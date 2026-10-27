@@ -83,7 +83,7 @@ export function lampsOn(inst, head, tail, brake = 0, { drl = 0, reverse = false,
       switch (h.kind) {
         case 'tail': o = (tail * 0.16 + b * 0.5) * dk; break;
         case 'third': o = b * 0.45 * dk; break;
-        case 'head': o = (head * 0.42 + dayH * 0.1 + (has.has('drl') ? drl * 0.06 : 0)) * dk; break;
+        case 'head': o = (head * 0.3 + dayH * 0.06 + (has.has('drl') ? drl * 0.04 : 0)) * dk; break;
         case 'rev': o = rv * 0.42 * dk; break;
         case 'ind': o = haz > 0 ? 0.6 * (0.45 + 0.55 * dk) : 0; break;
       }
@@ -108,6 +108,21 @@ function haloTexture() {
   haloTex.colorSpace = THREE.SRGBColorSpace;
   return haloTex;
 }
+// A halo only shows from in front of its lamp (it is the lens's glow, not a ball of light): the sprite fades out as the
+// view turns past ~80 deg off the lamp's axis (dir: +1 the car's front, -1 its back, 0 a side repeater: always), so
+// from behind or inside the car nothing floats ahead of the bonnet; it sits a hair toward the eye (no cut on the body).
+const haloFacing = (sh) => {
+  sh.vertexShader = 'varying float vFace;\n' + sh.vertexShader.replace('vec4 mvPosition = modelViewMatrix[ 3 ];', `vec4 mvPosition = modelViewMatrix[ 3 ];
+    vec3 toEye = normalize( - mvPosition.xyz );
+    #if LAMP_DIR != 0
+      vFace = smoothstep( 0.17, 0.6, dot( normalize( ( modelViewMatrix * vec4( 0.0, 0.0, float( LAMP_DIR ), 0.0 ) ).xyz ), toEye ) );
+    #else
+      vFace = 1.0;
+    #endif
+    mvPosition.xyz += toEye * 0.1;`);
+  sh.fragmentShader = 'varying float vFace;\n' + sh.fragmentShader.replace('vec4 diffuseColor = vec4( diffuse, opacity );', `if ( vFace < 0.003 ) discard;
+    vec4 diffuseColor = vec4( diffuse, opacity * vFace * vFace );`);
+};
 const HALO_COL = { tail: new THREE.Color(1, 0.04, 0.01), third: new THREE.Color(1, 0.04, 0.01), head: new THREE.Color(1, 0.88, 0.7), rev: new THREE.Color(0.85, 0.9, 1), ind: new THREE.Color(1, 0.42, 0.04) };
 // the halo sprites of a car (once): at each lamp, a little out from its lens. Reversing / indicator halos where the
 // model has none of its own: on the inner / outer part of the tail and head lamps.
@@ -118,6 +133,7 @@ function halos(L) {
   const A = L.halo, hl = L.halfL, out = (a) => (a.c.z > 0 ? a.size.z / 2 + 0.05 : -a.size.z / 2 - 0.05);
   const add = (kind, x, y, z, sx, sy) => {
     const m = new THREE.SpriteMaterial({ map: haloTexture(), color: HALO_COL[kind], transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+    m.defines = { LAMP_DIR: kind === 'ind' && Math.abs(z) <= hl * 0.45 ? 0 : z >= 0 ? 1 : -1 }; m.onBeforeCompile = haloFacing;
     const s = new THREE.Sprite(m);
     s.position.set(x, y, z); s.scale.set(sx, sy, 1); s.visible = false; s.renderOrder = 5;
     s.name = 'lamp-halo';
@@ -132,7 +148,7 @@ function halos(L) {
     for (const a of th) { mn.min(a.c.clone().addScaledVector(a.size, -0.5)); mx.max(a.c.clone().addScaledVector(a.size, 0.5)); }
     add('third', (mn.x + mx.x) / 2, (mn.y + mx.y) / 2, mn.z - 0.05, cl((mx.x - mn.x) * 1.6, 0.4, 0.9), 0.24);
   }
-  for (const a of A.head || []) add('head', a.c.x, a.c.y, a.c.z + out(a), cl(a.size.x * 1.7, 0.5, 0.95), cl(a.size.y * 3, 0.35, 0.6));
+  for (const a of A.head || []) add('head', a.c.x, a.c.y, a.c.z + out(a), cl(a.size.x * 1.2, 0.3, 0.6), cl(a.size.y * 2, 0.22, 0.4));
   if (A.rev?.length) for (const a of A.rev) add('rev', a.c.x, a.c.y, a.c.z + out(a), 0.4, 0.3);
   else for (const a of A.tail || []) add('rev', a.c.x * 0.72, a.c.y - a.size.y * 0.12, a.c.z + out(a) - 0.01, 0.36, 0.26);
   const ind = A.ind || [];
@@ -400,10 +416,10 @@ export class Smoke {
     // anywhere along the seams at the back of the bonnet / round the grille
     const a = (R() - 0.5) * 0.9, b = (R() - 0.5) * 0.5;
     if (fwd) { x += fwd.z * a + fwd.x * b; z += -fwd.x * a + fwd.z * b; } else { x += a; z += b; }
-    const cv = this.carV, keep = 0.35; // (the rest of the car's speed: the air over it takes the puff)
+    const cv = this.carV, keep = 0.5; // (the rest of the car's speed: the air over it takes the puff)
     this.P[i3] = x; this.P[i3 + 1] = y; this.P[i3 + 2] = z;
     if (!smoke) {
-      this.V[i3] = cv.x * keep + (R() - 0.5) * 0.6; this.V[i3 + 1] = cv.y * keep + (0.9 + R() * 1.1) * (0.6 + 0.4 * inten); this.V[i3 + 2] = cv.z * keep + (R() - 0.5) * 0.6;
+      this.V[i3] = cv.x * keep + (R() - 0.5) * 0.6; this.V[i3 + 1] = cv.y * keep + (1.3 + R() * 1.3) * (0.6 + 0.4 * inten); this.V[i3 + 2] = cv.z * keep + (R() - 0.5) * 0.6;
       this.life[i] = 1.1 + R() * 1.0; this.s0[i] = 0.2 + R() * 0.15 + Math.min(0.5, sp * 0.03); this.s1[i] = (1.0 + R() * 0.8) * (0.65 + 0.35 * inten);
       this.a0[i] = (0.62 + R() * 0.25) * (0.3 + 0.7 * inten) / (1 + sp * 0.03); this.dark[i] = R() * 0.06;
     } else {

@@ -815,7 +815,7 @@ export class Drive {
       d.e.smokeFx ||= new Smoke(this.scene);
       d.e.smokeFx.rate = d.crash ? 6 : 0.8 + ((dmg - 40) / 60) * 3;
       const b = _v.set(0, d.t.size.y * 0.78, d.t.size.z / 2 - 0.8); d.e.car.localToWorld(b);
-      d.e.smokeFx.update(dt, !d.crash || d.crash.t > 0.25 ? b : null, this.camera, night);
+      d.e.smokeFx.update(dt, !d.crash || d.crash.t > 0.25 ? b : null, this.camera, night, _w.set(Math.sin(d.yaw), 0, Math.cos(d.yaw)), on);
     }
     try { this.audio?.setCar?.({ on: true, rpm: d.rpm, load: d.load, electric: !!d.spec.electric, squeal: d.squeal, horn: d.horn, speed: this.speed, profile: d.spec.sound || 'i4', shift: d.shiftT > 0, inside: this.view === 'cockpit', crank: d.crank, firing: d.crash ? 0 : d.firing }); } catch (e) { if (!this.audioErr) { this.audioErr = true; console.warn('car audio', e); } }
   }
@@ -925,7 +925,7 @@ export class Drive {
           if (W.sinking) { W.sinking += dt; g.position.y -= dt * 1.8; g.updateMatrixWorld(true); if (W.sinking > 0.8) { this.tow(e); continue; } }
           else if (!nearYou && (W.unseen > 3 || (W.t > 20 && dist > 40))) { if (W.unseen > 3) { this.tow(e); continue; } W.sinking = 1e-3; }
           if (e.astray) continue;
-          if (e.smokeFx) { const b = _v.set(0, e.t.size.y * 0.78, e.t.size.z / 2 - 0.8); g.localToWorld(b); e.smokeFx.update(dt, W.t < 60 ? b : null, cam, night); }
+          if (e.smokeFx) { const b = _v.set(0, e.t.size.y * 0.78, e.t.size.z / 2 - 0.8); g.localToWorld(b); e.smokeFx.update(dt, W.t < 60 ? b : null, cam, night, _w.set(0, 0, 1).applyQuaternion(g.quaternion)); }
           if (e.inst) lampsOn(e.inst, night > 0.2 ? 1 : 0, 0.55, 0, { hazard: hazardPhase() }); // (the wreck: hazards, dim tails, headlights on at night)
         }
         if (!e.wrecked && !e.astray) { e.smokeFx?.clear(); this.wrecks.splice(i, 1); }

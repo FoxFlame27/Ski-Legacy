@@ -26,7 +26,7 @@ import { world } from './world.js';
 import { layout } from './layout.js';
 import { EXPRESS, LENGTH, expressAt, TRACK_OFF, TUBE_H, PORTAL_IN, ringDelta } from './expressroute.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
-import { RailBuilder, railMaterials, canvasTex } from './railtrack.js';
+import { RailBuilder, railMaterials, canvasTex, mouthFade } from './railtrack.js';
 import { setTerrainClipSet, terrainClipFocus } from './terrain.js';
 import { smoothstep, mulberry32 } from '../core/noise.js';
 import { planExpressStations, buildExpressStation } from './expressstations.js';
@@ -243,7 +243,8 @@ export function expressMaterials() {
   return XM;
 }
 const MOUTH = { m: null };
-function mouthMaterial() { return (MOUTH.m ??= new THREE.MeshBasicMaterial({ color: 0x030405 })); }
+// (dissolves within ~70 m of the camera: see mouthFade -- you never ride / walk through a black plane)
+function mouthMaterial() { return (MOUTH.m ??= mouthFade(new THREE.MeshBasicMaterial({ color: 0x030405 }))); }
 
 // palette (linear)
 const C = {

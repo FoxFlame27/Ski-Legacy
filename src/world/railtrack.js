@@ -502,8 +502,25 @@ export function portalClips() {
 // ------------------------------------------------------------------ portal facade
 let MOUTH = null;
 function mouthMaterial() {
-  MOUTH ??= new THREE.MeshBasicMaterial({ color: 0x040506, side: THREE.FrontSide });
+  MOUTH ??= mouthFade(new THREE.MeshBasicMaterial({ color: 0x040506, side: THREE.FrontSide }));
   return MOUTH;
+}
+/**
+ * A portal's dark mouth is only for the view from afar: from within ~70 m it dissolves (screen-door dither, gone by
+ * 40 m), so a camera riding / skiing / walking into the tunnel never meets a black wall over the opening (or the
+ * train ahead of it vanishing into one) -- up close the tube's own lining, dim past the daylit first metres, shows.
+ */
+function mouthFade(mat, near = 40, far = 70) {
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vMouthW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvMouthW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vMouthW;')
+      .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+      float mouthK = smoothstep(${near.toFixed(1)}, ${far.toFixed(1)}, distance(vMouthW, cameraPosition));
+      if (mouthK < 1.0 && fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453) >= mouthK) discard;`);
+  };
+  mat.customProgramCacheKey = () => `mouth-fade-${near}-${far}`;
+  return mat;
 }
 function buildPortal(stone, paint, tn, which, name) {
   const s = which === 0 ? tn.s0 : tn.s1, f = frame(s, {});
@@ -766,4 +783,4 @@ export function buildRailway(scene) {
   };
   return { group, chunks, update, materials: M };
 }
-export { B as RailBuilder, materials as railMaterials, canvasTex };
+export { B as RailBuilder, materials as railMaterials, canvasTex, mouthFade };

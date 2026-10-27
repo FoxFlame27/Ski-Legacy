@@ -2,7 +2,7 @@
 // line, slab track on the viaducts and in the tunnels), the overhead line (masts, cantilevers, contact and messenger
 // wires over both tracks), the tunnels (lined double-track tubes with walkways and lamps, modern concrete portals
 // with name plates, the terrain clip volumes behind them), the viaducts (concrete box girders on tapered piers down
-// to the natural ground; split piers on the tallest, a concrete arch over the deepest gorges) and the stations
+// to the natural ground; split piers on the tallest) and the stations
 // (expressstations.js).
 //
 // 69 km is far too much to build up front. Everything is an entity that is built when the viewer comes within its
@@ -29,7 +29,7 @@ import { freeCourses } from '../modes/parkour/freeworld.js';
 import { RailBuilder, railMaterials, canvasTex } from './railtrack.js';
 import { setTerrainClipSet, terrainClipFocus } from './terrain.js';
 import { smoothstep, mulberry32 } from '../core/noise.js';
-import { planExpressStations, buildExpressStation, HALL_HALF, hallVisible } from './expressstations.js';
+import { planExpressStations, buildExpressStation, HALL_HALF, hallTop } from './expressstations.js';
 
 const CHUNK = 250;
 const GAUGE = 1.0;              // (the Wolkenspitzbahn's railcar: metre gauge)
@@ -311,7 +311,7 @@ function buildCatenary(steel, s0, s1, kindAt, wires) {
       const tx = f.x + f.rx * sd * TRACK_OFF, tz = f.z + f.rz * sd * TRACK_OFF; // over the track
       if (kind === 'tunnel' || kind === 'hall') {
         // drop bracket from the vault
-        const top = f.y + TS + (TC - TS) * Math.sqrt(Math.max(0, 1 - (TRACK_OFF / TW) ** 2)) - 0.15;
+        const top = f.y - 0.15 + (kind === 'hall' ? hallTop(TRACK_OFF) : TS + (TC - TS) * Math.sqrt(Math.max(0, 1 - (TRACK_OFF / TW) ** 2)));
         steel.rod([tx, top, tz], [tx, f.y + MESS_Y - 0.6, tz], 0.04, C.mastDark, 4);
         steel.rod([tx - f.rx * 0.5, f.y + MESS_Y - 0.6, tz - f.rz * 0.5], [tx + f.rx * 0.5, f.y + MESS_Y - 0.6, tz + f.rz * 0.5], 0.035, C.mastDark, 4);
         continue;
@@ -415,7 +415,9 @@ function buildTube(lining, lampB, tn, s0, s1) {
 // A modern concrete portal: a headwall with the tube's opening, a projecting frame round the arch, parallel wing
 // walls retaining the cutting, a coping with snow on it, the name plate over the arch, the dark mouth just inside.
 // Local frame: x across, y up from the rail, z out of the tunnel (a right-handed basis at both ends).
-const HEAD_W = 12.5, HEAD_H = TC + 4.6, WING_L = 13;
+// (the headwall reaches back over the whole cut behind the portal plane (the roadbed shaper digs PORTAL_IN m into
+// the hill): no gap between its top and the cover over the tube)
+const HEAD_W = 12.5, HEAD_H = TC + 4.6, WING_L = 13, HEAD_D = PORTAL_IN + 0.8;
 function portalBasis(tn, which) {
   const s = which === 0 ? tn.s0 : tn.s1, f = frame(s, {});
   const dir = which === 0 ? -1 : 1; // out of the tunnel along -t at the entrance, +t at the exit
@@ -455,10 +457,11 @@ function buildPortal(XMat, tn, which, label) {
   const { m, X, Z, f } = portalBasis(tn, which);
   const grp = new THREE.Group();
   const W = TW + 0.3, Hs = TS, Hc = TC + 0.3;
-  // headwall: a slab with the opening, 1.4 m deep (into the hill)
+  // headwall: a slab with the opening, HEAD_D deep (into the hill); its opening 5 cm wider than the flared lining
+  // (no z-fighting with it)
   // (one polygon round the opening: from the left foot in along the floor, round the arch, out to the right foot)
-  const outer = new THREE.Shape([[-HEAD_W, -1.6], ...archPath(null, W, Hs, Hc, -1.6), [HEAD_W, -1.6], [HEAD_W, HEAD_H], [-HEAD_W, HEAD_H]].map(([x, y]) => new THREE.Vector2(x, y)));
-  const head = extrude(outer, 1.4); head.translate(0, 0, -1.4);
+  const outer = new THREE.Shape([[-HEAD_W, -1.6], ...archPath(null, W + 0.05, Hs, Hc + 0.05, -1.6), [HEAD_W, -1.6], [HEAD_W, HEAD_H], [-HEAD_W, HEAD_H]].map(([x, y]) => new THREE.Vector2(x, y)));
+  const head = extrude(outer, HEAD_D); head.translate(0, 0, -HEAD_D);
   // the frame round the arch: a horseshoe band 1.1 m wide, standing 0.9 m proud of the headwall
   const band = new THREE.Shape(archPath(null, W + 1.1, Hs, Hc + 1.1, -0.75).concat(archPath(null, W, Hs, Hc, -0.75).reverse()).map(([x, y]) => new THREE.Vector2(x, y)));
   const fr = extrude(band, 1.6); fr.translate(0, 0, -0.7);
@@ -474,8 +477,8 @@ function buildPortal(XMat, tn, which, label) {
     wings.push(g);
   }
   // coping: a cap along the headwall's top, snow on it
-  const cop = new THREE.BoxGeometry(HEAD_W * 2 + 0.5, 0.4, 1.9); cop.translate(0, HEAD_H + 0.2, -0.55);
-  const snow = new THREE.BoxGeometry(HEAD_W * 2 + 0.3, 0.22, 1.7); snow.translate(0, HEAD_H + 0.51, -0.55);
+  const cop = new THREE.BoxGeometry(HEAD_W * 2 + 0.5, 0.4, HEAD_D + 0.5); cop.translate(0, HEAD_H + 0.2, 0.25 - HEAD_D / 2);
+  const snow = new THREE.BoxGeometry(HEAD_W * 2 + 0.3, 0.22, HEAD_D + 0.3); snow.translate(0, HEAD_H + 0.51, 0.25 - HEAD_D / 2);
   for (const g of [head, fr, ...wings, cop]) {
     g.applyMatrix4(m);
     const mesh = new THREE.Mesh(g, XMat.portal);

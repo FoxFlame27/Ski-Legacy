@@ -70,7 +70,7 @@ function props(models) {
   if (PROPS) return PROPS;
   PROPS = {};
   try {
-    if (models?.wooden_bench) { const b = bakeGeometry(models.wooden_bench, { size: 1.9, axis: 'x', decimate: 0.01 }); if (b.geometry) PROPS.bench = b; }
+    if (models?.wooden_bench) { const b = bakeGeometry(models.wooden_bench, { size: 1.9, axis: 'x', decimate: 0.01 }); if (b.geometry) { b.geometry.userData.shared = true; PROPS.bench = b; } }
   } catch (e) { console.warn('express bench', e); }
   return PROPS;
 }
@@ -113,7 +113,7 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], clips
       rec.lay = courseLayout(st);
       const at = (u, lat) => { const p = F.P(u, lat); return { x: p[0], z: p[2] }; };
       for (const c of rec.lay.columns) colliders.push({ ...at(c.u, c.lat), r: 0.3 });
-      for (const b of rec.lay.benches) colliders.push({ ...at(b.u, b.lat), hw: 0.95, hd: 0.4, rot: -st.heading, top: st.y + PLAT_Y + 0.5 });
+      for (const b of rec.lay.benches) colliders.push({ ...at(b.u, b.lat), hw: 0.4, hd: 0.95, rot: -st.heading, top: st.y + PLAT_Y + 0.5 });
       for (const l of rec.lay.lamps) colliders.push({ ...at(l.u, l.lat), r: 0.2 });
       for (const p of rec.lay.posts) for (const du of [-1.5, 1.5]) colliders.push({ ...at(p.u + du, p.lat), r: 0.15 });
       // the windscreens behind the canopies
@@ -134,11 +134,14 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], clips
     } else {
       // the village entrance: its frame (z out of the stairs, x to the right of that), the stairwell's footprint
       const E = VILLAGE_ENTRANCE, oz = [Math.sin(E.heading), Math.cos(E.heading)], ox = [-oz[1], oz[0]];
-      const gy = world.height(E.x, E.z);
+      // (the pavilion's floor: the highest ground under it; its plinth reaches down to the lowest)
+      let gy = -Infinity;
+      for (const [x, z] of [[0, 0], [-3.6, 1.6], [3.6, 1.6], [-3.6, -14.4], [3.6, -14.4]]) gy = Math.max(gy, world.height(E.x + ox[0] * x + oz[0] * z, E.z + ox[1] * x + oz[1] * z));
       rec.ent = { x: E.x, z: E.z, y: gy, ox, oz, heading: E.heading };
       const L = (x, z) => ({ x: E.x + ox[0] * x + oz[0] * z, z: E.z + ox[1] * x + oz[1] * z });
       colliders.push({ ...L(0, -7.6), hw: 2.4, hd: 6.8, rot: -E.heading }); // (the stairwell: E itself stays free)
       for (const [x, z] of [[-3.6, 1.2], [3.6, 1.2], [-3.6, -14.2], [3.6, -14.2]]) colliders.push({ ...L(x, z), r: 0.25 });
+      for (const sd of [-1, 1]) colliders.push({ ...L(sd * 3.6, -6.5), hw: 0.12, hd: 7.5, rot: -E.heading }); // the side glass
       // the terrain is clipped open over the stairwell (a box: from the top step to the doorway's wall)
       clips.push({ x: E.x, y: gy, z: E.z, grade: 0, tx: -oz[0], tz: -oz[1], a0: 0.85, a1: 13.6, hw: 2.15, v0: -7, vS: 1.5, v1: 1.5 });
     }
@@ -303,7 +306,7 @@ function buildEntrance(rec, M) {
   }
   glass.face(L(-RW, 0.05, RZ1 + 0.2), L(RW, 0.05, RZ1 + 0.2), L(RW, RY, RZ1 + 0.2), L(-RW, RY, RZ1 + 0.2), L(0, 1, 0), lin('#ffffff'), 4);
   // the stone plinth round the stairwell (the floor of the pavilion) and a lit soffit over the stairs
-  for (const sd of [-1, 1]) stone.obx(L(sd * (RW - 0.6), 0.04, (RZ0 + RZ1) / 2), X, Z, 1.2 - 0.2, 0.08, (RZ0 - RZ1) / 2 - 0.3, K.pave);
+  for (const sd of [-1, 1]) stone.obx(L(sd * (RW - 0.6), -0.33, (RZ0 + RZ1) / 2), X, Z, 1.2 - 0.2, 0.45, (RZ0 - RZ1) / 2 - 0.3, K.pave);
   lamps.obx(L(0, RY - 0.02, -6), X, Z, 0.08, 0.02, 6, K.lamp);
   const grp = new THREE.Group();
   const add = (b, mat, cast = true) => { const g = b.build(); if (!g) return null; const m = new THREE.Mesh(g, mat); m.castShadow = cast; m.receiveShadow = true; m.matrixAutoUpdate = false; grp.add(m); return m; };
@@ -415,6 +418,9 @@ function buildHall(rec, M) {
   grp.userData.dispose = mats;
   return grp;
 }
+
+/** The hall's vault over the top of rail at `lat` m from the centre line (the overhead line's drop brackets). */
+export function hallTop(lat) { return HALL_SPR + (HALL_CR - HALL_SPR) * Math.sqrt(Math.max(0, 1 - (lat / HALL_W) ** 2)); }
 
 /** Is the village hall worth drawing for a viewer at v (underground: under the ground there, near the hall)? */
 export function hallVisible(rec, v, under) {

@@ -1170,6 +1170,38 @@ export class Audio {
     return true;
   }
 
+  // ---------------------------------------------------------------- train PA (spoken)
+  /**
+   * A station announcement in the computer's own voices (the browser's / Electron's speechSynthesis: on a Mac the
+   * system voices, German then English like the Wolkenspitzbahn's recorded lines): a three-tone gong, then each line in
+   * turn. lines: [{ text, lang: 'de' | 'en' }]. The music ducks under it. Silently nothing where there is no speech.
+   * @returns {boolean} false when it can't speak (nothing played)
+   */
+  pa(lines) {
+    const S = typeof window !== 'undefined' ? window.speechSynthesis : null;
+    if (!S || !this.ctx || !lines?.length) return false;
+    try {
+      S.cancel();
+      // the gong: three falling tones (a station's PA chime)
+      [784, 659, 523].forEach((f, i) => this.tone(f, 1.1, 'sine', 0.08, 0, i * 0.32));
+      const voices = S.getVoices(), pick = (lang, names) => voices.find((v) => names.includes(v.name)) || voices.find((v) => v.lang?.toLowerCase().startsWith(lang));
+      const V = { de: pick('de', ['Anna', 'Petra', 'Markus', 'Helena']), en: pick('en', ['Daniel', 'Serena', 'Samantha', 'Karen']) };
+      const t = this.ctx.currentTime, d = this.duck.gain;
+      d.cancelScheduledValues(t); d.setTargetAtTime(0.42, t, 0.06);
+      this.paSpeaking = true;
+      const us = lines.map((l, i) => {
+        const u = new SpeechSynthesisUtterance(l.text);
+        u.lang = l.lang === 'de' ? 'de-DE' : 'en-GB';
+        if (V[l.lang]) u.voice = V[l.lang];
+        u.rate = 0.96; u.volume = Math.min(1, this.volume * 1.1);
+        if (i === lines.length - 1) u.onend = u.onerror = () => { this.paSpeaking = false; try { d.setTargetAtTime(1, this.ctx.currentTime + 0.2, 0.35); } catch { /* closed */ } };
+        return u;
+      });
+      setTimeout(() => us.forEach((u) => S.speak(u)), 1100); // (after the gong; speechSynthesis queues them in order)
+      return true;
+    } catch { this.paSpeaking = false; return false; }
+  }
+
   // ---------------------------------------------------------------- music
   /**
    * Switch the soundtrack context with a crossfade: 'menu' | 'freeride' | 'race' | 'results' | null (silence).

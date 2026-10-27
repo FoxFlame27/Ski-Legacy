@@ -416,6 +416,30 @@ function trainAnnounce(hint) {
     if (railAnn.pending.length && !audio.speaking && audio.announce(railAnn.pending[0])) railAnn.pending.shift();
   } catch { /* the PA never breaks the ride */ }
 }
+// Legacy Express PA (Oct 27, the user: "add the voice for departure on the train and next stop etc"): the gong and the
+// line in German and English in the computer's voices (audio.pa), as the train departs, before each stop and at it;
+// each once per ride, never over another one (or over the Wolkenspitzbahn's)
+let expressAnn = { said: new Set(), pending: [], t: 0 };
+function expressAnnounce(hint) {
+  try {
+    const now = performance.now();
+    if (now - expressAnn.t > 3000) expressAnn = { said: new Set(), pending: [], t: now }; // (a new ride)
+    expressAnn.t = now;
+    let m, key = null, lines = null;
+    if (!hint) { /* nothing new */ }
+    else if ((m = /^Legacy Express to (.+?) · departs in/.exec(hint))) {
+      key = 'dep'; lines = [{ lang: 'de', text: `Legacy Express nach ${m[1]}. Bitte einsteigen.` }, { lang: 'en', text: `Legacy Express to ${m[1]}. Please board, the doors are closing.` }];
+    } else if ((m = /next stop (.+?) · \d+ min/.exec(hint))) {
+      key = `next:${m[1]}`; lines = [{ lang: 'de', text: `Nächster Halt: ${m[1]}.` }, { lang: 'en', text: `Next stop: ${m[1]}.` }];
+    } else if ((m = /^(.+?) · press E to get off here/.exec(hint))) {
+      key = `at:${m[1]}`; lines = [{ lang: 'de', text: `${m[1]}.` }, { lang: 'en', text: `${m[1]}.` }];
+    } else if ((m = /^(.+?) · arrived/.exec(hint))) {
+      key = `arr:${m[1]}`; lines = [{ lang: 'de', text: `${m[1]}. Bitte aussteigen.` }, { lang: 'en', text: `${m[1]}. This is your stop, please mind the gap.` }];
+    }
+    if (key && !expressAnn.said.has(key)) { expressAnn.said.add(key); expressAnn.pending.push(lines); }
+    if (expressAnn.pending.length && !audio.speaking && !audio.paSpeaking && audio.pa(expressAnn.pending[0])) expressAnn.pending.shift();
+  } catch { /* the PA never breaks the ride */ }
+}
 // riding: the ride's hint for the top-left card (its speed is on the speedometer); hold Space fast-forwards
 function rideText(h) { return h ? `${h.replace(/ · \d+ km\/h/, '')} · hold Space to speed up` : null; }
 // the speedometer's label while you ride something instead of your skis
@@ -1279,6 +1303,7 @@ function loop() {
     hud.rideHint(null);
     rideLine = r?.stop ? null : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST} · Enter to skip` : null;
     ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;
+    expressAnnounce(r?.hint);
   } else if (skibus.riding) {
     const r = skibus.updateRide(dt, !menu && input.down('Space'));
     if (r?.seat) player.seat = r.seat;

@@ -446,6 +446,7 @@ export class AdminPanel {
             <div class="mp-row"><span>HUD</span>${seg([['Shown', 'hud:0', !this.hudOff], ['Hidden', 'hud:1', this.hudOff]])}</div>
             <div class="mp-row"><span>Free camera</span><button class="ad-btn" data-act="fly" tabindex="-1">FLY</button></div>
             <div class="mp-row"><span>Snowmobile</span><button class="ad-btn" data-act="sled" tabindex="-1">SPAWN HERE</button></div>
+            <div class="mp-row"><span>Helicopter</span><button class="ad-btn" data-act="heli" tabindex="-1">SPAWN HERE</button></div>
             <div class="mp-row"><span>Unlock</span>${seg([['All skis', 'skis', ownsAllSkis], ['All outfits', 'outfits', ownsAllOutfits]])}</div>
             <div class="mp-row"><span>Day pass</span>${seg([[pass ? 'Active' : 'Give pass', 'pass', pass], ['Reset pass & tickets', 'unpass']])}</div>
           </div>
@@ -482,6 +483,7 @@ export class AdminPanel {
     if (a.startsWith('hud:')) return this.setHud(a.endsWith('1'));
     if (a === 'fly') return this.startFly();
     if (a === 'sled') return this.ctx.sleds?.spawnNear?.(this.ctx.player);
+    if (a === 'heli') { if (this.ctx.heli?.spawnNear?.(this.ctx.player) === false) this.hud?.flash?.('The helicopter is busy right now', 'bad', 2000); return; }
     if (a === 'skis') return this.unlockSkis();
     if (a === 'outfits') return this.unlockOutfits();
     if (a === 'pass') return this.givePass();

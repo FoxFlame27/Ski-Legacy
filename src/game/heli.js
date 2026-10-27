@@ -151,6 +151,31 @@ export class Heli {
     return this.away ? this.prompts.call : this.prompts.book;
   }
 
+  /**
+   * Admin panel: the helicopter set down on the snow in front of you (parked out like after a landing: E climbs in,
+   * no charge; it flies itself home once you go far away). false while it is flying / boarding / on a rescue.
+   */
+  spawnNear(p = this.player) {
+    if (this.state === 'flying' || this.state === 'boarding' || this.state === 'rescue') return false;
+    // 16 m ahead (clear of you with the rotor's ~5.5 m reach), on the flattest of a few spots, nose across the slope
+    const h = p.heading || 0;
+    let best = null;
+    for (const off of [0, 0.5, -0.5, 1, -1]) {
+      const a = h + off, x = p.pos.x + Math.sin(a) * 16, z = p.pos.z + Math.cos(a) * 16, e = 4;
+      const slope = Math.hypot(this.snow(x + e, z) - this.snow(x - e, z), this.snow(x, z + e) - this.snow(x, z - e)) / (2 * e);
+      if (!best || slope < best.slope) best = { x, z, slope };
+    }
+    this.pilot.phase = 'idle';
+    this.state = 'parked';
+    this.rpm = 0; this.handoff = 0; this.flight.hold = 0;
+    this.flight.place(best.x, best.z, h + Math.PI / 2, this.ground);
+    this.away = { x: best.x, z: best.z };
+    this.awayT = IDLE_WAIT; // (shut down: the rotor stands still until you climb in)
+    this.syncModel();
+    this.hud.flash('Helicopter · walk up to it · E to fly', 'good', 2400);
+    return true;
+  }
+
   /** Send a helicopter parked out on the mountain home to its pad (its pilot flies it). */
   callHome(quiet = false) {
     if (this.state !== 'parked' || !this.away) return;

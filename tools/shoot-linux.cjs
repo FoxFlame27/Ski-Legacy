@@ -3,7 +3,26 @@
 // steps: [{ eval: "js", wait: ms, keys: [...], shot: "name" }]
 const { chromium } = require('playwright');
 const fs = require('fs');
+// at most two game instances at once on this machine (each takes ~3-4 GB in software WebGL; more get OOM-killed):
+// a slot is a lock directory, taken with mkdir, released on exit, stale after 15 min
+const os = require('os'), path = require('path');
+const LOCKS = [0, 1].map((i) => path.join(os.tmpdir(), `ski-legacy-shoot.lock-${i}`));
+let held = null;
+async function takeSlot() {
+  for (;;) {
+    for (const l of LOCKS) {
+      try { fs.mkdirSync(l); held = l; return; } catch {
+        try { if (Date.now() - fs.statSync(l).mtimeMs > 15 * 60e3) fs.rmSync(l, { recursive: true, force: true }); } catch { /* gone */ }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+const release = () => { if (held) try { fs.rmSync(held, { recursive: true, force: true }); } catch { /* */ } held = null; };
+process.on('exit', release);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { release(); process.exit(1); });
 (async () => {
+  await takeSlot();
   const out = process.argv[2], steps = process.argv[3] ? JSON.parse(fs.readFileSync(process.argv[3], 'utf8')) : [];
   fs.mkdirSync(out, { recursive: true });
   const browser = await chromium.launch({ args: ['--disable-dev-shm-usage', '--js-flags=--max-old-space-size=8192', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });

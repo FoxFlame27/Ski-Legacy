@@ -25,7 +25,7 @@ const beside = (s, lat) => { expressAt(s, _f); return { x: _f.x - _f.dz * lat, z
 
 /** courses: freeCourses() (modes/parkour/freeworld.js), for the side each station's square faces. */
 export function buildExpressGround(courses = []) {
-  fitExpressProfile((x, z) => world.height(x, z), { under: keepUnder(courses) });
+  fitExpressProfile((x, z) => world.height(x, z), { under: keepUnder(courses), protect: courseGround(courses) });
   const L = EXPRESS;
   // the stations: side platforms either side of the double track; the station's side (entrance, square, exit) faces
   // the course's start (the station stands beside it: you walk over to the start house)
@@ -96,5 +96,23 @@ function keepUnder(courses) {
   };
   for (const e of courses) { const T = e.course?.track; if (!T) continue; for (let i = 0; i + 4 < T.n; i += 4) mark(T.X[i], T.Z[i], T.X[i + 4], T.Z[i + 4], 50); }
   for (const l of layout.lifts) mark(l.bottom.x, l.bottom.z, l.top.x, l.top.z, 30);
+  return (x, z) => set.has(Math.floor(x / C) * 100000 + Math.floor(z / C));
+}
+
+// the ground the roadbed shaper must never change: 35 m either side of a race course's line (the track, its berms and
+// shoulders) and 60 m round its start and finish areas
+function courseGround(courses) {
+  const C = 10, set = new Set();
+  const mark = (x, z, r) => {
+    for (let cx = Math.floor((x - r) / C); cx <= Math.floor((x + r) / C); cx++) for (let cz = Math.floor((z - r) / C); cz <= Math.floor((z + r) / C); cz++) {
+      if (Math.hypot(cx * C + C / 2 - x, cz * C + C / 2 - z) < r + C * 0.7) set.add(cx * 100000 + cz);
+    }
+  };
+  for (const e of courses) {
+    const T = e.course?.track; if (!T) continue;
+    for (let i = 0; i < T.n; i += 4) mark(T.X[i], T.Z[i], 35);
+    if (e.start) mark(e.start.x, e.start.z, 60);
+    if (e.finish) mark(e.finish.x, e.finish.z, 60);
+  }
   return (x, z) => set.has(Math.floor(x / C) * 100000 + Math.floor(z / C));
 }

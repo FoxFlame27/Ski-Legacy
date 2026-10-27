@@ -217,11 +217,12 @@ export function expressNearest(x, z, out = _n) {
 // Fitted on the final natural ground (the courses' regions shape it: call after registerFreeWorldCourses, before the
 // shaper is registered). Tunnels where the ground stands more than TUNNEL_COVER m over the rail, viaducts where it
 // falls more than BRIDGE_OVER m below; in between the roadbed's cuttings and embankments.
+const OVER_COURSE = 16; // m: a viaduct over a race course clears it by this much
 const TUNNEL_COVER = 15, BRIDGE_OVER = 12, SMOOTH_W = 150, UNDER_R = 620, STATION_FREE = 250;
 const VILLAGE_C = { x: 30, z: 40 }; // (the village's middle: round it the line runs deep underground)
 // `under(x, z)`: true where the line must pass deep underground (the race courses' lines, the lift lines: a tunnel
 // under them, never a cutting through a race track)
-export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
+export function fitExpressProfile(groundAt, { under: keepUnder = null, protect = null } = {}) {
   const L = EXPRESS;
   if (L.ready) return L;
   const n = L.n, k4 = 2; // (work on every 2nd sample: 4 m)
@@ -246,13 +247,14 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
   }
   // under the village and round it (UNDER_R) the line stays deep in the ground: it never surfaces among the houses,
   // the lifts' bases or the Wolkenspitzbahn's valley station
-  const cap = new Float64Array(m).fill(Infinity), under = new Uint8Array(m);
+  const cap = new Float64Array(m).fill(Infinity), under = new Uint8Array(m), hard = new Uint8Array(m);
   for (let i = 0; i < m; i++) {
     const x = L.X[i * k4], z = L.Z[i * k4];
     // (the village's own station and its approaches stay above ground: STATION_FREE m round it)
     if (Math.hypot(x - VILLAGE_STATION.x, z - VILLAGE_STATION.z) < STATION_FREE) continue;
-    if (Math.hypot(x - VILLAGE_C.x, z - VILLAGE_C.z) > UNDER_R && !keepUnder?.(x, z)) continue;
-    cap[i] = g[i] - TUNNEL_COVER - 9; under[i] = 1;
+    const course = !!keepUnder?.(x, z);
+    if (Math.hypot(x - VILLAGE_C.x, z - VILLAGE_C.z) > UNDER_R && !course) continue;
+    cap[i] = g[i] - TUNNEL_COVER - 9; under[i] = 1; hard[i] = course ? 1 : 0;
   }
   // grade limit per sample: MAX_GRADE, or steeper where the climb between two stations needs it (the stops beside
   // the starts sit high on the mountains: a leg may have to gain more than MAX_GRADE allows over its length)
@@ -273,14 +275,58 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
   }
   // vertical curves
   for (let it = 0; it < 40; it++) for (let i = 0; i < m; i++) if (!pin[i]) Y[i] = (Y[(i - 1 + m) % m] + Y[i] * 2 + Y[(i + 1) % m]) / 4;
+  // the race courses and the lift lines come first: under them the line is ALWAYS deep (their cap holds; the grade
+  // steepens round it where it must). Oct 27: a shallow tunnel under Legacy World Downhill lifted the course into a
+  // hump by the start (the cover over a tube) and the race respawned you there for ever.
+  // (an upper envelope: no higher than any course cap allows, coming up from it at the grade limit; the line takes
+  // the lower of itself and the envelope, so it dives under a course smoothly and never steps)
+  // A course may be passed under (deep: the cap) or over (a viaduct well clear of it: OVER_COURSE m up): per stretch
+  // of the line near a course, whichever the line is nearer to (under a course right below a station the line can't
+  // dive deep in time, but it can fly over).
+  const U = new Float64Array(m).fill(Infinity), F = new Float64Array(m).fill(-Infinity);
+  // (the choice must also leave the stations' level platforms reachable at the grade: an option that a platform
+  // nearby can't reach is out; failing both, the smaller misfit)
+  const pins = [];
+  for (let i = 0; i < m; i++) if (pin[i]) pins.push(i);
+  const ringD = (a, b) => { const d = Math.abs(a - b) % m; return Math.min(d, m - d); };
+  const misfit = (i, j, over) => {
+    let w = 0;
+    for (const p of pins) for (let k = i; k < j; k += 4) {
+      const reach = ringD(p, k) * dl[k] * 1.02, lim = over ? g[k] + OVER_COURSE - reach : cap[k] + reach;
+      w = Math.max(w, over ? lim - Y[p] : Y[p] - lim);
+    }
+    return w;
+  };
+  const overAt = new Uint8Array(m);
+  for (let i = 0; i < m; i++) {
+    if (!hard[i] || (i > 0 && hard[i - 1])) continue;
+    let j = i, sy = 0, sg = 0;
+    while (j < m && hard[j]) { sy += Y[j]; sg += g[j]; j++; }
+    const mo = misfit(i, j, true), mu = misfit(i, j, false);
+    const over = mo <= 0 && mu <= 0 ? (sy - sg) / (j - i) > -TUNNEL_COVER : mo < mu;
+    for (let k = i; k < j; k++) { if (over) { F[k] = g[k] + OVER_COURSE; overAt[k] = 1; } else U[k] = cap[k]; }
+  }
+  for (let r = 0; r < 2; r++) {
+    for (let i = 1; i <= m; i++) { const j = i % m, p = (i - 1) % m; U[j] = Math.min(U[j], U[p] + dl[j]); F[j] = Math.max(F[j], F[p] - dl[j]); }
+    for (let i = m - 1; i >= 0; i--) { const q = (i + 1) % m; U[i] = Math.min(U[i], U[q] + dl[i]); F[i] = Math.max(F[i], F[q] - dl[i]); }
+  }
+  for (let i = 0; i < m; i++) if (!pin[i]) Y[i] = clamp(Y[i], F[i], Math.max(F[i], U[i]));
+  // (where neither way fits a platform close by, ease the step out over the last metres before it: steeper there,
+  // never a jump)
+  const nearPin = new Uint8Array(m);
+  for (const p of pins) for (let k = -40; k <= 40; k++) nearPin[(p + k + m) % m] = 1;
+  for (let it = 0; it < 6; it++) {
+    for (let i = 1; i <= m; i++) { const j = i % m, p = (i - 1) % m, d = dl[j] * 2.2; if (!pin[j] && nearPin[j]) Y[j] = clamp(Y[j], Y[p] - d, Y[p] + d); }
+    for (let i = m - 1; i >= 0; i--) { const q = (i + 1) % m, d = dl[i] * 2.2; if (!pin[i] && nearPin[i]) Y[i] = clamp(Y[i], Y[q] - d, Y[q] + d); }
+  }
   for (let i = 0; i < n; i++) {
     const f = i / k4, a = Math.floor(f) % m, b = (a + 1) % m, t = f - Math.floor(f);
     L.Y[i] = Y[a] + (Y[b] - Y[a]) * t;
   }
   // tunnels and viaducts: classify every 4 m, close short gaps, drop slivers
   const kind = new Int8Array(m);
-  for (let i = 0; i < m; i++) { const c = g[i] - Y[i]; kind[i] = c > TUNNEL_COVER ? 1 : c < -BRIDGE_OVER ? -1 : 0; }
-  for (let i = 0; i < m; i++) if (under[i]) kind[i] = 1;
+  for (let i = 0; i < m; i++) { const c = g[i] - Y[i]; kind[i] = c > TUNNEL_COVER || (c > 0 && protect?.(L.X[i * k4], L.Z[i * k4])) ? 1 : c < -BRIDGE_OVER ? -1 : 0; }
+  for (let i = 0; i < m; i++) if (under[i] && !overAt[i]) kind[i] = 1;
   const spans = (want, gap, min) => {
     const out = [];
     let open = -1;
@@ -300,6 +346,7 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
   L.bridges = L.bridges.filter((b) => !L.tunnels.some((t) => b.s0 < t.s1 && b.s1 > t.s0));
   L.tunnels.forEach((t, k) => { t.name = `${EXPRESS_NAME} Tunnel ${k + 1}`; });
   L.ground = g; // (natural ground every 4 m: piers, portals)
+  L.protect = protect;
   L.ready = true;
   buildSpeedProfile();
   return L;
@@ -324,6 +371,7 @@ export function shapeExpressBed(x, z, h, spacing = 0) {
   if (!L.ready) return h;
   const nn = expressNearest(x, z);
   if (!nn || nn.d > 78) return h;
+  if (L.protect?.(x, z)) return h; // (a race course's ground is never touched: courses are sacred)
   const s = nn.s;
   for (const t of L.tunnels) {
     if (inSpanOf(t, s, PORTAL_IN)) {

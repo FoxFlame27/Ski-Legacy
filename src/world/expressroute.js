@@ -31,6 +31,7 @@ function buildPlan() {
   const C = EXPRESS_CTRL.slice();
   C.push(C[0]); // close the ring back at the hall
   const stopIdx = new Map(Object.entries(EXPRESS_STOP_AT).map(([id, i]) => [i, id]));
+  const courseStopAt = Object.fromEntries(EXPRESS_COURSE_STOPS.map((c) => [c.id, c]));
   // resample the polygon every ~20 m, remembering where the stops fall
   let X = [], Z = [];
   const at = {};
@@ -46,7 +47,21 @@ function buildPlan() {
   for (const [id, s] of Object.entries(at)) {
     let dx, dz;
     if (id === 'village') { dx = 1; dz = 0; X[s] = VILLAGE_STATION.x; Z[s] = VILLAGE_STATION.z; }
-    else { const a = (s - half - 6 + n) % n, b = (s + half + 6) % n; dx = X[b] - X[a]; dz = Z[b] - Z[a]; }
+    else {
+      const a = (s - half - 6 + n) % n, b = (s + half + 6) % n; dx = X[b] - X[a]; dz = Z[b] - Z[a];
+      // a race's station lies across from its start: the platform runs square to the way over to the start, so the
+      // straight never passes under or near the start (Oct 27: the start stood on top of the tunnel at Floodlight)
+      // (only where the straight along the chord would pass within 60 m of the start: elsewhere turning it would make
+      // the line double back on itself)
+      const c = courseStopAt[id], cl = Math.hypot(dx, dz) || 1;
+      let near = Infinity;
+      if (c && c.sx !== undefined) for (let k = -half; k <= half; k++) near = Math.min(near, Math.hypot(X[s] + (dx / cl) * k * SMOOTH_D - c.sx, Z[s] + (dz / cl) * k * SMOOTH_D - c.sz));
+      if (near < 60) {
+        let tx = -(c.sz - Z[s]), tz = c.sx - X[s];
+        if (tx * dx + tz * dz < 0) { tx = -tx; tz = -tz; }
+        dx = tx; dz = tz;
+      }
+    }
     const l = Math.hypot(dx, dz) || 1;
     for (let k = -half; k <= half; k++) {
       const i = (s + k + n) % n;

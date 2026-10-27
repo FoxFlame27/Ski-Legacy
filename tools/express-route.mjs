@@ -31,6 +31,21 @@ for (const e of Object.values(E)) for (const [x, z] of courseLine(e)) {
     if (ii >= 0 && jj >= 0 && ii < N && jj < N && Math.hypot(di, dj) * G < 140) pen[jj * N + ii] = 1;
   }
 }
+// no-go cells: within 100 m of a start (the start house, the line-up, its shoulder) and 45 m of a course line (the
+// line never runs under a start or close along a course; Oct 27, the user: "at Floodlight Slalom the race start is on
+// top of the tunnel")
+const block = new Uint8Array(N * N);
+for (const e of Object.values(E)) {
+  const mark = (x, z, r) => {
+    const ci = Math.round((x - X0) / G), cj = Math.round((z - X0) / G), k = Math.ceil(r / G);
+    for (let dj = -k; dj <= k; dj++) for (let di = -k; di <= k; di++) {
+      const ii = ci + di, jj = cj + dj;
+      if (ii >= 0 && jj >= 0 && ii < N && jj < N && Math.hypot(di, dj) * G <= r) block[jj * N + ii] = 1;
+    }
+  };
+  mark(e.start.x, e.start.z, 100);
+  for (const [x, z] of courseLine(e)) mark(x, z, 45);
+}
 const lineDist = (e, x, z) => { let d = Infinity; for (const [px, pz] of courseLine(e)) d = Math.min(d, Math.hypot(px - x, pz - z)); return d; };
 
 // a stop beside each START (Oct 27, the user: "next to each race course there's a train station where the train
@@ -49,7 +64,7 @@ function stopFor(e) {
     const score = hi - lo + Math.abs(world.height(x, z) - st.y) * 0.6 + r * 0.05;
     if (!best || score < best.score) best = { x, z, score };
   }
-  return { id: e.id, name: e.name, x: Math.round(best.x), z: Math.round(best.z) };
+  return { id: e.id, name: e.name, x: Math.round(best.x), z: Math.round(best.z), sx: Math.round(st.x), sz: Math.round(st.z) };
 }
 
 function astar(a, b) {
@@ -75,6 +90,7 @@ function astar(a, b) {
       const ii = vi + di, jj = vj + dj;
       if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
       const u = jj * N + ii, L = Math.hypot(di, dj) * G, dh = Math.abs(H[u] - H[v]);
+      if (block[u] && u !== t) continue;
       const c = L * (1 + pen[u] * 25) + (dh * dh / L) * 60;
       if (g[v] + c < g[u]) { g[u] = g[v] + c; from[u] = v; push(g[u] + hd(u), u); }
     }

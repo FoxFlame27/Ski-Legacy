@@ -1,0 +1,8 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><base href="/"><title>sponsor atlas</title><style>html,body{margin:0;background:#444}canvas,img{display:block;width:1600px}</style></head>
+<body><script type="module">
+// Dev harness: shows the net banner atlas (world/sponsors.js) once the logos have loaded.
+import { sponsorAtlas } from '/src/world/sponsors.js';
+const t = sponsorAtlas();
+setTimeout(() => { document.body.appendChild(t.image); window.__done = true; }, 2500);
+</script></body></html>

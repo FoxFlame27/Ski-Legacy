@@ -1,0 +1,59 @@
+/* Admin panel (ui/admin.js): the menus' brush paper and blue italic lettering over a dark-blue shade.
+   Left: money, time & weather, player toggles. Right: the teleport list. Sizes in --u like the menus. */
+#admin { position: fixed; inset: 0; z-index: 58; color: var(--blue); font-family: var(--ui); transition: opacity 0.2s ease; }
+#admin.in { animation: fadeIn 0.25s ease backwards; }
+#admin.out { opacity: 0; pointer-events: none; }
+.ad-shade { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(var(--shade), 0.74) 0%, rgba(var(--shade), 0.5) 48%, rgba(var(--shade), 0.34) 100%); }
+.ad-wrap { position: absolute; inset: 0; display: flex; align-items: stretch; gap: calc(var(--u) * 34); padding: calc(var(--u) * 34) calc(var(--u) * 64) calc(var(--u) * 34); }
+.ad-col { flex: none; display: flex; flex-direction: column; gap: calc(var(--u) * 12); min-height: 0; max-height: 100%; overflow-y: auto; scrollbar-width: none; }
+.ad-col::-webkit-scrollbar { display: none; }
+.ad-col .menu-head { margin-bottom: calc(var(--u) * 6); }
+.ad-right { flex: 0 1 calc(var(--u) * 540); padding-top: calc(var(--u) * 132); overflow: visible; }
+
+.menu-panel.ad-panel { width: calc(var(--u) * 520); padding: calc(var(--u) * 12) calc(var(--u) * 28) calc(var(--u) * 12); }
+.ad-panel .mp-head { padding-bottom: calc(var(--u) * 4); }
+.ad-panel .mp-row { min-height: calc(var(--u) * 36); padding: calc(var(--u) * 3) 0; gap: calc(var(--u) * 12); font-size: var(--t-sm); }
+.ad-panel .mp-row > span:first-child { white-space: nowrap; }
+.ad-panel .seg { flex-wrap: wrap; justify-content: flex-end; }
+.ad-panel .seg button { padding: calc(var(--u) * 6) calc(var(--u) * 11); }
+.ad-btn { padding: calc(var(--u) * 6) calc(var(--u) * 16); border: 2px solid var(--blue); border-radius: calc(var(--u) * 5); background: var(--blue); color: #fff; cursor: pointer;
+  font: italic 700 calc(var(--u) * 20)/1 var(--num); letter-spacing: 0.06em; }
+.ad-btn:hover { background: #0f3aa8; }
+.ad-set { display: flex; align-items: center; gap: calc(var(--u) * 8); }
+.ad-amount { width: calc(var(--u) * 170); padding: calc(var(--u) * 5) calc(var(--u) * 10); border: 2px solid rgba(21, 70, 200, 0.5); border-radius: calc(var(--u) * 5); outline: none;
+  background: var(--ice); color: var(--blue); font: italic 700 calc(var(--u) * 22)/1 var(--num); letter-spacing: 0.02em; -webkit-user-select: text; user-select: text; }
+.ad-amount:focus { border-color: var(--blue); background: #fff; }
+.ad-amount::placeholder { color: rgba(21, 70, 200, 0.35); }
+.ad-time { margin-left: calc(var(--u) * 8); font: italic 700 calc(var(--u) * 24)/1 var(--num); font-variant-numeric: tabular-nums; }
+.ad-hour { width: calc(var(--u) * 250); accent-color: var(--blue); }
+.ad-wx { align-items: flex-start; }
+.ad-wx > span:first-child { padding-top: calc(var(--u) * 6); }
+
+/* teleport list: grouped rows like the course list, red group labels */
+.menu-panel.ad-tp { width: 100%; height: 100%; display: flex; flex-direction: column; padding-bottom: calc(var(--u) * 16); }
+.ad-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 calc(var(--u) * -10); padding: 0 calc(var(--u) * 10) calc(var(--u) * 10);
+  scrollbar-width: thin; scrollbar-color: rgba(21, 70, 200, 0.35) transparent;
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--u) * 26), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - var(--u) * 26), transparent); }
+.ad-list::-webkit-scrollbar { width: 6px; }
+.ad-list::-webkit-scrollbar-thumb { background: rgba(21, 70, 200, 0.3); border-radius: 3px; }
+.ad-group { margin: calc(var(--u) * 14) 0 calc(var(--u) * 3); font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.18em; color: var(--blue-dim); }
+.ad-group:first-child { margin-top: calc(var(--u) * 4); }
+.ad-place { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--u) * 14); width: 100%; padding: calc(var(--u) * 6) calc(var(--u) * 10);
+  border: 0; border-top: 1px solid rgba(21, 70, 200, 0.1); background: none; cursor: pointer; text-align: left; color: var(--blue); transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.18s cubic-bezier(.2,.9,.2,1); }
+.ad-place:hover { background: linear-gradient(90deg, rgba(21, 70, 200, 0.1), rgba(21, 70, 200, 0)); box-shadow: inset calc(var(--u) * 4) 0 0 var(--red); transform: translateX(calc(var(--u) * 4)); }
+.ad-pl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: italic 700 calc(var(--u) * 23)/1.15 var(--num); letter-spacing: 0.02em; text-transform: uppercase; }
+.ad-pl-sub { flex: none; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 var(--t-xs)/1 var(--ui); color: var(--blue-dim); }
+
+/* free-fly camera: a hint strip at the bottom, the HUD steps aside */
+#admin-fly { position: fixed; left: 50%; bottom: calc(var(--u) * 34); z-index: 20; transform: translateX(-50%); pointer-events: none; animation: fadeIn 0.3s ease backwards; }
+.ad-fly { display: flex; align-items: center; gap: calc(var(--u) * 18); padding: calc(var(--u) * 12) calc(var(--u) * 30); color: var(--blue); white-space: nowrap;
+  font: 600 var(--t-sm)/1 var(--ui); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); }
+.ad-fly b { font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.18em; color: var(--red); }
+.ad-fly span { display: flex; align-items: center; gap: calc(var(--u) * 4); }
+.ad-fly .kc { background: var(--ice); border-color: rgba(21, 70, 200, 0.42); color: var(--blue); }
+body.admin-flying #hud > :not(#flash), body.admin-open #hud > :not(#flash) { visibility: hidden !important; }
+.ad-sub { display: flex; align-items: center; gap: calc(var(--u) * 6); }
+.ad-sub .kc { color: #fff; }
+.ad-sub .ch-dot { background: rgba(255, 255, 255, 0.6); }
+body.admin-hide-hud #hud, body.admin-hide-hud #racehud { display: none !important; }

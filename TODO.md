@@ -1,0 +1,214 @@
+# Ski Legacy — everything requested (tracked until done)
+
+Legend: [x] done & verified · [~] partly done · [ ] to do
+
+## Core game (original request)
+- [x] Game called Ski Legacy, desktop app in /Applications
+- [x] Open world, infinite procedural mountains; start at the bottom surrounded by mountains
+- [x] "Rent skis" at start; you already own all other gear (worn on the body)
+- [x] Money counter bottom-left; earn money by winning races vs bots
+- [x] Races all around the map, easy → expert
+- [x] Better skis = slightly faster (+3/6/10%)
+- [x] Gondola costs money (plus chairlifts, day pass, tickets)
+- [x] Ski shop, ticket seller, mountain hut, lifts — real ski-resort things
+- [x] Other people around (skiers on pistes, villagers)
+- [x] R switches 1st/3rd person; 1st person shows poles in hands + feet on skis
+- [x] Snow tracks under the skis + snow spray
+- [x] Day/night cycle + snowfall
+- [x] All 3D models from Meshy, very high quality, checked before use (regenerate close-up assets in high detail)
+- [x] "Super high graphics" (sharp, realistic lighting, mountains like the reference photo)
+
+## Feedback fixes
+- [x] Not blurry: native resolution, no blur/grain filters
+- [x] Clean, simple UI; remove the weird icons
+- [x] Huge back while skiing (torso leaned backwards) — fixed stance
+- [x] Animations: mocap walk/run + hand-tuned standing pose, wrists/palms fixed, verified frame by frame
+- [x] Characters regenerated in a clean A-pose; Finn without skis
+- [x] Skis carried on your back when walking; G to put on / take off
+- [x] Walk-in ski shop: look at skis on racks → Buy/Rent/Equip; clerk
+- [x] Ticket seller at the booth you talk to
+- [x] Signs not floating; on posts / mounted properly
+- [x] Meshy buildings/props scaled to realistic sizes
+- [x] Gondola fast-forward: character no longer lags behind the cabin
+- [x] Can't ski on flat ground: walk with skis on your back, put them on once on a slope
+- [x] Ski tracks look real (lit groove, lip) + boot prints when walking
+- [ ] Models look good up close (high-poly Meshy regeneration, 4K textures)
+- [ ] Mountains + sky look like the reference photo (deep blue sky, dark rock bands, snow ledges, blue shadows)
+- [x] Gondola towers follow terrain; no grey cut walls around station pads
+- [ ] Performance: terrain generation off the main thread
+- [ ] Publish every update to the installed app
+- [x] Intro (SKI LEGACY slam, Icecold Studio, Made with Claude) + brush-stroke main menu with loading spinner
+- [x] Endless downhill Legacy Valley south of the village (simulated: 10 km without stalling)
+- [x] Race starts on wide flat platforms; E stops you; Legacy Valley Run + Valley Chair at the village
+- [x] Jumping on skis and on foot
+- [x] All UI (Esc menu, HUD, dialogs, shop, races) in the white-brush / blue-text style; game pauses
+- [x] Detailed tumbling snowflakes
+- [x] GPU texture budget (fixes WebGL context loss / memory on 8 GB Mac)
+- [ ] Apply results of intro/menu QA review (workflow was interrupted; rerun)
+- [ ] Mountains closer to the reference photo (ongoing)
+
+## Upgrade round (Oct 25): more mountains, racing, World Racing, tricks, logo look
+- [x] More mountains with their own gondolas + resort dressing (signs, markers, fences) + Legacy Park (resort team)
+- [x] Character select: no streaks over text; 3D showcase (src/game/showcase.js, done) + new menu flow (UI team)
+- [x] RACE vs AI bots (Easy/Medium/Hard), 3-2-1-GO, positions, results (race team)
+- [x] WORLD RACING: separate downhill parkour courses (alpine / icecanyon / bigair) with barriers, checkpoints, ghost, medals (parkour + race teams)
+- [x] Physics feel + tricks (spins, flips, grabs) + ramps (physics team)
+- [x] Six playable characters / bot outfits (Luca, Mila, Kai added; Meshy rigs + mocap packs, optimized)
+- [x] New Meshy props: start house (flag + base trimmed off), patrol hut, tunnel portal, grandstand, timing board
+- [x] App icon = the Ski Legacy logo art (build/icon.icns, swapped into the installed app)
+- [x] Game look matches the logo: cobalt sky, starburst sun, distant hero peaks, cloud banks, blue snow shadows, dark pines (look team)
+- [ ] Logo-style wordmark in intro + menu (after UI team), main mountain crown sharper like the logo's peak (after resort team)
+- [x] Integrate everything in main.js (src/game/modes.js prepared), mode-card images, QA, publish
+- [x] Feedback round: easy steering, no auto-downhill, no walking uphill, first-person skis/poles, natural idle, skis off the back
+- [x] Wipeout fades back to the village; first race free; ticket booth to scale; ski bus; gondola mid-stations
+- [x] Safety nets along drops/cliffs/bends (posts on the snow, panels following it); terraced rock "waves" reduced ~95%
+- [x] Races downhill-only, starter-friendly near the village; World Cup look + longer World Racing courses
+- [x] Jobs (deliveries, rescues, lost & found, guiding) with Meshy props; 8 more skis (12 total) on a 16 m shop wall
+- [ ] Next: art-director polish round (post.js bloom/grade), mode-card photos, logo-style menu wordmark (only if asked)
+
+## Oct 26 rounds (published: logo icon, intro clip, perf settings, animation, races, sound, sponsors)
+- [x] New icon (circle logo, jumping skier) + intro clip (skier jumps, zoom-out to SKI LEGACY) — kept exactly as published 10:13
+- [x] Intro badge no longer stretched (resize while loading; object-fit cover)
+- [x] Graphics setting (Performance / Balanced / High / Ultra, auto-detect + auto-drop), 60 fps on the M1
+- [x] Sound/music/announcer, broadcast race presentation, crowds/flags/snowcats, slow-mo
+- [x] Skis right side up + tips forward on all 12 models (file axes); carver/legend/cruiser regenerated
+- [x] Ski poles: only on your own skier, only in third person, with pole plants
+- [x] Sponsor banners with real logos on every net (+ beatandraise.com / iceyclient marks)
+- [x] Skiing pose: no sitting back (hip-joint reach fix, slope-square stance), milder W tuck, moving arms — published Oct 26 evening
+- [x] First person: eye over the bindings, own body visible when looking down — published Oct 26 evening
+- [x] Walking = run cycle slowed down; walk up ordinary slopes (only >38° blocked) — published Oct 26 evening
+- [x] Chairlifts can be ridden down from the top; Esc pauses all sound — published Oct 26 evening
+- [x] Skiers all over the mountain (instanced distant skiers) — published Oct 26 evening
+- [x] Only big boulders block you; no wipeouts at low speed (head-on > ~40 km/h) — published Oct 26 evening
+- [x] Park ramps no longer see-through — published Oct 26 evening
+- [x] Snow surface relief/drifts/grain + it snows ~40% of the time with build-up — published Oct 26 evening (check fps cost on the real Mac: ~2-4 fps)
+- [x] Race mountains sharp/rocky, race tunnels rebuilt, backdrop seam blended, night shadows fixed, sharpening on Performance — published Oct 26 evening
+- [ ] Daytime still mostly blue/white (warmer logo-v2 look needs the user's OK); clouds themselves unchanged; canyon walls smooth up close
+- [x] Ski tracks + footprints (they were never drawn below Ultra — culled); carve/skid/landing marks, boot & ski-boot prints, braking spray no longer hides you — published Oct 26 evening
+- [x] Talk to people: cinematic two-shot (letterbox, person turns + gestures, name chip) for clients, seller, recipients, victims; rescue: victim skis down beside you, crash = 'Rescue failed' — published Oct 26 evening
+- [x] Ski shop interior that fits the game + admin panel (F2 / `, open world only) — published Oct 26 evening
+- [x] Cheering fans = 8 real Meshy people (recoloured, flags, cowbells), 21 procedural cheer poses, instanced + LOD, react as you pass / at the finish — published Oct 26 evening
+- [x] Piste floodlight masts as Meshy models + helmet lamp with a real beam — published Oct 26 evening
+- [x] Rocks = procedural granite boulders with snow caps; park kickers reshaped; mid-station view unblocked; race-start sky beams removed; personal-best cards + STATS rows; ski-bus travel card — published Oct 26 evening
+- [x] Polish round 2: new trail map (M, drag/zoom, click to set compass), World-Racing results for open-world races (RACE AGAIN), heli abort fix, snow guns at night, scree at cliff feet, see-through nets on Performance, shop clerk conversation + shop sign, photo mode (P) — published Oct 26 evening
+- [x] Lead fixes: distant-skier respawn crash; ski models clamped to a realistic 11 cm width (no slab on your back) — published Oct 26 evening
+- [x] Secrets: Knappenstollen tunnel → Schattenkar, Teufelsrinne couloir, Silbergrotte ice cave, Adlertor arch, Försterweg — published Oct 26 evening
+- [ ] Secrets leftovers: Eisfall-Grotte (switched off), a 3rd tunnel site, night shots, extra nets
+- [x] Wolkenspitze (new biggest mountain) + Wolkenspitzbahn rack railway (sit inside, spiral tunnel, glacier hall) + Gletscherjet, Firnfeld/Firnboden chairs, Wolkensee gondola, Sonnenwiese chair — published Oct 26 evening
+- [ ] Transport leftovers: Legacy↔Silberhorn link gondola, more horn relief, portal cuttings texture stretch, platform detail, heli drop 'Eiskrone' on the new flank
+- [ ] Check: first-person look-down showed no skis in one final-test shot; HUD speed label 'undefined (off)' seen once
+
+## Oct 26 evening requests (rolling publishes)
+- [x] Walking calm (in-place clip speed fix), villagers walk properly; W pose ≈ normal stance + occasional double-pole; FP pole view model; M on controls card; map pins anywhere; Esc never also pauses; fade screens show logo + spinner; heli lands anywhere; old-fashioned shop; lift clearance (71 towers) + Meshy mid-stations; more skiers; footprints/tracks fade; admin teleports to secrets + train stations — published
+- [~] Soft collisions with other people (skiers, villagers) — done, unpublished
+- [ ] Rescue helicopter instead of wipeouts: crash → heli flies to you, picks you up, flies you to the village (vehicles agent, when a slot frees)
+- [ ] Helicopter collides with objects (trees, buildings, towers) without crashing (vehicles agent)
+- [ ] Ski bus ride: fix hairpin road strips, cut slopes, interior; then switch BUS_RIDE on (vehicles agent)
+- [x] Railway: Meshy stations/train/interior, no clipping, no floating stations, tunnels joined + Meshy lamps, faster tunnels (dark time halved), portal terrain clip, station lights, camera never inside mountain, passengers + moving station people (published)
+- [x] Gondola/chair base + top terminals with Meshy halls (published 19:48)
+- [ ] Job board as a pinned-notes notice board UI (jobs agent, running)
+- [x] Ski tracks glitching in the snow (fixed: skid bands tiled onto the terrain, published 19:13)
+- [ ] Village lamp posts: real light pools at night (check)
+- [ ] Icecold Studio intro card: make it way better, premium studio ident (studio agent, running)
+- [x] Hand-built lights -> Meshy (race + secret tunnels, hut lanterns, helipad mast, far piste masts, rail platform lamps) (published)
+- [ ] Lights follow-ups: glow sprites on race-tunnel banks, LOD for the 14k-tri mine lanterns, plaza point lights at the lantern flame, rail tunnel lamps (switch on after check)
+- [x] Rescue helicopter instead of the free-ride wipeout (races keep respawn) + soft heli collisions (published 19:48)
+- [x] Ride inside the ski bus on real roads (published 19:48)
+- [x] Camera jerking up and down on very high falls (focus snap -> clamp, published 19:48)
+- [x] Races with 15 racers (LOD + far stand-ins), race clock slows in slow-mo (verified x0.30), 5 new race maps (published)
+- [x] Character select: MAN or WOMAN only (Marco's and Elena's bodies), every look from the ski shop (+4 kits: the other skiers' looks), no names / stats; old saves migrate by body (verified in dev, publish pending)
+- [ ] New custom procedural walking animation (walk agent, running)
+- [x] First-person overhaul: real gloves + poles that move with the skiing, helmet cam (6° bank cap), flips, crash pull-out to third person (published)
+- [~] No blurry models anywhere (render scale / auto-quality / texture budgets / LODs) + replace every remaining hand-built model with Meshy and delete the old ones (visual agent) — unpublished:
+  - [x] Native resolution on every preset (Retina 2.0, dynamic floor 1.5; was 1.5 dropping to 1.0 on Performance); auto-drops session-only; pause menu at full res
+  - [x] LODs: full Meshy detail out to ~140 m on Performance (was 56 m), finer chalet / lift-tower LODs
+  - [x] Textures: 9 close-up models at 2048 (cabin, chair, chair hut, heli, lift tower, patrol hut, market stall, job board, snowcat); black emissive maps dropped (net -45 MB)
+  - [x] Meshy deck chairs at the summit huts; Meshy skis for rescue jobs; market stall red ground disc trimmed; LIFT TICKETS sign clipping fixed
+  - [x] (published 20:39) everything above
+  - [x] Round 2 (unpublished): Meshy bullwheel on every chairlift terminal (built "mushroom" deleted), trail map on the Meshy board (2048 map), mid-station podium concrete/larch detail, Meshy signpost poles + finish-arch truss pylons, Meshy shop counter (front run, plane-clipped), gentler sharpening at the 1.5 floor
+- [x] Checkpoint races easier + clearer: blue chevrons, HUD NEXT row, numbered discs, bend boards, wider gates, gentler pitches, fewer open-world gates (published)
+- [x] Gondola base/top stations back to the original models (user preferred them; MESHY_TERMINAL off)
+- [x] Bus faces the right way + real road (asphalt wheel tracks, snow banks, poles, guardrails) (published)
+- [x] Train inside/outside/window view sharp (full-res while riding, hero textures, clean passengers) (published)
+- [x] Station people walk, chat, board and alight with the timetable (published)
+- [x] Village (~44 people), lift bases, bus stops, terrace walkers, skis on shoulders, livelier spectators, NPC skiers off race lines (published)
+- [x] Walk/run animation reverted to the previous one (user disliked the new procedural walk; SkierRig.walkClips = true)
+- [x] Two strikes: first free-ride wipeout you get up, second (within 3 min, no lift ride between) calls the rescue helicopter
+- [x] Bus roads rerouted: 0 overlaps with pistes, nets, buildings, railway, trees (Wolkensee stop dropped, uses the train) (published)
+
+## Oct 26 race round (race agent): 15 racers, slow-mo clock, races easier + clearer, 5 new courses
+- [x] RACE: 15 racers (you + 14 AI), 9-abreast grid + 6 in the second row; bots never ski through each other; HUD board shows the podium + your neighbours; compact 15-row results; LOD (poses by distance, off-screen rigs hidden, instanced stand-ins past 150 m, FX for the nearest 6) - published 20:34
+- [x] Open-world races: 14 rivals too (staggered grid behind the arch, lanes, passing, bumps, same LOD) - published 20:34
+- [x] Slow motion: verified the race clock, HUD timer, splits, bots, ghost and open-world timers all run at the time scale (x0.30 at scale 0.30) - no clock ignored it
+- [x] Races easier + clearer: blue guide chevrons on the snow (next ~110 m), HUD NEXT row (next checkpoint / gate, distance, arrow), numbered discs over checkpoint arches, chevron boards on every bend + STEEP boards before steep pitches, wider gates (6.5 m, 3 m tolerance, 0.5 s penalty, "follow the arrows"), open-world gates every 40-55 m with 7.5 m openings close to the line, alpine/ice canyon widened + gentler + grippier, par/medals recomputed - published 20:34 (warning boards re-mounted on the nets after the publish: republish)
+- [x] 5 new courses: Sunny Meadow (Easy), Floodlight Slalom (Easy, night under floodlights), Black Forest Giant Slalom (Medium), Glacier Super-G (Medium), Eagle Peak Downhill (Hard) - published 20:34, checked in-game ~20:50 (all fine, none hidden)
+- [x] After the 20:34 publish (needs republish): warning boards hang flat on the nets (never through them), checkpoint number discs always drawn (no empty ring at a distance), bolder guide chevrons, open-world race wipeout = back on the course line (no DNF / village), in-arch start lanes 2.2 m
+- [ ] Follow-ups: NPC skiers can still ski down open-world race lines (npcs.js, people agent); floodlights do not light characters (pistelights.js keeps that uniform private, lights agent); one ~0.1 s hitch when a 15-racer results screen projects unfinished bots
+- [~] Whole-game polish + regression sweep: boot to races, every transport, pistes, night, all UI panels (polish agent) - round 1 swept boot/intro/menu, village, gondola, chair, train, heli rescue, piste, night, snow, UI panels, all 8 race starts; fixed (unpublished): race intro crane no longer flies through the START banner (blurry screen-filling lettering on 7 of 8 courses), village fence rows continuous
+  - [x] Polish round 2 (unpublished): speedometer hidden while riding (lifts, train, bus, heli); snowcat double tiller removed (Meshy body only); F2 admin verified clean; Floodlight Slalom racers lit by the course floods; snow falls as soft irregular specks (no snowflake icons, crystal sprite removed); CONTROLS card fades once you set off; Esc closes conversations / dialogs
+  - [x] Steep-face stretching (terrain.js, normal + clip variant): rock/snow mask noise from side projections on steep faces, snow-drift relief calmed there (it was projected from above and smeared down the faces), and couloirs kept to moderately steep ground (faded out between slope 0.45 and 0.6: on steeper faces their fall-line stretch read as a brush smear; A/B-isolated)
+  - [x] Polish round 3 (unpublished): Meshy post-bus stop sign (printed SKI BUS + stop name on both sides) replaces the board on posts; ticket seller behind the booth's ticket window; portal rock cuts steep only near the face + noise-broken crest (no regular ribs); patrol job person never a player body; first person on foot: arms fold away (no forearm pumping in front of the eye); race results project unfinished bots from a clean-run time table (no ~0.1 s hitch)
+  - [x] Ski bus coach regenerated at higher detail (150k triangles from 4k textures, cab-forward), PostBus yellow again (selective body-paint tint, satin finish; glass, tyres, lights, trim unchanged)
+  - [ ] Portal rock faces: the ribs are the terrain step from the cutting up to the tube cover just behind each facade (railroute.js shapeRoadbed, vertical on purpose); fix = carve a sloped rock face rising from the facade top into the hill (cover stays >= crown + 3 m), then re-check the cab's ride through (boulder dressing tried and reverted: looked placed)
+- [x] Polish round 3: detailed yellow ski bus, Meshy SKI BUS stop sign, ticket seller behind the window, patrol job model, FP walking arms, results-screen hitch (published)
+- [ ] Rock step above each rail tunnel portal reads as vertical ribs: carve a sloped rock face (later pass)
+- [x] Day pass cheaper: $140 -> $50 (published)
+- [x] Bus road sides: plough berms shaped into the terrain itself (same snow), varied, tapered at stops (published)
+- [x] Train: bus-style seats, natural seated poses (7 variants), textured ceiling + front bulkhead + racks, nose underframe fixed, station people livelier before boarding (published)
+- [x] Bus: solid collider + camera blocker, E to board within 7 m of the bus (published)
+- [ ] Floating/sunk props + hand-built seats: polish agent stopped mid-round at the user's request (partial fixes in lifts/village/interior/races published 08:07, no report); finish the audit next round
+- [x] Trees: only the trunk stops you, ski through the branches (published)
+- [ ] Secrets: 2 stray lines in the first tunnel, fall-through in the Silberhorn ice cave, full bug sweep + 5-8 new Försterweg-style forest trails (secrets agent)
+- [ ] Overlapping props / z-fighting audit + finish floating props + hand-built seats (polish agent)
+- [ ] Ski tracks overlapping the snow: draw tracks into the terrain shader (track mask) or prove geometry marks never cut in (tracks agent)
+- [x] Races: remove the snow arrows; green bar between gate flags (grey when passed, red when missed); easier gate sections in race modes + open-world races (race agent, details below; unpublished)
+- [x] AI racers' animation + poles + style: user tested, approved (2026-10-27)
+- [ ] Race bots too slow at every difficulty: speed up the whole field per level (AI agent, final task)
+- [x] Oct 27 (race agent): blue guide chevrons removed everywhere (HUD NEXT row, checkpoint discs and bend boards kept); a glowing green barrier-tape bar between the two flags of every must-pass gate (RACE, WORLD RACING, open-world races) - the next gate pulses, grey once passed, red if missed
+- [x] Gate stretches easier: World Racing gates 8 m wide (were 6.5), turning poles 1.4-1.8 m off the centre line (were 2.4-3), 48-80 m apart (were 38-70), none on bends or narrow spots, 4 m pass margin (was 3); gate stretches straighter + smoother + a touch gentler; open-world gates every 50-70 m (were 40-55), 9 m openings (were 7.5), 3.5 m margin (was 2.5), turning pole 0.4-2.2 m off the line, none on sharp bends (1002 -> 463 gates in total since the start of the round); par/medals recomputed - unpublished
+- [ ] DECLUTTER: 1-3 big main runs per mountain, a handful of open-world races (not 35), far fewer gates/flags everywhere incl. race courses (race agent, top priority)
+- [ ] Drivable snowmobiles: E to mount, climb mountains, chase cam, engine sound, headlights, soft collisions, a few parked ones (vehicles agent)
+- [x] Oct 27 declutter (race agent, unpublished): 1-3 main runs per mountain (Legacy: Panorama/Edelweiss/Kandahar; Adlerhorn: Adlerflug/Sonnenhang; Silberhorn: Silberpfeil/Gamsweg/Gratweg; Sonnenkopf: Lärchenweg/Hasenweg; Valley Classic now a plain piste), no ski lanes, open-world races 35 -> 6 (Bunny Hill Cup, Legacy Valley Run, Hasenweg Family Cup, Adlerhorn Super-G, Legacy Downhill, Silberhorn Downhill), no procedural races / Express chairs (lifts 32 -> 13), at most 10 wide gates per race (1002 -> 55 gates), piste markers every 120 m (were 40), race-mode courses: downhill flag pairs only at big bends (e.g. alpine 53 -> 7), slalom/GS gates ~40% further apart
+- [ ] Wolkenspitze's small extra pistes (transport.js) and the village flag poles (flags.js) were left as they are (other agents' files)
+- [x] Loading-screen logo much bigger (46vh, 1024 px source so it stays sharp)
+- [x] On foot: no separate walk, always the sprint pace + run animation (FOOT_SPEED 4.2)
+- [x] Speedometer (km/h) in snowmobile, train, bus, heli with the vehicle's name; bottom ride bar removed (stop in top-left card, "Get off" via E prompt) (published 10:07)
+- [x] Snowmobile climbs ~50 deg (was 38), loses grip ~52-61 deg (published 10:07)
+- [ ] After a heli rescue: ambulance at the pad, ~10 s drive-away shot, black, reload in the village, -$50 even below zero (vehicles agent)
+- [ ] 3 parking lots (big/medium/small) with realistic access roads, Meshy props, crisp markings; remove every car prop (vehicles agent)
+- [x] Car parks: snow piles shaped into the terrain, matte surface (no ice look), bay lines render (published)
+- [x] New map-based travel UI: bus/train/gondola-mid route pickers, heli-ski flight planner, card dialogs for booth/huts/clerk/jobs (published 10:35)
+- [x] Start money for new games: $5,000
+- [ ] Hospital (Meshy) where the ambulance drives you; rescue fee $500 +$250 per earlier rescue (vehicles agent; code live, being checked)
+- [ ] Parked BMW X3 (user's model, optimized to 1.6 MB) in the village car park, plain glass (no transmission), merged meshes, collider (vehicles agent)
+- [x] Hospital + escalating rescue fee ($500 +$250 each) + parked BMW X3 (published 10:44)
+- [ ] Parked Audi RS6 (user's model, 234k tris -> simplify to ~80-100k) next to the BMW (vehicles agent)
+- [ ] Bus/train map picker must start the real ride, not teleport (UI agent)
+- [ ] Random car traffic on the road network (data-driven CAR_MODELS: BMW X3, RS6, future cars), parks/unparks, stops for the player, night lights (vehicles agent, after RS6)
+- [ ] Golf GTI (user's model, 543k tris -> simplify ~90k) parked in the Sonnenkopf car park + in traffic; fix BMW see-through wheels; blend lot edges (vehicles agent)
+- [ ] Dacia Duster (user's model, 31k tris) parked at the roadside (not a lot, never drives) (vehicles agent)
+- [ ] Tesla Model 3 (user's model, 247k tris -> ~90k) parked in the small trailhead lot + in traffic (vehicles agent)
+- [ ] Drivable cars: E at a parked car, realistic snow car physics (auto gearbox, grip, suspension), 1st person with full-detail interior + turning wheel, 3rd person chase, km/h + gear bottom right, real-car controls, engine/skid/horn sounds, headlights, get out anywhere (vehicles agent)
+- [ ] Collisions with people (free ride only; races / World Racing keep the soft bump): skiing into somebody at 15+ km/h knocks you both over (your tumble + get-up, no strike / helicopter) and fines $5 per km/h ($50-$400); on foot a stumble + $20; snowmobile hits knock people over, $10 per km/h ($150-$900), the sled just bumps; cars call knockPerson() ($12 per km/h, $200-$1500). One fine per incident (5 s cooldown), balance may go below zero (game/peoplehits.js; code live, not yet published)
+- [x] Drivable cars (all 5), facing table, driver-eye cockpit + turning wheel, people in traffic cars, engine start + per-car engine sound, car bashing (traffic/parked/people), road junction gaps fixed (published)
+- [x] Collisions with people: both fall, fine, no strike (ski/foot/snowmobile/car) (published)
+- [x] Race courses look distinct: per-course time/weather/colours/scenery/terrain character (published)
+- [x] Train PA announcements (chime + German/English) (published)
+- [x] Snowmobile leaves tracks; skis stay close on the back when running; bus map lists only reachable stops (published)
+- [ ] Leftovers: junction (75,4346) 0.5 m off-centre, pale wedge at (371,1519); listen to engines; car-vs-people untested; Wolkensee bus-stop sign without a bus
+- [x] Car lights: third brake light only when braking, brake/tails brighter and stay red, per-model light groups (no glowing windows), lights + hazards stay on after crashes (published 13:46)
+- [x] Real recorded crash sounds per surface: car metal/glass, tree wood crack, building debris, rock, pole clang, net, snow (published 13:46)
+- [x] Cockpit arms: closed sleeves (no hollow ends), glove + jacket colours; crashed/stuck cars despawn fast; steering wheels one copy, turn clean on all models (published 13:46)
+- [ ] Guardrails solid for walking/skiing/snowmobile + Meshy W-beam + very common (roads agent)
+- [ ] First-person ski hands: detailed gloves, natural wrist/forearm, jacket/glove colours, texture detail kept (hands agent)
+- [ ] Free world: old open-world races removed, the 8 race-mode courses placed on the mountains, E at the start house races 14 AI (races agent)
+- [ ] Real engine recordings with RPM crossfade (audio agent)
+- [ ] Drivers/passengers seated properly in all cars (seating agent)
+- [x] Guardrails solid for walking/skiing/snowmobile + knocked traffic cars; galvanised W-beam (instanced, bent along curves), ~10.8 km, valley side everywhere outside the village, both sides on bends/ridges/steep; no poles on road lanes (published 14:12)
+- [x] Car cockpit: your own seated body (camera at the eyes, head hidden, hands on the wheel via IK), Meshy arms removed (published 14:12)
+- [x] First-person ski hands: Meshy gloved fists on the poles, jacket-coloured sleeves with texture detail (published 14:12)
+- [x] Free world: old gate races removed, all 8 race-mode courses placed on the mountains, E at the start house races 14 AI (published 14:12)
+- [ ] Course starts in the heli flight planner + trail map (races agent)
+- [ ] Performance pass: profiler (?perf=1), collider grid, parked-car draw calls (perf agent)
+- [ ] More cars: user downloads picks from Sketchfab (X-Trail, Defender pickup, G63, Karoq, V-Class, Ferrari FF), then integrate
+- [ ] Note: X3/RS6/Golf models are CC BY-NC-SA (fine while the game is free)

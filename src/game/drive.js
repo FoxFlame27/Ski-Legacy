@@ -1,0 +1,1011 @@
+// Drive the parked cars: E beside one ("Drive BMW X3"), a fade and you are in the driver's seat (your skis on your
+// back); E again at a standstill and you step out by the driver's door, the car stays where you left it.
+//   W throttle · S brake, then reverse · A/D steer · SPACE handbrake · R first person / chase · C look back
+//   H horn · L headlights (on by themselves at night) · E get out (stopped)
+// A car game on snow: an engine with an automatic gearbox (D/R; the Tesla one gear, instant torque), top speed and
+// pull per car; grip from the surface (ploughed roads and car parks hold, loose snow less, groomed pistes and ice are
+// slippery): under- and oversteer, handbrake slides; a spring per wheel (body roll, pitch under braking and
+// acceleration, each wheel following the snow); off-road by grip and slope. Soft bumps off trees, buildings, cars,
+// nets and people: no damage, no wipeout. First person from the driver's seat (the car's full-detail model with its
+// interior, the steering wheel turning), the mouse looks round; or a chase camera that lags in turns and pulls back
+// with speed. Engine / tyre / horn sounds (audio.setCar), headlights with a pool on the road at night.
+import * as THREE from 'three';
+import { world as WORLD } from '../world/world.js';
+import { nightUniform } from '../world/village.js';
+import { loadGLB } from '../core/assets.js';
+import { carTemplate, carInstance, driverEye, REAL } from './cars.js';
+import { keysHTML } from '../ui/hud.js';
+import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
+import { lampsOn, LightPool, Smoke, hazardPhase } from './carlights.js';
+import { knockPerson, peopleNear } from './peoplehits.js';
+import { busRoads } from './bus/roads.js';
+import { TyreTracks } from './tyretracks.js';
+
+// per car: name, pull (m/s^2 at low speed), top speed (m/s), electric (one gear)
+export const CAR_SPECS = {
+  car_bmw_x3: { label: 'BMW X3', accel: 4.6, top: 58, sound: 'i6' },
+  car_audi_rs6: { label: 'Audi RS6 Avant', accel: 7.4, top: 78, sound: 'v8' },
+  car_vw_golf_gti: { label: 'VW Golf GTI', accel: 5.8, top: 68, sound: 'gti' },
+  car_tesla_m3: { label: 'Tesla Model 3', accel: 7.0, top: 62, electric: true },
+  car_dacia_duster: { label: 'Dacia Duster', accel: 3.8, top: 50, sound: 'i4' },
+};
+const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
+const RATIOS = [3.6, 2.2, 1.5, 1.15, 0.92, 0.76], FINAL = 3.7, IDLE = 820, REDLINE = 6400;
+const G = 9.81;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const CRASH_V = 62 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
+const EXTREME_V = 120 / 3.6; // ...and this fast: the car's wrecked at once
+// what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
+const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
+const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
+// kerb weights (kg), for the knocks between cars
+const MASS = { car_bmw_x3: 1900, car_audi_rs6: 2100, car_vw_golf_gti: 1450, car_tesla_m3: 1850, car_dacia_duster: 1300 };
+// driven wheels (the rest all-wheel drive)
+const DRIVE = { car_vw_golf_gti: 'fwd', car_dacia_duster: 'fwd' };
+// two cars' boxes (x, z, yaw, half width hw, half length hd) overlapping? -> { nx, nz (from B to A), depth, px, pz
+// (a contact point: the corners of one inside the other) } or null
+function obb(A, B) {
+  const axes = [[Math.sin(A.yaw), Math.cos(A.yaw)], [Math.cos(A.yaw), -Math.sin(A.yaw)], [Math.sin(B.yaw), Math.cos(B.yaw)], [Math.cos(B.yaw), -Math.sin(B.yaw)]];
+  const dx = A.x - B.x, dz = A.z - B.z;
+  const rad = (o, ax, az) => o.hd * Math.abs(Math.sin(o.yaw) * ax + Math.cos(o.yaw) * az) + o.hw * Math.abs(Math.cos(o.yaw) * ax - Math.sin(o.yaw) * az);
+  let best = Infinity, nx = 0, nz = 0;
+  for (const [ax, az] of axes) {
+    const dist = dx * ax + dz * az, ov = rad(A, ax, az) + rad(B, ax, az) - Math.abs(dist);
+    if (ov <= 0) return null;
+    if (ov < best) { best = ov; const sg = dist >= 0 ? 1 : -1; nx = ax * sg; nz = az * sg; }
+  }
+  const corners = (o) => { const f = [Math.sin(o.yaw), Math.cos(o.yaw)], r = [Math.cos(o.yaw), -Math.sin(o.yaw)], out = []; for (const a of [-1, 1]) for (const b of [-1, 1]) out.push([o.x + f[0] * o.hd * a + r[0] * o.hw * b, o.z + f[1] * o.hd * a + r[1] * o.hw * b]); return out; };
+  const inside = (o, x, z) => { const lx = x - o.x, lz = z - o.z; return Math.abs(lx * Math.sin(o.yaw) + lz * Math.cos(o.yaw)) <= o.hd && Math.abs(lx * Math.cos(o.yaw) - lz * Math.sin(o.yaw)) <= o.hw; };
+  let px = 0, pz = 0, n = 0;
+  for (const [x, z] of corners(A)) if (inside(B, x, z)) { px += x; pz += z; n++; }
+  if (!n) for (const [x, z] of corners(B)) if (inside(A, x, z)) { px += x; pz += z; n++; }
+  if (!n) { px = (A.x + B.x) / 2; pz = (A.z + B.z) / 2; n = 1; }
+  return { nx, nz, depth: best, px: px / n, pz: pz / n };
+}
+const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _ray = new THREE.Raycaster();
+
+const CSS = `
+#drive-hud .ch-card { position: absolute; left: 22px; bottom: 92px; transition: opacity 0.6s ease, translate 0.6s ease; }
+#drive-hud .ch-card.out { opacity: 0; translate: calc(var(--u, 1px) * -24) 0; }`;
+
+export class Drive {
+  constructor({ scene, player, camera, hud, audio, colliders, vegetation, parking, transition, world = WORLD, cameraBlockers = null, input = null, traffic = null, freeRide = null, trails = null }) {
+    Object.assign(this, { scene, player, camera, hud, audio, colliders, vegetation, parking, transition, world, cameraBlockers, input, traffic, freeRide });
+    this.tyres = trails ? new TyreTracks(trails) : null; // the tyres' tracks in the snow (tyretracks.js)
+    this.pool = null; // the headlights' pool of light on the road (carlights.js)
+    // the cabin's dome light (one, made now with intensity 0: switching it on later recompiles nothing)
+    this.dome = new THREE.PointLight(0xffe2bf, 0, 3.0, 2);
+    this.dome.castShadow = false;
+    scene.add(this.dome);
+    this.wrecks = []; // crashed cars waiting to be towed (out of sight)
+    this.shake = 0;
+    this.sliding = []; // parked cars you shoved, sliding to a stop
+    if (traffic) { traffic.parking = parking; traffic.you = this; } // (the traffic keeps clear of parked cars, wrecks, you)
+    this.d = null;
+    this.view = 'chase';
+    this.look = { yaw: 0, pitch: -0.05 };
+    this.cam = { pos: new THREE.Vector3(), look: new THREE.Vector3(), yaw: 0, ready: false };
+    this.seat = { pos: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, 1) };
+    this.prompt = { label: '', act: null };
+  }
+
+  get active() { return !!this.d; }
+  get speed() { return this.d ? Math.hypot(this.d.vx, this.d.vz) : 0; }
+  get label() { const d = this.d; if (!d) return ''; const dm = Math.round(d.e.damage || 0); return `${d.spec.label} · ${d.gear}` + (dm > 0 ? ` · car damage ${dm}%` : ''); }
+
+  // ------------------------------------------------------------------ getting in
+  /** E beside a parked car (within ~1.6 m of its body): { label: 'Drive BMW X3', act } or null. */
+  interaction(pos) {
+    if (this.d || this.entering || !this.parking?.cars?.length) return null;
+    const p = this.player;
+    if (p.mode === 'fall' || p.mode === 'sit') return null;
+    let best = null, bd = Infinity;
+    for (const e of this.parking.cars) {
+      if (!CAR_SPECS[e.name] || e.driving || e.slide) continue;
+      const g = e.car.position, yaw = e.car.rotation.y, dx = pos.x - g.x, dz = pos.z - g.z;
+      if (Math.abs(dx) > 8 || Math.abs(dz) > 8) continue;
+      const lx = dx * Math.cos(yaw) - dz * Math.sin(yaw), lz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      const d = Math.hypot(Math.max(0, Math.abs(lx) - 0.95), Math.max(0, Math.abs(lz) - e.length / 2));
+      if (d < 2.2 && d < bd) { bd = d; best = e; }
+    }
+    if (!best) return null;
+    if (best.wrecked) { this.prompt.label = `${CAR_SPECS[best.name].label} · wrecked`; this.prompt.act = () => this.hud?.flash('Wrecked · it will be towed away', 'bad', 2000); return this.prompt; }
+    this.prompt.label = `Drive ${CAR_SPECS[best.name].label}`;
+    this.prompt.act = () => this.enter(best);
+    return this.prompt;
+  }
+
+  enter(e) {
+    if (this.d || this.entering || e.driving || e.wrecked) return;
+    this.entering = true; // (one E: a second press while it fades does nothing)
+    const p = this.player;
+    this.transition.fade(async () => {
+      try {
+        if (this.d || p.mode === 'sit' || p.mode === 'fall') return;
+        const spec = CAR_SPECS[e.name];
+        e.home ||= { x: e.car.position.x, z: e.car.position.z, yaw: e.car.rotation.y };
+        e.astray = null;
+        e.driving = true;
+        e.collider.x = 1e9; e.collider.z = 1e9;
+        const bi = this.cameraBlockers?.indexOf(e.block);
+        if (bi >= 0) this.cameraBlockers.splice(bi, 1);
+        // the car you drive: its wheels and steering wheel as moving parts
+        const inst = carInstance(e.t, { paint: e.paint, wheels: true });
+        this.swapVisual(e, inst);
+        const g = e.car;
+        this.d = {
+          e, spec, inst, t: e.t, x: g.position.x, z: g.position.z, y: g.position.y, yaw: g.rotation.y, vx: 0, vz: 0, vy: 0, yawRate: 0,
+          steer: 0, gear: 'P', rpm: IDLE, gi: 0, shiftT: 0, air: false, pitch: 0, roll: 0, pitchV: 0, rollV: 0, la: 0, lat: 0,
+          lights: false, horn: false, squeal: 0, offT: 0.6, wheelBase: Math.max(2.4, e.length * 0.6), half: e.length / 2, w: e.t.size.x,
+          start: 0, load: 0, crank: 0, firing: 0,
+        };
+        try { this.audio?.carStart?.(!!spec.electric); } catch { /* (no chime) */ }
+        p.setSkisOn(false); // (skis on your back)
+        p.viewBeforeRide = p.view; p.view = 'third';
+        this.updateSeat();
+        p.sitOn(this.seat);
+        p.rig.snapPose?.(); // (straight into the seated pose: no blend from standing through the roof)
+        this.d.rigFrames = 0; // (and hidden until it has been posed seated: placeCamera)
+        p.rig.root.visible = false; p.rig.gear.visible = false;
+        this.cam.ready = false; this.look.yaw = 0; this.look.pitch = -0.05;
+        this.showCard(true);
+        this.audio?.play('board');
+        // the full-detail model (its interior) for the car you drive, when there is one
+        const full = FULL[e.name];
+        if (full) loadGLB(full).then((gltf) => {
+          if (!this.d || this.d.e !== e || !gltf) return;
+          const t = carTemplate(gltf, e.length, full);
+          const fi = carInstance(t, { paint: e.paint, wheels: true });
+          this.swapVisual(e, fi);
+          this.d.inst = fi; this.d.t = t; this.d.glassIn = undefined;
+        }).catch(() => {});
+      } catch (err) { console.warn('drive: getting in failed', err); this.rollbackEnter(e); }
+      finally { this.entering = false; }
+    }).catch(() => { this.entering = false; });
+  }
+  // getting in went wrong halfway: the car parked as it was, you standing beside it (never in it)
+  rollbackEnter(e) {
+    const p = this.player, g = e.car;
+    try {
+      if (e.parkedVisual) { for (const o of g.children.slice()) if (o !== e.block) g.remove(o); for (const o of e.parkedVisual) g.add(o); }
+      e.collider.x = g.position.x; e.collider.z = g.position.z; e.collider.rot = -g.rotation.y;
+      if (this.cameraBlockers && !this.cameraBlockers.includes(e.block)) this.cameraBlockers.push(e.block);
+    } catch { /* (as it is) */ }
+    e.driving = false; this.d = null;
+    try {
+      if (p.seat === this.seat) p.seat = null;
+      const sp = this.exitSpot({ x: g.position.x, z: g.position.z, yaw: g.rotation.y, w: 1.9, half: e.length / 2, e });
+      if (p.mode === 'sit') { p.standUp(sp.x, sp.z, sp.heading); p.rig.snapPose?.(); }
+      if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
+      p.rig.root.visible = true; p.rig.gear.visible = true; p.rig.setSkisVisible?.(p.hasSkis);
+      this.showCard(false);
+    } catch { /* (nothing more to undo) */ }
+  }
+  // where you step out: beside the driver's door if that's clear, else the other side, behind, in front; on clear
+  // ground (no car, building, tree or net there)
+  exitSpot(d) {
+    const yaw = d.yaw, fx = Math.sin(yaw), fz = Math.cos(yaw), lx = fz, lz = -fx;
+    const side = (s, k, out) => ({ x: d.x + lx * s * (d.w / 2 + out) + fx * k, z: d.z + lz * s * (d.w / 2 + out) + fz * k, heading: yaw + s * (Math.PI / 2) });
+    const cands = [side(1, 0.3, 0.75), side(-1, 0.3, 0.75), side(1, -0.8, 0.75), side(-1, -0.8, 0.75),
+      { x: d.x - fx * (d.half + 1.0), z: d.z - fz * (d.half + 1.0), heading: yaw + Math.PI }, { x: d.x + fx * (d.half + 1.0), z: d.z + fz * (d.half + 1.0), heading: yaw },
+      side(1, 0.3, 2.2), side(-1, 0.3, 2.2)];
+    for (const c of cands) if (this.clearAt(c.x, c.z, 0.45, d.e)) return c;
+    return cands[0];
+  }
+  clearAt(x, z, r, own = null) {
+    const inBox = (cx, cz, yaw, hw, hd) => { const dx = x - cx, dz = z - cz, a = dx * Math.cos(yaw) - dz * Math.sin(yaw), b = dx * Math.sin(yaw) + dz * Math.cos(yaw); return Math.abs(a) < hw + r && Math.abs(b) < hd + r; };
+    for (const e of this.parking?.cars || []) if (e !== own && Math.abs(e.car.position.x - x) < 8 && Math.abs(e.car.position.z - z) < 8 && inBox(e.car.position.x, e.car.position.z, e.car.rotation.y, 0.97, e.length / 2)) return false;
+    for (const c of this.traffic?.cars || []) if (c.mode !== 'gone' && Math.abs(c.x - x) < 8 && Math.abs(c.z - z) < 8 && inBox(c.x, c.z, c.yaw, c.w / 2, c.l / 2)) return false;
+    const cars = this.carColliders();
+    for (const c of this.colliders) {
+      if (cars.has(c) || c === own?.collider) continue;
+      const size = c.r ?? Math.max(c.hw, c.hd);
+      if (Math.abs(c.x - x) > size + r + 0.5 || Math.abs(c.z - z) > size + r + 0.5) continue;
+      if (c.r !== undefined) { if (Math.hypot(x - c.x, z - c.z) < c.r + r) return false; }
+      else if (inBox(c.x, c.z, -c.rot, c.hw, c.hd)) return false;
+    }
+    if (this.vegetation?.collide?.(x, z, r, 0.6)) return false;
+    return true;
+  }
+  // show a car instance in place of the parked car's (the parked one is kept to put back)
+  swapVisual(e, inst) {
+    const g = e.car;
+    if (!e.parkedVisual) e.parkedVisual = g.children.filter((o) => o !== e.block);
+    for (const o of g.children.slice()) if (o !== e.block) g.remove(o);
+    g.add(inst.group);
+  }
+  // ------------------------------------------------------------------ getting out
+  exit() {
+    const d = this.d, p = this.player;
+    if (!d) return;
+    if (this.speed > 1) { this.hud?.flash('Stop the car to get out', 'bad', 1500); return; }
+    const yaw = d.yaw;
+    // by the driver's door (left side) on clear ground; else the other side, behind, in front
+    const sp = this.exitSpot(d);
+    this.park();
+    p.seat = null;
+    p.standUp(sp.x, sp.z, sp.heading);
+    p.rig.snapPose?.(); // (standing at once, outside: no blend from the seat)
+    if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
+    p.rig.root.visible = true; p.rig.gear.visible = true;
+    p.rig.setSkisVisible(p.hasSkis);
+    p.camYaw = sp.heading + Math.PI;
+    void yaw;
+  }
+  // the car stays where it stopped: the parked look, its collider and camera blocker back
+  park() {
+    const d = this.d;
+    if (!d) return;
+    this.tyres?.end();
+    const e = d.e, g = e.car;
+    for (const o of g.children.slice()) if (o !== e.block) g.remove(o);
+    for (const o of e.parkedVisual || []) g.add(o);
+    g.position.set(d.x, this.world.height(d.x, d.z) + 0.03, d.z);
+    g.rotation.set(0, d.yaw, 0);
+    g.updateMatrixWorld(true);
+    e.collider.x = d.x; e.collider.z = d.z; e.collider.rot = -d.yaw;
+    if (this.cameraBlockers && !this.cameraBlockers.includes(e.block)) this.cameraBlockers.push(e.block);
+    e.driving = false;
+    if (!d.crash) e.smokeFx?.clear();
+    if (this.dome) this.dome.intensity = 0;
+    this.tailPool?.update(0, 0, 0, 0, this.world, 0);
+    this.d = null;
+    this.pool?.update(0, 0, 0, 0, this.world, 0);
+    this.showCard(false);
+    this.audio?.setCar?.({ on: false });
+  }
+  /** End a drive at once (main.js: teleports, menus): the car parks where it is. */
+  abort() {
+    if (!this.d) return;
+    const p = this.player;
+    let sp = null;
+    try { sp = this.exitSpot(this.d); } catch { sp = null; }
+    this.park();
+    if (p.seat === this.seat) p.seat = null;
+    if (p.mode === 'sit' && sp) { p.standUp(sp.x, sp.z, sp.heading); p.rig.snapPose?.(); } // (never left sitting / standing in the car)
+    if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
+    p.rig.root.visible = true; p.rig.gear.visible = true;
+    p.rig.setSkisVisible(p.hasSkis);
+  }
+
+  // ------------------------------------------------------------------ per frame
+  update(dt, input) {
+    if (this.sliding.length && dt > 0) this.slideParked(dt);
+    if (this.wrecks.length && dt > 0) this.updateWrecks(dt);
+    if (!this.d) { this.unstick(); return; }
+    if (dt <= 0) { this.audio?.setCar?.({ on: true, paused: true }); return; }
+    try {
+      const d = this.d;
+      d.offT = Math.max(0, d.offT - dt);
+      const key = (a, b) => !!input && (input.down(a) || (b && input.down(b)));
+      // the engine starts as you get in: the starter turns it over, it catches, flares and settles to idle
+      d.start += dt;
+      const cranking = !d.spec.electric && d.start < 0.85, live = !d.crash;
+      const thr = live && !cranking && key('KeyW', 'ArrowUp') ? 1 : 0, brk = live && key('KeyS', 'ArrowDown') ? 1 : 0;
+      const steerIn = live ? (key('KeyA', 'ArrowLeft') ? 1 : 0) - (key('KeyD', 'ArrowRight') ? 1 : 0) : 0;
+      const hb = live && key('Space'), lookBack = key('KeyC');
+      d.horn = key('KeyH');
+      if (input?.hit?.('KeyL')) d.lights = !d.lights;
+      if (input?.hit?.('KeyR')) { this.view = this.view === 'chase' ? 'cockpit' : 'chase'; this.cam.ready = false; }
+      if (input?.hit?.('KeyE') && d.offT <= 0 && !d.crash) { this.exit(); if (!this.d) return; }
+      const n = Math.max(1, Math.ceil(dt / (1 / 120)));
+      if (d.crash) this.crashStep(dt);
+      else for (let i = 0; i < n; i++) { this.step(dt / n, thr, brk, steerIn, hb); if (d.crash) break; }
+      if (!d.spec.electric && d.start < 2.4) {
+        if (cranking) { d.crank = 1; d.firing = d.start > 0.62 ? 0.5 : 0; d.rpm = 210 + 70 * Math.abs(Math.sin(d.start * 26)); }
+        else { const k = d.start - 0.85; d.crank = 0; d.firing = 1; d.rpm = Math.max(d.rpm, IDLE + 900 * Math.exp(-k * 2.4) * Math.min(1, k * 10)); }
+      } else { d.crank = 0; d.firing = 1; }
+      d.load += (thr - d.load) * (1 - Math.exp(-dt * 9));
+      this.pose(dt);
+      this.updateSeat();
+      const p = this.player;
+      p.pos.copy(this.seat.pos);
+      this.placeRig();
+      this.placeCamera(dt, input, lookBack);
+      this.effects(dt, thr);
+      this.tyres?.update(d); // (tyre tracks in the snow: tyretracks.js)
+      // on its side or its roof (more than ~70 degrees for a second, slow): F flips it back onto its wheels
+      const upY = _w.set(0, 1, 0).applyQuaternion(d.e.car.quaternion).y;
+      d.flipT = !d.crash && upY < 0.34 && this.speed < 2 ? (d.flipT || 0) + dt : 0;
+      if (d.flipT > 1) {
+        if (performance.now() - (this.flipMsgT || 0) > 2000) { this.flipMsgT = performance.now(); this.hud?.flash('F · Flip car back', 'good', 1900); }
+        if (input?.hit?.('KeyF')) this.unflip();
+      }
+      // after a crash: the car comes to rest, then you're out beside it
+      if (d.crash) { d.crash.t += dt; if (d.crash.t > 1.9 && this.speed < 1.2 && Math.abs(d.crash.rollTo - d.crash.roll) < 0.05) this.wreckOut(); }
+    } catch (err) { console.warn('drive', err); try { this.abort(); } catch { this.d = null; } }
+  }
+
+  // surface grip: ploughed roads and car parks hold (winter tyres), packed snow off the road is clearly slipperier
+  // (it drags too, and it's bumpy), groomed pistes are close to ice
+  grip(x, z) {
+    const c = this.world.corridorAt(x, z, this._corr || (this._corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false }));
+    if (c.kind === 'lift' && c.d < 0) return { mu: 0.92, roll: 0.015, rough: 0.1, road: true }; // (roads, car parks, junctions, lay-bys: winter tyres)
+    if (c.groomed && c.d < 0) return { mu: 0.24, roll: 0.02, rough: 0.4 };                    // groomed piste: icy
+    return { mu: 0.46, roll: 0.06, rough: 1 };                                                // packed / loose snow
+  }
+
+  // A bicycle model: the front and rear axles each with a tyre that grips by its slip angle (rising to a peak, then a
+  // gentle fall into a slide), the load on each axle shifting with braking and acceleration, the drive and the brakes
+  // per axle within each tyre's grip (a friction circle: wheelspin or a locked axle has less grip sideways), ABS-like
+  // brakes biased to the front (it stays straight under braking), the handbrake locking the rear (a slide you hold
+  // with the steering). Yaw comes from the tyre forces. The steering: a rack with less lock at speed, rate-limited,
+  // centring itself. The engine: a torque curve through the automatic gears (one gear and a power limit for the
+  // Tesla), engine braking off the throttle, air drag setting the top speed.
+  step(dt, thr, brk, steerIn, hb) {
+    const d = this.d, spec = d.spec, W = this.world;
+    const fx = Math.sin(d.yaw), fz = Math.cos(d.yaw), lx = fz, lz = -fx; // forward, left
+    let u = d.vx * fx + d.vz * fz, v = d.vx * lx + d.vz * lz, r = d.yawRate;
+    const s = this.grip(d.x, d.z);
+    this.roughness = s.rough;
+    const e = 1.4, h0 = W.groundHeight(d.x, d.z, d.y + 1);
+    const gx = (W.groundHeight(d.x + e, d.z, d.y + 1) - W.groundHeight(d.x - e, d.z, d.y + 1)) / (2 * e);
+    const gz = (W.groundHeight(d.x, d.z + e, d.y + 1) - W.groundHeight(d.x, d.z - e, d.y + 1)) / (2 * e);
+    const cosT = 1 / Math.sqrt(1 + gx * gx + gz * gz);
+    // gearbox (automatic): S at a standstill engages reverse, W drive
+    if (Math.abs(u) < 0.4) {
+      if (brk && !thr && d.gear !== 'R') { d.holdR = (d.holdR || 0) + dt; if (d.holdR > 0.25) d.gear = 'R'; }
+      else d.holdR = 0;
+      if (thr && d.gear !== 'D') d.gear = 'D';
+    }
+    const m = MASS[d.e.name] || 1700, L = d.wheelBase, fwd = DRIVE[d.e.name] === 'fwd';
+    const a = L * (fwd ? 0.4 : 0.46), b = L - a, hcg = 0.55, Iz = m * a * b * 1.15;
+    const au = Math.abs(u), sgn = u >= 0 ? 1 : -1;
+    // the steering rack: full lock at parking speed, much less at speed; it moves at a limited rate and centres itself
+    const lock = 0.6 / (1 + 0.0045 * au * au);
+    const rate = (steerIn ? 2.4 : 3.2) / (1 + au / 16);
+    d.steer += clamp(steerIn * lock - d.steer, -rate * dt, rate * dt);
+    const delta = d.steer;
+    if (!d.air) {
+      // loads on the axles: static, plus the weight moving with the acceleration (nose down braking, squat pulling)
+      const Wt = m * G * cosT;
+      const Fzf = Math.max(Wt * 0.15, (Wt * b) / L - (m * d.la * hcg) / L), Fzr = Math.max(Wt * 0.15, (Wt * a) / L + (m * d.la * hcg) / L);
+      const mu = s.mu, capF = mu * Fzf, capR = mu * Fzr;
+      // the engine (through the gears) and the brakes
+      let Fdrive = 0, Fbrake = 0;
+      const x = clamp((d.rpm - 800) / 5600, 0, 1), curve = 0.62 + 0.38 * Math.sin(Math.PI * x);
+      const gearK = spec.electric ? 1 : Math.pow(RATIOS[d.gi] / RATIOS[0], 0.85);
+      const Fmax = m * spec.accel;
+      if (d.gear === 'D') {
+        if (thr) Fdrive = spec.electric ? Math.min(Fmax, (Fmax * 0.42 * spec.top) / Math.max(1, au)) * thr : Fmax * gearK * curve * thr * (d.shiftT > 0 ? 0.3 : 1);
+        if (brk) Fbrake = m * 10 * brk;
+        else if (!thr && u > 1) Fbrake = m * (spec.electric ? 1.1 : 0.35 + 0.8 * (d.rpm / REDLINE)); // (engine braking / regen)
+      } else if (d.gear === 'R') {
+        if (brk) Fdrive = u > -7 ? -m * 3.2 : 0;
+        if (thr) Fbrake = m * 10;
+      }
+      // per axle: drive split (AWD 40/60, FWD all front), brakes 65/35 front; each within its tyre's grip (ABS: just
+      // under it); the handbrake locks the rear
+      const split = fwd ? 1 : 0.4;
+      let Fxf = Fdrive * split - Fbrake * 0.65 * sgn, Fxr = Fdrive * (1 - split) - Fbrake * 0.35 * sgn;
+      Fxf = clamp(Fxf, -0.95 * capF, 0.95 * capF);
+      Fxr = clamp(Fxr, -0.95 * capR, 0.95 * capR);
+      let latR = 1;
+      if (hb && au > 0.5) { Fxr = -sgn * 0.75 * capR; latR = 0.32; }
+      // sideways: slip angles of the axles, a tyre curve (peak near 9 degrees, then a gentle fall), what grip the
+      // drive / brakes leave (friction circle)
+      const uu = Math.max(au, 0.8);
+      const af = Math.atan2(v + a * r, uu) - delta * sgn, ar = Math.atan2(v - b * r, uu);
+      const tyre = (al) => Math.sin(1.35 * Math.atan(14 * al));
+      const kf = Math.min(1, Math.abs(Fxf) / Math.max(1, capF)), kr = Math.min(1, Math.abs(Fxr) / Math.max(1, capR));
+      const Fyf = -capF * Math.sqrt(Math.max(0, 1 - kf * kf)) * tyre(af);
+      const Fyr = -capR * Math.sqrt(Math.max(0, 1 - kr * kr)) * latR * tyre(ar);
+      // resistances: rolling (snow drags more), air (sets the top speed), slope
+      const topF = spec.electric ? Fmax * 0.42 : Fmax * Math.pow(RATIOS[RATIOS.length - 1] / RATIOS[0], 0.85) * 0.66;
+      const drag = (topF / (spec.top * spec.top)) * u * au;
+      const roll = s.roll * Wt * sgn * Math.min(1, au / 0.5);
+      const gF = -G * (gx * fx + gz * fz) * cosT * m, gL = -G * (gx * lx + gz * lz) * cosT * m;
+      const cs = Math.cos(delta), sn = Math.sin(delta);
+      const FF = Fxf * cs - Fyf * sn + Fxr - drag - roll + gF;
+      const FL = Fxf * sn + Fyf * cs + Fyr + gL;
+      const u0 = u;
+      u += (FF / m + r * v) * dt;
+      v += (FL / m - r * u0) * dt;
+      r += ((a * (Fxf * sn + Fyf * cs) - b * Fyr) / Iz) * dt;
+      // braking to a stop doesn't roll it backwards; parked stays put
+      if (Fbrake > 0 && Math.sign(u) !== Math.sign(u0) && u0 !== 0) u = 0;
+      if (d.gear === 'P' || (d.gear === 'D' && !thr && brk && Math.abs(u) < 0.3)) { u = 0; v *= 0.5; }
+      // at walking pace the tyres just roll where they point (no slip maths at ~0 speed)
+      const kd = clamp((Math.abs(u) - 1) / 3, 0, 1);
+      if (kd < 1) { const rk = (u / L) * Math.tan(delta); r = rk + (r - rk) * kd; v = v * kd + rk * b * (1 - kd) * 0; }
+      d.la += ((u - u0) / dt - d.la) * Math.min(1, dt * 12);
+      d.lat = FL / m;
+      // tyre noise: only on cleared roads (snow hushes it): a slide, wheelspin, a locked axle
+      const slide = Math.max(Math.abs(af), Math.abs(ar));
+      d.squeal = s.road ? clamp((slide - 0.12) * 5 + (hb && au > 4 ? 0.4 : 0) + (kr > 0.94 && thr ? 0.3 : 0), 0, 1) : 0;
+    } else {
+      r *= Math.exp(-dt * 1.2);
+    }
+    d.vx = fx * u + lx * v; d.vz = fz * u + lz * v; d.yawRate = r;
+    d.yaw = wrapPi(d.yaw + r * dt);
+    d.x += d.vx * dt; d.z += d.vz * dt;
+    // vertical: on the snow it follows the ground; over a crest at speed it leaves it (a small jump)
+    // (a step in the ground: a kerb, a car park's edge, a deck, is settled onto, never turned into upward speed; a
+    // jump is never more than a hop)
+    const g1 = this.world.groundHeight(d.x, d.z, d.y + 1);
+    if (!d.air) {
+      const step = g1 - h0;
+      const vyG = clamp(Math.abs(step) > 0.3 ? d.vy * 0.5 : step / dt, -9, 5);
+      if (vyG < d.vy - G * dt - 3.2 && Math.abs(u) > 10 && step > -1.5) { d.air = true; d.vy = clamp(d.vy, -9, 4) - G * dt; d.y += d.vy * dt; } // (the springs keep it down over ordinary crests)
+      else { d.y = g1; d.vy += (vyG - d.vy) * 0.5; }
+    } else {
+      d.vy = Math.min(d.vy, 6) - G * dt; d.y += d.vy * dt;
+      if (d.y <= g1) { d.pitchV += Math.min(1.5, -d.vy * 0.08); d.y = g1; d.vy = 0; d.air = false; }
+    }
+    // engine revs and gears
+    const wr = 0.34, speedAbs = Math.abs(u);
+    if (spec.electric) d.rpm = IDLE + speedAbs * 220;
+    else {
+      d.shiftT = Math.max(0, d.shiftT - dt);
+      const rpmAt = (gi) => (speedAbs / wr) * RATIOS[gi] * FINAL * 60 / (2 * Math.PI);
+      if (d.gear === 'D') {
+        if (rpmAt(d.gi) > 5800 && d.gi < RATIOS.length - 1) { d.gi++; d.shiftT = 0.25; }
+        else if (d.gi > 0 && rpmAt(d.gi) < 2200) d.gi--;
+      } else d.gi = 0;
+      d.rpm = clamp(Math.max(IDLE + thr * 600, rpmAt(d.gi)), IDLE, REDLINE);
+    }
+    this.collide();
+    this.bash(dt);
+  }
+
+  // soft bumps: trees, rocks, colliders (buildings, nets, other cars), people; no damage
+  collide() {
+    const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
+    let px = 0, pz = 0, n = 0, solid = false, kind = 'snow';
+    const R = d.w / 2;
+    for (const k of [d.half - R, 0, -(d.half - R)]) {
+      const cx = d.x + fx * k, cz = d.z + fz * k;
+      const t = this.vegetation?.collide?.(cx, cz, R, 0.6);
+      if (t) { const dx = cx - t.x, dz = cz - t.z, l = Math.hypot(dx, dz) || 1; const o = R + t.r - l; if (o > 0) { px += (dx / l) * o; pz += (dz / l) * o; n++; solid = true; kind = vegKind(t); } }
+      // guardrails: a line you slide along (a scrape, never a crash)
+      const RG = busRoads.railGrid;
+      if (RG?.size) {
+        const stamp = (this.railStamp = (this.railStamp || 0) + 1);
+        for (let gx = Math.floor((cx - 1.4) / 16); gx <= Math.floor((cx + 1.4) / 16); gx++) for (let gz = Math.floor((cz - 1.4) / 16); gz <= Math.floor((cz + 1.4) / 16); gz++) {
+        const cell = RG.get(gx * 100003 + gz);
+        if (cell) for (const k of cell) {
+          const g = busRoads.rails[k];
+          if (g.stamp === stamp) continue;
+          g.stamp = stamp;
+          const ex = g.bx - g.ax, ez = g.bz - g.az, l2 = ex * ex + ez * ez || 1;
+          const t2 = clamp(((cx - g.ax) * ex + (cz - g.az) * ez) / l2, 0, 1), qx = g.ax + ex * t2, qz = g.az + ez * t2;
+          const dx = cx - qx, dz = cz - qz, l = Math.hypot(dx, dz), o = R + 0.12 - l;
+          if (o > 0 && l > 1e-4) { px += (dx / l) * o; pz += (dz / l) * o; n++; if (kind === 'snow') kind = 'metal'; }
+        }
+        }
+      }
+      const cars = this.carColliders();
+      for (const c of this.colliders) {
+        if (c === d.e.collider || cars.has(c) || c.rail) continue; // (other cars: bash(); guardrails: their line colliders)
+        const size = c.r ?? Math.max(c.hw, c.hd);
+        if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
+        if (c.r !== undefined) {
+          const dx = cx - c.x, dz = cz - c.z, l = Math.hypot(dx, dz);
+          if (l < c.r + R) { px += (l > 1e-3 ? dx / l : 1) * (c.r + R - l); pz += (l > 1e-3 ? dz / l : 0) * (c.r + R - l); n++; if (!c.soft && !c.net) solid = true; kind = kindOf(c); }
+        } else {
+          const cs = Math.cos(-c.rot), sn = Math.sin(-c.rot), lx = (cx - c.x) * cs - (cz - c.z) * sn, lz = (cx - c.x) * sn + (cz - c.z) * cs;
+          const ox = c.hw + R - Math.abs(lx), oz = c.hd + R - Math.abs(lz);
+          if (ox > 0 && oz > 0) {
+            let nlx = 0, nlz = 0;
+            if (ox < oz) nlx = Math.sign(lx) || 1; else nlz = Math.sign(lz) || 1;
+            const c2 = Math.cos(c.rot), s2 = Math.sin(c.rot), o = Math.min(ox, oz);
+            px += (nlx * c2 - nlz * s2) * o; pz += (nlx * s2 + nlz * c2) * o; n++;
+            if (!c.soft && !c.net) solid = true;
+            kind = kindOf(c);
+          }
+        }
+      }
+    }
+    if (!n) return;
+    const l = Math.hypot(px, pz) || 1, nx = px / l, nz = pz / l;
+    d.x += px; d.z += pz;
+    const vn = d.vx * nx + d.vz * nz;
+    // into something solid (a trunk, a building, a rock, a lift tower) at 40 km/h or more: a crash
+    if (solid && -vn > CRASH_V && this.canCrash()) { this.crash(-vn, nx, nz, kind); return; }
+    if (vn < 0) {
+      d.vx -= nx * vn * 1.2; d.vz -= nz * vn * 1.2; // (a soft bounce back)
+      d.vx *= 0.85; d.vz *= 0.85;
+      d.yawRate *= 0.6;
+      if (-vn > 2 && performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); this.audio?.impact ? this.audio.impact(kind === 'soft' ? 'snow' : kind, Math.min(0.7, -vn / 16)) : this.audio?.play('land', Math.min(1, -vn / 10)); d.pitchV -= Math.min(0.6, -vn * 0.04); }
+    }
+  }
+
+  // on foot (or skis) inside a parked car's footprint (never meant to happen): out to the nearer side of it
+  unstick() {
+    const p = this.player;
+    if (!p || this.entering || (p.mode !== 'walk' && p.mode !== 'ski')) return;
+    this.unstickT = (this.unstickT || 0) + 1;
+    if (this.unstickT % 6) return;
+    for (const e of this.parking?.cars || []) {
+      const g = e.car.position, yaw = e.car.rotation.y, dx = p.pos.x - g.x, dz = p.pos.z - g.z;
+      if (Math.abs(dx) > 4 || Math.abs(dz) > 4) continue;
+      const a = dx * Math.cos(yaw) - dz * Math.sin(yaw), b = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      if (Math.abs(a) > 0.9 || Math.abs(b) > e.length / 2 - 0.15) continue;
+      const sp = this.exitSpot({ x: g.x, z: g.z, yaw, w: 1.9, half: e.length / 2, e });
+      p.pos.x = sp.x; p.pos.z = sp.z; p.pos.y = this.world.height(sp.x, sp.z);
+      p.vel?.set?.(0, 0, 0);
+      break;
+    }
+  }
+
+  // ------------------------------------------------------------------ bashing into cars and people
+  // the colliders of the other cars (traffic, parked): handled by bash(), not by the soft bumps
+  carColliders() {
+    const n = (this.traffic?.cars?.length || 0) + (this.parking?.cars?.length || 0);
+    if (this._cc && this._ccN === n) return this._cc;
+    this._ccN = n;
+    this._cc = new Set([...(this.traffic?.cars || []).map((c) => c.collider), ...(this.parking?.cars || []).map((e) => e.collider)]);
+    return this._cc;
+  }
+  // Your car against the others (boxes, separating axes): a real knock above a walking pace, both cars get the impulse
+  // of the closing speed by their masses (a bounce), the other one a spin from where it was hit: a traffic car slides
+  // off its lane and comes to rest crooked (traffic.js 'knocked' / 'wreck': it stays until the watchdog takes it away
+  // out of sight), a parked one is shoved out of its bay. Yours just bounces (no damage, no wipeout). People in the
+  // way are knocked over (peoplehits.js: they fall, you're fined).
+  bash(dt) {
+    const d = this.d;
+    if (!d) return;
+    const fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
+    const A = { x: d.x, z: d.z, yaw: d.yaw, hw: d.w / 2 - 0.08, hd: d.half };
+    const m1 = MASS[d.e.name] || 1700, I1 = (m1 * (4 * d.half * d.half + d.w * d.w)) / 12;
+    const others = [];
+    for (const c of this.traffic?.cars || []) if (c.mode !== 'gone' && c.g.visible && Math.abs(c.x - d.x) < 9 && Math.abs(c.z - d.z) < 9) others.push({ kind: 'traffic', o: c, x: c.x, z: c.z, yaw: c.yaw, hw: c.w / 2 - 0.08, hd: c.l / 2, m: MASS[c.name] || 1700, vx: Math.sin(c.yaw) * (c.mode === 'knocked' ? 0 : c.v) * (c.rev ? -1 : 1) + (c.kvx || 0), vz: Math.cos(c.yaw) * (c.mode === 'knocked' ? 0 : c.v) * (c.rev ? -1 : 1) + (c.kvz || 0) });
+    for (const e of this.parking?.cars || []) if (e !== d.e && !e.driving && Math.abs(e.car.position.x - d.x) < 9 && Math.abs(e.car.position.z - d.z) < 9) others.push({ kind: 'parked', o: e, x: e.car.position.x, z: e.car.position.z, yaw: e.car.rotation.y, hw: 0.9, hd: e.length / 2, m: MASS[e.name] || 1700, vx: e.slide?.vx || 0, vz: e.slide?.vz || 0 });
+    for (const B of others) {
+      const hit = obb(A, B);
+      if (!hit) continue;
+      const { nx, nz, depth, px, pz } = hit; // (normal from B to A; contact point)
+      const m2 = B.m, I2 = (m2 * (4 * B.hd * B.hd + 4 * B.hw * B.hw)) / 12;
+      // closing speed along the normal (with the turning of both at the contact)
+      const r1x = px - d.x, r1z = pz - d.z, r2x = px - B.x, r2z = pz - B.z;
+      const w2 = B.kind === 'traffic' ? B.o.kw || 0 : B.o.slide?.w || 0;
+      const v1x = d.vx + d.yawRate * r1z, v1z = d.vz - d.yawRate * r1x, v2x = B.vx + w2 * r2z, v2z = B.vz - w2 * r2x;
+      const vn = (v1x - v2x) * nx + (v1z - v2z) * nz;
+      const bash = -vn > 1.3 || (B.kind === 'traffic' && B.o.mode !== 'road' && B.o.mode !== 'lot' && B.o.mode !== 'parked' && -vn > 0.2);
+      // push apart (by mass when it's a knock; a nudge only moves you), then the impulse when they close
+      const share = bash ? m2 / (m1 + m2) : 1;
+      d.x += nx * depth * share; d.z += nz * depth * share;
+      if (vn >= 0) continue;
+      const e = 0.28;
+      const rn1 = r1z * nx - r1x * nz, rn2 = r2z * nx - r2x * nz; // (r x n, about y)
+      const J = (-(1 + e) * vn) / (1 / m1 + (bash ? 1 / m2 + (rn2 * rn2) / I2 : 0) + (rn1 * rn1) / I1);
+      d.vx += (J / m1) * nx; d.vz += (J / m1) * nz;
+      d.yawRate += clamp(((r1z * nx - r1x * nz) * J) / I1, -1.5, 1.5) * 0.5;
+      if (!bash) continue; // (a nudge at parking speed: only you bounce)
+      const dvx = (-J / m2) * nx, dvz = (-J / m2) * nz, dw = clamp((-(r2z * nx - r2x * nz) * J) / I2, -2.5, 2.5);
+      if (B.kind === 'traffic') this.traffic?.knock?.(B.o, B.vx + dvx, B.vz + dvz, w2 + dw);
+      else this.shove(B.o, B.vx + dvx, B.vz + dvz, w2 + dw);
+      // and the other car pushed its share out of the overlap
+      const o = B.kind === 'traffic' ? B.o : null;
+      if (o) { o.x -= nx * depth * (1 - share); o.z -= nz * depth * (1 - share); }
+      else { B.o.car.position.x -= nx * depth * (1 - share); B.o.car.position.z -= nz * depth * (1 - share); }
+      const hard = Math.min(1, -vn / 12);
+      // head-on into another car at 40 km/h or more (closing): a crash
+      if (-vn > CRASH_V && Math.abs(nx * fx + nz * fz) > 0.6 && this.canCrash()) { this.crash(-vn, nx, nz, 'car'); return; }
+      if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.25 + 0.4 * hard); else this.audio?.play('land', 0.4 + 0.6 * hard); d.pitchV -= 0.25 * hard; d.rollV += (Math.random() - 0.5) * 0.6 * hard; }
+    }
+    // people: knocked over (and a fine) when the car's body touches them; the car only bumps softly
+    try {
+      const sp = Math.hypot(d.vx, d.vz);
+      if (sp > 0.6) {
+        for (const p of peopleNear(d.x, d.z, d.half + 1.2, this._ppl || (this._ppl = []))) {
+          const dx = p.x - d.x, dz = p.z - d.z, lz = dx * fx + dz * fz, lx = dx * fz - dz * fx;
+          if (Math.abs(lz) > d.half + 0.3 || Math.abs(lx) > d.w / 2 + 0.3) continue;
+          const l = Math.hypot(dx, dz) || 1, closing = Math.max(sp * 0.5, (d.vx * dx + d.vz * dz) / l);
+          const r = knockPerson(p, closing, 'car', d.vx / sp, d.vz / sp);
+          if (r?.fell) { d.vx *= 0.9; d.vz *= 0.9; this.audio?.play('land', 0.5); }
+          else if (!r) { // (people hits off: the car just bumps softly off them)
+            const nx = -dx / l, nz = -dz / l, vn = d.vx * nx + d.vz * nz;
+            if (vn < 0) { d.vx -= nx * vn * 1.1; d.vz -= nz * vn * 1.1; d.vx *= 0.9; d.vz *= 0.9; }
+          }
+        }
+        this._ppl.length = 0;
+      }
+    } catch { /* (people are optional) */ }
+  }
+  // a parked car shoved: it slides (and turns) to a stop on the snow, where it stays
+  shove(e, vx, vz, w) {
+    e.home ||= { x: e.car.position.x, z: e.car.position.z, yaw: e.car.rotation.y };
+    e.slide = { vx, vz, w };
+    if (!this.sliding.includes(e)) this.sliding.push(e);
+  }
+  slideParked(dt) {
+    for (let i = this.sliding.length - 1; i >= 0; i--) {
+      const e = this.sliding[i], s = e.slide, g = e.car;
+      try {
+        const sp = Math.hypot(s.vx, s.vz), dec = 0.6 * G * dt;
+        if (sp > dec) { s.vx -= (s.vx / sp) * dec; s.vz -= (s.vz / sp) * dec; } else { s.vx = 0; s.vz = 0; }
+        s.w *= Math.exp(-dt * 2.6);
+        if (Math.abs(s.w) < 0.04 && !s.vx && !s.vz) s.w = 0;
+        g.position.x += s.vx * dt; g.position.z += s.vz * dt;
+        g.rotation.y = wrapPi(g.rotation.y + s.w * dt);
+        g.position.y = this.world.height(g.position.x, g.position.z) + 0.03;
+        g.updateMatrixWorld(true);
+        e.collider.x = g.position.x; e.collider.z = g.position.z; e.collider.rot = -g.rotation.y;
+        if (!s.vx && !s.vz && !s.w) {
+          e.slide = null; this.sliding.splice(i, 1);
+          // left crooked out of its bay: back into it soon (out of sight, or a while later from afar)
+          const h = e.home;
+          if (h && !e.driving && (Math.hypot(g.position.x - h.x, g.position.z - h.z) > 0.4 || Math.abs(wrapPi(g.rotation.y - h.yaw)) > 0.08)) { e.astray = { t: 0, unseen: 0 }; if (!this.wrecks.includes(e)) this.wrecks.push(e); }
+        }
+      } catch { e.slide = null; this.sliding.splice(i, 1); }
+    }
+  }
+
+  // the body on its springs (roll in bends, pitch under acceleration and braking), the wheels on the snow
+  pose(dt) {
+    const d = this.d, g = d.e.car, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw), lx = fz, lz = -fx; // (+x local: left)
+    const W = this.world, wb = d.wheelBase / 2, tr = d.w / 2 - 0.15;
+    const hFL = W.groundHeight(d.x + fx * wb + lx * tr, d.z + fz * wb + lz * tr, d.y + 1);
+    const hFR = W.groundHeight(d.x + fx * wb - lx * tr, d.z + fz * wb - lz * tr, d.y + 1);
+    const hRL = W.groundHeight(d.x - fx * wb + lx * tr, d.z - fz * wb + lz * tr, d.y + 1);
+    const hRR = W.groundHeight(d.x - fx * wb - lx * tr, d.z - fz * wb - lz * tr, d.y + 1);
+    const ground = (hFL + hFR + hRL + hRR) / 4;
+    const pitchG = Math.atan2((hRL + hRR) / 2 - (hFL + hFR) / 2, wb * 2), rollG = Math.atan2((hFL + hRL) / 2 - (hFR + hRR) / 2, tr * 2);
+    // springs: the ground's tilt, plus the load moving (nose up when pulling away, down when braking; out in bends)
+    const pitchT = clamp(d.air ? d.pitch : pitchG - clamp(d.la * 0.007, -0.06, 0.05), -0.6, 0.6); // (nose down braking, squat pulling)
+    const yawAccel = d.yawRate * Math.hypot(d.vx, d.vz);
+    const rollT = clamp(d.air ? d.roll : rollG + clamp(yawAccel * 0.011, -0.07, 0.07), -0.6, 0.6); // (leans out of the bend)
+    // springs damped near critically: it settles at once, no bobbing
+    d.pitchV += ((pitchT - d.pitch) * 110 - d.pitchV * 18) * dt; d.pitch += d.pitchV * dt;
+    d.rollV += ((rollT - d.roll) * 95 - d.rollV * 16.5) * dt; d.roll += d.rollV * dt;
+    const y = d.air ? d.y : ground;
+    g.position.set(d.x, y + 0.02, d.z);
+    _e.set(d.pitch, d.yaw, d.roll + (d.crash?.roll || 0), 'YXZ');
+    g.quaternion.setFromEuler(_e);
+    if (d.crash?.roll) {
+      // rolling over: round its own middle, resting on whichever side is down
+      const cr = d.crash.roll, h2 = d.t.size.y / 2, rest = Math.abs(Math.cos(cr)) * h2 + Math.abs(Math.sin(cr)) * (d.w / 2);
+      const off = _w.set(0, h2, 0).applyQuaternion(g.quaternion);
+      g.position.set(d.x - off.x, ground + rest - off.y, d.z - off.z);
+    }
+    g.updateMatrixWorld(true);
+    // wheels: spin with the ground speed, the front ones steer, each one dropped / lifted to its own patch of snow
+    const u = d.vx * fx + d.vz * fz, hs = [hRL, hRR, hFL, hFR];
+    for (const [i, wh] of (d.inst.wheels || []).entries()) {
+      wh.roll.rotation.x += (u * dt) / wh.r; // (rolling: a turn per 2 pi r driven)
+      if (wh.front) wh.steer.rotation.y = d.steer;
+      const k = (wh.front ? 2 : 0) + (wh.steer.position.x < 0 ? 1 : 0);
+      wh.steer.position.y = (wh.baseY ??= wh.steer.position.y) + clamp((hs[k] ?? ground) - ground, -0.1, 0.1);
+      void i;
+    }
+    // the steering wheel: about 1 1/4 turns lock to lock at parking speed (less at speed, as the lock is less)
+    if (d.inst.steering) d.inst.steering.col.quaternion.setFromAxisAngle(d.inst.steering.axis, -d.steer * 7);
+  }
+
+  updateSeat() {
+    const d = this.d;
+    // the driver's eye: left front seat, behind the steering wheel (cars.js driverEye, from where the wheel is)
+    if (d.eyeT !== d.t) { d.eyeT = d.t; d.eyeLocal = driverEye(d.t); }
+    const eye = d.eyeLocal;
+    // you sit on the seat's cushion against its backrest (carpeople.js seatHip, the model's own seat; the rig's hip is
+    // 0.1 m above its seat point), inside and out, the seat slid forward where the wheel would be out of reach; a car
+    // without seat hints: so your eyes are at its driver's eye
+    const hip = seatHip(d.t, 0.1, 0.42);
+    if (hip) this.seat.pos.set(hip.x, hip.y - 0.1, hip.z);
+    else this.seat.pos.set(eye.x, eye.y - SEAT_EYE.y, eye.z - SEAT_EYE.z);
+    d.e.car.localToWorld(this.seat.pos);
+    this.seat.fwd.set(Math.sin(d.yaw), 0, Math.cos(d.yaw));
+  }
+
+  // first person from the driver's seat (the mouse looks round, about 120 degrees either way; the head moving a
+  // little with the car), or a chase camera: the mouse orbits it round the car (it swings back behind the car after
+  // 1.5 s without the mouse), it lags a little in turns, looks into them and pulls back with speed (C: look back)
+  placeCamera(dt, input, lookBack) {
+    const d = this.d, cam = this.camera, C = this.cam, g = d.e.car, sp = this.speed, p = this.player;
+    const sens = 0.0022 * (p.sensitivity || 1);
+    const mdx = input?.mdx || 0, mdy = input?.mdy || 0;
+    this.shake = Math.max(0, this.shake - dt * 1.6);
+    const rough = d.crash ? 0 : this.roughness || 0;
+    if (this.view === 'cockpit') {
+      this.look.yaw = clamp(this.look.yaw - mdx * sens, -2.09, 2.09);
+      this.look.pitch = clamp(this.look.pitch - mdy * sens, -1.05, 0.5);
+      const ly = lookBack ? Math.PI : this.look.yaw;
+      const eye = _v.copy(d.eyeRig || d.eyeLocal).add(_w.set(clamp(-d.lat * 0.002, -0.03, 0.03), 0, clamp(-d.la * 0.003, -0.03, 0.03))); // (your own eyes: placeRig)
+      g.localToWorld(eye);
+      const dir = _w.set(Math.sin(ly) * Math.cos(this.look.pitch), Math.sin(this.look.pitch), Math.cos(ly) * Math.cos(this.look.pitch)).transformDirection(g.matrixWorld);
+      cam.position.copy(eye);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(eye.add(dir));
+      cam.near = 0.05;
+      cam.fov += (72 + sp * 0.08 - cam.fov) * (1 - Math.exp(-dt * 4));
+      d.inst.full.visible = true;
+      this.cabinGlass(true);
+      this.cabinLight(true);
+      // you: your own character in the seat, hands on the wheel (placeRig), the head left out (player.js: first person)
+      p.view = 'first';
+      p.rig.root.visible = (d.rigFrames = (d.rigFrames || 0) + 1) > 3; p.rig.gear.visible = false;
+    } else {
+      const travel = sp > 2 ? Math.atan2(d.vx, d.vz) : d.yaw;
+      const now = performance.now();
+      if (!C.ready) { C.oyaw = d.yaw + Math.PI; C.pitch = 0.17; C.lastMouse = 0; }
+      if (mdx || mdy) { C.lastMouse = now; C.oyaw -= mdx * sens; C.pitch = clamp(C.pitch + mdy * sens, -0.08, 1.0); }
+      // eases back behind the car (or ahead of it, looking back) when the mouse rests
+      if (lookBack || now - C.lastMouse > 1500) {
+        const target = (lookBack ? travel : travel + Math.PI) - d.yawRate * 0.12; // (a little into the turn)
+        C.oyaw += wrapPi(target - C.oyaw) * (1 - Math.exp(-dt * (lookBack ? 10 : 3)));
+        C.pitch += (0.17 - C.pitch) * (1 - Math.exp(-dt * 2));
+      }
+      const dist = 5.6 + sp * 0.05, cp = Math.cos(C.pitch);
+      const focus = _v.set(d.x, g.position.y + 1.25, d.z);
+      const want = _w.set(focus.x + Math.sin(C.oyaw) * cp * dist, focus.y + 0.25 + Math.sin(C.pitch) * dist, focus.z + Math.cos(C.oyaw) * cp * dist);
+      const gy = this.world.height(want.x, want.z) + 0.8;
+      if (want.y < gy) want.y = gy;
+      const bl = this.cameraBlockers;
+      if (bl?.length) {
+        const dv = want.clone().sub(focus), len = dv.length();
+        _ray.set(focus, dv.divideScalar(len)); _ray.far = len;
+        const hit = _ray.intersectObjects(bl, true)[0];
+        if (hit) want.copy(focus).addScaledVector(_ray.ray.direction, Math.max(1.5, hit.distance - 0.4));
+      }
+      if (!C.ready || lookBack !== C.lb) { C.pos.copy(want); C.ready = true; C.lb = lookBack; }
+      C.pos.lerp(want, 1 - Math.exp(-dt * 9));
+      cam.position.copy(C.pos);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(focus);
+      cam.near = 0.1;
+      cam.fov += (62 + sp * 0.2 - cam.fov) * (1 - Math.exp(-dt * 3));
+      this.cabinGlass(false);
+      this.cabinLight(false);
+      p.view = 'third';
+      p.rig.root.visible = (d.rigFrames = (d.rigFrames || 0) + 1) > 3; p.rig.gear.visible = false; // (you in the driver's seat, skis stowed; shown once seated)
+    }
+    // shake: a crash (strong, dying away), rough snow at speed (subtle)
+    // (a crash: a hard random jolt dying away; rough snow: a smooth wobble that grows with speed, never jitter)
+    const k = this.shake * this.shake * 0.16, kr = rough * Math.min(1, sp / 25) * 0.01, tt = performance.now() / 1000;
+    if (k > 1e-4) cam.position.add(_w.set((Math.random() - 0.5) * k, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k));
+    if (kr > 1e-4) cam.position.add(_w.set(Math.sin(tt * 19.3) * kr * 0.6, (Math.sin(tt * 27.1) + Math.sin(tt * 41.7 + 1.3) * 0.5) * kr, Math.sin(tt * 23.9 + 0.7) * kr * 0.4));
+    cam.updateProjectionMatrix();
+  }
+
+  // Inside: the materials keep their own look; one small warm dome light under the roof above the front seats lights
+  // the cabin (made at boot with intensity 0, so switching it never recompiles a shader): gentle by day, brighter at
+  // night, off outside (chase view) and when you get out. Screens and gauges glow softly.
+  cabinLight(inside) {
+    const d = this.d;
+    if (!d?.inst?.full) return;
+    const night = clamp(nightUniform?.value ?? 0, 0, 1);
+    const L = this.dome;
+    if (L) {
+      L.intensity = inside ? 1.0 + night * 3.2 : 0;
+      if (inside) { const eye = d.eyeLocal; L.position.set(eye.x * 0.4, Math.min(d.t.size.y - 0.2, eye.y + 0.08), eye.z + 0.42); d.e.car.localToWorld(L.position); }
+    }
+    if (d.cabinInst !== d.inst) {
+      d.cabinInst = d.inst; d.cabinMats = [];
+      d.inst.full.traverse((o) => {
+        if (!o.isMesh || !o.material || Array.isArray(o.material) || !/screen|display|gauge|cluster|lcd|navi|infot|instrument/i.test(o.material.name || '') || !o.material.emissive) return;
+        const m = o.material.clone(); o.material = m; d.cabinMats.push(m);
+      });
+    }
+    for (const m of d.cabinMats) { m.emissive.set(0x8fb4e0); m.emissiveIntensity = inside ? 0.12 + night * 0.35 : 0; }
+  }
+
+  // from inside, the windows nearly clear (the tinted glass seen from outside would darken the whole view)
+  cabinGlass(inside) {
+    const g = this.d?.inst?.glass;
+    if (!g || this.d.glassIn === inside) return;
+    this.d.glassIn = inside;
+    for (const m of g) {
+      m.userData.outMat ||= m.material;
+      if (inside) m.material = m.userData.inMat ||= Object.assign(m.userData.outMat.clone(), { opacity: 0.1 });
+      else m.material = m.userData.outMat;
+    }
+  }
+
+  effects(dt, thr) {
+    const d = this.d, night = nightUniform?.value ?? 0;
+    const on = d.lights || night > 0.2 ? 1 : 0;
+    const braking = !d.crash && (d.gear === 'R' ? d.la > 2 : d.la < -2); // (slowing, either way; not pulling away in R)
+    // the car's own lamps glow (head and tail at night, the brake lights whenever it brakes); crashed, they stay on
+    // (the tails dim) and the hazards flash
+    lampsOn(d.inst, on, on, braking ? 1 : 0, { drl: !on && !d.crash ? 1 : 0, reverse: !d.crash && d.gear === 'R', hazard: d.crash ? hazardPhase() : null });
+    (this.pool ||= new LightPool(this.scene)).update(d.x, d.z, d.yaw, d.half, this.world, on);
+    // the tail lights' red glow on the snow behind (brighter braking)
+    (this.tailPool ||= new LightPool(this.scene, 0xff2a14)).update(d.x, d.z, d.yaw + Math.PI, d.half, this.world, on ? (braking ? 0.75 : 0.35) : braking && night > 0.05 ? 0.4 : 0, 0.28);
+    const dmg = d.e.damage || 0;
+    if (d.crash || dmg >= 40) {
+      // steam from the bonnet: a wisp once it's badly knocked about, a plume when it's wrecked
+      d.e.smokeFx ||= new Smoke(this.scene);
+      d.e.smokeFx.rate = d.crash ? 6 : 0.8 + ((dmg - 40) / 60) * 3;
+      const b = _v.set(0, d.t.size.y * 0.78, d.t.size.z / 2 - 0.8); d.e.car.localToWorld(b);
+      d.e.smokeFx.update(dt, !d.crash || d.crash.t > 0.25 ? b : null, this.camera, night);
+    }
+    try { this.audio?.setCar?.({ on: true, rpm: d.rpm, load: d.load, electric: !!d.spec.electric, squeal: d.squeal, horn: d.horn, speed: this.speed, profile: d.spec.sound || 'i4', shift: d.shiftT > 0, inside: this.view === 'cockpit', crank: d.crank, firing: d.crash ? 0 : d.firing }); } catch (e) { if (!this.audioErr) { this.audioErr = true; console.warn('car audio', e); } }
+  }
+
+  // back on its wheels, upright, on clear ground, a little lift (behind a fade)
+  unflip() {
+    const d = this.d;
+    if (!d || this.flipping) return;
+    this.flipping = true;
+    this.transition.fade(async () => {
+      try {
+        if (!this.d) return;
+        let x = d.x, z = d.z;
+        if (!this.clearAt(x, z, d.w / 2, d.e)) for (const [ox, oz] of [[3, 0], [-3, 0], [0, 4], [0, -4], [5, 5], [-5, -5]]) if (this.clearAt(d.x + ox, d.z + oz, d.w / 2, d.e)) { x = d.x + ox; z = d.z + oz; break; }
+        d.x = x; d.z = z; d.y = this.world.groundHeight(x, z, d.y + 3) + 0.25;
+        d.vx = 0; d.vz = 0; d.vy = 0; d.yawRate = 0; d.air = true;
+        d.pitch = 0; d.roll = 0; d.pitchV = 0; d.rollV = 0; d.flipT = 0;
+      } finally { this.flipping = false; }
+    }).catch(() => { this.flipping = false; });
+  }
+
+  // ------------------------------------------------------------------ crashes
+  canCrash() { return !!this.d && !this.d.crash && (this.freeRide ? !!this.freeRide() : true); }
+  // a hard stop, a big jolt, the crash sound, steam from the bonnet; fast (or on a steep slope) it may roll over or
+  // spin into the snow; then you're out beside the wreck (wreckOut) and it counts as a wipeout (main.js strikes)
+  crash(v, nx, nz, kind = 'building') {
+    const d = this.d;
+    if (!d || d.crash) return;
+    const hard = clamp((v - CRASH_V) / 14, 0, 1);
+    // damage: a big crash ~12-25 %, an extreme one (120 km/h+) wrecks it at once; until then you drive on
+    const e0 = d.e;
+    e0.damage = Math.min(100, (e0.damage || 0) + (v >= EXTREME_V ? 100 : 12 + (v - CRASH_V) * 1.0));
+    if (e0.damage < 100) {
+      d.vx = d.vx * 0.22 + nx * v * 0.12; d.vz = d.vz * 0.22 + nz * v * 0.12;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      d.yawRate = clamp(d.yawRate + side * (0.3 + hard * 0.8), -2, 2);
+      d.pitchV -= 1.2 * (0.5 + hard); d.rollV += side * 0.6 * (0.4 + hard);
+      this.shake = 0.75;
+      try { this.audio?.impact ? this.audio.impact(kind, 0.6 + 0.4 * hard) : this.audio?.carCrash?.(0.5); } catch { /* (silent) */ }
+      this.hud?.flash(`Crash · car damage ${Math.round(e0.damage)}%`, 'bad', 2200);
+      return;
+    }
+    const e = 1.5, W = this.world;
+    const gx = (W.groundHeight(d.x + e, d.z, d.y + 1) - W.groundHeight(d.x - e, d.z, d.y + 1)) / (2 * e);
+    const gz = (W.groundHeight(d.x, d.z + e, d.y + 1) - W.groundHeight(d.x, d.z - e, d.y + 1)) / (2 * e);
+    const steep = Math.hypot(gx, gz) > 0.42;
+    const rolls = (v > 70 / 3.6 || steep) && Math.random() < 0.75;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    d.crash = { t: 0, v, roll: 0, rollTo: rolls ? side * (Math.random() < 0.55 ? Math.PI / 2 : Math.PI) : 0, rate: 3.2 + Math.random() * 1.6 };
+    const keep = rolls ? 0.35 : 0.1;
+    d.vx = d.vx * keep + nx * v * 0.12; d.vz = d.vz * keep + nz * v * 0.12;
+    d.yawRate = clamp(d.yawRate + side * (0.6 + hard * 1.8), -3.2, 3.2);
+    d.pitchV -= 1.6 * (0.5 + hard); d.rollV += side * 0.8 * (0.4 + hard);
+    d.horn = false; d.squeal = 0; d.load = 0;
+    this.shake = 1;
+    try { if (kind !== 'car') this.audio?.impact?.(kind, 1); this.audio?.carCrash?.(0.55 + 0.45 * hard); } catch { /* (silent) */ }
+    this.hud?.flash('Crashed · the car is wrecked', 'bad', 2200);
+  }
+  crashStep(dt) {
+    const d = this.d, c = d.crash, sp = Math.hypot(d.vx, d.vz), dec = 0.9 * G * dt;
+    if (sp > dec) { d.vx -= (d.vx / sp) * dec; d.vz -= (d.vz / sp) * dec; } else { d.vx = 0; d.vz = 0; }
+    d.yawRate *= Math.exp(-dt * 1.6);
+    d.yaw = wrapPi(d.yaw + d.yawRate * dt);
+    d.x += d.vx * dt; d.z += d.vz * dt;
+    d.y = this.world.groundHeight(d.x, d.z, d.y + 1); d.air = false; d.vy = 0;
+    d.rpm += (0 - d.rpm) * (1 - Math.exp(-dt * 3)); d.la = 0; d.steer *= Math.exp(-dt * 3);
+    if (c.rollTo) { const diff = c.rollTo - c.roll; c.roll += Math.sign(diff) * Math.min(Math.abs(diff), c.rate * dt); }
+    this.collide();
+  }
+  // out beside the wreck (the side that's up); the car stays as it lies until it's towed (out of your sight)
+  wreckOut() {
+    const d = this.d, p = this.player;
+    if (!d) return;
+    const e = d.e, g = e.car, yaw = d.yaw;
+    const pos = g.position.clone(), quat = g.quaternion.clone();
+    const sg = d.crash.rollTo > 0.1 ? -1 : 1; // (on its left side: out to the right)
+    const sx = Math.cos(yaw) * sg, sz = -Math.sin(yaw) * sg;
+    const x = d.x + sx * (d.w / 2 + 1.4), z = d.z + sz * (d.w / 2 + 1.4);
+    this.park();
+    g.position.copy(pos); g.quaternion.copy(quat); g.updateMatrixWorld(true);
+    e.wrecked = { t: 0, unseen: 0 };
+    if (!this.wrecks.includes(e)) this.wrecks.push(e);
+    p.seat = null;
+    p.standUp(x, z, yaw + (Math.PI / 2) * sg);
+    p.rig.snapPose?.();
+    if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
+    p.rig.root.visible = true; p.rig.gear.visible = true;
+    p.rig.setSkisVisible(p.hasSkis);
+    p.camYaw = yaw + (Math.PI / 2) * sg + Math.PI;
+    p.events.push('crash'); // (free ride: a strike; the second one brings the rescue helicopter)
+    this.hud?.flash('Wrecked · it will be towed away', 'bad', 2800);
+  }
+  updateWrecks(dt) {
+    const cam = this.camera, night = nightUniform?.value ?? 0;
+    for (let i = this.wrecks.length - 1; i >= 0; i--) {
+      const e = this.wrecks[i];
+      try {
+        if (e.wrecked || e.astray) {
+          const W = e.wrecked || e.astray, g = e.car;
+          W.t += dt;
+          const dx = g.position.x - cam.position.x, dz = g.position.z - cam.position.z, dist = Math.hypot(dx, dz);
+          const f = cam.getWorldDirection(_w), seen = dist < 30 || (dist < 450 && (dx * f.x + dz * f.z) / (dist || 1) > 0.2);
+          W.unseen = seen ? 0 : W.unseen + dt;
+          // gone soon: 3 s out of sight, or after 20 s while you're 40 m+ away (it sinks away if you can see it);
+          // never while you're beside it (6 m)
+          const pp = this.player.pos, nearYou = Math.hypot(g.position.x - pp.x, g.position.z - pp.z) < 6;
+          if (W.sinking) { W.sinking += dt; g.position.y -= dt * 1.8; g.updateMatrixWorld(true); if (W.sinking > 0.8) { this.tow(e); continue; } }
+          else if (!nearYou && (W.unseen > 3 || (W.t > 20 && dist > 40))) { if (W.unseen > 3) { this.tow(e); continue; } W.sinking = 1e-3; }
+          if (e.astray) continue;
+          if (e.smokeFx) { const b = _v.set(0, e.t.size.y * 0.78, e.t.size.z / 2 - 0.8); g.localToWorld(b); e.smokeFx.update(dt, W.t < 60 ? b : null, cam, night); }
+          if (e.inst) lampsOn(e.inst, night > 0.2 ? 1 : 0, 0.55, 0, { hazard: hazardPhase() }); // (the wreck: hazards, dim tails, headlights on at night)
+        }
+        if (!e.wrecked && !e.astray) { e.smokeFx?.clear(); this.wrecks.splice(i, 1); }
+      } catch { e.wrecked = null; this.wrecks.splice(i, 1); }
+    }
+  }
+  // towed: back where it was parked, as good as new
+  tow(e) {
+    const h = e.home, g = e.car;
+    if (h) { g.position.set(h.x, this.world.height(h.x, h.z) + 0.03, h.z); g.rotation.set(0, h.yaw, 0); }
+    else g.rotation.set(0, g.rotation.y, 0);
+    g.updateMatrixWorld(true);
+    e.collider.x = g.position.x; e.collider.z = g.position.z; e.collider.rot = -g.rotation.y;
+    e.wrecked = null; e.astray = null; e.damage = 0;
+    e.smokeFx?.clear();
+    if (e.inst) lampsOn(e.inst, 0, 0, 0); // (towed: parked, lights off)
+  }
+
+  // you in the driver's seat: your own character (your outfit), fixed to the car (its pitch, roll, bounce: the same
+  // frame), leant back into the backrest, both hands on the wheel at ten to two turning with it, feet to the pedals.
+  // Inside, the camera is at your eyes (d.eyeRig) with your head folded away, so looking down shows your own chest,
+  // arms, hands on the wheel and legs; the chase camera shows the same body.
+  placeRig() {
+    const d = this.d, rig = this.player.rig, g = d.e.car, b = rig?.b;
+    if (!rig?.root || !b?.hips) return;
+    const r = rig.root;
+    r.position.copy(this.seat.pos); r.quaternion.copy(g.quaternion); r.updateMatrixWorld(true);
+    const inside = this.view === 'cockpit';
+    try {
+      // your own arms (first person folds them away for the ski view model) and, inside, no head before the eye (also
+      // on the frame you switch, before player.js hides it)
+      for (const a of [b.lArm, b.rArm]) if (a && a.scale.x !== 1) a.scale.setScalar(1);
+      if (b.head) b.head.scale.setScalar(inside ? 0.001 : 1);
+      r.updateMatrixWorld(true);
+      // leant back toward this car's backrest (carpeople.js seat hints): the torso (hips to neck) turned from how the
+      // rig sits to ~60 % of the backrest's lean, the neck in line with it (the sit pose pokes the head forward), the
+      // head level: your eyes at a natural driver's eye point, ~0.4 m behind the wheel
+      const seat = seatsFor(d.t), tv = g.worldToLocal(wpos(b.neck || b.head)).sub(g.worldToLocal(wpos(b.hips)));
+      const want = 0.6 * Math.atan(seat ? -seat.d[3] : 0.4), cur = Math.atan2(-tv.z, tv.y), rec = clamp(want - cur, 0, 0.6);
+      leanBack(b, new THREE.Vector3(-1, 0, 0).applyQuaternion(g.quaternion), rec, 0.25, -(rec + 0.25) * 0.85);
+      const S = d.t.steering, c = S ? S.c : new THREE.Vector3().copy(d.eyeLocal).add(new THREE.Vector3(0, -0.27, 0.6));
+      const tilt = S?.tilt ?? 0.38, ca = Math.cos(tilt), sa = Math.sin(tilt), rr = (S?.rimR ?? 0.185) * 0.97;
+      const turn = clamp(d.steer * 7, -1.75, 1.75);
+      // the wheel's frame (car space): A along the column (away from you), U up its face, +x to your left
+      const A = new THREE.Vector3(0, -sa, ca), U = new THREE.Vector3(0, ca, sa);
+      for (const [i, arm, fore, hand] of [[0, b.lArm, b.lFore, b.lHand], [1, b.rArm, b.rFore, b.rHand]]) {
+        const side = i === 0 ? 1 : -1, phi = side * 1.05 + turn;
+        // the grip on the rim (ten to two, turning with it); the wrist a hand's length short of it, toward you
+        const radial = new THREE.Vector3(Math.sin(phi), 0, 0).addScaledVector(U, Math.cos(phi));
+        const grip = c.clone().addScaledVector(radial, rr);
+        const wrist = grip.clone().addScaledVector(A, -0.075).addScaledVector(radial, 0.035);
+        g.localToWorld(wrist);
+        twoBone(arm, fore, hand, wrist, new THREE.Vector3(side * 0.7, -1, -0.3).normalize().applyQuaternion(g.quaternion));
+        // fingers over the rim and round it (forward and in), the palm on the rim
+        const fingers = A.clone().multiplyScalar(0.8).addScaledVector(radial, -0.45).normalize().applyQuaternion(g.quaternion);
+        const palm = radial.clone().multiplyScalar(-0.75).addScaledVector(A, 0.35).normalize().applyQuaternion(g.quaternion);
+        if (rig.aimHand) rig.aimHand(i, fingers, palm); else if (hand && fore) setWQ(hand, wquat(fore));
+      }
+      const hip = g.worldToLocal(wpos(b.hips));
+      for (const [i, up, leg, foot] of [[0, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
+        const side = i === 0 ? 1 : -1;
+        const tgt = g.localToWorld(new THREE.Vector3(hip.x + side * 0.14, hip.y - 0.26, hip.z + 0.74));
+        twoBone(up, leg, foot, tgt, new THREE.Vector3(side * 0.15, 1, 0.5).normalize().applyQuaternion(g.quaternion));
+      }
+      // your eyes (the camera inside), in the car's frame: ahead of and above the head joint
+      d.eyeRig = g.worldToLocal(wpos(b.head).add(new THREE.Vector3(0, 0.09, 0.085).applyQuaternion(g.quaternion)));
+    } catch (e) { d.eyeRig = null; if (!this.rigErr) { this.rigErr = true; console.warn('drive seat', e); } } // (the pose stays as the rig made it)
+  }
+
+  // the controls card (bottom left), like the helicopter's and the snowmobile's
+  showCard(on) {
+    if (!this.cardEl) {
+      if (!document.getElementById('drive-hud-css')) { const st = document.createElement('style'); st.id = 'drive-hud-css'; st.textContent = CSS; document.head.appendChild(st); }
+      const el = document.createElement('div');
+      el.id = 'drive-hud';
+      el.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+      const rows = [[['W'], 'Throttle'], [['S'], 'Brake · reverse'], [['A', 'D'], 'Steer'], [['SPACE'], 'Handbrake'], [['R'], 'Camera · inside / chase'], [['C'], 'Look back'], [['H'], 'Horn'], [['L'], 'Headlights'], [['E'], 'Get out (stopped)']];
+      el.innerHTML = `<div class="ch-card paper"><div class="ch-head">CAR</div>${rows.map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${keysHTML(k)}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
+      (document.getElementById('hud') || document.body).appendChild(el);
+      this.cardEl = el;
+    }
+    const card = this.cardEl.firstElementChild;
+    clearTimeout(this.cardT);
+    this.cardEl.hidden = !on;
+    card.classList.remove('out');
+    if (on) this.cardT = setTimeout(() => card.classList.add('out'), 12000);
+  }
+}
+void REAL;

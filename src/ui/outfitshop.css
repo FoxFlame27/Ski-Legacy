@@ -1,0 +1,76 @@
+/* Outfit shop (ui/outfitshop.js): the menus' brush paper and blue italic lettering, laid over the shop
+   camera's view of your skier on the podium (left column = shop, right = live 3D preview). Sizes in --u. */
+#outfit-shop { position: fixed; inset: 0; z-index: 9; color: var(--blue); font-family: var(--ui); transition: opacity 0.28s ease; animation: fadeIn 0.3s ease backwards; }
+#outfit-shop.out { opacity: 0; pointer-events: none; }
+body.outfit-open #hud > :not(#flash) { visibility: hidden !important; }
+.os-shade { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(var(--shade), 0.74) 0%, rgba(var(--shade), 0.46) 34%, rgba(var(--shade), 0.08) 54%, rgba(var(--shade), 0) 62%); }
+.os-drag { position: absolute; left: 50%; right: 0; top: 0; bottom: 0; cursor: grab; touch-action: none; }
+.os-drag.dragging { cursor: grabbing; }
+
+.os-col { position: absolute; z-index: 2; left: calc(var(--u) * 64); top: calc(var(--u) * 34); bottom: calc(var(--u) * 70); width: calc(var(--u) * 540);
+  display: flex; flex-direction: column; align-items: stretch; }
+.os-col.in { animation: slideIn 0.45s cubic-bezier(.2,.9,.2,1) backwards; }
+.os-head { margin-bottom: calc(var(--u) * 12); }
+.os-tabs { flex: none; margin: 0 0 calc(var(--u) * 14); }
+.os-tabs button { height: calc(var(--u) * 46); padding: 0 calc(var(--u) * 17); font-size: calc(var(--u) * 22); }
+
+/* catalogue rows: brush paper strips like the course list, the selected one painted blue */
+.os-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: calc(var(--u) * 8); overflow-y: auto; padding: calc(var(--u) * 2) calc(var(--u) * 16) calc(var(--u) * 22) 0;
+  scrollbar-width: none; -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--u) * 34), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - var(--u) * 34), transparent); }
+.os-list::-webkit-scrollbar { display: none; }
+.os-row { flex: none; display: flex; align-items: center; gap: calc(var(--u) * 14); width: calc(100% - var(--u) * 14); height: calc(var(--u) * 60);
+  padding: 0 calc(var(--u) * 22) 0 calc(var(--u) * 16); border: 0; background: none; cursor: pointer; text-align: left; color: var(--blue);
+  --paper: rgba(255, 255, 255, 0.92); transition: transform 0.25s cubic-bezier(.2,.9,.2,1), color 0.2s ease; animation: slideIn 0.45s cubic-bezier(.2,.9,.2,1) backwards; }
+.os-row.hover { transform: translateX(calc(var(--u) * 6)); --paper: #fff; }
+.os-row.sel { transform: translateX(calc(var(--u) * 12)); color: #fff; --paper: var(--blue); }
+.os-row.sel::after { content: ''; position: absolute; left: calc(var(--u) * -12); top: 20%; bottom: 20%; width: calc(var(--u) * 6); background: var(--red); }
+.os-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(var(--u) * 4); }
+.os-name { font: italic 700 calc(var(--u) * 24)/1 var(--num); letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-sub { font: 500 var(--t-xs)/1.25 var(--ui); color: var(--blue-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-row.sel .os-sub { color: rgba(255, 255, 255, 0.82); }
+.os-price { flex: none; font: italic 700 calc(var(--u) * 24)/1 var(--num); font-variant-numeric: tabular-nums; }
+.os-tag { flex: none; font: 800 var(--t-xs)/1 var(--ui); font-style: normal; letter-spacing: 0.14em; color: var(--blue-dim); }
+.os-tag.worn { color: var(--red); }
+.os-row.sel .os-tag { color: rgba(255, 255, 255, 0.85); }
+.os-row.sel .os-tag.worn { color: #fff; }
+
+/* swatches: two-tone tile, helmet dome (matte / gloss / chrome), lens pill, kit stripes, original */
+.os-sw { position: relative; flex: none; display: block; width: calc(var(--u) * 36); height: calc(var(--u) * 36); }
+.os-sw-tone { border-radius: calc(var(--u) * 5); transform: rotate(-8deg) skewX(-6deg);
+  background: linear-gradient(135deg, var(--a) 0 60%, var(--b) 60% 100%); box-shadow: inset 0 0 0 calc(var(--u) * 2) rgba(255, 255, 255, 0.55), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.25); }
+.os-sw-helmet { height: calc(var(--u) * 30); margin-top: calc(var(--u) * 4); border-radius: 50% 50% 38% 38% / 64% 64% 36% 36%; background: var(--c);
+  box-shadow: inset 0 calc(var(--u) * -4) calc(var(--u) * 6) rgba(0, 0, 0, 0.28), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.25); }
+.os-sw-helmet.gloss, .os-sw-helmet.chrome { background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.85) 0 9%, rgba(255, 255, 255, 0) 30%), var(--c); }
+.os-sw-helmet.chrome { background: radial-gradient(circle at 34% 30%, #fff 0 10%, rgba(255, 255, 255, 0) 32%), linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(0, 0, 0, 0.35)), var(--c); }
+.os-sw-lens { width: calc(var(--u) * 42); height: calc(var(--u) * 22); border-radius: calc(var(--u) * 11); background: var(--c);
+  box-shadow: inset 0 0 0 calc(var(--u) * 3) #1c1f26, 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.25); }
+.os-sw-lens.mirror { background: linear-gradient(160deg, rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, 0.7) 42%, rgba(255, 255, 255, 0) 54%), var(--c); }
+.os-sw-kit { display: flex; overflow: hidden; border-radius: calc(var(--u) * 5); transform: rotate(-8deg); box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.3); }
+.os-sw-kit b { flex: 1; }
+.os-sw-orig { border-radius: calc(var(--u) * 5); border: max(1.5px, calc(var(--u) * 2)) dashed rgba(21, 70, 200, 0.45); }
+.os-row.sel .os-sw-orig { border-color: rgba(255, 255, 255, 0.7); }
+
+/* selected item + buy / wear */
+.os-detail { flex: none; margin-top: calc(var(--u) * 10); padding: calc(var(--u) * 16) calc(var(--u) * 28) calc(var(--u) * 18); color: var(--blue); --paper: #fff;
+  filter: drop-shadow(0 calc(var(--u) * 10) calc(var(--u) * 24) rgba(0, 14, 44, 0.35)); }
+.os-detail.swap > * { animation: fadeSlide 0.3s cubic-bezier(.2,.9,.2,1) backwards; }
+.os-kicker { font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.18em; color: var(--red); }
+.os-title { margin-top: calc(var(--u) * 7); font: italic 700 calc(var(--u) * 36)/0.95 var(--num); letter-spacing: 0.01em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-note { margin-top: calc(var(--u) * 8); font: 500 var(--t-xs)/1.4 var(--ui); color: var(--blue-dim); }
+.os-actrow { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 20); margin-top: calc(var(--u) * 12); }
+.os-act { width: calc(var(--u) * 300); flex: none; }
+.os-act > span { color: var(--blue-dim); }
+.os-act.ready > span { color: #fff; }
+.os-act.done { cursor: default; }
+.os-act.pop { animation: osPop 0.4s cubic-bezier(.2,1.4,.4,1); }
+.os-act.nope { animation: osNope 0.38s ease; }
+@keyframes osPop { 40% { scale: 1.06; } }
+@keyframes osNope { 20%, 60% { translate: calc(var(--u) * -6) 0; } 40%, 80% { translate: calc(var(--u) * 6) 0; } }
+.os-wallet { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: calc(var(--u) * 5); }
+.os-wallet span { font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim); }
+.os-wallet b { font: italic 700 calc(var(--u) * 30)/1 var(--num); font-variant-numeric: tabular-nums; }
+
+/* key hints along the bottom, like the menus */
+.os-foot { position: absolute; z-index: 2; left: calc(var(--u) * 64); bottom: calc(var(--u) * 24); display: flex; flex-wrap: wrap; gap: calc(var(--u) * 22); pointer-events: none;
+  font: 600 var(--t-xs)/1 var(--ui); color: rgba(255, 255, 255, 0.88); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }

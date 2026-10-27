@@ -1,0 +1,50 @@
+{
+  "fan_woman": {
+    "preview": "01a177db-5eef-7103-b20f-58dc290945bc",
+    "refine": "01a177dc-5054-7333-a12b-4d996ab04b64",
+    "rig": "01a177dd-a2a7-734b-b661-e531cb6fb07e",
+    "done": true
+  },
+  "fan_girl": {
+    "preview": "01a177db-5ef1-7569-981a-4d5ce1d09b1d",
+    "refine": "01a177dc-2e2a-75e6-bfcc-51322385968c",
+    "rig": "01a177dd-c2e4-737e-957f-e8cdb4b65f9a",
+    "done": true
+  },
+  "fan_kid": {
+    "preview": "01a177db-5eee-71e7-865c-92473585414b",
+    "refine": "01a177dc-718f-7376-a4b9-1978ef6c02c7",
+    "rig": "01a177dd-e2df-77a6-9a41-df86fd66cdc2",
+    "done": true
+  },
+  "fan_man": {
+    "preview": "01a17803-e22c-7756-9de5-36db84cca011",
+    "refine": "01a17805-2f38-763f-aa8c-e579c64e6321",
+    "rig": "01a17806-defd-731a-b7a1-1576f154cd72",
+    "done": true
+  },
+  "fan_elder": {
+    "preview": "01a17803-e223-73ea-9dea-948dbce9514f",
+    "refine": "01a17805-0d1d-77ed-832a-6cf392058768",
+    "rig": "01a17806-9e40-75e0-9892-efddd738f2e5",
+    "done": true
+  },
+  "fan_lady": {
+    "preview": "01a17804-2579-7187-8f6f-c9d901ef0fc4",
+    "refine": "01a17806-be93-734e-9149-66a64c359ae6",
+    "rig": "01a17808-73a8-7511-b503-5a83b4d4334d",
+    "done": true
+  },
+  "fan_teen": {
+    "preview": "01a17804-2580-76b9-b89c-6b01134bc61e",
+    "refine": "01a17805-b404-77d2-b040-c600c0058b81",
+    "rig": "01a17807-7f11-72e5-b009-89282c466ba8",
+    "done": true
+  },
+  "fan_skier": {
+    "preview": "01a17804-2582-7295-aed6-13bd22d5297c",
+    "refine": "01a17805-b311-73b5-a5db-63b60132aabf",
+    "rig": "01a17807-9ced-744e-9ca3-b36fda20859d",
+    "done": true
+  }
+}

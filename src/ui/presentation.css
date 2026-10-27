@@ -1,0 +1,75 @@
+/* =================== BROADCAST PRESENTATION (race intro, replays, podium) ===================
+   Reuses the race HUD's look (style.css): .rh-panel white brush paper, --blue italic numerals, --red accents. */
+#pres { position: fixed; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; }
+/* while a cinematic owns the camera the race HUD steps aside */
+body.pres-cine #racehud { opacity: 0; }
+body.pres-cine #flash, body.pres-cine #crosshair, body.pres-cine #controls-hint, body.pres-cine #alt, body.pres-cine #view-mode { visibility: hidden; }
+
+/* letterbox bars */
+.pres-bar { position: absolute; left: 0; right: 0; height: calc(var(--u) * 84); background: #040a16; transform: scaleY(0); transition: transform 0.55s cubic-bezier(.2,.9,.2,1); }
+.pres-bar.top { top: 0; transform-origin: top center; }
+.pres-bar.bot { bottom: 0; transform-origin: bottom center; }
+#pres.lb .pres-bar { transform: scaleY(1); }
+
+/* skip hint, in the bottom bar */
+.pres-skip { position: absolute; right: calc(var(--u) * 64); bottom: calc(var(--u) * 28); display: flex; align-items: center; gap: calc(var(--u) * 10);
+  font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.2em; color: rgba(255, 255, 255, 0.78); opacity: 0; transition: opacity 0.4s ease; }
+.pres-skip.on { opacity: 1; transition-delay: 0.6s; }
+.pres-skip .kc { color: #fff; border-color: rgba(255, 255, 255, 0.7); }
+
+/* lower third: red kicker tab over a white brush panel, course name + stats (intro) or the top 3 (podium) */
+.pres-l3 { position: absolute; left: calc(var(--u) * 72); bottom: calc(var(--u) * 112); display: flex; flex-direction: column; align-items: flex-start; }
+.pres-l3:empty { display: none; }
+.pl3-kick { position: relative; z-index: 1; margin: 0 0 calc(var(--u) * -6) calc(var(--u) * 18); padding: calc(var(--u) * 7) calc(var(--u) * 26) calc(var(--u) * 7) calc(var(--u) * 18);
+  background: var(--red); clip-path: var(--brush-b); color: #fff; font: 800 var(--t-xs)/1.2 var(--ui); letter-spacing: 0.24em; white-space: nowrap; }
+.pl3-main { min-width: calc(var(--u) * 420); padding: calc(var(--u) * 16) calc(var(--u) * 48) calc(var(--u) * 18) calc(var(--u) * 36); }
+.pl3-main::after { content: ''; position: absolute; left: calc(var(--u) * 14); top: 20%; bottom: 20%; width: calc(var(--u) * 6); background: var(--red); }
+.pl3-title { font: italic 700 calc(var(--u) * 56)/1 var(--num); letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap; }
+.pl3-stats { display: flex; gap: calc(var(--u) * 34); margin-top: calc(var(--u) * 12); }
+.pl3-stat span { display: block; font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim); white-space: nowrap; }
+.pl3-stat b { display: flex; align-items: center; gap: calc(var(--u) * 8); margin-top: calc(var(--u) * 6); font: italic 700 calc(var(--u) * 30)/1 var(--num); white-space: nowrap; text-transform: uppercase; }
+.pl3-stat b small { margin-left: -0.12em; font-size: 0.6em; color: var(--blue-dim); }
+.pl3-rows { display: flex; flex-direction: column; gap: calc(var(--u) * 2); margin-top: calc(var(--u) * 10); }
+.pl3-row { position: relative; display: grid; grid-template-columns: calc(var(--u) * 40) minmax(0, 1fr) auto; align-items: center; gap: calc(var(--u) * 14); min-height: calc(var(--u) * 40); padding: 0 calc(var(--u) * 12); }
+.pl3-p { font: italic 700 calc(var(--u) * 32)/1 var(--num); }
+.pl3-n { font: 600 var(--t-md)/1.2 var(--ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl3-t { font: italic 700 calc(var(--u) * 26)/1 var(--num); font-variant-numeric: tabular-nums; }
+.pl3-row.me { color: #fff; }
+.pl3-row.me::before { content: ''; position: absolute; inset: calc(var(--u) * 2) calc(var(--u) * -8); z-index: -1; background: var(--blue); clip-path: var(--brush-b); }
+.pres-l3.in .pl3-kick { animation: pl3Kick 0.5s 0.25s cubic-bezier(.2,.9,.2,1) backwards; }
+.pres-l3.in .pl3-main { animation: pl3In 0.6s cubic-bezier(.2,.9,.2,1) backwards; }
+.pres-l3.in .pl3-stat, .pres-l3.in .pl3-row { animation: fadeSlide 0.4s cubic-bezier(.2,.9,.2,1) backwards; }
+.pres-l3.in .pl3-stat:nth-child(2), .pres-l3.in .pl3-row:nth-child(2) { animation-delay: 0.42s; }
+.pres-l3.in .pl3-stat:nth-child(3), .pres-l3.in .pl3-row:nth-child(3) { animation-delay: 0.5s; }
+.pres-l3.in .pl3-stat:nth-child(4) { animation-delay: 0.58s; }
+.pres-l3.in .pl3-stat:nth-child(1), .pres-l3.in .pl3-row:nth-child(1) { animation-delay: 0.34s; }
+.pres-l3.out { opacity: 0; translate: calc(var(--u) * -50) 0; transition: opacity 0.35s ease, translate 0.4s cubic-bezier(.6,0,.8,.4); }
+@keyframes pl3In { from { opacity: 0; translate: calc(var(--u) * -80) 0; clip-path: inset(0 100% 0 0); } to { opacity: 1; translate: 0 0; clip-path: inset(0 0 0 0); } }
+@keyframes pl3Kick { from { opacity: 0; translate: 0 calc(var(--u) * 14); } }
+
+/* REPLAY badge, under the top bar */
+.pres-rb-wrap { position: absolute; left: calc(var(--u) * 64); top: calc(var(--u) * 104); display: flex; flex-direction: column; align-items: flex-start; }
+.pres-rb { display: flex; align-items: center; gap: calc(var(--u) * 14); padding: calc(var(--u) * 10) calc(var(--u) * 34) calc(var(--u) * 10) calc(var(--u) * 24); animation: pl3In 0.5s cubic-bezier(.2,.9,.2,1) backwards; }
+.prb-dot { flex: none; width: calc(var(--u) * 14); height: calc(var(--u) * 14); min-width: 8px; min-height: 8px; border-radius: 50%; background: var(--red); animation: prbBlink 1.2s ease-in-out infinite; }
+.prb-word { font: italic 700 calc(var(--u) * 40)/1 var(--num); letter-spacing: 0.06em; }
+.prb-time { min-width: calc(var(--u) * 92); font: italic 700 calc(var(--u) * 28)/1 var(--num); color: var(--blue-dim); font-variant-numeric: tabular-nums; }
+.prb-slow { margin: calc(var(--u) * -4) 0 0 calc(var(--u) * 18); padding: calc(var(--u) * 5) calc(var(--u) * 20) calc(var(--u) * 5) calc(var(--u) * 16); background: var(--red); clip-path: var(--brush-b); color: #fff;
+  font: 800 var(--t-xs)/1.2 var(--ui); letter-spacing: 0.22em; white-space: nowrap; opacity: 0; translate: 0 calc(var(--u) * -6); transition: opacity 0.25s ease, translate 0.3s cubic-bezier(.2,.9,.2,1); }
+.prb-slow.on { opacity: 1; translate: 0 0; }
+@keyframes prbBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+/* stinger: three brush strokes sweep across (blue, white with the label, red); the cut happens while covered */
+.pres-sting { position: absolute; inset: 0; }
+.ps-stroke { position: absolute; left: -10vw; width: 140vw; transform: translateX(-115%); will-change: transform; }
+.ps-stroke .brush { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ps-stroke.s0 { top: -8%; height: 48%; }
+.ps-stroke.s1 { top: 24%; height: 54%; }
+.ps-stroke.s2 { top: 62%; height: 46%; }
+.ps-stroke > span { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center; font: italic 700 calc(var(--u) * 130)/1 var(--num); letter-spacing: 0.04em; color: var(--blue); }
+.pres-sting.go .ps-stroke { animation: psSweep 0.9s cubic-bezier(.65,0,.3,1) both; }
+.pres-sting.go .s1 { animation-delay: 0.04s; }
+.pres-sting.go .s2 { animation-delay: 0.08s; }
+@keyframes psSweep { 0% { transform: translateX(-115%); } 36%, 60% { transform: translateX(0); } 100% { transform: translateX(115%); } }
+
+/* WATCH REPLAY on the results screen (same brush button as RETRY / NEXT / MENU, a little wider) */
+.rr-btn.pres-replay-btn { width: calc(var(--u) * 330); }

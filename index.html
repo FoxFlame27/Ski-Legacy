@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ski Legacy</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Boot intro + main menu (the live 3D world renders behind the menu) -->
+  <div id="intro" hidden></div>
+  <div id="menu" hidden></div>
+
+  <!-- HUD -->
+  <div id="hud" hidden>
+    <div id="info"><div id="loc">Legacy Village</div><div id="clock">09:30 · Clear</div><div id="objective"></div></div>
+    <div id="waypoint" hidden><span id="wp-arrow"><svg viewBox="0 0 16 16"><path d="M8 1.5 L13.5 13 L8 10.2 L2.5 13 Z" fill="currentColor"/></svg></span><span id="wp-text"></span></div>
+    <div id="flash"></div>
+    <div id="money"><span class="cur">$</span><span id="money-val">150</span><span id="money-delta"></span></div>
+    <div id="speedo"><span id="speed-val">0</span><span class="unit">KM/H</span><div id="ski-name"></div></div>
+    <div id="prompt" hidden><span class="key">E</span><span id="prompt-text"></span></div>
+    <div id="race-hud" hidden>
+      <div id="race-name"></div>
+      <div id="race-time">0:00.00</div>
+      <div id="race-gate"></div>
+      <div id="race-pen"></div>
+      <ol id="race-rows"></ol>
+    </div>
+    <div id="countdown"></div>
+    <div id="crosshair" hidden></div>
+    <div id="ride-hint" hidden><span id="ride-name"></span> · hold Space to speed up</div>
+    <div id="controls-hint" hidden></div>
+    <div id="alt" hidden></div>
+    <div id="view-mode" hidden></div>
+  </div>
+
+  <!-- Race HUD (panels, countdown, banners, trick popups), race results and branded transitions:
+       built by src/ui/racehud.js and src/ui/transition.js -->
+  <div id="racehud"></div>
+  <div id="race-results" hidden></div>
+  <div id="transition" hidden></div>
+
+  <div id="panel" class="modal" hidden><div class="card" id="panel-card"></div></div>
+  <div id="map" class="modal" hidden><div class="card map-card"><canvas id="map-canvas" width="900" height="900"></canvas><div id="map-legend"></div></div></div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

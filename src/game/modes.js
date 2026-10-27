@@ -1,0 +1,162 @@
+// Game modes: FREE RIDE in the open-world resort, RACE (vs AI bots) and WORLD RACING (time trial vs your
+// ghost) on the purpose-built courses far away from the resort. Owns the teleports between them: the
+// branded transition card covers the screen while a course is built and the terrain around it streams in.
+import { RaceSession } from '../modes/race/session.js';
+import { COURSES, getCourse } from '../modes/parkour/courses.js';
+import { applyCourseAtmosphere, restoreCourseAtmosphere } from '../modes/parkour/looks.js';
+
+export class Modes {
+  /**
+   * @param {object} o
+   * @param {THREE.Scene} o.scene
+   * @param {object} o.models
+   * @param {object} o.player
+   * @param {(charId: string, skiId: string) => object} o.makeRig
+   * @param {() => string[]} o.botCharacters   character ids the AI field may wear
+   * @param {object} o.audio, o.hud, o.raceHud, o.transition, o.trails, o.spray
+   * @param {object} o.save
+   * @param {() => void} o.writeSave
+   * @param {(x: number, z: number) => Promise<void>} o.stream   pre-stream terrain + trees around a point
+   * @param {() => Promise<void>} o.toMenu   back to the main menu (called behind the transition card)
+   * @param {(info: object) => void} [o.onResult]  a finished run (prize money etc.)
+   */
+  constructor(o) {
+    Object.assign(this, o);
+    this.session = null;
+    this.course = null;
+    this.group = null;
+    this.current = null; // { mode, courseId, difficulty }
+  }
+
+  get active() { return !!this.session; }
+
+  /** Course list for the menu (World Racing shows PB + medal). */
+  list() {
+    return COURSES.map((c) => ({
+      id: c.id, name: c.name, tagline: c.tagline, difficulty: c.difficulty, length: c.length, drop: c.drop,
+      par: c.par, medals: c.medals, record: this.save.records?.[c.id] || null,
+    }));
+  }
+
+  // Build (once) and show a course; the previous one is torn down so only one course lives in memory.
+  load(courseId) {
+    if (this.course?.id === courseId) return this.course;
+    this.unload();
+    const course = getCourse(courseId);
+    this.group = course.build(this.scene, this.models);
+    if (this.group && !this.group.parent) this.scene.add(this.group);
+    this.course = course;
+    // the course's own time of day, weather and haze while it is loaded (looks.js; restored in unload)
+    try { applyCourseAtmosphere(courseId); } catch (e) { console.warn('Course atmosphere failed', e); }
+    return course;
+  }
+
+  unload() {
+    try { restoreCourseAtmosphere(); } catch (e) { console.warn('Course atmosphere restore failed', e); }
+    if (!this.course) return;
+    this.group?.parent?.remove(this.group);
+    this.course.dispose?.();
+    this.course = this.group = null;
+  }
+
+  /** Start a race or a time trial: teleport to the course behind the transition card.
+   *  `covered` runs once the card covers the screen (e.g. leaving the menu). */
+  async start({ mode, courseId, difficulty = 'medium' }, covered) {
+    const def = COURSES.find((c) => c.id === courseId) || COURSES[0];
+    this.current = { mode, courseId: def.id, difficulty };
+    const label = `${mode === 'race' ? 'RACE' : 'WORLD RACING'} · ${def.name}`;
+    await this.transition.teleport(label, async () => { covered?.(); await this.begin(); });
+  }
+
+  // Everything that happens while the screen is covered.
+  async begin() {
+    const { mode, courseId, difficulty } = this.current;
+    this.end();
+    const course = this.load(courseId);
+    this.player.teleport(course.start.x, course.start.z, course.start.heading);
+    await this.stream(course.start.x, course.start.z);
+    this.session = new RaceSession({
+      scene: this.scene, course, mode, difficulty, botCount: this.botCount, // (undefined: the full field)
+      player: this.player, makeRig: this.makeRig, botCharacters: this.botCharacters(),
+      audio: this.audio, hud: this.hud, raceHud: this.raceHud, trails: this.trails, spray: this.spray,
+      save: this.save, writeSave: this.writeSave,
+      stream: this.stream, // terrain around a respawn checkpoint streams while the screen is dark
+      weather: () => window.__game?.env?.weatherLabel, // shown on the race intro card
+      onExit: (choice) => this.exit(choice),
+    });
+    this.session.start();
+  }
+
+  /** FREE RIDE: race a course right where it stands on its mountain (E at its start house, see
+   *  modes/parkour/freeworld.js): the same session as RACE (14 AI, intro, checkpoints, results), no teleport to a
+   *  far map and no course atmosphere. o.result({ place, time, dnf }) -> prize money shown on the results card;
+   *  o.retry() -> false when RACE AGAIN can't be paid. After the finish you ski on from the finish area. */
+  startFree(courseId, { difficulty = 'medium', result, retry } = {}) {
+    this.end();
+    const course = getCourse(courseId);
+    this.group = course.build(this.scene, this.models); // (the free world built it already: reused)
+    if (this.group && !this.group.parent) this.scene.add(this.group);
+    this.course = course;
+    this.current = { mode: 'race', courseId: course.id, difficulty, free: true, retry };
+    this.session = new RaceSession({
+      scene: this.scene, course, mode: 'race', difficulty, botCount: this.botCount,
+      player: this.player, makeRig: this.makeRig, botCharacters: this.botCharacters(),
+      audio: this.audio, hud: this.hud, raceHud: this.raceHud, trails: this.trails, spray: this.spray,
+      save: this.save, writeSave: this.writeSave, stream: this.stream,
+      weather: () => window.__game?.env?.weatherLabel,
+      freeRide: { result },
+      onExit: (choice) => this.exitFree(choice),
+    });
+    this.session.start();
+  }
+
+  // RACE AGAIN (back to the start, entry fee as usual) or CONTINUE (free ride from the finish area)
+  async exitFree(choice) {
+    if (!this.current?.free) return;
+    if (choice === 'retry' && this.current.retry?.() !== false && this.session?.restart) {
+      await this.transition.fade(() => this.session?.restart());
+      this.lock?.();
+      return;
+    }
+    this.end();
+    // (the course stays standing: the free world drops its meshes once you are far away)
+    this.course = this.group = null;
+    this.current = null;
+    this.lock?.();
+  }
+
+  /** Results screen choice: 'retry' | 'next' | 'menu'. */
+  async exit(choice) {
+    if (!this.current) return;
+    if (choice === 'retry') {
+      // same rivals, fresh run (cheap); rebuild only if the session cannot restart itself
+      await this.transition.fade(() => (this.session?.restart ? this.session.restart() : this.begin()));
+      this.lock?.(); // the results screen released the mouse
+    } else if (choice === 'next') {
+      const i = COURSES.findIndex((c) => c.id === this.current.courseId);
+      await this.start({ ...this.current, courseId: COURSES[(i + 1) % COURSES.length].id });
+    } else {
+      await this.leave();
+    }
+  }
+
+  /** Abandon the session and go back to the main menu (pause menu MAIN MENU, results MENU). */
+  async leave() {
+    await this.transition.fade(async () => {
+      this.end();
+      this.unload();
+      this.current = null;
+      await this.toMenu();
+    });
+  }
+
+  end() {
+    this.session?.dispose();
+    this.session = null;
+    this.raceHud.hide();
+  }
+
+  update(dt, input) {
+    this.session?.update(dt, input);
+  }
+}

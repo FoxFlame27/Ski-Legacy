@@ -1,0 +1,12 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><base href="/"><title>clip test</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}#host{position:fixed;inset:0}</style></head>
+<body><div id="host" class="scene-clip"></div>
+<script type="module">
+// Dev harness: plays only the intro logo clip (no game boot), so its frames can be screenshotted on time.
+import '/src/ui/introclip.css';
+import { IntroClip } from '/src/ui/introclip.js';
+const clip = new IntroClip(document.getElementById('host'), null);
+window.__clip = clip;
+clip.start().then((ok) => { window.__clipStarted = ok; });
+</script></body></html>

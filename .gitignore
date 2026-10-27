@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+Untitled
+assets-src/
+crystal.glb
+.cursorignore

@@ -1,0 +1,226 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><base href="/"><title>walk lab</title><link rel="icon" href="data:,">
+<style>html,body{margin:0;background:#1b1f26;overflow:hidden}#labels div{position:absolute;color:#0d1a2a;font:600 12px system-ui;text-shadow:0 0 3px #fff,0 0 2px #fff;white-space:nowrap}</style></head>
+<body><canvas id="c"></canvas><div id="labels"></div>
+<script type="module">
+// Dev harness for the on-foot animation (src/player/skier.js poseFoot): no game boot, only the character
+// models and the rig. Each row is one subject (character x speed), each column one moment; the camera
+// tracks the subject. The ground is a flat / sloped / bumpy test surface (world.groundHeight is patched).
+//   ?chars=all|skier_red,...  ?speeds=1.35,1.7,4.2  ?view=side|front|back|q34|top  ?ground=flat|up|down|cross|bumpy
+//   ?slope=15 (deg)  ?script=const|startstop|turn|idle|circle|sprint|walkrun  ?cols=8  ?step=0.1 (s between columns)
+//   ?warm=2.5 (s before the first column)  ?carry=1 (skis on the back)  ?clips=1 (Meshy clips: the old walk)
+//   ?camfix=1 (camera ignores the heading)  ?cell=220x300  ?dist=5.2  ?who=player|npc|player,npc (rows per style; npc: villager speed model)  ?seed=1
+// window.__metrics: per-subject foot slide while planted, knee extension, ground clearance.
+import * as THREE from 'three';
+import { loadGLB } from '/src/core/assets.js';
+import { SkierRig } from '/src/player/skier.js';
+import { PLAYER_STYLE, npcStyle } from '/src/player/gait.js';
+import { world } from '/src/world/world.js';
+
+const q = new URLSearchParams(location.search);
+const ALL = ['skier_blue', 'skier_red', 'skier_green', 'skier_orange', 'skier_black', 'skier_purple'];
+const NAME = { skier_blue: 'Elena', skier_red: 'Marco', skier_green: 'Finn', skier_orange: 'Luca', skier_black: 'Mila', skier_purple: 'Kai' };
+const chars = (q.get('chars') || 'skier_red') === 'all' ? ALL : (q.get('chars') || 'skier_red').split(',');
+const speeds = (q.get('speeds') || '1.7').split(',').map(Number);
+const VIEW = q.get('view') || 'side';
+const GROUND = q.get('ground') || 'flat';
+const SLOPE = (+(q.get('slope') || 15) * Math.PI) / 180;
+const SCRIPT = q.get('script') || 'const';
+const COLS = +(q.get('cols') || 8);
+const STEP = +(q.get('step') || 0.1);
+const WARM = +(q.get('warm') ?? 2.5);
+const CARRY = q.get('carry') === '1';
+const CLIPS = q.get('clips') === '1';
+const [CW, CH] = (q.get('cell') || '220x300').split('x').map(Number);
+const DIST = +(q.get('dist') || 5.2);
+const DT = 1 / 60;
+SkierRig.walkClips = CLIPS; // the Meshy clips are only a fallback behind this flag
+
+const tanS = Math.tan(SLOPE);
+function H(x, z) {
+  switch (GROUND) {
+    case 'up': return z * tanS;
+    case 'down': return -z * tanS;
+    case 'cross': return x * tanS;
+    case 'bumpy': return 0.09 * Math.sin(x * 1.7 + 0.4) * Math.cos(z * 1.1) + 0.06 * Math.sin(z * 2.3 + 1.2) + 0.03 * Math.sin(z * 4.1 + x * 3.0);
+    case 'stairs': return Math.max(0, Math.floor(z / 0.32) * 0.16);
+    default: return 0;
+  }
+}
+world.height = (x, z) => H(x, z);
+world.groundHeight = (x, z) => H(x, z);
+world.normal = (x, z, out = new THREE.Vector3()) => { const e = 0.2; return out.set(-(H(x + e, z) - H(x - e, z)), 2 * e, -(H(x, z + e) - H(x, z - e))).normalize(); };
+world.groundNormal = (x, z, y, out = new THREE.Vector3()) => world.normal(x, z, out);
+
+const WHO = (q.get('who') || 'player').split(',');
+const SEED = +(q.get('seed') || 1);
+const rows = [];
+for (const c of chars) for (const s of speeds) for (const who of WHO) rows.push({ char: c, speed: s, who });
+const W = CW * COLS, Hh = CH * rows.length;
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, Hh);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#c9d6e6');
+scene.add(new THREE.HemisphereLight('#f4f8ff', '#8a96a8', 1.6));
+const sun = new THREE.DirectionalLight('#ffffff', 2.6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3, near: 0.5, far: 30 });
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+
+// ground: the test surface with a 1 m / 25 cm grid (foot sliding shows against it)
+{
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#eef2f6'; g.fillRect(0, 0, 256, 256);
+  g.strokeStyle = '#c2ccd8'; g.lineWidth = 2;
+  for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(i * 64, 0); g.lineTo(i * 64, 256); g.moveTo(0, i * 64); g.lineTo(256, i * 64); g.stroke(); }
+  g.strokeStyle = '#7f8ea3'; g.lineWidth = 4; g.strokeRect(0, 0, 256, 256);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.anisotropy = 8; tex.colorSpace = THREE.SRGBColorSpace;
+  const N = 600, S = 120;
+  const geo = new THREE.PlaneGeometry(S, S, N, N).rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i); p.setY(i, H(x, z)); uv.setXY(i, x, z); }
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 }));
+  m.receiveShadow = true;
+  scene.add(m);
+}
+
+const labels = document.getElementById('labels');
+function label(x, y, text) { const d = document.createElement('div'); d.style.left = x + 4 + 'px'; d.style.top = y + 2 + 'px'; d.textContent = text; labels.appendChild(d); }
+
+const needed = new Set(['ski_rental', 'ski_pole']);
+for (const r of rows) { needed.add(`${r.char}_rigged`); if (CLIPS) needed.add(`${r.char}_anims`); }
+const models = {};
+await Promise.all([...needed].map(async (n) => { models[n] = await loadGLB(n); }));
+
+function clipsFor(id) {
+  const anims = models[`${id}_anims`]?.animations || [];
+  const find = (re) => anims.find((c) => re.test(c.name));
+  return { idle: find(/^Idle/i), walk: find(/Walk/i), run: find(/Run/i) };
+}
+
+// speed / heading over time for the scripted subjects (the player's and the villagers' movement models)
+function drive(S, t, dt) {
+  const v0 = S.target;
+  let want = v0, turn = 0;
+  switch (SCRIPT) {
+    case 'idle': want = 0; break;
+    case 'startstop': want = t > 0.6 && t < 3.2 ? v0 : 0; break;
+    case 'sprint': want = t < 1.2 ? 1.7 : t < 3.4 ? v0 : 1.7; break;
+    case 'walkrun': want = Math.min(v0, 0.2 + t * 0.6); break; // slow ramp through every speed
+    case 'turn': want = 0; turn = t > 0.5 && t < 2.2 ? 1 : t > 3.0 && t < 4.0 ? -1 : 0; break;
+    case 'circle': want = v0; S.heading += (v0 / 3.0) * dt; break;
+    case 'zigzag': want = v0; S.headingT = Math.sin(t * 1.1) * 0.9; break;
+    default: want = v0;
+  }
+  if (SCRIPT === 'turn' && turn) S.headingT = (S.headingT ?? 0) + turn * 1.6 * dt;
+  if (S.headingT !== undefined && SCRIPT !== 'circle') {
+    let dh = S.headingT - S.heading; dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+    S.heading += dh * Math.min(1, dt * (S.who === 'npc' ? 4 : 10));
+  }
+  if (S.who === 'npc') S.v += (want - S.v) * Math.min(1, dt * 3);
+  else if (want > 0) S.v += (want - S.v) * (1 - Math.exp(-dt * 8));
+  else S.v *= Math.exp(-dt * 10);
+  if (S.v < 0.02 && want === 0) S.v = 0;
+}
+
+const subjects = rows.map((r, i) => {
+  const gltf = models[`${r.char}_rigged`];
+  const rig = new SkierRig(gltf, { ski: models.ski_rental, pole: r.who === 'player' ? models.ski_pole : null, clips: CLIPS ? clipsFor(r.char) : null });
+  rig.walkStyle = r.who === 'player' ? PLAYER_STYLE : npcStyle((SEED * 0.6180339 + i * 0.2718) % 1);
+  rig.addTo(scene);
+  rig.setCarry(CARRY);
+  rig.setSkisVisible(CARRY);
+  rig.root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return { ...r, rig, x: i * 3 - rows.length * 1.5, z: -10, heading: 0, v: SCRIPT === 'const' ? r.speed : 0, target: r.speed, t: 0,
+    m: { slide: [0, 0], n: [0, 0], kneeMax: 0, kneeMin: 9, pen: 0, lift: [0, 0], eyeY: [], hipY: [] }, foot: [null, null] };
+});
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _d = new THREE.Vector3();
+function kneeAngle(rig, i) {
+  const b = rig.b, [up, leg, foot] = i === 0 ? [b.lUp, b.lLeg, b.lFoot] : [b.rUp, b.rLeg, b.rFoot];
+  up.getWorldPosition(_a); leg.getWorldPosition(_b); foot.getWorldPosition(_c);
+  return Math.PI - _d.subVectors(_a, _b).angleTo(_c.sub(_b)); // 0 = straight
+}
+function step(S, dt) {
+  drive(S, S.t, dt);
+  S.x += Math.sin(S.heading) * S.v * dt; S.z += Math.cos(S.heading) * S.v * dt;
+  S.rig.root.position.set(S.x, H(S.x, S.z), S.z);
+  const st = { mode: S.v > 0.1 ? 'walk' : 'idle', heading: S.heading, speed: S.v, crouch: 0, lean: 0, plow: 0, normal: world.normal(S.x, S.z), carry: CARRY, airY: 0 };
+  if (S.who === 'player') st.fp = false;
+  S.rig.update(dt, st);
+  S.t += dt;
+  // metrics: a foot (toe base) within 2.5 cm of its lowest height counts as planted
+  const b = S.rig.b;
+  for (let i = 0; i < 2; i++) {
+    const toe = (i === 0 ? b.lFoot : b.rFoot).children.find((c) => /Toe/.test(c.name)) || (i === 0 ? b.lFoot : b.rFoot);
+    toe.getWorldPosition(_a);
+    const h = _a.y - H(_a.x, _a.z);
+    const f = S.foot[i];
+    S.foot[i] = { x: _a.x, z: _a.z };
+    if (f && S.t > WARM * 0.6) {
+      const sp = Math.hypot(_a.x - f.x, _a.z - f.z) / dt;
+      if (h < (S.m.floor?.[i] ?? h) + 0.02) { S.m.slide[i] += sp; S.m.n[i]++; }
+      S.m.floor ??= [h, h]; S.m.floor[i] = Math.min(S.m.floor[i], h);
+      S.m.pen = Math.min(S.m.pen, h);
+      S.m.lift[i] = Math.max(S.m.lift[i], h);
+      const k = kneeAngle(S.rig, i); S.m.kneeMin = Math.min(S.m.kneeMin, k); S.m.kneeMax = Math.max(S.m.kneeMax, k);
+    }
+  }
+  if (S.t > WARM * 0.6) { S.m.eyeY.push(+(S.rig.eyeWorld.y - S.rig.root.position.y).toFixed(4)); b.hips.getWorldPosition(_a); S.m.hipY.push(+(_a.y - S.rig.root.position.y).toFixed(4)); }
+}
+
+const cam = new THREE.PerspectiveCamera(26, CW / CH, 0.1, 200);
+function placeCam(S) {
+  const r = S.rig.root.position, h = q.get('camfix') === '1' ? 0 : S.heading; // camfix: the camera keeps the start heading
+  const f = _a.set(Math.sin(h), 0, Math.cos(h)), rt = _b.set(-Math.cos(h), 0, Math.sin(h)); // character's right
+  const tgt = _c.set(r.x, r.y + 0.92, r.z);
+  const D = DIST;
+  if (VIEW === 'side') cam.position.copy(tgt).addScaledVector(rt, D).addScaledVector(f, 0).add(_d.set(0, 0.12, 0));
+  else if (VIEW === 'left') cam.position.copy(tgt).addScaledVector(rt, -D).add(_d.set(0, 0.12, 0));
+  else if (VIEW === 'front') cam.position.copy(tgt).addScaledVector(f, D).add(_d.set(0, 0.2, 0));
+  else if (VIEW === 'back') cam.position.copy(tgt).addScaledVector(f, -D).add(_d.set(0, 0.5, 0));
+  else if (VIEW === 'q34') cam.position.copy(tgt).addScaledVector(f, D * 0.72).addScaledVector(rt, D * 0.7).add(_d.set(0, 0.45, 0));
+  else if (VIEW === 'game') cam.position.copy(tgt).addScaledVector(f, -D * 0.95).add(_d.set(0, 1.4, 0)); // third-person game camera
+  else if (VIEW === 'top') cam.position.copy(tgt).add(_d.set(0.01, D, 0));
+  cam.up.set(0, 1, 0);
+  if (VIEW === 'top') { cam.up.set(f.x, 0, f.z); }
+  cam.lookAt(tgt);
+  // the camera never tracks the gait (the body's motion shows against the frame): only the root
+  sun.position.set(r.x - 3, r.y + 7, r.z + 4); sun.target.position.set(r.x, r.y, r.z); sun.target.updateMatrixWorld();
+}
+
+renderer.setScissorTest(true);
+const shots = [];
+for (let c = 0; c < COLS; c++) shots.push(WARM + c * STEP);
+let t = 0;
+for (let c = 0; c < COLS; c++) {
+  while (t < shots[c] - 1e-6) { for (const S of subjects) step(S, DT); t += DT; }
+  for (let ri = 0; ri < subjects.length; ri++) {
+    const S = subjects[ri];
+    for (const o of subjects) { o.rig.root.visible = o === S; o.rig.gear.visible = o === S; }
+    placeCam(S);
+    const x = c * CW, y = Hh - (ri + 1) * CH;
+    renderer.setViewport(x, y, CW, CH); renderer.setScissor(x, y, CW, CH);
+    renderer.render(scene, cam);
+    label(x, (ri) * CH, `${NAME[S.char] || S.char}${WHO.length > 1 || S.who === 'npc' ? ' ' + S.who : ''} v${S.v.toFixed(2)} t${(t).toFixed(2)}`);
+  }
+}
+window.__metrics = subjects.map((S) => ({ char: S.char, speed: S.speed, who: S.who,
+  slide: S.m.slide.map((s, i) => +(s / Math.max(1, S.m.n[i])).toFixed(3)), planted: S.m.n,
+  kneeMinDeg: +(S.m.kneeMin * 57.3).toFixed(1), kneeMaxDeg: +(S.m.kneeMax * 57.3).toFixed(1),
+  toeMinH: +S.m.pen.toFixed(3), toeLift: S.m.lift.map((v) => +v.toFixed(3)),
+  eyeBob: S.m.eyeY.length ? +(Math.max(...S.m.eyeY) - Math.min(...S.m.eyeY)).toFixed(4) : 0,
+  hipBob: S.m.hipY.length ? +(Math.max(...S.m.hipY) - Math.min(...S.m.hipY)).toFixed(4) : 0,
+  dims: { legLen: +S.rig.legLen.toFixed(3), hipY: +S.rig.hipRest.y.toFixed(3), ankleH: +S.rig.ankleH.toFixed(3), armLen: +S.rig.armLen.toFixed(3), footFwd: +S.rig.footFwd.toFixed(3) } }));
+window.__done = true;
+</script></body></html>

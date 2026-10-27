@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><base href="/"><title>ski orientation</title>
+<style>html,body{margin:0;background:#dfe6ee;font:600 15px system-ui}#labels div{position:absolute;left:8px;color:#123}</style></head>
+<body><canvas id="c"></canvas><div id="labels"></div>
+<script type="module">
+// Dev harness: every shop ski as the game orients it (makeSki), side view, the end the game treats as the tip on the RIGHT.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { makeSki } from '/src/player/skier.js';
+import { SKIS } from '/src/game/economy.js';
+const W = 1600, ROW = 150, H = ROW * SKIS.length;
+const VIEW = new URLSearchParams(location.search).get('view') || 'side'; // side (from the left) | top (from above)
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+r.setSize(W, H); r.setClearColor('#dfe6ee');
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight('#ffffff', '#667788', 2.2));
+const sun = new THREE.DirectionalLight('#ffffff', 2); sun.position.set(-3, 4, 2); scene.add(sun);
+const ppu = W / 2.0; // pixels per metre
+const cam = new THREE.OrthographicCamera(-1, 1, H / ppu / 2, -H / ppu / 2, 0.1, 50);
+if (VIEW === 'top') { cam.up.set(-1, 0, 0); cam.position.set(0, 10, 0); } else cam.position.set(-10, 0, 0);
+cam.lookAt(0, 0, 0); // screen right = +Z (tip) in both views
+const loader = new GLTFLoader(); loader.setMeshoptDecoder(MeshoptDecoder);
+const labels = document.getElementById('labels');
+for (let i = 0; i < SKIS.length; i++) {
+  const s = SKIS[i];
+  let gltf; try { gltf = await loader.loadAsync(`models/${s.model}.glb`); gltf.modelName = s.model; } catch { gltf = await loader.loadAsync(`models/${s.fallback}.glb`); gltf.modelName = s.fallback; }
+  const g = makeSki(gltf);
+  const y = H / ppu / 2 - (i + 0.6) * ROW / ppu;
+  if (VIEW === 'top') g.position.set(-y, 0, 0); else g.position.set(0, y, 0);
+  scene.add(g);
+  const d = document.createElement('div'); d.style.top = (i * ROW + 6) + 'px'; d.textContent = `${i} ${s.id} (${s.model})  — ${VIEW} — game TIP → right`; labels.appendChild(d);
+}
+r.render(scene, cam);
+window.__done = true;
+</script></body></html>

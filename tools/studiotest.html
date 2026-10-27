@@ -1,0 +1,108 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><base href="/"><title>studio test</title>
+<link rel="stylesheet" href="/src/style.css"><link rel="icon" href="data:,">
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}</style></head>
+<body><div id="intro" hidden></div>
+<script type="module">
+// Dev harness: plays only the Icecold Studio ident (intro scene 2, src/ui/studioident.js), no game boot.
+//   ?still=1     frames on demand: window.__seek(t) draws time t (the exit fade included) -> tools/studio-shots.mjs
+//   ?fallback=1  the static vector fallback
+//   ?offline=1   renders the ident's sound offline and reports its levels (window.__audioReport)
+//   ?specimen=<json list of opts>&t=2  several look variants stacked, drawn at time t
+//   ?intro=1     the whole boot intro (Intro.play: clip -> studio -> Claude), without the game; ?intro=1&skip=5.4
+//                presses a key at 5.4 s
+import { StudioIdent, STUDIO_MS, STUDIO_LEAVE_MS, STUDIO_HIT_S } from '/src/ui/studioident.js';
+import { Audio } from '/src/core/audio.js';
+const q = new URLSearchParams(location.search);
+const still = q.has('still');
+
+if (q.has('intro')) {
+  const { Intro } = await import('/src/ui/intro.js');
+  const audio = new Audio(); audio.init();
+  window.__introT0 = performance.now();
+  if (q.has('skip')) setTimeout(() => dispatchEvent(new KeyboardEvent('keydown', { key: ' ' })), +q.get('skip') * 1000);
+  new Intro(audio).play().then(() => { window.__introDone = (performance.now() - window.__introT0) / 1000; });
+} else if (q.has('specimen')) {
+  const list = JSON.parse(q.get('specimen')), t = +(q.get('t') || 2);
+  const box = document.getElementById('intro');
+  box.style.cssText = 'display:grid;grid-template-rows:repeat(' + list.length + ',1fr)';
+  let n = 0;
+  for (const opts of list) {
+    const host = document.createElement('div');
+    host.className = 'scene-studio';
+    host.style.cssText = 'position:relative;overflow:hidden';
+    box.appendChild(host);
+    const id = new StudioIdent(host, null);
+    id.onMessage = (m) => { if (m.type === 'drawn' && ++n === list.length) window.__studioReady = true; };
+    id.start({ still: true, opts }).then(() => id.send({ type: 'seek', t }));
+  }
+} else if (q.has('offline')) {
+  // the ident's sound and the clip's recorded hits, rendered offline, compared by peak / RMS
+  const sr = 48000, dur = 3.4;
+  const level = async (fn) => {
+    const off = new OfflineAudioContext(2, sr * dur, sr);
+    const a = new Audio();
+    a.ctx = off; a.sfx = off.destination;
+    const w = off.createBuffer(1, sr * 2, sr), d = w.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    a.white = w;
+    await fn(a, off);
+    const b = await off.startRendering();
+    const L = b.getChannelData(0), R = b.getChannelData(1);
+    let peak = 0, sum = 0, nan = 0;
+    const win = [];
+    for (let i = 0; i < L.length; i++) {
+      const v = Math.max(Math.abs(L[i]), Math.abs(R[i]));
+      if (!Number.isFinite(L[i]) || !Number.isFinite(R[i])) nan++;
+      peak = Math.max(peak, v); sum += (L[i] * L[i] + R[i] * R[i]) / 2;
+      const k = Math.floor(i / (sr * 0.1));
+      win[k] = Math.max(win[k] || 0, v);
+    }
+    return { peak: +peak.toFixed(3), rms: +Math.sqrt(sum / L.length).toFixed(4), nan, peaks100ms: win.map((v) => +v.toFixed(3)) };
+  };
+  const rec = (name, vol) => async (a, off) => {
+    const r = await fetch(`./audio/sfx/${name}.m4a`);
+    const buf = await off.decodeAudioData(await r.arrayBuffer());
+    const s = off.createBufferSource(); s.buffer = buf;
+    const g = off.createGain(); g.gain.value = vol; s.connect(g).connect(off.destination); s.start(0);
+  };
+  window.__audioReport = {
+    icecold: await level((a) => { a.iceHit(STUDIO_HIT_S); }),
+    slam: await level(rec('slam', 0.95)),
+    chime: await level(rec('chime', 0.5)),
+  };
+} else {
+  document.getElementById('intro').hidden = false;
+  const audio = q.has('mute') ? null : new Audio();
+  audio?.init();
+  const host = document.createElement('div');
+  host.className = 'intro-scene scene-studio';
+  document.getElementById('intro').appendChild(host);
+  const ident = new StudioIdent(host, audio);
+  window.__ident = ident;
+  if (q.has('fallback')) {
+    ident.fallback();
+    window.__studioReady = true;
+  } else {
+    // exit fade as CSS plays it: cubic-bezier(.4,0,.2,1) over STUDIO_LEAVE_MS
+    const bez = (x) => { let lo = 0, hi = 1; for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2, X = 3 * 0.4 * m * (1 - m) ** 2 + 3 * 0.2 * m * m * (1 - m) + m ** 3; if (X < x) lo = m; else hi = m; } const m = (lo + hi) / 2; return 3 * 0 * m * (1 - m) ** 2 + 3 * 1 * m * m * (1 - m) + m ** 3; };
+    let drawn = null;
+    ident.onMessage = (m) => { if (m.type === 'drawn') drawn?.(); if (m.type === 'stats') window.__stats = m; };
+    window.__seek = (t) => new Promise((res) => {
+      drawn = res;
+      host.style.transition = 'none';
+      const u = (t * 1000 - STUDIO_MS) / STUDIO_LEAVE_MS;
+      host.style.opacity = u <= 0 ? '1' : String(1 - bez(Math.min(1, u)));
+      ident.send({ type: 'seek', t });
+    });
+    const ok = await ident.start({ still });
+    window.__studioReady = ok;
+    window.__studioT0 = performance.now();
+    if (!ok) ident.fallback();
+    if (!still) {
+      setTimeout(() => { ident.send({ type: 'stats' }); host.classList.add('leave'); }, STUDIO_MS);
+      setTimeout(() => { ident.stop(); window.__studioDone = true; }, STUDIO_MS + STUDIO_LEAVE_MS);
+    }
+  }
+}
+</script></body></html>

@@ -1,0 +1,598 @@
+{
+  "_old": {
+    "skier_red": {
+      "preview": "01a17255-23c9-75e2-a214-43a8d0345b44",
+      "refine": "01a17256-1473-7603-bc3c-3884c32be5d2",
+      "rig": "01a17257-85d0-7007-b4ca-0a80f057afcc",
+      "done": true,
+      "anim": "01a1728f-4ec2-71ad-9288-122a0feb1f91"
+    },
+    "skier_blue": {
+      "preview": "01a17255-23cf-75fe-9f53-f22bed239240",
+      "refine": "01a17256-13c7-73a2-a76f-99f450c5c402",
+      "rig": "01a17257-8d10-7216-8f49-337dceb31a9f",
+      "done": true,
+      "anim": "01a1728f-4ecf-7085-a5f0-d0dce625b286"
+    },
+    "skier_green": {
+      "preview": "01a17255-23c7-76a3-920f-6471e297979f",
+      "refine": "01a17256-15a9-7454-bce4-9e989831e46a",
+      "rig": "01a17257-a4a7-73ee-8a52-8dbf5b13af9c",
+      "done": true,
+      "anim": "01a1728f-4ed0-74a6-8f87-d91f9fbd31d4"
+    }
+  },
+  "skier_red": {
+    "preview": "01a172ad-5ec7-7723-a1f6-8c4258694b20",
+    "refine": "01a172ae-6fe3-77a0-82cc-c0551620d8f0",
+    "rig": "01a172b0-3b35-71f3-b501-36cbf31db87c",
+    "done": true,
+    "anim": "01a172b2-5fe4-7465-9cc4-bf235a796006"
+  },
+  "skier_blue": {
+    "preview": "01a172ad-5ec3-7209-aa99-cd972068116b",
+    "refine": "01a172ae-90a7-7676-bc59-bb378713c591",
+    "rig": "01a172b0-3176-73b1-9eac-06a2f6a4c8f1",
+    "done": true,
+    "anim": "01a172b2-5fe2-7575-99f5-16ddd542155e"
+  },
+  "skier_green": {
+    "preview": "01a172c5-2517-74c1-8bd7-7bf1b557ae0d",
+    "refine": "01a172c6-1d78-771a-866b-35291a62660c",
+    "rig": "01a172c7-7733-709d-9229-7f237760179d",
+    "done": true,
+    "anim": "01a17307-6f20-7427-a15b-04505ef164a1"
+  },
+  "ski_rental": {
+    "preview": "01a172d1-b8cd-7029-bfc3-4dae8a8f54e6",
+    "refine": "01a172d2-e900-772a-81d6-e48b3995f9b2",
+    "done": true
+  },
+  "ski_sport": {
+    "preview": "01a172d1-b8cb-7426-9d23-8817810f463a",
+    "refine": "01a172d2-c637-7448-a6b1-0443c8208fb2",
+    "done": true
+  },
+  "ski_pro": {
+    "preview": "01a172d1-b8cd-74fa-8fac-9d68bd725c52",
+    "refine": "01a172d2-c6af-7030-9768-dfd5adf53785",
+    "done": true
+  },
+  "ski_pole": {
+    "preview": "01a172d1-b8d2-734b-a7b9-9a6ff3728a6e",
+    "refine": "01a172d2-e7f7-70cb-823a-2d434edcbb52",
+    "done": true
+  },
+  "rental_shop": {
+    "preview": "01a172d1-b8cc-7025-8973-c18c095ebefc",
+    "refine": "01a172d4-c810-76de-8cf3-0b170b0de7e1",
+    "done": true
+  },
+  "gondola_station": {
+    "preview": "01a172d1-b8cf-7524-968a-f80ee495a116",
+    "refine": "01a172d4-38c5-7129-81cb-9caadd2ded5e",
+    "done": true
+  },
+  "gondola_cabin": {
+    "preview": "01a172d6-9047-754c-b70c-7605296279d5",
+    "refine": "01a172d9-7313-7123-8d63-7078a8707ed4",
+    "done": true
+  },
+  "chairlift_chair": {
+    "preview": "01a172d6-907e-745c-bbd4-188afff2b3be",
+    "refine": "01a172d9-510a-74a1-b834-9e50878b5436",
+    "done": true
+  },
+  "lift_tower": {
+    "preview": "01a172d6-accf-7708-8a77-da92de33c390",
+    "refine": "01a172d9-5022-764d-98c0-3e9b860ecfc9",
+    "done": true
+  },
+  "pine_tree": {
+    "preview": "01a172d6-b079-778d-8629-13264e807249",
+    "refine": "01a172d9-d71e-724b-aea2-4d279b0aade2",
+    "done": true
+  },
+  "pine_tree2": {
+    "preview": "01a172d8-d260-7131-9377-4616be51c21d",
+    "refine": "01a172da-7d1a-7263-8f55-93156805f4b5",
+    "done": true
+  },
+  "rock": {
+    "preview": "01a172da-9d78-70cd-8bd2-4df3fc27c83f",
+    "refine": "01a172dd-337f-710f-b14c-4548ece5e73d",
+    "done": true
+  },
+  "hotel_chalet": {
+    "preview": "01a172de-cacb-7504-88aa-eb67d2fdeb35",
+    "refine": "01a172e1-982d-71c5-bb36-3c416f633501",
+    "done": true
+  },
+  "mountain_hut": {
+    "preview": "01a172de-ce56-75fe-b89c-9dfbaccb85b6",
+    "refine": "01a172e1-5a33-7740-8183-b0a5b5f8aedf",
+    "done": true
+  },
+  "ticket_booth": {
+    "preview": "01a172df-ec44-757e-946b-000e586618e7",
+    "refine": "01a172e3-2e37-7298-881e-b78a9c5b5fa4",
+    "done": true
+  },
+  "ski_elite": {
+    "preview": "01a172e0-48a5-70c4-af80-fa6b2af41cce",
+    "refine": "01a172e1-ac44-7501-8f82-8de94821b290",
+    "done": true
+  },
+  "snow_cannon": {
+    "preview": "01a172e2-e59d-76ec-8a1c-8b3c3c8e093e",
+    "refine": "01a172e6-08ae-70b1-b2b1-23067f4b2390",
+    "done": true
+  },
+  "lamp_post": {
+    "preview": "01a172e3-d867-743f-b141-b8eb6d9fbdf4",
+    "refine": "01a172e5-bd95-779b-b9db-2e872b07a890",
+    "done": true
+  },
+  "wooden_bench": {
+    "preview": "01a172e4-b166-728d-b9a2-662286da99b6",
+    "refine": "01a172e6-b89f-76cf-a0c8-b3d32dd8e12e",
+    "done": true
+  },
+  "outdoor_ski_rack": {
+    "preview": "01a172e5-31d5-754e-9afb-cc95b8f01028",
+    "refine": "01a172e6-fbb7-7087-9a14-edea55018c8f",
+    "done": true
+  },
+  "snowman": {
+    "preview": "01a172e5-7021-7620-b8e9-53a9b15aa1a6",
+    "refine": "01a172e6-faa1-7323-83b5-19f8d22c332d",
+    "done": true
+  },
+  "firewood_pile": {
+    "preview": "01a172e5-c038-72a6-8c11-a92ed8084cb8",
+    "refine": "01a172e9-78ea-7454-bc32-ce0f6e93b4bd",
+    "done": true
+  },
+  "wooden_fence": {
+    "preview": "01a172e7-049c-71e1-92f7-b617523a3e4c",
+    "refine": "01a172e7-eca3-7250-b2a5-2a80d2fdb67e",
+    "done": true
+  },
+  "christmas_tree": {
+    "preview": "01a172e8-6c1e-756d-8336-4789e0aaa37b",
+    "refine": "01a172ea-bd53-7000-a2c2-756847a45361",
+    "done": true
+  },
+  "picnic_table": {
+    "preview": "01a172e8-6f82-738a-ab08-5e8ec3eb86ee",
+    "refine": "01a172ea-38d7-72b0-a742-7a4c25a9f9ed",
+    "done": true
+  },
+  "wooden_sled": {
+    "preview": "01a172e8-89eb-72bc-92af-980a77128c99",
+    "refine": "01a172e9-d529-7006-a965-9d9b4f507330",
+    "done": true
+  },
+  "snowmobile": {
+    "preview": "01a172e8-eb84-7519-a5cd-738a5e5edd35",
+    "refine": "01a172ea-bd95-7535-8461-b8d61fd80c6c",
+    "done": true
+  },
+  "wooden_barrel": {
+    "preview": "01a172e9-5c7d-71c9-8fe7-a54da058a4c6",
+    "refine": "01a172eb-4679-709f-a8ff-08c7dc76601b",
+    "done": true
+  },
+  "trash_bin": {
+    "preview": "01a172eb-4ba2-7243-ba3b-f4b80f710e8b",
+    "refine": "01a172ed-5300-71a2-8a36-c9bae3c7b887",
+    "done": true
+  },
+  "market_stall": {
+    "preview": "01a172eb-d1dc-7035-adae-c42521806f7b",
+    "refine": "01a172ed-9be5-7153-ac82-7e5238686b19",
+    "done": true
+  },
+  "fire_pit": {
+    "preview": "01a172ec-9309-7668-802f-e806e7b6b924",
+    "refine": "01a172ee-1de2-7542-90b8-7fd1c05b1f22",
+    "done": true
+  },
+  "parked_suv": {
+    "preview": "01a172ec-fade-711a-a912-be7071a134b6",
+    "refine": "01a172ee-80aa-77ee-bda8-6e5a1a9daafe",
+    "done": true
+  },
+  "helmet_shelf": {
+    "preview": "01a172ed-31da-76a1-892b-8452b22ee175",
+    "refine": "01a172ef-051a-736d-aee2-17541ac3ffca",
+    "done": true
+  },
+  "boot_rack": {
+    "preview": "01a172ed-5544-7495-b9ce-003319951aef",
+    "refine": "01a172ef-87ac-72e3-8815-1621df1e4e4c",
+    "done": true
+  },
+  "jacket_rail": {
+    "preview": "01a172ef-2e32-7088-ac64-c9057edf4a0d",
+    "refine": "01a172f1-5b97-7635-b05d-a0e59ba0f5ac",
+    "done": true
+  },
+  "shop_counter": {
+    "preview": "01a172ef-71da-755d-b674-43bf6b21d611",
+    "refine": "01a172f1-dfea-716c-a063-07fdd2602c7d",
+    "done": true
+  },
+  "potted_plant": {
+    "preview": "01a172ef-e118-73fc-b0ff-dd3aa42cc12c",
+    "refine": "01a172f0-fd29-75ae-afaa-f5fea823834a",
+    "done": true
+  },
+  "glove_bin": {
+    "preview": "01a172f0-6884-76a6-a7f5-097f832e2a11",
+    "refine": "01a172f2-c794-7081-b767-183b42a55de7",
+    "done": true
+  },
+  "race_arch": {
+    "preview": "01a17318-4ebf-73fc-8c76-04ba3fdb08ca",
+    "refine": "01a17319-6148-74ae-bf3e-e1cf3a051bd5",
+    "done": true
+  },
+  "skier_orange": {
+    "preview": "01a17336-8ae0-737f-af9e-3ddc8e412f88",
+    "refine": "01a17338-61e3-701b-a18f-9682bc62c2d7",
+    "rig": "01a1733a-dd46-720b-b22f-bb28ba6dda0a",
+    "done": true,
+    "anim": "01a1734c-c55a-72b0-9504-d55e3c6fce7c"
+  },
+  "grandstand": {
+    "preview": "01a17336-8aea-7627-83cc-7df08fed5e22",
+    "refine": "01a17338-616c-7527-b798-c61485a4fc48",
+    "done": true
+  },
+  "timing_board": {
+    "preview": "01a17336-8ae0-737d-9c49-f9112f659ceb",
+    "refine": "01a17337-9ad7-771f-ae8f-3e9c8275ff69",
+    "done": true
+  },
+  "safety_net": {
+    "preview": "01a1733a-7c68-741a-8d86-20dd287146db",
+    "refine": "01a1733b-cbef-7036-8065-d56f2999e0fc"
+  },
+  "tunnel_portal": {
+    "preview": "01a1733b-1fb0-7093-b5fa-a71f94cc0323"
+  },
+  "skier_black": {
+    "preview": "01a1733c-0277-7152-9dba-2fdfdf8f85b3",
+    "refine": "01a1733d-3465-76ec-afb2-96f7b8dd9611",
+    "rig": "01a1733e-f318-73a2-8ee6-7d43a631055c",
+    "done": true,
+    "anim": "01a1734c-c54a-7746-907f-a8c135423f95"
+  },
+  "skier_purple": {
+    "preview": "01a1733c-026f-700a-92a2-a1dde3db0892",
+    "refine": "01a1733d-34c4-7524-b61c-34d7fe4cea0b",
+    "rig": "01a1733f-139d-712c-ba48-4f4dc4929c93",
+    "anim": "01a1734c-c558-74d3-b19e-8e457ef2d703"
+  },
+  "start_house": {
+    "preview": "01a1733f-d34f-710f-a6f7-b5c202ada55b",
+    "refine": "01a17341-cbde-73b5-95b1-05826f7d93e6",
+    "done": true
+  },
+  "patrol_hut": {
+    "preview": "01a1733f-d34c-772d-869f-71a9e7686876",
+    "refine": "01a17341-edcb-7581-b38a-3cdd4d158d44",
+    "done": true
+  },
+  "ski_powder": {
+    "preview": "01a173c9-35fc-77aa-ba12-e8a87724907d",
+    "refine": "01a173ca-ca00-75ce-9ed6-210df2df8c3d",
+    "done": true
+  },
+  "ski_touring": {
+    "preview": "01a173c9-35f7-7615-95af-b57e0c6f0219",
+    "refine": "01a173ca-ca02-764c-8fee-905d283b8dec",
+    "done": true
+  },
+  "ski_gs": {
+    "preview": "01a173c9-35f9-73d7-9a7b-89b943ff478c",
+    "refine": "01a173ca-cb1f-7701-aef8-58cb8a7f64d1",
+    "done": true
+  },
+  "ski_superg": {
+    "preview": "01a173cc-ae65-7420-9b45-67d79420f80d",
+    "refine": "01a173cd-fe77-7521-a7b4-f64d98d0777a",
+    "done": true
+  },
+  "job_board": {
+    "preview": "01a173cc-d894-7726-bfb9-5bf46f2046c5",
+    "refine": "01a173ce-44ba-7416-bef6-44b1ff03d1d6",
+    "done": true
+  },
+  "delivery_backpack": {
+    "preview": "01a173cc-f237-77c0-880c-118981c3fe17",
+    "refine": "01a173ce-617b-735c-bb47-ea01837421c0",
+    "done": true
+  },
+  "mail_bag": {
+    "preview": "01a173cd-d864-70f4-aab2-8d83bad4e44b",
+    "refine": "01a173cf-8ae8-712e-99aa-b35a4a7e2a4e",
+    "done": true
+  },
+  "ski_glove": {
+    "preview": "01a173d0-89fc-7744-aa5b-59efe27ad00b",
+    "refine": "01a173d1-b4e9-7500-9af1-15aca3a9473f",
+    "done": true
+  },
+  "ski_goggles": {
+    "preview": "01a173d0-93bb-701a-b10c-6c18fd365ff9",
+    "refine": "01a173d1-f98e-716f-8844-886e77e9bfcc",
+    "done": true
+  },
+  "beanie": {
+    "preview": "01a173d0-94f5-74c3-bcdb-bc473060deb3",
+    "refine": "01a173d1-fcd9-70b3-a2b9-308f502ca6f1",
+    "done": true
+  },
+  "compact_camera": {
+    "preview": "01a173d0-e04a-713d-af56-a30f5b0d1f3f",
+    "refine": "01a173d2-059f-7488-a86b-3a0618977b4e",
+    "done": true
+  },
+  "rescue_sled": {
+    "preview": "01a173d1-a104-7009-8daf-ebd27351abcb",
+    "refine": "01a173d2-aa9c-732f-a42e-a4d14b4dedb5",
+    "done": true
+  },
+  "smartphone": {
+    "preview": "01a173d1-e4bb-7241-8824-1a1f6d3736d2",
+    "refine": "01a173d2-cc12-7601-8c8a-6574c03c7ebf",
+    "done": true
+  },
+  "ski_park": {
+    "preview": "01a173d4-e255-7303-b798-2fd572514e31",
+    "refine": "01a173d5-924e-7774-acf7-cda9cca3776c",
+    "done": true
+  },
+  "patrol_backpack": {
+    "preview": "01a173d4-e247-7176-9338-b33d3b130dce",
+    "refine": "01a173d6-3769-74f5-885a-b8f0806493a8",
+    "done": true
+  },
+  "heli_body": {
+    "preview": "01a1742d-8fea-74c0-bc9c-595fe0be8781",
+    "refine": "01a1742e-82d0-741b-aa2c-ae0e7fc06b07",
+    "done": true
+  },
+  "piste_light": {
+    "preview": "01a1742d-8fea-74be-94fb-3920e99056e3",
+    "refine": "01a1742e-6001-734b-9eb5-8014a36782d5",
+    "done": true
+  },
+  "snowcat": {
+    "preview": "01a1773f-e195-77bf-966a-ff326fd1afdb",
+    "refine": "01a17741-9b0a-71cd-924f-c5c035007952",
+    "done": true
+  },
+  "ski_carver": {
+    "preview": "01a17793-69a7-7564-a591-49e5f3ad0e5f",
+    "refine": "01a17794-7f53-71c8-8a27-e611c12ab327",
+    "done": true
+  },
+  "ski_legend": {
+    "preview": "01a17793-69a6-737e-9e3b-78543e422187",
+    "refine": "01a17794-7de4-74ed-84e5-2d12cee68cab",
+    "done": true
+  },
+  "ski_cruiser": {
+    "preview": "01a17797-c63f-776d-8172-9f65d840ded3",
+    "refine": "01a17798-ddea-7573-9e33-986d515218a4",
+    "done": true
+  },
+  "floodlight_head": {
+    "preview": "01a177e3-2945-77f2-88bb-28102c429955",
+    "refine": "01a177e4-9cb7-75a5-b08a-b50786143886",
+    "done": true
+  },
+  "floodlight_head_b": {
+    "preview": "01a177e3-2937-74d9-b0b8-67b5bbfa8212",
+    "refine": "01a177e5-851a-75d4-91b5-37095635e019",
+    "done": true
+  },
+  "floodlight_mast": {
+    "preview": "01a177e3-2939-71de-a517-b6d4f7f4e757",
+    "refine": "01a177e4-5b74-70d1-97e7-b74e28a3dc75",
+    "done": true
+  },
+  "floodlight_mast_b": {
+    "preview": "01a177e3-2936-72ed-840a-c21c61a492a7",
+    "refine": "01a177e4-3983-7507-99dc-7390630a2324",
+    "done": true
+  },
+  "floodlight_head_c": {
+    "preview": "01a177fe-6e9a-7610-8708-078dfc2cc65d",
+    "refine": "01a17801-1468-767d-9104-694befadcbfb",
+    "done": true
+  },
+  "gondola_midstation": {
+    "preview": "01a17942-f2c5-740f-ab22-75b86f8a32a4",
+    "refine": "01a17945-3194-703a-b408-0cb798e01777",
+    "done": true
+  },
+  "gondola_terminal": {
+    "preview": "01a17942-f2c1-760c-9a0f-056a3c98f3f9",
+    "refine": "01a17945-74bf-7108-b40d-b887d5ea5d00",
+    "done": true
+  },
+  "chair_terminal": {
+    "preview": "01a17965-9d9e-707c-a65c-0050e986700a",
+    "refine": "01a17968-126c-7748-9426-2861c225b2d4",
+    "done": true
+  },
+  "chair_terminal_b": {
+    "preview": "01a17965-9d99-7285-9921-bc9aaa0016c0",
+    "refine": "01a17967-6556-71ff-ab74-865b60d3dcba",
+    "done": true
+  },
+  "rail_station_valley": {
+    "preview": "01a1795a-22d4-77f3-bbbe-d4406bd323cc",
+    "refine": "01a1795c-a878-75d6-9394-a82f6f8fd201",
+    "done": true
+  },
+  "rail_station_halt": {
+    "preview": "01a1795a-22d2-7357-8168-b86020ed4828",
+    "refine": "01a1795c-a75c-71c0-804c-b6b66bf3798c",
+    "done": true
+  },
+  "rail_station_glacier": {
+    "preview": "01a1795a-22d4-74df-9f7c-5b4711f4e33b",
+    "refine": "01a1795c-4393-72a6-872e-4e589719da09",
+    "done": true
+  },
+  "rail_car": {
+    "preview": "01a1795a-22d6-7120-b266-4c4819a7ed17",
+    "refine": "01a1795b-7ada-71c7-929c-5c71c7a32f1d",
+    "done": true
+  },
+  "rail_seat_pair": {
+    "preview": "01a1795a-22e0-70ea-8bce-1dd584190fa4",
+    "refine": "01a1795b-bd2b-715c-ab28-349f244c0bb7",
+    "done": true
+  },
+  "rail_car2": {
+    "preview": "01a1796e-787c-75ef-8f45-a48df2fd5a7b",
+    "refine": "01a17970-3355-76b5-b725-f827fc949112",
+    "done": true
+  },
+  "rail_car3": {
+    "preview": "01a1796e-7870-70bd-9c66-fd53fd1c1f9d",
+    "refine": "01a17970-555a-71e4-b0ec-2f1d3aa2a6df",
+    "done": true
+  },
+  "deck_chair": {
+    "preview": "01a179a5-4a45-761a-b6da-1c840ef1c0d3",
+    "refine": "01a179a7-24a5-749d-a9fb-46641a31fd27",
+    "done": true
+  },
+  "chair_bullwheel2": {
+    "preview": "01a179aa-1daa-76fc-8ed5-8fcabfc653b3",
+    "refine": "01a179ac-8079-7550-8eb0-7ceeaef4d8ff",
+    "done": true
+  },
+  "map_board3": {
+    "preview": "01a179aa-1dab-769c-bdfa-a95fbaea6aea",
+    "refine": "01a179ac-8076-73d9-af27-acedd7259ae7",
+    "done": true
+  },
+  "chair_bullwheel_v1_reel": {
+    "preview": "01a179a5-4a45-72a4-97e6-9b9849c58108",
+    "refine": "01a179a7-46dd-721c-aff9-ed210c7eca2c",
+    "done": true
+  },
+  "chair_bullwheel": {
+    "preview": "01a179aa-1db0-702c-937e-9ca1c02614d8",
+    "refine": "01a179ac-818c-7594-ad39-09f044af9e70",
+    "done": true
+  },
+  "map_board_v1_snowbox": {
+    "preview": "01a179a5-4a42-7397-999a-98f65d7c8231",
+    "refine": "01a179a7-6775-737a-991f-3828d54c02e2",
+    "done": true
+  },
+  "map_board": {
+    "preview": "01a179aa-1dab-70a5-b255-781c6ba37028",
+    "refine": "01a179ac-1d3f-71c3-a738-976b0243900a",
+    "done": true
+  },
+  "truss_pylon": {
+    "preview": "01a179c2-ebd0-7688-8de7-1c24ead2b8a7",
+    "refine": "01a179c4-4007-7567-ad9e-02908aabe51b",
+    "done": true
+  },
+  "sign_pole": {
+    "preview": "01a179c2-ebd0-77ec-9b99-74140042074e",
+    "refine": "01a179c4-3efe-77ca-bded-5dcf2a7a0afd",
+    "done": true
+  },
+  "ski_bus_v1_lowpoly": null,
+  "ski_bus": {
+    "preview": "01a17a16-e7ad-7559-8bd1-a5c78c135b42",
+    "refine": "01a17a18-1ca8-73b7-9135-0f1545c7fc12",
+    "done": true
+  },
+  "bus_stop_sign": {
+    "preview": "01a17a12-77f6-706c-9c50-e1656f9e3181",
+    "refine": "01a17a13-6ba5-77a4-b2e4-31e418d46400",
+    "done": true
+  },
+  "bus_shelter_unused": {
+    "preview": "01a17a12-77f1-7447-8553-0ab63a14b095",
+    "refine": "01a17a15-1c73-77d5-842d-3d1b05cc5bc7"
+  },
+  "ski_bus2_unused": {
+    "preview": "01a17a12-77f0-762c-b748-384818e4a479",
+    "refine": "01a17a13-f0b3-778b-8ec3-83b974977f84",
+    "done": true
+  },
+  "ski_bus4_unused": {
+    "preview": "01a17a16-e7a1-71e9-9603-e696e0e96c56",
+    "refine": "01a17a18-6009-7716-be50-45cb4cda49e4",
+    "done": true
+  },
+  "shop_bench": {
+    "preview": "01a17c0b-8b3c-713a-8d52-9db01a3efec8",
+    "refine": "01a17c0c-9cee-7482-93bb-b0890f9ac60b",
+    "done": true
+  },
+  "farm_table": {
+    "preview": "01a17c0b-8b3c-7711-aae5-544244d1ae05",
+    "refine": "01a17c0c-df14-77bb-a99e-4d768c4edbc9",
+    "done": true
+  },
+  "sign_board_unused": {
+    "preview": "01a17c0b-8b3c-713c-a244-ab72e1032b72",
+    "refine": "01a17c0d-0138-707e-b4bf-f4bdafae68be",
+    "done": true
+  },
+  "ambulance": {
+    "preview": "01a17c9f-d1cf-7422-be45-734826a0c929",
+    "refine": "01a17ca2-1147-7471-992a-0876ecfc3d1d",
+    "done": true
+  },
+  "parking_pay_machine": {
+    "preview": "01a17c9f-d1cc-774c-9297-c0287a3907fd",
+    "refine": "01a17ca1-497f-7250-abed-e582bc083735",
+    "done": true
+  },
+  "parking_sign": {
+    "preview": "01a17c9f-d1cf-74c7-b5e4-5201872d7fd1",
+    "refine": "01a17ca1-28eb-7700-a1a2-372ed336c83d",
+    "done": true
+  },
+  "medical_centre": {
+    "preview": "01a17cb1-996e-7400-881a-fb5b0356c4f8",
+    "refine": "01a17cb3-3284-76f7-a299-bad460822818",
+    "done": true
+  },
+  "driving_hand_a": {
+    "preview": "01a17d4d-4f0c-7452-adb4-f0a8ef79e581",
+    "refine": "01a17d4e-85dc-70cc-97a7-394ddd37cf51",
+    "done": true
+  },
+  "driving_hand_b": {
+    "preview": "01a17d4d-4f09-72f2-8652-92b1944f5cf6",
+    "refine": "01a17d4e-648d-774e-82c5-b184ad0de295",
+    "done": true
+  },
+  "driving_hand_c": {
+    "preview": "01a17d4d-4f10-77a2-a14e-bb5ae84f9ae5",
+    "refine": "01a17d4e-8737-7408-83ef-f06763c42105",
+    "done": true
+  },
+  "guardrail_segment": {
+    "preview": "01a17d61-377a-7175-99f9-723639e96106",
+    "refine": "01a17d63-18a8-73d2-8602-3cb154334ac6",
+    "done": true
+  }
+}

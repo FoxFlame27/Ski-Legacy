@@ -1,0 +1,3 @@
+/* Boot-intro opening clip (src/ui/introclip.js): one full-screen canvas, drawn by a worker. */
+.scene-clip { background: #000; }
+.scene-clip .clip-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; } /* never stretched, even mid-resize */

@@ -1,0 +1,146 @@
+SKI LEGACY - AUDIO CREDITS
+==========================
+
+Every recording here is CC0 1.0 Universal (public domain dedication,
+https://creativecommons.org/publicdomain/zero/1.0/) or generated for this game.
+No attribution is legally required; it is given anyway with thanks.
+The files were trimmed, filtered, loudness-matched, made loopable (loops are
+crossfaded at runtime) and encoded to AAC (.m4a) for the game.
+
+SOUND EFFECTS (public/audio/sfx/, mono AAC 64 kbps)
+---------------------------------------------------
+Source: freesound.org, each sound page lists "License: Creative Commons 0".
+
+ski_carve.m4a       "Alpine_ski_POV - - Stereo Out.wav" by Lydmakeren (16 s from 1:36)
+                    https://freesound.org/people/Lydmakeren/sounds/567839/        CC0 1.0
+ski_scrape.m4a      "Snowboard_Sequence_Mono.wav" by Nox_Sound (edge scrape, 2:24.6-2:29.4)
+ski_powder.m4a      same recording (soft snow, 0:53.6-0:59.6), low-passed
+                    https://freesound.org/people/Nox_Sound/sounds/667729/          CC0 1.0
+wind_rush.m4a       "Strong wind" by lextrack
+                    https://freesound.org/people/lextrack/sounds/344887/           CC0 1.0
+wind_mountain.m4a   "Wind__Artic__Cold.wav" by cobratronik
+                    https://freesound.org/people/cobratronik/sounds/117136/        CC0 1.0
+lift_hum.m4a        "remontee mecanique ski moteur.wav" by indieground
+                    https://freesound.org/people/indieground/sounds/223829/        CC0 1.0
+lift_clunk.m4a      "Passing Chairlift Tower" by andriiperevodchyk
+                    https://freesound.org/people/andriiperevodchyk/sounds/519459/  CC0 1.0
+step.m4a (sprite)   "FOOT_STEPS_SNOW_HEAVY.wav" by alexo400
+                    https://freesound.org/people/alexo400/sounds/543385/           CC0 1.0
+                    "Footsteps_Mountain_Boots_Snow_Walk_Mono.wav" by Nox_Sound
+                    https://freesound.org/people/Nox_Sound/sounds/613849/          CC0 1.0
+land.m4a (sprite)   "JM_IMPACT_01a/01c/01b - Snow on cement.wav" by Julien_Matthey
+                    https://freesound.org/people/Julien_Matthey/sounds/167076/     CC0 1.0
+                    https://freesound.org/people/Julien_Matthey/sounds/167080/     CC0 1.0
+                    https://freesound.org/people/Julien_Matthey/sounds/167081/     CC0 1.0
+bodyfall.m4a        "Body fall.wav" by DylanTheFish
+                    https://freesound.org/people/DylanTheFish/sounds/417994/       CC0 1.0
+bodyfall_heavy.m4a  "BODY FALL - V HVY - DIRT" by leonelmail
+                    https://freesound.org/people/leonelmail/sounds/504626/         CC0 1.0
+snow_burst.m4a      "Avalanche Hit" by Breviceps
+                    https://freesound.org/people/Breviceps/sounds/457528/          CC0 1.0
+whoosh.m4a          "Woosh" by florianreichelt
+                    https://freesound.org/people/florianreichelt/sounds/683096/    CC0 1.0
+swish.m4a           "Whoosh" by qubodup
+                    https://freesound.org/people/qubodup/sounds/60013/             CC0 1.0
+slam.m4a            "Dramatic Hit" by qubodup
+                    https://freesound.org/people/qubodup/sounds/222517/            CC0 1.0
+chime.m4a           "GLEAM-GLOW-SFX-CHIME.wav" by newagesoup
+                    https://freesound.org/people/newagesoup/sounds/351408/         CC0 1.0
+cash.m4a            "Cash Register Purchase" by Zott820
+                    https://freesound.org/people/Zott820/sounds/209578/            CC0 1.0
+click.m4a           "Videogame Menu BUTTON CLICK" by Christopherderp
+                    https://freesound.org/people/Christopherderp/sounds/342200/    CC0 1.0
+tick.m4a            "menu click" by Leszek_Szary
+                    https://freesound.org/people/Leszek_Szary/sounds/146721/       CC0 1.0
+error.m4a           "Failure/wrong action.wav" by GabrielAraujo
+                    https://freesound.org/people/GabrielAraujo/sounds/242503/      CC0 1.0
+buzzer.m4a          "Buzzer sounds (Wrong answer / Error)" by Breviceps
+                    https://freesound.org/people/Breviceps/sounds/493163/          CC0 1.0
+ding.m4a            "correct" by ertfelda
+                    https://freesound.org/people/ertfelda/sounds/243701/           CC0 1.0
+beep.m4a, beep_go.m4a  "S001_Countdown_Signal.wav" by Pol (Pól)
+                    https://freesound.org/people/P%C3%B3l/sounds/385928/           CC0 1.0
+horn.m4a            "Airhorn" by jacksonacademyashmore
+                    https://freesound.org/people/jacksonacademyashmore/sounds/414208/  CC0 1.0
+crowd.m4a           "Crowd Cheer" by FoolBoyMedia
+                    https://freesound.org/people/FoolBoyMedia/sounds/397434/       CC0 1.0
+crowd_roar.m4a      "RoaringCrowd.wav" by benfree
+                    https://freesound.org/people/benfree/sounds/130568/            CC0 1.0
+
+Vehicle impacts (car / snowmobile hitting things; sprites of several takes, from the
+freesound HQ previews, trimmed, high-passed and peak-normalised):
+crash_car.m4a       "Car Crash" by squareal
+                    https://freesound.org/people/squareal/sounds/237375/           CC0 1.0
+                    "Crash.wav" by CogFireStudios
+                    https://freesound.org/people/CogFireStudios/sounds/420356/     CC0 1.0
+                    "Car Crash (with Glass)" by magnuswaker
+                    https://freesound.org/people/magnuswaker/sounds/592388/        CC0 1.0
+metal_hit.m4a       "snd_metal_smash.wav" by gristi
+                    https://freesound.org/people/gristi/sounds/562198/             CC0 1.0
+                    "metal crash 2.wav" by AuDRoger
+                    https://freesound.org/people/AuDRoger/sounds/471192/           CC0 1.0
+glass.m4a           "Glass Break" by unfa
+                    https://freesound.org/people/unfa/sounds/221528/               CC0 1.0
+                    "Breaking Glass Stereo" by GN2013
+                    https://freesound.org/people/GN2013/sounds/199906/             CC0 1.0
+                    "Glass panel shattering" by LukaCafuka
+                    https://freesound.org/people/LukaCafuka/sounds/758207/         CC0 1.0
+wood_crack.m4a      "Wood Crack 5" by utsuru
+                    https://freesound.org/people/utsuru/sounds/183450/             CC0 1.0
+                    "branch break snap crunch nice.wav" by kyles
+                    https://freesound.org/people/kyles/sounds/452109/              CC0 1.0
+                    "Cracking wood 2" by JappeHallunken
+                    https://freesound.org/people/JappeHallunken/sounds/501303/     CC0 1.0
+branches.m4a        "Dried branches" by Vrymaa
+                    https://freesound.org/people/Vrymaa/sounds/734627/             CC0 1.0
+debris.m4a          "Big falling debris (crash)" by xkeril
+                    https://freesound.org/people/xkeril/sounds/703247/             CC0 1.0
+rock_hit.m4a        "S020_Rock_Impact_Mono.wav" by Pol (Pól)
+                    https://freesound.org/people/P%C3%B3l/sounds/385938/           CC0 1.0
+metal_clang.m4a     "Metallic Clang.aif" by jasonLON
+                    https://freesound.org/people/jasonLON/sounds/125404/           CC0 1.0
+                    "Basic Metal Clang Free" by AardsReal
+                    https://freesound.org/people/AardsReal/sounds/842171/          CC0 1.0
+metal_scrape.m4a    "METLImpt_Metal Resonant Scrape Impact" by SoundDesignForYou
+                    https://freesound.org/people/SoundDesignForYou/sounds/697758/  CC0 1.0
+snow_thump.m4a      "S29-30 Body falls in hard snow.wav" by craigsmith
+                    https://freesound.org/people/craigsmith/sounds/675895/         CC0 1.0
+
+Car engines (steady stretches cut as loops; the game crossfades and pitches them by rpm):
+eng_v8_0/1.m4a      "G13-15-V8 Engine Idle Out.wav" by craigsmith (idle ~960 rpm, held revs ~3330 rpm)
+                    https://freesound.org/people/craigsmith/sounds/437997/         CC0 1.0
+eng_gti_0-3.m4a     "Import car revs on Chassis Dyno with Turbo.wav" by editboy23 (idle, dyno pulls
+eng_i6_1/2.m4a      ~3150 / 4860 / 6180 rpm; the i6 upper loops are the same, lowered 6 % and smoothed)
+                    https://freesound.org/people/editboy23/sounds/496171/          CC0 1.0
+eng_i6_0.m4a        "Inline Six.wav" by dudebrobrodude (idle)
+                    https://freesound.org/people/dudebrobrodude/sounds/466715/     CC0 1.0
+eng_i4_0/1.m4a      "00_Renault_duster_Exaust_3times_outdoor.wav" by semenov_nick (idle, rev ~3630 rpm)
+                    https://freesound.org/people/semenov_nick/sounds/380719/       CC0 1.0
+car_start.m4a       "engine start BMW 320 VG91.wav" by joanfelipsound (starter cranking raised +14 dB)
+                    https://freesound.org/people/joanfelipsound/sounds/57939/      CC0 1.0
+car_door.m4a        "Car Door open and close 2.wav" by NachtmahrTV
+                    https://freesound.org/people/NachtmahrTV/sounds/556691/        CC0 1.0
+
+MUSIC (public/audio/music/, stereo AAC 64 kbps)
+-----------------------------------------------
+Source: Internet Archive items whose license field is CC0 1.0
+(http://creativecommons.org/publicdomain/zero/1.0/).
+
+menu_hitech.m4a     "High Technologic Beat Explosion" by Loyalty Freak Music,
+                    album "ROBOT DANCE !" (0:06-3:26, faded)
+                    https://archive.org/details/LoyaltyFreakMusicROBOTDANCE2017113032423755   CC0 1.0
+ride_rocknroll.m4a  "Rock'n Roll Circuit" by Komiku, album "Komiku Incredible Kart Game" (2021)
+ride_city.m4a       "Visiting the city with your kart" by Komiku, same album
+race_punk.m4a       "Punk Rock Circuit" by Komiku, same album
+results_win.m4a     "You Win !! Impressive !!" by Komiku, same album
+results_loop.m4a    "Choose your kart !" by Komiku, same album
+                    https://archive.org/details/komiku-incredible-kart-game                 CC0 1.0
+
+ANNOUNCER (public/audio/voice/, mono AAC 56 kbps)
+-------------------------------------------------
+Generated for this game with the macOS text-to-speech voice "Daniel" (`say`),
+then processed offline (band-limited PA EQ, horn-speaker drive, compression,
+PA slapback echoes and a stadium reverb tail). Original game content.
+Lines: three, two, one, go, pb ("New personal best!"), checkpoint, first, second,
+third, gold, silver, bronze, wipeout, finish, welcome ("Welcome to Legacy Village."),
+alpine ("Legacy World Downhill."), icecanyon ("Ice Canyon."), bigair ("Big Air Line.").

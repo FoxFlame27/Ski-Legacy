@@ -6,11 +6,15 @@
 #racestand[hidden] { display: none; }
 
 .rs-cork { align-items: stretch; gap: calc(var(--u) * 28); }
+/* both notes share the cork by ratio from a zero basis and may shrink below their content's min-content width
+   (min-width: 0): the course taglines are long nowrap lines, and with the default min-width: auto they forced the
+   list wider than the board, pushing the card off the cork (the cork clips: overflow hidden) */
+.rs-list, .rs-card { min-width: 0; max-height: 100%; }
 .rs-list, .rs-card { position: relative; display: flex; flex-direction: column; min-height: 0; color: var(--blue); isolation: isolate;
   filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 8) rgba(50, 22, 2, 0.42)); animation: jbNote 0.42s cubic-bezier(.2, .9, .2, 1) backwards; }
 .rs-list::before, .rs-card::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, #fffdf6 0%, #fbf6ea 100%); clip-path: var(--clip, var(--brush-b)); }
-.rs-list { flex: 1 1 calc(var(--u) * 470); padding: calc(var(--u) * 26) calc(var(--u) * 18) calc(var(--u) * 18); gap: calc(var(--u) * 10); transform: rotate(-0.8deg); }
-.rs-card { flex: 1 1 calc(var(--u) * 470); padding: calc(var(--u) * 26) calc(var(--u) * 30) calc(var(--u) * 20); gap: calc(var(--u) * 9); transform: rotate(0.7deg); animation-delay: 0.08s; }
+.rs-list { flex: 1.12 1 0; padding: calc(var(--u) * 26) calc(var(--u) * 18) calc(var(--u) * 18); gap: calc(var(--u) * 10); transform: rotate(-0.8deg); }
+.rs-card { flex: 1 1 0; overflow: hidden auto; scrollbar-width: thin; padding: calc(var(--u) * 26) calc(var(--u) * 30) calc(var(--u) * 20); gap: calc(var(--u) * 9); transform: rotate(0.7deg); animation-delay: 0.08s; }
 
 .rs-rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: calc(var(--u) * 4); padding-right: calc(var(--u) * 4); }
 .rs-row { flex: none; display: flex; align-items: center; gap: calc(var(--u) * 12); width: 100%; padding: calc(var(--u) * 7) calc(var(--u) * 12); border: 0; border-radius: calc(var(--u) * 4);
@@ -19,6 +23,7 @@
 .rs-row.sel { background: var(--blue); color: #fff; transform: translateX(calc(var(--u) * 6)); }
 .rs-num { flex: none; width: calc(var(--u) * 30); font: italic 700 calc(var(--u) * 22)/1 var(--num); opacity: 0.6; }
 .rs-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(var(--u) * 3); }
+.rs-name b, .rs-name small { display: block; }
 .rs-name b { font: italic 700 calc(var(--u) * 21)/1.05 var(--num); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rs-name small { font: 600 max(11px, calc(var(--u) * 12))/1.2 var(--ui); color: #6a7590; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rs-row.sel .rs-name small { color: rgba(255, 255, 255, 0.78); }
@@ -38,9 +43,10 @@
 .rs-diffs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
 .rs-fun { position: relative; display: flex; flex-direction: column; gap: calc(var(--u) * 6); margin-top: calc(var(--u) * 4); }
 .rs-stamp { position: static; align-self: flex-start; transform: rotate(-2deg); font-size: calc(var(--u) * 16); }
-.rs-fun p { margin: 0; font: 600 max(11px, calc(var(--u) * 13))/1.35 var(--ui); color: #44506a; }
+.rs-fun p { margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font: 600 max(11px, calc(var(--u) * 13))/1.35 var(--ui); color: #44506a; }
 .rs-card .jb-acts { flex-direction: row; gap: calc(var(--u) * 14); margin-top: auto; padding-top: calc(var(--u) * 6); }
-.rs-card .jb-acts .jb-btn { flex: 1; }
+.rs-card .jb-acts .jb-btn { flex: 1 1 0; min-width: 0; }
+.rs-card .jb-acts .jb-btn span { overflow: hidden; text-overflow: clip; }
 
 @media (max-width: 720px) {
   .rs-cork { flex-direction: column; overflow-y: auto; }

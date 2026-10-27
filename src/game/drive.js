@@ -670,8 +670,10 @@ export class Drive {
       wh.steer.position.y = (wh.baseY ??= wh.steer.position.y) + clamp((hs[k] ?? ground) - ground, -0.1, 0.1);
       void i;
     }
-    // the steering wheel: about 1 1/4 turns lock to lock at parking speed (less at speed, as the lock is less)
-    if (d.inst.steering) d.inst.steering.col.quaternion.setFromAxisAngle(d.inst.steering.axis, -d.steer * 7);
+    // the steering wheel: ~100 deg either way at full lock at parking speed (less at speed, as the lock is less).
+    // (Oct 27, the user: "the steering wheel moves way too much by just a turn": it was x7, two thirds of a turn either
+    // way, and a key tap goes to full lock; now a turn reads as hands turning the wheel, not spinning it)
+    if (d.inst.steering) d.inst.steering.col.quaternion.setFromAxisAngle(d.inst.steering.axis, -d.steer * 3);
   }
 
   updateSeat() {
@@ -962,7 +964,7 @@ export class Drive {
       leanBack(b, new THREE.Vector3(-1, 0, 0).applyQuaternion(g.quaternion), rec, 0.25, -(rec + 0.25) * 0.85);
       const S = d.t.steering, c = S ? S.c : new THREE.Vector3().copy(d.eyeLocal).add(new THREE.Vector3(0, -0.27, 0.6));
       const tilt = S?.tilt ?? 0.38, ca = Math.cos(tilt), sa = Math.sin(tilt), rr = (S?.rimR ?? 0.185) * 0.97;
-      const turn = clamp(d.steer * 7, -1.75, 1.75);
+      const turn = clamp(d.steer * 3, -1.75, 1.75); // (the wheel's own angle: updateBody)
       // the wheel's frame (car space): A along the column (away from you), U up its face, +x to your left
       const A = new THREE.Vector3(0, -sa, ca), U = new THREE.Vector3(0, ca, sa);
       for (const [i, arm, fore, hand] of [[0, b.lArm, b.lFore, b.lHand], [1, b.rArm, b.rFore, b.rHand]]) {

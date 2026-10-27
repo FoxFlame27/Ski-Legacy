@@ -99,7 +99,8 @@ const LAMP_RULES = {
 // Materials drawn as cut-outs (opaque, depth-written, alpha-tested) instead of blended. The RS6's whole cabin is one
 // textured material marked alpha BLEND (for its decals: stitching, button labels), so it came in transparent with no
 // depth writes: the steering wheel's airbag and spokes were drawn over by whatever lay behind them (the column, the
-// instrument cluster) and looked see-through. Its texture's alpha is either solid or a cut-out, so a cut-out is exact.
+// instrument cluster) and looked see-through. Its texture's alpha: solid panels (the airbag, spokes, dash) with soft
+// grey seams, and cut-out decals (stitching, button symbols): cut at 0.3, so the seams stay solid (no slits).
 const CUTOUT = { car_audi_rs6: /InteriorA_Material/i };
 // The four rings on the steering wheel's airbag (RS6): the model's own badge there is a dark decal on the black hub,
 // lost in it, where the real car's are chrome. Four thin chrome tori laid exactly on that decal, from its UV layout
@@ -240,7 +241,7 @@ export function carTemplate(gltf, length, name = '') {
     if (!glass && m.transparent && CUTOUT[model]?.test(m.name || '')) {
       // (a cut-out: solid where its texture is, holes where it isn't; casts no shadow, as before)
       if (out === m) out = m.clone();
-      out.transparent = false; out.depthWrite = true; out.alphaTest = 0.5; out.userData.cutout = true;
+      out.transparent = false; out.depthWrite = true; out.alphaTest = 0.3; out.userData.cutout = true;
     }
     swap.set(m, out);
     return out;

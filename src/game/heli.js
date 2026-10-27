@@ -28,6 +28,7 @@ import { collideHeli } from './heli/collide.js';
 import { travelPicker, fmtMin } from '../ui/travel.js'; // the flight planner
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
 import { CARD_DIALOG } from '../ui/hud.js';
+import { addTrafficBlocker } from './traffic.js'; // (cars stop for it on a road)
 
 export const HELI_PRICE = 300;
 const JUMP_AGL = 6;          // jump out from at most this high (skids above the snow, m)...
@@ -117,6 +118,14 @@ export class Heli {
     dropZones(); // (laid out once, while the game loads)
     this.rescue = new Rescue(this);
     this.colEnv = { vegetation: player.vegetation, colliders, skip: [this.cabinCol, this.tailCol], lifts, ground: this.ground };
+    // set down on a road (or hovering just over it): the traffic and the ski bus stop short of it, never drive through
+    const blk = { x: 0, y: 0, z: 0, yaw: 0, hw: 2.0, hd: 5.4 };
+    addTrafficBlocker((out) => {
+      const f = this.flight;
+      if (f.agl > 6) return;
+      blk.x = f.pos.x - Math.sin(f.yaw) * 1.2; blk.z = f.pos.z - Math.cos(f.yaw) * 1.2; blk.y = f.groundY; blk.yaw = f.yaw; // (the tail behind)
+      out.push(blk);
+    });
     this.bump = 0;
     this.place();
   }
@@ -544,8 +553,9 @@ export class Heli {
       const size = c.r ?? Math.hypot(c.hw, c.hd), reach = size + FRAME.rotorR + 1.5;
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > reach || Math.abs(dz) > reach || dx * dx + dz * dz > reach * reach) continue;
-      L.label = c.net ? 'Safety nets below' : size > 1.5 ? 'Too close to buildings' : 'Obstacles below · find open snow';
-      L.hold = c.net ? 5 : size > 1.5 ? 14 : 4;
+      const car = c.traffic || c.car || c.bus; // (never down on a car or the bus: a few metres over them)
+      L.label = c.net ? 'Safety nets below' : car ? 'Cars below · find open snow' : size > 1.5 ? 'Too close to buildings' : 'Obstacles below · find open snow';
+      L.hold = c.net ? 5 : car ? (c.bus ? 6 : 4.5) : size > 1.5 ? 14 : 4;
       return L;
     }
     // a lift line (cables overhead) or a cleared lift strip

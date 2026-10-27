@@ -12,8 +12,10 @@ import { fitModel } from '../../core/assets.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { busRoads, roadAt, ROAD_HALF, roadsideBlocked } from './roads.js';
 import { transition } from '../../ui/transition.js';
+import { trafficBlockers } from '../traffic.js';
 
 export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 16.5, acc: 1.1, brake: 1.3, lat: 1.5 };
+const CLEAR_DEC = 1.8, CLEAR_GAP = 4; // braking for something in the lane (m/s^2, within its 2.6 limit); the gap it stops at (m)
 const BAY = 7; // the bus stops this far before the end of the road (its middle)
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -816,26 +818,12 @@ export class BusLine {
       roadAt(t, r.s, _p);
       const i = _p.i, k = (r.s - t.S[i]) / Math.max(1e-3, t.S[Math.min(t.n - 1, i + 1)] - t.S[i]);
       let vt = Math.max(r.s < t.s1 - 0.5 ? 1.2 : 0, lerp(t.V[i], t.V[Math.min(t.n - 1, i + 1)], clamp(k, 0, 1)));
-      // traffic ahead in its lane, going its way: it slows behind a slower car and keeps a safe gap. Never held up
-      // for good: wrecks, parked and manoeuvring cars don't count, nothing does in the last stretch into the stop,
-      // and a car that has held it at a standstill for 3 s is taken off the road (traffic.js despawn)
-      try {
-        const cars = this.traffic?.cars, toStop = t.s1 - r.s;
-        if (cars && toStop > 45) {
-          const g = this.bus.group.position, fx = Math.sin(this.yaw || 0), fz = Math.cos(this.yaw || 0);
-          let blocker = null, lim = Infinity;
-          for (const o of cars) {
-            const turning = o.mode === 'lot' && !!o.turnRoad && !o.lot; // (a three-point turn across the road)
-            if (o.mode !== 'road' && !turning) continue;
-            if (!turning && Math.sin(o.yaw) * fx + Math.cos(o.yaw) * fz < 0.5) continue; // (oncoming / crossing)
-            const dx = o.x - g.x, dz = o.z - g.z, aheadD = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
-            if (aheadD > 0 && aheadD < 60 && side < 2.8) { const v = Math.max(0, o.v + (aheadD - 16) * 0.35); if (v < lim) { lim = v; blocker = o; } }
-          }
-          vt = Math.min(vt, lim);
-          r.heldT = blocker && r.v < 0.5 ? (r.heldT || 0) + dt : 0;
-          if (r.heldT > 3 && blocker) { this.traffic.despawn?.(blocker); r.heldT = 0; }
-        }
-      } catch { /* (never stop the bus over a car) */ }
+      // anything in its lane ahead, along the road it drives (round the bends too): the traffic (it follows a car at
+      // a safe gap, brakes for one stopped, crashed or turning), parked / shoved cars and the car you left on the
+      // road, a train or a helicopter in the way (traffic.js trafficBlockers). It never drives through one: it
+      // brakes in time and waits. A traffic car that has held it at a standstill for 3 s is taken off the road
+      // (traffic.js despawn); a shoved parked car goes back to its bay by itself (drive.js)
+      try { vt = Math.min(vt, this.clearAhead(t, r, dt)); } catch (e) { if (!this.clearWarn) { this.clearWarn = true; console.warn('bus clearance', e); } }
       r.v += clamp(vt - r.v, -BUS.brake * 2 * h, BUS.acc * 1.5 * h);
       r.s = Math.min(t.s1, r.s + r.v * h);
       if (r.s >= t.s1 - 0.05) { r.done = true; r.v = 0; r.arrive = 1.2; }
@@ -855,6 +843,51 @@ export class BusLine {
     for (let k = r.li + 1; k < r.legs.length; k++) left += r.legs[k].s1 - r.legs[k].s0;
     const hint = r.done ? `${r.to.name} · arrived` : r.wait > 0 ? `Ski bus to ${r.to.name} · doors closing` : `Ski bus to ${r.to.name} · ${(left / 1000).toFixed(1)} km · ${Math.round(r.v * 3.6)} km/h`;
     return { seat, hint };
+  }
+
+  // the speed (m/s) the bus may drive at so it stops short of whatever stands in its lane ahead (trip t, ride r)
+  clearAhead(t, r, dt) {
+    const obs = this.obstacles(), g = this.bus.group.position;
+    if (!obs.length) { r.heldT = 0; return Infinity; }
+    const look = 30 + (r.v * r.v) / (2 * CLEAR_DEC), i0 = roadAt(t, r.s - 2, _p).i, i1 = roadAt(t, r.s + look, _p).i + 1;
+    let lim = Infinity, blocker = null;
+    for (const o of obs) {
+      if (Math.abs(o.x - g.x) > look + 12 || Math.abs(o.z - g.z) > look + 12) continue;
+      if (o.y !== undefined && Math.abs(o.y - g.y) > 5) continue; // (a train in a tunnel under the road)
+      // the nearest point of the road ahead: how far along, how far to the side of the bus's lane
+      let bj = -1, bd = Infinity;
+      for (let j = i0; j <= Math.min(t.n - 2, i1); j++) { const d = (t.X[j] - o.x) ** 2 + (t.Z[j] - o.z) ** 2; if (d < bd) { bd = d; bj = j; } }
+      if (bj < 0) continue;
+      const hx = t.X[bj + 1] - t.X[bj], hz = t.Z[bj + 1] - t.Z[bj], hl = Math.hypot(hx, hz) || 1, ux = hx / hl, uz = hz / hl;
+      const dx = o.x - t.X[bj], dz = o.z - t.Z[bj], s = t.S[bj] + dx * ux + dz * uz;
+      const lat = -dx * uz + dz * ux - BUS.lane; // (the lane: right of the heading (ux, uz) is (-uz, ux))
+      const ca = Math.abs(Math.sin(o.yaw) * ux + Math.cos(o.yaw) * uz), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+      const across = o.hw * ca + o.hd * sa, along = o.hw * sa + o.hd * ca;
+      if (Math.abs(lat) > BUS.width / 2 + across + 0.35) continue; // (beside the lane: the other lane, a bay)
+      const gap = s - r.s - BUS.len / 2 - along;
+      if (s - r.s < 0 || gap > look) continue;
+      // going the bus's way: follow at its speed; anything else: stop short of it
+      const vo = Math.max(0, (o.v || 0) * (Math.sin(o.yaw) * ux + Math.cos(o.yaw) * uz));
+      const room = gap - CLEAR_GAP, v = room > 0 ? Math.sqrt(vo * vo + 2 * CLEAR_DEC * room) : 0;
+      if (v < lim) { lim = v; blocker = o; }
+    }
+    r.heldT = blocker && r.v < 0.5 ? (r.heldT || 0) + dt : 0;
+    if (r.heldT > 3 && blocker?.car && this.traffic?.despawn) { this.traffic.despawn(blocker.car); r.heldT = 0; }
+    return lim;
+  }
+  // everything the bus must not drive through, as boxes { x, y, z, yaw, hw, hd, v, car (a traffic car) }
+  obstacles() {
+    const out = (this._obs ||= []), pool = (this._obsPool ||= []);
+    out.length = 0;
+    let n = 0;
+    const add = (x, y, z, yaw, hw, hd, v = 0, car = null) => { const o = (pool[n++] ||= {}); o.x = x; o.y = y; o.z = z; o.yaw = yaw; o.hw = hw; o.hd = hd; o.v = v; o.car = car; out.push(o); };
+    const tr = this.traffic;
+    for (const c of tr?.cars || []) if (c.mode !== 'gone' && c.sinkT === undefined) add(c.x, c.y, c.z, c.yaw, c.w / 2, c.l / 2, c.mode === 'road' ? c.v : 0, c);
+    for (const e of tr?.parking?.cars || []) if (!e.driving) { const p = e.car.position; add(p.x, p.y, p.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2); }
+    const d = tr?.you?.d;
+    if (d) add(d.x, d.y, d.z, d.yaw, d.w / 2, d.half);
+    for (const b of trafficBlockers()) add(b.x, b.y, b.z, b.yaw, b.hw, b.hd);
+    return out;
   }
 
   abort() {

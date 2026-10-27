@@ -21,7 +21,50 @@ const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 60, LANE = 
 const END_KEEP = 95;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const _p = {}, _q = {}, _a = new THREE.Vector3(), _b = new THREE.Vector3();
+const _p = {}, _q = {}, _a = new THREE.Vector3(), _b = new THREE.Vector3(), _f = new THREE.Vector3();
+const BUS_HW = 1.3, BUS_HD = 6; // (the ski bus's footprint: bus.js BUS width 2.55, length 12)
+
+// ------------------------------------------------------------------ other vehicles no car drives through
+// Things that are not road traffic but that cars must never drive through (the trains, the helicopter set down on a
+// road): each source fills `out` with boxes { x, y, z, yaw (its +z), hw, hd, push }. The traffic and the ski bus
+// (bus.js) brake for them in their way (only at about their height: never for a train in a tunnel under the road);
+// a `push` box (a train: it keeps its timetable, it never stops) shoves any car on its line off to the side.
+const BLOCKERS = [], _boxes = [];
+/** Register fill(out) (called every frame); returns a function that unregisters it. */
+export function addTrafficBlocker(fill) {
+  BLOCKERS.push(fill);
+  return () => { const i = BLOCKERS.indexOf(fill); if (i >= 0) BLOCKERS.splice(i, 1); };
+}
+/** Rail cars: getCars() -> their Object3Ds (placed in world coordinates, +z along the track), hw / hd their half
+ * width / length. Express: addTrainBlocker(() => cars, { hw: CAR.hw, hd: CAR.half }). */
+export function addTrainBlocker(getCars, { hw = 1.4, hd = 8.6 } = {}) {
+  const pool = [];
+  return addTrafficBlocker((out) => {
+    const cars = getCars() || [];
+    for (let k = 0; k < cars.length; k++) {
+      const g = cars[k];
+      if (!g) continue;
+      const b = (pool[k] ||= { hw, hd, push: true });
+      _f.set(0, 0, 1).applyQuaternion(g.quaternion);
+      b.x = g.position.x; b.y = g.position.y; b.z = g.position.z; b.yaw = Math.atan2(_f.x, _f.z);
+      out.push(b);
+    }
+  });
+}
+/** This frame's blocker boxes (a shared array: read it, don't keep it). */
+export function trafficBlockers() {
+  _boxes.length = 0;
+  for (const fill of BLOCKERS) { try { fill(_boxes); } catch (e) { if (!fill.warned) { fill.warned = true; console.warn('traffic blocker', e); } } }
+  return _boxes;
+}
+// the box of something (x, z, yaw, half width / length) seen from a car heading (fx, fz): its extent across the
+// car's way and along it
+function extents(yaw, hw, hd, fx, fz, out) {
+  const ca = Math.abs(Math.sin(yaw) * fx + Math.cos(yaw) * fz), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+  out.across = hw * ca + hd * sa; out.along = hw * sa + hd * ca;
+  return out;
+}
+const _ext = {};
 
 // the pool of light a car's headlights throw on the road (a soft additive decal)
 function poolTexture() {
@@ -212,6 +255,9 @@ export class Traffic {
         }
       }
       this.aroundBus(dt);
+      // the trains and a helicopter on the road: braked for (clearance); a train shoves a car off its line
+      this.blk = trafficBlockers();
+      if (this.enabled && this.blk.length) this.shoveOff(this.blk);
       const glow = night > 0.18 ? Math.min(1, night * 1.4) : 0;
       const lodR = glow > 0 ? 110 : LOD_R, lit = [], tails = []; // (at night the detailed cars, with their lamps, further out)
       this.tailPools ||= [];
@@ -349,8 +395,17 @@ export class Traffic {
     // the car you drive (its body, not just where you sit)
     const dv = this.you?.d;
     if (dv) check(dv.x, dv.z, 32, (c.l + dv.half * 2) / 2 + 3);
-    const bus = this.skibus?.line?.bus?.group;
-    if (bus?.visible) check(bus.position.x, bus.position.z, 36, 13);
+    // the bus (its whole length: also when it stands across the way at a junction), the trains and a helicopter on
+    // the road (trafficBlockers, at about the car's height)
+    const box = (x, z, yaw, hw, hd, gap) => {
+      const dx = x - c.x, dz = z - c.z;
+      if (Math.abs(dx) > gap + hd || Math.abs(dz) > gap + hd) return;
+      const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(yaw, hw, hd, fx, fz, _ext);
+      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + 0.3) lim = Math.min(lim, Math.max(0, (ahead - e.along - c.l / 2 - 2.5) * 0.7));
+    };
+    const line = this.skibus?.line, bus = line?.bus?.group;
+    if (bus?.visible) box(bus.position.x, bus.position.z, line.yaw || 0, BUS_HW, BUS_HD, 36);
+    for (const b of this.blk || []) if (b.y === undefined || Math.abs(b.y - c.y) < 5) box(b.x, b.z, b.yaw, b.hw, b.hd, 40);
     const p = this.player.pos;
     check(p.x, p.z, 26, c.l / 2 + 3);
     return lim;
@@ -365,6 +420,49 @@ export class Traffic {
     c.x = (_a.x + _b.x) / 2; c.z = (_a.z + _b.z) / 2; c.y = (_a.y + _b.y) / 2 + 0.02;
     c.yaw = Math.atan2(_a.x - _b.x, _a.z - _b.z);
     this.pose(c, Math.atan2(_b.y - _a.y, Math.hypot(_a.x - _b.x, _a.z - _b.z)));
+  }
+
+  // a train keeps its timetable: a car on its line (left there, knocked onto it) is shoved off to the side, the car
+  // you drive pushed back off it (a wall you can't drive through)
+  shoveOff(blk) {
+    for (const b of blk) {
+      if (!b.push) continue;
+      const sx = Math.sin(b.yaw), sz = Math.cos(b.yaw), rx = sz, rz = -sx; // along the train, across it
+      // the push (signed, across the train) that takes a car's box clear of it, or 0
+      const hit = (x, y, z, yaw, hw, hd) => {
+        if (y !== undefined && b.y !== undefined && Math.abs(y - b.y) > 5) return 0;
+        const dx = x - b.x, dz = z - b.z, R = b.hd + hd + 1;
+        if (Math.abs(dx) > R || Math.abs(dz) > R) return 0;
+        const u = dx * sx + dz * sz, w = dx * rx + dz * rz, e = extents(yaw, hw, hd, sx, sz, _ext);
+        if (Math.abs(u) > b.hd + e.along || Math.abs(w) > b.hw + e.across) return 0;
+        return (w < 0 ? -1 : 1) * (b.hw + e.across + 0.15) - w;
+      };
+      for (const c of this.cars) {
+        if (c.mode === 'gone' || c.sinkT !== undefined) continue;
+        const k = hit(c.x, c.y, c.z, c.yaw, c.w / 2, c.l / 2);
+        if (!k) continue;
+        const sg = Math.sign(k);
+        c.x += rx * k; c.z += rz * k;
+        this.knock(c, rx * sg * 3, rz * sg * 3, (Math.random() - 0.5) * 1.5);
+        this.pose(c, 0);
+      }
+      for (const e of this.parking?.cars || []) {
+        if (e.driving) continue;
+        const g = e.car.position, k = hit(g.x, g.y, g.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2);
+        if (!k) continue;
+        const sg = Math.sign(k);
+        this.you?.shove?.(e, rx * sg * 2.5, rz * sg * 2.5, (Math.random() - 0.5) * 0.8); // (first: it remembers its bay)
+        g.x += rx * k; g.z += rz * k; g.y = world.height(g.x, g.z) + 0.03;
+        e.car.updateMatrixWorld(true);
+        e.collider.x = g.x; e.collider.z = g.z;
+      }
+      const d = this.you?.d, k = d ? hit(d.x, d.y, d.z, d.yaw, d.w / 2, d.half) : 0;
+      if (k) {
+        const sg = Math.sign(k), vn = (d.vx * rx + d.vz * rz) * sg;
+        d.x += rx * k; d.z += rz * k;
+        if (vn < 0) { d.vx -= rx * sg * vn * 1.2; d.vz -= rz * sg * vn * 1.2; }
+      }
+    }
   }
 
   pose(c, pitch = 0) {
@@ -398,7 +496,7 @@ export class Traffic {
     const nx = c.x + c.kvx * dt, nz = c.z + c.kvz * dt;
     let blocked = false;
     for (const o of this.colliders) {
-      if (o === c.collider || o.traffic || (o.soft && !o.rail)) continue; // (a guardrail stops it too)
+      if (o === c.collider || o.traffic || (o.soft && !o.rail && !o.bus)) continue; // (a guardrail and the bus stop it too)
       const r = o.r ?? Math.max(o.hw, o.hd);
       if (Math.abs(o.x - nx) > r + 2 || Math.abs(o.z - nz) > r + 2) continue;
       if (o.r !== undefined) { if (Math.hypot(nx - o.x, nz - o.z) < o.r + c.w / 2) { blocked = true; break; } }

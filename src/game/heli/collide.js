@@ -94,7 +94,8 @@ export function collideHeli(f, env, dt) {
       if (env.skip && env.skip.includes(c)) continue;
       const size = c.r ?? Math.max(c.hw, c.hd), reach = size + ROTOR_R + 1;
       if (Math.abs(p.x - c.x) > reach || Math.abs(p.z - c.z) > reach) continue;
-      const g = env.ground(c.x, c.z), h = colliderHeight(c, size);
+      // (cars and the bus: a little over their roofs too, the skids are below the lowest point tested)
+      const g = env.ground(c.x, c.z), h = colliderHeight(c, size) + (c.traffic || c.car || c.bus ? 0.5 : 0);
       if (c.r !== undefined) vertical(c.x, c.z, g - 1, g + h, c.r, c.r);
       else box(c, g - 1, g + h);
     }

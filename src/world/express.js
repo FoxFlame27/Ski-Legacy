@@ -24,6 +24,7 @@ import { buildCar, CAR, trainUniforms } from './train.js';
 import { world } from './world.js';
 import { layout } from './layout.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
+import { addTrainBlocker } from '../game/traffic.js';
 import { smoothstep, clamp, lerp } from '../core/noise.js';
 
 // the track agent's module (track, viaducts, tunnels, stations, the village entrance and hall): loaded lazily so
@@ -221,6 +222,8 @@ export class Express {
     scene.add(this.cabin.group);
     this.trains = [];
     for (const dir of [1, -1]) for (let k = 0; k < PER_DIR; k++) this.trains.push(new TrainSet(this, dir, k / PER_DIR + (dir > 0 ? 0 : 0.5 / PER_DIR), k));
+    // traffic stops for (and is shoved off the line by) the near trains (game/traffic.js)
+    addTrainBlocker(() => this.trains.flatMap((tr) => tr.lod === 2 ? [] : tr.cars.map((c, k) => (k === 0 && this.ride?.train === tr ? this.cabin : c).group)), { hw: CAR.hw, hd: CAR.half });
     this.passengers = null; // (copied from the Wolkenspitzbahn's once it has seated its own: copyPassengers)
     try { this.buildSigns(); } catch (e) { console.warn('Legacy Express stop signs', e); }
     this.track = null;

@@ -19,6 +19,7 @@ import { buildCar, CAR, trainUniforms, setCarModel, crisp } from './train.js';
 import { poseSeated } from './seatpose.js';
 import { buildStations } from './railstations.js';
 import { RailPeople } from './railpeople.js';
+import { addTrainBlocker } from '../game/traffic.js';
 
 // people waiting at the stations (fans.js crowd people); the Meshy railcar body for outside views
 export const RAIL_PEOPLE = true;
@@ -166,6 +167,9 @@ export class Railway {
     try { if (RAIL_MESHY_CAR && models?.rail_car2) setCarModel(models.rail_car2); } catch (e) { console.warn('rail car', e); } // the Meshy railcar (outside views)
     try { this.people = RAIL_PEOPLE && typeof document !== 'undefined' ? new RailPeople(scene, this.stations) : null; } catch (e) { console.warn('rail people', e); this.people = null; }
     this.trains = [new TrainSet(this, 0, 0), new TrainSet(this, 0.5, 1)];
+    // no car drives through a train, the train shoves any car on the line aside (traffic.js)
+    const bodies = this.trains.flatMap((tr) => tr.cars.map((c) => c.group));
+    addTrainBlocker(() => bodies, { hw: CAR.hw, hd: CAR.half });
     this.passengerMats = [];
     MeshoptSimplifier.ready.then(() => this.seatPassengers(this.trains[0])).catch((e) => console.warn('rail passengers', e));
     this.t = CYCLE * 0.62; // timetable time (s)

@@ -210,7 +210,7 @@ export class ParkingLots {
     car.position.set(bay.x, world.height(bay.x, bay.z) + 0.03, bay.z);
     car.rotation.y = yaw;
     this.group.add(car);
-    const collider = { x: bay.x, z: bay.z, hw: 0.97, hd: length / 2, rot: -yaw, h: 1.7 };
+    const collider = { x: bay.x, z: bay.z, hw: 0.97, hd: length / 2, rot: -yaw, h: 1.7, car: true };
     colliders.push(collider);
     const block = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.5, length - 0.1), new THREE.MeshBasicMaterial());
     block.position.y = 0.8; block.visible = false;
@@ -227,7 +227,7 @@ export class ParkingLots {
     car.position.set(lb.x, world.height(lb.x, lb.z) + 0.03, lb.z);
     car.rotation.y = lb.yaw;
     this.group.add(car);
-    const collider = { x: lb.x, z: lb.z, hw: 0.97, hd: length / 2, rot: -lb.yaw, h: 1.7 };
+    const collider = { x: lb.x, z: lb.z, hw: 0.97, hd: length / 2, rot: -lb.yaw, h: 1.7, car: true };
     colliders.push(collider);
     const block = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.5, length - 0.1), new THREE.MeshBasicMaterial());
     block.position.y = 0.8; block.visible = false;

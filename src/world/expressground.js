@@ -65,7 +65,7 @@ export function buildExpressGround(courses = []) {
   const _n = { d: 0, s: 0, side: 0, i: 0 };
   world.addCut({
     bounds: expressBounds,
-    apply: (x, z, h) => shapeExpressBed(x, z, h),
+    apply: (x, z, h, spacing) => shapeExpressBed(x, z, h, spacing),
     forest: (x, z, f) => {
       const n = expressNearest(x, z, _n);
       if (!n) return f;

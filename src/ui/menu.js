@@ -1,7 +1,7 @@
 // Front-end menus over the live 3D world:
-//   Main (PLAY · SKIER · CONTROLS · STATS · SETTINGS · QUIT): PLAY drops you straight into free ride (no mode
-//   chooser any more, Oct 27: RACE "just for fun" lives at the RACING stand in Legacy Village, ui/racestand.js;
-//   WORLD RACING is gone); SKIER is the character select (MAN or WOMAN on the 3D showcase) -> START,
+//   Main (PLAY · CONTROLS · STATS · SETTINGS · QUIT): PLAY opens the character select (MAN or WOMAN on the 3D
+//   showcase) and its START drops you into free ride (no mode chooser any more, Oct 27: RACE "just for fun" lives
+//   at the RACING stand in Legacy Village, ui/racestand.js; WORLD RACING is gone),
 // plus stats, settings and the in-game pause menu.
 // House style: white paint-brush strokes with blue italic condensed lettering.
 // Every size is expressed in the CSS unit --u (1u = 1px on a 1280x800 canvas, see style.css),
@@ -359,7 +359,7 @@ export class Menu {
     }
     return {
       logo: 'big', shade: 'left', hints: [['updown', 'Select'], ['enter', 'Confirm']],
-      html: `<div class="menu-col compact">${this.btn('PLAY', 'play', 3, 'big')}${this.btn('SKIER', 'skier', 37)}${this.btn('CONTROLS', 'controls', 31)}${this.btn('STATS', 'stats', 7)}`
+      html: `<div class="menu-col">${this.btn('PLAY', 'play', 3, 'big')}${this.btn('CONTROLS', 'controls', 31)}${this.btn('STATS', 'stats', 7)}`
         + `${this.btn('SETTINGS', 'settings', 11)}${this.btn('QUIT', 'quit', 13, 'small')}</div>`,
     };
   }
@@ -693,7 +693,7 @@ export class Menu {
   action(act, fromClick = false) {
     const [a, arg] = String(act).split(':');
     switch (a) {
-      case 'play': return this.start(); // no mode chooser: PLAY is free ride
+      case 'play': return this.go('showcase', 1); // (Oct 27, the user: the skier choice still comes first; its START: free ride)
       case 'skier': return this.go('showcase', 1);
       case 'controls': return this.go('controls', 1);
       case 'stats': return this.go('stats', 1);

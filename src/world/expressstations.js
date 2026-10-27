@@ -3,7 +3,7 @@
 //   - two side platforms (240 m, either side of the double track: the station's side faces the course's start /
 //     the village), styled like the Wolkenspitzbahn's (stone coping, white safety line, paving)
 //   - the Wolkenspitzbahn's own station building (its Meshy models: rail_station_valley at the village,
-//     rail_station_halt at the races) behind the station-side platform, its front to the track, on a stone plinth,
+//     rail_station_halt at the races) behind the station-side platform, its front to the track, on the snow,
 //     with the valley station's glazed platform canopy in front of it
 //   - the red name boards (the station's name, "LEGACY EXPRESS") on posts along both platforms and one on the
 //     station square behind the building (facing the start), benches, lamps, walkable platforms, colliders
@@ -231,11 +231,11 @@ function buildStation(rec, M, models) {
       bld.position.set(0, 0, sz.z / 2);
       bld.rotation.y = Math.PI; // the model's front (+z) faces the track (-z here)
       holder.add(bld);
-      const plinth = new THREE.Mesh(new THREE.BoxGeometry(sz.x * 0.96, 5, sz.z * 0.96), M.stationPlinth ??= new THREE.MeshStandardMaterial({ color: 0x6e6a63, roughness: 0.9 }));
-      plinth.position.set(0, -2.5, sz.z / 2);
-      holder.add(plinth);
+      // (no plinth: it stands on the snow of the station square, flattened to platform level in expressground.js;
+      // Oct 27, the user: "a weird platform under them, they should be on snow")
+      bld.position.y = -0.18;
       grp.add(holder);
-      rec.cameraBlockers?.push(plinth);
+      rec.cameraBlockers?.push(bld);
     } catch (e) { console.warn('Legacy Express station building', e); }
   }
   {

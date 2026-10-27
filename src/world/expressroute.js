@@ -301,7 +301,10 @@ export const PORTAL_IN = 3.2;
 const W_BED = 7.5, CUT = 0.9, FILL = 0.62, CUT_PORTAL = 2.0, W_PORTAL = 3.0;
 const CUT_NOISE = new Simplex(9133);
 const _q = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
-export function shapeExpressBed(x, z, h) {
+// `spacing`: the terrain mesh's vertex spacing there (world.height's; 0 = exact). A coarse far node can't show a cutting
+// narrower than its grid, so there the formation widens by most of a cell: from afar the line runs in a trench you can
+// see, never inside the hillside (Oct 27, the user: "some places where the train goes through a mountain").
+export function shapeExpressBed(x, z, h, spacing = 0) {
   const L = EXPRESS;
   if (!L.ready) return h;
   const nn = expressNearest(x, z);
@@ -323,7 +326,7 @@ export function shapeExpressBed(x, z, h) {
     if (dB >= -PORTAL_IN - 0.5 && dB < 30) portal = Math.max(portal, Math.min(1, 1 - dB / 30));
   }
   if (onExpressBridge(s) && h < bed - 2) return h;
-  const cut = CUT + (CUT_PORTAL - CUT) * portal * portal, wb = W_BED + W_PORTAL * portal;
+  const cut = CUT + (CUT_PORTAL - CUT) * portal * portal, wb = W_BED + W_PORTAL * portal + (spacing > 3 ? spacing * 0.8 : 0);
   const w = Math.max(0, nn.d - wb);
   let top = bed + w * cut;
   if (portal > 0 && w > 0) top += CUT_NOISE.fbm(x * 0.09, z * 0.09, 3) * 3.0 * portal * Math.min(1, w / 5);

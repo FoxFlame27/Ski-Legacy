@@ -2002,7 +2002,9 @@ export class SkierRig {
     for (let i = 0; i < 2; i++) {
       const s = i === 0 ? -1 : 1, H = this.fpHands[i], pl = this.plant[i];
       // ---- where the hand wants to be (camera frame: x right, y up, -z ahead)
-      const T = _v3.set(s * (0.282 - 0.05 * tk), -0.312 + 0.012 * tk, -0.555 - 0.04 * tk);
+      // (Oct 27, the user: "move hands a bit forward so you can see them better": 11 cm further ahead and a little
+      // higher than before (-0.555 / -0.312), well inside the lower corners of the picture instead of at its edge)
+      const T = _v3.set(s * (0.274 - 0.05 * tk), -0.282 + 0.012 * tk, -0.665 - 0.04 * tk);
       const ins = Math.max(0, s * lean), out = Math.max(0, -s * lean); // inside / outside hand of the turn
       T.x += s * (0.018 * out - 0.012 * ins); T.y += 0.022 * ins - 0.008 * out; T.z += 0.03 * out - 0.055 * ins;
       T.x += s * (0.065 + 0.045 * spin) * airW; T.y += 0.035 * airW; T.z += 0.02 * airW; // balance in the air
@@ -2050,7 +2052,7 @@ export class SkierRig {
       const Y = _s[1].copy(H.d).negate();
       // (the Meshy arm: the fist turned about the pole so the forearm runs off toward the elbow, low and outside: the
       // sleeve leaves the picture through the bottom corner)
-      const Zb = arms ? _s[3].set(s * 0.47, -0.5 - 0.05 * absorb, -0.3).sub(p).negate() : _s[3].set(-s * 0.28, -0.2, -1);
+      const Zb = arms ? _s[3].set(s * 0.47, -0.5 - 0.05 * absorb, -0.4).sub(p).negate() : _s[3].set(-s * 0.28, -0.2, -1);
       Zb.addScaledVector(Y, -Zb.dot(Y)).normalize();
       const X = _s[4].crossVectors(Y, Zb);
       _m.makeBasis(X, Y, Zb);
@@ -2058,7 +2060,7 @@ export class SkierRig {
       const wrist = H.cuff.position.copy(FP_WRIST);
       wrist.x *= -s; // (the right fist is mirrored)
       wrist.applyQuaternion(H.root.quaternion).add(p);
-      const elbow = _s[2].set(s * 0.47, -0.5 - 0.05 * absorb, -0.3).sub(wrist).normalize(); // wrist -> elbow
+      const elbow = _s[2].set(s * 0.47, -0.5 - 0.05 * absorb, -0.4).sub(wrist).normalize(); // wrist -> elbow (moved ahead with the hands)
       H.cuff.quaternion.setFromUnitVectors(UP, elbow);
     }
   }

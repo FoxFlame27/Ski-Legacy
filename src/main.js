@@ -25,6 +25,7 @@ import { SkierRig } from './player/skier.js';
 import { Player } from './player/player.js';
 import { Trails, Spray, skierFX } from './fx/snowfx.js';
 import { FreeCourses, registerFreeWorldCourses, freeCourses } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
+import { buildExpressGround } from './world/expressground.js'; // the Legacy Express: the high-speed line to every race (its ground works)
 import { NPCs } from './game/npcs.js';
 import { initPeopleHits, playerHitPerson } from './game/peoplehits.js';
 import { HUD, CARD_DIALOG } from './ui/hud.js';
@@ -196,6 +197,8 @@ async function boot() {
   // the eight World Racing courses stand on the mountains around the resort: their regions shape the terrain, so
   // they are registered now, before any of it is built (one per task while the models stream in)
   try { console.log('World Racing courses on the mountains:', await registerFreeWorldCourses(), 'ms'); } catch (e) { console.warn('free-world courses', e); }
+  // the Legacy Express's line is fitted on the courses' final ground, its roadbed carved in before any terrain is built
+  try { buildExpressGround(freeCourses()); } catch (e) { console.warn('Legacy Express ground', e); }
   models = await modelsLoading;
   if (!models.ski_elite) models.ski_elite = models.ski_pro;
 

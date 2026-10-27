@@ -179,7 +179,7 @@ export class Helipad {
    * @param {{x: number, z: number}} o.site
    * @param {number} [o.price]    flight price on the sign
    */
-  constructor({ scene, models, colliders, site, price = 150 }) {
+  constructor({ scene, models, colliders, site, price = 300 }) {
     this.group = new THREE.Group();
     this.group.name = 'helipad';
     const { x, z } = site;

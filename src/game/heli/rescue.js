@@ -16,9 +16,9 @@ import { Ambulance } from './ambulance.js';
 import { busRoads } from '../bus/roads.js';
 import { save, writeSave } from '../economy.js';
 
-// The rescue bill (the ambulance): $500, then $250 more for every rescue before it (counted in the save); it is
+// The rescue bill (the ambulance): $500, then $125 more for every rescue before it (counted in the save); it is
 // charged even into the red (shops, lifts and passes then refuse until you earn it back)
-export const FEE_BASE = 500, FEE_STEP = 250;
+export const FEE_BASE = 500, FEE_STEP = 125; // (was +250 a rescue: halved 2026-10-27)
 export const rescueFee = () => FEE_BASE + FEE_STEP * Math.max(0, save.rescues | 0);
 // The ambulance ride after a rescue (false: the rescue ends the old way, out at the pad, no fee).
 export const AMBULANCE_ON = true; // (checked in the game 2026-10-27)

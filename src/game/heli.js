@@ -29,7 +29,7 @@ import { travelPicker, fmtMin } from '../ui/travel.js'; // the flight planner
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
 import { CARD_DIALOG } from '../ui/hud.js';
 
-export const HELI_PRICE = 150;
+export const HELI_PRICE = 300;
 const JUMP_AGL = 6;          // jump out from at most this high (skids above the snow, m)...
 const JUMP_SPEED = 6;        // ...and this slow (m/s)
 const CAM_DIST = 17;

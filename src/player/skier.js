@@ -845,7 +845,7 @@ export class SkierRig {
     }
     for (const [name, c] of Object.entries(this.clips)) {
       c.action.setEffectiveWeight(c.w / (sum || 1));
-      if (name === 'walk' || name === 'run') c.action.setEffectiveTimeScale(THREE.MathUtils.clamp(v / c.speed, name === 'run' ? 0.3 : 0.5, 1.8));
+      if (name === 'walk' || name === 'run') c.action.setEffectiveTimeScale(THREE.MathUtils.clamp(v / c.speed, name === 'run' ? 0.3 : 0.5, name === 'run' ? 2.6 : 1.8)); // (the run cycle keeps up with the faster pace on foot)
     }
     this.mixer.update(dt);
     // keep the feet on uneven ground: offset the whole body by the ground under it (decks included)

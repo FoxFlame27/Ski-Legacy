@@ -13,6 +13,7 @@ import { world as WORLD } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
 import { nightUniform } from '../world/village.js';
 import { knockPerson, people } from './peoplehits.js';
+import { freeCourses } from '../modes/parkour/freeworld.js';
 
 // Off until verified in the game (the browser queue ran out before the check): with it off nothing is placed, no
 // light or sound is created and every main.js hook is inert. Dev override: ?flags=sleds (or localStorage 'sl.flags').
@@ -37,6 +38,7 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _ray = new THREE.Raycaster();
 const _p = new THREE.Vector3(), _dir = new THREE.Vector3();
 // marks it leaves in the snow (fx/snowfx.js trails): [id, metres ahead of the centre, metres to the right, width]
+const MAX_SLEDS = 40; // parked sleds round the resort (each drawn only within 380 m of the camera)
 const SLED_MARKS = [['sled-ski-l', 0.95, -0.5, 0.12], ['sled-ski-r', 0.95, 0.5, 0.12], ['sled-track', -0.9, 0, 0.42]];
 const SEAT = new THREE.Vector3(0, 0.74, -0.32);   // the rider's seat (sled frame: +z forward, y up from the snow)
 const TRACK = new THREE.Vector3(0, 0.2, -1.35);   // where the track throws snow
@@ -70,16 +72,22 @@ export class Snowmobiles {
   get speed() { return this.d ? Math.hypot(this.d.vx, this.d.vz) : 0; }
 
   // ------------------------------------------------------------------ parked sleds
-  // Where the resort keeps them: the village (by the plaza), two gondola bases and the nearest huts: on clear,
-  // gentle snow off the runs, a few metres from the buildings. Four at most (no clutter).
+  // Where the resort keeps them: the village (round the plaza), every lift's bottom and top station, every hut,
+  // every Legacy Express station and every race's start and finish: on clear, gentle snow off the runs, a few metres
+  // from the buildings, never two within 40 m (Oct 27, the user: "add a lot more snowmobiles everywhere").
   pickSpots() {
     const out = [], L = this.layout, W = this.world;
-    const tries = [{ x: 20, z: -60, near: 'gondola base' }, { x: 46, z: 74, near: 'village' }]; // (the gondola-base one replaces the old parked prop)
-    const bases = L.lifts.filter((l) => l.type === 'gondola' && !l.procedural).slice(0, 3);
-    for (const l of bases) { const [ux, uz] = l.dir; tries.push({ x: l.bottom.x - uz * 30 - ux * 10, z: l.bottom.z + ux * 30 - uz * 10, near: l.name }); }
-    for (const h of L.huts.slice(0, 2)) tries.push({ x: h.x + 14, z: h.z + 10, near: h.name });
+    const tries = [{ x: 20, z: -60, near: 'gondola base' }, { x: 46, z: 74, near: 'village' }, { x: -120, z: -20, near: 'village' }, { x: 140, z: 40, near: 'village' }]; // (the gondola-base one replaces the old parked prop)
+    for (const l of L.lifts) {
+      const [ux, uz] = l.dir || [0, 1];
+      tries.push({ x: l.bottom.x - uz * 30 - ux * 10, z: l.bottom.z + ux * 30 - uz * 10, near: l.name });
+      tries.push({ x: l.top.x + uz * 30 + ux * 12, z: l.top.z - ux * 30 + uz * 12, near: l.name });
+    }
+    for (const h of L.huts) tries.push({ x: h.x + 14, z: h.z + 10, near: h.name });
+    for (const st of L.express?.stations || []) { const b = st.exit || st.board; if (b) tries.push({ x: b.x, z: b.z, near: st.name }); }
+    try { for (const e of freeCourses()) { tries.push({ x: e.heli.x + 15, z: e.heli.z + 10, near: e.name }); tries.push({ x: e.finish.x + 70, z: e.finish.z + 40, near: e.name }); } } catch { /* (no courses) */ }
     for (const t of tries) {
-      if (out.length >= 4) break;
+      if (out.length >= MAX_SLEDS) break;
       const s = this.clearSpot(t.x, t.z, 26, out);
       if (s) out.push({ ...s, heading: Math.atan2(-s.x, -s.z) + 0.6 }); // nose roughly toward the valley
     }

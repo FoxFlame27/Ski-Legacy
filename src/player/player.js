@@ -63,7 +63,7 @@ const BODY_SLIDE = 8.5;             // deceleration of a tumbling body on snow a
 const GETUP_TIME = 1.35;            // seconds to stand back up
 
 // ---- on foot ----
-const FOOT_SPEED = 4.2;     // on foot (m/s): the sprint pace and run animation; there's no slower walk
+const FOOT_SPEED = 8.4;     // on foot (m/s): the sprint pace and run animation; there's no slower walk (Oct 27: twice the old 4.2)
 const WALK_FULL = Math.tan(22 * DEG);  // uphill walking slows above this...
 const WALK_MAX = Math.tan(38 * DEG);   // ...and stops only on real steeps (cliffs, rock faces): take a lift
 

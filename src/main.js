@@ -339,7 +339,7 @@ async function boot() {
   jobs = new Jobs({ scene, models, player, hud, audio, save, writeSave, earn: (amount, label) => earn(amount, label), layout, makeRig, talk });
   // heli-skiing: the helipad + the helicopter you fly yourself (every collider exists by now)
   heli = new Heli({ scene, models, player, input, camera, hud, audio, spray, world, layout, colliders, spend, transition, lifts });
-  sleds = new Snowmobiles({ scene, models, player, camera, hud, audio, spray, trails, layout, colliders, vegetation, world }); // a few parked around the resort
+  sleds = new Snowmobiles({ scene, models, player, camera, hud, audio, spray, trails, layout, colliders, vegetation, world }); // parked all round the resort (up to 40: lifts, huts, Express stations, race starts and finishes)
   // cars on the roads (needs the player: it keeps away from you and stops for you)
   try { traffic = new Traffic({ scene, models, colliders, player, camera, skibus, makeRig }); } catch (e) { console.warn('traffic: ' + (e?.stack || e)); traffic = null; }
   if (traffic && skibus?.line) skibus.line.traffic = traffic; // (the bus slows behind cars)

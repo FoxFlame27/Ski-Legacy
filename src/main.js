@@ -693,8 +693,17 @@ function leaveRail(exit) {
 function openExpress(it) {
   const from = it.from, pass = hasPass(), X = layout.express;
   const list = express.destinations(from.id).sort((a, b) => (!a.course - !b.course) || a.min - b.min);
+  // (on a race station's platform its own race too: the shuttle up to the start, free; at its start sign: you are there)
+  const own = !it.sign && from.course ? express.courses.get(from.course) : null;
+  if (own) list.unshift({ st: from, course: own, dir: 1, min: 3, km: 0, stops: 0, pts: [], shuttle: true });
   const dests = list.map((d) => {
     const e = d.course;
+    if (d.shuttle) {
+      return {
+        name: d.st.name, x: d.st.x, z: d.st.z, color: e.D.color, race: e.id, meta: `${e.D.label} · $${e.reward.toLocaleString('en-US')} prize · the shuttle up to the start`,
+        tag: 'FREE', act: () => { leaveExpress(express.arrival(express.stIndex(from.id))); input.lock(); }, info: d,
+      };
+    }
     return {
       name: d.st.name, x: d.st.x, z: d.st.z, path: d.pts, color: e?.D.color, race: e?.id,
       meta: e ? `${e.D.label} · $${e.reward.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`,
@@ -707,7 +716,7 @@ function openExpress(it) {
     mode: 'route', title: 'Legacy Express', kicker: pass ? 'DAY PASS ACTIVE · 300 KM/H' : `$${EXPRESS_PRICE} TO ANY RACE · 300 KM/H`,
     sub: `From <b>${from.underground ? 'Legacy Village' : from.name}</b> · pick your race`, listHead: 'RACES',
     lineStyle: 'express', lines: X ? [X.pts] : [], stops: X?.stations || [], from: { name: from.name, x: from.x, z: from.z },
-    dests, go: 'RIDE', goLabel: (d) => `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
+    dests, go: 'RIDE', goLabel: (d) => d.info?.shuttle ? 'Shuttle up to the start' : `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
     plan: (d) => {
       const i = d.info, e = i.course;
       return `<div class="tp-name" style="color:${e ? e.D.color : 'inherit'}">${e ? e.D.label : 'Legacy Village'}</div><div class="tp-grid">${cell('RIDE', `${Math.max(1, Math.round(i.min))}<small>min</small>`)}${cell('STOPS', i.stops)}${e ? cell('PRIZE', `$${e.reward.toLocaleString('en-US')}`) : cell('KM', i.km.toFixed(0))}</div>`;
@@ -736,8 +745,10 @@ function boardExpress(from, to) {
 function leaveExpress(a) {
   if (!a) return;
   const e = a.course ? freeCourses().find((c) => c.id === a.course) : null;
+  const wasRiding = express.riding;
   const off = () => {
     express.abort();
+    if (!wasRiding) return; // (the shuttle from a station's platform: you were never on the train)
     player.rig.root.visible = true; player.rig.gear.visible = true;
     if (player.viewBeforeRide) { player.view = player.viewBeforeRide; player.viewBeforeRide = null; }
     player.headlampOn = player.lampBeforeRide; player.lampBeforeRide = undefined;

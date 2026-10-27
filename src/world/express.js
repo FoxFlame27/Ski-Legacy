@@ -603,16 +603,18 @@ export class Express {
     let cells = null;
     try { cells = this.startObstacles(e); } catch (err) { console.warn('Legacy Express: start obstacles', err); }
     const house = e.course.startHouse;
+    const raised = Math.abs(e.start.y - fr.y); // (a start raised over its ground: the shoulder's higher parts)
     let best = null;
     for (const side of [fr.pref, -fr.pref]) {
-      for (const a of [-2, 0, -4, 2, -6, 4, -8]) for (const d of [3, 4.5, 6, 8, 10]) {
+      for (const a of [-2, 0, -4, 2, -6, 4, -8, 7, 10, 13]) for (const d of [3, 4.5, 6, 8, 10]) {
         const lat = side * (fr.w + d), x = fr.x + fr.fx * a + fr.rx * lat, z = fr.z + fr.fz * a + fr.rz * lat;
         if (Math.hypot(x - fr.x, z - fr.z) > START_R - 3.5) continue;
         if (Math.hypot(x - e.heli.x, z - e.heli.z) < 10) continue;
         if (house && Math.hypot(x - house.x, z - house.z) < 7) continue;
-        const q = this.probe(e, fr, x, z, { clear: 1.5, maxDy: 3.5, line: 1.2, cells });
+        const q = this.probe(e, fr, x, z, { clear: 1.5, maxDy: 3.5 + raised, line: 1.2, cells });
         if (!q) continue;
-        const score = q.slope * 30 + q.dy * 0.8 + Math.abs(a + 2) * 0.12 + d * 0.15 + (side !== fr.pref ? 2.5 : 0);
+        // (+ how far below / above the start line's own level: freeworld's nearStart wants it within 12 m)
+        const off = Math.abs(q.y - e.start.y), score = q.slope * 30 + q.dy * 0.8 + Math.max(0, off - 1.5) * 5 + (off > 10.5 ? 40 : 0) + Math.abs(a + 2) * 0.12 + d * 0.15 + (side !== fr.pref ? 2.5 : 0);
         if (!best || score < best.score) best = { x, z, y: q.y, score };
       }
     }

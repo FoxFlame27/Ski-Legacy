@@ -1,7 +1,7 @@
 // Front-end menus over the live 3D world:
-//   Main (PLAY · STATS · SETTINGS · QUIT) -> mode cards (FREE RIDE · RACE · WORLD RACING)
-//   -> race setup (course + AI difficulty) / world-racing setup (course + PB + medal)
-//   -> character select: MAN or WOMAN on the 3D showcase (main.js renders the skier) -> START,
+//   Main (PLAY · SKIER · CONTROLS · STATS · SETTINGS · QUIT): PLAY drops you straight into free ride (no mode
+//   chooser any more, Oct 27: RACE "just for fun" lives at the RACING stand in Legacy Village, ui/racestand.js;
+//   WORLD RACING is gone); SKIER is the character select (MAN or WOMAN on the 3D showcase) -> START,
 // plus stats, settings and the in-game pause menu.
 // House style: white paint-brush strokes with blue italic condensed lettering.
 // Every size is expressed in the CSS unit --u (1u = 1px on a 1280x800 canvas, see style.css),
@@ -150,212 +150,9 @@ export function replay(el, cls) {
 }
 
 const seedOf = (str) => [...String(str)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 9973, 17);
-const pad2 = (v) => String(v).padStart(2, '0');
-const cap = (s) => s[0].toUpperCase() + s.slice(1);
 const fmtMoney = (v) => (v || 0).toLocaleString('en-US');
-const fmtLen = (m) => (!Number.isFinite(m) ? '—' : m >= 1000 ? `${(m / 1000).toFixed(1)}<small>KM</small>` : `${Math.round(m)}<small>M</small>`);
-const ORD = (n) => (n % 100 >= 11 && n % 100 <= 13 ? 'TH' : ['TH', 'ST', 'ND', 'RD'][n % 10] || 'TH');
-const diffKey = (d) => String(d || '').toLowerCase();
-// piste-style difficulty mark: green circle / blue square / black diamond
-const diffSign = (d) => `<i class="diff-sign ${esc(diffKey(d))}"></i>`;
-
-// ------------------------------------------------------------------ mode card art (photo fallback)
-// Poster-style scenes: natural ridgelines (midpoint displacement), every peak split into a lit and
-// a shaded face along a jagged fall line (sun from the upper right), horizon haze for depth.
-
-let artUid = 0;
-
-const polyPath = (pts) => `M${pts.map(([x, y]) => `${n1(x)} ${n1(y)}`).join(' L')} Z`;
-const SUB = 16; // ridge points per key segment (4 midpoint subdivisions)
-
-// dense jagged polyline through key points [[x, y], ...] (x ascending)
-function ridgeLine(keys, rough, r) {
-  let pts = keys.map((p) => [p[0], p[1]]);
-  let amp = rough;
-  for (let it = 0; it < 4; it++) {
-    const next = [pts[0]];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
-      next.push([(ax + bx) / 2 + (r() - 0.5) * (bx - ax) * 0.25, (ay + by) / 2 + (r() - 0.5) * amp], [bx, by]);
-    }
-    pts = next;
-    amp *= 0.55;
-  }
-  return pts;
-}
-
-function ridgeY(P, x) {
-  for (let i = 0; i < P.length - 1; i++) {
-    if (x >= P[i][0] && x <= P[i + 1][0]) return P[i][1] + ((P[i + 1][1] - P[i][1]) * (x - P[i][0])) / (P[i + 1][0] - P[i][0] || 1);
-  }
-  return P[P.length - 1][1];
-}
-
-/** A mountain range: lit silhouette down to `base`, plus the shaded west face of every peak key. */
-function range(keys, { rough = 9, base = 200, lit, shade, seed = 1 }) {
-  const r = rng(seed);
-  const P = ridgeLine(keys, rough, r);
-  let out = `<path d="${polyPath([...P, [P[P.length - 1][0], base], [P[0][0], base]])}" fill="${lit}"/>`;
-  for (let k = 1; k < keys.length - 1; k++) {
-    if (!(keys[k][1] < keys[k - 1][1] && keys[k][1] < keys[k + 1][1])) continue; // peaks only
-    const [ax, ay] = P[k * SUB];
-    // the shadow edge runs diagonally down to the right (a wedge), never past the next valley
-    const fall = [], cap = keys[k + 1][0] - 2;
-    for (let j = 1; j <= 8; j++) {
-      let fy = ay + ((base - ay) * j) / 8, fx = ax + (fy - ay) * 0.55;
-      const capped = fx >= cap;
-      if (capped) { fx = cap; fy = ay + (cap - ax) / 0.55; } // reached the next valley: close from here
-      fx += j < 8 && !capped ? (r() - 0.5) * 4 : 0;
-      fall.push([fx, Math.max(fy, ridgeY(P, fx) + 0.8)]); // stays under the ridge
-      if (capped) break;
-    }
-    // the crease with the neighbour on the left slants down-left from the valley (no vertical seam)
-    const [vx, vy] = P[(k - 1) * SUB];
-    const crease = [];
-    for (let j = 8; j >= 1; j--) {
-      const cy = vy + ((base - vy) * j) / 8;
-      const cx = vx - (cy - vy) * 0.3 + (j < 8 ? (r() - 0.5) * 3 : 0);
-      crease.push([cx, Math.max(cy, ridgeY(P, cx) + 0.8)]);
-    }
-    out += `<path d="${polyPath([...P.slice((k - 1) * SUB, k * SUB + 1), ...fall, ...crease])}" fill="${shade}"/>`;
-  }
-  return out;
-}
-
-// three-tier spruce silhouette standing on (x, y), height s
-function pine(x, y, s, c) {
-  const at = (dx, f) => `${n1(x + s * dx)} ${n1(y - s * f)}`;
-  return `<path d="M${at(0, 1)} L${at(0.2, 0.7)} L${at(0.12, 0.7)} L${at(0.3, 0.42)} L${at(0.18, 0.42)} L${at(0.38, 0.1)} L${at(0.05, 0.1)} L${at(0.05, 0)}`
-    + ` L${at(-0.05, 0)} L${at(-0.05, 0.1)} L${at(-0.38, 0.1)} L${at(-0.18, 0.42)} L${at(-0.3, 0.42)} L${at(-0.12, 0.7)} L${at(-0.2, 0.7)} Z" fill="${c}"/>`;
-}
-
-// a band of trees between x0 and x1 around baseline y (drawn back to front)
-function forest(x0, x1, y, count, s0, s1, colors, seed) {
-  const r = rng(seed);
-  const trees = [];
-  for (let i = 0; i < count; i++) trees.push([x0 + r() * (x1 - x0), y + (r() - 0.5) * 8, s0 + r() * (s1 - s0), colors[i % colors.length]]);
-  trees.sort((a, b) => a[1] - b[1]);
-  return trees.map(([tx, ty, ts, c]) => pine(tx, ty, ts, c)).join('');
-}
-
-// small alpine chalet: timber body, snowy roof with a shaded half, warm windows
-function chalet(x, y, s) {
-  const p = (dx, dy) => `${n1(x + s * dx)} ${n1(y - s * dy)}`;
-  return `<path d="M${p(-0.5, 0)} L${p(-0.5, 0.48)} L${p(0.5, 0.48)} L${p(0.5, 0)} Z" fill="#6b4632"/>`
-    + `<path d="M${p(-0.66, 0.42)} L${p(0, 0.92)} L${p(0.66, 0.42)} L${p(0.6, 0.36)} L${p(0, 0.82)} L${p(-0.6, 0.36)} Z" fill="#f7faff"/>`
-    + `<path d="M${p(-0.66, 0.42)} L${p(0, 0.92)} L${p(0, 0.82)} L${p(-0.6, 0.36)} Z" fill="#cbd9f0"/>`
-    + `<rect x="${n1(x - s * 0.3)}" y="${n1(y - s * 0.34)}" width="${n1(s * 0.16)}" height="${n1(s * 0.14)}" fill="#ffd27a"/>`
-    + `<rect x="${n1(x + s * 0.14)}" y="${n1(y - s * 0.34)}" width="${n1(s * 0.16)}" height="${n1(s * 0.14)}" fill="#ffd27a"/>`;
-}
-
-// slalom gate on the snow: soft shadow, two poles, a panel
-function gate(x, y, s, col) {
-  return `<ellipse cx="${n1(x + s * 0.32)}" cy="${n1(y + s * 0.03)}" rx="${n1(s * 0.5)}" ry="${n1(s * 0.07)}" fill="#c9d7ee"/>`
-    + `<path d="M${n1(x)} ${n1(y)} V${n1(y - s)} M${n1(x + s * 0.64)} ${n1(y)} V${n1(y - s)}" stroke="#20304d" stroke-width="${n1(Math.max(0.8, s * 0.07))}"/>`
-    + `<rect x="${n1(x)}" y="${n1(y - s)}" width="${n1(s * 0.64)}" height="${n1(s * 0.48)}" fill="${col}"/>`;
-}
-
-// canyon wall: a vertical jagged inner edge (keys [[y, x], ...]) closed against the side `sideX`
-function wall(keys, sideX, fill, rim, seed) {
-  const r = rng(seed);
-  const edge = ridgeLine(keys, 7, r).map(([y, x]) => [x, y]);
-  const shifted = edge.map(([x, y]) => [x + (sideX < 0 ? -3 : 3), y]).reverse();
-  const top = edge[0][1], bottom = edge[edge.length - 1][1];
-  return `<path d="${polyPath([[sideX, top], ...edge, [sideX, bottom]])}" fill="${fill}"/>`
-    + `<path d="${polyPath([...edge, ...shifted])}" fill="${rim}"/>`;
-}
-
-const grad = (id, stops, vertical = true) => `<linearGradient id="${id}" x1="0" y1="0" x2="${vertical ? 0 : 1}" y2="${vertical ? 1 : 0}">${stops.map(([o, c, a = 1]) => `<stop offset="${o}" stop-color="${c}" stop-opacity="${a}"/>`).join('')}</linearGradient>`;
-
-/** Illustrated scene shown behind each mode card (the photo, when present, fades in over it). */
-function modeArt(id) {
-  const u = ++artUid;
-  const svg = (defs, body) => `<svg class="mc-svg" viewBox="0 0 320 196" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs>${defs}</defs>${body}</svg>`;
-  if (id === 'race') {
-    // race day: a steep groomed course with gates and safety netting under a deep blue sky
-    const course = [[34, 106, 7, '#e5352b'], [70, 116, 8.5, '#1f5fe0'], [96, 131, 10.5, '#e5352b'], [140, 143, 13, '#1f5fe0'], [160, 164, 16.5, '#e5352b'], [214, 178, 21, '#1f5fe0']];
-    return svg(
-      grad(`rs${u}`, [[0, '#0b3593'], [0.6, '#3a74db'], [1, '#a8c7f4']])
-      + grad(`rh${u}`, [[0, '#ffffff', 0], [0.2, '#ffffff', 0.1], [0.4, '#ffffff', 0.3], [0.6, '#ffffff', 0.44], [1, '#ffffff', 0.5]])
-      + grad(`rf${u}`, [[0, '#ffffff'], [1, '#e6eef9']]),
-      `<rect width="320" height="196" fill="url(#rs${u})"/>`
-      + range([[-10, 92], [26, 70], [58, 86], [100, 48], [140, 78], [184, 40], [224, 72], [262, 56], [300, 80], [330, 66]], { lit: '#e6eefb', shade: '#a9bfe3', seed: 11, rough: 8 })
-      + `<rect y="60" width="320" height="136" fill="url(#rh${u})"/>`
-      + range([[-10, 108], [44, 94], [96, 110]], { lit: '#f4f8fe', shade: '#b8cbe9', seed: 12, rough: 5 })
-      + `<path d="M-10 102 C 70 98, 150 110, 226 138 S 304 174, 330 180 V 196 H -10 Z" fill="url(#rf${u})"/>`
-      + `<path d="M-10 128 C 50 124, 110 140, 152 168 S 186 196, 190 196 H -10 Z" fill="#dce6f6"/>`
-      + forest(-6, 30, 110, 7, 9, 15, ['#1d3e5e', '#24507a'], 13)
-      + `<path d="M 30 101 C 90 104, 150 122, 214 150 S 292 188, 314 196" fill="none" stroke="#ff7a1a" stroke-width="1.5" stroke-dasharray="5 3"/>`
-      + `<path d="M 22 112 C 60 118, 92 126, 120 140 S 176 168, 212 196" fill="none" stroke="#c3d3ee" stroke-width="1.2"/>`
-      + course.map(([x, y, s, c]) => gate(x, y, s, c)).join(''),
-    );
-  }
-  if (id === 'trial') {
-    // world racing: a moonlit ice canyon under the aurora, the course glowing down the middle
-    const r = rng(77);
-    let stars = '';
-    for (let i = 0; i < 30; i++) stars += `<circle cx="${n1(r() * 320)}" cy="${n1(r() * 74)}" r="${n1(0.35 + r() * 0.85)}" fill="#ffffff" opacity="${(0.3 + r() * 0.55).toFixed(2)}"/>`;
-    return svg(
-      grad(`ws${u}`, [[0, '#040d28'], [0.55, '#10306f'], [1, '#3a70c8']])
-      + grad(`wa${u}`, [[0, '#5ff2d6', 0], [0.45, '#5ff2d6', 0.5], [1, '#7fb6ff', 0]], false)
-      + grad(`wh${u}`, [[0, '#9cc4ff', 0], [0.2, '#9cc4ff', 0.08], [0.4, '#9cc4ff', 0.22], [0.6, '#9cc4ff', 0.33], [1, '#9cc4ff', 0.38]])
-      + grad(`wi${u}`, [[0, '#b9d0f6'], [1, '#f2f7ff']]),
-      `<rect width="320" height="196" fill="url(#ws${u})"/>${stars}`
-      + `<path d="M-10 58 C 60 24, 140 70, 200 38 S 300 24, 330 42 L 330 60 C 282 48, 222 84, 160 72 S 40 60, -10 84 Z" fill="url(#wa${u})"/>`
-      + range([[-10, 96], [36, 64], [76, 86], [120, 46], [158, 38], [196, 70], [238, 50], [282, 80], [330, 58]], { lit: '#d3e2fb', shade: '#7f9dd3', seed: 21, rough: 8 })
-      + `<rect y="70" width="320" height="126" fill="url(#wh${u})"/>`
-      + `<path d="M96 196 C 126 160, 146 138, 156 110 L 168 110 C 178 138, 196 160, 228 196 Z" fill="url(#wi${u})"/>`
-      + wall([[52, 36], [92, 60], [130, 78], [166, 96], [202, 116]], -12, '#122f69', '#3d6fc8', 22)
-      + wall([[58, 286], [96, 264], [132, 248], [168, 230], [202, 210]], 332, '#163a7e', '#5286dc', 23)
-      + `<path d="M162 112 C 170 130, 150 146, 160 164 S 178 186, 168 200" fill="none" stroke="#9fd8ff" stroke-width="5" stroke-linecap="round" opacity=".3"/>`
-      + `<path d="M162 112 C 170 130, 150 146, 160 164 S 178 186, 168 200" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>`,
-    );
-  }
-  // free ride: a sunny morning over the resort, forest, chalets and fresh tracks
-  return svg(
-    grad(`fs${u}`, [[0, '#2a66d0'], [0.58, '#83b5ee'], [1, '#dbeafb']])
-    + `<radialGradient id="fg${u}" cx=".8" cy=".14" r=".55"><stop offset="0" stop-color="#fffbe6" stop-opacity=".95"/><stop offset=".3" stop-color="#fff2c2" stop-opacity=".38"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>`
-    + grad(`fh${u}`, [[0, '#ffffff', 0], [0.2, '#ffffff', 0.1], [0.4, '#ffffff', 0.3], [0.6, '#ffffff', 0.47], [1, '#ffffff', 0.55]])
-    + grad(`ff${u}`, [[0, '#ffffff'], [1, '#e7eef9']]),
-    `<rect width="320" height="196" fill="url(#fs${u})"/><rect width="320" height="196" fill="url(#fg${u})"/>`
-    + range([[-10, 108], [30, 88], [64, 100], [106, 64], [142, 88], [180, 50], [218, 82], [256, 70], [292, 92], [330, 80]], { lit: '#e9f1fc', shade: '#bfd0ec', seed: 31, rough: 9 })
-    + `<rect y="78" width="320" height="118" fill="url(#fh${u})"/>`
-    + range([[-10, 138], [34, 112], [76, 128], [120, 104], [160, 126], [204, 100], [248, 124], [290, 108], [330, 122]], { lit: '#f8fbff', shade: '#b4c8e7', seed: 32, rough: 7 })
-    + forest(-8, 128, 150, 26, 7, 13, ['#1b3a58', '#23496e', '#1f4163'], 33)
-    + forest(236, 330, 148, 18, 7, 13, ['#1b3a58', '#23496e', '#1f4163'], 34)
-    + chalet(178, 156, 15) + chalet(200, 152, 12)
-    + `<path d="M-10 196 V 160 C 60 150, 140 154, 210 160 S 300 168, 330 164 V 196 Z" fill="url(#ff${u})"/>`
-    + `<path d="M138 196 C 148 186, 126 178, 144 170 S 166 160, 156 152" fill="none" stroke="#a9bfe2" stroke-width="1.4"/>`
-    + `<path d="M148 196 C 160 186, 138 178, 156 170 S 178 160, 168 152" fill="none" stroke="#a9bfe2" stroke-width="1.1"/>`,
-  );
-}
-
-// mode photos (public/ui/mode-*.jpg) are optional: preload once, fade in over the illustration
-const photoState = new Map(); // url -> 'ok' | 'fail' | 'loading'
-function loadPhotos(root) {
-  root.querySelectorAll('.mc-photo[data-img]').forEach((ph) => {
-    const url = ph.dataset.img;
-    const apply = () => { ph.style.backgroundImage = `url("${url}")`; ph.classList.add('loaded'); };
-    const st = photoState.get(url);
-    if (st === 'ok') return apply();
-    if (st === 'fail') return;
-    photoState.set(url, 'loading');
-    const img = new Image();
-    img.onload = () => { photoState.set(url, 'ok'); apply(); };
-    img.onerror = () => photoState.set(url, 'fail');
-    img.src = url;
-  });
-}
 
 // ------------------------------------------------------------------ data
-
-const MODES = [
-  { id: 'free', title: 'FREE RIDE', kicker: 'OPEN WORLD', desc: 'Ski the open resort at your own pace.', img: './ui/mode-free.jpg' },
-  { id: 'race', title: 'RACE', kicker: 'VS 14 AI RACERS', desc: 'Beat 14 AI rivals to the finish line.', img: './ui/mode-race.jpg' },
-  { id: 'trial', title: 'WORLD RACING', kicker: 'TIME TRIAL', desc: 'Chase your ghost, splits and medals.', img: './ui/mode-world.jpg' },
-];
-
-const DIFFS = [{ id: 'easy', label: 'EASY' }, { id: 'medium', label: 'MEDIUM' }, { id: 'hard', label: 'HARD' }];
 
 // used only if main.js provides no getCourses() hook
 const FALLBACK_COURSES = [
@@ -400,7 +197,7 @@ export class Menu {
   /**
    * @param {object} o
    * @param {Array<{id, body?, label?}>} o.characters  the player characters to choose from (MAN, WOMAN)
-   * @param {(sel: {mode: 'free'|'race'|'trial', courseId: string|null, difficulty: 'easy'|'medium'|'hard', character: string}) => void} o.onStart
+   * @param {(sel: {mode: 'free', courseId: null, character: string}) => void} o.onStart  PLAY / START: into free ride
    * @param {(charId: string|null) => void} [o.onShowcase]  show / swap / remove the 3D showcase skier
    * @param {(deltaYaw: number) => void} [o.onShowcaseSpin]  drag on the showcase turns the skier (radians)
    * @param {() => Array<{id, name, tagline, difficulty, length, drop, par?, medals?, record?: {best, medal}}>} [o.getCourses]
@@ -422,11 +219,7 @@ export class Menu {
     this.onSens = o.onSens;
     this.onVolume = o.onVolume;
     this.prefs = loadPrefs();
-    this.sel = {
-      mode: MODES.some((m) => m.id === this.prefs.mode) ? this.prefs.mode : 'free',
-      difficulty: DIFFS.some((d) => d.id === this.prefs.difficulty) ? this.prefs.difficulty : 'medium',
-      courseId: null,
-    };
+    this.sel = { mode: 'free', courseId: null };
     this.ready = false;
     this.load = { f: 0, t: 'Loading world' };
     this.inGame = false;
@@ -435,8 +228,6 @@ export class Menu {
     this.focusables = [];
     this.fi = -1;
     this.chi = 0;
-    this.courses = [];
-    this.courseIdx = 0;
     this.showcaseOn = false;
     this.starting = false;
     this.built = false;
@@ -552,8 +343,6 @@ export class Menu {
 
   buildScreen(name) {
     switch (name) {
-      case 'mode': return this.scrMode();
-      case 'race': case 'trial': return this.scrCourses(name);
       case 'showcase': return this.scrShowcase();
       case 'controls': return this.scrControls();
       case 'stats': return this.scrStats();
@@ -570,7 +359,7 @@ export class Menu {
     }
     return {
       logo: 'big', shade: 'left', hints: [['updown', 'Select'], ['enter', 'Confirm']],
-      html: `<div class="menu-col">${this.btn('PLAY', 'play', 3, 'big')}${this.btn('CONTROLS', 'controls', 31)}${this.btn('STATS', 'stats', 7)}`
+      html: `<div class="menu-col compact">${this.btn('PLAY', 'play', 3, 'big')}${this.btn('SKIER', 'skier', 37)}${this.btn('CONTROLS', 'controls', 31)}${this.btn('STATS', 'stats', 7)}`
         + `${this.btn('SETTINGS', 'settings', 11)}${this.btn('QUIT', 'quit', 13, 'small')}</div>`,
     };
   }
@@ -590,142 +379,11 @@ export class Menu {
     };
   }
 
-  scrMode() {
-    const cards = MODES.map((m, i) => `
-      <button class="mode-card" data-act="mode:${m.id}" data-f data-stagger tabindex="-1" style="--clip:${brushClip(40 + i * 3, 7, 5)}">
-        <span class="mc-art" style="--clip:${brushClip(61 + i * 5, 3, 3)}">${modeArt(m.id)}<span class="mc-photo" data-img="${m.img}"></span><span class="mc-shine"></span><span class="mc-num">${pad2(i + 1)}</span></span>
-        <span class="mc-body"><span class="mc-kicker">${m.kicker}</span><span class="mc-title">${m.title}</span><span class="mc-desc">${m.desc}</span></span>
-        <span class="mc-bar"></span>
-      </button>`).join('');
-    return {
-      logo: 'small', shade: 'full',
-      hints: [['leftright', 'Select'], ['enter', 'Confirm'], ['esc', 'Back']],
-      html: `${this.head('CHOOSE MODE', 'Three ways to ride the mountain')}
-        <div class="mode-row">${cards}</div>`,
-      focus: Math.max(0, MODES.findIndex((m) => m.id === this.sel.mode)),
-      after: (el) => loadPhotos(el),
-      back: () => this.go('main', -1),
-    };
-  }
-
   fetchCourses() {
     let list = null;
     try { list = this.getCourses?.(); } catch (e) { console.warn('getCourses failed', e); }
     if (!Array.isArray(list) || !list.length) list = FALLBACK_COURSES.map((c) => ({ ...c, record: save.records?.[c.id] || null }));
     return list;
-  }
-
-  courseRow(c, i, kind) {
-    const rec = c.record || {};
-    const side = kind === 'trial'
-      ? `<span class="cr-rec">${Number.isFinite(rec.best) ? `<b>${fmtTime(rec.best)}</b>` : '<em>NO TIME</em>'}${medalHTML(rec.medal, 32)}</span>`
-      : `<span class="cr-diff">${diffSign(c.difficulty)}<em>${esc(String(c.difficulty || '').toUpperCase())}</em></span>`;
-    return `<button class="course-row${i === this.courseIdx ? ' sel' : ''}" tabindex="-1" data-act="course:${i}" data-stagger style="--clip:${brushClip(120 + i * 7, 4, 3)}">
-        <span class="cr-num">${pad2(i + 1)}</span>
-        <span class="cr-main"><b class="cr-name">${esc(c.name)}</b><small class="cr-tag">${esc(c.tagline || '')}</small></span>
-        ${side}</button>`;
-  }
-
-  courseDetail(c, kind) {
-    const rec = c.record || {};
-    const cells = [
-      ['LENGTH', fmtLen(c.length)],
-      ['DROP', Number.isFinite(c.drop) ? `${Math.round(c.drop)}<small>M</small>` : '—'],
-      ['LEVEL', `${diffSign(c.difficulty)}${esc(String(c.difficulty || '—').toUpperCase())}`],
-    ];
-    if (Number.isFinite(c.par)) cells.push(['PAR TIME', fmtTime(c.par)]);
-    // race: best finishing place (+ podium medal); world racing: personal best time (+ time medal)
-    const place = Number(rec.bestRace);
-    const best = kind === 'race'
-      ? (place > 0
-        ? `<div class="cd-best"><span class="cd-label">BEST FINISH</span><b>${place}<small>${ORD(place)}</small></b>${medalHTML(rec.raceMedal, 46)}</div>`
-        : '<div class="cd-best none"><span class="cd-label">BEST FINISH</span><em>No race finished yet</em></div>')
-      : Number.isFinite(rec.best)
-        ? `<div class="cd-best"><span class="cd-label">PERSONAL BEST</span><b>${fmtTime(rec.best)}</b>${medalHTML(rec.medal, 46)}</div>`
-        : '<div class="cd-best none"><span class="cd-label">PERSONAL BEST</span><em>No time set yet</em></div>';
-    const medals = kind === 'trial' && c.medals
-      ? `<div class="cd-medals">${MEDALS.filter((m) => Number.isFinite(c.medals[m])).map((m) => `<span>${medalHTML(m, 24)}<b>${fmtTime(c.medals[m])}</b></span>`).join('')}</div>`
-      : '';
-    return `<div class="cd-kicker">${kind === 'trial' ? 'WORLD RACING' : 'RACE'} · COURSE ${pad2(this.courseIdx + 1)}</div>
-      <div class="cd-name">${esc(c.name)}</div>
-      <div class="cd-tag">${esc(c.tagline || '')}</div>
-      <div class="cd-grid">${cells.map(([k, v]) => `<div class="cd-cell"><span class="cd-label">${k}</span><b>${v}</b></div>`).join('')}</div>
-      ${best}${medals}`;
-  }
-
-  scrCourses(kind) {
-    const race = kind === 'race';
-    this.courses = this.fetchCourses();
-    const want = this.prefs.course?.[kind];
-    this.courseIdx = Math.max(0, this.courses.findIndex((c) => c.id === want));
-    this.sel.courseId = this.courses[this.courseIdx]?.id ?? null;
-    const sel = this.courses[this.courseIdx];
-    const diff = race ? `<div class="setup-label">AI DIFFICULTY</div>
-        <div class="seg-brush" data-stagger>${DIFFS.map((d) => `<button tabindex="-1" data-act="diff:${d.id}" class="${this.sel.difficulty === d.id ? 'on' : ''}">${d.label}</button>`).join('')}</div>` : '';
-    return {
-      logo: 'small', shade: 'left',
-      hints: race ? [['updown', 'Course'], ['leftright', 'Difficulty'], ['enter', 'Continue'], ['esc', 'Back']]
-        : [['updown', 'Course'], ['enter', 'Continue'], ['esc', 'Back']],
-      html: `${this.head(race ? 'RACE' : 'WORLD RACING', race ? 'Fifteen racers, one course. First across the line wins.' : 'Time trial against the ghost of your personal best.')}
-        <div class="setup">
-          <div class="setup-col">
-            <div class="setup-label">COURSE</div>
-            <div class="course-list${this.courses.length > 3 ? ' scroll' : ''}">${this.courses.map((c, i) => this.courseRow(c, i, kind)).join('')}</div>
-            ${diff}
-            <div class="setup-actions">${this.btn('CONTINUE', 'continue', 17, 'mid')}</div>
-          </div>
-          <div class="course-detail" data-stagger style="--clip:${brushClip(77, 6, 4)}">${sel ? this.courseDetail(sel, kind) : ''}</div>
-        </div>`,
-      // Enter presses the highlighted button (CONTINUE unless the mouse moved the highlight to BACK)
-      keys: {
-        up: () => this.selectCourse(this.courseIdx - 1),
-        down: () => this.selectCourse(this.courseIdx + 1),
-        left: () => (race ? this.stepDifficulty(-1) : this.selectCourse(this.courseIdx - 1)),
-        right: () => (race ? this.stepDifficulty(1) : this.selectCourse(this.courseIdx + 1)),
-      },
-      back: () => this.go('mode', -1),
-    };
-  }
-
-  selectCourse(i, silent = false) {
-    const list = this.courses, el = this.cur?.el;
-    if (!list.length || !el) return;
-    i = ((i % list.length) + list.length) % list.length;
-    const changed = i !== this.courseIdx;
-    this.courseIdx = i;
-    this.sel.courseId = list[i].id;
-    const kind = this.cur.name;
-    this.prefs.course = { ...(this.prefs.course || {}), [kind]: list[i].id };
-    savePrefs(this.prefs);
-    el.querySelectorAll('.course-row').forEach((row, j) => row.classList.toggle('sel', j === i));
-    el.querySelector('.course-row.sel')?.scrollIntoView?.({ block: 'nearest' });
-    const det = el.querySelector('.course-detail');
-    if (det && changed) { det.innerHTML = this.courseDetail(list[i], kind); replay(det, 'swap'); }
-    if (!silent && changed) this.audio?.play('tick');
-  }
-
-  setDifficulty(id, silent = false) {
-    if (!DIFFS.some((d) => d.id === id)) return;
-    const changed = id !== this.sel.difficulty;
-    this.sel.difficulty = id;
-    this.prefs.difficulty = id;
-    savePrefs(this.prefs);
-    this.cur?.el.querySelectorAll('.seg-brush [data-act^="diff:"]').forEach((b) => b.classList.toggle('on', b.dataset.act === `diff:${id}`));
-    if (!silent && changed) this.audio?.play('tick');
-  }
-
-  stepDifficulty(d) {
-    const i = DIFFS.findIndex((x) => x.id === this.sel.difficulty);
-    this.setDifficulty(DIFFS[Math.max(0, Math.min(DIFFS.length - 1, i + d))].id);
-  }
-
-  modeLine() {
-    const m = this.sel.mode;
-    if (m === 'free') return 'Free ride · the open resort';
-    const c = this.courses.find((x) => x.id === this.sel.courseId);
-    const name = c ? c.name : '';
-    if (m === 'race') return `Race · ${name} · ${cap(this.sel.difficulty)} AI`;
-    return `World racing · ${name}`;
   }
 
   // Character select: MAN or WOMAN. main.js stands the chosen skier in 3D (ski stance, dressed as equipped)
@@ -738,7 +396,7 @@ export class Menu {
     return {
       logo: 'small', shade: 'show',
       hints: [['leftright', 'Man / woman'], ['enter', 'Start'], ['esc', 'Back'], ...(spin ? [['', 'Drag to rotate']] : [])],
-      html: `${spin ? '<div class="sc-drag" aria-hidden="true"></div>' : ''}${this.head('CHOOSE YOUR SKIER', this.modeLine())}
+      html: `${spin ? '<div class="sc-drag" aria-hidden="true"></div>' : ''}${this.head('CHOOSE YOUR SKIER', 'Free ride · the open resort')}
         <div class="sc-panel" data-stagger style="--clip:${brushClip(140, 6, 4)}">
           <div class="seg-brush sc-pick">${picks}</div>
           <div class="sc-note">Customize your look in the ski shop: jackets, trousers, helmets and goggles.</div>
@@ -762,7 +420,7 @@ export class Menu {
       },
       // left / right pick MAN / WOMAN; Enter presses the highlighted button (START by default)
       keys: { left: () => this.pickChar(this.chi - 1), right: () => this.pickChar(this.chi + 1), up: () => {}, down: () => {} },
-      back: () => this.go(this.sel.mode === 'free' ? 'mode' : this.sel.mode, -1),
+      back: () => this.go('main', -1),
     };
   }
 
@@ -793,15 +451,16 @@ export class Menu {
     this.onShowcase?.(null);
   }
 
+  // PLAY (straight into free ride as the saved skier) and the character screen's START
   start() {
+    if (this.cur?.name !== 'showcase') this.chi = Math.max(0, this.chars.findIndex((x) => x.id === save.character));
     const c = this.chars[this.chi];
     if (this.starting || !c) return;
     this.starting = true;
     save.character = c.id;
     writeSave();
     savePrefs(this.prefs);
-    const mode = this.sel.mode;
-    const payload = { mode, courseId: mode === 'free' ? null : this.sel.courseId, difficulty: this.sel.difficulty, character: c.id };
+    const payload = { mode: 'free', courseId: null, character: c.id };
     // the showcase skier stays until main.js hides the menu (hide() calls onShowcase(null)),
     // so it never pops out before a transition has covered the screen
     if (this.onStart) this.onStart(payload);
@@ -831,7 +490,7 @@ export class Menu {
         <div class="stats-wrap">
           <div class="menu-panel" data-stagger style="--clip:${brushClip(150, 5, 4)}"><div class="mp-head">CAREER</div>
             ${rows.map(([k, v]) => `<div class="mp-row"><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>
-          <div class="menu-panel" data-stagger style="--clip:${brushClip(151, 5, 4)}"><div class="mp-head">WORLD RACING RECORDS</div>${recs}</div>
+          <div class="menu-panel" data-stagger style="--clip:${brushClip(151, 5, 4)}"><div class="mp-head">COURSE RECORDS</div>${recs}</div>
         </div>`,
       back: () => this.go(this.inGame ? 'pause' : 'main', -1),
     };
@@ -1034,20 +693,12 @@ export class Menu {
   action(act, fromClick = false) {
     const [a, arg] = String(act).split(':');
     switch (a) {
-      case 'play': return this.go('mode', 1);
+      case 'play': return this.start(); // no mode chooser: PLAY is free ride
+      case 'skier': return this.go('showcase', 1);
       case 'controls': return this.go('controls', 1);
       case 'stats': return this.go('stats', 1);
       case 'settings': return this.go('settings', 1);
       case 'back': return this.back(!fromClick);
-      case 'mode':
-        if (!MODES.some((m) => m.id === arg)) return undefined;
-        this.sel.mode = arg;
-        this.prefs.mode = arg;
-        savePrefs(this.prefs);
-        return this.go(arg === 'free' ? 'showcase' : arg, 1);
-      case 'course': return this.selectCourse(Number(arg), fromClick);
-      case 'diff': return this.setDifficulty(arg, fromClick);
-      case 'continue': return this.courses.length ? this.go('showcase', 1) : undefined;
       case 'pick': return this.pickChar(Number(arg), fromClick);
       case 'start': return this.start();
       case 'resume': return this.pauseHandlers?.onResume?.();

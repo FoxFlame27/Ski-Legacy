@@ -153,6 +153,7 @@ export class RaceSession {
     this.writeSave = o.writeSave;
     this.onExit = o.onExit;
     this.freeRide = o.freeRide || null; // free ride (the course on its mountain): prize money, RACE AGAIN / CONTINUE
+    this.choices = o.choices || null;   // the results buttons for RACE (else RETRY / NEXT / MENU)
     this.mode = o.mode === 'trial' ? 'trial' : 'race';
     this.difficulty = DIFFICULTY[o.difficulty] ? o.difficulty : 'medium';
     this.botCharacters = o.botCharacters?.length ? o.botCharacters : DEFAULT_CHARS;
@@ -1378,7 +1379,7 @@ export class RaceSession {
       } catch (e) { console.warn('Race: free-ride result failed', e); }
       this.resultsArgs.canNext = false;
       this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', 'BACK TO START', 'ENTER']];
-    }
+    } else if (this.choices) this.resultsArgs.choices = this.choices;
     this.presentResults();
   }
 

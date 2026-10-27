@@ -55,6 +55,8 @@ import { presentation } from './game/presentation/index.js';
 import { Jobs } from './game/jobs.js';
 import { Talk } from './game/talk.js';
 import { Modes } from './game/modes.js';
+import { RaceStand } from './game/racestand.js'; // the RACING stand in Legacy Village: RACE just for fun (no mode chooser any more)
+import { RaceStandUI } from './ui/racestand.js';
 import { RaceHud } from './ui/racehud.js';
 import { transition } from './ui/transition.js';
 import { COURSES, COURSE_MODELS } from './modes/parkour/courses.js';
@@ -158,6 +160,7 @@ let sleds = null; // snowmobiles you can drive (game/snowmobile.js)
 let parking = null; // the car parks (game/parking.js)
 let traffic = null; // cars driving the roads (game/traffic.js)
 let drive = null; // the car you drive (game/drive.js)
+let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
 let secrets = null; // hidden tunnels, couloirs, caves (world/secrets.js)
 const jobFrame = { active: false }; // reused every frame
@@ -283,6 +286,7 @@ async function boot() {
     botCharacters: () => CHARACTERS.map((c) => c.id).filter((id) => id !== save.character),
     stream: streamAround,
     toMenu: backToMenu,
+    toWorld: backToStand, // a fun race from the RACING stand ends back there, in free ride
     lock: () => input.lock(),
   });
   // (the old open-world gate races are gone: free ride races the World Racing courses where they stand, see
@@ -347,6 +351,12 @@ async function boot() {
       get lifts() { return lifts; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get started() { return started; }, get paused() { return paused; },
       get secrets() { return secrets; }, get railway() { return railway; } },
   });
+
+  // the RACING stand beside the village job board: RACE just for fun (every collider of the village exists by now)
+  try {
+    raceStandUI = new RaceStandUI({ hud, audio });
+    raceStand = new RaceStand({ scene, models, jobs, colliders, open: openRaceStand });
+  } catch (e) { console.warn('racing stand', e); raceStand = null; }
 
   // pre-stream the world around the start
   setLoad(0.7, 'Streaming terrain…');
@@ -453,14 +463,43 @@ function startGame() {
   }
 }
 
-// Menu START: free ride drops you into Legacy Village; RACE / WORLD RACING teleport to a course.
+// Menu PLAY / START: always free ride in Legacy Village (no mode chooser: RACE is at the RACING stand there).
 async function startFromMenu(sel = {}) {
   if (sel.character && sel.character !== save.character) { save.character = sel.character; writeSave(); }
-  if (sel.mode === 'race' || sel.mode === 'trial') {
-    jobs.onEvent('teleport'); // a running delivery / rescue ends when you leave for a race
-    await modes.start({ mode: sel.mode, courseId: sel.courseId, difficulty: sel.difficulty || 'medium' }, () => startGame());
-    input.lock();
-  } else startGame();
+  startGame();
+}
+
+// E at the RACING stand: pick a course and the AI difficulty, then RACE exactly as the old menu option did
+// (teleport to the course, 14 AI). Just for fun: RACE pays nothing (prize money: the start houses in free ride).
+const RS_PREFS = 'ski-legacy-racestand';
+function openRaceStand() {
+  if (!raceStandUI || modes.active) return;
+  let pr = {};
+  try { pr = JSON.parse(localStorage.getItem(RS_PREFS) || '{}') || {}; } catch { /* storage unavailable */ }
+  player.vel.set(0, 0, 0);
+  raceStandUI.open({
+    courses: modes.list(), courseId: pr.course, difficulty: pr.difficulty,
+    close: () => input.lock(),
+    start: (courseId, difficulty) => {
+      try { localStorage.setItem(RS_PREFS, JSON.stringify({ course: courseId, difficulty })); } catch { /* storage unavailable */ }
+      jobs.onEvent('teleport'); // a running delivery / rescue ends when you leave for a race
+      if (outfitShop?.isOpen) outfitShop.close();
+      player.frozen = false;
+      modes.start({ courseId, difficulty }).then(() => input.lock(), (err) => { console.warn('stand race', err); input.lock(); });
+    },
+  });
+}
+
+// A fun race's VILLAGE (results / pause): back in free ride in front of the RACING stand (called behind a fade).
+async function backToStand() {
+  const r = raceStand?.returnPoint() || { x: 4, z: 34, heading: Math.PI };
+  player.frozen = false;
+  player.setSkisOn(false);
+  player.teleport(r.x, r.z, r.heading);
+  raceHud.hide();
+  await streamAround(player.pos.x, player.pos.z);
+  audio.music('freeride');
+  hud.flash('Back in Legacy Village · Racing', 'good', 2400);
 }
 
 // Back to the main menu over the panorama (called behind a fade): the player waits in the village.
@@ -687,23 +726,15 @@ function leaveRail(exit) {
 }
 
 // ------------------------------------------------------------------ the Legacy Express
-// E at the village entrance (beside the ski shop), a station's platform or a race's stop sign: the route picker
-// with every race (its difficulty, the prize, the ride time the shorter way round, the fare: $EXPRESS_PRICE or
-// the day pass); the races first, nearest first, the village last
+// E on a station's platform (every race has one beside its start; the village's is by the ski shop): the route
+// picker with every other station and its race (its difficulty, the prize, the ride time the shorter way round, the
+// fare: $EXPRESS_PRICE or the day pass); the races first, nearest first, the village last. You board the train
+// standing at the platform; if it is not in yet you wait there for it (it comes in within the minute)
 function openExpress(it) {
   const from = it.from, pass = hasPass(), X = layout.express;
   const list = express.destinations(from.id).sort((a, b) => (!a.course - !b.course) || a.min - b.min);
-  // (on a race station's platform its own race too: the shuttle up to the start, free; at its start sign: you are there)
-  const own = !it.sign && from.course ? express.courses.get(from.course) : null;
-  if (own) list.unshift({ st: from, course: own, dir: 1, min: 3, km: 0, stops: 0, pts: [], shuttle: true });
   const dests = list.map((d) => {
     const e = d.course;
-    if (d.shuttle) {
-      return {
-        name: d.st.name, x: d.st.x, z: d.st.z, color: e.D.color, race: e.id, meta: `${e.D.label} · $${e.reward.toLocaleString('en-US')} prize · the shuttle up to the start`,
-        tag: 'FREE', act: () => { leaveExpress(express.arrival(express.stIndex(from.id))); input.lock(); }, info: d,
-      };
-    }
     return {
       name: d.st.name, x: d.st.x, z: d.st.z, path: d.pts, color: e?.D.color, race: e?.id,
       meta: e ? `${e.D.label} · $${e.reward.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`,
@@ -714,17 +745,25 @@ function openExpress(it) {
   const cell = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   travelPicker({ hud, player, audio }).open({
     mode: 'route', title: 'Legacy Express', kicker: pass ? 'DAY PASS ACTIVE · 300 KM/H' : `$${EXPRESS_PRICE} TO ANY RACE · 300 KM/H`,
-    sub: `From <b>${from.underground ? 'Legacy Village' : from.name}</b> · pick your race`, listHead: 'RACES',
+    sub: `From <b>${from.name}</b> · pick your station`, listHead: 'STATIONS',
     lineStyle: 'express', lines: X ? [X.pts] : [], stops: X?.stations || [], from: { name: from.name, x: from.x, z: from.z },
-    dests, go: 'RIDE', goLabel: (d) => d.info?.shuttle ? 'Shuttle up to the start' : `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
+    dests, go: 'RIDE', goLabel: (d) => `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
     plan: (d) => {
       const i = d.info, e = i.course;
       return `<div class="tp-name" style="color:${e ? e.D.color : 'inherit'}">${e ? e.D.label : 'Legacy Village'}</div><div class="tp-grid">${cell('RIDE', `${Math.max(1, Math.round(i.min))}<small>min</small>`)}${cell('STOPS', i.stops)}${e ? cell('PRIZE', `$${e.reward.toLocaleString('en-US')}`) : cell('KM', i.km.toFixed(0))}</div>`;
     },
   });
 }
+// the train for `to` stands at the platform: pay and step in (a short fade into the seat); not in yet: wait on the
+// platform for it (the loop boards you as it stops: express.waiting)
 function boardExpress(from, to) {
-  if (!hasPass() && !spend(EXPRESS_PRICE)) return;
+  if (!express.trainIn(from.id, to.id)) {
+    if (!hasPass() && save.money < EXPRESS_PRICE) { spend(EXPRESS_PRICE); return; } // (not enough money: says so)
+    const wait = express.waitFor(from.id, to.id);
+    hud.flash(`Legacy Express to ${to.name} · due in ${Math.max(1, Math.ceil(wait ?? 30))} s · wait on the platform`, 'good', 3200);
+    return;
+  }
+  if (!hasPass() && !spend(EXPRESS_PRICE)) { express.cancelWait(); return; }
   jobs.onEvent('lift', { rail: true });
   transition.fade(async () => {
     const seat = express.board(from.id, to.id);
@@ -735,45 +774,26 @@ function boardExpress(from, to) {
     player.lampBeforeRide = player.headlampOn; player.headlampOn = false;
     player.rig.root.visible = false; player.rig.gear.visible = false; // you are the passenger in the panorama row
     express.update(0, { viewer: seat.pos });
-    await streamAround(seat.pos.x, seat.pos.z);
   });
   audio.play('board');
   hud.flash(`Legacy Express to ${to.name}${hasPass() ? ' · Day pass' : ` · -$${EXPRESS_PRICE}`}`, 'good', 2600);
 }
-// off the train: at the village up the steps to the entrance beside the ski shop; at a race the shuttle up to its
-// start (the station is down by the finish): you stand on the start shoulder, skis on, E races
+// off the train onto the platform of that station, beside your car (express.arrival): from there you walk (to the
+// race's start beside the station, into the village)
+async function exitExpress(a) {
+  express.abort();
+  player.rig.root.visible = true; player.rig.gear.visible = true;
+  if (player.viewBeforeRide) { player.view = player.viewBeforeRide; player.viewBeforeRide = null; }
+  player.headlampOn = player.lampBeforeRide; player.lampBeforeRide = undefined;
+  player.standUp(a.exit.x, a.exit.z, a.exit.heading);
+  player.rig.setSkisVisible(player.hasSkis);
+  await streamAround(a.exit.x, a.exit.z);
+  const e = a.course ? freeCourses().find((c) => c.id === a.course) : null;
+  hud.flash(e ? `${a.name} · the start is beside the station` : `${a.name} · Legacy Express`, 'good', 3000);
+}
 function leaveExpress(a) {
   if (!a) return;
-  const e = a.course ? freeCourses().find((c) => c.id === a.course) : null;
-  const wasRiding = express.riding;
-  const off = () => {
-    express.abort();
-    if (!wasRiding) return; // (the shuttle from a station's platform: you were never on the train)
-    player.rig.root.visible = true; player.rig.gear.visible = true;
-    if (player.viewBeforeRide) { player.view = player.viewBeforeRide; player.viewBeforeRide = null; }
-    player.headlampOn = player.lampBeforeRide; player.lampBeforeRide = undefined;
-  };
-  if (!e) {
-    transition.fade(async () => {
-      off();
-      player.standUp(a.exit.x, a.exit.z, a.exit.heading);
-      player.rig.setSkisVisible(player.hasSkis);
-      await streamAround(a.exit.x, a.exit.z);
-    });
-    hud.flash(`${a.name} · Legacy Express`, 'good', 2400);
-    return;
-  }
-  transition.teleport(e.name, async () => {
-    off();
-    const spot = express.startSpot(e);
-    if (player.hasSkis) player.setSkisOn(true);
-    player.standUp(spot.x, spot.z, spot.heading);
-    player.rig.setSkisVisible(player.hasSkis);
-    player.camPitch = -0.12;
-    await streamAround(spot.x, spot.z);
-  }, { kicker: 'LEGACY EXPRESS · SHUTTLE UP TO THE START' }).then(() => {
-    hud.flash(player.hasSkis ? `${e.name} · press E at the start to race` : `${e.name} · rent skis to race`, 'gold', 3400);
-  }, (err) => console.warn('Legacy Express arrival', err));
+  transition.fade(() => exitExpress(a));
 }
 
 // A free-ride race on a World Racing course (E at its start house, modes/parkour/freeworld.js): the podium's
@@ -927,6 +947,8 @@ function findInteraction() {
   if (heliPrompt) return heliPrompt;
   const job = jobs.interaction(p);
   if (job) return job;
+  const stand = raceStand?.interaction(p); // the RACING stand (RACE just for fun)
+  if (stand) return stand;
   for (const it of village.interactables) {
     if (Math.hypot(p.x - it.x, p.z - it.z) < it.r) {
       if (it.id === 'shop') return { label: 'Enter the ski shop', act: enterShop };
@@ -939,8 +961,8 @@ function findInteraction() {
   if (stop && busDests(stop).length) return { label: 'Take the ski bus', act: () => openBus(stop) }; // (no road: no bus from here)
   const rw = railway.interaction(p, { hasPass: hasPass() });
   if (rw) return { label: rw.label, act: () => openRail(rw) };
-  const ex = express?.interaction(p, { hasPass: hasPass() }); // the village entrance, a station's platform, a race's stop sign
-  if (ex) return { label: ex.label, act: () => openExpress(ex) };
+  const ex = express?.interaction(p, { hasPass: hasPass() }); // a station's platform (waiting for your train: E cancels)
+  if (ex) return { label: ex.label, act: () => { if (ex.cancel) { express.cancelWait(); hud.flash('Legacy Express · not waiting', 'good', 1600); } else openExpress(ex); } };
   const st = lifts.nearestStation(p);
   if (st && st.dist < (st.line.spec.type === 'gondola' ? 20 : 13)) {
     const s = st.line.spec;
@@ -1022,7 +1044,8 @@ function openPause() {
   menu.showPause({
     onResume: closePause,
     onRestart: inSession ? () => { closePause(); modes.session?.restart?.(); } : undefined,
-    onVillage: inSession ? undefined : () => { returnToVillage(); closePause(); },
+    // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
+    onVillage: !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: goToMainMenu,
     onQuit: () => { save.hour = freeRideHour() ?? env.hour; writeSave(); },
   });
@@ -1231,7 +1254,12 @@ function loop() {
   let rideLine = null, ridePrompt = null; // riding: the line for the top-left card, the stop to get off at (E)
   railway.update(dt, { viewer: camera.position, fast: railway.riding && !menu && input.down('Space') });
   mark('railway');
-  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space') });
+  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space'), walker: player.mode !== 'sit' && !heli.active && !drive?.active && !sleds.active ? player.pos : null });
+  if (express && !express.riding && express.wait && !transition.active) { // waiting on a platform for your train
+    const w = express.wait, ws = express.waiting(player.pos);
+    if (ws === 'ready') boardExpress(express.stations[w.from], express.stations[w.dest]);
+    else if (ws === 'gone') hud.flash('Legacy Express · you left the platform', 'good', 1800);
+  }
   mark('express');
   if (railway.riding) {
     const r = railway.updateRide();
@@ -1247,7 +1275,7 @@ function loop() {
     if (r?.seat) player.seat = r.seat;
     if (r?.arrive) leaveExpress(r.arrive);
     else if (r?.stop && !menu && input.hit('KeyE')) leaveExpress(express.leaveAtStop());
-    else if (!menu && !transition.active && input.hit('Enter')) leaveExpress(express.skip()); // skip to the arrival
+    else if (!menu && !transition.active && input.hit('Enter')) transition.fade(async () => { const a = express.skip(); if (a) await exitExpress(a); }); // skip to the arrival (the train jumps on to your stop)
     hud.rideHint(null);
     rideLine = r?.stop ? null : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST} · Enter to skip` : null;
     ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;

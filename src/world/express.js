@@ -1,12 +1,12 @@
-// The Legacy Express at runtime: the high-speed trains round the ring (expressroute.js), from the village's
-// underground hall to a station beside every World Racing course. Trains run both ways on a timetable (right-hand
-// running on the double track), each a pair of the Wolkenspitzbahn's two-car railcars in multiple (train.js: the
-// same railcar, its Meshy body, seats and seated passengers, in the line's Legacy blue). You board at the village
-// entrance beside the ski shop, on any station's platform or at the "Legacy Express" stop sign beside every race's
-// start; the route picker (ui/travel.js) lists every race and picks the shorter way round. You ride in the lead
-// car's panorama row, looking out through the cab (R: outside view, mouse: look round, Space: fast-forward, Enter:
-// skip to the arrival); at a race station a shuttle takes you up to the start (startSpot: on the flat start shoulder
-// with room round you, E races).
+// The Legacy Express at runtime: the high-speed trains round the ring (expressroute.js), from Legacy Village's
+// station to a station beside every World Racing course. Trains run both ways on a timetable (right-hand running on
+// the double track), each a pair of the Wolkenspitzbahn's two-car railcars in multiple (train.js: the same railcar,
+// its Meshy body, seats and seated passengers, in the line's Legacy blue), and stop at every station. You walk onto a
+// station's platform (E: the route picker, ui/travel.js) and board the train standing there: while you are near a
+// station (on foot) a train each way is brought in within ~40 s and waits at the platform for you; picked before it
+// is in, you wait on the platform and board as it stops. You ride in the lead car's panorama row, looking out
+// through the cab (R: outside view, mouse: look round, Space: fast-forward, Enter: skip to the arrival) and get off
+// on the platform of your stop, beside your car: from there you walk (to the race's start, into the village).
 //
 // main.js glue (see the integration notes at the bottom of this file):
 //   express = new Express({ scene, colliders, models, makeRig, railway, cameraBlockers }); await express.ready
@@ -17,7 +17,7 @@
 //   loop, after railway.lateUpdate: express.lateUpdate(camera, env, atmosphere, dt)  (tunnel light, cabin light)
 import * as THREE from 'three';
 import {
-  EXPRESS, EXPRESS_NAME, EXPRESS_PROFILE, LENGTH, STEP, DWELL, expressAt, trackAt, expressNearest, inExpressTunnel,
+  EXPRESS, EXPRESS_NAME, EXPRESS_PROFILE, LENGTH, STEP, DWELL, PLATFORM, expressAt, trackAt, expressNearest, inExpressTunnel,
   onExpressBridge, inSpanOf, wrapS,
 } from './expressroute.js';
 import { buildCar, CAR, trainUniforms } from './train.js';
@@ -27,7 +27,7 @@ import { freeCourses } from '../modes/parkour/freeworld.js';
 import { addTrainBlocker } from '../game/traffic.js';
 import { smoothstep, clamp, lerp } from '../core/noise.js';
 
-// the track agent's module (track, viaducts, tunnels, stations, the village entrance and hall): loaded lazily so
+// the track agent's module (track, viaducts, tunnels, stations): loaded lazily so
 // the trains run (and the game boots) whether it is there or not
 let TRACK_MODULE = {};
 try { TRACK_MODULE = import.meta.glob('./expresstrack.js'); } catch { /* (Node tools: no glob imports) */ }
@@ -40,9 +40,12 @@ const PITCH = CAR.len + CAR.gap;    // m between car centres
 const PER_DIR = 3;                  // trains each way round the ring (one every ~11 min)
 export const FAST = 10;             // Space: the timetable runs this much faster while you ride
 const NEAR = 420, FAR = 4500;       // m from the viewer: full cars / the far version / hidden
-const STATION_R = 10, ENTRANCE_R = 7, SIGN_R = 5; // m: where E boards
-const START_R = 24;
-const VIEWS = ['seat', 'outside', 'trackside']; // R: the window seat, the chase camera, a camera beside the line                 // (freeworld.js: E at a course's start within this races it)
+const STATION_R = 10;              // m round a station's board point where E boards (besides anywhere on its platforms)
+const HOLD_R = 500;                 // m: on foot this near a station, a train each way comes in soon and waits there
+const NUDGE_WAIT = 75, WANT = 40;   // s: a train due later than NUDGE_WAIT is brought in to arrive in WANT
+const DEPART_MIN = 12;              // s: boarding, the train waits at least this long before it leaves
+const EXIT_LAT = 6.3;               // m from the centre line: where you stand on the platform getting off
+const VIEWS = ['seat', 'outside', 'trackside']; // R: the window seat, the chase camera, a camera beside the line
 const G = 9.81;
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _t = new THREE.Vector3();
@@ -119,58 +122,6 @@ function livery(mat, key) {
   return m;
 }
 
-// ------------------------------------------------------------------ the stop sign at the race starts
-let SIGN = null;
-function signParts() {
-  if (SIGN) return SIGN;
-  const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
-  let tex = null;
-  if (canvas) {
-    canvas.width = 512; canvas.height = 640;
-    const g = canvas.getContext('2d'), W = 512, H = 640;
-    const F = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
-    g.fillStyle = '#16245a'; g.fillRect(0, 0, W, H);
-    g.fillStyle = '#e2231a'; g.fillRect(0, 0, W, 22);
-    // the train pictogram: a raked high-speed nose on a rail
-    g.fillStyle = '#ffffff';
-    g.beginPath();
-    g.moveTo(96, 250); g.lineTo(96, 140); g.quadraticCurveTo(96, 112, 124, 112); g.lineTo(300, 112);
-    g.bezierCurveTo(372, 112, 420, 170, 432, 236); g.lineTo(432, 250); g.closePath(); g.fill();
-    g.fillStyle = '#16245a';
-    g.beginPath(); g.moveTo(312, 130); g.bezierCurveTo(360, 132, 396, 168, 410, 200); g.lineTo(312, 200); g.closePath(); g.fill();
-    for (const x of [124, 184, 244]) g.fillRect(x, 136, 44, 52);
-    g.fillStyle = '#ffffff'; g.fillRect(80, 268, 370, 8);
-    g.fillStyle = '#e2231a'; g.fillRect(96, 226, 336, 10);
-    g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-    g.fillStyle = '#ffffff'; g.font = `italic 700 104px ${F}`; g.fillText('LEGACY', W / 2, 400);
-    g.font = `italic 700 104px ${F}`; g.fillText('EXPRESS', W / 2, 496);
-    g.fillStyle = '#9fb3e8'; g.font = `600 40px ${F}`; g.fillText('TRAINS TO EVERY RACE', W / 2, 566);
-    g.fillStyle = '#e2231a'; g.fillRect(0, H - 18, W, 18);
-    tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-  }
-  const face = new THREE.MeshStandardMaterial({ map: tex, color: tex ? 0xffffff : 0x16245a, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.06, roughness: 0.5, metalness: 0.05 });
-  const frame = new THREE.MeshStandardMaterial({ color: 0x23272d, roughness: 0.45, metalness: 0.6 });
-  SIGN = { face, frame, faceGeo: new THREE.PlaneGeometry(1.0, 1.25), boxGeo: new THREE.BoxGeometry(1.08, 1.33, 0.08), postGeo: new THREE.CylinderGeometry(0.055, 0.065, 3.4, 10), footGeo: new THREE.CylinderGeometry(0.2, 0.24, 0.12, 12) };
-  return SIGN;
-}
-function buildSign(x, y, z, yaw) {
-  const P = signParts(), g = new THREE.Group();
-  g.name = 'express-stop-sign';
-  for (const s of [-0.38, 0.38]) {
-    const post = new THREE.Mesh(P.postGeo, P.frame); post.position.set(s, 1.7, 0); post.castShadow = true; g.add(post);
-    const foot = new THREE.Mesh(P.footGeo, P.frame); foot.position.set(s, 0.04, 0); g.add(foot);
-  }
-  const box = new THREE.Mesh(P.boxGeo, P.frame); box.position.set(0, 2.62, 0); box.castShadow = true; g.add(box);
-  for (const side of [1, -1]) {
-    const f = new THREE.Mesh(P.faceGeo, P.face);
-    f.position.set(0, 2.62, side * 0.042); f.rotation.y = side > 0 ? 0 : Math.PI;
-    g.add(f);
-  }
-  g.position.set(x, y - 0.05, z); g.rotation.y = yaw;
-  return g;
-}
-
 // ------------------------------------------------------------------ trains
 class TrainSet {
   constructor(ex, dir, phase, index) {
@@ -200,7 +151,8 @@ export class Express {
     this.dark = 0;
     this.timeScale = 1;
     this.t = 0;
-    this.signs = [];
+    this.off = { 1: 0, '-1': 0 }; // s: each direction's timetable shift (trains brought in / held at a station)
+    this.wait = null;      // { from, dest, dir }: picked before the train was in (you wait on the platform)
     this.streamPos = new THREE.Vector3();
     this.ok = !!(layout.express?.stations?.length && EXPRESS_PROFILE.V);
     if (!this.ok) { console.warn('Legacy Express: no line (expressground.js did not run)'); this.ready = Promise.resolve(); return; }
@@ -225,7 +177,6 @@ export class Express {
     // traffic stops for (and is shoved off the line by) the near trains (game/traffic.js)
     addTrainBlocker(() => this.trains.flatMap((tr) => tr.lod === 2 ? [] : tr.cars.map((c, k) => (k === 0 && this.ride?.train === tr ? this.cabin : c).group)), { hw: CAR.hw, hd: CAR.half });
     this.passengers = null; // (copied from the Wolkenspitzbahn's once it has seated its own: copyPassengers)
-    try { this.buildSigns(); } catch (e) { console.warn('Legacy Express stop signs', e); }
     this.track = null;
     this.ready = this.loadTrack({ models, colliders, cameraBlockers });
     this.update(0, {});
@@ -233,7 +184,7 @@ export class Express {
 
   get riding() { return !!this.ride; }
   way(dir) { return dir > 0 ? this.tt.up : this.tt.down; }
-  u(tr) { const L = this.way(tr.dir).loop; return ((((this.t + tr.phase * L) % L) + L) % L); }
+  u(tr) { const L = this.way(tr.dir).loop; return ((((this.t + this.off[tr.dir] + tr.phase * L) % L) + L) % L); }
 
   async loadTrack({ models, colliders, cameraBlockers }) {
     const load = TRACK_MODULE['./expresstrack.js'];
@@ -264,11 +215,12 @@ export class Express {
   }
 
   // ------------------------------------------------------------------ timetable + trains
-  update(dt, { viewer = null, fast = false } = {}) {
+  update(dt, { viewer = null, fast = false, walker = null } = {}) {
     if (!this.ok) return;
     // Space while riding: the timetable runs FAST times quicker (the streaming keeps up: main.js streams ahead)
     this.timeScale = this.ride && fast ? FAST : 1;
     this.t = (this.t + dt * this.timeScale) % (this.tt.up.loop * 1000);
+    if (walker && !this.ride) this.serve(walker, dt);
     const cam = viewer || (this.ride ? this.seatWorld() : null);
     for (const tr of this.trains) {
       trainState(this.tt, this.way(tr.dir), this.u(tr), tr.state);
@@ -359,21 +311,84 @@ export class Express {
 
   // ------------------------------------------------------------------ boarding
   stIndex(id) { return this.stations.findIndex((s) => s.id === id); }
-  /** The prompt at the village entrance, a station's platform or a race's stop sign: { label, from } or null. */
+  // is p on station st's platforms (or at its board point)? (pad: m of slack all round)
+  onPlatform(st, p, pad = 0) {
+    if (p.y !== undefined && Math.abs(p.y - st.y) > 6 + pad * 0.3) return false;
+    const b = st.board;
+    if (b && Math.hypot(p.x - b.x, p.z - b.z) < STATION_R + pad) return true;
+    const dx = Math.sin(st.heading), dz = Math.cos(st.heading), x = p.x - st.x, z = p.z - st.z;
+    const u = x * dx + z * dz, lat = Math.abs(-x * dz + z * dx);
+    return Math.abs(u) <= PLATFORM / 2 + pad && lat >= 3.0 - pad && lat <= 9.6 + pad;
+  }
+  // the next train going dir at station a: { train, wait (s until it stands at the platform; 0: it does now),
+  // left (s until it leaves) }
+  nextAt(a, dir) {
+    const w = this.way(dir), d = w.segs.find((g) => g.kind === 'dwell' && g.st === a);
+    if (!d) return null;
+    let best = null;
+    for (const tr of this.trains) {
+      if (tr.dir !== dir) continue;
+      const into = ((((this.u(tr) - d.t0) % w.loop) + w.loop) % w.loop); // (s since its stop here began)
+      const n = into < d.dur ? { train: tr, wait: 0, left: d.dur - into } : { train: tr, wait: w.loop - into, left: d.dur };
+      if (!best || n.wait < best.wait || (n.wait === 0 && n.left > best.left)) best = n;
+    }
+    return best;
+  }
+  // On foot near a station (main.js passes the walker): a train each way is brought in soon (its direction's
+  // timetable shifted while it is still far off) and held at the platform while you are about (that direction's
+  // clock stands still with a few seconds of its stop left). Nobody is ever moved: the trains come to you.
+  serve(p, dt) {
+    let a = -1, bd = HOLD_R;
+    for (let k = 0; k < this.stations.length; k++) {
+      const st = this.stations[k], d = Math.hypot(p.x - st.x, p.z - st.z);
+      if (d < bd && (p.y === undefined || Math.abs(p.y - st.y) < 90)) { bd = d; a = k; }
+    }
+    if (a < 0) return;
+    for (const dir of [1, -1]) {
+      const n = this.nextAt(a, dir);
+      if (!n) continue;
+      if (n.wait > NUDGE_WAIT) this.off[dir] += n.wait - WANT;
+      else if (n.wait === 0 && n.left < 4) this.off[dir] -= dt * this.timeScale;
+    }
+  }
+  /** The prompt on a station's platform: { label, from } (or, waiting for your train, { label, from, cancel }). */
   interaction(p, { hasPass = false } = {}) {
     if (this.ride || !this.ok) return null;
-    const price = hasPass ? 'Day pass' : `$${EXPRESS_PRICE}`;
-    for (const st of this.stations) {
-      const b = st.board, r = st.underground ? ENTRANCE_R : STATION_R;
-      if (!b || Math.abs(p.x - b.x) > r || Math.abs(p.z - b.z) > r || Math.hypot(p.x - b.x, p.z - b.z) > r) continue;
-      if (!st.underground && p.y !== undefined && Math.abs(p.y - st.y) > 9) continue;
-      return { from: st, label: st.underground ? `${EXPRESS_NAME} · trains to every race · ${price}` : `${EXPRESS_NAME} · ${st.name} station · ${price}` };
+    const w = this.wait;
+    if (w && this.onPlatform(this.stations[w.from], p, 25)) {
+      const n = this.nextAt(w.from, w.dir);
+      return { from: this.stations[w.from], cancel: true, label: `Waiting for the ${EXPRESS_NAME} to ${this.stations[w.dest].name} · ${n && n.wait > 0 ? `due in ${Math.ceil(n.wait)} s` : 'boarding'} · E to cancel` };
     }
-    for (const sg of this.signs) {
-      if (Math.abs(p.x - sg.x) > SIGN_R || Math.abs(p.z - sg.z) > SIGN_R || Math.hypot(p.x - sg.x, p.z - sg.z) > SIGN_R) continue;
-      return { from: sg.station, sign: true, label: `${EXPRESS_NAME} · trains to every race · ${price}` };
+    const price = hasPass ? 'Day pass' : `$${EXPRESS_PRICE}`;
+    for (let k = 0; k < this.stations.length; k++) {
+      const st = this.stations[k];
+      if (!this.onPlatform(st, p)) continue;
+      const wait = Math.min(this.nextAt(k, 1)?.wait ?? Infinity, this.nextAt(k, -1)?.wait ?? Infinity);
+      const when = wait <= 0 ? 'train at the platform' : wait < Infinity ? `next train in ${Math.ceil(wait)} s` : '';
+      return { from: st, label: `${EXPRESS_NAME} · ${st.name}${when ? ` · ${when}` : ''} · ${price}` };
     }
     return null;
+  }
+  /** Is the train from fromId to toId (the shorter way round) standing at fromId's platform now? */
+  trainIn(fromId, toId) {
+    const a = this.stIndex(fromId), b = this.stIndex(toId);
+    if (a < 0 || b < 0 || a === b) return false;
+    return this.nextAt(a, this.bestDir(a, b))?.wait === 0;
+  }
+  /** Picked before the train is in: you wait on the platform (main.js boards you as it stops: waiting()). */
+  waitFor(fromId, toId) {
+    const a = this.stIndex(fromId), b = this.stIndex(toId);
+    if (a < 0 || b < 0 || a === b) return null;
+    this.wait = { from: a, dest: b, dir: this.bestDir(a, b) };
+    return this.nextAt(a, this.wait.dir)?.wait ?? null;
+  }
+  cancelWait() { this.wait = null; }
+  /** While waiting: 'ready' (your train stands at the platform: board it), 'gone' (you left the platform) or null. */
+  waiting(p) {
+    const w = this.wait;
+    if (!w || this.ride) return null;
+    if (!this.onPlatform(this.stations[w.from], p, 25)) { this.wait = null; return 'gone'; }
+    return this.nextAt(w.from, w.dir)?.wait === 0 ? 'ready' : null;
   }
 
   // ride time (s) from station a to b going dir (from the departure at a to the arrival at b, the stops between)
@@ -407,18 +422,21 @@ export class Express {
   }
 
   /**
-   * Board at station `fromId` for `toId`: the timetable jumps so a train going the shorter way stands at the
-   * platform with its doors open (main.js hides the jump behind a fade); you take the window seat in the
-   * panorama row of its lead car, looking out through the cab. Returns the seat (for player.sitOn).
+   * Board the train standing at station `fromId`'s platform going the shorter way to `toId` (null if none is in:
+   * waitFor() then): it waits at least DEPART_MIN s more; you take the window seat in the panorama row of its lead
+   * car, looking out through the cab. Returns the seat (for player.sitOn).
    */
   board(fromId, toId) {
     const a = this.stIndex(fromId), b = this.stIndex(toId);
     if (a < 0 || b < 0 || a === b) return null;
     const dir = this.bestDir(a, b), w = this.way(dir);
-    const tr = this.trains.find((x) => x.dir === dir);
+    const n = this.nextAt(a, dir);
+    if (!n || n.wait > 0) return null;
+    if (n.left < DEPART_MIN) this.off[dir] -= DEPART_MIN - n.left;
+    const tr = n.train;
     const segI = w.segs.findIndex((g) => g.kind === 'dwell' && g.st === a);
-    this.t += w.segs[segI].t0 + 6 - this.u(tr); // (24 s to departure; Space hurries it)
     const seat = this.cabin.seats.find((s) => s.row === 1 && s.window && s.side > 0) || this.cabin.seats.find((s) => s.front && s.window) || this.cabin.seats[0];
+    this.wait = null;
     this.ride = { train: tr, from: a, dest: b, dir, segI, departed: false, exitSent: false, seat };
     this.lastDest = b;
     this.look.yaw = 0; this.look.pitch = -0.04;
@@ -440,12 +458,17 @@ export class Express {
   }
   seatWorld() { return this.ride ? this.seatPose().pos : null; }
 
-  // where you end up getting off at station k: { id, name, course (id | null), exit: { x, z, heading } }
-  arrival(k) { const st = this.stations[k]; return { id: st.id, name: st.name, course: st.course, exit: st.exit }; }
+  // where you get off at station k: on its platform (the station's side) beside the lead car of a train going dir,
+  // facing away from the track: { id, name, course (id | null), exit: { x, z, heading } }
+  arrival(k, dir = this.ride?.dir ?? 1) {
+    const st = this.stations[k], side = st.side || 1;
+    const dx = Math.sin(st.heading), dz = Math.cos(st.heading), u = dir * 1.5 * PITCH, lat = side * EXIT_LAT;
+    const exit = { x: st.x + dx * u - dz * lat, z: st.z + dz * u + dx * lat, heading: Math.atan2(-dz * side, dx * side) };
+    return { id: st.id, name: st.name, course: st.course, exit };
+  }
   /**
    * While riding: { seat, hint, eta (s), stop?: { name } (standing at a stop on the way: E gets you off) } or,
-   * once, { seat, arrive } when the train stands at your stop (main.js takes you off: a fade, or the shuttle up
-   * to the race's start).
+   * once, { seat, arrive } when the train stands at your stop (main.js takes you off onto its platform).
    */
   updateRide() {
     const r = this.ride;
@@ -476,11 +499,17 @@ export class Express {
     r.exitSent = true;
     return this.arrival(st.at);
   }
-  /** Skip the rest of the ride: the arrival at your stop (main.js covers it with the travel card). */
+  /**
+   * Skip the rest of the ride: the timetable jumps on (this direction's) until your train stands at your stop, and
+   * you get off there (main.js covers it with a fade). The arrival, or null.
+   */
   skip() {
     const r = this.ride;
     if (!r || r.exitSent) return null;
-    r.exitSent = true;
+    const w = this.way(r.dir), db = w.segs.find((g) => g.kind === 'dwell' && g.st === r.dest);
+    this.off[r.dir] += ((((db.t0 + 1 - this.u(r.train)) % w.loop) + w.loop) % w.loop);
+    this.update(0, {});
+    r.departed = true; r.exitSent = true;
     return this.arrival(r.dest);
   }
   abort() { this.ride = null; this.camS = undefined; }
@@ -494,136 +523,6 @@ export class Express {
     this.t += best - this.u(tr);
     this.update(0, {});
     return { ...tr.state };
-  }
-
-  // ------------------------------------------------------------------ the race starts
-  // E at the stop sign beside every race's start boards for anywhere (the shuttle down to the station is implied);
-  // the signs stand 28-38 m from the start on its flat shoulder, away from the heli's landing spot
-  buildSigns() {
-    for (const e of freeCourses()) {
-      const k = this.stIndex(e.id);
-      if (k < 0) continue;
-      const fr = this.startFrame(e);
-      let best = null;
-      for (const side of [fr.pref, -fr.pref]) {
-        for (let a = -14; a <= 10; a += 4) for (let d = 12; d <= 34; d += 2.5) {
-          const lat = side * (fr.w + d), x = fr.x + fr.fx * a + fr.rx * lat, z = fr.z + fr.fz * a + fr.rz * lat;
-          const dist = Math.hypot(x - fr.x, z - fr.z);
-          if (dist < 28 || dist > 38) continue;
-          if (Math.hypot(x - e.heli.x, z - e.heli.z) < 14) continue;
-          const q = this.probe(e, fr, x, z, { clear: 1.6, maxDy: 6, line: 5 });
-          if (!q) continue;
-          const score = q.slope * 25 + q.dy * 0.5 + Math.abs(dist - 31) * 0.15 + (side !== fr.pref ? 2 : 0);
-          if (!best || score < best.score) best = { x, z, y: q.y, score };
-        }
-        if (best) break;
-      }
-      if (!best) continue;
-      const yaw = Math.atan2(fr.x - best.x, fr.z - best.z); // (facing the start)
-      const g = buildSign(best.x, best.y, best.z, yaw);
-      this.scene.add(g);
-      const c = Math.cos(yaw), s = Math.sin(yaw);
-      for (const o of [-0.38, 0.38]) this.colliders.push({ x: best.x + c * o, z: best.z - s * o, r: 0.12 });
-      this.signs.push({ x: best.x, z: best.z, y: best.y, course: e.id, station: this.stations[k], group: g });
-    }
-  }
-  // the start's frame: the line (x, z, y), down the course (fx, fz), its right (rx, rz), the half width, the side
-  // away from the heli's landing spot (pref: +1 right)
-  startFrame(e) {
-    const T = e.course.track, s0 = e.start.s, h = e.start.heading;
-    const fx = Math.sin(h), fz = Math.cos(h), rx = -Math.cos(h), rz = Math.sin(h);
-    const w = T.sAt(T.W, s0);
-    const pref = (e.heli.x - e.start.x) * rx + (e.heli.z - e.start.z) * rz > 0 ? -1 : 1;
-    // (y: the snow at the start, which is the start's own level wherever its region shapes the ground)
-    return { x: e.start.x, z: e.start.z, y: world.groundHeight(e.start.x, e.start.z, e.start.y + 1), fx, fz, rx, rz, w, pref, h };
-  }
-  // is (x, z) a place to stand? the ground level (<= maxDy from the start) and flat, no collider or course mesh
-  // within `clear` m, off the course line (`line` m past its edge): { y, slope, dy } or null
-  probe(e, fr, x, z, { clear = 1.4, maxDy = 3.5, line = 1.5, cells = null } = {}) {
-    const y = world.groundHeight(x, z);
-    const dy = Math.abs(y - fr.y);
-    if (dy > maxDy) return null;
-    const k = 1.2, hx = world.groundHeight(x + k, z) - world.groundHeight(x - k, z), hz = world.groundHeight(x, z + k) - world.groundHeight(x, z - k);
-    const slope = Math.hypot(hx, hz) / (2 * k);
-    if (slope > 0.3) return null;
-    for (const c of this.colliders) {
-      const reach = (c.r ?? Math.max(c.hw, c.hd)) + clear;
-      if (Math.abs(x - c.x) > reach || Math.abs(z - c.z) > reach) continue;
-      if (c.r !== undefined) { if (Math.hypot(x - c.x, z - c.z) < c.r + clear) return null; continue; }
-      const cs = Math.cos(-c.rot), sn = Math.sin(-c.rot), lx = (x - c.x) * cs - (z - c.z) * sn, lz = (x - c.x) * sn + (z - c.z) * cs;
-      if (Math.abs(lx) < c.hw + clear && Math.abs(lz) < c.hd + clear) return null;
-    }
-    // off the course itself (its first 300 m: it may curve back past the start)
-    const T = e.course.track;
-    for (let i = 0; i < Math.min(T.n, 150); i += 2) if (Math.hypot(x - T.X[i], z - T.Z[i]) < T.W[i] + line) return null;
-    if (cells) {
-      const C = cells.size, r = Math.ceil(clear / C);
-      const ci = Math.floor(x / C), cj = Math.floor(z / C);
-      for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) if (cells.set.has((ci + i) * 100003 + (cj + j))) return null;
-    }
-    return { y, slope, dy };
-  }
-  // the course's meshes standing on the snow round its start (start house, wand, flags, boards): occupied 0.5 m
-  // cells from their real triangles between 0.15 and 2.5 m over the ground (decals and roofs overhead don't count)
-  startObstacles(e, R = 34) {
-    const g = e.course.group, C = 0.5, set = new Set();
-    if (!g) return { set, size: C };
-    g.updateMatrixWorld(true);
-    const sx = e.start.x, sz = e.start.z, v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-    const m = new THREE.Matrix4(), im = new THREE.Matrix4(), box = new THREE.Box3();
-    g.traverse((o) => {
-      if (!o.isMesh || o.isSkinnedMesh || !o.visible || !o.geometry?.attributes?.position) return;
-      const geo = o.geometry, pos = geo.attributes.position, index = geo.index;
-      if (!geo.boundingBox) geo.computeBoundingBox();
-      const n = o.isInstancedMesh ? o.count : 1;
-      for (let k = 0; k < n; k++) {
-        if (o.isInstancedMesh) { o.getMatrixAt(k, im); m.multiplyMatrices(o.matrixWorld, im); } else m.copy(o.matrixWorld);
-        box.copy(geo.boundingBox).applyMatrix4(m);
-        if (box.max.x < sx - R || box.min.x > sx + R || box.max.z < sz - R || box.min.z > sz + R) continue;
-        const tris = index ? index.count / 3 : pos.count / 3;
-        for (let t = 0; t < tris; t++) {
-          for (let q = 0; q < 3; q++) v[q].fromBufferAttribute(pos, index ? index.getX(t * 3 + q) : t * 3 + q).applyMatrix4(m);
-          const x0 = Math.min(v[0].x, v[1].x, v[2].x), x1 = Math.max(v[0].x, v[1].x, v[2].x), z0 = Math.min(v[0].z, v[1].z, v[2].z), z1 = Math.max(v[0].z, v[1].z, v[2].z);
-          if (x1 < sx - R || x0 > sx + R || z1 < sz - R || z0 > sz + R || x1 - x0 > 40 || z1 - z0 > 40) continue;
-          const base = world.height((x0 + x1) / 2, (z0 + z1) / 2);
-          const lo = Math.min(v[0].y, v[1].y, v[2].y) - base, hi = Math.max(v[0].y, v[1].y, v[2].y) - base;
-          if (hi < 0.15 || lo > 2.5) continue;
-          for (let i = Math.floor(x0 / C); i <= Math.floor(x1 / C); i++) for (let j = Math.floor(z0 / C); j <= Math.floor(z1 / C); j++) set.add(i * 100003 + j);
-        }
-      }
-    });
-    return { set, size: C };
-  }
-  /**
-   * Where the shuttle sets you down at a race's start: on the flat start shoulder beside the start line (the side
-   * away from the heli's landing spot first), clear of the start house, the wand, the flags and where the field
-   * lines up, inside the start's E radius, facing down the course. Builds the course's meshes if they aren't up.
-   * Returns { x, z, y, heading }.
-   */
-  startSpot(e) {
-    try { if (!e.course.group) e.course.build(this.scene, this.models || {}); } catch (err) { console.warn('Legacy Express: course build', err); }
-    const fr = this.startFrame(e);
-    let cells = null;
-    try { cells = this.startObstacles(e); } catch (err) { console.warn('Legacy Express: start obstacles', err); }
-    const house = e.course.startHouse;
-    const raised = Math.abs(e.start.y - fr.y); // (a start raised over its ground: the shoulder's higher parts)
-    let best = null;
-    for (const side of [fr.pref, -fr.pref]) {
-      for (const a of [-2, 0, -4, 2, -6, 4, -8, 7, 10, 13]) for (const d of [3, 4.5, 6, 8, 10]) {
-        const lat = side * (fr.w + d), x = fr.x + fr.fx * a + fr.rx * lat, z = fr.z + fr.fz * a + fr.rz * lat;
-        if (Math.hypot(x - fr.x, z - fr.z) > START_R - 3.5) continue;
-        if (Math.hypot(x - e.heli.x, z - e.heli.z) < 10) continue;
-        if (house && Math.hypot(x - house.x, z - house.z) < 7) continue;
-        const q = this.probe(e, fr, x, z, { clear: 1.5, maxDy: 3.5 + raised, line: 1.2, cells });
-        if (!q) continue;
-        // (+ how far below / above the start line's own level: freeworld's nearStart wants it within 12 m)
-        const off = Math.abs(q.y - e.start.y), score = q.slope * 30 + q.dy * 0.8 + Math.max(0, off - 1.5) * 5 + (off > 10.5 ? 40 : 0) + Math.abs(a + 2) * 0.12 + d * 0.15 + (side !== fr.pref ? 2.5 : 0);
-        if (!best || score < best.score) best = { x, z, y: q.y, score };
-      }
-    }
-    // (nowhere on the shoulder: just past the start line on the course, the start wand behind you)
-    if (!best) best = { x: fr.x + fr.fx * 4, z: fr.z + fr.fz * 4, y: world.groundHeight(fr.x + fr.fx * 4, fr.z + fr.fz * 4) };
-    return { x: best.x, z: best.z, y: best.y, heading: fr.h };
   }
 
   // ------------------------------------------------------------------ cameras
@@ -800,17 +699,13 @@ export class Express {
     this.info.tex.needsUpdate = true;
   }
 
-  /** A place name for the HUD: riding, or standing at a station / the village entrance. */
+  /** A place name for the HUD: riding, or standing near a station. */
   locName(p = null) {
     if (!this.ok) return null;
     const r = this.ride;
     if (!r) {
       if (!p) return null;
-      for (const st of this.stations) {
-        const b = st.board;
-        if (!b) continue;
-        if (st.underground ? Math.hypot(p.x - b.x, p.z - b.z) < 14 : Math.hypot(p.x - st.x, p.z - st.z) < 150 && Math.abs(p.y - st.y) < 20) return st.underground ? `${EXPRESS_NAME} · Legacy Village` : `${st.name} · ${EXPRESS_NAME}`;
-      }
+      for (const st of this.stations) if (Math.hypot(p.x - st.x, p.z - st.z) < 150 && Math.abs(p.y - st.y) < 20) return `${st.name} · ${EXPRESS_NAME}`;
       return null;
     }
     const st = r.train.state;
@@ -856,17 +751,15 @@ export class Express {
     trainUniforms.uCabin.value = 0.3 + 0.9 * Math.max(night, dark);
     trainUniforms.uHead.value = Math.max(night, dark);
     for (const m of this.railway?.passengerMats || []) m.emissiveIntensity = 0.05 + 0.4 * Math.max(night, dark);
-    if (SIGN) SIGN.face.emissiveIntensity = 0.06 + 0.5 * night;
     try { this.track?.setNight?.(night); } catch { /* (the track's own business) */ }
     if (this.ride) this.drawInfo();
   }
 }
 
 // ------------------------------------------------------------------ integration notes (main.js)
-// openExpress(it): the route picker (travelPicker, mode 'route') with express.destinations(it.from.id); a pick ->
-//   boardExpress(from, to): if (!hasPass() && !spend(EXPRESS_PRICE)) return; transition.fade(() => { const seat =
-//   express.board(from.id, to.id); player.sitOn(seat); hide the rig; player.viewBeforeRide = player.view; })
-// in the loop: if (express.riding) { const r = express.updateRide(); if (r?.seat) player.seat = r.seat;
-//   if (r?.arrive) leaveExpress(r.arrive); E at r.stop: leaveExpress(express.leaveAtStop()); Enter:
-//   leaveExpress(express.skip()) }  leaveExpress: the village -> a fade to the entrance (exit); a race -> the
-//   travel card "shuttle up to the start", express.startSpot(course) (you stand at the start: E races)
+// findInteraction: express.interaction(p) on a platform -> openExpress (the picker: every other station, its race);
+//   a pick -> boardExpress(from, to): express.trainIn(from, to) ? (pay; transition.fade -> express.board, sitOn) :
+//   express.waitFor(from, to) (you wait on the platform; E cancels: ex.cancel -> express.cancelWait())
+// loop: express.update(dt, { viewer, fast, walker: on foot ? player.pos : null }); not riding: express.waiting(pos)
+//   'ready' -> boardExpress; riding: updateRide() -> arrive / stop (E) / Enter (skip) -> leaveExpress(arrival):
+//   a fade, standUp on that station's platform beside your car (arrival.exit)

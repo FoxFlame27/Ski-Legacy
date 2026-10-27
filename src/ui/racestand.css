@@ -1,0 +1,49 @@
+/* RACING stand (src/ui/racestand.js): the job board's frame and cork (jobboard.css) with the courses on a paper
+   note on the left and the picked course as a card on the right. Sizes in --u like the menus. */
+#racestand { position: fixed; inset: 0; z-index: 41; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at 50% 45%, rgba(var(--shade), 0.42) 0%, rgba(var(--shade), 0.72) 100%);
+  font-family: var(--ui); animation: jbFade 0.22s ease both; }
+#racestand[hidden] { display: none; }
+
+.rs-cork { align-items: stretch; gap: calc(var(--u) * 28); }
+.rs-list, .rs-card { position: relative; display: flex; flex-direction: column; min-height: 0; color: var(--blue); isolation: isolate;
+  filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 8) rgba(50, 22, 2, 0.42)); animation: jbNote 0.42s cubic-bezier(.2, .9, .2, 1) backwards; }
+.rs-list::before, .rs-card::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, #fffdf6 0%, #fbf6ea 100%); clip-path: var(--clip, var(--brush-b)); }
+.rs-list { flex: 1 1 calc(var(--u) * 470); padding: calc(var(--u) * 26) calc(var(--u) * 18) calc(var(--u) * 18); gap: calc(var(--u) * 10); transform: rotate(-0.8deg); }
+.rs-card { flex: 1 1 calc(var(--u) * 470); padding: calc(var(--u) * 26) calc(var(--u) * 30) calc(var(--u) * 20); gap: calc(var(--u) * 9); transform: rotate(0.7deg); animation-delay: 0.08s; }
+
+.rs-rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: calc(var(--u) * 4); padding-right: calc(var(--u) * 4); }
+.rs-row { flex: none; display: flex; align-items: center; gap: calc(var(--u) * 12); width: 100%; padding: calc(var(--u) * 7) calc(var(--u) * 12); border: 0; border-radius: calc(var(--u) * 4);
+  background: transparent; cursor: pointer; text-align: left; color: var(--blue); transition: background 0.15s ease, transform 0.15s ease; }
+.rs-row:hover { background: rgba(21, 70, 200, 0.07); }
+.rs-row.sel { background: var(--blue); color: #fff; transform: translateX(calc(var(--u) * 6)); }
+.rs-num { flex: none; width: calc(var(--u) * 30); font: italic 700 calc(var(--u) * 22)/1 var(--num); opacity: 0.6; }
+.rs-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(var(--u) * 3); }
+.rs-name b { font: italic 700 calc(var(--u) * 21)/1.05 var(--num); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rs-name small { font: 600 max(11px, calc(var(--u) * 12))/1.2 var(--ui); color: #6a7590; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rs-row.sel .rs-name small { color: rgba(255, 255, 255, 0.78); }
+.rs-lvl { flex: none; display: flex; align-items: center; gap: calc(var(--u) * 8); }
+.rs-lvl em { font: italic 700 calc(var(--u) * 16)/1 var(--num); }
+
+.rs-detail { display: flex; flex-direction: column; gap: calc(var(--u) * 8); }
+.rs-card .jb-title { font-size: calc(var(--u) * 34); }
+.rs-card .jb-brief { -webkit-line-clamp: 2; }
+.rs-card .jb-facts { padding: calc(var(--u) * 9) 0; }
+.rs-card .jb-fact b { display: flex; align-items: center; gap: calc(var(--u) * 6); font-size: calc(var(--u) * 21); }
+.rs-diffs-l { font: 800 calc(var(--u) * 10)/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: #8a93a8; margin-top: calc(var(--u) * 2); }
+.rs-diffs { display: flex; gap: calc(var(--u) * 8); }
+.rs-diffs button { flex: 1; height: calc(var(--u) * 38); border: calc(var(--u) * 2) solid rgba(21, 70, 200, 0.3); border-radius: calc(var(--u) * 4); background: transparent; cursor: pointer;
+  font: italic 700 calc(var(--u) * 19)/1 var(--num); letter-spacing: 0.06em; color: var(--blue); transition: background 0.15s ease, color 0.15s ease; }
+.rs-diffs button:hover { background: rgba(21, 70, 200, 0.08); }
+.rs-diffs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+.rs-fun { position: relative; display: flex; flex-direction: column; gap: calc(var(--u) * 6); margin-top: calc(var(--u) * 4); }
+.rs-stamp { position: static; align-self: flex-start; transform: rotate(-2deg); font-size: calc(var(--u) * 16); }
+.rs-fun p { margin: 0; font: 600 max(11px, calc(var(--u) * 13))/1.35 var(--ui); color: #44506a; }
+.rs-card .jb-acts { flex-direction: row; gap: calc(var(--u) * 14); margin-top: auto; padding-top: calc(var(--u) * 6); }
+.rs-card .jb-acts .jb-btn { flex: 1; }
+
+@media (max-width: 720px) {
+  .rs-cork { flex-direction: column; overflow-y: auto; }
+  .rs-list, .rs-card { flex: none; }
+  .rs-rows { max-height: 40vh; }
+}

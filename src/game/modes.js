@@ -1,6 +1,7 @@
-// Game modes: FREE RIDE in the open-world resort, RACE (vs AI bots) and WORLD RACING (time trial vs your
-// ghost) on the purpose-built courses far away from the resort. Owns the teleports between them: the
-// branded transition card covers the screen while a course is built and the terrain around it streams in.
+// Game modes: FREE RIDE in the open-world resort and RACE (vs AI bots, just for fun: no prize money) on the
+// purpose-built courses far away from the resort, started from the RACING stand in Legacy Village
+// (ui/racestand.js; WORLD RACING, the time trial, is gone as a mode: Oct 27). Owns the teleports between them:
+// the branded transition card covers the screen while a course is built and the terrain around it streams in.
 import { RaceSession } from '../modes/race/session.js';
 import { COURSES, getCourse } from '../modes/parkour/courses.js';
 import { applyCourseAtmosphere, restoreCourseAtmosphere } from '../modes/parkour/looks.js';
@@ -18,6 +19,7 @@ export class Modes {
    * @param {() => void} o.writeSave
    * @param {(x: number, z: number) => Promise<void>} o.stream   pre-stream terrain + trees around a point
    * @param {() => Promise<void>} o.toMenu   back to the main menu (called behind the transition card)
+   * @param {() => Promise<void>} [o.toWorld]  a fun race's VILLAGE / ESC: back to free ride at the RACING stand (ditto)
    * @param {(info: object) => void} [o.onResult]  a finished run (prize money etc.)
    */
   constructor(o) {
@@ -30,7 +32,7 @@ export class Modes {
 
   get active() { return !!this.session; }
 
-  /** Course list for the menu (World Racing shows PB + medal). */
+  /** Course list for the RACING stand (best finish, PB + medal). */
   list() {
     return COURSES.map((c) => ({
       id: c.id, name: c.name, tagline: c.tagline, difficulty: c.difficulty, length: c.length, drop: c.drop,
@@ -59,12 +61,12 @@ export class Modes {
     this.course = this.group = null;
   }
 
-  /** Start a race or a time trial: teleport to the course behind the transition card.
-   *  `covered` runs once the card covers the screen (e.g. leaving the menu). */
-  async start({ mode, courseId, difficulty = 'medium' }, covered) {
+  /** Start a race (just for fun, no prize money): teleport to the course behind the transition card.
+   *  `covered` runs once the card covers the screen. */
+  async start({ courseId, difficulty = 'medium' }, covered) {
     const def = COURSES.find((c) => c.id === courseId) || COURSES[0];
-    this.current = { mode, courseId: def.id, difficulty };
-    const label = `${mode === 'race' ? 'RACE' : 'WORLD RACING'} · ${def.name}`;
+    this.current = { mode: 'race', courseId: def.id, difficulty };
+    const label = `RACE · ${def.name}`;
     await this.transition.teleport(label, async () => { covered?.(); await this.begin(); });
   }
 
@@ -82,6 +84,8 @@ export class Modes {
       save: this.save, writeSave: this.writeSave,
       stream: this.stream, // terrain around a respawn checkpoint streams while the screen is dark
       weather: () => window.__game?.env?.weatherLabel, // shown on the race intro card
+      // RETRY / NEXT / VILLAGE (the stand's race ends back at the stand in free ride, not in a menu)
+      choices: this.toWorld ? [['retry', 'RETRY', 'R'], ['next', 'NEXT', 'ENTER'], ['menu', 'VILLAGE', 'ESC']] : null,
       onExit: (choice) => this.exit(choice),
     });
     this.session.start();
@@ -144,9 +148,23 @@ export class Modes {
     } else if (choice === 'next') {
       const i = COURSES.findIndex((c) => c.id === this.current.courseId);
       await this.start({ ...this.current, courseId: COURSES[(i + 1) % COURSES.length].id });
+    } else if (this.toWorld) {
+      await this.home();
     } else {
       await this.leave();
     }
+  }
+
+  /** A fun race's VILLAGE (results ESC, pause RETURN TO VILLAGE): back to free ride at the RACING stand. */
+  async home() {
+    if (!this.current) return;
+    await this.transition.fade(async () => {
+      this.end();
+      this.unload(); // (the free-ride time of day and weather come back)
+      this.current = null;
+      await this.toWorld();
+    });
+    this.lock?.();
   }
 
   /** Abandon the session and go back to the main menu (pause menu MAIN MENU, results MENU). */

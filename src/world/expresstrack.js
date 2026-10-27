@@ -13,7 +13,7 @@
 //           a tunnel or near a portal)                           built within 800 m
 //   bridge  a whole viaduct (the showpieces: seen from far)      built within 7.5 km
 //   portal  one tunnel mouth                                      built within 4 km
-//   station a stop (platforms, canopies, boards, the village entrance and hall)   built within 3.2 km
+//   station a stop (platforms, the station building, boards)   built within 3.2 km
 // The few things that must exist everywhere at once (pier and station colliders, walkable platform / deck surfaces,
 // the terrain clip volumes) are plain data, made up front.
 //
@@ -24,12 +24,12 @@
 import * as THREE from 'three';
 import { world } from './world.js';
 import { layout } from './layout.js';
-import { EXPRESS, LENGTH, expressAt, TRACK_OFF, TUBE_H, PORTAL_IN } from './expressroute.js';
+import { EXPRESS, LENGTH, expressAt, TRACK_OFF, TUBE_H, PORTAL_IN, ringDelta } from './expressroute.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
 import { RailBuilder, railMaterials, canvasTex } from './railtrack.js';
 import { setTerrainClipSet, terrainClipFocus } from './terrain.js';
 import { smoothstep, mulberry32 } from '../core/noise.js';
-import { planExpressStations, buildExpressStation, HALL_HALF, hallTop } from './expressstations.js';
+import { planExpressStations, buildExpressStation } from './expressstations.js';
 
 const CHUNK = 250;
 const GAUGE = 1.0;              // (the Wolkenspitzbahn's railcar: metre gauge)
@@ -311,11 +311,13 @@ function buildCatenary(steel, s0, s1, kindAt, wires) {
       const tx = f.x + f.rx * sd * TRACK_OFF, tz = f.z + f.rz * sd * TRACK_OFF; // over the track
       if (kind === 'tunnel' || kind === 'hall') {
         // drop bracket from the vault
-        const top = f.y - 0.15 + (kind === 'hall' ? hallTop(TRACK_OFF) : TS + (TC - TS) * Math.sqrt(Math.max(0, 1 - (TRACK_OFF / TW) ** 2)));
+        const top = f.y - 0.15 + (TS + (TC - TS) * Math.sqrt(Math.max(0, 1 - (TRACK_OFF / TW) ** 2)));
         steel.rod([tx, top, tz], [tx, f.y + MESS_Y - 0.6, tz], 0.04, C.mastDark, 4);
         steel.rod([tx - f.rx * 0.5, f.y + MESS_Y - 0.6, tz - f.rz * 0.5], [tx + f.rx * 0.5, f.y + MESS_Y - 0.6, tz + f.rz * 0.5], 0.035, C.mastDark, 4);
         continue;
       }
+      // (at a station: none on the station's side in front of the building and its canopy)
+      if (kind === 'station' && layout.express?.stations.some((st) => st.side === sd && Math.abs(ringDelta(st.s, s)) < 32)) continue;
       const lat = kind === 'station' ? 9.6 : MAST_LAT;
       const mx = f.x + f.rx * sd * lat, mz = f.z + f.rz * sd * lat;
       const foot = kind === 'bridge' ? f.y - DECK : f.y - 0.74;
@@ -656,12 +658,11 @@ function buildBridge(XMat, plan) {
 }
 
 // ------------------------------------------------------------------ the line's chunks
-function kindsOf(c0, c1, hallS) {
+function kindsOf(c0, c1) {
   const cuts = new Set([c0, c1]);
   const T = spansIn(EXPRESS.tunnels, c0, c1), Bs = spansIn(EXPRESS.bridges, c0, c1);
-  const St = spansIn(EXPRESS.stations.filter((st) => !st.underground).map((st) => ({ s0: st.s0 - 6, s1: st.s1 + 6 })), c0, c1);
-  const H = spansIn([{ s0: -hallS, s1: hallS }], c0, c1);
-  for (const sp of [...T, ...Bs, ...St, ...H]) { cuts.add(sp.a); cuts.add(sp.b); }
+  const St = spansIn(EXPRESS.stations.map((st) => ({ s0: st.s0 - 6, s1: st.s1 + 6 })), c0, c1);
+  for (const sp of [...T, ...Bs, ...St]) { cuts.add(sp.a); cuts.add(sp.b); }
   const list = [...cuts].sort((a, b) => a - b);
   const out = [];
   for (let k = 0; k < list.length - 1; k++) {
@@ -669,7 +670,7 @@ function kindsOf(c0, c1, hallS) {
     if (b - a < 0.05) continue;
     const m = (a + b) / 2;
     const tn = T.find((sp) => m > sp.a && m < sp.b), br = Bs.find((sp) => m > sp.a && m < sp.b);
-    const kind = H.some((sp) => m > sp.a && m < sp.b) ? 'hall' : tn ? 'tunnel' : br ? 'bridge' : St.some((sp) => m > sp.a && m < sp.b) ? 'station' : 'open';
+    const kind = tn ? 'tunnel' : br ? 'bridge' : St.some((sp) => m > sp.a && m < sp.b) ? 'station' : 'open';
     out.push({ a, b, kind, tn });
   }
   return out;
@@ -678,7 +679,7 @@ function kindFn(pieces) { return (s) => (pieces.find((p) => s >= p.a && s <= p.b
 
 function buildChunkBed(XMat, c0, c1) {
   const bd = new XB({ uv: true }), slab = new XB();
-  for (const p of kindsOf(c0, c1, HALL_HALF)) buildBed(bd, slab, p.kind, p.a, p.b);
+  for (const p of kindsOf(c0, c1)) buildBed(bd, slab, p.kind, p.a, p.b);
   const grp = new THREE.Group();
   const add = (b, mat, cast) => { const geo = b.build(); if (!geo) return; const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.castShadow = cast; m.matrixAutoUpdate = false; grp.add(m); };
   add(bd, XMat.ballast, false);
@@ -686,7 +687,7 @@ function buildChunkBed(XMat, c0, c1) {
   return grp;
 }
 function buildChunkDetail(XMat, c0, c1) {
-  const pieces = kindsOf(c0, c1, HALL_HALF);
+  const pieces = kindsOf(c0, c1);
   const steel = new XB(), lining = new XB({ uv: true, light: true }), lamps = new XB(), wires = [], sl = [];
   buildRails(steel, c0, c1);
   sleeperMatrices(sl, c0, c1);
@@ -772,7 +773,7 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
     }
   });
   // the stations
-  const stations = planExpressStations({ colliders, cameraBlockers, clips });
+  const stations = planExpressStations({ colliders, cameraBlockers, clips, models });
   for (const rec of stations) ent('station', rec.x, rec.z, rec.r, () => buildExpressStation(rec, XMat, models), { rec });
   setTerrainClipSet('express', clips);
 

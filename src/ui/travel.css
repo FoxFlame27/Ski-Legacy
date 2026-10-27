@@ -95,6 +95,8 @@ body.tv-open #hud { visibility: hidden; } /* (the free-ride HUD steps aside whil
 .tv-dest.sel::after { content: ''; position: absolute; left: calc(var(--u) * -10); top: 22%; bottom: 22%; width: calc(var(--u) * 5); background: var(--red); }
 .tv-dot { flex: none; width: calc(var(--u) * 14); height: calc(var(--u) * 14); min-width: 9px; min-height: 9px; border-radius: 50%; background: #fff; box-shadow: inset 0 0 0 max(2px, calc(var(--u) * 3)) var(--blue); }
 .tv-dest.sel .tv-dot { background: var(--red); box-shadow: 0 0 0 max(2px, calc(var(--u) * 2)) #fff; }
+/* a race destination (dest.color): a pin in the race's difficulty colour, kept when highlighted */
+.tv-dot.race, .tv-dest.sel .tv-dot.race { border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--c); box-shadow: 0 0 0 max(1.5px, calc(var(--u) * 2)) #fff; }
 .tv-dot.peak { border-radius: 0; background: var(--red); box-shadow: none; clip-path: polygon(50% 4%, 100% 92%, 0 92%); }
 .tv-dot.free { background: none; box-shadow: inset 0 0 0 max(2px, calc(var(--u) * 2.5)) var(--blue); border-radius: 50%; }
 .tv-dest.sel .tv-dot.free { box-shadow: inset 0 0 0 max(2px, calc(var(--u) * 2.5)) #fff; background: none; }

@@ -3,16 +3,19 @@
 // stops, where you are, and the destinations as a list beside it. Hover or the arrow keys highlight a stop (the
 // route there lights up, with its name, ride time and price), click or Enter rides there, Esc cancels.
 // Used by the ski bus, the Wolkenspitzbahn and gondola mid-stations; the heli-ski desk opens it as a pilot's
-// chart (mode 'chart': range rings round the helipad, flight lines to the drop zones, a flight plan card).
+// chart (mode 'chart': range rings round the helipad, flight lines to the drop zones, a flight plan card). The Legacy
+// Express (lineStyle 'express', lines: [layout.express.pts] with their tunnel flags) is drawn as on the trail map, with
+// the race courses: each stop joined to its race (dest.race = course id, or the course of the same name).
 // While open it blocks the game like a panel (hud.setBlocking('travel')): no input, no pause menu on Esc; the
 // pointer is released, and the chosen ride locks it again (main.js's actions call input.lock()).
 //
 //   picker.open({ mode: 'route' | 'chart', title, kicker, sub, from: { name, x, z }, lines: [[[x, z]...]...],
-//                 lineStyle: 'bus' | 'rail' | 'lift', stops: [{ name, x, z }],
-//                 dests: [{ name, x, z, path?: [[x, z]...], meta, price?: number|string, tag?: string, short?, act }],
+//                 lineStyle: 'bus' | 'rail' | 'lift' | 'express', stops: [{ name, x, z }],
+//                 dests: [{ name, x, z, path?: [[x, z]...], meta, price?: number|string, tag?: string, short?, act,
+//                           color?: race colour (the list shows a race pin in it), race?: course id }],
 //                 home?: { x, z } (chart), go: 'RIDE' | 'FLY', goNote?, goDisabled?, onCancel? })
 import './travel.css';
-import { TrailMap, NAVY, RED, BLUE, FONT } from './trailmap.js';
+import { TrailMap, NAVY, RED, BLUE, FONT, EXPRESS, racePin, raceInk, finishMark, expressStop } from './trailmap.js';
 import { MAIN_SUMMIT } from '../world/world.js';
 import { layout } from '../world/layout.js';
 import { PISTE_COLORS } from '../world/resortdressing.js';
@@ -113,7 +116,8 @@ export class RoutePicker extends TrailMap {
     this.$list.innerHTML = o.dests.map((d, i) => {
       const pr = d.tag ? `<span class="tv-pr tag${/free/i.test(d.tag) ? ' free' : ''}">${esc(d.tag)}</span>`
         : d.price !== undefined && d.price !== null ? `<span class="tv-pr${d.short ? ' short' : ''}">${esc(typeof d.price === 'number' ? `$${d.price}` : d.price)}</span>` : '';
-      return `<button class="tv-dest" data-i="${i}"><i class="tv-dot${d.dot ? ' ' + d.dot : ''}"></i><span class="tv-dn"><b>${esc(d.name)}</b>${d.meta ? `<em>${esc(d.meta)}</em>` : ''}</span>${pr}</button>`;
+      const dot = d.color ? `<i class="tv-dot race" style="--c:${esc(raceInk(d.color))}"></i>` : `<i class="tv-dot${d.dot ? ' ' + d.dot : ''}"></i>`;
+      return `<button class="tv-dest" data-i="${i}">${dot}<span class="tv-dn"><b>${esc(d.name)}</b>${d.meta ? `<em>${esc(d.meta)}</em>` : ''}</span>${pr}</button>`;
     }).join('');
     r.hidden = false;
     this.hud?.setBlocking?.('travel', true);
@@ -204,7 +208,7 @@ export class RoutePicker extends TrailMap {
     const pad = o.mode === 'chart' ? 0.16 : 0.13;
     const w = Math.max(400, x1 - x0), h = Math.max(300, z1 - z0);
     const s = Math.min((this.W * (1 - 2 * pad)) / w, (this.H * (1 - 2 * pad)) / h);
-    this.view.s = Math.min(1.2, Math.max(0.03, s));
+    this.view.s = Math.min(1.2, Math.max(0.02, s));
     this.view.x = (x0 + x1) / 2;
     this.view.z = (z0 + z1) / 2;
   }
@@ -226,6 +230,7 @@ export class RoutePicker extends TrailMap {
     if (chart) this.drawGrid();
     this.drawVillage();
     this.drawContext(chart);
+    if (!chart && (o.lineStyle === 'express' || o.races)) this.drawRaceLines();
     this.drawSummits();
     if (chart) this.drawChart(now); else this.drawRoute(now);
     this.drawPlayer(now);
@@ -272,6 +277,7 @@ export class RoutePicker extends TrailMap {
     g.save();
     g.lineCap = 'round'; g.lineJoin = 'round';
     for (const L of o.lines || []) {
+      if (style === 'express') { this.strokeExpress(L, 5.5); continue; }
       this.path(L);
       g.setLineDash([]);
       g.strokeStyle = 'rgba(255,255,255,0.96)'; g.lineWidth = style === 'lift' ? 7 : 9; g.stroke();
@@ -299,8 +305,9 @@ export class RoutePicker extends TrailMap {
       g.setLineDash([]); g.lineDashOffset = 0;
     }
     g.restore();
+    if (style === 'express') this.drawExpressRaces();
     // stops: white rings; the highlighted one red and breathing; where you are: navy with YOU ARE HERE
-    const fromName = o.from?.name;
+    const fromName = o.from?.name, ink = style === 'rail' ? '#1b1f27' : style === 'lift' ? NAVY : style === 'express' ? EXPRESS : BLUE;
     for (const s of o.stops || []) {
       const x = this.X(s.x), y = this.Z(s.z);
       if (!this.inView(x, y)) continue;
@@ -312,16 +319,47 @@ export class RoutePicker extends TrailMap {
         g.beginPath(); g.arc(x, y, 11 + ph * 20, 0, Math.PI * 2); g.stroke();
       }
       const r = sel ? 10 : here ? 8.5 : 7.5;
-      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
-      g.fillStyle = sel ? RED : here ? NAVY : '#fff'; g.fill();
-      g.lineWidth = sel || here ? 3 : 3.2; g.strokeStyle = sel || here ? '#fff' : (style === 'rail' ? '#1b1f27' : style === 'lift' ? NAVY : BLUE); g.stroke();
+      if (style === 'express' && !sel && !here) expressStop(g, x, y, r);
+      else {
+        g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
+        g.fillStyle = sel ? RED : here ? NAVY : '#fff'; g.fill();
+        g.lineWidth = sel || here ? 3 : 3.2; g.strokeStyle = sel || here ? '#fff' : ink; g.stroke();
+      }
       if (here) { g.beginPath(); g.arc(x, y, 3, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill(); }
       this.reserve(x, y, r + 2);
       if (di >= 0) this.spots.push({ x, y, r: Math.max(16, r + 6), i: di });
       const cands = this.around(r + 2, 6);
       if (sel) this.label(s.name.toUpperCase(), x, y, { size: 22, color: RED, prio: -2, force: true, cands });
       else if (here) this.label('YOU ARE HERE', x, y, { size: 16, color: NAVY, prio: -1, force: true, cands });
-      else this.label(s.name, x, y, { size: 16, color: style === 'rail' ? '#1b1f27' : style === 'lift' ? NAVY : BLUE, prio: 0, cands });
+      else this.label(s.name, x, y, { size: 16, color: di >= 0 && o.dests[di].color ? raceInk(o.dests[di].color) : ink, prio: 0, cands });
+    }
+  }
+
+  // the express's races: the finish and the start pin of each course, the stop's dotted link to its finish (and,
+  // for the highlighted stop, on up to the start)
+  drawExpressRaces() {
+    const o = this.o, g = this.g, d = o.dests[this.fi], races = this.races();
+    const raceOf = (q) => q && races.find((e) => e.id === (q.race || q.course) || e.name === q.name);
+    const focus = raceOf(d);
+    for (const s of o.stops || []) {
+      const e = raceOf(o.dests.find((q) => q.name === s.name)) || raceOf(s);
+      if (!e) continue;
+      const col = raceInk(e.D.color), x = this.X(s.x), y = this.Z(s.z);
+      g.save();
+      g.lineCap = 'round'; g.setLineDash([0.1, 5.5]);
+      for (const p of e === focus ? [e.finish, e.start] : [e.finish]) {
+        g.beginPath(); g.moveTo(x, y); g.lineTo(this.X(p.x), this.Z(p.z));
+        g.strokeStyle = '#fff'; g.lineWidth = 5.5; g.stroke(); g.strokeStyle = col; g.lineWidth = 3; g.stroke();
+      }
+      g.restore();
+    }
+    for (const e of races) {
+      const col = raceInk(e.D.color), fx = this.X(e.finish.x), fy = this.Z(e.finish.z), x = this.X(e.start.x), y = this.Z(e.start.z);
+      if (this.inView(fx, fy)) { finishMark(g, fx, fy, 7, col); this.reserve(fx, fy, 6); }
+      if (!this.inView(x, y)) continue;
+      const r = e === focus ? 11 : 8.5, cy = racePin(g, x, y, r, col);
+      this.boxes.push([x - r - 2, cy - r - 2, x + r + 2, y + 1]);
+      if (e === focus) this.label(`${e.D.label.toUpperCase()} · START`, x, cy, { size: 14, color: col, prio: -1, cands: this.around(r + 1, 5) });
     }
   }
 

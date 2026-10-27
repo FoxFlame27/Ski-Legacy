@@ -53,6 +53,15 @@ const LAMP_RULES = {
       : /red_glass/i.test(l) ? (p.third ? 'third' : null)
       : /Glass_backlights_glass_light/i.test(l) ? (p.rear && !p.low ? 'lensR' : null)
       : null,
+    // The cover glass over the tail lamps is the same material as the headlamps' ('glass_light': a clear glass, which
+    // matFor makes a pale see-through grey): over the red light guides it washed them out to a pinkish white, by day
+    // and lit. The G01's tail lamps are deep red, smoked lenses: that glass at the back, red and dark.
+    // (glow: its own share of the light, less than a clear lens: lit from behind, it filters rather than shines; the
+    // light guides behind it stay a clean red under braking instead of stacking up toward orange)
+    lens: { lensR: { color: 0x3c0306, opacity: 0.64, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+    // (and the red light guides themselves, a faint see-through film boosted by its opacity, a little less: braking at
+    // night they summed past what the tone map keeps red, to salmon. glow: kind -> share, for the LED cores)
+    glow: { tail: 0.6 },
   },
   car_audi_rs6: {
     test: /LightA_Material|red_glass/i,
@@ -87,6 +96,16 @@ const LAMP_RULES = {
     kind: (l, p) => /Headlight/i.test(l) ? (p.front ? 'head' : null) : /Taillight/i.test(l) ? (p.rear && !p.low ? 'tail' : null) : null,
   },
 };
+// Materials drawn as cut-outs (opaque, depth-written, alpha-tested) instead of blended. The RS6's whole cabin is one
+// textured material marked alpha BLEND (for its decals: stitching, button labels), so it came in transparent with no
+// depth writes: the steering wheel's airbag and spokes were drawn over by whatever lay behind them (the column, the
+// instrument cluster) and looked see-through. Its texture's alpha is either solid or a cut-out, so a cut-out is exact.
+const CUTOUT = { car_audi_rs6: /InteriorA_Material/i };
+// The four rings on the steering wheel's airbag (RS6): the model's own badge there is a dark decal on the black hub,
+// lost in it, where the real car's are chrome. Four thin chrome tori laid exactly on that decal, from its UV layout
+// (the badge texture draws the rings stacked down its right-hand column): u, v of each ring's centre, the ring's radius
+// and the tube's (texture units). They are part of the steering wheel, so they turn with it.
+const HUB_RINGS = { car_audi_rs6: { mat: /BadgeA_Material/i, u: 0.809, v: [0.18, 0.391, 0.602, 0.813], r: 0.152, tube: 0.021 } };
 // no high-mounted brake light in the model: where to add one (the rear window's glass)
 const THIRD_AT = { car_tesla_m3: { glass: /glassDark/i, at: 'window' }, car_dacia_duster: { glass: /Foglight/i, at: 'spoiler' } };
 // any other car: by name and place
@@ -198,6 +217,7 @@ export function fitCar(gltf, length, name) {
 export function carTemplate(gltf, length, name = '') {
   if (cache.has(gltf)) return cache.get(gltf);
   const src = fitCar(gltf, length, name); // (length along z, nose toward +z, real size)
+  const model = name.replace(/_full$/, ''); // (the full-detail model: the same rules as the simplified one)
   src.updateMatrixWorld(true);
   const swap = new Map();
   const matFor = (m) => {
@@ -217,6 +237,11 @@ export function carTemplate(gltf, length, name = '') {
       out.emissive.set(0x000000); out.emissiveIntensity = 0; out.emissiveMap = null;
     }
     if (glass && m.emissive && (m.emissiveMap || m.emissive.getHex() !== 0)) out.userData.emOrig = { color: m.emissive.clone(), map: m.emissiveMap || null };
+    if (!glass && m.transparent && CUTOUT[model]?.test(m.name || '')) {
+      // (a cut-out: solid where its texture is, holes where it isn't; casts no shadow, as before)
+      if (out === m) out = m.clone();
+      out.transparent = false; out.depthWrite = true; out.alphaTest = 0.5; out.userData.cutout = true;
+    }
     swap.set(m, out);
     return out;
   };
@@ -229,7 +254,16 @@ export function carTemplate(gltf, length, name = '') {
   const fitBox = new THREE.Box3().setFromObject(src), halfL = (fitBox.max.z - fitBox.min.z) / 2, carH = fitBox.max.y - fitBox.min.y, halfW = (fitBox.max.x - fitBox.min.x) / 2;
   const lampGroups = new Map(); // kind -> Map(material -> geometries)
   const anchors = new Map(); // kind -> [{ min, max }] per side (x < 0, x >= 0): where the halos go
-  const rule = LAMP_RULES[name.replace(/_full$/, '')];
+  const rule = LAMP_RULES[model];
+  // a lamp's own glass where the model shares one with other lamps (rule.lens: kind -> look), once per material
+  const lensMats = new Map();
+  const lensFor = (mat, kind) => {
+    const look = rule?.lens?.[kind];
+    if (!look || !mat.transparent) return mat;
+    const k = mat.uuid + kind;
+    if (!lensMats.has(k)) { const m = mat.clone(); m.name = `${mat.name || 'lens'}_${kind}`; m.color.set(look.color); m.opacity = look.opacity; m.roughness = look.roughness ?? m.roughness; m.metalness = look.metalness ?? m.metalness; m.userData.glow = look.glow ?? 1; lensMats.set(k, m); }
+    return lensMats.get(k);
+  };
   const zone = (x, y, z) => {
     const front = z > halfL * 0.45, rear = z < -halfL * 0.45;
     return { x, y, z, front, rear, low: y < carH * 0.42, hi: y > carH * 0.72, third: rear && Math.abs(x) < 0.42 && y > carH * 0.7, mirror: !front && !rear && Math.abs(z) < halfL * 0.42 && Math.abs(x) > halfW - 0.3 && y > carH * 0.5 };
@@ -253,11 +287,11 @@ export function carTemplate(gltf, length, name = '') {
     if (!by.size) return false;
     for (const [kind, tri] of by) {
       if (!lampGroups.has(kind)) lampGroups.set(kind, new Map());
-      const map = lampGroups.get(kind);
-      if (!map.has(mat)) map.set(mat, []);
+      const map = lampGroups.get(kind), lm = lensFor(mat, kind);
+      if (!map.has(lm)) map.set(lm, []);
       const sub = compact(g, tri, null);
       sub.userData.label = label;
-      map.get(mat).push(sub);
+      map.get(lm).push(sub);
     }
     if (keep.length) { const sub = compact(g, keep, null); sub.userData.label = label; if (!groups.has(mat)) groups.set(mat, []); groups.get(mat).push(sub); }
     return true;
@@ -293,10 +327,17 @@ export function carTemplate(gltf, length, name = '') {
   for (const p of parts) { p.geometry.computeBoundingBox(); box.union(p.geometry.boundingBox); }
   // a model with no high-mounted brake light of its own (Tesla: at the top of the rear window; Dacia: above it, on
   // the tailgate spoiler): a slim strip of its own, found from the rear window's glass
-  try { if (THIRD_AT[name.replace(/_full$/, '')] && !lampGroups.has('third')) synthThird(groups, lampGroups, anchors, THIRD_AT[name.replace(/_full$/, '')], halfL, carH); } catch (e) { console.warn('third brake light', name, e); }
+  try { if (THIRD_AT[model] && !lampGroups.has('third')) synthThird(groups, lampGroups, anchors, THIRD_AT[model], halfL, carH); } catch (e) { console.warn('third brake light', name, e); }
   const lampParts = [];
   // (core: the light emitters themselves, by name: the brightest tier)
-  for (const [kind, map] of lampGroups) for (const [material, geos] of map) { const geometry = mergeGeometries(geos, false); if (geometry) { geometry.computeBoundingSphere(); lampParts.push({ kind, geometry, material, core: kind === 'drl' || geos.some((g) => /glow|emiss|drl|signature/i.test(g.userData.label || '')) }); } }
+  // (glow: a share of the usual light, LAMP_RULES lens / glow)
+  for (const [kind, map] of lampGroups) for (const [material, geos] of map) {
+    const geometry = mergeGeometries(geos, false);
+    if (!geometry) continue;
+    geometry.computeBoundingSphere();
+    const core = kind === 'drl' || geos.some((g) => /glow|emiss|drl|signature/i.test(g.userData.label || ''));
+    lampParts.push({ kind, geometry, material, core, glow: (material.userData.glow ?? 1) * (core ? rule?.glow?.[kind] ?? 1 : 1) });
+  }
   const halo = {};
   for (const [kind, sides] of anchors) halo[kind] = sides.filter(Boolean).map((b) => ({ c: b.min.clone().add(b.max).multiplyScalar(0.5), size: b.max.clone().sub(b.min) }));
   const t = { parts, size: box.getSize(new THREE.Vector3()), lod: null, wheels: null, body: null, lamps: { parts: lampParts, halo, halfL } };
@@ -417,6 +458,8 @@ function splitWheels(t, groups, name = '') {
   t.body = merge(body);
   t.wheels = wheels.map((w) => ({ c: w.c, r: w.r, front: w.front, parts: merge(w.groups) })).filter((w) => w.parts.length);
   t.steering = steerC ? { c: steerC, parts: merge(steerGroups), axis: steerAxis || new THREE.Vector3(0, -Math.sin(steerTilt), Math.cos(steerTilt)), tilt: steerTilt, rimR: steerR } : null;
+  const rings = HUB_RINGS[name.replace(/_full$/, '')];
+  if (t.steering && rings) try { const p = hubRings(t.steering, rings); if (p) t.steering.parts.push(p); else console.warn('steering wheel rings: no badge', name); } catch (e) { console.warn('steering wheel rings', name, e); }
   if (t.wheels.length !== 4) {
     // no wheels found: the steering wheel (if any) goes back into the body
     if (t.steering) for (const p of t.steering.parts) { const g = p.geometry.clone(); g.translate(steerC.x, steerC.y, steerC.z); t.body.push({ geometry: g, material: p.material }); }
@@ -560,6 +603,50 @@ function findSteering(pieces, hint) {
   if (nTri < 40) { console.warn('steering wheel: nothing in the disc'); return null; }
   return { c, tri, axis: A, tilt, rimR };
 }
+// The four rings on the hub (HUB_RINGS): each ring's centre found on the badge decal by its UV (the triangle holding
+// it, barycentric), its plane and size from that triangle's UV -> position map; a flattened chrome torus there, a hair
+// proud of the decal (toward the driver). -> { geometry, material } in the steering wheel's frame, or null.
+let ringsMat = null;
+function hubRings(S, spec) {
+  const out = [];
+  const pa = new THREE.Vector3(), pb = new THREE.Vector3(), pc = new THREE.Vector3(), du = new THREE.Vector3(), dv = new THREE.Vector3();
+  for (const v0 of spec.v) {
+    const u0 = spec.u;
+    let hit = null;
+    for (const part of S.parts) {
+      if (!spec.mat.test(part.material.name || '')) continue;
+      const g = part.geometry, P = g.attributes.position, U = g.attributes.uv, I = g.index.array;
+      for (let i = 0; i < I.length && !hit; i += 3) {
+        const a = I[i], b = I[i + 1], c = I[i + 2];
+        const ua = U.getX(a), va = U.getY(a), ub = U.getX(b) - ua, vb = U.getY(b) - va, uc = U.getX(c) - ua, vc = U.getY(c) - va;
+        const det = ub * vc - uc * vb;
+        if (Math.abs(det) < 1e-9) continue;
+        // (u0, v0) = a + s (b - a) + r (c - a), in UV
+        const s = ((u0 - ua) * vc - uc * (v0 - va)) / det, r = (ub * (v0 - va) - (u0 - ua) * vb) / det;
+        if (s < -1e-4 || r < -1e-4 || s + r > 1 + 1e-4) continue;
+        pa.fromBufferAttribute(P, a); pb.fromBufferAttribute(P, b).sub(pa); pc.fromBufferAttribute(P, c).sub(pa);
+        // the position's derivatives along u and v (the inverse of the UV map)
+        du.copy(pb).multiplyScalar(vc / det).addScaledVector(pc, -vb / det);
+        dv.copy(pc).multiplyScalar(ub / det).addScaledVector(pb, -uc / det);
+        hit = { at: pa.clone().addScaledVector(pb, s).addScaledVector(pc, r), du: du.clone(), dv: dv.clone() };
+      }
+    }
+    if (!hit) return null;
+    const n = new THREE.Vector3().crossVectors(hit.dv, hit.du).normalize();
+    if (n.dot(S.axis) > 0) n.negate(); // (toward the driver: the column's axis points away)
+    const ex = hit.dv.clone().addScaledVector(n, -hit.dv.dot(n)).normalize(), ey = new THREE.Vector3().crossVectors(n, ex);
+    const k = (hit.du.length() + hit.dv.length()) / 2, R = spec.r * k, tube = spec.tube * k;
+    const geo = new THREE.TorusGeometry(R, tube, 8, 48);
+    geo.scale(1, 1, 0.6); // (a badge: a little flatter than round)
+    geo.applyMatrix4(new THREE.Matrix4().makeBasis(ex, ey, n).setPosition(hit.at.clone().addScaledVector(n, tube * 0.75)));
+    out.push(geo);
+  }
+  ringsMat ||= new THREE.MeshStandardMaterial({ name: 'hub_rings_chrome', color: 0xe4e7eb, metalness: 1, roughness: 0.2 });
+  const geometry = mergeGeometries(out, false);
+  geometry.computeBoundingSphere();
+  return { geometry, material: ringsMat };
+}
+
 // a new geometry with just these triangles (vertices compacted), moved so `origin` is at 0 (a wheel's axle)
 function compact(g, tri, origin) {
   const map = new Map(), P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv;
@@ -625,7 +712,7 @@ export function carInstance(t, { paint = null, wheels = false } = {}) {
     // a different paint colour for this one (the body paint material, tinted; textures keep their detail)
     if (paint !== null && /paint/i.test(mat.name || '') && !mat.transparent) { tinted ||= mat.clone(); tinted.color = new THREE.Color(paint); mat = tinted; }
     const m = new THREE.Mesh(p.geometry, mat);
-    m.castShadow = !p.material.transparent; m.receiveShadow = true;
+    m.castShadow = !p.material.transparent && !p.material.userData.cutout; m.receiveShadow = true;
     if (p.material.transparent && p.material.opacity < 0.6) glass.push(m); // (the windows: drive.js clears them from inside)
     full.add(m);
   }
@@ -666,7 +753,8 @@ export function carInstance(t, { paint = null, wheels = false } = {}) {
     mesh.castShadow = false; mesh.receiveShadow = !m.transparent;
     full.add(mesh);
     // (see-through lamp glass shows only its opacity's share of the glow: made up for)
-    lamps.list.push({ m, kind: p.kind, tier, boost: m.transparent ? 1 / Math.max(0.12, m.opacity ?? 1) : 1 });
+    // (and some lamps take less: p.glow, from LAMP_RULES lens / glow)
+    lamps.list.push({ m, kind: p.kind, tier, boost: (m.transparent ? 1 / Math.max(0.12, m.opacity ?? 1) : 1) * (p.glow ?? 1) });
     lamps.kinds.add(p.kind);
   }
   group.add(full);

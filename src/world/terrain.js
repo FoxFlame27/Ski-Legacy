@@ -117,7 +117,10 @@ export const PL_BEAM_GLSL = `
 // clipping variant of the shader and of its shadow depth (a discard costs the GPU's early depth / hidden-surface
 // removal, so the rest of the terrain never pays for it).
 export const TCLIP_MAX = 8;
-const CLIP = { boxes: [], terrains: new Set() };
+// The volumes come in named sets (railway.js: the Wolkenspitzbahn's portals; expresstrack.js: the Legacy Express's
+// portals and its village entrance's stairwell): more than TCLIP_MAX in all, so the TCLIP_MAX nearest the focus
+// (terrainClipFocus, the camera; a portal only matters with the camera near it) are the ones installed.
+const CLIP = { boxes: [], terrains: new Set(), sets: new Map(), pick: [], fx: 0, fz: 0 };
 Object.assign(terrainUniforms, {
   uTClipN: { value: 0 },
   uTClipO: { value: new Float32Array(TCLIP_MAX * 4) }, // origin xyz, grade
@@ -145,8 +148,29 @@ const TCLIP_GLSL = `
     }
     return hit;
   }`;
-export function setTerrainClips(list) {
-  const n = Math.min(list.length, TCLIP_MAX);
+/** Replace the clip volumes of set `name` (the others stay). */
+export function setTerrainClipSet(name, list) {
+  CLIP.sets.set(name, list || []);
+  installClips(true);
+}
+/** The Wolkenspitzbahn's volumes (railway.js; replaces its set, as it always did). */
+export function setTerrainClips(list) { setTerrainClipSet('rail', list); }
+/** Where the camera is: with more volumes than TCLIP_MAX the nearest are installed (re-picked every ~40 m). */
+export function terrainClipFocus(x, z) {
+  if (Math.abs(x - CLIP.fx) < 40 && Math.abs(z - CLIP.fz) < 40) return;
+  CLIP.fx = x; CLIP.fz = z;
+  installClips(false);
+}
+function installClips(force) {
+  let list = [];
+  for (const l of CLIP.sets.values()) list = list.concat(l);
+  if (list.length > TCLIP_MAX) {
+    const d2 = (b) => (b.x - CLIP.fx) ** 2 + (b.z - CLIP.fz) ** 2;
+    list = list.map((b) => [d2(b), b]).sort((a, b) => a[0] - b[0]).slice(0, TCLIP_MAX).map((a) => a[1]);
+  }
+  if (!force && list.length === CLIP.pick.length && list.every((b) => CLIP.pick.includes(b))) return;
+  CLIP.pick = list;
+  const n = list.length;
   const O = terrainUniforms.uTClipO.value, T = terrainUniforms.uTClipT.value, S = terrainUniforms.uTClipS.value;
   CLIP.boxes = [];
   for (let i = 0; i < n; i++) {

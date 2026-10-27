@@ -26,6 +26,8 @@ import { Player } from './player/player.js';
 import { Trails, Spray, skierFX } from './fx/snowfx.js';
 import { FreeCourses, registerFreeWorldCourses, freeCourses } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
 import { buildExpressGround } from './world/expressground.js'; // the Legacy Express: the high-speed line to every race (its ground works)
+import { Express, EXPRESS_PRICE, FAST as EXPRESS_FAST } from './world/express.js'; // the Legacy Express's trains, boarding and the ride
+import { planExpressScenery, buildExpressScenery } from './world/expressscenery.js'; // the frozen lakes under the Legacy Express's viaducts
 import { NPCs } from './game/npcs.js';
 import { initPeopleHits, playerHitPerson } from './game/peoplehits.js';
 import { HUD, CARD_DIALOG } from './ui/hud.js';
@@ -151,6 +153,7 @@ let talk = null; // conversations: the camera moves in on whoever you talk to (s
 const setLoad = (f, t) => menu?.setLoading(f, t);
 
 let railway = null;
+let express = null; // the Legacy Express: trains round the ring to every race (world/express.js)
 let sleds = null; // snowmobiles you can drive (game/snowmobile.js)
 let parking = null; // the car parks (game/parking.js)
 let traffic = null; // cars driving the roads (game/traffic.js)
@@ -198,6 +201,7 @@ async function boot() {
   // they are registered now, before any of it is built (one per task while the models stream in)
   try { console.log('World Racing courses on the mountains:', await registerFreeWorldCourses(), 'ms'); } catch (e) { console.warn('free-world courses', e); }
   // the Legacy Express's line is fitted on the courses' final ground, its roadbed carved in before any terrain is built
+  try { planExpressScenery(freeCourses()); } catch (e) { console.warn('Legacy Express scenery (lakes)', e); } // (first: the line's profile is fitted on the lakes' basins)
   try { buildExpressGround(freeCourses()); } catch (e) { console.warn('Legacy Express ground', e); }
   models = await modelsLoading;
   if (!models.ski_elite) models.ski_elite = models.ski_pro;
@@ -210,6 +214,8 @@ async function boot() {
   village = new Village(scene, models, colliders, layout);
   lifts = new Lifts(scene, models, colliders, layout);
   railway = new Railway({ scene, colliders, makeRig, models }); // the Wolkenspitzbahn: track, stations, trains
+  try { express = new Express({ scene, colliders, models, makeRig, railway, cameraBlockers: village.cameraBlockers }); await express.ready; } catch (e) { console.warn('Legacy Express', e); express = null; } // its trains (+ the line's track, stations)
+  try { buildExpressScenery(scene); } catch (e) { console.warn('Legacy Express scenery', e); } // the frozen lakes' ice
   decor = new Decor(scene, models, colliders, village);
   // safety nets, piste signs + markers, patrol huts; Legacy Park (its corridor is registered by initLayout)
   dressing = buildResortDressing(scene, models);
@@ -405,6 +411,7 @@ function rideText(h) { return h ? `${h.replace(/ · \d+ km\/h/, '')} · hold Spa
 // the speedometer's label while you ride something instead of your skis
 function vehicleName() {
   if (railway?.riding) return 'Wolkenspitzbahn';
+  if (express?.riding) return 'Legacy Express';
   if (skibus?.riding) return 'Ski bus';
   if (drive?.active) return drive.label; // (the car and its gear: "BMW X3 · D")
   if (sleds?.active) return 'Snowmobile';
@@ -461,7 +468,7 @@ async function backToMenu() {
   if (outfitShop?.isOpen) outfitShop.close();
   heli.abort();
   if (races.active) races.abort();
-  if (player.mode === 'sit') { lifts.ride = null; railway.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
+  if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
   player.frozen = false;
   player.setSkisOn(false);
@@ -679,6 +686,85 @@ function leaveRail(exit) {
   hud.flash(exit.name ? `${exit.name}` : 'Arrived', 'good', 2400);
 }
 
+// ------------------------------------------------------------------ the Legacy Express
+// E at the village entrance (beside the ski shop), a station's platform or a race's stop sign: the route picker
+// with every race (its difficulty, the prize, the ride time the shorter way round, the fare: $EXPRESS_PRICE or
+// the day pass); the races first, nearest first, the village last
+function openExpress(it) {
+  const from = it.from, pass = hasPass(), X = layout.express;
+  const list = express.destinations(from.id).sort((a, b) => (!a.course - !b.course) || a.min - b.min);
+  const dests = list.map((d) => {
+    const e = d.course;
+    return {
+      name: d.st.name, x: d.st.x, z: d.st.z, path: d.pts, color: e?.D.color, race: e?.id,
+      meta: e ? `${e.D.label} · $${e.reward.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`,
+      price: pass ? undefined : EXPRESS_PRICE, tag: pass ? 'DAY PASS' : undefined, short: !pass && save.money < EXPRESS_PRICE,
+      act: () => { boardExpress(from, d.st); input.lock(); }, info: d,
+    };
+  });
+  const cell = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
+  travelPicker({ hud, player, audio }).open({
+    mode: 'route', title: 'Legacy Express', kicker: pass ? 'DAY PASS ACTIVE · 300 KM/H' : `$${EXPRESS_PRICE} TO ANY RACE · 300 KM/H`,
+    sub: `From <b>${from.underground ? 'Legacy Village' : from.name}</b> · pick your race`, listHead: 'RACES',
+    lineStyle: 'express', lines: X ? [X.pts] : [], stops: X?.stations || [], from: { name: from.name, x: from.x, z: from.z },
+    dests, go: 'RIDE', goLabel: (d) => `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
+    plan: (d) => {
+      const i = d.info, e = i.course;
+      return `<div class="tp-name" style="color:${e ? e.D.color : 'inherit'}">${e ? e.D.label : 'Legacy Village'}</div><div class="tp-grid">${cell('RIDE', `${Math.max(1, Math.round(i.min))}<small>min</small>`)}${cell('STOPS', i.stops)}${e ? cell('PRIZE', `$${e.reward.toLocaleString('en-US')}`) : cell('KM', i.km.toFixed(0))}</div>`;
+    },
+  });
+}
+function boardExpress(from, to) {
+  if (!hasPass() && !spend(EXPRESS_PRICE)) return;
+  jobs.onEvent('lift', { rail: true });
+  transition.fade(async () => {
+    const seat = express.board(from.id, to.id);
+    if (!seat) return;
+    if (dynRes.pr < dynRes.max) { dynRes.pr = dynRes.max; setRenderScale(dynRes.max); } // sharp in the train
+    player.sitOn(seat);
+    player.viewBeforeRide = player.view; // R switches the train's seat / outside view instead
+    player.lampBeforeRide = player.headlampOn; player.headlampOn = false;
+    player.rig.root.visible = false; player.rig.gear.visible = false; // you are the passenger in the panorama row
+    express.update(0, { viewer: seat.pos });
+    await streamAround(seat.pos.x, seat.pos.z);
+  });
+  audio.play('board');
+  hud.flash(`Legacy Express to ${to.name}${hasPass() ? ' · Day pass' : ` · -$${EXPRESS_PRICE}`}`, 'good', 2600);
+}
+// off the train: at the village up the steps to the entrance beside the ski shop; at a race the shuttle up to its
+// start (the station is down by the finish): you stand on the start shoulder, skis on, E races
+function leaveExpress(a) {
+  if (!a) return;
+  const e = a.course ? freeCourses().find((c) => c.id === a.course) : null;
+  const off = () => {
+    express.abort();
+    player.rig.root.visible = true; player.rig.gear.visible = true;
+    if (player.viewBeforeRide) { player.view = player.viewBeforeRide; player.viewBeforeRide = null; }
+    player.headlampOn = player.lampBeforeRide; player.lampBeforeRide = undefined;
+  };
+  if (!e) {
+    transition.fade(async () => {
+      off();
+      player.standUp(a.exit.x, a.exit.z, a.exit.heading);
+      player.rig.setSkisVisible(player.hasSkis);
+      await streamAround(a.exit.x, a.exit.z);
+    });
+    hud.flash(`${a.name} · Legacy Express`, 'good', 2400);
+    return;
+  }
+  transition.teleport(e.name, async () => {
+    off();
+    const spot = express.startSpot(e);
+    if (player.hasSkis) player.setSkisOn(true);
+    player.standUp(spot.x, spot.z, spot.heading);
+    player.rig.setSkisVisible(player.hasSkis);
+    player.camPitch = -0.12;
+    await streamAround(spot.x, spot.z);
+  }, { kicker: 'LEGACY EXPRESS · SHUTTLE UP TO THE START' }).then(() => {
+    hud.flash(player.hasSkis ? `${e.name} · press E at the start to race` : `${e.name} · rent skis to race`, 'gold', 3400);
+  }, (err) => console.warn('Legacy Express arrival', err));
+}
+
 // A free-ride race on a World Racing course (E at its start house, modes/parkour/freeworld.js): the podium's
 // prize money and the stats ("Races won"), paid once per run when the results card comes up (session.js)
 function courseResult(e, { place, dnf }) {
@@ -842,6 +928,8 @@ function findInteraction() {
   if (stop && busDests(stop).length) return { label: 'Take the ski bus', act: () => openBus(stop) }; // (no road: no bus from here)
   const rw = railway.interaction(p, { hasPass: hasPass() });
   if (rw) return { label: rw.label, act: () => openRail(rw) };
+  const ex = express?.interaction(p, { hasPass: hasPass() }); // the village entrance, a station's platform, a race's stop sign
+  if (ex) return { label: ex.label, act: () => openExpress(ex) };
   const st = lifts.nearestStation(p);
   if (st && st.dist < (st.line.spec.type === 'gondola' ? 20 : 13)) {
     const s = st.line.spec;
@@ -940,7 +1028,7 @@ function returnToVillage(message = 'Back in Legacy Village') {
   if (outfitShop?.isOpen) outfitShop.close();
   heli.abort();
   if (races.active) races.abort();
-  if (player.mode === 'sit') { lifts.ride = null; railway.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
+  if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
   player.frozen = false;
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
   player.setSkisOn(false);
@@ -1014,7 +1102,7 @@ function updateDynRes(dt) {
   else if (dynRes.high >= 4) pr += 0.125;
   else return;
   dynRes.low = dynRes.high = 0;
-  pr = Math.min(dynRes.max, Math.max(railway?.riding ? dynRes.max : dynRes.min, pr)); // (sharp while riding the train)
+  pr = Math.min(dynRes.max, Math.max(railway?.riding || express?.riding ? dynRes.max : dynRes.min, pr)); // (sharp while riding the train)
   if (Math.abs(pr - dynRes.pr) > 0.01) { dynRes.pr = pr; setRenderScale(pr); }
 }
 
@@ -1132,6 +1220,8 @@ function loop() {
   let rideLine = null, ridePrompt = null; // riding: the line for the top-left card, the stop to get off at (E)
   railway.update(dt, { viewer: camera.position, fast: railway.riding && !menu && input.down('Space') });
   mark('railway');
+  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space') });
+  mark('express');
   if (railway.riding) {
     const r = railway.updateRide();
     if (r?.seat) player.seat = r.seat; // (still seated while the arrival fades out)
@@ -1141,6 +1231,15 @@ function loop() {
     rideLine = r?.stop ? null : rideText(r?.hint);
     ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;
     trainAnnounce(r?.hint);
+  } else if (express?.riding) {
+    const r = express.updateRide();
+    if (r?.seat) player.seat = r.seat;
+    if (r?.arrive) leaveExpress(r.arrive);
+    else if (r?.stop && !menu && input.hit('KeyE')) leaveExpress(express.leaveAtStop());
+    else if (!menu && !transition.active && input.hit('Enter')) leaveExpress(express.skip()); // skip to the arrival
+    hud.rideHint(null);
+    rideLine = r?.stop ? null : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST} · Enter to skip` : null;
+    ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;
   } else if (skibus.riding) {
     const r = skibus.updateRide(dt, !menu && input.down('Space'));
     if (r?.seat) player.seat = r.seat;
@@ -1164,6 +1263,7 @@ function loop() {
 
   player.update(dt);
   if (railway.riding) railway.applyCamera(camera, { ...input, hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
+  if (express?.riding) express.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   if (skibus.riding) skibus.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   mark('player');
   // the helicopter: your flight (seat, controls, chase camera) or its trip home; parked: the pad and windsock
@@ -1186,10 +1286,11 @@ function loop() {
   mark('game');
   npcs.update(dt, player.pos, env, camera);
   mark('npcs');
-  const streamAt = admin.streamPos || heli.streamPos; // ahead of the helicopter / free camera, otherwise where you are
-  terrain.update(streamAt.x, streamAt.z, heli.active ? 8 : 5);
+  const fastRide = heli.active || !!express?.riding; // (a fast trip: a bigger streaming budget, ahead of it)
+  const streamAt = admin.streamPos || (express?.riding ? express.streamPos : null) || heli.streamPos; // ahead of the helicopter / the express / free camera, otherwise where you are
+  terrain.update(streamAt.x, streamAt.z, fastRide ? 8 : 5);
   mark('terrain');
-  vegetation.update(streamAt.x, streamAt.z, dt, heli.active ? 4 : 3);
+  vegetation.update(streamAt.x, streamAt.z, dt, fastRide ? 4 : 3);
   mark('vegetation');
   atmosphere.update(dt, camera, env);
   mark('atmosphere');
@@ -1267,11 +1368,11 @@ function loop() {
       prompt: null, objective: '', heading: camYaw, waypoint: null,
     });
     else hud.frame({
-      speed: railway.riding ? railway.speed : skibus.riding ? skibus.speed : drive?.active ? drive.speed : sleds.active ? sleds.speed : heli.active ? heli.speed : player.mode === 'walk' ? 0 : player.speed, loc: railway.locName(player.pos) || locationName(), time: env.timeString, weather,
+      speed: railway.riding ? railway.speed : express?.riding ? express.speed : skibus.riding ? skibus.speed : drive?.active ? drive.speed : sleds.active ? sleds.speed : heli.active ? heli.speed : player.mode === 'walk' ? 0 : player.speed, loc: (express?.riding && express.locName()) || railway.locName(player.pos) || express?.locName(player.pos) || locationName(), time: env.timeString, weather,
       ski: vehicleName() || (player.skisOn || !player.hasSkis ? ski : `${ski} (off)`),
       prompt: ridePrompt || interaction?.label || (player.hasSkis && !player.skisOn && player.mode === 'walk' && !player.isFlatHere() ? 'Put on skis' : null), promptKey: ridePrompt || interaction ? 'E' : 'G', objective: races.active ? '' : (rideLine || heli.hudLine() || sleds.hudLine() || jobs.hudLine() || objective()),
       heading: camYaw, waypoint: races.active ? null : heli.active ? heli.waypoint(player.pos) || waypoint() : waypoint(), // (also while riding: train, bus, lifts, snowmobile)
-      speedo: player.mode !== 'sit' || railway.riding || skibus.riding || sleds.active || heli.active || !!drive?.active, // (vehicles show their own speed; chairs and gondolas don't)
+      speedo: player.mode !== 'sit' || railway.riding || !!express?.riding || skibus.riding || sleds.active || heli.active || !!drive?.active, // (vehicles show their own speed; chairs and gondolas don't)
     });
     if (player.mode === 'ski') save.stats.distance += player.speed * dt;
     save.stats.topSpeed = Math.max(save.stats.topSpeed, player.topSpeed);
@@ -1318,6 +1419,7 @@ function loop() {
   glare.update(dt, camera, env);
   mark('glare');
   railway.lateUpdate(camera, env, atmosphere, dt); // tunnels: the daylight fades out deep inside
+  express?.lateUpdate(camera, env, atmosphere, dt); // (the Legacy Express's tunnels too; the cabin light after both)
   mark('railLate');
   post.setSun(env.sunDir, tmpLight.copy(env.sun.color).multiplyScalar(env.sun.intensity), env.sunVisible * (1 - env.nightFactor));
   post.render(dt, player.mode === 'ski' ? player.speed : 0, player.mode === 'fall' ? Math.max(0, 1 - player.fallT * 2) : 0);
@@ -1352,7 +1454,7 @@ boot().catch((e) => {
 
 window.__game = {
   get player() { return player; }, env, layout, world, scene, camera, renderer,
-  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
+  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
   // handles for building new systems inside the running game (dev tests)
   get terrain() { return terrain; }, get secrets() { return secrets; }, get vegetation() { return vegetation; }, get atmosphere() { return atmosphere; }, get backdrop() { return backdrop; }, get glare() { return glare; }, get npcs() { return npcs; }, get dressing() { return dressing; }, propDetail, get decor() { return decor; },
   streamAround, applyQuality, autoQ, get quality() { return quality; }, get dynRes() { return dynRes; }, get started() { return started; }, get paused() { return paused; },

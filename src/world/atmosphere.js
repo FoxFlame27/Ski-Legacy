@@ -202,6 +202,9 @@ for (const c of CELLS) {
   if (c.S.length > 48) c.S.length = 48;
 }
 
+/** The wind at the snow (m/s, x / z), set every frame by Atmosphere.update: snowfall drift, wreck steam. */
+export const windUniform = { value: new THREE.Vector2(1.5, 0.6) };
+
 export class Atmosphere {
   constructor(scene, { renderer, crystal } = {}) {
     this.scene = scene;
@@ -209,7 +212,7 @@ export class Atmosphere {
       uTime: { value: 0 },
       uCam: { value: new THREE.Vector3() },
       uSnow: { value: 0 },
-      uWind: { value: new THREE.Vector2(1.5, 0.6) },
+      uWind: windUniform, // (shared: the wreck steam drifts with it, carlights.js)
       uLight: { value: new THREE.Color(1, 1, 1) },
       uAmbient: { value: new THREE.Color(0.6, 0.65, 0.75) },
       uSunDir: { value: new THREE.Vector3(0, 1, 0) },

@@ -20,6 +20,7 @@ import { lampsOn, LightPool, Smoke, hazardPhase } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads } from './bus/roads.js';
 import { TyreTracks } from './tyretracks.js';
+const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
 
 // per car: name, pull (m/s^2 at low speed), top speed (m/s), electric (one gear)
 export const CAR_SPECS = {
@@ -705,6 +706,9 @@ export class Drive {
       this.look.pitch = clamp(this.look.pitch - mdy * sens, -1.05, 0.5);
       const ly = lookBack ? Math.PI : this.look.yaw;
       const eye = _v.copy(d.eyeRig || d.eyeLocal).add(_w.set(clamp(-d.lat * 0.002, -0.03, 0.03), 0, clamp(-d.la * 0.003, -0.03, 0.03))); // (your own eyes: placeRig)
+      // a little over your eyes (sitting up tall: more road over the bonnet; Oct 27, the user: "move the camera a bit
+      // higher so you can see more out the window in front of you"), never into the headlining
+      eye.y = Math.min(eye.y + COCKPIT_RAISE, d.t.size.y - 0.17);
       g.localToWorld(eye);
       const dir = _w.set(Math.sin(ly) * Math.cos(this.look.pitch), Math.sin(this.look.pitch), Math.cos(ly) * Math.cos(this.look.pitch)).transformDirection(g.matrixWorld);
       cam.position.copy(eye);

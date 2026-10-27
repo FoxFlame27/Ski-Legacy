@@ -173,21 +173,30 @@ export function planExpressScenery(courses = []) {
 }
 
 // ------------------------------------------------------------------ meshes
-/** The ice sheets (and later props). Returns the group; nothing to update per frame. */
+const CULL = 5200; // m: an ice sheet is drawn only within this of the camera (the train sees them from <= ~2.5 km)
+/** The ice sheets. Returns the group; nothing to update per frame: each sheet sits in a THREE.LOD (centred on its
+ *  lake) whose far level is empty, so the renderer's own LOD pass drops it beyond CULL (and the frustum the rest). */
 export function buildExpressScenery(scene) {
   const group = new THREE.Group();
   group.name = 'express-scenery';
   if (!lakes.length) return group;
   const mat = iceMaterial();
-  for (const L of lakes) group.add(iceSheet(L, mat));
+  for (const L of lakes) {
+    const lod = new THREE.LOD();
+    lod.name = 'lake-' + L.id;
+    lod.position.set(L.x, L.level, L.z);
+    lod.addLevel(iceSheet(L, mat), 0);
+    lod.addLevel(new THREE.Object3D(), CULL);
+    group.add(lod);
+  }
   scene.add(group);
   return group;
 }
 
 // a radial fan from the centre to just inside the shoreline (found along each ray), rings packed toward the shore
 function iceSheet(L, mat) {
-  const NA = 192, NR = 16, y = L.level + 0.035;
-  const P = [L.x, y, L.z], E = [0], I = [];
+  const NA = 192, NR = 16, y = 0.035; // (local to the LOD at (L.x, L.level, L.z))
+  const P = [0, y, 0], E = [0], I = [];
   const reach = Math.max(L.a, L.b) * 1.5;
   for (let k = 0; k < NA; k++) {
     const an = (k / NA) * Math.PI * 2, dx = Math.cos(an), dz = Math.sin(an);
@@ -195,7 +204,7 @@ function iceSheet(L, mat) {
     for (let it = 0; it < 28; it++) { const m = (lo + hi) / 2; if (lakeSdf(L, L.x + dx * m, L.z + dz * m) < -ICE_IN) lo = m; else hi = m; }
     for (let r = 1; r <= NR; r++) {
       const t = Math.pow(r / NR, 0.7);
-      P.push(L.x + dx * lo * t, y, L.z + dz * lo * t);
+      P.push(dx * lo * t, y, dz * lo * t);
       E.push(t);
     }
   }
@@ -261,11 +270,13 @@ function iceMaterial() {
         // the wind's frame: drifts streak along it
         vec2 q = vec2(dot(p, vec2(0.83, 0.56)), dot(p, vec2(-0.56, 0.83)));
         float n1 = iN(p * 0.05).r, n2 = iN(p * 0.006 + 3.0).a, n3 = iN(p * 0.3).r;
-        // clear black-blue ice, lighter (thinner, milky) in places
-        vec3 deep = vec3(0.018, 0.05, 0.08), clear = vec3(0.06, 0.16, 0.23), milky = vec3(0.3, 0.44, 0.55), frost = vec3(0.72, 0.82, 0.9);
-        vec3 c = mix(deep, clear, smoothstep(0.3, 0.75, n2));
-        c = mix(c, milky, smoothstep(0.6, 0.85, iN(p * 0.017 - 5.0).r) * 0.55);
-        float frostK = smoothstep(0.58, 0.8, n1 * 0.6 + n2 * 0.45) * 0.6;
+        // blue-white lake ice (milky with trapped air in wide fields), black-blue clear ice in wind-swept patches
+        vec3 deep = vec3(0.025, 0.08, 0.13), blue = vec3(0.17, 0.36, 0.5), milky = vec3(0.52, 0.66, 0.77), frost = vec3(0.74, 0.84, 0.92);
+        vec3 c = mix(blue, milky, smoothstep(0.42, 0.64, n2));
+        c = mix(c, milky * 1.08, smoothstep(0.55, 0.75, iN(p * 0.017 - 5.0).r) * 0.5);
+        float clearK = smoothstep(0.44, 0.33, iN(p * 0.008 + 1.7).r);
+        c = mix(c, deep, clearK * 0.9);
+        float frostK = smoothstep(0.58, 0.8, n1 * 0.6 + n2 * 0.45) * 0.6 * (1.0 - clearK * 0.7);
         // pressure cracks (~35 m cells): white ridges that still read from the viaducts
         float crB = iCracks(p / 34.0 + (iN(p * 0.004).gb - 0.5) * 0.8);
         float wB = fwidth(crB);
@@ -288,15 +299,15 @@ function iceMaterial() {
         c = mix(c, vec3(0.9, 0.95, 1.0), clamp(crack * 0.85 + bub * 0.6 + crackBig * 0.75, 0.0, 1.0));
         // snow: long drifts streaked along the wind, the fields between swept clear; banked up against the shore
         float streak = iN(q * vec2(0.0035, 0.016) + 11.0).a * 0.75 + iN(q * vec2(0.01, 0.05) - 4.0).r * 0.35;
-        float drift = smoothstep(0.62, 0.78, streak + uSnowCover * 0.4);
+        float drift = smoothstep(0.58, 0.72, streak + uSnowCover * 0.4) * (1.0 - clearK * 0.8);
         drift = max(drift, smoothstep(0.8, 0.97, vEdge + (n3 - 0.5) * 0.18 + (iN(p * 0.02 + 7.0).r - 0.5) * 0.25));
         drift = clamp(drift + uSnowCover * 0.35, 0.0, 1.0);
         // thin powder dusting at the drifts' edges (the ice shows through)
-        float dust = smoothstep(0.5, 0.66, streak) * (1.0 - drift) * 0.45;
+        float dust = smoothstep(0.47, 0.6, streak) * (1.0 - drift) * 0.45;
         c = mix(c, vec3(0.8, 0.86, 0.93), dust);
         c = mix(c, vec3(0.93, 0.95, 0.99), drift);
         diffuseColor.rgb = c;
-        iRough = mix(0.035, 0.28, frostK) + crack * 0.2 + crackBig * 0.25 + dust * 0.35;
+        iRough = mix(0.05, 0.02, clearK) + frostK * 0.25 + crack * 0.2 + crackBig * 0.25 + dust * 0.35;
         iRough = mix(iRough, 0.82, drift);
       }`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = iRough;');

@@ -1371,13 +1371,13 @@ export class RaceSession {
       difficulty: race ? DIFFICULTY[this.difficulty].label : null, medals: this.medals,
     };
     if (this.freeRide) {
-      // free ride: the podium earns prize money (paid once per run), then RACE AGAIN or ski on from the finish area
+      // free ride: the podium earns prize money (paid once per run), then RACE AGAIN or BACK TO START (Modes.exitFree)
       try {
         const prize = this.freeRide.result?.({ place: race ? place : 0, time: this.finalTime, dnf: !Number.isFinite(this.finalTime) });
         if (prize > 0) this.resultsArgs.prize = prize;
       } catch (e) { console.warn('Race: free-ride result failed', e); }
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', 'CONTINUE', 'ENTER']];
+      this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', 'BACK TO START', 'ENTER']];
     }
     this.presentResults();
   }

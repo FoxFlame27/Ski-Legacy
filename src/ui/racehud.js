@@ -446,7 +446,7 @@ export class RaceHud {
         }).join('')}
       </div>` : '';
 
-    // (open-world races bring their own: RACE AGAIN / CONTINUE)
+    // (open-world races bring their own: RACE AGAIN / BACK TO START)
     const choices = custom || [['retry', 'RETRY', 'R'], canNext ? ['next', 'NEXT', 'ENTER'] : null, ['menu', 'MENU', 'ESC']].filter(Boolean);
     const actions = choices.map(([id, label, key], i) => `<button class="brush-btn rr-btn" tabindex="-1" data-choice="${id}">${brushSVG(370 + i * 3)}<span>${label}<i class="kc">${key}</i></span></button>`).join('');
 

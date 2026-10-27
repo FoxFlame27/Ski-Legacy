@@ -1292,6 +1292,14 @@ export class Player {
     if (lag.lengthSq() > maxLag * maxLag) S.off.copy(tgt).addScaledVector(lag, maxLag / lag.length());
     const eye = _v.copy(this.pos).add(S.off);
     eye.y += this.camDip * 0.3;
+    // the head goes with the hands: a pole push dips it a little forward and down (Oct 27, the user: "move the camera
+    // too"), so the hands never look like they float on their own
+    if (skiing && this.rig.plant) {
+      let push = 0;
+      for (const pl of this.rig.plant) if (pl.t < 1) push = Math.max(push, smoothstep(0, 0.25, pl.t) * (1 - smoothstep(0.35, 0.85, pl.t)));
+      eye.y -= 0.03 * push;
+      eye.x += Math.sin(this.heading) * 0.04 * push; eye.z += Math.cos(this.heading) * 0.04 * push;
+    }
 
     // ---- where you look: the skis' heading, a little ahead into a turn, plus the mouse
     const yaw0 = this.heading + (skiing ? this.yawFx : 0);

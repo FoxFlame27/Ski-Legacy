@@ -1997,19 +1997,21 @@ export class SkierRig {
     const brake = clamp(st.brake || 0, 0, 1), grab = clamp(st.grab || 0, 0, 1), grabHand = GRAB_POSES[st.grabType]?.hand ?? 1;
     // both poles planted together: a double-pole stroke (skating off, a start gate, pushing on in the tuck)
     const dbl = this.plant[0].t < 1 && Math.abs(this.plant[0].t - this.plant[1].t) < 0.03;
-    // turning the view: the hands trail it (x with the yaw rate, y with the pitch rate)
-    const turnX = clamp(S.w.y * 0.022, -0.05, 0.05), turnY = clamp(-S.w.x * 0.018, -0.04, 0.04);
+    // turning the view: the hands trail it up and down with the pitch rate, never sideways (Oct 27, the user: the hands
+    // "go inside, they should just go backward": every motion of the hands is now along the arms, back and forth,
+    // never in toward the middle of the picture)
+    const turnY = clamp(-S.w.x * 0.018, -0.04, 0.04);
     for (let i = 0; i < 2; i++) {
       const s = i === 0 ? -1 : 1, H = this.fpHands[i], pl = this.plant[i];
       // ---- where the hand wants to be (camera frame: x right, y up, -z ahead; FP_POSE)
       const P = FP_POSE;
       const T = _v3.set(s * (P.x - 0.05 * tk), P.y + 0.012 * tk, P.z - 0.04 * tk);
       const ins = Math.max(0, s * lean), out = Math.max(0, -s * lean); // inside / outside hand of the turn
-      T.x += s * (0.018 * out - 0.012 * ins); T.y += 0.022 * ins - 0.008 * out; T.z += 0.03 * out - 0.055 * ins;
-      T.x += s * (0.065 + 0.045 * spin) * airW; T.y += 0.035 * airW; T.z += 0.02 * airW; // balance in the air
+      T.y += 0.015 * ins - 0.008 * out; T.z += 0.03 * out - 0.02 * ins;
+      T.x += s * (0.03 + 0.03 * spin) * airW; T.y += 0.035 * airW; T.z += 0.02 * airW; // balance in the air (out, never in)
       T.y -= 0.11 * absorb; T.z -= 0.03 * absorb;                                     // landing: down with the legs
       T.y += 0.05 * pop - 0.045 * charge; T.z += 0.07 * charge - 0.07 * pop;          // load a jump: back; pop: up
-      T.x += s * 0.025 * brake; T.z -= 0.04 * brake;                                  // hockey stop: braced
+      T.z -= 0.04 * brake;                                                            // hockey stop: braced
       // ---- the pole (direction of the shaft from the grip): angled back, swept back further in the tuck,
       // out a little in the air
       const D = _v4.set(s * 0.2, -0.95, 0.24).lerp(_s[0].set(s * 0.1, -0.7, 0.7), tk);
@@ -2018,23 +2020,22 @@ export class SkierRig {
       const pt = pl.t;
       if (pt < 1) {
         if (dbl) {
-          // double-pole stroke: reach forward, plant, push down and back past the hips, recover
-          const reach = smoothT(pt, 0, 0.2) * (1 - smoothT(pt, 0.24, 0.5)), push = smoothT(pt, 0.24, 0.52) * (1 - smoothT(pt, 0.58, 1));
-          T.z -= 0.1 * reach - 0.06 * push; T.y += 0.04 * reach - 0.085 * push;
-          D.lerp(_s[0].set(s * 0.16, -0.74, -0.66), reach).lerp(_s[0].set(s * 0.16, -0.5, 0.85), push);
+          // double-pole stroke: both hands push straight back and down past the hips, then come forward again
+          const push = smoothT(pt, 0, 0.35) * (1 - smoothT(pt, 0.45, 1));
+          T.z += 0.09 * push; T.y -= 0.07 * push;
+          D.lerp(_s[0].set(s * 0.16, -0.55, 0.82), push);
         } else {
-          // turn initiation: the inside pole's basket swings forward to the snow beside the ski tip, the body
-          // skis past it, the pole swings back
-          const fwd = smoothT(pt, 0, 0.2) * (1 - smoothT(pt, 0.22, 0.45)), pass = smoothT(pt, 0.2, 0.4) * (1 - smoothT(pt, 0.45, 0.85));
-          T.z -= 0.07 * fwd + 0.02 * pass; T.y -= 0.018 * fwd; T.x -= s * 0.01 * fwd;
-          D.lerp(_s[0].set(s * 0.22, -0.62, -0.75), fwd).lerp(_s[0].set(s * 0.2, -0.97, 0.05), pass);
+          // a pole plant: the hand gives a short push straight back (the basket behind the boot), then returns
+          const push = smoothT(pt, 0, 0.25) * (1 - smoothT(pt, 0.35, 0.85));
+          T.z += 0.06 * push; T.y -= 0.035 * push;
+          D.lerp(_s[0].set(s * 0.18, -0.7, 0.69), push);
         }
       }
       // ---- grabs: the grabbing hand drops to the ski (out of the picture), the other opens out
       if (grab > 0) {
         const mine = grabHand === i;
         if (mine) { T.lerp(_s[0].set(s * 0.16, -0.78, -0.3), grab); D.lerp(_s[0].set(s * 0.1, -0.4, 0.91), grab); }
-        else { T.x += s * 0.1 * grab; T.y += 0.06 * grab; }
+        else { T.y += 0.06 * grab; }
       }
       D.normalize();
       // ---- springs toward the pose (the plant swing is quicker than the hands' drift)
@@ -2047,7 +2048,7 @@ export class SkierRig {
       // through the bottom corner)
       const p = H.root.position.copy(H.p).add(S.lag);
       const sway = 0.5 + smoothT(spd, 3, 15); // (a little livelier at speed)
-      p.x += turnX + Math.sin(S.t * 1.7 + i * 2.3) * 0.0035 * sway; p.y += turnY + Math.sin(S.t * 2.3 + i * 1.1) * 0.003 * sway - 0.32 * rise; p.z += 0.06 * rise;
+      p.x += -S.lag.x * 0.7 + Math.sin(S.t * 1.7 + i * 2.3) * 0.002 * sway; p.y += turnY + Math.sin(S.t * 2.3 + i * 1.1) * 0.003 * sway - 0.32 * rise; p.z += 0.06 * rise;
       const Y = _s[1].copy(H.d).negate();
       // (the Meshy arm: the fist turned about the pole so the forearm runs off toward the elbow, low and outside: the
       // sleeve leaves the picture through the bottom corner)

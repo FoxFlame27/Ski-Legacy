@@ -792,9 +792,13 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .tm-scale { position: absolute; left: calc(var(--u) * 30); bottom: calc(var(--u) * 28); display: flex; align-items: center; gap: calc(var(--u) * 8);
   pointer-events: none; font: italic 700 calc(var(--u) * 17)/1 var(--num); color: var(--blue); text-shadow: 0 0 4px #fff, 0 0 2px #fff; }
 .tm-scale i { display: block; height: calc(var(--u) * 7); border: 2px solid var(--blue); border-top: 0; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
-.tm-legend { flex: none; width: calc(var(--u) * 250); align-self: flex-start; padding-bottom: calc(var(--u) * 16); }
+.tm-legend { flex: none; width: calc(var(--u) * 290); align-self: flex-start; padding-bottom: calc(var(--u) * 16); }
 .tm-legend .mp-head { padding-top: calc(var(--u) * 12); }
 .tm-legend .mp-head:first-child { padding-top: 0; }
+.tm-grid { display: grid; grid-template-columns: auto 1fr; column-gap: calc(var(--u) * 14); }
+.tm-grid .tm-row { gap: calc(var(--u) * 7); min-height: calc(var(--u) * 27); }
+.tm-grid .tm-sym, .tm-grid .tm-sw { width: calc(var(--u) * 22); }
+.tm-grid .tm-row span { white-space: nowrap; }
 .tm-row { display: flex; align-items: center; gap: calc(var(--u) * 12); min-height: calc(var(--u) * 30); font: 600 var(--t-sm)/1.2 var(--ui); color: var(--blue); }
 .tm-sw { flex: none; width: calc(var(--u) * 30); height: calc(var(--u) * 7); border-radius: 99px; background: var(--c); box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(21, 70, 200, 0.12); }
 .tm-sym { position: relative; flex: none; display: block; width: calc(var(--u) * 30); height: calc(var(--u) * 18); }
@@ -806,8 +810,24 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .tm-sym.bus::before { content: 'BUS'; position: absolute; left: 10%; right: 10%; top: 10%; bottom: 10%; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: var(--blue); color: #fff; font: 800 calc(var(--u) * 8)/1 var(--ui); }
 .tm-sym.park::before, .tm-sym.secret::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 10); height: calc(var(--u) * 10); margin: calc(var(--u) * -5); background: #ff7a1a; transform: rotate(45deg); }
 .tm-sym.secret::before { background: #ffcf5a; box-shadow: 0 0 0 1.5px #7a5600; }
-.tm-sym.race::before { content: ''; position: absolute; left: 40%; top: 6%; bottom: 6%; width: 1.5px; background: #15214a; }
-.tm-sym.race::after { content: ''; position: absolute; left: calc(40% + 1.5px); top: 6%; width: calc(var(--u) * 11); height: calc(var(--u) * 8); background: var(--red); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+/* races: a pin in the difficulty colour with a chequered flag; the finish a chequered square; the race line a tape */
+.tm-sym.pin::before { content: ''; position: absolute; left: 50%; top: 0; width: calc(var(--u) * 15); height: calc(var(--u) * 15); margin-left: calc(var(--u) * -7.5);
+  border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--c); box-shadow: 0 0 0 1.5px #fff, 0 1px 3px rgba(8, 20, 60, 0.4); }
+.tm-sym.pin::after { content: ''; position: absolute; left: calc(50% - var(--u) * 3.5); top: calc(var(--u) * 4); width: calc(var(--u) * 8); height: calc(var(--u) * 5.5);
+  background: conic-gradient(#fff 25%, transparent 0 50%, #fff 0 75%, transparent 0) 0 0 / calc(var(--u) * 5.4) calc(var(--u) * 5.5); }
+.tm-sym.finish::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 12); height: calc(var(--u) * 12); margin: calc(var(--u) * -6);
+  background: conic-gradient(#161616 25%, #fff 0 50%, #161616 0 75%, #fff 0) 0 0 / calc(var(--u) * 8) calc(var(--u) * 8); box-shadow: 0 0 0 2px #fff, 0 0 0 3px #15214a; }
+.tm-sym.tape::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: calc(var(--u) * 6); margin-top: calc(var(--u) * -3); border-radius: 99px;
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.92) 0 calc(var(--u) * 3), transparent 0 calc(var(--u) * 8)) center / 100% 2px no-repeat, var(--c);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 calc(var(--u) * 6) color-mix(in srgb, var(--c) 18%, transparent); }
+/* the Legacy Express: a violet line with a white hairline (dashed and faint in tunnels); stations white discs in violet rings */
+.tm-sym.express::before, .tm-sym.xtunnel::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: calc(var(--u) * 6); margin-top: calc(var(--u) * -3);
+  background: linear-gradient(#fff, #fff) center / 100% 1.5px no-repeat, #6a22c9; box-shadow: 0 0 0 2px #fff; }
+.tm-sym.xtunnel::before { height: calc(var(--u) * 4); margin-top: calc(var(--u) * -2); box-shadow: none;
+  background: repeating-linear-gradient(90deg, rgba(106, 34, 201, 0.6) 0 calc(var(--u) * 6), transparent 0 calc(var(--u) * 10)); }
+.tm-sym.xstop::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: calc(var(--u) * 6); margin-top: calc(var(--u) * -3); background: #6a22c9; box-shadow: 0 0 0 2px #fff; }
+.tm-sym.xstop::after { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 14); height: calc(var(--u) * 14); margin: calc(var(--u) * -7); box-sizing: border-box;
+  border-radius: 50%; background: #fff; border: calc(var(--u) * 3) solid #6a22c9; box-shadow: 0 0 0 2px #fff; }
 .tm-sym.heli::before { content: 'H'; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 16); height: calc(var(--u) * 16); margin: calc(var(--u) * -8); display: flex; align-items: center; justify-content: center;
   border: 2px solid var(--ko); border-radius: 50%; box-sizing: border-box; color: var(--ko); font: italic 700 calc(var(--u) * 12)/1 var(--num); }
 .tm-sym.jobs::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 9); height: calc(var(--u) * 9); margin: calc(var(--u) * -4.5); background: #7a4a22; }

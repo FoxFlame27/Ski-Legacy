@@ -296,6 +296,10 @@ export class CourseRegion {
     const dB = Math.min(x - b.minx, b.maxx - x, z - b.minz, b.maxz - z);
     if (dB <= 0) return world.baseHeight(x, z, spacing);
     let h = this.scenery(x, z, spacing);
+    // the scenery eases into the world toward the region's edge; the course itself (its near field, its features)
+    // never does (Oct 27: Legacy World Downhill's start lies 563 m inside its region's edge, inside the band: the
+    // blend pulled its start 12.8 m under the start line and a race there respawned you for ever, 'fell')
+    if (dB < this.band) h = lerp(world.baseHeight(x, z, spacing), h, smoothstep(0, this.band, dB));
     const T = this.track;
     const p = T.locate(x, z);
     const nr = this._near;
@@ -306,7 +310,6 @@ export class CourseRegion {
       h = this.nearField(p, h, x, z, spacing);
     }
     h = this.applyFeatures(x, z, h, s, v, p.far, spacing);
-    if (dB < this.band) h = lerp(world.baseHeight(x, z, spacing), h, smoothstep(0, this.band, dB));
     return h;
   }
 

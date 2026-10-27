@@ -440,13 +440,18 @@ class World {
   // Forest density 0..1 (used by vegetation and distant terrain tint)
   forest(x, z, h, slope) {
     const region = this.regions.length ? this.regionAt(x, z) : null;
-    if (region?.forest) return region.forest(x, z, h, slope);
-    const n = N2.fbm(x * 0.0022 + 40, z * 0.0022 - 17, 3) * 0.5 + 0.5;
-    const tl = 520 + N.noise(x * 0.001, z * 0.001) * 90; // treeline (relative altitude)
-    const alt = 1 - smoothstep(tl - 120, tl, h);
-    const steep = 1 - smoothstep(0.7, 1.1, slope);
-    const nearVillage = smoothstep(VILLAGE_R * 0.9, VILLAGE_R * 1.6, Math.hypot(x, z));
-    let f = clamp((n - 0.38) * 2.6, 0, 1) * alt * steep * nearVillage;
+    let f;
+    if (region?.forest) f = region.forest(x, z, h, slope);
+    else {
+      const n = N2.fbm(x * 0.0022 + 40, z * 0.0022 - 17, 3) * 0.5 + 0.5;
+      const tl = 520 + N.noise(x * 0.001, z * 0.001) * 90; // treeline (relative altitude)
+      const alt = 1 - smoothstep(tl - 120, tl, h);
+      const steep = 1 - smoothstep(0.7, 1.1, slope);
+      const nearVillage = smoothstep(VILLAGE_R * 0.9, VILLAGE_R * 1.6, Math.hypot(x, z));
+      f = clamp((n - 0.38) * 2.6, 0, 1) * alt * steep * nearVillage;
+    }
+    // the cuts thin the forest inside a course's region too (the railways' formations run through the regions round
+    // the courses: before, trees stood on the Legacy Express's tracks there)
     if (this.cuts.length && x >= this.cutBox.minx && x <= this.cutBox.maxx && z >= this.cutBox.minz && z <= this.cutBox.maxz) {
       for (const c of this.cuts) { const b = c.bounds; if (c.forest && x >= b.minx && x <= b.maxx && z >= b.minz && z <= b.maxz) f = c.forest(x, z, f); }
     }

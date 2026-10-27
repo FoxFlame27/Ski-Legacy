@@ -70,7 +70,8 @@ export function buildExpressGround(courses = []) {
       const n = expressNearest(x, z, _n);
       if (!n) return f;
       if (inExpressTunnel(n.s, 20)) return f;
-      return f * smoothstep(TRACK_OFF + 8, TRACK_OFF + 16, n.d);
+      // (under the viaducts too: no crown pokes up through a deck)
+      return f * smoothstep(TRACK_OFF + 10, TRACK_OFF + 20, n.d);
     },
   });
   // the line for the trail map: centre line every 20 m with a tunnel flag, the ring closed

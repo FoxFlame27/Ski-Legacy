@@ -1,5 +1,5 @@
-// The Legacy Express: the high-speed line to every race. A double-track ring from the village's underground hall
-// (under the ski shop's quarter) out through the valleys to a stop beside each World Racing course's finish and
+// The Legacy Express: the high-speed line to every race. A double-track ring from the village's station (above
+// ground, north-west of the ski shop) out through the valleys to a stop beside each World Racing course's start and
 // back. Pure data + math (no THREE, runs in Node), like railroute.js for the Wolkenspitzbahn:
 //   - the plan: the control polygon (expressdata.js, planned by tools/express-route.mjs) smoothed into the centre
 //     line, sampled every STEP m; the platforms are straight
@@ -18,11 +18,12 @@ export const STEP = 2;            // m between centre-line samples
 export const TRACK_OFF = 2.3;     // m from the centre line to each track's centre (double track)
 export const MAX_GRADE = 0.25;    // (steep: a rack line like the Wolkenspitzbahn, whose spiral climbs at 24 %)
 export const PLATFORM = 240;      // m of straight, level platform at every stop
-// the village's underground station: its hall runs east-west under the ski shop's quarter, rail level HALL_DEPTH m
-// under the village floor; the entrance building stands beside the ski shop (expressground.js / main.js)
-export const VILLAGE_HALL = { x: -80, z: -40, len: PLATFORM };
-export const HALL_DEPTH = 28;
-export const VILLAGE_ENTRANCE = { x: -66, z: -46, heading: Math.PI / 2 }; // (heading: the way you face coming out)
+// the village's station: above ground (Oct 27, the user: "not underground, put it above ground, no tunnel there"),
+// its platforms east-west on the open ground north-west of the ski shop, between the village and the Panorama piste
+// (the line runs west into the mountain; east it crosses the pistes' run-out at grade and dives under the village)
+export const VILLAGE_STATION = { x: -190, z: -160, len: PLATFORM };
+/** @deprecated (the underground village hall's entrance; kept until every user is gone) */
+export const VILLAGE_ENTRANCE = { x: -190, z: -140, heading: Math.PI };
 
 // ------------------------------------------------------------------ the plan
 const SMOOTH_D = 20, SMOOTH_IT = 3000;
@@ -44,7 +45,7 @@ function buildPlan() {
   const pin = new Uint8Array(n);
   for (const [id, s] of Object.entries(at)) {
     let dx, dz;
-    if (id === 'village') { dx = 1; dz = 0; X[s] = VILLAGE_HALL.x; Z[s] = VILLAGE_HALL.z; }
+    if (id === 'village') { dx = 1; dz = 0; X[s] = VILLAGE_STATION.x; Z[s] = VILLAGE_STATION.z; }
     else { const a = (s - half - 6 + n) % n, b = (s + half + 6) % n; dx = X[b] - X[a]; dz = Z[b] - Z[a]; }
     const l = Math.hypot(dx, dz) || 1;
     for (let k = -half; k <= half; k++) {
@@ -97,7 +98,7 @@ function buildPlan() {
     const c = courseStop[id];
     L.stations.push({
       id, name: id === 'village' ? 'Legacy Village' : c.name, course: id === 'village' ? null : id,
-      s, s0: s - PLATFORM / 2, s1: s + PLATFORM / 2, underground: id === 'village',
+      s, s0: s - PLATFORM / 2, s1: s + PLATFORM / 2, underground: false,
     });
   }
   return L;
@@ -201,7 +202,8 @@ export function expressNearest(x, z, out = _n) {
 // Fitted on the final natural ground (the courses' regions shape it: call after registerFreeWorldCourses, before the
 // shaper is registered). Tunnels where the ground stands more than TUNNEL_COVER m over the rail, viaducts where it
 // falls more than BRIDGE_OVER m below; in between the roadbed's cuttings and embankments.
-const TUNNEL_COVER = 15, BRIDGE_OVER = 12, SMOOTH_W = 150, UNDER_R = 620;
+const TUNNEL_COVER = 15, BRIDGE_OVER = 12, SMOOTH_W = 150, UNDER_R = 620, STATION_FREE = 250;
+const VILLAGE_C = { x: 30, z: 40 }; // (the village's middle: round it the line runs deep underground)
 // `under(x, z)`: true where the line must pass deep underground (the race courses' lines, the lift lines: a tunnel
 // under them, never a cutting through a race track)
 export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
@@ -217,13 +219,13 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
   let acc = 0;
   for (let k = -w; k <= w; k++) acc += g[(k + m) % m];
   for (let i = 0; i < m; i++) { Y[i] = acc / (2 * w + 1); acc += g[(i + w + 1) % m] - g[(i - w + m) % m]; }
-  // the stations: level platforms (the village hall deep under the village floor, the others on their ground)
+  // the stations: level platforms on their ground
   const pin = new Uint8Array(m);
   for (const st of L.stations) {
     const a = Math.round(st.s0 / (STEP * k4)), b = Math.round(st.s1 / (STEP * k4));
-    let y;
-    if (st.underground) y = groundAt(VILLAGE_HALL.x, VILLAGE_HALL.z) - HALL_DEPTH;
-    else { let sum = 0, c = 0; for (let i = a; i <= b; i++) { sum += g[(i + m) % m]; c++; } y = sum / c; }
+    let sum = 0, c = 0;
+    for (let i = a; i <= b; i++) { sum += g[(i + m) % m]; c++; }
+    const y = sum / c;
     st.y = y;
     for (let i = a - 6; i <= b + 6; i++) { const j = (i + m) % m; Y[j] = y; pin[j] = 1; }
   }
@@ -232,17 +234,30 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null } = {}) {
   const cap = new Float64Array(m).fill(Infinity), under = new Uint8Array(m);
   for (let i = 0; i < m; i++) {
     const x = L.X[i * k4], z = L.Z[i * k4];
-    if (Math.hypot(x - VILLAGE_HALL.x, z - VILLAGE_HALL.z) > UNDER_R && !keepUnder?.(x, z)) continue;
+    // (the village's own station and its approaches stay above ground: STATION_FREE m round it)
+    if (Math.hypot(x - VILLAGE_STATION.x, z - VILLAGE_STATION.z) < STATION_FREE) continue;
+    if (Math.hypot(x - VILLAGE_C.x, z - VILLAGE_C.z) > UNDER_R && !keepUnder?.(x, z)) continue;
     cap[i] = g[i] - TUNNEL_COVER - 9; under[i] = 1;
   }
-  // grade limit (both ways round the ring, a few sweeps); the pins stay
-  const d = STEP * k4 * MAX_GRADE;
-  for (let it = 0; it < 8; it++) {
-    for (let i = 1; i <= m; i++) { const j = i % m, p = (i - 1) % m; if (!pin[j]) Y[j] = Math.min(clamp(Y[j], Y[p] - d, Y[p] + d), cap[j]); }
-    for (let i = m - 1; i >= 0; i--) { const j = i, q = (i + 1) % m; if (!pin[j]) Y[j] = Math.min(clamp(Y[j], Y[q] - d, Y[q] + d), cap[j]); }
+  // grade limit per sample: MAX_GRADE, or steeper where the climb between two stations needs it (the stops beside
+  // the starts sit high on the mountains: a leg may have to gain more than MAX_GRADE allows over its length)
+  const dl = new Float64Array(m).fill(STEP * k4 * MAX_GRADE);
+  const S4 = L.stations.map((st) => ({ i0: Math.round(st.s1 / (STEP * k4)) + 6, i1: Math.round(st.s0 / (STEP * k4)) - 6, y: st.y }));
+  for (let k = 0; k < S4.length; k++) {
+    const a = S4[k], b = S4[(k + 1) % S4.length];
+    const i0 = a.i0, i1 = b.i1 + (b.i1 <= a.i0 ? m : 0), need = Math.abs(b.y - a.y) / Math.max(1, (i1 - i0) * STEP * k4);
+    const g = Math.max(MAX_GRADE, need * 1.12);
+    for (let i = i0; i <= i1; i++) dl[(i + m) % m] = STEP * k4 * g;
+  }
+  // (each round: the cap, then the grade both ways round; the grade has the last word, so right beside a station the
+  // line may not get as deep as the cap wants in time, but it never steps)
+  for (let it = 0; it < 12; it++) {
+    for (let i = 0; i < m; i++) if (!pin[i]) Y[i] = Math.min(Y[i], cap[i]);
+    for (let i = 1; i <= m; i++) { const j = i % m, p = (i - 1) % m, d = dl[j]; if (!pin[j]) Y[j] = clamp(Y[j], Y[p] - d, Y[p] + d); }
+    for (let i = m - 1; i >= 0; i--) { const j = i, q = (i + 1) % m, d = dl[j]; if (!pin[j]) Y[j] = clamp(Y[j], Y[q] - d, Y[q] + d); }
   }
   // vertical curves
-  for (let it = 0; it < 40; it++) for (let i = 0; i < m; i++) if (!pin[i]) Y[i] = Math.min((Y[(i - 1 + m) % m] + Y[i] * 2 + Y[(i + 1) % m]) / 4, cap[i] + 6);
+  for (let it = 0; it < 40; it++) for (let i = 0; i < m; i++) if (!pin[i]) Y[i] = (Y[(i - 1 + m) % m] + Y[i] * 2 + Y[(i + 1) % m]) / 4;
   for (let i = 0; i < n; i++) {
     const f = i / k4, a = Math.floor(f) % m, b = (a + 1) % m, t = f - Math.floor(f);
     L.Y[i] = Y[a] + (Y[b] - Y[a]) * t;

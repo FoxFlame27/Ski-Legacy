@@ -18,8 +18,9 @@
 import * as THREE from 'three';
 import {
   EXPRESS, EXPRESS_NAME, EXPRESS_PROFILE, LENGTH, STEP, DWELL, PLATFORM, expressAt, trackAt, expressNearest, inExpressTunnel,
-  onExpressBridge, inSpanOf, wrapS,
+  onExpressBridge, inSpanOf, wrapS, ringDelta, TRACK_OFF,
 } from './expressroute.js';
+import { brakeFor, release, latOf, CarColliders } from './trainstop.js';
 import { buildCar, CAR, trainUniforms } from './train.js';
 import { world } from './world.js';
 import { layout } from './layout.js';
@@ -176,6 +177,8 @@ export class Express {
     for (const dir of [1, -1]) for (let k = 0; k < PER_DIR; k++) this.trains.push(new TrainSet(this, dir, k / PER_DIR + (dir > 0 ? 0 : 0.5 / PER_DIR), k));
     // traffic stops for (and is shoved off the line by) the near trains (game/traffic.js)
     addTrainBlocker(() => this.trains.flatMap((tr) => tr.lod === 2 ? [] : tr.cars.map((c, k) => (k === 0 && this.ride?.train === tr ? this.cabin : c).group)), { hw: CAR.hw, hd: CAR.half });
+    this.solid = new CarColliders(colliders, 8, PITCH / 2); // the cars near you are solid (trainstop.js; PITCH: no gaps)
+    this.rate = { 1: 1, '-1': 1 }; this.blocked = { 1: false, '-1': false }; // (you on a track: that direction's clock)
     this.passengers = null; // (copied from the Wolkenspitzbahn's once it has seated its own: copyPassengers)
     this.track = null;
     this.ready = this.loadTrack({ models, colliders, cameraBlockers });
@@ -215,17 +218,22 @@ export class Express {
   }
 
   // ------------------------------------------------------------------ timetable + trains
-  update(dt, { viewer = null, fast = false, walker = null } = {}) {
+  update(dt, { viewer = null, fast = false, walker = null, player = null, audio = null } = {}) {
     if (!this.ok) return;
     // Space while riding: the timetable runs FAST times quicker (the streaming keeps up: main.js streams ahead)
     this.timeScale = this.ride && fast ? FAST : 1;
     this.t = (this.t + dt * this.timeScale) % (this.tt.up.loop * 1000);
+    // you on a track (player: main.js, null while riding): a train coming brakes and waits short of you; that
+    // direction's clock runs at its rate (its other trains keep their spacing)
+    this.stopFor(this.ride ? null : player, dt, audio);
+    for (const dir of [1, -1]) if (this.rate[dir] < 1) this.off[dir] -= dt * this.timeScale * (1 - this.rate[dir]);
     if (walker && !this.ride) this.serve(walker, dt);
     const cam = viewer || (this.ride ? this.seatWorld() : null);
     for (const tr of this.trains) {
       trainState(this.tt, this.way(tr.dir), this.u(tr), tr.state);
       this.place(tr, cam);
     }
+    this.solidCars(this.ride ? null : player);
     // the car you sit in shows its cabin; seen from outside the Meshy body (like every other car)
     const inside = !!this.ride && this.view === 'seat';
     if (this.cabin.inside !== inside) { this.cabin.inside = inside; this.cabin.setInside?.(inside); }
@@ -243,6 +251,47 @@ export class Express {
       trackAt(st.s + this.ride.dir * Math.min(900, st.speed * this.timeScale * 2.5), this.ride.dir, _p);
       this.streamPos.set(_p.x, _p.y, _p.z);
     }
+  }
+
+  // each direction's clock rate this frame (this.rate, 0..1) from its trains' brakes (trainstop.js), off the states
+  // of the last frame; this.blocked[dir]: you are on that direction's track (serve brings no train in past you)
+  stopFor(p, dt, audio) {
+    let lat = null, sp = 0, LAT = 2.3;
+    const n = p && expressNearest(p.x, p.z);
+    if (n) {
+      sp = n.s; lat = latOf(p, expressAt(sp, _q));
+      // on a platform's length only between the rails (its edge is 1.6 m from the track's middle)
+      if (this.stations.some((st) => Math.abs(ringDelta(st.s, sp)) < PLATFORM / 2 + 15)) LAT = 1.4;
+    }
+    const LEN = 3 * PITCH + CAR.len; // (nose to tail)
+    for (const dir of [1, -1]) {
+      const on = lat !== null && Math.abs(lat - TRACK_OFF * dir) < LAT && dt > 0;
+      this.blocked[dir] = on;
+      let rate = 1;
+      for (const tr of this.trains) {
+        if (tr.dir !== dir) continue;
+        const st = tr.state, b = tr.stop || (tr.stop = {}), v = st.speed || 0;
+        if (!on) { if (!p || !(dt > 0)) release(b, v); else rate = Math.min(rate, brakeFor(b, v, null, dt)); continue; } // (pulling away again)
+        const D = ringDelta(st.s + dir * (1.5 * PITCH + CAR.half), sp) * dir; // (m from its nose to you, ahead)
+        rate = Math.min(rate, brakeFor(b, v, D > -(LEN + 2) ? D : null, dt, audio));
+      }
+      for (const tr of this.trains) if (tr.dir === dir && tr.stop) tr.stop.ve = rate * (tr.state.speed || 0);
+      this.rate[dir] = rate;
+    }
+  }
+  // the cars within reach of you as box colliders (null: all parked)
+  solidCars(p) {
+    this.solid.begin();
+    if (p) for (const tr of this.trains) {
+      const st = tr.state, d = tr.dir;
+      trackAt(st.s, d, _p);
+      if (Math.abs(_p.x - p.x) > 110 || Math.abs(_p.z - p.z) > 110) continue;
+      for (let k = 0; k < CARS; k++) {
+        trackAt(st.s + d * (1.5 - k) * PITCH, d, _p);
+        this.solid.add(_p.x, _p.y, _p.z, _p.dx, _p.dz, p);
+      }
+    }
+    this.solid.end();
   }
 
   // place a train's cars on its track (each body between its bogies, leaning a little into the curves: a tilting
@@ -347,8 +396,8 @@ export class Express {
     for (const dir of [1, -1]) {
       const n = this.nextAt(a, dir);
       if (!n) continue;
-      if (n.wait > NUDGE_WAIT) this.off[dir] += n.wait - WANT;
-      else if (n.wait === 0 && n.left < 4) this.off[dir] -= dt * this.timeScale;
+      if (n.wait > NUDGE_WAIT) { if (!this.blocked[dir]) this.off[dir] += n.wait - WANT; } // (never jumped past you on its track)
+      else if (n.wait === 0 && n.left < 4) this.off[dir] -= dt * this.timeScale * this.rate[dir]; // (what stopFor has not held already)
     }
   }
   /** The prompt on a station's platform: { label, from } (or, waiting for your train, { label, from, cancel }). */

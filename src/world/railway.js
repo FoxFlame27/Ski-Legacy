@@ -10,7 +10,7 @@
 //   loop, after player.update:   railway.applyCamera(camera, input, dt)   (seat / outside camera while riding)
 //   loop, before post.render:    railway.lateUpdate(camera, env, atmosphere)  (tunnel light, snowfall indoors)
 import * as THREE from 'three';
-import { RAIL, RAIL_NAME, railAt, inTunnel, CYCLE, PROFILE, trainState, boardingU, TRIP_S0, TRIP_S1, DWELL_END, STEP } from './railroute.js';
+import { RAIL, RAIL_NAME, railAt, inTunnel, CYCLE, PROFILE, trainState, boardingU, TRIP_S0, TRIP_S1, DWELL_END, STEP, railNearest } from './railroute.js';
 import { buildRailway, loopOffset, LOOP, railUniforms, setTunnelLampModel, portalClips } from './railtrack.js';
 import { setTerrainClips } from './terrain.js';
 import { meshyHead, HEADS } from './pistelights.js';
@@ -20,6 +20,7 @@ import { poseSeated } from './seatpose.js';
 import { buildStations } from './railstations.js';
 import { RailPeople } from './railpeople.js';
 import { addTrainBlocker } from '../game/traffic.js';
+import { brakeFor, release, latOf, CarColliders } from './trainstop.js';
 
 // people waiting at the stations (fans.js crowd people); the Meshy railcar body for outside views
 export const RAIL_PEOPLE = true;
@@ -170,6 +171,7 @@ export class Railway {
     // no car drives through a train, the train shoves any car on the line aside (traffic.js)
     const bodies = this.trains.flatMap((tr) => tr.cars.map((c) => c.group));
     addTrainBlocker(() => bodies, { hw: CAR.hw, hd: CAR.half });
+    this.solid = new CarColliders(colliders, 4, SET_HALF); // the cars near you are solid (trainstop.js)
     this.passengerMats = [];
     MeshoptSimplifier.ready.then(() => this.seatPassengers(this.trains[0])).catch((e) => console.warn('rail passengers', e));
     this.t = CYCLE * 0.62; // timetable time (s)
@@ -290,15 +292,19 @@ export class Railway {
   }
 
   // ------------------------------------------------------------------ timetable + trains
-  update(dt, { viewer = null, fast = false } = {}) {
+  // player: your position on foot / skis (main.js; null while you ride a train): the trains stop for you on the
+  // track (the whole line's clock slows with the held train: one track with a passing loop, the crossing holds)
+  update(dt, { viewer = null, fast = false, player = null, audio = null } = {}) {
     this.timeScale = this.ride && fast ? 6 : 1;
-    this.t = (this.t + dt * this.timeScale) % (CYCLE * 1000);
+    const rate = this.stopFor(this.ride ? null : player, dt, audio);
+    this.t = (this.t + dt * this.timeScale * rate) % (CYCLE * 1000);
     const cam = viewer || (this.ride ? this.seatWorld() : null);
     for (const tr of this.trains) {
       trainState(this.t, tr.phase, tr.state);
       const onLoop = tr.state.dir < 0 && tr.state.s > LOOP.s0 && tr.state.s < LOOP.s1;
       tr.place(tr.state.s, onLoop, cam);
     }
+    this.solidCars(this.ride ? null : player);
     // the car you sit in shows its cabin (our shell, glass, seats, passengers); every other car the Meshy body
     for (const tr of this.trains) tr.cars.forEach((c, k) => {
       const inside = !!this.ride && this.ride.train === tr && this.ride.car === k && this.view === 'seat';
@@ -307,6 +313,46 @@ export class Railway {
     if (viewer) this.track.update(viewer, { inTunnel: !!this.ride && inTunnel(this.camS ?? this.ride.train.s, -80) });
     this.showPassengers(cam);
     this.stations.update?.(viewer, this.t);
+  }
+
+  // the line's clock rate this frame (0..1): each train brakes for you if you are on its track ahead (trainstop.js)
+  stopFor(p, dt, audio) {
+    let lat = null, sp = 0, LAT = 2.3;
+    const n = p && railNearest(p.x, p.z);
+    if (n) {
+      sp = n.s; lat = latOf(p, railAt(sp, _f));
+      // at a platform only between the rails (its edge is 1.75 m from the track's middle)
+      if (RAIL.stations.some((st) => sp > st.s0 - 15 && sp < st.s1 + 15)) LAT = 1.45;
+    }
+    let rate = 1;
+    for (const tr of this.trains) {
+      const st = tr.state, b = tr.stop || (tr.stop = {});
+      if (st.s === undefined) continue;
+      const v = st.speed || 0;
+      if (!p || !(dt > 0)) { release(b, v); continue; }
+      const dir = st.dir || (st.leg === 'bottom' ? 1 : -1); // (standing at a terminus: the way it leaves)
+      const trackLat = dir < 0 ? loopOffset(sp) : 0;    // (going down it takes the passing loop's other track)
+      const nose = st.s + dir * (SET_HALF + CAR.half);
+      const D = (sp - nose) * dir;
+      const on = lat !== null && Math.abs(lat - trackLat) < LAT && D > -(2 * SET_HALF + 2 * CAR.half + 2);
+      rate = Math.min(rate, brakeFor(b, v, on ? D : null, dt, audio));
+    }
+    for (const tr of this.trains) if (tr.stop && tr.state.s !== undefined) tr.stop.ve = rate * (tr.state.speed || 0); // (all on the one clock)
+    return rate;
+  }
+  // the cars within reach of you as box colliders (null: all parked)
+  solidCars(p) {
+    this.solid.begin();
+    if (p) for (const tr of this.trains) {
+      const onLoop = tr.state.dir < 0 && tr.state.s > LOOP.s0 && tr.state.s < LOOP.s1;
+      if (Math.abs(trackPoint(tr.state.s, onLoop, _c).x - p.x) > 60 || Math.abs(_c.z - p.z) > 60) continue;
+      for (const k of [-1, 1]) {
+        const sc = tr.state.s + k * SET_HALF;
+        trackPoint(sc, onLoop, _c); railAt(sc, _f);
+        this.solid.add(_c.x, _c.y, _c.z, _f.dx, _f.dz, p);
+      }
+    }
+    this.solid.end();
   }
 
   // ------------------------------------------------------------------ stations + boarding

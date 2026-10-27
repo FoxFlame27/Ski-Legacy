@@ -1252,9 +1252,9 @@ function loop() {
   lifts.update(dt, player.pos);
   mark('lifts');
   let rideLine = null, ridePrompt = null; // riding: the line for the top-left card, the stop to get off at (E)
-  railway.update(dt, { viewer: camera.position, fast: railway.riding && !menu && input.down('Space') });
+  railway.update(dt, { viewer: camera.position, fast: railway.riding && !menu && input.down('Space'), player: railway.riding || express?.riding ? null : player.pos, audio }); // (player: the trains stop for you on the track)
   mark('railway');
-  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space'), walker: player.mode !== 'sit' && !heli.active && !drive?.active && !sleds.active ? player.pos : null });
+  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space'), walker: player.mode !== 'sit' && !heli.active && !drive?.active && !sleds.active ? player.pos : null, player: railway.riding || express.riding ? null : player.pos, audio });
   if (express && !express.riding && express.wait && !transition.active) { // waiting on a platform for your train
     const w = express.wait, ws = express.waiting(player.pos);
     if (ws === 'ready') boardExpress(express.stations[w.from], express.stations[w.dest]);

@@ -1,0 +1,282 @@
+// The Panoramastrasse: a narrow scenic mountain road "the other way" from the bus roads (they run south down the
+// valley; this one goes east, over the Legacy Express's tunnel under the village's edge, to the free mountain east of
+// the resort) and up it in switchbacks to a summit viewpoint with a car park. Planned by roads.js planBusRoads (last,
+// after the car parks / hospital / rental) and carved by its own world cut (shapeScenic). Pure layout (no THREE).
+//   - the approach: A* (roads.js route) from a T junction on the village -> Sonnenkopf road east to a ROUNDABOUT at
+//     the mountain's foot (three arms: the approach, the climb, a short spur to the Talblick car park)
+//   - the climb: a contour walker (each 4 m step picks the heading whose ground climbs ~8.5 %, never closer than ~36 m
+//     to the road below except at its own hairpin), hairpins as 180° arcs of radius 14 m into the slope; the profile
+//     is the ground smoothed and capped at 11.5 % (cuttings and fills at the hairpins: a sketchy road)
+//   - pull-outs (lay-bys) on straight stretches with a drop on the valley side (a bench and a view board stand there,
+//     bus.js), the Gipfelblick car park at the top
+// Every scenic road is an access road (s = 0 at its car park / the ring, its end at the junction / the ring): the
+// traffic drives them like the car parks' access roads (traffic.js), with the ring between them.
+import { world } from '../../world/world.js';
+import { expressNearest } from '../../world/expressroute.js';
+import {
+  busRoads, route, smoothPath, makeRoad, roadAt, laneDistance, berm, ROAD_HALF, BENCH, BERM_IN, CLEAR,
+} from './roads.js';
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const SC_GRADE = 0.115;             // the scenic road's steepest grade (alpine pass road)
+const LEG_G = 0.065;                // the grade the walker looks for along a leg (the hairpins make up the rest)
+const HAIRPIN_R = 14;               // m (centre line): tight but a car (and a bus) gets round
+export const RING_R = 15;           // the roundabout's centre line radius (single lane ring, the island inside)
+export const ISLAND_R = RING_R - 3.4 - 0.7; // (ROAD_HALF 3.4: roads.js imports this module, so its constants are not ready here yet)
+// where it goes (checked in Node: no pistes, lifts, races or course regions out there; the Express only in its tunnel)
+const JUNCTION_NEAR = { x: 205, z: 330 };  // the T junction on the village -> Sonnenkopf road (over the Express tunnel)
+const CLIMB_AT = { x: 2700, z: 330 };      // where the switchbacks start (the mountain's east flank)
+const TOP_H = 715;                         // the summit plateau (the walker stops there)
+const TERRACE_H = 230;                     // the terrace east of the village (the first switchbacks climb onto it)
+const BOX = { minx: 250, maxx: 3900, minz: -350, maxz: 1250 };
+const EXPRESS_OK = [420, 820];             // arc length span of the Express tunnel under the village's edge we cross
+
+// ground the scenic road keeps off: ski areas, stations, the railway, lifts, the Express (except over its tunnel),
+// the other roads (except at its own junction), outside the planned box
+function badGround(O, allowNear = null) {
+  const q = {};
+  return (x, z) => {
+    if (x < BOX.minx - 200 || x > BOX.maxx || z < BOX.minz || z > BOX.maxz) return true;
+    O.query(x, z, q);
+    if (q.ski < CLEAR.ski + 12 || q.net < 12 || q.block < CLEAR.block + 4 || q.rail < 20 || q.lift < 10) return true;
+    const c = world.corridorAt(x, z);
+    if ((c.kind === 'piste' || c.kind === 'race') && c.d < 25) return true;
+    const e = expressNearest(x, z);
+    if (e && e.d < 40 && !(e.s > EXPRESS_OK[0] && e.s < EXPRESS_OK[1])) return true;
+    if (allowNear && Math.hypot(x - allowNear.x, z - allowNear.z) < 70) return false;
+    return laneDistance(x, z) < 30;
+  };
+}
+
+// the climb: contour walker with hairpins -> [[x, z]...] every ~4 m, or null
+function serpentine(x, z, hd, O, TOP_H, { leg0 = 380, legs = [300, 180], maxPins = 12, allowNear = null } = {}) {
+  const bad = badGround(O, allowNear), H = (a, b) => world.height(a, b, 8), ds = 4, pts = [[x, z]];
+  let leg = 0, legLen = leg0, hairpins = 0;
+  const nearOwn = (px, pz, skip) => { // distance to the road so far, leaving out its last `skip` points
+    let d = Infinity;
+    for (let i = 0; i < pts.length - skip; i += 2) d = Math.min(d, Math.hypot(pts[i][0] - px, pts[i][1] - pz));
+    return d;
+  };
+  for (let step = 0; step < 3000; step++) {
+    if (H(x, z) >= TOP_H || (hairpins >= maxPins && leg > 200 && H(x, z) > TOP_H - 90)) break;
+    const h0 = H(x, z);
+    let best = null;
+    for (let k = -6; k <= 6; k++) {
+      const a = hd + (k / 6) * (ds / 40), nx = x + Math.sin(a) * ds, nz = z + Math.cos(a) * ds;
+      let cost = Math.abs((H(nx, nz) - h0) / ds - LEG_G) + Math.abs(k) * 0.002;
+      if (bad(nx, nz)) cost += 10;
+      const own = nearOwn(nx, nz, 30);
+      if (own < 48) cost += (48 - own) * 0.08;
+      if (!best || cost < best.cost) best = { a, nx, nz, cost };
+    }
+    // a hairpin: the leg is long enough, or ahead is no-go / the road below / a cliff
+    const ax = x + Math.sin(hd) * 40, az = z + Math.cos(hd) * 40;
+    const blocked = bad(ax, az) || best.cost > 0.3;
+    if ((leg >= legLen || (blocked && leg > 80)) && hairpins < maxPins) {
+      const e = 6, gx = H(x + e, z) - H(x - e, z), gz = H(x, z + e) - H(x, z - e);
+      const lx = Math.cos(hd), lz = -Math.sin(hd); // (the heading's left)
+      const turn = gx * lx + gz * lz > 0 ? 1 : -1; // (into the slope)
+      const cx = x + lx * turn * HAIRPIN_R, cz = z + lz * turn * HAIRPIN_R;
+      const a0 = Math.atan2(x - cx, z - cz), n = Math.ceil((Math.PI * HAIRPIN_R) / ds);
+      let ok = true;
+      const arc = [];
+      for (let i = 1; i <= n; i++) {
+        const a = a0 + turn * -(i / n) * Math.PI; // (sin/cos frame: + turns the radius vector right; left = -)
+        const px = cx + Math.sin(a) * HAIRPIN_R, pz = cz + Math.cos(a) * HAIRPIN_R;
+        if (bad(px, pz) || nearOwn(px, pz, Math.round(leg / ds) + 4) < 2 * HAIRPIN_R + 6) ok = false;
+        arc.push([px, pz]);
+      }
+      if (ok) {
+        pts.push(...arc);
+        x = arc[arc.length - 1][0]; z = arc[arc.length - 1][1]; hd = hd + Math.PI;
+        leg = 0; hairpins++; legLen = legs[0] + ((hairpins * 97) % legs[1]);
+        continue;
+      }
+    }
+    if (best.cost > 9) { if (typeof process !== "undefined" && process.env?.SCENIC_DEBUG) console.log("walker stuck", step, Math.round(x), Math.round(z), Math.round(h0), hairpins); return H(x, z) > TOP_H - 120 ? pts : null; } // (stuck near the top: the car park goes here)
+    x = best.nx; z = best.nz; hd = best.a; leg += ds;
+    pts.push([x, z]);
+  }
+  return pts;
+}
+
+// a car park's frame from where the road reaches it (end point, heading in): { lot fields } (cf. roads.js planLots)
+function lotAt(def, ex, ez, hx, hz) {
+  const cx = ex + hx * (def.hd + 2), cz = ez + hz * (def.hd + 2);
+  const yaw = Math.atan2(hz, -hx), ux = Math.sin(yaw), uz = Math.cos(yaw), vx = uz, vz = -ux;
+  let lo = Infinity, hi = -Infinity;
+  for (let a = -def.hw; a <= def.hw; a += 4) for (let b = -def.hd; b <= def.hd; b += 4) { const h = world.height(cx + ux * a + vx * b, cz + uz * a + vz * b); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+  return { ...def, x: cx, z: cz, yaw, y: (lo + hi) / 2, ux, uz, vx, vz, ex, ez, dirx: -hx, dirz: -hz, piles: [], scenic: true };
+}
+
+/** Plan the scenic road(s), the roundabout and their car parks (appended to busRoads). */
+export function planScenic(O) {
+  const main = busRoads.roads.filter((r) => !r.access);
+  const r0 = main.find((r) => r.from === busRoads.stops[0]);
+  if (!r0) return;
+  // the T junction: the village road's point nearest the planned spot
+  let J = null;
+  for (let i = 0; i < r0.n; i++) { const d = Math.hypot(r0.X[i] - JUNCTION_NEAR.x, r0.Z[i] - JUNCTION_NEAR.z); if (!J || d < J.d) J = { i, x: r0.X[i], z: r0.Z[i], y: r0.Y[i], s: r0.S[i], d }; }
+  if (!J || J.d > 120) return;
+  const bad = badGround(O, J);
+  // A: from the T junction square off the village road, east up the terrace in switchbacks (the Express passes
+  // under in its tunnel); the roundabout where it tops out
+  const jd = roadAt(r0, J.s), ex0 = -jd.dz, ez0 = jd.dx, sgn = ex0 >= 0 ? 1 : -1; // (the road's normal, pointing east)
+  const ux = ex0 * sgn, uz = ez0 * sgn;
+  const terrace = serpentine(J.x + ux * 24, J.z + uz * 24, Math.atan2(ux, uz), O, TERRACE_H, { leg0: 220, legs: [200, 120], maxPins: 8, allowNear: J });
+  if (!terrace || terrace.length < 20) { console.warn('scenic road: no way up the terrace'); return; }
+  const tn = terrace.length, th = Math.atan2(terrace[tn - 1][0] - terrace[tn - 3][0], terrace[tn - 1][1] - terrace[tn - 3][1]);
+  const RX = terrace[tn - 1][0] + Math.sin(th) * (RING_R + 6), RZ = terrace[tn - 1][1] + Math.cos(th) * (RING_R + 6);
+  const yR = world.height(RX, RZ);
+  const ring = { x: RX, z: RZ, y: yR, R: RING_R, arms: [] };
+  const armPt = (ang, r) => ({ x: ring.x + Math.sin(ang) * r, z: ring.z + Math.cos(ang) * r });
+  // an arm from the ring outward (angle ang) to target b: [[x, z]...] from the ring's centre line, or null
+  const arm = (ang, b, opts = {}) => {
+    const p0 = armPt(ang, RING_R), p1 = armPt(ang, RING_R + 14), p2 = armPt(ang, RING_R + 30);
+    const pts = route(p2, b, { obstacles: O, bad: opts.bad || bad, margin: opts.margin ?? 500, maxGrade: 0.09 });
+    if (!pts) return null;
+    return smoothPath([[p0.x, p0.z], [p1.x, p1.z], ...pts], 4, 4);
+  };
+  const dirTo = (b) => Math.atan2(b.x - ring.x, b.z - ring.z);
+  const angA = th + Math.PI;
+  const pa = [[armPt(angA, RING_R).x, armPt(angA, RING_R).z], ...terrace.slice().reverse(), [J.x + ux * 12, J.z + uz * 12], [J.x, J.z]];
+  // B: ring -> the climb's start, then the switchbacks
+  const angB = dirTo(CLIMB_AT);
+  const pb0 = arm(angB, CLIMB_AT, { margin: 300 });
+  if (!pb0) { console.warn('scenic road: no way to the mountain'); return; }
+  const m = pb0.length, hd0 = Math.atan2(pb0[m - 1][0] - pb0[m - 3][0], pb0[m - 1][1] - pb0[m - 3][1]);
+  const climb = serpentine(CLIMB_AT.x, CLIMB_AT.z, hd0, O, TOP_H);
+  if (!climb) { console.warn('scenic road: no climb'); return; }
+  const pb = [...pb0, ...climb.slice(1)];
+  // the summit car park where the climb ends
+  const e = pb.length, hx0 = pb[e - 1][0] - pb[e - 3][0], hz0 = pb[e - 1][1] - pb[e - 3][1], hl = Math.hypot(hx0, hz0) || 1;
+  const top = lotAt({ size: 'small', name: 'Gipfelblick car park', hw: 15, hd: 9 }, pb[e - 1][0] + (hx0 / hl) * 4, pb[e - 1][1] + (hz0 / hl) * 4, hx0 / hl, hz0 / hl);
+  pb.push([top.ex, top.ez], [top.ex - top.dirx * 7, top.ez - top.dirz * 7]); // (in through the entrance: no gap)
+  // C: a short spur to the Talblick car park (the side of the ring away from the other two arms)
+  let angC = Math.atan2(-(Math.sin(angA) + Math.sin(angB)), -(Math.cos(angA) + Math.cos(angB)));
+  const lowDef = { size: 'small', name: 'Talblick car park', hw: 13, hd: 9 };
+  const c0 = armPt(angC, RING_R), c1 = armPt(angC, RING_R + 40);
+  const pc = smoothPath([[c0.x, c0.z], [c1.x, c1.z]], 0, 4);
+  const low = lotAt(lowDef, c1.x + Math.sin(angC) * 2, c1.z + Math.cos(angC) * 2, Math.sin(angC), Math.cos(angC));
+  pc.push([low.ex, low.ez], [low.ex - low.dirx * 7, low.ez - low.dirz * 7]);
+  // the roads (access roads: s = 0 at the car park / ring)
+  const rev = (p) => p.slice().reverse();
+  const RA = makeRoad(pa, { name: 'Panorama roundabout', x: ring.x, z: ring.z, ring: true }, { name: 'junction', x: J.x, z: J.z }, { y0: yR, y1: J.y, maxGrade: SC_GRADE });
+  const RB = makeRoad(rev(pb), { name: top.name, x: top.ex, z: top.ez, lot: true }, { name: 'Panorama roundabout', x: ring.x, z: ring.z, ring: true }, { y0: top.y, y1: yR, maxGrade: SC_GRADE });
+  const RC = makeRoad(rev(pc), { name: low.name, x: low.ex, z: low.ez, lot: true }, { name: 'Panorama roundabout', x: ring.x, z: ring.z, ring: true }, { y0: low.y, y1: yR, maxGrade: SC_GRADE });
+  // the ring itself: a closed loop (drawn as a road, counted as tarmac by laneDistance), level
+  const n = 28, X = new Float32Array(n + 1), Z = new Float32Array(n + 1), Y = new Float32Array(n + 1).fill(yR), S = new Float32Array(n + 1);
+  for (let i = 0; i <= n; i++) { const a = (i / n) * Math.PI * 2; X[i] = ring.x + Math.sin(a) * RING_R; Z[i] = ring.z + Math.cos(a) * RING_R; if (i) S[i] = S[i - 1] + Math.hypot(X[i] - X[i - 1], Z[i] - Z[i - 1]); }
+  const RR = { from: { name: 'Panorama roundabout' }, to: { name: 'Panorama roundabout' }, n: n + 1, X, Z, Y, S, length: S[n], ringRoad: ring };
+  for (const r of [RA, RB, RC, RR]) { r.access = true; r.scenic = true; }
+  RA.ringAt0 = ring; RB.ringAtEnd = ring; RC.ringAtEnd = ring;
+  RA.name = 'Panoramastrasse (valley)'; RB.name = 'Panoramastrasse'; RC.name = 'Talblick spur';
+  ring.arms = [{ road: RA, end: 0, ang: angA }, { road: RB, end: 1, ang: angB }, { road: RC, end: 1, ang: angC }];
+  busRoads.roads.push(RA, RB, RC, RR);
+  busRoads.lots.push(top, low);
+  busRoads.junctions.push({ x: J.x, z: J.z, scenic: true, road: r0, s: J.s, arm: RA });
+  busRoads.junctions.push({ x: ring.x, z: ring.z, ring: true });
+  busRoads.roundabouts = [ring];
+  busRoads.scenic = { junction: J, ring, climb: RB, approach: RA, spur: RC, top, low };
+  // pull-outs on the climb: straight, gentle-ish stretches with the ground falling away on one side (the view)
+  busRoads.laybys ||= [];
+  const RBi = busRoads.roads.indexOf(RB), taken = [];
+  for (let s = 120; s < RB.length - 300 && taken.length < 5; s += 8) {
+    if (taken.some((t) => Math.abs(t - s) < 700)) continue;
+    const a = roadAt(RB, s - 16), b = roadAt(RB, s + 16), p = roadAt(RB, s);
+    const bend = Math.abs(Math.atan2(a.dx * b.dz - a.dz * b.dx, a.dx * b.dx + a.dz * b.dz));
+    if (bend > 0.08 || Math.abs(p.grade) > 0.09) continue;
+    for (const side of [1, -1]) {
+      const rx = -p.dz * side, rz = p.dx * side, x = p.x + rx * 4.6, z = p.z + rz * 4.6;
+      const far = world.height(p.x + rx * 30, p.z + rz * 30);
+      if (far > p.y - 10) continue; // (no view: the slope rises there)
+      if (laneDistance(p.x + rx * 14, p.z + rz * 14, RBi, s, 60) < 12) continue; // (the leg below too close)
+      busRoads.laybys.push({ ri: RBi, s, side, x, z, yaw: Math.atan2(p.dx, p.dz), scenic: true, view: true });
+      taken.push(s);
+      break;
+    }
+  }
+}
+
+// One world cut for the scenic roads: flat across the road, eased back to the slope beyond the shoulder. Where two
+// legs of the switchbacks lie close the ground between them blends between both (partition of unity: never a step);
+// a pull-out's shoulder is wider; the roundabout's island a low snow dome inside its kerb.
+export function shapeScenic() {
+  const roads = busRoads.roads.filter((r) => r.scenic);
+  if (!roads.length) return;
+  const G = 32, grid = new Map();
+  let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+  for (const r of roads) {
+    const ri = busRoads.roads.indexOf(r);
+    for (let i = 0; i < r.n - 1; i++) {
+      const sg = { ax: r.X[i], az: r.Z[i], bx: r.X[i + 1], bz: r.Z[i + 1], ay: r.Y[i], by: r.Y[i + 1], ri, sa: r.S[i], sb: r.S[i + 1], r };
+      const R = 70, x0 = Math.min(sg.ax, sg.bx) - R, x1 = Math.max(sg.ax, sg.bx) + R, z0 = Math.min(sg.az, sg.bz) - R, z1 = Math.max(sg.az, sg.bz) + R;
+      minx = Math.min(minx, x0); minz = Math.min(minz, z0); maxx = Math.max(maxx, x1); maxz = Math.max(maxz, z1);
+      for (let cx = Math.floor(x0 / G); cx <= Math.floor(x1 / G); cx++) for (let cz = Math.floor(z0 / G); cz <= Math.floor(z1 / G); cz++) {
+        const key = cx * 65536 + cz;
+        let arr = grid.get(key);
+        if (!arr) grid.set(key, (arr = []));
+        arr.push(sg);
+      }
+    }
+    const line = [];
+    for (let i = 0; i < r.n; i += 3) line.push([r.X[i], r.Z[i]]);
+    line.push([r.X[r.n - 1], r.Z[r.n - 1]]);
+    world.addCorridor(line, BENCH + 3, 'lift', { busRoad: true, scenic: true });
+  }
+  const ring = busRoads.roundabouts?.[0];
+  if (ring) world.addCorridor([[ring.x - 1, ring.z], [ring.x + 1, ring.z]], RING_R + BENCH, 'lift', { busRoad: true, scenic: true });
+  const lb = (busRoads.laybys || []).filter((l) => l.scenic);
+  // nearest point (d, y, s, ri, side, seg) and the nearest of another stretch (|s - s1| > 60 or another road)
+  const A = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null }, B = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null };
+  const pick = (x, z) => {
+    const arr = grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G));
+    A.d = B.d = Infinity;
+    if (!arr) return;
+    const cand = [];
+    for (const s of arr) {
+      const ex = s.bx - s.ax, ez = s.bz - s.az, l2 = ex * ex + ez * ez || 1;
+      const t = clamp(((x - s.ax) * ex + (z - s.az) * ez) / l2, 0, 1);
+      const d = Math.hypot(s.ax + ex * t - x, s.az + ez * t - z);
+      cand.push([d, s, t]);
+      if (d < A.d) set(A, d, s, t, x, z);
+    }
+    for (const [d, s, t] of cand) if (d < B.d && (s.r !== A.r || Math.abs(s.sa - A.s) > 60)) set(B, d, s, t, x, z);
+  };
+  const set = (o, d, s, t, x, z) => {
+    o.d = d; o.y = s.ay + (s.by - s.ay) * t; o.s = s.sa + (s.sb - s.sa) * t; o.ri = s.ri; o.r = s.r;
+    o.side = (s.bx - s.ax) * (z - s.az) - (s.bz - s.az) * (x - s.ax) >= 0 ? 1 : -1;
+  };
+  const bench = (o) => { let b = BENCH; for (const l of lb) if (l.ri === o.ri && l.side === o.side && Math.abs(l.s - o.s) < 22) b = Math.max(b, BENCH + 4 * smoothstep(22, 12, Math.abs(l.s - o.s))); return b; };
+  const weight = (o, h) => { // (1 - k) / k: infinite on the flat bench, 0 where the ground is untouched
+    const b = bench(o), blend = Math.min(60, 6 + Math.abs(h - o.y) * 3.4), k = smoothstep(b, b + blend, o.d);
+    return k <= 1e-5 ? Infinity : (1 - k) / k;
+  };
+  world.addCut({
+    bounds: { minx, minz, maxx, maxz },
+    busRoads: true, scenic: true,
+    apply(x, z, h, spacing = 0) {
+      if (ring) {
+        const rr = Math.hypot(x - ring.x, z - ring.z);
+        if (rr < ISLAND_R + 0.4) return ring.y + 0.18 + 0.85 * Math.max(0, 1 - (rr / ISLAND_R) ** 2); // (kerb + snow dome)
+      }
+      pick(x, z);
+      if (A.d > 70) return h;
+      const wa = weight(A, h);
+      let out;
+      if (wa === Infinity) out = A.y;
+      else {
+        const wb = B.d < 70 ? weight(B, h) : 0;
+        if (wb === Infinity) out = B.y;
+        else out = (wa * A.y + wb * B.y + h) / (wa + wb + 1);
+      }
+      // the plough berm (as on the bus roads; none round the ring and at the pull-outs: berm() tapers there)
+      if (spacing <= 4 && A.d > BERM_IN && A.d < BERM_IN + 4.8 && !A.r.ringRoad && !(ring && Math.hypot(x - ring.x, z - ring.z) < RING_R + 22)) {
+        const bm = berm(A.ri, A.side, A.s, A.r.length, x, z), t = (A.d - BERM_IN) / bm.W;
+        if (bm.H > 0.01 && t > 0 && t < 1) out += bm.H * 0.8 * (t < 0.38 ? smoothstep(0, 0.38, t) : 1 - smoothstep(0.38, 1, t));
+      }
+      return out;
+    },
+  });
+}

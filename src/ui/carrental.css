@@ -1,47 +1,65 @@
-/* CAR RENTAL card (src/ui/carrental.js): the job board's warm wooden frame and header plank; inside, the models as
-   a column of paper tabs (left) and the chosen one on a paper card (paint swatches, terms, price, brush buttons). */
-#carrental { position: fixed; inset: 0; z-index: 41; display: flex; align-items: center; justify-content: center; font-family: var(--ui);
-  background: radial-gradient(ellipse at 50% 45%, rgba(var(--shade), 0.42) 0%, rgba(var(--shade), 0.72) 100%); animation: crFade 0.22s ease both; }
+/* CAR RENTAL configurator (src/ui/carrental.js): the outfit designer's layout and paper (outfitshop.css: .os-*) over the
+   showroom camera on your car (left column = the steps, right = the live 3D preview), plus the car's own bits: the
+   numbered step tabs, paint swatches by finish, trim / rim swatches, the number plate you type on, the summary. */
+#carrental { position: fixed; inset: 0; z-index: 41; color: var(--blue); font-family: var(--ui); animation: fadeIn 0.3s ease backwards; }
 #carrental[hidden] { display: none; }
-@keyframes crFade { from { opacity: 0; } }
-.cr-board { position: relative; width: min(calc(var(--u) * 980), 94vw); display: flex; flex-direction: column; padding: calc(var(--u) * 24) calc(var(--u) * 28) calc(var(--u) * 28);
-  border-radius: calc(var(--u) * 10); animation: crIn 0.32s cubic-bezier(.2, .9, .2, 1) both;
-  background: repeating-linear-gradient(90deg, rgba(60, 30, 10, 0.16) 0 calc(var(--u) * 2), transparent calc(var(--u) * 2) calc(var(--u) * 9), rgba(255, 220, 170, 0.06) calc(var(--u) * 9) calc(var(--u) * 11), transparent calc(var(--u) * 11) calc(var(--u) * 23)),
-    linear-gradient(180deg, #9b6232 0%, #7e4b23 46%, #6c3e1b 100%);
-  box-shadow: inset 0 0 0 calc(var(--u) * 3) rgba(255, 214, 160, 0.16), inset 0 calc(var(--u) * -10) calc(var(--u) * 26) rgba(40, 18, 4, 0.45), 0 calc(var(--u) * 30) calc(var(--u) * 80) rgba(0, 10, 30, 0.55); }
-@keyframes crIn { from { transform: translateY(calc(var(--u) * 26)) scale(0.97); opacity: 0; } }
-.cr-plank { align-self: center; margin: calc(var(--u) * -4) 0 calc(var(--u) * 18); padding: calc(var(--u) * 8) calc(var(--u) * 46); border-radius: calc(var(--u) * 4);
-  background: repeating-linear-gradient(90deg, rgba(40, 20, 6, 0.18) 0 calc(var(--u) * 1.5), transparent calc(var(--u) * 1.5) calc(var(--u) * 13)), linear-gradient(180deg, #5b3418, #45260f);
-  box-shadow: inset 0 calc(var(--u) * 2) 0 rgba(255, 210, 150, 0.14), 0 calc(var(--u) * 6) calc(var(--u) * 12) rgba(20, 8, 0, 0.4);
-  color: #f6ead4; font: italic 700 calc(var(--u) * 30)/1 var(--num); letter-spacing: 0.08em; white-space: nowrap; text-shadow: 0 2px 0 rgba(20, 8, 0, 0.5); }
-.cr-plank em { color: #f2c88c; font-weight: 600; letter-spacing: 0.04em; }
-.cr-body { display: flex; gap: calc(var(--u) * 26); align-items: stretch; }
-.cr-list { flex: 0 0 calc(var(--u) * 360); display: flex; flex-direction: column; gap: calc(var(--u) * 10); }
-.cr-car { position: relative; display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; align-items: baseline; text-align: left; cursor: pointer; border: 0;
-  padding: calc(var(--u) * 12) calc(var(--u) * 18); border-radius: calc(var(--u) * 4); color: var(--blue); background: linear-gradient(180deg, #fffdf6, #f3ecdb);
-  box-shadow: 0 calc(var(--u) * 4) calc(var(--u) * 8) rgba(50, 22, 2, 0.35); transition: transform 0.16s cubic-bezier(.2, .9, .2, 1); }
-.cr-car:hover { transform: translateX(calc(var(--u) * 6)); }
-.cr-car.on { background: linear-gradient(180deg, #fff6d8, #f7e7b4); box-shadow: inset calc(var(--u) * 6) 0 0 #1546c8, 0 calc(var(--u) * 6) calc(var(--u) * 12) rgba(50, 22, 2, 0.4); transform: translateX(calc(var(--u) * 10)); }
-.cr-name { font: italic 700 calc(var(--u) * 24)/1.1 var(--num); letter-spacing: 0.03em; }
-.cr-kind { grid-column: 1; font: 500 calc(var(--u) * 14)/1.3 var(--ui); color: rgba(30, 40, 70, 0.7); }
-.cr-car b { grid-row: 1 / span 2; grid-column: 2; align-self: center; font: italic 700 calc(var(--u) * 26)/1 var(--num); color: #8f1d14; }
-.cr-tag { position: absolute; right: calc(var(--u) * 90); top: calc(var(--u) * 8); padding: calc(var(--u) * 2) calc(var(--u) * 8); border: calc(var(--u) * 2) solid #129a46; border-radius: calc(var(--u) * 3);
-  color: #129a46; font: italic 700 calc(var(--u) * 13)/1.2 var(--num); letter-spacing: 0.08em; transform: rotate(-4deg); }
-.cr-card { flex: 1; display: flex; flex-direction: column; gap: calc(var(--u) * 10); padding: calc(var(--u) * 26) calc(var(--u) * 30) calc(var(--u) * 24); color: var(--blue);
-  background: linear-gradient(180deg, #fffdf6 0%, #fbf6ea 100%); border-radius: calc(var(--u) * 4); box-shadow: 0 calc(var(--u) * 10) calc(var(--u) * 20) rgba(50, 22, 2, 0.4); }
-.cr-kicker { font: 700 calc(var(--u) * 14)/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: #8a2a1c; }
-.cr-title { margin: 0; font: italic 700 calc(var(--u) * 44)/1 var(--num); letter-spacing: 0.02em; }
-.cr-paint { display: flex; gap: calc(var(--u) * 10); align-items: baseline; font: 500 calc(var(--u) * 16)/1.2 var(--ui); color: rgba(30, 40, 70, 0.75); }
-.cr-paint b { color: var(--blue); font-weight: 700; }
-.cr-sws { display: flex; gap: calc(var(--u) * 10); flex-wrap: wrap; }
-.cr-sw { width: calc(var(--u) * 38); height: calc(var(--u) * 38); border-radius: 50%; border: calc(var(--u) * 3) solid #fff; cursor: pointer;
-  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.55) 0 14%, var(--sw) 46%, color-mix(in srgb, var(--sw) 60%, #000) 100%);
-  box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.35); transition: transform 0.14s ease; }
-.cr-sw:hover { transform: scale(1.1); }
-.cr-sw.on { box-shadow: 0 0 0 calc(var(--u) * 3) #1546c8, 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.35); }
-.cr-terms { margin: calc(var(--u) * 4) 0 0; padding-left: calc(var(--u) * 20); font: 500 calc(var(--u) * 15)/1.5 var(--ui); color: rgba(30, 40, 70, 0.8); }
-.cr-price { display: flex; justify-content: space-between; align-items: baseline; margin-top: auto; padding-top: calc(var(--u) * 10); border-top: calc(var(--u) * 2) dashed rgba(21, 70, 200, 0.25);
-  font: italic 700 calc(var(--u) * 20)/1 var(--num); letter-spacing: 0.06em; text-transform: uppercase; }
-.cr-price b { font-size: calc(var(--u) * 46); color: #8f1d14; }
-.cr-acts { display: flex; gap: calc(var(--u) * 14); }
-.cr-acts .cr-btn { flex: 1; }
+body.carcfg-open #hud > :not(#flash) { visibility: hidden !important; }
+body.carcfg-open #crosshair { visibility: hidden; }
+#carrental .cr-col { width: calc(var(--u) * 560); }
+.cr-steps button { height: calc(var(--u) * 44); padding: 0 calc(var(--u) * 11); font-size: calc(var(--u) * 19); }
+.cr-steps button i { display: inline-block; margin-right: calc(var(--u) * 5); font-style: normal; font-size: 0.72em; opacity: 0.6; }
+.cr-steps button.done i { color: var(--red); opacity: 1; }
+.cr-group { flex: none; margin: calc(var(--u) * 6) 0 calc(var(--u) * -2) calc(var(--u) * 4); font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.18em; color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
+#carrental .os-row { height: calc(var(--u) * 54); }
+
+/* swatches: the car in its paint, paint by finish (gloss highlight, metallic flake gradient, pearl sheen, matte flat),
+   the trim (leather / a check of coloured threads), a rim */
+.cr-sw-car { width: calc(var(--u) * 44); height: calc(var(--u) * 22); margin-top: calc(var(--u) * 8); border-radius: calc(var(--u) * 10) calc(var(--u) * 14) calc(var(--u) * 4) calc(var(--u) * 4); background: var(--c);
+  box-shadow: inset 0 calc(var(--u) * -5) 0 rgba(0, 0, 0, 0.35), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.3); }
+.cr-sw-paint { border-radius: 50%; background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.8) 0 10%, rgba(255, 255, 255, 0) 32%), var(--c);
+  box-shadow: inset 0 calc(var(--u) * -4) calc(var(--u) * 6) rgba(0, 0, 0, 0.3), 0 0 0 calc(var(--u) * 2) rgba(255, 255, 255, 0.8), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.3); }
+.cr-sw-paint.metallic { background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.85) 0 9%, rgba(255, 255, 255, 0) 30%), linear-gradient(150deg, rgba(255, 255, 255, 0.35), rgba(0, 0, 0, 0.35)), var(--c); }
+.cr-sw-paint.pearl { background: radial-gradient(circle at 34% 30%, #fff 0 9%, rgba(255, 255, 255, 0) 30%), linear-gradient(120deg, rgba(255, 220, 240, 0.35), rgba(180, 230, 255, 0.3) 55%, rgba(0, 0, 0, 0.25)), var(--c); }
+.cr-sw-paint.matte { background: var(--c); box-shadow: inset 0 calc(var(--u) * -3) calc(var(--u) * 4) rgba(0, 0, 0, 0.18), 0 0 0 calc(var(--u) * 2) rgba(255, 255, 255, 0.8), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.3); }
+.cr-sw-trim { border-radius: calc(var(--u) * 8) calc(var(--u) * 8) calc(var(--u) * 4) calc(var(--u) * 4); background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(0, 0, 0, 0.25)), var(--c);
+  box-shadow: inset 0 0 0 calc(var(--u) * 2) rgba(255, 255, 255, 0.4), 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.3); }
+.cr-sw-trim.pat { background: repeating-linear-gradient(90deg, transparent 0 calc(var(--u) * 7), var(--a) calc(var(--u) * 7) calc(var(--u) * 8.5)), repeating-linear-gradient(0deg, transparent 0 calc(var(--u) * 7), var(--a) calc(var(--u) * 7) calc(var(--u) * 8.5)), var(--c); }
+.cr-sw-rim { border-radius: 50%; background: radial-gradient(circle, #222 0 14%, var(--c) 15% 52%, #111 53% 70%, #2a2a2a 71%);
+  box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(0, 20, 60, 0.3); }
+
+/* the plate: the real thing, white, black condensed letters, the shields at its ends; you type straight on it */
+.cr-plate-wrap { display: flex; flex-direction: column; gap: calc(var(--u) * 14); padding: calc(var(--u) * 10) 0; }
+.cr-plate { position: relative; display: flex; align-items: center; gap: calc(var(--u) * 10); width: calc(var(--u) * 470); height: calc(var(--u) * 104); padding: 0 calc(var(--u) * 18);
+  background: #f7f7f4; border-radius: calc(var(--u) * 10); box-shadow: inset 0 0 0 calc(var(--u) * 4) #111, inset 0 0 0 calc(var(--u) * 8) #f7f7f4, 0 calc(var(--u) * 10) calc(var(--u) * 24) rgba(0, 14, 44, 0.4); }
+.cr-ch { flex: none; width: calc(var(--u) * 30); height: calc(var(--u) * 38); background: #d52b1e; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
+  -webkit-mask: linear-gradient(#000 0 0); }
+.cr-ch:not(.cr-ct) { background: linear-gradient(#fff 0 0) center 42% / 22% 60% no-repeat, linear-gradient(#fff 0 0) center 42% / 64% 20% no-repeat, #d52b1e; }
+.cr-ct { background: linear-gradient(90deg, #d52b1e 50%, #f2f2f2 50%); }
+.cr-plate-in { flex: 1; min-width: 0; border: 0; outline: 0; background: none; text-align: center; color: #121212; caret-color: var(--red);
+  font: 700 calc(var(--u) * 68)/1 "Barlow Condensed", "Arial Narrow", Arial, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; }
+.cr-plate-acts { display: flex; align-items: center; gap: calc(var(--u) * 16); }
+.cr-mini { width: calc(var(--u) * 170); height: calc(var(--u) * 50); }
+.cr-plate-note { font: 600 var(--t-xs)/1.3 var(--ui); color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6); }
+.cr-plate-wrap .os-note { color: rgba(255, 255, 255, 0.85); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6); }
+
+/* the summary */
+.cr-sum { padding: calc(var(--u) * 14) calc(var(--u) * 24) calc(var(--u) * 16); --paper: rgba(255, 255, 255, 0.94); display: flex; flex-direction: column; gap: calc(var(--u) * 6); }
+.cr-sum-row { display: flex; align-items: center; gap: calc(var(--u) * 12); padding: calc(var(--u) * 5) 0; border-bottom: calc(var(--u) * 1.5) dashed rgba(21, 70, 200, 0.18); cursor: pointer; }
+.cr-sum-row:hover { color: var(--red); }
+.cr-sum-row span { flex: 1; display: flex; flex-direction: column; gap: calc(var(--u) * 2); min-width: 0; }
+.cr-sum-row small { font: 800 calc(var(--u) * 11)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim); }
+.cr-sum-row b { font: italic 700 calc(var(--u) * 22)/1.05 var(--num); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-sum-row em { font: italic 700 calc(var(--u) * 20)/1 var(--num); font-style: italic; }
+.cr-sum-row .os-sw { width: calc(var(--u) * 26); height: calc(var(--u) * 26); }
+.cr-sum-tot { display: flex; justify-content: space-between; align-items: baseline; padding-top: calc(var(--u) * 6); font: italic 700 calc(var(--u) * 20)/1 var(--num); letter-spacing: 0.08em; }
+.cr-sum-tot b { font-size: calc(var(--u) * 40); color: var(--red); }
+.cr-terms { margin: calc(var(--u) * 4) 0 0; padding-left: calc(var(--u) * 18); font: 500 var(--t-xs)/1.45 var(--ui); color: var(--blue-dim); }
+
+/* the detail card: the bill, back / next / rent */
+.cr-bill { display: flex; justify-content: space-between; align-items: baseline; margin-top: calc(var(--u) * 8); font: 600 var(--t-xs)/1.3 var(--ui); color: var(--blue-dim); }
+.cr-bill b { font: italic 700 calc(var(--u) * 30)/1 var(--num); color: var(--red); }
+#carrental .os-actrow { justify-content: flex-start; gap: calc(var(--u) * 12); }
+#carrental .os-wallet { margin-left: auto; }
+#carrental .os-act { width: calc(var(--u) * 270); }
+.cr-back { width: calc(var(--u) * 110); flex: none; }
+.cr-back > span { color: var(--blue); }

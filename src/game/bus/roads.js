@@ -174,6 +174,7 @@ export function route(a, b, opts = {}) {
       const d = Math.hypot(dx, dz) * CELL, gr = Math.abs(height(j) - hi) / d;
       // grade: free up to ~6 %, then rising fast; beyond ~16 % only as a last resort
       const gc = 1 + (gr / 0.1) ** 4 * 0.6 + (gr > 0.17 ? 40 : 0);
+      if (opts.maxGrade && gr > opts.maxGrade) continue; // (a hard cap: the scenic road zigzags up a step instead)
       const pj = penalty(j);
       if (pj === Infinity) continue;
       const turn = inx || inz ? Math.acos(clamp(inx * DIRN[q][0] + inz * DIRN[q][1], -1, 1)) : 0;

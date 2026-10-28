@@ -1,0 +1,237 @@
+// CAR CONFIGURATOR data and looks (the rental showroom's designer, ui/carrental.js): paint colours in four finishes
+// (solid gloss, metallic, pearl, matte), interior trims (leathers, sport fabrics with a coloured check / stitching),
+// rim colours and the number plate (Swiss style: canton letters, your own text, the shields; a canvas texture on a
+// plate of its own, laid over each car's front and rear plate). dressCar() turns a car instance (cars.js
+// carInstance, wheels: true) into exactly that car: the showroom's live preview, the rented car in the yard, and the
+// car you drive (drive.js: e.dress), outside and in the cockpit (the *_full models too).
+import * as THREE from 'three';
+import { isPaint } from './cars.js';
+
+// paint: hex (sRGB), finish -> how the clear coat and flakes read (roughness, metalness), extra cost
+export const FINISH = {
+  solid: { label: 'Solid', rough: 0.3, metal: 0.25, clear: 1, cost: 0 },
+  metallic: { label: 'Metallic', rough: 0.24, metal: 0.72, clear: 1, cost: 30 },
+  pearl: { label: 'Pearl', rough: 0.18, metal: 0.5, clear: 1, cost: 50 },
+  matte: { label: 'Matte', rough: 0.66, metal: 0.12, clear: 0, cost: 60 },
+};
+export const PAINTS = [
+  { id: 'white', label: 'Alpine White', hex: 0xf2f2f0, finish: 'solid' }, { id: 'black', label: 'Night Black', hex: 0x15171a, finish: 'solid' },
+  { id: 'red', label: 'Tornado Red', hex: 0xa8161c, finish: 'solid' }, { id: 'yellow', label: 'Racing Yellow', hex: 0xe2b81c, finish: 'solid' },
+  { id: 'orange', label: 'Arizona Orange', hex: 0xd0611c, finish: 'solid' }, { id: 'kingfisher', label: 'Kingfisher Blue', hex: 0x1f68ad, finish: 'solid' },
+  { id: 'lime', label: 'Lime Green', hex: 0x78ad2a, finish: 'solid' },
+  { id: 'silver', label: 'Glacier Silver', hex: 0xb2b7bd, finish: 'metallic' }, { id: 'graphite', label: 'Graphite Grey', hex: 0x464a50, finish: 'metallic' },
+  { id: 'blue', label: 'Midnight Blue', hex: 0x1d2b50, finish: 'metallic' }, { id: 'green', label: 'Forest Green', hex: 0x2a4636, finish: 'metallic' },
+  { id: 'burgundy', label: 'Burgundy', hex: 0x5e1622, finish: 'metallic' }, { id: 'bronze', label: 'Bronze', hex: 0x8a5a2e, finish: 'metallic' },
+  { id: 'ice', label: 'Ice Blue', hex: 0x8fb1c8, finish: 'metallic' },
+  { id: 'pearlwhite', label: 'Pearl White', hex: 0xefebe2, finish: 'pearl' }, { id: 'violet', label: 'Velvet Violet', hex: 0x4a2a5e, finish: 'pearl' },
+  { id: 'mblack', label: 'Matte Black', hex: 0x1c1d1f, finish: 'matte' }, { id: 'mgrey', label: 'Matte Nardo Grey', hex: 0x6a6d70, finish: 'matte' },
+  { id: 'army', label: 'Matte Army Green', hex: 0x4a5238, finish: 'matte' }, { id: 'sand', label: 'Matte Desert Sand', hex: 0xb49a72, finish: 'matte' },
+];
+// interiors: the trim colour the seats (and door cards) are recoloured to (their texture's shading kept), the
+// pattern (1: sport fabric, a fine check of coloured threads: the "stitching"), its accent, cost
+export const INTERIORS = [
+  { id: 'orig', label: 'Factory trim', sub: 'As it left the factory', hex: 0x000000, amt: 0, cost: 0 },
+  { id: 'black', label: 'Black leather', sub: 'Nappa, black', hex: 0x1a1a1c, amt: 1, cost: 0 },
+  { id: 'tan', label: 'Cognac leather', sub: 'Tan nappa, a warm brown', hex: 0x9a5a2c, amt: 1, cost: 40 },
+  { id: 'oxblood', label: 'Oxblood leather', sub: 'Deep red nappa', hex: 0x6e1a1e, amt: 1, cost: 50 },
+  { id: 'ivory', label: 'Ivory leather', sub: 'Pale cream nappa', hex: 0xd8cdb6, amt: 1, cost: 50 },
+  { id: 'sportred', label: 'Sport fabric · red check', sub: 'Charcoal cloth, red stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0xc0161c, cost: 30 },
+  { id: 'sportblue', label: 'Sport fabric · blue check', sub: 'Charcoal cloth, blue stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0x1f6fd0, cost: 30 },
+  { id: 'alcantara', label: 'Alcantara · yellow stitch', sub: 'Grey suede, yellow stitching', hex: 0x55575b, amt: 1, pattern: 2, accent: 0xe8c21a, cost: 40 },
+];
+// rims: a tint over the wheel's metal (tyres stay black)
+export const RIMS = [
+  { id: 'orig', label: 'Factory alloys', hex: 0xffffff, cost: 0 }, { id: 'black', label: 'Gloss black', hex: 0x1b1c1e, cost: 20 },
+  { id: 'gunmetal', label: 'Gunmetal', hex: 0x5a5e64, cost: 20 }, { id: 'bronze', label: 'Bronze', hex: 0x9a6a36, cost: 30 },
+  { id: 'gold', label: 'Gold', hex: 0xd0a650, cost: 30 }, { id: 'red', label: 'Red', hex: 0xa01a1e, cost: 30 },
+];
+export const PLATE_COST = 25; // your own text on the plates
+const CANTONS = ['VS', 'GR', 'BE', 'UR', 'OW', 'TI', 'ZH', 'LU'];
+
+/** A plate in the game's style: two canton letters and up to six digits ("VS 123456"). */
+export function randomPlate(rnd = Math.random) { return `${CANTONS[Math.floor(rnd() * CANTONS.length)]} ${Math.floor(1000 + rnd() * 899000)}`; }
+/** What you may type on a plate: 1-8 letters / digits (spaces and hyphens between). */
+export const cleanPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 \-]/g, '').replace(/\s+/g, ' ').replace(/^[ -]+/, '').slice(0, 8);
+export const plateOk = (s) => /[A-Z0-9]/.test(s) && cleanPlate(s).replace(/[ -]/g, '').length >= 1 && s.length <= 8;
+
+export const paintOf = (id) => PAINTS.find((p) => p.id === id) || PAINTS[0];
+export const interiorOf = (id) => INTERIORS.find((p) => p.id === id) || INTERIORS[0];
+export const rimOf = (id) => RIMS.find((p) => p.id === id) || RIMS[0];
+/** A config made whole (old saves: { id, paint } only). */
+export function normConfig(c = {}) {
+  return { id: c.id, paint: paintOf(c.paint).id, interior: interiorOf(c.interior).id, rims: rimOf(c.rims).id, plate: cleanPlate(c.plate) || randomPlate(), custom: !!c.custom };
+}
+/** Extra cost of a config over the car's day rate (finish, trim, rims, a custom plate). */
+export function extrasCost(c) { return FINISH[paintOf(c.paint).finish].cost + interiorOf(c.interior).cost + rimOf(c.rims).cost + (c.custom ? PLATE_COST : 0); }
+
+// ---------------------------------------------------------------- the plate texture (cached per text)
+const plateTex = new Map();
+export function plateTexture(text) {
+  if (plateTex.has(text)) return plateTex.get(text);
+  const W = 1024, H = 220, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  // white reflective plate, a thin black rim
+  g.fillStyle = '#f7f7f4'; g.beginPath(); g.roundRect(4, 4, W - 8, H - 8, 22); g.fill();
+  g.lineWidth = 7; g.strokeStyle = '#111'; g.beginPath(); g.roundRect(14, 14, W - 28, H - 28, 16); g.stroke();
+  // the shields: the Swiss cross (left), the canton's (right; red / white halves)
+  const shield = (x, fillA, fillB, cross) => {
+    g.save(); g.translate(x, H / 2); g.beginPath(); g.moveTo(-34, -46); g.lineTo(34, -46); g.lineTo(34, 8); g.quadraticCurveTo(34, 40, 0, 52); g.quadraticCurveTo(-34, 40, -34, 8); g.closePath();
+    g.fillStyle = fillA; g.fill(); if (fillB) { g.save(); g.clip(); g.fillStyle = fillB; g.fillRect(0, -50, 40, 110); g.restore(); }
+    g.lineWidth = 3; g.strokeStyle = '#222'; g.stroke();
+    if (cross) { g.fillStyle = '#fff'; g.fillRect(-7, -26, 14, 48); g.fillRect(-22, -9, 44, 14); }
+    g.restore();
+  };
+  shield(70, '#d52b1e', null, true);
+  shield(W - 70, '#d52b1e', '#f4f4f4', false);
+  // the text: black, condensed, as wide as it fits
+  g.fillStyle = '#121212'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  let size = 170;
+  g.font = `700 ${size}px "Barlow Condensed", "Arial Narrow", Arial, sans-serif`;
+  const room = W - 260, w = g.measureText(text).width;
+  if (w > room) { size = Math.floor(size * room / w); g.font = `700 ${size}px "Barlow Condensed", "Arial Narrow", Arial, sans-serif`; }
+  if ('letterSpacing' in g) g.letterSpacing = '6px';
+  g.fillText(text, W / 2, H / 2 + 8);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 16;
+  plateTex.set(text, t);
+  if (plateTex.size > 40) { const k = plateTex.keys().next().value; if (k !== text) { plateTex.get(k).dispose(); plateTex.delete(k); } }
+  return t;
+}
+
+// ---------------------------------------------------------------- where the plates go (per template, once)
+// Each model's plate: its own plate material's triangles where it has one (front / rear), else a ray from ahead /
+// behind at the plate's height on the real car (fitted frame, m): the surface there and its facing.
+const PLATE_MAT = { car_tesla_m3: /LicensePlate/i, car_bmw_x3: /Nomera/i, car_audi_rs6: /ManufacturerPlate/i };
+const PLATE_Y = { car_vw_golf_gti: [0.42, 0.63], car_dacia_duster: [0.5, 0.8], car_tesla_m3: [0.36, 0.56], car_bmw_x3: [0.45, 0.82], car_audi_rs6: [0.38, 0.8] };
+function plateSpots(t) {
+  if (t.plates !== undefined) return t.plates;
+  t.plates = [];
+  try {
+    const parts = (t.body || t.parts).filter((p) => !p.material.transparent);
+    const meshes = parts.map((p) => new THREE.Mesh(p.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
+    const L = t.size.z / 2, ys = PLATE_Y[t.name] || [0.45, 0.7], rc = new THREE.Raycaster(), v = new THREE.Vector3();
+    // the plate material's centre per end (where the model has one)
+    const own = [null, null], re = PLATE_MAT[t.name];
+    if (re) for (const p of parts) if (re.test(p.material.name || '')) {
+      const P = p.geometry.attributes.position, b = [new THREE.Box3(), new THREE.Box3()];
+      for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); b[v.z > 0 ? 0 : 1].expandByPoint(v); }
+      b.forEach((bb, k) => { const s = bb.getSize(new THREE.Vector3()); if (!bb.isEmpty() && s.x > 0.25 && s.x < 0.7 && s.y > 0.05 && s.y < 0.3) own[k] = bb.getCenter(new THREE.Vector3()); });
+    }
+    for (const k of [0, 1]) {
+      const s = k ? -1 : 1, y = own[k]?.y ?? ys[k], hits = [];
+      for (const [x, dy] of [[0, 0], [0.24, 0], [-0.24, 0], [0, 0.05], [0, -0.05]]) {
+        rc.set(new THREE.Vector3(x, y + dy, s * (L + 1)), new THREE.Vector3(0, 0, -s)); rc.far = 2.2;
+        const h = rc.intersectObjects(meshes, false)[0];
+        hits.push(h ? h.point : null);
+      }
+      if (!hits[0]) continue;
+      // the plate's plane: across from the side hits, up from the high / low ones (a flat plate, in front of all)
+      const across = hits[1] && hits[2] ? hits[1].clone().sub(hits[2]).normalize() : new THREE.Vector3(1, 0, 0);
+      const up = hits[3] && hits[4] ? hits[3].clone().sub(hits[4]).normalize() : new THREE.Vector3(0, 1, 0);
+      if (Math.abs(across.z) > 0.5) across.set(1, 0, 0);
+      if (up.y < 0.75) up.set(0, 1, 0);
+      const n = new THREE.Vector3().crossVectors(across, up).normalize();
+      if (n.z * s < 0) n.negate();
+      up.crossVectors(n, across).normalize(); if (up.y < 0) up.negate(); // (square to the plate's facing)
+      let off = 0;
+      for (const h of hits) if (h) off = Math.max(off, h.clone().sub(hits[0]).dot(n));
+      const at = hits[0].clone().addScaledVector(n, Math.min(0.05, off) + 0.006);
+      // (seen from outside it reads left to right: at the back the plate's x is the car's -x)
+      const x = s > 0 ? across : across.clone().negate();
+      const m = new THREE.Matrix4().makeBasis(x, new THREE.Vector3().crossVectors(n, x).normalize(), n).setPosition(at);
+      t.plates.push({ m, front: !k });
+    }
+    for (const me of meshes) me.material.dispose();
+  } catch (e) { console.warn('plates', t.name, e); }
+  return t.plates;
+}
+const plateGeo = new THREE.PlaneGeometry(0.5, 0.108);
+
+// ---------------------------------------------------------------- interiors (a recolour inside the material)
+// The trim's colour from the texture's own light and shade (lum), only where the seats are for a model whose cabin is
+// one atlas (zone: behind the dash, between the floor and the window line), a fine leather grain / cloth weave at
+// close range (the cabin reads crisp even where its texture is soft), fading with distance (no shimmer).
+const CABIN = {
+  car_vw_golf_gti: { mat: /leather|perfor|fabric|seatB/i }, car_tesla_m3: { mat: /BlackSuade|interiorGray|LightGrayInterior/i },
+  car_bmw_x3: { mat: /FrontSeat|BackSeat/i }, car_audi_rs6: { mat: /InteriorA_Material|InteriorTillingA/i, zone: true },
+  car_dacia_duster: { mat: /UV_int/i, zone: true, grain: 1 },
+};
+function cabinMat(src, look, t, spec) {
+  const m = src.clone();
+  const sz = t.steering?.c?.z ?? t.size.z * 0.1;
+  const U = {
+    uTint: { value: new THREE.Color(look.hex) }, uAccent: { value: new THREE.Color(look.accent || 0) }, uAmt: { value: look.amt || 0 },
+    uPat: { value: look.pattern || 0 }, uGrain: { value: spec.grain ? 0.16 : 0.08 },
+    uZone: { value: new THREE.Vector4(sz - 0.32, 0.22, Math.min(1.25, t.size.y - 0.3), spec.zone ? 1 : 0) },
+  };
+  m.userData.cabin = U;
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCab;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvCab = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vCab; uniform vec3 uTint, uAccent; uniform float uAmt, uPat, uGrain; uniform vec4 uZone;
+float cabH(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float cabN(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(cabH(i), cabH(i + vec3(1, 0, 0)), f.x), mix(cabH(i + vec3(0, 1, 0)), cabH(i + vec3(1, 1, 0)), f.x), f.y),
+    mix(mix(cabH(i + vec3(0, 0, 1)), cabH(i + vec3(1, 0, 1)), f.x), mix(cabH(i + vec3(0, 1, 1)), cabH(i + vec3(1, 1, 1)), f.x), f.y), f.z); }`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+{
+  float zone = uZone.w < 0.5 ? 1.0 : (1.0 - smoothstep(uZone.x - 0.05, uZone.x + 0.05, vCab.z)) * smoothstep(uZone.y - 0.05, uZone.y + 0.05, vCab.y) * (1.0 - smoothstep(uZone.z - 0.06, uZone.z + 0.06, vCab.y));
+  float lum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+  vec3 col = uTint * (0.45 + 1.7 * lum);
+  float fw = length(fwidth(vCab));
+  if (uPat > 0.5) {
+    // the check: thin coloured threads every 6 cm (two close ones), across the seat's face (x, and up / along it)
+    vec2 q = vec2(vCab.x, vCab.y + vCab.z) * 16.0, g = abs(fract(q) - 0.5), g2 = abs(fract(q * 2.0 + 0.25) - 0.5);
+    float aa = fw * 16.0 + 0.02, line = 1.0 - smoothstep(0.02, 0.02 + aa, min(g.x, g.y));
+    float thin = (1.0 - smoothstep(0.015, 0.015 + aa * 2.0, min(g2.x, g2.y))) * 0.35;
+    col = mix(col, uAccent * (0.55 + 1.2 * lum), clamp(uPat > 1.5 ? thin * 2.2 : line * 0.9 + thin, 0.0, 1.0));
+  }
+  diffuseColor.rgb = mix(diffuseColor.rgb, col, uAmt * zone);
+  // the grain (leather / weave), only close up: two octaves of fine noise
+  float gr = cabN(vCab * 700.0) * 0.6 + cabN(vCab * 1900.0) * 0.4;
+  diffuseColor.rgb *= 1.0 + (gr - 0.5) * uGrain * (1.0 - smoothstep(0.0012, 0.004, fw));
+}`);
+  };
+  m.customProgramCacheKey = () => 'cabin-v1';
+  return m;
+}
+
+// ---------------------------------------------------------------- dress an instance
+const _tint = new THREE.Color();
+/** Paint, interior, rims and plates on a car instance (cars.js carInstance) of template t. cfg: normConfig(). */
+export function dressCar(inst, t, cfg) {
+  if (!inst || !t || !cfg) return inst;
+  const model = (t.name || '').replace(/_full$/, ''), paint = paintOf(cfg.paint), fin = FINISH[paint.finish], look = interiorOf(cfg.interior), rim = rimOf(cfg.rims);
+  const spec = CABIN[model];
+  const swaps = new Map();
+  const swap = (m, make) => { if (!swaps.has(m)) swaps.set(m, make(m)); return swaps.get(m); };
+  for (const o of inst.full.children) {
+    if (!o.isMesh || inst.lamps?.list?.some((l) => l.m === o.material)) continue;
+    const src = o.userData.srcMat ||= o.material;
+    // the body paint: colour and finish (textures keep their detail)
+    if (isPaint(model, src)) {
+      o.material = swap(src, (m) => {
+        const p = m.clone(); p.color = new THREE.Color(paint.hex);
+        p.roughness = fin.rough; p.metalness = fin.metal;
+        if (p.isMeshPhysicalMaterial) { p.clearcoat = fin.clear; p.clearcoatRoughness = 0.06; }
+        if (paint.finish === 'pearl' && p.isMeshPhysicalMaterial) { p.iridescence = 0.25; }
+        return p;
+      });
+    } else if (spec?.mat.test(src.name || '') && (look.amt > 0 || spec.grain)) o.material = swap(src, (m) => cabinMat(m, look, t, spec));
+    else o.material = src;
+  }
+  // the rims: their metal tinted (the tyres' black stays black: a multiply)
+  for (const w of inst.wheels || []) w.roll.traverse((o) => {
+    if (!o.isMesh) return;
+    const src = o.userData.srcMat ||= o.material;
+    if (rim.id === 'orig' || /tire|tyre|rubber|disk|disc|brake|break|calip|callip/i.test(src.name || '')) { o.material = src; return; }
+    o.material = swap(src, (m) => { const r = m.clone(); r.color = (m.color ? m.color.clone() : new THREE.Color(1, 1, 1)).multiply(_tint.set(rim.hex)); if (rim.id === 'black') r.roughness = Math.min(r.roughness ?? 0.3, 0.3); return r; });
+  });
+  // the plates (front and back), your text
+  if (!inst.plates) { inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
+  const tex = plateTexture(cfg.plate || 'VS 1967');
+  for (const p of inst.plates) if (p.material.map !== tex) { p.material.map = tex; p.material.needsUpdate = true; }
+  inst.cfg = cfg;
+  return inst;
+}

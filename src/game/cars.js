@@ -109,6 +109,58 @@ const CUTOUT = { car_audi_rs6: /InteriorA_Material/i };
 const HUB_RINGS = { car_audi_rs6: { mat: /BadgeA_Material/i, u: 0.809, v: [0.18, 0.391, 0.602, 0.813], r: 0.152, tube: 0.021 } };
 // no high-mounted brake light in the model: where to add one (the rear window's glass)
 const THIRD_AT = { car_tesla_m3: { glass: /glassDark/i, at: 'window' }, car_dacia_duster: { glass: /Foglight/i, at: 'spoiler' } };
+// The body paint: the material the paint colour tints (cars with no material of their own called *paint*: the Dacia's
+// body is UV_body, its paint baked orange into the shared atlas: neutralised to a light grey in a copy of its own,
+// neutralPaint, so any colour multiplies cleanly; the Dacia's own orange is then its material's colour)
+const PAINT_MAT = { car_dacia_duster: /^UV_body/ };
+export const isPaint = (model, m) => !m.transparent && (PAINT_MAT[model] || /paint/i).test(m.name || '');
+const NEUTRAL = { car_dacia_duster: 0xef8e2c };
+function neutralPaint(m, hex) {
+  const img = m.map?.image;
+  if (!img?.width) return m;
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height), a = d.data;
+  for (let i = 0; i < a.length; i += 4) {
+    const r = a[i], gg = a[i + 1], b = a[i + 2];
+    // how orange this texel is (saturated, red over green over blue): the paint; its shade kept as a grey
+    const k = Math.min(1, Math.max(0, ((r - b) / Math.max(1, r) - 0.45) * 4)) * (r > gg && gg > b ? 1 : 0) * Math.min(1, Math.max(0, (r - 60) / 50));
+    if (k <= 0) continue;
+    const v = Math.min(255, (r / 220) * 236);
+    a[i] = r + (v - r) * k; a[i + 1] = gg + (v - gg) * k; a[i + 2] = b + (v - b) * k;
+  }
+  g.putImageData(d, 0, 0);
+  const out = m.clone(), t = m.map.clone();
+  t.image = c; t.needsUpdate = true;
+  out.map = t; out.color = new THREE.Color(hex);
+  return out;
+}
+// A soft cabin atlas made crisper (the Dacia's: its whole interior in one heavily compressed 1024 texture, ~3 mm a
+// texel, magnified ~5x from the driver's seat): upscaled 2x (smooth), then an unsharp mask, in place (every material
+// sharing it sees it); off the main frame (an idle callback), once.
+const CRISP = { car_dacia_duster: /^UV_int$/ };
+function crispMap(tex) {
+  const img = tex?.image;
+  if (!img?.width || tex.userData.crisp) return;
+  tex.userData.crisp = true;
+  const run = () => {
+    try {
+      const W = Math.min(2048, img.width * 2), H = Math.min(2048, img.height * 2), c = document.createElement('canvas'); c.width = W; c.height = H;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, W, H);
+      const d = g.getImageData(0, 0, W, H), a = d.data, src = new Uint8ClampedArray(a), row = W * 4, K = 0.9;
+      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = y * row + x * 4;
+        for (let ch = 0; ch < 3; ch++) {
+          const j = i + ch, blur = (src[j - 4] + src[j + 4] + src[j - row] + src[j + row]) * 0.25;
+          a[j] = src[j] + (src[j] - blur) * K;
+        }
+      }
+      g.putImageData(d, 0, 0);
+      tex.image = c; tex.needsUpdate = true;
+    } catch (e) { console.warn('crisp cabin', e); }
+  };
+  (globalThis.requestIdleCallback || ((f) => setTimeout(f, 200)))(run);
+}
 // any other car: by name and place
 const LAMP = /light|lamp|drl|glow|lens|red_?glas/i, NOT_LAMP = /black|chrome|metal|interior|plate|licen|mirror|disk|disc|rotor|calliper|caliper|seat|stitch|rail|blue|dash|screen|display|int_|cabin|roof|ceiling|reading|reflector|fog|housing|window/i;
 const AMBER = /orange|amber|indicator|turn_?sig|blinker/i;
@@ -238,6 +290,11 @@ export function carTemplate(gltf, length, name = '') {
       out.emissive.set(0x000000); out.emissiveIntensity = 0; out.emissiveMap = null;
     }
     if (glass && m.emissive && (m.emissiveMap || m.emissive.getHex() !== 0)) out.userData.emOrig = { color: m.emissive.clone(), map: m.emissiveMap || null };
+    if (!glass && NEUTRAL[model] !== undefined && isPaint(model, m)) out = neutralPaint(m, NEUTRAL[model]);
+    if (CRISP[model]?.test(m.name || '')) crispMap(m.map);
+    // every texture filtered at the widest angle the GPU has (three clamps it): the dash, seats and door cards seen
+    // at a slant from the driver's seat stay sharp instead of melting into the mip below
+    for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (m[k] && m[k].anisotropy < 16) { m[k].anisotropy = 16; m[k].needsUpdate = true; }
     if (!glass && m.transparent && CUTOUT[model]?.test(m.name || '')) {
       // (a cut-out: solid where its texture is, holes where it isn't; casts no shadow, as before)
       if (out === m) out = m.clone();
@@ -341,7 +398,7 @@ export function carTemplate(gltf, length, name = '') {
   }
   const halo = {};
   for (const [kind, sides] of anchors) halo[kind] = sides.filter(Boolean).map((b) => ({ c: b.min.clone().add(b.max).multiplyScalar(0.5), size: b.max.clone().sub(b.min) }));
-  const t = { parts, size: box.getSize(new THREE.Vector3()), lod: null, wheels: null, body: null, lamps: { parts: lampParts, halo, halfL } };
+  const t = { name, parts, size: box.getSize(new THREE.Vector3()), lod: null, wheels: null, body: null, lamps: { parts: lampParts, halo, halfL } };
   // the four wheels as their own pieces (for the cars that drive: they spin and the front ones steer)
   try { splitWheels(t, groups, name); } catch (e) { console.warn('car wheels', e); t.wheels = null; }
   cache.set(gltf, t);
@@ -711,7 +768,7 @@ export function carInstance(t, { paint = null, wheels = false } = {}) {
   for (const p of spin ? t.body : t.parts) {
     let mat = p.material;
     // a different paint colour for this one (the body paint material, tinted; textures keep their detail)
-    if (paint !== null && /paint/i.test(mat.name || '') && !mat.transparent) { tinted ||= mat.clone(); tinted.color = new THREE.Color(paint); mat = tinted; }
+    if (paint !== null && isPaint((t.name || '').replace(/_full$/, ''), mat)) { tinted ||= mat.clone(); tinted.color = new THREE.Color(paint); mat = tinted; }
     const m = new THREE.Mesh(p.geometry, mat);
     m.castShadow = !p.material.transparent && !p.material.userData.cutout; m.receiveShadow = true;
     if (p.material.transparent && p.material.opacity < 0.6) glass.push(m); // (the windows: drive.js clears them from inside)

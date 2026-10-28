@@ -68,8 +68,8 @@ export function buildSectors(kit) {
   const hweg = route(FH, [70, -30], uv(FH, aChair.bottom, -10, -40), 0, { turnCost: 30, sideHill: 0.8, steepCost: 160 });
   // the Talweg: from the basin west, home to the Adlerhorn's runs (it ends on the nearest of them)
   const adPts = (adler?.pistes ?? []).flatMap((p) => p.pts);
-  let join = { x: 1500, z: -420 }, jd = Infinity;
-  for (const [x, z] of adPts) { const d = Math.hypot(x - 1550, z + 380); if (d < jd) { jd = d; join = { x, z }; } }
+  let join = { x: 950, z: -250 }, jd = Infinity;
+  for (const [x, z] of adPts) { const d = Math.hypot(x - 950, z + 250); if (d < jd) { jd = d; join = { x, z }; } }
   const ts = { x: hut.x - 40, z: hut.z - 30 };
   const FT = face('talweg', ts, join, 380, 300);
   const tal = route(FT, [0, 0], [FT.faceLen, 0], 0, { turnCost: 24, sideHill: 1, steepCost: 160 });
@@ -112,9 +112,16 @@ export function buildSectors(kit) {
 
   // ---------------------------------------------------------------- bowls + the terrain shaper
   layout.bowls = BOWLS;
-  world.addCut(skiShaper(BOWLS.map((b) => ({ pts: b.pts, w: b.w }))));
+  const runs = [...pistesA, ...pistesB];
+  world.addCut(skiShaper([
+    ...BOWLS.map((b) => ({ pts: b.pts, w: b.w, g: MAX_G })),
+    ...runs.map((p) => ({ pts: p.pts.filter((_, i) => i % 2 === 0 || i === p.pts.length - 1), w: PISTE_WIDTH[p.diff] + 6, g: Math.max(BAND[p.diff][1] * (+(globalThis.process?.env?.GF || 1.1)), 0.3) })),
+  ]));
+  if (globalThis.process?.env?.NOBENCH) return;
   // then the runs themselves: each one graded like a built piste (see pisteBench)
-  world.addCut(pisteBench([...pistesA, ...pistesB].map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 4, gMax: BAND[p.diff][1] }))));
+  // (the gentlest first: where a steeper run crosses an easier one it takes the easier one's level, never the reverse)
+  const order = ['Talweg', 'Hirschweg', 'Kammweg', 'Höhenweg', 'Almrausch', 'Murmeltier', 'Kammabfahrt', 'Ostkar', 'Steinbock', 'Kamin'];
+  world.addCut(pisteBench([...pistesA, ...pistesB].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)).map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 4, gMax: BAND[p.diff][1] }))));
 }
 
 // ---------------------------------------------------------------- the piste bench
@@ -123,22 +130,63 @@ export function buildSectors(kit) {
 // back to the natural slope beside it (wider where the bench is cut deeper or filled higher). So a run holds the
 // mean grade of its line all the way down (no rolls, steps or lips) and the station pads at its ends stay as
 // they are (the profile is pinned to the ground at its first and last metres). Where runs meet or cross, their
-// profiles blend by weight.
-const BANK = 26; // m of snow bank beyond a run's bench (at least)
+// profiles don't fight: runs are built in priority order (the gentlest first), each one's profile taken from the
+// ground as the runs before it left it, and the earlier run wins on its own bench (the later one meets it at its
+// level, over a snow bank).
+const BANK = 26, BANK_MAX = 100; // m of snow bank beyond a run's bench (at least / at most)
+const BC = 64;   // m: spatial grid cell
+// the run's nearest bench point to (x, z): { w: its weight there (1 on the bench, falling off over the snow bank,
+// whose width grows with the height of the bench over / under the natural ground h0), y: the bench's level }
+const _b = { w: 0, y: 0 };
+function benchAt(run, x, z, h0) {
+  _b.w = 0;
+  const arr = run.G.get(Math.floor(x / BC) + ',' + Math.floor(z / BC));
+  if (!arr) return _b;
+  let bestD = Infinity, bestY = 0;
+  for (let i = 0; i < arr.length; i++) {
+    const s = arr[i], ex = s.bx - s.ax, ez = s.bz - s.az, l2 = ex * ex + ez * ez || 1;
+    const t = Math.max(0, Math.min(1, ((x - s.ax) * ex + (z - s.az) * ez) / l2));
+    const d = Math.hypot(s.ax + ex * t - x, s.az + ez * t - z);
+    if (d < bestD) { bestD = d; bestY = s.ya + (s.yb - s.ya) * t; }
+  }
+  _b.w = 1 - smoothstep(run.w, run.w + Math.min(BANK_MAX, Math.max(BANK, Math.abs(bestY - h0) * 1.7)), bestD);
+  _b.y = bestY;
+  return _b;
+}
 function pisteBench(runs) {
-  const segs = [], G = new Map(), C = 64;
+  const out = [];
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
-  for (const r of runs) {
+  for (const r of runs) for (const [x, z] of r.pts) {
+    const R = r.w + BANK_MAX + 8;
+    minx = Math.min(minx, x - R); maxx = Math.max(maxx, x + R); minz = Math.min(minz, z - R); maxz = Math.max(maxz, z + R);
+  }
+  // a pad's flat core stays as it is; its embankment gives way to the bench
+  const benched = (x, z, h, upto) => {
+    if (!upto) return h;
+    let y = h;
+    for (let k = upto - 1; k >= 0; k--) { const b = benchAt(out[k], x, z, h); if (b.w > 0) y += (b.y - y) * b.w; }
+    return h + (y - h) * (1 - smoothstep(0.8, 1, world.padInfluence(x, z)));
+  };
+  let state = 0; // 0: not built, 1: building (the ground it samples is the ground without it), 2: built
+  const build = () => { state = 1; for (const r of runs) addRun(r); state = 2; };
+  const addRun = (r) => {
     const P = r.pts, n = P.length, S = new Float32Array(n), raw = new Float32Array(n);
-    for (let i = 0; i < n; i++) { raw[i] = world.height(P[i][0], P[i][1]); if (i) S[i] = S[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); }
+    const h0 = new Float32Array(n);
+    for (let i = 0; i < n; i++) { h0[i] = world.height(P[i][0], P[i][1]); raw[i] = benched(P[i][0], P[i][1], h0[i], out.length); if (i) S[i] = S[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); }
+    // lock: how far a point lies on an earlier run's bench (there this run keeps that run's level) or at the run's
+    // ends (pads, junctions); the profile is the ground smoothed (~200 m) between the locked points
+    const lock = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let lk = 1 - Math.min(smoothstep(0, 24, S[i]), smoothstep(0, 24, S[n - 1] - S[i]));
+      for (const o of out) lk = Math.max(lk, benchAt(o, P[i][0], P[i][1], h0[i]).w);
+      lock[i] = lk;
+    }
     let Y = Float32Array.from(raw);
-    for (let pass = 0; pass < 4; pass++) {
+    for (let it = 0; it < 80; it++) {
       const o = new Float32Array(n);
-      for (let i = 0; i < n; i++) { let s = 0, w = 0; for (let k = -12; k <= 12; k++) { const j = Math.max(0, Math.min(n - 1, i + k)), wt = 13 - Math.abs(k); s += Y[j] * wt; w += wt; } o[i] = s / w; }
+      for (let i = 0; i < n; i++) { let s = 0, w = 0; for (let k = -8; k <= 8; k++) { const j = Math.max(0, Math.min(n - 1, i + k)), wt = 9 - Math.abs(k); s += Y[j] * wt; w += wt; } o[i] = s / w + (raw[i] - s / w) * lock[i]; }
       Y = o;
     }
-    // the ends meet the ground (pads, junctions); then the profile never climbs (a run only goes down)
-    for (let i = 0; i < n; i++) { const k = Math.min(smoothstep(0, 24, S[i]), smoothstep(0, 24, S[n - 1] - S[i])); Y[i] = raw[i] + (Y[i] - raw[i]) * k; }
     // grade cap: the band's steepest grade (or a little over the line's mean grade, where that is steeper): going
     // down, the profile never falls faster than that (it stays filled above a steep pitch and catches up below)
     // and never climbs; where it ends above the ground, the difference is spread evenly over the whole run
@@ -148,41 +196,24 @@ function pisteBench(runs) {
       const e = Y[n - 1] - raw[n - 1];
       if (e > 0) for (let i = 0; i < n; i++) Y[i] -= (e * S[i]) / L;
     }
-    const run = { Y, w: r.w };
+    for (let i = 0; i < n; i++) Y[i] += (raw[i] - Y[i]) * lock[i];
+    const run = { Y, w: r.w, pts: P, G: new Map() };
     for (let i = 1; i < n; i++) {
-      const [ax, az] = P[i - 1], [bx, bz] = P[i], seg = { ax, az, bx, bz, ya: Y[i - 1], yb: Y[i], run };
-      segs.push(seg);
-      const R = r.w + BANK + 40;
-      minx = Math.min(minx, ax - R, bx - R); maxx = Math.max(maxx, ax + R, bx + R); minz = Math.min(minz, az - R, bz - R); maxz = Math.max(maxz, az + R, bz + R);
-      for (let cx = Math.floor((Math.min(ax, bx) - R) / C); cx <= Math.floor((Math.max(ax, bx) + R) / C); cx++)
-        for (let cz = Math.floor((Math.min(az, bz) - R) / C); cz <= Math.floor((Math.max(az, bz) + R) / C); cz++) {
-          const key = cx + ',' + cz; let arr = G.get(key); if (!arr) G.set(key, (arr = [])); arr.push(seg);
+      const [ax, az] = P[i - 1], [bx, bz] = P[i], seg = { ax, az, bx, bz, ya: Y[i - 1], yb: Y[i] };
+      const R = r.w + BANK_MAX + 8;
+      for (let cx = Math.floor((Math.min(ax, bx) - R) / BC); cx <= Math.floor((Math.max(ax, bx) + R) / BC); cx++)
+        for (let cz = Math.floor((Math.min(az, bz) - R) / BC); cz <= Math.floor((Math.max(az, bz) + R) / BC); cz++) {
+          const key = cx + ',' + cz; let arr = run.G.get(key); if (!arr) run.G.set(key, (arr = [])); arr.push(seg);
         }
     }
-  }
+    out.push(run);
+  };
+  // (built on first use once the crag mask is set: the profiles follow the final ground)
   return {
-    bounds: { minx, minz, maxx, maxz }, shaper: true,
+    bounds: { minx, minz, maxx, maxz }, shaper: true, runs: out,
     apply(x, z, h) {
-      const arr = G.get(Math.floor(x / C) + ',' + Math.floor(z / C));
-      if (!arr) return h;
-      // nearest point of each run (one per run), weighted by how far inside its bench / bank it is
-      let num = 0, den = 0, W = 0, last = null, bestD = Infinity, bestY = 0;
-      const flush = () => { if (!last) return; const w = last.w; if (w > 0) { num += w * bestY; den += w; if (w > W) W = w; } };
-      for (let i = 0; i < arr.length; i++) {
-        const s = arr[i];
-        if (s.run !== last?.run) { flush(); last = { run: s.run, w: 0 }; bestD = Infinity; }
-        const ex = s.bx - s.ax, ez = s.bz - s.az, l2 = ex * ex + ez * ez || 1;
-        const t = Math.max(0, Math.min(1, ((x - s.ax) * ex + (z - s.az) * ez) / l2));
-        const d = Math.hypot(s.ax + ex * t - x, s.az + ez * t - z);
-        if (d < bestD) {
-          bestD = d; bestY = s.ya + (s.yb - s.ya) * t;
-          const bank = Math.max(BANK, Math.abs(bestY - h) * 1.7);
-          last.w = 1 - smoothstep(s.run.w, s.run.w + bank, d);
-        }
-      }
-      flush();
-      if (W <= 0) return h;
-      return h + (num / den - h) * W * (1 - smoothstep(0.8, 1, world.padInfluence(x, z))); // (a pad's flat core stays; its embankment gives way)
+      if (state !== 2) { if (state === 1 || !world.cragMask) return h; build(); }
+      return benched(x, z, h, out.length);
     },
   };
 }
@@ -192,8 +223,8 @@ function pisteBench(runs) {
 // a smoothed, grade-limited version of itself; it fades out over FEATHER m beyond a strip and under every pad.
 // h' = h + w * (S - R): R the natural ground on the shaper's grid, S the same grid blurred (~40 m) and relaxed so no
 // step between neighbours is steeper than MAX_G. What the grid can't hold (fine snow texture, pads, earlier cuts)
-// stays as it was. The grids are built on first use (after the crag mask: the ground they see is the final one).
-const SH_CELL = 8, FEATHER = 70, MAX_G = 0.68;
+// stays as it was. The grids are built on first use once the crag mask is set (the ground they see is the final one).
+const SH_CELL = 8, FEATHER = 70, MAX_G = 0.68, ITERS = +(globalThis.process?.env?.SH_IT || 120);
 function skiShaper(strips) {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const s of strips) for (const [x, z] of s.pts) {
@@ -202,7 +233,7 @@ function skiShaper(strips) {
   }
   const x0 = Math.floor(minx / SH_CELL) * SH_CELL - SH_CELL * 8, z0 = Math.floor(minz / SH_CELL) * SH_CELL - SH_CELL * 8;
   const nx = Math.ceil((maxx - x0) / SH_CELL) + 9, nz = Math.ceil((maxz - z0) / SH_CELL) + 9;
-  let R = null, D = null, M = null;
+  let R = null, D = null, M = null, building = false;
   const build = () => {
     R = new Float32Array(nx * nz);
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) R[j * nx + i] = world.baseHeight(x0 + i * SH_CELL, z0 + j * SH_CELL);
@@ -216,6 +247,7 @@ function skiShaper(strips) {
     // the strength mask (1 inside a strip, feathered out), then relax the grade inside it (talus: a step steeper
     // than MAX_G moves both cells toward each other; cells outside the mask stay put, so the edges blend)
     M = new Float32Array(nx * nz);
+    const Lim = new Float32Array(nx * nz).fill(MAX_G * SH_CELL); // per cell: the gentlest strip's grade limit
     for (const s of strips) {
       for (let k = 1; k < s.pts.length; k++) {
         const [ax, az] = s.pts[k - 1], [bx, bz] = s.pts[k], ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, reach = s.w + FEATHER;
@@ -226,18 +258,18 @@ function skiShaper(strips) {
           const t = Math.max(0, Math.min(1, (px * ex + pz * ez) / l2));
           const d = Math.hypot(px - ex * t, pz - ez * t) - s.w, w = 1 - smoothstep(0, FEATHER, d), q = j * nx + i;
           if (w > M[q]) M[q] = w;
+          if (w >= 0.5 && s.g * SH_CELL < Lim[q]) Lim[q] = s.g * SH_CELL;
         }
       }
     }
     // (the grid's outer ring stays at weight 0: the shaper ends exactly where its bounds do)
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) if (i < 2 || j < 2 || i >= nx - 2 || j >= nz - 2) M[j * nx + i] = 0;
-    const lim = MAX_G * SH_CELL;
-    for (let it = 0; it < 40; it++) {
+    for (let it = 0; it < ITERS; it++) {
       for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
         const q = j * nx + i;
         if (M[q] < 0.5) continue;
         for (const n of [q + 1, q + nx]) {
-          const dh = S[q] - S[n];
+          const dh = S[q] - S[n], lim = Math.min(Lim[q], Lim[n]);
           if (Math.abs(dh) <= lim) continue;
           const e = (Math.abs(dh) - lim) * 0.25 * Math.sign(dh), wn = M[n] >= 0.5 ? 1 : 0;
           S[q] -= e * (wn ? 1 : 2); if (wn) S[n] += e;
@@ -251,7 +283,7 @@ function skiShaper(strips) {
   return {
     bounds, shaper: true,
     apply(x, z, h) {
-      if (!D) build();
+      if (!D) { if (building || !world.cragMask) return h; building = true; build(); building = false; }
       const fx = (x - x0) / SH_CELL, fz = (z - z0) / SH_CELL, i = Math.floor(fx), j = Math.floor(fz);
       if (i < 0 || j < 0 || i >= nx - 1 || j >= nz - 1) return h;
       const tx = fx - i, tz = fz - j, k = j * nx + i;

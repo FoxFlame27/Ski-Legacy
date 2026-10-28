@@ -1073,7 +1073,8 @@ let trailMap = null;
 function openMap() {
   trailMap ??= new TrailMap({
     player, locationName, onClose: () => input.lock(),
-    markers: () => ({ jobs: jobs.mapMarkers(), heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [] }),
+    markers: () => ({ jobs: jobs.mapMarkers(), heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [],
+      places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Car Rental', kind: 'car' }] : [] }),
   });
   if (trailMap.toggle()) document.exitPointerLock?.();
 }

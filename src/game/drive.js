@@ -20,6 +20,7 @@ import { lampsOn, LightPool, Smoke, hazardPhase } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { TyreTracks } from './tyretracks.js';
+import { addDent, applyDents, repairInstance } from './cardamage.js';
 const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
 
 // per car: name, pull (m/s^2 at low speed), top speed (m/s), electric (one gear)
@@ -44,6 +45,7 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const CRASH_V = 62 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
 const EXTREME_V = 120 / 3.6; // ...and this fast: the car's wrecked at once
+const KNOCK_V = 26 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
@@ -142,7 +144,7 @@ export class Drive {
         const bi = this.cameraBlockers?.indexOf(e.block);
         if (bi >= 0) this.cameraBlockers.splice(bi, 1);
         // the car you drive: its wheels and steering wheel as moving parts
-        const inst = carInstance(e.t, { paint: e.paint, wheels: true });
+        const inst = this.look(e, carInstance(e.t, { paint: e.dress ? null : e.paint, wheels: true }), e.t);
         this.swapVisual(e, inst);
         const g = e.car;
         this.d = {
@@ -167,7 +169,7 @@ export class Drive {
         if (full) loadGLB(full).then((gltf) => {
           if (!this.d || this.d.e !== e || !gltf) return;
           const t = carTemplate(gltf, e.length, full);
-          const fi = carInstance(t, { paint: e.paint, wheels: true });
+          const fi = this.look(e, carInstance(t, { paint: e.dress ? null : e.paint, wheels: true }), t);
           this.swapVisual(e, fi);
           this.d.inst = fi; this.d.t = t; this.d.glassIn = undefined;
         }).catch(() => {});
@@ -219,6 +221,12 @@ export class Drive {
     if (this.vegetation?.collide?.(x, z, r, 0.6)) return false;
     return true;
   }
+  // a car instance as this car looks: a rental's own config (carrental.js e.dress: paint, interior, rims, plates) and
+  // its dents (cardamage.js)
+  look(e, inst, t) {
+    try { e.dress?.(inst, t); applyDents(inst, e); } catch (err) { console.warn('drive: car look', err); }
+    return inst;
+  }
   // show a car instance in place of the parked car's (the parked one is kept to put back)
   swapVisual(e, inst) {
     const g = e.car;
@@ -252,6 +260,7 @@ export class Drive {
     const e = d.e, g = e.car;
     for (const o of g.children.slice()) if (o !== e.block) g.remove(o);
     for (const o of e.parkedVisual || []) g.add(o);
+    if (e.dents?.length) applyDents(e.inst, e); // (parked as it is: its dents too)
     g.position.set(d.x, this.world.height(d.x, d.z) + 0.03, d.z);
     g.rotation.set(0, d.yaw, 0);
     g.updateMatrixWorld(true);
@@ -557,6 +566,7 @@ export class Drive {
     const vn = d.vx * nx + d.vz * nz;
     // into something solid (a trunk, a building, a rock, a lift tower) at 40 km/h or more: a crash
     if (solid && -vn > CRASH_V && this.canCrash()) { this.crash(-vn, nx, nz, kind); return; }
+    if (solid && -vn > KNOCK_V) this.knock(-vn, nx, nz);
     if (vn < 0) {
       d.vx -= nx * vn * 1.2; d.vz -= nz * vn * 1.2; // (a soft bounce back)
       d.vx *= 0.85; d.vz *= 0.85;
@@ -637,6 +647,7 @@ export class Drive {
       const hard = Math.min(1, -vn / 12);
       // head-on into another car at 40 km/h or more (closing): a crash
       if (-vn > CRASH_V && Math.abs(nx * fx + nz * fz) > 0.6 && this.canCrash()) { this.crash(-vn, nx, nz, 'car'); return; }
+      if (-vn > KNOCK_V) this.knock(-vn * (Math.abs(nx * fx + nz * fz) > 0.6 ? 1 : 0.7), nx, nz);
       if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.25 + 0.4 * hard); else this.audio?.play('land', 0.4 + 0.6 * hard); d.pitchV -= 0.25 * hard; d.rollV += (Math.random() - 0.5) * 0.6 * hard; }
     }
     // people: knocked over (and a fine) when the car's body touches them; the car only bumps softly
@@ -891,6 +902,24 @@ export class Drive {
   }
 
   // ------------------------------------------------------------------ crashes
+  // a dent where it hit (n: from what you hit toward the car, world): into the car's frame (cardamage.js)
+  dent(nx, nz, hard) {
+    const d = this.d, c = Math.cos(d.yaw), s = Math.sin(d.yaw);
+    const ix = -nx, iz = -nz; // (the impact's direction from the car's middle)
+    addDent(d.e, ix * c - iz * s, ix * s + iz * c, hard, d.t.size);
+    applyDents(d.inst, d.e);
+  }
+  // a knock (26 km/h up to a crash): a few % of damage, a small dent, a jolt; once per hit (not every frame of it)
+  knock(v, nx, nz) {
+    const d = this.d;
+    if (!d || d.crash || performance.now() - (this.knockT || 0) < 600) return;
+    this.knockT = performance.now();
+    const e = d.e, add = 2 + (v - KNOCK_V) * 0.7;
+    e.damage = Math.min(99, (e.damage || 0) + add);
+    this.dent(nx, nz, Math.min(0.45, (v - KNOCK_V) / 22));
+    this.shake = Math.max(this.shake, 0.35);
+    this.hud?.flash(`Knock · car damage ${Math.round(e.damage)}%`, 'bad', 1500);
+  }
   canCrash() { return !!this.d && !this.d.crash && (this.freeRide ? !!this.freeRide() : true); }
   // a hard stop, a big jolt, the crash sound, steam from the bonnet; fast (or on a steep slope) it may roll over or
   // spin into the snow; then you're out beside the wreck (wreckOut) and it counts as a wipeout (main.js strikes)
@@ -901,6 +930,8 @@ export class Drive {
     // damage: a big crash ~12-25 %, an extreme one (120 km/h+) wrecks it at once; until then you drive on
     const e0 = d.e;
     e0.damage = Math.min(100, (e0.damage || 0) + (v >= EXTREME_V ? 100 : 12 + (v - CRASH_V) * 1.0));
+    this.knockT = performance.now();
+    try { this.dent(nx, nz, Math.min(1, 0.45 + hard * 0.55 + (e0.damage >= 100 ? 0.2 : 0))); } catch (err) { console.warn('drive: dent', err); }
     if (e0.damage < 100) {
       d.vx = d.vx * 0.22 + nx * v * 0.12; d.vz = d.vz * 0.22 + nz * v * 0.12;
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -994,6 +1025,7 @@ export class Drive {
     g.updateMatrixWorld(true);
     e.collider.x = g.position.x; e.collider.z = g.position.z; e.collider.rot = -g.rotation.y;
     e.wrecked = null; e.astray = null; e.damage = 0;
+    if (e.dents?.length) { e.dents = []; repairInstance(e.inst); } // (repaired)
     e.smokeFx?.clear();
     if (e.inst) lampsOn(e.inst, 0, 0, 0); // (towed: parked, lights off)
   }

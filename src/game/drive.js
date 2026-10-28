@@ -541,9 +541,9 @@ export class Drive {
   }
   // Your car against the others (boxes, separating axes): a real knock above a walking pace, both cars get the impulse
   // of the closing speed by their masses (a bounce), the other one a spin from where it was hit: a traffic car slides
-  // off its lane and comes to rest crooked (traffic.js 'knocked' / 'wreck': it stays until the watchdog takes it away
-  // out of sight), a parked one is shoved out of its bay. Yours just bounces (no damage, no wipeout). People in the
-  // way are knocked over (peoplehits.js: they fall, you're fined).
+  // aside and comes to rest crooked on its road (traffic.js 'knocked' / 'wreck': never beyond the plowed edge + 1 m or
+  // through a guardrail / tree; the 5-minute watchdog parks it in a car park), a parked one is shoved out of its bay.
+  // Yours just bounces (no damage, no wipeout). People in the way are knocked over (peoplehits.js: they fall, fined).
   bash(dt) {
     const d = this.d;
     if (!d) return;

@@ -111,7 +111,7 @@ function snowCover(mat, key) {
   return mat;
 }
 
-const ACROSS = [-1, -0.5, 0, 0.5, 1];
+const ACROSS = [-1, -2 / 3, -1 / 3, 0, 1 / 3, 2 / 3, 1];
 
 // An access road's centre line up to just inside (0.3 m) the bus road it joins: { X, Z, S, n } (its own arrays up to
 // there, the last point exactly on the edge). Inside = across a bus road's strip, between its ends (a road carrying
@@ -492,12 +492,13 @@ function buildRoadMeshes(group, colliders = null) {
   const rails = new Guardrails(colliders, addRail);
   const CH = 60; // samples per chunk (~240 m)
   const H = (x, z) => world.height(x, z);
+  const MH = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z)); // (the drawn terrain)
   busRoads.roads.forEach((r, ri) => {
     // guardrails (planned on the whole road; an access road's are kept off the road it joins)
     let mask = [new Uint8Array(r.n), new Uint8Array(r.n)];
     try {
       mask = planRails(r, ri, H);
-      for (const run of railRuns(r, mask, H)) rails.addRun(run);
+      for (const run of railRuns(r, mask, MH)) rails.addRun(run); // (posts on the drawn ground)
     } catch (e) { console.warn('guardrails', e); mask = [new Uint8Array(r.n), new Uint8Array(r.n)]; }
     // an access road ends just inside the road it joins, cut exactly there (that one is drawn over it): a T-junction
     // with no gap; one that carries on from a road's end is left whole (no gap there either)
@@ -517,25 +518,37 @@ function buildRoadMeshes(group, colliders = null) {
     };
     const dirStart = prev ? jointDir(prev, r) : null, dirEnd = next ? jointDir(r, next) : null;
     for (let c0 = 0; c0 < nEnd; c0 += CH) {
-      const c1 = Math.min(nEnd, c0 + CH), m = c1 - c0 + 1, na = ACROSS.length;
-      const rp = new Float32Array(m * na * 3), ruv = new Float32Array(m * na * 2), ri2 = [];
-      for (let k = 0; k < m; k++) {
-        const i = c0 + k, a = Math.max(0, i - 1), b = Math.min(R.n - 1, i + 1);
+      const c1 = Math.min(nEnd, c0 + CH), m = c1 - c0 + 1, na = ACROSS.length, mr = 2 * m - 1;
+      const rp = new Float32Array(mr * na * 3), ruv = new Float32Array(mr * na * 2), ri2 = [];
+      const dirAt = (i) => {
+        const a = Math.max(0, i - 1), b = Math.min(R.n - 1, i + 1);
         let dx = R.X[b] - R.X[a], dz = R.Z[b] - R.Z[a];
         const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
         if (i === 0 && dirStart) [dx, dz] = dirStart;
         else if (i === R.n - 1 && dirEnd) [dx, dz] = dirEnd;
+        return [dx, dz];
+      };
+      // (two rows per road sample, ~2 m apart, ~1.1 m across, each on the drawn terrain's own surface (its 2 m
+      // triangles, world.meshHeight): the strip neither floats over nor sinks into the ground between its vertices)
+      for (let kr = 0; kr < mr; kr++) {
+        const k0 = kr >> 1, i0 = c0 + k0, half = kr & 1, i1 = Math.min(R.n - 1, i0 + half);
+        let [dx, dz] = dirAt(i0);
+        if (half) { const d1 = dirAt(i1), l = Math.hypot(dx + d1[0], dz + d1[1]) || 1; dx = (dx + d1[0]) / l; dz = (dz + d1[1]) / l; }
+        const cx = half ? (R.X[i0] + R.X[i1]) / 2 : R.X[i0], cz = half ? (R.Z[i0] + R.Z[i1]) / 2 : R.Z[i0], cs = half ? (R.S[i0] + R.S[i1]) / 2 : R.S[i0];
         const nx = dz, nz = -dx; // across the road
-        // the strip follows the carved ground itself (sampled like the terrain), a few cm above it
         for (let q = 0; q < na; q++) {
-          const o = ACROSS[q] * ROAD_HALF, x = R.X[i] + nx * o, z = R.Z[i] + nz * o;
-          rp.set([x, H(x, z) + 0.035, z], (k * na + q) * 3);
-          ruv.set([(ACROSS[q] + 1) / 2, (v0 + R.S[i]) / 13.5], (k * na + q) * 2);
+          const o = ACROSS[q] * ROAD_HALF, x = cx + nx * o, z = cz + nz * o;
+          rp.set([x, MH(x, z) + 0.035, z], (kr * na + q) * 3);
+          ruv.set([(ACROSS[q] + 1) / 2, (v0 + cs) / 13.5], (kr * na + q) * 2);
         }
+        if (kr < mr - 1) {
+          for (let q = 0; q < na - 1; q++) { const A = kr * na + q, B = (kr + 1) * na + q; ri2.push(A, B, A + 1, A + 1, B, B + 1); }
+        }
+      }
+      for (let k = 0; k < m; k++) {
+        const i = c0 + k;
+        const [dx, dz] = dirAt(i), nx = dz, nz = -dx;
         // (the plough berms are shaped into the terrain itself: roads.js)
-        if (k < m - 1) {
-          for (let q = 0; q < na - 1; q++) { const A = k * na + q, B = (k + 1) * na + q; ri2.push(A, B, A + 1, A + 1, B, B + 1); }
-        }
         // orange snow poles every ~48 m and white reflector posts every ~24 m, both sides, staggered: where there is
         // no guardrail, and never on another road's lane, in a junction's mouth, a car park or the lay-by
         if (i % 6 === 0 && R.S[i] > 12 && R.S[R.n - 1] - R.S[i] > 12) {
@@ -546,7 +559,7 @@ function buildRoadMeshes(group, colliders = null) {
             const x = R.X[i] + nx * o * sg, z = R.Z[i] + nz * o * sg;
             if (roadsideBlocked(x, z, 0.25, ri, R.S[i])) continue;
             const ry = Math.atan2(nx * sg, nz * sg); // reflector toward the road
-            ((i / 6) % 4 < 2 ? posts : poles).push([x, H(x, z), z, ry + Math.PI]);
+            ((i / 6) % 4 < 2 ? posts : poles).push([x, MH(x, z), z, ry + Math.PI]);
           }
         }
       }

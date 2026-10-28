@@ -866,6 +866,76 @@ export class Audio {
     }
   }
 
+  /**
+   * A car glancing off a guardrail (a steel W-beam on posts): not a bell-like clang but a dull, heavy sheet-steel
+   * bonk / thud with a short grind of paint and metal, louder, lower and fuller by the speed into the rail (amount
+   * 0..1); `along` (m/s, the speed along the rail) adds a longer scrape tail. The slide itself: setRailScrape().
+   */
+  railHit(amount = 0.4, along = 0) {
+    if (!this.ctx) return;
+    const a = clamp(Number.isFinite(amount) ? amount : 0.4, 0.06, 1), rnd = (lo, hi) => lo + Math.random() * (hi - lo);
+    const B = this.buf, slide = clamp(along / 25, 0, 1);
+    try {
+      if (B.metal_hit) {
+        // the body panel and the rail's beam: the dent recording, slowed and dulled (no ring)
+        this.shot('metal_hit', { sprite: true, vol: 0.25 + 0.6 * a, rate: rnd(0.62, 0.74) - 0.08 * a, lp: 1400 + 3200 * a });
+        if (B.metal_scrape && (a > 0.15 || slide > 0.2)) this.shot('metal_scrape', { vol: (0.2 + 0.4 * a) * (0.5 + slide), rate: rnd(0.85, 1), delay: 0.02, dur: 0.25 + 0.5 * slide, lp: 3500 + 4000 * a });
+        this.tone(78, 0.28 + 0.15 * a, 'sine', 0.45 * a, 0.5);   // the weight of it
+        if (performance.now() - (this.carLive || 0) < 600 && a > 0.5) this.shot('crash_car', { sprite: [1], vol: 0.25 * a, rate: rnd(0.95, 1.05), dur: 0.6, lp: 5000 });
+        return;
+      }
+      // synthesized: a damped sheet-steel thump (low inharmonic modes dying fast) and a gritty band of noise
+      const ctx = this.ctx, t = ctx.currentTime;
+      for (const [f, v, d] of [[96, 0.5, 0.3], [187, 0.28, 0.18], [342, 0.16, 0.12], [611, 0.08, 0.08]]) {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'triangle'; o.frequency.setValueAtTime(f * (1 + 0.1 * a), t); o.frequency.exponentialRampToValueAtTime(f * 0.8, t + d);
+        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v * a, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0005, t + d);
+        o.connect(g).connect(this.sfx); o.start(t); o.stop(t + d + 0.05);
+      }
+      const src = ctx.createBufferSource(); src.buffer = this.white;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1100 + 900 * a; f.Q.value = 1.4;
+      const g = ctx.createGain(), dur = 0.18 + 0.4 * slide;
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.3 * a, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0005, t + dur);
+      src.connect(f).connect(g).connect(this.sfx); src.start(t, Math.random()); src.stop(t + dur + 0.05);
+    } catch { /* (silent) */ }
+  }
+
+  /**
+   * The scrape loop while a car slides along a guardrail: speed (m/s along the rail), 0 = silent. A grinding band of
+   * the metal_scrape recording (looped; filtered noise until it loads), pitch and loudness rising with the speed, with a
+   * chatter as the panel catches on the rail's posts and joints.
+   */
+  setRailScrape(speed = 0) {
+    if (!this.ctx) return;
+    const v = Math.max(0, +speed || 0), on = v > 0.8;
+    if (this.railScr && !this.railScr.rec && !this.railScr.on && this.buf.metal_scrape?.duration > 0.8) { // (the recording has loaded since)
+      try { this.railScr.src.stop(); this.railScr.lfo.stop(); this.railScr.g.disconnect(); } catch { /* (gone) */ }
+      this.railScr = null;
+    }
+    if (!this.railScr) {
+      if (!on) return;
+      try {
+        const ctx = this.ctx, B = this.buf.metal_scrape, rec = !!(B && B.duration > 0.8);
+        const src = ctx.createBufferSource(); src.buffer = rec ? this.loopify(B, 0.15) : this.white; src.loop = true;
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 280; hp.Q.value = 0.7;
+        const bp = ctx.createBiquadFilter(); bp.type = rec ? 'lowpass' : 'bandpass'; bp.frequency.value = rec ? 5000 : 1600; bp.Q.value = rec ? 0.7 : 1.1;
+        const chat = ctx.createGain(); chat.gain.value = 1;
+        const lfo = ctx.createOscillator(), depth = ctx.createGain(); lfo.type = 'sawtooth'; lfo.frequency.value = 4; depth.gain.value = 0.35;
+        lfo.connect(depth).connect(chat.gain); lfo.start();
+        const g = ctx.createGain(); g.gain.value = 0;
+        src.connect(hp).connect(bp).connect(chat).connect(g).connect(this.sfx);
+        src.start(0, rec ? Math.random() * src.buffer.duration * 0.8 : Math.random());
+        this.railScr = { src, bp, lfo, g, rec, on: false };
+      } catch { return; }
+    }
+    const N = this.railScr, t = this.ctx.currentTime, k = clamp(v / 22, 0, 1);
+    N.on = on;
+    N.g.gain.setTargetAtTime(on ? (0.12 + 0.38 * k) * (N.rec ? 1 : 0.6) : 0, t, on ? 0.03 : 0.08);
+    N.src.playbackRate.setTargetAtTime(N.rec ? 0.75 + 0.45 * k : 1, t, 0.05);
+    N.bp.frequency.setTargetAtTime(N.rec ? 2500 + 6000 * k : 1200 + 1400 * k, t, 0.05);
+    N.lfo.frequency.setTargetAtTime(Math.max(1, v / 2.2), t, 0.1); // (posts every ~2 m)
+  }
+
   /** A car crash: a crunch of metal, glass breaking and a heavy thud (amount 0..1). */
   carCrash(amount = 1) {
     if (!this.ctx) return;

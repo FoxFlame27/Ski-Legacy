@@ -4,7 +4,7 @@
 // thin dark mullions between stone piers, the five display cars on their turntables behind it, warm light inside),
 // the CAR RENTAL board on the gable (village sign style, lit at night), lanterns, flags, potted spruces, and a compact
 // ploughed yard in front (kerbs, painted bays, the TOW bay) fading into the snow. E at the door: inside
-// (carrentalroom.js, its own scene: two storeys, a sharp village street and peaks built outside its glass);
+// (carrentalroom.js, its own scene: two storeys; through its glass the real world, rendered live as in the ski shop);
 // at a car on display or the clerk: the rental card (ui/carrental.js). The rented car waits in the yard, nose to the
 // road; E beside it to drive (drive.js: every other car only says where to rent one). One rental at a time (renting
 // another returns the old one); it is kept in the save (back in the yard next time). Wreck it: $1000 (once; the
@@ -59,6 +59,8 @@ export class CarRental {
     this.yaw0 = Math.atan2(L.dirx, L.dirz); // the lot's frame: local +z toward the road, +x along it
     this.buildOutside();
     this.room = new CarRentalRoom({ renderer: o.renderer, models: o.models, makeRig: o.makeRig, cars: RENTALS, display: DISPLAY.map(([id, paint]) => ({ id, paint: paintHex(paint) })), upper: UPPER.map(([id, paint]) => ({ id, paint: paintHex(paint) })) });
+    // the showroom's windows look out on the real world from where the hall stands (its own outside hidden for that view)
+    this.room.setWorld({ scene: o.scene, frame: this.hall, hide: () => [this.hall, this.player?.rig?.root, this.player?.rig?.gear] });
     // the tow truck: in its TOW bay along the road, nose to the yard's right end; out: on round to the right onto the
     // road; back: in from the road at the left of the bay, round into it (so it ends nose first, square in the bay)
     const P = YARD.tow, park = this.w(P.x, P.z);
@@ -89,7 +91,7 @@ export class CarRental {
     const canvas = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
     const mk = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m; };
     // the hall (building frame: the room's), its glass clear enough to show the lit showroom (a light sheen only)
-    const hall = new THREE.Group(); hall.position.set(0, 0, BZ); g.add(hall);
+    const hall = this.hall = new THREE.Group(); hall.position.set(0, 0, BZ); g.add(hall);
     const glass = new THREE.MeshPhysicalMaterial({ color: 0xd4e4ee, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.14, envMapIntensity: 0.5, depthWrite: false });
     const sh = buildShell(hall, 'out', glass);
     this.stripMat = sh.strips; this.doors = sh.doors; this.litMats = sh.lit; this.doorT = 0;
@@ -191,9 +193,6 @@ export class CarRental {
     this.carSpot = { ...this.w(YARD.carX, YARD.carZ), yaw: this.yaw0 }; // (in the middle bay, nose to the road)
   }
 
-  /** The view out of the showroom (carrentalroom.js builds it: a sharp village street and peaks), at this hour. */
-  outsideView() { this.room.setOutside(nightUniform?.value ?? 0); }
-
   // ------------------------------------------------------------------ rental cars (parking entries drive.js can drive)
   // cfg: carconfig.js normConfig() (the car, its paint, interior, rims, plate): the car in the yard is exactly that one,
   // and so is every look of it drive.js makes (e.dress: driving, the full-detail cockpit)
@@ -269,7 +268,6 @@ export class CarRental {
     this.player.frozen = true;
     this.audio?.play?.('click');
     this.transition.fade(() => {
-      this.outsideView(); // (the world through the glass, as it is now)
       this.inside = true;
       this.room.enter();
       this.getPost().setView(this.room.scene, this.room.camera);
@@ -281,7 +279,7 @@ export class CarRental {
     const out = () => {
       if (this.ui.isOpen) this.ui.close('leave');
       this.room.endConfigure();
-      this.inside = false; this.room.active = false;
+      this.inside = false; this.room.active = false; this.room.releasePortal();
       this.getPost().setView(this.scene, this.camera);
       document.getElementById('crosshair').hidden = true;
       this.player.frozen = false;

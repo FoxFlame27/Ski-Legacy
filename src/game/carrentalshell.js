@@ -105,8 +105,9 @@ function worldUV(geo) {
  * door, mezzanine, stair, trusses). glass: the glazing's material (each side its own).
  * Returns { glassMeshes, strips (the light strips' material), front (z of the glass), doors (the two sliding leaves:
  * setDoors()), lit (the self-lit inner materials, outside only) }.
+ * opts.view ('in'): the material of the upper side windows' view (carrentalroom.js: the live world).
  */
-export function buildShell(g, side, glass) {
+export function buildShell(g, side, glass, opts = {}) {
   const m = shellMaterials(), { W, D, H, RISE, T, EAVE, EAVE_F, PIER, FL, MZ } = L, out = side === 'out';
   const wallMat = out ? m.larchOut : m.larchIn;
   const inner = out ? m.larchInLit : m.larchIn, oak = out ? m.oakLit : m.oak, glu = out ? m.glulamLit : m.glulam;
@@ -126,7 +127,7 @@ export function buildShell(g, side, glass) {
     B(W, H, T, m.larchIn, 0, H / 2, -D / 2 - T / 2);
     for (const sx of [-1, 1]) B(PIER, H, 0.4, m.stone, sx * (W / 2 - PIER / 2), H / 2, D / 2 - 0.1); // (the piers' inner faces)
   }
-  // the upper windows in the side walls (the second storey): outside a warm lit glass, inside the snowy peaks
+  // the upper windows in the side walls (the second storey): outside a warm lit glass, inside the view out
   const wy = FL + 1.85, ww = 1.9, wh = 1.6;
   for (const sx of [-1, 1]) for (const wz of [-5.2, -1.6, 2.0, 5.4]) {
     if (out) {
@@ -135,7 +136,7 @@ export function buildShell(g, side, glass) {
       B(0.14, 0.06, ww + 0.3, m.steel, sx * (W / 2 + T + 0.08), wy - wh / 2 - 0.1, wz, false);
     } else {
       B(0.06, wh + 0.18, ww + 0.18, m.steel, sx * (W / 2 - 0.02), wy, wz, false);
-      const sky = add(new THREE.PlaneGeometry(ww, wh), m.winIn, sx * (W / 2 - 0.055), wy, wz, false);
+      const sky = add(new THREE.PlaneGeometry(ww, wh), opts.view || m.winIn, sx * (W / 2 - 0.06), wy, wz, false);
       sky.rotation.y = -sx * Math.PI / 2;
       B(0.2, 0.05, ww + 0.2, m.oak, sx * (W / 2 - 0.1), wy - wh / 2 - 0.05, wz, false);
     }

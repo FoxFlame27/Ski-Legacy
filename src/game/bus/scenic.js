@@ -401,13 +401,13 @@ export function shapeScenic() {
           const key = c[1].ri * 4096 + Math.floor(c[1].sa / 48), o = best.get(key);
           if (!o || c[0] < o[0]) best.set(key, c);
         }
-        // (each stretch's band: y +- its batter, widened to nothing toward REACH so a stretch fades in smoothly)
+        // (each stretch's band: y +- its batter; its weight below fades out toward REACH)
         let lo = -Infinity, hi = Infinity, soft = 1.6;
         const BD = BANDS; BD.length = 0;
         for (const [d, sg, t] of best.values()) {
           const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
           const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
-          const e = Math.max(0, d - b), w = k * e + 4000 * f * f, l = y - w, u = y + w;
+          const e = Math.max(0, d - b), w = k * e, l = y - w, u = y + w; // (at REACH the band holds h: no step)
           lo = Math.max(lo, l); hi = Math.min(hi, u); soft = Math.min(soft, 0.2 * w + 0.01);
           BD.push((1 - f) / (e * e + 0.02), l, u); // (its inverse-distance weight: used where the bands disagree)
         }

@@ -309,8 +309,8 @@ export class Drive {
   update(dt, input) {
     if (this.sliding.length && dt > 0) this.slideParked(dt);
     if (this.wrecks.length && dt > 0) this.updateWrecks(dt);
-    if (!this.d) { this.unstick(); return; }
-    if (dt <= 0) { this.audio?.setCar?.({ on: true, paused: true }); return; }
+    if (!this.d) { this.unstick(); if (this.audio?.railScr?.on) this.audio.setRailScrape(0); return; }
+    if (dt <= 0) { this.audio?.setCar?.({ on: true, paused: true }); this.audio?.setRailScrape?.(0); return; }
     try {
       const d = this.d;
       d.offT = Math.max(0, d.offT - dt);
@@ -333,6 +333,10 @@ export class Drive {
         else { const k = d.start - 0.85; d.crank = 0; d.firing = 1; d.rpm = Math.max(d.rpm, IDLE + 900 * Math.exp(-k * 2.4) * Math.min(1, k * 10)); }
       } else { d.crank = 0; d.firing = 1; }
       d.load += (thr - d.load) * (1 - Math.exp(-dt * 9));
+      // the guardrail scrape: while touching one (railHit), by the speed along it
+      d.railT = Math.max(0, (d.railT || 0) - dt);
+      try { this.audio?.setRailScrape?.(d.railT > 0 ? d.railSlide || 0 : 0); } catch { /* (silent) */ }
+      if (d.railT <= 0) d.railSlide = 0;
       this.pose(dt);
       this.updateSeat();
       const p = this.player;
@@ -530,6 +534,7 @@ export class Drive {
   collide() {
     const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
     let px = 0, pz = 0, n = 0, solid = false, kind = 'snow';
+    let rpx = 0, rpz = 0, rn = 0; // (guardrails: their own push, a glancing collision below)
     const R = d.w / 2;
     for (const k of [d.half - R, 0, -(d.half - R)]) {
       const cx = d.x + fx * k, cz = d.z + fz * k;
@@ -548,7 +553,7 @@ export class Drive {
           const ex = g.bx - g.ax, ez = g.bz - g.az, l2 = ex * ex + ez * ez || 1;
           const t2 = clamp(((cx - g.ax) * ex + (cz - g.az) * ez) / l2, 0, 1), qx = g.ax + ex * t2, qz = g.az + ez * t2;
           const dx = cx - qx, dz = cz - qz, l = Math.hypot(dx, dz), o = R + 0.12 - l;
-          if (o > 0 && l > 1e-4) { px += (dx / l) * o; pz += (dz / l) * o; n++; if (kind === 'snow') kind = 'metal'; }
+          if (o > 0 && l > 1e-4) { rpx += (dx / l) * o; rpz += (dz / l) * o; rn++; }
         }
         }
       }
@@ -574,6 +579,7 @@ export class Drive {
         }
       }
     }
+    if (rn) this.railHit(rpx, rpz);
     if (!n) return;
     const l = Math.hypot(px, pz) || 1, nx = px / l, nz = pz / l;
     d.x += px; d.z += pz;
@@ -587,6 +593,43 @@ export class Drive {
       d.yawRate *= 0.6;
       if (-vn > 2 && performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); this.audio?.impact ? this.audio.impact(kind === 'soft' ? 'snow' : kind, Math.min(0.7, -vn / 16)) : this.audio?.play('land', Math.min(1, -vn / 10)); d.pitchV -= Math.min(0.6, -vn * 0.04); }
     }
+  }
+
+  // A guardrail: a glancing collision, never a dead stop. Out of the rail by the overlap; the speed into it bounces
+  // back with a little restitution (0.3), the speed along it is kept less a Coulomb friction loss (bigger the steeper
+  // the angle); the nose is turned toward the rail's direction (the car glances off and runs along it) and given a
+  // little yaw away from it. A head-on hit loses most of its speed but rolls back a bit. The sound: a thud by the
+  // speed into the rail (audio.railHit) and a scrape loop while it slides along it (audio.setRailScrape, update()).
+  railHit(px, pz) {
+    const d = this.d, l = Math.hypot(px, pz);
+    if (l < 1e-6) return;
+    const nx = px / l, nz = pz / l;
+    d.x += px; d.z += pz;
+    const vn = d.vx * nx + d.vz * nz;
+    let tx = -nz, tz = nx, vt = d.vx * tx + d.vz * tz;
+    if (vt < 0) { tx = -tx; tz = -tz; vt = -vt; }
+    if (vn < -0.05) {
+      const e = 0.3, mu = 0.22, into = -vn;
+      const vt2 = Math.max(vt * 0.35, vt - mu * (1 + e) * into); // (friction: never more than 65 % of the speed along it)
+      const vn2 = e * into + 0.4;                                   // (out of it: a bounce, plus a nudge clear of the rail)
+      d.vx = tx * vt2 + nx * vn2; d.vz = tz * vt2 + nz * vn2;
+      // the heading: turned part of the way to the new direction of travel (forwards or reversing, whichever is nearer)
+      const sp = Math.hypot(d.vx, d.vz);
+      if (sp > 1) {
+        const fx = Math.sin(d.yaw), fz = Math.cos(d.yaw), back = d.vx * fx + d.vz * fz < 0;
+        const travel = Math.atan2(back ? -d.vx : d.vx, back ? -d.vz : d.vz), err = wrapPi(travel - d.yaw);
+        const turn = clamp(err * 0.55, -0.35, 0.35);
+        d.yaw = wrapPi(d.yaw + turn);
+        d.yawRate = d.yawRate * 0.3 + clamp(err, -1, 1) * 0.6; // (a little yaw away from the rail)
+      } else d.yawRate *= 0.5;
+      if (into > KNOCK_V * 1.4) this.knock(into, nx, nz); // (a hard hit dents it: no crash, you drive on)
+      d.rollV += (Math.random() - 0.5) * Math.min(0.5, into * 0.05);
+      d.pitchV -= Math.min(0.3, into * 0.02);
+      const now = performance.now();
+      if (into > 1.2 && now - (this.railBangT || 0) > 220) { this.railBangT = now; try { this.audio?.railHit ? this.audio.railHit(Math.min(1, into / 14), vt2) : this.audio?.impact?.('metal', Math.min(0.7, into / 16)); } catch { /* (silent) */ } }
+    }
+    d.railSlide = Math.max(d.railSlide || 0, vt); // (the scrape loop's speed: update())
+    d.railT = 0.12;
   }
 
   // on foot (or skis) inside a parked car's footprint (never meant to happen): out to the nearer side of it

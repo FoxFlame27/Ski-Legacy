@@ -1,0 +1,192 @@
+{
+  "sofa": {
+    "preview": "01a183a2-319a-76fc-ae13-e56896422eb8",
+    "refine": "01a183a3-cc1b-73bb-95df-ab3ce0420fd8",
+    "done": true
+  },
+  "armchair": {
+    "preview": "01a183a2-31ee-76c5-852f-29e174e15f99",
+    "refine": "01a183a4-31d3-772f-9c26-28b137a1e522",
+    "done": true
+  },
+  "coffee_table": {
+    "preview": "01a183a2-3197-71c0-832c-ed045f030623",
+    "refine": "01a183a4-3111-778f-83c8-eb454aa0dd08",
+    "done": true
+  },
+  "tv_unit": {
+    "preview": "01a183a2-3197-71be-a178-a899e781f78a",
+    "refine": "01a183a3-ee8e-7131-a80e-b7d43fa3baa6",
+    "done": true
+  },
+  "rug": {
+    "preview": "01a183a2-3198-7423-b4c1-481889b96fcc",
+    "refine": "01a183a3-66f5-7791-a5c4-7c0175a6064d",
+    "done": true
+  },
+  "bookshelf": {
+    "preview": "01a183a2-31a5-757f-b2cc-5d717b54b6d7",
+    "refine": "01a183a3-ee2c-74bc-b717-9322db02415b",
+    "done": true
+  },
+  "fireplace_stove": {
+    "preview": "01a183a2-3197-7601-96ba-28db49edf68c",
+    "refine": "01a183a3-ef28-7171-b3bf-9950557c6a87",
+    "done": true
+  },
+  "log_basket": {
+    "preview": "01a183a2-319a-76fa-9a41-18cc0f0fa606",
+    "refine": "01a183a5-92bb-765e-8c5a-6abf504906d3",
+    "done": true
+  },
+  "kitchen_counter": {
+    "preview": "01a183a2-319e-7379-9295-1e3c8ebf84ab",
+    "refine": "01a183a4-0f28-768e-af26-4246ae30d603",
+    "done": true
+  },
+  "kitchen_sink": {
+    "preview": "01a183a2-31a0-71e7-a3c0-3456f1141192",
+    "refine": "01a183a3-ccdf-7418-9f73-067fde4a9ea4",
+    "done": true
+  },
+  "fridge": {
+    "preview": "01a183a4-a67b-72ae-8669-44de51aaedda",
+    "refine": "01a183a5-ee49-7055-bfc8-c3e1cac0b96a",
+    "done": true
+  },
+  "stove": {
+    "preview": "01a183a5-1ce1-72cd-b22b-21c9ec1deb87",
+    "refine": "01a183a8-22f9-74de-a3b4-cd2c07dab127",
+    "done": true
+  },
+  "dining_table": {
+    "preview": "01a183a5-43aa-7483-88ae-fb008acb3dba",
+    "refine": "01a183a6-8e71-7320-98f9-2a22b957f71a",
+    "done": true
+  },
+  "dining_chair": {
+    "preview": "01a183a5-4bf1-73f7-8afd-edb72d872273",
+    "refine": "01a183a6-7d91-7759-8e26-dff74fa9cdcc",
+    "done": true
+  },
+  "wall_shelf": {
+    "preview": "01a183a5-5f23-743e-b9df-a524c98e4c96",
+    "refine": "01a183a6-c8ec-7571-a4d8-998bfe192896",
+    "done": true
+  },
+  "double_bed": {
+    "preview": "01a183a5-7c1f-7735-b84f-6e776e6e75e8",
+    "refine": "01a183a7-21be-7559-9887-d70ac84de281",
+    "done": true
+  },
+  "single_bed": {
+    "preview": "01a183a5-ce15-7198-836f-fc66af096266",
+    "refine": "01a183a7-1f60-74c5-93d4-c120311c2c92",
+    "done": true
+  },
+  "wardrobe": {
+    "preview": "01a183a5-d8f3-76bc-9c78-1a9925a534ab",
+    "refine": "01a183a7-2035-7613-a7cf-09f4b8e2189f",
+    "done": true
+  },
+  "nightstand": {
+    "preview": "01a183a5-fc70-708e-8203-222872bd2017",
+    "refine": "01a183a7-c0c5-74dc-870e-afb2945ecf49",
+    "done": true
+  },
+  "desk": {
+    "preview": "01a183a7-19fd-7544-920e-307fda10221a",
+    "refine": "01a183a8-85a7-72c9-8f24-5d57af8ff9dd",
+    "done": true
+  },
+  "desk_chair": {
+    "preview": "01a183a7-ccb0-75db-8be8-ceb8d045c80f",
+    "refine": "01a183a8-f6f1-77e3-b775-f98c191f1dee",
+    "done": true
+  },
+  "blanket_chest": {
+    "preview": "01a183a7-db21-7509-bd7f-48391d86671a",
+    "refine": "01a183a9-9ecd-7306-ae97-2b17757fd705",
+    "done": true
+  },
+  "bath_rug": {
+    "preview": "01a183a8-16a7-7208-b615-c6730e59f324",
+    "refine": "01a183a9-4383-70e5-9b7e-478724a57e8f",
+    "done": true
+  },
+  "towel_rack": {
+    "preview": "01a183a8-206b-70cf-9e05-83c71baa1afc",
+    "refine": "01a183a9-277b-744e-9912-72c357bcd5e5",
+    "done": true
+  },
+  "mirror_cabinet": {
+    "preview": "01a183a8-4b9e-74a5-87db-dcfa3c2d4a92",
+    "refine": "01a183a9-92c5-7016-a406-5f17ba127542",
+    "done": true
+  },
+  "laundry_basket": {
+    "preview": "01a183a8-513c-7200-8b02-5e0b40ef90ca",
+    "refine": "01a183aa-3afa-7125-b4b8-769150cf384a",
+    "done": true
+  },
+  "plant_tall": {
+    "preview": "01a183a8-b9b2-72da-a315-e11be93f77d6",
+    "refine": "01a183a9-df6a-7305-b8ff-0d436cb44ae5",
+    "done": true
+  },
+  "plant_small": {
+    "preview": "01a183a9-8f86-7236-8fa6-2704beb3f3e3",
+    "refine": "01a183aa-f8d2-724c-bdb2-8054fa4b08fc",
+    "done": true
+  },
+  "ski_rack": {
+    "preview": "01a183a9-b168-77ff-96a3-225578c15a52",
+    "refine": "01a183aa-fb14-72c5-803d-4c17e6ffc2e7",
+    "done": true
+  },
+  "picture_mountain": {
+    "preview": "01a183aa-3a9e-7478-8795-a5ea3cc69aed",
+    "refine": "01a183ab-9fc1-7788-94b3-f7334b48329f",
+    "done": true
+  },
+  "picture_deer": {
+    "preview": "01a183aa-3fb1-7347-8845-8cb319df8f7c",
+    "refine": "01a183ab-cbed-7382-8f98-e459c302d512",
+    "done": true
+  },
+  "antlers": {
+    "preview": "01a183aa-6fe2-7575-a3c1-1f3451463d63",
+    "refine": "01a183ab-c9d1-748d-9da9-bb6f89c92540",
+    "done": true
+  },
+  "cuckoo_clock": {
+    "preview": "01a183aa-b5be-77ad-b9b7-ad4e5fdff5e7",
+    "refine": "01a183ab-fdc0-73ba-aa50-e01db07272d7",
+    "done": true
+  },
+  "floor_lamp": {
+    "preview": "01a183aa-ddec-734e-a7d8-568103da1bd1",
+    "refine": "01a183ab-cc8c-735f-bcff-7d97b72ceaf8",
+    "done": true
+  },
+  "table_lamp": {
+    "preview": "01a183ab-0bc9-73a6-8a2c-30ef1f2e786d",
+    "refine": "01a183ac-121b-7361-93e1-7835cea93847",
+    "done": true
+  },
+  "ceiling_lamp": {
+    "preview": "01a183ab-8c6d-76d1-8844-daa9d7e27f35",
+    "refine": "01a183ac-b3c7-7116-acc3-a39c24a54b29",
+    "done": true
+  },
+  "wall_sconce": {
+    "preview": "01a183ab-a9f9-770c-95a5-31eab1d9de03",
+    "refine": "01a183ac-d4d8-76ed-a8e9-5690070a3ebf",
+    "done": true
+  },
+  "lantern": {
+    "preview": "01a183ac-6464-71ea-aecc-e0edbaf2a17c",
+    "refine": "01a183ad-8e57-715b-8469-cfae9d9e13eb",
+    "done": true
+  }
+}

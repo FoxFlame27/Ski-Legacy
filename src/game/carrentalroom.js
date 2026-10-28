@@ -1,13 +1,12 @@
 // Inside the CAR RENTAL (its own scene, like the ski shop's: main.js renders it through post.setView while you're in).
-// Two storeys: the stair along the left wall up to the mezzanine at the back (two more cars, the office); the doors
-// an automatic sliding pair. Through the glass: a real (simple) snowy village street, chalets, spruces and peaks,
-// built in this scene (sharp at any distance: no captured cube map, no fog).
 // The very hall you see from the road (carrentalshell.js builds both sides from one LAYOUT): larch walls, the glass
-// front with its mullions and door, the vaulted timber ceiling on glulam trusses, the five cars on their turntables
-// where they stand behind the glass outside. Through the glass: the real world, captured once as you come in
-// (carrental.js: a cube camera just outside the door, set as this scene's background, turned with the building).
-// A polished dark stone floor that mirrors the cars, a free-standing reception desk (the clerk behind it), a small
-// lounge corner. Walk with WASD + mouse; look at a car or the clerk and press E (carrental.js opens the rental card).
+// front with its mullions and sliding doors, the vaulted timber ceiling on glulam trusses, the five cars on their
+// turntables where they stand behind the glass outside; two storeys (the stair along the left wall up to the
+// mezzanine: two more cars, the office). A polished dark stone floor that mirrors the cars, a reception desk (the
+// clerk behind it), a lounge corner. Through the glass: the REAL world, rendered live the ski shop's way
+// (interior.js): a second camera, your camera carried to where the hall stands in the village (setWorld), renders
+// the world (the hall itself hidden) into a target the window planes show by screen position (gl_FragCoord).
+// Walk with WASD + mouse; look at a car or the clerk and press E (carrental.js).
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
@@ -24,7 +23,25 @@ export const ROOM = { W: LAYOUT.W, D: LAYOUT.D, H: LAYOUT.H };
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0);
 const HITBOX = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
 const DOOR = LAYOUT.door, DESK = LAYOUT.desk;
-const _v = new THREE.Vector3();
+const _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _s = new THREE.Vector3(), _size = new THREE.Vector2(), _frustum = new THREE.Frustum(), _box = new THREE.Box3();
+// the window view: the world render, indexed by where the fragment is on screen (as interior.js); a faint cool tint
+// and a soft sheen toward the top read as clean glass; no world yet: a pale winter sky
+const PORTAL_VERT = `
+  varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const PORTAL_FRAG = `
+  uniform sampler2D tView;
+  uniform float uHas;
+  uniform vec4 uVP;
+  varying vec2 vUv;
+  void main() {
+    vec2 suv = (gl_FragCoord.xy - uVP.xy) / uVP.zw;
+    vec3 view = texture2D(tView, suv).rgb;
+    vec3 sky = mix(vec3(1.5, 1.6, 1.75), vec3(0.3, 0.5, 0.95), smoothstep(0.3, 1.0, suv.y));
+    vec3 c = mix(sky, view, uHas) * vec3(0.94, 0.96, 0.97);
+    c += vec3(0.025, 0.03, 0.035) * smoothstep(0.4, 1.0, vUv.y);
+    gl_FragColor = vec4(c, 1.0);
+  }`;
 
 function tex(w, h, draw, { repeat = null, srgb = true } = {}) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
@@ -49,7 +66,7 @@ export class CarRentalRoom {
     this.pos = new THREE.Vector3(); this.level = 'ground'; this.eyeY = EYE; this.doorT = 0; this.vel = new THREE.Vector3(); this.yaw = Math.PI; this.pitch = -0.08;
     this.obstacles = []; this.aimables = []; this.tables = [];
     this.cfg = null; // the configurator: { table, step, yaw, pitch, dist } (carrental.js configure())
-    this.models = models; this.cars = cars;
+    this.models = models; this.cars = cars; this.renderer = renderer;
     const pmrem = new THREE.PMREMGenerator(renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
     pmrem.dispose();
@@ -58,93 +75,98 @@ export class CarRentalRoom {
     this.buildLights();
     this.buildCars(models, cars, display);
     this.buildUpper(models, cars, upper);
-    this.buildView();
     this.buildDesk(models, makeRig);
     this.buildLounge(models);
+    this.portalMeshes();
   }
-  /** The view out at this time of day (night 0..1: the sky and the snow darken, the chalets' windows glow). */
-  setOutside(night = 0) {
-    const n = Math.max(0, Math.min(1, night)), V = this.view;
-    if (!V) return;
-    for (const [mat, base] of V.mats) mat.color.copy(base).multiplyScalar(1 - 0.82 * n);
-    V.sky.color.setScalar(1 - 0.88 * n);
-    V.win.emissiveIntensity = 0.25 + 2.2 * n;
-  }
-
-  // ------------------------------------------------------------------ the view out: the yard, the street, the village, the peaks
-  buildView() {
-    const S = this.scene, V = this.view = { mats: [] }, D2 = ROOM.D / 2;
-    const mat = (o) => { const m = new THREE.MeshStandardMaterial(o); V.mats.push([m, m.color.clone()]); return m; };
-    const put = (geo, m, x, y, z, parent = S) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); parent.add(o); return o; };
-    this.scene.background = new THREE.Color(0xcfe0ee);
-    // the sky: a dome with a gradient (vertex colours: deep blue overhead to a pale haze at the horizon)
-    const skyGeo = new THREE.SphereGeometry(1200, 32, 16), sp = skyGeo.attributes.position, cols = [];
-    const top = new THREE.Color(0x4f8fd0), hor = new THREE.Color(0xe4eef6), c = new THREE.Color();
-    for (let i = 0; i < sp.count; i++) { const t = Math.max(0, sp.getY(i) / 1200); c.copy(hor).lerp(top, Math.pow(t, 0.55)); cols.push(c.r, c.g, c.b); }
-    skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
-    V.sky = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, depthWrite: false, fog: false });
-    put(skyGeo, V.sky, 0, 0, 0).renderOrder = -1;
-    // the snow everywhere (under the hall too), the ploughed yard out front with its bays, the road, its snow banks
-    const snow = mat({ color: 0xf2f5f8, roughness: 0.95 });
-    put(new THREE.PlaneGeometry(2400, 2400), snow, 0, -0.06, 0).rotation.x = -Math.PI / 2;
-    const yardC = document.createElement('canvas'); yardC.width = 1024; yardC.height = 512;
-    { const g = yardC.getContext('2d'), r = rng(3); g.fillStyle = '#8a8884'; g.fillRect(0, 0, 1024, 512);
-      for (let i = 0; i < 6000; i++) { const v = 120 + r() * 40; g.fillStyle = `rgba(${v + 6},${v + 3},${v},0.35)`; g.fillRect(r() * 1024, r() * 512, 2, 2); }
-      g.strokeStyle = 'rgba(248,248,242,0.95)'; g.lineWidth = 5; for (const x of [140, 245, 350, 455]) { g.beginPath(); g.moveTo(x, 110); g.lineTo(x, 330); g.stroke(); }
-      g.strokeStyle = 'rgba(232,172,30,0.95)'; g.lineWidth = 6; g.strokeRect(620, 180, 320, 140); }
-    const yardT = new THREE.CanvasTexture(yardC); yardT.colorSpace = THREE.SRGBColorSpace; yardT.anisotropy = 16;
-    put(new THREE.PlaneGeometry(29.2, 13.6), mat({ map: yardT, roughness: 0.9 }), 0, 0.005, D2 + 0.3 + 6.8).rotation.x = -Math.PI / 2;
-    const roadC = document.createElement('canvas'); roadC.width = 256; roadC.height = 256;
-    { const g = roadC.getContext('2d'); g.fillStyle = '#4a4b4e'; g.fillRect(0, 0, 256, 256); g.fillStyle = 'rgba(240,240,236,0.9)'; g.fillRect(0, 124, 150, 8);
-      g.fillStyle = 'rgba(235,238,240,0.7)'; g.fillRect(0, 0, 256, 14); g.fillRect(0, 242, 256, 14); }
-    const roadT = new THREE.CanvasTexture(roadC); roadT.colorSpace = THREE.SRGBColorSpace; roadT.anisotropy = 16; roadT.wrapS = THREE.RepeatWrapping; roadT.repeat.set(100, 1);
-    const RZ = D2 + 18.5;
-    put(new THREE.PlaneGeometry(800, 7.5), mat({ map: roadT, roughness: 0.75 }), 0, 0.01, RZ).rotation.x = -Math.PI / 2;
-    for (const z of [RZ - 4.4, RZ + 4.4]) { const b = put(new THREE.CylinderGeometry(0.7, 0.7, 800, 8, 1), snow, 0, -0.25, z); b.rotation.z = Math.PI / 2; b.scale.set(1, 1, 0.8); }
-    // street lamps along the near side of the road
-    const steel = mat({ color: 0x2a2c30, roughness: 0.5, metalness: 0.6 });
-    V.win = new THREE.MeshStandardMaterial({ color: 0x3a3020, emissive: 0xffc77a, emissiveIntensity: 0.25 });
-    for (let x = -60; x <= 60; x += 24) { put(new THREE.CylinderGeometry(0.08, 0.1, 6, 8), steel, x, 3, RZ - 4.8); put(new THREE.BoxGeometry(0.5, 0.18, 0.3), V.win, x, 6, RZ - 4.5); }
-    // the village across the road: chalets (larch, stone base, snowy roofs, lit windows), spruces round them
-    const r = rng(17), wood = mat({ color: 0x8a5a34, roughness: 0.85 }), stone = mat({ color: 0x8a8580, roughness: 0.95 }), roofM = mat({ color: 0xf4f7fa, roughness: 0.9 });
-    const chalet = (x, z, w, h, d, yaw) => {
-      const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = yaw; S.add(g);
-      put(new THREE.BoxGeometry(w, 1.2, d), stone, 0, 0.6, 0, g);
-      put(new THREE.BoxGeometry(w, h - 1.2, d), wood, 0, 1.2 + (h - 1.2) / 2, 0, g);
-      const rise = w * 0.32, sh = new THREE.Shape(); sh.moveTo(-w / 2 - 0.9, 0); sh.lineTo(w / 2 + 0.9, 0); sh.lineTo(0, rise + 0.3); sh.closePath();
-      const roof = put(new THREE.ExtrudeGeometry(sh, { depth: d + 1.6, bevelEnabled: false }), roofM, 0, h, -d / 2 - 0.8, g); void roof;
-      const gsh = new THREE.Shape(); gsh.moveTo(-w / 2, 0); gsh.lineTo(w / 2, 0); gsh.lineTo(0, rise); gsh.closePath();
-      put(new THREE.ExtrudeGeometry(gsh, { depth: d - 0.02, bevelEnabled: false }), wood, 0, h, -d / 2 + 0.01, g);
-      for (let i = 0; i < Math.floor(w / 2.6); i++) for (const y of [2.2, h - 1.3]) { const wx = -w / 2 + 1.6 + i * 2.6; if (wx > w / 2 - 1) continue; put(new THREE.BoxGeometry(1.1, 1.2, 0.08), V.win, wx, y, -d / 2 - 0.02, g); }
-      put(new THREE.BoxGeometry(w + 0.2, 0.12, 1.4), wood, 0, h - 2.2, -d / 2 - 0.7, g); // (a balcony)
-    };
-    for (let x = -110; x <= 110; x += 15 + r() * 9) { if (Math.abs(x) < 4) continue; chalet(x, RZ + 14 + r() * 8, 8 + r() * 4, 5 + r() * 2, 8 + r() * 3, Math.PI + (r() - 0.5) * 0.3); }
-    for (let x = -100; x <= 100; x += 26 + r() * 10) chalet(x, RZ + 40 + r() * 14, 9 + r() * 4, 5.5 + r() * 2.5, 9, Math.PI + (r() - 0.5) * 0.5);
-    for (const sx of [-1, 1]) chalet(sx * (32 + r() * 6), D2 + 4 + r() * 4, 10, 6, 9, Math.PI - sx * 0.2);
-    // spruces (instanced: two cones each), along the road and round the chalets, thicker toward the slopes
-    const trees = [];
-    for (let i = 0; i < 160; i++) { const x = (r() - 0.5) * 320, z = RZ + 8 + Math.pow(r(), 0.7) * 150; if (Math.abs(x) < 6 && z < RZ + 12) continue; trees.push([x, z, 5 + r() * 7]); }
-    for (const sx of [-1, 1]) for (let i = 0; i < 10; i++) trees.push([sx * (20 + r() * 40), D2 + r() * 14, 4 + r() * 5]);
-    const green = mat({ color: 0x1e3a2a, roughness: 0.9 }), tipM = mat({ color: 0xe8eef2, roughness: 0.9 });
-    const lo = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 8), green, trees.length), hi = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 8), tipM, trees.length), mm = new THREE.Matrix4();
-    trees.forEach(([x, z, h], i) => {
-      lo.setMatrixAt(i, mm.compose(new THREE.Vector3(x, h * 0.42, z), new THREE.Quaternion(), new THREE.Vector3(h * 0.3, h * 0.84, h * 0.3)));
-      hi.setMatrixAt(i, mm.compose(new THREE.Vector3(x, h * 0.78, z), new THREE.Quaternion(), new THREE.Vector3(h * 0.17, h * 0.44, h * 0.17)));
+  // ------------------------------------------------------------------ the view out (live, as the ski shop's)
+  // One plane just outside the glazing covers the whole front (every pane, the door bay: open or shut it shows the
+  // world); the upper side windows take the same material (buildShell). The panes themselves draw nothing.
+  buildPortal() {
+    const { W, D, H, PIER } = LAYOUT, top = H - 0.5;
+    this.portalMat = new THREE.ShaderMaterial({
+      uniforms: { tView: { value: null }, uHas: { value: 0 }, uVP: { value: new THREE.Vector4(0, 0, 1, 1) } },
+      vertexShader: PORTAL_VERT, fragmentShader: PORTAL_FRAG,
     });
-    S.add(lo, hi);
-    // the peaks: a ring of jagged snowy mountains (rock below, snow above: vertex colours), far off, sharp
-    const rock = new THREE.Color(0x6f7c8c), snowC = new THREE.Color(0xf6f9fc);
-    const peakM = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }); V.mats.push([peakM, peakM.color.clone()]);
-    for (let i = 0; i < 16; i++) {
-      const a = -1.45 + (i / 15) * 2.9 + (r() - 0.5) * 0.12, dist = 420 + r() * 260, h = 140 + r() * 190, rad = 150 + r() * 120;
-      const geo = new THREE.ConeGeometry(rad, h, 11, 6), p = geo.attributes.position, cc = [];
-      for (let k = 0; k < p.count; k++) {
-        const y = p.getY(k), t = (y + h / 2) / h;
-        if (t < 0.999) { const j = 1 + (r() - 0.5) * 0.35 * (1 - t * 0.5); p.setX(k, p.getX(k) * j); p.setZ(k, p.getZ(k) * j); p.setY(k, y + (r() - 0.5) * h * 0.06 * (t > 0.02 ? 1 : 0)); }
-        c.copy(t > 0.42 + r() * 0.12 ? snowC : rock); cc.push(c.r, c.g, c.b);
-      }
-      geo.setAttribute('color', new THREE.Float32BufferAttribute(cc, 3)); geo.computeVertexNormals();
-      put(geo.toNonIndexed(), peakM, Math.sin(a) * dist, h / 2 - 8, D2 + Math.cos(a) * dist);
+    const front = new THREE.Mesh(new THREE.PlaneGeometry(W - 2 * PIER + 0.2, top + 0.1), this.portalMat);
+    front.position.set(0, (top + 0.1) / 2 - 0.05, D / 2 + 0.22); front.rotation.y = Math.PI; // (beyond the mullions, the door's header, the sill)
+    this.scene.add(front);
+    this.portalFront = front;
+    // (every window plane reports the viewport it is drawn into; the first draw of the frame sets it for all)
+    const vp = (r) => r.getCurrentViewport(this.portalMat.uniforms.uVP.value);
+    front.onBeforeRender = vp;
+    // the floor's mirror would sample the view at the wrong place: in its reflection the windows are a plain pale sky
+    if (this.mirror) {
+      const flat = new THREE.MeshBasicMaterial({ color: 0xc8d6e2 }), orig = this.mirror.onBeforeRender, self = this;
+      this.mirror.onBeforeRender = function (...a) {
+        const list = self.portalMeshes();
+        for (const m of list) m.material = flat;
+        try { orig.apply(this, a); } finally { for (const m of list) m.material = self.portalMat; }
+      };
+    }
+    this.portalCam = new THREE.PerspectiveCamera(70, 1, 0.1, 30000);
+    this.lastShadow = 0;
+  }
+  portalMeshes() {
+    if (this._portalMeshes) return this._portalMeshes;
+    const list = [];
+    this.scene.traverse((o) => { if (o.isMesh && o.material === this.portalMat) { list.push(o); o.onBeforeRender = this.portalFront.onBeforeRender; } });
+    return (this._portalMeshes = list);
+  }
+  /**
+   * Where the hall stands in the world: { scene, frame: Object3D in the hall's frame (floor middle, +z out of the
+   * glass), hide: () => Object3D[] (the hall seen from outside, you) }.
+   */
+  setWorld(o) { this.world = o && o.scene && o.frame ? o : null; }
+  releasePortal() {
+    if (this.portalRT) { this.portalRT.dispose(); this.portalRT = null; }
+    this.portalMat.uniforms.tView.value = null;
+    this.portalMat.uniforms.uHas.value = 0;
+  }
+  // Render the world from where your camera would be if the hall were the real one (only while a window is in view);
+  // the world's shadows are refreshed every few seconds, not every frame.
+  renderPortal() {
+    const o = this.world, r = this.renderer;
+    if (!o || !r) return;
+    const cam = this.camera, meshes = this.portalMeshes();
+    cam.updateMatrixWorld();
+    _frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    if (!meshes.some((m) => _frustum.intersectsBox(_box.setFromObject(m)))) return;
+    const size = r.getDrawingBufferSize(_size);
+    const k = Math.min(1, 1800 / Math.max(1, size.x));
+    const w = Math.max(64, Math.round(size.x * k)), h = Math.max(64, Math.round(size.y * k));
+    if (!this.portalRT) {
+      this.portalRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
+      this.portalMat.uniforms.tView.value = this.portalRT.texture;
+      this.lastShadow = 0;
+    } else if (this.portalRT.width !== w || this.portalRT.height !== h) this.portalRT.setSize(w, h);
+    const pc = this.portalCam;
+    o.frame.updateMatrixWorld();
+    _m.multiplyMatrices(o.frame.matrixWorld, cam.matrixWorld).decompose(pc.position, pc.quaternion, _s);
+    pc.fov = cam.fov; pc.aspect = cam.aspect; pc.near = 0.1; pc.far = 30000;
+    const v = cam.view; // (the configurator frames the car off-centre: the same offset)
+    if (v?.enabled) pc.setViewOffset(v.fullWidth, v.fullHeight, v.offsetX, v.offsetY, v.width, v.height); else pc.clearViewOffset();
+    pc.updateProjectionMatrix();
+    const hidden = (o.hide?.() || []).filter(Boolean), was = hidden.map((x) => x.visible);
+    for (const x of hidden) x.visible = false;
+    const prev = r.getRenderTarget(), auto = r.shadowMap.autoUpdate, now = performance.now();
+    r.shadowMap.autoUpdate = false;
+    r.shadowMap.needsUpdate = now - this.lastShadow > 3000;
+    if (r.shadowMap.needsUpdate) this.lastShadow = now;
+    try {
+      r.setRenderTarget(this.portalRT);
+      r.clear();
+      r.render(o.scene, pc);
+      this.portalMat.uniforms.uHas.value = 1;
+    } catch (e) {
+      console.warn('Car rental window view failed', e);
+      this.world = null;
+      this.portalMat.uniforms.uHas.value = 0;
+    } finally {
+      r.setRenderTarget(prev);
+      r.shadowMap.autoUpdate = auto;
+      r.shadowMap.needsUpdate = false;
+      hidden.forEach((x, i) => { x.visible = was[i]; });
     }
   }
 
@@ -171,8 +193,11 @@ export class CarRentalRoom {
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
     S.add(floor);
     // the hall: the shared shell (walls, the glass front and door, the trusses and ceiling), the glass nearly clear
-    const glass = new THREE.MeshPhysicalMaterial({ color: 0xe6f2f8, roughness: 0.02, metalness: 0, transparent: true, opacity: 0.08, depthWrite: false, envMapIntensity: 0.3 });
-    this.doors = buildShell(S, 'in', glass).doors;
+    // the glass itself draws nothing (no second layer, no sheen to fight with): what you see through every pane is
+    // the live view (buildPortal: the front's one plane behind the glazing, the upper side windows)
+    const glass = new THREE.MeshBasicMaterial({ visible: false });
+    this.buildPortal();
+    this.doors = buildShell(S, 'in', glass, { view: this.portalMat }).doors;
     this.doorHit = new THREE.Mesh(new THREE.BoxGeometry(DOOR.w, DOOR.h, 0.4), HITBOX);
     this.doorHit.position.set(DOOR.x, DOOR.h / 2, D / 2 - 0.1); this.doorHit.userData.kind = 'door';
     S.add(this.doorHit); this.aimables.push(this.doorHit);
@@ -504,7 +529,7 @@ export class CarRentalRoom {
   /** Walk / look (input null: a panel is open); returns what the crosshair is on: { kind, id, paint, label } or null. */
   update(dt, input, sensitivity = 1, talking = false) {
     for (const t of this.tables) if (this.cfg?.table !== t) t.spin.rotation.y += t.speed * dt;
-    if (this.cfg) { this.cfgCamera(dt); return null; } // (configuring: the camera is on your car)
+    if (this.cfg) { this.cfgCamera(dt); this.renderPortal(); return null; } // (configuring: the camera is on your car)
     if (this.camera.fov !== 70) { this.camera.fov = 70; this.camera.updateProjectionMatrix(); }
     // the clerk: idle behind the desk, turning to you when you come close or while you talk
     if (this.clerk) {
@@ -531,6 +556,7 @@ export class CarRentalRoom {
     this.camera.position.set(this.pos.x, this.eyeY, this.pos.z);
     const dir = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), Math.cos(this.yaw) * Math.cos(this.pitch));
     this.camera.lookAt(_v.copy(this.camera.position).add(dir));
+    this.renderPortal();
     if (!input) return null;
     const hits = new THREE.Raycaster(this.camera.position, dir, 0, 7).intersectObjects(this.aimables, false);
     const u = hits[0]?.object.userData;

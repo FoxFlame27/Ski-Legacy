@@ -1990,77 +1990,37 @@ export class SkierRig {
       S.lag.addScaledVector(S.lagV, h).clampLength(0, 0.07);
     }
     S.q.copy(camera.quaternion); S.e.copy(camera.position);
-    const tk = clamp(st.tuck || 0, 0, 1), spd = st.speed || 0, lean = clamp(st.edge || 0, -1, 1);
-    S.air += ((st.air ? 1 : 0) - S.air) * ek(h, st.air ? 6 : 12);
-    const airW = S.air * S.air * (3 - 2 * S.air), spin = clamp(Math.abs(st.spin || 0) / 7, 0, 1) * airW;
-    const absorb = clamp(st.absorb || 0, 0, 1), charge = clamp(st.charge || 0, 0, 1), pop = clamp(st.pop || 0, 0, 1);
-    const brake = clamp(st.brake || 0, 0, 1), grab = clamp(st.grab || 0, 0, 1), grabHand = GRAB_POSES[st.grabType]?.hand ?? 1;
-    // both poles planted together: a double-pole stroke (skating off, a start gate, pushing on in the tuck)
-    const dbl = this.plant[0].t < 1 && Math.abs(this.plant[0].t - this.plant[1].t) < 0.03;
-    // turning the view: the hands trail it up and down with the pitch rate, never sideways (Oct 27, the user: the hands
-    // "go inside, they should just go backward": every motion of the hands is now along the arms, back and forth,
-    // never in toward the middle of the picture)
-    const turnY = clamp(-S.w.x * 0.018, -0.04, 0.04);
+    // (Oct 28, the user: the hands "push to the left and right instead of the arms moving backwards. The hands
+    // shouldn't move or turn, they should just get pulled back. And the other animation where the arms point up
+    // shouldn't exist.") The view model now does ONE thing: in the rest pose (FP_POSE) the arms and poles are fixed
+    // to the camera; a pole push (the rig's plant timer, one pole or both) pulls each whole arm straight back along
+    // the body and returns it. No sideways motion, no turning of the fist or pole, no tuck / air / landing / jump /
+    // grab poses, no inertia sway. (The only other motion is the hands coming up into the picture as they appear.)
     for (let i = 0; i < 2; i++) {
-      const s = i === 0 ? -1 : 1, H = this.fpHands[i], pl = this.plant[i];
-      // ---- where the hand wants to be (camera frame: x right, y up, -z ahead; FP_POSE)
+      const s = i === 0 ? -1 : 1, H = this.fpHands[i], pt = this.plant[i].t;
       const P = FP_POSE;
-      const T = _v3.set(s * (P.x - 0.05 * tk), P.y + 0.012 * tk, P.z - 0.04 * tk);
-      const ins = Math.max(0, s * lean), out = Math.max(0, -s * lean); // inside / outside hand of the turn
-      T.y += 0.015 * ins - 0.008 * out; T.z += 0.03 * out - 0.02 * ins;
-      T.x += s * (0.03 + 0.03 * spin) * airW; T.y += 0.035 * airW; T.z += 0.02 * airW; // balance in the air (out, never in)
-      T.y -= 0.11 * absorb; T.z -= 0.03 * absorb;                                     // landing: down with the legs
-      T.y += 0.05 * pop - 0.045 * charge; T.z += 0.07 * charge - 0.07 * pop;          // load a jump: back; pop: up
-      T.z -= 0.04 * brake;                                                            // hockey stop: braced
-      // ---- the pole (direction of the shaft from the grip): angled back, swept back further in the tuck,
-      // out a little in the air
-      const D = _v4.set(s * 0.2, -0.95, 0.24).lerp(_s[0].set(s * 0.1, -0.7, 0.7), tk);
-      D.lerp(_s[0].set(s * 0.45, -0.84, 0.28), airW).lerp(_s[0].set(s * 0.32, -0.94, 0.06), brake);
-      // ---- pole plants (the rig's plant timer: 0..1 over 0.55 s)
-      const pt = pl.t;
-      if (pt < 1) {
-        if (dbl) {
-          // double-pole stroke: both hands push straight back and down past the hips, then come forward again
-          const push = smoothT(pt, 0, 0.35) * (1 - smoothT(pt, 0.45, 1));
-          T.z += 0.09 * push; T.y -= 0.07 * push;
-          D.lerp(_s[0].set(s * 0.16, -0.55, 0.82), push);
-        } else {
-          // a pole plant: the hand gives a short push straight back (the basket behind the boot), then returns
-          const push = smoothT(pt, 0, 0.25) * (1 - smoothT(pt, 0.35, 0.85));
-          T.z += 0.06 * push; T.y -= 0.035 * push;
-          D.lerp(_s[0].set(s * 0.18, -0.7, 0.69), push);
-        }
-      }
-      // ---- grabs: the grabbing hand drops to the ski (out of the picture), the other opens out
-      if (grab > 0) {
-        const mine = grabHand === i;
-        if (mine) { T.lerp(_s[0].set(s * 0.16, -0.78, -0.3), grab); D.lerp(_s[0].set(s * 0.1, -0.4, 0.91), grab); }
-        else { T.y += 0.06 * grab; }
-      }
-      D.normalize();
-      // ---- springs toward the pose (the plant swing is quicker than the hands' drift)
-      if (!H.init) { H.init = true; H.p.copy(T); H.v.set(0, 0, 0); H.d.copy(D); H.dv.set(0, 0, 0); }
-      springTo(H.p, H.v, T, 15, h);
-      springTo(H.d, H.dv, D, 24, h);
-      H.d.normalize();
-      // ---- place the rigid fist + pole: grip at the hand, pole along the shaft direction, knuckles forward and a
-      // little in; the cuff turns at the wrist toward the elbow (below the picture, so the forearm leaves it
-      // through the bottom corner)
-      const p = H.root.position.copy(H.p).add(S.lag);
-      const sway = 0.5 + smoothT(spd, 3, 15); // (a little livelier at speed)
-      p.x += -S.lag.x * 0.7 + Math.sin(S.t * 1.7 + i * 2.3) * 0.002 * sway; p.y += turnY + Math.sin(S.t * 2.3 + i * 1.1) * 0.003 * sway - 0.32 * rise; p.z += 0.06 * rise;
-      const Y = _s[1].copy(H.d).negate();
-      // (the Meshy arm: the fist turned about the pole so the forearm runs off toward the elbow, low and outside: the
-      // sleeve leaves the picture through the bottom corner)
-      const Zb = arms ? _s[3].set(s * P.ex, P.ey - 0.05 * absorb, P.ez).sub(p).negate() : _s[3].set(-s * 0.28, -0.2, -1);
+      const push = pt < 1 ? fpPush(pt) : 0;
+      // ---- where the hand wants to be (camera frame: x right, y up, -z ahead): the rest pose, pulled back
+      const T = _v3.set(s * P.x, P.y - FP_PULL.y * push, P.z + FP_PULL.z * push);
+      if (!H.init) { H.init = true; H.p.copy(T); H.v.set(0, 0, 0); }
+      springTo(H.p, H.v, T, 18, h);
+      H.p.x = s * P.x; // (never sideways, not even through the spring)
+      const p = H.root.position.copy(H.p);
+      p.y -= 0.32 * rise; p.z += 0.06 * rise;
+      // ---- the fist's orientation: fixed, from the rest pose (the pole angled back, the forearm toward the elbow)
+      const D = _v4.set(s * 0.2, -0.95, 0.24).normalize();
+      const Y = _s[1].copy(D).negate();
+      const Zb = arms ? _s[3].set(s * P.ex, P.ey, P.ez).sub(_s[0].set(s * P.x, P.y, P.z)).negate() : _s[3].set(-s * 0.28, -0.2, -1);
       Zb.addScaledVector(Y, -Zb.dot(Y)).normalize();
       const X = _s[4].crossVectors(Y, Zb);
       _m.makeBasis(X, Y, Zb);
       H.root.quaternion.setFromRotationMatrix(_m);
+      H.d.copy(D);
+      // the cuff (procedural fists only): at the wrist, toward the elbow, which moves back with the hand
       const wrist = H.cuff.position.copy(FP_WRIST);
       wrist.x *= -s; // (the right fist is mirrored)
       wrist.applyQuaternion(H.root.quaternion).add(p);
-      const elbow = _s[2].set(s * P.ex, P.ey - 0.05 * absorb, P.ez).sub(wrist).normalize(); // wrist -> elbow
+      const elbow = _s[2].set(s * P.ex, P.ey, P.ez).add(_s[0].subVectors(p, _s[5].set(s * P.x, P.y, P.z))).sub(wrist).normalize();
       H.cuff.quaternion.setFromUnitVectors(UP, elbow);
     }
   }
@@ -2078,6 +2038,10 @@ export class SkierRig {
 // tubes and the gloves turned into claws; then the sleeves' open ends showed in the bottom corners: the fists now sit
 // close to the eye, so each forearm runs on past the edge of the picture.) Exported for tuning from the dev console.
 export const FP_POSE = { x: 0.235, y: -0.255, z: -0.44, ex: 0.33, ey: -0.72, ez: 0.08 };
+// The pole push: how far the whole arm is pulled back (+z, toward the camera) and down (-y) at the stroke's peak.
+export const FP_PULL = { y: 0.04, z: 0.12 };
+// push weight over the rig's plant timer (0..1 over 0.55 s): pulled back quickly, then returned
+export function fpPush(t) { return smoothT(t, 0, 0.3) * (1 - smoothT(t, 0.4, 0.95)); }
 function ek(h, r) { return 1 - Math.exp(-h * r); } // exponential smoothing factor for step h at rate r
 // exact critically damped spring step of vector x (velocity v) toward t at angular frequency w (stable at any h)
 function springTo(x, v, t, w, h) {

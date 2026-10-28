@@ -14,7 +14,7 @@
 //  - the skier follows convex snow while gravity plus leg absorption can keep up (STICK), otherwise
 //    takes off: kicker lips, rollers and crests at speed. Space charges a pop (ollie).
 //  - landings are judged on impact into the snow and on the trick (src/player/tricks.js).
-// On foot you can walk up ordinary slopes; it gets slower with the grade and stops at ~38 degrees
+// On foot you can walk up ordinary slopes; it gets slower with the grade and stops at ~50 degrees
 // (take a lift). All ground queries go through world.groundHeight / surfaces, so ramps and bridge
 // decks are ridden.
 import * as THREE from 'three';
@@ -65,8 +65,11 @@ const GETUP_TIME = 1.35;            // seconds to stand back up
 // ---- on foot ----
 const FOOT_SPEED = 4.2;     // on foot (m/s): the normal pace (run animation)
 const SPRINT_K = 1.5; // Shift: 1.5x on foot
-const WALK_FULL = Math.tan(22 * DEG);  // uphill walking slows above this...
-const WALK_MAX = Math.tan(38 * DEG);   // ...and stops only on real steeps (cliffs, rock faces): take a lift
+// (Oct 28, the user: "make it so you can walk higher": the limits went from 22/38 degrees to 30/50 and the step up
+// onto decks, stairs and ledges is 0.9 m; sheer faces and building walls (colliders) still stop you)
+const WALK_FULL = Math.tan(30 * DEG);  // uphill walking slows above this...
+const WALK_MAX = Math.tan(50 * DEG);   // ...and stops only on real steeps (cliffs, rock faces): take a lift
+const WALK_STEP = 0.9;                 // highest ledge you step up onto on foot (m above the boots)
 
 // ---- first-person camera: a helmet cam ----
 // The eyes of your own (visible) body over the boots, looking a little down the run (further down a steep
@@ -991,7 +994,7 @@ export class Player {
 
   // ------------------------------------------------------------------ walking
   // Ski boots on snow: normal on the flat, the village and gentle paths, slower uphill, and no
-  // climbing up mountains (above ~38 degrees you stop and slip back: lifts and the bus go up).
+  // climbing up mountains (above ~50 degrees you stop and slip back: lifts and the bus go up).
   updateWalk(dt) {
     const inp = this.input;
     const live = !this.frozen;
@@ -1019,7 +1022,7 @@ export class Player {
       let target = FOOT_SPEED * (sprinting ? SPRINT_K : 1);
       const up = dir.x * ux + dir.z * uz; // > 0: some of the step goes uphill
       if (up > 0 && slope > WALK_FULL) {
-        // the uphill part of the step fades out between 22 and 38 degrees of terrain; what's left is a
+        // the uphill part of the step fades out between 30 and 50 degrees of terrain; what's left is a
         // level traverse (so zig-zagging up a steep face doesn't work either), and it's slower going
         const k = smoothstep(WALK_FULL, WALK_MAX, slope);
         dir.x -= ux * up * k; dir.z -= uz * up * k;
@@ -1055,14 +1058,29 @@ export class Player {
     } else this.walkSlip = 0;
     // jumping on foot
     if (live && inp.hit('Space') && !this.footAir) { this.footJumpV = 4.4; this.footAir = true; this.audio?.play('jump'); }
-    const ground = world.groundHeight(p.x, p.z, feetY + 0.3);
+    // (groundHeight takes a surface up to 0.6 m above its hint: the hint puts that at WALK_STEP above the boots)
+    let ground = world.groundHeight(p.x, p.z, feetY + WALK_STEP - 0.6);
+    // low obstacles with a flat top (rocks, benches, bollards, piers under a deck) within a step: stepped up onto
+    for (const c of this.colliders) {
+      if (c.top === undefined || c.top <= ground || c.top > feetY + WALK_STEP) continue;
+      const R = 0.35, reach = (c.r ?? Math.max(c.hw, c.hd)) + R;
+      if (Math.abs(p.x - c.x) > reach || Math.abs(p.z - c.z) > reach) continue;
+      let inside;
+      if (c.r !== undefined) inside = Math.hypot(p.x - c.x, p.z - c.z) < c.r + R;
+      else {
+        const cs = Math.cos(-c.rot), sn = Math.sin(-c.rot);
+        const lx = (p.x - c.x) * cs - (p.z - c.z) * sn, lz = (p.x - c.x) * sn + (p.z - c.z) * cs;
+        inside = Math.abs(lx) < c.hw + R && Math.abs(lz) < c.hd + R;
+      }
+      if (inside) ground = c.top;
+    }
     if (this.footAir) {
       this.footJumpY = (this.footJumpY || 0) + this.footJumpV * dt;
       this.footJumpV -= 9.81 * dt;
       if (this.footJumpY <= 0) { this.footJumpY = 0; this.footAir = false; this.audio?.play('step'); this.shake = 0.15; }
     }
     p.y = ground + (this.footJumpY || 0);
-    this.collide(0, p.y);
+    this.collide(0, p.y + 0.02); // (+2 cm: standing on a top you stepped up onto)
     this.footT = (this.footT || 0) + Math.hypot(this.vel.x, this.vel.z) * dt;
     if (this.footT > 1.3) { // a step every 1.3 m (you always move at the sprint pace on foot)
       this.footT = 0;

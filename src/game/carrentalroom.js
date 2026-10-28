@@ -17,7 +17,7 @@ import { LAYOUT, buildShell, stairY, setDoors, ceilingAt } from './carrentalshel
 // the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 // where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
-const SHOT = { car: [0.75, 0.2, 5.6], paint: [1.05, 0.24, 5.4], rims: [1.45, 0.06, 4.6], plate: [Math.PI - 0.3, 0.12, 4.8], sum: [0.6, 0.22, 5.8] };
+const SHOT = { paint: [1.05, 0.24, 5.4], rims: [1.45, 0.06, 4.6], plate: [Math.PI - 0.3, 0.12, 4.8], sum: [0.6, 0.22, 5.8] };
 
 export const ROOM = { W: LAYOUT.W, D: LAYOUT.D, H: LAYOUT.H };
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0);
@@ -424,14 +424,14 @@ export class CarRentalRoom {
     }
     const T = id ? this.tables.find((o) => o.id === id) : null, M = this.marker;
     M.table = T; M.t = 0; M.g.visible = !!T;
-    if (T) { M.g.position.set(T.x, (T.y || 0) + 0.2, T.z); M.ring.scale.setScalar(T.up ? 1.05 : 1.12); M.arrow.position.y = (T.up ? 1.9 : 2.2); }
+    if (T) { M.h = T.up ? 1.9 : T.z < LAYOUT.MZ + 1 ? 1.75 : 2.2; M.g.position.set(T.x, (T.y || 0) + 0.2, T.z); M.ring.scale.setScalar(T.up ? 1.05 : 1.12); M.arrow.position.y = M.h; } // (under the mezzanine: lower)
   }
   updateGuide(dt) {
     const M = this.marker;
     if (!M?.table) return;
     M.t += dt;
     if (M.t > 45) { this.guide(null); return; } // (it gives up after a while)
-    M.arrow.position.y = (M.table.up ? 1.9 : 2.2) + Math.sin(M.t * 3) * 0.12;
+    M.arrow.position.y = M.h + Math.sin(M.t * 3) * 0.12;
     M.arrow.rotation.y += dt * 1.6;
     M.ring.material.opacity = 0.55 + 0.35 * Math.sin(M.t * 4);
   }

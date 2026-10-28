@@ -18,7 +18,7 @@ export const LAYOUT = {
   stair: { x0: -13, x1: -11.5, z0: -2.2, z1: 4.2, steps: 20 },
   posts: [-4.9, 2.4, 8.2],
   // the cars on display: a row of three behind the glass, two at the back under the mezzanine (x, z, heading),
-  // turntable radius; upstairs: two more (not for rent), and the office on the right
+  // turntable radius; upstairs: two more (the supercars, for rent too), and the office on the right
   spots: [[-8.2, 2.3, 0.75], [-1.6, 2.3, -0.6], [5.4, 2.3, 0.55], [-8.2, -3.9, -0.5], [-1.6, -3.9, 0.6]], R: 2.55,
   upSpots: [[-6.8, -4.6, 1.3], [-0.6, -4.6, -1.85]],
   office: { x0: 5.4, gap: -3.7 }, // its glass partition at x0, from the back wall to z gap (the way in)
@@ -74,7 +74,7 @@ export function shellMaterials() {
     strip: new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffe2b8, emissiveIntensity: 2.2 }),
     oak: new THREE.MeshStandardMaterial({ color: 0xc2925e, roughness: 0.5 }),
     railGlass: new THREE.MeshPhysicalMaterial({ color: 0xd8ecf2, roughness: 0.05, transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide }),
-    // the upper side windows: from outside a warm lit glass, from inside the bright snowy sky and peaks
+    // the upper side windows: from outside a warm lit glass, from inside (no view given) a painted sky
     winOut: new THREE.MeshStandardMaterial({ color: 0x9fb4c4, emissive: 0xffe6c0, emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.2 }),
     winIn: new THREE.MeshBasicMaterial({ map: canvasTex(512, 512, (c, w, h) => {
       const sky = c.createLinearGradient(0, 0, 0, h); sky.addColorStop(0, '#6fa3d8'); sky.addColorStop(0.7, '#d9e8f4'); sky.addColorStop(1, '#eef4f8');

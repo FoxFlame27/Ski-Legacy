@@ -298,8 +298,11 @@ export function shapeRoadbed(x, z, h) {
 // dwells at the termini are set so that both meetings fall on the loop's middle (see DWELL_END).
 export const DWELL_MID = 20; // s at Wolkensee
 const DWELL_MIN = 40; // s at least at either terminus
-const ACC = 0.9; // m/s^2
-const DARK_BOOST = 2.1, DARK_ACC = 3.4, DARK_EASE = 70, DARK_VMAX = 50; // (50 m/s: 180 km/h)
+// RAIL_BUFF: the whole profile sped up (limits, curve limits, acceleration / braking) for quicker trips; the trains
+// still brake to a stop at every station (the profile's zeros there), the timetable and meetings follow from it
+const RAIL_BUFF = 1.9;
+const ACC = 0.9 * RAIL_BUFF; // m/s^2
+const DARK_BOOST = 2.1, DARK_ACC = 3.4 * 1.5, DARK_EASE = 70, DARK_VMAX = 50 * 1.6; // (80 m/s: 288 km/h)
 // the passing loop (railtrack.js lays its second track): between s0 and s1, `off` m to the right of the line
 export const PASSING_LOOP = { s0: 3390, s1: 3690, off: 4.6, ease: 46 };
 /** 0 outside .. 1 deep inside a long tunnel's dark stretch (portal to portal; the spiral's ends in the top hall). */
@@ -327,11 +330,11 @@ export const PROFILE = (() => {
   const V = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     const s = L.S[i];
-    let v = 30;
-    if (s > climb) v = 24;
-    if (s > t2.s0 - 30) v = 23;
+    let v = 30 * RAIL_BUFF;
+    if (s > climb) v = 24 * RAIL_BUFF;
+    if (s > t2.s0 - 30) v = 23 * RAIL_BUFF;
     const k = 1 + (DARK_BOOST - 1) * darkness(s);
-    V[i] = Math.min(Math.min(v, Math.sqrt(3.2 * rad[i])) * k, DARK_VMAX);
+    V[i] = Math.min(Math.min(v, Math.sqrt(3.2 * RAIL_BUFF * RAIL_BUFF * rad[i])) * k, DARK_VMAX);
   }
   const acc = (i) => ACC + (DARK_ACC - ACC) * darkness(L.S[i]);
   const i0 = Math.round(TRIP_S0 / ds), i1 = Math.round(TRIP_S1 / ds), iMid = Math.round(L.stations[1].s / ds);

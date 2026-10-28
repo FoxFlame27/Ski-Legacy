@@ -100,22 +100,24 @@ function worldUV(geo) {
 }
 
 /**
- * The shell into `g` (building frame). side 'out': the outside's roof snow, plinth, piers and eaves; 'in': what you see
- * from the showroom (the same walls, glass, trusses). glass: the glazing's material (each side its own).
- * Returns { glassMeshes, strips (the light strips' material), front (z of the glass) }.
+ * The shell into `g` (building frame). side 'out': the outside's roof snow, plinth, piers and eaves, and the inside as
+ * seen through the glass (self-lit, no roof shadow on it); 'in': what you see from the showroom (the same walls, glass,
+ * door, mezzanine, stair, trusses). glass: the glazing's material (each side its own).
+ * Returns { glassMeshes, strips (the light strips' material), front (z of the glass), doors (the two sliding leaves:
+ * setDoors()), lit (the self-lit inner materials, outside only) }.
  */
 export function buildShell(g, side, glass) {
-  const m = shellMaterials(), { W, D, H, RISE, T, EAVE, EAVE_F, PIER } = L, out = side === 'out';
+  const m = shellMaterials(), { W, D, H, RISE, T, EAVE, EAVE_F, PIER, FL, MZ } = L, out = side === 'out';
   const wallMat = out ? m.larchOut : m.larchIn;
-  const add = (geo, mat, x, y, z, shadow = true) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; g.add(o); return o; };
-  const B = (w, h, d, mat, x, y, z, shadow) => add(worldUV(new THREE.BoxGeometry(w, h, d)), mat, x, y, z, shadow);
+  const inner = out ? m.larchInLit : m.larchIn, oak = out ? m.oakLit : m.oak, glu = out ? m.glulamLit : m.glulam;
+  const add = (geo, mat, x, y, z, shadow = true, parent = g) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; parent.add(o); return o; };
+  const B = (w, h, d, mat, x, y, z, shadow, parent) => add(worldUV(new THREE.BoxGeometry(w, h, d)), mat, x, y, z, shadow, parent);
+  // (the inside's parts: seen from outside they take no shadow from the roof, so the hall reads lit)
+  const I = (o) => { if (out) { o.receiveShadow = false; o.castShadow = false; } return o; };
   // walls: the sides and the back (larch, on the outside a stone plinth), the gables (back and front, over the glass)
   if (out) {
-    // (the outer skin: larch outside; the hall's inner faces show through the glass in the inner larch: a thin
-    // second skin just inside, so both sides read right)
-    for (const sx of [-1, 1]) { B(T, H, D + 2 * T, m.larchOut, sx * (W / 2 + T / 2), H / 2, 0); B(0.02, H, D, m.larchIn, sx * (W / 2 - 0.01), H / 2, 0, false); }
-    B(W + 2 * T, H, T, m.larchOut, 0, H / 2, -D / 2 - T / 2); B(W, H, 0.02, m.larchIn, 0, H / 2, -D / 2 + 0.01, false);
-    // the stone plinth round the sides and back (proud of the boards), the corner piers in front
+    for (const sx of [-1, 1]) { B(T, H, D + 2 * T, m.larchOut, sx * (W / 2 + T / 2), H / 2, 0); I(B(0.02, H, D, inner, sx * (W / 2 - 0.01), H / 2, 0, false)); }
+    B(W + 2 * T, H, T, m.larchOut, 0, H / 2, -D / 2 - T / 2); I(B(W, H, 0.02, inner, 0, H / 2, -D / 2 + 0.01, false));
     for (const sx of [-1, 1]) B(0.16, 0.9, D + 2 * T + 0.16, m.stone, sx * (W / 2 + T + 0.08), 0.45 - 0.2, 0);
     B(W + 2 * T + 0.32, 0.9, 0.16, m.stone, 0, 0.45 - 0.2, -D / 2 - T - 0.08);
     for (const sx of [-1, 1]) B(PIER + T, H, T + 0.5, m.stone, sx * (W / 2 - PIER / 2 + T / 2), H / 2, D / 2 + 0.05);
@@ -124,54 +126,110 @@ export function buildShell(g, side, glass) {
     B(W, H, T, m.larchIn, 0, H / 2, -D / 2 - T / 2);
     for (const sx of [-1, 1]) B(PIER, H, 0.4, m.stone, sx * (W / 2 - PIER / 2), H / 2, D / 2 - 0.1); // (the piers' inner faces)
   }
+  // the upper windows in the side walls (the second storey): outside a warm lit glass, inside the snowy peaks
+  const wy = FL + 1.85, ww = 1.9, wh = 1.6;
+  for (const sx of [-1, 1]) for (const wz of [-5.2, -1.6, 2.0, 5.4]) {
+    if (out) {
+      B(0.08, wh + 0.18, ww + 0.18, m.steel, sx * (W / 2 + T + 0.03), wy, wz, false);
+      B(0.04, wh, ww, m.winOut, sx * (W / 2 + T + 0.07), wy, wz, false);
+      B(0.14, 0.06, ww + 0.3, m.steel, sx * (W / 2 + T + 0.08), wy - wh / 2 - 0.1, wz, false);
+    } else {
+      B(0.06, wh + 0.18, ww + 0.18, m.steel, sx * (W / 2 - 0.02), wy, wz, false);
+      const sky = add(new THREE.PlaneGeometry(ww, wh), m.winIn, sx * (W / 2 - 0.055), wy, wz, false);
+      sky.rotation.y = -sx * Math.PI / 2;
+      B(0.2, 0.05, ww + 0.2, m.oak, sx * (W / 2 - 0.1), wy - wh / 2 - 0.05, wz, false);
+    }
+  }
   const gable = new THREE.Shape(); gable.moveTo(-W / 2 - T, 0); gable.lineTo(W / 2 + T, 0); gable.lineTo(0, RISE + T * RISE / (W / 2)); gable.closePath();
   const gGeo = new THREE.ExtrudeGeometry(gable, { depth: T, bevelEnabled: false });
   { const p = gGeo.attributes.position, uv = gGeo.attributes.uv; for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), p.getY(i)); }
   add(gGeo, wallMat, 0, H, -D / 2 - T);
   add(gGeo, wallMat, 0, H, D / 2 - T + 0.05);
-  // the front beam over the glass (glulam, the gable sits on it) and the glazing: full height between the piers,
-  // thin dark mullions, a transom, a sill
-  const gx0 = -W / 2 + PIER, gx1 = W / 2 - PIER, gw = gx1 - gx0, fz = D / 2;
+  // the front: a glulam beam over the glass (the gable sits on it), the glazing bay by bay between the piers (thin dark
+  // mullions, a transom at the upper floor, a sill), one bay the door: an automatic sliding pair under a steel header
+  const n = L.mullions, bw = L.bayW, gx0 = -W / 2 + PIER, gx1 = W / 2 - PIER, gw = gx1 - gx0, fz = D / 2, top = H - 0.5, d = L.door;
   B(W + 2 * T, 0.5, T + 0.1, m.glulam, 0, H - 0.25, fz - T / 2 + 0.05);
   const glassMeshes = [];
-  const pane = add(new THREE.PlaneGeometry(gw, H - 0.6), glass, (gx0 + gx1) / 2, (H - 0.6) / 2 + 0.1, fz, false);
-  if (!out) pane.rotation.y = Math.PI;
-  glassMeshes.push(pane);
-  const n = L.mullions;
-  for (let i = 0; i <= n; i++) B(0.09, H - 0.5, 0.16, m.steel, gx0 + (gw * i) / n, (H - 0.5) / 2, fz, false);
-  B(gw, 0.07, 0.14, m.steel, (gx0 + gx1) / 2, L.transom, fz, false);
-  B(gw, 0.12, 0.2, m.steel, (gx0 + gx1) / 2, 0.06, fz, false);
-  // the door: a heavier frame, a push bar each side
-  const d = L.door;
-  for (const sx of [-1, 1]) B(0.11, d.h, 0.2, m.steel, d.x + sx * d.w / 2, d.h / 2, fz, false);
-  B(d.w, 0.11, 0.2, m.steel, d.x, d.h, fz, false);
-  B(0.04, d.h - 0.2, 0.04, m.steel, d.x, (d.h - 0.2) / 2 + 0.1, fz, false); // (the meeting stiles)
-  for (const sz of [-1, 1]) B(d.w * 0.7, 0.045, 0.05, new THREE.MeshStandardMaterial({ color: 0xc8ccd0, metalness: 1, roughness: 0.2 }), d.x, 1.05, fz + sz * 0.14, false);
+  const pane = (x, y0, y1, w, z = fz, parent = g) => { const p = add(new THREE.PlaneGeometry(w, y1 - y0), glass, x, (y0 + y1) / 2, z, false, parent); if (!out) p.rotation.y = Math.PI; glassMeshes.push(p); return p; };
+  for (let i = 0; i < n; i++) { const cx = gx0 + bw * (i + 0.5); pane(cx, i === d.bay ? d.h + 0.2 : 0.12, top, bw); }
+  for (let i = 0; i <= n; i++) B(0.09, top, 0.16, m.steel, gx0 + bw * i, top / 2, fz, false);
+  B(gw, 0.09, 0.14, m.steel, (gx0 + gx1) / 2, FL, fz, false); // (the transom at the upper floor)
+  const dl = d.x - bw / 2, dr = d.x + bw / 2; // (the sill either side of the door, a flush threshold in it)
+  B(dl - gx0, 0.12, 0.2, m.steel, (gx0 + dl) / 2, 0.06, fz, false);
+  B(gx1 - dr, 0.12, 0.2, m.steel, (dr + gx1) / 2, 0.06, fz, false);
+  B(bw - 0.09, 0.012, 0.44, m.steel, d.x, 0.006, fz - 0.06, false);
+  B(bw - 0.09, 0.2, 0.3, m.steel, d.x, d.h + 0.1, fz - 0.08, false); // (the header: the sliding gear)
+  for (const sz of [-1, 1]) B(0.18, 0.05, 0.05, new THREE.MeshStandardMaterial({ color: 0x0c0d0e, roughness: 0.3 }), d.x, d.h - 0.02, fz - 0.08 + sz * 0.16, false); // (the motion sensors)
+  const leaves = [], lw = (bw - 0.09) / 2, lh = d.h - 0.02, band = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });
+  for (const s of [-1, 1]) {
+    const leaf = new THREE.Group(), x0 = d.x + s * lw / 2;
+    leaf.position.set(x0, 0, fz - 0.14);
+    leaf.userData = { x0, dir: s, slide: lw - 0.06 };
+    for (const sx of [-1, 1]) B(0.05, lh, 0.05, m.steel, sx * (lw / 2 - 0.025), lh / 2 + 0.01, 0, false, leaf);
+    B(lw, 0.05, 0.05, m.steel, 0, lh - 0.015, 0, false, leaf);
+    B(lw, 0.09, 0.05, m.steel, 0, 0.055, 0, false, leaf);
+    const gp = add(new THREE.PlaneGeometry(lw - 0.1, lh - 0.14), glass, 0, lh / 2 + 0.03, 0, false, leaf); if (!out) gp.rotation.y = Math.PI; glassMeshes.push(gp);
+    add(new THREE.PlaneGeometry(lw - 0.1, 0.06), band, 0, 1.45, 0.004, false, leaf); // (the frosted band: you see it's a door)
+    g.add(leaf); leaves.push(leaf);
+  }
+  // the upper floor: an oak mezzanine along the back on a steel edge beam and posts, a glass balustrade, lights under it
+  const zb = -D / 2, dz = MZ - zb;
+  I(B(W, 0.3, dz, oak, 0, FL - 0.15, zb + dz / 2));
+  I(B(W, 0.34, 0.06, m.steel, 0, FL - 0.15, MZ + 0.03));
+  for (const px of L.posts) I(B(0.2, FL - 0.3, 0.2, m.steel, px, (FL - 0.3) / 2, MZ - 0.14));
+  const strips = out ? m.strip.clone() : m.strip;
+  for (const lx of [-10, -5.6, -0.8, 3.8, 8.4, 11.6]) I(B(1.4, 0.03, 0.3, strips, lx, FL - 0.315, zb + dz / 2, false));
+  const S = L.stair, rx0 = S.x1, rlen = W / 2 - rx0, rcx = (rx0 + W / 2) / 2;
+  add(new THREE.BoxGeometry(rlen, 0.9, 0.02), m.railGlass, rcx, FL + 0.5, MZ - 0.06, false);
+  I(B(rlen, 0.06, 0.08, m.steel, rcx, FL + 1.0, MZ - 0.06, false));
+  for (let x = rx0 + 0.03; x < W / 2; x += 2.45) I(B(0.05, 1.0, 0.05, m.steel, x, FL + 0.5, MZ - 0.06, false));
+  // the stair up along the left wall: floating oak treads on two steel stringers, a glass balustrade and handrail
+  const N = S.steps, rise = FL / N, run = (S.z1 - S.z0) / N, sw = S.x1 - S.x0, slen = Math.hypot(S.z1 - S.z0, FL), ang = Math.atan2(FL, S.z1 - S.z0), zm = (S.z0 + S.z1) / 2;
+  for (let i = 0; i < N; i++) I(B(sw - 0.04, 0.06, run + 0.04, oak, (S.x0 + S.x1) / 2, (i + 1) * rise - 0.03, S.z1 - (i + 0.5) * run));
+  for (const sx of [S.x0 + 0.05, S.x1 - 0.05]) I(B(0.1, 0.3, slen, m.steel, sx, FL / 2 - 0.12, zm)).rotation.x = ang;
+  const ya = 0.3, yb = FL + 0.12, hb = 0.9, rg = new THREE.BufferGeometry();
+  rg.setAttribute('position', new THREE.Float32BufferAttribute([S.x1, ya, S.z1, S.x1, yb, S.z0, S.x1, yb + hb, S.z0, S.x1, ya + hb, S.z1], 3));
+  rg.setIndex([0, 1, 2, 0, 2, 3]); rg.computeVertexNormals();
+  add(rg, m.railGlass, 0, 0, 0, false);
+  I(B(0.06, 0.06, slen, m.steel, S.x1, (ya + yb) / 2 + hb + 0.05, zm, false)).rotation.x = ang;
+  I(B(0.07, ya + hb + 0.1, 0.07, m.steel, S.x1, (ya + hb + 0.1) / 2, S.z1, false)); // (the newel at the foot)
+  // upstairs on the right: the office behind a glass partition (a desk, a chair, a screen, a shelf of binders)
+  const O = L.office, olen = O.gap - zb;
+  add(new THREE.BoxGeometry(0.03, 2.5, olen), m.railGlass, O.x0, FL + 1.25, zb + olen / 2, false);
+  for (const y of [FL + 0.03, FL + 2.5]) I(B(0.06, 0.06, olen, m.steel, O.x0, y, zb + olen / 2, false));
+  I(B(0.06, 2.5, 0.06, m.steel, O.x0, FL + 1.25, O.gap, false));
+  I(B(1.9, 0.05, 0.85, oak, 9.6, FL + 0.75, -5.2));
+  for (const sx of [-1, 1]) I(B(0.05, 0.72, 0.75, m.steel, 9.6 + sx * 0.88, FL + 0.36, -5.2));
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1a1b1e, roughness: 0.5 });
+  I(B(0.6, 0.38, 0.03, dark, 9.6, FL + 1.0, -5.45, false));
+  I(B(0.56, 0.34, 0.005, new THREE.MeshStandardMaterial({ color: 0x0, emissive: 0x9fc0ee, emissiveIntensity: 1 }), 9.6, FL + 1.0, -5.432, false));
+  I(B(0.52, 0.08, 0.5, dark, 9.6, FL + 0.48, -6.0)); I(B(0.52, 0.6, 0.06, dark, 9.6, FL + 0.82, -6.25));
+  I(B(0.06, 0.44, 0.06, m.steel, 9.6, FL + 0.22, -6.0, false));
+  I(B(2.6, 1.9, 0.38, oak, 10.6, FL + 0.95, zb + 0.2));
+  { const r = rng(21); for (let k = 0; k < 22; k++) I(B(0.08, 0.3, 0.26, new THREE.MeshStandardMaterial({ color: [0x1546c8, 0xd0342c, 0x2a2c30, 0xe8c21a][k % 4], roughness: 0.7 }), 9.45 + k * 0.105, FL + 1.25 + (k > 10 ? -0.6 : 0) + r() * 0.01, zb + 0.25, false)); }
   // the roof: two slabs from the ridge to the eaves (timber underneath: the ceiling inside), front and back overhangs;
   // outside, a thick layer of snow on each and a dark fascia on the eaves
-  const k = RISE / (W / 2), run = W / 2 + EAVE, drop = RISE + k * EAVE, len = Math.hypot(run, drop), ang = Math.atan2(drop, run);
+  const k = RISE / (W / 2), runR = W / 2 + EAVE, drop = RISE + k * EAVE, len = Math.hypot(runR, drop), angR = Math.atan2(drop, runR);
   const zlen = D + 2 * T + (out ? EAVE_F + 0.6 : 0), zc = out ? (EAVE_F - 0.6) / 2 : 0;
   for (const sx of [-1, 1]) {
-    const nx = Math.sin(ang) * sx, ny = Math.cos(ang); // (the slab's outward normal)
-    const cx = sx * run / 2, cy = H + RISE - drop / 2;
+    const nx = Math.sin(angR) * sx, ny = Math.cos(angR);
+    const cx = sx * runR / 2, cy = H + RISE - drop / 2;
     const slab = B(len, 0.28, zlen, out ? m.roof : m.larchIn, cx + nx * 0.14, cy + ny * 0.14, zc);
-    slab.rotation.z = -sx * ang;
+    slab.rotation.z = -sx * angR;
     if (out) {
-      const ce = B(len, 0.02, D + 2 * T, m.larchIn, cx - nx * 0.012, cy - ny * 0.012, 0, false); ce.rotation.z = -sx * ang; // (the timber ceiling, seen through the glass)
+      const ce = I(B(len, 0.02, D + 2 * T, inner, cx - nx * 0.012, cy - ny * 0.012, 0, false)); ce.rotation.z = -sx * angR;
       const sn = B(len + 0.08, 0.34, zlen - 0.1, m.snow, cx + nx * 0.45, cy + ny * 0.45, zc);
-      sn.rotation.z = -sx * ang;
-      const fa = B(0.12, 0.42, zlen, m.steel, sx * (run + 0.02), H - k * EAVE - 0.05, zc); void fa; // (the eaves' fascia)
+      sn.rotation.z = -sx * angR;
+      B(0.12, 0.42, zlen, m.steel, sx * (runR + 0.02), H - k * EAVE - 0.05, zc);
     }
   }
-  // inside (and seen through the glass): glulam trusses (a tie beam, the king post, two struts), the ridge beam, light
-  // strips under each tie beam
-  const strips = out ? m.strip.clone() : m.strip;
+  // glulam trusses (a tie beam, the king post, two struts), the ridge beam, light strips under each tie beam
   for (const z of [-D / 2 + 1.75, -D / 2 + 5.25, -D / 2 + 8.75, -D / 2 + 12.25]) {
-    B(W, 0.36, 0.24, m.glulam, 0, H - 0.18, z);
-    B(0.24, RISE, 0.24, m.glulam, 0, H + RISE / 2, z);
-    for (const sx of [-1, 1]) { const s = B(Math.hypot(W / 4, RISE * 0.5), 0.2, 0.2, m.glulam, sx * W / 8, H + RISE * 0.25, z); s.rotation.z = -sx * Math.atan2(RISE * 0.5, W / 4); }
-    B(W - 3, 0.04, 0.12, strips, 0, H - 0.38, z, false);
+    I(B(W, 0.36, 0.24, glu, 0, H - 0.18, z));
+    I(B(0.24, RISE, 0.24, glu, 0, H + RISE / 2, z));
+    for (const sx of [-1, 1]) { const s = I(B(Math.hypot(W / 4, RISE * 0.5), 0.2, 0.2, glu, sx * W / 8, H + RISE * 0.25, z)); s.rotation.z = -sx * Math.atan2(RISE * 0.5, W / 4); }
+    I(B(W - 3, 0.04, 0.12, strips, 0, H - 0.38, z, false));
   }
-  B(0.3, 0.4, D, m.glulam, 0, H + RISE - 0.35, 0);
-  return { glassMeshes, strips, front: fz };
+  I(B(0.3, 0.4, D, glu, 0, H + RISE - 0.35, 0));
+  return { glassMeshes, strips, front: fz, doors: leaves, lit: out ? [m.larchInLit, m.oakLit, m.glulamLit] : [] };
 }

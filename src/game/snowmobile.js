@@ -371,10 +371,10 @@ export class Snowmobiles {
     const kindOf = (c) => (c.net ? 'net' : c.soft ? 'snow' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
     for (const k of [0.95, -0.85]) {
       const cx = d.x + fx * k, cz = d.z + fz * k, R = 0.72;
-      const t = this.vegetation?.collide?.(cx, cz, R, 0.6);
+      const t = this.vegetation?.collide?.(cx, cz, R, 0.6, 'crown'); // (the whole tree: its branches too)
       if (t) {
         const dx = cx - t.x, dz = cz - t.z, l = Math.hypot(dx, dz) || 1;
-        hit(dx / l, dz / l, R + t.r - l, false, 's' in t && !('trunk' in t) ? 'rock' : 'tree');
+        hit(dx / l, dz / l, R + (t.crown ?? t.r) - l, false, 's' in t && !('trunk' in t) ? 'rock' : 'tree');
       }
       for (const c of this.colliders) {
         if (c === d.s.collider) continue;

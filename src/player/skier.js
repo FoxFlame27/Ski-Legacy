@@ -2007,6 +2007,15 @@ export class SkierRig {
       H.p.x = s * P.x; // (never sideways, not even through the spring)
       const p = H.root.position.copy(H.p);
       p.y -= 0.32 * rise; p.z += 0.06 * rise;
+      // (Oct 28, the user: "a little bit of vibration in the hands: if you land from a height your hands move up a
+      // bit, and the hands move from the rough snow and ski paths"): up/down and a touch fore/aft only (never
+      // sideways): a landing lifts them (the head's own bump spring, plus the absorb), and a buzz through the poles
+      // that grows with speed, more on rough off-piste snow than on a groomed run, and when skidding
+      const land = clamp(-S.lag.y * 0.9, -0.025, 0.05) + 0.03 * (st.absorb || 0);
+      const amp = st.air ? 0 : smoothT(st.speed || 0, 2, 24) * (0.0012 + 0.0042 * (st.rough ?? 0.5)) + 0.0025 * clamp(st.brake || 0, 0, 1);
+      const tt = S.t + i * 0.37;
+      p.y += land + amp * (Math.sin(tt * 61) * 0.6 + Math.sin(tt * 37.3 + 1.1) * 0.4);
+      p.z += amp * 0.5 * Math.sin(tt * 47.1 + 2.3);
       // ---- the fist's orientation: fixed, from the rest pose (the pole angled back, the forearm toward the elbow)
       const D = _v4.set(s * 0.2, -0.95, 0.24).normalize();
       const Y = _s[1].copy(D).negate();

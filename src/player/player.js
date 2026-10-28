@@ -120,6 +120,7 @@ function parkFeatureAt(x, z, y) {
 
 // Top of a tree / rock from the vegetation (trees have a `type`, rocks sit half buried); NaN if unknown.
 const PERSON_R = 0.4, PERSON = { soft: true }; // other skiers / villagers: a soft bump
+const BRANCHES = { soft: true }; // a tree's boughs: a soft bump
 const BIG_ROCK = 2.6;   // rock size (m) from which a boulder blocks you
 const CRASH_HIT = 11;  // m/s straight into a tree / boulder / wall (~40 km/h) before it wipes you out
 const obstacleTop = (t) => (t.type !== undefined ? t.y + t.s : t.y + 0.75 * t.s);
@@ -1163,6 +1164,15 @@ export class Player {
       const dx = p.x - hit.x, dz = p.z - hit.z, d = Math.hypot(dx, dz) || 1, hr = hit.trunk ?? hit.r;
       p.x = hit.x + (dx / d) * (hr + R + 0.01); p.z = hit.z + (dz / d) * (hr + R + 0.01);
       this.bounce(dx / d, dz / d, speed);
+    } else if (above < 2.5) {
+      // the branches: the whole tree is solid (Oct 28, the user): you're held off its outline and bump off the
+      // boughs softly (they give: a slowed, soft bounce, never a wipeout)
+      const t = this.vegetation?.collide(p.x, p.z, R, Infinity, 'crown');
+      if (t && t.crown) {
+        const dx = p.x - t.x, dz = p.z - t.z, d = Math.hypot(dx, dz) || 1;
+        p.x = t.x + (dx / d) * (t.crown + R + 0.01); p.z = t.z + (dz / d) * (t.crown + R + 0.01);
+        this.bounce(dx / d, dz / d, speed, BRANCHES);
+      }
     }
   }
 
@@ -1407,6 +1417,7 @@ export class Player {
     o.charge = this.charging && !this.air ? this.charge : 0;
     o.pop = this.popT < 0.25 ? Math.sin((this.popT / 0.25) * Math.PI) : 0;
     o.brake = this.skidAmt; o.grab = this.grabVis; o.grabType = this.tricks.grabType; o.spin = this.spinVis;
+    o.rough = this._corr?.groomed && this._corr.d < 3 ? 0.25 : 1; // (a groomed run is smooth; off it the snow is rough)
     return o;
   }
 }

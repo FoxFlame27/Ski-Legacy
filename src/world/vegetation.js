@@ -29,6 +29,22 @@ const IMP_W = 256, IMP_H = 512; // impostor bake size
 // Mean needle brightness (linear) of each pine texture: both models are normalised to the same tint with it.
 // Measured from the texture at load; these are the values of the current models, used if that fails.
 const NEEDLE_LUM = { pine_tree: 0.077, pine_tree2: 0.23 };
+// branch spread per tree type (radius / height), measured from the models (crownOf); a spruce-like default until then
+const CROWN = [0.2, 0.2];
+// the spread of a tree's lower third (radius from its axis / its height): most of the outermost tips (90th percentile,
+// a stray needle tip doesn't count), times 0.85 (the tips give: you brush them)
+function crownOf(geo) {
+  const P = geo?.attributes?.position;
+  if (!P) return 0;
+  let y0 = Infinity, y1 = -Infinity, cx = 0, cz = 0;
+  for (let i = 0; i < P.count; i++) { const y = P.getY(i); if (y < y0) y0 = y; if (y > y1) y1 = y; cx += P.getX(i); cz += P.getZ(i); }
+  cx /= P.count; cz /= P.count;
+  const H = y1 - y0 || 1, d = [];
+  for (let i = 0; i < P.count; i++) if ((P.getY(i) - y0) / H < 0.35) d.push(Math.hypot(P.getX(i) - cx, P.getZ(i) - cz));
+  if (d.length < 8) return 0;
+  d.sort((a, b) => a - b);
+  return Math.min(0.4, (d[Math.floor(d.length * 0.9)] / H) * 0.85);
+}
 
 // Shared by the 3D trees and the impostors:
 //  - snow on the branches (the model's own clumps + fresh dusting) shows fully up close, and fades toward the
@@ -130,6 +146,9 @@ export class Vegetation {
     const treeNames = ['pine_tree', 'pine_tree2'].filter((n) => models[n]);
     this.types = treeNames.map((n) => bakeGeometry(models[n], { size: 1, axis: 'y' }));
     const lumNorm = this.types.map((t, i) => 1 / needleLum(t.material.map, NEEDLE_LUM[treeNames[i]] ?? 0.1));
+    // (Oct 28, the user: "make the whole tree collidable, not only the stem, also the branches"): each model's
+    // branch spread in its lower part (where a skier, walker or car meets it), as a share of the tree's height
+    this.types.forEach((t, i) => { const k = crownOf(t.geometry); if (k) CROWN[i] = k; });
     const makeInst = (geo, mat, max, shadow) => {
       const m = new THREE.InstancedMesh(geo, mat, max);
       m.count = 0;
@@ -360,7 +379,8 @@ export class Vegetation {
         if (c.d < 3 + r1 * 4) continue;
         if (this.nearPad(x, z)) continue;
         const s = 7 + r1 * 9 + f * 5;
-        trees.push({ x, y: h - 0.3, z, s, rot: r2 * 6.283, type: rr < 0.6 ? 0 : 1, r: s * 0.03 + 0.25, trunk: 0.15 + s * 0.012 }); // trunk: what a skier hits
+        const type = rr < 0.6 ? 0 : 1;
+        trees.push({ x, y: h - 0.3, z, s, rot: r2 * 6.283, type, r: s * 0.03 + 0.25, trunk: 0.15 + s * 0.012, crown: Math.max(0.6, s * (CROWN[type] ?? CROWN[0])) }); // trunk: the stem; crown: the branches
       } else if (rr < (slope > 0.45 ? 0.05 : 0.006) && this.rockKit) {
         // big boulders keep further off the runs, clear of the nets and border poles at their edges
         world.corridorAt(x, z, c);
@@ -536,13 +556,14 @@ export class Vegetation {
   // Returns the first obstacle hit within radius r of (x,z), or null.
   /** The tree or rock at (x, z) within r, or null. Rocks smaller than `minRock` (size) are skied over.
    *  `trunkOnly`: trees count only by their trunk, so a skier brushes through the branches. */
+  /** The tree or rock at (x, z) within r: trunkOnly true = the stem only; 'crown' = the whole tree (its branches). */
   collide(x, z, r, minRock = 0, trunkOnly = false) {
     const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
     for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
       const cell = this.cells.get((cx + i) + ',' + (cz + j));
       if (!cell) continue;
       for (const t of cell.trees) {
-        const dx = x - t.x, dz = z - t.z, tr = trunkOnly ? t.trunk ?? t.r : t.r;
+        const dx = x - t.x, dz = z - t.z, tr = trunkOnly === 'crown' ? t.crown ?? t.r : trunkOnly ? t.trunk ?? t.r : t.r;
         if (dx * dx + dz * dz < (r + tr) ** 2) return t;
       }
       for (const t of cell.rocks) {

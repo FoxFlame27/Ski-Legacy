@@ -538,8 +538,8 @@ export class Drive {
     const R = d.w / 2;
     for (const k of [d.half - R, 0, -(d.half - R)]) {
       const cx = d.x + fx * k, cz = d.z + fz * k;
-      const t = this.vegetation?.collide?.(cx, cz, R, 0.6);
-      if (t) { const dx = cx - t.x, dz = cz - t.z, l = Math.hypot(dx, dz) || 1; const o = R + t.r - l; if (o > 0) { px += (dx / l) * o; pz += (dz / l) * o; n++; solid = true; kind = vegKind(t); } }
+      const t = this.vegetation?.collide?.(cx, cz, R, 0.6, 'crown'); // (the whole tree: its branches too)
+      if (t) { const dx = cx - t.x, dz = cz - t.z, l = Math.hypot(dx, dz) || 1; const o = R + (t.crown ?? t.r) - l; if (o > 0) { px += (dx / l) * o; pz += (dz / l) * o; n++; solid = true; kind = vegKind(t); } }
       // guardrails: a line you slide along (a scrape, never a crash)
       const RG = busRoads.railGrid;
       if (RG?.size) {

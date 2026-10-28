@@ -420,7 +420,7 @@ export class Menu {
       },
       // left / right pick MAN / WOMAN; Enter presses the highlighted button (START by default)
       keys: { left: () => this.pickChar(this.chi - 1), right: () => this.pickChar(this.chi + 1), up: () => {}, down: () => {} },
-      back: () => this.go('main', -1),
+      back: () => this.go(this.inGame ? 'settings' : 'main', -1), // (opened from SETTINGS in game: back there)
     };
   }
 
@@ -458,6 +458,7 @@ export class Menu {
     if (this.starting || !c) return;
     this.starting = true;
     save.character = c.id;
+    if (this.cur?.name === 'showcase') save.characterChosen = true;
     writeSave();
     savePrefs(this.prefs);
     const payload = { mode: 'free', courseId: null, character: c.id };
@@ -508,6 +509,7 @@ export class Menu {
           <div class="mp-row" data-f data-row="quality"><span>Graphics</span><div class="seg">${qs.map((x) => `<button tabindex="-1" data-q="${x}" class="${q === x ? 'on' : ''}">${QUALITY_LABELS[x]}</button>`).join('')}</div></div>
           <div class="mp-row" data-f data-row="sens"><span>Mouse sensitivity</span><input class="m-sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}"></div>
           <div class="mp-row" data-f data-row="vol"><span>Volume</span><input class="m-vol" type="range" min="0" max="1" step="0.05" value="${save.volume ?? 0.8}"></div>
+          <div class="mp-row" data-f data-row="skier"><span>Skier</span><button class="mp-skier" tabindex="-1">Change skier</button></div>
           <div class="mp-row" data-f data-row="reset"><span>Progress</span><button class="mp-danger" tabindex="-1">Reset all progress</button></div>
         </div>`,
       after: (el) => this.bindSettings(el),
@@ -526,6 +528,7 @@ export class Menu {
     vol.addEventListener('input', () => { save.volume = parseFloat(vol.value); writeSave(); this.onVolume?.(save.volume); });
     // sliders give the keyboard back to the menu once released
     for (const s of [sens, vol]) s.addEventListener('change', () => s.blur());
+    el.querySelector('.mp-skier')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
     const reset = el.querySelector('.mp-danger');
     reset.addEventListener('click', () => {
       this.audio?.play('click');
@@ -558,6 +561,7 @@ export class Menu {
     const row = this.focusables[this.fi];
     const kind = row?.dataset.row;
     if (kind === 'quality') { if (this.pendingQ && this.pendingQ !== save.quality) this.onQuality?.(this.pendingQ); }
+    else if (kind === 'skier') row.querySelector('.mp-skier').click();
     else if (kind === 'reset') row.querySelector('.mp-danger').click();
     else if (row?.dataset.act) row.click();
   }
@@ -693,7 +697,8 @@ export class Menu {
   action(act, fromClick = false) {
     const [a, arg] = String(act).split(':');
     switch (a) {
-      case 'play': return this.go('showcase', 1); // (Oct 27, the user: the skier choice still comes first; its START: free ride)
+      // the MAN / WOMAN choice only the first time (Oct 28, the user); later it's under SETTINGS · Skier
+      case 'play': return save.characterChosen ? this.start() : this.go('showcase', 1);
       case 'skier': return this.go('showcase', 1);
       case 'controls': return this.go('controls', 1);
       case 'stats': return this.go('stats', 1);

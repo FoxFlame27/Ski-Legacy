@@ -490,6 +490,8 @@ function startGame() {
 // Menu PLAY / START: always free ride in Legacy Village (no mode chooser: RACE is at the RACING stand there).
 async function startFromMenu(sel = {}) {
   if (sel.character && sel.character !== save.character) { save.character = sel.character; writeSave(); }
+  // a new skier chosen from the pause menu's SETTINGS: swap in place and play on
+  if (started) { if (player.rig && save.character !== player.rigChar) swapCharacter(save.character); menu.hide(); closePause(); return; }
   startGame();
 }
 

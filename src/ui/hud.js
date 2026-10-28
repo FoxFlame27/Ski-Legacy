@@ -43,10 +43,9 @@ const setText = (id, v) => { const e = $(id); if (e.textContent !== v) e.textCon
 export const CONTROLS = [
   { title: 'ON THE SNOW', rows: [
     [['A', 'D'], 'Steer left / right', 'Pivot on the spot when stopped'],
-    [['W'], 'Push off, tuck for speed', 'After a lift or a stop you stand still: press W to go'],
+    [['W'], 'Pole yourself on, tuck for speed', 'On the flat or standing still: W pushes with your poles'],
     [['S'], 'Brake', 'Snowplow, hockey stop when fast'],
     [['S', '+', 'A', 'D'], 'Skid turn'],
-    [['SHIFT'], 'Skate on the flat'],
     [['SPACE'], 'Hold to crouch, release to jump', 'Tap for a small hop'],
   ] },
   { title: 'IN THE AIR', rows: [

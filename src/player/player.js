@@ -136,7 +136,7 @@ export class Player {
     this.skisOn = false;
     this.ski = { speed: 1, grip: 1 };
     this.frictionScale = 1; // snow grip/glide multiplier, set externally each frame (ice ~0.35)
-    this.autoSkisOff = true; // stopping on flat ground takes the skis off (race sessions may disable)
+    this.autoSkisOff = false; // (stopping on flat ground used to take the skis off: now they stay on, you pole on)
     this.hold = false; // keep a grounded skier in place (countdowns)
     this.parked = false; // standing still until the player moves (after teleports, lifts, getting up, braked stops)
     this.launch = 0;     // s of race-start push left (startPush)
@@ -274,9 +274,8 @@ export class Player {
     const inp = this.input;
     if (inp.hit('KeyR') && !(this.mode === 'sit' && this.viewBeforeRide)) this.view = this.view === 'third' ? 'first' : 'third';
     if (inp.hit('KeyG') && this.hasSkis && (this.mode === 'walk' || (this.mode === 'ski' && !this.air && this.speed < 2))) {
-      // you can only click into your skis where there's a slope to ski
-      if (!this.skisOn && this.isFlatHere()) this.events.push('tooFlat');
-      else this.setSkisOn(!this.skisOn);
+      // skis go on anywhere (Oct 27, the user): on the flat you pole yourself off with W
+      this.setSkisOn(!this.skisOn);
     }
 
     // mouse look
@@ -421,10 +420,10 @@ export class Player {
     ctl.steer = this.steer;
     ctl.steerIn = steerIn;
     ctl.brake = k.back;
-    ctl.skate = k.grab;
-    ctl.go = k.front && !k.back;   // W: push off when slow, tuck at speed
+    ctl.skate = false; // (Shift no longer skates you faster on the flat, Oct 27: it only grabs in the air)
+    ctl.go = k.front && !k.back;   // W: double-pole off when slow, tuck at speed
     ctl.tuck = ctl.go;
-    ctl.move = steerIn !== 0 || k.front || k.grab; // anything that should get a parked skier going
+    ctl.move = steerIn !== 0 || k.front; // anything that should get a parked skier going
     const steps = Math.max(1, Math.ceil(dt / SUBSTEP - 1e-9));
     const h = dt / steps;
     for (let s = 0; s < steps && this.mode === 'ski'; s++) this.skiStep(h, ctl);

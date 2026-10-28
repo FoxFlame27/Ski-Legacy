@@ -574,7 +574,10 @@ function shapeRoads(roads) {
       let lot = null;
       if (busRoads.lots.length) { try { lot = lotShape(x, z, h, spacing); } catch { lot = null; } }
       const nr = nearest(x, z);
-      if (lot && (lot.out <= 0 || nr.d > BENCH)) return lot.y;
+      // (on the car park its own level; round it the road eases into the car park's shaped ground, not the slope's:
+      // before, the two switched at the road's shoulder, a step where an access road met its car park)
+      if (lot && lot.out <= 0) return lot.y;
+      if (lot) h = lot.y;
       if (nr.d > 66) return h;
       const diff = Math.abs(h - nr.y);
       const blend = Math.min(60, 6 + diff * 3.4); // (gentle snow embankments, no dark walls)

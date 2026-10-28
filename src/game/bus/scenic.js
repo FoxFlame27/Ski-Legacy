@@ -395,21 +395,28 @@ export function shapeScenic() {
       const bA = bench(A);
       if (A.d <= bA) out = A.y;
       else {
-        const best = BEST; best.clear(); // (each road's stretch of ~48 m once: its nearest segment)
+        // (each road's stretch of ~48 m once: its nearest point, its height and bench a soft blend of the segments
+        // nearly as near (a hairpin inside one stretch: no step where its nearer leg swaps))
+        const best = BEST; best.clear();
         for (const c of CAND) {
           if (c[0] > REACH) continue;
           const key = c[1].ri * 4096 + Math.floor(c[1].sa / 48), o = best.get(key);
-          if (!o || c[0] < o[0]) best.set(key, c);
+          if (!o) best.set(key, [c[0], 0, 0, 0]); else if (c[0] < o[0]) o[0] = c[0];
+        }
+        for (const [d0, sg, t0] of CAND) {
+          if (d0 > REACH) continue;
+          const o = best.get(sg.ri * 4096 + Math.floor(sg.sa / 48)), wq = Math.exp(-(d0 - o[0]) / 1.5);
+          if (wq < 1e-3) continue;
+          // (its own bench: wider at its own lay-by; before, the lay-by's width jumped from one leg to the other
+          // where the nearest leg swapped: a step in the ground)
+          BO.ri = sg.ri; BO.s = sg.sa + (sg.sb - sg.sa) * t0; BO.side = (sg.bx - sg.ax) * (z - sg.az) - (sg.bz - sg.az) * (x - sg.ax) >= 0 ? 1 : -1;
+          o[1] += wq; o[2] += wq * (sg.ay + (sg.by - sg.ay) * t0); o[3] += wq * bench(BO);
         }
         // (each stretch's band: y +- its batter; its weight below fades out toward REACH)
         let lo = -Infinity, hi = Infinity, soft = 1.6;
         const BD = BANDS; BD.length = 0;
-        for (const [d, sg, t] of best.values()) {
-          const y = sg.ay + (sg.by - sg.ay) * t;
-          // (its own bench: wider at its own lay-by, whichever stretch is the nearest; before, the lay-by's width
-          // jumped from one leg to the other where the nearest leg swapped: a step in the ground)
-          BO.ri = sg.ri; BO.s = sg.sa + (sg.sb - sg.sa) * t; BO.side = (sg.bx - sg.ax) * (z - sg.az) - (sg.bz - sg.az) * (x - sg.ax) >= 0 ? 1 : -1;
-          const b = bench(BO);
+        for (const [d, ws, ys, bs] of best.values()) {
+          const y = ys / ws, b = bs / ws;
           const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
           // (a further stretch's band loosens from 40 m out, gently (~1 m per m), so one coming into reach never steps
           // the ground where the nearer ones pulled it away from h)

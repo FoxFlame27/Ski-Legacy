@@ -338,6 +338,7 @@ export class TrailMap {
     this.queue = [];
     this.spots = [];
     this.drawVillage();
+    this.drawChalets();
     this.drawPark();
     this.drawPistes();
     this.drawExpress();
@@ -488,6 +489,33 @@ export class TrailMap {
     const off = Math.max(24, 150 * s);
     this.label('LEGACY VILLAGE', vx, vy, { size: 21, color: BLUE, prio: 0, force: true,
       cands: [[0, off, 'center'], [0, -off, 'center'], [-off * 0.8, off * 0.7, 'right'], [off * 0.8, off * 0.7, 'left'], [0, off * 1.7, 'center'], [-off, -off * 0.6, 'right']] });
+  }
+
+  // the chalet village (game/chalets.js sets layout.chaletVillage): the Chaletweg, each chalet's footprint (yours in
+  // gold), the playground; labelled and clickable as a place
+  drawChalets() {
+    const C = layout.chaletVillage;
+    if (!C) return;
+    const g = this.g, s = this.view.s, cx = this.X(C.center.x), cy = this.Z(C.center.z);
+    if (!this.inView(cx, cy, 400 * s + 60)) return;
+    g.save();
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    this.path(C.road);
+    g.strokeStyle = '#fff'; g.lineWidth = Math.max(2.5, 9 * s); g.stroke();
+    g.strokeStyle = '#8a8f98'; g.lineWidth = Math.max(1.5, 6.5 * s); g.stroke();
+    const mine = C.rented?.();
+    for (const h of C.houses) {
+      const x = this.X(h.x), y = this.Z(h.z), w = Math.max(3, h.w * s), d = Math.max(4.5, h.d * s);
+      g.save(); g.translate(x, y); g.rotate(-h.yaw);
+      g.fillStyle = h.id === mine ? GOLD : '#a0522d'; g.strokeStyle = '#fff'; g.lineWidth = 1;
+      g.beginPath(); g.rect(-w / 2, -d / 2, w, d); g.fill(); g.stroke();
+      g.restore();
+    }
+    for (const p of C.playground || []) { g.fillStyle = '#2fbf5b'; g.beginPath(); g.arc(this.X(p.x), this.Z(p.z), Math.max(2.5, 4 * s), 0, Math.PI * 2); g.fill(); }
+    g.restore();
+    this.reserve(cx, cy, 12);
+    this.spot(cx, cy, Math.max(14, 120 * s), C.x, C.z, C.label);
+    this.label('CHALET VILLAGE', cx, cy, { size: 15, color: '#8a3a12', prio: 2, cands: this.around(Math.max(14, 130 * s), 6) });
   }
 
   drawPark() {

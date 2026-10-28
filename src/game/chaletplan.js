@@ -19,7 +19,7 @@ export const IT = 0.12;                              // interior wall thickness
 export const STAIR = { x0: -1.7, x1: -0.7, z0: -2.8, z1: 1.6, steps: 16 }; // foot (z0, floor G) to top (z1, floor FL)
 export const HOLE = { x0: -1.7, x1: -0.7, z0: -2.2, z1: 1.6 };             // the stairwell in the upper floor
 export const DOOR = { z: -0.25, w: 1.0, h: 2.15 };   // the front door (x = HX)
-export const PRICE = 500;                            // a stay (renting the chalet)
+export const NIGHT = 100;                            // the cheapest chalet's price per night (game/chalets.js prices each)
 
 /** Upstairs ceiling height (absolute y) at (x, z): the roof slope from the knee walls up to the collar; in the
  *  dormer band never below the dormer's flat ceiling. */

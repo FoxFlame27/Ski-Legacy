@@ -76,6 +76,7 @@ import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, scr
 import { PersonalBests } from './game/bests.js';
 import { TrailMap } from './ui/trailmap.js';
 import { PhotoMode } from './ui/photomode.js';
+import { Chalets } from './game/chalets.js'; // the chalet village (Almdorf): rent a chalet, its interior
 import { BuildMode } from './game/build/buildmode.js'; // chalet build mode (F inside your rented chalet)
 import { startObjective } from './game/build/objectives.js';
 let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
@@ -166,6 +167,7 @@ let sleds = null; // snowmobiles you can drive (game/snowmobile.js)
 let parking = null; // the car parks (game/parking.js)
 let traffic = null; // cars driving the roads (game/traffic.js)
 let drive = null; // the car you drive (game/drive.js)
+let chalets = null; // the chalet village: the houses, renting one, its interior (game/chalets.js)
 let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
@@ -356,6 +358,7 @@ async function boot() {
     carRental = new CarRental({ scene, camera, renderer, models, colliders, cameraBlockers: village.cameraBlockers, parking, drive, traffic, hud, audio, save, writeSave, spend, transition, player, input,
       makeRig: () => makeRig('skier_orange', 'rental'), getPost: () => post });
   } catch (e) { console.warn('car rental: ' + (e?.stack || e)); carRental = null; }
+  try { chalets = new Chalets({ scene, camera, renderer, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, spend, transition, player, getPost: () => post, getHour: () => env.hour }); } catch (e) { console.warn('chalets: ' + (e?.stack || e)); chalets = null; }
   // admin panel: money, time / weather, teleports, unlocks, speed boost, HUD, free camera (ui/admin.js)
   admin = new AdminPanel({
     save, writeSave, hud, audio, env, layout, input, camera, transition, streamAround, equipSkis,
@@ -566,6 +569,7 @@ async function backToMenu() {
   if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
   carRental?.leave(true);
+  chalets?.leave(true);
   player.frozen = false;
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
@@ -1000,6 +1004,8 @@ function findInteraction() {
   if (carPrompt) return carPrompt;
   const rental = carRental?.interaction(p); // the CAR RENTAL's door
   if (rental) return rental;
+  const chalet = chalets?.interaction(p); // a chalet's front door (rent it / go in)
+  if (chalet) return chalet;
   const sledPrompt = sleds.interaction(p);
   if (sledPrompt) return sledPrompt;
   const heliPrompt = heli.interaction(p);
@@ -1079,7 +1085,7 @@ function waypoint() {
   const mk = trailMap?.target;
   if (mk && Math.hypot(mk.x - p.x, mk.z - p.z) < 30) { trailMap.target = null; hud.flash(`Arrived · ${mk.label}`, 'good', 2200); }
   else if (mk) return to(mk.x, mk.z, mk.label);
-  if (!player.hasSkis && startObjective(save, player)?.startsWith('Rent a chalet')) return null; // (the chalet village)
+  if (!player.hasSkis && startObjective(save, player)?.startsWith('Rent a chalet')) { const cv = layout.chaletVillage; return cv ? to(cv.x, cv.z, 'Chalet village') : null; } // (the chalet village)
   if (!player.hasSkis) return to(village.shopDoor.x, village.shopDoor.z, 'Ski shop');
   const g = layout.lifts[0];
   if (gondolaRides === 0 && Math.hypot(p.x, p.z) < 400 && save.stats.races === 0) return to(g.bottom.x, g.bottom.z, 'Gondola');
@@ -1132,6 +1138,7 @@ function returnToVillage(message = 'Back in Legacy Village') {
   player.frozen = false;
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
   carRental?.leave(true);
+  chalets?.leave(true);
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
   player.camYaw = 0;
@@ -1223,6 +1230,7 @@ function applyQuality(name, persist = true) {
   post = new Post(renderer, scene, camera);
   if (interior.active) post.setView(interior.scene, interior.camera);
   if (carRental?.inside) post.setView(carRental.room.scene, carRental.room.camera);
+  if (chalets?.inside) post.setView(chalets.room.scene, chalets.room.camera);
   resetDynRes();
   setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
 }
@@ -1296,6 +1304,9 @@ function loop() {
   if (interior.active) {
     shopTarget = interior.update(dt, menu ? { mdx: 0, mdy: 0, down: () => false } : input, save.sensitivity);
     if (!menu && shopTarget && input.hit('KeyE')) { audio.play('click'); shopAction(shopTarget); }
+    interaction = null;
+  } else if (chalets?.inside) { // inside a chalet (its own scene)
+    chalets.frame(dt, menu || hud.panelOpen ? null : input, save.sensitivity);
     interaction = null;
   } else if (carRental?.inside) { // inside the CAR RENTAL (its own scene)
     carRental.frame(dt, menu ? null : input, save.sensitivity);
@@ -1387,6 +1398,7 @@ function loop() {
   mark('traffic');
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
   carRental?.update(dt); // the tow truck, the rental's sign at night
+  chalets?.update(dt); // the full-detail chalet nearest you
   mark('drive');
   modes.update(dt, input); // after the player (positions, checkpoints, barriers, respawns)
   mark('modes');
@@ -1476,6 +1488,8 @@ function loop() {
         speed: 0, loc: 'Ski Rental & Shop', time: env.timeString, weather, ski, heading: 0, waypoint: null,
         prompt: shopTarget?.label || null, objective: player.hasSkis ? '' : 'Look at a pair of skis and press E',
       });
+    } else if (chalets?.inside) {
+      hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || null, objective: objective() || '' });
     } else if (carRental?.inside) {
       hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the clerk and press E' });
     } else if (inSession) hud.frame({
@@ -1570,7 +1584,7 @@ boot().catch((e) => {
 
 window.__game = {
   get player() { return player; }, env, layout, world, scene, camera, renderer,
-  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
+  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get chalets() { return chalets; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
   // handles for building new systems inside the running game (dev tests)
   get terrain() { return terrain; }, get secrets() { return secrets; }, get vegetation() { return vegetation; }, get atmosphere() { return atmosphere; }, get backdrop() { return backdrop; }, get glare() { return glare; }, get npcs() { return npcs; }, get dressing() { return dressing; }, propDetail, get decor() { return decor; },
   streamAround, applyQuality, autoQ, get quality() { return quality; }, get dynRes() { return dynRes; }, get started() { return started; }, get paused() { return paused; },

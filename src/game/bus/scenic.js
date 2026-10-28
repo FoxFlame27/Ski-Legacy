@@ -327,3 +327,59 @@ export function shapeScenic() {
     },
   });
 }
+
+// The scenic traffic's tour (traffic.js drives a few cars round it, out and back, in the right-hand lane): out of the
+// Talblick car park, up the spur, anticlockwise round the ring to the climb, up the switchbacks to the Gipfelblick car
+// park (round in its aisle, a pause for the view), down again, anticlockwise round the ring, back down the spur and
+// round in the Talblick car park. -> { X, Z, S, L, entries: [s before each ring entry], pauses: [s], ring } or null
+export function scenicTour(lane = 1.6) {
+  const SC = busRoads.scenic;
+  if (!SC) return null;
+  const { ring, climb: RB, spur: RC, top, low } = SC;
+  const pts = [], entries = [], pauses = [], mark = [];
+  const P = {};
+  const along = (r, s0, s1) => { // a road's right-hand lane from s0 to s1 (either way)
+    const dir = s1 > s0 ? 1 : -1;
+    for (let s = s0; dir > 0 ? s <= s1 : s >= s1; s += dir * 2) { roadAt(r, s, P); const tx = P.dx * dir, tz = P.dz * dir; pts.push([P.x - tz * lane, P.z + tx * lane]); }
+  };
+  const angOf = (r, s) => { roadAt(r, s, P); return Math.atan2(P.x - ring.x, P.z - ring.z); };
+  const round = (a0, a1) => { // anticlockwise (increasing angle) round the ring's single lane
+    let d = a1 - a0; while (d <= 0.25) d += Math.PI * 2;
+    const n = Math.ceil((d * ring.R) / 2);
+    for (let i = 1; i < n; i++) { const a = a0 + (d * i) / n; pts.push([ring.x + Math.sin(a) * ring.R, ring.z + Math.cos(a) * ring.R]); }
+  };
+  const turnIn = (L) => { // in at the entrance, round in the aisle (radius ~4 m), out at the entrance
+    const cx = L.x - L.dirx * 2, cz = L.z - L.dirz * 2, ax = L.dirx, az = L.dirz, bx = -az, bz = ax; // (a: toward the entrance)
+    pts.push([L.ex, L.ez], [L.ex - ax * 4 + bx * 1.6, L.ez - az * 4 + bz * 1.6]);
+    mark.push(['pause', pts.length]);
+    for (let i = 0; i <= 10; i++) { const t = (i / 10) * Math.PI; pts.push([cx + bx * 4 * Math.cos(t) - ax * 4 * Math.sin(t), cz + bz * 4 * Math.cos(t) - az * 4 * Math.sin(t)]); }
+    pts.push([L.ex - ax * 4 - bx * 1.6, L.ez - az * 4 - bz * 1.6], [L.ex, L.ez]);
+  };
+  const E = 12; // (an arm's lane ends this far from its end on the ring's centre line: then the ring)
+  along(RC, 2, RC.length - E); mark.push(['entry', pts.length]); round(angOf(RC, RC.length - E), angOf(RB, RB.length - E));
+  along(RB, RB.length - E, 2); turnIn(top);
+  along(RB, 2, RB.length - E); mark.push(['entry', pts.length]); round(angOf(RB, RB.length - E), angOf(RC, RC.length - E));
+  along(RC, RC.length - E, 2); turnIn(low);
+  // corners rounded (Chaikin, twice), then every 2 m
+  let p = pts;
+  const keep = new Set();
+  for (let k = 0; k < 2; k++) {
+    const q = [];
+    for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; q.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]); }
+    p = q;
+  }
+  void keep;
+  const scale = p.length / pts.length;
+  const X = [], Z = [], S = [];
+  let s = 0, carry = 0;
+  const raw = [0];
+  for (let i = 1; i <= p.length; i++) raw.push(raw[i - 1] + Math.hypot(p[i % p.length][0] - p[i - 1][0], p[i % p.length][1] - p[i - 1][1]));
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i], b = p[(i + 1) % p.length], l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    let t = carry;
+    while (t < l) { X.push(a[0] + ((b[0] - a[0]) * t) / l); Z.push(a[1] + ((b[1] - a[1]) * t) / l); S.push(s); s += 2; t += 2; }
+    carry = t - l;
+  }
+  for (const [kind, i] of mark) (kind === 'entry' ? entries : pauses).push(raw[Math.min(raw.length - 1, Math.round(i * scale))]);
+  return { X, Z, S, L: s, entries, pauses, ring };
+}

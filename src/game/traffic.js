@@ -12,12 +12,13 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadAt, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { scenicTour } from './bus/scenic.js';
 import { CAR_MODELS, carTemplate, carInstance, farMesh } from './cars.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 import { carPath, linkPath, prepPath, followPath } from './carpath.js';
 
-const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
+const N_CARS = 12, N_SCENIC = 3, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
 const END_KEEP = 95;
 // a car is always on its road: its body at most 1 m beyond the plowed edge (knocked aside, or swerving round a crash
@@ -94,7 +95,7 @@ export class Traffic {
     if (!roads.length) return;
     this.main = roads.filter((r) => !r.access);
     this.access = roads.filter((r) => r.access);
-    this.lots = busRoads.lots.filter((l) => !l.building && l.bays?.length);
+    this.lots = busRoads.lots.filter((l) => !l.building && !l.scenic && l.bays?.length);
     // junctions: where each access road meets a bus road
     this.junctions = [];
     for (const r of this.access) {
@@ -116,6 +117,17 @@ export class Traffic {
       this.cars.push(car);
       this.spawn(car, true);
     }
+    // the Panoramastrasse: a few cars of their own on its tour (scenic.js scenicTour), out and back for the view
+    try {
+      this.tour = scenicTour(LANE);
+      if (this.tour) for (let k = 0; k < N_SCENIC; k++) {
+        const [name, length] = avail[(k * 5 + 3) % avail.length];
+        const car = this.makeCar(carTemplate(models[name], length, name), N_CARS + k, colours[(k * 2 + 1) % colours.length]);
+        car.name = name; car.scenic = true; car.mode = 'scenic'; car.u = (k / N_SCENIC) * this.tour.L + 30; car.v = 0; car.vmax = 9 + k * 1.5;
+        this.cars.push(car);
+        this.tourPose(car);
+      }
+    } catch (e) { console.warn('scenic traffic', e); }
     // the people in them (baked over the first frames; parked traffic cars show nobody)
     try {
       this.people = new CarPeople(makeRig);
@@ -216,7 +228,7 @@ export class Traffic {
     roadAt(at.r, at.s, _p);
     const dir = Math.sin(yaw) * _p.dx + Math.cos(yaw) * _p.dz >= 0 ? 1 : -1;
     const ahead = (o, sameWay) => o.mode === 'road' && o.road === at.r && (o.s - at.s) * dir > 0 && (o.s - at.s) * dir < 320 && (o.dir === dir) === sameWay;
-    const spare = () => this.cars.filter((o) => o.mode !== 'parked' && !this.inSight(o.x, o.z, 400)).sort((a, b) => Math.hypot(b.x - bp.x, b.z - bp.z) - Math.hypot(a.x - bp.x, a.z - bp.z))[0];
+    const spare = () => this.cars.filter((o) => !o.scenic && o.mode !== 'parked' && !this.inSight(o.x, o.z, 400)).sort((a, b) => Math.hypot(b.x - bp.x, b.z - bp.z) - Math.hypot(a.x - bp.x, a.z - bp.z))[0];
     if (!this.cars.some((o) => ahead(o, true))) {
       const c = spare(), s = at.s + dir * (140 + Math.random() * 40);
       if (c && s > END_KEEP + 30 && s < at.r.length - END_KEEP - 30) this.putOnRoad(c, at.r, s, dir, Math.max(6, line.speed * 0.9));
@@ -237,6 +249,7 @@ export class Traffic {
         this.recycleT = 2;
         // trips end (out of sight) and cars come back somewhere else; a wreck stays where it came to rest
         for (const c of this.cars) {
+          if (c.scenic) { if ((c.mode === 'wreck' || c.mode === 'knocked') && !this.inSight(c.x, c.z)) { c.mode = 'scenic'; c.v = 0; this.tourPose(c); } continue; } // (back on its tour)
           if (c.mode === 'gone') continue;
           const odd = c.mode === 'wreck' || c.mode === 'knocked', dP = Math.hypot(c.x - p.x, c.z - p.z);
           c.trip = (c.trip ?? (120 + Math.random() * 180)) - 2;
@@ -254,8 +267,9 @@ export class Traffic {
           if (away && c.trip <= 0 && c.mode !== 'lot' && !odd) { this.despawn(c); c.trip = undefined; continue; }
         }
         // about six cars on the roads around you (the rest stay spread over the network)
-        let near = this.cars.filter((c) => c.mode !== 'gone' && Math.hypot(c.x - p.x, c.z - p.z) < 420).length;
+        let near = this.cars.filter((c) => !c.scenic && c.mode !== 'gone' && Math.hypot(c.x - p.x, c.z - p.z) < 420).length;
         for (const c of this.cars) {
+          if (c.scenic) continue;
           if (near >= NEAR_WANT) break;
           const d = Math.hypot(c.x - p.x, c.z - p.z);
           if ((c.mode === 'gone' || d > 520) && !this.inSight(c.x, c.z) && this.recycle(c)) near++;
@@ -334,7 +348,52 @@ export class Traffic {
       return;
     }
     if (c.mode === 'lot') { this.manoeuvre(c, dt); return; }
+    if (c.mode === 'scenic') { this.tourDrive(c, dt); return; }
     this.drive(c, dt);
+  }
+
+  // ---- the scenic tour: along a fixed loop (right-hand lane, single-lane ring anticlockwise), slowing for the bends
+  // and the grade, keeping its distance behind the car ahead, giving way before the ring to anyone on it (cars, you),
+  // stopping for you in its way, a pause at each viewpoint car park
+  tourAt(u, out) {
+    const T = this.tour, n = T.X.length, f = ((u % T.L) + T.L) % T.L / 2, i = Math.floor(f) % n, j = (i + 1) % n, t = f - Math.floor(f);
+    out.x = T.X[i] + (T.X[j] - T.X[i]) * t; out.z = T.Z[i] + (T.Z[j] - T.Z[i]) * t;
+    return out;
+  }
+  tourPose(c) {
+    const a = this.tourAt(c.u + c.l * 0.38, {}), b = this.tourAt(c.u - c.l * 0.38, {});
+    const ya = world.height(a.x, a.z), yb = world.height(b.x, b.z);
+    c.x = (a.x + b.x) / 2; c.z = (a.z + b.z) / 2; c.y = (ya + yb) / 2 + 0.02;
+    c.yaw = Math.atan2(a.x - b.x, a.z - b.z);
+    this.pose(c, Math.atan2(yb - ya, Math.hypot(a.x - b.x, a.z - b.z)));
+  }
+  tourDrive(c, dt) {
+    const T = this.tour, L = T.L, u = ((c.u % L) + L) % L;
+    if (c.pause > 0) { c.pause -= dt; c.v = 0; c.brake = 1; return; }
+    // the bend ahead (the tightest within ~30 m): v <= sqrt(a_lat * R)
+    let vt = c.vmax;
+    const h = (q) => { const a = this.tourAt(q, _p), bx = a.x, bz = a.z, b = this.tourAt(q + 4, _q); return Math.atan2(b.x - bx, b.z - bz); };
+    for (let d = 0; d < 32; d += 8) { const k = Math.abs(wrapPi(h(u + d + 6) - h(u + d))) / 6; if (k > 1e-3) vt = Math.min(vt, Math.sqrt(2.6 / k) + d * 0.12); }
+    // the car ahead on the tour
+    for (const o of this.cars) { if (o === c || !o.scenic || o.mode !== 'scenic') continue; const gap = (((o.u - u) % L) + L) % L; if (gap < 40) vt = Math.min(vt, Math.max(0, (gap - 11) * 0.45)); }
+    // give way before the ring: someone on it (or about to be), within its quarter to the left
+    const R = T.ring;
+    for (const e of T.entries) {
+      const toE = (((e - u) % L) + L) % L;
+      if (toE > 16) continue;
+      const busy = [...this.cars.filter((o) => o !== c && o.scenic && o.mode === 'scenic'), { x: this.player.pos.x, z: this.player.pos.z }]
+        .some((o) => { const r = Math.hypot(o.x - R.x, o.z - R.z); return r < R.R + 5 && r > R.R - 5 && Math.hypot(o.x - c.x, o.z - c.z) < 28; });
+      if (busy) vt = Math.min(vt, Math.max(0, (toE - 2) * 0.5));
+    }
+    // you, in its way (on foot or in a car)
+    const pdx = this.player.pos.x - c.x, pdz = this.player.pos.z - c.z, fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), al = pdx * fx + pdz * fz;
+    if (al > 0 && al < 18 && Math.abs(pdx * fz - pdz * fx) < 2.6) vt = Math.min(vt, Math.max(0, (al - 6) * 0.5));
+    c.brake = vt < c.v - 0.3 ? 1 : 0;
+    c.v = vt > c.v ? Math.min(vt, c.v + 1.6 * dt) : Math.max(vt, c.v - 4 * dt);
+    const u1 = u + c.v * dt;
+    for (const ps of T.pauses) if (u < ps && u1 >= ps) { c.pause = 15 + Math.random() * 30; c.v = 0; }
+    c.u = u1;
+    this.tourPose(c);
   }
 
   // ---- on the road (as it was: following the lane line of the road itself)

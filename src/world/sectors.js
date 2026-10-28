@@ -9,10 +9,12 @@
 //    west to the Adlerhorn's runs and the village. The Hirschalm Hütte stands by the chair's base.
 //  - Ostkar: the wide bowl at the east end of the ridge. The Ostkar Chair (blue, red, black), the blue Kammweg
 //    over from the Hirschalm Chair's top and the blue Höhenweg back across to the Hirschalm.
-//  - Freeride bowls (Hirschkar, Ostkar-Mulde, Kammhang): open, unmarked slopes between the runs. A terrain shaper
-//    (world cut) smooths every new run and bowl there: the mid-scale relief is blurred and the grade relaxed
-//    to <= ~35 degrees (no cliff steps), fine snow texture and every pad (stations, huts) left exactly as they
-//    were. The bowls also go into the crag mask (layout.bowls), so no rock bands form on them.
+//  - Freeride bowls (Hirschkar, Ostkar-Mulde, Kammhang): open, unmarked slopes between the runs.
+//  - The ground: the raw range out here is pinnacles and 50-100 m walls, so each sector's whole area (AREAS) is
+//    reshaped first (areaShaper: blurred, then grade-limited to ~32 degrees, with gentle shoulders round the
+//    stations and huts, feathered into the untouched range), and then every run is graded like a built piste
+//    (pisteBench). The areas and bowls go into the crag mask (layout.bowls), so no rock bands form on them.
+//    The Murmelhütte stands on the Ostkar's floor.
 // Everything stays inside x 1400..4150, z -700..1150: well clear of the World Racing regions (the nearest, Big Air,
 // starts at x 4294), the Legacy Express, the Wolkenspitzbahn, the roads and the village.
 import { world } from './world.js';
@@ -32,9 +34,33 @@ export const BOWLS = [
   { name: 'Kammhang', pts: [[2700, 820], [2680, 560], [2700, 330]], w: 130 },
 ];
 
+// the reshaped areas (see areaShaper): capsules (centre line + half-width) round each sector's lifts, runs and bowls
+export const AREAS = [
+  { name: 'Hirschalm face', pts: [[2960, 90], [3070, 960]], w: 400 },
+  { name: 'Ostkar face', pts: [[3880, 90], [3740, 1040]], w: 330 },
+  { name: 'Kamm traverse', pts: [[3070, 930], [3880, 150]], w: 230 },
+  { name: 'Höhen traverse', pts: [[3740, 1010], [2960, 150]], w: 230 },
+  { name: 'Hirschalm basin', pts: [[2600, 150], [3880, 150]], w: 160 },
+  { name: 'Adlerblick', pts: [[2850, 30], [2430, -470]], w: 200 },
+  { name: 'Hirschweg', pts: [[2400, -520], [2870, -20]], w: 170 },
+];
+// the box the reshaping stays inside: east of the Adlerhorn's summit runs, west of Big Air (x 4294), south of
+// the Panoramastrasse's mountain (scenic.js: its switchbacks climb to x ~2050, z ~1050)
+const CLIP = { minx: 2380, maxx: 4200, minz: -640, maxz: 1150 };
+// the stations (the chairs' ends) and huts below: the shaper eases the ground round them into level shoulders
+const FLATS = [[2960, 150], [3070, 930], [2830, 10], [2430, -455], [3880, 150], [3740, 1010], [2700, 190], [3770, 200]];
+
 export function buildSectors(kit) {
   const { layout, addLift, addPiste, routePiste, faceUV, BAND, PISTE_WIDTH } = kit;
   const adler = layout.peaks.find((pk) => pk.id === 'adlerhorn');
+  // the area shaper first: everything below (stations, routes, pads) is laid out on the reshaped ground. What must
+  // keep its ground pins it: the other resorts' runs, lifts and pads (the Adlerhorn's top station and hut nearby)
+  const keep = [
+    ...layout.pistes.map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 40 })),
+    ...layout.lifts.map((l) => ({ pts: [[l.bottom.x, l.bottom.z], [l.top.x, l.top.z]], w: 40 })),
+    ...world.pads.map((pd) => ({ pts: [[pd.x, pd.z]], w: pd.r + pd.blend + 10 })),
+  ];
+  world.addCut(areaShaper(AREAS, keep, CLIP, FLATS));
   const blocked = layout.huts.map((h) => [h.x, h.z, 36]);
   const routed = [];
   const route = (m, a, b, diff, o = {}) => {
@@ -45,18 +71,12 @@ export function buildSectors(kit) {
   };
   const uv = (F, p, du = 0, dv = 0) => { const [u, v] = faceUV(F, p.x, p.z); return [u + du, v + dv]; };
 
-  // a chair's top station gets a level apron down the face in front of it, where its runs start side by side
-  const apron = (l) => {
-    const top = world.pads.find((pd) => pd.x === l.top.x && pd.z === l.top.z);
-    world.addPad({ x: l.top.x - l.dir[0] * 40, z: l.top.z - l.dir[1] * 40, r: 30, blend: 40, h: top ? top.h - 3 : undefined });
-  };
 
   // ---------------------------------------------------------------- Hirschalm
   const hChair = addLift({ type: 'chair', name: 'Hirschalm Chair', bottom: { x: 2960, z: 150 }, top: { x: 3070, z: 930 }, price: 10,
     topName: 'the Kamm', bottomName: 'the Hirschalm' });
   const aChair = addLift({ type: 'chair', name: 'Adlerblick Chair', bottom: { x: 2830, z: 10 }, top: { x: 2430, z: -455 }, price: 10,
     topName: 'the Adlerhorn summit', bottomName: 'the Hirschalm' });
-  apron(hChair);
   // the alm restaurant on the basin, west of the chairs' bases, its terrace facing south over the basin
   const hut = { x: 2700, z: 190, name: 'Hirschalm Hütte', label: 'Hirschalm · Hirschalm Hütte', yaw: 0.35, peak: 'hirschalm' };
   world.addPad({ x: hut.x, z: hut.z, r: 18, blend: 22 });
@@ -95,7 +115,11 @@ export function buildSectors(kit) {
   // ---------------------------------------------------------------- Ostkar
   const oChair = addLift({ type: 'chair', name: 'Ostkar Chair', bottom: { x: 3880, z: 150 }, top: { x: 3740, z: 1010 }, price: 10,
     topName: 'the Ostkar ridge', bottomName: 'the Ostkar' });
-  apron(oChair);
+  // the Murmelhütte: a small hut on the Ostkar's floor, beside the chair's base (west of it, off the runs' ends)
+  const ohut = { x: 3770, z: 200, name: 'Murmelhütte', label: 'Ostkar · Murmelhütte', yaw: -0.2, peak: 'ostkar' };
+  world.addPad({ x: ohut.x, z: ohut.z, r: 16, blend: 20 });
+  layout.huts.push(ohut);
+  blocked.push([ohut.x, ohut.z, 36]);
   const opatrol = { x: oChair.top.x + 38, z: oChair.top.z + 22 };
   world.addPad({ x: opatrol.x, z: opatrol.z, r: 6, blend: 10 });
   const FO = face('ostkar', oChair.top, oChair.bottom, 380, 320);
@@ -116,15 +140,11 @@ export function buildSectors(kit) {
     addPiste('Höhenweg', 1, hoehe, { peak: 'hirschalm', number: 56 }),
   ];
   pistesA.push(pistesB.pop());
-  layout.peaks.push({ id: 'ostkar', name: 'Ostkar', lift: oChair, pistes: pistesB, patrol: opatrol });
+  layout.peaks.push({ id: 'ostkar', name: 'Ostkar', lift: oChair, hut: ohut, pistes: pistesB, patrol: opatrol });
 
-  // ---------------------------------------------------------------- bowls + the terrain shaper
-  layout.bowls = BOWLS;
-  const runs = [...pistesA, ...pistesB];
-  world.addCut(skiShaper([
-    ...BOWLS.map((b) => ({ pts: b.pts, w: b.w, g: MAX_G })),
-    ...runs.map((p) => ({ pts: p.pts.filter((_, i) => i % 2 === 0 || i === p.pts.length - 1), w: PISTE_WIDTH[p.diff] + 6, g: Math.max(BAND[p.diff][1] * (+(globalThis.process?.env?.GF || 1.1)), 0.3) })),
-  ]));
+  // ---------------------------------------------------------------- bowls
+  // (the bowls and the reshaped areas go into the crag mask: no rock bands on them or within 40 m of them)
+  layout.bowls = [...BOWLS, ...AREAS.map((a) => ({ ...a, area: true }))];
   if (globalThis.process?.env?.NOBENCH) return;
   // then the runs themselves: each one graded like a built piste (see pisteBench)
   // (the gentlest first: where a steeper run crosses an easier one it takes the easier one's level, never the reverse)
@@ -228,72 +248,98 @@ function pisteBench(runs) {
   };
 }
 
-// ---------------------------------------------------------------- the shaper
-// A world cut over the strips (centre line + half-width): inside them the terrain's mid-scale relief is replaced by
-// a smoothed, grade-limited version of itself; it fades out over FEATHER m beyond a strip and under every pad.
-// h' = h + w * (S - R): R the natural ground on the shaper's grid, S the same grid blurred (~40 m) and relaxed so no
-// step between neighbours is steeper than MAX_G. What the grid can't hold (fine snow texture, pads, earlier cuts)
-// stays as it was. The grids are built on first use once the crag mask is set (the ground they see is the final one).
-const SH_CELL = 8, FEATHER = 70, MAX_G = 0.68, ITERS = +(globalThis.process?.env?.SH_IT || 120);
-function skiShaper(strips) {
+// ---------------------------------------------------------------- the area shaper
+// The ground out here is the raw range (ridged peaks, pinnacles, 50-100 m walls), far too wild for a narrow strip
+// shaper: a run 40 m wide beside a 100 m wall stays beside it. So each sector's whole area (AREAS: capsules round
+// its lift lines, runs and bowls) is reshaped as one: the natural ground on a 10 m grid, blurred (~50 m), then
+// grade-limited (Lipschitz envelopes, below) so no slope inside the area is steeper than MAX_G (~32 degrees).
+// Only the cells inside the area move, at full weight deeper than FE inside it and fading to nothing at its edge,
+// round the other resorts' runs, lifts and pads (keep) and at the clip box. h' = h + M (T - R) (R the natural
+// ground on the grid, T the grade-limited one, M the weight), faded under pads.
+// Built at once, before the sectors' lifts and runs are laid out (their stations and routes see the final
+// ground); R is sampled without rock bands (the crag mask keeps the areas and 40 m beyond them band-free).
+const SH_CELL = 10, MAX_G = 0.62, BLUR = 3, FE = 110, FLAT_G = 0.2, KMIX = +(globalThis.process?.env?.KMIX || 0.15); // m grid, grade limit, blur (cells), feather (m), fill share
+function areaShaper(areas, keep, clip, flats = []) {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
-  for (const s of strips) for (const [x, z] of s.pts) {
-    minx = Math.min(minx, x - s.w - FEATHER); maxx = Math.max(maxx, x + s.w + FEATHER);
-    minz = Math.min(minz, z - s.w - FEATHER); maxz = Math.max(maxz, z + s.w + FEATHER);
+  for (const a of areas) for (const [x, z] of a.pts) {
+    minx = Math.min(minx, x - a.w); maxx = Math.max(maxx, x + a.w); minz = Math.min(minz, z - a.w); maxz = Math.max(maxz, z + a.w);
   }
-  const x0 = Math.floor(minx / SH_CELL) * SH_CELL - SH_CELL * 8, z0 = Math.floor(minz / SH_CELL) * SH_CELL - SH_CELL * 8;
-  const nx = Math.ceil((maxx - x0) / SH_CELL) + 9, nz = Math.ceil((maxz - z0) / SH_CELL) + 9;
-  let R = null, D = null, M = null, building = false;
-  const build = () => {
-    R = new Float32Array(nx * nz);
-    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) R[j * nx + i] = world.baseHeight(x0 + i * SH_CELL, z0 + j * SH_CELL);
-    // blur: 3 separable box passes of radius 2 cells (~ a 40 m gaussian)
-    let S = Float32Array.from(R);
-    const T = new Float32Array(nx * nz), r = 2;
-    for (let pass = 0; pass < 3; pass++) {
-      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { let s = 0, c = 0; for (let k = -r; k <= r; k++) { const ii = i + k; if (ii >= 0 && ii < nx) { s += S[j * nx + ii]; c++; } } T[j * nx + i] = s / c; }
-      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { let s = 0, c = 0; for (let k = -r; k <= r; k++) { const jj = j + k; if (jj >= 0 && jj < nz) { s += T[jj * nx + i]; c++; } } S[j * nx + i] = s / c; }
-    }
-    // the strength mask (1 inside a strip, feathered out), then relax the grade inside it (talus: a step steeper
-    // than MAX_G moves both cells toward each other; cells outside the mask stay put, so the edges blend)
-    M = new Float32Array(nx * nz);
-    const Lim = new Float32Array(nx * nz).fill(MAX_G * SH_CELL); // per cell: the gentlest strip's grade limit
-    for (const s of strips) {
-      for (let k = 1; k < s.pts.length; k++) {
-        const [ax, az] = s.pts[k - 1], [bx, bz] = s.pts[k], ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, reach = s.w + FEATHER;
-        const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - reach - x0) / SH_CELL)), i1 = Math.min(nx - 1, Math.ceil((Math.max(ax, bx) + reach - x0) / SH_CELL));
-        const j0 = Math.max(0, Math.floor((Math.min(az, bz) - reach - z0) / SH_CELL)), j1 = Math.min(nz - 1, Math.ceil((Math.max(az, bz) + reach - z0) / SH_CELL));
-        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-          const px = x0 + i * SH_CELL - ax, pz = z0 + j * SH_CELL - az;
-          const t = Math.max(0, Math.min(1, (px * ex + pz * ez) / l2));
-          const d = Math.hypot(px - ex * t, pz - ez * t) - s.w, w = 1 - smoothstep(0, FEATHER, d), q = j * nx + i;
-          if (w > M[q]) M[q] = w;
-          if (w >= 0.5 && s.g * SH_CELL < Lim[q]) Lim[q] = s.g * SH_CELL;
-        }
-      }
-    }
-    // (the grid's outer ring stays at weight 0: the shaper ends exactly where its bounds do)
-    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) if (i < 2 || j < 2 || i >= nx - 2 || j >= nz - 2) M[j * nx + i] = 0;
-    for (let it = 0; it < ITERS; it++) {
-      for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
-        const q = j * nx + i;
-        if (M[q] < 0.5) continue;
-        for (const n of [q + 1, q + nx]) {
-          const dh = S[q] - S[n], lim = Math.min(Lim[q], Lim[n]);
-          if (Math.abs(dh) <= lim) continue;
-          const e = (Math.abs(dh) - lim) * 0.25 * Math.sign(dh), wn = M[n] >= 0.5 ? 1 : 0;
-          S[q] -= e * (wn ? 1 : 2); if (wn) S[n] += e;
-        }
-      }
-    }
-    D = new Float32Array(nx * nz);
-    for (let q = 0; q < D.length; q++) D[q] = (S[q] - R[q]) * M[q];
+  minx = Math.max(minx, clip.minx); maxx = Math.min(maxx, clip.maxx); minz = Math.max(minz, clip.minz); maxz = Math.min(maxz, clip.maxz);
+  const x0 = Math.floor(minx / SH_CELL) * SH_CELL - SH_CELL * 4, z0 = Math.floor(minz / SH_CELL) * SH_CELL - SH_CELL * 4;
+  const nx = Math.ceil((maxx - x0) / SH_CELL) + 5, nz = Math.ceil((maxz - z0) / SH_CELL) + 5, N = nx * nz;
+  // the natural ground, without rock bands (a mask that allows none over the grid)
+  const R = new Float32Array(N), cm = world.cragMask;
+  world.cragMask = { x0: x0 - 100, z0: z0 - 100, cell: 1e5, nx: 3, nz: 3, d: new Float32Array(9) };
+  try { for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) R[j * nx + i] = world.baseHeight(x0 + i * SH_CELL, z0 + j * SH_CELL); }
+  finally { world.cragMask = cm; }
+  // free cells: inside an area capsule and the clip box, clear of everything that must keep its ground
+  const free = new Uint8Array(N), segD = (px, pz, ax, az, bx, bz) => {
+    const ex = bx - ax, ez = bz - az, t = Math.max(0, Math.min(1, ((px - ax) * ex + (pz - az) * ez) / (ex * ex + ez * ez || 1)));
+    return Math.hypot(ax + ex * t - px, az + ez * t - pz);
   };
-  const bounds = { minx: x0 + SH_CELL * 2, minz: z0 + SH_CELL * 2, maxx: x0 + (nx - 3) * SH_CELL, maxz: z0 + (nz - 3) * SH_CELL };
+  // (as segments with their boxes, only those that reach the grid: a cell tests the few round it)
+  const segs = (list) => list.flatMap((a) => (a.pts.length === 1 ? [[a.pts[0], a.pts[0]]] : a.pts.slice(1).map((b, k) => [a.pts[k], b])).map(([[ax, az], [bx, bz]]) => ({ ax, az, bx, bz, w: a.w,
+    x0: Math.min(ax, bx) - a.w, x1: Math.max(ax, bx) + a.w, z0: Math.min(az, bz) - a.w, z1: Math.max(az, bz) + a.w })))
+    .filter((g) => g.x1 > x0 && g.x0 < x0 + nx * SH_CELL && g.z1 > z0 && g.z0 < z0 + nz * SH_CELL);
+  const areaSegs = segs(areas), keepSegs = segs(keep);
+  // the weight: 1 deeper than FE inside an area, falling to 0 at its edge, at FE from anything kept and at the clip box
+  const depth = (G, x, z, inside) => { let best = inside ? -1e9 : 1e9; for (const g of G) { if (x < g.x0 - FE || x > g.x1 + FE || z < g.z0 - FE || z > g.z1 + FE) continue; const d = segD(x, z, g.ax, g.az, g.bx, g.bz) - g.w; best = inside ? Math.max(best, -d) : Math.min(best, d); } return best; };
+  const M = new Float32Array(N);
+  for (let j = 2; j < nz - 2; j++) for (let i = 2; i < nx - 2; i++) {
+    const x = x0 + i * SH_CELL, z = z0 + j * SH_CELL;
+    const dc = Math.min(x - clip.minx, clip.maxx - x, z - clip.minz, clip.maxz - z);
+    if (dc <= 0) continue;
+    const w = smoothstep(0, FE, depth(areaSegs, x, z, true)) * smoothstep(0, FE, depth(keepSegs, x, z, false)) * smoothstep(0, FE, dc);
+    if (w > 0) { M[j * nx + i] = w; free[j * nx + i] = 1; }
+  }
+  // blur (3 separable box passes)
+  let S = Float32Array.from(R);
+  const Tm = new Float32Array(N);
+  for (let pass = 0; pass < 3; pass++) {
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { let s = 0, c = 0; for (let k = -BLUR; k <= BLUR; k++) { const ii = i + k; if (ii >= 0 && ii < nx) { s += S[j * nx + ii]; c++; } } Tm[j * nx + i] = s / c; }
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { let s = 0, c = 0; for (let k = -BLUR; k <= BLUR; k++) { const jj = j + k; if (jj >= 0 && jj < nz) { s += Tm[jj * nx + i]; c++; } } S[j * nx + i] = s / c; }
+  }
+  // the grade limit: the lower envelope (every cell no higher than any other cell + MAX_G * distance: peaks and
+  // walls shaved to cones) and the upper one (no lower than any other - MAX_G * distance: pits and gullies filled),
+  // each by chamfer sweeps over the 8 neighbours from the blurred ground on the area's cells; both are within the
+  // limit everywhere, so any blend of them is too. Mostly shaved (KMIX of the fill): filling a wall's foot would
+  // lift a whole basin floor.
+  const F = new Float32Array(N);
+  for (let q = 0; q < N; q++) F[q] = free[q] ? S[q] : R[q];
+  // the grade limit per cell: MAX_G, eased to FLAT_G round the stations and huts (flats), so their level pads sit on
+  // a gentle shoulder instead of a 32-degree cone (a pad's embankment on that would be far steeper)
+  const Lm = new Float32Array(N).fill(MAX_G);
+  for (const [fx, fz] of flats) for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+    const d = Math.hypot(x0 + i * SH_CELL - fx, z0 + j * SH_CELL - fz);
+    if (d < 170) Lm[j * nx + i] = Math.min(Lm[j * nx + i], FLAT_G + (MAX_G - FLAT_G) * smoothstep(50, 170, d));
+  }
+  const envelope = (sg) => { // sg = 1: lower envelope (min of f + L d), -1: upper (max of f - L d)
+    const E = Float32Array.from(F, (v, q) => (free[q] ? v * sg : 1e6));
+    const back = [[-1, 0, SH_CELL], [-1, -1, SH_CELL * Math.SQRT2], [0, -1, SH_CELL], [1, -1, SH_CELL * Math.SQRT2]], fwd = back.map(([a, b, l]) => [-a, -b, l]);
+    for (let round = 0; round < 6; round++) {
+      let changed = 0;
+      for (const [dirs, rev] of [[back, false], [fwd, true]]) for (let jj = 0; jj < nz; jj++) {
+        const j = rev ? nz - 1 - jj : jj;
+        for (let ii = 0; ii < nx; ii++) {
+          const i = rev ? nx - 1 - ii : ii, q = j * nx + i;
+          let v = E[q];
+          for (const [di, dj, l] of dirs) { const a = i + di, b = j + dj; if (a >= 0 && b >= 0 && a < nx && b < nz) { const n = b * nx + a, w = E[n] + l * (Lm[q] + Lm[n]) * 0.5; if (w < v) v = w; } }
+          if (v < E[q] - 1e-3) { E[q] = v; changed++; }
+        }
+      }
+      if (!changed) break;
+    }
+    for (let q = 0; q < N; q++) E[q] *= sg;
+    return E;
+  };
+  const Lo = envelope(1), Hi = envelope(-1);
+  const T = new Float32Array(N);
+  for (let q = 0; q < N; q++) T[q] = free[q] ? Lo[q] + (Hi[q] - Lo[q]) * KMIX : R[q];
+  const D = new Float32Array(N);
+  for (let q = 0; q < N; q++) D[q] = free[q] ? (T[q] - R[q]) * M[q] : 0;
   return {
-    bounds, shaper: true,
+    bounds: { minx: x0, minz: z0, maxx: x0 + (nx - 1) * SH_CELL, maxz: z0 + (nz - 1) * SH_CELL }, shaper: true, id: 'sectors-area',
     apply(x, z, h) {
-      if (!D) { if (building || !world.cragMask) return h; building = true; build(); building = false; }
       const fx = (x - x0) / SH_CELL, fz = (z - z0) / SH_CELL, i = Math.floor(fx), j = Math.floor(fz);
       if (i < 0 || j < 0 || i >= nx - 1 || j >= nz - 1) return h;
       const tx = fx - i, tz = fz - j, k = j * nx + i;

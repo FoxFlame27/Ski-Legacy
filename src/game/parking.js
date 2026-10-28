@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
-import { carTemplate, carInstance, farMesh, CAR_MODELS } from './cars.js';
+import { carTemplate, carInstance, farMesh, CAR_MODELS, CAR_RARE } from './cars.js';
 import { setPlates } from './carconfig.js';
 import { mulberry32 } from '../core/noise.js';
 import { nightUniform } from '../world/village.js';
@@ -136,7 +136,7 @@ export class ParkingLots {
         const rnd = mulberry32(4417);
         const lots = busRoads.lots.filter((l) => !l.building && l.bays?.length);
         const colours = [null, 0xf2f2f0, 0x1b1d22, 0x9aa0a6, 0x24324e, 0x7a1d1d, 0x5d6166, 0xd8d2c4, 0x2f4a3a, 0xb8b1a3];
-        const kinds = CAR_MODELS.filter(([name]) => models[name]);
+        const kinds = CAR_MODELS.filter(([name]) => models[name] && !CAR_RARE.has(name)), rare = CAR_MODELS.filter(([name]) => models[name] && CAR_RARE.has(name));
         for (const lot of lots) {
           const want = Math.round(lot.bays.length * 0.55);
           const order = lot.bays.map((b) => ({ b, r: rnd() })).sort((a, b) => a.r - b.r).map((o) => o.b);
@@ -145,7 +145,8 @@ export class ParkingLots {
           for (const pass of [0, 1]) for (const bay of order) {
             if (n >= want || bay.taken) continue;
             if (pass === 0 && lot.bays.some((o) => o.taken && Math.hypot(o.x - bay.x, o.z - bay.z) < 3.2)) continue;
-            const [name, length] = kinds[Math.floor(rnd() * kinds.length)];
+            // (now and then a supercar, CAR_RARE: ~1 bay in 30; the same draw, so the rest stay as they were)
+            const r = rnd(), [name, length] = rare.length && (r * 997) % 1 < 0.035 ? rare[Math.floor(((r * 997) % 1) / 0.035 * rare.length)] : kinds[Math.floor(r * kinds.length)];
             const paint = colours[Math.floor(rnd() * colours.length)];
             try { this.parkCar(lot, models[name], colliders, cameraBlockers, { length, bay, paint, name }); n++; } catch (e) { console.warn('parked car', name, e); }
           }

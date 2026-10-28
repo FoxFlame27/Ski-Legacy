@@ -29,12 +29,15 @@ export const RENTALS = [
   { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 250, length: 4.7 },
   { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 300, length: 4.7 },
   { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 450, length: 5.0 },
+  // upstairs, the supercar floor (UPPER: on the mezzanine, rented the same way: walk up, E at it, or pick it here)
+  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 800, length: 4.96 },
+  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 900, length: 4.64 },
 ];
 export { PAINTS }; // (the configurator's: carconfig.js)
-// the five cars on display inside (one of each, each its own colour; LAYOUT.spots: where)
+// the five cars on display downstairs (one of each, each its own colour; LAYOUT.spots: where)
 const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_tesla_m3', 'white'], ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_dacia_duster', 'orange']];
-// upstairs on the mezzanine, on show (LAYOUT.upSpots)
-const UPPER = [['car_audi_rs6', 'yellow'], ['car_bmw_x3', 'silver']];
+// upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for rent like the rest, at their own rates)
+const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red']];
 export const WRECK_FEE = 1000;
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
 // its road end, the rental bays (lines at x, from / to z), your car's spot, the TOW bay (middle, half length / width)

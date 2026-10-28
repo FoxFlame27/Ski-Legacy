@@ -109,6 +109,8 @@ export function plateTexture(text) {
 //  Audi RS6   front: the honeycomb under the rings (no plate in the model). rear: its own plate (US size, ManufacturerPlate).
 //  Tesla M3   front / rear: its own plates (LicensePlateText / Red / Yellow, US size) on their holders.
 //  Golf GTI   front: the plate holder on the bumper (a raised 0.5 x 0.1 panel). rear: the flat recess under the plate lights.
+//  SLS AMG    front: the flat lip under the grille (0.24-0.31 m). rear: its own plate (EXT_PLATE_plastic) in the bumper.
+//  Taycan     front / rear: the flat plate panels in the bumpers (0.36-0.48 m; no plate in the model).
 //  Duster     front: the plate holder in the bumper (0.54 x 0.1). rear: the recess on the tailgate (0.5 x 0.09, leaning back).
 const PLATE_SPOT = {
   car_bmw_x3: { mat: /Nomera/i, f: [0.534, 0], r: [0.965, 15] },
@@ -116,6 +118,8 @@ const PLATE_SPOT = {
   car_tesla_m3: { mat: /LicensePlate/i, f: [0.421, 0], r: [0.767, 0] },
   car_vw_golf_gti: { f: [0.493, 4], r: [0.515, 4] },
   car_dacia_duster: { f: [0.60, 0], r: [0.887, 18] },
+  car_mercedes_sls: { mat: /EXT_PLATE/i, f: [0.275, 0], r: [0.445, 0] },
+  car_porsche_taycan: { f: [0.42, 0], r: [0.42, 0] },
 };
 export const PLATE_W = 0.52, PLATE_H = 0.11; // EU plate, 520 x 110 mm (the models are at their real size)
 const plateModel = (t) => (t.name || '').replace(/_full$/, '');
@@ -169,6 +173,7 @@ const CABIN = {
   car_vw_golf_gti: { mat: /leather|perfor|fabric|seatB/i }, car_tesla_m3: { mat: /BlackSuade|interiorGray|LightGrayInterior/i },
   car_bmw_x3: { mat: /FrontSeat|BackSeat/i }, car_audi_rs6: { mat: /InteriorA_Material|InteriorTillingA/i, zone: true },
   car_dacia_duster: { mat: /UV_int/i, zone: true, grain: 1 },
+  car_mercedes_sls: { mat: /^INT_Skin\.\d/i, zone: true }, car_porsche_taycan: { mat: /taycan_turbo_s_cab/i, zone: true },
 };
 function cabinMat(src, look, t, spec) {
   const m = src.clone();

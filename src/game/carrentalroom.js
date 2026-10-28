@@ -14,7 +14,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import { fitModel, loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye } from './cars.js';
 import { dressCar, setPlates } from './carconfig.js';
-import { LAYOUT, buildShell, stairY, setDoors } from './carrentalshell.js';
+import { LAYOUT, buildShell, stairY, setDoors, ceilingAt } from './carrentalshell.js';
 // the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 // where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
@@ -259,17 +259,41 @@ export class CarRentalRoom {
     });
   }
 
-  // ------------------------------------------------------------------ upstairs: two more cars on the mezzanine (on show)
+  // ------------------------------------------------------------------ upstairs: the supercars on the mezzanine
+  // (for rent like the ones downstairs: E at one, the same configurator; on the floor itself, no turntable: a table
+  // entry of their own that never turns, its floor at FL)
   buildUpper(models, cars, upper) {
     const S = this.scene, FL = LAYOUT.FL;
     this.obstaclesUp = [];
+    const rim = new THREE.MeshStandardMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.18 });
     upper.forEach((d, k) => {
       const at = LAYOUT.upSpots[k], spec = cars.find((c) => c.id === d.id), gltf = models[d.id];
       if (!at || !spec || !gltf) return;
       const t = carTemplate(gltf, spec.length, d.id), inst = setPlates(carInstance(t, { paint: d.paint }), t);
       inst.group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      inst.group.position.set(at[0], FL, at[1]); inst.group.rotation.y = at[2];
-      S.add(inst.group);
+      const spin = new THREE.Group(); spin.position.set(at[0], FL, at[1]); spin.rotation.y = at[2];
+      spin.add(inst.group); S.add(spin);
+      const hit = new THREE.Mesh(new THREE.BoxGeometry(2.1, 1.5, spec.length + 0.2), HITBOX);
+      hit.position.y = 0.75; hit.userData = { kind: 'car', id: d.id, paint: d.paint, label: spec.label, up: true };
+      spin.add(hit); this.aimables.push(hit);
+      this.tables.push({ spin, speed: 0, id: d.id, inst, t, spec, x: at[0], z: at[1], y: FL, up: true });
+      // its price card on a steel stand, at the balustrade in front of it
+      const card = tex(512, 320, (g, w, h) => {
+        g.fillStyle = '#16181c'; g.fillRect(0, 0, w, h); g.fillStyle = '#e2b81c'; g.fillRect(0, 0, w, 14);
+        g.textAlign = 'left'; g.fillStyle = '#e2b81c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
+        g.fillStyle = '#f4f2ee'; g.font = `italic 700 ${spec.label.length > 18 ? 56 : 72}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.fillText(spec.label, 34, 152);
+        g.fillStyle = '#e2b81c'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price}`, 34, 270);
+        g.fillStyle = 'rgba(244,242,238,0.7)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('per rental · E to rent', 250, 262);
+      });
+      const stand = new THREE.Group();
+      box(0.05, 1.05, 0.05, rim, 0, 0.52, 0, stand);
+      box(0.36, 0.02, 0.36, rim, 0, 0.01, 0, stand);
+      const c = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.39), new THREE.MeshStandardMaterial({ map: card, roughness: 0.6 }));
+      c.position.set(0, 1.18, 0.03); c.rotation.x = -0.35; stand.add(c);
+      box(0.66, 0.43, 0.02, rim, 0, 1.18, 0.0, stand).rotation.x = -0.35;
+      stand.position.set(at[0] + 1.6, FL, LAYOUT.MZ - 0.55);
+      S.add(stand);
+      this.obstaclesUp.push({ x: stand.position.x, z: stand.position.z, r: 0.25 });
       const sp = new THREE.SpotLight(0xffe2bd, 45, 10, 0.6, 0.6, 1.6);
       sp.position.set(at[0], ROOM.H - 0.4, at[1] + 1.5); sp.target.position.set(at[0], FL + 0.5, at[1]);
       S.add(sp, sp.target);
@@ -365,6 +389,7 @@ export class CarRentalRoom {
   configure(cfg, step) {
     const T = this.tables.find((o) => o.id === cfg.id);
     if (!T) return;
+    this.cfgUp = !!T.up; // (upstairs: the camera stays up there)
     if (this.cfg && this.cfg.table !== T) this.restore(this.cfg.table);
     const prev = this.cfg;
     const want = step === 'interior' && FULL[cfg.id] ? 'full' : 'simple';
@@ -421,10 +446,12 @@ export class CarRentalRoom {
     } else {
       if (!c.dragged) c.yaw += dt * 0.06; // (a slow drift round it)
       const a = heading + c.yaw;
-      pos.set(T.x + Math.sin(a) * c.dist * Math.cos(c.pitch), 0.16 + 0.7 + Math.sin(c.pitch) * c.dist, T.z + Math.cos(a) * c.dist * Math.cos(c.pitch));
+      const y0 = T.y || 0; // (upstairs: from the mezzanine's floor)
+      pos.set(T.x + Math.sin(a) * c.dist * Math.cos(c.pitch), y0 + (T.up ? 0 : 0.16) + 0.7 + Math.sin(c.pitch) * c.dist, T.z + Math.cos(a) * c.dist * Math.cos(c.pitch));
       pos.x = Math.max(-ROOM.W / 2 + 0.4, Math.min(ROOM.W / 2 - 0.4, pos.x)); pos.z = Math.max(-ROOM.D / 2 + 0.4, Math.min(ROOM.D / 2 - 0.4, pos.z));
-      if (pos.z < LAYOUT.MZ + 0.3) pos.y = Math.min(pos.y, LAYOUT.FL - 0.5); // (under the mezzanine: below its floor)
-      look.set(T.x, c.step === 'rims' ? 0.5 : 0.75, T.z);
+      if (T.up) pos.y = Math.max(y0 + 0.4, Math.min(pos.y, ceilingAt(pos.x) - 0.5)); // (under the roof)
+      else if (pos.z < LAYOUT.MZ + 0.3) pos.y = Math.min(pos.y, LAYOUT.FL - 0.5); // (under the mezzanine: below its floor)
+      look.set(T.x, y0 + (c.step === 'rims' ? 0.5 : 0.75), T.z);
       cam.fov = 45;
     }
     // (eased there; at once the first time and between inside / outside)
@@ -507,7 +534,7 @@ export class CarRentalRoom {
     if (!input) return null;
     const hits = new THREE.Raycaster(this.camera.position, dir, 0, 7).intersectObjects(this.aimables, false);
     const u = hits[0]?.object.userData;
-    if (!u?.kind) return null;
+    if (!u?.kind || (u.up && this.level !== 'up')) return null; // (the cars upstairs: from up there)
     if (u.kind === 'door') return { kind: 'door', label: 'Leave Car Rental' };
     if (u.kind === 'clerk') return { kind: 'clerk', label: 'Talk to the rental clerk' };
     return { kind: 'car', id: u.id, paint: u.paint, label: `Rent ${u.label}` };

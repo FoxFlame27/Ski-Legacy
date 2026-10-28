@@ -8,7 +8,9 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 import { fitModel, dequantize } from '../core/assets.js';
 
 /** Car models: [model name, real length (m)]. Add a car here (and to MODEL_LIST) and it parks / drives too. */
-export const CAR_MODELS = [['car_bmw_x3', 4.7], ['car_audi_rs6', 5.0], ['car_vw_golf_gti', 4.3], ['car_tesla_m3', 4.7], ['car_dacia_duster', 4.34]];
+export const CAR_MODELS = [['car_bmw_x3', 4.7], ['car_audi_rs6', 5.0], ['car_vw_golf_gti', 4.3], ['car_tesla_m3', 4.7], ['car_dacia_duster', 4.34], ['car_mercedes_sls', 4.64], ['car_porsche_taycan', 4.96]];
+// rare in the traffic and the car parks (the supercars: one in a while, not one in seven)
+export const CAR_RARE = new Set(['car_mercedes_sls', 'car_porsche_taycan']);
 
 const cache = new Map();
 
@@ -17,6 +19,7 @@ const cache = new Map();
 export const REAL = {
   car_bmw_x3: [4.71, 1.89, 1.68], car_audi_rs6: [4.99, 1.95, 1.46], car_vw_golf_gti: [4.29, 1.79, 1.46],
   car_tesla_m3: [4.69, 1.85, 1.44], car_dacia_duster: [4.34, 1.80, 1.69],
+  car_mercedes_sls: [4.64, 1.94, 1.26], car_porsche_taycan: [4.96, 1.97, 1.38],
 };
 const JUNK = /plane|ground|shadow|floor|backdrop|base_?plate|studio/i;
 const REAR = /tail|rear|back_?light|red_?gla|red_?light|glow_red|reflector/i, FRONT = /head|front_?light|front/i;
@@ -25,8 +28,11 @@ const REAR = /tail|rear|back_?light|red_?gla|red_?light|glow_red|reflector/i, FR
 // traffic and far-LOD versions all come from this. A car not listed here falls back to a guess (lights, longest side).
 export const FACING = {
   car_bmw_x3: 0, car_audi_rs6: 0, car_audi_rs6_full: 0, car_vw_golf_gti: 0, car_vw_golf_gti_full: 0,
-  car_tesla_m3: 0, car_tesla_m3_full: 0, car_dacia_duster: -Math.PI / 2,
+  car_tesla_m3: 0, car_tesla_m3_full: 0, car_dacia_duster: -Math.PI / 2, car_mercedes_sls: 0, car_porsche_taycan: 0,
 };
+// parts of a model left out altogether: the SLS's broken-glass overlay (a second skin over every window and lamp
+// lens) and its motion-blurred rim discs (invisible at rest, drawn over the real rims)
+const HIDE = { car_mercedes_sls: /DAMAGE_GLASS|Rim_Blurred/i };
 
 // Lamps per model, checked against each model's meshes (where every part sits on the car, its name and material) and
 // the real cars: (label, zone) -> 'head' | 'drl' | 'tail' | 'third' | 'rev' | 'ind' | 'lensF' | 'lensR' | null (no
@@ -91,6 +97,27 @@ const LAMP_RULES = {
       : /glassDark/i.test(l) ? (p.rear && !p.low && !p.hi && Math.abs(p.x) > 0.3 ? 'lensR' : null)
       : null,
   },
+  // Mercedes SLS AMG (C197): textured lamps (Lights_Front: the headlamp units and the indicators in the mirrors;
+  // Lights_Rear: the tail lamps, the third brake light at the roof's end, the low centre lamp (fog: never lit here)),
+  // the LED strip in the headlamps (EXT_Microluci: the DRL), their clear cover glass (Glass_Clear: front / back)
+  car_mercedes_sls: {
+    test: /Lights_Front|Lights_Rear|Microluci|Glass_Clear/i,
+    kind: (l, p) => /Microluci/i.test(l) ? (p.front ? 'drl' : null)
+      : /Lights_Front/i.test(l) ? (p.mirror ? 'ind' : p.front ? 'head' : null)
+      : /Lights_Rear/i.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'tail' : null)
+      : /Glass_Clear/i.test(l) ? (p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null)
+      : null,
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.4, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+  },
+  // Porsche Taycan Turbo S: every lamp in one textured atlas (the four-point headlamps, the light bar across the
+  // back, the third brake light at the top of the rear window); the windows' material is also the lamps' cover glass
+  // (front low: the headlamp lenses; back, below the rear window: the light bar's smoked glass)
+  car_porsche_taycan: {
+    test: /taycan_turbo_s_lights|car_windows/i,
+    kind: (l, p) => /car_windows/i.test(l) ? (p.front && p.y < 0.85 ? 'lensF' : p.rear && !p.low && !p.hi ? 'lensR' : null)
+      : p.third ? 'third' : p.front ? (p.low ? null : 'head') : p.rear && !p.low ? 'tail' : null,
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+  },
   car_dacia_duster: {
     test: /Headlight|Taillight/i,
     kind: (l, p) => /Headlight/i.test(l) ? (p.front ? 'head' : null) : /Taillight/i.test(l) ? (p.rear && !p.low ? 'tail' : null) : null,
@@ -112,10 +139,12 @@ const THIRD_AT = { car_tesla_m3: { glass: /glassDark/i, at: 'window' }, car_daci
 // The body paint: the material the paint colour tints (cars with no material of their own called *paint*: the Dacia's
 // body is UV_body, its paint baked orange into the shared atlas: neutralised to a light grey in a copy of its own,
 // neutralPaint, so any colour multiplies cleanly; the Dacia's own orange is then its material's colour)
-const PAINT_MAT = { car_dacia_duster: /^UV_body/ };
+const PAINT_MAT = { car_dacia_duster: /^UV_body/, car_porsche_taycan: /ext_carmine_red/i };
 export const isPaint = (model, m) => !m.transparent && (PAINT_MAT[model] || /paint/i).test(m.name || '');
-const NEUTRAL = { car_dacia_duster: 0xef8e2c };
-function neutralPaint(m, hex) {
+// (the colour baked in, and the texel value its clean paint has: the Dacia's orange, the Taycan's Carmine Red)
+const NEUTRAL = { car_dacia_duster: 0xef8e2c, car_porsche_taycan: 0xa8181f };
+const NEUTRAL_HUE = { car_porsche_taycan: 'red' };
+function neutralPaint(m, hex, hue = 'orange') {
   const img = m.map?.image;
   if (!img?.width) return m;
   const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
@@ -124,9 +153,11 @@ function neutralPaint(m, hex) {
   for (let i = 0; i < a.length; i += 4) {
     const r = a[i], gg = a[i + 1], b = a[i + 2];
     // how orange this texel is (saturated, red over green over blue): the paint; its shade kept as a grey
-    const k = Math.min(1, Math.max(0, ((r - b) / Math.max(1, r) - 0.45) * 4)) * (r > gg && gg > b ? 1 : 0) * Math.min(1, Math.max(0, (r - 60) / 50));
+    // (red: how much red stands over both green and blue)
+    const k = hue === 'red' ? Math.min(1, Math.max(0, ((r - Math.max(gg, b)) / Math.max(1, r) - 0.45) * 4)) * Math.min(1, Math.max(0, (r - 50) / 40))
+      : Math.min(1, Math.max(0, ((r - b) / Math.max(1, r) - 0.45) * 4)) * (r > gg && gg > b ? 1 : 0) * Math.min(1, Math.max(0, (r - 60) / 50));
     if (k <= 0) continue;
-    const v = Math.min(255, (r / 220) * 236);
+    const v = Math.min(255, (r / (hue === 'red' ? 155 : 220)) * 236);
     a[i] = r + (v - r) * k; a[i + 1] = gg + (v - gg) * k; a[i + 2] = b + (v - b) * k;
   }
   g.putImageData(d, 0, 0);
@@ -224,7 +255,8 @@ function synthThird(groups, lampGroups, anchors, spec, halfL, carH) {
 export function fitCar(gltf, length, name) {
   const m = gltf.scene.clone(true);
   const junk = [];
-  m.traverse((o) => { if (o.isMesh && JUNK.test(`${o.name} ${[].concat(o.material).map((x) => x?.name).join(' ')}`)) junk.push(o); });
+  const hide = HIDE[(name || '').replace(/_full$/, '')];
+  m.traverse((o) => { if (!o.isMesh) return; const lbl = `${o.name} ${[].concat(o.material).map((x) => x?.name).join(' ')}`; if (JUNK.test(lbl) || hide?.test(lbl)) junk.push(o); });
   for (const o of junk) o.parent?.remove(o);
   m.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
@@ -290,7 +322,7 @@ export function carTemplate(gltf, length, name = '') {
       out.emissive.set(0x000000); out.emissiveIntensity = 0; out.emissiveMap = null;
     }
     if (glass && m.emissive && (m.emissiveMap || m.emissive.getHex() !== 0)) out.userData.emOrig = { color: m.emissive.clone(), map: m.emissiveMap || null };
-    if (!glass && NEUTRAL[model] !== undefined && isPaint(model, m)) out = neutralPaint(m, NEUTRAL[model]);
+    if (!glass && NEUTRAL[model] !== undefined && isPaint(model, m)) out = neutralPaint(m, NEUTRAL[model], NEUTRAL_HUE[model]);
     if (CRISP[model]?.test(m.name || '')) crispMap(m.map);
     // every texture filtered at the widest angle the GPU has (three clamps it): the dash, seats and door cards seen
     // at a slant from the driver's seat stay sharp instead of melting into the mip below
@@ -472,7 +504,8 @@ function splitWheels(t, groups, name = '') {
   // models (Golf: Int_SW_*); in the rest, the separate bits of geometry lying in the wheel's disc (findSteering)
   const STEER = /steer|lenk|volant|int_sw/i;
   const sbox = new THREE.Box3();
-  for (const { g } of pieces) if (STEER.test(g.userData.label || '')) { g.computeBoundingBox(); sbox.union(g.boundingBox); }
+  const byShape = STEER_BY_SHAPE.has(name.replace(/_full$/, '')); // (named, but only part of the wheel: found by its shape)
+  if (!byShape) for (const { g } of pieces) if (STEER.test(g.userData.label || '')) { g.computeBoundingBox(); sbox.union(g.boundingBox); }
   let steerC = sbox.isEmpty() ? null : sbox.getCenter(new THREE.Vector3());
   let steerTri = null, steerAxis = null, steerTilt = 0.38, steerR = 0.185; // (unnamed: piece -> Set of its triangles that are the wheel)
   if (steerC) { const sz = sbox.getSize(new THREE.Vector3()); steerR = clamp(sz.x / 2, 0.16, 0.21); }
@@ -480,6 +513,7 @@ function splitWheels(t, groups, name = '') {
     try { const h = new THREE.Vector3(...STEER_AT[name]); h.exact = /tesla/.test(name); const f = findSteering(pieces, h); if (f) { steerC = f.c; steerTri = f.tri; steerAxis = f.axis; steerTilt = f.tilt; steerR = f.rimR; } } catch (e) { console.warn('steering wheel', name, e); }
   }
   const steerGroups = new Map();
+  const keepPaint = KEEP_PAINT.has(name.replace(/_full$/, ''));
   // split every triangle: inside a wheel's cylinder (around its axle, x) -> that wheel, else the body
   const body = new Map();
   const a = new THREE.Vector3(), b2 = new THREE.Vector3(), c2 = new THREE.Vector3();
@@ -495,12 +529,13 @@ function splitWheels(t, groups, name = '') {
       continue;
     }
     const P = g.attributes.position, I = g.index.array, named = WHEEL.test(g.userData.label || '');
+    const bodyOnly = keepPaint && isPaint(name.replace(/_full$/, ''), mat); // (the wheel arches' paint stays on the body)
     const lists = new Map(), st = steerTri?.get(g), sw = st ? [] : null;
     for (let i = 0; i < I.length; i += 3) {
       if (st && st.has(i)) { sw.push(I[i], I[i + 1], I[i + 2]); continue; }
       a.fromBufferAttribute(P, I[i]); b2.fromBufferAttribute(P, I[i + 1]); c2.fromBufferAttribute(P, I[i + 2]);
       const wa = inWheel(a);
-      const w = wa && wa === inWheel(b2) && wa === inWheel(c2) && (named || a.y < wa.c.y + wa.r) ? wa : null;
+      const w = wa && wa === inWheel(b2) && wa === inWheel(c2) && (named || (a.y < wa.c.y + wa.r && !bodyOnly)) ? wa : null;
       const key = w || body;
       if (!lists.has(key)) lists.set(key, []);
       lists.get(key).push(I[i], I[i + 1], I[i + 2]);
@@ -532,7 +567,13 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const STEER_AT = {
   car_bmw_x3: [0.372, 1.07, 0.33], car_audi_rs6_full: [0.42, 0.95, 0.49], car_tesla_m3_full: [0.47, 0.81, 0.61], car_dacia_duster: [0.37, 1.02, 0.54],
   car_audi_rs6: [0.42, 0.95, 0.49], car_tesla_m3: [0.47, 0.81, 0.61], // (the simplified ones: the same frame as their full models)
+  car_mercedes_sls: [0.43, 0.77, -0.11], car_porsche_taycan: [0.37, 0.88, 0.45],
 };
+// models whose steering wheel is named only in part (the SLS: INT_Skin_volante is the rim's leather; the spokes, hub
+// and badge are other materials): found by its shape from STEER_AT instead, all of it
+const STEER_BY_SHAPE = new Set(['car_mercedes_sls']);
+// models whose wheel arches (paint) lie inside the tyres' cylinders: the paint never turns with a wheel
+const KEEP_PAINT = new Set(['car_mercedes_sls', 'car_porsche_taycan']);
 const COLUMN = new THREE.Vector3(0, -Math.sin(0.38), Math.cos(0.38)); // (the steering column: forward and down)
 // Every separate bit of geometry (connected triangles) near the hint that lies wholly in the wheel's disc (round the
 // column, a few cm thick): the rim, spokes, hub, buttons. Twice: the second time round the centre the first one found.

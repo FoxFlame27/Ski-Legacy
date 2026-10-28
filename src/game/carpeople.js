@@ -75,6 +75,10 @@ const SEATS = [
   // (a glass roof: the height under it)
   { name: 'car_tesla_m3', traffic: true, size: [4.70, 1.46], wheel: [0.811, 0.607], d: [0.47, 0.395, -0.105, -0.17], r: [0.38, 0.394, -0.97, -0.17], floor: [0.28, 0.27], roof: [1.37, 1.37] },
   { name: 'car_tesla_m3_full', size: [4.70, 1.46], wheel: [0.914, 0.668], d: [0.47, 0.395, -0.105, -0.17], r: [0.38, 0.394, -0.97, -0.17], floor: [0.28, 0.27], roof: [1.37, 1.37] },
+  // (the SLS: a two-seater, no rear seats; low, its cushions 0.29 m off the ground. The Taycan: the rear seats' feet
+  // in the battery's "foot garages")
+  { name: 'car_mercedes_sls', traffic: true, size: [4.64, 1.26], wheel: [0.768, -0.095], d: [0.43, 0.29, -0.675, -0.32], r: null, floor: [0.24, 0.24], roof: [1.17, 1.15] },
+  { name: 'car_porsche_taycan', traffic: true, size: [4.96, 1.36], wheel: [0.834, 0.352], d: [0.37, 0.37, -0.255, -0.27], r: [0.38, 0.47, -1.08, -0.4], floor: [0.30, 0.30], roof: [1.28, 1.22] },
   { name: 'car_dacia_duster', size: [4.34, 1.92], wheel: [1.032, 0.546], d: [0.372, 0.63, -0.153, -0.25], r: [0.38, 0.624, -0.871, -0.27], floor: [0.39, 0.40], roof: [1.57, 1.59] },
 ];
 const DEPTH = 0.13, DEPTH_U = 0.11; // hip joint / shoulder joints to the backrest (pelvis, shoulder blades, jacket)
@@ -226,11 +230,11 @@ export class CarPeople {
       g.add(o);
     };
     const pick = (list) => list[Math.floor(rnd() * list.length) % list.length];
-    const front = S.d.slice(1), pass = S.p || front, rear = S.r.slice(1);
+    const front = S.d.slice(1), pass = S.p || front, rear = S.r?.slice(1);
     put(pick(D?.length ? D : P), S.d[0], front, S.roof[0]); // (no driver baked for it: a passenger at the wheel)
     if (P.length) {
       if (rnd() < 0.45) put(pick(P), -S.d[0], pass, S.roof[0]);
-      const back = rnd();
+      const back = S.r ? rnd() : 1; // (a two-seater: nobody in the back)
       if (back < 0.22) put(pick(P), (rnd() < 0.5 ? 1 : -1) * S.r[0], rear, S.roof[1]);
       else if (back < 0.3) { put(pick(P), S.r[0], rear, S.roof[1]); put(pick(P), -S.r[0], rear, S.roof[1]); }
     }

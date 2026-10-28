@@ -137,7 +137,7 @@ const MODEL_LIST = [
   // car parks (game/parking.js): pay machine + P sign (lamp_post is above)
   'parking_pay_machine', 'parking_sign',
   // the medical centre (game/hospital.js) and the one parked car (the user's BMW X3, game/parking.js)
-  'medical_centre', 'car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_dacia_duster', 'car_tesla_m3',
+  'medical_centre', 'car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_dacia_duster', 'car_tesla_m3', 'car_mercedes_sls', 'car_porsche_taycan',
   // shop interior props
   'helmet_shelf', 'boot_rack', 'jacket_rail', 'shop_counter', 'potted_plant', 'glove_bin', 'shop_bench', 'farm_table',
   // race courses + resort dressing

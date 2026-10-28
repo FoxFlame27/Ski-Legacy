@@ -31,6 +31,10 @@ export const CAR_SPECS = {
   car_vw_golf_gti: { label: 'VW Golf GTI', accel: 5.8, top: 68, sound: 'gti' },
   car_tesla_m3: { label: 'Tesla Model 3', accel: 7.0, top: 62, electric: true },
   car_dacia_duster: { label: 'Dacia Duster', accel: 3.8, top: 50, sound: 'i4' },
+  // the supercars upstairs at the rental: the SLS's 6.2 V8 (420 kW, 0-100 in 3.8 s, 317 km/h), the Taycan Turbo S
+  // (2 motors, 2.8 s, 260 km/h)
+  car_mercedes_sls: { label: 'Mercedes SLS AMG', accel: 8.2, top: 88, sound: 'v8' },
+  car_porsche_taycan: { label: 'Porsche Taycan Turbo S', accel: 9.6, top: 72, electric: true },
 };
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 const RATIOS = [3.6, 2.2, 1.5, 1.15, 0.92, 0.76], FINAL = 3.7, IDLE = 820, REDLINE = 6400;
@@ -51,9 +55,9 @@ const KNOCK_V = 26 / 3.6; // ...a knock (below a crash): a few % of damage and a
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
 // kerb weights (kg), for the knocks between cars
-const MASS = { car_bmw_x3: 1900, car_audi_rs6: 2100, car_vw_golf_gti: 1450, car_tesla_m3: 1850, car_dacia_duster: 1300 };
+const MASS = { car_bmw_x3: 1900, car_audi_rs6: 2100, car_vw_golf_gti: 1450, car_tesla_m3: 1850, car_dacia_duster: 1300, car_mercedes_sls: 1620, car_porsche_taycan: 2300 };
 // driven wheels (the rest all-wheel drive)
-const DRIVE = { car_vw_golf_gti: 'fwd', car_dacia_duster: 'fwd' };
+const DRIVE = { car_vw_golf_gti: 'fwd', car_dacia_duster: 'fwd', car_mercedes_sls: 'rwd' };
 // two cars' boxes (x, z, yaw, half width hw, half length hd) overlapping? -> { nx, nz (from B to A), depth, px, pz
 // (a contact point: the corners of one inside the other) } or null
 function obb(A, B) {
@@ -392,8 +396,8 @@ export class Drive {
       else d.holdR = 0;
       if (thr && d.gear !== 'D') d.gear = 'D';
     }
-    const m = MASS[d.e.name] || 1700, L = d.wheelBase, fwd = DRIVE[d.e.name] === 'fwd';
-    const a = L * (fwd ? 0.4 : 0.46), b = L - a, hcg = 0.55, Iz = m * a * b * 1.15;
+    const m = MASS[d.e.name] || 1700, L = d.wheelBase, fwd = DRIVE[d.e.name] === 'fwd', rwd = DRIVE[d.e.name] === 'rwd';
+    const a = L * (fwd ? 0.4 : rwd ? 0.47 : 0.46), b = L - a, hcg = 0.55, Iz = m * a * b * 1.15;
     const au = Math.abs(u), sgn = u >= 0 ? 1 : -1;
     // the steering rack: full lock at parking speed; at speed the lock a full key press gives is what the surface's
     // grip can turn (~75 % of it, plus a little for the tyres' slip): holding A/D on the road never slides, on snow
@@ -429,7 +433,7 @@ export class Drive {
       // tyre's drive / braking under its grip, and with the wheel turned well under it, so the friction circle always
       // leaves most of the grip for steering (the old 95 % left under a third sideways: no steering under throttle
       // or brakes, a spinning rear on snow); the handbrake locks the rear
-      const split = fwd ? 1 : 0.4;
+      const split = fwd ? 1 : rwd ? 0 : 0.4; // (rear-wheel drive: all of it at the back)
       let Fxf = Fdrive * split - Fbrake * 0.65 * sgn, Fxr = Fdrive * (1 - split) - Fbrake * 0.35 * sgn;
       const kx = 0.9 - 0.3 * Math.min(1, Math.abs(steerIn) + Math.abs(d.steer) * 4); // (0.6 turning: 80 % kept sideways)
       Fxf = clamp(Fxf, -kx * capF, kx * capF);

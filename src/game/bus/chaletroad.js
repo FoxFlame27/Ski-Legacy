@@ -1,0 +1,183 @@
+// The chalet village (Almdorf): an Austrian chalet resort on the gentle forested slope (~10 degrees, falling north)
+// between the village -> Sonnenkopf road and the Legacy Express, a little way north of Legacy Village. Pure layout
+// (no THREE): runs in Node too; world/chalets.js builds the houses from busRoads.chalets.
+//   - the Chaletweg: a T junction off the valley road, a wide bend (R 40 m) onto the lowest terrace, then up the
+//     slope in three switchbacks (hairpins R 30 m: the legs run along the contours, 60 m apart), to a small car park
+//     at the top; a scenic road (scenic.js carves it, scenicdrive.js drives a few cars up and down it)
+//   - the terraces: a flat pad per chalet on the uphill side of each leg, level with the road at its drive (the
+//     parking spot beside the house), the ground eased back to the slope round it at no more than ~35 degrees; the
+//     chalets face downhill over the road to the view; the playground on a pad of its own in the middle
+//   - the forest: none on the pads (cleared strips), thicker on the banks between the terraces
+// Kept off: pistes, lifts, the Express, the valley road (but at the junction), the car rental, the race regions.
+import { world } from '../../world/world.js';
+import { expressNearest } from '../../world/expressroute.js';
+import { busRoads, makeRoad, roadAt, laneDistance } from './roads.js';
+import { lotAt } from './scenic.js';
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const SC_GRADE = 0.115;
+const JUNCTION_NEAR = { x: 416, z: 1200 }; // the T junction on the valley road
+const LEG_Z = [1180, 1120, 1060, 1000];    // the legs (along the contours, the slope falls toward +z)
+const XE = 628, XW = 388, XL = 334;        // the east hairpins, the west hairpin, the car park's entrance (top leg)
+const HAIRPIN_R = 30, BEND_R = 40;
+// the terraces on the uphill side of each leg: [x from, x to] of the row of plots
+const ROWS = [[438, 590], [404, 640], [334, 590], [352, 608]];
+const PLOT_W = 30;                         // m along the leg (house + its parking spot + a gap)
+const PAD_FRONT = 9.4, PAD_BACK = 35;      // m uphill from the leg's centre line
+const BANK = 0.7;                          // tan 35 degrees: the terraces' banks
+export const CHALET_PLACE = { x: 500, z: 1075, label: 'Chalet village', r: 200 };
+
+const hash = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+
+// a polyline with every corner rounded (tangent arcs, radius R[i] at corner i), every ~4 m
+function filleted(P, R, step = 4) {
+  const dense = [P[0]];
+  let cur = P[0];
+  for (let i = 1; i < P.length - 1; i++) {
+    const [px, pz] = P[i], ax = px - P[i - 1][0], az = pz - P[i - 1][1], la = Math.hypot(ax, az), bx = P[i + 1][0] - px, bz = P[i + 1][1] - pz, lb = Math.hypot(bx, bz);
+    const a = [ax / la, az / la], b = [bx / lb, bz / lb];
+    const th = Math.acos(clamp(a[0] * b[0] + a[1] * b[1], -1, 1)), cr = a[0] * b[1] - a[1] * b[0];
+    const t = R[i] * Math.tan(th / 2), S = [px - a[0] * t, pz - a[1] * t];
+    line(dense, cur, S);
+    const n = cr > 0 ? [-a[1], a[0]] : [a[1], -a[0]], C = [S[0] + n[0] * R[i], S[1] + n[1] * R[i]], v0 = [S[0] - C[0], S[1] - C[1]], sg = cr > 0 ? 1 : -1;
+    const m = Math.max(2, Math.ceil((th * R[i]) / 0.5));
+    for (let k = 1; k <= m; k++) { const f = (sg * th * k) / m, c = Math.cos(f), s = Math.sin(f); dense.push([C[0] + v0[0] * c - v0[1] * s, C[1] + v0[0] * s + v0[1] * c]); }
+    cur = dense[dense.length - 1];
+  }
+  line(dense, cur, P[P.length - 1]);
+  // even resampling
+  const out = [dense[0]];
+  let carry = 0;
+  for (let i = 0; i < dense.length - 1; i++) {
+    const [ax, az] = dense[i], [bx, bz] = dense[i + 1], L = Math.hypot(bx - ax, bz - az);
+    let t = step - carry;
+    while (t <= L) { out.push([ax + ((bx - ax) * t) / L, az + ((bz - az) * t) / L]); t += step; }
+    carry = L - (t - step);
+  }
+  const last = dense[dense.length - 1], ol = out[out.length - 1];
+  if (Math.hypot(last[0] - ol[0], last[1] - ol[1]) > 1.5) out.push(last); else out[out.length - 1] = last;
+  return out;
+}
+function line(out, a, b) {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.ceil(L / 0.5);
+  for (let k = 1; k <= n; k++) out.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
+}
+
+const smin = (a, b, k) => { const h = clamp(0.5 + (0.5 * (b - a)) / k, 0, 1); return b + (a - b) * h - k * h * (1 - h); };
+const smax = (a, b, k) => -smin(-a, -b, k);
+
+/** Plan the Chaletweg, its car park and the terraces (appended to busRoads; busRoads.chalets for the houses). */
+export function planChaletVillage(O) {
+  const main = busRoads.roads.filter((r) => !r.access && !r.scenic);
+  const r0 = main.find((r) => r.from === busRoads.stops[0]);
+  if (!r0) return;
+  let J = null;
+  for (let i = 0; i < r0.n; i++) { const d = Math.hypot(r0.X[i] - JUNCTION_NEAR.x, r0.Z[i] - JUNCTION_NEAR.z); if (!J || d < J.d) J = { x: r0.X[i], z: r0.Z[i], y: r0.Y[i], s: r0.S[i], d }; }
+  if (!J || J.d > 40) { console.warn('chalet village: no junction'); return; }
+  // square off the valley road (its normal into the site), then the bend onto the lowest leg
+  const jd = roadAt(r0, J.s), sg = jd.dz >= 0 ? 1 : -1, ex = jd.dz * sg, ez = -jd.dx * sg; // (pointing east, uphill)
+  if (ez > -0.2) { console.warn('chalet village: the valley road runs the wrong way here'); return; }
+  const t0 = (J.z - LEG_Z[0]) / -ez, C0 = [J.x + ex * t0, LEG_Z[0]];
+  const corners = [[J.x, J.z], C0, [XE, LEG_Z[0]], [XE, LEG_Z[1]], [XW, LEG_Z[1]], [XW, LEG_Z[2]], [XE, LEG_Z[2]], [XE, LEG_Z[3]], [XL, LEG_Z[3]]];
+  const radii = [0, BEND_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, 0];
+  const up = filleted(corners, radii); // (from the junction up to the car park's entrance)
+  const lot = lotAt({ size: 'small', name: 'Almdorf car park', hw: 14, hd: 9 }, XL, LEG_Z[3], -1, 0);
+  const pts = [[lot.ex - lot.dirx * 7, lot.ez - lot.dirz * 7], ...up.slice().reverse()]; // (s = 0 in the car park)
+  // the clearances (warned, not fatal: the layout is fixed)
+  const q = {};
+  let worst = null;
+  for (const [x, z] of up) {
+    O.query(x, z, q);
+    const c = world.corridorAt(x, z), e = expressNearest(x, z), dj = Math.hypot(x - J.x, z - J.z);
+    const why = q.ski < 25 ? 'piste' : q.lift < 12 ? 'lift' : q.block < 16 ? 'building' : (c.kind === 'piste' || c.kind === 'race') && c.d < 20 ? 'piste' : e && e.d < 45 ? 'Express' : dj > 45 && laneDistance(x, z) < 30 ? 'road' : null;
+    if (why && !worst) worst = { why, x: Math.round(x), z: Math.round(z) };
+  }
+  if (worst) console.warn('chalet village: the road runs close to', worst);
+  const road = makeRoad(pts, { name: lot.name, x: lot.ex, z: lot.ez, lot: true }, { name: 'junction', x: J.x, z: J.z }, { y0: lot.y, y1: J.y, maxGrade: SC_GRADE, envelope: true });
+  road.name = 'Chaletweg'; road.access = true; road.scenic = true; road.chalet = true;
+  road.lot0 = lot; road.exitAt1 = { road: r0, s: J.s, x: J.x, z: J.z };
+  lot.y = road.Y[0];
+  // ---- the terraces: plots along each leg's uphill side
+  const ri = busRoads.roads.length; // (the index the road gets)
+  const P = {};
+  const nearestS = (x, z) => { let bs = 0, bd = Infinity; for (let i = 0; i < road.n; i++) { const d = Math.hypot(road.X[i] - x, road.Z[i] - z); if (d < bd) { bd = d; bs = road.S[i]; } } return bs; };
+  const plots = [];
+  let id = 0;
+  ROWS.forEach(([xa, xb], row) => {
+    const zl = LEG_Z[row], n = Math.floor((xb - xa) / PLOT_W), w = (xb - xa) / n;
+    for (let k = 0; k < n; k++) {
+      const h = hash(id * 7 + 3), mirror = hash(id * 5 + 1) < 0.45; // (mirrored: the parking spot on the west)
+      const x0 = xa + w * k + 1.5, x1 = xa + w * (k + 1) - 1.5, side = mirror ? -1 : 1;
+      // the house's origin: 12 m in from the plot's west end (east end when mirrored), the parking spot beyond it
+      const hx = mirror ? x1 - 12 : x0 + 12, park = { x: hx + side * 12.2, z: zl - 13.5 };
+      const s = nearestS(park.x, zl - 6);
+      roadAt(road, s, P);
+      plots.push({
+        id: id++, row, x0, x1, z0: zl - PAD_BACK, z1: zl - PAD_FRONT, y: P.y + 0.2, legZ: zl, mirror,
+        house: { x: hx, z: zl - 22, yaw: (h - 0.5) * 0.09 }, park, drive: { x: park.x, z: zl - 12.5, s },
+        shed: hash(id * 13 + 7) < 0.45, bench: hash(id * 3 + 11) < 0.7,
+      });
+    }
+  });
+  // the playground: the plot in the middle of the village (row 2, nearest the centre)
+  const mid = plots.filter((p) => p.row === 2).sort((a, b) => Math.abs((a.x0 + a.x1) / 2 - 470) - Math.abs((b.x0 + b.x1) / 2 - 470))[0];
+  if (mid) { mid.playground = true; mid.shed = false; }
+  // neighbouring pads in a row: their levels within reach of each other's banks
+  for (let it = 0; it < 3; it++) for (let i = 1; i < plots.length; i++) {
+    const a = plots[i - 1], b = plots[i];
+    if (a.row !== b.row) continue;
+    const gap = Math.max(1, b.x0 - a.x1), lim = gap * BANK * 0.8;
+    if (b.y - a.y > lim) b.y = a.y + lim; else if (a.y - b.y > lim) a.y = b.y + lim;
+  }
+  // ---- the ground: one cut for every pad (registered before the roads' cuts: those come after and ease the
+  // ground between road and pad); the forest kept off the pads, thicker on the banks
+  let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+  for (const p of plots) { minx = Math.min(minx, p.x0 - 40); maxx = Math.max(maxx, p.x1 + 40); minz = Math.min(minz, p.z0 - 40); maxz = Math.max(maxz, p.z1 + 40); }
+  const C = [];
+  world.addCut({
+    bounds: { minx, minz, maxx, maxz },
+    chalets: true,
+    apply(x, z, h) {
+      C.length = 0;
+      for (const p of plots) {
+        const dx = Math.max(p.x0 - x, 0, x - p.x1), dz = Math.max(p.z0 - z, 0, z - p.z1);
+        if (dx > 40 || dz > 40) continue;
+        const d = Math.hypot(dx, dz);
+        if (d * BANK > Math.abs(h - p.y) + 1.5) continue; // (the slope there is within the bank already)
+        C.push(d, p.y);
+      }
+      if (!C.length) return h;
+      // nearest pad first; a further one narrows the band only while it still agrees
+      let lo = -Infinity, hi = Infinity, used = 0;
+      while (used < C.length / 2) {
+        let m = -1;
+        for (let i = 0; i < C.length; i += 2) if (C[i] >= 0 && (m < 0 || C[i] < C[m])) m = i;
+        if (m < 0) break;
+        const d = C[m], y = C[m + 1];
+        C[m] = -1; used++;
+        const l = Math.max(lo, y - d * BANK), u = Math.min(hi, y + d * BANK);
+        if (l > u) break;
+        lo = l; hi = u;
+      }
+      const soft = Math.min(1.2, (hi - lo) * 0.2 + 0.01);
+      return smax(smin(h, hi, soft), lo, soft);
+    },
+    forest(x, z, f) {
+      for (const p of plots) if (x > p.x0 - 3 && x < p.x1 + 3 && z > p.z0 - 2 && z < p.z1 + 3) return 0;
+      if (x < minx + 30 || x > maxx - 30 || z < minz + 30 || z > maxz - 30) return f;
+      const n = 0.55 + 0.45 * Math.sin(x * 0.083 + z * 0.031) * Math.sin(z * 0.071 - x * 0.027);
+      return Math.max(f, 0.34 * n);
+    },
+  });
+  // no trees or rocks on a pad (a cleared strip along it, as on the car parks)
+  for (const p of plots) {
+    const zc = (p.z0 + p.z1) / 2, hd = (p.z1 - p.z0) / 2;
+    world.addCorridor([[p.x0 + hd, zc], [Math.max(p.x0 + hd + 0.5, p.x1 - hd), zc]], hd + 1, 'lift', { chalet: true });
+  }
+  busRoads.roads.push(road);
+  busRoads.lots.push(lot);
+  busRoads.junctions.push({ x: J.x, z: J.z, scenic: true, road: r0, s: J.s, arm: road });
+  // the drives: no snow poles, guardrail or plough berm across a house's entrance
+  for (const p of plots) busRoads.junctions.push({ x: p.drive.x, z: p.drive.z, drive: true });
+  busRoads.chalets = { road, ri, lot, plots, junction: J, place: CHALET_PLACE, bounds: { minx, minz, maxx, maxz } };
+}

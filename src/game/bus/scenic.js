@@ -316,7 +316,7 @@ export function shapeScenic() {
   const lb = (busRoads.laybys || []).filter((l) => l.scenic);
   // nearest point (d, y, s, ri, side, seg) and the nearest of another stretch (|s - s1| > 60 or another road)
   const A = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null }, B = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null };
-  const CAND = [];
+  const CAND = [], CUTS = [], USED = new Uint8Array(4096), BEST = new Map();
   const pick = (x, z) => {
     const arr = grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G));
     A.d = B.d = Infinity;
@@ -355,16 +355,37 @@ export function shapeScenic() {
       const bA = bench(A);
       if (A.d <= bA) out = A.y;
       else {
-        let lo = -Infinity, hi = Infinity, soft = 1.6;
-        for (const [d, sg, t] of CAND) { // (every stretch nearby: the switchbacks' legs above and below too)
-          if (d > REACH) continue;
-          const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
-          if (d <= b) { lo = Math.max(lo, y); hi = Math.min(hi, y); continue; }
-          const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), w = k * (d - b);
-          lo = Math.max(lo, y - w); hi = Math.min(hi, y + w); soft = Math.min(soft, 0.4 * w + 0.01);
+        // (nearest first: a further leg narrows the band only as far as it still agrees with the nearer ones, so the
+        // ground is continuous at every shoulder and between legs too steep apart the nearer leg's batter wins)
+        const C = CUTS; C.length = 0;
+        const best = BEST; best.clear(); // (each road's stretch of ~48 m once: its nearest segment)
+        for (const c of CAND) {
+          if (c[0] > REACH) continue;
+          const key = c[1].ri * 4096 + Math.floor(c[1].sa / 48), o = best.get(key);
+          if (!o || c[0] < o[0]) best.set(key, c);
         }
-        if (globalThis.__DBGCUT) console.log('cut', x, z, h.toFixed(1), 'lo', lo.toFixed(1), 'hi', hi.toFixed(1), 'A', A.d.toFixed(1), A.y.toFixed(1), CAND.length);
-        if (lo > hi) out = (lo + hi) / 2;
+        for (const [d, sg, t] of best.values()) {
+          const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
+          const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), w = d <= b ? 0 : k * (d - b);
+          C.push(d - b, y - w, y + w);
+        }
+        let lo = -Infinity, hi = Infinity, soft = 1.6, e1 = -1, ramp = null;
+        const used = USED; used.fill(0, 0, C.length / 3);
+        for (let pass = 0; pass < C.length / 3; pass++) {
+          let m = -1;
+          for (let q = 0; q < C.length; q += 3) if (!used[q / 3] && (m < 0 || C[q] < C[m])) m = q;
+          if (m < 0) break;
+          used[m / 3] = 1;
+          if (e1 < 0) e1 = Math.max(0, C[m]);
+          const l = Math.max(lo, C[m + 1]), u = Math.min(hi, C[m + 2]);
+          if (l <= u) { lo = l; hi = u; soft = Math.min(soft, 0.4 * (C[m + 2] - C[m + 1]) / 2 + 0.01); continue; }
+          // (disagrees: two legs too steep apart for the batters; a straight ramp from the nearer band's edge to this
+          // one's, by how far out from each shoulder: continuous at the shoulders and where the two meet)
+          const e2 = Math.max(0, C[m]), a = C[m + 1] > hi ? hi : lo, b = C[m + 1] > hi ? C[m + 1] : C[m + 2];
+          ramp = a + (b - a) * (e1 / (e1 + e2 + 1e-3));
+          break;
+        }
+        if (ramp !== null) out = ramp;
         else out = smax(smin(h, hi, soft), lo, soft);
       }
       // the plough berm (as on the bus roads; none round the ring and at the pull-outs: berm() tapers there)

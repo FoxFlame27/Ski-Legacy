@@ -637,4 +637,29 @@ export const ASSETS = [
     prompt: 'A modern two seat lounge sofa standing alone in cognac brown leather with a low square silhouette, thin black metal legs, two cushions, no text, no ground, no people, realistic game asset',
     texture: 'smooth cognac brown leather with fine stitching, black metal legs, realistic PBR',
   },
+  // the chalet village (world/chalets.js): its garden dressing
+  {
+    name: 'picket_fence',
+    polycount: 6000,
+    prompt: 'A single straight section of rustic Austrian alpine wooden picket fence standing alone, about 3 m long and 1 m tall, natural weathered larch wood: two horizontal rails, eleven vertical pointed pickets with even gaps, a square post at each end, no snow, no ground, no text, realistic game asset',
+    texture: 'weathered natural larch wood, warm brown with grey patina, visible grain, realistic PBR',
+  },
+  {
+    name: 'garden_shed',
+    polycount: 10000,
+    prompt: 'A small Austrian alpine wooden garden shed standing alone, about 3 m wide and 2.5 m deep, dark brown timber plank walls, a single wooden door with black iron hinges, one small window with green shutters, a pitched gable roof with dark grey shingles, no snow, no ground, no text, realistic game asset',
+    texture: 'dark brown stained timber planks, black iron hinges, green painted shutters, dark grey roof shingles, realistic PBR',
+  },
+  {
+    name: 'playground',
+    polycount: 15000,
+    prompt: 'A small wooden children playground set standing alone: a wooden climbing tower with a little pitched roof, a red slide coming down one side, a two seat swing frame on the other side and a small square wooden sandbox in front, natural pine wood, no snow, no ground, no people, no text, realistic game asset',
+    texture: 'natural honey pine wood, red plastic slide, black rubber swing seats, galvanised chains, pale sand, realistic PBR',
+  },
+  {
+    name: 'garden_bench',
+    polycount: 5000,
+    prompt: 'A rustic Austrian alpine wooden garden bench standing alone with a backrest, about 1.6 m long, solid larch planks, a little heart shape cut out of the backrest, no snow, no ground, no text, realistic game asset',
+    texture: 'weathered natural larch wood, warm brown, visible grain, realistic PBR',
+  },
 ];

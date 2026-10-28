@@ -611,5 +611,17 @@
   "car_turntable": {},
   "tool_cabinet": {},
   "tyre_rack": {},
-  "lounge_sofa": {}
+  "lounge_sofa": {},
+  "picket_fence": {
+    "preview": "01a1833d-3f3e-7779-b167-4087857e19b0"
+  },
+  "garden_shed": {
+    "preview": "01a1833d-3f30-7549-802a-247a1feeea30"
+  },
+  "playground": {
+    "preview": "01a1833d-3f48-7203-9d0a-9fb1fa9438e8"
+  },
+  "garden_bench": {
+    "preview": "01a1833d-3f38-735b-b5a3-972d219ad290"
+  }
 }

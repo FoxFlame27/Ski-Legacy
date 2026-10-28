@@ -7,19 +7,34 @@
 // on a stone plinth, glulam trusses inside under a timber ceiling.
 import * as THREE from 'three';
 
-// the hall (inside, m): width, depth, wall height, the ridge's rise over the walls; eaves overhang (sides / front)
+// the hall (inside, m): width, depth, wall height (two storeys), the ridge's rise over the walls; eaves overhang
 export const LAYOUT = {
-  W: 26, D: 14, H: 5.2, RISE: 4.6, T: 0.3, EAVE: 1.1, EAVE_F: 1.8, PIER: 0.7,
-  mullions: 8, transom: 3.0, // glass bays across the front, the transom bar's height
-  door: { x: -3.25, w: 1.9, h: 2.6 }, // (in the middle of a glass bay)
-  // the cars on display: one row of three behind the glass, two at the back (x, z, heading), turntable radius
-  spots: [[-8.6, 2.3, 0.75], [-1.6, 2.3, -0.6], [5.4, 2.3, 0.55], [-8.6, -3.7, -0.5], [-1.6, -3.7, 0.6]], R: 2.55,
+  W: 26, D: 14, H: 7.6, RISE: 3.8, T: 0.3, EAVE: 1.1, EAVE_F: 1.8, PIER: 0.7,
+  mullions: 8, // glass bays across the front
+  door: { bay: 3, h: 2.7, x: 0, w: 0 }, // an automatic sliding pair filling one glass bay (x, w: below)
+  // the upper floor: a mezzanine along the back (its floor's height, its front edge z), the stair up to it along the
+  // left wall (from z1 at the bottom to z0 at the top), the steel posts under its edge (x)
+  FL: 3.6, MZ: -2.2,
+  stair: { x0: -13, x1: -11.5, z0: -2.2, z1: 4.2, steps: 20 },
+  posts: [-4.9, 2.4, 8.2],
+  // the cars on display: a row of three behind the glass, two at the back under the mezzanine (x, z, heading),
+  // turntable radius; upstairs: two more (not for rent), and the office on the right
+  spots: [[-8.2, 2.3, 0.75], [-1.6, 2.3, -0.6], [5.4, 2.3, 0.55], [-8.2, -3.9, -0.5], [-1.6, -3.9, 0.6]], R: 2.55,
+  upSpots: [[-6.8, -4.6, 1.3], [-0.6, -4.6, -1.85]],
+  office: { x0: 5.4, gap: -3.7 }, // its glass partition at x0, from the back wall to z gap (the way in)
   desk: { x: 8.6, z: -6.1, r: 2.5 }, // the reception desk (an arc of counter round its centre, open to the back wall)
   lounge: { x: 10.4, z: 3.9 },
 };
 const L = LAYOUT;
+L.bayW = (L.W - 2 * L.PIER) / L.mullions;
+L.door.x = -L.W / 2 + L.PIER + L.bayW * (L.door.bay + 0.5);
+L.door.w = L.bayW - 0.09;
 /** Ceiling height (underside of the roof) at x. */
 export const ceilingAt = (x) => L.H + L.RISE * Math.max(0, 1 - Math.abs(x) / (L.W / 2));
+/** The stair's height at z (0 at its foot, FL at its top). */
+export const stairY = (z) => L.FL * Math.max(0, Math.min(1, (L.stair.z1 - z) / (L.stair.z1 - L.stair.z0)));
+/** The sliding doors: t 0 shut .. 1 open (the leaves buildShell returned). */
+export function setDoors(leaves, t) { for (const l of leaves || []) l.position.x = l.userData.x0 + l.userData.dir * l.userData.slide * t; }
 
 const rng = (seed) => { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
 function canvasTex(w, h, draw, repeat) {
@@ -57,7 +72,21 @@ export function shellMaterials() {
     roof: new THREE.MeshStandardMaterial({ color: 0x2c2926, roughness: 0.8 }),
     snow: new THREE.MeshStandardMaterial({ color: 0xf3f6fa, roughness: 0.92 }),
     strip: new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffe2b8, emissiveIntensity: 2.2 }),
+    oak: new THREE.MeshStandardMaterial({ color: 0xc2925e, roughness: 0.5 }),
+    railGlass: new THREE.MeshPhysicalMaterial({ color: 0xd8ecf2, roughness: 0.05, transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide }),
+    // the upper side windows: from outside a warm lit glass, from inside the bright snowy sky and peaks
+    winOut: new THREE.MeshStandardMaterial({ color: 0x9fb4c4, emissive: 0xffe6c0, emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.2 }),
+    winIn: new THREE.MeshBasicMaterial({ map: canvasTex(512, 512, (c, w, h) => {
+      const sky = c.createLinearGradient(0, 0, 0, h); sky.addColorStop(0, '#6fa3d8'); sky.addColorStop(0.7, '#d9e8f4'); sky.addColorStop(1, '#eef4f8');
+      c.fillStyle = sky; c.fillRect(0, 0, w, h);
+      const r = rng(11); c.fillStyle = '#f6f9fc'; c.beginPath(); c.moveTo(0, h);
+      for (let x = 0; x <= w; x += 32) c.lineTo(x, h * (0.55 + r() * 0.25)); c.lineTo(w, h); c.fill();
+      c.fillStyle = '#9fb0c2'; for (let k = 0; k < 6; k++) { const x = r() * w; c.beginPath(); c.moveTo(x - 40, h); c.lineTo(x, h * (0.62 + r() * 0.1)); c.lineTo(x + 30, h); c.fill(); }
+    }) }),
   };
+  // the inner faces seen from outside: the same boards and oak, self-lit (the hall's lights on them; no roof shadow)
+  const lit = (src, k) => { const o = src.clone(); o.emissive = new THREE.Color(0xffffff); o.emissiveMap = src.map || null; if (!src.map) o.emissive.copy(src.color); o.emissiveIntensity = k; return o; };
+  M.larchInLit = lit(M.larchIn, 0.5); M.oakLit = lit(M.oak, 0.45); M.glulamLit = lit(M.glulam, 0.4);
   return M;
 }
 // UVs in metres on a box (each face mapped by its own two axes): one texture scale everywhere, no stretched boards

@@ -49,7 +49,7 @@ export function routeH(a, b, opts = {}) {
   const W = Math.ceil((Math.max(a.x, b.x) + margin - minx) / CELL) + 1, H = Math.ceil((Math.max(a.z, b.z) + margin - minz) / CELL) + 1;
   const N = W * H, ND = DIRS.length;
   const hgt = new Float32Array(N).fill(NaN), pen = new Float32Array(N).fill(NaN);
-  const g = new Float32Array(N * ND).fill(Infinity), len = new Float32Array(N * ND), from = new Int32Array(N * ND).fill(-1), closed = new Uint8Array(N * ND);
+  const g = new Float32Array(N * ND).fill(Infinity), len = new Float32Array(N * ND), yr = new Float32Array(N * ND), from = new Int32Array(N * ND).fill(-1), closed = new Uint8Array(N * ND);
   const corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false }, qo = {};
   const X = (i) => minx + (i % W) * CELL, Z = (i) => minz + Math.floor(i / W) * CELL;
   // (the ground's broad shape: local crags averaged out, the road's cut and fill deal with those)
@@ -79,7 +79,7 @@ export function routeH(a, b, opts = {}) {
   const open = new Heap();
   for (let q = 0; q < ND; q++) {
     if (opts.dirA !== undefined && angDiff(DANG[q], opts.dirA) > 0.5) continue;
-    g[s0 * ND + q] = 0; open.push(Math.hypot(X(s0) - bx, Z(s0) - bz), s0 * ND + q);
+    g[s0 * ND + q] = 0; yr[s0 * ND + q] = opts.y0 ?? 0; open.push(Math.hypot(X(s0) - bx, Z(s0) - bz), s0 * ND + q);
   }
   let iter = 0, end = -1;
   while (open.size && iter++ < 1500000) {
@@ -103,12 +103,14 @@ export function routeH(a, b, opts = {}) {
       const gc = 1 + (gr / 0.1) ** 4 * 0.4;
       // (the profile: with y0 / y1 given, ground the road could not reach from either end at maxGrade (this far along
       // from a, at least this far from b) is a cut or a fill: it costs by the metre)
+      // (the road's own height along the way: it follows the ground within maxGrade from where it was; where it
+      // can't, the difference is a cut or a fill: by the metre. And it must still be able to reach y1 at b)
       const L = len[st] + d, hj = height(j);
-      let ex = 0;
-      if (opts.y0 !== undefined) ex += Math.max(0, Math.abs(hj - opts.y0) - maxGrade * L);
-      if (opts.y1 !== undefined) ex += Math.max(0, Math.abs(hj - opts.y1) - maxGrade * Math.hypot(X(j) - bx, Z(j) - bz));
+      let ex = 0, yn = hj;
+      if (opts.y0 !== undefined) { yn = clamp(hj, yr[st] - maxGrade * d, yr[st] + maxGrade * d); ex += Math.abs(hj - yn) * (d / CELL); }
+      if (opts.y1 !== undefined) ex += Math.max(0, Math.abs(yn - opts.y1) - maxGrade * Math.hypot(X(j) - bx, Z(j) - bz)) * (d / CELL);
       const c = g[st] + d * gc * pj + 60 * turn * turn + (gr > maxGrade ? 3000 * (gr - maxGrade) / 0.01 : 0) + ex * (opts.exK ?? 40);
-      if (c < g[sj]) { g[sj] = c; len[sj] = L; from[sj] = st; open.push(c + Math.hypot(X(j) - bx, Z(j) - bz), sj); }
+      if (c < g[sj]) { g[sj] = c; len[sj] = L; yr[sj] = yn; from[sj] = st; open.push(c + Math.hypot(X(j) - bx, Z(j) - bz), sj); }
     }
   }
   if (end < 0) return null;

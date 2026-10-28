@@ -13,6 +13,7 @@ import { world } from '../../world/world.js';
 import { layout, VILLAGE_BUILDINGS, PISTE_WIDTH, ensureRaceCells } from '../../world/layout.js';
 import { RAIL } from '../../world/railroute.js';
 import { planScenic, shapeScenic } from './scenic.js'; // the scenic mountain road (Panoramastrasse) + its roundabout
+import { planScenicLoop } from './scenicloop.js'; // the Passstrasse and the loop round the back of the mountains
 
 const CELL = 20;
 const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
@@ -451,6 +452,7 @@ export function planBusRoads(stops) {
   try { planLayby(obstacles); } catch (e) { console.warn('lay-by', e); }
   try { planRental(obstacles); } catch (e) { console.warn('car rental site', e); } // (last: moves nothing planned above)
   try { planScenic(obstacles); } catch (e) { console.warn('scenic road', e); } // (after everything: its roads go last)
+  try { planScenicLoop(obstacles); } catch (e) { console.warn('scenic loop', e); } // (more scenic roads off the Panorama roundabout)
   shapeRoads(busRoads.roads.filter((r) => !r.scenic)); // (the scenic roads, appended last, carve their own cut: same indices)
   try { shapeScenic(); } catch (e) { console.warn('scenic road cut', e); }
   busRoads.ready = true;

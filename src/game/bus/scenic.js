@@ -264,6 +264,7 @@ export function planScenic(O) {
   const RR = ringRoad(ring, 'Panorama roundabout');
   for (const r of [RA, RB, RC, RR]) { r.access = true; r.scenic = true; }
   RA.ringAt0 = ring; RB.ringAtEnd = ring; RC.ringAtEnd = ring;
+  RB.lot0 = top; RC.lot0 = low; RA.exitAt1 = { road: r0, s: J.s, x: J.x, z: J.z }; // (the scenic network's graph: scenicloop.js)
   RA.name = 'Panoramastrasse (valley)'; RB.name = 'Panoramastrasse'; RC.name = 'Talblick spur';
   ring.arms = [{ road: RA, end: 0, ang: angA }, { road: RB, end: 1, ang: angB }, { road: RC, end: 1, ang: angC }];
   busRoads.roads.push(RA, RB, RC, RR);

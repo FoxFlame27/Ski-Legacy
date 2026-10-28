@@ -13,6 +13,7 @@ import { loadFanKits, FanCrowd, FAN_KEYS as K } from './fans.js';
 import { PeopleSim } from './peoplesim.js';
 import { world } from './world.js';
 import { mulberry32 } from '../core/noise.js';
+import { stopWaitArea } from '../game/bus/roads.js';
 
 const VIEW = 170, LOD = [18, 50];
 const C = { x: 0, z: -4 }, RING = 15;          // the path ring round the Christmas tree (decor.js)
@@ -54,7 +55,9 @@ class Village {
       this.doors.push({ kind: 'gondola', in: P(l.bottom.x - l.dir[0] * 9, l.bottom.z - l.dir[1] * 9), out: e, w: 1 });
     }
     const bs = layout.busStops?.[0];
-    this.bus = bs ? { x: bs.x, z: bs.z, heading: bs.heading } : null;
+    // (with a road: the waiting area beside it, the sign's side; never the roadway the stop's point lies on)
+    const wa = bs ? stopWaitArea(bs) : null;
+    this.bus = bs ? { x: bs.x, z: bs.z, heading: bs.heading, wa } : null;
     const bc = village.booth?.counter, bf = village.booth?.front;
     this.booth = bc && bf ? { at: P(bc.x + bf.x * 0.5, bc.z + bf.z * 0.5), face: Math.atan2(-bf.x, -bf.z) } : null;
     this.map = { at: P(8, -21.6), face: Math.PI };
@@ -132,7 +135,7 @@ class Village {
     const map = () => ({ at: { x: this.map.at.x + (R() - 0.5) * 2.2, z: this.map.at.z + R() * 0.8 }, face: this.map.face, hold: R() < 0.5 ? K.POINT : 0, look: { x: 8, y: world.height(8, -24) + 1.8, z: -24 }, dur: 6 + R() * 6 });
     const booth = () => this.booth && { at: { x: this.booth.at.x, z: this.booth.at.z }, face: this.booth.face, dur: 5 + R() * 5 };
     const window = () => ({ at: { x: this.shop.window.x + (R() - 0.5) * 1.5, z: this.shop.window.z + (R() - 0.5) * 1.5 }, face: this.shop.face, dur: 5 + R() * 8 });
-    const busWait = () => this.bus && { at: { x: this.bus.x + (R() - 0.5) * 4, z: this.bus.z + (R() - 0.5) * 3 }, face: this.bus.heading + Math.PI / 2 + (R() - 0.5) * 1.2, hold: R() < 0.45 ? K.PHONE : 0, dur: 30 + R() * 60, chat: true };
+    const busWait = () => this.bus && { at: this.bus.wa ? this.bus.wa.pick(R) : { x: this.bus.x + (R() - 0.5) * 4, z: this.bus.z + (R() - 0.5) * 3 }, face: (this.bus.wa ? this.bus.wa.face : this.bus.heading + Math.PI / 2) + (R() - 0.5) * 1.2, hold: R() < 0.45 ? K.PHONE : 0, dur: 30 + R() * 60, chat: true };
     const leave = (kinds) => ({ door: this.pickDoor(kinds) });
     if (plan === 'ski') {
       if (R() < 0.35) out.push(map());
@@ -237,23 +240,30 @@ class Bases {
     }
     for (const b of layout.busStops || []) {
       if (Math.hypot(b.x, b.z) < 120) continue; // (the village's stop is the village's)
-      this.places.push({ kind: 'bus', x: b.x, z: b.z, heading: b.heading, n: 4, r: 2.5 });
+      // (with a road: waiting beside it, on the sign's side, >= 1.5 m off the plowed edge; never on the road)
+      const wa = stopWaitArea(b);
+      this.places.push({ kind: 'bus', x: wa ? wa.x : b.x, z: wa ? wa.z : b.z, heading: b.heading, face: wa ? wa.face : null, wa, n: 4, r: 2.5 });
     }
     this.live = new Set();
   }
   fill(pl, shown) {
     const p = this.sim.people.find((q) => !q.onStage);
     if (!p) return;
-    const R = this.rnd, a = R() * Math.PI * 2, r = 1 + R() * pl.r;
-    const x = pl.x + Math.cos(a) * r, z = pl.z + Math.sin(a) * r;
+    const R = this.rnd, { x, z } = this.spot(pl);
     this.sim.spawn(p, x, z, R() * 6.28, { shown, vmax: 1.15 + R() * 0.2 });
     p.place = pl; p.state = 'stand'; p.until = this.time + 8 + R() * 20;
     p.carry = pl.kind === 'lift' && R() < 0.45 ? 1 : 0;
     this.pose(p);
   }
+  // a spot at a place: round it, or (a bus stop with a road) in its waiting area beside the road
+  spot(pl) {
+    if (pl.wa) return pl.wa.pick(this.rnd);
+    const a = this.rnd() * Math.PI * 2, r = 1 + this.rnd() * pl.r;
+    return { x: pl.x + Math.cos(a) * r, z: pl.z + Math.sin(a) * r };
+  }
   pose(p) {
     const pl = p.place, R = this.rnd;
-    p.face = pl.kind === 'bus' ? pl.heading + Math.PI / 2 + (R() - 0.5) : Math.atan2(pl.ux, pl.uz) + (R() - 0.5) * 2.2;
+    p.face = pl.kind === 'bus' ? (pl.face ?? pl.heading + Math.PI / 2) + (R() - 0.5) : Math.atan2(pl.ux, pl.uz) + (R() - 0.5) * 2.2;
     const r = R();
     p.holdTo = !p.carry && r < 0.35 ? 1 : 0; p.hold = r < 0.2 ? K.PHONE : K.HOLD;
     p.look = pl.kind === 'lift' && R() < 0.4 ? { x: pl.x + pl.ux * 60, y: world.height(pl.x, pl.z) + 25, z: pl.z + pl.uz * 60 } : null;
@@ -283,8 +293,7 @@ class Bases {
         this.sim.setPath(p, [pl.entry], () => this.sim.hide(p, 1.6));
       } else if (R < 0.55) {
         // a few steps, a chat with whoever stands near
-        const a = this.rnd() * Math.PI * 2, r = 1 + this.rnd() * pl.r;
-        this.sim.setPath(p, [{ x: pl.x + Math.cos(a) * r, z: pl.z + Math.sin(a) * r }], () => this.pose(p));
+        this.sim.setPath(p, [this.spot(pl)], () => this.pose(p));
         p.until = this.time + 10 + this.rnd() * 18;
       } else {
         let mate = null, best = 6;

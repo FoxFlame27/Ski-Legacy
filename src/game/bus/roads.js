@@ -364,6 +364,31 @@ export function roadsideBlocked(x, z, r = 0.3, own = -1, s = 0, { lots = true } 
   return null;
 }
 
+/**
+ * Where people wait at a stop (the sign's side of the road, as skibus.js besideBay places the sign: the bus's right
+ * where its front door stops, 7 m from the road's end): { face (toward the road), pick(rnd) -> { x, z } } or null
+ * (no road). pick: a spot 2-6 m off the plowed edge, within ~5 m along of the sign, clear of the sign and bench
+ * and of every road's lane (>= 1.5 m off its plowed edge).
+ */
+export function stopWaitArea(stop) {
+  const r = busRoads.roads.find((q) => q.to === stop) || busRoads.roads.find((q) => q.from === stop);
+  if (!r) return null;
+  const arriving = r.to === stop, p = roadAt(r, arriving ? r.length - 4 : 10);
+  const px = p.x, pz = p.z, ax = p.dx, az = p.dz, rx = -p.dz, rz = p.dx; // along the road; its right (the sign's side)
+  const pick = (rnd = Math.random) => {
+    let x = px + rx * (ROAD_HALF + 5), z = pz + rz * (ROAD_HALF + 5);
+    for (let k = 0; k < 16; k++) {
+      const u = (rnd() - 0.5) * 10, v = ROAD_HALF + 2 + rnd() * 4;
+      if (Math.abs(u) < 3 && v < ROAD_HALF + 4.4) continue; // (the sign and the bench)
+      const qx = px + ax * u + rx * v, qz = pz + az * u + rz * v;
+      if (laneDistance(qx, qz) < ROAD_HALF + 1.6) continue;
+      x = qx; z = qz; break;
+    }
+    return { x, z };
+  };
+  return { x: px + rx * (ROAD_HALF + 4), z: pz + rz * (ROAD_HALF + 4), face: Math.atan2(-rx, -rz), pick };
+}
+
 // ------------------------------------------------------------------ the network + terrain shaping
 export const busRoads = { roads: [], stops: [], lots: [], junctions: [], ready: false, ms: 0 };
 
@@ -404,7 +429,12 @@ export function planBusRoads(stops) {
     let pts = null;
     try { pts = route(from, s, { obstacles }); } catch (e) { console.warn('bus road', e); }
     if (!pts) { s.noRoad = true; continue; }
-    busRoads.roads.push(makeRoad(smoothPath(pts), from, s));
+    // a road carrying on from a stop where another ends (a stop on the way) starts at that road's height: one
+    // continuous bench through the stop (no step in the carved ground where the two roads meet)
+    const prev = busRoads.roads.find((r) => r.to === from);
+    const sp = smoothPath(pts), m = sp.length; // (no sliver of a last segment: the strip's end cross-section turns)
+    if (m > 3 && Math.hypot(sp[m - 1][0] - sp[m - 2][0], sp[m - 1][1] - sp[m - 2][1]) < 2) sp.splice(m - 2, 1);
+    busRoads.roads.push(makeRoad(sp, from, s, prev ? { y0: prev.Y[prev.n - 1] } : {}));
     linked.push(s);
   }
   // a stop left without a road goes back where it was (the travel card serves it from there)

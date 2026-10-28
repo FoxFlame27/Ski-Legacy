@@ -445,6 +445,19 @@ function buildRoadMeshes(group, colliders = null) {
     // with no gap; one that carries on from a road's end is left whole (no gap there either)
     const R = r.access ? trimAccess(r) : r;
     const nEnd = R.n - 1;
+    // a stop on the way (one road ends where the next one starts): both strips end on the same cross-section (the
+    // bisector of their headings) and the texture runs on (v carries on from the road before), so they meet edge to
+    // edge; before, the two strips overlapped in a wedge at the stop and z-fought (crossed light / dark bands)
+    const prev = r.access ? null : busRoads.roads.find((o) => !o.access && o.to === r.from);
+    const nexts = r.access ? [] : busRoads.roads.filter((o) => !o.access && o.from === r.to);
+    const next = nexts.length === 1 ? nexts[0] : null;
+    let v0 = 0;
+    for (let q = prev, g = 0; q && g < 20; g++) { v0 += q.length; q = busRoads.roads.find((o) => !o.access && o.to === q.from); }
+    const jointDir = (a, b) => { // (unit) bisector of road a's last heading and road b's first
+      const d0 = roadDir(a, a.n - 1), d1 = roadDir(b, 0), x = d0[0] + d1[0], z = d0[1] + d1[1], l = Math.hypot(x, z);
+      return l > 0.2 ? [x / l, z / l] : null;
+    };
+    const dirStart = prev ? jointDir(prev, r) : null, dirEnd = next ? jointDir(r, next) : null;
     for (let c0 = 0; c0 < nEnd; c0 += CH) {
       const c1 = Math.min(nEnd, c0 + CH), m = c1 - c0 + 1, na = ACROSS.length;
       const rp = new Float32Array(m * na * 3), ruv = new Float32Array(m * na * 2), ri2 = [];
@@ -452,12 +465,14 @@ function buildRoadMeshes(group, colliders = null) {
         const i = c0 + k, a = Math.max(0, i - 1), b = Math.min(R.n - 1, i + 1);
         let dx = R.X[b] - R.X[a], dz = R.Z[b] - R.Z[a];
         const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+        if (i === 0 && dirStart) [dx, dz] = dirStart;
+        else if (i === R.n - 1 && dirEnd) [dx, dz] = dirEnd;
         const nx = dz, nz = -dx; // across the road
         // the strip follows the carved ground itself (sampled like the terrain), a few cm above it
         for (let q = 0; q < na; q++) {
           const o = ACROSS[q] * ROAD_HALF, x = R.X[i] + nx * o, z = R.Z[i] + nz * o;
           rp.set([x, H(x, z) + 0.035, z], (k * na + q) * 3);
-          ruv.set([(ACROSS[q] + 1) / 2, R.S[i] / 13.5], (k * na + q) * 2);
+          ruv.set([(ACROSS[q] + 1) / 2, (v0 + R.S[i]) / 13.5], (k * na + q) * 2);
         }
         // (the plough berms are shaped into the terrain itself: roads.js)
         if (k < m - 1) {

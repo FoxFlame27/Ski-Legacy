@@ -271,7 +271,7 @@ export class Drive {
     for (const o of g.children.slice()) if (o !== e.block) g.remove(o);
     for (const o of e.parkedVisual || []) g.add(o);
     if (e.dents?.length) applyDents(e.inst, e); // (parked as it is: its dents too)
-    g.position.set(d.x, this.world.height(d.x, d.z) + 0.03, d.z);
+    g.position.set(d.x, (this.world.meshHeight || this.world.height).call(this.world, d.x, d.z) + 0.03, d.z);
     g.rotation.set(0, d.yaw, 0);
     g.updateMatrixWorld(true);
     e.collider.x = d.x; e.collider.z = d.z; e.collider.rot = -d.yaw;
@@ -699,7 +699,7 @@ export class Drive {
         if (Math.abs(s.w) < 0.04 && !s.vx && !s.vz) s.w = 0;
         g.position.x += s.vx * dt; g.position.z += s.vz * dt;
         g.rotation.y = wrapPi(g.rotation.y + s.w * dt);
-        g.position.y = this.world.height(g.position.x, g.position.z) + 0.03;
+        g.position.y = (this.world.meshHeight || this.world.height).call(this.world, g.position.x, g.position.z) + 0.03;
         g.updateMatrixWorld(true);
         e.collider.x = g.position.x; e.collider.z = g.position.z; e.collider.rot = -g.rotation.y;
         if (!s.vx && !s.vz && !s.w) {
@@ -1034,7 +1034,7 @@ export class Drive {
   // towed: back where it was parked, as good as new
   tow(e) {
     const h = e.home, g = e.car;
-    if (h) { g.position.set(h.x, this.world.height(h.x, h.z) + 0.03, h.z); g.rotation.set(0, h.yaw, 0); }
+    if (h) { g.position.set(h.x, (this.world.meshHeight || this.world.height).call(this.world, h.x, h.z) + 0.03, h.z); g.rotation.set(0, h.yaw, 0); }
     else g.rotation.set(0, g.rotation.y, 0);
     g.updateMatrixWorld(true);
     e.collider.x = g.position.x; e.collider.z = g.position.z; e.collider.rot = -g.rotation.y;

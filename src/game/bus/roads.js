@@ -509,7 +509,7 @@ function shapeRoads(roads) {
     line.push([r.X[r.n - 1], r.Z[r.n - 1]]);
     world.addCorridor(line, BENCH + 3, 'lift', { busRoad: true });
   }
-  const near = { d: 0, y: 0, s: 0, ri: 0, side: 1 };
+  const near = { d: 0, y: 0, s: 0, ri: 0, side: 1 }, OTHER = new Map(), OTHY = new Map();
   const nearest = (x, z) => {
     const arr = grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G));
     near.d = Infinity;
@@ -523,6 +523,21 @@ function shapeRoads(roads) {
     }
     near.d = Math.sqrt(near.d);
     near.y = best.ay + (best.by - best.ay) * bt;
+    // (another road nearly as near, e.g. an access road running in beside the road it joins at another height:
+    // the heights blended by nearness, so the ground does not step where the nearer one swaps)
+    let wsum = 1, ysum = near.y;
+    for (const s of arr) {
+      if (s.ri === best.ri) continue;
+      const ex = s.bx - s.ax, ez = s.bz - s.az, l2 = ex * ex + ez * ez || 1;
+      const t = clamp(((x - s.ax) * ex + (z - s.az) * ez) / l2, 0, 1);
+      const d = Math.hypot(s.ax + ex * t - x, s.az + ez * t - z) - near.d;
+      if (d > 6) continue;
+      const w = Math.exp(-d / 1.2);
+      if (w > (OTHER.get(s.ri) ?? -1)) OTHER.set(s.ri, w), OTHY.set(s.ri, s.ay + (s.by - s.ay) * t);
+    }
+    for (const [ri, w] of OTHER) { wsum += w; ysum += w * OTHY.get(ri); }
+    OTHER.clear(); OTHY.clear();
+    near.y = ysum / wsum;
     near.s = best.sa + (best.sb - best.sa) * bt;
     near.ri = best.ri;
     near.side = (best.bx - best.ax) * (z - best.az) - (best.bz - best.az) * (x - best.ax) >= 0 ? 1 : -1;

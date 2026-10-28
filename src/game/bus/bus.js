@@ -816,10 +816,10 @@ export class BusLine {
   }
 
   // place the bus with its middle at arc length s of trip t (front and rear axles on the road, in the right lane)
-  place(t, s) {
+  place(t, s, shift = this.ride?.shift || 0) {
     const half = 3.0;
     roadAt(t, s + half, _p); roadAt(t, s - half, _q);
-    const lane = BUS.lane;
+    const lane = BUS.lane * (1 - 2 * shift); // (overtaking: out into the other lane)
     // (the right-hand lane: right of the heading (dx, dz) is (-dz, dx))
     _a.set(_p.x - _p.dz * lane, _p.y, _p.z + _p.dx * lane);
     _b.set(_q.x - _q.dz * lane, _q.y, _q.z + _q.dx * lane);
@@ -899,7 +899,7 @@ export class BusLine {
       r.arrive -= dt;
       if (r.arrive <= 0 && !r.turning) {
         r.turning = true;
-        const next = () => { r.li++; r.t = r.legs[r.li]; r.s = r.t.s0; r.v = 0; r.done = false; r.wait = 1.4; r.turning = false; this.place(r.t, r.s); };
+        const next = () => { r.li++; r.t = r.legs[r.li]; r.s = r.t.s0; r.v = 0; r.done = false; r.wait = 1.4; r.turning = false; r.passing = false; r.shift = 0; this.place(r.t, r.s); };
         transition.fade(async () => { if (this.ride === r) next(); }).catch(() => { if (this.ride === r) next(); });
       }
       this.place(t, r.s);
@@ -917,6 +917,7 @@ export class BusLine {
       // brakes in time and waits. A traffic car that has held it at a standstill for 3 s is taken off the road
       // (traffic.js despawn); a shoved parked car goes back to its bay by itself (drive.js)
       try { vt = Math.min(vt, this.clearAhead(t, r, dt)); } catch (e) { if (!this.clearWarn) { this.clearWarn = true; console.warn('bus clearance', e); } }
+      r.shift = (r.shift || 0) + clamp((r.passing ? 1 : 0) - (r.shift || 0), -0.45 * h, 0.45 * h); // (~2 s to change lanes)
       r.v += clamp(vt - r.v, -BUS.brake * 2 * h, BUS.acc * 1.5 * h);
       r.s = Math.min(t.s1, r.s + r.v * h);
       if (r.s >= t.s1 - 0.05) { r.done = true; r.v = 0; r.arrive = 1.2; }
@@ -938,32 +939,62 @@ export class BusLine {
     return { seat, hint };
   }
 
-  // the speed (m/s) the bus may drive at so it stops short of whatever stands in its lane ahead (trip t, ride r)
+  // the speed (m/s) the bus may drive at so it stops short of whatever stands in its lane ahead (trip t, ride r).
+  // (Oct 28, the user: "the bus should overtake"): held up behind something stopped or crawling in its lane, with the
+  // other lane clear far enough ahead (oncoming traffic included) and the road going on long enough, it pulls out,
+  // passes and pulls back in once its lane is clear beside and just ahead of it
   clearAhead(t, r, dt) {
     const obs = this.obstacles(), g = this.bus.group.position;
-    if (!obs.length) { r.heldT = 0; return Infinity; }
-    const look = 30 + (r.v * r.v) / (2 * CLEAR_DEC), i0 = roadAt(t, r.s - 2, _p).i, i1 = roadAt(t, r.s + look, _p).i + 1;
-    let lim = Infinity, blocker = null;
+    const sh = r.shift || 0;
+    if (!obs.length) { r.heldT = 0; r.slowT = 0; r.passing = false; return Infinity; }
+    const look = 30 + (r.v * r.v) / (2 * CLEAR_DEC), far = Math.max(look, 150);
+    const i0 = roadAt(t, r.s - BUS.len, _p).i, i1 = roadAt(t, r.s + far, _p).i + 1;
+    let lim = Infinity, blocker = null, own = null, otherNear = false, otherAhead = Infinity, ownBeside = false;
     for (const o of obs) {
-      if (Math.abs(o.x - g.x) > look + 12 || Math.abs(o.z - g.z) > look + 12) continue;
+      if (Math.abs(o.x - g.x) > far + 12 || Math.abs(o.z - g.z) > far + 12) continue;
       if (o.y !== undefined && Math.abs(o.y - g.y) > 5) continue; // (a train in a tunnel under the road)
-      // the nearest point of the road ahead: how far along, how far to the side of the bus's lane
+      // the nearest point of the road: how far along, how far to the side of the centre line
       let bj = -1, bd = Infinity;
       for (let j = i0; j <= Math.min(t.n - 2, i1); j++) { const d = (t.X[j] - o.x) ** 2 + (t.Z[j] - o.z) ** 2; if (d < bd) { bd = d; bj = j; } }
       if (bj < 0) continue;
       const hx = t.X[bj + 1] - t.X[bj], hz = t.Z[bj + 1] - t.Z[bj], hl = Math.hypot(hx, hz) || 1, ux = hx / hl, uz = hz / hl;
       const dx = o.x - t.X[bj], dz = o.z - t.Z[bj], s = t.S[bj] + dx * ux + dz * uz;
-      const lat = -dx * uz + dz * ux - BUS.lane; // (the lane: right of the heading (ux, uz) is (-uz, ux))
+      const latC = -dx * uz + dz * ux; // (right of the heading (ux, uz) is (-uz, ux))
       const ca = Math.abs(Math.sin(o.yaw) * ux + Math.cos(o.yaw) * uz), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
-      const across = o.hw * ca + o.hd * sa, along = o.hw * sa + o.hd * ca;
-      if (Math.abs(lat) > BUS.width / 2 + across + 0.35) continue; // (beside the lane: the other lane, a bay)
-      const gap = s - r.s - BUS.len / 2 - along;
-      if (s - r.s < 0 || gap > look) continue;
+      const across = o.hw * ca + o.hd * sa, along = o.hw * sa + o.hd * ca, W = BUS.width / 2 + across + 0.35;
+      const inOwn = Math.abs(latC - BUS.lane) < W, inOther = Math.abs(latC + BUS.lane) < W;
+      const ds = s - r.s, vAlong = (o.v || 0) * (Math.sin(o.yaw) * ux + Math.cos(o.yaw) * uz);
+      // the other lane: anything near the bus or ahead of it there (something coming the other way: further ahead,
+      // by how far it closes in while the bus passes)
+      if (inOther) {
+        const reach = ds - Math.max(0, -vAlong) * 9;
+        if (ds > -BUS.len / 2 - along - 3 && ds < BUS.len / 2 + along + 6) otherNear = true;
+        if (ds > 0) otherAhead = Math.min(otherAhead, reach - BUS.len / 2 - along);
+      }
+      if (inOwn && ds > -(BUS.len / 2 + along + 1) && ds < BUS.len / 2 + along + 10) ownBeside = true; // (beside it or just ahead)
+      // the lanes the bus is in now: its own until well out, the other one from part way across
+      const counts = (inOwn && sh < 0.85 && !(r.passing && sh > 0.15)) || (inOther && sh > 0.15);
+      if (!counts) continue;
+      const gap = ds - BUS.len / 2 - along;
+      if (ds < 0 || gap > look) continue;
       // going the bus's way: follow at its speed; anything else: stop short of it
-      const vo = Math.max(0, (o.v || 0) * (Math.sin(o.yaw) * ux + Math.cos(o.yaw) * uz));
+      const vo = Math.max(0, vAlong);
       const room = gap - CLEAR_GAP, v = room > 0 ? Math.sqrt(vo * vo + 2 * CLEAR_DEC * room) : 0;
       if (v < lim) { lim = v; blocker = o; }
+      if (inOwn && (!own || gap < own.gap)) own = { gap, vo, along };
     }
+    // overtaking: held up behind something slow in its own lane for 1.5 s
+    const slowed = own && own.vo < 4 && own.gap < 30 && r.v < 6;
+    r.slowT = slowed ? (r.slowT || 0) + dt : 0;
+    if (!r.passing && r.slowT > 1.5) {
+      const need = own.gap + 2 * own.along + BUS.len + 25;
+      if (!otherNear && otherAhead > need && t.s1 - r.s > need + 40) { r.passing = true; r.slowT = 0; }
+    }
+    // back in once its own lane is clear beside it and just ahead (or the other lane gets busy ahead: back in as
+    // soon as there is room)
+    if (r.passing && !ownBeside) r.passing = false;
+    // still behind it and something now comes in the other lane: give up, back in behind it
+    if (r.passing && own && own.gap > 0 && otherAhead < own.gap + 2 * own.along + BUS.len + 10) r.passing = false;
     r.heldT = blocker && r.v < 0.5 ? (r.heldT || 0) + dt : 0;
     if (r.heldT > 3 && blocker?.car && this.traffic?.despawn) { this.traffic.despawn(blocker.car); r.heldT = 0; }
     return lim;

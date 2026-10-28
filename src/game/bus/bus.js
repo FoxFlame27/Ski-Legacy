@@ -13,6 +13,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { busRoads, roadAt, ROAD_HALF, roadsideBlocked } from './roads.js';
 import { transition } from '../../ui/transition.js';
 import { trafficBlockers } from '../traffic.js';
+import { buildScenicProps } from './scenicprops.js';
 
 export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 16.5, acc: 1.1, brake: 1.3, lat: 1.5 };
 const CLEAR_DEC = 1.8, CLEAR_GAP = 4; // braking for something in the lane (m/s^2, within its 2.6 limit); the gap it stops at (m)
@@ -130,7 +131,7 @@ const roadDir = (r, i) => {
 // Where road r (index ri) gets a guardrail: [right side, left side] per road sample (1 = rail).
 function planRails(r, ri, H) {
   const n = r.n, L = r.length, out = [new Uint8Array(n), new Uint8Array(n)];
-  if (n < MIN_RUN + 4) return out;
+  if (n < MIN_RUN + 4 || r.ringRoad) return out; // (the roundabout's ring: its island kerb, no rails)
   const head = (i) => { const [dx, dz] = roadDir(r, i); return Math.atan2(dx, dz); };
   const lean = new Float32Array(n), drop = [new Uint8Array(n), new Uint8Array(n)], both = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
@@ -174,7 +175,7 @@ function planRails(r, ri, H) {
     for (let sd = 0; sd < 2; sd++) {
       const sg = sd ? 1 : -1, x = r.X[i] + nx * sg * RAIL_OFF, z = r.Z[i] + nz * sg * RAIL_OFF;
       let b = s < end0 || s > L - end1 || Math.hypot(x, z) < VILLAGE_R || (hospS !== null && Math.abs(s - hospS) < 20);
-      if (!b && sd === 0) for (const lb of busRoads.laybys || []) if (busRoads.roads[lb.ri] === r && Math.abs(lb.s - s) < 20) b = true;
+      if (!b) for (const lb of busRoads.laybys || []) if (busRoads.roads[lb.ri] === r && (lb.side ?? 1) === (sd ? -1 : 1) && Math.abs(lb.s - s) < 20) b = true;
       if (!b && roadsideBlocked(x, z, 1.6, ri, s)) b = true;
       ban[sd][i] = b ? 1 : 0;
     }
@@ -496,9 +497,9 @@ function buildRoadMeshes(group, colliders = null) {
       rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
       rg.setAttribute('uv', new THREE.BufferAttribute(ruv, 2));
       rg.setIndex(ri2); rg.computeVertexNormals();
-      const road = new THREE.Mesh(rg, r.access ? accessMat : roadMat);
+      const road = new THREE.Mesh(rg, r.access && !r.ringRoad ? accessMat : roadMat); // (the ring over its arms' ends)
       road.receiveShadow = true;
-      road.renderOrder = r.access ? 2 : 1; // (an access road lies over the car park's surface at the entrance)
+      road.renderOrder = r.access && !r.ringRoad ? 2 : 1; // (an access road lies over the car park's surface at the entrance)
       group.add(road);
     }
   });
@@ -662,6 +663,7 @@ export class BusLine {
     this.group = new THREE.Group();
     this.group.name = 'bus-roads';
     if (busRoads.roads.length) buildRoadMeshes(this.group, colliders); // (+ the guardrails' colliders)
+    if (busRoads.scenic) try { buildScenicProps(this.group); } catch (e) { console.warn('scenic road props', e); }
     scene.add(this.group);
     this.bus = buildBus(models, makeRig);
     scene.add(this.bus.group);

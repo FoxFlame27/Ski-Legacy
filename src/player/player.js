@@ -63,7 +63,8 @@ const BODY_SLIDE = 8.5;             // deceleration of a tumbling body on snow a
 const GETUP_TIME = 1.35;            // seconds to stand back up
 
 // ---- on foot ----
-const FOOT_SPEED = 8.4;     // on foot (m/s): the sprint pace and run animation; there's no slower walk (Oct 27: twice the old 4.2)
+const FOOT_SPEED = 4.2;     // on foot (m/s): the normal pace (run animation)
+const SPRINT_K = 1.5, SPRINT_MAX = 7.5, SPRINT_COOL = 2.5; // Shift: 1.5x for up to 7.5 s, then 2.5 s before the next sprint
 const WALK_FULL = Math.tan(22 * DEG);  // uphill walking slows above this...
 const WALK_MAX = Math.tan(38 * DEG);   // ...and stops only on real steeps (cliffs, rock faces): take a lift
 
@@ -1010,10 +1011,17 @@ export class Player {
     const slope = Math.hypot(gx, gz);
     const ux = slope > 1e-6 ? gx / slope : 0, uz = slope > 1e-6 ? gz / slope : 0; // uphill direction
     let blocked = false;
+    // Shift sprints (Oct 28, the user): 1.5x, at most SPRINT_MAX s at a time, then SPRINT_COOL s to recover
+    const spr = this.sprint ??= { t: 0, cool: 0 };
+    const shift = !this.frozen && dir.lengthSq() > 0 && (this.input.down('ShiftLeft') || this.input.down('ShiftRight'));
+    let sprinting = false;
+    if (spr.cool > 0) { spr.cool = Math.max(0, spr.cool - dt); spr.t = 0; }
+    else if (shift) { spr.t += dt; sprinting = true; if (spr.t >= SPRINT_MAX) { spr.cool = SPRINT_COOL; spr.t = 0; } }
+    else spr.t = 0;
     if (dir.lengthSq() > 0) {
       dir.normalize();
       const want = Math.atan2(dir.x, dir.z);
-      let target = FOOT_SPEED; // on foot you always move at the old sprint pace (no separate walk)
+      let target = FOOT_SPEED * (sprinting ? SPRINT_K : 1);
       const up = dir.x * ux + dir.z * uz; // > 0: some of the step goes uphill
       if (up > 0 && slope > WALK_FULL) {
         // the uphill part of the step fades out between 22 and 38 degrees of terrain; what's left is a

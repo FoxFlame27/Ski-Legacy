@@ -53,7 +53,7 @@ import { Crowds } from './world/crowds.js';
 import { Snowcats } from './world/snowcats.js';
 import { Flags } from './world/flags.js';
 import { presentation } from './game/presentation/index.js';
-import { wantsBusIntro, runBusIntro } from './game/presentation/busintro.js'; // first-time intro: the summer valley, the ski bus
+import { wantsBusIntro } from './game/presentation/busintro.js'; // first-time intro: the summer valley, the ski bus
 import { Jobs } from './game/jobs.js';
 import { Talk } from './game/talk.js';
 import { Modes } from './game/modes.js';
@@ -504,9 +504,22 @@ async function startFromMenu(sel = {}) {
   if (!busIntro && wantsBusIntro(save)) { playBusIntro(); return; } // a brand-new save: the ski bus brings you
   startGame();
 }
+// (Oct 28, the user: "the intro is super bad, it doesn't look like the game at all: you're just in the bus and you
+// get driven there, no waiting at the bus stop, no green; you sit in the bus until you arrive at Legacy Village, no
+// teleport"): the game's own ski bus, from the farthest stop it can reach, to the village stop in
+// real time (hold Space to fast-forward; ~8 min at most); you get off there as after any bus ride
 function playBusIntro() {
-  runBusIntro({ renderer, post, scene, camera, models, makeRig, save, writeSave, audio, transition, player, skibus, streamAround, startGame, swapCharacter, menu, showcase,
-    setActive: (o) => { busIntro = o; } }).catch((e) => { console.warn('bus intro', e); busIntro = null; post.setView(scene, camera); startGame(); });
+  save.introBus = true;
+  const stops = skibus.stops || [];
+  const village = stops.slice().sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0];
+  let from = null;
+  try {
+    from = village && stops.filter((st) => st !== village && skibus.canRide(st, village))
+      .map((st) => ({ st, min: skibus.route(st, village).min })).filter((o) => o.min <= 8)
+      .sort((a, b) => b.min - a.min)[0]?.st;
+  } catch (e) { console.warn('bus intro', e); }
+  startGame();
+  if (from) boardBus(from, village);
 }
 
 // E at the RACING stand: pick a course and the AI difficulty, then RACE exactly as the old menu option did

@@ -449,10 +449,11 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .settings .mp-row.is-focus { background: linear-gradient(90deg, rgba(21, 70, 200, 0.09), rgba(21, 70, 200, 0)); box-shadow: inset calc(var(--u) * 4) 0 0 var(--red); }
 .mp-row input[type=range] { width: calc(var(--u) * 230); accent-color: var(--blue); }
 .seg { display: flex; gap: calc(var(--u) * 4); }
-.seg button, .mp-danger { padding: calc(var(--u) * 7) calc(var(--u) * 12); border: 2px solid var(--blue); border-radius: calc(var(--u) * 5); background: transparent; color: var(--blue); cursor: pointer; font: 700 var(--t-sm)/1 var(--ui); }
+.seg button, .mp-danger, .mp-skier { padding: calc(var(--u) * 7) calc(var(--u) * 12); border: 2px solid var(--blue); border-radius: calc(var(--u) * 5); background: transparent; color: var(--blue); cursor: pointer; font: 700 var(--t-sm)/1 var(--ui); }
 .seg button.on { background: var(--blue); color: #fff; }
 .seg button.pending { outline: 2px dashed var(--red); outline-offset: 2px; }
 .mp-danger { border-color: var(--ko); color: var(--ko); }
+.mp-skier:hover { background: var(--blue); color: #fff; }
 
 /* =================== BRUSH UI (everything matches the main menu) =================== */
 :root {

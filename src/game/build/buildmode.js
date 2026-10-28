@@ -231,7 +231,7 @@ export class BuildMode {
     const root = this.chalet.root;
     root.updateMatrixWorld();
     _m.copy(root.matrixWorld).invert();
-    return { o: _o.copy(ray.origin).applyMatrix4(_m), d: _d.copy(ray.direction).transformDirection(_m) };
+    return { o: ray.origin.clone().applyMatrix4(_m), d: ray.direction.clone().transformDirection(_m) }; // (own vectors: worldRay reuses _o/_d)
   }
 
   currentStorey(storeys) {

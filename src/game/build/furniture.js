@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { loadGLB } from '../../core/assets.js';
 import { FURNITURE } from './catalog.js';
+import { fitScales } from './placement.js';
 
 export const loadFurniture = (id) => loadGLB(`furniture/${id}`);
 
@@ -18,24 +19,17 @@ export function makeFurnitureObject(item, gltf) {
   const [sx, sy, sz] = item.size;
   let m;
   if (gltf) {
-    m = gltf.scene.clone(true);
-    m.updateMatrixWorld(true);
-    let box = new THREE.Box3().setFromObject(m);
-    let d = box.getSize(new THREE.Vector3());
-    // Meshy sometimes lays the long side along z: turn it to match the catalog footprint
-    if ((sx > sz * 1.3 && d.z > d.x * 1.3) || (sz > sx * 1.3 && d.x > d.z * 1.3)) {
-      m.rotation.y = Math.PI / 2;
-      m.updateMatrixWorld(true);
-      box = new THREE.Box3().setFromObject(m);
-      d = box.getSize(new THREE.Vector3());
-    }
-    const r = [sx / d.x, sy / d.y, sz / d.z];
-    let s;
-    if (item.flat) s = Math.min(r[0], r[2]);
-    else if (item.place === 'wall') s = Math.min(r[0], r[1]);
-    else s = Math.min(...r.filter((v, i) => item.size[i] >= 0.1));
-    m.scale.multiplyScalar(s);
-    if (item.flat) m.scale.y = Math.min(s, r[1] * 1.5); // rugs: squash to a thin mat
+    const model = gltf.scene.clone(true);
+    model.updateMatrixWorld(true);
+    const d = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+    const fit = fitScales(item, [d.x, d.y, d.z]); // height exact, footprint toward the catalog (placement.js)
+    const turned = new THREE.Group();
+    if (fit.layFlat) model.rotation.x = -Math.PI / 2; // a rug modelled standing up
+    turned.add(model);
+    if (fit.turn) turned.rotation.y = Math.PI / 2;
+    m = new THREE.Group();
+    m.add(turned);
+    m.scale.set(...fit.scale);
     m.updateMatrixWorld(true);
     m.traverse((o) => { if (o.isMesh) { o.castShadow = !item.flat; o.receiveShadow = true; } });
   } else {
@@ -60,7 +54,7 @@ export function makeFurnitureObject(item, gltf) {
 }
 
 // ---------------------------------------------------------------- thumbnails
-const THUMB_KEY = 'sl-furniture-thumbs-v1';
+const THUMB_KEY = 'sl-furniture-thumbs-v2';
 const thumbs = new Map();
 try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem(THUMB_KEY) || '{}'))) thumbs.set(k, v); } catch { /* no storage */ }
 const persist = () => { try { localStorage.setItem(THUMB_KEY, JSON.stringify(Object.fromEntries(thumbs))); } catch { /* full or blocked */ } };

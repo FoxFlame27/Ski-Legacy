@@ -98,3 +98,27 @@ export function rayWall(ox, oz, dx, dz, walls, maxDist = 8) {
   }
   return best;
 }
+
+/**
+ * How to fit a model with raw bounding-box size d = [x, y, z] to a catalog item (pure, for Node checks).
+ * Returns { layFlat, turn, scale: [sx, sy, sz] }: first lay it flat (rotate -90 deg about x) if `layFlat`,
+ * then turn it 90 deg about y if `turn`, then scale by `scale` (in the turned frame). Height is matched
+ * exactly (flat items: width); width and depth each follow the catalog within -23%..+30% of the height scale.
+ */
+export function fitScales(item, d) {
+  let [dx, dy, dz] = d;
+  const [w, h, dd] = item.size;
+  const layFlat = !!item.flat && dy > dz * 2; // a rug modelled standing up
+  if (layFlat) [dy, dz] = [dz, dy];
+  const turn = (w > dd * 1.3 && dz > dx * 1.3) || (dd > w * 1.3 && dx > dz * 1.3);
+  if (turn) [dx, dz] = [dz, dx];
+  if (item.flat) {
+    const s = Math.sqrt((w / dx) * (dd / dz));
+    return { layFlat, turn, scale: [s, Math.min(s, h / dy), s] };
+  }
+  const sy = h / dy;
+  const clamp = (v) => Math.min(sy * 1.3, Math.max(sy * 0.77, v));
+  const sx = clamp(w / dx);
+  const sz = item.place === 'wall' ? Math.min(clamp(dd / dz), dd / dz) : clamp(dd / dz);
+  return { layFlat, turn, scale: [sx, sy, sz] };
+}

@@ -72,4 +72,4 @@ body.pres-cine #flash, body.pres-cine #crosshair, body.pres-cine #controls-hint,
 @keyframes psSweep { 0% { transform: translateX(-115%); } 36%, 60% { transform: translateX(0); } 100% { transform: translateX(115%); } }
 
 /* WATCH REPLAY on the results screen (same brush button as RETRY / NEXT / MENU, a little wider) */
-.rr-btn.pres-replay-btn { width: calc(var(--u) * 330); }
+.rr-btn.pres-replay-btn { min-width: calc(var(--u) * 330); }

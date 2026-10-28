@@ -59,7 +59,7 @@ body.outfit-open #hud > :not(#flash) { visibility: hidden !important; }
 .os-title { margin-top: calc(var(--u) * 7); font: italic 700 calc(var(--u) * 36)/0.95 var(--num); letter-spacing: 0.01em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .os-note { margin-top: calc(var(--u) * 8); font: 500 var(--t-xs)/1.4 var(--ui); color: var(--blue-dim); }
 .os-actrow { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 20); margin-top: calc(var(--u) * 12); }
-.os-act { width: calc(var(--u) * 300); flex: none; }
+.os-act { min-width: calc(var(--u) * 300); flex: none; }
 .os-act > span { color: var(--blue-dim); }
 .os-act.ready > span { color: #fff; }
 .os-act.done { cursor: default; }

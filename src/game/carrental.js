@@ -5,7 +5,7 @@
 // the CAR RENTAL board on the gable (village sign style, lit at night), lanterns, flags, potted spruces, and a compact
 // ploughed yard in front (kerbs, painted bays, the TOW bay) fading into the snow. E at the door: inside
 // (carrentalroom.js, its own scene: two storeys; through its glass the real world, rendered live as in the ski shop);
-// at a car on display or the clerk: the rental card (ui/carrental.js). The rented car waits in the yard, nose to the
+// at a car on display: the configurator for that car (ui/carrental.js); the clerk sends you to a random one. The rented car waits in the yard, nose to the
 // road; E beside it to drive (drive.js: every other car only says where to rent one). One rental at a time (renting
 // another returns the old one); it is kept in the save (back in the yard next time). Wreck it: $1000 (once; the
 // balance may go below zero, like a fine), the rental ends and the tow truck (towtruck.js) fetches the very car from
@@ -293,13 +293,29 @@ export class CarRental {
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }
 
-  // the configurator: from the car you looked at (its display paint), or your current rental's config (the clerk)
+  // the configurator, for the car you pressed E at (its display paint to start; your current rental's config when it's
+  // that model). The model itself is fixed in there: paint, wheels, plate only.
   openCard(pick, paintHexWant) {
+    if (!RENTALS.some((c) => c.id === pick)) return;
+    this.room.guide(null); // (found it)
     const cur = this.save.rental ? normConfig(this.save.rental) : null;
-    const base = cur && (!pick || pick === cur.id) ? cur : normConfig({ id: pick || RENTALS[0].id, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
+    const base = cur && pick === cur.id ? cur : normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
     this.ui.open({ cars: RENTALS, cfg: base, current: cur, money: this.save.money, cost: (c) => this.cost(c),
       preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
       rent: (c) => { this.rent(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); } });
+  }
+
+  // the clerk: a car of the day, picked at random from the floor (never the same twice in a row); a marker over it
+  // shows you the way (carrentalroom.js guide) until you press E at it
+  recommend() {
+    const on = this.room.tables.map((t) => t.id).filter((id) => RENTALS.some((c) => c.id === id));
+    if (!on.length) return;
+    const pool = on.length > 1 ? on.filter((id) => id !== this.lastTip) : on, id = pool[Math.floor(Math.random() * pool.length)];
+    this.lastTip = id;
+    const spec = RENTALS.find((c) => c.id === id), up = this.room.tables.find((t) => t.id === id)?.up;
+    const lines = [`Grüezi! Take a look at the ${spec.label}${up ? ' upstairs' : ''}!`, `Have you seen the ${spec.label}${up ? ' upstairs' : ''}? Lovely in the snow.`, `Today I'd go for the ${spec.label}${up ? ', up the stairs' : ''}. Have a look!`];
+    this.hud?.flash(lines[Math.floor(Math.random() * lines.length)], 'good', 3600);
+    this.room.guide(id);
   }
 
   /** Inside, per frame (main.js): walking, looking, E. Returns what to show as the prompt. */
@@ -310,7 +326,7 @@ export class CarRental {
       this.audio?.play?.('click');
       const t = this.target;
       if (t.kind === 'door') this.leave();
-      else if (t.kind === 'clerk') { this.hud?.flash('Grüezi! Which car would you like today?', 'good', 2200); this.openCard(null, null); }
+      else if (t.kind === 'clerk') this.recommend();
       else this.openCard(t.id, t.paint);
     }
     return this.target;

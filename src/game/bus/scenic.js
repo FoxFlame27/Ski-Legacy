@@ -407,7 +407,9 @@ export function shapeScenic() {
         for (const [d, sg, t] of best.values()) {
           const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
           const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
-          const e = Math.max(0, d - b), w = k * e, l = y - w, u = y + w; // (at REACH the band holds h: no step)
+          // (a further stretch's band loosens from 40 m out, gently (~1 m per m), so one coming into reach never steps
+          // the ground where the nearer ones pulled it away from h)
+          const e = Math.max(0, d - b), q = smoothstep(REACH * 0.92, REACH, d), w = k * e + Math.max(0, d - REACH * 0.4) + 3000 * q * q, l = y - w, u = y + w;
           lo = Math.max(lo, l); hi = Math.min(hi, u); soft = Math.min(soft, 0.2 * w + 0.01);
           BD.push((1 - f) / (e * e + 0.02), l, u); // (its inverse-distance weight: used where the bands disagree)
         }

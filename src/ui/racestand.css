@@ -45,8 +45,7 @@
 .rs-stamp { position: static; align-self: flex-start; transform: rotate(-2deg); font-size: calc(var(--u) * 16); }
 .rs-fun p { margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font: 600 max(11px, calc(var(--u) * 13))/1.35 var(--ui); color: #44506a; }
 .rs-card .jb-acts { flex-direction: row; gap: calc(var(--u) * 14); margin-top: auto; padding-top: calc(var(--u) * 6); }
-.rs-card .jb-acts .jb-btn { flex: 1 1 0; min-width: 0; }
-.rs-card .jb-acts .jb-btn span { overflow: hidden; text-overflow: clip; }
+.rs-card .jb-acts .jb-btn { flex: 1 0 auto; width: auto; } /* (each as wide as its label at least: no text past its stroke) */
 
 @media (max-width: 720px) {
   .rs-cork { flex-direction: column; overflow-y: auto; }

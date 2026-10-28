@@ -1,6 +1,7 @@
 // The CAR RENTAL configurator (src/game/carrental.js), in the ski shop's outfit designer style (ui/outfitshop.js: white
-// brush paper, blue italic condensed lettering, red accents, the live 3D preview to the right): step by step, CAR ·
-// PAINT · WHEELS · PLATE · SUMMARY, then RENT (the cabin keeps its factory trim). Every choice shows at once on the
+// brush paper, blue italic condensed lettering, red accents, the live 3D preview to the right): step by step, PAINT ·
+// WHEELS · PLATE · SUMMARY, then RENT (the cabin keeps its factory trim). The car is the one you opened it at (E at
+// it, or the one the clerk sent you to): no switching models in here. Every choice shows at once on the
 // real car on its showroom turntable (the camera swings round to it; drag to turn). Keyboard + mouse:
 // left / right a step, up / down a choice, Enter next (RENT on the summary), Esc closes; on the plate you type.
 //   open({ cars: [{ id, label, kind, price, length }], cfg, current: cfg | null, money, cost(cfg) -> { base, extras, total },
@@ -11,7 +12,7 @@ import { brushSVG, brushClip, esc } from './menu.js';
 import { PAINTS, RIMS, FINISH, PLATE_COST, paintOf, rimOf, cleanPlate, randomPlate } from '../game/carconfig.js';
 
 const STEPS = [
-  { id: 'car', label: 'CAR', one: 'THE CAR' }, { id: 'paint', label: 'PAINT', one: 'PAINT' },
+  { id: 'paint', label: 'PAINT', one: 'PAINT' },
   { id: 'rims', label: 'WHEELS', one: 'WHEELS' }, { id: 'plate', label: 'PLATE', one: 'NUMBER PLATE' }, { id: 'sum', label: 'SUMMARY', one: 'YOUR CAR' },
 ];
 const KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyS', 'KeyA', 'KeyD', 'Enter', 'NumpadEnter', 'Escape', 'Tab']);
@@ -59,7 +60,6 @@ export class CarRentalUI {
   // ---------------------------------------------------------------- the choices of a step: { id, ...row } and which is on
   rows() {
     const v = this.view, s = STEPS[this.step].id, c = this.cfg;
-    if (s === 'car') return { list: v.cars.map((o) => ({ id: o.id, name: o.label, sub: `${o.kind} · ${o.length.toFixed(1)} m`, price: money(o.price), sw: `<i class="os-sw cr-sw-car" style="--c:${css(paintOf(c.paint).hex)}"></i>`, tag: v.current?.id === o.id ? 'IN THE YARD' : '' })), on: c.id, key: 'id' };
     if (s === 'paint') return { list: PAINTS.map((p) => ({ id: p.id, name: p.label, sub: FINISH[p.finish].label, price: plus(FINISH[p.finish].cost), sw: `<i class="os-sw cr-sw-paint ${p.finish}" style="--c:${css(p.hex)}"></i>`, group: FINISH[p.finish].label })), on: c.paint, key: 'paint' };
     if (s === 'rims') return { list: RIMS.map((r) => ({ id: r.id, name: r.label, sub: r.id === 'orig' ? "The car's own alloys" : 'Painted alloys, tyres stay black', price: plus(r.cost), sw: `<i class="os-sw cr-sw-rim" style="--c:${r.id === 'orig' ? '#c9ced4' : css(r.hex)}"></i>` })), on: c.rims, key: 'rims' };
     return null;
@@ -170,12 +170,12 @@ export class CarRentalUI {
     } else {
       // the summary: every choice and what it costs
       const car = v.cars.find((o) => o.id === c.id), p = paintOf(c.paint), w = rimOf(c.rims), cost = v.cost(c);
-      const line = (k, name, price, sw = '') => `<div class="cr-sum-row" data-go="${k}">${sw}<span><small>${STEPS[k].label}</small><b>${esc(name)}</b></span><em>${esc(price)}</em></div>`;
+      const line = (k, name, price, sw = '') => `<div class="cr-sum-row"${k >= 0 ? ` data-go="${k}"` : ' data-fixed'}>${sw}<span><small>${k >= 0 ? STEPS[k].label : 'CAR'}</small><b>${esc(name)}</b></span><em>${esc(price)}</em></div>`;
       list.innerHTML = `<div class="cr-sum paper" style="--clip:${brushClip(733, 4, 3)}">
-          ${line(0, car.label, money(car.price))}
-          ${line(1, `${p.label} · ${FINISH[p.finish].label}`, plus(FINISH[p.finish].cost), `<i class="os-sw cr-sw-paint ${p.finish}" style="--c:${css(p.hex)}"></i>`)}
-          ${line(2, w.label, plus(w.cost))}
-          ${line(3, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
+          ${line(-1, car.label, money(car.price))}
+          ${line(0, `${p.label} · ${FINISH[p.finish].label}`, plus(FINISH[p.finish].cost), `<i class="os-sw cr-sw-paint ${p.finish}" style="--c:${css(p.hex)}"></i>`)}
+          ${line(1, w.label, plus(w.cost))}
+          ${line(2, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
           <div class="cr-sum-tot"><span>TOTAL</span><b>${money(cost.total)}</b></div>
           <ul class="cr-terms"><li>Waits in the yard out front · E to drive</li><li>One car at a time: renting another returns yours</li><li>Wreck it and it costs <b>$1,000</b> · the tow truck fetches it</li></ul>
         </div>`;
@@ -189,12 +189,13 @@ export class CarRentalUI {
     const car = v.cars.find((o) => o.id === c.id);
     const same = v.current && ['id', 'paint', 'rims', 'plate'].every((k) => v.current[k] === c[k]);
     const broke = last && v.money < cost.total;
-    const title = { car: car.label, paint: paintOf(c.paint).label, rims: rimOf(c.rims).label, plate: c.plate, sum: car.label }[s.id];
-    const label = last ? (same ? 'ALREADY YOURS' : broke ? 'NOT ENOUGH MONEY' : `RENT · ${money(cost.total)}`) : `NEXT · ${STEPS[this.step + 1].label}`;
+    const title = { paint: paintOf(c.paint).label, rims: rimOf(c.rims).label, plate: c.plate, sum: car.label }[s.id];
+    // (the label: one short word, the step it leads to small underneath; RENT with its price)
+    const label = last ? (same ? 'ALREADY YOURS' : broke ? 'NOT ENOUGH MONEY' : `RENT · ${money(cost.total)}`) : `NEXT<small>${STEPS[this.step + 1].label}</small>`;
     const ready = !(last && (same || broke));
     const det = this.el.querySelector('.cr-detail');
     det.innerHTML = `
-      <div class="os-kicker">STEP ${this.step + 1} OF ${STEPS.length} · ${s.one}</div>
+      <div class="os-kicker">${esc(car.label.toUpperCase())} · STEP ${this.step + 1} OF ${STEPS.length} · ${s.one}</div>
       <div class="os-title">${esc(title)}</div>
       <div class="cr-bill">
         <span class="cr-bill-l"><small>${esc(car.label)} ${money(cost.base)}${cost.extras ? ` · extras ${money(cost.extras)}` : ''}</small><b>${money(cost.total)}</b></span>
@@ -202,7 +203,7 @@ export class CarRentalUI {
       </div>
       <div class="os-actrow cr-actrow">
         ${this.step ? `<button class="brush-btn mid cr-back" tabindex="-1">${brushSVG(379, 120, 74, { fill: '#dfe7fb' })}<span>BACK</span></button>` : ''}
-        <button class="brush-btn mid os-act${ready ? ' ready' : ''}" tabindex="-1" ${last && same ? 'disabled' : ''}>${brushSVG(377, 300, 74, { fill: ready ? (last ? '#c8261c' : '#1546c8') : '#dfe7fb' })}<span>${label}</span></button>
+        <button class="brush-btn mid os-act${ready ? ' ready' : ''}" tabindex="-1" ${last && same ? 'disabled' : ''}>${brushSVG(377, 300, 74, { fill: ready ? (last ? '#c8261c' : '#1546c8') : '#dfe7fb' })}<span class="${last ? '' : 'cr-next'}">${label}</span></button>
       </div>`;
     det.querySelector('.os-act').addEventListener('click', () => (last ? this.rent() : this.next()));
     det.querySelector('.cr-back')?.addEventListener('click', () => this.go(this.step - 1));

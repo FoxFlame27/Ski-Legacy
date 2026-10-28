@@ -269,11 +269,13 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .menu-col { display: flex; flex-direction: column; align-items: flex-start; gap: calc(var(--u) * 6); }
 
 /* white paint-stroke buttons with blue lettering (the stroke itself is an inline SVG) */
-.brush-btn { position: relative; display: block; flex: none; width: calc(var(--u) * 360); height: calc(var(--u) * 82); border: 0; padding: 0; background: none; cursor: pointer; text-align: left; color: var(--blue);
+/* (every brush button sizes to its label: the min-width is the stroke's usual length, a longer label stretches the
+   stroke; the label's right padding keeps it clear of the bristle tail) */
+.brush-btn { position: relative; display: block; flex: none; width: max-content; min-width: calc(var(--u) * 360); max-width: 100%; height: calc(var(--u) * 82); border: 0; padding: 0; background: none; cursor: pointer; text-align: left; color: var(--blue);
   filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 14) rgba(0, 0, 0, 0.25)); transition: transform 0.18s cubic-bezier(.2,.9,.2,1); }
 .brush-btn .brush { position: absolute; inset: 0; width: 100%; height: 100%; transform-origin: left center; transition: transform 0.25s cubic-bezier(.2,.9,.2,1);
   animation: brushIn 0.55s cubic-bezier(.2,.9,.2,1) backwards; animation-delay: inherit; pointer-events: none; }
-.brush-btn > span { position: relative; display: block; padding-left: calc(var(--u) * 46); font: italic 700 calc(var(--u) * 40)/calc(var(--u) * 82) var(--num); letter-spacing: 0.06em; color: var(--blue);
+.brush-btn > span { position: relative; display: block; padding-left: calc(var(--u) * 46); padding-right: calc(var(--u) * 66); font: italic 700 calc(var(--u) * 40)/calc(var(--u) * 82) var(--num); letter-spacing: 0.06em; color: var(--blue);
   white-space: nowrap; animation: fadeIn 0.5s backwards; animation-delay: inherit; pointer-events: none; }
 .brush-btn::after { content: ''; position: absolute; left: calc(var(--u) * -16); top: 30%; bottom: 30%; width: calc(var(--u) * 6); background: var(--red); transform: scaleY(0); transition: transform 0.2s cubic-bezier(.2,.9,.2,1); }
 .brush-btn.is-focus { transform: translateX(calc(var(--u) * 14)) rotate(-1deg); }
@@ -281,13 +283,13 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .brush-btn.is-focus::after { transform: scaleY(1); }
 .brush-btn:active { transform: translateX(calc(var(--u) * 14)) scale(0.98); }
 .brush-btn[disabled] { opacity: 0.55; cursor: default; filter: grayscale(0.4); }
-.brush-btn.big { width: calc(var(--u) * 430); height: calc(var(--u) * 100); }
-.brush-btn.big > span { font-size: calc(var(--u) * 54); line-height: calc(var(--u) * 100); }
-.brush-btn.mid { width: calc(var(--u) * 300); height: calc(var(--u) * 74); }
-.brush-btn.mid > span { font-size: calc(var(--u) * 34); line-height: calc(var(--u) * 74); padding-left: calc(var(--u) * 40); }
-.brush-btn.small { width: calc(var(--u) * 250); height: calc(var(--u) * 62); margin-top: calc(var(--u) * 10); }
-.brush-btn.small > span { font-size: calc(var(--u) * 28); line-height: calc(var(--u) * 62); padding-left: calc(var(--u) * 38); }
-.brush-btn.wide { width: calc(var(--u) * 500); }
+.brush-btn.big { min-width: calc(var(--u) * 430); height: calc(var(--u) * 100); }
+.brush-btn.big > span { padding-right: calc(var(--u) * 80); font-size: calc(var(--u) * 54); line-height: calc(var(--u) * 100); }
+.brush-btn.mid { min-width: calc(var(--u) * 300); height: calc(var(--u) * 74); }
+.brush-btn.mid > span { font-size: calc(var(--u) * 34); line-height: calc(var(--u) * 74); padding-left: calc(var(--u) * 40); padding-right: calc(var(--u) * 60); }
+.brush-btn.small { min-width: calc(var(--u) * 250); height: calc(var(--u) * 62); margin-top: calc(var(--u) * 10); }
+.brush-btn.small > span { font-size: calc(var(--u) * 28); line-height: calc(var(--u) * 62); padding-left: calc(var(--u) * 38); padding-right: calc(var(--u) * 50); }
+.brush-btn.wide { min-width: calc(var(--u) * 500); }
 .menu-col.compact .brush-btn { height: calc(var(--u) * 70); }
 .menu-col.compact .brush-btn > span { font-size: calc(var(--u) * 36); line-height: calc(var(--u) * 70); }
 .menu-col.compact .brush-btn.big { height: calc(var(--u) * 88); }
@@ -376,7 +378,7 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .seg-brush button.on::before { background: var(--blue); }
 /* primary + BACK side by side (the gap leaves room for the focus nudge: 14u + 5% stroke stretch) */
 .setup-actions, .sc-actions { display: flex; align-items: center; gap: calc(var(--u) * 38); margin-top: calc(var(--u) * 24); }
-.setup-actions .brush-btn.small, .sc-actions .brush-btn.small { width: calc(var(--u) * 200); margin-top: 0; }
+.setup-actions .brush-btn.small, .sc-actions .brush-btn.small { min-width: calc(var(--u) * 200); margin-top: 0; }
 .setup-actions .brush-btn.small > span, .sc-actions .brush-btn.small > span { padding-left: calc(var(--u) * 34); }
 .course-detail { flex: none; width: calc(var(--u) * 470); margin-top: calc(var(--u) * 26); padding: calc(var(--u) * 26) calc(var(--u) * 34) calc(var(--u) * 28); color: var(--blue);
   filter: drop-shadow(0 calc(var(--u) * 10) calc(var(--u) * 24) rgba(0, 14, 44, 0.35)); animation: riseIn 0.55s cubic-bezier(.2,.9,.2,1) backwards; }
@@ -733,8 +735,8 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .rr-table.big .rr-t { font-size: calc(var(--u) * 21); }
 .rr-table.big .rr-tr.me::before { inset: calc(var(--u) * 1) calc(var(--u) * -8); }
 .rr-actions { position: relative; display: flex; justify-content: center; gap: calc(var(--u) * 18); margin-top: calc(var(--u) * 40); animation: fadeIn 0.5s 1s backwards; }
-.rr-btn { width: calc(var(--u) * 270); height: calc(var(--u) * 74); }
-.rr-btn > span { display: flex; align-items: center; gap: calc(var(--u) * 14); padding-left: calc(var(--u) * 40); font-size: calc(var(--u) * 34); line-height: calc(var(--u) * 74); }
+.rr-btn { min-width: calc(var(--u) * 270); height: calc(var(--u) * 74); }
+.rr-btn > span { display: flex; align-items: center; gap: calc(var(--u) * 14); padding-left: calc(var(--u) * 40); padding-right: calc(var(--u) * 60); font-size: calc(var(--u) * 34); line-height: calc(var(--u) * 74); }
 .rr-btn .kc { border-color: rgba(21, 70, 200, 0.45); color: var(--blue); }
 
 /* =================== TRANSITIONS =================== */

@@ -409,6 +409,33 @@ export class CarRentalRoom {
     if (models.potted_plant) for (const [px, pz] of [[ROOM.W / 2 - 0.55, lz - 1.75], [ROOM.W / 2 - 0.55, ROOM.D / 2 - 0.7]]) { const p = fitModel(models.potted_plant, { size: 1.5, axis: 'y' }); p.position.set(px, 0, pz); p.traverse((o) => { if (o.isMesh) o.castShadow = true; }); S.add(p); this.obstacles.push({ x: px, z: pz, r: 0.45 }); }
   }
 
+  // ------------------------------------------------------------------ the clerk's tip: a marker over that car
+  /** Show the way to car `id` (null: off): a gold arrow bobbing over it and a glowing ring round it. */
+  guide(id) {
+    if (!this.marker) {
+      const g = new THREE.Group(), gold = new THREE.MeshBasicMaterial({ color: 0xffc83a, toneMapped: false });
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.6, 24), gold); cone.rotation.x = Math.PI; cone.position.y = 0.3;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.45, 16), gold); stem.position.y = 0.82;
+      const arrow = new THREE.Group(); arrow.add(cone, stem); g.add(arrow);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(2.5, 0.05, 8, 96), new THREE.MeshBasicMaterial({ color: 0xffc83a, transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false }));
+      ring.rotation.x = Math.PI / 2; g.add(ring);
+      g.visible = false; this.scene.add(g);
+      this.marker = { g, arrow, ring, t: 0 };
+    }
+    const T = id ? this.tables.find((o) => o.id === id) : null, M = this.marker;
+    M.table = T; M.t = 0; M.g.visible = !!T;
+    if (T) { M.g.position.set(T.x, (T.y || 0) + 0.2, T.z); M.ring.scale.setScalar(T.up ? 1.05 : 1.12); M.arrow.position.y = (T.up ? 1.9 : 2.2); }
+  }
+  updateGuide(dt) {
+    const M = this.marker;
+    if (!M?.table) return;
+    M.t += dt;
+    if (M.t > 45) { this.guide(null); return; } // (it gives up after a while)
+    M.arrow.position.y = (M.table.up ? 1.9 : 2.2) + Math.sin(M.t * 3) * 0.12;
+    M.arrow.rotation.y += dt * 1.6;
+    M.ring.material.opacity = 0.55 + 0.35 * Math.sin(M.t * 4);
+  }
+
   // ------------------------------------------------------------------ the configurator (ui/carrental.js): your car, live
   /** Show cfg on that model's turntable (stopped), the camera on it for this step (interior: from the driver's seat). */
   configure(cfg, step) {
@@ -529,6 +556,7 @@ export class CarRentalRoom {
   /** Walk / look (input null: a panel is open); returns what the crosshair is on: { kind, id, paint, label } or null. */
   update(dt, input, sensitivity = 1, talking = false) {
     for (const t of this.tables) if (this.cfg?.table !== t) t.spin.rotation.y += t.speed * dt;
+    this.updateGuide(dt);
     if (this.cfg) { this.cfgCamera(dt); this.renderPortal(); return null; } // (configuring: the camera is on your car)
     if (this.camera.fov !== 70) { this.camera.fov = 70; this.camera.updateProjectionMatrix(); }
     // the clerk: idle behind the desk, turning to you when you come close or while you talk

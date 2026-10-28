@@ -427,9 +427,11 @@ export function carTemplate(gltf, length, name = '') {
     const geo = dequantize(o.geometry);
     geo.applyMatrix4(o.matrixWorld);
     for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+    const hadNormals = !!geo.attributes.normal;
     if (!geo.attributes.normal) geo.computeVertexNormals();
     if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     if (!geo.index) geo.setIndex([...Array(geo.attributes.position.count).keys()]);
+    if (hadNormals) orientWinding(geo, o.matrixWorld.determinant() < 0);
     fixNormals(geo); // (decimated meshes still carrying their high-res normals: re-shaded smooth, with crisp creases)
     const label = `${o.name} ${mats.map((m) => m.name).join(' ')}`;
     const add = (mat, g) => { const lbl = label + ' ' + (mat.name || ''); if (lampSplit(mat, g, lbl)) return; if (!groups.has(mat)) groups.set(mat, []); groups.get(mat).push(g); g.userData.label = lbl; };
@@ -854,6 +856,25 @@ function creased(pos, idx, nrm, carry = [], cos = CREASE, weld = 1e4) {
 
 // A mesh whose normals stray far from its faces (> 45 deg at one corner in 20: models decimated with their high-res
 // normals kept, which shade them in dark blotches and lumps) gets creased smooth normals of its own instead.
+// Baking a mirrored node (a negative scale: the Taycan's front fascia / bumper / grille mesh and its wheels are
+// mirrored in x) into world space turns its triangles' winding inside out: drawn single-sided, its outside faces were
+// culled and the car's nose showed through to the inside (the front looked cut off from the body). Each triangle is
+// wound to agree with the model's own (correctly transformed) vertex normals; a mirrored mesh is flipped first, so a
+// triangle with no clear normal keeps the mirror-corrected winding.
+function orientWinding(geo, mirrored) {
+  const P = geo.attributes.position.array, N = geo.attributes.normal.array, I = geo.index.array.slice();
+  let flips = 0;
+  for (let i = 0; i < I.length; i += 3) {
+    if (mirrored) { const t = I[i + 1]; I[i + 1] = I[i + 2]; I[i + 2] = t; }
+    const a = 3 * I[i], b = 3 * I[i + 1], c = 3 * I[i + 2];
+    const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+    const x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+    const d = x * (N[a] + N[b] + N[c]) + y * (N[a + 1] + N[b + 1] + N[c + 1]) + z * (N[a + 2] + N[b + 2] + N[c + 2]);
+    if (d < 0) { const t = I[i + 1]; I[i + 1] = I[i + 2]; I[i + 2] = t; flips++; }
+  }
+  if (mirrored || flips) geo.setIndex(new THREE.BufferAttribute(I, 1));
+}
+
 function fixNormals(geo) {
   const P = geo.attributes.position.array, N = geo.attributes.normal.array, I = geo.index.array;
   if (I.length < 60) return;

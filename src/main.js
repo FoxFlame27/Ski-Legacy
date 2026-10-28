@@ -1093,6 +1093,7 @@ function openMap() {
 }
 
 let paused = false;
+const heliRiding = () => !!heli && (heli.active || heli.rescuing || heli.state === 'boarding');
 function openPause() {
   paused = true;
   audio.setPaused(true); // the whole soundscape and the music pause with the game
@@ -1102,7 +1103,9 @@ function openPause() {
     onResume: closePause,
     onRestart: inSession ? () => { closePause(); modes.session?.restart?.(); } : undefined,
     // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
-    onVillage: !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
+    // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
+    // with its ambulance ride)
+    onVillage: heliRiding() ? undefined : !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: goToMainMenu,
     onQuit: () => { save.hour = freeRideHour() ?? env.hour; writeSave(); },
   });

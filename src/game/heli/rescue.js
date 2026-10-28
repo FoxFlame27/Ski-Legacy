@@ -4,7 +4,13 @@
 // flat open snow beside you (a fade, and you are in the cabin) or, over trees or a slope too steep to land on,
 // hovers above you and winches you up. Then it flies you home to the pad (a chase camera, the mouse looks
 // around, hold SPACE to speed it all up), lands, and you step out: "Back in Legacy Village".
-// Anything odd (no way in, taking far too long) falls back to the old fade (main.js wipeoutToVillage).
+// The ambulance waiting at the pad then drives you all the way to the medical centre (a chase camera, SPACE speeds
+// it up), where you are treated and released outside its door. (Oct 28, the user: "the ambulance doesn't work, you
+// just get teleported into the village": the whole rescue had a 150 s limit, so a long flight home (from a far peak,
+// slowed down to lose height on the glide path) ran out of time and fell back to the wipeout fade into the village;
+// and the ambulance drove for 10 s, then the screen cut to the medical centre.) Now only the wait for the pick-up
+// is timed; once you are aboard a watchdog only steps in when the helicopter or the ambulance stops getting closer,
+// and even then you come round at the medical centre (never the village plaza).
 //
 // heli.js drives it: start() from heli.rescueMe(), controls(dt) for the flight, after(dt, input) for the player,
 // the rope and the camera; cleanup() from heli.abort().
@@ -23,7 +29,8 @@ export const rescueFee = () => FEE_BASE + FEE_STEP * Math.max(0, save.rescues | 
 // The ambulance ride after a rescue (false: the rescue ends the old way, out at the pad, no fee).
 export const AMBULANCE_ON = true; // (checked in the game 2026-10-27)
 
-const LIMIT = 150;         // game seconds before giving up (the old fade instead)
+const LIMIT = 150;         // game seconds to pick you up before giving up (straight to the medical centre instead)
+const STUCK = 45;          // game seconds without getting any closer (helicopter home, ambulance) before giving up
 const FAR = 1500;          // farther than this, the helicopter starts the shot already on its way...
 const START_D = 800;       // ...this far out
 const HOVER_AGL = 12, HOVER_TREES = 27; // winch hover heights above the snow (m)
@@ -222,7 +229,14 @@ export class Rescue {
     this.fast = !!input?.down?.('Space');
     const sdt = dt * (this.fast ? 4 : 1); // (SPACE: the waits and the winch run faster too)
     this.t += sdt; this.pt += sdt;
-    if (this.t > LIMIT + 30) { this.fail(); return; }
+    // aboard: a watchdog on the progress toward the pad / the medical centre (no clock on the ride itself)
+    if (this.phase === 'home' || this.phase === 'ambulance') {
+      const P = this.phase === 'home' ? h.flight.pos : this.amb.pos(_w);
+      const tx = this.phase === 'home' ? h.home.x : this.amb.goal?.x ?? P.x, tz = this.phase === 'home' ? h.home.z : this.amb.goal?.z ?? P.z;
+      const d = Math.hypot(P.x - tx, P.z - tz);
+      if (this.watch?.phase !== this.phase || d < this.watch.best - 1) this.watch = { phase: this.phase, best: d, t: 0 };
+      else if ((this.watch.t += sdt) > STUCK) { this.fail(); return; }
+    }
     // the ambulance's lights and siren from the moment you land at the pad until the screen goes black
     if (this.amb?.ok && (this.phase === 'arrive' || this.phase === 'ambulance') && !this.sirenOff) {
       const amb = this.amb, cam = h.camera.position, a = amb.pos(_w);
@@ -231,20 +245,21 @@ export class Rescue {
       const vr = dist > 1 ? (amb.vx * (a.x - cam.x) + amb.vz * (a.z - cam.z)) / dist : 0; // moving away: +
       h.audio?.setSiren?.({ on: true, dist, doppler: clamp(343 / (343 + vr), 0.9, 1.1) });
     }
-    // in the ambulance: it drives off (about 10 s) while a shot by the pad watches it go
+    // in the ambulance: it drives you all the way to the medical centre's door (a shot by the pad watches it set
+    // off, then the camera follows it); there you are treated and released
     if (this.phase === 'ambulance') {
       const amb = this.amb;
-      amb.drive(sdt);
+      if (!this.leaving) amb.drive(sdt);
       amb.flash(0, nightK(h));
       amb.pos(this.ambSeat.pos); this.ambSeat.pos.y += 1.2;
       this.ambSeat.fwd.set(Math.sin(amb.yaw), 0, Math.cos(amb.yaw));
       p.pos.copy(this.ambSeat.pos);
       h.streamPos.copy(this.ambSeat.pos);
-      this.ambShot(dt);
-      if (this.pt > 10 && !this.leaving) this.homeByAmbulance();
+      if (this.pt < 4) this.ambShot(dt); else this.ambChase(dt);
+      if (amb.arrived && !this.leaving) this.homeByAmbulance();
       return;
     }
-    if (this.t > LIMIT) { this.fail(); return; }
+    if (!this.inCabin && !this.attached && this.t > LIMIT) { this.fail(); return; }
     // stay down in the snow until you are picked up (the fall's own get-up waits)
     if (!this.attached && !this.inCabin) {
       p.frozen = true;
@@ -431,45 +446,75 @@ export class Rescue {
     cam.updateProjectionMatrix();
   }
 
-  // the screen goes black; you come round in the village on foot, $50 poorer
+  // the camera follows the ambulance, behind and above it, the mouse never fighting it
+  ambChase(dt) {
+    const h = this.h, cam = h.camera, a = this.amb.pos(_u), fx = Math.sin(this.amb.yaw), fz = Math.cos(this.amb.yaw);
+    const want = _v.set(a.x - fx * 13, 0, a.z - fz * 13);
+    want.y = Math.max(a.y + 4.8, h.snow(want.x, want.z) + 2);
+    if (!this.chase) this.chase = this.shotAt ? this.shotAt.clone() : want.clone();
+    this.chase.lerp(want, 1 - Math.exp(-dt * 2.2));
+    cam.position.copy(this.chase);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(a.x + fx * 5, a.y + 1.3, a.z + fz * 5);
+    cam.near = 0.1;
+    cam.fov += (55 - cam.fov) * (1 - Math.exp(-dt * 2));
+    cam.updateProjectionMatrix();
+  }
+
+  // at the medical centre: carried in (a fade), treated, and released outside its door on foot, the bill paid
   homeByAmbulance() {
-    const h = this.h, p = h.player;
+    const h = this.h;
     this.leaving = true;
-    h.transition.fade(async () => {
-      this.sirenOff = true;
-      h.audio?.setSiren?.({ on: false });
-      p.seat = null;
-      // outside the medical centre's entrance (else the plaza)
-      const H = busRoads.hospital;
-      if (H) { const x = H.ex + H.dirx * 2, z = H.ez + H.dirz * 2, hd = Math.atan2(-H.dirx, -H.dirz); p.standUp(x, z, hd); p.camYaw = hd + Math.PI; } // (facing the door)
-      else { p.standUp(4, 34, Math.PI); p.camYaw = 0; }
-      if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
-      p.setSkisOn(false);
-      p.rig.root.visible = true; p.rig.gear.visible = true;
-      p.rig.setSkisVisible(p.hasSkis);
-      this.cleanup();
-      h.state = 'parked';
-      this.charge();
-    }).catch(() => this.fail());
+    h.transition.fade(async () => { this.release(); }).catch(() => { this.release(); });
+  }
+
+  // out of the medical centre's door (else beside the pad, where the rescue ended; never the village plaza)
+  release() {
+    const h = this.h, p = h.player;
+    this.sirenOff = true;
+    h.audio?.setSiren?.({ on: false });
+    p.seat = null;
+    h.model.clearRack();
+    const H = busRoads.hospital;
+    if (H) { const x = H.ex + H.dirx * 2, z = H.ez + H.dirz * 2, hd = Math.atan2(-H.dirx, -H.dirz); p.standUp(x, z, hd); p.camYaw = hd + Math.PI; } // (facing the door)
+    else { const a = h.home.yaw + Math.PI / 2, d = PAD_R + 3, x = h.home.x + Math.sin(a) * d, z = h.home.z + Math.cos(a) * d; p.standUp(x, z, Math.atan2(h.home.x - x, h.home.z - z)); }
+    if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
+    p.setSkisOn(false);
+    p.frozen = false;
+    p.rig.root.visible = true; p.rig.gear.visible = true;
+    p.rig.setSkisVisible(p.hasSkis);
+    this.cleanup();
+    h.state = 'parked';
+    this.charge(H ? 'Treated at the medical centre and released' : 'Rescue and ambulance');
   }
 
   // the ambulance fee, straight off your balance (it can go below zero: shops, lifts and passes then refuse)
-  charge() {
+  charge(what = 'Rescue and ambulance') {
     const h = this.h, fee = rescueFee();
     save.money -= fee;
     save.rescues = (save.rescues | 0) + 1;
     writeSave();
     h.hud.setMoney?.(save.money, -fee);
     h.audio?.play('cash');
-    h.hud.flash(`Rescue and ambulance · -$${fee} · the next one costs $${rescueFee()}`, 'bad', 4200);
+    h.hud.flash(`${what} · -$${fee} · the next one costs $${rescueFee()}`, 'bad', 4200);
   }
 
-  /** Give up: the old fade back to the village (main.js's fallback). */
+  /** Give up: a fade, and you come round at the medical centre (only the village fallback if even that fails). */
   fail() {
-    const fb = this.fallback;
+    const h = this.h, fb = this.fallback;
     this.fallback = null;
-    this.h.abort(); // (ends the rescue too, stands you up)
-    try { fb?.(); } catch (e) { console.warn('rescue fallback', e); }
+    if (this.failing) return;
+    this.failing = true;
+    const done = () => { this.failing = false; };
+    h.transition.fade(async () => {
+      try {
+        h.abort(); // (ends the rescue too, puts the helicopter back on its pad)
+        this.release();
+      } catch (e) {
+        console.warn('rescue fallback', e);
+        try { fb?.(); } catch (e2) { console.warn('rescue fallback', e2); }
+      }
+    }).then(done, done);
   }
 
   /** End the rescue (heli.abort / finish). */
@@ -481,6 +526,6 @@ export class Rescue {
     this.sirenOff = false;
     if (this.phase) p.frozen = false;
     this.phase = null; this.spot = null; this.attached = false; this.inCabin = false;
-    this.boarding = false; this.leaving = false; this.ropeLen = 0; this.shot.ready = false;
+    this.boarding = false; this.leaving = false; this.ropeLen = 0; this.shot.ready = false; this.watch = null; this.chase = null;
   }
 }

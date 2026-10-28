@@ -1,6 +1,6 @@
 // The ambulance that meets the rescue helicopter at the village pad (game/heli/rescue.js): it waits beside the
-// pad, you are carried in, and it drives off with its blue lights flashing (onto the bus road when one is near,
-// otherwise straight away from the pad over open snow) while a fixed shot by the pad pans after it.
+// pad, you are carried in, and it drives you with its blue lights flashing all the way to the medical centre's door
+// (along the bus road that passes nearest both when there is one); `arrived` once it has pulled up there.
 import * as THREE from 'three';
 import { fitModel } from '../../core/assets.js';
 import { busRoads, roadAt } from '../bus/roads.js';
@@ -41,13 +41,13 @@ export class Ambulance {
   park(x, z, yaw) {
     if (!this.ok) return;
     this.x = x; this.z = z; this.yaw = yaw; this.s = 0; this.v = 0; this.t = 0; this.vx = 0; this.vz = 0;
-    this.path = null;
+    this.path = null; this.goal = null; this.arrived = false;
     this.place();
     this.group.visible = true;
     for (const m of this.lights) m.emissiveIntensity = 0.15;
   }
 
-  hide() { this.group.visible = false; this.path = null; }
+  hide() { this.group.visible = false; this.path = null; this.goal = null; this.arrived = false; }
 
   // the way out: toward the medical centre (along the road that passes nearest both, else straight to it), else to
   // the nearest bus road within ~300 m and on along it, else straight out over the snow
@@ -70,10 +70,12 @@ export class Ambulance {
         const { r, is, ih } = best, step = ih >= is ? 2 : -2;
         for (let k = is; step > 0 ? k <= ih : k >= ih; k += step) pts.push([r.X[k], r.Z[k]]);
       }
-      pts.push([H.ex, H.ez]);
+      // pull up a few metres out from the entrance (the van stops beside the door, not in it)
+      pts.push([H.ex + (H.dirx || 0) * 6, H.ez + (H.dirz || 0) * 6]);
       const S = [0];
       for (let k = 1; k < pts.length; k++) S.push(S[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
       this.path = { pts, S, n: pts.length, length: S[S.length - 1] };
+      this.goal = { x: pts[pts.length - 1][0], z: pts[pts.length - 1][1] };
       return;
     }
     let best = null, bd = 300;
@@ -91,6 +93,7 @@ export class Ambulance {
     const S = [0];
     for (let k = 1; k < pts.length; k++) S.push(S[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
     this.path = { pts, S, n: pts.length, length: S[S.length - 1] };
+    this.goal = { x: pts[pts.length - 1][0], z: pts[pts.length - 1][1] };
   }
 
   // a point on the path at arc length s
@@ -105,13 +108,16 @@ export class Ambulance {
     return out;
   }
 
-  /** Drive on along the way out (dt already sped up with SPACE). */
+  /** Drive on toward the medical centre (dt already sped up with SPACE); stops at the end of the way, `arrived`. */
   drive(dt) {
     if (!this.ok) return;
     if (!this.path) this.plan();
     this.t += dt;
-    this.v = Math.min(14, this.v + dt * 3.2);
-    this.s += this.v * dt;
+    const left = this.path.length - this.s;
+    // up to 16 m/s, braking gently (2.5 m/s^2) to a stop at the door
+    this.v = Math.min(16, this.v + dt * 3.2, Math.sqrt(2 * 2.5 * Math.max(0, left - 0.5)) + 0.3);
+    this.s = Math.min(this.path.length, this.s + this.v * dt);
+    if (this.path.length - this.s < 0.6) { this.arrived = true; this.v = 0; }
     const a = this.at(this.s + 3, {}), b = this.at(Math.max(0, this.s - 3), {});
     const px = this.x, pz = this.z;
     this.x = (a.x + b.x) / 2; this.z = (a.z + b.z) / 2;

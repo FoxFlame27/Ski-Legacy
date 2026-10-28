@@ -154,7 +154,7 @@ function trimAccess(r) {
 // off, never wipe out) and the car's line colliders (busRoads.rails).
 const SEG = 4;                       // m of rail per instance (posts at 1 and 3 m)
 const RAIL_OFF = ROAD_HALF + 0.55;   // the back of the beam from the centre line (its waves reach 8 cm toward the road)
-const BEAM_LO = 0.45, BEAM_TOP = 0.76, WAVE = 0.083;
+const BEAM_LO = 0.38, BEAM_TOP = 0.68, WAVE = 0.083; // (the beam's centre ~0.53 m, its top ~0.68 m over the road edge)
 const RAIL_FAR = 400;                // m: a stretch further than this from the camera is not drawn
 const VILLAGE_R = 175;               // no guardrails in the village
 const MIN_RUN = 8;                   // road samples (~28 m)
@@ -257,8 +257,10 @@ function railRuns(r, mask, H) {
       if (!m[k]) continue;
       const [dx, dz] = roadDir(r, k), ox = dz * sg, oz = -dx * sg;
       const x = r.X[k] + ox * RAIL_OFF, z = r.Z[k] + oz * RAIL_OFF;
-      const ex = r.X[k] + ox * ROAD_HALF, ez = r.Z[k] + oz * ROAD_HALF, y = H(ex, ez);
-      if (Math.abs(H(x, z) - y) > 0.5 || Math.abs(y - r.Y[k]) > 1.2) continue;
+      const ex = r.X[k] + ox * ROAD_HALF, ez = r.Z[k] + oz * ROAD_HALF, ye = H(ex, ez), yg = H(x, z);
+      if (Math.abs(yg - ye) > 0.5 || Math.abs(ye - r.Y[k]) > 1.2) continue;
+      // (standing on the snow where its posts are, never above the road edge: a little lower where the bank falls away)
+      const y = Math.max(ye - 0.2, Math.min(ye, yg));
       if (laneDistance(x, z) < RAIL_OFF - 0.35) continue;
       pt[k] = { k, x, z, y, ox, oz };
     }
@@ -318,9 +320,9 @@ function railGeometry() {
   const parts = [beam];
   const mid = (BEAM_LO + BEAM_TOP) / 2;
   for (const px of [1, 3]) {
-    parts.push(box(0.1, 1.17, 0.008, px, 0.135, 0.205));            // post web (toward the road)
-    parts.push(box(0.008, 1.17, 0.055, px - 0.046, 0.135, 0.235));  // flanges
-    parts.push(box(0.008, 1.17, 0.055, px + 0.046, 0.135, 0.235));
+    parts.push(box(0.1, 1.09, 0.008, px, 0.095, 0.205));            // post web (toward the road)
+    parts.push(box(0.008, 1.09, 0.055, px - 0.046, 0.095, 0.235));  // flanges
+    parts.push(box(0.008, 1.09, 0.055, px + 0.046, 0.095, 0.235));
     parts.push(box(0.075, 0.19, 0.2, px, mid, 0.1));                // spacer block
   }
   return { galv: mergeGeometries(parts, false), refl: box(0.065, 0.07, 0.014, 1, mid, -0.006) };
@@ -417,7 +419,7 @@ class Guardrails {
       const ax = pts[a][0], az = pts[a][2], bx = pts[b][0], bz = pts[b][2], l = Math.hypot(bx - ax, bz - az) || 1;
       let top = -Infinity;
       for (let q = a; q <= b; q++) top = Math.max(top, pts[q][1] - pts[q][3]);
-      this.colliders.push({ x: (ax + bx) / 2, z: (az + bz) / 2, hw: 0.075, hd: l / 2 + 0.06, rot: -Math.atan2(bx - ax, bz - az), h: 0.9, top: top + BEAM_TOP, soft: true, rail: true });
+      this.colliders.push({ x: (ax + bx) / 2, z: (az + bz) / 2, hw: 0.075, hd: l / 2 + 0.06, rot: -Math.atan2(bx - ax, bz - az), h: BEAM_TOP + 0.05, top: top + BEAM_TOP, soft: true, rail: true });
       this.boxes++;
       a = b;
     }

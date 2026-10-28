@@ -70,7 +70,7 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
     if (!parts.has(key)) parts.set(key, []);
     parts.get(key).push(g);
   };
-  const H = (x, z) => world.height(x, z);
+  const H = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z)); // (on the drawn terrain)
   const box = (w, h, d, x = 0, y = 0, z = 0) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
   const merge = (list) => mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g)));
   // ---- pieces (local frame: +z = the way it faces)

@@ -2,13 +2,15 @@
 //   - the lay-bys on the climbs and the viewpoint car parks: benches facing the view, a panorama board, a low dry-stone
 //     wall (snow on its top) along the drop
 //   - every roundabout arm: a give-way triangle under a blue roundabout disc on a grey post, on the right of the way in
-//   - every roundabout island (the carved snow dome): a small spruce, a wooden fingerpost and a few boulders
+//   - every roundabout island (the carved snow dome): one of the game's own pines (the forest's Meshy model; none
+//     when the models are not loaded: no stand-in made in code), a wooden fingerpost and a few boulders
 // All of it merged by material into a handful of meshes (one draw call each), the walls also line colliders for your
 // car (busRoads.rails, as the guardrails) and soft boxes for everything else.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from '../../world/world.js';
 import { busRoads, roadAt, ROAD_HALF, laneDistance } from './roads.js';
+import { fitModel } from '../../core/assets.js';
 
 const rnd = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 
@@ -54,8 +56,9 @@ const boardTex = () => canvasTex(256, 128, (g, w, h) => {
   g.fillText('PANORAMA', w / 2, 102);
 });
 
-/** Build the scenic roads' props into `group`. colliders: the scene's soft colliders (optional). -> { meshes, walls } */
-export function buildScenicProps(group, { colliders = null } = {}) {
+/** Build the scenic roads' props into `group`. colliders: the scene's soft colliders (optional); models: the loaded
+ * GLTFs (the island pines). -> { meshes, walls } */
+export function buildScenicProps(group, { colliders = null, models = null } = {}) {
   const scenicRoads = busRoads.roads.filter((r) => r.scenic);
   if (!scenicRoads.length) return { meshes: 0, walls: 0 };
   const parts = new Map(); // material key -> [geometry...]
@@ -82,9 +85,6 @@ export function buildScenicProps(group, { colliders = null } = {}) {
   const discFace = new THREE.PlaneGeometry(0.7, 0.7).translate(0, 2.3, 0);
   const wallSeg = box(2.0, 0.62, 0.5, 0, 0.31, 0);
   const wallCap = box(2.02, 0.12, 0.56, 0, 0.66, 0);
-  const trunk = new THREE.CylinderGeometry(0.09, 0.14, 1.2, 7).translate(0, 0.6, 0);
-  const spruce = merge([new THREE.ConeGeometry(1.25, 1.9, 9).translate(0, 1.6, 0), new THREE.ConeGeometry(0.95, 1.6, 9).translate(0, 2.5, 0), new THREE.ConeGeometry(0.6, 1.3, 9).translate(0, 3.3, 0)]);
-  const spruceSnow = merge([new THREE.ConeGeometry(0.8, 0.5, 9).translate(0, 2.35, 0), new THREE.ConeGeometry(0.55, 0.45, 9).translate(0, 3.1, 0), new THREE.ConeGeometry(0.3, 0.4, 9).translate(0, 3.85, 0)]);
   const fingerPost = box(0.12, 2.4, 0.12, 0, 1.2, 0);
   const finger = box(1.0, 0.18, 0.04, 0.5, 0, 0);
   const boulder = new THREE.IcosahedronGeometry(0.6, 0);
@@ -169,11 +169,16 @@ export function buildScenicProps(group, { colliders = null } = {}) {
       put('roundBack', discFace, x, y, z, yaw + Math.PI);
       signs++;
     }
-    // the island: a spruce on the snow dome's crown, a fingerpost toward the arms, boulders round its foot
-    const cy = H(ring.x, ring.z);
-    put('bark', trunk, ring.x, cy - 0.1, ring.z);
-    put('spruce', spruce, ring.x, cy - 0.1, ring.z);
-    put('snow', spruceSnow, ring.x, cy - 0.1, ring.z);
+    // the island: one of the forest's pines on the snow dome's crown, a fingerpost toward the arms, boulders round its foot
+    const pine = models?.pine_tree || models?.pine_tree2;
+    if (pine) {
+      const t = fitModel(pine, { size: 6.5, axis: 'y' });
+      t.position.set(ring.x, H(ring.x, ring.z) - 0.15, ring.z);
+      t.rotation.y = rnd(ring.x + ring.z) * 6.28;
+      t.traverse((m) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+      t.name = 'scenic-island-pine';
+      group.add(t);
+    }
     const px = ring.x + 2.2, pz = ring.z - 1.4, py = H(px, pz) - 0.1;
     put('wood', fingerPost, px, py, pz);
     (ring.arms || []).forEach((a, k) => put('fingerBoard', finger, px, py + 2.05 - k * 0.24, pz, a.ang - Math.PI / 2));
@@ -198,8 +203,6 @@ export function buildScenicProps(group, { colliders = null } = {}) {
     roundBack: new THREE.MeshStandardMaterial({ map: rt, color: 0x5a5d62, alphaTest: 0.5, roughness: 0.6, metalness: 0.3 }),
     stone: new THREE.MeshStandardMaterial({ color: 0x77736c, roughness: 0.95, flatShading: true }),
     snow: new THREE.MeshStandardMaterial({ color: 0xf4f7fb, roughness: 0.9 }),
-    bark: new THREE.MeshStandardMaterial({ color: 0x4a3423, roughness: 0.9 }),
-    spruce: new THREE.MeshStandardMaterial({ color: 0x1f4a2e, roughness: 0.85, flatShading: true }),
     fingerBoard: new THREE.MeshStandardMaterial({ color: 0xe9c46a, roughness: 0.7 }),
     rock: new THREE.MeshStandardMaterial({ color: 0x6b6862, roughness: 0.95, flatShading: true }),
   };

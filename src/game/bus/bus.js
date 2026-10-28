@@ -739,7 +739,7 @@ export class BusLine {
     this.group = new THREE.Group();
     this.group.name = 'bus-roads';
     if (busRoads.roads.length) buildRoadMeshes(this.group, colliders); // (+ the guardrails' colliders)
-    if (busRoads.roads.length) { try { buildScenicProps(this.group, { colliders }); } catch (e) { console.warn('scenic props', e); } }
+    if (busRoads.roads.length) { try { buildScenicProps(this.group, { colliders, models }); } catch (e) { console.warn('scenic props', e); } }
     scene.add(this.group);
     this.bus = buildBus(models, makeRig);
     scene.add(this.bus.group);

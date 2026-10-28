@@ -126,11 +126,8 @@ export class ParkingLots {
         try { this.build(L, surf, paint, models, colliders); } catch (e) { console.warn('car park', L.name, e); }
       }
       scene.add(this.group);
-      // the Dacias: parked at the roadside in their lay-bys (never in a car park, never in the traffic)
-      for (const lb of busRoads.laybys || []) {
-        if (!models.car_dacia_duster) break;
-        try { this.roadsideCar(lb, models.car_dacia_duster, 4.34, colliders, cameraBlockers); } catch (e) { console.warn('roadside car', e); }
-      }
+      // (the Dacia no longer stands at the roadside lay-bys, Oct 28: it parks in the car parks and drives in the traffic
+      // like every other model, CAR_MODELS)
       // parked cars: the car parks well filled (about 55 % of the bays), every model in many paint colours, mostly
       // with a free bay between them; seeded, so it is the same every time. Shared geometry; the detailed car only
       // close to the camera, a one-mesh version further out (update())

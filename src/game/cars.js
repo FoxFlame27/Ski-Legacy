@@ -8,7 +8,7 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 import { fitModel, dequantize } from '../core/assets.js';
 
 /** Car models: [model name, real length (m)]. Add a car here (and to MODEL_LIST) and it parks / drives too. */
-export const CAR_MODELS = [['car_bmw_x3', 4.7], ['car_audi_rs6', 5.0], ['car_vw_golf_gti', 4.3], ['car_tesla_m3', 4.7]];
+export const CAR_MODELS = [['car_bmw_x3', 4.7], ['car_audi_rs6', 5.0], ['car_vw_golf_gti', 4.3], ['car_tesla_m3', 4.7], ['car_dacia_duster', 4.34]];
 
 const cache = new Map();
 

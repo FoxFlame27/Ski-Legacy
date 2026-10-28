@@ -594,5 +594,22 @@
     "preview": "01a17d61-377a-7175-99f9-723639e96106",
     "refine": "01a17d63-18a8-73d2-8602-3cb154334ac6",
     "done": true
-  }
+  },
+  "valley_tree": {
+    "preview": "01a1819a-93fa-74db-8dbd-46bb17cbdb29"
+  },
+  "bus_shelter": {
+    "preview": "01a1819a-93e0-7664-97b8-4ae7b876e56b"
+  },
+  "farmhouse": {
+    "preview": "01a1819a-9406-7057-9734-ca5be1e28f1b"
+  },
+  "car_rental": {
+    "preview": "01a1819a-c2d2-72fd-9afa-66e10763f15c"
+  },
+  "rental_desk": {},
+  "car_turntable": {},
+  "tool_cabinet": {},
+  "tyre_rack": {},
+  "lounge_sofa": {}
 }

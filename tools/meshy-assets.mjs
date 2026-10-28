@@ -581,4 +581,60 @@ export const ASSETS = [
     prompt: 'A realistic gloved left hand and lower arm, a black padded winter glove with a short gauntlet, the hand closed in a relaxed natural driving grip as if holding a round bar 3 cm thick that is not there, fingers curled around, thumb resting on top, the dark ski jacket sleeve on the forearm, the arm continuing back from the wrist, single isolated hand, no bar, no steering wheel, no ground, realistic game asset',
     texture: 'black padded ski glove with grey stitching, dark navy ski jacket sleeve, realistic PBR',
   },
+  // first-time intro (game/presentation/busintro.js): a green summer valley below the resort, no snow anywhere
+  {
+    name: 'valley_tree',
+    polycount: 30000,
+    prompt: 'A single large broadleaf deciduous tree standing alone in summer, like a European oak or beech: a thick brown trunk with rough bark, spreading branches, a full rounded crown of lush green leaves, no snow, no ground, no grass, realistic game asset',
+    texture: 'rough grey brown bark, dense vivid green summer leaves with natural light and dark variation, realistic PBR',
+  },
+  {
+    name: 'bus_shelter',
+    polycount: 30000,
+    prompt: 'A small rural alpine bus shelter standing alone: an open fronted wooden hut with a pitched dark shingle roof, three timber plank walls, a long wooden bench inside along the back wall, a small timetable board on the side wall, on a low concrete slab, no snow, no text, no people, realistic game asset',
+    texture: 'weathered warm brown larch planks, dark grey wooden shingle roof, light grey concrete slab, a small white timetable sheet, realistic PBR',
+  },
+  {
+    name: 'farmhouse',
+    polycount: 60000,
+    prompt: 'A traditional alpine farmhouse standing alone in summer: a white rendered stone ground floor with small windows and green shutters, a dark wooden upper floor with a long balcony full of red geraniums, a wide low pitched roof with deep overhangs and grey slate tiles, a stack of firewood by the door, no snow, no ground, no people, realistic game asset',
+    texture: 'white lime render, dark brown aged timber, grey slate roof tiles, green window shutters, red geranium flowers, realistic PBR',
+  },
+  // the Legacy Village car rental (game/carrental.js): the building, and the showroom props of its walk-in interior
+  {
+    name: 'car_rental',
+    polycount: 90000,
+    prompt: 'An alpine chalet style car rental garage building standing alone, single storey with a tall ground floor: a wide pitched timber roof with deep eaves covered in thick snow, warm larch timber and grey natural stone walls, a very large floor-to-ceiling glass showroom window across the left half of the front with a sleek modern car visible inside, a wide sectional steel garage door on the right half of the front, a glass entrance door between them under a small canopy, wall lamps, no text, no letters, no logos, no ground, no people, realistic architectural game asset',
+    texture: 'warm honey larch timber boards, grey natural stone base, dark grey metal roof edges with thick white snow, clear blue-tinted showroom glass with dark steel mullions, white sectional steel garage door, warm wall lamps, no lettering, realistic PBR',
+  },
+  {
+    name: 'rental_desk',
+    polycount: 30000,
+    prompt: 'A modern luxury car dealership reception desk standing alone, long curved front panel in white gloss with a warm oak wood top and an oak base strip, a slim computer monitor, a keyboard, a small card terminal, a tray of car keys and a small vase on top, no text, no logos, no chair, no ground, no people, realistic game asset',
+    texture: 'glossy white lacquer front panel, warm oak wood top, black monitor and keyboard, brushed steel details, realistic PBR',
+  },
+  {
+    name: 'car_turntable',
+    polycount: 12000,
+    prompt: 'A round car showroom display turntable platform standing alone: a low flat disc about five meters across and twenty centimeters high, a polished brushed aluminium rim with a thin glowing white LED ring, a dark grey anti-slip top surface with subtle radial grooves, completely empty, no car, no text, no ground, realistic game asset',
+    texture: 'polished brushed aluminium rim, glowing white LED strip, dark charcoal textured top surface, realistic PBR',
+  },
+  {
+    name: 'tool_cabinet',
+    polycount: 20000,
+    prompt: 'A professional red steel mechanic rolling tool cabinet standing alone, tall with many drawers with aluminium handles, a black work top with a few spanners and a socket set lying on it, a pegboard back panel with hanging tools, small black caster wheels, no text, no logos, no ground, realistic game asset',
+    texture: 'glossy red powder coated steel, brushed aluminium drawer handles, black rubber work top, chrome tools, realistic PBR',
+  },
+  {
+    name: 'tyre_rack',
+    polycount: 30000,
+    prompt: 'A dark grey steel tyre display rack standing alone with two shelves holding eight new black winter car tyres standing upright side by side, deep snow tread pattern visible, alloy wheel rims on some of them, no text, no logos, no ground, realistic game asset',
+    texture: 'black rubber tyres with deep winter tread, silver alloy rims, dark grey powder coated steel rack, realistic PBR',
+  },
+  {
+    name: 'lounge_sofa',
+    polycount: 20000,
+    prompt: 'A modern two seat lounge sofa standing alone in cognac brown leather with a low square silhouette, thin black metal legs, two cushions, no text, no ground, no people, realistic game asset',
+    texture: 'smooth cognac brown leather with fine stitching, black metal legs, realistic PBR',
+  },
 ];

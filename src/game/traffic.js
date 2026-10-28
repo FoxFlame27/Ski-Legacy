@@ -495,8 +495,11 @@ export class Traffic {
       box(g.x, g.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 30);
     }
     // the car you drive (its body, not just where you sit; stopped: by its footprint, it may be passed)
+    // (Oct 28, the user: "make it so other cars can crash into you": about one driver in ten isn't looking: on the
+    // road it never brakes for your car, and runs into it; the bash (drive.js) does the rest, both ways)
     const dv = this.you?.d;
-    if (dv) { if (Math.hypot(dv.vx || 0, dv.vz || 0) < 0.8) box(dv.x, dv.z, dv.yaw, dv.w / 2, dv.half, 32); else check(dv.x, dv.z, 32, (c.l + dv.half * 2) / 2 + 3); }
+    c.careless ??= Math.random() < 0.1;
+    if (dv && !(c.careless && c.mode === 'road')) { if (Math.hypot(dv.vx || 0, dv.vz || 0) < 0.8) box(dv.x, dv.z, dv.yaw, dv.w / 2, dv.half, 32); else check(dv.x, dv.z, 32, (c.l + dv.half * 2) / 2 + 3); }
     // the bus (its whole length: also when it stands across the way at a junction), the trains and a helicopter on
     // the road (trafficBlockers, at about the car's height)
     const line = this.skibus?.line, bus = line?.bus?.group;

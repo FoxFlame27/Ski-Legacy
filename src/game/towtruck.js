@@ -92,6 +92,25 @@ function keepRight(path) {
   });
 }
 
+// the cab roof in the truck's frame (g at the origin, unturned): down-rays along the middle over the front half find
+// the highest part (the cab: the bed and the crane are lower), its middle is where the lamps go; at(x): the roof's
+// height across it there (null off the model)
+function findRoof(g) {
+  g.updateMatrixWorld(true);
+  const ray = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0), o = new THREE.Vector3();
+  const hitY = (x, z) => { ray.set(o.set(x, 20, z), down); const h = ray.intersectObject(g, true).find((i) => i.object.isMesh); return h ? h.point.y : null; };
+  const zs = [];
+  for (let z = BED.z + 2.9 * S; z <= HALF_L; z += 0.05) { const y = hitY(0, z); if (y !== null) zs.push([z, y]); }
+  if (!zs.length) return null;
+  const top = Math.max(...zs.map((p) => p[1]));
+  // the roof's flat top: the samples within 6 cm of the highest (a run of them, not a single antenna / mirror)
+  const flat = zs.filter((p) => p[1] > top - 0.06);
+  if (flat.length < 4) { const sorted = zs.map((p) => p[1]).sort((a, b) => b - a); const y2 = sorted[Math.min(sorted.length - 1, 8)]; flat.splice(0, flat.length, ...zs.filter((p) => p[1] > y2 - 0.06)); }
+  const z = (Math.min(...flat.map((p) => p[0])) + Math.max(...flat.map((p) => p[0]))) / 2;
+  const y = hitY(0, z) ?? top;
+  return { z, y, at: (x) => hitY(x, z) };
+}
+
 export class TowTruck {
   /**
    * @param {object} o
@@ -124,12 +143,17 @@ export class TowTruck {
     // amber beacons on the cab roof (a pair) and their glow
     this.beaconMat = new THREE.MeshStandardMaterial({ color: 0xffa21a, emissive: 0xff8a00, emissiveIntensity: 0, roughness: 0.3, transparent: true, opacity: 0.92 });
     this.beacons = [];
-    const roofY = 2.44 * S, roofZ = HALF_L - 1.55 * S;
+    // (Oct 28, the user: "the lights on the towing machine are floating": the roof was a guessed constant; now it is
+    // found on the model itself: rays straight down onto the cab, the roof's highest flat stretch, each lamp sat on it)
+    const roof = gltf ? findRoof(this.g) : null;
+    const roofZ = roof ? roof.z : HALF_L - 1.55 * S;
+    const roofY = roof ? roof.y : 2.44 * S;
     for (const sx of [-0.62, 0.62]) {
+      const y = (roof && roof.at(sx)) ?? roofY;
       const base = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.05, 14), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 }));
-      base.position.set(sx, roofY + 0.025, roofZ);
+      base.position.set(sx, y + 0.02, roofZ);
       const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, 0.16, 14), this.beaconMat);
-      dome.position.set(sx, roofY + 0.13, roofZ);
+      dome.position.set(sx, y + 0.12, roofZ);
       this.g.add(base, dome);
       this.beacons.push(dome);
     }
@@ -196,17 +220,29 @@ export class TowTruck {
   follow(j, dt, vmax) {
     const P = j.path;
     while (j.k < P.length - 1 && Math.hypot(P[j.k].x - this.x, P[j.k].z - this.z) < LOOK) j.k++;
-    const tgt = P[j.k], end = P[P.length - 1];
+    const end = P[P.length - 1];
+    let tgt = P[j.k];
     const left = Math.hypot(end.x - this.x, end.z - this.z) + 0;
+    // overtaking (Oct 28, the user: "the towing truck gets stuck when there's too many cars because of the crash": the
+    // queue behind a wreck waited for the truck and the truck for the queue): held up 2 s, it pulls out into the other
+    // lane, beacons on, and goes past (oncoming traffic brakes for it: it's a traffic blocker), then back in
+    j.held = j.held || 0; j.pass = Math.max(0, (j.pass || 0) - dt);
+    if (j.pass > 0 && j.k < P.length - 2) {
+      const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+      tgt = { x: tgt.x + fz * LANE * 2, z: tgt.z - fx * LANE * 2 };
+    }
     const want = Math.atan2(tgt.x - this.x, tgt.z - this.z), err = wrapPi(want - this.yaw);
     let v = Math.min(vmax, j.k >= P.length - 1 ? Math.max(1.2, left * 0.9) : vmax);
     v *= clamp(1.15 - Math.abs(err) * 1.1, 0.25, 1);
-    // traffic just ahead in its lane: wait
-    for (const c of this.traffic?.cars || []) {
+    // traffic just ahead in its lane: wait (not while overtaking)
+    let blocked = false;
+    if (j.pass <= 0) for (const c of this.traffic?.cars || []) {
       if (c.mode === 'gone' || !c.g?.visible) continue;
       const dx = c.x - this.x, dz = c.z - this.z, f = dx * Math.sin(this.yaw) + dz * Math.cos(this.yaw), s = dx * Math.cos(this.yaw) - dz * Math.sin(this.yaw);
-      if (f > 0 && f < HALF_L + 7 && Math.abs(s) < 2.3) v = Math.min(v, Math.max(0, (f - HALF_L - 3) * 0.8));
+      if (f > 0 && f < HALF_L + 7 && Math.abs(s) < 2.3) { const cap = Math.max(0, (f - HALF_L - 3) * 0.8); if (cap < v) { v = cap; blocked = cap < 1; } }
     }
+    j.held = blocked ? j.held + dt : Math.max(0, j.held - dt * 2);
+    if (j.held > 2) { j.held = 0; j.pass = 7; }
     this.v += clamp(v - this.v, -6 * dt, 2.2 * dt);
     const rate = Math.max(0.25, Math.abs(this.v)) / (WHEELBASE / Math.tan(0.6)); // (max steering ~34 degrees)
     this.yaw = wrapPi(this.yaw + clamp(err, -rate * dt * 3, rate * dt * 3) * Math.min(1, Math.abs(this.v) / 1.5 + 0.35));

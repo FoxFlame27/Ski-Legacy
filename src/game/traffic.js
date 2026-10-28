@@ -15,6 +15,7 @@ import { busRoads, roadAt, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { CAR_MODELS, carTemplate, carInstance } from './cars.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
+import { carPath, linkPath, prepPath, followPath } from './carpath.js';
 
 const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 60, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
@@ -26,6 +27,7 @@ const EDGE = ROAD_HALF + 1, STUCK_T = 300;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _p = {}, _q = {}, _a = new THREE.Vector3(), _b = new THREE.Vector3(), _f = new THREE.Vector3();
+const TURN_LEAD = 7, OFF_TURN = 0.12; // (a car turning at a junction starts its arc this far before it)
 const BUS_HW = 1.3, BUS_HD = 6; // (the ski bus's footprint: bus.js BUS width 2.55, length 12)
 
 // ------------------------------------------------------------------ other vehicles no car drives through
@@ -151,7 +153,7 @@ export class Traffic {
       const s = END_KEEP + 10 + Math.random() * Math.max(1, r.length - 2 * END_KEEP - 20);
       roadAt(r, s, _p);
       if (!first && Math.hypot(_p.x - p.x, _p.z - p.z) < 220) continue;
-      c.mode = 'road'; c.road = r; c.s = s; c.dir = Math.random() < 0.5 ? 1 : -1; c.v = c.vmax * 0.7; c.path = null; c.off = 0; c.offT = 0; c.pass = null;
+      c.mode = 'road'; c.road = r; c.s = s; c.dir = Math.random() < 0.5 ? 1 : -1; c.v = c.vmax * 0.7; c.path = null; c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null;
       this.placeOnRoad(c, 0);
       return;
     }
@@ -161,7 +163,7 @@ export class Traffic {
   parkAt(c, lot, bay, wait) {
     if (c.bay && c.bay !== bay) c.bay.traffic = false;
     bay.traffic = true;
-    c.mode = 'parked'; c.lot = lot; c.bay = bay; c.wait = wait; c.v = 0; c.path = null; c.rev = false;
+    c.mode = 'parked'; c.lot = lot; c.bay = bay; c.wait = wait; c.v = 0; c.path = null; c.rev = false; c.lotSteer = 0;
     c.x = bay.x; c.z = bay.z; c.yaw = Math.atan2(bay.hx, bay.hz); c.y = world.height(c.x, c.z) + 0.03;
     this.pose(c, 0);
   }
@@ -198,7 +200,7 @@ export class Traffic {
   putOnRoad(c, r, s, dir, v = null) {
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
     c.mode = 'road'; c.road = r; c.s = clamp(s, 2, r.length - 2); c.dir = dir; c.v = v ?? c.vmax * 0.8; c.path = null; c.rev = false; c.nextJ = undefined; c.pause = 0;
-    c.off = 0; c.offT = 0; c.pass = null;
+    c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null;
     this.placeOnRoad(c, 0);
   }
   // riding the bus: a car or two ahead of it the same way (at a sensible gap), now and then one coming the other way
@@ -344,31 +346,45 @@ export class Traffic {
     const toEnd = Math.abs(end - c.s);
     const J = c.nextJ !== undefined ? c.nextJ : (c.nextJ = this.pickJunction(c));
     const toJ = J ? (J.s - c.s) * c.dir : Infinity;
-    if (J && toJ < 30) vt = Math.min(vt, 3 + toJ * 0.3);
+    if (J && toJ < 30) vt = Math.min(vt, 2.6 + Math.max(0, toJ - TURN_LEAD) * 0.3);
     // the end of a bus road is a bus stop (a dead end): no car goes in there, unless it turns off to a car park on the
     // way; it eases down and turns round (or, out of sight, leaves) well before the bus bay
     const toJ0 = J ? (J.s - c.s) * c.dir : Infinity, keepOut = !r.access && !(toJ0 <= toEnd + 0.5);
     if (keepOut && toEnd < END_KEEP + 45) vt = Math.min(vt, 1.5 + Math.max(0, toEnd - END_KEEP) * 0.3);
     if (keepOut && toEnd <= END_KEEP + 1) { this.deadEnd(c); return; }
     if (r.access && c.dir < 0) vt = Math.min(vt, 3.5 + toEnd * 0.15); // (slowing for the car park)
+    if (r.access && c.dir > 0) vt = Math.min(vt, 2.6 + Math.max(0, toEnd - TURN_LEAD) * 0.3); // (and for the junction)
     // a crash or a car stopped on the road ahead: round it (into the other lane, or up to 1 m beyond the plowed edge)
     // when there's room and nothing beside the road there (guardrail, tree, wall); else it waits behind it
     c.passT = (c.passT || 0) - dt;
     if (c.passT <= 0) { c.passT = 0.4; this.planPass(c); }
-    const off = c.off || 0, offT = c.offT || 0;
-    if (offT !== off) { const rate = clamp(0.35 * c.v, 0.5, 1.5) * dt; c.off = off + clamp(offT - off, -rate, rate); }
+    // (a lane change / swerve is steered: the body angled off the lane line (c.offQ, tan of the angle, at most 0.28),
+    // the angle turning only as it drives (up to OFF_TURN per metre, lateral acceleration <= 1.8: standing, nothing
+    // moves sideways), straightened out in time to arrive on the new line; it moves only where it points)
+    const off = c.off || 0, err = (c.offT || 0) - off, q = c.offQ || 0, k = Math.min(OFF_TURN, 1.8 / Math.max(1, c.v * c.v));
+    const turnBy = k * c.v * dt, qMax = Math.min(0.28, Math.sqrt(2 * k * Math.abs(err))); // (k: per metre, gentler at speed)
+    const qT = Math.abs(err) < 0.02 ? 0 : clamp(err * 0.5, -qMax, qMax);
+    c.offQ = q + clamp(qT - q, -turnBy, turnBy);
     if (c.pass) vt = Math.min(vt, 4.5);
     vt = Math.min(vt, this.clearance(c));
     const dv = vt - c.v;
     c.brake = dv < -0.5 ? clamp(-dv / 4, 0, 1) : 0;
     c.v = Math.max(0, c.v + clamp(dv, -6 * dt, 2.2 * dt));
     c.s = clamp(c.s + c.dir * c.v * dt, 0, r.length);
-    if (J && (J.s - c.s) * c.dir <= 0.5) {
+    c.off = (c.off || 0) + (c.offQ || 0) * c.v * dt; // (sideways only as far as it is angled: never crabbing)
+    if (J && (J.s - c.s) * c.dir <= TURN_LEAD) {
       c.nextJ = undefined;
-      // (the bay is booked here: no car drives in to find the car park full and turn in its entrance)
+      // (the bay is booked here: no car drives in to find the car park full and turn in its entrance); it turns in
+      // round an arc onto the access road's lane (link), never pivoting at the junction
       const bay = J.lot && this.entryBay(J.lot);
-      if (bay) { if (c.bay) c.bay.traffic = false; bay.traffic = true; c.bay = bay; c.road = J.access; c.s = J.access.length - 1; c.dir = -1; c.v = Math.min(c.v, 4); }
+      if (bay) { if (c.bay) c.bay.traffic = false; bay.traffic = true; c.bay = bay; this.link(c, J.access, J.access.length - 9, -1); this.manoeuvre(c, dt); return; }
     }
+    // up the access road to the junction: round onto the bus road, either way
+    if (r.access && c.dir > 0 && c.s >= r.length - TURN_LEAD) {
+      const jn = this.junctions.find((j) => j.access === r);
+      if (jn) { const d = Math.random() < 0.5 ? 1 : -1; this.link(c, jn.road, clamp(jn.s + d * 9, 2, jn.road.length - 2), d); this.manoeuvre(c, dt); return; }
+    }
+    if (r.access && c.dir < 0 && c.s <= 7.5) { this.enterLot(c); return; } // (in through the entrance, turning for the aisle)
     if (c.road === r && (c.dir > 0 ? c.s >= r.length - 0.5 : c.s <= 0.5)) {
       if (r.access && c.dir < 0) { this.enterLot(c); return; }
       if (r.access) {
@@ -385,7 +401,7 @@ export class Traffic {
     for (const j of this.junctions) {
       if (j.road !== c.road) continue;
       const ahead = (j.s - c.s) * c.dir;
-      if (ahead > 2 && (!best || ahead < (best.s - c.s) * c.dir)) best = j;
+      if (ahead > TURN_LEAD + 2 && (!best || ahead < (best.s - c.s) * c.dir)) best = j;
     }
     return best;
   }
@@ -523,8 +539,32 @@ export class Traffic {
     const rx = -tz / tl, rz = tx / tl, w = LANE + (c.off || 0); // (the lane line, or swerving round something)
     _a.set(_p.x + rx * w, _p.y, _p.z + rz * w); _b.set(_q.x + rx * w, _q.y, _q.z + rz * w);
     c.x = (_a.x + _b.x) / 2; c.z = (_a.z + _b.z) / 2; c.y = (_a.y + _b.y) / 2 + 0.02;
-    c.yaw = Math.atan2(_a.x - _b.x, _a.z - _b.z);
+    // (the body points where it goes: along the road, turned toward a lane change by its lateral speed)
+    const ux = _a.x - _b.x, uz = _a.z - _b.z, ul = Math.hypot(ux, uz) || 1, q = c.offQ || 0;
+    c.yaw = Math.atan2(ux / ul + rx * q, uz / ul + rz * q);
     this.pose(c, Math.atan2(_b.y - _a.y, Math.hypot(_a.x - _b.x, _a.z - _b.z)));
+  }
+  // onto road r (at s, way dir) from wherever a manoeuvre left it: no jump; what is left over (beside the lane line,
+  // a slightly different heading) becomes a lane offset and a lateral speed it then steers out
+  toRoad(c, r, s, dir, v) {
+    const x = c.x, z = c.z, yaw = c.yaw;
+    c.mode = 'road'; c.road = r; c.dir = dir; c.v = v; c.path = null; c.rev = false; c.nextJ = undefined; c.pass = null; c.offT = 0; c.pause = 0;
+    roadAt(r, clamp(s, 1, r.length - 1), _p);
+    const tx = _p.dx * dir, tz = _p.dz * dir, dx = x - _p.x, dz = z - _p.z;
+    c.s = clamp(s + (dx * tx + dz * tz) * dir, 1, r.length - 1);
+    c.off = clamp(dx * -tz + dz * tx - LANE, -3.5, 1.8);
+    const e = wrapPi(yaw - Math.atan2(tx, tz)); // (+ = turned left of the road: angled leftward)
+    c.offQ = clamp(-Math.tan(e), -1, 1);
+    this.placeOnRoad(c, 0);
+  }
+  // a turn from one road onto another (a junction): an arc from where it is, as it heads, onto r's lane at s (way dir)
+  link(c, r, s, dir) {
+    roadAt(r, s, _p);
+    const hx = _p.dx * dir, hz = _p.dz * dir, x = _p.x - hz * LANE, z = _p.z + hx * LANE;
+    const P = linkPath({ x: c.x, z: c.z }, { x: Math.sin(c.yaw), z: Math.cos(c.yaw) }, { x, z }, { x: hx, z: hz }, 9);
+    for (const k of [2, 4, 6, 8]) P.push({ x: x + hx * k, z: z + hz * k }); // (a straight run-out: it settles on the lane)
+    c.mode = 'lot'; c.lot = null; c.rev = false; c.pause = 0; c.next = 'road'; c.link = { r, s: s + dir * 8, dir };
+    c.path = prepPath(P, { vMax: 6, vEnd: 3 }); c.pi = 0; c.lotSteer = c.steer || 0; c.off = 0; c.offT = 0; c.offQ = 0;
   }
 
   // a train keeps its timetable: a car on its line (left there, knocked onto it) is shoved off to the side, the car
@@ -590,7 +630,7 @@ export class Traffic {
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
     c.mode = 'knocked'; c.path = null; c.rev = false; c.v = 0; c.brake = 1; c.pause = 0; c.nextJ = undefined;
     c.kvx = vx; c.kvz = vz; c.kw = clamp(w, -3, 3);
-    c.off = 0; c.offT = 0; c.pass = null; c.wd = { x: c.x, z: c.z, t: 0 }; // (it rests where it stops: the 5-minute watchdog)
+    c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null; c.wd = { x: c.x, z: c.z, t: 0 }; // (it rests where it stops: the 5-minute watchdog)
   }
   slide(c, dt) {
     const sp = Math.hypot(c.kvx, c.kvz);
@@ -625,7 +665,7 @@ export class Traffic {
     c.kvx = 0; c.kvz = 0; c.kw = 0; c.sinkT = undefined;
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
     c.mode = 'gone'; c.wait = 1 + Math.random() * 4; c.g.visible = false; c.collider.x = 1e9; c.path = null; c.rev = false;
-    c.off = 0; c.offT = 0; c.pass = null; c.wd = null;
+    c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null; c.wd = null; c.link = null;
   }
   // stuck for 5 minutes: taken off, and back parked in a free bay of a car park out of your sight (it drives off from
   // there later); none free: it comes back a moment later the usual way (spawn)
@@ -694,40 +734,31 @@ export class Traffic {
       for (const t of [0.5, 1.0, Math.PI / 2]) c.path.push(this.lotPt(lot, b.u + side * R * (1 - Math.cos(t)), vA + sB * R * (1 - Math.sin(t))));
       c.path.push(this.lotPt(lot, clamp(e.u, -lot.hw + 3, lot.hw - 3), vA));
     }
-    c.path.push(this.lotPt(lot, e.u, e.v), { x: lot.ex + lot.dirx * 2, z: lot.ez + lot.dirz * 2 });
+    c.path.push(this.lotPt(lot, e.u, e.v));
+    const acc = this.junctions.find((j) => j.lot === lot)?.access;
+    if (acc) for (const s of [9, 12]) { roadAt(acc, s, _p); c.path.push({ x: _p.x - _p.dz * LANE, z: _p.z + _p.dx * LANE }); }
+    else c.path.push({ x: lot.ex + lot.dirx * 2, z: lot.ez + lot.dirz * 2 });
     c.pi = 1;
   }
   // follow the waypoints at walking pace with a smoothly turning steering wheel (pure pursuit, 3.5 m ahead)
   manoeuvre(c, dt) {
     if (c.pause > 0) { c.pause -= dt; c.brake = 1; return; }
-    const P = c.path;
-    // the look-ahead point along the path
-    while (c.pi < P.length - 1 && Math.hypot(P[c.pi].x - c.x, P[c.pi].z - c.z) < 3.0) c.pi++;
-    const last = P[P.length - 1], toEnd = Math.hypot(last.x - c.x, last.z - c.z);
-    if (c.pi >= P.length - 1 && toEnd < 0.35) { this.endManoeuvre(c); return; }
-    const tgt = P[c.pi];
-    const fwd = c.rev ? -1 : 1, hx = Math.sin(c.yaw) * fwd, hz = Math.cos(c.yaw) * fwd;
-    const dx = tgt.x - c.x, dz = tgt.z - c.z, ld = Math.hypot(dx, dz) || 1;
-    const alpha = Math.atan2(dx * hz - dz * hx, dx * hx + dz * hz); // angle to the target (+ = left of the travel direction)
-    const want = clamp(Math.atan2(2 * c.wheelBase * Math.sin(alpha), Math.max(2.5, ld)), -0.6, 0.6);
-    c.lotSteer = (c.lotSteer || 0) + clamp(want - (c.lotSteer || 0), -dt * 1.2, dt * 1.2);
-    // slow: 10-15 km/h forward, walking pace in reverse, easing to a stop at the end (and for anything in the way)
-    let vt = c.rev ? 1.4 : 3.6;
-    vt = Math.min(vt, Math.sqrt(Math.max(0, 2 * 1.2 * (toEnd - 0.25))) + 0.15, this.clearance(c));
-    c.v += clamp(vt - c.v, -3 * dt, 1.2 * dt);
-    c.brake = vt < c.v - 0.2 ? 1 : 0;
-    const yawRate = (c.v / c.wheelBase) * Math.tan(c.lotSteer) * fwd;
-    c.yaw = wrapPi(c.yaw + yawRate * dt);
-    c.x += Math.sin(c.yaw) * c.v * dt * fwd; c.z += Math.cos(c.yaw) * c.v * dt * fwd;
+    // (waypoints -> corners rounded into arcs it can drive, points already behind it dropped, slower in the bends)
+    if (!c.path.dense) { c.path = carPath(c, c.path, { r: c.rev ? 4 : 5, vMax: c.rev ? 1.4 : 3.6, vEnd: c.next === 'out' || c.next === 'turn3' ? 2 : 0 }); c.pi = 0; }
+    // slow: 10-15 km/h forward, walking pace in reverse, easing to a stop at the end (and for anything in the way);
+    // pure pursuit on the bicycle model (carpath.js): the steering turns gradually, the body only ever goes where it points
+    if (followPath(c, c.path, dt, this.clearance(c))) { this.endManoeuvre(c); return; }
     c.y += (world.height(c.x, c.z) + 0.03 - c.y) * (1 - Math.exp(-dt * 10));
     this.pose(c, 0);
   }
   endManoeuvre(c) {
-    c.v = 0; c.lotSteer = 0;
+    if (c.next === 'road') { const L = c.link; c.link = null; this.toRoad(c, L.r, L.s, L.dir, c.v); return; } // (a junction turn: on at speed)
+    const v0 = c.v;
+    c.v = 0;
     // the three-point turn: forward across, back, forward into the other lane, then on along the road
     if (c.next === 'turn1') { c.next = 'turn2'; c.rev = true; c.path = [c.turnPts[0], c.turnPts[1]]; c.pi = 1; c.pause = 0.4; return; }
     if (c.next === 'turn2') { c.next = 'turn3'; c.rev = false; c.path = [c.turnPts[1], c.turnPts[2]]; c.pi = 1; c.pause = 0.4; return; }
-    if (c.next === 'turn3') { const T = c.turnRoad; c.turnRoad = null; c.mode = 'road'; c.road = T.r; c.s = clamp(T.s + T.dir * 5, 1, T.r.length - 1); c.dir = T.dir; c.v = 2; c.nextJ = undefined; c.off = 0; c.offT = 0; c.pass = null; this.placeOnRoad(c, 0); return; }
+    if (c.next === 'turn3') { const T = c.turnRoad; c.turnRoad = null; this.toRoad(c, T.r, T.s + T.dir * 5, T.dir, v0); return; }
     if (c.next === 'park') {
       // settle straight and centred in the bay
       this.parkAt(c, c.lot, c.bay, 25 + Math.random() * 60);
@@ -737,7 +768,7 @@ export class Traffic {
     // out of the car park: onto the access road, away to the junction
     const jn = this.junctions.find((j) => j.lot === c.lot);
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
-    if (jn) { c.mode = 'road'; c.road = jn.access; c.s = 2; c.dir = 1; c.v = 2.5; c.nextJ = undefined; c.off = 0; c.offT = 0; c.pass = null; this.placeOnRoad(c, 0); }
+    if (jn) this.toRoad(c, jn.access, 12, 1, v0);
     else { c.mode = 'gone'; c.wait = 4; }
   }
 }

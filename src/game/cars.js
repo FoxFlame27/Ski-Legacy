@@ -31,8 +31,42 @@ export const FACING = {
   car_tesla_m3: 0, car_tesla_m3_full: 0, car_dacia_duster: -Math.PI / 2, car_mercedes_sls: 0, car_porsche_taycan: 0,
 };
 // parts of a model left out altogether: the SLS's broken-glass overlay (a second skin over every window and lamp
-// lens) and its motion-blurred rim discs (invisible at rest, drawn over the real rims)
-const HIDE = { car_mercedes_sls: /DAMAGE_GLASS|Rim_Blurred/i };
+// lens), its motion-blurred rim discs (invisible at rest, drawn over the real rims) and INT_vetro: a second, inner
+// skin on every window (a white haze texture at ~10 % alpha, rough 1: the "super dirty" windows; Glass_Windows is the
+// glass itself, made the same plain tinted glass as every other car's)
+const HIDE = { car_mercedes_sls: /DAMAGE_GLASS|Rim_Blurred|INT_vetro\./i };
+// per-model material fixes (the Sketchfab SLS came over from a spec / gloss set-up: its black trim plastic, tail
+// lamps and cabin plastics fully or half metallic, its leather and plastics at roughness 0.2 with a full-strength
+// specular, a metallic carpet, a light grey headliner: a car of mirrors, far brighter than the rest. Brought in line
+// with the other cars' interiors (metalness <= ~0.6, roughness 0.5-0.95, a weak specular). regex -> props
+// (color: a multiplier on the material's colour; spec: specularIntensity on a physical material)
+const MAT_FIX = {
+  car_mercedes_sls: [
+    [/^Plastic\./, { metalness: 0.15, roughness: 0.5 }],
+    [/^Details\./, { metalness: 0.5, roughness: 0.4 }],
+    [/^Lights_Rear\./, { metalness: 0.15, roughness: 0.25 }],
+    [/^INT_Skin\./, { metalness: 0, roughness: 0.62, spec: 0.3 }],
+    [/^INT_Skin_volante/, { metalness: 0, roughness: 0.55, spec: 0.3 }],
+    [/^INT_Cuciture/, { roughness: 0.65, spec: 0.3 }],
+    [/^INT_Plastica_Grigia/, { metalness: 0.1, roughness: 0.62, spec: 0.3 }],
+    [/^INT_carpet/, { metalness: 0, roughness: 0.95, spec: 0.1, color: 0.6 }],
+    [/^INT_Alcantara/, { metalness: 0, roughness: 0.95, spec: 0.1, color: 0.5 }],
+    [/^INT_(Plastica_Bianca|Plastica_rossa|Carpaint|Decals_Alu|Pedali)/, { spec: 0.35 }],
+    [/^INT_Vetro_Display/, { roughness: 0.05, opacity: 0.12, spec: 0.5 }],
+  ],
+};
+function fixMat(model, m) {
+  const list = MAT_FIX[model];
+  const hit = list && list.find(([re]) => re.test(m.name || ''));
+  if (!hit) return m;
+  const out = m.clone(), f = hit[1];
+  if (f.metalness !== undefined) out.metalness = f.metalness;
+  if (f.roughness !== undefined) out.roughness = f.roughness;
+  if (f.color !== undefined) out.color.multiplyScalar(f.color);
+  if (f.opacity !== undefined) out.opacity = f.opacity;
+  if (f.spec !== undefined && out.isMeshPhysicalMaterial) out.specularIntensity = Math.min(out.specularIntensity ?? 1, f.spec);
+  return out;
+}
 
 // Lamps per model, checked against each model's meshes (where every part sits on the car, its name and material) and
 // the real cars: (label, zone) -> 'head' | 'drl' | 'tail' | 'third' | 'rev' | 'ind' | 'lensF' | 'lensR' | null (no
@@ -323,6 +357,7 @@ export function carTemplate(gltf, length, name = '') {
     }
     if (glass && m.emissive && (m.emissiveMap || m.emissive.getHex() !== 0)) out.userData.emOrig = { color: m.emissive.clone(), map: m.emissiveMap || null };
     if (!glass && NEUTRAL[model] !== undefined && isPaint(model, m)) out = neutralPaint(m, NEUTRAL[model], NEUTRAL_HUE[model]);
+    if (!glass && MAT_FIX[model]) { const f = fixMat(model, out); if (f !== out) { f.userData = { ...out.userData }; out = f; } }
     if (CRISP[model]?.test(m.name || '')) crispMap(m.map);
     // every texture filtered at the widest angle the GPU has (three clamps it): the dash, seats and door cards seen
     // at a slant from the driver's seat stay sharp instead of melting into the mip below

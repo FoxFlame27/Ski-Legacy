@@ -244,7 +244,7 @@ export function dressCar(inst, t, cfg) {
   for (const w of inst.wheels || []) w.roll.traverse((o) => {
     if (!o.isMesh) return;
     const src = o.userData.srcMat ||= o.material;
-    if (rim.id === 'orig' || /tire|tyre|rubber|disk|disc|brake|break|calip|callip/i.test(src.name || '')) { o.material = src; return; }
+    if (rim.id === 'orig' || /tire|tyre|rubber|disk|disc|rotor|brake|break|calip|callip/i.test(src.name || '')) { o.material = src; return; }
     o.material = swap(src, (m) => { const r = m.clone(); r.color = (m.color ? m.color.clone() : new THREE.Color(1, 1, 1)).multiply(_tint.set(rim.hex)); if (rim.id === 'black') r.roughness = Math.min(r.roughness ?? 0.3, 0.3); return r; });
   });
   // the plates (front and back), your text

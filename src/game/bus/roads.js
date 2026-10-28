@@ -554,7 +554,11 @@ function shapeRoads(roads) {
   }
   // a car park: flat at its own height, eased back to the slope around it, the snow ploughed into a berm round its
   // edges (open at the entrance)
-  const lotShape = (x, z, h, spacing) => {
+  // (every car park near the point in turn, each easing into the ground the ones before left: no step where two
+  // car parks' surrounds meet, as there was beside the village car park; on a car park itself its own level)
+  const LS = { y: 0, out: 0 };
+  const lotShape = (x, z, h0, spacing) => {
+    let h = h0, any = false, outMin = Infinity;
     for (const L of busRoads.lots) {
       const dx = x - L.x, dz = z - L.z;
       if (Math.abs(dx) > L.hw + L.hd + 60 || Math.abs(dz) > L.hw + L.hd + 60) continue;
@@ -563,24 +567,29 @@ function shapeRoads(roads) {
       const blend = Math.min(45, 6 + Math.abs(h - L.y) * 3.2);
       if (out > blend + 6 && !(L.piles && out < 9)) continue;
       let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(1.5, 1.5 + blend, out);
-      if (spacing <= 4 && !L.building && out > 1.4 && out < 5.4 && Math.hypot(x - L.ex, z - L.ez) > 13) {
-        const t = (out - 1.4) / 4;
-        y += 0.65 * (t < 0.4 ? smoothstep(0, 0.4, t) : 1 - smoothstep(0.4, 1, t));
+      if (spacing <= 4 && !L.building && out > 1.4 && out < 5.4 && Math.hypot(x - L.ex, z - L.ez) > 10) {
+        const t = (out - 1.4) / 4, open = smoothstep(10, 15, Math.hypot(x - L.ex, z - L.ez)); // (tapered at the entrance, no step)
+        y += 0.65 * open * (t < 0.4 ? smoothstep(0, 0.4, t) : 1 - smoothstep(0.4, 1, t));
       }
       // ploughed snow piles: soft lumpy domes (the radius wanders with the angle, a few lumps on top)
       if (L.piles && spacing <= 8) {
+        let pile = 0;
         for (const P of L.piles) {
           const px = x - P.x, pz = z - P.z, r = Math.hypot(px, pz);
           if (r > P.R * 1.35) continue;
           const a = Math.atan2(pz, px), R = P.R * (1 + 0.16 * Math.sin(3 * a + P.p1) + 0.09 * Math.sin(5 * a + P.p2));
           if (r >= R) continue;
           const q = 1 - (r / R) * (r / R);
-          y = Math.max(y, L.y + P.H * q * Math.sqrt(q) * (1 + 0.08 * Math.sin(px * 1.7 + P.p1) * Math.sin(pz * 1.9 + P.p2)));
+          pile = Math.max(pile, P.H * q * Math.sqrt(q) * (1 + 0.08 * Math.sin(px * 1.7 + P.p1) * Math.sin(pz * 1.9 + P.p2)));
         }
+        y += pile; // (on the ground under it: before, a pile off the car park's edge stood on the car park's level, a step)
       }
-      return { y, out };
+      if (out <= 0) { LS.y = y; LS.out = out; return LS; }
+      h = y; any = true; outMin = Math.min(outMin, out);
     }
-    return null;
+    if (!any) return null;
+    LS.y = h; LS.out = outMin;
+    return LS;
   };
   world.addCut({
     bounds: { minx, minz, maxx, maxz },

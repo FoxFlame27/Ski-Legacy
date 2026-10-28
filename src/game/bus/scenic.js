@@ -403,33 +403,34 @@ export function shapeScenic() {
       // the batter meets the slope; two stretches near each other (the switchbacks' legs): both their batters
       let out;
       const bA = bench(A);
-      if (A.d <= bA) {
-        out = A.y;
-        // (another road's shoulder overlapping this one's, e.g. two arms near a roundabout or a spur at its tee:
-        // their heights blended by nearness, no step where the nearer one swaps)
-        if (B.d < REACH) {
-          const bB = bench(B), wB = Math.exp(-(B.d - A.d) / 1.0) * smoothstep(bB, bB - 2, B.d);
-          if (wB > 0) out = (A.y + B.y * wB) / (1 + wB);
-        }
+      // (each road's stretch of ~48 m once: its nearest point, its height and bench a soft blend of the segments
+      // nearly as near (a hairpin or a tight corner inside one stretch: no step where its nearer leg swaps))
+      const best = BEST; best.clear();
+      for (const c of CAND) {
+        if (c[0] > REACH) continue;
+        const key = c[1].ri * 4096 + Math.floor(c[1].sa / 48), o = best.get(key);
+        if (!o) best.set(key, [c[0], 0, 0, 0]); else if (c[0] < o[0]) o[0] = c[0];
       }
-      else {
-        // (each road's stretch of ~48 m once: its nearest point, its height and bench a soft blend of the segments
-        // nearly as near (a hairpin inside one stretch: no step where its nearer leg swaps))
-        const best = BEST; best.clear();
-        for (const c of CAND) {
-          if (c[0] > REACH) continue;
-          const key = c[1].ri * 4096 + Math.floor(c[1].sa / 48), o = best.get(key);
-          if (!o) best.set(key, [c[0], 0, 0, 0]); else if (c[0] < o[0]) o[0] = c[0];
+      for (const [d0, sg, t0] of CAND) {
+        if (d0 > REACH) continue;
+        const o = best.get(sg.ri * 4096 + Math.floor(sg.sa / 48)), wq = Math.exp(-(d0 - o[0]) / 1.5);
+        if (wq < 1e-3) continue;
+        // (its own bench: wider at its own lay-by; before, the lay-by's width jumped from one leg to the other
+        // where the nearest leg swapped: a step in the ground)
+        BO.ri = sg.ri; BO.s = sg.sa + (sg.sb - sg.sa) * t0; BO.side = (sg.bx - sg.ax) * (z - sg.az) - (sg.bz - sg.az) * (x - sg.ax) >= 0 ? 1 : -1;
+        o[1] += wq; o[2] += wq * (sg.ay + (sg.by - sg.ay) * t0); o[3] += wq * bench(BO);
+      }
+      if (A.d <= bA) {
+        // on the shoulder: its height; where another stretch's shoulder overlaps (two arms by a roundabout, a spur at
+        // its tee, the inside of a tight corner) the heights blended by nearness: no step where the nearer one swaps
+        let ws = 0, wy = 0, dmin = Infinity;
+        for (const v of BEST.values()) dmin = Math.min(dmin, v[0]);
+        for (const [d, w0, ys, bs] of BEST.values()) {
+          const b = bs / w0, w = Math.exp(-(d - dmin) / 1.0) * smoothstep(b + 2, b, d);
+          if (w > 1e-4) { ws += w; wy += w * (ys / w0); }
         }
-        for (const [d0, sg, t0] of CAND) {
-          if (d0 > REACH) continue;
-          const o = best.get(sg.ri * 4096 + Math.floor(sg.sa / 48)), wq = Math.exp(-(d0 - o[0]) / 1.5);
-          if (wq < 1e-3) continue;
-          // (its own bench: wider at its own lay-by; before, the lay-by's width jumped from one leg to the other
-          // where the nearest leg swapped: a step in the ground)
-          BO.ri = sg.ri; BO.s = sg.sa + (sg.sb - sg.sa) * t0; BO.side = (sg.bx - sg.ax) * (z - sg.az) - (sg.bz - sg.az) * (x - sg.ax) >= 0 ? 1 : -1;
-          o[1] += wq; o[2] += wq * (sg.ay + (sg.by - sg.ay) * t0); o[3] += wq * bench(BO);
-        }
+        out = ws > 0 ? wy / ws : A.y;
+      } else {
         // (each stretch's band: y +- its batter; its weight below fades out toward REACH)
         let lo = -Infinity, hi = Infinity, soft = 1.6;
         const BD = BANDS; BD.length = 0;

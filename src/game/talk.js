@@ -448,7 +448,7 @@ export class Talk {
     if (Math.hypot(C.x - N.x, C.z - N.z) < 0.75) { this.why = 'near them'; return false; }
     if (Math.hypot(C.x - P.x, C.z - P.z) < 0.5) { this.why = 'near you'; return false; }
     const gy = world.groundHeight(C.x, C.z, C.y + 1);
-    for (const c of this.colliders) {
+    for (const c of this.colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
       const reach = (c.r ?? Math.max(c.hw, c.hd)) + 0.4;
       if (Math.abs(C.x - c.x) > reach || Math.abs(C.z - c.z) > reach) continue;
       if (c.top !== undefined && C.y > c.top + 0.3) continue;
@@ -457,7 +457,7 @@ export class Talk {
     // no lift station or other building (a big collider) between the camera and the face
     for (const f of [0.2, 0.4, 0.6, 0.75]) {
       const x = C.x + (F.x - C.x) * f, z = C.z + (F.z - C.z) * f;
-      for (const c of this.colliders) {
+      for (const c of this.colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (size < 1.6 || Math.abs(x - c.x) > size + 0.5 || Math.abs(z - c.z) > size + 0.5) continue;
         if (c.top !== undefined && C.y + (F.y - C.y) * f > c.top) continue;

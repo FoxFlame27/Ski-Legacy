@@ -89,7 +89,7 @@ export function getRunIndex() { return (runIndex ??= new RunIndex()); }
 
 /** Is (x, z) within `margin` of a collider ({x, z, r} | oriented box {x, z, hw, hd, rot})? */
 export function hitsCollider(colliders, x, z, margin = 0.3) {
-  for (const c of colliders) {
+  for (const c of colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
     const reach = (c.r ?? Math.max(c.hw, c.hd)) + margin;
     if (Math.abs(x - c.x) > reach || Math.abs(z - c.z) > reach) continue;
     if (c.r !== undefined) { if (Math.hypot(x - c.x, z - c.z) < c.r + margin) return true; continue; }

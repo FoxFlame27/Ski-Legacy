@@ -277,6 +277,7 @@ export class CarRental {
       ...[-1, 1].map((sx) => box(sx * (W / 2 - PIER / 2 + T / 2), D / 2 + 0.05, (PIER + T) / 2, (T + 0.5) / 2)),
       box((gx0 + dl) / 2, D / 2, (dl - gx0) / 2, 0.12), box((dr + gx1) / 2, D / 2, (gx1 - dr) / 2, 0.12),
       box(S.x1 + 0.03, (S.z0 + S.z1 - 0.9) / 2, 0.06, (S.z1 - 0.9 - S.z0) / 2), // (the stair's glass side: only its foot is open)
+      { ...box(LAYOUT.door.x, D / 2 + 0.6, LAYOUT.bayW / 2 + 0.2, 0.3), carOnly: true }, // (no driving in through the door: people walk through it)
     ];
     this.colliders.push(...this.walls);
     // (upstairs only: the mezzanine's balustrade)

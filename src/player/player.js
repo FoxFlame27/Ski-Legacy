@@ -1062,7 +1062,7 @@ export class Player {
     // (groundHeight takes a surface up to 0.6 m above its hint: the hint puts that at WALK_STEP above the boots)
     let ground = world.groundHeight(p.x, p.z, feetY + WALK_STEP - 0.6);
     // low obstacles with a flat top (rocks, benches, bollards, piers under a deck) within a step: stepped up onto
-    for (const c of this.colliders) {
+    for (const c of this.colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
       if (c.top === undefined || c.top <= ground || c.top > feetY + WALK_STEP) continue;
       const R = 0.35, reach = (c.r ?? Math.max(c.hw, c.hd)) + R;
       if (Math.abs(p.x - c.x) > reach || Math.abs(p.z - c.z) > reach) continue;
@@ -1110,7 +1110,7 @@ export class Player {
   collide(speed, feetY = -Infinity, above = 0) {
     const p = this.pos;
     const R = 0.35;
-    for (const c of this.colliders) {
+    for (const c of this.colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
       if (c.top !== undefined ? feetY > c.top : above > 2.5) continue;
       // cheap reject first: most colliders (nets, signs, markers) are far away
       const reach = (c.r ?? Math.max(c.hw, c.hd)) + R;

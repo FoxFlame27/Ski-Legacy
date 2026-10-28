@@ -180,7 +180,7 @@ export class Traffic {
     if (c.bay && c.bay !== bay) c.bay.traffic = false;
     bay.traffic = true;
     c.mode = 'parked'; c.lot = lot; c.bay = bay; c.wait = wait; c.v = 0; c.path = null; c.rev = false; c.lotSteer = 0;
-    c.x = bay.x; c.z = bay.z; c.yaw = Math.atan2(bay.hx, bay.hz); c.y = world.height(c.x, c.z) + 0.03;
+    c.x = bay.x; c.z = bay.z; c.yaw = Math.atan2(bay.hx, bay.hz); c.y = world.meshHeight(c.x, c.z) + 0.03;
     this.pose(c, 0);
   }
 
@@ -378,7 +378,7 @@ export class Traffic {
   }
   tourPose(c) {
     const a = this.tourAt(c.u + c.l * 0.38, {}, c), b = this.tourAt(c.u - c.l * 0.38, {}, c);
-    const ya = world.height(a.x, a.z), yb = world.height(b.x, b.z);
+    const ya = world.meshHeight(a.x, a.z), yb = world.meshHeight(b.x, b.z);
     c.x = (a.x + b.x) / 2; c.z = (a.z + b.z) / 2; c.y = (ya + yb) / 2 + 0.02;
     c.yaw = Math.atan2(a.x - b.x, a.z - b.z);
     this.pose(c, Math.atan2(yb - ya, Math.hypot(a.x - b.x, a.z - b.z)));
@@ -641,6 +641,9 @@ export class Traffic {
     const tx = (_p.x - _q.x) || c.dir * _p.dx, tz = (_p.z - _q.z) || c.dir * _p.dz, tl = Math.hypot(tx, tz) || 1;
     const rx = -tz / tl, rz = tx / tl, w = LANE + (c.off || 0); // (the lane line, or swerving round something)
     _a.set(_p.x + rx * w, _p.y, _p.z + rz * w); _b.set(_q.x + rx * w, _q.y, _q.z + rz * w);
+    // (on the drawn road: the ground as the terrain mesh shows it, which the strip follows; the road's design profile
+    // _p.y lies up to ~0.5 m under it where a stop's or a car park's pad meets the road -- the cars sank into the road)
+    _a.y = world.groundHeight(_a.x, _a.z, _p.y + 1); _b.y = world.groundHeight(_b.x, _b.z, _q.y + 1);
     c.x = (_a.x + _b.x) / 2; c.z = (_a.z + _b.z) / 2; c.y = (_a.y + _b.y) / 2 + 0.02;
     // (the body points where it goes: along the road, turned toward a lane change by its lateral speed)
     const ux = _a.x - _b.x, uz = _a.z - _b.z, ul = Math.hypot(ux, uz) || 1, q = c.offQ || 0;
@@ -701,7 +704,7 @@ export class Traffic {
         if (!k) continue;
         const sg = Math.sign(k);
         this.you?.shove?.(e, rx * sg * 2.5, rz * sg * 2.5, (Math.random() - 0.5) * 0.8); // (first: it remembers its bay)
-        g.x += rx * k; g.z += rz * k; g.y = world.height(g.x, g.z) + 0.03;
+        g.x += rx * k; g.z += rz * k; g.y = world.meshHeight(g.x, g.z) + 0.03;
         e.car.updateMatrixWorld(true);
         e.collider.x = g.x; e.collider.z = g.z;
       }
@@ -757,7 +760,7 @@ export class Traffic {
       }
     }
     c.x = nx; c.z = nz; c.yaw = ny;
-    c.y = world.height(c.x, c.z) + 0.03;
+    c.y = world.meshHeight(c.x, c.z) + 0.03;
     c.v = 0; c.brake = 1;
     this.pose(c, 0);
     if (!c.kvx && !c.kvz && !c.kw) { c.mode = 'wreck'; c.brake = 0; }
@@ -851,7 +854,7 @@ export class Traffic {
     // slow: 10-15 km/h forward, walking pace in reverse, easing to a stop at the end (and for anything in the way);
     // pure pursuit on the bicycle model (carpath.js): the steering turns gradually, the body only ever goes where it points
     if (followPath(c, c.path, dt, this.clearance(c))) { this.endManoeuvre(c); return; }
-    c.y += (world.height(c.x, c.z) + 0.03 - c.y) * (1 - Math.exp(-dt * 10));
+    c.y += (world.meshHeight(c.x, c.z) + 0.03 - c.y) * (1 - Math.exp(-dt * 10));
     this.pose(c, 0);
   }
   endManoeuvre(c) {

@@ -380,7 +380,7 @@ export class Track {
       const steps = Math.ceil(fr.w / 0.5);
       for (let k = -steps; k <= steps; k++) {
         const lat = k * 0.5, x = fr.x + fr.nx * lat, z = fr.z + fr.nz * lat;
-        const raise = world.groundHeight(x, z, fr.y + 12) - world.height(x, z);
+        const raise = world.groundHeight(x, z, fr.y + 12) - world.meshHeight(x, z);
         if (raise > 0.12) { a = Math.min(a, lat); b = Math.max(b, lat); hits++; }
       }
     }

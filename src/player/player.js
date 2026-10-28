@@ -1005,7 +1005,7 @@ export class Player {
     const p = this.pos;
     const feetY = p.y - (this.footJumpY || 0);
     // terrain grade under the boots (decks, bridges and ramps are built to be walked on)
-    const onTerrain = world.groundHeight(p.x, p.z, feetY + 0.3) < world.height(p.x, p.z) + 0.03;
+    const onTerrain = world.groundHeight(p.x, p.z, feetY + 0.3) < world.meshHeight(p.x, p.z) + 0.03;
     const gx = onTerrain ? (world.height(p.x + 1, p.z) - world.height(p.x - 1, p.z)) / 2 : 0;
     const gz = onTerrain ? (world.height(p.x, p.z + 1) - world.height(p.x, p.z - 1)) / 2 : 0;
     const slope = Math.hypot(gx, gz);

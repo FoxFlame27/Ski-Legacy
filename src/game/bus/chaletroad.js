@@ -21,7 +21,7 @@ const LEG_Z = [1180, 1120, 1060, 1000];    // the legs (along the contours, the 
 const XE = 628, XW = 388, XL = 334;        // the east hairpins, the west hairpin, the car park's entrance (top leg)
 const HAIRPIN_R = 30, BEND_R = 40;
 // the terraces on the uphill side of each leg: [x from, x to] of the row of plots
-const ROWS = [[438, 590], [404, 640], [334, 590], [352, 608]];
+const ROWS = [[438, 590], [410, 640], [368, 590], [352, 608]];
 const PLOT_W = 30;                         // m along the leg (house + its parking spot + a gap)
 const PAD_FRONT = 9.4, PAD_BACK = 35;      // m uphill from the leg's centre line
 const BANK = 0.7;                          // tan 35 degrees: the terraces' banks

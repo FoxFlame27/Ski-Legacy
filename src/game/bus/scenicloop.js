@@ -53,6 +53,14 @@ function badNet(O, allow = [], { xing = false, planned = true } = {}) {
     if ((c.kind === 'piste' || c.kind === 'race') && c.d < 28) return true;
     const e = expressNearest(x, z);
     if (e && e.d < 50 && !(xing && e.s > XING[0] && e.s < XING[1])) return true;
+    // (the car parks planned so far, 14 m round them: never across one, even near our own junctions; before, the
+    // Passstrasse ran straight over the Talblick car park, 9 m above it: torn ground and a cliff through the bays)
+    for (const L of busRoads.lots) {
+      const dx = x - L.x, dz = z - L.z;
+      if (Math.abs(dx) > 80 || Math.abs(dz) > 80) continue;
+      const u = Math.abs(dx * L.ux + dz * L.uz) - L.hw, v = Math.abs(dx * L.vx + dz * L.vz) - L.hd;
+      if (Math.hypot(Math.max(0, u), Math.max(0, v)) < 14) return true;
+    }
     for (const a of allow) if (Math.hypot(x - a.x, z - a.z) < a.r) return false;
     return laneDistance(x, z) < 28 || (planned && nearPlanned(x, z) < 45);
   };

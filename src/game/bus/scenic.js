@@ -351,8 +351,8 @@ export function shapeScenic() {
       const w = KEEP_K * Math.max(0, o - 1.5);
       lo = Math.max(lo, L.y - w); hi = Math.min(hi, L.y + w);
     }
-    if (lo > hi) return out; // (two of them disagree: their own cut decides, h)
-    return clamp(out, Math.min(lo, h), Math.max(hi, h));
+    // (two of them disagree: pinned into the gap between them, continuous where they just meet)
+    return clamp(out, Math.min(lo, hi, h), Math.max(lo, hi, h));
   };
   // nearest point (d, y, s, ri, side, seg) and the nearest of another stretch (|s - s1| > 60 or another road)
   const A = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null }, B = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null };

@@ -188,5 +188,26 @@
     "preview": "01a183ac-6464-71ea-aecc-e0edbaf2a17c",
     "refine": "01a183ad-8e57-715b-8469-cfae9d9e13eb",
     "done": true
+  },
+  "geranium_box": {
+    "preview": "01a183ce-6ac3-700a-ae2d-52f5a084ffd4"
+  },
+  "herb_pot": {
+    "preview": "01a183ce-6a9e-72bd-bd1c-d51f477b7e4b"
+  },
+  "cactus": {
+    "preview": "01a183ce-6aa1-735b-a796-8fd6810b3461"
+  },
+  "vase": {
+    "preview": "01a183ce-6aa0-72fd-a1c4-784734f851af"
+  },
+  "tealight_lantern": {
+    "preview": "01a183ce-6aa2-7746-af0f-03477927c50e"
+  },
+  "deer_figurine": {
+    "preview": "01a183ce-6ab0-7151-8628-8605aa266ebd"
+  },
+  "photo_frame": {
+    "preview": "01a183ce-6ac3-7652-8fdd-2d7e21c852d0"
   }
 }

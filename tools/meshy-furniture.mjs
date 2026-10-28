@@ -60,6 +60,13 @@ const PROMPTS = {
   ceiling_lamp: 'A rustic antler chandelier with six candle style light bulbs, hanging from a short chain',
   wall_sconce: 'A wall mounted wrought iron and wood candle lantern sconce light, flat back plate',
   lantern: 'A small wooden and glass candle lantern with a carry handle',
+  geranium_box: 'A small rectangular wooden flower box planter full of red geraniums with green leaves',
+  herb_pot: 'A small terracotta pot with fresh green basil herbs',
+  cactus: 'A tiny round green cactus in a small painted ceramic pot',
+  vase: 'A small blue and white painted ceramic vase with a few wildflowers and edelweiss',
+  tealight_lantern: 'A small glass candle jar with a lit candle inside and a wooden lid',
+  deer_figurine: 'A small hand carved wooden deer figurine standing on a little wooden base',
+  photo_frame: 'A small standing wooden picture frame with a family photo of skiers in the mountains',
 };
 
 function loadKey() {
@@ -135,7 +142,7 @@ async function build(item) {
   if (!s.preview) {
     s.preview = (await api('POST', '/v2/text-to-3d', {
       mode: 'preview', prompt: prompt.slice(0, 600), ai_model: 'meshy-6', art_style: 'realistic',
-      should_remesh: true, topology: 'triangle', target_polycount: item.flat ? 1500 : 6000, target_formats: ['glb'],
+      should_remesh: true, topology: 'triangle', target_polycount: item.flat ? 1500 : item.small ? 3000 : 6000, target_formats: ['glb'],
     })).result;
     saveState();
     log(`${id}: preview started`);

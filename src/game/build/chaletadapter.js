@@ -12,7 +12,7 @@
 //   walls()             [{ ax, az, bx, bz, t, y0, y1 }]                     wall segments (with door gaps)
 //   addObject(obj, col) -> handle   place obj (already positioned) + collider col = { x, z, hw, hd, rot, y0, y1 }
 //   removeObject(handle)
-//   onFrame(cb)         optional per-frame hook: cb(dt, input)
+//   sills()             [{ x, z, y, len, depth, yaw, storey }] window ledges (optional)
 //
 // Discovery: any module matching src/world/chalet*.js or src/game/chalet*.js that exports
 // `chaletInteriorAPI` (an object, or a zero-arg getter function), or window.chaletInteriorAPI.
@@ -57,7 +57,7 @@ export function normRect(r) {
   return { x0: r.x - w / 2, z0: r.z - d / 2, x1: r.x + w / 2, z1: r.z + d / 2 };
 }
 
-export function normWall(w) {
+export function normWall(w, faceLine = false) {
   let o;
   if (Array.isArray(w)) o = { ax: w[0], az: w[1], bx: w[2], bz: w[3] };
   else if (w.a && w.b) o = { ax: w.a.x, az: w.a.z, bx: w.b.x, bz: w.b.z };
@@ -73,6 +73,13 @@ export function normWall(w) {
   o.y0 = num(w.y0, w.bottom, -Infinity);
   o.y1 = num(w.y1, w.top, Infinity);
   if (w.storey != null) o.storey = w.storey;
+  if (faceLine && w.exterior) { // the chalet API: an exterior wall's line is its inner face, t outward (away from the middle)
+    let nx = -(o.bz - o.az), nz = o.bx - o.ax;
+    const L = Math.hypot(nx, nz) || 1; nx /= L; nz /= L;
+    const mx = (o.ax + o.bx) / 2, mz = (o.az + o.bz) / 2;
+    if (mx * nx + mz * nz < 0) { nx = -nx; nz = -nz; }
+    o.ax += nx * o.t / 2; o.az += nz * o.t / 2; o.bx += nx * o.t / 2; o.bz += nz * o.t / 2;
+  }
   return o;
 }
 
@@ -95,17 +102,27 @@ export function adaptChalet(raw) {
     active: () => !!val(raw.isActive ?? raw.active ?? raw.inside ?? raw.isInside, raw),
     get root() { return val(raw.group ?? raw.root ?? raw.interior ?? raw.scene, raw); },
     get camera() { return val(raw.camera, raw); },
+    /** Player feet position in ROOT space (the chalet API gives it there already). */
     playerPos() {
       const p = val(raw.player, raw);
       return p?.pos ?? p?.position ?? (p?.isVector3 ? p : null);
     },
     storeys() {
       const st = normStoreys(raw);
-      if (!st.length) return (this._plan ??= planLayout()); // the shared chalet plan (chaletplan.js)
-      const shared = val(raw.walls ?? raw.wallSegments, raw);
-      if (shared) { const ws = shared.map(normWall).filter(Boolean); for (const s of st) s.walls ??= ws; }
-      return st;
+      const plan = (this._plan ??= planLayout()); // the shared chalet plan (chaletplan.js): walls split at windows
+      if (!st.length) return plan;
+      const shared = (val(raw.walls ?? raw.wallSegments, raw) || []);
+      return st.map((s, i) => {
+        const lvl = raw.storeys?.[i]?.level ?? (i ? 'up' : 'ground');
+        const p = plan.find((q) => q.level === lvl);
+        // walls: the plan's (they know the windows) unless the API gave this storey its own
+        const walls = s.walls || p?.walls || shared.filter((w) => (w.storey ?? i) === i).map((w) => normWall(w, true)).filter(Boolean);
+        const ceilingAt = typeof raw.ceilingAt === 'function' ? (x, z) => raw.ceilingAt(x, z, lvl) : (p?.ceilingAt ?? s.ceilingAt);
+        return { ...s, level: lvl, walls, blocks: s.blocks?.length ? s.blocks : (p?.blocks || []), ceilingAt };
+      });
     },
+    /** Window sills: [{ x, z, y, len, depth, yaw, storey }] (root space; yaw = the direction into the room). */
+    sills() { return (val(raw.sills, raw) || []).filter((q) => Number.isFinite(q?.x) && Number.isFinite(q?.y)); },
     addObject(obj, col) {
       const f = raw.addObject ?? raw.addPlaced ?? raw.place ?? raw.addFurniture;
       if (f) return f.call(raw, obj, col) ?? obj;
@@ -117,11 +134,7 @@ export function adaptChalet(raw) {
       if (f) return f.call(raw, handle);
       handle?.parent?.remove(handle);
     },
-    onFrame(cb) {
-      const f = raw.onFrame ?? raw.addFrameHook ?? raw.hook;
-      if (typeof f === 'function') { f.call(raw, cb); return true; }
-      return false;
-    },
+    // (no per-frame hook: main.js calls buildMode.update every frame, which also notices you leaving)
   };
 }
 

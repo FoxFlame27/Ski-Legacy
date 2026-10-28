@@ -63,7 +63,7 @@ export class BuildMode {
   }
 
   /** Explicitly attach a chalet interior API (optional: it is also discovered automatically). */
-  attach(raw) { this.rawAPI = raw; this.chalet = adaptChalet(raw); this.hooked = this.chalet?.onFrame((dt, input) => this.tick(dt, input || this.input)) || false; }
+  attach(raw) { this.rawAPI = raw; this.chalet = adaptChalet(raw); }
 
   /** One-line HUD objective while inside the chalet (null when not inside). */
   hudLine() {
@@ -78,7 +78,7 @@ export class BuildMode {
   update(dt, input = this.input) {
     const raw = currentRawAPI();
     if (raw && raw !== this.rawAPI) this.attach(raw);
-    if (!this.hooked) this.tick(dt, input);
+    this.tick(dt, input);
   }
 
   tick(dt, input) {

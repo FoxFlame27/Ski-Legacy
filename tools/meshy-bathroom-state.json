@@ -1,0 +1,29 @@
+{
+  "toilet": {
+    "preview": "01a183ce-9e2e-74f1-94cf-5b3a444d198d"
+  },
+  "washbasin": {
+    "preview": "01a183ce-9e2f-743e-83cd-480fabab30de"
+  },
+  "shower": {
+    "preview": "01a183ce-9e23-762b-a3b0-1c626d35982b"
+  },
+  "bathtub": {
+    "preview": "01a183ce-9e30-7250-af10-8ff6daf7841c"
+  },
+  "bath_mirror": {
+    "preview": "01a183ce-9e30-700e-9470-9f52e3292135"
+  },
+  "towel_hooks": {
+    "preview": "01a183ce-9e2c-7420-87da-ff990f87b60b"
+  },
+  "pendant_lamp": {
+    "preview": "01a183ce-9e2f-7725-b348-d2baaccc1155"
+  },
+  "antler_lamp": {
+    "preview": "01a183ce-9e3e-75f3-b0a7-98074f20be28"
+  },
+  "wall_lamp": {
+    "preview": "01a183ce-9e2d-75ad-9724-75fc8c528f60"
+  }
+}

@@ -7,6 +7,7 @@
 //       to the model's own. Wall items are thinned to the catalog depth.
 // place: 'floor' | 'wall' (back faces the wall, mounted at `mount` metres above the floor)
 //        | 'ceiling' (hangs from the ceiling).
+// small: little decor that can also stand on a window sill or on top of furniture (tabletop).
 // flat:  rugs etc. — no collider, may overlap other furniture.
 // The model's "front" is +z (Meshy faces the camera = +z).
 
@@ -56,19 +57,28 @@ export const FURNITURE = [
 
   // Decor
   { id: 'plant_tall', name: 'Tall Plant', category: 'decor', price: 80, size: [0.65, 1.4, 0.65], place: 'floor' },
-  { id: 'plant_small', name: 'Small Plant', category: 'decor', price: 35, size: [0.3, 0.5, 0.3], place: 'floor' },
+  { id: 'plant_small', name: 'Small Plant', category: 'decor', price: 35, size: [0.3, 0.5, 0.3], place: 'floor', small: true },
   { id: 'ski_rack', name: 'Ski Rack', category: 'decor', price: 220, size: [1.1, 1.8, 0.55], place: 'floor' },
   { id: 'picture_mountain', name: 'Mountain Painting', category: 'decor', price: 150, size: [0.9, 0.7, 0.05], place: 'wall', mount: 1.25 },
   { id: 'picture_deer', name: 'Deer Painting', category: 'decor', price: 150, size: [0.6, 0.85, 0.05], place: 'wall', mount: 1.2 },
   { id: 'antlers', name: 'Antler Trophy', category: 'decor', price: 260, size: [0.6, 0.7, 0.3], place: 'wall', mount: 1.7 },
   { id: 'cuckoo_clock', name: 'Cuckoo Clock', category: 'decor', price: 190, size: [0.45, 0.85, 0.22], place: 'wall', mount: 1.55 },
 
+  // Small decor: goes on window sills, on top of furniture (tables, counters, shelves...) or the floor
+  { id: 'geranium_box', name: 'Geranium Pot', category: 'decor', price: 30, size: [0.4, 0.3, 0.18], place: 'floor', small: true },
+  { id: 'herb_pot', name: 'Herb Pot', category: 'decor', price: 20, size: [0.18, 0.24, 0.18], place: 'floor', small: true },
+  { id: 'cactus', name: 'Little Cactus', category: 'decor', price: 18, size: [0.14, 0.26, 0.14], place: 'floor', small: true },
+  { id: 'vase', name: 'Flower Vase', category: 'decor', price: 25, size: [0.15, 0.32, 0.15], place: 'floor', small: true },
+  { id: 'tealight_lantern', name: 'Candle Jar', category: 'decor', price: 15, size: [0.12, 0.18, 0.12], place: 'floor', small: true, light: 0.08 },
+  { id: 'deer_figurine', name: 'Carved Deer', category: 'decor', price: 40, size: [0.22, 0.26, 0.1], place: 'floor', small: true },
+  { id: 'photo_frame', name: 'Photo Frame', category: 'decor', price: 20, size: [0.2, 0.25, 0.08], place: 'floor', small: true },
+
   // Lighting
   { id: 'floor_lamp', name: 'Floor Lamp', category: 'lighting', price: 160, size: [0.45, 1.65, 0.45], place: 'floor', light: 1.45 },
-  { id: 'table_lamp', name: 'Table Lamp', category: 'lighting', price: 70, size: [0.3, 0.5, 0.3], place: 'floor', light: 0.4 },
+  { id: 'table_lamp', name: 'Table Lamp', category: 'lighting', price: 70, size: [0.3, 0.5, 0.3], place: 'floor', light: 0.4, small: true },
   { id: 'ceiling_lamp', name: 'Antler Chandelier', category: 'lighting', price: 340, size: [0.85, 0.65, 0.85], place: 'ceiling', light: 0.1 },
   { id: 'wall_sconce', name: 'Wall Sconce', category: 'lighting', price: 90, size: [0.2, 0.38, 0.22], place: 'wall', mount: 1.8, light: 0.2 },
-  { id: 'lantern', name: 'Lantern', category: 'lighting', price: 45, size: [0.22, 0.45, 0.22], place: 'floor', light: 0.25 },
+  { id: 'lantern', name: 'Lantern', category: 'lighting', price: 45, size: [0.22, 0.45, 0.22], place: 'floor', light: 0.25, small: true },
 ];
 
 export const FURNITURE_BY_ID = Object.fromEntries(FURNITURE.map((f) => [f.id, f]));

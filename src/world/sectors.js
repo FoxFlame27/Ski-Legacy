@@ -167,18 +167,24 @@ const BC = 64;   // m: spatial grid cell
 const GRADE_CAP = [0.25, 0.38, 0.5, 0.75];
 // the run's nearest bench point to (x, z): { w: its weight there (1 on the bench, falling off over the snow bank,
 // whose width grows with the height of the bench over / under the natural ground h0), y: the bench's level }
-const _b = { w: 0, y: 0 };
+const _b = { w: 0, y: 0 }, _d = new Float64Array(4096), _y = new Float64Array(4096), SOFT = 9; // (m: the soft minimum's scale)
 function benchAt(run, x, z, h0) {
   _b.w = 0;
   const arr = run.G.get(Math.floor(x / BC) + ',' + Math.floor(z / BC));
   if (!arr) return _b;
-  let bestD = Infinity, bestY = 0;
+  // (the level: a soft minimum over the run's segments, so where two legs of a winding run pass close by at
+  // different levels the bench ramps between them instead of stepping where the nearest leg switches)
+  let bestD = Infinity, n = 0;
   for (let i = 0; i < arr.length; i++) {
     const s = arr[i], ex = s.bx - s.ax, ez = s.bz - s.az, l2 = ex * ex + ez * ez || 1;
     const t = Math.max(0, Math.min(1, ((x - s.ax) * ex + (z - s.az) * ez) / l2));
     const d = Math.hypot(s.ax + ex * t - x, s.az + ez * t - z);
-    if (d < bestD) { bestD = d; bestY = s.ya + (s.yb - s.ya) * t; }
+    _d[n] = d; _y[n++] = s.ya + (s.yb - s.ya) * t;
+    if (d < bestD) bestD = d;
   }
+  let sw = 0, sy = 0;
+  for (let i = 0; i < n; i++) { const d = _d[i] - bestD; if (d < 60) { const k = Math.exp(-d / SOFT); sw += k; sy += k * _y[i]; } }
+  const bestY = sy / sw;
   _b.w = 1 - smoothstep(run.w, run.w + Math.min(BANK_MAX, Math.max(BANK, Math.abs(bestY - h0) * 1.7)), bestD);
   _b.y = bestY;
   return _b;

@@ -76,6 +76,8 @@ import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, scr
 import { PersonalBests } from './game/bests.js';
 import { TrailMap } from './ui/trailmap.js';
 import { PhotoMode } from './ui/photomode.js';
+import { BuildMode } from './game/build/buildmode.js'; // chalet build mode (F inside your rented chalet)
+import { startObjective } from './game/build/objectives.js';
 let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
 let bests = null; // personal-best cards in free ride (top speed, longest jump, milestones)
 
@@ -115,6 +117,7 @@ env.hour = save.hour;
 const input = new Input(canvas);
 const audio = new Audio();
 const hud = new HUD();
+const buildMode = new BuildMode({ save, writeSave, spend, hud, audio, input });
 const raceHud = new RaceHud({ hud, audio });
 
 // The six Meshy skiers: the race field, the skiers on the pistes and the villagers wear all of them. You play
@@ -1040,6 +1043,8 @@ function findInteraction() {
 }
 
 function objective() {
+  const start = startObjective(save, player, buildMode); // rent a chalet -> furnish it -> rent skis
+  if (start) return start;
   if (!player.hasSkis) return 'Rent skis at the ski shop';
   if (gondolaRides === 0 && Math.hypot(player.pos.x, player.pos.z) < 400 && save.stats.races === 0) return 'Take the gondola up the mountain';
   if (save.stats.wins === 0) return 'Find a race and win it';
@@ -1074,6 +1079,7 @@ function waypoint() {
   const mk = trailMap?.target;
   if (mk && Math.hypot(mk.x - p.x, mk.z - p.z) < 30) { trailMap.target = null; hud.flash(`Arrived · ${mk.label}`, 'good', 2200); }
   else if (mk) return to(mk.x, mk.z, mk.label);
+  if (!player.hasSkis && startObjective(save, player)?.startsWith('Rent a chalet')) return null; // (the chalet village)
   if (!player.hasSkis) return to(village.shopDoor.x, village.shopDoor.z, 'Ski shop');
   const g = layout.lifts[0];
   if (gondolaRides === 0 && Math.hypot(p.x, p.z) < 400 && save.stats.races === 0) return to(g.bottom.x, g.bottom.z, 'Gondola');
@@ -1300,6 +1306,7 @@ function loop() {
     interaction = inSession ? null : findInteraction();
     if (interaction && input.hit('KeyE')) { audio.play('click'); interaction.act(); }
   }
+  if (started) buildMode.update(dt, input); // (no-op until you're inside your rented chalet)
   // the ticket seller idles at the booth window
   if (seller.root.position.distanceToSquared(player.pos) < 150 * 150) {
     seller.update(dt, { mode: 'idle', heading: talk.yawFor(seller, sellerHeading, dt), speed: 0, crouch: 0, lean: 0, plow: 0, normal: new THREE.Vector3(0, 1, 0) });

@@ -7,7 +7,8 @@
 //   root                Object3D furniture is parented to (storey/wall coords are in its local space)
 //   camera              the camera used inside
 //   playerPos()         player feet position (world space) or null
-//   storeys()           [{ floorY, ceilingY, rects: [{ x0, z0, x1, z1 }] }]   walkable floor per storey
+//   storeys()           [{ floorY, ceilingY, rects: [{ x0, z0, x1, z1 }], walls, blocks, ceilingAt(x,z) }]
+//                       (defaults to the shared plan in src/game/chaletplan.js via ./chaletlayout.js)
 //   walls()             [{ ax, az, bx, bz, t, y0, y1 }]                     wall segments (with door gaps)
 //   addObject(obj, col) -> handle   place obj (already positioned) + collider col = { x, z, hw, hd, rot, y0, y1 }
 //   removeObject(handle)
@@ -15,6 +16,8 @@
 //
 // Discovery: any module matching src/world/chalet*.js or src/game/chalet*.js that exports
 // `chaletInteriorAPI` (an object, or a zero-arg getter function), or window.chaletInteriorAPI.
+
+import { planLayout } from './chaletlayout.js';
 
 const modules = import.meta.glob(['/src/world/chalet*.js', '/src/game/chalet*.js']);
 
@@ -80,7 +83,7 @@ function normStoreys(raw) {
     const floorY = num(s.floorY, s.y, s.floor, i * 2.9);
     const ceilingY = num(s.ceilingY, s.ceiling, s.top, floorY + num(s.height, 2.6));
     const rects = (s.rects ?? s.floorRects ?? s.walkable ?? s.areas ?? []).map(normRect);
-    return { floorY, ceilingY, rects, walls: s.walls ? s.walls.map(normWall).filter(Boolean) : null };
+    return { floorY, ceilingY, rects, walls: s.walls ? s.walls.map(normWall).filter(Boolean) : null, blocks: s.blocks || [], ceilingAt: s.ceilingAt || (() => ceilingY) };
   });
 }
 
@@ -98,6 +101,7 @@ export function adaptChalet(raw) {
     },
     storeys() {
       const st = normStoreys(raw);
+      if (!st.length) return (this._plan ??= planLayout()); // the shared chalet plan (chaletplan.js)
       const shared = val(raw.walls ?? raw.wallSegments, raw);
       if (shared) { const ws = shared.map(normWall).filter(Boolean); for (const s of st) s.walls ??= ws; }
       return st;

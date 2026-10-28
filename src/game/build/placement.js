@@ -69,7 +69,7 @@ export function snapToWalls(f, walls, reach = 0.35) {
     const dist = (f.x - w.ax) * nx + (f.z - w.az) * nz;
     const supN = f.hw * Math.abs(ux[0] * nx + ux[1] * nz) + f.hd * Math.abs(uz[0] * nx + uz[1] * nz);
     const gap = Math.abs(dist) - supN - (w.t || 0.2) / 2;
-    if (gap > 0.001 && gap < reach) {
+    if (Math.abs(gap) > 0.001 && gap > -0.15 && gap < reach) { // (also pushes out of a slight overlap)
       const s = Math.sign(dist) || 1;
       f.x -= nx * s * gap; f.z -= nz * s * gap;
     }

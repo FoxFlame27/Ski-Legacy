@@ -3,7 +3,7 @@
 // blueprint ghost (red when it doesn't fit), snapping to a 0.25 m grid and flush against walls.
 // Click / Enter buys and places the real Meshy model (with a collider) and saves it to
 // save.chalet.furniture = [{ id, x, y, z, rot }] (coordinates in the interior root's local space).
-// G picks a placed piece up to move it, X sells it back for half its price.
+// Q picks a placed piece up to move it, X sells it back for half its price.
 //
 // It talks to the chalet module only through ./chaletadapter.js (see the interface documented there).
 // main.js calls buildMode.update(dt, input) every frame; that also discovers the chalet API.
@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { FURNITURE_BY_ID, SELL_REFUND } from './catalog.js';
 import { loadFurniture, makeFurnitureObject, renderThumbs } from './furniture.js';
 import { makeGhost } from './blueprint.js';
-import { snap, onFloor, pointOnFloor, boxesOverlap, boxHitsWall, snapToWalls, rayWall, GRID } from './placement.js';
+import { snap, corners, onFloor, pointOnFloor, boxesOverlap, boxHitsWall, snapToWalls, rayWall, GRID } from './placement.js';
 import { adaptChalet, currentRawAPI, discoverChaletAPI } from './chaletadapter.js';
 import { BuildMenu } from '../../ui/buildmenu.js';
 
@@ -116,7 +116,7 @@ export class BuildMode {
     if (cancel) this.cancel();
     else if (click && this.item) this.placeHere();
     if (input.hit('KeyX') && this.hover) this.sell(this.hover);
-    if (input.hit('KeyG') && this.hover && !this.moving) this.pickUp(this.hover);
+    if (input.hit('KeyQ') && this.hover && !this.moving) this.pickUp(this.hover);
   }
 
   setOn(on) {
@@ -207,7 +207,7 @@ export class BuildMode {
       let t = Math.abs(d.y) > 0.05 ? (planeY - o.y) / d.y : -1;
       if (t < 0 || t * hl > REACH) t = Math.min(REACH, 2.5) / hl; // looking level/away: hold it in front
       x = snap(o.x + d.x * t); z = snap(o.z + d.z * t);
-      y = item.place === 'ceiling' ? st.ceilingY : st.floorY;
+      y = item.place === 'ceiling' ? (st.ceilingAt?.(x, z) ?? st.ceilingY) : st.floorY;
     }
 
     let fp = footprint(item, dims, x, y, z, rot);
@@ -230,6 +230,10 @@ export class BuildMode {
     for (const w of walls) {
       if (w === host || w.y0 >= fp.y1 || w.y1 <= fp.y0) continue;
       if (boxHitsWall(fp, w)) return 'Blocked by a wall';
+    }
+    for (const b of st.blocks || []) if (b.y0 < fp.y1 && b.y1 > fp.y0 && boxesOverlap(fp, b)) return 'Keep the way clear';
+    if (st.ceilingAt && item.place !== 'ceiling') {
+      for (const [cx, cz] of corners(fp)) if (fp.y1 > st.ceilingAt(cx, cz) + 0.02) return 'Too tall under the roof';
     }
     if (!item.flat) {
       for (const p of this.placed) {
@@ -358,7 +362,7 @@ export class BuildMode {
       while (top.parent) top = top.parent;
       top.add(this.hoverBox);
       this.hoverBox.update();
-      if (!this.item) this.menu?.status(`${e.item.name} · G move · X sell +$${Math.round(e.item.price * SELL_REFUND)}`);
+      if (!this.item) this.menu?.status(`${e.item.name} · Q move · X sell +$${Math.round(e.item.price * SELL_REFUND)}`);
     }
   }
 

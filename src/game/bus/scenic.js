@@ -356,7 +356,7 @@ export function shapeScenic() {
   };
   // nearest point (d, y, s, ri, side, seg) and the nearest of another stretch (|s - s1| > 60 or another road)
   const A = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null }, B = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null };
-  const CAND = [], BANDS = [], BEST = new Map();
+  const CAND = [], BANDS = [], BEST = new Map(), BO = { ri: 0, s: 0, side: 1 };
   const pick = (x, z) => {
     const arr = grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G));
     A.d = B.d = Infinity;
@@ -405,7 +405,11 @@ export function shapeScenic() {
         let lo = -Infinity, hi = Infinity, soft = 1.6;
         const BD = BANDS; BD.length = 0;
         for (const [d, sg, t] of best.values()) {
-          const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
+          const y = sg.ay + (sg.by - sg.ay) * t;
+          // (its own bench: wider at its own lay-by, whichever stretch is the nearest; before, the lay-by's width
+          // jumped from one leg to the other where the nearest leg swapped: a step in the ground)
+          BO.ri = sg.ri; BO.s = sg.sa + (sg.sb - sg.sa) * t; BO.side = (sg.bx - sg.ax) * (z - sg.az) - (sg.bz - sg.az) * (x - sg.ax) >= 0 ? 1 : -1;
+          const b = bench(BO);
           const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
           // (a further stretch's band loosens from 40 m out, gently (~1 m per m), so one coming into reach never steps
           // the ground where the nearer ones pulled it away from h)
@@ -433,7 +437,6 @@ export function shapeScenic() {
       }
       // (the scenic road's own surface wins on its shoulder: a junction, a lot's spur)
       const kept = keepBand(x, z, h, out);
-      if (globalThis.__scDbg) globalThis.__scDbg.push({ bands: [...BANDS].map((v) => +v.toFixed(2)), best: [...BEST.values()].map(([d, sg]) => [+d.toFixed(1), sg.r.name.slice(0, 5), Math.round(sg.sa)]), h, out, kept, Ad: A.d, Ay: A.y, As: A.s, An: A.r.name, kd: keepBand.d });
       // (and a bus road's where its centre line is the nearer one: the T junctions' mouths)
       return kept === out ? out : out + (kept - out) * Math.max(smoothstep(bench(A), bench(A) + 6, A.d), smoothstep(-1.5, 1.5, A.d - keepBand.d));
     },

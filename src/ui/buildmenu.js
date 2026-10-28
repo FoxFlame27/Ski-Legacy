@@ -29,7 +29,7 @@ export class BuildMenu {
       <div class="bm-keys">
         <b>Wheel</b>/<b>↑</b><b>↓</b> browse · <b>←</b><b>→</b> room<br>
         <b>Click</b>/<b>Enter</b> buy &amp; place · <b>R</b> rotate (hold <b>R</b>+wheel: fine)<br>
-        <b>G</b> move · <b>X</b> sell (50%) · <b>RMB</b>/<b>⌫</b> empty hand · <b>F</b> exit
+        <b>Q</b> move · <b>X</b> sell (50%) · <b>RMB</b>/<b>⌫</b> empty hand · <b>F</b> exit
       </div>`;
     this.flashEl = Object.assign(document.createElement('div'), { id: 'build-flash' });
     this.cross = Object.assign(document.createElement('div'), { id: 'build-cross', hidden: true });

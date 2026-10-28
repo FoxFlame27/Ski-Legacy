@@ -114,7 +114,7 @@ export class BuildMode {
 
   /** One-line HUD objective while inside the chalet (null when not inside). */
   hudLine() {
-    if (!this.chalet || !this.wasActive) return null;
+    if (!this.chalet || !this.wasActive || !this.chalet.active()) return null; // (only while you're inside it)
     if (!this.on) {
       if (this.lampAim) return `Press E to switch the ${this.lampAim.item.name.toLowerCase()} ${this.lampAim.rec.on === false ? 'on' : 'off'}`;
       return this.input.cursorFree ? 'Mouse free · TAB to look around · F to furnish' : 'Press F to furnish your chalet · TAB frees the mouse';

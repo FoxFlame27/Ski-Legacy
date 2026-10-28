@@ -153,6 +153,10 @@ class World {
 
   groundHeight(x, z, yHint = Infinity) {
     let h = this.meshHeight(x, z);
+    // on a road: the road's own smooth surface (drawn from the exact height), not the 2 m terrain triangles, which
+    // go lumpy at its edges where the cuttings and embankments start (Oct 28, the user: "at some places of the
+    // road you bounce up and down, next to the guard rails"); roads.js sets roadSurface once the roads are planned
+    if (this.roadSurface) { const r = this.roadSurface(x, z, h); if (r !== null) h = r; }
     const arr = this.surfaceGrid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
     if (arr) {
       for (let i = 0; i < arr.length; i++) {

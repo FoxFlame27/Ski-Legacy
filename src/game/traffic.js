@@ -378,7 +378,7 @@ export class Traffic {
   }
   tourPose(c) {
     const a = this.tourAt(c.u + c.l * 0.38, {}, c), b = this.tourAt(c.u - c.l * 0.38, {}, c);
-    const ya = world.meshHeight(a.x, a.z), yb = world.meshHeight(b.x, b.z);
+    const ya = world.groundHeight(a.x, a.z, (c.y ?? 0) + 1), yb = world.groundHeight(b.x, b.z, (c.y ?? 0) + 1); // (on the road: its smooth surface)
     c.x = (a.x + b.x) / 2; c.z = (a.z + b.z) / 2; c.y = (ya + yb) / 2 + 0.02;
     c.yaw = Math.atan2(a.x - b.x, a.z - b.z);
     this.pose(c, Math.atan2(yb - ya, Math.hypot(a.x - b.x, a.z - b.z)));
@@ -854,7 +854,7 @@ export class Traffic {
     // slow: 10-15 km/h forward, walking pace in reverse, easing to a stop at the end (and for anything in the way);
     // pure pursuit on the bicycle model (carpath.js): the steering turns gradually, the body only ever goes where it points
     if (followPath(c, c.path, dt, this.clearance(c))) { this.endManoeuvre(c); return; }
-    c.y += (world.meshHeight(c.x, c.z) + 0.03 - c.y) * (1 - Math.exp(-dt * 10));
+    c.y += (world.groundHeight(c.x, c.z, c.y + 1) + 0.03 - c.y) * (1 - Math.exp(-dt * 10));
     this.pose(c, 0);
   }
   endManoeuvre(c) {

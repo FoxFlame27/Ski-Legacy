@@ -333,6 +333,17 @@ function laneGrid() {
  * within `win` m of arc length `s` along it (where a prop stands beside its own road).
  */
 export { BENCH, BERM_IN, MAX_GRADE, CLEAR, nearestRoadPoint };
+// The ground on and beside a road for world.groundHeight: the road's smooth surface (the exact height + 3.5 cm, as
+// bus.js draws it) across the plowed width, easing back to the drawn terrain over the next 1.5 m of shoulder;
+// null away from the roads. (mesh: the drawn-terrain height there, already looked up)
+world.roadSurface = (x, z, mesh) => {
+  if (!busRoads.roads.length) return null;
+  const d = laneDistance(x, z);
+  if (d > ROAD_HALF + 2) return null;
+  const r = world.height(x, z) + 0.035;
+  if (d <= ROAD_HALF + 0.5) return r;
+  return r + (mesh - r) * clamp((d - ROAD_HALF - 0.5) / 1.5, 0, 1);
+};
 export function laneDistance(x, z, own = -1, s = 0, win = 0) {
   const G = laneGrid(), arr = G.map.get(Math.floor(x / G.C) * 100003 + Math.floor(z / G.C));
   let d = Infinity;

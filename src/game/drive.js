@@ -436,8 +436,12 @@ export class Drive {
       const af = Math.atan2(v + a * r, uu) - delta * sgn, ar = Math.atan2(v - b * r, uu);
       const tyre = (al) => Math.sin(1.2 * Math.atan(14 * al)); // (past the peak only a gentle fall: slides stay catchable)
       const kf = Math.min(1, Math.abs(Fxf) / Math.max(1, capF)), kr = Math.min(1, Math.abs(Fxr) / Math.max(1, capR));
-      const Fyf = -capF * Math.sqrt(Math.max(0, 1 - kf * kf)) * tyre(af);
-      const Fyr = -capR * Math.sqrt(Math.max(0, 1 - kr * kr)) * latR * tyre(ar);
+      // (crawling, the wheels just roll where they point: the turn comes from the walking-pace blend below, so the
+      // slip maths' sideways force fades out; else a wheel turned at a standstill reads as a full slide and its drag
+      // all but stops the car pulling away / reversing with the wheel already turned)
+      const kLow = clamp((au - 1) / 3, 0, 1);
+      const Fyf = -capF * Math.sqrt(Math.max(0, 1 - kf * kf)) * tyre(af) * kLow;
+      const Fyr = -capR * Math.sqrt(Math.max(0, 1 - kr * kr)) * latR * tyre(ar) * kLow;
       // resistances: rolling (snow drags more), air (sets the top speed), slope
       const topF = spec.electric ? Fmax * 0.42 : Fmax * Math.pow(RATIOS[RATIOS.length - 1] / RATIOS[0], 0.85) * 0.66;
       const drag = (topF / (spec.top * spec.top)) * u * au;

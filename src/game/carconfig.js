@@ -99,53 +99,67 @@ export function plateTexture(text) {
 }
 
 // ---------------------------------------------------------------- where the plates go (per template, once)
-// Each model's plate: its own plate material's triangles where it has one (front / rear), else a ray from ahead /
-// behind at the plate's height on the real car (fitted frame, m): the surface there and its facing.
-const PLATE_MAT = { car_tesla_m3: /LicensePlate/i, car_bmw_x3: /Nomera/i, car_audi_rs6: /ManufacturerPlate/i };
-const PLATE_Y = { car_vw_golf_gti: [0.42, 0.63], car_dacia_duster: [0.5, 0.8], car_tesla_m3: [0.36, 0.56], car_bmw_x3: [0.45, 0.82], car_audi_rs6: [0.38, 0.8] };
-function plateSpots(t) {
+// Each model's plate spot, measured from its own geometry (fitted frame: m, wheels on y = 0, nose toward +z), front
+// and rear: y = the plate's centre height, tilt = how far its face leans back (deg; the face looks that much up).
+// Where the model has its own plate (mat: its material) the spot is that plate's centre and facing; it is hidden on
+// the instance and ours takes its place. Otherwise the recess / holder the real plate sits in. The depth is found
+// by rays over the plate's whole face: flush on the frontmost point (nothing pokes through), a hair in front.
+//  BMW X3     front: its own plate (Nomera, EU size, in the bumper). rear: its own plate (Nomera, a plane named
+//             "Plane006" that fitCar drops as junk), in its frame (badge material) on the tailgate under the roundel.
+//  Audi RS6   front: the honeycomb under the rings (no plate in the model). rear: its own plate (US size, ManufacturerPlate).
+//  Tesla M3   front / rear: its own plates (LicensePlateText / Red / Yellow, US size) on their holders.
+//  Golf GTI   front: the plate holder on the bumper (a raised 0.5 x 0.1 panel). rear: the flat recess under the plate lights.
+//  Duster     front: the plate holder in the bumper (0.54 x 0.1). rear: the recess on the tailgate (0.5 x 0.09, leaning back).
+const PLATE_SPOT = {
+  car_bmw_x3: { mat: /Nomera/i, f: [0.534, 0], r: [0.965, 15] },
+  car_audi_rs6: { mat: /ManufacturerPlate/i, f: [0.49, 9], r: [0.809, 13.7] },
+  car_tesla_m3: { mat: /LicensePlate/i, f: [0.421, 0], r: [0.767, 0] },
+  car_vw_golf_gti: { f: [0.493, 4], r: [0.515, 4] },
+  car_dacia_duster: { f: [0.60, 0], r: [0.887, 18] },
+};
+export const PLATE_W = 0.52, PLATE_H = 0.11; // EU plate, 520 x 110 mm (the models are at their real size)
+const plateModel = (t) => (t.name || '').replace(/_full$/, '');
+export function plateSpots(t) {
   if (t.plates !== undefined) return t.plates;
   t.plates = [];
   try {
-    const parts = (t.body || t.parts).filter((p) => !p.material.transparent);
+    const spec = PLATE_SPOT[plateModel(t)] || { f: [0.45, 0], r: [0.7, 0] };
+    const parts = [...(t.body || t.parts || []), ...(t.lamps?.parts || [])].filter((p) => !p.material.transparent && !spec.mat?.test(p.material.name || ''));
     const meshes = parts.map((p) => new THREE.Mesh(p.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
-    const L = t.size.z / 2, ys = PLATE_Y[t.name] || [0.45, 0.7], rc = new THREE.Raycaster(), v = new THREE.Vector3();
-    // the plate material's centre per end (where the model has one)
-    const own = [null, null], re = PLATE_MAT[t.name];
-    if (re) for (const p of parts) if (re.test(p.material.name || '')) {
-      const P = p.geometry.attributes.position, b = [new THREE.Box3(), new THREE.Box3()];
-      for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); b[v.z > 0 ? 0 : 1].expandByPoint(v); }
-      b.forEach((bb, k) => { const s = bb.getSize(new THREE.Vector3()); if (!bb.isEmpty() && s.x > 0.25 && s.x < 0.7 && s.y > 0.05 && s.y < 0.3) own[k] = bb.getCenter(new THREE.Vector3()); });
-    }
+    const L = t.size.z / 2, rc = new THREE.Raycaster(), o = new THREE.Vector3();
     for (const k of [0, 1]) {
-      const s = k ? -1 : 1, y = own[k]?.y ?? ys[k], hits = [];
-      for (const [x, dy] of [[0, 0], [0.24, 0], [-0.24, 0], [0, 0.05], [0, -0.05]]) {
-        rc.set(new THREE.Vector3(x, y + dy, s * (L + 1)), new THREE.Vector3(0, 0, -s)); rc.far = 2.2;
-        const h = rc.intersectObjects(meshes, false)[0];
-        hits.push(h ? h.point : null);
-      }
-      if (!hits[0]) continue;
-      // the plate's plane: across from the side hits, up from the high / low ones (a flat plate, in front of all)
-      const across = hits[1] && hits[2] ? hits[1].clone().sub(hits[2]).normalize() : new THREE.Vector3(1, 0, 0);
-      const up = hits[3] && hits[4] ? hits[3].clone().sub(hits[4]).normalize() : new THREE.Vector3(0, 1, 0);
-      if (Math.abs(across.z) > 0.5) across.set(1, 0, 0);
-      if (up.y < 0.75) up.set(0, 1, 0);
-      const n = new THREE.Vector3().crossVectors(across, up).normalize();
-      if (n.z * s < 0) n.negate();
-      up.crossVectors(n, across).normalize(); if (up.y < 0) up.negate(); // (square to the plate's facing)
-      let off = 0;
-      for (const h of hits) if (h) off = Math.max(off, h.clone().sub(hits[0]).dot(n));
-      const at = hits[0].clone().addScaledVector(n, Math.min(0.05, off) + 0.006);
+      const s = k ? -1 : 1, [y, tilt] = k ? spec.r : spec.f, a = tilt * Math.PI / 180;
+      const n = new THREE.Vector3(0, Math.sin(a), s * Math.cos(a));
       // (seen from outside it reads left to right: at the back the plate's x is the car's -x)
-      const x = s > 0 ? across : across.clone().negate();
-      const m = new THREE.Matrix4().makeBasis(x, new THREE.Vector3().crossVectors(n, x).normalize(), n).setPosition(at);
-      t.plates.push({ m, front: !k });
+      const x = new THREE.Vector3(s, 0, 0), up = new THREE.Vector3().crossVectors(n, x);
+      // the surface at the plate's centre (straight in), then 1 m out along the plate's facing from there
+      rc.set(o.set(0, y, s * (L + 1)), new THREE.Vector3(0, 0, -s)); rc.far = 2.5;
+      const h0 = rc.intersectObjects(meshes, false)[0];
+      if (!h0) continue;
+      const A = h0.point.clone().addScaledVector(n, 1);
+      const ds = []; let centre = null;
+      for (const u of [-0.24, -0.16, -0.08, 0, 0.08, 0.16, 0.24]) for (const v of [-0.045, 0, 0.045]) {
+        o.copy(A).addScaledVector(x, u).addScaledVector(up, v);
+        rc.set(o, n.clone().negate()); rc.far = 2.5;
+        const h = rc.intersectObjects(meshes, false)[0];
+        if (!h) continue;
+        ds.push(h.distance);
+        if (!u && !v) centre = h.distance;
+      }
+      if (centre === null) continue;
+      // the frontmost point of the face, leaving out a lone lip / catch at the very edge (more than 2 cm proud of
+      // the median: the recess's rim, a tailgate handle; the plate's edge goes under it, the rest stays flush)
+      ds.sort((p, q) => p - q);
+      const med = ds[ds.length >> 1], near = ds.find((d) => d >= med - 0.02), far = ds[ds.length - 1];
+      const at = A.clone().addScaledVector(n, -near + 0.002); // flush on the frontmost point, 2 mm proud
+      const m = new THREE.Matrix4().makeBasis(x, up, n).setPosition(at);
+      t.plates.push({ m, front: !k, at, n, gap: far - near, sunk: centre - near });
     }
     for (const me of meshes) me.material.dispose();
   } catch (e) { console.warn('plates', t.name, e); }
   return t.plates;
 }
-const plateGeo = new THREE.PlaneGeometry(0.5, 0.108);
+const plateGeo = new THREE.PlaneGeometry(PLATE_W, PLATE_H);
 
 // ---------------------------------------------------------------- interiors (a recolour inside the material)
 // The trim's colour from the texture's own light and shade (lum), only where the seats are for a model whose cabin is
@@ -237,7 +251,11 @@ export function dressCar(inst, t, cfg) {
 /** Number plates (front and back) on any car instance: the rental's own, a random one for the traffic and the
  *  parked cars (Oct 28, the user: "make bots have random number plates"). */
 export function setPlates(inst, t, text = randomPlate()) {
-  if (!inst.plates) { inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
+  if (!inst.plates) {
+    // the model's own plate (its texture, another size) hidden: ours takes its place
+    const own = PLATE_SPOT[plateModel(t)]?.mat;
+    if (own) for (const o of inst.full.children) if (o.isMesh && own.test(o.material?.name || '')) o.visible = false;
+    inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
   const tex = plateTexture(text);
   for (const p of inst.plates) if (p.material.map !== tex) { p.material.map = tex; p.material.needsUpdate = true; }
   return inst;

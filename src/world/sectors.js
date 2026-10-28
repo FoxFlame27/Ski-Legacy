@@ -149,7 +149,7 @@ export function buildSectors(kit) {
   // then the runs themselves: each one graded like a built piste (see pisteBench)
   // (the gentlest first: where a steeper run crosses an easier one it takes the easier one's level, never the reverse)
   const order = ['Talweg', 'Hirschweg', 'Kammweg', 'Höhenweg', 'Almrausch', 'Murmeltier', 'Kammabfahrt', 'Ostkar', 'Steinbock', 'Kamin'];
-  world.addCut(pisteBench([...pistesA, ...pistesB].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)).map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 4, gMax: BAND[p.diff][1] }))));
+  world.addCut(pisteBench([...pistesA, ...pistesB].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)).map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 4, gMax: GRADE_CAP[p.diff] }))));
 }
 
 // ---------------------------------------------------------------- the piste bench
@@ -161,8 +161,10 @@ export function buildSectors(kit) {
 // profiles don't fight: runs are built in priority order (the gentlest first), each one's profile taken from the
 // ground as the runs before it left it, and the earlier run wins on its own bench (the later one meets it at its
 // level, over a snow bank).
-const BANK = 26, BANK_MAX = 100, DEV = +(globalThis.process?.env?.DEV || 10); // m of snow bank beyond a run's bench (at least / at most)
+const BANK = 26, BANK_MAX = 100, DEV = +(globalThis.process?.env?.DEV || 24); // m of snow bank beyond a run's bench (at least / at most)
 const BC = 64;   // m: spatial grid cell
+// the steepest grade a run's bench may hold, by colour: green ~14, blue ~21, red ~26.5, black ~37 degrees
+const GRADE_CAP = [0.25, 0.38, 0.5, 0.75];
 // the run's nearest bench point to (x, z): { w: its weight there (1 on the bench, falling off over the snow bank,
 // whose width grows with the height of the bench over / under the natural ground h0), y: the bench's level }
 const _b = { w: 0, y: 0 };
@@ -191,8 +193,12 @@ function pisteBench(runs) {
   // a pad's flat core stays as it is; its embankment gives way to the bench
   const benched = (x, z, h, upto) => {
     if (!upto) return h;
-    let y = h;
-    for (let k = upto - 1; k >= 0; k--) { const b = benchAt(out[k], x, z, h); if (b.w > 0) y += (b.y - y) * b.w; }
+    // (where benches overlap, each counts with its weight cubed: a run's groomed core outweighs another run's snow
+    // bank, so two runs side by side or crossing don't leave a bank step on either one's piste)
+    let sw = 0, sy = 0, wm = 0;
+    for (let k = 0; k < upto; k++) { const b = benchAt(out[k], x, z, h); if (b.w > 0) { const w3 = b.w * b.w * b.w; sw += w3; sy += w3 * b.y; if (b.w > wm) wm = b.w; } }
+    if (!sw) return h;
+    const y = h + (sy / sw - h) * wm;
     return h + (y - h) * (1 - smoothstep(0.8, 1, world.padInfluence(x, z)));
   };
   let state = 0; // 0: not built, 1: building (the ground it samples is the ground without it), 2: built
@@ -206,7 +212,7 @@ function pisteBench(runs) {
     const lock = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let lk = 1 - Math.min(smoothstep(0, 24, S[i]), smoothstep(0, 24, S[n - 1] - S[i]));
-      for (const o of out) lk = Math.max(lk, benchAt(o, P[i][0], P[i][1], h0[i]).w);
+      for (const o of out) lk = Math.max(lk, smoothstep(0.85, 1, benchAt(o, P[i][0], P[i][1], h0[i]).w)); // (on its groomed core, not its banks)
       lock[i] = lk;
     }
     let Y = Float32Array.from(raw);
@@ -215,10 +221,10 @@ function pisteBench(runs) {
       for (let i = 0; i < n; i++) { let s = 0, w = 0; for (let k = -8; k <= 8; k++) { const j = Math.max(0, Math.min(n - 1, i + k)), wt = 9 - Math.abs(k); s += Y[j] * wt; w += wt; } o[i] = s / w + (raw[i] - s / w) * lock[i]; }
       Y = o;
     }
-    // grade cap: the band's steepest grade (or a little over the line's mean grade, where that is steeper): going
+    // grade cap: the colour's steepest grade (GRADE_CAP; or a little over the line's mean grade, where that is steeper): going
     // down, the profile never falls faster than that (it stays filled above a steep pitch and catches up below)
     // and never climbs; where it ends above the ground, the difference is spread evenly over the whole run
-    const L = S[n - 1] || 1, g = Math.max(r.gMax * 1.1, ((raw[0] - raw[n - 1]) / L) * 1.15);
+    const L = S[n - 1] || 1, g = Math.max(r.gMax, ((raw[0] - raw[n - 1]) / L) * 1.05);
     for (let k = 0; k < 3; k++) {
       for (let i = 1; i < n; i++) Y[i] = Math.min(Y[i - 1], Math.max(Y[i], Y[i - 1] - g * (S[i] - S[i - 1])));
       const e = Y[n - 1] - raw[n - 1];

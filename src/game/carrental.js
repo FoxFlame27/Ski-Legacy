@@ -15,6 +15,7 @@ import { carTemplate, carInstance } from './cars.js';
 import { CarRentalRoom } from './carrentalroom.js';
 import { TowTruck } from './towtruck.js';
 import { CarRentalUI } from '../ui/carrental.js';
+import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate } from './carconfig.js';
 
 export const RENTALS = [
   { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 150, length: 4.3 },
@@ -23,15 +24,11 @@ export const RENTALS = [
   { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 300, length: 4.7 },
   { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 450, length: 5.0 },
 ];
-export const PAINTS = [
-  { id: 'white', label: 'Alpine White', hex: 0xf2f2f0 }, { id: 'red', label: 'Tornado Red', hex: 0x9e1a1a }, { id: 'blue', label: 'Midnight Blue', hex: 0x1f2f52 },
-  { id: 'graphite', label: 'Graphite Grey', hex: 0x3b3e43 }, { id: 'silver', label: 'Glacier Silver', hex: 0xaab0b6 }, { id: 'green', label: 'Forest Green', hex: 0x2f4a3a },
-  { id: 'black', label: 'Night Black', hex: 0x15171a }, { id: 'orange', label: 'Arizona Orange', hex: 0xc4561c },
-];
+export { PAINTS }; // (the configurator's: carconfig.js)
 // the five cars on display inside (one of each, each its own colour)
 const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_tesla_m3', 'white'], ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_dacia_duster', 'orange']];
 export const WRECK_FEE = 1000;
-const paintHex = (id) => (PAINTS.find((p) => p.id === id) || PAINTS[0]).hex;
+const paintHex = (id) => paintOf(id).hex;
 
 export class CarRental {
   constructor(o) {
@@ -60,7 +57,7 @@ export class CarRental {
     }
     // the save: your rental back in the yard
     const s = o.save.rental;
-    if (s && RENTALS.some((c) => c.id === s.id)) { try { this.current = this.spawn(s.id, s.paint); } catch (e) { console.warn('rental car', e); } }
+    if (s && RENTALS.some((c) => c.id === s.id)) { try { o.save.rental = normConfig(s); this.current = this.spawn(o.save.rental); } catch (e) { console.warn('rental car', e); } }
   }
 
   // lot frame -> world { x, z }
@@ -171,10 +168,12 @@ export class CarRental {
   }
 
   // ------------------------------------------------------------------ rental cars (parking entries drive.js can drive)
-  spawn(id, paintId) {
-    const spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
+  // cfg: carconfig.js normConfig() (the car, its paint, interior, rims, plate): the car in the yard is exactly that one,
+  // and so is every look of it drive.js makes (e.dress: driving, the full-detail cockpit)
+  spawn(cfg) {
+    const id = cfg.id, spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
     if (!spec || !gltf || !this.parking) return null;
-    const t = carTemplate(gltf, spec.length, id), inst = carInstance(t, { paint: paintHex(paintId) }), car = inst.group, p = this.carSpot;
+    const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group, p = this.carSpot;
     car.name = 'rental-car';
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;
     (this.parking.group.parent ? this.parking.group : this.scene).add(car);
@@ -183,7 +182,8 @@ export class CarRental {
     const block = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.5, spec.length - 0.1), new THREE.MeshBasicMaterial());
     block.position.y = 0.8; block.visible = false; car.add(block); car.updateMatrixWorld(true);
     this.cameraBlockers?.push(block);
-    const e = { car, inst, t, far: null, full: car.children[0], name: id, length: spec.length, paint: paintHex(paintId), paintId, collider, block, held: [], rental: true, home: { x: p.x, z: p.z, yaw: p.yaw } };
+    const e = { car, inst, t, far: null, full: car.children[0], name: id, length: spec.length, paint: paintHex(cfg.paint), paintId: cfg.paint, cfg, collider, block, held: [], rental: true, home: { x: p.x, z: p.z, yaw: p.yaw } };
+    e.dress = (i, tt) => dressCar(i, tt, e.cfg);
     (this.parking.cars ||= []).push(e);
     if (this.drive) this.drive._cc = null; // (drive.js re-collects the cars' colliders)
     return e;
@@ -202,12 +202,15 @@ export class CarRental {
     if (this.drive) this.drive._cc = null;
   }
 
-  rent(id, paintId) {
-    const spec = RENTALS.find((c) => c.id === id);
-    if (!spec || !this.spend(spec.price)) return;
+  /** The price of a config: the car's rate and the extras (finish, trim, rims, your own plate). */
+  cost(cfg) { const spec = RENTALS.find((c) => c.id === cfg.id) || RENTALS[0], extras = extrasCost(cfg); return { base: spec.price, extras, total: spec.price + extras }; }
+  rent(cfg) {
+    cfg = normConfig(cfg);
+    const spec = RENTALS.find((c) => c.id === cfg.id);
+    if (!spec || !this.spend(this.cost(cfg).total)) return;
     if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; } // (one at a time: the old one is returned)
-    this.current = this.spawn(id, paintId);
-    this.save.rental = { id, paint: paintId };
+    this.current = this.spawn(cfg);
+    this.save.rental = cfg;
     this.writeSave();
     this.hud?.flash(`${spec.label} rented · it waits in the yard out front`, 'gold', 3200);
   }
@@ -249,6 +252,7 @@ export class CarRental {
     if (!this.inside) return;
     const out = () => {
       if (this.ui.isOpen) this.ui.close('leave');
+      this.room.endConfigure();
       this.inside = false; this.room.active = false;
       this.getPost().setView(this.scene, this.camera);
       document.getElementById('crosshair').hidden = true;
@@ -263,11 +267,13 @@ export class CarRental {
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }
 
+  // the configurator: from the car you looked at (its display paint), or your current rental's config (the clerk)
   openCard(pick, paintHexWant) {
-    const paint = PAINTS.find((p) => p.hex === paintHexWant)?.id || this.save.rental?.paint || 'white';
-    this.ui.open({ cars: RENTALS, paints: PAINTS, pick: pick || this.save.rental?.id || RENTALS[0].id, paint, money: this.save.money,
-      current: this.save.rental ? { id: this.save.rental.id, paint: this.save.rental.paint } : null,
-      rent: (id, p) => { this.rent(id, p); this.input?.lock?.(); }, close: () => this.input?.lock?.() });
+    const cur = this.save.rental ? normConfig(this.save.rental) : null;
+    const base = cur && (!pick || pick === cur.id) ? cur : normConfig({ id: pick || RENTALS[0].id, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
+    this.ui.open({ cars: RENTALS, cfg: base, current: cur, money: this.save.money, cost: (c) => this.cost(c),
+      preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
+      rent: (c) => { this.rent(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); } });
   }
 
   /** Inside, per frame (main.js): walking, looking, E. Returns what to show as the prompt. */

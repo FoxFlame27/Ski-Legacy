@@ -8,8 +8,13 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { fitModel } from '../core/assets.js';
-import { carTemplate, carInstance } from './cars.js';
+import { fitModel, loadGLB } from '../core/assets.js';
+import { carTemplate, carInstance, driverEye } from './cars.js';
+import { dressCar } from './carconfig.js';
+// the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
+const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
+// where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
+const SHOT = { car: [0.75, 0.2, 5.6], paint: [1.05, 0.24, 5.4], rims: [1.45, 0.06, 4.6], plate: [Math.PI - 0.3, 0.12, 4.8], sum: [0.6, 0.22, 5.8] };
 
 export const ROOM = { W: 26, D: 16, H: 5.4 };
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0);
@@ -40,6 +45,8 @@ export class CarRentalRoom {
     addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); });
     this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.yaw = Math.PI; this.pitch = -0.08;
     this.obstacles = []; this.aimables = []; this.tables = [];
+    this.cfg = null; // the configurator: { table, step, yaw, pitch, dist } (carrental.js configure())
+    this.models = models; this.cars = cars;
     const pmrem = new THREE.PMREMGenerator(renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
     pmrem.dispose();
@@ -169,7 +176,7 @@ export class CarRentalRoom {
       hit.position.y = 0.85; hit.userData = { kind: 'car', id: d.id, paint: d.paint, label: spec.label };
       spin.add(hit); this.aimables.push(hit);
       S.add(tt);
-      this.tables.push({ spin, speed: 0.1 + 0.03 * (k % 2) });
+      this.tables.push({ spin, speed: 0.1 + 0.03 * (k % 2), id: d.id, inst, t: carTemplate(gltf, spec.length, d.id), spec, x: at[0], z: at[1] });
       this.obstacles.push({ x: at[0], z: at[1], r: R + 0.1 });
       // a spotlight on it from the ceiling (no shadow: the key light casts them)
       const sp = new THREE.SpotLight(0xffe2bd, 60, 12, 0.5, 0.6, 1.6);
@@ -299,6 +306,81 @@ export class CarRentalRoom {
     this.obstacles.push({ x: 12.6, z: -2.4, r: 0.6 }, { x: 12.6, z: -0.8, r: 0.6 });
   }
 
+  // ------------------------------------------------------------------ the configurator (ui/carrental.js): your car, live
+  /** Show cfg on that model's turntable (stopped), the camera on it for this step (interior: from the driver's seat). */
+  configure(cfg, step) {
+    const T = this.tables.find((o) => o.id === cfg.id);
+    if (!T) return;
+    if (this.cfg && this.cfg.table !== T) this.restore(this.cfg.table);
+    const prev = this.cfg;
+    const want = step === 'interior' && FULL[cfg.id] ? 'full' : 'simple';
+    // (a car of its own for the preview: wheels as their own parts, so the rims take their colour)
+    if (!T.cfgInst || T.cfgKind !== want) {
+      const t = want === 'full' && T.fullT ? T.fullT : T.t;
+      if (want === 'full' && !T.fullT) {
+        loadGLB(FULL[cfg.id]).then((g) => { if (!g) return; T.fullT = carTemplate(g, T.spec.length, FULL[cfg.id]); if (this.cfg?.table === T && this.cfg.step === 'interior') this.configure(this.cfg.cfg, 'interior'); }).catch(() => {});
+      }
+      const inst = carInstance(t, { wheels: true });
+      inst.group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      if (T.cfgInst) T.spin.remove(T.cfgInst.group); else T.spin.remove(T.inst.group);
+      T.spin.add(inst.group);
+      T.cfgInst = inst; T.cfgT = t; T.cfgKind = t === T.t ? 'simple' : 'full';
+    }
+    dressCar(T.cfgInst, T.cfgT, cfg);
+    for (const g of T.cfgInst.glass) g.visible = step !== 'interior'; // (from inside: the cabin in clear view)
+    const shot = SHOT[step];
+    this.cfg = { table: T, cfg, step, yaw: shot ? shot[0] : prev?.yaw ?? 0.8, pitch: shot ? shot[1] : 0.2, dist: shot ? shot[2] : 5.5, look: 0, lookP: 0, snap: !prev };
+  }
+  /** Drag: turn round the car (or look round the cabin). */
+  orbit(dx, dy) {
+    const c = this.cfg;
+    if (!c) return;
+    if (c.step === 'interior') { c.look = Math.max(-1.2, Math.min(1.2, c.look - dx)); c.lookP = Math.max(-0.5, Math.min(0.4, c.lookP - dy)); }
+    else { c.yaw -= dx; c.pitch = Math.max(0.02, Math.min(0.75, c.pitch + dy)); c.dragged = true; }
+  }
+  restore(T) {
+    if (!T?.cfgInst) return;
+    T.spin.remove(T.cfgInst.group); T.spin.add(T.inst.group);
+    T.cfgInst = null; T.cfgKind = null;
+  }
+  endConfigure() {
+    if (!this.cfg) return;
+    this.restore(this.cfg.table);
+    this.cfg = null;
+    this.camera.clearViewOffset();
+  }
+  // the configurator's camera: round the stopped turntable, or in the driver's seat; the car framed right of the panel
+  cfgCamera(dt) {
+    const c = this.cfg, T = c.table, cam = this.camera;
+    const W = innerWidth, H = innerHeight;
+    cam.setViewOffset(W, H, -W * 0.2, 0, W, H);
+    const pos = _v, look = new THREE.Vector3();
+    T.spin.updateMatrixWorld(true);
+    const heading = T.spin.rotation.y;
+    if (c.step === 'interior') {
+      const t = T.cfgT, eye = driverEye(t);
+      eye.y += 0.04; eye.z -= 0.05;
+      pos.copy(eye); T.spin.localToWorld(pos);
+      const a = c.look, p = -0.22 + c.lookP;
+      look.set(eye.x + Math.sin(a) * Math.cos(p), eye.y + Math.sin(p), eye.z + Math.cos(a) * Math.cos(p)); T.spin.localToWorld(look);
+      cam.fov = 72;
+    } else {
+      if (!c.dragged) c.yaw += dt * 0.06; // (a slow drift round it)
+      const a = heading + c.yaw;
+      pos.set(T.x + Math.sin(a) * c.dist * Math.cos(c.pitch), 0.16 + 0.7 + Math.sin(c.pitch) * c.dist, T.z + Math.cos(a) * c.dist * Math.cos(c.pitch));
+      pos.x = Math.max(-ROOM.W / 2 + 0.4, Math.min(ROOM.W / 2 - 0.4, pos.x)); pos.z = Math.max(-ROOM.D / 2 + 0.4, Math.min(ROOM.D / 2 - 0.4, pos.z));
+      look.set(T.x, c.step === 'rims' ? 0.5 : 0.75, T.z);
+      cam.fov = 45;
+    }
+    // (eased there; at once the first time and between inside / outside)
+    const inside = c.step === 'interior';
+    if (c.snap || c.wasInside !== inside) { cam.position.copy(pos); c.at = look.clone(); c.snap = false; }
+    else { const k = 1 - Math.exp(-dt * 5); cam.position.lerp(pos, k); c.at.lerp(look, k); }
+    c.wasInside = inside;
+    cam.lookAt(c.at);
+    cam.updateProjectionMatrix();
+  }
+
   // ------------------------------------------------------------------ per frame
   enter() {
     this.active = true;
@@ -308,7 +390,9 @@ export class CarRentalRoom {
 
   /** Walk / look (input null: a panel is open); returns what the crosshair is on: { kind, id, paint, label } or null. */
   update(dt, input, sensitivity = 1, talking = false) {
-    for (const t of this.tables) t.spin.rotation.y += t.speed * dt;
+    for (const t of this.tables) if (this.cfg?.table !== t) t.spin.rotation.y += t.speed * dt;
+    if (this.cfg) { this.cfgCamera(dt); return null; } // (configuring: the camera is on your car)
+    if (this.camera.fov !== 70) { this.camera.fov = 70; this.camera.updateProjectionMatrix(); }
     // the clerk: idle behind the desk, turning to you when you come close or while you talk
     if (this.clerk) {
       const c = this.clerk.root.position, near = talking || Math.hypot(this.pos.x - c.x, this.pos.z - c.z) < 6;

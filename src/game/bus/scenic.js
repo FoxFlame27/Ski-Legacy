@@ -50,7 +50,7 @@ function badGround(O, allowNear = null) {
 }
 
 // the climb: contour walker with hairpins -> [[x, z]...] every ~4 m, or null
-function serpentine(x, z, hd, O, TOP_H, { leg0 = 380, legs = [300, 180], maxPins = 12, allowNear = null } = {}) {
+function serpentine(x, z, hd, O, TOP_H, { leg0 = 380, legs = [300, 180], maxPins = 12, allowNear = null, goal = null } = {}) {
   const bad = badGround(O, allowNear), H = (a, b) => world.height(a, b, 8), ds = 4, pts = [[x, z]];
   let leg = 0, legLen = leg0, hairpins = 0;
   const nearOwn = (px, pz, skip) => { // distance to the road so far, leaving out its last `skip` points
@@ -65,6 +65,7 @@ function serpentine(x, z, hd, O, TOP_H, { leg0 = 380, legs = [300, 180], maxPins
     for (let k = -6; k <= 6; k++) {
       const a = hd + (k / 6) * (ds / 40), nx = x + Math.sin(a) * ds, nz = z + Math.cos(a) * ds;
       let cost = Math.abs((H(nx, nz) - h0) / ds - LEG_G) + Math.abs(k) * 0.002;
+      if (goal && Math.hypot(goal.x - x, goal.z - z) > 250) cost += 0.03 * (1 - Math.cos(a - Math.atan2(goal.x - x, goal.z - z))); // (toward the mountain while the ground lets it)
       if (bad(nx, nz)) cost += 10;
       const own = nearOwn(nx, nz, 30);
       if (own < 48) cost += (48 - own) * 0.08;
@@ -142,12 +143,10 @@ export function planScenic(O) {
   const angA = th + Math.PI;
   const pa = [[armPt(angA, RING_R).x, armPt(angA, RING_R).z], ...terrace.slice().reverse(), [J.x + ux * 12, J.z + uz * 12], [J.x, J.z]];
   // B: ring -> the climb's start, then the switchbacks
-  const angB = dirTo(CLIMB_AT);
-  const pb0 = arm(angB, CLIMB_AT, { margin: 300 });
-  if (!pb0) { console.warn('scenic road: no way to the mountain'); return; }
-  const m = pb0.length, hd0 = Math.atan2(pb0[m - 1][0] - pb0[m - 3][0], pb0[m - 1][1] - pb0[m - 3][1]);
-  const climb = serpentine(CLIMB_AT.x, CLIMB_AT.z, hd0, O, TOP_H);
-  if (!climb) { console.warn('scenic road: no climb'); return; }
+  const angB = dirTo(CLIMB_AT), b0 = armPt(angB, RING_R), b1 = armPt(angB, RING_R + 14);
+  const climb = serpentine(b1.x, b1.z, angB, O, TOP_H, { goal: CLIMB_AT, allowNear: ring, leg0: 500 });
+  if (!climb) { console.warn('scenic road: no climb', Math.round(ring.x), Math.round(ring.z)); return; }
+  const pb0 = [[b0.x, b0.z]];
   const pb = [...pb0, ...climb.slice(1)];
   // the summit car park where the climb ends
   const e = pb.length, hx0 = pb[e - 1][0] - pb[e - 3][0], hz0 = pb[e - 1][1] - pb[e - 3][1], hl = Math.hypot(hx0, hz0) || 1;

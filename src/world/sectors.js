@@ -45,11 +45,18 @@ export function buildSectors(kit) {
   };
   const uv = (F, p, du = 0, dv = 0) => { const [u, v] = faceUV(F, p.x, p.z); return [u + du, v + dv]; };
 
+  // a chair's top station gets a level apron down the face in front of it, where its runs start side by side
+  const apron = (l) => {
+    const top = world.pads.find((pd) => pd.x === l.top.x && pd.z === l.top.z);
+    world.addPad({ x: l.top.x - l.dir[0] * 40, z: l.top.z - l.dir[1] * 40, r: 30, blend: 40, h: top ? top.h - 3 : undefined });
+  };
+
   // ---------------------------------------------------------------- Hirschalm
   const hChair = addLift({ type: 'chair', name: 'Hirschalm Chair', bottom: { x: 2960, z: 150 }, top: { x: 3070, z: 930 }, price: 10,
     topName: 'the Kamm', bottomName: 'the Hirschalm' });
   const aChair = addLift({ type: 'chair', name: 'Adlerblick Chair', bottom: { x: 2830, z: 10 }, top: { x: 2430, z: -455 }, price: 10,
     topName: 'the Adlerhorn summit', bottomName: 'the Hirschalm' });
+  apron(hChair);
   // the alm restaurant on the basin, west of the chairs' bases, its terrace facing south over the basin
   const hut = { x: 2700, z: 190, name: 'Hirschalm Hütte', label: 'Hirschalm · Hirschalm Hütte', yaw: 0.35, peak: 'hirschalm' };
   world.addPad({ x: hut.x, z: hut.z, r: 18, blend: 22 });
@@ -59,9 +66,9 @@ export function buildSectors(kit) {
   world.addPad({ x: patrol.x, z: patrol.z, r: 6, blend: 10 });
 
   const FA = face('hirschalm', hChair.top, hChair.bottom, 420, 360);
-  const kamm = route(FA, [36, 20], uv(FA, hChair.bottom, -26, 34), 2, { side: 1 });
-  const stein = route(FA, [36, -4], uv(FA, hChair.bottom, -30, -6), 3, { side: 0, steepCost: 20 });
-  const alm = route(FA, [36, -30], uv(FA, hChair.bottom, -24, -40), 1, { side: -1, steepCost: 120 });
+  const kamm = route(FA, [50, 20], uv(FA, hChair.bottom, -26, 34), 2, { side: 1 });
+  const stein = route(FA, [50, -4], uv(FA, hChair.bottom, -30, -6), 3, { side: 0, steepCost: 20 });
+  const alm = route(FA, [50, -30], uv(FA, hChair.bottom, -24, -40), 1, { side: -1, steepCost: 120 });
   // the Hirschweg: from the Adlerhorn top station down into the basin (a long, easy cat track)
   const aTop = adler?.lift.top ?? { x: 2290, z: -560 };
   const FH = face('hirschweg', aTop, aChair.bottom, 420, 360);
@@ -88,18 +95,19 @@ export function buildSectors(kit) {
   // ---------------------------------------------------------------- Ostkar
   const oChair = addLift({ type: 'chair', name: 'Ostkar Chair', bottom: { x: 3880, z: 150 }, top: { x: 3740, z: 1010 }, price: 10,
     topName: 'the Ostkar ridge', bottomName: 'the Ostkar' });
+  apron(oChair);
   const opatrol = { x: oChair.top.x + 38, z: oChair.top.z + 22 };
   world.addPad({ x: opatrol.x, z: opatrol.z, r: 6, blend: 10 });
   const FO = face('ostkar', oChair.top, oChair.bottom, 380, 320);
-  const murmel = route(FO, [36, 28], uv(FO, oChair.bottom, -26, 30), 1, { side: 1, steepCost: 120 });
-  const ost = route(FO, [36, 2], uv(FO, oChair.bottom, -30, 4), 2, { side: 0 });
-  const kamin = route(FO, [36, -26], uv(FO, oChair.bottom, -26, -30), 3, { side: -1, steepCost: 20 });
+  const murmel = route(FO, [50, 28], uv(FO, oChair.bottom, -26, 30), 1, { side: 1, steepCost: 120 });
+  const ost = route(FO, [50, 2], uv(FO, oChair.bottom, -30, 4), 2, { side: 0 });
+  const kamin = route(FO, [50, -26], uv(FO, oChair.bottom, -26, -30), 3, { side: -1, steepCost: 20 });
   // links: the Kammweg from the Hirschalm Chair's top east to the Ostkar Chair, the Höhenweg from the Ostkar
   // Chair's top back west to the Hirschalm Chair
   const FK = face('kammweg', hChair.top, oChair.bottom, 420, 360);
-  const kweg = route(FK, [40, -36], uv(FK, oChair.bottom, -30, -40), 1, { turnCost: 20, sideHill: 1.2, steepCost: 120 });
+  const kweg = route(FK, [50, -36], uv(FK, oChair.bottom, -30, -40), 1, { turnCost: 20, sideHill: 1.2, steepCost: 120 });
   const FW = face('hoehenweg', oChair.top, hChair.bottom, 420, 360);
-  const hoehe = route(FW, [40, 36], uv(FW, hChair.bottom, -30, 40), 1, { turnCost: 20, sideHill: 1.2, steepCost: 120 });
+  const hoehe = route(FW, [50, 36], uv(FW, hChair.bottom, -30, 40), 1, { turnCost: 20, sideHill: 1.2, steepCost: 120 });
   const pistesB = [
     addPiste('Murmeltier', 1, murmel, { peak: 'ostkar', number: 61 }),
     addPiste('Ostkar', 2, ost, { peak: 'ostkar', number: 62 }),
@@ -133,7 +141,7 @@ export function buildSectors(kit) {
 // profiles don't fight: runs are built in priority order (the gentlest first), each one's profile taken from the
 // ground as the runs before it left it, and the earlier run wins on its own bench (the later one meets it at its
 // level, over a snow bank).
-const BANK = 26, BANK_MAX = 100; // m of snow bank beyond a run's bench (at least / at most)
+const BANK = 26, BANK_MAX = 100, DEV = +(globalThis.process?.env?.DEV || 10); // m of snow bank beyond a run's bench (at least / at most)
 const BC = 64;   // m: spatial grid cell
 // the run's nearest bench point to (x, z): { w: its weight there (1 on the bench, falling off over the snow bank,
 // whose width grows with the height of the bench over / under the natural ground h0), y: the bench's level }
@@ -196,7 +204,9 @@ function pisteBench(runs) {
       const e = Y[n - 1] - raw[n - 1];
       if (e > 0) for (let i = 0; i < n; i++) Y[i] -= (e * S[i]) / L;
     }
-    for (let i = 0; i < n; i++) Y[i] += (raw[i] - Y[i]) * lock[i];
+    // (a bench is cut or filled at most DEV m: no towering embankments; where the line is steeper than that allows,
+    // the run keeps the ground's own, smoothed grade)
+    for (let i = 0; i < n; i++) { Y[i] = Math.max(raw[i] - DEV, Math.min(raw[i] + DEV, Y[i])); Y[i] += (raw[i] - Y[i]) * lock[i]; }
     const run = { Y, w: r.w, pts: P, G: new Map() };
     for (let i = 1; i < n; i++) {
       const [ax, az] = P[i - 1], [bx, bz] = P[i], seg = { ax, az, bx, bz, ya: Y[i - 1], yb: Y[i] };

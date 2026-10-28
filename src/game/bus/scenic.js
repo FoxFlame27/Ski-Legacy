@@ -314,9 +314,49 @@ export function shapeScenic() {
   for (const ring of rings) world.addCorridor([[ring.x - 1, ring.z], [ring.x + 1, ring.z]], ring.R + BENCH, 'lift', { busRoad: true, scenic: true });
   const ringNear = (x, z, r) => { for (const ring of rings) if (Math.abs(x - ring.x) < r && Math.abs(z - ring.z) < r && Math.hypot(x - ring.x, z - ring.z) < r) return ring; return null; };
   const lb = (busRoads.laybys || []).filter((l) => l.scenic);
+  // the bus roads and the car parks keep their own ground: the scenic cut may only ease toward them at a ~42 degree
+  // batter (before, a switchback's deep fill 75 m off buried the valley bus road 23 m deep: the bus drove through the hill)
+  const KEEP_K = 0.9, KG = 32, keep = new Map();
+  busRoads.roads.forEach((r, ri) => {
+    if (r.scenic) return;
+    for (let i = 0; i < r.n - 1; i++) {
+      const sg = [r.X[i], r.Z[i], r.X[i + 1], r.Z[i + 1], r.Y[i], r.Y[i + 1], ri * 4096 + Math.floor(r.S[i] / 48)], R = 80;
+      for (let cx = Math.floor((Math.min(sg[0], sg[2]) - R) / KG); cx <= Math.floor((Math.max(sg[0], sg[2]) + R) / KG); cx++) for (let cz = Math.floor((Math.min(sg[1], sg[3]) - R) / KG); cz <= Math.floor((Math.max(sg[1], sg[3]) + R) / KG); cz++) {
+        const key = cx * 65536 + cz;
+        if (!keep.has(key)) keep.set(key, []);
+        keep.get(key).push(sg);
+      }
+    }
+  });
+  const KB = new Map();
+  const keepBand = (x, z, h, out) => {
+    let lo = -Infinity, hi = Infinity;
+    keepBand.d = Infinity;
+    const arr = keep.get(Math.floor(x / KG) * 65536 + Math.floor(z / KG));
+    if (arr) {
+      KB.clear(); // (each road's stretch of ~48 m once: its nearest segment)
+      for (const sg of arr) {
+        const [ax, az, bx, bz, ay, by, key] = sg, ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, t = clamp(((x - ax) * ex + (z - az) * ez) / l2, 0, 1);
+        const d = Math.hypot(ax + ex * t - x, az + ez * t - z), o = KB.get(key);
+        if (!o || d < o[0]) KB.set(key, [d, ay + (by - ay) * t]);
+      }
+      for (const [d] of KB.values()) keepBand.d = Math.min(keepBand.d, d);
+      // (+ the grade along the road for the further stretches: the next stretch of the same road agrees)
+      for (const [d, y] of KB.values()) { const w = KEEP_K * Math.max(0, d - BENCH) + (d > keepBand.d ? 0.3 * d : 0); lo = Math.max(lo, y - w); hi = Math.min(hi, y + w); }
+    }
+    for (const L of busRoads.lots) {
+      const dx = x - L.x, dz = z - L.z;
+      if (Math.abs(dx) > 120 || Math.abs(dz) > 120) continue;
+      const u = dx * L.ux + dz * L.uz, v = dx * L.vx + dz * L.vz, o = Math.hypot(Math.max(0, Math.abs(u) - L.hw), Math.max(0, Math.abs(v) - L.hd));
+      const w = KEEP_K * Math.max(0, o - 1.5);
+      lo = Math.max(lo, L.y - w); hi = Math.min(hi, L.y + w);
+    }
+    if (lo > hi) return out; // (two of them disagree: their own cut decides, h)
+    return clamp(out, Math.min(lo, h), Math.max(hi, h));
+  };
   // nearest point (d, y, s, ri, side, seg) and the nearest of another stretch (|s - s1| > 60 or another road)
   const A = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null }, B = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null };
-  const CAND = [], BEST = new Map();
+  const CAND = [], BANDS = [], BEST = new Map();
   const pick = (x, z) => {
     const arr = grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G));
     A.d = B.d = Infinity;
@@ -355,8 +395,6 @@ export function shapeScenic() {
       const bA = bench(A);
       if (A.d <= bA) out = A.y;
       else {
-        // (nearest first: a further leg narrows the band only as far as it still agrees with the nearer ones, so the
-        // ground is continuous at every shoulder and between legs too steep apart the nearer leg's batter wins)
         const best = BEST; best.clear(); // (each road's stretch of ~48 m once: its nearest segment)
         for (const c of CAND) {
           if (c[0] > REACH) continue;
@@ -364,31 +402,37 @@ export function shapeScenic() {
           if (!o || c[0] < o[0]) best.set(key, c);
         }
         // (each stretch's band: y +- its batter, widened to nothing toward REACH so a stretch fades in smoothly)
-        let lo = -Infinity, hi = Infinity, soft = 1.6, ws = 0, wy = 0;
+        let lo = -Infinity, hi = Infinity, soft = 1.6;
+        const BD = BANDS; BD.length = 0;
         for (const [d, sg, t] of best.values()) {
           const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
           const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
           const e = Math.max(0, d - b), w = k * e + 4000 * f * f, l = y - w, u = y + w;
           lo = Math.max(lo, l); hi = Math.min(hi, u); soft = Math.min(soft, 0.2 * w + 0.01);
-          // (inverse-distance weights of each band's own answer: used where the bands disagree)
-          const wt = (1 - f) / ((e + 0.5) * (e + 0.5));
-          ws += wt; wy += wt * (h < l ? l : h > u ? u : h);
+          BD.push((1 - f) / (e * e + 0.02), l, u); // (its inverse-distance weight: used where the bands disagree)
         }
         // the bands agree (the batters meet the slope): the ground eased into all of them; where they do not (two legs
         // too steep apart, stacked switchbacks), each leg's own batter weighted by nearness, blended in by how far they
         // disagree: continuous everywhere (no cliffs where the nearest legs swap)
-        if (lo <= hi) out = smax(smin(h, hi, soft), lo, soft);
-        else {
-          const c = h < hi ? hi : h > lo ? lo : h, W = ws > 0 ? wy / ws : c;
-          out = c + (W - c) * smoothstep(0, 8, lo - hi) * smoothstep(0, 3, A.d - bA); // (A's own height at its shoulder)
-        }
+        if (lo > hi - 4) {
+          // (P: the ground pinned into the intersection, or into the gap between the bands where they disagree; W: each
+          // band's nearest point to P weighted by nearness, so W = P where the bands just meet: no step there)
+          const P = lo <= hi ? clamp(h, lo, hi) : clamp(h, hi, lo);
+          let ws = 0, wy = 0;
+          for (let q = 0; q < BD.length; q += 3) { ws += BD[q]; wy += BD[q] * clamp(P, BD[q + 1], BD[q + 2]); }
+          const W = ws > 0 ? wy / ws : P, t = smoothstep(-4, 0, lo - hi);
+          out = t >= 1 ? W : smax(smin(h, hi, soft), lo, soft) * (1 - t) + W * t;
+        } else out = smax(smin(h, hi, soft), lo, soft);
       }
       // the plough berm (as on the bus roads; none round the ring and at the pull-outs: berm() tapers there)
       if (spacing <= 4 && A.d > BERM_IN && A.d < BERM_IN + 4.8 && !A.r.ringRoad && !ringNear(x, z, RING_R + 22)) {
         const bm = berm(A.ri, A.side, A.s, A.r.length, x, z), t = (A.d - BERM_IN) / bm.W;
         if (bm.H > 0.01 && t > 0 && t < 1) out += bm.H * 0.8 * (t < 0.38 ? smoothstep(0, 0.38, t) : 1 - smoothstep(0.38, 1, t));
       }
-      return out;
+      // (the scenic road's own surface wins on its shoulder: a junction, a lot's spur)
+      const kept = keepBand(x, z, h, out);
+      // (and a bus road's where its centre line is the nearer one: the T junctions' mouths)
+      return kept === out ? out : out + (kept - out) * Math.max(smoothstep(bench(A), bench(A) + 6, A.d), smoothstep(-1.5, 1.5, A.d - keepBand.d));
     },
   });
 }

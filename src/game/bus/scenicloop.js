@@ -16,7 +16,7 @@ import { world } from '../../world/world.js';
 import { expressNearest } from '../../world/expressroute.js';
 import { busRoads, smoothPath, makeRoad, roadAt, laneDistance, CLEAR } from './roads.js';
 import { zigzag, lotAt, ringRoad, findLaybys, RING_R } from './scenic.js';
-import { routeH } from './scenicnet.js';
+import { routeH, smoothRoute } from './scenicnet.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const SC_GRADE = 0.115;
@@ -25,12 +25,21 @@ const EAST_AT = { x: 3560, z: 1800 };     // the Ostal roundabout (the valley fl
 const PASS_AT = { x: 2790, z: 1660 };     // the pass (the saddle north of the Sonnenkopf's summit)
 const BACK_AT = { x: 2760, z: 3100 };     // the Hinterkopf roundabout (the hollow behind the Sonnenkopf)
 const BRINK_AT = { x: 1760, z: 3300 };    // the top of the switchbacks down into the Legacy valley
-const VALLEY_J = { x: 570, z: 3300 };     // the T junction on the valley road
+const VALLEY_J = { x: 640, z: 3110 };     // the T junction on the valley road
 const XING = [4150, 4470];                // the Express's arc length span (its tunnel under the ridge) we may cross
 const SECTORS = { minx: 2380 - 130, maxx: 4200 + 130, minz: -640 - 130, maxz: 1150 + 130 }; // (sectors.js CLIP + room)
 
 // no-go ground for the new roads: allow = [{x, z, r}] spots where other roads may be near (our junctions)
-function badNet(O, allow = [], { xing = false } = {}) {
+// the new roads planned so far (not in busRoads.roads yet: laneDistance does not see them), in 40 m cells
+const PLAN = new Map();
+function addPlanned(pts) { for (const [x, z] of pts) { const k = Math.floor(x / 40) * 65536 + Math.floor(z / 40); if (!PLAN.has(k)) PLAN.set(k, []); PLAN.get(k).push(x, z); } }
+function nearPlanned(x, z) {
+  let d = Infinity;
+  const cx = Math.floor(x / 40), cz = Math.floor(z / 40);
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const arr = PLAN.get((cx + a) * 65536 + cz + b); if (arr) for (let i = 0; i < arr.length; i += 2) d = Math.min(d, Math.hypot(arr[i] - x, arr[i + 1] - z)); }
+  return d;
+}
+function badNet(O, allow = [], { xing = false, planned = true } = {}) {
   const q = {};
   const rental = busRoads.rental;
   return (x, z) => {
@@ -45,7 +54,7 @@ function badNet(O, allow = [], { xing = false } = {}) {
     const e = expressNearest(x, z);
     if (e && e.d < 50 && !(xing && e.s > XING[0] && e.s < XING[1])) return true;
     for (const a of allow) if (Math.hypot(x - a.x, z - a.z) < a.r) return false;
-    return laneDistance(x, z) < 34;
+    return laneDistance(x, z) < 28 || (planned && nearPlanned(x, z) < 45);
   };
 }
 
@@ -123,9 +132,9 @@ function routed(head, tail, y0, y1, bad, O, opts = {}) {
   const a = head[head.length - 1], b = tail[0];
   const dA = Math.atan2(a[0] - head[head.length - 2][0], a[1] - head[head.length - 2][1]);
   const dB = Math.atan2(tail[1][0] - b[0], tail[1][1] - b[1]);
-  const raw = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 0.8, soft: true, y0, y1: opts.noY1 ? undefined : y1, dirA: dA, dirB: dB, exK: opts.exK ?? 1000 });
+  const raw = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 0.8, soft: true, y0, y1: opts.noY1 ? undefined : y1, dirA: dA, dirB: dB, exK: opts.exK ?? (+(typeof process !== 'undefined' && process.env?.EXK) || 300) });
   if (!raw) return null;
-  return smoothPath([...head.slice(0, -1), ...raw, ...tail.slice(1)], 4, 4);
+  return smoothRoute([...head, ...raw.slice(1, -1), ...tail], { fixedA: head.length, fixedB: tail.length });
 }
 
 /** Plan the Passstrasse, the Hinterkopfstrasse, their roundabouts, junctions and car parks (appended to busRoads). */
@@ -134,6 +143,7 @@ export function planScenicLoop(O) {
   if (!SC) return;
   const P0 = SC.ring;
   const t0 = Date.now();
+  PLAN.clear();
   const roads = [], lots = [], tees = [];
   let RL1 = null, RL2 = null, brinkLot = null, H = null, passLot = null, RP = null;
   // ---- the Ostal roundabout
@@ -143,8 +153,8 @@ export function planScenicLoop(O) {
   E.name = 'Ostal roundabout';
   // ---- the Passstrasse: the switchbacks up from the Ostal (zigzag from the roundabout), the rest routed
   const angEP = freeAngle(E, dirTo(E, PASS_AT));
-  const bE = armPt(E, angEP, RING_R + 14);
-  const badP = badNet(O, [{ x: P0.x, z: P0.z, r: 80 }, { x: E.x, z: E.z, r: 80 }]);
+  const bE = armPt(E, angEP, RING_R + 34); // (the switchbacks' first leg well clear of the roundabout's other arms)
+  const badP = badNet(O, [{ x: P0.x, z: P0.z, r: 85 }, { x: E.x, z: E.z, r: 55 }]);
   const ZZ = zigzag(bE, angEP, E.y, O, null, { topH: Hs(PASS_AT.x, PASS_AT.z) - 4, bad: badP, minPins: 2, legHalf: 120 });
   if (!ZZ) { console.warn('scenic loop: no switchbacks up to the pass'); return; }
   DBG('pass zigzag pins', ZZ.pins, 'yEnd', ZZ.yEnd.toFixed(0), 'end', ZZ.pts[ZZ.pts.length - 1].map(Math.round));
@@ -157,18 +167,18 @@ export function planScenicLoop(O) {
   const mid = routed(headP, tailR, P0.y, ZZ.yEnd, badP, O);
   if (!mid) { console.warn('scenic loop: no way to the pass'); return; }
   const eEnd = [...zUp.slice(0, 12).reverse()];
-  for (let t = 10; t >= 0; t -= 4) { const q = armPt(E, angEP, RING_R + t); eEnd.push([q.x, q.z]); }
+  for (let t = 30; t >= 0; t -= 4) { const q = armPt(E, angEP, RING_R + t); eEnd.push([q.x, q.z]); }
   const passPts = [...mid, ...tailP.slice(12, tailP.length - 13), ...smoothPath(eEnd, 4, 4)]; // (the corner into the arm rounded)
   RP = makeRoad(passPts, { name: P0.name, ring: true }, { name: E.name, ring: true }, { y0: P0.y, y1: E.y, maxGrade: SC_GRADE, envelope: true });
   RP.name = 'Passstrasse'; RP.ringAt0 = P0; RP.ringAtEnd = E;
-  roads.push(RP);
+  roads.push(RP); addPlanned(passPts);
   P0.arms.push({ road: RP, end: 0, ang: angPE });
   E.arms.push({ road: RP, end: 1, ang: angEP });
   // the Passhöhe car park: on a T junction near the top
   let iTop = 0;
   for (let i = 0; i < RP.n; i++) if (RP.Y[i] > RP.Y[iTop]) iTop = i;
   const sTop = RP.S[iTop];
-  passLot = spurLot(RP, sTop - 500, sTop + 200, { size: 'small', name: 'Passhöhe car park', hw: 15, hd: 9 }, badP);
+  passLot = spurLot(RP, sTop - 500, sTop + 200, { size: 'small', name: 'Passhöhe car park', hw: 15, hd: 9 }, badNet(O, [], { planned: false }));
   // ---- the Ostal car park (a short spur off the roundabout, on the side away from the pass)
   const lotSpur = (ring, want, name) => {
     for (let k = 0; k < 8; k++) {
@@ -193,13 +203,14 @@ export function planScenicLoop(O) {
   H = ringSite(BACK_AT, bad0);
   if (!H) { console.warn('scenic loop: no Hinterkopf roundabout site'); finish(); return; }
   H.name = 'Hinterkopf roundabout';
-  const angEH = freeAngle(E, dirTo(E, H)), angHE = freeAngle(H, dirTo(H, E));
-  const badL = badNet(O, [{ x: E.x, z: E.z, r: 80 }, { x: H.x, z: H.z, r: 80 }]);
+  const side = Math.sign(wrap(dirTo(E, H) - angEP)) || 1; // (away from the switchbacks)
+  const angEH = freeAngle(E, dirTo(E, H) + side * 0.6), angHE = freeAngle(H, dirTo(H, E));
+  const badL = badNet(O, [{ x: E.x, z: E.z, r: 55 }, { x: H.x, z: H.z, r: 55 }]);
   const pl1 = routed(armStart(E, angEH), armStart(H, angHE).reverse(), E.y, H.y, badL, O);
   if (pl1) {
     RL1 = makeRoad(pl1, { name: E.name, ring: true }, { name: H.name, ring: true }, { y0: E.y, y1: H.y, maxGrade: SC_GRADE, envelope: true });
     RL1.name = 'Ostalstrasse'; RL1.ringAt0 = E; RL1.ringAtEnd = H;
-    roads.push(RL1);
+    roads.push(RL1); addPlanned(pl1);
     E.arms.push({ road: RL1, end: 0, ang: angEH });
     H.arms.push({ road: RL1, end: 1, ang: angHE });
   } else console.warn('scenic loop: no road down the Ostal');
@@ -211,21 +222,21 @@ export function planScenicLoop(O) {
   DBG('valley J', J && Math.round(J.d), J && [Math.round(J.x), Math.round(J.z)], 'passLot', !!passLot, 'sTop', Math.round(sTop), 'RP', Math.round(RP.length));
   if (H && J && J.d < 150) {
     const jd = roadAt(J.m, J.s), nx0 = -jd.dz, nz0 = jd.dx, sg = nx0 >= 0 ? 1 : -1, ux = nx0 * sg, uz = nz0 * sg; // (east)
-    const B = { x: J.x + ux * 48, z: J.z + uz * 48 };
+    const B = { x: J.x + ux * 90, z: J.z + uz * 90 };
     const badD = badNet(O, [{ x: J.x, z: J.z, r: 75 }], { xing: true });
     const angUp = dirTo(B, BRINK_AT);
     DBG('valley B', Math.round(B.x), Math.round(B.z), 'top', Math.round(Hs(BRINK_AT.x, BRINK_AT.z)), 'y', Math.round(J.y));
-    const ZD = zigzag(B, angUp, J.y + 0.098 * 48, O, null, { topH: Hs(BRINK_AT.x, BRINK_AT.z) - 6, bad: badD, minPins: 2, legHalf: 130 });
+    const ZD = zigzag(B, angUp, J.y + 0.098 * 90, O, null, { topH: Hs(BRINK_AT.x, BRINK_AT.z) - 6, bad: badD, minPins: 2, legHalf: 130 });
     if (ZD) {
       DBG('valley zigzag pins', ZD.pins, 'yEnd', ZD.yEnd.toFixed(0), 'end', ZD.pts[ZD.pts.length - 1].map(Math.round));
       const angHW = freeAngle(H, dirTo(H, BRINK_AT));
-      const badW = badNet(O, [{ x: H.x, z: H.z, r: 80 }], { xing: true });
+      const badW = badNet(O, [{ x: H.x, z: H.z, r: 55 }], { xing: true });
       const down = ZD.pts.slice().reverse(); // (from the top down to B)
       const head = armStart(H, angHW);
       const mid2 = routed(head, down.slice(0, 12), H.y, ZD.yEnd, badW, O, { margin: 400 });
       if (mid2) {
         const end = down.slice(-12);
-        for (let t = 44; t >= 0; t -= 4) end.push([J.x + ux * t, J.z + uz * t]);
+        for (let t = 86; t >= 0; t -= 4) end.push([J.x + ux * t, J.z + uz * t]);
         const pts = [...mid2, ...down.slice(12, -12), ...smoothPath(end, 4, 4)]; // (the corner off the last leg rounded)
         RL2 = makeRoad(pts, { name: H.name, ring: true }, { name: 'junction', x: J.x, z: J.z }, { y0: H.y, y1: J.y, maxGrade: SC_GRADE, envelope: true });
         RL2.name = 'Hinterkopfstrasse'; RL2.ringAt0 = H; RL2.exitAt1 = { road: J.m, s: J.s, x: J.x, z: J.z };
@@ -239,7 +250,7 @@ export function planScenicLoop(O) {
   if (RL2) {
     let sB = 0, bd = Infinity;
     for (let i = 0; i < RL2.n; i++) { const d = Math.hypot(RL2.X[i] - BRINK_AT.x, RL2.Z[i] - BRINK_AT.z); if (d < bd) { bd = d; sB = RL2.S[i]; } }
-    brinkLot = spurLot(RL2, sB - 600, sB + 250, { size: 'small', name: 'Sonnenblick car park', hw: 15, hd: 9 }, badNet(O, [], { xing: false }), roads.filter((r) => r !== RL2));
+    brinkLot = spurLot(RL2, sB - 600, sB + 250, { size: 'small', name: 'Sonnenblick car park', hw: 15, hd: 9 }, badNet(O, [], { planned: false }), roads.filter((r) => r !== RL2));
   }
   finish();
 

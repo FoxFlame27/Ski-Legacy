@@ -10,7 +10,7 @@ import { world } from '../../world/world.js';
 import { coachSeats } from '../../world/coachseat.js';
 import { fitModel } from '../../core/assets.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { busRoads, roadAt, ROAD_HALF, roadsideBlocked } from './roads.js';
+import { busRoads, roadAt, ROAD_HALF, roadsideBlocked, laneDistance } from './roads.js';
 import { transition } from '../../ui/transition.js';
 import { trafficBlockers } from '../traffic.js';
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
@@ -213,21 +213,42 @@ function railRuns(r, mask, H) {
   const runs = [];
   for (let sd = 0; sd < 2; sd++) {
     const m = mask[sd], sg = sd ? 1 : -1;
-    for (let i = 0; i < r.n;) {
-      if (!m[i]) { i++; continue; }
-      let j = i;
-      while (j < r.n && m[j]) j++;
-      const idx = [];
-      for (let k = i; k < j; k++) idx.push(k);
-      if (sd === 1) idx.reverse();
-      const last = idx.length - 1;
-      runs.push(idx.map((k, q) => {
-        const [dx, dz] = roadDir(r, k), ox = dz * sg, oz = -dx * sg; // outward, away from the road
+    // each rail point checked: at the road edge's height (a point off the flat shoulder, on another road's lane or
+    // on this road's own other leg, or where the offset line folds at a tight corner breaks the run); runs shorter
+    // than ~22 m are dropped (no orphan stubs)
+    const pt = new Array(r.n).fill(null);
+    for (let k = 0; k < r.n; k++) {
+      if (!m[k]) continue;
+      const [dx, dz] = roadDir(r, k), ox = dz * sg, oz = -dx * sg;
+      const x = r.X[k] + ox * RAIL_OFF, z = r.Z[k] + oz * RAIL_OFF;
+      const ex = r.X[k] + ox * ROAD_HALF, ez = r.Z[k] + oz * ROAD_HALF, y = H(ex, ez);
+      if (Math.abs(H(x, z) - y) > 0.5 || Math.abs(y - r.Y[k]) > 1.2) continue;
+      if (laneDistance(x, z) < RAIL_OFF - 0.35) continue;
+      pt[k] = { k, x, z, y, ox, oz };
+    }
+    const pieces = [];
+    let cur = [];
+    for (let k = 0; k < r.n; k++) {
+      const p = pt[k], q = cur[cur.length - 1];
+      let ok = !!p;
+      if (ok && q) {
+        const ddx = p.x - q.x, ddz = p.z - q.z, l = Math.hypot(ddx, ddz), [dx, dz] = roadDir(r, k);
+        if (p.k !== q.k + 1 || l < 0.8 || l > 7 || (ddx * dx + ddz * dz) / (l || 1) < 0.6) ok = false; // (a fold or a jump)
+        if (!ok && p) { if (cur.length) pieces.push(cur); cur = [p]; continue; }
+      }
+      if (ok) cur.push(p);
+      else { if (cur.length) pieces.push(cur); cur = []; }
+    }
+    if (cur.length) pieces.push(cur);
+    for (const piece of pieces) {
+      if (piece.length < 6) continue;
+      if (sd === 1) piece.reverse();
+      const last = piece.length - 1;
+      runs.push(piece.map((p, q) => {
         const e = Math.min(q, last - q), flare = e < 3 ? [1.1, 0.42, 0.1][e] : 0, sink = e < 3 ? [0.98, 0.5, 0.13][e] : 0;
-        const x = r.X[k] + ox * (RAIL_OFF + flare), z = r.Z[k] + oz * (RAIL_OFF + flare);
-        return [x, H(x, z), z, sink];
+        const x = p.x + p.ox * flare, z = p.z + p.oz * flare;
+        return [x, p.y, z, sink];
       }));
-      i = j;
     }
   }
   return runs;

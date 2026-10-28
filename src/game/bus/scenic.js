@@ -13,7 +13,7 @@
 // traffic drives them like the car parks' access roads (traffic.js), with the ring between them.
 import { world } from '../../world/world.js';
 import { expressNearest } from '../../world/expressroute.js';
-import { routeH, minRadius, selfClearance } from './scenicnet.js';
+import { routeH, minRadius, selfClearance, smoothRoute } from './scenicnet.js';
 import {
   busRoads, route, smoothPath, makeRoad, roadAt, laneDistance, berm, ROAD_HALF, BENCH, BERM_IN, CLEAR,
 } from './roads.js';
@@ -112,7 +112,7 @@ function serpentine(x, z, hd, O, TOP_H, { leg0 = 380, legs = [300, 180], maxPins
 // cut and fill (shapeScenic) deal with its crags. -> { pts: [[x, z]...] every ~4 m from B, pins, yEnd } or null
 const DBG = (...a) => { if (typeof process !== 'undefined' && process.env?.SCENIC_DEBUG) console.log(...a); };
 const DESIGN_G = 0.098, LEG_HALF = 150;
-export function zigzag(B, ang, y0, O, allowNear, { topH = TOP_H, bad: badFn = null, minPins = 3, legHalf = LEG_HALF } = {}) {
+export function zigzag(B, ang, y0, O, allowNear, { topH = TOP_H, bad: badFn = null, minPins = 3, legHalf = LEG_HALF, minDu = null } = {}) {
   const bad = badFn || badGround(O, allowNear), ds = 4, R = HAIRPIN_R, LEG_HALF = legHalf;
   const Ux = Math.sin(ang), Uz = Math.cos(ang), Cx = Uz, Cz = -Ux; // (uphill, across)
   const P = (u, l) => [B.x + Ux * u + Cx * l, B.z + Uz * u + Cz * l];
@@ -123,11 +123,13 @@ export function zigzag(B, ang, y0, O, allowNear, { topH = TOP_H, bad: badFn = nu
   const turn = (sg) => { const n = Math.ceil((Math.PI / 2) * R / ds), da = (sg * Math.PI) / 2 / n, ch = 2 * R * Math.sin(Math.abs(da) / 2); for (let i = 0; i < n; i++) { const m = hd + da / 2; x += Math.sin(m) * ch; z += Math.cos(m) * ch; hd += da; pts.push([x, z]); } s += (Math.PI / 2) * R; };
   const ok = (from) => { for (let i = from; i < pts.length; i++) if (bad(pts[i][0], pts[i][1])) return false; return true; };
   go(LEG_HALF); // (the first leg: from the middle out)
-  if (!ok(0)) return null;
+  if (!ok(0)) { DBG('zz first leg bad', pts.find((p) => bad(p[0], p[1])).map(Math.round)); return null; }
   for (let k = 0; k < 30; k++) {
     // where the next leg goes: the nearest line up the face whose ground has come up to the road there
     const g0 = G(u);
-    let du = 2 * R;
+    // (the next leg at least far enough up the face that the ground between two legs stays under ~45 degrees: the
+    // height they gain over a hairpin and a leg, over the gap between their shoulders)
+    let du = Math.max(2 * R, minDu ?? (2 * 8.6 + DESIGN_G * (Math.PI * R + 2 * LEG_HALF - 2 * R)) / (1 - DESIGN_G));
     while (du < 160 && G(u + du) < y0 + DESIGN_G * (s + Math.PI * R + du - 2 * R)) du += 4;
     if (Math.max(G(u + 28), G(u + 56), G(u + 84)) < g0 + 1) { DBG('zz top', k, u, du); break; } // (over the top: the ground no longer rises)
     const keep = pts.length, save = { x, z, hd, s, u, pins };
@@ -214,7 +216,14 @@ export function planScenic(O) {
   const jd = roadAt(r0, J.s), ex0 = -jd.dz, ez0 = jd.dx, sgn = ex0 >= 0 ? 1 : -1; // (the road's normal, pointing east)
   const ux = ex0 * sgn, uz = ez0 * sgn;
   const J1 = { x: J.x + ux * 26, z: J.z + uz * 26 };
+  // B (planned first: the approach keeps off its switchbacks): ring -> the climb's start, then the switchbacks
+  const angB = dirTo(CLIMB_AT), b0 = armPt(angB, RING_R), b1 = armPt(angB, RING_R + 14);
+  const ZZ = zigzag(b1, angB, yR, O, ring, { minDu: 34 });
+  if (!ZZ) { console.warn('scenic road: no climb', Math.round(ring.x), Math.round(ring.z)); return; }
+  const pb = [[b0.x, b0.z], ...ZZ.pts];
   const angA = dirTo(J1);
+  const nearClimb = (x, z) => { let d = Infinity; for (let i = 0; i < pb.length; i += 2) { const q = pb[i]; if (Math.abs(q[0] - x) < 60 && Math.abs(q[1] - z) < 60) d = Math.min(d, Math.hypot(q[0] - x, q[1] - z)); } return d; };
+  const badA = (x, z) => bad(x, z) || (Math.hypot(x - ring.x, z - ring.z) > 60 && nearClimb(x, z) < 55);
   // (the gentlest way over the ridge without a hairpin: the A* on its 20 m grid meets a hard grade cap with tight
   // zigzags, which the smoothing turns into ~6 m kinks; a steeper cap with no bend under ~12 m wins, the cut and fill
   // make up the grade)
@@ -223,9 +232,9 @@ export function planScenic(O) {
   for (const g of [0.1, 0.115, 0.13]) {
     const p0 = armPt(angA, RING_R), p1 = armPt(angA, RING_R + 14), p2 = armPt(angA, RING_R + 30);
     // (searched from the junction's end, the low one: the road there gains its height in switchbacks before the ridge)
-    const raw = routeH(J1, p2, { obstacles: O, bad, margin: 350, maxGrade: g, maxTurn: 0.8, soft: true, y0: J.y, y1: yR });
+    const raw = routeH(J1, p2, { obstacles: O, bad: badA, margin: 350, maxGrade: g, maxTurn: 0.8, soft: true, y0: J.y, y1: yR });
     if (!raw) continue;
-    const p = smoothPath([[p0.x, p0.z], [p1.x, p1.z], ...raw.reverse()], 4, 4);
+    const p = smoothRoute([[p0.x, p0.z], [p1.x, p1.z], ...raw.reverse().slice(1)], { fixedA: 2 });
     DBG('approach H', g, 'minR', minRadius(p).toFixed(1), 'clear', selfClearance(p, 120).toFixed(1), p.length);
     if (minRadius(p) >= 12 && selfClearance(p, 120) > 26) { appr = p; break; }
   }
@@ -237,11 +246,6 @@ export function planScenic(O) {
   }
   if (!appr) { console.warn('scenic road: no way to the junction'); return; }
   const pa = [...appr, [J.x + ux * 12, J.z + uz * 12], [J.x, J.z]];
-  // B: ring -> the climb's start, then the switchbacks
-  const angB = dirTo(CLIMB_AT), b0 = armPt(angB, RING_R), b1 = armPt(angB, RING_R + 14);
-  const ZZ = zigzag(b1, angB, yR, O, ring);
-  if (!ZZ) { console.warn('scenic road: no climb', Math.round(ring.x), Math.round(ring.z)); return; }
-  const pb = [[b0.x, b0.z], ...ZZ.pts];
   // the summit car park where the climb ends
   const e = pb.length, hx0 = pb[e - 1][0] - pb[e - 3][0], hz0 = pb[e - 1][1] - pb[e - 3][1], hl = Math.hypot(hx0, hz0) || 1;
   const top = lotAt({ size: 'small', name: 'Gipfelblick car park', hw: 15, hd: 9 }, pb[e - 1][0] + (hx0 / hl) * 4, pb[e - 1][1] + (hz0 / hl) * 4, hx0 / hl, hz0 / hl);
@@ -277,6 +281,9 @@ export function planScenic(O) {
   findLaybys(RB);
 }
 
+const REACH = 100, BATTER = 0.78; // m the cut reaches from the centre line; batter slope (tan 38 degrees)
+const smin = (a, b, k) => { const h = clamp(0.5 + (0.5 * (b - a)) / k, 0, 1); return b + (a - b) * h - k * h * (1 - h); };
+const smax = (a, b, k) => -smin(-a, -b, k);
 // One world cut for the scenic roads: flat across the road, eased back to the slope beyond the shoulder. Where two
 // legs of the switchbacks lie close the ground between them blends between both (partition of unity: never a step);
 // a pull-out's shoulder is wider; the roundabout's island a low snow dome inside its kerb.
@@ -289,7 +296,7 @@ export function shapeScenic() {
     const ri = busRoads.roads.indexOf(r);
     for (let i = 0; i < r.n - 1; i++) {
       const sg = { ax: r.X[i], az: r.Z[i], bx: r.X[i + 1], bz: r.Z[i + 1], ay: r.Y[i], by: r.Y[i + 1], ri, sa: r.S[i], sb: r.S[i + 1], r };
-      const R = 70, x0 = Math.min(sg.ax, sg.bx) - R, x1 = Math.max(sg.ax, sg.bx) + R, z0 = Math.min(sg.az, sg.bz) - R, z1 = Math.max(sg.az, sg.bz) + R;
+      const R = REACH, x0 = Math.min(sg.ax, sg.bx) - R, x1 = Math.max(sg.ax, sg.bx) + R, z0 = Math.min(sg.az, sg.bz) - R, z1 = Math.max(sg.az, sg.bz) + R;
       minx = Math.min(minx, x0); minz = Math.min(minz, z0); maxx = Math.max(maxx, x1); maxz = Math.max(maxz, z1);
       for (let cx = Math.floor(x0 / G); cx <= Math.floor(x1 / G); cx++) for (let cz = Math.floor(z0 / G); cz <= Math.floor(z1 / G); cz++) {
         const key = cx * 65536 + cz;
@@ -309,11 +316,12 @@ export function shapeScenic() {
   const lb = (busRoads.laybys || []).filter((l) => l.scenic);
   // nearest point (d, y, s, ri, side, seg) and the nearest of another stretch (|s - s1| > 60 or another road)
   const A = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null }, B = { d: 0, y: 0, s: 0, ri: 0, side: 1, r: null };
+  const CAND = [];
   const pick = (x, z) => {
     const arr = grid.get(Math.floor(x / G) * 65536 + Math.floor(z / G));
     A.d = B.d = Infinity;
     if (!arr) return;
-    const cand = [];
+    const cand = CAND; cand.length = 0;
     for (const s of arr) {
       const ex = s.bx - s.ax, ez = s.bz - s.az, l2 = ex * ex + ez * ez || 1;
       const t = clamp(((x - s.ax) * ex + (z - s.az) * ez) / l2, 0, 1);
@@ -328,10 +336,7 @@ export function shapeScenic() {
     o.side = (s.bx - s.ax) * (z - s.az) - (s.bz - s.az) * (x - s.ax) >= 0 ? 1 : -1;
   };
   const bench = (o) => { let b = BENCH; for (const l of lb) if (l.ri === o.ri && l.side === o.side && Math.abs(l.s - o.s) < 22) b = Math.max(b, BENCH + 4 * smoothstep(22, 12, Math.abs(l.s - o.s))); return b; };
-  const weight = (o, h) => { // (1 - k) / k: infinite on the flat bench, 0 where the ground is untouched
-    const b = bench(o), blend = Math.min(60, 6 + Math.abs(h - o.y) * 3.4), k = smoothstep(b, b + blend, o.d);
-    return k <= 1e-5 ? Infinity : (1 - k) / k;
-  };
+
   world.addCut({
     bounds: { minx, minz, maxx, maxz },
     busRoads: true, scenic: true,
@@ -342,14 +347,25 @@ export function shapeScenic() {
         return ring.y + 0.18 + 0.85 * Math.max(0, 1 - (rr / ISLAND_R) ** 2); // (kerb + snow dome)
       }
       pick(x, z);
-      if (A.d > 70) return h;
-      const wa = weight(A, h);
+      if (A.d > REACH) return h;
+      // batters: beyond the flat shoulder the ground may rise or fall from the road at no more than ~38 degrees
+      // (steeper only where the cut or fill is so deep it would not meet the slope within REACH), a soft crease where
+      // the batter meets the slope; two stretches near each other (the switchbacks' legs): both their batters
       let out;
-      if (wa === Infinity) out = A.y;
+      const bA = bench(A);
+      if (A.d <= bA) out = A.y;
       else {
-        const wb = B.d < 70 ? weight(B, h) : 0;
-        if (wb === Infinity) out = B.y;
-        else out = (wa * A.y + wb * B.y + h) / (wa + wb + 1);
+        let lo = -Infinity, hi = Infinity, soft = 1.6;
+        for (const [d, sg, t] of CAND) { // (every stretch nearby: the switchbacks' legs above and below too)
+          if (d > REACH) continue;
+          const y = sg.ay + (sg.by - sg.ay) * t, b = sg.r === A.r && Math.abs(sg.sa - A.s) < 30 ? bA : BENCH;
+          if (d <= b) { lo = Math.max(lo, y); hi = Math.min(hi, y); continue; }
+          const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), w = k * (d - b);
+          lo = Math.max(lo, y - w); hi = Math.min(hi, y + w); soft = Math.min(soft, 0.4 * w + 0.01);
+        }
+        if (globalThis.__DBGCUT) console.log('cut', x, z, h.toFixed(1), 'lo', lo.toFixed(1), 'hi', hi.toFixed(1), 'A', A.d.toFixed(1), A.y.toFixed(1), CAND.length);
+        if (lo > hi) out = (lo + hi) / 2;
+        else out = smax(smin(h, hi, soft), lo, soft);
       }
       // the plough berm (as on the bus roads; none round the ring and at the pull-outs: berm() tapers there)
       if (spacing <= 4 && A.d > BERM_IN && A.d < BERM_IN + 4.8 && !A.r.ringRoad && !ringNear(x, z, RING_R + 22)) {

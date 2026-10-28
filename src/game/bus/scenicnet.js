@@ -109,7 +109,7 @@ export function routeH(a, b, opts = {}) {
       let ex = 0, yn = hj;
       if (opts.y0 !== undefined) { yn = clamp(hj, yr[st] - maxGrade * d, yr[st] + maxGrade * d); ex += Math.abs(hj - yn) * (d / CELL); }
       if (opts.y1 !== undefined) ex += Math.max(0, Math.abs(yn - opts.y1) - maxGrade * Math.hypot(X(j) - bx, Z(j) - bz)) * (d / CELL);
-      const c = g[st] + d * gc * pj + 60 * turn * turn + (gr > maxGrade ? 3000 * (gr - maxGrade) / 0.01 : 0) + ex * (opts.exK ?? 40);
+      const c = g[st] + d * gc * pj + (opts.turnW ?? 300) * turn * turn + (turn > 0.01 ? (opts.bendC ?? 30) : 0) + (gr > maxGrade ? 3000 * (gr - maxGrade) / 0.01 : 0) + ex * (opts.exK ?? 40);
       if (c < g[sj]) { g[sj] = c; len[sj] = L; yr[sj] = yn; from[sj] = st; open.push(c + Math.hypot(X(j) - bx, Z(j) - bz), sj); }
     }
   }
@@ -138,4 +138,65 @@ export function selfClearance(p, gap = 80, step = 2) {
   const ds = 4, skip = Math.ceil(gap / ds);
   for (let i = 0; i < p.length; i += step) for (let j = i + skip; j < p.length; j += step) m = Math.min(m, Math.hypot(p[i][0] - p[j][0], p[i][1] - p[j][1]));
   return m;
+}
+
+// Douglas-Peucker
+function simplify(pts, eps) {
+  if (pts.length < 3) return pts;
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    const [ax, az] = pts[a], [bx, bz] = pts[b], ex = bx - ax, ez = bz - az, l = Math.hypot(ex, ez) || 1;
+    let best = -1, bd = eps;
+    for (let i = a + 1; i < b; i++) { const d = Math.abs((pts[i][0] - ax) * ez - (pts[i][1] - az) * ex) / l; if (d > bd) { bd = d; best = i; } }
+    if (best > 0) { keep[best] = 1; stack.push([a, best], [best, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+const resample = (p, step) => {
+  const out = [p[0]];
+  let carry = 0;
+  for (let i = 0; i < p.length - 1; i++) {
+    const [ax, az] = p[i], [bx, bz] = p[i + 1], L = Math.hypot(bx - ax, bz - az);
+    let t = step - carry;
+    while (t <= L) { out.push([ax + ((bx - ax) * t) / L, az + ((bz - az) * t) / L]); t += step; }
+    carry = L - (t - step);
+  }
+  const last = p[p.length - 1], ol = out[out.length - 1];
+  if (Math.hypot(last[0] - ol[0], last[1] - ol[1]) > 1) out.push(last);
+  return out;
+};
+/**
+ * A routed line made a road: the grid's wiggles straightened (Douglas-Peucker, wide), corners rounded (Chaikin), then
+ * every bend opened up to `minR` (default 60 m) except the hairpins (a half turn within ~70 m: those keep their
+ * radius, the switchbacks' legs must not move), resampled every 4 m. `fixed`: points at either end kept as they are.
+ */
+export function smoothRoute(pts, { eps = 12, minR = 60, step = 4, fixedA = 0, fixedB = 0 } = {}) {
+  const A = pts.slice(0, fixedA), B = fixedB ? pts.slice(pts.length - fixedB) : [];
+  let p = simplify(pts.slice(Math.max(0, fixedA - 1), pts.length - Math.max(0, fixedB - 1)), eps);
+  for (let k = 0; k < 5; k++) {
+    const q = [p[0]];
+    for (let i = 0; i < p.length - 1; i++) { const [ax, az] = p[i], [bx, bz] = p[i + 1]; q.push([ax * 0.75 + bx * 0.25, az * 0.75 + bz * 0.25], [ax * 0.25 + bx * 0.75, az * 0.25 + bz * 0.75]); }
+    q.push(p[p.length - 1]);
+    p = q;
+  }
+  p = resample(p, step);
+  const n = p.length, maxTurn = step / minR, head = (i) => Math.atan2(p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
+  const W = Math.ceil(36 / step);
+  for (let it = 0; it < 300; it++) {
+    let moved = false;
+    for (let i = 2; i < n - 2; i++) {
+      const t = Math.abs(Math.atan2(Math.sin(head(i) - head(i - 1)), Math.cos(head(i) - head(i - 1))));
+      if (t <= maxTurn) continue;
+      const a = Math.max(0, i - W), b = Math.min(n - 2, i + W);
+      if (Math.abs(Math.atan2(Math.sin(head(b) - head(a)), Math.cos(head(b) - head(a)))) > 2.2) continue; // (a hairpin)
+      const mx = (p[i - 1][0] + p[i + 1][0]) / 2, mz = (p[i - 1][1] + p[i + 1][1]) / 2;
+      p[i] = [p[i][0] + (mx - p[i][0]) * 0.5, p[i][1] + (mz - p[i][1]) * 0.5];
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  p = resample(p, step);
+  return [...A.slice(0, -1), ...p, ...B.slice(1)];
 }

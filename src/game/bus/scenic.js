@@ -433,6 +433,7 @@ export function shapeScenic() {
       }
       // (the scenic road's own surface wins on its shoulder: a junction, a lot's spur)
       const kept = keepBand(x, z, h, out);
+      if (globalThis.__scDbg) globalThis.__scDbg.push({ bands: [...BANDS].map((v) => +v.toFixed(2)), best: [...BEST.values()].map(([d, sg]) => [+d.toFixed(1), sg.r.name.slice(0, 5), Math.round(sg.sa)]), h, out, kept, Ad: A.d, Ay: A.y, As: A.s, An: A.r.name, kd: keepBand.d });
       // (and a bus road's where its centre line is the nearer one: the T junctions' mouths)
       return kept === out ? out : out + (kept - out) * Math.max(smoothstep(bench(A), bench(A) + 6, A.d), smoothstep(-1.5, 1.5, A.d - keepBand.d));
     },

@@ -354,10 +354,10 @@ export class BuildMode {
       this.hoverBox = new THREE.BoxHelper(e.obj, 0xffd479);
       this.hoverBox.material.depthTest = false;
       this.hoverBox.renderOrder = 12;
-      this.chalet.root.add(this.hoverBox);
+      let top = this.chalet.root; // BoxHelper geometry is in world space: hang it on the scene itself
+      while (top.parent) top = top.parent;
+      top.add(this.hoverBox);
       this.hoverBox.update();
-      this.chalet.root.updateMatrixWorld();
-      this.hoverBox.applyMatrix4(_m.copy(this.chalet.root.matrixWorld).invert()); // BoxHelper is in world space
       if (!this.item) this.menu?.status(`${e.item.name} · G move · X sell +$${Math.round(e.item.price * SELL_REFUND)}`);
     }
   }

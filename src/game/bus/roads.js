@@ -250,7 +250,7 @@ function relax(pts, step, minR = 13) {
 }
 
 // a road: centre line every ~4 m with heights, arc lengths and headings
-export function makeRoad(pts, a, b, { y0 = null, y1 = null, maxGrade = MAX_GRADE } = {}) {
+export function makeRoad(pts, a, b, { y0 = null, y1 = null, maxGrade = MAX_GRADE, envelope = false } = {}) {
   const n = pts.length;
   const X = new Float32Array(n), Z = new Float32Array(n), Y = new Float32Array(n), S = new Float32Array(n);
   for (let i = 0; i < n; i++) { X[i] = pts[i][0]; Z[i] = pts[i][1]; if (i) S[i] = S[i - 1] + Math.hypot(X[i] - X[i - 1], Z[i] - Z[i - 1]); }
@@ -276,6 +276,8 @@ export function makeRoad(pts, a, b, { y0 = null, y1 = null, maxGrade = MAX_GRADE
   // (an access road meets a lot and the road it joins at their own heights)
   if (y0 !== null) for (let i = 0; i < n; i++) Y[i] += (y0 - Y[0]) * (1 - smoothstep(0, 40, S[i]));
   if (y1 !== null) for (let i = 0; i < n; i++) Y[i] += (y1 - Y[n - 1]) * (1 - smoothstep(0, 40, S[n - 1] - S[i]));
+  // (envelope: both ends fixed, every point within reach of both at maxGrade: never a step at an end; the scenic roads)
+  if (envelope && y0 !== null && y1 !== null) for (let i = 0; i < n; i++) Y[i] = clamp(Y[i], Math.max(y0 - maxGrade * S[i], y1 - maxGrade * (S[n - 1] - S[i])), Math.min(y0 + maxGrade * S[i], y1 + maxGrade * (S[n - 1] - S[i])));
   for (let i = 1; i < n; i++) { const d = S[i] - S[i - 1]; Y[i] = clamp(Y[i], Y[i - 1] - maxGrade * d, Y[i - 1] + maxGrade * d); }
   for (let i = n - 2; i >= 0; i--) { const d = S[i + 1] - S[i]; Y[i] = clamp(Y[i], Y[i + 1] - maxGrade * d, Y[i + 1] + maxGrade * d); }
   if (y1 !== null) Y[n - 1] = y1;

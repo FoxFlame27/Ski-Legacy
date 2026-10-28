@@ -4,6 +4,7 @@
 import { world, MAIN_SUMMIT, MASSIFS, valleyCenter } from './world.js';
 import { mulberry32, hash2, clamp } from '../core/noise.js';
 import { buildTransport } from './transport.js';
+import { buildSectors } from './sectors.js';
 
 export const DIFFICULTY = [
   { key: 'easy', label: 'Easy', color: '#2fbf5b', maxSlope: 0.30, length: 520, gates: 34, reward: 150, botSkill: 0.78, entry: 0 },
@@ -24,6 +25,7 @@ export const layout = {
   lanes: [],     // ski lanes: pistes (lane: true) lined with nets on both sides, see buildLane
   huts: [],      // mountain restaurants { x, z, name, label, yaw } (the village builds them)
   peaks: [],     // ski mountains: { id, name, lift, hut, patrol: {x, z}, pistes, summit }
+  bowls: [],     // open freeride bowls { name, pts, w } (sectors.js): shaped and crag-free, not groomed
   park: null,    // Legacy Park: frame, features, corridor line, Park Lift (park.js builds the meshes)
   nets: [],      // safety-net runs (resortdressing.js builds them), see planNets
   busStops: [],  // ski-bus stops { x, z, heading, name }: the village plaza + every gondola base
@@ -991,6 +993,7 @@ function setCragMask() {
   const runs = [
     ...layout.pistes.map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] })),
     ...layout.races.map((r) => ({ pts: r.path.filter((_, i) => i % 2 === 0 || i === r.path.length - 1), w: r.halfWidth })),
+    ...(layout.bowls || []).map((b) => ({ pts: b.pts, w: b.w })), // the freeride bowls (sectors.js)
   ];
   const R = 56, cell = 10;
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
@@ -1558,7 +1561,9 @@ export function initLayout() {
   step('peaks', buildPeaks);
   step('park', buildPark);
   // the Wolkenspitzbahn, the Wolkenspitze's lifts and the new gondolas / chairlifts (transport.js)
-  step('transport', () => buildTransport({ layout, addLift, addPiste, keepOut, routePiste, tracePath, faceUV, placeMid, BAND, PISTE_WIDTH, VILLAGE_BUILDINGS }));
+  const kit = { layout, addLift, addPiste, keepOut, routePiste, tracePath, faceUV, placeMid, BAND, PISTE_WIDTH, VILLAGE_BUILDINGS };
+  step('transport', () => buildTransport(kit));
+  step('sectors', () => buildSectors(kit)); // the Hirschalm + Ostkar sectors and their freeride bowls (sectors.js)
   step('cragMask', setCragMask);          // after the resort's runs exist, before any terrain is built
   step('valley', buildValleyRaces);
   step('midStations', planMidStations);

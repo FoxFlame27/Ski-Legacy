@@ -47,11 +47,13 @@ import { ParkingLots } from './game/parking.js'; // the car parks (vehicles agen
 import { Hospital } from './game/hospital.js'; // the medical centre the ambulance drives to (vehicles agent)
 import { Traffic } from './game/traffic.js'; // cars driving the roads (vehicles agent)
 import { Drive } from './game/drive.js'; // drive the parked cars yourself (vehicles agent)
+import { CarRental } from './game/carrental.js'; // CAR RENTAL: rent a car (showroom inside), the wreck fee, the tow truck
 import { planBusRoads } from './game/bus/roads.js'; // plowed roads for the ski bus (vehicles agent)
 import { Crowds } from './world/crowds.js';
 import { Snowcats } from './world/snowcats.js';
 import { Flags } from './world/flags.js';
 import { presentation } from './game/presentation/index.js';
+import { wantsBusIntro, runBusIntro } from './game/presentation/busintro.js'; // first-time intro: the summer valley, the ski bus
 import { Jobs } from './game/jobs.js';
 import { Talk } from './game/talk.js';
 import { Modes } from './game/modes.js';
@@ -148,6 +150,7 @@ const MODEL_LIST = [
   ...(BUS_RIDE ? ['ski_bus'] : []),
   // the ambulance after a heli rescue (game/heli/ambulance.js)
   'ambulance', 'bus_stop_sign',
+  'tow_truck', // the CAR RENTAL's tow truck (game/towtruck.js)
 ].filter((n, i, a) => n !== 'safety_net' && a.indexOf(n) === i);
 
 let menu = null;
@@ -160,6 +163,7 @@ let sleds = null; // snowmobiles you can drive (game/snowmobile.js)
 let parking = null; // the car parks (game/parking.js)
 let traffic = null; // cars driving the roads (game/traffic.js)
 let drive = null; // the car you drive (game/drive.js)
+let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
 let secrets = null; // hidden tunnels, couloirs, caves (world/secrets.js)
@@ -168,6 +172,7 @@ const propDetail = new PropDetail();
 let startHouse = null, startHouseGroup = null;
 const colliders = [];
 let started = false;
+let busIntro = null; // first-time intro (game/presentation/busintro.js): the valley cinematic, then the arrival; owns the camera
 let gondolaRides = 0;
 let headlamp;
 let outfitShop = null;
@@ -344,6 +349,10 @@ async function boot() {
   try { traffic = new Traffic({ scene, models, colliders, player, camera, skibus, makeRig }); } catch (e) { console.warn('traffic: ' + (e?.stack || e)); traffic = null; }
   if (traffic && skibus?.line) skibus.line.traffic = traffic; // (the bus slows behind cars)
   try { drive = new Drive({ scene, player, camera, hud, audio, colliders, vegetation, parking, transition, world, cameraBlockers: village.cameraBlockers, traffic, trails, freeRide: () => started && !modes?.active && !races?.active }); } catch (e) { console.warn('drive: ' + (e?.stack || e)); drive = null; }
+  try {
+    carRental = new CarRental({ scene, camera, renderer, models, colliders, cameraBlockers: village.cameraBlockers, parking, drive, traffic, hud, audio, save, writeSave, spend, transition, player, input,
+      makeRig: () => makeRig('skier_orange', 'rental'), getPost: () => post });
+  } catch (e) { console.warn('car rental: ' + (e?.stack || e)); carRental = null; }
   // admin panel: money, time / weather, teleports, unlocks, speed boost, HUD, free camera (ui/admin.js)
   admin = new AdminPanel({
     save, writeSave, hud, audio, env, layout, input, camera, transition, streamAround, equipSkis,
@@ -492,7 +501,12 @@ async function startFromMenu(sel = {}) {
   if (sel.character && sel.character !== save.character) { save.character = sel.character; writeSave(); }
   // a new skier chosen from the pause menu's SETTINGS: swap in place and play on
   if (started) { if (player.rig && save.character !== player.rigChar) swapCharacter(save.character); menu.hide(); closePause(); return; }
+  if (!busIntro && wantsBusIntro(save)) { playBusIntro(); return; } // a brand-new save: the ski bus brings you
   startGame();
+}
+function playBusIntro() {
+  runBusIntro({ renderer, post, scene, camera, models, makeRig, save, writeSave, audio, transition, player, skibus, streamAround, startGame, swapCharacter, menu, showcase,
+    setActive: (o) => { busIntro = o; } }).catch((e) => { console.warn('bus intro', e); busIntro = null; post.setView(scene, camera); startGame(); });
 }
 
 // E at the RACING stand: pick a course and the AI difficulty, then RACE exactly as the old menu option did
@@ -535,6 +549,7 @@ async function backToMenu() {
   if (races.active) races.abort();
   if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
+  carRental?.leave(true);
   player.frozen = false;
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
@@ -967,6 +982,8 @@ function findInteraction() {
   if (player.mode === 'sit' || races.active || heli.rescuing) return null;
   const carPrompt = drive?.interaction(p);
   if (carPrompt) return carPrompt;
+  const rental = carRental?.interaction(p); // the CAR RENTAL's door
+  if (rental) return rental;
   const sledPrompt = sleds.interaction(p);
   if (sledPrompt) return sledPrompt;
   const heliPrompt = heli.interaction(p);
@@ -1091,6 +1108,7 @@ function returnToVillage(message = 'Back in Legacy Village') {
   if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
   player.frozen = false;
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
+  carRental?.leave(true);
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
   player.camYaw = 0;
@@ -1181,6 +1199,7 @@ function applyQuality(name, persist = true) {
   post.dispose();
   post = new Post(renderer, scene, camera);
   if (interior.active) post.setView(interior.scene, interior.camera);
+  if (carRental?.inside) post.setView(carRental.room.scene, carRental.room.camera);
   resetDynRes();
   setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
 }
@@ -1211,7 +1230,7 @@ window.addEventListener('blur', () => { autoQ.t = 0; autoQ.frames = 0; }); // a 
 // behind a heavy frame.
 let lastRender = 0, menuRes = false;
 function menuThrottle() {
-  const inMenu = !started || paused;
+  const inMenu = (!started && !busIntro) || paused;
   if (inMenu !== menuRes) {
     menuRes = inMenu;
     renderer.setPixelRatio(inMenu && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
@@ -1248,14 +1267,17 @@ function loop() {
   presentation.update(rawDt, { player, paused: frozen }); // slow-motion moments (big airs, photo finishes)
   const dt = frozen ? 0 : rawDt * presentation.timeScale;
   const menu = frozen || hud.panelOpen || !document.getElementById('map').hidden;
-  input.enabled = started && !menu;
+  input.enabled = started && !menu && !busIntro;
   const inSession = modes?.active; // RACE / WORLD RACING: the session runs the show
 
   if (interior.active) {
     shopTarget = interior.update(dt, menu ? { mdx: 0, mdy: 0, down: () => false } : input, save.sensitivity);
     if (!menu && shopTarget && input.hit('KeyE')) { audio.play('click'); shopAction(shopTarget); }
     interaction = null;
-  } else if (started && !menu) {
+  } else if (carRental?.inside) { // inside the CAR RENTAL (its own scene)
+    carRental.frame(dt, menu ? null : input, save.sensitivity);
+    interaction = null;
+  } else if (started && !menu && !busIntro) {
     if (input.hit('KeyM') && !inSession) openMap();
     if (input.hit('KeyL')) player.headlampOn = !player.headlampOn;
     interaction = inSession ? null : findInteraction();
@@ -1340,6 +1362,7 @@ function loop() {
   traffic?.update(dt); // cars on the roads (after you moved: they stop for you)
   mark('traffic');
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
+  carRental?.update(dt); // the tow truck, the rental's sign at night
   mark('drive');
   modes.update(dt, input); // after the player (positions, checkpoints, barriers, respawns)
   mark('modes');
@@ -1429,6 +1452,8 @@ function loop() {
         speed: 0, loc: 'Ski Rental & Shop', time: env.timeString, weather, ski, heading: 0, waypoint: null,
         prompt: shopTarget?.label || null, objective: player.hasSkis ? '' : 'Look at a pair of skis and press E',
       });
+    } else if (carRental?.inside) {
+      hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the clerk and press E' });
     } else if (inSession) hud.frame({
       speed: player.speed, loc: modes.course?.name || 'World Racing', time: env.timeString, weather, ski,
       prompt: null, objective: '', heading: camYaw, waypoint: null,
@@ -1448,7 +1473,7 @@ function loop() {
   }
 
   if (!started && showcase.active) showcase.update(dt);
-  else if (!started) {
+  else if (!started && !busIntro) {
     // menu panorama: a slow cinematic flight around the valley and the main mountain
     if (!window.__game.panoFrozen) titleT = (titleT + dt / 150) % 1;
     const p = PANO_POS.getPointAt(titleT), l = PANO_LOOK.getPointAt(titleT);
@@ -1487,6 +1512,7 @@ function loop() {
   railway.lateUpdate(camera, env, atmosphere, dt); // tunnels: the daylight fades out deep inside
   express?.lateUpdate(camera, env, atmosphere, dt); // (the Legacy Express's tunnels too; the cabin light after both)
   mark('railLate');
+  busIntro?.update(frozen ? 0 : rawDt); // (after everything else: it poses the camera)
   post.setSun(env.sunDir, tmpLight.copy(env.sun.color).multiplyScalar(env.sun.intensity), env.sunVisible * (1 - env.nightFactor));
   post.render(dt, player.mode === 'ski' ? player.speed : 0, player.mode === 'fall' ? Math.max(0, 1 - player.fallT * 2) : 0);
   mark('render');
@@ -1520,7 +1546,7 @@ boot().catch((e) => {
 
 window.__game = {
   get player() { return player; }, env, layout, world, scene, camera, renderer,
-  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
+  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
   // handles for building new systems inside the running game (dev tests)
   get terrain() { return terrain; }, get secrets() { return secrets; }, get vegetation() { return vegetation; }, get atmosphere() { return atmosphere; }, get backdrop() { return backdrop; }, get glare() { return glare; }, get npcs() { return npcs; }, get dressing() { return dressing; }, propDetail, get decor() { return decor; },
   streamAround, applyQuality, autoQ, get quality() { return quality; }, get dynRes() { return dynRes; }, get started() { return started; }, get paused() { return paused; },
@@ -1531,5 +1557,5 @@ window.__game = {
     for (const [k, v] of Object.entries(prof.t)) out[k] = +(v / Math.max(1, prof.frames)).toFixed(2);
     return out;
   },
-  get models() { return models; }, get spray() { return spray; }, get trails() { return trails; }, get hud() { return hud; }, audio, colliders, makeRig, spend, earn, save, writeSave, raceHud, input, setPano: (t) => { titleT = t; }, swapCharacter, startGame, equipSkis, boardLift,
+  get models() { return models; }, get spray() { return spray; }, get trails() { return trails; }, get hud() { return hud; }, audio, colliders, makeRig, spend, earn, save, writeSave, raceHud, input, setPano: (t) => { titleT = t; }, swapCharacter, startGame, equipSkis, boardLift, get busIntro() { return busIntro; }, playBusIntro,
 };

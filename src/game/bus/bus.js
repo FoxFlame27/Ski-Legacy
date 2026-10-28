@@ -530,7 +530,7 @@ function buildRoadMeshes(group, colliders = null) {
 
 // ------------------------------------------------------------------ the bus
 // The Meshy shell (front +z, wheels on y = 0, 12 m long) + our interior. Local frame: x left, y up, z forward.
-function buildBus(models, makeRig) {
+export function buildBus(models, makeRig) {
   const group = new THREE.Group();
   group.name = 'ski-bus';
   // (the Meshy coach is modelled along x with its cab at -x: turned so the cab leads, toward +z)

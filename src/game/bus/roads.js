@@ -12,6 +12,7 @@
 import { world } from '../../world/world.js';
 import { layout, VILLAGE_BUILDINGS, PISTE_WIDTH, ensureRaceCells } from '../../world/layout.js';
 import { RAIL } from '../../world/railroute.js';
+import { planScenic, shapeScenic } from './scenic.js'; // the scenic mountain road (Panoramastrasse) + its roundabout
 
 const CELL = 20;
 const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
@@ -123,7 +124,7 @@ export function buildObstacles(stops) {
 }
 
 // A* from a to b ({x, z}) -> [[x, z], ...] or null
-function route(a, b, opts = {}) {
+export function route(a, b, opts = {}) {
   const margin = opts.margin ?? 700;
   const minx = Math.min(a.x, b.x) - margin, minz = Math.min(a.z, b.z) - margin;
   const W = Math.ceil((Math.max(a.x, b.x) + margin - minx) / CELL) + 1, H = Math.ceil((Math.max(a.z, b.z) + margin - minz) / CELL) + 1;
@@ -142,6 +143,7 @@ function route(a, b, opts = {}) {
     let p = 1 + Math.max(0, s - 0.18) * 9 + (s > 0.7 ? 60 : 0);
     const q = opts.obstacles?.query(x, z, qo);
     if (q && (q.ski < CLEAR.ski || q.net < CLEAR.net || q.block < CLEAR.block || q.rail < CLEAR.rail)) return (pen[i] = Infinity);
+    if (opts.bad && opts.bad(x, z)) return (pen[i] = Infinity); // (a caller's own no-go ground: the scenic road's)
     if (q && q.lift < 4) p += 800; // under a lift line: only where there is no way round, and straight across
     // other cleared strips (secret passages, tunnels' approaches): keep off too
     world.corridorAt(x, z, corr);
@@ -203,7 +205,7 @@ function simplify(pts, eps = 5) {
 }
 
 // Chaikin corner cutting (ends kept), then an even resampling every `step` metres
-function smoothPath(pts, iters = 4, step = 4) {
+export function smoothPath(pts, iters = 4, step = 4) {
   let p = simplify(pts);
   for (let k = 0; k < iters; k++) {
     const q = [p[0]];
@@ -247,7 +249,7 @@ function relax(pts, step, minR = 13) {
 }
 
 // a road: centre line every ~4 m with heights, arc lengths and headings
-function makeRoad(pts, a, b, { y0 = null, y1 = null } = {}) {
+export function makeRoad(pts, a, b, { y0 = null, y1 = null, maxGrade = MAX_GRADE } = {}) {
   const n = pts.length;
   const X = new Float32Array(n), Z = new Float32Array(n), Y = new Float32Array(n), S = new Float32Array(n);
   for (let i = 0; i < n; i++) { X[i] = pts[i][0]; Z[i] = pts[i][1]; if (i) S[i] = S[i - 1] + Math.hypot(X[i] - X[i - 1], Z[i] - Z[i - 1]); }
@@ -273,8 +275,8 @@ function makeRoad(pts, a, b, { y0 = null, y1 = null } = {}) {
   // (an access road meets a lot and the road it joins at their own heights)
   if (y0 !== null) for (let i = 0; i < n; i++) Y[i] += (y0 - Y[0]) * (1 - smoothstep(0, 40, S[i]));
   if (y1 !== null) for (let i = 0; i < n; i++) Y[i] += (y1 - Y[n - 1]) * (1 - smoothstep(0, 40, S[n - 1] - S[i]));
-  for (let i = 1; i < n; i++) { const d = S[i] - S[i - 1]; Y[i] = clamp(Y[i], Y[i - 1] - MAX_GRADE * d, Y[i - 1] + MAX_GRADE * d); }
-  for (let i = n - 2; i >= 0; i--) { const d = S[i + 1] - S[i]; Y[i] = clamp(Y[i], Y[i + 1] - MAX_GRADE * d, Y[i + 1] + MAX_GRADE * d); }
+  for (let i = 1; i < n; i++) { const d = S[i] - S[i - 1]; Y[i] = clamp(Y[i], Y[i - 1] - maxGrade * d, Y[i - 1] + maxGrade * d); }
+  for (let i = n - 2; i >= 0; i--) { const d = S[i + 1] - S[i]; Y[i] = clamp(Y[i], Y[i + 1] - maxGrade * d, Y[i + 1] + maxGrade * d); }
   if (y1 !== null) Y[n - 1] = y1;
   if (y0 !== null) Y[0] = y0;
   return { from: a, to: b, n, X, Z, Y, S, length: S[n - 1] };
@@ -325,6 +327,7 @@ function laneGrid() {
  * Distance from (x, z) to the nearest road centre line (up to ~16 m; Infinity beyond), leaving out road `own`
  * within `win` m of arc length `s` along it (where a prop stands beside its own road).
  */
+export { BENCH, BERM_IN, MAX_GRADE, CLEAR, nearestRoadPoint };
 export function laneDistance(x, z, own = -1, s = 0, win = 0) {
   const G = laneGrid(), arr = G.map.get(Math.floor(x / G.C) * 100003 + Math.floor(z / G.C));
   let d = Infinity;
@@ -443,7 +446,10 @@ export function planBusRoads(stops) {
   try { planLots(obstacles, stops); } catch (e) { console.warn('car parks', e); }
   try { planHospital(obstacles); } catch (e) { console.warn('hospital site', e); }
   try { planLayby(obstacles); } catch (e) { console.warn('lay-by', e); }
-  shapeRoads(busRoads.roads);
+  try { planRental(obstacles); } catch (e) { console.warn('car rental site', e); } // (last: moves nothing planned above)
+  try { planScenic(obstacles); } catch (e) { console.warn('scenic road', e); } // (after everything: its roads go last)
+  shapeRoads(busRoads.roads.filter((r) => !r.scenic)); // (the scenic roads, appended last, carve their own cut: same indices)
+  try { shapeScenic(); } catch (e) { console.warn('scenic road cut', e); }
   busRoads.ready = true;
   busRoads.ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   return busRoads;
@@ -454,7 +460,7 @@ export function planBusRoads(stops) {
 // over 20 m at each road end (the bus bays and junctions are at the stops), and stays low in the village.
 const fr = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 const _berm = { H: 0, W: 3.4 };
-function berm(ri, side, s, L, x, z) {
+export function berm(ri, side, s, L, x, z) {
   const p = ri * 11 + (side > 0 ? 5 : 0), T = 6.2832;
   const n = 0.6 + 0.2 * Math.sin(s * 0.093 + fr(p) * T) + 0.12 * Math.sin(s * 0.231 + fr(p + 1) * T) + 0.08 * Math.sin(s * 0.517 + fr(p + 2) * T);
   let taper = smoothstep(14, 34, s) * smoothstep(14, 34, L - s);
@@ -720,6 +726,52 @@ function planHospital(O) {
       }
     }
   }
+}
+
+// The CAR RENTAL (game/carrental.js): a building lot right on a bus road in Legacy Village, its yard / garage front
+// on the road's edge (rented cars wait there, the tow truck drives straight out onto the road and parks there): a
+// straight, gentle stretch near the village centre, the pad at the road's own height (flush with it), clear of the ski
+// areas, nets, lifts, stations, buildings, the railway, other roads, car parks, junctions, stops and the lay-bys.
+// busRoads.rental = { building lot (like the hospital's) + ri, s (the road and arc length in front), side }.
+export const RENTAL_LOT = { hw: 15, hd: 13 }; // half length along the road, half depth (m)
+function planRental(O) {
+  const q = {}, { hw, hd } = RENTAL_LOT;
+  let best = null;
+  busRoads.roads.forEach((r, ri) => {
+    if (r.access) return;
+    for (let s = 40; s < r.length - 40; s += 4) {
+      const m = roadAt(r, s), a = roadAt(r, s - 18), b = roadAt(r, s + 18);
+      const score0 = Math.hypot(m.x + 10, m.z - 20); // (as near the village square as it fits)
+      if (score0 > 330 || (best && score0 > best.score)) continue;
+      const bend = Math.abs(Math.atan2(a.dx * b.dz - a.dz * b.dx, a.dx * b.dx + a.dz * b.dz));
+      if (bend > 0.12 || Math.abs(m.grade) > 0.05) continue;
+      for (const side of [1, -1]) {
+        const nx = -m.dz * side, nz = m.dx * side, off = ROAD_HALF + 0.6 + hd; // (side 1: right of the way it runs)
+        const cx = m.x + nx * off, cz = m.z + nz * off;
+        let ok = true, lo = Infinity, hi = -Infinity;
+        for (let u = -hw - 4; u <= hw + 4 && ok; u += 4) for (let v = -hd - 4; v <= hd - 1 && ok; v += 4) { // (v toward the road)
+          const x = cx + m.dx * u - nx * v, z = cz + m.dz * u - nz * v;
+          O.query(x, z, q);
+          if (q.ski < 8 || q.net < 6 || q.block < 4 || q.rail < 8 || q.lift < 4) ok = false;
+          const c = world.corridorAt(x, z);
+          if (c.kind && c.kind !== 'lift' && c.d < 8) ok = false;
+          if (Math.abs(u) <= hw && Math.abs(v) <= hd) { const h = world.height(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+        }
+        if (!ok || hi - lo > 4 || Math.abs((hi + lo) / 2 - m.y) > 2.2) continue;
+        // no other road within reach (only the one in front), no car park, junction, stop or lay-by near it
+        if (busRoads.roads.some((o, oi) => { for (let i = 0; i < o.n; i += 2) { const d = Math.hypot(o.X[i] - cx, o.Z[i] - cz); if (d < hw + hd + 8 && (oi !== ri || Math.abs(o.S[i] - s) > hw + 30)) return true; } return false; })) continue;
+        if (busRoads.lots.some((L) => Math.hypot(L.x - cx, L.z - cz) < Math.hypot(L.hw, L.hd) + Math.hypot(hw, hd) + 12)) continue;
+        if ([...busRoads.junctions, ...busRoads.stops, ...(busRoads.laybys || [])].some((j) => Math.hypot(j.x - cx, j.z - cz) < 50)) continue;
+        if (Math.hypot(cx + 190, cz + 160) < 90) continue; // (the Legacy Express's village station)
+        const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz); // (u along the road; the front to the road)
+        best = { name: 'Car rental', building: true, rental: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+          ex: m.x + nx * (ROAD_HALF + 0.6), ez: m.z + nz * (ROAD_HALF + 0.6), dirx: -nx, dirz: -nz, facing, ri, s, side, score: score0 };
+      }
+    }
+  });
+  if (!best) return;
+  busRoads.lots.push(best);
+  busRoads.rental = best;
 }
 
 /** Dev: the network as plain data (lengths, worst grade). */

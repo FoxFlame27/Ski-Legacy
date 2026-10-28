@@ -18,7 +18,7 @@ import { keysHTML } from '../ui/hud.js';
 import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
 import { lampsOn, LightPool, Smoke, hazardPhase } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
-import { busRoads } from './bus/roads.js';
+import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { TyreTracks } from './tyretracks.js';
 const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
 
@@ -33,6 +33,13 @@ export const CAR_SPECS = {
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 const RATIOS = [3.6, 2.2, 1.5, 1.15, 0.92, 0.76], FINAL = 3.7, IDLE = 820, REDLINE = 6400;
 const G = 9.81;
+// surfaces (grip()): mu, rolling drag, bumpiness; road: the tarmac (firm grip, tyre noise, full stability assist)
+const SURF = {
+  road: { mu: 1.0, roll: 0.015, rough: 0.1, road: true },
+  shoulder: { mu: 0.72, roll: 0.03, rough: 0.5 },
+  snow: { mu: 0.58, roll: 0.05, rough: 1 },
+  piste: { mu: 0.4, roll: 0.02, rough: 0.4 },
+};
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const CRASH_V = 62 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
@@ -112,6 +119,9 @@ export class Drive {
     }
     if (!best) return null;
     if (best.wrecked) { this.prompt.label = `${CAR_SPECS[best.name].label} · wrecked`; this.prompt.act = () => this.hud?.flash('Wrecked · it will be towed away', 'bad', 2000); return this.prompt; }
+    // only a car you rented lets you in (carrental.js sets locked): any other just says where to rent one
+    const hint = this.locked?.(best);
+    if (hint) { this.prompt.label = hint; this.prompt.act = () => this.hud?.flash(hint, 'bad', 2400); return this.prompt; }
     this.prompt.label = `Drive ${CAR_SPECS[best.name].label}`;
     this.prompt.act = () => this.enter(best);
     return this.prompt;
@@ -324,13 +334,24 @@ export class Drive {
     } catch (err) { console.warn('drive', err); try { this.abort(); } catch { this.d = null; } }
   }
 
-  // surface grip: ploughed roads and car parks hold (winter tyres), packed snow off the road is clearly slipperier
-  // (it drags too, and it's bumpy), groomed pistes are close to ice
+  // surface grip: the ploughed tarmac (a road's plowed width + its packed strip, car parks, junctions, lay-bys: the
+  // bus roads' own shapes) holds firm (winter tyres); the snowy shoulder / berm bench a little less; off the road
+  // the snow is clearly slipperier (it drags too, and it's bumpy) but predictable; groomed pistes slippier still
   grip(x, z) {
+    if (this.onTarmac(x, z)) return SURF.road;
     const c = this.world.corridorAt(x, z, this._corr || (this._corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false }));
-    if (c.kind === 'lift' && c.d < 0) return { mu: 0.92, roll: 0.015, rough: 0.1, road: true }; // (roads, car parks, junctions, lay-bys: winter tyres)
-    if (c.groomed && c.d < 0) return { mu: 0.24, roll: 0.02, rough: 0.4 };                    // groomed piste: icy
-    return { mu: 0.46, roll: 0.06, rough: 1 };                                                // packed / loose snow
+    if (c.kind === 'lift' && c.d < 0) return busRoads.roads.length ? SURF.shoulder : SURF.road; // (no bus roads planned: the old corridor test)
+    if (c.groomed && c.d < 0) return SURF.piste;
+    return SURF.snow;
+  }
+  onTarmac(x, z) {
+    const R = busRoads;
+    if (!R.roads.length) return false;
+    if (laneDistance(x, z) < ROAD_HALF + 0.9) return true;
+    for (const L of R.lots) { const dx = x - L.x, dz = z - L.z; if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + 0.5 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + 0.5) return true; if (L.ex !== undefined && Math.hypot(x - L.ex, z - L.ez) < 8) return true; }
+    for (const j of R.junctions) if (Math.abs(j.x - x) < 10 && Math.abs(j.z - z) < 10) return true;
+    for (const lb of R.laybys || []) { const fx = Math.sin(lb.yaw), fz = Math.cos(lb.yaw), dx = x - lb.x, dz = z - lb.z; if (Math.abs(dx * fx + dz * fz) < 10 && Math.abs(dx * fz - dz * fx) < 3) return true; }
+    return false;
   }
 
   // A bicycle model: the front and rear axles each with a tyre that grips by its slip angle (rising to a peak, then a
@@ -359,9 +380,15 @@ export class Drive {
     const m = MASS[d.e.name] || 1700, L = d.wheelBase, fwd = DRIVE[d.e.name] === 'fwd';
     const a = L * (fwd ? 0.4 : 0.46), b = L - a, hcg = 0.55, Iz = m * a * b * 1.15;
     const au = Math.abs(u), sgn = u >= 0 ? 1 : -1;
-    // the steering rack: full lock at parking speed, much less at speed; it moves at a limited rate and centres itself
-    const lock = 0.6 / (1 + 0.0045 * au * au);
-    const rate = (steerIn ? 2.4 : 3.2) / (1 + au / 16);
+    // the steering rack: full lock at parking speed; at speed the lock a full key press gives is what the surface's
+    // grip can turn (~75 % of it, plus a little for the tyres' slip): holding A/D on the road never slides, on snow
+    // only gently. It moves at a limited rate and centres itself. (Steering works whatever the pedals do: A/D are
+    // read on their own, and the tyres always keep most of their grip for turning: traction control / ABS below.)
+    // (latOk: the cornering the grip leaves while braking / accelerating, la: the friction circle)
+    const latOk = Math.sqrt(Math.max((0.3 * s.mu * G) ** 2, (0.78 * s.mu * G) ** 2 - d.la * d.la));
+    const lock = clamp((L * latOk) / Math.max(1, au * au) + 0.015, 0.03, 0.6);
+    // (the rate: ~0.3 s to the lock whatever the speed, so a tap at speed is a small correction, not a swerve)
+    const rate = Math.min((steerIn ? 2.6 : 3.6) / (1 + au / 18), Math.max(lock * (steerIn ? 3.2 : 5), steerIn ? 0.2 : 0.35));
     d.steer += clamp(steerIn * lock - d.steer, -rate * dt, rate * dt);
     const delta = d.steer;
     if (!d.air) {
@@ -371,6 +398,7 @@ export class Drive {
       const mu = s.mu, capF = mu * Fzf, capR = mu * Fzr;
       // the engine (through the gears) and the brakes
       let Fdrive = 0, Fbrake = 0;
+      if (!s.road) thr *= 0.6; // (a gentler throttle on snow: less wheelspin)
       const x = clamp((d.rpm - 800) / 5600, 0, 1), curve = 0.62 + 0.38 * Math.sin(Math.PI * x);
       const gearK = spec.electric ? 1 : Math.pow(RATIOS[d.gi] / RATIOS[0], 0.85);
       const Fmax = m * spec.accel;
@@ -379,22 +407,25 @@ export class Drive {
         if (brk) Fbrake = m * 10 * brk;
         else if (!thr && u > 1) Fbrake = m * (spec.electric ? 1.1 : 0.35 + 0.8 * (d.rpm / REDLINE)); // (engine braking / regen)
       } else if (d.gear === 'R') {
-        if (brk) Fdrive = u > -7 ? -m * 3.2 : 0;
+        if (brk) Fdrive = u > -5.5 ? -m * 3.4 * (s.road ? 1 : 0.7) : 0;
         if (thr) Fbrake = m * 10;
       }
-      // per axle: drive split (AWD 40/60, FWD all front), brakes 65/35 front; each within its tyre's grip (ABS: just
-      // under it); the handbrake locks the rear
+      // per axle: drive split (AWD 40/60, FWD all front), brakes 65/35 front; traction control and ABS hold each
+      // tyre's drive / braking under its grip, and with the wheel turned well under it, so the friction circle always
+      // leaves most of the grip for steering (the old 95 % left under a third sideways: no steering under throttle
+      // or brakes, a spinning rear on snow); the handbrake locks the rear
       const split = fwd ? 1 : 0.4;
       let Fxf = Fdrive * split - Fbrake * 0.65 * sgn, Fxr = Fdrive * (1 - split) - Fbrake * 0.35 * sgn;
-      Fxf = clamp(Fxf, -0.95 * capF, 0.95 * capF);
-      Fxr = clamp(Fxr, -0.95 * capR, 0.95 * capR);
+      const kx = 0.9 - 0.3 * Math.min(1, Math.abs(steerIn) + Math.abs(d.steer) * 4); // (0.6 turning: 80 % kept sideways)
+      Fxf = clamp(Fxf, -kx * capF, kx * capF);
+      Fxr = clamp(Fxr, -kx * capR, kx * capR);
       let latR = 1;
       if (hb && au > 0.5) { Fxr = -sgn * 0.75 * capR; latR = 0.32; }
       // sideways: slip angles of the axles, a tyre curve (peak near 9 degrees, then a gentle fall), what grip the
       // drive / brakes leave (friction circle)
-      const uu = Math.max(au, 0.8);
+      const uu = Math.max(au, 1.5); // (a floor: the slip maths stays stable crawling; below ~1 m/s the tyres just roll)
       const af = Math.atan2(v + a * r, uu) - delta * sgn, ar = Math.atan2(v - b * r, uu);
-      const tyre = (al) => Math.sin(1.35 * Math.atan(14 * al));
+      const tyre = (al) => Math.sin(1.2 * Math.atan(14 * al)); // (past the peak only a gentle fall: slides stay catchable)
       const kf = Math.min(1, Math.abs(Fxf) / Math.max(1, capF)), kr = Math.min(1, Math.abs(Fxr) / Math.max(1, capR));
       const Fyf = -capF * Math.sqrt(Math.max(0, 1 - kf * kf)) * tyre(af);
       const Fyr = -capR * Math.sqrt(Math.max(0, 1 - kr * kr)) * latR * tyre(ar);
@@ -410,12 +441,28 @@ export class Drive {
       u += (FF / m + r * v) * dt;
       v += (FL / m - r * u0) * dt;
       r += ((a * (Fxf * sn + Fyf * cs) - b * Fyr) / Iz) * dt;
-      // braking to a stop doesn't roll it backwards; parked stays put
+      // stability assist (ESC): a yaw rate beyond what the wheels ask (u tan(delta) / L, no more than the grip can
+      // carry) or against it is pulled back (oversteer, a spin: caught; too little is left to the tyres, only nudged),
+      // and the rear's sideways slide (v - b r: the rear axle drifting out) is damped; firm on the road (no sliding at
+      // normal driving, no creep), softer on snow (a gentle, recoverable slide, never a spin on its own); the
+      // handbrake mostly overrides it
+      {
+        const rMax = (latOk * 1.05) / Math.max(Math.abs(u), 2);
+        const rT = clamp((u / L) * Math.tan(delta), -rMax, rMax);
+        const over = r * rT < 0 || Math.abs(r) > Math.abs(rT);
+        const hbK = hb && au > 0.5 ? 0.15 : 1;
+        r += (rT - r) * (1 - Math.exp(-dt * (s.road ? 7 : 3.5) * (over ? 1 : 0.25) * hbK));
+        v = b * r + (v - b * r) * Math.exp(-dt * (s.road ? 6 : 2) * hbK);
+      }
+      // braking to a stop doesn't roll it backwards; parked stays put; and at a standstill off the pedals it holds
+      // (hill hold: no creep down a gentle slope, unless the slope is beyond what the tyres can hold)
       if (Fbrake > 0 && Math.sign(u) !== Math.sign(u0) && u0 !== 0) u = 0;
       if (d.gear === 'P' || (d.gear === 'D' && !thr && brk && Math.abs(u) < 0.3)) { u = 0; v *= 0.5; }
-      // at walking pace the tyres just roll where they point (no slip maths at ~0 speed)
+      if (!thr && !(d.gear === 'R' && brk) && Math.abs(u) < 0.5 && Math.abs(gF) < 0.6 * mu * Wt) { u = 0; v = 0; r = 0; }
+      // at walking pace the tyres just roll where they point (no slip maths at ~0 speed): turning about the rear
+      // axle (the middle swings out b r), forwards or back
       const kd = clamp((Math.abs(u) - 1) / 3, 0, 1);
-      if (kd < 1) { const rk = (u / L) * Math.tan(delta); r = rk + (r - rk) * kd; v = v * kd + rk * b * (1 - kd) * 0; }
+      if (kd < 1) { const rk = (u / L) * Math.tan(delta); r = rk + (r - rk) * kd; v = v * kd + rk * b * (1 - kd); }
       d.la += ((u - u0) / dt - d.la) * Math.min(1, dt * 12);
       d.lat = FL / m;
       // tyre noise: only on cleared roads (snow hushes it): a slide, wheelspin, a locked axle
@@ -913,6 +960,7 @@ export class Drive {
     p.camYaw = yaw + (Math.PI / 2) * sg + Math.PI;
     p.events.push('crash'); // (free ride: a strike; the second one brings the rescue helicopter)
     this.hud?.flash('Wrecked · it will be towed away', 'bad', 2800);
+    try { this.onWreck?.(e); } catch (err) { console.warn('drive: onWreck', err); } // (carrental.js: the fee, the tow truck)
   }
   updateWrecks(dt) {
     const cam = this.camera, night = nightUniform?.value ?? 0;
@@ -929,7 +977,7 @@ export class Drive {
           // never while you're beside it (6 m)
           const pp = this.player.pos, nearYou = Math.hypot(g.position.x - pp.x, g.position.z - pp.z) < 6;
           if (W.sinking) { W.sinking += dt; g.position.y -= dt * 1.8; g.updateMatrixWorld(true); if (W.sinking > 0.8) { this.tow(e); continue; } }
-          else if (!nearYou && (W.unseen > 3 || (W.t > 20 && dist > 40))) { if (W.unseen > 3) { this.tow(e); continue; } W.sinking = 1e-3; }
+          else if (!W.tow && !nearYou && (W.unseen > 3 || (W.t > 20 && dist > 40))) { if (W.unseen > 3) { this.tow(e); continue; } W.sinking = 1e-3; } // (W.tow: the tow truck fetches it)
           if (e.astray) continue;
           if (e.smokeFx) { const b = _v.set(0, e.t.size.y * 0.78, e.t.size.z / 2 - 0.8); g.localToWorld(b); e.smokeFx.update(dt, W.t < 60 ? b : null, cam, night, _w.set(0, 0, 1).applyQuaternion(g.quaternion)); }
           if (e.inst) lampsOn(e.inst, night > 0.2 ? 1 : 0, 0.55, 0, { hazard: hazardPhase() }); // (the wreck: hazards, dim tails, headlights on at night)

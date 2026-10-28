@@ -77,6 +77,10 @@ import { PersonalBests } from './game/bests.js';
 import { TrailMap } from './ui/trailmap.js';
 import { PhotoMode } from './ui/photomode.js';
 import { Chalets } from './game/chalets.js'; // the chalet village (Almdorf): rent a chalet, its interior
+import { seating } from './game/seating.js'; // sitting down on benches, chairs, sofas, bed edges (the whole map + your chalet)
+import { chaletInteriorAPI } from './game/chaletroom.js';
+import { HX as CHALET_HX } from './game/chaletplan.js';
+import { FURNITURE_BY_ID } from './game/build/catalog.js';
 import { BuildMode } from './game/build/buildmode.js'; // chalet build mode (F inside your rented chalet)
 import { startObjective } from './game/build/objectives.js';
 let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
@@ -167,6 +171,7 @@ let sleds = null; // snowmobiles you can drive (game/snowmobile.js)
 let parking = null; // the car parks (game/parking.js)
 let traffic = null; // cars driving the roads (game/traffic.js)
 let drive = null; // the car you drive (game/drive.js)
+let chaletSeatPrompt = null; // inside your chalet: Sit down / Stand up (game/seating.js)
 let chalets = null; // the chalet village: the houses, renting one, its interior (game/chalets.js)
 let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
@@ -359,6 +364,8 @@ async function boot() {
       makeRig: () => makeRig('skier_orange', 'rental'), getPost: () => post });
   } catch (e) { console.warn('car rental: ' + (e?.stack || e)); carRental = null; }
   try { chalets = new Chalets({ scene, camera, renderer, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, spend, transition, player, getPost: () => post, getHour: () => env.hour }); } catch (e) { console.warn('chalets: ' + (e?.stack || e)); chalets = null; }
+  seating.init({ save, chaletAPI: chaletInteriorAPI, catalog: FURNITURE_BY_ID, chalets });
+  seating.setVillage((x, z) => world.height(x, z), CHALET_HX);
   // admin panel: money, time / weather, teleports, unlocks, speed boost, HUD, free camera (ui/admin.js)
   admin = new AdminPanel({
     save, writeSave, hud, audio, env, layout, input, camera, transition, streamAround, equipSkis,
@@ -1014,6 +1021,8 @@ function findInteraction() {
   if (job) return job;
   const stand = raceStand?.interaction(p); // the RACING stand (RACE just for fun)
   if (stand) return stand;
+  const seat = seating.interaction(player); // a bench, a deck chair... (game/seating.js)
+  if (seat) return seat;
   for (const it of village.interactables) {
     if (Math.hypot(p.x - it.x, p.z - it.z) < it.r) {
       if (it.id === 'shop') return { label: 'Enter the ski shop', act: enterShop };
@@ -1307,11 +1316,14 @@ function loop() {
     interaction = null;
   } else if (chalets?.inside) { // inside a chalet (its own scene)
     chalets.frame(dt, menu || hud.panelOpen ? null : input, save.sensitivity);
+    chaletSeatPrompt = seating.chaletFrame(menu || hud.panelOpen ? null : input, chalets.target, buildMode.on); // (sit on your furniture)
     interaction = null;
   } else if (carRental?.inside) { // inside the CAR RENTAL (its own scene)
+    seating.leftChalet();
     carRental.frame(dt, menu ? null : input, save.sensitivity);
     interaction = null;
   } else if (started && !menu && !busIntro) {
+    seating.leftChalet();
     if (input.hit('KeyM') && !inSession) openMap();
     if (input.hit('KeyL')) player.headlampOn = !player.headlampOn;
     interaction = inSession ? null : findInteraction();
@@ -1331,7 +1343,7 @@ function loop() {
   mark('env');
 
   // lift riding: move the cars first, then seat the rider on the updated car (no lag)
-  lifts.timeScale = player.mode === 'sit' && !heli.active && !skibus.riding && !sleds.active && !drive?.active && input.down('Space') ? 16 : 1; // Space climbs in the helicopter
+  lifts.timeScale = player.mode === 'sit' && !seating.seated && !heli.active && !skibus.riding && !sleds.active && !drive?.active && input.down('Space') ? 16 : 1; // Space climbs in the helicopter
   lifts.update(dt, player.pos);
   mark('lifts');
   let rideLine = null, ridePrompt = null; // riding: the line for the top-left card, the stop to get off at (E)
@@ -1369,6 +1381,9 @@ function loop() {
     if (r?.exit) leaveBus(r.exit);
     hud.rideHint(null);
     rideLine = rideText(r?.hint);
+  } else if (seating.seated) { // on a bench / a chair: E or a move key stands you up
+    ridePrompt = seating.updateSeated(dt, input, menu);
+    hud.rideHint(null);
   } else if (player.mode === 'sit') {
     const r = lifts.updateRide();
     if (r?.seat) {
@@ -1489,7 +1504,7 @@ function loop() {
         prompt: shopTarget?.label || null, objective: player.hasSkis ? '' : 'Look at a pair of skis and press E',
       });
     } else if (chalets?.inside) {
-      hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || null, objective: objective() || '' });
+      hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || chaletSeatPrompt || null, objective: objective() || '' });
     } else if (carRental?.inside) {
       hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the clerk and press E' });
     } else if (inSession) hud.frame({

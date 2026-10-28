@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { loadGLB } from '../../core/assets.js';
 import { FURNITURE } from './catalog.js';
-import { fitScales } from './placement.js';
+import { fitScales, lampLocal } from './placement.js';
 
 export const loadFurniture = (id) => loadGLB(`furniture/${id}`);
 
@@ -44,13 +44,35 @@ export function makeFurnitureObject(item, gltf) {
   g.add(m);
   const dims = box.getSize(new THREE.Vector3());
   g.userData.dims = dims;
-  if (item.light != null) { // a warm glowing bulb (no real light: keeps shader variants stable)
-    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
-    bulb.position.y = item.place === 'ceiling' ? -dims.y * 0.6 : item.place === 'wall' ? dims.y * 0.6 : item.light;
-    if (item.place === 'wall') bulb.position.z = dims.z * 0.6;
+  if (item.light != null) { // the bulb: a warm glow (the real light comes from the lamp pool, lamps.js)
+    const p = lampLocal(item, dims);
+    const bulb = new THREE.Group();
+    bulb.position.set(p.x, p.y, p.z);
+    const core = new THREE.Mesh(new THREE.SphereGeometry(Math.min(0.05, dims.x * 0.12), 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe2b0 }));
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xffc887, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    halo.scale.setScalar(Math.max(0.25, Math.min(0.9, dims.y * 0.5)));
+    bulb.add(core, halo);
     g.add(bulb);
+    g.userData.bulb = bulb;
   }
   return g;
+}
+
+let glowTex = null;
+function glowTexture() {
+  if (glowTex) return glowTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d'), gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,240,210,1)'); gr.addColorStop(0.25, 'rgba(255,200,135,0.55)'); gr.addColorStop(1, 'rgba(255,180,110,0)');
+  x.fillStyle = gr; x.fillRect(0, 0, 64, 64);
+  return (glowTex = new THREE.CanvasTexture(c));
+}
+/** Lamp on / off look (the glow only; lamps.js gives it its light). */
+export function setBulb(obj, on) {
+  const b = obj?.userData.bulb;
+  if (!b) return;
+  b.children[0].material.color.set(on ? 0xffe2b0 : 0x6b5a48);
+  b.children[1].visible = on;
 }
 
 // ---------------------------------------------------------------- thumbnails

@@ -7,6 +7,8 @@
 //       to the model's own. Wall items are thinned to the catalog depth.
 // place: 'floor' | 'wall' (back faces the wall, mounted at `mount` metres above the floor)
 //        | 'ceiling' (hangs from the ceiling).
+// light: a lamp: its bulb at this fraction of the height (ceiling: below the top); lux: its PointLight intensity.
+//        Placed lamps really light the room (lamps.js) and toggle with E; their on/off is saved as `on`.
 // small: little decor that can also stand on a window sill or on top of furniture (tabletop).
 // flat:  rugs etc. — no collider, may overlap other furniture.
 // seat:  you can sit on it (game/seating.js): { h: seat height (m), n: spots along the front, sides: spots along
@@ -71,16 +73,16 @@ export const FURNITURE = [
   { id: 'herb_pot', name: 'Herb Pot', category: 'decor', price: 20, size: [0.18, 0.24, 0.18], place: 'floor', small: true },
   { id: 'cactus', name: 'Little Cactus', category: 'decor', price: 18, size: [0.14, 0.26, 0.14], place: 'floor', small: true },
   { id: 'vase', name: 'Flower Vase', category: 'decor', price: 25, size: [0.15, 0.32, 0.15], place: 'floor', small: true },
-  { id: 'tealight_lantern', name: 'Candle Jar', category: 'decor', price: 15, size: [0.12, 0.18, 0.12], place: 'floor', small: true, light: 0.08 },
+  { id: 'tealight_lantern', name: 'Candle Jar', category: 'decor', price: 15, size: [0.12, 0.18, 0.12], place: 'floor', small: true, light: 0.5, lux: 1.5 },
   { id: 'deer_figurine', name: 'Carved Deer', category: 'decor', price: 40, size: [0.22, 0.26, 0.1], place: 'floor', small: true },
   { id: 'photo_frame', name: 'Photo Frame', category: 'decor', price: 20, size: [0.2, 0.25, 0.08], place: 'floor', small: true },
 
   // Lighting
-  { id: 'floor_lamp', name: 'Floor Lamp', category: 'lighting', price: 160, size: [0.45, 1.65, 0.45], place: 'floor', light: 1.45 },
-  { id: 'table_lamp', name: 'Table Lamp', category: 'lighting', price: 70, size: [0.3, 0.5, 0.3], place: 'floor', light: 0.4, small: true },
-  { id: 'ceiling_lamp', name: 'Antler Chandelier', category: 'lighting', price: 340, size: [0.85, 0.65, 0.85], place: 'ceiling', light: 0.1 },
-  { id: 'wall_sconce', name: 'Wall Sconce', category: 'lighting', price: 90, size: [0.2, 0.38, 0.22], place: 'wall', mount: 1.8, light: 0.2 },
-  { id: 'lantern', name: 'Lantern', category: 'lighting', price: 45, size: [0.22, 0.45, 0.22], place: 'floor', light: 0.25, small: true },
+  { id: 'floor_lamp', name: 'Floor Lamp', category: 'lighting', price: 160, size: [0.45, 1.65, 0.45], place: 'floor', light: 0.85, lux: 10 },
+  { id: 'table_lamp', name: 'Table Lamp', category: 'lighting', price: 70, size: [0.3, 0.5, 0.3], place: 'floor', light: 0.75, lux: 5, small: true },
+  { id: 'ceiling_lamp', name: 'Antler Chandelier', category: 'lighting', price: 340, size: [0.85, 0.65, 0.85], place: 'ceiling', light: 0.6, lux: 14 },
+  { id: 'wall_sconce', name: 'Wall Sconce', category: 'lighting', price: 90, size: [0.2, 0.38, 0.22], place: 'wall', mount: 1.8, light: 0.6, lux: 6 },
+  { id: 'lantern', name: 'Lantern', category: 'lighting', price: 45, size: [0.22, 0.45, 0.22], place: 'floor', light: 0.5, lux: 3, small: true },
 ];
 
 export const FURNITURE_BY_ID = Object.fromEntries(FURNITURE.map((f) => [f.id, f]));

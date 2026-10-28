@@ -11,6 +11,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from '../../world/world.js';
 import { busRoads, roadAt, ROAD_HALF, laneDistance } from './roads.js';
 import { fitModel } from '../../core/assets.js';
+import { registerBench } from '../seating.js'; // (the benches can be sat on)
 
 const rnd = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 
@@ -118,6 +119,7 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
       const x = cx + lx * sd * 2.6, z = cz + lz * sd * 2.6;
       put('wood', benchWood, x, H(x, z), z, yaw);
       put('iron', benchLeg, x, H(x, z), z, yaw);
+      try { registerBench({ x, y: H(x, z) + 0.475, z, yaw, width: 1.8, off: -0.04, floorY: H(x, z) }); } catch { /* (no seating) */ }
     }
     put('wood', boardPosts, cx, H(cx, cz), cz, yaw + Math.PI); // (the board faces the benches' way back: read it, then turn round)
     put('board', boardBack, cx, H(cx, cz), cz, yaw + Math.PI);

@@ -122,3 +122,34 @@ export function fitScales(item, d) {
   const sz = item.place === 'wall' ? Math.min(clamp(dd / dz), dd / dz) : clamp(dd / dz);
   return { layFlat, turn, scale: [sx, sy, sz] };
 }
+
+/** Local bulb point of a lamp (object frame: see makeFurnitureObject), dims = { x, y, z } scaled size. */
+export function lampLocal(item, dims) {
+  const f = item.light ?? 0.8;
+  if (item.place === 'ceiling') return { x: 0, y: -dims.y * f, z: 0 };
+  if (item.place === 'wall') return { x: 0, y: dims.y * f, z: dims.z * 0.6 };
+  return { x: 0, y: dims.y * f, z: 0 };
+}
+/** World-of-root bulb point of a placed lamp record { x, y, z, rot }. */
+export function lampPoint(item, dims, rec) {
+  const l = lampLocal(item, dims), c = Math.cos(rec.rot || 0), s = Math.sin(rec.rot || 0);
+  return { x: rec.x + l.x * c + l.z * s, y: rec.y + l.y, z: rec.z - l.x * s + l.z * c };
+}
+
+/** Ray (o, d: {x,y,z}) against window sills [{ x, z, y, len, depth, yaw }] (yaw: into the room).
+ *  Nearest hit within maxT: { sill, t, u (along, from the centre), v (across), x, y, z }. */
+export function raySill(o, d, sills, maxT = 6) {
+  let best = null;
+  for (const s of sills) {
+    if (Math.abs(d.y) < 1e-4) continue;
+    const t = (s.y - o.y) / d.y;
+    if (t <= 0 || t > maxT || (best && t >= best.t)) continue;
+    const px = o.x + d.x * t, pz = o.z + d.z * t;
+    const ix = Math.sin(s.yaw), iz = Math.cos(s.yaw), ax = Math.cos(s.yaw), az = -Math.sin(s.yaw);
+    const u = (px - s.x) * ax + (pz - s.z) * az, v = (px - s.x) * ix + (pz - s.z) * iz;
+    const m = 0.06; // a little slack round the ledge
+    if (Math.abs(u) > s.len / 2 + m || Math.abs(v) > s.depth / 2 + m) continue;
+    best = { sill: s, t, u, v, x: px, y: s.y, z: pz };
+  }
+  return best;
+}

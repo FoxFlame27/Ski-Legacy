@@ -55,7 +55,7 @@ export function makeGhost(source) {
       m.add(e);
     } catch { /* odd geometry: shader only */ }
   }
-  group.traverse((o) => { if (o.isLight) o.visible = false; });
+  group.traverse((o) => { if (o.isLight || o.isSprite) o.visible = false; });
   let valid = true;
   return {
     group,

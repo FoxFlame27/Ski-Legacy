@@ -21,6 +21,7 @@ import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { TyreTracks } from './tyretracks.js';
 import { addDent, applyDents, repairInstance } from './cardamage.js';
+import { setPlates } from './carconfig.js';
 const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
 
 // per car: name, pull (m/s^2 at low speed), top speed (m/s), electric (one gear)
@@ -224,7 +225,12 @@ export class Drive {
   // a car instance as this car looks: a rental's own config (carrental.js e.dress: paint, interior, rims, plates) and
   // its dents (cardamage.js)
   dressed(e, inst, t) { // (not "look": that is the cockpit mouse-look { yaw, pitch } field, which would shadow it)
-    try { e.dress?.(inst, t); applyDents(inst, e); } catch (err) { console.warn('drive: car look', err); }
+    try {
+      if (e.dress) e.dress(inst, t);
+      else setPlates(inst, t, e.inst?.plateText || e.plateText); // (the same plates as it had parked)
+      if (inst.plateText) e.plateText = inst.plateText;
+      applyDents(inst, e);
+    } catch (err) { console.warn('drive: car look', err); }
     return inst;
   }
   // show a car instance in place of the parked car's (the parked one is kept to put back)

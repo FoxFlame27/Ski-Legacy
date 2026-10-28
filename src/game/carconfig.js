@@ -250,11 +250,20 @@ export function dressCar(inst, t, cfg) {
 
 /** Number plates (front and back) on any car instance: the rental's own, a random one for the traffic and the
  *  parked cars (Oct 28, the user: "make bots have random number plates"). */
-export function setPlates(inst, t, text = randomPlate()) {
+/** A model's own plate part (its texture, another size, the old spot), by material or name; not its plate lights. */
+export const OWN_PLATE = /plate|licen|nomera|kennz/i;
+export function isOwnPlate(t, o) {
+  const own = PLATE_SPOT[plateModel(t)]?.mat;
+  const mats = Array.isArray(o.material) ? o.material : [o.material];
+  return mats.some((m) => { const n = m?.name || ''; return (own && own.test(n)) || (OWN_PLATE.test(n) && !/light|lamp|glow/i.test(n)); });
+}
+export function setPlates(inst, t, text = inst.plateText || randomPlate()) {
+  inst.plateText = text;
   if (!inst.plates) {
     // the model's own plate (its texture, another size) hidden: ours takes its place
-    const own = PLATE_SPOT[plateModel(t)]?.mat;
-    if (own) for (const o of inst.full.children) if (o.isMesh && own.test(o.material?.name || '')) o.visible = false;
+    // (Oct 28, the user: "some cars have double number plates, one on an old position": every model's own plate
+    // part goes, wherever it sits in the instance and whatever material list it has)
+    inst.full.traverse((o) => { if (o.isMesh && isOwnPlate(t, o)) o.visible = false; });
     inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
   const tex = plateTexture(text);
   for (const p of inst.plates) if (p.material.map !== tex) { p.material.map = tex; p.material.needsUpdate = true; }

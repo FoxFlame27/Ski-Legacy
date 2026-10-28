@@ -825,6 +825,7 @@ async function buildLod(t) {
   const pos = [], col = [], pnt = [], idx = [];
   let base = 0;
   for (const p of [...t.parts, ...(t.lamps?.parts || [])]) {
+    if (/plate|licen|nomera|kennz/i.test(p.material.name || '') && !/light|lamp|glow/i.test(p.material.name || '')) continue; // (the model's own plate: not on the far car)
     const g = p.geometry, P = g.attributes.position, I = g.index.array;
     const c = (p.material.color || new THREE.Color(0x777777)).clone(), m = meanColour(p.material.map);
     if (m) c.multiply(m);

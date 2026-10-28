@@ -45,8 +45,8 @@ export const FURNITURE = [
   { id: 'wall_shelf', name: 'Spice Shelf', category: 'kitchen', price: 80, size: [1.0, 0.45, 0.25], place: 'wall', mount: 1.5 },
 
   // Bedroom
-  { id: 'double_bed', name: 'Double Bed', category: 'bedroom', price: 1500, size: [1.6, 1.0, 2.05], place: 'floor', seat: { h: 0.52, sides: 2 } },
-  { id: 'single_bed', name: 'Single Bed', category: 'bedroom', price: 700, size: [1.0, 0.9, 2.05], place: 'floor', seat: { h: 0.5, sides: 2 } },
+  { id: 'double_bed', name: 'Double Bed', category: 'bedroom', price: 1500, size: [1.6, 1.0, 2.0], place: 'floor', seat: { h: 0.52, sides: 2 } },
+  { id: 'single_bed', name: 'Single Bed', category: 'bedroom', price: 700, size: [1.0, 0.9, 2.0], place: 'floor', seat: { h: 0.5, sides: 2 } },
   { id: 'wardrobe', name: 'Painted Wardrobe', category: 'bedroom', price: 850, size: [1.2, 2.0, 0.6], place: 'floor' },
   { id: 'nightstand', name: 'Nightstand', category: 'bedroom', price: 140, size: [0.5, 0.6, 0.42], place: 'floor' },
   { id: 'desk', name: 'Writing Desk', category: 'bedroom', price: 380, size: [1.3, 0.76, 0.65], place: 'floor' },
@@ -73,16 +73,16 @@ export const FURNITURE = [
   { id: 'herb_pot', name: 'Herb Pot', category: 'decor', price: 20, size: [0.18, 0.24, 0.18], place: 'floor', small: true },
   { id: 'cactus', name: 'Little Cactus', category: 'decor', price: 18, size: [0.14, 0.26, 0.14], place: 'floor', small: true },
   { id: 'vase', name: 'Flower Vase', category: 'decor', price: 25, size: [0.15, 0.32, 0.15], place: 'floor', small: true },
-  { id: 'tealight_lantern', name: 'Candle Jar', category: 'decor', price: 15, size: [0.12, 0.18, 0.12], place: 'floor', small: true, light: 0.5, lux: 1.5 },
+  { id: 'tealight_lantern', name: 'Candle Jar', category: 'decor', price: 15, size: [0.12, 0.18, 0.12], place: 'floor', small: true, light: 0.5, lux: 2 },
   { id: 'deer_figurine', name: 'Carved Deer', category: 'decor', price: 40, size: [0.22, 0.26, 0.1], place: 'floor', small: true },
   { id: 'photo_frame', name: 'Photo Frame', category: 'decor', price: 20, size: [0.2, 0.25, 0.08], place: 'floor', small: true },
 
   // Lighting
-  { id: 'floor_lamp', name: 'Floor Lamp', category: 'lighting', price: 160, size: [0.45, 1.65, 0.45], place: 'floor', light: 0.85, lux: 10 },
-  { id: 'table_lamp', name: 'Table Lamp', category: 'lighting', price: 70, size: [0.3, 0.5, 0.3], place: 'floor', light: 0.75, lux: 5, small: true },
-  { id: 'ceiling_lamp', name: 'Antler Chandelier', category: 'lighting', price: 340, size: [0.85, 0.65, 0.85], place: 'ceiling', light: 0.6, lux: 14 },
-  { id: 'wall_sconce', name: 'Wall Sconce', category: 'lighting', price: 90, size: [0.2, 0.38, 0.22], place: 'wall', mount: 1.8, light: 0.6, lux: 6 },
-  { id: 'lantern', name: 'Lantern', category: 'lighting', price: 45, size: [0.22, 0.45, 0.22], place: 'floor', light: 0.5, lux: 3, small: true },
+  { id: 'floor_lamp', name: 'Floor Lamp', category: 'lighting', price: 160, size: [0.45, 1.65, 0.45], place: 'floor', light: 0.85, lux: 12 },
+  { id: 'table_lamp', name: 'Table Lamp', category: 'lighting', price: 70, size: [0.3, 0.5, 0.3], place: 'floor', light: 0.75, lux: 6, small: true },
+  { id: 'ceiling_lamp', name: 'Antler Chandelier', category: 'lighting', price: 340, size: [0.85, 0.65, 0.85], place: 'ceiling', light: 0.6, lux: 16 },
+  { id: 'wall_sconce', name: 'Wall Sconce', category: 'lighting', price: 90, size: [0.2, 0.38, 0.22], place: 'wall', mount: 1.8, light: 0.6, lux: 7 },
+  { id: 'lantern', name: 'Lantern', category: 'lighting', price: 45, size: [0.22, 0.45, 0.22], place: 'floor', light: 0.5, lux: 4, small: true },
 ];
 
 export const FURNITURE_BY_ID = Object.fromEntries(FURNITURE.map((f) => [f.id, f]));

@@ -1009,7 +1009,7 @@ function findInteraction() {
   if (player.mode === 'sit' || races.active || heli.rescuing) return null;
   const carPrompt = drive?.interaction(p);
   if (carPrompt) return carPrompt;
-  const rental = carRental?.interaction(p); // the CAR RENTAL's door
+  const rental = carRental?.interaction(p); // inside the CAR RENTAL: a car (its configurator), the clerk
   if (rental) return rental;
   const chalet = chalets?.interaction(p); // a chalet's front door (rent it / go in)
   if (chalet) return chalet;
@@ -1238,7 +1238,6 @@ function applyQuality(name, persist = true) {
   post.dispose();
   post = new Post(renderer, scene, camera);
   if (interior.active) post.setView(interior.scene, interior.camera);
-  if (carRental?.inside) post.setView(carRental.room.scene, carRental.room.camera);
   if (chalets?.inside) post.setView(chalets.room.scene, chalets.room.camera);
   resetDynRes();
   setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
@@ -1317,10 +1316,6 @@ function loop() {
   } else if (chalets?.inside) { // inside a chalet (its own scene)
     chalets.frame(dt, menu || hud.panelOpen ? null : input, save.sensitivity);
     chaletSeatPrompt = seating.chaletFrame(menu || hud.panelOpen ? null : input, chalets.target, buildMode.on); // (sit on your furniture)
-    interaction = null;
-  } else if (carRental?.inside) { // inside the CAR RENTAL (its own scene)
-    seating.leftChalet();
-    carRental.frame(dt, menu ? null : input, save.sensitivity);
     interaction = null;
   } else if (started && !menu && !busIntro) {
     seating.leftChalet();
@@ -1412,7 +1407,7 @@ function loop() {
   traffic?.update(dt); // cars on the roads (after you moved: they stop for you)
   mark('traffic');
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
-  carRental?.update(dt); // the tow truck, the rental's sign at night
+  carRental?.update(dt); // the tow truck, the sign at night, the hall's doors and showroom (in the world), the configurator's camera
   chalets?.update(dt); // the full-detail chalet nearest you
   mark('drive');
   modes.update(dt, input); // after the player (positions, checkpoints, barriers, respawns)
@@ -1505,8 +1500,8 @@ function loop() {
       });
     } else if (chalets?.inside) {
       hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || chaletSeatPrompt || null, objective: objective() || '' });
-    } else if (carRental?.inside) {
-      hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the clerk and press E' });
+    } else if (carRental?.inside && !inSession) {
+      hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.ui.isOpen ? null : interaction?.label || null, objective: carRental.current ? '' : 'Walk up to a car or the clerk and press E' });
     } else if (inSession) hud.frame({
       speed: player.speed, loc: modes.course?.name || 'World Racing', time: env.timeString, weather, ski,
       prompt: null, objective: '', heading: camYaw, waypoint: null,

@@ -31,7 +31,19 @@ export function makeFurnitureObject(item, gltf) {
     m.add(turned);
     m.scale.set(...fit.scale);
     m.updateMatrixWorld(true);
-    m.traverse((o) => { if (o.isMesh) { o.castShadow = !item.flat; o.receiveShadow = true; } });
+    const glow = item.light != null ? [] : null; // a lamp's own materials glow warm while it's on (setBulb)
+    m.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = !item.flat; o.receiveShadow = true;
+      if (glow && o.material?.isMeshStandardMaterial) {
+        o.material = o.material.clone();
+        o.material.emissive.set(0xffc887);
+        o.material.emissiveMap = o.material.map;
+        o.material.emissiveIntensity = 0;
+        glow.push(o.material);
+      }
+    });
+    if (glow) g.userData.glowMats = glow;
   } else {
     m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), fallbackMat);
     m.castShadow = !item.flat; m.receiveShadow = true;
@@ -73,6 +85,7 @@ export function setBulb(obj, on) {
   if (!b) return;
   b.children[0].material.color.set(on ? 0xffe2b0 : 0x6b5a48);
   b.children[1].visible = on;
+  for (const m of obj.userData.glowMats || []) m.emissiveIntensity = on ? 0.35 : 0;
 }
 
 // ---------------------------------------------------------------- thumbnails

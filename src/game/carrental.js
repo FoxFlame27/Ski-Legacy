@@ -22,7 +22,7 @@ import { CarRentalRoom } from './carrentalroom.js';
 import { TowTruck } from './towtruck.js';
 import { CarRentalUI } from '../ui/carrental.js';
 import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate, setPlates } from './carconfig.js';
-import { LAYOUT, buildShell, setDoors } from './carrentalshell.js';
+import { LAYOUT, buildShell, setDoors, stairY } from './carrentalshell.js';
 import { makeSign } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
 
@@ -60,9 +60,8 @@ export class CarRental {
     if (!this.L) return;
     const L = this.L;
     this.yaw0 = Math.atan2(L.dirx, L.dirz); // the lot's frame: local +z toward the road, +x along it
-    this.buildOutside();
     this.room = null; // the showroom inside (carrentalroom.js): built the first time you come near (showroom())
-    this.near = false;
+    this.buildOutside();
     // the tow truck: in its TOW bay along the road, nose to the yard's right end; out: on round to the right onto the
     // road; back: in from the road at the left of the bay, round into it (so it ends nose first, square in the bay)
     const P = YARD.tow, park = this.w(P.x, P.z);
@@ -187,7 +186,8 @@ export class CarRental {
     this.scene.add(g);
     this.group = g;
     g.updateMatrixWorld(true);
-    this.buildWalkable();
+    this.hallC = this.w(0, BZ);
+    this.buildHallPhysics();
     this.door = this.w(LAYOUT.door.x, BZ + D / 2 + 1.3);
     this.carSpot = { ...this.w(YARD.carX, YARD.carZ), yaw: this.yaw0 }; // (in the middle bay, nose to the road)
   }
@@ -255,41 +255,82 @@ export class CarRental {
     if (this.truck) this.truck.fetch(e, (car) => this.remove(car));
   }
 
-  // ------------------------------------------------------------------ outside: the door
-  interaction(p) {
-    if (!this.L || this.inside || !this.room) return null;
-    if (Math.hypot(p.x - this.door.x, p.z - this.door.z) < 2.6) return this._prompt ||= { label: 'Car Rental', act: () => this.enter() };
-    return null;
+  // ------------------------------------------------------------------ the hall in the world: walls, floors, the stair
+  /** World x, z -> the hall's frame (origin on its floor in the middle, +z out of the glass). */
+  toHall(x, z, out = {}) {
+    const L = this.L, dx = x - L.x, dz = z - L.z;
+    out.x = L.dirz * dx - L.dirx * dz; out.z = L.dirx * dx + L.dirz * dz - YARD.hall;
+    return out;
+  }
+  /** The hall's frame -> world { x, z }. */
+  fromHall(hx, hz) { return this.w(hx, hz + YARD.hall); }
+  // Its walls and glass front (the door's bay open: the sliding pair opens as you come), the stair's open side as
+  // colliders; the floor, the stair and the mezzanine as walkable surfaces (world.groundHeight: the mezzanine is only
+  // taken from the stair's top, never from the floor under it); invisible boxes the 3rd-person camera stops at
+  // (on only while you are inside).
+  buildHallPhysics() {
+    const { W, D, T, PIER, FL, MZ, H } = LAYOUT, S = LAYOUT.stair, Y = this.L.y, rot = -this.yaw0;
+    const box = (hx, hz, hw, hd) => { const p = this.fromHall(hx, hz); return { x: p.x, z: p.z, hw, hd, rot }; };
+    const gx0 = -W / 2 + PIER, gx1 = W / 2 - PIER, dl = LAYOUT.door.x - LAYOUT.bayW / 2, dr = LAYOUT.door.x + LAYOUT.bayW / 2;
+    this.walls = [
+      box(-(W / 2 + T / 2), 0, T / 2, D / 2 + T), box(W / 2 + T / 2, 0, T / 2, D / 2 + T), box(0, -D / 2 - T / 2, W / 2 + T, T / 2),
+      ...[-1, 1].map((sx) => box(sx * (W / 2 - PIER / 2 + T / 2), D / 2 + 0.05, (PIER + T) / 2, (T + 0.5) / 2)),
+      box((gx0 + dl) / 2, D / 2, (dl - gx0) / 2, 0.12), box((dr + gx1) / 2, D / 2, (gx1 - dr) / 2, 0.12),
+      box(S.x1 + 0.03, (S.z0 + S.z1 - 0.9) / 2, 0.06, (S.z1 - 0.9 - S.z0) / 2), // (the stair's glass side: only its foot is open)
+    ];
+    this.colliders.push(...this.walls);
+    // (upstairs only: the mezzanine's balustrade)
+    this.upWalls = [box((S.x1 + W / 2) / 2, MZ - 0.06, (W / 2 - S.x1) / 2, 0.08)];
+    const cs = [[-W / 2, -D / 2], [W / 2, -D / 2], [-W / 2, D / 2], [W / 2, D / 2]].map(([a, b]) => this.fromHall(a, b));
+    const bounds = { minx: Math.min(...cs.map((c) => c.x)) - 1, maxx: Math.max(...cs.map((c) => c.x)) + 1, minz: Math.min(...cs.map((c) => c.z)) - 1, maxz: Math.max(...cs.map((c) => c.z)) + 1 };
+    const h = {}, inside = (x, z) => { this.toHall(x, z, h); return Math.abs(h.x) <= W / 2 && Math.abs(h.z) <= D / 2; };
+    this.surfaces = [
+      world.addSurface({ bounds, height: (x, z) => (inside(x, z) ? Y + 0.03 : null) }),
+      world.addSurface({ bounds, height: (x, z) => (inside(x, z) && h.x >= S.x0 && h.x <= S.x1 + 0.02 && h.z >= S.z0 - 0.05 && h.z <= S.z1 ? Y + 0.03 + stairY(h.z) : null) }),
+      world.addSurface({ bounds, height: (x, z) => (inside(x, z) && h.z < MZ ? Y + FL : null) }),
+    ];
+    // the camera's stops: the side and back walls and the ceiling (tie beams' height)
+    const inv = new THREE.MeshBasicMaterial();
+    const blk = (w, hh, d, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, hh, d), inv); m.position.set(x, y, z); m.visible = false; this.hall.add(m); return m; };
+    this.blockers = [blk(T, H, D, -W / 2 - T / 2, H / 2, 0), blk(T, H, D, W / 2 + T / 2, H / 2, 0), blk(W, H, T, 0, H / 2, -D / 2 - T / 2), blk(W, 0.2, D, 0, H - 0.3, 0)];
+    this.hall.updateMatrixWorld(true);
+    this.blockersOn = false;
+    this.level = null; // the room's obstacles in the world: 'down' (the ground floor's), 'up' (the mezzanine's)
+  }
+  // the furniture of the floor you are on as colliders (the ground floor's turntables, desk, sofa; upstairs the cars,
+  // the office, the balustrade)
+  setLevel(level) {
+    if (level === this.level) return;
+    const drop = (arr) => { for (const c of arr || []) { const i = this.colliders.indexOf(c); if (i >= 0) this.colliders.splice(i, 1); } };
+    drop(this.downCols); drop(this.upCols);
+    this.level = level;
+    if (level === 'down') this.colliders.push(...this.downCols);
+    else if (level === 'up') this.colliders.push(...this.upCols);
+    if (this.drive) this.drive._cc = null;
+  }
+  // the showroom (carrentalroom.js), the first time you come near
+  showroom() {
+    const hex = (list) => list.map(([id, paint]) => ({ id, paint: paintHex(paint) }));
+    this.room = new CarRentalRoom({ frame: this.hall, models: this.models, makeRig: this.makeRig, cars: RENTALS, display: hex(DISPLAY), upper: hex(UPPER) });
+    const circ = (o) => { const p = this.fromHall(o.x, o.z); return { x: p.x, z: p.z, r: o.r }; };
+    this.downCols = this.room.obstacles.map(circ);
+    this.upCols = [...this.room.obstaclesUp.map(circ), ...this.upWalls];
   }
 
-  enter() {
-    if (this.inside || this.transition.active) return;
-    this.player.frozen = true;
-    this.audio?.play?.('click');
-    this.transition.fade(() => {
-      this.inside = true;
-      this.room.enter();
-      this.getPost().setView(this.room.scene, this.room.camera);
-      document.getElementById('crosshair').hidden = false;
-    });
+  // ------------------------------------------------------------------ inside: what E does (main.js findInteraction)
+  interaction(p) {
+    if (!this.L || !this.room || !this.inside || this.ui.isOpen) return null;
+    const t = this.room.pick(this.toHall(p.x, p.z, this._ph ||= {}), this.level === 'up');
+    if (!t) return null;
+    const key = t.kind + ':' + (t.id || '');
+    this._prompts ||= {};
+    return this._prompts[key] ||= { label: t.label, act: () => (t.kind === 'clerk' ? this.recommend() : this.openCard(t.id, t.paint)) };
   }
-  leave(now = false) {
-    if (!this.inside) return;
-    const out = () => {
-      if (this.ui.isOpen) this.ui.close('leave');
-      this.room.endConfigure();
-      this.inside = false; this.room.active = false; this.room.releasePortal();
-      this.getPost().setView(this.scene, this.camera);
-      document.getElementById('crosshair').hidden = true;
-      this.player.frozen = false;
-      if (now) return;
-      const f = { x: this.L.dirx, z: this.L.dirz };
-      this.player.teleport(this.door.x + f.x * 0.8, this.door.z + f.z * 0.8, Math.atan2(f.x, f.z));
-      this.player.camYaw = Math.atan2(f.x, f.z) + Math.PI + 0.4;
-      this.player.camPitch = -0.12;
-      if (this.current) setTimeout(() => this.hud?.flash('Your rental car waits in the yard · E to drive', 'good', 2800), 400);
-    };
-    if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
+  /** Close the configurator (main.js: back to the menu, the bus home). */
+  leave() {
+    if (this.ui.isOpen) this.ui.close('leave');
+    this.room?.endConfigure(this.camera);
+    this.player.frozen = false;
   }
 
   // the configurator, for the car you pressed E at (its display paint to start; your current rental's config when it's
@@ -297,11 +338,12 @@ export class CarRental {
   openCard(pick, paintHexWant) {
     if (!RENTALS.some((c) => c.id === pick)) return;
     this.room.guide(null); // (found it)
+    this.player.frozen = true;
     const cur = this.save.rental ? normConfig(this.save.rental) : null;
     const base = cur && pick === cur.id ? cur : normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
     this.ui.open({ cars: RENTALS, cfg: base, current: cur, money: this.save.money, cost: (c) => this.cost(c),
       preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
-      rent: (c) => { this.rent(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); } });
+      rent: (c) => { this.rent(c); }, close: () => { this.room.endConfigure(this.camera); this.player.frozen = false; this.input?.lock?.(); } });
   }
 
   // the clerk: a car of the day, picked at random from the floor (never the same twice in a row); a marker over it
@@ -317,20 +359,6 @@ export class CarRental {
     this.room.guide(id);
   }
 
-  /** Inside, per frame (main.js): walking, looking, E. Returns what to show as the prompt. */
-  frame(dt, input, sensitivity) {
-    const open = this.ui.isOpen;
-    this.target = this.room.update(dt, open ? null : input, sensitivity, open);
-    if (!open && this.target && input?.hit?.('KeyE')) {
-      this.audio?.play?.('click');
-      const t = this.target;
-      if (t.kind === 'door') this.leave();
-      else if (t.kind === 'clerk') this.recommend();
-      else this.openCard(t.id, t.paint);
-    }
-    return this.target;
-  }
-
   /** Per frame, outside too: the tow truck, the sign and lamps at night. */
   update(dt) {
     if (!this.L) return;
@@ -341,10 +369,28 @@ export class CarRental {
     if (this.glowMat) this.glowMat.emissiveIntensity = 0.3 + 0.9 * n;
     if (this.stripMat) this.stripMat.emissiveIntensity = 1.6 + 2.0 * n; // (the hall's light strips, seen through the glass)
     if (this.litMats) for (const m of this.litMats) m.emissiveIntensity = 0.45 + 0.35 * n;
-    // the sliding doors: open as you walk up to them (not while you are inside or driving)
-    const p = this.player?.pos, near = !this.inside && p && !this.drive?.active && Math.hypot(p.x - this.door.x, p.z - this.door.z) < 4.2;
+    // the showroom: built the first time you come within ~70 m, shown within 60 m (further off: the stand-ins)
+    const cam = this.camera.position, dc = Math.hypot(cam.x - this.hallC.x, cam.z - this.hallC.z);
+    if (!this.room && dc < 70) { try { this.showroom(); } catch (e) { console.warn('car rental showroom', e); this.room = false; } }
+    const show = !!this.room && dc < 60;
+    if (this.room) this.room.visible = show;
+    this.far.visible = !show;
+    // you: in the hall (on foot), on which floor
+    const p = this.player?.pos, driving = !!this.drive?.active, { W, D } = LAYOUT;
+    const h = p ? this.toHall(p.x, p.z, this._h ||= {}) : null;
+    this.inside = !!h && !driving && Math.abs(h.x) < W / 2 + 0.2 && Math.abs(h.z) < D / 2 + 0.2;
+    if (this.room) this.setLevel(this.inside && p.y - this.L.y > 1.2 ? 'up' : 'down');
+    if (this.inside !== this.blockersOn) {
+      this.blockersOn = this.inside;
+      for (const b of this.blockers) { const i = this.cameraBlockers?.indexOf(b) ?? -1; if (this.inside && i < 0) this.cameraBlockers?.push(b); else if (!this.inside && i >= 0) this.cameraBlockers.splice(i, 1); }
+    }
+    if (show) this.room.update(dt, this.inside ? { x: h.x, y: p.y - this.L.y, z: h.z } : null);
+    // the configurator: the game camera round the car (after the player's camera)
+    if (this.ui.isOpen && this.room?.cfg) this.room.cfgCamera(dt, this.camera);
+    // the sliding doors: open as you walk up to them, from either side (not while driving)
+    const dd = p && !driving ? Math.hypot(h.x - LAYOUT.door.x, h.z - D / 2) : Infinity;
     const was = this.doorT;
-    this.doorT += ((near ? 1 : 0) - this.doorT) * (1 - Math.exp(-dt * 5));
+    this.doorT += ((dd < 4.2 ? 1 : 0) - this.doorT) * (1 - Math.exp(-dt * 5));
     if (Math.abs(this.doorT - was) > 1e-4) setDoors(this.doors, this.doorT * this.doorT * (3 - 2 * this.doorT));
   }
 }

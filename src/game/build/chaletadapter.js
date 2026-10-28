@@ -12,12 +12,12 @@
 //   walls()             [{ ax, az, bx, bz, t, y0, y1 }]                     wall segments (with door gaps)
 //   addObject(obj, col) -> handle   place obj (already positioned) + collider col = { x, z, hw, hd, rot, y0, y1 }
 //   removeObject(handle)
-//   sills()             [{ x, z, y, len, depth, yaw, storey }] window ledges (optional)
+//   sills()             [{ x, z, y, len, depth, yaw, storey }] window ledges (optional: else from chaletplan.js)
 //
 // Discovery: any module matching src/world/chalet*.js or src/game/chalet*.js that exports
 // `chaletInteriorAPI` (an object, or a zero-arg getter function), or window.chaletInteriorAPI.
 
-import { planLayout } from './chaletlayout.js';
+import { planLayout, planSills } from './chaletlayout.js';
 
 const modules = import.meta.glob(['/src/world/chalet*.js', '/src/game/chalet*.js']);
 
@@ -122,7 +122,10 @@ export function adaptChalet(raw) {
       });
     },
     /** Window sills: [{ x, z, y, len, depth, yaw, storey }] (root space; yaw = the direction into the room). */
-    sills() { return (val(raw.sills, raw) || []).filter((q) => Number.isFinite(q?.x) && Number.isFinite(q?.y)); },
+    sills() {
+      const own = (val(raw.sills, raw) || []).filter((q) => Number.isFinite(q?.x) && Number.isFinite(q?.y));
+      return own.length ? own : (this._sills ??= planSills()); // (the plan's windows when the API has none)
+    },
     addObject(obj, col) {
       const f = raw.addObject ?? raw.addPlaced ?? raw.place ?? raw.addFurniture;
       if (f) return f.call(raw, obj, col) ?? obj;

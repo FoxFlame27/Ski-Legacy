@@ -102,6 +102,11 @@ export class BuildMode {
       }
       if (e.code === 'Escape' && (this.on || this.input.cursorFree)) { this.setOn(false); this.setCursorFree(false, false); }
     });
+    // Esc in LOOK mode: the browser drops pointer lock (and may swallow the key): fall back to CURSOR mode instead
+    // of the pause menu (registered before main.js's pause handler, so overlayOpen() already sees cursorFree)
+    document.addEventListener('pointerlockchange', () => {
+      if (!document.pointerLockElement && this.on && this.look) this.setLook(false);
+    });
   }
 
   get furniture() {
@@ -131,7 +136,7 @@ export class BuildMode {
     const c = this.chalet;
     const active = !!c?.active() && !!c.root;
     if (!active) {
-      if (this.wasActive) { this.setOn(false); this.setCursorFree(false, false); }
+      if (this.wasActive) { this.setOn(false); this.setCursorFree(false); } // (left the chalet: mouse look again)
       this.wasActive = false;
       return;
     }
@@ -296,7 +301,8 @@ export class BuildMode {
       // small decor: a window sill or the top of a placed piece, when that's nearer than the floor
       let top = null;
       if (item.small) {
-        const sill = raySill(o, d, this.chalet.sills(), Math.min(t, REACH));
+        const sills = this.chalet.sills().filter((q) => q.y > st.floorY + 0.2 && q.y < st.floorY + 2.4); // (this storey's)
+        const sill = raySill(o, d, sills, Math.min(t, REACH));
         const tt = this.rayTop(Math.min(t, sill ? sill.t : t));
         if (tt) top = tt;
         else if (sill) top = { kind: 'sill', ...sill };

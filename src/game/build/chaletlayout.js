@@ -59,3 +59,28 @@ export function planLayout() {
 }
 
 export const HOUSE = { HX, HZ, IX, IZ };
+
+/**
+ * Window sills from the plan (house frame), for small decor: [{ x, z, y, len, depth, yaw, storey, level }].
+ * The ledge chaletroom.js builds under every window: its top at the window's y0 (0.9 m over the floor), from the
+ * inner face ~0.13 m into the room to ~0.1 m into the reveal. yaw = the direction into the room. (Glazed doors,
+ * whose bottom is near the floor, have none.)
+ */
+export function planSills() {
+  const out = [];
+  for (const e of EXTERIOR) {
+    const floor = e.level === 'up' ? FL : G;
+    const L = exteriorLine(e.side), k = L.axis === 'x' ? 0 : 1;
+    for (const o of e.openings || []) {
+      if (o.kind !== 'window' || o.y0 - floor < 0.5) continue;
+      const p = [L.a[0], L.a[1]];
+      p[k] = o.c;
+      const cen = -0.02; // centre of the usable ledge, along the outward normal from the inner face
+      out.push({
+        x: p[0] + L.n[0] * cen, z: p[1] + L.n[1] * cen, y: o.y0, len: o.w + 0.1, depth: 0.22,
+        yaw: Math.atan2(-L.n[0], -L.n[1]), storey: e.level === 'up' ? 1 : 0, level: e.level,
+      });
+    }
+  }
+  return out;
+}

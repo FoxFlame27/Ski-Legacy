@@ -33,7 +33,8 @@ export class Input {
     document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === canvas; });
     canvas.addEventListener('click', () => { if (this.enabled && !this.locked && !this.cursorFree) this.lock(); });
   }
-  lock() { this.canvas.requestPointerLock?.()?.catch?.(() => {}); }
+  // (no-op while the mouse is deliberately free: an overlay closing mustn't grab it back from build mode)
+  lock() { if (!this.cursorFree) this.canvas.requestPointerLock?.()?.catch?.(() => {}); }
   unlock() { if (document.pointerLockElement) document.exitPointerLock(); }
   down(code) { return this.enabled && this.keys.has(code); }
   hit(code) { return this.enabled && this.pressed.has(code); }

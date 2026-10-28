@@ -131,7 +131,8 @@ function optimize(id) {
     '--texture-compress', 'webp', '--texture-size', String(tex), '--compress', 'meshopt',
     '--simplify-ratio', String(ratio)], { cwd: ROOT, stdio: 'ignore' });
   run(512, 0.3);
-  if (fs.statSync(out).size > 600 * 1024) run(256, 0.2);
+  if (fs.statSync(out).size > 300 * 1024) run(256, 0.2); // (keep every model under ~300 KB)
+  if (fs.statSync(out).size > 300 * 1024) run(256, 0.1);
   log(`${id}: optimised -> ${Math.round(fs.statSync(out).size / 1024)} KB`);
 }
 

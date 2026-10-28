@@ -16,7 +16,7 @@ import { layout } from './layout.js';
 import { smoothstep } from '../core/noise.js';
 import {
   EXPRESS, EXPRESS_NAME, fitExpressProfile, shapeExpressBed, expressAt, expressBounds, expressNearest, inExpressTunnel,
-  TRACK_OFF, VILLAGE_ENTRANCE, PLATFORM,
+  TRACK_OFF, VILLAGE_ENTRANCE, PLATFORM, expressDeckHeight, LENGTH,
 } from './expressroute.js';
 
 export const PLATFORM_OFF = 7.2;   // m from the centre line to the middle of a side platform (3 m wide)
@@ -74,6 +74,8 @@ export function buildExpressGround(courses = []) {
       return f * smoothstep(TRACK_OFF + 10, TRACK_OFF + 20, n.d);
     },
   });
+  // the ballast bed and the viaducts' decks are walked on (not the formation, nor the valley under a deck)
+  world.addLineSurface((s, o) => expressAt(s, o), LENGTH, expressDeckHeight);
   // the line for the trail map: centre line every 20 m with a tunnel flag, the ring closed
   const pts = [];
   for (let s = 0; s <= L.length; s += 20) { expressAt(s, _f); pts.push([_f.x, _f.z, inExpressTunnel(s) ? 1 : 0]); }

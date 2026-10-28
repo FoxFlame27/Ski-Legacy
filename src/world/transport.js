@@ -4,7 +4,7 @@
 // restaurant, the Wolkensee Gondola over to the Adlerhorn with the Seeabfahrt, and the Sonnenwiese beginner chair
 // by the village. Pure layout (no THREE): it runs in Node too.
 import { world } from './world.js';
-import { RAIL, railAt, railBounds, railNearest, shapeRoadbed, planBridges } from './railroute.js';
+import { RAIL, railAt, railBounds, railNearest, shapeRoadbed, planBridges, railDeckHeight } from './railroute.js';
 import { WOLKENSPITZE } from './wolkenspitze.js';
 import { smoothstep } from '../core/noise.js';
 
@@ -155,6 +155,8 @@ function buildRailwayGround({ layout, keepOut }) {
       return f * smoothstep(7, 14, n.d);
     },
   });
+  // the track bed, the viaducts' decks and the platforms are walked on (not the formation under them)
+  world.addLineSurface((s, o) => railAt(s, o), RAIL.length, railDeckHeight);
   // the top station's building on the glacier above the rock hall: a flat terrace
   const platt = RAIL.stations.find((st) => st.id === 'platt');
   const top = beside((platt.s0 + platt.s1) / 2, 0);

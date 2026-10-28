@@ -71,6 +71,7 @@ class World {
     this.surfaceGrid = new Map(); // 64m cells -> surfaces
     this.cuts = []; // local terrain shaping (see addCut)
     this.cutBox = { minx: 0, minz: 0, maxx: -1, maxz: -1 };
+    this.meshCache = new Map(); // meshHeight: 2 m grid vertex -> height
   }
 
   // ---------------- regions: purpose-built maps (e.g. the World Racing courses) ----------------
@@ -78,7 +79,7 @@ class World {
   //   { id, bounds: { minx, minz, maxx, maxz }, height(x, z, spacing, world) -> number,
   //     forest?(x, z, h, slope) -> 0..1 }
   // region.height should blend back to world.baseHeight near its own edges.
-  addRegion(region) { this.regions.push(region); return region; }
+  addRegion(region) { this.regions.push(region); this.meshCache.clear(); return region; }
   regionAt(x, z, margin = 0) {
     for (let i = 0; i < this.regions.length; i++) {
       const b = this.regions[i].bounds;
@@ -104,6 +105,21 @@ class World {
     }
     return surf;
   }
+  // A walkable structure along a line (a railway's track bed, its viaducts' decks): `height(x, z)` for the whole line,
+  // registered as one surface per `chunk` m of it (bounds: that stretch's points +- `margin`), so the 64 m surface grid
+  // only asks it near the line. at(s, out) -> { x, z } on the centre line.
+  addLineSurface(at, length, height, { chunk = 200, margin = 14, step = 10 } = {}) {
+    const p = {}, out = [];
+    for (let s0 = 0; s0 < length; s0 += chunk) {
+      let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+      for (let s = s0; s <= Math.min(length, s0 + chunk) + 1e-6; s += step) {
+        at(Math.min(s, length), p);
+        minx = Math.min(minx, p.x); maxx = Math.max(maxx, p.x); minz = Math.min(minz, p.z); maxz = Math.max(maxz, p.z);
+      }
+      out.push(this.addSurface({ bounds: { minx: minx - margin, minz: minz - margin, maxx: maxx + margin, maxz: maxz + margin }, height }));
+    }
+    return out;
+  }
   removeSurface(surf) {
     for (const arr of this.surfaceGrid.values()) {
       const i = arr.indexOf(surf);
@@ -113,8 +129,30 @@ class World {
 
   // Height a skier stands on: the terrain, or the highest surface that is not far above `yHint`
   // (so you ride onto a ramp or bridge from its own level, but fall past a bridge from below it).
+  // The terrain's surface as the near terrain mesh draws it: its 2 m grid of exact heights (terrain.js buildNode on a
+  // 128 m node: spacing 2, sampled at spacing 0), triangulated the same way (diagonal from (i+1, j) to (i, j+1)). Between
+  // the vertices the mesh is flat, the analytic height is not: in a hollow, at the foot of a cutting's wall or a
+  // portal's rock cut the drawn snow lies above world.height (up to tens of cm in the fine noise, metres at a wall),
+  // and feet set on world.height sank into it (Oct 28, the user: "you sink through the floor at some places").
+  // Vertex heights are cached (cleared whenever the terrain's features change).
+  meshHeight(x, z) {
+    const fx = x * 0.5, fz = z * 0.5, i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j;
+    const C = this.meshCache;
+    if (C.size > 30000) C.clear();
+    const V = (a, b) => {
+      const k = (a + 1048576) * 2097152 + (b + 1048576);
+      let h = C.get(k);
+      if (h === undefined) { h = this.height(a * 2, b * 2); C.set(k, h); }
+      return h;
+    };
+    const hb = V(i + 1, j), hc = V(i, j + 1);
+    if (tx + tz <= 1) { const ha = V(i, j); return ha + (hb - ha) * tx + (hc - ha) * tz; }
+    const hd = V(i + 1, j + 1);
+    return hd + (hc - hd) * (1 - tx) + (hb - hd) * (1 - tz);
+  }
+
   groundHeight(x, z, yHint = Infinity) {
-    let h = this.height(x, z);
+    let h = this.meshHeight(x, z);
     const arr = this.surfaceGrid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
     if (arr) {
       for (let i = 0; i < arr.length; i++) {
@@ -306,6 +344,7 @@ class World {
     }
     pad.blend = Math.min(60, Math.max(pad.blend, maxDiff * 3.2));
     this.pads.push(pad);
+    this.meshCache.clear();
     const R = pad.r + pad.blend;
     for (let cx = Math.floor((pad.x - R) / 256); cx <= Math.floor((pad.x + R) / 256); cx++) {
       for (let cz = Math.floor((pad.z - R) / 256); cz <= Math.floor((pad.z + R) / 256); cz++) {
@@ -383,6 +422,7 @@ class World {
   // fine terrain mesh (2 m) see every cut. Register cuts before the terrain near them is built.
   addCut(cut) {
     this.cuts.push(cut);
+    this.meshCache.clear();
     const B = this.cutBox, b = cut.bounds, first = this.cuts.length === 1;
     B.minx = first ? b.minx : Math.min(B.minx, b.minx); B.minz = first ? b.minz : Math.min(B.minz, b.minz);
     B.maxx = first ? b.maxx : Math.max(B.maxx, b.maxx); B.maxz = first ? b.maxz : Math.max(B.maxz, b.maxz);
@@ -391,6 +431,7 @@ class World {
   removeCut(cut) {
     const i = this.cuts.indexOf(cut);
     if (i >= 0) this.cuts.splice(i, 1);
+    this.meshCache.clear();
   }
   applyCuts(x, z, h, spacing) {
     const B = this.cutBox;

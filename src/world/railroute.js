@@ -397,3 +397,39 @@ export function boardingU(id, dir) {
   if (id === 'platt') return T + DWELL_END - 20; // waiting at the top
   return dir > 0 ? tMid + DWELL_MID * 0.3 : 2 * T + DWELL_END - tMid - DWELL_MID * 0.7;
 }
+
+// ------------------------------------------------------------------ walkable track (world.addSurface: transport.js)
+// The top of what railtrack.js / railstations.js build on the formation, as a height for the player's ground: the
+// ballast bed (0.36 m over the formation's 0.72 m drop, the sleepers' tops 0.12 m higher), the slab in the tunnels, the
+// viaducts' decks (railtrack.js buildViaduct) and the stations' platforms (railstations.js buildPlatform). Without it
+// the player walked on the formation, sunk to the knees in the ballast and the platforms, and fell through the decks
+// (Oct 28, the user: "you sink through the floor ... in the train tracks"). null off the structures.
+const _w = { d: 1e9, s: 0, side: 0, i: 0 }, _wp = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
+function trackTop(a, slab) {
+  if (a <= 0.525) return -0.24;                       // the sleepers (1.05 m long)
+  if (slab) return a <= 1.9 ? -0.42 : null;           // the tunnels' concrete slab
+  if (a <= 1.55) return -0.36;                        // the ballast's crest
+  return a <= 2.25 ? -0.36 - (a - 1.55) / 0.7 * 0.38 : null; // its shoulders down to the formation
+}
+function loopOff(s) { // (= railtrack.js loopOffset)
+  const P = PASSING_LOOP;
+  if (s <= P.s0 || s >= P.s1) return 0;
+  return P.off * smoothstep(P.s0, P.s0 + P.ease, s) * (1 - smoothstep(P.s1 - P.ease, P.s1, s));
+}
+export function railDeckHeight(x, z) {
+  const n = railNearest(x, z, _w);
+  if (!n || n.d > 10) return null;
+  const s = n.s, p = railAt(s, _wp);
+  const lat = (x - p.x) * -p.dz + (z - p.z) * p.dx; // + right of the line (railtrack.js frame: rx = -dz, rz = dx)
+  const slab = inTunnel(s);
+  let top = trackTop(Math.abs(lat), slab);
+  const off = loopOff(s);
+  if (off) { const t2 = trackTop(Math.abs(lat - off), false); if (t2 !== null && (top === null || t2 > top)) top = t2; }
+  if (!slab && onBridge(s) && Math.abs(lat) <= 2.7 && (top === null || top < -0.4)) top = -0.4; // the viaduct's deck
+  for (const st of RAIL.stations) {
+    if (st.underground || s < st.s0 + 4 || s > st.s1 - 4) continue;
+    const l = lat * st.side;
+    if (l >= 1.75 && l <= 5.95) top = 0.06; // the platform
+  }
+  return top === null ? null : p.y + top;
+}

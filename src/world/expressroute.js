@@ -438,3 +438,28 @@ export function rideTime(a, b, dir) {
   const fwd = (from, to) => (to >= from ? T[to] - T[from] : T[n] - T[from] + T[to] + DWELL);
   return dir > 0 ? fwd(ia, ib === 0 ? n : ib) - DWELL : fwd(ib, ia === 0 ? n : ia) - DWELL;
 }
+
+// ------------------------------------------------------------------ walkable track (world.addSurface: expressground.js)
+// The top of what expresstrack.js builds on the formation, as a height for the player's ground: the ballast prism of
+// both tracks (BALLAST_TOP 0.30 under the rail; the sleepers' tops 0.15), the cable troughs on its shoulders, and on the
+// viaducts the deck (DECK 0.55 under the rail, out to the parapets) with the track slabs (0.25) on it. Without it the
+// player walked on the formation, sunk in the ballast, and fell through the viaducts' decks (Oct 28, the user: "you
+// sink through the floor ... in the train tracks"). The tunnels keep their cover (the mountain is the ground there);
+// the platforms are surfaces of their own (expressstations.js). null off the structures.
+const _wn = { d: 1e9, s: 0, side: 0, i: 0 }, _wp = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
+export function expressDeckHeight(x, z) {
+  if (!EXPRESS.ready) return null;
+  const n = expressNearest(x, z, _wn);
+  if (!n || n.d > 7.5) return null;
+  const s = n.s;
+  if (inExpressTunnel(s)) return null;
+  const p = expressAt(s, _wp);
+  const lat = (x - p.x) * -p.dz + (z - p.z) * p.dx, a = Math.abs(lat), t = Math.abs(a - TRACK_OFF);
+  let top = null;
+  if (onExpressBridge(s)) {
+    if (a <= 6.6) top = t <= 0.95 ? -0.15 : t <= 1.4 ? -0.25 : -0.55; // sleepers / slab / deck
+  } else if (a <= TRACK_OFF + 2.45) {
+    top = t <= 0.95 && a <= TRACK_OFF + 0.95 ? -0.15 : a <= TRACK_OFF + 1.6 ? -0.30 : -0.30 - (a - TRACK_OFF - 1.6) / 0.85 * 0.44;
+  } else if (Math.abs(a - TRACK_OFF - 3.9) <= 0.3) top = -0.5; // the cable troughs
+  return top === null ? null : p.y + top;
+}

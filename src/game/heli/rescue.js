@@ -136,7 +136,7 @@ export class Rescue {
       g.y = Math.max(f.groundY + f.cgH + 35, ty + f.cgH + 20 + Math.max(0, d - 150) / 5.5);
       if (this.spot && !this.spot.land) g.y = Math.max(g.y, this.spot.hoverY);
       const high = f.pos.y - g.y;
-      g.speed = high > 25 ? clamp((16 * Math.max(0, d - 120)) / high, 18, 72) : 72;
+      g.speed = high > 25 ? clamp((12 * Math.max(0, d - 120)) / high, 15, 72) : 72;
       autopilot(f, g, o);
       if (this.spot && d < 1.2 && f.speed < 0.9) this.go(this.spot.land ? 'settle' : 'hover');
       return o;

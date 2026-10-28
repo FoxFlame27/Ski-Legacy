@@ -22,10 +22,10 @@ export const SLEDS_ON = true || devFlag('sleds');
 
 export const SLED = {
   len: 2.9,
-  vmax: 23.5,      // m/s on the flat (~85 km/h)
-  vboost: 26.5,    // with SHIFT
+  vmax: 35,        // m/s on the flat (~126 km/h; buffed from 23.5)
+  vboost: 40,      // with SHIFT
   vback: 4.5,
-  acc: 10, brake: 11, drag: 0.0028, roll: 0.35,
+  acc: 14, brake: 13, drag: 0.0028, roll: 0.35,
   mu: 1.3, muIce: 0.62,       // traction (drive / brake force limit = mu * g * cos): climbs ~50 deg in fresh snow
   grip: 8, gripIce: 2.4,      // how fast sideways sliding dies away (1/s)
   turn: 1.7,                  // yaw rate at low speed (rad/s)

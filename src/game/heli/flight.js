@@ -291,7 +291,7 @@ export class HomePilot {
       g.y = Math.max(f.groundY + f.cgH + 35, padY + 20 + Math.max(0, d - 150) / 5.5);
       // high above the path (a ridge pushed us up): slow down so the descent still ends over the pad
       const high = f.pos.y - g.y;
-      g.speed = high > 25 ? clamp((16 * Math.max(0, d - 120)) / high, 20, 80) : 80; g.stop = 0.7; g.decel = 4.5;
+      g.speed = high > 25 ? clamp((12 * Math.max(0, d - 120)) / high, 18, 80) : 80; g.stop = 0.7; g.decel = 4.5;
       autopilot(f, g, o);
       if (d < 0.9 && f.speed < 0.6) this.phase = 'align';
       return o;

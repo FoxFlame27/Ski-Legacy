@@ -8,12 +8,12 @@ import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { drawnHeight } from './settle.js';
 
 const CFG = {
-  gondola: { stationH: 7.5, side: 3.4, spacing: 240, clearance: 16, speed: 12, carGap: 64, carH: 3.1, model: 'gondola_cabin', seatDrop: 2.5, stationSize: 14 },
-  chair: { stationH: 5.2, side: 2.6, spacing: 115, clearance: 9, speed: 4.5, carGap: 28, carH: 3.2, model: 'chairlift_chair', seatDrop: 2.78, stationSize: 8 },
+  gondola: { stationH: 7.5, side: 3.4, spacing: 240, clearance: 16, speed: 18, carGap: 64, carH: 3.1, model: 'gondola_cabin', seatDrop: 2.5, stationSize: 14 },
+  chair: { stationH: 5.2, side: 2.6, spacing: 115, clearance: 9, speed: 8, carGap: 28, carH: 3.2, model: 'chairlift_chair', seatDrop: 2.78, stationSize: 8 },
 };
 // mid-station: cabins crawl through +-MID_HALF m of the station centre and ramp back to line speed
 // over MID_RAMP m either side; riders can get off / on while their cabin is in the crawl zone
-const MID_HALF = 9, MID_RAMP = 30, MID_SLOW = 0.15;
+const MID_HALF = 9, MID_RAMP = 36, MID_SLOW = 0.1; // (0.1 x 18 m/s: the same ~1.8 m/s crawl as before the speed-up)
 const MID_LEN = 26, MID_W = 15; // station hall (along / across the line)
 
 // ground clearance under the cabins (cabin / chair bottom over the snow, both ways, out of the stations):

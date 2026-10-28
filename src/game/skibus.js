@@ -154,7 +154,7 @@ export class SkiBus {
     const legs = this.line?.legs(this.netStop(from), this.netStop(to));
     if (!legs) {
       const km = Math.hypot(to.x - from.x, to.z - from.z) / 1000;
-      return { pts: [[from.x, from.z], [to.x, to.z]], km, min: Math.max(1, km * 1.6) };
+      return { pts: [[from.x, from.z], [to.x, to.z]], km, min: Math.max(1, km * 1.05) }; // (~57 km/h door to door: BUS.cruise 26)
     }
     const pts = [[from.x, from.z]];
     let len = 0, t = legs.length * 4; // (a few seconds at each stop on the way)

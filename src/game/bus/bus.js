@@ -13,6 +13,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { busRoads, roadAt, ROAD_HALF, roadsideBlocked } from './roads.js';
 import { transition } from '../../ui/transition.js';
 import { trafficBlockers } from '../traffic.js';
+import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
 
 export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 16.5, acc: 1.1, brake: 1.3, lat: 1.5 };
 const CLEAR_DEC = 1.8, CLEAR_GAP = 4; // braking for something in the lane (m/s^2, within its 2.6 limit); the gap it stops at (m)
@@ -662,6 +663,7 @@ export class BusLine {
     this.group = new THREE.Group();
     this.group.name = 'bus-roads';
     if (busRoads.roads.length) buildRoadMeshes(this.group, colliders); // (+ the guardrails' colliders)
+    if (busRoads.roads.length) { try { buildScenicProps(this.group, { colliders }); } catch (e) { console.warn('scenic props', e); } }
     scene.add(this.group);
     this.bus = buildBus(models, makeRig);
     scene.add(this.bus.group);

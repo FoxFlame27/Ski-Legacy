@@ -291,7 +291,7 @@ async function boot() {
   });
   // (the old open-world gate races are gone: free ride races the World Racing courses where they stand, see
   // modes/parkour/freeworld.js; `races` keeps the old name for the checks below)
-  races = new FreeCourses({ scene, models, modes });
+  races = new FreeCourses({ scene, models, modes, colliders });
   player.onTrick = (t) => { raceHud.trick(t); modes.session?.onTrick?.(t); };
   bests = new PersonalBests({ player, save, writeSave, raceHud, audio });
   photo = new PhotoMode({

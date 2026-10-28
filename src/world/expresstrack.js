@@ -302,7 +302,7 @@ function sleeperMatrices(list, s0, s1) {
 // Masts every MAST_EVERY m on both sides (outside the tracks; behind the platforms at the stations, on the deck's
 // edge on the viaducts), a cantilever over each track; in the tunnels drop brackets from the vault. The contact wire
 // zigzags ±0.2 m from mast to mast; the messenger sags between them; the far wires are 1-px lines.
-function buildCatenary(steel, s0, s1, kindAt, wires) {
+function buildCatenary(steel, s0, s1, kindAt, wires, cols = null) {
   const f = {};
   for (let s = Math.ceil(s0 / MAST_EVERY) * MAST_EVERY; s < s1; s += MAST_EVERY) {
     const kind = kindAt(s);
@@ -328,6 +328,8 @@ function buildCatenary(steel, s0, s1, kindAt, wires) {
       for (const fl of [-1, 1]) steel.obx([mx + Z[0] * fl * 0.13, (foot + top) / 2, mz + Z[2] * fl * 0.13], X, Z, 0.16, (top - foot) / 2, 0.02, C.mast);
       steel.obx([mx, (foot + top) / 2, mz], X, Z, 0.02, (top - foot) / 2, 0.12, C.mastDark);
       if (kind !== 'bridge') steel.obx([mx, foot + 0.15, mz], X, Z, 0.4, 0.35, 0.4, C.trough);
+      // solid: the foundation block's footprint (not on a viaduct: a footprint has no bottom, it would stand in the valley under the deck)
+      if (kind !== 'bridge') cols?.push({ x: mx, z: mz, r: 0.4, h: top - f.y + 0.7 });
       // cantilever: the upper tube to the messenger, the lower (registration) arm to the contact wire, a stay
       const reach = (lat - TRACK_OFF) + 0.6;
       const p = (l, y) => [mx - f.rx * sd * l, f.y + y, mz - f.rz * sd * l];
@@ -689,10 +691,10 @@ function buildChunkBed(XMat, c0, c1) {
 }
 function buildChunkDetail(XMat, c0, c1) {
   const pieces = kindsOf(c0, c1);
-  const steel = new XB(), lining = new XB({ uv: true, light: true }), lamps = new XB(), wires = [], sl = [];
+  const steel = new XB(), lining = new XB({ uv: true, light: true }), lamps = new XB(), wires = [], sl = [], cols = [];
   buildRails(steel, c0, c1);
   sleeperMatrices(sl, c0, c1);
-  buildCatenary(steel, c0, c1, kindFn(pieces), wires);
+  buildCatenary(steel, c0, c1, kindFn(pieces), wires, cols);
   for (const p of pieces) if (p.kind === 'tunnel') buildTube(lining, lamps, p.tn, p.a, p.b);
   const grp = new THREE.Group();
   const add = (b, mat, { cast = false } = {}) => { const geo = b.build(); if (!geo) return null; const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.castShadow = cast; m.matrixAutoUpdate = false; grp.add(m); return m; };
@@ -715,6 +717,7 @@ function buildChunkDetail(XMat, c0, c1) {
     grp.add(wl);
   }
   grp.userData.inner = inner;
+  grp.userData.colliders = cols; // the masts: registered while the chunk is built (update())
   return grp;
 }
 
@@ -761,7 +764,7 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
   const bridges = EXPRESS.bridges.map((b) => planBridge(b));
   for (const pl of bridges) {
     ent('bridge', pl.x, pl.z, pl.r, () => buildBridge(XMat, pl));
-    for (const p of pl.piers) if (p.h > 1.5) colliders.push({ x: p.x, z: p.z, hw: p.a1 + 0.3, hd: p.b1 + 0.3, rot: -p.heading });
+    for (const p of pl.piers) if (p.h > 1.5) colliders.push({ x: p.x, z: p.z, hw: p.a1 + 0.3, hd: p.b1 + 0.3, rot: -p.heading, top: p.top }); // (top: walked over on the deck)
   }
   // the portals and their clip volumes
   const clips = [];
@@ -784,6 +787,15 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
     for (const m of o.userData.signs || []) { signs.add(m); m.emissiveIntensity = night * 0.45; }
     o.userData.setNight?.(night);
   };
+  // a dropped chunk takes its mast colliders with it (the shared array: compacted in place, others keep their order)
+  const unregister = (o) => {
+    const gone = o.userData.colliders;
+    if (!gone?.length) return;
+    const set = new Set(gone);
+    let j = 0;
+    for (let i = 0; i < colliders.length; i++) if (!set.has(colliders[i])) colliders[j++] = colliders[i];
+    colliders.length = j;
+  };
   const queue = [];
   const update = (v, { inTunnel = null, budget = 4, all = false } = {}) => {
     terrainClipFocus(v.x, v.z);
@@ -793,7 +805,7 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
       const d = Math.hypot(v.x - e.x, v.z - e.z) - e.r;
       e.d = d;
       if (!e.obj) { if (d < e.buildR) queue.push(e); continue; }
-      if (d > e.dropR) { group.remove(e.obj); disposeObj(e.obj); for (const m of e.obj.userData.signs || []) signs.delete(m); e.obj = null; continue; }
+      if (d > e.dropR) { unregister(e.obj); group.remove(e.obj); disposeObj(e.obj); for (const m of e.obj.userData.signs || []) signs.delete(m); e.obj = null; continue; }
       const vis = d < e.visR;
       if (e.obj.visible !== vis) e.obj.visible = vis;
       if (vis && e.obj.userData.inner) {
@@ -807,6 +819,7 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
     const t0 = performance.now();
     for (const e of queue) {
       try { e.obj = e.build(); } catch (err) { console.warn('Legacy Express build', e.kind, err); e.obj = new THREE.Group(); e.failed = true; }
+      for (const c of e.obj.userData.colliders || []) colliders.push(c); // (the chunk's catenary masts: solid only while it stands)
       e.obj.visible = e.d < e.visR;
       group.add(e.obj);
       applyNight(e.obj);

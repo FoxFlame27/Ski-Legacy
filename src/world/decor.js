@@ -189,8 +189,10 @@ export class Decor {
     // fences along the village's edge, clear of the gondola lines and the runs coming in to their stations
     // (each 3 m section turned along its row, the model's length being its x: turned across it, the sections stood
     // apart like loose stubs)
-    for (let i = 0; i < 6; i++) P('wooden_fence', -152 + i * 3.1, 122 + i * 0.4, -Math.atan2(0.4, 3.1), 3.0, 'xz', 0);
-    for (let i = 0; i < 6; i++) P('wooden_fence', 128 + i * 3.1, 36 + i * 0.3, -Math.atan2(0.3, 3.1), 3.0, 'xz', 0);
+    // (each a thin board collider along its row: soft, like a net, for skis; solid for the car and the sled)
+    const fence = (x, z, yaw) => { if (P('wooden_fence', x, z, yaw, 3.0, 'xz', 0)) this.colliders.push({ x, z, hw: 1.6, hd: 0.15, rot: -yaw, soft: true }); };
+    for (let i = 0; i < 6; i++) fence(-152 + i * 3.1, 122 + i * 0.4, -Math.atan2(0.4, 3.1));
+    for (let i = 0; i < 6; i++) fence(128 + i * 3.1, 36 + i * 0.3, -Math.atan2(0.3, 3.1));
     // (no cars anywhere for now: the car parks are game/parking.js, still empty)
     // planters along the gondola approach
     for (const x of [-6, 6]) for (const z of [-30, -42]) P('wooden_barrel', x, z, 0, 1.0, 'y', 0.4);

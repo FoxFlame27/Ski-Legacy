@@ -161,6 +161,7 @@ export class Railway {
     // the tunnel luminaires: the Meshy four-flood bank (pistelights.js), else the plain light strips
     try { if (RAIL_MESHY_TUNNEL_LAMPS && models?.floodlight_head_c) setTunnelLampModel(meshyHead(models.floodlight_head_c, HEADS.floodlight_head_c)); } catch (e) { console.warn('rail tunnel lamps', e); }
     this.track = buildRailway(scene);
+    colliders.push(...(this.track.colliders || [])); // the catenary masts and the stone viaduct's piers
     this.clips = [];
     try { if (RAIL_TERRAIN_CLIP) { this.clips = portalClips(); setTerrainClips(this.clips); } } catch (e) { console.warn('rail terrain clips', e); }
     this.stations = buildStations(scene, colliders, models);

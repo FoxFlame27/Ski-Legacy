@@ -71,10 +71,11 @@ function lineDist(e, x, z) {
 
 export class FreeCourses {
   /**
-   * @param {object} o { scene, models, modes }
+   * @param {object} o { scene, models, modes, colliders }
    */
   constructor(o) {
     this.scene = o.scene;
+    this.colliders = o.colliders || null; // (main.js's shared array: the night courses' floodlight masts while they stand)
     this.models = o.models;
     this.modes = o.modes;
     this.t = 0;
@@ -96,6 +97,7 @@ export class FreeCourses {
       const list = freeCourses();
       const m = this.modes;
       const sessionCourse = m?.course || null;
+      this.syncMasts(list);
       // RACE / WORLD RACING from the menu: only that course stands
       if (m?.active && !m.current?.free) {
         for (const e of list) if (e.course !== sessionCourse && e.course.group) e.course.dispose();
@@ -119,6 +121,25 @@ export class FreeCourses {
       this.near = near && nd < BUILD_D && near.course.group ? near : null;
     } catch (e) {
       if (!this.warned) { this.warned = true; console.warn('Free world courses: update failed', e); }
+    }
+  }
+
+  // a course's props outside its nets (a night course's floodlight masts, the finish's grandstands, timing board and
+  // patrol hut, lamp posts, snow cannons: props.js course.solids) are solid while its meshes stand: registered on
+  // build, removed again on dispose (checked every tick)
+  syncMasts(list) {
+    const C = this.colliders;
+    if (!C) return;
+    for (const e of list) {
+      const up = !!e.course.group;
+      if (up && !e.mastCols) { e.mastCols = [...(e.course.floodlights || []).map((m) => ({ x: m.x, z: m.z, r: 0.2, h: 11 })), ...(e.course.solids || [])]; C.push(...e.mastCols); }
+      else if (!up && e.mastCols) {
+        const gone = new Set(e.mastCols);
+        let j = 0;
+        for (let i = 0; i < C.length; i++) if (!gone.has(C[i])) C[j++] = C[i];
+        C.length = j;
+        e.mastCols = null;
+      }
     }
   }
 

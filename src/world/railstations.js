@@ -415,6 +415,7 @@ export function buildStations(scene, colliders = [], models = null) {
         can.position.copy(holder.position).addScaledVector(az, -4.4);
         can.quaternion.copy(holder.quaternion);
         group.add(can);
+        for (let x = -15; x <= 15.01; x += 6) colliders.push({ x: can.position.x + ax.x * x + az.x * 4.1, z: can.position.z + ax.z * x + az.z * 4.1, r: 0.15 }); // its steel columns
       }
       const ex = besideLine(mid + 4, side * 4.3);
       rec.exit = { x: ex.x, z: ex.z, heading: Math.atan2(az.x, az.z) };
@@ -438,6 +439,8 @@ export function buildStations(scene, colliders = [], models = null) {
         can.position.copy(house.position).addScaledVector(az, -4.4);
         can.quaternion.copy(house.quaternion);
         group.add(can);
+        // its steel columns (buildCanopy(): every 6 m along it, 0.3 m in front of the building)
+        for (let x = -15; x <= 15.01; x += 6) colliders.push({ x: can.position.x + ax.x * x + az.x * 4.1, z: can.position.z + ax.z * x + az.z * 4.1, r: 0.15 });
       }
       // name board on the building's front, over the door
       const nb = nameBoard(st.name, rec.alt, big ? 6.4 : 4.2);
@@ -462,6 +465,7 @@ export function buildStations(scene, colliders = [], models = null) {
       for (let s = st.s0 + 16; s < st.s1 - 10; s += 24) {
         const bp = besideLine(s, side * 4.8);
         const b = bench.clone(); b.position.set(bp.x, bp.y + 0.06, bp.z); b.lookAt(besideLine(s, 0).x, bp.y + 0.06, besideLine(s, 0).z); group.add(b);
+        colliders.push({ x: bp.x, z: bp.z, r: 0.6, top: bp.y + 0.55 }); // (low: jumped over)
         const lp = besideLine(s + 12, side * 5.3);
         if (LP) lampAt.push([lp.x, lp.y + 0.06, lp.z, Math.atan2(-(-lp.dz * side), -(lp.dx * side))]);
         else { const l = lamp.clone(); l.position.set(lp.x, lp.y + 0.06, lp.z); group.add(l); }

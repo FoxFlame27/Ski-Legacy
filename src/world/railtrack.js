@@ -246,7 +246,7 @@ function buildTrack(ballast, concrete, steel, s0, s1, offFn, { slab = false } = 
 }
 
 // ------------------------------------------------------------------ overhead line
-function buildCatenary(steel, concrete, s0, s1, tunnel, offFn, wires = null) {
+function buildCatenary(steel, concrete, s0, s1, tunnel, offFn, wires = null, cols = null) {
   const f = {};
   const wireY = 5.0;
   // masts every 40 m on the left (outside the tunnels), cantilever arm over the track
@@ -258,6 +258,7 @@ function buildCatenary(steel, concrete, s0, s1, tunnel, offFn, wires = null) {
     const top = f.y + 6.4;
     steel.box(mx, (g - 0.3 + top) / 2, mz, 0.22, top - g + 0.3, 0.22, '#5d646c', '#5d646c', f.heading);
     concrete.box(mx, g + 0.15, mz, 0.6, 0.5, 0.6, '#9a9893', '#9a9893', f.heading);
+    cols?.push({ x: mx, z: mz, r: 0.3, h: top - g }); // solid (its foundation block's footprint)
     const ax = f.x + f.rx * off, az = f.z + f.rz * off;
     steel.bar([mx, top - 0.3, mz], [ax + f.rx * 0.6, top - 0.3, az + f.rz * 0.6], 0.05, '#5d646c');
     steel.bar([mx, f.y + wireY + 0.2, mz], [ax, f.y + wireY + 0.15, az], 0.035, '#5d646c');
@@ -606,7 +607,7 @@ function buildPortal(stone, paint, tn, which, name) {
 
 // ------------------------------------------------------------------ viaduct
 // Stone arch viaduct: piers every ~18 m down to the ground, round arches between them, the deck with parapets.
-function buildViaduct(stone, b) {
+function buildViaduct(stone, b, cols = null) {
   const g = new B();
   const f = {}, f2 = {};
   const span = 18;
@@ -623,6 +624,7 @@ function buildViaduct(stone, b) {
     // pier: battered (wider at the foot)
     const h = top - g0 + 1.5;
     g.obox(f.x, g0 - 1.5 + h / 2, f.z, ax, ay, az, 2.6 + h * 0.03, h / 2, 1.3 + h * 0.015, k % 2 ? C : C2, CAP);
+    cols?.push({ x: f.x, z: f.z, hw: 2.6 + h * 0.03, hd: 1.3 + h * 0.015, rot: -f.heading, h: top - g0, top }); // (the pier: solid from the ground; walked over on the deck)
   }
   for (let k = 0; k < n; k++) {
     const sa = b.s0 + k * sp, sb = sa + sp;
@@ -670,7 +672,7 @@ export function buildRailway(scene) {
   const M = materials();
   const group = new THREE.Group();
   group.name = 'wolkenspitzbahn';
-  const chunks = [];
+  const chunks = [], cols = []; // cols: the masts' and the viaduct piers' colliders (railway.js registers them)
   const L = RAIL;
   const tunnels = L.tunnels;
   // chunk the line
@@ -690,7 +692,7 @@ export function buildRailway(scene) {
       const mid = (a + b) / 2;
       const tn = tunnels.find((t) => mid > t.s0 && mid < t.s1);
       buildTrack(ballast, concrete, steel, a, b, () => 0, { slab: !!tn });
-      buildCatenary(steel, concrete, a, b, !!tn, () => 0, wires);
+      buildCatenary(steel, concrete, a, b, !!tn, () => 0, wires, cols);
       if (tn && tn.end && b > HALL.s0) {
         // the top station's rock hall at the end of the line
         if (a < HALL.s0) buildTube(lining, lampB, tn, a, HALL.s0, () => 0, steel, heads);
@@ -701,7 +703,7 @@ export function buildRailway(scene) {
     const la = Math.max(c0, LOOP.s0), lb = Math.min(c1, LOOP.s1);
     if (lb > la) {
       buildTrack(ballast, concrete, steel, la, lb, loopOffset);
-      buildCatenary(steel, concrete, la, lb, false, loopOffset, wires);
+      buildCatenary(steel, concrete, la, lb, false, loopOffset, wires, cols);
     }
     const add = (bd, mat, { cast = true, receive = true } = {}) => {
       const geo = bd.build();
@@ -756,7 +758,7 @@ export function buildRailway(scene) {
   }
   // viaducts
   for (const b of L.bridges || []) {
-    const v = buildViaduct(M.stone, b);
+    const v = buildViaduct(M.stone, b, cols);
     const q = railAt((b.s0 + b.s1) / 2, {});
     chunks.push({ group: v, x: q.x, z: q.z, r: (b.s1 - b.s0) / 2 + 20, far: true });
     group.add(v);
@@ -781,6 +783,6 @@ export function buildRailway(scene) {
       }
     }
   };
-  return { group, chunks, update, materials: M };
+  return { group, chunks, update, materials: M, colliders: cols };
 }
 export { B as RailBuilder, materials as railMaterials, canvasTex, mouthFade };

@@ -138,6 +138,8 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], model
     for (const l of rec.lay.lamps) colliders.push({ ...at(l.u, l.lat), r: 0.2 });
     for (const b of rec.lay.boards) for (const du of [-1.1, 1.1]) colliders.push({ ...at(b.u + du, b.lat), r: 0.12 });
     for (const du of [-1.8, 1.8]) colliders.push({ ...at(rec.lay.square.u + du, rec.lay.square.lat), r: 0.12 });
+    // the glazed canopy's steel columns (canopy(): every 6 m along its length, 0.3 m in front of the building)
+    for (let u = -CAN_LEN / 2; u <= CAN_LEN / 2 + 0.01; u += 6) colliders.push({ ...at(u, st.side * (HOUSE_LAT - 0.3)), r: 0.16 });
     const H = rec.lay.house;
     if (H) colliders.push({ ...at(0, st.side * (HOUSE_LAT + H.sz.z / 2)), hw: (H.sz.z / 2) * 0.9, hd: (H.sz.x / 2) * 0.9, rot: -st.heading }); // (hd: along the track)
     // both platforms are walkable (their tops stand 0.37 m over the squares: you step up onto them)

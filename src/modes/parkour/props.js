@@ -49,6 +49,7 @@ function shareModel(obj) {
 // ------------------------------------------------------------------ entry point
 export function buildCourseMeshes(course, models = {}) {
   clearMeshGround();
+  course.solids = []; // the props that stand outside the nets as colliders ({x, z, r} | boxes): freeworld.js registers them while the course stands
   const group = new THREE.Group();
   group.name = 'course-' + course.id;
   const barriers = buildBarriers(course, models);
@@ -495,6 +496,7 @@ function buildFinish(course, models, group, dye) {
   for (const st of [A.grandstand, A.grandstand2]) {
     // stands are on the left of the track: their front (+z) must face right, toward the course
     const yawS = st.heading - Math.PI / 2;
+    course.solids.push({ x: st.x, z: st.z, hw: 10.5, hd: 6, rot: -yawS });
     if (models.grandstand) {
       const m = shareModel(makeLOD(models.grandstand, { size: 22, axis: 'x' }, 180, 0.02));
       m.position.set(st.x, footprintMin(st.x, st.z, yawS, 11, 7) - 0.12, st.z);
@@ -508,6 +510,7 @@ function buildFinish(course, models, group, dye) {
   {
     const tb = A.board;
     const yawB = tb.heading + Math.PI / 2 + 0.35;
+    course.solids.push({ x: tb.x, z: tb.z, hw: 3.4, hd: 0.4, rot: -yawB });
     if (models.timing_board) {
       const m = shareModel(fitModel(models.timing_board, { size: 7, axis: 'x' }));
       m.position.set(tb.x, footprintMin(tb.x, tb.z, yawB, 3.5, 1) - 0.1, tb.z);
@@ -521,6 +524,7 @@ function buildFinish(course, models, group, dye) {
   {
     const h = A.hut;
     const yawH = h.heading + Math.PI / 2;
+    course.solids.push({ x: h.x, z: h.z, hw: 2.2, hd: 2.2, rot: -yawH });
     if (models.patrol_hut) {
       const m = shareModel(fitModel(models.patrol_hut, { size: 5, axis: 'xz' }));
       m.position.set(h.x, footprintMin(h.x, h.z, yawH, 2.5, 2.5) - 0.1, h.z);
@@ -951,10 +955,11 @@ function buildSigns(course, group) {
 function buildDecor(course, models, group) {
   const T = course.track;
   const rnd = mulberry32(course.def.seed + 71);
-  const put = (name, s, lat, size, axis = 'y', yawOff = 0) => {
+  const put = (name, s, lat, size, axis = 'y', yawOff = 0, r = 0) => {
     if (!models[name]) return;
     const p = gentleSpot(T, s, [lat], size * 0.35, size * 0.35, 0.45);
     if (!p) return;
+    if (r) course.solids?.push({ x: p.x, z: p.z, r });
     const m = shareModel(fitModel(models[name], { size, axis }));
     m.position.set(p.x, p.ground - 0.05, p.z);
     m.rotation.y = p.heading + yawOff;
@@ -965,13 +970,13 @@ function buildDecor(course, models, group) {
   for (let k = 0; k < 4; k++) {
     const s = fs - 40 + k * 30;
     const w = T.sAt(T.W, s);
-    put('lamp_post', s, (k % 2 ? 1 : -1) * (w + 5.4), 4.2, 'y');
+    put('lamp_post', s, (k % 2 ? 1 : -1) * (w + 5.4), 4.2, 'y', 0, 0.25);
   }
   for (let s = 400 + rnd() * 300; s < course.length - 300; s += 600 + rnd() * 400) {
     const w = T.sAt(T.W, s);
     const side = rnd() < 0.5 ? -1 : 1, sd = side > 0 ? 1 : 0;
     if (course.features.some((f) => s > f.s0 - 40 && s < (f.s1 ?? f.s0) + 40)) continue;
     if (T.codeAt(T.AN[sd], s) || T.codeAt(T.BAR[sd], s) !== BARRIER.bnet) continue;
-    put('snow_cannon', s, side * (w + 2.6), 2.4, 'y', side * 1.2);
+    put('snow_cannon', s, side * (w + 2.6), 2.4, 'y', side * 1.2, 1.0);
   }
 }

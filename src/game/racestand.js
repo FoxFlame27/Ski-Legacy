@@ -94,6 +94,8 @@ export class RaceStand {
     const { x, z, yaw } = this.spot;
     colliders.push(this.spot.collider);
     jobs.sites?.obst?.add(this.spot.collider);
+    // the two gate flags' poles either side of the board (build(): local x ±1.45, z 0.3)
+    for (const lx of [-1.45, 1.45]) colliders.push({ x: x + lx * Math.cos(yaw) + 0.3 * Math.sin(yaw), z: z - lx * Math.sin(yaw) + 0.3 * Math.cos(yaw), r: 0.12 });
     try { this.group = this.build(models); } catch (e) { console.warn('Racing stand: build failed', e); }
     if (!this.group) return;
     const fx = Math.cos(yaw) * 0.72, fz = -Math.sin(yaw) * 0.72;

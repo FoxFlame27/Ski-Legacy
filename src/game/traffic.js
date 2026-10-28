@@ -1,8 +1,8 @@
 // Traffic: cars (any of CAR_MODELS, so every car added later drives too) on the bus roads and the car parks' access
 // roads. On the road each keeps to the right-hand lane, 30-60 km/h, slower in bends and on steep grades, with smooth
 // acceleration; at a junction it may turn off to a car park. In the car park it drives like a person parks: slowly
-// along the aisle (10-15 km/h), a smooth turn into a free bay nose in, ending straight and centred; later it reverses
-// out in an arc into the aisle, stops a moment, and drives off. At a dead end (the bus stops) it never turns on the
+// along the aisle (10-15 km/h) past a free bay, stops, and backs into it in an arc, ending straight and centred, the
+// nose out toward the aisle (like every parked car); later it drives forward out of it in an arc and off. At a dead end (the bus stops) it never turns on the
 // spot: out of the player's sight it is taken off and comes back from a car park. It keeps its distance behind other
 // cars and the bus and stops for you on the road ahead. Soft colliders (you bump off, no wipeout). The wheels spin
 // with the distance driven and the front ones steer. At dusk and night the moving cars light up: headlights, tail
@@ -16,7 +16,7 @@ import { CAR_MODELS, carTemplate, carInstance } from './cars.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 
-const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 60, LANE = 1.6, BAY_D = 5.2;
+const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 60, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
 const END_KEEP = 95;
 // a car is always on its road: its body at most 1 m beyond the plowed edge (knocked aside, or swerving round a crash
@@ -365,7 +365,9 @@ export class Traffic {
     c.s = clamp(c.s + c.dir * c.v * dt, 0, r.length);
     if (J && (J.s - c.s) * c.dir <= 0.5) {
       c.nextJ = undefined;
-      if (J.lot && J.lot.bays.some((b) => !b.taken && !b.traffic)) { c.road = J.access; c.s = J.access.length - 1; c.dir = -1; c.v = Math.min(c.v, 4); }
+      // (the bay is booked here: no car drives in to find the car park full and turn in its entrance)
+      const bay = J.lot && this.entryBay(J.lot);
+      if (bay) { if (c.bay) c.bay.traffic = false; bay.traffic = true; c.bay = bay; c.road = J.access; c.s = J.access.length - 1; c.dir = -1; c.v = Math.min(c.v, 4); }
     }
     if (c.road === r && (c.dir > 0 ? c.s >= r.length - 0.5 : c.s <= 0.5)) {
       if (r.access && c.dir < 0) { this.enterLot(c); return; }
@@ -395,12 +397,14 @@ export class Traffic {
       const dx = x - c.x, dz = z - c.z, ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
       if (ahead > 0 && ahead < gap && side < 3.2) lim = Math.min(lim, Math.max(0, (ahead - stopAt) * 0.7));
     };
-    // (a box: something by its footprint, so a car can pass beside it)
+    // (a box: something by its footprint, so a car can pass beside it; in a car park (backing into / out of a bay
+    // between parked cars) only a real overlap stops it: 0.3 m short of the footprint, not 2.5 m)
+    const inLot = c.mode === 'lot' && c.lot, m = inLot ? 0.3 : 2.5, sm = inLot ? 0.1 : 0.3;
     const box = (x, z, yaw, hw, hd, gap) => {
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > gap + hd || Math.abs(dz) > gap + hd) return;
       const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(yaw, hw, hd, fx, fz, _ext);
-      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + 0.3) lim = Math.min(lim, Math.max(0, (ahead - e.along - c.l / 2 - 2.5) * 0.7));
+      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, Math.max(0, (ahead - e.along - c.l / 2 - m) * 0.7));
     };
     // other cars: the moving ones by their line, a wreck / knocked car by its footprint (it may be passed)
     for (const o of this.cars) {
@@ -411,6 +415,7 @@ export class Traffic {
     for (const e of this.parking?.cars || []) {
       const g = e.car.position;
       if (e.driving || Math.abs(g.x - c.x) > 34 || Math.abs(g.z - c.z) > 34) continue;
+      if (inLot && c.bay && Math.hypot(g.x - c.bay.x, g.z - c.bay.z) < 3.2) continue; // (the cars either side of its bay: the arc in / out clears them)
       box(g.x, g.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 30);
     }
     // the car you drive (its body, not just where you sit; stopped: by its footprint, it may be passed)
@@ -642,38 +647,55 @@ export class Traffic {
     c.turnRoad = { r: c.road, s: c.s, dir: -c.dir };
   }
 
-  // ---- in the car park: along the aisle, a smooth turn into the bay nose in; later reverse out in an arc, pause, go
+  // ---- in the car park: along the aisle past the bay, then back into it in an arc; later forward out in an arc, go
   // a point of the lot in its own frame (u along the long side, v across)
   lotPt(L, u, v) { return { x: L.x + L.ux * u + L.vx * v, z: L.z + L.uz * u + L.vz * v }; }
   lotUV(L, x, z) { const dx = x - L.x, dz = z - L.z; return { u: dx * L.ux + dz * L.uz, v: dx * L.vx + dz * L.vz }; }
-  // the aisle in front of a bay: its centre line (v) and the side the entrance is on
+  // the aisle in front of a bay: its centre line (v), sB the way from it into the bay (v), side: the entrance's side (u)
   aisleFor(L, bay) {
-    const b = this.lotUV(L, bay.x, bay.z), hv = bay.hx * L.vx + bay.hz * L.vz; // the nose points along v by hv (+-1)
-    return { b, vA: b.v - Math.sign(hv) * (BAY_D / 2 + 3.4) };
+    const b = this.lotUV(L, bay.x, bay.z), sB = -Math.sign(bay.hx * L.vx + bay.hz * L.vz) || 1; // (the nose points out, to the aisle)
+    const e = this.lotUV(L, L.ex - L.dirx * 4, L.ez - L.dirz * 4);
+    return { b, e, sB, vA: b.v - sB * ((bay.hd || 2.75) + 3.4), side: Math.sign(e.u - b.u) || 1 };
+  }
+  // a free bay a car can back into from the entrance: room in the aisle beyond it to pull up before reversing
+  entryBay(L) {
+    return L.bays.find((bay) => {
+      if (bay.taken || bay.traffic) return false;
+      const { b, side } = this.aisleFor(L, bay);
+      return Math.abs(b.u - side * BACK_R) < L.hw - 2.6;
+    });
   }
   enterLot(c) {
     const lot = this.junctions.find((j) => j.access === c.road)?.lot;
-    const bay = lot?.bays.find((b) => !b.taken && !b.traffic);
+    const bay = lot && (c.bay?.traffic && lot.bays.includes(c.bay) ? c.bay : this.entryBay(lot)); // (booked at the junction)
     if (!lot || !bay) { this.deadEnd(c); return; } // (full: never a U-turn on the spot)
+    if (c.bay && c.bay !== bay) c.bay.traffic = false;
     bay.traffic = true;
-    c.lot = lot; c.bay = bay; c.mode = 'lot'; c.rev = false; c.next = 'park'; c.turnRoad = null;
-    const e = this.lotUV(lot, lot.ex - lot.dirx * 4, lot.ez - lot.dirz * 4), { b, vA } = this.aisleFor(lot, bay);
-    const side = Math.sign(e.u - b.u) || 1; // (it comes along the aisle from the entrance's side)
-    const uIn = clamp(e.u, -lot.hw + 3, lot.hw - 3);
-    // entrance -> into the aisle -> along it to a few metres short of the bay -> round into the bay -> its middle
-    c.path = [this.lotPt(lot, e.u, e.v), this.lotPt(lot, uIn, vA), this.lotPt(lot, b.u + side * 6, vA), this.lotPt(lot, b.u + side * 1.2, (vA + b.v) / 2), { x: bay.x - bay.hx * 1.6, z: bay.z - bay.hz * 1.6 }, { x: bay.x, z: bay.z }];
-    c.path.unshift({ x: c.x, z: c.z });
+    c.lot = lot; c.bay = bay; c.mode = 'lot'; c.rev = false; c.next = 'backIn'; c.turnRoad = null;
+    const { b, e, sB, vA, side } = this.aisleFor(lot, bay), R = BACK_R;
+    const uIn = clamp(e.u, -lot.hw + 3, lot.hw - 3), uS = b.u - side * R;
+    // entrance -> into the aisle -> along it past the bay -> pull up R beyond it, straight along the aisle
+    c.path = [{ x: c.x, z: c.z }, this.lotPt(lot, e.u, e.v), this.lotPt(lot, uIn, vA)];
+    if ((uIn - uS) * side > 7) c.path.push(this.lotPt(lot, uS + side * 5, vA));
+    c.path.push(this.lotPt(lot, uS + side * 2.5, vA), this.lotPt(lot, uS, vA)); // (the last leg straight along the aisle)
+    // then (endManoeuvre) back round a quarter circle into the bay's mouth, and straight back to its middle
+    c.after = [this.lotPt(lot, uS, vA)];
+    for (const t of [0.5, 1.0, Math.PI / 2]) c.after.push(this.lotPt(lot, uS + side * R * Math.sin(t), vA + sB * R * (1 - Math.cos(t))));
+    c.after.push({ x: bay.x, z: bay.z });
     c.pi = 1;
   }
   leaveBay(c) {
     const lot = c.lot, bay = c.bay;
-    const e = this.lotUV(lot, lot.ex - lot.dirx * 4, lot.ez - lot.dirz * 4), { b, vA } = this.aisleFor(lot, bay);
-    const side = Math.sign(e.u - b.u) || 1;
-    // reverse out: straight back a little, then the back swings away from the exit (the nose turns toward it)
-    c.mode = 'lot'; c.rev = true; c.next = 'pause';
-    c.path = [{ x: c.x, z: c.z }, { x: bay.x - bay.hx * 2.2, z: bay.z - bay.hz * 2.2 }, this.lotPt(lot, b.u - side * 2.2, (vA + b.v) / 2 + 0 * vA), this.lotPt(lot, b.u - side * 4.5, vA)];
+    const { b, e, sB, vA, side } = this.aisleFor(lot, bay), R = BACK_R;
+    // forward out (the nose is already out): straight to the bay's mouth, then round toward the exit along the aisle
+    c.mode = 'lot'; c.rev = false; c.next = 'out'; c.after = null;
+    c.path = [{ x: c.x, z: c.z }, this.lotPt(lot, b.u, vA + sB * R)];
+    if (Math.abs(e.u - b.u) > R + 1) {
+      for (const t of [0.5, 1.0, Math.PI / 2]) c.path.push(this.lotPt(lot, b.u + side * R * (1 - Math.cos(t)), vA + sB * R * (1 - Math.sin(t))));
+      c.path.push(this.lotPt(lot, clamp(e.u, -lot.hw + 3, lot.hw - 3), vA));
+    }
+    c.path.push(this.lotPt(lot, e.u, e.v), { x: lot.ex + lot.dirx * 2, z: lot.ez + lot.dirz * 2 });
     c.pi = 1;
-    c.after = [this.lotPt(lot, b.u - side * 4.5, vA), this.lotPt(lot, b.u + side * 3, vA), this.lotPt(lot, clamp(e.u, -lot.hw + 3, lot.hw - 3), vA), this.lotPt(lot, e.u, e.v), { x: lot.ex + lot.dirx * 2, z: lot.ez + lot.dirz * 2 }];
   }
   // follow the waypoints at walking pace with a smoothly turning steering wheel (pure pursuit, 3.5 m ahead)
   manoeuvre(c, dt) {
@@ -711,7 +733,7 @@ export class Traffic {
       this.parkAt(c, c.lot, c.bay, 25 + Math.random() * 60);
       return;
     }
-    if (c.next === 'pause') { c.rev = false; c.path = c.after; c.after = null; c.pi = 1; c.next = 'out'; c.pause = 0.9; return; }
+    if (c.next === 'backIn') { c.rev = true; c.path = c.after; c.after = null; c.pi = 1; c.next = 'park'; c.pause = 0.7; return; }
     // out of the car park: onto the access road, away to the junction
     const jn = this.junctions.find((j) => j.lot === c.lot);
     if (c.bay) { c.bay.traffic = false; c.bay = null; }

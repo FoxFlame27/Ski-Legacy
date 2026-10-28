@@ -1,16 +1,17 @@
 // Car parks: a big one by Legacy Village, a medium one at a gondola base, a small one at the trailhead (planned with
 // their access roads in game/bus/roads.js, which also flattens them into the terrain and ploughs a berm round their
 // edges). Here: the surface (packed snow over asphalt), crisp painted bays (real geometry, sharp at any distance),
-// lamp posts that light up at night, a pay machine and a P sign at the entrance (Meshy props). No cars (yet).
+// lamp posts that light up at night, a pay machine and a P sign at the entrance (Meshy props), and parked cars
+// backed into the bays (centred, nose out toward the aisle).
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
 import { carTemplate, carInstance, CAR_MODELS } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 import { nightUniform } from '../world/village.js';
-import { busRoads, roadsideBlocked } from './bus/roads.js';
+import { busRoads, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
 
-const BAY_W = 2.6, BAY_D = 5.2, LINE = 0.12;
+const BAY_W = 2.6, BAY_D = 5.5, LINE = 0.12; // (5.5 m deep: the longest car, 5.0 m, fits inside the lines)
 // parked cars: [model, real length (m), which car park] (the car models are the user's own, in MODEL_LIST)
 export const PARKED = [['car_bmw_x3', 4.7, 'big'], ['car_audi_rs6', 5.0, 'big'], ['car_vw_golf_gti', 4.3, 'medium'], ['car_tesla_m3', 4.7, 'small']];
 
@@ -51,6 +52,62 @@ function lotTexture() {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 8;
   return t;
+}
+
+// The bays of a car park, in its own frame (u along the long side, v across): rows along both long sides (a middle
+// double row in the big one), BAY_W x BAY_D between the painted lines. A bay is kept only when all of it is clear of
+// the entrance mouth (8 m), of the access road (+1 m) and of every collider standing on it; the lines are drawn only
+// for kept bays, so the markings and the cars always agree. Each bay: its centre, and (hx, hz) the way the nose of a
+// car backed into it points (out, toward the aisle; the rear at the bay's back line).
+export function lotBays(L, colliders = []) {
+  const at = (u, v) => [L.x + L.ux * u + L.vx * v, L.z + L.uz * u + L.vz * v];
+  const R = Math.hypot(L.hw, L.hd) + 8;
+  const access = busRoads.roads.filter((r) => r.access && Math.hypot(r.X[0] - L.ex, r.Z[0] - L.ez) < 12);
+  const near = colliders.filter((c) => c && !c.car && Number.isFinite(c.x) && (c.r != null || c.hw != null) && Math.hypot(c.x - L.x, c.z - L.z) < R + (c.r ?? Math.hypot(c.hw, c.hd)));
+  const onRoad = (x, z) => {
+    for (const r of access) for (let i = 1; i < r.n; i++) {
+      const ax = r.X[i - 1], az = r.Z[i - 1], dx = r.X[i] - ax, dz = r.Z[i] - az;
+      if (Math.abs(ax - x) > 40 || Math.abs(az - z) > 40) continue;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1)));
+      if (Math.hypot(ax + dx * t - x, az + dz * t - z) < ROAD_HALF + 1) return true;
+    }
+    return false;
+  };
+  const inCollider = (x, z, c) => {
+    const dx = x - c.x, dz = z - c.z;
+    if (c.r != null) return Math.hypot(dx, dz) < c.r + 0.1;
+    const cs = Math.cos(-(c.rot || 0)), sn = Math.sin(-(c.rot || 0));
+    return Math.abs(dx * cs - dz * sn) < c.hw + 0.1 && Math.abs(dx * sn + dz * cs) < c.hd + 0.1;
+  };
+  const clear = (uc, vc) => {
+    for (const a of [-1, -0.5, 0, 0.5, 1]) for (const b of [-1, -0.5, 0, 0.5, 1]) {
+      const [x, z] = at(uc + a * BAY_W / 2, vc + b * BAY_D / 2);
+      if (Math.abs(a) === 1 && Math.abs(b) === 1 && Math.hypot(x - L.ex, z - L.ez) < 8) return false; // (the mouth)
+      if (onRoad(x, z) || near.some((c) => inCollider(x, z, c))) return false;
+    }
+    // (a small collider between the samples: its centre in the bay)
+    for (const c of near) { const dx = c.x - L.x, dz = c.z - L.z; if (Math.abs(dx * L.ux + dz * L.uz - uc) < BAY_W / 2 && Math.abs(dx * L.vx + dz * L.vz - vc) < BAY_D / 2) return false; }
+    return true;
+  };
+  const bays = [], lines = [], mid = new Set();
+  const rows = [[-L.hd + 0.4, 1], [L.hd - 0.4, -1]];
+  if (L.hd >= 16) rows.push([0, 1], [0, -1]);
+  const n = Math.floor((L.hw * 2 - 3.5 * 2) / BAY_W), u0 = -n * BAY_W / 2;
+  for (const [v0, dir] of rows) {
+    const v1 = v0 + dir * BAY_D, vc = (v0 + v1) / 2, keep = [];
+    for (let k = 0; k < n; k++) {
+      const uc = u0 + (k + 0.5) * BAY_W;
+      keep[k] = clear(uc, vc);
+      if (!keep[k]) continue;
+      const [x, z] = at(uc, vc);
+      bays.push({ x, z, hx: dir * L.vx, hz: dir * L.vz, u: uc, v: vc, hw: BAY_W / 2, hd: BAY_D / 2, edge: v0 !== 0 });
+      if (v0 === 0) mid.add(k);
+    }
+    // the dividers: each line beside a kept bay (once)
+    for (let k = 0; k <= n; k++) if (keep[k - 1] || keep[k]) lines.push([u0 + k * BAY_W, v0, u0 + k * BAY_W, v1]);
+  }
+  for (const k of mid) lines.push([u0 + k * BAY_W, 0, u0 + (k + 1) * BAY_W, 0]); // (the middle double row's centre line)
+  return { bays, lines };
 }
 
 export class ParkingLots {
@@ -132,25 +189,9 @@ export class ParkingLots {
       for (const [u, v] of [[u0 + nu2, v0 + nv2], [u0 - nu2, v0 - nv2], [u1 + nu2, v1 + nv2], [u1 - nu2, v1 - nv2]]) { const [x, z] = at(u, v); lp.push(x, world.height(x, z) + 0.05, z); }
       li.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
     };
-    const rows = [[-L.hd + 0.4, 1], [L.hd - 0.4, -1]];
-    if (L.hd >= 16) rows.push([0, 1], [0, -1]);
-    const margin = 3.5, open = 9; // (no bays across the entrance mouth)
-    for (const [v0, dir] of rows) {
-      const v1 = v0 + dir * BAY_D;
-      const n = Math.floor((L.hw * 2 - margin * 2) / BAY_W);
-      const u0 = -n * BAY_W / 2;
-      for (let k = 0; k <= n; k++) {
-        const u = u0 + k * BAY_W, [ex, ez] = at(u, (v0 + v1) / 2);
-        if (Math.hypot(ex - L.ex, ez - L.ez) < open) continue;
-        strip(u, v0, u, v1);
-        // the bay between this line and the next: centre, and the heading of a car parked nose in (to the row's edge)
-        if (k < n) {
-          const [bx, bz] = at(u + BAY_W / 2, (v0 + v1) / 2);
-          if (Math.hypot(bx - L.ex, bz - L.ez) > open + 1) (L.bays ||= []).push({ x: bx, z: bz, hx: -dir * L.vx, hz: -dir * L.vz, edge: v0 !== 0 });
-        }
-      }
-      if (v0 === 0) strip(u0, 0, u0 + n * BAY_W, 0); // the middle row's centre line
-    }
+    const { bays, lines } = lotBays(L, colliders);
+    L.bays = bays;
+    for (const [u0, v0, u1, v1] of lines) strip(u0, v0, u1, v1);
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
     lg.setIndex(li); lg.computeVertexNormals();
@@ -200,7 +241,7 @@ export class ParkingLots {
 
   // The BMW (a detailed model: 110 meshes, transmission glass): glass made plain tinted see-through (transmission
   // costs a whole extra render pass), lights off, the meshes merged per material (a few draw calls), a box collider
-  // and a camera blocker. Parked in the bay nearest the entrance.
+  // and a camera blocker. Backed into its bay: centred in it, the nose out toward the aisle (lotBays()).
   parkCar(L, gltf, colliders, cameraBlockers, { length = 4.7, bay = null, paint = null, name = '' } = {}) {
     if (!bay) return null;
     bay.taken = true;
@@ -217,7 +258,7 @@ export class ParkingLots {
     car.add(block);
     car.updateMatrixWorld(true);
     cameraBlockers?.push(block);
-    (this.cars ||= []).push({ car, inst, t: carTemplate(gltf, length, name), far: null, full: car.children[0], name, length, paint, collider, block, bay });
+    (this.cars ||= []).push({ car, inst, t: carTemplate(gltf, length, name), far: null, full: car.children[0], name, length, paint, collider, block, bay, held: [bay] });
     return bay;
   }
 

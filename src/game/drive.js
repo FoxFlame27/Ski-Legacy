@@ -246,6 +246,12 @@ export class Drive {
     g.rotation.set(0, d.yaw, 0);
     g.updateMatrixWorld(true);
     e.collider.x = d.x; e.collider.z = d.z; e.collider.rot = -d.yaw;
+    // the car park bays: the one(s) it now stands in are taken (no other car parks on it), the one it left is free
+    try {
+      for (const b of e.held || []) b.taken = false;
+      e.held = [];
+      for (const L of busRoads.lots) for (const b of L.bays || []) if (Math.abs(d.x - b.x) < 3 && Math.abs(d.z - b.z) < 3 && Math.hypot(d.x - b.x, d.z - b.z) < 3) { b.taken = true; e.held.push(b); }
+    } catch { /* (bookkeeping only) */ }
     if (this.cameraBlockers && !this.cameraBlockers.includes(e.block)) this.cameraBlockers.push(e.block);
     e.driving = false;
     if (!d.crash) e.smokeFx?.clear();

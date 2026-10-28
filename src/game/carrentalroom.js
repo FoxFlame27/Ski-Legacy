@@ -89,7 +89,6 @@ export class CarRentalRoom {
     const halo = new THREE.Mesh(new THREE.PlaneGeometry(10.5, 2.4), new THREE.MeshBasicMaterial({ color: 0xffc98a, transparent: true, opacity: 0.12, toneMapped: false, depthWrite: false }));
     halo.position.set(-4.4, 6.1, -D / 2 + 0.045); S.add(halo);
   }
-  }
 
   // ------------------------------------------------------------------ the cars on their turntables
   buildCars(models, cars, display) {
@@ -281,82 +280,90 @@ export class CarRentalRoom {
   }
 
   // ------------------------------------------------------------------ the configurator (ui/carrental.js): your car, live
-  /** Show cfg on that model's turntable (stopped), the camera on it for this step (interior: from the driver's seat). */
+  /** Show cfg on that model's turntable (stopped); the game camera swings round it for this step (cfgCamera). */
   configure(cfg, step) {
     const T = this.tables.find((o) => o.id === cfg.id);
     if (!T) return;
-    this.cfgUp = !!T.up; // (upstairs: the camera stays up there)
     if (this.cfg && this.cfg.table !== T) this.restore(this.cfg.table);
     const prev = this.cfg;
-    const want = step === 'interior' && FULL[cfg.id] ? 'full' : 'simple';
     // (a car of its own for the preview: wheels as their own parts, so the rims take their colour)
-    if (!T.cfgInst || T.cfgKind !== want) {
-      const t = want === 'full' && T.fullT ? T.fullT : T.t;
-      if (want === 'full' && !T.fullT) {
-        loadGLB(FULL[cfg.id]).then((g) => { if (!g) return; T.fullT = carTemplate(g, T.spec.length, FULL[cfg.id]); if (this.cfg?.table === T && this.cfg.step === 'interior') this.configure(this.cfg.cfg, 'interior'); }).catch(() => {});
-      }
-      const inst = carInstance(t, { wheels: true });
-      inst.group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      if (T.cfgInst) T.spin.remove(T.cfgInst.group); else T.spin.remove(T.inst.group);
-      T.spin.add(inst.group);
-      T.cfgInst = inst; T.cfgT = t; T.cfgKind = t === T.t ? 'simple' : 'full';
+    if (!T.cfgInst) {
+      const inst = carInstance(T.t, { wheels: true });
+      T.spin.remove(T.inst.group); T.spin.add(inst.group);
+      T.cfgInst = inst;
     }
-    dressCar(T.cfgInst, T.cfgT, cfg);
-    for (const g of T.cfgInst.glass) g.visible = step !== 'interior'; // (from inside: the cabin in clear view)
+    dressCar(T.cfgInst, T.t, cfg);
     const shot = SHOT[step];
-    this.cfg = { table: T, cfg, step, yaw: shot ? shot[0] : prev?.yaw ?? 0.8, pitch: shot ? shot[1] : 0.2, dist: shot ? shot[2] : 5.5, look: 0, lookP: 0, snap: !prev };
+    this.cfg = { table: T, cfg, step, yaw: shot ? shot[0] : prev?.yaw ?? 0.8, pitch: shot ? shot[1] : 0.2, dist: shot ? shot[2] : 5.5, snap: !prev, dragged: prev?.dragged && prev.table === T };
+    if (shot && prev) this.cfg.dragged = false;
   }
-  /** Drag: turn round the car (or look round the cabin). */
+  /** Drag: turn round the car. */
   orbit(dx, dy) {
     const c = this.cfg;
     if (!c) return;
-    if (c.step === 'interior') { c.look = Math.max(-1.2, Math.min(1.2, c.look - dx)); c.lookP = Math.max(-0.5, Math.min(0.4, c.lookP - dy)); }
-    else { c.yaw -= dx; c.pitch = Math.max(0.02, Math.min(0.75, c.pitch + dy)); c.dragged = true; }
+    c.yaw -= dx; c.pitch = Math.max(0.02, Math.min(0.75, c.pitch + dy)); c.dragged = true;
   }
   restore(T) {
     if (!T?.cfgInst) return;
     T.spin.remove(T.cfgInst.group); T.spin.add(T.inst.group);
-    T.cfgInst = null; T.cfgKind = null;
+    T.cfgInst = null;
   }
-  endConfigure() {
+  /** The configurator closed: the car back as it was, the camera's off-centre framing off. */
+  endConfigure(camera) {
     if (!this.cfg) return;
     this.restore(this.cfg.table);
     this.cfg = null;
-    this.camera.clearViewOffset();
+    if (camera) { camera.clearViewOffset(); camera.updateProjectionMatrix(); }
   }
-  // the configurator's camera: round the stopped turntable, or in the driver's seat; the car framed right of the panel
-  cfgCamera(dt) {
-    const c = this.cfg, T = c.table, cam = this.camera;
+  // The configurator's camera (the game's own: carrental.js calls this after the player's camera each frame): round the
+  // stopped turntable, the car framed right of the panel; worked out in the hall frame, then put in the world.
+  cfgCamera(dt, cam) {
+    const c = this.cfg, T = c.table;
     const W = innerWidth, H = innerHeight;
     cam.setViewOffset(W, H, -W * 0.2, 0, W, H);
-    const pos = _v, look = new THREE.Vector3();
-    T.spin.updateMatrixWorld(true);
+    const pos = _v, look = _l;
     const heading = T.spin.rotation.y;
-    if (c.step === 'interior') {
-      const t = T.cfgT, eye = driverEye(t);
-      eye.y += 0.04; eye.z -= 0.05;
-      pos.copy(eye); T.spin.localToWorld(pos);
-      const a = c.look, p = -0.22 + c.lookP;
-      look.set(eye.x + Math.sin(a) * Math.cos(p), eye.y + Math.sin(p), eye.z + Math.cos(a) * Math.cos(p)); T.spin.localToWorld(look);
-      cam.fov = 72;
-    } else {
-      if (!c.dragged) c.yaw += dt * 0.06; // (a slow drift round it)
-      const a = heading + c.yaw;
-      const y0 = T.y || 0; // (upstairs: from the mezzanine's floor)
-      pos.set(T.x + Math.sin(a) * c.dist * Math.cos(c.pitch), y0 + (T.up ? 0 : 0.16) + 0.7 + Math.sin(c.pitch) * c.dist, T.z + Math.cos(a) * c.dist * Math.cos(c.pitch));
-      pos.x = Math.max(-ROOM.W / 2 + 0.4, Math.min(ROOM.W / 2 - 0.4, pos.x)); pos.z = Math.max(-ROOM.D / 2 + 0.4, Math.min(ROOM.D / 2 - 0.4, pos.z));
-      if (T.up) pos.y = Math.max(y0 + 0.4, Math.min(pos.y, ceilingAt(pos.x) - 0.5)); // (under the roof)
-      else if (pos.z < LAYOUT.MZ + 0.3) pos.y = Math.min(pos.y, LAYOUT.FL - 0.5); // (under the mezzanine: below its floor)
-      look.set(T.x, y0 + (c.step === 'rims' ? 0.5 : 0.75), T.z);
-      cam.fov = 45;
-    }
-    // (eased there; at once the first time and between inside / outside)
-    const inside = c.step === 'interior';
-    if (c.snap || c.wasInside !== inside) { cam.position.copy(pos); c.at = look.clone(); c.snap = false; }
-    else { const k = 1 - Math.exp(-dt * 5); cam.position.lerp(pos, k); c.at.lerp(look, k); }
-    c.wasInside = inside;
+    if (!c.dragged) c.yaw += dt * 0.06; // (a slow drift round it)
+    const a = heading + c.yaw, y0 = T.y || 0; // (upstairs: from the mezzanine's floor)
+    pos.set(T.x + Math.sin(a) * c.dist * Math.cos(c.pitch), y0 + (T.up ? 0 : 0.16) + 0.7 + Math.sin(c.pitch) * c.dist, T.z + Math.cos(a) * c.dist * Math.cos(c.pitch));
+    pos.x = Math.max(-ROOM.W / 2 + 0.4, Math.min(ROOM.W / 2 - 0.4, pos.x)); pos.z = Math.max(-ROOM.D / 2 + 0.4, Math.min(ROOM.D / 2 - 0.4, pos.z));
+    if (T.up) pos.y = Math.max(y0 + 0.4, Math.min(pos.y, ceilingAt(pos.x) - 0.5)); // (under the roof)
+    else if (pos.z < LAYOUT.MZ + 0.3) pos.y = Math.min(pos.y, LAYOUT.FL - 0.5); // (under the mezzanine: below its floor)
+    look.set(T.x, y0 + (c.step === 'rims' ? 0.5 : 0.75), T.z);
+    this.frame.localToWorld(pos); this.frame.localToWorld(look);
+    // (eased there; at once the first time)
+    if (c.snap || !c.at) { c.pos = pos.clone(); c.at = look.clone(); c.snap = false; }
+    else { const k = 1 - Math.exp(-dt * 5); c.pos.lerp(pos, k); c.at.lerp(look, k); }
+    cam.position.copy(c.pos);
     cam.lookAt(c.at);
+    cam.fov = 45;
     cam.updateProjectionMatrix();
   }
 
+  // ------------------------------------------------------------------ per frame (while shown)
+  /** The turntables turn, the clerk turns to you when you come near (you: hall frame, or null), the guide bobs. */
+  update(dt, you) {
+    for (const t of this.tables) if (this.cfg?.table !== t) t.spin.rotation.y += t.speed * dt;
+    this.updateGuide(dt);
+    if (this.clerk) {
+      const c = this.clerk.root.position, near = you && you.y < 1.5 && Math.hypot(you.x - c.x, you.z - c.z) < 6;
+      const want = near ? Math.atan2(you.x - c.x, you.z - c.z) : this.deskYaw;
+      this.clerkYaw += Math.atan2(Math.sin(want - this.clerkYaw), Math.cos(want - this.clerkYaw)) * (1 - Math.exp(-dt * 4));
+      this.clerk.update(dt, { mode: 'idle', heading: this.clerkYaw, speed: 0, crouch: 0, lean: 0, plow: 0, normal: UP });
+    }
+  }
+  /**
+   * What you can press E at from p (hall frame; up: on the mezzanine): { kind: 'clerk' } across the desk, or the car
+   * you stand by: { kind: 'car', id, paint, label } (the nearest, on your floor), else null.
+   */
+  pick(p, up) {
+    if (!up && this.clerkAt && Math.hypot(p.x - this.clerkAt.x, p.z - this.clerkAt.z) < 3.0) return { kind: 'clerk', label: 'Talk to the rental clerk' };
+    let best = null, bd = Infinity;
+    for (const T of this.tables) {
+      if (!!T.up !== !!up) continue;
+      const d = Math.hypot(p.x - T.x, p.z - T.z), reach = T.up ? T.spec.length / 2 + 1.2 : LAYOUT.R + 1.3;
+      if (d < reach && d < bd) { bd = d; best = T; }
+    }
+    return best ? { kind: 'car', id: best.id, paint: best.paint, label: `Rent ${best.spec.label}` } : null;
+  }
 }

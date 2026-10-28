@@ -79,7 +79,10 @@ export function setBulb(obj, on) {
 const THUMB_KEY = 'sl-furniture-thumbs-v2';
 const thumbs = new Map();
 try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem(THUMB_KEY) || '{}'))) thumbs.set(k, v); } catch { /* no storage */ }
-const persist = () => { try { localStorage.setItem(THUMB_KEY, JSON.stringify(Object.fromEntries(thumbs))); } catch { /* full or blocked */ } };
+const boxThumbs = new Set(); // rendered from the fallback box (model missing): never cached
+const persist = () => {
+  try { localStorage.setItem(THUMB_KEY, JSON.stringify(Object.fromEntries([...thumbs].filter(([k]) => !boxThumbs.has(k))))); } catch { /* full or blocked */ }
+};
 
 export const getThumb = (id) => thumbs.get(id) || null;
 
@@ -117,6 +120,7 @@ export function renderThumbs(onThumb) {
       let url;
       try { url = canvas.toDataURL('image/webp', 0.8); } catch { url = null; }
       scene.remove(obj);
+      if (!gltf) boxThumbs.add(item.id);
       if (url) { thumbs.set(item.id, url); onThumb?.(item.id, url); }
       await new Promise((res) => setTimeout(res, 0)); // let the game breathe between renders
     }

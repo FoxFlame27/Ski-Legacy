@@ -152,7 +152,6 @@ export class ChaletRoom {
     for (let i = 0; i < uv.count; i++) uv.setXY(i, (p.getX(i) + (x0 + x1) / 2), (p.getY(i) + (z0 + z1) / 2));
     const m = new THREE.Mesh(g, mat);
     m.rotation.x = down ? Math.PI / 2 : -Math.PI / 2; m.position.set((x0 + x1) / 2, y, (z0 + z1) / 2);
-    if (down) m.scale.y = -1; // (keep the plane's extent the same after flipping)
     this.scene.add(m); return m;
   }
   /**
@@ -331,9 +330,7 @@ export class ChaletRoom {
       const start = long ? a[1] : a[0];
       const ops = W.openings.map((o) => ({ ...o, u0: o.c - o.w / 2 - start, u1: o.c + o.w / 2 - start }));
       const mat = up ? M.timber : M.plaster;
-      this.slab(a, b, outward ? 0 : -T, outward ? T : 0, y0, top, ops.filter((o) => o.kind !== 'front'), mat);
-      // (the front door's opening: a notch, its leaf shut in it)
-      if (ops.some((o) => o.kind === 'front')) { /* the slab above notched it: see below */ }
+      this.slab(a, b, outward ? 0 : -T, outward ? T : 0, y0, top, ops, mat); // (the front door: a notch, its leaf shut in it)
       for (const o of ops) {
         const uc = (o.u0 + o.u1) / 2, cx = a[0] + ux * uc, cz = a[1] + uz * uc, ry = Math.atan2(ux, uz) - Math.PI / 2; // (box local x along the wall)
         const nx = L0.n[0], nz = L0.n[1], w = o.u1 - o.u0, h = o.y1 - o.y0, ym = (o.y0 + o.y1) / 2;
@@ -480,7 +477,7 @@ export class ChaletRoom {
       const q = r.rects.reduce((a, b) => ((b.x1 - b.x0) * (b.z1 - b.z0) > (a.x1 - a.x0) * (a.z1 - a.z0) ? b : a));
       const x = (q.x0 + q.x1) / 2, z = (q.z0 + q.z1) / 2, up = r.level === 'up', y = up ? Math.min(ceilingUp(x, z), FL + COLLAR) - 0.05 : GC - 0.2;
       const area = (q.x1 - q.x0) * (q.z1 - q.z0);
-      const L = new THREE.PointLight(0xffd8a8, 4 + area * 0.35, 14, 1.6);
+      const L = new THREE.PointLight(0xffd8a8, 10 + area * 0.8, 14, 1.6);
       L.position.set(x, y - 0.35, z); S.add(L);
       const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, 0.14, 16, 1, true), this.M.lamp); shade.position.set(x, y - 0.3, z); S.add(shade);
       this.box(0.01, 0.25, 0.01, this.M.iron, x, y - 0.12, z);
@@ -549,7 +546,7 @@ export class ChaletRoom {
   enter() {
     this.active = true;
     const d = this.doorAt;
-    this.pos.set(d.x - d.nx * 0.4, G, d.z - d.nz * 0.4); this.level = 'ground'; this.eyeY = G + EYE;
+    this.pos.set(d.x - d.nx * 0.8, G, d.z - d.nz * 0.8); this.level = 'ground'; this.eyeY = G + EYE;
     this.yaw = Math.atan2(-d.nx, -d.nz); this.pitch = -0.05; this.vel.set(0, 0, 0);
   }
   leave() { this.active = false; this.releasePortal(); }
@@ -576,7 +573,7 @@ export class ChaletRoom {
     this.renderPortal();
     if (!input) return null;
     // the front door: looked at, or stood right at it
-    const d = this.doorAt, near = this.level === 'ground' && Math.hypot(this.pos.x - d.x, this.pos.z - d.z) < 1.0;
+    const d = this.doorAt, near = this.level === 'ground' && Math.hypot(this.pos.x - d.x, this.pos.z - d.z) < 0.55;
     const hit = new THREE.Raycaster(this.camera.position, dir, 0, 3).intersectObjects(this.aimables, false)[0];
     if (near || hit?.object.userData.kind === 'door') return { kind: 'door', label: 'Leave the chalet' };
     return null;

@@ -613,15 +613,19 @@
   "tyre_rack": {},
   "lounge_sofa": {},
   "picket_fence": {
-    "preview": "01a1833d-3f3e-7779-b167-4087857e19b0"
+    "preview": "01a1833d-3f3e-7779-b167-4087857e19b0",
+    "refine": "01a1833e-3380-73b9-a7a7-1e732d93f6cd"
   },
   "garden_shed": {
-    "preview": "01a1833d-3f30-7549-802a-247a1feeea30"
+    "preview": "01a1833d-3f30-7549-802a-247a1feeea30",
+    "refine": "01a1833e-9895-7421-86cd-1630f733ceb8"
   },
   "playground": {
-    "preview": "01a1833d-3f48-7203-9d0a-9fb1fa9438e8"
+    "preview": "01a1833d-3f48-7203-9d0a-9fb1fa9438e8",
+    "refine": "01a1833e-5537-774e-9f94-2a977d773ad7"
   },
   "garden_bench": {
-    "preview": "01a1833d-3f38-735b-b5a3-972d219ad290"
+    "preview": "01a1833d-3f38-735b-b5a3-972d219ad290",
+    "refine": "01a1833e-98f2-7599-8e64-24b2672a34cd"
   }
 }

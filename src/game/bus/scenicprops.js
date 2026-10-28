@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from '../../world/world.js';
-import { busRoads, roadAt, ROAD_HALF } from './roads.js';
+import { busRoads, roadAt, ROAD_HALF, laneDistance } from './roads.js';
 
 const rnd = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 
@@ -112,6 +112,7 @@ export function buildScenicProps(group, { colliders = null } = {}) {
     walls++;
   };
   const viewpoint = (cx, cz, fx, fz, wallLen, wallOff) => {
+    if (laneDistance(cx, cz) < 7) return false; // (another road's lane there: a switchback's leg, a junction)
     const yaw = Math.atan2(fx, fz), lx = fz, lz = -fx; // (facing the view; l: along the edge)
     for (const sd of [-1, 1]) {
       const x = cx + lx * sd * 2.6, z = cz + lz * sd * 2.6;
@@ -123,7 +124,8 @@ export function buildScenicProps(group, { colliders = null } = {}) {
     put('boardFace', boardFace, cx, H(cx, cz), cz, yaw + Math.PI);
     if (wallLen > 0) {
       const wx = cx + fx * wallOff, wz = cz + fz * wallOff;
-      wall(wx - lx * wallLen / 2, wz - lz * wallLen / 2, wx + lx * wallLen / 2, wz + lz * wallLen / 2);
+      const clear = [-0.5, 0, 0.5].every((t) => laneDistance(wx + lx * wallLen * t, wz + lz * wallLen * t) > ROAD_HALF + 2.5);
+      if (clear) wall(wx - lx * wallLen / 2, wz - lz * wallLen / 2, wx + lx * wallLen / 2, wz + lz * wallLen / 2);
     }
   };
   // the lay-bys: the shoulder is ~12.6 m from the centre line there (scenic.js shapeScenic): benches at 9.6 m
@@ -135,8 +137,7 @@ export function buildScenicProps(group, { colliders = null } = {}) {
     if (!r) continue;
     roadAt(r, lb.s, P);
     const fx = -P.dz * lb.side, fz = P.dx * lb.side; // (toward the view)
-    viewpoint(P.x + fx * 9.4, P.z + fz * 9.4, fx, fz, 18, 2.3);
-    views++;
+    if (viewpoint(P.x + fx * 9.4, P.z + fz * 9.4, fx, fz, 18, 2.3) !== false) views++;
   }
   // the scenic car parks: on the short end (or the far side) whose ground falls away most
   for (const L of busRoads.lots) {
@@ -150,8 +151,7 @@ export function buildScenicProps(group, { colliders = null } = {}) {
     const { nx, nz, h, w } = best;
     const far = nx === -L.vx && nz === -L.vz; // (the far long side has a row of bays: the benches stand beyond it)
     const off = far ? h + 1.0 : h + 1.1;
-    viewpoint(L.x + nx * off, L.z + nz * off, nx, nz, 2 * w + 1, 1.0);
-    views++;
+    if (viewpoint(L.x + nx * off, L.z + nz * off, nx, nz, 2 * w + 1, 1.0) !== false) views++;
   }
   // ---- the roundabouts
   let signs = 0;
@@ -161,6 +161,7 @@ export function buildScenicProps(group, { colliders = null } = {}) {
       const hx = -ox, hz = -oz, rx = -hz, rz = hx;     // (the way in, its right)
       const d = ring.R + 11, off = ROAD_HALF + 1.4;
       const x = ring.x + ox * d + rx * off, z = ring.z + oz * d + rz * off, y = H(x, z), yaw = Math.atan2(ox, oz);
+      if (laneDistance(x, z) < ROAD_HALF + 0.8) continue; // (on another arm's lane)
       put('pole', signPole, x, y, z, yaw);
       put('giveWay', triFace, x, y, z, yaw);
       put('giveWayBack', triFace, x, y, z, yaw + Math.PI);

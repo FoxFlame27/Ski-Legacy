@@ -20,7 +20,7 @@ import { routeH, smoothRoute } from './scenicnet.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const SC_GRADE = 0.115;
-const DBG = (...a) => { if (typeof process !== 'undefined' && process.env?.SCENIC_DEBUG) console.log(...a); };
+const DBG = (...a) => { if (globalThis.process?.env?.SCENIC_DEBUG) console.log(...a); };
 const EAST_AT = { x: 3560, z: 1800 };     // the Ostal roundabout (the valley floor behind the Sonnenkopf)
 const PASS_AT = { x: 2790, z: 1660 };     // the pass (the saddle north of the Sonnenkopf's summit)
 const BACK_AT = { x: 2760, z: 3100 };     // the Hinterkopf roundabout (the hollow behind the Sonnenkopf)
@@ -132,7 +132,7 @@ function routed(head, tail, y0, y1, bad, O, opts = {}) {
   const a = head[head.length - 1], b = tail[0];
   const dA = Math.atan2(a[0] - head[head.length - 2][0], a[1] - head[head.length - 2][1]);
   const dB = Math.atan2(tail[1][0] - b[0], tail[1][1] - b[1]);
-  const raw = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 0.8, soft: true, y0, y1: opts.noY1 ? undefined : y1, dirA: dA, dirB: dB, exK: opts.exK ?? (+(typeof process !== 'undefined' && process.env?.EXK) || 300) });
+  const raw = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 0.8, soft: true, y0, y1: opts.noY1 ? undefined : y1, dirA: dA, dirB: dB, exK: opts.exK ?? 300 });
   if (!raw) return null;
   return smoothRoute([...head, ...raw.slice(1, -1), ...tail], { fixedA: head.length, fixedB: tail.length });
 }

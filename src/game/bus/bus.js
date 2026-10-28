@@ -25,8 +25,8 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 const _p = {}, _q = {};
 
 // ------------------------------------------------------------------ road meshes
-// The road surface, 6.8 m across x 13.5 m along: dark asphalt showing in the four wheel tracks, packed snow
-// between them and along the edges, white edge lines and a dashed centre line half under the snow, grit.
+// The road surface, 6.8 m across x 13.5 m along: worn asphalt, white edge lines and a dashed centre line, grit; the
+// snow over it (tracks, edges, patches) is drawn by the shader (snowCover).
 function roadTexture() {
   const W = 512, H = 1024, c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -40,22 +40,8 @@ function roadTexture() {
   g.fillStyle = 'rgba(236,238,240,0.85)';
   g.fillRect(W * 0.045, 0, W * 0.022, H); g.fillRect(W * 0.933, 0, W * 0.022, H);
   g.fillRect(W * 0.492, H * 0.08, W * 0.016, H * 0.3); g.fillRect(W * 0.492, H * 0.58, W * 0.016, H * 0.3);
-  // packed snow: between the wheel tracks and along both edges, with ragged borders (tracks at ~19/36/64/81 %)
-  // (borders: a small random walk, no regular waves)
-  const snowBand = (a, b, alpha) => {
-    let j0 = 0, j1 = 0;
-    for (let y = 0; y < H; y += 2) {
-      j0 = Math.max(-4, Math.min(4, j0 * 0.9 + (rnd() - 0.5) * 2.2)); j1 = Math.max(-4, Math.min(4, j1 * 0.9 + (rnd() - 0.5) * 2.2));
-      g.fillStyle = `rgba(226,232,238,${alpha})`;
-      g.fillRect(a * W + j0, y, (b - a) * W + j1 - j0, 2);
-    }
-  };
-  snowBand(-0.02, 0.135, 0.92); snowBand(0.245, 0.30, 0.55); snowBand(0.415, 0.585, 0.88); snowBand(0.70, 0.755, 0.55); snowBand(0.865, 1.02, 0.92);
-  // snow flecks and grit across everything
-  for (let i = 0; i < 2600; i++) { g.fillStyle = `rgba(235,240,246,${0.25 + rnd() * 0.5})`; g.beginPath(); g.arc(rnd() * W, rnd() * H, 0.6 + rnd() * 2.2, 0, 7); g.fill(); }
+  // (the snow on it: shader noise in world space, snowCover below; no painted bands or flecks to repeat)
   for (let i = 0; i < 1800; i++) { const v = 80 + rnd() * 50; g.fillStyle = `rgba(${v + 18},${v + 8},${v},0.5)`; g.fillRect(rnd() * W, rnd() * H, 1.5, 1.5); }
-  // a thin dusting over the tracks too
-  g.fillStyle = 'rgba(222,228,234,0.16)'; g.fillRect(0, 0, W, H);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping;
@@ -72,6 +58,56 @@ function decal(mat, k = 0.0012) {
       gl_Position = projectionMatrix * mvPosition;`);
   };
   mat.customProgramCacheKey = () => `busdecal${k}`;
+  return mat;
+}
+
+// The snow on the roads, in the shader: wheel tracks that wander across the lane and vary in width along the road
+// and fade out (stretches fully snowed over), ragged snow along both edges, and large patches (world position noise,
+// no repeating tile) of packed snow, slush and bare asphalt. uv: u across the strip (0..1), v = metres / 13.5.
+const SNOW_GLSL = `
+varying vec3 vRoadW;
+float rdH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float rdN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(rdH(i), rdH(i + vec2(1.0, 0.0)), f.x), mix(rdH(i + vec2(0.0, 1.0)), rdH(i + vec2(1.0, 1.0)), f.x), f.y); }
+float rdF(vec2 p) { return rdN(p) * 0.5 + rdN(p * 2.03 + 7.1) * 0.25 + rdN(p * 4.01 + 3.3) * 0.125 + rdN(p * 8.1 + 1.7) * 0.0625; }
+`;
+const SNOW_FRAG = `
+  {
+    vec2 Wp = vRoadW.xz;
+    float u = vMapUv.x, sv = vMapUv.y * 13.5;
+    float wob = (rdN(vec2(sv * 0.021, 3.7)) - 0.5) * 0.10 + (rdN(vec2(sv * 0.09, 9.1)) - 0.5) * 0.035;
+    float wid = 0.04 + 0.035 * rdN(vec2(sv * 0.03, 1.3));
+    float tr = 0.0;
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.2 - wob)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.36 - wob * 0.8)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.64 + wob * 0.7)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.8 + wob)));
+    float fine = rdF(Wp * 0.9), P = rdF(Wp * 0.03 + 4.0);
+    float clearT = smoothstep(0.3, 0.7, rdN(vec2(sv * 0.012, 5.5))) * (0.6 + 0.4 * fine);
+    float eN = rdN(vec2(sv * 0.15, 2.2)) * 0.07 + (fine - 0.5) * 0.06;
+    float edge = 1.0 - smoothstep(0.06 + eN, 0.16 + eN, u) + smoothstep(0.84 - eN, 0.94 - eN, u);
+    float snow = clamp(1.0 - tr * clearT, 0.0, 1.0) * smoothstep(0.22, 0.55, P + 0.3 * fine - 0.1);
+    float bare = smoothstep(0.6, 0.78, P);
+    snow = max(snow * (1.0 - bare * 0.9), clamp(edge, 0.0, 1.0));
+    float slush = (1.0 - snow) * smoothstep(0.35, 0.7, rdF(Wp * 0.06 + 11.0)) * (1.0 - bare);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.29, 0.28) * (0.85 + 0.3 * fine), slush * 0.75);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.84, 0.89) * (0.88 + 0.16 * fine), snow * (0.7 + 0.3 * fine));
+    rdWet = slush;
+  }
+`;
+function snowCover(mat, key) {
+  const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+  mat.onBeforeCompile = (sh, r) => {
+    prev?.call(mat, sh, r);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vRoadW;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoadW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\n${SNOW_GLSL}\nfloat rdWet = 0.0;`)
+      .replace('#include <map_fragment>', `#include <map_fragment>\n${SNOW_FRAG}`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= 1.0 - 0.4 * rdWet;');
+  };
+  mat.customProgramCacheKey = () => `${prevKey ? prevKey.call(mat) : ''}-roadsnow-${key}`;
   return mat;
 }
 
@@ -440,8 +476,8 @@ class Guardrails {
 function buildRoadMeshes(group, colliders = null) {
   // draw order where strips overlap: a bus road over an access road (junctions), an access road over the car park's
   // surface and paint (entrances); each a clear step apart (no z-fighting at any distance)
-  const roadMat = decal(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.72, metalness: 0, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -14 }), 0.0017);
-  const accessMat = decal(new THREE.MeshStandardMaterial({ map: roadMat.map, roughness: 0.72, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -10 }), 0.00145);
+  const roadMat = snowCover(decal(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.72, metalness: 0, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -14 }), 0.0017), 'main');
+  const accessMat = snowCover(decal(new THREE.MeshStandardMaterial({ map: roadMat.map, roughness: 0.72, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -10 }), 0.00145), 'access');
   const poles = [], posts = [];
   // the rails' line colliders, in a grid (drive.js keeps your car off them, sliding along)
   busRoads.rails = []; busRoads.railGrid = new Map();
@@ -982,3 +1018,4 @@ export class BusLine {
     return true;
   }
 }
+export const railsForTest = { planRails, railRuns }; // (Node checks)

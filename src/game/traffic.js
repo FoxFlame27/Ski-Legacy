@@ -12,13 +12,14 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadAt, laneDistance, ROAD_HALF } from './bus/roads.js';
-import { scenicTour } from './bus/scenic.js';
+import { scenicWalk, scenicSpawn, scenicNetReady } from './bus/scenicdrive.js';
 import { CAR_MODELS, carTemplate, carInstance, farMesh } from './cars.js';
+import { setPlates } from './carconfig.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 import { carPath, linkPath, prepPath, followPath } from './carpath.js';
 
-const N_CARS = 12, N_SCENIC = 3, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
+const N_CARS = 12, N_SCENIC = 6, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
 const END_KEEP = 95;
 // a car is always on its road: its body at most 1 m beyond the plowed edge (knocked aside, or swerving round a crash
@@ -91,7 +92,7 @@ export class Traffic {
     Object.assign(this, { scene, colliders, player, camera, skibus });
     this.cars = [];
     this.enabled = true;
-    const roads = busRoads.roads.filter((r) => !r.scenic); // (the Panoramastrasse and its roundabout: not driven by the traffic yet)
+    const roads = busRoads.roads.filter((r) => !r.scenic); // (the scenic roads and their roundabouts: their own cars below)
     if (!roads.length) return;
     this.main = roads.filter((r) => !r.access);
     this.access = roads.filter((r) => r.access);
@@ -117,15 +118,15 @@ export class Traffic {
       this.cars.push(car);
       this.spawn(car, true);
     }
-    // the Panoramastrasse: a few cars of their own on its tour (scenic.js scenicTour), out and back for the view
+    // the scenic roads (the Panoramastrasse, the Passstrasse, the loop round the back): cars of their own, each on
+    // its own random way round the network (bus/scenicdrive.js), brought back near you when they're far out of sight
     try {
-      this.tour = scenicTour(LANE);
-      if (this.tour) for (let k = 0; k < N_SCENIC; k++) {
+      if (scenicNetReady()) for (let k = 0; k < N_SCENIC; k++) {
         const [name, length] = avail[(k * 5 + 3) % avail.length];
         const car = this.makeCar(carTemplate(models[name], length, name), N_CARS + k, colours[(k * 2 + 1) % colours.length]);
-        car.name = name; car.scenic = true; car.mode = 'scenic'; car.u = (k / N_SCENIC) * this.tour.L + 30; car.v = 0; car.vmax = 9 + k * 1.5;
+        car.name = name; car.scenic = true; car.vmax = 9 + (k % 4) * 1.5;
         this.cars.push(car);
-        this.tourPose(car);
+        this.scenicPlace(car, k < 3 ? { x: player.pos.x, z: player.pos.z, min: 120, max: 900 } : null);
       }
     } catch (e) { console.warn('scenic traffic', e); }
     // the people in them (baked over the first frames; parked traffic cars show nobody)
@@ -249,7 +250,11 @@ export class Traffic {
         this.recycleT = 2;
         // trips end (out of sight) and cars come back somewhere else; a wreck stays where it came to rest
         for (const c of this.cars) {
-          if (c.scenic) { if ((c.mode === 'wreck' || c.mode === 'knocked') && !this.inSight(c.x, c.z)) { c.mode = 'scenic'; c.v = 0; this.tourPose(c); } continue; } // (back on its tour)
+          if (c.scenic) { // (a wreck out of sight, or far away out of sight: back on the network, near you if it can)
+            const far = Math.hypot(c.x - p.x, c.z - p.z) > 900;
+            if (((c.mode === 'wreck' || c.mode === 'knocked') || (far && c.mode === 'scenic')) && !this.inSight(c.x, c.z)) this.scenicPlace(c, { x: p.x, z: p.z, min: 150, max: 700 });
+            continue;
+          }
           if (c.mode === 'gone') continue;
           const odd = c.mode === 'wreck' || c.mode === 'knocked', dP = Math.hypot(c.x - p.x, c.z - p.z);
           c.trip = (c.trip ?? (120 + Math.random() * 180)) - 2;
@@ -339,7 +344,7 @@ export class Traffic {
   }
 
   step(c, dt) {
-    if (c.mode === 'gone') { c.wait -= dt; if (c.wait <= 0) this.spawn(c); return; }
+    if (c.mode === 'gone') { c.wait -= dt; if (c.wait <= 0) { if (c.scenic) { const p = this.player.pos; this.scenicPlace(c, { x: p.x, z: p.z, min: 150, max: 700 }); } else this.spawn(c); } return; }
     if (c.mode === 'knocked') { this.slide(c, dt); return; }
     if (c.mode === 'wreck') { c.v = 0; c.brake = 0; return; } // (rests where it stopped, crooked, until the watchdog takes it)
     if (c.mode === 'parked') {
@@ -352,46 +357,79 @@ export class Traffic {
     this.drive(c, dt);
   }
 
-  // ---- the scenic tour: along a fixed loop (right-hand lane, single-lane ring anticlockwise), slowing for the bends
-  // and the grade, keeping its distance behind the car ahead, giving way before the ring to anyone on it (cars, you),
-  // stopping for you in its way, a pause at each viewpoint car park
-  tourAt(u, out) {
-    const T = this.tour, n = T.X.length, f = ((u % T.L) + T.L) % T.L / 2, i = Math.floor(f) % n, j = (i + 1) % n, t = f - Math.floor(f);
+  // ---- the scenic roads: each car along its own path (scenicWalk: right-hand lane, single-lane rings anticlockwise),
+  // slowing for the bends and the grade, keeping its distance behind any car ahead, giving way before a ring to
+  // anyone on it (cars, you), stopping for you in its way, a pause at each viewpoint car park; at a junction with a
+  // valley road, out of sight, it leaves (and comes back somewhere else on the network)
+  scenicPlace(c, near = null) {
+    const ok = near ? (x, z) => !this.inSight(x, z) : null;
+    const st = (near && scenicSpawn(Math.random, near, ok)) || scenicSpawn(Math.random);
+    if (!st) { c.mode = 'gone'; c.g.visible = false; c.collider.x = 1e9; c.wait = 30; return; }
+    c.mode = 'scenic'; c.v = 0; c.pause = 0; c.brake = 0;
+    c.spath = scenicWalk(st, LANE, 6); c.u = 4;
+    this.tourPose(c);
+  }
+  tourAt(u, out, c) {
+    const T = c.spath, n = T.X.length, f = Math.max(0, Math.min(T.L, u)) / 2, i = Math.min(n - 1, Math.floor(f)), j = Math.min(n - 1, i + 1), t = f - Math.floor(f);
     out.x = T.X[i] + (T.X[j] - T.X[i]) * t; out.z = T.Z[i] + (T.Z[j] - T.Z[i]) * t;
     return out;
   }
   tourPose(c) {
-    const a = this.tourAt(c.u + c.l * 0.38, {}), b = this.tourAt(c.u - c.l * 0.38, {});
+    const a = this.tourAt(c.u + c.l * 0.38, {}, c), b = this.tourAt(c.u - c.l * 0.38, {}, c);
     const ya = world.height(a.x, a.z), yb = world.height(b.x, b.z);
     c.x = (a.x + b.x) / 2; c.z = (a.z + b.z) / 2; c.y = (ya + yb) / 2 + 0.02;
     c.yaw = Math.atan2(a.x - b.x, a.z - b.z);
     this.pose(c, Math.atan2(yb - ya, Math.hypot(a.x - b.x, a.z - b.z)));
   }
+  // the path running out: the next piece appended (from where this one ends: straight on), the passed part dropped
+  tourExtend(c) {
+    const T = c.spath, cut = Math.max(0, Math.floor((c.u - 20) / 2)), nx = scenicWalk(T.end, LANE, 6), off = cut * 2, L0 = T.L - off;
+    const X = T.X.slice(cut).concat(nx.X.slice(1)), Z = T.Z.slice(cut).concat(nx.Z.slice(1));
+    const sh = (u) => u - off, sh2 = (u) => u + L0;
+    c.spath = {
+      X, Z, L: (X.length - 1) * 2, end: nx.end,
+      entries: [...T.entries.map((e) => ({ u: sh(e.u), ring: e.ring })), ...nx.entries.map((e) => ({ u: sh2(e.u), ring: e.ring }))].filter((e) => e.u > -50),
+      pauses: [...T.pauses.map(sh), ...nx.pauses.map(sh2)].filter((u) => u > -50),
+      exits: [...T.exits.map(sh), ...nx.exits.map(sh2)].filter((u) => u > -50),
+    };
+    c.u -= off;
+  }
   tourDrive(c, dt) {
-    const T = this.tour, L = T.L, u = ((c.u % L) + L) % L;
+    if (!c.spath) { this.scenicPlace(c); return; }
+    if (c.u > c.spath.L - 80) this.tourExtend(c);
+    const T = c.spath, u = c.u;
     if (c.pause > 0) { c.pause -= dt; c.v = 0; c.brake = 1; return; }
     // the bend ahead (the tightest within ~30 m): v <= sqrt(a_lat * R)
     let vt = c.vmax;
-    const h = (q) => { const a = this.tourAt(q, _p), bx = a.x, bz = a.z, b = this.tourAt(q + 4, _q); return Math.atan2(b.x - bx, b.z - bz); };
+    const h = (q) => { const a = this.tourAt(q, _p, c), bx = a.x, bz = a.z, b = this.tourAt(q + 4, _q, c); return Math.atan2(b.x - bx, b.z - bz); };
     for (let d = 0; d < 32; d += 8) { const k = Math.abs(wrapPi(h(u + d + 6) - h(u + d))) / 6; if (k > 1e-3) vt = Math.min(vt, Math.sqrt(2.6 / k) + d * 0.12); }
-    // the car ahead on the tour
-    for (const o of this.cars) { if (o === c || !o.scenic || o.mode !== 'scenic') continue; const gap = (((o.u - u) % L) + L) % L; if (gap < 40) vt = Math.min(vt, Math.max(0, (gap - 11) * 0.45)); }
-    // give way before the ring: someone on it (or about to be), within its quarter to the left
-    const R = T.ring;
+    // any car ahead of it, going its way (the scenic cars are on paths of their own)
+    const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw);
+    for (const o of this.cars) {
+      if (o === c || o.mode === 'gone' || o.mode === 'parked') continue;
+      const dx = o.x - c.x, dz = o.z - c.z, al = dx * fx + dz * fz;
+      if (al <= 0 || al > 40 || Math.abs(dx * fz - dz * fx) > 2.4) continue;
+      if (Math.sin(o.yaw) * fx + Math.cos(o.yaw) * fz < 0.3 && o.mode === 'scenic') continue; // (oncoming, in its own lane)
+      vt = Math.min(vt, Math.max(0, (al - 11) * 0.45));
+    }
+    // give way before a ring: someone on it (or about to be), within its quarter to the left
     for (const e of T.entries) {
-      const toE = (((e - u) % L) + L) % L;
-      if (toE > 16) continue;
+      const toE = e.u - u;
+      if (toE < 0 || toE > 16) continue;
+      const R = e.ring;
       const busy = [...this.cars.filter((o) => o !== c && o.scenic && o.mode === 'scenic'), { x: this.player.pos.x, z: this.player.pos.z }]
         .some((o) => { const r = Math.hypot(o.x - R.x, o.z - R.z); return r < R.R + 5 && r > R.R - 5 && Math.hypot(o.x - c.x, o.z - c.z) < 28; });
       if (busy) vt = Math.min(vt, Math.max(0, (toE - 2) * 0.5));
     }
     // you, in its way (on foot or in a car)
-    const pdx = this.player.pos.x - c.x, pdz = this.player.pos.z - c.z, fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), al = pdx * fx + pdz * fz;
+    const pdx = this.player.pos.x - c.x, pdz = this.player.pos.z - c.z, al = pdx * fx + pdz * fz;
     if (al > 0 && al < 18 && Math.abs(pdx * fz - pdz * fx) < 2.6) vt = Math.min(vt, Math.max(0, (al - 6) * 0.5));
+    // the grade: slower up and down the steep bits
     c.brake = vt < c.v - 0.3 ? 1 : 0;
     c.v = vt > c.v ? Math.min(vt, c.v + 1.6 * dt) : Math.max(vt, c.v - 4 * dt);
     const u1 = u + c.v * dt;
     for (const ps of T.pauses) if (u < ps && u1 >= ps) { c.pause = 15 + Math.random() * 30; c.v = 0; }
+    for (const ex of T.exits) if (u < ex && u1 >= ex && !this.inSight(c.x, c.z)) { c.mode = 'gone'; c.g.visible = false; c.collider.x = 1e9; c.wait = 20 + Math.random() * 40; return; }
     c.u = u1;
     this.tourPose(c);
   }

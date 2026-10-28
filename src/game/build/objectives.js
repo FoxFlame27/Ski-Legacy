@@ -8,7 +8,7 @@ export function startObjective(save, player, buildMode) {
   if (inside) return inside;
   const fresh = !player.hasSkis && (save.stats?.races || 0) === 0;
   if (!fresh) return null;
-  if (!chaletRented(save)) return 'Rent a chalet in the chalet village';
+  // (Oct 28, the user: chalets are bought for $50,000 now, earned with races and jobs: no chalet step at the start)
   // (Oct 28, the user: the furnishing hint "stays forever; it should only show when you're in the chalet": outside
   // it, the next step is the skis)
   return null; // -> 'Rent skis at the ski shop'

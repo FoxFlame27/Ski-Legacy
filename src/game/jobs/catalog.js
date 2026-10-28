@@ -12,6 +12,7 @@ export function hashStr(s) {
   return h >>> 0;
 }
 const round5 = (v) => Math.round(v / 5) * 5;
+const PAY = 5; // (Oct 28, the user: jobs pay way more, so a $50,000 chalet is within reach)
 const round15 = (v) => Math.ceil(v / 15) * 15;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const pickOne = (arr, rnd) => arr[Math.floor(rnd() * arr.length) % arr.length];
@@ -156,7 +157,7 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       const c = CARGO[key];
       const est = ctx.est(from, d);
       if (est < 45 || est > (c.perishable ? 300 : 540)) return null;
-      const reward = round5(clamp(35 + est * 0.22 + (c.perishable ? 15 : 0), 40, 150));
+      const reward = round5(clamp(35 + est * 0.22 + (c.perishable ? 15 : 0), 40, 150) * PAY);
       const dest = { ...destData(d), char: d.npc ? charFor(ctx, rnd, d.role) : null };
       return {
         type: 'delivery', cargo: key, pack: c.pack,
@@ -178,7 +179,7 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       if (!down) return null;
       const estDown = ctx.est(s, down);
       if (estDown > 420) return null;
-      const reward = round5(clamp(70 + est * 0.22 + estDown * 0.3, 90, 240));
+      const reward = round5(clamp(70 + est * 0.22 + estDown * 0.3, 90, 240) * PAY);
       const variant = rnd() < 0.6 ? 'injured' : 'stuck';
       const name = pickOne(GUESTS, rnd);
       return {
@@ -205,7 +206,7 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       if (!spot) return null;
       const item = pickOne(items, rnd), noun = ITEMS[item].noun, guest = pickOne(GUESTS, rnd);
       // the round trip plus a minute or two of searching: paid like the other jobs per minute
-      const reward = round5(clamp(30 + est * 0.36, 50, 190));
+      const reward = round5(clamp(30 + est * 0.36, 50, 190) * PAY);
       return {
         type: 'lost', item, noun, guest,
         title: `Lost ${noun} · ${a.label}`, short: `Lost ${noun}`,
@@ -225,7 +226,7 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       if (est < 90 || est > 600) return null;
       const skill = pickOne(Object.keys(SKILLS), rnd), S = SKILLS[skill], name = pickOne(GUESTS, rnd);
       const estG = est / S.factor;
-      const reward = round5(clamp(85 + estG * 0.2, 90, 190));
+      const reward = round5(clamp(85 + estG * 0.2, 90, 190) * PAY);
       const to = d.kind === 'board' && d.hubId === 'village' ? 'Legacy Village' : d.kind === 'board' ? d.place : d.to;
       return {
         type: 'escort', title: `Guide ${name} to ${shortOf(d)}`, short: `Guiding ${name}`,

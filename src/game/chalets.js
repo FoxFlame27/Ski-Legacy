@@ -5,7 +5,7 @@
 // The forest round it is the game's own (world/vegetation.js; chaletroad.js clears the pads, thickens the banks).
 // Cheap: the chalets are one instanced low-poly mesh (chalet_lo.glb, 24k triangles), the full model (chalet.glb)
 // only on the one you stand nearest; the props instanced too.
-// RENT A CHALET: E at any chalet's front door: rent it by the night ($100-$230 a night, dearer higher up the slope
+// BUY A CHALET ($50,000, yours for good; the renting described below was replaced on Oct 28): E at any chalet's front door: (was: rent it by the night) ($100-$230 a night, dearer higher up the slope
 // with the view, a shed or a bench; pay 1, 3 or 7 nights up front; checkout at noon on the day after the last night;
 // one chalet at a time, kept in the save: save.chalet = { id, name, rented, since, until (save.day), nightly,
 // furniture }; when the stay runs out the chalet is given back, save.chalet keeps only the furniture). Only your chalet opens (E: in, game/chaletroom.js, the one
@@ -20,6 +20,7 @@ import { HX, HZ, DOOR, NIGHT } from './chaletplan.js';
 import { ChaletRoom, setChaletInterior } from './chaletroom.js';
 
 // the model's body (chalet.glb, scene units, measured): x -0.17..0.61 (the door's side +x), z -0.88..0.31, ground y -0.40
+export const CHALET_PRICE = 50000; // (bought for good, not rented)
 const BODY = { x: 0.22, z: -0.285, y: -0.40, len: 1.19 };
 const S = (2 * HZ) / BODY.len;
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -177,53 +178,37 @@ export class Chalets {
     for (const im of this.inst) { im.setMatrixAt(i, hidden ? ZERO : _m.multiplyMatrices(im.userData.mats[i], im.userData.local)); im.instanceMatrix.needsUpdate = true; }
   }
 
-  // ------------------------------------------------------------------ renting (by the night)
-  rented() { this.expire(); const id = this.save.chalet?.id; return id == null ? null : this.houses.find((h) => h.id === id) || null; }
+  // ------------------------------------------------------------------ buying (Oct 28, the user: "you BUY chalets, no
+  // renting; buying costs 50k", earned with races and jobs). One chalet, yours for good: save.chalet = { id, name,
+  // owned, rented (= owned, for older readers), since, furniture }. (An old rental in a save just counts as owned.)
+  rented() { const id = this.save.chalet?.id; return id == null ? null : this.houses.find((h) => h.id === id) || null; }
   insideOwn() { return this.inside && !!this.current && this.current.id === this.save.chalet?.id; }
   hour() { return this.getHour?.() ?? 12; }
-  /** Nights left on your stay (0 on the last morning, before checkout at noon). */
-  nightsLeft() { const c = this.save.chalet; return c?.until == null ? 0 : Math.max(0, c.until - (this.save.day ?? 1)); }
-  // the stay over (checkout at noon on the day after the last night): the chalet goes back, the furniture is kept
-  expire() {
-    const c = this.save.chalet;
-    if (!c || c.id == null || c.until == null || this.inside) return;
-    const day = this.save.day ?? 1;
-    if (day > c.until || (day === c.until && this.hour() >= 12)) {
-      this.save.chalet = { furniture: c.furniture || [], last: c.id, lastName: c.name };
-      this.writeSave();
-      this.hud?.flash(`Your stay at ${c.name} is over · rent a chalet again to go back in`, 'bad', 3600);
-    }
-  }
   interaction(p) {
     if (!this.V || this.inside || !this.room) return null;
     for (const h of this.houses) {
       if (Math.abs(p.x - h.door.x) > 3 || Math.abs(p.z - h.door.z) > 3 || Math.hypot(p.x - h.door.x, p.z - h.door.z) > 2.4) continue;
-      if (this.rented() === h) {
-        const n = this.nightsLeft();
-        return { label: `Enter your chalet (${h.name} · ${n ? `${n} night${n > 1 ? 's' : ''} left` : 'checkout at noon'})`, act: () => (n ? this.enter(h) : this.offer(h)) };
-      }
-      return (h._rent ||= { label: `Rent this chalet · $${h.nightly} / night`, act: () => this.offer(h) });
+      const mine = this.rented();
+      if (mine === h) return (h._in ||= { label: `Enter your chalet (${h.name})`, act: () => this.enter(h) });
+      if (mine) return { label: `You already own ${mine.name}`, act: () => this.hud?.flash(`One chalet each: you already own ${mine.name}`, 'bad', 2400) };
+      return (h._buy ||= { label: `Buy this chalet · $${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.offer(h) });
     }
     return null;
   }
   offer(h) {
-    const own = this.rented() === h, old = own ? null : this.rented();
-    const say = own
-      ? `Your stay at ${h.name} ends at noon today. Stay longer?`
-      : `A two-storey chalet in Almdorf: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, its own parking bay. It comes empty: furnish it as you like. $${h.nightly} a night, paid up front; checkout at noon.${old ? ` Renting it gives up ${old.name} (your furniture moves with you).` : ''}`;
-    const opts = [1, 3, 7].map((n) => ({ label: `${own ? 'Stay' : 'Rent'} ${n} night${n > 1 ? 's' : ''}`, sub: `$${(n * h.nightly).toLocaleString('en-US')} · $${h.nightly} / night`, price: `$${(n * h.nightly).toLocaleString('en-US')}`, act: () => this.rent(h, n) }));
-    if (own) opts.push({ label: 'Go in', sub: 'until noon', act: () => this.enter(h) });
-    opts.push({ label: 'Not now' });
-    this.hud.dialog(`${h.name} · Almdorf`, say, opts, { kicker: `Chalet village · $${h.nightly} / night` });
+    const say = 'A two-storey chalet in Almdorf: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, and its own parking. It comes empty: furnish it as you like. Yours for good.';
+    this.hud.dialog(`${h.name} · Almdorf`, say, [
+      { label: 'Buy this chalet', sub: 'Yours for good', price: `$${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.buy(h) },
+      { label: 'Not now' },
+    ], { kicker: `Chalet village · $${CHALET_PRICE.toLocaleString('en-US')}` });
   }
-  rent(h, nights) {
-    if (!this.spend(nights * h.nightly)) return;
-    const old = this.save.chalet, day = this.save.day ?? 1, same = old?.id === h.id && old.until != null;
-    // nights from tonight (or on from the stay you have there)
-    const until = (same ? Math.max(old.until, day) : day) + nights;
-    this.save.chalet = { id: h.id, name: h.name, rented: true, since: same ? old.since : day, until, nightly: h.nightly, furniture: old?.furniture || [] };
+  buy(h) {
+    if (this.rented()) return;
+    if (!this.spend(CHALET_PRICE)) return;
+    const old = this.save.chalet;
+    this.save.chalet = { id: h.id, name: h.name, owned: true, rented: true, since: this.save.day ?? 1, furniture: old?.furniture || [] };
     this.writeSave();
-    this.hud.flash(same ? `${h.name}: your stay runs to noon on day ${until}` : `${h.name} is yours for ${nights} night${nights > 1 ? 's' : ''} · E at its door to go in`, 'good', 3400);
+    this.hud.flash(`${h.name} is yours · E at its door to go in`, 'good', 3400);
   }
 
   // ------------------------------------------------------------------ in and out
@@ -269,7 +254,6 @@ export class Chalets {
 
   /** Per frame, outside: the full-detail model on the chalet you're nearest (within 70 m). */
   update() {
-    if (this.V && (this._ex = (this._ex || 0) + 1) % 60 === 0) this.expire(); // (the stay's checkout)
     if (!this.inst || this.inside) return;
     const p = this.player?.pos;
     if (!p) return;

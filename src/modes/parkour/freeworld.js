@@ -14,10 +14,11 @@ const START_R = 24;    // m around the start line: E races the course
 
 // entry fee and prize money, like the old open-world races (1st / 2nd / 3rd: 100 % / 30 % / 10 %)
 const DIFF = {
-  Easy: { label: 'Easy', color: '#2fbf5b', entry: 0, base: 300, ai: 'easy' },
-  Medium: { label: 'Medium', color: '#2f7bff', entry: 0, base: 600, ai: 'medium' },
-  Hard: { label: 'Hard', color: '#e23b3b', entry: 20, base: 1200, ai: 'medium' },
-  Expert: { label: 'Expert', color: '#141414', entry: 50, base: 1900, ai: 'hard' },
+  // (Oct 28, the user: races and jobs pay way more, so a $50,000 chalet is within reach: prizes ×5)
+  Easy: { label: 'Easy', color: '#2fbf5b', entry: 0, base: 1500, ai: 'easy' },
+  Medium: { label: 'Medium', color: '#2f7bff', entry: 0, base: 3000, ai: 'medium' },
+  Hard: { label: 'Hard', color: '#e23b3b', entry: 20, base: 6000, ai: 'medium' },
+  Expert: { label: 'Expert', color: '#141414', entry: 50, base: 9500, ai: 'hard' },
 };
 export const PRIZE_SHARE = [1, 0.3, 0.1];
 

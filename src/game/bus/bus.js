@@ -973,7 +973,7 @@ export class BusLine {
         if (ds > -BUS.len / 2 - along - 3 && ds < BUS.len / 2 + along + 6) otherNear = true;
         if (ds > 0) otherAhead = Math.min(otherAhead, reach - BUS.len / 2 - along);
       }
-      if (inOwn && ds > -(BUS.len / 2 + along + 1) && ds < BUS.len / 2 + along + 10) ownBeside = true; // (beside it or just ahead)
+      if (inOwn && ds > -(BUS.len / 2 + along + 1) && ds < BUS.len / 2 + along + 30) ownBeside = true; // (beside it or still ahead in its lane)
       // the lanes the bus is in now: its own until well out, the other one from part way across
       const counts = (inOwn && sh < 0.85 && !(r.passing && sh > 0.15)) || (inOther && sh > 0.15);
       if (!counts) continue;
@@ -986,11 +986,11 @@ export class BusLine {
       if (inOwn && (!own || gap < own.gap)) own = { gap, vo, along };
     }
     // overtaking: held up behind something slow in its own lane for 1.5 s
-    const slowed = own && own.vo < 4 && own.gap < 30 && r.v < 6;
+    const slowed = own && own.vo < 4 && own.gap < 40 && r.v < 7;
     r.slowT = slowed ? (r.slowT || 0) + dt : 0;
     if (!r.passing && r.slowT > 1.5) {
       const need = own.gap + 2 * own.along + BUS.len + 25;
-      if (!otherNear && otherAhead > need && t.s1 - r.s > need + 40) { r.passing = true; r.slowT = 0; }
+      if (!otherNear && otherAhead > need && t.s1 - r.s > need + 10) { r.passing = true; r.slowT = 0; }
     }
     // back in once its own lane is clear beside it and just ahead (or the other lane gets busy ahead: back in as
     // soon as there is room)

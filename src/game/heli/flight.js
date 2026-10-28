@@ -2,7 +2,7 @@
 // Pure math (three.js vectors only): src/game/heli.js drives it from the keys or the autopilot.
 //
 // Controls (ctl, each -1..1): fwd (W/S), turn (A/D, + = left), lift (Space/Shift).
-//  - W builds forward airspeed along the heading (up to 60 m/s), S brakes and backs up slowly;
+//  - W builds forward airspeed along the heading (up to 95 m/s), S brakes and backs up slowly;
 //    with nothing held it slows to a hover and holds its height.
 //  - A/D yaw: a quick pedal turn in the hover, a wide banked turn at speed. The path follows the
 //    nose with a little drift.
@@ -14,11 +14,11 @@
 import * as THREE from 'three';
 
 export const FLIGHT = {
-  MAX_FWD: 60, MAX_BACK: 8,       // m/s
-  ACC: 8.5, BRAKE: 11, BACK_ACC: 2.6, COAST: 2.4, DRAG: 0.0012,
+  MAX_FWD: 95, MAX_BACK: 10,      // m/s (buffed from 60: ~340 km/h flat out)
+  ACC: 13, BRAKE: 16, BACK_ACC: 3.4, COAST: 2.4, DRAG: 0.0008,
   DRIFT: 1.7,                     // how fast the path catches up with the nose (1/s)
   TURN: 1.15, TURN_FAST: 0.5, TURN_TAU: 0.28, // yaw rates (rad/s) at a hover / at full speed
-  CLIMB: 11, SINK: 8, V_ACC: 7, V_STOP: 14, // vertical speeds (m/s), their response and how hard they stop (m/s^2)
+  CLIMB: 16, SINK: 10, V_ACC: 9, V_STOP: 16, // vertical speeds (m/s), their response and how hard they stop (m/s^2)
   AGL_MAX: 420,                   // soft ceiling above the ground (m)
   LAND_SLOPE: 0.30,               // steepest ground the skids settle on (~17 deg)
   POWER: 0.92,                    // rotor speed needed to lift off
@@ -266,7 +266,7 @@ export class HomePilot {
     this.phase = 'idle';
     this.t = 0;
     this.out = { fwd: 0, turn: 0, lift: 0 };
-    this.goal = { x: 0, z: 0, y: 0, agl: 30, speed: 50, stop: 0.7, yaw: undefined, decel: 2.2 };
+    this.goal = { x: 0, z: 0, y: 0, agl: 30, speed: 80, stop: 0.7, yaw: undefined, decel: 3.3 };
   }
 
   /** pad: { x, z, y (deck height), yaw } */
@@ -291,7 +291,7 @@ export class HomePilot {
       g.y = Math.max(f.groundY + f.cgH + 35, padY + 20 + Math.max(0, d - 150) / 5.5);
       // high above the path (a ridge pushed us up): slow down so the descent still ends over the pad
       const high = f.pos.y - g.y;
-      g.speed = high > 25 ? clamp((10 * Math.max(0, d - 120)) / high, 14, 50) : 50; g.stop = 0.7; g.decel = 3;
+      g.speed = high > 25 ? clamp((16 * Math.max(0, d - 120)) / high, 20, 80) : 80; g.stop = 0.7; g.decel = 4.5;
       autopilot(f, g, o);
       if (d < 0.9 && f.speed < 0.6) this.phase = 'align';
       return o;
@@ -327,7 +327,7 @@ export function autopilot(f, goal, out = { fwd: 0, turn: 0, lift: 0 }) {
   // speed: cruise, slowing down so we can stop at the goal (v^2 = 2 a s, gently: 2.2 m/s^2 unless told otherwise)
   // (the path lags the nose a little: start braking that much earlier)
   const lead = Math.hypot(f.vel.x, f.vel.z) * 0.6;
-  const uD = d < stop ? 0 : Math.min(goal.speed ?? 45, Math.sqrt(2 * (goal.decel ?? 2.2) * Math.max(0, d - stop - lead)) + 0.4);
+  const uD = d < stop ? 0 : Math.min(goal.speed ?? 70, Math.sqrt(2 * (goal.decel ?? 3.3) * Math.max(0, d - stop - lead)) + 0.4);
   // there: hold the spot and turn to the parking heading
   const want = d < stop && goal.yaw !== undefined ? goal.yaw : Math.atan2(dx, dz);
   const err = wrapPi(want - f.yaw);

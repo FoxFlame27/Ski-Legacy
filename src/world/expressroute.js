@@ -400,12 +400,13 @@ export function shapeExpressBed(x, z, h, spacing = 0) {
 }
 
 // ------------------------------------------------------------------ speed profile
-// The limit (m/s): 300 km/h on the open line, less through curves (tilting train: a generous lateral limit), a
+// The limit (m/s): 450 km/h on the open line, less through curves (tilting train: a generous lateral limit), a
 // stop at every station. Ride times run round the ring in +s from the village (the other way the profile is the
 // same, run backwards). EXPRESS_PROFILE: { V (per sample), T (s into a +s trip from the village, dwells
 // included), loop (one full round) }.
-export const VMAX = 83;          // m/s (300 km/h)
-export const ACC = 1.1;          // m/s^2
+export const VMAX = 125;         // m/s (450 km/h: sped up 1.5x from 300 km/h)
+export const ACC = 2.2;          // m/s^2 (doubled: the stops' run-ins and run-outs no longer take minutes)
+const LAT = 10;                  // m/s^2: the curve limit's lateral acceleration (was 4.5: ~1.5x the curve speeds)
 export const DWELL = 30;         // s at every stop
 export const EXPRESS_PROFILE = { V: null, T: null, loop: 0 };
 function buildSpeedProfile() {
@@ -417,7 +418,7 @@ function buildSpeedProfile() {
     const ab = Math.hypot(bx - ax, bz - az), bc = Math.hypot(cx - bx, cz - bz), ca = Math.hypot(ax - cx, az - cz);
     const cr = Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax));
     const r = cr < 1e-6 ? 1e9 : (ab * bc * ca) / (2 * cr);
-    V[i] = Math.min(VMAX, Math.sqrt(4.5 * r));
+    V[i] = Math.min(VMAX, Math.sqrt(LAT * r));
   }
   const stopI = L.stations.map((st) => Math.round(st.s / STEP));
   for (const i of stopI) V[i] = 0;

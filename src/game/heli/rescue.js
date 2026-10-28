@@ -50,7 +50,7 @@ export class Rescue {
     this.phase = null;        // inbound | settle | pickup | hover | home | arrive | out
     this.t = 0; this.pt = 0;  // total / phase time (game s)
     this.fast = false;
-    this.goal = { x: 0, z: 0, y: undefined, agl: undefined, speed: 45, stop: 0.8, yaw: undefined, decel: 2.6 };
+    this.goal = { x: 0, z: 0, y: undefined, agl: undefined, speed: 72, stop: 0.8, yaw: undefined, decel: 3.9 };
     this.out = { fwd: 0, turn: 0, lift: 0 };
     this.spot = null;         // { x, z, y, yaw, land: bool, hoverY }
     this.winchSeat = { pos: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, 1) };
@@ -124,7 +124,7 @@ export class Rescue {
   controls(dt) {
     const h = this.h, f = h.flight, p = h.player, o = this.out, g = this.goal;
     o.fwd = o.turn = o.lift = 0;
-    g.y = undefined; g.agl = undefined; g.yaw = undefined; g.stop = 0.8; g.decel = 2.6; g.speed = 45;
+    g.y = undefined; g.agl = undefined; g.yaw = undefined; g.stop = 0.8; g.decel = 3.9; g.speed = 72;
     if (this.phase === 'inbound') {
       // toward you (once you have stopped sliding and it is close, toward the pick-up spot it picked)
       if (!this.spot && this.settled() && Math.hypot(f.pos.x - p.pos.x, f.pos.z - p.pos.z) < 320) this.spot = this.pickSpot();
@@ -136,7 +136,7 @@ export class Rescue {
       g.y = Math.max(f.groundY + f.cgH + 35, ty + f.cgH + 20 + Math.max(0, d - 150) / 5.5);
       if (this.spot && !this.spot.land) g.y = Math.max(g.y, this.spot.hoverY);
       const high = f.pos.y - g.y;
-      g.speed = high > 25 ? clamp((10 * Math.max(0, d - 120)) / high, 12, 45) : 45;
+      g.speed = high > 25 ? clamp((16 * Math.max(0, d - 120)) / high, 18, 72) : 72;
       autopilot(f, g, o);
       if (this.spot && d < 1.2 && f.speed < 0.9) this.go(this.spot.land ? 'settle' : 'hover');
       return o;

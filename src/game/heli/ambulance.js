@@ -114,8 +114,8 @@ export class Ambulance {
     if (!this.path) this.plan();
     this.t += dt;
     const left = this.path.length - this.s;
-    // up to 16 m/s, braking gently (2.5 m/s^2) to a stop at the door
-    this.v = Math.min(16, this.v + dt * 3.2, Math.sqrt(2 * 2.5 * Math.max(0, left - 0.5)) + 0.3);
+    // up to 24 m/s (buffed from 16), braking (3.5 m/s^2) to a stop at the door
+    this.v = Math.min(24, this.v + dt * 4.5, Math.sqrt(2 * 3.5 * Math.max(0, left - 0.5)) + 0.3);
     this.s = Math.min(this.path.length, this.s + this.v * dt);
     if (this.path.length - this.s < 0.6) { this.arrived = true; this.v = 0; }
     const a = this.at(this.s + 3, {}), b = this.at(Math.max(0, this.s - 3), {});

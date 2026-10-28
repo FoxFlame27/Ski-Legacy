@@ -169,10 +169,9 @@ export const seating = {
   // the chalet village's garden and playground benches (game/chalets.js places them from its plots)
   villageSeats() {
     if (this._village || !this.chalets?.V?.plots) return;
-    const world = this.chalets.world || null;
-    const plots = this.chalets.V.plots, H = (x, z) => (this._height ? this._height(x, z) : 0);
     if (!this._height) return;
-    this._village = true; void world;
+    const plots = this.chalets.V.plots, H = this._height;
+    this._village = true;
     for (const p of plots) {
       if (p.playground) {
         const x = (p.x0 + p.x1) / 2;

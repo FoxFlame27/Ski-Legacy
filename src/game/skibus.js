@@ -8,6 +8,7 @@ import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
 import { busRoads, roadAt, ROAD_HALF } from './bus/roads.js';
 import { BusLine } from './bus/bus.js';
+import { propSeats } from './seating.js';
 
 // the printed face of a stop's sign plate: SKI BUS over the stop's name, dark green on post-bus yellow
 function stopFaceMaterial(name) {
@@ -134,6 +135,7 @@ export class SkiBus {
       bench.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       this.group.add(bench);
       colliders.push({ x: bx, z: bz, r: 0.8 });
+      propSeats('wooden_bench', bench, 1.7); // (sit and wait)
     }
   }
 

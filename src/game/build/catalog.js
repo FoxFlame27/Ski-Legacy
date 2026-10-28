@@ -9,6 +9,8 @@
 //        | 'ceiling' (hangs from the ceiling).
 // small: little decor that can also stand on a window sill or on top of furniture (tabletop).
 // flat:  rugs etc. — no collider, may overlap other furniture.
+// seat:  you can sit on it (game/seating.js): { h: seat height (m), n: spots along the front, sides: spots along
+//        each long side, facing out (beds) }.
 // The model's "front" is +z (Meshy faces the camera = +z).
 
 export const CATEGORIES = [
@@ -22,8 +24,8 @@ export const CATEGORIES = [
 
 export const FURNITURE = [
   // Living room
-  { id: 'sofa', name: 'Loden Sofa', category: 'living', price: 1200, size: [2.1, 0.9, 0.9], place: 'floor' },
-  { id: 'armchair', name: 'Wingback Armchair', category: 'living', price: 450, size: [0.85, 1.05, 0.9], place: 'floor' },
+  { id: 'sofa', name: 'Loden Sofa', category: 'living', price: 1200, size: [2.1, 0.9, 0.9], place: 'floor', seat: { h: 0.45, n: 3 } },
+  { id: 'armchair', name: 'Wingback Armchair', category: 'living', price: 450, size: [0.85, 1.05, 0.9], place: 'floor', seat: { h: 0.45 } },
   { id: 'coffee_table', name: 'Oak Coffee Table', category: 'living', price: 220, size: [1.2, 0.42, 0.7], place: 'floor' },
   { id: 'tv_unit', name: 'TV & Stand', category: 'living', price: 1400, size: [1.6, 1.35, 0.45], place: 'floor' },
   { id: 'rug', name: 'Wool Rug', category: 'living', price: 180, size: [2.0, 0.02, 1.4], place: 'floor', flat: true },
@@ -37,17 +39,17 @@ export const FURNITURE = [
   { id: 'fridge', name: 'Fridge', category: 'kitchen', price: 900, size: [0.75, 1.8, 0.75], place: 'floor' },
   { id: 'stove', name: 'Cooker', category: 'kitchen', price: 800, size: [0.7, 1.0, 0.65], place: 'floor' },
   { id: 'dining_table', name: 'Farmhouse Table', category: 'kitchen', price: 600, size: [1.9, 0.75, 0.95], place: 'floor' },
-  { id: 'dining_chair', name: 'Carved Chair', category: 'kitchen', price: 120, size: [0.45, 0.95, 0.5], place: 'floor' },
+  { id: 'dining_chair', name: 'Carved Chair', category: 'kitchen', price: 120, size: [0.45, 0.95, 0.5], place: 'floor', seat: { h: 0.47 } },
   { id: 'wall_shelf', name: 'Spice Shelf', category: 'kitchen', price: 80, size: [1.0, 0.45, 0.25], place: 'wall', mount: 1.5 },
 
   // Bedroom
-  { id: 'double_bed', name: 'Double Bed', category: 'bedroom', price: 1500, size: [1.6, 1.0, 2.05], place: 'floor' },
-  { id: 'single_bed', name: 'Single Bed', category: 'bedroom', price: 700, size: [1.0, 0.9, 2.05], place: 'floor' },
+  { id: 'double_bed', name: 'Double Bed', category: 'bedroom', price: 1500, size: [1.6, 1.0, 2.05], place: 'floor', seat: { h: 0.52, sides: 2 } },
+  { id: 'single_bed', name: 'Single Bed', category: 'bedroom', price: 700, size: [1.0, 0.9, 2.05], place: 'floor', seat: { h: 0.5, sides: 2 } },
   { id: 'wardrobe', name: 'Painted Wardrobe', category: 'bedroom', price: 850, size: [1.2, 2.0, 0.6], place: 'floor' },
   { id: 'nightstand', name: 'Nightstand', category: 'bedroom', price: 140, size: [0.5, 0.6, 0.42], place: 'floor' },
   { id: 'desk', name: 'Writing Desk', category: 'bedroom', price: 380, size: [1.3, 0.76, 0.65], place: 'floor' },
-  { id: 'desk_chair', name: 'Desk Chair', category: 'bedroom', price: 190, size: [0.6, 1.0, 0.6], place: 'floor' },
-  { id: 'blanket_chest', name: 'Blanket Chest', category: 'bedroom', price: 300, size: [1.0, 0.6, 0.5], place: 'floor' },
+  { id: 'desk_chair', name: 'Desk Chair', category: 'bedroom', price: 190, size: [0.6, 1.0, 0.6], place: 'floor', seat: { h: 0.48 } },
+  { id: 'blanket_chest', name: 'Blanket Chest', category: 'bedroom', price: 300, size: [1.0, 0.6, 0.5], place: 'floor', seat: { h: 0.55, n: 2 } },
 
   // Bathroom
   { id: 'bath_rug', name: 'Bath Mat', category: 'bathroom', price: 40, size: [0.9, 0.02, 0.6], place: 'floor', flat: true },

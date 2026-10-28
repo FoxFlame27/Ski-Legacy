@@ -16,6 +16,7 @@ import { XB, lin } from './expresstrack.js';
 import { RailBuilder, canvasTex } from './railtrack.js';
 import { bakeGeometry, makeLOD } from '../core/assets.js';
 import { crisp } from './train.js';
+import { registerBench } from '../game/seating.js';
 
 export const PLAT_Y = 0.25;                   // platform top over the top of rail (the squares lie at -0.12)
 const EDGE = 3.9, BACK = 8.7;                 // platform edge / back, m from the centre line
@@ -135,6 +136,10 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], model
     rec.lay = stationLayout(st, models);
     const at = (u, lat) => { const p = F.P(u, lat); return { x: p[0], z: p[2] }; };
     for (const b of rec.lay.benches) colliders.push({ ...at(b.u, b.lat), hw: 0.4, hd: 0.95, rot: -st.heading, top: st.y + PLAT_Y + 0.5 });
+    if (models?.wooden_bench) for (const b of rec.lay.benches) { // (the benches facing the track: sit and wait)
+      const p = F.P(b.u, b.lat, PLAT_Y);
+      registerBench({ x: p[0], y: p[1] + 0.48, z: p[2], yaw: st.heading + (b.sd > 0 ? -Math.PI / 2 : Math.PI / 2), width: 1.9, off: 0.04, floorY: p[1] });
+    }
     for (const l of rec.lay.lamps) colliders.push({ ...at(l.u, l.lat), r: 0.2 });
     for (const b of rec.lay.boards) for (const du of [-1.1, 1.1]) colliders.push({ ...at(b.u + du, b.lat), r: 0.12 });
     for (const du of [-1.8, 1.8]) colliders.push({ ...at(rec.lay.square.u + du, rec.lay.square.lat), r: 0.12 });

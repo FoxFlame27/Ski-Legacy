@@ -1,11 +1,15 @@
-// The build-mode furniture catalog: a scrollable panel on the right with a rendered thumbnail of every
-// Meshy model, its name and price, grouped by room. You keep walking while it is open (no pointer
-// unlock needed: wheel / arrow keys browse it; with the cursor free you can also click cards).
+// The build-mode furniture catalogue: a column on the right in the menus' brush style (white paper, blue
+// italic lettering, red markers), a rendered thumbnail of every Meshy model with its name and price, grouped by
+// room. Browse it with the mouse: wheel over it scrolls, click a room tab, click a card to take it in hand.
+// You keep walking (WASD) while it is open. Key hints run along the bottom, with the look / cursor mode chip.
 import './buildmenu.css';
+import { brushSVG, brushClip } from './menu.js';
 import { CATEGORIES, FURNITURE } from '../game/build/catalog.js';
 import { getThumb } from '../game/build/furniture.js';
 
 const fmt = (n) => n.toLocaleString('en-US');
+const kc = (k) => `<i class="kc">${k}</i>`;
+const hint = (keys, label) => `<span class="hint">${keys}<em>${label}</em></span>`;
 
 export class BuildMenu {
   constructor({ onSelect }) {
@@ -14,39 +18,67 @@ export class BuildMenu {
     const el = (this.el = document.createElement('div'));
     el.id = 'build-menu';
     el.hidden = true;
+    let seed = 700;
     el.innerHTML = `
-      <div class="bm-head"><span class="bm-title">Build mode</span><span class="bm-money"></span></div>
-      <div class="bm-tabs">${CATEGORIES.map((c) => `<button class="bm-tab" data-cat="${c.id}">${c.name}</button>`).join('')}</div>
-      <div class="bm-status"></div>
+      <div class="menu-title" style="width:calc(var(--u) * 230)">${brushSVG(7123, 250, 80)}<span>FURNISH</span></div>
+      <div class="bm-sub"><span>Your chalet</span><span class="bm-money"></span></div>
+      <div class="seg-brush bm-tabs">${CATEGORIES.map((c) => `<button tabindex="-1" data-cat="${c.id}">${c.name}</button>`).join('')}</div>
       <div class="bm-list">${CATEGORIES.map((c) => `
         <div class="bm-cat" data-cat-head="${c.id}">${c.name}</div>
         <div class="bm-grid">${FURNITURE.filter((f) => f.category === c.id).map((f) => `
-          <div class="bm-card" data-id="${f.id}">
+          <div class="bm-card paper" data-id="${f.id}" style="--clip:${brushClip(seed++, 3, 4)}">
             <img class="bm-thumb loading" alt="" data-thumb="${f.id}">
             <div class="bm-name">${f.name}</div><div class="bm-price">$${fmt(f.price)}</div>
           </div>`).join('')}</div>`).join('')}
       </div>
-      <div class="bm-keys">
-        <b>Wheel</b>/<b>↑</b><b>↓</b> browse · <b>←</b><b>→</b> room<br>
-        <b>Click</b>/<b>Enter</b> buy &amp; place · <b>R</b> rotate (hold <b>R</b>+wheel: fine)<br>
-        <b>Q</b> move · <b>X</b> sell (50%) · <b>RMB</b>/<b>⌫</b> empty hand · <b>F</b> exit
-      </div>`;
+      <div class="bm-status paper" style="--clip:${brushClip(911, 4, 4)}"></div>`;
+    this.foot = document.createElement('div');
+    this.foot.id = 'build-foot';
+    this.foot.hidden = true;
     this.flashEl = Object.assign(document.createElement('div'), { id: 'build-flash' });
     this.cross = Object.assign(document.createElement('div'), { id: 'build-cross', hidden: true });
-    document.body.append(el, this.flashEl, this.cross);
+    document.body.append(el, this.foot, this.flashEl, this.cross);
     this.list = el.querySelector('.bm-list');
+    this.statusEl = el.querySelector('.bm-status');
     this.cards = new Map([...el.querySelectorAll('.bm-card')].map((c) => [c.dataset.id, c]));
-    el.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus / pointer lock on the game
+    el.addEventListener('mousedown', (e) => e.preventDefault()); // keep keyboard focus on the game
     el.addEventListener('click', (e) => {
       const card = e.target.closest('.bm-card');
-      if (card) return this.select(FURNITURE.findIndex((f) => f.id === card.dataset.id));
-      const tab = e.target.closest('.bm-tab');
+      if (card) {
+        const i = FURNITURE.findIndex((f) => f.id === card.dataset.id);
+        return this.select(i === this.index ? -1 : i, false); // click the one in hand again: put it down
+      }
+      const tab = e.target.closest('.bm-tab, .bm-tabs button');
       if (tab) this.jumpCategory(tab.dataset.cat);
     });
+    this.list.addEventListener('scroll', () => this.syncTabs(), { passive: true });
+    this.setMode('cursor');
     this.refreshThumbs();
   }
 
-  show(on) { this.el.hidden = !on; this.cross.hidden = !on; if (on) this.refreshThumbs(); }
+  show(on) { this.el.hidden = !on; this.foot.hidden = !on; if (on) { this.refreshThumbs(); this.syncTabs(); } else this.cross.hidden = true; }
+  /** Is this DOM node part of the menu (wheel / clicks over it belong to the menu, not the room)? */
+  owns(node) { return !!node && this.el.contains(node); }
+
+  /** 'cursor': mouse free to click the menu and place; 'look': mouse look (pointer locked). */
+  setMode(mode) {
+    this.mode = mode;
+    this.cross.hidden = this.el.hidden || mode !== 'look';
+    document.body.classList.toggle('build-cursor', mode === 'cursor' && !this.el.hidden);
+    const look = mode === 'look';
+    this.foot.innerHTML = [
+      `<span class="bm-mode paper ${look ? 'look' : ''}" style="--clip:${brushClip(321, 4, 4)}">${look ? 'LOOK AROUND' : 'CURSOR'}</span>`,
+      hint(kc('TAB'), look ? 'Free the mouse' : 'Look around'),
+      look ? '' : hint(kc('RMB'), 'Hold to look'),
+      hint(kc('WASD'), 'Walk'),
+      hint(kc(look ? 'CLICK' : 'CLICK'), 'Buy &amp; place'),
+      hint(kc('R') + kc('WHEEL'), 'Rotate'),
+      hint(kc('Q'), 'Move'),
+      hint(kc('X'), 'Sell 50%'),
+      hint(kc('⌫'), 'Empty hand'),
+      hint(kc('F'), 'Done'),
+    ].join('');
+  }
 
   refreshThumbs() {
     for (const img of this.el.querySelectorAll('img[data-thumb]')) {
@@ -64,42 +96,34 @@ export class BuildMenu {
     for (const f of FURNITURE) this.cards.get(f.id).classList.toggle('short', money < f.price);
   }
   status(text, bad = false) {
-    const s = this.el.querySelector('.bm-status');
-    s.textContent = text || '';
-    s.classList.toggle('bad', bad);
+    if (this.statusEl.textContent !== (text || '')) this.statusEl.textContent = text || '';
+    this.statusEl.classList.toggle('bad', bad);
   }
 
-  /** Move the selection by `d` items (wraps). */
-  step(d) {
-    const n = FURNITURE.length;
-    this.select(this.index < 0 ? (d > 0 ? 0 : n - 1) : (this.index + d + n) % n);
+  /** Highlight the tab of the room whose cards are at the top of the scrolled list. */
+  syncTabs() {
+    const top = this.list.scrollTop + 8;
+    let cur = CATEGORIES[0].id;
+    for (const h of this.el.querySelectorAll('[data-cat-head]')) if (h.offsetTop - this.list.offsetTop <= top) cur = h.dataset.catHead;
+    for (const t of this.el.querySelectorAll('.bm-tabs button')) t.classList.toggle('on', t.dataset.cat === cur);
   }
-  stepCategory(d) {
-    const cur = this.index < 0 ? -1 : CATEGORIES.findIndex((c) => c.id === FURNITURE[this.index].category);
-    const next = CATEGORIES[(cur + d + CATEGORIES.length) % CATEGORIES.length];
-    this.jumpCategory(next.id);
+  jumpCategory(cat) {
+    const head = this.el.querySelector(`[data-cat-head="${cat}"]`);
+    if (head) this.list.scrollTo({ top: head.offsetTop - this.list.offsetTop - 4, behavior: 'smooth' });
   }
-  jumpCategory(cat) { this.select(FURNITURE.findIndex((f) => f.category === cat)); }
 
-  select(i) {
+  select(i, scroll = true) {
     if (this.index >= 0) this.cards.get(FURNITURE[this.index].id)?.classList.remove('sel');
     this.index = i;
-    for (const t of this.el.querySelectorAll('.bm-tab')) t.classList.toggle('on', i >= 0 && t.dataset.cat === FURNITURE[i].category);
     if (i >= 0) {
       const card = this.cards.get(FURNITURE[i].id);
       card.classList.add('sel');
-      // keep the card in view (and its room header when it's the first of the room)
-      const head = this.el.querySelector(`[data-cat-head="${FURNITURE[i].category}"]`);
-      const first = FURNITURE.findIndex((f) => f.category === FURNITURE[i].category) === i;
-      const top = (first ? head : card).offsetTop - this.list.offsetTop;
-      const bottom = card.offsetTop - this.list.offsetTop + card.offsetHeight;
-      if (top < this.list.scrollTop) this.list.scrollTop = top - 4;
-      else if (bottom > this.list.scrollTop + this.list.clientHeight) this.list.scrollTop = bottom - this.list.clientHeight + 4;
+      if (scroll) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
     this.onSelect?.(i >= 0 ? FURNITURE[i] : null);
   }
 
-  /** Red flash on screen and on the card (not enough money). */
+  /** Red flash on screen and a shake of the card (not enough money / doesn't fit). */
   deny(id) {
     const card = id && this.cards.get(id);
     if (card) { card.classList.remove('deny'); void card.offsetWidth; card.classList.add('deny'); }

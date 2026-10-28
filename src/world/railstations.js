@@ -10,6 +10,7 @@ import { RailBuilder as B, railMaterials, canvasTex } from './railtrack.js';
 import { mulberry32 } from '../core/noise.js';
 import { makeLOD, bakeGeometry } from '../core/assets.js';
 import { crisp } from './train.js';
+import { seatsFromObject } from '../game/seating.js';
 
 // the station buildings are Meshy models (rail_station_valley / _halt / _glacier, main.js MODEL_LIST); without
 // them (or with this off) the procedural buildings below stand in
@@ -465,6 +466,7 @@ export function buildStations(scene, colliders = [], models = null) {
       for (let s = st.s0 + 16; s < st.s1 - 10; s += 24) {
         const bp = besideLine(s, side * 4.8);
         const b = bench.clone(); b.position.set(bp.x, bp.y + 0.06, bp.z); b.lookAt(besideLine(s, 0).x, bp.y + 0.06, besideLine(s, 0).z); group.add(b);
+        seatsFromObject(b, [-0.55, 0, 0.55].map((x) => ({ x, y: 0.5, z: 0, yaw: Math.PI, floor: 0 }))); // (its backrest on +z: you face -z)
         colliders.push({ x: bp.x, z: bp.z, r: 0.6, top: bp.y + 0.55 }); // (low: jumped over)
         const lp = besideLine(s + 12, side * 5.3);
         if (LP) lampAt.push([lp.x, lp.y + 0.06, lp.z, Math.atan2(-(-lp.dz * side), -(lp.dx * side))]);
@@ -507,6 +509,8 @@ export function buildStations(scene, colliders = [], models = null) {
       house.position.set(ox, gy - 0.12, oz);
       house.quaternion.setFromRotationMatrix(m);
       group.add(house);
+      // the terrace's two benches (no backrest), looking out to the front (-z), the deck at y 0.28
+      seatsFromObject(house, [-3.2, 3.6].flatMap((x) => [-0.55, 0, 0.55].map((k) => ({ x: x + k, y: 0.77, z: -8.5 + 2.1, yaw: Math.PI, floor: 0.28 }))));
       if (meshyTop) {
         // the Meshy summit station behind the terrace (its front, +z, toward the village)
         const bld = makeLOD(models.rail_station_glacier, { size: 14, axis: 'y' }, 300, 0.05);

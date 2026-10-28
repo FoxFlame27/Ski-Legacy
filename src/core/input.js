@@ -9,6 +9,11 @@ export class Input {
     this.mdx = 0; this.mdy = 0; this.wheel = 0;
     this.locked = false;
     this.enabled = true;
+    // cursorFree: the mouse is deliberately free (e.g. chalet build mode): a click on the canvas doesn't grab it
+    // back, and losing pointer lock doesn't open the pause menu (main.js overlayOpen). lookDrag: mouse movement
+    // still turns the view while the pointer is free (build mode: hold the right button to look around).
+    this.cursorFree = false;
+    this.lookDrag = false;
     addEventListener('keydown', (e) => {
       if (e.repeat) return;
       this.keys.add(e.code);
@@ -21,12 +26,12 @@ export class Input {
     // losing focus drops every key without reporting releases (no accidental jumps)
     addEventListener('blur', () => { this.keys.clear(); this.released.clear(); });
     addEventListener('mousemove', (e) => {
-      if (!this.locked) return;
+      if (!this.locked && !this.lookDrag) return;
       this.mdx += e.movementX; this.mdy += e.movementY;
     });
     addEventListener('wheel', (e) => { this.wheel += Math.sign(e.deltaY); }, { passive: true });
     document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === canvas; });
-    canvas.addEventListener('click', () => { if (this.enabled && !this.locked) this.lock(); });
+    canvas.addEventListener('click', () => { if (this.enabled && !this.locked && !this.cursorFree) this.lock(); });
   }
   lock() { this.canvas.requestPointerLock?.()?.catch?.(() => {}); }
   unlock() { if (document.pointerLockElement) document.exitPointerLock(); }

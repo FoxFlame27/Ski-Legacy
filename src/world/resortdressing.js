@@ -14,6 +14,7 @@ import { drawnHeight } from './settle.js';
 import { hash2 } from '../core/noise.js';
 import { sponsorAtlas, bannerUV, pickBanner } from './sponsors.js';
 import { quality, onQualityChange } from '../engine/quality.js';
+import { propSeats, registerBench } from '../game/seating.js';
 
 const HAS_DOM = typeof document !== 'undefined';
 export const SIGN_FONT = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
@@ -1290,6 +1291,7 @@ function buildTerraces(group, colliders, models, index) {
     m.updateMatrix(); m.matrixAutoUpdate = false; m.updateMatrixWorld(true);
     group.add(m);
     colliders.push({ x: it.x, z: it.z, r: it.r });
+    propSeats(it.name, m, it.size); // (benches: you can sit on them)
   }
   // the Meshy deck chair (striped canvas on a beech frame, facing +z like the terrace rows), one instanced draw
   if (!chairs.length || !models.deck_chair) return;
@@ -1297,7 +1299,11 @@ function buildTerraces(group, colliders, models, index) {
   if (!dc.geometry) return;
   const deck = new THREE.InstancedMesh(dc.geometry, dc.material, chairs.length);
   deck.name = 'deckchairs';
-  chairs.forEach((c, i) => deck.setMatrixAt(i, mat4(c.x, groundMin(c.x, c.z, 0.75) - 0.02, c.z, c.yaw)));
+  chairs.forEach((c, i) => {
+    const y = groundMin(c.x, c.z, 0.75) - 0.02;
+    deck.setMatrixAt(i, mat4(c.x, y, c.z, c.yaw));
+    registerBench({ x: c.x, y: y + 0.38, z: c.z, yaw: c.yaw, n: 1, off: -0.12, floorY: y }); // (sit in it)
+  });
   deck.castShadow = true; deck.receiveShadow = true; deck.computeBoundingSphere();
   group.add(deck);
   group.userData.deckChairs = chairs.length;

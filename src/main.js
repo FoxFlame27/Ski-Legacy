@@ -1148,7 +1148,7 @@ addEventListener('keydown', (e) => { if (e.code === 'Escape' && paused) closePau
 
 // Overlays that free the mouse on purpose (panels, dialogs, map, admin, photo mode, outfits, conversations):
 // opening one, or closing it with Esc, releases pointer lock too, and that must never open the pause menu
-const overlayOpen = () => hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!photo?.active || !!outfitShop?.isOpen
+const overlayOpen = () => input.cursorFree || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!photo?.active || !!outfitShop?.isOpen
   || !!talk?.active || !document.getElementById('map').hidden || document.getElementById('travel')?.hidden === false; // (travel: route / flight map pickers)
 let escClosedAt = -1e9;
 addEventListener('keydown', (e) => { if (e.code === 'Escape' && overlayOpen()) escClosedAt = performance.now(); }, true); // capture: before the overlay closes itself

@@ -5,6 +5,7 @@ import { world } from './world.js';
 import { layout } from './layout.js';
 import { fitModel } from '../core/assets.js';
 import { meshHeight } from '../fx/snowfx.js';
+import { propSeats } from '../game/seating.js';
 
 // Cobblestones with snow packed into the joints; edges of the strip fade into the snow (alpha).
 function cobbleTexture() {
@@ -144,6 +145,7 @@ export class Decor {
     m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     this.group.add(m);
     if (collide) this.colliders.push({ x, z, r: collide });
+    propSeats(name, m, size); // (benches: you can sit on them)
     return m;
   }
 

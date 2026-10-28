@@ -39,6 +39,7 @@ import { oldSign, lanternPost, oldTracks, cairn, ropeLine, propMaterials } from 
 import { featureMaterials } from './secrets/features.js';
 import { slice, sharedMaterials } from './secrets/slice.js';
 import { SECRET_LIST, secretEnabled } from './secrets/list.js';
+import { propSeats } from '../game/seating.js';
 
 const BUILD_R = 650, DROP_R = 1100; // build a secret's meshes within this distance of it, drop them beyond this
 // a model's clone shares the loaded model's geometry: never disposed with a secret
@@ -457,6 +458,7 @@ function dressSpot(sp, models, group, colliders, lanterns) {
     m.traverse((q) => { if (q.isMesh) { q.castShadow = true; q.receiveShadow = true; } });
     group.add(m);
     if (r) colliders.push({ x, z, r });
+    propSeats(name, m, size); // (benches: you can sit on them)
     return m;
   };
   const lantern = (dx, dz, seed) => {

@@ -12,12 +12,12 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadAt, laneDistance, ROAD_HALF } from './bus/roads.js';
-import { CAR_MODELS, carTemplate, carInstance } from './cars.js';
+import { CAR_MODELS, carTemplate, carInstance, farMesh } from './cars.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 import { carPath, linkPath, prepPath, followPath } from './carpath.js';
 
-const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 60, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
+const N_CARS = 12, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
 const END_KEEP = 95;
 // a car is always on its road: its body at most 1 m beyond the plowed edge (knocked aside, or swerving round a crash
@@ -90,7 +90,7 @@ export class Traffic {
     Object.assign(this, { scene, colliders, player, camera, skibus });
     this.cars = [];
     this.enabled = true;
-    const roads = busRoads.roads;
+    const roads = busRoads.roads.filter((r) => !r.scenic); // (the Panoramastrasse and its roundabout: not driven by the traffic yet)
     if (!roads.length) return;
     this.main = roads.filter((r) => !r.access);
     this.access = roads.filter((r) => r.access);
@@ -125,6 +125,7 @@ export class Traffic {
 
   makeCar(t, k, paint) {
     const inst = carInstance(t, { paint, wheels: true });
+    try { setPlates(inst, t); } catch { /* (no plate spots on this model) */ }
     const g = inst.group;
     g.name = 'traffic-car';
     const w = t.size.x, l = t.size.z, h = t.size.y;
@@ -285,7 +286,7 @@ export class Traffic {
         const show = this.enabled && c.mode !== 'gone' && d < SHOW_R;
         c.g.visible = show;
         if (show) {
-          if (!c.inst.far && c.t.lod) { const m = new THREE.Mesh(c.t.lod.geometry, c.t.lod.material); m.visible = false; c.g.add(m); c.inst.far = m; }
+          if (!c.inst.far && c.t.lod) { const m = farMesh(c.t, c.inst); m.visible = false; c.g.add(m); c.inst.far = m; }
           const near = d < lodR || !c.inst.far;
           c.inst.full.visible = near;
           if (c.inst.far) c.inst.far.visible = !near;

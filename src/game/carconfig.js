@@ -229,9 +229,16 @@ export function dressCar(inst, t, cfg) {
     o.material = swap(src, (m) => { const r = m.clone(); r.color = (m.color ? m.color.clone() : new THREE.Color(1, 1, 1)).multiply(_tint.set(rim.hex)); if (rim.id === 'black') r.roughness = Math.min(r.roughness ?? 0.3, 0.3); return r; });
   });
   // the plates (front and back), your text
-  if (!inst.plates) { inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
-  const tex = plateTexture(cfg.plate || 'VS 1967');
-  for (const p of inst.plates) if (p.material.map !== tex) { p.material.map = tex; p.material.needsUpdate = true; }
+  setPlates(inst, t, cfg.plate || 'VS 1967');
   inst.cfg = cfg;
+  return inst;
+}
+
+/** Number plates (front and back) on any car instance: the rental's own, a random one for the traffic and the
+ *  parked cars (Oct 28, the user: "make bots have random number plates"). */
+export function setPlates(inst, t, text = randomPlate()) {
+  if (!inst.plates) { inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
+  const tex = plateTexture(text);
+  for (const p of inst.plates) if (p.material.map !== tex) { p.material.map = tex; p.material.needsUpdate = true; }
   return inst;
 }

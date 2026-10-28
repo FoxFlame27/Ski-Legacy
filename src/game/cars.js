@@ -363,6 +363,7 @@ export function carTemplate(gltf, length, name = '') {
     if (!geo.attributes.normal) geo.computeVertexNormals();
     if (!geo.attributes.uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(geo.attributes.position.count * 2), 2));
     if (!geo.index) geo.setIndex([...Array(geo.attributes.position.count).keys()]);
+    fixNormals(geo); // (decimated meshes still carrying their high-res normals: re-shaded smooth, with crisp creases)
     const label = `${o.name} ${mats.map((m) => m.name).join(' ')}`;
     const add = (mat, g) => { const lbl = label + ' ' + (mat.name || ''); if (lampSplit(mat, g, lbl)) return; if (!groups.has(mat)) groups.set(mat, []); groups.get(mat).push(g); g.userData.label = lbl; };
     if (mats.length === 1 || !o.geometry.groups?.length) add(matFor(mats[0]), geo);
@@ -726,30 +727,159 @@ function compact(g, tri, origin) {
   return out;
 }
 
-// the far LOD: every part in one vertex-coloured mesh, decimated to a few thousand triangles
+// Smooth normals from the faces themselves, with a crease: each corner takes the area-weighted normals of the faces
+// round its point (every vertex there, split or not) that bend less than `cos` from its own face (orientation from
+// `nrm`, the old normals, where given: double-sided parts with flipped winding stay lit on the right side); a vertex
+// whose corners disagree is split. Indexed out (the merging, wheel and lamp splits need it); `carry`: per-vertex
+// arrays copied along ({ a, n }). -> { pos, nor, idx, carry }
+const CREASE = Math.cos(THREE.MathUtils.degToRad(45));
+function creased(pos, idx, nrm, carry = [], cos = CREASE, weld = 1e4) {
+  const nv = pos.length / 3, nt = (idx.length / 3) | 0, pid = new Int32Array(nv), at = new Map();
+  let np = 0;
+  for (let v = 0; v < nv; v++) {
+    const k = ((Math.round(pos[3 * v] * weld) + 65536) * 131072 + Math.round(pos[3 * v + 1] * weld) + 65536) * 131072 + Math.round(pos[3 * v + 2] * weld) + 65536;
+    let p = at.get(k); if (p === undefined) { p = np++; at.set(k, p); } pid[v] = p;
+  }
+  const fn = new Float32Array(nt * 3), fu = new Float32Array(nt * 3), start = new Int32Array(np + 1), list = new Int32Array(nt * 3);
+  for (let f = 0; f < nt; f++) {
+    const a = 3 * idx[3 * f], b = 3 * idx[3 * f + 1], c = 3 * idx[3 * f + 2];
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2], vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    let x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx;
+    if (nrm) { // (facing the way its old normals say, where they clearly disagree with the winding)
+      let d = 0; for (let k = 0; k < 3; k++) { const j = 3 * idx[3 * f + k]; d += x * nrm[j] + y * nrm[j + 1] + z * nrm[j + 2]; }
+      if (d < -0.3 * Math.hypot(x, y, z) * 3) { x = -x; y = -y; z = -z; }
+    }
+    const l = Math.hypot(x, y, z) || 1;
+    fn[3 * f] = x; fn[3 * f + 1] = y; fn[3 * f + 2] = z; fu[3 * f] = x / l; fu[3 * f + 1] = y / l; fu[3 * f + 2] = z / l;
+    for (let k = 0; k < 3; k++) start[pid[idx[3 * f + k]] + 1]++;
+  }
+  for (let p = 0; p < np; p++) start[p + 1] += start[p];
+  const fill = start.slice(0, np);
+  for (let f = 0; f < nt; f++) for (let k = 0; k < 3; k++) list[fill[pid[idx[3 * f + k]]]++] = f;
+  const out = new Map(), P = [], N = [], I = [], C = carry.map(() => []);
+  for (let f = 0; f < nt; f++) for (let k = 0; k < 3; k++) {
+    const v = idx[3 * f + k], p = pid[v];
+    let x = 0, y = 0, z = 0;
+    for (let i = start[p]; i < start[p + 1]; i++) { const g = list[i]; if (fu[3 * f] * fu[3 * g] + fu[3 * f + 1] * fu[3 * g + 1] + fu[3 * f + 2] * fu[3 * g + 2] >= cos) { x += fn[3 * g]; y += fn[3 * g + 1]; z += fn[3 * g + 2]; } }
+    let l = Math.hypot(x, y, z);
+    if (!l) { if (nrm) { x = nrm[3 * v]; y = nrm[3 * v + 1]; z = nrm[3 * v + 2]; } else y = 1; l = Math.hypot(x, y, z) || 1; } // (a sliver: its old normal)
+    x /= l; y /= l; z /= l;
+    const key = v * 16777216 + (Math.round(x * 127) + 127) * 65536 + (Math.round(y * 127) + 127) * 256 + Math.round(z * 127) + 127;
+    let j = out.get(key);
+    if (j === undefined) {
+      j = P.length / 3; out.set(key, j);
+      P.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); N.push(x, y, z);
+      for (const [c, { a, n }] of carry.entries()) for (let q = 0; q < n; q++) C[c].push(a[n * v + q]);
+    }
+    I.push(j);
+  }
+  return { pos: new Float32Array(P), nor: new Float32Array(N), idx: I, carry: C };
+}
+
+// A mesh whose normals stray far from its faces (> 45 deg at one corner in 20: models decimated with their high-res
+// normals kept, which shade them in dark blotches and lumps) gets creased smooth normals of its own instead.
+function fixNormals(geo) {
+  const P = geo.attributes.position.array, N = geo.attributes.normal.array, I = geo.index.array;
+  if (I.length < 60) return;
+  let off = 0;
+  for (let i = 0; i < I.length; i += 3) {
+    const a = 3 * I[i], b = 3 * I[i + 1], c = 3 * I[i + 2];
+    const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2], vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+    const x = uy * vz - uz * vy, y = uz * vx - ux * vz, z = ux * vy - uy * vx, l = Math.hypot(x, y, z);
+    if (!l) continue;
+    for (const j of [a, b, c]) if (Math.abs(x * N[j] + y * N[j + 1] + z * N[j + 2]) < 0.7 * l * Math.hypot(N[j], N[j + 1], N[j + 2])) off++;
+  }
+  if (off < I.length * 0.05) return;
+  const r = creased(P, I, N, [{ a: geo.attributes.uv.array, n: 2 }]);
+  geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(r.nor, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(r.carry[0]), 2));
+  geo.setIndex(r.idx);
+}
+
+// a texture's mean colour (linear; alpha-weighted), for the far LOD's vertex colours: a tyre is white x its dark map
+const meanCache = new WeakMap();
+function meanColour(tex) {
+  if (!tex?.image || typeof document === 'undefined') return null;
+  if (meanCache.has(tex)) return meanCache.get(tex);
+  let out = null;
+  try {
+    const c = document.createElement('canvas'); c.width = c.height = 16;
+    const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(tex.image, 0, 0, 16, 16);
+    const d = g.getImageData(0, 0, 16, 16).data;
+    let r = 0, gg = 0, b = 0, w = 0;
+    for (let i = 0; i < d.length; i += 4) { const a = d[i + 3]; r += d[i] * a; gg += d[i + 1] * a; b += d[i + 2] * a; w += a; }
+    if (w) out = new THREE.Color().setRGB(r / w / 255, gg / w / 255, b / w / 255, THREE.SRGBColorSpace);
+  } catch { /* (an image the canvas can't read: the plain colour) */ }
+  meanCache.set(tex, out);
+  return out;
+}
+
+// The far LOD: every part, lamps and glass too (the windows as dark solid panes: no see-through shell), welded into
+// one surface (separate panels and seams no longer tear open when edges collapse), decimated to ~12k triangles,
+// creased smooth normals; vertex-coloured by each material's colour x its texture's mean; the body paint its own
+// group, so each car keeps its own colour out there (farMesh).
 async function buildLod(t) {
   await MeshoptSimplifier.ready;
-  const pos = [], nor = [], col = [], idx = [];
+  const model = (t.name || '').replace(/_full$/, '');
+  const pos = [], col = [], pnt = [], idx = [];
   let base = 0;
-  for (const p of t.parts) {
-    if (p.material.transparent && p.material.opacity < 0.6) continue; // (glass: the dark body shows through anyway)
-    const g = p.geometry, P = g.attributes.position, N = g.attributes.normal, I = g.index.array;
-    const c = p.material.color || new THREE.Color(0x777777);
-    for (let i = 0; i < P.count; i++) { pos.push(P.getX(i), P.getY(i), P.getZ(i)); nor.push(N.getX(i), N.getY(i), N.getZ(i)); col.push(c.r, c.g, c.b); }
+  for (const p of [...t.parts, ...(t.lamps?.parts || [])]) {
+    const g = p.geometry, P = g.attributes.position, I = g.index.array;
+    const c = (p.material.color || new THREE.Color(0x777777)).clone(), m = meanColour(p.material.map);
+    if (m) c.multiply(m);
+    const paint = isPaint(model, p.material) ? 1 : 0;
+    for (let i = 0; i < P.count; i++) { pos.push(P.getX(i), P.getY(i), P.getZ(i)); col.push(c.r, c.g, c.b); pnt.push(paint); }
     for (let i = 0; i < I.length; i++) idx.push(I[i] + base);
     base += P.count;
   }
   if (!idx.length) return;
-  const positions = new Float32Array(pos), indices = new Uint32Array(idx);
-  const target = Math.min(indices.length, 6000 * 3);
-  const [simple] = MeshoptSimplifier.simplify(indices, positions, 3, target - (target % 3), 0.05, []);
+  // welded (1 mm): one point per spot, its colour the area-weighted mean of the faces round it, paint by majority
+  const nv = pos.length / 3, pid = new Int32Array(nv), at = new Map(), wpos = [], wsum = [];
+  for (let v = 0; v < nv; v++) {
+    const k = ((Math.round(pos[3 * v] * 1e3) + 65536) * 131072 + Math.round(pos[3 * v + 1] * 1e3) + 65536) * 131072 + Math.round(pos[3 * v + 2] * 1e3) + 65536;
+    let q = at.get(k); if (q === undefined) { q = wpos.length / 3; at.set(k, q); wpos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]); wsum.push(0, 0, 0, 0, 0); } pid[v] = q;
+  }
+  const widx = [];
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = pid[idx[i]], b = pid[idx[i + 1]], c = pid[idx[i + 2]];
+    if (a === b || b === c || a === c) continue;
+    widx.push(a, b, c);
+    const ux = wpos[3 * b] - wpos[3 * a], uy = wpos[3 * b + 1] - wpos[3 * a + 1], uz = wpos[3 * b + 2] - wpos[3 * a + 2], vx = wpos[3 * c] - wpos[3 * a], vy = wpos[3 * c + 1] - wpos[3 * a + 1], vz = wpos[3 * c + 2] - wpos[3 * a + 2];
+    const ar = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) + 1e-9;
+    for (let k = 0; k < 3; k++) { const v = idx[i + k], s = 5 * pid[v]; wsum[s] += col[3 * v] * ar; wsum[s + 1] += col[3 * v + 1] * ar; wsum[s + 2] += col[3 * v + 2] * ar; wsum[s + 3] += ar; wsum[s + 4] += pnt[v] * ar; }
+  }
+  const W = wpos.length / 3, wcol = new Float32Array(W * 3), wpnt = new Float32Array(W);
+  for (let q = 0; q < W; q++) { const s = 5 * q, a = wsum[s + 3] || 1; wcol[3 * q] = wsum[s] / a; wcol[3 * q + 1] = wsum[s + 1] / a; wcol[3 * q + 2] = wsum[s + 2] / a; wpnt[q] = wsum[s + 4] / a > 0.5 ? 1 : 0; }
+  const positions = new Float32Array(wpos), indices = new Uint32Array(widx);
+  MeshoptSimplifier.useExperimentalFeatures = true; // (Prune: the tiny loose bits go first)
+  let simple = indices;
+  for (const err of [0.008, 0.016, 0.03]) { // (as close as ~12k triangles allow; a coarser bound only if they don't)
+    [simple] = MeshoptSimplifier.simplify(indices, positions, 3, Math.min(indices.length, 12000 * 3), err, ['Prune']);
+    if (simple.length <= 16000 * 3) break;
+  }
+  const r = creased(positions, simple, null, [{ a: wcol, n: 3 }, { a: wpnt, n: 1 }], CREASE, 1e3);
+  // the paint's triangles first (group 0: the car's own paint), the rest after (group 1: vertex colours)
+  const pf = r.carry[1], tri = [[], []];
+  for (let i = 0; i < r.idx.length; i += 3) tri[pf[r.idx[i]] + pf[r.idx[i + 1]] + pf[r.idx[i + 2]] >= 2 ? 0 : 1].push(r.idx[i], r.idx[i + 1], r.idx[i + 2]);
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
-  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
-  g.setIndex(new THREE.BufferAttribute(simple, 1));
+  g.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(r.nor, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(r.carry[0]), 3));
+  g.setIndex(tri[0].concat(tri[1]));
+  g.addGroup(0, tri[0].length, 0); g.addGroup(tri[0].length, tri[1].length, 1);
   g.computeBoundingSphere();
-  t.lod = { geometry: g, material: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.2 }) };
+  const pm = t.parts.find((p) => isPaint(model, p.material))?.material;
+  const paint = new THREE.MeshStandardMaterial({ color: pm?.color?.clone().multiply(meanColour(pm.map) || new THREE.Color(1, 1, 1)) || 0x888888, roughness: 0.32, metalness: 0.35 });
+  t.lod = { geometry: g, material: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.15 }), paint, tints: new Map() };
+}
+
+/** The far LOD mesh for a car instance (its own paint colour), or null while the LOD is still being built. */
+export function farMesh(t, inst = null) {
+  if (!t.lod) return null;
+  const c = inst?.paint ?? null;
+  if (c !== null && !t.lod.tints.has(c)) { const m = t.lod.paint.clone(); m.color = new THREE.Color(c); t.lod.tints.set(c, m); }
+  return new THREE.Mesh(t.lod.geometry, [c === null ? t.lod.paint : t.lod.tints.get(c), t.lod.material]);
 }
 
 /** The driver's eye in the car's frame (left-hand drive: the left front seat, +x), behind the steering wheel. */
@@ -816,5 +946,5 @@ export function carInstance(t, { paint = null, wheels = false } = {}) {
     lamps.kinds.add(p.kind);
   }
   group.add(full);
-  return { group, full, far: null, wheels: wl, steering, glass, lamps };
+  return { group, full, far: null, wheels: wl, steering, glass, lamps, paint };
 }

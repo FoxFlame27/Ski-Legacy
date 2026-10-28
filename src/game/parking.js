@@ -6,7 +6,8 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
-import { carTemplate, carInstance, CAR_MODELS } from './cars.js';
+import { carTemplate, carInstance, farMesh, CAR_MODELS } from './cars.js';
+import { setPlates } from './carconfig.js';
 import { mulberry32 } from '../core/noise.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
@@ -243,6 +244,7 @@ export class ParkingLots {
     if (!bay) return null;
     bay.taken = true;
     const inst = carInstance(carTemplate(gltf, length, name), { paint }), car = inst.group; // (shared, merged per material, glass tinted)
+    try { setPlates(inst, carTemplate(gltf, length, name)); } catch { /* (no plate spots on this model) */ }
     car.name = 'parked-car';
     const yaw = Math.atan2(bay.hx, bay.hz);
     car.position.set(bay.x, world.height(bay.x, bay.z) + 0.03, bay.z);
@@ -286,8 +288,8 @@ export class ParkingLots {
           for (const p of this.cars) {
             if (p.driving) continue; // (the car you drive: drive.js shows it)
             const d = Math.hypot(p.car.position.x - c.x, p.car.position.z - c.z);
-            if (!p.far && p.t.lod) { const m = new THREE.Mesh(p.t.lod.geometry, p.t.lod.material); m.visible = false; m.castShadow = true; p.car.add(m); p.far = m; }
-            const near = d < 55 || !p.far;
+            if (!p.far && p.t.lod) { const m = farMesh(p.t, p.inst); m.visible = false; m.castShadow = true; p.car.add(m); p.far = m; }
+            const near = d < 70 || !p.far; // (the full model to 70 m: the LOD only where it's a few dozen pixels)
             p.car.visible = d < 420;
             p.full.visible = near;
             if (p.far) p.far.visible = !near;

@@ -152,6 +152,10 @@ for (const [i, n] of list.entries()) {
     const t = carTemplate(gltf, base(n), n);
     const inst = carInstance(t, { wheels: true });
     obj = inst.group; obj.position.copy(at);
+    if (q.get('lod')) { // (&lod=1: the far LOD instead, as parking / traffic show it out past their LOD distance)
+      for (let k = 0; k < 600 && !t.lod; k++) await new Promise((r) => setTimeout(r, 50));
+      if (t.lod) { inst.full.visible = false; obj.add(new THREE.Mesh(t.lod.geometry, t.lod.material)); info.push(`   lod tris ${t.lod.geometry.index.count / 3}`); }
+    }
     if (inst.steering) {
       inst.steering.col.quaternion.setFromAxisAngle(inst.steering.axis, +(q.get('turn') ?? 0.9)); steer = t.steering.c;
       if (q.get('tint')) { const red = new THREE.MeshStandardMaterial({ color: 0xff3030, emissive: 0x601010 }); inst.steering.col.traverse((o) => { if (o.isMesh) o.material = red; }); }

@@ -3,7 +3,8 @@
 // one graph, shortest way, in the right-hand lane), amber beacons flashing, stops at the road point nearest the wreck,
 // winches it to the road if it lies off it, lifts the EXACT car (the same object: model, paint, smoke) onto its bed,
 // and drives back with it riding on the back; in the yard the wreck is taken off and the truck parks.
-// The model: ~6.6 m long along -z with its origin at a front corner; re-centred, turned nose to +z and scaled up so
+// The model: ~6.6 m long, its nose (the grille) at z -6.25 and its origin at the bed's tail; re-centred, turned nose to +z (the
+// bed, the beacons on the cab roof and the car riding on the deck all in that frame) and scaled up so
 // the bed (4.5 m in the model) takes the longest car (the RS6, 5.0 m) without touching the cab.
 import * as THREE from 'three';
 import { world } from '../world/world.js';
@@ -96,9 +97,11 @@ export class TowTruck {
    * @param {object} o
    * @param {{x,z,yaw}} o.park   its spot in the yard (yaw: the way its nose points)
    * @param {{x,z}[]} o.yardOut  the way out of the yard to the road (from the spot, ending on the road's edge)
+   * @param {{x,z}[]} [o.yardIn] the way back in (from the road's edge, ending short of the spot: it drives into its
+   *   bay nose first, square, never turning round in it); else yardOut backwards
    */
-  constructor({ scene, models, colliders, camera, park, yardOut, traffic = null, audio = null }) {
-    Object.assign(this, { scene, colliders, camera, park, yardOut, traffic, audio });
+  constructor({ scene, models, colliders, camera, park, yardOut, yardIn = null, traffic = null, audio = null }) {
+    Object.assign(this, { scene, colliders, camera, park, yardOut, yardIn: yardIn || yardOut.slice().reverse(), traffic, audio });
     this.jobs = []; // wrecks waiting: { e (the parking entry), onDone }
     this.job = null;
     this.state = 'parked';
@@ -108,7 +111,7 @@ export class TowTruck {
     if (gltf) {
       const m = gltf.scene.clone(true);
       m.rotation.y = Math.PI; // (nose to +z)
-      m.position.set(RAW.cx, 0, -RAW.cz); // (re-centred: after the turn the model's x and z flip)
+      m.position.set(RAW.cx, 0, RAW.cz); // (re-centred: the model runs nose -z from its origin at the bed's tail; turned, its centre (-cx, -cz) back to 0)
       const s = new THREE.Group(); s.scale.setScalar(S); s.add(m);
       m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       this.g.add(s);
@@ -247,9 +250,11 @@ export class TowTruck {
       e.collider.x = 1e9; e.collider.z = 1e9; // (no collider while on the truck: it rides along)
       if (j.lt >= 1) {
         j.onBed = true; j.phase = 'back';
-        const from = nearestNode(this.x, this.z), yardEnd = this.yardOut[this.yardOut.length - 1], to = nearestNode(yardEnd.x, yardEnd.z);
+        const from = nearestNode(this.x, this.z), to = nearestNode(this.yardIn[0].x, this.yardIn[0].z);
         const road = pts((from.i >= 0 && to.i >= 0 && shortest(from.i, to.i)) || []);
-        j.path = [{ x: this.x, z: this.z }, ...keepRight(road), ...this.yardOut.slice().reverse(), { x: this.park.x, z: this.park.z }];
+        // (home: the road to the yard, in, and on to a point just past its spot: it pulls straight into the bay)
+        const f = { x: Math.sin(this.park.yaw), z: Math.cos(this.park.yaw) };
+        j.path = [{ x: this.x, z: this.z }, ...keepRight(road), ...this.yardIn, { x: this.park.x, z: this.park.z }, { x: this.park.x + f.x * 0.5, z: this.park.z + f.z * 0.5 }];
         j.k = 0;
       }
     } else if (j.phase === 'back') {

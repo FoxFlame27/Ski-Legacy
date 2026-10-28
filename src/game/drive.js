@@ -144,7 +144,7 @@ export class Drive {
         const bi = this.cameraBlockers?.indexOf(e.block);
         if (bi >= 0) this.cameraBlockers.splice(bi, 1);
         // the car you drive: its wheels and steering wheel as moving parts
-        const inst = this.look(e, carInstance(e.t, { paint: e.dress ? null : e.paint, wheels: true }), e.t);
+        const inst = this.dressed(e, carInstance(e.t, { paint: e.dress ? null : e.paint, wheels: true }), e.t);
         this.swapVisual(e, inst);
         const g = e.car;
         this.d = {
@@ -169,7 +169,7 @@ export class Drive {
         if (full) loadGLB(full).then((gltf) => {
           if (!this.d || this.d.e !== e || !gltf) return;
           const t = carTemplate(gltf, e.length, full);
-          const fi = this.look(e, carInstance(t, { paint: e.dress ? null : e.paint, wheels: true }), t);
+          const fi = this.dressed(e, carInstance(t, { paint: e.dress ? null : e.paint, wheels: true }), t);
           this.swapVisual(e, fi);
           this.d.inst = fi; this.d.t = t; this.d.glassIn = undefined;
         }).catch(() => {});
@@ -223,7 +223,7 @@ export class Drive {
   }
   // a car instance as this car looks: a rental's own config (carrental.js e.dress: paint, interior, rims, plates) and
   // its dents (cardamage.js)
-  look(e, inst, t) {
+  dressed(e, inst, t) { // (not "look": that is the cockpit mouse-look { yaw, pitch } field, which would shadow it)
     try { e.dress?.(inst, t); applyDents(inst, e); } catch (err) { console.warn('drive: car look', err); }
     return inst;
   }

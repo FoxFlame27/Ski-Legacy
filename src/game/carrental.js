@@ -1,7 +1,10 @@
-// CAR RENTAL: cars are no longer free to take. The rental garage stands on the road through Legacy Village (its site:
-// game/bus/roads.js planRental: a flat lot right on the road's edge): an alpine chalet showroom (stone base, larch
-// boards, a snowy pitched roof, a big glazed showroom with a car inside, a sectional garage door, the CAR RENTAL sign
-// lit at night) and its ploughed yard in front, on the road. E at the door: inside (carrentalroom.js, its own scene);
+// CAR RENTAL: cars are no longer free to take. The rental hall stands on the road through Legacy Village (its site:
+// game/bus/roads.js planRental: a flat lot right on the road's edge): an alpine car hall (carrentalshell.js: the one
+// shell both outside and in: a wide larch gable to the road under a deep snowy roof, a full-height glass front with
+// thin dark mullions between stone piers, the five display cars on their turntables behind it, warm light inside),
+// the CAR RENTAL board on the gable (village sign style, lit at night), lanterns, flags, potted spruces, and a compact
+// ploughed yard in front (kerbs, painted bays, the TOW bay) fading into the snow. E at the door: inside
+// (carrentalroom.js, its own scene, the world outside captured into its glass);
 // at a car on display or the clerk: the rental card (ui/carrental.js). The rented car waits in the yard, nose to the
 // road; E beside it to drive (drive.js: every other car only says where to rent one). One rental at a time (renting
 // another returns the old one); it is kept in the save (back in the yard next time). Wreck it: $1000 (once; the
@@ -16,6 +19,9 @@ import { CarRentalRoom } from './carrentalroom.js';
 import { TowTruck } from './towtruck.js';
 import { CarRentalUI } from '../ui/carrental.js';
 import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate } from './carconfig.js';
+import { LAYOUT, buildShell } from './carrentalshell.js';
+import { makeSign } from '../world/village.js';
+import { fitModel } from '../core/assets.js';
 
 export const RENTALS = [
   { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 150, length: 4.3 },
@@ -25,9 +31,13 @@ export const RENTALS = [
   { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 450, length: 5.0 },
 ];
 export { PAINTS }; // (the configurator's: carconfig.js)
-// the five cars on display inside (one of each, each its own colour)
+// the five cars on display inside (one of each, each its own colour; LAYOUT.spots: where)
 const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_tesla_m3', 'white'], ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_dacia_duster', 'orange']];
 export const WRECK_FEE = 1000;
+// the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
+// its road end, the rental bays (lines at x, from / to z), your car's spot, the TOW bay (middle, half length / width)
+const YARD = { hall: -7.6, hw: 14.6, z1: 13.2, bayLines: [-12.4, -9.4, -6.4, -3.4], bayZ: [2.6, 8.4], carX: -7.9, carZ: 5.6,
+  tow: { x: 7.6, z: 6.6, hl: 4.6, hw: 1.9 } };
 const paintHex = (id) => paintOf(id).hex;
 
 export class CarRental {
@@ -44,11 +54,14 @@ export class CarRental {
     this.yaw0 = Math.atan2(L.dirx, L.dirz); // the lot's frame: local +z toward the road, +x along it
     this.buildOutside();
     this.room = new CarRentalRoom({ renderer: o.renderer, models: o.models, makeRig: o.makeRig, cars: RENTALS, display: DISPLAY.map(([id, paint]) => ({ id, paint: paintHex(paint) })) });
-    // the tow truck: parked in the yard, nose toward the building's end; out: backs up, then round to the road
-    const park = this.w(4.6, 4.2), back = this.w(11.6, 4.2);
+    // the tow truck: in its TOW bay along the road, nose to the yard's right end; out: on round to the right onto the
+    // road; back: in from the road at the left of the bay, round into it (so it ends nose first, square in the bay)
+    const P = YARD.tow, park = this.w(P.x, P.z);
     try {
       this.truck = new TowTruck({ scene: o.scene, models: o.models, colliders: o.colliders, camera: o.camera, traffic: o.traffic, audio: o.audio,
-        park: { ...park, yaw: this.yaw0 - Math.PI / 2 }, yardOut: [back, this.w(12.6, 9), this.w(11.5, 15.6)] });
+        park: { ...park, yaw: this.yaw0 + Math.PI / 2 },
+        yardOut: [park, this.w(12.6, 8.4), this.w(14.2, 11.6), this.w(14.6, 15.8)],
+        yardIn: [this.w(-1.2, 15.8), this.w(0.6, 11.2), this.w(3.4, P.z + 0.3)] });
     } catch (e) { console.warn('tow truck', e); this.truck = null; }
     // drive.js: only your rental lets you in; a wreck of it: the fee and the truck
     if (o.drive) {
@@ -65,106 +78,120 @@ export class CarRental {
 
   // ------------------------------------------------------------------ the building and the yard
   buildOutside() {
-    const L = this.L, g = new THREE.Group();
+    const L = this.L, g = new THREE.Group(), { W, D, H, T } = LAYOUT, BZ = YARD.hall;
     g.name = 'car-rental';
     g.position.set(L.x, L.y, L.z); g.rotation.y = this.yaw0;
-    const BW = 22, BD = 10, BZ = -8, WALL = 5.0; // building: width, depth, its middle (local z), wall height
-    const front = BZ + BD / 2;
-    const mk = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m; };
-    const B = (w, h, d, mat, x, y, z) => mk(new THREE.BoxGeometry(w, h, d), mat, x, y, z);
     const canvas = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
-    // larch boards (vertical) and the grey stone base
-    const larch = canvas(512, 512, (c, w, h) => { let s = 9; const r = () => ((s = (s * 16807) % 2147483647) / 2147483647); for (let x = 0; x < w; x += 32) { const v = (r() - 0.5) * 30; c.fillStyle = `rgb(${178 + v},${118 + v * 0.8},${66 + v * 0.6})`; c.fillRect(x, 0, 32, h); c.fillStyle = 'rgba(40,20,6,0.55)'; c.fillRect(x, 0, 2, h); for (let k = 0; k < 8; k++) { c.fillStyle = `rgba(80,40,12,${0.06 + r() * 0.08})`; c.fillRect(x + 4 + r() * 24, 0, 1 + r() * 2, h); } } });
-    larch.wrapS = larch.wrapT = THREE.RepeatWrapping; larch.repeat.set(5, 1.2);
-    const stoneT = canvas(512, 256, (c, w, h) => { let s = 5; const r = () => ((s = (s * 16807) % 2147483647) / 2147483647); c.fillStyle = '#5d5b57'; c.fillRect(0, 0, w, h); for (let y = 0; y < h; y += 42) for (let x = -(y % 84 ? 30 : 0); x < w; x += 60 + r() * 30) { const v = 120 + r() * 50; c.fillStyle = `rgb(${v},${v - 3},${v - 8})`; c.beginPath(); c.roundRect(x + 3, y + 3, 54 + r() * 20, 36, 8); c.fill(); } });
-    stoneT.wrapS = stoneT.wrapT = THREE.RepeatWrapping; stoneT.repeat.set(4, 1);
-    const wood = new THREE.MeshStandardMaterial({ map: larch, roughness: 0.8 });
-    const stone = new THREE.MeshStandardMaterial({ map: stoneT, roughness: 0.95 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.45, metalness: 0.7 });
-    const snow = new THREE.MeshStandardMaterial({ color: 0xf4f7fb, roughness: 0.9 });
-    // walls: sides and back in larch over a stone plinth; the front: stone pillars and fascia framing glass and garage
-    B(BW, WALL - 1, 0.3, wood, 0, 1 + (WALL - 1) / 2, BZ - BD / 2);
-    for (const sx of [-1, 1]) B(0.3, WALL - 1, BD, wood, sx * BW / 2, 1 + (WALL - 1) / 2, BZ);
-    B(BW + 0.2, 1, BD + 0.2, stone, 0, 0.5 - 0.3, BZ);
-    for (const px of [-BW / 2 + 0.4, -1.9, 1.9, BW / 2 - 0.4]) B(0.8, WALL, 0.5, stone, px, WALL / 2, front);
-    B(BW, 1.1, 0.5, wood, 0, WALL - 0.55, front);
-    // the showroom glass (left), mullions, and a car on display behind it under warm light
-    const glass = new THREE.MeshPhysicalMaterial({ color: 0xcfe4f0, roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.28 });
-    mk(new THREE.PlaneGeometry(8.6, WALL - 1.3), glass, -6.2, (WALL - 1.3) / 2 + 0.2, front + 0.02).castShadow = false;
-    for (const mx of [-8.4, -6.2, -4.0]) B(0.1, WALL - 1.3, 0.12, steel, mx, (WALL - 1.3) / 2 + 0.2, front + 0.05);
-    B(8.6, 0.12, 0.14, steel, -6.2, 0.2, front + 0.05);
-    const glow = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, emissive: 0xffd9a8, emissiveIntensity: 0.25, roughness: 0.9 });
-    mk(new THREE.PlaneGeometry(8.6, WALL - 1.2), glow, -6.2, (WALL - 1.2) / 2 + 0.1, BZ - BD / 2 + 0.2); // (the showroom's back wall)
-    mk(new THREE.PlaneGeometry(8.6, 4.4), new THREE.MeshStandardMaterial({ color: 0x3c3a38, roughness: 0.2 }), -6.2, 0.05, front - 2.4).rotation.x = -Math.PI / 2;
-    this.glowMat = glow;
-    if (this.models.car_audi_rs6) {
-      const inst = carInstance(carTemplate(this.models.car_audi_rs6, 5.0, 'car_audi_rs6'), { paint: paintHex('graphite') });
-      inst.group.position.set(-6.2, 0.06, front - 2.6); inst.group.rotation.y = -Math.PI / 2 + 0.35;
+    const mk = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m; };
+    // the hall (building frame: the room's), its glass reflective from outside
+    const hall = new THREE.Group(); hall.position.set(0, 0, BZ); g.add(hall);
+    const glass = new THREE.MeshPhysicalMaterial({ color: 0xbcd3e0, roughness: 0.03, metalness: 0.15, transparent: true, opacity: 0.32, envMapIntensity: 1.6, depthWrite: false });
+    const sh = buildShell(hall, 'out', glass);
+    this.stripMat = sh.strips;
+    // inside, seen through the glass: the polished floor, the back wall's warm glow, the cars on their turntables
+    mk(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ color: 0x2e2c2a, roughness: 0.18, metalness: 0.2 }), 0, 0.02, 0, hall).rotation.x = -Math.PI / 2;
+    this.glowMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, emissive: 0xffcf98, emissiveIntensity: 0.3, roughness: 0.9 });
+    mk(new THREE.PlaneGeometry(9, 1.8), this.glowMat, -4.4, 3.6, -D / 2 + 0.05, hall); // (the backlit CAR RENTAL sign inside)
+    const ttTop = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.55, metalness: 0.2 }), ttRim = new THREE.MeshStandardMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.18 });
+    DISPLAY.forEach(([id, paint], k) => {
+      const at = LAYOUT.spots[k], spec = RENTALS.find((c) => c.id === id), gl = this.models[id];
+      if (!at) return;
+      mk(new THREE.CylinderGeometry(LAYOUT.R, LAYOUT.R, 0.16, 48), ttTop, at[0], 0.08, at[1], hall);
+      mk(new THREE.TorusGeometry(LAYOUT.R, 0.06, 8, 64), ttRim, at[0], 0.13, at[1], hall).rotation.x = Math.PI / 2;
+      if (!gl || !spec) return;
+      const inst = carInstance(carTemplate(gl, spec.length, id), { paint: paintHex(paint) });
+      inst.group.position.set(at[0], 0.16, at[1]); inst.group.rotation.y = at[2];
       inst.group.traverse((m) => { if (m.isMesh) m.castShadow = true; });
-      g.add(inst.group);
-    }
-    // the garage door (right): white sectional panels
-    const panelT = canvas(256, 256, (c, w, h) => { c.fillStyle = '#eef0f2'; c.fillRect(0, 0, w, h); for (let y = 0; y < h; y += 64) { c.fillStyle = 'rgba(0,0,0,0.18)'; c.fillRect(0, y, w, 3); c.fillStyle = 'rgba(255,255,255,0.7)'; c.fillRect(0, y + 3, w, 2); for (let x = 16; x < w; x += 60) { c.fillStyle = 'rgba(0,0,0,0.06)'; c.fillRect(x, y + 14, 44, 36); } } });
-    mk(new THREE.PlaneGeometry(7.8, 3.8), new THREE.MeshStandardMaterial({ map: panelT, roughness: 0.4, metalness: 0.3 }), 6.2, 1.9, front + 0.03);
-    // the entrance door between them (glass, under a small canopy) and its warm lamp
-    mk(new THREE.PlaneGeometry(1.6, 2.5), new THREE.MeshPhysicalMaterial({ color: 0xffe6c0, emissive: 0xffd49a, emissiveIntensity: 0.35, roughness: 0.1, transparent: true, opacity: 0.75 }), 0, 1.25, front + 0.03);
-    B(1.8, 0.1, 0.1, steel, 0, 2.55, front + 0.06);
-    B(3.4, 0.14, 1.6, steel, 0, 3.1, front + 0.8);
-    // the sign over the front: CAR RENTAL, lit at night
-    const signT = canvas(2048, 256, (c, w, h) => {
-      c.fillStyle = '#1b2f5c'; c.fillRect(0, 0, w, h); c.fillStyle = '#f2c88c'; c.fillRect(0, h - 14, w, 6); c.fillRect(0, 8, w, 6);
-      c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#ffffff'; c.font = 'italic 700 170px "Barlow Condensed", "Arial Narrow", Arial, sans-serif';
-      if ('letterSpacing' in c) c.letterSpacing = '22px';
-      c.fillText('CAR RENTAL', w / 2, h / 2 + 6);
+      hall.add(inst.group);
     });
-    this.signMat = new THREE.MeshStandardMaterial({ map: signT, emissiveMap: signT, emissive: 0xffffff, emissiveIntensity: 0.15, roughness: 0.5 });
-    mk(new THREE.PlaneGeometry(9.5, 1.2), this.signMat, 0, WALL - 0.55, front + 0.27);
-    // wall lamps
+    // the CAR RENTAL board on the gable (the village's sign style: a lettered board with a wooden back), lit at night
+    const sign = makeSign('CAR RENTAL\nLEGACY VILLAGE', { w: 8.4, h: 2.0, font: 'bold 104px Georgia' });
+    sign.position.set(0, H + 1.55, D / 2 + 0.1); hall.add(sign);
+    this.signMat = sign.userData.faceMaterial;
+    // lanterns on the stone piers (either side of the glass), each a dark steel box with a warm glass
+    const steel = new THREE.MeshStandardMaterial({ color: 0x1f2124, roughness: 0.4, metalness: 0.7 });
     this.lampMat = new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffc77a, emissiveIntensity: 0.2 });
-    for (const lx of [-10.6, -1.3, 1.3, 10.6]) { B(0.18, 0.3, 0.2, steel, lx, 2.9, front + 0.35); mk(new THREE.BoxGeometry(0.14, 0.12, 0.12), this.lampMat, lx, 2.75, front + 0.4); }
-    // the roof: a wide pitched roof (ridge along the front), deep eaves, thick snow on it, a gable fascia
-    const RW = BW + 2.4, RD = BD + 2.6, rise = 3.0, half = RD / 2, slope = Math.hypot(half, rise), ang = Math.atan2(rise, half);
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0x33302c, roughness: 0.7 });
-    for (const sz of [-1, 1]) {
-      const p = mk(new THREE.BoxGeometry(RW, 0.25, slope), roofMat, 0, WALL + rise / 2, BZ + sz * half / 2);
-      p.rotation.x = sz * ang;
-      const sn = mk(new THREE.BoxGeometry(RW - 0.1, 0.32, slope - 0.1), snow, 0, WALL + rise / 2 + 0.26, BZ + sz * half / 2 + sz * 0.02);
-      sn.rotation.x = sz * ang;
+    for (const sx of [-1, 1]) {
+      const x = sx * (W / 2 - LAYOUT.PIER / 2 + T / 2), zf = D / 2 + 0.05 + (T + 0.5) / 2; // (the pier's front face)
+      mk(new THREE.BoxGeometry(0.1, 0.24, 0.16), steel, x, 2.75, zf + 0.08, hall);
+      mk(new THREE.BoxGeometry(0.26, 0.42, 0.26), steel, x, 2.6, zf + 0.29, hall);
+      mk(new THREE.BoxGeometry(0.2, 0.32, 0.2), this.lampMat, x, 2.6, zf + 0.29, hall).castShadow = false;
     }
-    const gable = new THREE.Shape(); gable.moveTo(-BD / 2, 0); gable.lineTo(BD / 2, 0); gable.lineTo(0, rise - 0.1); gable.closePath();
-    for (const sx of [-1, 1]) { const m = mk(new THREE.ShapeGeometry(gable), wood, sx * (BW / 2 + 0.01), WALL, BZ); m.rotation.y = sx * Math.PI / 2; m.material.side = THREE.DoubleSide; }
-    // the yard: ploughed, packed snow over asphalt, two painted bays and the TOW bay, snow piles at the back corners
-    const yardT = canvas(1024, 1024, (c, w, h) => {
+    // the yard: a compact ploughed apron of packed snow over asphalt from the glass to the road, fading into the
+    // snow at its sides, painted bays (three for rentals, the TOW bay), kerbs along its sides
+    const X0 = -YARD.hw, X1 = YARD.hw, Z0 = BZ + D / 2 + T, Z1 = YARD.z1, YW = X1 - X0, YD = Z1 - Z0;
+    const yardT = canvas(1024, 512, (c, w, h) => {
       let s = 3; const r = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-      c.fillStyle = '#86837e'; c.fillRect(0, 0, w, h);
-      for (let i = 0; i < 9000; i++) { const v = 108 + r() * 40; c.fillStyle = `rgba(${v + 6},${v + 3},${v},0.4)`; c.fillRect(r() * w, r() * h, 2, 2); }
-      for (let i = 0; i < 70; i++) { const x = r() * w, y = r() * h, R = 30 + r() * 120, gr = c.createRadialGradient(x, y, 0, x, y, R); gr.addColorStop(0, 'rgba(232,234,236,0.45)'); gr.addColorStop(1, 'rgba(232,234,236,0)'); c.fillStyle = gr; c.fillRect(x - R, y - R, 2 * R, 2 * R); }
-      // (the canvas spans the lot: x -15..15 -> 0..w, z -3..13 -> 0..h: its top row is the building's side) painted lines
-      const X = (lx) => ((lx + 15) / 30) * w, Z = (lz) => ((lz + 3) / 16) * h;
-      c.strokeStyle = 'rgba(245,245,240,0.9)'; c.lineWidth = 5;
-      for (const lx of [-9.4, -6.6, -3.8]) { c.beginPath(); c.moveTo(X(lx), Z(1.0)); c.lineTo(X(lx), Z(7.0)); c.stroke(); }
-      c.strokeStyle = 'rgba(230,170,30,0.9)'; c.strokeRect(X(0.4), Z(2.5), X(9.0) - X(0.4), Z(5.9) - Z(2.5));
-      c.fillStyle = 'rgba(230,170,30,0.9)'; c.font = 'italic 700 46px Arial'; c.textAlign = 'center'; c.fillText('TOW', X(4.6), Z(6.4));
+      const X = (lx) => ((lx - X0) / YW) * w, Z = (lz) => ((lz - Z0) / YD) * h;
+      c.fillStyle = '#7b7975'; c.fillRect(0, 0, w, h);
+      for (let i = 0; i < 9000; i++) { const v = 100 + r() * 40; c.fillStyle = `rgba(${v + 6},${v + 3},${v},0.4)`; c.fillRect(r() * w, r() * h, 2, 2); }
+      for (let i = 0; i < 60; i++) { const x = r() * w, y = r() * h, R = 20 + r() * 80, gr = c.createRadialGradient(x, y, 0, x, y, R); gr.addColorStop(0, 'rgba(236,238,240,0.4)'); gr.addColorStop(1, 'rgba(236,238,240,0)'); c.fillStyle = gr; c.fillRect(x - R, y - R, 2 * R, 2 * R); }
+      c.strokeStyle = 'rgba(246,246,240,0.92)'; c.lineWidth = 5;
+      for (const lx of YARD.bayLines) { c.beginPath(); c.moveTo(X(lx), Z(YARD.bayZ[0])); c.lineTo(X(lx), Z(YARD.bayZ[1])); c.stroke(); }
+      c.beginPath(); c.moveTo(X(YARD.bayLines[0]), Z(YARD.bayZ[0])); c.lineTo(X(YARD.bayLines.at(-1)), Z(YARD.bayZ[0])); c.stroke();
+      const t = YARD.tow; c.strokeStyle = 'rgba(232,172,30,0.95)'; c.lineWidth = 6;
+      c.strokeRect(X(t.x - t.hl), Z(t.z - t.hw), X(t.x + t.hl) - X(t.x - t.hl), Z(t.z + t.hw) - Z(t.z - t.hw));
+      c.fillStyle = 'rgba(232,172,30,0.95)'; c.font = 'italic 700 44px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.save(); c.translate(X(t.x + t.hl) - 40, Z(t.z)); c.rotate(-Math.PI / 2); c.fillText('TOW', 0, 0); c.restore();
+      // (the sides fade into the snow: alpha)
+      c.globalCompositeOperation = 'destination-in';
+      const fx = c.createLinearGradient(0, 0, w, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.035, '#000'); fx.addColorStop(0.965, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = fx; c.fillRect(0, 0, w, h);
     });
-    const yard = new THREE.Mesh(new THREE.PlaneGeometry(30, 16, 30, 16), new THREE.MeshStandardMaterial({ map: yardT, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
-    yard.rotation.x = -Math.PI / 2; yard.position.set(0, 0.03, 5); yard.receiveShadow = true;
-    // (follow the ground: each vertex at the terrain's height)
+    const yard = new THREE.Mesh(new THREE.PlaneGeometry(YW, YD, 28, 14), new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+    yard.receiveShadow = true;
+    // (each vertex on the ground: the plane laid flat in the lot frame, then at the terrain's height)
     const pa = yard.geometry.attributes.position;
-    yard.updateMatrixWorld(true); g.updateMatrixWorld(true);
-    for (let i = 0; i < pa.count; i++) { const lx = pa.getX(i), lz = 5 - pa.getY(i), p = this.w(lx, lz); pa.setZ(i, world.height(p.x, p.z) - L.y + 0.03); }
+    for (let i = 0; i < pa.count; i++) { const lx = (X0 + X1) / 2 + pa.getX(i), lz = (Z0 + Z1) / 2 - pa.getY(i), p = this.w(lx, lz); pa.setXYZ(i, lx, world.height(p.x, p.z) - L.y + 0.04, lz); }
     pa.needsUpdate = true; yard.geometry.computeVertexNormals();
-    yard.position.y = 0;
+    yard.renderOrder = 1;
     g.add(yard);
+    // kerbs along the yard's sides (granite, low), on the ground
+    const kerb = new THREE.MeshStandardMaterial({ color: 0x9a9890, roughness: 0.85 });
+    for (const sx of [-1, 1]) for (let z = Z0 + 0.6; z < Z1 - 1.5; z += 2) { const p = this.w(sx * (YARD.hw - 0.5), z + 1); mk(new THREE.BoxGeometry(0.22, 0.16, 1.96), kerb, sx * (YARD.hw - 0.5), world.height(p.x, p.z) - L.y + 0.06, z + 1); }
+    // flags at the yard's front corners (blue banners on steel poles), potted spruces either side of the door
+    const banner = canvas(128, 512, (c, w, h) => { c.fillStyle = '#16346e'; c.fillRect(0, 0, w, h); c.fillStyle = '#f2c88c'; c.fillRect(0, 0, w, 10); c.fillRect(0, h - 10, w, 10);
+      c.save(); c.translate(w / 2, h / 2); c.rotate(-Math.PI / 2); c.fillStyle = '#fff'; c.font = 'italic 700 64px "Barlow Condensed", "Arial Narrow", Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('CAR RENTAL', 0, 4); c.restore(); });
+    const bannerMat = new THREE.MeshStandardMaterial({ map: banner, roughness: 0.8, side: THREE.DoubleSide });
+    for (const sx of [-1, 1]) {
+      const lx = sx * (YARD.hw - 0.6), lz = Z1 - 1.0, p = this.w(lx, lz), y = world.height(p.x, p.z) - L.y;
+      mk(new THREE.CylinderGeometry(0.05, 0.06, 7, 10), steel, lx, y + 3.5 - 0.3, lz);
+      mk(new THREE.BoxGeometry(1.0, 0.04, 0.04), steel, lx - sx * 0.48, y + 6.4, lz);
+      mk(new THREE.PlaneGeometry(0.9, 3.4), bannerMat, lx - sx * 0.48, y + 4.68, lz).castShadow = false;
+      this.colliders.push({ x: p.x, z: p.z, r: 0.15 });
+    }
+    const potMat = new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.7 });
+    for (const dx of [-1.6, 1.6]) {
+      const lx = LAYOUT.door.x + dx, lz = BZ + D / 2 + 0.9;
+      mk(new THREE.CylinderGeometry(0.42, 0.34, 0.7, 20), potMat, lx, 0.35, lz);
+      if (this.models.pine_tree) { const t = fitModel(this.models.pine_tree, { size: 2.3, axis: 'y' }); t.position.set(lx, 0.62, lz); t.traverse((m) => { if (m.isMesh) m.castShadow = true; }); g.add(t); }
+      const p = this.w(lx, lz); this.colliders.push({ x: p.x, z: p.z, r: 0.45 });
+    }
     this.scene.add(g);
     this.group = g;
-    // solid: the building (a box a little inside the walls), a camera blocker the same size
-    const c = this.w(0, BZ + 0.25);
-    this.colliders.push({ x: c.x, z: c.z, hw: BW / 2, hd: BD / 2 + 0.25, rot: -this.yaw0 });
-    const blk = new THREE.Mesh(new THREE.BoxGeometry(BW, WALL + 2, BD), new THREE.MeshBasicMaterial());
-    blk.position.set(0, (WALL + 2) / 2, BZ); blk.visible = false; g.add(blk); g.updateMatrixWorld(true);
+    // solid: the hall (its box), a camera blocker the same size
+    const c = this.w(0, BZ);
+    this.colliders.push({ x: c.x, z: c.z, hw: W / 2 + T, hd: D / 2 + T + 0.25, rot: -this.yaw0 });
+    const blk = new THREE.Mesh(new THREE.BoxGeometry(W + 2 * T, H + LAYOUT.RISE, D + 2 * T), new THREE.MeshBasicMaterial());
+    blk.position.set(0, (H + LAYOUT.RISE) / 2, BZ); blk.visible = false; g.add(blk); g.updateMatrixWorld(true);
     this.cameraBlockers?.push(blk);
-    this.door = this.w(0, front + 1.2);
-    this.carSpot = { ...this.w(-5.2, 4.1), yaw: this.yaw0 }; // (nose to the road)
+    this.door = this.w(LAYOUT.door.x, BZ + D / 2 + 1.3);
+    this.carSpot = { ...this.w(YARD.carX, YARD.carZ), yaw: this.yaw0 }; // (in the middle bay, nose to the road)
+    // where the view out of the showroom is captured from: just outside the glass, at eye height (outsideView())
+    this.viewAt = this.w(0, BZ + D / 2 + 2.2);
+  }
+
+  /** The world outside the glass for the showroom: a cube camera's six views from just outside the door (once per visit). */
+  outsideView() {
+    try {
+      if (!this.cubeRT) { this.cubeRT = new THREE.WebGLCubeRenderTarget(512, { type: THREE.HalfFloatType, generateMipmaps: false }); this.cubeCam = new THREE.CubeCamera(0.3, 2500, this.cubeRT); }
+      const p = this.viewAt, rig = this.player?.rig?.root, was = rig?.visible;
+      this.cubeCam.position.set(p.x, world.height(p.x, p.z) + 1.7, p.z);
+      if (rig) rig.visible = false;
+      this.cubeCam.update(this.renderer, this.scene);
+      if (rig) rig.visible = was;
+      this.room.setOutside(this.cubeRT.texture, this.yaw0);
+    } catch (e) { console.warn('car rental: the view out', e); this.room.setOutside(null, 0); }
   }
 
   // ------------------------------------------------------------------ rental cars (parking entries drive.js can drive)
@@ -242,6 +269,7 @@ export class CarRental {
     this.player.frozen = true;
     this.audio?.play?.('click');
     this.transition.fade(() => {
+      this.outsideView(); // (the world through the glass, as it is now)
       this.inside = true;
       this.room.enter();
       this.getPost().setView(this.room.scene, this.room.camera);
@@ -295,8 +323,9 @@ export class CarRental {
     if (!this.L) return;
     this.truck?.update(dt);
     const n = nightUniform?.value ?? 0;
-    if (this.signMat) this.signMat.emissiveIntensity = 0.15 + 1.1 * n;
+    if (this.signMat) this.signMat.emissiveIntensity = 0.05 + 0.75 * n;
     if (this.lampMat) this.lampMat.emissiveIntensity = 0.2 + 2.4 * n;
-    if (this.glowMat) this.glowMat.emissiveIntensity = 0.25 + 0.9 * n;
+    if (this.glowMat) this.glowMat.emissiveIntensity = 0.3 + 0.9 * n;
+    if (this.stripMat) this.stripMat.emissiveIntensity = 1.2 + 2.0 * n; // (the hall's light strips, seen through the glass)
   }
 }

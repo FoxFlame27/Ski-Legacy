@@ -1,17 +1,17 @@
 // The CAR RENTAL configurator (src/game/carrental.js), in the ski shop's outfit designer style (ui/outfitshop.js: white
 // brush paper, blue italic condensed lettering, red accents, the live 3D preview to the right): step by step, CAR ·
-// PAINT · INTERIOR · WHEELS · PLATE · SUMMARY, then RENT. Every choice shows at once on the real car on its showroom
-// turntable (the camera swings round to it; the interior from the driver's seat; drag to turn). Keyboard + mouse:
+// PAINT · WHEELS · PLATE · SUMMARY, then RENT (the cabin keeps its factory trim). Every choice shows at once on the
+// real car on its showroom turntable (the camera swings round to it; drag to turn). Keyboard + mouse:
 // left / right a step, up / down a choice, Enter next (RENT on the summary), Esc closes; on the plate you type.
 //   open({ cars: [{ id, label, kind, price, length }], cfg, current: cfg | null, money, cost(cfg) -> { base, extras, total },
 //          preview(cfg, step), drag(dx, dy), rent(cfg), close() })
 import './outfitshop.css'; // (its rows, tabs, detail card)
 import './carrental.css';
 import { brushSVG, brushClip, esc } from './menu.js';
-import { PAINTS, INTERIORS, RIMS, FINISH, PLATE_COST, paintOf, interiorOf, rimOf, cleanPlate, randomPlate } from '../game/carconfig.js';
+import { PAINTS, RIMS, FINISH, PLATE_COST, paintOf, rimOf, cleanPlate, randomPlate } from '../game/carconfig.js';
 
 const STEPS = [
-  { id: 'car', label: 'CAR', one: 'THE CAR' }, { id: 'paint', label: 'PAINT', one: 'PAINT' }, { id: 'interior', label: 'INTERIOR', one: 'INTERIOR' },
+  { id: 'car', label: 'CAR', one: 'THE CAR' }, { id: 'paint', label: 'PAINT', one: 'PAINT' },
   { id: 'rims', label: 'WHEELS', one: 'WHEELS' }, { id: 'plate', label: 'PLATE', one: 'NUMBER PLATE' }, { id: 'sum', label: 'SUMMARY', one: 'YOUR CAR' },
 ];
 const KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyS', 'KeyA', 'KeyD', 'Enter', 'NumpadEnter', 'Escape', 'Tab']);
@@ -30,7 +30,7 @@ export class CarRentalUI {
   open(view) {
     if (!this.el) { this.el = document.createElement('div'); this.el.id = 'carrental'; this.el.hidden = true; document.body.appendChild(this.el); }
     this.view = view;
-    this.cfg = { ...view.cfg };
+    this.cfg = { ...view.cfg, interior: 'orig' }; // (no trim step: the factory cabin, at no cost)
     this.step = view.step || 0;
     this.openedAt = performance.now();
     this.render(true);
@@ -61,7 +61,6 @@ export class CarRentalUI {
     const v = this.view, s = STEPS[this.step].id, c = this.cfg;
     if (s === 'car') return { list: v.cars.map((o) => ({ id: o.id, name: o.label, sub: `${o.kind} · ${o.length.toFixed(1)} m`, price: money(o.price), sw: `<i class="os-sw cr-sw-car" style="--c:${css(paintOf(c.paint).hex)}"></i>`, tag: v.current?.id === o.id ? 'IN THE YARD' : '' })), on: c.id, key: 'id' };
     if (s === 'paint') return { list: PAINTS.map((p) => ({ id: p.id, name: p.label, sub: FINISH[p.finish].label, price: plus(FINISH[p.finish].cost), sw: `<i class="os-sw cr-sw-paint ${p.finish}" style="--c:${css(p.hex)}"></i>`, group: FINISH[p.finish].label })), on: c.paint, key: 'paint' };
-    if (s === 'interior') return { list: INTERIORS.map((t) => ({ id: t.id, name: t.label, sub: t.sub, price: plus(t.cost), sw: t.amt ? `<i class="os-sw cr-sw-trim${t.pattern ? ' pat' : ''}" style="--c:${css(t.hex)};--a:${css(t.accent || t.hex)}"></i>` : '<i class="os-sw os-sw-orig"></i>' })), on: c.interior, key: 'interior' };
     if (s === 'rims') return { list: RIMS.map((r) => ({ id: r.id, name: r.label, sub: r.id === 'orig' ? "The car's own alloys" : 'Painted alloys, tyres stay black', price: plus(r.cost), sw: `<i class="os-sw cr-sw-rim" style="--c:${r.id === 'orig' ? '#c9ced4' : css(r.hex)}"></i>` })), on: c.rims, key: 'rims' };
     return null;
   }
@@ -170,14 +169,13 @@ export class CarRentalUI {
       setTimeout(() => { inp.focus(); inp.select(); }, 30);
     } else {
       // the summary: every choice and what it costs
-      const car = v.cars.find((o) => o.id === c.id), p = paintOf(c.paint), t = interiorOf(c.interior), w = rimOf(c.rims), cost = v.cost(c);
+      const car = v.cars.find((o) => o.id === c.id), p = paintOf(c.paint), w = rimOf(c.rims), cost = v.cost(c);
       const line = (k, name, price, sw = '') => `<div class="cr-sum-row" data-go="${k}">${sw}<span><small>${STEPS[k].label}</small><b>${esc(name)}</b></span><em>${esc(price)}</em></div>`;
       list.innerHTML = `<div class="cr-sum paper" style="--clip:${brushClip(733, 4, 3)}">
           ${line(0, car.label, money(car.price))}
           ${line(1, `${p.label} · ${FINISH[p.finish].label}`, plus(FINISH[p.finish].cost), `<i class="os-sw cr-sw-paint ${p.finish}" style="--c:${css(p.hex)}"></i>`)}
-          ${line(2, t.label, plus(t.cost))}
-          ${line(3, w.label, plus(w.cost))}
-          ${line(4, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
+          ${line(2, w.label, plus(w.cost))}
+          ${line(3, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
           <div class="cr-sum-tot"><span>TOTAL</span><b>${money(cost.total)}</b></div>
           <ul class="cr-terms"><li>Waits in the yard out front · E to drive</li><li>One car at a time: renting another returns yours</li><li>Wreck it and it costs <b>$1,000</b> · the tow truck fetches it</li></ul>
         </div>`;
@@ -189,20 +187,22 @@ export class CarRentalUI {
   renderDetail() {
     const v = this.view, c = this.cfg, s = STEPS[this.step], cost = v.cost(c), last = this.step === STEPS.length - 1;
     const car = v.cars.find((o) => o.id === c.id);
-    const same = v.current && ['id', 'paint', 'interior', 'rims', 'plate'].every((k) => v.current[k] === c[k]);
+    const same = v.current && ['id', 'paint', 'rims', 'plate'].every((k) => v.current[k] === c[k]);
     const broke = last && v.money < cost.total;
-    const title = { car: car.label, paint: paintOf(c.paint).label, interior: interiorOf(c.interior).label, rims: rimOf(c.rims).label, plate: c.plate, sum: car.label }[s.id];
+    const title = { car: car.label, paint: paintOf(c.paint).label, rims: rimOf(c.rims).label, plate: c.plate, sum: car.label }[s.id];
     const label = last ? (same ? 'ALREADY YOURS' : broke ? 'NOT ENOUGH MONEY' : `RENT · ${money(cost.total)}`) : `NEXT · ${STEPS[this.step + 1].label}`;
     const ready = !(last && (same || broke));
     const det = this.el.querySelector('.cr-detail');
     det.innerHTML = `
       <div class="os-kicker">STEP ${this.step + 1} OF ${STEPS.length} · ${s.one}</div>
       <div class="os-title">${esc(title)}</div>
-      <div class="cr-bill"><span>${esc(car.label)} ${money(cost.base)}${cost.extras ? ` · extras ${money(cost.extras)}` : ''}</span><b>${money(cost.total)}</b></div>
-      <div class="os-actrow">
+      <div class="cr-bill">
+        <span class="cr-bill-l"><small>${esc(car.label)} ${money(cost.base)}${cost.extras ? ` · extras ${money(cost.extras)}` : ''}</small><b>${money(cost.total)}</b></span>
+        <span class="cr-bill-r"><small>YOUR MONEY</small><b>${money(v.money)}</b></span>
+      </div>
+      <div class="os-actrow cr-actrow">
         ${this.step ? `<button class="brush-btn mid cr-back" tabindex="-1">${brushSVG(379, 120, 74, { fill: '#dfe7fb' })}<span>BACK</span></button>` : ''}
         <button class="brush-btn mid os-act${ready ? ' ready' : ''}" tabindex="-1" ${last && same ? 'disabled' : ''}>${brushSVG(377, 300, 74, { fill: ready ? (last ? '#c8261c' : '#1546c8') : '#dfe7fb' })}<span>${label}</span></button>
-        <div class="os-wallet"><span>YOUR MONEY</span><b>${money(v.money)}</b></div>
       </div>`;
     det.querySelector('.os-act').addEventListener('click', () => (last ? this.rent() : this.next()));
     det.querySelector('.cr-back')?.addEventListener('click', () => this.go(this.step - 1));

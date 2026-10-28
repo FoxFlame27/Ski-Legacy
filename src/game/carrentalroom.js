@@ -1,26 +1,26 @@
 // Inside the CAR RENTAL (its own scene, like the ski shop's: main.js renders it through post.setView while you're in).
-// A bright modern showroom in an alpine chalet: a polished dark stone floor that mirrors the cars (a Reflector under a
-// glossy tile layer), warm oak slat walls, a timber ceiling with light strips, spotlights on five cars, one of every
-// model you can rent, each on a slowly turning display turntable (aluminium rim, LED ring) with a price stand; the
-// curved white reception desk with an oak top, the clerk behind it, the backlit CAR RENTAL sign; a lounge corner
-// (leather sofa, coffee table, plants), a red mechanic's tool cabinet and a winter-tyre rack, the front glazed onto the
-// snowy yard. Walk with WASD + mouse; look at a car or the clerk and press E (carrental.js opens the rental card).
+// The very hall you see from the road (carrentalshell.js builds both sides from one LAYOUT): larch walls, the glass
+// front with its mullions and door, the vaulted timber ceiling on glulam trusses, the five cars on their turntables
+// where they stand behind the glass outside. Through the glass: the real world, captured once as you come in
+// (carrental.js: a cube camera just outside the door, set as this scene's background, turned with the building).
+// A polished dark stone floor that mirrors the cars, a free-standing reception desk (the clerk behind it), a small
+// lounge corner. Walk with WASD + mouse; look at a car or the clerk and press E (carrental.js opens the rental card).
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { fitModel, loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye } from './cars.js';
 import { dressCar } from './carconfig.js';
+import { LAYOUT, buildShell } from './carrentalshell.js';
 // the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 // where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
 const SHOT = { car: [0.75, 0.2, 5.6], paint: [1.05, 0.24, 5.4], rims: [1.45, 0.06, 4.6], plate: [Math.PI - 0.3, 0.12, 4.8], sum: [0.6, 0.22, 5.8] };
 
-export const ROOM = { W: 26, D: 16, H: 5.4 };
+export const ROOM = { W: LAYOUT.W, D: LAYOUT.D, H: LAYOUT.H };
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0);
 const HITBOX = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
-const DOOR = { x: -3.2, w: 1.8, h: 2.5 };
-const DESK = { x: 8, z: -5.2, r: 2.6 }; // the curved desk: its centre (the clerk stands there), radius
+const DOOR = LAYOUT.door, DESK = LAYOUT.desk;
 const _v = new THREE.Vector3();
 
 function tex(w, h, draw, { repeat = null, srgb = true } = {}) {
@@ -56,12 +56,17 @@ export class CarRentalRoom {
     this.buildCars(models, cars, display);
     this.buildDesk(models, makeRig);
     this.buildLounge(models);
-    this.buildWorkshop();
+  }
+  /** The world outside the glass (a cube texture captured at the door; yaw: the building's heading in the world). */
+  setOutside(cubeTex, yaw) {
+    this.scene.background = cubeTex || new THREE.Color(0x2a2420);
+    this.scene.backgroundRotation?.set(0, -yaw, 0);
+    this.scene.backgroundIntensity = 1;
   }
 
   // ------------------------------------------------------------------ the room
   buildShell() {
-    const { W, D, H } = ROOM, S = this.scene;
+    const { W, D } = ROOM, S = this.scene;
     // polished floor: large dark stone tiles over a mirror (the cars and lights reflect, softly)
     const floorTex = tex(1024, 1024, (g, w, h) => {
       const r = rng(7);
@@ -81,48 +86,14 @@ export class CarRentalRoom {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshPhysicalMaterial({ map: floorTex, roughness: 0.12, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.05, transparent: !!this.mirror, opacity: this.mirror ? 0.8 : 1 }));
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
     S.add(floor);
-    // walls: warm white plaster, the back wall oak slats (the sign hangs on it)
-    const plaster = new THREE.MeshStandardMaterial({ color: 0xf1e9dc, roughness: 0.92 });
-    const oakTex = tex(512, 512, (g, w, h) => {
-      const r = rng(3); g.fillStyle = '#6b4526'; g.fillRect(0, 0, w, h);
-      for (let x = 0; x < w; x += 32) { const v = (r() - 0.5) * 24; g.fillStyle = `rgb(${176 + v},${124 + v * 0.8},${78 + v * 0.6})`; g.fillRect(x + 3, 0, 26, h);
-        for (let k = 0; k < 10; k++) { g.strokeStyle = `rgba(70,40,15,${0.08 + r() * 0.1})`; g.lineWidth = 1; g.beginPath(); const gx = x + 5 + r() * 22; g.moveTo(gx, 0); g.lineTo(gx + r() * 4 - 2, h); g.stroke(); } }
-    }, { repeat: [W / 4, 1] });
-    const oak = new THREE.MeshStandardMaterial({ map: oakTex, roughness: 0.55 });
-    const wall = (w, h, mat, x, y, z, ry) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); m.position.set(x, y, z); m.rotation.y = ry; m.receiveShadow = true; S.add(m); return m; };
-    wall(W, H, oak, 0, H / 2, -D / 2, 0);
-    wall(D, H, plaster, -W / 2, H / 2, 0, Math.PI / 2);
-    wall(D, H, plaster, W / 2, H / 2, 0, -Math.PI / 2);
-    // the front: a glazed wall onto the yard (a bright snowy view), the glass door, dark steel mullions
-    const view = tex(1024, 256, (g, w, h) => {
-      const sky = g.createLinearGradient(0, 0, 0, h); sky.addColorStop(0, '#9fc3e6'); sky.addColorStop(0.55, '#dfeaf3'); sky.addColorStop(0.6, '#f4f7fa'); sky.addColorStop(1, '#e6ebf0');
-      g.fillStyle = sky; g.fillRect(0, 0, w, h);
-      const r = rng(11); g.fillStyle = '#c9d5e0';
-      g.beginPath(); g.moveTo(0, h * 0.5); for (let x = 0; x <= w; x += 32) g.lineTo(x, h * (0.3 + r() * 0.22)); g.lineTo(w, h * 0.6); g.lineTo(0, h * 0.6); g.fill();
-      for (let i = 0; i < 40; i++) { const x = r() * w, y = h * 0.6, s = 14 + r() * 26; g.fillStyle = `rgba(40,62,48,${0.55 + r() * 0.3})`; g.beginPath(); g.moveTo(x, y - s * 1.8); g.lineTo(x - s * 0.5, y); g.lineTo(x + s * 0.5, y); g.fill(); }
-    });
-    const outside = new THREE.MeshBasicMaterial({ map: view, toneMapped: false, color: 0xd8d8d8 });
-    wall(W, H, outside, 0, H / 2, D / 2 + 0.6, Math.PI);
-    const glass = new THREE.MeshPhysicalMaterial({ color: 0xdfeff7, roughness: 0.05, metalness: 0, transmission: 0, transparent: true, opacity: 0.12 });
-    wall(W, H, glass, 0, H / 2, D / 2, Math.PI);
-    const steel = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.4, metalness: 0.7 });
-    for (let x = -W / 2; x <= W / 2 + 0.01; x += W / 8) box(0.12, H, 0.14, steel, x, H / 2, D / 2, S);
-    box(W, 0.14, 0.16, steel, 0, 2.9, D / 2, S); box(W, 0.3, 0.2, steel, 0, 0.15, D / 2, S);
-    // the door: a frame and its push bar (E here: leave)
-    box(0.1, DOOR.h, 0.18, steel, DOOR.x - DOOR.w / 2, DOOR.h / 2, D / 2 - 0.02, S); box(0.1, DOOR.h, 0.18, steel, DOOR.x + DOOR.w / 2, DOOR.h / 2, D / 2 - 0.02, S);
-    box(DOOR.w, 0.1, 0.18, steel, DOOR.x, DOOR.h, D / 2 - 0.02, S);
-    box(DOOR.w * 0.7, 0.05, 0.06, new THREE.MeshStandardMaterial({ color: 0xc8ccd0, metalness: 1, roughness: 0.2 }), DOOR.x, 1.05, D / 2 - 0.12, S);
+    // the hall: the shared shell (walls, the glass front and door, the trusses and ceiling), the glass nearly clear
+    const glass = new THREE.MeshPhysicalMaterial({ color: 0xe6f2f8, roughness: 0.04, metalness: 0, transparent: true, opacity: 0.1, depthWrite: false });
+    buildShell(S, 'in', glass);
     this.doorHit = new THREE.Mesh(new THREE.BoxGeometry(DOOR.w, DOOR.h, 0.4), HITBOX);
     this.doorHit.position.set(DOOR.x, DOOR.h / 2, D / 2 - 0.1); this.doorHit.userData.kind = 'door';
     S.add(this.doorHit); this.aimables.push(this.doorHit);
-    // ceiling: dark timber with long warm light strips
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ color: 0x3b2a1e, roughness: 0.8 }));
-    ceil.rotation.x = Math.PI / 2; ceil.position.y = H; S.add(ceil);
-    const strip = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffe6c4, emissiveIntensity: 2.2 });
-    for (const z of [-5, 0, 5]) box(W - 2, 0.04, 0.16, strip, 0, H - 0.03, z, S).castShadow = false;
-    for (let x = -W / 2 + 1; x < W / 2; x += 1.6) box(0.12, 0.18, D, new THREE.MeshStandardMaterial({ color: 0x5a3d26, roughness: 0.7 }), x, H - 0.09, 0, S).castShadow = false;
-    // skirting
-    box(W, 0.12, 0.03, steel, 0, 0.06, -D / 2 + 0.015, S);
+    const steel = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.4, metalness: 0.7 });
+    box(W, 0.1, 0.03, steel, 0, 0.05, -D / 2 + 0.015, S); // (skirting)
     // the backlit sign on the oak wall: CAR RENTAL · LEGACY VILLAGE
     const sign = tex(2048, 400, (g, w, h) => {
       g.clearRect(0, 0, w, h);
@@ -135,9 +106,9 @@ export class CarRentalRoom {
       g.fillText('LEGACY VILLAGE · SINCE 1967', w / 2, h * 0.86);
     });
     const sm = new THREE.Mesh(new THREE.PlaneGeometry(9, 1.75), new THREE.MeshBasicMaterial({ map: sign, transparent: true, toneMapped: false }));
-    sm.position.set(-2, 3.75, -D / 2 + 0.03); S.add(sm);
+    sm.position.set(-4.4, 3.6, -D / 2 + 0.03); S.add(sm);
     const halo = new THREE.Mesh(new THREE.PlaneGeometry(10.5, 2.4), new THREE.MeshBasicMaterial({ color: 0xffc98a, transparent: true, opacity: 0.12, toneMapped: false, depthWrite: false }));
-    halo.position.set(-2, 3.75, -D / 2 + 0.02); S.add(halo);
+    halo.position.set(-4.4, 3.6, -D / 2 + 0.02); S.add(halo);
   }
 
   buildLights() {
@@ -154,14 +125,14 @@ export class CarRentalRoom {
 
   // ------------------------------------------------------------------ the cars on their turntables
   buildCars(models, cars, display) {
-    const S = this.scene, spots = [[-9, -4.1], [-2.2, -4.3], [-9, 3.4], [2.6, 3.4], [9.3, 3.5]];
+    const S = this.scene, spots = LAYOUT.spots; // (where they stand seen from outside too)
     const rim = new THREE.MeshStandardMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.18 });
     const top = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.55, metalness: 0.2 });
     const led = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4e4, emissiveIntensity: 2.4 });
     display.forEach((d, k) => {
       const spec = cars.find((c) => c.id === d.id), gltf = models[d.id], at = spots[k % spots.length];
       if (!spec || !gltf) return;
-      const R = 2.75, tt = new THREE.Group();
+      const R = LAYOUT.R, tt = new THREE.Group();
       tt.position.set(at[0], 0, at[1]);
       const disc = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.16, 64), top); disc.position.y = 0.08; disc.receiveShadow = true;
       const ring = new THREE.Mesh(new THREE.TorusGeometry(R, 0.06, 10, 96), rim); ring.rotation.x = Math.PI / 2; ring.position.y = 0.13;
@@ -171,7 +142,7 @@ export class CarRentalRoom {
       const inst = carInstance(carTemplate(gltf, spec.length, d.id), { paint: d.paint });
       inst.group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       spin.add(inst.group);
-      spin.rotation.y = k * 1.3 + 0.6;
+      spin.rotation.y = at[2];
       const hit = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.7, spec.length + 0.2), HITBOX);
       hit.position.y = 0.85; hit.userData = { kind: 'car', id: d.id, paint: d.paint, label: spec.label };
       spin.add(hit); this.aimables.push(hit);
@@ -196,7 +167,7 @@ export class CarRentalRoom {
       const c = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.39), new THREE.MeshStandardMaterial({ map: card, roughness: 0.6 }));
       c.position.set(0, 1.18, 0.03); c.rotation.x = -0.35; stand.add(c);
       box(0.66, 0.43, 0.02, rim, 0, 1.18, 0.0, stand).rotation.x = -0.35;
-      const toEntry = Math.atan2(-3 - at[0], 6 - at[1]);
+      const toEntry = at[1] > 0 ? Math.atan2(DOOR.x - at[0], ROOM.D / 2 - at[1]) * 0.35 : Math.PI / 2; // (the front row's cards in front, turned a little to the door; the back row's beside, in the gap between the turntables)
       stand.position.set(at[0] + Math.sin(toEntry) * (R + 0.55), 0, at[1] + Math.cos(toEntry) * (R + 0.55));
       stand.rotation.y = toEntry;
       S.add(stand);
@@ -207,25 +178,27 @@ export class CarRentalRoom {
   // ------------------------------------------------------------------ the reception desk and the clerk
   buildDesk(models, makeRig) {
     const S = this.scene, g = new THREE.Group(), { x, z, r } = DESK;
+    // a solid curved counter standing on the floor: a white gloss body (an annular sector, 0.62 m deep, 1.04 m
+    // high), an oak top proud of it all round, a recessed dark plinth with an LED line; open toward the back wall
     const gloss = new THREE.MeshPhysicalMaterial({ color: 0xf6f4f0, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08 });
     const oakTop = new THREE.MeshStandardMaterial({ color: 0xb98552, roughness: 0.45 });
-    const front = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 1.0, 48, 1, true, -Math.PI * 0.42, Math.PI * 0.84), gloss);
-    front.position.y = 0.55; front.material.side = THREE.DoubleSide;
-    const topM = new THREE.Mesh(new THREE.RingGeometry(r - 0.62, r + 0.06, 48, 1, Math.PI / 2 - Math.PI * 0.42, Math.PI * 0.84), oakTop);
-    topM.rotation.x = -Math.PI / 2; topM.position.y = 1.07;
-    const topEdge = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.06, r + 0.06, 0.05, 48, 1, true, -Math.PI * 0.42, Math.PI * 0.84), oakTop); topEdge.position.y = 1.05;
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.04, r - 0.04, 0.08, 48, 1, true, -Math.PI * 0.42, Math.PI * 0.84), oakTop); base.position.y = 0.04;
-    const ledStrip = new THREE.Mesh(new THREE.CylinderGeometry(r + 0.01, r + 0.01, 0.02, 48, 1, true, -Math.PI * 0.42, Math.PI * 0.84), new THREE.MeshBasicMaterial({ color: 0xffe2b8, toneMapped: false }));
-    ledStrip.position.y = 0.1;
-    g.add(front, topM, topEdge, base, ledStrip);
-    for (const o of [front, topM, topEdge, base]) { o.castShadow = o.receiveShadow = true; o.material.side = THREE.DoubleSide; }
+    const A = Math.PI * 0.4; // (half the arc)
+    const sector = (r0, r1, a0 = -A, a1 = A) => { const sh = new THREE.Shape(); sh.absarc(0, 0, r1, Math.PI / 2 - a1, Math.PI / 2 - a0, false); sh.absarc(0, 0, r0, Math.PI / 2 - a0, Math.PI / 2 - a1, true); sh.closePath(); return sh; };
+    // (drawn in x / y, laid flat: rotation.x -90 deg takes the shape's y to -z, so it is mirrored (scale.y -1) to
+    // put the arc's front toward +z, the room)
+    const slab = (shape, y0, h, mat) => { const m = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false, curveSegments: 40 }), mat); m.rotation.x = -Math.PI / 2; m.scale.y = -1; m.position.y = y0; mat.side = THREE.DoubleSide; m.castShadow = m.receiveShadow = true; g.add(m); return m; };
+    slab(sector(r - 0.56, r - 0.06), 0, 0.1, new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.6 }));
+    slab(sector(r - 0.62, r), 0.1, 0.94, gloss);
+    slab(sector(r - 0.66, r + 0.05, -A - 0.02, A + 0.02), 1.04, 0.05, oakTop);
+    const ledStrip = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.055, r - 0.055, 0.015, 48, 1, true, -A, 2 * A), new THREE.MeshBasicMaterial({ color: 0xffe2b8, toneMapped: false }));
+    ledStrip.position.y = 0.095; g.add(ledStrip);
     // on it (the clerk's side, ~0.3 m in from the front): a monitor, keyboard, card terminal, a tray of keys, a vase
     const black = new THREE.MeshStandardMaterial({ color: 0x141518, roughness: 0.35, metalness: 0.4 });
     const ang = (a, d) => [Math.sin(a) * d, Math.cos(a) * d];
     const [mx, mz] = ang(-0.25, r - 0.38);
     const mon = new THREE.Group(); box(0.62, 0.38, 0.03, black, 0, 0.3, 0, mon); box(0.05, 0.22, 0.05, black, 0, 0.1, -0.03, mon); box(0.22, 0.015, 0.16, black, 0, 0.007, -0.03, mon);
     const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.34), new THREE.MeshBasicMaterial({ color: 0x9fc0ee, toneMapped: false })); scr.position.set(0, 0.3, -0.017); scr.rotation.y = Math.PI; mon.add(scr);
-    mon.position.set(mx, 1.08, mz); mon.rotation.y = -0.25 + Math.PI; g.add(mon);
+    mon.position.set(mx, 1.09, mz); mon.rotation.y = -0.25 + Math.PI; g.add(mon);
     const kb = box(0.44, 0.02, 0.14, black, 0, 1.09, 0, g); const [kx, kz] = ang(-0.25, r - 0.62); kb.position.set(kx, 1.09, kz); kb.rotation.y = -0.25;
     const term = box(0.08, 0.04, 0.16, black, 0, 1.1, 0, g); const [tx, tz] = ang(0.25, r - 0.3); term.position.set(tx, 1.1, tz); term.rotation.set(0.3, 0.25, 0);
     const tray = box(0.3, 0.025, 0.2, new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 1, roughness: 0.25 }), 0, 1.09, 0, g); const [ox, oz] = ang(0.6, r - 0.3); tray.position.set(ox, 1.09, oz);
@@ -234,28 +207,27 @@ export class CarRentalRoom {
     const [vx, vz] = ang(-0.9, r - 0.25); vase.position.set(vx, 1.19, vz); g.add(vase);
     for (let k = 0; k < 5; k++) { const f = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshStandardMaterial({ color: k % 2 ? 0xe23a3a : 0xffffff, roughness: 0.6 })); f.position.set(vx + Math.sin(k * 1.3) * 0.06, 1.38 + (k % 3) * 0.03, vz + Math.cos(k * 1.3) * 0.06); g.add(f); }
     g.position.set(x, 0, z);
-    g.rotation.y = -0.35; // (turned a little toward the door)
     S.add(g);
-    this.deskYaw = -0.35;
+    this.deskYaw = 0; // (square to the back wall, facing the room)
     // the clerk behind it, facing the room
     try {
       this.clerk = makeRig();
       this.clerk.setSkisVisible?.(false);
       this.clerk.addTo(this.scene);
-      this.clerk.root.position.set(x - Math.sin(this.deskYaw) * 0.25, 0, z - Math.cos(this.deskYaw) * 0.25);
+      this.clerk.root.position.set(x, 0, z + r - 1.05); // (behind the counter, at it)
     } catch (e) { console.warn('car rental clerk', e); this.clerk = null; }
     this.clerkYaw = this.deskYaw;
     this.clerkHit = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.9, 1.2), HITBOX);
-    this.clerkHit.position.set(x, 0.95, z); this.clerkHit.userData.kind = 'clerk';
+    this.clerkHit.position.set(x, 0.95, z + r - 1.05); this.clerkHit.userData.kind = 'clerk';
     S.add(this.clerkHit); this.aimables.push(this.clerkHit);
     // the desk keeps you on the customer side: a ring of circles along its front
-    for (let a = -Math.PI * 0.42; a <= Math.PI * 0.42 + 1e-3; a += Math.PI * 0.12) this.obstacles.push({ x: x + Math.sin(a + this.deskYaw) * r, z: z + Math.cos(a + this.deskYaw) * r, r: 0.35 });
-    this.obstacles.push({ x, z, r: r - 0.2 });
+    for (let a = -A; a <= A + 1e-3; a += A / 6) this.obstacles.push({ x: x + Math.sin(a) * (r - 0.3), z: z + Math.cos(a) * (r - 0.3), r: 0.38 });
+    this.obstacles.push({ x, z, r: r - 0.4 });
     // a key cabinet on the wall behind the desk
     const kc = new THREE.Group(); box(1.4, 0.9, 0.08, new THREE.MeshStandardMaterial({ color: 0xb98552, roughness: 0.5 }), 0, 0, 0, kc);
     for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) box(0.03, 0.08, 0.02, black, -0.55 + i * 0.22, 0.25 - j * 0.25, 0.06, kc);
-    kc.position.set(x + 0.3, 1.9, -ROOM.D / 2 + 0.06); S.add(kc);
-    if (models.potted_plant) for (const [px, pz] of [[11.9, -7.1], [5.2, -7.1]]) { const p = fitModel(models.potted_plant, { size: 1.5, axis: 'y' }); p.position.set(px, 0, pz); p.traverse((o) => { if (o.isMesh) o.castShadow = true; }); S.add(p); this.obstacles.push({ x: px, z: pz, r: 0.45 }); }
+    kc.position.set(x, 1.9, -ROOM.D / 2 + 0.04); S.add(kc); // (flush on the wall: its back on the boards)
+    if (models.potted_plant) for (const [px, pz] of [[x + r + 0.9, -ROOM.D / 2 + 0.6], [x - r - 0.9, -ROOM.D / 2 + 0.6]]) { const p = fitModel(models.potted_plant, { size: 1.5, axis: 'y' }); p.position.set(px, 0, pz); p.traverse((o) => { if (o.isMesh) o.castShadow = true; }); S.add(p); this.obstacles.push({ x: px, z: pz, r: 0.45 }); }
   }
 
   // ------------------------------------------------------------------ the lounge: a leather sofa, a coffee table, plants
@@ -267,43 +239,16 @@ export class CarRentalRoom {
     for (const sx of [-1.05, 1.05]) box(0.2, 0.62, 0.9, leather, sx, 0.5, 0, g);
     for (const sx of [-0.52, 0.52]) box(1.0, 0.14, 0.72, leather, sx, 0.66, 0.06, g);
     for (const sx of [-1.0, 1.0]) for (const sz of [-0.38, 0.38]) box(0.04, 0.24, 0.04, black, sx, 0.12, sz, g);
-    g.position.set(-9.2, 0, 6.95); g.rotation.y = Math.PI; S.add(g);
+    const { z: lz } = LAYOUT.lounge, wx = ROOM.W / 2 - 0.5; // (the sofa's back to the right wall, facing the room)
+    g.position.set(wx, 0, lz); g.rotation.y = -Math.PI / 2; S.add(g);
     const table = new THREE.Group();
     const tTop = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 32), new THREE.MeshPhysicalMaterial({ color: 0x2b2b2b, roughness: 0.1, clearcoat: 1 })); tTop.position.y = 0.42; tTop.castShadow = true;
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.2, 0.42, 16), black); leg.position.y = 0.21;
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.2, 0.4, 16), black); leg.position.y = 0.2;
     table.add(tTop, leg);
-    for (let k = 0; k < 3; k++) box(0.24, 0.012, 0.32, new THREE.MeshStandardMaterial({ color: [0x1546c8, 0xd0342c, 0xf2f2f0][k], roughness: 0.7 }), -0.1 + k * 0.08, 0.45 + k * 0.012, 0, table).rotation.y = k * 0.4;
-    table.position.set(-9.2, 0, 5.6); S.add(table);
-    this.obstacles.push({ x: -9.7, z: 6.95, r: 0.7 }, { x: -8.7, z: 6.95, r: 0.7 }, { x: -9.2, z: 5.6, r: 0.6 });
-    if (models.potted_plant) for (const [px, pz] of [[-12, 7.1], [-6.6, 7.2], [-12, -7.1]]) { const p = fitModel(models.potted_plant, { size: 1.6, axis: 'y' }); p.position.set(px, 0, pz); p.traverse((o) => { if (o.isMesh) o.castShadow = true; }); S.add(p); this.obstacles.push({ x: px, z: pz, r: 0.45 }); }
-  }
-
-  // ------------------------------------------------------------------ the workshop wall: tool cabinet, tyre rack
-  buildWorkshop() {
-    const S = this.scene;
-    const red = new THREE.MeshPhysicalMaterial({ color: 0xb3171b, roughness: 0.3, clearcoat: 0.8 });
-    const alu = new THREE.MeshStandardMaterial({ color: 0xd0d4d8, metalness: 1, roughness: 0.25 });
-    const black = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.7 });
-    // the tool cabinet against the left wall: drawers with aluminium handles, a pegboard with tools above
-    const tc = new THREE.Group();
-    box(1.6, 1.0, 0.6, red, 0, 0.58, 0, tc); box(1.62, 0.04, 0.62, black, 0, 1.1, 0, tc);
-    for (let i = 0; i < 6; i++) { box(1.5, 0.008, 0.01, black, 0, 0.2 + i * 0.15, 0.302, tc); box(0.5, 0.025, 0.03, alu, 0, 0.26 + i * 0.15, 0.31, tc); }
-    for (const sx of [-0.7, 0.7]) for (const sz of [-0.25, 0.25]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 12), black); w.rotation.z = Math.PI / 2; w.position.set(sx, 0.04, sz); tc.add(w); }
-    box(1.6, 1.0, 0.03, new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.8 }), 0, 1.75, -0.29, tc);
-    for (let i = 0; i < 7; i++) box(0.04, 0.22 + (i % 3) * 0.06, 0.02, alu, -0.6 + i * 0.2, 1.75, -0.26, tc);
-    tc.position.set(-12.62, 0, -0.1); tc.rotation.y = Math.PI / 2; S.add(tc);
-    this.obstacles.push({ x: -12.6, z: -0.6, r: 0.5 }, { x: -12.6, z: 0.4, r: 0.5 });
-    // the tyre rack against the right wall: two shelves of winter tyres standing upright (alloys on half of them)
-    const tr = new THREE.Group(), rack = new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.6, metalness: 0.5 });
-    const tyre = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.85 });
-    for (const sx of [-1.1, 1.1]) for (const sz of [-0.25, 0.25]) box(0.05, 1.7, 0.05, rack, sx, 0.85, sz, tr);
-    for (const y of [0.1, 0.92]) { box(2.25, 0.04, 0.55, rack, 0, y, 0, tr);
-      for (let i = 0; i < 4; i++) {
-        const t = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.11, 12, 28), tyre); t.position.set(-0.8 + i * 0.53, y + 0.4, 0); t.castShadow = true; tr.add(t);
-        if ((i + (y > 0.5 ? 1 : 0)) % 2 === 0) { const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.16, 20), alu); rim.rotation.x = Math.PI / 2; rim.position.copy(t.position); tr.add(rim); }
-      } }
-    tr.position.set(12.62, 0, -1.6); tr.rotation.y = -Math.PI / 2; S.add(tr);
-    this.obstacles.push({ x: 12.6, z: -2.4, r: 0.6 }, { x: 12.6, z: -0.8, r: 0.6 });
+    for (let k = 0; k < 3; k++) box(0.24, 0.012, 0.32, new THREE.MeshStandardMaterial({ color: [0x1546c8, 0xd0342c, 0xf2f2f0][k], roughness: 0.7 }), -0.1 + k * 0.08, 0.446 + k * 0.012, 0, table).rotation.y = k * 0.4;
+    table.position.set(wx - 1.45, 0, lz); S.add(table);
+    this.obstacles.push({ x: wx, z: lz - 0.55, r: 0.7 }, { x: wx, z: lz + 0.55, r: 0.7 }, { x: wx - 1.45, z: lz, r: 0.6 });
+    if (models.potted_plant) for (const [px, pz] of [[ROOM.W / 2 - 0.55, lz - 1.75], [ROOM.W / 2 - 0.55, ROOM.D / 2 - 0.7]]) { const p = fitModel(models.potted_plant, { size: 1.5, axis: 'y' }); p.position.set(px, 0, pz); p.traverse((o) => { if (o.isMesh) o.castShadow = true; }); S.add(p); this.obstacles.push({ x: px, z: pz, r: 0.45 }); }
   }
 
   // ------------------------------------------------------------------ the configurator (ui/carrental.js): your car, live

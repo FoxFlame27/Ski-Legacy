@@ -6,7 +6,8 @@
 body.carcfg-open #hud > :not(#flash) { visibility: hidden !important; }
 body.carcfg-open #crosshair { visibility: hidden; }
 #carrental .cr-col { width: calc(var(--u) * 560); }
-.cr-steps button { height: calc(var(--u) * 44); padding: 0 calc(var(--u) * 11); font-size: calc(var(--u) * 19); }
+.cr-steps { display: flex; }
+.cr-steps button { flex: 1 1 0; min-width: 0; height: calc(var(--u) * 44); padding: 0 calc(var(--u) * 6); font-size: calc(var(--u) * 19); white-space: nowrap; }
 .cr-steps button i { display: inline-block; margin-right: calc(var(--u) * 5); font-style: normal; font-size: 0.72em; opacity: 0.6; }
 .cr-steps button.done i { color: var(--red); opacity: 1; }
 .cr-group { flex: none; margin: calc(var(--u) * 6) 0 calc(var(--u) * -2) calc(var(--u) * 4); font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.18em; color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
@@ -55,11 +56,17 @@ body.carcfg-open #crosshair { visibility: hidden; }
 .cr-sum-tot b { font-size: calc(var(--u) * 40); color: var(--red); }
 .cr-terms { margin: calc(var(--u) * 4) 0 0; padding-left: calc(var(--u) * 18); font: 500 var(--t-xs)/1.45 var(--ui); color: var(--blue-dim); }
 
-/* the detail card: the bill, back / next / rent */
-.cr-bill { display: flex; justify-content: space-between; align-items: baseline; margin-top: calc(var(--u) * 8); font: 600 var(--t-xs)/1.3 var(--ui); color: var(--blue-dim); }
-.cr-bill b { font: italic 700 calc(var(--u) * 30)/1 var(--num); color: var(--red); }
-#carrental .os-actrow { justify-content: flex-start; gap: calc(var(--u) * 12); }
-#carrental .os-wallet { margin-left: auto; }
-#carrental .os-act { width: calc(var(--u) * 270); }
-.cr-back { width: calc(var(--u) * 110); flex: none; }
+/* the detail card: the bill and your money (one row, each a label over a figure), then BACK + NEXT / RENT (the
+   button takes the rest of the row: nothing in the card can run into anything else at any size) */
+.cr-bill { display: flex; justify-content: space-between; align-items: flex-end; gap: calc(var(--u) * 16); margin-top: calc(var(--u) * 10); }
+.cr-bill > span { display: flex; flex-direction: column; gap: calc(var(--u) * 5); min-width: 0; }
+.cr-bill-r { flex: none; align-items: flex-end; }
+.cr-bill small { font: 700 var(--t-xs)/1.2 var(--ui); letter-spacing: 0.06em; color: var(--blue-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-bill-r small { letter-spacing: 0.16em; font-weight: 800; }
+.cr-bill b { font: italic 700 calc(var(--u) * 30)/1 var(--num); font-variant-numeric: tabular-nums; color: var(--red); }
+.cr-bill-r b { color: var(--blue); }
+#carrental .cr-actrow { justify-content: flex-start; gap: calc(var(--u) * 12); }
+#carrental .cr-actrow .os-act { flex: 1 1 auto; width: auto; min-width: 0; }
+#carrental .os-act > span { white-space: nowrap; }
+.cr-back { width: calc(var(--u) * 116); flex: none; }
 .cr-back > span { color: var(--blue); }

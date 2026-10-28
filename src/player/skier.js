@@ -2075,8 +2075,9 @@ export class SkierRig {
 // forearm runs off toward (ex, ey, ez). The elbow sits low and back by your side, so the sleeves leave the picture
 // through its bottom corners and the fists show knuckles forward round the grips. (Oct 27, the user: the hands were
 // hard to see at the picture's bottom edge; then, with the elbow moved forward too, the sleeves ran in sideways like
-// tubes and the gloves turned into claws.) Exported for tuning from the dev console.
-export const FP_POSE = { x: 0.26, y: -0.29, z: -0.6, ex: 0.3, ey: -0.72, ez: -0.1 };
+// tubes and the gloves turned into claws; then the sleeves' open ends showed in the bottom corners: the fists now sit
+// close to the eye, so each forearm runs on past the edge of the picture.) Exported for tuning from the dev console.
+export const FP_POSE = { x: 0.235, y: -0.255, z: -0.44, ex: 0.33, ey: -0.72, ez: 0.08 };
 function ek(h, r) { return 1 - Math.exp(-h * r); } // exponential smoothing factor for step h at rate r
 // exact critically damped spring step of vector x (velocity v) toward t at angular frequency w (stable at any h)
 function springTo(x, v, t, w, h) {

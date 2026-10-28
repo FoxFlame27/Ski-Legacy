@@ -25,6 +25,8 @@ const ITEMS = [
   { id: 'towel_hooks', dir: 'bathroom', prompt: `A wall mounted oak wood board with three chrome towel hooks and one folded white towel hanging, flat back, ${SAN}`, tex: 'oak wood, chrome hooks, white cotton towel' },
   { id: 'pendant_lamp', dir: 'lamps', prompt: `A rustic hanging pendant lamp: a wrought iron ring chandelier with four candle style bulbs, hanging from a short black chain, ${LAMP}`, tex: 'black wrought iron, warm cream candle sleeves, glowing bulbs' },
   { id: 'antler_lamp', dir: 'lamps', prompt: `A rustic antler chandelier ceiling lamp with three cream fabric lampshades, hanging from a short chain, ${LAMP}`, tex: 'natural antler, cream linen shades, black iron' },
+  { id: 'snowman', dir: 'garden', small: true, prompt: 'A friendly snowman made of three stacked snowballs, coal eyes and buttons, a carrot nose, a red knitted scarf and a small black hat, standing alone, no ground, no background, no text, low poly game asset', tex: 'white packed snow, black coal, orange carrot, red wool scarf' },
+  { id: 'sledge', dir: 'garden', small: true, prompt: 'A traditional wooden Davos sledge toboggan with slatted wooden seat and curved wooden runners with metal strips, standing alone, no ground, no background, no text, low poly game asset', tex: 'warm varnished ash wood, dark iron runners' },
   { id: 'wall_lamp', dir: 'lamps', prompt: `A wall mounted lamp sconce: a carved wooden back plate with a wrought iron arm holding a small cream linen lampshade, flat back, ${LAMP}`, tex: 'warm wood, black iron, cream linen shade' },
 ];
 

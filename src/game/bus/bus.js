@@ -572,6 +572,12 @@ function buildRoadMeshes(group, colliders = null) {
     im.castShadow = true;
     group.add(im);
   };
+  // (Oct 28, the user: "make sure the light reflectors and snow pole measurers on the side of the road are
+  // collidable"): thin round colliders, soft like the guardrails (you bump and slide off; never a crash)
+  if (colliders) {
+    for (const [x, y, z] of poles) colliders.push({ x, z, r: 0.06, h: 2.2, top: y + 2.2, soft: true, pole: true });
+    for (const [x, y, z] of posts) colliders.push({ x, z, r: 0.09, h: 1.05, top: y + 1.05, soft: true, pole: true });
+  }
   // orange snow poles with a black tip (2.2 m)
   const pole = new THREE.CylinderGeometry(0.03, 0.035, 2.2, 6); pole.translate(0, 1.0, 0);
   const tip = new THREE.CylinderGeometry(0.032, 0.032, 0.4, 6); tip.translate(0, 1.95, 0);

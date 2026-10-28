@@ -290,6 +290,16 @@ const smax = (a, b, k) => -smin(-a, -b, k);
 export function shapeScenic() {
   const roads = busRoads.roads.filter((r) => r.scenic);
   if (!roads.length) return;
+  // each roundabout arm level with the ring until its shoulder is clear of the ring's (then up or down to its own
+  // grade): before, an arm curving away beside the ring already 2-3 m above it met the ring's flat shoulder in a step
+  for (const ring of busRoads.roundabouts || []) for (const a of ring.arms || []) {
+    const r = a.road, n = r.n, D0 = RING_R + 2 * BENCH + 1, D1 = D0 + 22;
+    for (let k = 0; k < n; k++) {
+      const i = a.end ? n - 1 - k : k, dc = Math.hypot(r.X[i] - ring.x, r.Z[i] - ring.z);
+      if (dc > D1) break;
+      r.Y[i] = ring.y + (r.Y[i] - ring.y) * smoothstep(D0, D1, dc);
+    }
+  }
   const G = 32, grid = new Map();
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const r of roads) {
@@ -393,7 +403,15 @@ export function shapeScenic() {
       // the batter meets the slope; two stretches near each other (the switchbacks' legs): both their batters
       let out;
       const bA = bench(A);
-      if (A.d <= bA) out = A.y;
+      if (A.d <= bA) {
+        out = A.y;
+        // (another road's shoulder overlapping this one's, e.g. two arms near a roundabout or a spur at its tee:
+        // their heights blended by nearness, no step where the nearer one swaps)
+        if (B.d < REACH) {
+          const bB = bench(B), wB = Math.exp(-(B.d - A.d) / 1.0) * smoothstep(bB, bB - 2, B.d);
+          if (wB > 0) out = (A.y + B.y * wB) / (1 + wB);
+        }
+      }
       else {
         // (each road's stretch of ~48 m once: its nearest point, its height and bench a soft blend of the segments
         // nearly as near (a hairpin inside one stretch: no step where its nearer leg swaps))
@@ -444,6 +462,7 @@ export function shapeScenic() {
       }
       // (the scenic road's own surface wins on its shoulder: a junction, a lot's spur)
       const kept = keepBand(x, z, h, out);
+      if (globalThis.__scDbg) globalThis.__scDbg.push({ bands: [...BANDS].map((v) => +v.toFixed(2)), best: [...BEST.entries()].map(([k, v]) => [k, v.map((q) => +q.toFixed(2))]), h, out, kept, Ad: A.d, Ay: A.y, As: A.s, An: A.r.name, kd: keepBand.d });
       // (and a bus road's where its centre line is the nearer one: the T junctions' mouths)
       return kept === out ? out : out + (kept - out) * Math.max(smoothstep(bench(A), bench(A) + 6, A.d), smoothstep(-1.5, 1.5, A.d - keepBand.d));
     },

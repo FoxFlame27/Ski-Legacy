@@ -57,7 +57,6 @@ import { wantsBusIntro } from './game/presentation/busintro.js'; // first-time i
 import { Jobs } from './game/jobs.js';
 import { Talk } from './game/talk.js';
 import { Modes } from './game/modes.js';
-import { RaceStand } from './game/racestand.js'; // the RACING stand in Legacy Village: RACE just for fun (no mode chooser any more)
 import { RaceStandUI } from './ui/racestand.js';
 import { RaceHud } from './ui/racehud.js';
 import { transition } from './ui/transition.js';
@@ -375,11 +374,8 @@ async function boot() {
       get secrets() { return secrets; }, get railway() { return railway; } },
   });
 
-  // the RACING stand beside the village job board: RACE just for fun (every collider of the village exists by now)
-  try {
-    raceStandUI = new RaceStandUI({ hud, audio });
-    raceStand = new RaceStand({ scene, models, jobs, colliders, open: openRaceStand });
-  } catch (e) { console.warn('racing stand', e); raceStand = null; }
+  // the RACING stand beside the village job board is gone (Oct 29, the user: "remove this racing day sign");
+  // races are the free-ride races at the courses' start houses
 
   // pre-stream the world around the start
   setLoad(0.7, 'Streaming terrain…');

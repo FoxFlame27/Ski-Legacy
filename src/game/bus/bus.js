@@ -12,7 +12,7 @@ import { fitModel } from '../../core/assets.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { busRoads, roadAt, ROAD_HALF, roadsideBlocked, laneDistance } from './roads.js';
 import { transition } from '../../ui/transition.js';
-import { trafficBlockers } from '../traffic.js';
+import { trafficBlockers, addTrafficBlocker } from '../traffic.js';
 import { buildRoadSigns } from './roadsigns.js'; // speed limit and warning signs along the roads
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
 
@@ -851,6 +851,99 @@ function buildInterior(makeRig) {
   return g;
 }
 
+// a bus's pose: its middle at arc length s of path t (front and rear axles on the road, in the right lane, `shift` 0..1
+// out into the other lane, shiftV its rate), on group g; returns its yaw
+function poseBus(g, t, s, shift = 0, shiftV = 0, v = 0) {
+  const half = 3.0;
+  roadAt(t, s + half, _p); roadAt(t, s - half, _q);
+  const lane = BUS.lane * (1 - 2 * shift); // (overtaking: out into the other lane)
+  // changing lanes the bus steers: the front axle is already further across than the rear (the slope of the path
+  // it traces, lateral speed / forward speed), so it turns out and back in instead of sliding sideways
+  const slope = clamp((-2 * BUS.lane * shiftV) / Math.max(2, v), -0.2, 0.2);
+  const lf = lane + slope * half, lr = lane - slope * half;
+  // (the right-hand lane: right of the heading (dx, dz) is (-dz, dx))
+  _a.set(_p.x - _p.dz * lf, _p.y, _p.z + _p.dx * lf);
+  _b.set(_q.x - _q.dz * lr, _q.y, _q.z + _q.dx * lr);
+  // (on the road's own surface under each axle: the mountain roads are banked into their bends)
+  if (world.groundHeight) { _a.y = world.groundHeight(_a.x, _a.z, _p.y + 1); _b.y = world.groundHeight(_b.x, _b.z, _q.y + 1); }
+  g.position.addVectors(_a, _b).multiplyScalar(0.5);
+  _m.lookAt(_b, _a, _up);
+  g.quaternion.setFromRotationMatrix(_m);
+  g.rotateY(Math.PI);
+  g.updateMatrixWorld(true);
+  return Math.atan2(_a.x - _b.x, _a.z - _b.z);
+}
+
+// ------------------------------------------------------------------ the fleet's timetable
+// Each round: from the village out to a terminus (a stop at the end of a branch of the network) and back, stopping at
+// every stop on the way. Its way each direction is one path (the trips between the stops joined end to end: the bus
+// drives on through each stop after its halt). Where a bus is is a function of the clock alone (a shared clock in
+// multiplayer, later): pos(T) from the timetable; near you it drives itself (brakes for the traffic, overtakes:
+// clearAhead), keeping to the timetable as best it can, and goes back to it once out of sight.
+export const FLEET_N = 8;              // buses in all: bus:0 (yours, waits at the village) and bus:1..7 on the rounds
+const DWELL_STOP = 16, DWELL_END = 40, DWELL_DEPOT = 45; // s: at a stop on the way, at the terminus, at the village
+const FLEET_SIM = 1300;                // m: nearer you than this a bus drives itself
+const FLEET_SHOW = 1300;               // m: drawn within this (beyond, its timetable alone: cheap)
+const DEPOT_GAP = 16;                  // m: a bus leaving the village starts this far beyond the one waiting there
+// one direction of a round: the trips (BusLine.leg) joined -> { n, X, Y, Z, S, length, V, marks: [{ s, stop, dwell }],
+// sA, sB, kt: [knot times], ks: [knot arc lengths], dur }
+function fleetDir(trips, startGap, endDwell) {
+  const X = [], Y = [], Z = [], marks = [];
+  let off = 0, sA = 0;
+  trips.forEach((t, k) => {
+    for (let i = 0; i < t.n; i++) {
+      if (X.length && i === 0 && Math.hypot(t.X[0] - X[X.length - 1], t.Z[0] - Z[Z.length - 1]) < 0.5) continue;
+      X.push(t.X[i]); Y.push(t.Y[i]); Z.push(t.Z[i]);
+    }
+    if (k === 0) sA = t.s0 + startGap;
+    marks.push({ s: off + t.s1, stop: t.to, dwell: k === trips.length - 1 ? endDwell : DWELL_STOP });
+    off += t.length;
+  });
+  const n = X.length, P = { n, X: Float32Array.from(X), Y: Float32Array.from(Y), Z: Float32Array.from(Z), S: new Float32Array(n) };
+  for (let i = 1; i < n; i++) P.S[i] = P.S[i - 1] + Math.hypot(P.X[i] - P.X[i - 1], P.Z[i] - P.Z[i - 1]);
+  P.length = P.S[n - 1];
+  // the speeds: the bends (as BusLine.leg), to a standstill at each stop, from it after
+  const V = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = Math.max(0, i - 4), b = Math.min(n - 1, i + 4);
+    const h0 = Math.atan2(P.X[Math.min(n - 1, a + 1)] - P.X[a], P.Z[Math.min(n - 1, a + 1)] - P.Z[a]);
+    const h1 = Math.atan2(P.X[b] - P.X[Math.max(0, b - 1)], P.Z[b] - P.Z[Math.max(0, b - 1)]);
+    const k = Math.abs(wrapPi(h1 - h0)) / Math.max(1, P.S[b] - P.S[a]);
+    V[i] = Math.min(BUS.cruise, Math.sqrt(BUS.lat / Math.max(1e-4, k)));
+  }
+  const zero = [sA, ...marks.map((m) => m.s)];
+  for (const z of zero) { let bi = 0; for (let i = 0; i < n; i++) if (Math.abs(P.S[i] - z) < Math.abs(P.S[bi] - z)) bi = i; V[bi] = 0; }
+  for (let i = 0; i < n; i++) if (P.S[i] <= sA || P.S[i] >= marks[marks.length - 1].s) V[i] = 0;
+  for (let i = n - 2; i >= 0; i--) V[i] = Math.min(V[i], Math.sqrt(V[i + 1] ** 2 + 2 * BUS.brake * (P.S[i + 1] - P.S[i])));
+  for (let i = 1; i < n; i++) V[i] = Math.min(V[i], Math.sqrt(V[i - 1] ** 2 + 2 * BUS.acc * (P.S[i] - P.S[i - 1])));
+  P.V = V; P.marks = marks; P.sA = sA; P.sB = marks[marks.length - 1].s;
+  // the knots (time, arc length): the drive, held at each stop for its dwell
+  const kt = [0], ks = [sA];
+  let tm = 0, mi = 0, sPrev = sA;
+  for (let i = 0; i < n && mi < marks.length; i++) {
+    const s = P.S[i];
+    if (s <= sA) continue;
+    const m = marks[mi], sTo = Math.min(s, m.s), ds = sTo - sPrev;
+    if (ds > 0) { const v = Math.max(0.8, (V[Math.max(0, i - 1)] + V[i]) / 2); tm += ds / v; kt.push(tm); ks.push(sTo); sPrev = sTo; }
+    if (s >= m.s) { tm += m.dwell; kt.push(tm); ks.push(m.s); mi++; i--; }
+  }
+  P.kt = Float64Array.from(kt); P.ks = Float32Array.from(ks); P.dur = tm;
+  return P;
+}
+// a direction's state at time tau (0..dur): { s, v, mark (the stop it waits at, or null) }
+function dirAt(P, tau, out) {
+  const kt = P.kt, ks = P.ks, n = kt.length;
+  if (tau <= 0) { out.s = ks[0]; out.v = 0; out.mark = null; return out; }
+  if (tau >= kt[n - 1]) { out.s = ks[n - 1]; out.v = 0; out.mark = P.marks[P.marks.length - 1]; return out; }
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (kt[m] <= tau) lo = m; else hi = m; }
+  const dt = kt[hi] - kt[lo], f = dt > 1e-6 ? (tau - kt[lo]) / dt : 0;
+  out.s = ks[lo] + (ks[hi] - ks[lo]) * f;
+  out.v = dt > 1e-6 ? (ks[hi] - ks[lo]) / dt : 0;
+  out.mark = out.v < 1e-3 ? (P.marks.find((m) => Math.abs(m.s - out.s) < 0.5) || null) : null;
+  return out;
+}
+
 // ------------------------------------------------------------------ the line
 export class BusLine {
   constructor({ scene, models, makeRig = null, colliders = null, cameraBlockers = null }) {
@@ -880,6 +973,12 @@ export class BusLine {
     this.fov = null;
     this.timeScale = 1;
     this.parkAtVillage();
+    // the other buses on their rounds (Oct 29, the user: "busses should sometimes randomly drive around ... there
+    // should be 8 buses"): bus:0 is this one (you ride it; it waits at the village between rides), bus:1..7 run the
+    // routes on a timetable
+    this.fleet = [];
+    this.fleetClock = 0;
+    try { this.buildFleet(scene, colliders); } catch (e) { console.warn('bus fleet', e); this.fleet = []; }
   }
 
   get riding() { return !!this.ride; }
@@ -939,40 +1038,26 @@ export class BusLine {
 
   // place the bus with its middle at arc length s of trip t (front and rear axles on the road, in the right lane)
   place(t, s, shift = this.ride?.shift || 0) {
-    const half = 3.0;
-    roadAt(t, s + half, _p); roadAt(t, s - half, _q);
-    const lane = BUS.lane * (1 - 2 * shift); // (overtaking: out into the other lane)
-    // changing lanes the bus steers: the front axle is already further across than the rear (the slope of the path
-    // it traces, lateral speed / forward speed), so it turns out and back in instead of sliding sideways
-    const r = this.ride, slope = r ? clamp((-2 * BUS.lane * (r.shiftV || 0)) / Math.max(2, r.v || 0), -0.2, 0.2) : 0;
-    const lf = lane + slope * half, lr = lane - slope * half;
-    // (the right-hand lane: right of the heading (dx, dz) is (-dz, dx))
-    _a.set(_p.x - _p.dz * lf, _p.y, _p.z + _p.dx * lf);
-    _b.set(_q.x - _q.dz * lr, _q.y, _q.z + _q.dx * lr);
-    // (on the road's own surface under each axle: the mountain roads are banked into their bends)
-    if (world.groundHeight) { _a.y = world.groundHeight(_a.x, _a.z, _p.y + 1); _b.y = world.groundHeight(_b.x, _b.z, _q.y + 1); }
-    const g = this.bus.group;
-    g.position.addVectors(_a, _b).multiplyScalar(0.5);
-    _m.lookAt(_b, _a, _up);
-    g.quaternion.setFromRotationMatrix(_m);
-    g.rotateY(Math.PI);
-    g.updateMatrixWorld(true);
+    const r = this.ride, g = this.bus.group;
+    const yaw = poseBus(g, t, s, shift, r?.shiftV || 0, r?.v || 0);
     // the collider follows (off while you ride inside)
     const c = this.collider;
-    if (c) {
-      const yaw = Math.atan2(_a.x - _b.x, _a.z - _b.z);
-      c.x = this.ride ? 1e9 : g.position.x; c.z = this.ride ? 1e9 : g.position.z; c.rot = -yaw; this.yaw = yaw;
-    }
+    if (c) { c.x = this.ride ? 1e9 : g.position.x; c.z = this.ride ? 1e9 : g.position.z; c.rot = -yaw; this.yaw = yaw; }
   }
 
   /** The stop the bus waits at when p is within `m` metres of its body (null otherwise). */
   waitingAt(p, m = 7) {
-    if (this.ride || !this.at || !this.bus.group.visible) return null;
-    const g = this.bus.group.position, yaw = this.yaw || 0;
-    const dx = p.x - g.x, dz = p.z - g.z;
-    const lx = dx * Math.cos(yaw) - dz * Math.sin(yaw), lz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
-    const ex = Math.max(0, Math.abs(lx) - BUS.width / 2), ez = Math.max(0, Math.abs(lz) - BUS.len / 2);
-    return Math.hypot(ex, ez) < m ? this.at : null;
+    if (this.ride) return null;
+    const near = (g, yaw) => {
+      const dx = p.x - g.x, dz = p.z - g.z;
+      const lx = dx * Math.cos(yaw) - dz * Math.sin(yaw), lz = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+      const ex = Math.max(0, Math.abs(lx) - BUS.width / 2), ez = Math.max(0, Math.abs(lz) - BUS.len / 2);
+      return Math.hypot(ex, ez) < m;
+    };
+    if (this.at && this.bus.group.visible && near(this.bus.group.position, this.yaw || 0)) return this.at;
+    // (or one of the fleet waiting at a stop)
+    for (const b of this.fleet) if (b.at && b.group.visible && near(b.group.position, b.yaw)) return b.at;
+    return null;
   }
 
   // between rides the bus waits at the village stop
@@ -994,7 +1079,10 @@ export class BusLine {
     if (!legs) return null;
     const t = legs[0];
     const seat = this.bus.seats.find((s) => s.window && s.side < 0 && s.row === 2) || this.bus.seats[0];
-    this.ride = { legs, li: 0, t, s: t.s0, v: 0, from, to, seat, wait: 2.2, done: false, exitSent: false, turning: false };
+    // (a bus of the fleet waiting at that stop: you get on that one, it leaves its round while you ride it)
+    const fb = this.at === from && this.bus.group.visible ? null : this.fleet.find((q) => q.at === from && q.group.visible && !q.taken) || null; // (bus:0 itself when it waits there)
+    if (fb) { fb.taken = true; fb.group.visible = false; fb.collider.x = 1e9; }
+    this.ride = { legs, li: 0, t, s: t.s0, v: 0, from, to, seat, wait: 2.2, done: false, exitSent: false, turning: false, busId: fb ? fb.id : 'bus:0', fleetBus: fb };
     this.at = null;
     this.look.yaw = -0.35; this.look.pitch = -0.05;
     this.view = 'seat'; this.fov = null; this.chase.off = null;
@@ -1074,8 +1162,8 @@ export class BusLine {
   // (Oct 28, the user: "the bus should overtake"): held up behind something stopped or crawling in its lane, with the
   // other lane clear far enough ahead (oncoming traffic included) and the road going on long enough, it pulls out,
   // passes and pulls back in once its lane is clear beside and just ahead of it
-  clearAhead(t, r, dt, want = BUS.cruise) {
-    const obs = this.obstacles(), g = this.bus.group.position;
+  clearAhead(t, r, dt, want = BUS.cruise, g = this.bus.group.position, self = null) {
+    const obs = this.obstacles(self);
     const sh = r.shift || 0;
     if (!obs.length) { r.heldT = 0; r.slowT = 0; r.passing = false; return Infinity; }
     const look = 30 + (r.v * r.v) / (2 * CLEAR_DEC), far = Math.max(look, 150);
@@ -1137,7 +1225,7 @@ export class BusLine {
     return lim;
   }
   // everything the bus must not drive through, as boxes { x, y, z, yaw, hw, hd, v, car (a traffic car) }
-  obstacles() {
+  obstacles(self = null) {
     const out = (this._obs ||= []), pool = (this._obsPool ||= []);
     out.length = 0;
     let n = 0;
@@ -1147,14 +1235,185 @@ export class BusLine {
     for (const e of tr?.parking?.cars || []) if (!e.driving) { const p = e.car.position; add(p.x, p.y, p.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2); }
     const d = tr?.you?.d;
     if (d) add(d.x, d.y, d.z, d.yaw, d.w / 2, d.half);
-    for (const b of trafficBlockers()) add(b.x, b.y, b.z, b.yaw, b.hw, b.hd);
+    for (const b of trafficBlockers()) if (!b.fleet || b.fleet !== self) add(b.x, b.y, b.z, b.yaw, b.hw, b.hd, b.v || 0); // (the fleet's buses among them: not this one itself)
+    // (for a bus of the fleet: the one you ride, or the one waiting at the village between rides)
+    if (self && this.bus.group.visible) { const g = this.bus.group.position; add(g.x, g.y, g.z, this.yaw || 0, BUS.width / 2, BUS.len / 2, this.ride ? this.ride.v : 0); }
     return out;
+  }
+
+  // ------------------------------------------------------------------ the fleet (bus:1..7)
+  buildFleet(scene, colliders) {
+    if (!busRoads.roads.length) return;
+    const v = busRoads.stops[0];
+    const stops = busRoads.stops.filter((q) => q !== v && !q.noRoad);
+    const legs = busRoads.busLegs || [];
+    const isLeaf = (q) => !legs.some((l) => l.from === q) && !busRoads.roads.some((r) => r.from === q && !r.access);
+    const routes = [];
+    for (const L of stops) {
+      if (!isLeaf(L)) continue;
+      const out = this.legs(v, L), back = this.legs(L, v);
+      if (!out || !back) continue;
+      const A = fleetDir(out, DEPOT_GAP, DWELL_END), B = fleetDir(back, 0, DWELL_DEPOT);
+      routes.push({ to: L, out: A, back: B, cycle: A.dur + B.dur });
+    }
+    if (!routes.length) return;
+    // the buses over the rounds by their length (every round at least one), spread evenly round each
+    const N = FLEET_N - 1, tot = routes.reduce((a, r) => a + r.cycle, 0);
+    for (const r of routes) r.m = Math.max(1, Math.round((N * r.cycle) / tot));
+    let sum = routes.reduce((a, r) => a + r.m, 0);
+    while (sum > N) { const r = routes.filter((q) => q.m > 1).sort((a, b) => a.cycle / a.m - b.cycle / b.m)[0]; if (!r) break; r.m--; sum--; }
+    while (sum < N) { routes.sort((a, b) => b.cycle / b.m - a.cycle / a.m)[0].m++; sum++; }
+    let id = 1;
+    routes.forEach((r, ri) => {
+      for (let k = 0; k < r.m && id <= N; k++) {
+        const group = new THREE.Group();
+        group.name = `ski-bus-${id}`;
+        group.add(this.bus.shell.clone(true)); // (the same geometry and paint as bus:0)
+        group.visible = false;
+        scene.add(group);
+        const collider = { x: 1e9, z: 1e9, hw: BUS.width / 2 + 0.05, hd: BUS.len / 2, rot: 0, soft: true, h: 3.4, bus: true };
+        colliders?.push(collider);
+        // (its place in the round: evenly apart, each round shifted so their buses don't leave the village together)
+        const phase = (r.cycle * k) / r.m + ri * 53;
+        this.fleet.push({ id: `bus:${id}`, route: r, phase, group, collider, seats: this.bus.seats.length, yaw: 0, at: null, st: null, v: 0, x: 0, y: 0, z: 0 });
+        id++;
+      }
+    });
+    // the traffic brakes for them, follows them (and the bus you ride does too)
+    const pool = [];
+    this.unblock = addTrafficBlocker((out) => {
+      let k = 0;
+      for (const b of this.fleet) {
+        if (b.taken || !b.near) continue;
+        const o = (pool[k++] ||= { push: false });
+        o.x = b.x; o.y = b.y; o.z = b.z; o.yaw = b.yaw; o.hw = BUS.width / 2; o.hd = BUS.len / 2; o.v = b.v; o.fleet = b;
+        out.push(o);
+      }
+    });
+    this.fleetRoutes = routes.map((r) => ({ to: r.to.name, buses: r.m, cycleMin: +(r.cycle / 60).toFixed(1) }));
+  }
+
+  /** Multiplayer (later): the fleet's clock (s) from a shared one. */
+  setFleetClock(t) { this.fleetClock = t; }
+
+  // where bus b's timetable has it at the fleet's clock: { dir (0 out, 1 back), s, v, mark }
+  fleetTarget(b, out = {}) {
+    const r = b.route, c = r.cycle;
+    let tau = (((this.fleetClock + b.phase) % c) + c) % c;
+    if (tau < r.out.dur) { out.dir = 0; dirAt(r.out, tau, out); return out; }
+    tau -= r.out.dur; out.dir = 1; dirAt(r.back, tau, out); return out;
+  }
+
+  /** Per frame (main.js): the fleet on its rounds. p: where you are (the buses near you drive themselves). */
+  updateFleet(dt, p) {
+    if (!this.fleet.length || !(dt > 0)) return;
+    dt = Math.min(dt, 0.1);
+    this.fleetClock += dt;
+    const T = (this._ft ||= {});
+    for (const b of this.fleet) {
+      if (b.taken) continue;
+      this.fleetTarget(b, T);
+      const d = p ? Math.hypot(b.x - p.x, b.z - p.z) : Infinity;
+      b.near = d < FLEET_SHOW;
+      let st = b.st;
+      // far from you (or new): where the timetable has it
+      const lagT = st ? st.lag : 0;
+      if (!st || d > FLEET_SIM || (lagT > 180 && d > 600)) {
+        st = b.st = { dir: T.dir, s: T.s, v: T.v, wait: 0, shift: 0, shiftV: 0, passing: false, lag: 0, mark: T.mark, dwell: 0 };
+      } else {
+        const P = st.dir ? b.route.back : b.route.out;
+        if (st.mark) {
+          // waiting at a stop: off again when the timetable has it gone (or, late, after a short halt)
+          st.dwell += dt;
+          const sameStop = T.dir === st.dir && T.mark === st.mark;
+          if (!sameStop && st.dwell > 4) {
+            if (st.mark === P.marks[P.marks.length - 1]) { // (the end of the way: turn for the other one)
+              st.dir = 1 - st.dir; const Q = st.dir ? b.route.back : b.route.out; st.s = Q.sA; st.v = 0;
+            }
+            st.mark = null; st.dwell = 0;
+          }
+        } else {
+          // driving: the speed the road allows, a little more when behind the timetable; braking for whatever is in
+          // its lane, overtaking (clearAhead, as the bus you ride)
+          const next = P.marks.find((m) => m.s > st.s + 0.05) || P.marks[P.marks.length - 1];
+          roadAt(P, st.s, _p);
+          const behind = T.dir !== st.dir ? 1 : T.s > st.s + 20 ? 1 : 0;
+          let vt = Math.max(1.5, P.V[_p.i] || 0) * (behind ? 1.15 : 1);
+          if (T.dir === st.dir && T.s < st.s - 5) vt = Math.min(vt, 3); // (ahead of it: easy)
+          const view = (st.view ||= { n: P.n, X: P.X, Y: P.Y, Z: P.Z, S: P.S });
+          if (view.X !== P.X) { view.n = P.n; view.X = P.X; view.Y = P.Y; view.Z = P.Z; view.S = P.S; }
+          view.s1 = next.s;
+          let lim = Infinity;
+          try { lim = this.clearAhead(view, st, dt, Math.min(vt, BUS.cruise), b.group.position, b); } catch (e) { if (!this.fleetWarn) { this.fleetWarn = true; console.warn('bus fleet clearance', e); } }
+          vt = Math.min(vt, lim);
+          const W = 2.1, x = st.shift || 0, sv = st.shiftV || 0, a = W * W * ((st.passing ? 1 : 0) - x) - 2 * W * sv;
+          st.shiftV = sv + a * dt; st.shift = clamp(x + st.shiftV * dt, 0, 1); if (st.shift === 0 || st.shift === 1) st.shiftV *= 0.5;
+          st.v += clamp(vt - st.v, -BUS.brake * 2 * dt, BUS.acc * 1.5 * dt);
+          st.s = Math.min(next.s, st.s + st.v * dt);
+          // at the stop (or held up just short of it: it opens its doors there)
+          if (st.s >= next.s - 0.05 || (next.s - st.s < 25 && lim < 0.5 && st.v < 0.3)) { st.mark = next; st.v = 0; st.dwell = 0; }
+        }
+        // how far behind the timetable (s): roughly, by the distance at cruising speed
+        st.lag = T.dir !== st.dir ? 999 : Math.max(0, (T.s - st.s) / BUS.cruise);
+      }
+      b.d = d;
+    }
+    // two waiting at one stop queue one behind the other (by how far each stands short of the stop)
+    const Q = (this._fq ||= new Map());
+    Q.clear();
+    for (const b of this.fleet) {
+      const st = b.st;
+      if (b.taken || !st) continue;
+      const P = st.dir ? b.route.back : b.route.out;
+      b.sq = st.s;
+      if (!st.mark) continue;
+      const k = st.mark.stop.name + st.dir;
+      if (!Q.has(k)) Q.set(k, []);
+      Q.get(k).push(b);
+      b.short = st.mark.s - st.s;
+      b.pathLen = P.length;
+    }
+    for (const list of Q.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, c) => a.short - c.short || a.id.localeCompare(c.id));
+      let need = -Infinity;
+      for (const b of list) { const e = Math.max(b.short, need); b.sq = b.st.mark.s - e; need = e + BUS.len + 3; }
+    }
+    for (const b of this.fleet) {
+      const st = b.st, d = b.d;
+      if (b.taken || !st) continue;
+      // drawn near you only (cheap far away: just its timetable)
+      const P = st.dir ? b.route.back : b.route.out, sq = Math.max(0, b.sq);
+      b.v = st.mark ? 0 : st.v;
+      b.at = st.mark ? st.mark.stop : null;
+      if (d < FLEET_SHOW) {
+        b.yaw = poseBus(b.group, P, sq, st.shift || 0, st.shiftV || 0, st.v || 0);
+        b.group.visible = true;
+        const g = b.group.position;
+        b.x = g.x; b.y = g.y; b.z = g.z;
+        b.collider.x = g.x; b.collider.z = g.z; b.collider.rot = -b.yaw;
+      } else {
+        roadAt(P, sq, _p);
+        b.x = _p.x; b.y = _p.y; b.z = _p.z; b.yaw = Math.atan2(_p.dx, _p.dz);
+        b.group.visible = false;
+        b.collider.x = 1e9;
+      }
+    }
+  }
+
+  /** The fleet now (multiplayer, the route map): [{ id, x, z, yaw, at (stop name), route, seats, taken }] */
+  fleetState() {
+    return [
+      { id: 'bus:0', x: this.bus.group.position.x, z: this.bus.group.position.z, yaw: this.yaw || 0, at: this.at?.name || null, route: null, seats: this.bus.seats.length, taken: !!this.ride },
+      ...this.fleet.map((b) => ({ id: b.id, x: b.x, z: b.z, yaw: b.yaw, at: b.at?.name || null, route: b.route.to.name, seats: b.seats, taken: !!b.taken })),
+    ];
   }
 
   abort() {
     if (!this.ride) return;
     const r = this.ride;
     this.ride = null;
+    if (r.fleetBus) { r.fleetBus.taken = false; r.fleetBus.st = null; } // (back on its round, where its timetable has it)
     // there: it waits at that stop (stopped half way by a teleport: it is not at a stop)
     this.at = r.exitSent ? r.to : null;
     this.place(r.t, r.s);

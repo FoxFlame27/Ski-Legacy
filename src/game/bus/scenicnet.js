@@ -8,6 +8,10 @@ const CELL = 20;
 const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1], [2, 1], [1, 2], [-1, 2], [-2, 1], [-2, -1], [-1, -2], [1, -2], [2, -1]];
 const DIRN = DIRS.map(([x, z]) => { const l = Math.hypot(x, z); return [x / l, z / l]; });
 const DANG = DIRN.map(([x, z]) => Math.atan2(x, z));
+// the ground's samples on the 20 m grid, shared by every search while the roads are planned (the ground does not change
+// until the roads' cuts go in, after the planning)
+const HCACHE = new Map(), SCACHE = new Map();
+export function clearRouteCache() { HCACHE.clear(); SCACHE.clear(); }
 
 class Heap {
   constructor() { this.k = []; this.v = []; }
@@ -45,7 +49,8 @@ class Heap {
  */
 export function routeH(a, b, opts = {}) {
   const margin = opts.margin ?? 400, maxGrade = opts.maxGrade ?? 0.1, maxTurn = opts.maxTurn ?? 0.8;
-  const minx = Math.min(a.x, b.x) - margin, minz = Math.min(a.z, b.z) - margin;
+  // (the grid aligned to whole cells: the ground's samples are shared between searches, HCACHE)
+  const minx = Math.floor((Math.min(a.x, b.x) - margin) / CELL) * CELL, minz = Math.floor((Math.min(a.z, b.z) - margin) / CELL) * CELL;
   const W = Math.ceil((Math.max(a.x, b.x) + margin - minx) / CELL) + 1, H = Math.ceil((Math.max(a.z, b.z) + margin - minz) / CELL) + 1;
   const N = W * H, ND = DIRS.length;
   const hgt = new Float32Array(N).fill(NaN), pen = new Float32Array(N).fill(NaN);
@@ -55,14 +60,22 @@ export function routeH(a, b, opts = {}) {
   // (the ground's broad shape: local crags averaged out, the road's cut and fill deal with those)
   const sm = opts.smooth ?? 16;
   const height = (i) => {
-    if (Number.isNaN(hgt[i])) { const x = X(i), z = Z(i); hgt[i] = (world.height(x, z, 8) * 2 + world.height(x + sm, z, 8) + world.height(x - sm, z, 8) + world.height(x, z + sm, 8) + world.height(x, z - sm, 8)) / 6; }
+    if (Number.isNaN(hgt[i])) {
+      const x = X(i), z = Z(i), k = (x / CELL) * 1048576 + z / CELL + sm * 1e12;
+      let v = HCACHE.get(k);
+      if (v === undefined) { v = (world.height(x, z, 8) * 2 + world.height(x + sm, z, 8) + world.height(x - sm, z, 8) + world.height(x, z + sm, 8) + world.height(x, z - sm, 8)) / 6; HCACHE.set(k, v); }
+      hgt[i] = v;
+    }
     return hgt[i];
   };
   const penalty = (i) => {
     if (!Number.isNaN(pen[i])) return pen[i];
-    const x = X(i), z = Z(i), e = 8;
-    const gx = (world.height(x + e, z, 8) - world.height(x - e, z, 8)) / (2 * e), gz = (world.height(x, z + e, 8) - world.height(x, z - e, 8)) / (2 * e);
-    const s = Math.hypot(gx, gz);
+    const x = X(i), z = Z(i), e = 8, k = (x / CELL) * 1048576 + z / CELL;
+    let s = SCACHE.get(k);
+    if (s === undefined) {
+      const gx = (world.height(x + e, z, 8) - world.height(x - e, z, 8)) / (2 * e), gz = (world.height(x, z + e, 8) - world.height(x, z - e, 8)) / (2 * e);
+      SCACHE.set(k, (s = Math.hypot(gx, gz)));
+    }
     let p = 1 + Math.max(0, s - 0.18) * 6 + (s > 0.8 ? (opts.steepPen ?? 30) : 0);
     const q = opts.obstacles?.query(x, z, qo);
     if (q && (q.ski < CLEAR.ski || q.net < CLEAR.net || q.block < CLEAR.block || q.rail < CLEAR.rail)) return (pen[i] = Infinity);
@@ -73,6 +86,8 @@ export function routeH(a, b, opts = {}) {
     if ((corr.kind === 'piste' || corr.kind === 'race') && corr.d < CLEAR.ski) return (pen[i] = Infinity);
     return (pen[i] = p);
   };
+  const MB = new Map();
+  const midBad = (x, z) => { const k = Math.round(x) * 1048576 + Math.round(z); let v = MB.get(k); if (v === undefined) MB.set(k, (v = !!opts.bad(x, z))); return v; };
   const cell = (p) => clamp(Math.round((p.x - minx) / CELL), 0, W - 1) + clamp(Math.round((p.z - minz) / CELL), 0, H - 1) * W;
   const s0 = cell(a), s1 = cell(b), bx = X(s1), bz = Z(s1);
   const angDiff = (p, q) => Math.abs(Math.atan2(Math.sin(p - q), Math.cos(p - q)));
@@ -100,6 +115,8 @@ export function routeH(a, b, opts = {}) {
       if (gr > maxGrade && !opts.soft) continue;
       const pj = penalty(j);
       if (pj === Infinity) continue;
+      // (a diagonal or a knight's step: the ground between its cells too (it jumped thin no-go strips: a piste's edge))
+      if (opts.bad && (dx && dz) && midBad(X(i) + (dx * CELL) / 2, Z(i) + (dz * CELL) / 2)) continue;
       const gc = 1 + (gr / 0.1) ** 4 * 0.4;
       // (the profile: with y0 / y1 given, ground the road could not reach from either end at maxGrade (this far along
       // from a, at least this far from b) is a cut or a fill: it costs by the metre)

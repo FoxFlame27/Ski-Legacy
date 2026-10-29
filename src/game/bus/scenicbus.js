@@ -99,3 +99,16 @@ export function planScenicBus() {
   busRoads.stops.push(...stops); // (the same array as layout.busStops: the stop list, the trail map and skibus.js show them)
   busRoads.scenicStops = stops;
 }
+
+/** The Westgrat stop at the top of the Westgratstrasse (rentalroad.js): one leg from the village stop, up the valley
+ * road to the junction across from the car rental and up the Westgratstrasse (s = 0 at its car park). */
+export function planWestgratBus() {
+  const RW = busRoads.rentalRoad, ex = RW?.exitAt1;
+  if (!RW || !ex || !RW.westRoad) return;
+  const base = ex.road, v = busRoads.stops[0];
+  if (!base || base.from !== v) return;
+  const sW = Math.min(16, RW.length / 4), W = stopAt('Westgrat', RW, sW);
+  (busRoads.busLegs ||= []).push(leg(v, W, [piece(base, 0, ex.s), piece(RW, RW.length, sW)]));
+  busRoads.stops.push(W);
+  (busRoads.scenicStops ||= []).push(W);
+}

@@ -15,8 +15,8 @@
 import { world } from '../../world/world.js';
 import { expressNearest } from '../../world/expressroute.js';
 import { busRoads, smoothPath, makeRoad, roadAt, laneDistance, CLEAR } from './roads.js'; // (used inside functions only: roads.js imports this module)
-import { climb, lotAt, ringRoad, findLaybys, RING_R } from './scenic.js';
-import { routeH, smoothRoute } from './scenicnet.js';
+import { climb, lotAt, ringRoad, findLaybys, roadDeviation, RING_R } from './scenic.js';
+import { routeH, smoothRoute, selfClearance } from './scenicnet.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const SC_GRADE = 0.115;
@@ -136,51 +136,54 @@ function spurLot(road, sA, sB, def, bad, others = []) {
   return { s: best.s, x: p.x, z: p.z, y: p.y, lot, pts };
 }
 
+// no-go ground plus the road it carries on into (`pts`), but near the joint `at`: the route keeps off its legs
+function offPath(bad, pts, at) {
+  const G = new Map();
+  for (const [x, z] of pts) { const k = Math.floor(x / 40) * 65536 + Math.floor(z / 40); if (!G.has(k)) G.set(k, []); G.get(k).push(x, z); }
+  return (x, z) => {
+    if (bad(x, z)) return true;
+    if (Math.hypot(x - at[0], z - at[1]) < 70) return false;
+    const cx = Math.floor(x / 40), cz = Math.floor(z / 40);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const arr = G.get((cx + a) * 65536 + cz + b); if (arr) for (let i = 0; i < arr.length; i += 2) if (Math.hypot(arr[i] - x, arr[i + 1] - z) < 34) return true; }
+    return false;
+  };
+}
 // a road between two given ends, its middle routed (heading-aware A*, the grade soft: switchbacks where it can, the
 // cut and fill elsewhere): head / tail [[x, z]...] fixed, y0 / y1 their heights -> [[x, z]...] every ~4 m or null
 function routed(head, tail, y0, y1, bad, O, opts = {}) {
   const a = head[head.length - 1], b = tail[0];
   const dA = Math.atan2(a[0] - head[head.length - 2][0], a[1] - head[head.length - 2][1]);
   const dB = Math.atan2(tail[1][0] - b[0], tail[1][1] - b[1]);
-  const raw = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 0.8, soft: true, y0, y1: opts.noY1 ? undefined : y1, dirA: dA, dirB: dB, exK: opts.exK ?? 300 });
+  // (Oct 29: the grade between the 20 m cells paid gently and no pull toward y1 (that drew the search into the straightest
+  // line, the road hundreds of metres in the ground); its bends no longer opened to 60 m (that straightened the
+  // switchbacks it found): the road keeps near the ground)
+  // (a few ways weighed, the one whose road keeps nearest the ground)
+  let best = null;
+  for (const v of [{ grK: 0.15 }, { grK: 0.3, y0, exK: 30 }]) {
+    const r = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 1.0, soft: true, steepPen: 0, dirA: dA, dirB: dB, ...v });
+    if (!r) continue;
+    const p = smoothRoute([...head, ...r.slice(1, -1), ...tail], { fixedA: head.length, fixedB: tail.length, eps: 6, minR: 24 });
+    if (p.some(([x, z]) => bad(x, z) && !head.concat(tail).some((q) => Math.hypot(q[0] - x, q[1] - z) < 40))) continue;
+    // (its own legs, and the road it carries on into, well apart: a strip over a strip is never right)
+    const sep = selfClearance([...p, ...(opts.after || [])], 120);
+    if (sep < 26) { DBG('routed: legs too close', JSON.stringify(v), sep.toFixed(0)); continue; }
+    const D = roadDeviation(p, y0, y1);
+    DBG('routed', JSON.stringify(v), 'len', p.length * 4, 'dev', D.dev.toFixed(1), (100 * D.big).toFixed(0) + '%');
+    if (!best || D.dev + 20 * D.big < best.sc) best = { p, sc: D.dev + 20 * D.big };
+    if (D.dev < 9 && D.big < 0.4) break; // (good enough: the search is not free)
+  }
+  if (best) return best.p;
+  // (else as before)
+  let raw = routeH({ x: a[0], z: a[1] }, { x: b[0], z: b[1] }, { obstacles: O, bad, margin: opts.margin ?? 450, maxGrade: 0.1, maxTurn: 0.8, soft: true, y0, y1: opts.noY1 ? undefined : y1, dirA: dA, dirB: dB, exK: opts.exK ?? 300 });
   if (!raw) return null;
-  return smoothRoute([...head, ...raw.slice(1, -1), ...tail], { fixedA: head.length, fixedB: tail.length });
+  const p = smoothRoute([...head, ...raw.slice(1, -1), ...tail], { fixedA: head.length, fixedB: tail.length });
+  return selfClearance([...p, ...(opts.after || [])], 120) < 26 ? null : p;
 }
 
 // The Hochkopfstrasse (Oct 29, the user: "add some more roads ... a big mountain where you drive up"): off the
 // Ostalstrasse at a T junction, a flowing mountain road up the Hochkopf (the free summit between the Ostal and the
 // Hinterkopf hollow, ~770 m) to a viewpoint car park on its top. -> a T spur { s, x, z, y, lot, pts (from the car
 // park down to the junction), name } or null
-// a road winding up round a summit (a cone of a mountain: round it in a rising spiral, no hairpins at all): from B,
-// round `top` (either way) along the contour at its own height as it climbs at `grade`, its radius eased (no more
-// than ~20 degrees off the circle), each round at least `minSep` inside the one below -> [[x, z]...] or null
-function spiralClimb(top, B, y0, topH, bad, { grade = 0.09, dir = 1, minSep = 55 } = {}) {
-  let th = Math.atan2(B.x - top.x, B.z - top.z), r = Math.hypot(B.x - top.x, B.z - top.z), y = y0;
-  const pts = [[B.x, B.z]], below = new Map(), bin = (a) => Math.round((((a % 6.2832) + 6.2832) % 6.2832) / 0.035);
-  let turned = 0;
-  for (let step = 0; step < 4000; step++) {
-    if (y >= topH || r < 40) break;
-    const dth = (dir * 4) / Math.max(r, 30);
-    const k = bin(th);
-    if (turned < 6.2832 - 0.3) below.set(k, r); // (the first round: the one the next must stay inside)
-    th += dth; turned += Math.abs(dth);
-    // (the contour at the road's height near this radius)
-    let want = r, be = Infinity;
-    for (let rr = Math.max(30, r - 60); rr <= r + 60; rr += 3) { const e = Math.abs(Hs(top.x + Math.sin(th) * rr, top.z + Math.cos(th) * rr) - (y + grade * 4)) + Math.abs(rr - r) * 0.04; if (e < be) { be = e; want = rr; } }
-    r = clamp(want, r - 1.4, r + 1.4);
-    const rb = below.get(bin(th));
-    if (turned > 6.2832 - 0.3 && rb !== undefined) { r = Math.min(r, rb - minSep); if (turned > 6.2832 + 0.3) below.set(bin(th), r); }
-    if (r < 40) break;
-    const x = top.x + Math.sin(th) * r, z = top.z + Math.cos(th) * r;
-    if (bad(x, z)) { DBG('spiral bad', Math.round(x), Math.round(z), Math.round(y)); return y > topH - 70 ? smoothPath(pts, 3, 4) : null; }
-    const q = pts[pts.length - 1];
-    y += grade * Math.hypot(x - q[0], z - q[1]);
-    pts.push([x, z]);
-  }
-  if (y < topH - 70) { DBG('spiral short', Math.round(y), topH); return null; }
-  return smoothPath(pts, 3, 4);
-}
-
 const SUMMIT_AT = { x: 3330, z: 2480 };
 function summitRoad(parent, O) {
   let top = null;
@@ -190,12 +193,12 @@ function summitRoad(parent, O) {
   for (let s = 160; s < parent.length - 160; s += 8) { roadAt(parent, s, P); const d = Math.hypot(P.x - top.x, P.z - top.z); if (!near || d < near.d) near = { s, d }; }
   if (!near) return null;
   const LEAD = 64;
-  for (const ds of [0, -100, 100, -200, 200, -300, 300]) {
+  for (const ds of [0, -200, 200, -100]) {
     const s = clamp(near.s + ds, 160, parent.length - 160);
     roadAt(parent, s, P);
     let nx = -P.dz, nz = P.dx;
     if ((top.x - P.x) * nx + (top.z - P.z) * nz < 0) { nx = -nx; nz = -nz; }
-    const bad = badNet(O, [{ x: P.x, z: P.z, r: 60 }]);
+    const bad = badNet(O, [{ x: P.x, z: P.z, r: 60, r0: 30 }]); // (near the junction other roads may come close, but never onto their lanes)
     const lead = [];
     for (let t = 0; t <= LEAD; t += 4) lead.push([P.x + nx * t, P.z + nz * t]);
     if (lead.some(([x, z]) => Math.hypot(x - P.x, z - P.z) > 30 && bad(x, z))) { DBG('summit lead bad', ds); continue; }
@@ -203,13 +206,14 @@ function summitRoad(parent, O) {
     // (round the mountain in a rising spiral, either way; else up its face in switchbacks)
     // (to the Hochalm viewpoint on its shoulder, ~300 m up: round the mountain in a rising spiral, either way, or up its
     // face in flowing switchbacks; never the old comb)
-    const topH = Math.min(top.h - 10, P.y + 0.05 * LEAD + 300);
-    let ZZ = null;
-    for (const dir of [1, -1]) {
-      const sp = spiralClimb(top, B, P.y + 0.05 * LEAD, topH, bad, { dir });
-      if (sp) { ZZ = { pts: sp, pins: 0, yEnd: P.y + 0.05 * LEAD + 0.09 * sp.length * 4, spiral: dir }; break; }
+    // (Oct 29: on the ground (routed / the grade line), up to ~300 m, else less; the spiral and the switchbacks of
+    // before ran up to 450 m under the mountain: dropped)
+    let ZZ = null, topH = 0;
+    for (const rise of [300, 200]) {
+      topH = Math.min(top.h - 10, P.y + 0.05 * LEAD + rise);
+      ZZ = climb(B, ang, P.y + 0.05 * LEAD, O, null, { topH, bad, minPins: 0, legHalf: 150, noComb: true, noFlow: true, maxR: 900, target: top, routeVariants: 2 });
+      if ((!ZZ?.gradeLine && !ZZ?.routed) || ZZ.dev > 25) { DBG('summit climb off the ground', ds, rise, ZZ && ZZ.dev.toFixed(0)); ZZ = null; } else break;
     }
-    ZZ ||= climb(B, ang, P.y + 0.05 * LEAD, O, null, { topH, bad, minPins: 0, legHalf: 150, noComb: true });
     if (!ZZ) { DBG('summit no climb', ds); continue; }
     const zz = ZZ.pts.slice(1), up = [...lead.slice(0, -8), ...smoothPath([...lead.slice(-8), ...zz.slice(0, 18)], 4, 4), ...zz.slice(18)]; // (the corner where the lead turns onto the climb rounded)
     const e = up.length, hx0 = up[e - 1][0] - up[e - 3][0], hz0 = up[e - 1][1] - up[e - 3][1], hl = Math.hypot(hx0, hz0) || 1;
@@ -217,7 +221,7 @@ function summitRoad(parent, O) {
     let ok = true;
     for (let a = -lot.hw - 3; a <= lot.hw + 3 && ok; a += 5) for (let b = -lot.hd - 3; b <= lot.hd + 3 && ok; b += 5) if (bad(lot.x + lot.ux * a + lot.vx * b, lot.z + lot.uz * a + lot.vz * b)) ok = false;
     if (!ok) { DBG('summit lot bad', ds); continue; }
-    lot.y = Math.min(lot.y, ZZ.yEnd);
+    lot.y = Math.min(lot.y, ZZ.yEnd, P.y + 0.105 * 4 * up.length); // (never more than the road can climb to it at its grade)
     const pts = [[lot.ex - lot.dirx * 7, lot.ez - lot.dirz * 7], [lot.ex, lot.ez], ...up.slice().reverse()];
     DBG('summit road', Math.round(top.x), Math.round(top.z), Math.round(top.h), 'pins', ZZ.pins, 'len', pts.length * 4);
     return { s, x: P.x, z: P.z, y: P.y, lot, pts, name: 'Hochalmstrasse' };
@@ -243,7 +247,7 @@ export function planScenicLoop(O) {
   const angEP = freeAngle(E, dirTo(E, PASS_AT));
   const bE = armPt(E, angEP, RING_R + 34); // (the switchbacks' first leg well clear of the roundabout's other arms)
   const badP = badNet(O, [{ x: P0.x, z: P0.z, r: 85, r0: RING_R + 16 }, { x: E.x, z: E.z, r: 55 }]);
-  const ZZ = climb(bE, angEP, E.y, O, null, { topH: Hs(PASS_AT.x, PASS_AT.z) - 4, bad: badP, minPins: 2, legHalf: 120 });
+  const ZZ = climb(bE, angEP, E.y, O, null, { topH: Hs(PASS_AT.x, PASS_AT.z) - 4, bad: badP, minPins: 2, legHalf: 120, target: PASS_AT, routeVariants: 3 });
   if (!ZZ) { console.warn('scenic loop: no switchbacks up to the pass'); return; }
   DBG('pass zigzag pins', ZZ.pins, 'yEnd', ZZ.yEnd.toFixed(0), 'end', ZZ.pts[ZZ.pts.length - 1].map(Math.round));
   const zUp = ZZ.pts; // (from bE up to the top)
@@ -258,7 +262,7 @@ export function planScenicLoop(O) {
   for (const dA of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, Math.PI]) {
     const a = freeAngle(P0, want + dA);
     if (P0.arms.some((o) => Math.abs(wrap(o.ang - a)) < 0.9)) continue;
-    const h = armStart(P0, a), m = routed(h, tailR, P0.y, ZZ.yEnd, badP, O);
+    const h = armStart(P0, a), m = routed(h, tailR, P0.y, ZZ.yEnd, offPath(badP, tailP.slice(12), tailR[0]), O, { after: tailP.slice(12) });
     if (m && !crosses(m)) { angPE = a; mid = m; break; }
     DBG('pass arm', (a * 57.3).toFixed(0), m ? 'crosses' : 'no route', m && m.filter(([x, z]) => Math.hypot(x - P0.x, z - P0.z) > RING_R + 12 && laneDistance(x, z) < 7.8).slice(0, 3).map((q) => q.map(Math.round).join(',')).join(' '));
   }
@@ -328,14 +332,14 @@ export function planScenicLoop(O) {
     const badD = badNet(O, [{ x: J.x, z: J.z, r: 75 }], { xing: true });
     const angUp = dirTo(B, BRINK_AT);
     DBG('valley B', Math.round(B.x), Math.round(B.z), 'top', Math.round(Hs(BRINK_AT.x, BRINK_AT.z)), 'y', Math.round(J.y));
-    const ZD = climb(B, angUp, J.y + 0.098 * 90, O, null, { topH: Hs(BRINK_AT.x, BRINK_AT.z) - 6, bad: badD, minPins: 2, legHalf: 130 });
+    const ZD = climb(B, angUp, J.y + 0.098 * 90, O, null, { topH: Hs(BRINK_AT.x, BRINK_AT.z) - 6, bad: badD, minPins: 2, legHalf: 130, target: BRINK_AT });
     if (ZD) {
       DBG('valley zigzag pins', ZD.pins, 'yEnd', ZD.yEnd.toFixed(0), 'end', ZD.pts[ZD.pts.length - 1].map(Math.round));
       const angHW = freeAngle(H, dirTo(H, BRINK_AT));
       const badW = badNet(O, [{ x: H.x, z: H.z, r: 55 }], { xing: true });
       const down = ZD.pts.slice().reverse(); // (from the top down to B)
       const head = armStart(H, angHW);
-      const mid2 = routed(head, down.slice(0, 12), H.y, ZD.yEnd, badW, O, { margin: 400 });
+      const mid2 = routed(head, down.slice(0, 12), H.y, ZD.yEnd, offPath(badW, down.slice(12), down[0]), O, { margin: 400, after: down.slice(12) });
       if (mid2) {
         const end = down.slice(-12);
         for (let t = 86; t >= 0; t -= 4) end.push([J.x + ux * t, J.z + uz * t]);

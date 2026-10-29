@@ -70,6 +70,10 @@ export class SkiBus {
   updateRide(dt, fast) { return this.line ? this.line.updateRide(dt, fast) : null; }
   applyCamera(camera, input, dt) { return this.line ? this.line.applyCamera(camera, input, dt) : false; }
   abort() { this.line?.abort(); }
+  /** Per frame: the other buses on their rounds (bus.js BusLine.updateFleet). p: where you are. */
+  updateFleet(dt, p) { this.line?.updateFleet(dt, p); }
+  /** The buses now: [{ id ('bus:0'..'bus:7'), x, z, yaw, at, route, seats, taken }] (multiplayer seats, later). */
+  fleetState() { return this.line ? this.line.fleetState() : []; }
   // the road network's own stop object for one of ours (same name: the sign stands beside the road's end)
   netStop(s) { return busRoads.stops.find((q) => q.name === s.name) || s; }
 

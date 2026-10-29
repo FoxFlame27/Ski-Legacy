@@ -414,7 +414,7 @@ export class ChaletRoom {
     for (const r of ROOMS) if (r.bath) for (const q of r.rects) this.plane(q.x0, q.z0, q.x1, q.z1, (r.level === 'up' ? FL : G) + 0.006, M.floorTile);
     const around = [[-IX, -IZ, IX, H.z0], [-IX, H.z1, IX, IZ], [-IX, H.z0, H.x0, H.z1], [H.x1, H.z0, IX, H.z1]];
     for (const [x0, z0, x1, z1] of around) { this.plane(x0, z0, x1, z1, FL, M.floor); this.plane(x0, z0, x1, z1, GC, M.ceiling, true); }
-    const sl = FL - GC, sy = (GC + FL) / 2;
+    const sl = FL - GC + 0.002, sy = (GC + FL) / 2 - 0.005; // (the stairwell's trim: 4 mm under the floor, 6 mm under the ceiling: no face in their planes)
     this.box(H.x1 - H.x0, sl, 0.04, M.beam, (H.x0 + H.x1) / 2, sy, H.z0);
     this.box(H.x1 - H.x0, sl, 0.04, M.beam, (H.x0 + H.x1) / 2, sy, H.z1);
     this.box(0.04, sl, H.z1 - H.z0, M.beam, H.x1, sy, (H.z0 + H.z1) / 2);
@@ -531,27 +531,37 @@ export class ChaletRoom {
       }
       this.addSolid(W.level, a, b, IT / 2, ops.map((o) => [o.u0, o.u1]), false, y0, up ? FL + COLLAR : GC);
     }
-    for (const R of RAILS) {
+    RAILS.forEach((R, i) => {
       const [ax, az] = R.a, [bx, bz] = R.b, L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L, ry = Math.atan2(ux, uz) - Math.PI / 2;
-      this.box(L + 0.06, 0.06, 0.08, M.beam, (ax + bx) / 2, FL + 1.0, (az + bz) / 2, ry);
-      this.box(L, 0.05, 0.05, M.beam, (ax + bx) / 2, FL + 0.1, (az + bz) / 2, ry);
+      const dy = i * 0.004; // (the two rails cross at the corner: their tops / bottoms never in one plane)
+      this.box(L + 0.06, 0.06, 0.08, M.beam, (ax + bx) / 2, FL + 1.0 + dy, (az + bz) / 2, ry);
+      this.box(L, 0.05, 0.05, M.beam, (ax + bx) / 2, FL + 0.1 + dy, (az + bz) / 2, ry);
       for (let u = 0; u <= L + 1e-6; u += 0.13) this.box(0.035, 0.9, 0.035, M.beam, ax + ux * u, FL + 0.55, az + uz * u);
       this.addSolid('up', R.a, R.b, 0.05, [], false, FL, FL + 1.04);
-    }
+    });
   }
 
   // ------------------------------------------------------------------ the stair (along z, at the back of the hall)
   buildStair() {
-    const S = STAIR, n = S.steps, run = (S.z1 - S.z0) / n, rise = (FL - G) / n, w = S.x1 - S.x0, xm = (S.x0 + S.x1) / 2;
+    const S = STAIR, n = S.steps, run = (S.z1 - S.z0) / n, rise = (FL - G) / n;
+    // No two faces in one plane anywhere (they z-fought: the plaster body's top was the tread's top, its front the
+    // tread's front). Per step: the plaster body (riser) set back 2 cm, its top buried mid-way inside the wooden tread, its
+    // sides 5 mm in; the tread 4 cm thick, 1 cm proud each side, its nosing 3 cm over the riser, its back tucked
+    // inside the next step's body (the last one's in the stairwell's trim, short of the upper floor). The walk heights (the
+    // treads' tops: stairY) are unchanged.
+    const bx0 = S.x0 + 0.005, bx1 = S.x1 - 0.005, tx0 = S.x0 - 0.01, tx1 = S.x1 + 0.01;
     for (let k = 0; k < n; k++) {
-      const y1 = G + (k + 1) * rise, z = S.z0 + (k + 0.5) * run;
-      this.box(w, y1 - G, run, this.M.plaster, xm, (G + y1) / 2, z);
-      this.box(w + 0.02, 0.04, run + 0.03, this.M.beam, xm, y1 - 0.02, z + 0.015);
+      const y1 = G + (k + 1) * rise, z0 = S.z0 + k * run, z1 = z0 + run, last = k === n - 1;
+      const by0 = G - 0.01, by1 = y1 - 0.02, bz0 = z0 + 0.02, bz1 = last ? S.z1 - 0.01 : z1 + 0.01;
+      this.box(bx1 - bx0, by1 - by0, bz1 - bz0, this.M.plaster, (bx0 + bx1) / 2, (by0 + by1) / 2, (bz0 + bz1) / 2);
+      const tz0 = z0 - 0.01, tz1 = last ? S.z1 - 0.01 : z1 + 0.03; // (the last: into the stairwell's trim, not under the floor)
+      this.box(tx1 - tx0, 0.04, tz1 - tz0, this.M.beam, (tx0 + tx1) / 2, y1 - 0.02, (tz0 + tz1) / 2);
     }
-    const za = S.z0, zb = -1.2, ya = G + 0.95, yb = stairY(zb) + 0.95, L = Math.hypot(zb - za, yb - ya);
-    const rail = this.box(0.06, 0.06, L, this.M.beam, S.x1 - 0.04, (ya + yb) / 2, (za + zb) / 2);
+    // the handrail: it ends short of the hall wall (x -0.78, from z -1.3) instead of running into it
+    const za = S.z0, zb = -1.36, ya = G + 0.95, yb = G + 0.95 + (zb - za) * (rise / run), L = Math.hypot(zb - za, yb - ya);
+    const rail = this.box(0.06, 0.06, L, this.M.beam, S.x1 - 0.045, (ya + yb) / 2, (za + zb) / 2);
     rail.rotation.x = -Math.atan2(yb - ya, zb - za);
-    this.box(0.08, 1.0, 0.08, this.M.beam, S.x1 - 0.04, G + 0.5, S.z0 + 0.05);
+    this.box(0.08, 1.005, 0.08, this.M.beam, S.x1 - 0.045, G + 0.4975, S.z0 + 0.05); // (its foot 5 mm under the floor)
     this.solidStair = [[S.x0, S.z0, S.x0, -1.2, 0.02], [S.x1, S.z0, S.x1, -1.2, 0.02]];
   }
 

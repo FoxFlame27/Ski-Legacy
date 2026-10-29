@@ -28,6 +28,10 @@ const PLOT_W = 28;                         // m along the leg: a side garden, th
 const PAD_FRONT = 9.2, FRONT_GARDEN = 2.6; // m from the leg's centre line to the pad; the front garden (pad edge to the steps)
 const PAD_DEPTH = FRONT_GARDEN + FOOT.x1 + HX + 1.2; // (the back wall 1.2 m short of the pad's back: the eaves overhang the bank)
 const BAY = { w: 5.4, d: 5.6 };            // the private parking beside each house: two 2.5 x 5 m bays, fenced
+// (Oct 29, the user: the parking "too far forward", the drive "a huge flat slab": the bays set back beside the house,
+// a normal-width lane to them from the road)
+const BAY_SET = 3.4;                       // m from the pad's front edge to the bays (beside the house's front wall)
+export const DRIVE_W = 3.2;                // the drive: a lane from the road's plowed edge to the bays
 const BANK = 0.7;                          // tan 35 degrees: the terraces' banks
 export const CHALET_PLACE = { x: 500, z: 1075, label: 'Chalet village', r: 200 };
 
@@ -118,7 +122,7 @@ export function planChaletVillage(O) {
       const wz = sd > 0 ? 1 : -1, lo = Math.min(wz * FOOT.z0, wz * FOOT.z1), hi = Math.max(wz * FOOT.z0, wz * FOOT.z1);
       const hx = bs > 0 ? x0 + 4.4 - lo : x1 - 4.4 - hi; // (a 4.4 m side garden, the bay on the other side)
       const bx = bs > 0 ? hx + hi + 1.0 + BAY.w / 2 : hx + lo - 1.0 - BAY.w / 2;
-      const bay = { x: bx, z: at(PAD_FRONT + 0.3 + BAY.d / 2), w: BAY.w, d: BAY.d, yaw: sd > 0 ? 0 : Math.PI };
+      const bay = { x: bx, z: at(PAD_FRONT + BAY_SET + BAY.d / 2), w: BAY.w, d: BAY.d, yaw: sd > 0 ? 0 : Math.PI };
       const s = nearestS(bay.x, zl);
       roadAt(road, s, P);
       const za = at(PAD_FRONT), zb = at(PAD_FRONT + PAD_DEPTH);
@@ -220,7 +224,7 @@ export function planAlmdorfStop() {
     for (let k = 1; k < n; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z[k] - Z[k - 1]);
     return { from, to, n, X, Y, Z, S, length: S[n - 1], busLeg: true, base: r0, s0: r0.S[a] };
   };
-  const stop = { x: J.x, z: J.z, heading: 0, name: 'Almdorf', chalets: true };
+  const stop = { x: J.x, z: J.z, heading: 0, name: 'Chalet Village', chalets: true }; // (the stop formerly called Almdorf)
   busRoads.stops.push(stop); // (the same array as layout.busStops: the trail map and the stop list show it)
   busRoads.busLegs = [slice(0, iJ, r0.from, stop), slice(iJ, r0.n - 1, stop, r0.to)];
 }
@@ -310,20 +314,33 @@ export function chaletLampSpots(V, items = [], colliders = []) {
 export const CHALET_DRIVES = { on: true }; // (Node checks: off for the before/after comparison)
 // (getters: roads.js and this file import each other, so ROAD_HALF isn't set yet while this module first runs)
 const DRIVE = { get v0() { return ROAD_HALF; }, get vr() { return ROAD_HALF; }, M: 2.2, OFF: 0.04 };
+/** Is (x, v) on the drive (the lane) or its bays (v: metres from the leg's centre line, into the plot)? e: margin. */
+export function onDrive(d, x, v, e = 0) {
+  const a = Math.abs(x - d.cx);
+  if (v < d.v0 - 1e-6 || v > d.vb1 + e + 1e-6) return false;
+  return v < d.vb0 - e ? a <= d.dw2 + e + 1e-6 : a <= d.bw2 + e + 1e-6 || (v < d.vb0 && a <= d.dw2 + e + 1e-6);
+}
+/** Distance (m, in plan) from (x, v) to the drive and its bays (0 on them). */
+export function driveDistance(d, x, v) {
+  const a = Math.abs(x - d.cx);
+  const dl = Math.hypot(Math.max(0, a - d.dw2), Math.max(0, d.v0 - v, v - d.vb0));
+  const db = Math.hypot(Math.max(0, a - d.bw2), Math.max(0, d.vb0 - v, v - d.vb1));
+  return Math.min(dl, db);
+}
 export function driveHeight(p, x, z) {
   const d = p.drv;
   if (!d) return null;
   const v = d.sd * (z - d.legZ);
-  if (v < d.v0 - 1e-6 || v > d.vb1 + 1e-6 || x < d.x0 - 1e-6 || x > d.x1 + 1e-6) return null;
+  if (!onDrive(d, x, v)) return null;
   // (4 cm over the graded ground, and never under the drawn 2 m terrain triangles: where one spans the fold at the
   // road's edge it lies up to ~5 cm over the ground there; the mesh follows it there, under a centimetre)
   return Math.max(driveGround(d, x, v), world.meshHeight(x, z) - 0.03) + DRIVE.OFF;
 }
-// the graded ground: x anywhere (the road end's line extended), v from the plowed edge on
+// the graded ground: the lane (x across it: the road end's line extended), v from the plowed edge on; the bays flat
 function driveGround(d, x, v) {
-  const ya = d.ya0 + (d.ya1 - d.ya0) * (x - d.x0) / (d.x1 - d.x0);
-  if (v <= d.vr) return ya;
   if (v >= d.vb0) return d.yb;
+  const ya = d.ya0 + (d.ya1 - d.ya0) * (clamp(x, d.x0, d.x1) - d.x0) / (d.x1 - d.x0);
+  if (v <= d.vr) return ya;
   return ya + (d.yb - ya) * (v - d.vr) / (d.vb0 - d.vr);
 }
 export function planChaletDrives(V) {
@@ -331,11 +348,11 @@ export function planChaletDrives(V) {
   const list = [];
   for (const p of V.plots) {
     if (p.playground || !p.bay) continue;
-    const sd = p.side, x0 = p.bay.x - p.bay.w / 2, x1 = p.bay.x + p.bay.w / 2;
-    const vb0 = PAD_FRONT + 0.3, vb1 = vb0 + p.bay.d;
+    const sd = p.side, cx = p.bay.x, dw2 = DRIVE_W / 2, bw2 = p.bay.w / 2, x0 = cx - dw2, x1 = cx + dw2;
+    const vb0 = PAD_FRONT + BAY_SET, vb1 = vb0 + p.bay.d;
     // the road end: the road's own height at the plowed edge (its grade along the lane), read before this cut
     const za = p.legZ + sd * DRIVE.v0;
-    const d = { sd, legZ: p.legZ, x0, x1, v0: DRIVE.v0, vr: DRIVE.vr, vb0, vb1, ya0: world.height(x0, za), ya1: world.height(x1, za), yb: p.y, za, zb: p.legZ + sd * vb0, zc: p.legZ + sd * vb1 };
+    const d = { sd, legZ: p.legZ, cx, dw2, bw2, x0, x1, bx0: cx - bw2, bx1: cx + bw2, v0: DRIVE.v0, vr: DRIVE.vr, vb0, vb1, ya0: world.height(x0, za), ya1: world.height(x1, za), yb: p.y, za, zb: p.legZ + sd * vb0, zc: p.legZ + sd * vb1 };
     p.drv = d;
     list.push(d);
   }
@@ -343,23 +360,27 @@ export function planChaletDrives(V) {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   const R = DRIVE.M + 8; // (the banks: at most ~5.6 m of height to take up)
   for (const d of list) {
-    minx = Math.min(minx, d.x0 - R); maxx = Math.max(maxx, d.x1 + R);
+    minx = Math.min(minx, d.bx0 - R); maxx = Math.max(maxx, d.bx1 + R);
     const zA = d.za, zB = d.legZ + d.sd * (d.vb1 + R);
     minz = Math.min(minz, zA, zB); maxz = Math.max(maxz, zA, zB);
   }
+  const M = DRIVE.M;
   world.addCut({
     bounds: { minx, minz, maxx, maxz },
     chaletDrives: true,
     apply(x, z, h) {
       for (const d of list) {
-        if (x < d.x0 - R || x > d.x1 + R) continue;
+        if (x < d.bx0 - R || x > d.bx1 + R) continue;
         const v = d.sd * (z - d.legZ);
         if (v < d.v0 || v > d.vb1 + R) continue; // (never on the road itself)
-        const xa = d.x0 - DRIVE.M, xb = d.x1 + DRIVE.M, vb = d.vb1 + DRIVE.M;
-        const dx = Math.max(xa - x, 0, x - xb), dv = Math.max(v - vb, 0);
-        const T = driveGround(d, clamp(x, xa, xb), Math.min(v, vb));
-        if (dx === 0 && dv === 0) return T; // (the drive, the bay and their margins: exactly the plane)
-        const dd = Math.hypot(dx, dv), lo = T - dd * BANK_K, hi = T + dd * BANK_K;
+        // the lane and the bays, each with its flat margin (M); outside them, soft banks back to the ground
+        const a = Math.abs(x - d.cx);
+        const dl = Math.hypot(Math.max(0, a - d.dw2 - M), Math.max(0, v - d.vb0)); // (the lane: its own plane across)
+        const db = Math.hypot(Math.max(0, a - d.bw2 - M), Math.max(0, d.vb0 - v), Math.max(0, v - d.vb1 - M));
+        const lane = v < d.vb0 && dl <= db;
+        const T = lane ? driveGround(d, x, Math.min(v, d.vb0)) : d.yb, dd = lane ? dl : db;
+        if (dd === 0) return T; // (the drive, the bays and their margins: exactly the plane)
+        const lo = T - dd * BANK_K, hi = T + dd * BANK_K;
         if (h >= lo && h <= hi) return h;
         const k = Math.min(0.5, dd * BANK_K * 0.5); // (soft where the bank meets the ground; none at the plane's edge)
         return smax(smin(h, hi, k), lo, k);
@@ -371,6 +392,6 @@ export function planChaletDrives(V) {
   for (const p of V.plots) {
     const d = p.drv;
     if (!d) continue;
-    world.addSurface?.({ bounds: { minx: d.x0, maxx: d.x1, minz: Math.min(d.za - d.sd * 0.6, d.zc), maxz: Math.max(d.za - d.sd * 0.6, d.zc) }, height: (x, z) => driveHeight(p, x, z) });
+    world.addSurface?.({ bounds: { minx: d.bx0, maxx: d.bx1, minz: Math.min(d.za - d.sd * 0.6, d.zc), maxz: Math.max(d.za - d.sd * 0.6, d.zc) }, height: (x, z) => driveHeight(p, x, z) });
   }
 }

@@ -21,7 +21,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from '../world/world.js';
 import { layout } from '../world/layout.js';
 import { busRoads } from './bus/roads.js';
-import { chaletLampSpots, driveHeight } from './bus/chaletroad.js';
+import { chaletLampSpots, driveHeight, driveDistance, DRIVE_W } from './bus/chaletroad.js';
 import { loadGLB, fitModel, clusterDecimate } from '../core/assets.js';
 import { addNightGlow, nightUniform } from '../world/village.js';
 import { addStreetLamps } from '../world/pistelights.js';
@@ -108,15 +108,16 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
     const door = L(HX + 1.6, DOOR.z), dx = door.x;
     // the parking space and its drive (flat; edge to edge, never on top of each other)
     // (chaletroad.js planChaletDrives graded both: p.drv; the drive meets the road's plowed edge, edge to edge)
-    const bay = p.bay, bw = bay.w, bz0 = p.drv?.zb ?? zIn(0.3), bz1 = p.drv?.zc ?? zIn(0.3 + bay.d), road = p.drv?.za ?? p.legZ + sd * 3.7;
+    // (Oct 29: the bays set back beside the house, a 3.2 m lane to them; chaletroad.js DRIVE_W, BAY_SET)
+    const bay = p.bay, bw = bay.w, dw = DRIVE_W, bz0 = p.drv?.zb ?? bay.z - sd * bay.d / 2, bz1 = p.drv?.zc ?? bay.z + sd * bay.d / 2, road = p.drv?.za ?? p.legZ + sd * 3.4;
     put({ kind: 'bay', pid: p.id, plot: p, x: bay.x, z: (bz0 + bz1) / 2, yaw: 0, hw: bw / 2, hd: bay.d / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: bz0, zb: bz1, out: sd });
-    put({ kind: 'drive', pid: p.id, plot: p, x: bay.x, z: (road + bz0) / 2, yaw: 0, hw: bw / 2, hd: Math.abs(bz0 - road) / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: road, zb: bz0 });
-    // ONE fence round the plot: gaps for the drive and the gate
-    const gx0 = bay.x - bw / 2 - 0.15 - xa, gx1 = bay.x + bw / 2 + 0.15 - xa;
+    put({ kind: 'drive', pid: p.id, plot: p, x: bay.x, z: (road + bz0) / 2, yaw: 0, hw: dw / 2, hd: Math.abs(bz0 - road) / 2, flat: true, x0: bay.x - dw / 2, x1: bay.x + dw / 2, za: road, zb: bz0 });
+    // ONE fence round the plot: gaps for the drive (its snow berm too: buildLanes, 0.6 m) and the gate
+    const gx0 = bay.x - dw / 2 - 0.75 - xa, gx1 = bay.x + dw / 2 + 0.75 - xa;
     loop(p.id, xa, xb, zf, zb, [[gx0, gx1], [dx - 0.65 - xa, dx + 0.65 - xa]]);
     const toHouse = Math.sign(c.x - bay.x) || 1, awayBay = Math.sign(dx - bay.x) || 1;
-    // the "P PRIVAT" sign: inside the fence beside the drive's gap, on the house side, facing the road
-    { const sx = bay.x + toHouse * (bw / 2 + 0.45), sz = zIn(0.55); put({ kind: 'sign', pid: p.id, x: sx, z: sz, y: height(sx, sz), yaw: yawOut, hw: 0.25, hd: 0.06, y0: 0, y1: 1.95, col: true, r: 0.12 }); }
+    // the "P PRIVAT" sign: inside the fence beside the drive's gap (clear of its berm), on the house side, facing the road
+    { const sx = bay.x + toHouse * (dw / 2 + 1.05), sz = zIn(0.55); put({ kind: 'sign', pid: p.id, x: sx, z: sz, y: height(sx, sz), yaw: yawOut, hw: 0.25, hd: 0.06, y0: 0, y1: 1.95, col: true, r: 0.12 }); }
     // the mailbox at the gate (its number on the front), on the gate's side away from the drive
     { const mx = dx + awayBay * 1.05, mz = zIn(0.6); put({ kind: 'mailbox', pid: p.id, num: p.num, x: mx, z: mz, y: height(mx, mz), yaw: yawOut, hw: 0.2, hd: 0.18, y0: 0, y1: 1.3, col: true, r: 0.15 }); }
     // stepping stones from the gate to the steps (flush with the snow)
@@ -133,8 +134,8 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
       tree(gx, 10.2, 3.0 + hash(p.id + 2) * 0.7);
       if (hash(p.id * 7) < 0.6) { const z = zIn(8.4), x = gx - 0.6; put({ kind: 'snowman', pid: p.id, x, z, y: height(x, z), yaw: yawOut + 0.4, hw: 0.35, hd: 0.35, y0: 0, y1: 1.5, col: true, r: 0.4 }); }
     }
-    // dwarf spruces along the front of the house, clear of the steps and the path
-    for (const lz of [-4.6, -3.0, 2.6, 4.3]) { const q = L(HX + 1.6, lz); tree(q.x, Math.abs(q.z - p.front), 0.9 + hash(p.id * 13 + lz) * 0.4, 'shrub'); }
+    // (no dwarf spruces along the front of the house any more: decimated to a few hundred triangles, at night they
+    // read as black armchairs against the wall (Oct 29, the user))
   }
   return out;
 }
@@ -147,6 +148,67 @@ function atlasCell(n) { // uv rect (three: v up) of number n
   return [cx / ATLAS.w, 1 - (cy + ATLAS.ch) / ATLAS.h, (cx + ATLAS.cw) / ATLAS.w, 1 - cy / ATLAS.h];
 }
 const SIGN_UV = [ATLAS.sign.x / ATLAS.w, 1 - (ATLAS.sign.y + ATLAS.sign.h) / ATLAS.h, (ATLAS.sign.x + ATLAS.sign.w) / ATLAS.w, 1 - ATLAS.sign.y / ATLAS.h];
+
+// The snow on the drives and parking bays (as on the plowed roads, bus.js: the same kind of shader noise, in the
+// drape's own material, so no extra draw call): packed snow with wheel tracks up the middle of each 2.5 m bay
+// (worn to slush and tarmac in places), ragged snow along the edges, big patches of fresh snow and bare tarmac in
+// world space; the painted lines and PRIVAT show faintly through it (and clearly in the tracks).
+// uv (drape): u across the space (0..1, its two bays: lines at 0.04 / 0.5 / 0.96), world z along it.
+const DRIVE_SNOW_GLSL = `
+varying vec3 vSnW;
+varying vec2 vSnUv;
+float snH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float snN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(snH(i), snH(i + vec2(1.0, 0.0)), f.x), mix(snH(i + vec2(0.0, 1.0)), snH(i + vec2(1.0, 1.0)), f.x), f.y); }
+float snF(vec2 p) { return snN(p) * 0.5 + snN(p * 2.03 + 7.1) * 0.25 + snN(p * 4.01 + 3.3) * 0.125 + snN(p * 8.1 + 1.7) * 0.0625; }
+float snWet = 0.0;
+`;
+const DRIVE_SNOW_FRAG = `
+  {
+    vec2 Wp = vSnW.xz;
+    float sz = vSnW.z;
+    #ifdef DRIVE_BAY
+    float a = (vSnUv.x - 0.5) * 5.4, bt = 0.0, hw = 2.7; // (the bays: uv 0..1 across the 5.4 m)
+    #else
+    float a = vSnUv.x, bt = vSnUv.y, hw = 1.6;          // (the lane: metres across; the berm: bt > 0)
+    #endif
+    float wob = (snN(vec2(sz * 0.35, 3.7)) - 0.5) * 0.19;
+    float wid = 0.16 + 0.08 * snN(vec2(sz * 0.5, 1.3)); // (m: a tyre's track)
+    float tr = 0.0, aa = abs(a);
+    #ifdef DRIVE_BAY
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.6, abs(aa - 0.45 - wob)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.6, abs(aa - 2.05 + wob)));
+    #else
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.6, abs(aa - 0.8 - wob)));
+    #endif
+    float fine = snF(Wp * 1.1), P = snF(Wp * 0.09 + 4.0);
+    float clearT = (0.45 + 0.55 * smoothstep(0.3, 0.7, snN(vec2(sz * 0.12, Wp.x * 0.05 + 5.5)))) * (0.6 + 0.4 * fine);
+    float eN = snN(vec2(sz * 0.6, 2.2)) * 0.2 + (fine - 0.5) * 0.15;
+    float edge = smoothstep(hw - 0.45 - eN, hw - 0.05, aa) + step(0.001, bt);
+    float snow = clamp(1.0 - tr * clearT, 0.0, 1.0) * smoothstep(0.12, 0.45, P + 0.3 * fine);
+    float bare = smoothstep(0.66, 0.82, P);
+    snow = max(snow * (1.0 - bare * 0.85), clamp(edge, 0.0, 1.0));
+    float slush = (1.0 - snow) * smoothstep(0.3, 0.65, snF(Wp * 0.25 + 11.0)) * (1.0 - bare);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.29, 0.28) * (0.85 + 0.3 * fine), slush * 0.7);
+    // (at most ~80 % cover away from the edges: the paint underneath still reads, faintly)
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.84, 0.89) * (0.88 + 0.16 * fine), max(clamp(snow * (0.62 + 0.2 * fine) + clamp(edge, 0.0, 1.0) * 0.18, 0.0, 1.0), step(0.001, bt)));
+    snWet = slush;
+  }
+`;
+function drivewaySnow(mat, key) {
+  if (key === 'bay') mat.defines = { ...(mat.defines || {}), DRIVE_BAY: '' };
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSnW;\nvarying vec2 vSnUv;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSnW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvSnUv = uv;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\n${DRIVE_SNOW_GLSL}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>\n${DRIVE_SNOW_FRAG}`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= 1.0 - 0.45 * snWet;');
+  };
+  mat.customProgramCacheKey = () => `chalet-drive-snow-${key}`;
+  return mat;
+}
 
 export class Chalets {
   constructor(o) {
@@ -423,11 +485,56 @@ export class Chalets {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       geo.setIndex(idx); geo.computeVertexNormals();
-      const mat = new THREE.MeshStandardMaterial(textured ? { map: this.bayTexture(), roughness: 0.9 } : { color: 0x8d8a84, roughness: 0.95 });
+      const mat = drivewaySnow(new THREE.MeshStandardMaterial(textured ? { map: this.bayTexture(), roughness: 0.9 } : { color: 0x8d8a84, roughness: 0.95 }), textured ? 'bay' : 'drive');
       const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.name = textured ? 'chalet-bays' : 'chalet-drives'; g.add(m);
     };
     if (bays.length) drape(bays, true);
-    if (drives.length) drape(drives, false);
+    if (drives.length) this.buildLanes(g, drives);
+  }
+  // the drives (one mesh for the village): each plot's lane from the road to its bays, and a soft snow berm (BERM m
+  // wide, rounded at every corner) round the lane and the bays, so they blend into the snowy garden instead of
+  // ending in a hard-cut edge. One grid per plot over lane + bays + berm, its lines on the bays' own edges and
+  // subdivisions (the bays: their own textured mesh above, watertight with this one); quads on the bays left out.
+  // uv: x = metres across from the lane's centre line, y = how far into the berm (0 on the lane, 1 at its foot).
+  buildLanes(g, drives) {
+    const BERM = 0.6, pos = [], uv = [], idx = [];
+    const range = (a, b, n) => Array.from({ length: n + 1 }, (_, k) => a + ((b - a) * k) / n);
+    const uniq = (list) => list.sort((a, b) => a - b).filter((v, i, l) => i === 0 || v - l[i - 1] > 0.04);
+    for (const r of drives) {
+      const p = r.plot, d = p?.drv;
+      if (!d) continue;
+      const sd = d.sd, bw = d.bw2 * 2, bdep = d.vb1 - d.vb0;
+      const nxB = Math.max(1, Math.ceil(bw / 0.5)), nzB = Math.max(1, Math.ceil(bdep / 0.5)); // (as the bays' drape)
+      const xs = uniq([...range(d.bx0, d.bx1, nxB), d.cx - d.dw2, d.cx + d.dw2, d.bx0 - BERM * 0.5, d.bx0 - BERM, d.bx1 + BERM * 0.5, d.bx1 + BERM]);
+      const vs = uniq([...range(d.v0, d.vb0, Math.max(1, Math.ceil((d.vb0 - d.v0) / 0.5))), ...range(d.vb0, d.vb1, nzB), d.vb1 + BERM * 0.5, d.vb1 + BERM]);
+      const nx = xs.length, b = pos.length / 3, T = [];
+      for (const v of vs) for (const x of xs) {
+        const z = d.legZ + sd * v, t = driveDistance(d, x, v) / BERM;
+        let y;
+        if (t <= 1e-6) y = driveHeight(p, x, z) ?? world.height(x, z) + 0.04;
+        else {
+          const base = Math.max(world.height(x, z), world.meshHeight(x, z) - 0.03) + 0.04;
+          y = t >= 1 ? base - 0.08 : base + 0.13 * Math.sin(Math.PI * t) - 0.04 * t; // (up and over, its foot in the snow)
+        }
+        pos.push(x, y, z); uv.push(x - d.cx, Math.min(1, t)); T.push(t);
+      }
+      const onBay = (k) => { const x = xs[k % nx], v = vs[Math.floor(k / nx)]; return T[k] <= 1e-6 && v >= d.vb0 - 1e-6 && Math.abs(x - d.cx) <= d.bw2 + 1e-6; };
+      for (let j = 0; j < vs.length - 1; j++) for (let i = 0; i < nx - 1; i++) {
+        const q = [j * nx + i, j * nx + i + 1, (j + 1) * nx + i, (j + 1) * nx + i + 1];
+        if (q.every((k) => T[k] >= 1)) continue; // (out past the berm)
+        if (q.every(onBay)) continue;            // (the bays' own mesh)
+        const [a0, a1, a2, a3] = q.map((k) => b + k);
+        // (facing up: v runs along +z for sd > 0, along -z for sd < 0)
+        if (sd > 0) idx.push(a0, a2, a1, a1, a2, a3); else idx.push(a0, a1, a2, a1, a3, a2);
+      }
+    }
+    if (!idx.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    const mat = drivewaySnow(new THREE.MeshStandardMaterial({ color: 0x8d8a84, roughness: 0.95 }), 'drive');
+    const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.name = 'chalet-drives'; g.add(m);
   }
   /** The bay's painting (canvas: x = u, left to right as you drive in; y down = from the back (v 1) to the road (v 0)). */
   static bayLayout() {

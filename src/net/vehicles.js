@@ -123,7 +123,11 @@ export class RemoteVehicles {
     tag.position.set(0, (t.size?.y || 1.5) + 0.55, 0);
     group.add(tag);
     this.o.scene.add(group);
-    const c = { pid: r.pid, key, t, inst, group, tag, x: 0, y: 0, z: 0, yaw: 0, steer: 0, u: 0, lit: -1, posed: false, driven: false, atRef: null };
+    // solid like any parked or traffic car (a box collider in the shared list: you can't walk or drive through it); parked
+    // far away while it isn't placed
+    const col = { x: 1e9, z: 1e9, hw: (t.size?.x || 1.9) / 2, hd: (t.size?.z || 4.6) / 2, rot: 0, h: 1.7, car: true, mp: true };
+    this.o.colliders?.push(col);
+    const c = { pid: r.pid, key, t, inst, group, tag, col, x: 0, y: 0, z: 0, yaw: 0, steer: 0, u: 0, lit: -1, posed: false, driven: false, atRef: null };
     this.cars.set(r.pid, c);
     return c;
   }
@@ -132,6 +136,8 @@ export class RemoteVehicles {
     if (!c) return;
     c.group.removeFromParent();
     c.tag.material.map.dispose(); c.tag.material.dispose();
+    const L = this.o.colliders, i = L ? L.indexOf(c.col) : -1;
+    if (i >= 0) L.splice(i, 1);
     this.cars.delete(pid);
   }
   updateCar(r, dt, cam, outdoors) {
@@ -158,6 +164,9 @@ export class RemoteVehicles {
     const d = c.posed ? _d.set(c.x, c.y, c.z).sub(cam).length() : Infinity;
     const show = outdoors && c.posed && d < VEH_FAR;
     if (g.visible !== show) g.visible = show;
+    // (not while you ride in it: you sit inside its box)
+    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid;
+    c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
     g.position.set(c.x, c.y, c.z);
     g.rotation.set(0, c.yaw, 0);

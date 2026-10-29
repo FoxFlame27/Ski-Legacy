@@ -142,6 +142,7 @@ export class Multiplayer {
     this.vehicles = new RemoteVehicles({
       scene: this.c.scene, models: () => window.__game?.models, camera: () => this.c.camera,
       localCar: () => this.carRide.localCar(), selfName: () => MP.name,
+      colliders: this.c.colliders, ridingPid: () => this.carRide.ride?.pid, // (their cars are solid: you can't walk or drive through them)
       transitSeat: (k, v, n, out) => this.transit.seat(k, v, n, out), // (riders of the shared trains, cabins, buses)
     });
     this.remotes = new RemotePlayers({

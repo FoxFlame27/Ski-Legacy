@@ -382,7 +382,7 @@ async function boot() {
   // multiplayer: the session object (nothing connects until MULTIPLAYER in the menu)
   try {
     multiplayer = new Multiplayer({
-      save, hud, audio, env, camera, scene, getEquipped,
+      save, hud, audio, env, camera, scene, getEquipped, colliders,
       makeRig: (c, s) => makeRig(c, s, { poles: true, ai: true }), applyOutfit,
       fx: (id, r, info, dt) => skierFX(trails, spray, id, r, info, dt),
       pose: mpPose, getScene: mpScene, setAI: setAIOn, applySave: applyMpSave, onLost: (why) => leaveMultiplayer(why),

@@ -22,6 +22,7 @@ import { layout } from '../world/layout.js';
 import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 
+export const STRAY_BACK = 180; // s left off the road and outside any car park / lay-by (with you away) before it goes back to its bay
 export const TOW_AFTER = 75;    // s left blocking a road with you away before the truck is called
 export const AWAY_R = 40;       // m: "away" from your car
 const LOT = { hw: 18, hd: 9 };  // the car park's half length (along the road) and half depth (two rows of bays)
@@ -174,17 +175,22 @@ export class Impound {
     return { x: e.car.position.x, y: e.car.position.y, z: e.car.position.z, impounded: !!(e.impound || e.towing), car: e };
   }
 
-  // is the car standing on a road (a lane or a junction), not in a car park, the rental's yard or a lay-by?
-  blocking(e) {
-    if (!busRoads.roads.length) return false;
-    const g = e.car, x = g.position.x, z = g.position.z, yaw = g.rotation.y, fx = Math.sin(yaw), fz = Math.cos(yaw), h = (e.length || 4.6) / 2 - 0.4;
-    if (this.inLot(x, z)) return false;
+  // properly parked: in a car park, the rental's yard / lot or a lay-by
+  parked(e) {
+    const g = e.car, x = g.position.x, z = g.position.z;
+    if (this.inLot(x, z)) return true;
     for (const L of busRoads.lots) {
       if (L.hw === undefined || L.ux === undefined) continue;
       const dx = x - L.x, dz = z - L.z;
-      if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + 0.8 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + 0.8) return false; // (a car park, the rental's lot)
+      if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + 0.8 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + 0.8) return true; // (a car park, the rental's lot)
     }
-    for (const lb of busRoads.laybys || []) { const lx = Math.sin(lb.yaw), lz = Math.cos(lb.yaw), dx = x - lb.x, dz = z - lb.z; if (Math.abs(dx * lx + dz * lz) < 11 && Math.abs(dx * lz - dz * lx) < 3.5) return false; }
+    for (const lb of busRoads.laybys || []) { const lx = Math.sin(lb.yaw), lz = Math.cos(lb.yaw), dx = x - lb.x, dz = z - lb.z; if (Math.abs(dx * lx + dz * lz) < 11 && Math.abs(dx * lz - dz * lx) < 3.5) return true; }
+    return false;
+  }
+  // is the car standing on a road (a lane or a junction), not in a car park, the rental's yard or a lay-by?
+  blocking(e) {
+    if (!busRoads.roads.length || this.parked(e)) return false;
+    const g = e.car, x = g.position.x, z = g.position.z, yaw = g.rotation.y, fx = Math.sin(yaw), fz = Math.cos(yaw), h = (e.length || 4.6) / 2 - 0.4;
     for (const k of [0, 1, -1]) if (laneDistance(x + fx * h * k, z + fz * h * k) < ROAD_HALF + 0.2) return true;
     return false;
   }
@@ -205,7 +211,23 @@ export class Impound {
     this.t = 0.5;
     const p = R.player.pos, d = Math.hypot(p.x - e.car.position.x, p.z - e.car.position.z);
     const block = this.blocking(e);
-    if (!block || d < 15) { e.abandonT = 0; if (!block) e.warned = false; return; } // (moved off the road, or you came back)
+    // left off the road and outside any car park (in the snow, on a verge): back in its bay after 3 minutes, no fee
+    // (Oct 29, the user: "if you leave your car behind not on the road or a parking lot it should go back to a parking
+    // lot after 3 min")
+    if (!block) {
+      e.abandonT = 0; e.warned = false;
+      if (d < AWAY_R || !busRoads.roads.length || this.parked(e)) { e.strayT = 0; return; }
+      e.strayT = (e.strayT || 0) + step;
+      if (e.strayT >= STRAY_BACK) {
+        e.strayT = 0;
+        this.place(e, this.own);
+        if (R.drive) R.drive._cc = null;
+        R.hud?.flash(`Your car was left out in the snow · it's back in your bay at the car rental`, 'good', 4200);
+      }
+      return;
+    }
+    e.strayT = 0;
+    if (d < 15) { e.abandonT = 0; return; } // (you came back)
     if (d > 25 && !e.warned) { e.warned = true; R.hud?.flash('Your car is blocking the road · it will be towed if you leave it there', 'bad', 3600); }
     if (d >= AWAY_R) e.abandonT = (e.abandonT || 0) + step;
     if (e.abandonT >= TOW_AFTER) this.tow(e);

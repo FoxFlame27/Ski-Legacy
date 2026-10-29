@@ -308,7 +308,8 @@ export function chaletLampSpots(V, items = [], colliders = []) {
  * sinks into it where the 2 m terrain triangles round the ramp's ends fall below it.
  */
 export const CHALET_DRIVES = { on: true }; // (Node checks: off for the before/after comparison)
-const DRIVE = { v0: ROAD_HALF, vr: ROAD_HALF, M: 2.2, OFF: 0.04 };
+// (getters: roads.js and this file import each other, so ROAD_HALF isn't set yet while this module first runs)
+const DRIVE = { get v0() { return ROAD_HALF; }, get vr() { return ROAD_HALF; }, M: 2.2, OFF: 0.04 };
 export function driveHeight(p, x, z) {
   const d = p.drv;
   if (!d) return null;

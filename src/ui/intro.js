@@ -1,4 +1,4 @@
-// Boot intro: the SKI LEGACY logo clip (src/ui/introclip.js) -> Icecold Studio -> a mountain card.
+// Boot intro: the SKI LEGACY logo clip (src/ui/introclip.js) -> Icecold Studio.
 // Canvas clip + DOM/CSS scenes + WebAudio hits; skippable with any key or click.
 import '@fontsource-variable/source-serif-4/opsz.css'; // calm editorial serif for the studio + mountain cards
 import { IntroClip, CLIP_MS } from './introclip.js';
@@ -8,15 +8,6 @@ const wait = (ms, sig) => new Promise((res) => {
   const t = setTimeout(res, ms);
   sig.onSkip.push(() => { clearTimeout(t); res(); });
 });
-
-// The intro's mountain mark: three snowy peaks drawn as one line (it draws itself in: stroke-dashoffset), and a sun.
-export function peaksMark(w = 220) {
-  return `<svg class="peaks-mark" width="${w}" height="${Math.round(w * 0.5)}" viewBox="0 0 220 110" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-    <circle class="peaks-sun" cx="168" cy="26" r="12" stroke="#ff4d3d"/>
-    <path class="peaks-line" pathLength="1" d="M6 100 L58 34 L78 58 L112 14 L146 62 L162 46 L214 100"/>
-    <path class="peaks-snow" pathLength="1" d="M47 48 L58 34 L68 47 M101 28 L112 14 L124 30"/>
-  </svg>`;
-}
 
 export class Intro {
   constructor(audio) {
@@ -74,20 +65,6 @@ export class Intro {
       if (!sig.skipped) await wait(STUDIO_MS, sig);
       await this.leave(s, STUDIO_LEAVE_MS);
       ident.stop();
-    }
-
-    // 3 -- a mountain card: the peaks drawn in, the line, and a word before the game (headphones on)
-    if (!sig.skipped) {
-      const s = this.scene(`
-        <div class="peakcard">
-          ${peaksMark()}
-          <div class="peak-title">SKI LEGACY</div>
-          <div class="peak-sub">Best played with headphones</div>
-        </div>`, 'scene-peaks');
-      requestAnimationFrame(() => s.classList.add('in'));
-      this.audio?.play('soft');
-      await wait(2300, sig);
-      await this.leave(s, 700);
     }
 
     removeEventListener('keydown', this.skip);

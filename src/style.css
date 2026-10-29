@@ -160,19 +160,6 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .studio-static-sub { font-family: 'Inter Variable', system-ui, sans-serif; font-weight: 600; font-size: min(3.4vh, 2.25vw); letter-spacing: 0.36em; margin-right: -0.36em; color: #9fb3c4; }
 @keyframes studioIn { from { opacity: 0; transform: scale(1.02); } }
 
-/* 3: the mountain card (src/ui/intro.js peaksMark): the peaks draw in, then the title and the line */
-.scene-peaks { background: radial-gradient(ellipse at 50% 35%, #1c4fa0 0%, #0c2a5c 55%, #071733 100%); }
-.peakcard { text-align: center; color: #fff; }
-.peaks-mark { display: block; margin: 0 auto 26px; }
-.peaks-line, .peaks-snow { stroke-dasharray: 1; stroke-dashoffset: 1; }
-.scene-peaks.in .peaks-line { transition: stroke-dashoffset 1.3s cubic-bezier(.4,0,.2,1); stroke-dashoffset: 0; }
-.scene-peaks.in .peaks-snow { transition: stroke-dashoffset 0.6s 1.0s ease-out; stroke-dashoffset: 0; }
-.peaks-sun { opacity: 0; transform-origin: 168px 26px; transform: scale(0.4); }
-.scene-peaks.in .peaks-sun { transition: opacity 0.6s 0.8s, transform 0.8s 0.8s cubic-bezier(.2,.9,.2,1); opacity: 1; transform: none; }
-.peak-title { font-family: 'Barlow Condensed', sans-serif; font-weight: 700; font-style: italic; font-size: 64px; letter-spacing: 0.06em; opacity: 0; transform: translateY(10px); transition: opacity 0.7s 0.9s, transform 0.9s 0.9s cubic-bezier(.2,.9,.2,1); }
-.peak-sub { margin-top: 10px; font-family: 'Inter Variable', system-ui, sans-serif; font-size: 16px; font-weight: 500; letter-spacing: 0.24em; text-transform: uppercase; color: #9fc2ff; opacity: 0; transition: opacity 0.8s 1.3s; }
-.scene-peaks.in .peak-title, .scene-peaks.in .peak-sub { opacity: 1; transform: none; }
-
 /* =================== UI SCALE + SHARED PIECES =================== */
 /* 1u = 1px on a 1280x800 canvas. Menus, race HUD, results and transitions size everything in
    multiples of --u, so the layout always fits (1024x640 up to 2880x1800: the tighter axis wins).

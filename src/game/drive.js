@@ -415,10 +415,12 @@ export class Drive {
     // only gently. It moves at a limited rate and centres itself. (Steering works whatever the pedals do: A/D are
     // read on their own, and the tyres always keep most of their grip for turning: traction control / ABS below.)
     // (latOk: the cornering the grip leaves while braking / accelerating, la: the friction circle)
-    const latOk = Math.sqrt(Math.max((0.3 * s.mu * G) ** 2, (0.78 * s.mu * G) ** 2 - d.la * d.la));
+    // (Oct 29: the whole grip asked for, was 78 %, and the wheel turned in 1.6x as fast: steering felt dull, wide
+    // turns at speed. The self-centring rate is as before)
+    const latOk = Math.sqrt(Math.max((0.3 * s.mu * G) ** 2, (s.mu * G) ** 2 - d.la * d.la));
     const lock = clamp((L * latOk) / Math.max(1, au * au) + 0.015, 0.03, 0.6);
-    // (the rate: ~0.3 s to the lock whatever the speed, so a tap at speed is a small correction, not a swerve)
-    const rate = Math.min((steerIn ? 2.6 : 3.6) / (1 + au / 18), Math.max(lock * (steerIn ? 3.2 : 5), steerIn ? 0.2 : 0.35));
+    // (the rate: ~0.2 s to the lock whatever the speed, so a tap at speed is a quick correction, not a swerve)
+    const rate = Math.min((steerIn ? 4.2 : 3.6) / (1 + au / 18), Math.max(lock * (steerIn ? 5.1 : 5), steerIn ? 0.32 : 0.35));
     d.steer += clamp(steerIn * lock - d.steer, -rate * dt, rate * dt);
     const delta = d.steer;
     if (!d.air) {
@@ -476,16 +478,17 @@ export class Drive {
       v += (FL / m - r * u0) * dt;
       r += ((a * (Fxf * sn + Fyf * cs) - b * Fyr) / Iz) * dt;
       // stability assist (ESC): a yaw rate beyond what the wheels ask (u tan(delta) / L, no more than the grip can
-      // carry) or against it is pulled back (oversteer, a spin: caught; too little is left to the tyres, only nudged),
+      // carry) or against it is pulled back (oversteer, a spin: caught; too little: helped round on the road, only
+      // nudged on snow),
       // and the rear's sideways slide (v - b r: the rear axle drifting out) is damped; firm on the road (no sliding at
       // normal driving, no creep), softer on snow (a gentle, recoverable slide, never a spin on its own); the
       // handbrake mostly overrides it
       {
-        const rMax = (latOk * 1.05) / Math.max(Math.abs(u), 2);
+        const rMax = (latOk * (s.road ? 1.3 : 1.2)) / Math.max(Math.abs(u), 2);
         const rT = clamp((u / L) * Math.tan(delta), -rMax, rMax);
         const over = r * rT < 0 || Math.abs(r) > Math.abs(rT);
         const hbK = hb && au > 0.5 ? 0.15 : 1;
-        r += (rT - r) * (1 - Math.exp(-dt * (s.road ? 7 : 3.5) * (over ? 1 : 0.25) * hbK));
+        r += (rT - r) * (1 - Math.exp(-dt * (s.road ? 7 : 3.5) * (over ? 1 : s.road ? 0.8 : 0.25) * hbK));
         v = b * r + (v - b * r) * Math.exp(-dt * (s.road ? 6 : 2) * hbK);
       }
       // braking to a stop doesn't roll it backwards; parked stays put; and at a standstill off the pedals it holds

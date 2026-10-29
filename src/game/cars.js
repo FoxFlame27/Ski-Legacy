@@ -197,8 +197,9 @@ const LAMP_RULES = {
   },
   car_audi_rs6: {
     test: /LightA_Material|red_glass/i,
+    // (the two small lamps over the number plate at the back: plate lamps, white, never a red tail light)
     kind: (l, p) => /red_glass/i.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'lensR' : null)
-      : p.mirror ? 'ind' : p.front ? 'head' : p.third ? 'third' : p.rear && !p.low ? 'tail' : null,
+      : p.mirror ? 'ind' : p.front ? 'head' : p.third ? 'third' : p.rear && !p.low && Math.abs(p.x) > 0.25 ? 'tail' : null,
   },
   car_vw_golf_gti: {
     test: /Glow_|Trunk_Red_Glass|Glass_Red|Glass_Clear|Clear_Glass/i,
@@ -296,9 +297,12 @@ const LAMP_RULES = {
   car_toyota_gr_yaris: {
     test: /LightA_Material|red_glass|glass_light/i, tex: true,
     kind: (l, p) => {
+      const ax = Math.abs(p.x);
+      // (the Toyota emblems' clear covers, front on the grille and back on the tailgate, and the gloss strip behind the
+      // rear one are glass_light too: never a lamp, they lit up as lens glass with the head / tail lights)
+      if (/red_glass|glass_light/i.test(l) && ax < 0.3 && !p.hi && !p.low) return null;
       if (/red_glass/i.test(l)) return p.third ? 'third' : p.rear && !p.low ? 'lensR' : null;
       if (/glass_light/i.test(l)) return p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null;
-      const ax = Math.abs(p.x);
       if (p.mirror) return 'ind*'; // the repeaters in the mirrors
       // the headlamps (a plain reflector texture): the L of light guide along the lower edge and up the outer side the
       // DRL, the reflector bowl inside the low beam (low: the fog lamps, never lit here)

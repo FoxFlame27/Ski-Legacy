@@ -66,6 +66,8 @@ export const TUNING = {
   ramMult: 1.2,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
   ramGapS: 2.5,      // s a patrol car drops back after a ram before the next
   cooldownS: 6,
+  holdR: 12,         // m: a patrol car this close to you for holdS (in all; it ebbs away when they're further) ...
+  holdS: 12,         // s: ... and they get out and arrest you (the user: "you can just sit in your car and they won't arrest you")
   wreckKmh: 15,      // you hitting a patrol car: damage % = (km/h closing - this) x wreckPer; 100 %: wrecked
   wreckPer: 0.9,
   backupS: 9,        // s after a patrol car is wrecked before another comes (the chase goes on meanwhile)
@@ -596,6 +598,8 @@ export class Police {
     const paused = !!this.paused?.();
     try {
       if (W && !paused) this.chase(dt, W);
+      // being arrested in your car: it is held (drive.js: no throttle, no steering, brakes on, no getting out)
+      if (this.drive) this.drive.held = !!((W?.scene?.kind === 'arrest' && !W.scene.abort) || this.jailing) && !!this.drive.active;
       for (const u of this.units) if (u.on) { if (!W) this.leave(u, dt); if (u.on) policeLights(u.m, true, this.time + u.k * 0.21); }
       this.hits(dt);
       this.wrecks(dt);
@@ -636,6 +640,10 @@ export class Police {
       const moving = T.car ? T.sp > 4 : T.foot && away > 2.2;
       if (W.grace <= 0 && moving) this.flee(W);
     }
+    // boxed in: a patrol car within holdR of you for holdS in all (it ebbs away twice as fast when they're further):
+    // they get out and arrest you, whatever your speed (you can't sit it out in the car, nor drive off: drive.held)
+    W.holdT = near < TUNING.holdR ? (W.holdT || 0) + dt : Math.max(0, (W.holdT || 0) - dt * 2);
+    if (W.holdT >= TUNING.holdS) { W.holdT = 0; this.begin(W, 'arrest', lead, 'held'); return; }
     // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;
     // (on foot off the roads: parked as near you as a car gets counts as close)
@@ -1104,6 +1112,7 @@ export class Police {
     if (kind === 'fine') this.note('Pulled over · stay where you are');
     else if (why === 'wrecked') this.note('Your car is wrecked · the police are coming for you');
     else if (why === 'stopped') this.note('Stopped · you are under arrest');
+    else if (why === 'held') this.note('Boxed in by the police · you are under arrest');
   }
   // the officer: the police officer's rig on foot (his own, see loadOfficer), else a skier from the job pool
   // (jobs/actors.js), else a stand-in figure
@@ -1172,7 +1181,7 @@ export class Police {
     // the other car stays back (behind the lead, a little to the side)
     for (const x of this.units) if (x.on && x !== u) { const b = this.carPoint({ x: u.x, z: u.z, yaw: u.yaw }, 1.4, -11, this._p2 ||= {}); this.step(x, dt, b.x, b.z, clamp(hyp(x.x, x.z, b.x, b.z) * 0.8, 0, 14), u.yaw); }
     // you drive off (or run off) mid-scene: fleeing again; the officer back to his car
-    const off = T.car ? T.sp > 4.5 : T.foot && S.kind === 'fine' && T.sp > 2.6 && S.step !== 'pull';
+    const off = T.car ? S.kind === 'fine' && T.sp > 4.5 : T.foot && S.kind === 'fine' && T.sp > 2.6 && S.step !== 'pull'; // (an arrest in the car: held, drive.js)
     if (off && (S.step === 'pull' || S.step === 'walk' || (S.step === 'talk' && !S.said))) {
       this.flee(W);
       if (u.officer) { S.step = 'back'; S.abort = true; } else { W.scene = null; return; }
@@ -1292,6 +1301,7 @@ export class Police {
   /** Everything gone at once (an arrest's fade, a race, the prison). */
   clear(quiet = false) {
     this.w = null; this.cool = TUNING.cooldownS; this.wreckE = null;
+    if (this.drive) this.drive.held = false;
     for (const u of this.units) if (u.on) this.despawn(u);
     if (!quiet) this.setHud(false);
   }

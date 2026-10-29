@@ -1496,7 +1496,8 @@ function openPause() {
     // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
     // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
     // with its ambulance ride)
-    onVillage: heliRiding() || prison?.active ? undefined : !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
+    onVillage: heliRiding() || prison?.active || police?.active ? undefined : // (no RETURN TO VILLAGE during a police chase: the user)
+      !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: isMP() ? undefined : goToMainMenu,
     onLeaveMP: isMP() ? () => leaveMultiplayer() : undefined, // (multiplayer: LEAVE MULTIPLAYER instead of MAIN MENU)
     onQuit: () => { if (!isMP()) save.hour = freeRideHour() ?? env.hour; rememberSpot(); writeSave(); },

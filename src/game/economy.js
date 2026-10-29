@@ -72,11 +72,14 @@ export function loadSave() {
   return save;
 }
 
+let resetting = false; // (a reset in progress: nothing writes the old save back, e.g. the unload handlers in main.js)
 export function writeSave() {
+  if (resetting) return;
   try { localStorage.setItem(KEY, JSON.stringify(save)); } catch { /* storage unavailable */ }
 }
 
 export function resetSave() {
+  resetting = true;
   try { localStorage.removeItem(KEY); } catch { /* ignore */ }
   location.reload();
 }

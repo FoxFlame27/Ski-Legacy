@@ -371,11 +371,14 @@ async function boot() {
     save, writeSave, hud, audio, env, layout, input, camera, transition, streamAround, equipSkis,
     ctx: { get player() { return player; }, get modes() { return modes; }, get races() { return races; }, get interior() { return interior; }, get heli() { return heli; }, get sleds() { return sleds; },
       get lifts() { return lifts; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get started() { return started; }, get paused() { return paused; },
-      get secrets() { return secrets; }, get railway() { return railway; } },
+      get secrets() { return secrets; }, get railway() { return railway; }, get carRental() { return carRental; }, get drive() { return drive; }, get chalets() { return chalets; } },
   });
 
   // the RACING stand beside the village job board is gone (Oct 29, the user: "remove this racing day sign");
   // races are the free-ride races at the courses' start houses
+
+  // continue where you were (save.pos, kept while you play free ride): the pre-stream below streams around it
+  restoreSpot();
 
   // pre-stream the world around the start
   setLoad(0.7, 'Streaming terrain…');
@@ -414,6 +417,64 @@ async function streamAround(x, z) {
   guard = 0;
   while (vegetation.update(x, z, 0, 40) > 0 && guard++ < 200) await new Promise((r) => setTimeout(r, 0));
 }
+
+// ------------------------------------------------------------------ where you are, kept in the save
+// (Oct 29, the user: "make it so you keep the location you are at when you quit the game"): save.pos = { x, z, y, h,
+// skis }, your last outdoor free-ride spot on foot or skis (driving: where you'd step out of the car). Not taken
+// inside the shop / car rental / a chalet, in a race or mode, on a lift, bus, train, snowmobile or the helicopter, in
+// a fall or a jump, or in the menus: then the last good spot stays. Restored at launch and at PLAY from the main menu;
+// a new game (reset save) has none, so it starts in Legacy Village.
+const SPOT_LIMIT = 12000;
+function outdoorSpot() {
+  if (!started || busIntro || !player || wipeoutBusy || transition?.active) return null;
+  if (modes?.active || races?.active) return null;
+  if (interior?.active || chalets?.inside || carRental?.inside) return null;
+  if (heliRiding() || sleds?.active) return null;
+  if (drive?.active) {
+    try { const sp = drive.exitSpot(drive.d); return { x: sp.x, z: sp.z, y: drive.d.y, h: sp.heading, skis: false }; } catch { return null; }
+  }
+  if ((player.mode !== 'walk' && player.mode !== 'ski') || player.air || player.frozen || player.seat) return null;
+  return { x: player.pos.x, z: player.pos.z, y: player.pos.y, h: player.heading, skis: player.mode === 'ski' && !!player.skisOn };
+}
+function rememberSpot() {
+  try {
+    const sp = outdoorSpot();
+    if (!sp || ![sp.x, sp.z, sp.y, sp.h].every(Number.isFinite)) return;
+    const r = (v) => Math.round(v * 100) / 100;
+    save.pos = { x: r(sp.x), z: r(sp.z), y: r(sp.y), h: r(sp.h), skis: sp.skis };
+  } catch { /* (the last good spot stays) */ }
+}
+// the saved spot if it is still a good place to stand (in the world, on the ground, not in a building / tree / car)
+function savedSpot() {
+  const sp = save.pos;
+  if (!sp || typeof sp !== 'object' || ![sp.x, sp.z, sp.h].every(Number.isFinite)) return null;
+  if (Math.abs(sp.x) > SPOT_LIMIT || Math.abs(sp.z) > SPOT_LIMIT) return null;
+  try {
+    const g = world.groundHeight(sp.x, sp.z, Number.isFinite(sp.y) ? sp.y + 0.5 : Infinity);
+    if (!Number.isFinite(g)) return null;
+    if (drive?.clearAt && !drive.clearAt(sp.x, sp.z, 0.3)) return null;
+    const y = Number.isFinite(sp.y) && Math.abs(g - sp.y) < 3 ? sp.y : undefined;
+    return { x: sp.x, z: sp.z, y, h: sp.h, skis: !!sp.skis };
+  } catch { return null; }
+}
+// put the player at the saved spot (no streaming: callers stream around it); false = none, the normal spawn stays
+function restoreSpot() {
+  const sp = savedSpot();
+  if (!sp) { if (save.pos) save.pos = null; return false; }
+  try {
+    player.frozen = false;
+    player.setSkisOn(false);
+    player.teleport(sp.x, sp.z, sp.h, sp.y);
+    if (sp.skis && player.hasSkis && !player.isFlatHere?.()) player.setSkisOn(true);
+    player.rig?.setSkisVisible?.(player.hasSkis);
+    player.resumed = true;
+    return true;
+  } catch (e) { console.warn('restore spot', e); player.teleport(4, 34, Math.PI); player.resumed = false; return false; }
+}
+function persistSpot() { rememberSpot(); writeSave(); }
+addEventListener('beforeunload', persistSpot);
+addEventListener('pagehide', persistSpot);
+document.addEventListener('visibilitychange', () => { if (document.hidden && started) persistSpot(); });
 
 // Wipeout in free ride: let the tumble play out until you lie in the snow, fade out, wake up in Legacy Village.
 let wipeoutBusy = false;
@@ -491,7 +552,8 @@ async function wipeoutToVillage() {
 function startGame() {
   if (started) return;
   if (player.rig && save.character !== player.rigChar) swapCharacter(save.character);
-  player.camYaw = 0; player.camPitch = -0.12;
+  player.camYaw = player.resumed ? player.heading + Math.PI : 0; player.camPitch = -0.12; // (continued: the camera behind you)
+  player.resumed = false;
   menu.hide();
   hud.show();
   hud.setMoney(save.money);
@@ -512,6 +574,12 @@ async function startFromMenu(sel = {}) {
   // a new skier chosen from the pause menu's SETTINGS: swap in place and play on
   if (started) { if (player.rig && save.character !== player.rigChar) swapCharacter(save.character); menu.hide(); closePause(); return; }
   // (Oct 29, the user: no bus intro: a new game starts straight in Legacy Village)
+  // back from the main menu: on where you were (the menu waits in the village); streamed behind the menu
+  const sp = savedSpot();
+  if (sp && Math.hypot(player.pos.x - sp.x, player.pos.z - sp.z) > 3 && restoreSpot()) {
+    await streamAround(player.pos.x, player.pos.z);
+    if (started) return;
+  }
   startGame();
 }
 // (Oct 28, the user: "the intro is super bad, it doesn't look like the game at all: you're just in the bus and you
@@ -567,6 +635,7 @@ async function backToStand() {
 
 // Back to the main menu over the panorama (called behind a fade): the player waits in the village.
 async function backToMenu() {
+  rememberSpot(); // (where you were: PLAY, or the next launch, carries on from there)
   if (outfitShop?.isOpen) outfitShop.close();
   heli.abort();
   if (races.active) races.abort();
@@ -1134,7 +1203,7 @@ function openPause() {
     // with its ambulance ride)
     onVillage: heliRiding() ? undefined : !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: goToMainMenu,
-    onQuit: () => { save.hour = freeRideHour() ?? env.hour; writeSave(); },
+    onQuit: () => { save.hour = freeRideHour() ?? env.hour; rememberSpot(); writeSave(); },
   });
 }
 function closePause() {
@@ -1195,7 +1264,7 @@ const PANO_LOOK = new THREE.CatmullRomCurve3([
   new THREE.Vector3(0, 1100, -2350), new THREE.Vector3(1800, 900, -900), new THREE.Vector3(3190, 1100, -800),
   new THREE.Vector3(0, 500, -1800),
 ], true, 'centripetal');
-let titleT = 0.02, saveTimer = 0, lastDay = env.hour, interaction = null, prevMode = null;
+let titleT = 0.02, saveTimer = 0, spotTimer = 0, lastDay = env.hour, interaction = null, prevMode = null;
 const tmpLight = new THREE.Color(), tmpLight2 = new THREE.Color();
 
 // Dynamic resolution: hold the preset's frame rate by scaling the render resolution between its floor and its
@@ -1528,7 +1597,9 @@ function loop() {
     save.stats.topSpeed = Math.max(save.stats.topSpeed, player.topSpeed);
     bests?.update(dt, inSession || !!races.active || heli.active);
     saveTimer += dt;
-    if (saveTimer > 10) { saveTimer = 0; save.hour = freeRideHour() ?? env.hour; writeSave(); }
+    spotTimer += dt;
+    if (spotTimer > 1) { spotTimer = 0; rememberSpot(); } // (written with the save below, and on quit)
+    if (saveTimer > 5) { saveTimer = 0; save.hour = freeRideHour() ?? env.hour; writeSave(); }
   }
 
   if (!started && showcase.active) showcase.update(dt);

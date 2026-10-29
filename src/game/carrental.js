@@ -80,7 +80,7 @@ export class CarRental {
     } catch (e) { console.warn('tow truck', e); this.truck = null; }
     // drive.js: only your rental lets you in; a wreck of it: the fee and the truck
     if (o.drive) {
-      o.drive.locked = (e) => (e.rental ? null : 'Rent a car at Car Rental in Legacy Village');
+      o.drive.locked = (e) => (e.rental || e.free ? null : 'Rent a car at Car Rental in Legacy Village');
       o.drive.onWreck = (e) => this.wrecked(e);
     }
     // the save: your rental back in the yard
@@ -205,11 +205,11 @@ export class CarRental {
   // ------------------------------------------------------------------ rental cars (parking entries drive.js can drive)
   // cfg: carconfig.js normConfig() (the car, its paint, interior, rims, plate): the car in the yard is exactly that one,
   // and so is every look of it drive.js makes (e.dress: driving, the full-detail cockpit)
-  spawn(cfg) {
+  spawn(cfg, p = this.carSpot, free = false) {
     const id = cfg.id, spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
-    if (!spec || !gltf || !this.parking) return null;
-    const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group, p = this.carSpot;
-    car.name = 'rental-car';
+    if (!spec || !gltf || !this.parking || !p) return null;
+    const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group;
+    car.name = free ? 'admin-car' : 'rental-car';
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;
     (this.parking.group.parent ? this.parking.group : this.scene).add(car);
     const collider = { x: p.x, z: p.z, hw: 0.97, hd: spec.length / 2, rot: -p.yaw, h: 1.7, car: true };
@@ -217,10 +217,25 @@ export class CarRental {
     const block = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.5, spec.length - 0.1), new THREE.MeshBasicMaterial());
     block.position.y = 0.8; block.visible = false; car.add(block); car.updateMatrixWorld(true);
     this.cameraBlockers?.push(block);
-    const e = { car, inst, t, far: null, full: car.children[0], name: id, length: spec.length, paint: paintHex(cfg.paint), paintId: cfg.paint, cfg, collider, block, held: [], rental: true, home: { x: p.x, z: p.z, yaw: p.yaw } };
+    const e = { car, inst, t, far: null, full: car.children[0], name: id, length: spec.length, paint: paintHex(cfg.paint), paintId: cfg.paint, cfg, collider, block, held: [], rental: !free, free, home: { x: p.x, z: p.z, yaw: p.yaw } };
     e.dress = (i, tt) => dressCar(i, tt, e.cfg);
     (this.parking.cars ||= []).push(e);
     if (this.drive) this.drive._cc = null; // (drive.js re-collects the cars' colliders)
+    return e;
+  }
+  // admin panel (ui/admin.js): a free car of a random model from the fleet, parked at { x, z, yaw }; yours to drive
+  // like a rental, no fee (a wreck of it: just towed away). One at a time: the last one goes when a new one comes.
+  spawnFree(spot) {
+    const kinds = RENTALS.filter((c) => this.models[c.id]);
+    if (!kinds.length || !spot) return null;
+    const spec = kinds[Math.floor(Math.random() * kinds.length)];
+    const paint = PAINTS[Math.floor(Math.random() * PAINTS.length)]?.id;
+    if (this.freeCar && !this.freeCar.driving && !this.freeCar.wrecked) this.remove(this.freeCar);
+    const e = this.spawn(normConfig({ id: spec.id, paint }), spot, true);
+    if (!e) return null;
+    this.freeCar = e;
+    if (Number.isFinite(spot.y)) { e.car.position.y = spot.y + 0.03; e.car.updateMatrixWorld(true); } // (the ground you stand on: a road, a bridge)
+    e.label = spec.label;
     return e;
   }
   // a car gone from the world (returned, or the wreck off the truck)

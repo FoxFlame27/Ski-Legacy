@@ -1197,17 +1197,23 @@ function applyMpSave() {
   if (carRental) carRental.mp = on ? {
     rent: (cfg) => multiplayer.rentCar(cfg).then((car) => { if (car) carRental.placeRented({ ...cfg, ...car }); }),
     ended: (cfg) => multiplayer.carEnded(cfg),
+    plateCheck: (p) => multiplayer.plateCheck(p), plateIssue: () => multiplayer.plateIssue(), // (the configurator: plates unique for everyone)
   } : null;
   if (outfitShop) outfitShop.buyHook = on ? (id) => multiplayer.buyOutfit(id) : null;
 }
 // your presence for the other players (filled ~12x a second, no allocation)
 const _mpDir = new THREE.Vector3();
 function mpPose(o) {
-  let cam = null;
+  let cam = null, room = null;
   o.interior = null;
-  if (interior.active) { o.interior = 'skishop'; cam = interior.camera; }
-  else if (carRental?.inside) { o.interior = 'carrental'; cam = carRental.room?.camera; }
+  if (interior.active) { o.interior = 'skishop'; cam = interior.camera; room = interior; }
+  else if (carRental?.inside) { o.interior = 'carrental'; cam = carRental.room?.camera; room = carRental.room; }
   else if (chalets?.inside && chalets.current) { o.interior = `chalet:${chalets.current.id}`; cam = chalets.room?.camera; }
+  if (room?.pos && Number.isFinite(room.yaw)) { // (the shop / rental: where you walk, not the camera, which swings off to a preview or the clerk)
+    o.x = room.pos.x; o.y = room.pos.y || 0; o.z = room.pos.z; o.yaw = room.yaw;
+    o.vx = room.vel?.x || 0; o.vy = 0; o.vz = room.vel?.z || 0; o.st = MPST.walk; o.crouch = 0; o.lean = 0; o.flags = 0;
+    return;
+  }
   if (cam) { // (inside: the interior's own camera is you)
     cam.getWorldDirection(_mpDir);
     o.x = cam.position.x; o.y = cam.position.y - 1.6; o.z = cam.position.z; o.yaw = Math.atan2(_mpDir.x, _mpDir.z);
@@ -1277,7 +1283,8 @@ function mpRaceStart(d) {
     chalets?.leave(true);
     player.frozen = false;
     if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
-    return modes.startFree(e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false });
+    return modes.startFree(e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false,
+      grid: { slot: d.slot, n: d.n }, others: () => multiplayer.raceOthers() }); // (your own grid slot; the others' times)
   }).then(() => input.lock(), (err) => console.warn('multiplayer race', err));
 }
 
@@ -1287,6 +1294,8 @@ function findInteraction() {
   if (player.mode === 'sit' || races.active || heli.rescuing) return null;
   const carPrompt = drive?.interaction(p);
   if (carPrompt) return carPrompt;
+  const ride = isMP() ? multiplayer?.carInteraction(p) : null; // (multiplayer: "Ask <owner> for a ride" at their car)
+  if (ride) return ride;
   const rental = carRental?.interaction(p); // the CAR RENTAL's door
   if (rental) return rental;
   const chalet = chalets?.interaction(p); // a chalet's front door (rent it / go in)
@@ -1721,6 +1730,7 @@ function loopUpdate() {
   traffic?.update(dt); // cars on the roads (after you moved: they stop for you)
   mark('traffic');
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
+  if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
   chalets?.update(dt); // the full-detail chalet nearest you
   mark('drive');

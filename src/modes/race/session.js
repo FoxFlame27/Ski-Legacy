@@ -191,6 +191,8 @@ export class RaceSession {
     // broadcast presentation
     // multiplayer: syncGo() -> seconds until the shared GO (server clock); the countdown is timed to it, no intro
     this.syncGo = typeof o.syncGo === 'function' ? o.syncGo : null;
+    // multiplayer: your slot on the start grid (the server's raceStart grid: { slot, n }), so racers never overlap
+    this.mpGrid = o.grid && Number.isInteger(o.grid.slot) ? { slot: Math.max(0, o.grid.slot), n: Math.max(1, o.grid.n | 0) } : null;
     this.introEnabled = o.intro !== false && !this.syncGo;
     this.introDone = false;
     this.weather = o.weather; // string or () => string for the intro's lower third
@@ -385,8 +387,10 @@ export class RaceSession {
     this.parkCount = 0;
     this.prevOrder.length = 0;
     // start grid: the player at the start wand, the field abreast and staggered behind
-    const slots = this.gridSlots(this.bots.length + 1);
-    const me = slots[0];
+    const mpSlot = this.mpGrid ? this.mpGrid.slot : 0;
+    const slots = this.gridSlots(Math.max(this.bots.length + 1, this.mpGrid ? Math.max(this.mpGrid.n, mpSlot + 1) : 0));
+    const me = slots[mpSlot];
+    if (mpSlot) { slots.splice(mpSlot, 1); slots.splice(0, 0, me); } // (bots, if any, take the other slots)
     this.bots.forEach((b, i) => {
       const sl = slots[i + 1];
       b.reset(sl.s, sl.lat, this.attempt);
@@ -1410,6 +1414,8 @@ export class RaceSession {
 
   raceRows() {
     const rows = [{ name: 'You', time: this.finalTime, me: true, kind: 'player', dnf: false }];
+    // multiplayer: the other players who have finished (raceProgress; the server's results card has everyone)
+    try { for (const r of this.freeRide?.others?.() || []) rows.push(r); } catch (e) { console.warn('Race: other racers', e); }
     for (const b of this.bots) {
       const time = b.finished ? b.finishTime : b.projectFinish();
       rows.push({ name: b.name, time, me: false, kind: 'bot', dnf: !Number.isFinite(time), projected: !b.finished });

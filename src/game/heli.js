@@ -157,6 +157,7 @@ export class Heli {
     if (this.state === 'parked' && this.away && Math.hypot(pos.x - f.pos.x, pos.z - f.pos.z) < 9) return this.prompts.again;
     if (!this.pad.near(pos)) return null;
     if (this.state === 'auto') return this.prompts.away;
+    if (this.mp && !this.away && !this.mp.ready()) return this.mp.wait(); // (multiplayer: out with someone, the next copy later)
     return this.away ? this.prompts.call : this.prompts.book;
   }
 
@@ -205,7 +206,12 @@ export class Heli {
     }
     const broke = save.money < HELI_PRICE, H = this.home;
     const eta = (km) => (40 + (km * 1000) / 42) / 60; // spool-up and climb, then ~150 km/h
-    const fly = (zone) => { if (this.spend(HELI_PRICE)) { this.plan = zone; this.board(); } lock(); };
+    const fly = (zone) => {
+      // multiplayer: the server rents it (its price; one copy at a time, net/heli.js)
+      if (this.mp) { this.mp.rent().then((ok) => { if (ok && this.state === 'parked') { this.plan = zone; this.board(); } }); lock(); return; }
+      if (this.spend(HELI_PRICE)) { this.plan = zone; this.board(); }
+      lock();
+    };
     const dests = dropZones().map((z) => ({ z, km: Math.hypot(z.x - H.x, z.z - H.z) / 1000 })).sort((a, b) => a.km - b.km)
       .map(({ z, km }) => ({ name: z.name, x: z.x, z: z.z, km, zone: z, dot: 'peak', meta: `${km.toFixed(1)} km · ${fmtMin(eta(km))} · ${z.vertical} m vertical`, act: () => fly(z) }));
     // the race courses on the mountains: the heli sets you down beside the start house (E there races the course)
@@ -240,7 +246,7 @@ export class Heli {
     const broke = save.money < HELI_PRICE;
     this.hud.dialog('Heli-Ski', 'Untouched powder on the far peaks. You take the controls: fly anywhere you like, hover low over fresh snow and jump out to ski.', [
       { label: 'Fly the helicopter', sub: broke ? `$${HELI_PRICE} · you have $${save.money}` : `$${HELI_PRICE} · you are the pilot`, disabled: broke,
-        act: () => { if (this.spend(HELI_PRICE)) this.board(); lock(); } },
+        act: () => { if (this.mp) this.mp.rent().then((ok) => { if (ok && this.state === 'parked') this.board(); }); else if (this.spend(HELI_PRICE)) this.board(); lock(); } },
       { label: 'Not now', act: lock },
     ]);
   }

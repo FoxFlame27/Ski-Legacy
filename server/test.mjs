@@ -130,6 +130,31 @@ try {
   const ra2 = await a.req('carReturn', { plate: 'SKI 1' });
   const pc2 = await b.req('plateCheck', { plate: 'SKI 1' });
   ok(ra2.ok && pc2.d.free === true, 'returned car: its plate is free again');
+  const pi = await b.req('plateIssue');
+  const pi2 = await a.req('plateCheck', { plate: pi.d.plate });
+  ok(pi.ok && pi.d.plate && pi2.d.free === true && pi.d.plate !== cb2.d.car.plate, 'plateIssue: a random plate nobody has');
+
+  // ---------------------------------------------------------------- the vehicle you show (your rental car)
+  console.log('vehicles');
+  const nv = await a.req('veh', { k: 'car' });
+  ok(!nv.ok && nv.err === 'no_car', 'no rental: no car to show (no_car)');
+  const vb = await b.req('veh', { k: 'car', at: [1, 2, 3.004, 0.5], cfg: { id: 'car_lamborghini_huracan', plate: 'FAKE 1' } });
+  const vev = await a.next('veh', (d) => d.pid === pidB);
+  ok(vb.ok && vev && vev.k === 'car' && vev.veh.cfg.id === 'car_bmw_x3' && vev.veh.cfg.plate === cb2.d.car.plate && vev.veh.at[2] === 3,
+    "Bob's car is shown to Alice from his profile (model and plate are the server's, not the client's), parked where he says");
+  ok(server.profileOf('bob').cars[0].at?.[0] === 1, "its parked spot is kept in Bob's profile (put back there when he returns)");
+  const badAt = await b.req('veh', { k: 'car', at: [1, 2] });
+  ok(!badAt.ok && badAt.err === 'bad_value', 'a bad parked pose is refused');
+  const badK = await b.req('veh', { k: 'tank' });
+  ok(!badK.ok && badK.err === 'bad_vehicle', 'an unknown vehicle kind is refused');
+  const offV = await b.req('veh', { k: 'car', off: true });
+  const offEv = await a.next('veh', (d) => d.pid === pidB && d.k === 'car' && d.veh === null);
+  ok(offV.ok && offEv, 'a car taken out of view: everyone is told');
+  const nh = await b.req('veh', { k: 'heli' });
+  ok(!nh.ok && nh.err === 'not_renting', 'no helicopter shown without renting one');
+  const vd = await b.req('veh', { k: 'car' });
+  const vdev = await a.next('veh', (d) => d.pid === pidB && d.veh && !d.veh.at);
+  ok(vd.ok && vdev && vdev.veh.k === 'car', 'driving: the car without a parked pose (the presence row is its pose)');
 
   // ---------------------------------------------------------------- money: only server-validated changes
   console.log('money');
@@ -188,13 +213,28 @@ try {
   w.heli.padAt = Date.now() - 1; // (5 minutes later)
   const h3 = await b.req('heliRent');
   ok(h3.ok && w.heli.copies.length === 2, 'after 5 min a copy waits at the pad: Bob rents it (2 out)');
+  const hv = await a.req('veh', { k: 'heli', at: [10, 20, 30, 1] });
+  const hvev = await b.next('veh', (d) => d.pid === pidA && d.k === 'heli' && d.veh);
+  ok(hv.ok && hvev && hvev.veh.id === h1.d.id && hvev.veh.at[0] === 10, "Alice's copy (parked out on the mountain) is shown to Bob");
+  const hr = await a.req('heliReturn');
+  const hrev = await b.next('veh', (d) => d.pid === pidA && d.k === 'heli' && d.veh === null);
+  const hm = await b.next('heli', (d) => d.copies.length === 1 && d.copies[0].name === 'Bob');
+  ok(hr.ok && hrev && hm && hm.padAt <= Date.now() && w.heli.copies.length === 1, 'Alice returns it: it is gone from view and the pad has a helicopter again at once');
+  const hr2 = await a.req('heliReturn');
+  ok(!hr2.ok && hr2.err === 'not_renting', 'a second return is refused');
+  await b.req('heliReturn');
 
   // ---------------------------------------------------------------- race queue: 2 needed, everyone in the world starts it at once
   console.log('races');
   const c3 = new Fake(url);
   await c3.open();
   const r3 = await c3.req('register', { name: 'Cleo' });
-  await c3.req('login', { v: PROTO, name: 'Cleo', token: r3.d.token });
+  const lc = await c3.req('login', { v: PROTO, name: 'Cleo', token: r3.d.token });
+  ok(lc.d.world.players.find((p) => p.name === 'Bob')?.vehs?.car?.cfg?.id === 'car_bmw_x3', "a player who joins sees Bob's car at once (vehs in the world snapshot)");
+  await b.req('carReturn', { plate: cb2.d.car.plate });
+  const cgone = await c3.next('veh', (d) => d.pid === pidB && d.k === 'car' && d.veh === null);
+  ok(!!cgone, 'Bob returns his car: it is gone for everyone');
+  await b.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'red' } }); // (rented again: on disk below)
   const q1 = await a.req('raceJoin', { race: 'meadow' });
   ok(q1.ok && q1.d.n === 1 && !q1.d.startAt, 'one in the queue: waiting for players (1/2)');
   await b.req('raceJoin', { race: 'meadow' });

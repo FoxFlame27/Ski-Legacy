@@ -7,7 +7,8 @@ export const ST = { walk: 0, ski: 1, drive: 2, ride: 3, sit: 4, fly: 5, fall: 6 
 export const ST_NAMES = ['walk', 'ski', 'drive', 'ride', 'sit', 'fly', 'fall'];
 
 // presence flag bits (row[12])
-export const F = { air: 1, tuck: 2, skisOn: 4, carry: 8, hasSkis: 16, moving: 32 };
+// (lights: a car's headlights / a helicopter's rotor at flight power; car: driving a car, x/y/z/yaw = the car's pose)
+export const F = { air: 1, tuck: 2, skisOn: 4, carry: 8, hasSkis: 16, moving: 32, lights: 64, car: 128 };
 
 // presence row as received: [pid, ts, x, y, z, yaw, vx, vy, vz, state, crouch, lean, flags, vehicle, interior]
 export const R = { pid: 0, ts: 1, x: 2, y: 3, z: 4, yaw: 5, vx: 6, vy: 7, vz: 8, st: 9, crouch: 10, lean: 11, flags: 12, veh: 13, int: 14 };
@@ -30,5 +31,7 @@ export const ERR_TEXT = {
   plate_taken: 'That plate is taken.',
   not_yet: 'Not available yet.',
   timeout: 'No answer.',
+  pending: 'Still waiting for an answer.',
+  already_renting: 'You already have a helicopter out.',
   offline: 'Not connected to the server.',
 };

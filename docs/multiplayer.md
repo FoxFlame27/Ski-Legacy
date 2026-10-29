@@ -13,6 +13,9 @@ hooks for the next wave of features. Singleplayer is unchanged whenever `isMP()`
 | Connection | `src/net/client.js` | The singleton `net`: an event emitter, requests that return promises, clock sync and reconnects. |
 | Session | `src/net/session.js` | Login, the save swap, presence, the money guard, purchases, permissions, races and the transport helpers. It lives at `window.__game.multiplayer` (`main.js` holds it as `multiplayer`). |
 | Remote players | `src/net/remote.js` | The avatars (the game's own skier rig and outfit), snapshot interpolation and name tags. |
+| Remote vehicles | `src/net/vehicles.js` | The other players' cars and helicopter copies, the owner tags on parked ones, and the seat each avatar sits in. |
+| Your car / rides | `src/net/carride.js` | Your car shown to everyone (and put back where you left it), "Ask <owner> for a ride", riding as a passenger. |
+| Helicopter pad | `src/net/heli.js` | The pad's copy (shown when the server has one), renting through the server, returning, your copy shown to everyone. |
 | Overlays | `src/net/ui.js` | The status pill, the race line, the speed-up line and the Y/N permission prompt. |
 | Menu | `src/ui/menu.js` | PLAY offers SINGLEPLAYER or MULTIPLAYER. On the first multiplayer launch it asks for a name, then shows connecting, an error, or the world. |
 
@@ -121,7 +124,8 @@ whose `.data` is `d`.
 | `seatClaim` | `{k, v, n?, seat?}` | `{seat, v}`: the lowest free seat (or `seat` if it is free) · `full`, `no_permission`, `owner_away` |
 | `seatRelease` | – | broadcast `seats` |
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
-| `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` |
+| `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
+| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
 | `raceFinish` | `{rid, time: ms \| null, dnf?}` | `{time}`. The time is trusted only within 3 s of the server's own measurement. |
 | `perm` | `{kind: 'carRide', to: name}` / `{kind: 'chaletVisit', ref: chaletId}` | resolves when the owner answers: `{allow, owner, kind, ref}` (30 s timeout → `allow:false, reason:'timeout'`) · `owner_away`, `pending`, `no_owner` |
@@ -151,6 +155,7 @@ whose `.data` is `d`.
 | `skip` | `{k, v, holding, aboard, active}` |
 | `warp` | `{key: 'kind\|line', off, rate, since}` |
 | `heli` | `{copies: [{id, name, since}], padAt, copyMs}` |
+| `veh` | `{pid, k: 'car' \| 'heli', veh: {k, cfg?, id?, at?} \| null}` (also `vehs: {car, heli}` in `join` and the world snapshot) |
 | `permAsk` | `{rid, kind, from, pid, ref, timeoutMs}` (to the owner) |
 | `permClosed` / `permRevoked` / `kickInterior` / `seatLost` | the prompt went away / a grant was taken back / you must leave that interior / you were taken out of a car |
 | `raceQueue` | `{race, n, names, startAt (0 = waiting for players), need: 2, waitMs}` |
@@ -166,7 +171,15 @@ The client sends about 12 per second and leaves no allocation per frame. Each ro
 
 - `ts` is the server time from `net.serverNow()`.
 - `state` is `ST` from `protocol.js`: `walk 0, ski 1, drive 2, ride 3, sit 4, fly 5, fall 6`.
-- `flags` is `F`: `air 1, tuck 2, skisOn 4, carry 8, hasSkis 16`.
+- `flags` is `F`: `air 1, tuck 2, skisOn 4, carry 8, hasSkis 16, moving 32, lights 64, car 128`.
+- **Driving your car** (`F.car`): `x/y/z/yaw` is the car's pose, `vx/vz` its velocity, `crouch` the steering angle,
+  `F.lights` the headlights.
+- **Flying a helicopter** (`state` fly): `x/y/z/yaw` is the helicopter's pose, `crouch` its pitch, `lean` its roll,
+  `F.lights` the rotor at flight power.
+- **Riding in someone's car** (`state` ride, vehicle `car:Owner:seat`): `x/y/z` is your seat; the other clients seat
+  you in that seat of the owner's car as they draw it.
+- **Inside the ski shop or the car rental**: the room's walker position (`pos`, floor height), `yaw` and walking
+  `vel`, not its camera (the camera swings off to the outfit preview, the clerk or the configured car).
 
 The server prepends the pid and appends the vehicle and interior from its own records:
 
@@ -212,10 +225,15 @@ Each line has one timeline:
   the world is queued and that is at least 2.
 - **Entry.** The server charges the entry fee at the start; the first race is free, as in singleplayer.
 - **Start.** The client runs the normal race session with `bots: 0` and `syncGo`, so the countdown ends at the
-  shared GO.
+  shared GO. Each racer stands on their own `slot` of the session's start grid (`grid: {slot, n}`: abreast, then in
+  staggered rows), so nobody overlaps.
+- **Live board.** Under the status pill: every racer in race order, finished racers by time first, then everyone
+  still racing by how far down the course they are (`track.nearestS`, twice a second).
 - **Finish.** The session's result goes to `raceFinish`.
 - **Results.** The server ranks the finishers and pays `reward × [1, 0.4, 0.15]`. It closes the race when everyone
-  has finished, when an entrant leaves (counted as DNF), or 10 minutes after the start.
+  has finished, when an entrant leaves (counted as DNF), or 10 minutes after the start. The race's own results
+  screen lists the racers who finished before you (`raceProgress`); `raceResult` then opens the results card
+  (`MpUI.results`): everyone's place, time and prize money, from the server (click or 20 s closes it).
 
 The HUD line shows `RACE QUEUE · 1/2 · waiting for players`, `… starting in 23s`, or `RACE · GO in 3s`.
 
@@ -254,7 +272,12 @@ multiplayer.setInterior(id | null)        // -> bool (the session also does this
 multiplayer.buy(kind, data) / buySkis / buyOutfit / buyChalet(h) / rentCar(cfg) / carEnded(cfg)
 multiplayer.earn(amount, 'job' | 'secret')
 multiplayer.raceJoin(id) / raceLeave()
-multiplayer.remotes                       // RemotePlayers: .players (Map pid -> Remote {name, pos, yaw, state, veh, interior, rig}), .byName(name)
+multiplayer.remotes                       // RemotePlayers: .players (Map pid -> Remote {name, pos, yaw, state, veh, vcar, vheli, interior, rig}), .byName(name)
+multiplayer.vehicles                      // RemoteVehicles: .cars (Map pid -> drawn car {group, t, x, z, yaw, posed}), carOf(pid), seatFor(remote, out)
+multiplayer.carInteraction(pos)           // main.js findInteraction: "Ask <owner> for a ride"
+multiplayer.late(dt, input)               // main.js after drive.update: riders in your car, you in theirs (E out)
+multiplayer.plateCheck(plate) / plateIssue()   // -> {plate, free, mine} / a free plate (the configurator)
+multiplayer.raceOthers()                  // the other racers who finished, as race-session rows
 multiplayer.sendLook()                    // after a character / outfit / skis change (main.js already calls it)
 ```
 
@@ -264,9 +287,9 @@ multiplayer.sendLook()                    // after a character / outfit / skis c
 - any rise that did not come from the server is undone.
 
 Anything that grants ownership must use `multiplayer.buy(...)` instead of `spend` and a write to `save`. The ski
-shop's skis, outfits, chalets and the rental car already do. The helicopter must switch to `heliRent`.
+shop's skis, outfits, chalets, the rental car and the helicopter (`heliRent`) do.
 
-## Hooks for wave 2 (not done yet)
+## Wave 2
 
 ### Shared bus, train, express and gondola seats
 
@@ -282,14 +305,19 @@ The speed-up server side is done. The client side is not:
 - **Speed-up.** Replace the local `input.down('Space')` fast-forward with `holdSkip(...)` plus `lineTime`, and show
   `skipLine` with `ui.setSkip`.
 
-### Helicopter copies
+### Helicopter copies (done)
 
-- **Server side, done.** The `heli` state and `heliRent` are in place: `padAt` is when the pad next has a
-  helicopter, which is 5 minutes after the last rental or immediately after a return.
-- **Client side.**
-  - Spawn a parked copy at the pad when `serverNow() ≥ padAt`.
-  - Render the other players' rented copies from their presence (`state` fly).
-  - Replace `spend(HELI_PRICE)` with `heliRent()`.
+- **The pad** (`net/heli.js`, `heli.mp` hooks in `game/heli.js`): the pad's helicopter is shown, solid and bookable
+  only while `serverNow() ≥ padAt`. Otherwise the pad is empty and E says "the helicopter is out · next one in N min".
+  When the server makes a copy available, it appears on the pad ("A helicopter is waiting at the helipad" when you
+  are within 400 m).
+- **Renting.** FLY calls `heliRent` (the server's price) instead of the local `spend`; the flight starts on its answer.
+- **Returning.** When your helicopter is back on its pad (its pilot flew it home, or the flight was aborted),
+  `heliReturn` is sent and the pad has a helicopter again for everyone.
+- **Yours, seen by everyone.** Flying, your presence row is its pose (above). Parked out on the mountain:
+  `veh {k:'heli', at}`. On its way home on its own: `veh {k:'heli', off:true}`.
+- **Theirs** (`net/vehicles.js`): a `HeliModel` per renter, flying with their presence (pitch, roll, the rotor
+  spinning up), or parked at `at` with "<name>'s helicopter" above it. Their avatar sits in the pilot's seat.
 
 ### Chalet owner name tags and visiting
 
@@ -308,39 +336,45 @@ To do:
 - the visitor's view of the owner's furniture. The server only stores it per profile; a `chaletFurniture`
   request does not exist yet.
 
-### Car passengers
+### Car passengers and everyone's cars (done)
 
-- **Server side, done.** `perm {kind:'carRide', to}` sends the owner the Y/N prompt (`MpUI.ask`). After a yes,
-  `seatClaim {k:'car', v: ownerName}` gives seat 1 (front) and then 2 and up (back). The owner holds seat 0.
-- **Client side.**
-  - Render each player's car from presence: `state` drive, and `veh` `car:Owner:0`.
-  - Add the "ask the owner" prompt near a remote car.
-  - Seat the passenger.
-- **Profile.** The car config is in `MP.profile.cars[0]`. A wave-2 request to fetch another player's car config,
-  or a look field for it, is still needed.
+- **Your car, seen by everyone** (`net/carride.js`): `veh {k:'car', at}` while it is parked (sent when it comes, goes,
+  or stands somewhere new; checked once a second), `veh {k:'car'}` while you drive it (your presence row is then its
+  pose). The server takes the look (model, paint, trim, rims, plate) from your profile, never from the client, and
+  keeps the parked spot in `profile.cars[0].at`.
+- **Leaving and coming back.** When you leave, your car (and helicopter) leaves everyone's view with you (`leave`).
+  When you come back, your car is put back at `at` if that spot is free (`drive.clearAt` and no other player's car
+  within 4.5 m); otherwise beside it, at the nearest free car park bay, or it stays in the rental's yard.
+- **Owner tags.** A parked, empty car carries "<owner>'s car" above it, for everyone including the owner (hidden
+  while it is driven, beyond 130 m, and indoors).
+- **Their cars** (`net/vehicles.js`): built once per car from the same templates as the rental (`carTemplate`,
+  `carInstance`, `dressCar`): the front wheels steer, the wheels roll, the lamps follow their headlights and the night.
+- **Rides.** Within 2.2 m of another player's car (one moving at walking pace at most), E says "Ask <owner> for a
+  ride". The owner gets "Allow <name> to get in your car?" (Y / N, 30 s). Allowed, `seatClaim {k:'car', v: owner,
+  n: seats}` gives seat 1 (front passenger) or 2+ (the back). The passenger sits in that seat (`carSeats(t)`:
+  carpeople.js's measured seats; 0 driver, 1 front passenger, 2/3 rear outboard, 4 rear middle, 5/6 the GLS's third
+  row) of the car as it is drawn on their screen; R switches between first person from the seat and the chase view;
+  E gets out by that seat's door. A `seatLost` (the owner took it back or left), a car gone for 1.5 s, or anything
+  else moving you (a race start, a teleport) ends the ride.
+- **Riders in your car.** Their avatars are posed after your car moved that frame (`remotes.late`), so they never
+  lag it. The owner does not claim seat 0; `F.car` in the presence row marks the driver.
+- **Not done.** Other players' cars have no colliders (you walk and drive through them).
 
-### Shared car rental and ski shop interiors
+### Shared car rental and ski shop interiors (done)
 
-- **Done.**
-  - The interior id is in presence (`skishop`, `carrental`, `chalet:N`).
-  - `RemotePlayers` renders only the players in the same interior, in `mpScene(id)`.
-  - Purchases go through the server.
-- **To polish.**
-  - The avatars stand at camera height minus 1.6 m and face the camera's direction.
-  - Outfit previews are not shared.
-  - The clerk dialogs are per client.
+- The avatars in the ski shop and the car rental stand where their owner walks (the room's `pos`, on the right floor
+  of the rental's mezzanine), face where they look and walk while they move; their name tags show indoors too.
+- Outfit previews and the clerk dialogs are per client.
 
-### Plate uniqueness UI
+### Plate uniqueness UI (done)
 
-The car rental's rent goes through `multiplayer.rentCar(cfg)`: a taken custom plate is refused (`plate_taken`), and
-a random plate is reissued if it is taken. The configurator should call `plateCheck` while the player types and
-show the result.
+In multiplayer the configurator's PLATE step checks what you type with `plateCheck` (280 ms after the last key) and
+shows "<plate> is taken · type another"; RENT then says PLATE TAKEN and takes you back to the plate. RANDOM, and the
+plate a new configuration starts with, come from `plateIssue` (a plate nobody has). `buy` checks again.
 
-### Race polish
+### Race polish (done)
 
-- Use the grid `slot` from `raceStart`; everyone currently starts from the same gate position.
-- Show the other racers' times from `raceProgress`.
-- Add a results card from `raceResult`.
+See **Races** above: the grid slots, the live board, the results card.
 
 ### Day counter
 

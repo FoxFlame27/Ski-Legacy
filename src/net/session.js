@@ -6,12 +6,16 @@
 //    the money guard, the status pill / race line
 //  - the server-authoritative purchases (skis, outfits, chalets, the rental car and its plate) and payouts (jobs,
 //    secrets, races) as small async helpers main.js and the game systems call
-// Wave-2 hooks (shared seats, warps, helicopter copies, car rides, chalet visits) are documented in docs/multiplayer.md.
+//  - wave 2: everyone's cars and helicopter copies (vehicles.js), car rides (carride.js), the helicopter pad
+//    (heli.js), the race grid / live board / results card. See docs/multiplayer.md.
 import { MP } from './mode.js';
 import { net } from './client.js';
 import { serverUrl } from './config.js';
 import { PROTO, ST, F, ERR_TEXT, MAX_PLAYERS } from './protocol.js';
 import { RemotePlayers } from './remote.js';
+import { RemoteVehicles } from './vehicles.js';
+import { CarRide } from './carride.js';
+import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
 
 const ACCOUNTS_KEY = 'ski-legacy-mp-accounts';
@@ -51,6 +55,11 @@ export class Multiplayer {
     this.money = { server: 0, pending: 0 };
     this.pushT = null; this.pushed = {};
     this.race = { queued: null, queue: null, start: null };
+    this.raceRows = []; this.boardT = 0;
+    this.carRide = new CarRide(this); // your car shown to everyone, rides in other players' cars
+    this.heliMp = new MpHeli(this);   // the helicopter pad and your copy
+    this.vehicles = null;             // the other players' cars and helicopters (per world: setWorld)
+    this.lastPos = { x: 0, z: 0, interior: null, t: 0 };
     // shared state for the wave-2 systems (live, kept current from the server's broadcasts)
     MP.seats = new Map();  // 'kind|id' -> [[seat, pid], ...]
     MP.warps = new Map();  // 'kind|line' -> { off, rate, since }
@@ -117,6 +126,7 @@ export class Multiplayer {
     this.c.setAI(false);
     MP.onSave = () => this.schedulePush();
     this.c.applySave();
+    this.heliMp.attach();
     net.send('look', this.look());
     this.push(true);
   }
@@ -125,9 +135,13 @@ export class Multiplayer {
     MP.world = { id: w.id, max: w.max || MAX_PLAYERS, players: new Map() };
     this.clock = w.clock;
     this.remotes?.dispose();
+    this.vehicles = new RemoteVehicles({
+      scene: this.c.scene, models: () => window.__game?.models, camera: () => this.c.camera,
+      localCar: () => this.carRide.localCar(), selfName: () => MP.name,
+    });
     this.remotes = new RemotePlayers({
       scene: this.c.scene, makeRig: this.c.makeRig, applyOutfit: this.c.applyOutfit, getScene: this.c.getScene, fx: this.c.fx,
-      now: () => net.serverNow(), selfPid: MP.pid,
+      now: () => net.serverNow(), selfPid: MP.pid, vehicles: this.vehicles,
     });
     for (const p of w.players) { MP.world.players.set(p.pid, { pid: p.pid, name: p.name, chalet: p.chalet }); this.remotes.add(p); }
     MP.seats.clear(); for (const s of w.seats || []) MP.seats.set(`${s.k}|${s.v}`, s.occ);
@@ -154,7 +168,9 @@ export class Multiplayer {
     on('permClosed', (d) => this.ui?.cancel(d.rid));
     on('permRevoked', (d) => this.c.hud.flash(d.kind === 'carRide' ? `${d.owner} took back the car ride` : `${d.owner} took back the chalet visit`, 'bad', 3000));
     on('kickInterior', (d) => { this.interior = null; this.c.onKickInterior?.(d.interior); });
-    on('seatLost', (d) => this.c.onSeatLost?.(d));
+    on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
+    on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
+    on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) r.done.set(d.pid, d); });
     on('raceQueue', (d) => { if (d.n) MP.queues.set(d.race, d); else MP.queues.delete(d.race); if (this.race.queued === d.race) this.race.queue = d; });
     on('raceStart', (d) => this.onRaceStart(d));
     on('raceResult', (d) => this.onRaceResult(d));
@@ -175,6 +191,7 @@ export class Multiplayer {
       this.setWorld(d.world);
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
       this.c.hud.flash('Reconnected', 'good', 2000);
+      this.carRide.reset(); this.heliMp.reset();
       net.emit('relogin', d); // (wave-2 systems: seats and permissions were dropped with the old connection: claim again)
     } catch (e) { this.lost(errText(e)); }
   }
@@ -189,12 +206,13 @@ export class Multiplayer {
   leave() {
     if (!MP.active) return;
     if (this.race.start && !this.race.finished) net.send('raceFinish', { rid: this.race.start.rid, dnf: true });
+    try { this.carRide.dispose(); this.heliMp.detach(); } catch (e) { console.warn('[mp] vehicles', e); }
     for (const off of this.offs) off();
     this.offs.length = 0;
     clearTimeout(this.pushT); this.pushT = null;
     this.push(false, true);
     net.close('leave');
-    this.remotes?.dispose(); this.remotes = null;
+    this.remotes?.dispose(); this.remotes = null; this.vehicles = null;
     this.ui?.show(false);
     MP.active = false; MP.status = 'off'; MP.onSave = null; MP.world = null; MP.profile = null; MP.pid = 0;
     this.interior = null; this.race = { queued: null, queue: null, start: null };
@@ -336,6 +354,10 @@ export class Multiplayer {
     this.c.audio?.play?.('cash');
     return d.car;
   }
+  /** The configurator's plate step: is this plate free? -> { plate, free, mine } (null offline / bad plate). */
+  plateCheck(plate) { return net.request('plateCheck', { plate }).catch(() => null); }
+  /** A random plate nobody has (the server's), or null. */
+  plateIssue() { return net.request('plateIssue').then((d) => d.plate || null, () => null); }
   carEnded(cfg) { if (cfg?.plate) net.request('carReturn', { plate: cfg.plate }).catch(() => {}); if (MP.profile) MP.profile.cars = []; }
 
   // ---------------------------------------------------------------- interiors and permissions
@@ -351,7 +373,7 @@ export class Multiplayer {
     catch (e) { this.c.hud.flash(errText(e), 'bad', 2400); return { allow: false, error: e.code }; }
   }
   async onPermAsk(d) {
-    const text = d.kind === 'carRide' ? `${d.from} wants to ride in your car` : `${d.from} wants to visit your chalet`;
+    const text = d.kind === 'carRide' ? `Allow ${d.from} to get in your car?` : `${d.from} wants to visit your chalet`;
     this.c.audio?.play?.('tick');
     const allow = await this.ui.ask(d.rid, text, d.timeoutMs || 30000);
     if (allow === null) return; // (closed by the server)
@@ -372,8 +394,9 @@ export class Multiplayer {
     const me = d.grid.find((g) => g.pid === MP.pid);
     if (!me) return;
     this.race.queued = null; this.race.queue = null;
-    this.race.start = { ...d, slot: me.slot }; this.race.finished = false;
-    this.c.onRaceStart?.({ ...d, slot: me.slot, secondsToGo: () => (d.at - net.serverNow()) / 1000 });
+    this.race.start = { ...d, slot: me.slot, done: new Map() }; this.race.finished = false;
+    this.ui?.closeResults();
+    this.c.onRaceStart?.({ ...d, slot: me.slot, n: d.grid.length, secondsToGo: () => (d.at - net.serverNow()) / 1000 });
   }
   /** The race session's result callback: the server ranks everybody and pays the prizes (raceResult). */
   raceFinished({ time, dnf }) {
@@ -387,11 +410,43 @@ export class Multiplayer {
     const mine = d.order.find((o) => o.pid === MP.pid);
     if (!mine || this.race.start?.rid !== d.rid) return;
     this.race.start = null;
+    this.ui?.setBoard(null);
+    const course = window.__game?.modes?.course;
+    const title = course?.id === d.race && course.name ? course.name : String(d.race || 'Race').replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+    this.ui?.results(title, d.order, MP.pid); // (everyone's times and prize money, from the server)
     const s = this.c.save.stats;
     s.races = (s.races || 0) + 1;
     if (mine.place === 1) s.wins = (s.wins || 0) + 1;
     const ord = (n) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
     this.c.hud.flash(mine.dnf ? 'Race over · DNF' : `Race over · ${ord(mine.place)} of ${d.order.length}${mine.prize ? ` · +$${mine.prize.toLocaleString('en-US')}` : ''}`, mine.place === 1 ? 'gold' : 'good', 4200);
+  }
+  /** The other racers who have finished, as rows for the race's own results table (modes/race/session.js). */
+  raceOthers() {
+    const r = this.race.start, out = [];
+    if (!r) return out;
+    for (const p of r.done.values()) if (p.pid !== MP.pid) out.push({ name: p.name, time: p.dnf ? Infinity : p.time / 1000, me: false, kind: 'player', dnf: !!p.dnf });
+    return out;
+  }
+  // the live race board: finished racers by time, then everyone still racing by how far down the course they are
+  // (twice a second)
+  updateBoard(dt, now) {
+    const r = this.race.start;
+    if (!r || now < r.at) { if (this.ui?.lines.board) this.ui.setBoard(null); return; }
+    if ((this.boardT += dt) < 0.5) return;
+    this.boardT = 0;
+    const g = window.__game, track = g?.modes?.session?.track, rows = this.raceRows;
+    rows.length = 0;
+    for (const e of r.grid) {
+      const fin = r.done.get(e.pid), me = e.pid === MP.pid;
+      let s = -Infinity;
+      if (!fin && track?.nearestS) {
+        const p = me ? g.player.pos : this.remotes?.players.get(e.pid)?.pos;
+        if (p) s = track.nearestS(p.x, p.z);
+      }
+      rows.push({ name: me ? `${e.name} (you)` : e.name, me, time: fin && !fin.dnf ? fin.time / 1000 : null, dnf: !!fin?.dnf, s });
+    }
+    rows.sort((a, b) => (a.dnf - b.dnf) || ((a.time ?? Infinity) - (b.time ?? Infinity)) || (b.s - a.s));
+    this.ui?.setBoard(rows);
   }
   raceLine(now) {
     const q = this.race.queue;
@@ -450,6 +505,17 @@ export class Multiplayer {
     return (((c.hour + ((now - c.at) / c.dayMs) * 24) % 24) + 24) % 24;
   }
 
+  /** E near another player's car: "Ask <owner> for a ride" (main.js findInteraction). */
+  carInteraction(pos) { return MP.active ? this.carRide.interaction(pos) : null; }
+
+  /** Late in the frame, after your car moved (main.js, after drive.update): the players riding in your car, and you
+   *  riding in someone else's (E gets out). input: null while a menu is open. */
+  late(dt, input) {
+    if (!MP.active) return;
+    if (this.view) this.remotes?.late(dt, this.view);
+    this.carRide.late(dt, input);
+  }
+
   // ---------------------------------------------------------------- every frame
   update(dt, view) {
     if (!MP.active) return;
@@ -462,12 +528,18 @@ export class Multiplayer {
       if (this.clock.weather && env.weather !== this.clock.weather) env.setWeather(this.clock.weather);
     }
     this.guardMoney();
+    try { this.carRide.frame(dt); this.heliMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
     // presence
     this.sendAcc += dt;
     if (this.sendAcc >= 1 / SEND_HZ && net.open) {
       this.sendAcc = 0;
       const p = this.pose;
       this.c.pose(p);
+      this.carRide.pose(p); this.heliMp.pose(p); // (driving / flying: the vehicle's pose; riding with someone)
+      // inside, the walk speed from the step since the last row (the rooms' avatars walk instead of gliding)
+      const L = this.lastPos, now2 = performance.now(), sdt = Math.max(0.02, (now2 - L.t) / 1000);
+      if (p.interior && p.interior === L.interior && !p.vx && !p.vz) { p.vx = (p.x - L.x) / sdt; p.vz = (p.z - L.z) / sdt; if (Math.hypot(p.vx, p.vz) > 6) p.vx = p.vz = 0; }
+      L.x = p.x; L.z = p.z; L.interior = p.interior; L.t = now2;
       if (p.interior !== this.interior) {
         // into / out of an interior: the server approves it first (a chalet needs its owner's ok); until then no
         // presence goes out (nobody sees you outdoors at the interior's coordinates)
@@ -484,6 +556,8 @@ export class Multiplayer {
       }
     }
     this.remotes?.update(dt, view);
+    this.view = view;
+    this.updateBoard(dt, now);
     // the status pill
     const w = MP.world;
     if (this.ui) {

@@ -269,6 +269,7 @@ class World {
     if (i < 0) return { err: 'not_renting' };
     this.heli.copies.splice(i, 1);
     this.heli.padAt = Math.min(this.heli.padAt, Date.now()); // (it lands back on the pad)
+    if (c.vehs.heli) this.server.setVeh(c, { k: 'heli', off: true });
     this.broadcast('heli', this.heliMsg());
     return {};
   }
@@ -435,6 +436,7 @@ class Client {
     this.pres = null;      // the last presence row
     this.interior = null;  // server-approved interior id ('skishop', 'carrental', 'chalet:7', ...)
     this.seat = null;      // { k, v, seat }
+    this.vehs = { car: null, heli: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? } (setVeh)
     this.queue = null;     // race id queued for
     this.bucket = new Bucket(120, 60);
     this.pBucket = new Bucket(30, 25);
@@ -443,7 +445,7 @@ class Client {
   sendRaw(s) { if (this.ws.readyState === 1) this.ws.send(s); }
   send(t, d) { this.sendRaw(JSON.stringify({ t, d })); }
   res(id, ok, d, err) { if (id == null) return; this.sendRaw(JSON.stringify(ok ? { t: 'res', id, ok: true, d } : { t: 'res', id, ok: false, err, d })); }
-  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.profile?.chalet?.id ?? null }; }
+  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.profile?.chalet?.id ?? null, vehs: this.vehs }; }
 }
 
 // ------------------------------------------------------------------ the server
@@ -615,6 +617,7 @@ export class GameServer {
       case 'skip': return reply(w.skip(c, d));
       case 'heliRent': return reply(w.heliRent(c));
       case 'heliReturn': return reply(w.heliReturn(c));
+      case 'veh': return reply(this.setVeh(c, d));
       case 'raceJoin': return reply(w.raceJoin(c, d));
       case 'raceLeave': return reply(w.raceLeave(c));
       case 'raceFinish': return reply(w.raceFinish(c, d));
@@ -704,6 +707,37 @@ export class GameServer {
     const w = new World(this, this.nextWorld++);
     this.worlds.set(w.id, w);
     return w;
+  }
+
+  // ---------------------------------------------------------------- the vehicles you show (your car, a helicopter copy)
+  // { k: 'car' }: your rental, its look from your profile (model, paint, trim, rims, the plate the server issued);
+  // { k: 'heli' }: the copy you rented; { k, off: true }: gone. at: [x, y, z, yaw] where it stands while you are not in
+  // it (driving or flying, your presence row is its pose). A car's parked spot is kept in the profile (cars[0].at: it
+  // is put back there when you come back). Broadcast as 'veh' { pid, k, veh | null }; publicInfo.vehs for joiners.
+  // Leaving the world takes them out of everyone's view (the 'leave' broadcast) until you are back.
+  setVeh(c, d) {
+    const k = d?.k;
+    if (k !== 'car' && k !== 'heli') return { err: 'bad_vehicle' };
+    let v = null;
+    if (!d.off) {
+      if (k === 'car') {
+        const car = c.profile.cars?.[0];
+        if (!car) return { err: 'no_car' };
+        v = { k, cfg: { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate } };
+      } else {
+        const h = c.world?.heli.copies.find((x) => x.key === c.key);
+        if (!h) return { err: 'not_renting' };
+        v = { k, id: h.id };
+      }
+      if (d.at != null) {
+        if (!Array.isArray(d.at) || d.at.length !== 4 || !d.at.every(isNum)) return { err: 'bad_value' };
+        v.at = d.at.map((x) => Math.round(x * 100) / 100);
+        if (k === 'car') { c.profile.cars[0].at = v.at; this.store.profiles.save(); }
+      }
+    }
+    c.vehs[k] = v;
+    c.world?.broadcast('veh', { pid: c.pid, k, veh: v }, c);
+    return { d: { veh: v } };
   }
 
   // ---------------------------------------------------------------- interiors (chalets need the owner's ok)
@@ -837,6 +871,7 @@ export class GameServer {
       const car = { id: cfg.id, paint, interior, rims, plate, custom, since: Date.now() };
       P.cars = [car];
       this.plates.set(plateKey(plate), c.key);
+      if (c.vehs.car) this.setVeh(c, { k: 'car' }); // (the car everyone sees is the new one)
       return { d: { money: P.money, car, price } };
     }
     return { err: 'bad_kind' };
@@ -848,6 +883,7 @@ export class GameServer {
     if (i < 0) return { err: 'no_car' };
     P.cars.splice(i, 1);
     if (this.plates.get(k) === c.key) this.plates.delete(k);
+    if (c.vehs.car) this.setVeh(c, { k: 'car', off: true });
     this.store.profiles.save();
     return { d: { cars: P.cars } };
   }

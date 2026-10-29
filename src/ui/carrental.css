@@ -42,6 +42,7 @@ body.carcfg-open #crosshair { visibility: hidden; }
 .cr-mini { min-width: calc(var(--u) * 170); height: calc(var(--u) * 50); }
 #carrental .cr-mini > span { font-size: calc(var(--u) * 24); line-height: calc(var(--u) * 50); padding-left: calc(var(--u) * 26); padding-right: calc(var(--u) * 40); }
 .cr-plate-note { font: 600 var(--t-xs)/1.3 var(--ui); color: #fff; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6); }
+.cr-plate-note.taken { color: #ff9a8f; font-weight: 700; } /* (multiplayer: somebody has that plate) */
 .cr-plate-wrap .os-note { color: rgba(255, 255, 255, 0.85); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6); }
 
 /* the summary */

@@ -4,6 +4,9 @@
 // packets are late, and a name tag above the head (hidden beyond ~150 m).
 // Interiors: an avatar shows only while you are in the same interior as they are (null = outdoors), in that
 // interior's scene and coordinates (getScene(interiorId) from main.js).
+// Vehicles (net/vehicles.js, optional o.vehicles): other players' cars and helicopters, and the avatars seated in
+// them (a driver at the wheel, passengers in their seats, a pilot in the cabin); the avatars in YOUR car are posed in
+// late() once your own car has moved this frame.
 // No allocations per frame: snapshot slots, vectors and the rig state objects are all reused.
 import * as THREE from 'three';
 import { R, ST, F } from './protocol.js';
@@ -20,7 +23,7 @@ const _a = new THREE.Vector3();
 
 function wrapAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
 
-function makeTag(name) {
+export function makeTag(name, color = '#1f5fd1') {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 96;
   const g = c.getContext('2d');
@@ -31,7 +34,7 @@ function makeTag(name) {
   g.beginPath();
   g.roundRect ? g.roundRect(x0, 14, w, 68, 14) : g.rect(x0, 14, w, 68);
   g.fill();
-  g.fillStyle = '#1f5fd1';
+  g.fillStyle = color;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(name, 256, 50);
   const tex = new THREE.CanvasTexture(c);
@@ -59,6 +62,11 @@ class Remote {
     this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3();
     this.yaw = 0; this.state = ST.walk; this.flags = 0; this.crouch = 0; this.lean = 0;
     this.veh = 0; this.interior = null; this.seen = false;
+    this.vcar = info.vehs?.car || null;   // the vehicles they show ('veh': { k: 'car', cfg, at? }, { k: 'heli', id, at? })
+    this.vheli = info.vehs?.heli || null;
+    this.ok = false; this.inLocal = false;
+    this.vehStr = 0; this.vehK = ''; this.vehOwner = ''; this.vehSeat = -1; // the parsed `kind:id:seat` (vehicles.js)
+    this.seatPos = new THREE.Vector3(); this.seatYaw = 0;
     this.animAcc = 0;
     this.st = { mode: 'idle', heading: 0, speed: 0, crouch: 0, lean: 0, edge: 0, tuck: false, plow: 0, skid: 0, normal: UP, air: false, flip: 0, grab: 0, spinVel: 0, charge: 0, lookYaw: 0, lookPitch: 0, seat: null, carry: false, airY: 0, fall: null };
     this.seat = new THREE.Vector3();
@@ -109,7 +117,7 @@ export class RemotePlayers {
     if (!info || info.pid === this.selfPid) return null;
     let r = this.players.get(info.pid);
     if (!r) { r = new Remote(info); this.players.set(info.pid, r); }
-    else { r.name = info.name; if (info.look) r.look = info.look; }
+    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; } }
     if (info.pres) r.push(info.pres, this.o.now());
     if (info.interior !== undefined) r.interior = info.interior || null;
     return r;
@@ -118,6 +126,7 @@ export class RemotePlayers {
   remove(pid) {
     const r = this.players.get(pid);
     if (!r) return;
+    this.o.vehicles?.remove(pid);
     this.detach(r);
     if (r.tag) { r.tag.material.map.dispose(); r.tag.material.dispose(); }
     this.players.delete(pid);
@@ -129,6 +138,9 @@ export class RemotePlayers {
     r.look = look;
     r.rigKey = ''; // rebuilt on the next update
   }
+
+  /** A vehicle a player shows changed ('veh' broadcast: k 'car' | 'heli', veh or null). */
+  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; }
 
   onRows(rows) {
     if (!Array.isArray(rows)) return;
@@ -221,49 +233,62 @@ export class RemotePlayers {
   update(dt, v) {
     if (!this.players.size) return;
     const now = this.o.now();
+    for (const r of this.players.values()) r.ok = this.sample(r, now - r.delay);
+    this.o.vehicles?.update(dt, this, v); // (their cars and helicopters first: the avatars sit in them)
+    for (const r of this.players.values()) if (r.ok) this.poseOne(r, dt, v, false);
+  }
+
+  /** After your own car moved this frame (main.js, after drive.update): the avatars riding in it. */
+  late(dt, v) {
+    if (!this.players.size || !this.o.vehicles) return;
+    for (const r of this.players.values()) if (r.ok && r.inLocal) this.poseOne(r, dt, v, true);
+  }
+
+  poseOne(r, dt, v, late) {
+    // seated in a vehicle (a car seat, the helicopter's cabin): the seat comes from the vehicle as drawn here
+    const veh = this.o.vehicles;
+    const inVeh = veh ? veh.seatFor(r, r.seatPos) : false; // (sets r.seatYaw, r.inLocal)
+    if (r.inLocal && !late) return; // (in your car: posed in late())
+    const pos = inVeh ? r.seatPos : r.pos;
     const cam = v.camera.position;
-    for (const r of this.players.values()) {
-      if (!this.sample(r, now - r.delay)) continue;
-      const here = this.visible && (r.interior || null) === (v.interior || null);
-      const d = here ? _a.copy(r.pos).sub(cam).length() : Infinity;
-      if (!here || d > HIDE_FAR) { if (r.rig?.root.visible) { r.rig.root.visible = false; r.rig.gear.visible = false; } continue; }
-      const rig = this.ensureRig(r);
-      if (!rig) continue;
-      const scene = (r.interior ? this.o.getScene?.(r.interior) : this.o.scene) || this.o.scene;
-      if (r.scene !== scene) this.attach(r, scene);
-      if (!rig.root.visible) { rig.root.visible = true; rig.gear.visible = true; rig.snapNext = true; }
-      rig.root.position.copy(r.pos);
-      // the rig's pose from the state
-      const st = r.st, speed = Math.hypot(r.vel.x, r.vel.z);
-      const seated = r.state === ST.sit || r.state === ST.ride || r.state === ST.drive || r.state === ST.fly;
-      if (seated) { st.mode = 'sit'; r.seat.copy(r.pos); st.seat = r.seat; }
-      else if (r.state === ST.ski) { st.mode = 'ski'; st.seat = null; }
-      else { st.mode = speed > 0.1 ? 'walk' : 'idle'; st.seat = null; }
-      st.heading = r.yaw;
-      st.speed = seated ? 0 : speed;
-      st.crouch = r.crouch; st.lean = r.lean; st.edge = r.lean * 0.6;
-      st.air = !!(r.flags & F.air); st.tuck = !!(r.flags & F.tuck);
-      st.carry = !!(r.flags & F.carry);
-      st.normal = UP;
-      const skisVisible = r.state === ST.ski || st.carry;
-      if (r.skisShown !== skisVisible) { r.skisShown = skisVisible; rig.setSkisVisible(skisVisible); }
-      // name tag: a little smaller far away, hidden past TAG_FAR
-      const tagOn = d < TAG_FAR;
-      if (r.tag.visible !== tagOn) r.tag.visible = tagOn;
-      if (tagOn) { const k = r.tag.userData.base * Math.max(0.6, Math.min(1, 1.15 - d / 220)); r.tag.scale.set(k * (512 / 96), k, 1); }
-      r.animAcc += dt;
-      if (d < ANIM_NEAR || r.animAcc > (d < ANIM_NEAR * 3 ? 0.06 : 0.15)) {
-        rig.update(r.animAcc, st);
-        r.animAcc = 0;
-      }
-      if (r.state === ST.ski && d < 120 && this.o.fx) {
-        const fi = r.fxInfo;
-        fi.grounded = !st.air; fi.speed = speed; fi.sideslip = Math.abs(r.lean) * 0.15; fi.lean = r.lean;
-        this.o.fx(9000 + r.pid * 4, rig, fi, dt);
-      }
+    const here = this.visible && (r.interior || null) === (v.interior || null);
+    const d = here ? _a.copy(pos).sub(cam).length() : Infinity;
+    if (!here || d > HIDE_FAR) { if (r.rig?.root.visible) { r.rig.root.visible = false; r.rig.gear.visible = false; } return; }
+    const rig = this.ensureRig(r);
+    if (!rig) return;
+    const scene = (r.interior ? this.o.getScene?.(r.interior) : this.o.scene) || this.o.scene;
+    if (r.scene !== scene) this.attach(r, scene);
+    if (!rig.root.visible) { rig.root.visible = true; rig.gear.visible = true; rig.snapNext = true; }
+    rig.root.position.copy(pos);
+    // the rig's pose from the state
+    const st = r.st, speed = Math.hypot(r.vel.x, r.vel.z);
+    const seated = inVeh || r.state === ST.sit || r.state === ST.ride || r.state === ST.drive || r.state === ST.fly;
+    if (seated) { st.mode = 'sit'; if (!inVeh) r.seatPos.copy(r.pos); st.seat = r.seatPos; }
+    else if (r.state === ST.ski) { st.mode = 'ski'; st.seat = null; }
+    else { st.mode = speed > 0.1 ? 'walk' : 'idle'; st.seat = null; }
+    st.heading = inVeh ? r.seatYaw : r.yaw;
+    st.speed = seated ? 0 : speed;
+    st.crouch = seated ? 0 : r.crouch; st.lean = seated ? 0 : r.lean; st.edge = st.lean * 0.6;
+    st.air = !seated && !!(r.flags & F.air); st.tuck = !seated && !!(r.flags & F.tuck);
+    st.carry = !inVeh && !!(r.flags & F.carry);
+    st.normal = UP;
+    const skisVisible = !inVeh && (r.state === ST.ski || st.carry);
+    if (r.skisShown !== skisVisible) { r.skisShown = skisVisible; rig.setSkisVisible(skisVisible); }
+    // name tag: a little smaller far away, hidden past TAG_FAR
+    const tagOn = d < TAG_FAR;
+    if (r.tag.visible !== tagOn) r.tag.visible = tagOn;
+    if (tagOn) { const k = r.tag.userData.base * Math.max(0.6, Math.min(1, 1.15 - d / 220)); r.tag.scale.set(k * (512 / 96), k, 1); }
+    r.animAcc += dt;
+    if (d < ANIM_NEAR || r.animAcc > (d < ANIM_NEAR * 3 ? 0.06 : 0.15)) {
+      rig.update(r.animAcc, st);
+      r.animAcc = 0;
+    }
+    if (r.state === ST.ski && d < 120 && this.o.fx) {
+      const fi = r.fxInfo;
+      fi.grounded = !st.air; fi.speed = speed; fi.sideslip = Math.abs(r.lean) * 0.15; fi.lean = r.lean;
+      this.o.fx(9000 + r.pid * 4, rig, fi, dt);
     }
   }
 
-  dispose() { this.clear(); }
+  dispose() { this.clear(); this.o.vehicles?.dispose(); }
 }
-

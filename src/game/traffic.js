@@ -76,6 +76,38 @@ function extents(yaw, hw, hd, fx, fz, out) {
 }
 const _ext = {};
 
+// ------------------------------------------------------------------ stretches of road reserved for a job
+// A zone (the tow truck: the road round a wreck and where the truck stops, both lanes, 25 m either side; the other
+// lane while it overtakes) is a polyline `pts` [{x, z}] and a half width `hw` round it. Cars treat it as blocked: they
+// stop `gap` m short of it (no swerving past it); `evict`: the cars inside it when it's made are taken off (out of
+// sight at once; in sight, once they stand still in it, they sink away).
+const ZONES = [];
+/** Reserve zone { pts, hw, gap = 12, evict = false }; returns a function that frees it. */
+export function addTrafficZone(zone) {
+  const P = zone.pts;
+  zone.gap ??= 12;
+  zone.x0 = Math.min(...P.map((p) => p.x)) - zone.hw; zone.x1 = Math.max(...P.map((p) => p.x)) + zone.hw;
+  zone.z0 = Math.min(...P.map((p) => p.z)) - zone.hw; zone.z1 = Math.max(...P.map((p) => p.z)) + zone.hw;
+  zone.fresh = true;
+  ZONES.push(zone);
+  return () => { const i = ZONES.indexOf(zone); if (i >= 0) ZONES.splice(i, 1); };
+}
+export function trafficZones() { return ZONES; }
+/** Is (x, z) within the zone (its half width + pad)? */
+export function inZone(zone, x, z, pad = 0) {
+  const R = zone.hw + pad;
+  if (x < zone.x0 - pad || x > zone.x1 + pad || z < zone.z0 - pad || z > zone.z1 + pad) return false;
+  const P = zone.pts;
+  if (P.length === 1) return Math.hypot(x - P[0].x, z - P[0].z) < R;
+  for (let i = 1; i < P.length; i++) {
+    const ax = P[i - 1].x, az = P[i - 1].z, ex = P[i].x - ax, ez = P[i].z - az, l2 = ex * ex + ez * ez || 1e-9;
+    const t = clamp(((x - ax) * ex + (z - az) * ez) / l2, 0, 1), dx = x - ax - ex * t, dz = z - az - ez * t;
+    if (dx * dx + dz * dz < R * R) return true;
+  }
+  return false;
+}
+const _zp = {};
+
 // the pool of light a car's headlights throw on the road (a soft additive decal)
 function poolTexture() {
   const c = document.createElement('canvas');
@@ -287,6 +319,9 @@ export class Traffic {
         }
       }
       this.aroundBus(dt);
+      // road reserved for a tow job: the cars in it taken off (every 0.5 s, and at once when one is made)
+      this.zoneT = (this.zoneT ?? 0.5) - dt;
+      if (ZONES.length && (this.zoneT <= 0 || ZONES.some((z) => z.fresh))) { this.clearZones(Math.max(0, 0.5 - this.zoneT)); this.zoneT = 0.5; }
       // the trains and a helicopter on the road: braked for (clearance); a train shoves a car off its line
       this.blk = trafficBlockers();
       if (this.enabled && this.blk.length) this.shoveOff(this.blk);
@@ -427,6 +462,15 @@ export class Traffic {
         .some((o) => { const r = Math.hypot(o.x - R.x, o.z - R.z); return r < R.R + 5 && r > R.R - 5 && Math.hypot(o.x - c.x, o.z - c.z) < 28; });
       if (busy) vt = Math.min(vt, Math.max(0, (toE - 2) * 0.5));
     }
+    // a truck / train / helicopter on the road in its way (by its footprint), and road reserved for a tow job
+    for (const b of this.blk || []) {
+      if (b.y !== undefined && Math.abs(b.y - c.y) > 5) continue;
+      const dx = b.x - c.x, dz = b.z - c.z;
+      if (Math.abs(dx) > 50 || Math.abs(dz) > 50) continue;
+      const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(b.yaw, b.hw, b.hd, fx, fz, _ext);
+      if (ahead + e.along > 0.5 && ahead - e.along < 40 && side < c.w / 2 + e.across + 0.3) vt = Math.min(vt, Math.max(0, (ahead - e.along - c.l / 2 - 2.5) * 0.7));
+    }
+    if (ZONES.length) vt = Math.min(vt, this.zoneLimit(c));
     // you, in its way (on foot or in a car)
     const pdx = this.player.pos.x - c.x, pdz = this.player.pos.z - c.z, al = pdx * fx + pdz * fz;
     if (al > 0 && al < 18 && Math.abs(pdx * fz - pdz * fx) < 2.6) vt = Math.min(vt, Math.max(0, (al - 6) * 0.5));
@@ -520,23 +564,27 @@ export class Traffic {
     // (a box: something by its footprint, so a car can pass beside it; in a car park (backing into / out of a bay
     // between parked cars) only a real overlap stops it: 0.3 m short of the footprint, not 2.5 m)
     const inLot = c.mode === 'lot' && c.lot, m = inLot ? 0.3 : 2.5, sm = inLot ? 0.1 : 0.3;
-    const box = (x, z, yaw, hw, hd, gap) => {
+    // (a wreck: never up against it: it waits 14 m back (room to swing out round it later), unless it is going round
+    // it now, c.pass)
+    const mW = inLot ? 0.3 : c.pass ? 2.5 : 14;
+    const box = (x, z, yaw, hw, hd, gap, mm = m) => {
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > gap + hd || Math.abs(dz) > gap + hd) return;
       const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(yaw, hw, hd, fx, fz, _ext);
-      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, Math.max(0, (ahead - e.along - c.l / 2 - m) * 0.7));
+      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, Math.max(0, (ahead - e.along - c.l / 2 - mm) * 0.7));
     };
     // other cars: the moving ones by their line, a wreck / knocked car by its footprint (it may be passed)
     for (const o of this.cars) {
       if (o === c || o.mode === 'gone' || o.mode === 'parked') continue;
-      if (o.mode === 'wreck' || o.mode === 'knocked') box(o.x, o.z, o.yaw, o.w / 2, o.l / 2, 32); else check(o.x, o.z, 32, (c.l + o.l) / 2 + 3);
+      if (o.mode === 'wreck' || o.mode === 'knocked') box(o.x, o.z, o.yaw, o.w / 2, o.l / 2, 36, mW); else check(o.x, o.z, 32, (c.l + o.l) / 2 + 3);
     }
     // parked cars, wrecks and shoved cars in the way (parking.js; the lay-by and bay cars are beside the lane)
     for (const e of this.parking?.cars || []) {
       const g = e.car.position;
       if (e.driving || Math.abs(g.x - c.x) > 34 || Math.abs(g.z - c.z) > 34) continue;
       if (inLot && c.bay && Math.hypot(g.x - c.bay.x, g.z - c.bay.z) < 3.2) continue; // (the cars either side of its bay: the arc in / out clears them)
-      box(g.x, g.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 30);
+      if (e.wrecked || e.astray) { _f.set(0, 0, 1).applyQuaternion(e.car.quaternion); box(g.x, g.z, Math.atan2(_f.x, _f.z), 1.0, (e.length || 4.6) / 2, 36, mW); } // (rolled: its heading, not rotation.y)
+      else box(g.x, g.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 30);
     }
     // the car you drive (its body, not just where you sit; stopped: by its footprint, it may be passed)
     // (Oct 28, the user: "make it so other cars can crash into you": about one driver in ten isn't looking: on the
@@ -551,7 +599,66 @@ export class Traffic {
     for (const b of this.blk || []) if (b.y === undefined || Math.abs(b.y - c.y) < 5) box(b.x, b.z, b.yaw, b.hw, b.hd, 40);
     const p = this.player.pos;
     check(p.x, p.z, 26, c.l / 2 + 3);
+    return Math.min(lim, this.zoneLimit(c));
+  }
+
+  // ---- reserved road (a tow job): a point d m ahead of the car's nose on its way (its lane on the road, its scenic
+  // path, else straight on as it heads)
+  aheadPt(c, d, out) {
+    if (c.mode === 'road' && c.road) {
+      roadAt(c.road, clamp(c.s + c.dir * d, 0, c.road.length), out);
+      const w = LANE + (c.off || 0);
+      out.x += -out.dz * c.dir * w; out.z += out.dx * c.dir * w;
+      return out;
+    }
+    if (c.mode === 'scenic' && c.spath) return this.tourAt(c.u + d, out, c);
+    const s = c.rev ? -1 : 1;
+    out.x = c.x + Math.sin(c.yaw) * s * d; out.z = c.z + Math.cos(c.yaw) * s * d;
+    return out;
+  }
+  // how far ahead of its nose its way enters a zone (Infinity: not within maxD); a zone it is already in doesn't count
+  // (it drives out of it, or is taken off)
+  zoneAhead(c, maxD = 48, zone = null) {
+    let best = Infinity;
+    for (const zn of ZONES) {
+      if (zone && zn !== zone) continue;
+      if (c.x < zn.x0 - maxD - c.l || c.x > zn.x1 + maxD + c.l || c.z < zn.z0 - maxD - c.l || c.z > zn.z1 + maxD + c.l) continue;
+      if (inZone(zn, c.x, c.z)) continue;
+      for (let d = 0; d <= maxD && d < best; d += 1.5) if (inZone(zn, this.aheadPt(c, c.l / 2 + d, _zp).x, _zp.z)) { best = d; break; }
+    }
+    return best;
+  }
+  zoneLimit(c) {
+    let lim = Infinity;
+    for (const zn of ZONES) {
+      const d = this.zoneAhead(c, zn.gap + 36, zn);
+      if (d < Infinity) lim = Math.min(lim, Math.max(0, (d - zn.gap) * 0.7));
+    }
     return lim;
+  }
+  // the cars inside an evicting zone: out of sight taken off at once; in sight, once standing in it (8 s, or 1 s when
+  // the truck is close: zone.urgent), they sink away
+  clearZones(dt) {
+    for (const zn of ZONES) {
+      if (!zn.evict) continue;
+      for (const c of this.cars) {
+        if (c.mode === 'gone' || c.mode === 'parked' || c.sinkT !== undefined) continue;
+        const h = c.l * 0.35, fx = Math.sin(c.yaw) * h, fz = Math.cos(c.yaw) * h;
+        const inside = inZone(zn, c.x, c.z) || inZone(zn, c.x + fx, c.z + fz) || inZone(zn, c.x - fx, c.z - fz);
+        if (!inside) { if (c.zoneZ === zn) c.zoneT = 0; continue; }
+        if (c.zoneZ !== zn) { c.zoneZ = zn; c.zoneT = 0; }
+        if (!this.inSight(c.x, c.z)) { this.despawn(c); continue; }
+        c.zoneT = (c.v < 0.5 || c.mode === 'wreck' || c.mode === 'knocked') ? (c.zoneT || 0) + dt : 0;
+        if (c.zoneT > (zn.urgent ? 1 : 8)) this.evict(c);
+      }
+      zn.fresh = false;
+    }
+  }
+  /** Off the road for good (out of sight at once, in sight it sinks away): something needs the space (tow truck). */
+  evict(c) {
+    if (!c || c.mode === 'gone' || c.sinkT !== undefined) return;
+    if (!this.inSight(c.x, c.z)) { this.despawn(c); return; }
+    c.sinkT = 0; c.toLot = false;
   }
 
   // ---- round a crash: the nearest thing standing in its lane ahead (a wreck, a shoved or abandoned car, the car you
@@ -560,8 +667,10 @@ export class Traffic {
   // guardrail, tree or wall beside the road. No room: c.offT 0 and it waits behind (the watchdog takes it after 5 min).
   planPass(c) {
     const r = c.road, fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), M = EDGE - c.w / 2;
+    // (a reserved stretch ahead (a tow job): it queues behind it on its own lane line, never swerves up to it)
+    if (ZONES.length && this.zoneAhead(c, 60) < Infinity) { c.pass = null; c.offT = 0; return; }
     let best = null;
-    const consider = (x, z, yaw, hw, hd) => {
+    const consider = (x, z, yaw, hw, hd, berth = 0.4) => {
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > 40 || Math.abs(dz) > 40) return;
       const e = extents(yaw, hw, hd, fx, fz, _ext), u = dx * fx + dz * fz;
@@ -571,10 +680,10 @@ export class Traffic {
       const rx = -_p.dz * c.dir, rz = _p.dx * c.dir, w = (x - _p.x) * rx + (z - _p.z) * rz, gap = e.across + c.w / 2 + 0.4;
       if (Math.abs(w) > EDGE + e.across) return; // (not on the road)
       if (Math.abs(w - LANE - (c.off || 0)) > gap && Math.abs(w - LANE) > gap) return; // (clear of the lane)
-      if (!best || u < best.u) best = { u, so, w, gap, along: e.along };
+      if (!best || u < best.u) best = { u, so, w, gap, along: e.along, berth };
     };
-    for (const o of this.cars) if (o !== c && (o.mode === 'wreck' || o.mode === 'knocked')) consider(o.x, o.z, o.yaw, o.w / 2, o.l / 2);
-    for (const e of this.parking?.cars || []) if (!e.driving) consider(e.car.position.x, e.car.position.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2);
+    for (const o of this.cars) if (o !== c && (o.mode === 'wreck' || o.mode === 'knocked')) consider(o.x, o.z, o.yaw, o.w / 2, o.l / 2, 1.2);
+    for (const e of this.parking?.cars || []) if (!e.driving) consider(e.car.position.x, e.car.position.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, e.wrecked || e.astray ? 1.2 : 0.4);
     const d = this.you?.d;
     if (d && Math.hypot(d.vx || 0, d.vz || 0) < 0.8) consider(d.x, d.z, d.yaw, d.w / 2, d.half);
     if (!best) { c.pass = null; c.offT = 0; return; } // (nothing in the way: back on its lane line)
@@ -588,10 +697,13 @@ export class Traffic {
       }
       return true;
     };
-    const right = best.w + best.gap, left = best.w - best.gap;
+    // (round a wreck through the other lane: a wide berth, 1.2 m)
+    const right = best.w + best.gap, left = best.w - best.gap - Math.max(0, best.berth - 0.4);
     // (beside it already: keep to the side it chose)
     if (c.pass && best.u < best.along + c.l / 2) return;
-    const oncoming = this.cars.some((o) => o !== c && o.mode === 'road' && o.road === r && o.dir !== c.dir && (o.s - c.s) * c.dir > -10 && (o.s - c.s) * c.dir < best.u + 80);
+    // (the other lane clear: nothing coming, and no truck / train / helicopter on the road there)
+    const oncoming = this.cars.some((o) => o !== c && o.mode === 'road' && o.road === r && o.dir !== c.dir && (o.s - c.s) * c.dir > -10 && (o.s - c.s) * c.dir < best.u + 80)
+      || (this.blk || []).some((b) => { const dx = b.x - c.x, dz = b.z - c.z, u = dx * fx + dz * fz; return u > -10 && u < best.u + 80 && Math.abs(dx * fz - dz * fx) < 9 && (b.y === undefined || Math.abs(b.y - c.y) < 5); });
     if (free(right)) { c.pass = 'right'; c.offT = right - LANE; }
     else if (!oncoming && free(left)) { c.pass = 'left'; c.offT = left - LANE; }
     else { c.pass = null; c.offT = 0; }

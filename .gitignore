@@ -10,3 +10,10 @@ Untitled
 assets-src/
 crystal.glb
 .cursorignore
+
+# secrets / server data (never commit)
+*_rsa
+*_rsa.pub
+*.pem
+*.key
+server/data/

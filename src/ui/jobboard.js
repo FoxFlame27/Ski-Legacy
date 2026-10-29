@@ -17,8 +17,10 @@ const ICONS = {
   rescue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M10 6.8h4v3.2h3.2v4H14v3.2h-4V14H6.8v-4H10z" fill="currentColor" stroke="none"/></svg>',
   // a guide's flag
   escort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V3.5"/><path d="M5 4h12l-3 4 3 4H5" fill="currentColor" fill-opacity="0.18"/></svg>',
+  // a car (the taxi)
+  taxi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 16.5V12l2-5h12l2 5v4.5z"/><path d="M4 12h16M9.5 4.5h5v2.5h-5z"/><circle cx="7.5" cy="17.5" r="1.8" fill="currentColor"/><circle cx="16.5" cy="17.5" r="1.8" fill="currentColor"/></svg>',
 };
-const KIND = { delivery: 'Delivery', rescue: 'Rescue', escort: 'Guide' };
+const KIND = { delivery: 'Delivery', rescue: 'Rescue', escort: 'Guide', taxi: 'Taxi' };
 const DIFF = [null, ['Easy', '#129a46'], ['Medium', '#1546c8'], ['Hard', '#d0342c']]; // piste colours
 const CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 const PINS = ['#d0342c', '#1546c8', '#e09a00', '#129a46'];
@@ -121,7 +123,7 @@ export class JobBoardUI {
         <div class="jb-kind">${ICONS[o.type] || ''}${esc(KIND[o.type] || 'Job')}</div>
         <h3 class="jb-title">${esc(o.title)}</h3>
         <p class="jb-brief">${esc(o.brief)}</p>
-        <div class="jb-foot"><span class="jb-pay">${money(o.reward)}${tip}</span>
+        <div class="jb-foot"><span class="jb-pay">${o.payText ? esc(o.payText) : money(o.reward)}${tip}</span>
           <span class="jb-side"><span class="jb-time">${CLOCK}${esc(o.minutes)}</span>${diffHTML(o.diff)}</span></div>
       </button>`;
   }
@@ -138,14 +140,14 @@ export class JobBoardUI {
         <div class="jb-from">${esc(o.client)}</div>
         <p class="jb-brief">${esc(o.brief)}</p>
         <div class="jb-facts">
-          <span class="jb-fact">Pay<b>${money(o.reward)}</b></span>
-          <span class="jb-fact">Tip<b class="tip">${o.bonus ? `up to ${money(o.bonus)}` : '—'}</b></span>
+          <span class="jb-fact">Pay<b>${o.payText ? esc(o.payText) : money(o.reward)}</b></span>
+          <span class="jb-fact">Tip<b class="tip">${o.tipText ? esc(o.tipText) : o.bonus ? `up to ${money(o.bonus)}` : '—'}</b></span>
           <span class="jb-fact">Time<b>${esc(o.minutes)}</b></span>
           <span class="jb-fact">Difficulty<b>${diffHTML(o.diff)}</b></span>
         </div>
         ${busy ? '<div class="jb-note-busy">You are already on a job: finish it or cancel it first.</div>' : ''}
         <div class="jb-acts">
-          <button class="jb-btn" data-take ${busy ? 'disabled' : ''}>${brushSVG(61, 300, 60, { fill: '#1546c8' })}<span>TAKE THE JOB</span></button>
+          <button class="jb-btn" data-take ${busy ? 'disabled' : ''}>${brushSVG(61, 300, 60, { fill: '#1546c8' })}<span>${esc(o.takeText || 'TAKE THE JOB')}</span></button>
           <button class="jb-btn light" data-back>${brushSVG(62, 300, 60, { fill: '#e9eefb' })}<span>BACK</span></button>
         </div></div>`;
     d.hidden = false;

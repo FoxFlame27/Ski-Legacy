@@ -49,6 +49,7 @@ import { Hospital } from './game/hospital.js'; // the medical centre the ambulan
 import { Traffic } from './game/traffic.js'; // cars driving the roads (vehicles agent)
 import { Drive } from './game/drive.js'; // drive the parked cars yourself (vehicles agent)
 import { CarRental } from './game/carrental.js'; // CAR RENTAL: rent a car (showroom inside), the wreck fee, the tow truck
+import { Taxi } from './game/taxi.js'; // LEGACY TAXI: drive fares in your car (the board's TAXI note, or T in the car)
 import { planBusRoads } from './game/bus/roads.js'; // plowed roads for the ski bus (vehicles agent)
 import { Crowds } from './world/crowds.js';
 import { Snowcats } from './world/snowcats.js';
@@ -179,6 +180,7 @@ let drive = null; // the car you drive (game/drive.js)
 let chaletSeatPrompt = null; // inside your chalet: Sit down / Stand up (game/seating.js)
 let chalets = null; // the chalet village: the houses, renting one, its interior (game/chalets.js)
 let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
+let taxi = null; // LEGACY TAXI: fares round the resort in your car (game/taxi.js)
 let vehicleHits = null; // getting hit by vehicles on foot / on skis (game/vehiclehits.js)
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
@@ -370,6 +372,13 @@ async function boot() {
     carRental = new CarRental({ scene, camera, renderer, models, colliders, cameraBlockers: village.cameraBlockers, parking, drive, traffic, hud, audio, save, writeSave, spend, transition, player, input,
       makeRig: () => makeRig('skier_orange', 'rental'), getPost: () => post });
   } catch (e) { console.warn('car rental: ' + (e?.stack || e)); carRental = null; }
+  // taxi fares in your own car: paid as jobs (multiplayer: the server's 'job' payout)
+  try {
+    if (drive) {
+      taxi = new Taxi({ scene, player, drive, carRental, jobs, hud, audio, layout, earn: (amount, label) => earn(amount, label, 'job'), busy: () => !!jobs?.job });
+      jobs.extraOffers = () => [taxi.boardOffer()];
+    }
+  } catch (e) { console.warn('taxi: ' + (e?.stack || e)); taxi = null; }
   try { chalets = new Chalets({ scene, camera, renderer, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, spend, transition, player, getPost: () => post, getHour: () => env.hour }); } catch (e) { console.warn('chalets: ' + (e?.stack || e)); chalets = null; }
   seating.init({ save, chaletAPI: chaletInteriorAPI, catalog: FURNITURE_BY_ID, chalets });
   seating.setVillage((x, z) => world.height(x, z), CHALET_HX);
@@ -1407,6 +1416,8 @@ function locationName() {
 function waypoint() {
   const p = player.pos;
   const to = (x, z, label) => ({ label, ang: Math.atan2(x - p.x, z - p.z), dist: Math.hypot(x - p.x, z - p.z) });
+  const tw = taxi?.waypoint(p);
+  if (tw) return to(tw.x, tw.z, tw.label);
   const jw = jobs.waypoint(p);
   if (jw) return to(jw.x, jw.z, jw.label);
   // a place you marked on the trail map, until you get there
@@ -1431,7 +1442,7 @@ let trailMap = null;
 function openMap() {
   trailMap ??= new TrailMap({
     player, locationName, onClose: () => input.lock(),
-    markers: () => ({ jobs: jobs.mapMarkers(), heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [],
+    markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [],
       places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Car Rental', kind: 'car' }] : [] }),
   });
   if (trailMap.toggle()) document.exitPointerLock?.();
@@ -1765,6 +1776,7 @@ function loopUpdate() {
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
   if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
+  taxi?.update(dt, started && !menu && !inSession && !paused ? input : null); // (after the car moved: the passenger in its back seat)
   chalets?.update(dt); // the full-detail chalet nearest you
   try { vehicleHits?.update(dt); } catch (e) { loopFault('vehicle hits', e); } // after every vehicle moved: a car / bus running into you
   mark('drive');
@@ -1870,7 +1882,7 @@ function loopUpdate() {
     else hud.frame({
       speed: railway.riding ? railway.speed : express?.riding ? express.speed : skibus.riding ? skibus.speed : drive?.active ? drive.speed : sleds.active ? sleds.speed : heli.active ? heli.speed : player.mode === 'walk' ? 0 : player.speed, loc: (express?.riding && express.locName()) || railway.locName(player.pos) || express?.locName(player.pos) || locationName(), time: env.timeString, weather,
       ski: vehicleName() || (player.skisOn || !player.hasSkis ? ski : `${ski} (off)`),
-      prompt: ridePrompt || interaction?.label || (player.hasSkis && !player.skisOn && player.mode === 'walk' && !player.isFlatHere() ? 'Put on skis' : null), promptKey: ridePrompt || interaction ? 'E' : 'G', objective: races.active ? '' : (rideLine || heli.hudLine() || sleds.hudLine() || jobs.hudLine() || objective()),
+      prompt: ridePrompt || interaction?.label || (player.hasSkis && !player.skisOn && player.mode === 'walk' && !player.isFlatHere() ? 'Put on skis' : null), promptKey: ridePrompt || interaction ? 'E' : 'G', objective: races.active ? '' : (rideLine || heli.hudLine() || sleds.hudLine() || taxi?.hudLine() || jobs.hudLine() || objective()),
       heading: camYaw, waypoint: races.active ? null : heli.active ? heli.waypoint(player.pos) || waypoint() : waypoint(), // (also while riding: train, bus, lifts, snowmobile)
       speedo: player.mode !== 'sit' || railway.riding || !!express?.riding || skibus.riding || sleds.active || heli.active || !!drive?.active, // (vehicles show their own speed; chairs and gondolas don't)
     });

@@ -292,6 +292,8 @@ export class Jobs {
   openBoardUI(b) {
     const hub = b.hub, job = this.job;
     const offers = this.offersFor(hub).filter((o) => !job || o.id !== job.id);
+    let extra = [];
+    try { extra = (this.extraOffers?.(hub) || []).filter(Boolean); } catch (e) { console.warn('Jobs: extra offers', e); } // (main.js: the taxi's note)
     this.boardUI ??= new JobBoardUI({ hud: this.hud, audio: this.audio });
     this.refreshHud();
     this.boardUI.open({
@@ -299,9 +301,13 @@ export class Jobs {
       offers: offers.map((o) => ({
         id: o.id, type: o.type, title: o.title, brief: o.brief, client: o.client, reward: o.reward, bonus: o.bonus,
         minutes: minutes(o.limit + (o.estDown ? o.estDown * 1.5 : 0)), diff: this.difficulty(o),
-      })),
+      })).concat(extra),
       current: job ? { title: job.title, type: job.type, client: job.client, status: this.hudLine() || this.statusText() } : null,
-      take: (id) => { const o = offers.find((x) => x.id === id); if (!o || !this.accept(o)) this.relock(); },
+      take: (id) => {
+        const x = extra.find((e) => e.id === id); // (a note pinned by another system: the taxi's)
+        if (x) { try { x.take?.(); } catch (e) { console.warn('Jobs: extra offer', e); } this.relock(); return; }
+        const o = offers.find((q) => q.id === id); if (!o || !this.accept(o)) this.relock();
+      },
       cancel: () => { this.cancel(); this.relock(); },
       close: () => this.relock(),
     });

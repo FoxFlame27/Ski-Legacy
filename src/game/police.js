@@ -28,8 +28,8 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye } from './cars.js';
-import { busRoads } from './bus/roads.js';
-import { roadGraph, roadNearest, roadShortest, obb } from './towtruck.js';
+import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { roadGraph, roadNearest, obb } from './towtruck.js';
 import { addTrafficBlocker } from './traffic.js';
 import { makeFallbackFigure } from './jobs/props.js';
 import { resetRig } from './jobs/actors.js';
@@ -58,9 +58,10 @@ export const TUNING = {
   reachR: 60,        // m: they have reached you (the grace to pull over starts)
   graceS: 8,         // s to pull over once they reach you; still moving after it: fleeing
   footCatchR: 4,     // m: an officer on foot this close: caught
-  vRoad: 38,         // m/s (137 km/h) on the roads
-  vOff: 22,          // m/s off them
-  ramExtra: 8,       // m/s over your speed when they ram
+  vRoad: 42,         // m/s (151 km/h) on the roads (the bends ahead slow them: A_LAT)
+  vOff: 20,          // m/s off them
+  catchUp: 0.35,     // up to this much faster than vRoad while far behind you (150-400 m: GTA's catch-up)
+  ramExtra: 6,       // m/s over your speed at most, closing in for a ram (a PIT: alongside, then a nudge)
   ramMult: 1.2,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
   ramGapS: 2.5,      // s a patrol car drops back after a ram before the next
   cooldownS: 6,      // s after a chase ends before another hit calls them
@@ -214,14 +215,89 @@ function contact(A, B) {
   }
   return { nx, nz, depth: best };
 }
-// a road path's points moved LANE m into the right-hand lane (as towtruck.js keepRight)
-function keepRight(ids) {
-  const G = roadGraph(), P = ids.map((i) => ({ x: G.X[i], z: G.Z[i] }));
-  return P.map((p, k) => {
-    const a = P[Math.max(0, k - 2)], b = P[Math.min(P.length - 1, k + 2)];
-    const dx = b.x - a.x, dz = b.z - a.z, l = Math.hypot(dx, dz) || 1;
-    return { x: p.x - (dz / l) * LANE, z: p.z + (dx / l) * LANE };
-  });
+// ---- the patrol cars' driving (Oct 29, the user: "the police ai is very bad"): A* along the road graph to the road
+// point nearest where you will be (re-planned about once a second), straight only for the last stretch; pure pursuit
+// (a look-ahead growing with the speed), the speed held to what the bends ahead and the steering can take (braking for
+// them in time), obstacles probed out to braking distance (colliders, trees, steep ground, the traffic, the bus, the
+// other patrol car); no progress: back up and turn out (both ways in turn), as a last resort (out of sight, far) put
+// back on a road. Fleeing: a PIT (alongside your rear quarter, then a nudge into it) by the first car, the second cuts
+// you off (routes to where you will be in a few seconds, blocks ahead / PITs from the other side).
+const A_LAT = 8.5, A_BRAKE = 10, R_MIN = WB / Math.tan(0.7);
+const FR = [0.25, 0.5, 0.75, 1];
+const ANG_L = [0.3, -0.3, 0.6, -0.6, 0.95, -0.95, 1.4, -1.4], ANG_R = ANG_L.map((a) => -a);
+// A* over the road graph (towtruck.js roadGraph) from node a to b: the node ids into out (Int32Array), their count
+// (0: no way); its buffers kept between calls (a stamp instead of clearing them)
+let RT = null;
+function routeIds(a, b, out) {
+  const G = roadGraph(), X = G.X, Z = G.Z, adj = G.adj;
+  if (!RT || RT.G !== G) {
+    let E = 1;
+    for (const l of adj) E += l.length;
+    RT = { G, g: new Float64Array(G.N), prev: new Int32Array(G.N), mark: new Uint32Array(G.N), shut: new Uint32Array(G.N), stamp: 0, hf: new Float64Array(E + 8), hn: new Int32Array(E + 8) };
+  }
+  const R = RT, g = R.g, prev = R.prev, mark = R.mark, shut = R.shut, hf = R.hf, hn = R.hn, cap = hf.length;
+  const st = ++R.stamp, bx = X[b], bz = Z[b];
+  if (st >= 0xfffffff0) { R.stamp = 0; mark.fill(0); shut.fill(0); return 0; }
+  g[a] = 0; prev[a] = -1; mark[a] = st;
+  let hl = 1, found = false;
+  hf[0] = Math.hypot(X[a] - bx, Z[a] - bz); hn[0] = a;
+  while (hl > 0) {
+    const n = hn[0];
+    // pop (a binary heap in two typed arrays)
+    hl--;
+    if (hl > 0) {
+      const lf = hf[hl], ln = hn[hl];
+      let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i, mf = lf; if (l < hl && hf[l] < mf) { m = l; mf = hf[l]; } if (r < hl && hf[r] < mf) m = r; if (m === i) break; hf[i] = hf[m]; hn[i] = hn[m]; i = m; }
+      hf[i] = lf; hn[i] = ln;
+    }
+    if (shut[n] === st) continue;
+    shut[n] = st;
+    if (n === b) { found = true; break; }
+    const L = adj[n];
+    for (let q = 0; q < L.length; q++) {
+      const v = L[q];
+      if (shut[v] === st) continue;
+      const nd = g[n] + Math.hypot(X[v] - X[n], Z[v] - Z[n]);
+      if (mark[v] === st && nd >= g[v]) continue;
+      mark[v] = st; g[v] = nd; prev[v] = n;
+      if (hl >= cap) continue;
+      const f = nd + Math.hypot(X[v] - bx, Z[v] - bz);
+      let i = hl++;
+      while (i > 0) { const p = (i - 1) >> 1; if (hf[p] <= f) break; hf[i] = hf[p]; hn[i] = hn[p]; i = p; }
+      hf[i] = f; hn[i] = v;
+    }
+  }
+  if (!found) return 0;
+  let k = 0;
+  for (let n = b; n >= 0 && k < out.length; n = prev[n]) { out[k++] = n; if (n === a) break; }
+  for (let i = 0, j = k - 1; i < j; i++, j--) { const t = out[i]; out[i] = out[j]; out[j] = t; }
+  return k;
+}
+// from road node i, m metres on along the roads the way (dx, dz) points (at a fork: the branch most that way): where
+// you will be on the roads (never a point extrapolated off a bend, nearest some other road)
+function roadAhead(i, dx, dz, m) {
+  const G = roadGraph(), X = G.X, Z = G.Z;
+  let prev = -1, acc = 0;
+  for (let guard = 0; guard < 300 && acc < m; guard++) {
+    const L = G.adj[i];
+    let best = -1, bd = 0.2, bl = 1;
+    for (let q = 0; q < L.length; q++) {
+      const v = L[q];
+      if (v === prev) continue;
+      const ex = X[v] - X[i], ez = Z[v] - Z[i], el = Math.hypot(ex, ez) || 1, dd = (ex * dx + ez * dz) / el;
+      if (dd > bd) { bd = dd; best = v; bl = el; }
+    }
+    if (best < 0) break;
+    acc += bl; dx = (X[best] - X[i]) / bl; dz = (Z[best] - Z[i]) / bl;
+    prev = i; i = best;
+  }
+  return i;
+}
+// (x, z) inside the box (cx, cz, yaw: its +z, hw, hd) grown by r?
+function inBox(x, z, r, cx, cz, yaw, hw, hd) {
+  const s = Math.sin(yaw), c = Math.cos(yaw), dx = x - cx, dz = z - cz;
+  return Math.abs(dx * c - dz * s) < hw + r && Math.abs(dx * s + dz * c) < hd + r;
 }
 
 // a patrol car seen from the side (the WANTED box: one per car after you)
@@ -325,8 +401,13 @@ export class Police {
     const hw = m.size.x / 2 - 0.05, hd = m.size.z / 2;
     const col = { x: 1e9, z: 1e9, hw, hd, rot: 0, h: 1.7, police: 'local' };
     this.colliders?.push(col);
-    const u = { k, m, g: m.g, col, hw, hd, box: { hw, hd: hd + 0.3 }, on: false, x: 0, y: 0, z: 0, yaw: 0, v: 0, steer: 0, path: null, pi: 0, repath: 0,
-      probeT: 0, avoid: { turn: 0, vmax: 99 }, stuck: 0, rev: 0, revSteer: 0, mode: 'chase', officer: null, driver: null, gone: 0, leaveTo: null };
+    const u = { k, m, g: m.g, col, hw, hd, box: { hw, hd: hd + 0.3, police: true }, on: false, x: 0, y: 0, z: 0, yaw: 0, v: 0, steer: 0, path: null, pi: 0, repath: 0,
+      probeT: 0, avoid: { turn: 0, vmax: 99 }, stuck: 0, rev: 0, revSteer: 0, mode: 'chase', officer: null, driver: null, gone: 0, leaveTo: null,
+      // (the driving: the road way (ids, its points in the lane PX / PZ, pn of them, pi the nearest), the goal it was
+      // planned to (gx, gz); progress (stX / stZ every stT s, stuckN failures in a row); the PIT (pitSide, pitT);
+      // on foot: fg, the nearest reachable point to you (fgT: re-found); boost: the catch-up)
+      ids: null, PX: null, PZ: null, pn: 0, gx: 1e9, gz: 1e9, stX: 0, stZ: 0, stT: 0, stuckN: 0, uturn: 0,
+      pitSide: 0, pitT: 0, ramCool: 0, ram: false, fg: { x: 0, z: 0, ok: false, park: false }, fgT: 0, boost: 1, parked: false };
     this.units[k] = u;
     return u;
   }
@@ -381,8 +462,9 @@ export class Police {
     u.g.add(o);
     u.driver = o;
   }
-  // out of sight 300-500 m from you on the roads, facing the way to you (no roads: off-road behind the camera)
-  spawn(k) {
+  // out of sight 300-500 m from you on the roads, facing the way to you (no roads: off-road behind the camera);
+  // strict (a stuck car put back on a road): only out of sight within lo-hi, else nothing happens (false)
+  spawn(k, lo0 = TUNING.spawnMin, hi0 = TUNING.spawnMax, strict = false) {
     const u = this.unit(k), p = this.target();
     if (!p) return false;
     let best = null;
@@ -392,25 +474,29 @@ export class Police {
         this.camera?.updateMatrixWorld?.();
         _fr.setFromProjectionMatrix(_m.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
         const other = this.units.find((x) => x.on && x !== u), cand = [];
-        for (let pass = 0; pass < 3 && !cand.length; pass++) {
-          const lo = pass === 2 ? 120 : TUNING.spawnMin, hi = pass === 0 ? TUNING.spawnMax : pass === 1 ? 800 : 1500;
+        for (let pass = 0; pass < (strict ? 1 : 3) && !cand.length; pass++) {
+          const lo = pass === 2 ? 120 : lo0, hi = pass === 0 ? hi0 : pass === 1 ? Math.max(800, hi0) : 1500;
           for (let i = 0; i < G.N; i += 1) {
             const d = hyp(G.X[i], G.Z[i], p.x, p.z);
             if (d < lo || d > hi) continue;
-            if (other && hyp(G.X[i], G.Z[i], other.x, other.z) < 40) continue;
+            if (other && hyp(G.X[i], G.Z[i], other.x, other.z) < (strict ? 80 : 40)) continue;
+            if (strict && p.sp > 3 && (G.X[i] - p.x) * p.vx + (G.Z[i] - p.z) * p.vz > 0) continue; // (put back: behind you)
             const seen = pass === 0 && _fr.containsPoint(_v.set(G.X[i], world.height(G.X[i], G.Z[i]) + 1, G.Z[i]));
             if (!seen) cand.push(i);
           }
         }
         if (cand.length) {
           const i = cand[Math.floor(Math.random() * cand.length)], b = roadNearest(p.x, p.z);
-          const ids = b.i >= 0 ? roadShortest(i, b.i) : null;
-          const n = ids && ids.length > 1 ? ids[1] : -1;
+          const ids = (this._sid ||= { a: new Int32Array(0) });
+          if (ids.a.length !== G.N) ids.a = new Int32Array(G.N);
+          const cnt = b.i >= 0 ? routeIds(i, b.i, ids.a) : 0;
+          const n = cnt > 1 ? ids.a[Math.min(2, cnt - 1)] : -1;
           const yaw = n >= 0 ? Math.atan2(G.X[n] - G.X[i], G.Z[n] - G.Z[i]) : Math.atan2(p.x - G.X[i], p.z - G.Z[i]);
           best = { x: G.X[i] - Math.cos(yaw) * LANE, z: G.Z[i] + Math.sin(yaw) * LANE, yaw };
         }
       }
     } catch (e) { console.warn('police spawn', e); }
+    if (!best && strict) return false;
     if (!best) {
       const cy = this.camera ? Math.atan2(-this.camera.matrixWorld.elements[8], -this.camera.matrixWorld.elements[10]) : 0;
       const a = cy + Math.PI + (Math.random() - 0.5);
@@ -419,6 +505,8 @@ export class Police {
     }
     u.on = true; u.x = best.x; u.z = best.z; u.yaw = best.yaw; u.v = 8; u.steer = 0; u.path = null; u.repath = 0; u.mode = 'chase';
     u.stuck = 0; u.rev = 0; u.gone = 0; u.leaveTo = null;
+    u.pn = 0; u.gx = 1e9; u.stX = u.x; u.stZ = u.z; u.stT = 0; u.stuckN = 0; u.uturn = 0; u.pitT = 0; u.pitSide = 0; u.ramCool = 0; u.ram = false;
+    u.fgT = 0; u.fg.ok = false; u.boost = 1; u.parked = false; u.avoid.turn = 0; u.avoid.vmax = 99;
     u.y = world.groundHeight(u.x, u.z);
     u.g.visible = true;
     this.seatDriver(u);
@@ -428,7 +516,7 @@ export class Police {
   }
   despawn(u) {
     this.dropOfficer(u);
-    u.on = false; u.g.visible = false; u.v = 0; u.path = null;
+    u.on = false; u.g.visible = false; u.v = 0; u.path = null; u.pn = 0;
     u.col.x = 1e9; u.col.z = 1e9;
   }
   place(u) {
@@ -490,6 +578,8 @@ export class Police {
     let near = Infinity, lead = live[0];
     for (const u of live) { const d = hyp(u.x, u.z, T.x, T.z); if (d < near) { near = d; lead = u; } }
     W.near = near;
+    // (how hard you are slowing, smoothed: pulling over, no ram)
+    W.dec = (W.dec || 0) * 0.9 + (((W.lastSp ?? T.sp) - T.sp) / dt) * 0.1; W.lastSp = T.sp;
     // the escape: in all, further than escapeR from every patrol car
     if (near > TUNING.escapeR && !W.scene) W.esc += dt;
     if (W.esc >= TUNING.escapeS) { this.escaped(); return; }
@@ -507,10 +597,12 @@ export class Police {
     }
     // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;
-    W.stopT = still && near < TUNING.stopR ? W.stopT + dt : 0;
+    // (on foot off the roads: parked as near you as a car gets counts as close)
+    const close = near < TUNING.stopR || (T.foot && lead.parked && near < 90);
+    W.stopT = still && close ? W.stopT + dt : 0;
     if (W.stopT >= TUNING.stopS) { this.begin(W, W.fleeing ? 'arrest' : 'fine', lead, W.fleeing ? 'stopped' : ''); return; }
-    // fleeing on foot: an officer runs after you once his car is close
-    if (W.fleeing && T.foot && near < 16 && !lead.officer) { this.begin(W, 'arrest', lead, 'foot'); return; }
+    // fleeing on foot: an officer runs after you once his car is close (or as close as it gets)
+    if (W.fleeing && T.foot && (near < 16 || (lead.parked && near < 90)) && !lead.officer) { this.begin(W, 'arrest', lead, 'foot'); return; }
     if (W.fleeing && !W.spawned2 && W.t > 2) { W.spawned2 = true; this.spawn(1); }
     for (const u of live) this.drivePursuit(u, dt, T, W, u === lead);
   }
@@ -522,123 +614,331 @@ export class Police {
     this.note(`${foot ? 'Running from the police' : 'Fleeing · they will ram you'} · stay ${TUNING.escapeR} m away for ${mmss(TUNING.escapeS)} to escape`);
   }
 
-  // one patrol car chasing: tail you (not fleeing), ram you (fleeing; the second one cuts in ahead), on foot: stop short
+  // one patrol car chasing (the driving notes: above routeIds). Not fleeing: to where you will be, then tailing 10 m
+  // behind you (the other one 18 m). Fleeing: the first one PITs you (pit()), dropping back ramGapS after a hit; the
+  // second cuts you off (its own way to where you will be in a few seconds), blocks the road ahead of you or PITs
+  // from the other side. You slowing to a stop: no ram, they box you in. On foot: to the nearest point a car can
+  // reach near you (footGoal), parked there.
   drivePursuit(u, dt, T, W, lead) {
     const d = hyp(u.x, u.z, T.x, T.z);
-    let tx = T.x, tz = T.z, vt = TUNING.vRoad, ram = false;
-    if (!T.car && !T.foot) { // (on a lift, in the helicopter...: they wait where they are)
-      this.step(u, dt, u.x + Math.sin(u.yaw), u.z + Math.cos(u.yaw), 0); return;
-    }
+    u.ramCool = Math.max(0, u.ramCool - dt);
+    u.ram = false;
+    u.boost = 1 + TUNING.catchUp * clamp((d - 150) / 250, 0, 1);
+    if (!T.car && !T.foot) { u.parked = false; this.step(u, dt, u.x + Math.sin(u.yaw) * 3, u.z + Math.cos(u.yaw) * 3, 0); return; } // (on a lift, in the helicopter...: they wait)
+    // stuck again and again, far and out of sight: back on a road nearer you (the last resort)
+    if (u.stuckN >= 3 && d > 150 && !this.inView(u) && this.spawn(u.k, 160, 380, true)) return;
+    const vMax = TUNING.vRoad * u.boost;
     if (T.foot) {
-      // on foot: up to ~9 m from you, then stop
-      const k = d > 0.1 ? Math.max(0, d - 9) / d : 0;
-      tx = u.x + (T.x - u.x) * k; tz = u.z + (T.z - u.z) * k;
-      vt = clamp((d - 9) * 0.9, 0, TUNING.vRoad);
-    } else if (W.fleeing && d < 70 && (u.ramCool || 0) <= 0) {
-      // ramming: where you will be (lead), or ahead of you (the other one: a block)
-      ram = true;
-      const lookT = clamp(d / Math.max(8, u.v), 0, 1.2);
-      tx = T.x + T.vx * lookT; tz = T.z + T.vz * lookT;
-      if (!lead) { const f = T.sp > 3 ? 1 / T.sp : 0; tx += T.vx * f * 14; tz += T.vz * f * 14; }
-      vt = d > 25 ? TUNING.vRoad : T.sp + TUNING.ramExtra; // (closing in flat out, then just faster than you)
-    } else if (!W.fleeing && d < 45) {
-      // tailing: 10 m behind you (the other one 18 m), matching your speed
-      const back = lead ? 10 : 18, P = this.carPoint(T.car, lead ? 0 : 1.2, -T.car.half - back, this._pt ||= {});
-      tx = P.x; tz = P.z;
-      const gap = hyp(u.x, u.z, P.x, P.z);
-      vt = clamp(T.sp + gap * 0.8, 0, TUNING.vRoad);
-      if (gap < 2) vt = Math.min(vt, T.sp);
+      this.footGoal(u, T, dt);
+      const F = u.fg, g = hyp(u.x, u.z, F.x, F.z);
+      u.parked = g < 3.5 && Math.abs(u.v) < 1.5;
+      this.step(u, dt, F.x, F.z, g < 0.8 ? 0 : Math.min(vMax, 1.5 + Math.sqrt(2 * 5 * g)));
+      return;
     }
-    else if (W.fleeing && d < 70) { // (just rammed you: dropping back a moment before the next one)
-      const P = this.carPoint(T.car, 0, -T.car.half - 9, this._pt ||= {});
-      tx = P.x; tz = P.z; vt = Math.max(0, T.sp - 2);
+    u.parked = false;
+    const C = T.car, s = Math.sin(C.yaw), c = Math.cos(C.yaw);
+    const lxU = (u.x - C.x) * c - (u.z - C.z) * s, lzU = (u.x - C.x) * s + (u.z - C.z) * c; // (it, in your car's frame)
+    const fwd = T.vx * s + T.vz * c; // (your speed along your heading)
+    // where you will be: led by the time to get there (clamped); the second car (fleeing) further: cutting you off
+    const ex = (T.x - u.x) / Math.max(d, 0.1), ez = (T.z - u.z) / Math.max(d, 0.1);
+    const closing = Math.max(4, (Math.sin(u.yaw) * u.v - T.vx) * ex + (Math.cos(u.yaw) * u.v - T.vz) * ez);
+    const tl = !lead && W.fleeing ? clamp(d / Math.max(12, Math.abs(u.v)), 2, 7) : clamp(d / closing, 0, 3.5);
+    let px = T.x + T.vx * tl, pz = T.z + T.vz * tl;
+    // (further off, you on a road: that far on along it, re-found twice a second)
+    if (d > 40 && busRoads.roads.length) {
+      if ((u.goT = (u.goT || 0) - dt) <= 0) {
+        u.goT = 0.5; u.goOk = false;
+        const n = roadNearest(T.x, T.z);
+        if (n.i >= 0 && n.d < 15) { const G = roadGraph(), j = T.sp > 2 ? roadAhead(n.i, T.vx / T.sp, T.vz / T.sp, T.sp * tl) : n.i; u.goX = G.X[j]; u.goZ = G.Z[j]; u.goOk = true; }
+      }
+      if (u.goOk) { px = u.goX; pz = u.goZ; }
     }
-    u.ramCool = Math.max(0, (u.ramCool || 0) - dt);
-    u.ram = ram;
-    this.step(u, dt, tx, tz, vt);
+    // coming at you (oncoming, ahead of you, near): it brakes hard and turns round (a three-point turn on a road)
+    // where it is, so it is on your tail as you pass (and in your way while it turns)
+    if (fwd > 3 && lzU > -1 && lzU < 25 + Math.max(0, u.v) * 3.2 && Math.cos(u.yaw - C.yaw) < -0.3 && !(W.fleeing && !lead)) {
+      u.pitT = 0; u.pitSide = 0;
+      if (u.v > 6) this.step(u, dt, u.x + Math.sin(u.yaw) * 4, u.z + Math.cos(u.yaw) * 4, 0);
+      else { const P = this.carPoint(C, -LANE, lzU + 15, this._pt ||= {}); this.step(u, dt, P.x, P.z, 6); }
+      return;
+    }
+    if (!W.fleeing) {
+      if (d < 60) { this.follow(u, dt, C, lead ? 0 : 1.4, -C.half - u.hd - (lead ? 10 : 18), fwd, lxU, lzU, vMax, 12); return; }
+      this.step(u, dt, px, pz, Math.min(vMax, Math.max(0, fwd) + 4 + Math.sqrt(2 * A_BRAKE * Math.max(0, d - 25))));
+      return;
+    }
+    // you slowing to a stop (or stopped): no ram; the first boxes you in from behind, the second ahead (if it is there)
+    if ((T.sp < 4 || (T.sp < 10 && (W.dec || 0) > 1.5)) && d < 60) {
+      u.pitT = 0; u.pitSide = 0;
+      if (!lead && lzU > C.half + 2) { const P = this.carPoint(C, 0.4, C.half + 6 + u.hd, this._pt ||= {}); this.step(u, dt, P.x, P.z, clamp(hyp(u.x, u.z, P.x, P.z) * 0.8, 0, 12), wrapPi(C.yaw + Math.PI)); }
+      else this.follow(u, dt, C, lead ? 0.3 : 2.4, -C.half - u.hd - (lead ? 4 : 5), fwd, lxU, lzU, vMax, 8);
+      return;
+    }
+    if (d < 45) {
+      // the second one ahead of you, facing you: a road block (it stops in your way)
+      if (!lead && lzU > C.half + 8 && Math.cos(u.yaw - C.yaw) < -0.3) {
+        const P = this.carPoint(C, 0, lzU, this._pt ||= {});
+        this.step(u, dt, P.x, P.z, lzU < 30 ? 0 : 10);
+        return;
+      }
+      if (u.ramCool > 0) { this.follow(u, dt, C, lxU > 0 ? 1.2 : -1.2, -C.half - u.hd - 9, fwd, lxU, lzU, vMax, 0); return; } // (just hit you: dropping back)
+      let other = 0;
+      for (const o of this.units) if (o !== u && o.on && o.pitSide) other = o.pitSide;
+      this.pit(u, dt, C, fwd, lxU, lzU, vMax, lead ? 0 : -other);
+      return;
+    }
+    u.pitT = 0; u.pitSide = 0;
+    this.step(u, dt, px, pz, vMax);
+  }
+  // keeping station at (lx, lz) in your car's frame: straight for it while it is well ahead, else along your line there
+  // (aiming ahead along it: never a U-turn back to a spot it has overshot, it lets you pass); faster the further back
+  follow(u, dt, C, lx, lz, fwd, lxU, lzU, vMax, extra) {
+    const gap = lz - lzU, look = 6 + Math.abs(u.v) * 0.45;
+    const P = this.carPoint(C, lx, Math.max(lz + Math.max(0, fwd) * 0.3, lzU + look), this._pf ||= {});
+    u.noYou = true; // (your car: kept off by the speed here, not steered round)
+    const rel = gap > 0 ? Math.min(Math.sqrt(10 * gap), gap > 15 ? extra + 8 : extra + 3) : Math.max(-6, gap * 0.8); // (closing, easing in)
+    this.step(u, dt, P.x, P.z, clamp(fwd + rel, 0, vMax));
+  }
+  // a PIT: alongside you, its nose at your rear wheels (the side it is on, or `side`), then a nudge into your rear
+  // quarter (pitT; hits(): the spin); missed: it drops back a moment and lines up again. You slow (< 6 m/s): a bump
+  // from behind instead
+  pit(u, dt, C, fwd, lxU, lzU, vMax, side) {
+    u.ram = true;
+    if (!u.pitSide) u.pitSide = side || (lxU >= 0 ? 1 : -1);
+    const sg = u.pitSide, lxT = sg * (C.w / 2 + u.hw + 0.45), lzT = -C.half * 0.45 - u.hd;
+    if (u.pitT > 0) {
+      u.pitT -= dt;
+      const P = this.carPoint(C, sg * (C.w / 2 - 0.5), -C.half * 0.5 + 3 + Math.abs(u.v) * 0.25, this._pt ||= {});
+      this.step(u, dt, P.x, P.z, clamp(fwd + 2, 0, vMax * 1.2));
+      if (u.pitT <= 0) { u.pitSide = 0; u.ramCool = 1; }
+      return;
+    }
+    if (fwd <= 6) { const P = this.carPoint(C, 0, -C.half + 1, this._pt ||= {}); this.step(u, dt, P.x, P.z, Math.max(0, fwd) + 3); return; }
+    if (Math.abs(lzT - lzU) < 1.4 && Math.abs(lxT - lxU) < 1.1) u.pitT = 0.9;
+    this.follow(u, dt, C, lxT, lzT, fwd, lxU, lzU, vMax * (1 + TUNING.catchUp) / u.boost, TUNING.ramExtra);
+  }
+  // on foot: the nearest point a patrol car gets to near you: 9 m short of you by a road, else from the road point
+  // nearest you toward you while the ground is drivable (not steep, nothing solid), up to 9 m short of you
+  footGoal(u, T, dt) {
+    const F = u.fg;
+    if ((u.fgT -= dt) > 0 && F.ok) return;
+    u.fgT = 0.8; F.ok = true;
+    const n = busRoads.roads.length ? roadNearest(T.x, T.z) : null;
+    if (!n || n.i < 0 || n.d <= 12) {
+      const D = hyp(u.x, u.z, T.x, T.z), k = D > 9 ? (D - 9) / D : 0;
+      F.x = u.x + (T.x - u.x) * k; F.z = u.z + (T.z - u.z) * k;
+      return;
+    }
+    const G = roadGraph(), sx = G.X[n.i], sz = G.Z[n.i], dx = (T.x - sx) / n.d, dz = (T.z - sz) / n.d;
+    let hp = world.height(sx, sz);
+    F.x = sx; F.z = sz;
+    for (let s = 4; s <= Math.min(n.d - 9, 120); s += 4) {
+      const x = sx + dx * s, z = sz + dz * s, h = world.height(x, z);
+      if (Math.abs(h - hp) > 4 * 0.55 || this.solidAt(x, z, u.hw + 0.4, u)) break;
+      F.x = x; F.z = z; hp = h;
+    }
+  }
+  // on screen? (the camera's frustum, once a frame)
+  inView(u) {
+    try {
+      if (this.frT !== this.time) { this.frT = this.time; this.camera.updateMatrixWorld(); _fr.setFromProjectionMatrix(_m.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)); }
+      return _fr.containsPoint(_v.set(u.x, u.y + 1, u.z));
+    } catch { return true; }
+  }
+  // the way to (tx, tz) along the roads (A*), its points in the right-hand lane; from the point nearest the car
+  plan(u, tx, tz) {
+    u.repath = 0.9 + u.k * 0.2; u.gx = tx; u.gz = tz; u.pn = 0;
+    const a = roadNearest(u.x, u.z), b = roadNearest(tx, tz);
+    if (a.i < 0 || b.i < 0 || a.d > 150 || b.d > 250 || a.i === b.i) return;
+    const G = roadGraph(), X = G.X, Z = G.Z;
+    if (!u.ids || u.ids.length !== G.N) { u.ids = new Int32Array(G.N); u.PX = new Float32Array(G.N); u.PZ = new Float32Array(G.N); }
+    const ids = u.ids, n = routeIds(a.i, b.i, ids);
+    if (n < 2) return;
+    for (let k = 0; k < n; k++) {
+      const p = ids[Math.max(0, k - 2)], q = ids[Math.min(n - 1, k + 2)], dx = X[q] - X[p], dz = Z[q] - Z[p], l = Math.hypot(dx, dz) || 1, i = ids[k];
+      u.PX[k] = X[i] - (dz / l) * LANE; u.PZ[k] = Z[i] + (dx / l) * LANE;
+    }
+    u.pn = n;
+    let best = 0, bd = Infinity;
+    for (let k = 0; k < Math.min(n, 16); k++) { const dd = hyp(u.x, u.z, u.PX[k], u.PZ[k]); if (dd < bd) { bd = dd; best = k; } }
+    u.pi = best;
   }
 
   // ---------------------------------------------------------------- driving a patrol car
-  // to (tx, tz) at up to vt: along the road graph while far, straight there when close / off the roads; steering round
-  // colliders and trees; stuck: backs up and turns
+  // to (tx, tz) at up to vt: along the roads (A*, plan()) unless close, then straight; pure pursuit, the speed held to
+  // the bends ahead / the arc it is on; round what's in the way (probe()); no progress: backs up and turns out
   step(u, dt, tx, tz, vt, face = null) {
     const d = hyp(u.x, u.z, tx, tz);
-    let ax = tx, az = tz, onRoad = false;
-    if (d > 90 && busRoads.roads.length) {
-      u.repath -= dt;
-      if (!u.path || u.repath <= 0) {
-        u.repath = 2.5; u.path = null;
-        const a = roadNearest(u.x, u.z), b = roadNearest(tx, tz);
-        if (a.i >= 0 && b.i >= 0 && a.d < 35 && b.d < 80 && a.i !== b.i) { const ids = roadShortest(a.i, b.i); if (ids?.length > 1) { u.path = keepRight(ids); u.pi = 0; } }
+    // the way: re-planned about once a second, or when the goal has moved 30 m; straight only for the last stretch
+    u.repath -= dt;
+    if (d > 25 && busRoads.roads.length) { if (u.repath <= 0 || hyp(tx, tz, u.gx, u.gz) > 30) this.plan(u, tx, tz); }
+    else u.pn = 0;
+    const sp = Math.abs(u.v), ld = clamp(5 + sp * 0.55, 6, 28);
+    let ax = tx, az = tz, onRoad = false, vCurve = 99;
+    if (u.pn > 1) {
+      const PX = u.PX, PZ = u.PZ, last = u.pn - 1;
+      // (the nearest point onward; the aim: the first point ld or more away, else (the way ends) the goal)
+      for (let it = 0; it < 40 && u.pi < last && hyp(u.x, u.z, PX[u.pi + 1], PZ[u.pi + 1]) <= hyp(u.x, u.z, PX[u.pi], PZ[u.pi]) + 0.3; it++) u.pi++;
+      let k = u.pi;
+      while (k < last && hyp(u.x, u.z, PX[k], PZ[k]) < ld) k++;
+      if (hyp(u.x, u.z, PX[k], PZ[k]) >= ld) { ax = PX[k]; az = PZ[k]; }
+      onRoad = true;
+      // the bends ahead: no faster than the grip takes round them (A_LAT), braking for them in time
+      let s = hyp(u.x, u.z, PX[u.pi], PZ[u.pi]);
+      const reach = 20 + (sp * sp) / (2 * A_BRAKE);
+      for (let j = Math.max(u.pi, 2); j < last - 1 && s < reach; j++) {
+        const x1 = PX[j] - PX[j - 2], z1 = PZ[j] - PZ[j - 2], x2 = PX[j + 2] - PX[j], z2 = PZ[j + 2] - PZ[j];
+        const l1 = Math.hypot(x1, z1), l2 = Math.hypot(x2, z2);
+        if (l1 > 0.5 && l2 > 0.5) {
+          const kap = (2 * Math.abs(Math.atan2(x1 * z2 - z1 * x2, x1 * x2 + z1 * z2))) / (l1 + l2);
+          if (kap > 0.002) vCurve = Math.min(vCurve, Math.sqrt(A_LAT / kap + 2 * A_BRAKE * Math.max(0, s - 3)));
+        }
+        s += hyp(PX[j], PZ[j], PX[j + 1], PZ[j + 1]);
       }
-      if (u.path) {
-        const P = u.path, look = 9 + Math.abs(u.v) * 0.55;
-        while (u.pi < P.length - 1 && hyp(u.x, u.z, P[u.pi].x, P[u.pi].z) < look) u.pi++;
-        if (u.pi < P.length - 1) { ax = P[u.pi].x; az = P[u.pi].z; onRoad = true; } else u.path = null;
-      }
-    } else u.path = null;
-    let want = Math.atan2(ax - u.x, az - u.z);
-    if (d < 0.6 && face !== null) want = face;
-    // round what's in the way (probed a few times a second)
-    if ((u.probeT -= dt) <= 0) { u.probeT = 0.15; this.probe(u, want, vt); }
+    }
+    // pulling up facing `face`: from behind the spot (a point back along face, closing in on the spot)
+    if (face !== null && d < 16 && d > 0.6) { const b = Math.min(d * 0.6, 7); ax = tx - Math.sin(face) * b; az = tz - Math.cos(face) * b; }
+    let want = d < 0.6 && face !== null ? face : Math.atan2(ax - u.x, az - u.z);
+    const la = Math.max(0.1, hyp(u.x, u.z, ax, az));
+    // round what's in the way (probed ~7 times a second, out to braking distance; never beyond the aim)
+    if ((u.probeT -= dt) <= 0) { u.probeT = 0.14; this.probe(u, want, vt, Math.min(la, d) + 3, onRoad); }
     want += u.avoid.turn;
-    let v = Math.min(vt, u.avoid.vmax, onRoad ? TUNING.vRoad : TUNING.vOff + (u.ram ? 6 : 0));
-    const err = wrapPi(want - u.yaw);
+    const paved = onRoad || !!world.isRoadNear?.(u.x, u.z);
+    let v = Math.min(vt, u.avoid.vmax, vCurve, paved ? TUNING.vRoad * (u.ram ? 1 + TUNING.catchUp : u.boost) : TUNING.vOff + (u.ram ? 6 : 0));
+    // pure pursuit: the arc through the aim point (behind it: a U-turn at full lock and a crawl, one way until round)
+    const alpha = wrapPi(want - u.yaw);
+    let kap;
+    // (a spot just behind it (pulling up, parking): straight back to it, not round in a circle)
+    const back = vt > 0 && d < 12 && d > 0.6 && Math.abs(alpha) > 2.2 && u.rev <= 0;
+    if (back) { const ar = wrapPi(want - u.yaw - Math.PI); kap = -(2 * Math.sin(ar)) / Math.max(3, la); v = -Math.min(3.5, 0.5 + d * 0.6); u.uturn = 0; }
+    else if (Math.abs(alpha) > 1.75 || (u.uturn && Math.abs(alpha) > 1.0)) {
+      if (!u.uturn) { u.uturn = alpha >= 0 ? 1 : -1; u.kturn = paved; }
+      kap = u.uturn / R_MIN; v = Math.min(v, 4.5);
+      // on a road: a three-point turn (the nose at the edge: back up on the other lock), never round through the snow
+      if (u.kturn && u.rev <= 0 && u.v > 0.5 && laneDistance(u.x + Math.sin(u.yaw) * (u.hd + 0.8), u.z + Math.cos(u.yaw) * (u.hd + 0.8)) > ROAD_HALF + 0.4) { u.rev = 1.1; u.revSteer = -u.uturn * 0.6; }
+    } else { u.uturn = 0; kap = (2 * Math.sin(alpha)) / Math.max(4, la); }
+    if (Math.abs(kap) > 1e-3 && !back) v = Math.min(v, Math.max(4, Math.sqrt(A_LAT / Math.abs(kap))));
+    if (d < 0.6) v = 0;
     if (u.rev > 0) {
       u.rev -= dt;
       u.steer += clamp(u.revSteer - u.steer, -3 * dt, 3 * dt);
-      u.v += clamp(-5 - u.v, -8 * dt, 6 * dt);
+      u.v += clamp(-4.5 - u.v, -12 * dt, 8 * dt);
+      u.stT = 0; u.stX = u.x; u.stZ = u.z;
+      if (u.rev <= 0) u.probeT = 0;
     } else {
-      // behind it and close: a tight turn at a crawl
-      if (Math.abs(err) > 2.2 && d < 12) v = Math.min(v, 3);
-      v *= 1 - Math.min(0.72, Math.abs(err) * (u.v > 10 ? 0.75 : 0.35));
-      if (d < 0.6) v = 0;
-      const st = clamp(err * 1.9, -0.6, 0.6);
-      u.steer += clamp(st - u.steer, -2.6 * dt, 2.6 * dt);
-      u.v += clamp(v - u.v, -11 * dt, 6.5 * dt);
-      // stuck (wants to go, not moving): back up, wheels the other way
-      if (v > 2 && Math.abs(u.v) < 1.1) { if ((u.stuck += dt) > 1.4) { u.stuck = 0; u.rev = 1.3; u.revSteer = -Math.sign(err || 1) * 0.6; } } else u.stuck = 0;
+      // (the lock the speed allows: never more sideways grip than A_LAT x 1.3)
+      const lim = Math.min(0.7, Math.atan((WB * A_LAT * 1.3) / Math.max(1, u.v * u.v)) + 0.02);
+      u.steer += clamp(clamp(Math.atan(WB * kap), -lim, lim) - u.steer, -3 * dt, 3 * dt);
+      const acc = u.v < 0 ? 10 : 7.5 * (1 - 0.5 * clamp(u.v / 50, 0, 1));
+      u.v += clamp(v - u.v, -A_BRAKE * 1.1 * dt, acc * dt);
+      // progress: wanting to go but hardly moved in a second: back up and turn out (the other way each time); a few
+      // in a row: drivePursuit puts it back on a road out of sight
+      u.stT += dt;
+      if (u.v < -0.3) u.stNeg = true; // (backing up in this second (a three-point turn, parking): not stuck)
+      if (u.stT >= 1.1) {
+        const moved = hyp(u.x, u.z, u.stX, u.stZ);
+        if (v > 2.5 && moved < 1.6 && !u.stNeg) {
+          u.stuckN++; u.okT = 0; u.uturn = 0; u.avoid.turn = 0;
+          u.rev = 1.1 + Math.min(3, u.stuckN) * 0.3;
+          u.revSteer = -(alpha >= 0 ? 1 : -1) * (u.stuckN % 2 ? 1 : -1) * 0.6;
+        } else if (moved > 4) { u.okT = (u.okT || 0) + u.stT; if (u.okT > 5) u.stuckN = 0; }
+        u.stT = 0; u.stX = u.x; u.stZ = u.z; u.stNeg = false;
+      }
     }
     u.yaw = wrapPi(u.yaw + (u.v / WB) * Math.tan(u.steer) * dt);
     u.x += Math.sin(u.yaw) * u.v * dt; u.z += Math.cos(u.yaw) * u.v * dt;
     this.pushOut(u);
     this.place(u);
+    u.noYou = false;
   }
-  // something solid at (x, z) within r? (buildings, rocks, poles, parked cars, other players' cars; trees)
-  solidAt(x, z, r, u) {
-    // your car: steered round unless they mean to ram it
+  // something solid at (x, z) within r? (buildings, rocks, poles, parked cars, other players' cars, guardrails; trees);
+  // dyn (the probe): also the other patrol car, the traffic and the bus (and the guardrails a little narrower: the aim
+  // across a bend's chord grazes them)
+  solidAt(x, z, r, u, dyn = false) {
+    // your car: steered round unless they mean to ram it (or keep their distance behind it by the speed)
     const d = this.drive?.d;
-    if (d && !u.ram && Math.abs(d.x - x) < 4 + r && Math.abs(d.z - z) < 4 + r) {
+    if (d && !u.ram && !(dyn && u.noYou) && Math.abs(d.x - x) < 4 + r && Math.abs(d.z - z) < 4 + r) {
       const s = Math.sin(d.yaw), c = Math.cos(d.yaw), lx = (x - d.x) * c - (z - d.z) * s, lz = (x - d.x) * s + (z - d.z) * c;
       if (Math.abs(lx) < d.w / 2 + r && Math.abs(lz) < d.half + r) return (this._yc ||= { x: 0, z: 0, hw: 0, hd: 0, rot: 0 }, Object.assign(this._yc, { x: d.x, z: d.z, hw: d.w / 2, hd: d.half, rot: -d.yaw }));
     }
+    const mine = this.drive?.d?.e?.collider;
     for (const c of this.colliders || []) {
-      if (c === u.col || c.soft || c.net || c.rail || c.police === 'local' || c === this.drive?.d?.e?.collider) continue;
+      if (c === u.col || c.net || c.police === 'local' || c === mine) continue;
+      let rr = r;
+      if (c.rail) { if (c.top !== undefined && Math.abs(c.top - u.y) > 3.5) continue; if (dyn) rr = Math.max(0.3, r - 0.45); } // (a guardrail: solid)
+      else if (c.soft) continue;
       const size = c.r ?? Math.max(c.hw, c.hd);
-      if (Math.abs(c.x - x) > size + r || Math.abs(c.z - z) > size + r) continue;
-      if (c.r !== undefined) { if (Math.hypot(x - c.x, z - c.z) < c.r + r) return c; continue; }
+      if (Math.abs(c.x - x) > size + rr || Math.abs(c.z - z) > size + rr) continue;
+      if (c.r !== undefined) { if (Math.hypot(x - c.x, z - c.z) < c.r + rr) return c; continue; }
       const cs = Math.cos(-c.rot), sn = Math.sin(-c.rot), lx = (x - c.x) * cs - (z - c.z) * sn, lz = (x - c.x) * sn + (z - c.z) * cs;
-      if (Math.abs(lx) < c.hw + r && Math.abs(lz) < c.hd + r) return c;
+      if (Math.abs(lx) < c.hw + rr && Math.abs(lz) < c.hd + rr) return c;
     }
+    if (dyn && this.dynAt(x, z, r, u)) return true;
     const t = this.vegetation?.collide?.(x, z, r, 0.6, true);
     return t ? { x: t.x, z: t.z, r: t.trunk ?? t.r ?? 0.4 } : null;
   }
-  probe(u, want, vt) {
-    const L = clamp(Math.abs(u.v) * 0.9, 6, 22), A = u.avoid;
-    A.turn = 0; A.vmax = 99;
-    const free = (a) => {
-      const s = Math.sin(want + a), c = Math.cos(want + a);
-      for (const f of [0.5, 1]) if (this.solidAt(u.x + s * L * f, u.z + c * L * f, u.hw + 0.2, u)) return false;
-      return true;
-    };
-    if (vt < 1 || free(0)) return;
-    for (const a of [0.35, -0.35, 0.7, -0.7, 1.1, -1.1]) if (free(a)) { A.turn = a; A.vmax = Math.max(5, vt * (1 - Math.abs(a) * 0.5)); return; }
-    A.vmax = 4;
+  // (the probe) the other patrol car, the traffic (stretched a little the way it is moving), the ski bus
+  dynAt(x, z, r, u) {
+    for (const o of this.units) if (o !== u && o.on && Math.abs(o.x - x) < 6 + r && Math.abs(o.z - z) < 6 + r && inBox(x, z, r, o.x, o.z, o.yaw, o.hw, o.hd)) return true;
+    for (const c of this.traffic?.cars || []) {
+      if (c.mode === 'gone' || !c.g?.visible || Math.abs(c.x - x) > 9 + r || Math.abs(c.z - z) > 9 + r) continue;
+      const a = (c.mode === 'road' ? c.v || 0 : 0) * 0.4 * (c.rev ? -1 : 1);
+      if (inBox(x, z, r, c.x + Math.sin(c.yaw) * a, c.z + Math.cos(c.yaw) * a, c.yaw, c.w / 2, c.l / 2 + Math.abs(a))) return true;
+    }
+    const line = this.traffic?.skibus?.line, bg = line?.bus?.group;
+    return !!(bg?.visible && Math.abs(bg.position.x - x) < 9 + r && Math.abs(bg.position.z - z) < 9 + r && inBox(x, z, r, bg.position.x, bg.position.z, line.yaw || 0, 1.3, 6));
   }
-  // out of whatever it ran into (three circles along it), a scrape of speed
+  // what's in the way along `want` (out to braking distance, never beyond `reach`): the free heading nearest it (the
+  // side it went last first: no flip-flopping), slower the further off; nothing free: braking short of it. On the
+  // roads: no faster than the traffic on the way ahead + 6 m/s once near it (then round it)
+  probe(u, want, vt, reach, onRoad) {
+    const A = u.avoid, sp = Math.max(Math.abs(u.v), 5);
+    const L = Math.min(clamp(6 + sp * 0.3 + ((sp * sp) / (2 * A_BRAKE)) * 0.6, 7, 40), Math.max(6, reach));
+    A.vmax = 99;
+    if (vt < 1) { A.turn = 0; return; }
+    const b0 = this.ray(u, want, L);
+    if (b0 >= L) A.turn = 0;
+    else {
+      let best = 0, bd = b0, found = false;
+      for (const a of A.turn < 0 ? ANG_R : ANG_L) {
+        const b = this.ray(u, want + a, L);
+        if (b >= L) { A.turn = a; A.vmax = Math.max(6, vt * (1 - Math.abs(a) * 0.35)); found = true; break; }
+        if (b > bd) { bd = b; best = a; }
+      }
+      if (!found) { A.turn = best; A.vmax = Math.max(3, Math.sqrt(2 * A_BRAKE * Math.max(0, bd - 4))); }
+    }
+    const cars = this.traffic?.cars;
+    if (onRoad && u.pn > 1 && cars?.length) {
+      const R = 14 + (sp * sp) / (2 * A_BRAKE);
+      let s = 0;
+      for (let j = u.pi; j < u.pn - 2 && s < R; j += 2) {
+        const qx = u.PX[j], qz = u.PZ[j];
+        for (const c of cars) {
+          if (c.mode === 'gone' || !c.g?.visible || Math.abs(c.x - qx) > 2.8 || Math.abs(c.z - qz) > 2.8) continue;
+          const vl = Math.max(0, (c.mode === 'road' ? c.v || 0 : 0) * Math.cos(c.yaw - u.yaw) * (c.rev ? -1 : 1));
+          A.vmax = Math.min(A.vmax, vl + 6 + Math.sqrt(2 * A_BRAKE * Math.max(0, s - 14)));
+        }
+        s += hyp(qx, qz, u.PX[j + 2], u.PZ[j + 2]);
+      }
+    }
+  }
+  // how far along heading `ang` (up to L) it is clear: nothing solid, the ground not too steep (off the roads)
+  ray(u, ang, L) {
+    const s = Math.sin(ang), c = Math.cos(ang), r = u.hw + 0.25;
+    let hp = world.height(u.x, u.z), pd = 0;
+    for (let i = 0; i < FR.length; i++) {
+      const dd = L * FR[i], x = u.x + s * dd, z = u.z + c * dd;
+      if (this.solidAt(x, z, r, u, true)) return pd;
+      const h = world.height(x, z);
+      if (Math.abs(h - hp) > (dd - pd) * 0.7 && !world.isRoadNear?.(x, z)) return pd;
+      hp = h; pd = dd;
+    }
+    return L;
+  }
+  // out of whatever it ran into (three circles along it), a scrape of speed; a guardrail: a glance (turned along it,
+  // a little speed lost)
   pushOut(u) {
     const s = Math.sin(u.yaw), c = Math.cos(u.yaw), R = u.hw;
-    let hit = false;
+    let hit = false, rail = null;
     for (const k of [u.hd - R, 0, -(u.hd - R)]) {
       for (let it = 0; it < 2; it++) {
         const cx = u.x + s * k, cz = u.z + c * k, o = this.solidAt(cx, cz, R, u);
@@ -655,15 +955,37 @@ export class Police {
         }
         if (!(depth > 0)) break;
         u.x += nx * Math.min(depth, 1.5); u.z += nz * Math.min(depth, 1.5);
-        hit = true;
+        if (o.rail) rail = o; else hit = true;
       }
     }
     if (hit) u.v *= 0.92;
+    else if (rail) {
+      let e = wrapPi(-rail.rot - u.yaw);
+      if (Math.abs(e) > Math.PI / 2) e = wrapPi(e + Math.PI);
+      u.yaw = wrapPi(u.yaw + clamp(e * 0.3, -0.08, 0.08));
+      u.v *= 0.985;
+    }
   }
 
   // ---------------------------------------------------------------- contacts: you, the traffic, the other players
   hits(dt) {
     const d = this.drive?.d, W = this.w;
+    // the patrol cars into each other: apart, a scrape of speed
+    for (let i = 0; i < this.units.length; i++) {
+      const a = this.units[i];
+      if (!a.on) continue;
+      for (let j = i + 1; j < this.units.length; j++) {
+        const b = this.units[j];
+        if (!b.on || Math.abs(a.x - b.x) > 7 || Math.abs(a.z - b.z) > 7) continue;
+        const A1 = (a.A ||= {}), B1 = (b.A ||= {});
+        A1.x = a.x; A1.z = a.z; A1.yaw = a.yaw; A1.hw = a.hw; A1.hd = a.hd; B1.x = b.x; B1.z = b.z; B1.yaw = b.yaw; B1.hw = b.hw; B1.hd = b.hd;
+        const ct = contact(A1, B1);
+        if (!ct) continue;
+        a.x += ct.nx * ct.depth * 0.5; a.z += ct.nz * ct.depth * 0.5; b.x -= ct.nx * ct.depth * 0.5; b.z -= ct.nz * ct.depth * 0.5;
+        a.v *= 0.9; b.v *= 0.9;
+        this.place(a); this.place(b);
+      }
+    }
     for (const u of this.units) {
       if (!u.on) continue;
       const A = (u.A ||= {}); A.x = u.x; A.z = u.z; A.yaw = u.yaw; A.hw = u.hw; A.hd = u.hd;
@@ -695,15 +1017,18 @@ export class Police {
       this.place(u);
       const closing = -vn;
       if (u.ram && W?.fleeing) {
-        // their ram: real damage (drive.js knock / crash), a spin from where it hit
+        // their ram: real damage (drive.js knock / crash), a spin from where it hit: the point of your car nearest its
+        // middle, the push about your middle (a rear quarter: a PIT, you spin out)
         const eff = closing * TUNING.ramMult;
-        const side = (d.x - u.x) * Math.cos(d.yaw) - (d.z - u.z) * Math.sin(d.yaw);
-        d.yawRate = clamp((d.yawRate || 0) + Math.sign(side || 1) * Math.min(1.4, closing * 0.09), -2.5, 2.5);
+        const sy = Math.sin(d.yaw), cy = Math.cos(d.yaw), qx = u.x - d.x, qz = u.z - d.z;
+        const lx = clamp(qx * cy - qz * sy, -d.w / 2, d.w / 2), lz = clamp(qx * sy + qz * cy, -d.half, d.half);
+        const rx = cy * lx + sy * lz, rz = -sy * lx + cy * lz;
+        d.yawRate = clamp((d.yawRate || 0) + clamp((nx * rz - nz * rx) * (0.35 + closing * 0.12), -2.2, 2.2), -3, 3);
         const e = d.e;
         if (eff > CRASH_V && this.drive.canCrash()) this.drive.crash(eff, nx, nz, 'car');
         else if (eff > KNOCK_V) this.drive.knock(eff, nx, nz);
         if (this.drive.d?.crash) { e.policeWreck = true; this.wreckE = e; } // (wrecked by the police: not repaired, carrental.js)
-        u.v *= 0.5; u.ramCool = TUNING.ramGapS;
+        u.v *= u.pitT > 0 ? 0.85 : 0.5; u.ramCool = TUNING.ramGapS; u.pitT = 0; u.pitSide = 0;
       } else if (closing > KNOCK_V && yours > KNOCK_V * 0.6) {
         // you drove into them: your knock, and (not fleeing yet) now you are
         this.drive.knock(closing, nx, nz);
@@ -812,10 +1137,10 @@ export class Police {
       // pull up: behind your car (8 m), or ~8 m short of you on foot
       let px, pz, face = null;
       if (T.car) { const P = this.carPoint(T.car, 0.3, -T.car.half - 7.5, this._pt ||= {}); px = P.x; pz = P.z; face = T.car.yaw; }
-      else { const d = hyp(u.x, u.z, T.x, T.z), k = d > 0.1 ? Math.max(0, d - 8) / d : 0; px = u.x + (T.x - u.x) * k; pz = u.z + (T.z - u.z) * k; }
+      else { this.footGoal(u, T, dt); px = u.fg.x; pz = u.fg.z; } // (on foot: as near you as a car gets, footGoal)
       const g = hyp(u.x, u.z, px, pz);
-      this.step(u, dt, px, pz, clamp(g * 0.9, 0, 16), face);
-      if ((g < 2.2 && Math.abs(u.v) < 1) || (S.t > 14 && Math.abs(u.v) < 1.5) || (T.foot && hyp(u.x, u.z, T.x, T.z) < 14 && Math.abs(u.v) < 6)) { u.v = 0; S.step = 'walk'; S.t = 0; this.spawnOfficer(u); }
+      this.step(u, dt, px, pz, g < 0.8 ? 0 : clamp(1 + g * 0.9, 0, 16), face);
+      if ((g < 2.2 && Math.abs(u.v) < 1) || (S.t > 14 && Math.abs(u.v) < 1.5) || (T.foot && (hyp(u.x, u.z, T.x, T.z) < 14 || g < 3.5) && Math.abs(u.v) < 6)) { u.v = 0; S.step = 'walk'; S.t = 0; this.spawnOfficer(u); }
       return;
     }
     this.step(u, dt, u.x + Math.sin(u.yaw) * 0.3, u.z + Math.cos(u.yaw) * 0.3, 0);
@@ -831,7 +1156,7 @@ export class Police {
       // on foot: caught within 4 m
       if ((!T.car && dist < TUNING.footCatchR) || (T.car && left <= reach)) { S.step = 'talk'; S.t = 0; }
       // outrun on foot (or got into a car): back to the car, the chase goes on
-      else if (!T.car && S.kind === 'arrest' && hyp(o.pos.x, o.pos.z, u.x, u.z) > 45) { S.step = 'back'; S.abort = true; }
+      else if (!T.car && S.kind === 'arrest' && hyp(o.pos.x, o.pos.z, u.x, u.z) > 110) { S.step = 'back'; S.abort = true; }
       return;
     }
     if (S.step === 'talk') {

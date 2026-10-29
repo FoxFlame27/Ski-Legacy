@@ -39,6 +39,7 @@ const PLAQUE = { x: 4.015, y: 1.85, z: 1.45, w: 0.22, h: 0.165 }; // house frame
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _l = new THREE.Vector3();
 const LAMP_H = 3.6, LAMP_LIGHT_Y = 3.1; // the lamp post (as in Legacy Village), its lantern
+export const NEAR_HOME = 300;        // m: the marker / waypoint to your chalet show within this (+50 m fade)
 const MARK_Y = 11.5;                    // m over the pad: the marker over your own chalet
 const UP = new THREE.Vector3(0, 1, 0);
 // the chalet model's own windows (their glass, house frame: measured off chalet.glb with orthographic renders and
@@ -582,7 +583,9 @@ export class Chalets {
     const f = h.frame.position, p = this.player?.pos, cam = this.camera?.position || p;
     // hidden only at the door (within ~4 m: the prompt takes over), faded in over the next 2 m
     const dd = p ? Math.hypot(p.x - h.door.x, p.z - h.door.z) : 1e9;
-    const a = Math.min(1, Math.max(0, (dd - 4) / 2));
+    // (Oct 29, the user: "only show where your chalet is when you're close by, in the chalet village or on the road
+    // beside it"): faded out between 300 and 350 m from it
+    const a = Math.min(1, Math.max(0, (dd - 4) / 2)) * Math.min(1, Math.max(0, (NEAR_HOME + 50 - dd) / 50));
     S0.visible = a > 0.01;
     if (!S0.visible) return;
     mat.opacity = a;

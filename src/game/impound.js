@@ -23,12 +23,8 @@ import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 
 // how long until the impound lifts: the next in-game day starts at midnight (world/sky.js: 1 game hour = 40 real s)
-export function untilTomorrow() {
-  const h = typeof window !== 'undefined' ? window.__game?.env?.hour : undefined;
-  if (!Number.isFinite(h)) return 'at midnight';
-  const min = Math.ceil(((24 - h) * 40) / 60);
-  return min <= 1 ? 'in under a minute (at midnight)' : `in about ${min} min (at midnight)`;
-}
+// (Oct 29, the user: the game-clock time it is free again, "at 00:01 tomorrow", not "in about 14 min (at midnight)")
+export function untilTomorrow() { return 'at 00:01 tomorrow'; }
 export const STRAY_BACK = 180; // s left off the road and outside any car park / lay-by (with you away) before it goes back to its bay
 export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
 export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called

@@ -43,7 +43,7 @@
 #build-menu .bm-status:empty { display: none; }
 
 /* key hints along the bottom (as the outfit shop's), and the look / cursor mode chip */
-#build-foot { position: fixed; z-index: 9; left: calc(var(--u) * 28); right: calc(var(--u) * 480); bottom: calc(var(--u) * 22); display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--u) * 10) calc(var(--u) * 22); pointer-events: none;
+#build-foot { position: fixed; z-index: 9; left: calc(var(--u) * 340); /* (right of the money panel) */ right: calc(var(--u) * 480); bottom: calc(var(--u) * 22); display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--u) * 10) calc(var(--u) * 22); pointer-events: none;
   font: 600 var(--t-xs)/1 var(--ui); color: rgba(255, 255, 255, 0.92); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55); }
 #build-foot[hidden] { display: none; }
 #build-foot .bm-mode { position: relative; isolation: isolate; padding: calc(var(--u) * 7) calc(var(--u) * 14); font: italic 700 calc(var(--u) * 18)/1 var(--num); letter-spacing: 0.06em; color: #fff; text-shadow: none; --paper: var(--blue); }

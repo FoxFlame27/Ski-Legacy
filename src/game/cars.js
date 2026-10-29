@@ -142,8 +142,27 @@ function fixMat(model, m) {
 }
 
 // Lamps per model, checked against each model's meshes (where every part sits on the car, its name and material) and
-// the real cars: (label, zone) -> 'head' | 'drl' | 'tail' | 'third' | 'rev' | 'ind' | 'lensF' | 'lensR' | null (no
-// lamp: housings, chrome, reflectors, the plate, windows). test: the parts that can be lamps at all.
+// the real cars: (label, zone) -> 'head' (low beam) | 'high' (high beam: only the low beams' spill) | 'drl' | 'tail'
+// (running + brake) | 'brake' (a lamp's own brake graphic: braking only) | 'third' | 'rev' | 'ind' | 'lensF' | 'lensR'
+// | null (no lamp: housings, chrome, reflectors, the plate, windows); a kind + '*' glows evenly instead of through its
+// texture (a projector's lens, an LED whose texture is the dark unlit part). test: the parts that can be lamps at all.
+// tex: the zone also has the triangle's texel colour (p.c, p.lum, p.tone: 'dark' | 'grey' | 'white' | 'red' | 'amber'
+// | 'blue' | 'other'), so the glow follows the lamp graphics the texture draws, not the whole housing. The newer
+// models' lamps, found per triangle from where it sits and its texel colour (each checked in front / rear views of
+// the model coloured by kind):
+//  - SLS: the projector; the LED dots on the two strips over it (upper: indicator, lower: DRL; EXT_Microluci the same
+//    split); the mirrors' repeaters; at the back the red frame (tail), the red bar across the middle (brake), the
+//    clear bands over / under it (indicator / reversing), the third brake light at the roof's end.
+//  - Taycan: the four LED points (DRL) round the projector (low beam), the side markers; the light bar (tail), its
+//    bright red graphics (brake), the 3D fins in the lamps (outer ends: indicators, inner: reversing), the third light.
+//  - Huracán: the Y light guides (DRL), the inner projector (low) and the outer (high), the bumper's side markers;
+//    the Y at the back (tail), the fins over it (brake), the round lamp at each outer end (indicator), the centre
+//    lamp over the plate (reversing), the strip on the engine cover (third).
+//  - GR Yaris: the L of light guide (DRL) round the reflector bowl (low beam), the mirrors' repeaters; the C light
+//    guide (tail), the inner squares (brake over indicator), the diffuser's centre lamp (reversing), the spoiler's strip.
+//  - e-tron GT: the digital DRL bars, the matrix block (low) and the laser's blue X (high), the mirrors' repeaters;
+//    the tail lamps and light bar (TL), the brake segments (Emiss), the third light.
+//  - GLS: see its rule (palette-merged: by position and colour).
 //  - BMW X3 (G01): twin LED projectors (Front_lights_Spec), the DRL rings round them, indicators in the mirrors; the
 //    red light guides and lamp graphics behind dark glass at the back; the third brake light on the roof spoiler
 //    (red_glass up there; the red glass low in the bumper is a reflector).
@@ -208,38 +227,90 @@ const LAMP_RULES = {
   // Lights_Rear: the tail lamps, the third brake light at the roof's end, the low centre lamp (fog: never lit here)),
   // the LED strip in the headlamps (EXT_Microluci: the DRL), their clear cover glass (Glass_Clear: front / back)
   car_mercedes_sls: {
-    test: /Lights_Front|Lights_Rear|Microluci|Glass_Clear/i,
-    kind: (l, p) => /Microluci/i.test(l) ? (p.front ? 'drl' : null)
-      : /Lights_Front/i.test(l) ? (p.mirror ? 'ind' : p.front ? 'head' : null)
-      : /Lights_Rear/i.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'tail' : null)
-      : /Glass_Clear/i.test(l) ? (p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null)
-      : null,
+    test: /Lights_Front|Lights_Rear|Microluci|Glass_Clear/i, tex: true,
+    kind: (l, p) => {
+      if (/Glass_Clear/i.test(l)) return p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null;
+      const ax = Math.abs(p.x);
+      if (/Microluci/i.test(l)) return p.front ? (p.y > 0.706 ? 'ind' : 'drl') : null;
+      if (/Lights_Front/i.test(l)) {
+        if (p.mirror) return 'ind*';
+        if (!p.front) return null;
+        if (Math.hypot(ax - 0.755, p.y - 0.629) < 0.036 && p.z > 1.86) return 'head*'; // the projector
+        // the LED dots on the two strips over it (upper: indicator, lower: DRL); the strips' housings stay dark
+        return p.lum > 90 && p.y > 0.68 && p.y < 0.735 ? (p.y > 0.708 ? 'ind*' : 'drl*') : null;
+      }
+      if (p.third) return 'third*';
+      if (!p.rear || p.low) return null; // (the centre lamp in the diffuser: the rear fog lamp, never lit here)
+      // the red light bar across the middle: the brake light; the red frame round the lamp: the tail light
+      if (p.tone === 'red') return p.y > 0.697 && p.y < 0.728 && ax > 0.56 && ax < 0.86 ? 'brake' : 'tail';
+      return p.lum > 40 ? (p.y > 0.713 ? 'ind*' : 'rev*') : null; // the clear bands over and under the red light bar
+    },
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.4, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
   // Porsche Taycan Turbo S: every lamp in one textured atlas (the four-point headlamps, the light bar across the
   // back, the third brake light at the top of the rear window); the windows' material is also the lamps' cover glass
   // (front low: the headlamp lenses; back, below the rear window: the light bar's smoked glass)
   car_porsche_taycan: {
-    test: /taycan_turbo_s_lights|car_windows/i,
-    kind: (l, p) => /car_windows/i.test(l) ? (p.front && p.y < 0.85 ? 'lensF' : p.rear && !p.low && !p.hi ? 'lensR' : null)
-      : p.third ? 'third' : p.front ? (p.low ? null : 'head') : p.rear && !p.low ? 'tail' : null,
+    test: /taycan_turbo_s_lights|car_windows/i, tex: true,
+    kind: (l, p) => {
+      if (/car_windows/i.test(l)) return p.front && p.y < 0.85 ? 'lensF' : p.rear && !p.low && !p.hi ? 'lensR' : null;
+      const ax = Math.abs(p.x);
+      if (p.front) {
+        if (ax > 0.93 && p.z < 1.85) return 'ind*'; // the side markers at the wings' corners
+        if (Math.hypot(ax - 0.742, p.y - 0.689) < 0.05 && p.z > 1.9) return 'head*'; // the projector between the points
+        return p.tone === 'white' && p.lum > 150 ? 'drl' : null; // the four LED points
+      }
+      if (p.third) return p.tone === 'red' ? 'third' : null;
+      if (!p.rear || p.low) return null;
+      if (p.tone === 'red') return p.lum > 70 ? 'brake' : 'tail';
+      // the 3D fins in the light bar's lamps: their outer ends the indicators, the inner part the reversing lights
+      return (p.tone === 'grey' || p.tone === 'white') && p.lum > 50 && ax > 0.42 && p.y < 0.875 ? (ax > 0.72 ? 'ind*' : 'rev*') : null;
+    },
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
   // Lamborghini Huracán EVO and Toyota GR Yaris (TNR kits, like the RS6): every lamp one textured material (LightA:
   // the texture draws the LED signature), its clear cover glass (glass_light: headlamp lenses, the tail lamps' cover),
   // the red glass over the tail lamps (red_glass)
   car_lamborghini_huracan: {
-    test: /LightA_Material|red_glass|glass_light/i,
-    kind: (l, p) => /red_glass/i.test(l) ? (p.third ? 'third' : p.rear ? 'lensR' : null)
-      : /glass_light/i.test(l) ? (p.front ? 'lensF' : p.rear ? 'lensR' : null)
-      : p.mirror ? 'ind' : p.front ? 'head' : p.third ? 'third' : p.rear ? 'tail' : null,
+    test: /LightA_Material|red_glass|glass_light/i, tex: true,
+    kind: (l, p) => {
+      if (/red_glass/i.test(l)) return p.third ? 'third' : p.rear ? 'lensR' : null;
+      const ax = Math.abs(p.x);
+      // (the centre lamp over the plate: the reversing light, its clear glass lit)
+      if (/glass_light/i.test(l)) return p.front ? 'lensF' : p.rear && ax < 0.2 && p.y < 0.75 ? 'rev' : p.rear ? 'lensR' : null;
+      if (p.front) {
+        if (ax > 0.9) return 'ind*'; // the side markers in the bumper's corners
+        if (Math.hypot(ax - 0.577, p.y - 0.561) < 0.042) return 'head*'; // the inner projector: the low beam
+        if (Math.hypot(ax - 0.707, p.y - 0.598) < 0.042) return 'high*'; // the outer one: the high beam
+        return p.lum > 120 ? 'drl' : null; // the Y light guides
+      }
+      if (!p.rear) return null;
+      if (p.third) return p.lum > 100 ? 'third' : null;
+      if (ax < 0.2 && p.y < 0.72) return p.z < -2.17 ? 'rev*' : null; // the centre lamp over the plate
+      if (ax > 0.86) return null; // (the reflectors in the bumper's corners)
+      if (Math.hypot(ax - 0.787, p.y - 0.773) < 0.052 && p.lum < 100) return 'ind*'; // the round lamp at each outer end
+      return p.lum > 100 ? (p.y > 0.815 ? 'brake' : 'tail') : null; // the fins over it: brake; the Y light guide: tail
+    },
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
   car_toyota_gr_yaris: {
-    test: /LightA_Material|red_glass|glass_light/i,
-    kind: (l, p) => /red_glass/i.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'lensR' : null)
-      : /glass_light/i.test(l) ? (p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null)
-      : p.mirror ? 'ind' : p.front ? 'head' : p.third ? 'third' : p.rear && !p.low ? 'tail' : null,
+    test: /LightA_Material|red_glass|glass_light/i, tex: true,
+    kind: (l, p) => {
+      if (/red_glass/i.test(l)) return p.third ? 'third' : p.rear && !p.low ? 'lensR' : null;
+      if (/glass_light/i.test(l)) return p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null;
+      const ax = Math.abs(p.x);
+      if (p.mirror) return 'ind*'; // the repeaters in the mirrors
+      // the headlamps (a plain reflector texture): the L of light guide along the lower edge and up the outer side the
+      // DRL, the reflector bowl inside the low beam (low: the fog lamps, never lit here)
+      if (p.front) return p.low || p.lum < 60 ? null : ax > 0.712 || p.y < 0.695 ? 'drl' : 'head';
+      if (!p.rear) return null;
+      if (p.third) return p.lum > 100 ? 'third' : null; // the strip under the roof spoiler
+      if (p.low) return ax < 0.2 ? 'rev*' : null; // the reversing light in the middle of the diffuser (the corners: reflectors)
+      if (ax < 0.3) return null; // (the plate lamps)
+      if (ax > 0.53 && ax < 0.62 && p.y > 0.954 && p.y < 0.99) return 'brake*'; // the inner squares: brake over indicator
+      if (ax > 0.53 && ax < 0.62 && p.y > 0.922 && p.y <= 0.954) return 'ind*';
+      return p.lum > 120 ? 'tail' : null; // the C-shaped light guide
+    },
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
   // Audi e-tron GT (concept): the lamp units (mm_lights: the matrix headlamps, the tail lamps and the light bar,
@@ -247,24 +318,51 @@ const LAMP_RULES = {
   // light guides (TL: the DRL strip in the headlamps, the tail lamps' and the light bar's), the brake lamps (Emiss),
   // the cover glass (Glass_light: front / back)
   car_audi_etron_gt: {
-    test: /mm_lights|Glass_light/i,
-    kind: (l, p) => /Glass_light/i.test(l) ? (p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null)
-      : /\bEmiss\b/.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'tail' : null)
-      : /_TL_/.test(l) ? (p.front ? 'drl' : p.rear && !p.low ? 'tail' : null)
-      : p.mirror ? 'ind' : p.front ? (Math.abs(p.x) > 0.4 && !p.low ? 'head' : null) : p.third ? 'third' : p.rear && !p.low && Math.abs(p.x) > 0.1 ? 'tail' : null,
+    test: /mm_lights|Glass_light/i, tex: true,
+    kind: (l, p) => {
+      if (/Glass_light/i.test(l)) return p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null;
+      const ax = Math.abs(p.x);
+      if (/\bEmiss\b/.test(l)) return p.third ? 'third' : p.rear && !p.low ? 'brake' : null; // the brake lamps' own segments
+      if (/_TL_/.test(l)) return p.front ? 'drl' : p.rear && !p.low ? 'tail' : null; // the digital DRL bars; the tail lamps and light bar
+      // the lamp units: the repeaters in the mirrors; in the headlamps the laser module (the blue X: high beam) and the
+      // matrix module (the dark block under the DRL bars: low beam); the housings, the grille's frame and the lit
+      // e-tron letters on the diffuser stay dark
+      if (p.mirror) return 'ind*';
+      if (!p.front || ax < 0.45 || p.low) return null;
+      if (p.tone === 'blue') return 'high*';
+      return p.lum < 45 && ax > 0.56 && ax < 0.76 && p.y > 0.625 && p.y < 0.715 ? 'head*' : null;
+    },
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
-  // Mercedes-Benz GLS: the headlamps' LED signature (the only lamp material of its own); the tail lamps are the red
-  // part of the glass palettes (gls_glass / gls_glass_red at the back, at lamp height: lit red as the tail lamps),
-  // the headlamps' cover glass part of the dark glass palette (front: a clear lens). The third brake light: added on
-  // the tailgate spoiler above the rear window (THIRD_AT)
+  // Mercedes-Benz GLS (X167; a BeamNG mod, its materials palette-merged and nameless: the lamps found by where they
+  // sit and their palette colour): the headlamps' eyebrow (gls_headlight_lsig, the only lamp material of its own) the
+  // DRL; inside the lamp (gls_trim) the two MULTIBEAM modules (low beam), the round reflector at the outer end (high
+  // beam), the white strip under the modules (the indicator); the mirrors' strip (indicators). At the back (gls_trim
+  // under the red glass) the red light guides round each lamp (tail), the inner lamp's face (lit red braking), the
+  // three blocks in the outer lamp (indicator) and the clear strip under them (reversing); the red glass over them only
+  // catches the light. The third brake light: added on the tailgate spoiler above the rear window (THIRD_AT)
   car_mercedes_gls: {
-    test: /gls_headlight_lsig|gls_glass(_red|_dark)?\b/i,
-    kind: (l, p) => /lsig/i.test(l) ? (p.front ? 'head' : null)
-      : /gls_glass(_red)?\b/.test(l) ? (p.rear && !p.low && !p.hi && Math.abs(p.x) > 0.3 ? 'tail' : null)
-      : /gls_glass_dark\b/.test(l) ? (p.front && p.z > 1.9 && Math.abs(p.x) > 0.3 ? 'lensF' : null)
-      : null,
-    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, tail: { color: 0x7a0c0c, opacity: 0.78, roughness: 0.05, metalness: 0.1, glow: 1 } },
+    test: /gls_headlight_lsig|gls_glass(_red|_dark)?\b|gls_trim$/i, tex: true,
+    kind: (l, p) => {
+      const ax = Math.abs(p.x);
+      if (/lsig/i.test(l)) return p.front ? 'drl' : null;
+      if (/gls_glass(_red)?\b/.test(l)) return p.rear && ax > 0.36 && p.y > 1.05 && p.y < 1.24 && p.z < -2.15 ? 'lensR' : null;
+      if (/gls_glass_dark\b/.test(l)) return p.front && p.z > 1.9 && ax > 0.3 ? 'lensF' : null;
+      // gls_trim: everything else on the car; only the parts in the lamps
+      if (p.mirror) return p.tone === 'white' && p.lum > 225 && p.y > 1.25 && p.y < 1.31 && ax > 0.9 ? 'ind*' : null;
+      if (p.front && p.z > 2.18 && ax > 0.54 && ax < 0.88 && p.y > 0.85 && p.y < 1.05) {
+        if (Math.hypot(ax - 0.79, p.y - 0.945) < 0.042) return 'high*';
+        if (ax > 0.6 && ax < 0.715 && p.y > 0.905 && p.y < 0.975) return 'head*';
+        return ax < 0.72 && p.y > 0.862 && p.y <= 0.905 && p.lum > 190 ? 'ind*' : null;
+      }
+      if (p.rear && p.z < -2.18 && ax > 0.37 && ax < 0.9 && p.y > 1.06 && p.y < 1.23) {
+        if (p.tone === 'red') return 'tail';
+        if (ax > 0.73) return p.y > 1.12 && p.y < 1.18 && p.lum > 225 ? 'ind*' : p.y > 1.08 && p.y < 1.112 && p.lum > 150 ? 'rev*' : null;
+        return ax > 0.47 && ax < 0.68 && p.y > 1.125 && p.y < 1.18 && p.lum > 225 ? 'brake*' : null;
+      }
+      return null;
+    },
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.55, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
 };
 // Materials drawn as cut-outs (opaque, depth-written, alpha-tested) instead of blended. The RS6's whole cabin is one
@@ -280,6 +378,70 @@ const CUTOUT = { car_audi_rs6: /InteriorA_Material/i, car_lamborghini_huracan: /
 const HUB_RINGS = { car_audi_rs6: { mat: /BadgeA_Material/i, u: 0.809, v: [0.18, 0.391, 0.602, 0.813], r: 0.152, tube: 0.021 } };
 // no high-mounted brake light in the model: where to add one (the rear window's glass)
 const THIRD_AT = { car_tesla_m3: { glass: /glassDark/i, at: 'window' }, car_mercedes_gls: { glass: /gls_glass_privacy/i, at: 'spoiler' } };
+// The models' own number plates (their texture, another size, the old spot) are left out of the template altogether
+// (the full-detail car, the far LOD and the cockpit model all come from it): ours (carconfig.js setPlates) takes their
+// place. Every material named like a plate (not the plate lamps), and per model the plate pieces of shared materials,
+// found by where they sit and their size: whole connected pieces lying inside a box (fitted frame: x0, x1, y0, y1, z0, z1)
+//  - Tesla: the US plates' white blanks and their black holders (the text and stripes are LicensePlate*)
+//  - Golf: the dealer plates ("Golf", baked into the atlas): at the back with its frame; at the front its face only
+//    (its holder stands proud of a recess too small for a plate: ours goes on the holder)
+//  - Taycan: the US plate's bracket over the rear recess; e-tron GT: the blank plate on the rear bumper
+//  - GR Yaris: the raised pad the US plate sat on in the tailgate's recess
+//  - GLS: the front plate (in the dash-wood palette: a 52 x 11 cm face on a bracket over the lower intake): its face
+//    only (face: the triangles facing out of that end), the bracket stays as ours's holder
+// (the X3's rear plate is Plane006, which fitCar drops with the stray planes)
+const PLATE_NAME = /plate|licen|nomera|kennz/i, PLATE_LAMP = /light|lamp|glow/i;
+const PLATE_PIECES = {
+  car_tesla_m3: [[/^(White|BlackWash)$/, [-0.17, 0.17, 0.32, 0.5, 2.28, 2.42]], [/^(White|BlackWash)$/, [-0.17, 0.17, 0.67, 0.85, -2.38, -2.26]]],
+  car_vw_golf_gti: [[/^Atlas$/, [-0.28, 0.28, 0.42, 0.565, 2.125, 2.2], 'face'], [/^Atlas$/, [-0.28, 0.28, 0.42, 0.565, -2.2, -2.08]]],
+  car_porsche_taycan: [[/turbo_s_misc/, [-0.17, 0.17, 0.35, 0.47, -2.47, -2.38]]],
+  car_audi_etron_gt: [[/^gtVehicle_Exterior_mm_misc1$/, [-0.26, 0.26, 0.64, 0.76, -2.41, -2.33]]],
+  car_toyota_gr_yaris: [[/Coloured_Material/, [-0.17, 0.17, 0.73, 0.9, -1.885, -1.8]]],
+  car_mercedes_gls: [[/^gls_dash_wood$/, [-0.28, 0.28, 0.5, 0.625, 2.59, 2.62], 'face']],
+};
+export const isPlateMat = (m) => PLATE_NAME.test(m?.name || '') && !PLATE_LAMP.test(m?.name || '');
+// g without the connected pieces (welded at 1 mm) that lie wholly inside box (face: just the triangles in it that
+// face out of the car's end); g itself when there are none
+function dropPieces(g, box, face) {
+  const P = g.attributes.position, I = g.index.array, n = P.count, key = new Map(), canon = new Int32Array(n);
+  if (face) {
+    const keep = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), s = Math.sign(box[4] + box[5]);
+    for (let i = 0; i < I.length; i += 3) {
+      a.fromBufferAttribute(P, I[i]); b.fromBufferAttribute(P, I[i + 1]); c.fromBufferAttribute(P, I[i + 2]);
+      const x = (a.x + b.x + c.x) / 3, y = (a.y + b.y + c.y) / 3, z = (a.z + b.z + c.z) / 3;
+      const nz = b.sub(a).cross(c.sub(a)).normalize().z * s;
+      if (!(Math.abs(nz) > 0.9 && x >= box[0] && x <= box[1] && y >= box[2] && y <= box[3] && z >= box[4] && z <= box[5])) keep.push(I[i], I[i + 1], I[i + 2]);
+    }
+    if (keep.length === I.length) return g;
+    if (!keep.length) return null;
+    const sub = compact(g, keep, null); sub.userData.label = g.userData.label; return sub;
+  }
+  for (let i = 0; i < n; i++) { const k = `${Math.round(P.getX(i) * 1000)},${Math.round(P.getY(i) * 1000)},${Math.round(P.getZ(i) * 1000)}`; if (!key.has(k)) key.set(k, i); canon[i] = key.get(k); }
+  const par = new Int32Array(n).map((_, i) => i), find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+  for (let i = 0; i < I.length; i += 3) { const a = find(canon[I[i]]), b = find(canon[I[i + 1]]), c = find(canon[I[i + 2]]); par[b] = a; par[find(c)] = a; }
+  const out = new Map(); // root -> inside so far
+  for (let i = 0; i < n; i++) {
+    const r = find(canon[i]), x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+    const inside = x >= box[0] && x <= box[1] && y >= box[2] && y <= box[3] && z >= box[4] && z <= box[5];
+    out.set(r, (out.get(r) ?? true) && inside);
+  }
+  const keep = [];
+  for (let i = 0; i < I.length; i += 3) if (!out.get(find(canon[I[i]]))) keep.push(I[i], I[i + 1], I[i + 2]);
+  if (keep.length === I.length) return g;
+  if (!keep.length) return null;
+  const sub = compact(g, keep, null); sub.userData.label = g.userData.label; return sub;
+}
+function dropPlates(groups, model) {
+  const pieces = PLATE_PIECES[model] || [];
+  for (const [mat, geos] of groups) {
+    if (isPlateMat(mat)) { groups.delete(mat); continue; }
+    const boxes = pieces.filter(([re]) => re.test(mat.name || ''));
+    if (!boxes.length) continue;
+    const out = [];
+    for (let g of geos) { for (const [, b, face] of boxes) if (g) g = dropPieces(g, b, face); if (g) out.push(g); }
+    if (out.length) groups.set(mat, out); else groups.delete(mat);
+  }
+}
 // The body paint: the material the paint colour tints (cars with no material of their own called *paint*: the Dacia's
 // body is UV_body, its paint baked orange into the shared atlas: neutralised to a light grey in a copy of its own,
 // neutralPaint, so any colour multiplies cleanly; the Dacia's own orange is then its material's colour)
@@ -348,6 +510,46 @@ function genericLamp(l, p) {
   return null;
 }
 const _lv = new THREE.Vector3();
+// A lamp atlas's texels for the colour-aware lamp rules (rule.tex: which triangles show a red LED, an amber indicator, a
+// white light guide or just the dark housing): read once while the template is built (a canvas, at most 2048 px; the
+// Node checks hand them in decoded, image.px), then dropped
+function texels(tex) {
+  const img = tex?.image;
+  if (!img) return null;
+  if (img.px) return img.px;
+  if (typeof document === 'undefined' || !img.width) return null;
+  try {
+    const k = Math.min(1, 2048 / Math.max(img.width, img.height)), w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0, w, h);
+    return { w, h, d: g.getImageData(0, 0, w, h).data };
+  } catch { return null; }
+}
+// a triangle's texel colour (0..255): the mean of its middle and three points toward its corners (the texture's own
+// transform, KHR_texture_transform, applied)
+const _tc = [0, 0, 0];
+function triColour(px, tex, U, a, b, c) {
+  const ua = U.getX(a), va = U.getY(a), ub = U.getX(b), vb = U.getY(b), uc = U.getX(c), vc = U.getY(c);
+  const um = (ua + ub + uc) / 3, vm = (va + vb + vc) / 3;
+  _tc[0] = _tc[1] = _tc[2] = 0;
+  for (const [u0, v0] of [[um, vm], [ua, va], [ub, vb], [uc, vc]]) {
+    let u = (um + (u0 - um) * 0.6) * tex.repeat.x + tex.offset.x, v = (vm + (v0 - vm) * 0.6) * tex.repeat.y + tex.offset.y;
+    u -= Math.floor(u); v -= Math.floor(v);
+    const i = (Math.min(px.h - 1, Math.floor(v * px.h)) * px.w + Math.min(px.w - 1, Math.floor(u * px.w))) * 4;
+    _tc[0] += px.d[i] / 4; _tc[1] += px.d[i + 1] / 4; _tc[2] += px.d[i + 2] / 4;
+  }
+  return _tc;
+}
+// what a texel colour is: 'dark' (housing, black trim), 'white' / 'grey' (clear LEDs, reflectors, chrome), 'red',
+// 'amber', 'blue', or 'other'
+function tone(c) {
+  const [r, g, b] = c, mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  if (mx < 45) return 'dark';
+  if ((mx - mn) / mx < 0.22) return 0.3 * r + 0.59 * g + 0.11 * b > 150 ? 'white' : 'grey';
+  if (r === mx && g < r * 0.42 && b < r * 0.5) return 'red';
+  if (r === mx && g < r * 0.9 && b < g * 0.7) return 'amber';
+  return b === mx ? 'blue' : 'other';
+}
 
 // The added third brake light: a slim strip at the top of the rear window, just under the glass (a fastback: where
 // the window starts to fall away from the roof), or just above it on the tailgate spoiler (a hatch / SUV)
@@ -508,26 +710,39 @@ export function carTemplate(gltf, length, name = '') {
     const front = z > halfL * 0.45, rear = z < -halfL * 0.45;
     return { x, y, z, front, rear, low: y < carH * 0.42, hi: y > carH * 0.72, third: rear && Math.abs(x) < 0.42 && y > carH * 0.7, mirror: !front && !rear && Math.abs(z) < halfL * 0.42 && Math.abs(x) > halfW - 0.3 && y > carH * 0.5 };
   };
+  // (a flat lamp, kind + '*': it glows evenly, not through its texture: a projector's lens, a light guide whose
+  // texture is the dark unlit part)
+  const flatMats = new Map();
+  const flatFor = (mat) => { if (!flatMats.has(mat)) { const ud = mat.userData; mat.userData = {}; const m = mat.clone(); mat.userData = ud; m.name = `${mat.name}_flat`; m.userData = { ...ud, flat: true }; flatMats.set(mat, m); } return flatMats.get(mat); };
+  const pxCache = new Map();
   const lampSplit = (mat, g, label) => {
     if (rule ? !rule.test.test(label) : !((LAMP.test(label) && !NOT_LAMP.test(label)) || AMBER.test(label))) return false;
-    const P = g.attributes.position, I = g.index.array, keep = [], by = new Map();
+    const P = g.attributes.position, U = g.attributes.uv, I = g.index.array, keep = [], by = new Map();
+    // (rule.tex: the triangle's texel colour too: p.c, p.tone)
+    if (rule?.tex && mat.map && !pxCache.has(mat.map)) pxCache.set(mat.map, texels(mat.map));
+    const px = rule?.tex && mat.map ? pxCache.get(mat.map) : null;
     for (let i = 0; i < I.length; i += 3) {
       const x = (P.getX(I[i]) + P.getX(I[i + 1]) + P.getX(I[i + 2])) / 3, y = (P.getY(I[i]) + P.getY(I[i + 1]) + P.getY(I[i + 2])) / 3;
       const z = (P.getZ(I[i]) + P.getZ(I[i + 1]) + P.getZ(I[i + 2])) / 3;
       const p = zone(x, y, z);
-      const kind = rule ? rule.kind(label, p) : genericLamp(label, p);
+      if (rule?.tex) { const c = px && U ? triColour(px, mat.map, U, I[i], I[i + 1], I[i + 2]) : (mat.color ? [mat.color.r * 255, mat.color.g * 255, mat.color.b * 255] : [128, 128, 128]); p.c = c; p.tone = tone(c); p.lum = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]; }
+      let kind = rule ? rule.kind(label, p) : genericLamp(label, p), flat = false;
+      if (kind && kind.endsWith('*')) { kind = kind.slice(0, -1); flat = true; }
       if (!kind) { keep.push(I[i], I[i + 1], I[i + 2]); continue; }
+      kind = flat ? kind + '*' : kind;
       if (!by.has(kind)) by.set(kind, []);
       by.get(kind).push(I[i], I[i + 1], I[i + 2]);
+      if (flat) kind = kind.slice(0, -1);
       if (!anchors.has(kind)) anchors.set(kind, [null, null]);
       const side = anchors.get(kind), s = x < 0 ? 0 : 1;
       side[s] ||= { min: new THREE.Vector3(Infinity, Infinity, Infinity), max: new THREE.Vector3(-Infinity, -Infinity, -Infinity) };
       for (let k = 0; k < 3; k++) { const j = I[i + k]; _lv.set(P.getX(j), P.getY(j), P.getZ(j)); side[s].min.min(_lv); side[s].max.max(_lv); }
     }
     if (!by.size) return false;
-    for (const [kind, tri] of by) {
+    for (const [key, tri] of by) {
+      const flat = key.endsWith('*'), kind = flat ? key.slice(0, -1) : key;
       if (!lampGroups.has(kind)) lampGroups.set(kind, new Map());
-      const map = lampGroups.get(kind), lm = lensFor(mat, kind);
+      const map = lampGroups.get(kind), lm = flat ? flatFor(lensFor(mat, kind)) : lensFor(mat, kind);
       if (!map.has(lm)) map.set(lm, []);
       const sub = compact(g, tri, null);
       sub.userData.label = label;
@@ -561,6 +776,7 @@ export function carTemplate(gltf, length, name = '') {
       }
     }
   });
+  dropPlates(groups, model);
   const parts = [];
   for (const [material, geos] of groups) {
     const geometry = mergeGeometries(geos, false);
@@ -578,7 +794,7 @@ export function carTemplate(gltf, length, name = '') {
     const geometry = mergeGeometries(geos, false);
     if (!geometry) continue;
     geometry.computeBoundingSphere();
-    const core = kind === 'drl' || geos.some((g) => /glow|emiss|drl|signature/i.test(g.userData.label || ''));
+    const core = kind === 'drl' || !!material.userData.flat || geos.some((g) => /glow|emiss|drl|signature/i.test(g.userData.label || ''));
     lampParts.push({ kind, geometry, material, core, glow: (material.userData.glow ?? 1) * (core ? rule?.glow?.[kind] ?? 1 : 1) });
   }
   const halo = {};
@@ -1154,7 +1370,7 @@ export function carInstance(t, { paint = null, wheels = false } = {}) {
     const orig = src.userData?.emOrig, nm = src.name || '';
     const core = p.core || !!orig || /drl|led|glow|emiss|signature/i.test(nm);
     m.emissive.set(0x000000); m.emissiveIntensity = 0;
-    m.emissiveMap = orig?.map || m.map || null; // (fixed now: switching on never recompiles)
+    m.emissiveMap = src.userData?.flat ? null : orig?.map || m.map || null; // (fixed now: switching on never recompiles)
     const tier = core ? 'core' : m.emissiveMap ? 'tex' : 'plain';
     const mesh = new THREE.Mesh(p.geometry, m);
     mesh.castShadow = false; mesh.receiveShadow = !m.transparent;

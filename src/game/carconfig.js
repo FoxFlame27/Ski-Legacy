@@ -5,7 +5,7 @@
 // carInstance, wheels: true) into exactly that car: the showroom's live preview, the rented car in the yard, and the
 // car you drive (drive.js: e.dress), outside and in the cockpit (the *_full models too).
 import * as THREE from 'three';
-import { isPaint } from './cars.js';
+import { isPaint, isPlateMat } from './cars.js';
 
 // paint: hex (sRGB), finish -> how the clear coat and flakes read (roughness, metalness), extra cost
 export const FINISH = {
@@ -100,35 +100,43 @@ export function plateTexture(text) {
 
 // ---------------------------------------------------------------- where the plates go (per template, once)
 // Each model's plate spot, measured from its own geometry (fitted frame: m, wheels on y = 0, nose toward +z), front
-// and rear: y = the plate's centre height, tilt = how far its face leans back (deg; the face looks that much up).
-// Where the model has its own plate (mat: its material) the spot is that plate's centre and facing; it is hidden on
-// the instance and ours takes its place. Otherwise the recess / holder the real plate sits in. The depth is found
-// by rays over the plate's whole face: flush on the frontmost point (nothing pokes through), a hair in front.
-//  BMW X3     front: its own plate (Nomera, EU size, in the bumper). rear: its own plate (Nomera, a plane named
-//             "Plane006" that fitCar drops as junk), in its frame (badge material) on the tailgate under the roundel.
-//  Audi RS6   front: the honeycomb under the rings (no plate in the model). rear: its own plate (US size, ManufacturerPlate).
-//  Tesla M3   front / rear: its own plates (LicensePlateText / Red / Yellow, US size) on their holders.
-//  Golf GTI   front: the plate holder on the bumper (a raised 0.5 x 0.1 panel). rear: the flat recess under the plate lights.
-//  SLS AMG    front: the flat lip under the grille (0.24-0.31 m). rear: its own plate (EXT_PLATE_plastic) in the bumper.
-//  Taycan     front / rear: the flat plate panels in the bumpers (0.36-0.48 m; no plate in the model).
-//  Huracán    front: the flat panel under the nose's centre intake (0.24-0.36 m; no plate there in the model).
-//             rear: its own plate (ManufacturerPlate, US size) between the exhausts' grille, leaning back a little.
-//  GR Yaris   front: the bar across the lower grille (0.46-0.50). rear: its own plate (ManufacturerPlate) on the
-//             tailgate, leaning back with it.
-//  e-tron GT  (a concept: no plates in the model) front: the flat band under the grille (0.40-0.48). rear: the flat
-//             panel in the bumper over the diffuser (0.48-0.52).
-//  GLS        front: the lip under the grille (0.36-0.44). rear: the flat panel in the bumper (0.48-0.76).
+// and rear: y = the plate's centre height, tilt = how far its face leans back (deg; the face looks that much up), and
+// where the face has nothing behind it to find, its z. The models' own plates are gone from the templates (cars.js
+// PLATE_PIECES / isPlateMat): ours goes where they were, centred in the recess / holder they sat in (its outline
+// measured from rays straight in: the lips and walls round it), or where the real car carries it. The depth is found
+// by rays over the plate's whole face: flush on the frontmost point (nothing pokes through), 2 mm proud.
+//  BMW X3     front: the holder in the bumper (0.48-0.60; its own plate was there: Nomera). rear: the recess in the
+//             tailgate under the roundel (0.86-1.05, leaning back 15 deg; its own plate: Plane006, dropped as junk)
+//  Audi RS6   front: the bar of bumper under the grille (0.43-0.53, 8 deg). rear: the tailgate's recess (0.71-0.89, 14 deg;
+//             its own US plate was in it)
+//  Golf GTI   front: on the holder standing proud of the bumper (its rim: 0.434-0.55, z 2.15; a dealer plate in it;
+//             the recess behind it is too small for a plate). rear: the recess under the plate lamps
+//             (0.375-0.573; a dealer plate in a frame there)
+//  Tesla M3   no recesses (US plates on holders): front on the bumper over the lower grille (its edge at 0.385; the
+//             face looks 7 deg down), rear where the US plate was on the bumper (8 deg up)
+//  SLS AMG    front: the holder under the grille (0.22-0.33). rear: the recess in the bumper (0.375-0.505; its own plate)
+//  Taycan     front: the bumper's face over the lower grille (6 deg down, the nose's crease above). rear: the recess low in the bumper (0.34-0.48; a
+//             US bracket over it)
+//  Huracán    front: the bar across the centre intake (0.29-0.31). rear: the recess between the exhausts (0.495-0.67,
+//             4 deg; its own US plate)
+//  GR Yaris   front: the bar across the lower grille (0.445-0.50, a lip on top: ours stands on the lip). rear: the
+//             tailgate's recess (0.675-0.915, 18 deg;
+//             its own US plate on a pad)
+//  e-tron GT  (a concept) front: the band under the grille (0.37-0.53). rear: the bumper's panel between its lips
+//             (0.61-0.79, 15 deg; a blank plate there)
+//  GLS        front: on its bracket over the lower intake (the model's own plate face: 0.509-0.618, z 2.60). rear: the
+//             band of bumper between the crease and the trim strip (0.645-0.775)
 const PLATE_SPOT = {
-  car_bmw_x3: { mat: /Nomera/i, f: [0.534, 0], r: [0.965, 15] },
-  car_audi_rs6: { mat: /ManufacturerPlate/i, f: [0.49, 9], r: [0.809, 13.7] },
-  car_tesla_m3: { mat: /LicensePlate/i, f: [0.421, 0], r: [0.767, 0] },
-  car_vw_golf_gti: { f: [0.493, 4], r: [0.515, 4] },
-  car_mercedes_sls: { mat: /EXT_PLATE/i, f: [0.275, 0], r: [0.445, 0] },
-  car_porsche_taycan: { f: [0.42, 0], r: [0.42, 0] },
-  car_lamborghini_huracan: { mat: /ManufacturerPlate/i, f: [0.30, 0], r: [0.583, 7] },
-  car_toyota_gr_yaris: { mat: /ManufacturerPlate/i, f: [0.48, 0], r: [0.816, 19] },
-  car_audi_etron_gt: { f: [0.44, 0], r: [0.50, 0] },
-  car_mercedes_gls: { f: [0.40, 0], r: [0.62, 0] },
+  car_bmw_x3: { f: [0.534, 0], r: [0.965, 15] },
+  car_audi_rs6: { f: [0.48, 8], r: [0.80, 14] },
+  car_tesla_m3: { f: [0.45, -7], r: [0.759, 8] },
+  car_vw_golf_gti: { f: [0.492, 0, 2.15], r: [0.475, 4] },
+  car_mercedes_sls: { f: [0.275, 0], r: [0.44, 0] },
+  car_porsche_taycan: { f: [0.43, -6], r: [0.41, 0] },
+  car_lamborghini_huracan: { f: [0.30, 0], r: [0.583, 4] },
+  car_toyota_gr_yaris: { f: [0.473, 0], r: [0.80, 18] },
+  car_audi_etron_gt: { f: [0.45, 0], r: [0.70, 15] },
+  car_mercedes_gls: { f: [0.5635, 0, 2.6], r: [0.71, 0] },
 };
 export const PLATE_W = 0.52, PLATE_H = 0.11; // EU plate, 520 x 110 mm (the models are at their real size)
 const plateModel = (t) => (t.name || '').replace(/_full$/, '');
@@ -137,14 +145,20 @@ export function plateSpots(t) {
   t.plates = [];
   try {
     const spec = PLATE_SPOT[plateModel(t)] || { f: [0.45, 0], r: [0.7, 0] };
-    const parts = [...(t.body || t.parts || []), ...(t.lamps?.parts || [])].filter((p) => !p.material.transparent && !spec.mat?.test(p.material.name || ''));
+    // (the alpha-cut grilles too: the Huracán's rear plate goes on the mesh grille between the exhausts)
+    const parts = [...(t.body || t.parts || []), ...(t.lamps?.parts || [])].filter((p) => !p.material.transparent || p.material.opacity >= 0.9);
     const meshes = parts.map((p) => new THREE.Mesh(p.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
     const L = t.size.z / 2, rc = new THREE.Raycaster(), o = new THREE.Vector3();
     for (const k of [0, 1]) {
-      const s = k ? -1 : 1, [y, tilt] = k ? spec.r : spec.f, a = tilt * Math.PI / 180;
+      const s = k ? -1 : 1, [y, tilt, zFace] = k ? spec.r : spec.f, a = tilt * Math.PI / 180;
       const n = new THREE.Vector3(0, Math.sin(a), s * Math.cos(a));
       // (seen from outside it reads left to right: at the back the plate's x is the car's -x)
       const x = new THREE.Vector3(s, 0, 0), up = new THREE.Vector3().crossVectors(n, x);
+      if (zFace !== undefined) { // (given: on its holder, 2 mm proud)
+        const at = new THREE.Vector3(0, y, zFace).addScaledVector(n, 0.002);
+        t.plates.push({ m: new THREE.Matrix4().makeBasis(x, up, n).setPosition(at), front: !k, at, n, gap: 0, sunk: 0 });
+        continue;
+      }
       // the surface at the plate's centre (straight in), then 1 m out along the plate's facing from there
       rc.set(o.set(0, y, s * (L + 1)), new THREE.Vector3(0, 0, -s)); rc.far = 2.5;
       const h0 = rc.intersectObjects(meshes, false)[0];
@@ -165,6 +179,18 @@ export function plateSpots(t) {
       ds.sort((p, q) => p - q);
       const med = ds[ds.length >> 1], near = ds.find((d) => d >= med - 0.02), far = ds[ds.length - 1];
       const at = A.clone().addScaledVector(n, -near + 0.002); // flush on the frontmost point, 2 mm proud
+      // and nothing of the car inside its outline in front of it (a lip across the holder the rays passed between):
+      // out to 2 mm in front of the most proud vertex there
+      let w = -Infinity;
+      for (const p of parts) {
+        const P = p.geometry.attributes.position;
+        for (let i = 0; i < P.count; i++) {
+          o.fromBufferAttribute(P, i).sub(at);
+          const d = o.dot(n);
+          if (d > w && d < 0.06 && Math.abs(o.dot(x)) < PLATE_W / 2 && Math.abs(o.dot(up)) < PLATE_H / 2) w = d;
+        }
+      }
+      if (w > -0.002) at.addScaledVector(n, w + 0.002);
       const m = new THREE.Matrix4().makeBasis(x, up, n).setPosition(at);
       t.plates.push({ m, front: !k, at, n, gap: far - near, sunk: centre - near });
     }
@@ -266,11 +292,11 @@ export function dressCar(inst, t, cfg) {
 /** Number plates (front and back) on any car instance: the rental's own, a random one for the traffic and the
  *  parked cars (Oct 28, the user: "make bots have random number plates"). */
 /** A model's own plate part (its texture, another size, the old spot), by material or name; not its plate lights. */
+// (the models' own plates are left out of the templates already, cars.js; this only catches a stray one)
 export const OWN_PLATE = /plate|licen|nomera|kennz/i;
 export function isOwnPlate(t, o) {
-  const own = PLATE_SPOT[plateModel(t)]?.mat;
   const mats = Array.isArray(o.material) ? o.material : [o.material];
-  return mats.some((m) => { const n = m?.name || ''; return (own && own.test(n)) || (OWN_PLATE.test(n) && !/light|lamp|glow/i.test(n)); });
+  return o.name !== 'number-plate' && mats.some((m) => isPlateMat(m));
 }
 export function setPlates(inst, t, text = inst.plateText || randomPlate()) {
   inst.plateText = text;
@@ -279,7 +305,7 @@ export function setPlates(inst, t, text = inst.plateText || randomPlate()) {
     // (Oct 28, the user: "some cars have double number plates, one on an old position": every model's own plate
     // part goes, wherever it sits in the instance and whatever material list it has)
     inst.full.traverse((o) => { if (o.isMesh && isOwnPlate(t, o)) o.visible = false; });
-    inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
+    inst.plates = []; for (const s of plateSpots(t)) { const m = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.name = 'number-plate'; m.matrixAutoUpdate = false; m.matrix.copy(s.m); m.castShadow = false; m.receiveShadow = true; inst.full.add(m); inst.plates.push(m); } }
   const tex = plateTexture(text);
   for (const p of inst.plates) if (p.material.map !== tex) { p.material.map = tex; p.material.needsUpdate = true; }
   return inst;

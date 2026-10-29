@@ -16,7 +16,7 @@ import { loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye, REAL } from './cars.js';
 import { keysHTML } from '../ui/hud.js';
 import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
-import { lampsOn, LightPool, Smoke, hazardPhase } from './carlights.js';
+import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { TyreTracks } from './tyretracks.js';
@@ -935,7 +935,9 @@ export class Drive {
     // the car's own lamps glow (head and tail at night, the brake lights whenever it brakes); crashed, they stay on
     // (the tails dim) and the hazards flash
     lampsOn(d.inst, on, on, braking ? 1 : 0, { drl: !on && !d.crash ? 1 : 0, reverse: !d.crash && d.gear === 'R', hazard: d.crash ? hazardPhase() : null });
-    (this.pool ||= new LightPool(this.scene)).update(d.x, d.z, d.yaw, d.half, this.world, on);
+    // (the beams from the headlamps themselves: where they sit on this model, how far apart)
+    const hs = headlampSpot(d.inst);
+    (this.pool ||= new LightPool(this.scene)).update(d.x, d.z, d.yaw, hs ? hs.z : d.half, this.world, on, 1, hs ? hs.spread : 0);
     // the tail lights' red glow on the snow behind (brighter braking)
     (this.tailPool ||= new LightPool(this.scene, 0xff2a14)).update(d.x, d.z, d.yaw + Math.PI, d.half, this.world, on ? (braking ? 0.75 : 0.35) : braking && night > 0.05 ? 0.4 : 0, 0.28);
     const dmg = d.e.damage || 0;

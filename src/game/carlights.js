@@ -23,6 +23,7 @@ export const hazardPhase = () => (Math.floor(performance.now() / 380) % 2 ? 1 : 
 // ~0.8 -> a deep clear red; braking ~2.2 -> a bright red that the tone map keeps red; white can go far brighter.)
 const K = {
   head: { core: 6, tex: 3, plain: 1.5 },        // low beams (night / L)
+  high: { core: 0.9, tex: 0.5, plain: 0.3 },    // the high-beam reflectors: only the low beams' spill on them
   dayH: { core: 2, tex: 0.6, plain: 0.35 },     // a headlamp as the daytime running light (no DRL of its own)
   drl: { core: 3.2, tex: 1.4, plain: 1 },
   tail: { core: 0.8, tex: 1, plain: 0.65 },     // running
@@ -65,9 +66,11 @@ export function lampsOn(inst, head, tail, brake = 0, { drl = 0, reverse = false,
       let col = C.red, k = 0;
       switch (e.kind) {
         case 'head': col = C.head; k = head * K.head[t] + dayH * K.dayH[t]; break;
+        case 'high': col = C.head; k = head * K.high[t]; break;
         case 'drl': col = C.drl; k = Math.max(drl, head * 0.75) * K.drl[t]; break;
         case 'tail': k = tail * K.tail[t] + b * K.brake[t]; break;
         case 'third': k = b * K.third[t]; break;
+        case 'brake': k = b * K.third[t]; break; // (a lamp's own brake-light graphic: only under braking)
         case 'rev': col = C.rev; k = rv * K.rev[t]; break;
         case 'ind': col = C.amber; k = haz > 0 ? K.ind[t] : 0; break;
         case 'lensF': if (haz > 0 && !indF) { col = C.amber; k = 1.2; } else { col = C.head; k = head * 0.22 + dayH * 0.05; } break;
@@ -83,6 +86,7 @@ export function lampsOn(inst, head, tail, brake = 0, { drl = 0, reverse = false,
       switch (h.kind) {
         case 'tail': o = (tail * 0.16 + b * 0.5) * dk; break;
         case 'third': o = b * 0.45 * dk; break;
+        case 'brake': o = b * 0.3 * dk; break;
         case 'head': o = (head * 0.3 + dayH * 0.06 + (has.has('drl') ? drl * 0.04 : 0)) * dk; break;
         case 'rev': o = rv * 0.42 * dk; break;
         case 'ind': o = haz > 0 ? 0.6 * (0.45 + 0.55 * dk) : 0; break;
@@ -91,6 +95,16 @@ export function lampsOn(inst, head, tail, brake = 0, { drl = 0, reverse = false,
       h.s.visible = o > 0.004;
     }
   } catch (e) { if (!warned) { warned = true; console.warn('car lamps', e); } }
+}
+/** Where a car instance's low beams are (cars.js inst.lamps.halo.head): { z: their front, from the car's centre,
+ *  spread: half the distance between them }, or null (no headlamps of its own). */
+export function headlampSpot(inst) {
+  const L = inst?.lamps, H = L?.halo?.head;
+  if (!H?.length) return null;
+  if (L.headSpot) return L.headSpot;
+  let z = -Infinity, sx = 0;
+  for (const a of H) { z = Math.max(z, a.c.z + a.size.z / 2); sx += Math.abs(a.c.x); }
+  return (L.headSpot = { z, spread: sx / H.length });
 }
 const hasEnd = (L, kind, sign) => (L.ends ||= {})[kind + sign] ??= (L.halo[kind] || []).some((a) => a.c.z * sign > L.halfL * 0.45);
 
@@ -123,7 +137,7 @@ const haloFacing = (sh) => {
   sh.fragmentShader = 'varying float vFace;\n' + sh.fragmentShader.replace('vec4 diffuseColor = vec4( diffuse, opacity );', `if ( vFace < 0.003 ) discard;
     vec4 diffuseColor = vec4( diffuse, opacity * vFace * vFace );`);
 };
-const HALO_COL = { tail: new THREE.Color(1, 0.04, 0.01), third: new THREE.Color(1, 0.04, 0.01), head: new THREE.Color(1, 0.88, 0.7), rev: new THREE.Color(0.85, 0.9, 1), ind: new THREE.Color(1, 0.42, 0.04) };
+const HALO_COL = { brake: new THREE.Color(1, 0.04, 0.01), tail: new THREE.Color(1, 0.04, 0.01), third: new THREE.Color(1, 0.04, 0.01), head: new THREE.Color(1, 0.88, 0.7), rev: new THREE.Color(0.85, 0.9, 1), ind: new THREE.Color(1, 0.42, 0.04) };
 // the halo sprites of a car (once): at each lamp, a little out from its lens. Reversing / indicator halos where the
 // model has none of its own: on the inner / outer part of the tail and head lamps.
 function halos(L) {
@@ -198,15 +212,17 @@ export class LightPool {
     this.mesh.name = 'car-light-pool';
     scene.add(this.mesh);
   }
-  /** Lay it ahead of a car (x, z, yaw, front: distance of the bumper from the centre) on the ground; on: 0..1. */
-  update(x, z, yaw, front, world, on, size = 1) {
+  /** Lay it ahead of a car (x, z, yaw, front: distance of the bumper / the headlamps from the centre) on the ground;
+   *  on: 0..1; spread: half the distance between the headlamps (0: a plain pool), so the beams start at the lamps. */
+  update(x, z, yaw, front, world, on, size = 1, spread = 0) {
     this.mesh.visible = on > 0.01;
     if (!this.mesh.visible) return;
     this.mat.opacity = 0.55 * on;
     const fx = Math.sin(yaw), fz = Math.cos(yaw), lx = fz, lz = -fx;
     const P = this.mesh.geometry.attributes.position, a = P.array;
     for (let j = 0; j < NV; j++) {
-      const v = j / (NV - 1), ahead = front + 0.25 + v * 15 * size, half = (1.5 + v * 2.6) * Math.min(1, 0.4 + size * 0.6);
+      const v = j / (NV - 1), ahead = front + 0.25 + v * 15 * size;
+      const half = spread ? spread + 0.3 + v * (3.8 - spread) : (1.5 + v * 2.6) * Math.min(1, 0.4 + size * 0.6);
       for (let i = 0; i < NU; i++) {
         const u = (i / (NU - 1)) * 2 - 1, px = x + fx * ahead + lx * u * half, pz = z + fz * ahead + lz * u * half;
         const k = (j * NU + i) * 3;

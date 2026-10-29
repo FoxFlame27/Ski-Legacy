@@ -787,7 +787,7 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .tm-scale { position: absolute; left: calc(var(--u) * 30); bottom: calc(var(--u) * 28); display: flex; align-items: center; gap: calc(var(--u) * 8);
   pointer-events: none; font: italic 700 calc(var(--u) * 17)/1 var(--num); color: var(--blue); text-shadow: 0 0 4px #fff, 0 0 2px #fff; }
 .tm-scale i { display: block; height: calc(var(--u) * 7); border: 2px solid var(--blue); border-top: 0; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85); }
-.tm-legend { flex: none; width: calc(var(--u) * 290); align-self: flex-start; padding-bottom: calc(var(--u) * 16); }
+.tm-legend { flex: none; width: calc(var(--u) * 290); align-self: flex-start; padding-bottom: calc(var(--u) * 16); max-height: 100%; overflow-y: auto; scrollbar-width: none; }
 .tm-legend .mp-head { padding-top: calc(var(--u) * 12); }
 .tm-legend .mp-head:first-child { padding-top: 0; }
 .tm-grid { display: grid; grid-template-columns: auto 1fr; column-gap: calc(var(--u) * 14); }
@@ -826,6 +826,16 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .tm-sym.heli::before { content: 'H'; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 16); height: calc(var(--u) * 16); margin: calc(var(--u) * -8); display: flex; align-items: center; justify-content: center;
   border: 2px solid var(--ko); border-radius: 50%; box-sizing: border-box; color: var(--ko); font: italic 700 calc(var(--u) * 12)/1 var(--num); }
 .tm-sym.jobs::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 9); height: calc(var(--u) * 9); margin: calc(var(--u) * -4.5); background: #7a4a22; }
+.tm-sym.road::before, .tm-sym.scenic::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: calc(var(--u) * 5); margin-top: calc(var(--u) * -2.5); border-radius: 99px; background: #6f7788; box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px rgba(21, 70, 200, 0.12); }
+.tm-sym.scenic::before { background: #c9811a; }
+.tm-sym.ring::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 14); height: calc(var(--u) * 14); margin: calc(var(--u) * -7); box-sizing: border-box; border-radius: 50%; border: calc(var(--u) * 3.5) solid #c9811a; background: #fff; }
+.tm-sym.lot::before, .tm-sym.shop::before, .tm-sym.car::before, .tm-sym.med::before { content: 'P'; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 15); height: calc(var(--u) * 15); margin: calc(var(--u) * -7.5); display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; background: var(--blue); color: #fff; font: 800 calc(var(--u) * 10)/1 var(--ui); }
+.tm-sym.shop::before { content: '//'; background: #1f5fd6; font-style: italic; letter-spacing: -0.05em; }
+.tm-sym.car::before { content: ''; background: #1f5fd6; }
+.tm-sym.car::after { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 9); height: calc(var(--u) * 3.5); margin: calc(var(--u) * -0.5) 0 0 calc(var(--u) * -4.5); border-radius: 2px; background: #fff; box-shadow: calc(var(--u) * 1.5) calc(var(--u) * -2.5) 0 calc(var(--u) * -0.6) #fff; }
+.tm-sym.med::before { content: '+'; background: #fff; color: var(--ko); border: 2px solid var(--ko); box-sizing: border-box; font: 900 calc(var(--u) * 14)/1 var(--ui); }
+.tm-sym.chalet::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 11); height: calc(var(--u) * 11); margin: calc(var(--u) * -5.5); border-radius: 50%; background: #e7a500; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(21, 70, 200, 0.12); }
 .tm-hints { flex: none; display: flex; flex-wrap: wrap; gap: calc(var(--u) * 22); font: 600 var(--t-xs)/1 var(--ui); color: rgba(255, 255, 255, 0.88); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
 
 /* =================== PHOTO MODE (P, ui/photomode.js) =================== */

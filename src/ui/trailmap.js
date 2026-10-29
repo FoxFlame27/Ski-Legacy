@@ -17,11 +17,17 @@
 // Controls while open: drag = move, wheel / + - = zoom, R = back to you, M / Esc / click outside = close,
 // click a place (lift station, hut, stop, race, summit...) or anywhere on the map = mark it: `map.target` = { x, z, label } (main.js
 // points the compass there until you arrive; clicking it again clears the mark).
+// The roads come live from game/bus/roads.js (busRoads.roads / lots / roundabouts / hospital / rental): every road,
+// the scenic ones (Panoramastrasse, Passstrasse, Ostalstrasse, Hinterkopfstrasse, Hochalmstrasse, Autohausweg and
+// whatever is added later) in amber, the valley roads in grey, the roundabouts, the car parks (P) and the road names
+// along them. Their geometry is built once into world-space Path2Ds (rebuilt only when the network changes) and
+// stroked under a view transform; the zoom-out limit fits the whole network, the races and the express.
 import { world, MAIN_SUMMIT } from '../world/world.js';
 import { layout, VILLAGE_BUILDINGS } from '../world/layout.js';
 import { PISTE_COLORS } from '../world/resortdressing.js';
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
 import { brushSVG, brushClip, esc } from './menu.js';
+import { busRoads } from '../game/bus/roads.js'; // the road network (valley roads, scenic roads, roundabouts, car parks)
 
 // relief levels: tile size (m) at 64 px per tile, shown from zoom `from` (CSS px per m), contour interval (m)
 const LEVELS = [
@@ -155,6 +161,7 @@ export class TrailMap {
     const where = this.locationName?.() || '';
     this.$where.innerHTML = where ? `You are here · <b>${esc(where)}</b>` : 'Legacy Valley';
     this.resize();
+    this.fitBounds();
     cancelAnimationFrame(this.raf);
     const loop = () => {
       if (!this.isOpen) return;
@@ -201,8 +208,11 @@ export class TrailMap {
           <div class="tm-grid">${[0, 1, 2, 3].map((i) => sw(PISTE_COLORS[i], GRADES[i])).join('')}</div>
           <div class="mp-head">LIFTS</div>
           <div class="tm-grid">${sym('gondola', 'Gondola')}${sym('chair', 'Chairlift')}</div>
+          <div class="mp-head">ROADS</div>
+          <div class="tm-grid">${sym('road', 'Road')}${sym('scenic', 'Scenic road')}${sym('lot', 'Car park')}${sym('ring', 'Roundabout')}</div>
           <div class="mp-head">ON THE MAP</div>
           <div class="tm-grid">${sym('hut', 'Mountain hut')}${sym('bus', 'Ski bus')}${sym('park', 'Terrain park')}${sym('heli', 'Heli-ski')}
+          ${sym('shop', 'Ski shop')}${sym('car', 'Car rental')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}
           ${sym('secret', 'Secret found')}${sym('jobs', 'Job board')}</div>
         </div>
       </div>
@@ -292,9 +302,25 @@ export class TrailMap {
   zoomAt(px, py, k) {
     const v = this.view;
     const wx = v.x + (px - this.W / 2) / v.s, wz = v.z + (py - this.H / 2) / v.s; // stays under the cursor
-    v.s = Math.min(MAX_S, Math.max(MIN_S, v.s * k));
+    v.s = Math.min(MAX_S, Math.max(this.minS ?? MIN_S, v.s * k));
     v.x = wx - (px - this.W / 2) / v.s;
     v.z = wz - (py - this.H / 2) / v.s;
+  }
+
+  // the zoom-out limit: the whole world on the map (the road network out to the Ostal / Hinterkopf / Hochalm, every race,
+  // the express ring, the stops, the lifts), with a margin; never tighter than MIN_S
+  fitBounds() {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    const add = (x, z) => { if (Number.isFinite(x) && Number.isFinite(z)) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; } };
+    const rc = this.roadCache();
+    if (rc) { add(rc.box[0], rc.box[1]); add(rc.box[2], rc.box[3]); }
+    for (const e of this.races()) { add(e.start.x, e.start.z); add(e.finish.x, e.finish.z); }
+    for (const p of layout.express?.pts || []) add(p[0], p[1]);
+    for (const b of layout.busStops) add(b.x, b.z);
+    for (const l of layout.lifts) { add(l.bottom.x, l.bottom.z); add(l.top.x, l.top.z); }
+    if (!Number.isFinite(x0)) { this.minS = MIN_S; return; }
+    const fit = Math.min(this.W / Math.max(500, x1 - x0), this.H / Math.max(500, z1 - z0)) * 0.9;
+    this.minS = Math.max(0.004, Math.min(MIN_S, fit));
   }
 
   // ---------------------------------------------------------------- relief
@@ -337,6 +363,7 @@ export class TrailMap {
     this.boxes = [];
     this.queue = [];
     this.spots = [];
+    this.drawRoads();
     this.drawVillage();
     this.drawChalets();
     this.drawPark();
@@ -475,6 +502,120 @@ export class TrailMap {
   // label candidates around a symbol of radius r: right, left, above, below
   around(r, gap = 5) { return [[r + gap, 0, 'left'], [-r - gap, 0, 'right'], [0, -r - gap - 7, 'center'], [0, r + gap + 7, 'center']]; }
 
+  // ---------------------------------------------------------------- roads (game/bus/roads.js, live)
+  // The network as world-space Path2Ds, built once and rebuilt only when it changes (a road, car park or roundabout
+  // added): main roads (the valley roads), scenic roads (amber), minor roads (car park accesses, spurs, the Chaletweg),
+  // the roundabouts' rings; each named road's label spots (every ~50 m: x, z, angle); the car parks; the bounding box.
+  roadCache() {
+    const R = busRoads.roads;
+    if (!R?.length) return null;
+    const lots = busRoads.lots || [], rings = busRoads.roundabouts || [];
+    const key = `${R.length}:${lots.length}:${rings.length}:${busRoads.ready ? 1 : 0}`;
+    const c0 = this._roads;
+    if (c0 && c0.src === R && c0.key === key) return c0;
+    const main = new Path2D(), scenic = new Path2D(), minor = new Path2D(), scenicMinor = new Path2D(), ring = new Path2D();
+    const named = [], box = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const r of R) {
+      if (!r?.n || !r.X) continue;
+      const isRing = !!r.ringRoad, sc = !!r.scenic && !r.chalet, spur = /spur$/i.test(r.name || '');
+      const P = isRing ? ring : sc ? (spur ? scenicMinor : scenic) : r.access || r.chalet ? minor : main;
+      const step = r.n > 400 ? 3 : 2; // (samples every 4 m: 8-12 m is plenty for the map)
+      for (let i = 0; i < r.n; i += step) {
+        const x = r.X[i], z = r.Z[i];
+        if (i) P.lineTo(x, z); else P.moveTo(x, z);
+        if (x < box[0]) box[0] = x; if (z < box[1]) box[1] = z; if (x > box[2]) box[2] = x; if (z > box[3]) box[3] = z;
+      }
+      P.lineTo(r.X[r.n - 1], r.Z[r.n - 1]);
+      if (r.name && !isRing) {
+        const pts = [], k = Math.max(4, Math.round(50 / Math.max(1, r.length / r.n)));
+        for (let i = k; i < r.n - k; i += k) pts.push([r.X[i], r.Z[i], Math.atan2(r.Z[i + k] - r.Z[i - k], r.X[i + k] - r.X[i - k])]);
+        if (pts.length) named.push({ name: r.name, length: r.length, scenic: sc, minor: spur || (!sc && (r.access || r.chalet)), pts });
+      }
+    }
+    // (the same name on two pieces: labelled once, from the longer)
+    named.sort((a, b) => b.length - a.length);
+    const seen = new Set(), labels = named.filter((n) => { const k = n.name.replace(/\s*\(.*\)$/, ''); if (seen.has(k)) return false; seen.add(k); return true; });
+    this._roads = { src: R, key, main, scenic, minor, scenicMinor, ring, labels, box,
+      rings: rings.map((q) => ({ x: q.x, z: q.z, R: q.R || 15, name: q.name })),
+      lots: lots.filter((L) => !L.building && Number.isFinite(L.x)).map((L) => ({ x: L.x, z: L.z, hw: L.hw, hd: L.hd, ux: L.ux ?? 1, uz: L.uz ?? 0, vx: L.vx ?? 0, vz: L.vz ?? 1, name: L.name, size: L.size })) };
+    return this._roads;
+  }
+
+  drawRoads() {
+    const C = this.roadCache();
+    if (!C) return;
+    const g = this.g, v = this.view, s = v.s, d = this.dpr;
+    const bx0 = this.X(C.box[0]), by0 = this.Z(C.box[1]), bx1 = this.X(C.box[2]), by1 = this.Z(C.box[3]);
+    if (bx1 < -40 || by1 < -40 || bx0 > this.W + 40 || by0 > this.H + 40) return;
+    const wMain = Math.max(2.2, Math.min(6, 6.8 * s)), wMinor = Math.max(1.4, Math.min(4.5, 5.5 * s));
+    g.save();
+    // world space: one transform for the whole network (line widths in CSS px / s)
+    g.setTransform(d * s, 0, 0, d * s, d * (this.W / 2 - v.x * s), d * (this.H / 2 - v.z * s));
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    const stroke = (P, w, casing, col) => {
+      g.strokeStyle = casing; g.lineWidth = (w + 2.6) / s; g.stroke(P);
+      g.strokeStyle = col; g.lineWidth = w / s; g.stroke(P);
+    };
+    if (s >= 0.05) { stroke(C.minor, wMinor, 'rgba(255,255,255,0.92)', '#8a8f98'); stroke(C.scenicMinor, wMinor, 'rgba(255,255,255,0.92)', '#d39a3c'); }
+    stroke(C.main, wMain, 'rgba(255,255,255,0.95)', '#6f7788');
+    stroke(C.scenic, wMain, 'rgba(255,255,255,0.95)', '#c9811a');
+    stroke(C.ring, wMain, 'rgba(255,255,255,0.95)', '#c9811a');
+    g.restore();
+    // the roundabouts: a white island (and the name, zoomed in)
+    for (const q of C.rings) {
+      const x = this.X(q.x), y = this.Z(q.z);
+      if (!this.inView(x, y)) continue;
+      const r = Math.max(2.5, (q.R - 4) * s);
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill();
+      g.lineWidth = 1.2; g.strokeStyle = '#c9811a'; g.stroke();
+      this.reserve(x, y, Math.max(5, q.R * s));
+      if (q.name) {
+        this.spot(x, y, Math.max(7, q.R * s), q.x, q.z, q.name);
+        if (s >= 0.16) this.label(q.name, x, y, { size: 12.5, weight: 600, color: '#8a5a0c', prio: 7, cands: this.around(Math.max(6, q.R * s), 5) });
+      }
+    }
+    // the car parks: the lot's outline zoomed in, a blue P sign
+    for (const L of C.lots) {
+      const x = this.X(L.x), y = this.Z(L.z);
+      if (!this.inView(x, y)) continue;
+      if (s >= 0.35) {
+        g.beginPath();
+        for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const px = this.X(L.x + L.ux * a * L.hw + L.vx * b * L.hd), py = this.Z(L.z + L.uz * a * L.hw + L.vz * b * L.hd); if (a === -1 && b === -1) g.moveTo(px, py); else g.lineTo(px, py); }
+        g.closePath(); g.fillStyle = 'rgba(138,143,152,0.55)'; g.fill(); g.lineWidth = 1; g.strokeStyle = '#fff'; g.stroke();
+      }
+      if (s < 0.06 && L.size !== 'big') continue;
+      const q = s >= 0.2 ? 6.5 : 5;
+      g.fillStyle = BLUE; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
+      g.beginPath(); g.roundRect(x - q, y - q, 2 * q, 2 * q, 2); g.fill(); g.stroke();
+      g.fillStyle = '#fff'; g.font = `800 ${Math.round(q * 1.5)}px ${UI}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('P', x, y + 0.5);
+      this.reserve(x, y, q + 1);
+      if (L.name) {
+        this.spot(x, y, q + 2, L.x, L.z, L.name);
+        if (s >= 0.3) this.label(L.name, x, y, { size: 12.5, weight: 600, color: BLUE, prio: 8, cands: this.around(q + 1, 4) });
+      }
+    }
+    // the road names along them (upright, either side, as near the middle of the view as it fits)
+    const cx = this.W / 2, cy = this.H / 2;
+    g.font = `italic 700 13px ${FONT}`;
+    for (const n of C.labels) {
+      if (n.minor ? s < 0.22 : s < 0.07) continue;
+      const tw = g.measureText(n.name).width;
+      if (n.length * s < tw * 1.6) continue; // (the road too short on screen for its name)
+      const cands = [];
+      for (const [wx, wz, a0] of n.pts) {
+        const x = this.X(wx), y = this.Z(wz);
+        if (!this.inView(x, y, -30)) continue;
+        let ang = a0;
+        if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;
+        const off = wMain / 2 + 8, nx = -Math.sin(ang) * off, ny = Math.cos(ang) * off;
+        cands.push([Math.hypot(x - cx, y - cy), [x + nx, y + ny, 'center', ang], [x - nx, y - ny, 'center', ang]]);
+      }
+      if (!cands.length) continue;
+      cands.sort((a, b) => a[0] - b[0]);
+      this.label(n.name, 0, 0, { size: 13, color: n.scenic ? '#8a5a0c' : '#4a5263', prio: n.minor ? 7.5 : 4.5, cands: cands.slice(0, 14).flatMap((c) => [c[1], c[2]]) });
+    }
+  }
+
   drawVillage() {
     const g = this.g, s = this.view.s, vx = this.X(0), vy = this.Z(0);
     if (!this.inView(vx, vy, 300)) return;
@@ -513,6 +654,11 @@ export class TrailMap {
       if (h.num && s > 0.9) { g.fillStyle = '#fff'; g.font = `bold ${Math.round(Math.min(14, 5 * s))}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(h.num), x, y); } // (the house numbers, zoomed in)
     }
     const own = C.houses.find((h) => h.id === mine);
+    if (own && s < 0.9) { // (your chalet, findable zoomed out: a gold disc on it)
+      const ox = this.X(own.x), oy = this.Z(own.z);
+      g.beginPath(); g.arc(ox, oy, 5.5, 0, Math.PI * 2); g.fillStyle = GOLD; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+      this.spot(ox, oy, 8, own.x, own.z, own.name || 'Your chalet');
+    }
     if (own?.name) this.label(own.name.toUpperCase(), this.X(own.x), this.Z(own.z), { size: 12, color: '#8a6a00', prio: 1, cands: this.around(Math.max(10, 9 * s), 6) }); // (your chalet: "CHALET 7")
     for (const p of C.playground || []) { g.fillStyle = '#2fbf5b'; g.beginPath(); g.arc(this.X(p.x), this.Z(p.z), Math.max(2.5, 4 * s), 0, Math.PI * 2); g.fill(); }
     g.restore();
@@ -905,8 +1051,10 @@ export class TrailMap {
         if (m.label) this.label(m.label, x, y, { size: 14, color: '#9a6a00', prio: 1, cands: this.around(6) });
       }
     }
+    const CR = busRoads.rental; // (the car rental straight from roads.js when main.js passes none)
+    const places = mk.places?.some((m) => m.kind === 'car') || !CR ? mk.places || [] : [...(mk.places || []), { x: CR.ex ?? CR.x, z: CR.ez ?? CR.z, label: 'Car Rental', kind: 'car' }];
     // places worth finding (the Car Rental): a blue square with a little car, always labelled, clickable as a target
-    for (const m of mk.places || []) {
+    for (const m of places) {
       const x = X(m.x), y = Z(m.z);
       if (!this.inView(x, y)) continue;
       g.fillStyle = '#1f5fd6'; g.strokeStyle = '#fff'; g.lineWidth = 2;
@@ -920,6 +1068,29 @@ export class TrailMap {
       this.reserve(x, y, 11);
       this.spot(x, y, 11, m.x, m.z, m.label);
       this.label(m.label, x, y, { size: 14, weight: 700, color: '#1f5fd6', prio: 3, cands: this.around(10) });
+    }
+    // the village services (live: roads.js plans the medical centre and the car rental's lots, village.js the ski shop):
+    // a rounded square each, labelled, clickable as a target (the car rental from busRoads when main.js passes none)
+    const svc = [];
+    const shop = window.__game?.village?.shopDoor;
+    if (shop) svc.push({ x: shop.x, z: shop.z, label: 'Ski shop', kind: 'shop' });
+    const H = busRoads.hospital;
+    if (H) svc.push({ x: H.ex ?? H.x, z: H.ez ?? H.z, label: 'Medical centre', kind: 'med' });
+    for (const m of svc) {
+      const x = X(m.x), y = Z(m.z);
+      if (!this.inView(x, y)) continue;
+      const med = m.kind === 'med', col = med ? RED : '#1f5fd6';
+      g.fillStyle = med ? '#fff' : col; g.strokeStyle = med ? RED : '#fff'; g.lineWidth = 2;
+      g.beginPath(); g.roundRect(x - 9, y - 9, 18, 18, 4); g.fill(); g.stroke();
+      if (med) { g.fillStyle = RED; g.fillRect(x - 6, y - 2, 12, 4); g.fillRect(x - 2, y - 6, 4, 12); } // (the cross)
+      else { // (a pair of skis)
+        g.strokeStyle = '#fff'; g.lineWidth = 2; g.lineCap = 'round';
+        g.beginPath(); g.moveTo(x - 5, y + 5.5); g.lineTo(x + 3, y - 5.5); g.moveTo(x - 1.5, y + 5.5); g.lineTo(x + 6, y - 5.5); g.stroke();
+        g.lineCap = 'butt';
+      }
+      this.reserve(x, y, 11);
+      this.spot(x, y, 11, m.x, m.z, m.label);
+      if (s >= 0.08) this.label(m.label, x, y, { size: 14, weight: 700, color: med ? '#b01810' : col, prio: 3, cands: this.around(10) });
     }
     for (const m of mk.secrets || []) {
       const x = X(m.x), y = Z(m.z);

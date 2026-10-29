@@ -25,23 +25,31 @@ import { fitModel } from '../core/assets.js';
 
 export const RENTALS = [
   { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 1200, length: 4.3 },
-  { id: 'car_dacia_duster', label: 'Dacia Duster', kind: 'Compact SUV', price: 1000, length: 4.34 },
   { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 2000, length: 4.7 },
   { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 2500, length: 4.7 },
+  { id: 'car_toyota_gr_yaris', label: 'Toyota GR Yaris', kind: 'Rally hot hatch', price: 3000, length: 3.99 },
   { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 4000, length: 5.0 },
+  { id: 'car_mercedes_gls', label: 'Mercedes-Benz GLS', kind: 'Luxury SUV · 7 seats', price: 5000, length: 5.2 },
+  { id: 'car_audi_etron_gt', label: 'Audi e-tron GT', kind: 'Electric grand tourer', price: 7000, length: 4.96 },
   // upstairs, the supercar floor (UPPER: on the mezzanine, rented the same way: walk up, E at it, or pick it here)
   { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 8000, length: 4.96 },
   { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 10000, length: 4.64 },
+  { id: 'car_lamborghini_huracan', label: 'Lamborghini Huracán EVO', kind: 'V10 supercar', price: 12000, length: 4.52 },
 ];
+// (saves from before the Dacia left the fleet, Oct 29: its rental comes back as the Golf)
+const RETIRED = { car_dacia_duster: 'car_vw_golf_gti' };
 export { PAINTS }; // (the configurator's: carconfig.js)
-// the five cars on display downstairs (one of each, each its own colour; LAYOUT.spots: where)
-const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_tesla_m3', 'white'], ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_dacia_duster', 'orange']];
+// the seven cars on display downstairs (one of each, each its own colour; LAYOUT.spots: where, in this order)
+const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_mercedes_gls', 'black'], ['car_audi_etron_gt', 'kingfisher'], ['car_tesla_m3', 'white'],
+  ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_toyota_gr_yaris', 'white']];
 // upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for rent like the rest, at their own rates)
-const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red']];
+const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['car_lamborghini_huracan', 'orange']];
 export const WRECK_FEE = 1500; // (Oct 29 rebalance: was $1,000; a couple of jobs, the cars now rent for $1,000-10,000)
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
 // its road end, the rental bays (lines at x, from / to z), your car's spot, the TOW bay (middle, half length / width)
-const YARD = { hall: -7.6, hw: 14.6, z1: 13.2, bayLines: [-12.4, -9.4, -6.4, -3.4], bayZ: [2.6, 8.4], carX: -7.9, carZ: 5.6,
+// (Oct 29: the bigger hall, 32 x 17.5 m: its glass front 0.6 m further from the road than before (the yard 12.3 m
+// deep, the bays and the TOW bay as they were), its back 16.7 m in, its sides 16.3 m out: inside the cleared site)
+const YARD = { hall: -7.9, hw: 16.0, z1: 13.2, bayLines: [-12.4, -9.4, -6.4, -3.4], bayZ: [2.6, 8.4], carX: -7.9, carZ: 5.6,
   tow: { x: 7.6, z: 6.6, hl: 4.6, hw: 1.9 } };
 const paintHex = (id) => paintOf(id).hex;
 
@@ -77,6 +85,7 @@ export class CarRental {
     }
     // the save: your rental back in the yard
     const s = o.save.rental;
+    if (s && RETIRED[s.id]) s.id = RETIRED[s.id];
     if (s && RENTALS.some((c) => c.id === s.id)) { try { o.save.rental = normConfig(s); this.current = this.spawn(o.save.rental); } catch (e) { console.warn('rental car', e); } }
   }
 

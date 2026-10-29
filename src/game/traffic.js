@@ -13,7 +13,9 @@ import { world } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadAt, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { scenicWalk, scenicSpawn, scenicNetReady } from './bus/scenicdrive.js';
-import { CAR_MODELS, CAR_RARE, carTemplate, carInstance, farMesh } from './cars.js';
+import { CAR_MODELS, pickCar, carTemplate, carInstance, farMesh } from './cars.js';
+// one seeded number in [0, 1) per seed (a hash)
+const mulberry = (a) => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 import { setPlates } from './carconfig.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
@@ -106,15 +108,17 @@ export class Traffic {
       const lot = this.lots.find((l) => Math.hypot(l.ex - r.X[0], l.ez - r.Z[0]) < 12);
       if (best && best.d < 8) this.junctions.push({ access: r, road: best.m, s: best.s, lot });
     }
-    // (the supercars, CAR_RARE: one each among the cars, not one in every seven)
-    const all = CAR_MODELS.filter(([name]) => models[name]), rare = all.filter(([name]) => CAR_RARE.has(name));
-    const avail = all.filter(([name]) => !CAR_RARE.has(name));
-    if (!avail.length) return;
+    // each car's model a weighted draw (cars.js CAR_WEIGHT: the supercars ~1 in 300, the RS6 / e-tron GT / GLS ~1 in
+    // 25, ...), seeded per car so the same cars come back each session
+    const all = CAR_MODELS.filter(([name]) => models[name]);
+    if (!all.length) return;
+    const names = all.map(([n]) => n), lenOf = new Map(all);
+    const draw = (k) => { const n = pickCar(names, mulberry(k * 7919 + 17)); return [n, lenOf.get(n)]; };
     // shared night light pieces
     this.pools = []; // the headlights' pools of light on the road: the few nearest cars at night (carlights.js)
     const colours = [null, 0x1b1d22, 0x9aa0a6, 0x24324e, 0x7a1d1d, 0xf2f2f0];
     for (let k = 0; k < N_CARS; k++) {
-      const [name, length] = k === 7 && rare[0] ? rare[0] : avail[k % avail.length];
+      const [name, length] = draw(k);
       const car = this.makeCar(carTemplate(models[name], length, name), k, colours[k % colours.length]);
       car.name = name;
       this.cars.push(car);
@@ -124,7 +128,7 @@ export class Traffic {
     // its own random way round the network (bus/scenicdrive.js), brought back near you when they're far out of sight
     try {
       if (scenicNetReady()) for (let k = 0; k < N_SCENIC; k++) {
-        const [name, length] = k === 4 && rare[1] ? rare[1] : avail[(k * 5 + 3) % avail.length];
+        const [name, length] = draw(1000 + k);
         const car = this.makeCar(carTemplate(models[name], length, name), N_CARS + k, colours[(k * 2 + 1) % colours.length]);
         car.name = name; car.scenic = true; car.vmax = 9 + (k % 4) * 1.5;
         this.cars.push(car);

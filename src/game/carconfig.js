@@ -111,15 +111,24 @@ export function plateTexture(text) {
 //  Golf GTI   front: the plate holder on the bumper (a raised 0.5 x 0.1 panel). rear: the flat recess under the plate lights.
 //  SLS AMG    front: the flat lip under the grille (0.24-0.31 m). rear: its own plate (EXT_PLATE_plastic) in the bumper.
 //  Taycan     front / rear: the flat plate panels in the bumpers (0.36-0.48 m; no plate in the model).
-//  Duster     front: the plate holder in the bumper (0.54 x 0.1). rear: the recess on the tailgate (0.5 x 0.09, leaning back).
+//  Huracán    front: the flat panel under the nose's centre intake (0.24-0.36 m; no plate there in the model).
+//             rear: its own plate (ManufacturerPlate, US size) between the exhausts' grille, leaning back a little.
+//  GR Yaris   front: the bar across the lower grille (0.46-0.50). rear: its own plate (ManufacturerPlate) on the
+//             tailgate, leaning back with it.
+//  e-tron GT  (a concept: no plates in the model) front: the flat band under the grille (0.40-0.48). rear: the flat
+//             panel in the bumper over the diffuser (0.48-0.52).
+//  GLS        front: the lip under the grille (0.36-0.44). rear: the flat panel in the bumper (0.48-0.76).
 const PLATE_SPOT = {
   car_bmw_x3: { mat: /Nomera/i, f: [0.534, 0], r: [0.965, 15] },
   car_audi_rs6: { mat: /ManufacturerPlate/i, f: [0.49, 9], r: [0.809, 13.7] },
   car_tesla_m3: { mat: /LicensePlate/i, f: [0.421, 0], r: [0.767, 0] },
   car_vw_golf_gti: { f: [0.493, 4], r: [0.515, 4] },
-  car_dacia_duster: { f: [0.60, 0], r: [0.887, 18] },
   car_mercedes_sls: { mat: /EXT_PLATE/i, f: [0.275, 0], r: [0.445, 0] },
   car_porsche_taycan: { f: [0.42, 0], r: [0.42, 0] },
+  car_lamborghini_huracan: { mat: /ManufacturerPlate/i, f: [0.30, 0], r: [0.583, 7] },
+  car_toyota_gr_yaris: { mat: /ManufacturerPlate/i, f: [0.48, 0], r: [0.816, 19] },
+  car_audi_etron_gt: { f: [0.44, 0], r: [0.50, 0] },
+  car_mercedes_gls: { f: [0.40, 0], r: [0.62, 0] },
 };
 export const PLATE_W = 0.52, PLATE_H = 0.11; // EU plate, 520 x 110 mm (the models are at their real size)
 const plateModel = (t) => (t.name || '').replace(/_full$/, '');
@@ -172,8 +181,9 @@ const plateGeo = new THREE.PlaneGeometry(PLATE_W, PLATE_H);
 const CABIN = {
   car_vw_golf_gti: { mat: /leather|perfor|fabric|seatB/i }, car_tesla_m3: { mat: /BlackSuade|interiorGray|LightGrayInterior/i },
   car_bmw_x3: { mat: /FrontSeat|BackSeat/i }, car_audi_rs6: { mat: /InteriorA_Material|InteriorTillingA/i, zone: true },
-  car_dacia_duster: { mat: /UV_int/i, zone: true, grain: 1 },
   car_mercedes_sls: { mat: /^INT_Skin\.\d/i, zone: true }, car_porsche_taycan: { mat: /taycan_turbo_s_cab/i, zone: true },
+  car_lamborghini_huracan: { mat: /InteriorA_Material|InteriorTillingA/i, zone: true }, car_toyota_gr_yaris: { mat: /InteriorA_Material/i, zone: true },
+  car_audi_etron_gt: { mat: /^INTVehicle_Interior_mm_(mat05|mat01)$/, zone: true }, car_mercedes_gls: { mat: /^gls_interior$/, zone: true },
 };
 function cabinMat(src, look, t, spec) {
   const m = src.clone();

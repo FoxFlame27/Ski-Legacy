@@ -10,9 +10,9 @@ import { lampsOn } from '../src/game/carlights.js';
 
 const q = new URLSearchParams(location.search);
 const mode = q.get('mode') || 'raw';
-const LEN = { car_bmw_x3: 4.7, car_audi_rs6: 5.0, car_vw_golf_gti: 4.3, car_tesla_m3: 4.7, car_dacia_duster: 4.34, car_mercedes_sls: 4.64, car_porsche_taycan: 4.96 };
-const ALL = ['car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_tesla_m3', 'car_dacia_duster', 'car_mercedes_sls', 'car_porsche_taycan', 'car_audi_rs6_full', 'car_vw_golf_gti_full', 'car_tesla_m3_full'];
-const DRIVE = ['car_bmw_x3', 'car_audi_rs6_full', 'car_vw_golf_gti_full', 'car_tesla_m3_full', 'car_dacia_duster', 'car_mercedes_sls', 'car_porsche_taycan'];
+const LEN = { car_bmw_x3: 4.7, car_audi_rs6: 5.0, car_vw_golf_gti: 4.3, car_tesla_m3: 4.7, car_mercedes_sls: 4.64, car_porsche_taycan: 4.96, car_lamborghini_huracan: 4.52, car_toyota_gr_yaris: 3.99, car_audi_etron_gt: 4.96, car_mercedes_gls: 5.2 };
+const ALL = ['car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_tesla_m3', 'car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls', 'car_audi_rs6_full', 'car_vw_golf_gti_full', 'car_tesla_m3_full'];
+const DRIVE = ['car_bmw_x3', 'car_audi_rs6_full', 'car_vw_golf_gti_full', 'car_tesla_m3_full', 'car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls'];
 const names = (q.get('cars') || '').split(',').filter(Boolean);
 const list = names.length ? names : mode === 'cockpit' ? DRIVE : ALL;
 const COLS = +(q.get('cols') || (mode === 'cockpit' ? 3 : 4)), CW = +(q.get('w') || 480), CH = +(q.get('h') || 300);

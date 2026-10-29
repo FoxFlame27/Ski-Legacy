@@ -72,12 +72,21 @@ const CAR_SOUND = {
   gti: { cyl: 4, uneven: 0.3, rough: 0.4, scatter: 0.7, grit: 1.3, bright: 1.25, boom: 120, turbo: 1, pops: 0.8, vol: 1 },
   i6: { cyl: 6, uneven: 0.08, rough: 0.12, scatter: 0.4, grit: 0.5, bright: 0.85, boom: 100, turbo: 0.5, pops: 0, vol: 0.8 },
   i4: { cyl: 4, uneven: 0.18, rough: 0.2, scatter: 0.5, grit: 0.6, bright: 0.8, boom: 115, turbo: 0, pops: 0, vol: 0.8 },
+  // the Huracán's V10 (even firing, a high shriek), the GR Yaris's turbo three (a lumpy thrum, a big turbo), the GLS's
+  // V8 (smooth and hushed: no burble, no pops)
+  v10: { cyl: 10, uneven: 0.25, rough: 0.25, scatter: 0.45, grit: 1.2, bright: 1.25, boom: 105, turbo: 0, pops: 1, vol: 1.1 },
+  i3t: { cyl: 3, uneven: 0.4, rough: 0.4, scatter: 0.6, grit: 1.1, bright: 1.1, boom: 100, turbo: 1, pops: 0.6, vol: 0.95 },
+  v8s: { cyl: 8, uneven: 0.35, rough: 0.12, scatter: 0.35, grit: 0.6, bright: 0.75, boom: 80, turbo: 0.4, pops: 0, vol: 0.85 },
 };
 // recorded engines (CREDITS.txt): per profile, the rpm each loop sfx/eng_<profile>_<i>.m4a was recorded at (a steady
 // stretch of a real engine: idle, then held revs / dyno pulls). Played as loops crossfaded and pitched by the revs.
 // v8: a V8 idling and holding revs; gti: a turbo four on a dyno; i6: an inline six idling (+ the dyno four, lower and
 // smoother, for the upper revs); i4: a Dacia / Renault Duster idling and revving. The Tesla keeps its synthesized whine.
 const ENGINE_REC = { v8: [960, 3330], gti: [885, 3150, 4860, 6180], i6: [720, 2960, 4570], i4: [750, 3630] };
+// profiles with no recording of their own: another's loops, played as if recorded at these rpm (lower: pitched up).
+// v10: the V8's, a fifth higher (a V10 fires 10 times per two turns: the V8's note at 4/5 of the revs); i3t: the turbo
+// four's, a little lower (three cylinders); v8s: the V8's as they are (the quieter character: CAR_SOUND)
+const ENGINE_ALIAS = { v10: ['v8', 0.8], i3t: ['gti', 1.12], v8s: ['v8', 1] };
 const ENGINE_REC_LEVEL = 2;
 const START_CATCH = 1.96; // s into sfx/car_start.m4a where the engine catches (drive.js cranks for 0.85 s)
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -698,13 +707,14 @@ export class Audio {
   // The recorded engine of a car profile (ENGINE_REC), loaded the first time you drive that car; null until its loops
   // have loaded (or when they failed / for the electric car: the synthesized engine plays then).
   engineRec(profile) {
-    if (!profile || !ENGINE_REC[profile]) { this.dropEngineRec(); return null; }
+    const [file, k] = ENGINE_ALIAS[profile] || [profile, 1];
+    if (!profile || !ENGINE_REC[file]) { this.dropEngineRec(); return null; }
     this.engBufs ||= {};
     const set = this.engBufs[profile];
     if (set === undefined) {
       this.engBufs[profile] = null; // (loading)
-      Promise.all(ENGINE_REC[profile].map((rpm, i) => this.fetchBuffer(`sfx/eng_${profile}_${i}.m4a`)
-        .then((b) => ({ buf: this.loopify(b, clamp((b.duration - 0.12) * 0.25, 0.03, 0.12)), rpm }))))
+      Promise.all(ENGINE_REC[file].map((rpm, i) => this.fetchBuffer(`sfx/eng_${file}_${i}.m4a`)
+        .then((b) => ({ buf: this.loopify(b, clamp((b.duration - 0.12) * 0.25, 0.03, 0.12)), rpm: rpm * k }))))
         .then((s) => { this.engBufs[profile] = s; })
         .catch((e) => { this.engBufs[profile] = false; console.warn('[audio] engine recordings missing for', profile, '- synthesized engine', e?.message || e); });
       return null;

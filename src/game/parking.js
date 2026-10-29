@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
-import { carTemplate, carInstance, farMesh, CAR_MODELS, CAR_RARE } from './cars.js';
+import { carTemplate, carInstance, farMesh, CAR_MODELS, pickCar } from './cars.js';
 import { setPlates } from './carconfig.js';
 import { mulberry32 } from '../core/noise.js';
 import { nightUniform } from '../world/village.js';
@@ -127,8 +127,6 @@ export class ParkingLots {
         try { this.build(L, surf, paint, models, colliders); } catch (e) { console.warn('car park', L.name, e); }
       }
       scene.add(this.group);
-      // (the Dacia no longer stands at the roadside lay-bys, Oct 28: it parks in the car parks and drives in the traffic
-      // like every other model, CAR_MODELS)
       // parked cars: the car parks well filled (about 55 % of the bays), every model in many paint colours, mostly
       // with a free bay between them; seeded, so it is the same every time. Shared geometry; the detailed car only
       // close to the camera, a one-mesh version further out (update())
@@ -136,7 +134,7 @@ export class ParkingLots {
         const rnd = mulberry32(4417);
         const lots = busRoads.lots.filter((l) => !l.building && l.bays?.length);
         const colours = [null, 0xf2f2f0, 0x1b1d22, 0x9aa0a6, 0x24324e, 0x7a1d1d, 0x5d6166, 0xd8d2c4, 0x2f4a3a, 0xb8b1a3];
-        const kinds = CAR_MODELS.filter(([name]) => models[name] && !CAR_RARE.has(name)), rare = CAR_MODELS.filter(([name]) => models[name] && CAR_RARE.has(name));
+        const kinds = CAR_MODELS.filter(([name]) => models[name]), kindNames = kinds.map(([n]) => n), lenOf = new Map(kinds);
         for (const lot of lots) {
           const want = Math.round(lot.bays.length * 0.55);
           const order = lot.bays.map((b) => ({ b, r: rnd() })).sort((a, b) => a.r - b.r).map((o) => o.b);
@@ -145,8 +143,8 @@ export class ParkingLots {
           for (const pass of [0, 1]) for (const bay of order) {
             if (n >= want || bay.taken) continue;
             if (pass === 0 && lot.bays.some((o) => o.taken && Math.hypot(o.x - bay.x, o.z - bay.z) < 3.2)) continue;
-            // (now and then a supercar, CAR_RARE: ~1 bay in 30; the same draw, so the rest stay as they were)
-            const r = rnd(), [name, length] = rare.length && (r * 997) % 1 < 0.035 ? rare[Math.floor(((r * 997) % 1) / 0.035 * rare.length)] : kinds[Math.floor(r * kinds.length)];
+            // (a weighted draw, cars.js CAR_WEIGHT: the supercars ~1 bay in 300, the RS6 / e-tron GT / GLS ~1 in 25)
+            const name = pickCar(kindNames, rnd()), length = lenOf.get(name);
             const paint = colours[Math.floor(rnd() * colours.length)];
             try { this.parkCar(lot, models[name], colliders, cameraBlockers, { length, bay, paint, name }); n++; } catch (e) { console.warn('parked car', name, e); }
           }
@@ -260,22 +258,6 @@ export class ParkingLots {
     cameraBlockers?.push(block);
     (this.cars ||= []).push({ car, inst, t: carTemplate(gltf, length, name), far: null, full: car.children[0], name, length, paint, collider, block, bay, held: [bay] });
     return bay;
-  }
-
-  roadsideCar(lb, gltf, length, colliders, cameraBlockers) {
-    const inst = carInstance(carTemplate(gltf, length, 'car_dacia_duster')), car = inst.group;
-    car.name = 'parked-roadside-car';
-    car.position.set(lb.x, world.height(lb.x, lb.z) + 0.03, lb.z);
-    car.rotation.y = lb.yaw;
-    this.group.add(car);
-    const collider = { x: lb.x, z: lb.z, hw: 0.97, hd: length / 2, rot: -lb.yaw, h: 1.7, car: true };
-    colliders.push(collider);
-    const block = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.5, length - 0.1), new THREE.MeshBasicMaterial());
-    block.position.y = 0.8; block.visible = false;
-    car.add(block);
-    car.updateMatrixWorld(true);
-    cameraBlockers?.push(block);
-    (this.cars ||= []).push({ car, inst, t: carTemplate(gltf, length, 'car_dacia_duster'), far: null, full: car.children[0], name: 'car_dacia_duster', length, paint: null, collider, block });
   }
 
   /** Per frame: the lamps come on at dusk; parked cars: detailed close to the camera, one mesh further out. */

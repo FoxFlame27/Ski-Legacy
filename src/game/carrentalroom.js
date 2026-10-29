@@ -226,7 +226,7 @@ export class CarRentalRoom {
     const key = new THREE.DirectionalLight(0xffe8cc, 1.2);
     key.position.set(4, H + 6, 6); key.target.position.set(0, 0, 0);
     key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
-    Object.assign(key.shadow.camera, { left: -14, right: 14, top: 10, bottom: -10, near: 1, far: 30 });
+    Object.assign(key.shadow.camera, { left: -17, right: 17, top: 11, bottom: -11, near: 1, far: 32 });
     key.shadow.bias = -0.0004; key.shadow.normalBias = 0.02;
     S.add(key, key.target);
     this.spots = [];
@@ -256,8 +256,8 @@ export class CarRentalRoom {
       hit.position.y = 0.85; hit.userData = { kind: 'car', id: d.id, paint: d.paint, label: spec.label };
       spin.add(hit); this.aimables.push(hit);
       S.add(tt);
-      this.tables.push({ spin, speed: 0.1 + 0.03 * (k % 2), id: d.id, inst, t: t0, spec, x: at[0], z: at[1] });
-      this.obstacles.push({ x: at[0], z: at[1], r: R + 0.1 });
+      this.tables.push({ spin, speed: 0, id: d.id, inst, t: t0, spec, x: at[0], z: at[1] }); // (still: the rows are closer than a turning car's circle)
+      for (const f of [-0.32, 0, 0.32]) this.obstacles.push({ x: at[0] + Math.sin(at[2]) * f * spec.length, z: at[1] + Math.cos(at[2]) * f * spec.length, r: 1.05 });
       // a spotlight on it from the ceiling (no shadow: the key light casts them)
       const under = at[1] < LAYOUT.MZ + 1, sp = new THREE.SpotLight(0xffe2bd, under ? 30 : 70, under ? 8 : 14, under ? 0.8 : 0.5, 0.6, 1.6);
       sp.position.set(at[0], under ? LAYOUT.FL - 0.4 : ROOM.H - 0.4, at[1] + (under ? 1.6 : 1.2)); sp.target.position.set(at[0], 0.5, at[1]);
@@ -276,8 +276,8 @@ export class CarRentalRoom {
       const c = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.39), new THREE.MeshStandardMaterial({ map: card, roughness: 0.6 }));
       c.position.set(0, 1.18, 0.03); c.rotation.x = -0.35; stand.add(c);
       box(0.66, 0.43, 0.02, rim, 0, 1.18, 0.0, stand).rotation.x = -0.35;
-      const toEntry = at[1] > 0 ? Math.atan2(DOOR.x - at[0], ROOM.D / 2 - at[1]) * 0.35 : Math.PI / 2; // (the front row's cards in front, turned a little to the door; the back row's beside, in the gap between the turntables)
-      stand.position.set(at[0] + Math.sin(toEntry) * (R + 0.55), 0, at[1] + Math.cos(toEntry) * (R + 0.55));
+      const toEntry = Math.atan2(DOOR.x - at[0], ROOM.D / 2 - at[1]) * 0.35; // (each card in front of its car, in the walkway, turned a little to the door)
+      stand.position.set(at[0] + Math.sin(toEntry) * 1.9, 0, at[1] + Math.cos(toEntry) * 1.9);
       stand.rotation.y = toEntry;
       S.add(stand);
       this.obstacles.push({ x: stand.position.x, z: stand.position.z, r: 0.25 });
@@ -327,7 +327,8 @@ export class CarRentalRoom {
     });
     // the office: its desk and shelf, the glass partition (a line of circles, the way in at its front end)
     const O = LAYOUT.office;
-    this.obstaclesUp.push({ x: 9.6, z: -5.2, r: 0.75 }, { x: 8.9, z: -5.2, r: 0.5 }, { x: 10.3, z: -5.2, r: 0.5 }, { x: 10.6, z: -ROOM.D / 2 + 0.2, r: 0.4 }, { x: 9.6, z: -6.0, r: 0.3 });
+    const OX = LAYOUT.officeX, OZ = -ROOM.D / 2 + 1.8; // (carrentalshell.js: the office's desk, chair, shelf)
+    this.obstaclesUp.push({ x: OX, z: OZ, r: 0.75 }, { x: OX - 0.7, z: OZ, r: 0.5 }, { x: OX + 0.7, z: OZ, r: 0.5 }, { x: OX + 1.0, z: -ROOM.D / 2 + 0.2, r: 0.4 }, { x: OX, z: OZ - 0.8, r: 0.3 });
     for (let z = -ROOM.D / 2 + 0.2; z <= O.gap; z += 0.3) this.obstaclesUp.push({ x: O.x0, z, r: 0.05 });
     // the ground floor: the posts under the mezzanine's edge, the stair's side (only its foot is open)
     for (const px of LAYOUT.posts) this.obstacles.push({ x: px, z: LAYOUT.MZ - 0.14, r: 0.16 });

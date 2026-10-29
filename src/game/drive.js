@@ -30,11 +30,17 @@ export const CAR_SPECS = {
   car_audi_rs6: { label: 'Audi RS6 Avant', accel: 7.4, top: 78, sound: 'v8' },
   car_vw_golf_gti: { label: 'VW Golf GTI', accel: 5.8, top: 68, sound: 'gti' },
   car_tesla_m3: { label: 'Tesla Model 3', accel: 7.0, top: 62, electric: true },
-  car_dacia_duster: { label: 'Dacia Duster', accel: 3.8, top: 50, sound: 'i4' },
   // the supercars upstairs at the rental: the SLS's 6.2 V8 (420 kW, 0-100 in 3.8 s, 317 km/h), the Taycan Turbo S
   // (2 motors, 2.8 s, 260 km/h)
   car_mercedes_sls: { label: 'Mercedes SLS AMG', accel: 8.2, top: 88, sound: 'v8' },
   car_porsche_taycan: { label: 'Porsche Taycan Turbo S', accel: 9.6, top: 72, electric: true },
+  // Oct 29: the Huracán EVO (5.2 V10, 470 kW, 0-100 in 2.9 s, 325 km/h: revs to 8,500, rev: the engine's speed over
+  // the others'), the GR Yaris (1.6 turbo three, 192 kW, 5.5 s, 230 km/h), the e-tron GT concept (2 motors, 440 kW,
+  // 3.5 s, 240 km/h), the GLS 580 (4.0 V8 biturbo + EQ boost, ~270 kW, 5.3 s, 250 km/h)
+  car_lamborghini_huracan: { label: 'Lamborghini Huracán EVO', accel: 9.4, top: 90, sound: 'v10', rev: 1.3 },
+  car_toyota_gr_yaris: { label: 'Toyota GR Yaris', accel: 6.6, top: 64, sound: 'i3t', rev: 1.08 },
+  car_audi_etron_gt: { label: 'Audi e-tron GT', accel: 8.4, top: 67, electric: true },
+  car_mercedes_gls: { label: 'Mercedes-Benz GLS', accel: 6.0, top: 69, sound: 'v8s' },
 };
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 const RATIOS = [3.6, 2.2, 1.5, 1.15, 0.92, 0.76], FINAL = 3.7, IDLE = 820, REDLINE = 6400;
@@ -55,9 +61,10 @@ const KNOCK_V = 26 / 3.6; // ...a knock (below a crash): a few % of damage and a
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
 // kerb weights (kg), for the knocks between cars
-const MASS = { car_bmw_x3: 1900, car_audi_rs6: 2100, car_vw_golf_gti: 1450, car_tesla_m3: 1850, car_dacia_duster: 1300, car_mercedes_sls: 1620, car_porsche_taycan: 2300 };
+const MASS = { car_bmw_x3: 1900, car_audi_rs6: 2100, car_vw_golf_gti: 1450, car_tesla_m3: 1850, car_mercedes_sls: 1620, car_porsche_taycan: 2300,
+  car_lamborghini_huracan: 1420, car_toyota_gr_yaris: 1280, car_audi_etron_gt: 2300, car_mercedes_gls: 2500 };
 // driven wheels (the rest all-wheel drive)
-const DRIVE = { car_vw_golf_gti: 'fwd', car_dacia_duster: 'fwd', car_mercedes_sls: 'rwd' };
+const DRIVE = { car_vw_golf_gti: 'fwd', car_mercedes_sls: 'rwd' };
 // two cars' boxes (x, z, yaw, half width hw, half length hd) overlapping? -> { nx, nz (from B to A), depth, px, pz
 // (a contact point: the corners of one inside the other) } or null
 function obb(A, B) {
@@ -428,7 +435,7 @@ export class Drive {
       if (d.gear === 'D') {
         if (thr) Fdrive = spec.electric ? Math.min(Fmax, (Fmax * 0.42 * spec.top) / Math.max(1, au)) * thr : Fmax * gearK * curve * thr * (d.shiftT > 0 ? 0.3 : 1);
         if (brk) Fbrake = m * 10 * brk;
-        else if (!thr && u > 1) Fbrake = m * (spec.electric ? 1.1 : 0.35 + 0.8 * (d.rpm / REDLINE)); // (engine braking / regen)
+        else if (!thr && u > 1) Fbrake = m * (spec.electric ? 1.1 : 0.35 + 0.8 * (d.rpm / (REDLINE * (spec.rev || 1)))); // (engine braking / regen)
       } else if (d.gear === 'R') {
         if (brk) Fdrive = u > -5.5 ? -m * 3.4 * (s.road ? 1 : 0.7) : 0;
         if (thr) Fbrake = m * 10;
@@ -519,12 +526,13 @@ export class Drive {
     if (spec.electric) d.rpm = IDLE + speedAbs * 220;
     else {
       d.shiftT = Math.max(0, d.shiftT - dt);
-      const rpmAt = (gi) => (speedAbs / wr) * RATIOS[gi] * FINAL * 60 / (2 * Math.PI);
+      const rev = spec.rev || 1; // (a high-revving engine: the same gears, every rpm that much higher)
+      const rpmAt = (gi) => (speedAbs / wr) * RATIOS[gi] * FINAL * 60 / (2 * Math.PI) * rev;
       if (d.gear === 'D') {
-        if (rpmAt(d.gi) > 5800 && d.gi < RATIOS.length - 1) { d.gi++; d.shiftT = 0.25; }
-        else if (d.gi > 0 && rpmAt(d.gi) < 2200) d.gi--;
+        if (rpmAt(d.gi) > 5800 * rev && d.gi < RATIOS.length - 1) { d.gi++; d.shiftT = 0.25; }
+        else if (d.gi > 0 && rpmAt(d.gi) < 2200 * rev) d.gi--;
       } else d.gi = 0;
-      d.rpm = clamp(Math.max(IDLE + thr * 600, rpmAt(d.gi)), IDLE, REDLINE);
+      d.rpm = clamp(Math.max(IDLE + thr * 600, rpmAt(d.gi)), IDLE, REDLINE * rev);
     }
     this.collide();
     this.bash(dt);

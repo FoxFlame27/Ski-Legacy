@@ -79,7 +79,12 @@ const SEATS = [
   // in the battery's "foot garages")
   { name: 'car_mercedes_sls', traffic: true, size: [4.64, 1.26], wheel: [0.768, -0.095], d: [0.43, 0.29, -0.675, -0.32], r: null, floor: [0.24, 0.24], roof: [1.17, 1.15] },
   { name: 'car_porsche_taycan', traffic: true, size: [4.96, 1.36], wheel: [0.834, 0.352], d: [0.37, 0.37, -0.255, -0.27], r: [0.38, 0.47, -1.08, -0.4], floor: [0.30, 0.30], roof: [1.28, 1.22] },
-  { name: 'car_dacia_duster', size: [4.34, 1.92], wheel: [1.032, 0.546], d: [0.372, 0.63, -0.153, -0.25], r: [0.38, 0.624, -0.871, -0.27], floor: [0.39, 0.40], roof: [1.57, 1.59] },
+  // (Oct 29: the Huracán, a two-seater, low; the GR Yaris; the e-tron GT; the GLS, seven seats: r3 its third row
+  // [x, y, z, lean], cramped behind the second, roof[2] over it)
+  { name: 'car_lamborghini_huracan', traffic: true, size: [4.52, 1.18], wheel: [0.779, 0.359], d: [0.37, 0.27, -0.24, -0.5], r: null, floor: [0.15, 0.15], roof: [1.15, 1.10] },
+  { name: 'car_toyota_gr_yaris', traffic: true, size: [3.99, 1.44], wheel: [0.918, 0.277], d: [0.35, 0.47, -0.26, -0.47], r: [0.38, 0.54, -1.085, -0.35], floor: [0.21, 0.23], roof: [1.40, 1.37] },
+  { name: 'car_audi_etron_gt', traffic: true, size: [4.96, 1.38], wheel: [0.918, 0.402], d: [0.37, 0.36, -0.255, -0.37], r: [0.38, 0.475, -0.995, -0.5], floor: [0.24, 0.24], roof: [1.30, 1.28] },
+  { name: 'car_mercedes_gls', traffic: true, size: [5.20, 1.86], wheel: [1.156, 0.625], d: [0.42, 0.79, -0.01, -0.4], r: [0.42, 0.73, -1.16, -0.33], r3: [0.40, 0.61, -1.64, -0.22], floor: [0.50, 0.49], roof: [1.66, 1.77, 1.62] },
 ];
 const DEPTH = 0.13, DEPTH_U = 0.11; // hip joint / shoulder joints to the backrest (pelvis, shoulder blades, jacket)
 const RECLINE = 0.2; // (rad) a passenger's back leant into a car seat (they recline ~10-30 degrees), the head levelled
@@ -237,6 +242,7 @@ export class CarPeople {
       const back = S.r ? rnd() : 1; // (a two-seater: nobody in the back)
       if (back < 0.22) put(pick(P), (rnd() < 0.5 ? 1 : -1) * S.r[0], rear, S.roof[1]);
       else if (back < 0.3) { put(pick(P), S.r[0], rear, S.roof[1]); put(pick(P), -S.r[0], rear, S.roof[1]); }
+      if (S.r3 && rnd() < 0.1) put(pick(P), (rnd() < 0.5 ? 1 : -1) * S.r3[0], S.r3.slice(1), S.roof[2] ?? S.roof[1]); // (a third row)
     }
     return g;
   }

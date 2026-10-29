@@ -9,7 +9,8 @@ import { busRoads, ROAD_HALF } from './bus/roads.js';
 
 const IDS = ['car-fl', 'car-fr', 'car-rl', 'car-rr'];
 // tyre widths (m): the real ones (245, 285, 225, 235, 215 mm), the RS6's narrowed to what one strip column takes
-const TYRE = { car_bmw_x3: 0.245, car_audi_rs6: 0.262, car_vw_golf_gti: 0.225, car_tesla_m3: 0.235, car_dacia_duster: 0.22, car_mercedes_sls: 0.285, car_porsche_taycan: 0.285 };
+const TYRE = { car_bmw_x3: 0.245, car_audi_rs6: 0.262, car_vw_golf_gti: 0.225, car_tesla_m3: 0.235, car_mercedes_sls: 0.285, car_porsche_taycan: 0.285,
+  car_lamborghini_huracan: 0.305, car_toyota_gr_yaris: 0.225, car_audi_etron_gt: 0.285, car_mercedes_gls: 0.285 };
 const G_MAX = 0.133; // groove half width: past 0.2 m quad half width (groove x 1.5) the trails split a strip in 6 columns
 const CELL = 16;     // road grid (m)
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);

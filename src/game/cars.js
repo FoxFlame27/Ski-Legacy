@@ -8,9 +8,27 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 import { fitModel, dequantize } from '../core/assets.js';
 
 /** Car models: [model name, real length (m)]. Add a car here (and to MODEL_LIST) and it parks / drives too. */
-export const CAR_MODELS = [['car_bmw_x3', 4.7], ['car_audi_rs6', 5.0], ['car_vw_golf_gti', 4.3], ['car_tesla_m3', 4.7], ['car_dacia_duster', 4.34], ['car_mercedes_sls', 4.64], ['car_porsche_taycan', 4.96]];
+export const CAR_MODELS = [['car_bmw_x3', 4.7], ['car_audi_rs6', 5.0], ['car_vw_golf_gti', 4.3], ['car_tesla_m3', 4.7], ['car_mercedes_sls', 4.64], ['car_porsche_taycan', 4.96], ['car_lamborghini_huracan', 4.52], ['car_toyota_gr_yaris', 3.99], ['car_audi_etron_gt', 4.96], ['car_mercedes_gls', 5.2]];
 // rare in the traffic and the car parks (the supercars: one in a while, not one in seven)
-export const CAR_RARE = new Set(['car_mercedes_sls', 'car_porsche_taycan']);
+export const CAR_RARE = new Set(['car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris']);
+// spawn chances in the traffic and the car parks, per car spawned (Oct 29, the user's exact rates): the Huracán 1 in
+// 240, the SLS 1 in 225, the GR Yaris 1 in 80, the GLS 1 in 50, the Taycan 1 in 40, the RS6 and the e-tron GT 1 in 25
+// each, the X3 15 %; the Golf GTI and the Model 3 share the rest evenly (35.2 % each). pickCar() draws by these
+// (normalised over the models given, so it still works with one missing)
+const W_FIXED = {
+  car_lamborghini_huracan: 1 / 240, car_mercedes_sls: 1 / 225, car_toyota_gr_yaris: 1 / 80, car_mercedes_gls: 1 / 50,
+  car_porsche_taycan: 1 / 40, car_audi_rs6: 1 / 25, car_audi_etron_gt: 1 / 25, car_bmw_x3: 0.15,
+};
+const W_REST = (1 - Object.values(W_FIXED).reduce((a, b) => a + b, 0)) / 2;
+export const CAR_WEIGHT = { ...W_FIXED, car_vw_golf_gti: W_REST, car_tesla_m3: W_REST };
+/** A model drawn from `names` by CAR_WEIGHT; u in [0, 1) (a seeded random, or Math.random()). */
+export function pickCar(names, u = Math.random()) {
+  let sum = 0;
+  for (const n of names) sum += CAR_WEIGHT[n] ?? W_REST;
+  let a = u * sum;
+  for (const n of names) { a -= CAR_WEIGHT[n] ?? W_REST; if (a < 0) return n; }
+  return names[names.length - 1];
+}
 
 const cache = new Map();
 
@@ -18,9 +36,12 @@ const cache = new Map();
 // real sizes (m): length, width, height (the models are fitted by length, the rest is checked and logged)
 export const REAL = {
   car_bmw_x3: [4.71, 1.89, 1.68], car_audi_rs6: [4.99, 1.95, 1.46], car_vw_golf_gti: [4.29, 1.79, 1.46],
-  car_tesla_m3: [4.69, 1.85, 1.44], car_dacia_duster: [4.34, 1.80, 1.69],
+  car_tesla_m3: [4.69, 1.85, 1.44],
   car_mercedes_sls: [4.64, 1.94, 1.26], car_porsche_taycan: [4.96, 1.97, 1.38],
+  car_lamborghini_huracan: [4.52, 1.93, 1.17], car_toyota_gr_yaris: [3.99, 1.81, 1.46],
+  car_audi_etron_gt: [4.96, 1.96, 1.38], car_mercedes_gls: [5.21, 1.96, 1.82],
 };
+const PRECISE = new Set(['car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls']);
 const JUNK = /plane|ground|shadow|floor|backdrop|base_?plate|studio/i;
 const REAR = /tail|rear|back_?light|red_?gla|red_?light|glow_red|reflector/i, FRONT = /head|front_?light|front/i;
 // Which way each model's nose points as it comes in, checked by eye (tools/carlab.html?mode=raw: grille and headlights
@@ -28,13 +49,35 @@ const REAR = /tail|rear|back_?light|red_?gla|red_?light|glow_red|reflector/i, FR
 // traffic and far-LOD versions all come from this. A car not listed here falls back to a guess (lights, longest side).
 export const FACING = {
   car_bmw_x3: 0, car_audi_rs6: 0, car_audi_rs6_full: 0, car_vw_golf_gti: 0, car_vw_golf_gti_full: 0,
-  car_tesla_m3: 0, car_tesla_m3_full: 0, car_dacia_duster: -Math.PI / 2, car_mercedes_sls: 0, car_porsche_taycan: 0,
+  car_tesla_m3: 0, car_tesla_m3_full: 0, car_mercedes_sls: 0, car_porsche_taycan: 0,
+  car_lamborghini_huracan: 0, car_toyota_gr_yaris: 0, car_audi_etron_gt: 0, car_mercedes_gls: 0,
 };
 // parts of a model left out altogether: the SLS's broken-glass overlay (a second skin over every window and lamp
 // lens), its motion-blurred rim discs (invisible at rest, drawn over the real rims) and INT_vetro: a second, inner
 // skin on every window (a white haze texture at ~10 % alpha, rough 1: the "super dirty" windows; Glass_Windows is the
 // glass itself, made the same plain tinted glass as every other car's)
-const HIDE = { car_mercedes_sls: /DAMAGE_GLASS|Rim_Blurred|INT_vetro\./i };
+// The GR Yaris (a TNR kit, like the RS6 and the Huracán): WindowInside, a second, inner skin on every window (the
+// same tinted glass twice: dark, "dirty" windows) and LightEmissive, a fully transparent copy of every lamp (alpha 0:
+// 10k triangles drawn blended for nothing). The Huracán's glass is a single layer (Window_Material1).
+const HIDE = { car_mercedes_sls: /DAMAGE_GLASS|Rim_Blurred|INT_vetro\./i, car_toyota_gr_yaris: /WindowInside_Material|LightEmissive/i };
+// Materials that came over as gltf-transform palette materials ("PaletteMaterial00N": their own names lost; the
+// original names are still in the node names): renamed back, so the paint, glass, lamp and plate rules find them.
+const RENAME = {
+  car_lamborghini_huracan: { PaletteMaterial001: 'CalliperGloss_Material1', PaletteMaterial002: 'Base_Material1', PaletteMaterial003: 'PaintTNR_Material1',
+    PaletteMaterial004: 'Window_Material1', PaletteMaterial005: 'red_glass', PaletteMaterial006: 'glass_light', PaletteMaterial007: 'glass_surr' },
+  car_toyota_gr_yaris: { PaletteMaterial001: 'Base_Material1', PaletteMaterial002: 'LightEmissiveA_Material1', PaletteMaterial003: 'Paint_Material1',
+    PaletteMaterial004: 'WindowInside_Material1', PaletteMaterial005: 'glass_light', PaletteMaterial006: 'Window_Material1', PaletteMaterial007: 'red_glass3' },
+  // the GLS (a BeamNG mod: its materials palette-merged and its meshes joined, so a material's name is the only clue
+  // left, from where its triangles sit on the car): the body paint (four: hood / wings, doors and sills, bumpers,
+  // tailgate), the windows (the front door glass, the dark privacy glass at the back and the sunroof), the glass of
+  // the windscreen and the tail lamps (one palette: clear and red), the headlamps' LED signature, the trims, the
+  // cabin, the dash
+  car_mercedes_gls: { PaletteMaterial001: 'gls_trim', PaletteMaterial002: 'gls_glass_dark', PaletteMaterial003: 'gls_glass_red',
+    PaletteMaterial004: 'gls_trim_wheel', PaletteMaterial005: 'gls_interior', PaletteMaterial006: 'gls_dash_wood', PaletteMaterial007: 'gls_paint_tailgate',
+    PaletteMaterial008: 'gls_dash', PaletteMaterial009: 'gls_glass', PaletteMaterial010: 'gls_engine', PaletteMaterial011: 'gls_paint_front',
+    PaletteMaterial012: 'gls_paint_side', PaletteMaterial013: 'gls_glass_privacy', PaletteMaterial014: 'gls_paint_wing', PaletteMaterial015: 'gls_glass_door',
+    PaletteMaterial016: 'gls_headlight_lsig' },
+};
 // per-model material fixes (the Sketchfab SLS came over from a spec / gloss set-up: its black trim plastic, tail
 // lamps and cabin plastics fully or half metallic, its leather and plastics at roughness 0.2 with a full-strength
 // specular, a metallic carpet, a light grey headliner: a car of mirrors, far brighter than the rest. Brought in line
@@ -54,6 +97,34 @@ const MAT_FIX = {
     [/^INT_(Plastica_Bianca|Plastica_rossa|Carpaint|Decals_Alu|Pedali)/, { spec: 0.35 }],
     [/^INT_Vetro_Display/, { roughness: 0.05, opacity: 0.12, spec: 0.5 }],
   ],
+  // the TNR kits (Huracán, GR Yaris): the cabin atlas half to fully metallic (0.5-0.75) and glossy, the Huracán's
+  // TexturedA trims (in the cabin) a mirror (metalness 1, roughness 0.16): toned to the other cars' interiors
+  car_lamborghini_huracan: [
+    [/InteriorA_Material/, { metalness: 0.25, roughness: 0.62, spec: 0.3 }],
+    [/InteriorTillingA/, { metalness: 0.2, roughness: 0.7, spec: 0.3 }],
+    [/^Interior_C[12]$/, { metalness: 0.05, roughness: 0.75, spec: 0.3 }],
+    [/TexturedA_Material/, { metalness: 0.45, roughness: 0.42, spec: 0.4 }],
+  ],
+  car_toyota_gr_yaris: [
+    [/InteriorA_Material/, { metalness: 0.25, roughness: 0.62, spec: 0.3 }],
+    [/^color_int$/, { metalness: 0.05, roughness: 0.7, spec: 0.3 }],
+    [/Textured[23]?A_Material/, { metalness: 0.3, roughness: 0.7, spec: 0.4 }],
+  ],
+  // the e-tron GT's cabin: every material 0.25-0.8 metallic (the dash and console a dark mirror, mat09 metalness
+  // 0.8 at roughness 0), its exterior trims (ext / misc / lights housings) glossy chrome-ish: brought down
+  car_audi_etron_gt: [
+    [/^INTVehicle_Interior_mm_mat09$/, { metalness: 0.1, roughness: 0.45, spec: 0.4 }],
+    [/^INTVehicle_Interior_mm_(int1|mat01|mat05|mat13|sw1|mat11)$/, { metalness: 0.1, roughness: 0.65, spec: 0.3 }],
+    [/^INTVehicle_Interior_mm_(mat15|mat07|mat03)$|^cross$/, { metalness: 0.4, roughness: 0.4, spec: 0.4 }],
+    [/^gtVehicle_Exterior_mm_(ext1|cab1|chassis1)$/, { metalness: 0.2, roughness: 0.45 }],
+    [/^gtVehicle_Exterior_mm_tyre/, { metalness: 0, roughness: 0.85 }],
+  ],
+  // the GLS's palettes: metalness and roughness per texel, most of the trims and the whole cabin at metalness ~1 (a
+  // car of mirrors): the factor scales the palette's own (chrome stays the brightest, the leather and plastics dull)
+  car_mercedes_gls: [
+    [/^gls_(interior|dash|dash_wood)$/, { metalness: 0.15, roughness: 1, spec: 0.3, flat: 0.62 }],
+    [/^gls_(trim|trim_wheel|engine)$/, { metalness: 0.55, roughness: 1 }],
+  ],
 };
 function fixMat(model, m) {
   const list = MAT_FIX[model];
@@ -64,6 +135,8 @@ function fixMat(model, m) {
   if (f.roughness !== undefined) out.roughness = f.roughness;
   if (f.color !== undefined) out.color.multiplyScalar(f.color);
   if (f.opacity !== undefined) out.opacity = f.opacity;
+  // (flat: a palette whose roughness texels are 0 (mirror-smooth) everywhere: the texture's roughness dropped for one)
+  if (f.flat !== undefined) { out.roughnessMap = null; out.roughness = f.flat; }
   if (f.spec !== undefined && out.isMeshPhysicalMaterial) out.specularIntensity = Math.min(out.specularIntensity ?? 1, f.spec);
   return out;
 }
@@ -152,9 +225,46 @@ const LAMP_RULES = {
       : p.third ? 'third' : p.front ? (p.low ? null : 'head') : p.rear && !p.low ? 'tail' : null,
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
   },
-  car_dacia_duster: {
-    test: /Headlight|Taillight/i,
-    kind: (l, p) => /Headlight/i.test(l) ? (p.front ? 'head' : null) : /Taillight/i.test(l) ? (p.rear && !p.low ? 'tail' : null) : null,
+  // Lamborghini Huracán EVO and Toyota GR Yaris (TNR kits, like the RS6): every lamp one textured material (LightA:
+  // the texture draws the LED signature), its clear cover glass (glass_light: headlamp lenses, the tail lamps' cover),
+  // the red glass over the tail lamps (red_glass)
+  car_lamborghini_huracan: {
+    test: /LightA_Material|red_glass|glass_light/i,
+    kind: (l, p) => /red_glass/i.test(l) ? (p.third ? 'third' : p.rear ? 'lensR' : null)
+      : /glass_light/i.test(l) ? (p.front ? 'lensF' : p.rear ? 'lensR' : null)
+      : p.mirror ? 'ind' : p.front ? 'head' : p.third ? 'third' : p.rear ? 'tail' : null,
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+  },
+  car_toyota_gr_yaris: {
+    test: /LightA_Material|red_glass|glass_light/i,
+    kind: (l, p) => /red_glass/i.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'lensR' : null)
+      : /glass_light/i.test(l) ? (p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null)
+      : p.mirror ? 'ind' : p.front ? 'head' : p.third ? 'third' : p.rear && !p.low ? 'tail' : null,
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+  },
+  // Audi e-tron GT (concept): the lamp units (mm_lights: the matrix headlamps, the tail lamps and the light bar,
+  // the mirrors' indicators, the third brake light; the grille's lit frame and the diffuser's lamp never lit), their
+  // light guides (TL: the DRL strip in the headlamps, the tail lamps' and the light bar's), the brake lamps (Emiss),
+  // the cover glass (Glass_light: front / back)
+  car_audi_etron_gt: {
+    test: /mm_lights|Glass_light/i,
+    kind: (l, p) => /Glass_light/i.test(l) ? (p.front ? 'lensF' : p.rear && !p.low ? 'lensR' : null)
+      : /\bEmiss\b/.test(l) ? (p.third ? 'third' : p.rear && !p.low ? 'tail' : null)
+      : /_TL_/.test(l) ? (p.front ? 'drl' : p.rear && !p.low ? 'tail' : null)
+      : p.mirror ? 'ind' : p.front ? (Math.abs(p.x) > 0.4 && !p.low ? 'head' : null) : p.third ? 'third' : p.rear && !p.low && Math.abs(p.x) > 0.1 ? 'tail' : null,
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+  },
+  // Mercedes-Benz GLS: the headlamps' LED signature (the only lamp material of its own); the tail lamps are the red
+  // part of the glass palettes (gls_glass / gls_glass_red at the back, at lamp height: lit red as the tail lamps),
+  // the headlamps' cover glass part of the dark glass palette (front: a clear lens). The third brake light: added on
+  // the tailgate spoiler above the rear window (THIRD_AT)
+  car_mercedes_gls: {
+    test: /gls_headlight_lsig|gls_glass(_red|_dark)?\b/i,
+    kind: (l, p) => /lsig/i.test(l) ? (p.front ? 'head' : null)
+      : /gls_glass(_red)?\b/.test(l) ? (p.rear && !p.low && !p.hi && Math.abs(p.x) > 0.3 ? 'tail' : null)
+      : /gls_glass_dark\b/.test(l) ? (p.front && p.z > 1.9 && Math.abs(p.x) > 0.3 ? 'lensF' : null)
+      : null,
+    lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, tail: { color: 0x7a0c0c, opacity: 0.78, roughness: 0.05, metalness: 0.1, glow: 1 } },
   },
 };
 // Materials drawn as cut-outs (opaque, depth-written, alpha-tested) instead of blended. The RS6's whole cabin is one
@@ -162,22 +272,23 @@ const LAMP_RULES = {
 // depth writes: the steering wheel's airbag and spokes were drawn over by whatever lay behind them (the column, the
 // instrument cluster) and looked see-through. Its texture's alpha: solid panels (the airbag, spokes, dash) with soft
 // grey seams, and cut-out decals (stitching, button symbols): cut at 0.3, so the seams stay solid (no slits).
-const CUTOUT = { car_audi_rs6: /InteriorA_Material/i };
+const CUTOUT = { car_audi_rs6: /InteriorA_Material/i, car_lamborghini_huracan: /InteriorA_Material/i, car_toyota_gr_yaris: /InteriorA_Material/i };
 // The four rings on the steering wheel's airbag (RS6): the model's own badge there is a dark decal on the black hub,
 // lost in it, where the real car's are chrome. Four thin chrome tori laid exactly on that decal, from its UV layout
 // (the badge texture draws the rings stacked down its right-hand column): u, v of each ring's centre, the ring's radius
 // and the tube's (texture units). They are part of the steering wheel, so they turn with it.
 const HUB_RINGS = { car_audi_rs6: { mat: /BadgeA_Material/i, u: 0.809, v: [0.18, 0.391, 0.602, 0.813], r: 0.152, tube: 0.021 } };
 // no high-mounted brake light in the model: where to add one (the rear window's glass)
-const THIRD_AT = { car_tesla_m3: { glass: /glassDark/i, at: 'window' }, car_dacia_duster: { glass: /Foglight/i, at: 'spoiler' } };
+const THIRD_AT = { car_tesla_m3: { glass: /glassDark/i, at: 'window' }, car_mercedes_gls: { glass: /gls_glass_privacy/i, at: 'spoiler' } };
 // The body paint: the material the paint colour tints (cars with no material of their own called *paint*: the Dacia's
 // body is UV_body, its paint baked orange into the shared atlas: neutralised to a light grey in a copy of its own,
 // neutralPaint, so any colour multiplies cleanly; the Dacia's own orange is then its material's colour)
-const PAINT_MAT = { car_dacia_duster: /^UV_body/, car_porsche_taycan: /ext_carmine_red/i };
+const PAINT_MAT = { car_porsche_taycan: /ext_carmine_red/i, car_lamborghini_huracan: /^PaintTNR_Material/, car_toyota_gr_yaris: /^Paint_Material/, car_audi_etron_gt: /^CarPaint$/, car_mercedes_gls: /^gls_paint/ };
 export const isPaint = (model, m) => !m.transparent && (PAINT_MAT[model] || /paint/i).test(m.name || '');
-// (the colour baked in, and the texel value its clean paint has: the Dacia's orange, the Taycan's Carmine Red)
-const NEUTRAL = { car_dacia_duster: 0xef8e2c, car_porsche_taycan: 0xa8181f };
-const NEUTRAL_HUE = { car_porsche_taycan: 'red' };
+// (the colour baked in, and the texel value its clean paint has: the Taycan's Carmine Red, the Huracán's orange)
+// (the Huracán's Arancio Borealis and the Yaris's white: one palette texel each; 'flat': every texel to the grey)
+const NEUTRAL = { car_porsche_taycan: 0xa8181f, car_lamborghini_huracan: 0xf14b03, car_toyota_gr_yaris: 0xe4e4e4 };
+const NEUTRAL_HUE = { car_porsche_taycan: 'red', car_toyota_gr_yaris: 'flat' };
 function neutralPaint(m, hex, hue = 'orange') {
   const img = m.map?.image;
   if (!img?.width) return m;
@@ -188,10 +299,10 @@ function neutralPaint(m, hex, hue = 'orange') {
     const r = a[i], gg = a[i + 1], b = a[i + 2];
     // how orange this texel is (saturated, red over green over blue): the paint; its shade kept as a grey
     // (red: how much red stands over both green and blue)
-    const k = hue === 'red' ? Math.min(1, Math.max(0, ((r - Math.max(gg, b)) / Math.max(1, r) - 0.45) * 4)) * Math.min(1, Math.max(0, (r - 50) / 40))
+    const k = hue === 'flat' ? 1 : hue === 'red' ? Math.min(1, Math.max(0, ((r - Math.max(gg, b)) / Math.max(1, r) - 0.45) * 4)) * Math.min(1, Math.max(0, (r - 50) / 40))
       : Math.min(1, Math.max(0, ((r - b) / Math.max(1, r) - 0.45) * 4)) * (r > gg && gg > b ? 1 : 0) * Math.min(1, Math.max(0, (r - 60) / 50));
     if (k <= 0) continue;
-    const v = Math.min(255, (r / (hue === 'red' ? 155 : 220)) * 236);
+    const v = hue === 'flat' ? 236 : Math.min(255, (r / (hue === 'red' ? 155 : 220)) * 236);
     a[i] = r + (v - r) * k; a[i + 1] = gg + (v - gg) * k; a[i + 2] = b + (v - b) * k;
   }
   g.putImageData(d, 0, 0);
@@ -203,7 +314,7 @@ function neutralPaint(m, hex, hue = 'orange') {
 // A soft cabin atlas made crisper (the Dacia's: its whole interior in one heavily compressed 1024 texture, ~3 mm a
 // texel, magnified ~5x from the driver's seat): upscaled 2x (smooth), then an unsharp mask, in place (every material
 // sharing it sees it); off the main frame (an idle callback), once.
-const CRISP = { car_dacia_duster: /^UV_int$/ };
+const CRISP = {};
 function crispMap(tex) {
   const img = tex?.image;
   if (!img?.width || tex.userData.crisp) return;
@@ -289,7 +400,8 @@ function synthThird(groups, lampGroups, anchors, spec, halfL, carH) {
 export function fitCar(gltf, length, name) {
   const m = gltf.scene.clone(true);
   const junk = [];
-  const hide = HIDE[(name || '').replace(/_full$/, '')];
+  const hide = HIDE[(name || '').replace(/_full$/, '')], ren = RENAME[(name || '').replace(/_full$/, '')];
+  if (ren) m.traverse((o) => { if (o.isMesh) for (const x of [].concat(o.material)) if (x && ren[x.name]) x.name = ren[x.name]; });
   m.traverse((o) => { if (!o.isMesh) return; const lbl = `${o.name} ${[].concat(o.material).map((x) => x?.name).join(' ')}`; if (JUNK.test(lbl) || hide?.test(lbl)) junk.push(o); });
   for (const o of junk) o.parent?.remove(o);
   m.updateMatrixWorld(true);
@@ -317,17 +429,20 @@ export function fitCar(gltf, length, name) {
     console.warn(`car ${name}: not in FACING, nose guessed (check it in tools/carlab.html)`);
   }
   m.updateMatrixWorld(true);
-  box.setFromObject(m);
+  // (precise: every vertex. The newer models' nodes carry turns that are not right angles: their loose box (each
+  // mesh's own box, turned) reached 0.18 m below the e-tron GT's tyres and the car floated over the ground)
+  const exact = PRECISE.has((name || '').replace(/_full$/, ''));
+  box.setFromObject(m, exact);
   const s = length / box.getSize(v).z;
   m.scale.multiplyScalar(s);
   m.updateMatrixWorld(true);
-  box.setFromObject(m);
+  box.setFromObject(m, exact);
   const c = box.getCenter(new THREE.Vector3());
   m.position.sub(new THREE.Vector3(c.x, box.min.y, c.z));
   const g = new THREE.Group();
   g.add(m);
   g.updateMatrixWorld(true);
-  const fin = new THREE.Box3().setFromObject(g).getSize(new THREE.Vector3());
+  const fin = new THREE.Box3().setFromObject(g, exact).getSize(new THREE.Vector3());
   const real = REAL[name];
   console.info(`car ${name || '?'}: ${fin.z.toFixed(2)} x ${fin.x.toFixed(2)} x ${fin.y.toFixed(2)} m (L x W x H)` + (real ? `, real ${real.join(' x ')}` : '') + (alongX ? ' (turned: modelled along x)' : '') + (junk.length ? `, ${junk.length} stray plane(s) left out` : ''));
   return g;
@@ -566,7 +681,7 @@ function splitWheels(t, groups, name = '') {
       continue;
     }
     const P = g.attributes.position, I = g.index.array, named = WHEEL.test(g.userData.label || '');
-    const bodyOnly = keepPaint && isPaint(name.replace(/_full$/, ''), mat); // (the wheel arches' paint stays on the body)
+    const bodyOnly = (keepPaint && isPaint(name.replace(/_full$/, ''), mat)) || !!WHEEL_BODY[name.replace(/_full$/, '')]?.test(mat.name || ''); // (the wheel arches' paint stays on the body)
     const lists = new Map(), st = steerTri?.get(g), sw = st ? [] : null;
     for (let i = 0; i < I.length; i += 3) {
       if (st && st.has(i)) { sw.push(I[i], I[i + 1], I[i + 2]); continue; }
@@ -602,15 +717,21 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 // Steering wheels with no name: where the wheel is (fitted frame, m), found from the driver's seat with a fan of rays
 // (tools/carlab.html?mode=cockpit&detect=1) and checked by eye in the cockpit view.
 const STEER_AT = {
-  car_bmw_x3: [0.372, 1.07, 0.33], car_audi_rs6_full: [0.42, 0.95, 0.49], car_tesla_m3_full: [0.47, 0.81, 0.61], car_dacia_duster: [0.37, 1.02, 0.54],
+  car_bmw_x3: [0.372, 1.07, 0.33], car_audi_rs6_full: [0.42, 0.95, 0.49], car_tesla_m3_full: [0.47, 0.81, 0.61],
   car_audi_rs6: [0.42, 0.95, 0.49], car_tesla_m3: [0.47, 0.81, 0.61], // (the simplified ones: the same frame as their full models)
   car_mercedes_sls: [0.43, 0.77, -0.11], car_porsche_taycan: [0.37, 0.88, 0.45],
+  car_audi_etron_gt: [0.366, 1.06, 0.38], car_mercedes_gls: [0.42, 1.0, 0.75],
+  car_lamborghini_huracan: [0.36, 0.62, 0.45], car_toyota_gr_yaris: [0.33, 0.86, 0.3],
 };
 // models whose steering wheel is named only in part (the SLS: INT_Skin_volante is the rim's leather; the spokes, hub
 // and badge are other materials): found by its shape from STEER_AT instead, all of it
-const STEER_BY_SHAPE = new Set(['car_mercedes_sls']);
+// (the e-tron GT: its STEERING_WHEEL nodes carry a slab of the dash and console too: by its shape, like the SLS)
+const STEER_BY_SHAPE = new Set(['car_mercedes_sls', 'car_audi_etron_gt']);
 // models whose wheel arches (paint) lie inside the tyres' cylinders: the paint never turns with a wheel
-const KEEP_PAINT = new Set(['car_mercedes_sls', 'car_porsche_taycan']);
+const KEEP_PAINT = new Set(['car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls']);
+// and other materials that never turn with a wheel (unless named as one): arch liners, sill trims, the cabin's
+// trims beside the rear wheel arches (the GLS's third row) that lie inside a tyre's cylinder
+const WHEEL_BODY = { car_audi_etron_gt: /^gtVehicle_Exterior_mm_(ext1|chassis1)$/, car_mercedes_gls: /^gls_(dash|dash_wood|engine|trim_wheel)$/, car_toyota_gr_yaris: /Coloured_Material/, car_lamborghini_huracan: /Coloured_Material/ };
 const COLUMN = new THREE.Vector3(0, -Math.sin(0.38), Math.cos(0.38)); // (the steering column: forward and down)
 // Every separate bit of geometry (connected triangles) near the hint that lies wholly in the wheel's disc (round the
 // column, a few cm thick): the rim, spokes, hub, buttons. Twice: the second time round the centre the first one found.

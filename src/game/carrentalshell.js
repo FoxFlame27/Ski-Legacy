@@ -8,27 +8,33 @@
 import * as THREE from 'three';
 
 // the hall (inside, m): width, depth, wall height (two storeys), the ridge's rise over the walls; eaves overhang
+// (Oct 29: 26 x 14 m -> 32 x 17.5 m, +54 % floor: "not enough space to walk around". Every car, the counter and the
+// walls >= 2.5 m apart, upstairs too: three rows of cars downstairs standing along the hall (no longer spinning: the
+// rows are closer than a turning car's circle), three supercars in a row upstairs)
 export const LAYOUT = {
-  W: 26, D: 14, H: 7.6, RISE: 3.8, T: 0.3, EAVE: 1.1, EAVE_F: 1.8, PIER: 0.7,
+  W: 32, D: 17.5, H: 7.6, RISE: 4.2, T: 0.3, EAVE: 1.1, EAVE_F: 1.8, PIER: 0.7,
   mullions: 8, // glass bays across the front
   door: { bay: 3, h: 2.7, x: 0, w: 0 }, // an automatic sliding pair filling one glass bay (x, w: below)
   // the upper floor: a mezzanine along the back (its floor's height, its front edge z), the stair up to it along the
   // left wall (from z1 at the bottom to z0 at the top), the steel posts under its edge (x)
-  FL: 3.6, MZ: -2.2,
-  stair: { x0: -13, x1: -11.5, z0: -2.2, z1: 4.2, steps: 20 },
-  posts: [-4.9, 2.4, 8.2],
-  // the cars on display: a row of three behind the glass, two at the back under the mezzanine (x, z, heading),
-  // turntable radius; upstairs: two more (the supercars, for rent too), and the office on the right
-  spots: [[-8.2, 2.3, 0.75], [-1.6, 2.3, -0.6], [5.4, 2.3, 0.55], [-8.2, -3.9, -0.5], [-1.6, -3.9, 0.6]], R: 2.55,
-  upSpots: [[-6.8, -4.6, 1.3], [-0.6, -4.6, -1.85]],
-  office: { x0: 5.4, gap: -3.7 }, // its glass partition at x0, from the back wall to z gap (the way in)
-  desk: { x: 8.6, z: -6.1, r: 2.5 }, // the reception desk (an arc of counter round its centre, open to the back wall)
-  lounge: { x: 10.4, z: 3.9 },
+  FL: 3.6, MZ: -1.3,
+  stair: { x0: -16, x1: -14.5, z0: -1.3, z1: 5.1, steps: 20 },
+  posts: [-5.4, 2.4, 12.5], // (in the gaps between the middle row's cars)
+  // the cars on display (x, z, heading: along the hall, a little turned), on low plinths of radius R: two behind the
+  // glass either side of the way in from the door, a row of three in the middle, three at the back under the
+  // mezzanine; upstairs a row of three (the supercars, for rent too), and the office on the right
+  spots: [[-9.33, 4.85, 1.49], [6.35, 4.85, -1.49], [-9.33, -0.05, -1.49], [-1.49, -0.05, 1.49], [6.35, -0.05, -1.49],
+    [-10.83, -5.05, 1.49], [-2.99, -5.05, -1.49], [4.85, -5.05, 1.49]], R: 2.0,
+  upSpots: [[-9.44, -5.06, 1.49], [-1.82, -5.06, -1.49], [5.74, -5.06, 1.49]],
+  office: { x0: 10.8, gap: -2.8 }, // its glass partition at x0, from the back wall to z gap (the way in)
+  desk: { x: 12.0, z: -7.6, r: 1.45 }, // the reception desk (an arc of counter round its centre, open to the back wall)
+  lounge: { x: 13.6, z: 4.9 },
 };
 const L = LAYOUT;
 L.bayW = (L.W - 2 * L.PIER) / L.mullions;
 L.door.x = -L.W / 2 + L.PIER + L.bayW * (L.door.bay + 0.5);
 L.door.w = L.bayW - 0.09;
+L.officeX = (L.office.x0 + L.W / 2) / 2; // (the office's middle, x)
 /** Ceiling height (underside of the roof) at x. */
 export const ceilingAt = (x) => L.H + L.RISE * Math.max(0, 1 - Math.abs(x) / (L.W / 2));
 /** The stair's height at z (0 at its foot, FL at its top). */
@@ -129,7 +135,7 @@ export function buildShell(g, side, glass, opts = {}) {
   }
   // the upper windows in the side walls (the second storey): outside a warm lit glass, inside the view out
   const wy = FL + 1.85, ww = 1.9, wh = 1.6;
-  for (const sx of [-1, 1]) for (const wz of [-5.2, -1.6, 2.0, 5.4]) {
+  for (const sx of [-1, 1]) for (const wz of [-6.5, -2.0, 2.5, 6.75]) {
     if (out) {
       B(0.08, wh + 0.18, ww + 0.18, m.steel, sx * (W / 2 + T + 0.03), wy, wz, false);
       B(0.04, wh, ww, m.winOut, sx * (W / 2 + T + 0.07), wy, wz, false);
@@ -179,7 +185,7 @@ export function buildShell(g, side, glass, opts = {}) {
   I(B(W, 0.34, 0.06, m.steel, 0, FL - 0.15, MZ + 0.03));
   for (const px of L.posts) I(B(0.2, FL - 0.3, 0.2, m.steel, px, (FL - 0.3) / 2, MZ - 0.14));
   const strips = out ? m.strip.clone() : m.strip;
-  for (const lx of [-10, -5.6, -0.8, 3.8, 8.4, 11.6]) I(B(1.4, 0.03, 0.3, strips, lx, FL - 0.315, zb + dz / 2, false));
+  for (const lx of [-12.3, -6.9, -1.0, 4.7, 10.3, 14.3]) I(B(1.4, 0.03, 0.3, strips, lx, FL - 0.315, zb + dz / 2, false));
   const S = L.stair, rx0 = S.x1, rlen = W / 2 - rx0, rcx = (rx0 + W / 2) / 2;
   add(new THREE.BoxGeometry(rlen, 0.9, 0.02), m.railGlass, rcx, FL + 0.5, MZ - 0.06, false);
   I(B(rlen, 0.06, 0.08, m.steel, rcx, FL + 1.0, MZ - 0.06, false));
@@ -199,15 +205,16 @@ export function buildShell(g, side, glass, opts = {}) {
   add(new THREE.BoxGeometry(0.03, 2.5, olen), m.railGlass, O.x0, FL + 1.25, zb + olen / 2, false);
   for (const y of [FL + 0.03, FL + 2.5]) I(B(0.06, 0.06, olen, m.steel, O.x0, y, zb + olen / 2, false));
   I(B(0.06, 2.5, 0.06, m.steel, O.x0, FL + 1.25, O.gap, false));
-  I(B(1.9, 0.05, 0.85, oak, 9.6, FL + 0.75, -5.2));
-  for (const sx of [-1, 1]) I(B(0.05, 0.72, 0.75, m.steel, 9.6 + sx * 0.88, FL + 0.36, -5.2));
+  const OX = L.officeX, OZ = zb + 1.8; // (the office's desk: in the middle of the office, 1.8 m off the back wall)
+  I(B(1.9, 0.05, 0.85, oak, OX, FL + 0.75, OZ));
+  for (const sx of [-1, 1]) I(B(0.05, 0.72, 0.75, m.steel, OX + sx * 0.88, FL + 0.36, OZ));
   const dark = new THREE.MeshStandardMaterial({ color: 0x1a1b1e, roughness: 0.5 });
-  I(B(0.6, 0.38, 0.03, dark, 9.6, FL + 1.0, -5.45, false));
-  I(B(0.56, 0.34, 0.005, new THREE.MeshStandardMaterial({ color: 0x0, emissive: 0x9fc0ee, emissiveIntensity: 1 }), 9.6, FL + 1.0, -5.432, false));
-  I(B(0.52, 0.08, 0.5, dark, 9.6, FL + 0.48, -6.0)); I(B(0.52, 0.6, 0.06, dark, 9.6, FL + 0.82, -6.25));
-  I(B(0.06, 0.44, 0.06, m.steel, 9.6, FL + 0.22, -6.0, false));
-  I(B(2.6, 1.9, 0.38, oak, 10.6, FL + 0.95, zb + 0.2));
-  { const r = rng(21); for (let k = 0; k < 22; k++) I(B(0.08, 0.3, 0.26, new THREE.MeshStandardMaterial({ color: [0x1546c8, 0xd0342c, 0x2a2c30, 0xe8c21a][k % 4], roughness: 0.7 }), 9.45 + k * 0.105, FL + 1.25 + (k > 10 ? -0.6 : 0) + r() * 0.01, zb + 0.25, false)); }
+  I(B(0.6, 0.38, 0.03, dark, OX, FL + 1.0, OZ - 0.25, false));
+  I(B(0.56, 0.34, 0.005, new THREE.MeshStandardMaterial({ color: 0x0, emissive: 0x9fc0ee, emissiveIntensity: 1 }), OX, FL + 1.0, OZ - 0.232, false));
+  I(B(0.52, 0.08, 0.5, dark, OX, FL + 0.48, OZ - 0.8)); I(B(0.52, 0.6, 0.06, dark, OX, FL + 0.82, OZ - 1.05));
+  I(B(0.06, 0.44, 0.06, m.steel, OX, FL + 0.22, OZ - 0.8, false));
+  I(B(2.6, 1.9, 0.38, oak, OX + 1.0, FL + 0.95, zb + 0.2));
+  { const r = rng(21); for (let k = 0; k < 22; k++) I(B(0.08, 0.3, 0.26, new THREE.MeshStandardMaterial({ color: [0x1546c8, 0xd0342c, 0x2a2c30, 0xe8c21a][k % 4], roughness: 0.7 }), OX - 0.15 + k * 0.105, FL + 1.25 + (k > 10 ? -0.6 : 0) + r() * 0.01, zb + 0.25, false)); }
   // the roof: two slabs from the ridge to the eaves (timber underneath: the ceiling inside), front and back overhangs;
   // outside, a thick layer of snow on each and a dark fascia on the eaves
   const k = RISE / (W / 2), runR = W / 2 + EAVE, drop = RISE + k * EAVE, len = Math.hypot(runR, drop), angR = Math.atan2(drop, runR);
@@ -225,7 +232,7 @@ export function buildShell(g, side, glass, opts = {}) {
     }
   }
   // glulam trusses (a tie beam, the king post, two struts), the ridge beam, light strips under each tie beam
-  for (const z of [-D / 2 + 1.75, -D / 2 + 5.25, -D / 2 + 8.75, -D / 2 + 12.25]) {
+  for (let z = -D / 2 + 1.75; z < D / 2 - 0.5; z += 3.5) {
     I(B(W, 0.36, 0.24, glu, 0, H - 0.18, z));
     I(B(0.24, RISE, 0.24, glu, 0, H + RISE / 2, z));
     for (const sx of [-1, 1]) { const s = I(B(Math.hypot(W / 4, RISE * 0.5), 0.2, 0.2, glu, sx * W / 8, H + RISE * 0.25, z)); s.rotation.z = -sx * Math.atan2(RISE * 0.5, W / 4); }

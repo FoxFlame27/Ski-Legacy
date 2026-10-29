@@ -14,6 +14,9 @@ const CFG = {
 // mid-station: cabins crawl through +-MID_HALF m of the station centre and ramp back to line speed
 // over MID_RAMP m either side; riders can get off / on while their cabin is in the crawl zone
 const MID_HALF = 9, MID_RAMP = 36, MID_SLOW = 0.1; // (0.1 x 18 m/s: the same ~1.8 m/s crawl as before the speed-up)
+// multiplayer (net/transit.js): the cabins / chairs also crawl through the bottom and top stations (+-half m of the
+// bullwheel, ramping back to line speed over ramp m), so the one you wait for visibly comes in and you board it there
+const END_DWELL = { gondola: { half: 7, ramp: 30, slow: 0.1 }, chair: { half: 4, ramp: 14, slow: 0.15 } };
 const MID_LEN = 26, MID_W = 15; // station hall (along / across the line)
 
 // ground clearance under the cabins (cabin / chair bottom over the snow, both ways, out of the stations):
@@ -43,6 +46,8 @@ class LiftLine {
     this.scene = scene;
     this.colliders = colliders;
     const c = this.cfg;
+    // (a station in a road's cutting: the ground there is only final once the roads are carved, after the layout)
+    if (spec.bottomOnRoad) spec.bottom.y = world.height(spec.bottom.x, spec.bottom.z);
     const B = new THREE.Vector3(spec.bottom.x, spec.bottom.y + c.stationH, spec.bottom.z);
     const T = new THREE.Vector3(spec.top.x, spec.top.y + c.stationH, spec.top.z);
     this.B = B; this.T = T;
@@ -109,9 +114,23 @@ class LiftLine {
   // ---- motion along the loop (s in [0, 2L): up line 0..L, down line L..2L)
   uOf(s) { return s < this.L ? s : 2 * this.L - s; }
   speedAt(s) {
-    if (!this.mid) return this.cfg.speed;
+    let v = this.cfg.speed;
+    if (this.dwell) { // (multiplayer: the station crawl at both ends of the loop)
+      const e = this.dwell, r = (((s % this.L) + this.L) % this.L), d = Math.min(r, this.L - r);
+      if (d < e.half + e.ramp) v *= d < e.half ? e.slow : e.slow + (1 - e.slow) * smoothstep(0, 1, (d - e.half) / e.ramp);
+    }
+    if (!this.mid) return v;
     const d = Math.abs(this.uOf(s) - this.mid.u);
-    return this.cfg.speed * (d < MID_HALF ? MID_SLOW : d < MID_HALF + MID_RAMP ? MID_SLOW + (1 - MID_SLOW) * smoothstep(0, 1, (d - MID_HALF) / MID_RAMP) : 1);
+    return Math.min(v, this.cfg.speed * (d < MID_HALF ? MID_SLOW : d < MID_HALF + MID_RAMP ? MID_SLOW + (1 - MID_SLOW) * smoothstep(0, 1, (d - MID_HALF) / MID_RAMP) : 1));
+  }
+  /** Multiplayer on / off: the end-station crawl (the loop's times change with it; back in single player the cars
+   *  get their single-player spacing again). */
+  setDwell(on) {
+    const e = on ? END_DWELL[this.spec.type === 'chair' ? 'chair' : 'gondola'] : null;
+    if (e === (this.dwell || null)) return;
+    this.dwell = e;
+    this.loopTimes();
+    if (!on) { if (this.mid) this.spreadByTime(); else this.cars.forEach((c, i) => { c.s = (i * 2 * this.L) / this.cars.length; }); }
   }
   // move one car by time t (sub-stepped so cars never skip through the slow zone; t < 0 runs backwards)
   advance(car, t) {
@@ -126,7 +145,7 @@ class LiftLine {
   // (the same equal time gaps spreadByTime sets up; with no mid-station that is plain distance / speed)
   loopTimes() {
     const L2 = 2 * this.L;
-    if (!this.mid) { this.loopT = { P: L2 / this.cfg.speed, steps: 0, times: null }; return; }
+    if (!this.mid && !this.dwell) { this.loopT = { P: L2 / this.cfg.speed, steps: 0, times: null }; return; }
     const steps = Math.ceil(L2 / 2), times = new Float64Array(steps + 1);
     for (let i = 1; i <= steps; i++) times[i] = times[i - 1] + (L2 / steps) / this.speedAt((i - 0.5) * (L2 / steps));
     this.loopT = { P: times[steps], steps, times };
@@ -154,7 +173,7 @@ class LiftLine {
     let best = null;
     for (let i = 0; i < this.cars.length; i++) {
       const s = this.cars[i].s, ahead = (((s - target) % L2) + L2) % L2;
-      const t = ahead < 1.5 ? -ahead / this.speedAt(s) : this.travelTime(s, (((target - s) % L2) + L2) % L2);
+      const t = ahead < Math.max(1.5, 0.5 * (this.dwell?.half || 0)) ? -ahead / this.speedAt(s) : this.travelTime(s, (((target - s) % L2) + L2) % L2); // (one still crawling out of the station: that one)
       if (!best || t < best.t) best = { idx: i, t };
     }
     return best;
@@ -590,7 +609,7 @@ class LiftLine {
     return tB <= tA ? { idx: iB, t: tB } : { idx: iA, t: -tA };
   }
   travelTime(s0, dist) {
-    if (!this.mid) return dist / this.cfg.speed;
+    if (!this.mid && !this.dwell) return dist / this.cfg.speed;
     let t = 0;
     const n = Math.max(1, Math.ceil(dist / 2)), h = dist / n;
     for (let i = 0; i < n; i++) t += h / this.speedAt(s0 + h * (i + 0.5));
@@ -1083,7 +1102,10 @@ export class Lifts {
     layout.onAdd((kind, obj) => { if (kind === 'lift') this.add(obj); });
   }
 
-  add(spec) { const l = new LiftLine(spec, this.models, this.scene, this.colliders); l.mpId = this.lines.length; this.lines.push(l); }
+  add(spec) { const l = new LiftLine(spec, this.models, this.scene, this.colliders); l.mpId = this.lines.length; this.lines.push(l); l.setDwell(!!this._mp); }
+  // multiplayer (net/transit.js sets the shared-timeline hooks): every line crawls through its end stations then
+  get mp() { return this._mp || null; }
+  set mp(v) { this._mp = v || null; for (const l of this.lines) l.setDwell(!!v); }
 
   /** Swap every mid-station to the Meshy hall (the gltf of models/gondola_terminal) or back to the built hall (null). */
   setMidModel(gltf) {

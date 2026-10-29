@@ -359,7 +359,10 @@ together, each in their own seat.
   - Express: its own platform wait (`express.waitFor` / `waiting`), unchanged, but a train can only be boarded with
     at least 4 s of its stop left.
   - Lifts: a seat in the next cabin or chair coming round is claimed at once; you board when it reaches the boarding
-    point ("Your cabin comes in 2 s").
+    point ("Your cabin comes in 2 s"). In multiplayer the cabins and chairs crawl through the bottom and top stations
+    as they do through a mid-station (`LiftLine.setDwell`, on while `lifts.mp` is set; `speedAt`, `placeAt` and the
+    countdown all use it), so the one you wait for visibly comes in and you get in once it has come round to the
+    boarding point (or while it is still crawling out of the station).
   - Buses: you wait at the stop (25 m) for the next bus that goes your way ("Ski bus to X · next bus in 3 min"); it
     can be boarded with at least 4 s of its halt left. No round serving the trip: "No bus goes from A to B".
 - **Seats.** When the vehicle is in, the gate claims a seat (`seatClaim {k, v, n, seat}`, `seat`: the one single

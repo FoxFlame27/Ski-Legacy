@@ -181,9 +181,12 @@ export class MpTransit {
   liftTry() {
     const w = this.liftWait;
     if (!w) return;
+    // the cabin as drawn here (lifts.js placeAt: it crawls through the station in multiplayer): you get in once it
+    // has come round to the boarding point (on the side it leaves by, as single player brings it to you), or while it
+    // is still crawling out of the station when the seat came late. Before that, the countdown runs.
     const L2 = 2 * w.line.L, s = w.line.cars[w.idx].s, v = w.line.speedAt(s);
     const ahead = (((s - w.target) % L2) + L2) % L2, behind = (((w.target - s) % L2) + L2) % L2;
-    if (behind < 0.15 * v || ahead < 1.2 * v) { // (there, or just past: in you get)
+    if (ahead < Math.max(1.2 * v, w.line.dwell?.half || 0)) { // (there, or just past: in you get)
       this.liftWait = null;
       this.ready = { key: w.key, idx: w.idx, seat: w.seat };
       w.retry();

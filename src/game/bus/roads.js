@@ -896,29 +896,53 @@ function planHospital(O) {
   }
 }
 
-// The PRISON (game/prison.js, the village police station): like the hospital, a flattened building lot in Legacy
-// Village a short walk off the road (its door toward it), clear of the ski areas, lifts, buildings and the other lots.
+// The PRISON (game/prison.js, the village police station): like the car rental, a building lot right on a road in
+// Legacy Village, its yard (a short ploughed forecourt with parking bays) on the road's edge and the station's door
+// facing the road: a straight, gentle stretch, the pad at the road's own height (flush with it), clear of the ski
+// areas, nets, lifts, stations, buildings, the railway, other roads, car parks (the Autohaus too), junctions, stops
+// and lay-bys. Lot frame: u along the road, v toward it (the edge at v = hd). busRoads.prison = { building lot +
+// ri, s (the road and arc length in front), side }.
+export const PRISON_LOT = { hw: 13, hd: 12 }; // half length along the road, half depth (m)
 function planPrison(O) {
-  if (!busRoads.roads.length) return;
-  const hw = 13, hd = 10;
-  for (const t of [{ x: 40, z: 150 }, { x: 150, z: 240 }, { x: -60, z: 170 }, { x: 200, z: -60 }]) {
-    for (let r = 0; r <= 200; r += 10) {
-      const n = r ? Math.max(8, Math.round(r / 10)) : 1;
-      for (let k = 0; k < n; k++) {
-        const a = (k / n) * Math.PI * 2, cx = t.x + Math.cos(a) * r, cz = t.z + Math.sin(a) * r;
-        const net = nearestRoadPoint(cx, cz);
-        if (!net || net.d > 36 || net.d < 22) continue;
-        const facing = Math.atan2(net.x - cx, net.z - cz), yaw = facing + Math.PI / 2; // (the door toward the road)
-        const fit = lotFits(cx, cz, yaw, hw, hd, O);
-        if (!fit) continue;
-        const ux = Math.sin(yaw), uz = Math.cos(yaw), fx = Math.sin(facing), fz = Math.cos(facing);
-        busRoads.prison = { name: 'Police / Prison', building: true, x: cx, z: cz, yaw, y: fit.y, hw, hd, ux, uz, vx: uz, vz: -ux,
-          ex: cx + fx * (hd + 3), ez: cz + fz * (hd + 3), dirx: fx, dirz: fz, facing };
-        busRoads.lots.push(busRoads.prison);
-        return;
+  const q = {}, { hw, hd } = PRISON_LOT;
+  let best = null;
+  busRoads.roads.forEach((r, ri) => {
+    if (r.scenic || r.ring) return;
+    for (let s = 30; s < r.length - 30; s += 4) {
+      const m = roadAt(r, s), a = roadAt(r, s - 16), b = roadAt(r, s + 16);
+      const score0 = Math.hypot(m.x - 40, m.z - 120); // (in the village, near where it stood: off the square)
+      if (score0 > 300 || (best && score0 > best.score)) continue;
+      const bend = Math.abs(Math.atan2(a.dx * b.dz - a.dz * b.dx, a.dx * b.dx + a.dz * b.dz));
+      if (bend > 0.14 || Math.abs(m.grade) > 0.05) continue;
+      // (the road level along the whole frontage: the flat pad meets its edge without a step at either end)
+      if (Math.max(Math.abs(roadAt(r, s - hw).y - m.y), Math.abs(roadAt(r, s + hw).y - m.y)) > 0.2) continue;
+      for (const side of [1, -1]) {
+        const nx = -m.dz * side, nz = m.dx * side, off = ROAD_HALF + 0.6 + hd;
+        const cx = m.x + nx * off, cz = m.z + nz * off;
+        let ok = true, lo = Infinity, hi = -Infinity;
+        for (let u = -hw - 4; u <= hw + 4 && ok; u += 4) for (let v = -hd - 4; v <= hd - 1 && ok; v += 4) {
+          const x = cx + m.dx * u - nx * v, z = cz + m.dz * u - nz * v;
+          O.query(x, z, q);
+          if (q.ski < 8 || q.net < 6 || q.block < 4 || q.rail < 8 || q.lift < 4) ok = false;
+          const c = world.corridorAt(x, z);
+          if (c.kind && c.kind !== 'lift' && c.d < 8) ok = false;
+          if (c.kind === 'lift' && c.lot) ok = false; // (another lot's cleared strip)
+          if (Math.abs(u) <= hw && Math.abs(v) <= hd) { const h = world.height(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+        }
+        if (!ok || hi - lo > 4 || Math.abs((hi + lo) / 2 - m.y) > 2.2) continue;
+        if (busRoads.roads.some((o, oi) => { for (let i = 0; i < o.n; i += 2) { const d = Math.hypot(o.X[i] - cx, o.Z[i] - cz); if (d < hw + hd + 8 && (oi !== ri || Math.abs(o.S[i] - s) > hw + 30)) return true; } return false; })) continue;
+        if (busRoads.lots.some((L) => Math.hypot(L.x - cx, L.z - cz) < Math.hypot(L.hw, L.hd) + Math.hypot(hw, hd) + 12)) continue;
+        if ([...busRoads.junctions, ...busRoads.stops, ...(busRoads.laybys || [])].some((j) => Math.hypot(j.x - cx, j.z - cz) < 50)) continue;
+        if (Math.hypot(cx + 190, cz + 160) < 90) continue; // (the Legacy Express's village station)
+        const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz);
+        best = { name: 'Police / Prison', building: true, prison: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+          ex: m.x + nx * (ROAD_HALF + 0.6), ez: m.z + nz * (ROAD_HALF + 0.6), dirx: -nx, dirz: -nz, facing, ri, s, side, score: score0 };
       }
     }
-  }
+  });
+  if (!best) return;
+  busRoads.lots.push(best);
+  busRoads.prison = best;
 }
 
 // The CAR RENTAL (game/carrental.js): a building lot right on a bus road in Legacy Village, its yard / garage front

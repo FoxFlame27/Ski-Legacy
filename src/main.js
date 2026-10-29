@@ -1270,6 +1270,9 @@ function mpPose(o) {
   if (interior.active) { o.interior = 'skishop'; cam = interior.camera; room = interior; }
   else if (carRental?.inside) { o.interior = 'carrental'; cam = carRental.room?.camera; room = carRental.room; }
   else if (chalets?.inside && chalets.current) { o.interior = `chalet:${chalets.current.id}`; cam = chalets.room?.camera; }
+  // a chalet door still fading (as mpView): the approved chalet stays your interior and no row goes out meanwhile; a
+  // visit's yes is single use, and reporting you outside half-way in used it up (the guest was then shown out)
+  else if (chalets?.busy && multiplayer?.interior?.startsWith?.('chalet:')) { o.interior = multiplayer.interior; o.hold = true; return; }
   else if (prison?.inside) { o.interior = 'prison'; room = prison.room; } // (jailed: in your cell; visiting: the corridor)
   if (room?.pos && Number.isFinite(room.yaw)) { // (the shop / rental: where you walk, not the camera, which swings off to a preview or the clerk)
     o.x = room.pos.x; o.y = room.pos.y || 0; o.z = room.pos.z; o.yaw = room.yaw;

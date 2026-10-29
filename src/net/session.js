@@ -52,7 +52,7 @@ export class Multiplayer {
     this.offs = [];
     this.sendAcc = 0;
     this.row = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    this.pose = { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vy: 0, vz: 0, st: 0, crouch: 0, lean: 0, flags: 0, interior: null };
+    this.pose = { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vy: 0, vz: 0, st: 0, crouch: 0, lean: 0, flags: 0, interior: null, hold: false }; // (hold: send nothing this time)
     this.interior = null;         // the interior the server approved for you
     this.clock = null;            // { hour, at, dayMs, weather }
     this.money = { server: 0, pending: 0 };
@@ -734,13 +734,14 @@ export class Multiplayer {
     if (this.sendAcc >= 1 / SEND_HZ && net.open) {
       this.sendAcc = 0;
       const p = this.pose;
+      p.hold = false;
       this.c.pose(p);
       this.carRide.pose(p); this.heliMp.pose(p); // (driving / flying: the vehicle's pose; riding with someone)
       // inside, the walk speed from the step since the last row (the rooms' avatars walk instead of gliding)
       const L = this.lastPos, now2 = performance.now(), sdt = Math.max(0.02, (now2 - L.t) / 1000);
       if (p.interior && p.interior === L.interior && !p.vx && !p.vz) { p.vx = (p.x - L.x) / sdt; p.vz = (p.z - L.z) / sdt; if (Math.hypot(p.vx, p.vz) > 6) p.vx = p.vz = 0; }
       L.x = p.x; L.z = p.z; L.interior = p.interior; L.t = now2;
-      if (p.interior !== this.interior) {
+      if (p.hold) { /* (a door fading: nothing to tell yet) */ } else if (p.interior !== this.interior) {
         // into / out of an interior: the server approves it first (a chalet needs its owner's ok); until then no
         // presence goes out (nobody sees you outdoors at the interior's coordinates)
         if (!this.entering) {

@@ -74,8 +74,19 @@ export class NetClient {
     if (!this.open) { const e = new Error('offline'); e.code = 'offline'; return Promise.reject(e); }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); const e = new Error('timeout'); e.code = 'timeout'; reject(e); }, timeout);
-      this.pending.set(id, { resolve, reject, timer });
+      const start = performance.now();
+      let due = start + timeout;
+      // A timer that fires late (the main thread was busy: loading terrain on a slow machine) proves nothing: the
+      // answer may be waiting in the queue behind it. Then it waits a little longer (up to 4x the timeout in all).
+      const check = () => {
+        const p = this.pending.get(id);
+        if (!p) return;
+        const now = performance.now();
+        if (now - due > 1000 && now - start < timeout * 4) { due = now + 2000; p.timer = setTimeout(check, 2000); return; }
+        this.pending.delete(id);
+        const e = new Error('timeout'); e.code = 'timeout'; reject(e);
+      };
+      this.pending.set(id, { resolve, reject, timer: setTimeout(check, timeout) });
       this.ws.send(JSON.stringify({ t, d, id }));
     });
   }

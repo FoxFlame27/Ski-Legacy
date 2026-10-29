@@ -22,7 +22,7 @@ import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate, setPlat
 import { LAYOUT, buildShell } from './carrentalshell.js';
 import { makeSign } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
-import { Impound } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
+import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 
 export const RENTALS = [
@@ -308,7 +308,7 @@ export class CarRental {
         this.hud?.setMoney?.(this.save.money, -WRECK_FEE);
       }
       this.audio?.play?.('cash');
-      setTimeout(() => this.hud?.flash(`Car wrecked · -$${WRECK_FEE.toLocaleString('en-US')} · the tow truck takes it to be repaired`, 'bad', 3600), 2900); // (after drive.js's own "Wrecked" line)
+      setTimeout(() => this.hud?.flash(`Car wrecked · -$${WRECK_FEE.toLocaleString('en-US')} · the tow truck takes it to the car rental · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
     }
     const back = () => {
       if (!mine || this.save.rental !== mine || this.current) return; // (rented another meanwhile: that one stays)
@@ -356,7 +356,7 @@ export class CarRental {
       this.player.teleport(this.door.x + f.x * 0.8, this.door.z + f.z * 0.8, Math.atan2(f.x, f.z));
       this.player.camYaw = Math.atan2(f.x, f.z) + Math.PI + 0.4;
       this.player.camPitch = -0.12;
-      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? 'Your car is impounded · available tomorrow in the car park' : `Your rental car waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard'} · E to drive`, 'good', 2800), 400);
+      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is impounded in the car park · free again ${untilTomorrow()}` : `Your rental car waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard'} · E to drive`, 'good', 2800), 400);
     };
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }

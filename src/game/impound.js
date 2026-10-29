@@ -22,6 +22,13 @@ import { layout } from '../world/layout.js';
 import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 
+// how long until the impound lifts: the next in-game day starts at midnight (world/sky.js: 1 game hour = 40 real s)
+export function untilTomorrow() {
+  const h = typeof window !== 'undefined' ? window.__game?.env?.hour : undefined;
+  if (!Number.isFinite(h)) return 'at midnight';
+  const min = Math.ceil(((24 - h) * 40) / 60);
+  return min <= 1 ? 'in under a minute (at midnight)' : `in about ${min} min (at midnight)`;
+}
 export const STRAY_BACK = 180; // s left off the road and outside any car park / lay-by (with you away) before it goes back to its bay
 export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
 export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called
@@ -165,8 +172,8 @@ export class Impound {
     e.home = { x: p.x, z: p.z, yaw: p.yaw };
   }
   lockReason(e) {
-    if (e?.towing) return 'Your car · being towed to the car rental';
-    if (e?.impound) return 'Impounded · available tomorrow';
+    if (e?.towing) return 'Your car · being towed to the car rental car park';
+    if (e?.impound) return `Impounded · free again ${untilTomorrow()}`;
     return null;
   }
   /** Where your car is for the map and the name tags: { x, z, impounded } or null. */
@@ -258,7 +265,7 @@ export class Impound {
       R.hud?.setMoney?.(this.save.money, -fee);
     }
     R.audio?.play?.('cash');
-    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · pick it up tomorrow at the car rental`, 'bad', 5200);
+    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · impounded in the car park by the car rental · free again ${untilTomorrow()}`, 'bad', 6500);
     const done = (car) => {
       car.towing = false;
       if (mp && R.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends; the impound stays)

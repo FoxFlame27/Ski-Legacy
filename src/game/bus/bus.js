@@ -919,7 +919,7 @@ export class BusLine {
       // road, a train or a helicopter in the way (traffic.js trafficBlockers). It never drives through one: it
       // brakes in time and waits. A traffic car that has held it at a standstill for 3 s is taken off the road
       // (traffic.js despawn); a shoved parked car goes back to its bay by itself (drive.js)
-      try { vt = Math.min(vt, this.clearAhead(t, r, dt)); } catch (e) { if (!this.clearWarn) { this.clearWarn = true; console.warn('bus clearance', e); } }
+      try { vt = Math.min(vt, this.clearAhead(t, r, dt, vt)); } catch (e) { if (!this.clearWarn) { this.clearWarn = true; console.warn('bus clearance', e); } }
       r.shift = (r.shift || 0) + clamp((r.passing ? 1 : 0) - (r.shift || 0), -0.45 * h, 0.45 * h); // (~2 s to change lanes)
       r.v += clamp(vt - r.v, -BUS.brake * 2 * h, BUS.acc * 1.5 * h);
       r.s = Math.min(t.s1, r.s + r.v * h);
@@ -946,7 +946,7 @@ export class BusLine {
   // (Oct 28, the user: "the bus should overtake"): held up behind something stopped or crawling in its lane, with the
   // other lane clear far enough ahead (oncoming traffic included) and the road going on long enough, it pulls out,
   // passes and pulls back in once its lane is clear beside and just ahead of it
-  clearAhead(t, r, dt) {
+  clearAhead(t, r, dt, want = BUS.cruise) {
     const obs = this.obstacles(), g = this.bus.group.position;
     const sh = r.shift || 0;
     if (!obs.length) { r.heldT = 0; r.slowT = 0; r.passing = false; return Infinity; }
@@ -974,7 +974,7 @@ export class BusLine {
         if (ds > -BUS.len / 2 - along - 3 && ds < BUS.len / 2 + along + 6) otherNear = true;
         if (ds > 0) otherAhead = Math.min(otherAhead, reach - BUS.len / 2 - along);
       }
-      if (inOwn && ds > -(BUS.len / 2 + along + 1) && ds < BUS.len / 2 + along + 30) ownBeside = true; // (beside it or still ahead in its lane)
+      if (inOwn && ds > -(BUS.len / 2 + along + 8) && ds < BUS.len / 2 + along + 30) ownBeside = true; // (beside it, still ahead in its lane, or not yet 8 m behind)
       // the lanes the bus is in now: its own until well out, the other one from part way across
       const counts = (inOwn && sh < 0.85 && !(r.passing && sh > 0.15)) || (inOther && sh > 0.15);
       if (!counts) continue;
@@ -986,11 +986,17 @@ export class BusLine {
       if (v < lim) { lim = v; blocker = o; }
       if (inOwn && (!own || gap < own.gap)) own = { gap, vo, along };
     }
-    // overtaking: held up behind something slow in its own lane for 1.5 s
-    const slowed = own && own.vo < 4 && own.gap < 40 && r.v < 7;
+    // overtaking: held up for 1.5 s behind something in its own lane going clearly slower than the bus wants to
+    // (Oct 29, the user: "the bus still doesn't overtake, it just drives behind the car super slow": a moving car
+    // counts too, not only a stopped one). The road it needs: the bus closes the gap, its own length, the car's and
+    // a margin at the speed difference, at its own speed; the other lane must be clear that far (oncoming
+    // traffic's approach included) and the road must go on that far
+    const vWant = Math.max(8, Math.min(want, BUS.cruise));
+    const slowed = own && own.gap < 45 && own.vo < vWant * 0.8 && r.v < vWant * 0.85;
     r.slowT = slowed ? (r.slowT || 0) + dt : 0;
     if (!r.passing && r.slowT > 1.5) {
-      const need = own.gap + 2 * own.along + BUS.len + 25;
+      const rel = Math.max(3, vWant - own.vo), past = own.gap + 2 * own.along + BUS.len + 12;
+      const need = Math.min(450, (past / rel) * vWant + 20);
       if (!otherNear && otherAhead > need && t.s1 - r.s > need + 10) { r.passing = true; r.slowT = 0; }
     }
     // back in once its own lane is clear beside it and just ahead (or the other lane gets busy ahead: back in as

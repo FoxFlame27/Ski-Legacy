@@ -13,10 +13,10 @@
 //    while far, straight at you when close or off the roads, steering round colliders and trees, on the terrain.
 //    The HUD: a WANTED badge (time wanted, the escape countdown), a siren (audio.setSiren: the two-tone).
 //  - Stop (< 3 km/h for 3 s) with them within 40 m: they pull up behind you, an officer gets out, walks to your
-//    window, "License and registration... that's a $500 fine", walks back; they drive off. Wanted cleared.
+//    window, "License and registration... that's a fine ($1,000, +$500 for every earlier one)", walks back; they drive off. Wanted cleared.
 //  - Don't stop (TUNING.graceS after they reach you) and you are fleeing: they ram you (real knocks / crashes through
 //    drive.js: damage), a second car joins. 3 minutes in all further than 150 m from every patrol car: escaped.
-//    Rammed / blocked to a stop, or caught on foot within 4 m: arrested ($2,000, prison.jail(90)). Wrecked by their
+//    Rammed / blocked to a stop, or caught on foot within 4 m: arrested ($3,000, +$1,000 for every earlier one; prison.jail(90)). Wrecked by their
 //    rams: the car is lost (carrental.js: e.policeWreck, the rental ends, no repair) and you are arrested too.
 //  - Multiplayer: the patrol cars are local to the offender; their poses go out as 'veh' { k: 'police', cars } (like
 //    the tow truck, net/tow.js) and the others draw them (net/vehicles.js updatePolice). The officers on foot only here.
@@ -44,11 +44,13 @@ const OFFICER = 'police_officer';
 
 export const TUNING = {
   triggerKmh: 25,    // a hit at this closing speed (km/h) or more calls the police
-  fine: 500,         // stop and pay
-  arrestFine: 2000,  // caught fleeing
+  fine: 1000,        // stop and pay (the user: $1,000; more each time, see fineNow)
+  arrestFine: 3000,  // caught fleeing ($3,000; more each time)
+  fineStep: 500,     // $ more for every earlier fine or arrest (save.policeRecord)
+  arrestStep: 1000,  // $ more on an arrest for every earlier one
   jailS: 90,         // prison.jail(seconds)
   escapeS: 150,      // s (in all) further than escapeR from every patrol car: escaped (the user: "a bit easier to escape")
-  escapeR: 110,      // m
+  escapeR: 100,      // m
   stopR: 40,         // m: stopped with a patrol car this close: pulled over
   stopKmh: 3,        // ...below this speed
   stopS: 3,          // ...for this long
@@ -67,6 +69,7 @@ const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
 const MODEL = 'police/police_car';
 const SEND_DT = 1 / 6;
+const usd = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const FOOT = new Set([ST.walk, ST.ski, ST.fall]);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -309,7 +312,7 @@ export class Police {
   start(why) {
     this.w = { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, footT: 0, scene: null, why, spawned2: false };
     if (!this.spawn(0)) { this.w = null; return; }
-    this.note('Police! Stop to pay a $500 fine, or get away');
+    this.note(`Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`);
     this.audio?.play?.('error');
   }
 
@@ -495,7 +498,7 @@ export class Police {
     if (wreck && !W.scene && !T.car && wreck.wrecked) { this.wreckE = null; this.begin(W, 'arrest', lead, 'wrecked'); }
     if (W.scene) { this.sceneStep(dt, W, T); return; }
     // they reached you: the grace to pull over, then fleeing
-    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.note('Pull over now: stop to pay the $500 fine'); }
+    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.note(`Pull over now: stop to pay the ${usd(this.fineNow())} fine`); }
     if (W.reached && !W.fleeing) {
       W.grace -= dt;
       const away = (T.vx * (T.x - lead.x) + T.vz * (T.z - lead.z)) / Math.max(1, near); // (on foot: running away from them)
@@ -838,12 +841,14 @@ export class Police {
       if (!S.said) {
         S.said = true;
         if (S.kind === 'fine') {
-          this.say('Officer', 'License and registration, please... You caused a collision back there. That\'s a $500 fine.');
-          this.charge(TUNING.fine);
+          const f = this.fineNow();
+          this.say('Officer', `License and registration, please... You caused a collision back there.${this.record() ? ' And not for the first time.' : ''} That's a ${usd(f)} fine.`);
+          this.charge(f); this.addRecord();
         } else {
-          this.say('Officer', S.why === 'wrecked' ? 'Stay right there! You are under arrest. That car is going nowhere. $2,000 and you\'re coming with us.'
-            : T.car ? 'Out of the car! You are under arrest for fleeing the police. That\'s $2,000.' : 'Stop right there! You are under arrest for fleeing the police. That\'s $2,000.');
-          this.charge(TUNING.arrestFine);
+          const f = this.arrestNow(), a = usd(f);
+          this.say('Officer', S.why === 'wrecked' ? `Stay right there! You are under arrest. That car is going nowhere. ${a} and you're coming with us.`
+            : T.car ? `Out of the car! You are under arrest for fleeing the police. That's ${a}.` : `Stop right there! You are under arrest for fleeing the police. That's ${a}.`);
+          this.charge(f); this.lastArrest = f; this.addRecord();
         }
       }
       if (S.kind === 'arrest' && S.t > 2.2 && !S.jailed) { S.jailed = true; this.arrest(); return; }
@@ -870,6 +875,12 @@ export class Police {
   }
   // a fine off your money (single player: the save; multiplayer: the session's money guard sends it to the server as
   // a 'game' spend, which may take you into debt like any of the game's own charges)
+  // the fines grow with your record (the user: "if you do it more than once it keeps increasing"): every earlier
+  // fine or arrest adds fineStep / arrestStep (save.policeRecord, kept in the save: the multiplayer one too)
+  record() { return Math.max(0, this.save?.policeRecord | 0); }
+  addRecord() { if (this.save) { this.save.policeRecord = this.record() + 1; this.writeSave?.(); } }
+  fineNow() { return TUNING.fine + TUNING.fineStep * this.record(); }
+  arrestNow() { return TUNING.arrestFine + TUNING.arrestStep * this.record(); }
   charge(amount) {
     const s = this.save;
     if (!s) return;
@@ -893,7 +904,7 @@ export class Police {
     const go = () => {
       try { if (this.drive?.active) this.drive.abort(); } catch (e) { console.warn('police: out of the car', e); }
       this.clear(true);
-      this.hud?.flash?.(`Arrested · -$${TUNING.arrestFine.toLocaleString('en-US')}`, 'bad', 4000);
+      this.hud?.flash?.(`Arrested · -${usd(this.lastArrest || TUNING.arrestFine)}`, 'bad', 4000);
     };
     if (this.transition?.fade) this.transition.fade(go); else go();
   }
@@ -962,9 +973,9 @@ export class Police {
     const W = this.w;
     if (!W || paused) { this.setHud(false); return; }
     const S = W.scene;
-    const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : 'Pulled over · stay in the car · $500 fine') : 'Under arrest')
+    const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : `Pulled over · stay in the car · ${usd(this.fineNow())} fine`) : 'Under arrest')
       : W.fleeing ? 'Fleeing · they will ram you · stop to give up'
-        : W.reached ? `Pull over now: stop to pay the $500 fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : 'Police! Stop to pay a $500 fine, or get away';
+        : W.reached ? `Pull over now: stop to pay the ${usd(this.fineNow())} fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : `Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`;
     const msg2 = this.noteUntil > performance.now() ? this.noteText : msg;
     const near = Number.isFinite(W.near) ? ` · police ${Math.round(W.near)} m` : '';
     const esc = S ? '' : `Escape ${mmss(W.esc)} / ${mmss(TUNING.escapeS)} · stay ${TUNING.escapeR} m+ away${near}`;

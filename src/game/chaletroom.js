@@ -55,7 +55,7 @@ const _m = new THREE.Matrix4(), _s = new THREE.Vector3(), _size = new THREE.Vect
 const PORTAL_VERT = `
   varying vec2 vUv;
   void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-const LIVE_PORTAL = false; // the windows' live view of the world (see renderPortal)
+const LIVE_PORTAL = true; // the windows' live view of the world (see renderPortal; the freeze it was blamed for was build mode's lamp raycast)
 const PORTAL_FRAG = `
   uniform sampler2D tView;
   uniform float uHas;
@@ -287,7 +287,7 @@ export class ChaletRoom {
   renderPortal() {
     // (off: drawing the whole world a second time through the windows froze the game on going in, on the user's Mac;
     // the windows show a soft day / night view instead. Oct 29, "the chalets broke again ... it froze as soon as i got in")
-    if (!LIVE_PORTAL) return;
+    if (!LIVE_PORTAL || this.portalOff) return; // (portalOff: switched off for this session after slow frames)
     const o = this.world, r = this.renderer;
     if (!o || !r?.render) return;
     const cam = this.camera;
@@ -296,10 +296,10 @@ export class ChaletRoom {
     if (!this.portalMeshes.some((m) => _frustum.intersectsBox(_box.setFromObject(m)))) return; // (no window in view)
     // (every other frame: the world drawn a second time is the biggest cost in here)
     this.portalTick = (this.portalTick || 0) + 1;
-    if (this.portalMat.uniforms.uHas.value && (this.portalTick & 1)) return;
+    if (this.portalMat.uniforms.uHas.value && this.portalTick % 3) return; // (every third frame: a view out of a window needs no more)
     const size = r.getDrawingBufferSize(_size);
     // half resolution, at most 1024 px on the long side (a blurred view out of a window needs no more)
-    const k = Math.min(0.5, 1024 / Math.max(1, size.x, size.y));
+    const k = Math.min(0.4, 768 / Math.max(1, size.x, size.y));
     const w = Math.max(64, Math.round(size.x * k)), h = Math.max(64, Math.round(size.y * k));
     if (!this.portalRT) {
       this.portalRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
@@ -318,10 +318,16 @@ export class ChaletRoom {
     r.shadowMap.needsUpdate = now - this.lastShadow > 6000; // (the world's shadows: refreshed every few seconds)
     if (r.shadowMap.needsUpdate) this.lastShadow = now;
     try {
+      const t0 = performance.now();
       r.setRenderTarget(this.portalRT);
       r.clear();
       r.render(o.scene, pc);
       this.portalMat.uniforms.uHas.value = 1;
+      // a guard for a slow machine: the view out costing over ~45 ms again and again switches it off (the soft
+      // day / night view instead), so the room itself always stays smooth
+      const ms = performance.now() - t0;
+      this.portalSlow = ms > 45 ? (this.portalSlow || 0) + 1 : Math.max(0, (this.portalSlow || 0) - 1);
+      if (this.portalSlow > 6) { this.portalOff = true; this.portalMat.uniforms.uHas.value = 0; console.warn('chalet windows: live view off (slow)'); }
     } catch (e) {
       console.warn('Chalet window view failed', e);
       this.world = null;

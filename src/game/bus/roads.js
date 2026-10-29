@@ -404,7 +404,9 @@ export function roadsideBlocked(x, z, r = 0.3, own = -1, s = 0, { lots = true } 
  * and of every road's lane (>= 1.5 m off its plowed edge).
  */
 export function stopWaitArea(stop) {
-  const r = busRoads.roads.find((q) => q.to === stop) || busRoads.roads.find((q) => q.from === stop);
+  // (a stop part way along a road, as Almdorf at the chalet village's junction: its bus legs, as skibus.js besideBay)
+  const legs = busRoads.busLegs || [];
+  const r = legs.find((q) => q.to === stop) || busRoads.roads.find((q) => q.to === stop) || legs.find((q) => q.from === stop) || busRoads.roads.find((q) => q.from === stop);
   if (!r) return null;
   const arriving = r.to === stop, p = roadAt(r, arriving ? r.length - 4 : 10);
   const px = p.x, pz = p.z, ax = p.dx, az = p.dz, rx = -p.dz, rz = p.dx; // along the road; its right (the sign's side)

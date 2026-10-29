@@ -81,8 +81,9 @@ ${PL_BEAM_GLSL}
 			float d2 = dot( l, l );
 			if ( d2 > ${(PL_RANGE * PL_RANGE).toFixed(1)} ) continue;
 			vec3 ld = l * inversesqrt( d2 );
-			float win = clamp( 1.0 - d2 * d2 * ${(1 / PL_RANGE ** 4).toExponential(4)}, 0.0, 1.0 );
-			float e = lp.w * ( plBeam( ld, uPLoAim[ i ].xyz, uPLoShape ) + uPLoShape.w ) * win * win / max( d2, 16.0 );
+			vec4 la = uPLoAim[ i ];
+			float win = clamp( 1.0 - d2 * d2 * ( la.w > 0.0 ? la.w : ${(1 / PL_RANGE ** 4).toExponential(4)} ), 0.0, 1.0 );
+			float e = lp.w * ( plBeam( ld, la.xyz, uPLoShape ) + uPLoShape.w ) * win * win / max( d2, 16.0 );
 			plLight.color = uPLoColor * min( e, 40.0 );
 			plLight.direction = plR * ( - ld );
 			RE_Direct( plLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
@@ -97,13 +98,33 @@ ${PL_BEAM_GLSL}
  *  the on / count switch and the bounding sphere every lit material tests first. The resort's masts call it each
  *  frame, and so do the race courses' own floodlights (modes/race/floodlights.js), which fill the same arrays. */
 export function setLitObjects(count, max = OBJ_N) {
-  const Po = objUniforms.uPLoParams.value, pos = terrainUniforms.uPLPos.value, B = objUniforms.uPLoBound.value;
+  const Po = objUniforms.uPLoParams.value, pos = terrainUniforms.uPLPos.value, aim = terrainUniforms.uPLAim.value, B = objUniforms.uPLoBound.value;
   const no = Math.max(0, Math.min(count, OBJ_N, max));
   Po[0] = no ? 1 : 0; Po[1] = no;
   let bx = 0, by = 0, bz = 0, br = 0;
   for (let k = 0; k < no; k++) { bx += pos[k * 4] / no; by += pos[k * 4 + 1] / no; bz += pos[k * 4 + 2] / no; }
-  for (let k = 0; k < no; k++) br = Math.max(br, Math.hypot(pos[k * 4] - bx, pos[k * 4 + 1] - by, pos[k * 4 + 2] - bz));
-  B[0] = bx; B[1] = by; B[2] = bz; B[3] = br + PL_RANGE;
+  // (each light's own reach: aim.w = 1 / range^4, 0 for a floodlight's PL_RANGE)
+  for (let k = 0; k < no; k++) br = Math.max(br, Math.hypot(pos[k * 4] - bx, pos[k * 4 + 1] - by, pos[k * 4 + 2] - bz) + (aim[k * 4 + 3] > 0 ? aim[k * 4 + 3] ** -0.25 : PL_RANGE));
+  B[0] = bx; B[1] = by; B[2] = bz; B[3] = br;
+}
+
+// ------------------------------------------------------------------ street lamps
+// Lamp posts (Legacy Village's plaza, the chalet village's Chaletweg) light the ground the same cheap way as the
+// masts: each one is a small "mast" in the same per-pixel list and pool map, hanging over its foot (aimed straight
+// down), with a short reach (aim.w = 1 / range^4 in the shaders) and a lower intensity. They come on with the
+// floodlights at dusk. No THREE lights. addStreetLamps([{ x, z, y (the lamp's light centre), I?, R? }]) before or
+// after the PisteLights are built (village.js, chalets.js).
+export const LAMP = { I: 70, R: 15 }; // (under a lamp ~2.5x a floodlit piste, ~0.5x 8 m off: a warm pool, not a hot spot)
+const streetLamps = [];
+let pisteLightsLive = null;
+export function addStreetLamps(list) {
+  const lamps = list.map((l, k) => ({
+    x: l.x, z: l.z, lx: l.x, ly: l.y, lz: l.z, ax: 0, ay: -1, az: 0, I: l.I ?? LAMP.I, R: l.R ?? LAMP.R,
+    ir4: 1 / (l.R ?? LAMP.R) ** 4, th: hash01(Math.round(l.x * 7.3 + l.z * 3.1) + k, 11), on: 0, lamp: true,
+  }));
+  streetLamps.push(...lamps);
+  pisteLightsLive?.addLamps(lamps);
+  return lamps;
 }
 
 // ------------------------------------------------------------------ small helpers
@@ -683,9 +704,8 @@ class PoolMap {
     this.texture = null;
     if (this.done) return;
     let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
-    for (const m of masts) { minx = Math.min(minx, m.x); maxx = Math.max(maxx, m.x); minz = Math.min(minz, m.z); maxz = Math.max(maxz, m.z); }
     const R = PL_RANGE * 0.86;
-    minx -= R + 8; minz -= R + 8; maxx += R + 8; maxz += R + 8;
+    for (const m of masts) { const r = (m.R ? m.R * 0.86 : R) + 8; minx = Math.min(minx, m.x - r); maxx = Math.max(maxx, m.x + r); minz = Math.min(minz, m.z - r); maxz = Math.max(maxz, m.z + r); }
     this.texel = Math.max(4, Math.max(maxx - minx, maxz - minz) / 1024);
     this.W = Math.ceil((maxx - minx) / this.texel / 4) * 4;
     this.H = Math.ceil((maxz - minz) / this.texel / 4) * 4;
@@ -712,9 +732,11 @@ class PoolMap {
   }
   step(budgetMs) {
     if (this.done) return true;
-    const t0 = performance.now(), g = { y: 0, nx: 0, ny: 1, nz: 0 }, sh = this.shape, R = this.R, R4 = PL_RANGE ** 4;
+    const t0 = performance.now(), g = { y: 0, nx: 0, ny: 1, nz: 0 }, sh = this.shape;
     while (this.queue.length && performance.now() - t0 < budgetMs) {
       const m = this.queue.pop();
+      // (a street lamp: its own intensity and shorter reach)
+      const R = m.R ? m.R * 0.86 : this.R, R4 = (m.R || PL_RANGE) ** 4, I = m.I || INTENSITY;
       const i0 = Math.max(0, Math.floor((m.x - R - this.x0) / this.texel)), i1 = Math.min(this.W - 1, Math.ceil((m.x + R - this.x0) / this.texel));
       const j0 = Math.max(0, Math.floor((m.z - R - this.z0) / this.texel)), j1 = Math.min(this.H - 1, Math.ceil((m.z + R - this.z0) / this.texel));
       for (let j = j0; j <= j1; j++) {
@@ -729,7 +751,7 @@ class PoolMap {
           const ndl = -(lx * g.nx + ly * g.ny + lz * g.nz);
           if (ndl <= 0) continue;
           let win = Math.min(1, Math.max(0, 1 - (d2 * d2) / R4)); win *= win;
-          this.E[j * this.W + i] += INTENSITY * (beamJS(lx, ly, lz, m.ax, m.ay, m.az, sh) + sh[3]) * win / Math.max(d2, 16) * ndl;
+          this.E[j * this.W + i] += I * (beamJS(lx, ly, lz, m.ax, m.ay, m.az, sh) + sh[3]) * win / Math.max(d2, 16) * ndl;
         }
       }
     }
@@ -858,6 +880,8 @@ export class PisteLights {
     const t0 = performance.now();
     this.masts = planMasts(layout, world, colliders);
     const masts = this.masts, N = masts.length;
+    for (const m of masts) { m.I = INTENSITY; m.R = 0; m.ir4 = 0; }
+    this.lights = masts.slice(); // the masts, then the street lamps (addStreetLamps)
     this.colliders = masts.map((m) => ({ x: m.x, z: m.z, r: 0.3 }));
     // a small tree-free clearing round each mast (like the strips beside the safety nets)
     for (const m of masts) world.addCorridor?.([[m.x - 0.05, m.z], [m.x + 0.05, m.z]], 1.4, 'lift');
@@ -1040,19 +1064,31 @@ export class PisteLights {
   }
 
   finish(masts, world, t0) {
-    // near-light selection
+    // near-light selection (the masts and the street lamps)
     this.grid = new Grid(128);
     masts.forEach((m, i) => this.grid.add(m.x, m.z, m.x, m.z, i));
+    for (const l of streetLamps) { this.grid.add(l.x, l.z, l.x, l.z, this.lights.length); this.lights.push(l); }
     this.selI = new Int32Array(PL_MAX + 1);
     this.selD = new Float64Array(PL_MAX + 1);
 
     // far-field pool map (baked over the next frames) and the shared light uniforms
     const U = terrainUniforms;
     U.uPLColor.value.set(COLOR);
-    this.poolMap = new PoolMap(masts, world, U.uPLShape.value);
+    this.poolMap = new PoolMap(this.lights, world, U.uPLShape.value);
     this.planMs = Math.round(performance.now() - t0);
     this.setOn(0);
+    pisteLightsLive = this;
     onQualityChange(() => this.lastBucket.set(1e9, 0, 1e9));
+  }
+
+  /** More street lamps (addStreetLamps): into the near-light grid, and the pool map baked again with them. */
+  addLamps(lamps) {
+    if (!lamps.length) return;
+    for (const l of lamps) { this.grid.add(l.x, l.z, l.x, l.z, this.lights.length); this.lights.push(l); }
+    this.poolMap.texture?.dispose();
+    this.poolMap = new PoolMap(this.lights, this.world, terrainUniforms.uPLShape.value);
+    terrainUniforms.uPLMapK.value = 0;
+    this.setOn(this.on);
   }
 
   // switch-on state: masts come on one by one through the dusk (each has its own threshold)
@@ -1067,7 +1103,9 @@ export class PisteLights {
       for (let k = 0; k < this.G; k++) this.glowOn.array[i * this.G + k] = this.lampLive[i * this.G + k] ? m.on : 0;
     }
     this.glowOn.needsUpdate = true;
-    this.meanOn = masts.length ? sum / masts.length : 0;
+    const L = this.lights;
+    for (let i = masts.length; i < L.length; i++) { const l = L[i]; l.on = Math.min(1, Math.max(0, (on - l.th * 0.7) / 0.3)); sum += l.on; }
+    this.meanOn = L.length ? sum / L.length : 0;
     this.writeOnAttributes();
   }
   writeOnAttributes() {
@@ -1142,7 +1180,7 @@ export class PisteLights {
     let on = this.on + (target - this.on) * Math.min(1, dt * 0.8);
     if (Math.abs(target - on) < 0.01) on = target;
     if (on !== this.on) this.setOn(on);
-    const live = this.on > 0.001 && this.masts.length > 0;
+    const live = this.on > 0.001 && this.lights.length > 0;
     this.shared.on.value = this.on > 0.001 ? 1 : 0;
     this.group.visible = this.masts.length > 0;
     this.glow.visible = live;
@@ -1150,22 +1188,25 @@ export class PisteLights {
     const P = U.uPLParams.value, Po = objUniforms.uPLoParams.value;
     if (!live) { P[0] = 0; Po[0] = 0; U.uPLMapK.value = 0; return; }
 
-    // the masts nearest the camera light the snow per pixel (sorted, nearest first: the first OBJ_N also light
-    // characters / trees / props); pixels nearer than (first mast left out - its range) are exact, beyond that
-    // the baked pool map takes over
-    const selI = this.selI, selD = this.selD, c = this.grid.cell, R = SEL_R, LIT = Math.min(PL_MAX, quality.lights.lit);
-    let n = 0;
+    // the lights nearest the camera light the snow per pixel (sorted by how near their reach comes, distance -
+    // range, nearest first: the first OBJ_N also light characters / trees / props); pixels nearer than the first
+    // MAST left out reaches are exact, beyond that the baked pool map takes over (a street lamp left out is only
+    // missing inside that radius: a small pool far off, and it keeps the masts' exact radius wide)
+    const selI = this.selI, selD = this.selD, c = this.grid.cell, R = SEL_R, LIT = Math.min(PL_MAX, quality.lights.lit), lights = this.lights;
+    let n = 0, cutM = R - PL_RANGE;
     for (let gi = Math.floor((cam.x - R) / c); gi <= Math.floor((cam.x + R) / c); gi++) {
       for (let gj = Math.floor((cam.z - R) / c); gj <= Math.floor((cam.z + R) / c); gj++) {
         const cell = this.grid.map.get(gi * 100003 + gj);
         if (!cell) continue;
         for (let t = 0; t < cell.length; t++) {
-          const m = this.masts[cell[t]];
+          const m = lights[cell[t]];
           if (m.on <= 0) continue;
-          const d2 = (m.lx - cam.x) ** 2 + (m.ly - cam.y) ** 2 + (m.lz - cam.z) ** 2;
-          if (d2 > R * R) continue;
+          const dd = (m.lx - cam.x) ** 2 + (m.ly - cam.y) ** 2 + (m.lz - cam.z) ** 2;
+          if (dd > R * R) continue;
+          const d2 = Math.sqrt(dd) - (m.R || PL_RANGE); // (the key: how near its light comes)
           // insertion into the sorted top list (PL_MAX + 1 kept: the first one left out sets the exact radius)
-          if (n > LIT && d2 >= selD[LIT]) continue;
+          if (n > LIT && d2 >= selD[LIT]) { if (!m.lamp && d2 < cutM) cutM = d2; continue; }
+          if (n > LIT && !lights[selI[LIT]].lamp && selD[LIT] < cutM) cutM = selD[LIT]; // (falls off the list)
           let k = Math.min(n, LIT);
           while (k > 0 && selD[k - 1] > d2) { selD[k] = selD[k - 1]; selI[k] = selI[k - 1]; k--; }
           selD[k] = d2; selI[k] = cell[t];
@@ -1175,11 +1216,12 @@ export class PisteLights {
     }
     const count = Math.min(n, LIT), pos = U.uPLPos.value, aim = U.uPLAim.value;
     for (let k = 0; k < count; k++) {
-      const m = this.masts[selI[k]];
-      pos[k * 4] = m.lx; pos[k * 4 + 1] = m.ly; pos[k * 4 + 2] = m.lz; pos[k * 4 + 3] = INTENSITY * m.on;
-      aim[k * 4] = m.ax; aim[k * 4 + 1] = m.ay; aim[k * 4 + 2] = m.az; aim[k * 4 + 3] = 0;
+      const m = lights[selI[k]];
+      pos[k * 4] = m.lx; pos[k * 4 + 1] = m.ly; pos[k * 4 + 2] = m.lz; pos[k * 4 + 3] = m.I * m.on;
+      aim[k * 4] = m.ax; aim[k * 4 + 1] = m.ay; aim[k * 4 + 2] = m.az; aim[k * 4 + 3] = m.ir4;
     }
-    const cut = Math.max(0, (n > LIT ? Math.sqrt(selD[LIT]) : R) - PL_RANGE);
+    if (n > LIT && !lights[selI[LIT]].lamp && selD[LIT] < cutM) cutM = selD[LIT];
+    const cut = Math.max(0, cutM);
     this.nearR = cut < this.nearR ? cut : this.nearR + (cut - this.nearR) * Math.min(1, dt * 0.7);
     P[0] = 1; P[1] = count; P[2] = this.nearR; P[3] = 45;
     setLitObjects(count, quality.lights.obj); // (the first OBJ_N also light characters, trees and props)
@@ -1209,6 +1251,7 @@ export class PisteLights {
   dispose() {
     const U = terrainUniforms;
     U.uPLParams.value[0] = 0; objUniforms.uPLoParams.value[0] = 0; U.uPLMapK.value = 0;
+    if (pisteLightsLive === this) pisteLightsLive = null;
     this.scene.remove(this.group);
     this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     for (const m of this.materials) m.dispose();

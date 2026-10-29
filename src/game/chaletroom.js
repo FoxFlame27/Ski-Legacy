@@ -226,6 +226,7 @@ export class ChaletRoom {
     this.wallList = [];                    // the API's walls
     this.sillList = [];                    // the API's sills
     this.root = new THREE.Group(); this.root.name = 'chalet-furniture';
+    this.loads = [];                       // the Meshy fittings loading (warm() waits for them, then compiles)
     this.mats();
     this.buildPortal();
     this.buildFloors();
@@ -257,6 +258,24 @@ export class ChaletRoom {
   }
   /** Where the chalet you are in stands: { scene (the world), frame: Object3D (the house frame), hide: () => Object3D[] }. */
   setWorld(o) { this.world = o && o.scene && o.frame ? o : null; this.frame = this.world?.frame || null; }
+  /** Get the room ready to show without a hitch (called while you walk up to a door, awaited during the fade in):
+   *  the Meshy fittings loaded, then every material's shader compiled in the background (compileAsync: the
+   *  driver's parallel compile; no shader compiles on the first frame inside). Resolves within ~4 s whatever. */
+  warm(target = null) {
+    if (this.warmed) return this.warmed;
+    const r = this.renderer;
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    this.warmed = (async () => {
+      await Promise.race([Promise.allSettled(this.loads), wait(2500)]);
+      if (!r?.compileAsync) return;
+      // (compiled for the target the frame is drawn into, post's HDR buffer: a program depends on it)
+      const prev = r.getRenderTarget(), tgt = typeof target === 'function' ? target() : target;
+      let job = null;
+      try { if (tgt) r.setRenderTarget(tgt); job = r.compileAsync(this.scene, this.camera); } catch (e) { console.warn('chalet warm-up', e); } finally { r.setRenderTarget(prev); }
+      try { if (job) await Promise.race([job, wait(4000)]); } catch (e) { console.warn('chalet warm-up', e); }
+    })();
+    return this.warmed;
+  }
   releasePortal() {
     if (this.portalRT) { this.portalRT.dispose(); this.portalRT = null; }
     this.portalMat.uniforms.tView.value = null;
@@ -269,13 +288,17 @@ export class ChaletRoom {
     cam.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     if (!this.portalMeshes.some((m) => _frustum.intersectsBox(_box.setFromObject(m)))) return; // (no window in view)
+    // (every other frame: the world drawn a second time is the biggest cost in here)
+    this.portalTick = (this.portalTick || 0) + 1;
+    if (this.portalMat.uniforms.uHas.value && (this.portalTick & 1)) return;
     const size = r.getDrawingBufferSize(_size);
-    const k = Math.min(1, 1600 / Math.max(1, size.x));
+    // half resolution, at most 1024 px on the long side (a blurred view out of a window needs no more)
+    const k = Math.min(0.5, 1024 / Math.max(1, size.x, size.y));
     const w = Math.max(64, Math.round(size.x * k)), h = Math.max(64, Math.round(size.y * k));
     if (!this.portalRT) {
       this.portalRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
       this.portalMat.uniforms.tView.value = this.portalRT.texture;
-      this.lastShadow = 0;
+      this.lastShadow = performance.now(); // (the world's shadow map is fresh from the last frame outside)
     } else if (this.portalRT.width !== w || this.portalRT.height !== h) this.portalRT.setSize(w, h);
     const pc = this.portalCam;
     o.frame.updateMatrixWorld();
@@ -286,7 +309,7 @@ export class ChaletRoom {
     for (const x of hidden) x.visible = false;
     const prev = r.getRenderTarget(), auto = r.shadowMap.autoUpdate, now = performance.now();
     r.shadowMap.autoUpdate = false;
-    r.shadowMap.needsUpdate = now - this.lastShadow > 3000; // (the world's shadows: refreshed every few seconds)
+    r.shadowMap.needsUpdate = now - this.lastShadow > 6000; // (the world's shadows: refreshed every few seconds)
     if (r.shadowMap.needsUpdate) this.lastShadow = now;
     try {
       r.setRenderTarget(this.portalRT);
@@ -540,7 +563,7 @@ export class ChaletRoom {
     const fixture = (id, x, y, z, face, size, axis, fallback) => {
       const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = face; this.house.add(g);
       const stand = fallback?.(g);
-      loadGLB(`bathroom/${id}`).then((gl) => {
+      this.loads.push(loadGLB(`bathroom/${id}`).then((gl) => {
         if (!gl) return;
         const m = gl.scene.clone(true);
         m.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); interiorLit(o.material); o.castShadow = o.receiveShadow = false; if (id === 'shower') { o.material.transparent = true; o.material.opacity = 0.5; o.material.depthWrite = false; o.renderOrder = 2; /* (its glass walls: Meshy bakes them opaque) */ } } });
@@ -551,7 +574,7 @@ export class ChaletRoom {
         m.position.set(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
         if (stand) g.remove(stand);
         g.add(m);
-      }).catch(() => null);
+      }).catch(() => null));
       return g;
     };
     const toilet = (g) => {
@@ -601,49 +624,47 @@ export class ChaletRoom {
 
   // ------------------------------------------------------------------ the built-in lamps (Meshy) and their light
   buildLamps() {
-    const M = this.M;
-    const lamp = (id, x, y, z, face, size, level, power, fallback) => {
+    // the ceiling lamps (Oct 29, the user: "the lamps on the ceiling are super bad ... use Meshy lamps"): a rustic
+    // alpine drum pendant (a canopy at the ceiling, a thin rod, a linen drum shade) in every room and a wrought-iron
+    // candle chandelier over the living room's table; regenerated (tools/meshy-bathroom.mjs), the best of a few
+    // picked by their geometry (canopy on top, the shade below it, upright, sensible width / height). Fitted by their
+    // height, one uniform scale, their top (the canopy) on the ceiling. The light's source: in the shade / among the
+    // candles (no stand-in mesh: the room is shown only once they're in, ChaletRoom.warm)
+    const lamp = (id, x, y, z, face, size, level, power, glowAt) => {
       const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = face; this.house.add(g);
-      const stand = fallback(g);
-      loadGLB(`lamps/${id}`).then((gl) => {
+      this.loads.push(loadGLB(`lamps/${id}`).then((gl) => {
         if (!gl) return;
         const m = gl.scene.clone(true);
-        m.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); if (o.material.emissive) { o.material.emissive.set(0xffb46b); o.material.emissiveIntensity = 0.35; if (!o.material.emissiveMap && o.material.map) o.material.emissiveMap = o.material.map; } interiorLit(o.material); } });
+        m.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); if (o.material.emissive) { o.material.emissive.set(0xffb46b); o.material.emissiveIntensity = id === 'wall_lamp' ? 0.35 : 0.5; if (!o.material.emissiveMap && o.material.map) o.material.emissiveMap = o.material.map; } interiorLit(o.material); o.castShadow = o.receiveShadow = false; } });
         const b = new THREE.Box3().setFromObject(m), s = new THREE.Vector3(); b.getSize(s);
-        m.scale.setScalar(size / Math.max(1e-3, id === 'antler_lamp' ? Math.max(s.x, s.z) : s.y)); // (pendant, sconce: by height)
+        m.scale.setScalar(size / Math.max(1e-3, s.y)); // (by height: uniform)
         m.updateMatrixWorld(true); b.setFromObject(m);
-        // pendants hang from y (their top at it); sconces: their back on the wall (local -z), centred on y
+        // ceiling lamps hang from y (their canopy at it); sconces: their back on the wall (local -z), centred on y
         if (id === 'wall_lamp') m.position.set(-(b.min.x + b.max.x) / 2, -(b.min.y + b.max.y) / 2, -b.min.z);
         else m.position.set(-(b.min.x + b.max.x) / 2, -b.max.y, -(b.min.z + b.max.z) / 2);
-        stand.visible = false;
         g.add(m);
-        // a warm glowing bulb in it (the model's own shade might be opaque)
-      }).catch(() => null);
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), M.lamp);
-      bulb.position.set(0, id === 'wall_lamp' ? 0.0 : id === 'antler_lamp' ? -size * 0.6 : -size * 0.85, id === 'wall_lamp' ? 0.12 : 0); g.add(bulb);
+      }).catch(() => null));
       g.updateMatrixWorld(true);
-      const p = bulb.getWorldPosition(new THREE.Vector3()); // (house frame: the house group is at the origin now)
+      const p = g.localToWorld(new THREE.Vector3(0, -size * glowAt, id === 'wall_lamp' ? 0.12 : 0)); // (house frame)
       this.lamps.push({ x: p.x, y: p.y, z: p.z, level, power });
     };
-    const pendant = (g) => { const s = new THREE.Group(); const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.24, 0.18, 16, 1, true), M.lamp); shade.position.y = -0.42; s.add(shade); const c = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.34, 4), M.iron); c.position.y = -0.17; s.add(c); g.add(s); return s; };
-    const sconce = (g) => { const s = new THREE.Group(); const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.2, 0.03), M.beam); b.position.z = 0.015; s.add(b); const sh = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.12, 12, 1, true), M.lamp); sh.position.set(0, 0.04, 0.14); s.add(sh); g.add(s); return s; };
-    // a pendant over the middle of each room (the antler chandelier over the living room's table end)
+    // a pendant over the middle of each room (the chandelier over the living room's table end)
     for (const r of ROOMS) {
       const q = r.rects.reduce((a, b) => ((b.x1 - b.x0) * (b.z1 - b.z0) > (a.x1 - a.x0) * (a.z1 - a.z0) ? b : a));
       const x = (q.x0 + q.x1) / 2, z = (q.z0 + q.z1) / 2, up = r.level === 'up';
-      const y = up ? Math.min(ceilingUp(x, z), FL + COLLAR) - 0.02 : GC - 0.02; // (hung from the ceiling, its bottom ~1.95 m over the floor)
+      const y = up ? Math.min(ceilingUp(x, z), FL + COLLAR) - 0.02 : GC - 0.02; // (hung from the ceiling, its bottom ~1.9 m over the floor)
       if (r.id === 'living') {
-        lamp('antler_lamp', x - 1.6, y, z, 0, 0.75, 'ground', 1.0, pendant);
-        lamp('pendant_lamp', x + 1.9, y, z, 0, 0.7, 'ground', 0.8, pendant);
-      } else lamp('pendant_lamp', x, y, z, 0, r.bath ? 0.5 : 0.7, r.level, r.bath ? 0.6 : 0.8, pendant);
+        lamp('chandelier', x - 1.6, y, z, 0, 0.85, 'ground', 1.0, 0.72);
+        lamp('pendant_drum', x + 1.9, y, z, 0, 0.7, 'ground', 0.8, 0.85);
+      } else lamp('pendant_drum', x, y, z, 0, r.bath ? 0.5 : 0.7, r.level, r.bath ? 0.6 : 0.8, 0.85);
     }
     // wall sconces: the living room's back wall, the hall, the snug, the landing; 1.75 m over the floor
     const sy = G + 1.75;
-    lamp('wall_lamp', -IX + 0.02, sy, -3.6, Math.PI / 2, 0.36, 'ground', 0.45, sconce);
-    lamp('wall_lamp', -IX + 0.02, sy, -5.0 + 0.2, Math.PI / 2, 0.36, 'ground', 0.45, sconce);
-    lamp('wall_lamp', -0.78 + IT / 2 + 0.01, sy, 0.6, Math.PI / 2, 0.36, 'ground', 0.4, sconce);
-    lamp('wall_lamp', -IX + 0.02, sy, 4.2, Math.PI / 2, 0.36, 'ground', 0.4, sconce);
-    lamp('wall_lamp', 0.65 - IT / 2 - 0.01, FL + 1.75, -1.4, -Math.PI / 2, 0.36, 'up', 0.35, sconce);
+    lamp('wall_lamp', -IX + 0.02, sy, -3.6, Math.PI / 2, 0.36, 'ground', 0.45, 0);
+    lamp('wall_lamp', -IX + 0.02, sy, -5.0 + 0.2, Math.PI / 2, 0.36, 'ground', 0.45, 0);
+    lamp('wall_lamp', -0.78 + IT / 2 + 0.01, sy, 0.6, Math.PI / 2, 0.36, 'ground', 0.4, 0);
+    lamp('wall_lamp', -IX + 0.02, sy, 4.2, Math.PI / 2, 0.36, 'ground', 0.4, 0);
+    lamp('wall_lamp', 0.65 - IT / 2 - 0.01, FL + 1.75, -1.4, -Math.PI / 2, 0.36, 'up', 0.35, 0);
   }
 
   // ------------------------------------------------------------------ walking

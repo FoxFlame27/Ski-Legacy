@@ -11,7 +11,7 @@
 // Kept off: pistes, lifts, the Express, the valley road (but at the junction), the car rental, the race regions.
 import { world } from '../../world/world.js';
 import { expressNearest } from '../../world/expressroute.js';
-import { busRoads, makeRoad, roadAt, laneDistance } from './roads.js';
+import { busRoads, makeRoad, roadAt, laneDistance, ROAD_HALF } from './roads.js';
 import { lotAt } from './scenic.js';
 import { HX, FOOT } from '../chaletplan.js';
 
@@ -137,8 +137,8 @@ export function planChaletVillage(O) {
   const mid = plots.filter((p) => p.leg === 2 && p.side > 0).sort((a, b) => Math.abs((a.x0 + a.x1) / 2 - 480) - Math.abs((b.x0 + b.x1) / 2 - 480))[0];
   if (mid) { mid.playground = true; mid.shed = false; }
   // the house numbers, in order up the Chaletweg from the valley road (its s runs from the car park at the top):
-  // "Almdorf 1" is the first chalet you reach
-  plots.filter((p) => !p.playground).sort((a, b) => b.drive.s - a.drive.s || a.side - b.side).forEach((p, i) => { p.num = i + 1; p.name = `Almdorf ${i + 1}`; });
+  // "Chalet 1" is the first chalet you reach
+  plots.filter((p) => !p.playground).sort((a, b) => b.drive.s - a.drive.s || a.side - b.side).forEach((p, i) => { p.num = i + 1; p.name = `Chalet ${i + 1}`; });
   // neighbouring pads in a row: their levels within reach of each other's banks
   for (let it = 0; it < 3; it++) for (let i = 1; i < plots.length; i++) {
     const a = plots[i - 1], b = plots[i];
@@ -209,6 +209,7 @@ export function planChaletVillage(O) {
 export function planAlmdorfStop() {
   const V = busRoads.chalets;
   if (!V) return;
+  if (CHALET_DRIVES.on) try { planChaletDrives(V); } catch (e) { console.warn('chalet drives', e); } // (after every road's cut: last word)
   const J = V.junction, r0 = V.road.exitAt1?.road;
   if (!r0) return;
   let iJ = 0;
@@ -222,4 +223,153 @@ export function planAlmdorfStop() {
   const stop = { x: J.x, z: J.z, heading: 0, name: 'Almdorf', chalets: true };
   busRoads.stops.push(stop); // (the same array as layout.busStops: the trail map and the stop list show it)
   busRoads.busLegs = [slice(0, iJ, r0.from, stop), slice(iJ, r0.n - 1, stop, r0.to)];
+}
+
+/**
+ * The street lamps of the chalet village (Legacy Village's lamp post): along the Chaletweg every ~27 m at its edge
+ * (sides alternating, shifted along or across to the other side when a spot is taken), a pair at the junction with
+ * the valley road (the bus stop "Almdorf"), round the car park at the top. Kept off every lane (the hairpins' other
+ * legs, the valley road), the car park and its entrance, and every plot's drive, parking bay, fence, gate, steps
+ * and garden props (`items`: villagePlacements), and clear of the colliders already standing (the bus stop's sign
+ * and shelter). Pure: [{ x, z, s, yaw (facing the road), where }].
+ */
+export const LAMP_STEP = 27;
+export function chaletLampSpots(V, items = [], colliders = []) {
+  const road = V.road, out = [], P = {}, off = ROAD_HALF + 1.9; // (behind the snow poles and the guardrail)
+  const inBox = (x, z, o, m) => {
+    const c = Math.cos(o.yaw || 0), s = Math.sin(o.yaw || 0), dx = x - o.x, dz = z - o.z;
+    // (three.js rotation.y: local x = (c, -s), local z = (s, c))
+    return Math.abs(dx * c - dz * s) < (o.hw || 0) + m && Math.abs(dx * s + dz * c) < (o.hd || 0) + m;
+  };
+  const free = (x, z, { lot = true, s = -1 } = {}) => {
+    // (the lane check: every road but this stretch of the Chaletweg itself; then all of it, a little closer)
+    if (laneDistance(x, z, V.ri, s, 12) < ROAD_HALF + 1.0 || laneDistance(x, z) < ROAD_HALF + 0.8) return false;
+    for (const L of busRoads.lots) {
+      const dx = x - L.x, dz = z - L.z, u = dx * L.ux + dz * L.uz, v = dx * L.vx + dz * L.vz;
+      if (lot && Math.abs(u) < L.hw + 1.2 && Math.abs(v) < L.hd + 1.2) return false;
+      if (Math.hypot(x - L.ex, z - L.ez) < 9) return false;
+    }
+    for (const o of items) if (Math.abs(o.x - x) < 12 && Math.abs(o.z - z) < 12 && inBox(x, z, o, o.kind === 'drive' || o.kind === 'bay' ? 1.0 : 0.6)) return false;
+    for (const c of colliders) {
+      if (Math.abs(c.x - x) > 14 || Math.abs(c.z - z) > 14) continue;
+      if (c.r != null ? Math.hypot(c.x - x, c.z - z) < c.r + 0.6 : inBox(x, z, { x: c.x, z: c.z, yaw: -(c.rot || 0), hw: c.hw, hd: c.hd }, 0.6)) return false;
+    }
+    for (const q of out) if (Math.hypot(q.x - x, q.z - z) < 12) return false;
+    return true;
+  };
+  // along the road (s = 0 in the car park, the junction at its end)
+  const L = road.length;
+  let side = 1;
+  for (let s0 = 14; s0 < L - 16; s0 += LAMP_STEP) {
+    let got = null;
+    for (const ds of [0, 3, -3, 6, -6, 9, -9]) {
+      for (const sd of [side, -side]) {
+        const s = s0 + ds;
+        if (s < 8 || s > L - 10) continue;
+        roadAt(road, s, P);
+        const nx = P.dz, nz = -P.dx, x = P.x + nx * sd * off, z = P.z + nz * sd * off;
+        if (free(x, z, { s })) { got = { x, z, s, yaw: Math.atan2(-nx * sd, -nz * sd), where: 'road', sd }; break; }
+      }
+      if (got) break;
+    }
+    if (got) { out.push(got); side = -got.sd; }
+  }
+  // the junction and the bus stop: on the valley road, both corners of the Chaletweg's mouth and across from it
+  const J = V.junction, r0 = road.exitAt1?.road;
+  if (r0) {
+    for (const [ds, sd] of [[12, 1], [-12, 1], [12, -1], [-12, -1], [0, 1], [0, -1]]) {
+      roadAt(r0, J.s + ds, P);
+      const nx = P.dz, nz = -P.dx, x = P.x + nx * sd * off, z = P.z + nz * sd * off;
+      if (free(x, z)) out.push({ x, z, s: -1, yaw: Math.atan2(-nx * sd, -nz * sd), where: 'junction' });
+    }
+  }
+  // the car park: its corners, a little outside it (not at its entrance)
+  const lot = V.lot;
+  if (lot?.ux != null) {
+    for (const [su, sv] of [[1, 1], [1, -1], [-1, 1], [-1, -1], [0, 1], [0, -1]]) {
+      const u = su * (lot.hw + 1.6), v = sv * (lot.hd + 1.6), x = lot.x + lot.ux * u + lot.vx * v, z = lot.z + lot.uz * u + lot.vz * v;
+      if (free(x, z, { lot: false })) out.push({ x, z, s: 0, yaw: Math.atan2(lot.x - x, lot.z - z), where: 'car park' });
+    }
+  }
+  return out;
+}
+
+/**
+ * Each chalet's drive (the road's plowed edge -> its parking bay) and the bay itself, graded smooth (Oct 29, the
+ * user: "fix the driveways by the chalets, make them smooth and flat"). Before, the ground there was whatever the
+ * pad's cut and the road's embankment (registered after it) made of it between them: lumps, a step at the bay.
+ * Now one cut, registered after every road's (planAlmdorfStop calls it), has the last word:
+ *  - the bay: dead flat at the pad's level;
+ *  - the drive: a straight ramp from the road's plowed edge (3.4 m from the lane's centre line) to the bay, level
+ *    across (it follows the road's own grade at the road end only);
+ *  - the same plane carried 2.2 m past every edge (so no 2 m terrain triangle under the drive or bay leans on the
+ *    bank), then soft 35-degree banks back to the ground around.
+ * A walkable surface on each (the drive's mesh height, game/chalets.js drapes it from driveHeight): no foot or wheel
+ * sinks into it where the 2 m terrain triangles round the ramp's ends fall below it.
+ */
+export const CHALET_DRIVES = { on: true }; // (Node checks: off for the before/after comparison)
+const DRIVE = { v0: ROAD_HALF, vr: ROAD_HALF, M: 2.2, OFF: 0.04 };
+export function driveHeight(p, x, z) {
+  const d = p.drv;
+  if (!d) return null;
+  const v = d.sd * (z - d.legZ);
+  if (v < d.v0 - 1e-6 || v > d.vb1 + 1e-6 || x < d.x0 - 1e-6 || x > d.x1 + 1e-6) return null;
+  // (4 cm over the graded ground, and never under the drawn 2 m terrain triangles: where one spans the fold at the
+  // road's edge it lies up to ~5 cm over the ground there; the mesh follows it there, under a centimetre)
+  return Math.max(driveGround(d, x, v), world.meshHeight(x, z) - 0.03) + DRIVE.OFF;
+}
+// the graded ground: x anywhere (the road end's line extended), v from the plowed edge on
+function driveGround(d, x, v) {
+  const ya = d.ya0 + (d.ya1 - d.ya0) * (x - d.x0) / (d.x1 - d.x0);
+  if (v <= d.vr) return ya;
+  if (v >= d.vb0) return d.yb;
+  return ya + (d.yb - ya) * (v - d.vr) / (d.vb0 - d.vr);
+}
+export function planChaletDrives(V) {
+  const BANK_K = 0.7; // tan 35 degrees
+  const list = [];
+  for (const p of V.plots) {
+    if (p.playground || !p.bay) continue;
+    const sd = p.side, x0 = p.bay.x - p.bay.w / 2, x1 = p.bay.x + p.bay.w / 2;
+    const vb0 = PAD_FRONT + 0.3, vb1 = vb0 + p.bay.d;
+    // the road end: the road's own height at the plowed edge (its grade along the lane), read before this cut
+    const za = p.legZ + sd * DRIVE.v0;
+    const d = { sd, legZ: p.legZ, x0, x1, v0: DRIVE.v0, vr: DRIVE.vr, vb0, vb1, ya0: world.height(x0, za), ya1: world.height(x1, za), yb: p.y, za, zb: p.legZ + sd * vb0, zc: p.legZ + sd * vb1 };
+    p.drv = d;
+    list.push(d);
+  }
+  if (!list.length) return;
+  let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+  const R = DRIVE.M + 8; // (the banks: at most ~5.6 m of height to take up)
+  for (const d of list) {
+    minx = Math.min(minx, d.x0 - R); maxx = Math.max(maxx, d.x1 + R);
+    const zA = d.za, zB = d.legZ + d.sd * (d.vb1 + R);
+    minz = Math.min(minz, zA, zB); maxz = Math.max(maxz, zA, zB);
+  }
+  world.addCut({
+    bounds: { minx, minz, maxx, maxz },
+    chaletDrives: true,
+    apply(x, z, h) {
+      for (const d of list) {
+        if (x < d.x0 - R || x > d.x1 + R) continue;
+        const v = d.sd * (z - d.legZ);
+        if (v < d.v0 || v > d.vb1 + R) continue; // (never on the road itself)
+        const xa = d.x0 - DRIVE.M, xb = d.x1 + DRIVE.M, vb = d.vb1 + DRIVE.M;
+        const dx = Math.max(xa - x, 0, x - xb), dv = Math.max(v - vb, 0);
+        const T = driveGround(d, clamp(x, xa, xb), Math.min(v, vb));
+        if (dx === 0 && dv === 0) return T; // (the drive, the bay and their margins: exactly the plane)
+        const dd = Math.hypot(dx, dv), lo = T - dd * BANK_K, hi = T + dd * BANK_K;
+        if (h >= lo && h <= hi) return h;
+        const k = Math.min(0.5, dd * BANK_K * 0.5); // (soft where the bank meets the ground; none at the plane's edge)
+        return smax(smin(h, hi, k), lo, k);
+      }
+      return h;
+    },
+  });
+  // walkable: the drive's and the bay's mesh (2 m terrain triangles round the ramp's ends fall up to ~5 cm below it)
+  for (const p of V.plots) {
+    const d = p.drv;
+    if (!d) continue;
+    world.addSurface?.({ bounds: { minx: d.x0, maxx: d.x1, minz: Math.min(d.za - d.sd * 0.6, d.zc), maxz: Math.max(d.za - d.sd * 0.6, d.zc) }, height: (x, z) => driveHeight(p, x, z) });
+  }
 }

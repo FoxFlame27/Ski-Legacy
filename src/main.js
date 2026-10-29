@@ -1103,6 +1103,11 @@ function waypoint() {
   if (!player.hasSkis) return to(village.shopDoor.x, village.shopDoor.z, 'Ski shop');
   const g = layout.lifts[0];
   if (gondolaRides === 0 && Math.hypot(p.x, p.z) < 400 && save.stats.races === 0) return to(g.bottom.x, g.bottom.z, 'Gondola');
+  // nothing else to point at: your own chalet (at night from anywhere, by day once you're within ~450 m of it, so
+  // it's easy to find in the chalet village), until you're at its door
+  const home = chalets?.inside ? null : chalets?.homeWaypoint?.();
+  const dHome = home ? Math.hypot(home.x - p.x, home.z - p.z) : 0;
+  if (home && dHome > 6 && (env.nightFactor > 0.6 || dHome < 450)) return to(home.x, home.z, home.label);
   return null;
 }
 

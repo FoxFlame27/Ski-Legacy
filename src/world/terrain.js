@@ -99,7 +99,7 @@ export const PL_BEAM_GLSL = `
   blank.needsUpdate = true;
   Object.assign(terrainUniforms, {
     uPLPos: { value: new Float32Array(PL_MAX * 4) },   // xyz light centre, w intensity
-    uPLAim: { value: new Float32Array(PL_MAX * 4) },   // xyz aim (unit)
+    uPLAim: { value: new Float32Array(PL_MAX * 4) },   // xyz aim (unit), w 1 / range^4 (0: PL_RANGE; street lamps reach less far)
     uPLParams: { value: new Float32Array(4) },         // on, count, near radius (m), crossfade (m)
     uPLShape: { value: new Float32Array([0.12, 0.7, 4.5, 0.035]) },
     uPLColor: { value: new Float32Array([1, 0.83, 0.64]) },
@@ -615,8 +615,9 @@ export function createTerrainMaterial({ clip = false } = {}) {
                 vec3 ld = l * inversesqrt(d2);
                 float ndl = -dot(tPN, ld);
                 if (ndl <= 0.0) continue;
-                float win = clamp(1.0 - d2 * d2 * ${(1 / PL_RANGE ** 4).toExponential(4)}, 0.0, 1.0);
-                float e = lp.w * (plBeam(ld, uPLAim[i].xyz, uPLShape) + uPLShape.w) * win * win / max(d2, 16.0) * ndl;
+                vec4 la = uPLAim[i];
+                float win = clamp(1.0 - d2 * d2 * (la.w > 0.0 ? la.w : ${(1 / PL_RANGE ** 4).toExponential(4)}), 0.0, 1.0);
+                float e = lp.w * (plBeam(ld, la.xyz, uPLShape) + uPLShape.w) * win * win / max(d2, 16.0) * ndl;
                 plE += e;
                 if (e > plMax) { plMax = e; plL = -ld; }
               }

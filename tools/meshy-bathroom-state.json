@@ -53,5 +53,35 @@
     "preview": "01a183df-28ae-737e-86c9-f410d0dcf6fa",
     "refine": "01a186b3-b41b-7790-8744-ad928798f91d",
     "done": true
+  },
+  "pendant_drum_a": {
+    "preview": "01a18705-73fd-75bd-865e-e1e4e111e222",
+    "refine": "01a18706-4750-7577-8a39-007a27247a42",
+    "done": true
+  },
+  "pendant_drum_b": {
+    "preview": "01a18705-73de-76c4-a1b3-d2b70edde66a",
+    "refine": "01a18706-4710-7041-bb39-a73e1cf60280",
+    "done": true
+  },
+  "chandelier_a": {
+    "preview": "01a18705-73d9-70eb-8a08-35b2520d0ad6",
+    "refine": "01a18706-8a84-7388-a2f3-a4f4687f146d",
+    "done": true
+  },
+  "chandelier_b": {
+    "preview": "01a18705-73cf-7291-8fcf-640bf135573a",
+    "refine": "01a18706-675f-7320-a0e0-46960d215575",
+    "done": true
+  },
+  "pendant_drum_c": {
+    "preview": "01a1870d-41e6-760f-985f-b1c3349d28c9",
+    "refine": "01a1870e-3749-74ff-af4e-c46d1c40b9dd",
+    "done": true
+  },
+  "pendant_drum_d": {
+    "preview": "01a1870d-4219-716a-b327-0e539d6edef3",
+    "refine": "01a1870e-38e6-7668-b9c8-64fc06c211ab",
+    "done": true
   }
 }

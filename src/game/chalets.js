@@ -1,7 +1,7 @@
 // THE CHALET VILLAGE (Almdorf): two-storey chalets (the user's Meshy chalet: white plaster below, timber above,
 // snowy roofs) on terraces on both sides of the Chaletweg up the gentle forested slope north of Legacy Village (its
 // layout, its ground and its road: game/bus/chaletroad.js, part of busRoads; its bus stop "Almdorf" at the junction
-// with the valley road). 18 chalets, numbered up the Chaletweg ("Almdorf 1" is the first you reach from the valley
+// with the valley road). 18 chalets, numbered up the Chaletweg ("Chalet 1" is the first you reach from the valley
 // road): a blue enamel number plaque by each front door and the number on the mailbox at the garden gate. Every plot:
 // the chalet facing the road, a snowy garden inside ONE continuous picket fence (gaps for the drive and the gate),
 // small spruces, a bench, a shed or a snowman, a sledge in the garden, stepping stones from the gate to the front
@@ -21,7 +21,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from '../world/world.js';
 import { layout } from '../world/layout.js';
 import { busRoads } from './bus/roads.js';
+import { chaletLampSpots, driveHeight } from './bus/chaletroad.js';
 import { loadGLB, fitModel, clusterDecimate } from '../core/assets.js';
+import { addNightGlow, nightUniform } from '../world/village.js';
+import { addStreetLamps } from '../world/pistelights.js';
 import { HX, HZ, G, DOOR, MODEL, FOOT, STEPS, IX, IZ } from './chaletplan.js';
 import { ChaletRoom, setChaletInterior } from './chaletroom.js';
 
@@ -35,7 +38,18 @@ const HI_R = 60;                   // m: the full model on the chalet you're nea
 const PLAQUE = { x: 4.015, y: 1.85, z: 1.45, w: 0.22, h: 0.165 }; // house frame: on the plaster right of the door (measured flat there)
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _l = new THREE.Vector3();
+const LAMP_H = 3.6, LAMP_LIGHT_Y = 3.1; // the lamp post (as in Legacy Village), its lantern
+const MARK_Y = 11.5;                    // m over the pad: the marker over your own chalet
 const UP = new THREE.Vector3(0, 1, 0);
+// the chalet model's own windows (their glass, house frame: measured off chalet.glb with orthographic renders and
+// rays, Oct 29): [outward normal, x, y (centre), z, width, height]; lit warm at night (buildWindows)
+const MODEL_WINDOWS = [
+  ['x', 3.857, 2.06, 3.14, 0.72, 0.96], ['x', 3.856, 2.06, -2.93, 0.74, 0.96], ['x', 3.85, 5.35, 0.99, 0.62, 0.55], ['x', 3.85, 5.35, -0.82, 0.62, 0.55],
+  ['-x', -3.842, 5.32, 1.04, 0.72, 0.6], ['-x', -3.837, 5.31, -0.47, 0.74, 0.58], ['-x', -3.855, 2.06, -2.92, 0.72, 0.96], ['-x', -3.852, 2.06, 3.11, 0.7, 0.96],
+  ['z', -1.68, 5.11, 5.943, 0.68, 1.02], ['z', -0.81, 5.11, 5.938, 0.62, 1.02], ['z', 0.85, 5.11, 5.95, 0.66, 1.02], ['z', 1.72, 5.12, 5.95, 0.64, 1.0],
+  ['z', -2.11, 2.07, 5.902, 0.86, 0.96], ['z', -0.12, 1.55, 5.913, 0.68, 1.98], ['z', 1.96, 2.06, 5.9, 0.9, 0.96],
+  ['-z', -0.5, 5.37, -5.862, 1.08, 0.94], ['-z', 1.49, 2.06, -5.83, 0.7, 0.96], ['-z', -1.67, 2.06, -5.91, 0.7, 0.96],
+];
 const hash = (i) => { const v = Math.sin(i * 91.7 + 17.3) * 43758.5453; return v - Math.floor(v); };
 
 // ------------------------------------------------------------------ where everything stands (pure: the game and the
@@ -92,9 +106,10 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
     { const q = L(HX + 0.04, PLAQUE.z); put({ kind: 'plaque', pid: p.id, num: p.num, x: q.x, z: q.z, y: p.y + PLAQUE.y, yaw: yaw, hw: PLAQUE.w / 2, hd: 0.01 }); }
     const door = L(HX + 1.6, DOOR.z), dx = door.x;
     // the parking space and its drive (flat; edge to edge, never on top of each other)
-    const bay = p.bay, bw = bay.w, bz0 = zIn(0.3), bz1 = zIn(0.3 + bay.d), road = p.legZ + sd * 3.7;
-    put({ kind: 'bay', pid: p.id, x: bay.x, z: (bz0 + bz1) / 2, yaw: 0, hw: bw / 2, hd: bay.d / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: bz0, zb: bz1, out: sd });
-    put({ kind: 'drive', pid: p.id, x: bay.x, z: (road + bz0) / 2, yaw: 0, hw: bw / 2, hd: Math.abs(bz0 - road) / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: road, zb: bz0 });
+    // (chaletroad.js planChaletDrives graded both: p.drv; the drive meets the road's plowed edge, edge to edge)
+    const bay = p.bay, bw = bay.w, bz0 = p.drv?.zb ?? zIn(0.3), bz1 = p.drv?.zc ?? zIn(0.3 + bay.d), road = p.drv?.za ?? p.legZ + sd * 3.7;
+    put({ kind: 'bay', pid: p.id, plot: p, x: bay.x, z: (bz0 + bz1) / 2, yaw: 0, hw: bw / 2, hd: bay.d / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: bz0, zb: bz1, out: sd });
+    put({ kind: 'drive', pid: p.id, plot: p, x: bay.x, z: (road + bz0) / 2, yaw: 0, hw: bw / 2, hd: Math.abs(bz0 - road) / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: road, zb: bz0 });
     // ONE fence round the plot: gaps for the drive and the gate
     const gx0 = bay.x - bw / 2 - 0.15 - xa, gx1 = bay.x + bw / 2 + 0.15 - xa;
     loop(p.id, xa, xb, zf, zb, [[gx0, gx1], [dx - 0.65 - xa, dx + 0.65 - xa]]);
@@ -147,7 +162,7 @@ export class Chalets {
   }
 
   // save.chalet from before: furniture from before the Oct 28 rescale moved onto the new floors; a chalet from the
-  // 54-plot village (Oct 29: 18 now) moved onto one of the 18, renamed "Almdorf N"
+  // 54-plot village (Oct 29: 18 now) moved onto one of the 18, renamed "Chalet N"
   migrateSave() {
     const c = this.save?.chalet;
     if (!c) return;
@@ -162,7 +177,7 @@ export class Chalets {
     }
     if (c.plan !== 2) { c.plan = 2; dirty = true; }
     if (c.id != null && c.layout !== SAVE_LAYOUT) {
-      const h = this.houses.find((x) => x.id === c.id) || this.houses[0]; // (an id the new village doesn't have: Almdorf 1)
+      const h = this.houses.find((x) => x.id === c.id) || this.houses[0]; // (an id the new village doesn't have: Chalet 1)
       if (h) { c.id = h.id; c.name = h.name; }
       c.layout = SAVE_LAYOUT; dirty = true;
     }
@@ -177,11 +192,16 @@ export class Chalets {
       const frame = houseFrame(p);
       const door = frame.localToWorld(new THREE.Vector3(HX + 0.9, 0, DOOR.z)); // (on the steps)
       const out = new THREE.Vector3(1, 0, 0).applyQuaternion(frame.quaternion);
-      this.houses.push({ id: p.id, num: p.num, name: p.name || `Almdorf ${p.num}`, plot: p, frame, door, out, yaw: frame.rotation.y });
+      this.houses.push({ id: p.id, num: p.num, name: p.name || `Chalet ${p.num}`, plot: p, frame, door, out, yaw: frame.rotation.y });
     }
     this.houses.sort((a, b) => a.num - b.num);
     this.items = villagePlacements(this.V);
     this.benchSpots = this.items.filter((i) => i.kind === 'bench').map((b) => ({ x: b.x, y: b.y, z: b.z, yaw: b.yaw }));
+    // the street lamps (Legacy Village's lamp post) along the Chaletweg, at the junction / bus stop and round the
+    // car park: their light pools from now on (world/pistelights.js: no THREE lights), the posts in build()
+    this.lamps = chaletLampSpots(this.V, this.items, this.colliders || []);
+    for (const l of this.lamps) { l.y = world.height(l.x, l.z) - 0.05; this.colliders?.push({ x: l.x, z: l.z, r: 0.22 }); }
+    addStreetLamps(this.lamps.map((l) => ({ x: l.x, z: l.z, y: l.y + LAMP_LIGHT_Y })));
     const first = this.houses[0];
     const r = this.V.road, road = [];
     for (let i = 0; i < r.n; i += 3) road.push([r.X[i], r.Z[i]]);
@@ -244,6 +264,14 @@ export class Chalets {
       const list = this.items.filter((i) => (i.kind === 'spruce' || i.kind === 'shrub') && (pines[v] ? i.v === v : i.v !== v));
       this.instance(base, list.map((t) => M(t, t.h)), g);
     }
+    // the street lamps: Legacy Village's Meshy lamp post, its lantern glowing warm at night (one instanced mesh)
+    const lampGl = await loadGLB('lamp_post').catch(() => null);
+    if (lampGl && this.lamps.length) {
+      const lamp = this.fit(lampGl, { size: LAMP_H, axis: 'y' });
+      addNightGlow(lamp, 6);
+      this.instance(lamp, this.lamps.map((l) => M(l)), g, true);
+    }
+    this.buildWindows(g);
     this.buildFences(g, by('fence'));
     this.buildSolids(g);
     this.buildBays(g, by('bay'), by('drive'));
@@ -378,10 +406,11 @@ export class Chalets {
     const drape = (list, textured) => {
       const pos = [], uv = [], idx = [];
       for (const r of list) {
-        const x0 = r.x0, x1 = r.x1, za = r.za, zb = r.zb, nx = Math.max(1, Math.ceil((x1 - x0) / 1)), nz = Math.max(1, Math.ceil(Math.abs(zb - za) / 1)), b = pos.length / 3;
+        const x0 = r.x0, x1 = r.x1, za = r.za, zb = r.zb, nx = Math.max(1, Math.ceil((x1 - x0) / 0.5)), nz = Math.max(1, Math.ceil(Math.abs(zb - za) / 0.5)), b = pos.length / 3;
         for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
           const x = x0 + ((x1 - x0) * i) / nx, z = za + ((zb - za) * j) / nz;
-          pos.push(x, world.height(x, z) + 0.04, z);
+          // (on the graded drive / bay: its own surface, the one you walk and drive on; 4 cm over the ground)
+          pos.push(x, (r.plot ? driveHeight(r.plot, x, z) : null) ?? world.height(x, z) + 0.04, z);
           // uv: v from the bay's road end (0) to its back (1); u left to right as you drive in (facing +z your
           // right is -x, facing -z it's +x), so the painting reads upright and unmirrored from the driver's seat
           uv.push(r.out > 0 ? 1 - i / nx : i / nx, j / nz);
@@ -484,6 +513,93 @@ export class Chalets {
   }
 
   /** The village's draw calls and triangles (console; the Node checks print it too). */
+  // the windows lit warm at night: a soft glowing pane over every window of every chalet (some rooms dark), one
+  // instanced additive mesh, drawn only after dusk
+  buildWindows(g) {
+    const N = 32, data = new Uint8Array(N * N * 4);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const u = (i + 0.5) / N, v = (j + 0.5) / N, e = Math.min(u, 1 - u, v, 1 - v);
+      const bars = Math.abs(u - 0.5) < 0.03 || Math.abs(v - 0.55) < 0.03 ? 0.45 : 1; // (the glazing bars)
+      const a = Math.min(1, e / 0.12) * (0.75 + 0.25 * v) * bars * 255;
+      data.set([a, a, a, 255], (j * N + i) * 4);
+    }
+    const tex = new THREE.DataTexture(data, N, N); tex.needsUpdate = true; tex.colorSpace = THREE.SRGBColorSpace;
+    const panes = [];
+    for (const h of this.houses) MODEL_WINDOWS.forEach(([n, x, y, z, w, hh], k) => {
+      const lit = hash(h.id * 31 + k * 7 + 3);
+      if (lit > 0.7) return; // (nobody in that room)
+      const ry = n === 'x' ? Math.PI / 2 : n === '-x' ? -Math.PI / 2 : n === 'z' ? 0 : Math.PI, o = 0.03;
+      const local = _m.compose(_p.set(x + (n === 'x' ? o : n === '-x' ? -o : 0), y, z + (n === 'z' ? o : n === '-z' ? -o : 0)), _q.setFromAxisAngle(UP, ry), _s.set(w, hh, 1));
+      panes.push({ m: new THREE.Matrix4().multiplyMatrices(h.frame.matrixWorld, local), k: 0.55 + 0.45 * hash(h.id * 13 + k) });
+    });
+    if (!panes.length) return;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    const im = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, panes.length);
+    const c = new THREE.Color();
+    panes.forEach((p, i) => { im.setMatrixAt(i, p.m); im.setColorAt(i, c.setRGB(1.6 * p.k, 0.95 * p.k, 0.42 * p.k)); });
+    im.computeBoundingSphere();
+    im.name = 'chalet-windows'; im.visible = false; im.renderOrder = 3;
+    g.add(im);
+    this.windows = im;
+  }
+
+  // the marker over your own chalet: a gold house badge with its name, bobbing over the roof, readable from far
+  // and near (through trees and houses), gone only at its door, inside, or when you own none. One sprite, no light.
+  markerTexture(name) {
+    const W = 512, H = 320, cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const x = cv.getContext('2d'), cx = W / 2;
+    x.shadowColor = 'rgba(0,0,0,0.55)'; x.shadowBlur = 14;
+    // the badge: a gold disc, a white house on it
+    const gr = x.createLinearGradient(0, 18, 0, 200);
+    gr.addColorStop(0, '#ffe58a'); gr.addColorStop(1, '#d99a1c');
+    x.fillStyle = gr; x.beginPath(); x.arc(cx, 112, 92, 0, Math.PI * 2); x.fill();
+    x.shadowBlur = 0; x.lineWidth = 7; x.strokeStyle = '#fff6d0'; x.stroke();
+    x.fillStyle = '#ffffff'; x.beginPath();
+    x.moveTo(cx, 52); x.lineTo(cx + 58, 104); x.lineTo(cx + 42, 104); x.lineTo(cx + 42, 160); x.lineTo(cx + 12, 160); x.lineTo(cx + 12, 126);
+    x.lineTo(cx - 12, 126); x.lineTo(cx - 12, 160); x.lineTo(cx - 42, 160); x.lineTo(cx - 42, 104); x.lineTo(cx - 58, 104); x.closePath(); x.fill();
+    // the name under it
+    x.font = 'bold 58px Arial, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.shadowColor = 'rgba(0,0,0,0.7)'; x.shadowBlur = 10; x.lineWidth = 9; x.strokeStyle = 'rgba(40,24,0,0.85)';
+    x.strokeText(name, cx, 266); x.fillStyle = '#ffd95a'; x.fillText(name, cx, 266);
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+    return t;
+  }
+  updateMarker(dt) {
+    const h = this.inside ? null : this.rented();
+    if (!h || typeof document === 'undefined') { if (this.marker) this.marker.visible = false; return; }
+    if (!this.marker) {
+      // (depthTest off: seen through the trees and the other houses; drawn last, unfogged, not tone-mapped)
+      const mat = new THREE.SpriteMaterial({ transparent: true, depthTest: false, depthWrite: false, fog: false, toneMapped: false });
+      this.marker = new THREE.Sprite(mat);
+      this.marker.name = 'chalet-marker'; this.marker.renderOrder = 999; this.marker.center.set(0.5, 0);
+      this.marker.frustumCulled = false;
+      this.scene.add(this.marker);
+    }
+    const S0 = this.marker, mat = S0.material;
+    if (S0.userData.name !== h.name) { mat.map?.dispose(); mat.map = this.markerTexture(h.name); mat.needsUpdate = true; S0.userData.name = h.name; }
+    this.markT = (this.markT || 0) + dt;
+    const f = h.frame.position, p = this.player?.pos, cam = this.camera?.position || p;
+    // hidden only at the door (within ~4 m: the prompt takes over), faded in over the next 2 m
+    const dd = p ? Math.hypot(p.x - h.door.x, p.z - h.door.z) : 1e9;
+    const a = Math.min(1, Math.max(0, (dd - 4) / 2));
+    S0.visible = a > 0.01;
+    if (!S0.visible) return;
+    mat.opacity = a;
+    // a minimum on-screen size: ~5.5% of the distance tall (the same size on screen from far and near), never under
+    // 2.2 m; a little lower over the roof when you're close (still in view from the street)
+    const dc = cam ? Math.hypot(cam.x - f.x, cam.y - f.y - MARK_Y, cam.z - f.z) : 100;
+    const k = Math.min(60, Math.max(2.2, dc * 0.055));
+    const y = MARK_Y - 2 * Math.max(0, 1 - dc / 60);
+    S0.scale.set(k * 1.6, k, 1);
+    S0.position.set(f.x, f.y + y + Math.sin(this.markT * 1.7) * 0.12 * k, f.z);
+  }
+  /** Where your own chalet's front door is (main.js: the "Go home" waypoint), or null. */
+  homeWaypoint() {
+    const h = this.rented();
+    return h ? { x: h.door.x, z: h.door.z, label: `Your chalet · ${h.name}` } : null;
+  }
+
   stats(label = '') {
     let calls = 0, tris = 0;
     this.group?.traverseVisible((o) => {
@@ -539,13 +655,32 @@ export class Chalets {
     if (!this.room) { this.room = new ChaletRoom({ renderer: this.renderer }); setChaletInterior(this.room, this); }
     return this.room;
   }
+  // the room built and its shaders compiled ahead, in idle time, while you walk up to a chalet you may go into (so
+  // the fade in never waits on a synchronous build or a first-frame shader compile: that froze the game, and on an
+  // 8 GB Mac the GPU process then lost the WebGL context: the black screen)
+  prewarm() {
+    if (this.room?.warmed || this.prewarming) return;
+    this.prewarming = true;
+    const go = () => { try { this.ensureRoom().warm(() => this.getPost?.()?.target); } catch (e) { console.warn('chalet prewarm', e); } };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 1500 }); else setTimeout(go, 0);
+  }
+  watchContext() {
+    const cv = this.renderer?.domElement;
+    if (!cv?.addEventListener || this.ctxWatched) return;
+    this.ctxWatched = true;
+    cv.addEventListener('webglcontextlost', (e) => { e.preventDefault(); console.warn('WebGL context lost', this.inside ? '(inside a chalet)' : ''); this.room?.releasePortal(); });
+    cv.addEventListener('webglcontextrestored', () => { console.warn('WebGL context restored'); if (this.inside) this.leave(true); });
+  }
   enter(h) {
     if (this.inside || this.busy || this.transition?.active) return;
     this.busy = true;
     this.player.frozen = true;
     this.audio?.play?.('click');
-    this.transition.fade(() => {
-      const r = this.ensureRoom();
+    this.transition.fade(async () => {
+      let r;
+      try { r = this.ensureRoom(); await r.warm(() => this.getPost?.()?.target); } catch (e) { // (nothing to show: stay outside)
+        console.warn('chalet interior', e); this.busy = false; this.player.frozen = false; return;
+      }
       this.current = h; this.inside = true; this.busy = false;
       this.showHi(this.houses.indexOf(h)); // (so the windows' view hides this very house)
       r.setWorld({ scene: this.scene, frame: h.frame, hide: () => [this.player.rig?.root, this.player.rig?.gear, this.hi, this.hiShadow] });
@@ -593,8 +728,16 @@ export class Chalets {
   roomName() { return this.inside ? `${this.current?.name || 'Chalet'} · ${this.room?.roomName() || ''}` : ''; }
 
   /** Per frame (main.js): the full-detail model on the chalet you're nearest; nothing while you're away. */
-  update() {
-    if (!this.V || !this.inst) return;
+  update(dt = 0.016) {
+    if (!this.V) return;
+    this.watchContext();
+    this.updateMarker(dt);
+    if (this.windows) { // (the windows: lit from dusk)
+      const n = nightUniform.value;
+      this.windows.visible = n > 0.05;
+      this.windows.material.opacity = Math.min(1, n * 1.3);
+    }
+    if (!this.inst) return;
     if (this.inside) return; // (the house stays as it was when you went in)
     const p = this.player?.pos;
     if (!p) return;
@@ -602,6 +745,7 @@ export class Chalets {
     if (p.x < b.minx - HI_R || p.x > b.maxx + HI_R || p.z < b.minz - HI_R || p.z > b.maxz + HI_R) { if (this.hiAt >= 0) this.showHi(-1); return; }
     let best = -1, bd = HI_R;
     for (let i = 0; i < this.houses.length; i++) { const f = this.houses[i].frame.position, d = Math.hypot(p.x - f.x, p.z - f.z); if (d < bd) { bd = d; best = i; } }
+    if (best >= 0 && bd < 35) this.prewarm(); // (near a door you might go in at: the interior readied in the background)
     if (best === this.hiAt) return;
     if (best >= 0 && !this.hiModel) { // (the full model: loaded the first time you come near; the low one shows meanwhile)
       this.hiLoading ||= loadGLB('chalet').then((gl) => { if (gl) this.makeHi(gl); }).catch(() => null);

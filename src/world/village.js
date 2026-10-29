@@ -4,11 +4,12 @@ import { world } from './world.js';
 import { fitModel, bakeGeometry, makeLOD } from '../core/assets.js';
 import { Snowmaking } from './snowmaking.js';
 import { drawnHeight } from './settle.js';
+import { addStreetLamps } from './pistelights.js';
 
 export const nightUniform = { value: 0 };
 
 // Bright texels (lit windows, lanterns) glow at night.
-function addNightGlow(root, strength = 2.5) {
+export function addNightGlow(root, strength = 2.5) {
   root.traverse((o) => {
     if (!o.isMesh || !o.material?.map) return;
     const m = o.material.clone();
@@ -210,7 +211,6 @@ export class Village {
       lampSpots.push([Math.cos(a) * 34, Math.sin(a) * 34 - 6]);
     }
     lampSpots.push([-6, -36], [12, -36], [-26, -6], [-30, -30]);
-    let li = 0;
     for (const [x, z] of lampSpots) {
       let lamp;
       if (models.lamp_post) {
@@ -228,13 +228,10 @@ export class Village {
       }
       add(placeOnGround(lamp, x, z, faceTo(x, z, 0, -6), 0.05));
       colliders.push({ x, z, r: 0.25 });
-      if (li++ % 3 === 0) {
-        const L = new THREE.PointLight(0xffb060, 0, 28, 2);
-        L.position.set(x, world.height(x, z) + 3.1, z);
-        add(L);
-        this.lights.push(L);
-      }
     }
+    // every lamp lights a warm pool on the snow, the people and the hotels round it at night: the floodlights'
+    // light pools (world/pistelights.js), no THREE lights (they were six PointLights, every material paying for them)
+    addStreetLamps(lampSpots.map(([x, z]) => ({ x, z, y: world.height(x, z) + 3.1 })));
 
     // --- summit restaurant ---
     for (const hut of layout.huts) {

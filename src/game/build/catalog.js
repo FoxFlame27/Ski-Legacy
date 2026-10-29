@@ -69,9 +69,9 @@ export const FURNITURE = [
   { id: 'cuckoo_clock', name: 'Cuckoo Clock', category: 'decor', price: 190, size: [0.45, 0.85, 0.22], place: 'wall', mount: 1.55 },
 
   // Small decor: goes on window sills, on top of furniture (tables, counters, shelves...) or the floor
-  { id: 'geranium_box', name: 'Geranium Pot', category: 'decor', price: 30, size: [0.4, 0.3, 0.18], place: 'floor', small: true },
+  { id: 'geranium_box', name: 'Geranium Pot', category: 'decor', price: 30, size: [0.4, 0.24, 0.2], place: 'floor', small: true },
   { id: 'herb_pot', name: 'Herb Pot', category: 'decor', price: 20, size: [0.18, 0.24, 0.18], place: 'floor', small: true },
-  { id: 'cactus', name: 'Little Cactus', category: 'decor', price: 18, size: [0.14, 0.26, 0.14], place: 'floor', small: true },
+  { id: 'cactus', name: 'Little Cactus', category: 'decor', price: 18, size: [0.2, 0.2, 0.16], place: 'floor', small: true },
   { id: 'vase', name: 'Flower Vase', category: 'decor', price: 25, size: [0.15, 0.32, 0.15], place: 'floor', small: true },
   { id: 'tealight_lantern', name: 'Candle Jar', category: 'decor', price: 15, size: [0.12, 0.18, 0.12], place: 'floor', small: true, light: 0.5, lux: 2 },
   { id: 'deer_figurine', name: 'Carved Deer', category: 'decor', price: 40, size: [0.22, 0.26, 0.1], place: 'floor', small: true },

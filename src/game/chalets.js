@@ -67,7 +67,8 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
     }
     const f = houseFrame(p), L = (x, z) => f.localToWorld(_l.set(x, 0, z)).clone();
     const yaw = f.rotation.y, c = f.position;
-    put({ kind: 'house', pid: p.id, x: c.x, z: c.z, y: p.y, yaw, ox: (HX + 1.3 - HX) / 2, hw: (2 * HX + 1.3) / 2, hd: HZ, y0: 0, y1: 8 });
+    put({ kind: 'house', pid: p.id, x: c.x, z: c.z, y: p.y, yaw, hw: HX, hd: HZ, y0: 0, y1: 8 });
+    { const q = L((STEPS.x0 + STEPS.x1) / 2, (STEPS.z0 + STEPS.z1) / 2); put({ kind: 'steps', pid: p.id, x: q.x, z: q.z, y: p.y, yaw, hw: (STEPS.x1 - STEPS.x0) / 2, hd: (STEPS.z1 - STEPS.z0) / 2, y0: 0, y1: G }); }
     put({ kind: 'eaves', pid: p.id, x: L((FOOT.x0 + FOOT.x1) / 2, (FOOT.z0 + FOOT.z1) / 2).x, z: L((FOOT.x0 + FOOT.x1) / 2, (FOOT.z0 + FOOT.z1) / 2).z, y: p.y, yaw, hw: (FOOT.x1 - FOOT.x0) / 2, hd: (FOOT.z1 - FOOT.z0) / 2, y0: 4.6, y1: 8 });
     const door = L(HX + 1.6, DOOR.z), dx = door.x;
     // the bay and its drive (flat), its fence (back, and the back half of its house side), the sign
@@ -77,19 +78,19 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
     const bzF = zIn(0.3 + bay.d + 0.2), inner = bay.x < c.x ? bay.x + bw / 2 + 0.2 : bay.x - bw / 2 - 0.2, outer = bay.x < c.x ? xa : xb;
     fenceRun(p.id, outer, bzF, inner, bzF);
     fenceRun(p.id, inner, zIn(0.3 + bay.d * 0.5), inner, bzF);
-    { const sx = inner, sz = zIn(0.45); put({ kind: 'sign', pid: p.id, x: sx, z: sz, y: height(sx, sz), yaw: yawOut, hw: 0.3, hd: 0.06, y0: 0, y1: 1.9, col: true }); }
+    { const sx = inner + (bay.x < c.x ? 0.3 : -0.3), sz = zIn(0.45); put({ kind: 'sign', pid: p.id, x: sx, z: sz, y: height(sx, sz), yaw: yawOut, hw: 0.3, hd: 0.06, y0: 0, y1: 1.9, col: true }); }
     // the garden fence: the front (gaps: the drive, the gate to the path), both sides, the back
     const gx0 = Math.min(bay.x - bw / 2, bay.x + bw / 2) - 0.1 - xa, gx1 = Math.max(bay.x - bw / 2, bay.x + bw / 2) + 0.1 - xa;
     fenceRun(p.id, xa, zf, xb, zf, [[gx0, gx1], [dx - 0.7 - xa, dx + 0.7 - xa]]);
     fenceRun(p.id, xa, zf, xa, zb); fenceRun(p.id, xb, zf, xb, zb);
     fenceRun(p.id, xa, zb, xb, zb);
     // stepping stones from the gate to the steps (flush with the snow)
-    for (const d of [0.75, 1.45, 2.15]) { const z = zIn(d), x = dx + (hash(p.id * 3 + d * 7) - 0.5) * 0.12; put({ kind: 'stone', pid: p.id, x, z, y: height(x, z), yaw: hash(p.id + d) * 6, hw: 0.27, hd: 0.27, flat: true, r: 0.27 }); }
+    for (const d of [0.65, 1.3, 1.95]) { const z = zIn(d), x = dx + (hash(p.id * 3 + d * 7) - 0.5) * 0.12; put({ kind: 'stone', pid: p.id, x, z, y: height(x, z), yaw: 0, spin: hash(p.id + d) * 6, hw: 0.29, hd: 0.29, flat: true, r: 0.29 }); }
     // the garden strip beside the house: a bench facing the view, small spruces, a shed or a snowman
     const [g0, g1] = p.garden, gx = (Math.max(g0, xa + 0.2) + Math.min(g1, xb - 0.2)) / 2;
     if (p.bench !== false) { const z = zIn(2.3); put({ kind: 'bench', pid: p.id, x: gx, z, y: height(gx, z), yaw: yawOut, hw: 0.8, hd: 0.45, y0: 0, y1: 1.15, col: true }); }
     const tree = (x, d, h, kind = 'spruce') => { const z = zIn(d); put({ kind, pid: p.id, x, z, y: height(x, z), yaw: hash(p.id * 5 + d) * 6.28, h, hw: h * 0.2, hd: h * 0.2, y0: 0, y1: h, col: kind === 'spruce', r: h * 0.16, v: hash(p.id * 11 + d) < 0.5 ? 0 : 1 }); };
-    tree(gx - 0.75, 5.2, 2.6 + hash(p.id) * 0.8); tree(gx + 0.85, 6.6, 2.2 + hash(p.id + 1) * 0.6);
+    tree(gx - 0.75, 5.2, 2.6 + hash(p.id) * 0.8); tree(gx + 0.85, 7.0, 2.2 + hash(p.id + 1) * 0.6);
     if (p.shed) { const z = zIn(depth - 0.25 - 1.75); put({ kind: 'shed', pid: p.id, x: gx, z, y: height(gx, z), yaw: yawOut, hw: 1.48, hd: 1.6, y0: 0, y1: 2.2, col: true }); }
     else {
       tree(gx, 10.2, 3.0 + hash(p.id + 2) * 0.7);
@@ -251,7 +252,7 @@ export class Chalets {
     if (!list.length) return;
     const geo = new THREE.CylinderGeometry(0.27, 0.29, 0.08, 9);
     const im = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0x8f9296, roughness: 0.9 }), list.length);
-    list.forEach((s, i) => im.setMatrixAt(i, _m.compose(_p.set(s.x, s.y - 0.01, s.z), _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, s.yaw), _s.set(1, 1, 0.8 + 0.3 * hash(i)))));
+    list.forEach((s, i) => im.setMatrixAt(i, _m.compose(_p.set(s.x, s.y - 0.01, s.z), _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, s.spin), _s.set(1, 1, 0.8 + 0.2 * hash(i)))));
     im.receiveShadow = true; im.computeBoundingSphere(); g.add(im);
   }
   // each plot's parking (two 2.5 x 5 m bays, lines and PRIVAT painted on) and its drive to the road: draped on the

@@ -1,5 +1,5 @@
 // Shared transport in multiplayer: the Wolkenspitzbahn (world/railway.js), the Legacy Express (world/express.js), the
-// gondolas and chairlifts (world/lifts.js) and, once wired, the buses. Everyone in a world sees the same vehicle in
+// gondolas and chairlifts (world/lifts.js) and the ski buses (game/bus/bus.js fleet). Everyone in a world sees the same vehicle in
 // the same place:
 //  - every system is driven off its line's shared timeline (session.lineTime: the server clock plus the line's
 //    speed-up offset) through its `mp` hook instead of its own clock; nobody brings, holds or shifts a vehicle;
@@ -13,13 +13,16 @@
 //    avatars sit in the moving vehicle without lag.
 // Vehicle ids (the registry's `v`): trains 'rail-0' / 'rail-1' (kind 'train', one timeline 'train|rail'), express
 // 'express-e0..3' / 'express-w0..3' (kind 'express', timelines 'express|e' / 'express|w'), cabins and chairs
-// 'L<line>-<car>' (kind 'gondola' / 'chair', timeline '<kind>|L<line>'). See docs/multiplayer.md.
+// 'L<line>-<car>' (kind 'gondola' / 'chair', timeline '<kind>|L<line>'), buses 'bus:1'..'bus:7' (kind 'bus', each
+// round its own timeline 'bus|R<round>'; bus:0, single player's own bus, is not used). See docs/multiplayer.md.
 import { MP } from './mode.js';
 import { net } from './client.js';
 import { ERR_TEXT } from './protocol.js';
 
 const RAIL_RATE = 6;      // the single-player SPACE rates (railway.js, lifts: main.js)
 const LIFT_RATE = 16;
+const BUS_RATE = 8;       // (bus.js updateRide: fast ×8)
+const STOP_R = 25;        // m: waiting for the bus within this of the stop
 const BOARD_MIN = 4;      // s: a train still standing this long can be boarded (nobody holds it in multiplayer)
 const PLATFORM_R = 14;    // m: waiting for the train within this of the station's boarding spot
 const LIFT_R = 26;        // m: waiting for a cabin within this of the boarding point
@@ -32,6 +35,7 @@ export class MpTransit {
     this.sys = {};            // { railway, express, lifts, player, expressRate }
     this.mine = null;         // the seat you hold: { k, v, seat, t, rode, line?, idx?, train? }
     this.wait = null;         // waiting for the Wolkenspitzbahn: { key, st, up, dest, retry }
+    this.busWait = null;      // waiting at a bus stop: { key, from, to, nf, nt, retry }
     this.liftWait = null;     // a claimed cabin on its way to the boarding point: { key, line, idx, seat, target, retry, near }
     this.ready = null;        // a seat claimed for this boarding: { key, ... } (the next gate call boards)
     this.pending = false;     // a seatClaim on its way
@@ -59,7 +63,9 @@ export class MpTransit {
       rail: { time: () => s.lineTime('train|rail') / 1000, rate: () => rate('train|rail') },
       express: { time: (dir) => s.lineTime(dir > 0 ? 'express|e' : 'express|w') / 1000, rate: (dir) => rate(dir > 0 ? 'express|e' : 'express|w') },
       lifts: { time: (l) => s.lineTime(l.mpKey ||= `${liftKind(l)}|L${l.mpId}`) / 1000 },
+      bus: { time: (r) => s.lineTime(r.mpKey ||= `bus|${r.mpLine}`) / 1000, rate: (r) => rate(r.mpKey ||= `bus|${r.mpLine}`) },
     };
+    S.skibus?.line?.setMp?.(this.hooks.bus);
     if (S.railway) S.railway.mp = this.hooks.rail;
     if (S.express) S.express.mp = this.hooks.express;
     if (S.lifts) S.lifts.mp = this.hooks.lifts;
@@ -69,7 +75,8 @@ export class MpTransit {
     if (S.railway) { S.railway.mp = null; S.railway.mpPick = null; }
     if (S.express) { S.express.mp = null; S.express.mpPick = null; }
     if (S.lifts) { S.lifts.mp = null; S.lifts.mpPick = null; }
-    this.mine = null; this.wait = null; this.liftWait = null; this.ready = null; this.pending = false; this.fullId = null;
+    if (S.skibus?.line) { S.skibus.line.mpPick = null; S.skibus.line.setMp?.(null); }
+    this.mine = null; this.wait = null; this.busWait = null; this.liftWait = null; this.ready = null; this.pending = false; this.fullId = null;
   }
 
   // ---------------------------------------------------------------- boarding gates (main.js)
@@ -116,6 +123,39 @@ export class MpTransit {
       retry();
     });
     return false;
+  }
+
+  /** boardBus: true = board now (the bus line's mpPick is set); false = waiting at the stop for a bus that goes your
+   *  way / a seat in it (retry() boards). */
+  busGate(from, to, retry) {
+    const key = `bus|${from.name}|${to.name}`, SB = this.sys.skibus, L = SB?.line;
+    if (!L) return false;
+    if (this.ready?.key === key) { L.mpPick = { bus: this.ready.bus, seat: this.ready.seat }; this.ready = null; return true; }
+    this.wait = null; this.liftWait = null;
+    const nf = SB.netStop(from), nt = SB.netStop(to);
+    const n = L.mpNextBus(nf, nt);
+    if (!n) { this.busWait = null; this.flash(`No bus goes from ${from.name} to ${to.name}`, 'bad', 2600); return false; }
+    this.busWait = { key, from, to, nf, nt, retry };
+    this.waitSec = -1;
+    if (!this.busTry()) this.flash(`Ski bus to ${to.name} · next bus in ${fmtWait(n.wait)} · wait at the stop`, 'good', 3200);
+    return false;
+  }
+  busTry() {
+    const w = this.busWait, L = this.sys.skibus?.line;
+    if (!w || !L) return false;
+    const n = L.mpNextBus(w.nf, w.nt);
+    if (!n || n.wait > 0) { this.fullId = null; return false; }
+    if (n.left < BOARD_MIN || this.fullId === n.bus.id) return false;
+    if (this.pending) return true;
+    const b = n.bus, key = w.key, retry = w.retry;
+    this.claim('bus', b.id, { n: L.seatCount, seat: L.preferredSeat() }, (seat) => {
+      if (this.busWait?.key !== key) { this.s.releaseSeat(); this.mine = null; return; }
+      this.busWait = null;
+      this.mine.bus = b;
+      this.ready = { key, bus: b, seat };
+      retry();
+    });
+    return true;
   }
 
   /** boardLift: true = board now (lifts.mpPick set: the cabin is at the boarding point); false = a seat in the next
@@ -177,6 +217,11 @@ export class MpTransit {
       if (S.railway?.riding || Math.hypot(p.x - b.x, p.z - b.z) > PLATFORM_R) { this.wait = null; if (!S.railway?.riding) this.flash('Wolkenspitzbahn · you left the platform', 'good', 1800); }
       else this.railTry();
     }
+    if (this.busWait && p) {
+      const f = this.busWait.from;
+      if (S.skibus?.riding || Math.hypot(p.x - f.x, p.z - f.z) > STOP_R) { this.busWait = null; if (!S.skibus?.riding) this.flash('Ski bus · you left the stop', 'good', 1800); }
+      else this.busTry();
+    }
     if (this.liftWait && p) {
       const w = this.liftWait;
       if (Math.hypot(p.x - w.near.x, p.z - w.near.z) > LIFT_R || S.player.mode === 'sit') { this.liftWait = null; this.s.releaseSeat(); this.mine = null; }
@@ -204,12 +249,14 @@ export class MpTransit {
     if (m.k === 'train') return S.railway?.ride?.train === m.train;
     if (m.k === 'express') return S.express?.ride?.train === m.train;
     if (m.k === 'gondola' || m.k === 'chair') return S.lifts?.ride?.line === m.line && S.lifts.ride.idx === m.idx;
+    if (m.k === 'bus') return !!m.bus && S.skibus?.line?.ride?.fleetBus === m.bus;
     return false;
   }
   skipOpts(m) {
     const o = (this._so ||= { rate: 1, line: '' });
     if (m.k === 'train') { o.rate = RAIL_RATE; o.line = 'rail'; }
     else if (m.k === 'express') { o.rate = this.sys.expressRate || 10; o.line = m.train?.dir > 0 ? 'e' : 'w'; }
+    else if (m.k === 'bus') { o.rate = BUS_RATE; o.line = m.bus?.route?.mpLine; }
     else { o.rate = LIFT_RATE; o.line = m.line ? (m.line.mpLine ||= `L${m.line.mpId}`) : undefined; }
     return o;
   }
@@ -223,11 +270,13 @@ export class MpTransit {
   waitLine() {
     let sec = -1, what = '';
     if (this.wait) { const n = this.sys.railway?.nextAt(this.wait.st.id, this.wait.up); if (n) { sec = Math.ceil(n.wait); what = 'rail'; } }
+    else if (this.busWait) { const n = this.sys.skibus?.line?.mpNextBus(this.busWait.nf, this.busWait.nt); if (n) { sec = Math.ceil(n.wait); what = 'bus'; } }
     else if (this.liftWait) { const w = this.liftWait; sec = Math.ceil(Math.max(0, w.line.travelTime(w.line.cars[w.idx].s, (((w.target - w.line.cars[w.idx].s) % (2 * w.line.L)) + 2 * w.line.L) % (2 * w.line.L)))); what = 'lift'; }
     else return '';
     if (sec === this.waitSec && what === this.waitWhat) return this.waitText;
     this.waitSec = sec; this.waitWhat = what;
-    this.waitText = what === 'rail' ? (sec > 0 ? `Wolkenspitzbahn · next train in ${sec} s` : 'Wolkenspitzbahn · boarding') : sec > 1 ? `Your ${this.liftWait.line.spec.type === 'chair' ? 'chair' : 'cabin'} comes in ${sec} s` : 'Boarding';
+    this.waitText = what === 'bus' ? (sec > 0 ? `Ski bus to ${this.busWait.to.name} · next bus in ${fmtWait(sec)}` : `Ski bus to ${this.busWait.to.name} · boarding`)
+      : what === 'rail' ? (sec > 0 ? `Wolkenspitzbahn · next train in ${sec} s` : 'Wolkenspitzbahn · boarding') : sec > 1 ? `Your ${this.liftWait.line.spec.type === 'chair' ? 'chair' : 'cabin'} comes in ${sec} s` : 'Boarding';
     return this.waitText;
   }
 
@@ -243,7 +292,9 @@ export class MpTransit {
   // ---------------------------------------------------------------- the other players' seats (remote.js)
   /** Seat n of vehicle v (kind k) as drawn here: into out, returns its facing as a heading; null if unknown. */
   seat(k, v, n, out) {
-    const e = this.ref(k, v), S = this.sys;
+    const S = this.sys;
+    if (k === 'bus') return S.skibus?.line?.seatWorldAt(v, n, out) ?? null;
+    const e = this.ref(k, v);
     if (!e) return null;
     if (e.sys === 'rail') return S.railway.seatWorldAt(e.tr, n, out);
     if (e.sys === 'express') return S.express.seatWorldAt(e.tr, n, out);
@@ -270,4 +321,5 @@ export class MpTransit {
   flash(text, kind, ms) { this.s.c.hud?.flash(text, kind, ms); }
 }
 
+function fmtWait(s) { s = Math.max(1, Math.ceil(s)); return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`; }
 function liftKind(l) { return l.spec.type === 'chair' ? 'chair' : 'gondola'; }

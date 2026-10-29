@@ -273,8 +273,8 @@ multiplayer.skipLine(k, v)                // 'Hold SPACE to speed up (2/3 holdin
 multiplayer.ui.setSkip(text)              // show it under the status pill
 multiplayer.lineTime('bus|line1')         // the line's timeline in ms
 multiplayer.hourNow() / dayNow()          // the world's hour / in-game day
-multiplayer.transit                       // MpTransit (net/transit.js): railGate / expressGate / liftGate, seat(k, v, n, out)
-multiplayer.attachTransit({railway, express, lifts, player, expressRate})   // main.js, once
+multiplayer.transit                       // MpTransit (net/transit.js): railGate / expressGate / liftGate / busGate, seat(k, v, n, out)
+multiplayer.attachTransit({railway, express, lifts, skibus, player, expressRate})   // main.js, once
 multiplayer.chaletFurniture(plot)         // -> the owner's furniture (as their guest) | null
 multiplayer.revokeGuest(name)             // permRevoke chaletVisit (the guest list's SEND OUT)
 multiplayer.guests                        // your chalet's guest list (names)
@@ -303,7 +303,7 @@ shop's skis, outfits, chalets, the rental car and the helicopter (`heliRent`) do
 
 ## Wave 2
 
-### Shared trains, express, gondolas and chairlifts (done; the buses: pending)
+### Shared trains, express, gondolas, chairlifts and buses (done)
 
 `net/transit.js` (`multiplayer.transit`). Everyone in a world sees the same vehicle in the same place, and rides it
 together, each in their own seat.
@@ -313,7 +313,7 @@ together, each in their own seat.
 | Wolkenspitzbahn (`railway.js`) | `train` · `rail-0`, `rail-1` | `train\|rail` (both trains: one timetable) | `train.seatCount` (numbered through its cars) | ×6 |
 | Legacy Express (`express.js`) | `express` · `express-e0..3`, `express-w0..3` | `express\|e` / `express\|w` (a direction each) | the lead car's seats (`express.seatCount`) | ×10 |
 | Gondolas / chairlifts (`lifts.js`) | `gondola` / `chair` · `L<line>-<car>` (`line.mpId`: the lift's index) | `gondola\|L<line>` / `chair\|L<line>` | gondola 6 (two benches of 3), chair from the model's width | ×16 |
-| Buses (`bus/`) | `bus` · `bus:0..7` | pending | pending | pending |
+| Ski buses (`bus/bus.js` fleet) | `bus` · `bus:1..7` (`bus:0`, single player's own bus, is out of the game) | `bus\|R<round>` (each round, `route.mpLine`) | `line.seatCount` (bus:0's seat layout) | ×8 |
 
 - **Timeline.** In multiplayer each system has an `mp` hook (`railway.mp`, `express.mp`, `lifts.mp`, set by
   `transit.start()` on entering, cleared on leaving) and places every vehicle from its line's time
@@ -321,7 +321,12 @@ together, each in their own seat.
   lift's `placeAt(T)` (car k is where a car leaving s = 0 is after T + k/n of the loop's time: the same time gaps
   `spreadByTime` sets up). Nothing moves a vehicle for one player: the trains do not stop for you on the track, the
   express does not bring or hold a train, boarding does not shift the timetable, and Enter (skip to your stop) is off.
-- **Waiting.** Boarding goes through a gate in `main.js` (`railGate` / `expressGate` / `liftGate`):
+- **Buses.** `BusLine.setMp(hook)`: every fleet bus stands exactly where its round's timetable has it
+  (`fleetTarget` on the round's shared time; nothing drives itself or overtakes), and `bus:0` is hidden. You ride a
+  fleet bus on its round (`mpNextBus(from, to)`: a bus that stands at your stop and reaches your stop later on this
+  way or the next) and get off when it stands at your stop; bus:0's cabin (seats, interior) is drawn in its place for
+  you (`mpPose`), the fleet bus itself is hidden on your screen only.
+- **Waiting.** Boarding goes through a gate in `main.js` (`railGate` / `expressGate` / `liftGate` / `busGate`):
   - Wolkenspitzbahn: if no train stands at your platform for your way (`railway.nextAt(station, up)`, off the
     timetable's boarding windows), you wait on the platform: "next train in 42 s" under the status pill. Walking off
     the platform (14 m) gives up.
@@ -329,13 +334,15 @@ together, each in their own seat.
     at least 4 s of its stop left.
   - Lifts: a seat in the next cabin or chair coming round is claimed at once; you board when it reaches the boarding
     point ("Your cabin comes in 2 s").
+  - Buses: you wait at the stop (25 m) for the next bus that goes your way ("Ski bus to X · next bus in 3 min"); it
+    can be boarded with at least 4 s of its halt left. No round serving the trip: "No bus goes from A to B".
 - **Seats.** When the vehicle is in, the gate claims a seat (`seatClaim {k, v, n, seat}`, `seat`: the one single
   player gives you, else the lowest free one) and only then boards (and charges the fare): the system takes the seat
   through `mpPick`. A full vehicle says "Full · wait for the next one" and is skipped. The seat goes back
   (`seatRelease`) as soon as you are off by any way; after a reconnect it is claimed again.
 - **The other riders.** Their presence row carries `kind:id:seat` (the server's seat registry). `vehicles.seatFor`
   asks `transit.seat(k, v, n, out)` for that seat in the vehicle as drawn here (`railway.seatWorldAt`,
-  `express.seatWorldAt`, `line.seatInto`), so they sit in it without lag (the presence position is the fallback).
+  `express.seatWorldAt`, `line.seatInto`, `busLine.seatWorldAt`), so they sit in it without lag (the presence position is the fallback).
 - **Speed-up.** While you ride, `holdSkip(k, v, SPACE held, {rate, line})` every frame (only changes are sent); the
   pill shows `skipLine` ("Hold SPACE to speed up (2/3 holding)"). Alone aboard, SPACE works at once. Your own
   helicopter keeps its local SPACE.

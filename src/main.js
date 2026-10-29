@@ -388,7 +388,7 @@ async function boot() {
       pose: mpPose, getScene: mpScene, setAI: setAIOn, applySave: applyMpSave, onLost: (why) => leaveMultiplayer(why),
       onRaceStart: mpRaceStart, onKickInterior: mpKickInterior,
     });
-    multiplayer.attachTransit({ railway, express, lifts, player, expressRate: EXPRESS_FAST }); // (shared trains / cabins: net/transit.js)
+    multiplayer.attachTransit({ railway, express, lifts, skibus, player, expressRate: EXPRESS_FAST }); // (shared trains / cabins: net/transit.js)
   } catch (e) { console.warn('multiplayer: ' + (e?.stack || e)); multiplayer = null; }
 
   // the RACING stand beside the village job board is gone (Oct 29, the user: "remove this racing day sign");
@@ -1077,6 +1077,7 @@ async function rideBus(dest, from = null) {
 }
 
 function boardBus(from, dest) {
+  if (isMP() && !multiplayer.transit.busGate(from, dest, () => boardBus(from, dest))) return; // (multiplayer: wait for a shared bus, a seat in it)
   transition.fade(async () => {
     if (races.active) races.abort();
     const seat = skibus.board(from, dest);

@@ -549,7 +549,7 @@ export class Multiplayer {
     return (((c.hour + ((now - c.at) / c.dayMs) * 24) % 24) + 24) % 24;
   }
 
-  /** main.js: the shared transport systems ({ railway, express, lifts, player, expressRate }) for net/transit.js. */
+  /** main.js: the shared transport systems ({ railway, express, lifts, skibus, player, expressRate }) for net/transit.js. */
   attachTransit(sys) { this.transit.attach(sys); }
 
   /** E near another player's car: "Ask <owner> for a ride" (main.js findInteraction). */

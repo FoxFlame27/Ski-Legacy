@@ -25,6 +25,8 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _m = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0);
 const _p = {}, _q = {};
+const _mpf = new THREE.Vector3(); // (multiplayer: a seat's facing)
+const sameStop = (a, b) => !!a && !!b && (a === b || a.name === b.name);
 
 // ------------------------------------------------------------------ road meshes
 // The road surface, 6.8 m across x 13.5 m along: worn asphalt, white edge lines and a dashed centre line, grit; the
@@ -928,6 +930,8 @@ function fleetDir(trips, startGap, endDwell) {
     if (s >= m.s) { tm += m.dwell; kt.push(tm); ks.push(m.s); mi++; i--; }
   }
   P.kt = Float64Array.from(kt); P.ks = Float32Array.from(ks); P.dur = tm;
+  // (multiplayer: when it gets to each stop, from the start of this way)
+  for (const m of marks) { const k = P.ks.findIndex((x, i) => i > 0 && Math.abs(x - m.s) < 0.01); m.t = k > 0 ? P.kt[k] : 0; }
   return P;
 }
 // a direction's state at time tau (0..dur): { s, v, mark (the stop it waits at, or null) }
@@ -1075,6 +1079,7 @@ export class BusLine {
 
   /** Board at `from` for `to`: the bus stands at the stop with you in a window seat. Returns the seat or null. */
   board(from, to) {
+    if (this.mp) { const pick = this.mpPick; this.mpPick = null; return pick ? this.mpBoard(from, to, pick) : null; } // (multiplayer: the shared bus you waited for)
     const legs = this.legs(from, to);
     if (!legs) return null;
     const t = legs[0];
@@ -1108,6 +1113,7 @@ export class BusLine {
   updateRide(dt, fast = false) {
     const r = this.ride;
     if (!r) return null;
+    if (r.mp) return this.updateMpRide();
     this.timeScale = fast ? 8 : 1;
     let t = r.t;
     // at a stop on the way: the bus turns there for the next leg (behind a short fade)
@@ -1265,6 +1271,7 @@ export class BusLine {
     while (sum < N) { routes.sort((a, b) => b.cycle / b.m - a.cycle / a.m)[0].m++; sum++; }
     let id = 1;
     routes.forEach((r, ri) => {
+      r.idx = ri; r.mpLine = `R${ri}`; // (multiplayer: each round its own shared timeline 'bus|R<idx>')
       for (let k = 0; k < r.m && id <= N; k++) {
         const group = new THREE.Group();
         group.name = `ski-bus-${id}`;
@@ -1299,7 +1306,7 @@ export class BusLine {
   // where bus b's timetable has it at the fleet's clock: { dir (0 out, 1 back), s, v, mark }
   fleetTarget(b, out = {}) {
     const r = b.route, c = r.cycle;
-    let tau = (((this.fleetClock + b.phase) % c) + c) % c;
+    let tau = ((((this.mp ? this.mp.time(r) : this.fleetClock) + b.phase) % c) + c) % c; // (multiplayer: its round's shared timeline)
     if (tau < r.out.dur) { out.dir = 0; dirAt(r.out, tau, out); return out; }
     tau -= r.out.dur; out.dir = 1; dirAt(r.back, tau, out); return out;
   }
@@ -1310,6 +1317,7 @@ export class BusLine {
     dt = Math.min(dt, 0.1);
     this.fleetClock += dt;
     const T = (this._ft ||= {});
+    if (this.mp) this.mpBus0();
     for (const b of this.fleet) {
       if (b.taken) continue;
       this.fleetTarget(b, T);
@@ -1318,7 +1326,10 @@ export class BusLine {
       let st = b.st;
       // far from you (or new): where the timetable has it
       const lagT = st ? st.lag : 0;
-      if (!st || d > FLEET_SIM || (lagT > 180 && d > 600)) {
+      if (this.mp) { // multiplayer: exactly where its timetable has it, for everyone (nothing drives itself)
+        st ||= b.st = { dir: 0, s: 0, v: 0, wait: 0, shift: 0, shiftV: 0, passing: false, lag: 0, mark: null, dwell: 0 };
+        st.dir = T.dir; st.s = T.s; st.v = T.v; st.mark = T.mark; st.shift = 0; st.shiftV = 0; st.passing = false; st.lag = 0;
+      } else if (!st || d > FLEET_SIM || (lagT > 180 && d > 600)) {
         st = b.st = { dir: T.dir, s: T.s, v: T.v, wait: 0, shift: 0, shiftV: 0, passing: false, lag: 0, mark: T.mark, dwell: 0 };
       } else {
         const P = st.dir ? b.route.back : b.route.out;
@@ -1388,10 +1399,11 @@ export class BusLine {
       b.at = st.mark ? st.mark.stop : null;
       if (d < FLEET_SHOW) {
         b.yaw = poseBus(b.group, P, sq, st.shift || 0, st.shiftV || 0, st.v || 0);
-        b.group.visible = true;
+        const mine = this.ride?.fleetBus === b && this.ride.mp; // (multiplayer: the one you ride is drawn as bus:0's cabin)
+        b.group.visible = !mine;
         const g = b.group.position;
         b.x = g.x; b.y = g.y; b.z = g.z;
-        b.collider.x = g.x; b.collider.z = g.z; b.collider.rot = -b.yaw;
+        b.collider.x = mine ? 1e9 : g.x; b.collider.z = g.z; b.collider.rot = -b.yaw;
       } else {
         roadAt(P, sq, _p);
         b.x = _p.x; b.y = _p.y; b.z = _p.z; b.yaw = Math.atan2(_p.dx, _p.dz);
@@ -1399,6 +1411,113 @@ export class BusLine {
         b.collider.x = 1e9;
       }
     }
+  }
+
+  // ------------------------------------------------------------------ multiplayer (net/transit.js)
+  // The buses are shared: bus:1..7 run their rounds on the server's clock (mp.time(route): each round its own
+  // timeline, 'bus|R<idx>'); you wait at the stop for a real bus that goes your way and ride it on its round, in the
+  // seat the server gave you, until it stands at your stop. bus:0 (single player's own bus, waiting at the village)
+  // is not used: its cabin is drawn in place of the fleet bus you ride (the fleet bus itself is hidden for you).
+  /** Multiplayer on (hook { time(route) -> s, rate(route) }) or off (null: back to single player). */
+  setMp(hook) {
+    if (this.mp === hook) return;
+    if (this.ride?.mp) this.abort();
+    this.mp = hook || null;
+    for (const b of this.fleet) b.st = null; // (re-placed from the timetable next frame)
+    if (!this.mp) this.parkAtVillage();
+    else this.mpBus0();
+  }
+  // bus:0 is out of the game in multiplayer (its cabin shows only round you, in the fleet bus you ride)
+  mpBus0() {
+    if (this.ride?.mp) return;
+    this.at = null;
+    if (this.bus.group.visible) { this.bus.group.visible = false; if (this.collider) this.collider.x = 1e9; }
+  }
+  // the marks (stops) bus b's round reaches from mark i of way d on: the rest of that way, then the other way
+  serves(b, d, i, to) {
+    const r = b.route, A = d ? r.back : r.out, B = d ? r.out : r.back;
+    for (let k = i + 1; k < A.marks.length; k++) if (sameStop(A.marks[k].stop, to)) return true;
+    for (const m of B.marks) if (sameStop(m.stop, to)) return true;
+    return false;
+  }
+  /** The next bus from stop `from` that goes on to `to`: { bus, wait (s until it stands at the stop), left (s it still
+   *  stands there) } (wait 0: it is there now), or null when no round serves the trip. */
+  mpNextBus(from, to) {
+    let best = null;
+    for (const b of this.fleet) {
+      const r = b.route, c = r.cycle;
+      const tau = ((((this.mp ? this.mp.time(r) : this.fleetClock) + b.phase) % c) + c) % c;
+      for (let d = 0; d < 2; d++) {
+        const P = d ? r.back : r.out;
+        for (let i = 0; i < P.marks.length; i++) {
+          const m = P.marks[i];
+          if (!sameStop(m.stop, from) || !this.serves(b, d, i, to)) continue;
+          const at = (d ? r.out.dur : 0) + m.t, into = (((tau - at) % c) + c) % c;
+          const n = into < m.dwell ? { bus: b, wait: 0, left: m.dwell - into } : { bus: b, wait: c - into, left: m.dwell };
+          if (!best || n.wait < best.wait || (n.wait === 0 && best.wait === 0 && n.left > best.left)) best = n;
+        }
+      }
+    }
+    return best;
+  }
+  /** The seat single player gives you (a window seat on the left, row 2): the seat registry's index. */
+  preferredSeat() { const S = this.bus.seats; return Math.max(0, S.indexOf(S.find((q) => q.window && q.side < 0 && q.row === 2) || S[0])); }
+  get seatCount() { return this.bus.seats.length; }
+  /** Where seat n of fleet bus `id` is now (as drawn here): into out, its facing as a heading; null if not placed. */
+  seatWorldAt(id, n, out) {
+    const st = this.bus.seats[n];
+    let b = null;
+    for (const q of this.fleet) if (q.id === id) { b = q; break; }
+    if (!st || !b || !b.near || b.taken) return null;
+    const g = b.group; // (posed on the road; its parent is the scene)
+    out.copy(st.pos).applyQuaternion(g.quaternion).add(g.position);
+    _mpf.set(Math.sin(st.yaw || 0), 0, Math.cos(st.yaw || 0)).applyQuaternion(g.quaternion);
+    return Math.atan2(_mpf.x, _mpf.z);
+  }
+  // board fleet bus pick.bus at `from` (it stands there) for `to`, in seat pick.seat
+  mpBoard(from, to, pick) {
+    const b = pick.bus;
+    if (!b || b.taken) return null;
+    const seat = this.bus.seats[pick.seat] || this.bus.seats[0];
+    this.ride = { mp: true, fleetBus: b, from, to, seat, v: 0, departed: false, exitSent: false, li: 0, legs: [], t: null, s: 0 };
+    this.look.yaw = -0.35; this.look.pitch = -0.05;
+    this.view = 'seat'; this.fov = null; this.chase.off = null;
+    this.bus.group.visible = true;
+    this.mpPose();
+    this.setInside(true);
+    return this.seatPose();
+  }
+  // bus:0's cabin onto the fleet bus you ride
+  mpPose() {
+    const b = this.ride.fleetBus, g = this.bus.group;
+    g.position.copy(b.group.position); g.quaternion.copy(b.group.quaternion);
+    if (this.collider) this.collider.x = 1e9;
+    this.yaw = b.yaw;
+  }
+  updateMpRide() {
+    const r = this.ride, b = r.fleetBus, st = b.st;
+    this.timeScale = this.mp?.rate(b.route) || 1;
+    this.mpPose();
+    r.v = b.v;
+    if (!sameStop(b.at, r.from)) r.departed = true;
+    const seat = this.seatPose();
+    if (r.departed && sameStop(b.at, r.to)) {
+      if (!r.exitSent) {
+        r.exitSent = true;
+        const g = this.bus.group;
+        const door = g.localToWorld(_c.set(-(BUS.width / 2 + 1.8), 0, BUS.len / 2 - 2.0));
+        const fw = new THREE.Vector3(0, 0, 1).transformDirection(g.matrixWorld);
+        return { seat, exit: { x: door.x, z: door.z, heading: Math.atan2(fw.x, fw.z), name: r.to.name }, hint: `${r.to.name} · arrived` };
+      }
+      return { seat, hint: `${r.to.name} · arrived` };
+    }
+    let hint = `Ski bus to ${r.to.name} · waiting at ${r.from.name}`;
+    if (st && r.departed) {
+      const P = st.dir ? b.route.back : b.route.out;
+      const next = st.mark ? st.mark : P.marks.find((m) => m.s > st.s + 0.05) || P.marks[P.marks.length - 1];
+      hint = st.mark ? `Ski bus to ${r.to.name} · stopped at ${next.stop.name}` : `Ski bus to ${r.to.name} · next stop ${next.stop.name} · ${Math.round(r.v * 3.6)} km/h`;
+    }
+    return { seat, hint };
   }
 
   /** The fleet now (multiplayer, the route map): [{ id, x, z, yaw, at (stop name), route, seats, taken }] */
@@ -1413,6 +1532,7 @@ export class BusLine {
     if (!this.ride) return;
     const r = this.ride;
     this.ride = null;
+    if (r.mp) { this.setInside(false); this.bus.group.visible = false; this.timeScale = 1; return; } // (the fleet bus drives on)
     if (r.fleetBus) { r.fleetBus.taken = false; r.fleetBus.st = null; } // (back on its round, where its timetable has it)
     // there: it waits at that stop (stopped half way by a teleport: it is not at a stop)
     this.at = r.exitSent ? r.to : null;

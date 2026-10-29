@@ -2,10 +2,8 @@
 // lattice of an ice crystal -- freezes into existence: frost feathers grow along every stroke, left to right,
 // then the letters flash-freeze solid on the hit and STUDIO tracks in underneath. The sound (Audio.iceHit) is
 // scheduled on the audio clock when the first frame goes up, so the crack lands on the frame.
-// All vector, drawn on one canvas at devicePixelRatio by `identEngine`, which runs in a worker on an
-// OffscreenCanvas (smooth while the game boots on the main thread; main-thread fallback otherwise) and lays
-// itself out again on every resize (the app window goes fullscreen while the intro plays).
-import interUrl from '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2';
+// All vector: `identEngine` builds the letters (its svgPath() is the logotype); StudioIdent.start() plays it as SVG +
+// CSS animations (no worker, no canvas: those showed only black on some Macs).
 
 export const STUDIO_MS = 2350;      // first frame -> exit fade
 export const STUDIO_LEAVE_MS = 550; // exit fade (.scene-studio transition)
@@ -357,57 +355,33 @@ export class StudioIdent {
   }
 
   /**
-   * Loads and starts the ident; resolves true once the first frame is up (the sound is scheduled then),
-   * false if it can't play (call fallback()). `still`: draw frames on demand only (seek) - for tests.
+   * Plays the ident: plain SVG + CSS animations (Oct 29, the user: "fix the Icecold Studio intro, right now it's
+   * just black"). The canvas worker drew nothing on some Macs, so the ident no longer needs a worker, a canvas or a
+   * font load: the ICECOLD logotype is one vector path, frozen in by a frost wipe left to right, a flash-freeze on the
+   * hit (the sound, Audio.iceHit, scheduled on the audio clock), a glint across the ice, STUDIO tracking in. Only
+   * transform / opacity animate, so the compositor keeps it smooth while the game boots on the main thread.
+   * Resolves true at once (it always plays).
    */
-  start({ timeoutMs = 9000, still = false, opts = STUDIO_VARIANTS[variant()] } = {}) {
-    const canvas = document.createElement('canvas');
-    canvas.className = 'studio-canvas';
-    this.host.appendChild(canvas);
-    const dims = () => ({ w: Math.max(1, this.host.clientWidth || innerWidth), h: Math.max(1, this.host.clientHeight || innerHeight), dpr: Math.min(2, devicePixelRatio || 1) });
-    const init = { type: 'init', fontUrl: new URL(interUrl, document.baseURI).href, hit: STUDIO_HIT_S, opts, autoGo: !still, ...dims() };
-    return new Promise((resolve) => {
-      let done = false, timer = 0;
-      const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
-      this.abort = () => finish(false); // skipped while still loading
-      // the timeout: if it fires late (the main thread was blocked by the game booting), the worker's 'ready' may be
-      // queued right behind it, so give it a moment before giving up
-      const t0 = performance.now();
-      timer = setTimeout(() => {
-        if (performance.now() - t0 > timeoutMs + 300) timer = setTimeout(() => finish(false), 400);
-        else finish(false);
-      }, timeoutMs);
-      this.recv = (m) => {
-        if (m.type === 'ready') {
-          if (done) return; // too late: the fallback is up
-          if (!still) {
-            // the worker started on its own (autoGo): the hit lands HIT s after its first frame
-            const late = m.at ? ((performance.timeOrigin || 0) + performance.now() - m.at) / 1000 : 0;
-            if (late < STUDIO_HIT_S + 0.25) this.sound = this.audio?.iceHit?.(Math.max(0.02, STUDIO_HIT_S - late)) || null;
-          }
-          finish(true);
-        } else if (m.type === 'error') { console.warn('[studio ident]', m.message); finish(false); }
-        this.onMessage?.(m);
-      };
-      try {
-        if (typeof OffscreenCanvas === 'undefined' || !canvas.transferControlToOffscreen || typeof Worker === 'undefined') throw new Error('no offscreen');
-        const src = `const engine = (${identEngine.toString()})();\nself.onmessage = (e) => engine.msg(e.data, (m) => self.postMessage(m));`;
-        const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-        this.worker = new Worker(url);
-        URL.revokeObjectURL(url);
-        this.worker.onmessage = (e) => this.recv(e.data);
-        this.worker.onerror = (e) => { console.warn('[studio ident] worker', e.message); finish(false); };
-        const off = canvas.transferControlToOffscreen();
-        this.worker.postMessage({ ...init, canvas: off }, [off]);
-      } catch {
-        // main-thread fallback (same engine)
-        this.worker = null;
-        this.engine = identEngine();
-        this.engine.msg({ ...init, canvas }, this.recv);
-      }
-      this.ro = new ResizeObserver(() => this.send({ type: 'resize', ...dims() }));
-      this.ro.observe(this.host);
-    });
+  start() {
+    const e = identEngine();
+    const vb = `-0.02 -0.02 ${(e.width + 0.04).toFixed(3)} 1.04`, d = e.svgPath();
+    const el = document.createElement('div');
+    el.className = 'studio-dom';
+    el.innerHTML = `<div class="sd-bloom"></div>
+<div class="sd-lockup">
+  <div class="sd-logo">
+    <svg class="sd-ice" viewBox="${vb}" preserveAspectRatio="xMidYMid meet"><defs><linearGradient id="sd-ice-g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="0.55" stop-color="#dcecf8"/><stop offset="1" stop-color="#9fc4de"/></linearGradient></defs><path fill="url(#sd-ice-g)" fill-rule="evenodd" d="${d}"/></svg>
+    <svg class="sd-flash" viewBox="${vb}" preserveAspectRatio="xMidYMid meet"><path fill="#ffffff" fill-rule="evenodd" d="${d}"/></svg>
+    <div class="sd-wipe"></div>
+    <div class="sd-glint"></div>
+  </div>
+  <div class="sd-sub">STUDIO</div>
+</div>
+${Array.from({ length: 14 }, (_, i) => `<i class="sd-spark" style="--x:${26 + ((i * 37) % 48)}%;--y:${41 + ((i * 23) % 14)}%;--d:${(0.95 + (i % 5) * 0.06).toFixed(2)}s;--s:${(0.6 + (i % 3) * 0.35).toFixed(2)}"></i>`).join('')}`;
+    this.host.appendChild(el);
+    this.sound = this.audio?.iceHit?.(STUDIO_HIT_S) || null;
+    this.abort = () => {};
+    return Promise.resolve(true);
   }
 
   /** Static lockup (vector) when the canvas can't play: fades in with the hit sound. */

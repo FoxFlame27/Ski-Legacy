@@ -306,7 +306,13 @@ async function boot() {
   try {
     // (off on request, 2026-10-27: people are only a soft bump again: nobody falls, no fines. true turns it back on)
     const PEOPLE_HITS_ON = false;
-    initPeopleHits({ player, npcs, hud, audio, enabled: () => PEOPLE_HITS_ON && started && !modes?.active && !races?.active && !heli?.active });
+    // (Oct 29, the user: "the people should also get hit realistic": vehicles (your car, the snowmobile, traffic, the
+    // buses, the ploughs) throw people again, whatever PEOPLE_HITS_ON says; skiing / running into them stays soft)
+    const VEHICLE_PEOPLE_HITS_ON = true;
+    initPeopleHits({
+      player, npcs, hud, audio, spray,
+      enabled: (source) => (PEOPLE_HITS_ON || (VEHICLE_PEOPLE_HITS_ON && source !== 'ski' && source !== 'foot')) && started && !modes?.active && !races?.active && !heli?.active,
+    });
     player.onPersonHit = playerHitPerson;
   } catch (e) { console.warn('people hits', e); }
   modes = new Modes({
@@ -1884,7 +1890,7 @@ function loopUpdate() {
         else {
           strikes = 0;
           hud.flash(`${what} · the rescue helicopter is on its way`, 'bad', 3200);
-          if (!heli.rescueMe({ fallback: wipeoutToVillage })) wipeoutToVillage();
+          if (!heli.rescueMe({ fallback: wipeoutToVillage, free: !!hitBy })) wipeoutToVillage(); // (hit by a vehicle: no fee)
         }
       }
     }

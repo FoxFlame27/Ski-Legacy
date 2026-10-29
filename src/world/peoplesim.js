@@ -31,8 +31,8 @@ export class Person {
 }
 
 // the closest point of a collider ({x, z, r} circle or {x, z, hw, hd, rot} box) to (x, z): [dx, dz, distance
-// outside its surface] (negative inside)
-function away(c, x, z) {
+// outside its surface] (negative inside) (also game/npcs.js: a thrown villager stopped at a wall)
+export function away(c, x, z) {
   if (c.r !== undefined) { const dx = x - c.x, dz = z - c.z, d = Math.hypot(dx, dz) || 1e-6; return [dx / d, dz / d, d - c.r]; }
   const cs = Math.cos(-c.rot || 0), sn = Math.sin(-c.rot || 0), dx = x - c.x, dz = z - c.z;
   const lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
@@ -46,8 +46,8 @@ function away(c, x, z) {
 }
 
 // rotate the 3x3 part of the column-major matrix at m[o] by angle a about the horizontal axis (kx, 0, kz) (unit),
-// about its origin (the feet); lifted a little as it lies down (the body's thickness)
-function tilt(m, o, kx, kz, a) {
+// about its origin (the feet); lifted a little as it lies down (the body's thickness: `lift`)
+function tilt(m, o, kx, kz, a, lift = 0.06) {
   const c = Math.cos(a), s = Math.sin(a), C = 1 - c;
   for (let col = 0; col < 3; col++) {
     const j = o + col * 4, vx = m[j], vy = m[j + 1], vz = m[j + 2], kv = kx * vx + kz * vz;
@@ -55,8 +55,14 @@ function tilt(m, o, kx, kz, a) {
     m[j + 1] = vy * c + (kz * vx - kx * vz) * s;
     m[j + 2] = vz * c + kx * vy * s + kz * kv * C;
   }
-  m[o + 13] += 0.06 * s;
+  m[o + 13] += lift * Math.abs(s);
 }
+const G = 9.81;
+const BODY_C = 0.9;  // m: the body's centre over the feet (times the person's height scale): a thrown body turns about it
+const THICK = 0.15;  // m: lying, the centre's height over the snow (about where the old fall's figure lies)
+// a figure tilted by a (about the axis across the throw) and r (about the throw's line): its centre's lowest height
+// over the snow (standing c, lying THICK)
+const restH = (c, a, r) => { const u = Math.abs(Math.cos(a) * Math.cos(r)); return c * u + THICK * (1 - u); };
 
 export class PeopleSim {
   /**
@@ -106,17 +112,27 @@ export class PeopleSim {
   /** Fades out where the person stands (then off stage). */
   hide(p, rate = 2.4) { p.fadeTo = 0; p.fadeRate = rate; }
 
-  /** Knocked over toward (dx, dz) (unit): falls flat, lies a moment, gets up and carries on (game/peoplehits.js). */
-  knock(p, dx, dz, speed = 6) {
-    p.down = { t: 0, fall: true, dx, dz, s: 0, slide: Math.min(3, 0.8 + speed * 0.2), dur: 0.42, lie: 1.3 + Math.random() * 1.2, up: 0.9 };
+  /**
+   * Knocked over toward (dx, dz) (unit): falls flat, lies a moment, gets up and carries on (game/peoplehits.js). L: a
+   * vehicle's throw (peoplehits.js launchFor: vh, vy, spin, twist, lie, up): thrown instead (updateThrown).
+   */
+  knock(p, dx, dz, speed = 6, L = null) {
+    if (L) {
+      const c = BODY_C * (this.crowd.scl[p.i * 2 + 1] || 1);
+      p.down = {
+        t: 0, fall: true, thrown: true, state: 'fly', dx, dz, vx: dx * L.vh, vz: dz * L.vh, c, h: c, vy: L.vy,
+        a: 0, w: L.spin, r: 0, rw: L.twist, aT: null, lie: L.lie, up: L.up, lt: 0, aLie: 0, fx: 0, fz: 0,
+      };
+    } else p.down = { t: 0, fall: true, dx, dz, s: 0, slide: Math.min(3, 0.8 + speed * 0.2), dur: 0.42, lie: 1.3 + Math.random() * 1.2, up: 0.9 };
     p.v = 0;
   }
   /** A stumble: tips with the push and steps back up (0.8 s). */
   stumble(p, dx, dz) { p.down = { t: 0, fall: false, dx, dz, s: 0, slide: 0.45, dur: 0.8 }; p.v = 0; }
   // one frame of a knocked-over / stumbling person: the whole figure tips over about its feet toward the push
   updateDown(p, dt) {
-    const K = p.down, D = this.crowd.dyn, i = p.i;
+    const K = p.down, i = p.i;
     K.t += dt;
+    if (K.thrown) { this.updateThrown(p, K, dt); return; }
     let a, done = false, slideT;
     if (K.fall) {
       const t1 = K.dur, t2 = t1 + K.lie, t3 = t2 + K.up;
@@ -135,11 +151,108 @@ export class PeopleSim {
     p.y = this.groundY(p.x, p.z, p); p.gx = p.x; p.gz = p.z;
     this.crowd.setPlace(i, p.x, p.y, p.z, p.yaw);
     if (a > 1e-3) tilt(this.crowd.mat, i * 16, K.dz, -K.dx, a);
+    this.calm(p, dt);
+    if (done) { p.down = null; p.stuck = 0; }
+  }
+  // the pose inputs of somebody on the snow: no walking, talking, holding, looking about
+  calm(p, dt) {
+    const D = this.crowd.dyn, i = p.i;
     D.alpha[i] = p.alpha;
     const k = Math.min(1, dt * 7);
     D.walk[i] -= D.walk[i] * k; D.talk[i] -= D.talk[i] * k; D.holdW[i] -= D.holdW[i] * k;
     D.lookY[i] = 0; D.lookP[i] = 0;
-    if (done) { p.down = null; p.stuck = 0; }
+  }
+  // Thrown by a vehicle: the body's centre (p.x, p.z; K.h over the snow) flies a ballistic arc, the figure turning
+  // about it (a: the somersault across the throw, + = toward the push; r: the twist about the throw's line); landing
+  // hard it bounces (a thud, a puff: PeopleSim.onLand), then tumbles on along the snow with friction and settles flat
+  // (on the back or the front); lies K.lie s; gets up about its feet (the old fall's get-up). Never under the snow
+  // (restH), stopped by the walls it's thrown at (the obstacles).
+  updateThrown(p, K, dt) {
+    const i = p.i, m = this.crowd.mat, o = i * 16, c = K.c;
+    const gy = this.groundY(p.x, p.z, p);
+    if (K.state === 'up') {
+      const u = Math.min(1, K.lt / K.up);
+      K.lt += dt;
+      const a = K.aLie * (1 - u * u * (3 - 2 * u));
+      p.y = gy; p.gx = p.x; p.gz = p.z;
+      this.crowd.setPlace(i, p.x, p.y, p.z, p.yaw);
+      if (Math.abs(a) > 1e-3) tilt(m, o, K.dz, -K.dx, a);
+      this.calm(p, dt);
+      if (u >= 1) { p.down = null; p.stuck = 0; }
+      return;
+    }
+    if (K.state === 'fly') {
+      K.vy -= G * dt; K.h += K.vy * dt;
+      K.a += K.w * dt; K.r += K.rw * dt;
+      p.x += K.vx * dt; p.z += K.vz * dt;
+      const floor = restH(c, K.a, K.r);
+      if (K.h <= floor) {
+        const imp = -K.vy, k = imp > 3 ? 0.6 : 0.8;
+        K.h = floor;
+        K.vx *= k; K.vz *= k; K.w *= 0.5; K.rw *= 0.5;
+        if (imp > 1) PeopleSim.onLand?.(p.x, gy, p.z, imp, K.vx, K.vz);
+        if (imp > 2.5) K.vy = imp * 0.3; // a bounce
+        else { K.vy = 0; K.state = 'tumble'; K.w = K.w * 0.6 + Math.min(9, Math.hypot(K.vx, K.vz) * 1.2); K.lt = 0; }
+      }
+    } else if (K.state === 'tumble' || K.state === 'lie') {
+      K.lt += dt;
+      // the slide: friction on the snow (the limbs dig in as it slows)
+      const s = Math.hypot(K.vx, K.vz);
+      if (s > 1e-4) { const k = Math.max(0, s - 7.5 * dt) / s; K.vx *= k; K.vz *= k; }
+      p.x += K.vx * dt; p.z += K.vz * dt;
+      if (K.state === 'tumble') {
+        // rolling on along the snow, then settling flat: the nearest lying angle (on the back / the front)
+        if (K.aT === null && (Math.abs(K.w) < 3 || (s < 2 && K.lt > 0.5))) {
+          const rest = K.a + (K.w * Math.abs(K.w)) / 14;
+          K.aT = Math.round((rest - Math.PI / 2) / Math.PI) * Math.PI + Math.PI / 2;
+        }
+        if (K.aT === null) { K.w *= Math.exp(-dt * (s < 1.5 ? 3 : 0.9)); K.a += K.w * dt; }
+        else { const d = K.a - K.aT, e = Math.exp(-6 * dt), q = K.w + 6 * d; K.a = K.aT + (d + q * dt) * e; K.w = (K.w - q * 6 * dt) * e; }
+        // the twist: back to square
+        const rT = Math.round(K.r / TAU) * TAU, dr = K.r - rT, er = Math.exp(-5 * dt), qr = K.rw + 5 * dr;
+        K.r = rT + (dr + qr * dt) * er; K.rw = (K.rw - qr * 5 * dt) * er;
+        if ((K.aT !== null && Math.abs(K.a - K.aT) < 0.05 && Math.abs(K.w) < 0.4 && Math.abs(K.r - rT) < 0.05 && s < 0.3) || K.lt > 5) {
+          // flat: one angle in (-PI, PI] (+-PI/2), no twist
+          K.state = 'lie'; K.lt = 0; K.vx = 0; K.vz = 0;
+          K.a = K.aT !== null ? K.aT : K.a; K.a -= Math.round(K.a / TAU) * TAU;
+          if (Math.abs(Math.abs(K.a) - Math.PI / 2) > 0.3) K.a = Math.sign(K.a || 1) * Math.PI / 2;
+          K.r = 0; K.w = 0; K.rw = 0;
+        }
+      } else if (K.lt > K.lie) {
+        // getting up about the feet: the body's centre is half a body from them, toward the head
+        const sa = Math.sin(K.a);
+        p.x -= K.dx * sa * c; p.z -= K.dz * sa * c;
+        K.aLie = 1.45 * Math.sign(sa || 1);
+        K.state = 'up'; K.lt = 0;
+        this.updateThrown(p, K, 0);
+        return;
+      }
+      K.h = restH(c, K.a, K.r);
+    }
+    // a wall in the way (lamps, stalls, buildings): out of it, the speed into it gone
+    if (K.vx || K.vz) {
+      const cell = this.grid.size ? this.grid.get(Math.floor(p.x / 8) * 65536 + Math.floor(p.z / 8)) : null;
+      if (cell) for (const ob of cell) {
+        if (Math.abs(p.x - ob.x) > ob.reach || Math.abs(p.z - ob.z) > ob.reach) continue;
+        const [ux, uz, d] = away(ob, p.x, p.z);
+        if (d >= 0.35) continue;
+        p.x += ux * (0.35 - d); p.z += uz * (0.35 - d);
+        const vn = K.vx * ux + K.vz * uz;
+        if (vn < 0) {
+          K.vx -= ux * vn * 1.2; K.vz -= uz * vn * 1.2; K.vx *= 0.5; K.vz *= 0.5;
+          if (-vn > 2) PeopleSim.onLand?.(p.x, gy + K.h, p.z, -vn, 0, 0);
+        }
+      }
+    }
+    // the figure: turned about its centre, the centre placed K.h over the snow
+    const g2 = this.groundY(p.x, p.z, p);
+    this.crowd.setPlace(i, p.x, g2, p.z, p.yaw);
+    tilt(m, o, K.dz, -K.dx, K.a, 0);
+    if (K.r) tilt(m, o, K.dx, K.dz, K.r, 0);
+    const sy = this.crowd.scl[i * 2 + 1] || 1, k = c / sy; // (column 1: the body's up, times its height scale)
+    m[o + 12] = p.x - m[o + 4] * k; m[o + 13] = g2 + K.h - m[o + 5] * k; m[o + 14] = p.z - m[o + 6] * k;
+    p.y = g2; p.gx = p.x; p.gz = p.z;
+    this.calm(p, dt);
   }
 
   update(dt) {
@@ -256,3 +369,4 @@ export class PeopleSim {
 }
 PeopleSim.all = [];      // every simulation (the player bumps off their people: npcs.js)
 PeopleSim.player = null; // {x, z}: walking people step round the player
+PeopleSim.onLand = null; // (x, y, z, m/s down, vx, vz): a thrown person landed / hit a wall (game/peoplehits.js landed)

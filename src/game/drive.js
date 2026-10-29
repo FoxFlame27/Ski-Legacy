@@ -55,9 +55,9 @@ const SURF = {
 };
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const CRASH_V = 62 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
-const EXTREME_V = 120 / 3.6; // ...and this fast: the car's wrecked at once
-const KNOCK_V = 26 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
+const CRASH_V = 70 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
+const EXTREME_V = 150 / 3.6; // ...and this fast: the car's wrecked at once
+const KNOCK_V = 30 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
@@ -1026,12 +1026,12 @@ export class Drive {
     addDent(d.e, ix * c - iz * s, ix * s + iz * c, hard, d.t.size);
     applyDents(d.inst, d.e);
   }
-  // a knock (26 km/h up to a crash): a few % of damage, a small dent, a jolt; once per hit (not every frame of it)
+  // a knock (30 km/h up to a crash): a few % of damage, a small dent, a jolt; once per hit (not every frame of it)
   knock(v, nx, nz) {
     const d = this.d;
     if (!d || d.crash || performance.now() - (this.knockT || 0) < 600) return;
     this.knockT = performance.now();
-    const e = d.e, add = 2 + (v - KNOCK_V) * 0.7;
+    const e = d.e, add = 1 + (v - KNOCK_V) * 0.35; // (the user: "make cars not break so easily": half the old damage)
     // the knock that takes it to 100 %: wrecked (before, knocks stopped at 99 % and the car never broke down)
     if ((e.damage || 0) + add >= 100 && this.canCrash()) { e.damage = 100; this.crash(CRASH_V, nx, nz, 'car'); return; }
     e.damage = Math.min(99, (e.damage || 0) + add);
@@ -1049,9 +1049,9 @@ export class Drive {
     const d = this.d;
     if (!d || d.crash) return;
     const hard = clamp((v - CRASH_V) / 14, 0, 1);
-    // damage: a big crash ~12-25 %, an extreme one (120 km/h+) wrecks it at once; until then you drive on
+    // damage: a big crash ~7-15 %, an extreme one (150 km/h+) wrecks it at once; until then you drive on
     const e0 = d.e;
-    e0.damage = Math.min(100, (e0.damage || 0) + (v >= EXTREME_V ? 100 : 12 + (v - CRASH_V) * 1.0));
+    e0.damage = Math.min(100, (e0.damage || 0) + (v >= EXTREME_V ? 100 : 7 + (v - CRASH_V) * 0.55));
     this.knockT = performance.now();
     try { this.dent(nx, nz, Math.min(1, 0.45 + hard * 0.55 + (e0.damage >= 100 ? 0.2 : 0))); } catch (err) { console.warn('drive: dent', err); }
     if (e0.damage < 100) {

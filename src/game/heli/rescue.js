@@ -85,12 +85,13 @@ export class Rescue {
    * Start a rescue for the player lying where they crashed. false: not possible here (main.js uses the old fade).
    * @param {{fallback?: () => void}} o
    */
-  start({ fallback } = {}) {
+  start({ fallback, free = false } = {}) {
     const h = this.h, p = h.player, f = h.flight, W = h.world;
     if (this.phase || h.state === 'flying' || h.state === 'boarding') return false;
     // under a tunnel lid or inside a cave: no way to reach you from the air
     if (Math.abs(W.outsideHeight(p.pos.x, p.pos.z) - W.height(p.pos.x, p.pos.z)) > 2.5) return false;
     this.fallback = fallback;
+    this.free = free; // (knocked over by a vehicle: not your fault, no fee)
     this.t = 0; this.pt = 0; this.fast = false; this.spot = null; this.attached = false; this.inCabin = false; this.shot.ready = false;
     h.model.clearRack();
     h.away = null;
@@ -492,6 +493,7 @@ export class Rescue {
   // the ambulance fee, straight off your balance (it can go below zero: shops, lifts and passes then refuse)
   charge(what = 'Rescue and ambulance') {
     const h = this.h, fee = rescueFee();
+    if (this.free) { this.free = false; h.hud.flash(`${what} · free: it was not your fault`, 'good', 4200); return; }
     save.money -= fee;
     save.rescues = (save.rescues | 0) + 1;
     writeSave();

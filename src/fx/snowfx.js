@@ -863,8 +863,9 @@ function marks(trails, id, rig, e) {
 }
 
 // One-shot snow bursts queued by the rig / player: landings, crashes, tumble impacts, body slides,
-// pole plants. A ring of particles thrown outward from the contact, scaled by `amount` (0..1).
-function burst(spray, e, vel) {
+// pole plants (and people thrown by a vehicle landing: game/peoplehits.js landed()). A ring of particles thrown
+// outward from the contact, scaled by `amount` (0..1).
+export function burst(spray, e, vel) {
   const a = Math.max(0.05, Math.min(1, e.amount ?? 0.5));
   _p.set(e.x, e.y + 0.05, e.z);
   const carry = 0.25;

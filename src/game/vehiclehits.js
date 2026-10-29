@@ -15,6 +15,13 @@
 // Their velocity is measured from the collider's motion frame to frame (the same for every source, the remote cars'
 // interpolation included); a jump (respawn, parked far away at 1e9) resets it. Only vehicles within 15 m are tested;
 // nothing is allocated per frame (one record per collider, made the first time it is seen).
+//
+// The throw (Oct 29, the user: "the people should also get hit realistic"): the same arc the people get
+// (peoplehits.js launchFor: ~0.3 m up at 15 km/h, ~2 m at 50, ~3.4 m at 90, 10-20 m along), a backward somersault
+// (the legs taken out) at 25+ km/h, a heavier camera shake the harder the hit.
+// The people about (npcs.near) are hit by the same vehicles (hitPeople): thrown the same way, no fine (not your doing).
+// The drivers don't brake for them, but they keep to the pavements and the waiting areas: it's the odd one crossing.
+import { knockPerson, launchFor, people } from './peoplehits.js';
 
 const R = 0.35;                 // the player's radius (player.js collide)
 const MARGIN = 0.15;            // touching counts (the player's own collide has just pushed you out to the edge)
@@ -23,7 +30,9 @@ const V_MIN = 10 / 3.6;         // m/s: slower vehicles (and slower closing spee
 const HARD = 50 / 3.6;          // m/s: a hard hit, like a big crash (the rescue helicopter comes)
 const SAFE_MS = 2000;           // invulnerable this long after a hit
 const JUMP = 70;                // m/s: faster "motion" is a teleport (respawned, parked away): not a velocity
+const P_R = 0.3;                // a person's radius (hit by a vehicle: hitPeople)
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const _launch = {};
 
 export class VehicleHits {
   /**
@@ -98,6 +107,7 @@ export class VehicleHits {
       }
       r.px = x; r.pz = z;
     }
+    try { this.hitPeople(); } catch (e) { if (!this.warnedP) { this.warnedP = true; console.warn('vehicle hits people', e); } }
     const pl = this.player;
     if (pl.mode !== 'ski' && pl.mode !== 'walk') return;
     if (performance.now() < this.safeUntil) return;
@@ -139,6 +149,30 @@ export class VehicleHits {
     }
   }
 
+  // the people near you (npcs.near: NPC skiers, villagers, the instanced crowds) inside a moving vehicle's box: thrown
+  // along its line (knockPerson ignores whoever is already down, and everything when people hits are off)
+  hitPeople() {
+    const folk = people();
+    if (!folk.length) return;
+    for (let i = 0; i < this.n; i++) {
+      const r = this.list[i], c = r.col, v2 = r.vx * r.vx + r.vz * r.vz;
+      if (v2 < V_MIN * V_MIN) continue;
+      const oy = r.o?.y;
+      let cs = 2, sn = 0; // (its rotation, worked out for the first person near it)
+      for (let j = 0; j < folk.length; j++) {
+        const q = folk[j], dx = q.x - c.x, dz = q.z - c.z;
+        if (dx > NEAR || dx < -NEAR || dz > NEAR || dz < -NEAR) continue;
+        if (Number.isFinite(oy) && Number.isFinite(q.y) && Math.abs(q.y - oy) > 3) continue; // (a bridge, a platform)
+        if (cs === 2) { cs = Math.cos(-c.rot || 0); sn = Math.sin(-c.rot || 0); }
+        const lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
+        if (Math.abs(lx) >= c.hw + P_R || Math.abs(lz) >= c.hd + P_R) continue;
+        const vs = Math.sqrt(v2), into = (r.vx * dx + r.vz * dz) / (Math.hypot(dx, dz) || 1);
+        if (into < 0) continue; // (behind its middle, going away: a reversing tail is the other face)
+        knockPerson(q, Math.max(vs * 0.6, into), 'traffic', r.vx / vs, r.vz / vs);
+      }
+    }
+  }
+
   knock(r, nx, nz, pen, speed) {
     const pl = this.player, p = pl.pos;
     const hard = speed > HARD;
@@ -149,17 +183,21 @@ export class VehicleHits {
     let tx = (r.vx / vs) * 0.8 + nx * 0.2, tz = (r.vz / vs) * 0.8 + nz * 0.2;
     const tl = Math.hypot(tx, tz) || 1;
     tx /= tl; tz /= tl;
-    const h = clamp(speed + 1.5, 4, 18), up = clamp(1.2 + speed * 0.2, 1.8, 6.5);
+    // the arc the people get (peoplehits.js launchFor), a little lift at least (it's a wipeout from the first frame)
+    const L = launchFor(speed, _launch), h = Math.max(3, L.vh), up = Math.max(1.6, L.vy);
     pl.vel.set(tx * h, up, tz * h);
     // the side you go over to: away from the vehicle's line (left / right of its travel)
     const side = (r.vx / vs) * nz - (r.vz / vs) * nx >= 0 ? 1 : -1;
     const H = this.hit;
     H.hard = hard; H.kmh = Math.round(speed * 3.6); H.what = r.what || 'car'; H.pending = true;
-    pl.crash(side, { kind: hard ? 'tumble' : speed > 7 ? 'roll' : 'slam', pitchVel: hard ? speed * 0.6 : 0 });
+    // 25+ km/h: a backward somersault through the air (the legs taken out, the head toward the vehicle); slower a roll
+    // over / a topple
+    const kmh = speed * 3.6;
+    pl.crash(side, { kind: kmh >= 25 ? 'tumble' : kmh >= 15 ? 'roll' : 'slam', pitchVel: kmh >= 25 ? L.spin : 0 });
     if (pl.mode === 'fall') pl.fallAir = true; // (flying: lands on the snow, then slides and tumbles on)
     else H.pending = false;
-    pl.shake = Math.max(pl.shake || 0, 1);
-    pl.camDipV = (pl.camDipV || 0) - (hard ? 5 : 3);
+    pl.shake = Math.max(pl.shake || 0, clamp(0.8 + speed / 18, 1, 2.3)); // (heavier the harder: 2+ at 70+ km/h)
+    pl.camDipV = (pl.camDipV || 0) - clamp(2 + speed * 0.2, 3, 7.5);
     pl.fovKick = Math.max(pl.fovKick || 0, hard ? 0.8 : 0.4);
     try { this.audio?.impact?.('car', hard ? clamp(speed / 25, 0.6, 1) : clamp(speed / 28, 0.2, 0.5)); } catch { /* (silent) */ }
   }

@@ -4,12 +4,13 @@ import { world } from '../world/world.js';
 import { clamp, lerp } from '../core/noise.js';
 import { quality } from '../engine/quality.js';
 import { Townsfolk } from '../world/townsfolk.js';
-import { PeopleSim } from '../world/peoplesim.js';
+import { PeopleSim, away } from '../world/peoplesim.js';
 import { getRunIndex } from '../world/crowds.js';
-import { newFall, newStumble, stepFall } from './peoplehits.js';
+import { newFall, newStumble, stepFall, landed } from './peoplehits.js';
 
 const G = 9.81;
 const UP = new THREE.Vector3(0, 1, 0);
+const _ZERO = new THREE.Vector3();
 const _n = new THREE.Vector3(), _fw = new THREE.Vector3(), _side = new THREE.Vector3(), _np = new THREE.Vector3();
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4(), _sph = new THREE.Sphere(new THREE.Vector3(), 2);
 
@@ -118,6 +119,7 @@ function mergeGeos(parts) {
 export class NPCs {
   constructor({ scene, makeSkier, layout, fx, village = null, colliders = [], racing = null }) {
     this.scene = scene;
+    this.colliders = colliders; // (a villager thrown by a vehicle stops at a wall: updateDown)
     this.makeSkier = makeSkier;
     this.layout = layout;
     this.fx = fx;
@@ -206,7 +208,7 @@ export class NPCs {
         s.rig.setCarry?.(carry);
         const a = Math.random() * 6.28, r = 14 + Math.random() * 2;
         const pos = new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r - 4);
-        const rec = { ...s, pos, target: null, route: null, wait: Math.random() * 4, heading: Math.random() * 6.28, speed: 0, carry, kind: 'walker', down: null };
+        const rec = { ...s, pos, target: null, route: null, wait: Math.random() * 4, heading: Math.random() * 6.28, speed: 0, carry, kind: 'walker', down: null, id: 900 + i };
         pos.who = rec;
         this.walkers.push(rec);
       }
@@ -216,11 +218,12 @@ export class NPCs {
     }
   }
 
-  // ---- knocked over / stumbling (game/peoplehits.js: you ran into them). o: a skier or walker record.
-  knock(o, dx, dz, speed) {
+  // ---- knocked over / stumbling (game/peoplehits.js: you ran into them). o: a skier or walker record. L: a vehicle's
+  // throw (peoplehits.js launchFor): flying first (the root lifted off the snow), then the tumble.
+  knock(o, dx, dz, speed, L = null) {
     const h = o.heading || 0, dr = -dx * Math.cos(h) + dz * Math.sin(h); // the push toward their right (+) / left
     const side = Math.abs(dr) > 0.25 ? Math.sign(dr) : Math.random() < 0.5 ? -1 : 1;
-    o.down = newFall(side, dx, dz, speed);
+    o.down = newFall(side, dx, dz, speed, L);
     o.resume = false;
   }
   stumble(o, dx, dz) { o.down = newStumble(dx, dz); o.resume = false; }
@@ -229,17 +232,39 @@ export class NPCs {
     let done = true;
     try {
       done = stepFall(F, dt, o.heading || 0);
-      o.pos.x += F.vx * dt; o.pos.z += F.vz * dt;
-      o.pos.y = world.height(o.pos.x, o.pos.z);
-      o.rig.root.position.copy(o.pos);
-      const n = world.normal(o.pos.x, o.pos.z, _n) || UP;
+      const p = o.pos;
+      p.x += F.vx * dt; p.z += F.vz * dt;
+      // thrown into a wall, a stall, a lamp post (the village's colliders): stopped there, the push off it gone
+      if (o.kind === 'walker' && (F.vx || F.vz)) this.wall(F, p);
+      const gy = world.height(p.x, p.z);
+      p.y = gy + (F.h || 0); // (flying: over the snow below, never under it)
+      if (F.thud) { landed(p.x, gy, p.z, F.thud, F.vx, F.vz); F.thud = 0; }
+      o.rig.root.position.copy(p);
+      const n = world.normal(p.x, p.z, _n) || UP;
       o.rig.update(dt, { mode: 'fall', heading: o.heading || 0, speed: 0, crouch: 0, lean: 0, tuck: false, plow: 0, normal: n, air: false,
-        fall: F, fallSide: F.side, fallHeading: o.heading || 0, fallAir: false, fallT: F.t / 0.6 });
+        fall: F, fallSide: F.side, fallHeading: F.hd ?? o.heading ?? 0, fallAir: !!F.air, fallT: F.t / 0.6 });
+      if (o.rig.fx?.length) this.fx(o.id, o.rig, { grounded: false, speed: 0, vel: o.vel || _ZERO, sideslip: 0, plow: 0, lean: 0 }, dt); // (the body's puffs)
     } catch (e) { console.warn('npc fall', e); done = true; }
     if (done) {
       o.down = null;
       o.resume = true;
       if (o.kind === 'skier') { o.v = 2.5; o.animAcc = 0; } else o.speed = 0;
+    }
+  }
+  // a body sliding / flying into a collider: out of it, and its speed into it gone
+  wall(F, p) {
+    const C = this.colliders;
+    for (let i = 0; i < C.length; i++) {
+      const c = C[i], reach = (c.r ?? Math.max(c.hw || 0, c.hd || 0)) + 0.6;
+      if (!(Math.abs(p.x - c.x) < reach && Math.abs(p.z - c.z) < reach)) continue;
+      const [ux, uz, d] = away(c, p.x, p.z);
+      if (d >= 0.35) continue;
+      p.x += ux * (0.35 - d); p.z += uz * (0.35 - d);
+      const vn = F.vx * ux + F.vz * uz;
+      if (vn < 0) {
+        F.vx -= ux * vn * 1.2; F.vz -= uz * vn * 1.2; F.vx *= 0.5; F.vz *= 0.5;
+        if (-vn > 2) F.thud = Math.max(F.thud || 0, -vn); // (a thump against it)
+      }
     }
   }
 

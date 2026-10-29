@@ -47,8 +47,8 @@ export const TUNING = {
   fine: 500,         // stop and pay
   arrestFine: 2000,  // caught fleeing
   jailS: 90,         // prison.jail(seconds)
-  escapeS: 180,      // s (in all) further than escapeR from every patrol car: escaped
-  escapeR: 150,      // m
+  escapeS: 150,      // s (in all) further than escapeR from every patrol car: escaped (the user: "a bit easier to escape")
+  escapeR: 110,      // m
   stopR: 40,         // m: stopped with a patrol car this close: pulled over
   stopKmh: 3,        // ...below this speed
   stopS: 3,          // ...for this long
@@ -59,11 +59,11 @@ export const TUNING = {
   vRoad: 38,         // m/s (137 km/h) on the roads
   vOff: 22,          // m/s off them
   ramExtra: 8,       // m/s over your speed when they ram
-  ramMult: 1.5,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
+  ramMult: 1.2,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
   ramGapS: 2.5,      // s a patrol car drops back after a ram before the next
   cooldownS: 6,      // s after a chase ends before another hit calls them
 };
-const CRASH_V = 62 / 3.6, KNOCK_V = 26 / 3.6; // (drive.js)
+const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
 const MODEL = 'police/police_car';
 const SEND_DT = 1 / 6;
@@ -221,16 +221,22 @@ function keepRight(ids) {
   });
 }
 
+// a patrol car seen from the side (the WANTED box: one per car after you)
+const POLICE_CAR_ICON = '<svg viewBox="0 0 26 13"><path d="M2 9.5V7.2c0-.8.5-1.4 1.3-1.6L7 4.8l3-3.1c.4-.4.9-.6 1.5-.6h5.2c.6 0 1.1.3 1.5.7l2.6 3.1 2.4.5c.9.2 1.5.9 1.5 1.8v2.3c0 .5-.4.9-.9.9h-1.1a2.6 2.6 0 0 0-5.2 0H9.6a2.6 2.6 0 0 0-5.2 0H2.9c-.5 0-.9-.4-.9-.9zM11.8 2.4 9.6 4.9h4.6V2.4zm3.8 0v2.5h4.2l-2.1-2.5z"/><circle cx="7" cy="10.4" r="1.8"/><circle cx="19.2" cy="10.4" r="1.8"/><rect x="12.2" y="0" width="3" height="1.2" rx=".4" fill="#ff4d3d"/></svg>';
+
 const CSS = `
-#police-hud { position: absolute; top: 20px; right: 22px; width: 250px; padding: 12px 24px 14px 22px; background: #fff; color: var(--blue, #1546c8);
+#police-hud { position: absolute; left: 22px; bottom: 92px; width: 260px; padding: 12px 24px 14px 22px; background: #fff; color: var(--blue, #1546c8);
   clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; }
 #police-hud[hidden] { display: none; }
+body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (the same corner: the box takes it) */
 #police-hud .pl-lights { display: flex; gap: 6px; margin-bottom: 6px; }
 #police-hud .pl-lights i { flex: 1; height: 4px; border-radius: 2px; background: #1546c8; animation: pl-blink 0.5s steps(1) infinite; }
 #police-hud .pl-lights i + i { background: #ff4d3d; animation-delay: 0.25s; }
 #police-hud .pl-head { display: flex; align-items: baseline; justify-content: space-between; font-family: var(--num); font-style: italic; font-weight: 700; }
 #police-hud .pl-head b { font-size: 26px; letter-spacing: 0.06em; color: #ff4d3d; }
 #police-hud .pl-t { font-size: 22px; font-variant-numeric: tabular-nums; }
+#police-hud .pl-cars { display: flex; gap: 4px; margin-left: auto; margin-right: 10px; align-self: center; }
+#police-hud .pl-cars svg { width: 26px; height: 13px; fill: #1546c8; }
 #police-hud .pl-msg { margin-top: 4px; font-size: 13px; font-weight: 700; line-height: 1.3; }
 #police-hud .pl-esc { margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(21, 70, 200, 0.18); }
 #police-hud .pl-esc[hidden] { display: none; }
@@ -274,19 +280,20 @@ export class Police {
     if (!document.getElementById('police-css')) { const s = document.createElement('style'); s.id = 'police-css'; s.textContent = CSS; document.head.appendChild(s); }
     const el = document.createElement('div');
     el.id = 'police-hud'; el.hidden = true;
-    el.innerHTML = '<div class="pl-lights"><i></i><i></i></div><div class="pl-head"><b>WANTED</b><span class="pl-t"></span></div><div class="pl-msg"></div><div class="pl-esc"><span></span><div class="pl-bar"><i></i></div></div>';
+    el.innerHTML = '<div class="pl-lights"><i></i><i></i></div><div class="pl-head"><b>WANTED</b><span class="pl-cars"></span><span class="pl-t"></span></div><div class="pl-msg"></div><div class="pl-esc"><span></span><div class="pl-bar"><i></i></div></div>';
     (document.getElementById('hud') || document.body).appendChild(el);
     this.el = el;
-    this.$t = el.querySelector('.pl-t'); this.$msg = el.querySelector('.pl-msg'); this.$escBox = el.querySelector('.pl-esc'); this.$esc = el.querySelector('.pl-esc span'); this.$bar = el.querySelector('.pl-bar i');
+    this.$t = el.querySelector('.pl-t'); this.$cars = el.querySelector('.pl-cars'); this.$msg = el.querySelector('.pl-msg'); this.$escBox = el.querySelector('.pl-esc'); this.$esc = el.querySelector('.pl-esc span'); this.$bar = el.querySelector('.pl-bar i');
     this.hudCache = {};
   }
-  setHud(show, t = '', msg = '', esc = '', frac = 0) {
+  setHud(show, t = '', msg = '', esc = '', frac = 0, cars = 0) {
     if (!this.el) return;
-    if (this.el.hidden === show) this.el.hidden = !show;
+    if (this.el.hidden === show) { this.el.hidden = !show; document.body.classList.toggle('wanted', show); }
     if (!show) return;
     const C = this.hudCache;
     if (C.t !== t) this.$t.textContent = C.t = t;
     if (C.msg !== msg) this.$msg.textContent = C.msg = msg;
+    if (C.cars !== cars) { C.cars = cars; this.$cars.innerHTML = POLICE_CAR_ICON.repeat(cars); } // (a little patrol car per car after you)
     if (C.esc !== esc) { this.$esc.textContent = C.esc = esc; this.$escBox.hidden = !esc; }
     const w = `${Math.round(frac * 100)}%`;
     if (C.w !== w) this.$bar.style.width = C.w = w;
@@ -302,7 +309,7 @@ export class Police {
   start(why) {
     this.w = { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, footT: 0, scene: null, why, spawned2: false };
     if (!this.spawn(0)) { this.w = null; return; }
-    this.hud?.flash?.('Police! Stop to pay a $500 fine, or get away', 'bad', 4200);
+    this.note('Police! Stop to pay a $500 fine, or get away');
     this.audio?.play?.('error');
   }
 
@@ -488,7 +495,7 @@ export class Police {
     if (wreck && !W.scene && !T.car && wreck.wrecked) { this.wreckE = null; this.begin(W, 'arrest', lead, 'wrecked'); }
     if (W.scene) { this.sceneStep(dt, W, T); return; }
     // they reached you: the grace to pull over, then fleeing
-    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.hud?.flash?.('Police · pull over now: stop to pay the $500 fine', 'bad', 3200); }
+    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.note('Pull over now: stop to pay the $500 fine'); }
     if (W.reached && !W.fleeing) {
       W.grace -= dt;
       const away = (T.vx * (T.x - lead.x) + T.vz * (T.z - lead.z)) / Math.max(1, near); // (on foot: running away from them)
@@ -509,7 +516,7 @@ export class Police {
     if (W.fleeing) return;
     W.fleeing = true;
     const foot = !this.drive?.active;
-    this.hud?.flash?.(`${foot ? 'Running from the police' : 'Fleeing the police · they will ram you'} · stay ${TUNING.escapeR} m away for ${mmss(TUNING.escapeS)} to escape`, 'bad', 4200);
+    this.note(`${foot ? 'Running from the police' : 'Fleeing · they will ram you'} · stay ${TUNING.escapeR} m away for ${mmss(TUNING.escapeS)} to escape`);
   }
 
   // one patrol car chasing: tail you (not fleeing), ram you (fleeing; the second one cuts in ahead), on foot: stop short
@@ -722,9 +729,9 @@ export class Police {
     W.scene = { kind, u, why, step: 'pull', t: 0, said: false };
     W.stopT = 0;
     for (const x of this.units) if (x.on) x.ram = false;
-    if (kind === 'fine') this.hud?.flash?.('Pulled over · stay where you are', 'good', 2600);
-    else if (why === 'wrecked') this.hud?.flash?.('Your car is wrecked · the police are coming for you', 'bad', 3200);
-    else if (why === 'stopped') this.hud?.flash?.('Stopped · you are under arrest', 'bad', 2600);
+    if (kind === 'fine') this.note('Pulled over · stay where you are');
+    else if (why === 'wrecked') this.note('Your car is wrecked · the police are coming for you');
+    else if (why === 'stopped') this.note('Stopped · you are under arrest');
   }
   // the officer: the police officer's rig on foot (his own, see loadOfficer), else a skier from the job pool
   // (jobs/actors.js), else a stand-in figure
@@ -840,7 +847,7 @@ export class Police {
         }
       }
       if (S.kind === 'arrest' && S.t > 2.2 && !S.jailed) { S.jailed = true; this.arrest(); return; }
-      if (S.kind === 'fine' && S.t > 3.4) { S.step = 'back'; S.t = 0; this.hud?.flash?.('Fine paid · drive safely', 'good', 2600); }
+      if (S.kind === 'fine' && S.t > 3.4) { S.step = 'back'; S.t = 0; this.note('Fine paid · drive safely'); }
       return;
     }
     if (S.step === 'back') {
@@ -855,7 +862,12 @@ export class Police {
       }
     }
   }
-  say(who, line) { this.hud?.flash?.(`${who}: "${line}"`, 'gold', 4200); }
+  say(who, line) { this.note(`${who}: "${line}"`, 7); }
+  // a message in the WANTED box for a while (the user: one box, not pop-ups on top of it); no chase: a normal flash
+  note(text, s = 5) {
+    if (!this.w) { this.hud?.flash?.(text, 'bad', s * 1000); return; }
+    this.noteText = text; this.noteUntil = performance.now() + s * 1000;
+  }
   // a fine off your money (single player: the save; multiplayer: the session's money guard sends it to the server as
   // a 'game' spend, which may take you into debt like any of the game's own charges)
   charge(amount) {
@@ -953,9 +965,11 @@ export class Police {
     const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : 'Pulled over · stay in the car · $500 fine') : 'Under arrest')
       : W.fleeing ? 'Fleeing · they will ram you · stop to give up'
         : W.reached ? `Pull over now: stop to pay the $500 fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : 'Police! Stop to pay a $500 fine, or get away';
+    const msg2 = this.noteUntil > performance.now() ? this.noteText : msg;
     const near = Number.isFinite(W.near) ? ` · police ${Math.round(W.near)} m` : '';
     const esc = S ? '' : `Escape ${mmss(W.esc)} / ${mmss(TUNING.escapeS)} · stay ${TUNING.escapeR} m+ away${near}`;
-    this.setHud(true, mmss(W.t), msg, esc, S ? 0 : W.esc / TUNING.escapeS);
+    let cars = 0; for (const u of this.units) if (u.on) cars++;
+    this.setHud(true, mmss(W.t), msg2, esc, S ? 0 : W.esc / TUNING.escapeS, cars);
   }
   /** Trail map: the patrol cars while you are wanted (blue dots). */
   mapMarkers() {

@@ -315,7 +315,10 @@ function identEngine() {
           const d = dims || m;
           size(d.w, d.h, d.dpr);
           draw(curT());
-          send({ type: 'ready', font: fontReady });
+          // autoGo: start straight away in the worker (the game boots on the main thread meanwhile and can block it
+          // for seconds; waiting for its 'go' froze the ident on its first frame and it fell back to the still logo)
+          if (m.autoGo) { t0 = now(); stopped = false; raf = frame(tick); }
+          send({ type: 'ready', font: fontReady, at: (performance.timeOrigin || 0) + performance.now() });
         } catch (e) { send({ type: 'error', message: String(e?.message || e) }); }
       } else if (m.type === 'go') {
         t0 = now(); stopped = false; raf = frame(tick);
@@ -357,23 +360,30 @@ export class StudioIdent {
    * Loads and starts the ident; resolves true once the first frame is up (the sound is scheduled then),
    * false if it can't play (call fallback()). `still`: draw frames on demand only (seek) - for tests.
    */
-  start({ timeoutMs = 2500, still = false, opts = STUDIO_VARIANTS[variant()] } = {}) {
+  start({ timeoutMs = 9000, still = false, opts = STUDIO_VARIANTS[variant()] } = {}) {
     const canvas = document.createElement('canvas');
     canvas.className = 'studio-canvas';
     this.host.appendChild(canvas);
     const dims = () => ({ w: Math.max(1, this.host.clientWidth || innerWidth), h: Math.max(1, this.host.clientHeight || innerHeight), dpr: Math.min(2, devicePixelRatio || 1) });
-    const init = { type: 'init', fontUrl: new URL(interUrl, document.baseURI).href, hit: STUDIO_HIT_S, opts, ...dims() };
+    const init = { type: 'init', fontUrl: new URL(interUrl, document.baseURI).href, hit: STUDIO_HIT_S, opts, autoGo: !still, ...dims() };
     return new Promise((resolve) => {
-      let done = false;
+      let done = false, timer = 0;
       const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
       this.abort = () => finish(false); // skipped while still loading
-      const timer = setTimeout(() => finish(false), timeoutMs);
+      // the timeout: if it fires late (the main thread was blocked by the game booting), the worker's 'ready' may be
+      // queued right behind it, so give it a moment before giving up
+      const t0 = performance.now();
+      timer = setTimeout(() => {
+        if (performance.now() - t0 > timeoutMs + 300) timer = setTimeout(() => finish(false), 400);
+        else finish(false);
+      }, timeoutMs);
       this.recv = (m) => {
         if (m.type === 'ready') {
           if (done) return; // too late: the fallback is up
           if (!still) {
-            this.sound = this.audio?.iceHit?.(STUDIO_HIT_S) || null;
-            this.send({ type: 'go' });
+            // the worker started on its own (autoGo): the hit lands HIT s after its first frame
+            const late = m.at ? ((performance.timeOrigin || 0) + performance.now() - m.at) / 1000 : 0;
+            if (late < STUDIO_HIT_S + 0.25) this.sound = this.audio?.iceHit?.(Math.max(0.02, STUDIO_HIT_S - late)) || null;
           }
           finish(true);
         } else if (m.type === 'error') { console.warn('[studio ident]', m.message); finish(false); }

@@ -380,7 +380,7 @@ export class IntroClip {
   }
 
   /** Starts loading + playing; resolves true once the first frame is up, false if the clip can't play. */
-  start(timeoutMs = 3500) {
+  start(timeoutMs = 9000) {
     const canvas = document.createElement('canvas');
     canvas.className = 'clip-canvas';
     this.host.appendChild(canvas);
@@ -392,7 +392,12 @@ export class IntroClip {
       let done = false;
       const finish = (ok) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
       this.abort = () => finish(false); // skipped while still loading
-      const timer = setTimeout(() => finish(false), timeoutMs);
+      // (fired late: the main thread was blocked by the game booting; the worker's 'started' may be queued behind it)
+      const t0 = performance.now();
+      let timer = setTimeout(() => {
+        if (performance.now() - t0 > timeoutMs + 300) timer = setTimeout(() => finish(false), 400);
+        else finish(false);
+      }, timeoutMs);
       const onMsg = (m) => {
         if (m.type === 'started') finish(true);
         else if (m.type === 'error') { console.warn('[intro clip]', m.message); finish(false); }

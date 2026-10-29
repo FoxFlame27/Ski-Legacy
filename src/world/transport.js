@@ -6,6 +6,8 @@
 import { world } from './world.js';
 import { RAIL, railAt, railBounds, railNearest, shapeRoadbed, planBridges, railDeckHeight } from './railroute.js';
 import { WOLKENSPITZE } from './wolkenspitze.js';
+import { LEGACY_PEAK, spinePoint } from './legacypeak.js';
+import { EXPRESS, expressAt } from './expressroute.js';
 import { smoothstep } from '../core/noise.js';
 
 const _f = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
@@ -174,4 +176,81 @@ function buildRailwayGround({ layout, keepOut }) {
   }
   const W = WOLKENSPITZE;
   keepOut(W.summit.x - 1500, W.summit.z + 300, W.summit.x + 800, W.summit.z - 900, 2200);
+}
+
+// ------------------------------------------------------------------ Legacy Peak (4,000 m, legacypeak.js)
+// The highest mountain of the game, behind the main mountain. The Legacy Peak Gondola runs from the main mountain's
+// crown, a short walk north of the Legacy Gondola's top station (ride that up from the village first), to the summit
+// station on the dome at 4,000 m (the Gipfelhütte 4000 beside it). The Legacy Peak Run comes down the Gipfelgrat (the
+// broad spur round the cirque), past the gondola's bottom station onto the main face and all the way down to Legacy
+// Village, where the main runs finish. (noBus: no ski-bus stop on a mountain top; noMid: no mid-station over the cirque.)
+export function buildLegacyPeak({ layout, addLift, addPiste, routePiste, BAND, VILLAGE_BUILDINGS, BUNNY_TOP }) {
+  const S = LEGACY_PEAK.summit, legacy = layout.lifts.find((l) => l.main);
+  const bottom = { x: 150, z: -2330 };
+  const lift = addLift({ type: 'gondola', name: 'Legacy Peak Gondola', bottom, top: { x: S.x, z: S.z }, price: 60, noBus: true, noMid: true, peakLift: true,
+    topName: 'Legacy Peak 4000', bottomName: 'the Legacy summit' });
+  // the summit restaurant on the dome, its terrace facing south over the resort; ski patrol on the other side
+  const hut = { x: S.x + 46, z: S.z + 62, name: 'Gipfelhütte 4000', label: 'Legacy Peak 4000 · Gipfelhütte', yaw: 0, peak: LEGACY_PEAK.id };
+  world.addPad({ x: hut.x, z: hut.z, r: 16, blend: 20 });
+  layout.huts.push(hut);
+  const patrol = { x: S.x - 52, z: S.z + 40 };
+  world.addPad({ x: patrol.x, z: patrol.z, r: 6, blend: 10 });
+  // the run: one routing face from the summit to the village (u down it, v across), routed in two legs: down the spur
+  // to its foot by the gondola's bottom station, then down the main face (keeping off its runs) to the village
+  const end = { x: 0, z: -120 };
+  const F = face('legacypeak', S, end, 1150, 4000);
+  const uv = (p) => { const tx = p.x - F.top.x, tz = p.z - F.top.z; return [tx * F.fx + tz * F.fz, tz * F.fx - tx * F.fz]; };
+  const avoid = layout.pistes.map((p) => ({ pts: p.pts }));
+  const blocked = [
+    ...VILLAGE_BUILDINGS.map(([x, z]) => [x, z, 48]), BUNNY_TOP,
+    [legacy.top.x, legacy.top.z, 46], [bottom.x, bottom.z, 44], [hut.x, hut.z, 30], [patrol.x, patrol.z, 14],
+    ...layout.huts.filter((h) => !h.peak).map((h) => [h.x, h.z, 30]),
+    ...(legacy.mid ? [[legacy.mid.x, legacy.mid.z, 30]] : []),
+  ];
+  const [gMin, gMax] = BAND[2];
+  const foot = spinePoint(LEGACY_PEAK.spineLength - 60);
+  const a = routePiste(F, uv(spinePoint(70)), uv(foot), { gMin, gMax, avoid, blocked, turnCost: 14, steepCost: 60 });
+  const b = routePiste(F, uv(foot), uv(end), { gMin, gMax, avoid, blocked, turnCost: 10 });
+  F.grid = null;
+  const pts = [...a, ...b.slice(1)];
+  const piste = addPiste('Legacy Peak Run', 2, pts, { peak: LEGACY_PEAK.id, number: 50 });
+  layout.peaks.push({ id: LEGACY_PEAK.id, name: 'Legacy Peak 4000', lift, hut, pistes: [piste], patrol, summit: { x: S.x, z: S.z }, alt: LEGACY_PEAK.alt });
+  return lift;
+}
+
+// ------------------------------------------------------------------ the Hochkopf: from the Hochalm down to the Express
+// The Hochalm car park (the end of the Hochalmstrasse, scenicloop.js: the bus's Hochalm stop) lies on the Hochkopf's
+// east flank, in the hollow of the Ostal: no run can leave it downhill toward a railway (the Wolkenspitzbahn is
+// 4 km off beyond the Gipfelblick ridge; the Legacy Express's line, 1.5 km west, beyond the Hochkopf). So the Hochkopf
+// Gondola climbs from beside the car park to the Hochkopf's summit (~2,040 m), and the red Hochalm run comes down its
+// west side, south of the Sonnenkopf's top station, to the Legacy Express's Hochalm halt (expressroute.js
+// EXPRESS_HALTS); the Express runs from there to Legacy Village (one stop, both ways round the ring).
+// (The road planner never sees this lift (offRoad: roads.js buildObstacles), so the Hochalmstrasse and its car park
+// keep their lines; the bottom station has no groomed apron (roads keep 28 m off a piste corridor).)
+export function buildHochkopf({ layout, addLift, addPiste, routePiste, BAND }) {
+  const halt = EXPRESS.stations.find((st) => st.id === 'hochalm');
+  if (!halt) return null;
+  const top = { x: 2700, z: 2180 }, bottom = { x: 3462, z: 2396 };
+  // the bottom station stands at the car park's west end, on a terrace at the car park's level (122 m: the car park
+  // lies in the Hochalmstrasse's cutting), dug on into the slope; its cut stays tight (20 m) so the road's ground is
+  // untouched
+  const pad = world.addPad({ x: bottom.x, z: bottom.z, r: 12, blend: 20, h: 122 });
+  pad.blend = 20; // (addPad widens a pad's blend on a slope: not here)
+  const lift = addLift({ type: 'gondola', name: 'Hochalm Gondola', bottom, top, price: 30, noBus: true, noMid: true, noBottomPad: true, offRoad: true,
+    topName: 'the Hochkopf ridge', bottomName: 'the Hochalm' });
+  // the halt's square, on the side toward the Hochkopf (expressground.js: the side its `toward` lies on)
+  const f = expressAt(halt.s, {}), t = halt.toward;
+  const side = -f.dz * (t.x - f.x) + f.dx * (t.z - f.z) > 0 ? 1 : -1, lat = side * 44;
+  const end = { x: f.x - f.dz * lat, z: f.z + f.dx * lat };
+  const F = face('hochkopf', top, end, 560, 2000);
+  const uv = (p) => { const tx = p.x - F.top.x, tz = p.z - F.top.z; return [tx * F.fx + tz * F.fz, tz * F.fx - tx * F.fz]; };
+  const sk = layout.peaks.find((pk) => pk.id === 'sonnenkopf');
+  const blocked = [[end.x - f.dz * side * -30, end.z + f.dx * side * -30, 18]]; // (not over the platforms)
+  if (sk) blocked.push([sk.lift.top.x, sk.lift.top.z, 56], [sk.hut.x, sk.hut.z, 36], [sk.patrol.x, sk.patrol.z, 16]);
+  const [gMin, gMax] = BAND[2];
+  const pts = routePiste(F, [44, 0], uv(end), { gMin, gMax, avoid: layout.pistes.map((p) => ({ pts: p.pts })), blocked, turnCost: 12 });
+  F.grid = null;
+  const piste = addPiste('Hochalm', 2, pts, { number: 35, to: 'hochalm' });
+  sk?.pistes.push(piste);
+  return lift;
 }

@@ -3,7 +3,7 @@
 // the infinite world always regenerates identically.
 import { world, MAIN_SUMMIT, MASSIFS, valleyCenter } from './world.js';
 import { mulberry32, hash2, clamp } from '../core/noise.js';
-import { buildTransport } from './transport.js';
+import { buildTransport, buildLegacyPeak, buildHochkopf } from './transport.js';
 import { buildSectors } from './sectors.js';
 
 export const DIFFICULTY = [
@@ -869,7 +869,7 @@ function planMidStations() {
     ...layout.races.map((r) => ({ pts: r.path, w: r.halfWidth })),
   ];
   for (const lift of layout.lifts) {
-    if (lift.type !== 'gondola' || lift.length < 1500 || lift.mid) continue;
+    if (lift.type !== 'gondola' || lift.length < 1500 || lift.mid || lift.noMid) continue;
     const L = lift.length, [fx, fz] = lift.dir;
     // run segments near the middle part of the line
     const cx = lift.bottom.x + fx * L * 0.47, cz = lift.bottom.z + fz * L * 0.47, reach = L * 0.1 + 260;
@@ -1501,7 +1501,7 @@ function nearLine(a, b, r) {
 function planBusStops() {
   layout.busStops.push({ x: -16, z: 46, heading: Math.PI / 2, name: 'Legacy Village' });
   for (const l of layout.lifts) {
-    if (l.type !== 'gondola' || l.main || l.village || l.procedural) continue;
+    if (l.type !== 'gondola' || l.main || l.village || l.procedural || l.noBus) continue; // (noBus: a gondola up from another lift's top station)
     // on the station's flat pad, 19 m to the side of the line (the gondola sign stands on the other side),
     // facing the station: you step off the bus looking at the gondola
     const [ux, uz] = l.dir, sx = uz, sz = -ux;
@@ -1724,9 +1724,11 @@ export function initLayout() {
   step('peaks', buildPeaks);
   step('park', buildPark);
   // the Wolkenspitzbahn, the Wolkenspitze's lifts and the new gondolas / chairlifts (transport.js)
-  const kit = { layout, addLift, addPiste, keepOut, routePiste, tracePath, faceUV, placeMid, BAND, PISTE_WIDTH, VILLAGE_BUILDINGS };
+  const kit = { layout, addLift, addPiste, keepOut, routePiste, tracePath, faceUV, placeMid, BAND, PISTE_WIDTH, VILLAGE_BUILDINGS, BUNNY_TOP };
   step('transport', () => buildTransport(kit));
   step('sectors', () => buildSectors(kit)); // the Hirschalm + Ostkar sectors and their freeride bowls (sectors.js)
+  step('legacyPeak', () => buildLegacyPeak(kit)); // Legacy Peak (4,000 m): its gondola and the run down to the village (transport.js)
+  step('hochkopf', () => buildHochkopf(kit)); // the Hochkopf Gondola up from the Hochalm and the run down to the Express's Hochalm halt
   step('cragMask', setCragMask);          // after the resort's runs exist, before any terrain is built
   step('valley', buildValleyRaces);
   step('midStations', planMidStations);

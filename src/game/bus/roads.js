@@ -121,6 +121,7 @@ export function buildObstacles(stops) {
   if (layout.park?.line?.length > 1) O.line(layout.park.line, layout.park.halfWidth ?? 17, 'ski', 'Legacy Park', P);
   for (const n of layout.nets) if (n.line?.length > 1 && !n.fence) O.line(n.line, 0.6, 'net', `net ${n.type || ''}`, P); // (the piste fences hug the runs: the 'ski' clearance covers them)
   for (const l of layout.lifts) {
+    if (l.offRoad) continue; // (the Hochalm Gondola: built at the end of the Hochalmstrasse, beside its car park)
     const gond = l.type === 'gondola';
     O.add(l.bottom.x, l.bottom.z, l.top.x, l.top.z, gond ? 9 : 7, 'lift', l.name);
     for (const t of l.towers || []) if (t.x !== undefined) O.disc(t.x, t.z, 2, 'block', `${l.name} tower`);

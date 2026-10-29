@@ -25,6 +25,15 @@ export const VILLAGE_STATION = { x: -190, z: -160, len: PLATFORM };
 /** @deprecated (the underground village hall's entrance; kept until every user is gone) */
 export const VILLAGE_ENTRANCE = { x: -190, z: -140, heading: Math.PI };
 
+// Halts that are not race stops (not in the generated plan): { id, name, x, z (near the line), toward (the side its
+// square faces) }. Each gets a straight, level platform pinned into the relaxed line where it passes (a local nudge of
+// well under a metre: the line keeps its course). The Hochalm halt (Oct 29, the user: "the Hochalm bus station leads
+// nowhere: a piste down to a train stop and back to the village"): the Hochkopf Gondola runs up from the Hochalm car
+// park, the Hochalm run comes down the Hochkopf's west side to this halt, and the Express takes you back to the village.
+export const EXPRESS_HALTS = [
+  { id: 'hochalm', name: 'Hochalm', x: 1663, z: 2354, toward: { x: 3080, z: 2455 } },
+];
+
 // ------------------------------------------------------------------ the plan
 const SMOOTH_D = 20, SMOOTH_IT = 3000;
 function buildPlan() {
@@ -78,6 +87,19 @@ function buildPlan() {
     }
     [X, nx] = [nx, X]; [Z, nz] = [nz, Z];
   }
+  // the extra halts: a straight platform along the local chord, eased back into the line over 12 samples either side
+  for (const h of EXPRESS_HALTS) {
+    let b = 0, bd = Infinity;
+    for (let i = 0; i < n; i++) { const d = (X[i] - h.x) ** 2 + (Z[i] - h.z) ** 2; if (d < bd) { bd = d; b = i; } }
+    const K = half + 6, E = 12, a0 = (b - K + n) % n, a1 = (b + K) % n;
+    const dx = (X[a1] - X[a0]) / (2 * K), dz = (Z[a1] - Z[a0]) / (2 * K); // (one sample's step along the chord)
+    const cx = X[b], cz = Z[b];
+    for (let k = -K - E; k <= K + E; k++) {
+      const i = (b + k + n) % n, t = Math.abs(k) <= half ? 1 : 1 - smoothstep(half, K + E, Math.abs(k));
+      X[i] += (cx + dx * k - X[i]) * t; Z[i] += (cz + dz * k - Z[i]) * t;
+    }
+    at[h.id] = b;
+  }
   // centre line every STEP m (Catmull-Rom through the relaxed points, resampled by arc length)
   const P = [];
   for (let i = 0; i < n; i++) {
@@ -108,12 +130,13 @@ function buildPlan() {
   const sOfU = (u) => { let b = 0, bd = Infinity; for (let i = 0; i < m; i++) { const d = Math.abs(out[i][2] - u); if (d < bd) { bd = d; b = i; } } return b * STEP; };
   const courseStop = Object.fromEntries(EXPRESS_COURSE_STOPS.map((c) => [c.id, c]));
   const order = Object.entries(at).sort((a, b) => a[1] - b[1]);
+  const haltOf = Object.fromEntries(EXPRESS_HALTS.map((h) => [h.id, h]));
   for (const [id, u] of order) {
     const s = id === 'village' ? 0 : sOfU(u);
-    const c = courseStop[id];
+    const c = courseStop[id], h = haltOf[id];
     L.stations.push({
-      id, name: id === 'village' ? 'Legacy Village' : c.name, course: id === 'village' ? null : id,
-      s, s0: s - PLATFORM / 2, s1: s + PLATFORM / 2, underground: false,
+      id, name: id === 'village' ? 'Legacy Village' : h ? h.name : c.name, course: id === 'village' || h ? null : id,
+      s, s0: s - PLATFORM / 2, s1: s + PLATFORM / 2, underground: false, ...(h ? { halt: true, toward: h.toward } : {}),
     });
   }
   return L;
@@ -222,13 +245,19 @@ const TUNNEL_COVER = 15, BRIDGE_OVER = 12, SMOOTH_W = 150, UNDER_R = 620, STATIO
 const VILLAGE_C = { x: 30, z: 40 }; // (the village's middle: round it the line runs deep underground)
 // `under(x, z)`: true where the line must pass deep underground (the race courses' lines, the lift lines: a tunnel
 // under them, never a cutting through a race track)
-export function fitExpressProfile(groundAt, { under: keepUnder = null, protect = null } = {}) {
+// `natural(x, z)` (optional): the ground the line's profile is fitted on, where it differs from groundAt (Legacy Peak:
+// the line keeps its old level and runs straight through under the new mountain); tunnels and viaducts are still
+// decided on groundAt, the ground that is there.
+export function fitExpressProfile(groundAt, { under: keepUnder = null, protect = null, natural = null } = {}) {
   const L = EXPRESS;
   if (L.ready) return L;
   const n = L.n, k4 = 2; // (work on every 2nd sample: 4 m)
   const m = Math.floor(n / k4);
-  const g = new Float64Array(m);
-  for (let i = 0; i < m; i++) g[i] = groundAt(L.X[i * k4], L.Z[i * k4]);
+  const g = new Float64Array(m), gR = natural ? new Float64Array(m) : g;
+  for (let i = 0; i < m; i++) {
+    g[i] = (natural || groundAt)(L.X[i * k4], L.Z[i * k4]);
+    if (natural) gR[i] = groundAt(L.X[i * k4], L.Z[i * k4]);
+  }
   // smoothed ground (a ring: the window wraps)
   const w = Math.round(SMOOTH_W / (STEP * k4));
   const Y = new Float64Array(m);
@@ -239,9 +268,10 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null, protect =
   const pin = new Uint8Array(m);
   for (const st of L.stations) {
     const a = Math.round(st.s0 / (STEP * k4)), b = Math.round(st.s1 / (STEP * k4));
-    let sum = 0, c = 0;
-    for (let i = a; i <= b; i++) { sum += g[(i + m) % m]; c++; }
-    const y = sum / c;
+    let sum = 0, c = 0, lo = Infinity;
+    for (let i = a; i <= b; i++) { sum += g[(i + m) % m]; c++; lo = Math.min(lo, g[(i + m) % m]); }
+    // (a halt on a hump sits a little lower: in a shallow cutting rather than on a viaduct at its ends)
+    const y = st.halt ? Math.min(sum / c, lo + 8) : sum / c;
     st.y = y;
     for (let i = a - 6; i <= b + 6; i++) { const j = (i + m) % m; Y[j] = y; pin[j] = 1; }
   }
@@ -325,7 +355,7 @@ export function fitExpressProfile(groundAt, { under: keepUnder = null, protect =
   }
   // tunnels and viaducts: classify every 4 m, close short gaps, drop slivers
   const kind = new Int8Array(m);
-  for (let i = 0; i < m; i++) { const c = g[i] - Y[i]; kind[i] = c > TUNNEL_COVER || (c > 0 && protect?.(L.X[i * k4], L.Z[i * k4])) ? 1 : c < -BRIDGE_OVER ? -1 : 0; }
+  for (let i = 0; i < m; i++) { const c = gR[i] - Y[i]; kind[i] = c > TUNNEL_COVER || (c > 0 && protect?.(L.X[i * k4], L.Z[i * k4])) ? 1 : c < -BRIDGE_OVER ? -1 : 0; }
   for (let i = 0; i < m; i++) if (under[i] && !overAt[i]) kind[i] = 1;
   const spans = (want, gap, min) => {
     const out = [];

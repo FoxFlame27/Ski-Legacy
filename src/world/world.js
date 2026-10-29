@@ -4,6 +4,7 @@
 // Features (flat pads for buildings/stations, groomed piste corridors) are layered on top.
 import { Simplex, smoothstep, lerp, clamp } from '../core/noise.js';
 import { wolkenspitzeHeight } from './wolkenspitze.js';
+import { legacyPeakHeight } from './legacypeak.js';
 
 export const SEED = 7331;
 const N = new Simplex(SEED);
@@ -331,6 +332,9 @@ class World {
     // Valley floor: the village sits on a flat plateau
     const vf = smoothstep(VILLAGE_R * 0.7, VILLAGE_R * 3.4, d); // gentle rise out of the valley, no cliff ring
     h = lerp(N2.noise(x * 0.01, z * 0.01) * 0.6, h, vf);
+    // Legacy Peak, the 4,000 m mountain behind the main mountain (legacypeak.js; _noPeak: the ground without it, for
+    // the Legacy Express's profile, which runs straight through under it)
+    if (!this._noPeak) h = legacyPeakHeight(x, z, h, spacing);
     return h;
   }
 

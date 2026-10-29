@@ -38,7 +38,7 @@ export const CHALET_PLACE = { x: 500, z: 1075, label: 'Chalet village', r: 200 }
 const hash = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 
 // a polyline with every corner rounded (tangent arcs, radius R[i] at corner i), every ~4 m
-function filleted(P, R, step = 4) {
+export function filleted(P, R, step = 4) {
   const dense = [P[0]];
   let cur = P[0];
   for (let i = 1; i < P.length - 1; i++) {

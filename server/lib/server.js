@@ -31,6 +31,7 @@ export const GRACE_MS = 60 * 1000;         // a dropped connection keeps its pla
                                            // helicopter, race entry) this long for a reconnect, measured from the last
                                            // message; then the player leaves for real
 export const PERM_TIMEOUT_MS = 30 * 1000;
+export const GRANT_UNUSED_MS = 60 * 1000; // a yes (car ride, chalet visit) not used this long lapses
 // the in-game day: 1 on DAY_EPOCH, +1 at every world midnight (one game day = DAY_MS). Global, so a day pass
 // bought in one world is the same day in another
 export const DAY_EPOCH = Date.UTC(2026, 9, 1);
@@ -166,6 +167,8 @@ class World {
     if (m && !m.size) this.seats.delete(vk);
     this.holds.get(vk)?.delete(c.pid);
     if (notify) this.broadcast('seats', this.seatsMsg(vk, m));
+    // a passenger out of someone's car: that ride is used up (next time: ask again)
+    if (s.k === 'car' && nameKey(s.v) !== c.key) this.server.endGrant('carRide', nameKey(s.v), c.key);
     // a car's driver gets out: the passengers stay seated (the car stays where it is); the owner leaving the world
     // empties it (see removePlayer)
     this.updateSkip(vk);
@@ -203,6 +206,7 @@ class World {
     if (!m) { m = new Map(); this.seats.set(vk, m); }
     m.set(pick, c.pid);
     c.seat = { k, v, seat: pick };
+    if (k === 'car' && first === 1) this.server.useGrant('carRide', nameKey(v), c.key); // (aboard: the yes is in use)
     this.broadcast('seats', this.seatsMsg(vk, m));
     this.updateSkip(vk);
     return { d: { seat: pick, v } };
@@ -546,7 +550,11 @@ export class GameServer {
     this.nextWorld = 1;
     this.online = new Map(); // nameKey -> Client
     this.lastWorld = new Map(); // nameKey -> { id, t }: a reconnect lands in the same world if it has room
-    this.grants = new Set(); // `${kind}|${ownerKey}|${guestKey}` while both are online
+    // `${kind}|${ownerKey}|${guestKey}` -> { used, timer }: SINGLE USE. A yes lets the guest in once (one boarding
+    // of the car, one entry into the chalet); it is gone when they get out / leave, or after GRANT_UNUSED_MS unused.
+    // The next time they ask again and the owner is asked again.
+    this.grants = new Map();
+    this.grantMs = GRANT_UNUSED_MS;
     this.pending = new Map(); // rid -> permission request
     this.nextPerm = 1;
     this.regByIp = new Map(); // ip -> [t]: at most 5 new names an hour from one address
@@ -710,9 +718,31 @@ export class GameServer {
 
   // ---------------------------------------------------------------- permissions
   hasGrant(kind, ownerKey, guestKey) { return this.grants.has(`${kind}|${ownerKey}|${guestKey}`); }
+  /** The owner said yes: one use, lapsing after grantMs unused. */
+  addGrant(kind, ownerKey, guestKey) {
+    const k = `${kind}|${ownerKey}|${guestKey}`;
+    clearTimeout(this.grants.get(k)?.timer);
+    const e = { used: false, timer: null };
+    e.timer = setTimeout(() => { if (this.grants.get(k) === e && !e.used) this.endGrant(kind, ownerKey, guestKey); }, this.grantMs);
+    this.grants.set(k, e);
+  }
+  /** The guest is in (seated in the car, inside the chalet): the grant no longer lapses; it ends when they get out. */
+  useGrant(kind, ownerKey, guestKey) {
+    const e = this.grants.get(`${kind}|${ownerKey}|${guestKey}`);
+    if (e && !e.used) { e.used = true; clearTimeout(e.timer); e.timer = null; }
+  }
+  /** Used up (out of the car, out of the chalet), lapsed or revoked. */
+  endGrant(kind, ownerKey, guestKey) {
+    const k = `${kind}|${ownerKey}|${guestKey}`, e = this.grants.get(k);
+    if (!e) return false;
+    clearTimeout(e.timer);
+    this.grants.delete(k);
+    if (kind === 'chaletVisit') this.sendGuests(ownerKey);
+    return true;
+  }
   dropGrants(k) {
     const owners = new Set();
-    for (const g of [...this.grants]) { const [kind, o, gu] = g.split('|'); if (o === k || gu === k) { this.grants.delete(g); if (kind === 'chaletVisit' && o !== k) owners.add(o); } }
+    for (const g of [...this.grants.keys()]) { const [kind, o, gu] = g.split('|'); if (o === k || gu === k) { clearTimeout(this.grants.get(g).timer); this.grants.delete(g); if (kind === 'chaletVisit' && o !== k) owners.add(o); } }
     for (const [rid, p] of [...this.pending]) if (p.from.key === k || p.to.key === k) this.answerPerm(rid, false, 'gone');
     for (const o of owners) this.sendGuests(o);
   }
@@ -721,7 +751,7 @@ export class GameServer {
     const o = this.online.get(ownerKey);
     if (!o) return;
     const pre = `${kind}|${ownerKey}|`, names = [];
-    for (const g of this.grants) if (g.startsWith(pre)) names.push(this.store.accounts.data[g.slice(pre.length)]?.name || '?');
+    for (const g of this.grants.keys()) if (g.startsWith(pre)) names.push(this.store.accounts.data[g.slice(pre.length)]?.name || '?');
     o.send('guests', { kind, names });
   }
   answerPerm(rid, allow, reason = null) {
@@ -729,7 +759,7 @@ export class GameServer {
     if (!p) return false;
     this.pending.delete(rid);
     clearTimeout(p.timer);
-    if (allow) { this.grants.add(`${p.kind}|${p.to.key}|${p.from.key}`); if (p.kind === 'chaletVisit') this.sendGuests(p.to.key); }
+    if (allow) { this.addGrant(p.kind, p.to.key, p.from.key); if (p.kind === 'chaletVisit') this.sendGuests(p.to.key); }
     p.from.res(p.reqId, true, { allow: !!allow, reason, kind: p.kind, owner: p.to.name, ref: p.ref });
     if (!allow && reason !== 'gone') p.to.send('permClosed', { rid, reason: reason || 'denied' });
     return true;
@@ -938,7 +968,13 @@ export class GameServer {
       if (!isInt(n)) return { err: 'bad_interior' };
       const owner = this.chalets.get(n);
       // unowned: open for viewing; yours; or the owner let you in (while you both are online)
-      if (owner && owner !== c.key && !this.hasGrant('chaletVisit', owner, c.key)) return { err: 'no_permission' };
+      if (owner && owner !== c.key && c.interior !== id && !this.hasGrant('chaletVisit', owner, c.key)) return { err: 'no_permission' };
+      if (owner && owner !== c.key) this.useGrant('chaletVisit', owner, c.key);
+    }
+    // out of a chalet you were let into: that visit is used up (next time: ask again)
+    if (c.interior && c.interior !== id && c.interior.startsWith('chalet:')) {
+      const owner = this.chalets.get(Number(c.interior.slice(7)));
+      if (owner && owner !== c.key) this.endGrant('chaletVisit', owner, c.key);
     }
     c.interior = id;
     if (c.pres) { c.pres[14] = id || 0; c.world.dirty.set(c.pid, c.pres); }
@@ -968,7 +1004,7 @@ export class GameServer {
 
   permRevoke(c, d) {
     const g = this.online.get(nameKey(d.guest));
-    if (!g || !this.grants.delete(`${d.kind}|${c.key}|${g.key}`)) return { err: 'no_grant' };
+    if (!g || !this.endGrant(d.kind, c.key, g.key)) return { err: 'no_grant' };
     g.send('permRevoked', { kind: d.kind, owner: c.name });
     if (d.kind === 'carRide' && g.world) g.world.kickFromCar(c.name, g.pid);
     if (d.kind === 'chaletVisit') {

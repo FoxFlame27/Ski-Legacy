@@ -426,6 +426,7 @@ export class RaceHud {
     // race: finishing order with gaps to the winner; trial: you against your PB and the medal times
     // (the last column then reads from your side: red = you were slower, green = faster)
     const cell = (r, i, out) => {
+      if (!trial && Number.isInteger(r.place)) return String(r.place); // (multiplayer: the server's place, DNF too)
       if (out) return '—';
       if (!trial) return String(i + 1);
       if (r.medal) return medalHTML(r.medal, 26);

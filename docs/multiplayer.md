@@ -93,15 +93,29 @@ The server is authoritative for all of the following.
 
 **Worlds and connections**
 - At most 15 players per world.
-- A reconnect within 2 minutes returns to the same world if it has room.
-- Logging in a second time replaces the first connection, which receives `bye {reason:'replaced'}`.
+- **Grace period.** A connection that drops (code 1006, a heartbeat timeout, a proxy restart: anything but a
+  deliberate close 1000 / 1001 / 1005 or a kick) keeps its player for 60 s from the last message (`GRACE_MS`):
+  world slot, pid, seat, chalet plot, car, helicopter copy, grants and race entry. A login within that time resumes
+  that player on the new socket (`login` answers `resumed: true`); the others never see a leave or join. After
+  the grace period the player leaves for real.
+- A reconnect after that, within 2 minutes, returns to the same world if it has room.
+- Logging in while the name is online (another device) resumes it there; the old socket receives
+  `bye {reason:'replaced'}` and close code 4001.
+- The client (`net/client.js`) reconnects by itself with backoff (0.3 s to 5 s) for up to 2 minutes, logs in again
+  and carries on where it was. Only 4001 or LEAVE MULTIPLAYER stops it. A socket that says nothing for 20 s is
+  treated as dead, unless the check itself ran late (a main-thread hitch or a background tab proves nothing).
 
 **Limits**
-- General messages: 60 per second with a burst of 120. Far over the limit closes the connection with code 1008.
-- Presence: 25 per second; extra frames are dropped.
-- Frames are at most 64 KiB.
-- A WebSocket ping goes out every 10 s. A client that misses a ping is dropped. On disconnect the server releases
-  the player's seat, race queue entry, helicopter copy, permission grants and chalet plot.
+- General messages: 80 per second with a burst of 240. Over the limit a request is refused with `rate` (no debt:
+  the limit recovers at once). Only a flood (over 400 refused in 10 s) is kicked, with code 1008, and the client
+  reconnects.
+- Presence: 30 per second with a burst of 60; extra frames are dropped.
+- Frames are at most 256 KiB.
+- A WebSocket ping goes out every 15 s; the browser answers it itself. A connection with no pong and no message for
+  45 s is ended, and then gets the grace period. When a player leaves for real, the server releases their seat,
+  race queue entry, helicopter copy, permission grants and chalet plot.
+- Kicks and drops are logged: `kick <name>: <reason>`, `[drop] <name>: …`, `[-] <name>: no reconnect within the
+  grace period`, `[+] <name> reconnected …`.
 
 ## The wire protocol
 
@@ -124,17 +138,18 @@ whose `.data` is `d`.
 | `login` | `{v: 1, name, token, look?, plots?}` | `{proto, name, pid, now, profile, world, chalets: {plot: owner}, chaletPlot: {id, waiting, moved}, catalog}` · `bad_login`, `proto`. `plots`: the village's house plot ids (the server adopts a list of exactly `catalog.chalet.count` distinct ids 0–63; `catalog.chalet.plots` wins if it exists). |
 | `p` | presence row (below) | relayed to the world at 15 Hz in `P` |
 | `look` | `{c: characterId, o: outfit, s: skiId}` | broadcast `look {pid, look}` |
-| `enter` | `{interior: id \| null}` | approved interior. `chalet:N` needs ownership, an unowned chalet, or a `chaletVisit` grant · `no_permission` |
+| `enter` | `{interior: id \| null}` | approved interior. `chalet:N` needs ownership, an unowned chalet, or a `chaletVisit` grant (single use: consumed when you leave) · `no_permission` |
 | `seatClaim` | `{k, v, n?, seat?}` | `{seat, v}`: the lowest free seat (or `seat` if it is free) · `full`, `no_permission`, `owner_away` |
 | `seatRelease` | – | broadcast `seats` |
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
 | `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
 | `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
-| `raceFinish` | `{rid, time: ms \| null, dnf?}` | `{time}`. The time is trusted only within 3 s of the server's own measurement. |
+| `raceFinish` | `{rid, raw: ms, pen: ms, time: ms \| null, dnf?}`, sent at the line | `{time}`. `raw` (the clock) is trusted only within 3 s of the server's own measurement since GO, else the server's time counts; `pen` (gate penalties) is added. Older clients send `time` only. |
+| `raceProgress` | `{rid, gate, s}` (gates passed, metres along the course), twice a second | the live board; the furthest point is kept for a racer who drops out |
 | `perm` | `{kind: 'carRide', to: name}` / `{kind: 'chaletVisit', ref: chaletId}` | resolves when the owner answers: `{allow, owner, kind, ref}` (30 s timeout → `allow:false, reason:'timeout'`) · `owner_away`, `pending`, `no_owner` |
 | `permAnswer` | `{rid, allow}` | the owner's answer |
-| `permRevoke` | `{kind, guest}` | the guest gets `permRevoked`, and is kicked from the car or chalet; the owner gets `guests` |
+| `permRevoke` | `{kind, guest}` (grants are single use: one boarding of the car or one visit to the chalet; consumed on getting out / leaving, or after 60 s unused, then ask again) | the guest gets `permRevoked`, and is kicked from the car or chalet; the owner gets `guests` |
 | `chaletFurniture` | `{id}` (a plot) | `{id, owner, chalet: {furniture, plan, layout}}` for its owner or a guest they let in · `no_owner`, `no_permission` |
 | `spend` | `{amount, reason}` | `{money}` · `money`, `bad_amount` |
 | `earn` | `{amount, source: 'job' \| 'secret'}` | `{money}` · `rejected`, `cap` |
@@ -167,7 +182,8 @@ whose `.data` is `d`.
 | `permClosed` / `permRevoked` / `kickInterior` / `seatLost` | the prompt went away / a grant was taken back / you must leave that interior / you were taken out of a car |
 | `raceQueue` | `{race, n, names, startAt (0 = waiting for players), need: 2, waitMs}` |
 | `raceStart` | `{rid, race, at (server ms of GO), grid: [{pid, name, slot}]}` |
-| `raceProgress` / `raceResult` | `{rid, pid, name, time, dnf}` / `{rid, race, order: [{pid, name, place, time, prize, dnf?}]}` |
+| `raceProgress` / `raceResult` | `{rid, pid, name, time, dnf}` (a finish or a DNF) / `{rid, race, order: [{pid, name, place, time, prize, dnf, left, gate, s}]}`: every racer, distinct places |
+| `raceBoard` | `{rid, race, rows: [{pid, name, place, time, dnf, left, gate, s, off}]}` twice a second while a race runs (`off`: connection dropped, held) |
 | `bye` | `{reason: 'replaced' \| 'restart' \| 'shutdown'}` |
 
 ### Presence rows
@@ -234,13 +250,21 @@ Each line has one timeline:
 - **Start.** The client runs the normal race session with `bots: 0` and `syncGo`, so the countdown ends at the
   shared GO. Each racer stands on their own `slot` of the session's start grid (`grid: {slot, n}`: abreast, then in
   staggered rows), so nobody overlaps.
-- **Live board.** Under the status pill: every racer in race order, finished racers by time first, then everyone
-  still racing by how far down the course they are (`track.nearestS`, twice a second).
-- **Finish.** The session's result goes to `raceFinish`.
-- **Results.** The server ranks the finishers and pays `reward × [1, 0.4, 0.15]`. It closes the race when everyone
-  has finished, when an entrant leaves (counted as DNF), or 10 minutes after the start. The race's own results
-  screen lists the racers who finished before you (`raceProgress`); `raceResult` then opens the results card
-  (`MpUI.results`): everyone's place, time and prize money, from the server (click or 20 s closes it).
+- **Live board.** Each client sends `raceProgress` (gate index + metres along the course) twice a second; the
+  server broadcasts `raceBoard`: finishers by time, then everyone else by progress. The race session shows it in
+  its own standings panel and POSITION (`n / field`); `MpUI`'s board is only for a racer without a session.
+- **Finish.** The session sends `raceFinish` at the line (not at the results screen: the server checks the time
+  against its own clock).
+- **Dropouts.** A racer whose connection drops is held for the grace period (shown as reconnecting) and carries
+  on after a reconnect. Gone for good (or LEAVE MULTIPLAYER): DNF, placed behind the finishers by how far they
+  got. Back while the race still runs (a later login): the DNF is undone and they carry on.
+- **Results.** The server is the single source of truth. It closes the race when everyone left in it has
+  finished, 60 s after the first finisher (`RACE_AFTER_FIRST_MS`), or 10 minutes after the start. Every racer gets
+  a distinct place: finishers by time (equal times: who was home first), then the rest by progress. Prize money
+  `reward × [1, 0.4, 0.15]` by place, paid once per racer, to finishers only. The race session waits for
+  `raceResult` (up to 75 s, the live standings stay up) and its own results screen shows the server's places,
+  times and prizes (no podium). If the session is gone, the results card (`MpUI.results`) shows them instead. A
+  result missed during a reconnect comes with the login (`lastRace`).
 
 The HUD line shows `RACE QUEUE · 1/2 · waiting for players`, `… starting in 23s`, or `RACE · GO in 3s`.
 
@@ -255,7 +279,7 @@ net.on('seats', (d) => {});            // any server event, see the table above;
 net.send('look', {...});               // fire and forget
 await net.request('seatClaim', {...}); // request -> promise (throws Error with .code / .data)
 net.serverNow();                       // the shared clock (ms)
-net.on('relogin', fn);                 // reconnected: seats, holds and permissions are gone, claim them again
+net.on('relogin', fn);                 // reconnected (d.resumed: the server held everything; else seats, holds, permissions are gone): claim again
 
 MP.active, MP.name, MP.pid, MP.world.players (Map pid -> {pid, name, chalet}), MP.profile, MP.catalog
 MP.chalets   // {chaletId: ownerName} in every world

@@ -208,6 +208,30 @@ try {
   const pas = await b.req('seatClaim', { k: 'car', v: 'Alice' });
   ok(drv.ok && drv.d.seat === 0 && pas.ok && pas.d.seat === 1, 'allowed: Alice drives (seat 0), Bob is the front passenger (seat 1)');
   await a.req('seatRelease'); await b.req('seatRelease');
+  // single use: every boarding / every visit needs a new yes
+  const noSeat2 = await b.req('seatClaim', { k: 'car', v: 'Alice' });
+  ok(!noSeat2.ok && noSeat2.err === 'no_permission', 'single use: out of the car, getting in again without asking is refused');
+  const out = await b.req('enter', { interior: null });
+  const noEnter2 = await b.req('enter', { interior: 'chalet:7' });
+  ok(out.ok && !noEnter2.ok && noEnter2.err === 'no_permission', 'single use: out of the chalet, walking in again without asking is refused');
+  const askAgainP = b.req('perm', { kind: 'chaletVisit', ref: 7 });
+  const askAgain = await a.next('permAsk', (d) => d.kind === 'chaletVisit');
+  ok(!!askAgain, 'asking again: the owner gets the prompt again');
+  await a.req('permAnswer', { rid: askAgain.rid, allow: true });
+  ok((await askAgainP).d.allow && (await b.req('enter', { interior: 'chalet:7' })).ok, 'allowed again: in Bob goes');
+  ok((await b.req('enter', { interior: 'chalet:7' })).ok, 'staying inside (the same room again, e.g. after a reconnect) needs no new yes');
+  await b.req('enter', { interior: null });
+  ok(!server.hasGrant('chaletVisit', 'alice', 'bob'), 'that visit is used up when he leaves');
+  const grantMs = server.grantMs;
+  server.grantMs = 150;
+  const lapseP = b.req('perm', { kind: 'carRide', to: 'Alice' });
+  const lapseAsk = await a.next('permAsk', (d) => d.kind === 'carRide');
+  await a.req('permAnswer', { rid: lapseAsk.rid, allow: true });
+  await lapseP;
+  await sleep(300);
+  const lapsed = await b.req('seatClaim', { k: 'car', v: 'Alice' });
+  ok(!lapsed.ok && lapsed.err === 'no_permission', 'a yes that is not used within the time limit lapses');
+  server.grantMs = grantMs;
 
   // ---------------------------------------------------------------- helicopter copies
   console.log('helicopter');
@@ -322,6 +346,83 @@ try {
   ok(!!gone && !server.onlineByKey('gus') && !wg.players.has(lg.d.pid), 'no reconnect within the grace period: the player is removed');
   ok(!wg.seats.get('gondola|G7'), 'and their seat is released');
   server.graceMs = grace;
+
+  // ---------------------------------------------------------------- races with dropouts: server places, DNF by progress, prizes once
+  console.log('race dropouts');
+  const racer = async (name) => {
+    const f = new Fake(url); await f.open();
+    const r = await f.req('register', { name });
+    const l = await f.req('login', { v: PROTO, name, token: r.d.token });
+    return { f, pid: l.d.pid, world: server.worlds.get(l.d.world.id), key: name.toLowerCase() };
+  };
+  const startWith = async (list, race = 'meadow') => {
+    const w = list[0].world;
+    for (const x of list) await x.f.req('raceJoin', { race });
+    if (w.queues.get(race)) w.startRace(race); // (the others in the world are not queued: start it now)
+    const st = await list[0].f.next('raceStart', (d) => d.race === race && list.every((x) => d.grid.some((g) => g.pid === x.pid)));
+    const r = w.races.get(st.rid);
+    r.at = Date.now() - 60000; // (a minute in)
+    return { st, r, w };
+  };
+  {
+    const [X, Y, Z] = [await racer('Xena'), await racer('Yuri'), await racer('Zack')];
+    const { st, r } = await startWith([X, Y, Z]);
+    const money0 = Object.fromEntries([X, Y, Z].map((p) => [p.key, server.profileOf(p.key).money]));
+    // live progress: Zack is ahead (gate 4), then drops out (the network: 1006)
+    X.f.send('raceProgress', { rid: st.rid, gate: 2, s: 300 });
+    Y.f.send('raceProgress', { rid: st.rid, gate: 3, s: 410 });
+    Z.f.send('raceProgress', { rid: st.rid, gate: 4, s: 520 });
+    await sleep(100);
+    const board = await X.f.next('raceBoard', (d) => d.rid === st.rid && d.rows[0]?.name === 'Zack', 2000);
+    ok(board && board.rows.map((x) => x.name).join() === 'Zack,Yuri,Xena' && board.rows.map((x) => x.place).join() === '1,2,3', 'the live board orders racers by progress (gate, metres), places 1-2-3');
+    const grace = server.graceMs;
+    server.graceMs = 200;
+    Z.f.ws.terminate();
+    await sleep(80);
+    const held = await X.f.next('raceBoard', (d) => d.rid === st.rid && d.rows.find((x) => x.name === 'Zack')?.off, 2000);
+    ok(!!held && !r.done, 'a racer whose connection drops is held (shown as reconnecting), the race goes on');
+    await sleep(400);
+    ok(r.entrants.find((e) => e.name === 'Zack').left && r.entrants.find((e) => e.name === 'Zack').dnf, 'no reconnect within the grace period: Zack is out (DNF), his progress kept');
+    server.graceMs = grace;
+    await Y.f.req('raceFinish', { rid: st.rid, raw: 59500, pen: 0 });
+    const fx = await X.f.req('raceFinish', { rid: st.rid, raw: 58000, pen: 2000 }); // (60.0 s with the gate penalty)
+    ok(fx.ok && fx.d.time === 60000, 'gate penalties count on top of the plausible clock time');
+    const res = await X.f.next('raceResult', (d) => d.rid === st.rid);
+    ok(!!res && r.done, 'everyone left has finished: the race ends at once (it does not wait for the racer who left)');
+    const prize = CATALOG.races.meadow.reward;
+    ok(res && res.order.map((o) => `${o.place}:${o.name}${o.dnf ? ':DNF' : ''}`).join() === '1:Yuri,2:Xena,3:Zack:DNF', 'places: Yuri 1st, Xena 2nd, Zack 3rd as DNF (behind the finishers, by progress)');
+    ok(res && res.order[0].prize === prize && res.order[1].prize === Math.round(prize * 0.4) && res.order[2].prize === 0, 'prizes by place: 100 % / 40 %, nothing for a DNF');
+    await sleep(150);
+    ok(server.profileOf('yuri').money === money0.yuri + prize && server.profileOf('xena').money === money0.xena + Math.round(prize * 0.4) && server.profileOf('zack').money === money0.zack,
+      'the server paid each racer once (and Zack nothing)');
+    server.worlds.get(X.world.id).finishRace(r); // (a second close is a no-op: nobody is paid twice)
+    ok(server.profileOf('yuri').money === money0.yuri + prize, 'closing the race again pays nobody twice');
+    const lateFinish = await Y.f.req('raceFinish', { rid: st.rid, raw: 1 });
+    ok(!lateFinish.ok, 'a finish after the results is refused');
+    for (const p of [X, Y]) p.f.close();
+    await sleep(100);
+  }
+  {
+    // four racers: two finish with the SAME time, two leave at different points: every place is distinct
+    const P = [await racer('Pia'), await racer('Quin'), await racer('Rhea'), await racer('Seth')];
+    const { st } = await startWith(P);
+    P[2].f.send('raceProgress', { rid: st.rid, gate: 1, s: 120 });
+    P[3].f.send('raceProgress', { rid: st.rid, gate: 5, s: 700 });
+    await sleep(80);
+    await P[2].f.req('raceFinish', { rid: st.rid, dnf: true }); // (Rhea gives up)
+    P[3].f.ws.close(1000, 'leave'); // (Seth leaves multiplayer: out at once)
+    await sleep(80);
+    await P[0].f.req('raceFinish', { rid: st.rid, raw: 60000 });
+    await P[1].f.req('raceFinish', { rid: st.rid, raw: 60000 });
+    const res = await P[0].f.next('raceResult', (d) => d.rid === st.rid);
+    const places = res?.order.map((o) => o.place) || [];
+    ok(res && new Set(places).size === 4 && places.join() === '1,2,3,4', 'every racer gets a distinct place (1, 2, 3, 4), even with equal times');
+    ok(res && res.order[0].name === 'Pia' && res.order[1].name === 'Quin', 'equal times: the first one home ranks first');
+    ok(res && res.order[2].name === 'Seth' && res.order[3].name === 'Rhea' && res.order[2].dnf && res.order[3].dnf, 'the DNFs are ordered by how far they got (Seth gate 5 before Rhea gate 1)');
+    ok(res && res.order.filter((o) => o.prize > 0).length === 2, 'only finishers win prize money');
+    for (const p of P.slice(0, 3)) p.f.close();
+    await sleep(100);
+  }
 
   // ---------------------------------------------------------------- alone: multiplayer still works (world of 1)
   const solo = new Fake(url);

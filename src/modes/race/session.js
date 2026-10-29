@@ -80,6 +80,8 @@ const GATE_PENALTY = 0.5;          // s per missed slalom gate (forgiving: never
 const GATE_FLAG = 0.75, GATE_TOL = 4; // (4 m: generous)
 const RESULTS_DELAY = 2.6;         // s after the line before the results
 const RESULTS_MAX_WAIT = 6;        // ...or longer while the field is about to finish
+const MP_RESULTS_WAIT = 75;        // multiplayer: s after your finish to wait for the server's result (it closes a
+                                   // race 60 s after the first finisher) before showing provisional standings
 const FINISH_BRAKE = 9;            // m/s^2 ski-out after the line
 // start grid (m): racers abreast GRID_FIRST / +GRID_SPACING beside the player, rows GRID_ROW apart,
 // never closer than GRID_GAP to each other or GRID_EDGE to the barriers, and never inside any course
@@ -193,6 +195,9 @@ export class RaceSession {
     this.syncGo = typeof o.syncGo === 'function' ? o.syncGo : null;
     // multiplayer: your slot on the start grid (the server's raceStart grid: { slot, n }), so racers never overlap
     this.mpGrid = o.grid && Number.isInteger(o.grid.slot) ? { slot: Math.max(0, o.grid.slot), n: Math.max(1, o.grid.n | 0) } : null;
+    // multiplayer: { rid, field() -> the other racers [{ name, gate, s, time, dnf, off }], finish({ time, raw, pen, dnf })
+    // (sent at the line), result() -> the server's final { order, mine } or null }. The server decides the places.
+    this.mp = o.mp && typeof o.mp.field === 'function' ? o.mp : null;
     this.introEnabled = o.intro !== false && !this.syncGo;
     this.introDone = false;
     this.weather = o.weather; // string or () => string for the intro's lower third
@@ -236,8 +241,20 @@ export class RaceSession {
     this.raceHud?.show?.({
       courseName: this.course.name, mode: this.mode, checkpoints: this.cps.length - 1,
       best: getRecord(this.save, this.courseId)?.best ?? undefined,
-      difficulty: this.mode === 'race' ? DIFFICULTY[this.difficulty].label : null, total: this.bots.length + 1,
+      difficulty: this.mode === 'race' && !this.mp ? DIFFICULTY[this.difficulty].label : null, total: this.fieldSize(),
     });
+  }
+  /** Racers in this race: you, the AI field, and in multiplayer the other players. */
+  fieldSize() { return this.bots.length + 1 + (this.mp ? Math.max(0, (this.mpGrid?.n || 1) - 1) : 0); }
+  /** Multiplayer: the other players (safe: [] without). */
+  mpField() {
+    if (!this.mp) return [];
+    try { return this.mp.field() || []; } catch (e) { console.warn('Race: multiplayer field', e); return []; }
+  }
+  /** Multiplayer: the server's final result for this race, or null. */
+  mpResult() {
+    if (!this.mp) return null;
+    try { return this.mp.result?.() || null; } catch { return null; }
   }
 
   spawnBots() {
@@ -349,6 +366,7 @@ export class RaceSession {
     this.photoDone = false;
     this.podiumDone = false;
     this.resultsArgs = null;
+    this.mpWaitShown = false; this.mpShown = null;
     this.clock = -(LEAD_IN + 3);
     if (this.syncGo) { const s = this.syncGo(); if (Number.isFinite(s)) this.clock = -Math.max(0.5, s); }
     this.state = 'countdown';
@@ -562,7 +580,7 @@ export class RaceSession {
     if (!this.active || this.disposed) return;
     this.takeCrashEvents();
     if (!(dt > 0)) return;
-    if (input?.hit?.('Backspace') && this.state !== 'results') { this.restart(); return; }
+    if (input?.hit?.('Backspace') && this.state !== 'results' && !this.mp) { this.restart(); return; } // (no restarts in a shared race)
     this.floodlights?.update(dt);
     if (this.state === 'intro') { this.updateIntro(dt); return; }
     this.clock += dt;
@@ -574,6 +592,7 @@ export class RaceSession {
     this.updateGhost(dt, T);
     if (this.state !== 'results') this.updateHud(T, dt);
     if (this.state === 'finished' && T >= this.resultsAt && !this.cine) this.maybeShowResults(T);
+    if (this.mp) this.updateMp(T);
     this.recordReplay(T);
     this.gateBars?.update(dt);
     // podium / replay: rigs and camera, after everything else has moved this frame (real time: the
@@ -1301,7 +1320,10 @@ export class RaceSession {
     // the time counts right away: PB, time medal and ghost are saved at the line (a restart or a quit
     // before the results screen loses nothing); the place follows once the field is home
     this.commitTime();
-    const ahead = this.bots.filter((b) => b.finished && b.finishTime < this.finalTime).length;
+    // multiplayer: the finish goes to the server right at the line (it checks the time against its own clock)
+    if (this.mp) { try { this.mp.finish?.({ time: this.finalTime, raw: this.rawTime, pen: this.penalty, dnf: false }); } catch (e) { console.warn('Race: multiplayer finish', e); } }
+    const ahead = this.bots.filter((b) => b.finished && b.finishTime < this.finalTime).length
+      + this.mpField().filter((o) => o.finished && !o.dnf).length; // (players home before you: the server has their time)
     if (this.mode === 'race' && !this.penalty) this.notice(ordinal(ahead + 1), ahead < 3 ? 'good' : 'info');
     else if (this.mode === 'trial' && this.timeRes?.pb) this.notice('NEW RECORD', 'good');
     else this.notice('FINISH');
@@ -1347,12 +1369,17 @@ export class RaceSession {
   }
 
   maybeShowResults(T) {
+    // multiplayer: the server places everyone; wait for its result (the live standings stay up meanwhile)
+    if (this.mp && !this.mpResult() && T < this.finishClock + MP_RESULTS_WAIT) {
+      if (!this.mpWaitShown) { this.mpWaitShown = true; this.notice('WAITING FOR THE OTHER RACERS', 'info'); }
+      return;
+    }
     // give the field a moment to come home (real times instead of projections)
     if (this.mode === 'race' && T < this.finishClock + RESULTS_MAX_WAIT) {
       const close = this.bots.some((b) => !b.finished && (this.track.finishS - b.s) / Math.max(8, b.v) < this.finishClock + RESULTS_MAX_WAIT - T);
       if (close) return;
     }
-    if (this.mode === 'race' && !this.podiumDone && this.startPodium()) return; // results after the podium
+    if (this.mode === 'race' && !this.mp && !this.podiumDone && this.startPodium()) return; // results after the podium (not in multiplayer: the other racers are not ours to pose)
     this.showResults();
   }
 
@@ -1360,16 +1387,19 @@ export class RaceSession {
     if (this.state === 'results') return;
     this.state = 'results';
     const race = this.mode === 'race';
-    const rows = race ? this.raceRows() : this.trialRows();
-    const place = race ? rows.findIndex((r) => r.me) + 1 : 1;
-    const tres = this.commitTime();
-    const pres = race ? this.commitPlace(place) : null;
+    const res = this.mpResult();
+    this.mpShown = res ? 'final' : this.mp ? 'provisional' : null;
+    const rows = race ? (res ? this.mpRows(res) : this.raceRows()) : this.trialRows();
+    const place = res?.mine ? res.mine.place : race ? rows.findIndex((r) => r.me) + 1 : 1;
+    const tres = this.playerFinished ? this.commitTime() : { pb: false, previousBest: getRecord(this.save, this.courseId)?.best, medal: null };
+    const out = !this.playerFinished || !!res?.mine?.dnf; // (multiplayer: the race closed before you were home)
+    const pres = race ? (out ? { medal: null, newMedal: false } : this.commitPlace(place)) : null;
     const medal = race ? pres.medal : tres.medal;
     if (tres.pb || medal === 'gold') this.audio?.play?.('chime');
     // the stadium announcer: place, medal, personal best (once; not again after a replay)
     const A = this.audio;
     A?.music?.('results');
-    if (race && place >= 1 && place <= 3) A?.announce?.(['first', 'second', 'third'][place - 1]);
+    if (race && !out && place >= 1 && place <= 3) A?.announce?.(['first', 'second', 'third'][place - 1]);
     if (medal) A?.announce?.(medal, { delay: 1.4 });
     if (tres.pb) A?.announce?.('pb', { delay: 2.6 });
     this.lastResult = { pb: tres.pb, previousBest: tres.previousBest, medal, newMedal: race ? pres.newMedal : tres.newMedal, record: getRecord(this.save, this.courseId), rows, place };
@@ -1378,7 +1408,18 @@ export class RaceSession {
       pb: tres.pb, previousBest: tres.previousBest, points: this.points || undefined, penalty: this.penalty,
       difficulty: race ? DIFFICULTY[this.difficulty].label : null, medals: this.medals,
     };
-    if (this.freeRide) {
+    if (res?.mine) {
+      // multiplayer: the server's place, prize money (already paid by the server) and standings
+      if (res.mine.prize > 0) this.resultsArgs.prize = res.mine.prize;
+      if (res.mine.dnf) this.resultsArgs.time = NaN;
+      this.resultsArgs.difficulty = `MULTIPLAYER · ${rows.length} RACERS`;
+      this.resultsArgs.canNext = false;
+      this.resultsArgs.choices = [['continue', 'BACK TO START', 'ENTER']];
+    } else if (this.mp) {
+      this.resultsArgs.difficulty = 'MULTIPLAYER · PROVISIONAL';
+      this.resultsArgs.canNext = false;
+      this.resultsArgs.choices = [['continue', 'BACK TO START', 'ENTER']];
+    } else if (this.freeRide) {
       // free ride: the podium earns prize money (paid once per run), then RACE AGAIN or BACK TO START (Modes.exitFree)
       try {
         const prize = this.freeRide.result?.({ place: race ? place : 0, time: this.finalTime, dnf: !Number.isFinite(this.finalTime) });
@@ -1412,15 +1453,55 @@ export class RaceSession {
     }, () => { off?.(); if (live()) this.onExit?.('menu'); });
   }
 
+  // Multiplayer: the server's final order as results rows (everyone, in its places; DNF last, by how far they got).
+  mpRows(res) {
+    const rows = res.order.map((o) => ({
+      name: o === res.mine ? 'You' : o.name, time: o.dnf || !Number.isFinite(o.time) ? Infinity : o.time / 1000,
+      me: o === res.mine, kind: 'player', dnf: !!o.dnf, place: o.place,
+    }));
+    const lead = rows.find((r) => Number.isFinite(r.time))?.time;
+    for (const r of rows) r.gap = Number.isFinite(r.time) && Number.isFinite(lead) ? r.time - lead : NaN;
+    return rows;
+  }
+
+  // Multiplayer, every frame: the server's result ends the race for you too (closed 60 s after the first finisher:
+  // still out on the course = DNF), and replaces provisional standings shown after a long wait.
+  updateMp(T) {
+    const res = this.mpResult();
+    if (!res) return;
+    if (!this.playerFinished && this.state !== 'results' && (this.state === 'racing' || this.state === 'countdown')) {
+      this.finished = true;
+      this.state = 'finished';
+      this.pending = null;
+      this.finalTime = NaN; this.rawTime = NaN;
+      this.player.frozen = true;
+      this.finishClock = T;
+      this.resultsAt = T;
+      this.notice('RACE OVER', 'info');
+      return;
+    }
+    if (this.state === 'results' && this.mpShown === 'provisional' && !this.cine) {
+      this.resultsToken++; // (the provisional screen's buttons no longer end the run)
+      this.state = 'finished';
+      this.showResults();
+    }
+  }
+
   raceRows() {
-    const rows = [{ name: 'You', time: this.finalTime, me: true, kind: 'player', dnf: false }];
-    // multiplayer: the other players who have finished (raceProgress; the server's results card has everyone)
-    try { for (const r of this.freeRide?.others?.() || []) rows.push(r); } catch (e) { console.warn('Race: other racers', e); }
+    const rows = [{ name: 'You', time: this.finalTime, me: true, kind: 'player', dnf: !Number.isFinite(this.finalTime) }];
+    if (this.mp) {
+      // multiplayer, provisional: the other players home (their server times), then the rest by progress
+      for (const o of this.mpField()) rows.push({ name: o.name, time: o.finished ? o.time : Infinity, me: false, kind: 'player', dnf: !o.finished, s: o.s });
+    } else {
+      // (older callers: the other players who have finished)
+      try { for (const r of this.freeRide?.others?.() || []) rows.push(r); } catch (e) { console.warn('Race: other racers', e); }
+    }
     for (const b of this.bots) {
       const time = b.finished ? b.finishTime : b.projectFinish();
       rows.push({ name: b.name, time, me: false, kind: 'bot', dnf: !Number.isFinite(time), projected: !b.finished });
     }
-    rows.sort((a, b) => a.time - b.time);
+    // (by time; not home yet: by how far down the course)
+    rows.sort((a, b) => ((a.time - b.time) || 0) || ((b.s ?? 0) - (a.s ?? 0)));
     for (const r of rows) r.gap = r.time - rows[0].time;
     return rows;
   }
@@ -1641,6 +1722,8 @@ export class RaceSession {
     const mine = this.playerFinished ? 1e7 - this.finalTime : this.ps;
     let p = 1;
     for (const b of this.bots) if ((b.finished ? 1e7 - b.finishTime : b.s) > mine) p++;
+    // multiplayer: players home before you, or further down the course (a racer who left counts behind you)
+    for (const o of this.mpField()) if (!o.dnf && (o.finished ? 1e7 - o.time : o.s) > mine) p++;
     return p;
   }
 
@@ -1651,11 +1734,13 @@ export class RaceSession {
     this.standingsT = 0.25;
     const list = [{ name: 'You', me: true, s: this.ps, v: this.player.speed, time: this.playerFinished ? this.finalTime : null }];
     for (const b of this.bots) list.push({ name: b.name, me: false, s: b.s, v: b.v, time: b.finished ? b.finishTime : null });
+    // multiplayer: everyone by progress (gate + metres along the course; finishers by time; DNF / left at the end)
+    for (const o of this.mpField()) list.push({ name: o.dnf ? `${o.name} · DNF` : o.off ? `${o.name} · …` : o.name, me: false, s: o.dnf ? -1e6 + (Number.isFinite(o.s) ? o.s : 0) : Number.isFinite(o.s) ? o.s : -1e6, v: 20, time: o.finished ? o.time : null, dnf: o.dnf });
     list.sort((a, b) => (b.time !== null ? 1e7 - b.time : b.s) - (a.time !== null ? 1e7 - a.time : a.s));
     const lead = list[0];
     this.standingsCache = list.map((r) => ({
       name: r.name, me: r.me,
-      gap: r === lead ? 0 : r.time !== null && lead.time !== null ? r.time - lead.time : Math.max(0, (lead.s - r.s) / Math.max(10, r.v)),
+      gap: r.dnf ? NaN : r === lead ? 0 : r.time !== null && lead.time !== null ? r.time - lead.time : Math.max(0, (lead.s - r.s) / Math.max(10, r.v)),
     }));
     return this.standingsCache;
   }
@@ -1693,7 +1778,7 @@ export class RaceSession {
       next: this.state === 'racing' && !this.playerFinished ? this.nextTarget() : null,
       time: this.playerFinished ? this.finalTime : Math.max(0, T) + this.penalty,
       position: this.position(),
-      total: this.bots.length + 1,
+      total: this.fieldSize(),
       checkpoint: this.lastCp,
       checkpoints: this.cps.length - 1,
       distanceToFinish: Math.max(0, this.track.finishS - this.ps),

@@ -23,7 +23,7 @@ const CSS = `
 .mp-board{display:grid;grid-template-columns:auto 1fr auto;gap:calc(var(--u,1px)*2) calc(var(--u,1px)*10);min-width:calc(var(--u,1px)*200)}
 .mp-board .me{color:#c8261c}
 .mp-board i{font-style:normal;color:#0f2f6b;opacity:.75}
-.mp-res{position:absolute;left:calc(var(--u,1px)*24);top:50%;transform:translateY(-50%);min-width:calc(var(--u,1px)*380);background:#fff;color:#0f2f6b;
+.mp-res{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);min-width:calc(var(--u,1px)*380);max-height:80vh;overflow:auto;background:#fff;color:#0f2f6b;
   padding:calc(var(--u,1px)*16) calc(var(--u,1px)*22);border-radius:calc(var(--u,1px)*6);clip-path:polygon(1% 2%,99% 0,100% 97%,0 100%);
   box-shadow:0 6px 24px rgba(0,0,0,.25);pointer-events:auto;cursor:pointer;z-index:60}
 .mp-res b.mp-h{display:block;color:#1f5fd1;font-style:italic;font-size:calc(var(--u,1px)*26);font-weight:700}
@@ -35,6 +35,17 @@ const CSS = `
 .mp-guests small{font-size:calc(var(--u,1px)*12);letter-spacing:.08em;opacity:.7;font-style:normal}
 .mp-guests button{font:inherit;border:0;background:#e9eef8;color:#0f2f6b;font-style:italic;font-weight:700;margin-left:calc(var(--u,1px)*8);
   padding:0 calc(var(--u,1px)*8);cursor:pointer}
+/* Layout (no overlaps). Free roam: the pill top-right (the trick popup, also top-right, moves below it). In a race
+   the race HUD owns the top (position + standings left, clock centre, course info right) and bottom-right (speed);
+   the money panel is hidden there, so the pill goes bottom-left, and the race's own standings are the live board.
+   The results card is centred and never shows over the race's own results screen. */
+body:has(#mp-ui:not([hidden])):not(.in-race) .rh-trick{top:calc(var(--u,1px)*110)}
+body.in-race #mp-ui .mp-pill{top:auto;right:auto;left:calc(var(--u,1px)*28);bottom:calc(var(--u,1px)*24);align-items:flex-start}
+body.in-race #mp-ui .mp-board{display:none}
+body.in-race:has(#mp-ui:not([hidden])) #controls-hint{display:none}
+body:has(#race-results:not([hidden])) #mp-ui .mp-res{display:none}
+body:has(#race-results:not([hidden])) #mp-ui .mp-pill{display:none}
+.mp-board .off{opacity:.55}
 .mp-ask .mp-time{height:calc(var(--u,1px)*3);background:#1f5fd1;margin-top:calc(var(--u,1px)*10);transform-origin:left;transition:transform linear}
 `;
 
@@ -96,10 +107,10 @@ export class MpUI {
   /** The shared-transport speed-up line, e.g. "Hold SPACE to speed up (2/3 holding)" ('' hides it). */
   setSkip(text) { if (text !== this.lines.skip) { this.lines.skip = text; this.skipEl.textContent = text; this.skipEl.hidden = !text; } }
 
-  /** The live race board: rows [{ name, me, time (s) | null, dnf }] in race order (null hides it). */
+  /** The live race board: rows [{ name, me, time (s) | null, dnf, off, gate }] in race order (null hides it). */
   setBoard(rows) {
-    const html = rows?.length ? rows.map((r, i) => `<span>${i + 1}</span><span class="${r.me ? 'me' : ''}">${esc(r.name)}</span>`
-      + `<span>${r.dnf ? '<i>DNF</i>' : Number.isFinite(r.time) ? fmtTime(r.time) : '<i>racing</i>'}</span>`).join('') : '';
+    const html = rows?.length ? rows.map((r, i) => `<span>${i + 1}</span><span class="${r.me ? 'me' : ''}${r.off ? ' off' : ''}">${esc(r.name)}</span>`
+      + `<span>${r.dnf ? '<i>DNF</i>' : Number.isFinite(r.time) ? fmtTime(r.time) : r.off ? '<i>reconnecting</i>' : `<i>racing${r.gate ? ` · gate ${r.gate}` : ''}</i>`}</span>`).join('') : '';
     if (html === this.lines.board) return;
     this.lines.board = html;
     this.boardEl.innerHTML = html;
@@ -111,7 +122,7 @@ export class MpUI {
     this.closeResults();
     const box = document.createElement('div');
     box.className = 'mp-res';
-    const rows = order.map((o) => `<span>${o.dnf ? '—' : o.place}</span><span class="${o.pid === selfPid ? 'me' : ''}">${esc(o.name)}</span>`
+    const rows = order.map((o) => `<span>${o.place ?? '—'}</span><span class="${o.pid === selfPid ? 'me' : ''}">${esc(o.name)}</span>`
       + `<span>${o.dnf ? 'DNF' : fmtTime(o.time / 1000)}</span><span class="prize">${o.prize ? `+$${Math.round(o.prize).toLocaleString('en-US')}` : ''}</span>`).join('');
     box.innerHTML = `<b class="mp-h">${esc(title)}</b><small>RACE RESULTS · ${order.length} RACERS · CLICK TO CLOSE</small><div class="mp-rows">${rows}</div>`;
     box.addEventListener('click', () => this.closeResults());

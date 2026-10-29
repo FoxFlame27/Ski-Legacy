@@ -179,6 +179,7 @@ export class Multiplayer {
     on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
     on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) r.done.set(d.pid, d); });
+    on('raceBoard', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.board = d.rows; r.boardAt = performance.now(); } });
     on('raceQueue', (d) => { if (d.n) MP.queues.set(d.race, d); else MP.queues.delete(d.race); if (this.race.queued === d.race) this.race.queue = d; });
     on('raceStart', (d) => this.onRaceStart(d));
     on('raceResult', (d) => this.onRaceResult(d));
@@ -449,58 +450,89 @@ export class Multiplayer {
     const me = d.grid.find((g) => g.pid === MP.pid);
     if (!me) return;
     this.race.queued = null; this.race.queue = null;
-    this.race.start = { ...d, slot: me.slot, done: new Map() }; this.race.finished = false;
+    this.race.start = { ...d, slot: me.slot, done: new Map(), board: null }; this.race.finished = false; this.race.result = null;
     this.ui?.closeResults();
-    this.c.onRaceStart?.({ ...d, slot: me.slot, n: d.grid.length, secondsToGo: () => (d.at - net.serverNow()) / 1000 });
+    this.c.onRaceStart?.({ ...d, slot: me.slot, n: d.grid.length, secondsToGo: () => (d.at - net.serverNow()) / 1000,
+      // the race session's multiplayer hooks: the other racers, your finish at the line, the server's result
+      mp: { rid: d.rid, field: () => this.raceField(), finish: (r) => this.raceFinished(r), result: () => this.raceResultFor(d.rid) } });
   }
-  /** The race session's result callback: the server ranks everybody and pays the prizes (raceResult). */
-  raceFinished({ time, dnf }) {
+  /** Your finish, sent AT THE LINE (the server checks the time against its own clock, so it must not wait for the
+   *  results screen): time = official (penalties included), raw = the clock, pen = the gate penalties (s). The server
+   *  ranks everybody and pays the prizes (raceResult). */
+  raceFinished({ time, raw, pen, dnf }) {
     const r = this.race.start;
     if (!r || this.race.finished) return 0;
     this.race.finished = true;
-    net.request('raceFinish', { rid: r.rid, time: Number.isFinite(time) ? Math.round(time * 1000) : null, dnf: !!dnf || !Number.isFinite(time) }).catch(() => {});
+    const ms = (v) => (Number.isFinite(v) ? Math.round(v * 1000) : null);
+    const out = !!dnf || !Number.isFinite(time);
+    const send = () => net.request('raceFinish', { rid: r.rid, time: ms(time), raw: ms(raw), pen: ms(pen) ?? 0, dnf: out });
+    // (the line is crossed during a reconnect: sent once the connection is back)
+    send().catch((e) => { if (e.code === 'offline' || e.code === 'timeout') net.once('relogin', () => send().catch(() => {})); });
     return 0; // (the prize comes with the server's result)
   }
   onRaceResult(d) {
-    const mine = d.order.find((o) => o.pid === MP.pid);
+    const mine = d.order.find((o) => o.pid === MP.pid) || d.order.find((o) => o.name === MP.name);
     if (!mine || this.race.start?.rid !== d.rid) return;
     this.race.start = null;
+    this.race.result = { ...d, mine };
     this.ui?.setBoard(null);
-    const course = window.__game?.modes?.course;
-    const title = course?.id === d.race && course.name ? course.name : String(d.race || 'Race').replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
-    this.ui?.results(title, d.order, MP.pid); // (everyone's times and prize money, from the server)
     const s = this.c.save.stats;
     s.races = (s.races || 0) + 1;
-    if (mine.place === 1) s.wins = (s.wins || 0) + 1;
-    const ord = (n) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
-    this.c.hud.flash(mine.dnf ? 'Race over · DNF' : `Race over · ${ord(mine.place)} of ${d.order.length}${mine.prize ? ` · +$${mine.prize.toLocaleString('en-US')}` : ''}`, mine.place === 1 ? 'gold' : 'good', 4200);
+    if (mine.place === 1 && !mine.dnf) s.wins = (s.wins || 0) + 1;
+    // the race's own results screen shows the server's standings (modes/race/session.js asks raceResultFor); only
+    // when that session is gone (you left the course) the results card comes up instead
+    const sess = window.__game?.modes?.session;
+    if (!(sess?.mp && sess.mp.rid === d.rid && !sess.disposed)) {
+      const course = window.__game?.modes?.course;
+      const title = course?.id === d.race && course.name ? course.name : String(d.race || 'Race').replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+      this.ui?.results(title, d.order, mine.pid);
+    }
+    const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th'}`;
+    this.c.hud.flash(`Race over · ${ord(mine.place)} of ${d.order.length}${mine.dnf ? ' · DNF' : ''}${mine.prize ? ` · +$${mine.prize.toLocaleString('en-US')}` : ''}`, mine.place === 1 && !mine.dnf ? 'gold' : 'good', 4200);
   }
-  /** The other racers who have finished, as rows for the race's own results table (modes/race/session.js). */
-  raceOthers() {
+  /** The server's final result for race rid ({ rid, race, order, mine }), or null while it runs. */
+  raceResultFor(rid) { const r = this.race.result; return r && r.rid === rid ? r : null; }
+  /** The other racers as the race session's field: [{ pid, name, gate, s (m along the course), time (s) | null,
+   *  dnf, off (connection dropped), finished }]: the server's live board, else (an older server) the finishers and
+   *  where the other avatars are. */
+  raceField() {
     const r = this.race.start, out = [];
     if (!r) return out;
-    for (const p of r.done.values()) if (p.pid !== MP.pid) out.push({ name: p.name, time: p.dnf ? Infinity : p.time / 1000, me: false, kind: 'player', dnf: !!p.dnf });
+    const track = window.__game?.modes?.session?.track;
+    for (const e of r.grid) {
+      if (e.pid === MP.pid || e.name === MP.name) continue;
+      const b = r.board?.find((x) => x.pid === e.pid || x.name === e.name), fin = r.done.get(e.pid);
+      let s = b && Number.isFinite(b.s) ? b.s : -Infinity;
+      // (the avatar's own position is fresher than the board: used while it is connected and racing)
+      const p = !b?.off && !(fin || b?.time != null || b?.dnf) ? this.remotes?.players.get(e.pid)?.pos : null;
+      if (p && track?.nearestS) { const s2 = track.nearestS(p.x, p.z); if (Number.isFinite(s2) && Math.abs(s2 - s) < 400) s = Math.max(s, s2); else if (!b) s = s2; }
+      const time = b?.time != null ? b.time / 1000 : fin && !fin.dnf ? fin.time / 1000 : null;
+      out.push({ pid: e.pid, name: e.name, gate: b?.gate ?? 0, s, time, dnf: !!(b?.dnf || fin?.dnf), off: !!b?.off, left: !!b?.left, finished: time != null });
+    }
     return out;
   }
-  // the live race board: finished racers by time, then everyone still racing by how far down the course they are
-  // (twice a second)
+  /** (older name, kept for callers) the other racers who have finished, as race-session result rows. */
+  raceOthers() {
+    return this.raceField().filter((o) => o.finished || o.dnf).map((o) => ({ name: o.name, time: o.dnf ? Infinity : o.time, me: false, kind: 'player', dnf: o.dnf }));
+  }
+  // Twice a second while you race: your progress to the server (gate index + metres along the course: the live board
+  // and, should you drop out, where you got to). The race session's own HUD shows the standings; the overlay board
+  // only comes up when you race without it (you left the course).
   updateBoard(dt, now) {
     const r = this.race.start;
     if (!r || now < r.at) { if (this.ui?.lines.board) this.ui.setBoard(null); return; }
     if ((this.boardT += dt) < 0.5) return;
     this.boardT = 0;
-    const g = window.__game, track = g?.modes?.session?.track, rows = this.raceRows;
+    const sess = window.__game?.modes?.session;
+    const mine = sess?.mp && sess.mp.rid === r.rid && !sess.disposed ? sess : null;
+    if (mine && !this.race.finished && Number.isFinite(mine.ps)) net.send('raceProgress', { rid: r.rid, gate: Math.max(0, mine.nextGate | 0), s: Math.round(mine.ps * 10) / 10 });
+    if (mine) { if (this.ui?.lines.board) this.ui.setBoard(null); return; }
+    const rows = this.raceRows;
     rows.length = 0;
-    for (const e of r.grid) {
-      const fin = r.done.get(e.pid), me = e.pid === MP.pid;
-      let s = -Infinity;
-      if (!fin && track?.nearestS) {
-        const p = me ? g.player.pos : this.remotes?.players.get(e.pid)?.pos;
-        if (p) s = track.nearestS(p.x, p.z);
-      }
-      rows.push({ name: me ? `${e.name} (you)` : e.name, me, time: fin && !fin.dnf ? fin.time / 1000 : null, dnf: !!fin?.dnf, s });
-    }
-    rows.sort((a, b) => (a.dnf - b.dnf) || ((a.time ?? Infinity) - (b.time ?? Infinity)) || (b.s - a.s));
+    for (const o of this.raceField()) rows.push({ name: o.name, me: false, time: o.time, dnf: o.dnf, off: o.off, gate: o.gate, s: o.s });
+    const me = r.board?.find((x) => x.pid === MP.pid || x.name === MP.name);
+    rows.push({ name: `${MP.name} (you)`, me: true, time: me?.time != null ? me.time / 1000 : null, dnf: !!me?.dnf || this.race.finished, gate: me?.gate ?? 0, s: me?.s ?? -Infinity });
+    rows.sort((a, b) => (a.dnf - b.dnf) || ((a.time ?? Infinity) - (b.time ?? Infinity)) || (b.gate - a.gate) || (b.s - a.s));
     this.ui?.setBoard(rows);
   }
   raceLine(now) {

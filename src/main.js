@@ -1245,6 +1245,8 @@ function mpView() {
   if (interior.active) { v.interior = 'skishop'; v.camera = interior.camera; }
   else if (carRental?.inside) { v.interior = 'carrental'; v.camera = carRental.room.camera; }
   else if (chalets?.inside && chalets.current) { v.interior = `chalet:${chalets.current.id}`; v.camera = chalets.room.camera; }
+  // (a chalet door still fading: no change reported half-way; a visit's yes is single use and leaving would end it)
+  else if (chalets?.busy && multiplayer?.interior?.startsWith?.('chalet:')) { v.interior = multiplayer.interior; v.camera = camera; }
   else { v.interior = null; v.camera = camera; }
   return v;
 }
@@ -1253,8 +1255,11 @@ async function mpVisitChalet(h, owner) {
   hud.flash(`Asking ${owner} to let you in…`, 'good', 2400);
   const r = await multiplayer.ask('chaletVisit', { ref: h.id });
   if (!r?.allow) { if (!r?.error) hud.flash(`${owner} did not let you in`, 'bad', 2600); return; }
+  // (the furniture first: a yes is single use, and between the server letting you in and chalets.enter() no frame
+  // may pass, or the presence loop would report you outside and use the visit up)
+  const furniture = (await multiplayer.chaletFurniture(h.id)) || []; // (the owner's furniture: build mode shows it)
   if (!(await multiplayer.setInterior(`chalet:${h.id}`))) { hud.flash('Not allowed in', 'bad', 2200); return; }
-  chalets.guestFurniture = (await multiplayer.chaletFurniture(h.id)) || []; // (the owner's furniture: build mode shows it)
+  chalets.guestFurniture = furniture;
   chalets.viewing = h;
   chalets.enter(h);
 }
@@ -1290,7 +1295,7 @@ function mpRaceStart(d) {
     player.frozen = false;
     if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
     return modes.startFree(e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false,
-      grid: { slot: d.slot, n: d.n }, others: () => multiplayer.raceOthers() }); // (your own grid slot; the others' times)
+      grid: { slot: d.slot, n: d.n }, others: () => multiplayer.raceOthers(), mp: d.mp }); // (your grid slot; the other racers, the server's result)
   }).then(() => input.lock(), (err) => console.warn('multiplayer race', err));
 }
 

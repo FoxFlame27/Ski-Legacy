@@ -27,6 +27,7 @@ export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ah
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
 export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
 export const RACE_BOARD_MS = 500;          // the live race board (raceBoard) goes out this often while a race runs
+export const DEBT_FLOOR = -100000;        // the lowest the game's own charges (fees, fines) may take you
 export const GRACE_MS = 60 * 1000;         // a dropped connection keeps its player (world slot, seat, chalet plot, car,
                                            // helicopter, race entry) this long for a reconnect, measured from the last
                                            // message; then the player leaves for real
@@ -704,9 +705,9 @@ export class GameServer {
   profileOf(k) { return this.store.profiles.data[k] || null; }
 
   // ---------------------------------------------------------------- money (server-authoritative)
-  debit(c, amount, why) {
+  debit(c, amount, why, floor = 0) {
     amount = Math.round(amount);
-    if (!(amount >= 0) || c.profile.money < amount) return false;
+    if (!(amount >= 0) || c.profile.money - amount < floor) return false;
     c.profile.money -= amount;
     this.store.profiles.save();
     return true;
@@ -1026,7 +1027,10 @@ export class GameServer {
   spend(c, d) {
     const amount = d.amount;
     if (!isInt(amount) || amount <= 0 || amount > 1e7) return { err: 'bad_amount', d: { money: c.profile.money } };
-    if (!this.debit(c, amount, d.reason)) return { err: 'money', d: { money: c.profile.money } };
+    // the game's own charges (a wreck or tow fee, a fine, the hospital) may take you into debt, as in single player
+    // (Oct 29, the user: going into minus in multiplayer showed a server refusal and nothing was taken); purchases go
+    // through buy() and still need the money
+    if (!this.debit(c, amount, d.reason, d.reason === 'game' ? DEBT_FLOOR : 0)) return { err: 'money', d: { money: c.profile.money } };
     return { d: { money: c.profile.money } };
   }
 

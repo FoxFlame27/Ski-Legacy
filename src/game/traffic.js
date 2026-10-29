@@ -1,5 +1,6 @@
 // Traffic: cars (any of CAR_MODELS, so every car added later drives too) on the bus roads and the car parks' access
-// roads. On the road each keeps to the right-hand lane, 30-60 km/h, slower in bends and on steep grades, with smooth
+// roads. On the road each keeps to the right-hand lane at the road's speed limit (bus/speedlimits.js: up to 120 km/h
+// signed on the long straight valley stretches, some drivers faster, 150 at most), slower in bends, with smooth
 // acceleration; at a junction it may turn off to a car park. In the car park it drives like a person parks: slowly
 // along the aisle (10-15 km/h) past a free bay, stops, and backs into it in an arc, ending straight and centred, the
 // nose out toward the aisle (like every parked car); later it drives forward out of it in an arc and off. At a dead end (the bus stops) it never turns on the
@@ -13,6 +14,7 @@ import { world } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadAt, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { scenicWalk, scenicSpawn, scenicNetReady } from './bus/scenicdrive.js';
+import { roadTarget, speedLimitAt, V_MAX } from './bus/speedlimits.js'; // per-road speed limits (the signs' too)
 import { CAR_MODELS, pickCar, carTemplate, carInstance, farMesh } from './cars.js';
 // one seeded number in [0, 1) per seed (a hash)
 const mulberry = (a) => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -33,6 +35,23 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _p = {}, _q = {}, _a = new THREE.Vector3(), _b = new THREE.Vector3(), _f = new THREE.Vector3();
 const TURN_LEAD = 7, OFF_TURN = 0.12; // (a car turning at a junction starts its arc this far before it)
 const BUS_HW = 1.3, BUS_HD = 6; // (the ski bus's footprint: bus.js BUS width 2.55, length 12)
+// (Oct 29, the user: "make cars drive way faster up to 150km/h ... but only on big roads"): each road has its speed
+// limits (bus/speedlimits.js: up to 120 on the long straight valley stretches, 50 in the village, 50-60 on the pass
+// roads, 30 on the car parks' roads); a driver keeps to them times his own factor (DRV: some 25 % over, 150 km/h at
+// most) and slows for every bend in time. Following: a time gap (HEAD s) behind whatever is ahead, braking (BRK m/s^2)
+// planned from far enough out at any speed; a stopped car, a wreck, a tow job's zone seen from braking distance.
+const HEAD = 1.7, BRK = 3.0;
+const DRV = (k) => 0.92 + mulberry(k * 131 + 7) * 0.34;
+const lookFor = (v) => 30 + v * HEAD + (v * v) / (2 * BRK); // m: how far ahead it must watch at speed v
+// the speed that still stops `room` m short of something (moving at vl along the way: then HEAD s behind it)
+const followV = (room, vl = 0) => {
+  if (room <= 0) return 0;
+  const q = vl * vl + 2 * BRK * (room - HEAD * vl);
+  return Math.min(vl + room * 0.7, q > 0 ? Math.sqrt(q) : 0);
+};
+// (Oct 29, the user: "some ppl should crash into you too ... like 1 in a 100"): a traffic car that comes up to the car
+// you drive on a road (from behind, or oncoming) rolls once per encounter: 1 in BAD_P is a bad driver who hits you
+const BAD_P = 0.01;
 
 // ------------------------------------------------------------------ other vehicles no car drives through
 // Things that are not road traffic but that cars must never drive through (the trains, the helicopter set down on a
@@ -185,7 +204,7 @@ export class Traffic {
     const collider = { x: 1e9, z: 1e9, hw: w / 2 + 0.05, hd: l / 2, rot: 0, soft: true, h, traffic: true };
     this.colliders.push(collider);
     return {
-      t, inst, g, collider, w, l, k, mode: 'road', road: null, s: 0, dir: 1, v: 0, vmax: 8.5 + Math.random() * 8,
+      t, inst, g, collider, w, l, k, mode: 'road', road: null, s: 0, dir: 1, v: 0, vmax: 8.5 + Math.random() * 8, drv: DRV(k),
       x: 0, z: 0, y: 0, yaw: 0, brake: 0, wait: 0, lot: null, bay: null, steer: 0, rev: false, path: null, pause: 0, next: null,
       wheelBase: Math.max(2.4, l * 0.6),
     };
@@ -333,6 +352,7 @@ export class Traffic {
         const far = Math.hypot(c.x - p.x, c.z - p.z) > SIM_R;
         if (this.enabled && !far) {
           const x0 = c.x, z0 = c.z, yaw0 = c.yaw;
+          this.encounter(c);
           this.step(c, Math.min(dt, 0.05));
           // the wheels: roll by the distance driven (backwards when reversing); the front ones steer with the turn
           const moved = Math.hypot(c.x - x0, c.z - z0);
@@ -440,18 +460,22 @@ export class Traffic {
     if (c.u > c.spath.L - 80) this.tourExtend(c);
     const T = c.spath, u = c.u;
     if (c.pause > 0) { c.pause -= dt; c.v = 0; c.brake = 1; return; }
-    // the bend ahead (the tightest within ~30 m): v <= sqrt(a_lat * R)
-    let vt = c.vmax;
+    // the road's speed limit there (bus/speedlimits.js, times this driver's factor), and the bends ahead: v <= sqrt(a_lat
+    // * R), braked for from far enough out at its speed
+    const SL = speedLimitAt(c.x, c.z);
+    let vt = Math.min(V_MAX, ((SL?.kmh ?? 50) / 3.6) * (c.drv || 1));
     const h = (q) => { const a = this.tourAt(q, _p, c), bx = a.x, bz = a.z, b = this.tourAt(q + 4, _q, c); return Math.atan2(b.x - bx, b.z - bz); };
-    for (let d = 0; d < 32; d += 8) { const k = Math.abs(wrapPi(h(u + d + 6) - h(u + d))) / 6; if (k > 1e-3) vt = Math.min(vt, Math.sqrt(2.6 / k) + d * 0.12); }
+    const reach = Math.min(140, 32 + (c.v * c.v) / 4);
+    for (let d = 0; d < reach; d += 8) { const k = Math.abs(wrapPi(h(u + d + 6) - h(u + d))) / 6; if (k > 1e-3) vt = Math.min(vt, Math.sqrt(2.8 / k + 2 * 2.4 * d)); }
     // any car ahead of it, going its way (the scenic cars are on paths of their own)
     const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw);
     for (const o of this.cars) {
       if (o === c || o.mode === 'gone' || o.mode === 'parked') continue;
       const dx = o.x - c.x, dz = o.z - c.z, al = dx * fx + dz * fz;
-      if (al <= 0 || al > 40 || Math.abs(dx * fz - dz * fx) > 2.4) continue;
-      if (Math.sin(o.yaw) * fx + Math.cos(o.yaw) * fz < 0.3 && o.mode === 'scenic') continue; // (oncoming, in its own lane)
-      vt = Math.min(vt, Math.max(0, (al - 11) * 0.45));
+      if (al <= 0 || al > Math.max(40, lookFor(c.v)) || Math.abs(dx * fz - dz * fx) > 2.4) continue;
+      const along = Math.sin(o.yaw) * fx + Math.cos(o.yaw) * fz;
+      if (along < 0.3 && o.mode === 'scenic') continue; // (oncoming, in its own lane)
+      vt = Math.min(vt, followV(al - 11, Math.max(0, along * o.v * (o.rev ? -1 : 1))));
     }
     // give way before a ring: someone on it (or about to be), within its quarter to the left
     for (const e of T.entries) {
@@ -473,10 +497,10 @@ export class Traffic {
     if (ZONES.length) vt = Math.min(vt, this.zoneLimit(c));
     // you, in its way (on foot or in a car)
     const pdx = this.player.pos.x - c.x, pdz = this.player.pos.z - c.z, al = pdx * fx + pdz * fz;
-    if (al > 0 && al < 18 && Math.abs(pdx * fz - pdz * fx) < 2.6) vt = Math.min(vt, Math.max(0, (al - 6) * 0.5));
+    if (al > 0 && al < Math.max(18, lookFor(c.v)) && Math.abs(pdx * fz - pdz * fx) < 2.6) vt = Math.min(vt, followV(al - 6));
     // the grade: slower up and down the steep bits
     c.brake = vt < c.v - 0.3 ? 1 : 0;
-    c.v = vt > c.v ? Math.min(vt, c.v + 1.6 * dt) : Math.max(vt, c.v - 4 * dt);
+    c.v = vt > c.v ? Math.min(vt, c.v + 1.8 * dt) : Math.max(vt, c.v - 5 * dt);
     const u1 = u + c.v * dt;
     for (const ps of T.pauses) if (u < ps && u1 >= ps) { c.pause = 15 + Math.random() * 30; c.v = 0; }
     for (const ex of T.exits) if (u < ex && u1 >= ex && !this.inSight(c.x, c.z)) { c.mode = 'gone'; c.g.visible = false; c.collider.x = 1e9; c.wait = 20 + Math.random() * 40; return; }
@@ -487,17 +511,17 @@ export class Traffic {
   // ---- on the road (as it was: following the lane line of the road itself)
   drive(c, dt) {
     const r = c.road, end = c.dir > 0 ? r.length : 0;
-    roadAt(r, c.s, _p); roadAt(r, clamp(c.s + c.dir * 14, 0, r.length), _q);
-    const turn = Math.abs(wrapPi(Math.atan2(_q.dx, _q.dz) - Math.atan2(_p.dx, _p.dz)));
-    let vt = Math.min(c.vmax, Math.sqrt(2.4 / Math.max(1e-4, turn / 14)));
-    vt *= 1 - clamp((Math.abs(_p.grade) - 0.07) * 3.2, 0, 0.45);
+    // the road's limit (times this driver's factor) and the bends ahead, braked for in time (bus/speedlimits.js)
+    let vt = roadTarget(r, c.s, c.dir, c.drv || 1);
     const toEnd = Math.abs(end - c.s);
     const J = c.nextJ !== undefined ? c.nextJ : (c.nextJ = this.pickJunction(c));
     const toJ = J ? (J.s - c.s) * c.dir : Infinity;
+    if (J) vt = Math.min(vt, Math.sqrt(2.6 * 2.6 + 2 * 2.4 * Math.max(0, toJ - TURN_LEAD))); // (braking for the turn from far enough out)
     if (J && toJ < 30) vt = Math.min(vt, 2.6 + Math.max(0, toJ - TURN_LEAD) * 0.3);
     // the end of a bus road is a bus stop (a dead end): no car goes in there, unless it turns off to a car park on the
     // way; it eases down and turns round (or, out of sight, leaves) well before the bus bay
     const toJ0 = J ? (J.s - c.s) * c.dir : Infinity, keepOut = !r.access && !(toJ0 <= toEnd + 0.5);
+    if (keepOut) vt = Math.min(vt, Math.sqrt(1.5 * 1.5 + 2 * 2.4 * Math.max(0, toEnd - END_KEEP)));
     if (keepOut && toEnd < END_KEEP + 45) vt = Math.min(vt, 1.5 + Math.max(0, toEnd - END_KEEP) * 0.3);
     if (keepOut && toEnd <= END_KEEP + 1) { this.deadEnd(c); return; }
     if (r.access && c.dir < 0) vt = Math.min(vt, 3.5 + toEnd * 0.15); // (slowing for the car park)
@@ -505,11 +529,12 @@ export class Traffic {
     // a crash or a car stopped on the road ahead: round it (into the other lane, or up to 1 m beyond the plowed edge)
     // when there's room and nothing beside the road there (guardrail, tree, wall); else it waits behind it
     c.passT = (c.passT || 0) - dt;
-    if (c.passT <= 0) { c.passT = 0.4; this.planPass(c); }
+    if (c.passT <= 0 && !c.bad) { c.passT = 0.4; this.planPass(c); }
+    if (c.bad) vt = this.badDrive(c, vt, dt); // (a bad driver: at you, 1 in 100)
     // (a lane change / swerve is steered: the body angled off the lane line (c.offQ, tan of the angle, at most 0.28),
     // the angle turning only as it drives (up to OFF_TURN per metre, lateral acceleration <= 1.8: standing, nothing
     // moves sideways), straightened out in time to arrive on the new line; it moves only where it points)
-    const off = c.off || 0, err = (c.offT || 0) - off, q = c.offQ || 0, k = Math.min(OFF_TURN, 1.8 / Math.max(1, c.v * c.v));
+    const off = c.off || 0, err = (c.offT || 0) - off, q = c.offQ || 0, k = Math.min(OFF_TURN, (c.bad?.go ? 3.2 : 1.8) / Math.max(1, c.v * c.v));
     const turnBy = k * c.v * dt, qMax = Math.min(0.28, Math.sqrt(2 * k * Math.abs(err))); // (k: per metre, gentler at speed)
     const qT = Math.abs(err) < 0.02 ? 0 : clamp(err * 0.5, -qMax, qMax);
     c.offQ = q + clamp(qT - q, -turnBy, turnBy);
@@ -517,7 +542,8 @@ export class Traffic {
     vt = Math.min(vt, this.clearance(c));
     const dv = vt - c.v;
     c.brake = dv < -0.5 ? clamp(-dv / 4, 0, 1) : 0;
-    c.v = Math.max(0, c.v + clamp(dv, -6 * dt, 2.2 * dt));
+    c.v = Math.min(V_MAX, Math.max(0, c.v + clamp(dv, -6 * dt, (c.v < 20 ? 2.4 : 1.6) * dt)));
+    if (c.bad?.go) c.brake = 1; // (skidding: brake lights on, hardly slowing)
     c.s = clamp(c.s + c.dir * c.v * dt, 0, r.length);
     c.off = (c.off || 0) + (c.offQ || 0) * c.v * dt; // (sideways only as far as it is angled: never crabbing)
     if (J && (J.s - c.s) * c.dir <= TURN_LEAD) {
@@ -543,6 +569,54 @@ export class Traffic {
     this.placeOnRoad(c, dt);
   }
 
+  // ---- bad drivers (1 in 100): a car on a road that comes up to the car you drive (from behind it, or oncoming)
+  // rolls once per encounter (again only after it has been 220 m away). Never when you stand still, are off the road
+  // (a car park) or on foot. From behind: it closes at 13-20 m/s more than you and doesn't brake for you; oncoming:
+  // it skids (brakes locked, ~25-35 km/h) across into your lane at where you were when it lost it. Telegraphed: brake
+  // lights, a wobble, a warning; you can dodge it. The hit is the usual bash (drive.js: damage, the other car knocked).
+  encounter(c) {
+    const d = this.you?.d;
+    if (!d || c.mode !== 'road' || !c.road || c.road.access) { if (c.bad) this.endBad(c); if (!d) c.met = false; return; }
+    const dx = d.x - c.x, dz = d.z - c.z, dist = Math.hypot(dx, dz);
+    if (dist > 220) { c.met = false; if (c.bad) this.endBad(c); return; }
+    if (c.met || dist > 110) return;
+    c.met = true; // (one roll per encounter, not per frame)
+    const vy = Math.hypot(d.vx || 0, d.vz || 0);
+    if (vy < 3 || laneDistance(d.x, d.z) > ROAD_HALF + 0.6 || ZONES.length) return;
+    if (Math.random() >= BAD_P) return;
+    const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw);
+    if (dx * fx + dz * fz < 30) return; // (you must be ahead of it)
+    const same = ((d.vx || 0) * fx + (d.vz || 0) * fz) / vy;
+    if (same > 0.6) c.bad = { kind: 'behind', dv: 13 + Math.random() * 7, t: 0, go: false, w: 0 };
+    else if (same < -0.6 && vy < 20) c.bad = { kind: 'oncoming', vS: 7 + Math.random() * 3, t: 0, go: false, w: 0 };
+  }
+  badDrive(c, vt, dt) {
+    const B = c.bad, d = this.you?.d;
+    if (!d) { this.endBad(c); return vt; }
+    B.t += dt;
+    const fx = Math.sin(c.yaw), fz = Math.cos(c.yaw), dx = d.x - c.x, dz = d.z - c.z, ahead = dx * fx + dz * fz;
+    const vy = (d.vx || 0) * fx + (d.vz || 0) * fz, sp = Math.hypot(d.vx || 0, d.vz || 0);
+    if (ahead < -6 || B.t > 16) { this.endBad(c); return vt; } // (past you, or it never got there: it recovers)
+    // where you are across its road (its lane line + offset), when it commits
+    const aim = () => {
+      roadAt(c.road, c.s, _p);
+      const rx = -_p.dz * c.dir, rz = _p.dx * c.dir, M = EDGE - c.w / 2;
+      return clamp((d.x - _p.x) * rx + (d.z - _p.z) * rz, -M, M) - LANE;
+    };
+    const warn = () => { try { this.you?.hud?.flash?.('Look out: a car is skidding toward you!', 'bad', 1800); } catch { /* (no HUD) */ } };
+    if (B.kind === 'behind') {
+      if (!B.go && sp < 2) { this.endBad(c); return vt; } // (you stopped before it lost it: it brakes as anyone would)
+      vt = Math.min(V_MAX, Math.max(0, vy) + B.dv);
+      if (!B.go && ahead < Math.max(28, B.dv * 2.4)) { B.go = true; B.w = aim(); warn(); }
+      if (B.go) c.offT = B.w + Math.sin(B.t * 5) * 0.35;
+    } else {
+      if (!B.go && ahead < Math.max(40, (c.v + Math.max(0, -vy)) * 2.8)) { B.go = true; B.w = aim(); warn(); }
+      if (B.go) { vt = Math.min(vt, B.vS); c.offT = B.w; }
+    }
+    return vt;
+  }
+  endBad(c) { c.bad = null; c.offT = 0; }
+
   pickJunction(c) {
     if (c.road.access || Math.random() > 0.45) return null;
     let best = null;
@@ -557,9 +631,11 @@ export class Traffic {
   clearance(c) {
     const s = c.rev ? -1 : 1, fx = Math.sin(c.yaw) * s, fz = Math.cos(c.yaw) * s;
     let lim = Infinity;
-    const check = (x, z, gap, stopAt) => {
+    // (far enough ahead to brake in time at its speed; the gap by followV: a time gap behind a moving one)
+    const look = lookFor(c.v);
+    const check = (x, z, gap, stopAt, vl = 0) => {
       const dx = x - c.x, dz = z - c.z, ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx);
-      if (ahead > 0 && ahead < gap && side < 3.2) lim = Math.min(lim, Math.max(0, (ahead - stopAt) * 0.7));
+      if (ahead > 0 && ahead < gap && side < 3.2) lim = Math.min(lim, followV(ahead - stopAt, Math.max(0, vl)));
     };
     // (a box: something by its footprint, so a car can pass beside it; in a car park (backing into / out of a bay
     // between parked cars) only a real overlap stops it: 0.3 m short of the footprint, not 2.5 m)
@@ -571,34 +647,43 @@ export class Traffic {
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > gap + hd || Math.abs(dz) > gap + hd) return;
       const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(yaw, hw, hd, fx, fz, _ext);
-      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, Math.max(0, (ahead - e.along - c.l / 2 - mm) * 0.7));
+      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, followV(ahead - e.along - c.l / 2 - mm));
     };
+    const gapW = Math.max(36, look); // (a wreck, a stopped car, the bus: seen from braking distance)
     // other cars: the moving ones by their line, a wreck / knocked car by its footprint (it may be passed)
+    const onRoad = c.mode === 'road' && c.road;
     for (const o of this.cars) {
       if (o === c || o.mode === 'gone' || o.mode === 'parked') continue;
-      if (o.mode === 'wreck' || o.mode === 'knocked') box(o.x, o.z, o.yaw, o.w / 2, o.l / 2, 36, mW); else check(o.x, o.z, 32, (c.l + o.l) / 2 + 3);
+      if (o.mode === 'wreck' || o.mode === 'knocked') { box(o.x, o.z, o.yaw, o.w / 2, o.l / 2, gapW, mW); continue; }
+      // the same road, the same way: by the distance along the road (round the bends), a time gap behind it
+      if (onRoad && o.mode === 'road' && o.road === c.road && o.dir === c.dir) {
+        const ds = (o.s - c.s) * c.dir;
+        if (ds > 0 && ds < look && Math.abs((o.off || 0) - (c.off || 0)) < 2.6) lim = Math.min(lim, followV(ds - (c.l + o.l) / 2 - 3, o.v));
+        continue;
+      }
+      const vl = (Math.sin(o.yaw) * fx + Math.cos(o.yaw) * fz) * o.v * (o.rev ? -1 : 1);
+      check(o.x, o.z, 32, (c.l + o.l) / 2 + 3, vl);
     }
     // parked cars, wrecks and shoved cars in the way (parking.js; the lay-by and bay cars are beside the lane)
     for (const e of this.parking?.cars || []) {
       const g = e.car.position;
-      if (e.driving || Math.abs(g.x - c.x) > 34 || Math.abs(g.z - c.z) > 34) continue;
+      if (e.driving || Math.abs(g.x - c.x) > gapW + 4 || Math.abs(g.z - c.z) > gapW + 4) continue;
       if (inLot && c.bay && Math.hypot(g.x - c.bay.x, g.z - c.bay.z) < 3.2) continue; // (the cars either side of its bay: the arc in / out clears them)
-      if (e.wrecked || e.astray) { _f.set(0, 0, 1).applyQuaternion(e.car.quaternion); box(g.x, g.z, Math.atan2(_f.x, _f.z), 1.0, (e.length || 4.6) / 2, 36, mW); } // (rolled: its heading, not rotation.y)
+      if (e.wrecked || e.astray) { _f.set(0, 0, 1).applyQuaternion(e.car.quaternion); box(g.x, g.z, Math.atan2(_f.x, _f.z), 1.0, (e.length || 4.6) / 2, gapW, mW); } // (rolled: its heading, not rotation.y)
       else box(g.x, g.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 30);
     }
     // the car you drive (its body, not just where you sit; stopped: by its footprint, it may be passed)
-    // (Oct 28, the user: "make it so other cars can crash into you": about one driver in ten isn't looking: on the
-    // road it never brakes for your car, and runs into it; the bash (drive.js) does the rest, both ways)
+    // (a bad driver (badDrive, 1 in 100 per encounter) doesn't brake for your car: it runs into it; the bash
+    // (drive.js) does the rest, both ways)
     const dv = this.you?.d;
-    c.careless ??= Math.random() < 0.1;
-    if (dv && !(c.careless && c.mode === 'road')) { if (Math.hypot(dv.vx || 0, dv.vz || 0) < 0.8) box(dv.x, dv.z, dv.yaw, dv.w / 2, dv.half, 32); else check(dv.x, dv.z, 32, (c.l + dv.half * 2) / 2 + 3); }
+    if (dv && !c.bad) { if (Math.hypot(dv.vx || 0, dv.vz || 0) < 0.8) box(dv.x, dv.z, dv.yaw, dv.w / 2, dv.half, gapW); else { const vl = (dv.vx || 0) * fx + (dv.vz || 0) * fz; check(dv.x, dv.z, vl > -1 ? look : 32, (c.l + dv.half * 2) / 2 + 3, vl); } }
     // the bus (its whole length: also when it stands across the way at a junction), the trains and a helicopter on
     // the road (trafficBlockers, at about the car's height)
     const line = this.skibus?.line, bus = line?.bus?.group;
-    if (bus?.visible) box(bus.position.x, bus.position.z, line.yaw || 0, BUS_HW, BUS_HD, 36);
-    for (const b of this.blk || []) if (b.y === undefined || Math.abs(b.y - c.y) < 5) box(b.x, b.z, b.yaw, b.hw, b.hd, 40);
+    if (bus?.visible) box(bus.position.x, bus.position.z, line.yaw || 0, BUS_HW, BUS_HD, gapW);
+    for (const b of this.blk || []) if (b.y === undefined || Math.abs(b.y - c.y) < 5) box(b.x, b.z, b.yaw, b.hw, b.hd, Math.max(40, look));
     const p = this.player.pos;
-    check(p.x, p.z, 26, c.l / 2 + 3);
+    if (!dv) check(p.x, p.z, Math.max(26, look), c.l / 2 + 3); // (you on foot; in a car: your car, above)
     return Math.min(lim, this.zoneLimit(c));
   }
 
@@ -624,15 +709,15 @@ export class Traffic {
       if (zone && zn !== zone) continue;
       if (c.x < zn.x0 - maxD - c.l || c.x > zn.x1 + maxD + c.l || c.z < zn.z0 - maxD - c.l || c.z > zn.z1 + maxD + c.l) continue;
       if (inZone(zn, c.x, c.z)) continue;
-      for (let d = 0; d <= maxD && d < best; d += 1.5) if (inZone(zn, this.aheadPt(c, c.l / 2 + d, _zp).x, _zp.z)) { best = d; break; }
+      for (let d = 0; d <= maxD && d < best; d += d < 48 ? 1.5 : 4) if (inZone(zn, this.aheadPt(c, c.l / 2 + d, _zp).x, _zp.z)) { best = d; break; }
     }
     return best;
   }
   zoneLimit(c) {
     let lim = Infinity;
     for (const zn of ZONES) {
-      const d = this.zoneAhead(c, zn.gap + 36, zn);
-      if (d < Infinity) lim = Math.min(lim, Math.max(0, (d - zn.gap) * 0.7));
+      const d = this.zoneAhead(c, zn.gap + Math.max(36, lookFor(c.v)), zn); // (from braking distance at its speed)
+      if (d < Infinity) lim = Math.min(lim, followV(d - zn.gap));
     }
     return lim;
   }
@@ -852,6 +937,7 @@ export class Traffic {
       w += (Math.random() < 0.5 ? -1 : 1) * Math.min(1.2, sp * 0.09);
     }
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
+    c.bad = null;
     c.mode = 'knocked'; c.path = null; c.rev = false; c.v = 0; c.brake = 1; c.pause = 0; c.nextJ = undefined;
     c.kvx = vx; c.kvz = vz; c.kw = clamp(w, -3, 3);
     c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null; c.wd = { x: c.x, z: c.z, t: 0 }; // (it rests where it stops: the 5-minute watchdog)
@@ -889,7 +975,7 @@ export class Traffic {
     c.kvx = 0; c.kvz = 0; c.kw = 0; c.sinkT = undefined;
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
     c.mode = 'gone'; c.wait = 1 + Math.random() * 4; c.g.visible = false; c.collider.x = 1e9; c.path = null; c.rev = false;
-    c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null; c.wd = null; c.link = null;
+    c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null; c.wd = null; c.link = null; c.bad = null; c.met = false;
   }
   // stuck for 5 minutes: taken off, and back parked in a free bay of a car park out of your sight (it drives off from
   // there later); none free: it comes back a moment later the usual way (spawn)

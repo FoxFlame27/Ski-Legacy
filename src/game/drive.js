@@ -19,6 +19,7 @@ import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } fr
 import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { speedLimitAt } from './bus/speedlimits.js';
 import { TyreTracks } from './tyretracks.js';
 import { addDent, applyDents, repairInstance } from './cardamage.js';
 import { setPlates } from './carconfig.js';
@@ -114,7 +115,13 @@ export class Drive {
 
   get active() { return !!this.d; }
   get speed() { return this.d ? Math.hypot(this.d.vx, this.d.vz) : 0; }
-  get label() { const d = this.d; if (!d) return ''; const dm = Math.round(d.e.damage || 0); return `${d.spec.label} · ${d.gear}` + (dm > 0 ? ` · car damage ${dm}%` : ''); }
+  get label() {
+    const d = this.d; if (!d) return ''; const dm = Math.round(d.e.damage || 0);
+    // (the speed limit of the road you're on: the signs', bus/speedlimits.js)
+    let lim = '';
+    try { const L = speedLimitAt(d.x, d.z, ROAD_HALF + 0.5); if (L) lim = ` · limit ${L.kmh} km/h`; } catch { /* (no roads) */ }
+    return `${d.spec.label} · ${d.gear}${lim}` + (dm > 0 ? ` · car damage ${dm}%` : '');
+  }
 
   // ------------------------------------------------------------------ getting in
   /** E beside a parked car (within ~1.6 m of its body): { label: 'Drive BMW X3', act } or null. */

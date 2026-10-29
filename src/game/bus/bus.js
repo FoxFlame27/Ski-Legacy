@@ -13,6 +13,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { busRoads, roadAt, ROAD_HALF, roadsideBlocked, laneDistance } from './roads.js';
 import { transition } from '../../ui/transition.js';
 import { trafficBlockers } from '../traffic.js';
+import { buildRoadSigns } from './roadsigns.js'; // speed limit and warning signs along the roads
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
 
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -858,6 +859,9 @@ export class BusLine {
     this.group.name = 'bus-roads';
     if (busRoads.roads.length) buildRoadMeshes(this.group, colliders); // (+ the guardrails' colliders)
     if (busRoads.roads.length) { try { buildScenicProps(this.group, { colliders, models }); } catch (e) { console.warn('scenic props', e); } }
+    // speed limit and warning signs (roadsigns.js; the limits are the traffic's, speedlimits.js), after the scenic
+    // props so they never stand on a give-way sign or a bench
+    if (busRoads.roads.length) { try { busRoads.signs = buildRoadSigns(this.group, colliders).length; } catch (e) { console.warn('road signs', e); } }
     scene.add(this.group);
     this.bus = buildBus(models, makeRig);
     scene.add(this.bus.group);

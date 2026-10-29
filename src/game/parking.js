@@ -1,8 +1,8 @@
 // Car parks: a big one by Legacy Village, a medium one at a gondola base, a small one at the trailhead (planned with
 // their access roads in game/bus/roads.js, which also flattens them into the terrain and ploughs a berm round their
 // edges). Here: the surface (packed snow over asphalt), crisp painted bays (real geometry, sharp at any distance),
-// lamp posts that light up at night, a pay machine and a P sign at the entrance (Meshy props), and parked cars
-// backed into the bays (centred, nose out toward the aisle).
+// lamp posts that light up at night, a pay machine and a P sign at the entrance (Meshy props), and parked cars in
+// the bays (centred; about half backed in, nose out toward the aisle, the rest driven in nose first).
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
@@ -121,7 +121,9 @@ export class ParkingLots {
             // (a weighted draw, cars.js CAR_WEIGHT: the supercars ~1 bay in 300, the RS6 / e-tron GT / GLS ~1 in 25)
             const name = pickCar(kindNames, rnd()), length = lenOf.get(name);
             const paint = colours[Math.floor(rnd() * colours.length)];
-            try { this.parkCar(lot, models[name], colliders, cameraBlockers, { length, bay, paint, name }); n++; } catch (e) { console.warn('parked car', name, e); }
+            // (Oct 29, the user: "not only parking backwards ... also facing forwards"): about half nose in
+            const noseIn = rnd() < 0.5;
+            try { this.parkCar(lot, models[name], colliders, cameraBlockers, { length, bay, paint, name, noseIn }); n++; } catch (e) { console.warn('parked car', name, e); }
           }
         }
       } catch (e) { console.warn('parked cars', e); }
@@ -222,13 +224,13 @@ export class ParkingLots {
   // The BMW (a detailed model: 110 meshes, transmission glass): glass made plain tinted see-through (transmission
   // costs a whole extra render pass), lights off, the meshes merged per material (a few draw calls), a box collider
   // and a camera blocker. Backed into its bay: centred in it, the nose out toward the aisle (lotBays()).
-  parkCar(L, gltf, colliders, cameraBlockers, { length = 4.7, bay = null, paint = null, name = '' } = {}) {
+  parkCar(L, gltf, colliders, cameraBlockers, { length = 4.7, bay = null, paint = null, name = '', noseIn = false } = {}) {
     if (!bay) return null;
     bay.taken = true;
     const inst = carInstance(carTemplate(gltf, length, name), { paint }), car = inst.group; // (shared, merged per material, glass tinted)
     try { setPlates(inst, carTemplate(gltf, length, name)); } catch { /* (no plate spots on this model) */ }
     car.name = 'parked-car';
-    const yaw = Math.atan2(bay.hx, bay.hz);
+    const yaw = Math.atan2(bay.hx, bay.hz) + (noseIn ? Math.PI : 0); // (backed in: nose out to the aisle; or driven in nose first)
     car.position.set(bay.x, world.height(bay.x, bay.z) + 0.03, bay.z);
     car.rotation.y = yaw;
     this.group.add(car);

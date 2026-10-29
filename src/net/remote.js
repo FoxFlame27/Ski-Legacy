@@ -10,6 +10,7 @@
 // No allocations per frame: snapshot slots, vectors and the rig state objects are all reused.
 import * as THREE from 'three';
 import { R, ST, F } from './protocol.js';
+import { twoBone } from '../game/carpeople.js';
 
 const RING = 16;              // snapshots kept per player
 const DELAY = 120;            // ms of interpolation buffer (at least; more when rows arrive later: Remote.delay)
@@ -285,6 +286,7 @@ export class RemotePlayers {
     if (d < ANIM_NEAR || r.animAcc > (d < ANIM_NEAR * 3 ? 0.06 : 0.15)) {
       rig.update(r.animAcc, st);
       r.animAcc = 0;
+      if (inVeh && r.vehK === 'car') carLegs(rig); // (the bench 'sit' pose hangs the legs straight down: through the car floor)
     }
     if (r.state === ST.ski && d < 120 && this.o.fx) {
       const fi = r.fxInfo;
@@ -294,4 +296,20 @@ export class RemotePlayers {
   }
 
   dispose() { this.clear(); this.o.vehicles?.dispose(); }
+}
+
+// a car seat, not a bench: the legs stretched forward to the footwell (knees up, feet on the floor ahead), as
+// drive.js seats you (placeRig) and carpeople.js seats the traffic's people
+const _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
+function carLegs(rig) {
+  const b = rig.b;
+  if (!b?.hips || !b.lUp || !b.rUp) return;
+  const q = rig.root.quaternion;
+  rig.root.updateMatrixWorld(true);
+  _hip.setFromMatrixPosition(b.hips.matrixWorld);
+  for (const [side, up, leg, foot] of [[1, b.lUp, b.lLeg, b.lFoot], [-1, b.rUp, b.rLeg, b.rFoot]]) {
+    _tgt.set(side * 0.14, -0.26, 0.74).applyQuaternion(q).add(_hip);
+    _pole.set(side * 0.15, 1, 0.5).normalize().applyQuaternion(q);
+    try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
+  }
 }

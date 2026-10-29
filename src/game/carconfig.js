@@ -124,8 +124,9 @@ export function plateTexture(text) {
 //             its own US plate on a pad)
 //  e-tron GT  (a concept) front: the band under the grille (0.37-0.53). rear: the bumper's panel between its lips
 //             (0.61-0.79, 15 deg; a blank plate there)
-//  GLS        front: on its bracket over the lower intake (the model's own plate face: 0.509-0.618, z 2.60). rear: the
-//             band of bumper between the crease and the trim strip (0.645-0.775)
+//  GLS        front: on its bracket over the lower intake (the model's own plate face: 0.509-0.618, z 2.60). rear: high
+//             on the tailgate as on the real X167: the flat panel between the tail lights (0.93-1.195, leaning back
+//             14 deg; the dark strip under the star above it), level with the lamps' lower half
 const PLATE_SPOT = {
   car_bmw_x3: { f: [0.534, 0], r: [0.965, 15] },
   car_audi_rs6: { f: [0.48, 8], r: [0.80, 14] },
@@ -136,7 +137,7 @@ const PLATE_SPOT = {
   car_lamborghini_huracan: { f: [0.30, 0], r: [0.583, 4] },
   car_toyota_gr_yaris: { f: [0.473, 0], r: [0.80, 18] },
   car_audi_etron_gt: { f: [0.45, 0], r: [0.70, 15] },
-  car_mercedes_gls: { f: [0.5635, 0, 2.6], r: [0.96, 10] }, // (rear: on the tailgate between the lights, under the star; Oct 29, the user)
+  car_mercedes_gls: { f: [0.5635, 0, 2.6], r: [1.11, 14] }, // (rear: on the tailgate between the lights, under the star; Oct 29, the user: "way higher like real gls models")
 };
 export const PLATE_W = 0.52, PLATE_H = 0.11; // EU plate, 520 x 110 mm (the models are at their real size)
 const plateModel = (t) => (t.name || '').replace(/_full$/, '');

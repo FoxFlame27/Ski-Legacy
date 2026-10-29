@@ -446,6 +446,91 @@ function dropPlates(groups, model) {
     if (out.length) groups.set(mat, out); else groups.delete(mat);
   }
 }
+// The badges that are chrome on the real car but came in dark (the GLS's three-pointed stars: on the tailgate in the
+// dash palette, black; in the grille the star in the trim palette's black and its ring in the dash-wood grey; on the
+// steering wheel's hub, the hub's own gloss black): split off into a chrome of their own. Per model: the material
+// (name, or glass: the see-through ones), box (fitted frame: x0, x1, y0, y1, z0, z1), optionally the least width (x)
+// and triangle count of a piece, and the look (chrome unless said): the connected pieces (by index) lying wholly in
+// the box take it (disc: [x, y, r, rMax] instead: the triangles facing out of the car's end with their centres in
+// the box and within r of x, y, their corners within rMax). Never lamps: split after the lamps, and never lit
+// (Oct 29, the user: "make the mercedes star on the boot, steering wheel and front on the nose of the car silver")
+//  - tailgate: its star and ring (gls_dash), over the plate; the paint round them stays
+//  - grille: the star (gls_trim) and its ring (gls_dash_wood: the only piece there 20 cm across). The star sits
+//    under a smooth cover (the radar's, as on the real car), on a disc: as the real car's, the cover clear (it was
+//    the dark tinted glass, which greyed the star) and the disc gloss black (it was a light grey: the silver star
+//    on it hardly showed)
+//  - steering wheel (before the wheel is split off: it turns with it): the ring and star on the hub (gls_trim, pieces
+//    of 12 triangles and up; the hub's face inside the ring is loose triangles of its own: it stays black)
+const BADGES = {
+  car_mercedes_gls: [
+    { mat: /^gls_dash$/, box: [-0.06, 0.06, 1.235, 1.335, -2.56, -2.44] },
+    { mat: /^gls_trim$/, box: [-0.095, 0.095, 0.785, 0.955, 2.54, 2.6] },
+    { mat: /^gls_dash_wood$/, box: [-0.125, 0.13, 0.73, 0.98, 2.44, 2.58], w: 0.2 },
+    { mat: /^gls_dash_wood$/, box: [-0.1, 0.1, 0.76, 0.98, 2.545, 2.566], disc: [0.003, 0.849, 0.0965, 0.11], look: 'black' },
+    { glass: true, box: [-0.1, 0.11, 0.75, 0.95, 2.54, 2.58], look: 'clear' },
+    { mat: /^gls_trim$/, box: [0.355, 0.43, 1.156, 1.226, 0.525, 0.57], k: 12 },
+  ],
+};
+const badgeMats = {};
+const BADGE_LOOK = {
+  chrome: () => new THREE.MeshStandardMaterial({ name: 'badge_chrome', color: 0xdfe2e6, metalness: 1, roughness: 0.2 }),
+  black: () => new THREE.MeshStandardMaterial({ name: 'badge_black', color: 0x060708, metalness: 0, roughness: 0.15 }),
+  clear: () => new THREE.MeshStandardMaterial({ name: 'badge_cover', color: 0xdde3ea, transparent: true, opacity: 0.12, roughness: 0.03, metalness: 0.1, depthWrite: false }),
+};
+function splitBadges(groups, model) {
+  const spec = BADGES[model];
+  if (!spec) return;
+  const out = new Map(); // look -> geometries
+  for (const [mat, geos] of [...groups]) {
+    const boxes = spec.filter((s) => (s.glass ? mat.transparent : !mat.transparent && s.mat.test(mat.name || '')));
+    if (!boxes.length) continue;
+    const rest = [];
+    for (const g of geos) {
+      const P = g.attributes.position, I = g.index.array, n = P.count;
+      const par = new Int32Array(n).map((_, i) => i), find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+      for (let i = 0; i < I.length; i += 3) { const a = find(I[i]); par[find(I[i + 1])] = a; par[find(I[i + 2])] = a; }
+      const box = new Map(), tris = new Map(); // root -> its bounds; root -> its triangle count
+      for (let i = 0; i < n; i++) {
+        const r = find(i), x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+        let b = box.get(r); if (!b) box.set(r, (b = [x, x, y, y, z, z]));
+        b[0] = Math.min(b[0], x); b[1] = Math.max(b[1], x); b[2] = Math.min(b[2], y); b[3] = Math.max(b[3], y); b[4] = Math.min(b[4], z); b[5] = Math.max(b[5], z);
+      }
+      for (let i = 0; i < I.length; i += 3) { const r = find(I[i]); tris.set(r, (tris.get(r) || 0) + 1); }
+      const lookOf = new Map();
+      for (const [r, b] of box) {
+        const s = boxes.find(({ box: B, w = 0, k = 0, disc }) => !disc && b[0] >= B[0] && b[1] <= B[1] && b[2] >= B[2] && b[3] <= B[3] && b[4] >= B[4] && b[5] <= B[5] && b[1] - b[0] >= w && tris.get(r) >= k);
+        if (s) lookOf.set(r, s.look || 'chrome');
+      }
+      const discs = boxes.filter((s) => s.disc), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e = new THREE.Vector3(), f = new THREE.Vector3();
+      const triLook = (i) => {
+        a.fromBufferAttribute(P, I[i]); b.fromBufferAttribute(P, I[i + 1]); c.fromBufferAttribute(P, I[i + 2]);
+        const x = (a.x + b.x + c.x) / 3, y = (a.y + b.y + c.y) / 3, z = (a.z + b.z + c.z) / 3;
+        const r = (D) => Math.max(Math.hypot(a.x - D[0], a.y - D[1]), Math.hypot(b.x - D[0], b.y - D[1]), Math.hypot(c.x - D[0], c.y - D[1]));
+        const s = discs.find(({ box: B, disc: D }) => x >= B[0] && x <= B[1] && y >= B[2] && y <= B[3] && z >= B[4] && z <= B[5] && Math.hypot(x - D[0], y - D[1]) < D[2] && r(D) < D[3] && e.copy(b).sub(a).cross(f.copy(c).sub(a)).normalize().z * Math.sign(B[4] + B[5]) > 0.2);
+        return s ? s.look || 'chrome' : null;
+      };
+      if (!lookOf.size && !discs.length) { rest.push(g); continue; }
+      const keep = [], by = new Map();
+      for (let i = 0; i < I.length; i += 3) {
+        const look = lookOf.get(find(I[i])) || (discs.length ? triLook(i) : null);
+        if (!look) { keep.push(I[i], I[i + 1], I[i + 2]); continue; }
+        if (!by.has(look)) by.set(look, []);
+        by.get(look).push(I[i], I[i + 1], I[i + 2]);
+      }
+      if (!by.size) { rest.push(g); continue; }
+      for (const [look, tri] of by) {
+        const sub = compact(g, tri, null); sub.userData.label = `${g.userData.label || ''} badge`;
+        // (the black disc: a flat face, its normals straight out (its facets lean every way: glossy, they caught the
+        // sky in streaks))
+        if (look === 'black') { const N = sub.attributes.normal, sz = Math.sign(sub.attributes.position.getZ(0)); for (let i = 0; i < N.count; i++) N.setXYZ(i, 0, 0, sz); }
+        if (!out.has(look)) out.set(look, []); out.get(look).push(sub);
+      }
+      if (keep.length) { const sub = compact(g, keep, null); sub.userData.label = g.userData.label; rest.push(sub); }
+    }
+    if (rest.length) groups.set(mat, rest); else groups.delete(mat);
+  }
+  for (const [look, geos] of out) groups.set((badgeMats[look] ||= BADGE_LOOK[look]()), geos);
+}
 // The body paint: the material the paint colour tints (cars with no material of their own called *paint*: the Dacia's
 // body is UV_body, its paint baked orange into the shared atlas: neutralised to a light grey in a copy of its own,
 // neutralPaint, so any colour multiplies cleanly; the Dacia's own orange is then its material's colour)
@@ -781,6 +866,7 @@ export function carTemplate(gltf, length, name = '') {
     }
   });
   dropPlates(groups, model);
+  try { splitBadges(groups, model); } catch (e) { console.warn('badges', name, e); }
   const parts = [];
   for (const [material, geos] of groups) {
     const geometry = mergeGeometries(geos, false);

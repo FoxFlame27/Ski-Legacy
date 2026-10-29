@@ -14,6 +14,7 @@ import { fitModel, loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye } from './cars.js';
 import { dressCar, setPlates } from './carconfig.js';
 import { LAYOUT, buildShell, stairY, setDoors, ceilingAt } from './carrentalshell.js';
+import { claimPortal, dropPortal } from './liveportal.js';
 // the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 // where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
@@ -122,16 +123,18 @@ export class CarRentalRoom {
     if (this.portalRT) { this.portalRT.dispose(); this.portalRT = null; }
     this.portalMat.uniforms.tView.value = null;
     this.portalMat.uniforms.uHas.value = 0;
+    dropPortal(this);
   }
   // Render the world from where your camera would be if the hall were the real one (only while a window is in view);
   // the world's shadows are refreshed every few seconds, not every frame.
   renderPortal() {
     const o = this.world, r = this.renderer;
-    if (!o || !r) return;
+    if (!o || !r || this.portalOff) return; // (portalOff: switched off for this session after slow frames, as the chalets')
     const cam = this.camera, meshes = this.portalMeshes();
     cam.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     if (!meshes.some((m) => _frustum.intersectsBox(_box.setFromObject(m)))) return;
+    claimPortal(this); // (one live window view at a time: game/liveportal.js)
     const size = r.getDrawingBufferSize(_size);
     const k = Math.min(1, 1800 / Math.max(1, size.x));
     const w = Math.max(64, Math.round(size.x * k)), h = Math.max(64, Math.round(size.y * k));
@@ -154,10 +157,15 @@ export class CarRentalRoom {
     r.shadowMap.needsUpdate = now - this.lastShadow > 3000;
     if (r.shadowMap.needsUpdate) this.lastShadow = now;
     try {
+      const t0 = performance.now();
       r.setRenderTarget(this.portalRT);
       r.clear();
       r.render(o.scene, pc);
       this.portalMat.uniforms.uHas.value = 1;
+      // a slow machine: the view out costing over ~45 ms again and again switches it off (a soft sky instead)
+      const ms = performance.now() - t0;
+      this.portalSlow = ms > 45 ? (this.portalSlow || 0) + 1 : Math.max(0, (this.portalSlow || 0) - 1);
+      if (this.portalSlow > 6) { this.portalOff = true; this.portalMat.uniforms.uHas.value = 0; console.warn('Autohaus windows: live view off (slow)'); }
     } catch (e) {
       console.warn('Car rental window view failed', e);
       this.world = null;

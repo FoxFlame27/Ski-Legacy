@@ -27,6 +27,7 @@ import { buildPrisonOutside, polizeiSign, drawBadge } from './prisonoutside.js';
 import { policeModelReady } from './police.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
+import { LivePortal } from './liveportal.js';
 
 export const MAX_SENTENCE = 300; // s (the server's limit too)
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0), R = 0.26; // eye height, the walker's radius
@@ -63,6 +64,11 @@ export class PrisonRoom {
     addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); });
     this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3(); this.yaw = 0; this.pitch = 0;
     this.bounds = null; this.obstacles = []; this.flicker = null; this.t = 0;
+    // the windows (the cells' barred ones, the office's, the front door's pane): the real world outside, rendered live
+    // from where the station stands (game/liveportal.js; Prison.buildOutside gives it the world and the frames)
+    this.renderer = renderer;
+    this.portal = new LivePortal({ name: 'Prison' });
+    this.frames = null;
     try {
       const pmrem = new THREE.PMREMGenerator(renderer);
       this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
@@ -182,11 +188,9 @@ export class PrisonRoom {
       for (const y of [0.35, 1.8]) bands.push([dx0 - 0.03, bars, y, 0.07, 0.14, 0.09]); // (hinges)
       this.doors.push({ x: (dx0 + dx1) / 2, z: bars });
     }
-    // the small high windows at the back of each cell (night sky blue, a few bars)
-    const winMat = new THREE.MeshStandardMaterial({ color: 0x9fb8d6, emissive: 0x7fa0c8, emissiveIntensity: 0.9, roughness: 0.3 });
-    this.winMat = winMat;
+    // the small high windows at the back of each cell (the live view out, behind a few bars)
     for (const cx of CELLS) {
-      const w = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.45), winMat); w.position.set(cx, 2.55, z0 + 0.012); S.add(w);
+      const w = this.portal.add(new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.45))); w.position.set(cx, 2.55, z0 + 0.012); S.add(w);
       for (let x = cx - 0.42; x <= cx + 0.43; x += 0.14) rods.push([x, z0 + 0.05, 2.32, 2.78, 0.014]);
       bands.push([cx, z0 + 0.05, 2.33, 1.04, 0.05, 0.04], [cx, z0 + 0.05, 2.78, 1.04, 0.05, 0.04]);
     }
@@ -372,9 +376,8 @@ export class PrisonRoom {
     });
     add(new THREE.BoxGeometry(2.3, 1.26, 0.04), new THREE.MeshStandardMaterial({ color: 0x5a3a20, roughness: 0.7 }), 11.3, 1.85, F.z1 - 0.03, 0, false);
     add(new THREE.PlaneGeometry(2.2, 1.2), new THREE.MeshStandardMaterial({ map: posters, roughness: 0.85 }), 11.3, 1.85, F.z1 - 0.055, Math.PI, false);
-    this.viewMat = M.winIn.clone();
     for (const x of [14.7]) {
-      add(new THREE.PlaneGeometry(1.3, 1.25), this.viewMat, x, 1.95, F.z1 - 0.02, Math.PI, false);
+      this.portal.add(add(new THREE.PlaneGeometry(1.3, 1.25), null, x, 1.95, F.z1 - 0.02, Math.PI, false)); // (the live view out)
       box(1.45, 0.08, 0.1, M.larchIn, x, 2.6, F.z1 - 0.05); box(1.5, 0.06, 0.24, oak, x, 1.3, F.z1 - 0.1);
       box(0.06, 1.3, 0.1, M.larchIn, x - 0.7, 1.95, F.z1 - 0.05); box(0.06, 1.3, 0.1, M.larchIn, x + 0.7, 1.95, F.z1 - 0.05); box(0.05, 1.25, 0.06, M.larchIn, x, 1.95, F.z1 - 0.05);
     }
@@ -382,7 +385,7 @@ export class PrisonRoom {
     { const door = new THREE.Group(), dm = new THREE.MeshStandardMaterial({ color: 0x6b4426, roughness: 0.55 });
       const leaf = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.2, 0.06), dm); leaf.position.y = 1.1; door.add(leaf);
       for (const [w, h, x, y] of [[0.1, 2.32, -0.6, 1.16], [0.1, 2.32, 0.6, 1.16], [1.3, 0.1, 0, 2.27]]) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), M.glulam); m.position.set(x, y, 0); door.add(m); }
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.8), this.viewMat); pane.position.set(0, 1.55, 0.032); door.add(pane);
+      const pane = this.portal.add(new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.8))); pane.position.set(0, 1.55, 0.032); door.add(pane);
       const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.05), brass); handle.position.set(0.42, 1.05, 0.06); door.add(handle);
       const exitSign = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.2, 0.06), new THREE.MeshBasicMaterial({ map: tex(320, 104, (g, w, h) => {
         g.fillStyle = '#0f8a3c'; g.fillRect(0, 0, w, h); g.fillStyle = '#fff'; g.font = 'bold 56px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('AUSGANG', w / 2, h / 2 + 3);
@@ -508,6 +511,23 @@ export class PrisonRoom {
     void bars; void x1;
   }
 
+  /**
+   * Where the station stands outdoors: { scene, cells, office, hide }. cells / office: Object3Ds in the outdoor house
+   * whose local frame is this room's frame for that wing (the cell block looks out of the house's front, the cells'
+   * barred windows over the forecourt; the office's door is the front door, its window the left side's).
+   */
+  setWorld(o) {
+    this.frames = o && o.scene && o.cells && o.office ? { cells: o.cells, office: o.office } : null;
+    this.portal.setWorld(this.frames ? o : null);
+  }
+  // the live view out of whichever wing you are in (the gate between them at x FRONT.x0)
+  renderPortal() {
+    if (!this.frames) return;
+    this.camera.updateMatrixWorld();
+    this.portal.render(this.renderer, this.camera, this.camera.position.x < FRONT.x0 ? this.frames.cells : this.frames.office);
+  }
+  releasePortal() { this.portal.releasePortal(); }
+
   /** You in the room: role 'jailed' (in cell `cell`) or 'visitor' (in at the exit door). */
   place(role, cell = 1) {
     this.role = role; this.cell = cell;
@@ -556,14 +576,12 @@ export class PrisonRoom {
     this.camera.position.set(this.pos.x, EYE + bob, this.pos.z);
     const dir = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), Math.cos(this.yaw) * Math.cos(this.pitch));
     this.camera.lookAt(this.camera.position.clone().add(dir));
-    // the flickering tube; the window: night blue after dark, pale daylight by day
+    // the flickering tube
     if (this.flicker) {
       const f = Math.sin(this.t * 37) > 0.97 || (this.t % 7 < 0.18 && Math.sin(this.t * 83) > 0) ? 0.25 : 1;
       this.flicker.mat.emissiveIntensity = 2.2 * f; this.flicker.L.intensity = this.flicker.I * f;
     }
-    const n = nightUniform.value || 0;
-    this.winMat.emissive.setRGB(0.5 - 0.4 * n, 0.63 - 0.45 * n, 0.78 - 0.4 * n);
-    if (this.viewMat) this.viewMat.color.setRGB(1 - 0.82 * n, 1 - 0.78 * n, 1 - 0.6 * n); // (the snowy view out: dusk, night)
+    this.portal.setDay(1 - (nightUniform.value || 0)); // (the soft sky until the live view is up)
     if (this.plaqueMat) this.plaqueMat.emissiveIntensity = 0.12;
     if (this.crestMat) this.crestMat.emissiveIntensity = 0.35;
     if (this.clock) {
@@ -577,6 +595,7 @@ export class PrisonRoom {
       this.guardYaw += Math.atan2(Math.sin(want - this.guardYaw), Math.cos(want - this.guardYaw)) * (1 - Math.exp(-dt * 3));
       try { this.guard.update(dt, { mode: 'idle', heading: this.guardYaw, speed: 0, crouch: 0, lean: 0, plow: 0, normal: UP }); } catch { /* (decor) */ }
     }
+    this.renderPortal();
     if (!input) return null;
     // what's in front of you: the way out (visitors), the cell door (prisoners)
     if (this.role === 'visitor') {
@@ -618,6 +637,21 @@ export class Prison {
     this.outside3d = buildPrisonOutside(this, this.H);
     this.group = this.outside3d.group;
     this.door = this.outside3d.door;
+    // the windows' live view: the room's two wings carried onto the house out here (prisonoutside.js's house frame:
+    // x along the front, +z out of the front toward the road, y up from the house's floor)
+    const house = this.outside3d.house;
+    if (house) {
+      const cells = new THREE.Object3D(), office = new THREE.Object3D();
+      // the cell block turned round: its back wall (z -4, the barred windows) on the front face (z +5), the cells
+      // under the front's barred windows on the right (x 7.5 / 3.9 / 0.3)
+      cells.position.set(3.9, 0, 1.0); cells.rotation.y = Math.PI;
+      // the office a quarter turn: its front door (x 17, z 2.6) on the house's door (x -3.2, z 5), its window wall
+      // (z 5.6) toward the left side
+      office.position.set(-0.6, 0, -12.0); office.rotation.y = -Math.PI / 2;
+      house.add(cells, office);
+      house.updateMatrixWorld(true);
+      this.room.setWorld({ scene: this.scene, cells, office, hide: () => [house, this.player?.rig?.root, this.player?.rig?.gear] });
+    }
   }
 
   // ------------------------------------------------------------ the clock (the server's in multiplayer)
@@ -670,7 +704,7 @@ export class Prison {
     this.inside = on;
     const post = this.getPost();
     if (on) post.setView(this.room.scene, this.room.camera);
-    else post.setView(this.scene, this.camera);
+    else { post.setView(this.scene, this.camera); this.room.releasePortal(); } // (out: the live window view stops, its render target freed)
     const ch = document.getElementById('crosshair'); if (ch) ch.hidden = !on;
   }
   /** Out of the door into the village (a fade), the sentence served. */
@@ -763,6 +797,7 @@ export class Prison {
    *  server profile when you play on). */
   reset() {
     if (this.inside) { this.show(false); this.player.frozen = false; }
+    this.room.releasePortal();
     this.inside = false; this.role = null; this.active = false; this.busy = false; this.target = null;
   }
 

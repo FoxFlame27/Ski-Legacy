@@ -47,6 +47,7 @@ import {
   HX, IX, IZ, T, G, GC, FL, COLLAR, DORMER, IT, STAIR, HOLE, DOOR, ROOMS, EXTERIOR, INTERIOR, RAILS,
   ceilingUp, ceilingAt, stairY, exteriorLine,
 } from './chaletplan.js';
+import { claimPortal, dropPortal } from './liveportal.js';
 
 const EYE = 1.62, R0 = 0.28, WALL_OUT = T - 0.1; // (the exterior walls' outward depth: 10 cm inside the model's skin)
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -283,6 +284,7 @@ export class ChaletRoom {
     if (this.portalRT) { this.portalRT.dispose(); this.portalRT = null; }
     this.portalMat.uniforms.tView.value = null;
     this.portalMat.uniforms.uHas.value = 0;
+    dropPortal(this);
   }
   renderPortal() {
     // (off: drawing the whole world a second time through the windows froze the game on going in, on the user's Mac;
@@ -297,6 +299,7 @@ export class ChaletRoom {
     // (every other frame: the world drawn a second time is the biggest cost in here)
     this.portalTick = (this.portalTick || 0) + 1;
     if (this.portalMat.uniforms.uHas.value && this.portalTick % 3) return; // (every third frame: a view out of a window needs no more)
+    claimPortal(this); // (one live window view at a time: game/liveportal.js)
     const size = r.getDrawingBufferSize(_size);
     // half resolution, at most 1024 px on the long side (a blurred view out of a window needs no more)
     const k = Math.min(0.4, 768 / Math.max(1, size.x, size.y));

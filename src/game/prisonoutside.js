@@ -97,7 +97,7 @@ export function policeLamp() {
 
 /**
  * Build the station into the scene. P: the Prison (scene, models, colliders, cameraBlockers), L: its lot.
- * Returns { group, door: { x, z, yaw }, update(n, t) } (n: 0 day .. 1 night).
+ * Returns { group, house, door: { x, z, yaw }, update(n, t) } (n: 0 day .. 1 night).
  */
 export function buildPrisonOutside(P, L) {
   const M = shellMaterials(), models = P.models || {};
@@ -359,6 +359,7 @@ export function buildPrisonOutside(P, L) {
   const d = w(DX, FRONT + 2.6);
   return {
     group: g, colliders,
+    house, // (the house itself: its frame is the interior's windows' frame, prison.js; hidden in their view)
     door: { x: d.x, z: d.z, yaw: yaw0 },
     update(n, t) {
       sign.userData.faceMaterial.emissiveIntensity = 0.06 + 0.85 * n;

@@ -711,6 +711,7 @@ export class GameServer {
   //   /admin/give?name=Sammy&amount=100     money to a player (negative takes it away); online, they see it at once
   //   /admin/giveall?amount=200               money to every player
   //   /admin/tp?name=Sammy&to=Rafael          Sammy next to Rafael (both online, same world)
+  //   /admin/kick?name=Sammy                  Sammy off the server (back to his menu; he can join again)
   //   /admin/players                         every account: name, money, online
   admin(req, res) {
     const out = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o) + '\n'); };
@@ -745,6 +746,16 @@ export class GameServer {
       a.send('adminTp', { x: r[2], y: r[3], z: r[4], yaw: r[5], to: b.name });
       this.log(`[admin] teleport ${a.name} -> ${b.name}`);
       return out(200, { ok: true, moved: a.name, to: b.name, at: [r[2], r[3], r[4]] });
+    }
+    if (u.pathname === '/admin/kick') { // /admin/kick?name=Sammy: off the server now (no automatic reconnect; they can rejoin)
+      const c = this.online.get(nameKey(u.searchParams.get('name') || ''));
+      if (!c) return out(404, { ok: false, error: `${u.searchParams.get('name')} is not online` });
+      c.kicked = true;
+      try { c.send('bye', { reason: 'kicked' }); } catch { /* closed */ }
+      try { c.ws?.close(4001, 'kicked'); } catch { /* closed */ }
+      try { clearTimeout(c.graceT); this.onClose(c); } catch (e) { this.log(`[err] kick ${c.name}: ${e.stack || e}`); }
+      this.log(`[admin] kicked ${c.name}`);
+      return out(200, { ok: true, kicked: c.name });
     }
     if (u.pathname === '/admin/giveall') { // (every account, online or not)
       const amount = Math.round(Number(u.searchParams.get('amount')));

@@ -200,7 +200,7 @@ export class Multiplayer {
     on('bye', (d) => { this.byeReason = d?.reason; });
     on('status', (s) => { MP.status = s === 'open' ? 'online' : s; });
     on('reopen', () => this.relogin());
-    on('lost', (d) => this.lost(d?.reason === 'replaced' || this.byeReason === 'replaced' ? 'You logged in somewhere else.' : this.byeReason === 'restart' ? 'The server is restarting. Try again in a moment.' : 'Lost the connection to the server.'));
+    on('lost', (d) => this.lost(d?.reason === 'kicked' || this.byeReason === 'kicked' ? 'You were kicked from the server.' : d?.reason === 'replaced' || this.byeReason === 'replaced' ? 'You logged in somewhere else.' : this.byeReason === 'restart' ? 'The server is restarting. Try again in a moment.' : 'Lost the connection to the server.'));
   }
 
   async relogin() {

@@ -582,6 +582,7 @@ export class GameServer {
         res.end(JSON.stringify({ ok: true, proto: PROTO, worlds: this.worlds.size, players: this.online.size }));
         return;
       }
+      if (req.url.startsWith('/admin/')) { this.admin(req, res); return; }
       res.writeHead(404); res.end();
     });
     // (256 KB: a big chalet layout fits; an oversized frame would close the socket with 1009)
@@ -705,6 +706,34 @@ export class GameServer {
 
   onlineByKey(k) { return this.online.get(k) || null; }
   profileOf(k) { return this.store.profiles.data[k] || null; }
+
+  // Admin, from the server machine only (curl on 127.0.0.1; nginx passes only /ws and /health, never /admin):
+  //   /admin/give?name=Sammy&amount=100     money to a player (negative takes it away); online, they see it at once
+  //   /admin/players                         every account: name, money, online
+  admin(req, res) {
+    const out = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o) + '\n'); };
+    const ip = req.socket.remoteAddress || '';
+    if (req.headers['x-forwarded-for'] || !/^(127\.|::1$|::ffff:127\.)/.test(ip)) return out(403, { ok: false, error: 'local only' });
+    const u = new URL(req.url, 'http://local');
+    if (u.pathname === '/admin/players') {
+      const list = Object.entries(this.store.profiles.data).map(([k, p]) => ({ name: p.name || this.store.accounts?.data?.[k]?.name || k, money: p.money, online: this.online.has(k) }));
+      return out(200, { ok: true, players: list });
+    }
+    if (u.pathname === '/admin/give') {
+      const name = u.searchParams.get('name') || '', amount = Math.round(Number(u.searchParams.get('amount')));
+      if (!name || !Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 1e7) return out(400, { ok: false, error: 'use ?name=<player>&amount=<number>' });
+      const k = nameKey(name), prof = this.profileOf(k);
+      if (!prof) return out(404, { ok: false, error: `no player called ${name}` });
+      const c = this.online.get(k);
+      if (c?.profile && c.profile !== prof) c.profile.money += amount;
+      prof.money += amount;
+      this.store.profiles.save();
+      if (c) c.send('money', { v: c.profile?.money ?? prof.money, why: 'gift', delta: amount });
+      this.log(`[admin] ${amount >= 0 ? 'gave' : 'took'} ${Math.abs(amount)} ${amount >= 0 ? 'to' : 'from'} ${name} -> ${prof.money}`);
+      return out(200, { ok: true, name, money: prof.money, online: !!c });
+    }
+    return out(404, { ok: false, error: 'unknown admin command' });
+  }
 
   // ---------------------------------------------------------------- money (server-authoritative)
   debit(c, amount, why, floor = 0) {

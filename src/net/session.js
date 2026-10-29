@@ -171,6 +171,15 @@ export class Multiplayer {
     on('chalet', (d) => { if (d.owner) MP.chalets[d.id] = d.owner; else delete MP.chalets[d.id]; });
     on('chaletPlaced', (d) => this.applyPlot({ id: d.id, waiting: false }));
     on('guests', (d) => { if (d.kind === 'chaletVisit') this.guests = d.names || []; });
+    // the server admin moved you next to another player (/admin/tp): not while driving, flying or inside
+    on('adminTp', (d) => {
+      const g = window.__game;
+      if (!g?.player || !Number.isFinite(d?.x) || !Number.isFinite(d?.z)) return;
+      if (g.drive?.active || g.heli?.active || g.interior?.active || g.chalets?.inside || g.carRental?.inside) { this.c.hud.flash(`The server tried to move you to ${d.to} · get out first`, 'bad', 3000); return; }
+      const off = 1.8, x = d.x - Math.sin(d.yaw || 0) * off, z = d.z - Math.cos(d.yaw || 0) * off;
+      if (g.admin?.teleport) g.admin.teleport({ x, z, heading: d.yaw || 0, label: `Moved next to ${d.to}`, skis: false });
+      else g.player.teleport(x, z, d.yaw || 0);
+    });
     on('money', (d) => { this.setServerMoney(d.v); if (d.delta > 0) this.c.hud.setMoney(this.c.save.money, d.delta); });
     on('seats', (d) => { const k = `${d.k}|${d.v}`; if (d.occ.length) MP.seats.set(k, d.occ); else MP.seats.delete(k); });
     on('skip', (d) => { MP.skip.set(`${d.k}|${d.v}`, d); });

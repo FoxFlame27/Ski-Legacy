@@ -710,6 +710,7 @@ export class GameServer {
   // Admin, from the server machine only (curl on 127.0.0.1; nginx passes only /ws and /health, never /admin):
   //   /admin/give?name=Sammy&amount=100     money to a player (negative takes it away); online, they see it at once
   //   /admin/giveall?amount=200               money to every player
+  //   /admin/tp?name=Sammy&to=Rafael          Sammy next to Rafael (both online, same world)
   //   /admin/players                         every account: name, money, online
   admin(req, res) {
     const out = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o) + '\n'); };
@@ -732,6 +733,18 @@ export class GameServer {
       if (c) c.send('money', { v: c.profile?.money ?? prof.money, why: 'gift', delta: amount });
       this.log(`[admin] ${amount >= 0 ? 'gave' : 'took'} ${Math.abs(amount)} ${amount >= 0 ? 'to' : 'from'} ${name} -> ${prof.money}`);
       return out(200, { ok: true, name, money: prof.money, online: !!c });
+    }
+    if (u.pathname === '/admin/tp') { // /admin/tp?name=Sammy&to=Rafael: Sammy (online) next to Rafael (online, same world)
+      const a = this.online.get(nameKey(u.searchParams.get('name') || '')), b = this.online.get(nameKey(u.searchParams.get('to') || ''));
+      if (!a || !b) return out(404, { ok: false, error: `${!a ? u.searchParams.get('name') : u.searchParams.get('to')} is not online` });
+      if (a === b) return out(400, { ok: false, error: 'same player' });
+      if (a.world !== b.world) return out(409, { ok: false, error: `${a.name} is in world ${a.world?.id}, ${b.name} in world ${b.world?.id}` });
+      const r = b.pres;
+      if (!r) return out(409, { ok: false, error: `${b.name} has not moved yet` });
+      if (r[14]) return out(409, { ok: false, error: `${b.name} is inside (${r[14]})` });
+      a.send('adminTp', { x: r[2], y: r[3], z: r[4], yaw: r[5], to: b.name });
+      this.log(`[admin] teleport ${a.name} -> ${b.name}`);
+      return out(200, { ok: true, moved: a.name, to: b.name, at: [r[2], r[3], r[4]] });
     }
     if (u.pathname === '/admin/giveall') { // (every account, online or not)
       const amount = Math.round(Number(u.searchParams.get('amount')));

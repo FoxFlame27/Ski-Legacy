@@ -474,11 +474,18 @@ export class Heli {
     else if (want < this.rpm) this.rpm = Math.max(0, this.rpm - dt * (0.03 + 0.1 * this.rpm));
 
     if (this.state !== 'parked' || !f.landed || this.rpm > 0) {
-      f.step(dt, c, this.ground, this.rpm);
-      // hold SPACE during a rescue: it all runs four times as fast (the pilot steering every step)
-      if (this.state === 'rescue' && this.rescue.fast) for (let k = 0; k < 3 && this.state === 'rescue'; k++) { Object.assign(c, this.rescue.controls(dt)); f.step(dt, c, this.ground, this.rpm); }
-      // you fly into a tree, a roof, a net, a lift: it bumps off softly, nothing breaks
-      this.bump = flying && HELI_COLLIDE ? collideHeli(f, this.colEnv, dt) : 0;
+      // you (or its own pilot) fly into a tree, a roof, a net, a lift: it bumps off softly, nothing breaks; then the
+      // hard terrain floor again (nothing of it ever goes into the hillside). Every step, every state.
+      const solid = HELI_COLLIDE && (flying || this.state === 'auto' || this.state === 'rescue');
+      const stepOnce = () => {
+        f.step(dt, c, this.ground, this.rpm);
+        const b = solid ? collideHeli(f, this.colEnv, dt) : 0;
+        if (b) f.clampTerrain(this.ground);
+        return b;
+      };
+      this.bump = stepOnce();
+      // hold SPACE during a rescue: it all runs four times as fast (the pilot steering every step, the same checks)
+      if (this.state === 'rescue' && this.rescue.fast) for (let k = 0; k < 3 && this.state === 'rescue'; k++) { Object.assign(c, this.rescue.controls(dt)); this.bump = Math.max(this.bump, stepOnce()); }
     }
     this.syncModel();
 

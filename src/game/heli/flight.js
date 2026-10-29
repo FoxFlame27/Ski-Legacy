@@ -104,6 +104,7 @@ export class Flight {
    * @param {number} power   rotor speed 0..1 (lift-off needs FLIGHT.POWER)
    */
   step(dt, ctl, ground, power = 1) {
+    this.groundFn = ground; // (the autopilot's terrain look-ahead samples it)
     const n = Math.max(1, Math.ceil(dt / (1 / 60)));
     for (let i = 0; i < n; i++) this.sub(dt / n, ctl, ground, power);
     this.updateQuat();
@@ -196,10 +197,17 @@ export class Flight {
 
     p.addScaledVector(v, dt);
 
-    // ---- contact: no part of the airframe (skids, nose, tail, rotor tips) goes into the snow
+    // ---- contact: no part of the airframe (skids, nose, tail, rotor tips) goes into the snow, at any height and
+    // speed (Oct 29, the user: the rescue helicopter "just went through a mountain": only the centre was kept above
+    // the snow up high, so flying fast into a steep face the cabin and rotor slid up through the hillside)
     const g1 = ground(p.x, p.z), skids = g1 + this.cgH;
-    const floor = agl < 12 ? Math.max(skids, this.hullFloor(ground)) : skids;
+    const floor = Math.max(skids, this.hullFloor(ground));
     if (p.y <= floor) {
+      // ran into a face (not a touchdown): the speed into it goes, so it stops against the slope and climbs
+      if (floor - p.y > 0.25 && sp > 3) {
+        const kk = Math.exp(-dt * 8);
+        v.x *= kk; v.z *= kk; if (this.u > 0) this.u *= kk;
+      }
       p.y = floor;
       if (v.y < 0) v.y = 0;
       // settle onto the skids when slow and not climbing (never on a steep slope, nor while the nose,
@@ -223,6 +231,13 @@ export class Flight {
     // just above the snow the skids level with it
     if (this.agl < 1.2) { this.settle(ground, 0); pitchT += (this.landPitch - pitchT) * (1 - this.agl / 1.2); rollT += (this.landRoll - rollT) * (1 - this.agl / 1.2); }
     this.springAttitude(dt, pitchT, rollT, 4.2);
+  }
+
+  /** Hard floor after anything else moved it (the soft obstacle push): nothing of the airframe below the snow. */
+  clampTerrain(ground) {
+    if (this.landed) return;
+    const floor = Math.max(ground(this.pos.x, this.pos.z) + this.cgH, this.hullFloor(ground));
+    if (this.pos.y < floor) { this.pos.y = floor; if (this.vel.y < 0) this.vel.y = 0; }
   }
 
   springAttitude(dt, pitchT, rollT, w) {
@@ -324,10 +339,15 @@ export class HomePilot {
 export function autopilot(f, goal, out = { fwd: 0, turn: 0, lift: 0 }) {
   const p = f.pos, dx = goal.x - p.x, dz = goal.z - p.z, d = Math.hypot(dx, dz);
   const stop = goal.stop ?? 1.2;
+  let yD = goal.y !== undefined ? goal.y : f.groundY + f.cgH + (goal.agl ?? 30);
+  // terrain look-ahead: never below the hills ahead (and the trees on them) on the way to the goal
+  const T = terrainAhead(f, goal.x, goal.z, d);
+  yD = Math.max(yD, T.y);
   // speed: cruise, slowing down so we can stop at the goal (v^2 = 2 a s, gently: 2.2 m/s^2 unless told otherwise)
-  // (the path lags the nose a little: start braking that much earlier)
+  // (the path lags the nose a little: start braking that much earlier); slower still when a ridge ahead needs
+  // more climb than there is room for at this speed
   const lead = Math.hypot(f.vel.x, f.vel.z) * 0.6;
-  const uD = d < stop ? 0 : Math.min(goal.speed ?? 70, Math.sqrt(2 * (goal.decel ?? 3.3) * Math.max(0, d - stop - lead)) + 0.4);
+  const uD = d < stop ? 0 : Math.min(goal.speed ?? 70, T.u, Math.sqrt(2 * (goal.decel ?? 3.3) * Math.max(0, d - stop - lead)) + 0.4);
   // there: hold the spot and turn to the parking heading
   const want = d < stop && goal.yaw !== undefined ? goal.yaw : Math.atan2(dx, dz);
   const err = wrapPi(want - f.yaw);
@@ -335,7 +355,41 @@ export function autopilot(f, goal, out = { fwd: 0, turn: 0, lift: 0 }) {
   // only push forward when roughly facing the goal
   const facing = Math.cos(err);
   out.fwd = clamp((uD * Math.max(0, facing) - f.u) * 0.6, -1, 1);
-  const yD = goal.y !== undefined ? goal.y : f.groundY + f.cgH + (goal.agl ?? 30);
   out.lift = clamp((yD - p.y) * 0.18, -1, 1);
   return out;
+}
+
+// The autopilot's look-out (Oct 29, the user: the rescue helicopter flew home "through a mountain"): samples the
+// ground every 20 m along the track to the goal (and along where it is actually heading) out to 250..600 m, and
+// returns the height to hold so it passes ~90 m over every ridge (trees and buildings included), the clearance
+// tapering to 35 m over the last stretch so the descent to a landing spot stays above the terrain too; inside 30 m
+// of the goal the goal's own height rules (the vertical let-down over the pad / the pick-up spot). u: the most
+// airspeed that still leaves time to climb over the highest point ahead (~13 m/s up).
+const _T = { y: -Infinity, u: Infinity };
+const CLIMB_RATE = 13, STEP = 20;
+export function terrainAhead(f, gx, gz, d) {
+  _T.y = -Infinity; _T.u = Infinity;
+  const gr = f.groundFn;
+  if (!gr) return _T;
+  const p = f.pos, sp = Math.hypot(f.vel.x, f.vel.z);
+  const range = clamp(sp * 7, 250, 600);
+  const need = (x, z, s, left) => {
+    const y = gr(x, z) + f.cgH + 35 + Math.min(55, Math.max(0, left - 30) * 0.3);
+    if (y > _T.y) _T.y = y;
+    const rise = y - p.y;
+    if (rise > 0) _T.u = Math.min(_T.u, Math.max(9, (CLIMB_RATE * s) / rise));
+  };
+  if (d > 30) {
+    const ux = (gx - p.x) / d, uz = (gz - p.z) / d;
+    for (let s = STEP; s <= range && d - s > 30; s += STEP) need(p.x + ux * s, p.z + uz * s, s, d - s);
+  }
+  // where it is heading now (turning toward the goal, the path is not yet on the track)
+  if (sp > 4 && d > 60) {
+    const vx = f.vel.x / sp, vz = f.vel.z / sp, r = Math.min(range, sp * 4, d - 30);
+    for (let s = STEP; s <= r; s += STEP) {
+      const x = p.x + vx * s, z = p.z + vz * s;
+      need(x, z, s, Math.hypot(gx - x, gz - z));
+    }
+  }
+  return _T;
 }

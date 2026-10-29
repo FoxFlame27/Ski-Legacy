@@ -15,7 +15,13 @@ import { PROTO } from './protocol.js';
 
 const PING_EVERY = 2000;
 const REQ_TIMEOUT = 10000;
-const BACKOFF = [500, 1000, 2000, 4000, 6000, 8000];
+// reconnect waits (the last one repeats) until GIVE_UP_MS after the drop; only then 'lost' (back to the menu)
+const BACKOFF = [300, 1000, 2000, 3000, 5000];
+const GIVE_UP_MS = 120000;
+// liveness: the server answers our pings every 2 s and relays presence; nothing at all for STALE_MS means the socket
+// is dead (a network change, a sleeping laptop): drop it and reconnect. A check that itself ran late (the main thread
+// was busy loading terrain, the tab was in the background) proves nothing and is skipped.
+const STALE_MS = 20000, CHECK_EVERY = 4000;
 
 export class NetClient {
   constructor() {
@@ -33,6 +39,13 @@ export class NetClient {
     this.tries = 0;
     this.pingT = null;
     this.retryT = null;
+    this.lastMsg = 0;         // performance.now() of the last frame from the server
+    this.lastCheck = 0;
+    this.downSince = 0;       // performance.now() the connection dropped (0: up)
+    if (typeof document !== 'undefined') {
+      // back from the background: check the socket now (a laptop lid, a phone screen: often dead by then)
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && this.open) { this.lastCheck = performance.now(); this.ping(); } });
+    }
   }
 
   // ---------------------------------------------------------------- events
@@ -102,24 +115,29 @@ export class NetClient {
     this.setStatus(this.tries ? 'reconnecting' : 'connecting');
     return new Promise((resolve, reject) => {
       let ws;
-      try { ws = new WebSocket(this.url); } catch (e) { reject(e); return; }
+      try { ws = new WebSocket(this.url); } catch (e) { if (this.tries) this.retry(); reject(e); return; }
       this.ws = ws;
       let opened = false;
       ws.onopen = () => {
+        if (this.ws !== ws) return;
         opened = true;
-        const again = this.tries > 0;
+        const again = this.tries > 0 || this.downSince > 0;
         this.tries = 0;
+        this.downSince = 0;
         this.samples.length = 0;
         this.synced = false;
+        this.lastMsg = this.lastCheck = performance.now();
         this.setStatus('open');
         for (let i = 0; i < 5; i++) setTimeout(() => this.ping(), i * 120);
         clearInterval(this.pingT);
-        this.pingT = setInterval(() => this.ping(), PING_EVERY);
+        this.pingT = setInterval(() => { this.ping(); this.checkAlive(); }, PING_EVERY);
         this.emit('open');
         if (again) this.emit('reopen');
         resolve();
       };
       ws.onmessage = (ev) => {
+        if (this.ws !== ws) return;
+        this.lastMsg = performance.now();
         let m;
         try { m = JSON.parse(ev.data); } catch { return; }
         if (m.t === 'res') {
@@ -137,18 +155,51 @@ export class NetClient {
       ws.onerror = () => { /* onclose follows */ };
       ws.onclose = (ev) => {
         if (this.ws !== ws) return;
-        clearInterval(this.pingT);
-        for (const [id, p] of this.pending) { clearTimeout(p.timer); const e = new Error('offline'); e.code = 'offline'; p.reject(e); this.pending.delete(id); }
-        this.emit('close', { code: ev.code, reason: ev.reason });
-        if (!opened && this.tries === 0) { this.wantOpen = false; this.setStatus('off'); reject(new Error(ev.reason || 'Could not reach the server')); return; }
-        // kicked for a second login, or a deliberate close: no reconnect
-        if (!this.wantOpen || ev.code === 4001 || ev.code === 1008) { this.wantOpen = false; this.setStatus('off'); if (ev.code === 4001 || ev.code === 1008) this.emit('lost', { reason: ev.reason }); return; }
-        if (this.tries >= BACKOFF.length) { this.wantOpen = false; this.setStatus('off'); this.emit('lost', { reason: 'Connection lost' }); return; }
-        const wait = BACKOFF[this.tries++];
-        this.setStatus('reconnecting');
-        this.retryT = setTimeout(() => this.openSocket().catch(() => {}), wait);
+        if (!opened && this.tries === 0 && !this.downSince) { this.dropSocket(); this.wantOpen = false; this.setStatus('off'); reject(new Error(ev.reason || 'Could not reach the server')); return; }
+        this.onDrop(ev.code, ev.reason);
+        if (!opened) reject(new Error('reconnect failed'));
       };
     });
+  }
+
+  /** Forget the current socket (its late events are ignored) and fail what was waiting on it. */
+  dropSocket() {
+    const ws = this.ws;
+    this.ws = null;
+    clearInterval(this.pingT);
+    if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(4000, 'stale'); } catch { /* closed */ } }
+    for (const [id, p] of this.pending) { clearTimeout(p.timer); const e = new Error('offline'); e.code = 'offline'; p.reject(e); this.pending.delete(id); }
+  }
+
+  // The connection is gone. Anything but another login of this account (4001) or LEAVE MULTIPLAYER reconnects, with
+  // backoff, for up to GIVE_UP_MS (the server holds the player for a minute meanwhile: same world, seat, chalet...).
+  onDrop(code, reason) {
+    this.dropSocket();
+    this.emit('close', { code, reason });
+    if (!this.wantOpen || code === 4001) {
+      this.wantOpen = false; this.setStatus('off');
+      if (code === 4001) this.emit('lost', { reason: reason || 'replaced' });
+      return;
+    }
+    if (!this.downSince) this.downSince = performance.now();
+    this.retry();
+  }
+  retry() {
+    clearTimeout(this.retryT);
+    if (!this.wantOpen) return;
+    if (performance.now() - this.downSince > GIVE_UP_MS) { this.wantOpen = false; this.setStatus('off'); this.emit('lost', { reason: 'Connection lost' }); return; }
+    const wait = BACKOFF[Math.min(this.tries++, BACKOFF.length - 1)];
+    this.setStatus('reconnecting');
+    this.retryT = setTimeout(() => this.openSocket().catch(() => {}), wait);
+  }
+  /** The socket is open but useless (e.g. the login after a reconnect timed out): drop it and reconnect. */
+  reconnect(why = 'retry') { if (this.ws && this.wantOpen) this.onDrop(4000, why); }
+
+  checkAlive() {
+    const now = performance.now(), late = now - this.lastCheck > PING_EVERY * 2 + 1000;
+    this.lastCheck = now;
+    if (late || !this.open) return; // (this check itself ran late: the main thread was busy, not the network)
+    if (now - this.lastMsg > STALE_MS) { console.warn('[net] no word from the server for', Math.round((now - this.lastMsg) / 1000), 's: reconnecting'); this.reconnect('stale'); }
   }
 
   /** Close for good (LEAVE MULTIPLAYER). */
@@ -156,9 +207,10 @@ export class NetClient {
     this.wantOpen = false;
     clearTimeout(this.retryT);
     clearInterval(this.pingT);
+    this.downSince = 0; this.tries = 0;
     const ws = this.ws;
     this.ws = null;
-    if (ws) { try { ws.close(1000, reason); } catch { /* closed */ } }
+    if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(1000, reason); } catch { /* closed */ } }
     for (const [, p] of this.pending) { clearTimeout(p.timer); const e = new Error('offline'); e.code = 'offline'; p.reject(e); }
     this.pending.clear();
     this.setStatus('off');

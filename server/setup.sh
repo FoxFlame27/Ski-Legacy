@@ -184,6 +184,8 @@ server {
 		proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
 		proxy_read_timeout 3600s;
 		proxy_send_timeout 3600s;
+		send_timeout 3600s; # (the default 60 s cut players whose game was busy for a minute)
+		proxy_buffering off;
 	}
 	location /health { proxy_pass http://127.0.0.1:$PORT; }
 	location / { return 200 "Ski Legacy multiplayer server\n"; }

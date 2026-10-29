@@ -276,6 +276,53 @@ try {
   ok(!wr.seats.get('train|T1'), 'her train seat is released');
   ok(wr.size === 2, 'the world has 2 players left');
 
+  // ---------------------------------------------------------------- connection drops: bursts, reconnects, the grace period
+  console.log('dropouts');
+  const gus = new Fake(url);
+  await gus.open();
+  const rg = await gus.req('register', { name: 'Gus' });
+  const lg = await gus.req('login', { v: PROTO, name: 'Gus', token: rg.d.token });
+  const wg = server.worlds.get(lg.d.world.id);
+  // a burst of 50 presence rows (a main-thread hitch, a network stall flushing at once): nobody is kicked
+  for (let i = 0; i < 50; i++) gus.send('p', [Date.now(), 1 + i, 2, 3, 0, 0, 0, 0, 1, 0, 0, 0]);
+  // ...and a burst of 300 requests: refused for a moment (rate), never kicked
+  const burst = await Promise.all(Array.from({ length: 300 }, () => gus.req('profile')));
+  await sleep(200);
+  ok(gus.ws.readyState === 1 && wg.players.get(lg.d.pid)?.name === 'Gus', 'a burst of 50 presence rows and 300 requests: no kick');
+  ok(burst.some((r) => r.ok) && wg.dirty.size + 1 > 0, 'the burst is served as far as the rate allows (the rest refused, not counted as debt)');
+  await sleep(1100);
+  const after = await gus.req('profile');
+  ok(after.ok, 'after a burst the rate limit recovers at once (no debt)');
+  // a quick reconnect: the network drops (no close frame: 1006), the client logs in again within the grace period
+  await gus.req('seatClaim', { k: 'gondola', v: 'G7' });
+  a.events.length = 0;
+  gus.ws.terminate();
+  await sleep(150);
+  ok(server.onlineByKey('gus')?.dropped > 0 && wg.players.has(lg.d.pid), 'a dropped connection keeps the player in the world (held for a reconnect)');
+  ok(wg.seats.get('gondola|G7')?.get(0) === lg.d.pid, 'their seat is kept meanwhile');
+  const gus2 = new Fake(url);
+  await gus2.open();
+  const lg2 = await gus2.req('login', { v: PROTO, name: 'gus', token: rg.d.token });
+  ok(lg2.ok && lg2.d.resumed === true && lg2.d.world.id === lg.d.world.id && lg2.d.pid === lg.d.pid, 'a quick reconnect resumes: same world, same pid');
+  ok(wg.seats.get('gondola|G7')?.get(0) === lg.d.pid && server.onlineByKey('gus')?.dropped === 0, 'the seat is still theirs after the reconnect');
+  const reclaim = await gus2.req('seatClaim', { k: 'gondola', v: 'G7' });
+  ok(reclaim.ok && reclaim.d.seat === 0, 'claiming the seat again after the reconnect keeps the same seat');
+  ok(!a.events.some((m) => (m.t === 'leave' || m.t === 'join') && m.d.name === 'Gus'), 'the others never saw Gus leave or join');
+  // a second socket for the same account while the first is still open (another device): the old one is replaced
+  const gus3 = new Fake(url);
+  await gus3.open();
+  const closed = new Promise((r) => gus2.ws.on('close', (code) => r(code)));
+  const lg3 = await gus3.req('login', { v: PROTO, name: 'Gus', token: rg.d.token });
+  ok(lg3.ok && lg3.d.resumed && (await closed) === 4001, 'a login from another device takes over (the old socket gets 4001 replaced)');
+  // the grace period runs out: the player leaves for real (seat released, everyone told)
+  const grace = server.graceMs;
+  server.graceMs = 300;
+  gus3.ws.terminate();
+  const gone = await a.next('leave', (d) => d.name === 'Gus', 3000);
+  ok(!!gone && !server.onlineByKey('gus') && !wg.players.has(lg.d.pid), 'no reconnect within the grace period: the player is removed');
+  ok(!wg.seats.get('gondola|G7'), 'and their seat is released');
+  server.graceMs = grace;
+
   // ---------------------------------------------------------------- alone: multiplayer still works (world of 1)
   const solo = new Fake(url);
   await solo.open();

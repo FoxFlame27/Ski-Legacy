@@ -25,12 +25,19 @@ export const HELI_COPY_MS = 5 * 60 * 1000; // a rental out this long: a new copy
 export const RACE_WAIT_MS = 30 * 1000;     // queue countdown once 2 are in
 export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ahead (everyone counts down together)
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
+export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
+export const RACE_BOARD_MS = 500;          // the live race board (raceBoard) goes out this often while a race runs
+export const GRACE_MS = 60 * 1000;         // a dropped connection keeps its player (world slot, seat, chalet plot, car,
+                                           // helicopter, race entry) this long for a reconnect, measured from the last
+                                           // message; then the player leaves for real
 export const PERM_TIMEOUT_MS = 30 * 1000;
 // the in-game day: 1 on DAY_EPOCH, +1 at every world midnight (one game day = DAY_MS). Global, so a day pass
 // bought in one world is the same day in another
 export const DAY_EPOCH = Date.UTC(2026, 9, 1);
 export const dayFor = (now = Date.now()) => 1 + Math.floor((now - DAY_EPOCH) / DAY_MS);
-const HEARTBEAT_MS = 10000;
+const HEARTBEAT_MS = 15000;   // WebSocket-level ping (answered by the browser itself, not the game's main thread)
+const HEARTBEAT_MISSES = 3;   // nothing (no pong, no message) for 45 s: the connection is dead (terminated, then the grace period)
+const FLOOD_WINDOW_MS = 10000, FLOOD_KICK = 400; // refused (over the rate limit) messages in 10 s before a kick
 const NAME_RE = /^[A-Za-z0-9_ -]{3,16}$/;
 // seats per vehicle kind (a client may ask for fewer with n): the lowest free one is assigned
 export const SEAT_CAPS = { bus: 48, train: 64, express: 128, gondola: 8, chair: 6, heli: 4, car: 7, sled: 2 };
@@ -70,14 +77,17 @@ function newProfile(name) {
   };
 }
 
+// A token bucket. A refused message costs nothing (no debt: a burst after a network stall or a main-thread hitch
+// is throttled for a moment, never for good).
 class Bucket {
   constructor(cap, rate) { this.cap = cap; this.rate = rate; this.v = cap; this.t = Date.now(); }
   take(n = 1) {
     const now = Date.now();
     this.v = Math.min(this.cap, this.v + ((now - this.t) / 1000) * this.rate);
     this.t = now;
+    if (this.v < n) return false;
     this.v -= n;
-    return this.v >= 0;
+    return true;
   }
 }
 
@@ -134,6 +144,7 @@ class World {
       this.clock = { hour: h, at: now, day, weather: opts[Math.floor(Math.random() * opts.length)], next: now + 80000 + Math.random() * 100000 };
       this.broadcast('clock', this.clockMsg(now));
     }
+    for (const r of this.races.values()) if (!r.done && now >= r.at) this.raceBoard(r);
     if (this.dirty.size) {
       const rows = [...this.dirty.values()];
       this.dirty.clear();
@@ -311,7 +322,7 @@ class World {
     const n = q.members.length, now = Date.now();
     if (n < 2) { if (q.startAt) { q.startAt = 0; clearTimeout(q.timer); } }
     else if (n >= MAX_PLAYERS || n >= this.size) { clearTimeout(q.timer); this.startRace(race); return; }
-    else if (!q.startAt) { q.startAt = now + RACE_WAIT_MS; q.timer = setTimeout(() => this.startRace(race), RACE_WAIT_MS); }
+    else if (!q.startAt) { q.startAt = now + RACE_WAIT_MS; q.timer = setTimeout(() => { try { this.startRace(race); } catch (e) { this.server.log(`[err] startRace ${race}: ${e.stack || e}`); } }, RACE_WAIT_MS); }
     if (!n) this.queues.delete(race);
     this.broadcast('raceQueue', this.queueMsg(race));
   }
@@ -331,7 +342,8 @@ class World {
         if (!this.server.debit(c, def.entry, `race:${race}`)) { c.send('raceDropped', { race, reason: 'money' }); continue; }
         c.send('money', { v: c.profile.money, why: 'entry', delta: -def.entry });
       }
-      entrants.push({ pid, key: c.key, name: c.name, slot: entrants.length, time: null, done: false, dnf: false });
+      // prog: the furthest the racer got (gate index passed, metres along the course, race ms at that point)
+      entrants.push({ pid, key: c.key, name: c.name, slot: entrants.length, time: null, done: false, dnf: false, left: false, fin: 0, prog: { gate: 0, s: -Infinity, at: 0 } });
     }
     if (entrants.length < 2) { // (someone could not pay the entry: back to the queue for those left)
       for (const e of entrants) {
@@ -345,61 +357,118 @@ class World {
       return;
     }
     const r = { rid: this.nextRid++, race, at: now + RACE_LEAD_MS, entrants, done: false };
-    r.timer = setTimeout(() => this.finishRace(r), RACE_LEAD_MS + RACE_MAX_MS);
+    r.timer = setTimeout(() => this.safeFinish(r), RACE_LEAD_MS + RACE_MAX_MS);
     this.races.set(r.rid, r);
     this.broadcast('raceQueue', { race, n: 0, names: [], startAt: 0, need: 2, waitMs: RACE_WAIT_MS });
     this.broadcast('raceStart', this.raceStartMsg(r));
   }
   raceStartMsg(r) { return { rid: r.rid, race: r.race, at: r.at, grid: r.entrants.map((e) => ({ pid: e.pid, name: e.name, slot: e.slot })) }; }
-  raceFinish(c, { rid, time, dnf }) {
+  // A finish. The server's own clock decides: the client's race time (raw: without gate penalties, pen: the
+  // penalties) is trusted only within 3 s of the time the server measured since the shared GO, else the server's
+  // time counts. Old clients send `time` (penalties included) instead.
+  raceFinish(c, { rid, time, raw, pen, dnf }) {
     const r = this.races.get(rid);
     if (!r || r.done) return { err: 'bad_race' };
     const e = r.entrants.find((x) => x.key === c.key);
     if (!e) return { err: 'not_entered' };
-    if (e.done) return { err: 'already_done' };
+    if (e.done) return { err: 'already_done', d: { time: e.time } };
     const now = Date.now(), elapsed = now - r.at;
     e.done = true;
     if (dnf || elapsed < 0) { e.dnf = true; }
     else {
-      // the client's time (ms, its own timer) is trusted only within 3 s of what the server measured
-      e.time = isNum(time) && Math.abs(time - elapsed) <= 3000 ? Math.round(time) : elapsed;
+      const plausible = (t) => isNum(t) && t > 0 && Math.abs(t - elapsed) <= 3000;
+      if (isNum(raw)) e.time = Math.round((plausible(raw) ? raw : elapsed) + clamp(isNum(pen) ? pen : 0, 0, 10 * 60 * 1000));
+      else e.time = Math.round(plausible(time) ? time : elapsed);
+      e.fin = now;
+      e.prog = { gate: Math.max(e.prog.gate, 9999), s: Infinity, at: e.time };
+      // the first one home: the rest have RACE_AFTER_FIRST_MS to finish (the race never waits for someone who left)
+      if (!r.closeT) r.closeT = setTimeout(() => this.safeFinish(r), RACE_AFTER_FIRST_MS);
     }
     this.broadcast('raceProgress', { rid, pid: e.pid, name: e.name, time: e.time, dnf: e.dnf });
+    this.raceBoard(r, true);
     if (r.entrants.every((x) => x.done)) this.finishRace(r);
     return { d: { time: e.time } };
   }
+  /** Live progress of a racer: { rid, gate (gates passed), s (metres along the course) }, a couple of times a second. */
+  raceProgress(c, { rid, gate, s }) {
+    const r = this.races.get(rid);
+    if (!r || r.done) return { err: 'bad_race' };
+    const e = r.entrants.find((x) => x.key === c.key);
+    if (!e || e.done) return {};
+    if (!isInt(gate) || gate < 0 || gate > 999 || !isNum(s) || s < -1000 || s > 1e6) return { err: 'bad_value' };
+    // (only forward: a respawn a few metres back keeps the racer's best)
+    if (gate > e.prog.gate || (gate === e.prog.gate && s > e.prog.s)) e.prog = { gate, s, at: Date.now() - r.at };
+    return {};
+  }
+  // Race order: finishers by time (then by who was home first), then everyone else by how far they got (gate, metres),
+  // racers still out there before those who gave up or left.
+  rankEntrants(r) {
+    const by = (a, b) => (b.prog.gate - a.prog.gate) || ((b.prog.s === a.prog.s) ? 0 : (b.prog.s > a.prog.s ? 1 : -1));
+    const fin = r.entrants.filter((e) => e.done && !e.dnf).sort((a, b) => (a.time - b.time) || (a.fin - b.fin));
+    const racing = r.entrants.filter((e) => !e.done).sort(by);
+    const out = r.entrants.filter((e) => e.done && e.dnf).sort(by);
+    return [...fin, ...racing, ...out];
+  }
+  boardRow(e, place) {
+    const c = this.server.onlineByKey(e.key);
+    return {
+      pid: e.pid, name: e.name, place, time: e.done && !e.dnf ? e.time : null, dnf: e.dnf, left: e.left,
+      gate: e.prog.gate >= 9999 ? null : e.prog.gate, s: Number.isFinite(e.prog.s) ? Math.round(e.prog.s) : null,
+      off: !c || !!c.dropped, // (connection dropped: held for a reconnect)
+    };
+  }
+  /** The live race board to everyone in the world: raceBoard { rid, race, rows: [{ pid, name, place, time, dnf, gate, s, off }] }. */
+  raceBoard(r, force = false) {
+    const now = Date.now();
+    if (!force && now - (r.boardAt || 0) < RACE_BOARD_MS) return;
+    r.boardAt = now;
+    this.broadcast('raceBoard', { rid: r.rid, race: r.race, rows: this.rankEntrants(r).map((e, i) => this.boardRow(e, i + 1)) });
+  }
+  safeFinish(r) { try { this.finishRace(r); } catch (e) { this.server.log(`[err] finishRace ${r.rid}: ${e.stack || e}`); } }
+  /** A racer who left the world for good (no reconnect within the grace period, or LEAVE MULTIPLAYER): DNF, placed
+   *  by how far they got. They may come back while the race runs (addPlayer) and carry on. */
   dropFromRace(c) {
     const r = this.inRace(c);
-    if (r) this.raceFinish(c, { rid: r.rid, dnf: true });
+    if (!r) return;
+    const e = r.entrants.find((x) => x.key === c.key);
+    e.done = true; e.dnf = true; e.left = true;
+    this.broadcast('raceProgress', { rid: r.rid, pid: e.pid, name: e.name, time: null, dnf: true });
+    this.raceBoard(r, true);
+    if (r.entrants.every((x) => x.done)) this.finishRace(r);
   }
+  /** The race is over: everyone placed (finishers by time, then the rest by progress), prize money paid ONCE per
+   *  racer by place (reward x [1, 0.4, 0.15]; a racer who did not finish wins nothing), raceResult to the world. */
   finishRace(r) {
     if (r.done) return;
     r.done = true;
-    clearTimeout(r.timer);
+    clearTimeout(r.timer); clearTimeout(r.closeT);
     for (const e of r.entrants) if (!e.done) { e.done = true; e.dnf = true; }
-    const def = CATALOG.races[r.race], share = CATALOG.prizeShare;
-    const ranked = r.entrants.filter((e) => !e.dnf).sort((a, b) => a.time - b.time);
-    const order = [];
-    ranked.forEach((e, i) => {
-      const place = i + 1, prize = Math.round(def.reward * (share[i] ?? 0));
-      order.push({ pid: e.pid, name: e.name, place, time: e.time, prize });
+    const def = CATALOG.races[r.race] || { reward: 0 }, share = CATALOG.prizeShare || [1, 0.4, 0.15];
+    const order = this.rankEntrants(r).map((e, i) => {
+      const place = i + 1, prize = !e.dnf && !e.paid ? Math.round((def.reward || 0) * (share[i] ?? 0)) : 0;
+      const row = { ...this.boardRow(e, place), prize };
       const prof = this.server.profileOf(e.key);
-      if (prof) {
+      if (prof && !e.paid) {
+        e.paid = true; // (once per racer, whatever happens)
         prof.stats.races = (prof.stats.races || 0) + 1;
-        if (place === 1) prof.stats.wins = (prof.stats.wins || 0) + 1;
+        if (place === 1 && !e.dnf) prof.stats.wins = (prof.stats.wins || 0) + 1;
         if (prize) { prof.money += prize; prof.stats.earned = (prof.stats.earned || 0) + prize; }
-        this.server.store.profiles.save();
         const c = this.server.onlineByKey(e.key);
-        if (c) c.send('money', { v: prof.money, why: 'race', delta: prize });
+        if (c && prize) c.send('money', { v: prof.money, why: 'race', delta: prize });
       }
+      return row;
     });
-    for (const e of r.entrants) if (e.dnf) {
-      order.push({ pid: e.pid, name: e.name, place: null, time: null, prize: 0, dnf: true });
-      const prof = this.server.profileOf(e.key);
-      if (prof) { prof.stats.races = (prof.stats.races || 0) + 1; this.server.store.profiles.save(); }
-    }
+    this.server.store.profiles.save();
+    r.result = { rid: r.rid, race: r.race, order, keys: r.entrants.map((e) => e.key) };
+    r.endedAt = Date.now();
     this.broadcast('raceResult', { rid: r.rid, race: r.race, order });
     setTimeout(() => this.races.delete(r.rid), 60000);
+  }
+  /** The result of a race this player was in that ended in the last minute (for a reconnect that missed it). */
+  lastRaceFor(key) {
+    let best = null;
+    for (const r of this.races.values()) if (r.done && r.result?.keys.includes(key) && (!best || r.endedAt > best.endedAt)) best = r;
+    return best ? { rid: best.rid, race: best.race, order: best.result.order } : null;
   }
 
   // ---------------------------------------------------------------- joining / leaving
@@ -411,6 +480,12 @@ class World {
     c.world = this;
     this.players.set(pid, c);
     this.broadcast('join', c.publicInfo(), c);
+    // back in a race you dropped out of (gone longer than the grace period, the race still on): carry on from where
+    // you were (your client still runs the race; the server forgets the DNF)
+    for (const r of this.races.values()) {
+      const e = !r.done && r.entrants.find((x) => x.key === c.key && x.left && x.time === null);
+      if (e) { e.done = false; e.dnf = false; e.left = false; e.pid = c.pid; this.raceBoard(r, true); }
+    }
     for (const race of this.queues.keys()) this.updateQueue(race); // ("everyone in the world" grew)
   }
   removePlayer(c) {
@@ -446,11 +521,14 @@ class Client {
     this.queue = null;     // race id queued for
     this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
-    this.bucket = new Bucket(120, 60);
-    this.pBucket = new Bucket(30, 25);
+    this.bucket = new Bucket(240, 80);   // requests and events
+    this.pBucket = new Bucket(60, 30);   // presence rows (the client sends 12 a second)
+    this.refused = 0; this.refusedT = 0; // messages refused by the rate limit in the current FLOOD_WINDOW_MS
+    this.dropped = 0;      // the connection dropped at (ms; 0 = connected): the player is held for a reconnect
+    this.graceT = null;
     this.earned = [];      // [t, amount] over the last hour
   }
-  sendRaw(s) { if (this.ws.readyState === 1) this.ws.send(s); }
+  sendRaw(s) { if (this.ws && this.ws.readyState === 1) this.ws.send(s); }
   send(t, d) { this.sendRaw(JSON.stringify({ t, d })); }
   res(id, ok, d, err) { if (id == null) return; this.sendRaw(JSON.stringify(ok ? { t: 'res', id, ok: true, d } : { t: 'res', id, ok: false, err, d })); }
   publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.plot, vehs: this.vehs }; }
@@ -458,8 +536,10 @@ class Client {
 
 // ------------------------------------------------------------------ the server
 export class GameServer {
-  constructor({ dataDir, log = console.log, regPerHour = 5 } = {}) {
+  constructor({ dataDir, log = console.log, regPerHour = 5, graceMs = GRACE_MS, heartbeatMs = HEARTBEAT_MS } = {}) {
     this.store = new Store(dataDir);
+    this.graceMs = graceMs;
+    this.heartbeatMs = heartbeatMs;
     this.regPerHour = regPerHour; // new names from one address an hour
     this.log = log;
     this.worlds = new Map();
@@ -494,55 +574,111 @@ export class GameServer {
       }
       res.writeHead(404); res.end();
     });
-    this.wss = new WebSocketServer({ server: this.http, maxPayload: 64 * 1024, perMessageDeflate: false });
+    // (256 KB: a big chalet layout fits; an oversized frame would close the socket with 1009)
+    this.wss = new WebSocketServer({ server: this.http, maxPayload: 256 * 1024, perMessageDeflate: false });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
-    this.tickT = setInterval(() => { const now = Date.now(); for (const w of this.worlds.values()) w.tick(now); }, 1000 / TICK_HZ);
-    this.beatT = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
+    this.tickT = setInterval(() => {
+      const now = Date.now();
+      for (const w of this.worlds.values()) { try { w.tick(now); } catch (e) { this.log(`[err] tick world ${w.id}: ${e.stack || e}`); } }
+    }, 1000 / TICK_HZ);
+    this.beatT = setInterval(() => this.heartbeat(), this.heartbeatMs);
     return new Promise((resolve) => this.http.listen(port, host, () => resolve(this.http.address().port)));
   }
 
   async close(reason = 'shutdown') {
     clearInterval(this.tickT); clearInterval(this.beatT);
-    for (const c of this.online.values()) { c.send('bye', { reason }); }
-    for (const ws of this.wss?.clients || []) ws.close(1001, reason);
+    for (const c of this.online.values()) { clearTimeout(c.graceT); c.send('bye', { reason }); }
+    for (const ws of this.wss?.clients || []) ws.close(1012, reason); // (1012: service restart, the clients reconnect)
     this.store.flush();
     await new Promise((r) => (this.wss ? this.wss.close(() => r()) : r()));
     await new Promise((r) => (this.http ? this.http.close(() => r()) : r()));
   }
 
+  // WebSocket-level pings: the browser answers them itself, so a game busy loading terrain for a few seconds still
+  // counts as alive. Only HEARTBEAT_MISSES pings in a row without a pong or any message end the connection (which
+  // then gets the grace period like any other drop).
   heartbeat() {
+    const now = Date.now();
     for (const ws of this.wss.clients) {
-      if (ws.alive === false) { ws.terminate(); continue; }
-      ws.alive = false;
+      const quiet = now - (ws.lastSeen || 0);
+      if (quiet > this.heartbeatMs * HEARTBEAT_MISSES) {
+        this.log(`[drop] ${ws.conn?.c?.name || ws.conn?.c?.ip || '?'}: no heartbeat for ${Math.round(quiet / 1000)} s`);
+        ws.terminate();
+        continue;
+      }
       try { ws.ping(); } catch { /* closing */ }
     }
   }
 
+  /** Close a connection on purpose (logged; no grace period). */
+  kick(c, reason, code = 1008) {
+    this.log(`kick ${c.name || c.ip}: ${reason}`);
+    c.kicked = true;
+    try { c.ws?.close(code, reason); } catch { /* closed */ }
+  }
+
   onConnection(ws, req) {
     const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
-    const c = new Client(this, ws, ip);
-    ws.alive = true;
-    ws.on('pong', () => { ws.alive = true; });
+    // conn.c: the player this socket speaks for (a login that resumes a held player points it at that one)
+    const conn = { c: new Client(this, ws, ip) };
+    ws.conn = conn;
+    ws.lastSeen = Date.now();
+    ws.on('pong', () => { ws.lastSeen = Date.now(); });
     ws.on('message', (buf, isBinary) => {
-      ws.alive = true;
-      if (isBinary) return;
+      ws.lastSeen = Date.now();
+      const c = conn.c;
+      if (isBinary || c.ws !== ws) return; // (a socket replaced by a newer login: ignored)
       let m;
       try { m = JSON.parse(buf.toString()); } catch { return; }
       if (!m || typeof m.t !== 'string') return;
-      if (m.t === 'p') { if (c.pBucket.take()) this.onPresence(c, m.d); return; }
-      if (!c.bucket.take()) {
-        if (c.bucket.v < -60) { ws.close(1008, 'rate limit'); }
-        else c.res(m.id, false, null, 'rate');
+      if (m.t === 'p') {
+        if (c.pBucket.take()) { try { this.onPresence(c, m.d); } catch (e) { this.log(`[err] presence ${c.name}: ${e.stack || e}`); } }
         return;
       }
-      try { this.onMessage(c, m); } catch (e) { this.log(`[err] ${m.t}: ${e.stack || e}`); c.res(m.id, false, null, 'server'); }
+      if (!c.bucket.take()) {
+        // over the limit: refused (the client may retry). Only a sustained flood is kicked
+        const now = Date.now();
+        if (now - c.refusedT > FLOOD_WINDOW_MS) { c.refusedT = now; c.refused = 0; }
+        if (++c.refused > FLOOD_KICK) { this.kick(c, `rate limit (${c.refused} messages refused in ${FLOOD_WINDOW_MS / 1000} s, last '${String(m.t).slice(0, 20)}')`); return; }
+        c.res(m.id, false, null, 'rate');
+        return;
+      }
+      try { this.onMessage(c, m, conn); } catch (e) { this.log(`[err] ${m.t}: ${e.stack || e}`); c.res(m.id, false, null, 'server'); }
     });
-    ws.on('close', () => this.onClose(c));
-    ws.on('error', () => {});
+    ws.on('close', (code, why) => {
+      try { this.onSocketClose(conn.c, ws, code, String(why || '')); } catch (e) { this.log(`[err] close: ${e.stack || e}`); }
+    });
+    ws.on('error', (e) => this.log(`[ws error] ${conn.c.name || ip}: ${e.message || e}`));
+  }
+
+  // A socket closed. A deliberate close (LEAVE MULTIPLAYER: 1000, the tab closing: 1001, a close frame without a
+  // code: 1005) or a kick removes the player at once; anything else (1006: the network dropped, a heartbeat timeout,
+  // a proxy restart) holds the player for the grace period: a reconnect within it carries on as if nothing happened.
+  onSocketClose(c, ws, code, why) {
+    if (c.ws !== ws) return; // (replaced by a newer connection: that one is the player now)
+    if (!c.key || this.online.get(c.key) !== c) return;
+    const deliberate = code === 1000 || code === 1001 || code === 1005;
+    if (deliberate || c.kicked || !this.graceMs || !c.world) {
+      if (!deliberate && !c.kicked) this.log(`[drop] ${c.name}: closed ${code}${why ? ` (${why})` : ''}`);
+      this.onClose(c);
+      return;
+    }
+    c.ws = null;
+    c.dropped = Date.now();
+    const left = Math.max(Math.min(5000, this.graceMs), (ws.lastSeen || c.dropped) + this.graceMs - c.dropped);
+    this.log(`[drop] ${c.name}: closed ${code}${why ? ` (${why})` : ''}, held ${Math.round(left / 1000)} s for a reconnect`);
+    clearTimeout(c.graceT);
+    c.graceT = setTimeout(() => {
+      c.graceT = null;
+      if (c.ws || !c.dropped) return;
+      this.log(`[-] ${c.name}: no reconnect within the grace period`);
+      try { this.onClose(c); } catch (e) { this.log(`[err] grace: ${e.stack || e}`); }
+    }, left);
   }
 
   onClose(c) {
     if (!c.key || this.online.get(c.key) !== c) return;
+    clearTimeout(c.graceT); c.graceT = null;
     this.online.delete(c.key);
     const w = c.world;
     if (w) {
@@ -619,13 +755,13 @@ export class GameServer {
   }
 
   // ---------------------------------------------------------------- messages
-  onMessage(c, m) {
+  onMessage(c, m, conn = null) {
     const d = m.d && typeof m.d === 'object' ? m.d : {};
     const id = isInt(m.id) ? m.id : null;
     const reply = (r) => (r?.err ? c.res(id, false, r.d, r.err) : c.res(id, true, r?.d ?? {}));
     if (m.t === 'ping') { c.send('pong', { c: d.c, s: Date.now() }); return; }
     if (m.t === 'register') return reply(this.register(c, d));
-    if (m.t === 'login') return reply(this.login(c, d));
+    if (m.t === 'login') return reply(this.login(c, d, conn));
     if (!c.world) return c.res(id, false, null, 'not_logged_in');
     const w = c.world;
     switch (m.t) {
@@ -645,6 +781,7 @@ export class GameServer {
       case 'raceJoin': return reply(w.raceJoin(c, d));
       case 'raceLeave': return reply(w.raceLeave(c));
       case 'raceFinish': return reply(w.raceFinish(c, d));
+      case 'raceProgress': return reply(w.raceProgress(c, d));
       case 'perm': return this.permRequest(c, d, id);
       case 'permAnswer': {
         const p = this.pending.get(d.rid);
@@ -695,7 +832,7 @@ export class GameServer {
     return { d: { name, token } };
   }
 
-  login(c, d) {
+  login(c, d, conn = null) {
     if (c.key) return { err: 'already_logged_in' };
     if (d.v !== PROTO) return { err: 'proto', d: { proto: PROTO } };
     const k = nameKey(d.name), a = this.store.accounts.data[k];
@@ -703,7 +840,8 @@ export class GameServer {
     const h1 = Buffer.from(sha(d.token), 'hex'), h2 = Buffer.from(a.hash, 'hex');
     if (h1.length !== h2.length || !crypto.timingSafeEqual(h1, h2)) return { err: 'bad_login' };
     const old = this.online.get(k);
-    if (old) { old.send('bye', { reason: 'replaced' }); old.ws.close(4001, 'replaced'); old.replacing = true; this.onClose(old); }
+    if (old && old.world && conn) return this.resume(old, c, d, conn);
+    if (old) { old.send('bye', { reason: 'replaced' }); old.ws?.close(4001, 'replaced'); old.replacing = true; this.onClose(old); }
     c.name = a.name; c.key = k;
     c.profile = this.store.profiles.data[k] ||= newProfile(a.name);
     if (d.look && typeof d.look === 'object') c.look = { c: str(d.look.c, 32), o: d.look.o && JSON.stringify(d.look.o).length < 400 ? d.look.o : null, s: str(d.look.s, 32) };
@@ -713,13 +851,37 @@ export class GameServer {
     const w = this.pickWorld(k);
     w.addPlayer(c);
     this.log(`[+] ${c.name} -> world ${w.id} (${w.size}/${MAX_PLAYERS}, ${this.online.size} online)`);
+    return { d: this.loginMsg(c, false) };
+  }
+  loginMsg(c, resumed) {
+    const w = c.world;
     return {
-      d: {
-        proto: PROTO, name: c.name, pid: c.pid, now: Date.now(), profile: c.profile, world: w.snapshot(),
-        chalets: this.chaletsMsg(), chaletPlot: { id: c.plot, waiting: c.chaletWaiting, moved: !!c.plotMoved },
-        catalog: CATALOG,
-      },
+      proto: PROTO, name: c.name, pid: c.pid, now: Date.now(), profile: c.profile, world: w.snapshot(),
+      chalets: this.chaletsMsg(), chaletPlot: { id: c.plot, waiting: c.chaletWaiting, moved: !!c.plotMoved },
+      catalog: CATALOG,
+      resumed, // true: the same player carried on (same world, pid, seat, chalet plot, vehicles, race entry)
+      lastRace: w.lastRaceFor(c.key), // the result of a race you were in that ended in the last minute (missed while away?)
     };
+  }
+  /** A login while this name is still online (a reconnect after a drop, or the same account on another device): the
+   *  held player carries on on the new socket: same world, pid, seat, chalet plot, vehicles, grants and race entry.
+   *  An old socket that is still open is told 'replaced' and closed. */
+  resume(old, c, d, conn) {
+    const ows = old.ws;
+    clearTimeout(old.graceT); old.graceT = null;
+    old.dropped = 0; old.kicked = false; old.replacing = false;
+    old.ws = c.ws; old.ip = c.ip;
+    old.bucket = c.bucket; old.pBucket = c.pBucket; old.refused = 0;
+    conn.c = old;
+    if (ows && ows !== old.ws) { // (still open from the server's side: another device, or a socket not yet seen dead)
+      try { ows.send(JSON.stringify({ t: 'bye', d: { reason: 'replaced' } })); ows.close(4001, 'replaced'); } catch { /* closed */ }
+    }
+    if (d.look && typeof d.look === 'object') {
+      old.look = { c: str(d.look.c, 32), o: d.look.o && JSON.stringify(d.look.o).length < 400 ? d.look.o : null, s: str(d.look.s, 32) };
+      old.world.broadcast('look', { pid: old.pid, look: old.look }, old);
+    }
+    this.log(`[+] ${old.name} reconnected -> world ${old.world.id} (resumed${ows ? ', replaced an open socket' : ''})`);
+    return { d: this.loginMsg(old, true) };
   }
 
   pickWorld(k) {

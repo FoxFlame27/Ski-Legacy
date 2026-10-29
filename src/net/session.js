@@ -200,10 +200,21 @@ export class Multiplayer {
       this.applyPlot(d.chaletPlot, true);
       this.setWorld(d.world);
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
-      this.c.hud.flash('Reconnected', 'good', 2000);
-      this.carRide.reset(); this.heliMp.reset();
-      net.emit('relogin', d); // (wave-2 systems: seats and permissions were dropped with the old connection: claim again)
-    } catch (e) { this.lost(errText(e)); }
+      // resumed: the server held you through the drop (same world and pid, seat, chalet plot, car, helicopter, race
+      // entry): nothing to undo. Otherwise (away longer than the grace period) the rides start over
+      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); }
+      this.c.hud.flash(d.resumed ? 'Reconnected' : 'Reconnected · back in the world', 'good', 2000);
+      net.emit('relogin', d); // (wave-2 systems: claim your seat again; the server keeps it if it held you)
+      // a race that ended while you were away: its results now
+      const r = this.race.start;
+      if (r && d.lastRace?.rid === r.rid) this.onRaceResult(d.lastRace);
+      else if (r && !(d.world.races || []).some((x) => x.rid === r.rid)) { this.race.start = null; this.ui?.setBoard(null); }
+    } catch (e) {
+      // the account itself is refused (bad token, old game version): back to the menu. Anything else (a timeout, the
+      // socket dropping again): try the connection again
+      if (e.code === 'bad_login' || e.code === 'proto' || !MP.active) this.lost(errText(e));
+      else { console.warn('[mp] login after reconnect:', e.code || e.message); net.reconnect('relogin'); }
+    }
   }
 
   lost(reason) {

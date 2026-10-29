@@ -22,6 +22,8 @@ import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate, setPlat
 import { LAYOUT, buildShell } from './carrentalshell.js';
 import { makeSign } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
+import { Impound } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
+import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 
 export const RENTALS = [
   { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 1200, length: 4.3 },
@@ -83,6 +85,8 @@ export class CarRental {
       o.drive.locked = (e) => (e.rental || e.free ? null : 'Rent a car at Car Rental in Legacy Village');
       o.drive.onWreck = (e) => this.wrecked(e);
     }
+    try { this.impound = new Impound(this, { fee: WRECK_FEE }); } catch (e) { console.warn('rental car park', e); this.impound = null; }
+    try { this.ownerTags = new OwnerTags({ scene: o.scene, camera: o.camera, rental: this }); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     // the save: your rental back in the yard
     const s = o.save.rental;
     if (s && RETIRED[s.id]) s.id = RETIRED[s.id];
@@ -221,6 +225,7 @@ export class CarRental {
     e.dress = (i, tt) => dressCar(i, tt, e.cfg);
     (this.parking.cars ||= []).push(e);
     if (this.drive) this.drive._cc = null; // (drive.js re-collects the cars' colliders)
+    if (!free) this.impound?.adopt(e); // (towed: in its impound bay, locked until tomorrow)
     return e;
   }
   // admin panel (ui/admin.js): a free car of a random model from the fleet, parked at { x, z, yaw }; yours to drive
@@ -263,7 +268,7 @@ export class CarRental {
     this.current = this.spawn(cfg);
     this.save.rental = cfg;
     this.writeSave();
-    this.hud?.flash(`${spec.label} rented · it waits in the yard out front`, 'gold', 3200);
+    this.hud?.flash(`${spec.label} rented · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'gold', 3200);
   }
 
   /** The rental in the yard rebuilt from save.rental (switching between the single-player and multiplayer saves). */
@@ -279,7 +284,7 @@ export class CarRental {
     this.save.rental = normConfig(cfg);
     this.current = this.spawn(this.save.rental);
     this.writeSave();
-    this.hud?.flash(`${spec?.label || 'Car'} rented · ${this.save.rental.plate} · it waits in the yard out front`, 'gold', 3200);
+    this.hud?.flash(`${spec?.label || 'Car'} rented · ${this.save.rental.plate} · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'gold', 3200);
   }
 
   // drive.js: a car was wrecked (yours: the fee, once, and the rental ends); the truck fetches it
@@ -330,7 +335,7 @@ export class CarRental {
       this.player.teleport(this.door.x + f.x * 0.8, this.door.z + f.z * 0.8, Math.atan2(f.x, f.z));
       this.player.camYaw = Math.atan2(f.x, f.z) + Math.PI + 0.4;
       this.player.camPitch = -0.12;
-      if (this.current) setTimeout(() => this.hud?.flash('Your rental car waits in the yard · E to drive', 'good', 2800), 400);
+      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? 'Your car is impounded · available tomorrow in the car park' : `Your rental car waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard'} · E to drive`, 'good', 2800), 400);
     };
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }
@@ -379,6 +384,8 @@ export class CarRental {
   update(dt) {
     if (!this.L) return;
     this.truck?.update(dt);
+    this.impound?.update(dt); // (your car left on a road: towed to the impound)
+    try { this.ownerTags?.update(dt); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     const n = nightUniform?.value ?? 0;
     if (this.signMat) this.signMat.emissiveIntensity = 0.05 + 0.75 * n;
     if (this.lampMat) this.lampMat.emissiveIntensity = 0.2 + 2.4 * n;

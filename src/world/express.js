@@ -38,7 +38,7 @@ export const EXPRESS_LIVERY = true; // the railcar in Legacy blue (false: the Wo
 const CARS = 4;                     // two two-car units in multiple: cab, car, car, cab (the middle cabs meet)
 const FLIP = [false, true, false, true]; // car k turned round (its cab facing back)
 const PITCH = CAR.len + CAR.gap;    // m between car centres
-const PER_DIR = 3;                  // trains each way round the ring (one every ~11 min)
+const PER_DIR = 4;                  // trains each way round the ring (one every ~8 min; Oct 29, the user: 4 trains, shorter waits in multiplayer. Double track: they never meet)
 export const FAST = 10;             // Space: the timetable runs this much faster while you ride
 const NEAR = 420, FAR = 4500;       // m from the viewer: full cars / the far version / hidden
 const STATION_R = 10;              // m round a station's board point where E boards (besides anywhere on its platforms)
@@ -127,6 +127,7 @@ function livery(mat, key) {
 class TrainSet {
   constructor(ex, dir, phase, index) {
     this.dir = dir; this.phase = phase; this.index = index;
+    this.id = `express-${dir > 0 ? 'e' : 'w'}${index}`; // stable id (multiplayer seats: claimSeat('express', id))
     this.group = new THREE.Group();
     this.group.name = `express-train-${dir > 0 ? 'e' : 'w'}${index}`;
     this.cars = [];

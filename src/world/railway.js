@@ -32,7 +32,17 @@ import { world } from './world.js';
 
 export const RAIL_PRICE = 50; // uphill (Oct 29 rebalance: was $30)
 const ALT0 = 1245; // the village's altitude above sea level (signs)
-const SET_HALF = (CAR.len + CAR.gap) / 2; // car centres from the set's middle
+const SET_HALF = (CAR.len + CAR.gap) / 2; // car centres from a unit's middle
+// Each train runs as RAIL_UNITS two-car units in multiple (cab, car, car, cab: the middle cabs meet, like the Legacy
+// Express): the line is single track with one passing loop, so its frequency is fixed by the crossing (two trains,
+// one every ~5 min); the extra units double the seats instead (Oct 29, the user: "4 trains so that in multiplayer
+// you don't have to wait so long if the trains are full"). 2 units (4 cars) = 71.8 m: fits every platform and the loop (the
+// crossing keeps 45 m clear of the turnouts: a timetable check in Node).
+export const RAIL_UNITS = 2;
+const NCARS = 2 * RAIL_UNITS;
+const PITCH = CAR.len + CAR.gap;                  // m between car centres
+const HALF_LEN = ((NCARS - 1) / 2) * PITCH + CAR.half; // nose to the train's middle
+const carOff = (k) => ((NCARS - 1) / 2 - k) * PITCH; // car k's centre from the train's middle (+: up the line)
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _t = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0);
 const _f = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
@@ -111,10 +121,12 @@ class TrainSet {
   constructor(railway, phase, index) {
     this.phase = phase;
     this.index = index;
+    this.id = `rail-${index}`; // stable id (multiplayer seats: claimSeat('train', id, { n: seatCount }))
     this.group = new THREE.Group();
     this.group.name = `rail-train-${index}`;
-    // car 0 leads uphill (cab at its +z end, which faces up the line), car 1 is turned round (cab facing down)
-    this.cars = [buildCar({ cab: true, number: index * 2 + 1 }), buildCar({ cab: true, number: index * 2 + 2 })];
+    // car 0 leads uphill (cab at its +z end, which faces up the line); every odd car is turned round (cab facing
+    // down), so the last car leads downhill
+    this.cars = Array.from({ length: NCARS }, (_, k) => buildCar({ cab: true, number: index * NCARS + k + 1 }));
     for (const c of this.cars) { this.group.add(c.group); this.group.add(c.lo); c.lo.visible = false; }
     this.state = {};
     this.s = TRIP_S0;
@@ -126,10 +138,10 @@ class TrainSet {
     this.s = s;
     const dist = viewer ? Math.hypot(viewer.x - trackPoint(s, onLoop, _a).x, viewer.z - _a.z) : 0;
     const near = dist < 220;
-    for (let k = 0; k < 2; k++) {
+    for (let k = 0; k < this.cars.length; k++) {
       const c = this.cars[k];
-      const sc = s + (k === 0 ? SET_HALF : -SET_HALF);
-      const flip = k === 1; // car 1 faces down the line
+      const sc = s + carOff(k);
+      const flip = k % 2 === 1; // (odd cars face down the line)
       const sFront = sc + (flip ? -CAR.bogie : CAR.bogie), sBack = sc - (flip ? -CAR.bogie : CAR.bogie);
       trackPoint(sFront, onLoop, _a); trackPoint(sBack, onLoop, _b);
       const g = c.group;
@@ -151,6 +163,8 @@ class TrainSet {
     }
     this.near = near;
   }
+  /** Seats in the whole train (every car's). */
+  get seatCount() { return this.cars.reduce((n, c) => n + (c.seats?.length || 0), 0); }
 }
 
 export class Railway {
@@ -172,7 +186,7 @@ export class Railway {
     // no car drives through a train, the train shoves any car on the line aside (traffic.js)
     const bodies = this.trains.flatMap((tr) => tr.cars.map((c) => c.group));
     addTrainBlocker(() => bodies, { hw: CAR.hw, hd: CAR.half });
-    this.solid = new CarColliders(colliders, 4, SET_HALF); // the cars near you are solid (trainstop.js)
+    this.solid = new CarColliders(colliders, 2 * NCARS, SET_HALF); // the cars near you are solid (trainstop.js)
     this.passengerMats = [];
     MeshoptSimplifier.ready.then(() => this.seatPassengers(this.trains[0])).catch((e) => console.warn('rail passengers', e));
     this.t = CYCLE * 0.62; // timetable time (s)
@@ -334,9 +348,9 @@ export class Railway {
       if (!p || !(dt > 0)) { release(b, v); continue; }
       const dir = st.dir || (st.leg === 'bottom' ? 1 : -1); // (standing at a terminus: the way it leaves)
       const trackLat = dir < 0 ? loopOffset(sp) : 0;    // (going down it takes the passing loop's other track)
-      const nose = st.s + dir * (SET_HALF + CAR.half);
+      const nose = st.s + dir * HALF_LEN;
       const D = (sp - nose) * dir;
-      const on = lat !== null && Math.abs(lat - trackLat) < LAT && D > -(2 * SET_HALF + 2 * CAR.half + 2);
+      const on = lat !== null && Math.abs(lat - trackLat) < LAT && D > -(2 * HALF_LEN + 2);
       rate = Math.min(rate, brakeFor(b, v, on ? D : null, dt, audio));
     }
     for (const tr of this.trains) if (tr.stop && tr.state.s !== undefined) tr.stop.ve = rate * (tr.state.speed || 0); // (all on the one clock)
@@ -347,9 +361,9 @@ export class Railway {
     this.solid.begin();
     if (p) for (const tr of this.trains) {
       const onLoop = tr.state.dir < 0 && tr.state.s > LOOP.s0 && tr.state.s < LOOP.s1;
-      if (Math.abs(trackPoint(tr.state.s, onLoop, _c).x - p.x) > 60 || Math.abs(_c.z - p.z) > 60) continue;
-      for (const k of [-1, 1]) {
-        const sc = tr.state.s + k * SET_HALF;
+      if (Math.abs(trackPoint(tr.state.s, onLoop, _c).x - p.x) > 80 || Math.abs(_c.z - p.z) > 80) continue;
+      for (let k = 0; k < tr.cars.length; k++) {
+        const sc = tr.state.s + carOff(k);
         trackPoint(sc, onLoop, _c); railAt(sc, _f);
         this.solid.add(_c.x, _c.y, _c.z, _f.dx, _f.dz, p);
       }
@@ -400,7 +414,7 @@ export class Railway {
     const u = ((((this.t / CYCLE + tr.phase) % 1) + 1) % 1) * CYCLE;
     this.t += want - u;
     this.update(0, {});
-    const carIdx = up ? 0 : 1; // the car whose cab leads in this direction
+    const carIdx = up ? 0 : tr.cars.length - 1; // the car whose cab leads in this direction
     const car = tr.cars[carIdx];
     // the front seats facing the way we go, on the side with the better view (left going up: the valley)
     const seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
@@ -529,7 +543,7 @@ export class Railway {
       this.camS = s;
       let rigid = false;
       if (follow) {
-        this.camS = s - dirSign * (SET_HALF + CAR.half + 10);
+        this.camS = s - dirSign * (HALF_LEN + 10);
         const back = trackPoint(this.camS, onLoop, _a);
         // in a tunnel: on the tube's axis, 4.6 m over the rail (inside the lining whatever the curve); in a cutting
         // a little higher, over the train's roof

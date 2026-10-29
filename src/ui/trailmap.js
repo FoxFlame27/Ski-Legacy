@@ -212,7 +212,7 @@ export class TrailMap {
           <div class="tm-grid">${sym('road', 'Road')}${sym('scenic', 'Scenic road')}${sym('lot', 'Car park')}${sym('ring', 'Roundabout')}</div>
           <div class="mp-head">ON THE MAP</div>
           <div class="tm-grid">${sym('hut', 'Mountain hut')}${sym('bus', 'Ski bus')}${sym('park', 'Terrain park')}${sym('heli', 'Heli-ski')}
-          ${sym('shop', 'Ski shop')}${sym('car', 'Car rental')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}
+          ${sym('shop', 'Ski shop')}${sym('car', 'Car rental')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}${sym('car mycar', 'Your car')}${sym('car impound', 'Impounded car')}
           ${sym('secret', 'Secret found')}${sym('jobs', 'Job board')}</div>
         </div>
       </div>
@@ -659,7 +659,7 @@ export class TrailMap {
       g.beginPath(); g.arc(ox, oy, 5.5, 0, Math.PI * 2); g.fillStyle = GOLD; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
       this.spot(ox, oy, 8, own.x, own.z, own.name || 'Your chalet');
     }
-    if (own?.name) this.label(own.name.toUpperCase(), this.X(own.x), this.Z(own.z), { size: 12, color: '#8a6a00', prio: 1, cands: this.around(Math.max(10, 9 * s), 6) }); // (your chalet: "CHALET 7")
+    if (own) this.label(`YOUR CHALET${own.name ? ` · ${own.name.toUpperCase()}` : ''}`, this.X(own.x), this.Z(own.z), { size: 12, color: '#8a6a00', prio: 1, cands: this.around(Math.max(10, 9 * s), 6) }); // (your chalet: "YOUR CHALET · CHALET 7")
     for (const p of C.playground || []) { g.fillStyle = '#2fbf5b'; g.beginPath(); g.arc(this.X(p.x), this.Z(p.z), Math.max(2.5, 4 * s), 0, Math.PI * 2); g.fill(); }
     g.restore();
     this.reserve(cx, cy, 12);
@@ -1100,6 +1100,28 @@ export class TrailMap {
       this.reserve(x, y, 8);
       this.spot(x, y, 8, m.x, m.z, m.label);
       this.label(m.label, x, y, { size: 14, color: '#8a6200', prio: 4, cands: this.around(7) });
+    }
+    // what you own (game/ownertags.js, hosted by the car rental): your car (gold; grey while impounded) and the
+    // helicopter you rented, waiting out on the mountain; your chalet has its gold disc (drawChalets)
+    let mine = [];
+    try { mine = window.__game?.carRental?.ownerTags?.mapMarkers?.() || []; } catch { mine = []; }
+    for (const m of mine) {
+      if (m.kind === 'chalet') continue;
+      const x = X(m.x), y = Z(m.z);
+      if (!this.inView(x, y)) continue;
+      const col = m.kind === 'impound' ? '#6f7788' : GOLD;
+      g.fillStyle = col; g.strokeStyle = '#fff'; g.lineWidth = 2;
+      g.beginPath(); g.roundRect(x - 8, y - 8, 16, 16, 4); g.fill(); g.stroke();
+      g.fillStyle = '#fff';
+      if (m.kind === 'heli') { g.font = `italic 700 12px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('H', x, y + 0.5); }
+      else { // (a little car)
+        g.beginPath(); g.roundRect(x - 5.5, y - 0.5, 11, 3.6, 1.4); g.fill();
+        g.beginPath(); g.moveTo(x - 3.2, y - 0.5); g.lineTo(x - 1.8, y - 4); g.lineTo(x + 2.2, y - 4); g.lineTo(x + 3.6, y - 0.5); g.closePath(); g.fill();
+        g.fillStyle = col; for (const wx of [-3.2, 3.2]) { g.beginPath(); g.arc(x + wx, y + 3.3, 1.4, 0, Math.PI * 2); g.fill(); }
+      }
+      this.reserve(x, y, 10);
+      this.spot(x, y, 10, m.x, m.z, m.label);
+      this.label(m.label, x, y, { size: 13.5, weight: 700, color: m.kind === 'impound' ? '#4a5263' : '#8a6a00', prio: 1, cands: this.around(9) });
     }
   }
 

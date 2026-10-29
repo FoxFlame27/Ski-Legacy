@@ -836,6 +836,7 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .tm-sym.car::after { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 9); height: calc(var(--u) * 3.5); margin: calc(var(--u) * -0.5) 0 0 calc(var(--u) * -4.5); border-radius: 2px; background: #fff; box-shadow: calc(var(--u) * 1.5) calc(var(--u) * -2.5) 0 calc(var(--u) * -0.6) #fff; }
 .tm-sym.med::before { content: '+'; background: #fff; color: var(--ko); border: 2px solid var(--ko); box-sizing: border-box; font: 900 calc(var(--u) * 14)/1 var(--ui); }
 .tm-sym.chalet::before { content: ''; position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 11); height: calc(var(--u) * 11); margin: calc(var(--u) * -5.5); border-radius: 50%; background: #e7a500; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(21, 70, 200, 0.12); }
+.tm-sym.car.mycar::before { background: #e7a500; } .tm-sym.car.impound::before { background: #6f7788; } /* (your car / impounded: game/ownertags.js) */
 .tm-hints { flex: none; display: flex; flex-wrap: wrap; gap: calc(var(--u) * 22); font: 600 var(--t-xs)/1 var(--ui); color: rgba(255, 255, 255, 0.88); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
 
 /* =================== PHOTO MODE (P, ui/photomode.js) =================== */

@@ -14,6 +14,9 @@ import { fitModel } from '../core/assets.js';
 import { nightUniform } from '../world/village.js';
 import { knockPerson, people } from './peoplehits.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
+import { VILLAGE_BUILDINGS } from '../world/layout.js';
+import { RAIL, railAt, railNearest } from '../world/railroute.js';
+import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 
 // Off until verified in the game (the browser queue ran out before the check): with it off nothing is placed, no
 // light or sound is created and every main.js hook is inert. Dev override: ?flags=sleds (or localStorage 'sl.flags').
@@ -38,7 +41,8 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _ray = new THREE.Raycaster();
 const _p = new THREE.Vector3(), _dir = new THREE.Vector3();
 // marks it leaves in the snow (fx/snowfx.js trails): [id, metres ahead of the centre, metres to the right, width]
-const MAX_SLEDS = 40; // parked sleds round the resort (each drawn only within 380 m of the camera)
+const MAX_SLEDS = 15; // parked sleds round the resort, placed at random each session (each drawn only within 380 m of the camera)
+const VILLAGE_SLEDS = 5; // ...of them in Legacy Village
 const SLED_MARKS = [['sled-ski-l', 0.95, -0.5, 0.12], ['sled-ski-r', 0.95, 0.5, 0.12], ['sled-track', -0.9, 0, 0.42]];
 const SEAT = new THREE.Vector3(0, 0.74, -0.32);   // the rider's seat (sled frame: +z forward, y up from the snow)
 const TRACK = new THREE.Vector3(0, 0.2, -1.35);   // where the track throws snow
@@ -65,32 +69,47 @@ export class Snowmobiles {
     this.lampTarget = new THREE.Object3D();
     this.lamp.target = this.lampTarget;
     scene.add(this.lamp, this.lampTarget);
-    if (models.snowmobile) for (const spot of this.pickSpots()) this.add(spot.x, spot.z, spot.heading);
+    // (placed on the first frame: the chalet village, car parks and stations are all planned by then)
+    this.spawnPending = !!models.snowmobile;
+  }
+  spawnParked() {
+    this.spawnPending = false;
+    try { for (const spot of this.pickSpots()) this.add(spot.x, spot.z, spot.heading); } catch (e) { console.warn('snowmobiles: spots', e); }
   }
 
   get active() { return !!this.d; }
   get speed() { return this.d ? Math.hypot(this.d.vx, this.d.vz) : 0; }
 
   // ------------------------------------------------------------------ parked sleds
-  // Where the resort keeps them: the village (round the plaza), every lift's bottom and top station, every hut,
-  // every Legacy Express station and every race's start and finish: on clear, gentle snow off the runs, a few metres
-  // from the buildings, never two within 40 m (Oct 27, the user: "add a lot more snowmobiles everywhere").
+  // MAX_SLEDS at random each session (Oct 29, the user: "make snowscooters spawn randomly ... 15 snow scooters around
+  // the map"): VILLAGE_SLEDS round Legacy Village, the rest drawn from the huts, the car parks, the rail and Express
+  // stations, the chalet village and the lifts' bottom stations; on clear, gentle snow off the roads, runs, lift lines
+  // and tracks, clear of every collider, never two within 40 m.
   pickSpots() {
-    const out = [], L = this.layout, W = this.world;
-    const tries = [{ x: 20, z: -60, near: 'gondola base' }, { x: 46, z: 74, near: 'village' }, { x: -120, z: -20, near: 'village' }, { x: 140, z: 40, near: 'village' }]; // (the gondola-base one replaces the old parked prop)
-    for (const l of L.lifts) {
-      const [ux, uz] = l.dir || [0, 1];
-      tries.push({ x: l.bottom.x - uz * 30 - ux * 10, z: l.bottom.z + ux * 30 - uz * 10, near: l.name });
-      tries.push({ x: l.top.x + uz * 30 + ux * 12, z: l.top.z - ux * 30 + uz * 12, near: l.name });
+    const out = [], L = this.layout, rnd = Math.random;
+    const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    const village = [{ x: 20, z: -60 }, { x: 46, z: 74 }, { x: -120, z: -20 }, { x: 140, z: 40 }];
+    for (const [bx, bz] of VILLAGE_BUILDINGS) { const d = Math.hypot(bx, bz) || 1; village.push({ x: bx + (bx / d) * 16, z: bz + (bz / d) * 16 }); }
+    const other = [];
+    for (const h of L.huts || []) other.push({ x: h.x + 14, z: h.z + 10 });
+    for (const lot of busRoads.lots || []) {
+      if (lot.building || !Number.isFinite(lot.x)) continue;
+      const ux = lot.ux ?? 1, uz = lot.uz ?? 0;
+      other.push({ x: lot.x + ux * ((lot.hw || 10) + 7), z: lot.z + uz * ((lot.hw || 10) + 7) }); // (beside the car park)
     }
-    for (const h of L.huts) tries.push({ x: h.x + 14, z: h.z + 10, near: h.name });
-    for (const st of L.express?.stations || []) { const b = st.exit || st.board; if (b) tries.push({ x: b.x, z: b.z, near: st.name }); }
-    try { for (const e of freeCourses()) { tries.push({ x: e.heli.x + 15, z: e.heli.z + 10, near: e.name }); tries.push({ x: e.finish.x + 70, z: e.finish.z + 40, near: e.name }); } } catch { /* (no courses) */ }
-    for (const t of tries) {
-      if (out.length >= MAX_SLEDS) break;
-      const s = this.clearSpot(t.x, t.z, 26, out);
-      if (s) out.push({ ...s, heading: Math.atan2(-s.x, -s.z) + 0.6 }); // nose roughly toward the valley
+    for (const st of RAIL.stations || []) {
+      if (st.underground) continue;
+      const p = railAt(st.s), side = st.side || 1;
+      other.push({ x: p.x - p.dz * side * 16, z: p.z + p.dx * side * 16 });
     }
+    for (const st of L.express?.stations || []) { const b = st.exit || st.board; if (b) other.push({ x: b.x, z: b.z }); }
+    const cv = L.chaletVillage;
+    if (cv?.center) { other.push({ x: cv.center.x, z: cv.center.z }); if (cv.houses?.length) { const h = cv.houses[Math.floor(rnd() * cv.houses.length)]; other.push({ x: h.x + 10, z: h.z + 10 }); } }
+    for (const l of L.lifts || []) { const [ux, uz] = l.dir || [0, 1]; other.push({ x: l.bottom.x - uz * 30 - ux * 10, z: l.bottom.z + ux * 30 - uz * 10 }); }
+    const take = (list, n) => { let k = 0; for (const t of shuffle(list)) { if (k >= n || out.length >= MAX_SLEDS) break; const sp = this.clearSpot(t.x, t.z, 26, out); if (sp) { out.push({ ...sp, heading: rnd() * Math.PI * 2 }); k++; } } };
+    take(village, VILLAGE_SLEDS);
+    take(other, MAX_SLEDS - out.length);
+    if (out.length < MAX_SLEDS) take(village, MAX_SLEDS - out.length); // (short of places: more in the village)
     return out;
   }
   clearSpot(x0, z0, R, taken = []) {
@@ -99,7 +118,11 @@ export class Snowmobiles {
       const e = 2, g = Math.hypot(W.height(x + e, z) - W.height(x - e, z), W.height(x, z + e) - W.height(x, z - e)) / (2 * e);
       if (g > 0.18) return false;
       const c = W.corridorAt(x, z);
-      if (c.kind && c.d < 3) return false; // off the runs, lifts, roads
+      if (c.kind && c.d < 6) return false; // off the runs, lifts, roads
+      if (busRoads.roads.length && laneDistance(x, z) < ROAD_HALF + 4) return false; // (and off the bus roads)
+      for (const lot of busRoads.lots || []) { const dx = x - lot.x, dz = z - lot.z; if (Math.abs(dx * (lot.ux ?? 1) + dz * (lot.uz ?? 0)) < (lot.hw || 0) + 3 && Math.abs(dx * (lot.vx ?? 0) + dz * (lot.vz ?? 1)) < (lot.hd || 0) + 3) return false; } // (not in a car park's bays)
+      const rn = railNearest(x, z);
+      if (rn && rn.d < 9) return false; // (off the railway)
       for (const k of this.colliders) { const r = (k.r ?? Math.hypot(k.hw, k.hd)) + 3; if (Math.abs(k.x - x) < r && Math.abs(k.z - z) < r && Math.hypot(k.x - x, k.z - z) < r) return false; }
       if (this.vegetation?.collide?.(x, z, 3)) return false;
       for (const t of taken) if (Math.hypot(t.x - x, t.z - z) < 40) return false;
@@ -259,6 +282,7 @@ export class Snowmobiles {
   // ------------------------------------------------------------------ per frame
   /** @param {object|null} input  the Input while you may drive (null in menus) */
   update(dt, input) {
+    if (this.spawnPending && dt > 0) this.spawnParked();
     const d = this.d;
     // parked sleds far from the camera are not drawn (~40k triangles each)
     this.cullT = (this.cullT || 0) - dt;

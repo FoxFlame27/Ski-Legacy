@@ -256,7 +256,7 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
   transition: opacity 0.34s ease, transform 0.42s cubic-bezier(.2,.9,.2,1); }
 .menu-screen.enter { opacity: 0; transform: translateX(calc(var(--dir, 1) * var(--u) * 70)); transition: none; }
 .menu-screen.exit { opacity: 0; transform: translateX(calc(var(--dir, 1) * var(--u) * -70)); pointer-events: none; }
-.scr-main, .scr-pause { padding-top: calc(var(--u) * 226); }
+.scr-main, .scr-playmode, .scr-pause { padding-top: calc(var(--u) * 226); }
 .scr-pause.tight { padding-top: calc(var(--u) * 116); }
 .menu-col { display: flex; flex-direction: column; align-items: flex-start; gap: calc(var(--u) * 6); }
 

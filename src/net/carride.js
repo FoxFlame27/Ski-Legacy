@@ -15,6 +15,8 @@ import { MP } from './mode.js';
 import { net } from './client.js';
 import { ST, F } from './protocol.js';
 import { makeTag } from './remote.js';
+
+const OWN_TAG_OFF = true;
 import { carSeats, seatWorld } from './vehicles.js';
 import { busRoads } from '../game/bus/roads.js';
 
@@ -123,6 +125,8 @@ export class CarRide {
 
   // "<you>'s car" over your parked car (drive.js rebuilds the car's children on getting in / out: put back each frame)
   ownerTag(cur, driving) {
+    // (off: game/ownertags.js already puts your gold name tag over your own car; two tags stacked over it, Oct 29)
+    if (OWN_TAG_OFF) { if (this.tag) this.tag.visible = false; return; }
     const tag = this.tag ||= makeTag(`${MP.name}'s car`, '#0f2f6b');
     if (!cur || driving) { if (tag.visible) tag.visible = false; return; }
     if (tag.parent !== cur.car) { cur.car.add(tag); tag.position.set(0, (cur.t?.size?.y || 1.5) + 0.55, 0); }

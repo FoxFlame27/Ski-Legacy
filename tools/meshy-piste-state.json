@@ -1,0 +1,17 @@
+{
+  "bnet_panel": {
+    "preview": "01a1875a-c554-76ed-91b8-fb7b695bd7d9",
+    "refine": "01a1875b-9a01-7042-aaa3-ad58d566931b",
+    "done": true
+  },
+  "flag_pole": {
+    "preview": "01a1875a-c517-7351-9f24-f058bcb22958",
+    "refine": "01a1875b-769f-7757-9c2e-ff3ec66088d4",
+    "done": true
+  },
+  "rope_pole": {
+    "preview": "01a1875a-c516-74f3-83f2-2afd1442c55f",
+    "refine": "01a1875b-7661-7514-b958-4fc32b5e346b",
+    "done": true
+  }
+}

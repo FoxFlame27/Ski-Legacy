@@ -5,6 +5,12 @@
 //    posts every ~3.5 m, with a hem, a top rope and a low snow drift at the foot (one shared instance matrix per
 //    panel: the panel is a unit quad sheared onto its two posts, so it follows the slope);
 //  - rope lines: light orange poles every ~6 m with a cord and orange / yellow bunting.
+// Meshy models (tools/meshy-piste.mjs, public/models/piste) replace the procedural look once they load:
+//  - bnet_panel.glb: a B-net section with its two posts, sheared onto each span exactly like the procedural panel
+//    (so it follows the slope); it stands in for the panel, its trim and the B posts;
+//  - rope_pole.glb / flag_pole.glb: the rope line's stakes (alternating pennant / flag), turned along the line;
+//    the rope spans keep only their cord.
+// A model that fails to load (or is over its triangle budget) leaves that part procedural.
 // Four draw calls in all (net panels, panel trim, rope spans, posts); none of them casts a shadow. The instances
 // live in 256 m cells and only the cells within NET_FAR of the camera are packed into the meshes (repacked
 // after the camera moves ~40 m).
@@ -61,17 +67,52 @@ function trimGeo() {
   }
   return quadGeo(rows, true);
 }
-function ropeGeo() {
+function ropeGeo(bunting = true) {
   const cord = rgb('#f08a12'), A = rgb('#ff6a12'), Y = rgb('#ffd21f');
   const rows = [
     [[0, 0.985, 0, ...cord], [1, 0.985, 0, ...cord], [0, 1.015, 0, ...cord], [1, 1.015, 0, ...cord]],
     [[0, 1.015, -0.012, ...cord], [1, 1.015, -0.012, ...cord], [0, 1.015, 0.012, ...cord], [1, 1.015, 0.012, ...cord]],
   ];
-  for (let k = 0; k < 9; k++) { // bunting: small pennants hanging off the cord
+  for (let k = 0; bunting && k < 9; k++) { // bunting: small pennants hanging off the cord
     const x0 = 0.07 + k * 0.1, col = k % 2 ? Y : A;
     rows.push([[x0, 0.99, 0, ...col], [x0 + 0.04, 0.99, 0, ...col], [x0 + 0.02, 0.83, 0, ...col]]);
   }
   return quadGeo(rows, true);
+}
+const _up = new THREE.Vector3(0, 1, 0);
+// a loaded GLB's meshes as [{ geo, mat }], merged into one frame, the long horizontal side along x and normalised by
+// norm(box, size, shaft) (shaft: the centre of the model's lowest 30 %, i.e. a pole's foot); null when missing or
+// over maxTris triangles
+function glbParts(gltf, dequantize, name, maxTris, norm) {
+  if (!gltf) return null;
+  const parts = [];
+  gltf.scene.updateMatrixWorld(true);
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh || !o.geometry?.attributes.position) return;
+    const geo = dequantize(o.geometry);
+    for (const k of Object.keys(geo.attributes)) if (!['position', 'normal', 'uv'].includes(k)) geo.deleteAttribute(k);
+    geo.applyMatrix4(o.matrixWorld);
+    parts.push({ geo, mat: Array.isArray(o.material) ? o.material[0] : o.material });
+  });
+  const tris = parts.reduce((s, p) => s + (p.geo.index ? p.geo.index.count : p.geo.attributes.position.count) / 3, 0);
+  if (!parts.length || tris > maxTris) { console.warn(`piste fence model ${name}: ${tris} triangles, keeping the procedural look`); return null; }
+  const bounds = () => { const b = new THREE.Box3(); for (const p of parts) { p.geo.computeBoundingBox(); b.union(p.geo.boundingBox); } return b; };
+  let box = bounds(), size = box.getSize(new THREE.Vector3());
+  if (size.z > size.x * 1.05) {
+    const r = new THREE.Matrix4().makeRotationY(Math.PI / 2);
+    for (const p of parts) p.geo.applyMatrix4(r);
+    box = bounds(); size = box.getSize(new THREE.Vector3());
+  }
+  const shaft = new THREE.Vector3(), y0 = box.min.y + size.y * 0.3;
+  let n = 0;
+  for (const p of parts) {
+    const a = p.geo.attributes.position;
+    for (let i = 0; i < a.count; i++) if (a.getY(i) < y0) { shaft.x += a.getX(i); shaft.z += a.getZ(i); n++; }
+  }
+  if (n) shaft.divideScalar(n); else box.getCenter(shaft);
+  const M = norm(box, size, shaft);
+  for (const p of parts) { p.geo.applyMatrix4(M); p.geo.computeBoundingSphere(); }
+  return parts;
 }
 function postGeo() {
   const g = new THREE.CylinderGeometry(0.9, 1, 1, 6, 1, false);
@@ -92,7 +133,10 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
   const cellAt = (x, z) => {
     const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL);
     let c = cells.get(k);
-    if (!c) cells.set(k, (c = { cx: (Math.floor(x / CELL) + 0.5) * CELL, cz: (Math.floor(z / CELL) + 0.5) * CELL, panel: [], rope: [], post: [], postCol: [] }));
+    if (!c) {
+      cells.set(k, (c = { cx: (Math.floor(x / CELL) + 0.5) * CELL, cz: (Math.floor(z / CELL) + 0.5) * CELL,
+        panel: [], rope: [], postB: [], postBCol: [], postR: [], postRCol: [], poleA: [], poleB: [] }));
+    }
     return c;
   };
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), pv = new THREE.Vector3(), sv = new THREE.Vector3();
@@ -114,11 +158,22 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
       posts.push({ x, z, g: world.height(x, z), nx: a[2] + (b[2] - a[2]) * t, nz: a[3] + (b[3] - a[3]) * t });
     }
     // posts (planted 0.25 m into the snow); the rope line's poles alternate orange / white
+    // (the Meshy stakes: turned along the line, uniformly scaled to the post height, a little jitter)
     posts.forEach((p, k) => {
       const c = cellAt(p.x, p.z);
       m.compose(pv.set(p.x, p.g - 0.25, p.z), q.identity(), sv.set(T.postR, T.postH + 0.25, T.postR));
-      c.post.push(...m.elements);
-      c.postCol.push(...(f.type === 'R' ? (k % 2 ? colW : colR) : colB));
+      if (f.type === 'R') {
+        c.postR.push(...m.elements);
+        c.postRCol.push(...(k % 2 ? colW : colR));
+        const a = posts[Math.max(0, k - 1)], b = posts[Math.min(posts.length - 1, k + 1)];
+        q.setFromAxisAngle(_up, Math.atan2(-(b.z - a.z), b.x - a.x) + ((k * 7) % 5 - 2) * 0.06);
+        const H = T.postH + 0.25;
+        m.compose(pv, q, sv.set(H, H, H));
+        (k % 2 ? c.poleB : c.poleA).push(...m.elements);
+      } else {
+        c.postB.push(...m.elements);
+        c.postBCol.push(...colB);
+      }
       stats.posts++;
     });
     // spans: a unit quad sheared onto posts a -> b (bottom pulled toward the run by the catch angle)
@@ -158,11 +213,13 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
     }
   }
   stats.cells = cells.size;
-  for (const c of cells.values()) for (const k of ['panel', 'rope', 'post', 'postCol']) c[k] = new Float32Array(c[k]);
+  const KEYS = ['panel', 'rope', 'postB', 'postBCol', 'postR', 'postRCol', 'poleA', 'poleB'];
+  for (const c of cells.values()) for (const k of KEYS) c[k] = new Float32Array(c[k]);
 
   // ---- the four instanced meshes (capacity: every instance; only the cells near the camera are packed)
-  const tot = { panel: 0, rope: 0, post: 0 };
+  const tot = { panel: 0, rope: 0, postB: 0, postR: 0, poleA: 0, poleB: 0 };
   for (const c of cells.values()) for (const k in tot) tot[k] += c[k].length / 16;
+  tot.post = tot.postB + tot.postR;
   const trimMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, side: THREE.DoubleSide });
   const postMat = new THREE.MeshStandardMaterial({ roughness: 0.6 });
   const mk = (geo, mat, cap, name) => {
@@ -181,26 +238,92 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
   post.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, tot.post) * 3), 3);
   post.instanceColor.setUsage(THREE.DynamicDrawUsage);
 
+  // the Meshy models (set once loaded): glb.panel: [InstancedMesh] sharing panel.instanceMatrix; glb.poleA / poleB:
+  // [InstancedMesh] sharing their own matrix buffer
+  const glb = { panel: null, poleA: null, poleB: null };
+  const glbPoles = () => !!(glb.poleA && glb.poleB);
+
   let packX = Infinity, packZ = Infinity;
   const pack = (x, z) => {
     packX = x; packZ = z;
-    let np = 0, nr = 0, nq = 0;
-    const R = FAR + REPACK;
+    let np = 0, nr = 0, nq = 0, na = 0, nb = 0;
+    const R = FAR + REPACK, poles = glbPoles();
+    const pa = glb.poleA?.[0].instanceMatrix.array, pb = glb.poleB?.[0].instanceMatrix.array;
+    const addPosts = (mat, col) => {
+      if (!mat.length) return;
+      post.instanceMatrix.array.set(mat, nq * 16); post.instanceColor.array.set(col, nq * 3); nq += mat.length / 16;
+    };
     for (const c of cells.values()) {
       if (Math.hypot(Math.max(0, Math.abs(c.cx - x) - CELL / 2), Math.max(0, Math.abs(c.cz - z) - CELL / 2)) > R) continue;
       if (c.panel.length) { panel.instanceMatrix.array.set(c.panel, np * 16); np += c.panel.length / 16; }
       if (c.rope.length) { rope.instanceMatrix.array.set(c.rope, nr * 16); nr += c.rope.length / 16; }
-      if (c.post.length) { post.instanceMatrix.array.set(c.post, nq * 16); post.instanceColor.array.set(c.postCol, nq * 3); nq += c.post.length / 16; }
+      if (!glb.panel) addPosts(c.postB, c.postBCol); // (the Meshy B-net section brings its own posts)
+      if (!poles) addPosts(c.postR, c.postRCol);
+      else {
+        if (c.poleA.length) { pa.set(c.poleA, na * 16); na += c.poleA.length / 16; }
+        if (c.poleB.length) { pb.set(c.poleB, nb * 16); nb += c.poleB.length / 16; }
+      }
     }
     panel.count = trim.count = np; rope.count = nr; post.count = nq;
+    const up = [[panel.instanceMatrix, np, 16], [rope.instanceMatrix, nr, 16], [post.instanceMatrix, nq, 16], [post.instanceColor, nq, 3]];
+    for (const im of glb.panel || []) im.count = np;
+    if (poles) {
+      for (const im of glb.poleA) im.count = na;
+      for (const im of glb.poleB) im.count = nb;
+      up.push([glb.poleA[0].instanceMatrix, na, 16], [glb.poleB[0].instanceMatrix, nb, 16]);
+    }
     // (upload only the packed part of each buffer)
-    for (const [attr, cnt, size] of [[panel.instanceMatrix, np, 16], [rope.instanceMatrix, nr, 16], [post.instanceMatrix, nq, 16], [post.instanceColor, nq, 3]]) {
+    for (const [attr, cnt, size] of up) {
       attr.clearUpdateRanges?.();
       attr.addUpdateRange?.(0, Math.max(1, cnt) * size);
       attr.needsUpdate = true;
     }
-    stats.packed = { panels: np, ropes: nr, posts: nq };
+    stats.packed = { panels: np, ropes: nr, posts: nq, poles: na + nb };
   };
+
+  // ---- swap in the Meshy models (browser only; Node checks keep the procedural meshes)
+  const useGLBs = ({ loadGLB, dequantize }) => Promise.all([
+    loadGLB('piste/bnet_panel'), loadGLB('piste/rope_pole'), loadGLB('piste/flag_pole'),
+  ]).then(([gPanel, gRope, gFlag]) => {
+    const B = FENCE_TYPES.B;
+    // the section: x 0..1 across the span, y 1 = the net height (whole model B.postH tall, its foot 0.2 m into
+    // the snow), z in metres toward the run
+    const panelParts = glbParts(gPanel, dequantize, 'panel', 600, (box, size) => new THREE.Matrix4()
+      .makeScale(1 / size.x, B.postH / size.y / B.h, B.postH / size.y)
+      .multiply(new THREE.Matrix4().makeTranslation(-box.min.x, -box.min.y - 0.2 * size.y / B.postH, -(box.min.z + box.max.z) / 2)));
+    if (panelParts) {
+      glb.panel = panelParts.map((p, i) => {
+        p.mat.side = THREE.DoubleSide;
+        const im = mk(p.geo, p.mat, 1, 'fence-net-glb' + (i || ''));
+        im.instanceMatrix = panel.instanceMatrix;
+        return im;
+      });
+      panel.visible = trim.visible = false;
+    }
+    // the stakes: height 1 (the instance scales it to the post height), centred on the shaft
+    const stake = (g, name) => {
+      const parts = glbParts(g, dequantize, name, 300, (box, size, shaft) => new THREE.Matrix4()
+        .makeScale(1 / size.y, 1 / size.y, 1 / size.y)
+        .multiply(new THREE.Matrix4().makeTranslation(-shaft.x, -box.min.y, -shaft.z)));
+      if (!parts) return null;
+      const cap = Math.max(1, tot[name]);
+      const buf = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
+      buf.setUsage(THREE.DynamicDrawUsage);
+      return parts.map((p, i) => { const im = mk(p.geo, p.mat, 1, 'fence-stake-' + name + (i || '')); im.instanceMatrix = buf; return im; });
+    };
+    const a = stake(gRope, 'poleA'), b = a && stake(gFlag, 'poleB');
+    if (a && b) {
+      glb.poleA = a; glb.poleB = b;
+      rope.geometry.dispose();
+      rope.geometry = ropeGeo(false); // (the stakes carry the flags: the cord alone)
+    } else for (const im of [...(a || []), ...(b || [])]) group.remove(im);
+    stats.glb = { panel: !!glb.panel, poles: glbPoles() };
+    stats.drawCalls = group.children.filter((o) => o.visible).length;
+    if (Number.isFinite(packX)) pack(packX, packZ);
+  });
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    import('../core/assets.js').then(useGLBs).catch((e) => console.warn('piste fence models', e));
+  }
 
   // ---- the collider pool
   const pool = [];

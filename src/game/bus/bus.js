@@ -15,6 +15,7 @@ import { transition } from '../../ui/transition.js';
 import { trafficBlockers } from '../traffic.js';
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
 
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 26, acc: 1.7, brake: 2.0, lat: 2.6 };
 const CLEAR_DEC = 1.8, CLEAR_GAP = 4; // braking for something in the lane (m/s^2, within its 2.6 limit); the gap it stops at (m)
 const BAY = 7; // the bus stops this far before the end of the road (its middle)
@@ -756,7 +757,7 @@ export class BusLine {
     this.ride = null;
     this.view = 'seat';
     this.look = { yaw: 0, pitch: -0.05 };
-    this.chase = { yaw: 0, pitch: 0.2, dist: 20, off: null };
+    this.chase = { yaw: 0, pitch: 0.1, dist: 18, off: null };
     this.fov = null;
     this.timeScale = 1;
     this.parkAtVillage();
@@ -1037,8 +1038,10 @@ export class BusLine {
     g.updateMatrixWorld(true);
     const k6 = 1 - Math.exp(-dt * 6);
     if (this.view === 'seat') {
-      this.look.yaw = clamp(this.look.yaw - (input?.mdx || 0) * sens, -1.9, 1.9);
-      this.look.pitch = clamp(this.look.pitch - (input?.mdy || 0) * sens, -0.8, 0.8);
+      // (Oct 29, the user: "you can't really look and turn the camera"): all the way round from the seat, and well
+      // up and down
+      this.look.yaw = wrapPi(this.look.yaw - (input?.mdx || 0) * sens);
+      this.look.pitch = clamp(this.look.pitch - (input?.mdy || 0) * sens, -1.2, 1.2);
       const eye = _a.copy(r.seat.pos).add(_b.set(0, 0.84, 0.04));
       g.localToWorld(eye);
       const yaw = this.look.yaw;
@@ -1050,12 +1053,12 @@ export class BusLine {
       this.fov = this.fov == null ? 70 : lerp(this.fov, 70, k6);
     } else {
       this.chase.yaw -= (input?.mdx || 0) * sens;
-      this.chase.pitch = clamp(this.chase.pitch - (input?.mdy || 0) * sens, -0.05, 1.0);
+      this.chase.pitch = clamp(this.chase.pitch - (input?.mdy || 0) * sens, -0.25, 1.1); // (down to eye level, not only from above)
       this.chase.dist = clamp(this.chase.dist + (input?.wheel || 0) * 2, 10, 60);
       const target = _a.copy(g.position).add(_b.set(0, 2.2, 0));
       const fwd = _c.set(0, 0, 1).transformDirection(g.matrixWorld);
       const heading = Math.atan2(fwd.x, fwd.z) + Math.PI + this.chase.yaw, d = this.chase.dist, cp = Math.cos(this.chase.pitch);
-      const want = new THREE.Vector3(Math.sin(heading) * cp * d, Math.sin(this.chase.pitch) * d + 2, Math.cos(heading) * cp * d);
+      const want = new THREE.Vector3(Math.sin(heading) * cp * d, Math.sin(this.chase.pitch) * d + 0.8, Math.cos(heading) * cp * d);
       const gy = world.height(target.x + want.x, target.z + want.z) + 2;
       if (target.y + want.y < gy) want.y = gy - target.y;
       if (!this.chase.off) this.chase.off = want.clone(); else this.chase.off.lerp(want, 1 - Math.exp(-dt * 4));

@@ -402,9 +402,18 @@ export class Trails {
   // Continuous strips per emitter (one per ski, or one per skier while skidding). A point is committed when
   // the strip has run 0.7 m (0.25 m skidding), turned 4 degrees, or its width / edge / skid changed: long
   // straight segments, dense ones through turns, never a gap (each segment starts on the last one's end).
+  // (Oct 29, the user: "snow prints should only be in snow: there are footprints in the parking lot"): no marks
+  // on a plowed road or a car park (world.isPaved, set by the roads) or on anything built (a platform, a deck, a
+  // floor: the ground there stands above the snow)
+  noSnow(x, z, yHint) {
+    if (world.isPaved?.(x, z)) return true;
+    if (yHint > -1e8 && world.meshHeight) { const g = world.groundHeight(x, z, yHint + 0.3); if (g > world.meshHeight(x, z) + 0.12 && !world.isRoadNear?.(x, z)) return true; }
+    return false;
+  }
   track(id, x, z, yHint, dx, dz, G, D, tilt, skid) {
     let m = this.emitters.get(id);
     if (!m) { m = { has: false, t: 0, a: newEdge(), b: newEdge(), p: newEdge(), pend: false }; this.emitters.set(id, m); }
+    if (this.noSnow(x, z, yHint)) { m.has = false; return; } // (the strip breaks off and starts again on snow)
     const sx = dz, sz = -dx; // left of the strip
     const W = G * TRACK_Q;
     if (m.has && (this.time - m.t > 0.5 || Math.hypot(x - m.a.x, z - m.a.z) > 6)) m.has = false; // stale / teleported
@@ -479,6 +488,7 @@ export class Trails {
   // A stamped mark centred at (x, z) facing `heading`: kind K_BOOT / K_SKIBOOT / K_SLAP / K_SPLAT,
   // hw / hl half size of the quad (m), depth (m), a = run / amount, side = +1 left foot, -1 right
   stamp(kind, x, z, yHint, heading, hw, hl, depth, a = 0, side = 0) {
+    if (this.noSnow(x, z, yHint)) return;
     const fx = Math.sin(heading), fz = Math.cos(heading), sx = fz, sz = -fx, t = this.time;
     // big marks (landing slaps, crash splats) in tiles that follow the terrain, like the skid bands
     const nu = Math.max(1, Math.ceil((2 * hw) / 0.45)), nv = Math.max(1, Math.ceil((2 * hl) / 0.45));

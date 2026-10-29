@@ -344,6 +344,20 @@ world.roadSurface = (x, z, mesh) => {
   if (d <= ROAD_HALF + 0.5) return r;
   return r + (mesh - r) * clamp((d - ROAD_HALF - 0.5) / 1.5, 0, 1);
 };
+// No snow marks on a plowed road (its width + a little) or a car park (snowfx.js noSnow); isRoadNear: beside one
+// (the road's smooth surface stands a little off the drawn terrain there, which is not a deck)
+world.isPaved = (x, z) => {
+  if (!busRoads.roads.length) return false;
+  if (laneDistance(x, z) <= ROAD_HALF + 0.3) return true;
+  for (const L of busRoads.lots) {
+    if (L.hw === undefined || L.ux === undefined) continue;
+    const dx = x - L.x, dz = z - L.z;
+    if (Math.abs(dx) > L.hw + L.hd + 2 || Math.abs(dz) > L.hw + L.hd + 2) continue;
+    if (Math.abs(dx * L.ux + dz * L.uz) <= L.hw + 0.3 && Math.abs(dx * L.vx + dz * L.vz) <= L.hd + 0.3) return true;
+  }
+  return false;
+};
+world.isRoadNear = (x, z) => busRoads.roads.length > 0 && laneDistance(x, z) <= ROAD_HALF + 2.2;
 export function laneDistance(x, z, own = -1, s = 0, win = 0) {
   const G = laneGrid(), arr = G.map.get(Math.floor(x / G.C) * 100003 + Math.floor(z / G.C));
   let d = Infinity;

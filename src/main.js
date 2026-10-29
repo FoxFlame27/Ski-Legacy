@@ -1577,9 +1577,30 @@ function mark(name) {
   prof.last = now;
 }
 
+// A system that throws must never freeze the picture (Oct 29: a throw in the chalet's build mode, every frame, skipped
+// the render: a frozen picture, then black behind the pause menu). The update runs guarded, the render always
+// follows; each fault is logged with its stack the first time, then at most every 10 s with a count.
+const loopFaults = new Map();
+function loopFault(where, e) {
+  const k = `${where}: ${e?.message || e}`, f = loopFaults.get(k) || { n: 0, at: -1e9 }, now = performance.now();
+  f.n++;
+  if (now - f.at > 10000) { console.error(`[loop] ${where} failed${f.n > 1 ? ` (x${f.n})` : ''}:`, e); f.at = now; f.n = 0; }
+  loopFaults.set(k, f);
+}
 function loop() {
   requestAnimationFrame(loop);
   if (menuThrottle()) return;
+  let dt = 0;
+  try { dt = loopUpdate(); } catch (e) { loopFault('update', e); }
+  try {
+    post.setSun(env.sunDir, tmpLight.copy(env.sun.color).multiplyScalar(env.sun.intensity), env.sunVisible * (1 - env.nightFactor));
+    post.render(dt, player.mode === 'ski' ? player.speed : 0, player.mode === 'fall' ? Math.max(0, 1 - player.fallT * 2) : 0);
+  } catch (e) { loopFault('render', e); }
+  mark('render');
+  input.endFrame();
+}
+// every system's update for one frame; returns the frame's dt (for the render)
+function loopUpdate() {
   if (prof.on) { prof.last = performance.now(); prof.frames++; }
   const realDt = clock.getDelta(), rawDt = Math.min(0.05, realDt);
   if (started && !paused) { // paused frames are throttled on purpose
@@ -1599,8 +1620,10 @@ function loop() {
     if (!menu && shopTarget && input.hit('KeyE')) { audio.play('click'); shopAction(shopTarget); }
     interaction = null;
   } else if (chalets?.inside) { // inside a chalet (its own scene)
-    chalets.frame(dt, menu || hud.panelOpen ? null : input, save.sensitivity);
-    chaletSeatPrompt = seating.chaletFrame(menu || hud.panelOpen ? null : input, chalets.target, buildMode.on); // (sit on your furniture)
+    try {
+      chalets.frame(dt, menu || hud.panelOpen ? null : input, save.sensitivity);
+      chaletSeatPrompt = seating.chaletFrame(menu || hud.panelOpen ? null : input, chalets.target, buildMode.on); // (sit on your furniture)
+    } catch (e) { loopFault('chalet', e); }
     interaction = null;
   } else if (carRental?.inside) { // inside the CAR RENTAL (its own scene)
     seating.leftChalet();
@@ -1613,7 +1636,7 @@ function loop() {
     interaction = inSession ? null : findInteraction();
     if (interaction && input.hit('KeyE')) { audio.play('click'); interaction.act(); }
   }
-  if (started) buildMode.update(dt, input); // (no-op until you're inside your rented chalet)
+  if (started) { try { buildMode.update(dt, input); } catch (e) { loopFault('build mode', e); } } // (no-op until you're inside your rented chalet)
   // the ticket seller idles at the booth window
   if (seller.root.position.distanceToSquared(player.pos) < 150 * 150) {
     seller.update(dt, { mode: 'idle', heading: talk.yawFor(seller, sellerHeading, dt), speed: 0, crouch: 0, lean: 0, plow: 0, normal: new THREE.Vector3(0, 1, 0) });
@@ -1854,10 +1877,7 @@ function loop() {
   express?.lateUpdate(camera, env, atmosphere, dt); // (the Legacy Express's tunnels too; the cabin light after both)
   mark('railLate');
   busIntro?.update(frozen ? 0 : rawDt); // (after everything else: it poses the camera)
-  post.setSun(env.sunDir, tmpLight.copy(env.sun.color).multiplyScalar(env.sun.intensity), env.sunVisible * (1 - env.nightFactor));
-  post.render(dt, player.mode === 'ski' ? player.speed : 0, player.mode === 'fall' ? Math.max(0, 1 - player.fallT * 2) : 0);
-  mark('render');
-  input.endFrame();
+  return dt;
 }
 
 // intro plays while the world loads in the background; then the menu over the live panorama

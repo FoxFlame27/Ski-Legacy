@@ -225,6 +225,9 @@ export class BuildMode {
     } else {
       cam.getWorldPosition(_o); cam.getWorldDirection(_d);
       this.raycaster.set(_o, _d);
+      // (set() leaves raycaster.camera null, and a lamp's glow halo is a THREE.Sprite, whose raycast() throws without
+      // one: with a lamp in your chalet every frame threw here, before the render: the picture froze on going in)
+      this.raycaster.camera = cam;
     }
     this.raycaster.far = REACH;
     return this.raycaster.ray;

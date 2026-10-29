@@ -181,7 +181,7 @@ export const seating = {
   syncChalet() {
     const C = this.chalet, recs = C.save?.chalet?.furniture || [];
     let sig = '' + recs.length;
-    for (const r of recs) sig += `|${r.id},${r.x.toFixed(2)},${r.z.toFixed(2)},${(r.y ?? 0).toFixed(2)},${(r.rot || 0).toFixed(2)}`;
+    for (const r of recs) sig += `|${r.id},${(+r.x || 0).toFixed(2)},${(+r.z || 0).toFixed(2)},${(+r.y || 0).toFixed(2)},${(+r.rot || 0).toFixed(2)}`; // (a damaged record, x: null, must not throw every frame)
     if (sig === C.sig) return;
     C.sig = sig;
     removeSeat(C.seats); C.seats = [];

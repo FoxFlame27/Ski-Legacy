@@ -241,7 +241,7 @@ export class Menu {
       <div class="menu-logo"><div class="ml-ski">SKI</div><div class="ml-legacy">LEGACY</div></div>
       <div class="menu-mark"><b>SKI</b><span>LEGACY</span></div>
       <div class="menu-stage"></div>
-      <div class="menu-foot"><div class="menu-hints"></div><div class="menu-credit">Icecold Studio · Made with Claude</div></div>`;
+      <div class="menu-foot"><div class="menu-hints"></div><div class="menu-credit">Icecold Studio</div></div>`;
     this.stage = this.el.querySelector('.menu-stage');
     this.hintsEl = this.el.querySelector('.menu-hints');
     this.hintsEl.addEventListener('click', (e) => { if (e.target.closest('[data-hint-back]')) this.back(false); });

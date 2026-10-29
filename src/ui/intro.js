@@ -1,6 +1,6 @@
-// Boot intro: the SKI LEGACY logo clip (src/ui/introclip.js) -> Icecold Studio -> Made with Claude.
+// Boot intro: the SKI LEGACY logo clip (src/ui/introclip.js) -> Icecold Studio -> a mountain card.
 // Canvas clip + DOM/CSS scenes + WebAudio hits; skippable with any key or click.
-import '@fontsource-variable/source-serif-4/opsz.css'; // calm editorial serif for the studio + Claude cards
+import '@fontsource-variable/source-serif-4/opsz.css'; // calm editorial serif for the studio + mountain cards
 import { IntroClip, CLIP_MS } from './introclip.js';
 import { StudioIdent, STUDIO_MS, STUDIO_LEAVE_MS } from './studioident.js';
 
@@ -9,18 +9,13 @@ const wait = (ms, sig) => new Promise((res) => {
   sig.onSkip.push(() => { clearTimeout(t); res(); });
 });
 
-// Claude-style spark mark: rounded rays radiating from the center.
-export function claudeMark(size = 120, color = '#fff') {
-  const rays = 12;
-  let paths = '';
-  for (let i = 0; i < rays; i++) {
-    const a = (i / rays) * Math.PI * 2 + (i % 2 ? 0.08 : 0);
-    const len = i % 3 === 0 ? 46 : i % 3 === 1 ? 40 : 34;
-    const x2 = 50 + Math.cos(a) * len, y2 = 50 + Math.sin(a) * len;
-    const x1 = 50 + Math.cos(a) * 6, y1 = 50 + Math.sin(a) * 6;
-    paths += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="${i % 3 === 0 ? 9 : 8}" stroke-linecap="round"/>`;
-  }
-  return `<svg class="claude-mark" width="${size}" height="${size}" viewBox="0 0 100 100">${paths}</svg>`;
+// The intro's mountain mark: three snowy peaks drawn as one line (it draws itself in: stroke-dashoffset), and a sun.
+export function peaksMark(w = 220) {
+  return `<svg class="peaks-mark" width="${w}" height="${Math.round(w * 0.5)}" viewBox="0 0 220 110" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <circle class="peaks-sun" cx="168" cy="26" r="12" stroke="#ff4d3d"/>
+    <path class="peaks-line" pathLength="1" d="M6 100 L58 34 L78 58 L112 14 L146 62 L162 46 L214 100"/>
+    <path class="peaks-snow" pathLength="1" d="M47 48 L58 34 L68 47 M101 28 L112 14 L124 30"/>
+  </svg>`;
 }
 
 export class Intro {
@@ -81,14 +76,14 @@ export class Intro {
       ident.stop();
     }
 
-    // 3 -- Made with Claude
+    // 3 -- a mountain card: the peaks drawn in, the line, and a word before the game (headphones on)
     if (!sig.skipped) {
       const s = this.scene(`
-        <div class="claude">
-          ${claudeMark(132)}
-          <div class="claude-made">Made with</div>
-          <div class="claude-name">Claude</div>
-        </div>`, 'scene-claude');
+        <div class="peakcard">
+          ${peaksMark()}
+          <div class="peak-title">SKI LEGACY</div>
+          <div class="peak-sub">Best played with headphones</div>
+        </div>`, 'scene-peaks');
       requestAnimationFrame(() => s.classList.add('in'));
       this.audio?.play('soft');
       await wait(2300, sig);

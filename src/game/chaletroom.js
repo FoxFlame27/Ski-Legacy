@@ -1,23 +1,26 @@
-// Inside a chalet of the Almdorf chalet village. Every chalet is the same house (game/chaletplan.js: the plan), so ONE
-// interior serves them all: it lives IN THE WORLD (no scene switch, no fade), a Group placed in the chalet you're at
-// (game/chalets.js puts it there and cuts the exterior model's door away). You walk in through the real front door
-// and out again; inside you walk in first person (WASD + mouse), the stair between the floors. The windows are glass
-// on the real world. Every doorway has a hinged door: E (or walking into it) opens / closes it, and its leaf is
-// solid wherever it stands. The fixed fittings: the two bathrooms' sanitary ware (Meshy, public/models/bathroom/) and
-// the built-in lamps (Meshy, public/models/lamps/: an alpine pendant in every room, wall sconces), warm 2700 K pools
-// of light (a pool of point lights follows you to the nearest lamps), cool daylight through the windows by day.
+// Inside a chalet of the Almdorf chalet village: ITS OWN SCENE, like the ski shop and the car rental (main.js renders
+// it through post.setView while you are in; game/chalets.js fades you in at a chalet's front door and out again).
+// Every chalet is the same house (game/chaletplan.js: the plan), so ONE interior serves them all; going in carries the
+// view to that chalet: its windows show the real world from where it stands (a live portal render of the game's
+// scene, as the ski shop's windows). Inside you walk in first person (WASD + mouse), the stair between the floors.
+// Every inner doorway has a hinged door: E (or walking into it) opens / closes it, its leaf solid wherever it stands;
+// E at the front door takes you back out. The fixed fittings: the two bathrooms' sanitary ware (Meshy,
+// public/models/bathroom/) and the built-in lamps (Meshy, public/models/lamps/: an alpine pendant in every room, wall
+// sconces), warm 2700 K pools of light (a pool of point lights IN THIS SCENE follows you to the nearest lamps, shared
+// with the lamps you buy: setFurnitureLamps), cool daylight through the windows by day. Nothing of it is in the
+// outdoor world: no lights, no meshes, no per-frame work while you are outside.
 //
 // ---------------------------------------------------------------------------------------------------------------
 // INTERIOR API (for the build mode, src/game/build/*: chaletadapter.js finds `chaletInteriorAPI` here)
 //   chaletInteriorAPI is a live object (getters onto the one interior):
 //     active / isActive()  true while you are inside YOUR chalet (inside any chalet: `inside`)
 //     chalet               the chalet you are in: { id, name, plot } (null outside)
-//     scene                the scene the interior is in (the WORLD scene: the interior is part of the world)
-//     house                the Group placed at the chalet (house.matrixWorld = the house frame below, in the world)
+//     scene                the interior's own scene (rendered instead of the world while you are inside)
+//     house                the Group of the house in that scene (at its origin: its local frame = the house frame)
 //     root                 the Group furniture goes in, a child of `house` with no transform of its own: its local
 //                          coordinates ARE the house frame (positions, collider boxes, save.chalet.furniture)
 //     camera               the first-person camera inside (a child of `house`: its position is in the house frame;
-//                          use getWorldPosition / getWorldDirection for world rays)
+//                          getWorldPosition / getWorldDirection give the same, the house stands at the origin)
 //     player               { pos (feet, house frame), yaw, pitch, level, eye }
 //     storeys              [{ level: 'ground'|'up', floorY, ceilingY, rects: [{ x0, z0, x1, z1, room }] }]
 //                          (rects: the walkable floor of each room; ceilingY: the lowest full-height ceiling; the
@@ -29,14 +32,16 @@
 //     addObject(obj, col) -> handle   obj (already positioned in root space) is added to root; col (optional) =
 //                          { x, z, hw, hd, rot, y0, y1 } an oriented box (rot = the object's yaw) or { x, z, r }:
 //                          you walk against it on the storey its y0 falls on. Its materials get the interior's
-//                          lighting (the outdoor sky light shut out, the room's warm lamps in).
+//                          lighting (the daylight fill through the windows, the room's warm lamps).
 //     removeObject(handle)
-//     onFrame(cb) -> unsubscribe   cb(dt, input) every frame while inside (after walking and the camera)
+//     onFrame(cb) -> unsubscribe   cb(dt, input) every frame while inside (after walking and the camera, before the
+//                          windows' portal render)
 //   House frame: metres, +x the front (the entrance), z along the house, y up from the ground outside (the ground
 //   floor at y G = 0.3, the upper floor at FL = 3.15: chaletplan.js). save.chalet.furniture = [{ id, x, y, z, rot }]
 //   is in this frame; the build mode writes and loads it (this module does not touch it).
 // ---------------------------------------------------------------------------------------------------------------
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { loadGLB } from '../core/assets.js';
 import {
   HX, IX, IZ, T, G, GC, FL, COLLAR, DORMER, IT, STAIR, HOLE, DOOR, ROOMS, EXTERIOR, INTERIOR, RAILS,
@@ -45,13 +50,28 @@ import {
 
 const EYE = 1.62, R0 = 0.28, WALL_OUT = T - 0.1; // (the exterior walls' outward depth: 10 cm inside the model's skin)
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
+const _m = new THREE.Matrix4(), _s = new THREE.Vector3(), _size = new THREE.Vector2(), _box = new THREE.Box3(), _frustum = new THREE.Frustum();
+// the windows: a live view of the world (rendered from where you'd stand in the chalet out there), sampled in screen space
+const PORTAL_VERT = `
+  varying vec2 vUv;
+  void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const PORTAL_FRAG = `
+  uniform sampler2D tView;
+  uniform float uHas;
+  uniform vec4 uVP;
+  varying vec2 vUv;
+  void main() {
+    vec2 suv = (gl_FragCoord.xy - uVP.xy) / uVP.zw;
+    vec3 view = texture2D(tView, suv).rgb;
+    vec3 sky = mix(vec3(1.5, 1.6, 1.75), vec3(0.3, 0.5, 0.95), smoothstep(0.3, 1.0, vUv.y));
+    gl_FragColor = vec4(mix(sky, view, uHas) * vec3(0.95, 0.97, 0.98), 1.0);
+  }`;
 const rng = (seed) => { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 // ------------------------------------------------------------------ the interior's light (shared by its materials)
-// The interior is in the world scene, so the world's lights reach it. Its materials replace the world's sky light
-// (hemisphere, ambient, environment) by their own fill (uIntAmb: cool daylight by day, a dim warm glow at night,
-// never pitch dark) and shut the sun out (the house's walls do that); the room's lamps (point lights) light them.
+// The interior's materials get their own fill (uIntAmb: cool daylight by day, a dim warm glow at night, never pitch
+// dark) and a damped environment; the room's lamps (the pool of point lights in this scene) light them warmly.
 export const interiorLight = {
   amb: { value: new THREE.Color(0.5, 0.5, 0.5) }, // the fill (irradiance)
   hemi: { value: 0.08 },                          // how much of the world's sky light still gets in
@@ -182,7 +202,15 @@ export class ChaletRoom {
   constructor({ renderer }) {
     this.renderer = renderer;
     this.active = false;
-    this.house = new THREE.Group(); this.house.name = 'chalet-interior'; this.house.visible = false;
+    this.scene = new THREE.Scene(); this.scene.name = 'chalet-interior-scene';
+    this.scene.background = new THREE.Color(0xcfdceb);
+    try { // (a soft room environment for the reflections; damped by uIntEnv)
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    } catch (e) { /* (no WebGL: headless checks) */ }
+    this.house = new THREE.Group(); this.house.name = 'chalet-interior';
+    this.scene.add(this.house);
     this.camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 30000);
     this.house.add(this.camera);
     addEventListener('resize', () => { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); });
@@ -199,6 +227,7 @@ export class ChaletRoom {
     this.sillList = [];                    // the API's sills
     this.root = new THREE.Group(); this.root.name = 'chalet-furniture';
     this.mats();
+    this.buildPortal();
     this.buildFloors();
     this.buildWalls();
     this.buildStair();
@@ -206,31 +235,75 @@ export class ChaletRoom {
     this.buildLamps();
     this.house.add(this.root);
     this.house.traverse((o) => { if (o.isMesh) { o.receiveShadow = false; o.castShadow = false; } });
-    this.camBlend = 0;
-  }
-
-  /** The world scene the interior lives in (chalets.js): the house group, and the light pool (always there). */
-  attach(scene) {
-    this.world = scene;
-    scene.add(this.house);
-    // the light pool: a fixed number of warm point lights, always in the scene (a light count that never changes:
-    // no shader recompiles), parked dark until the interior is in use; each frame they go to the nearest lamps
+    this.portalMeshes = [];
+    this.house.traverse((o) => { if (o.isMesh && o.material === this.portalMat) { this.portalMeshes.push(o); o.onBeforeRender = this.vp; } });
+    // the light pool: a fixed number of warm point lights in this scene (a light count that never changes: no shader
+    // recompiles); each frame they go to the lamps nearest you (the built-in ones and the ones you bought)
     this.pool = [];
     const rig = new THREE.Group(); rig.name = 'chalet-lamp-pool';
-    for (let i = 0; i < 6; i++) { const L = new THREE.PointLight(0xffb46b, 0, 7.5, 1.7); L.castShadow = false; rig.add(L); this.pool.push(L); } // (shared with the lamps you buy: setFurnitureLamps)
-    this.house.add(rig); // (moves with the house; its visibility: the pool's lights stay on the scene graph below)
-    this.house.remove(rig); scene.add(rig); this.poolRig = rig;
+    for (let i = 0; i < 6; i++) { const L = new THREE.PointLight(0xffb46b, 0, 7.5, 1.7); L.castShadow = false; rig.add(L); this.pool.push(L); }
+    this.house.add(rig);
   }
-  get scene() { return this.world || null; }
 
-  /** Stand the interior in a chalet (its house frame: an Object3D in the world). */
-  place(frame) {
-    if (!frame) return;
-    this.house.position.copy(frame.position); this.house.quaternion.copy(frame.quaternion);
-    this.house.updateMatrixWorld(true);
-    this.frame = frame;
+  // ------------------------------------------------------------------ the view out (live portal, as the ski shop)
+  buildPortal() {
+    this.portalMat = new THREE.ShaderMaterial({
+      uniforms: { tView: { value: null }, uHas: { value: 0 }, uVP: { value: new THREE.Vector4(0, 0, 1, 1) } },
+      vertexShader: PORTAL_VERT, fragmentShader: PORTAL_FRAG,
+    });
+    this.vp = (r) => r.getCurrentViewport(this.portalMat.uniforms.uVP.value);
+    this.portalCam = new THREE.PerspectiveCamera(70, 1, 0.1, 30000);
+    this.lastShadow = 0;
   }
-  setVisible(on) { this.house.visible = on; }
+  /** Where the chalet you are in stands: { scene (the world), frame: Object3D (the house frame), hide: () => Object3D[] }. */
+  setWorld(o) { this.world = o && o.scene && o.frame ? o : null; this.frame = this.world?.frame || null; }
+  releasePortal() {
+    if (this.portalRT) { this.portalRT.dispose(); this.portalRT = null; }
+    this.portalMat.uniforms.tView.value = null;
+    this.portalMat.uniforms.uHas.value = 0;
+  }
+  renderPortal() {
+    const o = this.world, r = this.renderer;
+    if (!o || !r?.render) return;
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    _frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    if (!this.portalMeshes.some((m) => _frustum.intersectsBox(_box.setFromObject(m)))) return; // (no window in view)
+    const size = r.getDrawingBufferSize(_size);
+    const k = Math.min(1, 1600 / Math.max(1, size.x));
+    const w = Math.max(64, Math.round(size.x * k)), h = Math.max(64, Math.round(size.y * k));
+    if (!this.portalRT) {
+      this.portalRT = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
+      this.portalMat.uniforms.tView.value = this.portalRT.texture;
+      this.lastShadow = 0;
+    } else if (this.portalRT.width !== w || this.portalRT.height !== h) this.portalRT.setSize(w, h);
+    const pc = this.portalCam;
+    o.frame.updateMatrixWorld();
+    _m.multiplyMatrices(o.frame.matrixWorld, cam.matrixWorld).decompose(pc.position, pc.quaternion, _s);
+    pc.fov = cam.fov; pc.aspect = cam.aspect; pc.near = 0.1; pc.far = 30000;
+    pc.updateProjectionMatrix();
+    const hidden = (o.hide?.() || []).filter(Boolean), was = hidden.map((x) => x.visible);
+    for (const x of hidden) x.visible = false;
+    const prev = r.getRenderTarget(), auto = r.shadowMap.autoUpdate, now = performance.now();
+    r.shadowMap.autoUpdate = false;
+    r.shadowMap.needsUpdate = now - this.lastShadow > 3000; // (the world's shadows: refreshed every few seconds)
+    if (r.shadowMap.needsUpdate) this.lastShadow = now;
+    try {
+      r.setRenderTarget(this.portalRT);
+      r.clear();
+      r.render(o.scene, pc);
+      this.portalMat.uniforms.uHas.value = 1;
+    } catch (e) {
+      console.warn('Chalet window view failed', e);
+      this.world = null;
+      this.portalMat.uniforms.uHas.value = 0;
+    } finally {
+      r.setRenderTarget(prev);
+      r.shadowMap.autoUpdate = auto;
+      r.shadowMap.needsUpdate = false;
+      hidden.forEach((x, i) => { x.visible = was[i]; });
+    }
+  }
 
   mats() {
     const M = (o) => interiorLit(new THREE.MeshStandardMaterial(o));
@@ -395,7 +468,7 @@ export class ChaletRoom {
           gaps.push([o.u0, o.u1]);
           continue;
         }
-        // the frame (white, in the wall's depth), the cross bars, the glass outside them
+        // the frame (white, in the wall's depth), the cross bars, the view out behind them
         const [fx, fz] = at(WALL_OUT * 0.55), fd = 0.08, fw = 0.07;
         this.box(w, fw, fd, M.frame, fx, o.y1 - fw / 2, fz, ry);
         this.box(w, fw, fd, M.frame, fx, o.y0 + fw / 2, fz, ry);
@@ -404,8 +477,8 @@ export class ChaletRoom {
         this.box(0.05, h, fd * 0.8, M.frame, fx, ym, fz, ry);
         this.box(w, 0.04, fd * 0.8, M.frame, fx, o.y0 + h * 0.62, fz, ry);
         const [gx, gz] = at(WALL_OUT * 0.55 + 0.03);
-        const pane = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.02, h - 0.02), M.glass);
-        pane.position.set(gx, ym, gz); pane.rotation.y = Math.atan2(-nx, -nz); pane.renderOrder = 2;
+        const pane = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.02, h - 0.02), this.portalMat); // (the live view out)
+        pane.position.set(gx, ym, gz); pane.rotation.y = Math.atan2(-nx, -nz);
         this.house.add(pane);
         // the sill inside (0.9 m over the floor)
         const [sx, sz] = at(-0.06), sd = WALL_OUT * 0.5 + 0.14;
@@ -600,11 +673,6 @@ export class ChaletRoom {
       this.pushBox(c, p);
     }
   }
-  /** Out through the open front door? (past the wall's outer face, within the opening) */
-  outFront(p) {
-    const d = this.doorAt, f = this.front;
-    return !!(d && f?.open && p.x > IX - 0.2 && p.z > d.z0 + 0.12 && p.z < d.z1 - 0.12);
-  }
   walk(dt) {
     const p = this.pos, q = this.prev.copy(p), S = STAIR, H = HOLE;
     p.addScaledVector(this.vel, dt);
@@ -633,29 +701,27 @@ export class ChaletRoom {
         p.x = Math.max(-lim, Math.min(lim, p.x));
       }
     }
-    // the house's inner faces (but out through the open front door)
-    const d = this.doorAt, inDoor = this.level === 'ground' && this.front?.open && d && p.z > d.z0 + R0 * 0.5 && p.z < d.z1 - R0 * 0.5;
-    p.x = Math.max(-IX + R0, Math.min(inDoor ? HX + 0.4 : IX - R0, p.x));
-    if (!inDoor || p.x < IX - R0) p.z = Math.max(-IZ + R0, Math.min(IZ - R0, p.z));
+    // the house's inner faces
+    p.x = Math.max(-IX + R0, Math.min(IX - R0, p.x));
+    p.z = Math.max(-IZ + R0, Math.min(IZ - R0, p.z));
     p.y = this.level === 'up' ? FL : this.level === 'stair' ? stairY(p.z) : G;
   }
 
   // ------------------------------------------------------------------ in and out
-  /** In (from outside, through the front door): where you stand (house frame), the way you face (house yaw). */
-  enter(x, z, yaw, fromCam) {
+  /** In through the front door: in the hall, facing in (every inner door shut, a fresh house). */
+  enter() {
     this.active = true;
+    const d = this.doorAt;
     this.level = 'ground';
-    this.pos.set(Math.min(x, IX - R0), G, z); this.eyeY = G + EYE;
-    this.yaw = yaw; this.pitch = -0.05; this.vel.set(0, 0, 0);
-    this.house.visible = true;
-    // the camera eases in from where the outside camera was (no cut, no fade)
-    this.camFrom = null;
-    if (fromCam) { this.camFrom = { p: this.house.worldToLocal(fromCam.getWorldPosition(new THREE.Vector3())), q: fromCam.getWorldQuaternion(new THREE.Quaternion()).premultiply(this.house.getWorldQuaternion(new THREE.Quaternion()).invert()) }; this.camBlend = 0; }
+    this.pos.set(d.x - d.nx * 0.5, G, (d.z0 + d.z1) / 2); this.eyeY = G + EYE;
+    this.yaw = Math.atan2(-d.nx, -d.nz); this.pitch = -0.05; this.vel.set(0, 0, 0);
+    for (const dr of this.doors) { dr.target = 0; dr.angle = 0; dr.update(0); }
+    for (const L of this.pool) L.intensity = 0;
   }
-  leave() { this.active = false; this.vel.set(0, 0, 0); }
+  leave() { this.active = false; this.vel.set(0, 0, 0); this.releasePortal(); }
   roomName() { return (this.level === 'stair' ? 'Stairs' : this.roomAt(this.pos.x, this.pos.z, this.level)?.name) || 'Chalet'; }
 
-  /** Per frame while the interior is placed (inside or not): the doors swing, the light pool goes to the nearest lamps. */
+  /** Per frame while inside: the doors swing, the light pool goes to the lamps nearest the eye (house frame). */
   tick(dt, eye, hour = 12) {
     for (const d of this.doors) if (d.angle !== d.target) d.update(dt);
     // the fill: cool daylight by day (through the windows), a warm glow at night (never pitch dark)
@@ -664,7 +730,7 @@ export class ChaletRoom {
     interiorLight.hemi.value = 0.06 + 0.06 * day;
     // the pool: the 4 lamps nearest the eye (house frame), 2700 K
     if (!this.pool) return;
-    const on = this.house.visible && eye;
+    const on = this.active && eye;
     if (on) {
       const lv = eye.y > (G + FL) / 2 + 0.6 ? 'up' : 'ground';
       const all = furnitureLamps.length ? this.lamps.concat(furnitureLamps.map((f) => ({ ...f, level: f.y > (G + FL) / 2 + 0.6 ? 'up' : 'ground' }))) : this.lamps;
@@ -672,8 +738,7 @@ export class ChaletRoom {
       this.pool.forEach((L, i) => {
         const r = ranked[i];
         if (!r) { L.intensity = 0; return; }
-        _v.set(r.l.x, r.l.y - 0.08, r.l.z); this.house.localToWorld(_v);
-        L.position.copy(_v);
+        L.position.set(r.l.x, r.l.y - 0.08, r.l.z); // (the pool is in the house group: house frame)
         const want = 7.5 * r.l.power * (1 - 0.25 * day);
         L.intensity += (want - L.intensity) * Math.min(1, dt * 6);
       });
@@ -691,11 +756,11 @@ export class ChaletRoom {
       if (want.lengthSq()) want.normalize().multiplyScalar(2.3);
       this.vel.lerp(want, 1 - Math.exp(-dt * 10));
     } else this.vel.multiplyScalar(Math.exp(-dt * 10));
-    // walking into a shut door opens it (away from you)
+    // walking into a shut door opens it (away from you; not the front door: E there takes you out)
     const lvl = this.level === 'stair' ? null : this.level;
     if (lvl && this.vel.lengthSq() > 0.3) {
       for (const d of this.doors) {
-        if (d.level !== lvl || Math.abs(d.target) > 0.01 || Math.abs(d.angle) > 0.05) continue;
+        if (d.front || d.level !== lvl || Math.abs(d.target) > 0.01 || Math.abs(d.angle) > 0.05) continue;
         const [ax, az, bx, bz] = d.seg, ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez;
         const t = clamp(((this.pos.x - ax) * ex + (this.pos.z - az) * ez) / l2, 0, 1), dx = this.pos.x - (ax + ex * t), dz = this.pos.z - (az + ez * t);
         if (Math.hypot(dx, dz) < R0 + 0.12 && t > 0.15 && t < 0.85 && (this.vel.x * dx + this.vel.z * dz) < 0) d.toggle(this.pos.x, this.pos.z);
@@ -707,14 +772,9 @@ export class ChaletRoom {
     _e.set(this.pitch, this.yaw + Math.PI, 0);
     cam.position.set(this.pos.x, this.eyeY, this.pos.z);
     cam.quaternion.setFromEuler(_e);
-    if (this.camFrom && this.camBlend < 1) { // (easing in from the outside camera)
-      this.camBlend = Math.min(1, this.camBlend + dt / 0.45);
-      const k = this.camBlend * this.camBlend * (3 - 2 * this.camBlend);
-      cam.position.lerpVectors(this.camFrom.p, cam.position, k);
-      cam.quaternion.slerpQuaternions(this.camFrom.q, cam.quaternion, k);
-    }
     cam.updateMatrixWorld(true);
     for (const cb of this.hooks) { try { cb(dt, input); } catch (e) { console.warn('chalet hook', e); } }
+    this.renderPortal();
     if (!input) return null;
     // a door: looked at (within 2.5 m), or the nearest doorway you stand in
     cam.getWorldPosition(_v); cam.getWorldDirection(_w);
@@ -722,14 +782,15 @@ export class ChaletRoom {
     let door = hit?.object.userData.door || null;
     if (!door && lvl) {
       let best = 0.9;
-      for (const d of this.doors) { if (d.level !== lvl) continue; const mx = d.hinge[0] + d.u[0] * d.w / 2, mz = d.hinge[1] + d.u[1] * d.w / 2, dd = Math.hypot(this.pos.x - mx, this.pos.z - mz); if (dd < best) { best = dd; door = d; } }
+      for (const d of this.doors) { if (d.level !== lvl) continue; const mx = d.hinge[0] + d.u[0] * d.w / 2, mz = d.hinge[1] + d.u[1] * d.w / 2, dd = Math.hypot(this.pos.x - mx, this.pos.z - mz) - (d.front ? 0.5 : 0); if (dd < best) { best = dd; door = d; } } // (the front door: from a step further in)
     }
     if (!door) return null;
     const shut = Math.abs(door.target) < 0.01;
-    return { kind: 'door', door, label: door === this.front ? (shut ? 'Open the front door' : 'Close the front door') : shut ? 'Open the door' : 'Close the door' };
+    if (door === this.front) return { kind: 'exit', door, label: 'Leave the chalet' };
+    return { kind: 'door', door, label: shut ? 'Open the door' : 'Close the door' };
   }
-  /** E at a door (the prompt's target). */
-  use(t) { if (t?.door) t.door.toggle(this.pos.x, this.pos.z); }
+  /** E at an inner door (the prompt's target; the front door: game/chalets.js takes you out). */
+  use(t) { if (t?.kind === 'door' && t.door) t.door.toggle(this.pos.x, this.pos.z); }
 
   // ------------------------------------------------------------------ the build mode's hooks (see the API above)
   addObject(obj, col) {
@@ -759,7 +820,7 @@ export class ChaletRoom {
 // ------------------------------------------------------------------ the API (live: game/chalets.js sets `room`)
 const api = { room: null, owner: null };
 // The lamps you've bought and switched on (build/lamps.js), house frame { x, y, z, power }: they share the room's
-// light pool (one fixed set of point lights in the world scene, so no second pool weighs on every material outside)
+// light pool (one fixed set of point lights in the interior's own scene: none in the outdoor world)
 let furnitureLamps = [];
 export function setFurnitureLamps(list) { furnitureLamps = list || []; }
 export function setChaletInterior(room, owner) { api.room = room; api.owner = owner; }

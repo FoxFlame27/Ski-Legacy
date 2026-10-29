@@ -2,10 +2,12 @@
 // are all the same house, so one plan serves every one of them. House frame, metres: +x = the front (the entrance
 // side, facing the road), z along the house (its long side), y up from the ground outside (the pad).
 // The outside model (chalet.glb, the user's Meshy chalet, its ground clutter trimmed off) is scaled to a person by
-// its front door (measured on the mesh, Oct 28: the door's opening 0.219 model units tall -> 2.15 m, scale 9.8):
+// its front door (measured on the mesh, Oct 28: the door's opening 0.219 model units tall -> 2.15 m; Oct 29: those
+// units were the mesh's own, before its node's 0.951 scale, so with the node applied as three.js loads it: 10.305;
+// and its body's centre likewise, x 0.2186 / z -0.2762: tools measured the walls at x +-4.0, z +-6.1 in the frame):
 // the door 2.15 x 1.4 m (sill 0.3 m up, two steps), the storeys ~2.9 m, sills ~0.9-1.0 m over the floor: the body
-// is 2*HX x 2*HZ = 8.04 x 12.15 m (MODEL: how game/chalets.js fits it). The interior lives inside that hull, in the
-// world (game/chaletroom.js: one shared instance, placed at the chalet you're at; no scene switch).
+// is 2*HX x 2*HZ = 8.04 x 12.15 m (MODEL: how game/chalets.js fits it). The interior has the same plan, in its own
+// scene (game/chaletroom.js: one shared instance; E at the front door fades you in and out).
 //
 //   ground floor (floor G, ceiling GC, cream plaster walls, plank floor, timber ceiling with beams)
 //     entrance hall (the front door in the middle of the front), the open living room / kitchen (the -z end, full
@@ -13,7 +15,7 @@
 //   upper floor (floor FL, timber walls and sloped timber ceiling under the roof, dormers in the middle band)
 //     bedroom A (-z gable), bedroom B (front, middle, dormer), bedroom C (+z gable), the bathroom (back, middle,
 //     dormer), the landing and a corridor along the stairwell
-export const MODEL = { scale: 9.8, x: 0.315, z: -0.295, y: -0.405 }; // chalet.glb: its body's centre / ground (model units), the scale
+export const MODEL = { scale: 10.305, x: 0.2186, z: -0.2762, y: -0.405 }; // chalet.glb: its body's centre / ground (model units, its node transform applied), the scale
 export const HX = 4.02, HZ = 6.08, T = 0.3;          // half depth / half length (outer faces), exterior wall thickness
 export const IX = HX - T, IZ = HZ - T;               // inner faces
 export const G = 0.3, GC = 2.95, FL = 3.15;          // ground floor (the door's sill), its ceiling (2.65 m clear), the upper floor
@@ -23,9 +25,8 @@ export const IT = 0.12;                              // interior wall thickness
 export const STAIR = { x0: -1.83, x1: -0.78, z0: -2.6, z1: 1.72, steps: 16 }; // foot (z0, floor G) to top (z1, floor FL): 0.178 risers, 0.27 treads
 export const HOLE = { x0: -1.83, x1: -0.78, z0: -1.9, z1: 1.72 };            // the stairwell in the upper floor
 export const DOOR = { z: -0.17, w: 1.3, h: 2.15 };   // the front door (x = HX), its sill at G (the model's opening: z -0.88..0.54)
-export const DOOR_CUT = { z0: -0.88, z1: 0.54, x0: HX - 0.55, x1: HX + 0.3 };    // where the model's own (painted) door is cut away
 // the model's footprint in the house frame, eaves and front steps included (the plots are laid out round it)
-export const FOOT = { x0: -6.2, x1: 5.3, z0: -6.4, z1: 7.1 };
+export const FOOT = { x0: -5.6, x1: 5.55, z0: -7.0, z1: 7.25 };
 export const STEPS = { x0: HX, x1: HX + 1.3, z0: -1.0, z1: 0.7 };              // the front steps (up to G)
 export const DOOR_H = 2.1, DOOR_W = 0.9;             // the doors inside
 

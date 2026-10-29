@@ -1,30 +1,41 @@
 // THE CHALET VILLAGE (Almdorf): two-storey chalets (the user's Meshy chalet: white plaster below, timber above,
 // snowy roofs) on terraces on both sides of the Chaletweg up the gentle forested slope north of Legacy Village (its
 // layout, its ground and its road: game/bus/chaletroad.js, part of busRoads; its bus stop "Almdorf" at the junction
-// with the valley road). Every plot: the chalet facing the road, a snowy garden inside a picket fence (small spruces
-// and dwarf spruces from the game's own pine models, a bench, a shed or a snowman, a sledge by the steps), stepping
-// stones from the gate to the front steps, and a private parking bay beside the house (two 2.5 x 5 m bays, fenced,
-// a "Privat" sign) with its drive off the road. The playground on a plot of its own.
-// Cheap: the chalets are one instanced low-poly mesh (chalet_lo.glb), the full model (chalet.glb) only on the one you
-// stand nearest; the props instanced too.
-// BUY A CHALET ($50,000, yours for good, ONE each: save.chalet = { id, name, owned, since, furniture }). E at a
-// chalet's door: buy it, or have a look inside. Your own chalet's door (and the one you're viewing) opens with E or
-// when you walk into it: you walk straight in, no fade, no scene switch. The interior (game/chaletroom.js, one shared
-// instance) stands in the world inside the chalet you're at; that chalet's model gets its painted door cut away
-// and shows only its outward faces (FrontSide), so from inside you see the rooms and, through the windows, the world.
+// with the valley road). 18 chalets, numbered up the Chaletweg ("Almdorf 1" is the first you reach from the valley
+// road): a blue enamel number plaque by each front door and the number on the mailbox at the garden gate. Every plot:
+// the chalet facing the road, a snowy garden inside ONE continuous picket fence (gaps for the drive and the gate),
+// small spruces, a bench, a shed or a snowman, a sledge in the garden, stepping stones from the gate to the front
+// steps, and a private parking space beside the house (two 2.5 x 5 m bays, "PRIVAT" painted in each, a "P PRIVAT"
+// sign) with its drive off the road. The playground on a plot of its own.
+// Outside you always see the Meshy model: the full textured chalet.glb on the chalet you're nearest, the low-poly
+// chalet_lo.glb (one instanced mesh) on the rest; never both on one plot.
+// Cheap: everything small is merged or instanced (the fences: two meshes for the whole village; the posts, stones,
+// mailboxes and sign posts: one; the plaques, number plates and signs: one atlas mesh); no shadows from small props;
+// no per-frame work while you're away from the village.
+// BUY A CHALET ($50,000, yours for good, ONE each: save.chalet = { id, name, owned, since, furniture, layout }).
+// E at a chalet's front door: buy it, or have a look inside; your own one: go in. Going in: a short fade, and the
+// interior (game/chaletroom.js, its own scene: post.setView) with the real world in its windows; E at its front door:
+// a fade, and you're back outside in front of the chalet.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from '../world/world.js';
 import { layout } from '../world/layout.js';
 import { busRoads } from './bus/roads.js';
-import { loadGLB, fitModel } from '../core/assets.js';
-import { HX, HZ, G, DOOR, DOOR_CUT, MODEL, FOOT, STEPS, IX, IZ, FL } from './chaletplan.js';
+import { loadGLB, fitModel, clusterDecimate } from '../core/assets.js';
+import { HX, HZ, G, DOOR, MODEL, FOOT, STEPS, IX, IZ } from './chaletplan.js';
 import { ChaletRoom, setChaletInterior } from './chaletroom.js';
 
 export const CHALET_PRICE = 50000; // (bought for good, not rented)
+export const SAVE_LAYOUT = 3;      // save.chalet.layout: the 18-chalet village (Oct 29); older saves are moved onto it
 const S = MODEL.scale;
-const FENCE_L = 1.6;               // m: one fence section (stretched to fit its run)
+const POST_STEP = 1.8;             // m between the fence's posts
+const PICKET = 0.16;               // m: one picket and its gap (the fence's texture repeats every PICKET)
+const FENCE_H = 1.0;
+const HI_R = 60;                   // m: the full model on the chalet you're nearest, within this
+const PLAQUE = { x: 4.015, y: 1.85, z: 1.45, w: 0.22, h: 0.165 }; // house frame: on the plaster right of the door (measured flat there)
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const _l = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 const hash = (i) => { const v = Math.sin(i * 91.7 + 17.3) * 43758.5453; return v - Math.floor(v); };
 
 // ------------------------------------------------------------------ where everything stands (pure: the game and the
@@ -39,20 +50,27 @@ export function houseFrame(p) {
 export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
   const out = [];
   const put = (o) => { out.push(o); return o; };
-  const fenceRun = (pid, ax, az, bx, bz, gaps = []) => { // sections along a -> b, gaps [[u0, u1]] (metres along it)
+  // one fence per plot: a closed loop of runs (corner to corner), each run cut by its gaps [[u0, u1]] (m along it);
+  // every straight stretch: a 'fence' item (a -> b, its posts every ~POST_STEP), posts at its ends
+  const fenceRun = (pid, ax, az, bx, bz, gaps = []) => {
     const L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L, yaw = Math.atan2(-uz, ux);
     let u = 0;
-    const cuts = [...gaps].filter((g) => g[1] > 0 && g[0] < L).sort((a, b) => a[0] - b[0]);
+    const cuts = gaps.filter((g) => g[1] > 0 && g[0] < L).sort((a, b) => a[0] - b[0]);
     cuts.push([L, L]);
     for (const [g0, g1] of cuts) {
-      const a = u, b = Math.min(g0, L);
-      if (b - a > 0.5) {
-        const n = Math.max(1, Math.round((b - a) / FENCE_L)), l = (b - a) / n;
-        for (let k = 0; k < n; k++) { const m = a + l * (k + 0.5), x = ax + ux * m, z = az + uz * m; put({ kind: 'fence', pid, x, z, y: height(x, z), yaw, len: l, hw: l / 2, hd: 0.1, y0: 0, y1: 1.0 }); }
-        put({ kind: 'fenceCol', pid, x: ax + ux * (a + b) / 2, z: az + uz * (a + b) / 2, yaw, hw: (b - a) / 2, hd: 0.08, col: true });
+      const a = Math.max(0, u), b = Math.min(g0, L);
+      if (b - a > 0.3) {
+        const x0 = ax + ux * a, z0 = az + uz * a, x1 = ax + ux * b, z1 = az + uz * b;
+        put({ kind: 'fence', pid, ax: x0, az: z0, bx: x1, bz: z1, x: (x0 + x1) / 2, z: (z0 + z1) / 2, yaw, len: b - a, hw: (b - a) / 2, hd: 0.06, y0: 0, y1: FENCE_H, col: true });
       }
       u = Math.max(u, g1);
     }
+  };
+  const loop = (pid, xa, xb, zf, zb, frontGaps) => { // (front: xa -> xb at zf; then down the far side, the back, up)
+    fenceRun(pid, xa, zf, xb, zf, frontGaps);
+    fenceRun(pid, xb, zf, xb, zb);
+    fenceRun(pid, xb, zb, xa, zb);
+    fenceRun(pid, xa, zb, xa, zf);
   };
   for (const p of V.plots) {
     const sd = p.side, zIn = (d) => p.front + sd * d, depth = Math.abs(p.back - p.front), yawOut = sd < 0 ? 0 : Math.PI; // (facing the road)
@@ -61,34 +79,37 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
       const x = (p.x0 + p.x1) / 2, z = zIn(depth / 2 + 0.5);
       put({ kind: 'playground', pid: p.id, x, z, y: height(x, z), yaw: yawOut, hw: 2.35, hd: 2.1, y0: 0, y1: 3.6, col: true });
       for (const dx of [-6.5, 6.5]) { const bz = zIn(2.4); put({ kind: 'bench', pid: p.id, x: x + dx, z: bz, y: height(x + dx, bz), yaw: yawOut, hw: 0.8, hd: 0.45, y0: 0, y1: 1.15, col: true }); }
-      fenceRun(p.id, xa, zf, xb, zf, [[(xb - xa) / 2 - 1.0, (xb - xa) / 2 + 1.0]]);
-      fenceRun(p.id, xa, zf, xa, zb); fenceRun(p.id, xb, zf, xb, zb); fenceRun(p.id, xa, zb, xb, zb);
+      loop(p.id, xa, xb, zf, zb, [[(xb - xa) / 2 - 1.0, (xb - xa) / 2 + 1.0]]);
       continue;
     }
     const f = houseFrame(p), L = (x, z) => f.localToWorld(_l.set(x, 0, z)).clone();
     const yaw = f.rotation.y, c = f.position;
-    put({ kind: 'house', pid: p.id, x: c.x, z: c.z, y: p.y, yaw, hw: HX, hd: HZ, y0: 0, y1: 8 });
+    put({ kind: 'house', pid: p.id, num: p.num, x: c.x, z: c.z, y: p.y, yaw, hw: HX, hd: HZ, y0: 0, y1: 8 });
     { const q = L((STEPS.x0 + STEPS.x1) / 2, (STEPS.z0 + STEPS.z1) / 2); put({ kind: 'steps', pid: p.id, x: q.x, z: q.z, y: p.y, yaw, hw: (STEPS.x1 - STEPS.x0) / 2, hd: (STEPS.z1 - STEPS.z0) / 2, y0: 0, y1: G }); }
-    put({ kind: 'eaves', pid: p.id, x: L((FOOT.x0 + FOOT.x1) / 2, (FOOT.z0 + FOOT.z1) / 2).x, z: L((FOOT.x0 + FOOT.x1) / 2, (FOOT.z0 + FOOT.z1) / 2).z, y: p.y, yaw, hw: (FOOT.x1 - FOOT.x0) / 2, hd: (FOOT.z1 - FOOT.z0) / 2, y0: 4.6, y1: 8 });
+    { const q = L((FOOT.x0 + FOOT.x1) / 2, (FOOT.z0 + FOOT.z1) / 2); put({ kind: 'eaves', pid: p.id, x: q.x, z: q.z, y: p.y, yaw, hw: (FOOT.x1 - FOOT.x0) / 2, hd: (FOOT.z1 - FOOT.z0) / 2, y0: 4.6, y1: 8 }); }
+    // the way in: the steps, the landing in front of them, the path to the gate (no props there)
+    { const q = L(HX + 1.2, DOOR.z); put({ kind: 'doorway', pid: p.id, x: q.x, z: q.z, y: p.y, yaw, hw: 1.6, hd: 1.6, y0: 0, y1: 2.5, keepOut: true }); }
+    { const q = L(HX + 0.04, PLAQUE.z); put({ kind: 'plaque', pid: p.id, num: p.num, x: q.x, z: q.z, y: p.y + PLAQUE.y, yaw: yaw, hw: PLAQUE.w / 2, hd: 0.01 }); }
     const door = L(HX + 1.6, DOOR.z), dx = door.x;
-    // the bay and its drive (flat), its fence (back, and the back half of its house side), the sign
+    // the parking space and its drive (flat; edge to edge, never on top of each other)
     const bay = p.bay, bw = bay.w, bz0 = zIn(0.3), bz1 = zIn(0.3 + bay.d), road = p.legZ + sd * 3.7;
     put({ kind: 'bay', pid: p.id, x: bay.x, z: (bz0 + bz1) / 2, yaw: 0, hw: bw / 2, hd: bay.d / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: bz0, zb: bz1, out: sd });
     put({ kind: 'drive', pid: p.id, x: bay.x, z: (road + bz0) / 2, yaw: 0, hw: bw / 2, hd: Math.abs(bz0 - road) / 2, flat: true, x0: bay.x - bw / 2, x1: bay.x + bw / 2, za: road, zb: bz0 });
-    const bzF = zIn(0.3 + bay.d + 0.2), inner = bay.x < c.x ? bay.x + bw / 2 + 0.2 : bay.x - bw / 2 - 0.2, outer = bay.x < c.x ? xa : xb;
-    fenceRun(p.id, outer, bzF, inner, bzF);
-    fenceRun(p.id, inner, zIn(0.3 + bay.d * 0.5), inner, bzF);
-    { const sx = inner + (bay.x < c.x ? 0.3 : -0.3), sz = zIn(0.45); put({ kind: 'sign', pid: p.id, x: sx, z: sz, y: height(sx, sz), yaw: yawOut, hw: 0.3, hd: 0.06, y0: 0, y1: 1.9, col: true }); }
-    // the garden fence: the front (gaps: the drive, the gate to the path), both sides, the back
-    const gx0 = Math.min(bay.x - bw / 2, bay.x + bw / 2) - 0.1 - xa, gx1 = Math.max(bay.x - bw / 2, bay.x + bw / 2) + 0.1 - xa;
-    fenceRun(p.id, xa, zf, xb, zf, [[gx0, gx1], [dx - 0.7 - xa, dx + 0.7 - xa]]);
-    fenceRun(p.id, xa, zf, xa, zb); fenceRun(p.id, xb, zf, xb, zb);
-    fenceRun(p.id, xa, zb, xb, zb);
+    // ONE fence round the plot: gaps for the drive and the gate
+    const gx0 = bay.x - bw / 2 - 0.15 - xa, gx1 = bay.x + bw / 2 + 0.15 - xa;
+    loop(p.id, xa, xb, zf, zb, [[gx0, gx1], [dx - 0.65 - xa, dx + 0.65 - xa]]);
+    const toHouse = Math.sign(c.x - bay.x) || 1, awayBay = Math.sign(dx - bay.x) || 1;
+    // the "P PRIVAT" sign: inside the fence beside the drive's gap, on the house side, facing the road
+    { const sx = bay.x + toHouse * (bw / 2 + 0.45), sz = zIn(0.55); put({ kind: 'sign', pid: p.id, x: sx, z: sz, y: height(sx, sz), yaw: yawOut, hw: 0.25, hd: 0.06, y0: 0, y1: 1.95, col: true, r: 0.12 }); }
+    // the mailbox at the gate (its number on the front), on the gate's side away from the drive
+    { const mx = dx + awayBay * 1.05, mz = zIn(0.6); put({ kind: 'mailbox', pid: p.id, num: p.num, x: mx, z: mz, y: height(mx, mz), yaw: yawOut, hw: 0.2, hd: 0.18, y0: 0, y1: 1.3, col: true, r: 0.15 }); }
     // stepping stones from the gate to the steps (flush with the snow)
-    for (const d of [0.65, 1.3, 1.95]) { const z = zIn(d), x = dx + (hash(p.id * 3 + d * 7) - 0.5) * 0.12; put({ kind: 'stone', pid: p.id, x, z, y: height(x, z), yaw: 0, spin: hash(p.id + d) * 6, hw: 0.29, hd: 0.29, flat: true, r: 0.29 }); }
-    // the garden strip beside the house: a bench facing the view, small spruces, a shed or a snowman
+    const dSteps = Math.abs(L(STEPS.x1, DOOR.z).z - p.front);
+    for (let d = 0.7; d < dSteps - 0.35; d += 0.62) { const z = zIn(d), x = dx + (hash(p.id * 3 + d * 7) - 0.5) * 0.12; put({ kind: 'stone', pid: p.id, x, z, y: height(x, z), yaw: 0, spin: hash(p.id + d) * 6, hw: 0.29, hd: 0.29, flat: true, r: 0.29 }); }
+    // the garden strip beside the house: a bench facing the view, a sledge, small spruces, a shed or a snowman
     const [g0, g1] = p.garden, gx = (Math.max(g0, xa + 0.2) + Math.min(g1, xb - 0.2)) / 2;
     if (p.bench !== false) { const z = zIn(2.3); put({ kind: 'bench', pid: p.id, x: gx, z, y: height(gx, z), yaw: yawOut, hw: 0.8, hd: 0.45, y0: 0, y1: 1.15, col: true }); }
+    if (hash(p.id * 17) < 0.55) { const x = gx + 0.7, z = zIn(3.6); put({ kind: 'sledge', pid: p.id, x, z, y: height(x, z), yaw: yawOut + Math.PI / 2 + 0.3, hw: 0.5, hd: 0.25, y0: 0, y1: 0.35 }); }
     const tree = (x, d, h, kind = 'spruce') => { const z = zIn(d); put({ kind, pid: p.id, x, z, y: height(x, z), yaw: hash(p.id * 5 + d) * 6.28, h, hw: h * 0.2, hd: h * 0.2, y0: 0, y1: h, col: kind === 'spruce', r: h * 0.16, v: hash(p.id * 11 + d) < 0.5 ? 0 : 1 }); };
     tree(gx - 0.75, 5.2, 2.6 + hash(p.id) * 0.8); tree(gx + 0.85, 7.0, 2.2 + hash(p.id + 1) * 0.6);
     if (p.shed) { const z = zIn(depth - 0.25 - 1.75); put({ kind: 'shed', pid: p.id, x: gx, z, y: height(gx, z), yaw: yawOut, hw: 1.48, hd: 1.6, y0: 0, y1: 2.2, col: true }); }
@@ -96,13 +117,20 @@ export function villagePlacements(V, height = (x, z) => world.height(x, z)) {
       tree(gx, 10.2, 3.0 + hash(p.id + 2) * 0.7);
       if (hash(p.id * 7) < 0.6) { const z = zIn(8.4), x = gx - 0.6; put({ kind: 'snowman', pid: p.id, x, z, y: height(x, z), yaw: yawOut + 0.4, hw: 0.35, hd: 0.35, y0: 0, y1: 1.5, col: true, r: 0.4 }); }
     }
-    // dwarf spruces along the front of the house (either side of the path), a sledge by the steps
-    const wx = (lz) => L(HX + 2.0, lz);
-    for (const lz of [-4.2, -2.5, 2.1, 3.9]) { const q = wx(lz); const z = q.z, d = Math.abs(z - p.front); tree(q.x, d, 0.9 + hash(p.id * 13 + lz) * 0.4, 'shrub'); }
-    if (hash(p.id * 17) < 0.55) { const q = L(HX + 0.9, STEPS.z1 + 0.55); put({ kind: 'sledge', pid: p.id, x: q.x, z: q.z, y: height(q.x, q.z), yaw: yaw + Math.PI / 2, hw: 0.5, hd: 0.2, y0: 0, y1: 0.35 }); }
+    // dwarf spruces along the front of the house, clear of the steps and the path
+    for (const lz of [-4.6, -3.0, 2.6, 4.3]) { const q = L(HX + 1.6, lz); tree(q.x, Math.abs(q.z - p.front), 0.9 + hash(p.id * 13 + lz) * 0.4, 'shrub'); }
   }
   return out;
 }
+
+// the house-number atlas (one texture for every plaque, mailbox plate and parking sign): 8 x 4 cells of 128 x 96
+// (the numbers 1-32, blue enamel, white digits and border), the "P PRIVAT" sign below them (384 x 512)
+const ATLAS = { w: 1024, h: 1024, cw: 128, ch: 96, cols: 8, sign: { x: 0, y: 400, w: 384, h: 512 } };
+function atlasCell(n) { // uv rect (three: v up) of number n
+  const i = (n - 1) % 32, cx = (i % ATLAS.cols) * ATLAS.cw, cy = Math.floor(i / ATLAS.cols) * ATLAS.ch;
+  return [cx / ATLAS.w, 1 - (cy + ATLAS.ch) / ATLAS.h, (cx + ATLAS.cw) / ATLAS.w, 1 - cy / ATLAS.h];
+}
+const SIGN_UV = [ATLAS.sign.x / ATLAS.w, 1 - (ATLAS.sign.y + ATLAS.sign.h) / ATLAS.h, (ATLAS.sign.x + ATLAS.sign.w) / ATLAS.w, 1 - ATLAS.sign.y / ATLAS.h];
 
 export class Chalets {
   constructor(o) {
@@ -110,126 +138,144 @@ export class Chalets {
     Object.assign(this, o);
     this.V = busRoads.chalets;
     this.inside = false; this.current = null; this.target = null; this.viewing = null;
-    this.houses = []; this.hiAt = -1; this.roomAt = -1;
+    this.houses = []; this.hiAt = -1;
     if (!this.V) return;
-    this.migrateSave();
     this.plan();
-    this.room = new ChaletRoom({ renderer: o.renderer });
-    this.room.attach(this.scene);
-    setChaletInterior(this.room, this);
+    this.migrateSave();
+    setChaletInterior(null, this); // (the room itself: built the first time you go in)
     this.ready = this.build().catch((e) => console.warn('chalet village', e));
   }
 
-  // furniture saved before the Oct 28 rescale (floors at 0.55 / 3.5, a wider house): onto the new floors, inside
+  // save.chalet from before: furniture from before the Oct 28 rescale moved onto the new floors; a chalet from the
+  // 54-plot village (Oct 29: 18 now) moved onto one of the 18, renamed "Almdorf N"
   migrateSave() {
     const c = this.save?.chalet;
-    if (!c?.furniture?.length || c.plan >= 2) { if (c) c.plan = 2; return; }
-    for (const r of c.furniture) {
-      if (Number.isFinite(r.y)) r.y = r.y < 3.2 ? Math.max(G, r.y - 0.25) : r.y - 0.35;
-      if (Number.isFinite(r.x)) r.x = Math.max(-IX + 0.25, Math.min(IX - 0.25, r.x));
-      if (Number.isFinite(r.z)) r.z = Math.max(-IZ + 0.25, Math.min(IZ - 0.25, r.z));
+    if (!c) return;
+    let dirty = false;
+    if (c.furniture?.length && !(c.plan >= 2)) {
+      for (const r of c.furniture) {
+        if (Number.isFinite(r.y)) r.y = r.y < 3.2 ? Math.max(G, r.y - 0.25) : r.y - 0.35;
+        if (Number.isFinite(r.x)) r.x = Math.max(-IX + 0.25, Math.min(IX - 0.25, r.x));
+        if (Number.isFinite(r.z)) r.z = Math.max(-IZ + 0.25, Math.min(IZ - 0.25, r.z));
+      }
+      dirty = true;
     }
-    c.plan = 2;
-    this.writeSave?.();
+    if (c.plan !== 2) { c.plan = 2; dirty = true; }
+    if (c.id != null && c.layout !== SAVE_LAYOUT) {
+      const h = this.houses.find((x) => x.id === c.id) || this.houses[0]; // (an id the new village doesn't have: Almdorf 1)
+      if (h) { c.id = h.id; c.name = h.name; }
+      c.layout = SAVE_LAYOUT; dirty = true;
+    }
+    const h = this.rented();
+    if (h && c.name !== h.name) { c.name = h.name; dirty = true; }
+    if (dirty) this.writeSave?.();
   }
 
   plan() {
-    let n = 0;
     for (const p of this.V.plots) {
       if (p.playground) continue;
       const frame = houseFrame(p);
-      const door = frame.localToWorld(new THREE.Vector3(HX + 1.6, 0, DOOR.z));
+      const door = frame.localToWorld(new THREE.Vector3(HX + 0.9, 0, DOOR.z)); // (on the steps)
       const out = new THREE.Vector3(1, 0, 0).applyQuaternion(frame.quaternion);
-      this.houses.push({ id: p.id, name: `Chalet ${++n}`, plot: p, frame, door, out, yaw: frame.rotation.y });
+      this.houses.push({ id: p.id, num: p.num, name: p.name || `Almdorf ${p.num}`, plot: p, frame, door, out, yaw: frame.rotation.y });
     }
+    this.houses.sort((a, b) => a.num - b.num);
     this.items = villagePlacements(this.V);
     this.benchSpots = this.items.filter((i) => i.kind === 'bench').map((b) => ({ x: b.x, y: b.y, z: b.z, yaw: b.yaw }));
-    const J = this.V.junction, first = this.houses.slice().sort((a, b) => Math.hypot(a.door.x - J.x, a.door.z - J.z) - Math.hypot(b.door.x - J.x, b.door.z - J.z))[0];
+    const first = this.houses[0];
     const r = this.V.road, road = [];
     for (let i = 0; i < r.n; i += 3) road.push([r.X[i], r.Z[i]]);
     layout.chaletVillage = {
       x: first ? first.door.x : this.V.place.x, z: first ? first.door.z : this.V.place.z, label: 'Chalet village', center: { x: this.V.place.x, z: this.V.place.z },
-      houses: this.houses.map((h) => ({ id: h.id, x: h.frame.position.x, z: h.frame.position.z, yaw: h.yaw, w: 2 * HX, d: 2 * HZ })),
+      houses: this.houses.map((h) => ({ id: h.id, num: h.num, name: h.name, x: h.frame.position.x, z: h.frame.position.z, yaw: h.yaw, w: 2 * HX, d: 2 * HZ })),
       road, playground: this.V.plots.filter((p) => p.playground).map((p) => ({ x: (p.x0 + p.x1) / 2, z: (p.z0 + p.z1) / 2 })),
       rented: () => this.save.chalet?.id ?? null,
+      ownedName: () => this.rented()?.name || null,
     };
   }
 
   // ------------------------------------------------------------------ the houses, the gardens, the bays
   async build() {
-    const names = ['chalet_lo', 'picket_fence', 'garden_shed', 'garden_bench', 'playground', 'pine_tree', 'pine_tree2', 'garden/snowman', 'garden/sledge'];
-    const [lo, fence, shed, bench, play, pine1, pine2, snowman, sledge] = await Promise.all(names.map((n) => loadGLB(n).catch(() => null)));
+    const names = ['chalet_lo', 'garden_shed', 'garden_bench', 'playground', 'pine_tree', 'pine_tree2', 'garden/snowman', 'garden/sledge'];
+    const [lo, shed, bench, play, pine1, pine2, snowman, sledge] = await Promise.all(names.map((n) => loadGLB(n).catch(() => null)));
     const g = new THREE.Group(); g.name = 'chalet-village';
     this.scene.add(g); this.group = g;
-    if (lo) this.inst = this.instance(this.modelGroup(lo), this.houses.map((h) => h.frame.matrixWorld), g, true);
-    // the houses' colliders: the body, the front wall either side of the door (a gap you walk through when it's
-    // open), the door leaf (moved away while open), the front steps (a top you step onto)
+    // the houses: the low-poly Meshy chalet, instanced (the full one replaces it on the chalet you're nearest)
+    if (lo) {
+      this.loModel = this.modelGroup(lo);
+      this.inst = this.instance(this.loModel, this.houses.map((h) => h.frame.matrixWorld), g, true);
+    }
+    // the houses' colliders: the body, the front steps (a top you step onto); an invisible camera blocker
     const lbox = (h, x0, x1, z0, z1, extra = {}) => {
       const c = h.frame.localToWorld(new THREE.Vector3((x0 + x1) / 2, 0, (z0 + z1) / 2));
-      const col = { x: c.x, z: c.z, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, rot: -h.yaw, ...extra };
-      this.colliders.push(col);
-      return col;
+      this.colliders.push({ x: c.x, z: c.z, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, rot: -h.yaw, ...extra });
     };
+    const blkGeo = new THREE.BoxGeometry(2 * HX, 7.5, 2 * HZ), blkMat = new THREE.MeshBasicMaterial();
     for (const h of this.houses) {
-      const dz0 = DOOR.z - DOOR.w / 2, dz1 = DOOR.z + DOOR.w / 2;
-      lbox(h, -HX - 0.1, HX - 0.7, -HZ - 0.1, HZ + 0.1);
-      lbox(h, HX - 0.7, HX + 0.1, -HZ - 0.1, dz0);
-      lbox(h, HX - 0.7, HX + 0.1, dz1, HZ + 0.1);
-      h.leafCol = lbox(h, HX - 0.45, HX - 0.05, dz0, dz1);
-      h.leafAt = { x: h.leafCol.x, z: h.leafCol.z };
+      lbox(h, -HX - 0.05, HX + 0.05, -HZ - 0.05, HZ + 0.05);
       lbox(h, STEPS.x0, STEPS.x1, STEPS.z0, STEPS.z1, { top: h.frame.position.y + G });
       const c = h.frame.position;
-      const blk = new THREE.Mesh(new THREE.BoxGeometry(2 * HX, 7.5, 2 * HZ), new THREE.MeshBasicMaterial());
+      const blk = new THREE.Mesh(blkGeo, blkMat);
       blk.visible = false; blk.position.set(c.x, c.y + 3.75, c.z); blk.rotation.y = h.yaw; g.add(blk); blk.updateMatrixWorld(true);
+      blk.userData.cameraBlocker = true;
       this.cameraBlockers?.push(blk);
     }
-    // the props, instanced per kind
-    const M = (o, s = 1, sx = 1) => _m.compose(_p.set(o.x, o.y, o.z), _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, o.yaw || 0), _s.set(s * sx, s, s)).clone();
-    const by = (k) => this.items.filter((i) => i.kind === k);
     for (const i of this.items) {
       if (!i.col) continue;
-      if (i.kind === 'spruce' || i.kind === 'snowman') this.colliders.push({ x: i.x, z: i.z, r: i.r });
+      if (i.kind === 'fence') continue; // (below: one thin box per stretch)
+      if (i.r != null && (i.kind === 'spruce' || i.kind === 'snowman' || i.kind === 'sign' || i.kind === 'mailbox')) this.colliders.push({ x: i.x, z: i.z, r: i.r });
       else if (i.kind === 'bench') this.colliders.push({ x: i.x, z: i.z, hw: i.hw, hd: 0.3, rot: -i.yaw, top: i.y + 0.47 });
       else this.colliders.push({ x: i.x, z: i.z, hw: i.hw, hd: i.hd, rot: -(i.yaw || 0) });
     }
-    if (fence) { const base = this.fit(fence, { size: 1.0, axis: 'y' }, FENCE_L); this.instance(base, by('fence').map((f) => M(f, 1, f.len / FENCE_L)), g); }
-    if (shed) this.instance(this.fit(shed, { size: 2.2, axis: 'y' }), by('shed').map((o) => M(o)), g, true);
-    if (bench) this.instance(this.fit(bench, { size: 1.6, axis: 'x' }), by('bench').map((o) => M(o)), g, true);
-    if (play) this.instance(this.fit(play, { size: 3.6, axis: 'y' }), by('playground').map((o) => M(o)), g, true);
-    if (snowman) this.instance(this.fit(snowman, { size: 1.5, axis: 'y' }), by('snowman').map((o) => M(o)), g, true);
-    if (sledge) this.instance(this.fit(sledge, { size: 1.0, axis: 'xz' }), by('sledge').map((o) => M(o)), g, true);
-    // the garden's spruces and dwarf spruces: the game's own pine models (vegetation.js's), small
+    const by = (k) => this.items.filter((i) => i.kind === k);
+    for (const f of by('fence')) this.colliders.push({ x: f.x, z: f.z, hw: f.hw, hd: 0.06, rot: -f.yaw });
+    // the props, instanced per kind, no shadows (small)
+    const M = (o, s = 1) => _m.compose(_p.set(o.x, o.y, o.z), _q.setFromAxisAngle(UP, o.yaw || 0), _s.set(s, s, s)).clone();
+    if (shed) this.instance(this.fit(shed, { size: 2.2, axis: 'y' }), by('shed').map((o) => M(o)), g);
+    if (bench) this.instance(this.fit(bench, { size: 1.6, axis: 'x' }), by('bench').map((o) => M(o)), g);
+    if (play) this.instance(this.fit(play, { size: 3.6, axis: 'y' }), by('playground').map((o) => M(o)), g);
+    if (snowman) this.instance(this.fit(snowman, { size: 1.5, axis: 'y' }), by('snowman').map((o) => M(o)), g);
+    if (sledge) this.instance(this.fit(sledge, { size: 1.0, axis: 'xz' }), by('sledge').map((o) => M(o)), g);
+    // the garden's spruces and dwarf spruces: the game's own pine models, decimated (a garden tree needs no 20k triangles)
     const pines = [pine1, pine2].map((p) => (p ? this.pine(p) : null));
     for (const v of [0, 1]) {
       const base = pines[v] || pines[1 - v];
       if (!base) continue;
       const list = this.items.filter((i) => (i.kind === 'spruce' || i.kind === 'shrub') && (pines[v] ? i.v === v : i.v !== v));
-      this.instance(base, list.map((t) => M(t, t.h)), g, true);
+      this.instance(base, list.map((t) => M(t, t.h)), g);
     }
-    this.buildStones(g, by('stone'));
+    this.buildFences(g, by('fence'));
+    this.buildSolids(g);
     this.buildBays(g, by('bay'), by('drive'));
-    this.buildSigns(g, by('sign'));
+    this.buildPlates(g);
     g.updateMatrixWorld(true);
+    this.stats('built');
   }
   // the chalet model in the house frame (its body centred, its ground at y 0)
   modelGroup(gltf) {
     const m = gltf.scene.clone(true);
     m.scale.setScalar(S); m.position.set(-MODEL.x * S, -MODEL.y * S, -MODEL.z * S);
     const g = new THREE.Group(); g.add(m); g.updateMatrixWorld(true);
+    g.userData.glb = gltf.modelName || 'chalet';
     return g;
   }
-  fit(gltf, opts, len = 0) {
+  fit(gltf, opts) {
     const g = fitModel(gltf, opts);
-    if (len) { const b = new THREE.Box3().setFromObject(g), sx = len / Math.max(0.01, b.max.x - b.min.x); g.scale.x *= sx; }
     g.updateMatrixWorld(true);
     const b = new THREE.Box3().setFromObject(g); g.position.y -= b.min.y;
     const w = new THREE.Group(); w.add(g); w.updateMatrixWorld(true);
     return w;
   }
-  // a pine 1 m tall (instances scale it to their height), the forest's look: no baked glow, a touch of tint
+  // a pine 1 m tall (instances scale it to their height), the forest's look: no baked glow; decimated
   pine(gltf) {
     const w = this.fit(gltf, { size: 1, axis: 'y' });
-    w.traverse((o) => { if (o.isMesh) { const m = o.material.clone(); if (m.emissive) m.emissive.setRGB(0, 0, 0); m.emissiveMap = null; m.metalness = 0; o.material = m; } });
+    w.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = o.material.clone(); if (m.emissive) m.emissive.setRGB(0, 0, 0); m.emissiveMap = null; m.metalness = 0; o.material = m;
+      o.geometry.computeBoundingBox();
+      const bb = o.geometry.boundingBox, h = Math.max(bb.max.y - bb.min.y, bb.max.x - bb.min.x);
+      try { o.geometry = clusterDecimate(o.geometry, h * 0.09); } catch (e) { /* (keep the full one) */ }
+    });
     return w;
   }
   instance(base, mats, parent, shadows = false) {
@@ -247,16 +293,87 @@ export class Chalets {
     });
     return out;
   }
-  // stepping stones: flat slabs of grey granite, their tops 3 cm over the snow (no coplanar faces)
-  buildStones(g, list) {
+
+  // the picket fences: every stretch of every plot in two meshes (the pickets and rails: a strip textured with them,
+  // alpha-tested, seen from both sides; the posts: in buildSolids)
+  buildFences(g, list) {
     if (!list.length) return;
-    const geo = new THREE.CylinderGeometry(0.27, 0.29, 0.08, 9);
-    const im = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ color: 0x8f9296, roughness: 0.9 }), list.length);
-    list.forEach((s, i) => im.setMatrixAt(i, _m.compose(_p.set(s.x, s.y - 0.01, s.z), _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, s.spin), _s.set(1, 1, 0.8 + 0.2 * hash(i)))));
-    im.receiveShadow = true; im.computeBoundingSphere(); g.add(im);
+    const pos = [], uv = [], idx = [];
+    this.posts = [];
+    for (const f of list) {
+      const n = Math.max(1, Math.round(f.len / POST_STEP)), b = pos.length / 3;
+      for (let k = 0; k <= n; k++) {
+        const t = k / n, x = f.ax + (f.bx - f.ax) * t, z = f.az + (f.bz - f.az) * t, y = world.height(x, z) - 0.03, u = (f.len * t) / PICKET;
+        pos.push(x, y, z, x, y + FENCE_H, z); uv.push(u, 0, u, 1);
+        this.posts.push([x, y, z, f.yaw]);
+        if (k < n) { const a = b + k * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx); geo.computeVertexNormals(); // (a vertical strip: its normals sideways)
+    const t = this.picketTexture();
+    const mat = new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.85 });
+    const m = new THREE.Mesh(geo, mat); m.name = 'chalet-fences'; m.receiveShadow = true; m.castShadow = false;
+    g.add(m);
   }
-  // each plot's parking (two 2.5 x 5 m bays, lines and PRIVAT painted on) and its drive to the road: draped on the
-  // ground, 4 cm over it; the bay and the drive meet edge to edge (never on top of each other)
+  picketTexture() {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+    const x = c.getContext('2d');
+    x.clearRect(0, 0, 64, 128);
+    // (canvas y down: the top of the fence at the top) a pointed picket in the middle of each 16 cm, two rails
+    const wood = '#d9c4a0', dark = '#a88b62';
+    x.fillStyle = wood;
+    x.beginPath(); x.moveTo(14, 128); x.lineTo(14, 18); x.lineTo(32, 2); x.lineTo(50, 18); x.lineTo(50, 128); x.closePath(); x.fill();
+    x.fillStyle = dark; x.fillRect(14, 18, 3, 110); x.fillRect(47, 18, 3, 110);
+    x.fillStyle = '#c9b38c'; x.fillRect(0, 34, 64, 12); x.fillRect(0, 92, 64, 12);
+    x.fillStyle = 'rgba(80,60,40,0.35)'; x.fillRect(0, 45, 64, 2); x.fillRect(0, 103, 64, 2);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = 8;
+    return t;
+  }
+  // everything small and solid in ONE vertex-coloured mesh: the fence posts, the stepping stones, the mailboxes and
+  // their posts, the signs' posts and plates (their faces: the atlas mesh)
+  buildSolids(g) {
+    const parts = [];
+    const add = (geo, x, y, z, yaw, color, sx = 1, sy = 1, sz = 1) => {
+      geo = geo.index ? geo.toNonIndexed() : geo;
+      geo.deleteAttribute('uv');
+      geo.applyMatrix4(_m.compose(_p.set(x, y, z), _q.setFromAxisAngle(UP, yaw), _s.set(sx, sy, sz)));
+      const col = new THREE.Color(color), n = geo.attributes.position.count, a = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { a[i * 3] = col.r; a[i * 3 + 1] = col.g; a[i * 3 + 2] = col.b; }
+      geo.setAttribute('color', new THREE.BufferAttribute(a, 3));
+      parts.push(geo);
+    };
+    const post = new THREE.BoxGeometry(0.08, FENCE_H + 0.1, 0.08);
+    const seen = new Set();
+    for (const [x, y, z, yaw] of this.posts || []) {
+      const k = `${Math.round(x * 20)},${Math.round(z * 20)}`;
+      if (seen.has(k)) continue; seen.add(k); // (the corners: one post where two stretches meet)
+      add(post.clone(), x, y + (FENCE_H + 0.1) / 2, z, yaw, 0xb89c74);
+    }
+    const stone = new THREE.CylinderGeometry(0.27, 0.29, 0.08, 9);
+    this.items.filter((i) => i.kind === 'stone').forEach((s, i) => add(stone.clone(), s.x, s.y - 0.01, s.z, s.spin, 0x8f9296, 1, 1, 0.8 + 0.2 * hash(i)));
+    const mpost = new THREE.BoxGeometry(0.09, 1.0, 0.09), mbox = new THREE.BoxGeometry(0.34, 0.26, 0.3), mroof = new THREE.BoxGeometry(0.38, 0.03, 0.34);
+    for (const b of this.items.filter((i) => i.kind === 'mailbox')) {
+      add(mpost.clone(), b.x, b.y + 0.5, b.z, b.yaw, 0x6b4a2b);
+      add(mbox.clone(), b.x, b.y + 1.13, b.z, b.yaw, 0x2d5e3a);
+      add(mroof.clone(), b.x, b.y + 1.275, b.z, b.yaw, 0x22472c);
+    }
+    const spost = new THREE.CylinderGeometry(0.03, 0.03, 1.95, 8), splate = new THREE.BoxGeometry(0.46, 0.62, 0.02);
+    for (const s of this.items.filter((i) => i.kind === 'sign')) {
+      add(spost.clone(), s.x, s.y + 0.975, s.z, s.yaw, 0x9aa0a6);
+      const o = _l.set(0, 0, 0.035).applyAxisAngle(UP, s.yaw);
+      add(splate.clone(), s.x + o.x, s.y + 1.58, s.z + o.z, s.yaw, 0xd8d8d4);
+    }
+    if (!parts.length) return;
+    const geo = mergeGeometries(parts);
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
+    m.name = 'chalet-solids'; m.receiveShadow = true; m.castShadow = false;
+    g.add(m);
+  }
+  // each plot's parking (two 2.5 x 5 m bays, lines and PRIVAT painted in each) and its drive to the road: draped on
+  // the ground, 4 cm over it; the bay and the drive meet edge to edge (never on top of each other)
   buildBays(g, bays, drives) {
     const drape = (list, textured) => {
       const pos = [], uv = [], idx = [];
@@ -265,8 +382,9 @@ export class Chalets {
         for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
           const x = x0 + ((x1 - x0) * i) / nx, z = za + ((zb - za) * j) / nz;
           pos.push(x, world.height(x, z) + 0.04, z);
-          // uv: u across the bay, v from its road end (0) to its back (1); mirrored for the plots facing -z
-          uv.push(r.out > 0 ? i / nx : 1 - i / nx, j / nz);
+          // uv: v from the bay's road end (0) to its back (1); u left to right as you drive in (facing +z your
+          // right is -x, facing -z it's +x), so the painting reads upright and unmirrored from the driver's seat
+          uv.push(r.out > 0 ? 1 - i / nx : i / nx, j / nz);
         }
         const flip = (zb - za) < 0;
         for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const a = b + j * (nx + 1) + i; if (flip) idx.push(a, a + 1, a + nx + 1, a + 1, a + nx + 2, a + nx + 1); else idx.push(a, a + nx + 1, a + 1, a + 1, a + nx + 1, a + nx + 2); }
@@ -276,44 +394,106 @@ export class Chalets {
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       geo.setIndex(idx); geo.computeVertexNormals();
       const mat = new THREE.MeshStandardMaterial(textured ? { map: this.bayTexture(), roughness: 0.9 } : { color: 0x8d8a84, roughness: 0.95 });
-      const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; g.add(m);
+      const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.name = textured ? 'chalet-bays' : 'chalet-drives'; g.add(m);
     };
     if (bays.length) drape(bays, true);
     if (drives.length) drape(drives, false);
   }
+  /** The bay's painting (canvas: x = u, left to right as you drive in; y down = from the back (v 1) to the road (v 0)). */
+  static bayLayout() {
+    const W = 512, lines = [0.04, 0.5, 0.96]; // (the lines: 2.5 m bays inside the 5.4 m space)
+    const bays = [[lines[0], lines[1]], [lines[1], lines[2]]].map(([a, b]) => ({ x0: a * W + 6, x1: b * W - 6 }));
+    // PRIVAT near the entrance of each bay, upright for the driver (its foot toward the road: the canvas's bottom)
+    const text = bays.map((b) => ({ cx: (b.x0 + b.x1) / 2, maxW: (b.x1 - b.x0) * 0.78, base: W * 0.86 }));
+    return { W, lines, bays, text };
+  }
   bayTexture() {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 256;
+    const L = Chalets.bayLayout(), W = L.W;
+    const c = document.createElement('canvas'); c.width = W; c.height = W;
     const x = c.getContext('2d');
-    x.fillStyle = '#7f7d79'; x.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 2500; i++) { const v = 100 + Math.random() * 50; x.fillStyle = `rgba(${v},${v},${v - 4},0.35)`; x.fillRect(Math.random() * 256, Math.random() * 256, 2, 2); }
-    // (v = 0 at the drive's end, 1 at the back: canvas y flipped) two bays side by side, white lines, PRIVAT
-    x.fillStyle = 'rgba(240,240,236,0.9)';
-    for (const u of [0.04, 0.5, 0.96]) x.fillRect(u * 256 - 3, 0, 6, 256 * 0.93);
-    x.fillRect(0.04 * 256, 0, 0.92 * 256, 6);
-    x.save(); x.translate(128, 200); x.rotate(Math.PI); x.font = 'bold 30px Arial'; x.textAlign = 'center';
-    x.fillText('PRIVAT', -64 + 128, 0); x.fillText('PRIVAT', 64 - 128, 0); x.restore();
+    x.fillStyle = '#7f7d79'; x.fillRect(0, 0, W, W);
+    for (let i = 0; i < 6000; i++) { const v = 100 + Math.random() * 50; x.fillStyle = `rgba(${v},${v},${v - 4},0.35)`; x.fillRect(Math.random() * W, Math.random() * W, 2, 2); }
+    x.fillStyle = 'rgba(240,240,236,0.92)';
+    for (const u of L.lines) x.fillRect(u * W - 6, W * 0.04, 12, W * 0.96); // (the lines, from the back to the entrance)
+    x.fillRect(L.lines[0] * W, W * 0.04, (L.lines[2] - L.lines[0]) * W, 12); // (the back line)
+    x.textAlign = 'center'; x.textBaseline = 'alphabetic';
+    for (const t of L.text) {
+      let size = 64;
+      x.font = `bold ${size}px Arial`;
+      const w = x.measureText('PRIVAT').width;
+      if (w > t.maxW) { size = Math.floor((size * t.maxW) / w); x.font = `bold ${size}px Arial`; }
+      x.fillText('PRIVAT', t.cx, t.base);
+    }
+    const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8;
+    return tx;
+  }
+  // the atlas: the house numbers (blue enamel, white digits and border) and the "P PRIVAT" sign
+  atlasTexture() {
+    const c = document.createElement('canvas'); c.width = ATLAS.w; c.height = ATLAS.h;
+    const x = c.getContext('2d');
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    for (let n = 1; n <= 32; n++) {
+      const i = n - 1, cx = (i % ATLAS.cols) * ATLAS.cw, cy = Math.floor(i / ATLAS.cols) * ATLAS.ch, w = ATLAS.cw, h = ATLAS.ch;
+      x.fillStyle = '#1f4fa3'; x.fillRect(cx, cy, w, h);
+      x.strokeStyle = '#ffffff'; x.lineWidth = 6; x.strokeRect(cx + 9, cy + 9, w - 18, h - 18);
+      x.fillStyle = '#ffffff'; x.font = `bold ${n > 9 ? 58 : 66}px Arial`; x.fillText(String(n), cx + w / 2, cy + h / 2 + 3);
+    }
+    const s = ATLAS.sign;
+    x.fillStyle = '#f6f6f2'; x.fillRect(s.x, s.y, s.w, s.h);
+    x.strokeStyle = '#1d3f8f'; x.lineWidth = 12; x.strokeRect(s.x + 8, s.y + 8, s.w - 16, s.h - 16);
+    x.fillStyle = '#1d4fb8'; x.fillRect(s.x + 52, s.y + 40, s.w - 104, s.w - 104);
+    x.fillStyle = '#ffffff'; x.font = 'bold 230px Arial'; x.fillText('P', s.x + s.w / 2, s.y + 40 + (s.w - 104) / 2 + 10);
+    x.fillStyle = '#b3171d'; x.font = 'bold 84px Arial';
+    const pw = x.measureText('PRIVAT').width; if (pw > s.w - 40) x.font = `bold ${Math.floor((84 * (s.w - 40)) / pw)}px Arial`;
+    x.fillText('PRIVAT', s.x + s.w / 2, s.y + s.h - 70);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
     return t;
   }
-  // the "Privat" sign at each bay: a post, a white plate with the blue P and PRIVAT / Parken nur für Anwohner
-  buildSigns(g, list) {
-    if (!list.length) return;
-    const c = document.createElement('canvas'); c.width = 256; c.height = 192;
-    const x = c.getContext('2d');
-    x.fillStyle = '#f4f4f0'; x.fillRect(0, 0, 256, 192); x.strokeStyle = '#1d3f8f'; x.lineWidth = 10; x.strokeRect(5, 5, 246, 182);
-    x.fillStyle = '#1d4fb8'; x.fillRect(18, 22, 88, 88); x.fillStyle = '#fff'; x.font = 'bold 80px Arial'; x.textAlign = 'center'; x.fillText('P', 62, 96);
-    x.fillStyle = '#b3171d'; x.font = 'bold 44px Arial'; x.fillText('PRIVAT', 178, 80);
-    x.fillStyle = '#222'; x.font = '19px Arial'; x.fillText('Parken nur für', 128, 145); x.fillText('Bewohner', 128, 170);
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-    const plate = new THREE.BoxGeometry(0.5, 0.375, 0.02), post = new THREE.CylinderGeometry(0.025, 0.025, 1.5, 8);
-    const face = new THREE.MeshStandardMaterial({ map: t, roughness: 0.5 }), edge = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.5 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 0.6, roughness: 0.4 });
-    const ip = new THREE.InstancedMesh(post, steel, list.length), iq = new THREE.InstancedMesh(plate, [edge, edge, edge, edge, face, face], list.length);
-    list.forEach((s, i) => {
-      ip.setMatrixAt(i, _m.compose(_p.set(s.x, s.y + 0.75, s.z), _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, s.yaw), _s.set(1, 1, 1)));
-      iq.setMatrixAt(i, _m.compose(_p.set(s.x, s.y + 1.62, s.z), _q, _s));
+  // every plaque (by the front door), mailbox number plate and sign face: quads on one atlas, one mesh
+  buildPlates(g) {
+    const pos = [], uv = [], nor = [];
+    const quad = (cx, cy, cz, yaw, w, h, r) => { // (facing local +z turned by yaw)
+      const ux = Math.cos(yaw), uz = -Math.sin(yaw), nx = Math.sin(yaw), nz = Math.cos(yaw);
+      const P = (a, b) => [cx + ux * a, cy + b, cz + uz * a];
+      const [u0, v0, u1, v1] = r;
+      const A = P(-w / 2, -h / 2), B = P(w / 2, -h / 2), C = P(w / 2, h / 2), D = P(-w / 2, h / 2);
+      pos.push(...A, ...B, ...C, ...A, ...C, ...D);
+      uv.push(u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1);
+      for (let k = 0; k < 6; k++) nor.push(nx, 0, nz);
+    };
+    for (const p of this.items) {
+      if (p.kind === 'plaque' && p.num) {
+        // (yaw: the house frame's; its +x (the front) is local +z turned by yaw + PI/2)
+        quad(p.x, p.y, p.z, p.yaw + Math.PI / 2, PLAQUE.w, PLAQUE.h, atlasCell(p.num));
+      } else if (p.kind === 'mailbox' && p.num) {
+        const o = _l.set(0, 0, 0.152).applyAxisAngle(UP, p.yaw);
+        quad(p.x + o.x, p.y + 1.12, p.z + o.z, p.yaw, 0.2, 0.15, atlasCell(p.num));
+      } else if (p.kind === 'sign') {
+        const o = _l.set(0, 0, 0.047).applyAxisAngle(UP, p.yaw);
+        quad(p.x + o.x, p.y + 1.58, p.z + o.z, p.yaw, 0.44, 0.6, SIGN_UV);
+      }
+    }
+    if (!pos.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: this.atlasTexture(), roughness: 0.35, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2 }));
+    m.name = 'chalet-plates'; m.receiveShadow = true; m.castShadow = false;
+    g.add(m);
+  }
+
+  /** The village's draw calls and triangles (console; the Node checks print it too). */
+  stats(label = '') {
+    let calls = 0, tris = 0;
+    this.group?.traverseVisible((o) => {
+      if (!o.isMesh) return;
+      const n = o.isInstancedMesh ? o.count : 1, gm = o.geometry;
+      calls++; tris += ((gm.index ? gm.index.count : gm.attributes.position.count) / 3) * n;
     });
-    for (const m of [ip, iq]) { m.castShadow = true; m.receiveShadow = true; m.computeBoundingSphere(); g.add(m); }
+    const s = { calls, tris: Math.round(tris) };
+    if (label) console.info(`chalet village (${label}): ${s.calls} draw calls, ${s.tris.toLocaleString('en-US')} triangles`);
+    return s;
   }
 
   setInstance(i, hidden) {
@@ -322,30 +502,26 @@ export class Chalets {
   }
 
   // ------------------------------------------------------------------ buying (one chalet each, yours for good)
-  rented() { const id = this.save.chalet?.id; return id == null ? null : this.houses.find((h) => h.id === id) || null; }
+  rented() { const id = this.save?.chalet?.id; return id == null ? null : this.houses.find((h) => h.id === id) || null; }
   insideOwn() { return this.inside && !!this.current && this.current.id === this.save.chalet?.id; }
   hour() { return this.getHour?.() ?? 12; }
   canEnter(h) { return !!h && (this.rented() === h || this.viewing === h); }
   interaction(p) {
-    if (!this.V || this.inside || !this.room) return null;
+    if (!this.V || this.inside || this.busy) return null;
     for (const h of this.houses) {
-      if (Math.abs(p.x - h.door.x) > 3.2 || Math.abs(p.z - h.door.z) > 3.2 || Math.hypot(p.x - h.door.x, p.z - h.door.z) > 2.6) continue;
+      if (Math.abs(p.x - h.door.x) > 3 || Math.abs(p.z - h.door.z) > 3 || Math.hypot(p.x - h.door.x, p.z - h.door.z) > 2.3) continue;
       const mine = this.rented();
-      if (this.canEnter(h) && this.roomAt === this.houses.indexOf(h)) {
-        const shut = Math.abs(this.room.front.target) < 0.01;
-        return { label: shut ? `Open the door (${mine === h ? 'your chalet' : h.name})` : 'Close the door', act: () => this.room.front.toggle(9, 0) };
-      }
-      if (mine === h || this.viewing === h) return null; // (the interior is on its way there)
-      if (mine) return { label: `${h.name} · you already own ${mine.name}`, act: () => this.hud?.flash(`One chalet each: you already own ${mine.name}`, 'bad', 2400) };
+      if (this.canEnter(h)) return { label: `Go in · ${h.name}${mine === h ? ' (your chalet)' : ''}`, act: () => this.enter(h) };
+      if (mine) return { label: `${h.name} · you already own ${mine.name}`, act: () => this.hud?.flash(`You already own ${mine.name}: one chalet each`, 'bad', 2400) };
       return (h._buy ||= { label: `${h.name} for sale · $${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.offer(h) });
     }
     return null;
   }
   offer(h) {
-    const say = 'A two-storey chalet in Almdorf: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. It comes empty: furnish it as you like. Yours for good.';
-    this.hud.dialog(`${h.name} · Almdorf`, say, [
+    const say = `A two-storey chalet on the Chaletweg: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. It comes empty: furnish it as you like. Yours for good.`;
+    this.hud.dialog(h.name, say, [
       { label: 'Buy this chalet', sub: 'Yours for good', price: `$${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.buy(h) },
-      { label: 'Have a look inside', sub: 'The door is open', act: () => { this.viewing = h; this.openFor(h); } },
+      { label: 'Have a look inside', sub: 'It is open for viewing', act: () => { this.viewing = h; this.enter(h); } },
       { label: 'Not now' },
     ], { kicker: `Chalet village · $${CHALET_PRICE.toLocaleString('en-US')}` });
   }
@@ -353,149 +529,113 @@ export class Chalets {
     if (this.rented()) return;
     if (!this.spend(CHALET_PRICE)) return;
     const old = this.save.chalet;
-    this.save.chalet = { id: h.id, name: h.name, owned: true, rented: true, since: this.save.day ?? 1, furniture: old?.furniture || [], plan: 2 };
+    this.save.chalet = { id: h.id, name: h.name, owned: true, rented: true, since: this.save.day ?? 1, furniture: old?.furniture || [], plan: 2, layout: SAVE_LAYOUT };
     this.writeSave();
-    this.hud.flash(`${h.name} is yours · walk in through the front door`, 'good', 3400);
-    if (this.inside && this.current === h) return;
-    this.openFor(h);
+    this.hud.flash(`${h.name} is yours · E at its front door to go in`, 'good', 3400);
   }
-  openFor(h) { const i = this.houses.indexOf(h); this.placeRoom(i); this.room.front.target = this.room.front.inward; this.audio?.play?.('click'); }
 
-  // ------------------------------------------------------------------ the interior at a chalet; walking in and out
-  placeRoom(i) {
-    if (i === this.roomAt) return;
-    this.roomAt = i;
-    if (i < 0) { this.room.setVisible(false); return; }
-    const h = this.houses[i];
-    this.room.place(h.frame);
-    for (const d of this.room.doors) { d.target = 0; d.angle = 0; d.update(0); } // (a fresh house: every door shut)
+  // ------------------------------------------------------------------ in and out (a short fade each way)
+  ensureRoom() { // (this.room: the interior, built the first time you go in; its own scene, never in the world)
+    if (!this.room) { this.room = new ChaletRoom({ renderer: this.renderer }); setChaletInterior(this.room, this); }
+    return this.room;
   }
-  enter(h) { // (seamless: you crossed the threshold)
-    const lp = h.frame.worldToLocal(_l.copy(this.player.pos));
-    this.current = h; this.inside = true;
-    this.room.enter(lp.x, lp.z, -Math.PI / 2, this.camera);
+  enter(h) {
+    if (this.inside || this.busy || this.transition?.active) return;
+    this.busy = true;
     this.player.frozen = true;
-    this.rigWas = [this.player.rig?.root, this.player.rig?.gear].filter(Boolean).map((o) => [o, o.visible]);
-    for (const [o] of this.rigWas) o.visible = false;
-    this.getPost().setView(this.scene, this.room.camera);
-    const ch = document.getElementById('crosshair'); if (ch) ch.hidden = false;
-  }
-  leave(now = false) {
-    if (!this.inside) return;
-    const h = this.current, r = this.room;
-    this.inside = false; r.leave();
-    for (const [o, v] of this.rigWas || []) o.visible = v;
-    this.current = null;
-    this.getPost().setView(this.scene, this.camera);
-    const ch = document.getElementById('crosshair'); if (ch) ch.hidden = true;
-    this.player.frozen = false;
-    if (!h) return;
-    // out on the steps where you walked out (or, leaving abruptly: at the door)
-    const z = now ? DOOR.z : Math.max(DOOR.z - DOOR.w / 2 + 0.3, Math.min(DOOR.z + DOOR.w / 2 - 0.3, r.pos.z));
-    const w = h.frame.localToWorld(_l.set(HX + 0.75, 0, z)), f = h.out, heading = Math.atan2(f.x, f.z);
-    this.player.teleport(w.x, w.z, heading, h.frame.position.y + G);
-    this.player.camYaw = heading + Math.PI;
-    this.player.camPitch = -0.12;
-  }
-  /** Inside, per frame (main.js): walking, the doors. Returns the prompt target. */
-  frame(dt, input, sensitivity) {
-    const r = this.room;
-    this.target = r.update(dt, input, sensitivity);
-    if (this.target && input?.hit?.('KeyE')) { this.audio?.play?.('click'); r.use(this.target); }
-    r.tick(dt, _l.set(r.pos.x, r.eyeY, r.pos.z), this.hour());
-    this.syncLeaf();
-    // the front door closes behind you once you're in; out through it: back in the world
-    const d = r.doorAt;
-    if (r.front.target !== 0 && Math.hypot(r.pos.x - d.x, r.pos.z - (d.z0 + d.z1) / 2) > 2.6) r.front.target = 0;
-    if (r.outFront(r.pos) && r.pos.x > HX - 0.2) this.leave();
-    return this.target;
-  }
-  roomName() { return this.inside ? `${this.current?.name || 'Chalet'} · ${this.room.roomName()}` : ''; }
-  // the front door's outside collider: out of the way while the door is open
-  syncLeaf() {
-    const h = this.houses[this.roomAt];
-    for (const x of this.houses) if (x.leafCol && x !== h) { x.leafCol.x = x.leafAt.x; x.leafCol.z = x.leafAt.z; }
-    if (!h?.leafCol) return;
-    const open = this.room.front.open || Math.abs(this.room.front.target) > 0.01;
-    h.leafCol.x = open ? 1e9 : h.leafAt.x; h.leafCol.z = open ? 1e9 : h.leafAt.z;
-  }
-
-  /** Per frame, outside: the full-detail model and the interior on the chalet you're nearest; its door. */
-  update(dt = 0.016) {
-    if (!this.V || !this.room) return;
-    if (this.inside) { this.updateHi(); return; }
-    const p = this.player?.pos;
-    if (!p) return;
-    this.updateHi();
-    const i = this.hiAt, h = this.houses[i];
-    // the interior stands in the chalet you're at (it shows once you're near its door)
-    if (h && Math.hypot(p.x - h.frame.position.x, p.z - h.frame.position.z) < 40) this.placeRoom(i);
-    const R = this.houses[this.roomAt], near = R ? Math.hypot(p.x - R.door.x, p.z - R.door.z) : 1e9;
-    this.room.setVisible(!!R && near < 22);
-    this.cutDoor(!!R && near < 22);
-    if (!R) return;
-    const lp = R.frame.worldToLocal(_l.copy(p));
-    const f = this.room.front;
-    if (this.canEnter(R)) {
-      // walking into the door opens it
-      if (Math.abs(f.target) < 0.01 && lp.x > HX - 0.3 && lp.x < HX + 1.1 && Math.abs(lp.z - DOOR.z) < DOOR.w / 2 + 0.2 && Math.hypot(this.player.vel?.x || 0, this.player.vel?.z || 0) > 0.3) f.target = f.inward;
-      // through the open door: in
-      if (f.open && lp.x < HX - 0.25 && Math.abs(lp.z - DOOR.z) < DOOR.w / 2) { this.enter(R); return; }
-      // walked away: it closes
-      if (Math.abs(f.target) > 0.01 && near > 6) f.target = 0;
-    } else if (Math.abs(f.target) > 0.01 && near > 6) f.target = 0;
-    if (this.viewing && this.viewing !== R && near > 30) this.viewing = null;
-    this.room.tick(dt, this.room.house.visible ? lp.setY(lp.y + 1.6) : null, this.hour());
-    this.syncLeaf();
-  }
-  updateHi() {
-    const p = this.inside ? this.current.frame.position : this.player?.pos;
-    if (!p || !this.inst) return;
-    const b = this.V.bounds;
-    let best = -1;
-    if (this.inside) best = this.houses.indexOf(this.current);
-    else if (p.x > b.minx - 80 && p.x < b.maxx + 80 && p.z > b.minz - 80 && p.z < b.maxz + 80) {
-      let bd = 70;
-      this.houses.forEach((h, i) => { const d = Math.hypot(p.x - h.frame.position.x, p.z - h.frame.position.z); if (d < bd) { bd = d; best = i; } });
-    }
-    if (best === this.hiAt) return;
-    if (best >= 0 && !this.hiModel) {
-      if (!this.hiLoading) this.hiLoading = loadGLB('chalet').then((gl) => { this.hiModel = gl ? this.modelGroup(gl) : null; }).catch(() => null);
-      return;
-    }
-    if (this.hiAt >= 0) this.setInstance(this.hiAt, false);
-    this.hiAt = best;
-    if (best < 0) { if (this.hi) this.hi.visible = false; return; }
-    if (!this.hi) this.makeHi();
-    const h = this.houses[best];
-    this.hi.visible = true;
-    this.hi.position.copy(h.frame.position); this.hi.quaternion.copy(h.frame.quaternion); this.hi.updateMatrixWorld(true);
-    this.cut.inv.value.copy(this.hi.matrixWorld).invert();
-    this.setInstance(best, true);
-  }
-  // the full model, with a second set of materials for when the interior is in it: only its outward faces, and its
-  // painted front door cut away (the interior's real door stands in the opening)
-  makeHi() {
-    this.hi = this.hiModel; this.group.add(this.hi);
-    this.cut = { inv: { value: new THREE.Matrix4() }, min: { value: new THREE.Vector3(DOOR_CUT.x0, G + 0.03, DOOR_CUT.z0) }, max: { value: new THREE.Vector3(DOOR_CUT.x1, G + DOOR.h + 0.04, DOOR_CUT.z1) } };
-    const cut = this.cut;
-    this.hi.traverse((o) => {
-      if (!o.isMesh) return;
-      o.castShadow = o.receiveShadow = true;
-      const m = o.material.clone();
-      m.side = THREE.FrontSide;
-      m.onBeforeCompile = (sh) => {
-        sh.uniforms.uCutInv = cut.inv; sh.uniforms.uCutMin = cut.min; sh.uniforms.uCutMax = cut.max;
-        sh.vertexShader = 'uniform mat4 uCutInv;\nvarying vec3 vCutP;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n vCutP = (uCutInv * modelMatrix * vec4(transformed, 1.0)).xyz;');
-        sh.fragmentShader = 'uniform vec3 uCutMin;\nuniform vec3 uCutMax;\nvarying vec3 vCutP;\n' + sh.fragmentShader.replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n if (all(greaterThan(vCutP, uCutMin)) && all(lessThan(vCutP, uCutMax))) discard;');
-      };
-      m.customProgramCacheKey = () => 'chaletDoorCut';
-      o.userData.mats = [o.material, m];
+    this.audio?.play?.('click');
+    this.transition.fade(() => {
+      const r = this.ensureRoom();
+      this.current = h; this.inside = true; this.busy = false;
+      this.showHi(this.houses.indexOf(h)); // (so the windows' view hides this very house)
+      r.setWorld({ scene: this.scene, frame: h.frame, hide: () => [this.player.rig?.root, this.player.rig?.gear, this.hi, this.hiShadow] });
+      r.enter();
+      this.getPost().setView(r.scene, r.camera);
+      const ch = document.getElementById('crosshair'); if (ch) ch.hidden = false;
     });
   }
-  cutDoor(on) {
-    if (!this.hi || this.cutOn === on) return;
-    this.cutOn = on;
-    this.hi.traverse((o) => { if (o.userData.mats) o.material = o.userData.mats[on ? 1 : 0]; });
+  leave(now = false) {
+    if (!this.inside || (this.busy && !now)) return;
+    const h = this.current;
+    const out = () => {
+      this.busy = false;
+      if (!this.inside) return;
+      this.inside = false; this.room?.leave();
+      this.current = null;
+      if (this.viewing === h && this.rented() !== h) this.viewing = null;
+      this.getPost().setView(this.scene, this.camera);
+      const ch = document.getElementById('crosshair'); if (ch) ch.hidden = true;
+      this.player.frozen = false;
+      if (now || !h) return;
+      // out in front of the steps, facing away from the door
+      const w = h.frame.localToWorld(_l.set(STEPS.x1 + 0.7, 0, DOOR.z)), f = h.out, heading = Math.atan2(f.x, f.z);
+      this.player.teleport(w.x, w.z, heading, h.frame.position.y);
+      this.player.camYaw = heading + Math.PI;
+      this.player.camPitch = -0.12;
+    };
+    if (now) { out(); return; }
+    this.busy = true;
+    this.audio?.play?.('click');
+    this.transition.fade(out);
+  }
+  /** Inside, per frame (main.js): walking, the doors; E at the front door: out. Returns the prompt target. */
+  frame(dt, input, sensitivity) {
+    const r = this.room;
+    if (!r) return null;
+    this.target = this.busy ? null : r.update(dt, input, sensitivity);
+    if (this.target && input?.hit?.('KeyE')) {
+      if (this.target.kind === 'exit') this.leave();
+      else { this.audio?.play?.('click'); r.use(this.target); }
+    }
+    r.tick(dt, _l.set(r.pos.x, r.eyeY, r.pos.z), this.hour());
+    return this.target;
+  }
+  roomName() { return this.inside ? `${this.current?.name || 'Chalet'} · ${this.room?.roomName() || ''}` : ''; }
+
+  /** Per frame (main.js): the full-detail model on the chalet you're nearest; nothing while you're away. */
+  update() {
+    if (!this.V || !this.inst) return;
+    if (this.inside) return; // (the house stays as it was when you went in)
+    const p = this.player?.pos;
+    if (!p) return;
+    const b = this.V.bounds;
+    if (p.x < b.minx - HI_R || p.x > b.maxx + HI_R || p.z < b.minz - HI_R || p.z > b.maxz + HI_R) { if (this.hiAt >= 0) this.showHi(-1); return; }
+    let best = -1, bd = HI_R;
+    for (let i = 0; i < this.houses.length; i++) { const f = this.houses[i].frame.position, d = Math.hypot(p.x - f.x, p.z - f.z); if (d < bd) { bd = d; best = i; } }
+    if (best === this.hiAt) return;
+    if (best >= 0 && !this.hiModel) { // (the full model: loaded the first time you come near; the low one shows meanwhile)
+      this.hiLoading ||= loadGLB('chalet').then((gl) => { if (gl) this.makeHi(gl); }).catch(() => null);
+      return;
+    }
+    this.showHi(best);
+  }
+  // the full model, as it comes (its own materials and textures: nothing tinted or cut); it casts no shadow of its
+  // own (538k triangles): a stand-in of the low model's shape does, invisible in the picture
+  makeHi(gl) {
+    this.hiModel = this.modelGroup(gl);
+    this.hi = this.hiModel; this.hi.name = 'chalet-hi'; this.hi.visible = false;
+    this.hi.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
+    this.group.add(this.hi);
+    if (this.loModel) {
+      this.hiShadow = this.loModel.clone(true); this.hiShadow.name = 'chalet-hi-shadow'; this.hiShadow.visible = false;
+      const ghost = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+      this.hiShadow.traverse((o) => { if (o.isMesh) { o.material = ghost; o.castShadow = true; o.receiveShadow = false; } });
+      this.group.add(this.hiShadow);
+    }
+  }
+  /** The full model on house i (-1: none); the low one back on the house it leaves, off the one it takes. */
+  showHi(i) {
+    if (i === this.hiAt) return;
+    if (i >= 0 && !this.hi) return;
+    if (this.hiAt >= 0) this.setInstance(this.hiAt, false);
+    this.hiAt = i;
+    for (const o of [this.hi, this.hiShadow]) {
+      if (!o) continue;
+      o.visible = i >= 0;
+      if (i < 0) continue;
+      const h = this.houses[i];
+      o.position.copy(h.frame.position); o.quaternion.copy(h.frame.quaternion); o.updateMatrixWorld(true);
+    }
+    if (i >= 0) this.setInstance(i, true);
   }
 }

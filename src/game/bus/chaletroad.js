@@ -21,11 +21,11 @@ const JUNCTION_NEAR = { x: 416, z: 1200 }; // the T junction on the valley road
 const LEG_Z = [1180, 1120, 1060, 1000];    // the legs (along the contours, the slope falls toward +z)
 const XE = 628, XW = 388, XL = 334;        // the east hairpins, the west hairpin, the car park's entrance (top leg)
 const HAIRPIN_R = 30, BEND_R = 40;
-// the terraces on the uphill side of each leg: [x from, x to] of the row of plots
-// the rows of plots: [leg, side (-1 uphill, +1 downhill), x from, x to]
-const ROWS = [[0, -1, 438, 590], [0, 1, 470, 590], [1, -1, 410, 640], [1, 1, 432, 590], [2, -1, 368, 590], [2, 1, 404, 600], [3, -1, 352, 608], [3, 1, 362, 585]];
-const PLOT_W = 26;                         // m along the leg: a side garden, the house (eaves 13.5 m), its private parking, gaps
-const PAD_FRONT = 7.5, FRONT_GARDEN = 2.6; // m from the leg's centre line to the pad; the front garden (pad edge to the steps)
+// the rows of plots: [leg, side (-1 uphill, +1 downhill), x from, x to, plots in the row]. Oct 29, the user: "make
+// fewer chalets": 18 (and the playground), spread out with forest between them, instead of 54 side by side
+const ROWS = [[0, -1, 438, 590, 2], [0, 1, 470, 590, 2], [1, -1, 410, 640, 3], [1, 1, 432, 590, 1], [2, -1, 368, 590, 3], [2, 1, 404, 600, 3], [3, -1, 352, 608, 3], [3, 1, 362, 585, 2]];
+const PLOT_W = 28;                         // m along the leg: a side garden, the house (eaves 14.25 m), its private parking, gaps
+const PAD_FRONT = 9.2, FRONT_GARDEN = 2.6; // m from the leg's centre line to the pad; the front garden (pad edge to the steps)
 const PAD_DEPTH = FRONT_GARDEN + FOOT.x1 + HX + 1.2; // (the back wall 1.2 m short of the pad's back: the eaves overhang the bank)
 const BAY = { w: 5.4, d: 5.6 };            // the private parking beside each house: two 2.5 x 5 m bays, fenced
 const BANK = 0.7;                          // tan 35 degrees: the terraces' banks
@@ -107,12 +107,12 @@ export function planChaletVillage(O) {
   const nearestS = (x, z) => { let bs = 0, bd = Infinity; for (let i = 0; i < road.n; i++) { const d = Math.hypot(road.X[i] - x, road.Z[i] - z); if (d < bd) { bd = d; bs = road.S[i]; } } return bs; };
   const plots = [];
   let id = 0;
-  for (const [leg, side, xa, xb] of ROWS) {
-    const zl = LEG_Z[leg], n = Math.floor((xb - xa) / PLOT_W), w = (xb - xa) / n, sd = side;
+  for (const [leg, side, xa, xb, count] of ROWS) {
+    const zl = LEG_Z[leg], n = Math.min(count, Math.floor((xb - xa) / PLOT_W)), w = (xb - xa) / n, sd = side;
     const at = (d) => zl + sd * d; // (d metres from the leg's centre line, on this side)
     for (let k = 0; k < n; k++) {
       const h = hash(id * 7 + 3), mirror = hash(id * 5 + 1) < 0.45, bs = mirror ? -1 : 1; // (bs: the bay's side of the house)
-      const x0 = xa + w * k + 0.5, x1 = xa + w * (k + 1) - 0.5;
+      const xc = xa + w * (k + 0.5), x0 = xc - PLOT_W / 2 + 0.5, x1 = xc + PLOT_W / 2 - 0.5; // (centred in its share of the row)
       // the house faces the road: its frame's +x (the door) toward the leg; its local z runs along the leg, world
       // +x for a downhill plot, -x uphill (three.js: rotation.y = -PI/2 + yaw, yaw 0 uphill, PI downhill)
       const wz = sd > 0 ? 1 : -1, lo = Math.min(wz * FOOT.z0, wz * FOOT.z1), hi = Math.max(wz * FOOT.z0, wz * FOOT.z1);
@@ -136,6 +136,9 @@ export function planChaletVillage(O) {
   // the playground: a downhill plot in the middle of the village
   const mid = plots.filter((p) => p.leg === 2 && p.side > 0).sort((a, b) => Math.abs((a.x0 + a.x1) / 2 - 480) - Math.abs((b.x0 + b.x1) / 2 - 480))[0];
   if (mid) { mid.playground = true; mid.shed = false; }
+  // the house numbers, in order up the Chaletweg from the valley road (its s runs from the car park at the top):
+  // "Almdorf 1" is the first chalet you reach
+  plots.filter((p) => !p.playground).sort((a, b) => b.drive.s - a.drive.s || a.side - b.side).forEach((p, i) => { p.num = i + 1; p.name = `Almdorf ${i + 1}`; });
   // neighbouring pads in a row: their levels within reach of each other's banks
   for (let it = 0; it < 3; it++) for (let i = 1; i < plots.length; i++) {
     const a = plots[i - 1], b = plots[i];

@@ -510,7 +510,10 @@ export class TrailMap {
       g.fillStyle = h.id === mine ? GOLD : '#a0522d'; g.strokeStyle = '#fff'; g.lineWidth = 1;
       g.beginPath(); g.rect(-w / 2, -d / 2, w, d); g.fill(); g.stroke();
       g.restore();
+      if (h.num && s > 0.9) { g.fillStyle = '#fff'; g.font = `bold ${Math.round(Math.min(14, 5 * s))}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(h.num), x, y); } // (the house numbers, zoomed in)
     }
+    const own = C.houses.find((h) => h.id === mine);
+    if (own?.name) this.label(own.name.toUpperCase(), this.X(own.x), this.Z(own.z), { size: 12, color: '#8a6a00', prio: 1, cands: this.around(Math.max(10, 9 * s), 6) }); // (your chalet: "ALMDORF 7")
     for (const p of C.playground || []) { g.fillStyle = '#2fbf5b'; g.beginPath(); g.arc(this.X(p.x), this.Z(p.z), Math.max(2.5, 4 * s), 0, Math.PI * 2); g.fill(); }
     g.restore();
     this.reserve(cx, cy, 12);

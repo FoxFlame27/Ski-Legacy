@@ -1,107 +1,42 @@
-// Piste groomers (snowcats) working the resort's pistes: a few red machines crawl up and down the groomed
-// runs near the player at ~12 km/h, turning in a wide U at the end of their stretch. They keep off the race
-// courses, the lift stations, the village and the ski lanes, stop for the player (and are solid: one
-// moving collider each) and only exist within ~1.5 km of the player (re-placed out of sight as you travel).
-// At dusk / night: headlights + a rotating amber beacon (additive point sprites, one draw call for all)
-// and a pool of light on the snow ahead of each machine. No THREE lights.
-//
-// Model: the Meshy 'snowcat' (blade in front) + a procedural rear tiller; a procedural machine as fallback.
+// Snow ploughs on the roads (the red tracked snow machines, the Meshy 'snowcat' with its blade in front): three of
+// them, each working its own road for good (plowroutes.js: the valley road from the village, and the two scenic roads
+// nearest the village that share no roundabout), in the right-hand lane at 27-37 km/h (slower in bends, at a crawl
+// round a roundabout or turning on the spot at the end of their stretch), on the road's own surface, amber beacons
+// turning. Every few minutes one pulls over onto the shoulder and parks for 30-90 s (hazards flashing), only where
+// the shoulder is clear (no guardrail, snow pole, sign or prop where it sweeps in, no junction, stop, car park,
+// lay-by, roundabout or tee near), on a straight-ish, level stretch with flat ground under it; it also lets a queue
+// of cars stuck behind it go by (a short stop), and pulls back out when nothing comes from behind.
+// They stop for you (on foot or in your car) and for cars / the bus / other machines in their way; the traffic and
+// the ski bus see them (traffic.js addTrafficBlocker); each is solid (one moving collider: you hit it like a car).
+// Only those near you are fully simulated; far away they just move along their round (and park) on timers.
+// At dusk / night: headlights + the beacons (additive point sprites, one draw call for all) and a pool of light on
+// the road ahead of each moving machine. No THREE lights. Multiplayer: setOff(true) (no AI).
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from './world.js';
-import { layout, PISTE_WIDTH } from './layout.js';
 import { fitModel, makeLOD, loadGLB } from '../core/assets.js';
-import { qualityLevel, getRunIndex, hitsCollider, mulberry } from './crowds.js';
+import { qualityLevel, mulberry } from './crowds.js';
+import { addTrafficBlocker, trafficBlockers } from '../game/traffic.js';
+import { pickBeats, buildRound, roundAt, ahead, pullShift, plowSpotOk, PULL_LEN, PARK_LAT } from './plowroutes.js';
 
-const STEP = 4;              // m between route samples
-const SPEED = 3.3;           // m/s cruising (~12 km/h)
-const BODY_LEN = 6.6;        // m, blade to rear deck (the tiller trails behind)
-const HALF_W = 2.25, HALF_L = 4.6; // collider (blade + tiller)
-const NEAR = 1500;           // machines only work within this distance of the player
-const VILLAGE = { x: 0, z: -6, r: 200 };
-const FLEET = [2, 2, 3, 4, 5]; // machines per preset level (performance .. ultra)
+const COUNT = 3;             // machines on the roads
+const BODY_LEN = 6.6;        // m, blade to the back (the Meshy machine)
+const HW = 1.95, HD = 3.4;   // collider half width / length
+const BLK_HW = 1.7;          // half width as the traffic / the bus see it (the body: the blade's tips overhang)
+const SIM_R = 600;           // obstacle checks (you, the cars, the bus) within this of the player
+const SHOW_R = 1400;         // drawn within this of the camera
+const ACC = 0.6, BRK = 2.5;  // m/s^2
 
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _size = new THREE.Vector2();
-
-// ------------------------------------------------------------------ routes
-// Long stretches of piste the machines may work on: away from races, stations, huts, the village, lanes.
-function buildRoutes(colliders) {
-  const idx = getRunIndex();
-  const routes = [];
-  const stations = [];
-  for (const l of layout.lifts) {
-    stations.push([l.bottom.x, l.bottom.z, 60], [l.top.x, l.top.z, 60]);
-    if (l.mid) stations.push([l.mid.x, l.mid.z, 45]);
-  }
-  for (const h of layout.huts) stations.push([h.x, h.z, 50]);
-  for (const p of layout.pistes) {
-    if (p.lane || p.pts.length < 8) continue;
-    const pts = smoothLine(resample(p.pts, STEP), 3);
-    const n = pts.length / 2, W = PISTE_WIDTH[p.diff];
-    const lat = Math.min(W * 0.42, W - 4.5);
-    if (lat < 3.5) continue;
-    let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity;
-    for (let i = 0; i < n; i++) { minx = Math.min(minx, pts[i * 2]); maxx = Math.max(maxx, pts[i * 2]); minz = Math.min(minz, pts[i * 2 + 1]); maxz = Math.max(maxz, pts[i * 2 + 1]); }
-    const near = colliders.filter((c) => c.x > minx - W - 10 && c.x < maxx + W + 10 && c.z > minz - W - 10 && c.z < maxz + W + 10);
-    const nrm = normals(pts);
-    const ok = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-      const x = pts[i * 2], z = pts[i * 2 + 1];
-      let good = Math.hypot(x - VILLAGE.x, z - VILLAGE.z) > VILLAGE.r;
-      for (const [sx, sz, r] of stations) if (good && Math.hypot(x - sx, z - sz) < r) good = false;
-      if (good && idx.raceClearance(x, z) < 12) good = false;
-      if (good) {
-        for (const sd of [1, -1]) {
-          const lx = x + nrm[i * 2] * lat * sd, lz = z + nrm[i * 2 + 1] * lat * sd;
-          if (hitsCollider(near, lx, lz, HALF_W + 1.5)) { good = false; break; }
-        }
-      }
-      ok[i] = good ? 1 : 0;
-    }
-    // runs of good samples, at least 160 m long
-    for (let i = 0; i < n;) {
-      if (!ok[i]) { i++; continue; }
-      let j = i;
-      while (j + 1 < n && ok[j + 1]) j++;
-      if ((j - i) * STEP >= 160) routes.push({ piste: p, pts, nrm, i0: i, i1: j, lat, W });
-      i = j + 1;
-    }
-  }
-  return routes;
-}
-
-function resample(src, step) {
-  const out = [src[0][0], src[0][1]];
-  let carry = 0;
-  for (let k = 1; k < src.length; k++) {
-    const [ax, az] = src[k - 1], [bx, bz] = src[k];
-    const l = Math.hypot(bx - ax, bz - az);
-    let t = step - carry;
-    while (t <= l) { out.push(ax + ((bx - ax) * t) / l, az + ((bz - az) * t) / l); t += step; }
-    carry = l - (t - step);
-  }
+const _a = {}, _b = {};
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const hazardOn = () => (Math.floor(performance.now() / 380) % 2 ? 1 : 0);
+// a box (yaw: its +z, hw / hd) seen from heading (fx, fz): its extent across and along
+function extents(yaw, hw, hd, fx, fz, out) {
+  const ca = Math.abs(Math.sin(yaw) * fx + Math.cos(yaw) * fz), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+  out.across = hw * ca + hd * sa; out.along = hw * sa + hd * ca;
   return out;
 }
-function smoothLine(p, passes) {
-  let a = Float64Array.from(p);
-  const n = a.length / 2;
-  for (let s = 0; s < passes; s++) {
-    const b = Float64Array.from(a);
-    for (let i = 1; i < n - 1; i++) for (let c = 0; c < 2; c++) b[i * 2 + c] = (a[(i - 1) * 2 + c] + a[i * 2 + c] * 2 + a[(i + 1) * 2 + c]) / 4;
-    a = b;
-  }
-  return a;
-}
-// unit normals (to the right of increasing index, looking along the line: (-dz, dx))
-function normals(p) {
-  const n = p.length / 2, out = new Float64Array(n * 2);
-  for (let i = 0; i < n; i++) {
-    const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
-    const dx = p[b * 2] - p[a * 2], dz = p[b * 2 + 1] - p[a * 2 + 1], l = Math.hypot(dx, dz) || 1;
-    out[i * 2] = -dz / l; out[i * 2 + 1] = dx / l;
-  }
-  return out;
-}
+const _ext = {};
 
 // ------------------------------------------------------------------ meshes
 const RED = 0xc8231b;
@@ -118,36 +53,6 @@ function proceduralCat() {
   box(4.4, 1.05, 0.25, 0, 0.75, 3.05, red);                               // blade
   box(1.6, 0.18, 0.18, 0, 3.45, 0.4, dark);                               // light bar
   return g;
-}
-
-// the rear tiller: arm, drum housing and the rubber finisher flap trailing on the snow (local -z = back);
-// one vertex-coloured mesh, its geometry shared by the fleet
-let tillerGeo = null;
-const tillerMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.2 });
-function tiller(len) {
-  if (!tillerGeo) {
-    const z0 = -len / 2, c = new THREE.Color();
-    const part = (w, h, d, x, y, z, rx, hex) => {
-      const g = new THREE.BoxGeometry(w, h, d).toNonIndexed();
-      g.applyMatrix4(new THREE.Matrix4().makeRotationX(rx).setPosition(x, y, z));
-      c.set(hex);
-      const n = g.attributes.position.count, col = new Float32Array(n * 3);
-      for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
-      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      return g;
-    };
-    const parts = [
-      part(0.5, 0.35, 1.2, 0, 0.95, z0 - 0.3, -0.35, 0x3a3d42),   // arm
-      part(4.3, 0.62, 0.95, 0, 0.55, z0 - 1.05, 0, RED),          // drum housing
-      part(4.34, 0.08, 0.99, 0, 0.88, z0 - 1.05, 0, 0x3a3d42),    // its lid
-      part(4.2, 0.04, 1.1, 0, 0.12, z0 - 1.95, -0.12, 0x141517),  // finisher flap
-    ];
-    tillerGeo = mergeGeometries(parts);
-    for (const g of parts) g.dispose();
-  }
-  const m = new THREE.Mesh(tillerGeo, tillerMat);
-  m.castShadow = true; m.receiveShadow = true;
-  return m;
 }
 
 // light positions in the machine's frame: 4 headlights (roof bar + hood) and 2 beacons (fitted to the
@@ -231,26 +136,26 @@ export class Snowcats {
    * @param {THREE.Scene} scene
    * @param {object} o
    * @param {object} [o.models]      models.snowcat (loaded on demand when missing)
-   * @param {Array}  [o.colliders]   static colliders (the machines keep clear of them); each machine's own
-   *                                 moving collider is in this.colliders (push them into the game's list once)
+   * @param {Array}  [o.colliders]   the game's colliders (the roadside props a machine won't park on; the cars and
+   *                                 the bus it stops for); each machine's own moving collider is in this.colliders
+   *                                 (push them into the game's list once)
    * @param {string} [o.quality]     preset name (default: the live engine/quality.js preset)
    */
   constructor(scene, { models = {}, colliders = [], quality } = {}) {
     this.scene = scene;
+    this.all = colliders;
     this.level = qualityLevel(quality);
-    const count = FLEET[this.level];
     this.cats = [];
     this.colliders = [];
     this.group = new THREE.Group();
     this.group.name = 'snowcats';
     scene.add(this.group);
     this.rnd = mulberry(5150);
-    this.timer = 0;
     this.light = 0;
-    this.routes = [];
+    this.rounds = [];
+    try { this.rounds = pickBeats(COUNT).map((b) => buildRound(b)).filter((R) => R.n > 20); } catch (e) { console.warn('snow ploughs: rounds', e); }
+    const count = this.rounds.length;
     if (!count) return;
-    this.routes = buildRoutes(colliders);
-    if (!this.routes.length) return;
     // lights: one point cloud for every lamp of every machine
     const nL = count * LAMPS.length;
     this.lampPos = new Float32Array(nL * 3);
@@ -266,22 +171,30 @@ export class Snowcats {
     this.glow.renderOrder = 5;
     this.glow.visible = false;
     this.group.add(this.glow);
-    // pools of headlight on the snow (medium and up)
+    // pools of headlight on the road (medium and up)
     this.poolTex = this.level >= 2 ? poolTexture() : null;
-    for (let i = 0; i < count; i++) this.cats.push(this.makeCat(i));
+    for (let i = 0; i < count; i++) this.cats.push(this.makeCat(i, this.rounds[i]));
     if (models.snowcat) this.useModel(models.snowcat);
     else loadGLB('snowcat').then((g) => g && this.useModel(g));
+    // the traffic and the ski bus brake for them (and queue / overtake)
+    const pool = this.cats.map(() => ({ hw: BLK_HW, hd: HD, mine: true }));
+    this.unblock = addTrafficBlocker((out) => {
+      if (this.off) return;
+      for (const c of this.cats) {
+        const b = pool[c.i];
+        b.x = c.x; b.z = c.z; b.y = c.shown ? c.y : undefined; b.yaw = c.heading; b.v = c.v;
+        out.push(b);
+      }
+    });
   }
 
-  makeCat(i) {
+  makeCat(i, R) {
     const root = new THREE.Group();
     root.name = 'snowcat';
     const body = proceduralCat();
-    const till = tiller(BODY_LEN); // (only on the built fallback body: the Meshy machine has its own)
-    root.add(body, till);
+    root.add(body);
     this.shade(root);
     root.visible = false;
-    root.matrixAutoUpdate = true;
     this.group.add(root);
     let pool = null;
     if (this.poolTex) {
@@ -297,12 +210,17 @@ export class Snowcats {
       pool.matrixAutoUpdate = false;
       this.group.add(pool);
     }
-    const col = { x: 1e9, z: 1e9, hw: HALF_W, hd: HALF_L, rot: 0 };
+    const col = { x: 1e9, z: 1e9, hw: HW, hd: HD, rot: 0, plough: true };
     this.colliders.push(col);
-    return {
-      i, root, body, till, pool, col, route: null, s: 0, dir: 1, lat: 0, heading: 0, speed: 0, mode: 'hidden',
-      turn: null, x: 0, y: 0, z: 0, wait: 0, poolAt: new THREE.Vector3(1e9, 0, 0), beacon: this.rnd() * 6,
+    const rnd = this.rnd;
+    const c = {
+      i, R, root, body, pool, col, u: rnd() * R.L, v: 0, cruise: 7.6 + rnd() * 2.6, mode: 'drive', park: null,
+      parkT: 40 + i * 50 + rnd() * 120, wait: 0, q: 0, queueT: 0, stuckT: 0, ignoreT: 0, outT: 0,
+      heading: 0, x: 0, y: 0, z: 0, shown: false, poolAt: new THREE.Vector3(1e9, 0, 0), beacon: rnd() * 6,
     };
+    this.pose(c);
+    c.y = world.height(c.x, c.z);
+    return c;
   }
 
   useModel(gltf) {
@@ -312,9 +230,7 @@ export class Snowcats {
       // a decimated copy beyond 60-130 m
       const lod = makeLOD(gltf, opts, this.level ? 130 : 60, 0.03);
       c.root.remove(c.body);
-      if (c.till) { c.root.remove(c.till); c.till = null; } // the model carries its own tiller (two read as a double tail)
       c.body = lod;
-      c.col.hd = 3.7; // (the machine's length without the built tiller)
       c.root.add(lod);
       this.shade(c.root);
     }
@@ -326,67 +242,134 @@ export class Snowcats {
     root.traverse((o) => { if (o.isMesh) { o.castShadow = cast && o.castShadow !== false; o.receiveShadow = true; } });
   }
 
-  // ---------------------------------------------------------------- placement
-  // a route sample within NEAR of the player, out of sight, away from the other machines
-  place(c, player, camera) {
-    const rnd = this.rnd;
-    camera.getWorldDirection(_v);
-    for (let tries = 0; tries < 40; tries++) {
-      const r = this.routes[Math.floor(rnd() * this.routes.length)];
-      const span = r.i1 - r.i0;
-      const i = r.i0 + 6 + Math.floor(rnd() * Math.max(1, span - 12));
-      const x = r.pts[i * 2], z = r.pts[i * 2 + 1];
-      const d = Math.hypot(x - player.x, z - player.z);
-      if (d > NEAR - 100 || d < 220) continue;
-      const cx = x - camera.position.x, cz = z - camera.position.z, cd = Math.hypot(cx, cz);
-      if (cd < 600 && (cx * _v.x + cz * _v.z) / (cd || 1) > -0.2) continue; // in view: not here
-      if (this.cats.some((o) => o !== c && o.mode !== 'hidden' && Math.hypot(o.x - x, o.z - z) < 150)) continue;
-      c.route = r; c.s = i; c.dir = rnd() < 0.5 ? 1 : -1; c.lat = (rnd() < 0.5 ? 1 : -1) * r.lat;
-      c.mode = 'drive'; c.turn = null; c.speed = 0; c.wait = 0;
-      this.pose(c, true);
-      c.root.visible = true;
+  hide(c) {
+    c.root.visible = false;
+    c.shown = false;
+    if (c.pool) c.pool.visible = false;
+    c.col.x = c.col.z = 1e9;
+  }
+
+  // ---------------------------------------------------------------- along the round
+  // the extra shift to the right (pulling over / parked / pulling out) at d m from where it is now
+  latAt(c, d) {
+    if (c.mode === 'parked') return PARK_LAT;
+    if (c.mode === 'in') { let k = ahead(c.R, c.u + d, c.park.u); if (k > c.R.L / 2) k = 0; return pullShift(PULL_LEN - k); }
+    if (c.mode === 'out') return pullShift(PULL_LEN - (c.q + d));
+    return 0;
+  }
+  // position + heading: the middle of its front and back on the round (smooth through the bends and the turns)
+  pose(c) {
+    const R = c.R, A = roundAt(R, c.u + 2.4, _a), la = this.latAt(c, 2.4);
+    const ax = A.x - A.tz * la, az = A.z + A.tx * la;
+    const B = roundAt(R, c.u - 2.4, _b), lb = this.latAt(c, -2.4);
+    const bx = B.x - B.tz * lb, bz = B.z + B.tx * lb;
+    c.x = (ax + bx) / 2; c.z = (az + bz) / 2;
+    if (Math.abs(ax - bx) + Math.abs(az - bz) > 1e-4) c.heading = Math.atan2(ax - bx, az - bz);
+  }
+
+  // a parking spot from..to m ahead (the first that is clear); dur: how long it stays
+  tryPark(c, from, to, dur) {
+    const R = c.R;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let d = from - PULL_LEN - 10; d <= to + 10; d += 10) { roundAt(R, c.u + d, _a); x0 = Math.min(x0, _a.x); x1 = Math.max(x1, _a.x); z0 = Math.min(z0, _a.z); z1 = Math.max(z1, _a.z); }
+    x0 -= 14; x1 += 14; z0 -= 14; z1 += 14;
+    const mine = new Set(this.colliders), statics = [];
+    for (const o of this.all) if (!o.traffic && !o.bus && !mine.has(o) && !o.rail && o.x > x0 && o.x < x1 && o.z > z0 && o.z < z1) statics.push(o);
+    const avoid = this.cats.filter((o) => o !== c).map((o) => ({ x: o.x, z: o.z, r: 80 }));
+    if (this.pp) avoid.push({ x: this.pp.x, z: this.pp.z, r: 12 });
+    const height = (x, z) => world.groundHeight(x, z, c.y + 3);
+    for (let d = from; d <= to; d += 6) {
+      if (!plowSpotOk(R, c.u + d, { statics, height, hw: HW, hd: HD, avoid })) continue;
+      c.park = { u: (c.u + d) % R.L, dur };
+      c.mode = 'in';
       return true;
     }
     return false;
   }
 
-  hide(c) {
-    c.mode = 'hidden';
-    c.root.visible = false;
-    if (c.pool) c.pool.visible = false;
-    c.col.x = c.col.z = 1e9;
+  // nothing coming up behind it in the lane (to pull back out): cars, the bus, you
+  clearBehind(c) {
+    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
+    const near = (x, z) => { const dx = x - c.x, dz = z - c.z, al = dx * fx + dz * fz; return al > -55 && al < 6 && Math.abs(dx * fz - dz * fx) < 5.5; };
+    for (const m of this.movers || []) if (m.x < 1e8 && near(m.x, m.z) && Math.cos(-m.rot - c.heading) > 0.3) return false;
+    if (this.pp && near(this.pp.x, this.pp.z)) return false;
+    return true;
   }
 
-  // position + heading from the route (or the U-turn arc)
-  pose(c, snap = false) {
-    const r = c.route, P = r.pts, N = r.nrm, n = P.length / 2;
-    let x, z, hx, hz;
-    if (c.turn) {
-      const T = c.turn, th = T.th;
-      x = T.cx + T.nx * T.lat * Math.cos(th) + T.tx * Math.abs(T.lat) * Math.sin(th);
-      z = T.cz + T.nz * T.lat * Math.cos(th) + T.tz * Math.abs(T.lat) * Math.sin(th);
-      hx = -T.nx * T.lat * Math.sin(th) + T.tx * Math.abs(T.lat) * Math.cos(th);
-      hz = -T.nz * T.lat * Math.sin(th) + T.tz * Math.abs(T.lat) * Math.cos(th);
-    } else {
-      const i = Math.min(n - 2, Math.max(0, Math.floor(c.s))), t = c.s - i;
-      const nx = N[i * 2] + (N[i * 2 + 2] - N[i * 2]) * t, nz = N[i * 2 + 1] + (N[i * 2 + 3] - N[i * 2 + 1]) * t;
-      x = P[i * 2] + (P[i * 2 + 2] - P[i * 2]) * t + nx * c.lat;
-      z = P[i * 2 + 1] + (P[i * 2 + 3] - P[i * 2 + 1]) * t + nz * c.lat;
-      // heading: the line a few samples ahead (smooth through bends)
-      const a = Math.min(n - 1, Math.max(0, i - 1)), b = Math.min(n - 1, Math.max(0, i + 2));
-      hx = (P[b * 2] - P[a * 2]) * c.dir; hz = (P[b * 2 + 1] - P[a * 2 + 1]) * c.dir;
+  // the speed it may go with what is in its way: you, the cars and the bus, the other machines, a train or a
+  // helicopter on the road; and the queue behind it (it lets them by: a short stop)
+  obstacles(c, pp, dt) {
+    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
+    const look = 10 + (c.v * c.v) / (2 * 1.6) + HD;
+    let lim = Infinity, byMover = false, queued = false;
+    // you (on foot or in your car)
+    {
+      const ox = pp.x - c.x, oz = pp.z - c.z, al = ox * fx + oz * fz, sd = Math.abs(ox * fz - oz * fx);
+      if (ox * ox + oz * oz < 22) lim = 0;
+      else if (al > -2 && al < look + 5 && sd < BLK_HW + 1.6) lim = Math.min(lim, Math.max(0, (al - HD - 4) * 0.5));
     }
-    const target = Math.atan2(hx, hz);
-    if (snap) c.heading = target;
+    const box = (x, z, yaw, hw, hd, mover) => {
+      const dx = x - c.x, dz = z - c.z;
+      if (Math.abs(dx) > look + 30 || Math.abs(dz) > look + 30) return;
+      const al = dx * fx + dz * fz, sd = Math.abs(dx * fz - dz * fx), e = extents(yaw, hw, hd, fx, fz, _ext);
+      if (al - e.along > -1 && al < look + e.along && sd < BLK_HW + e.across + 0.35) {
+        const v = Math.max(0, (al - HD - e.along - 3) * 0.5);
+        if (v < lim) { lim = v; byMover = mover; }
+      } else if (mover && al < -HD && al > -HD - 32 && sd < 2.2 && Math.cos(yaw - c.heading) > 0.8) queued = true;
+    };
+    if (c.ignoreT > 0) c.ignoreT -= dt;
     else {
-      let dh = target - c.heading;
-      dh = Math.atan2(Math.sin(dh), Math.cos(dh));
-      c.heading += dh * Math.min(1, c.dtLast * 2.5);
+      for (const m of this.movers || []) if (m.x < 1e8) box(m.x, m.z, -m.rot, m.hw, m.hd, true);
+      for (const o of this.cats) if (o !== c && !this.off) box(o.x, o.z, o.heading, BLK_HW, HD, true);
     }
-    c.x = x; c.z = z;
+    for (const b of this.blk || []) {
+      if (b.mine || (b.y !== undefined && Math.abs(b.y - c.y) > 5)) continue;
+      box(b.x, b.z, b.yaw, b.hw, b.hd, false);
+    }
+    // (stood facing a car that waits for it, e.g. turning round: after 8 s it goes on anyway)
+    if (lim < 0.3 && byMover) { c.stuckT += dt; if (c.stuckT > 8) { c.stuckT = 0; c.ignoreT = 4; } } else c.stuckT = 0;
+    c.queueT = queued ? c.queueT + dt : Math.max(0, c.queueT - dt * 0.5);
+    return lim;
+  }
+
+  drive(c, dt, pp) {
+    const R = c.R, rnd = this.rnd;
+    if (c.mode === 'parked') {
+      c.v = 0;
+      c.wait -= dt;
+      if (c.wait <= 0) {
+        c.outT += dt;
+        if (!pp || c.outT > 20 || this.clearBehind(c)) { c.mode = 'out'; c.q = 0; c.outT = 0; }
+      }
+      this.pose(c);
+      return;
+    }
+    if (c.mode === 'drive') {
+      c.parkT -= dt;
+      if (c.parkT <= 0) { if (!this.tryPark(c, 40, 450, 30 + rnd() * 60)) c.parkT = 25; }
+      else if (c.queueT > 35) { c.queueT = 15; this.tryPark(c, 25, 260, 8 + rnd() * 8); } // (letting the queue by)
+    }
+    let vt = Math.min(c.cruise, R.VT[roundAt(R, c.u, _a).i]);
+    if (c.mode === 'in') {
+      let d = ahead(R, c.u, c.park.u);
+      if (d > R.L - 6) d = 0; // (just past it)
+      vt = Math.min(vt, Math.sqrt(2 * 0.7 * Math.max(0, d - 0.15)));
+      if (d < PULL_LEN + 15) vt = Math.min(vt, 4.5);
+      if (d < 0.35 && c.v < 0.5) { c.mode = 'parked'; c.u = c.park.u; c.v = 0; c.wait = c.park.dur; c.outT = 0; this.pose(c); return; }
+    } else if (c.mode === 'out') vt = Math.min(vt, 3 + c.q * 0.25);
+    if (pp) vt = Math.min(vt, this.obstacles(c, pp, dt));
+    c.v += clamp(vt - c.v, -BRK * dt, ACC * dt);
+    if (c.v < 0) c.v = 0;
+    const du = c.v * dt;
+    c.u = (c.u + du) % R.L;
+    if (c.mode === 'out') { c.q += du; if (c.q >= PULL_LEN) { c.mode = 'drive'; c.parkT = 150 + rnd() * 210; } }
+    this.pose(c);
   }
 
   // ---------------------------------------------------------------- per frame
+  /** Multiplayer: no snow ploughs (true). They are hidden (lamps out, colliders moved away) and come back on false. */
+  setOff(off) { this.off = !!off; this.offDone = false; }
+
   /**
    * @param {number} dt
    * @param {THREE.Camera} camera
@@ -394,43 +377,40 @@ export class Snowcats {
    * @param {object} player       the Player (pos)
    * @param {THREE.WebGLRenderer} [renderer]  (size of the light sprites)
    */
-  /** Multiplayer: no snowcats (true). They are hidden (lamps out, colliders moved away) and come back on false. */
-  setOff(off) { this.off = !!off; this.offDone = false; }
-
   update(dt, camera, env, player, renderer) {
-    if (!this.cats.length) return;
+    if (!this.cats.length || !(dt > 0)) return;
     if (this.off) {
       if (!this.offDone) {
         this.offDone = true;
-        for (const c of this.cats) if (c.mode !== 'hidden') this.hide(c);
+        for (const c of this.cats) this.hide(c);
         if (this.glow) { this.glow.visible = false; this.updateLamps(camera, 0, renderer); }
       }
       return;
     }
-    const pp = player.pos;
-    const active = FLEET[qualityLevel()]; // the preset may drop while playing
-    this.timer -= dt;
-    const check = this.timer <= 0;
-    if (check) this.timer = 0.5;
+    dt = Math.min(dt, 0.1);
+    const pp = player.pos, cam = camera.position;
+    this.pp = pp;
+    // the moving colliders (the traffic's cars, the bus): looked up again when the list grows
+    if (this.allN !== this.all.length) {
+      this.allN = this.all.length;
+      const mine = new Set(this.colliders);
+      this.movers = this.all.filter((o) => (o.traffic || o.bus) && !mine.has(o));
+    }
     const light = Math.max(env.nightFactor, (1 - env.dayFactor) * 0.6);
     this.light = light;
-    const cam = camera.position;
     let any = false;
+    this.blk = null;
     for (const c of this.cats) {
-      c.dtLast = dt;
-      if (c.i >= active) { if (c.mode !== 'hidden') this.hide(c); continue; }
-      if (check) {
-        const far = c.mode === 'hidden' || Math.hypot(c.x - pp.x, c.z - pp.z) > NEAR + 200;
-        if (far) {
-          // re-place only out of sight
-          const cd = Math.hypot(c.x - cam.x, c.z - cam.z);
-          if (c.mode === 'hidden' || cd > 700) { if (!this.place(c, pp, camera)) this.hide(c); }
-        }
-      }
-      if (c.mode === 'hidden') continue;
-      any = true;
-      this.drive(c, dt, pp);
-      this.dress(c, cam, light);
+      const nearP = Math.hypot(c.x - pp.x, c.z - pp.z) < SIM_R;
+      if (nearP && !this.blk) { try { this.blk = trafficBlockers(); } catch { this.blk = []; } }
+      try { this.drive(c, dt, nearP ? pp : null); } catch (e) { if (!this.warned) { this.warned = true; console.warn('snow plough', e); } }
+      const show = Math.hypot(c.x - cam.x, c.z - cam.z) < SHOW_R;
+      if (show && !c.shown) c.y = world.height(c.x, c.z); // (its height hint, stale while it was out of sight)
+      c.root.visible = show;
+      c.shown = show;
+      if (show) { any = true; this.dress(c, cam, light); } else if (c.pool) c.pool.visible = false;
+      const solid = show || nearP;
+      c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.heading;
     }
     if (this.glow) {
       this.glow.visible = any;
@@ -438,54 +418,19 @@ export class Snowcats {
     }
   }
 
-  drive(c, dt, pp) {
-    const r = c.route;
-    // stop for the player: anywhere close, or in the path ahead
-    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
-    const ox = pp.x - c.x, oz = pp.z - c.z;
-    const along = ox * fx + oz * fz, side = Math.abs(ox * fz - oz * fx);
-    const blocked = (along > -5 && along < 18 && side < 4.2) || ox * ox + oz * oz < 49;
-    // uphill crawls a little slower
-    const target = blocked ? 0 : SPEED * (c.grade > 0.12 ? 0.8 : 1);
-    c.speed += Math.max(-2.2 * dt, Math.min(0.7 * dt, target - c.speed));
-    const ds = c.speed * dt;
-    if (c.turn) {
-      const T = c.turn;
-      T.th += ds / (Math.PI * Math.abs(T.lat)) * Math.PI;
-      if (T.th >= Math.PI) {
-        c.turn = null; c.dir = -c.dir; c.lat = -c.lat; c.s = T.s;
-      }
-    } else {
-      c.s += (ds / STEP) * c.dir;
-      // the end of the stretch: a wide U-turn onto the other half of the piste
-      const margin = Math.abs(c.lat) / STEP + 2;
-      if ((c.dir > 0 && c.s >= r.i1 - margin) || (c.dir < 0 && c.s <= r.i0 + margin)) {
-        const P = r.pts, N = r.nrm, i = Math.floor(c.s), t = c.s - i;
-        const cx = P[i * 2] + (P[i * 2 + 2] - P[i * 2]) * t, cz = P[i * 2 + 1] + (P[i * 2 + 3] - P[i * 2 + 1]) * t;
-        let nx = N[i * 2] + (N[i * 2 + 2] - N[i * 2]) * t, nz = N[i * 2 + 1] + (N[i * 2 + 3] - N[i * 2 + 1]) * t;
-        const nl = Math.hypot(nx, nz) || 1;
-        nx /= nl; nz /= nl;
-        c.turn = { th: 0, s: c.s, lat: c.lat, cx, cz, nx, nz, tx: nz * c.dir, tz: -nx * c.dir };
-      }
-    }
-    this.pose(c);
-  }
-
   dress(c, cam, light) {
     const fx = Math.sin(c.heading), fz = Math.cos(c.heading), rx = fz, rz = -fx; // rx: the machine's local +x
-    const a = 2.6, b = 1.6;
-    const hF = world.height(c.x + fx * a, c.z + fz * a), hB = world.height(c.x - fx * a, c.z - fz * a);
-    const hL = world.height(c.x + rx * b, c.z + rz * b), hR = world.height(c.x - rx * b, c.z - rz * b);
-    c.grade = (hF - hB) / (2 * a);
-    const y = (hF + hB + hL + hR) / 4 - 0.06;
+    const a = 2.6, b = 1.6, yh = c.y + 2;
+    const hF = world.groundHeight(c.x + fx * a, c.z + fz * a, yh), hB = world.groundHeight(c.x - fx * a, c.z - fz * a, yh);
+    const hL = world.groundHeight(c.x + rx * b, c.z + rz * b, yh), hR = world.groundHeight(c.x - rx * b, c.z - rz * b, yh);
+    const y = (hF + hB + hL + hR) / 4 - 0.02;
     c.y = y;
     c.root.position.set(c.x, y, c.z);
     _e.set(Math.atan2(hB - hF, 2 * a), c.heading, Math.atan2(hL - hR, 2 * b));
     c.root.rotation.copy(_e);
-    c.col.x = c.x; c.col.z = c.z; c.col.rot = -c.heading;
-    // the beam on the snow ahead (at night, near the camera)
+    // the beam on the road ahead (at night, moving, near the camera)
     if (c.pool) {
-      const show = light > 0.06 && Math.hypot(c.x - cam.x, c.z - cam.z) < 380;
+      const show = light > 0.06 && c.mode !== 'parked' && Math.hypot(c.x - cam.x, c.z - cam.z) < 380;
       c.pool.visible = show;
       if (show) {
         c.pool.material.color.setRGB(1, 0.86, 0.66).multiplyScalar(light * 0.55);
@@ -495,9 +440,9 @@ export class Snowcats {
           for (let k = 0; k < pos.count; k++) {
             // PlaneGeometry(1, 1, 3, 4): u across (-0.5..0.5), v along (-0.5 back .. 0.5 front)
             const u = (k % 4) / 3 - 0.5, v = 0.5 - Math.floor(k / 4) / 4;
-            const lx = u * (7 + (v + 0.5) * 9), lz = 3.4 + (v + 0.5) * 18;
+            const lx = u * (6 + (v + 0.5) * 6), lz = 3.4 + (v + 0.5) * 18;
             const x = c.x + rx * lx + fx * lz, z = c.z + rz * lx + fz * lz;
-            pos.setXYZ(k, x, world.height(x, z) + 0.12, z);
+            pos.setXYZ(k, x, world.groundHeight(x, z, y + 2) + 0.12, z);
           }
           pos.needsUpdate = true;
         }
@@ -506,10 +451,10 @@ export class Snowcats {
   }
 
   updateLamps(camera, light, renderer) {
-    const P = this.lampPos, C = this.lampCol, t = performance.now() / 1000, lamps = this.lamps || LAMPS;
+    const P = this.lampPos, C = this.lampCol, t = performance.now() / 1000, lamps = this.lamps || LAMPS, hz = hazardOn();
     for (let ci = 0; ci < this.cats.length; ci++) {
       const c = this.cats[ci];
-      const vis = c.mode !== 'hidden';
+      const vis = c.shown, parked = c.mode === 'parked';
       if (vis) c.root.updateMatrixWorld();
       for (let k = 0; k < LAMPS.length; k++) {
         const o = (ci * LAMPS.length + k) * 3, L = lamps[k];
@@ -521,6 +466,10 @@ export class Snowcats {
           const f = Math.pow(Math.max(0, Math.sin(t * 7.8 + c.beacon + k * 1.7)), 6);
           const k2 = (0.25 + 0.75 * light) * f * 3.2;
           C[o] = 1.0 * k2; C[o + 1] = 0.48 * k2; C[o + 2] = 0.05 * k2;
+        } else if (parked) {
+          // parked: headlights off, the lower pair flashing amber (hazards)
+          const k2 = k >= 2 ? hz * (0.5 + light) * 1.6 : 0;
+          C[o] = 1.0 * k2; C[o + 1] = 0.55 * k2; C[o + 2] = 0.08 * k2;
         } else {
           const k2 = light * 2.4;
           C[o] = 1.0 * k2; C[o + 1] = 0.93 * k2; C[o + 2] = 0.8 * k2;

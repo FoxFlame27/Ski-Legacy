@@ -503,7 +503,8 @@ export class Traffic {
       const dx = b.x - c.x, dz = b.z - c.z;
       if (Math.abs(dx) > 50 || Math.abs(dz) > 50) continue;
       const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(b.yaw, b.hw, b.hd, fx, fz, _ext);
-      if (ahead + e.along > 0.5 && ahead - e.along < 40 && side < c.w / 2 + e.across + 0.3) vt = Math.min(vt, Math.max(0, (ahead - e.along - c.l / 2 - 2.5) * 0.7));
+      const vl = b.v ? Math.max(0, b.v * (Math.sin(b.yaw) * fx + Math.cos(b.yaw) * fz)) : 0; // (a snow plough on the move: behind it at its speed)
+      if (ahead + e.along > 0.5 && ahead - e.along < 40 && side < c.w / 2 + e.across + 0.3) vt = Math.min(vt, vl > 0.5 ? followV(ahead - e.along - c.l / 2 - 2.5, vl) : Math.max(0, (ahead - e.along - c.l / 2 - 2.5) * 0.7));
     }
     if (ZONES.length) vt = Math.min(vt, this.zoneLimit(c));
     // you, in its way (on foot or in a car)
@@ -654,11 +655,11 @@ export class Traffic {
     // (a wreck: never up against it: it waits 14 m back (room to swing out round it later), unless it is going round
     // it now, c.pass)
     const mW = inLot ? 0.3 : c.pass ? 2.5 : 14;
-    const box = (x, z, yaw, hw, hd, gap, mm = m) => {
+    const box = (x, z, yaw, hw, hd, gap, mm = m, vl = 0) => { // (vl: its speed along the car's way: a time gap behind it)
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > gap + hd || Math.abs(dz) > gap + hd) return;
       const ahead = dx * fx + dz * fz, side = Math.abs(dx * fz - dz * fx), e = extents(yaw, hw, hd, fx, fz, _ext);
-      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, followV(ahead - e.along - c.l / 2 - mm));
+      if (ahead + e.along > 0.5 && ahead - e.along < gap && side < c.w / 2 + e.across + sm) lim = Math.min(lim, followV(ahead - e.along - c.l / 2 - mm, vl));
     };
     const gapW = Math.max(36, look); // (a wreck, a stopped car, the bus: seen from braking distance)
     // other cars: the moving ones by their line, a wreck / knocked car by its footprint (it may be passed)
@@ -692,7 +693,8 @@ export class Traffic {
     // the road (trafficBlockers, at about the car's height)
     const line = this.skibus?.line, bus = line?.bus?.group;
     if (bus?.visible) box(bus.position.x, bus.position.z, line.yaw || 0, BUS_HW, BUS_HD, gapW);
-    for (const b of this.blk || []) if (b.y === undefined || Math.abs(b.y - c.y) < 5) box(b.x, b.z, b.yaw, b.hw, b.hd, Math.max(40, look));
+    // (a moving one, a snow plough (world/snowcats.js): followed at its speed, queued behind)
+    for (const b of this.blk || []) if (b.y === undefined || Math.abs(b.y - c.y) < 5) box(b.x, b.z, b.yaw, b.hw, b.hd, Math.max(40, look), m, b.v ? Math.max(0, b.v * (Math.sin(b.yaw) * fx + Math.cos(b.yaw) * fz)) : 0);
     const p = this.player.pos;
     if (!dv) check(p.x, p.z, Math.max(26, look), c.l / 2 + 3); // (you on foot; in a car: your car, above)
     return Math.min(lim, this.zoneLimit(c));

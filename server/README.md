@@ -1,7 +1,7 @@
 # Ski Legacy multiplayer server
 
 A small Node 20 WebSocket server (one dependency: `ws`). It keeps the accounts (unique names), the multiplayer
-saves, the worlds (max 15 players each) and everything shared. The protocol is in `docs/multiplayer.md`.
+saves, the worlds (max 50 players each) and everything shared. The protocol is in `docs/multiplayer.md`.
 
 The game connects to **`wss://138-199-163-183.sslip.io/ws`**. `138-199-163-183.sslip.io` is a free hostname that
 points at the VPS (138.199.163.183). Caddy uses it to get a Let's Encrypt certificate, which the game needs

@@ -18,7 +18,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const CATALOG = JSON.parse(fs.readFileSync(path.join(here, 'catalog.json'), 'utf8'));
 
 export const PROTO = 1;
-export const MAX_PLAYERS = 15;
+export const MAX_PLAYERS = 50;
 export const TICK_HZ = 15;                 // presence batches per second
 export const DAY_MS = 16 * 60 * 1000;      // one game day (sky.js DAY_SECONDS)
 export const HELI_COPY_MS = 5 * 60 * 1000; // a rental out this long: a new copy waits at the pad

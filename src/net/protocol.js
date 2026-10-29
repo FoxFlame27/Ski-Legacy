@@ -1,6 +1,6 @@
 // Shared protocol constants (mirrors server/lib/server.js). See docs/multiplayer.md.
 export const PROTO = 1;
-export const MAX_PLAYERS = 15;
+export const MAX_PLAYERS = 50;
 
 // presence state enum (row[9])
 export const ST = { walk: 0, ski: 1, drive: 2, ride: 3, sit: 4, fly: 5, fall: 6 };

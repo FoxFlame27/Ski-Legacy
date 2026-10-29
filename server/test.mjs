@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -433,19 +433,19 @@ try {
   solo.close();
   await sleep(150);
 
-  // ---------------------------------------------------------------- 15 per world: the 16th player opens world 2
+  // ---------------------------------------------------------------- MAX_PLAYERS (50) per world: the next player opens world 2
   console.log('worlds');
   const crowd = [];
   const used = server.worlds.get(la.d.world.id).size; // (Alice and Bob)
-  for (let i = 0; i < 16 - used; i++) {
+  for (let i = 0; i < MAX_PLAYERS + 1 - used; i++) {
     const f = new Fake(url); await f.open();
     const r = await f.req('register', { name: `Skier ${i}` });
     const l = await f.req('login', { v: PROTO, name: `Skier ${i}`, token: r.d.token });
     crowd.push({ f, world: l.d.world.id });
   }
   const w1 = la.d.world.id;
-  ok(crowd.slice(0, 15 - used).every((c) => c.world === w1) && crowd[crowd.length - 1].world !== w1, 'world 1 fills to 15, the 16th player gets a new world');
-  ok(server.worlds.get(w1).size === 15, 'world 1 has exactly 15 players');
+  ok(crowd.slice(0, MAX_PLAYERS - used).every((c) => c.world === w1) && crowd[crowd.length - 1].world !== w1, `world 1 fills to ${MAX_PLAYERS}, the next player gets a new world`);
+  ok(server.worlds.get(w1).size === MAX_PLAYERS, `world 1 has exactly ${MAX_PLAYERS} players`);
   for (const c of crowd) c.f.close();
   await sleep(100);
 

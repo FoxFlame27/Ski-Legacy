@@ -7,7 +7,7 @@ hooks for the next wave of features. Singleplayer is unchanged whenever `isMP()`
 
 | Piece | Where | What it does |
 |---|---|---|
-| Server | `server/` (Node 20+, `ws` only) | Accounts with unique names, the multiplayer saves, worlds of up to 15 players, the presence relay, and the shared registries. See `server/README.md` for deploy, logs and running it locally. |
+| Server | `server/` (Node 20+, `ws` only) | Accounts with unique names, the multiplayer saves, worlds of up to 50 players, the presence relay, and the shared registries. See `server/README.md` for deploy, logs and running it locally. |
 | Mode flag | `src/net/mode.js` | `MP` and `isMP()`. The module has no imports, so any file can use it without an import cycle. |
 | Server URL | `src/net/config.js` | `wss://138-199-163-183.sslip.io/ws`. Override it with `?mp=ws://localhost:8787/ws`. |
 | Connection | `src/net/client.js` | The singleton `net`: an event emitter, requests that return promises, clock sync and reconnects. |
@@ -92,7 +92,7 @@ The server is authoritative for all of the following.
 | `records`, `secrets`, `dayPass`, `tickets` | Size-capped. |
 
 **Worlds and connections**
-- At most 15 players per world.
+- At most 50 players per world.
 - **Grace period.** A connection that drops (code 1006, a heartbeat timeout, a proxy restart: anything but a
   deliberate close 1000 / 1001 / 1005 or a kick) keeps its player for 60 s from the last message (`GRACE_MS`):
   world slot, pid, seat, chalet plot, car, helicopter copy, grants and race entry. A login within that time resumes
@@ -247,7 +247,7 @@ Each line has one timeline:
 - **Countdown.** It starts when 2 or more players are queued and lasts 30 s.
   - A join during the countdown does not reset it.
   - If the queue drops below 2, the countdown is cancelled.
-- **Immediate start.** The race starts at once (with a 4 s lead) when 15 players are queued, or when everyone in
+- **Immediate start.** The race starts at once (with a 4 s lead) when 50 players are queued, or when everyone in
   the world is queued and that is at least 2.
 - **Entry.** The server charges the entry fee at the start; the first race is free, as in singleplayer.
 - **Start.** The client runs the normal race session with `bots: 0` and `syncGo`, so the countdown ends at the

@@ -36,9 +36,9 @@
 .rs-card .jb-facts { padding: calc(var(--u) * 9) 0; }
 .rs-card .jb-fact b { display: flex; align-items: center; gap: calc(var(--u) * 6); font-size: calc(var(--u) * 21); }
 .rs-diffs-l { font: 800 calc(var(--u) * 10)/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: #8a93a8; margin-top: calc(var(--u) * 2); }
-.rs-diffs { display: flex; gap: calc(var(--u) * 8); }
-.rs-diffs button { flex: 1; height: calc(var(--u) * 38); border: calc(var(--u) * 2) solid rgba(21, 70, 200, 0.3); border-radius: calc(var(--u) * 4); background: transparent; cursor: pointer;
-  font: italic 700 calc(var(--u) * 19)/1 var(--num); letter-spacing: 0.06em; color: var(--blue); transition: background 0.15s ease, color 0.15s ease; }
+.rs-diffs { display: flex; gap: calc(var(--u) * 6); }
+.rs-diffs button { flex: 1 1 auto; min-width: 0; padding: 0 calc(var(--u) * 6); height: calc(var(--u) * 38); border: calc(var(--u) * 2) solid rgba(21, 70, 200, 0.3); border-radius: calc(var(--u) * 4); background: transparent; cursor: pointer;
+  font: italic 700 calc(var(--u) * 16)/1 var(--num); letter-spacing: 0.06em; color: var(--blue); transition: background 0.15s ease, color 0.15s ease; }
 .rs-diffs button:hover { background: rgba(21, 70, 200, 0.08); }
 .rs-diffs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
 .rs-fun { position: relative; display: flex; flex-direction: column; gap: calc(var(--u) * 6); margin-top: calc(var(--u) * 4); }

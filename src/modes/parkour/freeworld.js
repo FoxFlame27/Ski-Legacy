@@ -1,6 +1,7 @@
 // The World Racing courses in FREE RIDE (Oct 27, the user: "replace all the races in free world with the races of
-// the race game mode, on the mountains, exactly those race tracks"). The eight courses stand on the mountains
-// around the resort (their defs in courses.js / newcourses.js place them there; RACE and WORLD RACING use the same
+// the race game mode, on the mountains, exactly those race tracks"). The courses stand on the mountains
+// around the resort (their defs in courses.js / newcourses.js / extremecourses.js place them there: the three Expert
+// ones far out in the ranges, reached by helicopter; RACE and WORLD RACING use the same
 // spots). Their regions shape the terrain, so every course is registered while the game loads, before any terrain
 // is built (registerFreeWorldCourses; the heightfield rasters stay resident). Their meshes (nets, start house,
 // tunnel, bridge, arena, floodlight masts...) are only built while you are within ~1.7 km and dropped again past
@@ -13,10 +14,11 @@ const DROP_D = 2600;   // m: dispose them again
 const START_R = 24;    // m around the start line: E races the course
 
 // entry fee and prize money, like the old open-world races (1st / 2nd / 3rd: 100 % / 40 % / 15 %)
-// (Oct 29 rebalance: the prize follows the course's length, perKm $ a km for 1st, never under min, so a 1.3 km
+// (Oct 29 rebalance, the Medium AI field's prizes, see AI_LEVELS: the prize follows the course's length, perKm $ a km for 1st, never under min, so a 1.3 km
 // sprint no longer pays like a 6.7 km downhill. A win pays a few jobs' worth: Easy $600-1,500, Medium
 // $1,250-2,300, Hard $3,200-4,700. The entry fee is a small stake, refunded many times over by a podium.)
 const DIFF = {
+  // (ai: the AI field the start card picks first; you can switch it there, the prize follows AI_LEVELS)
   Easy: { label: 'Easy', color: '#2fbf5b', entry: 0, perKm: 300, min: 600, ai: 'easy' },
   Medium: { label: 'Medium', color: '#2f7bff', entry: 50, perKm: 500, min: 1000, ai: 'medium' },
   Hard: { label: 'Hard', color: '#e23b3b', entry: 150, perKm: 700, min: 2000, ai: 'medium' },
@@ -25,6 +27,19 @@ const DIFF = {
 export const PRIZE_SHARE = [1, 0.4, 0.15];
 /** 1st place prize for a course of difficulty D and length L (m), in round $50s. */
 export const coursePrize = (D, L) => Math.round(Math.max(D.min, (D.perKm * L) / 1000) / 50) * 50;
+
+// The AI field you race (Oct 29, the user: "You earn more money the harder the AI is"): picked on the start card at
+// the start house. The prizes above are the Medium field's; an easier field pays less, a harder one more, and the
+// Superhard field (modes/race/bots.js DIFFICULTY.superhard) pays two and a half times as much. Entry fees stay.
+export const AI_LEVELS = [
+  { key: 'easy', label: 'Easy', mult: 0.6 },
+  { key: 'medium', label: 'Medium', mult: 1 },
+  { key: 'hard', label: 'Hard', mult: 1.6 },
+  { key: 'superhard', label: 'Superhard', mult: 2.5 },
+];
+export const aiLevel = (key) => AI_LEVELS.find((a) => a.key === key) || AI_LEVELS[1];
+/** 1st place prize of a course entry against the `ai` field, in round $50s. */
+export const prizeFor = (e, ai) => Math.round((e.reward * aiLevel(ai).mult) / 50) * 50;
 
 /** Register every course (region, corridor, surfaces) before the terrain is built: one per task, so the page
  *  stays responsive while the models load. */
@@ -47,7 +62,7 @@ export function freeCourses() {
     try { course = getCourse(c.id); } catch { continue; }
     const D = DIFF[course.difficulty] || DIFF.Medium;
     const L = course.length || course.track.length;
-    const reward = coursePrize(D, L);
+    const reward = course.def.purse ?? coursePrize(D, L); // (a course may set its own purse: the Medium field's 1st prize)
     const T = course.track, pts = [];
     for (let i = 0; i < T.n; i += 15) pts.push([T.X[i], T.Z[i]]);
     pts.push([T.X[T.n - 1], T.Z[T.n - 1]]);
@@ -55,10 +70,11 @@ export function freeCourses() {
     const w = T.sAt(T.W, course.start.s);
     const hp = T.pointAt(course.start.s + 6, -(w + 20));
     entries.push({
-      id: c.id, name: course.name, course, D, reward, length: L, drop: Math.round(course.drop),
+      id: c.id, name: course.name, course, D, reward, rewardMax: 0, length: L, drop: Math.round(course.drop),
       start: course.start, finish: course.finish, pts,
       heli: { name: course.name, x: hp.x, z: hp.z, heading: course.start.heading, vertical: Math.round(course.drop), course: c.id },
     });
+    entries[entries.length - 1].rewardMax = prizeFor(entries[entries.length - 1], 'superhard');
   }
   return entries;
 }
@@ -162,8 +178,8 @@ export class FreeCourses {
     return null;
   }
 
-  /** Prize money for a finishing place (1-based). */
-  prize(e, place, dnf) { return dnf ? 0 : Math.round(e.reward * (PRIZE_SHARE[place - 1] ?? 0)); }
+  /** Prize money for a finishing place (1-based) against the `ai` field (default: Medium, the base prize). */
+  prize(e, place, dnf, ai = 'medium') { return dnf ? 0 : Math.round(prizeFor(e, ai) * (PRIZE_SHARE[place - 1] ?? 0)); }
 
   /** Crowd target for crowds.js: the nearest built course while you are close to its finish arena. */
   crowdCourse(p) {

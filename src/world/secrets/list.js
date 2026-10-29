@@ -9,6 +9,12 @@ const ALL = [
   { id: 'silbergrotte', name: 'Silbergrotte' },
   { id: 'adlertor', name: 'Adlertor' },
   { id: 'foersterweg', name: 'Försterweg' },
+  // (Oct 29: five more)
+  { id: 'kristallgrotte', name: 'Kristallgrotte' },
+  { id: 'schmugglerstollen', name: 'Schmugglerstollen' },
+  { id: 'pulverkessel', name: 'Pulverkessel' },
+  { id: 'schmugglerhuette', name: 'Schmugglerhütte' },
+  { id: 'wolkenkanzel', name: 'Wolkenkanzel' },
 ];
 export const SECRET_LIST = ALL.filter((s) => !s.off);
 export const secretEnabled = (id) => SECRET_LIST.some((s) => s.id === id);

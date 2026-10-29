@@ -97,6 +97,37 @@ export const LOOKS = {
     terrain: { rugged: 1.6, peaksK: 1.25 },
     scenery: 'rock',
   },
+  // the three Expert courses (extremecourses.js)
+  devilsridge: {
+    // a raw big-mountain morning: hard light, a cold wind haze over bare rock, black and blood red
+    atmo: { hour: 9.4, weather: 'clear', snow: 0.04, cloud: 0.18, mist: 0.16, fog: '#c9d3e6', fogK: 0.3, fogDensity: 0.85, snowCover: 0.15 },
+    colors: {
+      arch: '#141414', band: '#d9221c', portal: '#141414', portalBand: '#d9221c', net: '#c0191b',
+      flags: [['#141414', '#d9221c', "DEVIL'S RIDGE"], ['#d9221c', '#141414', 'EXTREME'], ['#141414', '#ffffff', 'SKI LEGACY'], ['#ffffff', '#141414', 'EXPERT ONLY']],
+    },
+    terrain: { rugged: 1.7, peaksK: 1.3 },
+    scenery: 'rock',
+  },
+  wolfgorge: {
+    // a dark snowy afternoon in the gorge: steel-grey haze, light snow, deep pines, black and ice blue
+    atmo: { hour: 15.6, weather: 'light', snow: 0.35, cloud: 0.75, mist: 0.3, fog: '#8a98a6', fogK: 0.5, fogDensity: 1.2, snowCover: 0.8 },
+    colors: {
+      arch: '#141414', band: '#7fd3ff', portal: '#141414', portalBand: '#7fd3ff', net: '#d9221c',
+      flags: [['#141414', '#7fd3ff', 'WOLF GORGE'], ['#7fd3ff', '#141414', 'SLALOM'], ['#141414', '#ffffff', 'SKI LEGACY'], ['#ffffff', '#141414', 'EXPERT ONLY']],
+    },
+    terrain: { rugged: 1.3, forestK: 1.3, forestFar: 1.3 },
+    scenery: 'forest',
+  },
+  skyfang: {
+    // high on the ice at noon: thin cobalt sky, glare, no trees up top, black and gold
+    atmo: { hour: 12.8, weather: 'clear', snow: 0, cloud: 0.02, mist: 0.05, fog: '#e4f3ff', fogK: 0.25, fogDensity: 0.55, snowCover: 1, zenith: 0.72 },
+    colors: {
+      arch: '#141414', band: '#f2b134', portal: '#141414', portalBand: '#f2b134', net: '#ff6a13',
+      flags: [['#141414', '#f2b134', 'SKY FANG'], ['#f2b134', '#141414', 'DOWNHILL'], ['#141414', '#ffffff', 'SKI LEGACY'], ['#cfefff', '#0b2f5c', 'EXPERT ONLY']],
+    },
+    terrain: { rugged: 1.4, forestK: 0.5 },
+    scenery: 'glacier',
+  },
 };
 
 /** The look of a course (by id or course object); {} when it has none. */

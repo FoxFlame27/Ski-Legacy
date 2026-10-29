@@ -16,6 +16,7 @@ import { portalDims } from './structures.js';
 import { Track as RaceTrack, referenceTime } from '../race/bots.js';
 import { kicker, rollers, DOWNHILL_LAND, BIG_LAND } from './sections.js';
 import { NEW_COURSES, NEW_REF_TIMES } from './newcourses.js';
+import { EXTREME_COURSES, EXTREME_REF_TIMES } from './extremecourses.js';
 import { lookOf } from './looks.js';
 
 const DEG = Math.PI / 180;
@@ -187,11 +188,11 @@ const BIGAIR = {
   checkpointsAt: ['berm', 'berm#2', 'rollers#2', 'berm#4', 'berm#5', 'kickOut#6', 'berm#6', 'kickOut#7', 'berm#7'],
 };
 
-const DEFS = { alpine: ALPINE, icecanyon: ICECANYON, bigair: BIGAIR, ...NEW_COURSES };
+const DEFS = { alpine: ALPINE, icecanyon: ICECANYON, bigair: BIGAIR, ...NEW_COURSES, ...EXTREME_COURSES };
 
 // Reference (ideal run) times in seconds, measured in Node with referenceTime() on the registered
 // courses (tests.mjs prints them). register() recomputes the real value and warns if they drift.
-const REF_TIMES = { alpine: 206.21, icecanyon: 138.56, bigair: 169.86, ...NEW_REF_TIMES };
+const REF_TIMES = { alpine: 206.21, icecanyon: 138.56, bigair: 169.86, ...NEW_REF_TIMES, ...EXTREME_REF_TIMES };
 // Medal standards (and par) as multiples of that ideal run: gold needs a strong clean run, silver a
 // solid one, bronze is within reach of a casual run with a mistake or two.
 export const MEDAL_K = { par: 1.08, gold: 1.1, silver: 1.22, bronze: 1.38 };

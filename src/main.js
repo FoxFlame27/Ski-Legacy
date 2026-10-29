@@ -24,7 +24,7 @@ import { Audio } from './core/audio.js';
 import { SkierRig } from './player/skier.js';
 import { Player } from './player/player.js';
 import { Trails, Spray, skierFX } from './fx/snowfx.js';
-import { FreeCourses, registerFreeWorldCourses, freeCourses, PRIZE_SHARE } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
+import { FreeCourses, registerFreeWorldCourses, freeCourses, PRIZE_SHARE, AI_LEVELS, aiLevel, prizeFor } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
 import { buildExpressGround } from './world/expressground.js'; // the Legacy Express: the high-speed line to every race (its ground works)
 import { Express, EXPRESS_PRICE, FAST as EXPRESS_FAST } from './world/express.js'; // the Legacy Express's trains, boarding and the ride
 import { planExpressScenery, buildExpressScenery } from './world/expressscenery.js'; // the frozen lakes under the Legacy Express's viaducts
@@ -806,7 +806,7 @@ function openExpress(it) {
     const e = d.course;
     return {
       name: d.st.name, x: d.st.x, z: d.st.z, path: d.pts, color: e?.D.color, race: e?.id,
-      meta: e ? `${e.D.label} · $${e.reward.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`,
+      meta: e ? `${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`,
       price: pass ? undefined : EXPRESS_PRICE, tag: pass ? 'DAY PASS' : undefined, short: !pass && save.money < EXPRESS_PRICE,
       act: () => { boardExpress(from, d.st); input.lock(); }, info: d,
     };
@@ -819,7 +819,7 @@ function openExpress(it) {
     dests, go: 'RIDE', goLabel: (d) => `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
     plan: (d) => {
       const i = d.info, e = i.course;
-      return `<div class="tp-name" style="color:${e ? e.D.color : 'inherit'}">${e ? e.D.label : 'Legacy Village'}</div><div class="tp-grid">${cell('RIDE', `${Math.max(1, Math.round(i.min))}<small>min</small>`)}${cell('STOPS', i.stops)}${e ? cell('PRIZE', `$${e.reward.toLocaleString('en-US')}`) : cell('KM', i.km.toFixed(0))}</div>`;
+      return `<div class="tp-name" style="color:${e ? e.D.color : 'inherit'}">${e ? e.D.label : 'Legacy Village'}</div><div class="tp-grid">${cell('RIDE', `${Math.max(1, Math.round(i.min))}<small>min</small>`)}${cell('STOPS', i.stops)}${e ? cell('PRIZE', `≤$${e.rewardMax.toLocaleString('en-US')}`) : cell('KM', i.km.toFixed(0))}</div>`;
     },
   });
 }
@@ -867,36 +867,40 @@ function leaveExpress(a) {
 
 // A free-ride race on a World Racing course (E at its start house, modes/parkour/freeworld.js): the podium's
 // prize money and the stats ("Races won"), paid once per run when the results card comes up (session.js)
-function courseResult(e, { place, dnf }) {
+function courseResult(e, { place, dnf }, ai = 'medium') {
   save.stats.races = (save.stats.races || 0) + 1;
   if (place === 1 && !dnf) save.stats.wins = (save.stats.wins || 0) + 1;
-  const prize = races.prize(e, place, dnf);
+  const prize = races.prize(e, place, dnf, ai); // (scaled by the AI field you picked: freeworld.js AI_LEVELS)
   if (prize > 0) earn(prize);
   try { crowds?.cheer(e.finish.x, e.finish.z); } catch (err) { /* (cosmetic) */ }
   writeSave();
   return prize;
 }
 
-// E at a course's start house: the race card (entry fee, prize money, your best), then the same race as RACE mode
-// right here on the mountain; after the finish you ski on from the finish area
+// E at a course's start house: the race card (entry fee, the AI field and its prize money, your best), then the same
+// race as RACE mode right here on the mountain; after the finish you ski on from the finish area
 function courseInteraction(e) {
   const firstFree = (save.stats.races || 0) === 0; // your first race is on the house
   return {
-    label: `${e.name} · ${e.D.label} · $${e.reward.toLocaleString('en-US')}${firstFree ? ' · first race free' : ''}`,
+    label: `${e.name} · ${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')}${firstFree ? ' · first race free' : ''}`,
     act: () => {
       if (!player.hasSkis) { hud.flash('You need skis to race', 'bad'); return; }
       player.vel.set(0, 0, 0);
       player.frozen = true; // stop at the start while deciding
       const fee = firstFree ? 0 : e.D.entry;
-      const card = { name: e.name, D: { ...e.D, entry: fee }, reward: e.reward, shares: PRIZE_SHARE, length: e.length, gates: e.course.gates || [] };
+      // the AI field: the one you raced last (save.raceAi), else the course's own suggestion; the prizes follow it
+      const ai = { levels: AI_LEVELS, pick: AI_LEVELS.some((l) => l.key === save.raceAi) ? save.raceAi : e.D.ai, prizeOf: (k) => prizeFor(e, k) };
+      const card = { name: e.name, D: { ...e.D, entry: fee }, reward: e.reward, shares: PRIZE_SHARE, length: e.length, gates: e.course.gates || [], ai };
       hud.raceIntro(card, save.records?.[e.id]?.best, {
         onClose: () => { if (!modes.active) player.frozen = false; },
-        onStart: () => {
+        onStart: (pick = e.D.ai) => {
           if (fee && !spend(fee)) { player.frozen = false; return; }
           if (firstFree) hud.flash('First race is free · good luck!', 'gold', 2200);
           if (!player.skisOn) player.setSkisOn(true);
+          save.raceAi = pick;
+          const lvl = aiLevel(pick);
           transition.fade(() => modes.startFree(e.id, {
-            difficulty: e.D.ai, result: (r) => courseResult(e, r), retry: () => !e.D.entry || spend(e.D.entry),
+            difficulty: lvl.key, prizeMult: lvl.mult, result: (r) => courseResult(e, r, lvl.key), retry: () => !e.D.entry || spend(e.D.entry),
           })).then(() => input.lock(), (err) => { console.warn('free-ride race', err); player.frozen = false; });
         },
       });

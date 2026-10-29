@@ -393,7 +393,7 @@ export class RaceHud {
    * @returns {Promise<'retry'|'next'|'menu'>}
    */
   results(o = {}) {
-    const { courseName = '', mode = 'race', rows = [], place = null, time, medal = null, pb = false, previousBest, points, penalty, difficulty, canNext = true, prize, choices: custom } = o;
+    const { courseName = '', mode = 'race', rows = [], place = null, time, medal = null, pb = false, previousBest, points, penalty, difficulty, canNext = true, prize, prizeMult, choices: custom } = o;
     this.pending?.('menu', true); // a stale results screen resolves (silently) first
     clearTimeout(this.resT);
     this.suspend();
@@ -418,7 +418,10 @@ export class RaceHud {
     }
     if (Number.isFinite(penalty) && penalty > 0) lines.push(`<div class="rr-line"><span>PENALTIES</span><b class="pen">+${penalty.toFixed(2)}</b></div>`);
     if (Number.isFinite(points) && points > 0) lines.push(`<div class="rr-line"><span>TRICK POINTS</span><b>${fmtPts(points)}</b></div>`);
-    if (Number.isFinite(prize) && prize > 0) lines.push(`<div class="rr-line"><span>PRIZE MONEY</span><b class="prize">+$${Math.round(prize).toLocaleString('en-US')}</b></div>`);
+    // (free ride: the AI field's prize factor beside it, e.g. SUPERHARD ×2.5)
+    const mult = Number.isFinite(prizeMult) && prizeMult !== 1 ? ` · ${difficulty ? esc(String(difficulty).toUpperCase()) + ' ' : ''}×${prizeMult}` : '';
+    if (Number.isFinite(prize) && prize > 0) lines.push(`<div class="rr-line"><span>PRIZE MONEY${mult}</span><b class="prize">+$${Math.round(prize).toLocaleString('en-US')}</b></div>`);
+    else if (mult && !dnf && !trial) lines.push(`<div class="rr-line"><span>PRIZE MONEY${mult}</span><b>$0</b></div>`);
 
     // race: finishing order with gaps to the winner; trial: you against your PB and the medal times
     // (the last column then reads from your side: red = you were slower, green = faster)

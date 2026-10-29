@@ -6,7 +6,7 @@
 // (banked turns allow more), look-ahead braking and ballistic flight off kickers and lips with a
 // landing absorb. Each bot has its own abilities (cornering, gliding, start reaction, consistency);
 // the field of a difficulty is calibrated against a reference run of an ideal player on the same
-// course, so Easy / Medium / Hard feel the same on every course.
+// course, so Easy / Medium / Hard / Superhard feel the same on every course.
 //
 // Lateral offsets in this module are LEFT-positive (heading h: forward (sin h, cos h), left (cos h, -sin h)).
 import * as THREE from 'three';
@@ -79,7 +79,20 @@ export const DIFFICULTY = {
     label: 'Hard', pace: [0.99, 1.0, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.11, 1.13], aLat: 21, lineQ: [0.82, 1.0], tuckA: 12, tuckV: 11,
     reaction: [0.08, 0.22], push: [3.1, 3.6], brake: 7, mistakes: 1 / 110, severity: 0.55, skis: ['elite', 'pro', 'elite', 'pro', 'elite'],
   },
+  // Superhard (Oct 29, the user: "increase the difficulty of the AI in a new game mode after hard: superhard"): a
+  // World Cup field. Near-optimal lines, full tuck wherever the turn allows it, sharp starts, a mistake every four
+  // minutes or so and small ones. Its leaders ride ~4 % under the ideal reference run, about what an elite ski and
+  // a perfect line give over the calibration ski: the same snow, drag, grip and cornering model as every field, the
+  // pace calibration only gets a little more headroom (paceMax 1.1 instead of 1.07). Only an almost flawless run on
+  // good skis wins.
+  superhard: {
+    label: 'Superhard', pace: [0.958, 0.964, 0.97, 0.975, 0.98, 0.985, 0.99, 0.995, 1.0, 1.005, 1.01, 1.017, 1.025, 1.035], aLat: 23, lineQ: [0.94, 1.0], tuckA: 13.5, tuckV: 10,
+    reaction: [0.05, 0.12], push: [3.4, 3.9], brake: 7.5, mistakes: 1 / 260, severity: 0.4, skis: ['elite', 'elite', 'pro', 'elite', 'elite'],
+    consistency: 0.6, paceMax: 1.1,
+  },
 };
+/** The AI difficulties in order, easy first (every picker offers these). */
+export const DIFFICULTY_KEYS = ['easy', 'medium', 'hard', 'superhard'];
 
 /** `count` target paces spread over a difficulty's range (fastest first). */
 export function fieldPaces(D, count) {
@@ -682,6 +695,7 @@ export function createField(track, { difficulty = 'medium', count = 5, seed = 1,
   for (let i = 0; i < count; i++) {
     const ab = { cornering: rnd(), gliding: rnd(), start: rnd(), consistency: rnd() };
     if (difficulty === 'hard') ab.consistency = 0.35 + ab.consistency * 0.65; // pros don't fall apart
+    if (D.consistency) ab.consistency = D.consistency + ab.consistency * (1 - D.consistency); // (superhard: nor do the elite)
     const q = lerp(D.lineQ[0], D.lineQ[1], rnd());
     const bias = (rnd() - 0.5) * spread;
     const plan = track.planFor(q, bias);
@@ -709,7 +723,7 @@ export function createField(track, { difficulty = 'medium', count = 5, seed = 1,
     // calibrate the pace so the clean run hits the target time (12 halvings: ~0.02% of the pace, plenty;
     // a 14-racer field calibrates behind the loading card in about a second)
     const target = refTime * spec.targetPace;
-    let lo = 0.3, hi = 1.07, P = null; // (an Easy field rides well below its full potential)
+    let lo = 0.3, hi = D.paceMax || 1.07, P = null; // (an Easy field rides well below its full potential)
     for (let it = 0; it < 12; it++) {
       const p = (lo + hi) / 2;
       const t = simulateRun(track, spec.paramsAt(p));

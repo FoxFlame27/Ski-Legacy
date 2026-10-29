@@ -1,8 +1,10 @@
 // Secrets: hidden places in the resort's mountains, found by exploring: tunnels through ridges (an old miners'
 // drift, a glacier cave), a hidden cirque behind a moraine, a couloir between cliffs with a frozen waterfall in a
-// bay, a natural rock arch and a forest trail. The only hints are in the world itself (an old wooden sign, a lantern
+// bay, a natural rock arch and a forest trail; since Oct 29 also a glacier cave on the Wolkenspitze, a smugglers' drift,
+// a hidden powder bowl, the old smugglers' hut and a cliff-top pulpit (defineView). The only hints are in the world itself (an old wooden sign, a lantern
 // at a portal, a cairn, faint old tracks); the first time you get into one the HUD says so, it pays a small reward
-// and the save remembers it (save.secrets; the trail map marks the found ones, the stats screen counts them).
+// and the save remembers it (save.secrets; the trail map marks the found ones, the stats screen counts them); finding
+// them all pays ALL_FOUND_BONUS.
 //
 // How it fits together
 //  - initSecrets() (boot, right after initLayout, before any terrain is built) shapes the terrain: world cuts
@@ -41,6 +43,7 @@ import { slice, sharedMaterials } from './secrets/slice.js';
 import { SECRET_LIST, secretEnabled } from './secrets/list.js';
 import { propSeats } from '../game/seating.js';
 
+export const ALL_FOUND_BONUS = 10000; // $ for finding every secret
 const BUILD_R = 650, DROP_R = 1100; // build a secret's meshes within this distance of it, drop them beyond this
 // a model's clone shares the loaded model's geometry: never disposed with a secret
 const keep = (o) => { o.traverse((q) => { q.userData.secretKeep = true; }); return o; };
@@ -505,6 +508,35 @@ function dressSpot(sp, models, group, colliders, lanterns) {
   }
 }
 
+/**
+ * A viewpoint: a small level pad (o.at) on a cliff top or a shoulder, two benches looking out toward o.look and a
+ * lantern (dressSpot 'view'); found once you stand on it (o.trigR m).
+ */
+function defineView(o) {
+  if (!secretEnabled(o.id)) return null; // (switched off in secrets/list.js)
+  const { id, at, look, r = 5 } = o;
+  const y = world.height(at.x, at.z);
+  const pad = new Path([[at.x - 1, at.z], [at.x + 1, at.z]], { step: 1, reach: 40, smooth: false });
+  world.addCut(shapeCut(pad, { floor: () => y, half: r, blend: o.blend ?? 5, s0: -r, s1: pad.length + r, ease: 3 }));
+  world.addCorridor([[at.x - 1, at.z], [at.x + 1, at.z]], r + 3, 'lift');
+  // (dressSpot's frame: toTrail points away from the view, the benches sit on the view side looking out)
+  const sp = { x: at.x, z: at.z, r, kind: 'view', view: look, toTrail: Math.atan2(at.x - look[0], at.z - look[1]) };
+  return {
+    ...o, kind: 'view', center: { x: at.x, z: at.z }, radius: 60,
+    trigger: (p) => Math.hypot(p.x - at.x, p.z - at.z) < (o.trigR ?? 9) && Math.abs(p.y - y) < 5,
+    area: (p) => Math.hypot(p.x - at.x, p.z - at.z) < 22,
+    *build(ctx) {
+      const group = new THREE.Group();
+      group.name = `secret-${id}`;
+      const colliders = [], lanterns = [];
+      dressSpot(sp, ctx.secrets.models || {}, group, colliders, lanterns);
+      yield;
+      o.dress?.(group, colliders, lanterns, this);
+      return { group, colliders, lids: [], blockers: [], lanterns };
+    },
+  };
+}
+
 // Where a tunnel's lid may lie: between the two portal planes (in front of them are the open cuttings).
 function lidRegions(path, sF0, sF1) {
   const plane = (s, dir) => { const p = path.point(s, 0, {}); return { x: p.x, z: p.z, nx: p.tx * dir, nz: p.tz * dir }; };
@@ -598,6 +630,78 @@ const MAKERS = [
       const q = def.path.point(8, 5.5, {}), n = def.path.point(30, 0, {});
       const sign = oldSign(q.x, q.z, Math.atan2(n.x - q.x, n.z - q.z), 'Försterweg', { seed: 51, w: 1.35 });
       group.add(sign); colliders.push(...sign.userData.colliders);
+    },
+  }),
+  // ---- Oct 29 (the user: "add more secrets"): five more, out on untouched slopes away from the runs, the roads,
+  // the chalets, the express and the race courses (picked on the terrain with the scratchpad tools: tunnels where a
+  // ridge stands 16-50 m over a 5-13 % floor, the bowl where its rim rises all round but one side)
+  // Wolkenspitze, high on its south-east shoulder: a glacier cave through a rock rib, entered from a notch reached
+  // along the slope from the south. A cairn marks the notch; faint old tracks lead there
+  () => defineTunnel({
+    id: 'kristallgrotte', name: 'Kristallgrotte', reward: 1000, style: 'ice', seed: 19, Wi: 4.2, Hs: 3.4, Hc: 5.6, cover: 1.6,
+    pts: [[4430, -4472], [4404, -4430], [4378, -4388], [4353, -4346], [4327, -4304]],
+    dress(group, colliders, lanterns, def) {
+      const tr = [];
+      for (let k = 0; k <= 10; k++) tr.push([4436 + k * 1.5 + 2 * Math.sin(k * 0.9), -4590 + k * 11]);
+      for (let s = 0; s <= Math.max(0, def.sF0 - 3); s += 3) { const q = def.path.point(s, 0.5 * Math.sin(s * 0.2), {}); tr.push([q.x, q.z]); }
+      group.add(oldTracks(tr, { seed: 37, wander: 0.6 }));
+      const p = def.path.point(2, 7, {});
+      const c = cairn(p.x, p.z, { seed: 33, size: 0.95 });
+      group.add(c); colliders.push(...c.userData.colliders);
+    },
+  }),
+  // the forested hills south of the Legacy summit: an old drift through a spur (the miners left it, the smugglers
+  // used it), from a hollow at its head out onto the slope east of it. An old carved sign by the hollow
+  () => defineTunnel({
+    id: 'schmugglerstollen', name: 'Schmugglerstollen', portalName: 'Schmugglerstollen', year: 'anno 1902', reward: 1000, style: 'mine', seed: 23,
+    pts: [[1458, -3884], [1504, -3901], [1550, -3919], [1596, -3936], [1642, -3954]],
+    dress(group, colliders, lanterns, def) {
+      const tr = [[1420, -3990], [1428, -3962], [1438, -3936], [1447, -3912]];
+      for (let s = 0; s <= Math.max(0, def.sF0 - 3); s += 3) { const q = def.path.point(s, 0.4 * Math.sin(s * 0.23), {}); tr.push([q.x, q.z]); }
+      group.add(oldTracks(tr, { seed: 41, wander: 0.8 }));
+      const q = def.path.point(4, -6.5, {}), n = def.path.point(30, 0, {});
+      const sign = oldSign(q.x, q.z, Math.atan2(n.x - q.x, n.z - q.z), 'Alter Stollen', { seed: 43, w: 1.45 });
+      group.add(sign); colliders.push(...sign.userData.colliders);
+    },
+  }),
+  // a hidden bowl south-east of there: a cirque whose rim rises 60-130 m on every side but the south, untracked
+  // powder on its floor. A cairn on the north rim where you drop in, faint tracks down into it
+  () => defineBowl({
+    id: 'pulverkessel', name: 'Pulverkessel', reward: 750,
+    zone: { x: 2280, z: -4520, r: 42 },
+    dress(group, colliders, lanterns) {
+      const c = cairn(2283, -4406, { seed: 47, size: 1.05 });
+      group.add(c); colliders.push(...c.userData.colliders);
+      const tr = [];
+      for (let k = 0; k <= 16; k++) tr.push([2284 + 3 * Math.sin(k * 0.7), -4412 - k * 6]);
+      group.add(oldTracks(tr, { seed: 49, wander: 1.0 }));
+    },
+  }),
+  // west of the Silberhorn, in a hollow under the ridge to Eagle Peak: the old smugglers' hut, its door to the open
+  // north-west side. Faint old tracks come down to it from the ridge, a cairn where they leave it
+  () => defineBowl({
+    id: 'schmugglerhuette', name: 'Schmugglerhütte', reward: 750,
+    zone: { x: -4600, z: -380, r: 30 },
+    hut: { x: -4581, z: -385, yaw: 285 * Math.PI / 180, size: 7.0 },
+    dress(group, colliders, lanterns) {
+      const tr = [];
+      for (let k = 0; k <= 14; k++) tr.push([-4520 - k * 4.5 + 2 * Math.sin(k * 0.8), -262 - k * 7.5]);
+      group.add(oldTracks(tr, { seed: 53, wander: 0.9 }));
+      const c = cairn(-4517, -255, { seed: 55, size: 0.9 });
+      group.add(c); colliders.push(...c.userData.colliders);
+    },
+  }),
+  // Wolkenspitze's west face: a pulpit on the cliff top, 250 m of air below it, two benches looking out over the
+  // valley. An old sign and a cairn on the way down to it from the north
+  () => defineView({
+    id: 'wolkenkanzel', name: 'Wolkenkanzel', reward: 500,
+    at: { x: 2843, z: -4157 }, look: [2698, -4301], r: 5,
+    dress(group, colliders, lanterns) {
+      const sign = oldSign(2846, -4130, Math.atan2(2843 - 2846, -4157 + 4130), 'Wolkenkanzel', { seed: 57, w: 1.4 });
+      group.add(sign); colliders.push(...sign.userData.colliders);
+      const c = cairn(2838, -4070, { seed: 59, size: 0.9 });
+      group.add(c); colliders.push(...c.userData.colliders);
+      group.add(oldTracks([[2838, -4062], [2841, -4085], [2844, -4106], [2847, -4126], [2849, -4140]], { seed: 61, wander: 0.6 }));
     },
   }),
 ];
@@ -756,7 +860,8 @@ export class Secrets {
     const n = this.save.secrets.length, total = SECRET_LIST.length;
     this.hud.flash(`Secret found · ${d.name} (${n}/${total})`, 'gold', 3400);
     this.earn?.(d.reward || 500);
-    if (n === total) setTimeout(() => { this.hud.flash('Every secret found · +$5,000', 'gold', 3800); this.earn?.(5000); }, 3800);
+    // every secret found: the big finder's bonus (Oct 29: $10,000, with five more secrets out there)
+    if (n === total) setTimeout(() => { this.hud.flash(`Every secret found · +$${ALL_FOUND_BONUS.toLocaleString('en-US')}`, 'gold', 3800); this.earn?.(ALL_FOUND_BONUS); }, 3800);
     this.writeSave();
   }
 

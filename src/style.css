@@ -219,6 +219,7 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .diff-sign { display: inline-block; flex: none; width: calc(var(--u) * 13); height: calc(var(--u) * 13); min-width: 9px; min-height: 9px; background: #1f5fd6; box-shadow: 0 0 0 max(1.5px, calc(var(--u) * 2)) #fff; }
 .diff-sign.easy { background: #1f9d4a; border-radius: 50%; }
 .diff-sign.hard { background: #111; transform: rotate(45deg) scale(0.86); }
+.diff-sign.expert { background: #111; transform: rotate(45deg) scale(0.86); box-shadow: 0 0 0 max(1.5px, calc(var(--u) * 2)) #fff, 0 0 0 max(3px, calc(var(--u) * 4)) #d9221c; } /* (the Expert courses: a black diamond ringed red) */
 
 @keyframes riseIn { from { opacity: 0; translate: 0 calc(var(--u) * 30); } }
 @keyframes slideIn { from { opacity: 0; translate: calc(var(--u) * -40) 0; } }

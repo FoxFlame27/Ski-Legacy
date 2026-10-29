@@ -632,7 +632,7 @@ export class TrailMap {
       this.spot(x, cy, r + 3, e.start.x, e.start.z, e.name, tag);
       const card = {
         title: e.name.toUpperCase(), color: col, hot: on,
-        sub: [[e.D.label.toUpperCase(), col], [`  ·  $${e.reward.toLocaleString('en-US')}`, NAVY]],
+        sub: [[e.D.label.toUpperCase(), col], [`  ·  up to $${(e.rewardMax || e.reward).toLocaleString('en-US')}`, NAVY]], // (the Superhard field's 1st prize)
         more: s >= 0.3 ? `${(e.length / 1000).toFixed(1)} km  ·  ${e.drop} m drop` : null,
       };
       this.label(e.name, x, cy, { prio: 0.5, force: true, card,

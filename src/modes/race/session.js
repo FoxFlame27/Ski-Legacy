@@ -1,7 +1,7 @@
 // Race session: RACE against a field of 14 AI racers, or WORLD RACING (time trial against your ghost), on any
 // course object that implements the course contract (src/modes/parkour/courses.js).
 //
-//   const session = new RaceSession({ scene, course, mode: 'race' | 'trial', difficulty: 'easy' | 'medium' | 'hard',
+//   const session = new RaceSession({ scene, course, mode: 'race' | 'trial', difficulty: 'easy' | 'medium' | 'hard' | 'superhard',
 //     player, makeRig, botCharacters, audio, hud, raceHud, trails, spray, save, writeSave, onExit });
 //   session.start();            // start grid, bots / ghost, countdown 3-2-1-GO
 //   session.update(dt, input);  // every frame AFTER player.update()
@@ -1376,6 +1376,7 @@ export class RaceSession {
       try {
         const prize = this.freeRide.result?.({ place: race ? place : 0, time: this.finalTime, dnf: !Number.isFinite(this.finalTime) });
         if (prize > 0) this.resultsArgs.prize = prize;
+        if (Number.isFinite(this.freeRide.prizeMult) && race) this.resultsArgs.prizeMult = this.freeRide.prizeMult; // (the AI field's factor)
       } catch (e) { console.warn('Race: free-ride result failed', e); }
       this.resultsArgs.canNext = false;
       this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', 'BACK TO START', 'ENTER']];

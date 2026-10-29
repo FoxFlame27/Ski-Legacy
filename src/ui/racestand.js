@@ -1,7 +1,7 @@
 // RACING stand UI (Oct 27: RACE moved off the main menu into Legacy Village, "like jobs"): E at the stand opens it
 // up close in the job board's look (ui/jobboard.css: wooden frame, cork face, header plank). Left, the courses as
 // rows on a paper note (difficulty, your best finish); right, the picked course as a card: its facts, the AI
-// difficulty (EASY / MEDIUM / HARD) and START RACE, with the stamp "Just for fun · no prize money" (races for money
+// difficulty (EASY / MEDIUM / HARD / SUPERHARD) and START RACE, with the stamp "Just for fun · no prize money" (races for money
 // are the free-ride races at the courses' start houses). Keys: up / down course, left / right difficulty, Enter
 // start, Esc close. Blocks the game like a panel while open (hud.setBlocking).
 //   open({ courses: [{ id, name, tagline, difficulty, length, drop, record }], courseId, difficulty,
@@ -11,7 +11,7 @@ import './racestand.css';
 import { brushSVG, brushClip, esc, medalHTML } from './menu.js';
 import { fmtTime } from './hud.js';
 
-const DIFFS = [['easy', 'EASY'], ['medium', 'MEDIUM'], ['hard', 'HARD']];
+const DIFFS = [['easy', 'EASY'], ['medium', 'MEDIUM'], ['hard', 'HARD'], ['superhard', 'SUPERHARD']];
 const ord = (n) => (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
 const len = (m) => (!Number.isFinite(m) ? '—' : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
 const sign = (d) => `<i class="diff-sign ${esc(String(d || '').toLowerCase())}"></i>`;

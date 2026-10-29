@@ -272,28 +272,56 @@ export class HUD {
   }
 
   // Resort race card. An entry of 0 (easy races, and main.js passes 0 for your first race) reads FREE.
+  // race.ai (optional, the start houses' races): { levels: [{ key, label, mult }], pick, prizeOf(key) } -> an AI field
+  // picker (left / right or a click); the prizes follow the pick and onStart(key) gets it.
   raceIntro(race, best, { onStart, onClose }) {
     const fee = race.D.entry || 0;
     const broke = save.money < fee;
     const firstFree = !fee && (save.stats?.races || 0) === 0;
+    const ai = race.ai || null;
+    let pick = ai ? (ai.levels.some((l) => l.key === ai.pick) ? ai.pick : ai.levels[0].key) : null;
+    const prize = () => (ai ? ai.prizeOf(pick) : race.reward);
+    const prizes = () => {
+      const r = prize();
+      return `<div class="stat">1st place<b>$${fmtMoney(r)}</b></div>
+        <div class="stat">2nd / 3rd<b>$${fmtMoney(Math.round(r * (race.shares?.[1] ?? 0.4)))} / $${fmtMoney(Math.round(r * (race.shares?.[2] ?? 0.15)))}</b></div>`;
+    };
+    const aiRow = ai ? `<div class="sub" style="margin-top:12px">AI field · the harder the rivals, the bigger the prize</div>
+      <div class="ri-ai" style="display:flex;gap:8px;margin-top:6px">${ai.levels.map((l) => `<button class="btn${l.key === pick ? ' primary' : ''}" data-ai="${l.key}" style="flex:1 1 0;min-width:0;padding-left:4px;padding-right:4px">${l.label}<small style="display:block;opacity:0.8;font-size:11px">×${l.mult} · $${fmtMoney(ai.prizeOf(l.key))}</small></button>`).join('')}</div>` : '';
     this.open(`<h2>${race.name}</h2>
       <div class="sub">${race.D.label} · ${Math.round(race.length)} m · ${race.gates.length ? race.gates.length + ' gates · ' : ''}14 opponents</div>
       <div class="grid">
-        <div class="stat">1st place<b>$${fmtMoney(race.reward)}</b></div>
-        <div class="stat">2nd / 3rd<b>$${fmtMoney(Math.round(race.reward * (race.shares?.[1] ?? 0.4)))} / $${fmtMoney(Math.round(race.reward * (race.shares?.[2] ?? 0.15)))}</b></div>
+        <span class="ri-prizes" style="display:contents">${prizes()}</span>
         <div class="stat entry${fee ? '' : ' free'}">Entry<b>${fee ? '$' + fmtMoney(fee) : 'FREE'}</b>${firstFree ? '<em>First race on the house</em>' : ''}</div>
         <div class="stat">Your best<b>${best ? fmtTime(best) : '—'}</b></div>
       </div>
+      ${aiRow}
       <div class="sub" style="margin-top:14px">Ski through every gate (through the green bar between its two flags) and beat the 14 racers to the finish. A missed gate only adds half a second.</div>
       ${broke ? `<div class="sub" style="color:#ff8a80;font-weight:700">You need $${fmtMoney(fee)} for the entry fee — you have $${fmtMoney(save.money)}. Win easier races first.</div>` : ''}
       <div class="actions"><button class="btn" data-close>Cancel · Esc</button><button class="btn primary" data-start ${broke ? 'disabled' : ''}>Start · Enter</button></div>`, onClose);
-    const startBtn = $('panel-card').querySelector('[data-start]');
-    const go = () => { if (startBtn.disabled) return; removeEventListener('keydown', keys); this.close(); onStart(); };
-    // keyboard: Enter or E starts, Esc cancels
+    const card = $('panel-card');
+    const startBtn = card.querySelector('[data-start]');
+    const setAi = (k) => {
+      if (!ai || !ai.levels.some((l) => l.key === k)) return;
+      pick = k;
+      card.querySelectorAll('[data-ai]').forEach((b) => b.classList.toggle('primary', b.dataset.ai === k));
+      const box = card.querySelector('.ri-prizes');
+      if (box) box.innerHTML = prizes();
+    };
+    const stepAi = (d) => {
+      if (!ai) return;
+      const i = ai.levels.findIndex((l) => l.key === pick);
+      setAi(ai.levels[Math.max(0, Math.min(ai.levels.length - 1, i + d))].key);
+    };
+    card.querySelectorAll('[data-ai]').forEach((b) => b.addEventListener('click', () => setAi(b.dataset.ai)));
+    const go = () => { if (startBtn.disabled) return; removeEventListener('keydown', keys); this.close(); onStart(pick); };
+    // keyboard: Enter or E starts, Esc cancels, left / right pick the AI field
     const keys = (e) => {
       if (!this.panelOpen) { removeEventListener('keydown', keys); return; }
       if (e.code === 'Enter' || e.code === 'KeyE') { e.preventDefault(); go(); }
       else if (e.code === 'Escape') { removeEventListener('keydown', keys); this.close(); }
+      else if (ai && (e.code === 'ArrowLeft' || e.code === 'KeyA')) { e.preventDefault(); stepAi(-1); }
+      else if (ai && (e.code === 'ArrowRight' || e.code === 'KeyD')) { e.preventDefault(); stepAi(1); }
     };
     setTimeout(() => addEventListener('keydown', keys), 150); // ignore the E press that opened the card
     startBtn.addEventListener('click', go);

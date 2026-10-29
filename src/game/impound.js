@@ -23,7 +23,8 @@ import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 
 export const STRAY_BACK = 180; // s left off the road and outside any car park / lay-by (with you away) before it goes back to its bay
-export const TOW_AFTER = 75;    // s left blocking a road with you away before the truck is called
+export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
+export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called
 export const AWAY_R = 40;       // m: "away" from your car
 const LOT = { hw: 18, hd: 9 };  // the car park's half length (along the road) and half depth (two rows of bays)
 const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's far end)
@@ -215,7 +216,7 @@ export class Impound {
     // (Oct 29, the user: "if you leave your car behind not on the road or a parking lot it should go back to a parking
     // lot after 3 min")
     if (!block) {
-      e.abandonT = 0; e.warned = false;
+      e.abandonT = 0; e.warned = false; e.warned2 = false;
       if (d < AWAY_R || !busRoads.roads.length || this.parked(e)) { e.strayT = 0; return; }
       e.strayT = (e.strayT || 0) + step;
       if (e.strayT >= STRAY_BACK) {
@@ -227,10 +228,11 @@ export class Impound {
       return;
     }
     e.strayT = 0;
-    if (d < 15) { e.abandonT = 0; return; } // (you came back)
+    if (d < 15) { e.abandonT = 0; e.warned2 = false; return; } // (you came back)
     if (d > 25 && !e.warned) { e.warned = true; R.hud?.flash('Your car is blocking the road · it will be towed if you leave it there', 'bad', 3600); }
     if (d >= AWAY_R) e.abandonT = (e.abandonT || 0) + step;
-    if (e.abandonT >= TOW_AFTER) this.tow(e);
+    if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still blocking the road · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
+    if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.tow(e); }
   }
 
   // the truck fetches it (the wreck fee, now); it ends in an impound bay, locked until tomorrow

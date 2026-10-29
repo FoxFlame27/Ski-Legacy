@@ -21,6 +21,7 @@
 import * as THREE from 'three';
 import { world } from './world.js';
 
+const USE_GLB_STAKES = false;
 const CELL = 256, FAR = 480, REPACK = 40;
 const COL_CELL = 64, COL_R = 70, POOL = 160, REFILL = 4;
 export const FENCE_TYPES = {
@@ -283,7 +284,7 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
 
   // ---- swap in the Meshy models (browser only; Node checks keep the procedural meshes)
   const useGLBs = ({ loadGLB, dequantize }) => Promise.all([
-    loadGLB('piste/bnet_panel'), loadGLB('piste/rope_pole'), loadGLB('piste/flag_pole'),
+    loadGLB('piste/bnet_panel'), USE_GLB_STAKES ? loadGLB('piste/rope_pole') : null, USE_GLB_STAKES ? loadGLB('piste/flag_pole') : null,
   ]).then(([gPanel, gRope, gFlag]) => {
     const B = FENCE_TYPES.B;
     // the section: x 0..1 across the span, y 1 = the net height (whole model B.postH tall, its foot 0.2 m into
@@ -311,7 +312,9 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
       buf.setUsage(THREE.DynamicDrawUsage);
       return parts.map((p, i) => { const im = mk(p.geo, p.mat, 1, 'fence-stake-' + name + (i || '')); im.instanceMatrix = buf; return im; });
     };
-    const a = stake(gRope, 'poleA'), b = a && stake(gFlag, 'poleB');
+    // (off: the Meshy stakes lost their shafts in the simplify, so their flags floated beside the rope, Oct 29, the
+    // user: "these models are not attached"; the procedural poles and bunting stay)
+    const a = USE_GLB_STAKES ? stake(gRope, 'poleA') : null, b = a && stake(gFlag, 'poleB');
     if (a && b) {
       glb.poleA = a; glb.poleB = b;
       rope.geometry.dispose();

@@ -10,7 +10,7 @@
 # https://github.com/FoxFlame27/Ski-Legacy (branch legacy-express) into /opt/skilegacy/server (or copies it from
 # $SRC_DIR if you set that, e.g. after uploading a tarball); runs npm ci; installs the systemd service `skilegacy`
 # (restart always) and serves
-#   wss://138-199-163-183.sslip.io/ws  ->  the Node server on 127.0.0.1:8787
+#   wss://138-199-163-183.sslip.io/ws  ->  the Node server on 127.0.0.1:18787 (or the next free port)
 # through a TLS front:
 #   - an nginx that already runs here (another website on this server) gets ONE extra site of its own for the game's
 #     hostname, with a Let's Encrypt certificate from certbot; your other sites are not touched (nginx -t is checked
@@ -23,7 +23,7 @@ set -euo pipefail
 REPO="${REPO:-https://github.com/FoxFlame27/Ski-Legacy.git}"
 BRANCH="${BRANCH:-legacy-express}"
 DOMAIN="${DOMAIN:-138-199-163-183.sslip.io}"
-PORT="${PORT:-8787}"
+PORT="${PORT:-18787}" # (the first free one from here is used: 8787 is taken by another app on this server)
 APP_DIR=/opt/skilegacy
 DATA_DIR=/var/lib/skilegacy
 SVC_USER=skilegacy
@@ -96,6 +96,14 @@ cd "$APP_DIR/server"
 npm ci --omit=dev --no-audit --no-fund
 chown -R root:root "$APP_DIR/server"
 chmod -R a+rX "$APP_DIR/server"
+
+say "Port"
+# our own service off first (so its old port counts as free), then the first port nothing else listens on
+systemctl stop skilegacy >/dev/null 2>&1 || true
+port_busy() { ss -Hltn "( sport = :$1 )" 2>/dev/null | grep -q .; }
+for _ in $(seq 1 50); do port_busy "$PORT" || break; PORT=$((PORT + 1)); done
+port_busy "$PORT" && { echo "No free port found near $PORT" >&2; exit 1; }
+echo "   the game server listens on 127.0.0.1:$PORT"
 
 say "systemd service"
 cat > /etc/systemd/system/skilegacy.service <<UNIT
@@ -216,9 +224,12 @@ fi
 say "Check"
 sleep 2
 systemctl --no-pager --lines=5 status skilegacy || true
-curl -fsS "http://127.0.0.1:$PORT/health" && echo || echo "(the game server did not answer yet: journalctl -u skilegacy -n 50)"
+sleep 2
+# (the game server's own health answer carries "proto": anything else is another app on that port)
+if curl -fsS "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q '"proto"'; then echo "Game server: OK"
+else echo "Game server is NOT running. Its log:"; journalctl -u skilegacy -n 30 --no-pager || true; fi
 sleep 1
-if curl -fsS "https://$DOMAIN/health" >/dev/null 2>&1; then echo "HTTPS check: OK"; else echo "HTTPS check failed (with Caddy the first one can take ~30 s while it gets the certificate)"; fi
+if curl -fsS "https://$DOMAIN/health" 2>/dev/null | grep -q '"proto"'; then echo "HTTPS check: OK"; else echo "HTTPS check failed (with Caddy the first one can take ~30 s while it gets the certificate)"; fi
 echo
 echo "Done. The game connects to wss://$DOMAIN/ws"
 echo "Logs:    journalctl -u skilegacy -f        web front: journalctl -u nginx -f (or -u caddy)"

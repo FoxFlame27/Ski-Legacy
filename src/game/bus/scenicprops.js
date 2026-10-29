@@ -90,6 +90,7 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
   const finger = box(1.0, 0.18, 0.04, 0.5, 0, 0);
   const boulder = new THREE.IcosahedronGeometry(0.6, 0);
 
+  const NO_VIEWPOINTS = true;
   // ---- a viewpoint: two benches either side of a panorama board, facing (fx, fz), a wall in front along the drop
   let walls = 0;
   const wall = (ax, az, bx, bz) => { // a dry-stone wall from a to b (2 m stones, each on the ground)
@@ -113,6 +114,7 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
     walls++;
   };
   const viewpoint = (cx, cz, fx, fz, wallLen, wallOff) => {
+    if (NO_VIEWPOINTS) return false; // (Oct 29, the user: "remove all panorama signs/viewings")
     if (laneDistance(cx, cz) < 7) return false; // (another road's lane there: a switchback's leg, a junction)
     const yaw = Math.atan2(fx, fz), lx = fz, lz = -fx; // (facing the view; l: along the edge)
     for (const sd of [-1, 1]) {

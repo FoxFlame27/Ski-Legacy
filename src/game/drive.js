@@ -551,8 +551,30 @@ export class Drive {
       } else d.gi = 0;
       d.rpm = clamp(Math.max(IDLE + thr * 600, rpmAt(d.gi)), IDLE, REDLINE * rev);
     }
+    this.terrainHit(g1);
     this.collide();
     this.bash(dt);
+  }
+
+  // into the mountain: the ground ahead rising steeper than ~40 degrees (a rock face, a steep bank; never a road, a
+  // berm or a ramp) is a wall: the speed into it is a knock or a crash like any solid hit (Oct 29, the user: "make it
+  // so you can damage the car by crashing into mountains"), and it bounces the car back off the slope
+  terrainHit(g1) {
+    const d = this.d;
+    if (!d || d.air || d.crash) return;
+    const sp = Math.hypot(d.vx, d.vz);
+    if (sp < KNOCK_V) return;
+    const dx = d.vx / sp, dz = d.vz / sp, ahead = d.half + 0.6;
+    const gA = (this.world.groundHeight(d.x + dx * ahead, d.z + dz * ahead, d.y + 4) - g1) / ahead;
+    if (gA < 0.85) return;
+    const vin = sp * gA / Math.sqrt(1 + gA * gA); // (the speed into the face)
+    if (vin < KNOCK_V) return;
+    const nx = -dx, nz = -dz;
+    d.vx += nx * vin * 1.25; d.vz += nz * vin * 1.25; // (off the face, a little bounce back)
+    d.vx *= 0.6; d.vz *= 0.6;
+    if (vin > CRASH_V && this.canCrash()) { this.crash(vin, nx, nz, 'rock'); return; }
+    this.knock(vin, nx, nz);
+    if (performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); try { this.audio?.impact?.('rock', Math.min(0.7, vin / 16)); } catch { /* (silent) */ } }
   }
 
   // soft bumps: trees, rocks, colliders (buildings, nets, other cars), people; no damage

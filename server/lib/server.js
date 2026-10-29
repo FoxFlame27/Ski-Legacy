@@ -709,6 +709,7 @@ export class GameServer {
 
   // Admin, from the server machine only (curl on 127.0.0.1; nginx passes only /ws and /health, never /admin):
   //   /admin/give?name=Sammy&amount=100     money to a player (negative takes it away); online, they see it at once
+  //   /admin/giveall?amount=200               money to every player
   //   /admin/players                         every account: name, money, online
   admin(req, res) {
     const out = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o) + '\n'); };
@@ -731,6 +732,21 @@ export class GameServer {
       if (c) c.send('money', { v: c.profile?.money ?? prof.money, why: 'gift', delta: amount });
       this.log(`[admin] ${amount >= 0 ? 'gave' : 'took'} ${Math.abs(amount)} ${amount >= 0 ? 'to' : 'from'} ${name} -> ${prof.money}`);
       return out(200, { ok: true, name, money: prof.money, online: !!c });
+    }
+    if (u.pathname === '/admin/giveall') { // (every account, online or not)
+      const amount = Math.round(Number(u.searchParams.get('amount')));
+      if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 1e7) return out(400, { ok: false, error: 'use ?amount=<number>' });
+      const done = [];
+      for (const [k, prof] of Object.entries(this.store.profiles.data)) {
+        const c = this.online.get(k);
+        if (c?.profile && c.profile !== prof) c.profile.money += amount;
+        prof.money += amount;
+        if (c) c.send('money', { v: c.profile?.money ?? prof.money, why: 'gift', delta: amount });
+        done.push({ name: prof.name || this.store.accounts?.data?.[k]?.name || k, money: prof.money, online: !!c });
+      }
+      this.store.profiles.save();
+      this.log(`[admin] ${amount >= 0 ? 'gave' : 'took'} ${Math.abs(amount)} ${amount >= 0 ? 'to' : 'from'} all ${done.length} players`);
+      return out(200, { ok: true, amount, players: done });
     }
     return out(404, { ok: false, error: 'unknown admin command' });
   }

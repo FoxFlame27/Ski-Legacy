@@ -6,7 +6,7 @@
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { compactPrimitive, prune } from '@gltf-transform/functions';
-import { MeshoptDecoder } from 'meshoptimizer';
+import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 const [src, dst] = process.argv.slice(2, 4);
 const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : null; };
@@ -14,8 +14,8 @@ const above = arg('--above') !== null ? +arg('--above') : Infinity;
 const below = arg('--below') !== null ? +arg('--below') : -Infinity;
 const keep = arg('--keep') ? arg('--keep').split(',').map(Number) : null;
 
-await MeshoptDecoder.ready;
-const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
+await MeshoptDecoder.ready; await MeshoptEncoder.ready;
+const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.decoder': MeshoptDecoder, 'meshopt.encoder': MeshoptEncoder });
 const doc = await io.read(src);
 const a = [0, 0, 0], b = [0, 0, 0], c = [0, 0, 0];
 for (const mesh of doc.getRoot().listMeshes()) for (const prim of mesh.listPrimitives()) {

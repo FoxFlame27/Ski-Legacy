@@ -1,9 +1,11 @@
 // The chalet's plan (pure data, no THREE): the Almdorf chalets (game/chalets.js outside, game/chaletroom.js inside)
 // are all the same house, so one plan serves every one of them. House frame, metres: +x = the front (the entrance
 // side, facing the road), z along the house (its long side), y up from the ground outside (the pad).
-// The outside model (chalet.glb, the user's Meshy chalet) is scaled to a person: its front door 2.2 m tall (sill
-// 0.55 m up), its ground floor windows 1.35 m tall, sills 0.9 m over the floor, the storeys ~2.9 m: the body is then
-// 2*HX x 2*HZ = 8.5 x 12.9 m (MODEL: how game/chalets.js fits it). The interior lives inside that hull.
+// The outside model (chalet.glb, the user's Meshy chalet, its ground clutter trimmed off) is scaled to a person by
+// its front door (measured on the mesh, Oct 28: the door's opening 0.219 model units tall -> 2.15 m, scale 9.8):
+// the door 2.15 x 1.4 m (sill 0.3 m up, two steps), the storeys ~2.9 m, sills ~0.9-1.0 m over the floor: the body
+// is 2*HX x 2*HZ = 8.04 x 12.15 m (MODEL: how game/chalets.js fits it). The interior lives inside that hull, in the
+// world (game/chaletroom.js: one shared instance, placed at the chalet you're at; no scene switch).
 //
 //   ground floor (floor G, ceiling GC, cream plaster walls, plank floor, timber ceiling with beams)
 //     entrance hall (the front door in the middle of the front), the open living room / kitchen (the -z end, full
@@ -11,18 +13,21 @@
 //   upper floor (floor FL, timber walls and sloped timber ceiling under the roof, dormers in the middle band)
 //     bedroom A (-z gable), bedroom B (front, middle, dormer), bedroom C (+z gable), the bathroom (back, middle,
 //     dormer), the landing and a corridor along the stairwell
-export const MODEL = { scale: 10.84, x: 0.22, z: -0.285, y: -0.40 }; // chalet.glb: its body's centre / ground (scene units), the scale
-export const HX = 4.23, HZ = 6.45, T = 0.3;          // half depth / half length (outer faces), exterior wall thickness
+export const MODEL = { scale: 9.8, x: 0.315, z: -0.295, y: -0.405 }; // chalet.glb: its body's centre / ground (model units), the scale
+export const HX = 4.02, HZ = 6.08, T = 0.3;          // half depth / half length (outer faces), exterior wall thickness
 export const IX = HX - T, IZ = HZ - T;               // inner faces
-export const G = 0.55, GC = 3.3, FL = 3.5;           // ground floor, its ceiling, the upper floor
-export const KNEE = 1.8, COLLAR = 3.2, PITCH = 0.8;  // upstairs: knee height at the inner face, the flat collar ceiling, roof rise per m
-export const DORMER = { z0: -2.8, z1: 2.8, h: 2.5 };  // the dormers (both long sides, the middle band): their ceiling
+export const G = 0.3, GC = 2.95, FL = 3.15;          // ground floor (the door's sill), its ceiling (2.65 m clear), the upper floor
+export const KNEE = 1.8, COLLAR = 3.2, PITCH = 0.7;  // upstairs: knee height at the inner face, the flat collar ceiling, roof rise per m
+export const DORMER = { z0: -2.8, z1: 2.8, h: 2.6 };  // the dormers (both long sides, the middle band): their ceiling
 export const IT = 0.12;                              // interior wall thickness
-export const STAIR = { x0: -1.83, x1: -0.78, z0: -2.6, z1: 1.72, steps: 16 }; // foot (z0, floor G) to top (z1, floor FL): 0.184 risers, 0.27 treads
+export const STAIR = { x0: -1.83, x1: -0.78, z0: -2.6, z1: 1.72, steps: 16 }; // foot (z0, floor G) to top (z1, floor FL): 0.178 risers, 0.27 treads
 export const HOLE = { x0: -1.83, x1: -0.78, z0: -1.9, z1: 1.72 };            // the stairwell in the upper floor
-export const DOOR = { z: -0.28, w: 1.0, h: 2.2 };    // the front door (x = HX), its sill at G
+export const DOOR = { z: -0.17, w: 1.3, h: 2.15 };   // the front door (x = HX), its sill at G (the model's opening: z -0.88..0.54)
+export const DOOR_CUT = { z0: -0.88, z1: 0.54, x0: HX - 0.55, x1: HX + 0.3 };    // where the model's own (painted) door is cut away
+// the model's footprint in the house frame, eaves and front steps included (the plots are laid out round it)
+export const FOOT = { x0: -6.2, x1: 5.3, z0: -6.4, z1: 7.1 };
+export const STEPS = { x0: HX, x1: HX + 1.3, z0: -1.0, z1: 0.7 };              // the front steps (up to G)
 export const DOOR_H = 2.1, DOOR_W = 0.9;             // the doors inside
-export const NIGHT = 100;                            // the cheapest chalet's price per night (game/chalets.js prices each)
 
 /** Upstairs ceiling height (absolute y) at (x, z): the roof slope from the knee walls up to the collar; in the
  *  dormer band never below the dormer's flat ceiling. */
@@ -83,7 +88,7 @@ export const INTERIOR = [
   { level: 'up', a: [-IX, -2.8], b: [IX, -2.8], openings: [d(-0.07, FL)] },  // bedroom A
   { level: 'up', a: [-IX, 2.8], b: [IX, 2.8], openings: [d(-0.1, FL)] },     // bedroom C
   { level: 'up', a: [0.65, -2.8], b: [0.65, 2.8], openings: [d(0, FL)] },    // bedroom B
-  { level: 'up', a: [-1.83, -2.8], b: [-1.83, 2.8], openings: [d(2.26, FL, 0.8)] }, // the bathroom
+  { level: 'up', a: [-1.83, -2.8], b: [-1.83, 2.8], openings: [d(2.2, FL)] }, // the bathroom
 ];
 // railings round the stairwell (upstairs): walked against, seen through
 export const RAILS = [{ a: [HOLE.x1, HOLE.z0], b: [HOLE.x1, HOLE.z1] }, { a: [HOLE.x0, HOLE.z0], b: [HOLE.x1, HOLE.z0] }];

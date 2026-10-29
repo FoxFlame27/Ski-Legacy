@@ -170,17 +170,9 @@ export const seating = {
   villageSeats() {
     if (this._village || !this.chalets?.V?.plots) return;
     if (!this._height) return;
-    const plots = this.chalets.V.plots, H = this._height;
     this._village = true;
-    for (const p of plots) {
-      if (p.playground) {
-        const x = (p.x0 + p.x1) / 2;
-        for (const dx of [-7, 7]) { const bx = x + dx, bz = p.z1 - 3, y = H(bx, bz); registerBench({ x: bx, y: y + 0.47, z: bz, yaw: Math.PI, width: 1.6, off: 0.04, floorY: y }); }
-      } else if (p.bench && p.house) {
-        const bx = p.house.x + (p.mirror ? 3.2 : -3.2), bz = p.house.z + this._HX + 2.6, y = H(bx, bz);
-        registerBench({ x: bx, y: y + 0.47, z: bz, yaw: 0, width: 1.6, off: 0.04, floorY: y });
-      }
-    }
+    // (chalets.js publishes its benches: the gardens' and the playground's, each facing the road)
+    for (const b of this.chalets.benchSpots || []) registerBench({ x: b.x, y: b.y + 0.47, z: b.z, yaw: b.yaw, width: 1.6, off: 0.04, floorY: b.y });
   },
   /** main.js: the ground height and the house's half-depth (chaletplan HX) for the chalet village's benches. */
   setVillage(height, HX) { this._height = height; this._HX = HX; },
@@ -229,7 +221,9 @@ export const seating = {
     C.cam.lerp(want, 1 - Math.exp(-dt * 10));
     cam.position.copy(C.cam);
     const dir = _f.set(Math.sin(pl.yaw) * Math.cos(pl.pitch), Math.sin(pl.pitch), Math.cos(pl.yaw) * Math.cos(pl.pitch));
-    cam.lookAt(_s.copy(cam.position).add(dir));
+    _s.copy(cam.position).add(dir);
+    if (cam.parent) { cam.parent.updateWorldMatrix(true, false); cam.parent.localToWorld(_s); } // (the chalet's camera: a child of the house, its position in the house frame)
+    cam.lookAt(_s);
   },
 };
 if (typeof window !== 'undefined') window.seating = seating;

@@ -190,24 +190,38 @@
     "done": true
   },
   "geranium_box": {
-    "preview": "01a183ce-6ac3-700a-ae2d-52f5a084ffd4"
+    "preview": "01a183ce-6ac3-700a-ae2d-52f5a084ffd4",
+    "refine": "01a183f8-b7a6-75dc-bb8f-a5988e1e6668",
+    "done": true
   },
   "herb_pot": {
-    "preview": "01a183ce-6a9e-72bd-bd1c-d51f477b7e4b"
+    "preview": "01a183ce-6a9e-72bd-bd1c-d51f477b7e4b",
+    "refine": "01a183f6-8121-73d1-bbfd-4f965e55ce4f",
+    "done": true
   },
   "cactus": {
-    "preview": "01a183ce-6aa1-735b-a796-8fd6810b3461"
+    "preview": "01a183ce-6aa1-735b-a796-8fd6810b3461",
+    "refine": "01a183f2-db84-70d7-a40c-0e0ad7c69c80",
+    "done": true
   },
   "vase": {
-    "preview": "01a183ce-6aa0-72fd-a1c4-784734f851af"
+    "preview": "01a183ce-6aa0-72fd-a1c4-784734f851af",
+    "refine": "01a183f7-8b02-75bd-b538-c36064492a8d",
+    "done": true
   },
   "tealight_lantern": {
-    "preview": "01a183ce-6aa2-7746-af0f-03477927c50e"
+    "preview": "01a183ce-6aa2-7746-af0f-03477927c50e",
+    "refine": "01a183f2-b875-76c2-8a21-d14d7a3aca89",
+    "done": true
   },
   "deer_figurine": {
-    "preview": "01a183ce-6ab0-7151-8628-8605aa266ebd"
+    "preview": "01a183ce-6ab0-7151-8628-8605aa266ebd",
+    "refine": "01a183f3-1e58-72ce-9070-9aa0334011e0",
+    "done": true
   },
   "photo_frame": {
-    "preview": "01a183ce-6ac3-7652-8fdd-2d7e21c852d0"
+    "preview": "01a183ce-6ac3-7652-8fdd-2d7e21c852d0",
+    "refine": "01a183f7-2760-775b-95b2-93d72b4e552f",
+    "done": true
   }
 }

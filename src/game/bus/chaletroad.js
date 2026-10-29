@@ -13,7 +13,7 @@ import { world } from '../../world/world.js';
 import { expressNearest } from '../../world/expressroute.js';
 import { busRoads, makeRoad, roadAt, laneDistance } from './roads.js';
 import { lotAt } from './scenic.js';
-import { HX, HZ } from '../chaletplan.js';
+import { HX, FOOT } from '../chaletplan.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const SC_GRADE = 0.115;
@@ -24,9 +24,10 @@ const HAIRPIN_R = 30, BEND_R = 40;
 // the terraces on the uphill side of each leg: [x from, x to] of the row of plots
 // the rows of plots: [leg, side (-1 uphill, +1 downhill), x from, x to]
 const ROWS = [[0, -1, 438, 590], [0, 1, 470, 590], [1, -1, 410, 640], [1, 1, 404, 590], [2, -1, 368, 590], [2, 1, 404, 600], [3, -1, 352, 608], [3, 1, 362, 585]];
-const PLOT_W = 23;                         // m along the leg (house, its private parking beside it, a gap)
-const PAD_FRONT = 9.4, PAD_DEPTH = 14;     // m from the leg's centre line to the pad, its depth
-const BAY = { w: 5.6, d: 6.0 };            // the private parking beside each house (two cars side by side)
+const PLOT_W = 26;                         // m along the leg: a side garden, the house (eaves 13.5 m), its private parking, gaps
+const PAD_FRONT = 7.5, FRONT_GARDEN = 2.6; // m from the leg's centre line to the pad; the front garden (pad edge to the steps)
+const PAD_DEPTH = FRONT_GARDEN + FOOT.x1 + HX + 1.2; // (the back wall 1.2 m short of the pad's back: the eaves overhang the bank)
+const BAY = { w: 5.4, d: 5.6 };            // the private parking beside each house: two 2.5 x 5 m bays, fenced
 const BANK = 0.7;                          // tan 35 degrees: the terraces' banks
 export const CHALET_PLACE = { x: 500, z: 1075, label: 'Chalet village', r: 200 };
 
@@ -112,16 +113,22 @@ export function planChaletVillage(O) {
     for (let k = 0; k < n; k++) {
       const h = hash(id * 7 + 3), mirror = hash(id * 5 + 1) < 0.45, bs = mirror ? -1 : 1; // (bs: the bay's side of the house)
       const x0 = xa + w * k + 0.5, x1 = xa + w * (k + 1) - 0.5;
-      const hx = mirror ? x1 - 1.2 - HZ : x0 + 1.2 + HZ;
-      const bay = { x: hx + bs * (HZ + 1.3 + BAY.w / 2), z: at(PAD_FRONT + 0.2 + BAY.d / 2), w: BAY.w, d: BAY.d, yaw: sd > 0 ? 0 : Math.PI };
+      // the house faces the road: its frame's +x (the door) toward the leg; its local z runs along the leg, world
+      // +x for a downhill plot, -x uphill (three.js: rotation.y = -PI/2 + yaw, yaw 0 uphill, PI downhill)
+      const wz = sd > 0 ? 1 : -1, lo = Math.min(wz * FOOT.z0, wz * FOOT.z1), hi = Math.max(wz * FOOT.z0, wz * FOOT.z1);
+      const hx = bs > 0 ? x0 + 4.4 - lo : x1 - 4.4 - hi; // (a 4.4 m side garden, the bay on the other side)
+      const bx = bs > 0 ? hx + hi + 1.0 + BAY.w / 2 : hx + lo - 1.0 - BAY.w / 2;
+      const bay = { x: bx, z: at(PAD_FRONT + 0.3 + BAY.d / 2), w: BAY.w, d: BAY.d, yaw: sd > 0 ? 0 : Math.PI };
       const s = nearestS(bay.x, zl);
       roadAt(road, s, P);
       const za = at(PAD_FRONT), zb = at(PAD_FRONT + PAD_DEPTH);
       plots.push({
         id: id++, row: leg * 2 + (sd > 0 ? 1 : 0), leg, side: sd, x0, x1, z0: Math.min(za, zb), z1: Math.max(za, zb), legZ: zl, mirror,
         y: P.y + 0.2 + (sd < 0 ? 0.5 : -0.3), // (uphill pads a little above the road, downhill ones a little below: gentler banks)
-        house: { x: hx, z: at(PAD_FRONT + 3.2 + HX), yaw: sd * Math.PI / 2 + (h - 0.5) * 0.05 },
-        bay, park: { x: bay.x, z: bay.z }, drive: { x: bay.x, z: at(6), s }, front: at(PAD_FRONT + 0.4),
+        house: { x: hx, z: at(PAD_FRONT + FRONT_GARDEN + FOOT.x1), yaw: (sd < 0 ? 0 : Math.PI) + (h - 0.5) * 0.03 },
+        // front: the pad's road edge (z); back: its far edge; out: the way the front faces (+1 / -1 in z)
+        front: za, back: zb, out: -sd, garden: bs > 0 ? [x0, hx + lo - 0.3] : [hx + hi + 0.3, x1],
+        bay, park: { x: bay.x, z: bay.z }, drive: { x: bay.x, z: at(5), s },
         shed: hash(id * 13 + 7) < 0.4, bench: hash(id * 3 + 11) < 0.7,
       });
     }

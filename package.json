@@ -10,7 +10,8 @@
     "assets": "node tools/meshy-generate.mjs",
     "app": "vite build && electron .",
     "app:package": "vite build && electron-packager . \"Ski Legacy\" --platform=darwin --arch=arm64 --out=release --overwrite --icon=build/icon.icns --app-bundle-id=com.skilegacy.game --ignore=\"^/(src|server|docs|tools|assets-src|public|release|build|node_modules|index\\.html|vite\\.config\\.js|\\.env.*)\"",
-    "app:install": "npm run app:package && rm -rf \"/Applications/Ski Legacy.app\" && cp -R \"release/Ski Legacy-darwin-arm64/Ski Legacy.app\" /Applications/"
+    "app:install": "npm run app:package && rm -rf \"/Applications/Ski Legacy.app\" && cp -R \"release/Ski Legacy-darwin-arm64/Ski Legacy.app\" /Applications/",
+    "app:dmg": "bash tools/make-dmg.sh"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.1.0",

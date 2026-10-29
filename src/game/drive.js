@@ -1088,11 +1088,10 @@ export class Drive {
           const dx = g.position.x - cam.position.x, dz = g.position.z - cam.position.z, dist = Math.hypot(dx, dz);
           const f = cam.getWorldDirection(_w), seen = dist < 30 || (dist < 450 && (dx * f.x + dz * f.z) / (dist || 1) > 0.2);
           W.unseen = seen ? 0 : W.unseen + dt;
-          // gone soon: 3 s out of sight, or after 20 s while you're 40 m+ away (it sinks away if you can see it);
-          // never while you're beside it (6 m)
+          // gone once it has been out of sight 3 s (never sinking into the ground in view: Oct 29, the user); never
+          // while you're beside it (6 m)
           const pp = this.player.pos, nearYou = Math.hypot(g.position.x - pp.x, g.position.z - pp.z) < 6;
-          if (W.sinking) { W.sinking += dt; g.position.y -= dt * 1.8; g.updateMatrixWorld(true); if (W.sinking > 0.8) { this.tow(e); continue; } }
-          else if (!W.tow && !nearYou && (W.unseen > 3 || (W.t > 20 && dist > 40))) { if (W.unseen > 3) { this.tow(e); continue; } W.sinking = 1e-3; } // (W.tow: the tow truck fetches it)
+          if (!W.tow && !nearYou && W.unseen > 3) { this.tow(e); continue; } // (W.tow: the tow truck fetches it)
           if (e.astray) continue;
           if (e.smokeFx) { const b = _v.set(0, e.t.size.y * 0.78, e.t.size.z / 2 - 0.8); g.localToWorld(b); e.smokeFx.update(dt, W.t < 60 ? b : null, cam, night, _w.set(0, 0, 1).applyQuaternion(g.quaternion)); }
           if (e.inst) lampsOn(e.inst, night > 0.2 ? 1 : 0, 0.55, 0, { hazard: hazardPhase() }); // (the wreck: hazards, dim tails, headlights on at night)

@@ -303,7 +303,7 @@ export class Traffic {
           else c.wd.t += 2;
           if (c.wd.t >= STUCK_T && c.sinkT === undefined) {
             if (!this.inSight(c.x, c.z)) { this.toLot(c); continue; }
-            if (dP > 6) { c.sinkT = 0; c.toLot = true; }
+            if (dP > 6 && !odd) { c.sinkT = 0; c.toLot = true; } // (a wreck in view waits until you look away)
             continue;
           }
           const away = !this.inSight(c.x, c.z) || dP > 80;
@@ -643,6 +643,7 @@ export class Traffic {
       if (!zn.evict) continue;
       for (const c of this.cars) {
         if (c.mode === 'gone' || c.mode === 'parked' || c.sinkT !== undefined) continue;
+        if ((c.mode === 'wreck' || c.mode === 'knocked') && this.inSight(c.x, c.z)) continue; // (a wreck in view stays put: never sinks into the ground)
         const h = c.l * 0.35, fx = Math.sin(c.yaw) * h, fz = Math.cos(c.yaw) * h;
         const inside = inZone(zn, c.x, c.z) || inZone(zn, c.x + fx, c.z + fz) || inZone(zn, c.x - fx, c.z - fz);
         if (!inside) { if (c.zoneZ === zn) c.zoneT = 0; continue; }
@@ -658,6 +659,7 @@ export class Traffic {
   evict(c) {
     if (!c || c.mode === 'gone' || c.sinkT !== undefined) return;
     if (!this.inSight(c.x, c.z)) { this.despawn(c); return; }
+    if (c.mode === 'wreck' || c.mode === 'knocked') return; // (never sink a wreck in view)
     c.sinkT = 0; c.toLot = false;
   }
 

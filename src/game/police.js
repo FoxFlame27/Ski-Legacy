@@ -31,6 +31,7 @@ import { carTemplate, carInstance, driverEye } from './cars.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { roadGraph, roadNearest, obb } from './towtruck.js';
 import { addTrafficBlocker } from './traffic.js';
+import { Smoke } from './carlights.js';
 import { makeFallbackFigure } from './jobs/props.js';
 import { resetRig } from './jobs/actors.js';
 import { net } from '../net/client.js';
@@ -64,7 +65,11 @@ export const TUNING = {
   ramExtra: 6,       // m/s over your speed at most, closing in for a ram (a PIT: alongside, then a nudge)
   ramMult: 1.2,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
   ramGapS: 2.5,      // s a patrol car drops back after a ram before the next
-  cooldownS: 6,      // s after a chase ends before another hit calls them
+  cooldownS: 6,
+  wreckKmh: 15,      // you hitting a patrol car: damage % = (km/h closing - this) x wreckPer; 100 %: wrecked
+  wreckPer: 0.9,
+  backupS: 9,        // s after a patrol car is wrecked before another comes (the chase goes on meanwhile)
+  wreckStayS: 45,    // s a wreck stays where it is (then gone once out of sight)      // s after a chase ends before another hit calls them
 };
 const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
@@ -407,7 +412,8 @@ export class Police {
       // planned to (gx, gz); progress (stX / stZ every stT s, stuckN failures in a row); the PIT (pitSide, pitT);
       // on foot: fg, the nearest reachable point to you (fgT: re-found); boost: the catch-up)
       ids: null, PX: null, PZ: null, pn: 0, gx: 1e9, gz: 1e9, stX: 0, stZ: 0, stT: 0, stuckN: 0, uturn: 0,
-      pitSide: 0, pitT: 0, ramCool: 0, ram: false, fg: { x: 0, z: 0, ok: false, park: false }, fgT: 0, boost: 1, parked: false };
+      pitSide: 0, pitT: 0, ramCool: 0, ram: false, fg: { x: 0, z: 0, ok: false, park: false }, fgT: 0, boost: 1, parked: false,
+      dmg: 0, wrecked: false, wreckT: 0, smoke: null }; // (you can wreck it: hits(), wreck())
     this.units[k] = u;
     return u;
   }
@@ -465,6 +471,8 @@ export class Police {
   // out of sight 300-500 m from you on the roads, facing the way to you (no roads: off-road behind the camera);
   // strict (a stuck car put back on a road): only out of sight within lo-hi, else nothing happens (false)
   spawn(k, lo0 = TUNING.spawnMin, hi0 = TUNING.spawnMax, strict = false) {
+    if (this.units[k]?.wrecked) k = this.freeUnit(); // (a wreck still stands there: another car)
+    if (k < 0) return false;
     const u = this.unit(k), p = this.target();
     if (!p) return false;
     let best = null;
@@ -506,13 +514,40 @@ export class Police {
     u.on = true; u.x = best.x; u.z = best.z; u.yaw = best.yaw; u.v = 8; u.steer = 0; u.path = null; u.repath = 0; u.mode = 'chase';
     u.stuck = 0; u.rev = 0; u.gone = 0; u.leaveTo = null;
     u.pn = 0; u.gx = 1e9; u.stX = u.x; u.stZ = u.z; u.stT = 0; u.stuckN = 0; u.uturn = 0; u.pitT = 0; u.pitSide = 0; u.ramCool = 0; u.ram = false;
-    u.fgT = 0; u.fg.ok = false; u.boost = 1; u.parked = false; u.avoid.turn = 0; u.avoid.vmax = 99;
+    u.fgT = 0; u.fg.ok = false; u.boost = 1; u.parked = false; u.avoid.turn = 0; u.avoid.vmax = 99; u.dmg = 0;
     u.y = world.groundHeight(u.x, u.z);
     u.g.visible = true;
     this.seatDriver(u);
     if (u.driver) u.driver.visible = true;
     this.place(u);
     return true;
+  }
+  // a patrol car index free to (re)use: not out, not a wreck still standing; -1: all four taken
+  freeUnit() {
+    for (let k = 0; k < 4; k++) { const u = this.units[k]; if (!u || (!u.on && !u.wrecked)) return k; }
+    return -1;
+  }
+  // (the user: "make it so you can hit the police cars too") wrecked: it stops where it is, lights out, smoking,
+  // still solid; out of the chase (no ram, not counted for your escape); another comes after backupS
+  wreck(u) {
+    if (u.wrecked) return;
+    this.dropOfficer(u);
+    u.on = false; u.wrecked = true; u.wreckT = TUNING.wreckStayS; u.v = 0; u.ram = false; u.path = null;
+    u.col.police = 'wreck'; // (a plain solid box now: your car hits it as any obstacle, drive.js; the other patrol cars steer round it)
+    policeLights(u.m, false, 0);
+    u.smoke ||= new Smoke(this.scene);
+    if (this.w) { this.w.backupT = TUNING.backupS; this.note('Police car wrecked! · more are on the way'); }
+    try { this.audio?.impact ? this.audio.impact('car', 1) : this.audio?.play?.('land', 1); } catch { /* (silent) */ }
+  }
+  // the wrecks: smoking; gone once their time is up and you can't see them (or are far away)
+  wrecks(dt) {
+    for (const u of this.units) {
+      if (!u.wrecked) continue;
+      u.wreckT -= dt;
+      if (u.smoke) { const b = (this._wb ||= new THREE.Vector3()).set(0, u.m.size.y * 0.78, u.m.size.z / 2 - 0.8); u.g.localToWorld(b); u.smoke.rate = u.wreckT > TUNING.wreckStayS - 20 ? 5 : 1.5; u.smoke.update(dt, b, this.camera, 0, (this._wf ||= new THREE.Vector3()).set(Math.sin(u.yaw), 0, Math.cos(u.yaw)), 0); }
+      const T = this.target(), far = !T || hyp(u.x, u.z, T.x, T.z) > 150;
+      if (u.wreckT <= 0 && (far || !this.inView(u))) { u.wrecked = false; u.smoke?.clear(); u.g.visible = false; u.col.x = 1e9; u.col.z = 1e9; u.col.police = 'local'; if (u.driver) u.driver.visible = true; }
+    }
   }
   despawn(u) {
     this.dropOfficer(u);
@@ -563,6 +598,7 @@ export class Police {
       if (W && !paused) this.chase(dt, W);
       for (const u of this.units) if (u.on) { if (!W) this.leave(u, dt); if (u.on) policeLights(u.m, true, this.time + u.k * 0.21); }
       this.hits(dt);
+      this.wrecks(dt);
     } catch (e) { if (!this.err) { this.err = true; console.warn('police', e); } }
     this.siren(paused);
     this.hudFrame(paused);
@@ -574,7 +610,12 @@ export class Police {
     const T = this.target();
     if (!T) return;
     const live = this.units.filter((u) => u.on);
-    if (!live.length) { this.clear(); return; }
+    // reinforcements after a wreck (meanwhile the escape keeps counting: nobody is after you)
+    if (W.backupT > 0) { W.backupT -= dt; if (W.backupT <= 0 && live.length < 2) { const k = this.freeUnit(); if (k >= 0) this.spawn(k); } }
+    if (!live.length) {
+      if (W.backupT > 0 && !W.scene) { W.near = Infinity; W.esc += dt; if (W.esc >= TUNING.escapeS) this.escaped(); return; }
+      this.clear(); return;
+    }
     let near = Infinity, lead = live[0];
     for (const u of live) { const d = hyp(u.x, u.z, T.x, T.z); if (d < near) { near = d; lead = u; } }
     W.near = near;
@@ -603,7 +644,7 @@ export class Police {
     if (W.stopT >= TUNING.stopS) { this.begin(W, W.fleeing ? 'arrest' : 'fine', lead, W.fleeing ? 'stopped' : ''); return; }
     // fleeing on foot: an officer runs after you once his car is close (or as close as it gets)
     if (W.fleeing && T.foot && (near < 16 || (lead.parked && near < 90)) && !lead.officer) { this.begin(W, 'arrest', lead, 'foot'); return; }
-    if (W.fleeing && !W.spawned2 && W.t > 2) { W.spawned2 = true; this.spawn(1); }
+    if (W.fleeing && !W.spawned2 && W.t > 2) { W.spawned2 = true; const k = this.freeUnit(); if (k >= 0) this.spawn(k); }
     for (const u of live) this.drivePursuit(u, dt, T, W, u === lead);
   }
 
@@ -1028,12 +1069,15 @@ export class Police {
         if (eff > CRASH_V && this.drive.canCrash()) this.drive.crash(eff, nx, nz, 'car');
         else if (eff > KNOCK_V) this.drive.knock(eff, nx, nz);
         if (this.drive.d?.crash) { e.policeWreck = true; this.wreckE = e; } // (wrecked by the police: not repaired, carrental.js)
+        u.dmg += Math.max(0, closing * 3.6 - TUNING.wreckKmh) * TUNING.wreckPer * 0.35; // (their ram hurts them a little)
         u.v *= u.pitT > 0 ? 0.85 : 0.5; u.ramCool = TUNING.ramGapS; u.pitT = 0; u.pitSide = 0;
       } else if (closing > KNOCK_V && yours > KNOCK_V * 0.6) {
-        // you drove into them: your knock, and (not fleeing yet) now you are
+        // you drove into them: your knock, their damage, and (not fleeing yet) now you are
         this.drive.knock(closing, nx, nz);
+        u.dmg += Math.max(0, closing * 3.6 - TUNING.wreckKmh) * TUNING.wreckPer;
         if (W && !W.fleeing && closing * 3.6 >= TUNING.triggerKmh) this.flee(W);
       }
+      if (u.dmg >= 100) this.wreck(u);
       if (performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); try { this.audio?.impact ? this.audio.impact('car', Math.min(1, 0.3 + closing / 15)) : this.audio?.play?.('land', 0.6); } catch { /* (silent) */ } }
     }
     // other players on foot run into at speed (multiplayer): they call the police too

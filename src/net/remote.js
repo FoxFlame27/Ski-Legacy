@@ -274,6 +274,9 @@ export class RemotePlayers {
     st.normal = UP;
     const skisVisible = !inVeh && (r.state === ST.ski || st.carry);
     if (r.skisShown !== skisVisible) { r.skisShown = skisVisible; rig.setSkisVisible(skisVisible); }
+    // walking with skis: on the back (the rig's carry pose), never on the feet
+    const carry = st.carry && r.state !== ST.ski;
+    if (r.carryShown !== carry) { r.carryShown = carry; rig.setCarry?.(carry); }
     // name tag: a little smaller far away, hidden past TAG_FAR
     const tagOn = d < TAG_FAR;
     if (r.tag.visible !== tagOn) r.tag.visible = tagOn;

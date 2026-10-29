@@ -823,9 +823,13 @@ export class BusLine {
     const half = 3.0;
     roadAt(t, s + half, _p); roadAt(t, s - half, _q);
     const lane = BUS.lane * (1 - 2 * shift); // (overtaking: out into the other lane)
+    // changing lanes the bus steers: the front axle is already further across than the rear (the slope of the path
+    // it traces, lateral speed / forward speed), so it turns out and back in instead of sliding sideways
+    const r = this.ride, slope = r ? clamp((-2 * BUS.lane * (r.shiftV || 0)) / Math.max(2, r.v || 0), -0.2, 0.2) : 0;
+    const lf = lane + slope * half, lr = lane - slope * half;
     // (the right-hand lane: right of the heading (dx, dz) is (-dz, dx))
-    _a.set(_p.x - _p.dz * lane, _p.y, _p.z + _p.dx * lane);
-    _b.set(_q.x - _q.dz * lane, _q.y, _q.z + _q.dx * lane);
+    _a.set(_p.x - _p.dz * lf, _p.y, _p.z + _p.dx * lf);
+    _b.set(_q.x - _q.dz * lr, _q.y, _q.z + _q.dx * lr);
     const g = this.bus.group;
     g.position.addVectors(_a, _b).multiplyScalar(0.5);
     _m.lookAt(_b, _a, _up);
@@ -902,7 +906,7 @@ export class BusLine {
       r.arrive -= dt;
       if (r.arrive <= 0 && !r.turning) {
         r.turning = true;
-        const next = () => { r.li++; r.t = r.legs[r.li]; r.s = r.t.s0; r.v = 0; r.done = false; r.wait = 1.4; r.turning = false; r.passing = false; r.shift = 0; this.place(r.t, r.s); };
+        const next = () => { r.li++; r.t = r.legs[r.li]; r.s = r.t.s0; r.v = 0; r.done = false; r.wait = 1.4; r.turning = false; r.passing = false; r.shift = 0; r.shiftV = 0; this.place(r.t, r.s); };
         transition.fade(async () => { if (this.ride === r) next(); }).catch(() => { if (this.ride === r) next(); });
       }
       this.place(t, r.s);
@@ -920,7 +924,10 @@ export class BusLine {
       // brakes in time and waits. A traffic car that has held it at a standstill for 3 s is taken off the road
       // (traffic.js despawn); a shoved parked car goes back to its bay by itself (drive.js)
       try { vt = Math.min(vt, this.clearAhead(t, r, dt, vt)); } catch (e) { if (!this.clearWarn) { this.clearWarn = true; console.warn('bus clearance', e); } }
-      r.shift = (r.shift || 0) + clamp((r.passing ? 1 : 0) - (r.shift || 0), -0.45 * h, 0.45 * h); // (~2 s to change lanes)
+      // the lane change: a critically damped spring (eases out and in, ~3 s across; Oct 29, the user: "make sure
+      // overtaking is smooth"); place() turns the bus along the path it traces
+      { const W = 2.1, x = r.shift || 0, v = r.shiftV || 0, a = W * W * ((r.passing ? 1 : 0) - x) - 2 * W * v;
+        r.shiftV = v + a * h; r.shift = clamp(x + r.shiftV * h, 0, 1); if (r.shift === 0 || r.shift === 1) r.shiftV *= 0.5; }
       r.v += clamp(vt - r.v, -BUS.brake * 2 * h, BUS.acc * 1.5 * h);
       r.s = Math.min(t.s1, r.s + r.v * h);
       if (r.s >= t.s1 - 0.05) { r.done = true; r.v = 0; r.arrive = 1.2; }

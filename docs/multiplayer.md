@@ -15,6 +15,7 @@ hooks for the next wave of features. Singleplayer is unchanged whenever `isMP()`
 | Remote players | `src/net/remote.js` | The avatars (the game's own skier rig and outfit), snapshot interpolation and name tags. |
 | Remote vehicles | `src/net/vehicles.js` | The other players' cars and helicopter copies, the owner tags on parked ones, and the seat each avatar sits in. |
 | Your car / rides | `src/net/carride.js` | Your car shown to everyone (and put back where you left it), "Ask <owner> for a ride", riding as a passenger. |
+| Shared transport | `src/net/transit.js` | The trains, the express, the gondolas and chairlifts on the shared timelines; boarding waits for the real vehicle and claims a seat; seats go back when you get off; SPACE through `holdSkip`; the other riders' seats as drawn here. |
 | Helicopter pad | `src/net/heli.js` | The pad's copy (shown when the server has one), renting through the server, returning, your copy shown to everyone. |
 | Overlays | `src/net/ui.js` | The status pill, the race line, the speed-up line and the Y/N permission prompt. |
 | Menu | `src/ui/menu.js` | PLAY offers SINGLEPLAYER or MULTIPLAYER. On the first multiplayer launch it asks for a name, then shows connecting, an error, or the world. |
@@ -71,7 +72,10 @@ The server is authoritative for all of the following.
   `npm test` fails if the catalog drifts from the game.
 
 **Uniqueness**
-- Each chalet (ids 0–63, 18 exist) has at most one owner across all worlds, and each player owns at most one chalet.
+- Each player owns at most one chalet, for good (`profile.chalet`: its furniture and layout; `profile.chalet.id` is
+  the plot it last stood on).
+- A chalet **plot** (ids 0–63; the village has 18) is held only while its owner is online, across all worlds
+  (`server.chalets`: plot → online owner). See **Chalet plots** below.
 - Number plates are unique across all players. The plate key ignores spaces and hyphens, so `SKI 1` and `ski-1`
   are the same plate.
 - Each player has one rental car at a time. Renting another car returns the old one and frees its plate.
@@ -97,7 +101,7 @@ The server is authoritative for all of the following.
 - Presence: 25 per second; extra frames are dropped.
 - Frames are at most 64 KiB.
 - A WebSocket ping goes out every 10 s. A client that misses a ping is dropped. On disconnect the server releases
-  the player's seat, race queue entry, helicopter copy and permission grants.
+  the player's seat, race queue entry, helicopter copy, permission grants and chalet plot.
 
 ## The wire protocol
 
@@ -117,7 +121,7 @@ whose `.data` is `d`.
 |---|---|---|
 | `ping` | `{c}` | `pong {c, s: serverMs}` (clock sync; `net` does this every 2 s) |
 | `register` | `{name}` | `{name, token}` · errors `name_taken`, `name_invalid`, `rate` |
-| `login` | `{v: 1, name, token, look?}` | `{proto, name, pid, now, profile, world, chalets: {id: owner}, catalog}` · `bad_login`, `proto` |
+| `login` | `{v: 1, name, token, look?, plots?}` | `{proto, name, pid, now, profile, world, chalets: {plot: owner}, chaletPlot: {id, waiting, moved}, catalog}` · `bad_login`, `proto`. `plots`: the village's house plot ids (the server adopts a list of exactly `catalog.chalet.count` distinct ids 0–63; `catalog.chalet.plots` wins if it exists). |
 | `p` | presence row (below) | relayed to the world at 15 Hz in `P` |
 | `look` | `{c: characterId, o: outfit, s: skiId}` | broadcast `look {pid, look}` |
 | `enter` | `{interior: id \| null}` | approved interior. `chalet:N` needs ownership, an unowned chalet, or a `chaletVisit` grant · `no_permission` |
@@ -130,7 +134,8 @@ whose `.data` is `d`.
 | `raceFinish` | `{rid, time: ms \| null, dnf?}` | `{time}`. The time is trusted only within 3 s of the server's own measurement. |
 | `perm` | `{kind: 'carRide', to: name}` / `{kind: 'chaletVisit', ref: chaletId}` | resolves when the owner answers: `{allow, owner, kind, ref}` (30 s timeout → `allow:false, reason:'timeout'`) · `owner_away`, `pending`, `no_owner` |
 | `permAnswer` | `{rid, allow}` | the owner's answer |
-| `permRevoke` | `{kind, guest}` | the guest gets `permRevoked`, and is kicked from the car or chalet |
+| `permRevoke` | `{kind, guest}` | the guest gets `permRevoked`, and is kicked from the car or chalet; the owner gets `guests` |
+| `chaletFurniture` | `{id}` (a plot) | `{id, owner, chalet: {furniture, plan, layout}}` for its owner or a guest they let in · `no_owner`, `no_permission` |
 | `spend` | `{amount, reason}` | `{money}` · `money`, `bad_amount` |
 | `earn` | `{amount, source: 'job' \| 'secret'}` | `{money}` · `rejected`, `cap` |
 | `buy` | `{kind: 'skis' \| 'outfit', id}` · `{kind: 'chalet', id, name, meta}` · `{kind: 'car', cfg: {id, paint, interior, rims, plate, custom}}` | `{money, ...}` · `money`, `owned`, `taken {owner}`, `one_each`, `plate_taken {plate}`, `bad_plate` |
@@ -148,9 +153,11 @@ whose `.data` is `d`.
 | `P` | `[row, ...]`: the presence rows that changed since the last tick (15 Hz) |
 | `join` / `leave` | `{pid, name, look, pres, interior, chalet}` / `{pid, name}` |
 | `look` | `{pid, look}` |
-| `clock` | `{hour, at, dayMs, weather}`. The hour at server time `at` advances 24 h per `dayMs` (16 min). The weather changes every 80–180 s. |
+| `clock` | `{hour, day, at, dayMs, weather}`. The hour at server time `at` advances 24 h per `dayMs` (16 min); `day` is the day at `at`, +1 at every midnight. The weather changes every 80–180 s. |
 | `money` | `{v, why, delta}`: a server-side change, such as a race prize |
-| `chalet` | `{id, owner}` (sent to every world) |
+| `chalet` | `{id, owner}`: a chalet placed on plot `id`; `owner: null`: the plot is free again (its owner left). Sent to every world. |
+| `chaletPlaced` | `{id}`: you were waiting for a plot; your chalet now stands on `id` |
+| `guests` | `{kind: 'chaletVisit', names}`: the owner's guest list (sent when it changes) |
 | `seats` | `{k, v, occ: [[seat, pid], ...]}` |
 | `skip` | `{k, v, holding, aboard, active}` |
 | `warp` | `{key: 'kind\|line', off, rate, since}` |
@@ -265,7 +272,12 @@ multiplayer.holdSkip(k, v, holding, {rate, line})   // call every frame while se
 multiplayer.skipLine(k, v)                // 'Hold SPACE to speed up (2/3 holding)' or ''
 multiplayer.ui.setSkip(text)              // show it under the status pill
 multiplayer.lineTime('bus|line1')         // the line's timeline in ms
-multiplayer.hourNow()
+multiplayer.hourNow() / dayNow()          // the world's hour / in-game day
+multiplayer.transit                       // MpTransit (net/transit.js): railGate / expressGate / liftGate, seat(k, v, n, out)
+multiplayer.attachTransit({railway, express, lifts, player, expressRate})   // main.js, once
+multiplayer.chaletFurniture(plot)         // -> the owner's furniture (as their guest) | null
+multiplayer.revokeGuest(name)             // permRevoke chaletVisit (the guest list's SEND OUT)
+multiplayer.guests                        // your chalet's guest list (names)
 multiplayer.heliRent() / heliReturn()
 multiplayer.ask('carRide', {to: name}) / ask('chaletVisit', {ref: id})   // -> {allow}
 multiplayer.setInterior(id | null)        // -> bool (the session also does this by itself from mpPose)
@@ -291,19 +303,42 @@ shop's skis, outfits, chalets, the rental car and the helicopter (`heliRent`) do
 
 ## Wave 2
 
-### Shared bus, train, express and gondola seats
+### Shared trains, express, gondolas and chairlifts (done; the buses: pending)
 
-The speed-up server side is done. The client side is not:
+`net/transit.js` (`multiplayer.transit`). Everyone in a world sees the same vehicle in the same place, and rides it
+together, each in their own seat.
 
-- **Seats.** Call `claimSeat('bus', vehicleId, {n: seats})` when boarding and `releaseSeat()` when getting off.
-  Sit the player in the seat it returns. Remote riders already render seated at their presence position
-  (`state` ride or sit), which is right once the vehicles are on the shared timeline.
-- **Timeline.** Drive the timetables from `multiplayer.lineTime(key)` instead of local time, so every client sees
-  the same vehicle in the same place. The bus is `skibus.js` / `bus/bus.js`, the trains `railway.js` /
-  `express.js`, the gondolas and chairlifts `lifts.js`.
-- **Waiting.** Waiting for the bus must stay real: no teleport.
-- **Speed-up.** Replace the local `input.down('Space')` fast-forward with `holdSkip(...)` plus `lineTime`, and show
-  `skipLine` with `ui.setSkip`.
+| System | Kind · vehicle ids | Timeline (`MP.warps` key) | Seats (`n`) | SPACE rate |
+|---|---|---|---|---|
+| Wolkenspitzbahn (`railway.js`) | `train` · `rail-0`, `rail-1` | `train\|rail` (both trains: one timetable) | `train.seatCount` (numbered through its cars) | ×6 |
+| Legacy Express (`express.js`) | `express` · `express-e0..3`, `express-w0..3` | `express\|e` / `express\|w` (a direction each) | the lead car's seats (`express.seatCount`) | ×10 |
+| Gondolas / chairlifts (`lifts.js`) | `gondola` / `chair` · `L<line>-<car>` (`line.mpId`: the lift's index) | `gondola\|L<line>` / `chair\|L<line>` | gondola 6 (two benches of 3), chair from the model's width | ×16 |
+| Buses (`bus/`) | `bus` · `bus:0..7` | pending | pending | pending |
+
+- **Timeline.** In multiplayer each system has an `mp` hook (`railway.mp`, `express.mp`, `lifts.mp`, set by
+  `transit.start()` on entering, cleared on leaving) and places every vehicle from its line's time
+  (`lineTime(key) / 1000`) instead of its own clock: the railway's `t`, the express's `u(train)` per direction, each
+  lift's `placeAt(T)` (car k is where a car leaving s = 0 is after T + k/n of the loop's time: the same time gaps
+  `spreadByTime` sets up). Nothing moves a vehicle for one player: the trains do not stop for you on the track, the
+  express does not bring or hold a train, boarding does not shift the timetable, and Enter (skip to your stop) is off.
+- **Waiting.** Boarding goes through a gate in `main.js` (`railGate` / `expressGate` / `liftGate`):
+  - Wolkenspitzbahn: if no train stands at your platform for your way (`railway.nextAt(station, up)`, off the
+    timetable's boarding windows), you wait on the platform: "next train in 42 s" under the status pill. Walking off
+    the platform (14 m) gives up.
+  - Express: its own platform wait (`express.waitFor` / `waiting`), unchanged, but a train can only be boarded with
+    at least 4 s of its stop left.
+  - Lifts: a seat in the next cabin or chair coming round is claimed at once; you board when it reaches the boarding
+    point ("Your cabin comes in 2 s").
+- **Seats.** When the vehicle is in, the gate claims a seat (`seatClaim {k, v, n, seat}`, `seat`: the one single
+  player gives you, else the lowest free one) and only then boards (and charges the fare): the system takes the seat
+  through `mpPick`. A full vehicle says "Full · wait for the next one" and is skipped. The seat goes back
+  (`seatRelease`) as soon as you are off by any way; after a reconnect it is claimed again.
+- **The other riders.** Their presence row carries `kind:id:seat` (the server's seat registry). `vehicles.seatFor`
+  asks `transit.seat(k, v, n, out)` for that seat in the vehicle as drawn here (`railway.seatWorldAt`,
+  `express.seatWorldAt`, `line.seatInto`), so they sit in it without lag (the presence position is the fallback).
+- **Speed-up.** While you ride, `holdSkip(k, v, SPACE held, {rate, line})` every frame (only changes are sent); the
+  pill shows `skipLine` ("Hold SPACE to speed up (2/3 holding)"). Alone aboard, SPACE works at once. Your own
+  helicopter keeps its local SPACE.
 
 ### Helicopter copies (done)
 
@@ -319,22 +354,38 @@ The speed-up server side is done. The client side is not:
 - **Theirs** (`net/vehicles.js`): a `HeliModel` per renter, flying with their presence (pitch, roll, the rotor
   spinning up), or parked at `at` with "<name>'s helicopter" above it. Their avatar sits in the pilot's seat.
 
-### Chalet owner name tags and visiting
+### Chalet plots (done)
 
-What exists:
+Owning a chalet is for good; the plot it stands on is held only while you are online.
 
-- `MP.chalets` holds the owners.
+- **Leaving.** Your chalet leaves the world with you: `chalet {id, owner: null}` to everyone, guests inside are shown
+  out, and the plot is for sale to anyone (`buy` checks only that no online owner holds it).
+- **Coming back.** At login (`placeChalet`) your chalet goes back onto its old plot if it is free, else onto the free
+  plot nearest it by id (`chaletPlot.moved`: "Your old plot was taken · your chalet is now Chalet 7"). The furniture
+  is the owner's (`profile.chalet.furniture`), so it moves with the chalet. `profile.chalet.id` follows the plot.
+- **No plot free.** `chaletPlot.waiting`: "Every chalet plot is taken · your chalet comes back when one is free". The
+  next plot to free up goes to the owners waiting, first come first served (`chaletPlaced {id}`). While you wait,
+  `save.chalet.id` is null (you own it, it is just not placed).
+- **Logging in again** from elsewhere (`replaced`) keeps your plot.
+
+### Chalet owner name tags and visiting (done)
+
+- **Name tags** (`game/ownertags.js`, which already put your gold name over your own chalet): in multiplayer every
+  placed chalet carries "<owner>'s chalet": yours in gold, the others' in the players' blue (hidden beyond 320 m and
+  indoors). Single player is unchanged.
+- **Visiting.** On the owner's Y, `mpVisitChalet` fetches the owner's furniture (`chaletFurniture`) into
+  `chalets.guestFurniture`; build mode (`guestView`) shows it, to look at only. A chalet with no owner online shows
+  empty.
+- **Guest list.** Inside your own chalet with guests, the status pill lists them, each with SEND OUT (TAB frees the
+  mouse): `permRevoke`, the guest is shown out (`kickInterior`). The list comes from the server (`guests`).
+
+Also:
+
+- `MP.chalets` holds the placed chalets (plot → online owner).
 - `chalets.mp.ownerOf` already keeps a chalet that someone else owns off the market. It shows
   "Chalet 3 · Alice's chalet · ask to visit".
 - E asks the owner: `mpVisitChalet` in `main.js`. On Y the guest enters with `chalets.viewing`. On
-  `kickInterior` (the owner took the visit back), `mpKickInterior` takes them out.
-
-To do:
-
-- the name tag above each chalet;
-- the owner's list of guests and `permRevoke`;
-- the visitor's view of the owner's furniture. The server only stores it per profile; a `chaletFurniture`
-  request does not exist yet.
+  `kickInterior` (the owner took the visit back, or left), `mpKickInterior` takes them out.
 
 ### Car passengers and everyone's cars (done)
 
@@ -376,6 +427,9 @@ plate a new configuration starts with, come from `plateIssue` (a plate nobody ha
 
 See **Races** above: the grid slots, the live board, the results card.
 
-### Day counter
+### Day counter (done)
 
-`save.day`, which the day pass uses, is still counted locally. Derive it from the world clock.
+In multiplayer `save.day` (the day pass, the jobs) is the world clock's day: `clock.day` + the midnights since
+`clock.at` (`multiplayer.dayNow()`, set every frame; `main.js` no longer counts days in multiplayer). Day 1 is
+`DAY_EPOCH` (Oct 1 2026) and every world starts on the global day `dayFor(now)`, so a day pass is the same day in
+every world.

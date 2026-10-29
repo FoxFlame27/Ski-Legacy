@@ -26,6 +26,10 @@ export const RACE_WAIT_MS = 30 * 1000;     // queue countdown once 2 are in
 export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ahead (everyone counts down together)
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
 export const PERM_TIMEOUT_MS = 30 * 1000;
+// the in-game day: 1 on DAY_EPOCH, +1 at every world midnight (one game day = DAY_MS). Global, so a day pass
+// bought in one world is the same day in another
+export const DAY_EPOCH = Date.UTC(2026, 9, 1);
+export const dayFor = (now = Date.now()) => 1 + Math.floor((now - DAY_EPOCH) / DAY_MS);
 const HEARTBEAT_MS = 10000;
 const NAME_RE = /^[A-Za-z0-9_ -]{3,16}$/;
 // seats per vehicle kind (a client may ask for fewer with n): the lowest free one is assigned
@@ -86,7 +90,7 @@ class World {
     this.nextPid = 1;
     const now = Date.now();
     // the clock: hour at `at` (server ms), advancing 24 h per DAY_MS; the weather and when it moves on
-    this.clock = { hour: 9.5, at: now, weather: 'clear', next: now + 75000 };
+    this.clock = { hour: 9.5, at: now, day: dayFor(now), weather: 'clear', next: now + 75000 };
     this.seats = new Map();   // vkey 'kind|id' -> Map(seat -> pid)
     this.holds = new Map();   // vkey -> Set(pid) holding the skip key
     this.vmeta = new Map();   // vkey -> { line, rate }
@@ -101,7 +105,9 @@ class World {
   get size() { return this.players.size; }
 
   hourAt(now = Date.now()) { return (((this.clock.hour + ((now - this.clock.at) / DAY_MS) * 24) % 24) + 24) % 24; }
-  clockMsg(now = Date.now()) { return { hour: this.hourAt(now), at: now, dayMs: DAY_MS, weather: this.clock.weather }; }
+  /** The in-game day at `now`: the clock's day, +1 at every midnight since (client: session.dayNow mirrors this). */
+  dayAt(now = Date.now()) { return this.clock.day + Math.floor((this.clock.hour + ((now - this.clock.at) / DAY_MS) * 24) / 24); }
+  clockMsg(now = Date.now()) { return { hour: this.hourAt(now), day: this.dayAt(now), at: now, dayMs: DAY_MS, weather: this.clock.weather }; }
 
   broadcast(t, d, except = null) {
     const s = JSON.stringify({ t, d });
@@ -124,8 +130,8 @@ class World {
   tick(now) {
     if (now >= this.clock.next) {
       const opts = WEATHER_NEXT[this.clock.weather] || WEATHER_NEXT.clear;
-      const h = this.hourAt(now);
-      this.clock = { hour: h, at: now, weather: opts[Math.floor(Math.random() * opts.length)], next: now + 80000 + Math.random() * 100000 };
+      const h = this.hourAt(now), day = this.dayAt(now);
+      this.clock = { hour: h, at: now, day, weather: opts[Math.floor(Math.random() * opts.length)], next: now + 80000 + Math.random() * 100000 };
       this.broadcast('clock', this.clockMsg(now));
     }
     if (this.dirty.size) {
@@ -438,6 +444,8 @@ class Client {
     this.seat = null;      // { k, v, seat }
     this.vehs = { car: null, heli: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? } (setVeh)
     this.queue = null;     // race id queued for
+    this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
+    this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
     this.bucket = new Bucket(120, 60);
     this.pBucket = new Bucket(30, 25);
     this.earned = [];      // [t, amount] over the last hour
@@ -445,7 +453,7 @@ class Client {
   sendRaw(s) { if (this.ws.readyState === 1) this.ws.send(s); }
   send(t, d) { this.sendRaw(JSON.stringify({ t, d })); }
   res(id, ok, d, err) { if (id == null) return; this.sendRaw(JSON.stringify(ok ? { t: 'res', id, ok: true, d } : { t: 'res', id, ok: false, err, d })); }
-  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.profile?.chalet?.id ?? null, vehs: this.vehs }; }
+  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.plot, vehs: this.vehs }; }
 }
 
 // ------------------------------------------------------------------ the server
@@ -464,11 +472,16 @@ export class GameServer {
     this.regByIp = new Map(); // ip -> [t]: at most 5 new names an hour from one address
     // global registries, rebuilt from the profiles
     this.plates = new Map(); // plateKey -> nameKey
-    this.chalets = new Map(); // chalet id -> nameKey
     for (const [k, p] of Object.entries(this.store.profiles.data)) {
-      if (p.chalet && isInt(p.chalet.id)) this.chalets.set(p.chalet.id, k);
       for (const car of p.cars || []) if (car.plate) this.plates.set(plateKey(car.plate), k);
     }
+    // chalets: OWNING one is for good (profile.chalet: its furniture and layout, and profile.chalet.id, the plot it
+    // last stood on); the PLOT (1 of the village's 18) is held only while its owner is online. Offline, the plot is
+    // free (anyone may buy a chalet there); back online, the owner gets the old plot if it is free, else another free
+    // one (the furniture is the owner's, so it moves along), else waits for one (chaletWait, first come first served)
+    this.chalets = new Map(); // plot id -> nameKey of the ONLINE owner whose chalet stands there
+    this.chaletWait = [];     // nameKeys of online owners without a plot
+    this.plotIds = Array.isArray(CATALOG.chalet?.plots) ? CATALOG.chalet.plots.slice() : null; // the village's house plots (else: from a login, plotsHint)
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -537,6 +550,7 @@ export class GameServer {
       w.removePlayer(c);
       if (!w.size) { this.worlds.delete(w.id); clearTimeout(w.heli.timer); }
     }
+    this.unplaceChalet(c);
     this.dropGrants(c.key);
     this.store.profiles.save();
     this.log(`[-] ${c.name} (${this.online.size} online)`);
@@ -561,15 +575,25 @@ export class GameServer {
   // ---------------------------------------------------------------- permissions
   hasGrant(kind, ownerKey, guestKey) { return this.grants.has(`${kind}|${ownerKey}|${guestKey}`); }
   dropGrants(k) {
-    for (const g of [...this.grants]) { const [, o, gu] = g.split('|'); if (o === k || gu === k) this.grants.delete(g); }
+    const owners = new Set();
+    for (const g of [...this.grants]) { const [kind, o, gu] = g.split('|'); if (o === k || gu === k) { this.grants.delete(g); if (kind === 'chaletVisit' && o !== k) owners.add(o); } }
     for (const [rid, p] of [...this.pending]) if (p.from.key === k || p.to.key === k) this.answerPerm(rid, false, 'gone');
+    for (const o of owners) this.sendGuests(o);
+  }
+  /** The owner's guest list (chalet visitors allowed in): 'guests' { kind, names } to the owner. */
+  sendGuests(ownerKey, kind = 'chaletVisit') {
+    const o = this.online.get(ownerKey);
+    if (!o) return;
+    const pre = `${kind}|${ownerKey}|`, names = [];
+    for (const g of this.grants) if (g.startsWith(pre)) names.push(this.store.accounts.data[g.slice(pre.length)]?.name || '?');
+    o.send('guests', { kind, names });
   }
   answerPerm(rid, allow, reason = null) {
     const p = this.pending.get(rid);
     if (!p) return false;
     this.pending.delete(rid);
     clearTimeout(p.timer);
-    if (allow) this.grants.add(`${p.kind}|${p.to.key}|${p.from.key}`);
+    if (allow) { this.grants.add(`${p.kind}|${p.to.key}|${p.from.key}`); if (p.kind === 'chaletVisit') this.sendGuests(p.to.key); }
     p.from.res(p.reqId, true, { allow: !!allow, reason, kind: p.kind, owner: p.to.name, ref: p.ref });
     if (!allow && reason !== 'gone') p.to.send('permClosed', { rid, reason: reason || 'denied' });
     return true;
@@ -629,6 +653,7 @@ export class GameServer {
         return reply({});
       }
       case 'permRevoke': return reply(this.permRevoke(c, d));
+      case 'chaletFurniture': return reply(this.chaletFurniture(c, d));
       case 'spend': return reply(this.spend(c, d));
       case 'earn': return reply(this.earn(c, d));
       case 'buy': return reply(this.buy(c, d));
@@ -678,18 +703,20 @@ export class GameServer {
     const h1 = Buffer.from(sha(d.token), 'hex'), h2 = Buffer.from(a.hash, 'hex');
     if (h1.length !== h2.length || !crypto.timingSafeEqual(h1, h2)) return { err: 'bad_login' };
     const old = this.online.get(k);
-    if (old) { old.send('bye', { reason: 'replaced' }); old.ws.close(4001, 'replaced'); this.onClose(old); }
+    if (old) { old.send('bye', { reason: 'replaced' }); old.ws.close(4001, 'replaced'); old.replacing = true; this.onClose(old); }
     c.name = a.name; c.key = k;
     c.profile = this.store.profiles.data[k] ||= newProfile(a.name);
     if (d.look && typeof d.look === 'object') c.look = { c: str(d.look.c, 32), o: d.look.o && JSON.stringify(d.look.o).length < 400 ? d.look.o : null, s: str(d.look.s, 32) };
     this.online.set(k, c);
+    this.plotsHint(d.plots);
+    this.placeChalet(c); // (your chalet back on its plot, or another free one; before 'join' carries it)
     const w = this.pickWorld(k);
     w.addPlayer(c);
     this.log(`[+] ${c.name} -> world ${w.id} (${w.size}/${MAX_PLAYERS}, ${this.online.size} online)`);
     return {
       d: {
         proto: PROTO, name: c.name, pid: c.pid, now: Date.now(), profile: c.profile, world: w.snapshot(),
-        chalets: Object.fromEntries([...this.chalets].map(([id, ok]) => [id, this.store.accounts.data[ok]?.name || '?'])),
+        chalets: this.chaletsMsg(), chaletPlot: { id: c.plot, waiting: c.chaletWaiting, moved: !!c.plotMoved },
         catalog: CATALOG,
       },
     };
@@ -782,7 +809,10 @@ export class GameServer {
     if (!g || !this.grants.delete(`${d.kind}|${c.key}|${g.key}`)) return { err: 'no_grant' };
     g.send('permRevoked', { kind: d.kind, owner: c.name });
     if (d.kind === 'carRide' && g.world) g.world.kickFromCar(c.name, g.pid);
-    if (d.kind === 'chaletVisit' && g.interior === `chalet:${c.profile.chalet?.id}`) { g.interior = null; g.send('kickInterior', { interior: `chalet:${c.profile.chalet?.id}` }); }
+    if (d.kind === 'chaletVisit') {
+      if (c.plot != null && g.interior === `chalet:${c.plot}`) { g.interior = null; g.send('kickInterior', { interior: `chalet:${c.plot}` }); }
+      this.sendGuests(c.key);
+    }
     return {};
   }
 
@@ -834,7 +864,7 @@ export class GameServer {
     }
     if (kind === 'chalet') {
       const id = d.id;
-      if (!isInt(id) || id < 0 || id > 63) return { err: 'bad_item' };
+      if (!isInt(id) || id < 0 || id > 63 || (this.plotIds && !this.plotIds.includes(id))) return { err: 'bad_item' };
       const owner = this.chalets.get(id);
       if (owner) return { err: 'taken', d: { owner: this.store.accounts.data[owner]?.name } };
       if (P.chalet) return { err: 'one_each', d: { id: P.chalet.id } };
@@ -842,6 +872,7 @@ export class GameServer {
       const meta = d.meta && typeof d.meta === 'object' && JSON.stringify(d.meta).length < 400 ? d.meta : {};
       P.chalet = { ...meta, id, name: str(d.name, 40) || `Chalet ${id}`, owned: true, rented: true, furniture: [], since: Date.now() };
       this.chalets.set(id, c.key);
+      c.plot = id;
       this.broadcastAll('chalet', { id, owner: c.name });
       return { d: { money: P.money, chalet: P.chalet } };
     }
@@ -920,6 +951,71 @@ export class GameServer {
     }
     this.store.profiles.save();
     return {};
+  }
+
+  // ---------------------------------------------------------------- chalet plots (held while the owner is online)
+  chaletsMsg() { return Object.fromEntries([...this.chalets].map(([id, k]) => [id, this.store.accounts.data[k]?.name || '?'])); }
+  /** A login's list of the village's house plots (the client knows the village; the catalog may not): adopted
+   *  when it is a plausible list (distinct ids 0-63, as many as the catalog's chalet count). */
+  plotsHint(list) {
+    if (CATALOG.chalet?.plots || !Array.isArray(list)) return;
+    const n = CATALOG.chalet?.count || 18;
+    if (list.length !== n || !list.every((x) => isInt(x) && x >= 0 && x <= 63) || new Set(list).size !== n) return;
+    this.plotIds = list.slice().sort((a, b) => a - b);
+  }
+  /** The free plot nearest (by id) to `near`, or null. */
+  freePlot(near = 0) {
+    let best = null;
+    for (const id of this.plotIds || []) if (!this.chalets.has(id) && (best === null || Math.abs(id - near) < Math.abs(best - near))) best = id;
+    return best;
+  }
+  /** An owner comes online: their chalet onto its old plot if free, else another free plot, else they wait. */
+  placeChalet(c) {
+    const ch = c.profile?.chalet;
+    if (!ch || !isInt(ch.id)) return null;
+    if (c.plot != null && this.chalets.get(c.plot) === c.key) return c.plot;
+    const id = !this.chalets.has(ch.id) ? ch.id : this.freePlot(ch.id);
+    if (id === null) {
+      c.plot = null; c.chaletWaiting = true;
+      if (!this.chaletWait.includes(c.key)) this.chaletWait.push(c.key);
+      return null;
+    }
+    this.chaletWait = this.chaletWait.filter((k) => k !== c.key);
+    c.chaletWaiting = false;
+    c.plotMoved = ch.id !== id;
+    if (ch.id !== id) { ch.id = id; this.store.profiles.save(); }
+    c.plot = id;
+    this.chalets.set(id, c.key);
+    this.broadcastAll('chalet', { id, owner: c.name });
+    return id;
+  }
+  /** An owner goes offline: the plot is free (for sale); guests inside are shown out; a waiting owner gets it. */
+  unplaceChalet(c) {
+    this.chaletWait = this.chaletWait.filter((k) => k !== c.key);
+    const id = c.plot;
+    c.plot = null;
+    if (id == null || this.chalets.get(id) !== c.key) return;
+    this.chalets.delete(id);
+    if (c.replacing) return; // (the same player logging in again: the new connection takes the plot straight back)
+    const room = `chalet:${id}`;
+    for (const g of this.online.values()) if (g !== c && g.interior === room) { g.interior = null; g.send('kickInterior', { interior: room }); }
+    this.broadcastAll('chalet', { id, owner: null });
+    while (this.chaletWait.length) {
+      const w = this.online.get(this.chaletWait.shift());
+      if (!w || !w.profile?.chalet || w === c) continue;
+      w.profile.chalet.id = id;
+      if (this.placeChalet(w) === id) { w.send('chaletPlaced', { id }); break; }
+    }
+  }
+  /** The furniture of the chalet on plot `id` (its owner, or a guest the owner let in): { id, owner, chalet }. */
+  chaletFurniture(c, d) {
+    const id = d.id;
+    if (!isInt(id)) return { err: 'bad_item' };
+    const k = this.chalets.get(id);
+    if (!k) return { err: 'no_owner' };
+    if (k !== c.key && !this.hasGrant('chaletVisit', k, c.key)) return { err: 'no_permission' };
+    const ch = this.profileOf(k)?.chalet || {};
+    return { d: { id, owner: this.store.accounts.data[k]?.name || '?', chalet: { furniture: ch.furniture || [], plan: ch.plan, layout: ch.layout } } };
   }
 
   broadcastAll(t, d) { const s = JSON.stringify({ t, d }); for (const c of this.online.values()) c.sendRaw(s); }

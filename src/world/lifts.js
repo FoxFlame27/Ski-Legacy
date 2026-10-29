@@ -102,6 +102,7 @@ class LiftLine {
     // travel time (not distance), so every cabin keeps the same time gap through the station
     if (this.mid) this.spreadByTime();
     this.carPos = this.cars.map(() => new THREE.Vector3());
+    this.loopTimes();
     this.tmp = new THREE.Object3D();
   }
 
@@ -120,6 +121,70 @@ class LiftLine {
     for (let i = 0; i < n; i++) car.s = (((car.s + this.speedAt(car.s) * h) % L2) + L2) % L2;
   }
   inStation(s) { return !!this.mid && Math.abs(this.uOf(s) - this.mid.u) < MID_HALF; }
+  // ---- multiplayer (net/transit.js): every car's place from a time T (s, the line's shared timeline), so everyone
+  // sees the same cabin in the same place. Car k sits where a car leaving s = 0 is after T + k/n of the loop's time
+  // (the same equal time gaps spreadByTime sets up; with no mid-station that is plain distance / speed)
+  loopTimes() {
+    const L2 = 2 * this.L;
+    if (!this.mid) { this.loopT = { P: L2 / this.cfg.speed, steps: 0, times: null }; return; }
+    const steps = Math.ceil(L2 / 2), times = new Float64Array(steps + 1);
+    for (let i = 1; i <= steps; i++) times[i] = times[i - 1] + (L2 / steps) / this.speedAt((i - 0.5) * (L2 / steps));
+    this.loopT = { P: times[steps], steps, times };
+  }
+  // loop position after time tau (0..P) from s = 0
+  sAfter(tau) {
+    const T = this.loopT, L2 = 2 * this.L;
+    if (!T.times) return (tau / T.P) * L2;
+    let lo = 0, hi = T.steps;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T.times[m] <= tau) lo = m; else hi = m; }
+    const span = T.times[lo + 1] - T.times[lo] || 1;
+    return ((lo + (tau - T.times[lo]) / span) * L2) / T.steps;
+  }
+  placeAt(T) {
+    const P = this.loopT.P, n = this.cars.length, L2 = 2 * this.L;
+    for (let k = 0; k < n; k++) {
+      const tau = ((((T + (P * k) / n) % P) + P) % P);
+      this.cars[k].s = this.sAfter(tau) % L2;
+    }
+  }
+  /** The car next at loop position `target`: { idx, t } (t: s until it is there; < 0: it passed t s ago, at most a
+   *  moment). Nothing is moved (multiplayer: you wait for it). */
+  nextCar(target) {
+    const L2 = 2 * this.L;
+    let best = null;
+    for (let i = 0; i < this.cars.length; i++) {
+      const s = this.cars[i].s, ahead = (((s - target) % L2) + L2) % L2;
+      const t = ahead < 1.5 ? -ahead / this.speedAt(s) : this.travelTime(s, (((target - s) % L2) + L2) % L2);
+      if (!best || t < best.t) best = { idx: i, t };
+    }
+    return best;
+  }
+  /** Seats per cabin / chair (the seat registry's n): a gondola's two benches of 3; a chair as wide as the model. */
+  get seatCount() {
+    if (this.spec.type !== 'chair') return 6;
+    const w = this.carSize ? Math.max(this.carSize.x, this.carSize.z) : 2;
+    return Math.max(1, Math.min(6, Math.floor((w * 0.85) / 0.62)));
+  }
+  /** The seat single player gives you (the gondola's bench facing forward, middle; a chair's seat right of centre). */
+  get preferredSeat() {
+    if (this.spec.type !== 'chair') return 1;
+    const n = this.seatCount;
+    let best = 0;
+    for (let k = 0; k < n; k++) if (Math.abs((k - (n - 1) / 2) * 0.62 - 0.35) < Math.abs((best - (n - 1) / 2) * 0.62 - 0.35)) best = k;
+    return best;
+  }
+  /** Seat n of car carIdx now: into out (world), its facing (fwd: into outFwd if given) as a heading. */
+  seatInto(carIdx, n, out, outFwd = null) {
+    const c = this.cfg, p = this.carPos[carIdx], side = this.cars[carIdx].side || 1;
+    const fx = this.dir.x * side, fz = this.dir.z * side;
+    out.copy(p); out.y -= c.seatDrop;
+    let lat, along, face = 1;
+    if (this.spec.type === 'chair') { const m = this.seatCount; lat = (Math.min(n, m - 1) - (m - 1) / 2) * 0.62; along = 0.1; }
+    else { const b = n >= 3 ? 1 : 0; lat = ((n % 3) - 1) * 0.55; along = b ? 0.55 : -0.55; face = b ? -1 : 1; }
+    out.x += fx * along + this.sideV.x * lat; out.z += fz * along + this.sideV.z * lat;
+    if (outFwd) outFwd.set(fx * face, 0, fz * face);
+    return Math.atan2(fx * face, fz * face);
+  }
   spreadByTime() {
     // loop time at line speed vs. real loop time with the slow zone: place cabins at equal time steps
     let t = 0;
@@ -320,6 +385,9 @@ class LiftLine {
     const hi = bakeGeometry(models[c.model], { size: c.carH, axis: 'y' });
     const lo = bakeGeometry(models[c.model], { size: c.carH, axis: 'y', decimate: 0.05 });
     if (hi.geometry) {
+      hi.geometry.computeBoundingBox?.();
+      const bb = hi.geometry.boundingBox;
+      if (bb) this.carSize = { x: bb.max.x - bb.min.x, z: bb.max.z - bb.min.z }; // (a chair's seats: multiplayer)
       const count = Math.floor((2 * this.L) / c.carGap);
       const mk = (b, shadow) => {
         b.geometry.translate(0, -c.carH, 0); // hang from the top of the grip
@@ -448,12 +516,13 @@ class LiftLine {
     this.group.add(g);
   }
 
-  update(dt, timeScale, viewer) {
+  update(dt, timeScale, viewer, T = null) {
     const d = this.tmp;
     let nNear = 0, nFar = 0;
+    if (T !== null) this.placeAt(T); // (multiplayer: from the shared timeline)
     for (let i = 0; i < this.cars.length; i++) {
       const car = this.cars[i];
-      if (dt > 0) {
+      if (dt > 0 && T === null) {
         if (this.mid) this.advance(car, dt * timeScale);
         else car.s = (car.s + this.cfg.speed * dt * timeScale) % (2 * this.L);
       }
@@ -475,7 +544,8 @@ class LiftLine {
     }
   }
 
-  seatFor(carIdx) {
+  seatFor(carIdx, n = -1) {
+    if (n >= 0) { const pos = new THREE.Vector3(), fwd = new THREE.Vector3(); this.seatInto(carIdx, n, pos, fwd); return { pos, fwd }; } // (multiplayer: your seat)
     const c = this.cfg;
     const p = this.carPos[carIdx];
     const side = this.cars[carIdx].side;
@@ -1013,7 +1083,7 @@ export class Lifts {
     layout.onAdd((kind, obj) => { if (kind === 'lift') this.add(obj); });
   }
 
-  add(spec) { this.lines.push(new LiftLine(spec, this.models, this.scene, this.colliders)); }
+  add(spec) { const l = new LiftLine(spec, this.models, this.scene, this.colliders); l.mpId = this.lines.length; this.lines.push(l); }
 
   /** Swap every mid-station to the Meshy hall (the gltf of models/gondola_terminal) or back to the built hall (null). */
   setMidModel(gltf) {
@@ -1038,7 +1108,7 @@ export class Lifts {
       if (!near) continue;
       // fast-forwarding rides slow to x2 while the rider's cabin crawls through a mid-station (time to get off)
       const ts = r?.line === l && l.inStation(l.cars[r.idx].s) ? Math.min(this.timeScale, 2) : this.timeScale;
-      l.update(dt, ts, playerPos);
+      l.update(dt, ts, playerPos, this.mp ? this.mp.time(l) : null); // (multiplayer: the line's shared timeline, net/transit.js)
     }
   }
 
@@ -1068,8 +1138,17 @@ export class Lifts {
   }
 
   /** Board the next cabin: at the bottom (up) / top (down) station, or at the mid-station when `stop` is given. */
+  /** The loop position a rider boards at: the bottom (up), the top (down) or the mid-station (stop). */
+  boardTarget(line, up, stop = null) { return stop && line.mid ? (up ? line.mid.u : 2 * line.L - line.mid.u) : (up ? 0 : line.L); }
   board(line, up, stop = null) {
     const atMid = !!(stop && line.mid);
+    const pick = this.mp ? this.mpPick : null; // multiplayer: the cabin you waited for and the seat the server gave you
+    this.mpPick = null;
+    if (pick) {
+      line.update(0, 1, null, this.mp.time(line));
+      this.ride = { line, idx: pick.idx, up, t: 0, clearOfStop: !atMid, seat: pick.seat };
+      return line.seatFor(pick.idx, pick.seat);
+    }
     const target = atMid ? (up ? line.mid.u : 2 * line.L - line.mid.u) : (up ? 0 : line.L);
     const { idx, t } = line.pickCar(target);
     // bring that cabin to the boarding point: the whole loop moves on (or back) by the same time
@@ -1098,7 +1177,7 @@ export class Lifts {
     const line = r.line;
     const car = line.cars[r.idx];
     const L = line.L;
-    const seat = line.seatFor(r.idx);
+    const seat = line.seatFor(r.idx, r.seat ?? -1);
     const arrived = r.up ? car.s >= L - 3 : car.s >= 2 * L - 3 || car.s < 1;
     if (!arrived) {
       if (line.mid) {

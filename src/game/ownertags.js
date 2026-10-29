@@ -4,6 +4,8 @@
 // (net/remote.js makeTag), in gold, with your multiplayer name if you have one, else "You". Hidden while you are in
 // it and beyond TAG_FAR. mapMarkers() gives the trail map (ui/trailmap.js) "Your car", "Impounded car", "Your
 // chalet" and "Your helicopter".
+// Multiplayer: every chalet placed in the world carries "<owner>'s chalet" (yours in gold, the others' in the players'
+// blue), from MP.chalets (the plots held by owners who are online: an offline owner's chalet is not there).
 // Hosted by carrental.js (its update runs every frame); it reads the chalets and the helicopter off window.__game.
 import * as THREE from 'three';
 import { makeTag } from '../net/remote.js';
@@ -12,6 +14,7 @@ import { world } from '../world/world.js';
 
 const TAG_FAR = 320;   // m: tags hidden beyond
 const GOLD = '#9a6a00';
+const BLUE = '#1f5fd1';
 
 /** Your name for tags: the multiplayer name (in a session, else the one you registered), or "You". */
 export function ownerName() {
@@ -39,7 +42,15 @@ export class OwnerTags {
     if (st) out.push({ key: 'car', x: st.x, y: st.y + 2.2, z: st.z, label: st.impounded ? 'Impounded car' : 'Your car', impounded: st.impounded });
     else if (e?.car && !e.driving) out.push({ key: 'car', x: e.car.position.x, y: e.car.position.y + 2.2, z: e.car.position.z, label: 'Your car' });
     const ch = G?.chalets, h = ch?.rented?.();
-    if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet' }); }
+    if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: MP.active ? `${this.name}'s chalet` : null }); }
+    if (MP.active && MP.chalets && ch?.houses && !ch.inside) for (const id in MP.chalets) { // (the other players' chalets)
+      const owner = MP.chalets[id];
+      if (!owner || owner === MP.name) continue;
+      const oh = ch.houses.find((x) => x.id === +id);
+      if (!oh?.frame) continue;
+      const p = oh.frame.position;
+      out.push({ key: `chalet:${id}`, x: p.x, y: p.y + 10.5, z: p.z, label: `${owner}'s chalet`, text: `${owner}'s chalet`, color: BLUE, other: true });
+    }
     const heli = G?.heli;
     if (heli && heli.state === 'parked' && heli.away && heli.flight?.pos) { const p = heli.flight.pos; out.push({ key: 'heli', x: p.x, y: world.height(p.x, p.z) + 4.6, z: p.z, label: 'Your helicopter' }); }
     return out;
@@ -60,8 +71,9 @@ export class OwnerTags {
     const seen = new Set();
     for (const o of this.list) {
       let s = this.tags[o.key];
-      if (!s) { s = this.tags[o.key] = makeTag(o.impounded ? `${name} · impounded` : name, GOLD); s.userData.impounded = !!o.impounded; this.scene.add(s); }
-      if (s.userData.impounded !== !!o.impounded) { s.removeFromParent(); s.material.map?.dispose(); s.material.dispose(); delete this.tags[o.key]; continue; } // (rebuilt next time)
+      const text = o.text || (o.impounded ? `${name} · impounded` : name);
+      if (!s) { s = this.tags[o.key] = makeTag(text, o.color || GOLD); s.userData.impounded = !!o.impounded; s.userData.text = text; this.scene.add(s); }
+      if (s.userData.impounded !== !!o.impounded || s.userData.text !== text) { s.removeFromParent(); s.material.map?.dispose(); s.material.dispose(); delete this.tags[o.key]; continue; } // (rebuilt next time)
       s.position.set(o.x, o.y, o.z);
       seen.add(o.key);
     }
@@ -81,6 +93,6 @@ export class OwnerTags {
 
   /** For the trail map: [{ x, z, label, kind: 'car' | 'impound' | 'chalet' | 'heli' }]. */
   mapMarkers() {
-    try { return this.owned().map((o) => ({ x: o.x, z: o.z, label: o.label, kind: o.impounded ? 'impound' : o.key })); } catch { return []; }
+    try { return this.owned().filter((o) => !o.other).map((o) => ({ x: o.x, z: o.z, label: o.label, kind: o.impounded ? 'impound' : o.key })); } catch { return []; }
   }
 }

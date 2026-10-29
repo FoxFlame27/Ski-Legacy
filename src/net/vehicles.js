@@ -23,6 +23,7 @@ const TAG_FAR = 130;    // m: owner tags hidden beyond
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const _d = new THREE.Vector3();
 const SEATS = new WeakMap();
+const TRANSIT = new Set(['train', 'express', 'gondola', 'chair', 'bus']); // (shared transport: net/transit.js)
 
 /** The seat points of a car template in the car's frame (+x the driver's side, +z forward): 0 the driver, 1 the front
  *  passenger, 2.. the back (outboard behind the driver, behind the passenger, the middle; a third row: then those).
@@ -225,6 +226,11 @@ export class RemoteVehicles {
   seatFor(r, out) {
     r.inLocal = false;
     parseVeh(r);
+    if (TRANSIT.has(r.vehK) && this.o.transitSeat) { // a shared train / express / cabin / chair / bus (net/transit.js)
+      const yaw = this.o.transitSeat(r.vehK, r.vehOwner, r.vehSeat, out);
+      if (yaw !== null && yaw !== undefined) { r.seatYaw = yaw; return true; }
+      return false;
+    }
     if (r.state === ST.fly) {
       const h = this.helis.get(r.pid);
       if (!h) return false;

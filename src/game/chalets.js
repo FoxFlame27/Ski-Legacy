@@ -813,6 +813,7 @@ export class Chalets {
       this.inside = false; this.room?.leave();
       this.current = null;
       if (this.viewing === h && this.rented() !== h) this.viewing = null;
+      this.guestFurniture = null; // (multiplayer: the owner's furniture you saw as their guest)
       this.getPost().setView(this.scene, this.camera);
       const ch = document.getElementById('crosshair'); if (ch) ch.hidden = true;
       this.player.frozen = false;

@@ -31,6 +31,10 @@ const CSS = `
 .mp-res .mp-rows{display:grid;grid-template-columns:auto 1fr auto auto;gap:calc(var(--u,1px)*4) calc(var(--u,1px)*14);font-size:calc(var(--u,1px)*18);font-weight:600}
 .mp-res .me{color:#c8261c}
 .mp-res .prize{color:#1a8a3a}
+.mp-guests{pointer-events:auto;display:flex;flex-direction:column;align-items:flex-end;gap:calc(var(--u,1px)*3)}
+.mp-guests small{font-size:calc(var(--u,1px)*12);letter-spacing:.08em;opacity:.7;font-style:normal}
+.mp-guests button{font:inherit;border:0;background:#e9eef8;color:#0f2f6b;font-style:italic;font-weight:700;margin-left:calc(var(--u,1px)*8);
+  padding:0 calc(var(--u,1px)*8);cursor:pointer}
 .mp-ask .mp-time{height:calc(var(--u,1px)*3);background:#1f5fd1;margin-top:calc(var(--u,1px)*10);transform-origin:left;transition:transform linear}
 `;
 
@@ -51,12 +55,15 @@ export class MpUI {
     this.el = document.createElement('div');
     this.el.id = 'mp-ui';
     this.el.hidden = true;
-    this.el.innerHTML = '<div class="mp-pill"><div class="mp-status"></div><div class="mp-race" hidden></div><div class="mp-skip" hidden></div><div class="mp-board" hidden></div></div>';
+    this.el.innerHTML = '<div class="mp-pill"><div class="mp-status"></div><div class="mp-race" hidden></div><div class="mp-skip" hidden></div><div class="mp-board" hidden></div><div class="mp-guests" hidden></div></div>';
     document.body.appendChild(this.el);
     this.statusEl = this.el.querySelector('.mp-status');
     this.raceEl = this.el.querySelector('.mp-race');
     this.skipEl = this.el.querySelector('.mp-skip');
     this.boardEl = this.el.querySelector('.mp-board');
+    this.guestsEl = this.el.querySelector('.mp-guests');
+    this.guestKey = '';
+    this.guestsEl.addEventListener('click', (e) => { const b = e.target.closest('button[data-g]'); if (b) this.onRevoke?.(b.dataset.g); });
     this.asks = []; // queued permission prompts: { rid, text, resolve }
     this.cur = null;
     this.lines = { status: '', race: '', skip: '', board: '' };
@@ -77,6 +84,15 @@ export class MpUI {
   }
   /** The race queue / countdown line ('' hides it). */
   setRace(text) { if (text !== this.lines.race) { this.lines.race = text; this.raceEl.textContent = text; this.raceEl.hidden = !text; } }
+  /** Your chalet's guests (inside it), each with SEND OUT (null hides it). Rebuilt only when the list changes. */
+  setGuests(names, onRevoke) {
+    this.onRevoke = onRevoke || null;
+    const key = names?.length ? names.join('|') : '';
+    if (key === this.guestKey) return;
+    this.guestKey = key;
+    this.guestsEl.hidden = !key;
+    this.guestsEl.innerHTML = key ? `<small>GUESTS IN YOUR CHALET · TAB FREES THE MOUSE</small>${names.map((n) => `<span>${esc(n)}<button data-g="${esc(n)}">SEND OUT</button></span>`).join('')}` : '';
+  }
   /** The shared-transport speed-up line, e.g. "Hold SPACE to speed up (2/3 holding)" ('' hides it). */
   setSkip(text) { if (text !== this.lines.skip) { this.lines.skip = text; this.skipEl.textContent = text; this.skipEl.hidden = !text; } }
 

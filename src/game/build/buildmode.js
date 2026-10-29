@@ -20,6 +20,8 @@ import { snap, corners, onFloor, pointOnFloor, boxesOverlap, boxHitsWall, snapTo
 import { adaptChalet, currentRawAPI, discoverChaletAPI } from './chaletadapter.js';
 import { LampPool } from './lamps.js';
 import { BuildMenu } from '../../ui/buildmenu.js';
+import { isMP } from '../../net/mode.js';
+const NO_FURNITURE = [];
 
 const REACH = 6; // metres you can place from
 const RAD = Math.PI / 180;
@@ -138,9 +140,10 @@ export class BuildMode {
     if (!active) {
       if (this.wasActive) { this.setOn(false); this.setCursorFree(false); } // (left the chalet: mouse look again)
       this.wasActive = false;
+      if (isMP() && raw?.inside && c?.root) this.guestView(c, dt); // (multiplayer: someone else's chalet)
       return;
     }
-    if (c.root !== this.loadedRoot) this.loadPlaced();
+    if (c.root !== this.loadedRoot || this.loadedGuest) this.loadPlaced();
     this.wasActive = true;
     const pp = c.playerPos();
     this.lamps?.update(dt, this.placed, pp);
@@ -540,13 +543,22 @@ export class BuildMode {
   }
 
   // ------------------------------------------------------------ saved furniture
-  loadPlaced() {
+  // multiplayer, in someone else's chalet: the owner's furniture (net/session.js chaletFurniture; chalets.js
+  // guestFurniture), to look at only; a chalet nobody has: empty
+  guestView(c, dt) {
+    const recs = (typeof window !== 'undefined' && window.__game?.chalets?.guestFurniture) || NO_FURNITURE;
+    if (recs !== this.loadedGuest || c.root !== this.loadedRoot) this.loadPlaced(recs);
+    this.lamps?.update(dt, this.placed, c.playerPos());
+  }
+
+  loadPlaced(guest = null) {
+    this.loadedGuest = guest;
     for (const p of this.placed) { try { this.chalet.removeObject(p.handle); } catch { /* old interior */ } p.obj.parent?.remove(p.obj); }
     this.placed = [];
     this.loadedRoot = this.chalet.root;
     this.lamps?.dispose();
     this.lamps = new LampPool(this.loadedRoot); // a fixed light count from the start: no recompiles when you buy lamps
-    const recs = this.furniture.filter((r) => FURNITURE_BY_ID[r.id]);
+    const recs = (guest || this.furniture).filter((r) => FURNITURE_BY_ID[r.id]);
     const root = this.loadedRoot;
     for (const rec of recs) loadFurniture(rec.id).then((g) => { if (this.loadedRoot === root) this.addPlaced(rec, g); });
   }

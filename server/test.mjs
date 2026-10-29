@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -95,6 +95,11 @@ try {
   const s3 = await b.req('seatClaim', { k: 'gondola', v: 'g7', n: 1 });
   const s4 = await a.req('seatClaim', { k: 'gondola', v: 'g7', n: 1 });
   ok(s3.ok && s3.d.seat === 0 && !s4.ok && s4.err === 'full', 'a one-seat cabin: the second claim is refused (full)');
+  const s5 = await a.req('seatClaim', { k: 'train', v: 'rail-0', n: 24, seat: 5 });
+  const s6 = await b.req('seatClaim', { k: 'train', v: 'rail-0', n: 24, seat: 5 });
+  ok(s5.ok && s5.d.seat === 5 && s6.ok && s6.d.seat === 0, 'a preferred free seat is given; taken, the lowest free one');
+  await a.req('seatRelease'); await b.req('seatRelease');
+  await a.req('seatClaim', { k: 'bus', v: 'line1-bus0' }); await b.req('seatClaim', { k: 'gondola', v: 'g7', n: 1 }); // (as before)
   const seatsEv = await a.next('seats', (d) => d.k === 'gondola' && d.v === 'g7');
   ok(seatsEv && seatsEv.occ.length === 1 && seatsEv.occ[0][1] === pidB, 'seat changes are broadcast');
 
@@ -295,6 +300,87 @@ try {
   ok(server.worlds.get(w1).size === 15, 'world 1 has exactly 15 players');
   for (const c of crowd) c.f.close();
   await sleep(100);
+
+  // ---------------------------------------------------------------- chalet plots: held while the owner is online
+  console.log('chalet plots');
+  const join = async (name, plots) => {
+    const f = new Fake(url); await f.open();
+    const r = await f.req('register', { name });
+    const l = await f.req('login', { v: PROTO, name, token: r.d.token, plots });
+    return { f, token: r.d.token, l };
+  };
+  const relog = async (name, token) => { const f = new Fake(url); await f.open(); const l = await f.req('login', { v: PROTO, name, token }); return { f, l }; };
+  const hint = Array.from({ length: CATALOG.chalet.count }, (_, i) => 40 + i);
+  let dora = await join('Dora', hint);
+  const doraToken = dora.token;
+  ok(JSON.stringify(server.plotIds) === JSON.stringify(hint), "a login's list of the village's plots is adopted (plotsHint)");
+  const badHint = await join('Hint Bad', [1, 2, 3]);
+  ok(JSON.stringify(server.plotIds) === JSON.stringify(hint), 'an implausible plot list is ignored');
+  badHint.f.close();
+  server.plotIds = [40, 41]; // (a village of two plots, to run out of them)
+  server.profileOf('dora').money = 60000;
+  const bd = await dora.f.req('buy', { kind: 'chalet', id: 40, name: 'Chalet 1' });
+  ok(bd.ok && server.chalets.get(40) === 'dora', 'Dora buys the chalet on plot 40');
+  const bOut = await dora.f.req('buy', { kind: 'chalet', id: 5 });
+  ok(!bOut.ok && bOut.err === 'bad_item', 'a plot the village does not have cannot be bought');
+  const sofa = { id: 'sofa', x: 1, y: 0.3, z: 2, rot: 0 };
+  await dora.f.req('profileSet', { key: 'chalet', value: { furniture: [sofa], plan: 2 } });
+  const eve = await join('Eve');
+  ok(eve.l.d.chalets[40] === 'Dora', 'the login lists the chalets placed now (Dora on plot 40)');
+  dora.f.close();
+  const freed = await eve.f.next('chalet', (d) => d.id === 40 && d.owner === null);
+  ok(!!freed && !server.chalets.has(40), 'Dora goes offline: plot 40 is free for everyone (chalet {id, owner: null})');
+  ok(server.profileOf('dora').chalet?.owned, '...but Dora still owns her chalet');
+  server.profileOf('eve').money = 60000;
+  const be = await eve.f.req('buy', { kind: 'chalet', id: 40 });
+  ok(be.ok && server.chalets.get(40) === 'eve', 'Eve buys a chalet on plot 40 while Dora is away');
+  dora = await relog('Dora', doraToken);
+  const moved = await eve.f.next('chalet', (d) => d.owner === 'Dora');
+  ok(dora.l.d.chaletPlot.id === 41 && !dora.l.d.chaletPlot.waiting && dora.l.d.chaletPlot.moved && dora.l.d.profile.chalet.id === 41 && moved?.id === 41,
+    'Dora comes back: her old plot is taken, her chalet goes onto the free plot 41 (everyone is told)');
+  ok(JSON.stringify(dora.l.d.profile.chalet.furniture) === JSON.stringify([sofa]), '...with her furniture (it is hers, not the plot\'s)');
+  ok(dora.l.d.world.players.find((p) => p.name === 'Eve')?.chalet === 40, "the world snapshot carries each player's plot");
+  server.profileOf('finn') || null;
+  const finnR = await (async () => { const f = new Fake(url); await f.open(); const r = await f.req('register', { name: 'Finn' }); return { f, token: r.d.token }; })();
+  server.profileOf('finn').chalet = { id: 40, owned: true, rented: true, furniture: [] }; // (an owner whose plot is taken)
+  const lf = await finnR.f.req('login', { v: PROTO, name: 'Finn', token: finnR.token });
+  ok(lf.ok && lf.d.chaletPlot.id === null && lf.d.chaletPlot.waiting === true, 'no plot free: Finn waits for one (chaletPlot.waiting)');
+  ok(lf.d.world.players.find((p) => p.name === 'Finn')?.chalet === null && ![...server.chalets.values()].includes('finn'), '...and has no plot meanwhile');
+  dora.f.close();
+  const placed = await finnR.f.next('chaletPlaced');
+  ok(placed && placed.id === 41 && server.chalets.get(41) === 'finn' && server.profileOf('finn').chalet.id === 41, 'Dora leaves: Finn gets her plot (chaletPlaced)');
+  dora = await relog('Dora', doraToken);
+  if (!dora.l.ok) console.log('    relog:', dora.l.err);
+  ok(dora.l.d?.chaletPlot.waiting === true, 'Dora is back while both plots are taken: she waits');
+  // the visitor sees the owner's furniture; the owner's guest list and permRevoke
+  await eve.f.req('profileSet', { key: 'chalet', value: { furniture: [sofa, sofa] } });
+  const nf = await finnR.f.req('chaletFurniture', { id: 40 });
+  ok(!nf.ok && nf.err === 'no_permission', "no furniture of Eve's chalet for an uninvited player");
+  const vp = finnR.f.req('perm', { kind: 'chaletVisit', ref: 40 });
+  const va = await eve.f.next('permAsk', (d) => d.from === 'Finn');
+  await eve.f.req('permAnswer', { rid: va.rid, allow: true });
+  await vp;
+  const gl = await eve.f.next('guests', (d) => d.names.includes('Finn'));
+  ok(gl && gl.kind === 'chaletVisit', "Eve's guest list: Finn");
+  const yf = await finnR.f.req('chaletFurniture', { id: 40 });
+  ok(yf.ok && yf.d.owner === 'Eve' && yf.d.chalet.furniture.length === 2, "the guest gets the owner's furniture (chaletFurniture)");
+  await finnR.f.req('enter', { interior: 'chalet:40' });
+  await eve.f.req('permRevoke', { kind: 'chaletVisit', guest: 'Finn' });
+  const kick = await finnR.f.next('kickInterior');
+  const gl2 = await eve.f.next('guests', (d) => d.names.length === 0);
+  ok(kick && kick.interior === 'chalet:40' && gl2, 'Eve sends Finn out: he is shown out and her guest list is empty');
+  for (const f of [dora.f, eve.f, finnR.f]) f.close();
+  await sleep(150);
+  server.plotIds = null;
+
+  // ---------------------------------------------------------------- the day counter: from the world clock
+  console.log('day');
+  const wd = server.worlds.get(la.d.world.id);
+  ok(Number.isInteger(la.d.world.clock.day) && la.d.world.clock.day === dayFor(la.d.world.clock.at), 'the world clock carries the day');
+  const tNow = Date.now(), d0 = wd.dayAt(tNow);
+  ok(wd.dayAt(tNow + DAY_MS) === d0 + 1 && wd.dayAt(tNow + DAY_MS * 3) === d0 + 3, 'one game day later the day is +1 (at the world\'s midnight)');
+  const toMid = ((24 - wd.hourAt(tNow)) / 24) * DAY_MS;
+  ok(wd.dayAt(tNow + toMid - 1000) === d0 && wd.dayAt(tNow + toMid + 1000) === d0 + 1, 'the day turns over at midnight');
 
   // ---------------------------------------------------------------- persistence
   a.close(); b.close();

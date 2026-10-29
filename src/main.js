@@ -388,6 +388,7 @@ async function boot() {
       pose: mpPose, getScene: mpScene, setAI: setAIOn, applySave: applyMpSave, onLost: (why) => leaveMultiplayer(why),
       onRaceStart: mpRaceStart, onKickInterior: mpKickInterior,
     });
+    multiplayer.attachTransit({ railway, express, lifts, player, expressRate: EXPRESS_FAST }); // (shared trains / cabins: net/transit.js)
   } catch (e) { console.warn('multiplayer: ' + (e?.stack || e)); multiplayer = null; }
 
   // the RACING stand beside the village job board is gone (Oct 29, the user: "remove this racing day sign");
@@ -802,6 +803,7 @@ function talkToSeller() {
 function boardLift(st) {
   const line = st.line;
   if (!player.hasSkis) { hud.flash('Rent skis first', 'bad'); audio.play('error'); return; }
+  if (isMP() && !multiplayer.transit.liftGate(st, () => boardLift(st))) return; // (multiplayer: a seat in the next cabin, when it is there)
   const useTicket = !hasPass() && st.up && line.spec.main && (save.tickets || 0) > 0;
   const free = hasPass() || !st.up || useTicket; // riding the gondola down is free
   const price = line.spec.price;
@@ -857,6 +859,7 @@ function openRailMap(rw) {
   });
 }
 function boardRail(st, up, dest = null) {
+  if (isMP() && !multiplayer.transit.railGate(st, up, dest, () => boardRail(st, up, dest))) return; // (multiplayer: wait for the train, a seat in it)
   if (up && !hasPass() && !spend(RAIL_PRICE)) return;
   jobs.onEvent('lift', { rail: true });
   const to = dest ? layout.railway?.stations.find((s) => s.id === dest)?.name : null;
@@ -925,6 +928,7 @@ function boardExpress(from, to) {
     hud.flash(`Legacy Express to ${to.name} · due in ${Math.max(1, Math.ceil(wait ?? 30))} s · wait on the platform`, 'good', 3200);
     return;
   }
+  if (isMP() && !multiplayer.transit.expressGate(from, to, () => boardExpress(from, to))) return; // (multiplayer: a seat in it first)
   if (!hasPass() && !spend(EXPRESS_PRICE)) { express.cancelWait(); return; }
   jobs.onEvent('lift', { rail: true });
   transition.fade(async () => {
@@ -1249,6 +1253,7 @@ async function mpVisitChalet(h, owner) {
   const r = await multiplayer.ask('chaletVisit', { ref: h.id });
   if (!r?.allow) { if (!r?.error) hud.flash(`${owner} did not let you in`, 'bad', 2600); return; }
   if (!(await multiplayer.setInterior(`chalet:${h.id}`))) { hud.flash('Not allowed in', 'bad', 2200); return; }
+  chalets.guestFurniture = (await multiplayer.chaletFurniture(h.id)) || []; // (the owner's furniture: build mode shows it)
   chalets.viewing = h;
   chalets.enter(h);
 }
@@ -1652,7 +1657,7 @@ function loopUpdate() {
   }
 
   // day rollover -> new day, day pass expires
-  if (env.hour < lastDay) { save.day++; writeSave(); }
+  if (env.hour < lastDay && !isMP()) { save.day++; writeSave(); } // (multiplayer: the world clock's day, net/session.js)
   lastDay = env.hour;
   mark('input');
   env.update(dt, camera, player.pos);
@@ -1686,9 +1691,9 @@ function loopUpdate() {
     if (r?.seat) player.seat = r.seat;
     if (r?.arrive) leaveExpress(r.arrive);
     else if (r?.stop && !menu && input.hit('KeyE')) leaveExpress(express.leaveAtStop());
-    else if (!menu && !transition.active && input.hit('Enter')) transition.fade(async () => { const a = express.skip(); if (a) await exitExpress(a); }); // skip to the arrival (the train jumps on to your stop)
+    else if (!menu && !transition.active && !isMP() && input.hit('Enter')) transition.fade(async () => { const a = express.skip(); if (a) await exitExpress(a); }); // skip to the arrival (the train jumps on to your stop)
     hud.rideHint(null);
-    rideLine = r?.stop ? null : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST} · Enter to skip` : null;
+    rideLine = r?.stop ? null : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST}${isMP() ? '' : ' · Enter to skip'}` : null;
     ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;
     expressAnnounce(r?.hint);
   } else if (skibus.riding) {
@@ -1727,6 +1732,7 @@ function loopUpdate() {
   mark('heli');
   sleds.update(dt, started && !menu && !inSession ? input : null); // driving: the sled, your seat on it, its chase camera
   mark('sleds');
+  skibus?.updateFleet(dt, player.pos); // the other buses on their rounds (bus.js)
   traffic?.update(dt); // cars on the roads (after you moved: they stop for you)
   mark('traffic');
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound

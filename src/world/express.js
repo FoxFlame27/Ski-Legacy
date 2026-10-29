@@ -50,7 +50,8 @@ const VIEWS = ['seat', 'outside', 'trackside']; // R: the window seat, the chase
 const G = 9.81;
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _t = new THREE.Vector3();
-const _m = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0), _e = new THREE.Euler();
+const _m = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0), _e = new THREE.Euler(), _mpf = new THREE.Vector3();
+const MP_BOARD_MIN = 4; // s: multiplayer, a train still standing at least this long can be boarded (nobody holds it)
 const _p = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0 }, _q = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0 };
 const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -188,7 +189,11 @@ export class Express {
 
   get riding() { return !!this.ride; }
   way(dir) { return dir > 0 ? this.tt.up : this.tt.down; }
-  u(tr) { const L = this.way(tr.dir).loop; return ((((this.t + this.off[tr.dir] + tr.phase * L) % L) + L) % L); }
+  u(tr) {
+    const L = this.way(tr.dir).loop;
+    if (this.mp) return ((((this.mp.time(tr.dir) + tr.phase * L) % L) + L) % L); // (multiplayer: the direction's shared timeline)
+    return ((((this.t + this.off[tr.dir] + tr.phase * L) % L) + L) % L);
+  }
 
   async loadTrack({ models, colliders, cameraBlockers }) {
     const load = TRACK_MODULE['./expresstrack.js'];
@@ -222,13 +227,18 @@ export class Express {
   update(dt, { viewer = null, fast = false, walker = null, player = null, audio = null } = {}) {
     if (!this.ok) return;
     // Space while riding: the timetable runs FAST times quicker (the streaming keeps up: main.js streams ahead)
-    this.timeScale = this.ride && fast ? FAST : 1;
-    this.t = (this.t + dt * this.timeScale) % (this.tt.up.loop * 1000);
-    // you on a track (player: main.js, null while riding): a train coming brakes and waits short of you; that
-    // direction's clock runs at its rate (its other trains keep their spacing)
-    this.stopFor(this.ride ? null : player, dt, audio);
-    for (const dir of [1, -1]) if (this.rate[dir] < 1) this.off[dir] -= dt * this.timeScale * (1 - this.rate[dir]);
-    if (walker && !this.ride) this.serve(walker, dt);
+    if (this.mp) { // multiplayer (net/transit.js): each direction on its shared timeline (u); nobody brings or holds a train
+      this.timeScale = this.ride ? this.mp.rate(this.ride.dir) : 1;
+      this.stopFor(null, dt, audio);
+    } else {
+      this.timeScale = this.ride && fast ? FAST : 1;
+      this.t = (this.t + dt * this.timeScale) % (this.tt.up.loop * 1000);
+      // you on a track (player: main.js, null while riding): a train coming brakes and waits short of you; that
+      // direction's clock runs at its rate (its other trains keep their spacing)
+      this.stopFor(this.ride ? null : player, dt, audio);
+      for (const dir of [1, -1]) if (this.rate[dir] < 1) this.off[dir] -= dt * this.timeScale * (1 - this.rate[dir]);
+      if (walker && !this.ride) this.serve(walker, dt);
+    }
     const cam = viewer || (this.ride ? this.seatWorld() : null);
     for (const tr of this.trains) {
       trainState(this.tt, this.way(tr.dir), this.u(tr), tr.state);
@@ -423,7 +433,27 @@ export class Express {
   trainIn(fromId, toId) {
     const a = this.stIndex(fromId), b = this.stIndex(toId);
     if (a < 0 || b < 0 || a === b) return false;
-    return this.nextAt(a, this.bestDir(a, b))?.wait === 0;
+    const n = this.nextAt(a, this.bestDir(a, b));
+    return n?.wait === 0 && (!this.mp || n.left >= MP_BOARD_MIN);
+  }
+  /** Multiplayer: the train standing at fromId for toId now ({ train, wait, left }) or null. */
+  trainFor(fromId, toId) {
+    const a = this.stIndex(fromId), b = this.stIndex(toId);
+    if (a < 0 || b < 0 || a === b) return null;
+    return this.nextAt(a, this.bestDir(a, b));
+  }
+  /** The seat number single player gives you (the panorama row's window seat): the seat registry's index. */
+  preferredSeat() { const c = this.cabin.seats; return Math.max(0, c.indexOf(c.find((s) => s.row === 1 && s.window && s.side > 0) || c.find((s) => s.front && s.window) || c[0])); }
+  get seatCount() { return this.cabin?.seats?.length || 0; }
+  /** Where seat n (in the lead car: the riders' car) of train tr is now: into out, its facing as a heading; null when
+   *  the train is too far to be placed. */
+  seatWorldAt(tr, n, out) {
+    const st = this.cabin.seats[n];
+    if (!st || tr.lod === 2 || tr.lod < 0) return null;
+    const g = this.ride?.train === tr ? this.cabin.group : tr.cars[0].group;
+    out.copy(st.pos).applyQuaternion(g.quaternion).add(g.position);
+    _mpf.set(Math.sin(st.yaw), 0, Math.cos(st.yaw)).applyQuaternion(g.quaternion);
+    return Math.atan2(_mpf.x, _mpf.z);
   }
   /** Picked before the train is in: you wait on the platform (main.js boards you as it stops: waiting()). */
   waitFor(fromId, toId) {
@@ -438,7 +468,8 @@ export class Express {
     const w = this.wait;
     if (!w || this.ride) return null;
     if (!this.onPlatform(this.stations[w.from], p, 25)) { this.wait = null; return 'gone'; }
-    return this.nextAt(w.from, w.dir)?.wait === 0 ? 'ready' : null;
+    const n = this.nextAt(w.from, w.dir);
+    return n?.wait === 0 && (!this.mp || n.left >= MP_BOARD_MIN) ? 'ready' : null;
   }
 
   // ride time (s) from station a to b going dir (from the departure at a to the arrival at b, the stops between)
@@ -482,10 +513,13 @@ export class Express {
     const dir = this.bestDir(a, b), w = this.way(dir);
     const n = this.nextAt(a, dir);
     if (!n || n.wait > 0) return null;
-    if (n.left < DEPART_MIN) this.off[dir] -= DEPART_MIN - n.left;
+    const pick = this.mp ? this.mpPick : null; // multiplayer: the seat the server gave you on this very train
+    this.mpPick = null;
+    if (this.mp && (!pick || pick.train !== n.train)) return null;
+    if (!this.mp && n.left < DEPART_MIN) this.off[dir] -= DEPART_MIN - n.left;
     const tr = n.train;
     const segI = w.segs.findIndex((g) => g.kind === 'dwell' && g.st === a);
-    const seat = this.cabin.seats.find((s) => s.row === 1 && s.window && s.side > 0) || this.cabin.seats.find((s) => s.front && s.window) || this.cabin.seats[0];
+    const seat = (pick && this.cabin.seats[pick.seat]) || this.cabin.seats.find((s) => s.row === 1 && s.window && s.side > 0) || this.cabin.seats.find((s) => s.front && s.window) || this.cabin.seats[0];
     this.wait = null;
     this.ride = { train: tr, from: a, dest: b, dir, segI, departed: false, exitSent: false, seat };
     this.lastDest = b;
@@ -555,7 +589,7 @@ export class Express {
    */
   skip() {
     const r = this.ride;
-    if (!r || r.exitSent) return null;
+    if (!r || r.exitSent || this.mp) return null; // (multiplayer: the train is shared; hold Space instead)
     const w = this.way(r.dir), db = w.segs.find((g) => g.kind === 'dwell' && g.st === r.dest);
     this.off[r.dir] += ((((db.t0 + 1 - this.u(r.train)) % w.loop) + w.loop) % w.loop);
     this.update(0, {});

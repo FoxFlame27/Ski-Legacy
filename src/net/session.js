@@ -17,6 +17,7 @@ import { RemoteVehicles } from './vehicles.js';
 import { CarRide } from './carride.js';
 import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
+import { MpTransit } from './transit.js';
 
 const ACCOUNTS_KEY = 'ski-legacy-mp-accounts';
 const SEND_HZ = 12;
@@ -58,6 +59,7 @@ export class Multiplayer {
     this.raceRows = []; this.boardT = 0;
     this.carRide = new CarRide(this); // your car shown to everyone, rides in other players' cars
     this.heliMp = new MpHeli(this);   // the helicopter pad and your copy
+    this.transit = new MpTransit(this); // the shared trains, express, gondolas / chairlifts (and buses): seats, timelines
     this.vehicles = null;             // the other players' cars and helicopters (per world: setWorld)
     this.lastPos = { x: 0, z: 0, interior: null, t: 0 };
     // shared state for the wave-2 systems (live, kept current from the server's broadcasts)
@@ -92,7 +94,7 @@ export class Multiplayer {
     await this.ensureOpen();
     let d;
     try {
-      d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look() });
+      d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots() });
     } catch (e) {
       if (e.code === 'bad_login') this.forgetAccount(); // (the server has no such name / key: pick a name again)
       throw e;
@@ -119,6 +121,7 @@ export class Multiplayer {
     MP.chalets = d.chalets || {};
     MP.status = 'online';
     this.applyProfile(d.profile);
+    this.applyPlot(d.chaletPlot, true);
     this.setWorld(d.world);
     this.ui ||= new MpUI();
     this.ui.show(true);
@@ -127,6 +130,7 @@ export class Multiplayer {
     MP.onSave = () => this.schedulePush();
     this.c.applySave();
     this.heliMp.attach();
+    this.transit.start();
     net.send('look', this.look());
     this.push(true);
   }
@@ -138,6 +142,7 @@ export class Multiplayer {
     this.vehicles = new RemoteVehicles({
       scene: this.c.scene, models: () => window.__game?.models, camera: () => this.c.camera,
       localCar: () => this.carRide.localCar(), selfName: () => MP.name,
+      transitSeat: (k, v, n, out) => this.transit.seat(k, v, n, out), // (riders of the shared trains, cabins, buses)
     });
     this.remotes = new RemotePlayers({
       scene: this.c.scene, makeRig: this.c.makeRig, applyOutfit: this.c.applyOutfit, getScene: this.c.getScene, fx: this.c.fx,
@@ -158,7 +163,9 @@ export class Multiplayer {
     on('leave', (p) => { MP.world?.players.delete(p.pid); this.remotes?.remove(p.pid); this.c.hud.flash(`${p.name} left`, 'good', 2200); });
     on('look', (d) => this.remotes?.setLook(d.pid, d.look));
     on('clock', (d) => { this.clock = d; });
-    on('chalet', (d) => { MP.chalets[d.id] = d.owner; });
+    on('chalet', (d) => { if (d.owner) MP.chalets[d.id] = d.owner; else delete MP.chalets[d.id]; });
+    on('chaletPlaced', (d) => this.applyPlot({ id: d.id, waiting: false }));
+    on('guests', (d) => { if (d.kind === 'chaletVisit') this.guests = d.names || []; });
     on('money', (d) => { this.setServerMoney(d.v); if (d.delta > 0) this.c.hud.setMoney(this.c.save.money, d.delta); });
     on('seats', (d) => { const k = `${d.k}|${d.v}`; if (d.occ.length) MP.seats.set(k, d.occ); else MP.seats.delete(k); });
     on('skip', (d) => { MP.skip.set(`${d.k}|${d.v}`, d); });
@@ -185,9 +192,11 @@ export class Multiplayer {
     const acc = this.account();
     if (!acc || !MP.active) return;
     try {
-      const d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look() });
+      const d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots() });
       MP.pid = d.pid; MP.chalets = d.chalets || {};
       this.setServerMoney(d.profile.money);
+      this.guests = [];
+      this.applyPlot(d.chaletPlot, true);
       this.setWorld(d.world);
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
       this.c.hud.flash('Reconnected', 'good', 2000);
@@ -206,7 +215,7 @@ export class Multiplayer {
   leave() {
     if (!MP.active) return;
     if (this.race.start && !this.race.finished) net.send('raceFinish', { rid: this.race.start.rid, dnf: true });
-    try { this.carRide.dispose(); this.heliMp.detach(); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
     for (const off of this.offs) off();
     this.offs.length = 0;
     clearTimeout(this.pushT); this.pushT = null;
@@ -214,7 +223,8 @@ export class Multiplayer {
     net.close('leave');
     this.remotes?.dispose(); this.remotes = null; this.vehicles = null;
     this.ui?.show(false);
-    MP.active = false; MP.status = 'off'; MP.onSave = null; MP.world = null; MP.profile = null; MP.pid = 0;
+    MP.active = false; MP.status = 'off'; MP.onSave = null; MP.world = null; MP.profile = null; MP.pid = 0; MP.chaletPlot = null;
+    this.guests = []; this.ui?.setGuests(null);
     this.interior = null; this.race = { queued: null, queue: null, start: null };
     this.restoreSave();
     this.c.setAI(true);
@@ -241,6 +251,39 @@ export class Multiplayer {
     this.money = { server: p.money, pending: 0 };
     this.expected = p.money;
   }
+  /** Your chalet's plot from the server ({ id, waiting }): it stands there while you are online. Offline its plot was
+   *  free; back, you get the old plot if it is free, else another one (your furniture comes along), else you wait for
+   *  one ('chaletPlaced'). While you wait, save.chalet.id is null: you own it, it is just not placed. */
+  applyPlot(p, first = false) {
+    const s = this.c.save;
+    MP.chaletPlot = p || { id: null, waiting: false };
+    if (!s.chalet || !p) return;
+    s.chalet.id = p.id ?? null;
+    if (MP.profile?.chalet) MP.profile.chalet.id = p.id ?? null;
+    const name = (id) => window.__game?.chalets?.houses?.find((h) => h.id === id)?.name || 'a chalet';
+    if (p.waiting) this.c.hud.flash('Every chalet plot is taken · your chalet comes back when one is free', 'bad', 4200);
+    else if (p.id != null && !first) this.c.hud.flash(`Your chalet is back · ${name(p.id)}`, 'good', 3600);
+    else if (p.id != null && p.moved) this.c.hud.flash(`Your old plot was taken · your chalet is now ${name(p.id)}`, 'good', 4200);
+    if (p.id != null) s.chalet.name = name(p.id);
+  }
+  /** The chalet village's house plots (the server learns them from the game). */
+  plots() { const h = window.__game?.chalets?.houses; return Array.isArray(h) && h.length ? h.map((x) => x.id) : undefined; }
+  /** Visiting: the owner's furniture for the chalet on plot `id` (you need their ok), or null. */
+  async chaletFurniture(id) {
+    try { const d = await net.request('chaletFurniture', { id }); return Array.isArray(d.chalet?.furniture) ? d.chalet.furniture : []; }
+    catch { return null; }
+  }
+  /** Send a guest out of your chalet (the owner's guest list). */
+  revokeGuest(name) {
+    net.request('permRevoke', { kind: 'chaletVisit', guest: name }).then(() => this.c.hud.flash(`${name} has to leave your chalet`, 'good', 2400), () => {});
+  }
+  /** The in-game day of the world clock (everyone in multiplayer shares it), or null. */
+  dayNow(now = net.serverNow()) {
+    const c = this.clock;
+    if (!c || !Number.isFinite(c.day)) return null;
+    return c.day + Math.floor((c.hour + ((now - c.at) / c.dayMs) * 24) / 24);
+  }
+
   restoreSave() {
     if (!this.spSave) return;
     const s = this.c.save;
@@ -314,7 +357,7 @@ export class Multiplayer {
       return d;
     } catch (e) {
       if (e.data?.money != null) this.setServerMoney(e.data.money);
-      const msg = e.code === 'taken' ? `${e.data?.owner || 'Somebody'} already owns it` : e.code === 'plate_taken' ? `The plate ${e.data?.plate || ''} is taken` : e.code === 'one_each' ? 'One chalet each' : errText(e);
+      const msg = e.code === 'taken' ? `${e.data?.owner || 'Somebody'} already owns it` : e.code === 'plate_taken' ? `The plate ${e.data?.plate || ''} is taken` : e.code === 'one_each' ? (MP.chaletPlot?.waiting ? 'You own a chalet · it comes back when a plot is free' : 'One chalet each') : errText(e);
       this.c.hud.flash(msg, 'bad', 2600);
       this.c.audio?.play?.('error');
       return null;
@@ -473,10 +516,11 @@ export class Multiplayer {
   /** SPACE held / released on your shared vehicle (call every frame: only changes are sent). rate: the single-player
    *  fast-forward rate of that vehicle; line: the timeline it warps ('kind|line' in MP.warps; default: the vehicle). */
   holdSkip(k, v, on, { rate = 16, line } = {}) {
-    const key = `${k}|${v}|${!!on}`;
-    if (this.skipHeld === key) return;
-    this.skipHeld = key;
-    net.request('skip', { k, v, on: !!on, rate, line }).catch(() => {});
+    on = !!on;
+    const h = this.skipHeld;
+    if (h && h.k === k && h.v === v && h.on === on) return; // (no allocation while nothing changes)
+    this.skipHeld = { k, v, on };
+    net.request('skip', { k, v, on, rate, line }).catch(() => {});
   }
   /** The HUD line for the speed-up on a shared vehicle ('' when alone aboard). */
   skipLine(k, v) {
@@ -505,6 +549,9 @@ export class Multiplayer {
     return (((c.hour + ((now - c.at) / c.dayMs) * 24) % 24) + 24) % 24;
   }
 
+  /** main.js: the shared transport systems ({ railway, express, lifts, player, expressRate }) for net/transit.js. */
+  attachTransit(sys) { this.transit.attach(sys); }
+
   /** E near another player's car: "Ask <owner> for a ride" (main.js findInteraction). */
   carInteraction(pos) { return MP.active ? this.carRide.interaction(pos) : null; }
 
@@ -514,6 +561,14 @@ export class Multiplayer {
     if (!MP.active) return;
     if (this.view) this.remotes?.late(dt, this.view);
     this.carRide.late(dt, input);
+  }
+
+  /** Inside your own chalet with guests: the guest list, each with "send out" (TAB frees the mouse to click). */
+  guestUI() {
+    const own = !!window.__game?.chalets?.insideOwn?.();
+    const list = own && this.guests?.length ? this.guests : null;
+    this.revokeFn ||= (name) => this.revokeGuest(name);
+    this.ui?.setGuests(list, this.revokeFn);
   }
 
   // ---------------------------------------------------------------- every frame
@@ -527,8 +582,12 @@ export class Multiplayer {
       env.weatherTimer = 1e9; // (the server moves the weather on)
       if (this.clock.weather && env.weather !== this.clock.weather) env.setWeather(this.clock.weather);
     }
+    const day = this.dayNow(now), s = this.c.save;
+    if (day != null && s.day !== day) s.day = day; // (the day pass and the jobs count the world's days)
+    this.guestUI();
     this.guardMoney();
     try { this.carRide.frame(dt); this.heliMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.transit.update(); } catch (e) { console.warn('[mp] transit', e); }
     // presence
     this.sendAcc += dt;
     if (this.sendAcc >= 1 / SEND_HZ && net.open) {

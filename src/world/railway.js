@@ -46,6 +46,7 @@ const carOff = (k) => ((NCARS - 1) / 2 - k) * PITCH; // car k's centre from the 
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _t = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0);
 const _f = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
+const _mpf = new THREE.Vector3(); // (multiplayer: a seat's facing)
 
 // world position of the track at arc length s (the loop track for the down train while it passes the loop)
 function trackPoint(s, onLoop, out) {
@@ -311,9 +312,15 @@ export class Railway {
   // player: your position on foot / skis (main.js; null while you ride a train): the trains stop for you on the
   // track (the whole line's clock slows with the held train: one track with a passing loop, the crossing holds)
   update(dt, { viewer = null, fast = false, player = null, audio = null } = {}) {
-    this.timeScale = this.ride && fast ? 6 : 1;
-    const rate = this.stopFor(this.ride ? null : player, dt, audio);
-    this.t = (this.t + dt * this.timeScale * rate) % (CYCLE * 1000);
+    if (this.mp) { // multiplayer (net/transit.js): the line's shared timeline; nobody holds the trains
+      this.timeScale = this.mp.rate();
+      this.stopFor(null, dt, audio);
+      this.t = this.mp.time();
+    } else {
+      this.timeScale = this.ride && fast ? 6 : 1;
+      const rate = this.stopFor(this.ride ? null : player, dt, audio);
+      this.t = (this.t + dt * this.timeScale * rate) % (CYCLE * 1000);
+    }
     const cam = viewer || (this.ride ? this.seatWorld() : null);
     for (const tr of this.trains) {
       trainState(this.t, tr.phase, tr.state);
@@ -408,22 +415,90 @@ export class Railway {
    */
   board(id, up, destId = null) {
     const dir = up ? 1 : -1;
-    const tr = this.trains[0];
-    const want = boardingU(id, dir);
-    // shift the timetable so train 0 is at cycle time `want`
-    const u = ((((this.t / CYCLE + tr.phase) % 1) + 1) % 1) * CYCLE;
-    this.t += want - u;
+    const pick = this.mp ? this.mpPick : null; // multiplayer: the train standing here and the seat the server gave you
+    this.mpPick = null;
+    const tr = pick ? pick.train : this.trains[0];
+    if (!pick) {
+      const want = boardingU(id, dir);
+      // shift the timetable so train 0 is at cycle time `want`
+      const u = ((((this.t / CYCLE + tr.phase) % 1) + 1) % 1) * CYCLE;
+      this.t += want - u;
+    }
     this.update(0, {});
-    const carIdx = up ? 0 : tr.cars.length - 1; // the car whose cab leads in this direction
-    const car = tr.cars[carIdx];
+    let carIdx = up ? 0 : tr.cars.length - 1; // the car whose cab leads in this direction
+    let car = tr.cars[carIdx];
     // the front seats facing the way we go, on the side with the better view (left going up: the valley)
-    const seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
+    let seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
+    if (pick) { const at = this.seatAt(tr, pick.seat); if (at) { carIdx = at.car; car = tr.cars[carIdx]; seat = at.seat; } }
     const dest = destId && destId !== id ? destId : up ? 'platt' : 'tal';
     this.ride = { train: tr, car: carIdx, seat, up, from: id, dest, departed: false, wait: 0 };
     this.look.yaw = 0; this.look.pitch = -0.04;
     this.view = 'seat';
     this.fov = null; this.chase.off = null;
     return this.seatPose();
+  }
+
+  // ------------------------------------------------------------------ multiplayer (net/transit.js)
+  // A train's seats are numbered through its cars (car 0's first): the seat registry's index.
+  /** Seat number n of a train: { car (index), seat } or null. */
+  seatAt(tr, n) {
+    for (let k = 0; k < tr.cars.length; k++) { const L = tr.cars[k].seats?.length || 0; if (n < L) return { car: k, seat: tr.cars[k].seats[n] }; n -= L; }
+    return null;
+  }
+  /** The seat number single player would give you boarding `up` (the lead car's front window seat). */
+  preferredSeat(tr, up) {
+    const k = up ? 0 : tr.cars.length - 1, car = tr.cars[k];
+    const st = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
+    let n = car.seats.indexOf(st);
+    for (let j = 0; j < k; j++) n += tr.cars[j].seats?.length || 0;
+    return n;
+  }
+  /** Where seat n of a train is now: into out (world), its facing as a heading; null if there is no such seat. */
+  seatWorldAt(tr, n, out) {
+    const at = this.seatAt(tr, n);
+    if (!at) return null;
+    const g = tr.cars[at.car].group; // (its parent, the train's group, sits at the origin)
+    out.copy(at.seat.pos).applyQuaternion(g.quaternion).add(g.position);
+    _mpf.set(Math.sin(at.seat.yaw), 0, Math.cos(at.seat.yaw)).applyQuaternion(g.quaternion);
+    return Math.atan2(_mpf.x, _mpf.z);
+  }
+  /** The train for station `id` heading up / down: { train, wait (s until it stands there), left (s it still
+   *  stands) }, the soonest of the two (wait 0: it is at the platform now). Off the timetable alone (multiplayer: the
+   *  trains are never moved for anyone). */
+  nextAt(id, up) {
+    const w = this.windowAt(id, up);
+    if (!w) return null;
+    let best = null;
+    for (const tr of this.trains) {
+      const u = ((((this.t / CYCLE + tr.phase) % 1) + 1) % 1) * CYCLE;
+      const into = (((u - w.u0) % CYCLE) + CYCLE) % CYCLE;
+      const n = into < w.dur ? { train: tr, wait: 0, left: w.dur - into } : { train: tr, wait: CYCLE - into, left: w.dur };
+      if (!best || n.wait < best.wait) best = n;
+    }
+    return best;
+  }
+  // the stretch of the cycle (u0, dur) a train stands at station id with its doors open, about to leave up / down
+  // (scanned off the timetable once per station and way)
+  windowAt(id, up) {
+    const key = `${id}|${up ? 1 : 0}`;
+    this.windows ||= new Map();
+    if (this.windows.has(key)) return this.windows.get(key);
+    const st = {}, step = 0.25, n = Math.ceil(CYCLE / step), inW = (u) => {
+      trainState(u, 0, st);
+      return st.at === id && (up ? st.leg === 'up' || st.leg === 'bottom' : st.leg === 'down' || st.leg === 'top');
+    };
+    let w = null;
+    for (let i = 0; i < n; i++) {
+      const u = i * step;
+      if (inW(u) && !inW(u - step)) { // a window starts here: how long it lasts
+        let d = 0;
+        while (d < CYCLE && inW(u + d + step)) d += step;
+        w = { u0: u, dur: d + step };
+        break;
+      }
+    }
+    this.windows.set(key, w);
+    return w;
   }
 
   // the rider's seat: { pos (world, seat surface), fwd (world, horizontal) } for player.sitOn / updateSit

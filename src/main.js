@@ -514,7 +514,7 @@ async function startFromMenu(sel = {}) {
   if (sel.character && sel.character !== save.character) { save.character = sel.character; writeSave(); }
   // a new skier chosen from the pause menu's SETTINGS: swap in place and play on
   if (started) { if (player.rig && save.character !== player.rigChar) swapCharacter(save.character); menu.hide(); closePause(); return; }
-  if (!busIntro && wantsBusIntro(save)) { playBusIntro(); return; } // a brand-new save: the ski bus brings you
+  // (Oct 29, the user: no bus intro: a new game starts straight in Legacy Village)
   startGame();
 }
 // (Oct 28, the user: "the intro is super bad, it doesn't look like the game at all: you're just in the bus and you

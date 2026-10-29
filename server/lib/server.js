@@ -772,8 +772,16 @@ export class GameServer {
     if (!c.world || !Array.isArray(d) || d.length < 9 || d.length > 16) return;
     for (let i = 0; i < 12 && i < d.length; i++) if (!isNum(d[i])) return;
     const now = Date.now();
+    // the sender's own clock (its estimate of ours) keeps the rows' spacing smooth, but a sender whose estimate is off
+    // (a slow machine answering pings late, an asymmetric connection) made everyone see that one player hundreds of ms
+    // behind, all the time (Oct 29, the user: "why is it always the same person lagging behind"): each player's clock
+    // error is measured on arrival (smoothed) and taken out, so every row is on the server's own clock
     let ts = d[0];
-    if (Math.abs(ts - now) > 2000) ts = now; // (a client clock way off: stamped on arrival)
+    const dev = now - ts;
+    if (!Number.isFinite(c.tsBias) || Math.abs(dev - c.tsBias) > 1500) c.tsBias = dev;
+    else c.tsBias += (dev - c.tsBias) * 0.05;
+    ts += c.tsBias;
+    if (Math.abs(ts - now) > 2000) ts = now; // (still way off: stamped on arrival)
     const row = [c.pid, Math.round(ts)];
     for (let i = 1; i <= 11; i++) row.push(isNum(d[i]) ? Math.round(d[i] * 100) / 100 : 0);
     row[9] = clamp(row[9] | 0, 0, 15); // state

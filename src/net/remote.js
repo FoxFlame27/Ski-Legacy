@@ -65,6 +65,7 @@ class Remote {
     this.veh = 0; this.interior = null; this.seen = false;
     this.vcar = info.vehs?.car || null;   // the vehicles they show ('veh': { k: 'car', cfg, at? }, { k: 'heli', id, at? })
     this.vheli = info.vehs?.heli || null;
+    this.vtow = info.vehs?.tow || null;   // their tow truck out on a job ({ k: 'tow', at, v, car }: net/tow.js)
     this.ok = false; this.inLocal = false;
     this.vehStr = 0; this.vehK = ''; this.vehOwner = ''; this.vehSeat = -1; // the parsed `kind:id:seat` (vehicles.js)
     this.seatPos = new THREE.Vector3(); this.seatYaw = 0;
@@ -118,7 +119,7 @@ export class RemotePlayers {
     if (!info || info.pid === this.selfPid) return null;
     let r = this.players.get(info.pid);
     if (!r) { r = new Remote(info); this.players.set(info.pid, r); }
-    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; } }
+    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; } }
     if (info.pres) r.push(info.pres, this.o.now());
     if (info.interior !== undefined) r.interior = info.interior || null;
     return r;
@@ -141,7 +142,7 @@ export class RemotePlayers {
   }
 
   /** A vehicle a player shows changed ('veh' broadcast: k 'car' | 'heli', veh or null). */
-  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; }
+  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; }
 
   onRows(rows) {
     if (!Array.isArray(rows)) return;
@@ -234,7 +235,14 @@ export class RemotePlayers {
   update(dt, v) {
     if (!this.players.size) return;
     const now = this.o.now();
-    for (const r of this.players.values()) r.ok = this.sample(r, now - r.delay);
+    for (const r of this.players.values()) {
+      r.ok = this.sample(r, now - r.delay);
+      // a player on a slow connection is drawn further back in time (a longer buffer): led forward along their own
+      // velocity by the extra, so they show where they are now, not where they were (never seated: seats ride their
+      // vehicle)
+      const extra = Math.min(0.3, (r.delay - DELAY) / 1000);
+      if (r.ok && extra > 0 && !r.veh && r.state !== ST.sit && r.state !== ST.ride) r.pos.addScaledVector(r.vel, extra);
+    }
     this.o.vehicles?.update(dt, this, v); // (their cars and helicopters first: the avatars sit in them)
     for (const r of this.players.values()) if (r.ok) this.poseOne(r, dt, v, false);
   }

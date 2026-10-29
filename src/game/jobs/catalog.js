@@ -4,15 +4,22 @@
 // board + day + slot + how many times that slot was re-pinned.
 import { mulberry32 } from '../../core/noise.js';
 import { world } from '../../world/world.js';
-import { ITEMS } from './props.js';
 
 export function hashStr(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
-const round5 = (v) => Math.round(v / 5) * 5;
-const PAY = 5; // (Oct 28, the user: jobs pay way more, so a $50,000 chalet is within reach)
+// Pay (Oct 29 rebalance). The whole economy is set against what an hour of play earns:
+//   jobs   ~$150 a minute of the job's estimated time (+ up to 25-35 % tip): a 3-5 min job pays $450-800,
+//          ~$9,000 an hour with the walks between boards; a rescue is the premium job (~$200 a minute)
+//   races  a win pays a few jobs (freeworld.js: Easy $600-1,500, Medium $1,250-2,300, Hard $3,200-4,700)
+//   costs  (economy.js, outfits.js, carrental.js, heli.js, build/catalog.js): a lift ride $20-50, a day pass
+//          $150, good skis $3,000+ (a few races or jobs), a rental car $1,000-4,000, supercars $8,000-10,000,
+//          a heli flight $1,500, the rescue bill $750-2,000, a wreck $1,500, furniture $30-3,600, the chalet
+//          $50,000 (~3-4 hours of mixed play, ~2 for a strong racer)
+const round10 = (v) => Math.round(v / 10) * 10;
+const PAY_MIN = { delivery: 200, rescue: 500, escort: 400 }, PAY_MAX = { delivery: 1300, rescue: 2200, escort: 1600 };
 const round15 = (v) => Math.ceil(v / 15) * 15;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const pickOne = (arr, rnd) => arr[Math.floor(rnd() * arr.length) % arr.length];
@@ -109,11 +116,12 @@ export function generateOffers(ctx, hub, day, gens = []) {
 }
 
 // Each slot owns its job types, so two slots never pin the same job and re-pinning one slot never
-// changes the others: 0 = supplies run, 1 = rescue or lost & found, 2 = guide or service run.
+// changes the others: 0 = supplies run, 1 = ski patrol rescue (a service run when no casualty fits),
+// 2 = guide or service run. (Oct 29: the rescue replaced lost & found.)
 function slotTypes(slot, rnd, ctx) {
   const r = rnd();
   if (slot === 0) return ['delivery'];
-  if (slot === 1) return r < 0.55 ? ['rescue', 'lost'] : ['lost', 'rescue'];
+  if (slot === 1) return ['rescue', 'delivery'];
   return ctx.canRig && r < 0.55 ? ['escort', 'delivery'] : ['delivery', 'escort'];
 }
 
@@ -157,13 +165,13 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       const c = CARGO[key];
       const est = ctx.est(from, d);
       if (est < 45 || est > (c.perishable ? 300 : 540)) return null;
-      const reward = round5(clamp(35 + est * 0.22 + (c.perishable ? 15 : 0), 40, 150) * PAY);
+      const reward = round10(clamp(60 + est * 2.4 + (c.perishable ? 60 : 0), PAY_MIN.delivery, PAY_MAX.delivery));
       const dest = { ...destData(d), char: d.npc ? charFor(ctx, rnd, d.role) : null };
       return {
         type: 'delivery', cargo: key, pack: c.pack,
         title: `${c.title} to ${shortOf(d)}`, short: c.title,
         client: c.client(d, hub), brief: c.brief({ ...d, whoAt: WHO_AT[d.role]?.(d) || d.to }),
-        reward, bonus: round5(reward * 0.35), est: Math.round(est),
+        reward, bonus: round10(reward * 0.3), est: Math.round(est),
         par: Math.round(est * (c.perishable ? 0.8 : 0.9)), limit: round15(est * (c.perishable ? 1.35 : 1.7) + 45),
         dest,
       };
@@ -179,42 +187,21 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       if (!down) return null;
       const estDown = ctx.est(s, down);
       if (estDown > 420) return null;
-      const reward = round5(clamp(70 + est * 0.22 + estDown * 0.3, 90, 240) * PAY);
+      // injured: you bring them down in the patrol's akja (rescue sled), towing it behind you: the premium job
       const variant = rnd() < 0.6 ? 'injured' : 'stuck';
+      const reward = round10(clamp((200 + est * 2.6 + estDown * 3) * (variant === 'injured' ? 1.25 : 1), PAY_MIN.rescue, PAY_MAX.rescue));
       const name = pickOne(GUESTS, rnd);
       return {
         type: 'rescue', variant,
         title: variant === 'injured' ? `Skier down · ${s.piste}` : `Stuck in the snow · ${s.piste}`, short: variant === 'injured' ? 'Skier down' : 'Stuck skier',
         client: 'Ski patrol',
         brief: variant === 'injured'
-          ? `${name} went down beside the ${s.piste} piste and hurt a knee. Get there fast (look for the crossed skis), help them up and ski them down to ${down.to}. Stay close, and don't crash: a fall ends the rescue.`
+          ? `${name} went down beside the ${s.piste} piste and hurt a knee. Get there fast (look for the crossed skis and the red akja), load them into the rescue sled and tow it down to the patrol at ${down.to}. Ski smoothly: a crash ends the rescue.`
           : `${name}, a beginner, came out of their skis in deep snow beside the ${s.piste} piste. Help them back up and lead them down to ${down.to}. Take it easy: a fall ends the rescue.`,
-        reward, bonus: round5(reward * 0.25), est: Math.round(est), estDown: Math.round(estDown), par: Math.round(est * 0.9), limit: round15(est * 1.55 + 60),
+        reward, bonus: round10(reward * 0.25), est: Math.round(est), estDown: Math.round(estDown), par: Math.round(est * 0.9), limit: round15(est * 1.55 + 60),
         spot: { x: s.x, z: s.z, heading: s.heading, side: rnd() < 0.5 ? -1 : 1, edge: s.side, piste: s.piste, char: charFor(ctx, rnd, 'guest'), name },
         dest: { kind: 'spot', label: variant === 'injured' ? 'Injured skier' : 'Stuck skier', short: `the ${s.piste} piste`, x: s.x, z: s.z },
         down,
-      };
-    });
-  }
-  if (type === 'lost') {
-    const near = sites.areas.filter((a) => hyp(a.x - from.x, a.z - from.z) < 3200 && hyp(a.x - from.x, a.z - from.z) > 60);
-    const items = Object.keys(ITEMS);
-    return pick(near, rnd, (a) => {
-      const est = ctx.est(from, a) + ctx.est(a, from);
-      if (est > 720) return null;
-      const spot = sites.itemSpot(a, rnd);
-      if (!spot) return null;
-      const item = pickOne(items, rnd), noun = ITEMS[item].noun, guest = pickOne(GUESTS, rnd);
-      // the round trip plus a minute or two of searching: paid like the other jobs per minute
-      const reward = round5(clamp(30 + est * 0.36, 50, 190) * PAY);
-      return {
-        type: 'lost', item, noun, guest,
-        title: `Lost ${noun} · ${a.label}`, short: `Lost ${noun}`,
-        client: 'Guest services',
-        brief: `${guest} lost their ${noun} near ${a.place}. Search the area (it may glint in the sun) and bring it back to this board. A quick find earns a tip.`,
-        reward, bonus: round5(reward * 0.25), est: Math.round(est), par: Math.round(est * 1.2 + 60), limit: round15(est * 2 + 300),
-        area: { x: a.x, z: a.z, r: a.r, label: a.label, place: a.place }, itemPos: spot,
-        dest: { kind: 'board', hubId: hub.id, label: `Job board · ${hub.name}`, short: hub.kind === 'village' ? 'the village' : hub.name, x: hub.front.x, z: hub.front.z, place: hub.place },
       };
     });
   }
@@ -226,13 +213,13 @@ function makeOffer(ctx, hub, type, slot, rnd) {
       if (est < 90 || est > 600) return null;
       const skill = pickOne(Object.keys(SKILLS), rnd), S = SKILLS[skill], name = pickOne(GUESTS, rnd);
       const estG = est / S.factor;
-      const reward = round5(clamp(85 + estG * 0.2, 90, 190) * PAY);
+      const reward = round10(clamp(150 + estG * 2.5, PAY_MIN.escort, PAY_MAX.escort));
       const to = d.kind === 'board' && d.hubId === 'village' ? 'Legacy Village' : d.kind === 'board' ? d.place : d.to;
       return {
         type: 'escort', title: `Guide ${name} to ${shortOf(d)}`, short: `Guiding ${name}`,
         client: 'Ski school',
         brief: `${name} is ${S.text} and wants to get to ${to}. Lead the way and keep ${name} close: they follow your tracks at their own pace. Quick and safe earns a tip.`,
-        reward, bonus: round5(reward * 0.3), est: Math.round(estG), par: Math.round(estG * 0.95), limit: round15(estG * 1.7 + 90),
+        reward, bonus: round10(reward * 0.3), est: Math.round(estG), par: Math.round(estG * 0.95), limit: round15(estG * 1.7 + 90),
         guest: { name, skill, char: charFor(ctx, rnd, 'guest'), ski: skill === 'strong' ? 'pro' : skill === 'steady' ? 'sport' : 'rental' },
         dest: destData(d),
       };
@@ -305,6 +292,7 @@ export function failText(job, reason) {
       if (reason === 'crash') return 'Rescue failed · you crashed';
       if (reason === 'late') return `Too slow · the ski patrol took ${n} down`;
       if (reason === 'lost') return `${n} lost you · the ski patrol took over`;
+      if (reason === 'rough') return `Too rough a ride for ${n} · the ski patrol took over`;
       return 'The ski patrol took over the rescue';
     }
     if (reason === 'late') return 'The ski patrol reached the skier first';
@@ -316,18 +304,17 @@ export function failText(job, reason) {
     if (reason === 'lost') return `${n} lost sight of you and headed back`;
     return `${n} made it down safely on their own`;
   }
-  if (job.type === 'lost') return `The guest gave up on their ${job.noun || 'things'}`;
   return 'Job cancelled';
 }
 
 export function successText(job, total, tip) {
-  const pay = tip ? `$${job.reward} + $${tip} tip` : `+$${total}`;
+  const $ = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
+  const pay = tip ? `${$(job.reward)} + ${$(tip)} tip` : `+${$(total)}`;
   if (job.type === 'delivery') return `Delivered · ${pay}`;
   if (job.type === 'rescue') {
-    if (job.phase === 'down') return `${job.spot?.name || 'The skier'} is safe at ${job.down?.short || 'the bottom'} · ${pay}`;
+    if (job.phase === 'down') return `${job.spot?.name || 'The skier'} is ${job.tow ? 'with the patrol' : 'safe'} at ${job.down?.short || 'the bottom'} · ${pay}`;
     return job.variant === 'injured' ? `Patrol is on the way · ${pay}` : `Back on their skis · ${pay}`;
   }
-  if (job.type === 'lost') return `${job.guest || 'The guest'} is thrilled · ${pay}`;
   if (job.type === 'escort') return `${job.guest?.name || 'Your guest'} arrived · ${pay}`;
   return `Job done · ${pay}`;
 }

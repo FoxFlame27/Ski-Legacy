@@ -7,10 +7,10 @@ import { buildTransport } from './transport.js';
 import { buildSectors } from './sectors.js';
 
 export const DIFFICULTY = [
-  { key: 'easy', label: 'Easy', color: '#2fbf5b', maxSlope: 0.30, length: 520, gates: 34, reward: 150, botSkill: 0.78, entry: 0 },
-  { key: 'medium', label: 'Medium', color: '#2f7bff', maxSlope: 0.45, length: 800, gates: 30, reward: 380, botSkill: 0.9, entry: 0 },
-  { key: 'hard', label: 'Hard', color: '#e23b3b', maxSlope: 0.62, length: 1050, gates: 30, reward: 850, botSkill: 0.95, entry: 20 },
-  { key: 'expert', label: 'Expert', color: '#141414', maxSlope: 0.85, length: 1350, gates: 32, reward: 1900, botSkill: 0.99, entry: 50 },
+  { key: 'easy', label: 'Easy', color: '#2fbf5b', maxSlope: 0.30, length: 520, gates: 34, reward: 600, botSkill: 0.78, entry: 0 },
+  { key: 'medium', label: 'Medium', color: '#2f7bff', maxSlope: 0.45, length: 800, gates: 30, reward: 1250, botSkill: 0.9, entry: 50 },
+  { key: 'hard', label: 'Hard', color: '#e23b3b', maxSlope: 0.62, length: 1050, gates: 30, reward: 3200, botSkill: 0.95, entry: 150 },
+  { key: 'expert', label: 'Expert', color: '#141414', maxSlope: 0.85, length: 1350, gates: 32, reward: 4700, botSkill: 0.99, entry: 300 },
 ];
 // groomed half-width of a piste by difficulty (also used by the snow cannons and piste markers)
 export const PISTE_WIDTH = [24, 20, 16, 14];
@@ -572,7 +572,7 @@ const BUNNY_TOP = [330, -720, 70];
 function buildMainMountain() {
   // Village center at origin. Gondola runs from the village to just below the main summit.
   const top = { ...MAIN_FACE.top };
-  const gondola = addLift({ type: 'gondola', name: 'Legacy Gondola', bottom: { x: 0, z: -70 }, top, price: 25, noBottomPad: true, main: true, topName: 'the summit', bottomName: 'Legacy Village' });
+  const gondola = addLift({ type: 'gondola', name: 'Legacy Gondola', bottom: { x: 0, z: -70 }, top, price: 50, noBottomPad: true, main: true, topName: 'the summit', bottomName: 'Legacy Village' });
   placeMid(gondola, -1); // the Legacy Mid-Station; its stair and exit face west, where the Panorama starts
 
   // Summit restaurant
@@ -614,7 +614,7 @@ function buildMainMountain() {
   const ax = easy.finish.x, az = easy.finish.z, sx = easy.start.x, sz = easy.start.z;
   const ex = sx - ax, ez = sz - az, el = Math.hypot(ex, ez);
   const px = -ez / el * 35, pz = ex / el * 35;
-  const lift = addLift({ type: 'chair', name: 'Bunny Chair', bottom: { x: ax + px, z: az + pz }, top: { x: sx + px, z: sz + pz }, price: 10 });
+  const lift = addLift({ type: 'chair', name: 'Bunny Chair', bottom: { x: ax + px, z: az + pz }, top: { x: sx + px, z: sz + pz }, price: 20 });
   easy.lift = lift.id;
   world.addCorridor([[0, -120], [ax + px, az + pz]], 10, 'piste');
 
@@ -626,7 +626,7 @@ function buildMainMountain() {
       initDir: [0, 1], goal: [valleyCenter(1650), 1650], goalWeight: 0.6 });
     const vr = RESORT_RACES ? buildRace('Legacy Valley Run', 1, pts, 15, { main: true }) : runPiste('Legacy Valley Run', 1, pts, { number: 8 });
     const ex = vr.start.x - vr.finish.x, ez = vr.start.z - vr.finish.z, el = Math.hypot(ex, ez) || 1;
-    const lift = addLift({ type: 'chair', name: 'Valley Chair', price: 10,
+    const lift = addLift({ type: 'chair', name: 'Valley Chair', price: 20,
       bottom: { x: vr.finish.x - (ez / el) * 32, z: vr.finish.z + (ex / el) * 32 },
       top: { x: vr.start.x - (ez / el) * 32 - (ex / el) * 10, z: vr.start.z + (ex / el) * 32 - (ez / el) * 10 } });
     vr.lift = lift.id;
@@ -654,7 +654,7 @@ const faceUV = (m, x, z) => [(x - m.top.x) * m.fx + (z - m.top.z) * m.fz, (z - m
 // foot of the face; the line runs on to the same top station and the pistes run out over the apron to it.
 const PEAKS = {
   adlerhorn: {
-    number: 11, lift: 'Adlerhorn Gondola', price: 20, hut: { name: 'Adlerhorn Hütte', u: 30, v: -100 }, patrol: { u: -18, v: 58 },
+    number: 11, lift: 'Adlerhorn Gondola', price: 40, hut: { name: 'Adlerhorn Hütte', u: 30, v: -100 }, patrol: { u: -18, v: 58 },
     base: { x: 100, z: 0 },
     pistes: [
       { name: 'Adlerflug', diff: 2, side: 0, start: [46, 4], end: [-58, 4] },
@@ -666,7 +666,7 @@ const PEAKS = {
     ],
   },
   silberhorn: {
-    number: 21, lift: 'Silberhorn Gondola', price: 20, hut: { name: 'Silberhorn Hütte', u: 30, v: 100 }, patrol: { u: -18, v: -58 },
+    number: 21, lift: 'Silberhorn Gondola', price: 40, hut: { name: 'Silberhorn Hütte', u: 30, v: 100 }, patrol: { u: -18, v: -58 },
     base: { x: -75, z: 84 },
     pistes: [
       { name: 'Silberpfeil', diff: 3, side: 0, start: [46, -4], end: [-58, -4] },
@@ -678,7 +678,7 @@ const PEAKS = {
     ],
   },
   sonnenkopf: {
-    number: 31, lift: 'Sonnenkopf Gondola', price: 20, hut: { name: 'Sonnenkopf Hütte', u: 30, v: -100 }, patrol: { u: -18, v: 58 },
+    number: 31, lift: 'Sonnenkopf Gondola', price: 40, hut: { name: 'Sonnenkopf Hütte', u: 30, v: -100 }, patrol: { u: -18, v: 58 },
     pistes: [
       { name: 'Wolfsschlucht', diff: 2, side: 0, start: [46, -4], end: [-58, -4], drop: true },
       { name: 'Lärchenweg', diff: 1, side: 1, start: [42, 32], end: [-52, 16], viaMid: true },
@@ -831,7 +831,7 @@ function buildValleyRaces() {
   const [rp, rn] = lateralReach(race.path, race.finish.x, race.finish.z, race.start.x, race.start.z);
   const side = rp <= rn ? 1 : -1, off = Math.min(rp, rn) + race.halfWidth + 26;
   const ox = (-ez / el) * off * side, oz = (ex / el) * off * side; // to the side of the course
-  const lift = addLift({ type: 'gondola', name: 'Valley Gondola', price: 15, valley: true, topName: 'the upper valley', bottomName: 'the lower valley',
+  const lift = addLift({ type: 'gondola', name: 'Valley Gondola', price: 30, valley: true, topName: 'the upper valley', bottomName: 'the lower valley',
     bottom: { x: race.finish.x + ox + (ex / el) * 10, z: race.finish.z + oz + (ez / el) * 10 },
     top: { x: race.start.x + ox - (ex / el) * 20, z: race.start.z + oz - (ez / el) * 20 } });
 }
@@ -1086,7 +1086,7 @@ function planPark() {
   return {
     name: 'Legacy Park', heading, fx, fz, rx, rz, at, length: PARK_LENGTH, halfWidth: PARK_HALF_W, line, features,
     drop: { ...drop, r: 9 },
-    lift: { type: 'chair', name: 'Park Lift', price: 8, bottom: { x: bottom.x, z: bottom.z }, top: { x: top.x, z: top.z } },
+    lift: { type: 'chair', name: 'Park Lift', price: 15, bottom: { x: bottom.x, z: bottom.z }, top: { x: top.x, z: top.z } },
   };
 }
 
@@ -1455,7 +1455,7 @@ function genDownhill(di, dj) {
   const c = downhillCandidate(di, dj);
   if (!c) return;
   const race = buildRace(c.name, c.diff, c.pts, c.seed, { procedural: true, downhill: true });
-  const lift = addLift({ type: 'gondola', name: `${c.name.split(' ')[0]} Gondola`, price: 15 + c.diff * 5, procedural: true, bottom: { ...c.lift.bottom }, top: { ...c.lift.top } });
+  const lift = addLift({ type: 'gondola', name: `${c.name.split(' ')[0]} Gondola`, price: 30 + c.diff * 10, procedural: true, bottom: { ...c.lift.bottom }, top: { ...c.lift.top } });
   race.lift = lift.id;
   trimRaceAtClimb(race, 3);
 }
@@ -1536,7 +1536,7 @@ function genCell(ci, cj) {
   const diff = near ? Math.max(targetDiff, gradeDiff - 1) : gradeDiff;
   const name = `${ADJ[Math.floor(rnd() * ADJ.length)]} ${NOUN[Math.floor(rnd() * NOUN.length)]}`;
   const race = buildRace(name, diff, pts, seed, { procedural: true });
-  const l = addLift({ type: 'chair', name: `${name.split(' ')[0]} Express`, bottom: lift.bottom, top: lift.top, price: 10 + diff * 5, procedural: true });
+  const l = addLift({ type: 'chair', name: `${name.split(' ')[0]} Express`, bottom: lift.bottom, top: lift.top, price: 20 + diff * 10, procedural: true });
   race.lift = l.id;
   trimRaceAtClimb(race);
 }

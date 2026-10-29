@@ -86,8 +86,8 @@ function drawBoardFace(g, W, H) {
   // three pinned notes
   const notes = [
     { head: 'DELIVERIES', lines: ['Huts & lift crews', 'Mail to the village', 'Parcels, spare parts'], pin: '#c0392b', rot: -0.035 },
-    { head: 'SKI PATROL', lines: ['Skier down?', 'Get there fast', 'Stay till help comes'], pin: '#2e6bd1', rot: 0.022 },
-    { head: 'GUESTS', lines: ['Lost & found', 'Guide a guest', 'to the huts'], pin: '#2f9d58', rot: -0.014 },
+    { head: 'SKI PATROL', lines: ['Skier down?', 'Akja to the patrol', 'Stuck in deep snow'], pin: '#2e6bd1', rot: 0.022 },
+    { head: 'GUESTS', lines: ['Guide a guest', 'to the huts', 'Quick & safe: tips'], pin: '#2f9d58', rot: -0.014 },
   ];
   const nw = 276, nh = 372, top = 252;
   notes.forEach((n, i) => {
@@ -108,7 +108,7 @@ function drawBoardFace(g, W, H) {
     n.lines.forEach((ln, k) => g.fillText(ln, 0, -nh / 2 + 152 + k * 50));
     g.fillStyle = '#7a1f12';
     g.font = 'bold 32px Georgia, "Times New Roman", serif';
-    g.fillText(i === 1 ? '$80 - 170' : i === 0 ? '$40 - 150' : '$50 - 190', 0, nh / 2 - 46);
+    g.fillText(i === 1 ? '$500 - 2,200' : i === 0 ? '$200 - 1,300' : '$400 - 1,600', 0, nh / 2 - 46); // (the pay ranges in catalog.js)
     // pin
     g.fillStyle = n.pin;
     g.beginPath(); g.arc(0, -nh / 2 + 20, 13, 0, Math.PI * 2); g.fill();

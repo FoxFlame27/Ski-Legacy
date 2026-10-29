@@ -15,12 +15,10 @@ const ICONS = {
   delivery: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9M7.8 5.2l8.4 4.5"/></svg>',
   // the patrol's cross
   rescue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M10 6.8h4v3.2h3.2v4H14v3.2h-4V14H6.8v-4H10z" fill="currentColor" stroke="none"/></svg>',
-  // a magnifying glass
-  lost: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5.5 5.5"/></svg>',
   // a guide's flag
   escort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V3.5"/><path d="M5 4h12l-3 4 3 4H5" fill="currentColor" fill-opacity="0.18"/></svg>',
 };
-const KIND = { delivery: 'Delivery', rescue: 'Rescue', lost: 'Lost & found', escort: 'Guide' };
+const KIND = { delivery: 'Delivery', rescue: 'Rescue', escort: 'Guide' };
 const DIFF = [null, ['Easy', '#129a46'], ['Medium', '#1546c8'], ['Hard', '#d0342c']]; // piste colours
 const CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 const PINS = ['#d0342c', '#1546c8', '#e09a00', '#129a46'];

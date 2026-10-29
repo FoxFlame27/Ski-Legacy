@@ -43,12 +43,12 @@ function buildGlacier({ layout, addLift, addPiste, routePiste, faceUV, BAND }) {
   const station = beside((platt.s0 + platt.s1) / 2, 0);
   // (procedural: like the backcountry lifts it gets no ski-bus stop, base sign or village wayfinding board: only
   // the Wolkenspitzbahn comes up here)
-  const jet = addLift({ type: 'gondola', name: 'Gletscherjet', bottom: plat(-470, -150), top: plat(660, -40), price: 15, glacier: true, procedural: true,
+  const jet = addLift({ type: 'gondola', name: 'Gletscherjet', bottom: plat(-470, -150), top: plat(660, -40), price: 30, glacier: true, procedural: true,
     topName: 'the back of the glacier', bottomName: 'the lower glacier' });
-  const firn = addLift({ type: 'chair', name: 'Firnfeld Chair', bottom: plat(40, 330), top: plat(470, 290), price: 10, glacier: true,
+  const firn = addLift({ type: 'chair', name: 'Firnfeld Chair', bottom: plat(40, 330), top: plat(470, 290), price: 20, glacier: true,
     topName: 'the Firnfeld', bottomName: 'Wolkenplatt station' });
   // back up from the lower glacier to the station (a beginner's loop: the green down, the chair up)
-  addLift({ type: 'chair', name: 'Firnboden Chair', bottom: plat(-430, -30), top: plat(-70, 100), price: 10, glacier: true,
+  addLift({ type: 'chair', name: 'Firnboden Chair', bottom: plat(-430, -30), top: plat(-70, 100), price: 20, glacier: true,
     topName: 'Wolkenplatt station', bottomName: 'the lower glacier' });
   // the glacier restaurant beside the station building, its terrace facing down the glacier toward the village
   const hp = plat(6, 178);
@@ -91,7 +91,7 @@ function buildGlacier({ layout, addLift, addPiste, routePiste, faceUV, BAND }) {
 function buildWolkensee({ layout, addLift, addPiste, routePiste, BAND }) {
   const see = RAIL.stations.find((st) => st.id === 'see');
   const b = beside((see.s0 + see.s1) / 2 + 14, see.side * 50);
-  const g = addLift({ type: 'gondola', name: 'Wolkensee Gondola', bottom: { x: b.x, z: b.z }, top: { x: 2362, z: -702 }, price: 15,
+  const g = addLift({ type: 'gondola', name: 'Wolkensee Gondola', bottom: { x: b.x, z: b.z }, top: { x: 2362, z: -702 }, price: 30,
     topName: 'the Adlerhorn ridge', bottomName: 'Wolkensee' });
   // its base shares the halt's level (one flat forecourt: the halt's ground never slopes away under its building)
   const bpad = world.pads.find((pd) => pd.x === g.bottom.x && pd.z === g.bottom.z);
@@ -115,7 +115,7 @@ function buildWolkensee({ layout, addLift, addPiste, routePiste, BAND }) {
 // On the sunny, gentle east side of the valley just below the village: a short chair and a wide green run
 // (the first lift for a beginner, a short walk from the plaza).
 function buildSonnenwiese({ layout, addLift, addPiste, routePiste, BAND }) {
-  const c = addLift({ type: 'chair', name: 'Sonnenwiese Chair', bottom: { x: 392, z: 806 }, top: { x: 336, z: 362 }, price: 5,
+  const c = addLift({ type: 'chair', name: 'Sonnenwiese Chair', bottom: { x: 392, z: 806 }, top: { x: 336, z: 362 }, price: 20,
     topName: 'Legacy Village', bottomName: 'the Sonnenwiese' });
   const F = face('sonnenwiese', c.top, c.bottom, 260, 200);
   const [gMin, gMax] = BAND[0];

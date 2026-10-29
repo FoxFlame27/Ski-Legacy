@@ -73,9 +73,9 @@ export function buildSectors(kit) {
 
 
   // ---------------------------------------------------------------- Hirschalm
-  const hChair = addLift({ type: 'chair', name: 'Hirschalm Chair', bottom: { x: 2960, z: 150 }, top: { x: 3070, z: 930 }, price: 10,
+  const hChair = addLift({ type: 'chair', name: 'Hirschalm Chair', bottom: { x: 2960, z: 150 }, top: { x: 3070, z: 930 }, price: 20,
     topName: 'the Kamm', bottomName: 'the Hirschalm' });
-  const aChair = addLift({ type: 'chair', name: 'Adlerblick Chair', bottom: { x: 2830, z: 10 }, top: { x: 2430, z: -455 }, price: 10,
+  const aChair = addLift({ type: 'chair', name: 'Adlerblick Chair', bottom: { x: 2830, z: 10 }, top: { x: 2430, z: -455 }, price: 20,
     topName: 'the Adlerhorn summit', bottomName: 'the Hirschalm' });
   // the alm restaurant on the basin, west of the chairs' bases, its terrace facing south over the basin
   const hut = { x: 2700, z: 190, name: 'Hirschalm Hütte', label: 'Hirschalm · Hirschalm Hütte', yaw: 0.35, peak: 'hirschalm' };
@@ -113,7 +113,7 @@ export function buildSectors(kit) {
   layout.peaks.push({ id: 'hirschalm', name: 'Hirschalm', lift: hChair, hut, pistes: pistesA, patrol });
 
   // ---------------------------------------------------------------- Ostkar
-  const oChair = addLift({ type: 'chair', name: 'Ostkar Chair', bottom: { x: 3880, z: 150 }, top: { x: 3740, z: 1010 }, price: 10,
+  const oChair = addLift({ type: 'chair', name: 'Ostkar Chair', bottom: { x: 3880, z: 150 }, top: { x: 3740, z: 1010 }, price: 20,
     topName: 'the Ostkar ridge', bottomName: 'the Ostkar' });
   // the Murmelhütte: a small hut on the Ostkar's floor, beside the chair's base (west of it, off the runs' ends)
   const ohut = { x: 3770, z: 200, name: 'Murmelhütte', label: 'Ostkar · Murmelhütte', yaw: -0.2, peak: 'ostkar' };

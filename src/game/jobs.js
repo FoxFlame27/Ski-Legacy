@@ -1,10 +1,10 @@
 // Jobs: odd jobs around the resort that pay money, without cluttering the mountains. The only
 // permanent props are a few wooden job boards (the village plaza and the mountain huts; five at most
-// within 3 km of the village). Every parcel, injured skier, lost glove or guest exists only while its
+// within 3 km of the village). Every parcel, injured skier, rescue sled or guest exists only while its
 // job runs, and is cleaned up once you have moved on.
 //   Delivery      pick up at the board, hand it over at a hut, lift station, patrol post or race start
-//   Rescue        reach a skier down beside a piste before the patrol sled has to come up
-//   Lost & found  search an area for a guest's glove, phone or goggles and bring it back to the board
+//   Rescue        reach a skier down beside a piste: tow an injured one down in the patrol's akja (rescue
+//                 sled), or lead a stuck beginner down (Oct 29: the rescue replaced lost & found)
 //   Guide         lead a guest (who skis your own tracks) to a hut or down to the village
 // Offers are the same all game day (deterministic per board, day and slot); a slot is re-pinned when
 // its job is done, failed or dropped. Timers freeze whenever update() is told the game isn't active.
@@ -17,7 +17,7 @@ import * as VillageMod from '../world/village.js'; // read-only: the night facto
 import * as TransitionMod from '../ui/transition.js'; // read-only: whether a fade covers the screen
 import { Sites } from './jobs/sites.js';
 import { generateOffers, failText, successText, fmtClock, shortOf, SKILLS, GUESTS, descentFor, hashStr } from './jobs/catalog.js';
-import { makeBoard, makePack, makeItem, makeGlint, makeCrossedSkis, makeLyingSkis, makeRing, makeFallbackFigure, disposeProps, boardAssets, setPropModels, artWarmup, ITEMS, makeRescueSled } from './jobs/props.js';
+import { makeBoard, makePack, makeItem, makeGlint, makeCrossedSkis, makeLyingSkis, makeRing, makeFallbackFigure, disposeProps, boardAssets, setPropModels, artWarmup, ITEMS, makeRescueSled, meshY } from './jobs/props.js';
 import { Actor, Follower, RigPool } from './jobs/actors.js';
 import { BackFit, PackFollow } from './jobs/pose.js';
 import { edgeDist } from './jobs/sites.js';
@@ -32,10 +32,12 @@ const CHARS = ['skier_blue', 'skier_red', 'skier_green', 'skier_orange', 'skier_
 const BOARD_R = 2.3;          // read a board from in front of it
 const HAND_R = 2.8;           // hand a parcel over
 const HELP_R = 2.6;           // kneel beside a skier in the snow
-const ITEM_R = 2.0;           // pick a lost item up
 const ARRIVE_R = 5;           // guiding: arrived at the destination
 const DOWN_R = 22;            // rescue: you are at the bottom with the skier you brought down
 const DOWN_GUEST_R = 34;      // ...and they are with you
+const TOW_ROPE = 3.4;         // rescue akja: the rope from your back to the sled (m)
+const TOW_VMAX = 19;          // m/s (~68 km/h): faster than this is too rough a ride for the casualty
+const TOW_ROUGH = 6;          // s over that speed (it recovers when you slow down) and the patrol takes over
 const LINGER_R2 = 90 * 90;    // people and props stay until you are this far away (nobody vanishes in your face),
 const LINGER_NEAR2 = 40 * 40; // or, after a while, once they are out of view at least this far off
 const GLINT_R2 = 45 * 45;
@@ -366,6 +368,14 @@ export class Jobs {
     if (!v?.rig || !this.talk) { this.complete(); return; }
     job.down ??= descentFor(this.sites, job.spot) || this.villageDown();
     const name = this.victimName(job), stuck = job.variant === 'stuck', to = job.down.to || job.down.label;
+    if (!stuck && this.victimProps?.sled) {
+      // the akja: they can't ski on that knee, you tow them down in the patrol's rescue sled
+      this.dialog(this.personSpeaker(v), { name, role: 'Skier down' }, esc(`Ow... I twisted my knee badly, I can't ski on it. The patrol left their sled here. Can you get me in and take me down to ${to}?`), [
+        { label: 'Load them into the akja', sub: esc(`tow it to ${job.down.short || job.down.label} · ski smoothly`), act: () => { this.startTow(); this.relock(); } },
+        { label: 'One moment', act: () => this.relock() },
+      ]);
+      return;
+    }
     const line = stuck
       ? `Thank you for coming! My skis came off and I keep sinking in this deep snow. Can you help me up and show me the way down to ${to}?`
       : `Ow... I twisted my knee when I fell. I think I can still ski if we take it slowly. Will you take me down to ${to}?`;
@@ -416,8 +426,9 @@ export class Jobs {
     const a = this.sj.active;
     if (!a || typeof a !== 'object') { this.sj.active = null; return; }
     const okPos = (p) => p && Number.isFinite(p.x) && Number.isFinite(p.z) && Number.isFinite(world.height(p.x, p.z));
-    const valid = ['delivery', 'rescue', 'lost'].includes(a.type) && okPos(a.dest) && Number.isFinite(a.elapsed) && Number.isFinite(a.limit) &&
-      (a.type !== 'lost' || okPos(a.itemPos)) && (a.type !== 'rescue' || (okPos(a.spot) && a.phase !== 'down')) && a.day === (this.save.day ?? 1) &&
+    // (an old save's lost & found job is dropped: that job is gone, the rescue took its place)
+    const valid = ['delivery', 'rescue'].includes(a.type) && okPos(a.dest) && Number.isFinite(a.elapsed) && Number.isFinite(a.limit) &&
+      (a.type !== 'rescue' || (okPos(a.spot) && a.phase !== 'down')) && a.day === (this.save.day ?? 1) &&
       (a.dest.kind !== 'board' || this.boardById(a.dest.hubId));
     if (!valid) { this.sj.active = null; return; }
     this.job = a;
@@ -486,12 +497,6 @@ export class Jobs {
       }
       this.addThing(thing);
       this.prompts = { help: P(stuck ? 'Help them back up' : 'Help the injured skier', () => this.helpVictim()) };
-    } else if (job.type === 'lost') {
-      if (!job.found) this.spawnItem(job);
-      this.prompts = {
-        pick: P(`Pick up the ${job.noun}`, () => this.pickUp()),
-        ret: P(`Return the ${job.noun}`, () => this.complete()),
-      };
     } else if (job.type === 'escort') {
       const b = this.boardById(job.board);
       const at = b ? this.sites.besideBoard(b.hub) : { x: this.player.pos.x + 2, z: this.player.pos.z + 2, yaw: 0 };
@@ -557,28 +562,6 @@ export class Jobs {
   cargoNoun(job) {
     const n = { fondue: 'fondue cheese', bread: 'bread', cocoa: 'hot chocolate', mail: 'mail bag', firstaid: 'first-aid kit', radio: 'batteries', part: 'spare part', bibs: 'race bibs', shovels: 'shovels' };
     return n[job.cargo] || 'parcel';
-  }
-
-  spawnItem(job) {
-    const p = job.itemPos;
-    const obj = makeItem(job.item, p.x, p.z, p.yaw || 0);
-    const glint = makeGlint();
-    glint.position.set(0, 0.12, 0); // just above the item (its frame is tilted to the slope)
-    obj.add(glint);
-    this.item = { obj, glint, t: Math.abs(p.x * 0.37 + p.z * 0.11) % 6 };
-    this.addThing({ obj, item: true });
-  }
-
-  pickUp() {
-    const job = this.job;
-    if (!job || job.type !== 'lost' || job.found) return;
-    job.found = true;
-    this.removeItem();
-    this.writeSave();
-    const b = this.boardById(job.dest.hubId);
-    this.audio?.play?.('soft');
-    this.hud?.flash?.(`Found the ${job.noun} · bring it back to the board${b ? ` at ${b.hub.kind === 'village' ? 'the village' : b.hub.name}` : ''}`, 'good', 2800);
-    this.hudKey = -1;
   }
 
   removeItem() {
@@ -688,7 +671,7 @@ export class Jobs {
       }
     }
     for (const t of this.things) { t.linger = true; t.t = 0; t.follow = false; }
-    this.follower = null; this.guest = null; this.victim = null; this.recipient = null; this.victimProps = null;
+    this.follower = null; this.guest = null; this.victim = null; this.recipient = null; this.victimProps = null; this.tow = null;
     this.prompts = null;
     this.farT = 0;
     this.writeSave();
@@ -924,6 +907,94 @@ export class Jobs {
     this.farT = 0;
   }
 
+  // ---------------------------------------------------------------- rescue: the akja
+  // "Load them into the akja": the casualty sits in the patrol's rescue sled (their skis go in with them) and
+  // you tow it down on a rope to the lift / hut / village at the bottom, where the patrol takes over. The sled
+  // trails TOW_ROPE behind you, follows the snow (pitched to the slope) and swings round behind you on turns.
+  // Too fast (over TOW_VMAX for TOW_ROUGH s) or a crash and the patrol takes over: the job fails.
+  startTow() {
+    const job = this.job, v = this.victim, vp = this.victimProps;
+    if (!job || job.type !== 'rescue' || job.phase === 'down' || !v?.rig || !vp?.sled || this.disposed) return;
+    job.down ??= descentFor(this.sites, job.spot) || this.villageDown();
+    job.phase = 'down'; job.tow = true; job.rough = 0;
+    const estDown = this.est(v.pos, job.down);
+    job.limit = job.elapsed + round15(estDown * 2.4 + 90);
+    job.par = job.elapsed + Math.round(estDown * 1.4);
+    // the crossed skis go into the sled; the casualty and the sled leave the spot together
+    const t = this.things.find((e) => e.actor === v);
+    if (t) {
+      this.setSolid(t, false);
+      t.colliders = [];
+      if (t.obj) { this.mgroup.remove(t.obj); t.obj = null; }
+      t.follow = true; // posed here, not by the job loop
+    }
+    while (v.prep > 0) v.prepStep();
+    v.setVisible(true);
+    const sled = vp.sled;
+    sled.parent?.remove(sled);
+    sled.rotation.order = 'YZX';
+    const sz = sled.userData.size, alongX = !sz || sz.x >= sz.z;
+    const half = Math.max(0.6, ((alongX ? sz?.x : sz?.z) || 2.3) / 2 - 0.15);
+    const st = { obj: sled, colliders: [] };
+    this.addThing(st);
+    st.follow = true;
+    this.tow = { sled, alongX, half, x: sled.position.x, z: sled.position.z, yaw: Math.atan2(this.player.pos.x - sled.position.x, this.player.pos.z - sled.position.z), warn: false };
+    this.placeTow(0);
+    this.farT = 0;
+    this.writeSave();
+    this.audio?.play?.('soft');
+    this.hud?.flash?.(`${this.victimName(job)} is in the akja · tow them down to ${job.down.short || job.down.label}`, 'good', 3200);
+    this.hudKey = -1; this.refreshHud();
+  }
+
+  // the sled on its rope behind you, and the casualty sitting in it
+  placeTow(dt) {
+    const T = this.tow, p = this.player.pos, v = this.victim;
+    let dx = T.x - p.x, dz = T.z - p.z, d = Math.hypot(dx, dz);
+    if (d > 40) {
+      // a jump (a lift, a fade): the sled turns up right behind you
+      const h = this.player.heading || 0;
+      dx = -Math.sin(h); dz = -Math.cos(h); d = 1;
+      T.x = p.x + dx * TOW_ROPE; T.z = p.z + dz * TOW_ROPE;
+    } else if (d > TOW_ROPE) {
+      T.x = p.x + (dx / d) * TOW_ROPE; T.z = p.z + (dz / d) * TOW_ROPE;
+    }
+    // the sled points at you (its long axis along the rope), eased so it doesn't snap round when you stop
+    if (d > 0.3) {
+      const want = Math.atan2(-dx, -dz);
+      let dy = want - T.yaw; dy -= Math.round(dy / (Math.PI * 2)) * Math.PI * 2;
+      T.yaw += dt > 0 ? dy * Math.min(1, dt * 6) : dy;
+    }
+    const fx = Math.sin(T.yaw), fz = Math.cos(T.yaw);
+    const yF = meshY(T.x + fx * T.half, T.z + fz * T.half), yB = meshY(T.x - fx * T.half, T.z - fz * T.half);
+    const y = Math.max(meshY(T.x, T.z), (yF + yB) / 2) - 0.02, pitch = Math.atan2(yF - yB, 2 * T.half);
+    const s = T.sled;
+    s.position.set(T.x, y, T.z);
+    // the model's long axis (x or z) along the rope, tipped to the slope
+    if (T.alongX) { s.rotation.order = 'YZX'; s.rotation.set(0, T.yaw - Math.PI / 2, pitch); } else { s.rotation.order = 'YXZ'; s.rotation.set(-pitch, T.yaw, 0); }
+    if (v?.rig) {
+      // sitting in it facing you, a little back from the middle so the legs fit
+      const bx = T.x - fx * 0.35, bz = T.z - fz * 0.35;
+      v.pos.set(bx, y + 0.16 - Math.sin(pitch) * 0.35, bz);
+      v.heading = T.yaw;
+      v.rig.root.position.copy(v.pos);
+      v.rig.root.rotation.set(0, T.yaw, 0);
+    }
+  }
+
+  updateTow(dt) {
+    const job = this.job, T = this.tow, pl = this.player;
+    this.placeTow(dt);
+    // too fast is too rough for the casualty: a warning, then the patrol takes over
+    const sp = pl.speed ?? Math.hypot(pl.vel?.x || 0, pl.vel?.z || 0);
+    job.rough = Math.max(0, (job.rough || 0) + (sp > TOW_VMAX ? dt : -dt * 0.5));
+    const warn = sp > TOW_VMAX;
+    if (warn && !T.warn) { this.hud?.flash?.(`Easy! Too fast for ${this.victimName(job)} in the akja`, 'bad', 1800); this.audio?.play?.('error'); }
+    if (warn !== T.warn) { T.warn = warn; this.hudKey = -1; }
+    if (job.rough > TOW_ROUGH) { this.fail('rough'); return; }
+    if (near(pl.pos, job.down, DOWN_R) && near(T, job.down, DOWN_GUEST_R)) this.complete();
+  }
+
   // open snow a person can ski over: no tree, rock, net, sign or building within reach
   clearAt(x, z) {
     if (this.player.vegetation?.collide?.(x, z, 1.0)) return false;
@@ -938,6 +1009,7 @@ export class Jobs {
   updateRescue(dt) {
     const job = this.job, v = this.victim;
     if (!v) return;
+    if (this.tow) { this.updateTow(dt); return; }
     if (!this.follower) {
       if (v.pose === 'stand') this.startFollower();
       return;
@@ -992,9 +1064,6 @@ export class Jobs {
         if (near(pos, this.destPoint(job), job.dest.npc ? HAND_R : BOARD_R + 0.4)) return P.hand;
       } else if (job.type === 'rescue') {
         if (this.victim && job.phase !== 'down' && near(pos, this.victim.center(_c), HELP_R)) return P.help;
-      } else if (job.type === 'lost') {
-        if (!job.found) { if (near(pos, job.itemPos, ITEM_R)) return P.pick; }
-        else if (near(pos, this.destPoint(job), BOARD_R + 0.4)) return P.ret;
       } else if (job.type === 'escort') {
         if (near(pos, this.destPoint(job), ARRIVE_R)) return this.guestArrived() ? P.drop : P.wait;
       }
@@ -1009,9 +1078,7 @@ export class Jobs {
     const job = this.job;
     if (!job || this.disposed) return null;
     const w = this._wp;
-    if (job.type === 'lost' && !job.found) {
-      w.x = job.area.x; w.z = job.area.z; w.label = 'Search area';
-    } else if (job.type === 'escort' && this.guest && !this.follower?.hidden && this.follower?.gap > 90) {
+    if (job.type === 'escort' && this.guest && !this.follower?.hidden && this.follower?.gap > 90) {
       w.x = this.guest.pos.x; w.z = this.guest.pos.z; w.label = job.guest.name;
     } else if (job.type === 'rescue' && job.phase === 'down' && job.down) {
       const f = this.follower, far = f && !f.hidden && f.gap > 90 && this.victim;
@@ -1033,11 +1100,8 @@ export class Jobs {
     const out = this.boards.map((b) => ({ x: b.hub.x, z: b.hub.z, kind: 'board', label: 'Jobs' }));
     const job = this.job;
     if (job) {
-      if (job.type === 'lost' && !job.found) out.push({ x: job.area.x, z: job.area.z, kind: 'search', label: `Lost ${job.noun}`, r: job.area.r });
-      else {
-        const w = this.waypoint(this.player.pos);
-        if (w) out.push({ x: w.x, z: w.z, kind: 'target', label: w.label });
-      }
+      const w = this.waypoint(this.player.pos);
+      if (w) out.push({ x: w.x, z: w.z, kind: 'target', label: w.label });
     }
     return out;
   }
@@ -1051,16 +1115,11 @@ export class Jobs {
     if (!job) { this.hudText = ''; this.hudKey = -1; return; }
     const left = Math.max(0, job.limit - job.elapsed), sec = Math.ceil(left);
     let state = 0, extra = 0;
-    if (job.type === 'lost' && !job.found) {
-      const p = this.player.pos, d = Math.hypot(p.x - job.itemPos.x, p.z - job.itemPos.z);
-      const inArea = Math.hypot(p.x - job.area.x, p.z - job.area.z) < job.area.r + 12;
-      state = !inArea ? 1 : d < 6 ? 2 : d < 15 ? 3 : d < 30 ? 4 : 5;
-    } else if (job.type === 'lost') state = 6;
-    else if ((job.type === 'escort' || (job.type === 'rescue' && job.phase === 'down')) && this.follower) {
+    if ((job.type === 'escort' || (job.type === 'rescue' && job.phase === 'down')) && this.follower) {
       const gap = this.follower.gap;
       if (this.follower.hidden) state = 7;
       else if (gap > (job.type === 'rescue' ? 35 : 90)) { state = 8; extra = Math.round(gap / 10); }
-    } else if (job.type === 'rescue' && job.phase === 'down') state = 9;
+    } else if (job.type === 'rescue' && job.phase === 'down') state = job.tow ? (this.tow?.warn ? 11 : 10) : 9;
     const key = sec * 1000 + state * 100 + extra;
     if (key === this.hudKey) return;
     this.hudKey = key;
@@ -1070,14 +1129,10 @@ export class Jobs {
       case 'rescue': {
         if (job.phase !== 'down') { this.hudText = `${job.short} · ${job.spot.piste} · ${t} left`; break; }
         const name = this.victimName(job), to = job.down?.short || 'the bottom';
+        if (job.tow) { this.hudText = this.tow?.warn ? `Slow down · too fast for ${name} in the akja · ${t} left` : `Akja · tow ${name} down to ${to} · ${t} left`; break; }
         if (state === 8) this.hudText = `Wait for ${name} · ${extra * 10} m behind`;
         else if (state === 9) this.hudText = `${name} is getting up · ${t} left`;
         else this.hudText = `Bring ${name} down to ${to} · ${t} left`;
-        break;
-      }
-      case 'lost': {
-        const warm = ['', `search near ${job.area.place}`, 'right here', 'very close', 'warmer', 'cold'][state];
-        this.hudText = job.found ? `Bring the ${job.noun} back to the board · ${t}` : `${job.short} · ${warm} · ${t}`;
         break;
       }
       case 'escort': {
@@ -1103,8 +1158,6 @@ export class Jobs {
     const job = this.job;
     if (!job || this.disposed) return;
     if (name === 'crash' || name === 'teleport') {
-      // the search for a lost item goes on (and a found one stays in your pocket)
-      if (job.type === 'lost') return;
       this.fail(name);
     } else if (name === 'lift') {
       // which kind of lift you boarded (the guide's guest says so; the ride itself is seen from the

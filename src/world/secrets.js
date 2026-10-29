@@ -517,7 +517,7 @@ const MAKERS = [
   // Legacy summit: an old miners' drift from the shoulder south-west of the top station, under the crown, into
   // the hidden Schattenkar bowl
   () => defineTunnel({
-    id: 'knappenstollen', name: 'Knappenstollen', portalName: 'Knappenstollen', year: 'anno 1887', reward: 250, style: 'mine', seed: 3,
+    id: 'knappenstollen', name: 'Knappenstollen', portalName: 'Knappenstollen', year: 'anno 1887', reward: 1000, style: 'mine', seed: 3,
     pts: [[-160, -1952], [-178, -1972], [-214, -2010], [-262, -2066], [-318, -2130], [-370, -2186], [-412, -2228], [-446, -2258], [-474, -2282]],
     dress(group, colliders, lanterns, def) {
       // faint old tracks from beside the top station down to the portal, and an old arrow sign where they leave
@@ -529,7 +529,7 @@ const MAKERS = [
   }),
   // the hidden bowl the Knappenstollen comes out in: untracked powder, an old miners' hut
   () => defineBowl({
-    id: 'schattenkar', name: 'Schattenkar', reward: 150,
+    id: 'schattenkar', name: 'Schattenkar', reward: 500,
     // the hollow the drift comes out in: an old miners' hut on its north side, its west and north closed by a
     // moraine (the cirque's floor beyond drops away into a basin you could not ride out of); the way on is the
     // Teufelsrinne to the south
@@ -539,7 +539,7 @@ const MAKERS = [
   }),
   // out of the Schattenkar to the south: a narrow slot between cliffs through the bowl's rim, onto the main face
   () => defineCouloir({
-    id: 'teufelsrinne', name: 'Teufelsrinne', reward: 200, seed: 7,
+    id: 'teufelsrinne', name: 'Teufelsrinne', reward: 750, seed: 7,
     pts: [[-468, -2266], [-486, -2222], [-490, -2176], [-473, -2132], [-449, -2092], [-439, -2051], [-441, -2012], [-447, -1978], [-456, -1948], [-460, -1934], [-464, -1918], [-467, -1902]],
     floorKeys: [[0, 961.5], [180, 940], [344, 868.2], [374, 842.5]],
     // a bay on its west wall for the frozen waterfall (defineIceBay below; off while the Eisfall-Grotte is)
@@ -555,12 +555,12 @@ const MAKERS = [
   }),
   // in the Teufelsrinne: a frozen waterfall pours down the gully's west wall into a bay; ride behind its ice
   // curtain (in at one end, out at the other)
-  () => defineIceBay({ id: 'eisfall', name: 'Eisfall-Grotte', reward: 200, couloir: 'teufelsrinne', seed: 17, ledgeH: 9 }),
+  () => defineIceBay({ id: 'eisfall', name: 'Eisfall-Grotte', reward: 750, couloir: 'teufelsrinne', seed: 17, ledgeH: 9 }),
   // Silberhorn: a glacier cave under the summit's ice cap. Faint old tracks lead from the top station past the
   // hut into a hollow below the plateau's south-west rim; the cave runs north under the plateau (clear of the
   // station and every run) and comes out on the north face, a short ride above the red Gratweg
   () => defineTunnel({
-    id: 'silbergrotte', name: 'Silbergrotte', reward: 250, style: 'ice', seed: 11, Wi: 4.2, Hs: 3.4, Hc: 5.6, cover: 1.6,
+    id: 'silbergrotte', name: 'Silbergrotte', reward: 1000, style: 'ice', seed: 11, Wi: 4.2, Hs: 3.4, Hc: 5.6, cover: 1.6,
     pts: [[-2306, -114], [-2311, -99], [-2322, -90], [-2336, -89], [-2347, -97], [-2352, -114], [-2352, -140], [-2353, -175], [-2355, -220], [-2359, -270], [-2363, -310], [-2362, -338], [-2350, -356], [-2328, -364], [-2300, -364]],
     // (over 4.5 % all through: on flatter snow the game takes your skis off when you stop)
     floorKeys: [[0, 765.4], [50, 763.2], [-1, 744.2]],
@@ -577,7 +577,7 @@ const MAKERS = [
   // Adlerhorn: a natural rock arch on the shoulder north-west of the top station: from the top, down the open slope
   // and under the arch, then a gentle traverse back onto the blue Sonnenhang (between its net and the Super-G's)
   () => defineArch({
-    id: 'adlertor', name: 'Adlertor', reward: 150, seed: 5, span: 15, clear: 10.5,
+    id: 'adlertor', name: 'Adlertor', reward: 500, seed: 5, span: 15, clear: 10.5,
     pts: [[2283, -606], [2262, -628], [2238, -651], [2212, -673], [2186, -690], [2160, -697], [2134, -686], [2106, -664], [2078, -641], [2052, -620], [2032, -603]],
     // (a narrow bench across the slope, its downhill bank eased out over 12 m)
     atPoint: [2163, -697], window: 12, half: 3.6, blendL: 6, blendR: 12, maxGrade: 0.62, minGrade: 0.02,
@@ -591,7 +591,7 @@ const MAKERS = [
   // edge of the woods south-west of the village (where the ground starts to fall) down to the Valley Chair,
   // past the Försterhütte
   () => defineTrail({
-    id: 'foersterweg', name: 'Försterweg', reward: 150,
+    id: 'foersterweg', name: 'Försterweg', reward: 500,
     pts: [[-322, 291], [-348, 322], [-392, 380], [-430, 470], [-447, 560], [-450, 660], [-440, 760], [-420, 860], [-392, 960], [-350, 1050], [-286, 1130], [-200, 1200], [-110, 1262]],
     hut: { s: 474, d: -11 },
     dress(group, colliders, lanterns, def) {
@@ -755,8 +755,8 @@ export class Secrets {
     this.save.secrets.push(d.id);
     const n = this.save.secrets.length, total = SECRET_LIST.length;
     this.hud.flash(`Secret found · ${d.name} (${n}/${total})`, 'gold', 3400);
-    this.earn?.(d.reward || 150);
-    if (n === total) setTimeout(() => { this.hud.flash('Every secret found · +$1,000', 'gold', 3800); this.earn?.(1000); }, 3800);
+    this.earn?.(d.reward || 500);
+    if (n === total) setTimeout(() => { this.hud.flash('Every secret found · +$5,000', 'gold', 3800); this.earn?.(5000); }, 3800);
     this.writeSave();
   }
 

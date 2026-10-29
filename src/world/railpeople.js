@@ -16,7 +16,7 @@ import * as THREE from 'three';
 import { loadFanKits, FanCrowd, FAN_KEYS as K } from './fans.js';
 import { PeopleSim } from './peoplesim.js';
 import { world } from './world.js';
-import { RAIL, railAt, trainState, CYCLE, PROFILE, DWELL_END, DWELL_MID } from './railroute.js';
+import { RAIL, railAt, trainState, CYCLE, stopWindows } from './railroute.js';
 import { mulberry32 } from '../core/noise.js';
 
 const VIEW = 150;                 // m: beyond this a station's people are not drawn
@@ -29,13 +29,7 @@ const _f = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0, i: 0 };
 const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4();
 const _ts = {};
 
-// the stops at a station in cycle time: [{u0, u1, dir (the way it leaves)}]
-function stopWindows(id) {
-  const T = PROFILE.trip, tMid = PROFILE.T[PROFILE.iMid + 1] - DWELL_MID;
-  if (id === 'tal') return [{ u0: 2 * T + DWELL_END, u1: CYCLE, dir: 1 }];
-  if (id === 'platt') return [{ u0: T, u1: T + DWELL_END, dir: -1 }];
-  return [{ u0: tMid, u1: tMid + DWELL_MID, dir: 1 }, { u0: 2 * T + DWELL_END - tMid - DWELL_MID, u1: 2 * T + DWELL_END - tMid, dir: -1 }];
-}
+// (the stops at a station in cycle time, [{u0, u1, dir (the way it leaves)}]: railroute.js stopWindows)
 
 // ------------------------------------------------------------------ a station platform
 class Platform {
@@ -152,7 +146,7 @@ class Platform {
       if (!ex.end) p.yaw = this.yawTrack(ps[0]);
       p.plan = linger ? 'stay' : 'ride'; p.state = 'enter'; p.carry = skis ? 1 : 0;
       p.leaveAt = this.time + 45 + this.rnd() * 110;
-      p.dir = this.id === 'see' ? (this.rnd() < 0.6 ? 1 : -1) : this.id === 'tal' ? 1 : -1;
+      p.dir = this.st.halt ? (this.rnd() < 0.6 ? 1 : -1) : this.id === 'tal' ? 1 : -1;
       party.push(p);
     }
     if (!party.length) return;
@@ -320,11 +314,11 @@ class Platform {
     const tn = t === null ? 200 : train ? 0 : this.nextStop(t);
     // a train came in: people get off first, then the waiting ones get on
     if (train && !this.standing) {
-      const k = 3 + Math.floor(this.rnd() * (this.id === 'see' ? 4 : 8));
+      const k = 3 + Math.floor(this.rnd() * (this.st.halt ? 4 : 8));
       for (let j = 0; j < k; j++) this.alight(train, Math.floor(this.rnd() * 4), j * 0.9 + this.rnd() * 1.2);
       for (const p of this.sim.people) {
         if (!p.onStage || p.plan !== 'ride' || p.state === 'gone' || p.fadeTo <= 0) continue;
-        if (this.id === 'see' && p.dir !== train.dir) continue;
+        if (this.st.halt && p.dir !== train.dir) continue;
         const { s } = this.sOf(p);
         if (Math.abs(s - train.s) > 34) continue; // too far along the platform: the next one
         p.boardAt = this.time + 2.5 + this.rnd() * 5;
@@ -472,8 +466,8 @@ export class RailPeople {
             // the building's door, the platform's village end, its far end (fewer)
             this.stages.push(new Platform({ st, rec, kits, rnd, n: 40, parent: this.group,
               exits: [{ s: mid - 1.5, lat: 6.3, w: 3 }, { s: st.s0 + 5, end: true, w: 2 }, { s: st.s1 - 5, end: true, w: 0.6 }] }));
-          } else if (st.id === 'see') {
-            this.stages.push(new Platform({ st, rec, kits, rnd, n: 18, parent: this.group,
+          } else if (st.halt) { // (Wolkensee; the quieter Adlerwald)
+            this.stages.push(new Platform({ st, rec, kits, rnd, n: st.id === 'see' ? 18 : 10, parent: this.group,
               exits: [{ s: mid - 1.5, lat: 6.3, w: 2 }, { s: st.s0 + 5, end: true, w: 1 }, { s: st.s1 - 5, end: true, w: 1 }] }));
           } else {
             // the rock hall under the glacier (its way out: the passage at the back wall), the terrace above

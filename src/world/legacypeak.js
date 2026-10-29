@@ -17,10 +17,14 @@ const N = new Simplex(5113), N2 = new Simplex(5119);
 export const LEGACY_PEAK_ALT = 4000;                  // m above sea level (signs: ALT0 1,245 + 2,755)
 export const SUMMIT = { x: 200, z: -4600, h: 2755 };  // the summit (world units: metres above the village)
 const H_J = 1160;                                     // the spur's foot, on the main mountain's crown
-const W = 300;                                        // half-width of the spur's crown
-const FLOOR = 500, R_DOME = 1000;                     // the ground the massif's faces come down to; the dome's radius
-// the spur's centre line: from the summit south-east, round the cirque, south-west down to the main mountain's crown
-const SPINE_CTRL = [[200, -4600], [480, -4250], [470, -3650], [330, -3050], [210, -2700], [130, -2450]];
+const W = 250;                                        // half-width of the spur's crown
+const FLOOR = 500;                                    // the ground the massif's faces come down to
+// the summit massif's profile by distance r from the summit: a round snow dome (R0: its top's radius of curvature)
+// falling at the spur's own grade, then (the lower of the two) faces falling away like a broad bell (R_FACE, P_FACE)
+const R0 = 110, R_FACE = 1000, P_FACE = 2.6;
+// the spur's centre line: from the summit east, round the cirque, south-west down to the main mountain's crown (a long
+// sweep: ~2.6 km at a steady ~60 % along its crown; the run zig-zags down it at a red's grade)
+const SPINE_CTRL = [[200, -4600], [600, -4420], [800, -4000], [790, -3500], [620, -3060], [380, -2730], [130, -2450]];
 function chaikin(p, it) {
   for (let k = 0; k < it; k++) {
     const o = [p[0]];
@@ -50,6 +54,7 @@ export const LEGACY_PEAK = {
 };
 
 const softplus = (x, k) => (x > 8 * k ? x : k * Math.log1p(Math.exp(x / k)));
+const smin = (a, b, k) => { const d = Math.abs(a - b); return Math.min(a, b) - (d < k ? (k - d) * (k - d) / (4 * k) : 0); };
 const smax = (a, b, k) => { if (k <= 0) return Math.max(a, b); const d = Math.abs(a - b); return Math.max(a, b) + (d < k ? (k - d) * (k - d) / (4 * k) : 0); };
 // fractional octave count a sample spacing can carry (band-limited LOD sampling, like world.js)
 const oct = (lambda, full, spacing) => spacing > 0 ? Math.min(full, Math.max(0, Math.log2(lambda / (4 * spacing)) + 1)) : full;
@@ -62,23 +67,38 @@ function keep(x, z) {
     * (1 - smoothstep(1300, 2000, x)); // toward the Wolkenspitze
   if (w <= 0) return 0;
   w *= smoothstep(150, 320, Math.hypot(x + 460, z + 2290));  // Schattenkar / Teufelsrinne (secrets.js)
-  w *= smoothstep(250, 650, Math.hypot(x - 1550, z + 3930)); // Schmugglerstollen (secrets.js)
+  w *= smoothstep(230, 600, Math.hypot(x - 1550, z + 3930)); // Schmugglerstollen (secrets.js: its portals, its old tracks in)
   return w;
 }
 
-const _o = { h: 0, d: 0, s: 0 };
-// nearest point of the spine: distance d, arc length s
+const _o = { h: 0, d: 0, s: 0 }, _d2 = new Float64Array(SEG.length), _ss = new Float64Array(SEG.length);
+const S_TAU = 40; // m: where two stretches of the spine are about as near, their arc lengths blend over a few of these
+// nearest point of the spine: distance d, arc length s. s is blended between the segments about as near as the nearest
+// (weights by how much further they are), so it never jumps where the nearest point flips from one stretch of the
+// spine to another (round the cirque): the spur's height follows s, and a jump there was a 60 m step in the ground
 function spineAt(x, z) {
-  let bd = Infinity, bs = 0;
+  let bd = Infinity;
   for (let i = 0; i < SEG.length; i++) {
     const g = SEG[i];
     const t = clamp(((x - g.ax) * g.ex + (z - g.az) * g.ez) / (g.l * g.l), 0, 1);
     const dx = g.ax + g.ex * t - x, dz = g.az + g.ez * t - z, d = dx * dx + dz * dz;
-    if (d < bd) { bd = d; bs = g.s0 + t * g.l; }
+    _d2[i] = d; _ss[i] = g.s0 + t * g.l;
+    if (d < bd) bd = d;
   }
-  _o.d = Math.sqrt(bd); _o.s = bs;
+  const dmin = Math.sqrt(bd), cut = (dmin + 12 * S_TAU) ** 2;
+  let sw = 0, ss = 0;
+  for (let i = 0; i < SEG.length; i++) {
+    if (_d2[i] > cut) continue;
+    const wgt = Math.exp(-(Math.sqrt(_d2[i]) - dmin) / S_TAU);
+    sw += wgt; ss += wgt * _ss[i];
+  }
+  _o.d = dmin; _o.s = ss / sw;
   return _o;
 }
+
+// the crown's fall from the summit: a round top (R0), then the steady grade (prof(s) ~ s - R0 far out)
+const prof = (s) => Math.sqrt(s * s + R0 * R0) - R0;
+const G = (SUMMIT.h - H_J) / prof(SPINE_LEN); // (the spur's steady grade along its crown, ~0.6)
 
 /** The massif's own surface at (x, z) (absolute height) and how much it replaces the ground there (calm 0..1). */
 export function legacyPeak(x, z, spacing = 0, out = { h: 0, calm: 0, w: 0 }) {
@@ -88,16 +108,17 @@ export function legacyPeak(x, z, spacing = 0, out = { h: 0, calm: 0, w: 0 }) {
   out.w = w;
   if (w <= 0) return out;
   const r = Math.hypot(x - SUMMIT.x, z - SUMMIT.z);
-  // the summit massif: a snow dome on top, steepening into faces (2,755 m exactly on the summit)
-  let cone = FLOOR + (SUMMIT.h - FLOOR) * Math.exp(-(r * r) / (R_DOME * R_DOME));
+  // the summit massif: a round snow dome on top falling at the spur's grade all round (you can ski off it any way),
+  // steepening into faces beyond R1 (2,755 m exactly on the summit)
+  let cone = smin(SUMMIT.h - G * prof(r), FLOOR + (SUMMIT.h - FLOOR) * Math.exp(-Math.pow(r / R_FACE, P_FACE)), 60);
   // aretes and couloirs on the faces round it (not on the dome, not on the spur)
   const sp = spineAt(x, z), d = sp.d, s = sp.s;
   const onSpur = 1 - smoothstep(W, W + 220, d);
-  const rock = smoothstep(220, 600, r) * (1 - onSpur);
+  const rock = smoothstep(300, 650, r) * (1 - onSpur);
   if (rock > 0) cone += (N.ridged(x * 0.0016 + 3.1, z * 0.0016 - 7.3, Math.max(1, oct(620, 4, spacing)), 2.0, 0.45, 4) - 0.45) * 160 * rock;
-  // the spur: its crown falls at a steady grade from the summit to its foot, a little toward its edges, then its
-  // flanks drop away steeply
-  const yS = H_J + (SUMMIT.h - H_J) * (1 - s / SPINE_LEN);
+  // the spur: its crown falls at a steady grade from the summit to its foot (the dome's own profile), a little toward
+  // its edges, then its flanks drop away steeply
+  const yS = SUMMIT.h - G * prof(s);
   const e = softplus(d - W, 80), spur = yS - 0.1 * Math.min(d, W) - (yS - FLOOR) * (1 - Math.exp(-Math.pow(e / 600, 1.6)));
   let h = smax(cone, spur, 50 * smoothstep(150, 400, r));
   // rolls on the spur and the lower slopes, fine snow; none right on the summit (it stays 2,755 m)
@@ -105,7 +126,7 @@ export function legacyPeak(x, z, spacing = 0, out = { h: 0, calm: 0, w: 0 }) {
   h += N2.fbm(x * 0.004 + 1.3, z * 0.004 - 2.2, oct(250, 3, spacing), 2, 0.5, 3) * 7 * quiet;
   if (spacing < 10) h += (N2.noise(x * 0.025, z * 0.025) * 0.8 + N2.noise(x * 0.09, z * 0.09) * 0.15) * quiet;
   out.h = h;
-  out.calm = Math.max(onSpur, 1 - smoothstep(260, 520, r));
+  out.calm = Math.max(onSpur, 1 - smoothstep(300, 560, r));
   return out;
 }
 

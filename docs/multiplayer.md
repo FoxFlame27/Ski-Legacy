@@ -356,7 +356,10 @@ together, each in their own seat.
 - **Waiting.** Boarding goes through a gate in `main.js` (`railGate` / `expressGate` / `liftGate` / `busGate`):
   - Wolkenspitzbahn: if no train stands at your platform for your way (`railway.nextAt(station, up)`, off the
     timetable's boarding windows), you wait on the platform: "next train in 42 s" under the status pill. Walking off
-    the platform (14 m) gives up.
+    the platform (14 m) gives up. Every client runs the same timetable off `train|rail` (railroute.js `trainState`:
+    both trains stop at both halts, Wolkensee and Adlerwald, both ways, and cross on the passing loop between them;
+    the cycle `CYCLE` ≈ 691 s, a train every ~5.8 min), so a halt is the same window for everyone; E at a halt gets
+    you off (`railway.leaveAtStop`) and the seat goes back as on arrival.
   - Express: its own platform wait (`express.waitFor` / `waiting`), unchanged, but a train can only be boarded with
     at least 4 s of its stop left.
   - Lifts: a seat in the next cabin or chair coming round is claimed at once; you board when it reaches the boarding

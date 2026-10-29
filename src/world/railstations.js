@@ -1,11 +1,12 @@
 // The Wolkenspitzbahn's stations: platforms along the track, the station buildings (the valley station in
 // Legacy Village: stone ground floor, timber upper floor, a deep snowy roof and a glazed platform canopy; a
 // timber halt at Wolkensee by the frozen lake; the top station's glass hall on the glacier, its platform in a
-// rock hall under the ice), name boards, timetable boards, benches and lamps. Each station also says where you
+// rock hall under the ice; Adlerwald, a request halt below the Adlerhorn, has a timber halt like Wolkensee's), name
+// boards, timetable boards, benches and lamps. Each station also says where you
 // board (board) and where you step out on arrival (exit).
 import * as THREE from 'three';
 import { world } from './world.js';
-import { RAIL, railAt, PROFILE, CYCLE, DWELL_MID } from './railroute.js';
+import { RAIL, railAt, PROFILE, CYCLE, DWELL_MID, haltArrival } from './railroute.js';
 import { RailBuilder as B, railMaterials, canvasTex } from './railtrack.js';
 import { mulberry32 } from '../core/noise.js';
 import { makeLOD, bakeGeometry } from '../core/assets.js';
@@ -53,20 +54,21 @@ function nameBoard(name, alt, wM = 5.2) {
   return g;
 }
 // departures board: the ride times off the timetable (railroute.js), the interval between the two trains
-function timetableBoard(stationName) {
+function timetableBoard(stationName, id) {
   const trip = Math.round(PROFILE.trip / 60), every = Math.round(CYCLE / 2 / 60);
-  const toSee = PROFILE.T[PROFILE.iMid + 1] - DWELL_MID; // valley -> Wolkensee (= Wolkensee -> valley)
-  const fromSee = PROFILE.trip - PROFILE.T[PROFILE.iMid + 1]; // Wolkensee -> top (= top -> Wolkensee)
+  const tA = haltArrival(id); // a halt: valley -> here (= here -> valley)
+  const toVal = tA, toTop = tA === null ? 0 : PROFILE.trip - tA - DWELL_MID; // (here -> top = top -> here)
+  const via = `via ${RAIL.stations.filter((st) => st.halt).map((st) => st.name).join(' · ')}`;
   const t = boardTex(`tt-${stationName}`, 512, 640, (g, w, h) => {
     g.fillStyle = '#16191e'; g.fillRect(0, 0, w, h);
     g.fillStyle = RED; g.fillRect(0, 0, w, 96);
     g.fillStyle = WHITE; g.font = `italic 700 60px ${FONT}`; g.textBaseline = 'middle'; g.fillText('ABFAHRT · DEPARTURES', 24, 50);
     g.font = `600 40px ${FONT}`;
     const rows = stationName === 'Wolkenplatt'
-      ? [['Legacy Village', `${trip} min`], ['via Wolkensee', ''], ['every', `${every} min`]]
-      : stationName === 'Wolkensee'
-        ? [['Wolkenplatt', `${Math.max(1, Math.round(fromSee / 60))} min`], ['Legacy Village', `${Math.max(1, Math.round(toSee / 60))} min`], ['every', `${every} min`]]
-        : [['Wolkenplatt  2,611 m', `${trip} min`], ['via Wolkensee', ''], ['every', `${every} min`]];
+      ? [['Legacy Village', `${trip} min`], [via, ''], ['every', `${every} min`]]
+      : tA !== null
+        ? [['Wolkenplatt', `${Math.max(1, Math.round(toTop / 60))} min`], ['Legacy Village', `${Math.max(1, Math.round(toVal / 60))} min`], ['every', `${every} min`]]
+        : [['Wolkenplatt  2,611 m', `${trip} min`], [via, ''], ['every', `${every} min`]];
     rows.forEach(([a, b], i) => {
       const y = 160 + i * 90;
       g.fillStyle = '#ffb12e'; g.fillText(a, 28, y);
@@ -387,7 +389,7 @@ export function buildStations(scene, colliders = [], models = null) {
     rec.board = { x: P.x, z: P.z };
     // the building beside the platform (its front faces the track)
     const toTrack = Math.atan2(-(-_f.dz * side), -(_f.dx * side)); void toTrack;
-    const meshyKey = st.id === 'tal' ? 'rail_station_valley' : st.id === 'see' ? 'rail_station_halt' : null;
+    const meshyKey = st.id === 'tal' ? 'rail_station_valley' : st.halt ? 'rail_station_halt' : null;
     if (meshyKey && MESHY_STATIONS && models?.[meshyKey]) {
       // the Meshy building: its front (+z) to the track, its front line 1.2 m behind the platform's back edge, on a
       // stone plinth that reaches into the ground
@@ -420,7 +422,7 @@ export function buildStations(scene, colliders = [], models = null) {
       }
       const ex = besideLine(mid + 4, side * 4.3);
       rec.exit = { x: ex.x, z: ex.z, heading: Math.atan2(az.x, az.z) };
-    } else if (st.id === 'tal' || st.id === 'see') {
+    } else if (st.id === 'tal' || st.halt) {
       const big = st.id === 'tal';
       const house = buildStationHouse(M.stone, M.wood, M.glass, M.warm, big ? { len: 24, depth: 11, floors: 2 } : { len: 11, depth: 7, floors: 1, clock: false });
       const bp = besideLine(mid, side * (1.75 + 4.2 + 1.2));
@@ -454,7 +456,7 @@ export function buildStations(scene, colliders = [], models = null) {
     }
     {
       // timetable board, benches and lamps along the platform
-      const tt = timetableBoard(st.name);
+      const tt = timetableBoard(st.name, st.id);
       const tp = besideLine(mid - 8, side * 4.6);
       tt.position.set(tp.x, tp.y + 0.06, tp.z);
       tt.rotation.y = Math.atan2(_f.dz * side, -_f.dx * side) ;

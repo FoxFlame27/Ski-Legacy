@@ -40,7 +40,7 @@ export function buildExpressGround(courses = []) {
       return { id: st.id, name: st.name, course: null, s: st.s, x, z, y, heading, side: 1, underground: true, board: { x: e.x, z: e.z }, exit: { x: e.x + Math.sin(e.heading) * 3, z: e.z + Math.cos(e.heading) * 3, heading: e.heading } };
     }
     // which side the course's start is on
-    const start = startOf(st.course) || st.toward; // (a halt: its square faces the way to its run)
+    const start = startOf(st.course);
     const side = !start || -_f.dz * (start.x - x) + _f.dx * (start.z - z) > 0 ? 1 : -1;
     const plat = beside(st.s, side * PLATFORM_OFF);
     const out = beside(st.s, side * (PLATFORM_OFF + 9));

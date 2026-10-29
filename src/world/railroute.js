@@ -4,9 +4,11 @@
 // (cuttings and embankments along the open line, portal cuts at the tunnels).
 //
 // The line: Legacy Village (valley station, south-east corner of the village) -> Adlerhorn tunnel under the
-// Adlerhorn's lower slopes -> the forest corridor north-east of the village -> Wolkensee (mid-station with
-// the passing loop) -> up the Wolkental, the glacial trough on the Wolkenspitze's west side -> the spiral
-// tunnel through the rock step under the glacier -> Wolkenplatt (top station on the glacier plateau).
+// Adlerhorn's lower slopes -> the forest corridor north-east of the village -> Wolkensee (mid-station) -> the
+// passing loop -> Adlerwald (Oct 29: a halt in the trough under the Adlerhorn's north face, where the red Adlerwald
+// run comes down to the line from the Adlerhorn: transport.js buildAdlerwald) -> up the Wolkental, the glacial trough
+// on the Wolkenspitze's west side -> the spiral tunnel through the rock step under the glacier -> Wolkenplatt (top
+// station on the glacier plateau).
 import { smoothstep, clamp, Simplex } from '../core/noise.js';
 const CUT_NOISE = new Simplex(4721); // breaks up the portal rock cuts (shapeRoadbed)
 
@@ -39,7 +41,7 @@ const CTRL = [
   [610, -280], [770, -500],                                        // 5-6
   [905, -662],                                                     // 7     north portal
   [1040, -815], [1170, -950],                                      // 8-9   rock cutting
-  [1270, -1030], [1345, -1085], [1420, -1140],                     // 10-12 Wolkensee (passing loop)
+  [1270, -1030], [1345, -1085], [1420, -1140],                     // 10-12 Wolkensee
   [1600, -1265], [1870, -1385], [2200, -1510], [2500, -1650], [2760, -1830], // 13-17 forest corridor
   [3020, -1990], [3250, -2220], [3280, -2480], [3110, -2680], [2950, -2810], // 18-22 Wolkental
   [2894, -3014],                                                   // 23    spiral tunnel portal
@@ -56,7 +58,7 @@ const KEYS = [
   { c: 7, y: 196 },
   { c: 9, y: 214 },
   { c: 10, y: 222 }, { c: 12, y: 222 },
-  { c: 14, y: 290 }, { c: 17, y: 372 },
+  { c: 14, y: 290 }, { s: 2930, y: 344 }, { s: 3040, y: 344 }, { c: 17, y: 372 }, // (the Adlerwald halt's level platform)
   { c: 23, grade: 0.238 },
   { c: HALL, y: 1366 }, { c: LAST, y: 1366 },
 ];
@@ -67,10 +69,13 @@ const TUNNELS = [
   // the tube; the trough's carve still ends at the control point: wolkenspitze.js)
   { name: 'Wolkenspitz-Tunnel', a: 23, b: LAST, end: true, skip: 74 }, // ends in the top station's rock hall
 ];
-// stations: platform between control points, side of the platform (+1 = right of the line looking uphill)
+// stations: platform between control points (a, b) or arc lengths (s0, s1), side of the platform (+1 = right of the
+// line looking uphill), in line order. halt: an intermediate stop (the trains stop both ways, DWELL_MID; a timber
+// halt like Wolkensee's). Adlerwald's platform (110 m, level) holds a train (71.8 m) with 19 m to spare at each end.
 const STATIONS = [
   { id: 'tal', name: 'Legacy Village', a: 0, b: 2, side: -1 },
-  { id: 'see', name: 'Wolkensee', a: 10, b: 12, side: 1, loop: true },
+  { id: 'see', name: 'Wolkensee', a: 10, b: 12, side: 1, loop: true, halt: true },
+  { id: 'wald', name: 'Adlerwald', s0: 2930, s1: 3040, side: 1, halt: true },
   { id: 'platt', name: 'Wolkenplatt', a: HALL, b: LAST, side: -1, underground: true },
 ];
 
@@ -107,7 +112,7 @@ function buildLine() {
   const idxOf = (c) => { let b = 0; for (let i = 0; i < n; i++) if (Math.abs(U[i] - c) < Math.abs(U[b] - c)) b = i; return b; };
   const keys = [];
   for (const k of KEYS) {
-    const i = idxOf(k.c);
+    const i = k.s !== undefined ? Math.round(k.s / STEP) : idxOf(k.c);
     if (k.grade !== undefined) { const [pi, py] = keys[keys.length - 1]; keys.push([i, py + (i - pi) * STEP * k.grade]); } else keys.push([i, k.y]);
   }
   keys.sort((a, b) => a[0] - b[0]);
@@ -118,7 +123,8 @@ function buildLine() {
   }
   // vertical curves: smooth the grade changes, but keep the key heights and level platforms
   const fixed = new Uint8Array(n);
-  for (const st of STATIONS) for (let i = idxOf(st.a); i <= idxOf(st.b); i++) fixed[i] = 1;
+  const span = (st) => st.s0 !== undefined ? [Math.round(st.s0 / STEP), Math.round(st.s1 / STEP)] : [idxOf(st.a), idxOf(st.b)];
+  for (const st of STATIONS) { const [a, b] = span(st); for (let i = a; i <= b; i++) fixed[i] = 1; }
   for (const [i] of keys) fixed[i] = 1;
   void fixed;
   const Y0 = Float64Array.from(Y);
@@ -126,12 +132,14 @@ function buildLine() {
   void Y0;
   const S = Float64Array.from({ length: n }, (_, i) => i * STEP);
   const tunnels = TUNNELS.map((t) => ({ ...t, sCp: S[idxOf(t.a)], s0: S[idxOf(t.a)] + (t.skip || 0), s1: S[idxOf(t.b)] }));
-  const stations = STATIONS.map((st) => ({ ...st, s0: S[idxOf(st.a)], s1: S[idxOf(st.b)] }));
+  const stations = STATIONS.map((st) => { const [a, b] = span(st); return { ...st, s0: S[a], s1: S[b] }; });
   for (const st of stations) st.s = (st.s0 + st.s1) / 2;
   return { X, Z, Y, U, S, n, length: S[n - 1], tunnels, stations };
 }
 
 export const RAIL = buildLine();
+const station = (id) => RAIL.stations.find((st) => st.id === id);
+const TOP = RAIL.stations[RAIL.stations.length - 1]; // Wolkenplatt
 export const RAIL_NAME = 'Wolkenspitzbahn';
 export const GAUGE = 1.0;
 
@@ -276,7 +284,8 @@ export function shapeRoadbed(x, z, h) {
   }
   // (the rock cut steepens only over the last metres before the face: a steep wall on the terrain's 2 m mesh reads
   // as regular vertical ribs; its crest is broken by noise, ramping in from the bed's edge, so it looks blasted)
-  const cut = CUT + (CUT_PORTAL - CUT) * portal * portal, wb = W_BED + W_PORTAL * portal;
+  // (the formation widens under the passing loop's second track, on its side)
+  const cut = CUT + (CUT_PORTAL - CUT) * portal * portal, wb = W_BED + W_PORTAL * portal + (n.side > 0 ? loopOff(s) : 0);
   const w = Math.max(0, n.d - wb);
   // viaducts: the ground under them stays (their abutments sit where the embankment ends)
   if (onBridge(s) && h < bed - 2) return h;
@@ -296,26 +305,30 @@ export function shapeRoadbed(x, z, h) {
 // acceleration ease up over DARK_EASE m. The trip up is integrated once; the trip down runs the same profile
 // backwards (same time). Two trains shuttle in opposite phase and cross on the passing loop (PASSING_LOOP): the
 // dwells at the termini are set so that both meetings fall on the loop's middle (see DWELL_END).
-export const DWELL_MID = 20; // s at Wolkensee
+export const DWELL_MID = 20; // s at each halt (Wolkensee, Adlerwald)
 const DWELL_MIN = 40; // s at least at either terminus
 // RAIL_BUFF: the whole profile sped up (limits, curve limits, acceleration / braking) for quicker trips; the trains
 // still brake to a stop at every station (the profile's zeros there), the timetable and meetings follow from it
 const RAIL_BUFF = 1.9;
 const ACC = 0.9 * RAIL_BUFF; // m/s^2
 const DARK_BOOST = 2.1, DARK_ACC = 3.4 * 1.5, DARK_EASE = 70, DARK_VMAX = 50 * 1.6; // (80 m/s: 288 km/h)
-// the passing loop (railtrack.js lays its second track): between s0 and s1, `off` m to the right of the line
-export const PASSING_LOOP = { s0: 3390, s1: 3690, off: 4.6, ease: 46 };
+// the passing loop (railtrack.js lays its second track): between s0 and s1, `off` m to the right of the line. (Oct 29:
+// moved down the line from s 3390-3690 with the Adlerwald halt: the trains cross where the up train is half way
+// through its trip in time, and a halt before the old loop pushed that 50 s later, so both trains would have waited
+// 100 s more at the top every cycle. Here, in the corridor between Wolkensee and Adlerwald (short of the viaduct before
+// Adlerwald), the crossing comes ~20 s before the time half way: the cycle is 11.5 min, the trains 5.8 min apart.)
+export const PASSING_LOOP = { s0: 2410, s1: 2650, off: 4.6, ease: 46 };
 /** 0 outside .. 1 deep inside a long tunnel's dark stretch (portal to portal; the spiral's ends in the top hall). */
 export function darkness(s) {
   let k = 0;
   for (const t of RAIL.tunnels) {
-    const a = t.s0, b = t.end ? RAIL.stations[2].s0 - 10 : t.s1;
+    const a = t.s0, b = t.end ? TOP.s0 - 10 : t.s1;
     if (s > a && s < b) k = Math.max(k, smoothstep(0, DARK_EASE, s - a) * smoothstep(0, DARK_EASE, b - s));
   }
   return k;
 }
 // the trip runs from the valley station's stop to the top station's stop (the line runs on to the buffers)
-export const TRIP_S0 = RAIL.stations[0].s, TRIP_S1 = RAIL.stations[2].s;
+export const TRIP_S0 = RAIL.stations[0].s, TRIP_S1 = TOP.s;
 export const PROFILE = (() => {
   const L = RAIL, n = L.n, ds = STEP;
   const rad = new Float64Array(n).fill(1e9);
@@ -326,7 +339,7 @@ export const PROFILE = (() => {
     rad[i] = cr < 1e-6 ? 1e9 : (ab * bc * ca) / (2 * cr);
   }
   const t2 = L.tunnels[1];
-  const climb = L.stations[1].s1 + 1500; // the rack climb up the Wolkental starts here
+  const climb = station('see').s1 + 1500; // the rack climb up the Wolkental starts here
   const V = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     const s = L.S[i];
@@ -337,28 +350,31 @@ export const PROFILE = (() => {
     V[i] = Math.min(Math.min(v, Math.sqrt(3.2 * RAIL_BUFF * RAIL_BUFF * rad[i])) * k, DARK_VMAX);
   }
   const acc = (i) => ACC + (DARK_ACC - ACC) * darkness(L.S[i]);
-  const i0 = Math.round(TRIP_S0 / ds), i1 = Math.round(TRIP_S1 / ds), iMid = Math.round(L.stations[1].s / ds);
+  const i0 = Math.round(TRIP_S0 / ds), i1 = Math.round(TRIP_S1 / ds);
+  // the halts (Wolkensee, Adlerwald): the trains stop there both ways; iMid: Wolkensee's (kept for older callers)
+  const stops = L.stations.filter((st) => st.halt).map((st) => ({ id: st.id, i: Math.round(st.s / ds) }));
+  const iMid = stops.find((h) => h.id === 'see').i, stopAt = new Set(stops.map((h) => h.i));
   for (let i = 0; i <= i0; i++) V[i] = 0;
   for (let i = i1; i < n; i++) V[i] = 0;
-  V[iMid] = 0;
+  for (const h of stops) V[h.i] = 0;
   for (let i = 1; i < n; i++) V[i] = Math.min(V[i], Math.sqrt(V[i - 1] * V[i - 1] + 2 * acc(i) * ds));
   for (let i = n - 2; i >= 0; i--) V[i] = Math.min(V[i], Math.sqrt(V[i + 1] * V[i + 1] + 2 * acc(i) * ds));
-  // time along the trip up (s) from the valley stop, the mid-station dwell included
+  // time along the trip up (s) from the valley stop, the halts' dwells included
   const T = new Float64Array(n);
-  for (let i = i0 + 1; i <= i1; i++) T[i] = T[i - 1] + ds / Math.max((V[i] + V[i - 1]) / 2, 0.25) + (i === iMid + 1 ? DWELL_MID : 0);
+  for (let i = i0 + 1; i <= i1; i++) T[i] = T[i - 1] + ds / Math.max((V[i] + V[i - 1]) / 2, 0.25) + (stopAt.has(i - 1) ? DWELL_MID : 0);
   for (let i = i1 + 1; i < n; i++) T[i] = T[i1];
-  return { V, T, trip: T[i1], i0, i1, iMid };
+  return { V, T, trip: T[i1], i0, i1, iMid, stops, stopAt };
 })();
 
-/** Arc length reached `t` seconds into the trip up (0..trip); the dwell at Wolkensee holds the train still. */
+/** Arc length reached `t` seconds into the trip up (0..trip); the dwells at the halts hold the train still. */
 export function tripS(t) {
-  const { T, i0, i1, iMid, V } = PROFILE;
+  const { T, i0, i1, stopAt, V } = PROFILE;
   if (t <= 0) return i0 * STEP;
   if (t >= T[i1]) return i1 * STEP;
   let lo = i0, hi = i1;
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (T[m] <= t) lo = m; else hi = m; }
   const span = T[hi] - T[lo];
-  if (lo === iMid) { // the step that holds the dwell: stand, then roll on
+  if (stopAt.has(lo)) { // the step that holds a halt's dwell: stand, then roll on
     const travel = STEP / Math.max((V[hi] + V[lo]) / 2, 0.25);
     return (lo + clamp((t - T[lo] - (span - travel)) / travel, 0, 1)) * STEP;
   }
@@ -393,12 +409,27 @@ export function trainState(t, phase, out = {}) {
   out.doors = !!out.at;
   return out;
 }
+/** Time into the trip up (s) at which a train arrives at halt `id` (it stands there DWELL_MID s); the trip down
+ *  reaches it at trip - this - DWELL_MID. */
+export function haltArrival(id) {
+  const h = PROFILE.stops.find((x) => x.id === id);
+  return h ? PROFILE.T[h.i + 1] - DWELL_MID : null;
+}
+/** The stops at station `id` in cycle time: [{ u0, u1, dir (the way the train leaves) }]. */
+export function stopWindows(id) {
+  const T = PROFILE.trip;
+  if (id === RAIL.stations[0].id) return [{ u0: 2 * T + DWELL_END, u1: CYCLE, dir: 1 }];
+  if (id === TOP.id) return [{ u0: T, u1: T + DWELL_END, dir: -1 }];
+  const tA = haltArrival(id);
+  if (tA === null) return [];
+  return [{ u0: tA, u1: tA + DWELL_MID, dir: 1 }, { u0: 2 * T + DWELL_END - tA - DWELL_MID, u1: 2 * T + DWELL_END - tA, dir: -1 }];
+}
 /** Cycle time (0..CYCLE) at which a train stands at station `id` ready to leave heading `dir` (+1 up / -1 down). */
 export function boardingU(id, dir) {
-  const T = PROFILE.trip, tMid = PROFILE.T[PROFILE.iMid + 1] - DWELL_MID; // arrival at Wolkensee going up
-  if (id === 'tal') return CYCLE - 20;          // waiting at the bottom, 20 s before it leaves
-  if (id === 'platt') return T + DWELL_END - 20; // waiting at the top
-  return dir > 0 ? tMid + DWELL_MID * 0.3 : 2 * T + DWELL_END - tMid - DWELL_MID * 0.7;
+  const T = PROFILE.trip, tA = haltArrival(id); // (a halt: the arrival going up)
+  if (id === RAIL.stations[0].id) return CYCLE - 20; // waiting at the bottom, 20 s before it leaves
+  if (id === TOP.id) return T + DWELL_END - 20;      // waiting at the top
+  return dir > 0 ? tA + DWELL_MID * 0.3 : 2 * T + DWELL_END - tA - DWELL_MID * 0.7;
 }
 
 // ------------------------------------------------------------------ walkable track (world.addSurface: transport.js)

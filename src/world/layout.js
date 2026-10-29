@@ -3,7 +3,7 @@
 // the infinite world always regenerates identically.
 import { world, MAIN_SUMMIT, MASSIFS, valleyCenter } from './world.js';
 import { mulberry32, hash2, clamp } from '../core/noise.js';
-import { buildTransport, buildLegacyPeak, buildHochkopf } from './transport.js';
+import { buildTransport, buildLegacyPeak, buildHochalm } from './transport.js';
 import { buildSectors } from './sectors.js';
 
 export const DIFFICULTY = [
@@ -370,7 +370,9 @@ function addLift(spec) {
   groomedPad(world.addPad({ x: lift.top.x, z: lift.top.z, r: gondola ? 34 : 16, blend: 34 }), lift.dir);
   lift.bottom.y = world.height(lift.bottom.x, lift.bottom.z);
   lift.top.y = world.height(lift.top.x, lift.top.z);
-  world.addCorridor([[lift.bottom.x, lift.bottom.z], [lift.top.x, lift.top.z]], gondola ? 9 : 7, 'lift');
+  // (the cleared strip under the line; noCorridor: the lift lays its own, e.g. the Hochalm Gondola's stops short of the
+  // roads it crosses, which may not cross a cleared strip)
+  if (!lift.noCorridor) world.addCorridor([[lift.bottom.x, lift.bottom.z], [lift.top.x, lift.top.z]], gondola ? 9 : 7, 'lift');
   lift.towers = liftTowers(lift);
   layout.lifts.push(lift);
   layout.emit('lift', lift);
@@ -1728,7 +1730,7 @@ export function initLayout() {
   step('transport', () => buildTransport(kit));
   step('sectors', () => buildSectors(kit)); // the Hirschalm + Ostkar sectors and their freeride bowls (sectors.js)
   step('legacyPeak', () => buildLegacyPeak(kit)); // Legacy Peak (4,000 m): its gondola and the run down to the village (transport.js)
-  step('hochkopf', () => buildHochkopf(kit)); // the Hochkopf Gondola up from the Hochalm and the run down to the Express's Hochalm halt
+  step('hochalm', () => buildHochalm(kit)); // the Hochalm Gondola up to the Kamm and the Adlerwald run down to the Wolkenspitzbahn (transport.js)
   step('cragMask', setCragMask);          // after the resort's runs exist, before any terrain is built
   step('valley', buildValleyRaces);
   step('midStations', planMidStations);

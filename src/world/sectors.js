@@ -48,7 +48,7 @@ export const AREAS = [
 // the Panoramastrasse's mountain (scenic.js: its switchbacks climb to x ~2050, z ~1050)
 const CLIP = { minx: 2380, maxx: 4200, minz: -640, maxz: 1150 };
 // the stations (the chairs' ends) and huts below: the shaper eases the ground round them into level shoulders
-const FLATS = [[2960, 150], [3070, 930], [2830, 10], [2430, -455], [3880, 150], [3740, 1010], [2700, 190], [3770, 200]];
+const FLATS = [[2960, 150], [3070, 930], [2905, 150], [2430, -455], [3880, 150], [3740, 1010], [2700, 190], [3770, 200]];
 
 export function buildSectors(kit) {
   const { layout, addLift, addPiste, routePiste, faceUV, BAND, PISTE_WIDTH } = kit;
@@ -75,7 +75,10 @@ export function buildSectors(kit) {
   // ---------------------------------------------------------------- Hirschalm
   const hChair = addLift({ type: 'chair', name: 'Hirschalm Chair', bottom: { x: 2960, z: 150 }, top: { x: 3070, z: 930 }, price: 20,
     topName: 'the Kamm', bottomName: 'the Hirschalm' });
-  const aChair = addLift({ type: 'chair', name: 'Adlerblick Chair', bottom: { x: 2830, z: 10 }, top: { x: 2430, z: -455 }, price: 20,
+  // (its base on the basin floor beside the Hirschalm Chair's, where the Hirschalm's runs end: Oct 29, it stood 190 m
+  // north-west of there and 43 m higher, a walk up from every run's end; the Hochalm Gondola's riders come this way to
+  // the Adlerhorn and on down to the Wolkenspitzbahn's Adlerwald halt, transport.js buildHochalm)
+  const aChair = addLift({ type: 'chair', name: 'Adlerblick Chair', bottom: { x: 2905, z: 150 }, top: { x: 2430, z: -455 }, price: 20,
     topName: 'the Adlerhorn summit', bottomName: 'the Hirschalm' });
   // the alm restaurant on the basin, west of the chairs' bases, its terrace facing south over the basin
   const hut = { x: 2700, z: 190, name: 'Hirschalm Hütte', label: 'Hirschalm · Hirschalm Hütte', yaw: 0.35, peak: 'hirschalm' };

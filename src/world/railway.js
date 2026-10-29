@@ -1,6 +1,6 @@
 // The Wolkenspitzbahn at runtime: two trains on the timetable (railroute.js), crossing on the passing loop;
 // boarding at the stations, riding inside the cabin (a seat camera with mouse look, R for an outside view, Space
-// to speed up), getting off at Wolkensee or at the end of the line; the tunnels' darkness (the sun and the sky
+// to speed up), getting off at a halt (Wolkensee, Adlerwald) or at the end of the line; the tunnels' darkness (the sun and the sky
 // fade out when the camera is deep inside a tunnel, the cabin and the tunnel lamps carry the light).
 //
 // main.js glue (see the integration notes at the bottom of this file):
@@ -35,9 +35,10 @@ const ALT0 = 1245; // the village's altitude above sea level (signs)
 const SET_HALF = (CAR.len + CAR.gap) / 2; // car centres from a unit's middle
 // Each train runs as RAIL_UNITS two-car units in multiple (cab, car, car, cab: the middle cabs meet, like the Legacy
 // Express): the line is single track with one passing loop, so its frequency is fixed by the crossing (two trains,
-// one every ~5 min); the extra units double the seats instead (Oct 29, the user: "4 trains so that in multiplayer
-// you don't have to wait so long if the trains are full"). 2 units (4 cars) = 71.8 m: fits every platform and the loop (the
-// crossing keeps 45 m clear of the turnouts: a timetable check in Node).
+// one every ~5.8 min since the Adlerwald halt); the extra units double the seats instead (Oct 29, the user: "4 trains so
+// that in multiplayer you don't have to wait so long if the trains are full"). 2 units (4 cars) = 71.8 m: fits every
+// platform (Adlerwald's, the shortest: 15 m to spare at each end) and the loop (the crossing keeps 47 m clear of the
+// turnouts: a timetable check in Node).
 export const RAIL_UNITS = 2;
 const NCARS = 2 * RAIL_UNITS;
 const PITCH = CAR.len + CAR.gap;                  // m between car centres
@@ -514,7 +515,7 @@ export class Railway {
   seatWorld() { return this.ride ? this.seatPose().pos : null; }
 
   /**
-   * While riding: { seat, hint, stop?: { name, exit } (standing at Wolkensee: E gets you off) } or
+   * While riding: { seat, hint, stop?: { name, exit } (standing at a halt: E gets you off) } or
    * { exit: { x, z, heading, name } } when you arrive (the ride is over).
    */
   updateRide() {
@@ -529,22 +530,25 @@ export class Railway {
       if (!r.exitSent) { r.exitSent = true; return { seat, exit: { ...sta.exit, name: sta.name }, hint: `${sta.name} · arrived` }; }
       return { seat, hint: `${sta.name} · arrived` };
     }
-    const next = r.up ? (st.s < RAIL.stations[1].s - 1 ? 'Wolkensee' : 'Wolkenplatt') : (st.s > RAIL.stations[1].s + 1 ? 'Wolkensee' : 'Legacy Village');
+    // the next station the way the train goes (the halts: Wolkensee, Adlerwald)
+    const S = RAIL.stations, next = (r.up ? S.find((x) => x.s > st.s + 1) : [...S].reverse().find((x) => x.s < st.s - 1))?.name || (r.up ? 'Wolkenplatt' : 'Legacy Village');
     let stop = null;
-    if (r.departed && st.at === 'see' && !r.exitSent) {
-      const sta = this.stations.list.find((x) => x.id === 'see');
+    const halt = st.at && S.find((x) => x.id === st.at && x.halt);
+    if (r.departed && halt && !r.exitSent) {
+      const sta = this.stations.list.find((x) => x.id === halt.id);
       stop = { name: sta.name, exit: { ...sta.exit, name: sta.name } };
     }
     const kmh = Math.round(st.speed * 3.6);
     const hint = stop ? `${stop.name} · press E to get off here` : !r.departed ? `${RAIL_NAME} · departing for ${RAIL.stations.find((x) => x.id === r.dest)?.name || (r.up ? 'Wolkenplatt' : 'Legacy Village')}` : `${RAIL_NAME} · next stop ${next} · ${kmh} km/h`;
     return { seat, hint, stop };
   }
-  /** Get off at Wolkensee while the train stands there: the exit spot (main.js fades out, then calls abort()). */
+  /** Get off at a halt (Wolkensee, Adlerwald) while the train stands there: the exit spot (main.js fades out, then
+   *  calls abort()). */
   leaveAtStop() {
-    const r = this.ride;
-    if (!r || r.train.state.at !== 'see' || r.exitSent) return null;
+    const r = this.ride, at = r?.train.state.at;
+    if (!r || !at || !RAIL.stations.some((x) => x.id === at && x.halt) || r.exitSent) return null;
     r.exitSent = true;
-    const sta = this.stations.list.find((x) => x.id === 'see');
+    const sta = this.stations.list.find((x) => x.id === at);
     return { ...sta.exit, name: sta.name };
   }
   abort() { this.ride = null; }
@@ -665,7 +669,7 @@ export class Railway {
     }
     const st = r.train.state;
     if (st.at) return this.stations.list.find((x) => x.id === st.at)?.name || RAIL_NAME;
-    if (r.train.s > RAIL.stations[2].s0 - 30) return 'Wolkenplatt';
+    if (r.train.s > RAIL.stations[RAIL.stations.length - 1].s0 - 30) return 'Wolkenplatt';
     return inTunnel(r.train.s, 0) ? `${RAIL_NAME} · tunnel` : RAIL_NAME;
   }
 

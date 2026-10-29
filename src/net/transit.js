@@ -60,6 +60,8 @@ export class MpTransit {
     const S = this.sys, s = this.s;
     const rate = (key) => MP.warps?.get(key)?.rate || 1;
     this.hooks ||= {
+      // (the railway's timetable time: railroute.js trainState places both trains off it, the stops at Wolkensee and
+      // Adlerwald and the crossing on the passing loop included, so everyone sees the same train at the same halt)
       rail: { time: () => s.lineTime('train|rail') / 1000, rate: () => rate('train|rail') },
       express: { time: (dir) => s.lineTime(dir > 0 ? 'express|e' : 'express|w') / 1000, rate: (dir) => rate(dir > 0 ? 'express|e' : 'express|w') },
       lifts: { time: (l) => s.lineTime(l.mpKey ||= `${liftKind(l)}|L${l.mpId}`) / 1000 },

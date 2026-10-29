@@ -55,15 +55,18 @@ const _m = new THREE.Matrix4(), _s = new THREE.Vector3(), _size = new THREE.Vect
 const PORTAL_VERT = `
   varying vec2 vUv;
   void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const LIVE_PORTAL = false; // the windows' live view of the world (see renderPortal)
 const PORTAL_FRAG = `
   uniform sampler2D tView;
   uniform float uHas;
+  uniform float uDay;
   uniform vec4 uVP;
   varying vec2 vUv;
   void main() {
     vec2 suv = (gl_FragCoord.xy - uVP.xy) / uVP.zw;
     vec3 view = texture2D(tView, suv).rgb;
     vec3 sky = mix(vec3(1.5, 1.6, 1.75), vec3(0.3, 0.5, 0.95), smoothstep(0.3, 1.0, vUv.y));
+    sky *= mix(vec3(0.03, 0.04, 0.08), vec3(1.0), uDay); // (night: a dark blue view out)
     gl_FragColor = vec4(mix(sky, view, uHas) * vec3(0.95, 0.97, 0.98), 1.0);
   }`;
 const rng = (seed) => { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
@@ -249,7 +252,7 @@ export class ChaletRoom {
   // ------------------------------------------------------------------ the view out (live portal, as the ski shop)
   buildPortal() {
     this.portalMat = new THREE.ShaderMaterial({
-      uniforms: { tView: { value: null }, uHas: { value: 0 }, uVP: { value: new THREE.Vector4(0, 0, 1, 1) } },
+      uniforms: { tView: { value: null }, uHas: { value: 0 }, uDay: { value: 1 }, uVP: { value: new THREE.Vector4(0, 0, 1, 1) } },
       vertexShader: PORTAL_VERT, fragmentShader: PORTAL_FRAG,
     });
     this.vp = (r) => r.getCurrentViewport(this.portalMat.uniforms.uVP.value);
@@ -282,6 +285,9 @@ export class ChaletRoom {
     this.portalMat.uniforms.uHas.value = 0;
   }
   renderPortal() {
+    // (off: drawing the whole world a second time through the windows froze the game on going in, on the user's Mac;
+    // the windows show a soft day / night view instead. Oct 29, "the chalets broke again ... it froze as soon as i got in")
+    if (!LIVE_PORTAL) return;
     const o = this.world, r = this.renderer;
     if (!o || !r?.render) return;
     const cam = this.camera;
@@ -759,6 +765,7 @@ export class ChaletRoom {
     const day = clamp((hour - 6.5) / 1.5, 0, 1) * clamp((19 - hour) / 1.5, 0, 1);
     interiorLight.amb.value.setRGB(0.15 + 0.43 * day, 0.13 + 0.49 * day, 0.11 + 0.6 * day);
     interiorLight.hemi.value = 0.06 + 0.06 * day;
+    this.portalMat.uniforms.uDay.value = 0.15 + 0.85 * day;
     // the pool: the 4 lamps nearest the eye (house frame), 2700 K
     if (!this.pool) return;
     const on = this.active && eye;

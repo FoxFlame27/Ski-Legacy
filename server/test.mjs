@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -570,6 +570,10 @@ try {
     server.profileOf('tow gus').money = 100;
     const w1 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
     ok(w1.ok && w1.d.money === 100 - 1500 && !w1.d.impound && gcar().tow?.kind === 'wreck', 'a wreck: the fee (a fine: below zero if need be), no impound');
+    await g2.f.req('towDone');
+    server.profileOf('tow gus').money = DEBT_FLOOR + 1000;
+    const w2 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
+    ok(w2.ok && w2.d.fee === 0 && w2.d.money === DEBT_FLOOR + 1000 && gcar().tow, 'at the debt floor the truck still comes, unpaid (fee 0)');
     g2.f.send('veh', { k: 'tow', at: [10, 1, 20, 1.2], v: 0, car: true });
     await hal.f.next('veh', (d) => d.k === 'tow' && d.veh);
     const dn = await g2.f.req('towDone');

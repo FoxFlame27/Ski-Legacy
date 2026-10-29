@@ -982,8 +982,8 @@ export class GameServer {
 
   // ---------------------------------------------------------------- the tow truck (game/towtruck.js, impound.js)
   // { kind: 'wreck' }: you wrecked your car; { kind: 'tow' }: you left it blocking a road. The server charges its own
-  // fee (CATALOG.wreckFee, once per tow; like a fine in single player it may take the balance below zero: the truck
-  // fetches the car either way) and records the tow on the car: home [x, y, z, yaw] is where it ends (a wreck: its
+  // fee (CATALOG.wreckFee, once per tow; like a fine it may take the balance below zero, down to DEBT_FLOOR: the
+  // truck fetches the car either way) and records the tow on the car: home [x, y, z, yaw] is where it ends (a wreck: its
   // own bay, repaired; a tow: impound bay `bay`, locked until the next world day). The parked spot becomes home at
   // once, so a player who drops out mid-tow finds the car there (settleCar ends the record on leaving / login).
   tow(c, d) {
@@ -993,12 +993,13 @@ export class GameServer {
     if (!validAt(d.home)) return { err: 'bad_value' };
     if (car.tow) return { err: 'busy', d: { money: P.money, impound: car.impound || null } };
     const now = Date.now(), fee = CATALOG.wreckFee ?? 1500, home = d.home.map((x) => Math.round(x * 100) / 100);
-    P.money = Math.round(P.money - fee);
+    // (as the game's other charges: into debt down to DEBT_FLOOR; deeper than that the truck still comes, unpaid)
+    const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };
     car.at = home;
     if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 };
     this.store.profiles.save();
-    return { d: { money: P.money, fee, impound: car.impound || null, at: home } };
+    return { d: { money: P.money, fee: paid, impound: car.impound || null, at: home } };
   }
   /** The truck has unloaded your car (in its bay / the impound): the tow record ends. */
   towDone(c) {

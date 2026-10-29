@@ -144,7 +144,7 @@ whose `.data` is `d`.
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
 | `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
 | `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
-| `tow` | `{kind: 'wreck' \| 'tow', home: [x, y, z, yaw], bay?}` | `{money, fee, impound: {day, bay} \| null, at}`: the server's fee (`catalog.wreckFee`, once per tow, may go below zero like a fine); the car's spot becomes `home`; `tow` also impounds it until the next world day · `no_car`, `busy`, `bad_kind`, `bad_value` |
+| `tow` | `{kind: 'wreck' \| 'tow', home: [x, y, z, yaw], bay?}` | `{money, fee, impound: {day, bay} \| null, at}`: the server's fee (`catalog.wreckFee`, once per tow; like a fine it may go below zero, down to `DEBT_FLOOR`; deeper, the truck still comes and `fee` is 0); the car's spot becomes `home`; `tow` also impounds it until the next world day · `no_car`, `busy`, `bad_kind`, `bad_value` |
 | `towDone` | – | the tow record ends (the truck unloaded your car); your truck leaves the others' view |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
 | `raceFinish` | `{rid, raw: ms, pen: ms, time: ms \| null, dnf?}`, sent at the line | `{time}`. `raw` (the clock) is trusted only within 3 s of the server's own measurement since GO, else the server's time counts; `pen` (gate penalties) is added. Older clients send `time` only. |

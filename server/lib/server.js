@@ -54,13 +54,16 @@ const WEATHER_NEXT = {
   heavy: ['light', 'cloudy'],
   mist: ['clear', 'flurries', 'cloudy'],
 };
-const EARN_RULES = { job: 6000, secret: 10000 }; // max per payout; and EARN_HOURLY over the last hour, all sources
+// max per payout; and EARN_HOURLY over the last hour, all sources, per account. sell: furniture sold back from your
+// chalet (build mode: half its price; the dearest piece is $3,600)
+const EARN_RULES = { job: 6000, secret: 10000, sell: 2000 };
 const EARN_HOURLY = 60000;
 
 export const normName = (s) => String(s ?? '').trim().replace(/\s+/g, ' ');
 export const nameKey = (s) => normName(s).toLowerCase();
 export const validName = (s) => NAME_RE.test(s) && /[A-Za-z0-9]/.test(s);
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+const JAIL_MAX_S = 300, JAIL_SLACK = 3000; // (the longest sentence; the client's clock estimate may run a little ahead)
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
@@ -306,6 +309,9 @@ class World {
   raceJoin(c, { race }) {
     if (!CATALOG.races[race]) return { err: 'bad_race' };
     if (this.inRace(c)) return { err: 'in_race' };
+    // (already queued for it, e.g. a retry after a lost answer: unchanged; leaving and joining again would cancel and
+    // restart a running countdown)
+    if (c.queue === race && this.queues.get(race)?.members.includes(c.pid)) return { d: this.queueMsg(race) };
     this.raceLeave(c, true);
     let q = this.queues.get(race);
     if (!q) { q = { members: [], startAt: 0, timer: null }; this.queues.set(race, q); }
@@ -523,7 +529,7 @@ class Client {
     this.pres = null;      // the last presence row
     this.interior = null;  // server-approved interior id ('skishop', 'carrental', 'chalet:7', ...)
     this.seat = null;      // { k, v, seat }
-    this.vehs = { car: null, heli: null, tow: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
+    this.vehs = { car: null, heli: null, tow: null, police: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
     this.queue = null;     // race id queued for
     this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
@@ -532,7 +538,6 @@ class Client {
     this.refused = 0; this.refusedT = 0; // messages refused by the rate limit in the current FLOOD_WINDOW_MS
     this.dropped = 0;      // the connection dropped at (ms; 0 = connected): the player is held for a reconnect
     this.graceT = null;
-    this.earned = [];      // [t, amount] over the last hour
   }
   sendRaw(s) { if (this.ws && this.ws.readyState === 1) this.ws.send(s); }
   send(t, d) { this.sendRaw(JSON.stringify({ t, d })); }
@@ -560,6 +565,7 @@ export class GameServer {
     this.pending = new Map(); // rid -> permission request
     this.nextPerm = 1;
     this.regByIp = new Map(); // ip -> [t]: at most 5 new names an hour from one address
+    this.earnedBy = new Map(); // nameKey -> [[t, amount]] over the last hour (per account: a new login does not reset it)
     // global registries, rebuilt from the profiles
     this.plates = new Map(); // plateKey -> nameKey
     for (const [k, p] of Object.entries(this.store.profiles.data)) {
@@ -582,7 +588,10 @@ export class GameServer {
         res.end(JSON.stringify({ ok: true, proto: PROTO, worlds: this.worlds.size, players: this.online.size }));
         return;
       }
-      if (req.url.startsWith('/admin/')) { this.admin(req, res); return; }
+      if (req.url.startsWith('/admin/')) {
+        try { this.admin(req, res); } catch (e) { this.log(`[err] admin ${req.url}: ${e.stack || e}`); if (!res.headersSent) { res.writeHead(500); res.end(); } }
+        return;
+      }
       res.writeHead(404); res.end();
     });
     // (256 KB: a big chalet layout fits; an oversized frame would close the socket with 1009)
@@ -822,9 +831,12 @@ export class GameServer {
   sendGuests(ownerKey, kind = 'chaletVisit') {
     const o = this.online.get(ownerKey);
     if (!o) return;
+    o.send('guests', { kind, names: this.guestNames(ownerKey, kind) });
+  }
+  guestNames(ownerKey, kind = 'chaletVisit') {
     const pre = `${kind}|${ownerKey}|`, names = [];
     for (const g of this.grants.keys()) if (g.startsWith(pre)) names.push(this.store.accounts.data[g.slice(pre.length)]?.name || '?');
-    o.send('guests', { kind, names });
+    return names;
   }
   answerPerm(rid, allow, reason = null) {
     const p = this.pending.get(rid);
@@ -882,6 +894,7 @@ export class GameServer {
         return reply({});
       }
       case 'enter': return reply(this.enter(c, d));
+      case 'jail': return reply(this.jail(c, d));
       case 'seatClaim': return reply(w.claimSeat(c, d));
       case 'seatRelease': w.releaseSeat(c); return reply({});
       case 'skip': return reply(w.skip(c, d));
@@ -956,6 +969,7 @@ export class GameServer {
     if (old) { old.send('bye', { reason: 'replaced' }); old.ws?.close(4001, 'replaced'); old.replacing = true; this.onClose(old); }
     c.name = a.name; c.key = k;
     c.profile = this.store.profiles.data[k] ||= newProfile(a.name);
+    if (c.profile.jailUntil && c.profile.jailUntil <= Date.now()) { delete c.profile.jailUntil; delete c.profile.jailReason; this.store.profiles.save(); } // (served)
     if (d.look && typeof d.look === 'object') c.look = { c: str(d.look.c, 32), o: d.look.o && JSON.stringify(d.look.o).length < 400 ? d.look.o : null, s: str(d.look.s, 32) };
     this.online.set(k, c);
     this.plotsHint(d.plots);
@@ -973,6 +987,7 @@ export class GameServer {
       chalets: this.chaletsMsg(), chaletPlot: { id: c.plot, waiting: c.chaletWaiting, moved: !!c.plotMoved },
       catalog: CATALOG,
       resumed, // true: the same player carried on (same world, pid, seat, chalet plot, vehicles, race entry)
+      guests: this.guestNames(c.key), // your chalet's guest list (a resumed player's grants are still there)
       lastRace: w.lastRaceFor(c.key), // the result of a race you were in that ended in the last minute (missed while away?)
     };
   }
@@ -1019,7 +1034,7 @@ export class GameServer {
   // Leaving the world takes them out of everyone's view (the 'leave' broadcast) until you are back.
   setVeh(c, d) {
     const k = d?.k;
-    if (k !== 'car' && k !== 'heli' && k !== 'tow') return { err: 'bad_vehicle' };
+    if (k !== 'car' && k !== 'heli' && k !== 'tow' && k !== 'police') return { err: 'bad_vehicle' };
     let v = null;
     if (k === 'tow' && !d.off) {
       // your tow truck out on a job for your car (towtruck.js: only the owner's client drives it): its pose, speed and
@@ -1027,6 +1042,13 @@ export class GameServer {
       if (!c.profile.cars?.[0]) return { err: 'no_car' };
       if (!validAt(d.at) || (d.v != null && !isNum(d.v))) return { err: 'bad_value' };
       v = { k, at: d.at.map((x) => Math.round(x * 100) / 100), v: Math.round(clamp(d.v || 0, -30, 30) * 100) / 100, car: !!d.car };
+    } else if (k === 'police' && !d.off) {
+      // the patrol cars chasing you (game/police.js: local to you, the offender): up to two poses [x, y, z, yaw, v],
+      // streamed a few times a second while you are wanted; never stored
+      if (!Array.isArray(d.cars) || !d.cars.length || d.cars.length > 2) return { err: 'bad_value' };
+      if (!d.cars.every((a) => Array.isArray(a) && a.length === 5 && a.every(isNum))) return { err: 'bad_value' };
+      const r2 = (x) => Math.round(x * 100) / 100;
+      v = { k, cars: d.cars.map((a) => [r2(a[0]), r2(a[1]), r2(a[2]), r2(a[3]), r2(clamp(a[4], -60, 60))]) };
     } else if (!d.off) {
       if (k === 'car') {
         const car = c.profile.cars?.[0];
@@ -1091,6 +1113,8 @@ export class GameServer {
   enter(c, d) {
     const id = d.interior == null ? null : str(d.interior, 40);
     if (d.interior != null && !id) return { err: 'bad_interior' };
+    // in prison: the cell until the time is served (3 s of slack: the client releases you by its estimate of our clock)
+    if (id !== 'prison' && (c.profile?.jailUntil || 0) - Date.now() > JAIL_SLACK) return { err: 'jailed', d: { jailUntil: c.profile.jailUntil } };
     if (id && id.startsWith('chalet:')) {
       const n = Number(id.slice(7));
       if (!isInt(n)) return { err: 'bad_interior' };
@@ -1107,6 +1131,21 @@ export class GameServer {
     c.interior = id;
     if (c.pres) { c.pres[14] = id || 0; c.world.dirty.set(c.pid, c.pres); }
     return { d: { interior: id } };
+  }
+
+  // ---------------------------------------------------------------- prison (game/prison.js): served in the 'prison' interior
+  /** { seconds (1-300), reason }: you are jailed until now + seconds (in the profile: a login before then starts
+   *  you in the cell for the rest). A new sentence never shortens the one you are serving. */
+  jail(c, d) {
+    const s = d.seconds;
+    if (!isNum(s) || s < 1 || s > JAIL_MAX_S) return { err: 'bad_value' };
+    const reason = (str(d.reason, 80) ?? '').trim() || 'Arrested';
+    const now = Date.now(), P = c.profile;
+    P.jailUntil = Math.min(now + JAIL_MAX_S * 1000, Math.max(P.jailUntil || 0, now + Math.round(s * 1000)));
+    P.jailReason = reason;
+    this.store.profiles.save();
+    this.log(`[jail] ${c.name}: ${Math.round((P.jailUntil - now) / 1000)} s, ${reason}`);
+    return { d: { jailUntil: P.jailUntil, reason, now } };
   }
 
   permRequest(c, d, reqId) {
@@ -1156,10 +1195,11 @@ export class GameServer {
   earn(c, d) {
     const max = EARN_RULES[d.source], amount = d.amount, now = Date.now();
     if (!max || !isInt(amount) || amount <= 0 || amount > max) return { err: 'rejected', d: { money: c.profile.money } };
-    c.earned = c.earned.filter(([t]) => now - t < 3600000);
-    const hour = c.earned.reduce((s, [, a]) => s + a, 0);
+    const log = (this.earnedBy.get(c.key) || []).filter(([t]) => now - t < 3600000);
+    this.earnedBy.set(c.key, log);
+    const hour = log.reduce((s, [, a]) => s + a, 0);
     if (hour + amount > EARN_HOURLY) return { err: 'cap', d: { money: c.profile.money } };
-    c.earned.push([now, amount]);
+    log.push([now, amount]);
     this.credit(c, amount, d.source);
     c.profile.stats.earned = (c.profile.stats.earned || 0) + amount;
     return { d: { money: c.profile.money } };

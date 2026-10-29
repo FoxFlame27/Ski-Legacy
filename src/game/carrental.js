@@ -295,7 +295,17 @@ export class CarRental {
   wrecked(e) {
     const mine = e.rental && this.save.rental ? this.save.rental : null;
     const mp = mine ? this.mp : null;
-    if (mine) {
+    // (Oct 29, the user: "if your car becomes wrecked from the car crashes from the police it wont get repaired"):
+    // wrecked by a police ram (police.js sets e.policeWreck): no fee, no repair; the rental ends, the car is lost
+    const lost = !!(mine && e.policeWreck);
+    if (lost) {
+      e.rental = false;
+      if (this.current === e) this.current = null;
+      this.save.rental = null;
+      this.writeSave();
+      mp?.ended?.(mine); // (multiplayer: the server's car record ends)
+      setTimeout(() => this.hud?.flash('Car wrecked by the police · it will not be repaired · your rental has ended', 'bad', 6000), 2900);
+    } else if (mine) {
       e.rental = false;
       if (this.current === e) this.current = null;
       if (mp?.tow) { // multiplayer: the server charges the fee and records the tow (it ends in your bay: net/session.js)
@@ -318,7 +328,7 @@ export class CarRental {
     const done = (car) => {
       if (this.towed === car) this.towed = null;
       this.remove(car); back();
-      if (mp && this.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends)
+      if (mp && this.mp === mp && !lost) mp.towDone?.(); // (multiplayer: the server's tow record ends)
     };
     if (this.truck) this.truck.fetch(e, done);
     else if (mine) setTimeout(() => done(e), 20000);

@@ -66,6 +66,7 @@ class Remote {
     this.vcar = info.vehs?.car || null;   // the vehicles they show ('veh': { k: 'car', cfg, at? }, { k: 'heli', id, at? })
     this.vheli = info.vehs?.heli || null;
     this.vtow = info.vehs?.tow || null;   // their tow truck out on a job ({ k: 'tow', at, v, car }: net/tow.js)
+    this.vpolice = info.vehs?.police || null; // the patrol cars chasing them ({ k: 'police', cars: [[x, y, z, yaw, v]] }: game/police.js)
     this.ok = false; this.inLocal = false;
     this.vehStr = 0; this.vehK = ''; this.vehOwner = ''; this.vehSeat = -1; // the parsed `kind:id:seat` (vehicles.js)
     this.seatPos = new THREE.Vector3(); this.seatYaw = 0;
@@ -119,7 +120,7 @@ export class RemotePlayers {
     if (!info || info.pid === this.selfPid) return null;
     let r = this.players.get(info.pid);
     if (!r) { r = new Remote(info); this.players.set(info.pid, r); }
-    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; } }
+    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; } }
     if (info.pres) r.push(info.pres, this.o.now());
     if (info.interior !== undefined) r.interior = info.interior || null;
     return r;
@@ -142,7 +143,7 @@ export class RemotePlayers {
   }
 
   /** A vehicle a player shows changed ('veh' broadcast: k 'car' | 'heli', veh or null). */
-  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; }
+  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; else if (k === 'police') r.vpolice = veh || null; }
 
   onRows(rows) {
     if (!Array.isArray(rows)) return;

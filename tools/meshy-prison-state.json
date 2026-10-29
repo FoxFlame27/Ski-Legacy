@@ -1,0 +1,27 @@
+{
+  "prison_station": {
+    "preview": "01a1889e-b027-7324-bac3-68a5c821118a",
+    "refine": "01a188a0-b479-71df-b0b9-2f5c84e8c987",
+    "done": true
+  },
+  "cell_toilet": {
+    "preview": "01a1889e-b065-7493-9e84-de842a06c422",
+    "refine": "01a1889f-c992-7169-b0c8-15a28bedca38",
+    "done": true
+  },
+  "visit_desk": {
+    "preview": "01a1889e-b01a-71b0-b8c8-6233130b6122",
+    "refine": "01a188a0-0c3d-74f8-8933-aaf1aebe8104",
+    "done": true
+  },
+  "guard_desk": {
+    "preview": "01a1889e-b0ac-723d-8f30-c18d1e004d27",
+    "refine": "01a188a0-0b7f-7422-9084-5401abfbb4fd",
+    "done": true
+  },
+  "bunk_bed": {
+    "preview": "01a188ac-26d5-72f8-8902-d46c91206d6a",
+    "refine": "01a188ad-a654-7114-8589-17f03467ace3",
+    "done": true
+  }
+}

@@ -19,6 +19,7 @@ import { TowMp } from './tow.js';
 import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
 import { MpTransit } from './transit.js';
+import { DEVICE_PREFS } from '../game/economy.js';
 
 const ACCOUNTS_KEY = 'ski-legacy-mp-accounts';
 const SEND_HZ = 12;
@@ -122,6 +123,8 @@ export class Multiplayer {
     MP.catalog = d.catalog;
     MP.chalets = d.chalets || {};
     MP.status = 'online';
+    this.byeReason = null; // (a 'kicked' / 'replaced' from an earlier session must not name the next one's loss)
+    this.guests = Array.isArray(d.guests) ? d.guests : [];
     this.applyProfile(d.profile);
     this.applyPlot(d.chaletPlot, true);
     this.setWorld(d.world);
@@ -175,7 +178,10 @@ export class Multiplayer {
     on('adminTp', (d) => {
       const g = window.__game;
       if (!g?.player || !Number.isFinite(d?.x) || !Number.isFinite(d?.z)) return;
-      if (g.drive?.active || g.heli?.active || g.interior?.active || g.chalets?.inside || g.carRental?.inside) { this.c.hud.flash(`The server tried to move you to ${d.to} · get out first`, 'bad', 3000); return; }
+      // (nor on a train, the express, a bus, a sled, in someone's car or in a race: those keep their own seat and
+      // state, and a teleport would leave them riding with you gone)
+      if (g.drive?.active || g.heli?.active || g.interior?.active || g.chalets?.inside || g.carRental?.inside || g.prison?.inside || g.railway?.riding || g.express?.riding
+        || g.skibus?.riding || g.sleds?.active || g.modes?.active || this.carRide.ride || this.race.start) { this.c.hud.flash(`The server tried to move you to ${d.to} · get out first`, 'bad', 3000); return; }
       const off = 1.8, x = d.x - Math.sin(d.yaw || 0) * off, z = d.z - Math.cos(d.yaw || 0) * off;
       if (g.admin?.teleport) g.admin.teleport({ x, z, heading: d.yaw || 0, label: `Moved next to ${d.to}`, skis: false });
       else g.player.teleport(x, z, d.yaw || 0);
@@ -209,8 +215,9 @@ export class Multiplayer {
     try {
       const d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots() });
       MP.pid = d.pid; MP.chalets = d.chalets || {};
+      this.byeReason = null; // (a 'restart' before this reconnect is not the reason for a later loss)
       this.setServerMoney(d.profile.money);
-      this.guests = [];
+      this.guests = Array.isArray(d.guests) ? d.guests : []; // (resumed: your guests are still allowed in)
       this.applyPlot(d.chaletPlot, true);
       this.setWorld(d.world);
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
@@ -223,12 +230,30 @@ export class Multiplayer {
       const r = this.race.start;
       if (r && d.lastRace?.rid === r.rid) this.onRaceResult(d.lastRace);
       else if (r && !(d.world.races || []).some((x) => x.rid === r.rid)) { this.race.start = null; this.ui?.setBoard(null); }
+      this.raceAfterRelogin(d);
     } catch (e) {
       // the account itself is refused (bad token, old game version): back to the menu. Anything else (a timeout, the
       // socket dropping again): try the connection again
       if (e.code === 'bad_login' || e.code === 'proto' || !MP.active) this.lost(errText(e));
       else { console.warn('[mp] login after reconnect:', e.code || e.message); net.reconnect('relogin'); }
     }
+  }
+
+  /** After a login on a new connection: the race queue and a race start you may have missed meanwhile. The queue
+   *  line follows the server (a login that did not resume left the queue; a countdown may have started or moved on),
+   *  and a race that started during the drop with you on its grid is joined (a few seconds late at most) or given up
+   *  (DNF), so the server never waits for a racer whose client never started. */
+  raceAfterRelogin(d) {
+    if (this.race.queued) {
+      const q = MP.queues.get(this.race.queued);
+      if (q && (q.names || []).includes(MP.name)) this.race.queue = q;
+      else { this.race.queued = null; this.race.queue = null; }
+    }
+    if (this.race.start) return;
+    const st = (d.world?.races || []).find((x) => x.grid?.some((g) => g.pid === MP.pid));
+    if (!st) return;
+    if (net.serverNow() - st.at < 20000) { this.onRaceStart(st); return; }
+    net.request('raceFinish', { rid: st.rid, dnf: true }).catch(() => {});
   }
 
   lost(reason) {
@@ -251,7 +276,9 @@ export class Multiplayer {
     this.ui?.show(false);
     MP.active = false; MP.status = 'off'; MP.onSave = null; MP.world = null; MP.profile = null; MP.pid = 0; MP.chaletPlot = null;
     this.guests = []; this.ui?.setGuests(null);
-    this.interior = null; this.race = { queued: null, queue: null, start: null };
+    this.interior = null; this.race = { queued: null, queue: null, start: null }; this.byeReason = null;
+    this.skipHeld = null; this.entering = false;
+    MP.seats.clear(); MP.warps.clear(); MP.skip.clear(); MP.queues.clear(); MP.heli = null; MP.chalets = {};
     this.restoreSave();
     this.c.setAI(true);
     this.c.applySave();
@@ -313,9 +340,11 @@ export class Multiplayer {
 
   restoreSave() {
     if (!this.spSave) return;
-    const s = this.c.save;
+    const s = this.c.save, keep = {};
+    // (this machine's settings changed while online stay: graphics, mouse, volume are not progress)
+    for (const k of DEVICE_PREFS) if (s[k] !== undefined) keep[k] = s[k];
     for (const k of Object.keys(s)) delete s[k];
-    Object.assign(s, this.spSave);
+    Object.assign(s, this.spSave, keep);
     this.spSave = null;
   }
 
@@ -332,7 +361,8 @@ export class Multiplayer {
       if (!force && this.pushed[key] === j) return;
       this.pushed[key] = j;
       if (last) net.send('profileSet', { key, value }); // (leaving: no answers awaited, sent before the socket closes)
-      else net.request('profileSet', { key, value }).catch((e) => console.warn(`[mp] profile ${key}: ${e.code || e.message}`));
+      // (not stored: sent again with the next push. A timeout may still have arrived: profileSet is idempotent)
+      else net.request('profileSet', { key, value }).catch((e) => { if (this.pushed[key] === j) delete this.pushed[key]; console.warn(`[mp] profile ${key}: ${e.code || e.message}`); });
     };
     send('character', s.character);
     if (s.skis) send('skis', s.skis);
@@ -484,7 +514,7 @@ export class Multiplayer {
     const me = d.grid.find((g) => g.pid === MP.pid);
     if (!me) return;
     this.race.queued = null; this.race.queue = null;
-    this.race.start = { ...d, slot: me.slot, done: new Map(), board: null }; this.race.finished = false; this.race.result = null;
+    this.race.start = { ...d, slot: me.slot, done: new Map(), board: null, got: net.serverNow(), seen: false }; this.race.finished = false; this.race.result = null;
     this.ui?.closeResults();
     this.c.onRaceStart?.({ ...d, slot: me.slot, n: d.grid.length, secondsToGo: () => (d.at - net.serverNow()) / 1000,
       // the race session's multiplayer hooks: the other racers, your finish at the line, the server's result
@@ -559,6 +589,10 @@ export class Multiplayer {
     this.boardT = 0;
     const sess = window.__game?.modes?.session;
     const mine = sess?.mp && sess.mp.rid === r.rid && !sess.disposed ? sess : null;
+    // no race session for it (you left it from the pause menu, or it could not start here: another session was on):
+    // you are out (DNF), so the server neither waits for you nor keeps you 'in_race' for the next queue
+    if (mine) r.seen = true;
+    else if (!this.race.finished && (r.seen || now > Math.max(r.at, r.got || 0) + 8000)) this.raceFinished({ dnf: true });
     if (mine && !this.race.finished && Number.isFinite(mine.ps)) net.send('raceProgress', { rid: r.rid, gate: Math.max(0, mine.nextGate | 0), s: Math.round(mine.ps * 10) / 10 });
     if (mine) { if (this.ui?.lines.board) this.ui.setBoard(null); return; }
     const rows = this.raceRows;

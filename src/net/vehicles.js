@@ -17,6 +17,7 @@ import { lampsOn } from '../game/carlights.js';
 import { HeliModel, ANCHORS } from '../game/heli/model.js';
 import { nightUniform } from '../world/village.js';
 import { buildTowTruck, beaconsOn, groundPose, bedLocal, TOW_HALF } from '../game/towtruck.js';
+import { buildPoliceCar, policeLights, policeGround, policeModelReady } from '../game/police.js';
 
 const LEN = Object.fromEntries(CAR_MODELS);
 const VEH_FAR = 1800;   // m: vehicles beyond are not drawn
@@ -98,6 +99,7 @@ export class RemoteVehicles {
     this.cars = new Map();  // pid -> { key, t, inst, group, tag, x, y, z, yaw, steer, u, lit, posed, driven }
     this.helis = new Map(); // pid -> { model, tag, yaw, rpm, shown }
     this.tows = new Map();  // pid -> their tow truck out on a job: { g, beacons, beaconMat, beaconLight, col, x, z, yaw, posed, shown }
+    this.police = new Map(); // pid -> the patrol cars chasing them: [{ m, col, x, z, yaw, tx, tz, tyaw, tv, age, posed, shown }]
     this.remotes = null;
     this.time = 0;
   }
@@ -110,6 +112,7 @@ export class RemoteVehicles {
     for (const r of remotes.players.values()) {
       if (!r.ok) continue;
       this.updateTow(r, dt, cam, outdoors); // (first: their car may ride on its bed)
+      this.updatePolice(r, dt, cam, outdoors);
       this.updateCar(r, dt, cam, outdoors);
       this.updateHeli(r, dt, cam, outdoors);
     }
@@ -241,6 +244,55 @@ export class RemoteVehicles {
     this.tows.delete(pid);
   }
 
+  // ---------------------------------------------------------------- patrol cars
+  // The police chasing another player (game/police.js: local to them, their poses ~6 times a second): drawn with the
+  // same model, blue lights flashing, eased toward the last pose run on at its speed; solid to you (a box collider,
+  // police: 'remote'). Their officers on foot are only drawn on their own screen.
+  updatePolice(r, dt, cam, outdoors) {
+    const vp = r.vpolice;
+    let list = this.police.get(r.pid);
+    if (!vp?.cars?.length) { if (list) for (const w of list) this.hidePolice(w); return; }
+    if (!policeModelReady()) return; // (the glTF still loading)
+    if (!list) { list = []; this.police.set(r.pid, list); }
+    const fresh = list.ref !== vp;
+    list.ref = vp;
+    for (let k = 0; k < Math.max(list.length, vp.cars.length); k++) {
+      const a = vp.cars[k];
+      let w = list[k];
+      if (!a) { if (w) this.hidePolice(w); continue; }
+      if (!w) {
+        let m;
+        try { m = buildPoliceCar(this.o.models()); } catch (e) { console.warn('[mp] police car', e); return; }
+        m.g.name = `mp-police-${r.name}-${k}`;
+        this.o.scene.add(m.g);
+        const col = { x: 1e9, z: 1e9, hw: m.size.x / 2 - 0.05, hd: m.size.z / 2, rot: 0, h: 1.7, mp: true, police: 'remote' };
+        this.o.colliders?.push(col);
+        w = list[k] = { m, col, x: 0, y: 0, z: 0, yaw: 0, tx: 0, ty: 0, tz: 0, tyaw: 0, tv: 0, age: 0, posed: false, shown: true, t: k * 0.21 };
+      }
+      if (fresh) {
+        w.tx = a[0]; w.ty = a[1]; w.tz = a[2]; w.tyaw = a[3]; w.tv = a[4]; w.age = 0;
+        if (!w.posed || Math.hypot(w.tx - w.x, w.tz - w.z) > 25) { w.x = w.tx; w.y = w.ty; w.z = w.tz; w.yaw = w.tyaw; w.posed = true; }
+      }
+      w.age += dt;
+      const ahead = Math.min(w.age, 0.35) * w.tv, gx = w.tx + Math.sin(w.tyaw) * ahead, gz = w.tz + Math.cos(w.tyaw) * ahead;
+      const e = 1 - Math.exp(-dt * 7);
+      w.x += (gx - w.x) * e; w.z += (gz - w.z) * e; w.yaw = wrapPi(w.yaw + wrapPi(w.tyaw - w.yaw) * e);
+      const show = outdoors && _d.set(w.x, w.ty, w.z).sub(cam).length() < VEH_FAR;
+      w.col.x = show ? w.x : 1e9; w.col.z = show ? w.z : 1e9; w.col.rot = -w.yaw;
+      if (!show) { if (w.shown) this.hidePolice(w); continue; }
+      if (!w.shown) { w.shown = true; w.m.g.visible = true; }
+      policeGround(w.m.g, w.x, w.z, w.yaw, w.ty + 2);
+      policeLights(w.m, true, (w.t += dt));
+    }
+  }
+  hidePolice(w) { w.shown = false; w.m.g.visible = false; w.col.x = 1e9; w.col.z = 1e9; }
+  dropPolice(pid) {
+    const list = this.police.get(pid);
+    if (!list) return;
+    for (const w of list) { w.m.g.removeFromParent(); const L = this.o.colliders, i = L ? L.indexOf(w.col) : -1; if (i >= 0) L.splice(i, 1); }
+    this.police.delete(pid);
+  }
+
   // ---------------------------------------------------------------- helicopters
   updateHeli(r, dt, cam, outdoors) {
     const flying = r.state === ST.fly;
@@ -325,6 +377,6 @@ export class RemoteVehicles {
   /** A remote player's car as drawn (for the ride prompt and the passenger's seat), or null. */
   carOf(pid) { const c = this.cars.get(pid); return c?.posed ? c : null; }
 
-  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); }
-  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); }
+  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); }
+  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); }
 }

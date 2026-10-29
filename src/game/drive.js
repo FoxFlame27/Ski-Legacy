@@ -589,6 +589,7 @@ export class Drive {
     const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
     let px = 0, pz = 0, n = 0, solid = false, kind = 'snow';
     let rpx = 0, rpz = 0, rn = 0; // (guardrails: their own push, a glancing collision below)
+    let mpCar = null;
     const R = d.w / 2;
     for (const k of [d.half - R, 0, -(d.half - R)]) {
       const cx = d.x + fx * k, cz = d.z + fz * k;
@@ -613,7 +614,7 @@ export class Drive {
       }
       const cars = this.carColliders();
       for (const c of this.colliders) {
-        if (c === d.e.collider || cars.has(c) || c.rail) continue; // (other cars: bash(); guardrails: their line colliders)
+        if (c === d.e.collider || cars.has(c) || c.rail || c.police === 'local') continue; // (other cars: bash(); guardrails: their line colliders; your patrol cars: police.js)
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
         if (c.r !== undefined) {
@@ -629,6 +630,7 @@ export class Drive {
             px += (nlx * c2 - nlz * s2) * o; pz += (nlx * s2 + nlz * c2) * o; n++;
             if (!c.soft && !c.net) solid = true;
             kind = kindOf(c);
+            if (c.mp && c.car) mpCar = c; // (another player's car: police.js onHit)
           }
         }
       }
@@ -638,6 +640,7 @@ export class Drive {
     const l = Math.hypot(px, pz) || 1, nx = px / l, nz = pz / l;
     d.x += px; d.z += pz;
     const vn = d.vx * nx + d.vz * nz;
+    if (mpCar && vn < 0) this.hitReport('player-car', -vn);
     // into something solid (a trunk, a building, a rock, a lift tower) at 40 km/h or more: a crash
     if (solid && -vn > CRASH_V && this.canCrash()) { this.crash(-vn, nx, nz, kind); return; }
     if (solid && -vn > KNOCK_V) this.knock(-vn, nx, nz);
@@ -748,6 +751,7 @@ export class Drive {
       d.vx += (J / m1) * nx; d.vz += (J / m1) * nz;
       d.yawRate += clamp(((r1z * nx - r1x * nz) * J) / I1, -1.5, 1.5) * 0.5;
       if (!bash) continue; // (a nudge at parking speed: only you bounce)
+      this.hitReport(B.kind, -vn); // (police.js: a hit calls the police)
       const dvx = (-J / m2) * nx, dvz = (-J / m2) * nz, dw = clamp((-(r2z * nx - r2x * nz) * J) / I2, -2.5, 2.5);
       if (B.kind === 'traffic') this.traffic?.knock?.(B.o, B.vx + dvx, B.vz + dvz, w2 + dw);
       else this.shove(B.o, B.vx + dvx, B.vz + dvz, w2 + dw);
@@ -770,7 +774,7 @@ export class Drive {
           if (Math.abs(lz) > d.half + 0.3 || Math.abs(lx) > d.w / 2 + 0.3) continue;
           const l = Math.hypot(dx, dz) || 1, closing = Math.max(sp * 0.5, (d.vx * dx + d.vz * dz) / l);
           const r = knockPerson(p, closing, 'car', d.vx / sp, d.vz / sp);
-          if (r?.fell) { d.vx *= 0.9; d.vz *= 0.9; this.audio?.play('land', 0.5); }
+          if (r?.fell) { d.vx *= 0.9; d.vz *= 0.9; this.audio?.play('land', 0.5); this.hitReport('person', closing); }
           else if (!r) { // (people hits off: the car just bumps softly off them)
             const nx = -dx / l, nz = -dz / l, vn = d.vx * nx + d.vz * nz;
             if (vn < 0) { d.vx -= nx * vn * 1.1; d.vz -= nz * vn * 1.1; d.vx *= 0.9; d.vz *= 0.9; }
@@ -1035,6 +1039,9 @@ export class Drive {
     this.shake = Math.max(this.shake, 0.35);
     this.hud?.flash(`Knock · car damage ${Math.round(e.damage)}%`, 'bad', 1500);
   }
+  // what your car hit (kind: 'traffic' | 'parked' | 'person' | 'player-car', v: the closing speed, m/s) for whoever
+  // listens (police.js: onHit)
+  hitReport(kind, v) { try { this.onHit?.(kind, v); } catch (err) { console.warn('drive: onHit', err); } }
   canCrash() { return !!this.d && !this.d.crash && (this.freeRide ? !!this.freeRide() : true); }
   // a hard stop, a big jolt, the crash sound, steam from the bonnet; fast (or on a steep slope) it may roll over or
   // spin into the snow; then you're out beside the wreck (wreckOut) and it counts as a wipeout (main.js strikes)

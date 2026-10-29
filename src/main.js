@@ -50,6 +50,8 @@ import { Traffic } from './game/traffic.js'; // cars driving the roads (vehicles
 import { Drive } from './game/drive.js'; // drive the parked cars yourself (vehicles agent)
 import { CarRental } from './game/carrental.js'; // CAR RENTAL: rent a car (showroom inside), the wreck fee, the tow truck
 import { Taxi } from './game/taxi.js'; // LEGACY TAXI: drive fares in your car (the board's TAXI note, or T in the car)
+import { Police } from './game/police.js'; // POLICE: hit something while driving and they come after you (game/police.js)
+import { Prison } from './game/prison.js'; // the village police station: jail(seconds, reason), visits (game/prison.js)
 import { planBusRoads } from './game/bus/roads.js'; // plowed roads for the ski bus (vehicles agent)
 import { Crowds } from './world/crowds.js';
 import { Snowcats } from './world/snowcats.js';
@@ -128,7 +130,7 @@ env.hour = save.hour;
 const input = new Input(canvas);
 const audio = new Audio();
 const hud = new HUD();
-const buildMode = new BuildMode({ save, writeSave, spend, hud, audio, input });
+const buildMode = new BuildMode({ save, writeSave, spend, hud, audio, input, refund: (n) => earn(n, 'Sold', 'sell') }); // (refund: multiplayer only)
 const raceHud = new RaceHud({ hud, audio });
 
 // The six Meshy skiers: the race field, the skiers on the pistes and the villagers wear all of them. You play
@@ -180,6 +182,8 @@ let drive = null; // the car you drive (game/drive.js)
 let chaletSeatPrompt = null; // inside your chalet: Sit down / Stand up (game/seating.js)
 let chalets = null; // the chalet village: the houses, renting one, its interior (game/chalets.js)
 let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
+let prison = null; // the PRISON: the village police station and its cells (game/prison.js)
+let police = null; // the patrol cars after a collision (game/police.js)
 let taxi = null; // LEGACY TAXI: fares round the resort in your car (game/taxi.js)
 let vehicleHits = null; // getting hit by vehicles on foot / on skis (game/vehiclehits.js)
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
@@ -379,6 +383,19 @@ async function boot() {
       jobs.extraOffers = () => [taxi.boardOffer()];
     }
   } catch (e) { console.warn('taxi: ' + (e?.stack || e)); taxi = null; }
+  // the prison (the police station in the village): jail(seconds, reason) puts you in a cell; anyone can visit
+  try {
+    prison = new Prison({ scene, camera, renderer, models, colliders, cameraBlockers: village.cameraBlockers, hud, audio, transition, player, save, writeSave,
+      getPost: () => post, makeRig: () => makeRig('skier_black', 'rental'), clearActivity: prisonClear,
+      canStart: () => started && !busIntro && !modes?.active && !races?.active && !transition.active && !mpLeaving });
+    await prison.ready;
+  } catch (e) { console.warn('prison: ' + (e?.stack || e)); prison = null; }
+  try {
+    if (drive) police = new Police({ scene, models, player, camera, drive, traffic, carRental, jobs, hud, audio, save, writeSave, colliders, vegetation, transition,
+      mp: () => (isMP() ? multiplayer : null), getPrison: () => prison,
+      excluded: () => !started || !!busIntro || !!modes?.active || !!races?.active, // (a chase there ends at once)
+      paused: () => interior.active || !!chalets?.inside || !!carRental?.inside || !!prison?.inside }); // (inside: the chase waits)
+  } catch (e) { console.warn('police: ' + (e?.stack || e)); police = null; }
   try { chalets = new Chalets({ scene, camera, renderer, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, spend, transition, player, getPost: () => post, getHour: () => env.hour }); } catch (e) { console.warn('chalets: ' + (e?.stack || e)); chalets = null; }
   seating.init({ save, chaletAPI: chaletInteriorAPI, catalog: FURNITURE_BY_ID, chalets });
   seating.setVillage((x, z) => world.height(x, z), CHALET_HX);
@@ -413,7 +430,7 @@ async function boot() {
         S.traffic = traffic; S.skibus = skibus; S.carRental = carRental; S.snowcats = snowcats; S.multiplayer = isMP() ? multiplayer : null;
         return S;
       },
-      enabled: () => started && !paused && !busIntro && !modes?.active && !interior.active && !chalets?.inside && !carRental?.inside
+      enabled: () => started && !paused && !busIntro && !modes?.active && !interior.active && !chalets?.inside && !carRental?.inside && !prison?.inside
         && !heli.active && !sleds.active && !drive?.active && !seating.seated && !transition.active && !skibus?.riding
         && !railway?.riding && !express?.riding && !player.frozen,
     });
@@ -474,7 +491,7 @@ function outdoorSpot() {
   if (isMP()) return null; // (where you were is single player only)
   if (!started || busIntro || !player || wipeoutBusy || transition?.active) return null;
   if (modes?.active || races?.active) return null;
-  if (interior?.active || chalets?.inside || carRental?.inside) return null;
+  if (interior?.active || chalets?.inside || carRental?.inside || prison?.inside || prison?.active) return null;
   if (heliRiding() || sleds?.active) return null;
   if (drive?.active) {
     try { const sp = drive.exitSpot(drive.d); return { x: sp.x, z: sp.z, y: drive.d.y, h: sp.heading, skis: false }; } catch { return null; }
@@ -689,6 +706,7 @@ async function backToMenu(opts = {}) {
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
   carRental?.leave(true);
   chalets?.leave(true);
+  prison?.reset(); // (a sentence goes on from the save / the server profile when you play on)
   player.frozen = false;
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
@@ -1244,6 +1262,7 @@ function mpPose(o) {
   if (interior.active) { o.interior = 'skishop'; cam = interior.camera; room = interior; }
   else if (carRental?.inside) { o.interior = 'carrental'; cam = carRental.room?.camera; room = carRental.room; }
   else if (chalets?.inside && chalets.current) { o.interior = `chalet:${chalets.current.id}`; cam = chalets.room?.camera; }
+  else if (prison?.inside) { o.interior = 'prison'; room = prison.room; } // (jailed: in your cell; visiting: the corridor)
   if (room?.pos && Number.isFinite(room.yaw)) { // (the shop / rental: where you walk, not the camera, which swings off to a preview or the clerk)
     o.x = room.pos.x; o.y = room.pos.y || 0; o.z = room.pos.z; o.yaw = room.yaw;
     o.vx = room.vel?.x || 0; o.vy = 0; o.vz = room.vel?.z || 0; o.st = MPST.walk; o.crouch = 0; o.lean = 0; o.flags = 0;
@@ -1266,6 +1285,7 @@ function mpPose(o) {
 function mpScene(id) {
   if (id === 'skishop') return interior?.scene || null;
   if (id === 'carrental') return carRental?.room?.scene || null;
+  if (id === 'prison') return prison?.room?.scene || null;
   if (id && id.startsWith('chalet:')) return chalets?.room?.scene || null;
   return null;
 }
@@ -1274,6 +1294,7 @@ function mpView() {
   const v = mpViewState;
   if (interior.active) { v.interior = 'skishop'; v.camera = interior.camera; }
   else if (carRental?.inside) { v.interior = 'carrental'; v.camera = carRental.room.camera; }
+  else if (prison?.inside) { v.interior = 'prison'; v.camera = prison.room.camera; }
   else if (chalets?.inside && chalets.current) { v.interior = `chalet:${chalets.current.id}`; v.camera = chalets.room.camera; }
   // (a chalet door still fading: no change reported half-way; a visit's yes is single use and leaving would end it)
   else if (chalets?.busy && multiplayer?.interior?.startsWith?.('chalet:')) { v.interior = multiplayer.interior; v.camera = camera; }
@@ -1312,7 +1333,7 @@ function mpCourseInteraction(e) {
 }
 function mpRaceStart(d) {
   const e = freeCourses().find((c) => c.id === d.race);
-  if (!e || modes.active) return;
+  if (!e || modes.active || prison?.active) return; // (in prison: no race start)
   jobs.onEvent('teleport');
   transition.fade(() => {
     // wherever you are (a lift, a car, the shop...): to the start gate
@@ -1339,6 +1360,8 @@ function findInteraction() {
   if (ride) return ride;
   const rental = carRental?.interaction(p); // the CAR RENTAL's door
   if (rental) return rental;
+  const jail = prison?.interaction(p); // the PRISON's door: visit
+  if (jail) return jail;
   const chalet = chalets?.interaction(p); // a chalet's front door (rent it / go in)
   if (chalet) return chalet;
   const sledPrompt = sleds.interaction(p);
@@ -1442,7 +1465,7 @@ let trailMap = null;
 function openMap() {
   trailMap ??= new TrailMap({
     player, locationName, onClose: () => input.lock(),
-    markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [],
+    markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [], police: police?.mapMarkers() || [],
       places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Car Rental', kind: 'car' }] : [] }),
   });
   if (trailMap.toggle()) document.exitPointerLock?.();
@@ -1461,7 +1484,7 @@ function openPause() {
     // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
     // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
     // with its ambulance ride)
-    onVillage: heliRiding() ? undefined : !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
+    onVillage: heliRiding() || prison?.active ? undefined : !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: isMP() ? undefined : goToMainMenu,
     onLeaveMP: isMP() ? () => leaveMultiplayer() : undefined, // (multiplayer: LEAVE MULTIPLAYER instead of MAIN MENU)
     onQuit: () => { if (!isMP()) save.hour = freeRideHour() ?? env.hour; rememberSpot(); writeSave(); },
@@ -1473,6 +1496,25 @@ function closePause() {
   hud.el.hidden = false;
   menu.hidePause();
   input.lock();
+}
+// Into a prison cell (game/prison.js, behind its fade): out of whatever you were doing (a vehicle, a lift, a race,
+// the shop, a chalet, the admin panel)
+function prisonClear() {
+  try { jobs.onEvent('teleport'); } catch (e) { console.warn('prison: jobs', e); }
+  if (outfitShop?.isOpen) outfitShop.close();
+  if (admin?.fly) admin.stopFly?.();
+  if (admin?.isOpen) admin.close(false);
+  if (trailMap?.isOpen) trailMap.toggle();
+  heli.abort();
+  if (races.active) races.abort();
+  if (modes?.active) { try { modes.end(); modes.unload?.(); modes.current = null; } catch (e) { console.warn('prison: race', e); } }
+  if (isMP() && multiplayer?.carRide?.ride) multiplayer.carRide.end();
+  if (drive?.active) drive.abort();
+  if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
+  if (interior.active) { interior.active = false; document.getElementById('crosshair').hidden = true; }
+  carRental?.leave(true);
+  chalets?.leave(true);
+  player.setSkisOn(false);
 }
 // Ski bus back to Legacy Village from anywhere in the world.
 function returnToVillage(message = 'Back in Legacy Village') {
@@ -1575,6 +1617,7 @@ function applyQuality(name, persist = true) {
   post = new Post(renderer, scene, camera);
   if (interior.active) post.setView(interior.scene, interior.camera);
   if (carRental?.inside) post.setView(carRental.room.scene, carRental.room.camera);
+  if (prison?.inside) post.setView(prison.room.scene, prison.room.camera);
   if (chalets?.inside) post.setView(chalets.room.scene, chalets.room.camera);
   resetDynRes();
   setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
@@ -1681,6 +1724,10 @@ function loopUpdate() {
     seating.leftChalet();
     carRental.frame(dt, menu ? null : input, save.sensitivity);
     interaction = null;
+  } else if (prison?.inside) { // inside the PRISON (its own scene): your cell, or the visitors' corridor
+    seating.leftChalet();
+    prison.frame(dt, menu ? null : input, save.sensitivity);
+    interaction = null;
   } else if (started && !menu && !busIntro) {
     seating.leftChalet();
     if (input.hit('KeyM') && !inSession) openMap();
@@ -1776,7 +1823,9 @@ function loopUpdate() {
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
   if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
+  prison?.update(dt); // the sentence's clock (a sentence from before resumes), the station's lamp
   taxi?.update(dt, started && !menu && !inSession && !paused ? input : null); // (after the car moved: the passenger in its back seat)
+  try { police?.update(paused ? 0 : dt); } catch (e) { loopFault('police', e); } // (after your car moved: they chase, ram, pull you over)
   chalets?.update(dt); // the full-detail chalet nearest you
   try { vehicleHits?.update(dt); } catch (e) { loopFault('vehicle hits', e); } // after every vehicle moved: a car / bus running into you
   mark('drive');
@@ -1873,6 +1922,8 @@ function loopUpdate() {
       });
     } else if (chalets?.inside) {
       hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || chaletSeatPrompt || null, objective: objective() || '' });
+    } else if (prison?.inside) {
+      hud.frame({ speed: 0, loc: 'Legacy Village Prison', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: prison.target?.label || null, objective: prison.hudLine() });
     } else if (carRental?.inside) {
       hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the clerk and press E' });
     } else if (inSession) hud.frame({
@@ -1971,7 +2022,7 @@ boot().catch((e) => {
 
 window.__game = {
   get player() { return player; }, env, layout, world, scene, camera, renderer,
-  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get chalets() { return chalets; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
+  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get prison() { return prison; }, get police() { return police; }, get chalets() { return chalets; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
   // handles for building new systems inside the running game (dev tests)
   get terrain() { return terrain; }, get secrets() { return secrets; }, get vegetation() { return vegetation; }, get atmosphere() { return atmosphere; }, get backdrop() { return backdrop; }, get glare() { return glare; }, get npcs() { return npcs; }, get dressing() { return dressing; }, propDetail, get decor() { return decor; },
   streamAround, applyQuality, autoQ, get quality() { return quality; }, get dynRes() { return dynRes; }, get started() { return started; }, get paused() { return paused; },

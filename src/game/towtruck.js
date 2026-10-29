@@ -535,3 +535,6 @@ export class TowTruck {
     void _m; void _q;
   }
 }
+
+// the road graph for other road users that drive the real roads (game/police.js: the patrol cars)
+export { graph as roadGraph, nearestNode as roadNearest, shortest as roadShortest };

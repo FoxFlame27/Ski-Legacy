@@ -139,11 +139,12 @@ whose `.data` is `d`.
 | `p` | presence row (below) | relayed to the world at 15 Hz in `P` |
 | `look` | `{c: characterId, o: outfit, s: skiId}` | broadcast `look {pid, look}` |
 | `enter` | `{interior: id \| null}` | approved interior. `chalet:N` needs ownership, an unowned chalet, or a `chaletVisit` grant (single use: consumed when you leave) · `no_permission` |
+| `jail` | `{seconds: 1–300, reason}` | `{jailUntil, reason, now}`: you are jailed until server time `jailUntil` (in the profile with `jailReason`; a new sentence never shortens the one you serve, at most 300 s from now). While jailed, `enter` anything but `'prison'` is refused with `jailed {jailUntil}` (3 s of slack for the client's clock). A login before `jailUntil` gets it in `profile` (the game puts you back in the cell for the rest); a login after it clears it · `bad_value` |
 | `seatClaim` | `{k, v, n?, seat?}` | `{seat, v}`: the lowest free seat (or `seat` if it is free) · `full`, `no_permission`, `owner_away` |
 | `seatRelease` | – | broadcast `seats` |
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
 | `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
-| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
+| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) · `{k: 'police', cars: [[x, y, z, yaw, v], ...]}` (the 1-2 patrol cars chasing you, game/police.js, ~6/s, not stored) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
 | `tow` | `{kind: 'wreck' \| 'tow', home: [x, y, z, yaw], bay?}` | `{money, fee, impound: {day, bay} \| null, at}`: the server's fee (`catalog.wreckFee`, once per tow; like a fine it may go below zero, down to `DEBT_FLOOR`; deeper, the truck still comes and `fee` is 0); the car's spot becomes `home`; `tow` also impounds it until the next world day · `no_car`, `busy`, `bad_kind`, `bad_value` |
 | `towDone` | – | the tow record ends (the truck unloaded your car); your truck leaves the others' view |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
@@ -452,6 +453,16 @@ Also:
 - The avatars in the ski shop and the car rental stand where their owner walks (the room's `pos`, on the right floor
   of the rental's mezzanine), face where they look and walk while they move; their name tags show indoors too.
 - Outfit previews and the clerk dialogs are per client.
+
+### Prison (done)
+
+- `game/prison.js`: the village police station (its lot is planned last with the roads: `busRoads.prison`) and its
+  interior, interior id `'prison'`: a visitor corridor along three cells behind bars. Jailed, you are in cell
+  `pid % 3`; visitors (E at the station's door, "Visit the prison") walk the corridor. Everyone in `'prison'` sees
+  everyone else there (`remote.js`), so visitors see the prisoners through the bars.
+- `prison.jail(seconds, reason)` sends `jail`; the countdown runs on `net.serverNow()` against `jailUntil`. Leaving
+  multiplayer while jailed is allowed: the next login (profile `jailUntil` in the future) puts you back in the cell.
+  No admin panel, teleports, race starts or vehicles while jailed.
 
 ### Plate uniqueness UI (done)
 

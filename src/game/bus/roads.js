@@ -491,6 +491,7 @@ export function planBusRoads(stops) {
   try { planScenicLoop(obstacles); } catch (e) { console.warn('scenic loop', e); } // (more scenic roads off the Panorama roundabout)
   try { planChaletVillage(obstacles); } catch (e) { console.warn('chalet village', e); } // (its terraces' cut before the roads' cuts)
   try { planRentalRoad(obstacles); } catch (e) { console.warn('Westgratstrasse', e); } // (across from the car rental, up the Westgrat)
+  try { planPrison(obstacles); } catch (e) { console.warn('prison site', e); } // (last of all: moves nothing planned above)
   clearRouteCache();
   try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
   try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
@@ -889,6 +890,31 @@ function planHospital(O) {
         const H = { name: 'Medical centre', building: true, x: cx, z: cz, yaw, y: fit.y, hw, hd, ux, uz, vx, vz, ex, ez, dirx: fx, dirz: fz, facing };
         busRoads.lots.push(H);
         busRoads.hospital = H;
+        return;
+      }
+    }
+  }
+}
+
+// The PRISON (game/prison.js, the village police station): like the hospital, a flattened building lot in Legacy
+// Village a short walk off the road (its door toward it), clear of the ski areas, lifts, buildings and the other lots.
+function planPrison(O) {
+  if (!busRoads.roads.length) return;
+  const hw = 13, hd = 10;
+  for (const t of [{ x: 40, z: 150 }, { x: 150, z: 240 }, { x: -60, z: 170 }, { x: 200, z: -60 }]) {
+    for (let r = 0; r <= 200; r += 10) {
+      const n = r ? Math.max(8, Math.round(r / 10)) : 1;
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2, cx = t.x + Math.cos(a) * r, cz = t.z + Math.sin(a) * r;
+        const net = nearestRoadPoint(cx, cz);
+        if (!net || net.d > 36 || net.d < 22) continue;
+        const facing = Math.atan2(net.x - cx, net.z - cz), yaw = facing + Math.PI / 2; // (the door toward the road)
+        const fit = lotFits(cx, cz, yaw, hw, hd, O);
+        if (!fit) continue;
+        const ux = Math.sin(yaw), uz = Math.cos(yaw), fx = Math.sin(facing), fz = Math.cos(facing);
+        busRoads.prison = { name: 'Police / Prison', building: true, x: cx, z: cz, yaw, y: fit.y, hw, hd, ux, uz, vx: uz, vz: -ux,
+          ex: cx + fx * (hd + 3), ez: cz + fz * (hd + 3), dirx: fx, dirz: fz, facing };
+        busRoads.lots.push(busRoads.prison);
         return;
       }
     }

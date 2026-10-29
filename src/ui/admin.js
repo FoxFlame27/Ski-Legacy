@@ -69,6 +69,8 @@ export class AdminPanel {
     if (!c.started || c.paused || this.transition?.active) return 'menu';
     if (c.modes?.active || c.races?.active) return 'Admin panel · free ride only';
     if (c.interior?.active) return 'Admin panel · not inside the shop';
+    if (window.__game?.prison?.active) return 'Admin panel · not while in prison';
+    if (window.__game?.prison?.inside) return 'Admin panel · not inside the prison';
     if (c.heli?.active || c.heli?.state === 'boarding') return 'Admin panel · not while flying the helicopter';
     if (this.hud.panelOpen && !this.isOpen) return 'menu';
     if (document.getElementById('map') && !document.getElementById('map').hidden) return 'menu';

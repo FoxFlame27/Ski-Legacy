@@ -583,6 +583,170 @@ try {
     await sleep(100);
   }
 
+  // ---------------------------------------------------------------- prison: the sentence lives in the profile
+  console.log('prison');
+  {
+    const ivy = await join('Jail Ivy'), key = 'jail ivy';
+    for (const bad of [0, 301, -5, 'x', null, NaN]) {
+      const r = await ivy.f.req('jail', { seconds: bad, reason: 'x' });
+      if (r.ok || r.err !== 'bad_value') { ok(false, `jail ${bad} is refused`); break; }
+    }
+    ok(!server.profileOf(key).jailUntil, 'a sentence outside 1-300 s is refused (bad_value)');
+    const t0 = Date.now();
+    const j = await ivy.f.req('jail', { seconds: 90, reason: 'Speeding in the village' });
+    ok(j.ok && Math.abs(j.d.jailUntil - (t0 + 90000)) < 1500 && j.d.reason === 'Speeding in the village', 'jail 90 s: jailUntil is the server time + 90 s');
+    ok(server.profileOf(key).jailUntil === j.d.jailUntil && server.profileOf(key).jailReason === 'Speeding in the village', '...kept in the profile');
+    const shorter = await ivy.f.req('jail', { seconds: 10, reason: 'Again' });
+    ok(shorter.ok && shorter.d.jailUntil === j.d.jailUntil, 'a shorter sentence never shortens the one being served');
+    const longer = await ivy.f.req('jail', { seconds: 300, reason: 'Again' });
+    ok(longer.ok && longer.d.jailUntil <= Date.now() + 300000 && longer.d.jailUntil > j.d.jailUntil, 'a longer one extends it (up to 300 s from now)');
+    const shop = await ivy.f.req('enter', { interior: 'skishop' });
+    ok(!shop.ok && shop.err === 'jailed', 'while jailed: no other interior (jailed)');
+    const out = await ivy.f.req('enter', { interior: null });
+    ok(!out.ok && out.err === 'jailed', '...and not outdoors either');
+    const cell = await ivy.f.req('enter', { interior: 'prison' });
+    ok(cell.ok && cell.d.interior === 'prison', "the 'prison' interior is allowed");
+    // leaving and coming back: the rest of the sentence
+    ivy.f.close(); await sleep(150);
+    let back = await relog('Jail Ivy', ivy.token);
+    ok(back.l.ok && back.l.d.profile.jailUntil === longer.d.jailUntil && back.l.d.profile.jailUntil > back.l.d.now, 'a login before the time is up: jailUntil (in the future) comes with the profile');
+    // the time is served
+    server.profileOf(key).jailUntil = Date.now() - 1000;
+    const free = await back.f.req('enter', { interior: null });
+    ok(free.ok, 'served: outdoors again');
+    back.f.close(); await sleep(150);
+    back = await relog('Jail Ivy', ivy.token);
+    ok(back.l.ok && !back.l.d.profile.jailUntil && !back.l.d.profile.jailReason, 'a login after the time is up clears the sentence');
+    server.profileOf(key).jailUntil = Date.now() + 2000; // (within the slack: the client's clock runs a little ahead)
+    ok((await back.f.req('enter', { interior: 'skishop' })).ok, 'released a moment early by the client: allowed (3 s of slack)');
+    back.f.close();
+    await sleep(100);
+  }
+
+  // ---------------------------------------------------------------- the police: your patrol cars, seen by the others
+  console.log('police');
+  {
+    const pia = await join('Cop Pia'), quinn = await join('Cop Quinn');
+    const same = pia.l.d.world.id === quinn.l.d.world.id;
+    pia.f.send('veh', { k: 'police', cars: [[10, 1, 20, 1.2, 30], [40, 2, 50, -0.5, 12.345]] });
+    const pv = same ? await quinn.f.next('veh', (d) => d.k === 'police' && d.pid === pia.l.d.pid && d.veh) : null;
+    ok(!same || (pv && pv.veh.cars.length === 2 && pv.veh.cars[0][0] === 10 && pv.veh.cars[0][3] === 1.2 && pv.veh.cars[1][4] === 12.35), "the others see Pia's patrol cars (poses and speeds, rounded)");
+    const bad1 = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 3]] });
+    ok(!bad1.ok && bad1.err === 'bad_value', 'a patrol car pose must be [x, y, z, yaw, v]');
+    const bad2 = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 3, 0, 0], [1, 2, 3, 0, 0], [1, 2, 3, 0, 0]] });
+    ok(!bad2.ok && bad2.err === 'bad_value', 'at most two patrol cars');
+    const bad3 = await pia.f.req('veh', { k: 'police', cars: [] });
+    const bad4 = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 'x', 0, 0]] });
+    ok(!bad3.ok && !bad4.ok && bad4.err === 'bad_value', 'no cars / not numbers: refused (send off: true instead)');
+    const fast = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 3, 0, 500]] });
+    ok(fast.ok && fast.d.veh.cars[0][4] === 60, 'a patrol car speed is clamped');
+    const late = await join('Cop Rae');
+    const seen = late.l.d.world.players.find((p) => p.name === 'Cop Pia');
+    ok(late.l.d.world.id !== pia.l.d.world.id || seen?.vehs?.police?.cars?.length === 1, 'a player who joins sees the patrol cars at once (vehs in the world snapshot)');
+    const offR = await pia.f.req('veh', { k: 'police', off: true });
+    const offE = same ? await quinn.f.next('veh', (d) => d.k === 'police' && d.pid === pia.l.d.pid && d.veh === null) : true;
+    ok(offR.ok && offR.d.veh === null && offE, 'off: the patrol cars are gone for everyone');
+    // the fines go through 'spend' with reason 'game': they may take you into debt
+    server.profileOf('cop pia').money = 300;
+    const fine = await pia.f.req('spend', { amount: 500, reason: 'game' });
+    ok(fine.ok && fine.d.money === -200, 'a $500 police fine with $300: the balance goes below zero (a game charge)');
+    const arrest = await pia.f.req('spend', { amount: 2000, reason: 'game' });
+    ok(arrest.ok && arrest.d.money === -2200, '...and the $2,000 for fleeing on top');
+    pia.f.close(); quinn.f.close(); late.f.close();
+    await sleep(100);
+  }
+
+  // ---------------------------------------------------------------- admin (local only), payouts per account, queue retries
+  console.log('admin');
+  {
+    const admin = async (q) => { const r = await fetch(`http://127.0.0.1:${port}/admin/${q}`); return { code: r.status, d: await r.json() }; };
+    const who = async (name) => {
+      const f = new Fake(url); await f.open();
+      const r = await f.req('register', { name });
+      const l = await f.req('login', { v: PROTO, name, token: r.d.token });
+      return { f, token: r.d.token, l, key: name.toLowerCase() };
+    };
+    const [I, J] = [await who('Ivy Admin'), await who('Jon Admin')];
+    ok(I.l.d.world.id === J.l.d.world.id, 'Ivy and Jon share a world');
+    const list = await admin('players');
+    ok(list.code === 200 && list.d.players.some((p) => p.name === 'Ivy Admin' && p.online) && list.d.players.some((p) => p.name === 'Alice'), '/admin/players lists every account (online or not)');
+    const m0 = server.profileOf('ivy admin').money;
+    const give = await admin('give?name=ivy%20admin&amount=250');
+    const gm = await I.f.next('money', (d) => d.why === 'gift');
+    ok(give.code === 200 && give.d.money === m0 + 250 && gm && gm.v === m0 + 250 && gm.delta === 250, '/admin/give: the money is the server\'s, and the player sees it at once');
+    ok((await admin('give?name=nobody&amount=5')).code === 404 && (await admin('give?name=ivy%20admin&amount=x')).code === 400, '/admin/give: unknown player 404, bad amount 400');
+    const j0 = server.profileOf('jon admin').money, a0 = server.profileOf('alice').money;
+    const all = await admin('giveall?amount=100');
+    ok(all.code === 200 && server.profileOf('jon admin').money === j0 + 100 && server.profileOf('alice').money === a0 + 100 && !!(await J.f.next('money', (d) => d.why === 'gift')), '/admin/giveall: every account (offline ones too), online players told');
+    ok((await admin('tp?name=ivy%20admin&to=jon%20admin')).code === 409, '/admin/tp: refused while the target has not moved yet');
+    J.f.send('p', [Date.now(), 50, 10, 60, 0.5, 0, 0, 0, 0, 0, 0, 0]);
+    await sleep(120);
+    const tp = await admin('tp?name=ivy%20admin&to=jon%20admin');
+    const tpEv = await I.f.next('adminTp');
+    ok(tp.code === 200 && tpEv && tpEv.x === 50 && tpEv.z === 60 && tpEv.to === 'Jon Admin', '/admin/tp: Ivy is sent Jon\'s spot (adminTp)');
+    ok((await admin('tp?name=ivy%20admin&to=ivy%20admin')).code === 400 && (await admin('tp?name=ivy%20admin&to=nobody')).code === 404, '/admin/tp: same player 400, offline 404');
+    ok((await admin('nope')).code === 404, 'an unknown admin command is 404');
+    const forwarded = await fetch(`http://127.0.0.1:${port}/admin/players`, { headers: { 'x-forwarded-for': '1.2.3.4' } });
+    ok(forwarded.status === 403, 'a request through the proxy (x-forwarded-for) is refused: local only');
+    // a race queue join sent again (a retry after a lost answer) leaves a running countdown alone
+    await I.f.req('raceJoin', { race: 'meadow' });
+    await J.f.req('raceJoin', { race: 'meadow' });
+    const W = server.worlds.get(I.l.d.world.id), q = W.queues.get('meadow');
+    if (q && W.size > 2) {
+      const startAt = q.startAt;
+      await sleep(20);
+      const again = await I.f.req('raceJoin', { race: 'meadow' });
+      ok(again.ok && W.queues.get('meadow')?.startAt === startAt && W.queues.get('meadow').members.length === 2, 'raceJoin again for the same race: queued once, the countdown unchanged');
+    } else ok(true, 'raceJoin again for the same race (the race started at once: nothing to check)');
+    await I.f.req('raceLeave'); await J.f.req('raceLeave');
+    // kick: off the server, told why (4001: no automatic reconnect)
+    const closed = new Promise((r) => J.f.ws.on('close', (code, why) => r([code, String(why)])));
+    const k = await admin('kick?name=jon%20admin');
+    const [code, why] = await closed;
+    ok(k.code === 200 && code === 4001 && why === 'kicked' && !server.onlineByKey('jon admin') && !W.players.has(J.l.d.pid), '/admin/kick: closed with 4001 kicked, out of the world at once');
+    ok((await admin('kick?name=jon%20admin')).code === 404, '/admin/kick: not online any more: 404');
+    const back = new Fake(url); await back.open();
+    ok((await back.req('login', { v: PROTO, name: 'Jon Admin', token: J.token })).ok, 'a kicked player can log in again');
+    back.close();
+    // payouts: the hourly cap is per account (logging in again does not reset it); furniture sold back: 'sell'
+    const sell = await I.f.req('earn', { amount: 1800, source: 'sell' });
+    ok(sell.ok && !(await I.f.req('earn', { amount: 2500, source: 'sell' })).ok, "furniture sold back is paid ('sell', at most $2,000 a piece)");
+    for (let i = 0; i < 9; i++) await I.f.req('earn', { amount: 6000, source: 'job' });
+    const capped = await I.f.req('earn', { amount: 6000, source: 'job' });
+    I.f.close();
+    await sleep(100);
+    const I2 = new Fake(url); await I2.open();
+    await I2.req('login', { v: PROTO, name: 'Ivy Admin', token: I.token });
+    const after = await I2.req('earn', { amount: 6000, source: 'job' });
+    ok(!capped.ok && capped.err === 'cap' && !after.ok && after.err === 'cap', 'the hourly payout cap holds across a new login');
+    I2.close();
+    await sleep(100);
+  }
+
+  // ---------------------------------------------------------------- the guest list comes with a login
+  {
+    const g1 = new Fake(url), g2 = new Fake(url);
+    await g1.open(); await g2.open();
+    const r1 = await g1.req('register', { name: 'Host Hal' }), r2 = await g2.req('register', { name: 'Guest Gil' });
+    server.profileOf('host hal').money = 60000;
+    await g1.req('login', { v: PROTO, name: 'Host Hal', token: r1.d.token });
+    await g2.req('login', { v: PROTO, name: 'Guest Gil', token: r2.d.token });
+    let plot = server.freePlot(0) ?? 40;
+    while (server.chalets.has(plot)) plot++;
+    await g1.req('buy', { kind: 'chalet', id: plot });
+    const askP = g2.req('perm', { kind: 'chaletVisit', ref: plot });
+    const ask = await g1.next('permAsk');
+    await g1.req('permAnswer', { rid: ask.rid, allow: true });
+    await askP;
+    g1.ws.terminate(); // (the network drops: held for a reconnect, the grant kept)
+    await sleep(100);
+    const g3 = new Fake(url); await g3.open();
+    const re = await g3.req('login', { v: PROTO, name: 'Host Hal', token: r1.d.token });
+    ok(re.ok && re.d.resumed && Array.isArray(re.d.guests) && re.d.guests.includes('Guest Gil'), 'a resumed login carries the chalet guest list (the guests are still allowed in)');
+    g2.close(); g3.close();
+    await sleep(100);
+  }
+
   // ---------------------------------------------------------------- persistence
   a.close(); b.close();
   await sleep(150);

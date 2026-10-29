@@ -1051,6 +1051,14 @@ export class TrailMap {
         if (m.label) this.label(m.label, x, y, { size: 14, color: '#9a6a00', prio: 1, cands: this.around(6) });
       }
     }
+    // the patrol cars while you are wanted (game/police.js): blue dots
+    for (const m of mk.police || []) {
+      const x = X(m.x), y = Z(m.z);
+      if (!this.inView(x, y)) continue;
+      g.fillStyle = '#1f4fff'; g.strokeStyle = '#fff'; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill(); g.stroke();
+      this.reserve(x, y, 7);
+    }
     const CR = busRoads.rental; // (the car rental straight from roads.js when main.js passes none)
     const places = mk.places?.some((m) => m.kind === 'car') || !CR ? mk.places || [] : [...(mk.places || []), { x: CR.ex ?? CR.x, z: CR.ez ?? CR.z, label: 'Car Rental', kind: 'car' }];
     // places worth finding (the Car Rental): a blue square with a little car, always labelled, clickable as a target
@@ -1076,6 +1084,8 @@ export class TrailMap {
     if (shop) svc.push({ x: shop.x, z: shop.z, label: 'Ski shop', kind: 'shop' });
     const H = busRoads.hospital;
     if (H) svc.push({ x: H.ex ?? H.x, z: H.ez ?? H.z, label: 'Medical centre', kind: 'med' });
+    const PD = window.__game?.prison?.door; // (the police station: game/prison.js)
+    if (PD) svc.push({ x: PD.x, z: PD.z, label: 'Police / Prison', kind: 'police' });
     for (const m of svc) {
       const x = X(m.x), y = Z(m.z);
       if (!this.inView(x, y)) continue;
@@ -1083,6 +1093,7 @@ export class TrailMap {
       g.fillStyle = med ? '#fff' : col; g.strokeStyle = med ? RED : '#fff'; g.lineWidth = 2;
       g.beginPath(); g.roundRect(x - 9, y - 9, 18, 18, 4); g.fill(); g.stroke();
       if (med) { g.fillStyle = RED; g.fillRect(x - 6, y - 2, 12, 4); g.fillRect(x - 2, y - 6, 4, 12); } // (the cross)
+      else if (m.kind === 'police') { g.fillStyle = '#fff'; for (const bx of [-5, -1.5, 2]) g.fillRect(x + bx, y - 6, 2, 12); g.fillRect(x - 6, y - 6, 12, 1.6); g.fillRect(x - 6, y + 4.4, 12, 1.6); } // (cell bars)
       else { // (a pair of skis)
         g.strokeStyle = '#fff'; g.lineWidth = 2; g.lineCap = 'round';
         g.beginPath(); g.moveTo(x - 5, y + 5.5); g.lineTo(x + 3, y - 5.5); g.moveTo(x - 1.5, y + 5.5); g.lineTo(x + 6, y - 5.5); g.stroke();

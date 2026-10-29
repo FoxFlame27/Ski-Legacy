@@ -42,8 +42,8 @@ const inBox = (px, pz, b, m = 0) => {
 };
 
 export class BuildMode {
-  constructor({ save, writeSave, spend, hud, audio, input }) {
-    Object.assign(this, { save, writeSave, spend, hud, audio, input });
+  constructor({ save, writeSave, spend, hud, audio, input, refund = null }) {
+    Object.assign(this, { save, writeSave, spend, hud, audio, input, refund }); // refund(amount): multiplayer's payout (main.js)
     this.on = false;
     this.look = false; // LOOK mode (pointer locked) vs CURSOR mode (mouse free) while building
     this.chalet = null; // normalised chalet interior (chaletadapter.js)
@@ -447,10 +447,14 @@ export class BuildMode {
     this.removePlaced(e);
     const i = this.furniture.indexOf(e.rec);
     if (i >= 0) this.furniture.splice(i, 1);
-    this.save.money += refund;
-    this.hud?.setMoney(this.save.money, refund);
-    this.writeSave();
-    this.audio?.play('cash');
+    // (multiplayer: the server pays it back; money raised here would be undone by the session's money guard)
+    if (isMP() && this.refund) { this.refund(refund); this.writeSave(); }
+    else {
+      this.save.money += refund;
+      this.hud?.setMoney(this.save.money, refund);
+      this.writeSave();
+      this.audio?.play('cash');
+    }
     this.hud?.flash(`Sold ${e.item.name} · +$${fmt(refund)}`, 'good', 1400);
     this.setHover(null);
     this.dropOrphans(e);

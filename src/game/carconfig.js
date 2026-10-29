@@ -135,7 +135,7 @@ const PLATE_SPOT = {
   car_mercedes_sls: { f: [0.275, 0], r: [0.44, 0] },
   car_porsche_taycan: { f: [0.43, -6], r: [0.41, 0] },
   car_lamborghini_huracan: { f: null, r: [0.583, 4] }, // (no front plate: Oct 29, the user)
-  car_toyota_gr_yaris: { f: [0.473, 0], r: [0.855, 18] }, // (rear up in its recess: Oct 29, the user)
+  car_toyota_gr_yaris: { f: [0.473, 0], r: [0.835, 18] }, // (rear up in its recess: Oct 29, the user)
   car_audi_etron_gt: { f: [0.45, 0], r: [0.70, 15] },
   car_mercedes_gls: { f: [0.5635, 0, 2.6], r: [1.11, 14] }, // (rear: on the tailgate between the lights, under the star; Oct 29, the user: "way higher like real gls models")
 };

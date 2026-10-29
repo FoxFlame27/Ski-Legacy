@@ -212,7 +212,7 @@ export class TrailMap {
           <div class="tm-grid">${sym('road', 'Road')}${sym('scenic', 'Scenic road')}${sym('lot', 'Car park')}${sym('ring', 'Roundabout')}</div>
           <div class="mp-head">ON THE MAP</div>
           <div class="tm-grid">${sym('hut', 'Mountain hut')}${sym('bus', 'Ski bus')}${sym('park', 'Terrain park')}${sym('heli', 'Heli-ski')}
-          ${sym('shop', 'Ski shop')}${sym('car', 'Car rental')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}${sym('car mycar', 'Your car')}${sym('car impound', 'Impounded car')}
+          ${sym('shop', 'Ski shop')}${sym('car', 'Autohaus')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}${sym('car mycar', 'Your car')}${sym('car impound', 'Impounded car')}
           ${sym('secret', 'Secret found')}${sym('jobs', 'Job board')}</div>
         </div>
       </div>
@@ -1060,7 +1060,7 @@ export class TrailMap {
       this.reserve(x, y, 7);
     }
     const CR = busRoads.rental; // (the car rental straight from roads.js when main.js passes none)
-    const places = mk.places?.some((m) => m.kind === 'car') || !CR ? mk.places || [] : [...(mk.places || []), { x: CR.ex ?? CR.x, z: CR.ez ?? CR.z, label: 'Car Rental', kind: 'car' }];
+    const places = mk.places?.some((m) => m.kind === 'car') || !CR ? mk.places || [] : [...(mk.places || []), { x: CR.ex ?? CR.x, z: CR.ez ?? CR.z, label: 'Autohaus', kind: 'car' }];
     // places worth finding (the Car Rental): a blue square with a little car, always labelled, clickable as a target
     for (const m of places) {
       const x = X(m.x), y = Z(m.z);

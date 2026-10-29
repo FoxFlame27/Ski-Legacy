@@ -34,4 +34,6 @@ export const ERR_TEXT = {
   pending: 'Still waiting for an answer.',
   already_renting: 'You already have a helicopter out.',
   offline: 'Not connected to the server.',
+  owned: 'You already own one.',
+  no_car: 'That car is not yours.',
 };

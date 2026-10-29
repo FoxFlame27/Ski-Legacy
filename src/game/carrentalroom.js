@@ -203,14 +203,14 @@ export class CarRentalRoom {
     S.add(this.doorHit); this.aimables.push(this.doorHit);
     const steel = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.4, metalness: 0.7 });
     box(W, 0.1, 0.03, steel, 0, 0.05, -D / 2 + 0.015, S); // (skirting)
-    // the backlit sign on the oak wall: CAR RENTAL · LEGACY VILLAGE
+    // the backlit sign on the oak wall: AUTOHAUS · LEGACY VILLAGE
     const sign = tex(2048, 400, (g, w, h) => {
       g.clearRect(0, 0, w, h);
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.font = 'italic 700 220px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillStyle = '#fff';
       if ('letterSpacing' in g) g.letterSpacing = '24px';
       g.shadowColor = 'rgba(255,214,150,0.9)'; g.shadowBlur = 30;
-      g.fillText('CAR RENTAL', w / 2, h * 0.42);
+      g.fillText('AUTOHAUS', w / 2, h * 0.42);
       g.font = '600 64px "Inter Variable", Arial, sans-serif'; if ('letterSpacing' in g) g.letterSpacing = '20px'; g.fillStyle = '#f2c88c';
       g.fillText('LEGACY VILLAGE · SINCE 1967', w / 2, h * 0.86);
     });
@@ -267,8 +267,8 @@ export class CarRentalRoom {
         g.fillStyle = '#fbf8f2'; g.fillRect(0, 0, w, h); g.fillStyle = '#1546c8'; g.fillRect(0, 0, w, 14);
         g.textAlign = 'left'; g.fillStyle = '#8a2a1c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
         g.fillStyle = '#1546c8'; g.font = 'italic 700 72px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(spec.label, 34, 152);
-        g.fillStyle = '#8f1d14'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price.toLocaleString("en-US")}`, 34, 270);
-        g.fillStyle = 'rgba(30,40,70,0.65)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('per rental · E to rent', 250, 262);
+        g.fillStyle = '#8f1d14'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; const pr = `$${spec.price.toLocaleString("en-US")}`; g.fillText(pr, 34, 270); const px = 34 + g.measureText(pr).width + 16;
+        g.fillStyle = 'rgba(30,40,70,0.65)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('E to buy', px, 262);
       });
       const stand = new THREE.Group();
       box(0.05, 1.05, 0.05, rim, 0, 0.52, 0, stand);
@@ -307,8 +307,8 @@ export class CarRentalRoom {
         g.fillStyle = '#16181c'; g.fillRect(0, 0, w, h); g.fillStyle = '#e2b81c'; g.fillRect(0, 0, w, 14);
         g.textAlign = 'left'; g.fillStyle = '#e2b81c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
         g.fillStyle = '#f4f2ee'; g.font = `italic 700 ${spec.label.length > 18 ? 56 : 72}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.fillText(spec.label, 34, 152);
-        g.fillStyle = '#e2b81c'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price.toLocaleString("en-US")}`, 34, 270);
-        g.fillStyle = 'rgba(244,242,238,0.7)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('per rental · E to rent', 250, 262);
+        g.fillStyle = '#e2b81c'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; const pr = `$${spec.price.toLocaleString("en-US")}`; g.fillText(pr, 34, 270); const px = 34 + g.measureText(pr).width + 16;
+        g.fillStyle = 'rgba(244,242,238,0.7)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('E to buy', px, 262);
       });
       const stand = new THREE.Group();
       box(0.05, 1.05, 0.05, rim, 0, 0.52, 0, stand);
@@ -590,8 +590,8 @@ export class CarRentalRoom {
     const hits = new THREE.Raycaster(this.camera.position, dir, 0, 7).intersectObjects(this.aimables, false);
     const u = hits[0]?.object.userData;
     if (!u?.kind || (u.up && this.level !== 'up')) return null; // (the cars upstairs: from up there)
-    if (u.kind === 'door') return { kind: 'door', label: 'Leave Car Rental' };
-    if (u.kind === 'clerk') return { kind: 'clerk', label: 'Talk to the rental clerk' };
-    return { kind: 'car', id: u.id, paint: u.paint, label: `Rent ${u.label}` };
+    if (u.kind === 'door') return { kind: 'door', label: 'Leave the Autohaus' };
+    if (u.kind === 'clerk') return { kind: 'clerk', label: 'Talk to the salesman' };
+    return { kind: 'car', id: u.id, paint: u.paint, label: `Buy ${u.label}` };
   }
 }

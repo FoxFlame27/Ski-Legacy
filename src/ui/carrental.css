@@ -1,4 +1,4 @@
-/* CAR RENTAL configurator (src/ui/carrental.js): the outfit designer's layout and paper (outfitshop.css: .os-*) over the
+/* AUTOHAUS configurator (src/ui/carrental.js): the outfit designer's layout and paper (outfitshop.css: .os-*) over the
    showroom camera on your car (left column = the steps, right = the live 3D preview), plus the car's own bits: the
    numbered step tabs, paint swatches by finish, trim / rim swatches, the number plate you type on, the summary. */
 #carrental { position: fixed; inset: 0; z-index: 41; color: var(--blue); font-family: var(--ui); animation: fadeIn 0.3s ease backwards; }
@@ -78,3 +78,9 @@ body.carcfg-open #crosshair { visibility: hidden; }
 .cr-back { min-width: calc(var(--u) * 116); flex: none; }
 .cr-back > span { padding-right: calc(var(--u) * 34); }
 .cr-back > span { color: var(--blue); }
+/* AUTOHAUS: MY CARS (every car you own; click one: it goes in your bay) and SELL beside the main button */
+.cr-garage { margin-top: calc(var(--u) * 10); }
+.cr-garage .cr-group { margin: 0; color: var(--blue-dim); text-shadow: none; }
+.cr-garage .cr-sum-row em { font-size: calc(var(--u) * 15); letter-spacing: 0.08em; white-space: nowrap; }
+#carrental .cr-sell > span { color: var(--blue); padding-right: calc(var(--u) * 30); white-space: nowrap; }
+#carrental .cr-sell.armed > span { color: #fff; }

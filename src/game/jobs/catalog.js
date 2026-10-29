@@ -15,8 +15,8 @@ export function hashStr(s) {
 //          ~$9,000 an hour with the walks between boards; a rescue is the premium job (~$200 a minute)
 //   races  a win pays a few jobs (freeworld.js: Easy $600-1,500, Medium $1,250-2,300, Hard $3,200-4,700)
 //   costs  (economy.js, outfits.js, carrental.js, heli.js, build/catalog.js): a lift ride $20-50, a day pass
-//          $150, good skis $3,000+ (a few races or jobs), a rental car $1,000-4,000, supercars $8,000-10,000,
-//          a heli flight $1,500, the rescue bill $750-2,000, a wreck $1,500, furniture $30-3,600, the chalet
+//          $150, good skis $3,000+ (a few races or jobs), a car bought at the Autohaus $15,000-90,000,
+//          supercars $130,000-220,000, a heli flight $1,500, the rescue bill $750-2,000, a wreck 10 % of the car (min $2,500), furniture $30-3,600, the chalet
 //          $50,000 (~3-4 hours of mixed play, ~2 for a strong racer)
 const round10 = (v) => Math.round(v / 10) * 10;
 const PAY_MIN = { delivery: 200, rescue: 500, escort: 400 }, PAY_MAX = { delivery: 1300, rescue: 2200, escort: 1600 };

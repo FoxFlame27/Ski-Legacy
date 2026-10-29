@@ -1,15 +1,19 @@
-// CAR RENTAL: cars are no longer free to take. The rental hall stands on the road through Legacy Village (its site:
-// game/bus/roads.js planRental: a flat lot right on the road's edge): an alpine car hall (carrentalshell.js: the one
-// shell both outside and in: a wide larch gable to the road under a deep snowy roof, a full-height glass front with
-// thin dark mullions between stone piers, the five display cars on their turntables behind it, warm light inside),
-// the CAR RENTAL board on the gable (village sign style, lit at night), lanterns, flags, potted spruces, and a compact
-// ploughed yard in front (kerbs, painted bays, the TOW bay) fading into the snow. E at the door: inside
-// (carrentalroom.js, its own scene: two storeys; through its glass the real world, rendered live as in the ski shop);
-// at a car on display: the configurator for that car (ui/carrental.js); the clerk sends you to a random one. The rented car waits in the yard, nose to the
-// road; E beside it to drive (drive.js: every other car only says where to rent one). One rental at a time (renting
-// another returns the old one); it is kept in the save (back in the yard next time). Wreck it: WRECK_FEE (once; the
-// balance may go below zero, like a fine), the rental ends and the tow truck (towtruck.js) fetches the very car from
-// wherever it lies and brings it back to the yard on its bed.
+// AUTOHAUS (was the CAR RENTAL; Oct 29, the user: "make sure you buy the car instead of renting so change it autohaus
+// and up the prices"): cars are bought, not rented, at dealership prices. The hall stands on the road through Legacy
+// Village (its site: game/bus/roads.js planRental: a flat lot right on the road's edge): an alpine car hall
+// (carrentalshell.js: the one shell both outside and in: a wide larch gable to the road under a deep snowy roof, a
+// full-height glass front with thin dark mullions between stone piers, the display cars on their turntables behind it,
+// warm light inside), the AUTOHAUS board on the gable (village sign style, lit at night), lanterns, flags, potted
+// spruces, and a compact ploughed yard in front (kerbs, painted bays, the TOW bay) fading into the snow. E at the door:
+// inside (carrentalroom.js, its own scene: two storeys; through its glass the real world, rendered live as in the ski
+// shop); at a car on display: the configurator for that car (ui/carrental.js); the salesman sends you to a random one.
+// Your garage (save.garage: every car you bought, its config, plate and what you paid; one of each model): one of them
+// is out at a time (save.rental: it waits in your bay, nose to the road; E beside it to drive; drive.js: every other
+// car only says where to buy one). The configurator's MY CARS list (and E at a model you own) puts another of yours in
+// the bay (free), or sells one back for half what you paid. Wreck it: the repair bill (wreckFee: 10 % of the car's
+// price, at least WRECK_MIN; once; the balance may go below zero, like a fine) and the tow truck (towtruck.js) fetches
+// the very car from wherever it lies and brings it back to your bay, repaired. Wrecked by a police ram: not repaired,
+// gone from your garage. Multiplayer: the server owns the garage (profile cars, cars[0] the one out; net/session.js).
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
@@ -25,18 +29,20 @@ import { fitModel } from '../core/assets.js';
 import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 
+// (Oct 29, AUTOHAUS: bought for good at dealership prices, set against ~$9,000 an hour of jobs (jobs/catalog.js) and the
+// $50,000 chalet: the Golf after an hour or two of jobs, the supercars long-term goals)
 export const RENTALS = [
-  { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 1200, length: 4.3 },
-  { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 2000, length: 4.7 },
-  { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 2500, length: 4.7 },
-  { id: 'car_toyota_gr_yaris', label: 'Toyota GR Yaris', kind: 'Rally hot hatch', price: 3000, length: 3.99 },
-  { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 4000, length: 5.0 },
-  { id: 'car_mercedes_gls', label: 'Mercedes-Benz GLS', kind: 'Luxury SUV · 7 seats', price: 5000, length: 5.2 },
-  { id: 'car_audi_etron_gt', label: 'Audi e-tron GT', kind: 'Electric grand tourer', price: 7000, length: 4.96 },
-  // upstairs, the supercar floor (UPPER: on the mezzanine, rented the same way: walk up, E at it, or pick it here)
-  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 8000, length: 4.96 },
-  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 10000, length: 4.64 },
-  { id: 'car_lamborghini_huracan', label: 'Lamborghini Huracán EVO', kind: 'V10 supercar', price: 12000, length: 4.52 },
+  { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 15000, length: 4.3 },
+  { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 24000, length: 4.7 },
+  { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 30000, length: 4.7 },
+  { id: 'car_toyota_gr_yaris', label: 'Toyota GR Yaris', kind: 'Rally hot hatch', price: 34000, length: 3.99 },
+  { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 60000, length: 5.0 },
+  { id: 'car_mercedes_gls', label: 'Mercedes-Benz GLS', kind: 'Luxury SUV · 7 seats', price: 75000, length: 5.2 },
+  { id: 'car_audi_etron_gt', label: 'Audi e-tron GT', kind: 'Electric grand tourer', price: 90000, length: 4.96 },
+  // upstairs, the supercar floor (UPPER: on the mezzanine, bought the same way: walk up, E at it, or pick it here)
+  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 130000, length: 4.96 },
+  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 170000, length: 4.64 },
+  { id: 'car_lamborghini_huracan', label: 'Lamborghini Huracán EVO', kind: 'V10 supercar', price: 220000, length: 4.52 },
 ];
 // (saves from before the Dacia left the fleet, Oct 29: its rental comes back as the Golf)
 const RETIRED = { car_dacia_duster: 'car_vw_golf_gti' };
@@ -44,9 +50,13 @@ export { PAINTS }; // (the configurator's: carconfig.js)
 // the seven cars on display downstairs (one of each, each its own colour; LAYOUT.spots: where, in this order)
 const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_mercedes_gls', 'black'], ['car_audi_etron_gt', 'kingfisher'], ['car_tesla_m3', 'white'],
   ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_toyota_gr_yaris', 'white']];
-// upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for rent like the rest, at their own rates)
+// upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for sale like the rest)
 const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['car_lamborghini_huracan', 'orange']];
-export const WRECK_FEE = 1500; // (Oct 29 rebalance: was $1,000; a couple of jobs, the cars now rent for $1,000-10,000)
+// the tow truck's bills: a car left on a road (impound.js: towed and impounded, flat; server CATALOG.wreckFee) and a
+// wreck (the repair: WRECK_RATE of the car's list price, at least WRECK_MIN; server: wreckRate, wreckMin)
+export const WRECK_FEE = 1500, WRECK_RATE = 0.1, WRECK_MIN = 2500;
+export const wreckFee = (id) => Math.max(WRECK_MIN, Math.round(((RENTALS.find((c) => c.id === id)?.price || 0) * WRECK_RATE) / 50) * 50);
+export const SELL_SHARE = 0.5; // a car sold back: half what you paid
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
 // its road end, the rental bays (lines at x, from / to z), your car's spot, the TOW bay (middle, half length / width)
 // (Oct 29: the bigger hall, 32 x 17.5 m: its glass front 0.6 m further from the road than before (the yard 12.3 m
@@ -62,7 +72,7 @@ export class CarRental {
     Object.assign(this, o);
     this.L = busRoads.rental;
     this.inside = false;
-    this.current = null; // the rented car (a parking entry, rental: true)
+    this.current = null; // your car that is out (a parking entry, rental: true)
     this.towed = null;   // multiplayer: your wreck while the truck fetches it (the others still see it)
     this.ui = new CarRentalUI({ hud: o.hud, audio: o.audio });
     if (!this.L) return;
@@ -81,17 +91,42 @@ export class CarRental {
         yardOut: [park, this.w(12.6, 8.4), this.w(14.2, 11.6), this.w(14.6, 15.8)],
         yardIn: [this.w(-1.2, 15.8), this.w(0.6, 11.2), this.w(3.4, P.z + 0.3)] });
     } catch (e) { console.warn('tow truck', e); this.truck = null; }
-    // drive.js: only your rental lets you in; a wreck of it: the fee and the truck
+    // drive.js: only your own car lets you in; a wreck of it: the repair bill and the truck
     if (o.drive) {
-      o.drive.locked = (e) => (e.rental || e.free ? null : 'Rent a car at Car Rental in Legacy Village');
+      o.drive.locked = (e) => (e.rental || e.free ? null : 'Buy a car at the Autohaus in Legacy Village');
       o.drive.onWreck = (e) => this.wrecked(e);
     }
     try { this.impound = new Impound(this, { fee: WRECK_FEE }); } catch (e) { console.warn('rental car park', e); this.impound = null; }
     try { this.ownerTags = new OwnerTags({ scene: o.scene, camera: o.camera, rental: this }); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
-    // the save: your rental back in the yard
-    const s = o.save.rental;
-    if (s && RETIRED[s.id]) s.id = RETIRED[s.id];
-    if (s && RENTALS.some((c) => c.id === s.id)) { try { o.save.rental = normConfig(s); this.current = this.spawn(o.save.rental); } catch (e) { console.warn('rental car', e); } }
+    // the save: your garage, the car that is out back in your bay
+    this.migrate();
+    if (o.save.rental) { try { this.current = this.spawn(o.save.rental); } catch (e) { console.warn('rental car', e); } }
+  }
+
+  // ------------------------------------------------------------------ your garage (save.garage; save.rental: the one out)
+  /** Old saves: the rental becomes a car you own (free: it was paid for); the garage made whole (one of each model,
+   *  known models only), save.rental the garage's entry with its plate (or null). Multiplayer: the profile's cars. */
+  migrate() {
+    const S = this.save;
+    const fix = (c) => { if (!c || typeof c !== 'object') return null; if (RETIRED[c.id]) c = { ...c, id: RETIRED[c.id] }; return RENTALS.some((r) => r.id === c.id) ? normConfig(c) : null; };
+    const g = [];
+    for (const c of [...(Array.isArray(S.garage) ? S.garage : []), S.rental]) { const n = fix(c); if (n && !g.some((x) => x.id === n.id || x.plate === n.plate)) g.push(n); }
+    S.garage = g;
+    const r = fix(S.rental);
+    S.rental = r ? g.find((x) => x.plate === r.plate) || g.find((x) => x.id === r.id) || null : null;
+  }
+  get garage() { return Array.isArray(this.save.garage) ? this.save.garage : (this.save.garage = []); }
+  owns(id) { return this.garage.find((c) => c.id === id) || null; }
+  label(id) { return RENTALS.find((c) => c.id === id)?.label || 'car'; }
+  where() { return this.impound?.own ? 'car park beside the Autohaus' : 'yard out front'; }
+  /** What a car of yours sells back for: half what you paid (an old rental, never priced: half today's price). */
+  sellValue(cfg) { return Math.round(((Number.isFinite(cfg?.price) ? cfg.price : this.cost(cfg).total) * SELL_SHARE) / 50) * 50; }
+  /** Can the car that is out be swapped / sold now? (not while you drive it; one the tow truck has goes home from
+   *  the truck: wrecked() / impound.js only put it back while it is still the one out) */
+  busy() {
+    const c = this.current;
+    if (c && (c.driving || this.drive?.d?.e === c)) return 'Park your car first';
+    return null;
   }
 
   // lot frame -> world { x, z }
@@ -114,7 +149,7 @@ export class CarRental {
     const inFloor = mk(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ color: 0x8c8782, emissive: 0x4a4540, roughness: 0.25, metalness: 0.1 }), 0, 0.02, 0, hall);
     inFloor.rotation.x = -Math.PI / 2; inFloor.receiveShadow = inFloor.castShadow = false;
     this.glowMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, emissive: 0xffcf98, emissiveIntensity: 0.6, roughness: 0.9 });
-    mk(new THREE.PlaneGeometry(9, 1.8), this.glowMat, -4.4, 6.1, -D / 2 + 0.05, hall).receiveShadow = false; // (the backlit CAR RENTAL sign inside)
+    mk(new THREE.PlaneGeometry(9, 1.8), this.glowMat, -4.4, 6.1, -D / 2 + 0.05, hall).receiveShadow = false; // (the backlit AUTOHAUS sign inside)
     const ttTop = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.55, metalness: 0.2 }), ttRim = new THREE.MeshStandardMaterial({ color: 0xd9dde2, metalness: 1, roughness: 0.18 });
     const showCar = (id, paint, x, y, z, yaw) => {
       const spec = RENTALS.find((c) => c.id === id), gl = this.models[id];
@@ -132,8 +167,8 @@ export class CarRental {
       showCar(id, paint, at[0], 0.16, at[1], at[2]);
     });
     UPPER.forEach(([id, paint], k) => { const at = LAYOUT.upSpots[k]; if (at) showCar(id, paint, at[0], LAYOUT.FL, at[1], at[2]); });
-    // the CAR RENTAL board on the gable (the village's sign style: a lettered board with a wooden back), lit at night
-    const sign = makeSign('CAR RENTAL\nLEGACY VILLAGE', { w: 8.4, h: 2.0, font: 'bold 104px Georgia' });
+    // the AUTOHAUS board on the gable (the village's sign style: a lettered board with a wooden back), lit at night
+    const sign = makeSign('AUTOHAUS\nLEGACY VILLAGE', { w: 8.4, h: 2.0, font: 'bold 104px Georgia' });
     sign.position.set(0, H + 1.55, D / 2 + 0.1); hall.add(sign);
     this.signMat = sign.userData.faceMaterial;
     // lanterns on the stone piers (either side of the glass), each a dark steel box with a warm glass
@@ -179,7 +214,7 @@ export class CarRental {
     for (const sx of [-1, 1]) for (let z = Z0 + 0.6; z < Z1 - 1.5; z += 2) { const p = this.w(sx * (YARD.hw - 0.5), z + 1); mk(new THREE.BoxGeometry(0.22, 0.16, 1.96), kerb, sx * (YARD.hw - 0.5), world.height(p.x, p.z) - L.y + 0.06, z + 1); }
     // flags at the yard's front corners (blue banners on steel poles), potted spruces either side of the door
     const banner = canvas(128, 512, (c, w, h) => { c.fillStyle = '#16346e'; c.fillRect(0, 0, w, h); c.fillStyle = '#f2c88c'; c.fillRect(0, 0, w, 10); c.fillRect(0, h - 10, w, 10);
-      c.save(); c.translate(w / 2, h / 2); c.rotate(-Math.PI / 2); c.fillStyle = '#fff'; c.font = 'italic 700 64px "Barlow Condensed", "Arial Narrow", Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('CAR RENTAL', 0, 4); c.restore(); });
+      c.save(); c.translate(w / 2, h / 2); c.rotate(-Math.PI / 2); c.fillStyle = '#fff'; c.font = 'italic 700 64px "Barlow Condensed", "Arial Narrow", Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('AUTOHAUS', 0, 4); c.restore(); });
     const bannerMat = new THREE.MeshStandardMaterial({ map: banner, roughness: 0.8, side: THREE.DoubleSide });
     for (const sx of [-1, 1]) {
       const lx = sx * (YARD.hw - 0.6), lz = Z1 - 1.0, p = this.w(lx, lz), y = world.height(p.x, p.z) - L.y;
@@ -258,72 +293,123 @@ export class CarRental {
     if (this.drive) this.drive._cc = null;
   }
 
-  /** The price of a config: the car's rate and the extras (finish, trim, rims, your own plate). */
+  /** The price of a config: the car's list price and the extras (finish, trim, rims, your own plate). */
   cost(cfg) { const spec = RENTALS.find((c) => c.id === cfg.id) || RENTALS[0], extras = extrasCost(cfg); return { base: spec.price, extras, total: spec.price + extras }; }
-  rent(cfg) {
+  /** Buy `cfg` (one of each model): it joins your garage and waits in your bay (the one out before goes home). */
+  buy(cfg) {
     cfg = normConfig(cfg);
-    if (this.mp) return this.mp.rent(cfg); // multiplayer: the server rents it (price, a unique plate: net/session.js)
     const spec = RENTALS.find((c) => c.id === cfg.id);
-    if (!spec || !this.spend(this.cost(cfg).total)) return;
-    if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; } // (one at a time: the old one is returned)
-    this.current = this.spawn(cfg);
-    this.save.rental = cfg;
+    if (!spec) return;
+    if (this.owns(cfg.id)) { this.hud?.flash(`You already own a ${spec.label}`, 'bad', 2600); this.audio?.play?.('error'); return; }
+    const no = this.busy(); if (no) { this.hud?.flash(no, 'bad', 2600); this.audio?.play?.('error'); return; }
+    if (this.mp) return this.mp.rent(cfg); // multiplayer: the server sells it (price, a unique plate: net/session.js)
+    const total = this.cost(cfg).total;
+    if (!this.spend(total)) return;
+    cfg.price = total;
+    this.garage.unshift(cfg);
+    this.putOut(cfg, `${spec.label} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}`);
+  }
+  rent(cfg) { return this.buy(cfg); } // (the old name)
+  /** One of your cars (by plate) into your bay, free; the one out before goes home to your garage. */
+  takeOut(plate) {
+    const cfg = this.garage.find((c) => c.plate === plate);
+    if (!cfg || this.save.rental?.plate === plate) return;
+    const no = this.busy(); if (no) { this.hud?.flash(no, 'bad', 2600); this.audio?.play?.('error'); return; }
+    if (this.mp) { this.mp.switchCar?.(plate); return; } // multiplayer: the server swaps it (placeOwned)
+    this.garage.splice(this.garage.indexOf(cfg), 1); this.garage.unshift(cfg);
+    this.putOut(cfg, `Your ${this.label(cfg.id)} waits in the ${this.where()} · ${cfg.plate}`);
+  }
+  /** Sell one of your cars back (by plate) for sellValue(); the one out sold: the next of yours takes its bay. */
+  sell(plate) {
+    const cfg = this.garage.find((c) => c.plate === plate);
+    if (!cfg) return;
+    const out = this.save.rental?.plate === plate;
+    if (out) { const no = this.busy(); if (no) { this.hud?.flash(no, 'bad', 2600); this.audio?.play?.('error'); return; } }
+    if (this.mp) { this.mp.sellCar?.(plate); return; } // multiplayer: the server pays (placeOwned)
+    const v = this.sellValue(cfg);
+    this.garage.splice(this.garage.indexOf(cfg), 1);
+    this.save.money += v;
+    this.hud?.setMoney?.(this.save.money, v);
+    this.audio?.play?.('cash');
+    if (out) this.putOut(this.garage[0] || null, null);
+    else this.writeSave();
+    this.hud?.flash(`${this.label(cfg.id)} sold · +$${v.toLocaleString('en-US')}`, 'good', 3200);
+  }
+  /** `cfg` (a garage entry, or null: none) is the car out: in your bay, the one there before gone home. */
+  putOut(cfg, msg) {
+    if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; }
+    this.save.rental = cfg || null;
+    if (cfg) this.current = this.spawn(cfg);
     this.writeSave();
-    this.hud?.flash(`${spec.label} rented · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'gold', 3200);
+    if (msg) this.hud?.flash(msg, 'gold', 3400);
   }
 
-  /** The rental in the yard rebuilt from save.rental (switching between the single-player and multiplayer saves). */
+  /** Your garage and the car out rebuilt from the save (switching between the single-player and multiplayer saves). */
   resync() {
     if (this.current && !this.current.driving) { try { this.remove(this.current); } catch (e) { console.warn('rental car', e); } this.current = null; }
-    const s = this.save.rental;
-    if (s && RENTALS.some((c) => c.id === s.id)) { try { this.save.rental = normConfig(s); this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } }
+    this.migrate();
+    if (this.save.rental) { try { this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } }
   }
-  /** Multiplayer: the server rented `cfg` (its plate checked): put it in the yard. */
-  placeRented(cfg) {
-    const spec = RENTALS.find((c) => c.id === cfg.id);
-    if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; }
-    this.save.rental = normConfig(cfg);
-    this.current = this.spawn(this.save.rental);
-    this.writeSave();
-    this.hud?.flash(`${spec?.label || 'Car'} rented · ${this.save.rental.plate} · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'gold', 3200);
+  /** Multiplayer: the server's garage (profile cars, cars[0] the one out; net/session.js): the save follows it and the
+   *  car out is put in your bay when it changed (bought, switched, sold). */
+  placeOwned(cars, msg) {
+    const list = (cars || []).map((c) => normConfig(c)).filter((c) => RENTALS.some((r) => r.id === c.id));
+    const first = list[0] || null, was = this.save.rental?.plate || null;
+    this.save.garage = list;
+    if ((first?.plate || null) !== was || !this.current) this.putOut(first, msg);
+    else { this.save.rental = first; this.writeSave(); if (msg) this.hud?.flash(msg, 'gold', 3400); }
+  }
+  /** Multiplayer: the server sold you `cfg` (its plate checked): put it in the yard. (old name; placeOwned) */
+  placeRented(cfg, cars) {
+    if (cars) return this.placeOwned(cars, `${this.label(cfg.id)} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}`);
+    const c = normConfig(cfg);
+    this.save.garage = [c, ...this.garage.filter((x) => x.plate !== c.plate && x.id !== c.id)];
+    this.putOut(c, `${this.label(c.id)} bought · ${c.plate} · it waits in the ${this.where()}`);
   }
 
-  // drive.js: a car was wrecked (yours: the fee, once, and the rental ends); the truck fetches it
+  // drive.js: a car was wrecked (yours: the repair bill, once); the truck fetches it
   // Your car isn't lost (Oct 29, the user: "once your car gets towed away it's repaired again, so it spawns at the
-  // parking lot so you don't lose your car"): the fee, then once the truck has it back, it is repaired and waits in
-  // its bay in the car park beside the hall (the same car: model, paint, plate)
+  // parking lot so you don't lose your car"): the bill (wreckFee: 10 % of its price, at least WRECK_MIN), then once the
+  // truck has it back, it is repaired and waits in its bay in the car park beside the hall (the same car: model,
+  // paint, plate). It stays yours (AUTOHAUS: bought, in your garage)
   wrecked(e) {
     const mine = e.rental && this.save.rental ? this.save.rental : null;
     const mp = mine ? this.mp : null;
     // (Oct 29, the user: "if your car becomes wrecked from the car crashes from the police it wont get repaired"):
-    // wrecked by a police ram (police.js sets e.policeWreck): no fee, no repair; the rental ends, the car is lost
+    // wrecked by a police ram (police.js sets e.policeWreck): no bill, no repair; the car is gone from your garage (the
+    // next car of yours, if any, waits in your bay)
     const lost = !!(mine && e.policeWreck);
     if (lost) {
       e.rental = false;
       if (this.current === e) this.current = null;
+      const g = this.garage, i = g.findIndex((c) => c.plate === mine.plate);
+      if (i >= 0) g.splice(i, 1);
       this.save.rental = null;
+      if (mp?.ended) mp.ended(mine); // (multiplayer: the server takes it out of your garage; the next one comes out)
+      else if (g[0]) this.putOut(g[0], null);
       this.writeSave();
-      mp?.ended?.(mine); // (multiplayer: the server's car record ends)
-      setTimeout(() => this.hud?.flash('Car wrecked by the police · it will not be repaired · your rental has ended', 'bad', 6000), 2900);
+      const next = g[0] ? ` · your ${this.label(g[0].id)} waits in the ${this.where()}` : '';
+      setTimeout(() => this.hud?.flash(`Your ${this.label(mine.id)} was wrecked by the police · it will not be repaired · it is gone from your garage${next}`, 'bad', 7000), 2900);
     } else if (mine) {
+      const fee = wreckFee(mine.id);
       e.rental = false;
       if (this.current === e) this.current = null;
-      if (mp?.tow) { // multiplayer: the server charges the fee and records the tow (it ends in your bay: net/session.js)
+      if (mp?.tow) { // multiplayer: the server charges the bill and records the tow (it ends in your bay: net/session.js)
         this.towed = e; // (still shown to the others: lying there, then on the truck: net/carride.js)
         const p = this.carSpot;
         mp.tow('wreck', p ? [p.x, world.height(p.x, p.z) + 0.03, p.z, p.yaw] : [e.car.position.x, e.car.position.y, e.car.position.z, 0]);
       } else {
-        this.save.money -= WRECK_FEE;
+        this.save.money -= fee;
         this.writeSave();
-        this.hud?.setMoney?.(this.save.money, -WRECK_FEE);
+        this.hud?.setMoney?.(this.save.money, -fee);
       }
       this.audio?.play?.('cash');
-      setTimeout(() => this.hud?.flash(`Car wrecked · -$${WRECK_FEE.toLocaleString('en-US')} · the tow truck takes it to the car rental · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
+      setTimeout(() => this.hud?.flash(`Car wrecked · repair bill -$${fee.toLocaleString('en-US')} · the tow truck takes it to the Autohaus · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
     }
     const back = () => {
-      if (!mine || this.save.rental !== mine || this.current) return; // (rented another meanwhile: that one stays)
-      this.current = this.spawn(mine);
-      if (this.current) this.hud?.flash(`Your ${RENTALS.find((c) => c.id === mine.id)?.label || 'car'} is repaired · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'good', 3600);
+      if (!mine || lost || this.save.rental?.plate !== mine.plate || this.current) return; // (another of yours out meanwhile: that one stays)
+      this.current = this.spawn(this.save.rental);
+      if (this.current) this.hud?.flash(`Your ${this.label(mine.id)} is repaired · it waits in the ${this.where()}`, 'good', 3600);
     };
     const done = (car) => {
       if (this.towed === car) this.towed = null;
@@ -337,7 +423,7 @@ export class CarRental {
   // ------------------------------------------------------------------ outside: the door
   interaction(p) {
     if (!this.L || this.inside || !this.room) return null;
-    if (Math.hypot(p.x - this.door.x, p.z - this.door.z) < 2.6) return this._prompt ||= { label: 'Car Rental', act: () => this.enter() };
+    if (Math.hypot(p.x - this.door.x, p.z - this.door.z) < 2.6) return this._prompt ||= { label: 'Autohaus', act: () => this.enter() };
     return null;
   }
 
@@ -366,25 +452,29 @@ export class CarRental {
       this.player.teleport(this.door.x + f.x * 0.8, this.door.z + f.z * 0.8, Math.atan2(f.x, f.z));
       this.player.camYaw = Math.atan2(f.x, f.z) + Math.PI + 0.4;
       this.player.camPitch = -0.12;
-      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is impounded in the car park · free again ${untilTomorrow()}` : `Your rental car waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard'} · E to drive`, 'good', 2800), 400);
+      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is impounded in the car park · free again ${untilTomorrow()}` : `Your ${this.label(this.current.cfg?.id)} waits in the ${this.where()} · E to drive`, 'good', 2800), 400);
     };
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }
 
-  // the configurator, for the car you pressed E at (its display paint to start; your current rental's config when it's
-  // that model). The model itself is fixed in there: paint, wheels, plate only.
+  // the configurator, for the car you pressed E at (its display paint to start; your own car's config when you own
+  // that model: then it opens on the summary, to take it out or sell it). The model itself is fixed in there: paint,
+  // wheels, plate only. MY CARS (the summary): every car of yours, E / click to put it in your bay.
   openCard(pick, paintHexWant) {
     if (!RENTALS.some((c) => c.id === pick)) return;
     this.room.guide(null); // (found it)
-    const cur = this.save.rental ? normConfig(this.save.rental) : null;
-    const base = cur && pick === cur.id ? cur : normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
-    this.ui.open({ cars: RENTALS, cfg: base, current: cur, money: this.save.money, wreckFee: WRECK_FEE, cost: (c) => this.cost(c),
+    const own = this.owns(pick), cur = this.save.rental ? normConfig(this.save.rental) : null;
+    const base = own ? normConfig(own) : normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
+    const garage = this.garage.map((c) => ({ ...normConfig(c), label: this.label(c.id), value: this.sellValue(c), out: c.plate === cur?.plate }));
+    this.ui.open({ cars: RENTALS, cfg: base, current: cur, owned: own ? normConfig(own) : null, garage, step: own ? 3 : 0,
+      money: this.save.money, wreckFee: wreckFee(pick), sellValue: own ? this.sellValue(own) : 0, cost: (c) => this.cost(c),
       preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
-      rent: (c) => { this.rent(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); },
+      rent: (c) => { this.buy(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); },
+      takeOut: (plate) => { this.takeOut(plate); this.input?.lock?.(); }, sell: (plate) => { this.sell(plate); this.input?.lock?.(); },
       plateCheck: this.mp?.plateCheck, plateIssue: this.mp?.plateIssue }); // (multiplayer: plates unique across every player)
   }
 
-  // the clerk: a car of the day, picked at random from the floor (never the same twice in a row); a marker over it
+  // the salesman: a car of the day, picked at random from the floor (never the same twice in a row); a marker over it
   // shows you the way (carrentalroom.js guide) until you press E at it
   recommend() {
     const on = this.room.tables.map((t) => t.id).filter((id) => RENTALS.some((c) => c.id === id));
@@ -392,7 +482,8 @@ export class CarRental {
     const pool = on.length > 1 ? on.filter((id) => id !== this.lastTip) : on, id = pool[Math.floor(Math.random() * pool.length)];
     this.lastTip = id;
     const spec = RENTALS.find((c) => c.id === id), up = this.room.tables.find((t) => t.id === id)?.up;
-    const lines = [`Grüezi! Take a look at the ${spec.label}${up ? ' upstairs' : ''}!`, `Have you seen the ${spec.label}${up ? ' upstairs' : ''}? Lovely in the snow.`, `Today I'd go for the ${spec.label}${up ? ', up the stairs' : ''}. Have a look!`];
+    const price = `$${spec.price.toLocaleString('en-US')}`;
+    const lines = [`Grüezi! Take a look at the ${spec.label}${up ? ' upstairs' : ''}, yours for ${price}!`, `Have you seen the ${spec.label}${up ? ' upstairs' : ''}? Lovely in the snow, and only ${price}.`, `Today I'd buy the ${spec.label}${up ? ', up the stairs' : ''}. ${price}, and it's yours for good!`];
     this.hud?.flash(lines[Math.floor(Math.random() * lines.length)], 'good', 3600);
     this.room.guide(id);
   }
@@ -401,6 +492,7 @@ export class CarRental {
   frame(dt, input, sensitivity) {
     const open = this.ui.isOpen;
     this.target = this.room.update(dt, open ? null : input, sensitivity, open);
+    if (this.target?.kind === 'car' && this.owns(this.target.id)) this.target.label = `Your ${this.label(this.target.id)}${this.save.rental?.id === this.target.id ? '' : ' · take it out'} · sell`; // (one you own)
     if (!open && this.target && input?.hit?.('KeyE')) {
       this.audio?.play?.('click');
       const t = this.target;

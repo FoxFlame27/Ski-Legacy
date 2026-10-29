@@ -920,6 +920,8 @@ export class GameServer {
       case 'earn': return reply(this.earn(c, d));
       case 'buy': return reply(this.buy(c, d));
       case 'carReturn': return reply(this.carReturn(c, d));
+      case 'carSwitch': return reply(this.carSwitch(c, d));
+      case 'carSell': return reply(this.carSell(c, d));
       case 'plateCheck': {
         const p = cleanPlate(d.plate), k = plateKey(p);
         if (!k) return reply({ err: 'bad_plate' });
@@ -1083,7 +1085,9 @@ export class GameServer {
     if (d.kind !== 'wreck' && d.kind !== 'tow') return { err: 'bad_kind' };
     if (!validAt(d.home)) return { err: 'bad_value' };
     if (car.tow) return { err: 'busy', d: { money: P.money, impound: car.impound || null } };
-    const now = Date.now(), fee = CATALOG.wreckFee ?? 1500, home = d.home.map((x) => Math.round(x * 100) / 100);
+    // (a wreck: the repair bill, CATALOG.wreckRate of the car's list price, at least wreckMin; a tow: the flat wreckFee)
+    const now = Date.now(), home = d.home.map((x) => Math.round(x * 100) / 100);
+    const fee = d.kind === 'wreck' && CATALOG.wreckRate ? Math.max(CATALOG.wreckMin || 0, Math.round(((CATALOG.cars[car.id] || 0) * CATALOG.wreckRate) / 50) * 50) : CATALOG.wreckFee ?? 1500;
     // (as the game's other charges: into debt down to DEBT_FLOOR; deeper than that the truck still comes, unpaid)
     const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };
@@ -1101,11 +1105,11 @@ export class GameServer {
   /** A tow that never finished (the owner left mid-tow, the server restarted) ends where it was going; an impound
    *  whose day has passed is lifted. */
   settleCar(c, now = Date.now()) {
-    const car = c.profile?.cars?.[0];
-    if (!car) return;
     let dirty = false;
-    if (car.tow) { if (Array.isArray(car.tow.home)) car.at = car.tow.home; delete car.tow; dirty = true; }
-    if (car.impound && c.world && c.world.dayAt(now) > car.impound.day) { delete car.impound; dirty = true; } // (by the world's own clock)
+    for (const car of c.profile?.cars || []) { // (AUTOHAUS: every car you own; one towed may no longer be the one out)
+      if (car.tow) { if (Array.isArray(car.tow.home)) car.at = car.tow.home; delete car.tow; dirty = true; }
+      if (car.impound && c.world && c.world.dayAt(now) > car.impound.day) { delete car.impound; dirty = true; } // (by the world's own clock)
+    }
     if (dirty) this.store.profiles.save();
   }
 
@@ -1264,28 +1268,70 @@ export class GameServer {
         const want = cleanPlate(cfg.plate), o = want ? this.plates.get(plateKey(want)) : null;
         plate = want && plateKey(want) && (!o || o === c.key) ? want : this.freePlate();
       }
+      // AUTOHAUS (Oct 29): bought for good, one of each model; every car you own keeps its plate (cars: your garage,
+      // cars[0] the one out: the new car, in your bay)
+      P.cars = Array.isArray(P.cars) ? P.cars : [];
+      if (P.cars.some((x) => x.id === cfg.id)) return { err: 'owned', d: { money: P.money } };
+      if (P.cars.some((x) => plateKey(x.plate) === plateKey(plate))) { // (a plate already on another of your cars)
+        if (custom) return { err: 'plate_taken', d: { plate } };
+        plate = this.freePlate();
+      }
+      if (!plate) return { err: 'bad_plate' };
       const price = base + CATALOG.paints[paint] + CATALOG.interiors[interior] + CATALOG.rims[rims] + (custom ? CATALOG.plateCost : 0);
       if (!this.debit(c, price, 'car')) return { err: 'money', d: { money: P.money } };
-      // one car at a time (as the single-player rental): the old one goes back, its plate is free again
-      for (const old of P.cars || []) if (old.plate && this.plates.get(plateKey(old.plate)) === c.key) this.plates.delete(plateKey(old.plate));
-      const car = { id: cfg.id, paint, interior, rims, plate, custom, since: Date.now() };
-      P.cars = [car];
+      const car = { id: cfg.id, paint, interior, rims, plate, custom, price, since: Date.now() };
+      if (P.cars[0]) delete P.cars[0].at; // (the one out before goes home to your garage)
+      P.cars.unshift(car);
       this.plates.set(plateKey(plate), c.key);
       if (c.vehs.car) this.setVeh(c, { k: 'car' }); // (the car everyone sees is the new one)
-      return { d: { money: P.money, car, price } };
+      this.store.profiles.save();
+      return { d: { money: P.money, car, price, cars: P.cars } };
     }
     return { err: 'bad_kind' };
   }
 
+  /** A car of yours gone for good (wrecked by a police ram: not repaired; carrental.js): out of your garage, its
+   *  plate free again. The next car of yours (if any) is the one out. */
   carReturn(c, d) {
     const P = c.profile, k = plateKey(d.plate);
     const i = (P.cars || []).findIndex((car) => plateKey(car.plate) === k);
     if (i < 0) return { err: 'no_car' };
     P.cars.splice(i, 1);
     if (this.plates.get(k) === c.key) this.plates.delete(k);
-    if (c.vehs.car) this.setVeh(c, { k: 'car', off: true });
+    if (i === 0 && c.vehs.car) this.setVeh(c, { k: 'car', off: true });
     this.store.profiles.save();
     return { d: { cars: P.cars } };
+  }
+  /** AUTOHAUS: another car of yours out (free): it moves to cars[0] and starts in your bay (no parked spot). */
+  carSwitch(c, d) {
+    const P = c.profile, k = plateKey(d.plate);
+    const i = (P.cars || []).findIndex((car) => plateKey(car.plate) === k);
+    if (!k || i < 0) return { err: 'no_car' };
+    if (i > 0) {
+      const [car] = P.cars.splice(i, 1);
+      delete P.cars[0].at; delete car.at;
+      P.cars.unshift(car);
+      if (c.vehs.car) this.setVeh(c, { k: 'car', off: true }); // (the client shows the new one in its bay: veh again)
+      this.store.profiles.save();
+    }
+    return { d: { cars: P.cars } };
+  }
+  /** AUTOHAUS: sell a car of yours back for CATALOG.carSell of what you paid (a car from before cars were bought,
+   *  never priced: of its list price). Out of your garage, its plate free; not while the tow truck has it. */
+  carSell(c, d) {
+    const P = c.profile, k = plateKey(d.plate);
+    const i = (P.cars || []).findIndex((car) => plateKey(car.plate) === k);
+    if (!k || i < 0) return { err: 'no_car', d: { money: P.money } };
+    const car = P.cars[i];
+    if (car.tow) return { err: 'busy', d: { money: P.money } };
+    const paid = isInt(car.price) && car.price >= 0 ? car.price : (CATALOG.cars[car.id] || 0);
+    const refund = Math.round((paid * (CATALOG.carSell ?? 0.5)) / 50) * 50;
+    P.cars.splice(i, 1);
+    if (this.plates.get(k) === c.key) this.plates.delete(k);
+    if (i === 0 && c.vehs.car) this.setVeh(c, { k: 'car', off: true });
+    if (refund > 0) this.credit(c, refund, 'carSell');
+    this.store.profiles.save();
+    return { d: { money: P.money, refund, cars: P.cars } };
   }
 
   // the client-owned parts of the profile (no money, nothing bought): whitelisted and checked

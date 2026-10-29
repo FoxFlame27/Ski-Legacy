@@ -65,8 +65,9 @@ The server is authoritative for all of the following.
 **Money**
 - The client never sets money.
 - `spend` is checked against the balance.
-- `earn` is accepted only from the `job` source (at most $6,000 per payout) and the `secret` source (at most
-  $10,000), and at most $60,000 per hour in total.
+- `earn` is accepted only from the `job` source (at most $6,000 per payout), the `secret` source (at most
+  $10,000) and the `sell` source (furniture sold back in build mode: half its price, at most $2,000), and at most
+  $60,000 per hour in total per account (a new login does not reset it).
 - Race prizes are computed and paid by the server.
 - Purchases use the server's prices in `server/lib/catalog.json`, which is generated from the game's own tables.
   `npm test` fails if the catalog drifts from the game.
@@ -78,7 +79,12 @@ The server is authoritative for all of the following.
   (`server.chalets`: plot → online owner). See **Chalet plots** below.
 - Number plates are unique across all players. The plate key ignores spaces and hyphens, so `SKI 1` and `ski-1`
   are the same plate.
-- Each player has one rental car at a time. Renting another car returns the old one and frees its plate.
+- AUTOHAUS (was the car rental): cars are bought for good. A player's profile `cars` is their garage (one of each
+  model, each with its own plate and the `price` paid); `cars[0]` is the one out (in their bay, shown to the others).
+  `carSwitch` puts another owned car out for free; `carSell` sells one back for `catalog.carSell` (half) of what was
+  paid and frees its plate; `carReturn` (a car wrecked by a police ram: not repaired) takes it out of the garage.
+  A wreck's repair bill is `catalog.wreckRate` (10 %) of the car's list price, at least `catalog.wreckMin`; a car
+  towed off a road pays the flat `catalog.wreckFee`.
 
 **Profile fields the client may set** (`profileSet`, checked against a whitelist)
 
@@ -104,6 +110,8 @@ The server is authoritative for all of the following.
 - The client (`net/client.js`) reconnects by itself with backoff (0.3 s to 5 s) for up to 2 minutes, logs in again
   and carries on where it was. Only 4001 or LEAVE MULTIPLAYER stops it. A socket that says nothing for 20 s is
   treated as dead, unless the check itself ran late (a main-thread hitch or a background tab proves nothing).
+  Likewise a request's 10 s timeout that fires late waits a little longer (up to 40 s): its answer may be queued
+  behind the hitch (on a slow machine, a login during the terrain load failed with "No answer.").
 
 **Limits**
 - General messages: 80 per second with a burst of 240. Over the limit a request is refused with `rate` (no debt:
@@ -116,6 +124,12 @@ The server is authoritative for all of the following.
   race queue entry, helicopter copy, permission grants and chalet plot.
 - Kicks and drops are logged: `kick <name>: <reason>`, `[drop] <name>: …`, `[-] <name>: no reconnect within the
   grace period`, `[+] <name> reconnected …`.
+
+**Admin (the server machine only).** HTTP on the game port from 127.0.0.1, never through the proxy (a request with
+`x-forwarded-for` is refused, 403): `/admin/players` (every account: name, money, online), `/admin/give?name=&amount=`
+(online: `money {why:'gift'}` at once), `/admin/giveall?amount=`, `/admin/tp?name=&to=` (`adminTp {x, y, z, yaw, to}`;
+the client refuses it while driving, flying, riding a train, the express, a bus, a sled or someone's car, inside, or
+racing), `/admin/kick?name=` (`bye {reason:'kicked'}`, close 4001: no automatic reconnect; they may join again).
 
 ## The wire protocol
 
@@ -155,9 +169,11 @@ whose `.data` is `d`.
 | `permRevoke` | `{kind, guest}` (grants are single use: one boarding of the car or one visit to the chalet; consumed on getting out / leaving, or after 60 s unused, then ask again) | the guest gets `permRevoked`, and is kicked from the car or chalet; the owner gets `guests` |
 | `chaletFurniture` | `{id}` (a plot) | `{id, owner, chalet: {furniture, plan, layout}}` for its owner or a guest they let in · `no_owner`, `no_permission` |
 | `spend` | `{amount, reason}` | `{money}` · `money`, `bad_amount` |
-| `earn` | `{amount, source: 'job' \| 'secret'}` | `{money}` · `rejected`, `cap` |
-| `buy` | `{kind: 'skis' \| 'outfit', id}` · `{kind: 'chalet', id, name, meta}` · `{kind: 'car', cfg: {id, paint, interior, rims, plate, custom}}` | `{money, ...}` · `money`, `owned`, `taken {owner}`, `one_each`, `plate_taken {plate}`, `bad_plate` |
-| `carReturn` | `{plate}` | frees the plate |
+| `earn` | `{amount, source: 'job' \| 'secret' \| 'sell'}` | `{money}` · `rejected`, `cap` |
+| `buy` | `{kind: 'skis' \| 'outfit', id}` · `{kind: 'chalet', id, name, meta}` · `{kind: 'car', cfg: {id, paint, interior, rims, plate, custom}}` (car: `{money, car, price, cars}`; one of each model) | `{money, ...}` · `money`, `owned`, `taken {owner}`, `one_each`, `plate_taken {plate}`, `bad_plate` |
+| `carReturn` | `{plate}` | `{cars}`: the car is gone from your garage (a police wreck), its plate free · `no_car` |
+| `carSwitch` | `{plate}` | `{cars}`: that owned car is out (`cars[0]`, in your bay), no charge · `no_car` |
+| `carSell` | `{plate}` | `{money, refund, cars}`: sold back for `catalog.carSell` of its price, plate free · `no_car`, `busy` (being towed) |
 | `plateCheck` | `{plate}` | `{plate, free, mine}` |
 | `plateIssue` | – | `{plate}` (a random free plate, not reserved; `buy` checks again) |
 | `profileSet` | `{key, value}` | see the whitelist above |
@@ -258,6 +274,9 @@ Each line has one timeline:
   its own standings panel and POSITION (`n / field`); `MpUI`'s board is only for a racer without a session.
 - **Finish.** The session sends `raceFinish` at the line (not at the results screen: the server checks the time
   against its own clock).
+- **Giving up.** A racer with no race session for the race (left it from the pause menu, or it could not start
+  on their screen because another session was on) sends a DNF (`session.updateBoard`), so nobody waits for them
+  and they can queue again at once (otherwise `raceJoin` answers `in_race` until the race closes).
 - **Dropouts.** A racer whose connection drops is held for the grace period (shown as reconnecting) and carries
   on after a reconnect. Gone for good (or LEAVE MULTIPLAYER): DNF, placed behind the finishers by how far they
   got. Back while the race still runs (a later login): the DNF is undone and they carry on.

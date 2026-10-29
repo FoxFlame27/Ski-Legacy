@@ -158,7 +158,7 @@ export class Taxi {
       add(s.name === 'Legacy Village' ? 'Legacy Village plaza' : s.name, a ? a.x : s.x, a ? a.z : s.z, a ? { x: a.x, z: a.z } : null);
     }
     for (const L of busRoads.lots || []) {
-      const nm = L.rental ? 'the Car Rental' : L === busRoads.hospital || /medical/i.test(L.name || '') ? 'the medical centre' : L.name;
+      const nm = L.rental ? 'the Autohaus' : L === busRoads.hospital || /medical/i.test(L.name || '') ? 'the medical centre' : L.name;
       add(nm, L.ex ?? L.x, L.ez ?? L.z);
     }
     add('the chalet village', CHALET_PLACE.x, CHALET_PLACE.z); // (when its stop / car park did not already cover it)
@@ -177,16 +177,16 @@ export class Taxi {
     return {
       id: 'taxi', type: 'taxi', title: this.duty ? 'Legacy Taxi · on duty' : 'Legacy Taxi · drive fares',
       client: 'Legacy Taxi dispatch',
-      brief: !car ? 'Drive guests round the resort in your own car. Rent a car at the Car Rental first, then come back.'
+      brief: !car ? 'Drive guests round the resort in your own car. Buy a car at the Autohaus first, then come back.'
         : this.duty ? 'You are on duty: the dispatcher sends fares to your car. Press T in your car to end your shift.'
           : `Drive guests between bus stops, car parks, the chalets, the lift bases and the passes in your car. $${TARIFF.flag} + $${TARIFF.perKm / 10} per 100 m, a mountain surcharge, tips for a quick, smooth ride; knocks cost you, a wreck costs the fare. T in your car goes on or off duty.`,
       reward: 0, payText: '$40–250 a fare', bonus: 1, tipText: 'up to 25%', minutes: 'per fare', diff: 1,
-      takeText: !car ? 'RENT A CAR FIRST' : this.duty ? 'END MY SHIFT' : 'GO ON DUTY',
+      takeText: !car ? 'BUY A CAR FIRST' : this.duty ? 'END MY SHIFT' : 'GO ON DUTY',
       take: () => (this.duty ? this.goOffDuty() : this.goOnDuty(true)),
     };
   }
   goOnDuty(fromBoard = false) {
-    if (!this.hasCar()) { this.hud?.flash('Rent a car at the Car Rental first', 'bad', 2600); this.audio?.play('error'); return false; }
+    if (!this.hasCar()) { this.hud?.flash('Buy a car at the Autohaus first', 'bad', 2600); this.audio?.play('error'); return false; }
     if (this.duty) { this.hud?.flash('Already on taxi duty · T in your car ends your shift', 'gold', 2400); return true; }
     if (fromBoard && this.busy?.()) { this.hud?.flash('Finish or cancel your current job first', 'bad', 2400); return false; }
     this.duty = true;

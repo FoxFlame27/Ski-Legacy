@@ -123,9 +123,9 @@ try {
   // ---------------------------------------------------------------- number plates: unique across everyone
   console.log('plates');
   await a.req('profile'); // (Alice gets money to buy two cars: the server is the only one who can give it)
-  server.profileOf('alice').money = 20000; server.profileOf('bob').money = 20000;
+  server.profileOf('alice').money = 100000; server.profileOf('bob').money = 100000;
   const ca = await a.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'white', custom: true, plate: 'SKI 1' } });
-  ok(ca.ok && ca.d.car.plate === 'SKI 1' && ca.d.money === 20000 - 1200 - 100, 'Alice rents a Golf with the custom plate "SKI 1" (price checked by the server)');
+  ok(ca.ok && ca.d.car.plate === 'SKI 1' && ca.d.money === 100000 - CATALOG.cars.car_vw_golf_gti - CATALOG.plateCost && CATALOG.cars.car_vw_golf_gti === 15000, 'Alice buys a Golf ($15,000) with the custom plate "SKI 1" (price checked by the server)');
   const cb = await b.req('buy', { kind: 'car', cfg: { id: 'car_bmw_x3', paint: 'white', custom: true, plate: 'ski-1' } });
   ok(!cb.ok && cb.err === 'plate_taken', 'Bob cannot have "ski-1" (same plate, other spelling): plate_taken');
   const pc = await b.req('plateCheck', { plate: 'SKI 1' });
@@ -138,6 +138,25 @@ try {
   const pi = await b.req('plateIssue');
   const pi2 = await a.req('plateCheck', { plate: pi.d.plate });
   ok(pi.ok && pi.d.plate && pi2.d.free === true && pi.d.plate !== cb2.d.car.plate, 'plateIssue: a random plate nobody has');
+
+  // ---------------------------------------------------------------- AUTOHAUS: cars are owned (a garage), switched for free, sold back
+  console.log('autohaus');
+  const mB0 = server.profileOf('bob').money;
+  const g1 = await b.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'red' } });
+  ok(g1.ok && g1.d.cars.length === 2 && g1.d.cars[0].id === 'car_vw_golf_gti' && g1.d.cars[1].id === 'car_bmw_x3' && g1.d.money === mB0 - 15000 && g1.d.car.price === 15000,
+    'Bob buys a Golf too: both are his (the new one out, cars[0]), the X3 kept');
+  const g2x = await b.req('buy', { kind: 'car', cfg: { id: 'car_bmw_x3', paint: 'black' } });
+  ok(!g2x.ok && g2x.err === 'owned' && server.profileOf('bob').money === mB0 - 15000, 'one of each model: a second X3 is refused (owned), nothing charged');
+  const sw = await b.req('carSwitch', { plate: cb2.d.car.plate });
+  ok(sw.ok && sw.d.cars[0].id === 'car_bmw_x3' && sw.d.cars.length === 2 && server.profileOf('bob').money === mB0 - 15000, 'carSwitch: the X3 is out again without paying');
+  const swBad = await b.req('carSwitch', { plate: 'SKI 1' });
+  ok(!swBad.ok && swBad.err === 'no_car', "carSwitch to a plate that is not yours: no_car");
+  const sell = await b.req('carSell', { plate: g1.d.car.plate });
+  const pcS = await a.req('plateCheck', { plate: g1.d.car.plate });
+  ok(sell.ok && sell.d.refund === 7500 && sell.d.money === mB0 - 15000 + 7500 && sell.d.cars.length === 1 && sell.d.cars[0].id === 'car_bmw_x3' && pcS.d.free === true,
+    'carSell: the Golf sold back for half what Bob paid ($7,500), its plate free again');
+  const sell2 = await b.req('carSell', { plate: g1.d.car.plate });
+  ok(!sell2.ok && sell2.err === 'no_car', 'a car sold cannot be sold twice');
 
   // ---------------------------------------------------------------- the vehicle you show (your rental car)
   console.log('vehicles');
@@ -569,7 +588,7 @@ try {
     // a wreck: the fee even when it takes the balance below zero (a fine, as in single player); towDone ends it
     server.profileOf('tow gus').money = 100;
     const w1 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
-    ok(w1.ok && w1.d.money === 100 - 1500 && !w1.d.impound && gcar().tow?.kind === 'wreck', 'a wreck: the fee (a fine: below zero if need be), no impound');
+    ok(w1.ok && w1.d.money === 100 - 2500 && w1.d.fee === 2500 && !w1.d.impound && gcar().tow?.kind === 'wreck', 'a wreck: the repair bill (10 % of the Golf, at least $2,500; a fine: below zero if need be), no impound');
     await g2.f.req('towDone');
     server.profileOf('tow gus').money = DEBT_FLOOR + 1000;
     const w2 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });

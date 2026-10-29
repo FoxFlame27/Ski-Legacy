@@ -294,7 +294,8 @@ export class Multiplayer {
       money: p.money, owned: [...(p.owned || [])], skis: p.skis ?? null,
       outfits: { owned: [...(p.outfits?.owned || [])], equipped: { ...(p.outfits?.equipped || {}) } },
       chalet: p.chalet ? JSON.parse(JSON.stringify(p.chalet)) : null,
-      rental: car ? { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, custom: !!car.custom } : null,
+      rental: car ? { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, custom: !!car.custom, ...(car.price != null ? { price: car.price } : {}) } : null,
+      garage: (p.cars || []).map((c) => ({ id: c.id, paint: c.paint, interior: c.interior, rims: c.rims, plate: c.plate, custom: !!c.custom, ...(c.price != null ? { price: c.price } : {}) })), // (AUTOHAUS: every car you own; cars[0] is out)
       impound: car?.impound ? { day: car.impound.day, bay: car.impound.bay | 0, plate: car.plate } : null, // (the server keeps it: impound.js)
       stats: { races: 0, wins: 0, topSpeed: 0, distance: 0, earned: 0, ...(p.stats || {}) },
       records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
@@ -446,19 +447,47 @@ export class Multiplayer {
     this.c.hud.flash(`${h.name} is yours · E at its front door to go in`, 'good', 3400);
     return true;
   }
-  /** The rental car (one at a time): the server prices it and keeps its plate unique. */
+  /** AUTOHAUS: buy a car (one of each model; it joins your garage and is the one out): the server prices it and keeps
+   *  its plate unique. Resolves { car, cars } (cars: your garage, cars[0] out) or null. */
   async rentCar(cfg) {
     const d = await this.buy('car', { cfg });
     if (!d) return null;
-    MP.profile.cars = [d.car];
+    MP.profile.cars = d.cars || [d.car];
     this.c.audio?.play?.('cash');
-    return d.car;
+    return { car: d.car, cars: MP.profile.cars };
+  }
+  /** Another car of yours out (free; the server moves it to cars[0]). Resolves your garage or null. */
+  async switchCar(plate) {
+    try { const d = await net.request('carSwitch', { plate }); MP.profile.cars = d.cars; return d.cars; }
+    catch (e) { this.c.hud.flash(`Could not swap cars · ${errText(e)}`, 'bad', 2600); this.c.audio?.play?.('error'); return null; }
+  }
+  /** Sell a car of yours back (the server pays half what you paid). Resolves { cars, refund } or null. */
+  async sellCar(plate) {
+    this.guardMoney();
+    try {
+      const d = await net.request('carSell', { plate });
+      this.setServerMoney(d.money);
+      if (d.refund) this.c.hud.setMoney?.(this.c.save.money, d.refund);
+      MP.profile.cars = d.cars;
+      this.c.audio?.play?.('cash');
+      return d;
+    } catch (e) {
+      if (e.data?.money != null) this.setServerMoney(e.data.money);
+      this.c.hud.flash(`Could not sell it · ${errText(e)}`, 'bad', 2600); this.c.audio?.play?.('error');
+      return null;
+    }
   }
   /** The configurator's plate step: is this plate free? -> { plate, free, mine } (null offline / bad plate). */
   plateCheck(plate) { return net.request('plateCheck', { plate }).catch(() => null); }
   /** A random plate nobody has (the server's), or null. */
   plateIssue() { return net.request('plateIssue').then((d) => d.plate || null, () => null); }
-  carEnded(cfg) { if (cfg?.plate) net.request('carReturn', { plate: cfg.plate }).catch(() => {}); if (MP.profile) MP.profile.cars = []; }
+  /** A car of yours gone for good (wrecked by the police): out of your garage on the server. Resolves your garage. */
+  carEnded(cfg) {
+    const left = (MP.profile?.cars || []).filter((c) => c.plate !== cfg?.plate);
+    if (MP.profile) MP.profile.cars = left;
+    if (!cfg?.plate) return Promise.resolve(left);
+    return net.request('carReturn', { plate: cfg.plate }).then((d) => { if (MP.profile && d?.cars) MP.profile.cars = d.cars; return MP.profile?.cars || left; }, () => left);
+  }
   /** The tow truck sets out for your car (carrental.js wrecked: 'wreck'; impound.js tow: 'tow'): the server charges
    *  its fee (CATALOG.wreckFee) and records the tow; home [x, y, z, yaw] is where the car ends (its own bay / impound
    *  bay `bay`). Resolves the server's answer { money, fee, impound, at } or null. */

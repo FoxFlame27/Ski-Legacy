@@ -1,4 +1,4 @@
-// The CAR RENTAL building, once, for both sides of its glass: carrental.js builds it in the world (its snowy roof, the
+// The AUTOHAUS building (was the car rental), once, for both sides of its glass: carrental.js builds it in the world (its snowy roof, the
 // lit sign, the cars on display seen through the glazing) and carrentalroom.js builds the very same shell round the
 // showroom you walk in (the same timber walls, glass front and mullions, door, vaulted ceiling with its trusses, the
 // same cars on the same turntables). Building frame: origin on the floor in the middle of the hall, +z out of the
@@ -22,7 +22,7 @@ export const LAYOUT = {
   posts: [-5.4, 2.4, 12.5], // (in the gaps between the middle row's cars)
   // the cars on display (x, z, heading: along the hall, a little turned), on low plinths of radius R: two behind the
   // glass either side of the way in from the door, a row of three in the middle, three at the back under the
-  // mezzanine; upstairs a row of three (the supercars, for rent too), and the office on the right
+  // mezzanine; upstairs a row of three (the supercars, for sale too), and the office on the right
   spots: [[-9.33, 4.85, 1.49], [6.35, 4.85, -1.49], [-9.33, -0.05, -1.49], [-1.49, -0.05, 1.49], [6.35, -0.05, -1.49],
     [-10.83, -5.05, 1.49], [-2.99, -5.05, -1.49], [4.85, -5.05, 1.49]], R: 2.0,
   upSpots: [[-9.44, -5.06, 1.49], [-1.82, -5.06, -1.49], [5.74, -5.06, 1.49]],

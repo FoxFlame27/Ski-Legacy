@@ -107,7 +107,7 @@ export class Impound {
     if (!best) return null;
     const { cx, cz } = best;
     return {
-      name: 'Car rental car park', size: 'big', impound: true, x: cx, z: cz, y: best.y, yaw: Math.atan2(ux, uz), hw, hd, ux, uz, vx: fx, vz: fz,
+      name: 'Autohaus car park', size: 'big', impound: true, x: cx, z: cz, y: best.y, yaw: Math.atan2(ux, uz), hw, hd, ux, uz, vx: fx, vz: fz,
       ex: cx + fx * (hd + 2), ez: cz + fz * (hd + 2), dirx: fx, dirz: fz,
     };
   }
@@ -172,7 +172,7 @@ export class Impound {
     e.home = { x: p.x, z: p.z, yaw: p.yaw };
   }
   lockReason(e) {
-    if (e?.towing) return 'Your car · being towed to the car rental car park';
+    if (e?.towing) return 'Your car · being towed to the Autohaus car park';
     if (e?.impound) return `Impounded · free again ${untilTomorrow()}`;
     return null;
   }
@@ -230,7 +230,7 @@ export class Impound {
         e.strayT = 0;
         this.place(e, this.own);
         if (R.drive) R.drive._cc = null;
-        R.hud?.flash(`Your car was left out in the snow · it's back in your bay at the car rental`, 'good', 4200);
+        R.hud?.flash(`Your car was left out in the snow · it's back in your bay at the Autohaus`, 'good', 4200);
       }
       return;
     }
@@ -265,7 +265,7 @@ export class Impound {
       R.hud?.setMoney?.(this.save.money, -fee);
     }
     R.audio?.play?.('cash');
-    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · impounded in the car park by the car rental · free again ${untilTomorrow()}`, 'bad', 6500);
+    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · impounded in the car park by the Autohaus · free again ${untilTomorrow()}`, 'bad', 6500);
     const done = (car) => {
       car.towing = false;
       if (mp && R.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends; the impound stays)

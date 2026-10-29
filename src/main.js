@@ -48,7 +48,7 @@ import { ParkingLots } from './game/parking.js'; // the car parks (vehicles agen
 import { Hospital } from './game/hospital.js'; // the medical centre the ambulance drives to (vehicles agent)
 import { Traffic } from './game/traffic.js'; // cars driving the roads (vehicles agent)
 import { Drive } from './game/drive.js'; // drive the parked cars yourself (vehicles agent)
-import { CarRental } from './game/carrental.js'; // CAR RENTAL: rent a car (showroom inside), the wreck fee, the tow truck
+import { CarRental } from './game/carrental.js'; // AUTOHAUS (was the car rental): buy cars (showroom inside), your garage, the repair bill, the tow truck
 import { Taxi } from './game/taxi.js'; // LEGACY TAXI: drive fares in your car (the board's TAXI note, or T in the car)
 import { Police } from './game/police.js'; // POLICE: hit something while driving and they come after you (game/police.js)
 import { Prison } from './game/prison.js'; // the village police station: jail(seconds, reason), visits (game/prison.js)
@@ -1252,8 +1252,10 @@ function applyMpSave() {
     buy: (h) => multiplayer.buyChalet(h),
   } : null;
   if (carRental) carRental.mp = on ? {
-    rent: (cfg) => multiplayer.rentCar(cfg).then((car) => { if (car) carRental.placeRented({ ...cfg, ...car }); }),
-    ended: (cfg) => multiplayer.carEnded(cfg),
+    rent: (cfg) => multiplayer.rentCar(cfg).then((r) => { if (r) carRental.placeRented({ ...cfg, ...r.car }, r.cars); }), // (AUTOHAUS: bought; your garage from the server)
+    switchCar: (plate) => multiplayer.switchCar(plate).then((cars) => { if (cars) carRental.placeOwned(cars, `Your ${carRental.label(cars[0]?.id)} waits in the ${carRental.where()} · ${cars[0]?.plate || ''}`); }),
+    sellCar: (plate) => multiplayer.sellCar(plate).then((d) => { if (d) carRental.placeOwned(d.cars, `Sold · +$${(d.refund || 0).toLocaleString('en-US')}`); }),
+    ended: (cfg) => multiplayer.carEnded(cfg).then((cars) => carRental.placeOwned(cars, null)), // (wrecked by the police: gone from your garage)
     plateCheck: (p) => multiplayer.plateCheck(p), plateIssue: () => multiplayer.plateIssue(), // (the configurator: plates unique for everyone)
     tow: (kind, home, bay) => multiplayer.tow(kind, home, bay), towDone: () => multiplayer.towDone(), // (the tow truck: the fee and the impound on the server)
     carNear: (x, z, r) => multiplayer.carRide.carNear(x, z, r), // (an impound bay with another player's car in it)
@@ -1472,7 +1474,7 @@ function openMap() {
   trailMap ??= new TrailMap({
     player, locationName, onClose: () => input.lock(),
     markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [], police: police?.mapMarkers() || [],
-      places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Car Rental', kind: 'car' }] : [] }),
+      places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Autohaus', kind: 'car' }] : [] }),
   });
   if (trailMap.toggle()) document.exitPointerLock?.();
 }
@@ -1931,7 +1933,7 @@ function loopUpdate() {
     } else if (prison?.inside) {
       hud.frame({ speed: 0, loc: 'Legacy Village Prison', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: prison.target?.label || null, objective: prison.hudLine() });
     } else if (carRental?.inside) {
-      hud.frame({ speed: 0, loc: 'Car Rental', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the clerk and press E' });
+      hud.frame({ speed: 0, loc: 'Autohaus', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the salesman and press E' });
     } else if (inSession) hud.frame({
       speed: player.speed, loc: modes.course?.name || 'World Racing', time: env.timeString, weather, ski,
       prompt: null, objective: '', heading: camYaw, waypoint: null,

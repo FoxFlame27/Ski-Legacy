@@ -957,7 +957,7 @@ function planRental(O) {
         if ([...busRoads.junctions, ...busRoads.stops, ...(busRoads.laybys || [])].some((j) => Math.hypot(j.x - cx, j.z - cz) < 50)) continue;
         if (Math.hypot(cx + 190, cz + 160) < 90) continue; // (the Legacy Express's village station)
         const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz); // (u along the road; the front to the road)
-        best = { name: 'Car rental', building: true, rental: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+        best = { name: 'Autohaus', building: true, rental: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
           ex: m.x + nx * (ROAD_HALF + 0.6), ez: m.z + nz * (ROAD_HALF + 0.6), dirx: -nx, dirz: -nz, facing, ri, s, side, score: score0 };
       }
     }

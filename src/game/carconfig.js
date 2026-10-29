@@ -1,8 +1,8 @@
-// CAR CONFIGURATOR data and looks (the rental showroom's designer, ui/carrental.js): paint colours in four finishes
+// CAR CONFIGURATOR data and looks (the AUTOHAUS showroom's designer, ui/carrental.js): paint colours in four finishes
 // (solid gloss, metallic, pearl, matte), interior trims (leathers, sport fabrics with a coloured check / stitching),
 // rim colours and the number plate (Swiss style: canton letters, your own text, the shields; a canvas texture on a
 // plate of its own, laid over each car's front and rear plate). dressCar() turns a car instance (cars.js
-// carInstance, wheels: true) into exactly that car: the showroom's live preview, the rented car in the yard, and the
+// carInstance, wheels: true) into exactly that car: the showroom's live preview, the car you bought, in your bay, and the
 // car you drive (drive.js: e.dress), outside and in the cockpit (the *_full models too).
 import * as THREE from 'three';
 import { isPaint, isPlateMat } from './cars.js';
@@ -10,9 +10,9 @@ import { isPaint, isPlateMat } from './cars.js';
 // paint: hex (sRGB), finish -> how the clear coat and flakes read (roughness, metalness), extra cost
 export const FINISH = {
   solid: { label: 'Solid', rough: 0.3, metal: 0.25, clear: 1, cost: 0 },
-  metallic: { label: 'Metallic', rough: 0.24, metal: 0.72, clear: 1, cost: 150 },
-  pearl: { label: 'Pearl', rough: 0.18, metal: 0.5, clear: 1, cost: 250 },
-  matte: { label: 'Matte', rough: 0.66, metal: 0.12, clear: 0, cost: 300 },
+  metallic: { label: 'Metallic', rough: 0.24, metal: 0.72, clear: 1, cost: 1500 },
+  pearl: { label: 'Pearl', rough: 0.18, metal: 0.5, clear: 1, cost: 2500 },
+  matte: { label: 'Matte', rough: 0.66, metal: 0.12, clear: 0, cost: 3500 },
 };
 export const PAINTS = [
   { id: 'white', label: 'Alpine White', hex: 0xf2f2f0, finish: 'solid' }, { id: 'black', label: 'Night Black', hex: 0x15171a, finish: 'solid' },
@@ -32,20 +32,20 @@ export const PAINTS = [
 export const INTERIORS = [
   { id: 'orig', label: 'Factory trim', sub: 'As it left the factory', hex: 0x000000, amt: 0, cost: 0 },
   { id: 'black', label: 'Black leather', sub: 'Nappa, black', hex: 0x1a1a1c, amt: 1, cost: 0 },
-  { id: 'tan', label: 'Cognac leather', sub: 'Tan nappa, a warm brown', hex: 0x9a5a2c, amt: 1, cost: 200 },
-  { id: 'oxblood', label: 'Oxblood leather', sub: 'Deep red nappa', hex: 0x6e1a1e, amt: 1, cost: 250 },
-  { id: 'ivory', label: 'Ivory leather', sub: 'Pale cream nappa', hex: 0xd8cdb6, amt: 1, cost: 250 },
-  { id: 'sportred', label: 'Sport fabric · red check', sub: 'Charcoal cloth, red stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0xc0161c, cost: 150 },
-  { id: 'sportblue', label: 'Sport fabric · blue check', sub: 'Charcoal cloth, blue stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0x1f6fd0, cost: 150 },
-  { id: 'alcantara', label: 'Alcantara · yellow stitch', sub: 'Grey suede, yellow stitching', hex: 0x55575b, amt: 1, pattern: 2, accent: 0xe8c21a, cost: 200 },
+  { id: 'tan', label: 'Cognac leather', sub: 'Tan nappa, a warm brown', hex: 0x9a5a2c, amt: 1, cost: 2000 },
+  { id: 'oxblood', label: 'Oxblood leather', sub: 'Deep red nappa', hex: 0x6e1a1e, amt: 1, cost: 2500 },
+  { id: 'ivory', label: 'Ivory leather', sub: 'Pale cream nappa', hex: 0xd8cdb6, amt: 1, cost: 2500 },
+  { id: 'sportred', label: 'Sport fabric · red check', sub: 'Charcoal cloth, red stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0xc0161c, cost: 1500 },
+  { id: 'sportblue', label: 'Sport fabric · blue check', sub: 'Charcoal cloth, blue stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0x1f6fd0, cost: 1500 },
+  { id: 'alcantara', label: 'Alcantara · yellow stitch', sub: 'Grey suede, yellow stitching', hex: 0x55575b, amt: 1, pattern: 2, accent: 0xe8c21a, cost: 2000 },
 ];
 // rims: a tint over the wheel's metal (tyres stay black)
 export const RIMS = [
-  { id: 'orig', label: 'Factory alloys', hex: 0xffffff, cost: 0 }, { id: 'black', label: 'Gloss black', hex: 0x1b1c1e, cost: 100 },
-  { id: 'gunmetal', label: 'Gunmetal', hex: 0x5a5e64, cost: 100 }, { id: 'bronze', label: 'Bronze', hex: 0x9a6a36, cost: 150 },
-  { id: 'gold', label: 'Gold', hex: 0xd0a650, cost: 150 }, { id: 'red', label: 'Red', hex: 0xa01a1e, cost: 150 },
+  { id: 'orig', label: 'Factory alloys', hex: 0xffffff, cost: 0 }, { id: 'black', label: 'Gloss black', hex: 0x1b1c1e, cost: 1000 },
+  { id: 'gunmetal', label: 'Gunmetal', hex: 0x5a5e64, cost: 1000 }, { id: 'bronze', label: 'Bronze', hex: 0x9a6a36, cost: 1500 },
+  { id: 'gold', label: 'Gold', hex: 0xd0a650, cost: 1500 }, { id: 'red', label: 'Red', hex: 0xa01a1e, cost: 1500 },
 ];
-export const PLATE_COST = 100; // your own text on the plates
+export const PLATE_COST = 1000; // your own text on the plates (AUTOHAUS prices, Oct 29: every extra x10, the cars are bought now)
 const CANTONS = ['VS', 'GR', 'BE', 'UR', 'OW', 'TI', 'ZH', 'LU'];
 
 /** A plate in the game's style: two canton letters and up to six digits ("VS 123456"). */
@@ -59,9 +59,9 @@ export const interiorOf = (id) => INTERIORS.find((p) => p.id === id) || INTERIOR
 export const rimOf = (id) => RIMS.find((p) => p.id === id) || RIMS[0];
 /** A config made whole (old saves: { id, paint } only). */
 export function normConfig(c = {}) {
-  return { id: c.id, paint: paintOf(c.paint).id, interior: interiorOf(c.interior).id, rims: rimOf(c.rims).id, plate: cleanPlate(c.plate) || randomPlate(), custom: !!c.custom };
+  return { id: c.id, paint: paintOf(c.paint).id, interior: interiorOf(c.interior).id, rims: rimOf(c.rims).id, plate: cleanPlate(c.plate) || randomPlate(), custom: !!c.custom, ...(Number.isFinite(c.price) ? { price: c.price } : {}) }; // (price: what you paid, an owned car's)
 }
-/** Extra cost of a config over the car's day rate (finish, trim, rims, a custom plate). */
+/** Extra cost of a config over the car's list price (finish, trim, rims, a custom plate). */
 export function extrasCost(c) { return FINISH[paintOf(c.paint).finish].cost + interiorOf(c.interior).cost + rimOf(c.rims).cost + (c.custom ? PLATE_COST : 0); }
 
 // ---------------------------------------------------------------- the plate texture (cached per text)

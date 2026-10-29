@@ -1,45 +1,29 @@
 // Lamps you buy really light the chalet. WebGL forward lighting pays per light in every shader and recompiles
-// materials when the light count changes, so a FIXED pool of POOL warm PointLights lives in the interior root
-// from the moment you first enter; each update they go to the lit lamps nearest you (the rest keep only their
-// bulb glow), unused ones sit at intensity 0. The room's own ceiling lamps (9 in chaletroom.js) stay as they are:
-// 9 + POOL = 15 point lights inside, the most any interior uses.
+// materials when the light count changes, so the lit lamps don't get lights of their own: they join the chalet
+// room's built-in lamps as sources for its one fixed pool of point lights (chaletroom.js setFurnitureLamps), which
+// goes to whichever lamps are nearest you; the rest keep only their bulb glow.
 import * as THREE from 'three';
 import { lampPoint } from './placement.js';
+import { setFurnitureLamps } from '../chaletroom.js';
 
 export const POOL = 6;
 const COLOR = 0xffc887;
 
 export class LampPool {
-  constructor(root) {
-    this.root = root;
-    this.lights = [];
-    for (let i = 0; i < POOL; i++) {
-      const L = new THREE.PointLight(COLOR, 0, 6, 2);
-      L.castShadow = false;
-      L.name = 'furniture-lamp';
-      root.add(L);
-      this.lights.push(L);
-    }
-    this.timer = 0;
-  }
+  // (Oct 29: no lights of its own any more: the lit lamps go to the chalet room's shared pool, setFurnitureLamps;
+  // a second pool in the world scene cost every material outside six more lights)
+  constructor(root) { this.root = root; this.lights = []; this.timer = 0; }
 
-  /** lamps: placed entries [{ item, rec, obj }] (rec.on !== false = lit); player: root-space position. */
-  update(dt, lamps, player) {
+  /** lamps: placed entries [{ item, rec, obj }] (rec.on !== false = lit); player: root-space position (unused). */
+  update(dt, lamps) {
     this.timer -= dt;
     if (this.timer > 0) return;
-    this.timer = 0.25; // (no need to re-sort every frame)
-    const lit = lamps.filter((e) => e.item.light != null && e.rec.on !== false).map((e) => {
+    this.timer = 0.25;
+    setFurnitureLamps(lamps.filter((e) => e.item.light != null && e.rec.on !== false).map((e) => {
       const p = lampPoint(e.item, e.obj.userData.dims, e.rec);
-      return { e, p, d: player ? (p.x - player.x) ** 2 + (p.y - player.y) ** 2 + (p.z - player.z) ** 2 : 0 };
-    }).sort((a, b) => a.d - b.d);
-    this.lights.forEach((L, i) => {
-      const l = lit[i];
-      if (!l) { L.intensity = 0; return; }
-      L.position.set(l.p.x, l.p.y, l.p.z);
-      L.intensity = l.e.item.lux ?? 6;
-      L.distance = l.e.item.place === 'ceiling' || (l.e.item.lux ?? 6) >= 10 ? 7 : 4.5;
-    });
+      return { x: p.x, y: p.y, z: p.z, power: (e.item.lux ?? 6) / 7.5 };
+    }));
   }
 
-  dispose() { for (const L of this.lights) L.parent?.remove(L); this.lights = []; }
+  dispose() { setFurnitureLamps([]); }
 }

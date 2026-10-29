@@ -217,7 +217,7 @@ export class ChaletRoom {
     // no shader recompiles), parked dark until the interior is in use; each frame they go to the nearest lamps
     this.pool = [];
     const rig = new THREE.Group(); rig.name = 'chalet-lamp-pool';
-    for (let i = 0; i < 4; i++) { const L = new THREE.PointLight(0xffb46b, 0, 7.5, 1.7); L.castShadow = false; rig.add(L); this.pool.push(L); }
+    for (let i = 0; i < 6; i++) { const L = new THREE.PointLight(0xffb46b, 0, 7.5, 1.7); L.castShadow = false; rig.add(L); this.pool.push(L); } // (shared with the lamps you buy: setFurnitureLamps)
     this.house.add(rig); // (moves with the house; its visibility: the pool's lights stay on the scene graph below)
     this.house.remove(rig); scene.add(rig); this.poolRig = rig;
   }
@@ -667,7 +667,8 @@ export class ChaletRoom {
     const on = this.house.visible && eye;
     if (on) {
       const lv = eye.y > (G + FL) / 2 + 0.6 ? 'up' : 'ground';
-      const ranked = this.lamps.map((l) => ({ l, d: Math.hypot(l.x - eye.x, (l.y - eye.y) * 1.5, l.z - eye.z) + (l.level === lv ? 0 : 6) })).sort((a, b) => a.d - b.d);
+      const all = furnitureLamps.length ? this.lamps.concat(furnitureLamps.map((f) => ({ ...f, level: f.y > (G + FL) / 2 + 0.6 ? 'up' : 'ground' }))) : this.lamps;
+      const ranked = all.map((l) => ({ l, d: Math.hypot(l.x - eye.x, (l.y - eye.y) * 1.5, l.z - eye.z) + (l.level === lv ? 0 : 6) })).sort((a, b) => a.d - b.d);
       this.pool.forEach((L, i) => {
         const r = ranked[i];
         if (!r) { L.intensity = 0; return; }
@@ -757,6 +758,10 @@ export class ChaletRoom {
 
 // ------------------------------------------------------------------ the API (live: game/chalets.js sets `room`)
 const api = { room: null, owner: null };
+// The lamps you've bought and switched on (build/lamps.js), house frame { x, y, z, power }: they share the room's
+// light pool (one fixed set of point lights in the world scene, so no second pool weighs on every material outside)
+let furnitureLamps = [];
+export function setFurnitureLamps(list) { furnitureLamps = list || []; }
 export function setChaletInterior(room, owner) { api.room = room; api.owner = owner; }
 export const chaletInteriorAPI = {
   get inside() { return !!api.room?.active; },

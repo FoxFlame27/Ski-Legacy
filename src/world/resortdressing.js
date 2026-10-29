@@ -1,6 +1,7 @@
 // Resort dressing: what makes the slopes read like a real ski area. Piste signposts (colour-coded arrow
-// boards at every piste start and fork, gondola signs at the base stations, wayfinding in the village),
-// border markers along every piste, safety nets wherever a run borders a hazard (orange B-nets, tall red
+// boards at every piste start, fork and junction, naming where each run takes you; gondola signs at the base
+// stations, wayfinding in the village), border markers every ~25 m down both edges of every piste, the continuous
+// fences along every run (pistefence.js: B-nets / rope lines, instanced), safety nets wherever a run borders a hazard (orange B-nets, tall red
 // A-nets at cliffs) with snow drifts at their base, the World Cup courses' finish arenas (nets both sides,
 // blue dye lines, start house, finish arch, grandstand, timing board), the ski lanes' SKI LANE entry banners
 // (their nets come with the others), ski patrol huts at the summits and sun-terrace furniture at the huts.
@@ -15,6 +16,7 @@ import { hash2 } from '../core/noise.js';
 import { sponsorAtlas, bannerUV, pickBanner } from './sponsors.js';
 import { quality, onQualityChange } from '../engine/quality.js';
 import { propSeats, registerBench } from '../game/seating.js';
+import { buildPisteFences } from './pistefence.js';
 
 const HAS_DOM = typeof document !== 'undefined';
 export const SIGN_FONT = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
@@ -219,7 +221,7 @@ class SignAtlas {
 function boardOutline(L, H, tip) {
   return [[0, -H / 2], [L - tip, -H / 2], [L, 0], [L - tip, H / 2], [0, H / 2]];
 }
-function drawBoard(g, w, h, { color, number, name, dir }) {
+function drawBoard(g, w, h, { color, number, name, dir, sub = null }) {
   // dir +1: tip on the right, -1: tip on the left (as seen on this face)
   const L = BOARD.len, H = BOARD.h, tip = BOARD.tip, sx = w / L, sy = h / H;
   const P = boardOutline(L, H, tip).map(([x, y]) => [(dir > 0 ? x : L - x) * sx, (H / 2 - y) * sy]);
@@ -248,11 +250,17 @@ function drawBoard(g, w, h, { color, number, name, dir }) {
     tx = bx + badge + h * 0.22;
   }
   g.fillStyle = '#ffffff'; g.textAlign = 'left'; g.textBaseline = 'middle';
-  let size = Math.round(h * 0.56);
+  let size = Math.round(h * (sub ? 0.44 : 0.56));
   g.font = `700 ${size}px ${SIGN_FONT}`;
   const maxW = rx1 - tx - h * 0.15;
   while (g.measureText(name).width > maxW && size > 14) { size -= 1; g.font = `700 ${size}px ${SIGN_FONT}`; }
-  g.fillText(name, tx, h / 2 + 1);
+  g.fillText(name, tx, sub ? h * 0.37 : h / 2 + 1);
+  if (sub) { // where the run takes you ("· VILLAGE", "· HIRSCHALM CHAIR")
+    let s2 = Math.round(h * 0.3);
+    g.font = `600 ${s2}px ${SIGN_FONT}`;
+    while (g.measureText(sub).width > maxW && s2 > 11) { s2 -= 1; g.font = `600 ${s2}px ${SIGN_FONT}`; }
+    g.globalAlpha = 0.92; g.fillText(sub, tx, h * 0.75); g.globalAlpha = 1;
+  }
 }
 function drawLiftSign(g, w, h, { title, sub }) {
   g.fillStyle = '#7a1010'; g.fillRect(0, 0, w, h);
@@ -351,7 +359,12 @@ function fadeShader(mat, near, far, meshCoverage) {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uNetCut = netCut;
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vFadeW;')
-      .replace('#include <project_vertex>', '#include <project_vertex>\nvFadeW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <project_vertex>', `#include <project_vertex>
+        #ifdef USE_INSTANCING
+          vFadeW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+        #else
+          vFadeW = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        #endif`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vFadeW;\nuniform float uNetCut;')
       .replace('#include <alphatest_fragment>', `
         float netFar = 0.0; // (cut mode: 0 close .. 1 where the mesh only reads as a band)
@@ -582,7 +595,7 @@ export function buildNetRuns(runs) {
   const chunks = [];
   for (const ch of chunkMap.values()) {
     const meshes = [ch.B.mesh(mats.B, 'bnet-mesh'), ch.A.mesh(mats.A, 'anet-mesh'), ch.solid.mesh(mats.solid, 'net-solid'), ch.banner.mesh(mats.banner, 'net-banner')].filter(Boolean);
-    for (const m of meshes) { m.castShadow = m.name === 'net-solid'; m.receiveShadow = true; group.add(m); }
+    for (const m of meshes) { m.castShadow = false; m.receiveShadow = true; group.add(m); } // (no shadows from nets)
     const cx = (ch.minx + ch.maxx) / 2, cz = (ch.minz + ch.maxz) / 2;
     chunks.push({ x: cx, z: cz, r: Math.hypot(ch.maxx - ch.minx, ch.maxz - ch.minz) / 2 + 4, meshes });
   }
@@ -694,6 +707,7 @@ export function buildResortDressing(scene, models = {}) {
   const colliders = [];
   const index = new PisteIndex(layout.pistes);
   const nets = new NetIndex(layout.nets);
+  const hazardNets = new NetIndex(layout.nets.filter((n) => !n.fence));
   const cannons = cannonSpots();
   const nearCannon = (x, z, r) => cannons.some(([cx, cz]) => Math.abs(cx - x) < r && Math.abs(cz - z) < r && Math.hypot(cx - x, cz - z) < r);
   const stations = layout.lifts.flatMap((l) => [l.bottom, l.top, ...(l.mid ? [l.mid] : [])]);
@@ -701,10 +715,14 @@ export function buildResortDressing(scene, models = {}) {
   const inVillage = (x, z) => Math.hypot(x, z) < 240;
 
   buildSignposts(group, colliders, index, nets, models);
-  buildMarkers(group, index, nets, nearCannon, nearStation, inVillage);
-  const netBuild = buildNetRuns(layout.nets);
+  buildMarkers(group, index, hazardNets, nearCannon, nearStation, inVillage);
+  const netBuild = buildNetRuns(layout.nets.filter((n) => !n.fence));
   group.add(netBuild.group);
   colliders.push(...netBuild.colliders);
+  // the continuous fences along every run (instanced, streamed round the camera; a pool of soft colliders)
+  const fences = buildPisteFences(layout.nets.filter((n) => n.fence), { netMaterial: getNetMaterials().B });
+  group.add(fences.group);
+  colliders.push(...fences.colliders);
   buildArenas(group, colliders, models);
   buildLaneGates(group, colliders);
   buildPatrolHuts(group, colliders, models);
@@ -713,6 +731,8 @@ export function buildResortDressing(scene, models = {}) {
   group.userData.colliders = colliders;
   group.userData.nets = netBuild.stats;
   group.userData.netChunks = netBuild.chunks;
+  group.userData.fences = fences.stats;
+  group.userData.fenceBuild = fences;
   // night: 0..1 (e.g. the village's nightUniform.value) - sign faces glow faintly like the village signs
   group.userData.setNight = (night) => { const m = group.userData.signFaceMaterial; if (m) m.emissiveIntensity = night * 0.25; };
   // per frame (cheap): net chunks out of range are hidden (they have faded out by then)
@@ -722,6 +742,7 @@ export function buildResortDressing(scene, models = {}) {
       const vis = d < NET_FAR;
       for (const m of c.meshes) m.visible = vis;
     }
+    fences.update(cam);
   };
   scene?.add(group);
   return group;
@@ -729,13 +750,29 @@ export function buildResortDressing(scene, models = {}) {
 
 // ------------------------------------------------------------------ signposts
 function pisteNumber(p) { return p.number ?? layout.pistes.indexOf(p) + 1; }
+// where a run takes you: the village, the lift at its foot, or (a run that ends on another run) wherever that one goes
+export function pisteDest(p, depth = 0) {
+  const [x, z] = p.pts.at(-1);
+  if (Math.hypot(x, z) < 330) return 'Village';
+  let lift = null, bd = 95;
+  for (const l of layout.lifts) { const d = Math.hypot(l.bottom.x - x, l.bottom.z - z); if (d < bd) { bd = d; lift = l; } }
+  if (lift) return lift.village || Math.hypot(lift.bottom.x, lift.bottom.z) < 330 ? 'Village' : lift.name;
+  if (depth < 3) {
+    for (const q of layout.pistes) {
+      if (q === p || q.lane) continue;
+      for (const [qx, qz] of q.pts) if (Math.hypot(qx - x, qz - z) < PISTE_WIDTH[q.diff] + 12) return pisteDest(q, depth + 1);
+    }
+  }
+  return null;
+}
 
 function buildSignposts(group, colliders, index, nets, models) {
   const atlas = new SignAtlas();
   const cells = new Map(); // piste -> { right, left }
   const cw = 320, ch = Math.round((320 * BOARD.h) / BOARD.len);
   for (const p of layout.pistes) {
-    const opts = { color: PISTE_COLORS[p.diff], number: pisteNumber(p), name: p.name.toUpperCase() };
+    const dest = pisteDest(p);
+    const opts = { color: PISTE_COLORS[p.diff], number: pisteNumber(p), name: p.name.toUpperCase(), sub: dest ? `· ${dest.toUpperCase()}` : null };
     cells.set(p, { right: atlas.add(cw, ch, (g, w, h) => drawBoard(g, w, h, { ...opts, dir: 1 })), left: atlas.add(cw, ch, (g, w, h) => drawBoard(g, w, h, { ...opts, dir: -1 })) });
   }
   // gondola signs at the base stations (all but the Legacy Gondola, whose sign stands in the plaza)
@@ -766,11 +803,12 @@ function buildSignposts(group, colliders, index, nets, models) {
   // --- where the posts go: every piste start (one post per top station) and every fork
   const sites = []; // { x, z, facing (yaw the boards face), boards: [{ piste | cells, toward: [x, z] }] }
   const ahead = (p, s0, d = 70) => { const acc = arcLengths(p.pts); const q = sampleAt(p.pts, acc, Math.min(acc.at(-1), s0 + d)); return [q.x, q.z]; };
-  // one post per group of piste starts (the top station; the Panorama starts at the Legacy Mid-Station)
+  // one post per group of piste starts (the top station; the Panorama starts at the Legacy Mid-Station): every
+  // run (the ones outside the peaks too: the Bunny Hill, the valley runs) gets its numbered board at its start
   const groups = [];
-  for (const pk of layout.peaks) for (const p of pk.pistes.filter((q) => q.pts.length > 4)) {
-    const g = groups.find((gr) => gr.pk === pk && Math.hypot(gr.x - p.pts[0][0], gr.z - p.pts[0][1]) < 150);
-    if (g) g.pistes.push(p); else groups.push({ pk, x: p.pts[0][0], z: p.pts[0][1], pistes: [p] });
+  for (const p of layout.pistes.filter((q) => q.pts.length > 4 && !q.lane)) {
+    const g = groups.find((gr) => Math.hypot(gr.x - p.pts[0][0], gr.z - p.pts[0][1]) < 150);
+    if (g) g.pistes.push(p); else groups.push({ x: p.pts[0][0], z: p.pts[0][1], pistes: [p] });
   }
   for (const { pistes } of groups) {
     // mean start of the group's pistes and their mean initial direction
@@ -786,9 +824,9 @@ function buildSignposts(group, colliders, index, nets, models) {
     if (index.clearance(x, z) < -8) { x = sx - dx * 6 - dz * 9; z = sz - dz * 6 + dx * 9; }
     sites.push({ x, z, facing: Math.atan2(-dx, -dz), boards: pistes.map((p) => ({ piste: p, toward: ahead(p, 0) })) });
   }
-  // forks: where one piste leaves another of the same mountain
-  for (const pk of layout.peaks) {
-    const ps = pk.pistes.filter((p) => !p.lane); // a lane is fenced: no forks off it
+  // forks: where one piste leaves another (any two runs, across the mountains too)
+  {
+    const ps = layout.pistes.filter((p) => !p.lane && p.pts.length > 3); // a lane is fenced: no forks off it
     for (const a of ps) for (const b of ps) {
       if (a === b) continue;
       const accB = arcLengths(b.pts), L = accB.at(-1);
@@ -814,6 +852,27 @@ function buildSignposts(group, colliders, index, nets, models) {
         }
         if (close) together = true;
       }
+    }
+  }
+  // junctions: where a run ends on another one away from a station (the Talweg into the Sonnenhang): a post
+  // ~50 m before the merge, its board pointing down the run you join ("12 SONNENHANG · VILLAGE")
+  const liftEnds = layout.lifts.flatMap((l) => [l.bottom, l.top, ...(l.mid ? [l.mid] : [])]);
+  for (const b of layout.pistes) {
+    if (b.lane || b.pts.length < 4) continue;
+    const [ex, ez] = b.pts.at(-1);
+    if (liftEnds.some((st) => Math.hypot(st.x - ex, st.z - ez) < 90) || Math.hypot(ex, ez) < 330) continue;
+    for (const a of layout.pistes) {
+      if (a === b || a.lane) continue;
+      if (index.distTo(ex, ez, a) > PISTE_WIDTH[a.diff] + PISTE_WIDTH[b.diff] * 0.6) continue;
+      const accA = arcLengths(a.pts), sa = nearestArc(a, ex, ez);
+      if (accA.at(-1) - sa < 120) continue;
+      const accB = arcLengths(b.pts), q = sampleAt(b.pts, accB, Math.max(0, accB.at(-1) - 50));
+      const [ax, az] = ahead(a, sa, 70);
+      // on the run's edge on the side the joined run continues to, 3 m in from the groomed edge
+      const rx = -q.dz, rz = q.dx, side = (ax - q.x) * rx + (az - q.z) * rz >= 0 ? 1 : -1, off = PISTE_WIDTH[b.diff] - 3;
+      const x = q.x + rx * side * off, z = q.z + rz * side * off;
+      if (!sites.some((t) => Math.hypot(t.x - x, t.z - z) < 50)) sites.push({ x, z, facing: Math.atan2(-q.dx, -q.dz), boards: [{ piste: a, toward: [ax, az] }], junction: true });
+      break;
     }
   }
   // the village wayfinding post: on the plaza, facing where you arrive (the spawn by the bus stop)
@@ -900,6 +959,7 @@ function buildSignposts(group, colliders, index, nets, models) {
   if (boards) group.add(boards);
   group.userData.signFaceMaterial = faceMat;
   group.userData.signSites = sites.length;
+  group.userData.signStats = { starts: groups.length, forks: sites.filter((t) => !t.way && !t.junction).length - groups.length, junctions: sites.filter((t) => t.junction).length, boards: sites.reduce((n, t) => n + t.boards.length, 0) };
 }
 
 // arc length on piste p closest to (x, z)
@@ -918,18 +978,19 @@ function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage) {
   const spots = [];
   for (const p of layout.pistes) {
     if (p.lane) continue; // the nets mark a lane's edges
-    const acc = arcLengths(p.pts), L = acc.at(-1), w = PISTE_WIDTH[p.diff] + 1.2;
-    const step = 120, n = Math.floor((L - 140) / step); // (sparse: just enough to read the edges, no marker forest)
+    const acc = arcLengths(p.pts), L = acc.at(-1), w = PISTE_WIDTH[p.diff] + 0.1;
+    // every ~25 m down both edges, just inside the fence line (Oct 29: the user couldn't tell where the runs go)
+    const step = 25, n = Math.floor((L - 40) / step);
     for (let k = 0; k <= n; k++) {
-      const s = 70 + k * step + ((k * 7) % 5) - 2; // a slightly irregular rhythm, like hand-set poles
+      const s = 20 + k * step + ((k * 7) % 5) * 0.4 - 0.8; // a slightly irregular rhythm, like hand-set poles
       const q = sampleAt(p.pts, acc, s);
       const rx = -q.dz, rz = q.dx; // right, looking downhill
       for (const side of [1, -1]) {
         const x = q.x + rx * w * side, z = q.z + rz * w * side;
-        if (inVillage(x, z) || nearStation(x, z, 70) || nearCannon(x, z, 3.5)) continue;
+        if (inVillage(x, z) || nearStation(x, z, 40) || nearCannon(x, z, 3.5)) continue;
         if (index.clearance(x, z, p) < 1.5) continue; // inside another piste
         if (world.padInfluence(x, z) > 0.05) continue;
-        if (nets.near(x, z, 4)) continue; // the net marks this edge
+        if (nets.near(x, z, 0.8)) continue; // a hazard net stands right here (the nets stand 1.1 m further out)
         world.corridorAt(x, z, _corr);
         if (_corr.kind === 'race' && _corr.d < 0) continue; // on a World Cup course
         spots.push({ x, z, diff: p.diff, right: side > 0, lean: ((k * 13 + (side > 0 ? 5 : 0)) % 7 - 3) * 0.006 });
@@ -955,7 +1016,7 @@ function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage) {
     // the right-hand edge (looking downhill) carries an orange top, the left one stays in the piste colour
     tops.setColorAt(i, s.right ? orange : colors[s.diff]);
   });
-  for (const m of [bodies, tops]) { m.castShadow = true; m.receiveShadow = true; m.computeBoundingSphere(); group.add(m); }
+  for (const m of [bodies, tops]) { m.castShadow = false; m.receiveShadow = true; m.computeBoundingSphere(); group.add(m); } // (thousands of thin poles: no shadow pass)
   group.userData.markers = spots.length;
 }
 const _corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false };

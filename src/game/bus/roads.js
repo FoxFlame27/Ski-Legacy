@@ -112,7 +112,7 @@ export function buildObstacles(stops) {
     if (r.finish) O.disc(r.finish.x, r.finish.z, 55, 'block', `${r.name} finish arena`);
   }
   if (layout.park?.line?.length > 1) O.line(layout.park.line, layout.park.halfWidth ?? 17, 'ski', 'Legacy Park', P);
-  for (const n of layout.nets) if (n.line?.length > 1) O.line(n.line, 0.6, 'net', `net ${n.type || ''}`, P);
+  for (const n of layout.nets) if (n.line?.length > 1 && !n.fence) O.line(n.line, 0.6, 'net', `net ${n.type || ''}`, P); // (the piste fences hug the runs: the 'ski' clearance covers them)
   for (const l of layout.lifts) {
     const gond = l.type === 'gondola';
     O.add(l.bottom.x, l.bottom.z, l.top.x, l.top.z, gond ? 9 : 7, 'lift', l.name);

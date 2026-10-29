@@ -9,7 +9,7 @@ import { installHeightFog } from './engine/fog.js';
 import { Post } from './engine/post.js';
 import { PropDetail } from './engine/detail.js';
 import { world } from './world/world.js';
-import { layout, initLayout } from './world/layout.js';
+import { layout, initLayout, planPisteFences } from './world/layout.js';
 import { Terrain, terrainUniforms } from './world/terrain.js';
 import { Environment } from './world/sky.js';
 import { Vegetation } from './world/vegetation.js';
@@ -212,6 +212,7 @@ async function boot() {
   setLoad(0.02, 'Shaping the mountains…');
   initLayout();
   initSecrets(); // the secrets shape their tunnels / couloirs into the terrain before any of it is built
+  try { planPisteFences(); } catch (e) { console.warn('piste fences', e); } // nets / rope lines along every run (after the secrets: their trailheads stay open)
   if (BUS_RIDE) { try { planBusRoads(layout.busStops); } catch (e) { console.warn('bus roads / car parks', e); } } // the ski bus's roads are carved in before the terrain is built too
   terrain = new Terrain(scene);
   const modelsLoading = loadAll(MODEL_LIST, (n, total, name) => setLoad(0.05 + (n / total) * 0.55, `Loading ${name.replace(/_/g, ' ')}…`));

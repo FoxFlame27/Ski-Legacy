@@ -1127,6 +1127,7 @@ export function cannonSpots() {
 const NET_STEP = 2;     // m between net line samples
 const NET_OFF = 1.2;    // m beyond the groomed edge
 function planNets() {
+  const runSamples = new Map();
   const corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false };
   const cannons = cannonSpots();
   const stations = [];
@@ -1267,7 +1268,8 @@ function planNets() {
     parts.push([a, line.length - 1]);
     for (const [p0, p1] of lane ? parts : [best]) {
       const part = line.slice(p0, p1 + 1);
-      if ((part.length - 1) * NET_STEP >= 20) layout.nets.push({ type, line: part, owner, arena, lane, row, side });
+      // (s0 / s1: the stretch of the run it guards, in m along the run: planPisteFences fences the rest)
+      if ((part.length - 1) * NET_STEP >= 20) layout.nets.push({ type, line: part, owner, arena, lane, row, side, s0: samples[i0 + p0].s, s1: samples[i0 + p1].s });
     }
   };
 
@@ -1277,6 +1279,7 @@ function planNets() {
     if (p.lane) continue;
     const w = PISTE_WIDTH[p.diff];
     const S = sampleRun(p.pts, w), n = S.length, pad = Math.round(16 / NET_STEP);
+    runSamples.set(p, S); // (planPisteFences reuses them)
     for (const side of [1, -1]) {
       const blocked = (i) => S[i].s < 30 || S[i].s > S[n - 1].s - 30 || blockedAt(S[i].sides[side].x, S[i].sides[side].z, NET_OFF - 0.6);
       const A = intervals(n, (i) => S[i].sides[side].hz === 2, blocked, Math.round(10 / NET_STEP), 20);
@@ -1313,12 +1316,172 @@ function planNets() {
   // drop any piste hazard run that duplicates an arena or lane fence (that course / lane runs over the piste)
   const fences = layout.nets.filter((n) => n.arena || n.lane);
   layout.nets = layout.nets.filter((n) => n.arena || n.lane || !fences.some((a) => nearLine(n.line, a.line, 6)));
+  netKit = { sampleRun, cannons, runSamples };
   // a narrow tree-free strip just outside every net (so no trunk or branch stands in it)
   for (const net of layout.nets) {
     const strip = net.line.filter((_, i) => i % 3 === 0 || i === net.line.length - 1).map(([x, z, nx, nz]) => [x - nx * 1.6, z - nz * 1.6]);
     world.addCorridor(strip, 1.6, 'lift');
   }
 }
+// ---------- piste fences: every run fenced along both edges ----------
+// (Oct 29, the user: "the piste is super unclear... it needs to be like the races, with the ski nets all the
+// way".) After the hazard nets (planNets) and the secrets' trails (initSecrets: their trailheads must stay open),
+// before the terrain and the forests are built, every free-ride piste gets a continuous fence 1.2 m beyond each
+// groomed edge wherever planNets left it open:
+//  - an orange B-net (the race look) where the run borders forest, a drop or a gully, on the outside of fast
+//    bends, and along every red / black run;
+//  - a light rope-and-pole line (orange bunting) where an easy run opens onto open, level ground or a freeride
+//    bowl (the bowl side gets a 10 m gate every ~120 m, so the bowls stay skiable).
+// It breaks (the gaps keep every route connected) wherever the fence point would stand on or within 0.6 m of
+// another run, race course, the park, a pad's groomed apron, a secret trail or a road; within reach of a lift
+// station (gondola ~55 m, chair ~35 m), a mid-station or a hut, a lift tower, a snow cannon, a flattened pad, and
+// the village (its runs end open onto the plaza). It passes under lift lines (clear of the towers). Every run
+// ends at a station, the village or another run (checked in Node), so no run leads blindly into a forest: the
+// fences hold you on the groomed line down to the open junction or station at its end.
+// layout.nets entries: { type: 'B' | 'R', fence: true, line: [[x, z, nx, nz]...], owner, diff, side, bowl }
+// (resortdressing.js / pistefence.js draws them instanced, with soft grid-bucketed colliders)
+let netKit = null;
+export const FENCE_NET_OFF = 1.2;
+export function planPisteFences() {
+  if (layout.fencesPlanned || !netKit) return;
+  layout.fencesPlanned = true;
+  const t0 = performance.now();
+  const H = (x, z) => world.height(x, z);
+  const liftKeys = new Set(layout.lifts.map((l) => `${l.bottom.x},${l.bottom.z},${l.top.x},${l.top.z}`));
+  const towers = layout.lifts.flatMap((l) => l.towers || []);
+  const stations = [];
+  for (const l of layout.lifts) {
+    const g = l.type === 'gondola';
+    stations.push([l.bottom.x, l.bottom.z, g ? 55 : 34], [l.top.x, l.top.z, g ? 58 : 36]);
+    if (l.mid) stations.push([l.mid.x, l.mid.z, 42]);
+  }
+  for (const h of layout.huts) stations.push([h.x, h.z, 42]);
+  const { cannons } = netKit;
+  const bowls = (layout.bowls || []).filter((b) => !b.area);
+  const inBowl = (x, z) => bowls.some((b) => {
+    for (let i = 1; i < b.pts.length; i++) if (segDist(x, z, b.pts[i - 1][0], b.pts[i - 1][1], b.pts[i][0], b.pts[i][1]) < b.w) return true;
+    return false;
+  });
+  // the towers (6 m), stations, huts and cannons (1.5 m: they stand 1.8 m outside the fence line) in a 64 m grid
+  const spots = new Map();
+  for (const sp of [...towers.map((t) => [t.x, t.z, 6]), ...stations, ...cannons.map(([x, z]) => [x, z, 1.5])]) {
+    const [x, z, r] = sp;
+    for (let i = Math.floor((x - r) / 64); i <= Math.floor((x + r) / 64); i++) for (let j = Math.floor((z - r) / 64); j <= Math.floor((z + r) / 64); j++) {
+      const k = i + ',' + j;
+      if (!spots.has(k)) spots.set(k, []);
+      spots.get(k).push(sp);
+    }
+  }
+  // is a fence point off-limits? (lift lines and the nets' own tree strips don't count)
+  const blockedAt = (x, z) => {
+    if (x * x + z * z < 300 * 300) return true;
+    const segs = world.corridorGrid.get(Math.floor(x / 64) + ',' + Math.floor(z / 64));
+    if (segs) for (const s of segs) {
+      if (s.kind === 'lift' && (s.w <= 1.7 || liftKeys.has(`${s.ax},${s.az},${s.bx},${s.bz}`))) continue;
+      if (Math.abs(x - (s.ax + s.bx) / 2) > Math.abs(s.bx - s.ax) / 2 + s.w + 1 || Math.abs(z - (s.az + s.bz) / 2) > Math.abs(s.bz - s.az) / 2 + s.w + 1) continue;
+      if (segDist(x, z, s.ax, s.az, s.bx, s.bz) - s.w < 0.6) return true;
+    }
+    const pts = spots.get(Math.floor(x / 64) + ',' + Math.floor(z / 64));
+    if (pts) for (const [sx, sz, r] of pts) if (Math.abs(sx - x) < r && Math.abs(sz - z) < r && Math.hypot(sx - x, sz - z) < r) return true;
+    return world.padInfluence(x, z) > 0.05;
+  };
+  const corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false };
+  // what lies beyond the edge point (x, z), looking outward along (ox, oz): forest, a drop, a bowl
+  const beyond = (x, z, ox, oz) => {
+    const h0 = H(x, z);
+    let forest = 0, low = h0, hp = h0, kp = 0;
+    for (const k of [7, 20]) {
+      const px = x + ox * k, pz = z + oz * k, h = H(px, pz);
+      low = Math.min(low, h);
+      const sl = Math.abs(h - hp) / (k - kp); // (the slope along the probe: no extra height samples)
+      hp = h; kp = k;
+      world.corridorAt(px, pz, corr);
+      if (corr.groomed && corr.d < 0) continue; // another run there: no trees
+      forest = Math.max(forest, world.forest(px, pz, h, sl));
+    }
+    return { forest, drop: h0 - low, bowl: inBowl(x + ox * 20, z + oz * 20) };
+  };
+  const STEP = NET_STEP, fences = [];
+  const stats = { pistes: 0, B: 0, R: 0, lenB: 0, lenR: 0, gates: 0 };
+  for (const p of layout.pistes) {
+    if (p.lane) continue;
+    const w = PISTE_WIDTH[p.diff];
+    const S = netKit.runSamples.get(p) || netKit.sampleRun(p.pts, w), n = S.length;
+    if (n < 6) continue;
+    stats.pistes++;
+    for (const side of [1, -1]) {
+      // the stretches planNets already netted (this run's hazard nets on this side)
+      const covered = new Uint8Array(n);
+      for (const net of layout.nets) {
+        if (net.owner !== p.name || net.side !== side || net.arena || net.lane || net.s0 === undefined) continue;
+        for (let i = 0; i < n; i++) if (S[i].s >= net.s0 - 1 && S[i].s <= net.s1 + 1) covered[i] = 1;
+      }
+      const on = new Uint8Array(n), hard = new Uint8Array(n), bowl = new Uint8Array(n);
+      let probe = null;
+      for (let i = 0; i < n; i++) {
+        const c = S[i].sides[side];
+        on[i] = !covered[i] && !blockedAt(c.x, c.z) ? 1 : 0;
+        if (i % 6 === 0 || !probe) probe = beyond(c.x + c.nx * FENCE_NET_OFF, c.z + c.nz * FENCE_NET_OFF, -c.nx, -c.nz);
+        const open = probe.forest < 0.28 && probe.drop < 1.8;
+        bowl[i] = probe.bowl ? 1 : 0;
+        hard[i] = c.hz >= 1 || c.bend || probe.drop > 3 || probe.forest >= 0.28 || (!open) || (p.diff >= 2 && !probe.bowl) ? 1 : 0;
+      }
+      // B-net stretches grow 16 m each way; rope stretches under 40 m become B-net
+      const B = new Uint8Array(n), pad = Math.round(16 / STEP);
+      for (let i = 0; i < n; i++) if (hard[i]) for (let k = Math.max(0, i - pad); k <= Math.min(n - 1, i + pad); k++) B[k] = 1;
+      for (let i = 0; i < n; i++) {
+        if (B[i]) continue;
+        let j = i; while (j < n && !B[j]) j++;
+        if ((j - i) * STEP < 40) for (let k = i; k < j; k++) B[k] = 1;
+        i = j;
+      }
+      // the bowl gates: 10 m openings in the rope every ~120 m where a freeride bowl lies beyond
+      let sinceGate = 60;
+      for (let i = 0; i < n; i++) {
+        if (!on[i] || B[i] || !bowl[i]) { sinceGate = Math.min(sinceGate + STEP, 120); continue; }
+        sinceGate += STEP;
+        if (sinceGate >= 120) { for (let k = i; k < Math.min(n, i + Math.round(10 / STEP)); k++) on[k] = 0; stats.gates++; sinceGate = 0; }
+      }
+      // emit runs of the same type (a run of fence folds back on the inside of a tight bend: split it there)
+      for (let i = 0; i < n; i++) {
+        if (!on[i]) continue;
+        const type = B[i] ? 'B' : 'R';
+        let j = i; while (j + 1 < n && on[j + 1] && (B[j + 1] ? 'B' : 'R') === type) j++;
+        // (a fence joins the next one of the other type, or a hazard net, post to post: the line shares the end sample)
+        const a = i > 0 && (covered[i - 1] || on[i - 1]) ? i - 1 : i;
+        let part = [];
+        const flush = () => {
+          if ((part.length - 1) * STEP >= 10) {
+            fences.push({ type, fence: true, line: part, owner: p.name, diff: p.diff, side, arena: false, lane: false, row: 0, bowl: type === 'R' && bowl[i] === 1 });
+            stats[type]++; stats[type === 'B' ? 'lenB' : 'lenR'] += (part.length - 1) * STEP;
+          }
+          part = [];
+        };
+        for (let k = a; k <= j; k++) {
+          const c = S[k].sides[side];
+          if (part.length) {
+            const [px, pz] = part.at(-1), qx = S[k].q.x - S[k - 1].q.x, qz = S[k].q.z - S[k - 1].q.z;
+            if ((c.x - px) * qx + (c.z - pz) * qz < 0.25 * STEP * Math.hypot(qx, qz)) flush();
+          }
+          part.push([c.x, c.z, c.nx, c.nz]);
+        }
+        flush();
+        i = j;
+      }
+    }
+  }
+  layout.nets.push(...fences);
+  // a narrow tree-free strip just outside every fence, so no trunk stands in it (coarse: 24 m segments, so the
+  // corridor grid stays light; narrow, so the forest still comes up close to the runs)
+  for (const f of fences) {
+    const strip = f.line.filter((_, i) => i % 12 === 0 || i === f.line.length - 1).map(([x, z, nx, nz]) => [x - nx * 1.0, z - nz * 1.0]);
+    if (strip.length > 1) world.addCorridor(strip, 0.8, 'lift');
+  }
+  layout.fenceStats = { ...stats, ms: Math.round(performance.now() - t0) };
+  if (layout.timings) layout.timings.fences = layout.fenceStats.ms;
+  return layout.fenceStats;
+}
+
 // does most of line `a` lie within `r` metres of line `b`?
 function nearLine(a, b, r) {
   let hits = 0;

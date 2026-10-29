@@ -288,19 +288,27 @@ export class CarRental {
   }
 
   // drive.js: a car was wrecked (yours: the fee, once, and the rental ends); the truck fetches it
+  // Your car isn't lost (Oct 29, the user: "once your car gets towed away it's repaired again, so it spawns at the
+  // parking lot so you don't lose your car"): the fee, then once the truck has it back, it is repaired and waits in
+  // its bay in the car park beside the hall (the same car: model, paint, plate)
   wrecked(e) {
-    if (e.rental) {
+    const mine = e.rental && this.save.rental ? this.save.rental : null;
+    if (mine) {
       e.rental = false;
-      this.mp?.ended(this.save.rental); // (multiplayer: its plate is free again)
       if (this.current === e) this.current = null;
-      this.save.rental = null;
       this.save.money -= WRECK_FEE;
       this.writeSave();
       this.hud?.setMoney?.(this.save.money, -WRECK_FEE);
       this.audio?.play?.('cash');
-      setTimeout(() => this.hud?.flash(`Rental car wrecked · -$${WRECK_FEE.toLocaleString('en-US')} · the tow truck is on its way`, 'bad', 3600), 2900); // (after drive.js's own "Wrecked" line)
+      setTimeout(() => this.hud?.flash(`Car wrecked · -$${WRECK_FEE.toLocaleString('en-US')} · the tow truck takes it to be repaired`, 'bad', 3600), 2900); // (after drive.js's own "Wrecked" line)
     }
-    if (this.truck) this.truck.fetch(e, (car) => this.remove(car));
+    const back = () => {
+      if (!mine || this.save.rental !== mine || this.current) return; // (rented another meanwhile: that one stays)
+      this.current = this.spawn(mine);
+      if (this.current) this.hud?.flash(`Your ${RENTALS.find((c) => c.id === mine.id)?.label || 'car'} is repaired · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'good', 3600);
+    };
+    if (this.truck) this.truck.fetch(e, (car) => { this.remove(car); back(); });
+    else if (mine) setTimeout(() => { this.remove(e); back(); }, 20000);
   }
 
   // ------------------------------------------------------------------ outside: the door

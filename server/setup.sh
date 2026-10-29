@@ -2,8 +2,9 @@
 # Ski Legacy multiplayer server: one-shot setup for an Ubuntu / Debian VPS (run as root). Safe to run again:
 # every step checks first, so the same command also UPDATES the server to the latest code on GitHub.
 #
-#   From your Mac (in the game's folder):
-#     ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'bash -s' < server/setup.sh
+#   From your Mac (in the game's folder; the login user is nnechm, the script runs with sudo, -t lets sudo ask for the
+#   password):
+#     scp -i ~/Downloads/hetzner_rsa server/setup.sh nnechm@138.199.163.183:/tmp/skilegacy-setup.sh && ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo bash /tmp/skilegacy-setup.sh'
 #
 # What it does: installs Node 20 (NodeSource) and git; creates the `skilegacy` user; fetches the server/ folder of
 # https://github.com/FoxFlame27/Ski-Legacy (branch legacy-express) into /opt/skilegacy/server (or copies it from
@@ -29,7 +30,7 @@ SVC_USER=skilegacy
 export DEBIAN_FRONTEND=noninteractive
 
 say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
-[ "$(id -u)" -eq 0 ] || { echo "Run as root (ssh root@...)." >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || { echo "Run it with sudo: sudo bash /tmp/skilegacy-setup.sh" >&2; exit 1; }
 
 say "Base packages"
 apt-get update -y

@@ -13,7 +13,7 @@ Open Terminal in the game's folder (the one with `server/` in it) and run the li
 `~/Downloads/hetzner_rsa` with the path to your SSH key if it is somewhere else.
 
 ```sh
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'bash -s' < server/setup.sh
+scp -i ~/Downloads/hetzner_rsa server/setup.sh nnechm@138.199.163.183:/tmp/skilegacy-setup.sh && ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo bash /tmp/skilegacy-setup.sh'
 ```
 
 It takes a few minutes the first time. It installs Node 20, Caddy, git and ufw. It downloads the `server/` folder
@@ -35,7 +35,7 @@ If you use the Hetzner Cloud Firewall (in the Hetzner console), it must allow TC
 The script cannot clone a private repo. Upload the folder over SSH instead (also from the game's folder):
 
 ```sh
-tar -czf - --exclude node_modules --exclude data server | ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'rm -rf /tmp/sl && mkdir -p /tmp/sl && tar -xzf - -C /tmp/sl && SRC_DIR=/tmp/sl/server bash /tmp/sl/server/setup.sh'
+tar -czf - --exclude node_modules --exclude data server | ssh -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'rm -rf /tmp/sl && mkdir -p /tmp/sl && tar -xzf - -C /tmp/sl' && ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo SRC_DIR=/tmp/sl/server bash /tmp/sl/server/setup.sh'
 ```
 
 ## Update the server after a push
@@ -44,17 +44,17 @@ Run the same install command again. It pulls the latest `server/` from GitHub, r
 service. Player data in `/var/lib/skilegacy` is never touched.
 
 ```sh
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'bash -s' < server/setup.sh
+scp -i ~/Downloads/hetzner_rsa server/setup.sh nnechm@138.199.163.183:/tmp/skilegacy-setup.sh && ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo bash /tmp/skilegacy-setup.sh'
 ```
 
 ## Logs and status
 
 ```sh
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'journalctl -u skilegacy -f'          # live server log (Ctrl+C to stop)
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'journalctl -u skilegacy -n 200 --no-pager'
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'systemctl status skilegacy caddy --no-pager'
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'systemctl restart skilegacy'
-ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'journalctl -u caddy -n 100 --no-pager'   # certificate problems
+ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo journalctl -u skilegacy -f'          # live server log (Ctrl+C to stop)
+ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo journalctl -u skilegacy -n 200 --no-pager'
+ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo systemctl status skilegacy nginx --no-pager'
+ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo systemctl restart skilegacy'
+ssh -t -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo journalctl -u nginx -n 100 --no-pager'   # web front problems
 ```
 
 ## Data and backups
@@ -66,7 +66,7 @@ ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'journalctl -u caddy -n 100 
 To back them up:
 
 ```sh
-scp -i ~/Downloads/hetzner_rsa root@138.199.163.183:/var/lib/skilegacy/*.json ./backup/
+ssh -i ~/Downloads/hetzner_rsa nnechm@138.199.163.183 'sudo tar -czf - -C /var/lib skilegacy' > skilegacy-backup.tgz
 ```
 
 ## Run it locally

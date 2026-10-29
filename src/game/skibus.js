@@ -77,7 +77,8 @@ export class SkiBus {
   // its path), facing the road. (The village: where it departs; a terminus: where it arrives.)
   besideBay(s) {
     const net = this.netStop(s);
-    const r = busRoads.roads.find((q) => q.to === net) || busRoads.roads.find((q) => q.from === net);
+    const legs = busRoads.busLegs || [];
+    const r = legs.find((q) => q.to === net) || busRoads.roads.find((q) => q.to === net) || legs.find((q) => q.from === net) || busRoads.roads.find((q) => q.from === net);
     if (!r) return;
     const arriving = r.to === net, BAY = 7, o = ROAD_HALF + 3.2;
     const p = roadAt(r, arriving ? r.length - BAY + 3 : BAY + 3);

@@ -23,7 +23,7 @@ const XE = 628, XW = 388, XL = 334;        // the east hairpins, the west hairpi
 const HAIRPIN_R = 30, BEND_R = 40;
 // the terraces on the uphill side of each leg: [x from, x to] of the row of plots
 // the rows of plots: [leg, side (-1 uphill, +1 downhill), x from, x to]
-const ROWS = [[0, -1, 438, 590], [0, 1, 470, 590], [1, -1, 410, 640], [1, 1, 404, 590], [2, -1, 368, 590], [2, 1, 404, 600], [3, -1, 352, 608], [3, 1, 362, 585]];
+const ROWS = [[0, -1, 438, 590], [0, 1, 470, 590], [1, -1, 410, 640], [1, 1, 432, 590], [2, -1, 368, 590], [2, 1, 404, 600], [3, -1, 352, 608], [3, 1, 362, 585]];
 const PLOT_W = 26;                         // m along the leg: a side garden, the house (eaves 13.5 m), its private parking, gaps
 const PAD_FRONT = 7.5, FRONT_GARDEN = 2.6; // m from the leg's centre line to the pad; the front garden (pad edge to the steps)
 const PAD_DEPTH = FRONT_GARDEN + FOOT.x1 + HX + 1.2; // (the back wall 1.2 m short of the pad's back: the eaves overhang the bank)
@@ -194,4 +194,29 @@ export function planChaletVillage(O) {
   // the drives: no snow poles, guardrail or plough berm across a house's entrance
   for (const p of plots) busRoads.junctions.push({ x: p.drive.x, z: p.drive.z, drive: true }, { x: p.bay.x, z: p.bay.z, drive: true, bay: true }); // (a bay: firm tarmac grip)
   busRoads.chalets = { road, ri, lot, plots, junction: J, place: CHALET_PLACE, bounds: { minx, minz, maxx, maxz } };
+}
+
+/**
+ * The ski bus stop "Almdorf" (after every road is shaped: planBusRoads calls it last). It stands on the valley road
+ * at the Chaletweg's junction, so the 12 m bus never has to turn into the village's lanes: the road from the village
+ * stop past the junction is split there for the bus network (busRoads.busLegs: village -> Almdorf -> the next stop,
+ * slices of the same road, nothing new built or carved), so every ride along it stops at Almdorf on the way, and a
+ * ride from Almdorf goes either way. bus.js (parent) and skibus.js (besideBay) look the legs up first.
+ */
+export function planAlmdorfStop() {
+  const V = busRoads.chalets;
+  if (!V) return;
+  const J = V.junction, r0 = V.road.exitAt1?.road;
+  if (!r0) return;
+  let iJ = 0;
+  for (let i = 0; i < r0.n; i++) if (Math.abs(r0.S[i] - J.s) < Math.abs(r0.S[iJ] - J.s)) iJ = i;
+  if (iJ < 8 || iJ > r0.n - 8) return; // (too near either end to stop there)
+  const slice = (a, b, from, to) => {
+    const n = b - a + 1, X = r0.X.slice(a, b + 1), Y = r0.Y.slice(a, b + 1), Z = r0.Z.slice(a, b + 1), S = new Float32Array(n);
+    for (let k = 1; k < n; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z[k] - Z[k - 1]);
+    return { from, to, n, X, Y, Z, S, length: S[n - 1], busLeg: true, base: r0, s0: r0.S[a] };
+  };
+  const stop = { x: J.x, z: J.z, heading: 0, name: 'Almdorf', chalets: true };
+  busRoads.stops.push(stop); // (the same array as layout.busStops: the trail map and the stop list show it)
+  busRoads.busLegs = [slice(0, iJ, r0.from, stop), slice(iJ, r0.n - 1, stop, r0.to)];
 }

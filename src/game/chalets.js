@@ -440,7 +440,7 @@ export class Chalets {
       // walking into the door opens it
       if (Math.abs(f.target) < 0.01 && lp.x > HX - 0.3 && lp.x < HX + 1.1 && Math.abs(lp.z - DOOR.z) < DOOR.w / 2 + 0.2 && Math.hypot(this.player.vel?.x || 0, this.player.vel?.z || 0) > 0.3) f.target = f.inward;
       // through the open door: in
-      if (f.open && lp.x < HX - 0.45 && Math.abs(lp.z - DOOR.z) < DOOR.w / 2) { this.enter(R); return; }
+      if (f.open && lp.x < HX - 0.25 && Math.abs(lp.z - DOOR.z) < DOOR.w / 2) { this.enter(R); return; }
       // walked away: it closes
       if (Math.abs(f.target) > 0.01 && near > 6) f.target = 0;
     } else if (Math.abs(f.target) > 0.01 && near > 6) f.target = 0;

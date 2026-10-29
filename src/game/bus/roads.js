@@ -14,7 +14,7 @@ import { layout, VILLAGE_BUILDINGS, PISTE_WIDTH, ensureRaceCells } from '../../w
 import { RAIL } from '../../world/railroute.js';
 import { planScenic, shapeScenic } from './scenic.js'; // the scenic mountain road (Panoramastrasse) + its roundabout
 import { planScenicLoop } from './scenicloop.js'; // the Passstrasse and the loop round the back of the mountains
-import { planChaletVillage } from './chaletroad.js'; // the Chaletweg up through the chalet village (Almdorf)
+import { planChaletVillage, planAlmdorfStop } from './chaletroad.js'; // the Chaletweg up through the chalet village (Almdorf)
 
 const CELL = 20;
 const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
@@ -468,6 +468,7 @@ export function planBusRoads(stops) {
   try { planChaletVillage(obstacles); } catch (e) { console.warn('chalet village', e); } // (its terraces' cut before the roads' cuts)
   shapeRoads(busRoads.roads.filter((r) => !r.scenic)); // (the scenic roads, appended last, carve their own cut: same indices)
   try { shapeScenic(); } catch (e) { console.warn('scenic road cut', e); }
+  try { planAlmdorfStop(); } catch (e) { console.warn('Almdorf bus stop', e); } // (the chalet village's stop: the valley road split at its junction for the bus)
   busRoads.ready = true;
   busRoads.ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   return busRoads;

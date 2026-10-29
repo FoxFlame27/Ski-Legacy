@@ -2,28 +2,30 @@
 import { migrateCharacter } from './characters.js';
 
 export const SKIS = [
-  { id: 'rental', name: 'Rental Carver', model: 'ski_rental', price: 40, rent: true, speed: 1.0, grip: 1.0, desc: 'Basic rental skis. Forgiving and slow-ish. Returned at the end of your stay.' },
-  { id: 'cruiser', name: 'Alpine Cruiser 160', model: 'ski_cruiser', fallback: 'ski_rental', price: 220, speed: 1.015, grip: 1.05, desc: 'Easy-going beginner ski. Smooth and forgiving, a touch quicker than the rentals.' },
-  { id: 'sport', name: 'Sport All-Mountain 170', model: 'ski_sport', price: 450, speed: 1.03, grip: 1.08, desc: 'Lively all-mountain ski. +3% glide speed, better edge hold.' },
-  { id: 'park', name: 'Twin Tip Park 168', model: 'ski_park', fallback: 'ski_sport', price: 600, speed: 1.02, grip: 1.1, desc: 'Twin-tip freestyle ski for the park. Pops off kickers, lands switch.' },
-  { id: 'powder', name: 'Powder Hound 184', model: 'ski_powder', fallback: 'ski_sport', price: 700, speed: 1.03, grip: 1.12, desc: 'Wide freeride ski. Floats off-piste and stays calm at speed.' },
-  { id: 'touring', name: 'Summit Touring 176', model: 'ski_touring', fallback: 'ski_sport', price: 900, speed: 1.04, grip: 1.1, desc: 'Light touring ski. Quick and nimble everywhere on the mountain.' },
-  { id: 'carver', name: 'Slalom Carver SL', model: 'ski_carver', fallback: 'ski_pro', price: 1100, speed: 1.045, grip: 1.2, desc: 'Short-radius slalom ski. Bites hard on every turn.' },
-  { id: 'pro', name: 'World Cup GS Pro', model: 'ski_pro', price: 1600, speed: 1.06, grip: 1.16, desc: 'Race-stock giant slalom ski. +6% speed, razor edges.' },
-  { id: 'gs', name: 'Giant Slalom R30', model: 'ski_gs', fallback: 'ski_pro', price: 2200, speed: 1.07, grip: 1.18, desc: 'World Cup giant slalom ski. Fast and stable through long turns.' },
-  { id: 'superg', name: 'Super-G Arrow', model: 'ski_superg', fallback: 'ski_elite', price: 3200, speed: 1.085, grip: 1.2, desc: 'Long super-G race ski built for pure speed.' },
-  { id: 'elite', name: 'Legacy Elite Downhill', model: 'ski_elite', fallback: 'ski_pro', price: 4500, speed: 1.1, grip: 1.22, desc: 'Hand-built downhill weapon. +10% speed, unmatched stability.' },
-  { id: 'legend', name: 'Legacy Gold Edition', model: 'ski_legend', fallback: 'ski_elite', price: 7500, speed: 1.12, grip: 1.25, desc: 'The ultimate ski. +12% speed and perfect edge grip.' },
+  { id: 'rental', name: 'Rental Carver', model: 'ski_rental', price: 50, rent: true, speed: 1.0, grip: 1.0, desc: 'Basic rental skis. Forgiving and slow-ish. Returned at the end of your stay.' },
+  { id: 'cruiser', name: 'Alpine Cruiser 160', model: 'ski_cruiser', fallback: 'ski_rental', price: 300, speed: 1.015, grip: 1.05, desc: 'Easy-going beginner ski. Smooth and forgiving, a touch quicker than the rentals.' },
+  { id: 'sport', name: 'Sport All-Mountain 170', model: 'ski_sport', price: 800, speed: 1.03, grip: 1.08, desc: 'Lively all-mountain ski. +3% glide speed, better edge hold.' },
+  { id: 'park', name: 'Twin Tip Park 168', model: 'ski_park', fallback: 'ski_sport', price: 1000, speed: 1.02, grip: 1.1, desc: 'Twin-tip freestyle ski for the park. Pops off kickers, lands switch.' },
+  { id: 'powder', name: 'Powder Hound 184', model: 'ski_powder', fallback: 'ski_sport', price: 1200, speed: 1.03, grip: 1.12, desc: 'Wide freeride ski. Floats off-piste and stays calm at speed.' },
+  { id: 'touring', name: 'Summit Touring 176', model: 'ski_touring', fallback: 'ski_sport', price: 1600, speed: 1.04, grip: 1.1, desc: 'Light touring ski. Quick and nimble everywhere on the mountain.' },
+  { id: 'carver', name: 'Slalom Carver SL', model: 'ski_carver', fallback: 'ski_pro', price: 2200, speed: 1.045, grip: 1.2, desc: 'Short-radius slalom ski. Bites hard on every turn.' },
+  { id: 'pro', name: 'World Cup GS Pro', model: 'ski_pro', price: 3000, speed: 1.06, grip: 1.16, desc: 'Race-stock giant slalom ski. +6% speed, razor edges.' },
+  { id: 'gs', name: 'Giant Slalom R30', model: 'ski_gs', fallback: 'ski_pro', price: 4000, speed: 1.07, grip: 1.18, desc: 'World Cup giant slalom ski. Fast and stable through long turns.' },
+  { id: 'superg', name: 'Super-G Arrow', model: 'ski_superg', fallback: 'ski_elite', price: 5500, speed: 1.085, grip: 1.2, desc: 'Long super-G race ski built for pure speed.' },
+  { id: 'elite', name: 'Legacy Elite Downhill', model: 'ski_elite', fallback: 'ski_pro', price: 8000, speed: 1.1, grip: 1.22, desc: 'Hand-built downhill weapon. +10% speed, unmatched stability.' },
+  { id: 'legend', name: 'Legacy Gold Edition', model: 'ski_legend', fallback: 'ski_elite', price: 12000, speed: 1.12, grip: 1.25, desc: 'The ultimate ski. +12% speed and perfect edge grip.' },
 ];
 
 export const GEAR_YOU_OWN = ['Helmet', 'Goggles', 'Ski jacket', 'Ski pants', 'Gloves', 'Ski boots'];
 
-export const PRICES = { gondola: 25, chair: 10, dayPass: 50, hotChocolate: 6 };
+// The economy (Oct 29 rebalance, see the table in jobs/catalog.js): a good hour of jobs pays ~$9,000, of races
+// ~$15,000+; a lift ride is a few seconds of that, a day pass (one game day = 16 min) about a minute.
+export const PRICES = { gondola: 50, chair: 20, dayPass: 150, hotChocolate: 8 };
 
 const KEY = 'ski-legacy-save-v1';
 
 export const save = {
-  money: 5000,
+  money: 500, // a new save: basic skis and a day pass, then jobs and races
   skis: null, // equipped ski id
   owned: [],
   character: 'skier_blue', // the player character: 'skier_red' (man) or 'skier_blue' (woman), see characters.js

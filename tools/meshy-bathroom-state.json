@@ -1,21 +1,28 @@
 {
   "toilet": {
     "preview": "01a183ce-9e2e-74f1-94cf-5b3a444d198d",
-    "refine": "01a183f6-ede9-71f5-81be-d2ef378a7b73"
+    "refine": "01a183f6-ede9-71f5-81be-d2ef378a7b73",
+    "done": true
   },
   "washbasin": {
-    "preview": "01a183ce-9e2f-743e-83cd-480fabab30de"
+    "preview": "01a183ce-9e2f-743e-83cd-480fabab30de",
+    "refine": "01a186b3-b613-775d-aded-a416b7e232fd",
+    "done": true
   },
   "shower": {
     "preview": "01a183ce-9e23-762b-a3b0-1c626d35982b",
-    "refine": "01a183f6-ed2d-76ad-a99b-c7da1bee3464"
+    "refine": "01a183f6-ed2d-76ad-a99b-c7da1bee3464",
+    "done": true
   },
   "bathtub": {
     "preview": "01a183ce-9e30-7250-af10-8ff6daf7841c",
-    "refine": "01a183f8-c0a1-74c6-a788-919092430dad"
+    "refine": "01a183f8-c0a1-74c6-a788-919092430dad",
+    "done": true
   },
   "bath_mirror": {
-    "preview": "01a183ce-9e30-700e-9470-9f52e3292135"
+    "preview": "01a183ce-9e30-700e-9470-9f52e3292135",
+    "refine": "01a186b3-b410-7228-8620-8412db4687d5",
+    "done": true
   },
   "towel_hooks": {
     "preview": "01a183ce-9e2c-7420-87da-ff990f87b60b",
@@ -28,15 +35,23 @@
     "done": true
   },
   "antler_lamp": {
-    "preview": "01a183ce-9e3e-75f3-b0a7-98074f20be28"
+    "preview": "01a183ce-9e3e-75f3-b0a7-98074f20be28",
+    "refine": "01a186b3-b41c-71a0-937c-0a8cc22d996c",
+    "done": true
   },
   "wall_lamp": {
-    "preview": "01a183ce-9e2d-75ad-9724-75fc8c528f60"
+    "preview": "01a183ce-9e2d-75ad-9724-75fc8c528f60",
+    "refine": "01a186b3-b414-74ec-ac96-8bd3c6dee8c5",
+    "done": true
   },
   "snowman": {
-    "preview": "01a183df-28a1-76e1-acc6-86a174c0c6bf"
+    "preview": "01a183df-28a1-76e1-acc6-86a174c0c6bf",
+    "refine": "01a186b3-b406-750a-b765-9baaec50c5b6",
+    "done": true
   },
   "sledge": {
-    "preview": "01a183df-28ae-737e-86c9-f410d0dcf6fa"
+    "preview": "01a183df-28ae-737e-86c9-f410d0dcf6fa",
+    "refine": "01a186b3-b41b-7790-8744-ad928798f91d",
+    "done": true
   }
 }

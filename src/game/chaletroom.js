@@ -470,7 +470,7 @@ export class ChaletRoom {
       loadGLB(`bathroom/${id}`).then((gl) => {
         if (!gl) return;
         const m = gl.scene.clone(true);
-        m.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); interiorLit(o.material); o.castShadow = o.receiveShadow = false; if (/glass/i.test(o.material.name || '') || id === 'shower') { /* keep */ } } });
+        m.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); interiorLit(o.material); o.castShadow = o.receiveShadow = false; if (id === 'shower') { o.material.transparent = true; o.material.opacity = 0.5; o.material.depthWrite = false; o.renderOrder = 2; /* (its glass walls: Meshy bakes them opaque) */ } } });
         const b = new THREE.Box3().setFromObject(m), s = new THREE.Vector3(); b.getSize(s);
         const k = size / Math.max(1e-3, axis === 'h' ? s.y : axis === 'x' ? s.x : Math.max(s.x, s.z));
         m.scale.setScalar(k);
@@ -497,12 +497,12 @@ export class ChaletRoom {
     // vanity on the wall to the snug, the mirror over it
     fixture('toilet', 1.5 + IT / 2 + 0.36, G, 2.55, Math.PI / 2, 0.8, 'h', toilet);   // (0.8 m to the cistern's top)
     this.round.ground.push({ x: 1.5 + 0.4, z: 2.55, r: 0.3 });
-    fixture('washbasin', 2.9, G, 4.5 - IT / 2 - 0.25, Math.PI, 0.65, 'x', basin);    // (a 65 cm vanity, 85 cm high)
-    this.boxes.ground.push({ x: 2.9, z: 4.5 - 0.28, hw: 0.33, hd: 0.24, rot: 0 });
-    fixture('bath_mirror', 2.9, G + 1.25, 4.5 - IT / 2 - 0.02, Math.PI, 0.6, 'x');
-    { // the glass shower (0.9 x 0.9 m) in the corner by the front wall
-      const x1 = IX, x0 = x1 - 0.95, z1 = 4.5 - IT / 2, z0 = z1 - 0.95;
-      fixture('shower', (x0 + x1) / 2, G, (z0 + z1) / 2, -Math.PI / 2, 0.95, 'xz', (g) => {
+    fixture('washbasin', 2.05, G, 4.5 - IT / 2 - 0.28, Math.PI, 0.65, 'x', basin);    // (a 65 cm vanity, ~0.9 m high)
+    this.boxes.ground.push({ x: 2.05, z: 4.5 - 0.3, hw: 0.33, hd: 0.27, rot: 0 });
+    fixture('bath_mirror', 2.05, G + 1.25, 4.5 - IT / 2 - 0.02, Math.PI, 0.6, 'x');
+    { // the glass shower (2.0 m tall, ~1.15 x 1.33 m) in the corner by the front wall
+      const x1 = IX, x0 = x1 - 1.15, z1 = 4.5 - IT / 2, z0 = z1 - 1.33;
+      fixture('shower', (x0 + x1) / 2, G, (z0 + z1) / 2, -Math.PI / 2, 2.0, 'h', (g) => {
         const s = new THREE.Group();
         const tray = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.06, 0.95), M.ceramic); tray.position.y = 0.03; s.add(tray);
         const gl1 = new THREE.Mesh(new THREE.BoxGeometry(0.012, 1.95, 0.5), M.glass); gl1.position.set(0.47, 1.0, 0.22); s.add(gl1);
@@ -514,8 +514,8 @@ export class ChaletRoom {
     // toilet under the dormer window, the vanity on the stairwell's wall
     {
       const x0 = -IX, x1 = x0 + 0.8, z0 = -2.6, z1 = -0.9;
-      fixture('bathtub', (x0 + x1) / 2, FL, (z0 + z1) / 2, 0, 1.7, 'xz', (g) => {
-        const s = new THREE.Group(); const t = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.56, 1.7), M.ceramic); t.position.y = 0.28; s.add(t); g.add(s); return s;
+      fixture('bathtub', (x0 + x1) / 2, FL, (z0 + z1) / 2, Math.PI / 2, 1.7, 'xz', (g) => { // (the model's long side: its x)
+        const s = new THREE.Group(); const t = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.56, 0.78), M.ceramic); t.position.y = 0.28; s.add(t); g.add(s); return s;
       });
       this.solid.up.push([x1, z0, x1, z1, 0.03], [x0, z1, x1, z1, 0.03]);
     }
@@ -537,7 +537,7 @@ export class ChaletRoom {
         const m = gl.scene.clone(true);
         m.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); if (o.material.emissive) { o.material.emissive.set(0xffb46b); o.material.emissiveIntensity = 0.35; if (!o.material.emissiveMap && o.material.map) o.material.emissiveMap = o.material.map; } interiorLit(o.material); } });
         const b = new THREE.Box3().setFromObject(m), s = new THREE.Vector3(); b.getSize(s);
-        m.scale.setScalar(size / Math.max(1e-3, id === 'wall_lamp' ? s.y : Math.max(s.x, s.z)));
+        m.scale.setScalar(size / Math.max(1e-3, id === 'antler_lamp' ? Math.max(s.x, s.z) : s.y)); // (pendant, sconce: by height)
         m.updateMatrixWorld(true); b.setFromObject(m);
         // pendants hang from y (their top at it); sconces: their back on the wall (local -z), centred on y
         if (id === 'wall_lamp') m.position.set(-(b.min.x + b.max.x) / 2, -(b.min.y + b.max.y) / 2, -b.min.z);
@@ -547,7 +547,7 @@ export class ChaletRoom {
         // a warm glowing bulb in it (the model's own shade might be opaque)
       }).catch(() => null);
       const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), M.lamp);
-      bulb.position.set(0, id === 'wall_lamp' ? 0.0 : -size * 0.45, id === 'wall_lamp' ? 0.14 : 0); g.add(bulb);
+      bulb.position.set(0, id === 'wall_lamp' ? 0.0 : id === 'antler_lamp' ? -size * 0.6 : -size * 0.85, id === 'wall_lamp' ? 0.12 : 0); g.add(bulb);
       g.updateMatrixWorld(true);
       const p = bulb.getWorldPosition(new THREE.Vector3()); // (house frame: the house group is at the origin now)
       this.lamps.push({ x: p.x, y: p.y, z: p.z, level, power });
@@ -558,11 +558,11 @@ export class ChaletRoom {
     for (const r of ROOMS) {
       const q = r.rects.reduce((a, b) => ((b.x1 - b.x0) * (b.z1 - b.z0) > (a.x1 - a.x0) * (a.z1 - a.z0) ? b : a));
       const x = (q.x0 + q.x1) / 2, z = (q.z0 + q.z1) / 2, up = r.level === 'up';
-      const y = up ? Math.min(ceilingUp(x, z), FL + COLLAR) - 0.12 : GC - 0.2;
+      const y = up ? Math.min(ceilingUp(x, z), FL + COLLAR) - 0.02 : GC - 0.02; // (hung from the ceiling, its bottom ~1.95 m over the floor)
       if (r.id === 'living') {
         lamp('antler_lamp', x - 1.6, y, z, 0, 0.75, 'ground', 1.0, pendant);
-        lamp('pendant_lamp', x + 1.9, y, z, 0, 0.55, 'ground', 0.8, pendant);
-      } else lamp('pendant_lamp', x, y, z, 0, r.bath ? 0.4 : 0.5, r.level, r.bath ? 0.6 : 0.8, pendant);
+        lamp('pendant_lamp', x + 1.9, y, z, 0, 0.7, 'ground', 0.8, pendant);
+      } else lamp('pendant_lamp', x, y, z, 0, r.bath ? 0.5 : 0.7, r.level, r.bath ? 0.6 : 0.8, pendant);
     }
     // wall sconces: the living room's back wall, the hall, the snug, the landing; 1.75 m over the floor
     const sy = G + 1.75;

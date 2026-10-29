@@ -999,6 +999,8 @@ export class Drive {
     if (!d || d.crash || performance.now() - (this.knockT || 0) < 600) return;
     this.knockT = performance.now();
     const e = d.e, add = 2 + (v - KNOCK_V) * 0.7;
+    // the knock that takes it to 100 %: wrecked (before, knocks stopped at 99 % and the car never broke down)
+    if ((e.damage || 0) + add >= 100 && this.canCrash()) { e.damage = 100; this.crash(CRASH_V, nx, nz, 'car'); return; }
     e.damage = Math.min(99, (e.damage || 0) + add);
     this.dent(nx, nz, Math.min(0.45, (v - KNOCK_V) / 22));
     this.shake = Math.max(this.shake, 0.35);

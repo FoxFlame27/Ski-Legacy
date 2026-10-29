@@ -216,17 +216,22 @@ function keepRight(ids) {
 }
 
 const CSS = `
-#police-hud { position: fixed; top: 74px; left: 50%; transform: translateX(-50%); z-index: 40; pointer-events: none; min-width: 300px; max-width: 92vw;
-  font: 600 14px/1.35 system-ui, -apple-system, Segoe UI, sans-serif; color: #fff; text-align: center; background: rgba(8, 14, 38, 0.82);
-  border: 2px solid #2f62ff; border-radius: 10px; padding: 8px 14px 9px; box-shadow: 0 6px 22px rgba(0,0,0,0.35); animation: pl-flash 0.6s steps(1) infinite; }
+#police-hud { position: absolute; top: 20px; right: 22px; width: 250px; padding: 12px 24px 14px 22px; background: #fff; color: var(--blue, #1546c8);
+  clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; }
 #police-hud[hidden] { display: none; }
-#police-hud .pl-top { font-size: 17px; letter-spacing: 0.08em; }
-#police-hud .pl-top b { color: #ffe14a; }
-#police-hud .pl-msg { margin-top: 3px; font-weight: 500; }
-#police-hud .pl-esc { margin-top: 6px; font-size: 12.5px; font-weight: 500; opacity: 0.95; }
-#police-hud .pl-bar { height: 5px; margin-top: 3px; border-radius: 3px; background: rgba(255,255,255,0.18); overflow: hidden; }
-#police-hud .pl-bar i { display: block; height: 100%; width: 0; background: #ffe14a; }
-@keyframes pl-flash { 0% { border-color: #2f62ff; } 50% { border-color: #e2232a; } }`;
+#police-hud .pl-lights { display: flex; gap: 6px; margin-bottom: 6px; }
+#police-hud .pl-lights i { flex: 1; height: 4px; border-radius: 2px; background: #1546c8; animation: pl-blink 0.5s steps(1) infinite; }
+#police-hud .pl-lights i + i { background: #ff4d3d; animation-delay: 0.25s; }
+#police-hud .pl-head { display: flex; align-items: baseline; justify-content: space-between; font-family: var(--num); font-style: italic; font-weight: 700; }
+#police-hud .pl-head b { font-size: 26px; letter-spacing: 0.06em; color: #ff4d3d; }
+#police-hud .pl-t { font-size: 22px; font-variant-numeric: tabular-nums; }
+#police-hud .pl-msg { margin-top: 4px; font-size: 13px; font-weight: 700; line-height: 1.3; }
+#police-hud .pl-esc { margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(21, 70, 200, 0.18); }
+#police-hud .pl-esc[hidden] { display: none; }
+#police-hud .pl-esc span { display: block; font-size: 12px; font-weight: 700; color: var(--blue-dim, #4f72d4); font-variant-numeric: tabular-nums; }
+#police-hud .pl-bar { height: 6px; margin-top: 5px; background: rgba(21, 70, 200, 0.14); clip-path: var(--brush-b); }
+#police-hud .pl-bar i { display: block; height: 100%; width: 0; background: #1546c8; }
+@keyframes pl-blink { 0% { opacity: 1; } 50% { opacity: 0.15; } }`;
 
 // ------------------------------------------------------------------ the police
 export class Police {
@@ -261,10 +266,10 @@ export class Police {
     if (!document.getElementById('police-css')) { const s = document.createElement('style'); s.id = 'police-css'; s.textContent = CSS; document.head.appendChild(s); }
     const el = document.createElement('div');
     el.id = 'police-hud'; el.hidden = true;
-    el.innerHTML = '<div class="pl-top">&#9733; <b>WANTED</b> <span class="pl-t"></span></div><div class="pl-msg"></div><div class="pl-esc"><span></span><div class="pl-bar"><i></i></div></div>';
-    document.body.appendChild(el);
+    el.innerHTML = '<div class="pl-lights"><i></i><i></i></div><div class="pl-head"><b>WANTED</b><span class="pl-t"></span></div><div class="pl-msg"></div><div class="pl-esc"><span></span><div class="pl-bar"><i></i></div></div>';
+    (document.getElementById('hud') || document.body).appendChild(el);
     this.el = el;
-    this.$t = el.querySelector('.pl-t'); this.$msg = el.querySelector('.pl-msg'); this.$esc = el.querySelector('.pl-esc span'); this.$bar = el.querySelector('.pl-bar i');
+    this.$t = el.querySelector('.pl-t'); this.$msg = el.querySelector('.pl-msg'); this.$escBox = el.querySelector('.pl-esc'); this.$esc = el.querySelector('.pl-esc span'); this.$bar = el.querySelector('.pl-bar i');
     this.hudCache = {};
   }
   setHud(show, t = '', msg = '', esc = '', frac = 0) {
@@ -274,7 +279,7 @@ export class Police {
     const C = this.hudCache;
     if (C.t !== t) this.$t.textContent = C.t = t;
     if (C.msg !== msg) this.$msg.textContent = C.msg = msg;
-    if (C.esc !== esc) this.$esc.textContent = C.esc = esc;
+    if (C.esc !== esc) { this.$esc.textContent = C.esc = esc; this.$escBox.hidden = !esc; }
     const w = `${Math.round(frac * 100)}%`;
     if (C.w !== w) this.$bar.style.width = C.w = w;
   }
@@ -893,8 +898,8 @@ export class Police {
     const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : 'Pulled over · stay in the car · $500 fine') : 'Under arrest')
       : W.fleeing ? 'Fleeing · they will ram you · stop to give up'
         : W.reached ? `Pull over now: stop to pay the $500 fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : 'Police! Stop to pay a $500 fine, or get away';
-    const near = Number.isFinite(W.near) ? ` · nearest ${Math.round(W.near)} m` : '';
-    const esc = S ? '' : `Escape ${mmss(W.esc)} / ${mmss(TUNING.escapeS)} (more than ${TUNING.escapeR} m away)${near}`;
+    const near = Number.isFinite(W.near) ? ` · police ${Math.round(W.near)} m` : '';
+    const esc = S ? '' : `Escape ${mmss(W.esc)} / ${mmss(TUNING.escapeS)} · stay ${TUNING.escapeR} m+ away${near}`;
     this.setHud(true, mmss(W.t), msg, esc, S ? 0 : W.esc / TUNING.escapeS);
   }
   /** Trail map: the patrol cars while you are wanted (blue dots). */

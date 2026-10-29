@@ -83,7 +83,7 @@ export class RigPool {
     this.all.length = 0; this.free.length = 0;
   }
 }
-function resetRig(r) {
+export function resetRig(r) {
   r.root.parent?.remove(r.root);
   r.gear?.parent?.remove(r.gear);
   r.root.position.set(0, 0, 0); r.root.rotation.set(0, 0, 0); r.root.visible = true;

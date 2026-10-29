@@ -170,6 +170,15 @@ export class CarPeople {
     }
   }
 
+  /** A plain driver (placed by the car's driver eye, see fillByEye) baked from any rig: police.js, the officer at
+   *  the patrol car's wheel. The rig is posed for it (pass a spare one). */
+  async bakeDriver(rig) {
+    await MeshoptSimplifier.ready;
+    if (!rig?.root || !rig.b?.hips) return null;
+    if (rig.gear) rig.gear.visible = false;
+    return this.bakeOne(rig, 0, 'driver', null);
+  }
+
   // one seated figure: S (seat hints) for a driver baked for that model; S null and a driver: the plain one (as before)
   bakeOne(rig, n, role, S) {
     const b = rig.b, driver = role === 'driver', fitted = !driver || !!S;

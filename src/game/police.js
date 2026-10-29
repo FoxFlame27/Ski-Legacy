@@ -32,9 +32,15 @@ import { busRoads } from './bus/roads.js';
 import { roadGraph, roadNearest, roadShortest, obb } from './towtruck.js';
 import { addTrafficBlocker } from './traffic.js';
 import { makeFallbackFigure } from './jobs/props.js';
+import { resetRig } from './jobs/actors.js';
 import { net } from '../net/client.js';
 import { isMP } from '../net/mode.js';
 import { ST } from '../net/protocol.js';
+
+// The officers: a Meshy police officer in a navy winter uniform + hi-vis vest (tools/meshy-officer.mjs,
+// public/models/police_officer_rigged.glb + _anims.glb), loaded in the background (never blocks the start). Until it is
+// in (or without it): a skier from the job pool, else a stand-in figure. Only the police use him (not the NPC lists).
+const OFFICER = 'police_officer';
 
 export const TUNING = {
   triggerKmh: 25,    // a hit at this closing speed (km/h) or more calls the police
@@ -251,6 +257,8 @@ export class Police {
     this.sirenOn = false;
     this.lightsT = 0;
     policeModelReady();
+    this.officerRigs = []; // the officer's rigs not in use (his own, never the job pool's)
+    this.loadOfficer();
     // the traffic brakes for the patrol cars (boxes in its way)
     this.unblock = addTrafficBlocker((out) => { for (const u of this.units) if (u.on) { u.box.x = u.x; u.box.y = u.y; u.box.z = u.z; u.box.yaw = u.yaw; out.push(u.box); } });
     // drive.js: your car hit something (chained: another listener keeps working)
@@ -312,12 +320,52 @@ export class Police {
     this.units[k] = u;
     return u;
   }
-  // a driver at the wheel (traffic.js's baked seated figures, carpeople.js)
+  // the police officer model, loaded after the start; once in, every officer on foot is one and the patrol cars'
+  // driver is him baked seated (carpeople.js)
+  loadOfficer() {
+    const m = this.models;
+    if (!m || this.officerLoading) return;
+    this.officerLoading = Promise.all([loadGLB(`${OFFICER}_rigged`), loadGLB(`${OFFICER}_anims`)]).then(async ([rig, anims]) => {
+      if (!rig || this.disposed) return false;
+      m[`${OFFICER}_rigged`] = rig;
+      if (anims) m[`${OFFICER}_anims`] = anims;
+      this.hasOfficer = true;
+      try { await this.bakeOfficerDriver(); } catch (e) { console.warn('police officer driver', e); }
+      return true;
+    }).catch((e) => { console.warn('police officer', e); return false; });
+  }
+  newOfficerRig() {
+    try {
+      const rig = this.jobs?.makeRig?.(OFFICER, 'rental');
+      if (rig?.root && typeof rig.update === 'function') return { own: true, char: OFFICER, rig };
+    } catch (e) { console.warn('police officer rig', e); }
+    this.hasOfficer = false; // (never retried: the skiers stand in)
+    return null;
+  }
+  // the officer baked seated as the patrol cars' driver; drivers already at the wheel swap to him
+  async bakeOfficerDriver() {
+    const people = this.traffic?.people;
+    if (!people?.bakeDriver) return;
+    await people.ready;
+    const rig = this.jobs?.makeRig?.(OFFICER, 'rental');
+    const fig = rig ? await people.bakeDriver(rig) : null;
+    if (!fig || this.disposed) return;
+    this.officerFig = fig;
+    for (const u of this.units) {
+      if (!u.driver) continue;
+      const vis = u.driver.visible;
+      u.driver.removeFromParent(); u.driver = null;
+      this.seatDriver(u);
+      if (u.driver) u.driver.visible = vis;
+    }
+  }
+  // a driver at the wheel: the officer (above), else traffic.js's baked seated figures (carpeople.js)
   seatDriver(u) {
     if (u.driver) return;
     const figs = this.traffic?.people?.figs?.driver;
-    if (!figs?.length) return;
-    const fig = figs[u.k % figs.length], E = u.m.eye, o = new THREE.Group();
+    const fig = this.officerFig || (figs?.length ? figs[u.k % figs.length] : null);
+    if (!fig) return;
+    const E = u.m.eye, o = new THREE.Group();
     o.position.set(E.x - fig.eye.x, E.y - fig.eye.y, E.z - fig.eye.z);
     for (const p of fig.parts) { const mesh = new THREE.Mesh(p.geo, p.mat); mesh.castShadow = false; o.add(mesh); }
     u.g.add(o);
@@ -678,14 +726,18 @@ export class Police {
     else if (why === 'wrecked') this.hud?.flash?.('Your car is wrecked · the police are coming for you', 'bad', 3200);
     else if (why === 'stopped') this.hud?.flash?.('Stopped · you are under arrest', 'bad', 2600);
   }
-  // the officer: a skier rig on foot from the job pool (jobs/actors.js), else a stand-in figure
+  // the officer: the police officer's rig on foot (his own, see loadOfficer), else a skier from the job pool
+  // (jobs/actors.js), else a stand-in figure
   spawnOfficer(u) {
     if (u.officer) return u.officer;
     const s = Math.sin(u.yaw), c = Math.cos(u.yaw);
     const x = u.x + c * (u.hw + 0.6) + s * 0.2, z = u.z - s * (u.hw + 0.6) + c * 0.2; // (out by the driver's door: +x)
     const pos = new THREE.Vector3(x, world.groundHeight(x, z, u.y + 2), z);
     const st = { mode: 'idle', heading: u.yaw, speed: 0, crouch: 0, lean: 0, plow: 0, tuck: false, normal: UP, air: false, carry: false, seat: null };
-    const pool = this.jobs?.pool, slot = pool ? pool.take('skier_blue', this.player?.rigChar) : null, rig = slot?.rig || null;
+    let slot = this.hasOfficer ? this.officerRigs.pop() || this.newOfficerRig() : null;
+    if (slot) resetRig(slot.rig);
+    else { const pool = this.jobs?.pool; slot = pool ? pool.take('skier_blue', this.player?.rigChar) : null; }
+    const rig = slot?.rig || null;
     let root;
     if (rig) {
       root = rig.root;
@@ -702,7 +754,10 @@ export class Police {
   dropOfficer(u) {
     const o = u.officer;
     if (!o) return;
-    if (o.rig) { o.rig.root.removeFromParent(); o.rig.gear?.removeFromParent(); if (o.slot) this.jobs?.pool?.give(o.slot); }
+    if (o.rig) {
+      o.rig.root.removeFromParent(); o.rig.gear?.removeFromParent();
+      if (o.slot?.own) { resetRig(o.rig); this.officerRigs.push(o.slot); } else if (o.slot) this.jobs?.pool?.give(o.slot);
+    }
     else { o.root.removeFromParent(); o.root.userData?.ownGeometry?.dispose?.(); }
     u.officer = null;
     if (u.driver) u.driver.visible = true;
@@ -924,6 +979,7 @@ export class Police {
   }
 
   dispose() {
+    this.disposed = true;
     this.clear(true);
     this.unblock?.();
     for (const u of this.units) { u.g.removeFromParent(); const i = this.colliders?.indexOf(u.col); if (i >= 0) this.colliders.splice(i, 1); }

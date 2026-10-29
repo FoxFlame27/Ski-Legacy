@@ -130,12 +130,12 @@ export function plateTexture(text) {
 const PLATE_SPOT = {
   car_bmw_x3: { f: [0.534, 0], r: [0.965, 15] },
   car_audi_rs6: { f: [0.48, 8], r: [0.80, 14] },
-  car_tesla_m3: { f: [0.45, -7], r: [0.759, 8] },
+  car_tesla_m3: { f: [0.48, -7], r: [0.815, 8] }, // (Oct 29, the user: both up a bit)
   car_vw_golf_gti: { f: [0.492, 0, 2.15], r: [0.475, 4] },
   car_mercedes_sls: { f: [0.275, 0], r: [0.44, 0] },
   car_porsche_taycan: { f: [0.43, -6], r: [0.41, 0] },
-  car_lamborghini_huracan: { f: [0.30, 0], r: [0.583, 4] },
-  car_toyota_gr_yaris: { f: [0.473, 0], r: [0.80, 18] },
+  car_lamborghini_huracan: { f: null, r: [0.583, 4] }, // (no front plate: Oct 29, the user)
+  car_toyota_gr_yaris: { f: [0.473, 0], r: [0.855, 18] }, // (rear up in its recess: Oct 29, the user)
   car_audi_etron_gt: { f: [0.45, 0], r: [0.70, 15] },
   car_mercedes_gls: { f: [0.5635, 0, 2.6], r: [1.11, 14] }, // (rear: on the tailgate between the lights, under the star; Oct 29, the user: "way higher like real gls models")
 };
@@ -151,7 +151,9 @@ export function plateSpots(t) {
     const meshes = parts.map((p) => new THREE.Mesh(p.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
     const L = t.size.z / 2, rc = new THREE.Raycaster(), o = new THREE.Vector3();
     for (const k of [0, 1]) {
-      const s = k ? -1 : 1, [y, tilt, zFace] = k ? spec.r : spec.f, a = tilt * Math.PI / 180;
+      const sp = k ? spec.r : spec.f;
+      if (!sp) continue; // (no plate there)
+      const s = k ? -1 : 1, [y, tilt, zFace] = sp, a = tilt * Math.PI / 180;
       const n = new THREE.Vector3(0, Math.sin(a), s * Math.cos(a));
       // (seen from outside it reads left to right: at the back the plate's x is the car's -x)
       const x = new THREE.Vector3(s, 0, 0), up = new THREE.Vector3().crossVectors(n, x);

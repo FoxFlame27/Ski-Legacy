@@ -32,17 +32,17 @@ import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, 
 // (Oct 29, AUTOHAUS: bought for good at dealership prices, set against ~$9,000 an hour of jobs (jobs/catalog.js) and the
 // $50,000 chalet: the Golf after an hour or two of jobs, the supercars long-term goals)
 export const RENTALS = [
-  { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 15000, length: 4.3 },
-  { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 24000, length: 4.7 },
-  { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 30000, length: 4.7 },
-  { id: 'car_toyota_gr_yaris', label: 'Toyota GR Yaris', kind: 'Rally hot hatch', price: 34000, length: 3.99 },
-  { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 60000, length: 5.0 },
-  { id: 'car_mercedes_gls', label: 'Mercedes-Benz GLS', kind: 'Luxury SUV · 7 seats', price: 75000, length: 5.2 },
-  { id: 'car_audi_etron_gt', label: 'Audi e-tron GT', kind: 'Electric grand tourer', price: 90000, length: 4.96 },
+  { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 11250, length: 4.3 },
+  { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 18000, length: 4.7 },
+  { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 22500, length: 4.7 },
+  { id: 'car_toyota_gr_yaris', label: 'Toyota GR Yaris', kind: 'Rally hot hatch', price: 25500, length: 3.99 },
+  { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 45000, length: 5.0 },
+  { id: 'car_mercedes_gls', label: 'Mercedes-Benz GLS', kind: 'Luxury SUV · 7 seats', price: 56250, length: 5.2 },
+  { id: 'car_audi_etron_gt', label: 'Audi e-tron GT', kind: 'Electric grand tourer', price: 67500, length: 4.96 },
   // upstairs, the supercar floor (UPPER: on the mezzanine, bought the same way: walk up, E at it, or pick it here)
-  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 130000, length: 4.96 },
-  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 170000, length: 4.64 },
-  { id: 'car_lamborghini_huracan', label: 'Lamborghini Huracán EVO', kind: 'V10 supercar', price: 220000, length: 4.52 },
+  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 97500, length: 4.96 },
+  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 127500, length: 4.64 },
+  { id: 'car_lamborghini_huracan', label: 'Lamborghini Huracán EVO', kind: 'V10 supercar', price: 165000, length: 4.52 },
 ];
 // (saves from before the Dacia left the fleet, Oct 29: its rental comes back as the Golf)
 const RETIRED = { car_dacia_duster: 'car_vw_golf_gti' };

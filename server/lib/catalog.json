@@ -61,16 +61,16 @@
   "count": 18
  },
  "cars": {
-  "car_vw_golf_gti": 15000,
-  "car_tesla_m3": 24000,
-  "car_bmw_x3": 30000,
-  "car_toyota_gr_yaris": 34000,
-  "car_audi_rs6": 60000,
-  "car_mercedes_gls": 75000,
-  "car_audi_etron_gt": 90000,
-  "car_porsche_taycan": 130000,
-  "car_mercedes_sls": 170000,
-  "car_lamborghini_huracan": 220000
+  "car_vw_golf_gti": 11250,
+  "car_tesla_m3": 18000,
+  "car_bmw_x3": 22500,
+  "car_toyota_gr_yaris": 25500,
+  "car_audi_rs6": 45000,
+  "car_mercedes_gls": 56250,
+  "car_audi_etron_gt": 67500,
+  "car_porsche_taycan": 97500,
+  "car_mercedes_sls": 127500,
+  "car_lamborghini_huracan": 165000
  },
  "paints": {
   "white": 0,

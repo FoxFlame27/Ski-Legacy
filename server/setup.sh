@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
-# Ski Legacy multiplayer server: one-shot setup for a fresh Ubuntu / Debian VPS (run as root). Safe to run again:
+# Ski Legacy multiplayer server: one-shot setup for an Ubuntu / Debian VPS (run as root). Safe to run again:
 # every step checks first, so the same command also UPDATES the server to the latest code on GitHub.
 #
 #   From your Mac (in the game's folder):
 #     ssh -i ~/Downloads/hetzner_rsa root@138.199.163.183 'bash -s' < server/setup.sh
 #
-# What it does: installs Node 20 (NodeSource), git, ufw and Caddy (official apt repo); creates the `skilegacy`
-# user; fetches the server/ folder of https://github.com/FoxFlame27/Ski-Legacy (branch legacy-express) into
-# /opt/skilegacy/server (or copies it from $SRC_DIR if you set that, e.g. after uploading a tarball); runs npm ci;
-# installs the systemd service `skilegacy` (restart always); writes the Caddyfile that serves
-#   wss://138-199-163-183.sslip.io/ws  ->  the Node server on 127.0.0.1:8787   (Let's Encrypt certificate, automatic)
-# and opens the firewall for SSH (22 + your sshd port), 80 and 443. Player data lives in /var/lib/skilegacy and is
-# never touched by an update.
+# What it does: installs Node 20 (NodeSource) and git; creates the `skilegacy` user; fetches the server/ folder of
+# https://github.com/FoxFlame27/Ski-Legacy (branch legacy-express) into /opt/skilegacy/server (or copies it from
+# $SRC_DIR if you set that, e.g. after uploading a tarball); runs npm ci; installs the systemd service `skilegacy`
+# (restart always) and serves
+#   wss://138-199-163-183.sslip.io/ws  ->  the Node server on 127.0.0.1:8787
+# through a TLS front:
+#   - an nginx that already runs here (another website on this server) gets ONE extra site of its own for the game's
+#     hostname, with a Let's Encrypt certificate from certbot; your other sites are not touched (nginx -t is checked
+#     before every reload, and the game's site is taken out again if the check fails);
+#   - otherwise Caddy (automatic Let's Encrypt).
+# The firewall is never switched on; if ufw is already on, 80 and 443 are allowed. Player data lives in
+# /var/lib/skilegacy and is never touched by an update.
 set -euo pipefail
 
 REPO="${REPO:-https://github.com/FoxFlame27/Ski-Legacy.git}"
@@ -28,7 +33,7 @@ say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 
 say "Base packages"
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg git ufw debian-keyring debian-archive-keyring apt-transport-https rsync
+apt-get install -y ca-certificates curl gnupg git debian-keyring debian-archive-keyring apt-transport-https rsync
 
 say "Node.js 20"
 NODE_MAJOR=0
@@ -39,15 +44,26 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
 fi
 node -v
 
-say "Caddy"
-if ! command -v caddy >/dev/null 2>&1; then
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
-  chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update -y
-  apt-get install -y caddy
+# the TLS front: nginx when one already runs here (another website), else Caddy
+USE_NGINX=0
+if command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx; then USE_NGINX=1; fi
+if [ "$USE_NGINX" = 1 ]; then
+  say "nginx is already running: the game gets a site of its own (your other sites are not touched)"
+  # (an earlier run of this script may have installed Caddy: it must never take ports 80 / 443 from nginx)
+  if command -v caddy >/dev/null 2>&1; then systemctl disable --now caddy >/dev/null 2>&1 || true; fi
+  command -v certbot >/dev/null 2>&1 || apt-get install -y certbot
+  dpkg -s python3-certbot-nginx >/dev/null 2>&1 || apt-get install -y python3-certbot-nginx
+else
+  say "Caddy"
+  if ! command -v caddy >/dev/null 2>&1; then
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
+    chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -y
+    apt-get install -y caddy
+  fi
+  caddy version
 fi
-caddy version
 
 say "User and folders"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin "$SVC_USER"
@@ -81,7 +97,7 @@ chown -R root:root "$APP_DIR/server"
 chmod -R a+rX "$APP_DIR/server"
 
 say "systemd service"
-cat > /etc/systemd/system/skilegacy.service <<EOF
+cat > /etc/systemd/system/skilegacy.service <<UNIT
 [Unit]
 Description=Ski Legacy multiplayer server
 After=network-online.target
@@ -107,13 +123,68 @@ ReadWritePaths=$DATA_DIR
 
 [Install]
 WantedBy=multi-user.target
-EOF
+UNIT
 systemctl daemon-reload
 systemctl enable skilegacy >/dev/null
 systemctl restart skilegacy
 
-say "Caddy: https://$DOMAIN  (wss://$DOMAIN/ws)"
-cat > /etc/caddy/Caddyfile <<EOF
+if [ "$USE_NGINX" = 1 ]; then
+  say "nginx: https://$DOMAIN  (wss://$DOMAIN/ws)"
+  NGX_SITE=/etc/nginx/sites-available/skilegacy
+  NGX_LINK=/etc/nginx/sites-enabled/skilegacy
+  mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+  # reload only after nginx -t passes; on a failed check the game's site is taken out again (your sites keep running)
+  ngx_ok() {
+    if nginx -t >/dev/null 2>&1; then systemctl reload nginx
+    else echo "nginx config check failed: the game's site is taken out again" >&2; nginx -t || true; rm -f "$NGX_LINK"; exit 1; fi
+  }
+  if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    # first plain HTTP for the game's hostname, so certbot can prove it owns it
+    cat > "$NGX_SITE" <<SITE
+server {
+	listen 80;
+	listen [::]:80;
+	server_name $DOMAIN;
+	location / { return 200 "Ski Legacy multiplayer server\n"; }
+}
+SITE
+    ln -sf "$NGX_SITE" "$NGX_LINK"
+    ngx_ok
+    certbot certonly --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring
+  fi
+  cat > "$NGX_SITE" <<SITE
+# Ski Legacy multiplayer: TLS in front of the Node server; WebSockets on /ws.
+server {
+	listen 80;
+	listen [::]:80;
+	server_name $DOMAIN;
+	location / { return 301 https://\$host\$request_uri; }
+}
+server {
+	listen 443 ssl;
+	listen [::]:443 ssl;
+	server_name $DOMAIN;
+	ssl_certificate     /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+	ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
+	location /ws {
+		proxy_pass http://127.0.0.1:$PORT;
+		proxy_http_version 1.1;
+		proxy_set_header Upgrade \$http_upgrade;
+		proxy_set_header Connection "upgrade";
+		proxy_set_header Host \$host;
+		proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+		proxy_read_timeout 3600s;
+		proxy_send_timeout 3600s;
+	}
+	location /health { proxy_pass http://127.0.0.1:$PORT; }
+	location / { return 200 "Ski Legacy multiplayer server\n"; }
+}
+SITE
+  ln -sf "$NGX_SITE" "$NGX_LINK"
+  ngx_ok
+else
+  say "Caddy: https://$DOMAIN  (wss://$DOMAIN/ws)"
+  cat > /etc/caddy/Caddyfile <<CADDY
 # Ski Legacy: TLS (Let's Encrypt, automatic) in front of the Node server. WebSockets pass straight through.
 $DOMAIN {
 	handle /ws* {
@@ -126,26 +197,27 @@ $DOMAIN {
 		respond "Ski Legacy multiplayer server" 200
 	}
 }
-EOF
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-systemctl enable caddy >/dev/null
-systemctl reload caddy 2>/dev/null || systemctl restart caddy
+CADDY
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  systemctl enable caddy >/dev/null
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+fi
 
-say "Firewall (ufw): SSH, 80, 443"
-SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
-ufw allow 22/tcp >/dev/null
-[ -n "$SSH_PORT" ] && [ "$SSH_PORT" != "22" ] && ufw allow "$SSH_PORT/tcp" >/dev/null
-ufw allow 80/tcp >/dev/null
-ufw allow 443/tcp >/dev/null
-ufw allow 443/udp >/dev/null
-ufw --force enable >/dev/null
-ufw status | sed 's/^/   /'
+say "Firewall"
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  ufw allow 80/tcp >/dev/null
+  ufw allow 443/tcp >/dev/null
+  echo "   ufw is on: 80 and 443 allowed"
+else
+  echo "   ufw is off: nothing changed (a Hetzner Cloud Firewall, if you use one, must allow 80 and 443)"
+fi
 
 say "Check"
 sleep 2
 systemctl --no-pager --lines=5 status skilegacy || true
-curl -fsS "http://127.0.0.1:$PORT/health" && echo
+curl -fsS "http://127.0.0.1:$PORT/health" && echo || echo "(the game server did not answer yet: journalctl -u skilegacy -n 50)"
+sleep 1
+if curl -fsS "https://$DOMAIN/health" >/dev/null 2>&1; then echo "HTTPS check: OK"; else echo "HTTPS check failed (with Caddy the first one can take ~30 s while it gets the certificate)"; fi
 echo
 echo "Done. The game connects to wss://$DOMAIN/ws"
-echo "(The first HTTPS request can take ~30 s while Caddy gets the certificate.)"
-echo "Logs:    journalctl -u skilegacy -f        Caddy: journalctl -u caddy -f"
+echo "Logs:    journalctl -u skilegacy -f        web front: journalctl -u nginx -f (or -u caddy)"

@@ -1062,7 +1062,7 @@ export class Player {
     // (groundHeight takes a surface up to 0.6 m above its hint: the hint puts that at WALK_STEP above the boots)
     let ground = world.groundHeight(p.x, p.z, feetY + WALK_STEP - 0.6);
     // low obstacles with a flat top (rocks, benches, bollards, piers under a deck) within a step: stepped up onto
-    for (const c of this.colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
+    for (const c of this.colliders) { if (c.carOnly || c.noStep) continue; // (a vehicles-only barrier: people walk through; a guardrail: jumped over, never walked along on top)
       if (c.top === undefined || c.top <= ground || c.top > feetY + WALK_STEP) continue;
       const R = 0.35, reach = (c.r ?? Math.max(c.hw, c.hd)) + R;
       if (Math.abs(p.x - c.x) > reach || Math.abs(p.z - c.z) > reach) continue;
@@ -1115,6 +1115,10 @@ export class Player {
       // cheap reject first: most colliders (nets, signs, markers) are far away
       const reach = (c.r ?? Math.max(c.hw, c.hd)) + R;
       if (Math.abs(p.x - c.x) > reach || Math.abs(p.z - c.z) > reach) continue;
+      if (c.topA !== undefined) { // (a sloped top, a guardrail's: its height where you are along it, as drawn)
+        const cs0 = Math.cos(-c.rot), sn0 = Math.sin(-c.rot), lz = (p.x - c.x) * sn0 + (p.z - c.z) * cs0, L = Math.max(0.01, c.hd - 0.06);
+        if (feetY > c.topA + (c.topB - c.topA) * Math.min(1, Math.max(0, (lz + L) / (2 * L)))) continue;
+      }
       if (c.r !== undefined) {
         const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz);
         if (d < c.r + R) {

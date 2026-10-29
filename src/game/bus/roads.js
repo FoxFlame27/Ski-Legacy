@@ -21,7 +21,11 @@ const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
 const TURN_W = 110;        // cost of turning (per rad^2): long sweeping bends, few hairpins
 export const ROAD_HALF = 3.4;   // half the plowed width (m)
 const BENCH = ROAD_HALF + 5.2;  // flat shoulder either side of the centre line (the plough berms sit on it)
-const BERM_IN = ROAD_HALF + 0.8; // where the berm starts to rise (a strip of packed shoulder before it)
+// where the berm starts to rise (a strip of packed shoulder before it): 2.9 m past the plowed edge, so that every 2 m
+// triangle of the drawn terrain touching the road (up to 2.83 m off it) is on the flat shoulder; before (0.8 m) the
+// berm's foot lifted the drawn terrain under the road's edge up to ~0.4 m (the strip's edge, laid on that terrain,
+// curled up off the road surface you drive and walk on)
+const BERM_IN = ROAD_HALF + 2.9;
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -482,6 +486,8 @@ export function planBusRoads(stops) {
   try { planScenic(obstacles); } catch (e) { console.warn('scenic road', e); } // (after everything: its roads go last)
   try { planScenicLoop(obstacles); } catch (e) { console.warn('scenic loop', e); } // (more scenic roads off the Panorama roundabout)
   try { planChaletVillage(obstacles); } catch (e) { console.warn('chalet village', e); } // (its terraces' cut before the roads' cuts)
+  try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
+  try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
   shapeRoads(busRoads.roads.filter((r) => !r.scenic)); // (the scenic roads, appended last, carve their own cut: same indices)
   try { shapeScenic(); } catch (e) { console.warn('scenic road cut', e); }
   try { planAlmdorfStop(); } catch (e) { console.warn('Almdorf bus stop', e); } // (the chalet village's stop: the valley road split at its junction for the bus)
@@ -593,10 +599,11 @@ function shapeRoads(roads) {
       const u = dx * L.ux + dz * L.uz, v = dx * L.vx + dz * L.vz;
       const out = Math.hypot(Math.max(0, Math.abs(u) - L.hw), Math.max(0, Math.abs(v) - L.hd));
       const blend = Math.min(45, 6 + Math.abs(h - L.y) * 3.2);
-      if (out > blend + 6 && !(L.piles && out < 9)) continue;
-      let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(1.5, 1.5 + blend, out);
-      if (spacing <= 4 && !L.building && out > 1.4 && out < 5.4 && Math.hypot(x - L.ex, z - L.ez) > 10) {
-        const t = (out - 1.4) / 4, open = smoothstep(10, 15, Math.hypot(x - L.ex, z - L.ez)); // (tapered at the entrance, no step)
+      if (out > blend + 7.5 && !(L.piles && out < 13)) continue;
+      let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(2.9, 2.9 + blend, out); // (flat 2.9 m past the edge: see the berm)
+      // (the berm 2.9 m off the edge: the drawn terrain's 2 m triangles under the car park's edge stay flat)
+      if (spacing <= 4 && !L.building && out > 2.9 && out < 6.9 && Math.hypot(x - L.ex, z - L.ez) > 10) {
+        const t = (out - 2.9) / 4, open = smoothstep(10, 15, Math.hypot(x - L.ex, z - L.ez)); // (tapered at the entrance, no step)
         y += 0.65 * open * (t < 0.4 ? smoothstep(0, 0.4, t) : 1 - smoothstep(0.4, 1, t));
       }
       // ploughed snow piles: soft lumpy domes (the radius wanders with the angle, a few lumps on top)
@@ -610,7 +617,7 @@ function shapeRoads(roads) {
           const q = 1 - (r / R) * (r / R);
           pile = Math.max(pile, P.H * q * Math.sqrt(q) * (1 + 0.08 * Math.sin(px * 1.7 + P.p1) * Math.sin(pz * 1.9 + P.p2)));
         }
-        y += pile; // (on the ground under it: before, a pile off the car park's edge stood on the car park's level, a step)
+        y += pile * smoothstep(2.9, 4.5, out); // (on the ground under it: before, a pile off the car park's edge stood on the car park's level, a step; never on the car park or its edge)
       }
       if (out <= 0) { LS.y = y; LS.out = out; return LS; }
       h = y; any = true; outMin = Math.min(outMin, out);
@@ -710,7 +717,7 @@ function planLots(O, stops) {
             const big = def.size === 'big' ? 1 : def.size === 'medium' ? 0.8 : 0.6;
             let k = 0;
             for (const su of [-1, 1]) for (const sv of [-1, 1]) {
-              const px = cx + ux * su * (def.hw + 2.2) + vx * sv * (def.hd + 2.2), pz = cz + uz * su * (def.hw + 2.2) + vz * sv * (def.hd + 2.2);
+              const px = cx + ux * su * (def.hw + 3.6) + vx * sv * (def.hd + 3.6), pz = cz + uz * su * (def.hw + 3.6) + vz * sv * (def.hd + 3.6);
               if (Math.hypot(px - ent.x, pz - ent.z) < 16) continue;
               const fr2 = (q) => { const v = Math.sin((cx + k * 17.3 + q * 31.7) * 12.9898 + cz * 78.233) * 43758.5453; return v - Math.floor(v); };
               lot.piles.push({ x: px, z: pz, R: (3.2 + fr2(1) * 1.6) * (0.75 + 0.25 * big), H: (1.5 + fr2(2) * 1.5) * (0.7 + 0.3 * big), p1: fr2(3) * 6.28, p2: fr2(4) * 6.28 });
@@ -731,6 +738,96 @@ function planLots(O, stops) {
         }
       }
       if (found) break;
+    }
+  }
+}
+
+// A road into a car park is level with it across the car park and 1.5 m past its edge, and only then starts down
+// (or up) at the road's own grade: before, the centre line began 5 m inside the car park and was already ramping
+// there, while the car park is flat, so the ground stepped by up to ~0.7 m at the entrance (the road's cut below
+// the car park's level at its edge). Kept as it was when the road can't make it up at its own steepest grade.
+function levelIntoLots() {
+  const lots = busRoads.lots.filter((L) => !L.building && L.ux !== undefined);
+  const outOf = (L, x, z) => { const dx = x - L.x, dz = z - L.z; return Math.max(Math.abs(dx * L.ux + dz * L.uz) - L.hw, Math.abs(dx * L.vx + dz * L.vz) - L.hd); };
+  for (const r of busRoads.roads) {
+    if (r.ringRoad || r.n < 4) continue;
+    for (const e of [0, 1]) {
+      const at = (k) => (e ? r.n - 1 - k : k); // (k: samples from this end)
+      const L = lots.find((q) => outOf(q, r.X[at(0)], r.Z[at(0)]) < 2.5);
+      if (!L) continue;
+      let k = 0;
+      while (k < r.n - 1 && outOf(L, r.X[at(k)], r.Z[at(k)]) <= 0) k++;
+      const flat = Math.abs(r.S[at(k)] - r.S[at(0)]) + 1.5;
+      let g0 = 0.02;
+      for (let i = 1; i < r.n; i++) g0 = Math.max(g0, Math.abs(r.Y[i] - r.Y[i - 1]) / Math.max(0.01, r.S[i] - r.S[i - 1]));
+      // (a steep short drive, e.g. 6 m down in 50 m: a little steeper ramp, else the car park itself a little lower /
+      // higher, toward the road: up to 1.5 m more cut or fill)
+      const sg = Math.sign(r.Y[at(r.n - 1)] - L.y) || 1;
+      const level = (y0, g) => {
+        const Y = r.Y.slice();
+        for (let j = 0; j < r.n; j++) {
+          const i = at(j), d = Math.abs(r.S[i] - r.S[at(0)]);
+          if (d <= flat) { Y[i] = y0; continue; }
+          const p = at(j - 1), lim = g * Math.abs(r.S[i] - r.S[p]), y = clamp(Y[i], Y[p] - lim, Y[p] + lim);
+          if (Math.abs(y - Y[i]) < 0.001) return Y;
+          Y[i] = y;
+        }
+        return null;
+      };
+      let done = false;
+      for (let dy = 0; dy <= 1.5 && !done; dy += 0.25) for (const g of [g0, g0 * 1.15]) {
+        const Y = level(L.y + sg * dy, g);
+        if (!Y) continue;
+        r.Y = Y; L.y += sg * dy; done = true;
+        break;
+      }
+    }
+  }
+}
+
+// A road ending on another road's lane (a T junction, a roundabout's arm) meets it at that road's own surface: across
+// the other road's width (+ 1.5 m) its height follows that road's, then it eases to its own profile at no more than its own
+// steepest grade. Before, e.g. the Chaletweg met the valley road 0.46 m above it (a ledge across the junction).
+function levelIntoJunctions() {
+  const roads = busRoads.roads;
+  const onRoad = (B, x, z, pad = 0) => { // B's height under (x, z) when (x, z) is on B's lane (+ pad), else null
+    let best = null;
+    for (let i = 0; i < B.n - 1; i++) {
+      const ax = B.X[i], az = B.Z[i];
+      if (Math.abs(ax - x) > 12 || Math.abs(az - z) > 12) continue;
+      const dx = B.X[i + 1] - ax, dz = B.Z[i + 1] - az, l2 = dx * dx + dz * dz || 1, t = clamp(((x - ax) * dx + (z - az) * dz) / l2, 0, 1);
+      const d = Math.hypot(ax + dx * t - x, az + dz * t - z);
+      if (d < ROAD_HALF + pad && (!best || d < best.d)) best = { d, y: B.Y[i] + (B.Y[i + 1] - B.Y[i]) * t };
+    }
+    return best;
+  };
+  for (const r of roads) {
+    if (r.ringRoad || r.n < 4) continue;
+    for (const e of [0, 1]) {
+      const at = (k) => (e ? r.n - 1 - k : k), x = r.X[at(0)], z = r.Z[at(0)];
+      let host = null;
+      for (const B of roads) {
+        if (B === r || (!B.ringRoad && [0, B.n - 1].some((k) => Math.hypot(B.X[k] - x, B.Z[k] - z) < 1.5))) continue;
+        const h = onRoad(B, x, z);
+        if (h && h.d < ROAD_HALF - 0.05 && (!host || h.d < host.h.d)) host = { B, h };
+      }
+      if (!host) continue;
+      let g0 = 0.02;
+      for (let i = 1; i < r.n; i++) g0 = Math.max(g0, Math.abs(r.Y[i] - r.Y[i - 1]) / Math.max(0.01, r.S[i] - r.S[i - 1]));
+      // (level across the other road's lane and 1.5 m past its edge: its edge never tilts up or down the side road)
+      for (const g of [g0, g0 * 1.15, g0 * 1.3]) {
+        const Y = r.Y.slice();
+        let ok = false, inside = true;
+        for (let j = 0; j < r.n; j++) {
+          const i = at(j), h = inside ? onRoad(host.B, r.X[i], r.Z[i], 1.5) : null;
+          if (h) { Y[i] = h.y; continue; }
+          inside = false;
+          const p = at(j - 1), lim = g * Math.abs(r.S[i] - r.S[p]), y = clamp(Y[i], Y[p] - lim, Y[p] + lim);
+          if (Math.abs(y - Y[i]) < 0.001) { ok = true; break; }
+          Y[i] = y;
+        }
+        if (ok) { r.Y = Y; break; }
+      }
     }
   }
 }

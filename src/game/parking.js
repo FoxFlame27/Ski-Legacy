@@ -11,6 +11,7 @@ import { setPlates } from './carconfig.js';
 import { mulberry32 } from '../core/noise.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
+import { lotMaterial } from './bus/bus.js'; // (the roads' asphalt and snow: the access road carries on into the car park)
 
 const BAY_W = 2.6, BAY_D = 5.5, LINE = 0.12; // (5.5 m deep: the longest car, 5.0 m, fits inside the lines)
 // parked cars: [model, real length (m), which car park] (the car models are the user's own, in MODEL_LIST)
@@ -25,34 +26,6 @@ function decal(mat, k = 0.001) {
   };
   mat.customProgramCacheKey = () => `lotdecal${k}`;
   return mat;
-}
-
-// packed snow over dark asphalt, tyre-polished in places, grit: tiles every 8 m
-function lotTexture() {
-  const S = 1024, c = document.createElement('canvas');
-  c.width = c.height = S;
-  const g = c.getContext('2d');
-  let seed = 3;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  // a warm mid grey (a cold dark grey reads blue-icy under the snow light), fine grain
-  g.fillStyle = '#86837e'; g.fillRect(0, 0, S, S);
-  for (let i = 0; i < 26000; i++) { const v = 108 + rnd() * 40; g.fillStyle = `rgba(${v + 6},${v + 3},${v},0.4)`; g.fillRect(rnd() * S, rnd() * S, 1 + rnd() * 2, 1 + rnd() * 2); }
-  // packed snow in soft drifts (the plough leaves a thin layer); every blob drawn wrapped so the tiles meet seamlessly
-  const wrapped = (fn) => { for (const ox of [-S, 0, S]) for (const oy of [-S, 0, S]) fn(ox, oy); };
-  for (let i = 0; i < 110; i++) {
-    const x = rnd() * S, y = rnd() * S, r = 40 + rnd() * 140;
-    wrapped((ox, oy) => {
-      const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
-      gr.addColorStop(0, 'rgba(232,234,236,0.5)'); gr.addColorStop(1, 'rgba(232,234,236,0)');
-      g.fillStyle = gr; g.beginPath(); g.arc(x + ox, y + oy, r, 0, 7); g.fill();
-    });
-  }
-  for (let i = 0; i < 3000; i++) { g.fillStyle = `rgba(238,240,242,${0.2 + rnd() * 0.45})`; g.beginPath(); g.arc(rnd() * S, rnd() * S, 0.6 + rnd() * 2, 0, 7); g.fill(); }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  return t;
 }
 
 // The bays of a car park, in its own frame (u along the long side, v across): rows along both long sides (a middle
@@ -118,9 +91,11 @@ export class ParkingLots {
     this.bulbs = [];
     if (!busRoads.lots.length) return;
     try {
-      // matte: packed snow and dry asphalt, no icy gloss or blue sky reflections
-      const surf = decal(new THREE.MeshStandardMaterial({ map: lotTexture(), vertexColors: true, transparent: true, roughness: 1, metalness: 0, envMapIntensity: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
-      const paint = decal(new THREE.MeshStandardMaterial({ color: 0xeeefea, roughness: 0.92, metalness: 0, envMapIntensity: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }), 0.0013);
+      // the surface: the roads' own material (the same asphalt, snow and slush in world space; bus.js lotMaterial), so
+      // the access road, cut at the car park's edge, carries on into it seamlessly: no second layer at the entrance.
+      // The paint lies on it (2 cm up, drawn a hair nearer: the bay lines are a decal by design)
+      const surf = lotMaterial();
+      const paint = decal(new THREE.MeshStandardMaterial({ color: 0xeeefea, roughness: 0.92, metalness: 0, envMapIntensity: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }), 0.0019);
       this.bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffd59a, emissiveIntensity: 0, roughness: 0.4 });
       for (const L of busRoads.lots) {
         if (L.building) continue; // (the hospital's site: game/hospital.js)
@@ -159,14 +134,22 @@ export class ParkingLots {
       for (const rd of busRoads.roads) for (let i = 0; i < rd.n; i += 2) if (Math.abs(rd.X[i] - x) < r && Math.abs(rd.Z[i] - z) < r && Math.hypot(rd.X[i] - x, rd.Z[i] - z) < r) return true;
       return false;
     };
-    // surface: a grid over the lot that follows the (flattened) terrain a few cm up
+    // surface: a grid over the lot that follows the (flattened) terrain as the roads do (the drawn terrain's surface,
+    // world.meshHeight, + 3.5 cm: level with the access road where it meets the edge)
+    const MH = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z));
     const nu = Math.ceil((L.hw * 2) / 2), nv = Math.ceil((L.hd * 2) / 2);
     const pos = [], uv = [], col = [], idx = [];
+    // the mouth: where the access road meets the edge (its strip ends exactly there, bus.js roadStrip)
+    const mx = L.ex - L.dirx * 2, mz = L.ez - L.dirz * 2, ax = -L.dirz, az = L.dirx; // (the edge's middle; along the edge)
     for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
       const u = -L.hw + (i / nu) * L.hw * 2, v = -L.hd + (j / nv) * L.hd * 2, [x, z] = at(u, v);
-      pos.push(x, world.height(x, z) + 0.03, z); uv.push(u / 14, v / 14);
-      // the edges fade into the snow (no hard slab edge against the bank)
-      const e = Math.min(L.hw - Math.abs(u), L.hd - Math.abs(v)), a = Math.min(1, Math.max(0, e / 1.8));
+      pos.push(x, MH(x, z) + 0.035, z); uv.push(u / 6.8, v / 13.5); // (the road texture's own scale)
+      // the edges fade into the snow (no hard slab edge against the bank), except across the mouth: there the
+      // road's asphalt carries straight on (its own ploughed edges meet the fade either side)
+      const e = Math.min(L.hw - Math.abs(u), L.hd - Math.abs(v));
+      const lat = Math.abs((x - mx) * ax + (z - mz) * az), inn = (x - mx) * -L.dirx + (z - mz) * -L.dirz;
+      const mouth = inn < 6 ? 1 - Math.min(1, Math.max(0, (lat - (ROAD_HALF - 1)) / 1.6)) : 0;
+      const a = Math.max(Math.min(1, Math.max(0, e / 1.8)), mouth);
       col.push(1, 1, 1, a * a * (3 - 2 * a));
       if (i < nu && j < nv) { const a = j * (nu + 1) + i, b = a + nu + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
     }
@@ -183,7 +166,7 @@ export class ParkingLots {
     const strip = (u0, v0, u1, v1) => {
       const du = u1 - u0, dv = v1 - v0, l = Math.hypot(du, dv) || 1, nu2 = (-dv / l) * LINE / 2, nv2 = (du / l) * LINE / 2;
       const base = lp.length / 3;
-      for (const [u, v] of [[u0 + nu2, v0 + nv2], [u0 - nu2, v0 - nv2], [u1 + nu2, v1 + nv2], [u1 - nu2, v1 - nv2]]) { const [x, z] = at(u, v); lp.push(x, world.height(x, z) + 0.05, z); }
+      for (const [u, v] of [[u0 + nu2, v0 + nv2], [u0 - nu2, v0 - nv2], [u1 + nu2, v1 + nv2], [u1 - nu2, v1 - nv2]]) { const [x, z] = at(u, v); lp.push(x, MH(x, z) + 0.055, z); }
       li.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
     };
     const { bays, lines } = lotBays(L, colliders);

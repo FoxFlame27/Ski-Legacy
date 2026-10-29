@@ -28,7 +28,7 @@ const _p = {}, _q = {};
 // ------------------------------------------------------------------ road meshes
 // The road surface, 6.8 m across x 13.5 m along: worn asphalt, white edge lines and a dashed centre line, grit; the
 // snow over it (tracks, edges, patches) is drawn by the shader (snowCover).
-function roadTexture() {
+function roadTexture(plain = false) {
   const W = 512, H = 1024, c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
@@ -37,19 +37,22 @@ function roadTexture() {
   // worn asphalt with a fine grain (light: under the blue snow light a dark grey reads as navy)
   g.fillStyle = '#6a6b6d'; g.fillRect(0, 0, W, H);
   for (let i = 0; i < 9000; i++) { const v = 84 + rnd() * 44; g.fillStyle = `rgba(${v + 4},${v + 2},${v},0.5)`; g.fillRect(rnd() * W, rnd() * H, 1 + rnd() * 2, 1 + rnd() * 2); }
-  // markings (white, worn)
+  // markings (white, worn; none on the plain asphalt: the car parks)
   g.fillStyle = 'rgba(236,238,240,0.85)';
-  g.fillRect(W * 0.045, 0, W * 0.022, H); g.fillRect(W * 0.933, 0, W * 0.022, H);
-  g.fillRect(W * 0.492, H * 0.08, W * 0.016, H * 0.3); g.fillRect(W * 0.492, H * 0.58, W * 0.016, H * 0.3);
+  if (!plain) {
+    g.fillRect(W * 0.045, 0, W * 0.022, H); g.fillRect(W * 0.933, 0, W * 0.022, H);
+    g.fillRect(W * 0.492, H * 0.08, W * 0.016, H * 0.3); g.fillRect(W * 0.492, H * 0.58, W * 0.016, H * 0.3);
+  }
   // (the snow on it: shader noise in world space, snowCover below; no painted bands or flecks to repeat)
   for (let i = 0; i < 1800; i++) { const v = 80 + rnd() * 50; g.fillStyle = `rgba(${v + 18},${v + 8},${v},0.5)`; g.fillRect(rnd() * W, rnd() * H, 1.5, 1.5); }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping;
+  t.wrapS = plain ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping; t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 8;
   return t;
 }
 
+const ROAD_DECAL = 0.0015; // (roads and car parks alike: they never overlap)
 // Draw the road a hair toward the camera (a share of its distance): it stays on top of the terrain it lies on at
 // every terrain LOD and quality preset, without lifting it visibly or z-fighting up close.
 function decal(mat, k = 0.0012) {
@@ -67,6 +70,7 @@ function decal(mat, k = 0.0012) {
 // no repeating tile) of packed snow, slush and bare asphalt. uv: u across the strip (0..1), v = metres / 13.5.
 const SNOW_GLSL = `
 varying vec3 vRoadW;
+varying float vRoadEnd;
 float rdH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float rdN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(rdH(i), rdH(i + vec2(1.0, 0.0)), f.x), mix(rdH(i + vec2(0.0, 1.0)), rdH(i + vec2(1.0, 1.0)), f.x), f.y); }
@@ -83,10 +87,14 @@ const SNOW_FRAG = `
     tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.36 - wob * 0.8)));
     tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.64 + wob * 0.7)));
     tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.8 + wob)));
+    tr *= vRoadEnd; // (fading out into a car park)
     float fine = rdF(Wp * 0.9), P = rdF(Wp * 0.03 + 4.0);
     float clearT = smoothstep(0.3, 0.7, rdN(vec2(sv * 0.012, 5.5))) * (0.6 + 0.4 * fine);
     float eN = rdN(vec2(sv * 0.15, 2.2)) * 0.07 + (fine - 0.5) * 0.06;
     float edge = 1.0 - smoothstep(0.06 + eN, 0.16 + eN, u) + smoothstep(0.84 - eN, 0.94 - eN, u);
+    #ifdef ROAD_LOT
+    edge = 0.0; // (a car park: its edges fade into the snow by their vertex alpha)
+    #endif
     float snow = clamp(1.0 - tr * clearT, 0.0, 1.0) * smoothstep(0.22, 0.55, P + 0.3 * fine - 0.1);
     float bare = smoothstep(0.6, 0.78, P);
     snow = max(snow * (1.0 - bare * 0.9), clamp(edge, 0.0, 1.0));
@@ -96,51 +104,87 @@ const SNOW_FRAG = `
     rdWet = slush;
   }
 `;
-function snowCover(mat, key) {
+function snowCover(mat, key, lot = false) {
   const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+  if (lot) mat.defines = { ...(mat.defines || {}), ROAD_LOT: '' };
   mat.onBeforeCompile = (sh, r) => {
     prev?.call(mat, sh, r);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vRoadW;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoadW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <common>', `#include <common>\nvarying vec3 vRoadW;\nvarying float vRoadEnd;${lot ? '' : '\nattribute float aEnd;'}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\nvRoadW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvRoadEnd = ${lot ? '0.0' : 'aEnd'};`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>\n${SNOW_GLSL}\nfloat rdWet = 0.0;`)
-      .replace('#include <map_fragment>', `#include <map_fragment>\n${SNOW_FRAG}`)
+      // (into a car park the markings fade out too: the plain asphalt beside them, the same v)
+      .replace('#include <map_fragment>', `#include <map_fragment>\n${lot ? '' : 'diffuseColor.rgb = mix(diffuse * texture2D(map, vec2(0.3, vMapUv.y)).rgb, diffuseColor.rgb, vRoadEnd);'}\n${SNOW_FRAG}`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= 1.0 - 0.4 * rdWet;');
   };
   mat.customProgramCacheKey = () => `${prevKey ? prevKey.call(mat) : ''}-roadsnow-${key}`;
   return mat;
 }
 
+// The roads' material, and the car parks' (parking.js): the same asphalt (without markings), the same snow, slush
+// and bare patches in world space, so where an access road meets its car park the two surfaces carry on into each
+// other (no tyre tracks or ploughed edges on the car park; its edges fade into the snow by vertex alpha)
+let _roadMat = null, _lotMat = null;
+export function roadMaterial() {
+  return (_roadMat ||= snowCover(decal(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.72, metalness: 0 }), ROAD_DECAL), 'road'));
+}
+export function lotMaterial() {
+  return (_lotMat ||= snowCover(decal(new THREE.MeshStandardMaterial({ map: roadTexture(true), roughness: 0.72, metalness: 0, vertexColors: true, transparent: true, side: THREE.DoubleSide }), ROAD_DECAL), 'lot', true));
+}
+
 const ACROSS = [-1, -2 / 3, -1 / 3, 0, 1 / 3, 2 / 3, 1];
 
-// An access road's centre line up to just inside (0.3 m) the bus road it joins: { X, Z, S, n } (its own arrays up to
-// there, the last point exactly on the edge). Inside = across a bus road's strip, between its ends (a road carrying
-// on from another's end is never cut).
-function trimAccess(r) {
-  const mains = busRoads.roads.filter((o) => !o.access);
-  const ex = r.X[r.n - 1], ez = r.Z[r.n - 1];
-  const segs = [];
-  for (const m of mains) for (let i = 0; i < m.n - 1; i++) if (Math.abs(m.X[i] - ex) < 40 && Math.abs(m.Z[i] - ez) < 40) segs.push([m.X[i], m.Z[i], m.X[i + 1], m.Z[i + 1]]);
-  const inside = (x, z) => {
-    for (const [ax, az, bx, bz] of segs) {
-      const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz || 1, t = ((x - ax) * dx + (z - az) * dz) / l2;
-      if (t < 0 || t > 1) continue;
-      if (Math.hypot(x - (ax + dx * t), z - (az + dz * t)) < ROAD_HALF - 0.3) return true;
+// Where a road's strip ends against something drawn on its own (the road it joins, a roundabout's ring, a car park),
+// the strip is cut along that thing's edge: each of its long lines (ACROSS) stops exactly where it enters the other
+// surface, so the two meet edge to edge, never one lying over the other (no coplanar double layer, no z-fighting, no
+// draw-order or depth-offset tricks). endHosts(r) -> [at the start, at the end]: null, or { inside(x, z) }.
+const lotsDrawn = () => busRoads.lots.filter((L) => !L.building && L.ux !== undefined);
+function lotInside(L, pad0 = 0) {
+  return (x, z, pad = pad0) => { const dx = x - L.x, dz = z - L.z; return Math.abs(dx * L.ux + dz * L.uz) < L.hw + pad && Math.abs(dx * L.vx + dz * L.vz) < L.hd + pad; };
+}
+function roadInside(B) {
+  const open = !B.ringRoad; // (an open road's strip ends square at its ends: no round cap past them)
+  return (x, z, pad = 0) => {
+    for (let i = 0; i < B.n - 1; i++) {
+      const ax = B.X[i], az = B.Z[i];
+      if (Math.abs(ax - x) > 12 || Math.abs(az - z) > 12) continue;
+      const dx = B.X[i + 1] - ax, dz = B.Z[i + 1] - az, l2 = dx * dx + dz * dz || 1, t0 = ((x - ax) * dx + (z - az) * dz) / l2;
+      if (open && ((i === 0 && t0 < 0) || (i === B.n - 2 && t0 > 1))) continue;
+      const t = clamp(t0, 0, 1);
+      if (Math.hypot(ax + dx * t - x, az + dz * t - z) < ROAD_HALF + pad) return true;
     }
     return false;
   };
-  if (!segs.length || !inside(ex, ez)) return r;
-  let k = r.n - 1;
-  while (k > 1 && inside(r.X[k], r.Z[k])) k--;
-  if (k >= r.n - 1) return r;
-  // the edge between sample k (outside) and k + 1 (inside)
-  let a = 0, b = 1;
-  for (let it = 0; it < 14; it++) { const t = (a + b) / 2; if (inside(r.X[k] + (r.X[k + 1] - r.X[k]) * t, r.Z[k] + (r.Z[k + 1] - r.Z[k]) * t)) b = t; else a = t; }
-  const t = b, X = Array.from(r.X.slice(0, k + 2)), Z = Array.from(r.Z.slice(0, k + 2)), S = Array.from(r.S.slice(0, k + 2));
-  X[k + 1] = r.X[k] + (r.X[k + 1] - r.X[k]) * t; Z[k + 1] = r.Z[k] + (r.Z[k + 1] - r.Z[k]) * t; S[k + 1] = r.S[k] + (r.S[k + 1] - r.S[k]) * t;
-  return { X, Z, S, n: k + 2 };
-}                                      // road strip vertices across (x half width)
+}
+// which of two roads ending in each other gives way (is cut): an access road to a bus road, a road to a ring, else
+// the shorter one
+const roadRank = (r) => (r.ringRoad ? 3 : r.access ? 1 : 2);
+function endHosts(r) {
+  return [0, r.n - 1].map((i) => {
+    const x = r.X[i], z = r.Z[i];
+    // a car park the road runs into (its end inside the car park or at its edge)
+    for (const L of lotsDrawn()) if (lotInside(L, 2.5)(x, z)) return { lot: L, inside: lotInside(L) };
+    // the road it joins (its end on that road's strip, not where that road ends too: a road carrying on from another)
+    let best = null;
+    busRoads.roads.forEach((B) => {
+      if (B === r) return;
+      if (!B.ringRoad && [0, B.n - 1].some((k) => Math.hypot(B.X[k] - x, B.Z[k] - z) < 1.5)) return;
+      for (let k = 0; k < B.n - 1; k++) {
+        const ax = B.X[k], az = B.Z[k];
+        if (Math.abs(ax - x) > 12 || Math.abs(az - z) > 12) continue;
+        const dx = B.X[k + 1] - ax, dz = B.Z[k + 1] - az, l2 = dx * dx + dz * dz || 1, t = clamp(((x - ax) * dx + (z - az) * dz) / l2, 0, 1);
+        const d = Math.hypot(ax + dx * t - x, az + dz * t - z);
+        if (d < ROAD_HALF - 0.05 && (!best || d < best.d)) best = { d, B };
+      }
+    });
+    if (best) { // (the two ending in each other, e.g. an access road joining at a bus road's last stop: only one is cut)
+      const B = best.B, inR = roadInside(r);
+      if ([0, B.n - 1].some((k) => inR(B.X[k], B.Z[k])) && (roadRank(r) > roadRank(B) || (roadRank(r) === roadRank(B) && r.length > B.length))) return null;
+    }
+    return best ? { road: best.B, inside: roadInside(best.B) } : null;
+  });
+}
 
 // ------------------------------------------------------------------ guardrails
 // Galvanised W-beam guardrails (the double-wave steel profile on C-posts every 2 m, a spacer block between them, an
@@ -407,20 +451,30 @@ class Guardrails {
     while (k1 >= 0 && pts[k1][3] > 0.35) k1--;
     for (let k = k0; k < k1; k++) this.addRail(pts[k][0], pts[k][2], pts[k + 1][0], pts[k + 1][2]);
     if (!this.colliders) return;
+    // the boxes: exactly as high as the drawn beam (its top BEAM_TOP over the rail's foot, which the shader lays
+    // along the run linearly between the points, less the terminal's sink). A box's top slopes with the beam: topA
+    // at its start, topB at its end (local -z .. +z), each point between within RAIL_DY of that line (top: the
+    // highest, for whatever reads only that); merged along straight bits up to 12 m. Not a step-up surface (noStep:
+    // you don't walk along the top of a guardrail; you jump over it, or ski over it on a jump)
+    const RAIL_DY = 0.03;
+    const topAt = (k) => pts[k][1] - pts[k][3] + BEAM_TOP;
     for (let a = k0; a < k1;) {
       let b = a + 1;
       while (b < k1) {
         const nb = b + 1, ax = pts[a][0], az = pts[a][2], ex = pts[nb][0] - ax, ez = pts[nb][2] - az, l = Math.hypot(ex, ez) || 1;
         if (l > 12) break;
         let ok = true;
-        for (let q = a + 1; q < nb && ok; q++) if (Math.abs((pts[q][0] - ax) * ez - (pts[q][2] - az) * ex) / l > 0.06) ok = false;
+        for (let q = a + 1; q < nb && ok; q++) {
+          if (Math.abs((pts[q][0] - ax) * ez - (pts[q][2] - az) * ex) / l > 0.06) ok = false;
+          const f = ((pts[q][0] - ax) * ex + (pts[q][2] - az) * ez) / (l * l);
+          if (Math.abs(topAt(q) - (topAt(a) + (topAt(nb) - topAt(a)) * f)) > RAIL_DY) ok = false;
+        }
         if (!ok) break;
         b = nb;
       }
       const ax = pts[a][0], az = pts[a][2], bx = pts[b][0], bz = pts[b][2], l = Math.hypot(bx - ax, bz - az) || 1;
-      let top = -Infinity;
-      for (let q = a; q <= b; q++) top = Math.max(top, pts[q][1] - pts[q][3]);
-      this.colliders.push({ x: (ax + bx) / 2, z: (az + bz) / 2, hw: 0.075, hd: l / 2 + 0.06, rot: -Math.atan2(bx - ax, bz - az), h: BEAM_TOP + 0.05, top: top + BEAM_TOP, soft: true, rail: true });
+      const topA = topAt(a), topB = topAt(b);
+      this.colliders.push({ x: (ax + bx) / 2, z: (az + bz) / 2, hw: 0.075, hd: l / 2 + 0.06, rot: -Math.atan2(bx - ax, bz - az), h: BEAM_TOP, top: Math.max(topA, topB), topA, topB, soft: true, rail: true, noStep: true });
       this.boxes++;
       a = b;
     }
@@ -476,11 +530,110 @@ class Guardrails {
   }
 }
 
+// The drawn strip of road r: rows of ACROSS.length vertices, two rows per road sample (~2 m apart, ~1.1 m across),
+// each vertex on the drawn terrain's own surface (world.meshHeight, its 2 m triangles) + 3.5 cm; cut where it ends
+// against another road or a car park (endHosts). end: per vertex 0..1, 0 over the last metres into a car park (the
+// tyre tracks and the centre line fade out there: the car park's own surface carries on, the same asphalt and snow).
+// { R (the centre line), dirAt(i), pos (rows x across x 3), uv, end, rows, hosts }
+function roadStrip(r, MH) {
+  const R = r;
+  // a stop on the way (one road ends where the next one starts): both strips end on the same cross-section (the
+  // bisector of their headings) and the texture runs on (v carries on from the road before), so they meet edge to
+  // edge; before, the two strips overlapped in a wedge at the stop and z-fought (crossed light / dark bands)
+  const prev = r.access ? null : busRoads.roads.find((o) => !o.access && o.to === r.from);
+  const nexts = r.access ? [] : busRoads.roads.filter((o) => !o.access && o.from === r.to);
+  const next = nexts.length === 1 ? nexts[0] : null;
+  let v0 = 0;
+  for (let q = prev, g = 0; q && g < 20; g++) { v0 += q.length; q = busRoads.roads.find((o) => !o.access && o.to === q.from); }
+  const jointDir = (a, b) => { // (unit) bisector of road a's last heading and road b's first
+    const d0 = roadDir(a, a.n - 1), d1 = roadDir(b, 0), x = d0[0] + d1[0], z = d0[1] + d1[1], l = Math.hypot(x, z);
+    return l > 0.2 ? [x / l, z / l] : null;
+  };
+  // (a roundabout's ring is closed: its first and last cross-sections the same, no kink or overlap at the seam)
+  const ring = r.ringRoad && Math.hypot(R.X[0] - R.X[R.n - 1], R.Z[0] - R.Z[R.n - 1]) < 0.01;
+  const ringDir = ring ? (() => { const dx = R.X[1] - R.X[R.n - 2], dz = R.Z[1] - R.Z[R.n - 2], l = Math.hypot(dx, dz) || 1; return [dx / l, dz / l]; })() : null;
+  const dirStart = ringDir || (prev ? jointDir(prev, r) : null), dirEnd = ringDir || (next ? jointDir(r, next) : null);
+  const dirAt = (i) => {
+    const a = Math.max(0, i - 1), b = Math.min(R.n - 1, i + 1);
+    let dx = R.X[b] - R.X[a], dz = R.Z[b] - R.Z[a];
+    const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+    if (i === 0 && dirStart) [dx, dz] = dirStart;
+    else if (i === R.n - 1 && dirEnd) [dx, dz] = dirEnd;
+    return [dx, dz];
+  };
+  const na = ACROSS.length, rows = 2 * R.n - 1;
+  const pos = new Float32Array(rows * na * 3), uv = new Float32Array(rows * na * 2), end = new Float32Array(rows * na).fill(1);
+  const rowS = new Float32Array(rows);
+  for (let kr = 0; kr < rows; kr++) {
+    const i0 = kr >> 1, half = kr & 1, i1 = Math.min(R.n - 1, i0 + half);
+    let [dx, dz] = dirAt(i0);
+    if (half) { const d1 = dirAt(i1), l = Math.hypot(dx + d1[0], dz + d1[1]) || 1; dx = (dx + d1[0]) / l; dz = (dz + d1[1]) / l; }
+    const cx = half ? (R.X[i0] + R.X[i1]) / 2 : R.X[i0], cz = half ? (R.Z[i0] + R.Z[i1]) / 2 : R.Z[i0], cs = half ? (R.S[i0] + R.S[i1]) / 2 : R.S[i0];
+    const nx = dz, nz = -dx; // across the road
+    rowS[kr] = cs;
+    for (let q = 0; q < na; q++) {
+      const o = ACROSS[q] * ROAD_HALF, x = cx + nx * o, z = cz + nz * o;
+      pos.set([x, MH(x, z) + 0.035, z], (kr * na + q) * 3);
+      uv.set([(ACROSS[q] + 1) / 2, (v0 + cs) / 13.5], (kr * na + q) * 2);
+    }
+  }
+  // the cuts: each long line from the end inward, up to where it leaves the other surface (to 1 cm), the vertices
+  // before that all on that point (zero-area triangles: nothing drawn there)
+  const hosts = ring ? [null, null] : endHosts(r);
+  hosts.forEach((h, e) => {
+    if (!h) return;
+    const step = e ? -1 : 1, k0 = e ? rows - 1 : 0, lim = Math.min(rows - 1, 60);
+    let sCut = -Infinity;
+    const cutRow = new Array(na).fill(null); // (per line: the last row folded onto its cut)
+    const mid = na >> 1, order = [mid];
+    for (let o = 1; o <= mid; o++) order.push(mid - o, mid + o); // (from the centre line out)
+    for (const q of order) {
+      const P = (k) => (k * na + q) * 3;
+      // how far the line runs inside from the end (rows; -1: its end is outside)
+      let k = k0, n = 0;
+      const in0 = h.inside(pos[P(k0)], pos[P(k0) + 2]);
+      if (in0) while (n < lim && h.inside(pos[P(k + step)], pos[P(k + step) + 2])) { k += step; n++; }
+      if (n >= lim) continue; // (runs along inside it: leave it)
+      const depth = in0 ? n : -1;
+      // an edge line running a hair outside the other surface (within 35 cm) while its inner neighbour is cut
+      // deeper: folded at the neighbour's row, so no sliver of it lies along the other road's edge
+      const nb = q === mid ? null : cutRow[q < mid ? q + 1 : q - 1];
+      if (nb !== null && Math.abs(nb - k0) > depth + 1) {
+        let near = true;
+        for (let j = k0; j !== nb + step && near; j += step) if (!h.inside(pos[P(j)], pos[P(j) + 2], 0.35)) near = false;
+        if (near) {
+          const kk = nb + step, x = pos[P(kk)], y = pos[P(kk) + 1], z = pos[P(kk) + 2], vv = uv[(kk * na + q) * 2 + 1];
+          for (let j = k0; j !== kk; j += step) { pos.set([x, y, z], P(j)); uv[(j * na + q) * 2 + 1] = vv; end[j * na + q] = 0; }
+          cutRow[q] = nb;
+          continue;
+        }
+      }
+      if (!in0) continue;
+      const a = P(k), b = P(k + step);
+      let lo = 0, hi = 1; // (lo: inside)
+      for (let it = 0; it < 18; it++) { const t = (lo + hi) / 2; if (h.inside(pos[a] + (pos[b] - pos[a]) * t, pos[a + 2] + (pos[b + 2] - pos[a + 2]) * t)) lo = t; else hi = t; }
+      const x = pos[a] + (pos[b] - pos[a]) * hi, z = pos[a + 2] + (pos[b + 2] - pos[a + 2]) * hi, y = MH(x, z) + 0.035;
+      const ua = (k * na + q) * 2, ub = ((k + step) * na + q) * 2, vv = uv[ua + 1] + (uv[ub + 1] - uv[ua + 1]) * hi;
+      for (let j = k0; j !== k + step; j += step) { pos.set([x, y, z], (j * na + q) * 3); uv[(j * na + q) * 2 + 1] = vv; end[j * na + q] = 0; }
+      cutRow[q] = k;
+      const sc = rowS[k] + (rowS[k + step] - rowS[k]) * hi;
+      sCut = e ? (sCut === -Infinity ? sc : Math.min(sCut, sc)) : Math.max(sCut, sc);
+    }
+    // into a car park: the tracks and the centre line fade out over the last 8 m
+    if (h.lot && sCut !== -Infinity) for (let k = 0; k < rows; k++) {
+      const d = e ? sCut - rowS[k] : rowS[k] - sCut;
+      if (d > 8) continue;
+      const f = clamp(d / 8, 0, 1);
+      for (let q = 0; q < na; q++) end[k * na + q] = Math.min(end[k * na + q], f * f * (3 - 2 * f));
+    }
+  });
+  return { R, dirAt, pos, uv, end, rows, hosts };
+}
+
 function buildRoadMeshes(group, colliders = null) {
-  // draw order where strips overlap: a bus road over an access road (junctions), an access road over the car park's
-  // surface and paint (entrances); each a clear step apart (no z-fighting at any distance)
-  const roadMat = snowCover(decal(new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.72, metalness: 0, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -14 }), 0.0017), 'main');
-  const accessMat = snowCover(decal(new THREE.MeshStandardMaterial({ map: roadMat.map, roughness: 0.72, metalness: 0, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -10 }), 0.00145), 'access');
+  // one material for every road: the strips meet edge to edge (roadStrip cuts each where it ends against another
+  // road or a car park), so nothing needs drawing over anything else
+  const roadMat = roadMaterial();
   const poles = [], posts = [];
   // the rails' line colliders, in a grid (drive.js keeps your car off them, sliding along)
   busRoads.rails = []; busRoads.railGrid = new Map();
@@ -503,51 +656,11 @@ function buildRoadMeshes(group, colliders = null) {
       mask = planRails(r, ri, H);
       for (const run of railRuns(r, mask, MH)) rails.addRun(run); // (posts on the drawn ground)
     } catch (e) { console.warn('guardrails', e); mask = [new Uint8Array(r.n), new Uint8Array(r.n)]; }
-    // an access road ends just inside the road it joins, cut exactly there (that one is drawn over it): a T-junction
-    // with no gap; one that carries on from a road's end is left whole (no gap there either)
-    const R = r.access ? trimAccess(r) : r;
-    const nEnd = R.n - 1;
-    // a stop on the way (one road ends where the next one starts): both strips end on the same cross-section (the
-    // bisector of their headings) and the texture runs on (v carries on from the road before), so they meet edge to
-    // edge; before, the two strips overlapped in a wedge at the stop and z-fought (crossed light / dark bands)
-    const prev = r.access ? null : busRoads.roads.find((o) => !o.access && o.to === r.from);
-    const nexts = r.access ? [] : busRoads.roads.filter((o) => !o.access && o.from === r.to);
-    const next = nexts.length === 1 ? nexts[0] : null;
-    let v0 = 0;
-    for (let q = prev, g = 0; q && g < 20; g++) { v0 += q.length; q = busRoads.roads.find((o) => !o.access && o.to === q.from); }
-    const jointDir = (a, b) => { // (unit) bisector of road a's last heading and road b's first
-      const d0 = roadDir(a, a.n - 1), d1 = roadDir(b, 0), x = d0[0] + d1[0], z = d0[1] + d1[1], l = Math.hypot(x, z);
-      return l > 0.2 ? [x / l, z / l] : null;
-    };
-    const dirStart = prev ? jointDir(prev, r) : null, dirEnd = next ? jointDir(r, next) : null;
+    const strip = roadStrip(r, MH), R = strip.R, nEnd = R.n - 1, dirAt = strip.dirAt, na = ACROSS.length;
     for (let c0 = 0; c0 < nEnd; c0 += CH) {
-      const c1 = Math.min(nEnd, c0 + CH), m = c1 - c0 + 1, na = ACROSS.length, mr = 2 * m - 1;
-      const rp = new Float32Array(mr * na * 3), ruv = new Float32Array(mr * na * 2), ri2 = [];
-      const dirAt = (i) => {
-        const a = Math.max(0, i - 1), b = Math.min(R.n - 1, i + 1);
-        let dx = R.X[b] - R.X[a], dz = R.Z[b] - R.Z[a];
-        const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
-        if (i === 0 && dirStart) [dx, dz] = dirStart;
-        else if (i === R.n - 1 && dirEnd) [dx, dz] = dirEnd;
-        return [dx, dz];
-      };
-      // (two rows per road sample, ~2 m apart, ~1.1 m across, each on the drawn terrain's own surface (its 2 m
-      // triangles, world.meshHeight): the strip neither floats over nor sinks into the ground between its vertices)
-      for (let kr = 0; kr < mr; kr++) {
-        const k0 = kr >> 1, i0 = c0 + k0, half = kr & 1, i1 = Math.min(R.n - 1, i0 + half);
-        let [dx, dz] = dirAt(i0);
-        if (half) { const d1 = dirAt(i1), l = Math.hypot(dx + d1[0], dz + d1[1]) || 1; dx = (dx + d1[0]) / l; dz = (dz + d1[1]) / l; }
-        const cx = half ? (R.X[i0] + R.X[i1]) / 2 : R.X[i0], cz = half ? (R.Z[i0] + R.Z[i1]) / 2 : R.Z[i0], cs = half ? (R.S[i0] + R.S[i1]) / 2 : R.S[i0];
-        const nx = dz, nz = -dx; // across the road
-        for (let q = 0; q < na; q++) {
-          const o = ACROSS[q] * ROAD_HALF, x = cx + nx * o, z = cz + nz * o;
-          rp.set([x, MH(x, z) + 0.035, z], (kr * na + q) * 3);
-          ruv.set([(ACROSS[q] + 1) / 2, (v0 + cs) / 13.5], (kr * na + q) * 2);
-        }
-        if (kr < mr - 1) {
-          for (let q = 0; q < na - 1; q++) { const A = kr * na + q, B = (kr + 1) * na + q; ri2.push(A, B, A + 1, A + 1, B, B + 1); }
-        }
-      }
+      const c1 = Math.min(nEnd, c0 + CH), m = c1 - c0 + 1, mr = 2 * m - 1, ri2 = [];
+      const rp = strip.pos.slice(2 * c0 * na * 3, (2 * c1 + 1) * na * 3), ruv = strip.uv.slice(2 * c0 * na * 2, (2 * c1 + 1) * na * 2), rend = strip.end.slice(2 * c0 * na, (2 * c1 + 1) * na);
+      for (let kr = 0; kr < mr - 1; kr++) for (let q = 0; q < na - 1; q++) { const A = kr * na + q, B = (kr + 1) * na + q; ri2.push(A, B, A + 1, A + 1, B, B + 1); }
       for (let k = 0; k < m; k++) {
         const i = c0 + k;
         const [dx, dz] = dirAt(i), nx = dz, nz = -dx;
@@ -569,10 +682,12 @@ function buildRoadMeshes(group, colliders = null) {
       const rg = new THREE.BufferGeometry();
       rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
       rg.setAttribute('uv', new THREE.BufferAttribute(ruv, 2));
+      rg.setAttribute('aEnd', new THREE.BufferAttribute(rend, 1));
       rg.setIndex(ri2); rg.computeVertexNormals();
-      const road = new THREE.Mesh(rg, r.access && !r.ringRoad ? accessMat : roadMat); // (the ring over its arms' ends)
+      const nrm = rg.attributes.normal; // (a vertex only on the cut-away, zero-area triangles: up)
+      for (let k = 0; k < nrm.count; k++) if (!(Math.abs(nrm.getX(k)) + Math.abs(nrm.getY(k)) + Math.abs(nrm.getZ(k)) > 1e-6)) nrm.setXYZ(k, 0, 1, 0);
+      const road = new THREE.Mesh(rg, roadMat);
       road.receiveShadow = true;
-      road.renderOrder = r.access && !r.ringRoad ? 2 : 1; // (an access road lies over the car park's surface at the entrance)
       group.add(road);
     }
   });
@@ -1086,4 +1201,4 @@ export class BusLine {
     return true;
   }
 }
-export const railsForTest = { planRails, railRuns }; // (Node checks)
+export const railsForTest = { planRails, railRuns, roadStrip, ACROSS, Guardrails, BEAM_TOP }; // (Node checks)

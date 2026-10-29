@@ -25,6 +25,10 @@ const LEG_G = 0.065;                // the grade the walker looks for along a le
 const HAIRPIN_R = 14;               // m (centre line): tight but a car (and a bus) gets round
 export const RING_R = 15;           // the roundabout's centre line radius (single lane ring, the island inside)
 export const ISLAND_R = RING_R - 3.4 - 0.7; // (ROAD_HALF 3.4: roads.js imports this module, so its constants are not ready here yet)
+// the island's kerb and snow dome: inside a packed apron level with the ring, so every 2 m triangle of the drawn
+// terrain touching the ring's lane (up to 2.83 m inside its inner edge) is flat (before, the kerb at the lane's edge
+// lifted the lane's inner edge ~0.2 m off the road surface)
+const DOME_R = RING_R - 3.4 - 2.9;
 // where it goes (checked in Node: no pistes, lifts, races or course regions out there; the Express only in its tunnel)
 const JUNCTION_NEAR = { x: 205, z: 330 };  // the T junction on the village -> Sonnenkopf road (over the Express tunnel)
 const RING_AT = { x: 1300, z: 520 };       // the roundabout (the basin east of the Express, the mountain's foot)
@@ -321,6 +325,7 @@ export function shapeScenic() {
     world.addCorridor(line, BENCH + 3, 'lift', { busRoad: true, scenic: true });
   }
   const rings = busRoads.roundabouts || [];
+  for (const ring of rings) ring.islandR = DOME_R; // (scenicprops.js: the boulders round the dome's foot)
   for (const ring of rings) world.addCorridor([[ring.x - 1, ring.z], [ring.x + 1, ring.z]], ring.R + BENCH, 'lift', { busRoad: true, scenic: true });
   const ringNear = (x, z, r) => { for (const ring of rings) if (Math.abs(x - ring.x) < r && Math.abs(z - ring.z) < r && Math.hypot(x - ring.x, z - ring.z) < r) return ring; return null; };
   const lb = (busRoads.laybys || []).filter((l) => l.scenic);
@@ -394,7 +399,7 @@ export function shapeScenic() {
       const ring = ringNear(x, z, ISLAND_R + 0.4);
       if (ring) {
         const rr = Math.hypot(x - ring.x, z - ring.z);
-        return ring.y + 0.18 + 0.85 * Math.max(0, 1 - (rr / ISLAND_R) ** 2); // (kerb + snow dome)
+        return rr < DOME_R ? ring.y + 0.18 + 0.85 * Math.max(0, 1 - (rr / DOME_R) ** 2) : ring.y; // (kerb + snow dome inside the apron)
       }
       pick(x, z);
       if (A.d > REACH) return h;

@@ -63,7 +63,7 @@ export function routeH(a, b, opts = {}) {
     const x = X(i), z = Z(i), e = 8;
     const gx = (world.height(x + e, z, 8) - world.height(x - e, z, 8)) / (2 * e), gz = (world.height(x, z + e, 8) - world.height(x, z - e, 8)) / (2 * e);
     const s = Math.hypot(gx, gz);
-    let p = 1 + Math.max(0, s - 0.18) * 6 + (s > 0.8 ? 30 : 0);
+    let p = 1 + Math.max(0, s - 0.18) * 6 + (s > 0.8 ? (opts.steepPen ?? 30) : 0);
     const q = opts.obstacles?.query(x, z, qo);
     if (q && (q.ski < CLEAR.ski || q.net < CLEAR.net || q.block < CLEAR.block || q.rail < CLEAR.rail)) return (pen[i] = Infinity);
     if (opts.bad && opts.bad(x, z)) return (pen[i] = Infinity);
@@ -109,7 +109,7 @@ export function routeH(a, b, opts = {}) {
       let ex = 0, yn = hj;
       if (opts.y0 !== undefined) { yn = clamp(hj, yr[st] - maxGrade * d, yr[st] + maxGrade * d); ex += Math.abs(hj - yn) * (d / CELL); }
       if (opts.y1 !== undefined) ex += Math.max(0, Math.abs(yn - opts.y1) - maxGrade * Math.hypot(X(j) - bx, Z(j) - bz)) * (d / CELL);
-      const c = g[st] + d * gc * pj + (opts.turnW ?? 300) * turn * turn + (turn > 0.01 ? (opts.bendC ?? 30) : 0) + (gr > maxGrade ? 3000 * (gr - maxGrade) / 0.01 : 0) + ex * (opts.exK ?? 40);
+      const c = g[st] + d * gc * pj + (opts.turnW ?? 300) * turn * turn + (turn > 0.01 ? (opts.bendC ?? 30) : 0) + (gr > maxGrade ? (opts.grK ?? 1) * 3000 * (gr - maxGrade) / 0.01 : 0) + ex * (opts.exK ?? 40);
       if (c < g[sj]) { g[sj] = c; len[sj] = L; yr[sj] = yn; from[sj] = st; open.push(c + Math.hypot(X(j) - bx, Z(j) - bz), sj); }
     }
   }

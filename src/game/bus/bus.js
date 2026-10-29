@@ -945,6 +945,8 @@ export class BusLine {
     // (the right-hand lane: right of the heading (dx, dz) is (-dz, dx))
     _a.set(_p.x - _p.dz * lf, _p.y, _p.z + _p.dx * lf);
     _b.set(_q.x - _q.dz * lr, _q.y, _q.z + _q.dx * lr);
+    // (on the road's own surface under each axle: the mountain roads are banked into their bends)
+    if (world.groundHeight) { _a.y = world.groundHeight(_a.x, _a.z, _p.y + 1); _b.y = world.groundHeight(_b.x, _b.z, _q.y + 1); }
     const g = this.bus.group;
     g.position.addVectors(_a, _b).multiplyScalar(0.5);
     _m.lookAt(_b, _a, _up);

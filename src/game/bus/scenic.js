@@ -4,9 +4,11 @@
 // after the car parks / hospital / rental) and carved by its own world cut (shapeScenic). Pure layout (no THREE).
 //   - the approach: A* (roads.js route) from a T junction on the village -> Sonnenkopf road east to a ROUNDABOUT at
 //     the mountain's foot (three arms: the approach, the climb, a short spur to the Talblick car park)
-//   - the climb: zigzag() lays straight legs across the mountain's face joined by hairpins (radius 14 m), each leg
-//     where the ground has come up to the road at ~9.8 %; the profile is capped at 11.5 % with both ends fixed
-//     (makeRoad envelope), the cut and fill (shapeScenic) deal with the crags: a sketchy road
+//   - the climb: climb() / zigzagFlow() lays long legs across the mountain's face, each bending with the terrain toward
+//     its grade line (~9.8 %), joined by smooth half-turn hairpins, the legs far enough apart that the natural
+//     mountainside rises between them (the old comb of straight legs, zigzag(), is only the fallback); the profile is
+//     capped at 11.5 % with both ends fixed (makeRoad envelope), the road banked into its bends, the cut into the
+//     hillside steep and the fill an embankment (shapeScenic)
 //   - pull-outs (lay-bys) on straight stretches with a drop on the valley side (a bench and a view board stand there,
 //     bus.js), the Gipfelblick car park at the top
 // Every scenic road is an access road (s = 0 at its car park / the ring, its end at the junction / the ring): the
@@ -21,7 +23,6 @@ import {
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const SC_GRADE = 0.115;             // the scenic road's steepest grade (alpine pass road)
-const LEG_G = 0.065;                // the grade the walker looks for along a leg (the hairpins make up the rest)
 const HAIRPIN_R = 14;               // m (centre line): tight but a car (and a bus) gets round
 export const RING_R = 15;           // the roundabout's centre line radius (single lane ring, the island inside)
 export const ISLAND_R = RING_R - 3.4 - 0.7; // (ROAD_HALF 3.4: roads.js imports this module, so its constants are not ready here yet)
@@ -52,61 +53,6 @@ export function badGround(O, allowNear = null) {
     if (allowNear && Math.hypot(x - allowNear.x, z - allowNear.z) < 70) return false;
     return laneDistance(x, z) < 30;
   };
-}
-
-// the climb: contour walker with hairpins -> [[x, z]...] every ~4 m, or null
-function serpentine(x, z, hd, O, TOP_H, { leg0 = 380, legs = [300, 180], maxPins = 12, allowNear = null, goal = null } = {}) {
-  const bad = badGround(O, allowNear), ds = 4, pts = [[x, z]];
-  // the mountain's broad shape (local crags averaged out: the road's cut deals with those)
-  const H = (a, b) => (world.height(a, b, 8) * 2 + world.height(a + 14, b, 8) + world.height(a - 14, b, 8) + world.height(a, b + 14, 8) + world.height(a, b - 14, 8)) / 6;
-  let leg = 0, legLen = leg0, hairpins = 0;
-  const nearOwn = (px, pz, skip) => { // distance to the road so far, leaving out its last `skip` points
-    let d = Infinity;
-    for (let i = 0; i < pts.length - skip; i += 2) d = Math.min(d, Math.hypot(pts[i][0] - px, pts[i][1] - pz));
-    return d;
-  };
-  for (let step = 0; step < 3000; step++) {
-    if (H(x, z) >= TOP_H || (hairpins >= maxPins && leg > 200 && H(x, z) > TOP_H - 90)) break;
-    const h0 = H(x, z);
-    let best = null;
-    for (let k = -6; k <= 6; k++) {
-      const a = hd + k * 0.05, nx = x + Math.sin(a) * ds, nz = z + Math.cos(a) * ds;
-      let cost = Math.min(2, Math.abs((H(nx, nz) - h0) / ds - LEG_G)) + Math.abs(k) * 0.004;
-      if (goal && Math.hypot(goal.x - x, goal.z - z) > 250) cost += 0.03 * (1 - Math.cos(a - Math.atan2(goal.x - x, goal.z - z))); // (toward the mountain while the ground lets it)
-      if (bad(nx, nz)) cost += 100;
-      const own = nearOwn(nx, nz, 30);
-      if (own < 48) cost += (48 - own) * 0.08;
-      if (!best || cost < best.cost) best = { a, nx, nz, cost };
-    }
-    // a hairpin: the leg is long enough, or ahead is no-go / the road below / a cliff
-    const ax = x + Math.sin(hd) * 40, az = z + Math.cos(hd) * 40;
-    const blocked = bad(ax, az) || best.cost > 0.3;
-    if ((leg >= legLen || (blocked && leg > 80)) && hairpins < maxPins) {
-      const e = 6, gx = H(x + e, z) - H(x - e, z), gz = H(x, z + e) - H(x, z - e);
-      const lx = Math.cos(hd), lz = -Math.sin(hd); // (the heading's left)
-      const turn = gx * lx + gz * lz > 0 ? 1 : -1; // (into the slope)
-      const cx = x + lx * turn * HAIRPIN_R, cz = z + lz * turn * HAIRPIN_R;
-      const a0 = Math.atan2(x - cx, z - cz), n = Math.ceil((Math.PI * HAIRPIN_R) / ds);
-      let ok = true;
-      const arc = [];
-      for (let i = 1; i <= n; i++) {
-        const a = a0 + turn * -(i / n) * Math.PI; // (sin/cos frame: + turns the radius vector right; left = -)
-        const px = cx + Math.sin(a) * HAIRPIN_R, pz = cz + Math.cos(a) * HAIRPIN_R;
-        if (bad(px, pz) || nearOwn(px, pz, Math.round(leg / ds) + 4) < 2 * HAIRPIN_R + 6) ok = false;
-        arc.push([px, pz]);
-      }
-      if (ok) {
-        pts.push(...arc);
-        x = arc[arc.length - 1][0]; z = arc[arc.length - 1][1]; hd = hd + Math.PI;
-        leg = 0; hairpins++; legLen = legs[0] + ((hairpins * 97) % legs[1]);
-        continue;
-      }
-    }
-    if (best.cost > 50) { if (typeof process !== "undefined" && process.env?.SCENIC_DEBUG) { const q = {}; O.query(x + Math.sin(hd) * 4, z + Math.cos(hd) * 4, q); console.log("walker stuck", step, Math.round(x), Math.round(z), Math.round(h0), hairpins, JSON.stringify(q), laneDistance(x, z), JSON.stringify(world.corridorAt(x, z)), JSON.stringify(expressNearest(x, z))); } return H(x, z) > TOP_H - 120 ? pts : null; } // (stuck near the top: the car park goes here)
-    x = best.nx; z = best.nz; hd = best.a; leg += ds;
-    pts.push([x, z]);
-  }
-  return pts;
 }
 
 // the climb, laid out: straight legs across the mountain's face (along its contours, alternately left and right of the
@@ -144,6 +90,109 @@ export function zigzag(B, ang, y0, O, allowNear, { topH = TOP_H, bad: badFn = nu
     if (y0 + DESIGN_G * s > topH) break;
   }
   return pins >= minPins ? { pts, pins, yEnd: y0 + DESIGN_G * s, U: [Ux, Uz] } : null;
+}
+
+// The climb as an alpine road (Oct 29, the user: "they should not be like a zig zag road ... when you look between
+// them there should be a big mountain where you drive up"). The comb above had short straight legs ~34 m apart joined
+// by square-ended hairpins, the ground between them carved into terraces. Here, on the same proven layout (legs across
+// the face, each next one where the ground has come up to the road's height, all checked against the no-go ground):
+//   - long legs (fewer hairpins), their ends staggered, so the legs lie far apart: the next leg at least far enough up
+//     that the natural slope between two legs stays under ~40 degrees (a real mountainside between them, not a bench)
+//   - each leg bends with the terrain: shifted up or down the face (within ~30 % of the gap to its neighbours) toward
+//     its grade line, the contour at the road's own height, eased (gentle curvature, no kinks), square into its hairpins
+//   - each hairpin one smooth half turn into the slope across the whole gap (a wide gap: two wide quarter turns and a
+//     short rise between), no straight-and-square corners
+// -> { pts: [[x, z]...] every ~4 m from B, pins, yEnd, U, flow: true } or null
+export function zigzagFlow(B, ang, y0, O, allowNear, { topH = TOP_H, bad: badFn = null, minPins = 1, legHalf = 260, bend = 0.42, side = 1, cap = null } = {}) {
+  const bad = badFn || badGround(O, allowNear), ds = 4, R = HAIRPIN_R;
+  const Ux = Math.sin(ang), Uz = Math.cos(ang), Cx = Uz * side, Cz = -Ux * side; // (uphill, across)
+  const P = (u, l) => [B.x + Ux * u + Cx * l, B.z + Uz * u + Cz * l];
+  const hash = (k) => { const v = Math.sin(k * 91.7 + 13.1 + side * 3.3) * 43758.5; return v - Math.floor(v); };
+  const ends = []; // the hairpins' l (staggered)
+  // (the legs shorten as the mountain narrows toward its top)
+  let frac = 0;
+  // (cap: { x, z, max }: the legs' ends on that side of the line up the face no further out than max: room kept there)
+  const lEnd = (k) => {
+    if (ends[k] !== undefined) return ends[k];
+    const sg = k % 2 ? -1 : 1, c = [].concat(cap || []).find((q) => (Cx * q.x + Cz * q.z) * sg > 0.5);
+    const L = Math.max(Math.min(legHalf, 130), legHalf * (1 - 0.7 * frac)) * (0.85 + 0.3 * hash(k));
+    return (ends[k] = sg * (c ? Math.min(L, c.max * (0.9 + 0.1 * hash(k + 5))) : L));
+  };
+  // a hairpin across a gap: half an ellipse (semi-axes: half the gap up the face, its bulge past the leg's end)
+  const pinAB = (gap) => { const a = gap / 2; return [a, Math.max(Math.sqrt(15 * a), Math.min(a, 46))]; };
+  const pinLen = (gap) => { const [a, b] = pinAB(gap); return (Math.PI / 2) * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b))); };
+  const G = (u, a, b) => { let t = 0, n = 0; const lo = Math.min(a, b), hi = Math.max(a, b); for (let l = lo; l <= hi; l += 20) { const [x, z] = P(u, l); t += world.height(x, z); n++; } return t / n; };
+  // the skeleton: legs { u, l0, l1 } (the first from the middle out), the gaps du between them
+  const legs = [{ u: 0, l0: 0, l1: lEnd(0) }];
+  let s = Math.abs(lEnd(0)), u = 0;
+  for (let k = 0; k < 30; k++) {
+    const a = lEnd(k), b = lEnd(k + 1), L = Math.abs(b - a), g0 = G(u, a, b);
+    let du = Math.max(2 * R + 4, (2 * 8.6 + DESIGN_G * (Math.PI * 22 + L)) / 0.84);
+    while (du < 220 && G(u + du, a, b) < y0 + DESIGN_G * (s + pinLen(du) + L * 0.5)) du += 4;
+    if (Math.max(G(u + 30, a, b), G(u + 60, a, b), G(u + 90, a, b)) < g0 + 1) { DBG('zf top', k, Math.round(y0 + DESIGN_G * s)); break; } // (over the top)
+    s += pinLen(du) + L;
+    frac = clamp((DESIGN_G * s) / Math.max(1, topH - y0), 0, 1);
+    u += du;
+    legs.push({ u, l0: a, l1: b });
+    if (y0 + DESIGN_G * s > topH) break;
+  }
+  // (a quick look first: the skeleton's straight legs and its hairpins clear of no-go ground, before the slow part)
+  for (let k = 0; k < legs.length; k++) {
+    const L0 = legs[k];
+    for (let l = L0.l0; Math.abs(l - L0.l0) <= Math.abs(L0.l1 - L0.l0); l += 10 * Math.sign(L0.l1 - L0.l0 || 1)) { const [x, z] = P(L0.u, l); if (bad(x, z)) { DBG('zf bad (quick)', Math.round(legHalf), side, k, Math.round(x), Math.round(z)); return null; } }
+    if (k < legs.length - 1) {
+      const gap = legs[k + 1].u - L0.u, [ea, eb] = pinAB(gap), dir = Math.sign(L0.l1 - L0.l0) || 1;
+      for (let i = 1; i < 8; i++) { const a = (i / 8) * Math.PI, [x, z] = P(L0.u + ea - Math.cos(a) * ea, L0.l1 + dir * Math.sin(a) * eb); if (bad(x, z)) { DBG('zf bad pin (quick)', Math.round(legHalf), side, k); return null; } }
+    }
+  }
+  // the geometry, leg by leg: the grade line within the leg's band, eased; the half turns between
+  const out = [[B.x, B.z]];
+  let sAt = 0;
+  const push = (p) => { const q = out[out.length - 1]; sAt += Math.hypot(p[0] - q[0], p[1] - q[1]); out.push(p); };
+  for (let k = 0; k < legs.length; k++) {
+    const L0 = legs[k], dn = k ? L0.u - legs[k - 1].u : 60, up = k < legs.length - 1 ? legs[k + 1].u - L0.u : 60;
+    const n = Math.max(2, Math.round(Math.abs(L0.l1 - L0.l0) / ds)), ls = [], du0 = [];
+    for (let i = 0; i <= n; i++) ls.push(L0.l0 + ((L0.l1 - L0.l0) * i) / n);
+    // (per station: the shift toward the contour at the road's height there)
+    const yA = y0 + DESIGN_G * sAt;
+    for (let i = 0; i <= n; i++) {
+      const yi = yA + DESIGN_G * ds * i, lo = -bend * dn, hi = bend * up;
+      let bestD = 0, be = Infinity;
+      if (i % 2 && i < n) { du0.push(NaN); continue; } // (every other station: filled in between below)
+      for (let d = lo; d <= hi; d += 3) { const [x, z] = P(L0.u + d, ls[i]); const e = Math.abs(world.height(x, z, 8) - yi) + Math.abs(d) * 0.02; if (e < be) { be = e; bestD = d; } }
+      du0.push(bestD);
+    }
+    for (let i = 1; i < n; i++) if (Number.isNaN(du0[i])) du0[i] = (du0[i - 1] + du0[i + 1]) / 2;
+    // eased: ~24 degrees at most off the face's line, square (no shift) over the 40 m into either end
+    const RATE = 0.45 * ds;
+    for (let i = 0; i <= n; i++) { const e = Math.min(i, n - i) * ds; du0[i] *= k === 0 && i < n / 2 ? Math.min(1, (i * ds) / 40) : Math.min(1, Math.max(0, (e - 8) / 40)); }
+    for (let i = 1; i <= n; i++) du0[i] = clamp(du0[i], du0[i - 1] - RATE, du0[i - 1] + RATE);
+    for (let i = n - 1; i >= 0; i--) du0[i] = clamp(du0[i], du0[i + 1] - RATE, du0[i + 1] + RATE);
+    for (let pass = 0; pass < 6; pass++) for (let i = 1; i < n; i++) du0[i] = (du0[i - 1] + 2 * du0[i] + du0[i + 1]) / 4;
+    for (let i = 1; i <= n; i++) push(P(L0.u + du0[i], ls[i]));
+    if (k === legs.length - 1) break;
+    // the half turn up to the next leg, bulging past this leg's end
+    const gap = legs[k + 1].u - L0.u, [ea, eb] = pinAB(gap), dir = Math.sign(L0.l1 - L0.l0) || 1, le = L0.l1, cu = L0.u + ea;
+    const m = Math.max(6, Math.ceil(pinLen(gap) / ds));
+    for (let i = 1; i <= m; i++) { const a = (i / m) * Math.PI; push(P(cu - Math.cos(a) * ea, le + dir * Math.sin(a) * eb)); }
+  }
+  const pins = legs.length - 1;
+  if (pins < minPins) return null;
+  // (eased once more: corners cut and every bend opened to a bus's 13 m: roads.js smoothPath)
+  const p = smoothPath(out, 4, 4);
+  const badAt = p.findIndex((q) => bad(q[0], q[1]));
+  if (badAt >= 0) { DBG('zf bad', legHalf, side, 'pins', pins, p[badAt].map(Math.round)); return null; }
+  return { pts: p, pins, yEnd: y0 + DESIGN_G * sAt, U: [Ux, Uz], flow: true };
+}
+// the climb: the flowing legs, the longest that fit (either way across the face), else the old comb
+export function climb(B, ang, y0, O, allowNear, opts = {}) {
+  const lh = opts.legHalf ?? LEG_HALF;
+  for (const f of opts.noComb ? [1.9, 1.6, 1.35, 1.15, 1, 0.85] : [1.9, 1.6, 1.35, 1.15]) for (const side of [1, -1]) for (const bend of [0.42, 0.2]) {
+    const r = zigzagFlow(B, ang, y0, O, allowNear, { ...opts, legHalf: lh * f, side, bend });
+    if (r && r.yEnd >= (opts.topH ?? TOP_H) - 60) { DBG('climb flow', f, side, bend, 'pins', r.pins, 'yEnd', Math.round(r.yEnd)); return r; }
+    if (r) DBG('climb flow short', f, side, Math.round(r.yEnd));
+  }
+  return opts.noComb ? null : zigzag(B, ang, y0, O, allowNear, opts);
 }
 
 // a car park's frame from where the road reaches it (end point, heading in): { lot fields } (cf. roads.js planLots)
@@ -222,9 +271,21 @@ export function planScenic(O) {
   const J1 = { x: J.x + ux * 26, z: J.z + uz * 26 };
   // B (planned first: the approach keeps off its switchbacks): ring -> the climb's start, then the switchbacks
   const angB = dirTo(CLIMB_AT), b0 = armPt(angB, RING_R), b1 = armPt(angB, RING_R + 14);
-  const ZZ = zigzag(b1, angB, yR, O, ring, { minDu: 34 });
+  // (the flowing climb; the old comb of straight legs only if it finds no way)
+  // (the climb starts ~100 m out from the ring, so its legs leave room round the roundabout for its other arms; north
+  // of it: room for the Passstrasse)
+  let ZZ = null, lead = [];
+  for (const out of [100, 60, 14]) {
+    const bS = armPt(angB, RING_R + out), ld = [];
+    for (let t = 14 + 4; t < out; t += 4) { const q = armPt(angB, RING_R + t); ld.push([q.x, q.z]); }
+    if (ld.some((q) => bad(q[0], q[1]))) continue;
+    ZZ = climb(bS, angB, yR + 0.04 * Math.max(0, out - 30), O, ring, { minDu: 34, cap: [{ x: 0, z: 1, max: 160 }, { x: 0, z: -1, max: 230 }] });
+    if (ZZ) { lead = ld; break; }
+  }
   if (!ZZ) { console.warn('scenic road: no climb', Math.round(ring.x), Math.round(ring.z)); return; }
-  const pb = [[b0.x, b0.z], ...ZZ.pts];
+  const zz = ZZ.pts.slice(Math.hypot(ZZ.pts[0][0] - b1.x, ZZ.pts[0][1] - b1.z) < 1 ? 1 : 0);
+  // (the corner where the lead turns onto the first leg rounded)
+  const pb = [[b0.x, b0.z], ...smoothPath([[b1.x, b1.z], ...lead, ...zz.slice(0, 18)], 4, 4), ...zz.slice(18)];
   const angA = dirTo(J1);
   const nearClimb = (x, z) => { let d = Infinity; for (let i = 0; i < pb.length; i += 2) { const q = pb[i]; if (Math.abs(q[0] - x) < 60 && Math.abs(q[1] - z) < 60) d = Math.min(d, Math.hypot(q[0] - x, q[1] - z)); } return d; };
   const badA = (x, z) => bad(x, z) || (Math.hypot(x - ring.x, z - ring.z) > 60 && nearClimb(x, z) < 55);
@@ -256,7 +317,13 @@ export function planScenic(O) {
   top.y = Math.min(top.y, ZZ.yEnd); // (the pad at the road's height: cut into the summit if need be)
   pb.push([top.ex, top.ez], [top.ex - top.dirx * 7, top.ez - top.dirz * 7]); // (in through the entrance: no gap)
   // C: a short spur to the Talblick car park (the side of the ring away from the other two arms)
+  // (in the widest gap between the other two arms and the way the Passstrasse leaves for the pass: scenicloop.js)
   let angC = Math.atan2(-(Math.sin(angA) + Math.sin(angB)), -(Math.cos(angA) + Math.cos(angB)));
+  {
+    const dirs = [angA, angB, dirTo({ x: 2790, z: 1660 })].map((a) => (a + 4 * Math.PI) % (2 * Math.PI)).sort((p, q) => p - q);
+    let best = -1;
+    for (let k = 0; k < dirs.length; k++) { const a = dirs[k], b = k + 1 < dirs.length ? dirs[k + 1] : dirs[0] + 2 * Math.PI; if (b - a > best) { best = b - a; angC = (a + b) / 2; } }
+  }
   const lowDef = { size: 'small', name: 'Talblick car park', hw: 13, hd: 9 };
   const c0 = armPt(angC, RING_R), c1 = armPt(angC, RING_R + 40);
   const pc = smoothPath([[c0.x, c0.z], [c1.x, c1.z]], 0, 4);
@@ -285,7 +352,11 @@ export function planScenic(O) {
   findLaybys(RB);
 }
 
-const REACH = 100, BATTER = 0.78; // m the cut reaches from the centre line; batter slope (tan 38 degrees)
+// m the cut reaches from the centre line; the batters: the cut into the hillside steep (rock and packed snow, tan 49
+// degrees), the fill down the valley side an embankment (tan 36 degrees). (Oct 29: was 100 m and 38 degrees both ways:
+// between the switchbacks' legs the mountain was carved into terraces; now the cut stays close to the road and the
+// natural slope rises between the legs)
+const REACH = 80, CUT_K = 1.15, FILL_K = 0.72;
 const smin = (a, b, k) => { const h = clamp(0.5 + (0.5 * (b - a)) / k, 0, 1); return b + (a - b) * h - k * h * (1 - h); };
 const smax = (a, b, k) => -smin(-a, -b, k);
 // One world cut for the scenic roads: flat across the road, eased back to the slope beyond the shoulder. Where two
@@ -297,19 +368,61 @@ export function shapeScenic() {
   // each roundabout arm level with the ring until its shoulder is clear of the ring's (then up or down to its own
   // grade): before, an arm curving away beside the ring already 2-3 m above it met the ring's flat shoulder in a step
   for (const ring of busRoads.roundabouts || []) for (const a of ring.arms || []) {
-    const r = a.road, n = r.n, D0 = RING_R + 2 * BENCH + 1, D1 = D0 + 22;
+    const r = a.road, n = r.n, D0 = RING_R + 2 * BENCH + 1;
+    // (the ease from the ring's level back to the arm's own profile long enough to stay under ~10 %: before, a fixed
+    // 22 m took up to 4 m: a 30 % ramp off the roundabout)
+    const Yo = (dc) => { for (let k = 0; k < n; k++) { const i = a.end ? n - 1 - k : k; if (Math.hypot(r.X[i] - ring.x, r.Z[i] - ring.z) >= dc) return r.Y[i]; } return r.Y[a.end ? 0 : n - 1]; };
+    let D1 = D0 + 22;
+    const spur = r.lot0 && r.length < 120; // (a short spur to a car park: as it was, level into its car park)
+    while (!spur && D1 < D0 + 140 && (D1 - D0) * 0.1 < 1.5 * Math.abs(Yo(D1) - ring.y)) D1 += 4;
     for (let k = 0; k < n; k++) {
       const i = a.end ? n - 1 - k : k, dc = Math.hypot(r.X[i] - ring.x, r.Z[i] - ring.z);
       if (dc > D1) break;
       r.Y[i] = ring.y + (r.Y[i] - ring.y) * smoothstep(D0, D1, dc);
     }
+    // (then out along the arm no steeper than 13 %: it catches up with its own profile within a few hundred metres)
+    // (and back from the far end the same: no step where it meets the profile there)
+    if (!spur) for (const fwd of [true, false]) for (let k = 1; k < n; k++) {
+      const i = a.end === fwd ? n - 1 - k : k, j = a.end === fwd ? i + 1 : i - 1, d = Math.abs(r.S[i] - r.S[j]) * 0.13;
+      r.Y[i] = clamp(r.Y[i], r.Y[j] - d, r.Y[j] + d);
+    }
   }
+  // superelevation: the road banked into its bends (inside lower), up to 4 % on the tight ones (radius under ~60 m),
+  // none on the straights, eased in and out along the road, none near its ends, its T junctions and lay-bys (level
+  // there) or on a roundabout's ring. Signed by the side the bend turns to (as `side` below): bank * side * d lowers
+  // the inside. (The car's physics feels it through the ground's slope: drive.js)
+  const tees = busRoads.scenicTees || [];
+  for (const r of roads) {
+    const n = r.n, raw = new Float32Array(n), bank = new Float32Array(n);
+    r.bank = bank;
+    if (r.ringRoad || r.length < 120) continue;
+    for (let i = 3; i < n - 3; i++) {
+      const dx = r.X[i + 1] - r.X[i - 1], dz = r.Z[i + 1] - r.Z[i - 1], l = Math.hypot(dx, dz) || 1;
+      const ax = r.X[i] - r.X[i - 3], az = r.Z[i] - r.Z[i - 3], bx = r.X[i + 3] - r.X[i], bz = r.Z[i + 3] - r.Z[i];
+      const t = Math.atan2(ax * bz - az * bx, ax * bx + az * bz), R = (Math.hypot(ax, az) + Math.hypot(bx, bz)) / Math.max(1e-4, Math.abs(t));
+      const turn = (dx / l) * (r.Z[i + 3] - r.Z[i]) - (dz / l) * (r.X[i + 3] - r.X[i]) >= 0 ? 1 : -1;
+      raw[i] = 0.04 * clamp((60 / R - 0.15) / 0.85, 0, 1) * turn;
+    }
+    for (let i = 0; i < n; i++) {
+      let t = 0, w = 0;
+      for (let k = -6; k <= 6; k++) { const j = clamp(i + k, 0, n - 1), wt = 7 - Math.abs(k); t += raw[j] * wt; w += wt; }
+      let f = smoothstep(30, 60, r.S[i]) * smoothstep(30, 60, r.length - r.S[i]);
+      for (const tq of tees) { const d = Math.hypot(r.X[i] - tq.x, r.Z[i] - tq.z); if (d < 70) f *= smoothstep(35, 70, d); }
+      for (const l of busRoads.laybys || []) if (l.scenic && busRoads.roads[l.ri] === r && Math.abs(l.s - r.S[i]) < 50) f *= smoothstep(25, 50, Math.abs(l.s - r.S[i]));
+      bank[i] = (t / w) * f;
+    }
+  }
+  const bankOff = (sg, t, side, d) => {
+    const b = sg.ka + (sg.kb - sg.ka) * t;
+    if (!b) return 0;
+    return -b * side * Math.min(d, ROAD_HALF + 0.6) * (1 - smoothstep(ROAD_HALF + 0.6, BENCH - 0.6, d));
+  };
   const G = 32, grid = new Map();
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const r of roads) {
     const ri = busRoads.roads.indexOf(r);
     for (let i = 0; i < r.n - 1; i++) {
-      const sg = { ax: r.X[i], az: r.Z[i], bx: r.X[i + 1], bz: r.Z[i + 1], ay: r.Y[i], by: r.Y[i + 1], ri, sa: r.S[i], sb: r.S[i + 1], r };
+      const sg = { ax: r.X[i], az: r.Z[i], bx: r.X[i + 1], bz: r.Z[i + 1], ay: r.Y[i], by: r.Y[i + 1], ri, sa: r.S[i], sb: r.S[i + 1], r, ka: r.bank[i], kb: r.bank[i + 1] };
       const R = REACH, x0 = Math.min(sg.ax, sg.bx) - R, x1 = Math.max(sg.ax, sg.bx) + R, z0 = Math.min(sg.az, sg.bz) - R, z1 = Math.max(sg.az, sg.bz) + R;
       minx = Math.min(minx, x0); minz = Math.min(minz, z0); maxx = Math.max(maxx, x1); maxz = Math.max(maxz, z1);
       for (let cx = Math.floor(x0 / G); cx <= Math.floor(x1 / G); cx++) for (let cz = Math.floor(z0 / G); cz <= Math.floor(z1 / G); cz++) {
@@ -423,7 +536,7 @@ export function shapeScenic() {
         // (its own bench: wider at its own lay-by; before, the lay-by's width jumped from one leg to the other
         // where the nearest leg swapped: a step in the ground)
         BO.ri = sg.ri; BO.s = sg.sa + (sg.sb - sg.sa) * t0; BO.side = (sg.bx - sg.ax) * (z - sg.az) - (sg.bz - sg.az) * (x - sg.ax) >= 0 ? 1 : -1;
-        o[1] += wq; o[2] += wq * (sg.ay + (sg.by - sg.ay) * t0); o[3] += wq * bench(BO);
+        o[1] += wq; o[2] += wq * (sg.ay + (sg.by - sg.ay) * t0 + bankOff(sg, t0, BO.side, d0)); o[3] += wq * bench(BO);
       }
       if (A.d <= bA) {
         // on the shoulder: its height; where another stretch's shoulder overlaps (two arms by a roundabout, a spur at
@@ -441,10 +554,11 @@ export function shapeScenic() {
         const BD = BANDS; BD.length = 0;
         for (const [d, ws, ys, bs] of best.values()) {
           const y = ys / ws, b = bs / ws;
-          const k = Math.max(BATTER, Math.abs(h - y) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
+          const kc = Math.max(CUT_K, (h - y) / (REACH - 2 - b)), kf = Math.max(FILL_K, (y - h) / (REACH - 2 - b)), f = smoothstep(REACH * 0.75, REACH, d);
           // (a further stretch's band loosens from 40 m out, gently (~1 m per m), so one coming into reach never steps
           // the ground where the nearer ones pulled it away from h)
-          const e = Math.max(0, d - b), q = smoothstep(REACH * 0.92, REACH, d), w = k * e + Math.max(0, d - REACH * 0.4) + 3000 * q * q, l = y - w, u = y + w;
+          const e = Math.max(0, d - b), q = smoothstep(REACH * 0.92, REACH, d), w0 = Math.max(0, d - REACH * 0.4) + 3000 * q * q;
+          const wl = kf * e + w0, wu = kc * e + w0, l = y - wl, u = y + wu, w = Math.min(wl, wu);
           lo = Math.max(lo, l); hi = Math.min(hi, u); soft = Math.min(soft, 0.2 * w + 0.01);
           BD.push((1 - f) / (e * e + 0.02), l, u); // (its inverse-distance weight: used where the bands disagree)
         }

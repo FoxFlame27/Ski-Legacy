@@ -332,9 +332,15 @@ export class Drive {
       if (input?.hit?.('KeyL')) d.lights = !d.lights;
       if (input?.hit?.('KeyR')) { this.view = this.view === 'chase' ? 'cockpit' : 'chase'; this.cam.ready = false; }
       if (input?.hit?.('KeyE') && d.offT <= 0 && !d.crash) { this.exit(); if (!this.d) return; }
+      // the pedals: pressed progressively, not switched (Oct 29, "make driving more realistic"): the throttle opens over
+      // ~0.3 s and closes over ~0.15 s, the brake bites over ~0.2 s and lets go over ~0.1 s, so pulling away, lifting
+      // off and braking shift the car's weight smoothly instead of in a jolt. (Steering is untouched: its own rack)
+      const pd = (v, want, up, down) => (want > v ? Math.min(want, v + up * dt) : Math.max(want, v - down * dt));
+      d.thrP = pd(d.thrP || 0, thr, 3.4, 7), d.brkP = pd(d.brkP || 0, brk, 5, 10);
+      const thrE = thr ? Math.max(0.05, d.thrP) : d.thrP > 0.02 ? d.thrP : 0, brkE = brk ? Math.max(0.08, d.brkP) : d.brkP > 0.02 ? d.brkP : 0;
       const n = Math.max(1, Math.ceil(dt / (1 / 120)));
       if (d.crash) this.crashStep(dt);
-      else for (let i = 0; i < n; i++) { this.step(dt / n, thr, brk, steerIn, hb); if (d.crash) break; }
+      else for (let i = 0; i < n; i++) { this.step(dt / n, thrE, brkE, steerIn, hb, thr, brk); if (d.crash) break; }
       if (!d.spec.electric && d.start < 2.4) {
         if (cranking) { d.crank = 1; d.firing = d.start > 0.62 ? 0.5 : 0; d.rpm = 210 + 70 * Math.abs(Math.sin(d.start * 26)); }
         else { const k = d.start - 0.85; d.crank = 0; d.firing = 1; d.rpm = Math.max(d.rpm, IDLE + 900 * Math.exp(-k * 2.4) * Math.min(1, k * 10)); }
@@ -391,7 +397,7 @@ export class Drive {
   // with the steering). Yaw comes from the tyre forces. The steering: a rack with less lock at speed, rate-limited,
   // centring itself. The engine: a torque curve through the automatic gears (one gear and a power limit for the
   // Tesla), engine braking off the throttle, air drag setting the top speed.
-  step(dt, thr, brk, steerIn, hb) {
+  step(dt, thr, brk, steerIn, hb, thrKey = thr, brkKey = brk) {
     const d = this.d, spec = d.spec, W = this.world;
     const fx = Math.sin(d.yaw), fz = Math.cos(d.yaw), lx = fz, lz = -fx; // forward, left
     let u = d.vx * fx + d.vz * fz, v = d.vx * lx + d.vz * lz, r = d.yawRate;
@@ -403,9 +409,9 @@ export class Drive {
     const cosT = 1 / Math.sqrt(1 + gx * gx + gz * gz);
     // gearbox (automatic): S at a standstill engages reverse, W drive
     if (Math.abs(u) < 0.4) {
-      if (brk && !thr && d.gear !== 'R') { d.holdR = (d.holdR || 0) + dt; if (d.holdR > 0.25) d.gear = 'R'; }
+      if (brkKey && !thrKey && d.gear !== 'R') { d.holdR = (d.holdR || 0) + dt; if (d.holdR > 0.25) d.gear = 'R'; }
       else d.holdR = 0;
-      if (thr && d.gear !== 'D') d.gear = 'D';
+      if (thrKey && d.gear !== 'D') d.gear = 'D';
     }
     const m = MASS[d.e.name] || 1700, L = d.wheelBase, fwd = DRIVE[d.e.name] === 'fwd', rwd = DRIVE[d.e.name] === 'rwd';
     const a = L * (fwd ? 0.4 : rwd ? 0.47 : 0.46), b = L - a, hcg = 0.55, Iz = m * a * b * 1.15;
@@ -427,7 +433,10 @@ export class Drive {
       // loads on the axles: static, plus the weight moving with the acceleration (nose down braking, squat pulling)
       const Wt = m * G * cosT;
       const Fzf = Math.max(Wt * 0.15, (Wt * b) / L - (m * d.la * hcg) / L), Fzr = Math.max(Wt * 0.15, (Wt * a) / L + (m * d.la * hcg) / L);
-      const mu = s.mu, capF = mu * Fzf, capR = mu * Fzr;
+      // (the tyres' load sensitivity: cornering hard, the weight moving onto the outside wheels costs a little grip;
+      // tw: track width)
+      const tw = Math.max(1.4, d.w - 0.3), ltK = 1 - 0.06 * Math.min(1, (Math.abs(d.lat || 0) * hcg) / (tw * 0.5 * G));
+      const mu = s.mu * ltK, capF = mu * Fzf, capR = mu * Fzr;
       // the engine (through the gears) and the brakes
       let Fdrive = 0, Fbrake = 0;
       if (!s.road) thr *= 0.6; // (a gentler throttle on snow: less wheelspin)
@@ -437,7 +446,9 @@ export class Drive {
       if (d.gear === 'D') {
         if (thr) Fdrive = spec.electric ? Math.min(Fmax, (Fmax * 0.42 * spec.top) / Math.max(1, au)) * thr : Fmax * gearK * curve * thr * (d.shiftT > 0 ? 0.3 : 1);
         if (brk) Fbrake = m * 10 * brk;
-        else if (!thr && u > 1) Fbrake = m * (spec.electric ? 1.1 : 0.35 + 0.8 * (d.rpm / (REDLINE * (spec.rev || 1)))); // (engine braking / regen)
+        // (engine braking / regen off the throttle: stronger the higher the revs and the lower the gear, as the throttle
+        // closes; downhill the gearbox holds a lower gear for it, below)
+        else if (thr < 0.3 && u > 1) Fbrake = (1 - thr / 0.3) * m * (spec.electric ? 1.1 : Math.min(1.6, (0.25 + 0.85 * (d.rpm / (REDLINE * (spec.rev || 1)))) * clamp(Math.sqrt(RATIOS[d.gi] / RATIOS[3]), 0.75, 1.5)));
       } else if (d.gear === 'R') {
         if (brk) Fdrive = u > -5.5 ? -m * 3.4 * (s.road ? 1 : 0.7) : 0;
         if (thr) Fbrake = m * 10;
@@ -470,6 +481,7 @@ export class Drive {
       const drag = (topF / (spec.top * spec.top)) * u * au;
       const roll = s.roll * Wt * sgn * Math.min(1, au / 0.5);
       const gF = -G * (gx * fx + gz * fz) * cosT * m, gL = -G * (gx * lx + gz * lz) * cosT * m;
+      d.downhill = gF / (m * G) * Math.sign(u || 1); // (the slope's pull along the way you go: + downhill)
       const cs = Math.cos(delta), sn = Math.sin(delta);
       const FF = Fxf * cs - Fyf * sn + Fxr - drag - roll + gF;
       const FL = Fxf * sn + Fyf * cs + Fyr + gL;
@@ -532,8 +544,10 @@ export class Drive {
       const rev = spec.rev || 1; // (a high-revving engine: the same gears, every rpm that much higher)
       const rpmAt = (gi) => (speedAbs / wr) * RATIOS[gi] * FINAL * 60 / (2 * Math.PI) * rev;
       if (d.gear === 'D') {
-        if (rpmAt(d.gi) > 5800 * rev && d.gi < RATIOS.length - 1) { d.gi++; d.shiftT = 0.25; }
-        else if (d.gi > 0 && rpmAt(d.gi) < 2200 * rev) d.gi--;
+        // (coasting or braking down a steep road it holds a lower gear: the engine brakes, as a driver would shift down)
+        const hold = thr < 0.1 && (d.downhill || 0) > 0.05, up = hold ? 6200 : 5800, down = hold ? 3300 : thr > 0.85 ? 2800 : 2200;
+        if (rpmAt(d.gi) > up * rev && d.gi < RATIOS.length - 1) { d.gi++; d.shiftT = 0.25; }
+        else if (d.gi > 0 && rpmAt(d.gi) < down * rev && rpmAt(d.gi - 1) < 6000 * rev) d.gi--;
       } else d.gi = 0;
       d.rpm = clamp(Math.max(IDLE + thr * 600, rpmAt(d.gi)), IDLE, REDLINE * rev);
     }

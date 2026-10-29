@@ -236,19 +236,32 @@ export class Impound {
   }
 
   // the truck fetches it (the wreck fee, now); it ends in an impound bay, locked until tomorrow
+  // Multiplayer (R.mp, net/session.js): the server charges the fee and keeps the impound (its day: the world's) in your
+  // profile, so it holds across reconnects; the bay is one no other player's car stands in.
   tow(e) {
-    const R = this.R, fee = this.fee;
+    const R = this.R, fee = this.fee, mp = R.mp;
     e.towing = true; e.abandonT = 0;
-    const free = (this.pound || []).findIndex((b) => !b.taken);
+    const free = (this.pound || []).findIndex((b) => !b.taken && !mp?.carNear?.(b.x, b.z, 2));
     const bi = Math.max(0, free);
     this.save.impound = { day: this.day, bay: bi, plate: e.cfg?.plate || null };
-    this.save.money -= fee;
-    R.writeSave?.();
-    R.hud?.setMoney?.(this.save.money, -fee);
+    if (mp?.tow) {
+      const b = this.pound?.[bi], p = b && this.pose ? this.pose(b) : (R.carSpot || { x: e.car.position.x, z: e.car.position.z, yaw: 0 });
+      mp.tow('tow', [p.x, world.height(p.x, p.z) + 0.03, p.z, p.yaw], bi).then((d) => {
+        const day = d?.impound?.day;
+        if (!Number.isFinite(day)) return;
+        if (this.save.impound?.plate === (e.cfg?.plate || null)) this.save.impound.day = day; // (the server's day)
+        if (e.impound) e.impound.day = day;
+      });
+    } else {
+      this.save.money -= fee;
+      R.writeSave?.();
+      R.hud?.setMoney?.(this.save.money, -fee);
+    }
     R.audio?.play?.('cash');
     R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · pick it up tomorrow at the car rental`, 'bad', 5200);
     const done = (car) => {
       car.towing = false;
+      if (mp && R.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends; the impound stays)
       if (R.current !== car) return; // (returned meanwhile: a new rental)
       car.impound = { day: this.save.impound?.day ?? this.day };
       this.place(car, this.pound?.[bi] || this.own);

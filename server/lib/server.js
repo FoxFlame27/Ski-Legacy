@@ -63,6 +63,7 @@ export const validName = (s) => NAME_RE.test(s) && /[A-Za-z0-9]/.test(s);
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
+const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const CANTONS = ['VS', 'GR', 'BE', 'UR', 'OW', 'TI', 'ZH', 'LU'];
@@ -522,7 +523,7 @@ class Client {
     this.pres = null;      // the last presence row
     this.interior = null;  // server-approved interior id ('skishop', 'carrental', 'chalet:7', ...)
     this.seat = null;      // { k, v, seat }
-    this.vehs = { car: null, heli: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? } (setVeh)
+    this.vehs = { car: null, heli: null, tow: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
     this.queue = null;     // race id queued for
     this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
@@ -689,6 +690,7 @@ export class GameServer {
     if (!c.key || this.online.get(c.key) !== c) return;
     clearTimeout(c.graceT); c.graceT = null;
     this.online.delete(c.key);
+    this.settleCar(c); // (gone mid-tow: the car's record ends in the impound bay / its own bay)
     const w = c.world;
     if (w) {
       this.lastWorld.set(c.key, { id: w.id, t: Date.now() });
@@ -817,6 +819,8 @@ export class GameServer {
       case 'heliRent': return reply(w.heliRent(c));
       case 'heliReturn': return reply(w.heliReturn(c));
       case 'veh': return reply(this.setVeh(c, d));
+      case 'tow': return reply(this.tow(c, d));
+      case 'towDone': return reply(this.towDone(c));
       case 'raceJoin': return reply(w.raceJoin(c, d));
       case 'raceLeave': return reply(w.raceLeave(c));
       case 'raceFinish': return reply(w.raceFinish(c, d));
@@ -889,6 +893,7 @@ export class GameServer {
     this.placeChalet(c); // (your chalet back on its plot, or another free one; before 'join' carries it)
     const w = this.pickWorld(k);
     w.addPlayer(c);
+    this.settleCar(c); // (a tow left unfinished by a restart; an impound past its day)
     this.log(`[+] ${c.name} -> world ${w.id} (${w.size}/${MAX_PLAYERS}, ${this.online.size} online)`);
     return { d: this.loginMsg(c, false) };
   }
@@ -945,9 +950,15 @@ export class GameServer {
   // Leaving the world takes them out of everyone's view (the 'leave' broadcast) until you are back.
   setVeh(c, d) {
     const k = d?.k;
-    if (k !== 'car' && k !== 'heli') return { err: 'bad_vehicle' };
+    if (k !== 'car' && k !== 'heli' && k !== 'tow') return { err: 'bad_vehicle' };
     let v = null;
-    if (!d.off) {
+    if (k === 'tow' && !d.off) {
+      // your tow truck out on a job for your car (towtruck.js: only the owner's client drives it): its pose, speed and
+      // whether your car rides on its bed. Streamed a few times a second; never stored
+      if (!c.profile.cars?.[0]) return { err: 'no_car' };
+      if (!validAt(d.at) || (d.v != null && !isNum(d.v))) return { err: 'bad_value' };
+      v = { k, at: d.at.map((x) => Math.round(x * 100) / 100), v: Math.round(clamp(d.v || 0, -30, 30) * 100) / 100, car: !!d.car };
+    } else if (!d.off) {
       if (k === 'car') {
         const car = c.profile.cars?.[0];
         if (!car) return { err: 'no_car' };
@@ -958,14 +969,52 @@ export class GameServer {
         v = { k, id: h.id };
       }
       if (d.at != null) {
-        if (!Array.isArray(d.at) || d.at.length !== 4 || !d.at.every(isNum)) return { err: 'bad_value' };
+        if (!validAt(d.at)) return { err: 'bad_value' };
         v.at = d.at.map((x) => Math.round(x * 100) / 100);
-        if (k === 'car') { c.profile.cars[0].at = v.at; this.store.profiles.save(); }
+        // (while the truck has it, the spot kept is where the tow ends: the impound bay or its own bay)
+        if (k === 'car' && !c.profile.cars[0].tow) { c.profile.cars[0].at = v.at; this.store.profiles.save(); }
       }
     }
     c.vehs[k] = v;
     c.world?.broadcast('veh', { pid: c.pid, k, veh: v }, c);
     return { d: { veh: v } };
+  }
+
+  // ---------------------------------------------------------------- the tow truck (game/towtruck.js, impound.js)
+  // { kind: 'wreck' }: you wrecked your car; { kind: 'tow' }: you left it blocking a road. The server charges its own
+  // fee (CATALOG.wreckFee, once per tow; like a fine in single player it may take the balance below zero: the truck
+  // fetches the car either way) and records the tow on the car: home [x, y, z, yaw] is where it ends (a wreck: its
+  // own bay, repaired; a tow: impound bay `bay`, locked until the next world day). The parked spot becomes home at
+  // once, so a player who drops out mid-tow finds the car there (settleCar ends the record on leaving / login).
+  tow(c, d) {
+    const P = c.profile, car = P.cars?.[0];
+    if (!car) return { err: 'no_car', d: { money: P.money } };
+    if (d.kind !== 'wreck' && d.kind !== 'tow') return { err: 'bad_kind' };
+    if (!validAt(d.home)) return { err: 'bad_value' };
+    if (car.tow) return { err: 'busy', d: { money: P.money, impound: car.impound || null } };
+    const now = Date.now(), fee = CATALOG.wreckFee ?? 1500, home = d.home.map((x) => Math.round(x * 100) / 100);
+    P.money = Math.round(P.money - fee);
+    car.tow = { kind: d.kind, since: now, home };
+    car.at = home;
+    if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 };
+    this.store.profiles.save();
+    return { d: { money: P.money, fee, impound: car.impound || null, at: home } };
+  }
+  /** The truck has unloaded your car (in its bay / the impound): the tow record ends. */
+  towDone(c) {
+    this.settleCar(c);
+    if (c.vehs.tow) this.setVeh(c, { k: 'tow', off: true });
+    return { d: { at: c.profile.cars?.[0]?.at || null } };
+  }
+  /** A tow that never finished (the owner left mid-tow, the server restarted) ends where it was going; an impound
+   *  whose day has passed is lifted. */
+  settleCar(c, now = Date.now()) {
+    const car = c.profile?.cars?.[0];
+    if (!car) return;
+    let dirty = false;
+    if (car.tow) { if (Array.isArray(car.tow.home)) car.at = car.tow.home; delete car.tow; dirty = true; }
+    if (car.impound && c.world && c.world.dayAt(now) > car.impound.day) { delete car.impound; dirty = true; } // (by the world's own clock)
+    if (dirty) this.store.profiles.save();
   }
 
   // ---------------------------------------------------------------- interiors (chalets need the owner's ok)

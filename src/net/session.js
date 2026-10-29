@@ -15,6 +15,7 @@ import { PROTO, ST, F, ERR_TEXT, MAX_PLAYERS } from './protocol.js';
 import { RemotePlayers } from './remote.js';
 import { RemoteVehicles } from './vehicles.js';
 import { CarRide } from './carride.js';
+import { TowMp } from './tow.js';
 import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
 import { MpTransit } from './transit.js';
@@ -58,6 +59,7 @@ export class Multiplayer {
     this.race = { queued: null, queue: null, start: null };
     this.raceRows = []; this.boardT = 0;
     this.carRide = new CarRide(this); // your car shown to everyone, rides in other players' cars
+    this.towMp = new TowMp(this);     // your tow truck shown to everyone (its pose, your car on its bed)
     this.heliMp = new MpHeli(this);   // the helicopter pad and your copy
     this.transit = new MpTransit(this); // the shared trains, express, gondolas / chairlifts (and buses): seats, timelines
     this.vehicles = null;             // the other players' cars and helicopters (per world: setWorld)
@@ -123,6 +125,7 @@ export class Multiplayer {
     this.applyProfile(d.profile);
     this.applyPlot(d.chaletPlot, true);
     this.setWorld(d.world);
+    { const day = this.dayNow(); if (day != null) this.c.save.day = day; } // (the world's day before the rental is placed: impound.js adopt)
     this.ui ||= new MpUI();
     this.ui.show(true);
     this.bind();
@@ -144,6 +147,7 @@ export class Multiplayer {
       localCar: () => this.carRide.localCar(), selfName: () => MP.name,
       colliders: this.c.colliders, ridingPid: () => this.carRide.ride?.pid, // (their cars are solid: you can't walk or drive through them)
       transitSeat: (k, v, n, out) => this.transit.seat(k, v, n, out), // (riders of the shared trains, cabins, buses)
+      localTow: () => window.__game?.carRental?.truck || null, // (your own truck: the others' are not drawn over it in the TOW bay)
     });
     this.remotes = new RemotePlayers({
       scene: this.c.scene, makeRig: this.c.makeRig, applyOutfit: this.c.applyOutfit, getScene: this.c.getScene, fx: this.c.fx,
@@ -203,7 +207,7 @@ export class Multiplayer {
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
       // resumed: the server held you through the drop (same world and pid, seat, chalet plot, car, helicopter, race
       // entry): nothing to undo. Otherwise (away longer than the grace period) the rides start over
-      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); }
+      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); this.towMp.reset(); }
       this.c.hud.flash(d.resumed ? 'Reconnected' : 'Reconnected · back in the world', 'good', 2000);
       net.emit('relogin', d); // (wave-2 systems: claim your seat again; the server keeps it if it held you)
       // a race that ended while you were away: its results now
@@ -228,7 +232,7 @@ export class Multiplayer {
   leave() {
     if (!MP.active) return;
     if (this.race.start && !this.race.finished) net.send('raceFinish', { rid: this.race.start.rid, dnf: true });
-    try { this.carRide.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.dispose(); this.towMp.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
     for (const off of this.offs) off();
     this.offs.length = 0;
     clearTimeout(this.pushT); this.pushT = null;
@@ -255,6 +259,7 @@ export class Multiplayer {
       outfits: { owned: [...(p.outfits?.owned || [])], equipped: { ...(p.outfits?.equipped || {}) } },
       chalet: p.chalet ? JSON.parse(JSON.stringify(p.chalet)) : null,
       rental: car ? { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, custom: !!car.custom } : null,
+      impound: car?.impound ? { day: car.impound.day, bay: car.impound.bay | 0, plate: car.plate } : null, // (the server keeps it: impound.js)
       stats: { races: 0, wins: 0, topSpeed: 0, distance: 0, earned: 0, ...(p.stats || {}) },
       records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
       dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,
@@ -415,6 +420,26 @@ export class Multiplayer {
   /** A random plate nobody has (the server's), or null. */
   plateIssue() { return net.request('plateIssue').then((d) => d.plate || null, () => null); }
   carEnded(cfg) { if (cfg?.plate) net.request('carReturn', { plate: cfg.plate }).catch(() => {}); if (MP.profile) MP.profile.cars = []; }
+  /** The tow truck sets out for your car (carrental.js wrecked: 'wreck'; impound.js tow: 'tow'): the server charges
+   *  its fee (CATALOG.wreckFee) and records the tow; home [x, y, z, yaw] is where the car ends (its own bay / impound
+   *  bay `bay`). Resolves the server's answer { money, fee, impound, at } or null. */
+  async tow(kind, home, bay) {
+    this.guardMoney();
+    try {
+      const d = await net.request('tow', { kind, home, bay });
+      this.setServerMoney(d.money);
+      if (d.fee) this.c.hud.setMoney?.(this.c.save.money, -d.fee);
+      const car = MP.profile?.cars?.[0];
+      if (car) { car.at = d.at; if (d.impound) car.impound = d.impound; }
+      return d;
+    } catch (e) {
+      if (e.data?.money != null) this.setServerMoney(e.data.money);
+      if (e.code !== 'busy') console.warn('[mp] tow:', e.code || e.message);
+      return e.data?.impound ? { impound: e.data.impound } : null;
+    }
+  }
+  /** The truck has unloaded your car: the server's tow record ends. */
+  towDone() { net.request('towDone').catch(() => {}); }
 
   // ---------------------------------------------------------------- interiors and permissions
   /** Tell the server which interior you are in (null = outdoors). Resolves false when it refuses (a chalet). */
@@ -630,7 +655,7 @@ export class Multiplayer {
     if (day != null && s.day !== day) s.day = day; // (the day pass and the jobs count the world's days)
     this.guestUI();
     this.guardMoney();
-    try { this.carRide.frame(dt); this.heliMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.frame(dt); this.towMp.frame(dt); this.heliMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
     try { this.transit.update(); } catch (e) { console.warn('[mp] transit', e); }
     // presence
     this.sendAcc += dt;

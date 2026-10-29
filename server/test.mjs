@@ -530,6 +530,55 @@ try {
   const toMid = ((24 - wd.hourAt(tNow)) / 24) * DAY_MS;
   ok(wd.dayAt(tNow + toMid - 1000) === d0 && wd.dayAt(tNow + toMid + 1000) === d0 + 1, 'the day turns over at midnight');
 
+  // ---------------------------------------------------------------- the tow truck: the fee, the impound, mid-tow drops
+  console.log('tow truck');
+  {
+    const gus = await join('Tow Gus'), hal = await join('Tow Hal');
+    const nocar = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
+    ok(!nocar.ok && nocar.err === 'no_car', 'no car: nothing to tow (no_car)');
+    server.profileOf('tow gus').money = 20000;
+    const bought = await gus.f.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'white' } });
+    const m0 = bought.d.money;
+    const badHome = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 'x', 0] });
+    ok(!badHome.ok && badHome.err === 'bad_value', 'a tow needs a valid home spot');
+    const t1 = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
+    const gw = server.worlds.get(gus.l.d.world.id), gcar = () => server.profileOf('tow gus').cars[0];
+    ok(t1.ok && t1.d.fee === CATALOG.wreckFee && CATALOG.wreckFee === 1500 && t1.d.money === m0 - CATALOG.wreckFee, 'towed off a road: the server charges its own fee ($1,500)');
+    ok(t1.d.impound?.day === gw.dayAt() && t1.d.impound.bay === 2 && gcar().impound?.day === gw.dayAt(), '...and impounds the car until the next world day (in the profile)');
+    ok(JSON.stringify(gcar().at) === JSON.stringify([1, 2, 3, 0.5]), "...its parked spot is the impound bay at once");
+    const t2 = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
+    ok(!t2.ok && t2.err === 'busy' && server.profileOf('tow gus').money === m0 - 1500, 'a second tow while the truck is out is refused (charged once)');
+    await gus.f.req('veh', { k: 'car', at: [50, 0, 50, 0] });
+    ok(JSON.stringify(gcar().at) === JSON.stringify([1, 2, 3, 0.5]), 'while towed, the car moving does not change the spot it ends in');
+    gus.f.send('veh', { k: 'tow', at: [10, 1, 20, 1.2], v: 8, car: true });
+    const tv = await hal.f.next('veh', (d) => d.k === 'tow' && d.pid === gus.l.d.pid);
+    ok(tv && tv.veh.car === true && tv.veh.at[0] === 10 && tv.veh.v === 8, "the others see Gus's tow truck (pose, speed, the car on its bed)");
+    const badTow = await gus.f.req('veh', { k: 'tow', at: [1, 2] });
+    ok(!badTow.ok && badTow.err === 'bad_value', 'a tow truck pose must be [x, y, z, yaw]');
+    // Gus leaves mid-tow: the record ends in the impound bay, the impound stays; back, it is there
+    gus.f.close();
+    await hal.f.next('leave', (d) => d.name === 'Tow Gus');
+    ok(!gcar().tow && JSON.stringify(gcar().at) === JSON.stringify([1, 2, 3, 0.5]) && gcar().impound, 'Gus drops out mid-tow: his car ends in the impound bay (still impounded)');
+    let g2 = await relog('Tow Gus', gus.token);
+    ok(g2.l.ok && g2.l.d.profile.cars[0].impound?.day === t1.d.impound.day && !g2.l.d.profile.cars[0].tow && g2.l.d.profile.cars[0].at[0] === 1, '...and finds it there after logging in again');
+    // a day later the impound is lifted
+    server.profileOf('tow gus').cars[0].impound.day = gw.dayAt() - 1;
+    g2.f.close(); await sleep(100);
+    g2 = await relog('Tow Gus', gus.token);
+    ok(g2.l.ok && !g2.l.d.profile.cars[0].impound, 'the next world day the impound is lifted');
+    // a wreck: the fee even when it takes the balance below zero (a fine, as in single player); towDone ends it
+    server.profileOf('tow gus').money = 100;
+    const w1 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
+    ok(w1.ok && w1.d.money === 100 - 1500 && !w1.d.impound && gcar().tow?.kind === 'wreck', 'a wreck: the fee (a fine: below zero if need be), no impound');
+    g2.f.send('veh', { k: 'tow', at: [10, 1, 20, 1.2], v: 0, car: true });
+    await hal.f.next('veh', (d) => d.k === 'tow' && d.veh);
+    const dn = await g2.f.req('towDone');
+    const off = await hal.f.next('veh', (d) => d.k === 'tow' && d.veh === null);
+    ok(dn.ok && !gcar().tow && JSON.stringify(gcar().at) === JSON.stringify([5, 0, 6, 0]) && !!off, 'towDone: the car is home in its bay, the truck leaves the others\' view');
+    g2.f.close(); hal.f.close();
+    await sleep(100);
+  }
+
   // ---------------------------------------------------------------- persistence
   a.close(); b.close();
   await sleep(150);

@@ -1222,6 +1222,8 @@ function applyMpSave() {
     rent: (cfg) => multiplayer.rentCar(cfg).then((car) => { if (car) carRental.placeRented({ ...cfg, ...car }); }),
     ended: (cfg) => multiplayer.carEnded(cfg),
     plateCheck: (p) => multiplayer.plateCheck(p), plateIssue: () => multiplayer.plateIssue(), // (the configurator: plates unique for everyone)
+    tow: (kind, home, bay) => multiplayer.tow(kind, home, bay), towDone: () => multiplayer.towDone(), // (the tow truck: the fee and the impound on the server)
+    carNear: (x, z, r) => multiplayer.carRide.carNear(x, z, r), // (an impound bay with another player's car in it)
   } : null;
   if (outfitShop) outfitShop.buyHook = on ? (id) => multiplayer.buyOutfit(id) : null;
 }

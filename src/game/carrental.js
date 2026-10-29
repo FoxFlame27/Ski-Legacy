@@ -63,6 +63,7 @@ export class CarRental {
     this.L = busRoads.rental;
     this.inside = false;
     this.current = null; // the rented car (a parking entry, rental: true)
+    this.towed = null;   // multiplayer: your wreck while the truck fetches it (the others still see it)
     this.ui = new CarRentalUI({ hud: o.hud, audio: o.audio });
     if (!this.L) return;
     const L = this.L;
@@ -293,12 +294,19 @@ export class CarRental {
   // its bay in the car park beside the hall (the same car: model, paint, plate)
   wrecked(e) {
     const mine = e.rental && this.save.rental ? this.save.rental : null;
+    const mp = mine ? this.mp : null;
     if (mine) {
       e.rental = false;
       if (this.current === e) this.current = null;
-      this.save.money -= WRECK_FEE;
-      this.writeSave();
-      this.hud?.setMoney?.(this.save.money, -WRECK_FEE);
+      if (mp?.tow) { // multiplayer: the server charges the fee and records the tow (it ends in your bay: net/session.js)
+        this.towed = e; // (still shown to the others: lying there, then on the truck: net/carride.js)
+        const p = this.carSpot;
+        mp.tow('wreck', p ? [p.x, world.height(p.x, p.z) + 0.03, p.z, p.yaw] : [e.car.position.x, e.car.position.y, e.car.position.z, 0]);
+      } else {
+        this.save.money -= WRECK_FEE;
+        this.writeSave();
+        this.hud?.setMoney?.(this.save.money, -WRECK_FEE);
+      }
       this.audio?.play?.('cash');
       setTimeout(() => this.hud?.flash(`Car wrecked · -$${WRECK_FEE.toLocaleString('en-US')} · the tow truck takes it to be repaired`, 'bad', 3600), 2900); // (after drive.js's own "Wrecked" line)
     }
@@ -307,8 +315,13 @@ export class CarRental {
       this.current = this.spawn(mine);
       if (this.current) this.hud?.flash(`Your ${RENTALS.find((c) => c.id === mine.id)?.label || 'car'} is repaired · it waits in the ${this.impound?.own ? 'car park beside the hall' : 'yard out front'}`, 'good', 3600);
     };
-    if (this.truck) this.truck.fetch(e, (car) => { this.remove(car); back(); });
-    else if (mine) setTimeout(() => { this.remove(e); back(); }, 20000);
+    const done = (car) => {
+      if (this.towed === car) this.towed = null;
+      this.remove(car); back();
+      if (mp && this.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends)
+    };
+    if (this.truck) this.truck.fetch(e, done);
+    else if (mine) setTimeout(() => done(e), 20000);
   }
 
   // ------------------------------------------------------------------ outside: the door

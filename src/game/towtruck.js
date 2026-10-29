@@ -129,6 +129,68 @@ function findRoof(g) {
   return { z, y, at: (x) => hitY(x, z) };
 }
 
+// ------------------------------------------------------------------ the model (shared with net/vehicles.js)
+/** The truck's model (nose +z, origin on the road under its middle), its amber beacons on the cab roof and their glow:
+ *  { g, beacons, beaconMat, beaconLight }. A plain flatbed when the glTF is missing. */
+export function buildTowTruck(models) {
+  const g = new THREE.Group();
+  g.name = 'tow-truck';
+  const gltf = models?.tow_truck;
+  if (gltf) {
+    const m = gltf.scene.clone(true);
+    m.rotation.y = Math.PI; // (nose to +z)
+    m.position.set(RAW.cx, 0, RAW.cz); // (re-centred: the model runs nose -z from its origin at the bed's tail; turned, its centre (-cx, -cz) back to 0)
+    const s = new THREE.Group(); s.scale.setScalar(S); s.add(m);
+    m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    g.add(s);
+  } else { // (no model: a plain flatbed so the job still runs)
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd8a21a, roughness: 0.5 });
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 2.2), mat); cab.position.set(0, 1.5, HALF_L - 1.2);
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.25, 5.4), new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.7 })); bed.position.set(0, BED.y - 0.12, BED.z);
+    g.add(cab, bed);
+  }
+  // amber beacons on the cab roof (a pair) and their glow
+  const beaconMat = new THREE.MeshStandardMaterial({ color: 0xffa21a, emissive: 0xff8a00, emissiveIntensity: 0, roughness: 0.3, transparent: true, opacity: 0.92 });
+  const beacons = [];
+  // (Oct 28, the user: "the lights on the towing machine are floating": the roof was a guessed constant; now it is
+  // found on the model itself: rays straight down onto the cab, the roof's highest flat stretch, each lamp sat on it)
+  const roof = gltf ? findRoof(g) : null;
+  const roofZ = roof ? roof.z : HALF_L - 1.55 * S;
+  const roofY = roof ? roof.y : 2.44 * S;
+  for (const sx of [-0.62, 0.62]) {
+    const y = (roof && roof.at(sx)) ?? roofY;
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.05, 14), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 }));
+    base.position.set(sx, y + 0.02, roofZ);
+    const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, 0.16, 14), beaconMat);
+    dome.position.set(sx, y + 0.12, roofZ);
+    g.add(base, dome);
+    beacons.push(dome);
+  }
+  const beaconLight = new THREE.PointLight(0xffa020, 0, 14, 2);
+  beaconLight.position.set(0, roofY + 0.4, roofZ);
+  g.add(beaconLight);
+  return { g, beacons, beaconMat, beaconLight };
+}
+/** The beacons flashing (on a job) or dark: m from buildTowTruck, t a running time in s. */
+export function beaconsOn(m, on, t) {
+  m.beaconMat.emissiveIntensity = on ? 1.5 + 2.5 * Math.max(0, Math.sin(t * 7.5)) : 0;
+  m.beaconLight.intensity = on ? 6 * Math.max(0, Math.sin(t * 7.5)) ** 2 : 0;
+}
+/** The truck's group on the road at (x, z) facing yaw: its height, pitch and roll from the ground under its wheels. */
+export function groundPose(g, x, z, yaw) {
+  const s = Math.sin(yaw), c = Math.cos(yaw), h = (lx, lz) => world.height(x + s * lz + c * lx, z + c * lz - s * lx);
+  const f = h(0, HALF_L - 1.2), b = h(0, -HALF_L + 1.6), l = h(1, 0), r = h(-1, 0);
+  const y = (f + b) / 2;
+  const pitch = -Math.atan2(f - b, HALF_L * 2 - 2.8), roll = Math.atan2(l - r, 2);
+  g.position.set(x, y + 0.02, z);
+  _e.set(pitch, yaw, roll * 0.5);
+  g.quaternion.setFromEuler(_e);
+  g.updateMatrixWorld(true);
+}
+/** Where a car `len` m long rides on the bed, in the truck's frame (centred on the bed, its middle over the bed's). */
+export function bedLocal(len, out) { return out.set(0, BED.y, BED.z + Math.max(0, (BED_FIT - (len || 4.6)) / 2 - 0.15)); }
+export const TOW_HALF = { w: HALF_W, l: HALF_L };
+
 export class TowTruck {
   /**
    * @param {object} o
@@ -142,42 +204,9 @@ export class TowTruck {
     this.jobs = []; // wrecks waiting: { e (the parking entry), onDone }
     this.job = null;
     this.state = 'parked';
-    this.g = new THREE.Group();
-    this.g.name = 'tow-truck';
-    const gltf = models.tow_truck;
-    if (gltf) {
-      const m = gltf.scene.clone(true);
-      m.rotation.y = Math.PI; // (nose to +z)
-      m.position.set(RAW.cx, 0, RAW.cz); // (re-centred: the model runs nose -z from its origin at the bed's tail; turned, its centre (-cx, -cz) back to 0)
-      const s = new THREE.Group(); s.scale.setScalar(S); s.add(m);
-      m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-      this.g.add(s);
-    } else { // (no model: a plain flatbed so the job still runs)
-      const mat = new THREE.MeshStandardMaterial({ color: 0xd8a21a, roughness: 0.5 });
-      const cab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 2.2), mat); cab.position.set(0, 1.5, HALF_L - 1.2);
-      const bed = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.25, 5.4), new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.7 })); bed.position.set(0, BED.y - 0.12, BED.z);
-      this.g.add(cab, bed);
-    }
-    // amber beacons on the cab roof (a pair) and their glow
-    this.beaconMat = new THREE.MeshStandardMaterial({ color: 0xffa21a, emissive: 0xff8a00, emissiveIntensity: 0, roughness: 0.3, transparent: true, opacity: 0.92 });
-    this.beacons = [];
-    // (Oct 28, the user: "the lights on the towing machine are floating": the roof was a guessed constant; now it is
-    // found on the model itself: rays straight down onto the cab, the roof's highest flat stretch, each lamp sat on it)
-    const roof = gltf ? findRoof(this.g) : null;
-    const roofZ = roof ? roof.z : HALF_L - 1.55 * S;
-    const roofY = roof ? roof.y : 2.44 * S;
-    for (const sx of [-0.62, 0.62]) {
-      const y = (roof && roof.at(sx)) ?? roofY;
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.05, 14), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.6 }));
-      base.position.set(sx, y + 0.02, roofZ);
-      const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.1, 0.16, 14), this.beaconMat);
-      dome.position.set(sx, y + 0.12, roofZ);
-      this.g.add(base, dome);
-      this.beacons.push(dome);
-    }
-    this.beaconLight = new THREE.PointLight(0xffa020, 0, 14, 2);
-    this.beaconLight.position.set(0, roofY + 0.4, roofZ);
-    this.g.add(this.beaconLight);
+    this.mp = null; // multiplayer (net/tow.js): { others(add) }: the other players on foot in its way
+    // the model, its beacons and their glow (buildTowTruck: also net/vehicles.js, the other players' trucks)
+    Object.assign(this, buildTowTruck(models));
     // the winch cable (a thin line from the bed's tail to the car while it pulls)
     this.cable = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1, 5), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.6 }));
     this.cable.visible = false;
@@ -212,13 +241,7 @@ export class TowTruck {
       this.place(dt);
       if (j && j.onBed) this.carToBed(j.e);
       // the beacons: two rotating lamps, out of step, while on a job
-      const on = !!j;
-      for (let k = 0; k < this.beacons.length; k++) {
-        const ph = Math.sin(this.t * 7.5 + k * Math.PI);
-        this.beacons[k].scale.setScalar(1);
-        if (k === 0) this.beaconMat.emissiveIntensity = on ? 1.5 + 2.5 * Math.max(0, ph) : 0;
-      }
-      this.beaconLight.intensity = on ? 6 * Math.max(0, Math.sin(this.t * 7.5)) ** 2 : 0;
+      beaconsOn(this, !!j, this.t);
     } catch (err) { console.warn('tow truck', err); if (this.job) this.free(this.job); this.job = null; }
   }
 
@@ -312,6 +335,11 @@ export class TowTruck {
     else if (p) add(p.x, p.z, 0, 0.45, 0.45, null, 'you');
     const line = T?.skibus?.line, bus = line?.bus?.group;
     if (bus?.visible) add(bus.position.x, bus.position.z, line.yaw || 0, 1.3, 6, null, 'bus');
+    // multiplayer (traffic is off): the other players' cars (their box colliders in the shared list, mp: true; not
+    // their tow trucks: each player's truck serves only its owner's car and ignores the others') and the players
+    // themselves (net/tow.js hooks)
+    for (const c of this.colliders) if (c.mp && !c.tow && c.x < 1e8) add(c.x, c.z, -(c.rot || 0), c.hw ?? c.r ?? 1, c.hd ?? c.r ?? 1, c, 'mp');
+    try { this.mp?.others?.(add); } catch { /* */ }
     return out;
   }
   // the first pose (s) at which its box (plus margins) would overlap something: { s, o } or null
@@ -484,7 +512,7 @@ export class TowTruck {
   // the car's place on the bed: centred on it (its middle over the bed's), upright, nose forward
   bedPose(e) {
     this.g.updateMatrixWorld(true);
-    const p = new THREE.Vector3(0, BED.y, BED.z + Math.max(0, (BED_FIT - e.length) / 2 - 0.15)).applyMatrix4(this.g.matrixWorld);
+    const p = bedLocal(e.length, new THREE.Vector3()).applyMatrix4(this.g.matrixWorld);
     return { p, q: this.g.quaternion.clone() };
   }
   carToBed(e) {
@@ -502,14 +530,7 @@ export class TowTruck {
   }
   // on the road: its height and its pitch / roll from the ground under its wheels
   place() {
-    const s = Math.sin(this.yaw), c = Math.cos(this.yaw), h = (lx, lz) => world.height(this.x + s * lz + c * lx, this.z + c * lz - s * lx);
-    const f = h(0, HALF_L - 1.2), b = h(0, -HALF_L + 1.6), l = h(1, 0), r = h(-1, 0);
-    const y = (f + b) / 2;
-    const pitch = -Math.atan2(f - b, HALF_L * 2 - 2.8), roll = Math.atan2(l - r, 2);
-    this.g.position.set(this.x, y + 0.02, this.z);
-    _e.set(pitch, this.yaw, roll * 0.5);
-    this.g.quaternion.setFromEuler(_e);
-    this.g.updateMatrixWorld(true);
+    groundPose(this.g, this.x, this.z, this.yaw);
     this.collider.x = this.x; this.collider.z = this.z; this.collider.rot = -this.yaw;
     void _m; void _q;
   }

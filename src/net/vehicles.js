@@ -16,6 +16,7 @@ import { seatsFor } from '../game/carpeople.js';
 import { lampsOn } from '../game/carlights.js';
 import { HeliModel, ANCHORS } from '../game/heli/model.js';
 import { nightUniform } from '../world/village.js';
+import { buildTowTruck, beaconsOn, groundPose, bedLocal, TOW_HALF } from '../game/towtruck.js';
 
 const LEN = Object.fromEntries(CAR_MODELS);
 const VEH_FAR = 1800;   // m: vehicles beyond are not drawn
@@ -23,6 +24,8 @@ const TAG_FAR = 130;    // m: owner tags hidden beyond
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const _d = new THREE.Vector3();
 const SEATS = new WeakMap();
+const _b = new THREE.Vector3();
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const TRANSIT = new Set(['train', 'express', 'gondola', 'chair', 'bus']); // (shared transport: net/transit.js)
 
 /** The seat points of a car template in the car's frame (+x the driver's side, +z forward): 0 the driver, 1 the front
@@ -94,6 +97,7 @@ export class RemoteVehicles {
     this.o = o;
     this.cars = new Map();  // pid -> { key, t, inst, group, tag, x, y, z, yaw, steer, u, lit, posed, driven }
     this.helis = new Map(); // pid -> { model, tag, yaw, rpm, shown }
+    this.tows = new Map();  // pid -> their tow truck out on a job: { g, beacons, beaconMat, beaconLight, col, x, z, yaw, posed, shown }
     this.remotes = null;
     this.time = 0;
   }
@@ -105,6 +109,7 @@ export class RemoteVehicles {
     const cam = v.camera.position, outdoors = !v.interior;
     for (const r of remotes.players.values()) {
       if (!r.ok) continue;
+      this.updateTow(r, dt, cam, outdoors); // (first: their car may ride on its bed)
       this.updateCar(r, dt, cam, outdoors);
       this.updateHeli(r, dt, cam, outdoors);
     }
@@ -160,16 +165,20 @@ export class RemoteVehicles {
       c.u = 0; c.steer *= Math.exp(-dt * 3);
       if (vc.at && c.atRef !== vc.at) { c.atRef = vc.at; c.x = vc.at[0]; c.y = vc.at[1]; c.z = vc.at[2]; c.yaw = vc.at[3]; c.posed = true; }
     }
+    // (on their tow truck's bed: it rides with the truck, not where it lay)
+    const bed = !driving && r.vtow?.car ? this.tows.get(r.pid) : null;
+    if (bed?.posed) { bedLocal(LEN[cfg.id], _b).applyMatrix4(bed.g.matrixWorld); c.x = _b.x; c.y = _b.y; c.z = _b.z; c.yaw = bed.yaw; c.posed = true; }
     const g = c.group;
     const d = c.posed ? _d.set(c.x, c.y, c.z).sub(cam).length() : Infinity;
     const show = outdoors && c.posed && d < VEH_FAR;
     if (g.visible !== show) g.visible = show;
     // (not while you ride in it: you sit inside its box)
-    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid;
+    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed;
     c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
     g.position.set(c.x, c.y, c.z);
     g.rotation.set(0, c.yaw, 0);
+    if (bed?.posed) g.quaternion.copy(bed.g.quaternion); // (pitched and rolled with the truck)
     g.updateMatrixWorld(true); // (the seats are read from it this frame)
     if (!show) return;
     for (const w of c.inst.wheels) {
@@ -182,6 +191,54 @@ export class RemoteVehicles {
     // the owner's name over it while nobody drives it (Oct 29, the user: "everything you own has your name above if
     // you are not in it")
     if (driving) { if (c.tag.visible) c.tag.visible = false; } else tagScale(c.tag, d);
+  }
+
+  // ---------------------------------------------------------------- tow trucks
+  // Each player's tow truck fetches only their own car (net/tow.js: its pose ~6 times a second while it is out; off
+  // once parked). Drawn with the same model, beacons flashing, eased toward the last pose run on at its speed. Solid
+  // to you (a box collider, mp + tow: your own truck ignores it). In the TOW bay, while your own truck stands there,
+  // theirs is not drawn over it (the same truck in the same spot; their car on its bed still shows).
+  updateTow(r, dt, cam, outdoors) {
+    const vt = r.vtow;
+    let w = this.tows.get(r.pid);
+    if (!vt?.at) { if (w?.shown) this.hideTow(w); if (w) w.posed = false; return; }
+    if (!w) {
+      let m;
+      try { m = buildTowTruck(this.o.models()); } catch (e) { console.warn('[mp] tow truck', e); return; }
+      m.g.name = `mp-tow-${r.name}`;
+      this.o.scene.add(m.g);
+      const col = { x: 1e9, z: 1e9, hw: TOW_HALF.w, hd: TOW_HALF.l, rot: 0, h: 2.8, mp: true, tow: true };
+      this.o.colliders?.push(col);
+      w = { ...m, col, x: 0, z: 0, yaw: 0, ref: null, age: 0, tx: 0, tz: 0, tyaw: 0, tv: 0, posed: false, shown: true, t: 0 };
+      this.tows.set(r.pid, w);
+    }
+    if (w.ref !== vt) {
+      w.ref = vt; w.age = 0;
+      w.tx = vt.at[0]; w.tz = vt.at[2]; w.tyaw = vt.at[3]; w.tv = vt.v || 0;
+      if (!w.posed || Math.hypot(w.tx - w.x, w.tz - w.z) > 25) { w.x = w.tx; w.z = w.tz; w.yaw = w.tyaw; w.posed = true; }
+    }
+    // the last pose run on at its speed (a third of a second at most), eased into
+    w.age += dt;
+    const ahead = Math.min(w.age, 0.35) * w.tv, gx = w.tx + Math.sin(w.tyaw) * ahead, gz = w.tz + Math.cos(w.tyaw) * ahead;
+    const k = 1 - Math.exp(-dt * 7);
+    w.x += (gx - w.x) * k; w.z += (gz - w.z) * k; w.yaw = wrapPi(w.yaw + wrapPi(w.tyaw - w.yaw) * k);
+    groundPose(w.g, w.x, w.z, w.yaw);
+    const mine = this.o.localTow?.();
+    const overMine = !!(mine && !mine.job && Math.hypot(mine.x - w.x, mine.z - w.z) < 2.5); // (your truck parked right there)
+    const show = outdoors && !overMine && _d.set(w.x, w.g.position.y, w.z).sub(cam).length() < VEH_FAR;
+    w.col.x = show ? w.x : 1e9; w.col.z = show ? w.z : 1e9; w.col.rot = -w.yaw;
+    if (!show) { if (w.shown) this.hideTow(w); return; }
+    if (!w.shown) { w.shown = true; w.g.visible = true; }
+    beaconsOn(w, true, (w.t += dt));
+  }
+  hideTow(w) { w.shown = false; w.g.visible = false; w.beaconLight.intensity = 0; w.col.x = 1e9; w.col.z = 1e9; }
+  dropTow(pid) {
+    const w = this.tows.get(pid);
+    if (!w) return;
+    w.g.removeFromParent();
+    const L = this.o.colliders, i = L ? L.indexOf(w.col) : -1;
+    if (i >= 0) L.splice(i, 1);
+    this.tows.delete(pid);
   }
 
   // ---------------------------------------------------------------- helicopters
@@ -268,6 +325,6 @@ export class RemoteVehicles {
   /** A remote player's car as drawn (for the ride prompt and the passenger's seat), or null. */
   carOf(pid) { const c = this.cars.get(pid); return c?.posed ? c : null; }
 
-  remove(pid) { this.dropCar(pid); this.dropHeli(pid); }
-  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); }
+  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); }
+  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); }
 }

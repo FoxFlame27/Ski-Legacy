@@ -143,7 +143,9 @@ whose `.data` is `d`.
 | `seatRelease` | – | broadcast `seats` |
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
 | `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
-| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
+| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
+| `tow` | `{kind: 'wreck' \| 'tow', home: [x, y, z, yaw], bay?}` | `{money, fee, impound: {day, bay} \| null, at}`: the server's fee (`catalog.wreckFee`, once per tow, may go below zero like a fine); the car's spot becomes `home`; `tow` also impounds it until the next world day · `no_car`, `busy`, `bad_kind`, `bad_value` |
+| `towDone` | – | the tow record ends (the truck unloaded your car); your truck leaves the others' view |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
 | `raceFinish` | `{rid, raw: ms, pen: ms, time: ms \| null, dnf?}`, sent at the line | `{time}`. `raw` (the clock) is trusted only within 3 s of the server's own measurement since GO, else the server's time counts; `pen` (gate penalties) is added. Older clients send `time` only. |
 | `raceProgress` | `{rid, gate, s}` (gates passed, metres along the course), twice a second | the live board; the furthest point is kept for a racer who drops out |
@@ -177,7 +179,7 @@ whose `.data` is `d`.
 | `skip` | `{k, v, holding, aboard, active}` |
 | `warp` | `{key: 'kind\|line', off, rate, since}` |
 | `heli` | `{copies: [{id, name, since}], padAt, copyMs}` |
-| `veh` | `{pid, k: 'car' \| 'heli', veh: {k, cfg?, id?, at?} \| null}` (also `vehs: {car, heli}` in `join` and the world snapshot) |
+| `veh` | `{pid, k: 'car' \| 'heli' \| 'tow', veh: {k, cfg?, id?, at?, v?, car?} \| null}` (also `vehs: {car, heli, tow}` in `join` and the world snapshot) |
 | `permAsk` | `{rid, kind, from, pid, ref, timeoutMs}` (to the owner) |
 | `permClosed` / `permRevoked` / `kickInterior` / `seatLost` | the prompt went away / a grant was taken back / you must leave that interior / you were taken out of a car |
 | `raceQueue` | `{race, n, names, startAt (0 = waiting for players), need: 2, waitMs}` |
@@ -464,3 +466,24 @@ In multiplayer `save.day` (the day pass, the jobs) is the world clock's day: `cl
 `clock.at` (`multiplayer.dayNow()`, set every frame; `main.js` no longer counts days in multiplayer). Day 1 is
 `DAY_EPOCH` (Oct 1 2026) and every world starts on the global day `dayFor(now)`, so a day pass is the same day in
 every world.
+
+### Tow truck (done)
+
+- **Yours still runs** (`game/towtruck.js`; nothing in it checks `isMP()`, and it needs no traffic). It fetches only
+  your own car and steers round the other players' cars (the shared colliders with `mp: true`) and the players on
+  foot (`truck.mp.others`, set by `net/tow.js`). It ignores the other players' trucks (their colliders carry
+  `tow: true`), so every client's truck keeps the one TOW bay.
+- **Seen by everyone** (`net/tow.js`): while it is out, `veh {k:'tow', at, v, car}` about 6 times a second; `off`
+  once it is parked. `net/vehicles.js updateTow` draws it with the same model (`buildTowTruck`), beacons flashing,
+  eased toward the last pose run on at its speed; it is not drawn over your own parked truck in the TOW bay. With
+  `car`, the owner's car rides on its bed (`bedLocal`); the owner sends that car without a spot meanwhile
+  (`carride.js`: like driving). Your wreck stays your shown car until the truck has it (`carRental.towed`).
+- **Fees.** `carrental.js wrecked` and `impound.js tow` call `carRental.mp.tow(kind, home, bay)` (the `tow` request)
+  instead of taking the fee off the save.
+- **Impound.** The day is the world's (`save.day` is set from the clock before the rental is placed); the server keeps
+  `profile.cars[0].impound {day, bay}` and the login maps it into `save.impound`, so the car comes back locked in its
+  impound bay (a bay with no other player's car in it) and `putBack` leaves it there. Others see it there with the
+  owner's tag. The server lifts it at a login on a later world day.
+- **Drops.** The tow sets the car's spot (`at`) to where the tow ends at once and ignores spots sent while it runs;
+  a player gone mid-tow (or a restart) has the record ended there (`settleCar` on leaving and at login).
+

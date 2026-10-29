@@ -64,7 +64,10 @@ export class CarRide {
     const g = this.g;
     if (!g) return;
     if (!this.placed) { this.placed = true; try { this.putBack(); } catch (e) { console.warn('[mp] car spot', e); } }
-    const cur = g.carRental?.current || null, driving = !!(cur && g.drive?.d?.e === cur), V = this.v;
+    // (your wreck while the tow truck fetches it is still your car to the others: lying there, then on the truck's bed,
+    // where it rides with the truck as the others draw it: net/tow.js, vehicles.js; told like driving: no spot)
+    const cur = g.carRental?.current || g.carRental?.towed || null, V = this.v;
+    const driving = !!(cur && (g.drive?.d?.e === cur || this.mp.towMp?.carAboard(cur)));
     // tell the server when your car comes, goes, is driven, or stands somewhere new (checked once a second)
     let tell = cur !== V.cur || driving !== V.driving;
     if (!tell && cur && !driving && (V.t += dt) > 1) {
@@ -92,7 +95,7 @@ export class CarRide {
   // a free spot beside it, the nearest free car park bay, or the rental's yard (Oct 29, the user)
   putBack() {
     const g = this.g, R = g.carRental, cur = R?.current, at = MP.profile?.cars?.[0]?.at;
-    if (!cur || !at || g.drive?.d?.e === cur) return;
+    if (!cur || !at || g.drive?.d?.e === cur || cur.impound || cur.towing) return; // (impounded: it stays in its impound bay)
     const yaw = at[3], fx = Math.sin(yaw), fz = Math.cos(yaw);
     const cands = [[0, 0], [2.8, 0], [-2.8, 0], [0, 6], [0, -6], [5.6, 0], [-5.6, 0]].map(([s, f]) => ({ x: at[0] + fz * s + fx * f, z: at[2] - fx * s + fz * f, yaw }));
     const bays = [];
@@ -105,6 +108,11 @@ export class CarRide {
     if (Math.hypot(p.x - spot.x, p.z - spot.z) < 0.3) return;
     R.remove(cur);
     R.current = R.spawn(g.save.rental, spot);
+  }
+  /** Another player's parked car within r m of (x, z)? (impound.js: an impound bay nobody's car stands in) */
+  carNear(x, z, r = 2) {
+    for (const p of this.mp.remotes?.players.values() || []) { const a = p.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < r) return true; }
+    return false;
   }
   spotFree(x, z, own) {
     const g = this.g;

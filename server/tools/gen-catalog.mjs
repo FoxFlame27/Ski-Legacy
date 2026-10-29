@@ -20,7 +20,7 @@ const imp = (p) => import(path.join(src, p));
 export async function buildCatalog() {
   const { SKIS, PRICES } = await imp('game/economy.js');
   const { FINISH, PAINTS, INTERIORS, RIMS, PLATE_COST } = await imp('game/carconfig.js');
-  const { RENTALS } = await imp('game/carrental.js');
+  const { RENTALS, WRECK_FEE } = await imp('game/carrental.js');
   const { OUTFIT_ITEMS, OUTFIT_KITS } = await imp('game/outfits.js');
   const { CHALET_PRICE } = await imp('game/chalets.js');
   const { HELI_PRICE } = await imp('game/heli.js');
@@ -35,6 +35,7 @@ export async function buildCatalog() {
     interiors: Object.fromEntries(INTERIORS.map((i) => [i.id, i.cost])),
     rims: Object.fromEntries(RIMS.map((r) => [r.id, r.cost])),
     plateCost: PLATE_COST,
+    wreckFee: WRECK_FEE, // (the tow truck: a wreck, or a car towed off a road; server.tow)
     outfits: Object.fromEntries([...OUTFIT_ITEMS, ...OUTFIT_KITS].map((o) => [o.id, o.price || 0])), // (kits too: owning a kit owns its pieces 'kit_x.jacket')
     races: Object.fromEntries(fw.freeCourses().map((e) => [e.id, { name: e.name, reward: e.reward, entry: e.D.entry }])),
     prizeShare: fw.PRIZE_SHARE,

@@ -113,6 +113,7 @@
   "red": 150
  },
  "plateCost": 100,
+ "wreckFee": 1500,
  "outfits": {
   "j_glacier": 400,
   "j_racing": 400,

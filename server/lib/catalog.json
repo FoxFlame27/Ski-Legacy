@@ -117,6 +117,7 @@
  "wreckRate": 0.1,
  "wreckMin": 2500,
  "carSell": 0.5,
+ "garageMax": 10,
  "outfits": {
   "j_glacier": 400,
   "j_racing": 400,

@@ -7,10 +7,11 @@
 // spruces, and a compact ploughed yard in front (kerbs, painted bays, the TOW bay) fading into the snow. E at the door:
 // inside (carrentalroom.js, its own scene: two storeys; through its glass the real world, rendered live as in the ski
 // shop); at a car on display: the configurator for that car (ui/carrental.js); the salesman sends you to a random one.
-// Your garage (save.garage: every car you bought, its config, plate and what you paid; one of each model): one of them
+// Your garage (save.garage: every car you bought, its config, plate and what you paid; up to GARAGE_MAX cars, the same
+// model more than once too: every car is told apart by its plate): one of them
 // is out at a time (save.rental: it waits in your bay, nose to the road; E beside it to drive; drive.js: every other
-// car only says where to buy one). The configurator's MY CARS list (and E at a model you own) puts another of yours in
-// the bay (free), or sells one back for half what you paid. Wreck it: the repair bill (wreckFee: 10 % of the car's
+// car only says where to buy one). The configurator's MY CARS list (E at a model you own opens on it) puts another of
+// yours in the bay (free), or sells one back for half what you paid. Wreck it: the repair bill (wreckFee: 10 % of the car's
 // price, at least WRECK_MIN; once; the balance may go below zero, like a fine) and the tow truck (towtruck.js) fetches
 // the very car from wherever it lies and brings it back to your bay, repaired. Wrecked by a police ram: not repaired,
 // gone from your garage. Multiplayer: the server owns the garage (profile cars, cars[0] the one out; net/session.js).
@@ -57,6 +58,7 @@ const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['
 export const WRECK_FEE = 1500, WRECK_RATE = 0.1, WRECK_MIN = 2500;
 export const wreckFee = (id) => Math.max(WRECK_MIN, Math.round(((RENTALS.find((c) => c.id === id)?.price || 0) * WRECK_RATE) / 50) * 50);
 export const SELL_SHARE = 0.5; // a car sold back: half what you paid
+export const GARAGE_MAX = 10; // (Oct 29, the user: "you also can buy more than 1 car so you have multiple cars"): the cars you can own (server: catalog garageMax)
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
 // its road end, the rental bays (lines at x, from / to z), your car's spot, the TOW bay (middle, half length / width)
 // (Oct 29: the bigger hall, 32 x 17.5 m: its glass front 0.6 m further from the road than before (the yard 12.3 m
@@ -104,19 +106,20 @@ export class CarRental {
   }
 
   // ------------------------------------------------------------------ your garage (save.garage; save.rental: the one out)
-  /** Old saves: the rental becomes a car you own (free: it was paid for); the garage made whole (one of each model,
+  /** Old saves: the rental becomes a car you own (free: it was paid for); the garage made whole (one car per plate,
    *  known models only), save.rental the garage's entry with its plate (or null). Multiplayer: the profile's cars. */
   migrate() {
     const S = this.save;
     const fix = (c) => { if (!c || typeof c !== 'object') return null; if (RETIRED[c.id]) c = { ...c, id: RETIRED[c.id] }; return RENTALS.some((r) => r.id === c.id) ? normConfig(c) : null; };
     const g = [];
-    for (const c of [...(Array.isArray(S.garage) ? S.garage : []), S.rental]) { const n = fix(c); if (n && !g.some((x) => x.id === n.id || x.plate === n.plate)) g.push(n); }
+    for (const c of [...(Array.isArray(S.garage) ? S.garage : []), S.rental]) { const n = fix(c); if (n && !g.some((x) => x.plate === n.plate)) g.push(n); }
     S.garage = g;
     const r = fix(S.rental);
-    S.rental = r ? g.find((x) => x.plate === r.plate) || g.find((x) => x.id === r.id) || null : null;
+    S.rental = r ? g.find((x) => x.plate === r.plate) || null : null;
   }
   get garage() { return Array.isArray(this.save.garage) ? this.save.garage : (this.save.garage = []); }
-  owns(id) { return this.garage.find((c) => c.id === id) || null; }
+  /** Your cars of model `id` (by plate: you may own several of one model). */
+  owns(id) { return this.garage.filter((c) => c.id === id); }
   label(id) { return RENTALS.find((c) => c.id === id)?.label || 'car'; }
   where() { return this.impound?.own ? 'car park beside the Autohaus' : 'yard out front'; }
   /** What a car of yours sells back for: half what you paid (an old rental, never priced: half today's price). */
@@ -295,12 +298,17 @@ export class CarRental {
 
   /** The price of a config: the car's list price and the extras (finish, trim, rims, your own plate). */
   cost(cfg) { const spec = RENTALS.find((c) => c.id === cfg.id) || RENTALS[0], extras = extrasCost(cfg); return { base: spec.price, extras, total: spec.price + extras }; }
-  /** Buy `cfg` (one of each model): it joins your garage and waits in your bay (the one out before goes home). */
+  /** Buy `cfg` (a model you own already too: another one, its own plate; up to GARAGE_MAX cars): it joins your garage
+   *  and waits in your bay (the one out before goes home). */
   buy(cfg) {
     cfg = normConfig(cfg);
     const spec = RENTALS.find((c) => c.id === cfg.id);
     if (!spec) return;
-    if (this.owns(cfg.id)) { this.hud?.flash(`You already own a ${spec.label}`, 'bad', 2600); this.audio?.play?.('error'); return; }
+    if (this.garage.length >= GARAGE_MAX) { this.hud?.flash(`Your garage is full (${GARAGE_MAX} cars) · sell one first (MY CARS)`, 'bad', 3200); this.audio?.play?.('error'); return; }
+    if (!this.mp && this.garage.some((c) => c.plate === cfg.plate)) { // (a plate already on another of yours)
+      if (cfg.custom) { this.hud?.flash(`The plate ${cfg.plate} is on another car of yours`, 'bad', 2600); this.audio?.play?.('error'); return; }
+      do cfg.plate = randomPlate(); while (this.garage.some((c) => c.plate === cfg.plate));
+    }
     const no = this.busy(); if (no) { this.hud?.flash(no, 'bad', 2600); this.audio?.play?.('error'); return; }
     if (this.mp) return this.mp.rent(cfg); // multiplayer: the server sells it (price, a unique plate: net/session.js)
     const total = this.cost(cfg).total;
@@ -363,7 +371,7 @@ export class CarRental {
   placeRented(cfg, cars) {
     if (cars) return this.placeOwned(cars, `${this.label(cfg.id)} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}`);
     const c = normConfig(cfg);
-    this.save.garage = [c, ...this.garage.filter((x) => x.plate !== c.plate && x.id !== c.id)];
+    this.save.garage = [c, ...this.garage.filter((x) => x.plate !== c.plate)];
     this.putOut(c, `${this.label(c.id)} bought · ${c.plate} · it waits in the ${this.where()}`);
   }
 
@@ -457,17 +465,20 @@ export class CarRental {
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }
 
-  // the configurator, for the car you pressed E at (its display paint to start; your own car's config when you own
-  // that model: then it opens on the summary, to take it out or sell it). The model itself is fixed in there: paint,
-  // wheels, plate only. MY CARS (the summary): every car of yours, E / click to put it in your bay.
+  // the configurator, for the car you pressed E at (its display paint to start): always a new one to buy (a model you
+  // own already too: another one, its own plate); when you own that model it opens on the summary, where MY CARS lists
+  // every car of yours (yours of this model first): click one to put it in your bay, SELL it. The model itself is
+  // fixed in there: paint, wheels, plate only.
   openCard(pick, paintHexWant) {
     if (!RENTALS.some((c) => c.id === pick)) return;
     this.room.guide(null); // (found it)
-    const own = this.owns(pick), cur = this.save.rental ? normConfig(this.save.rental) : null;
-    const base = own ? normConfig(own) : normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
-    const garage = this.garage.map((c) => ({ ...normConfig(c), label: this.label(c.id), value: this.sellValue(c), out: c.plate === cur?.plate }));
-    this.ui.open({ cars: RENTALS, cfg: base, current: cur, owned: own ? normConfig(own) : null, garage, step: own ? 3 : 0,
-      money: this.save.money, wreckFee: wreckFee(pick), sellValue: own ? this.sellValue(own) : 0, cost: (c) => this.cost(c),
+    const own = this.owns(pick).length, cur = this.save.rental ? normConfig(this.save.rental) : null;
+    let plate = randomPlate(); while (this.garage.some((c) => c.plate === plate)) plate = randomPlate();
+    const base = normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate });
+    const garage = this.garage.map((c) => ({ ...normConfig(c), label: this.label(c.id), value: this.sellValue(c), out: c.plate === cur?.plate }))
+      .sort((a, b) => (b.id === pick) - (a.id === pick)); // (yours of this model first)
+    this.ui.open({ cars: RENTALS, cfg: base, current: cur, garage, garageMax: GARAGE_MAX, step: own ? 3 : 0, owned: own,
+      money: this.save.money, wreckFee: wreckFee(pick), cost: (c) => this.cost(c),
       preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
       rent: (c) => { this.buy(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); },
       takeOut: (plate) => { this.takeOut(plate); this.input?.lock?.(); }, sell: (plate) => { this.sell(plate); this.input?.lock?.(); },
@@ -492,7 +503,8 @@ export class CarRental {
   frame(dt, input, sensitivity) {
     const open = this.ui.isOpen;
     this.target = this.room.update(dt, open ? null : input, sensitivity, open);
-    if (this.target?.kind === 'car' && this.owns(this.target.id)) this.target.label = `Your ${this.label(this.target.id)}${this.save.rental?.id === this.target.id ? '' : ' · take it out'} · sell`; // (one you own)
+    const n = this.target?.kind === 'car' ? this.owns(this.target.id).length : 0;
+    if (n) this.target.label = `${this.label(this.target.id)} · yours: ${n} · buy another · take it out · sell`; // (a model you own)
     if (!open && this.target && input?.hit?.('KeyE')) {
       this.audio?.play?.('click');
       const t = this.target;

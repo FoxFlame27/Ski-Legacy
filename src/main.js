@@ -89,7 +89,7 @@ import { startObjective } from './game/build/objectives.js';
 import { MP, isMP } from './net/mode.js'; // multiplayer (docs/multiplayer.md): every AI system and the save check isMP()
 import { net } from './net/client.js';
 import { Multiplayer, errText } from './net/session.js';
-import { ST as MPST, F as MPF } from './net/protocol.js';
+import { ST as MPST, F as MPF, fallFlags as mpFallFlags } from './net/protocol.js';
 let multiplayer = null; // the multiplayer session (net/session.js), built at the end of boot
 let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
 let bests = null; // personal-best cards in free ride (top speed, longest jump, milestones)
@@ -1292,6 +1292,13 @@ function mpPose(o) {
     : p.mode === 'sit' ? MPST.sit : p.mode === 'ski' ? MPST.ski : p.mode === 'fall' ? MPST.fall : MPST.walk;
   o.crouch = p.crouch || 0; o.lean = p.lean || 0;
   o.flags = (p.air ? MPF.air : 0) | (p.tuck ? MPF.tuck : 0) | (p.skisOn ? MPF.skisOn : 0) | (p.hasSkis && !p.skisOn ? MPF.carry : 0) | (p.hasSkis ? MPF.hasSkis : 0);
+  // a wipeout (thrown by a car, a crash, lying there for the rescue): the tumble itself, so the others see you go
+  // flying, roll, lie in the snow and get up (protocol.js fallFlags; Oct 29, the user: "i only see him stand still")
+  if (o.st === MPST.fall && p.fall) {
+    const Fl = p.fall;
+    o.crouch = Fl.pitch || 0; o.lean = Fl.roll || 0;
+    o.flags = (p.skisOn ? MPF.skisOn : 0) | (p.hasSkis ? MPF.hasSkis : 0) | mpFallFlags(p.fallSide, p.fallAir, Fl.ball, Fl.getUp, (Fl.axisHeading || 0) - p.heading);
+  }
 }
 function mpScene(id) {
   if (id === 'skishop') return interior?.scene || null;

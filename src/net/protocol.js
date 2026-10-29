@@ -9,6 +9,20 @@ export const ST_NAMES = ['walk', 'ski', 'drive', 'ride', 'sit', 'fly', 'fall'];
 // presence flag bits (row[12])
 // (lights: a car's headlights / a helicopter's rotor at flight power; car: driving a car, x/y/z/yaw = the car's pose)
 export const F = { air: 1, tuck: 2, skisOn: 4, carry: 8, hasSkis: 16, moving: 32, lights: 64, car: 128 };
+// A wipeout (state fall: thrown by a car, a crash, lying in the snow for the rescue): crouch = the body's pitch
+// (somersault), lean = its roll; the flags (with the ski bits): F.air = still flying from the throw, bit 8 = went over
+// to the left, bits 9-12 the tuck (0..15), 13-17 the get-up (0..31), 18-22 the tumble axis relative to yaw (1/32 turns)
+export function fallFlags(side, air, ball, up, axis) {
+  const q = (v, n) => Math.round(Math.min(1, Math.max(0, v || 0)) * n);
+  const a = Math.round((Math.atan2(Math.sin(axis || 0), Math.cos(axis || 0)) / (Math.PI * 2)) * 32) & 31;
+  return (air ? F.air : 0) | (side < 0 ? 256 : 0) | (q(ball, 15) << 9) | (q(up, 31) << 13) | (a << 18);
+}
+export function fallDecode(flags, out) {
+  out.side = flags & 256 ? -1 : 1; out.air = !!(flags & F.air);
+  out.ball = ((flags >> 9) & 15) / 15; out.getUp = ((flags >> 13) & 31) / 31;
+  out.axis = (((flags >> 18) & 31) / 32) * Math.PI * 2;
+  return out;
+}
 
 // presence row as received: [pid, ts, x, y, z, yaw, vx, vy, vz, state, crouch, lean, flags, vehicle, interior]
 export const R = { pid: 0, ts: 1, x: 2, y: 3, z: 4, yaw: 5, vx: 6, vy: 7, vz: 8, st: 9, crouch: 10, lean: 11, flags: 12, veh: 13, int: 14 };
@@ -36,4 +50,5 @@ export const ERR_TEXT = {
   offline: 'Not connected to the server.',
   owned: 'You already own one.',
   no_car: 'That car is not yours.',
+  garage_full: 'Your garage is full. Sell a car first (MY CARS).',
 };

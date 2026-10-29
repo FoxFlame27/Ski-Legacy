@@ -20,7 +20,7 @@ const imp = (p) => import(path.join(src, p));
 export async function buildCatalog() {
   const { SKIS, PRICES } = await imp('game/economy.js');
   const { FINISH, PAINTS, INTERIORS, RIMS, PLATE_COST } = await imp('game/carconfig.js');
-  const { RENTALS, WRECK_FEE, WRECK_RATE, WRECK_MIN, SELL_SHARE } = await imp('game/carrental.js');
+  const { RENTALS, WRECK_FEE, WRECK_RATE, WRECK_MIN, SELL_SHARE, GARAGE_MAX } = await imp('game/carrental.js');
   const { OUTFIT_ITEMS, OUTFIT_KITS } = await imp('game/outfits.js');
   const { CHALET_PRICE } = await imp('game/chalets.js');
   const { HELI_PRICE } = await imp('game/heli.js');
@@ -38,6 +38,7 @@ export async function buildCatalog() {
     wreckFee: WRECK_FEE, // (the tow truck: a car towed off a road; server.tow)
     wreckRate: WRECK_RATE, wreckMin: WRECK_MIN, // (a wreck: the repair bill, this share of the car's list price, at least wreckMin)
     carSell: SELL_SHARE, // (AUTOHAUS: a car sold back, this share of what you paid; server.carSell)
+    garageMax: GARAGE_MAX, // (AUTOHAUS: the cars one player can own, the same model more than once too; server buy: garage_full)
     outfits: Object.fromEntries([...OUTFIT_ITEMS, ...OUTFIT_KITS].map((o) => [o.id, o.price || 0])), // (kits too: owning a kit owns its pieces 'kit_x.jacket')
     races: Object.fromEntries(fw.freeCourses().map((e) => [e.id, { name: e.name, reward: e.reward, entry: e.D.entry }])),
     prizeShare: fw.PRIZE_SHARE,

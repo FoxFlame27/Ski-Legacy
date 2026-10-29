@@ -9,7 +9,7 @@
 // late() once your own car has moved this frame.
 // No allocations per frame: snapshot slots, vectors and the rig state objects are all reused.
 import * as THREE from 'three';
-import { R, ST, F } from './protocol.js';
+import { R, ST, F, fallDecode } from './protocol.js';
 import { twoBone } from '../game/carpeople.js';
 
 const RING = 16;              // snapshots kept per player
@@ -21,6 +21,8 @@ const ANIM_NEAR = 60;         // m: full-rate animation within, lower rate beyon
 const HIDE_FAR = 2500;        // m: avatars beyond are not drawn at all
 const UP = new THREE.Vector3(0, 1, 0);
 const _a = new THREE.Vector3();
+const _fa = {}, _fb = {};
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 function wrapAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
 
@@ -67,6 +69,9 @@ class Remote {
     this.vheli = info.vehs?.heli || null;
     this.vtow = info.vehs?.tow || null;   // their tow truck out on a job ({ k: 'tow', at, v, car }: net/tow.js)
     this.vpolice = info.vehs?.police || null; // the patrol cars chasing them ({ k: 'police', cars: [[x, y, z, yaw, v]] }: game/police.js)
+    this.vrescue = info.vehs?.rescue || null; // the rescue helicopter / ambulance coming for them (net/rescue.js)
+    this.fa = 0; this.fb = 0; this.ff = 0;   // a wipeout: the flags either side of the sample and the blend (fallDecode)
+    this.fallSt = { pitch: 0, roll: 0, ball: 0, getUp: 0 }; this.wasFall = false; this.wasAir = false; this.hideRig = false;
     this.ok = false; this.inLocal = false;
     this.vehStr = 0; this.vehK = ''; this.vehOwner = ''; this.vehSeat = -1; // the parsed `kind:id:seat` (vehicles.js)
     this.seatPos = new THREE.Vector3(); this.seatYaw = 0;
@@ -120,7 +125,7 @@ export class RemotePlayers {
     if (!info || info.pid === this.selfPid) return null;
     let r = this.players.get(info.pid);
     if (!r) { r = new Remote(info); this.players.set(info.pid, r); }
-    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; } }
+    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; r.vrescue = info.vehs.rescue || null; } }
     if (info.pres) r.push(info.pres, this.o.now());
     if (info.interior !== undefined) r.interior = info.interior || null;
     return r;
@@ -143,7 +148,7 @@ export class RemotePlayers {
   }
 
   /** A vehicle a player shows changed ('veh' broadcast: k 'car' | 'heli', veh or null). */
-  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; else if (k === 'police') r.vpolice = veh || null; }
+  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; else if (k === 'police') r.vpolice = veh || null; else if (k === 'rescue') r.vrescue = veh || null; }
 
   onRows(rows) {
     if (!Array.isArray(rows)) return;
@@ -212,6 +217,7 @@ export class RemotePlayers {
       r.vel.set(a.n[5] + (b.n[5] - a.n[5]) * f, a.n[6] + (b.n[6] - a.n[6]) * f, a.n[7] + (b.n[7] - a.n[7]) * f);
       r.crouch = a.n[9] + (b.n[9] - a.n[9]) * f; r.lean = a.n[10] + (b.n[10] - a.n[10]) * f;
       src = f < 0.5 ? a : b;
+      r.fa = a.n[11]; r.fb = b.n[11]; r.ff = f;
     } else if (t > newest.n[0]) {
       // late: carry on along the velocity for a moment (not while seated: seats move with their vehicle)
       const dt = Math.min(EXTRAPOLATE, t - newest.n[0]) / 1000;
@@ -229,6 +235,7 @@ export class RemotePlayers {
     }
     r.state = src.n[8] | 0;
     r.flags = src.n[11] | 0;
+    if (!(a && b)) { r.fa = r.fb = r.flags; r.ff = 0; }
     r.veh = src.veh;
     r.interior = src.int || null;
     return true;
@@ -265,6 +272,8 @@ export class RemotePlayers {
     const veh = this.o.vehicles;
     const inVeh = veh ? veh.seatFor(r, r.seatPos) : false; // (sets r.seatYaw, r.inLocal)
     if (r.inLocal && !late) return; // (in your car: posed in late())
+    // carried in the rescue's ambulance (net/rescue.js): out of sight, as on their own screen
+    if (r.hideRig) { if (r.rig?.root.visible) { r.rig.root.visible = false; r.rig.gear.visible = false; } return; }
     const pos = inVeh ? r.seatPos : r.pos;
     const cam = v.camera.position;
     const here = this.visible && (r.interior || null) === (v.interior || null);
@@ -279,16 +288,19 @@ export class RemotePlayers {
     // the rig's pose from the state
     const st = r.st, speed = Math.hypot(r.vel.x, r.vel.z);
     const seated = inVeh || r.state === ST.sit || r.state === ST.ride || r.state === ST.drive || r.state === ST.fly;
+    const fall = !seated && r.state === ST.fall;
+    st.fall = null;
     if (seated) { st.mode = 'sit'; if (!inVeh) r.seatPos.copy(r.pos); st.seat = r.seatPos; }
     else if (r.state === ST.ski) { st.mode = 'ski'; st.seat = null; }
+    else if (fall) { st.mode = 'fall'; st.seat = null; this.fallPose(r, st); }
     else { st.mode = speed > 0.1 ? 'walk' : 'idle'; st.seat = null; }
     st.heading = inVeh ? r.seatYaw : r.yaw;
     st.speed = seated ? 0 : speed;
-    st.crouch = seated ? 0 : r.crouch; st.lean = seated ? 0 : r.lean; st.edge = st.lean * 0.6;
-    st.air = !seated && !!(r.flags & F.air); st.tuck = !seated && !!(r.flags & F.tuck);
-    st.carry = !inVeh && !!(r.flags & F.carry);
+    st.crouch = seated || fall ? 0 : r.crouch; st.lean = seated || fall ? 0 : r.lean; st.edge = st.lean * 0.6;
+    st.air = !seated && !fall && !!(r.flags & F.air); st.tuck = !seated && !fall && !!(r.flags & F.tuck);
+    st.carry = !inVeh && !fall && !!(r.flags & F.carry);
     st.normal = UP;
-    const skisVisible = !inVeh && (r.state === ST.ski || st.carry);
+    const skisVisible = !inVeh && (r.state === ST.ski || st.carry || (fall && !!(r.flags & F.skisOn)));
     if (r.skisShown !== skisVisible) { r.skisShown = skisVisible; rig.setSkisVisible(skisVisible); }
     // walking with skis: on the back (the rig's carry pose), never on the feet
     const carry = st.carry && r.state !== ST.ski;
@@ -303,11 +315,27 @@ export class RemotePlayers {
       r.animAcc = 0;
       if (inVeh && r.vehK === 'car') carLegs(rig); // (the bench 'sit' pose hangs the legs straight down: through the car floor)
     }
-    if (r.state === ST.ski && d < 120 && this.o.fx) {
-      const fi = r.fxInfo;
-      fi.grounded = !st.air; fi.speed = speed; fi.sideslip = Math.abs(r.lean) * 0.15; fi.lean = r.lean;
-      this.o.fx(9000 + r.pid * 4, rig, fi, dt);
+    // the snow thrown up as they go down and land from a throw (the body's own puffs come from the rig: placeFallen)
+    if (fall && d < 120 && rig.pushFx) {
+      if (!r.wasFall) rig.pushFx({ type: 'crash', x: pos.x, y: pos.y, z: pos.z, amount: clamp(speed / 18, 0.3, 1), vx: r.vel.x, vz: r.vel.z });
+      else if (r.wasAir && !st.fallAir) rig.pushFx({ type: 'impact', x: pos.x, y: pos.y, z: pos.z, amount: clamp(Math.abs(r.vel.y) / 10 + speed / 20, 0.3, 1) });
     }
+    r.wasFall = fall; r.wasAir = fall && !!st.fallAir;
+    if ((r.state === ST.ski || fall) && d < 120 && this.o.fx) {
+      const fi = r.fxInfo;
+      fi.grounded = !st.air && !fall; fi.speed = fall ? 0 : speed; fi.sideslip = fall ? 0 : Math.abs(r.lean) * 0.15; fi.lean = fall ? 0 : r.lean;
+      this.o.fx(9000 + r.pid * 4, rig, fi, dt);
+    } else if (rig.fx?.length) rig.fx.length = 0; // (nothing stale left for the next wipeout)
+  }
+
+  // a wipeout as they send it (main.js mpPose, protocol.js fallFlags): the tumble's pitch and roll (crouch, lean), the
+  // tuck and the get-up blended between the two rows around the sample, the side, the tumble axis, still in the air
+  fallPose(r, st) {
+    const A = fallDecode(r.fa, _fa), B = fallDecode(r.fb, _fb), f = r.ff, N = f < 0.5 ? A : B;
+    const Fs = r.fallSt;
+    Fs.pitch = r.crouch; Fs.roll = r.lean;
+    Fs.ball = A.ball + (B.ball - A.ball) * f; Fs.getUp = A.getUp + (B.getUp - A.getUp) * f;
+    st.fall = Fs; st.fallSide = N.side; st.fallAir = N.air; st.fallHeading = r.yaw + N.axis; st.fallT = 1;
   }
 
   dispose() { this.clear(); this.o.vehicles?.dispose(); }

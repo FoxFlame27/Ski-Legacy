@@ -529,7 +529,7 @@ class Client {
     this.pres = null;      // the last presence row
     this.interior = null;  // server-approved interior id ('skishop', 'carrental', 'chalet:7', ...)
     this.seat = null;      // { k, v, seat }
-    this.vehs = { car: null, heli: null, tow: null, police: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
+    this.vehs = { car: null, heli: null, tow: null, police: null, rescue: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
     this.queue = null;     // race id queued for
     this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
@@ -1036,7 +1036,7 @@ export class GameServer {
   // Leaving the world takes them out of everyone's view (the 'leave' broadcast) until you are back.
   setVeh(c, d) {
     const k = d?.k;
-    if (k !== 'car' && k !== 'heli' && k !== 'tow' && k !== 'police') return { err: 'bad_vehicle' };
+    if (k !== 'car' && k !== 'heli' && k !== 'tow' && k !== 'police' && k !== 'rescue') return { err: 'bad_vehicle' };
     let v = null;
     if (k === 'tow' && !d.off) {
       // your tow truck out on a job for your car (towtruck.js: only the owner's client drives it): its pose, speed and
@@ -1051,6 +1051,17 @@ export class GameServer {
       if (!d.cars.every((a) => Array.isArray(a) && a.length === 5 && a.every(isNum))) return { err: 'bad_value' };
       const r2 = (x) => Math.round(x * 100) / 100;
       v = { k, cars: d.cars.map((a) => [r2(a[0]), r2(a[1]), r2(a[2]), r2(a[3]), r2(clamp(a[4], -60, 60))]) };
+    } else if (k === 'rescue' && !d.off) {
+      // the rescue coming for you after a bad wipeout (game/heli/rescue.js, net/rescue.js: local to you, the casualty):
+      // the helicopter [x, y, z, yaw, pitch, roll, rpm], the ambulance [x, y, z, yaw, v] (either may be null, not both),
+      // where you are (s: 0 in the snow, 1 on the winch, 2 in the cabin, 3 in the ambulance), the winch rope's length,
+      // the ambulance's lights (l). Streamed a few times a second while it runs; never stored
+      const nums = (a, n) => Array.isArray(a) && a.length === n && a.every(isNum);
+      if ((d.h != null && !nums(d.h, 7)) || (d.a != null && !nums(d.a, 5)) || (d.h == null && d.a == null)) return { err: 'bad_value' };
+      if ((d.s != null && !isInt(d.s)) || (d.rope != null && !isNum(d.rope))) return { err: 'bad_value' };
+      const r2 = (x) => Math.round(x * 100) / 100;
+      v = { k, h: d.h ? d.h.map((x, i) => r2(i === 6 ? clamp(x, 0, 1) : x)) : null, a: d.a ? d.a.map((x, i) => r2(i === 4 ? clamp(x, -40, 40) : x)) : null,
+        s: clamp(d.s | 0, 0, 3), rope: r2(clamp(d.rope || 0, 0, 80)), l: !!d.l };
     } else if (!d.off) {
       if (k === 'car') {
         const car = c.profile.cars?.[0];
@@ -1268,10 +1279,11 @@ export class GameServer {
         const want = cleanPlate(cfg.plate), o = want ? this.plates.get(plateKey(want)) : null;
         plate = want && plateKey(want) && (!o || o === c.key) ? want : this.freePlate();
       }
-      // AUTOHAUS (Oct 29): bought for good, one of each model; every car you own keeps its plate (cars: your garage,
-      // cars[0] the one out: the new car, in your bay)
+      // AUTOHAUS (Oct 29): bought for good; as many as the garage holds (CATALOG.garageMax), the same model more than
+      // once too (a red and a black Golf): every car you own is told apart by its plate (cars: your garage, cars[0]
+      // the one out: the new car, in your bay)
       P.cars = Array.isArray(P.cars) ? P.cars : [];
-      if (P.cars.some((x) => x.id === cfg.id)) return { err: 'owned', d: { money: P.money } };
+      if (P.cars.length >= (CATALOG.garageMax ?? 10)) return { err: 'garage_full', d: { money: P.money, max: CATALOG.garageMax ?? 10 } };
       if (P.cars.some((x) => plateKey(x.plate) === plateKey(plate))) { // (a plate already on another of your cars)
         if (custom) return { err: 'plate_taken', d: { plate } };
         plate = this.freePlate();

@@ -145,18 +145,32 @@ try {
   const g1 = await b.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'red' } });
   ok(g1.ok && g1.d.cars.length === 2 && g1.d.cars[0].id === 'car_vw_golf_gti' && g1.d.cars[1].id === 'car_bmw_x3' && g1.d.money === mB0 - 11250 && g1.d.car.price === 11250,
     'Bob buys a Golf too: both are his (the new one out, cars[0]), the X3 kept');
+  const x3 = CATALOG.cars.car_bmw_x3;
   const g2x = await b.req('buy', { kind: 'car', cfg: { id: 'car_bmw_x3', paint: 'black' } });
-  ok(!g2x.ok && g2x.err === 'owned' && server.profileOf('bob').money === mB0 - 11250, 'one of each model: a second X3 is refused (owned), nothing charged');
+  ok(g2x.ok && g2x.d.cars.length === 3 && g2x.d.cars[0].id === 'car_bmw_x3' && g2x.d.car.plate !== cb2.d.car.plate && g2x.d.cars.filter((x) => x.id === 'car_bmw_x3').length === 2 && g2x.d.money === mB0 - 11250 - x3,
+    'several of one model: a second X3 (another plate, black) is bought, the first X3 kept');
   const sw = await b.req('carSwitch', { plate: cb2.d.car.plate });
-  ok(sw.ok && sw.d.cars[0].id === 'car_bmw_x3' && sw.d.cars.length === 2 && server.profileOf('bob').money === mB0 - 11250, 'carSwitch: the X3 is out again without paying');
+  ok(sw.ok && sw.d.cars[0].plate === cb2.d.car.plate && sw.d.cars.length === 3 && server.profileOf('bob').money === mB0 - 11250 - x3, 'carSwitch (by plate): the first X3 is out again without paying');
   const swBad = await b.req('carSwitch', { plate: 'SKI 1' });
   ok(!swBad.ok && swBad.err === 'no_car', "carSwitch to a plate that is not yours: no_car");
   const sell = await b.req('carSell', { plate: g1.d.car.plate });
   const pcS = await a.req('plateCheck', { plate: g1.d.car.plate });
-  ok(sell.ok && sell.d.refund === 5650 && sell.d.money === mB0 - 11250 + 5650 && sell.d.cars.length === 1 && sell.d.cars[0].id === 'car_bmw_x3' && pcS.d.free === true,
+  ok(sell.ok && sell.d.refund === 5650 && sell.d.money === mB0 - 11250 - x3 + 5650 && sell.d.cars.length === 2 && sell.d.cars[0].plate === cb2.d.car.plate && pcS.d.free === true,
     'carSell: the Golf sold back for half what Bob paid ($5,650: rounded to $50), its plate free again');
   const sell2 = await b.req('carSell', { plate: g1.d.car.plate });
   ok(!sell2.ok && sell2.err === 'no_car', 'a car sold cannot be sold twice');
+  const sellX = await b.req('carSell', { plate: g2x.d.car.plate });
+  ok(sellX.ok && sellX.d.cars.length === 1 && sellX.d.cars[0].plate === cb2.d.car.plate, 'the second X3 sold (by its plate): the first one stays');
+  // the garage holds CATALOG.garageMax cars: one more is refused (garage_full), nothing charged
+  const max = CATALOG.garageMax, mF = (server.profileOf('bob').money = 10000000), extra = [];
+  for (let i = 1; i < max; i++) { const r = await b.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'white' } }); if (r.ok) extra.push(r.d.car.plate); }
+  const full = await b.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'black' } });
+  ok(max === 10 && extra.length === max - 1 && server.profileOf('bob').cars.length === max && new Set(server.profileOf('bob').cars.map((x) => x.plate)).size === max
+    && !full.ok && full.err === 'garage_full' && full.d?.max === max && server.profileOf('bob').money === mF - (max - 1) * 11250, `a full garage (${max} cars, ${max - 1} of them Golfs, every plate its own): one more is refused (garage_full), nothing charged`);
+  for (const p of extra) await b.req('carSell', { plate: p });
+  await b.req('carSwitch', { plate: cb2.d.car.plate });
+  server.profileOf('bob').money = mB0 - 11250 - x3 + 5650 + sellX.d.refund;
+  ok(server.profileOf('bob').cars.length === 1 && server.profileOf('bob').cars[0].plate === cb2.d.car.plate, '...sold again: only the first X3 left');
 
   // ---------------------------------------------------------------- the vehicle you show (your rental car)
   console.log('vehicles');
@@ -665,6 +679,19 @@ try {
     const offR = await pia.f.req('veh', { k: 'police', off: true });
     const offE = same ? await quinn.f.next('veh', (d) => d.k === 'police' && d.pid === pia.l.d.pid && d.veh === null) : true;
     ok(offR.ok && offR.d.veh === null && offE, 'off: the patrol cars are gone for everyone');
+    // the rescue helicopter and ambulance coming for a player after a wipeout (net/rescue.js), seen by the others
+    pia.f.send('veh', { k: 'rescue', h: [1, 2, 3, 0.5, 0.1, -0.2, 1.7], a: null, s: 1, rope: 9.876 });
+    const rv = same ? await quinn.f.next('veh', (d) => d.k === 'rescue' && d.pid === pia.l.d.pid && d.veh) : null;
+    ok(!same || (rv && rv.veh.h[0] === 1 && rv.veh.h[6] === 1 && rv.veh.a === null && rv.veh.s === 1 && rv.veh.rope === 9.88), "the others see Pia's rescue helicopter (pose, rotor clamped, on the winch, the rope)");
+    const amb = await pia.f.req('veh', { k: 'rescue', h: [1, 2, 3, 0, 0, 0, 0], a: [5, 6, 7, 1, 99], s: 7, l: true });
+    ok(amb.ok && amb.d.veh.a[4] === 40 && amb.d.veh.s === 3 && amb.d.veh.l === true, '...and the ambulance (speed and seat clamped, its lights)');
+    const badR1 = await pia.f.req('veh', { k: 'rescue', h: [1, 2, 3] });
+    const badR2 = await pia.f.req('veh', { k: 'rescue' });
+    const badR3 = await pia.f.req('veh', { k: 'rescue', a: [1, 2, 'x', 0, 0] });
+    ok(!badR1.ok && !badR2.ok && !badR3.ok && badR1.err === 'bad_value', 'a rescue needs a helicopter [x, y, z, yaw, pitch, roll, rpm] or an ambulance [x, y, z, yaw, v]');
+    const offRs = await pia.f.req('veh', { k: 'rescue', off: true });
+    const offRe = same ? await quinn.f.next('veh', (d) => d.k === 'rescue' && d.pid === pia.l.d.pid && d.veh === null) : true;
+    ok(offRs.ok && offRs.d.veh === null && offRe, 'off: the rescue is gone for everyone');
     // the fines go through 'spend' with reason 'game': they may take you into debt
     server.profileOf('cop pia').money = 300;
     const fine = await pia.f.req('spend', { amount: 500, reason: 'game' });

@@ -16,6 +16,7 @@ import { RemotePlayers } from './remote.js';
 import { RemoteVehicles } from './vehicles.js';
 import { CarRide } from './carride.js';
 import { TowMp } from './tow.js';
+import { RescueMp } from './rescue.js';
 import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
 import { MpTransit } from './transit.js';
@@ -61,6 +62,7 @@ export class Multiplayer {
     this.raceRows = []; this.boardT = 0;
     this.carRide = new CarRide(this); // your car shown to everyone, rides in other players' cars
     this.towMp = new TowMp(this);     // your tow truck shown to everyone (its pose, your car on its bed)
+    this.rescueMp = new RescueMp(this); // your rescue helicopter and ambulance shown to everyone (net/rescue.js)
     this.heliMp = new MpHeli(this);   // the helicopter pad and your copy
     this.transit = new MpTransit(this); // the shared trains, express, gondolas / chairlifts (and buses): seats, timelines
     this.vehicles = null;             // the other players' cars and helicopters (per world: setWorld)
@@ -151,6 +153,7 @@ export class Multiplayer {
       colliders: this.c.colliders, ridingPid: () => this.carRide.ride?.pid, // (their cars are solid: you can't walk or drive through them)
       transitSeat: (k, v, n, out) => this.transit.seat(k, v, n, out), // (riders of the shared trains, cabins, buses)
       localTow: () => window.__game?.carRental?.truck || null, // (your own truck: the others' are not drawn over it in the TOW bay)
+      localHeli: () => window.__game?.heli || null, // (your own helicopter on the pad: a rescue heli landing there is not drawn over it)
     });
     this.remotes = new RemotePlayers({
       scene: this.c.scene, makeRig: this.c.makeRig, applyOutfit: this.c.applyOutfit, getScene: this.c.getScene, fx: this.c.fx,
@@ -223,7 +226,7 @@ export class Multiplayer {
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
       // resumed: the server held you through the drop (same world and pid, seat, chalet plot, car, helicopter, race
       // entry): nothing to undo. Otherwise (away longer than the grace period) the rides start over
-      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); this.towMp.reset(); }
+      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); this.towMp.reset(); this.rescueMp.reset(); }
       this.c.hud.flash(d.resumed ? 'Reconnected' : 'Reconnected · back in the world', 'good', 2000);
       net.emit('relogin', d); // (wave-2 systems: claim your seat again; the server keeps it if it held you)
       // a race that ended while you were away: its results now
@@ -266,7 +269,7 @@ export class Multiplayer {
   leave() {
     if (!MP.active) return;
     if (this.race.start && !this.race.finished) net.send('raceFinish', { rid: this.race.start.rid, dnf: true });
-    try { this.carRide.dispose(); this.towMp.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.dispose(); this.towMp.dispose(); this.rescueMp.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
     for (const off of this.offs) off();
     this.offs.length = 0;
     clearTimeout(this.pushT); this.pushT = null;
@@ -415,7 +418,7 @@ export class Multiplayer {
       return d;
     } catch (e) {
       if (e.data?.money != null) this.setServerMoney(e.data.money);
-      const msg = e.code === 'taken' ? `${e.data?.owner || 'Somebody'} already owns it` : e.code === 'plate_taken' ? `The plate ${e.data?.plate || ''} is taken` : e.code === 'one_each' ? (MP.chaletPlot?.waiting ? 'You own a chalet · it comes back when a plot is free' : 'One chalet each') : errText(e);
+      const msg = e.code === 'taken' ? `${e.data?.owner || 'Somebody'} already owns it` : e.code === 'plate_taken' ? `The plate ${e.data?.plate || ''} is taken` : e.code === 'garage_full' ? `Your garage is full (${e.data?.max || 10} cars) · sell one first (MY CARS)` : e.code === 'one_each' ? (MP.chaletPlot?.waiting ? 'You own a chalet · it comes back when a plot is free' : 'One chalet each') : errText(e);
       this.c.hud.flash(msg, 'bad', 2600);
       this.c.audio?.play?.('error');
       return null;
@@ -447,7 +450,7 @@ export class Multiplayer {
     this.c.hud.flash(`${h.name} is yours · E at its front door to go in`, 'good', 3400);
     return true;
   }
-  /** AUTOHAUS: buy a car (one of each model; it joins your garage and is the one out): the server prices it and keeps
+  /** AUTOHAUS: buy a car (several, the same model too, up to catalog garageMax; it joins your garage and is the one out): the server prices it and keeps
    *  its plate unique. Resolves { car, cars } (cars: your garage, cars[0] out) or null. */
   async rentCar(cfg) {
     const d = await this.buy('car', { cfg });
@@ -727,7 +730,7 @@ export class Multiplayer {
     if (day != null && s.day !== day) s.day = day; // (the day pass and the jobs count the world's days)
     this.guestUI();
     this.guardMoney();
-    try { this.carRide.frame(dt); this.towMp.frame(dt); this.heliMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.frame(dt); this.towMp.frame(dt); this.heliMp.frame(dt); this.rescueMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
     try { this.transit.update(); } catch (e) { console.warn('[mp] transit', e); }
     // presence
     this.sendAcc += dt;

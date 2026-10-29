@@ -79,8 +79,9 @@ The server is authoritative for all of the following.
   (`server.chalets`: plot → online owner). See **Chalet plots** below.
 - Number plates are unique across all players. The plate key ignores spaces and hyphens, so `SKI 1` and `ski-1`
   are the same plate.
-- AUTOHAUS (was the car rental): cars are bought for good. A player's profile `cars` is their garage (one of each
-  model, each with its own plate and the `price` paid); `cars[0]` is the one out (in their bay, shown to the others).
+- AUTOHAUS (was the car rental): cars are bought for good. A player's profile `cars` is their garage (up to
+  `catalog.garageMax` (10) cars, the same model more than once too: every car is told apart by its plate, each with
+  the `price` paid; a buy beyond the cap: `garage_full {max}`); `cars[0]` is the one out (in their bay, shown to the others).
   `carSwitch` puts another owned car out for free; `carSell` sells one back for `catalog.carSell` (half) of what was
   paid and frees its plate; `carReturn` (a car wrecked by a police ram: not repaired) takes it out of the garage.
   A wreck's repair bill is `catalog.wreckRate` (10 %) of the car's list price, at least `catalog.wreckMin`; a car
@@ -158,7 +159,7 @@ whose `.data` is `d`.
 | `seatRelease` | – | broadcast `seats` |
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
 | `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
-| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) · `{k: 'police', cars: [[x, y, z, yaw, v], ...]}` (the 1-2 patrol cars chasing you, game/police.js, ~6/s, not stored) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
+| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) · `{k: 'police', cars: [[x, y, z, yaw, v], ...]}` (the 1-2 patrol cars chasing you, game/police.js, ~6/s, not stored) · `{k: 'rescue', h: [x, y, z, yaw, pitch, roll, rpm] \| null, a: [x, y, z, yaw, v] \| null, s: 0-3, rope, l}` (the rescue helicopter / ambulance coming for you after a wipeout, net/rescue.js, ~6/s, not stored; s: 0 in the snow, 1 on the winch, 2 in the cabin, 3 in the ambulance) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
 | `tow` | `{kind: 'wreck' \| 'tow', home: [x, y, z, yaw], bay?}` | `{money, fee, impound: {day, bay} \| null, at}`: the server's fee (`catalog.wreckFee`, once per tow; like a fine it may go below zero, down to `DEBT_FLOOR`; deeper, the truck still comes and `fee` is 0); the car's spot becomes `home`; `tow` also impounds it until the next world day · `no_car`, `busy`, `bad_kind`, `bad_value` |
 | `towDone` | – | the tow record ends (the truck unloaded your car); your truck leaves the others' view |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
@@ -170,7 +171,7 @@ whose `.data` is `d`.
 | `chaletFurniture` | `{id}` (a plot) | `{id, owner, chalet: {furniture, plan, layout}}` for its owner or a guest they let in · `no_owner`, `no_permission` |
 | `spend` | `{amount, reason}` | `{money}` · `money`, `bad_amount` |
 | `earn` | `{amount, source: 'job' \| 'secret' \| 'sell'}` | `{money}` · `rejected`, `cap` |
-| `buy` | `{kind: 'skis' \| 'outfit', id}` · `{kind: 'chalet', id, name, meta}` · `{kind: 'car', cfg: {id, paint, interior, rims, plate, custom}}` (car: `{money, car, price, cars}`; one of each model) | `{money, ...}` · `money`, `owned`, `taken {owner}`, `one_each`, `plate_taken {plate}`, `bad_plate` |
+| `buy` | `{kind: 'skis' \| 'outfit', id}` · `{kind: 'chalet', id, name, meta}` · `{kind: 'car', cfg: {id, paint, interior, rims, plate, custom}}` (car: `{money, car, price, cars}`; several, the same model too, each its own plate; at most `catalog.garageMax`) | `{money, ...}` · `money`, `owned`, `taken {owner}`, `one_each`, `plate_taken {plate}`, `bad_plate`, `garage_full {max}` |
 | `carReturn` | `{plate}` | `{cars}`: the car is gone from your garage (a police wreck), its plate free · `no_car` |
 | `carSwitch` | `{plate}` | `{cars}`: that owned car is out (`cars[0]`, in your bay), no charge · `no_car` |
 | `carSell` | `{plate}` | `{money, refund, cars}`: sold back for `catalog.carSell` of its price, plate free · `no_car`, `busy` (being towed) |
@@ -196,7 +197,7 @@ whose `.data` is `d`.
 | `skip` | `{k, v, holding, aboard, active}` |
 | `warp` | `{key: 'kind\|line', off, rate, since}` |
 | `heli` | `{copies: [{id, name, since}], padAt, copyMs}` |
-| `veh` | `{pid, k: 'car' \| 'heli' \| 'tow', veh: {k, cfg?, id?, at?, v?, car?} \| null}` (also `vehs: {car, heli, tow}` in `join` and the world snapshot) |
+| `veh` | `{pid, k: 'car' \| 'heli' \| 'tow' \| 'police' \| 'rescue', veh: {k, cfg?, id?, at?, v?, car?, cars?, h?, a?, s?, rope?, l?} \| null}` (also `vehs: {car, heli, tow, police, rescue}` in `join` and the world snapshot) |
 | `permAsk` | `{rid, kind, from, pid, ref, timeoutMs}` (to the owner) |
 | `permClosed` / `permRevoked` / `kickInterior` / `seatLost` | the prompt went away / a grant was taken back / you must leave that interior / you were taken out of a car |
 | `raceQueue` | `{race, n, names, startAt (0 = waiting for players), need: 2, waitMs}` |
@@ -213,6 +214,9 @@ The client sends about 12 per second and leaves no allocation per frame. Each ro
 
 - `ts` is the server time from `net.serverNow()`.
 - `state` is `ST` from `protocol.js`: `walk 0, ski 1, drive 2, ride 3, sit 4, fly 5, fall 6`.
+  In `fall` (a wipeout: a crash, thrown by a car or bus, lying there for the rescue) `crouch` is the body's pitch,
+  `lean` its roll, and `flags` carry the tuck, the get-up, the side, the tumble axis and still-in-the-air
+  (`protocol.js` `fallFlags` / `fallDecode`); the others pose the tumble from them (`net/remote.js` `fallPose`).
 - `flags` is `F`: `air 1, tuck 2, skisOn 4, carry 8, hasSkis 16, moving 32, lights 64, car 128`.
 - **Driving your car** (`F.car`): `x/y/z/yaw` is the car's pose, `vx/vz` its velocity, `crouch` the steering angle,
   `F.lights` the headlights.

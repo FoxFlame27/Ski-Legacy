@@ -78,9 +78,13 @@ body.carcfg-open #crosshair { visibility: hidden; }
 .cr-back { min-width: calc(var(--u) * 116); flex: none; }
 .cr-back > span { padding-right: calc(var(--u) * 34); }
 .cr-back > span { color: var(--blue); }
-/* AUTOHAUS: MY CARS (every car you own; click one: it goes in your bay) and SELL beside the main button */
+/* AUTOHAUS: MY CARS (every car you own, by plate; click one: it goes in your bay; SELL on its row, click twice) */
 .cr-garage { margin-top: calc(var(--u) * 10); }
 .cr-garage .cr-group { margin: 0; color: var(--blue-dim); text-shadow: none; }
 .cr-garage .cr-sum-row em { font-size: calc(var(--u) * 15); letter-spacing: 0.08em; white-space: nowrap; }
-#carrental .cr-sell > span { color: var(--blue); padding-right: calc(var(--u) * 30); white-space: nowrap; }
-#carrental .cr-sell.armed > span { color: #fff; }
+.cr-garage .cr-group b { font: inherit; color: var(--red); }
+.cr-garage .cr-sum-row.mine small { color: var(--red); }
+.cr-car-sell { flex: none; padding: calc(var(--u) * 4) calc(var(--u) * 9); border: calc(var(--u) * 1.5) solid rgba(21, 70, 200, 0.35); border-radius: calc(var(--u) * 3); background: transparent;
+  color: var(--blue); font: italic 700 calc(var(--u) * 14)/1 var(--num); letter-spacing: 0.08em; white-space: nowrap; cursor: pointer; }
+.cr-car-sell:hover { color: var(--red); border-color: var(--red); }
+.cr-car-sell.armed { background: var(--red); border-color: var(--red); color: #fff; }

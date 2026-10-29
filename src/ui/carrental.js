@@ -4,11 +4,13 @@
 // it, or the one the clerk sent you to): no switching models in here. Every choice shows at once on the
 // real car on its showroom turntable (the camera swings round to it; drag to turn). Keyboard + mouse:
 // left / right a step, up / down a choice, Enter next (BUY on the summary), Esc closes; on the plate you type.
-// A model you own opens on the summary with your car: TAKE IT OUT (into your bay, free) or SELL (half what you paid,
-// click twice); MY CARS on the summary lists every car of yours (click one: it goes in your bay).
+// You may own several cars (up to garageMax), the same model more than once too: every car of yours is told apart by its
+// plate. The main button always BUYS a new one (its own plate); a model you own opens on the summary, where MY CARS lists
+// every car of yours (yours of this model first, marked): click one to put it in your bay (free), SELL on its row (half
+// what you paid, click twice).
 //   open({ cars: [{ id, label, kind, price, length }], cfg, current: cfg | null, money, cost(cfg) -> { base, extras, total },
-//          preview(cfg, step), drag(dx, dy), rent(cfg) (buys it), close(), step?, owned: cfg | null (this model, yours),
-//          garage: [{ ...cfg, label, value, out }], sellValue, takeOut(plate), sell(plate), wreckFee,
+//          preview(cfg, step), drag(dx, dy), rent(cfg) (buys it), close(), step?, owned: n (your cars of this model),
+//          garage: [{ ...cfg, label, value, out }], garageMax, takeOut(plate), sell(plate), wreckFee,
 //          plateCheck?(plate) -> Promise<{ free } | null>, plateIssue?() -> Promise<plate | null> })   (multiplayer: plates are
 //          unique across every player; the plate you type is checked with the server as you type, "taken" shows at once)
 import './outfitshop.css'; // (its rows, tabs, detail card)
@@ -41,8 +43,8 @@ export class CarRentalUI {
     this.openedAt = performance.now();
     this.plateTaken = false; this.plateSeq = 0; clearTimeout(this.plateT);
     // multiplayer: a random plate is the server's (nobody else has it); a custom one is checked
-    this.sellArm = false;
-    if (view.owned) { /* (your own car: its plate is yours) */ } else if (view.plateIssue && !this.cfg.custom && this.cfg.plate !== view.current?.plate) this.issuePlate();
+    this.sellArm = null; // (the plate of the car whose SELL was clicked once: click again to sell it)
+    if (view.plateIssue && !this.cfg.custom) this.issuePlate();
     else if (view.plateCheck && this.cfg.custom) this.checkPlate(this.cfg.plate, 0);
     this.render(true);
     this.el.hidden = false;
@@ -99,28 +101,22 @@ export class CarRentalUI {
     this.preview();
   }
   next() { if (this.step < STEPS.length - 1) this.go(this.step + 1); else this.rent(); }
-  /** The model is yours: { same: your config as it is, out: it is the one in your bay }, else null. */
-  mine() {
-    const v = this.view, o = v?.owned;
-    if (!o) return null;
-    return { same: ['id', 'paint', 'rims', 'plate'].every((k) => o[k] === this.cfg[k]), out: v.current?.plate === o.plate };
-  }
+  /** Your garage holds no more cars (sell one first). */
+  full() { const v = this.view; return !!v && (v.garage?.length || 0) >= (v.garageMax || Infinity); }
   rent() {
-    const v = this.view, c = { ...this.cfg }, cost = v.cost(c), m = this.mine();
-    if (m) { // (yours already: out it comes, or nothing; one of each model)
-      if (!m.same || m.out) { this.shake(); this.audio?.play?.('error'); return; }
-      this.close('takeout'); v.takeOut?.(v.owned.plate); return;
-    }
+    const v = this.view, c = { ...this.cfg }, cost = v.cost(c);
+    if (this.full()) { this.shake(); this.audio?.play?.('error'); this.hud?.flash?.(`Your garage is full (${v.garageMax} cars) · sell one first (MY CARS)`, 'bad', 3000); return; }
     if (this.plateTaken) { this.shake(); this.audio?.play?.('error'); this.go(STEPS.findIndex((s) => s.id === 'plate')); return; }
     if (v.money < cost.total) { this.shake(); this.audio?.play?.('error'); return; }
     this.close('rent');
     v.rent?.(c);
   }
-  sell() {
-    const v = this.view;
-    if (!v?.owned) return;
-    if (!this.sellArm) { this.sellArm = true; this.audio?.play?.('tick'); this.renderDetail(); return; } // (twice: sure?)
-    this.close('sell'); v.sell?.(v.owned.plate);
+  /** SELL on a MY CARS row: once arms it (SURE?), again sells that car (by its plate). */
+  sell(plate) {
+    const v = this.view, g = v?.garage?.find((x) => x.plate === plate);
+    if (!g) return;
+    if (this.sellArm !== plate) { this.sellArm = plate; this.audio?.play?.('tick'); this.render(false); return; } // (twice: sure?)
+    this.close('sell'); v.sell?.(plate);
   }
   // ---------------------------------------------------------------- multiplayer plates (unique across every player)
   checkPlate(text, delay = 280) {
@@ -238,10 +234,11 @@ export class CarRentalUI {
           ${line(1, w.label, plus(w.cost))}
           ${line(2, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
           <div class="cr-sum-tot"><span>TOTAL</span><b>${money(cost.total)}</b></div>
-          <ul class="cr-terms"><li>Yours for good · it waits in your bay at the Autohaus · E to drive</li><li>One of each model · one car out at a time (MY CARS: pick which) · sell it back for half what you paid</li><li>Wreck it: a repair bill of <b>${money(v.wreckFee ?? 2500)}</b> · the tow truck brings it back repaired · rammed off by the police: not repaired, it is gone</li></ul>
+          <ul class="cr-terms"><li>Yours for good · it waits in your bay at the Autohaus · E to drive</li><li>Up to ${v.garageMax || 10} cars, the same model more than once too · each its own plate · one out at a time (MY CARS: pick which) · sell one back for half what you paid</li><li>Wreck it: a repair bill of <b>${money(v.wreckFee ?? 2500)}</b> · the tow truck brings it back repaired · rammed off by the police: not repaired, it is gone</li></ul>
         </div>
-        ${v.garage?.length ? `<div class="cr-sum cr-garage paper" style="--clip:${brushClip(741, 4, 3)}"><div class="cr-group">MY CARS</div>${v.garage.map((g) => `<div class="cr-sum-row" data-car="${esc(g.plate)}"><i class="os-sw cr-sw-paint ${paintOf(g.paint).finish}" style="--c:${css(paintOf(g.paint).hex)}"></i><span><small>${esc(g.plate)} · RESALE ${money(g.value)}</small><b>${esc(g.label)}</b></span><em>${g.out ? 'IN YOUR BAY' : 'TAKE OUT'}</em></div>`).join('')}</div>` : ''}`;
+        ${v.garage?.length ? `<div class="cr-sum cr-garage paper" style="--clip:${brushClip(741, 4, 3)}"><div class="cr-group">MY CARS · <b>${v.garage.length} / ${v.garageMax || 10}</b></div>${v.garage.map((g) => `<div class="cr-sum-row${g.id === c.id ? ' mine' : ''}" data-car="${esc(g.plate)}"><i class="os-sw cr-sw-paint ${paintOf(g.paint).finish}" style="--c:${css(paintOf(g.paint).hex)}"></i><span><small>${esc(g.plate)} · ${esc(paintOf(g.paint).label)} · RESALE ${money(g.value)}</small><b>${esc(g.label)}</b></span><em>${g.out ? 'IN YOUR BAY' : 'TAKE OUT'}</em><button class="cr-car-sell${this.sellArm === g.plate ? ' armed' : ''}" tabindex="-1" data-sell="${esc(g.plate)}">${this.sellArm === g.plate ? `SURE? +${money(g.value)}` : 'SELL'}</button></div>`).join('')}</div>` : ''}`;
       list.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => this.go(+b.dataset.go)));
+      list.querySelectorAll('[data-sell]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); this.sell(b.dataset.sell); }));
       list.querySelectorAll('[data-car]').forEach((b) => b.addEventListener('click', () => {
         const g = v.garage.find((x) => x.plate === b.dataset.car);
         if (!g || g.out) { this.shake(); this.audio?.play?.('error'); return; }
@@ -253,29 +250,28 @@ export class CarRentalUI {
 
   renderDetail() {
     const v = this.view, c = this.cfg, s = STEPS[this.step], cost = v.cost(c), last = this.step === STEPS.length - 1;
-    const car = v.cars.find((o) => o.id === c.id), m = this.mine();
-    const broke = last && !m && v.money < cost.total;
+    const car = v.cars.find((o) => o.id === c.id), full = last && this.full();
+    const broke = last && v.money < cost.total;
     const title = { paint: paintOf(c.paint).label, rims: rimOf(c.rims).label, plate: c.plate, sum: car.label }[s.id];
-    // (the label: one short word, the step it leads to small underneath; BUY with its price; your own car: TAKE IT OUT)
-    const taken = last && !m && this.plateTaken;
-    const label = last ? (m ? (!m.same ? 'YOU OWN ONE' : m.out ? 'IN YOUR BAY' : 'TAKE IT OUT') : taken ? 'PLATE TAKEN' : broke ? 'NOT ENOUGH MONEY' : `BUY · ${money(cost.total)}`) : `NEXT<small>${STEPS[this.step + 1].label}</small>`;
-    const ready = !(last && (m ? !m.same || m.out : broke || taken));
+    // (the label: one short word, the step it leads to small underneath; BUY with its price (another one of a model you
+    // own too); your cars: MY CARS on the summary)
+    const taken = last && this.plateTaken;
+    const label = last ? (full ? 'GARAGE FULL' : taken ? 'PLATE TAKEN' : broke ? 'NOT ENOUGH MONEY' : `BUY${v.owned ? ' ANOTHER' : ''} · ${money(cost.total)}`) : `NEXT<small>${STEPS[this.step + 1].label}</small>`;
+    const ready = !(last && (full || broke || taken));
     const det = this.el.querySelector('.cr-detail');
     det.innerHTML = `
-      <div class="os-kicker">${esc(car.label.toUpperCase())}${m ? ' · YOURS' : ''} · STEP ${this.step + 1} OF ${STEPS.length} · ${s.one}</div>
+      <div class="os-kicker">${esc(car.label.toUpperCase())}${v.owned ? ` · YOU HAVE ${v.owned}` : ''} · STEP ${this.step + 1} OF ${STEPS.length} · ${s.one}</div>
       <div class="os-title">${esc(title)}</div>
       <div class="cr-bill">
-        ${m ? `<span class="cr-bill-l"><small>Yours · ${esc(v.owned.plate)} · sells for</small><b>${money(v.sellValue)}</b></span>` : `<span class="cr-bill-l"><small>${esc(car.label)} ${money(cost.base)}${cost.extras ? ` · extras ${money(cost.extras)}` : ''}</small><b>${money(cost.total)}</b></span>`}
+        <span class="cr-bill-l"><small>${esc(car.label)} ${money(cost.base)}${cost.extras ? ` · extras ${money(cost.extras)}` : ''}</small><b>${money(cost.total)}</b></span>
         <span class="cr-bill-r"><small>YOUR MONEY</small><b>${money(v.money)}</b></span>
       </div>
       <div class="os-actrow cr-actrow">
         ${this.step ? `<button class="brush-btn mid cr-back" tabindex="-1">${brushSVG(379, 120, 74, { fill: '#dfe7fb' })}<span>BACK</span></button>` : ''}
-        <button class="brush-btn mid os-act${ready ? ' ready' : ''}" tabindex="-1" ${last && m && m.same && m.out ? 'disabled' : ''}>${brushSVG(377, 300, 74, { fill: ready ? (last ? '#c8261c' : '#1546c8') : '#dfe7fb' })}<span class="${last ? '' : 'cr-next'}">${label}</span></button>
-        ${m && last ? `<button class="brush-btn mid cr-back cr-sell${this.sellArm ? ' armed' : ''}" tabindex="-1">${brushSVG(383, 200, 74, { fill: this.sellArm ? '#c8261c' : '#dfe7fb' })}<span>${this.sellArm ? `SURE? +${money(v.sellValue)}` : 'SELL'}</span></button>` : ''}
+        <button class="brush-btn mid os-act${ready ? ' ready' : ''}" tabindex="-1">${brushSVG(377, 300, 74, { fill: ready ? (last ? '#c8261c' : '#1546c8') : '#dfe7fb' })}<span class="${last ? '' : 'cr-next'}">${label}</span></button>
       </div>`;
     det.querySelector('.os-act').addEventListener('click', () => (last ? this.rent() : this.next()));
-    det.querySelector('.cr-back:not(.cr-sell)')?.addEventListener('click', () => this.go(this.step - 1));
-    det.querySelector('.cr-sell')?.addEventListener('click', () => this.sell());
+    det.querySelector('.cr-back')?.addEventListener('click', () => this.go(this.step - 1));
   }
 
   bind() {

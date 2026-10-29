@@ -18,6 +18,8 @@ import { HeliModel, ANCHORS } from '../game/heli/model.js';
 import { nightUniform } from '../world/village.js';
 import { buildTowTruck, beaconsOn, groundPose, bedLocal, TOW_HALF } from '../game/towtruck.js';
 import { buildPoliceCar, policeLights, policeGround, policeModelReady } from '../game/police.js';
+import { Ambulance } from '../game/heli/ambulance.js';
+import { world } from '../world/world.js';
 
 const LEN = Object.fromEntries(CAR_MODELS);
 const VEH_FAR = 1800;   // m: vehicles beyond are not drawn
@@ -27,7 +29,10 @@ const _d = new THREE.Vector3();
 const SEATS = new WeakMap();
 const _b = new THREE.Vector3();
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const clamp01 = (v) => (v > 1 ? 1 : v > 0 ? v : 0);
 const TRANSIT = new Set(['train', 'express', 'gondola', 'chair', 'bus']); // (shared transport: net/transit.js)
+const PASSENGER = new THREE.Vector3(-ANCHORS.seat.x, ANCHORS.seat.y, ANCHORS.seat.z); // (the rescue's cabin seat: rescue.js)
+const _door = new THREE.Vector3();
 
 /** The seat points of a car template in the car's frame (+x the driver's side, +z forward): 0 the driver, 1 the front
  *  passenger, 2.. the back (outboard behind the driver, behind the passenger, the middle; a third row: then those).
@@ -100,6 +105,7 @@ export class RemoteVehicles {
     this.helis = new Map(); // pid -> { model, tag, yaw, rpm, shown }
     this.tows = new Map();  // pid -> their tow truck out on a job: { g, beacons, beaconMat, beaconLight, col, x, z, yaw, posed, shown }
     this.police = new Map(); // pid -> the patrol cars chasing them: [{ m, col, x, z, yaw, tx, tz, tyaw, tv, age, posed, shown }]
+    this.rescues = new Map(); // pid -> the rescue coming for them: { model, rope, amb, ...poses } (updateRescue)
     this.remotes = null;
     this.time = 0;
   }
@@ -113,6 +119,7 @@ export class RemoteVehicles {
       if (!r.ok) continue;
       this.updateTow(r, dt, cam, outdoors); // (first: their car may ride on its bed)
       this.updatePolice(r, dt, cam, outdoors);
+      this.updateRescue(r, dt, cam, outdoors);
       this.updateCar(r, dt, cam, outdoors);
       this.updateHeli(r, dt, cam, outdoors);
     }
@@ -293,6 +300,126 @@ export class RemoteVehicles {
     this.police.delete(pid);
   }
 
+  // ---------------------------------------------------------------- the rescue
+  // The rescue helicopter and the ambulance coming for another player after a bad wipeout (game/heli/rescue.js: local
+  // to them; net/rescue.js streams 'veh' { k: 'rescue', h: [x, y, z, yaw, pitch, roll, rpm], a: [x, y, z, yaw, v],
+  // s, rope, l } ~6 times a second): drawn with the same models, eased toward the last pose run on at its velocity;
+  // the winch rope hanging from the door; the ambulance's lights flashing. Where the player is (s: 1 on the winch,
+  // 2 in the cabin, 3 in the ambulance) seats or hides their avatar (seatFor). Not drawn over your own helicopter
+  // standing on the same pad (the same helicopter in the same spot).
+  updateRescue(r, dt, cam, outdoors) {
+    const vr = r.vrescue;
+    let w = this.rescues.get(r.pid);
+    if (!vr) { if (w) this.hideRescue(w); return; }
+    if (!w) {
+      w = { model: null, rope: null, amb: null, ref: null, age: 0, t: 0, rpm: 0,
+        h: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, tx: 0, ty: 0, tz: 0, tyaw: 0, tp: 0, tr: 0, vx: 0, vy: 0, vz: 0, at: 0, posed: false, shown: false },
+        a: { x: 0, z: 0, yaw: 0, tx: 0, tz: 0, tyaw: 0, tv: 0, posed: false, shown: false } };
+      this.rescues.set(r.pid, w);
+    }
+    const fresh = w.ref !== vr;
+    if (fresh) { w.ref = vr; w.age = 0; }
+    w.age += dt; w.t += dt;
+    const e = 1 - Math.exp(-dt * 7), ahead = Math.min(w.age, 0.35);
+    // the helicopter
+    const H = w.h;
+    if (vr.h) {
+      if (!w.model) {
+        try { w.model = new HeliModel(this.o.models()); } catch (err) { console.warn('[mp] rescue helicopter', err); }
+        if (w.model) {
+          w.model.addTo(this.o.scene);
+          w.rope = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 6), new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.6 }));
+          w.rope.frustumCulled = false; w.rope.visible = false;
+          this.o.scene.add(w.rope);
+        }
+      }
+      if (w.model) {
+        const a = vr.h;
+        if (fresh) {
+          // its velocity from the last two poses (the rows come ~6 times a second)
+          const now = this.time, gap = now - H.at;
+          if (H.posed && gap > 0.05 && gap < 1) { H.vx = (a[0] - H.tx) / gap; H.vy = (a[1] - H.ty) / gap; H.vz = (a[2] - H.tz) / gap; } else { H.vx = H.vy = H.vz = 0; }
+          H.at = now;
+          H.tx = a[0]; H.ty = a[1]; H.tz = a[2]; H.tyaw = a[3]; H.tp = a[4]; H.tr = a[5];
+          if (!H.posed || Math.hypot(H.tx - H.x, H.tz - H.z) > 60) { H.x = H.tx; H.y = H.ty; H.z = H.tz; H.yaw = H.tyaw; H.pitch = H.tp; H.roll = H.tr; H.posed = true; }
+        }
+        H.x += (H.tx + H.vx * ahead - H.x) * e; H.y += (H.ty + H.vy * ahead - H.y) * e; H.z += (H.tz + H.vz * ahead - H.z) * e;
+        H.yaw = wrapPi(H.yaw + wrapPi(H.tyaw - H.yaw) * e); H.pitch += (H.tp - H.pitch) * e; H.roll += (H.tr - H.roll) * e;
+        const root = w.model.root;
+        root.position.set(H.x, H.y, H.z);
+        _e.set(H.pitch, H.yaw, H.roll, 'YXZ');
+        root.quaternion.setFromEuler(_e);
+        root.updateMatrixWorld(true); // (the seats are read from it this frame)
+        const mine = this.o.localHeli?.();
+        const overMine = !!(mine && mine.state === 'parked' && !mine.away && mine.model?.root.visible && Math.hypot(mine.flight.pos.x - H.x, mine.flight.pos.z - H.z) < 4);
+        const show = outdoors && !overMine && _d.set(H.x, H.y, H.z).sub(cam).length() < VEH_FAR;
+        if (!show) { if (H.shown) this.hideRescueHeli(w); }
+        else {
+          if (!H.shown) { H.shown = true; root.visible = true; }
+          w.rpm += (clamp01(a[6]) - w.rpm) * (1 - Math.exp(-dt * 1.5));
+          w.model.update(dt, { rpm: w.rpm, night: nightUniform.value, time: this.time, lamp: false, camera: this.o.camera?.() || null, ground: null, snow: 0 });
+          // the winch rope from the door arm down to the hook (rescue.js winch)
+          const len = vr.rope || 0;
+          if (len > 0.1) {
+            w.model.world(ANCHORS.door, _door); _door.y += 1.0;
+            w.rope.position.set(_door.x, _door.y - len / 2, _door.z); w.rope.scale.set(1, len, 1);
+            if (!w.rope.visible) w.rope.visible = true;
+          } else if (w.rope.visible) w.rope.visible = false;
+        }
+      }
+    } else if (H.shown) this.hideRescueHeli(w);
+    if (!vr.h) H.posed = false;
+    // the ambulance
+    const A = w.a;
+    if (vr.a) {
+      if (!w.amb) { try { w.amb = new Ambulance({ scene: this.o.scene, models: this.o.models() || {}, world }); } catch (err) { console.warn('[mp] ambulance', err); w.amb = { ok: false }; } }
+      const amb = w.amb;
+      if (amb.ok) {
+        const a = vr.a;
+        if (fresh) {
+          A.tx = a[0]; A.tz = a[2]; A.tyaw = a[3]; A.tv = a[4];
+          if (!A.posed || Math.hypot(A.tx - A.x, A.tz - A.z) > 25) { A.x = A.tx; A.z = A.tz; A.yaw = A.tyaw; A.posed = true; }
+        }
+        const gx = A.tx + Math.sin(A.tyaw) * ahead * A.tv, gz = A.tz + Math.cos(A.tyaw) * ahead * A.tv;
+        A.x += (gx - A.x) * e; A.z += (gz - A.z) * e; A.yaw = wrapPi(A.yaw + wrapPi(A.tyaw - A.yaw) * e);
+        const show = outdoors && _d.set(A.x, a[1], A.z).sub(cam).length() < VEH_FAR;
+        if (!show) { if (A.shown) { A.shown = false; amb.group.visible = false; } }
+        else {
+          amb.x = A.x; amb.z = A.z; amb.yaw = A.yaw;
+          amb.place();
+          if (!A.shown) { A.shown = true; amb.group.visible = true; }
+          if (vr.l) amb.flash(dt, nightUniform.value); else if (amb.lights) for (const m of amb.lights) m.emissiveIntensity = 0.15;
+        }
+      }
+    } else { if (A.shown) { A.shown = false; w.amb.group.visible = false; } A.posed = false; }
+  }
+  hideRescueHeli(w) { w.h.shown = false; if (w.model) { w.model.root.visible = false; w.model.pool.mesh.visible = false; w.model.beam.visible = false; } if (w.rope) w.rope.visible = false; }
+  hideRescue(w) {
+    if (w.h.shown) this.hideRescueHeli(w);
+    w.h.posed = false; w.a.posed = false; w.ref = null;
+    if (w.a.shown) { w.a.shown = false; w.amb.group.visible = false; }
+  }
+  dropRescue(pid) {
+    const w = this.rescues.get(pid);
+    if (!w) return;
+    if (w.model) { w.model.root.removeFromParent(); w.model.pool.mesh.removeFromParent(); }
+    if (w.rope) { w.rope.removeFromParent(); w.rope.geometry.dispose(); w.rope.material.dispose(); }
+    w.amb?.group?.removeFromParent();
+    this.rescues.delete(pid);
+  }
+  /** Where the rescue holds remote r (seatFor): the winch hook, the cabin's front seat; hidden in the ambulance. */
+  rescueSeat(r, out) {
+    const vr = r.vrescue;
+    if (!vr?.s) return false;
+    if (vr.s === 3) { r.hideRig = true; return false; }
+    const w = this.rescues.get(r.pid);
+    if (!w?.model || !w.h.posed) return false;
+    if (vr.s === 2) w.model.world(PASSENGER, out);
+    else { w.model.world(ANCHORS.door, out); out.y += 1.0 - (vr.rope || 0) - 0.9; }
+    r.seatYaw = w.h.yaw;
+    return true;
+  }
+
   // ---------------------------------------------------------------- helicopters
   updateHeli(r, dt, cam, outdoors) {
     const flying = r.state === ST.fly;
@@ -343,7 +470,10 @@ export class RemoteVehicles {
   /** Remote r seated in a vehicle drawn here (or in your car): its seat point into out, r.seatYaw; else false. */
   seatFor(r, out) {
     r.inLocal = false;
+    r.hideRig = false;
     parseVeh(r);
+    if (r.vrescue && this.rescueSeat(r, out)) return true; // (on the winch, in the cabin; hidden in the ambulance)
+    if (r.hideRig) return false;
     if (TRANSIT.has(r.vehK) && this.o.transitSeat) { // a shared train / express / cabin / chair / bus (net/transit.js)
       const yaw = this.o.transitSeat(r.vehK, r.vehOwner, r.vehSeat, out);
       if (yaw !== null && yaw !== undefined) { r.seatYaw = yaw; return true; }
@@ -377,6 +507,6 @@ export class RemoteVehicles {
   /** A remote player's car as drawn (for the ride prompt and the passenger's seat), or null. */
   carOf(pid) { const c = this.cars.get(pid); return c?.posed ? c : null; }
 
-  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); }
-  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); }
+  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); this.dropRescue(pid); }
+  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); for (const pid of [...this.rescues.keys()]) this.dropRescue(pid); }
 }

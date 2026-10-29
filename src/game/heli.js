@@ -30,7 +30,7 @@ import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing
 import { CARD_DIALOG } from '../ui/hud.js';
 import { addTrafficBlocker } from './traffic.js'; // (cars stop for it on a road)
 
-export const HELI_PRICE = 300;
+export const HELI_PRICE = 1500; // a treat: ~10 min of jobs (Oct 29 rebalance: was $300)
 const JUMP_AGL = 6;          // jump out from at most this high (skids above the snow, m)...
 const JUMP_SPEED = 6;        // ...and this slow (m/s)
 const CAM_DIST = 17;

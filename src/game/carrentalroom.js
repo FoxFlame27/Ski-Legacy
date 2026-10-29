@@ -118,7 +118,7 @@ export class CarRentalRoom {
         g.fillStyle = '#fbf8f2'; g.fillRect(0, 0, w, h); g.fillStyle = '#1546c8'; g.fillRect(0, 0, w, 14);
         g.textAlign = 'left'; g.fillStyle = '#8a2a1c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
         g.fillStyle = '#1546c8'; g.font = 'italic 700 72px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(spec.label, 34, 152);
-        g.fillStyle = '#8f1d14'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price}`, 34, 270);
+        g.fillStyle = '#8f1d14'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price.toLocaleString("en-US")}`, 34, 270);
         g.fillStyle = 'rgba(30,40,70,0.65)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('per rental · E to rent', 250, 262);
       });
       const stand = new THREE.Group();
@@ -155,7 +155,7 @@ export class CarRentalRoom {
         g.fillStyle = '#16181c'; g.fillRect(0, 0, w, h); g.fillStyle = '#e2b81c'; g.fillRect(0, 0, w, 14);
         g.textAlign = 'left'; g.fillStyle = '#e2b81c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
         g.fillStyle = '#f4f2ee'; g.font = `italic 700 ${spec.label.length > 18 ? 56 : 72}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.fillText(spec.label, 34, 152);
-        g.fillStyle = '#e2b81c'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price}`, 34, 270);
+        g.fillStyle = '#e2b81c'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(`$${spec.price.toLocaleString("en-US")}`, 34, 270);
         g.fillStyle = 'rgba(244,242,238,0.7)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('per rental · E to rent', 250, 262);
       });
       const stand = new THREE.Group();

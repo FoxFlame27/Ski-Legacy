@@ -74,7 +74,7 @@ function timetableBoard(stationName) {
       g.fillStyle = '#2a2f36'; g.fillRect(24, y + 38, w - 48, 2);
     });
     g.fillStyle = '#c9ced6'; g.font = `500 32px ${FONT}`;
-    g.fillText('Day pass valid · uphill $30', 28, h - 110);
+    g.fillText('Day pass valid · uphill $50', 28, h - 110); // (RAIL_PRICE in railway.js)
     g.fillText('Downhill free · skis in the cabin', 28, h - 64);
   });
   const g = new THREE.Group();

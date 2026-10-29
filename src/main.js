@@ -24,7 +24,7 @@ import { Audio } from './core/audio.js';
 import { SkierRig } from './player/skier.js';
 import { Player } from './player/player.js';
 import { Trails, Spray, skierFX } from './fx/snowfx.js';
-import { FreeCourses, registerFreeWorldCourses, freeCourses } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
+import { FreeCourses, registerFreeWorldCourses, freeCourses, PRIZE_SHARE } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
 import { buildExpressGround } from './world/expressground.js'; // the Legacy Express: the high-speed line to every race (its ground works)
 import { Express, EXPRESS_PRICE, FAST as EXPRESS_FAST } from './world/express.js'; // the Legacy Express's trains, boarding and the ride
 import { planExpressScenery, buildExpressScenery } from './world/expressscenery.js'; // the frozen lakes under the Legacy Express's viaducts
@@ -887,7 +887,7 @@ function courseInteraction(e) {
       player.vel.set(0, 0, 0);
       player.frozen = true; // stop at the start while deciding
       const fee = firstFree ? 0 : e.D.entry;
-      const card = { name: e.name, D: { ...e.D, entry: fee }, reward: e.reward, length: e.length, gates: e.course.gates || [] };
+      const card = { name: e.name, D: { ...e.D, entry: fee }, reward: e.reward, shares: PRIZE_SHARE, length: e.length, gates: e.course.gates || [] };
       hud.raceIntro(card, save.records?.[e.id]?.best, {
         onClose: () => { if (!modes.active) player.frozen = false; },
         onStart: () => {
@@ -1028,7 +1028,7 @@ function findInteraction() {
       if (it.id === 'shop') return { label: 'Enter the ski shop', act: enterShop };
       if (it.id === 'tickets') return { label: 'Talk to the ticket seller', act: talkToSeller };
       if (it.id === 'hut') return CARD_DIALOG ? { label: `Mountain hut · hot chocolate $${PRICES.hotChocolate}`, act: () => openHut(it) }
-        : { label: 'Buy a hot chocolate ($6)', act: () => { if (spend(PRICES.hotChocolate)) hud.flash('Hot chocolate', 'gold', 2000); } };
+        : { label: `Buy a hot chocolate ($${PRICES.hotChocolate})`, act: () => { if (spend(PRICES.hotChocolate)) hud.flash('Hot chocolate', 'gold', 2000); } };
     }
   }
   const stop = skibus.stopNear(p);

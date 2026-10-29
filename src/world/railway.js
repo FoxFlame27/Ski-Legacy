@@ -30,7 +30,7 @@ export const RAIL_TERRAIN_CLIP = true; // no terrain inside the tubes behind the
 import { smoothstep, clamp, lerp, mulberry32 } from '../core/noise.js';
 import { world } from './world.js';
 
-export const RAIL_PRICE = 30;
+export const RAIL_PRICE = 50; // uphill (Oct 29 rebalance: was $30)
 const ALT0 = 1245; // the village's altitude above sea level (signs)
 const SET_HALF = (CAR.len + CAR.gap) / 2; // car centres from the set's middle
 

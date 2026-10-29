@@ -177,7 +177,7 @@ export class CarRentalUI {
           ${line(1, w.label, plus(w.cost))}
           ${line(2, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
           <div class="cr-sum-tot"><span>TOTAL</span><b>${money(cost.total)}</b></div>
-          <ul class="cr-terms"><li>Waits in the yard out front · E to drive</li><li>One car at a time: renting another returns yours</li><li>Wreck it and it costs <b>$1,000</b> · the tow truck fetches it</li></ul>
+          <ul class="cr-terms"><li>Waits in the yard out front · E to drive</li><li>One car at a time: renting another returns yours</li><li>Wreck it and it costs <b>${money(v.wreckFee ?? 1500)}</b> · the tow truck fetches it</li></ul>
         </div>`;
       list.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => this.go(+b.dataset.go)));
     }

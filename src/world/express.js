@@ -33,7 +33,7 @@ import { smoothstep, clamp, lerp } from '../core/noise.js';
 let TRACK_MODULE = {};
 try { TRACK_MODULE = import.meta.glob('./expresstrack.js'); } catch { /* (Node tools: no glob imports) */ }
 
-export const EXPRESS_PRICE = 40;   // any race, one way (free with the day pass)
+export const EXPRESS_PRICE = 75;   // any race, one way (free with the day pass)
 export const EXPRESS_LIVERY = true; // the railcar in Legacy blue (false: the Wolkenspitzbahn's own red)
 const CARS = 4;                     // two two-car units in multiple: cab, car, car, cab (the middle cabs meet)
 const FLIP = [false, true, false, true]; // car k turned round (its cab facing back)

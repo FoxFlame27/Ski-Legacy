@@ -10,9 +10,9 @@ import { isPaint } from './cars.js';
 // paint: hex (sRGB), finish -> how the clear coat and flakes read (roughness, metalness), extra cost
 export const FINISH = {
   solid: { label: 'Solid', rough: 0.3, metal: 0.25, clear: 1, cost: 0 },
-  metallic: { label: 'Metallic', rough: 0.24, metal: 0.72, clear: 1, cost: 30 },
-  pearl: { label: 'Pearl', rough: 0.18, metal: 0.5, clear: 1, cost: 50 },
-  matte: { label: 'Matte', rough: 0.66, metal: 0.12, clear: 0, cost: 60 },
+  metallic: { label: 'Metallic', rough: 0.24, metal: 0.72, clear: 1, cost: 150 },
+  pearl: { label: 'Pearl', rough: 0.18, metal: 0.5, clear: 1, cost: 250 },
+  matte: { label: 'Matte', rough: 0.66, metal: 0.12, clear: 0, cost: 300 },
 };
 export const PAINTS = [
   { id: 'white', label: 'Alpine White', hex: 0xf2f2f0, finish: 'solid' }, { id: 'black', label: 'Night Black', hex: 0x15171a, finish: 'solid' },
@@ -32,20 +32,20 @@ export const PAINTS = [
 export const INTERIORS = [
   { id: 'orig', label: 'Factory trim', sub: 'As it left the factory', hex: 0x000000, amt: 0, cost: 0 },
   { id: 'black', label: 'Black leather', sub: 'Nappa, black', hex: 0x1a1a1c, amt: 1, cost: 0 },
-  { id: 'tan', label: 'Cognac leather', sub: 'Tan nappa, a warm brown', hex: 0x9a5a2c, amt: 1, cost: 40 },
-  { id: 'oxblood', label: 'Oxblood leather', sub: 'Deep red nappa', hex: 0x6e1a1e, amt: 1, cost: 50 },
-  { id: 'ivory', label: 'Ivory leather', sub: 'Pale cream nappa', hex: 0xd8cdb6, amt: 1, cost: 50 },
-  { id: 'sportred', label: 'Sport fabric · red check', sub: 'Charcoal cloth, red stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0xc0161c, cost: 30 },
-  { id: 'sportblue', label: 'Sport fabric · blue check', sub: 'Charcoal cloth, blue stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0x1f6fd0, cost: 30 },
-  { id: 'alcantara', label: 'Alcantara · yellow stitch', sub: 'Grey suede, yellow stitching', hex: 0x55575b, amt: 1, pattern: 2, accent: 0xe8c21a, cost: 40 },
+  { id: 'tan', label: 'Cognac leather', sub: 'Tan nappa, a warm brown', hex: 0x9a5a2c, amt: 1, cost: 200 },
+  { id: 'oxblood', label: 'Oxblood leather', sub: 'Deep red nappa', hex: 0x6e1a1e, amt: 1, cost: 250 },
+  { id: 'ivory', label: 'Ivory leather', sub: 'Pale cream nappa', hex: 0xd8cdb6, amt: 1, cost: 250 },
+  { id: 'sportred', label: 'Sport fabric · red check', sub: 'Charcoal cloth, red stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0xc0161c, cost: 150 },
+  { id: 'sportblue', label: 'Sport fabric · blue check', sub: 'Charcoal cloth, blue stitching', hex: 0x2c2d31, amt: 1, pattern: 1, accent: 0x1f6fd0, cost: 150 },
+  { id: 'alcantara', label: 'Alcantara · yellow stitch', sub: 'Grey suede, yellow stitching', hex: 0x55575b, amt: 1, pattern: 2, accent: 0xe8c21a, cost: 200 },
 ];
 // rims: a tint over the wheel's metal (tyres stay black)
 export const RIMS = [
-  { id: 'orig', label: 'Factory alloys', hex: 0xffffff, cost: 0 }, { id: 'black', label: 'Gloss black', hex: 0x1b1c1e, cost: 20 },
-  { id: 'gunmetal', label: 'Gunmetal', hex: 0x5a5e64, cost: 20 }, { id: 'bronze', label: 'Bronze', hex: 0x9a6a36, cost: 30 },
-  { id: 'gold', label: 'Gold', hex: 0xd0a650, cost: 30 }, { id: 'red', label: 'Red', hex: 0xa01a1e, cost: 30 },
+  { id: 'orig', label: 'Factory alloys', hex: 0xffffff, cost: 0 }, { id: 'black', label: 'Gloss black', hex: 0x1b1c1e, cost: 100 },
+  { id: 'gunmetal', label: 'Gunmetal', hex: 0x5a5e64, cost: 100 }, { id: 'bronze', label: 'Bronze', hex: 0x9a6a36, cost: 150 },
+  { id: 'gold', label: 'Gold', hex: 0xd0a650, cost: 150 }, { id: 'red', label: 'Red', hex: 0xa01a1e, cost: 150 },
 ];
-export const PLATE_COST = 25; // your own text on the plates
+export const PLATE_COST = 100; // your own text on the plates
 const CANTONS = ['VS', 'GR', 'BE', 'UR', 'OW', 'TI', 'ZH', 'LU'];
 
 /** A plate in the game's style: two canton letters and up to six digits ("VS 123456"). */

@@ -280,7 +280,7 @@ export class HUD {
       <div class="sub">${race.D.label} · ${Math.round(race.length)} m · ${race.gates.length ? race.gates.length + ' gates · ' : ''}14 opponents</div>
       <div class="grid">
         <div class="stat">1st place<b>$${fmtMoney(race.reward)}</b></div>
-        <div class="stat">2nd / 3rd<b>$${fmtMoney(Math.round(race.reward * 0.3))} / $${fmtMoney(Math.round(race.reward * 0.1))}</b></div>
+        <div class="stat">2nd / 3rd<b>$${fmtMoney(Math.round(race.reward * (race.shares?.[1] ?? 0.4)))} / $${fmtMoney(Math.round(race.reward * (race.shares?.[2] ?? 0.15)))}</b></div>
         <div class="stat entry${fee ? '' : ' free'}">Entry<b>${fee ? '$' + fmtMoney(fee) : 'FREE'}</b>${firstFree ? '<em>First race on the house</em>' : ''}</div>
         <div class="stat">Your best<b>${best ? fmtTime(best) : '—'}</b></div>
       </div>

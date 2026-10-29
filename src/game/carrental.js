@@ -27,21 +27,21 @@ import { makeSign } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
 
 export const RENTALS = [
-  { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 150, length: 4.3 },
-  { id: 'car_dacia_duster', label: 'Dacia Duster', kind: 'Compact SUV', price: 150, length: 4.34 },
-  { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 250, length: 4.7 },
-  { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 300, length: 4.7 },
-  { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 450, length: 5.0 },
+  { id: 'car_vw_golf_gti', label: 'VW Golf GTI', kind: 'Hot hatch', price: 1200, length: 4.3 },
+  { id: 'car_dacia_duster', label: 'Dacia Duster', kind: 'Compact SUV', price: 1000, length: 4.34 },
+  { id: 'car_tesla_m3', label: 'Tesla Model 3', kind: 'Electric saloon', price: 2000, length: 4.7 },
+  { id: 'car_bmw_x3', label: 'BMW X3', kind: 'Premium SUV', price: 2500, length: 4.7 },
+  { id: 'car_audi_rs6', label: 'Audi RS6 Avant', kind: 'Performance estate', price: 4000, length: 5.0 },
   // upstairs, the supercar floor (UPPER: on the mezzanine, rented the same way: walk up, E at it, or pick it here)
-  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 800, length: 4.96 },
-  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 900, length: 4.64 },
+  { id: 'car_porsche_taycan', label: 'Porsche Taycan Turbo S', kind: 'Electric super saloon', price: 8000, length: 4.96 },
+  { id: 'car_mercedes_sls', label: 'Mercedes SLS AMG', kind: 'Gull-wing supercar', price: 10000, length: 4.64 },
 ];
 export { PAINTS }; // (the configurator's: carconfig.js)
 // the five cars on display downstairs (one of each, each its own colour; LAYOUT.spots: where)
 const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_tesla_m3', 'white'], ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_dacia_duster', 'orange']];
 // upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for rent like the rest, at their own rates)
 const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red']];
-export const WRECK_FEE = 1000;
+export const WRECK_FEE = 1500; // (Oct 29 rebalance: was $1,000; a couple of jobs, the cars now rent for $1,000-10,000)
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
 // its road end, the rental bays (lines at x, from / to z), your car's spot, the TOW bay (middle, half length / width)
 const YARD = { hall: -7.6, hw: 14.6, z1: 13.2, bayLines: [-12.4, -9.4, -6.4, -3.4], bayZ: [2.6, 8.4], carX: -7.9, carZ: 5.6,
@@ -342,7 +342,7 @@ export class CarRental {
     this.player.frozen = true;
     const cur = this.save.rental ? normConfig(this.save.rental) : null;
     const base = cur && pick === cur.id ? cur : normConfig({ id: pick, paint: PAINTS.find((p) => p.hex === paintHexWant)?.id || 'white', plate: randomPlate() });
-    this.ui.open({ cars: RENTALS, cfg: base, current: cur, money: this.save.money, cost: (c) => this.cost(c),
+    this.ui.open({ cars: RENTALS, cfg: base, current: cur, money: this.save.money, wreckFee: WRECK_FEE, cost: (c) => this.cost(c),
       preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
       rent: (c) => { this.rent(c); }, close: () => { this.room.endConfigure(this.camera); this.player.frozen = false; this.input?.lock?.(); } });
   }

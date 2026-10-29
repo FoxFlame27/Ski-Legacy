@@ -22,10 +22,11 @@ import { Ambulance } from './ambulance.js';
 import { busRoads } from '../bus/roads.js';
 import { save, writeSave } from '../economy.js';
 
-// The rescue bill (the ambulance): $500, then $125 more for every rescue before it (counted in the save); it is
-// charged even into the red (shops, lifts and passes then refuse until you earn it back)
-export const FEE_BASE = 500, FEE_STEP = 125; // (was +250 a rescue: halved 2026-10-27)
-export const rescueFee = () => FEE_BASE + FEE_STEP * Math.max(0, save.rescues | 0);
+// The rescue bill (the ambulance): $750, then $150 more for every rescue before it (counted in the save), never
+// over $2,000 (~5 to 13 minutes of jobs: it hurts, it never ruins you); it is charged even into the red (shops,
+// lifts and passes then refuse until you earn it back). (Oct 29 rebalance: was $500 + $125, uncapped.)
+export const FEE_BASE = 750, FEE_STEP = 150, FEE_MAX = 2000;
+export const rescueFee = () => Math.min(FEE_MAX, FEE_BASE + FEE_STEP * Math.max(0, save.rescues | 0));
 // The ambulance ride after a rescue (false: the rescue ends the old way, out at the pad, no fee).
 export const AMBULANCE_ON = true; // (checked in the game 2026-10-27)
 

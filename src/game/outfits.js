@@ -779,7 +779,7 @@ export const OUTFIT_ITEMS = [
   { id: 'h_red', slot: 'helmet', name: 'Gloss Red', price: 350, color: '#d0202e', finish: 'gloss' },
   { id: 'h_neon', slot: 'helmet', name: 'Neon Yellow', price: 400, color: '#e8f01c', finish: 'gloss' },
   { id: 'h_silver', slot: 'helmet', name: 'Chrome Silver', price: 700, color: '#c9ccd2', finish: 'chrome' },
-  { id: 'h_gold', slot: 'helmet', name: 'Gold Chrome', price: 1150, color: '#d9a93a', finish: 'chrome' },
+  { id: 'h_gold', slot: 'helmet', name: 'Gold Chrome', price: 1200, color: '#d9a93a', finish: 'chrome' },
   { id: 'l_clear', slot: 'lens', name: 'Clear', price: 150, tint: '#dfe8ee', mirror: 0 },
   { id: 'l_smoke', slot: 'lens', name: 'Smoke', price: 200, tint: '#3a3d44', mirror: 0.35 },
   { id: 'l_rose', slot: 'lens', name: 'Rose', price: 300, tint: '#ff7aa8', mirror: 0.5 },

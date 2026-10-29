@@ -12,15 +12,19 @@ const BUILD_D = 1700;  // m from the course line: build its meshes
 const DROP_D = 2600;   // m: dispose them again
 const START_R = 24;    // m around the start line: E races the course
 
-// entry fee and prize money, like the old open-world races (1st / 2nd / 3rd: 100 % / 30 % / 10 %)
+// entry fee and prize money, like the old open-world races (1st / 2nd / 3rd: 100 % / 40 % / 15 %)
+// (Oct 29 rebalance: the prize follows the course's length, perKm $ a km for 1st, never under min, so a 1.3 km
+// sprint no longer pays like a 6.7 km downhill. A win pays a few jobs' worth: Easy $600-1,500, Medium
+// $1,250-2,300, Hard $3,200-4,700. The entry fee is a small stake, refunded many times over by a podium.)
 const DIFF = {
-  // (Oct 28, the user: races and jobs pay way more, so a $50,000 chalet is within reach: prizes ×5)
-  Easy: { label: 'Easy', color: '#2fbf5b', entry: 0, base: 1500, ai: 'easy' },
-  Medium: { label: 'Medium', color: '#2f7bff', entry: 0, base: 3000, ai: 'medium' },
-  Hard: { label: 'Hard', color: '#e23b3b', entry: 20, base: 6000, ai: 'medium' },
-  Expert: { label: 'Expert', color: '#141414', entry: 50, base: 9500, ai: 'hard' },
+  Easy: { label: 'Easy', color: '#2fbf5b', entry: 0, perKm: 300, min: 600, ai: 'easy' },
+  Medium: { label: 'Medium', color: '#2f7bff', entry: 50, perKm: 500, min: 1000, ai: 'medium' },
+  Hard: { label: 'Hard', color: '#e23b3b', entry: 150, perKm: 700, min: 2000, ai: 'medium' },
+  Expert: { label: 'Expert', color: '#141414', entry: 300, perKm: 900, min: 3000, ai: 'hard' },
 };
-export const PRIZE_SHARE = [1, 0.3, 0.1];
+export const PRIZE_SHARE = [1, 0.4, 0.15];
+/** 1st place prize for a course of difficulty D and length L (m), in round $50s. */
+export const coursePrize = (D, L) => Math.round(Math.max(D.min, (D.perKm * L) / 1000) / 50) * 50;
 
 /** Register every course (region, corridor, surfaces) before the terrain is built: one per task, so the page
  *  stays responsive while the models load. */
@@ -43,7 +47,7 @@ export function freeCourses() {
     try { course = getCourse(c.id); } catch { continue; }
     const D = DIFF[course.difficulty] || DIFF.Medium;
     const L = course.length || course.track.length;
-    const reward = Math.round((D.base * (0.8 + 0.4 * Math.min(1, L / 5000))) / 10) * 10;
+    const reward = coursePrize(D, L);
     const T = course.track, pts = [];
     for (let i = 0; i < T.n; i += 15) pts.push([T.X[i], T.Z[i]]);
     pts.push([T.X[T.n - 1], T.Z[T.n - 1]]);

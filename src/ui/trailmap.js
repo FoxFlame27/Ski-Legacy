@@ -1051,6 +1051,19 @@ export class TrailMap {
         if (m.label) this.label(m.label, x, y, { size: 14, color: '#9a6a00', prio: 1, cands: this.around(6) });
       }
     }
+    // multiplayer: the other players (net/remote.js mapMarkers), live: a green dot with their heading and their name
+    for (const m of mk.players || []) {
+      const x = X(m.x), y = Z(m.z);
+      if (!this.inView(x, y)) continue;
+      const fx = Math.sin(m.yaw || 0), fz = Math.cos(m.yaw || 0), dx = X(m.x + fx) - x, dy = Z(m.z + fz) - y, l = Math.hypot(dx, dy) || 1;
+      const ux = dx / l, uy = dy / l;
+      g.fillStyle = '#12a150'; g.strokeStyle = '#fff'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(x + ux * 11, y + uy * 11); g.lineTo(x - uy * 5, y + ux * 5); g.lineTo(x + uy * 5, y - ux * 5); g.closePath(); g.fill(); // (the heading)
+      g.beginPath(); g.arc(x, y, 6.5, 0, Math.PI * 2); g.fill(); g.stroke();
+      this.reserve(x, y, 8);
+      this.spot(x, y, 9, m.x, m.z, m.label);
+      this.label(m.label, x, y, { size: 14, weight: 700, color: '#0d7a3c', prio: 0, cands: this.around(8) });
+    }
     // the patrol cars while you are wanted (game/police.js): blue dots
     for (const m of mk.police || []) {
       const x = X(m.x), y = Z(m.z);

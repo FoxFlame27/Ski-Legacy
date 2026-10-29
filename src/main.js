@@ -1477,6 +1477,7 @@ function openMap() {
   trailMap ??= new TrailMap({
     player, locationName, onClose: () => input.lock(),
     markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [], police: police?.mapMarkers() || [],
+      players: multiplayer?.remotes?.mapMarkers?.() || [], // (multiplayer: the other players, live)
       places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Autohaus', kind: 'car' }] : [] }),
   });
   if (trailMap.toggle()) document.exitPointerLock?.();

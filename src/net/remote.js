@@ -156,6 +156,12 @@ export class RemotePlayers {
   }
 
   byName(name) { for (const r of this.players.values()) if (r.name === name) return r; return null; }
+  /** The trail map: everyone outdoors where they are now (inside a chalet / the Autohaus / the prison: not shown). */
+  mapMarkers() {
+    const out = [];
+    for (const r of this.players.values()) if (r.ok && !r.interior) out.push({ x: r.pos.x, z: r.pos.z, yaw: r.yaw, label: r.name, kind: 'player' });
+    return out;
+  }
 
   detach(r) {
     if (r.rig && r.scene) { r.rig.removeFrom(r.scene); if (r.tag) r.tag.removeFromParent(); }

@@ -30,6 +30,7 @@ import { Express, EXPRESS_PRICE, FAST as EXPRESS_FAST } from './world/express.js
 import { planExpressScenery, buildExpressScenery } from './world/expressscenery.js'; // the frozen lakes under the Legacy Express's viaducts
 import { NPCs } from './game/npcs.js';
 import { initPeopleHits, playerHitPerson } from './game/peoplehits.js';
+import { VehicleHits } from './game/vehiclehits.js'; // cars, buses, ploughs, the tow truck, other players' cars knock you over
 import { HUD, CARD_DIALOG } from './ui/hud.js';
 import { travelPicker, fmtMin } from './ui/travel.js'; // route map pickers (bus, train, gondola mid-stations) while CARD_DIALOG is on
 import { ShopInterior } from './game/interior.js';
@@ -178,6 +179,7 @@ let drive = null; // the car you drive (game/drive.js)
 let chaletSeatPrompt = null; // inside your chalet: Sit down / Stand up (game/seating.js)
 let chalets = null; // the chalet village: the houses, renting one, its interior (game/chalets.js)
 let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
+let vehicleHits = null; // getting hit by vehicles on foot / on skis (game/vehiclehits.js)
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
 let secrets = null; // hidden tunnels, couloirs, caves (world/secrets.js)
@@ -390,6 +392,23 @@ async function boot() {
     });
     multiplayer.attachTransit({ railway, express, lifts, skibus, player, expressRate: EXPRESS_FAST }); // (shared trains / cabins: net/transit.js)
   } catch (e) { console.warn('multiplayer: ' + (e?.stack || e)); multiplayer = null; }
+
+  // getting hit by a moving vehicle on foot or on skis (a wipeout: a strike; 50+ km/h brings the rescue helicopter).
+  // Free ride outdoors only: never seated, riding, driving, inside, or in a race session.
+  try {
+    const vehicleSources = { traffic: null, skibus: null, carRental: null, snowcats: null, multiplayer: null };
+    vehicleHits = new VehicleHits({
+      player, audio,
+      sources: () => {
+        const S = vehicleSources;
+        S.traffic = traffic; S.skibus = skibus; S.carRental = carRental; S.snowcats = snowcats; S.multiplayer = isMP() ? multiplayer : null;
+        return S;
+      },
+      enabled: () => started && !paused && !busIntro && !modes?.active && !interior.active && !chalets?.inside && !carRental?.inside
+        && !heli.active && !sleds.active && !drive?.active && !seating.seated && !transition.active && !skibus?.riding
+        && !railway?.riding && !express?.riding && !player.frozen,
+    });
+  } catch (e) { console.warn('vehicle hits: ' + (e?.stack || e)); vehicleHits = null; }
 
   // the RACING stand beside the village job board is gone (Oct 29, the user: "remove this racing day sign");
   // races are the free-ride races at the courses' start houses
@@ -1745,6 +1764,7 @@ function loopUpdate() {
   if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
   chalets?.update(dt); // the full-detail chalet nearest you
+  try { vehicleHits?.update(dt); } catch (e) { loopFault('vehicle hits', e); } // after every vehicle moved: a car / bus running into you
   mark('drive');
   modes.update(dt, input); // after the player (positions, checkpoints, barriers, respawns)
   mark('modes');
@@ -1789,15 +1809,18 @@ function loopUpdate() {
     else if (e === 'crash') {
       // sessions respawn at the checkpoint, open-world races fade back; free ride: you get up after the
       // first wipeout, the second (within 3 min, no lift ride between) calls the rescue helicopter
+      const hitBy = vehicleHits?.take(); // (knocked over by a vehicle, game/vehiclehits.js; a hard hit: the helicopter at once)
       if (!inSession) {
         jobs.onEvent('crash');
         if (performance.now() - lastStrikeAt > STRIKE_RESET_MS) strikes = 0;
         lastStrikeAt = performance.now();
-        if (races.active) { hud.flash('Wipeout', 'bad'); wipeoutToVillage(); }
-        else if (++strikes < 2) hud.flash('Wipeout · one more and the rescue helicopter comes', 'bad', 3200);
+        const what = hitBy ? `Hit by a ${hitBy.what} · ${hitBy.kmh} km/h` : 'Wipeout';
+        if (hitBy?.hard) strikes = Math.max(strikes, 1); // (a big crash: this one calls the rescue helicopter)
+        if (races.active) { hud.flash(what, 'bad'); wipeoutToVillage(); }
+        else if (++strikes < 2) hud.flash(`${what} · one more and the rescue helicopter comes`, 'bad', 3200);
         else {
           strikes = 0;
-          hud.flash('Wipeout · the rescue helicopter is on its way', 'bad', 3200);
+          hud.flash(`${what} · the rescue helicopter is on its way`, 'bad', 3200);
           if (!heli.rescueMe({ fallback: wipeoutToVillage })) wipeoutToVillage();
         }
       }

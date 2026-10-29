@@ -1,0 +1,497 @@
+// The multiplayer session: everything between "MULTIPLAYER" in the menu and LEAVE MULTIPLAYER.
+//  - account: your unique name + its secret token, kept in localStorage per server URL (first launch: register)
+//  - start(): connect, log in, join a world, swap the server profile into `save` (the single-player save is set
+//    aside untouched and comes back on leave()), switch every AI system off, spawn the remote avatars
+//  - update(dt) each frame: presence out at ~12 Hz, remote avatars (interpolated), the shared clock and weather,
+//    the money guard, the status pill / race line
+//  - the server-authoritative purchases (skis, outfits, chalets, the rental car and its plate) and payouts (jobs,
+//    secrets, races) as small async helpers main.js and the game systems call
+// Wave-2 hooks (shared seats, warps, helicopter copies, car rides, chalet visits) are documented in docs/multiplayer.md.
+import { MP } from './mode.js';
+import { net } from './client.js';
+import { serverUrl } from './config.js';
+import { PROTO, ST, F, ERR_TEXT, MAX_PLAYERS } from './protocol.js';
+import { RemotePlayers } from './remote.js';
+import { MpUI } from './ui.js';
+
+const ACCOUNTS_KEY = 'ski-legacy-mp-accounts';
+const SEND_HZ = 12;
+const PUSH_DELAY = 1500; // ms: profile changes are pushed this long after the last writeSave()
+
+export const errText = (e) => ERR_TEXT[e?.code] || e?.message || 'Something went wrong';
+
+function readAccounts() { try { return JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '{}') || {}; } catch { return {}; } }
+/** { name, token } stored for this server, or null (first launch: pick a name). */
+export function loadAccount(url = serverUrl()) { const a = readAccounts()[url]; return a && a.name && a.token ? a : null; }
+function storeAccount(url, acc) {
+  const all = readAccounts();
+  if (acc) all[url] = acc; else delete all[url];
+  try { localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(all)); } catch { /* storage unavailable */ }
+}
+
+export class Multiplayer {
+  /**
+   * @param {object} c  main.js context:
+   *   save, hud, audio, env, camera, scene, makeRig(charId, skiId), applyOutfit(rig, charId, outfit), getEquipped(save, charId),
+   *   fx(id, rig, info, dt), pose(out) -> fills the local presence (see main.js mpPose), getScene(interiorId),
+   *   setAI(on), applySave() (player / rental / HUD follow the swapped save), onLost(reason), onRaceStart(start),
+   *   onKickInterior(id)
+   */
+  constructor(c) {
+    this.c = c;
+    this.url = serverUrl();
+    this.ui = null;
+    this.remotes = null;
+    this.offs = [];
+    this.sendAcc = 0;
+    this.row = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    this.pose = { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vy: 0, vz: 0, st: 0, crouch: 0, lean: 0, flags: 0, interior: null };
+    this.interior = null;         // the interior the server approved for you
+    this.clock = null;            // { hour, at, dayMs, weather }
+    this.money = { server: 0, pending: 0 };
+    this.pushT = null; this.pushed = {};
+    this.race = { queued: null, queue: null, start: null };
+    // shared state for the wave-2 systems (live, kept current from the server's broadcasts)
+    MP.seats = new Map();  // 'kind|id' -> [[seat, pid], ...]
+    MP.warps = new Map();  // 'kind|line' -> { off, rate, since }
+    MP.skip = new Map();   // 'kind|id' -> { holding, aboard, active }
+    MP.heli = null;        // { copies: [{ id, name, since }], padAt, copyMs }
+    MP.queues = new Map(); // race id -> { n, names, startAt }
+  }
+
+  account() { return loadAccount(this.url); }
+  forgetAccount() { storeAccount(this.url, null); }
+
+  // ---------------------------------------------------------------- connect / log in
+  async ensureOpen() {
+    if (net.open) return;
+    await net.connect(this.url);
+  }
+
+  /** First launch: register a unique name (throws with .code 'name_taken' / 'name_invalid' / ...). */
+  async register(name) {
+    await this.ensureOpen();
+    const d = await net.request('register', { name });
+    storeAccount(this.url, { name: d.name, token: d.token });
+    return d.name;
+  }
+
+  /** Log in with the stored account and enter multiplayer. Throws (with .code) when it cannot. */
+  async start() {
+    const acc = this.account();
+    if (!acc) { const e = new Error('no account'); e.code = 'no_account'; throw e; }
+    await this.ensureOpen();
+    let d;
+    try {
+      d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look() });
+    } catch (e) {
+      if (e.code === 'bad_login') this.forgetAccount(); // (the server has no such name / key: pick a name again)
+      throw e;
+    }
+    this.enter(d);
+    return d;
+  }
+
+  /** Your character / outfit / skis changed: everyone's avatar of you follows. */
+  sendLook() { if (MP.active) net.send('look', this.look()); }
+
+  look() {
+    const s = this.c.save, ch = s.character;
+    let o = null;
+    try { o = this.c.getEquipped(s, ch); } catch { o = null; }
+    return { c: ch, o, s: s.skis || 'rental' };
+  }
+
+  enter(d) {
+    MP.active = true;
+    MP.name = d.name;
+    MP.pid = d.pid;
+    MP.catalog = d.catalog;
+    MP.chalets = d.chalets || {};
+    MP.status = 'online';
+    this.applyProfile(d.profile);
+    this.setWorld(d.world);
+    this.ui ||= new MpUI();
+    this.ui.show(true);
+    this.bind();
+    this.c.setAI(false);
+    MP.onSave = () => this.schedulePush();
+    this.c.applySave();
+    net.send('look', this.look());
+    this.push(true);
+  }
+
+  setWorld(w) {
+    MP.world = { id: w.id, max: w.max || MAX_PLAYERS, players: new Map() };
+    this.clock = w.clock;
+    this.remotes?.dispose();
+    this.remotes = new RemotePlayers({
+      scene: this.c.scene, makeRig: this.c.makeRig, applyOutfit: this.c.applyOutfit, getScene: this.c.getScene, fx: this.c.fx,
+      now: () => net.serverNow(), selfPid: MP.pid,
+    });
+    for (const p of w.players) { MP.world.players.set(p.pid, { pid: p.pid, name: p.name, chalet: p.chalet }); this.remotes.add(p); }
+    MP.seats.clear(); for (const s of w.seats || []) MP.seats.set(`${s.k}|${s.v}`, s.occ);
+    MP.warps.clear(); for (const x of w.warps || []) MP.warps.set(x.key, { off: x.off, rate: x.rate, since: x.since });
+    MP.heli = w.heli || null;
+    MP.queues.clear(); for (const q of w.queues || []) MP.queues.set(q.race, q);
+  }
+
+  bind() {
+    for (const off of this.offs) off();
+    const on = (t, fn) => this.offs.push(net.on(t, fn));
+    on('P', (rows) => this.remotes?.onRows(rows));
+    on('join', (p) => { MP.world?.players.set(p.pid, { pid: p.pid, name: p.name, chalet: p.chalet }); this.remotes?.add(p); this.c.hud.flash(`${p.name} joined`, 'good', 2200); });
+    on('leave', (p) => { MP.world?.players.delete(p.pid); this.remotes?.remove(p.pid); this.c.hud.flash(`${p.name} left`, 'good', 2200); });
+    on('look', (d) => this.remotes?.setLook(d.pid, d.look));
+    on('clock', (d) => { this.clock = d; });
+    on('chalet', (d) => { MP.chalets[d.id] = d.owner; });
+    on('money', (d) => { this.setServerMoney(d.v); if (d.delta > 0) this.c.hud.setMoney(this.c.save.money, d.delta); });
+    on('seats', (d) => { const k = `${d.k}|${d.v}`; if (d.occ.length) MP.seats.set(k, d.occ); else MP.seats.delete(k); });
+    on('skip', (d) => { MP.skip.set(`${d.k}|${d.v}`, d); });
+    on('warp', (d) => { MP.warps.set(d.key, { off: d.off, rate: d.rate, since: d.since }); });
+    on('heli', (d) => { MP.heli = d; });
+    on('permAsk', (d) => this.onPermAsk(d));
+    on('permClosed', (d) => this.ui?.cancel(d.rid));
+    on('permRevoked', (d) => this.c.hud.flash(d.kind === 'carRide' ? `${d.owner} took back the car ride` : `${d.owner} took back the chalet visit`, 'bad', 3000));
+    on('kickInterior', (d) => { this.interior = null; this.c.onKickInterior?.(d.interior); });
+    on('seatLost', (d) => this.c.onSeatLost?.(d));
+    on('raceQueue', (d) => { if (d.n) MP.queues.set(d.race, d); else MP.queues.delete(d.race); if (this.race.queued === d.race) this.race.queue = d; });
+    on('raceStart', (d) => this.onRaceStart(d));
+    on('raceResult', (d) => this.onRaceResult(d));
+    on('raceDropped', (d) => { if (this.race.queued === d.race) this.race.queued = null; this.c.hud.flash('Race · not enough money for the entry fee', 'bad', 3000); });
+    on('bye', (d) => { this.byeReason = d?.reason; });
+    on('status', (s) => { MP.status = s === 'open' ? 'online' : s; });
+    on('reopen', () => this.relogin());
+    on('lost', (d) => this.lost(d?.reason === 'replaced' || this.byeReason === 'replaced' ? 'You logged in somewhere else.' : this.byeReason === 'restart' ? 'The server is restarting. Try again in a moment.' : 'Lost the connection to the server.'));
+  }
+
+  async relogin() {
+    const acc = this.account();
+    if (!acc || !MP.active) return;
+    try {
+      const d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look() });
+      MP.pid = d.pid; MP.chalets = d.chalets || {};
+      this.setServerMoney(d.profile.money);
+      this.setWorld(d.world);
+      if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
+      this.c.hud.flash('Reconnected', 'good', 2000);
+      net.emit('relogin', d); // (wave-2 systems: seats and permissions were dropped with the old connection: claim again)
+    } catch (e) { this.lost(errText(e)); }
+  }
+
+  lost(reason) {
+    if (!MP.active) return;
+    this.leave();
+    this.c.onLost?.(reason);
+  }
+
+  /** Back to single player: the local save returns exactly as it was. */
+  leave() {
+    if (!MP.active) return;
+    if (this.race.start && !this.race.finished) net.send('raceFinish', { rid: this.race.start.rid, dnf: true });
+    for (const off of this.offs) off();
+    this.offs.length = 0;
+    clearTimeout(this.pushT); this.pushT = null;
+    this.push(false, true);
+    net.close('leave');
+    this.remotes?.dispose(); this.remotes = null;
+    this.ui?.show(false);
+    MP.active = false; MP.status = 'off'; MP.onSave = null; MP.world = null; MP.profile = null; MP.pid = 0;
+    this.interior = null; this.race = { queued: null, queue: null, start: null };
+    this.restoreSave();
+    this.c.setAI(true);
+    this.c.applySave();
+  }
+
+  // ---------------------------------------------------------------- the save swap
+  applyProfile(p) {
+    const s = this.c.save;
+    this.spSave = JSON.parse(JSON.stringify(s));
+    MP.profile = p;
+    const car = p.cars?.[0];
+    Object.assign(s, {
+      money: p.money, owned: [...(p.owned || [])], skis: p.skis ?? null,
+      outfits: { owned: [...(p.outfits?.owned || [])], equipped: { ...(p.outfits?.equipped || {}) } },
+      chalet: p.chalet ? JSON.parse(JSON.stringify(p.chalet)) : null,
+      rental: car ? { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, custom: !!car.custom } : null,
+      stats: { races: 0, wins: 0, topSpeed: 0, distance: 0, earned: 0, ...(p.stats || {}) },
+      records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
+      dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,
+      pos: null, // (where you were is single player only)
+    });
+    // (the character you picked in the menu is the one you play)
+    this.money = { server: p.money, pending: 0 };
+    this.expected = p.money;
+  }
+  restoreSave() {
+    if (!this.spSave) return;
+    const s = this.c.save;
+    for (const k of Object.keys(s)) delete s[k];
+    Object.assign(s, this.spSave);
+    this.spSave = null;
+  }
+
+  // the parts of the profile the player owns (no money, nothing bought), pushed when they change
+  schedulePush() {
+    if (this.pushT) return;
+    this.pushT = setTimeout(() => { this.pushT = null; this.push(); }, PUSH_DELAY);
+  }
+  push(force = false, last = false) {
+    if (!MP.active || !net.open) return;
+    const s = this.c.save;
+    const send = (key, value) => {
+      const j = JSON.stringify(value ?? null);
+      if (!force && this.pushed[key] === j) return;
+      this.pushed[key] = j;
+      if (last) net.send('profileSet', { key, value }); // (leaving: no answers awaited, sent before the socket closes)
+      else net.request('profileSet', { key, value }).catch((e) => console.warn(`[mp] profile ${key}: ${e.code || e.message}`));
+    };
+    send('character', s.character);
+    if (s.skis) send('skis', s.skis);
+    if (s.outfits?.equipped) send('outfitsEquipped', s.outfits.equipped);
+    if (s.chalet && MP.profile?.chalet) send('chalet', s.chalet);
+    send('stats', { topSpeed: s.stats?.topSpeed || 0, distance: s.stats?.distance || 0, longestJump: s.stats?.longestJump || 0, bestAir: s.stats?.bestAir || 0 });
+    send('records', s.records || {});
+    send('secrets', s.secrets || []);
+    send('dayPass', s.dayPass ?? -1);
+    send('tickets', s.tickets || 0);
+  }
+
+  // ---------------------------------------------------------------- money: the server's number wins
+  // Any drop of save.money (spend(), a fee taken straight off the save...) is sent as a spend the server checks;
+  // any rise that did not come from the server (the admin panel, a cheat, an old code path) is undone.
+  setServerMoney(v) {
+    if (!Number.isFinite(v)) return;
+    this.money.server = v;
+    this.expected = v - this.money.pending;
+    this.c.save.money = this.expected;
+    this.c.hud.setMoney?.(this.c.save.money);
+  }
+  guardMoney() {
+    const s = this.c.save;
+    if (s.money === this.expected) return;
+    if (s.money > this.expected) { s.money = this.expected; this.c.hud.setMoney?.(s.money); return; }
+    const amount = Math.round(this.expected - s.money);
+    this.expected = s.money;
+    if (amount <= 0) return;
+    this.money.pending += amount;
+    net.request('spend', { amount, reason: 'game' }).then(
+      (d) => { this.money.pending -= amount; this.setServerMoney(d.money); },
+      (e) => { this.money.pending -= amount; this.setServerMoney(e.data?.money ?? this.money.server); if (e.code === 'money') this.c.hud.flash('Not enough money (server)', 'bad', 2200); },
+    );
+  }
+
+  /** Jobs / secrets pay out through the server (limits per payout and per hour). Resolves true when paid. */
+  async earn(amount, source = 'job') {
+    try { const d = await net.request('earn', { amount: Math.round(amount), source }); this.setServerMoney(d.money); return true; }
+    catch (e) { if (e.data?.money != null) this.setServerMoney(e.data.money); this.c.hud.flash(`Payout refused · ${e.code === 'cap' ? 'hourly limit reached' : errText(e)}`, 'bad', 2600); return false; }
+  }
+
+  /** A purchase the server checks: kind 'skis' | 'outfit' | 'chalet' | 'car'. Resolves the server's answer or null. */
+  async buy(kind, data) {
+    this.guardMoney();
+    try {
+      const d = await net.request('buy', { kind, ...data });
+      if (d.money != null) this.setServerMoney(d.money);
+      return d;
+    } catch (e) {
+      if (e.data?.money != null) this.setServerMoney(e.data.money);
+      const msg = e.code === 'taken' ? `${e.data?.owner || 'Somebody'} already owns it` : e.code === 'plate_taken' ? `The plate ${e.data?.plate || ''} is taken` : e.code === 'one_each' ? 'One chalet each' : errText(e);
+      this.c.hud.flash(msg, 'bad', 2600);
+      this.c.audio?.play?.('error');
+      return null;
+    }
+  }
+  async buySkis(id) {
+    const d = await this.buy('skis', { id });
+    if (!d) return false;
+    const s = this.c.save;
+    s.owned = d.owned; MP.profile.owned = d.owned;
+    this.c.audio?.play?.('cash');
+    return true;
+  }
+  async buyOutfit(id) {
+    const d = await this.buy('outfit', { id });
+    if (!d) return false;
+    this.c.save.outfits.owned = [...d.outfits.owned];
+    MP.profile.outfits = d.outfits;
+    this.c.audio?.play?.('cash');
+    return true;
+  }
+  async buyChalet(h, meta = { plan: 2, layout: 3 }) {
+    const d = await this.buy('chalet', { id: h.id, name: h.name, meta });
+    if (!d) return false;
+    this.c.save.chalet = JSON.parse(JSON.stringify(d.chalet));
+    MP.profile.chalet = d.chalet;
+    MP.chalets[h.id] = MP.name;
+    this.c.audio?.play?.('cash');
+    this.c.hud.flash(`${h.name} is yours · E at its front door to go in`, 'good', 3400);
+    return true;
+  }
+  /** The rental car (one at a time): the server prices it and keeps its plate unique. */
+  async rentCar(cfg) {
+    const d = await this.buy('car', { cfg });
+    if (!d) return null;
+    MP.profile.cars = [d.car];
+    this.c.audio?.play?.('cash');
+    return d.car;
+  }
+  carEnded(cfg) { if (cfg?.plate) net.request('carReturn', { plate: cfg.plate }).catch(() => {}); if (MP.profile) MP.profile.cars = []; }
+
+  // ---------------------------------------------------------------- interiors and permissions
+  /** Tell the server which interior you are in (null = outdoors). Resolves false when it refuses (a chalet). */
+  async setInterior(id) {
+    if (id === this.interior) return true;
+    try { await net.request('enter', { interior: id }); this.interior = id; return true; }
+    catch (e) { return false; }
+  }
+  /** Ask an owner: kind 'carRide' (to: name) or 'chaletVisit' (ref: chalet id). Resolves { allow } (false on error). */
+  async ask(kind, { to, ref } = {}) {
+    try { return await net.request('perm', { kind, to, ref }, 40000); }
+    catch (e) { this.c.hud.flash(errText(e), 'bad', 2400); return { allow: false, error: e.code }; }
+  }
+  async onPermAsk(d) {
+    const text = d.kind === 'carRide' ? `${d.from} wants to ride in your car` : `${d.from} wants to visit your chalet`;
+    this.c.audio?.play?.('tick');
+    const allow = await this.ui.ask(d.rid, text, d.timeoutMs || 30000);
+    if (allow === null) return; // (closed by the server)
+    net.request('permAnswer', { rid: d.rid, allow }).catch(() => {});
+  }
+
+  // ---------------------------------------------------------------- races (queue, synced start, server results)
+  async raceJoin(race) {
+    try {
+      const d = await net.request('raceJoin', { race });
+      this.race.queued = race; this.race.queue = d; this.race.finished = false;
+      this.c.hud.flash('In the race queue · at least 2 racers', 'good', 2600);
+      return true;
+    } catch (e) { this.c.hud.flash(errText(e), 'bad', 2400); return false; }
+  }
+  raceLeave() { if (this.race.queued) { net.request('raceLeave').catch(() => {}); this.race.queued = null; this.race.queue = null; } }
+  onRaceStart(d) {
+    const me = d.grid.find((g) => g.pid === MP.pid);
+    if (!me) return;
+    this.race.queued = null; this.race.queue = null;
+    this.race.start = { ...d, slot: me.slot }; this.race.finished = false;
+    this.c.onRaceStart?.({ ...d, slot: me.slot, secondsToGo: () => (d.at - net.serverNow()) / 1000 });
+  }
+  /** The race session's result callback: the server ranks everybody and pays the prizes (raceResult). */
+  raceFinished({ time, dnf }) {
+    const r = this.race.start;
+    if (!r || this.race.finished) return 0;
+    this.race.finished = true;
+    net.request('raceFinish', { rid: r.rid, time: Number.isFinite(time) ? Math.round(time * 1000) : null, dnf: !!dnf || !Number.isFinite(time) }).catch(() => {});
+    return 0; // (the prize comes with the server's result)
+  }
+  onRaceResult(d) {
+    const mine = d.order.find((o) => o.pid === MP.pid);
+    if (!mine || this.race.start?.rid !== d.rid) return;
+    this.race.start = null;
+    const s = this.c.save.stats;
+    s.races = (s.races || 0) + 1;
+    if (mine.place === 1) s.wins = (s.wins || 0) + 1;
+    const ord = (n) => `${n}${n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'}`;
+    this.c.hud.flash(mine.dnf ? 'Race over · DNF' : `Race over · ${ord(mine.place)} of ${d.order.length}${mine.prize ? ` · +$${mine.prize.toLocaleString('en-US')}` : ''}`, mine.place === 1 ? 'gold' : 'good', 4200);
+  }
+  raceLine(now) {
+    const q = this.race.queue;
+    if (this.race.queued && q) {
+      if (q.n < 2 || !q.startAt) return `RACE QUEUE · ${q.n}/2 · waiting for players`;
+      return `RACE QUEUE · ${q.n} racers · starting in ${Math.max(0, Math.ceil((q.startAt - now) / 1000))}s`;
+    }
+    const r = this.race.start;
+    if (r && now < r.at) return `RACE · GO in ${Math.max(0, Math.ceil((r.at - now) / 1000))}s`;
+    return '';
+  }
+
+  // ---------------------------------------------------------------- shared transport (wave-2 hooks)
+  /** A seat on a shared vehicle: kind 'bus' | 'train' | 'express' | 'gondola' | 'chair' | 'heli' | 'car' | 'sled',
+   *  id: the vehicle (a car: its owner's name). The server gives the lowest free seat (n: seats it has, seat: a
+   *  preferred one). Resolves { seat, v } or null (full / no permission: flashed). One seat per player. */
+  async claimSeat(k, v, { n, seat, quiet = false } = {}) {
+    try { return await net.request('seatClaim', { k, v, n, seat }); }
+    catch (e) { if (!quiet) this.c.hud.flash(errText(e), 'bad', 2400); return null; }
+  }
+  releaseSeat() { this.skipHeld = null; return net.request('seatRelease').catch(() => {}); }
+  /** [[seat, pid], ...] taken on a vehicle (from the server's 'seats' broadcasts). */
+  seatsOf(k, v) { return MP.seats.get(`${k}|${v}`) || []; }
+  /** SPACE held / released on your shared vehicle (call every frame: only changes are sent). rate: the single-player
+   *  fast-forward rate of that vehicle; line: the timeline it warps ('kind|line' in MP.warps; default: the vehicle). */
+  holdSkip(k, v, on, { rate = 16, line } = {}) {
+    const key = `${k}|${v}|${!!on}`;
+    if (this.skipHeld === key) return;
+    this.skipHeld = key;
+    net.request('skip', { k, v, on: !!on, rate, line }).catch(() => {});
+  }
+  /** The HUD line for the speed-up on a shared vehicle ('' when alone aboard). */
+  skipLine(k, v) {
+    const s = MP.skip.get(`${k}|${v}`);
+    if (!s || s.aboard <= 1) return '';
+    return s.active ? `Speeding up · everyone is holding SPACE` : `Hold SPACE to speed up (${s.holding}/${s.aboard} holding)`;
+  }
+  /** Helicopter copies at the pad: resolves { id } or null (not_yet: d.waitMs). */
+  async heliRent() {
+    try { const d = await net.request('heliRent'); this.setServerMoney(d.money); return d; }
+    catch (e) { this.c.hud.flash(e.code === 'not_yet' ? `Next helicopter in ${Math.ceil((e.data?.waitMs || 0) / 60000)} min` : errText(e), 'bad', 2600); return null; }
+  }
+  heliReturn() { return net.request('heliReturn').catch(() => {}); }
+
+  // ---------------------------------------------------------------- shared timelines (wave-2 transport)
+  /** ms on a line's shared timeline (server clock + its speed-up so far): every client places the vehicles of
+   *  `kind|line` from this. */
+  lineTime(key, now = net.serverNow()) {
+    const w = MP.warps.get(key);
+    return w ? now + w.off + (w.rate - 1) * (now - w.since) : now;
+  }
+  /** The world's hour now (shared by everyone in it). */
+  hourNow(now = net.serverNow()) {
+    const c = this.clock;
+    if (!c) return null;
+    return (((c.hour + ((now - c.at) / c.dayMs) * 24) % 24) + 24) % 24;
+  }
+
+  // ---------------------------------------------------------------- every frame
+  update(dt, view) {
+    if (!MP.active) return;
+    const now = net.serverNow();
+    // the shared clock and weather
+    const env = this.c.env, h = this.hourNow(now);
+    if (h != null) {
+      env.hour = h;
+      env.weatherTimer = 1e9; // (the server moves the weather on)
+      if (this.clock.weather && env.weather !== this.clock.weather) env.setWeather(this.clock.weather);
+    }
+    this.guardMoney();
+    // presence
+    this.sendAcc += dt;
+    if (this.sendAcc >= 1 / SEND_HZ && net.open) {
+      this.sendAcc = 0;
+      const p = this.pose;
+      this.c.pose(p);
+      if (p.interior !== this.interior) {
+        // into / out of an interior: the server approves it first (a chalet needs its owner's ok); until then no
+        // presence goes out (nobody sees you outdoors at the interior's coordinates)
+        if (!this.entering) {
+          const want = p.interior;
+          this.entering = true;
+          this.setInterior(want).then((ok) => { this.entering = false; if (!ok) this.c.onKickInterior?.(want); });
+        }
+      } else {
+        const r = this.row;
+        r[0] = Math.round(now); r[1] = p.x; r[2] = p.y; r[3] = p.z; r[4] = p.yaw; r[5] = p.vx; r[6] = p.vy; r[7] = p.vz;
+        r[8] = p.st; r[9] = p.crouch; r[10] = p.lean; r[11] = p.flags;
+        net.sendPresence(r);
+      }
+    }
+    this.remotes?.update(dt, view);
+    // the status pill
+    const w = MP.world;
+    if (this.ui) {
+      if (MP.status === 'reconnecting') this.ui.setStatus('MULTIPLAYER · reconnecting…', true);
+      else this.ui.setStatus(`${MP.name} · WORLD ${w?.id ?? '-'} · ${(w?.players.size || 1)}/${w?.max || MAX_PLAYERS} PLAYERS`);
+      this.ui.setRace(this.raceLine(now));
+    }
+  }
+}
+
+export { ST, F };

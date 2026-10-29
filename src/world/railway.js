@@ -285,7 +285,8 @@ export class Railway {
     for (const [ci, car] of tr.cars.entries()) {
       if (!car.passengers) continue;
       let vis;
-      if (car.hasBody) vis = !!car.inside;
+      if (this.noPassengers) vis = false; // (multiplayer: nobody but real players)
+      else if (car.hasBody) vis = !!car.inside;
       else if (this.ride) vis = this.ride.train === tr && (this.ride.car === ci || this.view === 'outside');
       else vis = !!viewer && car.group.visible && Math.hypot(viewer.x - car.group.position.x, viewer.z - car.group.position.z) < 110;
       if (vis !== car.passengersVisible) { car.passengersVisible = vis; for (const r of car.passengers) r.visible = vis; }
@@ -582,7 +583,7 @@ export class Railway {
   // ------------------------------------------------------------------ light: tunnels, cabin, headlights
   /** After the environment update, before rendering: darkness inside tunnels, cabin light, snowfall indoors. */
   lateUpdate(camera, env, atmosphere, dt = 0.016) {
-    this.people?.update(dt, camera);
+    if (!this.noPassengers) this.people?.update(dt, camera); // (multiplayer: nobody waiting at the stations either)
     // how deep inside a tunnel the camera is (0 outside / near a portal .. 1 well inside)
     let deep = 0;
     const cp = camera.position;

@@ -1,0 +1,224 @@
+{
+ "skis": {
+  "rental": {
+   "price": 50,
+   "rent": true
+  },
+  "cruiser": {
+   "price": 300,
+   "rent": false
+  },
+  "sport": {
+   "price": 800,
+   "rent": false
+  },
+  "park": {
+   "price": 1000,
+   "rent": false
+  },
+  "powder": {
+   "price": 1200,
+   "rent": false
+  },
+  "touring": {
+   "price": 1600,
+   "rent": false
+  },
+  "carver": {
+   "price": 2200,
+   "rent": false
+  },
+  "pro": {
+   "price": 3000,
+   "rent": false
+  },
+  "gs": {
+   "price": 4000,
+   "rent": false
+  },
+  "superg": {
+   "price": 5500,
+   "rent": false
+  },
+  "elite": {
+   "price": 8000,
+   "rent": false
+  },
+  "legend": {
+   "price": 12000,
+   "rent": false
+  }
+ },
+ "prices": {
+  "gondola": 50,
+  "chair": 20,
+  "dayPass": 150,
+  "hotChocolate": 8,
+  "heli": 1500
+ },
+ "chalet": {
+  "price": 50000,
+  "count": 18
+ },
+ "cars": {
+  "car_vw_golf_gti": 1200,
+  "car_tesla_m3": 2000,
+  "car_bmw_x3": 2500,
+  "car_toyota_gr_yaris": 3000,
+  "car_audi_rs6": 4000,
+  "car_mercedes_gls": 5000,
+  "car_audi_etron_gt": 7000,
+  "car_porsche_taycan": 8000,
+  "car_mercedes_sls": 10000,
+  "car_lamborghini_huracan": 12000
+ },
+ "paints": {
+  "white": 0,
+  "black": 0,
+  "red": 0,
+  "yellow": 0,
+  "orange": 0,
+  "kingfisher": 0,
+  "lime": 0,
+  "silver": 150,
+  "graphite": 150,
+  "blue": 150,
+  "green": 150,
+  "burgundy": 150,
+  "bronze": 150,
+  "ice": 150,
+  "pearlwhite": 250,
+  "violet": 250,
+  "mblack": 300,
+  "mgrey": 300,
+  "army": 300,
+  "sand": 300
+ },
+ "interiors": {
+  "orig": 0,
+  "black": 0,
+  "tan": 200,
+  "oxblood": 250,
+  "ivory": 250,
+  "sportred": 150,
+  "sportblue": 150,
+  "alcantara": 200
+ },
+ "rims": {
+  "orig": 0,
+  "black": 100,
+  "gunmetal": 100,
+  "bronze": 150,
+  "gold": 150,
+  "red": 150
+ },
+ "plateCost": 100,
+ "outfits": {
+  "j_glacier": 400,
+  "j_racing": 400,
+  "j_forest": 350,
+  "j_teal": 500,
+  "j_sunset": 450,
+  "j_arctic": 550,
+  "j_midnight": 550,
+  "j_rose": 600,
+  "j_volt": 650,
+  "j_violet": 650,
+  "j_retro": 850,
+  "j_mint": 850,
+  "t_black": 250,
+  "t_charcoal": 250,
+  "t_navy": 300,
+  "t_olive": 300,
+  "t_sand": 300,
+  "t_snow": 350,
+  "t_red": 400,
+  "t_sky": 400,
+  "h_matteblack": 200,
+  "h_white": 250,
+  "h_olive": 300,
+  "h_navy": 300,
+  "h_red": 350,
+  "h_neon": 400,
+  "h_silver": 700,
+  "h_gold": 1200,
+  "l_clear": 150,
+  "l_smoke": 200,
+  "l_rose": 300,
+  "l_ice": 400,
+  "l_fire": 400,
+  "l_emerald": 450,
+  "l_violet": 450,
+  "l_gold": 550,
+  "kit_alpine": 2400,
+  "kit_forest": 2800,
+  "kit_park": 3000,
+  "kit_downhill": 3200,
+  "kit_glacier": 3600,
+  "kit_mono": 4000,
+  "kit_night": 5200,
+  "kit_gold": 8000
+ },
+ "races": {
+  "alpine": {
+   "name": "Legacy World Downhill",
+   "reward": 4700,
+   "entry": 150
+  },
+  "icecanyon": {
+   "name": "Ice Canyon",
+   "reward": 2300,
+   "entry": 50
+  },
+  "bigair": {
+   "name": "Big Air Line",
+   "reward": 1500,
+   "entry": 0
+  },
+  "meadow": {
+   "name": "Sunny Meadow",
+   "reward": 600,
+   "entry": 0
+  },
+  "floodlight": {
+   "name": "Floodlight Slalom",
+   "reward": 600,
+   "entry": 0
+  },
+  "forestgs": {
+   "name": "Black Forest Giant Slalom",
+   "reward": 1250,
+   "entry": 50
+  },
+  "glaciersg": {
+   "name": "Glacier Super-G",
+   "reward": 1450,
+   "entry": 50
+  },
+  "eaglepeak": {
+   "name": "Eagle Peak Downhill",
+   "reward": 3200,
+   "entry": 150
+  },
+  "devilsridge": {
+   "name": "Devil's Ridge Extreme",
+   "reward": 4000,
+   "entry": 300
+  },
+  "wolfgorge": {
+   "name": "Wolf Gorge Slalom",
+   "reward": 4000,
+   "entry": 300
+  },
+  "skyfang": {
+   "name": "Sky Fang Downhill",
+   "reward": 4000,
+   "entry": 300
+  }
+ },
+ "prizeShare": [
+  1,
+  0.4,
+  0.15
+ ]
+}

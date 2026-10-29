@@ -256,6 +256,7 @@ export class CarRental {
   cost(cfg) { const spec = RENTALS.find((c) => c.id === cfg.id) || RENTALS[0], extras = extrasCost(cfg); return { base: spec.price, extras, total: spec.price + extras }; }
   rent(cfg) {
     cfg = normConfig(cfg);
+    if (this.mp) return this.mp.rent(cfg); // multiplayer: the server rents it (price, a unique plate: net/session.js)
     const spec = RENTALS.find((c) => c.id === cfg.id);
     if (!spec || !this.spend(this.cost(cfg).total)) return;
     if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; } // (one at a time: the old one is returned)
@@ -265,10 +266,27 @@ export class CarRental {
     this.hud?.flash(`${spec.label} rented · it waits in the yard out front`, 'gold', 3200);
   }
 
+  /** The rental in the yard rebuilt from save.rental (switching between the single-player and multiplayer saves). */
+  resync() {
+    if (this.current && !this.current.driving) { try { this.remove(this.current); } catch (e) { console.warn('rental car', e); } this.current = null; }
+    const s = this.save.rental;
+    if (s && RENTALS.some((c) => c.id === s.id)) { try { this.save.rental = normConfig(s); this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } }
+  }
+  /** Multiplayer: the server rented `cfg` (its plate checked): put it in the yard. */
+  placeRented(cfg) {
+    const spec = RENTALS.find((c) => c.id === cfg.id);
+    if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; }
+    this.save.rental = normConfig(cfg);
+    this.current = this.spawn(this.save.rental);
+    this.writeSave();
+    this.hud?.flash(`${spec?.label || 'Car'} rented · ${this.save.rental.plate} · it waits in the yard out front`, 'gold', 3200);
+  }
+
   // drive.js: a car was wrecked (yours: the fee, once, and the rental ends); the truck fetches it
   wrecked(e) {
     if (e.rental) {
       e.rental = false;
+      this.mp?.ended(this.save.rental); // (multiplayer: its plate is free again)
       if (this.current === e) this.current = null;
       this.save.rental = null;
       this.save.money -= WRECK_FEE;

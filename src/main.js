@@ -82,6 +82,11 @@ import { HX as CHALET_HX } from './game/chaletplan.js';
 import { FURNITURE_BY_ID } from './game/build/catalog.js';
 import { BuildMode } from './game/build/buildmode.js'; // chalet build mode (F inside your rented chalet)
 import { startObjective } from './game/build/objectives.js';
+import { MP, isMP } from './net/mode.js'; // multiplayer (docs/multiplayer.md): every AI system and the save check isMP()
+import { net } from './net/client.js';
+import { Multiplayer, errText } from './net/session.js';
+import { ST as MPST, F as MPF } from './net/protocol.js';
+let multiplayer = null; // the multiplayer session (net/session.js), built at the end of boot
 let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
 let bests = null; // personal-best cards in free ride (top speed, longest jump, milestones)
 
@@ -246,7 +251,7 @@ async function boot() {
   skibus = new SkiBus({ scene, models, layout, colliders, makeRig, cameraBlockers: village.cameraBlockers }); // stops in the village + at every gondola base (+ the bus, its driver)
   try { parking = new ParkingLots({ scene, models, colliders, cameraBlockers: village.cameraBlockers }); } catch (e) { console.warn('car parks', e); parking = null; } // three car parks (empty)
   try { new Hospital({ scene, models, colliders }); } catch (e) { console.warn('medical centre', e); } // where the ambulance takes you
-  secrets = new Secrets({ scene, models, terrain, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, earn, propDetail });
+  secrets = new Secrets({ scene, models, terrain, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, earn: (a, l) => earn(a, l, 'secret'), propDetail });
   // living world: fans along the race finishes, flags in the village, snowcats grooming the pistes
   crowds = new Crowds(scene).addResortArenas({ dressing, models, colliders });
   flags = new Flags(scene, { colliders, village });
@@ -333,7 +338,7 @@ async function boot() {
   outfitShop = new OutfitShop({
     save, writeSave, spend, hud, audio, interior,
     getCharacter: () => save.character,
-    onEquip: (id) => { if (id === player.rigChar) applyOutfit(player.rig, id, getEquipped(save, id)); },
+    onEquip: (id) => { if (id === player.rigChar) applyOutfit(player.rig, id, getEquipped(save, id)); if (isMP()) multiplayer?.sendLook(); },
     onClose: () => input.lock(),
   });
   seller = makeRig('skier_green', 'rental');
@@ -373,6 +378,17 @@ async function boot() {
       get lifts() { return lifts; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get started() { return started; }, get paused() { return paused; },
       get secrets() { return secrets; }, get railway() { return railway; }, get carRental() { return carRental; }, get drive() { return drive; }, get chalets() { return chalets; } },
   });
+
+  // multiplayer: the session object (nothing connects until MULTIPLAYER in the menu)
+  try {
+    multiplayer = new Multiplayer({
+      save, hud, audio, env, camera, scene, getEquipped,
+      makeRig: (c, s) => makeRig(c, s, { poles: true, ai: true }), applyOutfit,
+      fx: (id, r, info, dt) => skierFX(trails, spray, id, r, info, dt),
+      pose: mpPose, getScene: mpScene, setAI: setAIOn, applySave: applyMpSave, onLost: (why) => leaveMultiplayer(why),
+      onRaceStart: mpRaceStart, onKickInterior: mpKickInterior,
+    });
+  } catch (e) { console.warn('multiplayer: ' + (e?.stack || e)); multiplayer = null; }
 
   // the RACING stand beside the village job board is gone (Oct 29, the user: "remove this racing day sign");
   // races are the free-ride races at the courses' start houses
@@ -426,6 +442,7 @@ async function streamAround(x, z) {
 // a new game (reset save) has none, so it starts in Legacy Village.
 const SPOT_LIMIT = 12000;
 function outdoorSpot() {
+  if (isMP()) return null; // (where you were is single player only)
   if (!started || busIntro || !player || wipeoutBusy || transition?.active) return null;
   if (modes?.active || races?.active) return null;
   if (interior?.active || chalets?.inside || carRental?.inside) return null;
@@ -634,8 +651,8 @@ async function backToStand() {
 }
 
 // Back to the main menu over the panorama (called behind a fade): the player waits in the village.
-async function backToMenu() {
-  rememberSpot(); // (where you were: PLAY, or the next launch, carries on from there)
+async function backToMenu(opts = {}) {
+  if (!opts.mp) rememberSpot(); // (where you were: PLAY, or the next launch, carries on from there; never a multiplayer spot)
   if (outfitShop?.isOpen) outfitShop.close();
   heli.abort();
   if (races.active) races.abort();
@@ -651,7 +668,10 @@ async function backToMenu() {
   paused = false;
   hud.el.hidden = true;
   raceHud.hide();
-  save.hour = freeRideHour() ?? env.hour;
+  // (the main menu is always single player: a multiplayer session ends here, the local save comes back)
+  const wasMP = isMP();
+  if (wasMP) { multiplayer?.leave(); env.hour = save.hour ?? env.hour; env.weatherTimer = 75; }
+  if (!opts.mp && !wasMP) save.hour = freeRideHour() ?? env.hour;
   writeSave();
   document.exitPointerLock?.();
   menu.show();
@@ -676,6 +696,7 @@ function swapCharacter(id) {
   player.rig = rig;
   player.setSkisOn(player.skisOn);
   player.rigChar = id;
+  if (isMP()) multiplayer?.sendLook();
 }
 
 // ------------------------------------------------------------------ economy actions
@@ -687,8 +708,10 @@ function spend(amount) {
   writeSave();
   return true;
 }
-function earn(amount) {
+function earn(amount, label, source = 'job') {
   if (!amount) return;
+  // multiplayer: the server pays (jobs, secrets: limits per payout and per hour); race prizes come from its results
+  if (isMP()) { multiplayer?.earn(amount, source).then((ok) => { if (ok) { hud.setMoney(save.money, amount); audio.play('cash'); } }); return; }
   save.money += amount;
   save.stats.earned += amount;
   hud.setMoney(save.money, amount);
@@ -704,6 +727,7 @@ function equipSkis(id) {
   player.rig.setSkiModel(models[s.model] || models[s.fallback] || models.ski_pro);
   player.setSkisOn(player.skisOn);
   writeSave();
+  if (isMP()) multiplayer?.sendLook();
 }
 
 function hasPass() { return save.dayPass === save.day; }
@@ -753,6 +777,10 @@ function shopAction(t) {
   const s = skiById(t.id);
   if (save.skis === s.id) return;
   if (save.owned.includes(s.id)) { equipSkis(s.id); hud.flash(`${s.name} equipped`, 'good'); return; }
+  if (isMP()) { // (the server sells them)
+    multiplayer?.buySkis(s.id).then((ok) => { if (ok) { equipSkis(s.id); hud.flash(s.rent ? `${s.name} rented` : `${s.name} purchased`, 'gold', 2200); } });
+    return;
+  }
   if (!spend(s.price)) return;
   save.owned.push(s.id);
   equipSkis(s.id);
@@ -945,6 +973,7 @@ function courseResult(e, { place, dnf }, ai = 'medium') {
 // E at a course's start house: the race card (entry fee, the AI field and its prize money, your best), then the same
 // race as RACE mode right here on the mountain; after the finish you ski on from the finish area
 function courseInteraction(e) {
+  if (isMP()) return mpCourseInteraction(e);
   const firstFree = (save.stats.races || 0) === 0; // your first race is on the house
   return {
     label: `${e.name} · ${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')}${firstFree ? ' · first race free' : ''}`,
@@ -1073,6 +1102,185 @@ function leaveBus(exit) {
   hud.flash(`Ski bus · ${exit.name}`, 'good', 2400);
 }
 
+// ------------------------------------------------------------------ multiplayer (net/session.js, docs/multiplayer.md)
+// PLAY -> MULTIPLAYER: your unique name on first launch, then log in, join a world (max 15) and drop into the
+// village with the server's save. No AI in multiplayer (traffic, resort skiers, crowds, snowcats, race bots); jobs
+// stay. LEAVE MULTIPLAYER (pause menu) or a lost connection: back to the main menu with the single-player save.
+let mpCancelled = false;
+const EMPTY_PEOPLE = [];
+async function startMultiplayer(sel = {}) {
+  if (!multiplayer) { menu.mpError('Multiplayer is not available'); return; }
+  if (started) return;
+  if (sel.character && sel.character !== save.character) { save.character = sel.character; writeSave(); }
+  if (!multiplayer.account()) { menu.mpName(); return; }
+  mpCancelled = false;
+  menu.mpStatus('Connecting to the server…');
+  try {
+    const d = await multiplayer.start();
+    if (mpCancelled) { multiplayer.leave(); return; }
+    menu.mpStatus(`World ${d.world.id} · ${d.world.players.length}/${d.world.max} players`);
+    // (no "where you were" in multiplayer: everyone starts in Legacy Village)
+    player.frozen = false;
+    player.setSkisOn(false);
+    player.teleport(4, 34, Math.PI);
+    player.resumed = false;
+    await streamAround(player.pos.x, player.pos.z);
+    if (mpCancelled || !isMP()) { multiplayer.leave(); return; }
+    startGame();
+    hud.flash(`Multiplayer · world ${d.world.id} · ${d.world.players.length}/${d.world.max} players`, 'good', 3200);
+  } catch (e) {
+    if (mpCancelled) return;
+    if (isMP()) multiplayer.leave(); else net.close('failed');
+    if (e.code === 'bad_login' || e.code === 'no_account') { menu.mpName(errText(e)); return; }
+    menu.mpError(errText(e));
+  }
+}
+async function mpRegister(name) {
+  mpCancelled = false;
+  menu.mpStatus('Checking your name…');
+  try {
+    await multiplayer.register(name);
+    if (!mpCancelled) startMultiplayer({});
+  } catch (e) {
+    if (mpCancelled) return;
+    net.close('failed');
+    if (['name_taken', 'name_invalid', 'rate'].includes(e.code)) menu.mpName(errText(e));
+    else menu.mpError(errText(e));
+  }
+}
+// LEAVE MULTIPLAYER, or the connection is gone (message: shown in the menu)
+let mpLeaving = false;
+function leaveMultiplayer(message = null) {
+  if (mpLeaving) return;
+  if (!started) { multiplayer?.leave(); if (message) menu.mpError(message); return; }
+  mpLeaving = true;
+  paused = false;
+  audio.setPaused(false);
+  menu.hidePause();
+  transition.fade(async () => {
+    if (modes.active) { modes.end(); modes.unload?.(); modes.current = null; }
+    await backToMenu({ mp: true });
+    multiplayer?.leave();
+    env.hour = save.hour ?? env.hour;
+    env.weatherTimer = 75;
+    if (message) menu.mpError(message);
+  }).finally(() => { mpLeaving = false; });
+}
+// AI on / off (multiplayer: only real players and the shared transport)
+function setAIOn(on) {
+  try { traffic?.setOff(!on); } catch (e) { console.warn('mp traffic', e); }
+  try { npcs?.setOff(!on); } catch (e) { console.warn('mp npcs', e); }
+  try { snowcats?.setOff(!on); } catch (e) { console.warn('mp snowcats', e); }
+  if (crowds?.group) crowds.group.visible = on;
+  if (express) express.noPassengers = !on; // (the trains' seated passengers)
+  if (railway) { railway.noPassengers = !on; if (railway.people?.group) railway.people.group.visible = on; }
+  if (modes) modes.botCount = on ? undefined : 0; // (race sessions: no AI field)
+  player.people = on ? () => npcs.near : () => EMPTY_PEOPLE;
+}
+// the swapped save (multiplayer profile <-> single-player save): the player, the rental car, the hooks follow it
+function applyMpSave() {
+  const on = isMP();
+  try {
+    player.hasSkis = !!save.skis;
+    if (save.skis) player.ski = skiById(save.skis) || player.ski;
+    swapCharacter(save.character); // (a fresh rig: skis model and outfit from this save)
+    player.setSkisOn(false);
+    player.rig.setSkisVisible(player.hasSkis);
+  } catch (e) { console.warn('mp player', e); }
+  hud.setMoney(save.money);
+  try { carRental?.resync(); } catch (e) { console.warn('mp rental', e); }
+  if (chalets) chalets.mp = on ? {
+    ownerOf: (id) => { const o = MP.chalets?.[id]; return o && o !== MP.name ? o : null; },
+    visit: (h, owner) => mpVisitChalet(h, owner),
+    buy: (h) => multiplayer.buyChalet(h),
+  } : null;
+  if (carRental) carRental.mp = on ? {
+    rent: (cfg) => multiplayer.rentCar(cfg).then((car) => { if (car) carRental.placeRented({ ...cfg, ...car }); }),
+    ended: (cfg) => multiplayer.carEnded(cfg),
+  } : null;
+  if (outfitShop) outfitShop.buyHook = on ? (id) => multiplayer.buyOutfit(id) : null;
+}
+// your presence for the other players (filled ~12x a second, no allocation)
+const _mpDir = new THREE.Vector3();
+function mpPose(o) {
+  let cam = null;
+  o.interior = null;
+  if (interior.active) { o.interior = 'skishop'; cam = interior.camera; }
+  else if (carRental?.inside) { o.interior = 'carrental'; cam = carRental.room?.camera; }
+  else if (chalets?.inside && chalets.current) { o.interior = `chalet:${chalets.current.id}`; cam = chalets.room?.camera; }
+  if (cam) { // (inside: the interior's own camera is you)
+    cam.getWorldDirection(_mpDir);
+    o.x = cam.position.x; o.y = cam.position.y - 1.6; o.z = cam.position.z; o.yaw = Math.atan2(_mpDir.x, _mpDir.z);
+    o.vx = 0; o.vy = 0; o.vz = 0; o.st = MPST.walk; o.crouch = 0; o.lean = 0; o.flags = 0;
+    return;
+  }
+  const p = player;
+  o.x = p.pos.x; o.y = p.pos.y; o.z = p.pos.z; o.yaw = p.heading;
+  o.vx = p.vel.x; o.vy = p.vel.y; o.vz = p.vel.z;
+  o.st = heli?.active ? MPST.fly : drive?.active || sleds?.active ? MPST.drive : railway?.riding || express?.riding || skibus?.riding ? MPST.ride
+    : p.mode === 'sit' ? MPST.sit : p.mode === 'ski' ? MPST.ski : p.mode === 'fall' ? MPST.fall : MPST.walk;
+  o.crouch = p.crouch || 0; o.lean = p.lean || 0;
+  o.flags = (p.air ? MPF.air : 0) | (p.tuck ? MPF.tuck : 0) | (p.skisOn ? MPF.skisOn : 0) | (p.hasSkis && !p.skisOn ? MPF.carry : 0) | (p.hasSkis ? MPF.hasSkis : 0);
+}
+function mpScene(id) {
+  if (id === 'skishop') return interior?.scene || null;
+  if (id === 'carrental') return carRental?.room?.scene || null;
+  if (id && id.startsWith('chalet:')) return chalets?.room?.scene || null;
+  return null;
+}
+const mpViewState = { interior: null, camera: null };
+function mpView() {
+  const v = mpViewState;
+  if (interior.active) { v.interior = 'skishop'; v.camera = interior.camera; }
+  else if (carRental?.inside) { v.interior = 'carrental'; v.camera = carRental.room.camera; }
+  else if (chalets?.inside && chalets.current) { v.interior = `chalet:${chalets.current.id}`; v.camera = chalets.room.camera; }
+  else { v.interior = null; v.camera = camera; }
+  return v;
+}
+// a chalet that is somebody else's: ask them (they get Y / N), then in you go
+async function mpVisitChalet(h, owner) {
+  hud.flash(`Asking ${owner} to let you in…`, 'good', 2400);
+  const r = await multiplayer.ask('chaletVisit', { ref: h.id });
+  if (!r?.allow) { if (!r?.error) hud.flash(`${owner} did not let you in`, 'bad', 2600); return; }
+  if (!(await multiplayer.setInterior(`chalet:${h.id}`))) { hud.flash('Not allowed in', 'bad', 2200); return; }
+  chalets.viewing = h;
+  chalets.enter(h);
+}
+function mpKickInterior(id) {
+  if (chalets?.inside && id === `chalet:${chalets.current?.id}`) { chalets.leave(); hud.flash('The owner closed the door', 'bad', 2600); }
+}
+// a course's start house in multiplayer: the race queue (2+ players; 30 s once two are in; everyone in the world or
+// 15 queued: at once). The start is the server's, the same moment for everyone; no AI field; the server pays
+function mpCourseInteraction(e) {
+  const q = multiplayer?.race.queued === e.id;
+  const n = MP.queues?.get(e.id)?.n || 0;
+  return {
+    label: q ? `${e.name} · queued (${n}/${Math.max(2, n)}) · E to leave the queue` : `${e.name} · race other players${n ? ` · ${n} waiting` : ''} · up to $${Math.round(e.reward).toLocaleString('en-US')}`,
+    act: () => {
+      if (q) { multiplayer.raceLeave(); hud.flash('Left the race queue', 'good', 1800); return; }
+      if (!player.hasSkis) { hud.flash('You need skis to race', 'bad'); return; }
+      multiplayer.raceJoin(e.id);
+    },
+  };
+}
+function mpRaceStart(d) {
+  const e = freeCourses().find((c) => c.id === d.race);
+  if (!e || modes.active) return;
+  jobs.onEvent('teleport');
+  transition.fade(() => {
+    // wherever you are (a lift, a car, the shop...): to the start gate
+    if (outfitShop?.isOpen) outfitShop.close();
+    heli.abort();
+    if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }
+    if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
+    carRental?.leave(true);
+    chalets?.leave(true);
+    player.frozen = false;
+    if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
+    return modes.startFree(e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false });
+  }).then(() => input.lock(), (err) => console.warn('multiplayer race', err));
+}
+
 // ------------------------------------------------------------------ interactions
 function findInteraction() {
   const p = player.pos;
@@ -1197,13 +1405,14 @@ function openPause() {
   const inSession = modes.active;
   menu.showPause({
     onResume: closePause,
-    onRestart: inSession ? () => { closePause(); modes.session?.restart?.(); } : undefined,
+    onRestart: inSession && !isMP() ? () => { closePause(); modes.session?.restart?.(); } : undefined,
     // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
     // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
     // with its ambulance ride)
     onVillage: heliRiding() ? undefined : !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
-    onMainMenu: goToMainMenu,
-    onQuit: () => { save.hour = freeRideHour() ?? env.hour; rememberSpot(); writeSave(); },
+    onMainMenu: isMP() ? undefined : goToMainMenu,
+    onLeaveMP: isMP() ? () => leaveMultiplayer() : undefined, // (multiplayer: LEAVE MULTIPLAYER instead of MAIN MENU)
+    onQuit: () => { if (!isMP()) save.hour = freeRideHour() ?? env.hour; rememberSpot(); writeSave(); },
   });
 }
 function closePause() {
@@ -1479,6 +1688,8 @@ function loop() {
   if (express?.riding) express.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   if (skibus.riding) skibus.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   mark('player');
+  if (multiplayer && isMP()) multiplayer.update(rawDt, mpView()); // presence out, remote players, shared clock, money guard
+  mark('mp');
   // the helicopter: your flight (seat, controls, chase camera) or its trip home; parked: the pad and windsock
   heli.update(dt, started && !menu && !inSession ? input : null);
   mark('heli');
@@ -1617,7 +1828,7 @@ function loop() {
   mark('pistelights');
   let crowdCourse = null; // (free ride: the fans at the finish arena of the course you are near)
   try { crowdCourse = modes.course ? null : races.crowdCourse(player.pos)?.course || null; } catch (e) { crowdCourse = null; }
-  crowds.update(dt, { camera, player, course: modes.course || crowdCourse, courseGroup: modes.group || crowdCourse?.group || null, models });
+  if (!isMP()) crowds.update(dt, { camera, player, course: modes.course || crowdCourse, courseGroup: modes.group || crowdCourse?.group || null, models }); // (multiplayer: no crowds)
   mark('crowds');
   snowcats.update(dt, camera, env, player, renderer);
   mark('snowcats');
@@ -1666,6 +1877,11 @@ menu = new Menu({
   onQuality: (q) => { save.quality = q; save.qualitySet = 'user'; writeSave(); location.reload(); },
   onSens: (v) => { save.sensitivity = v; if (player) player.sensitivity = v; writeSave(); },
   onVolume: (v) => audio.setVolume(v),
+  // multiplayer (net/session.js): MULTIPLAYER -> START, the name on first launch, BACK while connecting
+  onMultiplayer: (sel) => startMultiplayer(sel),
+  onMpName: (name) => mpRegister(name),
+  onMpCancel: () => { mpCancelled = true; if (!isMP()) net.close('cancel'); },
+  mpActive: () => isMP(),
 });
 const skipIntro = new URLSearchParams(location.search).has('nointro');
 (skipIntro ? Promise.resolve() : new Intro(audio).play()).then(() => { menu.show(); audio.music('menu'); });
@@ -1687,5 +1903,6 @@ window.__game = {
     for (const [k, v] of Object.entries(prof.t)) out[k] = +(v / Math.max(1, prof.frames)).toFixed(2);
     return out;
   },
+  get multiplayer() { return multiplayer; }, MP, net,
   get models() { return models; }, get spray() { return spray; }, get trails() { return trails; }, get hud() { return hud; }, audio, colliders, makeRig, spend, earn, save, writeSave, raceHud, input, setPano: (t) => { titleT = t; }, swapCharacter, startGame, equipSkis, boardLift, get busIntro() { return busIntro; }, playBusIntro,
 };

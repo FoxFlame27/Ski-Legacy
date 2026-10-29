@@ -1,7 +1,9 @@
 // Front-end menus over the live 3D world:
 //   Main (PLAY · CONTROLS · STATS · SETTINGS · QUIT): PLAY opens the character select (MAN or WOMAN on the 3D
 //   showcase) and its START drops you into free ride (no mode chooser any more, Oct 27: RACE "just for fun" lives
-//   at the RACING stand in Legacy Village, ui/racestand.js; WORLD RACING is gone),
+//   at the RACING stand in Legacy Village, ui/racestand.js; WORLD RACING is gone). PLAY first asks SINGLEPLAYER or
+//   MULTIPLAYER (Oct 29): multiplayer asks for your unique name on first launch (mpName), then connects (mpStatus /
+//   mpError) while main.js and net/session.js log in,
 // plus stats, settings and the in-game pause menu.
 // House style: white paint-brush strokes with blue italic condensed lettering.
 // Every size is expressed in the CSS unit --u (1u = 1px on a 1280x800 canvas, see style.css),
@@ -218,6 +220,12 @@ export class Menu {
     this.onQuality = o.onQuality;
     this.onSens = o.onSens;
     this.onVolume = o.onVolume;
+    this.mpActive = o.mpActive;           // () => true while in multiplayer (settings hide "Reset all progress")
+    this.onMultiplayer = o.onMultiplayer; // MULTIPLAYER ... START: main.js connects (see mpName / mpStatus / mpError)
+    this.onMpName = o.onMpName;           // the name typed on first launch -> main.js registers it
+    this.onMpCancel = o.onMpCancel;       // BACK while connecting
+    this.mpMode = false;                  // PLAY -> MULTIPLAYER picked (the showcase's START then goes online)
+    this.mpState = { error: '', text: '', value: '' };
     this.prefs = loadPrefs();
     this.sel = { mode: 'free', courseId: null };
     this.ready = false;
@@ -348,6 +356,9 @@ export class Menu {
       case 'stats': return this.scrStats();
       case 'settings': return this.scrSettings();
       case 'pause': return this.scrPause();
+      case 'playmode': return this.scrPlayMode();
+      case 'mpname': return this.scrMpName();
+      case 'mpwait': return this.scrMpWait();
       default: return this.scrMain();
     }
   }
@@ -363,6 +374,63 @@ export class Menu {
         + `${this.btn('SETTINGS', 'settings', 11)}${this.btn('QUIT', 'quit', 13, 'small')}</div>`,
     };
   }
+
+  // PLAY: single player (the free ride as always) or multiplayer (the shared free ride, up to 15 per world)
+  scrPlayMode() {
+    return {
+      logo: 'big', shade: 'left', hints: [['updown', 'Select'], ['enter', 'Confirm'], ['esc', 'Back']],
+      html: `<div class="menu-col">${this.btn('SINGLEPLAYER', 'single', 41, 'big')}${this.btn('MULTIPLAYER', 'multi', 43, 'big')}${this.btn('BACK', 'back', 13, 'small')}</div>`,
+      back: () => this.go('main', -1),
+    };
+  }
+
+  // first multiplayer launch: your name (unique for good; the server says when it is taken)
+  scrMpName() {
+    const st = this.mpState;
+    return {
+      logo: 'small', shade: 'left', hints: [['enter', 'Continue'], ['esc', 'Back']],
+      html: `${this.head('MULTIPLAYER', 'Pick your name · it is yours for good')}
+        <div class="sc-panel" data-stagger style="--clip:${brushClip(146, 6, 4)}">
+          <div class="mp-head">YOUR NAME</div>
+          <input class="mpn-input" maxlength="16" spellcheck="false" autocomplete="off" placeholder="3-16 letters" value="${esc(st.value || '')}">
+          <div class="mpn-err">${esc(st.error || '')}</div>
+          <div class="sc-note">Other players see it above your head and over your chalet. Letters, digits, spaces, _ and -.</div>
+        </div>
+        <div class="sc-actions">${this.btn('CONTINUE', 'mpname', 47, 'big')}</div>`,
+      after: (el) => {
+        const inp = el.querySelector('.mpn-input');
+        setTimeout(() => { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }, 60);
+        inp.addEventListener('input', () => { this.mpState.value = inp.value; });
+      },
+      keys: { enter: () => this.action('mpname'), up: () => {}, down: () => {} },
+      back: () => { this.onMpCancel?.(); this.go('playmode', -1); },
+    };
+  }
+
+  // connecting / joining a world, or what went wrong
+  scrMpWait() {
+    const st = this.mpState;
+    return {
+      logo: 'small', shade: 'left', hints: [['esc', 'Back']],
+      html: `${this.head('MULTIPLAYER', st.error ? 'Could not join' : 'Joining a world')}
+        <div class="menu-col">${st.error ? `<div class="mpw-text bad">${esc(st.error)}</div>`
+          : `<div class="menu-spinner"><div class="spin"></div><div class="spin-text">${esc(st.text || 'Connecting…')}</div></div>`}
+          ${this.btn('BACK', 'back', 13, 'small')}</div>`,
+      back: () => { this.onMpCancel?.(); this.mpMode = false; this.starting = false; this.go('playmode', -1); },
+    };
+  }
+
+  /** main.js: ask for a name (error: the server's reason the last one was refused). */
+  mpName(error = '') { this.mpState.error = error; this.starting = false; this.go('mpname', error ? 0 : 1); }
+  /** main.js: connecting / logging in (the spinner's text). */
+  mpStatus(text) {
+    const wasError = !!this.mpState.error;
+    this.mpState.error = ''; this.mpState.text = text;
+    const t = !wasError && this.cur?.name === 'mpwait' ? this.cur.el.querySelector('.spin-text') : null;
+    if (t) t.textContent = text; else this.go('mpwait', 1);
+  }
+  /** main.js: it failed (the menu shows why, BACK returns to SINGLEPLAYER / MULTIPLAYER). */
+  mpError(text) { this.mpState.error = text; this.starting = false; this.go('mpwait', 0); }
 
   // keyboard reference: three white panels (on the snow / in the air / general)
   scrControls() {
@@ -396,7 +464,7 @@ export class Menu {
     return {
       logo: 'small', shade: 'show',
       hints: [['leftright', 'Man / woman'], ['enter', 'Start'], ['esc', 'Back'], ...(spin ? [['', 'Drag to rotate']] : [])],
-      html: `${spin ? '<div class="sc-drag" aria-hidden="true"></div>' : ''}${this.head('CHOOSE YOUR SKIER', 'Free ride · the open resort')}
+      html: `${spin ? '<div class="sc-drag" aria-hidden="true"></div>' : ''}${this.head('CHOOSE YOUR SKIER', this.mpMode && !this.inGame ? 'Multiplayer free ride · up to 15 per world' : 'Free ride · the open resort')}
         <div class="sc-panel" data-stagger style="--clip:${brushClip(140, 6, 4)}">
           <div class="seg-brush sc-pick">${picks}</div>
           <div class="sc-note">Customize your look in the ski shop: jackets, trousers, helmets and goggles.</div>
@@ -420,7 +488,7 @@ export class Menu {
       },
       // left / right pick MAN / WOMAN; Enter presses the highlighted button (START by default)
       keys: { left: () => this.pickChar(this.chi - 1), right: () => this.pickChar(this.chi + 1), up: () => {}, down: () => {} },
-      back: () => this.go(this.inGame ? 'settings' : 'main', -1), // (opened from SETTINGS in game: back there)
+      back: () => this.go(this.inGame ? 'settings' : 'playmode', -1), // (opened from SETTINGS in game: back there)
     };
   }
 
@@ -461,7 +529,8 @@ export class Menu {
     if (this.cur?.name === 'showcase') save.characterChosen = true;
     writeSave();
     savePrefs(this.prefs);
-    const payload = { mode: 'free', courseId: null, character: c.id };
+    const payload = { mode: this.mpMode && !this.inGame ? 'mp' : 'free', courseId: null, character: c.id };
+    if (payload.mode === 'mp') { this.onMultiplayer?.(payload); setTimeout(() => { this.starting = false; }, 600); return; }
     // the showcase skier stays until main.js hides the menu (hide() calls onShowcase(null)),
     // so it never pops out before a transition has covered the screen
     if (this.onStart) this.onStart(payload);
@@ -510,7 +579,7 @@ export class Menu {
           <div class="mp-row" data-f data-row="sens"><span>Mouse sensitivity</span><input class="m-sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}"></div>
           <div class="mp-row" data-f data-row="vol"><span>Volume</span><input class="m-vol" type="range" min="0" max="1" step="0.05" value="${save.volume ?? 0.8}"></div>
           <div class="mp-row" data-f data-row="skier"><span>Skier</span><button class="mp-skier" tabindex="-1">Change skier</button></div>
-          <div class="mp-row" data-f data-row="reset"><span>Progress</span><button class="mp-danger" tabindex="-1">Reset all progress</button></div>
+          ${this.mpActive?.() ? '' : '<div class="mp-row" data-f data-row="reset"><span>Progress</span><button class="mp-danger" tabindex="-1">Reset all progress</button></div>'}
         </div>`,
       after: (el) => this.bindSettings(el),
       keys: { left: () => this.adjustSetting(-1), right: () => this.adjustSetting(1), enter: () => this.activateSetting() },
@@ -530,7 +599,7 @@ export class Menu {
     for (const s of [sens, vol]) s.addEventListener('change', () => s.blur());
     el.querySelector('.mp-skier')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
     const reset = el.querySelector('.mp-danger');
-    reset.addEventListener('click', () => {
+    reset?.addEventListener('click', () => {
       this.audio?.play('click');
       if (reset.dataset.confirm) resetSave();
       else { reset.dataset.confirm = '1'; reset.textContent = 'Click again to confirm'; }
@@ -574,10 +643,11 @@ export class Menu {
     // at most 7 rows: STATS gives way when both RESTART and RETURN TO VILLAGE are offered
     if (!(h.onRestart && h.onVillage)) items.push(['STATS', 'stats']);
     items.push(['SETTINGS', 'settings']);
-    if (h.onMainMenu || this.onMainMenu) items.push(['MAIN MENU', 'mainmenu']);
+    if (h.onLeaveMP) items.push(['LEAVE MULTIPLAYER', 'leavemp', 'wide']);
+    else if (h.onMainMenu || this.onMainMenu) items.push(['MAIN MENU', 'mainmenu']);
     if (h.onVillage) items.push(['RETURN TO VILLAGE', 'village', 'wide']);
     items.push(['QUIT GAME', 'quit', 'small']);
-    const seeds = { resume: 5, restart: 29, controls: 31, stats: 7, settings: 11, mainmenu: 23, village: 19, quit: 13 };
+    const seeds = { resume: 5, restart: 29, controls: 31, stats: 7, settings: 11, mainmenu: 23, leavemp: 23, village: 19, quit: 13 };
     const roomy = items.length <= 5;
     return {
       logo: roomy ? 'big' : 'small', shade: 'left', cls: roomy ? '' : 'tight',
@@ -675,6 +745,7 @@ export class Menu {
     if (!a) return;
     // a slider the mouse is still holding keeps its own arrow keys
     if (document.activeElement?.tagName === 'INPUT' && (a === 'left' || a === 'right')) return;
+    if (document.activeElement?.classList?.contains('mpn-input') && (a !== 'enter' && a !== 'back' || e.code === 'Space' || e.code === 'Backspace')) return; // (typing a name: W A S D, Space, Backspace are letters)
     e.preventDefault();
     e.stopPropagation();
     // START was pressed: main.js is taking us into the game (a transition may be covering the
@@ -698,7 +769,16 @@ export class Menu {
     const [a, arg] = String(act).split(':');
     switch (a) {
       // the MAN / WOMAN choice only the first time (Oct 28, the user); later it's under SETTINGS · Skier
-      case 'play': return save.characterChosen ? this.start() : this.go('showcase', 1);
+      case 'play': return this.go('playmode', 1);
+      case 'single': this.mpMode = false; return save.characterChosen ? this.start() : this.go('showcase', 1);
+      case 'multi': this.mpMode = true; return save.characterChosen ? this.start() : this.go('showcase', 1);
+      case 'mpname': {
+        const v = String(this.cur?.el.querySelector('.mpn-input')?.value || '').trim().replace(/\s+/g, ' ');
+        if (!/^[A-Za-z0-9_ -]{3,16}$/.test(v) || !/[A-Za-z0-9]/.test(v)) { this.mpState.value = v; return this.mpName('Names are 3-16 letters, digits, spaces, _ or -.'); }
+        this.mpState.value = v;
+        return this.onMpName?.(v);
+      }
+      case 'leavemp': return this.pauseHandlers?.onLeaveMP?.();
       case 'skier': return this.go('showcase', 1);
       case 'controls': return this.go('controls', 1);
       case 'stats': return this.go('stats', 1);

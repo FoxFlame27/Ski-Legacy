@@ -95,7 +95,7 @@ export class Modes {
    *  modes/parkour/freeworld.js): the same session as RACE (14 AI, intro, checkpoints, results), no teleport to a
    *  far map and no course atmosphere. o.result({ place, time, dnf }) -> prize money shown on the results card;
    *  o.retry() -> false when RACE AGAIN can't be paid. After the finish BACK TO START takes you up to the start again. */
-  startFree(courseId, { difficulty = 'medium', result, retry, prizeMult } = {}) {
+  startFree(courseId, { difficulty = 'medium', result, retry, prizeMult, bots, syncGo } = {}) {
     this.end();
     const course = getCourse(courseId);
     this.group = course.build(this.scene, this.models); // (the free world built it already: reused)
@@ -103,10 +103,10 @@ export class Modes {
     this.course = course;
     this.current = { mode: 'race', courseId: course.id, difficulty, free: true, retry };
     this.session = new RaceSession({
-      scene: this.scene, course, mode: 'race', difficulty, botCount: this.botCount,
+      scene: this.scene, course, mode: 'race', difficulty, botCount: bots ?? this.botCount, // (multiplayer: bots 0, syncGo: the shared start)
       player: this.player, makeRig: this.makeRig, botCharacters: this.botCharacters(),
       audio: this.audio, hud: this.hud, raceHud: this.raceHud, trails: this.trails, spray: this.spray,
-      save: this.save, writeSave: this.writeSave, stream: this.stream,
+      save: this.save, writeSave: this.writeSave, stream: this.stream, syncGo,
       weather: () => window.__game?.env?.weatherLabel,
       freeRide: { result, prizeMult }, // (prizeMult: the AI field's prize factor, shown with the prize on the results)
       onExit: (choice) => this.exitFree(choice),

@@ -1,0 +1,17 @@
+{
+  "name": "ski-legacy-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Ski Legacy multiplayer server: accounts, worlds (15 players), presence relay, shared registries",
+  "type": "module",
+  "main": "index.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.mjs",
+    "catalog": "node tools/gen-catalog.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

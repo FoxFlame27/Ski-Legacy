@@ -243,7 +243,23 @@ export class NPCs {
     }
   }
 
+  /** Multiplayer: nobody but real players (true): the resort's skiers, walkers, villagers and far skiers go. */
+  setOff(off) {
+    off = !!off;
+    if (off === !!this.off) return;
+    this.off = off;
+    if (off) {
+      for (let i = this.skiers.length - 1; i >= 0; i--) { try { this.removeSkier(i); } catch (e) { console.warn('npcs off', e); } }
+      for (const w of this.walkers) { try { this.releaseRig(w); } catch { /* gone */ } }
+      this.walkers.length = 0;
+      this.near.length = 0;
+    }
+    if (this.far?.mesh) this.far.mesh.visible = !off;
+    if (this.town?.group) this.town.group.visible = !off;
+  }
+
   update(dt, playerPos, env, camera) {
+    if (this.off) { this.near.length = 0; return; }
     this.ensureWalkers(playerPos);
     if (camera) this.far.update(dt, camera, env.dayFactor);
     PeopleSim.player = { x: playerPos.x, z: playerPos.z };

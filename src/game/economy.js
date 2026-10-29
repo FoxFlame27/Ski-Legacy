@@ -1,5 +1,6 @@
 // Ski gear catalogue, lift prices and persistent save data.
 import { migrateCharacter } from './characters.js';
+import { MP } from '../net/mode.js';
 
 export const SKIS = [
   { id: 'rental', name: 'Rental Carver', model: 'ski_rental', price: 50, rent: true, speed: 1.0, grip: 1.0, desc: 'Basic rental skis. Forgiving and slow-ish. Returned at the end of your stay.' },
@@ -75,10 +76,14 @@ export function loadSave() {
 let resetting = false; // (a reset in progress: nothing writes the old save back, e.g. the unload handlers in main.js)
 export function writeSave() {
   if (resetting) return;
+  // multiplayer: `save` holds the server profile, never written over the single-player save; the session pushes
+  // the parts the player owns (net/session.js MP.onSave)
+  if (MP.active) { MP.onSave?.(); return; }
   try { localStorage.setItem(KEY, JSON.stringify(save)); } catch { /* storage unavailable */ }
 }
 
 export function resetSave() {
+  if (MP.active) return; // (the multiplayer save lives on the server)
   resetting = true;
   try { localStorage.removeItem(KEY); } catch { /* ignore */ }
   location.reload();

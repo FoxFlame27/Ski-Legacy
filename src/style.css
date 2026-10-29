@@ -847,3 +847,11 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .pm-kick { font: italic 700 calc(var(--u) * 24)/1 var(--num); letter-spacing: 0.04em; color: var(--blue); margin-right: calc(var(--u) * 6); }
 .pm-bar .hint { gap: max(4px, calc(var(--u) * 6)); }
 body.photo-mode #racehud, body.photo-mode #ride-hint, body.photo-mode #crosshair { display: none !important; }
+
+/* ---------------------------------------------------------------- multiplayer menu screens (ui/menu.js) */
+.mpn-input { display: block; width: 100%; margin-top: calc(var(--u) * 14); padding: calc(var(--u) * 8) calc(var(--u) * 12); border: 0; border-bottom: calc(var(--u) * 3) solid var(--blue);
+  background: var(--ice); color: var(--blue); font: italic 700 calc(var(--u) * 34)/1.1 var(--num); letter-spacing: 0.04em; outline: none; -webkit-user-select: text; user-select: text; }
+.mpn-input:focus { background: #fff; }
+.mpn-err { min-height: 1.5em; margin-top: calc(var(--u) * 10); font: 600 var(--t-sm)/1.4 var(--ui); color: #c4262e; }
+.mpw-text { margin-top: calc(var(--u) * 6); font: italic 700 calc(var(--u) * 26)/1.2 var(--num); letter-spacing: 0.04em; color: var(--blue); }
+.mpw-text.bad { color: #c4262e; }

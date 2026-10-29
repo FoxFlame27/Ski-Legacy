@@ -16,6 +16,7 @@ export class Input {
     this.lookDrag = false;
     addEventListener('keydown', (e) => {
       if (e.repeat) return;
+      if (e.target?.classList?.contains('mpn-input')) return; // (typing your multiplayer name: no game keys, no preventDefault)
       this.keys.add(e.code);
       this.pressed.add(e.code);
       if (['Space', 'Tab', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();

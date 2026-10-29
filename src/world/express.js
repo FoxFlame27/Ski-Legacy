@@ -239,7 +239,7 @@ export class Express {
     if (this.cabin.inside !== inside) { this.cabin.inside = inside; this.cabin.setInside?.(inside); }
     this.cabin.group.visible = !!this.ride;
     this.copyPassengers();
-    if (this.passengers) { const vis = !!this.ride; if (vis !== this.passengers.visible) this.passengers.visible = vis; }
+    if (this.passengers) { const vis = !!this.ride && !this.noPassengers; if (vis !== this.passengers.visible) this.passengers.visible = vis; }
     // the line's own LOD (track, tunnels, stations) round the viewer
     if (viewer && this.track?.update) {
       try { this.track.update(viewer, { inTunnel: this.ride && this.view !== 'trackside' ? inExpressTunnel(this.camS ?? this.ride.train.state.s, -80) : null }); }

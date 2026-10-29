@@ -297,8 +297,19 @@ export class Traffic {
   }
 
   // ------------------------------------------------------------------ per frame
+  /** Multiplayer: no traffic at all (true) / back on the roads (false). Every car leaves at once (hidden, its
+   *  collider moved away); they come back by themselves after setOff(false). */
+  setOff(off) {
+    off = !!off;
+    if (off === !!this.off) return;
+    this.off = off;
+    if (!off) return;
+    for (const c of this.cars) { try { this.despawn(c); c.wait = 1 + Math.random() * 5; c.trip = undefined; c.toLot = false; } catch (e) { console.warn('traffic off', e); } }
+    for (const P of [...this.pools, ...(this.tailPools || [])]) if (P) P.mesh.visible = false;
+  }
+
   update(dt) {
-    if (!this.cars.length || dt <= 0) return;
+    if (this.off || !this.cars.length || dt <= 0) return;
     try {
       const p = this.player.pos, cam = this.camera.position, night = nightUniform?.value ?? 0;
       // keep the cars near you: far ones (out of sight) come back on the roads around you; some near the bus

@@ -737,6 +737,10 @@ export class Chalets {
     for (const h of this.houses) {
       if (Math.abs(p.x - h.door.x) > 3 || Math.abs(p.z - h.door.z) > 3 || Math.hypot(p.x - h.door.x, p.z - h.door.z) > 2.3) continue;
       const mine = this.rented();
+      // multiplayer (net/session.js sets this.mp = { ownerOf(id) -> name | null, visit(h, owner) }): somebody
+      // else's chalet is not for sale; E asks the owner to let you in
+      const owner = this.mp?.ownerOf(h.id);
+      if (owner && mine !== h && !this.canEnter(h)) return { label: `${h.name} · ${owner}'s chalet · ask to visit`, act: () => this.mp.visit(h, owner) };
       if (this.canEnter(h)) return { label: `Go in · ${h.name}${mine === h ? ' (your chalet)' : ''}`, act: () => this.enter(h) };
       if (mine) return { label: `${h.name} · you already own ${mine.name}`, act: () => this.hud?.flash(`You already own ${mine.name}: one chalet each`, 'bad', 2400) };
       return (h._buy ||= { label: `${h.name} for sale · $${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.offer(h) });
@@ -753,6 +757,7 @@ export class Chalets {
   }
   buy(h) {
     if (this.rented()) return;
+    if (this.mp) return this.mp.buy(h); // multiplayer: the server sells it (one owner per chalet, every world)
     if (!this.spend(CHALET_PRICE)) return;
     const old = this.save.chalet;
     this.save.chalet = { id: h.id, name: h.name, owned: true, rented: true, since: this.save.day ?? 1, furniture: old?.furniture || [], plan: 2, layout: SAVE_LAYOUT };

@@ -170,10 +170,27 @@ export class OutfitShop {
     if (st.worn) { this.audio?.play('tick'); return; }
     if (!st.owned) {
       const price = r.it.price;
+      // multiplayer: the server sells it (buyHook(id, price) -> Promise<boolean>, net/session.js); it adds the id to
+      // save.outfits.owned itself
+      if (this.buyHook) {
+        if (this.buying) return;
+        this.buying = true;
+        this.buyHook(r.id, price).then((ok) => {
+          this.buying = false;
+          if (!ok || !this.isOpen) { if (!ok) this.shake(); return; }
+          this.hud?.flash?.(`${r.it.name} bought`, 'gold', 1800);
+          this.wear(r);
+        });
+        return;
+      }
       if (!this.spend?.(price)) { this.shake(); return; } // spend() shows "Not enough money"
       ensureOutfits(this.save).owned.push(r.id);
       this.hud?.flash?.(`${r.it.name} bought`, 'gold', 1800);
     } else this.audio?.play('click');
+    this.wear(r);
+  }
+
+  wear(r) {
     setEquipped(this.save, this.charId, r.slot, r.id);
     this.writeSave?.();
     this.equipped = getEquipped(this.save, this.charId);

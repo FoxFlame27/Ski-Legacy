@@ -394,8 +394,19 @@ export class Snowcats {
    * @param {object} player       the Player (pos)
    * @param {THREE.WebGLRenderer} [renderer]  (size of the light sprites)
    */
+  /** Multiplayer: no snowcats (true). They are hidden (lamps out, colliders moved away) and come back on false. */
+  setOff(off) { this.off = !!off; this.offDone = false; }
+
   update(dt, camera, env, player, renderer) {
     if (!this.cats.length) return;
+    if (this.off) {
+      if (!this.offDone) {
+        this.offDone = true;
+        for (const c of this.cats) if (c.mode !== 'hidden') this.hide(c);
+        if (this.glow) { this.glow.visible = false; this.updateLamps(camera, 0, renderer); }
+      }
+      return;
+    }
     const pp = player.pos;
     const active = FLEET[qualityLevel()]; // the preset may drop while playing
     this.timer -= dt;

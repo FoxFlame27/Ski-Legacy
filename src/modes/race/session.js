@@ -189,7 +189,9 @@ export class RaceSession {
     this.settle = null;  // dark hold after the move: { until (race clock), resolve }
     this.crashes = 0;    // wipeouts this attempt (the player's 'crash' events, taken over by the session)
     // broadcast presentation
-    this.introEnabled = o.intro !== false;
+    // multiplayer: syncGo() -> seconds until the shared GO (server clock); the countdown is timed to it, no intro
+    this.syncGo = typeof o.syncGo === 'function' ? o.syncGo : null;
+    this.introEnabled = o.intro !== false && !this.syncGo;
     this.introDone = false;
     this.weather = o.weather; // string or () => string for the intro's lower third
     this.ui = o.presentationUI !== undefined ? o.presentationUI : typeof document !== 'undefined' ? presentationUI : null;
@@ -346,6 +348,7 @@ export class RaceSession {
     this.podiumDone = false;
     this.resultsArgs = null;
     this.clock = -(LEAD_IN + 3);
+    if (this.syncGo) { const s = this.syncGo(); if (Number.isFinite(s)) this.clock = -Math.max(0.5, s); }
     this.state = 'countdown';
     this.lastCount = null;
     this.goHidden = false;

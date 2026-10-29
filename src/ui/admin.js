@@ -9,6 +9,7 @@ import { SKIS } from '../game/economy.js';
 import { OUTFIT_ITEMS, OUTFIT_KITS, ensureOutfits } from '../game/outfits.js';
 import { WEATHER } from '../world/sky.js';
 import { world } from '../world/world.js';
+import { isMP } from '../net/mode.js';
 
 const OPEN_KEYS = new Set(['F2', 'Backquote']);
 const FLY_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyC', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight', 'KeyT', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -64,6 +65,7 @@ export class AdminPanel {
   /** Why the panel can't open right now (null = it can). */
   refusal() {
     const c = this.ctx;
+    if (isMP()) return 'Admin panel · off in multiplayer';
     if (!c.started || c.paused || this.transition?.active) return 'menu';
     if (c.modes?.active || c.races?.active) return 'Admin panel · free ride only';
     if (c.interior?.active) return 'Admin panel · not inside the shop';

@@ -1194,7 +1194,7 @@ export class Police {
   }
   say(who, line) { this.note(`${who}: "${line}"`, 7); }
   // a message in the WANTED box for a while (the user: one box, not pop-ups on top of it); no chase: a normal flash
-  note(text, s = 5) {
+  note(text, s = 7) {
     if (!this.w) { this.hud?.flash?.(text, 'bad', s * 1000); return; }
     this.noteText = text; this.noteUntil = performance.now() + s * 1000;
   }

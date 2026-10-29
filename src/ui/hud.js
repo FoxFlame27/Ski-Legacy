@@ -185,8 +185,8 @@ export class HUD {
     f.textContent = text;
     f.className = 'show ' + cls;
     clearTimeout(this.flashTimer);
-    // (the user: "make all notifications stay longer": every message at least 4 s, the longer ones 1.75x)
-    this.flashTimer = setTimeout(() => (f.className = ''), Math.max(4000, ms * 1.75));
+    // (the user: "make all notifications stay longer", twice: every message at least 5.5 s, the longer ones 2.25x)
+    this.flashTimer = setTimeout(() => (f.className = ''), Math.max(5500, ms * 2.25));
   }
 
   // ---------- races ----------

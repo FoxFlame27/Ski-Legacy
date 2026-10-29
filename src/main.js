@@ -2026,8 +2026,11 @@ menu = new Menu({
   mpActive: () => isMP(),
 });
 const skipIntro = new URLSearchParams(location.search).has('nointro');
-(skipIntro ? Promise.resolve() : new Intro(audio).play()).then(() => { menu.show(); audio.music('menu'); });
-boot().catch((e) => {
+const intro = skipIntro ? null : new Intro(audio);
+(intro ? intro.play() : Promise.resolve()).then(() => { menu.show(); audio.music('menu'); });
+// the boot waits until the intro's timeline is laid out (its clip's first frame up; at most 2.5 s): the boot blocks
+// the main thread for seconds, and the intro's own timers would fire late (the studio "took very long to load")
+Promise.race([intro?.scheduled, new Promise((r) => setTimeout(r, intro ? 2500 : 0))]).then(() => boot()).catch((e) => {
   console.error(e);
   setLoad(1, 'Error: ' + e.message);
 });

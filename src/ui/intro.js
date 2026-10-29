@@ -14,6 +14,7 @@ export class Intro {
     this.audio = audio;
     this.el = document.getElementById('intro');
     this.sig = { skipped: false, onSkip: [] };
+    this.scheduled = Promise.resolve(); // (play() replaces it: resolves once the timeline is laid out)
     this.skip = () => {
       if (this.sig.skipped) return;
       this.sig.skipped = true;
@@ -30,13 +31,20 @@ export class Intro {
   }
 
   async leave(s, ms = 600) {
-    s.classList.add('leave');
+    s.style.animation = `introOut ${ms}ms ease forwards`; // (an animation: it wins over a scene's timed fade-in)
     await wait(ms, this.sig);
     s.remove();
   }
 
+  // Oct 29, the user: "Icecold Studio takes very long to load". The game boots on the main thread while the intro
+  // plays and blocks it for seconds, so timers (the clip's end, the studio's start) fired late. Now the whole
+  // timeline is laid out as soon as the clip's first frame is up: the clip's fade-out and the studio's fade-in and
+  // ident are CSS animations with delays (the compositor runs them on time) and the ice hit is on the audio clock.
+  // `scheduled` resolves then; main.js holds the boot until it does (at most 2.5 s).
   async play() {
     const sig = this.sig;
+    let sched;
+    this.scheduled = new Promise((r) => (sched = r));
     this.el.hidden = false;
     addEventListener('keydown', this.skip, { once: true });
     this.el.addEventListener('pointerdown', this.skip, { once: true });
@@ -45,27 +53,33 @@ export class Intro {
     hint.textContent = 'Press any key to skip';
     this.el.appendChild(hint);
 
-    // 1 -- the logo clip: the skier jumps, the camera whips back to the SKI LEGACY badge (src/ui/introclip.js)
-    if (!sig.skipped) {
-      const s = this.scene('', 'scene-clip');
-      const clip = new IntroClip(s, this.audio);
-      sig.onSkip.push(() => clip.stop());
-      if (await clip.start()) await wait(CLIP_MS, sig);
-      await this.leave(s, 500);
-      clip.stop();
-    }
+    let clipS = null, studioS = null, clip = null, ident = null, total = 0;
+    try {
+      // 1 -- the logo clip: the skier jumps, the camera whips back to the SKI LEGACY badge (src/ui/introclip.js)
+      let at = 0; // s from now: the clip's end (its 0.5 s fade-out starts there)
+      if (!sig.skipped) {
+        clipS = this.scene('', 'scene-clip');
+        clip = new IntroClip(clipS, this.audio);
+        sig.onSkip.push(() => clip.stop());
+        if (await clip.start()) at = CLIP_MS / 1000;
+        clipS.style.setProperty('--out', `${at}s`);
+        clipS.classList.add('timed');
+      }
+      // 2 -- Icecold Studio: the ICECOLD logotype freezes into existence (src/ui/studioident.js), from the clip's end
+      if (!sig.skipped) {
+        studioS = this.scene('', 'scene-studio timed');
+        studioS.style.setProperty('--in', `${at + 0.5}s`);
+        ident = new StudioIdent(studioS, this.audio);
+        sig.onSkip.push(() => ident.stop());
+        await ident.start(at + 0.5);
+        total = (at + 0.5) * 1000 + STUDIO_MS;
+      }
+    } finally { sched(); }
 
-    // 2 -- Icecold Studio: the ICECOLD logotype freezes into existence (src/ui/studioident.js)
-    if (!sig.skipped) {
-      const s = this.scene('', 'scene-studio');
-      const ident = new StudioIdent(s, this.audio);
-      sig.onSkip.push(() => ident.stop());
-      const ok = await ident.start();
-      if (!ok && !sig.skipped) ident.fallback();
-      if (!sig.skipped) await wait(STUDIO_MS, sig);
-      await this.leave(s, STUDIO_LEAVE_MS);
-      ident.stop();
-    }
+    if (!sig.skipped) await wait(total, sig);
+    clip?.stop(); clipS?.remove();
+    if (studioS) await this.leave(studioS, STUDIO_LEAVE_MS);
+    ident?.stop();
 
     removeEventListener('keydown', this.skip);
     this.el.classList.add('done');

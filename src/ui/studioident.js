@@ -362,11 +362,12 @@ export class StudioIdent {
    * transform / opacity animate, so the compositor keeps it smooth while the game boots on the main thread.
    * Resolves true at once (it always plays).
    */
-  start() {
+  start(delay = 0) { // delay: s from now (the intro lays its whole timeline out at once: Intro.play)
     const e = identEngine();
     const vb = `-0.02 -0.02 ${(e.width + 0.04).toFixed(3)} 1.04`, d = e.svgPath();
     const el = document.createElement('div');
     el.className = 'studio-dom';
+    el.style.setProperty('--sd-at', `${delay}s`);
     el.innerHTML = `<div class="sd-bloom"></div>
 <div class="sd-lockup">
   <div class="sd-logo">
@@ -379,7 +380,7 @@ export class StudioIdent {
 </div>
 ${Array.from({ length: 14 }, (_, i) => `<i class="sd-spark" style="--x:${26 + ((i * 37) % 48)}%;--y:${41 + ((i * 23) % 14)}%;--d:${(0.95 + (i % 5) * 0.06).toFixed(2)}s;--s:${(0.6 + (i % 3) * 0.35).toFixed(2)}"></i>`).join('')}`;
     this.host.appendChild(el);
-    this.sound = this.audio?.iceHit?.(STUDIO_HIT_S) || null;
+    this.sound = this.audio?.iceHit?.(delay + STUDIO_HIT_S) || null;
     this.abort = () => {};
     return Promise.resolve(true);
   }

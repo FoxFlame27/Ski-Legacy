@@ -128,6 +128,11 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 #intro.done { opacity: 0; }
 .intro-scene { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; transition: opacity 0.6s ease, transform 0.6s ease; }
 .intro-scene.leave { opacity: 0; }
+/* the intro's timeline laid out at once (ui/intro.js play): the clip fades out at --out, the studio fades in at --in */
+.scene-clip.timed { animation: introOut 0.5s ease var(--out, 0s) forwards; }
+.scene-studio.timed { animation: introIn 0.35s ease var(--in, 0s) both; }
+@keyframes introOut { to { opacity: 0; } }
+@keyframes introIn { from { opacity: 0; } }
 .intro-skip { position: absolute; right: 26px; bottom: 22px; z-index: 5; font-size: 12px; color: rgba(255,255,255,0.5); letter-spacing: 0.08em; animation: fadeIn 1s 1s both; }
 @keyframes fadeIn { from { opacity: 0; } }
 
@@ -156,19 +161,19 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
    STUDIO tracking in. Only transform / opacity animate (the compositor keeps it smooth while the game boots). */
 .studio-dom { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .sd-lockup { position: relative; display: flex; flex-direction: column; align-items: center; gap: min(6.7vh, 3.8vw); }
-.sd-logo { position: relative; overflow: hidden; height: min(16vh, 10.5vw); animation: sdHit 0.55s cubic-bezier(.2,.9,.2,1) 0.95s; }
+.sd-logo { position: relative; overflow: hidden; height: min(16vh, 10.5vw); animation: sdHit 0.55s cubic-bezier(.2,.9,.2,1) calc(var(--sd-at, 0s) + 0.95s); }
 .sd-logo svg { display: block; height: 100%; width: auto; }
-.sd-logo .sd-flash { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; filter: drop-shadow(0 0 0.35em #bfe6ff); animation: sdFlash 0.75s ease-out 0.92s both; }
+.sd-logo .sd-flash { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; filter: drop-shadow(0 0 0.35em #bfe6ff); animation: sdFlash 0.75s ease-out calc(var(--sd-at, 0s) + 0.92s) both; }
 .sd-wipe { position: absolute; top: -6%; bottom: -6%; left: -8%; width: 240%; will-change: transform;
   background: linear-gradient(90deg, rgba(5,8,13,0) 0%, rgba(200,235,255,0.95) 1.6%, rgba(120,185,235,0.5) 3%, #05080d 5.5%, #05080d 100%);
-  animation: sdWipe 0.9s cubic-bezier(.45,.05,.35,1) 0.05s both; }
+  animation: sdWipe 0.9s cubic-bezier(.45,.05,.35,1) calc(var(--sd-at, 0s) + 0.05s) both; }
 .sd-glint { position: absolute; top: -25%; bottom: -25%; left: -30%; width: 18%; mix-blend-mode: soft-light; opacity: 0;
-  background: linear-gradient(100deg, transparent 0%, rgba(255,255,255,0.9) 50%, transparent 100%); animation: sdGlint 0.85s ease-in-out 1.3s both; }
-.sd-sub { font-family: 'Inter Variable', system-ui, sans-serif; font-weight: 600; font-size: min(3.4vh, 2.25vw); letter-spacing: 0.36em; margin-right: -0.36em; color: #9fb3c4; animation: sdSub 0.8s cubic-bezier(.2,.9,.2,1) 1.15s both; }
+  background: linear-gradient(100deg, transparent 0%, rgba(255,255,255,0.9) 50%, transparent 100%); animation: sdGlint 0.85s ease-in-out calc(var(--sd-at, 0s) + 1.3s) both; }
+.sd-sub { font-family: 'Inter Variable', system-ui, sans-serif; font-weight: 600; font-size: min(3.4vh, 2.25vw); letter-spacing: 0.36em; margin-right: -0.36em; color: #9fb3c4; animation: sdSub 0.8s cubic-bezier(.2,.9,.2,1) calc(var(--sd-at, 0s) + 1.15s) both; }
 .sd-bloom { position: absolute; left: 50%; top: 46%; width: 80vmin; height: 80vmin; margin: -40vmin 0 0 -40vmin; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle, rgba(150,210,255,0.32) 0%, rgba(150,210,255,0) 65%); opacity: 0; animation: sdBloom 1.3s ease-out 0.92s both; }
+  background: radial-gradient(circle, rgba(150,210,255,0.32) 0%, rgba(150,210,255,0) 65%); opacity: 0; animation: sdBloom 1.3s ease-out calc(var(--sd-at, 0s) + 0.92s) both; }
 .sd-spark { position: absolute; left: var(--x); top: var(--y); width: 6px; height: 6px; background: #e8f6ff; box-shadow: 0 0 8px #bfe6ff; opacity: 0;
-  animation: sdSpark 1s ease-out var(--d) both; }
+  animation: sdSpark 1s ease-out calc(var(--sd-at, 0s) + var(--d)) both; }
 @keyframes sdWipe { from { transform: translateX(0); } to { transform: translateX(48%); } }
 @keyframes sdFlash { 0% { opacity: 0; } 10% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes sdHit { 0% { transform: scale(1.04); } 100% { transform: scale(1); } }

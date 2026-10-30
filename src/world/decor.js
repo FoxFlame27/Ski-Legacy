@@ -7,6 +7,7 @@ import { fitModel } from '../core/assets.js';
 import { meshHeight } from '../fx/snowfx.js';
 import { propSeats } from '../game/seating.js';
 import { busRoads, laneDistance, ROAD_HALF } from '../game/bus/roads.js';
+import { mouthLane } from '../game/bus/junctions.js'; // (a junction's rounded corners: road too)
 
 // Cobblestones with snow packed into the joints; edges of the strip fade into the snow (alpha).
 function cobbleTexture() {
@@ -84,7 +85,7 @@ export class Decor {
     pts.push(points[points.length - 1]);
     // a path never runs over a road or a car park: it stops a little short of the plowed edge on each side
     const offRoad = ([x, z]) => {
-      if (laneDistance(x, z) < ROAD_HALF + width / 2 + 0.4) return false;
+      if (Math.min(laneDistance(x, z), mouthLane(x, z)) < ROAD_HALF + width / 2 + 0.4) return false;
       for (const L of busRoads.lots) {
         if (L.ux === undefined) continue;
         const dx = x - L.x, dz = z - L.z;

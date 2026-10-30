@@ -19,6 +19,7 @@ import { breakables } from '../../world/breakables.js'; // (the snow poles and r
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
 import { depotTrips } from './depot.js'; // the bus depot off the village stop: each bus's own bay, its ways in and out
 import { buildDepot } from './depotview.js'; // (its paving, bay lines, lamps and sign)
+import { buildJunctionMouths } from './junctionview.js'; // (where a road joins another: one surface, rounded corners, give-way line)
 
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 26, acc: 1.7, brake: 2.0, lat: 2.6 };
@@ -138,6 +139,12 @@ export function roadMaterial() {
 }
 export function lotMaterial() {
   return (_lotMat ||= snowCover(decal(new THREE.MeshStandardMaterial({ map: roadTexture(true), roughness: 0.72, metalness: 0, vertexColors: true, transparent: true, side: THREE.DoubleSide }), ROAD_DECAL), 'lot', true));
+}
+// a junction's mouth (junctionview.js): the car parks' plain asphalt and snow, laid over the two roads' edges where they
+// join (drawn a hair nearer than the roads, its edges fading into the snow by vertex alpha)
+let _mouthMat = null;
+function junctionMaterial() {
+  return (_mouthMat ||= snowCover(decal(new THREE.MeshStandardMaterial({ map: lotMaterial().map, roughness: 0.72, metalness: 0, vertexColors: true, transparent: true, depthWrite: false }), 0.0018), 'mouth', true));
 }
 
 const ACROSS = [-1, -2 / 3, -1 / 3, 0, 1 / 3, 2 / 3, 1];
@@ -711,6 +718,7 @@ function buildRoadMeshes(group, colliders = null) {
       group.add(road);
     }
   });
+  try { buildJunctionMouths(group, junctionMaterial()); } catch (e) { console.warn('junction mouths', e); } // (the joined surfaces, rounded corners, give-way lines)
   try {
     rails.build(group);
     busRoads.guardrails = { segments: rails.segs.length, km: +((rails.segs.length * SEG) / 1000).toFixed(2), boxes: rails.boxes, lines: busRoads.rails.length };

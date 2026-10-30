@@ -19,6 +19,7 @@ import { planScenicBus, planWestgratBus } from './scenicbus.js'; // the ski bus'
 import { planRentalRoad } from './rentalroad.js'; // the Westgratstrasse: across from the car rental, up the Westgrat
 import { clearRouteCache } from './scenicnet.js'; // (the routing's ground samples: freed once the roads are planned)
 import { planDepot } from './depot.js'; // the bus depot at the village stop and its road (the Depotweg)
+import { planMouths, mouthLane, mouthCorner, mouthNear, MOUTH_BERM } from './junctions.js'; // the junctions' joined surfaces and rounded corners
 
 const CELL = 20;
 const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
@@ -347,7 +348,7 @@ export { BENCH, BERM_IN, MAX_GRADE, CLEAR, nearestRoadPoint };
 // null away from the roads. (mesh: the drawn-terrain height there, already looked up)
 world.roadSurface = (x, z, mesh) => {
   if (!busRoads.roads.length) return null;
-  const d = laneDistance(x, z);
+  const d = Math.min(laneDistance(x, z), mouthLane(x, z)); // (a junction's rounded corners are road too)
   if (d > ROAD_HALF + 2) return null;
   const r = world.height(x, z) + 0.035;
   if (d <= ROAD_HALF + 0.5) return r;
@@ -357,7 +358,7 @@ world.roadSurface = (x, z, mesh) => {
 // (the road's smooth surface stands a little off the drawn terrain there, which is not a deck)
 world.isPaved = (x, z) => {
   if (!busRoads.roads.length) return false;
-  if (laneDistance(x, z) <= ROAD_HALF + 0.3) return true;
+  if (laneDistance(x, z) <= ROAD_HALF + 0.3 || mouthLane(x, z) <= ROAD_HALF + 0.3) return true;
   for (const L of busRoads.lots) {
     if (L.hw === undefined || L.ux === undefined) continue;
     const dx = x - L.x, dz = z - L.z;
@@ -392,6 +393,7 @@ export function roadsideBlocked(x, z, r = 0.3, own = -1, s = 0, { lots = true } 
   if (!busRoads.roads.length) return null;
   if (laneDistance(x, z, own, s, 40) < ROAD_HALF + 0.3 + r) return 'lane';
   for (const j of busRoads.junctions) if (Math.abs(j.x - x) < 14 + r && Math.abs(j.z - z) < 14 + r && Math.hypot(j.x - x, j.z - z) < 14 + r) return 'junction';
+  if (mouthLane(x, z) < ROAD_HALF + 0.3 + r) return 'junction'; // (on a junction's rounded corner)
   if (lots) {
     for (const L of busRoads.lots) {
       const dx = x - L.x, dz = z - L.z, u = dx * L.ux + dz * L.uz, v = dx * L.vx + dz * L.vz;
@@ -500,6 +502,7 @@ export function planBusRoads(stops) {
   clearRouteCache();
   try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
   try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
+  try { planMouths(); } catch (e) { console.warn('junction mouths', e); busRoads.mouths = []; } // (before the cuts: the berms round their corners)
   shapeRoads(busRoads.roads.filter((r) => !r.scenic)); // (the scenic roads, appended last, carve their own cut: same indices)
   try { shapeScenic(); } catch (e) { console.warn('scenic road cut', e); }
   try { planAlmdorfStop(); } catch (e) { console.warn('Almdorf bus stop', e); } // (the chalet village's stop: the valley road split at its junction for the bus)
@@ -519,12 +522,16 @@ export function berm(ri, side, s, L, x, z) {
   const p = ri * 11 + (side > 0 ? 5 : 0), T = 6.2832;
   const n = 0.6 + 0.2 * Math.sin(s * 0.093 + fr(p) * T) + 0.12 * Math.sin(s * 0.231 + fr(p + 1) * T) + 0.08 * Math.sin(s * 0.517 + fr(p + 2) * T);
   let taper = smoothstep(14, 34, s) * smoothstep(14, 34, L - s);
-  for (const j of busRoads.junctions) { const dj = Math.hypot(x - j.x, z - j.z); if (dj < 30) taper *= smoothstep(13, 30, dj); }
+  for (const j of busRoads.junctions) { if (j.mouth) continue; const dj = Math.hypot(x - j.x, z - j.z); if (dj < 30) taper *= smoothstep(13, 30, dj); }
   // a lay-by (the car parked at the roadside): the plough left that stretch of shoulder clear
   for (const lb of busRoads.laybys || []) if (lb.ri === ri && side === lb.side) taper *= smoothstep(9, 17, Math.abs(s - lb.s));
   const village = 0.45 + 0.55 * smoothstep(140, 260, Math.hypot(x, z));
   _berm.H = clamp(n, 0.3, 0.92) * taper * village;
   _berm.W = 3.4 + 0.5 * Math.sin(s * 0.061 + fr(p + 3) * T) + 0.3 * Math.sin(s * 0.19 + fr(p + 4) * T);
+  // a junction's mouth (junctions.js): the berm carries on round its rounded corners (shapeRoads), every road's berm
+  // there eased to one height and width (no step where the nearest road changes)
+  const w = mouthNear(x, z);
+  if (w > 0) { _berm.H += (MOUTH_BERM * village - _berm.H) * w; _berm.W += (3.4 - _berm.W) * w; }
   return _berm;
 }
 
@@ -665,7 +672,12 @@ function shapeRoads(roads) {
       // the plough berm: part of the terrain itself (the same snow, light and sparkle by day and night), a soft
       // rounded ridge whose height and width wander along the road, gone at the bus bays and road ends; the
       // coarse far-off terrain leaves it out (it would only alias into bumps there)
-      if (spacing <= 4 && nr.d > BERM_IN && nr.d < BERM_IN + 4.8) {
+      // (in a junction's rounded corner the berm follows the curve: the same profile off the joined surface's edge)
+      const corner = spacing <= 4 ? mouthCorner(x, z) : null;
+      if (corner !== null) {
+        const dc = ROAD_HALF + corner, t = (dc - BERM_IN) / 3.4, Hc = MOUTH_BERM * (0.45 + 0.55 * smoothstep(140, 260, Math.hypot(x, z)));
+        if (t > 0 && t < 1) out += Hc * (t < 0.38 ? smoothstep(0, 0.38, t) : 1 - smoothstep(0.38, 1, t));
+      } else if (spacing <= 4 && nr.d > BERM_IN && nr.d < BERM_IN + 4.8) {
         const r = roads[nr.ri];
         const b = berm(nr.ri, nr.side, nr.s, r.length, x, z);
         const t = (nr.d - BERM_IN) / b.W;

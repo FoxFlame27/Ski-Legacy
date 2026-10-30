@@ -87,7 +87,8 @@ export class Rescue {
    */
   start({ fallback, free = false } = {}) {
     const h = this.h, p = h.player, f = h.flight, W = h.world;
-    if (this.phase || h.state === 'flying' || h.state === 'boarding') return false;
+    if (this.phase && h.state !== 'rescue') { try { this.cleanup(); } catch { /* */ } this.phase = null; } // (a rescue left half-done: it never blocks the next one)
+    if (this.phase || h.state === 'flying' || h.state === 'boarding') { console.warn('rescue: helicopter busy', this.phase, h.state); return false; }
     // under a tunnel lid or inside a cave: no way to reach you from the air
     if (Math.abs(W.outsideHeight(p.pos.x, p.pos.z) - W.height(p.pos.x, p.pos.z)) > 2.5) return false;
     this.fallback = fallback;

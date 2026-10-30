@@ -29,6 +29,8 @@ import { swapInModel } from './prisonoutside.js';
 import { LivePortal } from './liveportal.js';
 import { isMP, MP } from '../net/mode.js';
 import { ST, fallFlags } from '../net/protocol.js';
+import { world } from '../world/world.js';
+import { twoBone } from './carpeople.js';
 
 const BEAMS_X = [-6.0, -3.6, -1.2, 1.2, 3.6, 6.0]; // the ceiling's glulam beams (x, every 2.4 m, symmetric about the middle)
 export const STAY_S = 20; // the recovery (game seconds in bed before you may get up; Oct 30, the user: 20 s)
@@ -48,6 +50,29 @@ const BED_Z = IN.z0 + 0.02 + BED.len / 2; // (the bed's middle)
 // a patient lying in bed (the presence row's root: the hips; the head on the pillow toward the wall)
 const HIPS_Z = IN.z0 + 1.0;
 const PITCH = -Math.PI / 2, TUCK = 0.45;
+// (the tuck as it goes out in the presence row, 4 bits: your own body in bed posed exactly as the others see it)
+const TUCK_Q = Math.round(TUCK * 15) / 15;
+const _bh = new THREE.Vector3(), _bn = new THREE.Vector3(), _bu = new THREE.Vector3(), _bf = new THREE.Vector3();
+const _ba = new THREE.Vector3(), _bl = new THREE.Vector3(), _br = new THREE.Vector3(), _bt = new THREE.Vector3(), _bp = new THREE.Vector3();
+
+/** A patient's arms lying by its side (after the rig's fall pose, which sprawls one arm out as on the snow): the hands
+ *  beside the hips on the mattress, the elbows a little out. Your own body in bed and the other players' (net/remote.js). */
+export function bedArms(rig) {
+  const b = rig?.b;
+  if (!b?.hips || !b.lArm || !b.rArm) return;
+  rig.root.updateMatrixWorld(true);
+  const hip = _bh.setFromMatrixPosition(b.hips.matrixWorld);
+  const ls = _bl.setFromMatrixPosition(b.lArm.matrixWorld), rs = _br.setFromMatrixPosition(b.rArm.matrixWorld);
+  const right = _bn.subVectors(rs, ls).normalize(); // (the body's right)
+  const down = _ba.copy(ls).add(rs).multiplyScalar(0.5); down.subVectors(hip, down).normalize(); // shoulders -> hips
+  const front = _bf.copy(UP).addScaledVector(down, -UP.dot(down));
+  if (front.lengthSq() < 1e-6) front.set(0, 1, 0); else front.normalize();
+  for (const [s, arm, fore, hand] of [[-1, b.lArm, b.lFore, b.lHand], [1, b.rArm, b.rFore, b.rHand]]) {
+    _bt.copy(hip).addScaledVector(right, s * 0.27).addScaledVector(down, 0.06).addScaledVector(front, 0.02);
+    _bp.copy(right).multiplyScalar(s * 0.6).addScaledVector(front, -0.8);
+    try { twoBone(arm, fore, hand, _bt, _bp); } catch { /* (the fall pose's arms stay) */ }
+  }
+}
 // the house's windows (hospital.js: ground floor, sill-to-lintel 1.15 .. 2.45 m)
 const WIN = {
   front: [[-5.2, 1.4, 1.3], [5.2, 1.4, 1.3]],
@@ -103,6 +128,10 @@ export class HospitalRoom {
     this.bounds = null; this.obstacles = []; this.t = 0;
     this.role = null; this.bed = 1; this.seat = null; this.top = BED.top;
     this.chairs = []; this.clock = null;
+    // your own body in bed (the player's rig lent to this scene while you rest: poseBody / returnBody); the view from
+    // its eyes, or (R, the game's view toggle) from beside the bed
+    this.restView = 'first'; this.tpYaw = Math.PI; this.tpPitch = -0.45;
+    this.eye = null; this.bodyC = null; this.lift = null; this.liftV = 0; this.rigHome = null; this.unculled = null;
     this.renderer = renderer;
     this.portal = new LivePortal({ name: 'Medical centre', tint: 0xf6f3ee });
     this.frame = null;
@@ -666,7 +695,10 @@ export class HospitalRoom {
   place(role, bed = 1) {
     this.role = role; this.bed = bed; this.seat = null;
     this.bounds = [IN.x0 + R, IN.x1 - R, IN.z0 + R, IN.z1 - R];
-    if (role === 'patient') { this.pos.set(BEDS[bed] ?? 0, 0, HIPS_Z); this.yaw = 0; this.pitch = -0.08; }
+    if (role === 'patient') {
+      this.pos.set(BEDS[bed] ?? 0, 0, HIPS_Z); this.yaw = 0; this.pitch = -0.3; // (looking down along yourself to your feet)
+      this.restView = 'first'; this.tpYaw = Math.PI; this.tpPitch = -0.45; this.eye = null; this.bodyC = null; this.lift = null; this.liftV = 0;
+    }
     else { this.pos.set(EXIT.x, 0, EXIT.z - 0.9); this.yaw = Math.PI; this.pitch = -0.04; }
     this.vel.set(0, 0, 0);
     this.update(0, null);
@@ -697,6 +729,61 @@ export class HospitalRoom {
       }
       p.x = Math.min(bx, Math.max(ax, p.x)); p.z = Math.min(bz, Math.max(az, p.z));
     }
+  }
+
+  /**
+   * Your own body lying in your bed while you rest (HospitalWard.update, every frame after main.js's player.update has
+   * posed the rig where you stand outdoors): the player's rig lent to this scene, posed as the others see you (mpPose,
+   * net/remote.js: the fall pose, pitch -90 deg, the tuck half way, on the bed's top, its head on the pillow), the arms
+   * by its side; the pillow camera goes to its eyes (the head folded away for it, as in first person outdoors).
+   */
+  poseBody(rig, dt) {
+    if (!rig?.root || !rig.b?.head || this.role !== 'patient') return;
+    if (rig.root.parent !== this.scene) {
+      this.rigHome = rig.root.parent;
+      this.scene.add(rig.root);
+      // (lying, the body leaves the standing pose's bounds the renderer would cull it by)
+      this.unculled = [];
+      rig.root.traverse((o) => { if (o.isMesh && o.frustumCulled) { o.frustumCulled = false; this.unculled.push(o); } });
+    }
+    const bx = BEDS[this.bed] ?? 0, top = this.bedTops?.[this.bed] ?? BED.top;
+    const st = this._bst ||= { mode: 'fall', heading: 0, speed: 0, crouch: 0, lean: 0, edge: 0, tuck: false, air: false, normal: UP,
+      fall: { pitch: PITCH, roll: 0, ball: TUCK_Q, getUp: 0 }, fallSide: 1, fallHeading: 0, fallAir: false, fallT: 1, carry: false, airY: 0, fp: false };
+    rig.root.position.set(bx, top, HIPS_Z);
+    // (no blend from the standing pose the player's update just made, and the body's settle onto the mattress kept
+    // from frame to frame: the rig resets it whenever its mode changes, which it does twice a frame here)
+    rig.mode = 'fall'; rig.snapNext = true;
+    rig.fallLift = this.lift ?? 0; rig.fallLiftV = this.liftV || 0;
+    rig.setHeadHidden(this.restView !== 'third');
+    // the floor its fall pose lies on: the mattress (as net/remote.js onFloor), not the world's terrain under these coordinates
+    const own = Object.prototype.hasOwnProperty.call(world, 'groundHeight'), g0 = world.groundHeight;
+    world.groundHeight = () => top;
+    try { rig.update(Math.min(dt, 0.1), st); } catch (e) { console.warn('hospital: body', e); } finally { if (own) world.groundHeight = g0; else delete world.groundHeight; }
+    this.lift = rig.fallLift; this.liftV = rig.fallLiftV;
+    if (rig.fx?.length) rig.fx.length = 0; // (no snow puffs off a mattress)
+    if (rig.gear) rig.gear.visible = false; // (no skis or poles in bed)
+    bedArms(rig);
+    // the eyes: up the head from the neck, toward the face (lying on your back: up), a little above
+    rig.root.updateMatrixWorld(true);
+    const h = _bh.setFromMatrixPosition(rig.b.head.matrixWorld);
+    const u = rig.b.neck ? _bu.subVectors(h, _bn.setFromMatrixPosition(rig.b.neck.matrixWorld)).normalize() : _bu.set(0, 0.5, -0.87);
+    const f = _bf.copy(UP).addScaledVector(u, -UP.dot(u));
+    if (f.lengthSq() < 1e-6) f.set(0, 0, 1); else f.normalize();
+    (this.eye ||= new THREE.Vector3()).copy(h).addScaledVector(u, 0.1).addScaledVector(f, 0.1).addScaledVector(UP, 0.03);
+    (this.bodyC ||= new THREE.Vector3()).setFromMatrixPosition(rig.b.hips.matrixWorld).addScaledVector(UP, 0.12);
+  }
+  /** Out of bed (up, out of the door, back to the menu): the rig back where it came from, walking again. */
+  returnBody(rig) {
+    if (!rig?.root || rig.root.parent !== this.scene) return;
+    this.scene.remove(rig.root);
+    (this.rigHome || null)?.add(rig.root);
+    this.rigHome = null;
+    for (const o of this.unculled || []) o.frustumCulled = true;
+    this.unculled = null;
+    if (rig.gear) rig.gear.visible = !rig.fpGearHidden;
+    rig.setHeadHidden(false);
+    rig.snapPose?.();
+    this.eye = null; this.bodyC = null;
   }
 
   /** The other players lying in the ward's beds now (multiplayer): bed index -> name. */
@@ -745,12 +832,18 @@ export class HospitalRoom {
   update(dt, input, sensitivity = 1) {
     this.t += dt;
     const patient = this.role === 'patient';
-    if (input) {
+    if (patient && input?.hit?.('KeyR')) this.restView = this.restView === 'third' ? 'first' : 'third'; // (the game's view toggle)
+    const third = patient && this.restView === 'third';
+    if (input && third) { // (from beside the bed: round your body, from the foot end and the sides, never through the wall)
+      const sens = 0.0022 * sensitivity;
+      this.tpYaw = Math.max(Math.PI - 1.5, Math.min(Math.PI + 1.5, this.tpYaw - input.mdx * sens));
+      this.tpPitch = Math.max(-1.2, Math.min(-0.08, this.tpPitch - input.mdy * sens));
+    } else if (input) {
       const sens = 0.0022 * sensitivity;
       this.yaw -= input.mdx * sens;
       this.pitch = Math.max(-1.3, Math.min(1.2, this.pitch - input.mdy * sens));
-      if (patient) { // (lying back on the pillow: the head turns, the body stays)
-        this.yaw = Math.max(-1.35, Math.min(1.35, this.yaw)); this.pitch = Math.max(-0.75, Math.min(0.95, this.pitch));
+      if (patient) { // (lying back on the pillow: the head turns, the body stays; down far enough to see yourself)
+        this.yaw = Math.max(-1.35, Math.min(1.35, this.yaw)); this.pitch = Math.max(-1.1, Math.min(0.95, this.pitch));
       }
     }
     if (input && !patient && !this.seat) {
@@ -762,9 +855,11 @@ export class HospitalRoom {
     } else this.vel.multiplyScalar(Math.exp(-dt * 10));
     if (!patient && !this.seat) this.walk(dt);
     const cam = this.camera;
-    if (patient) { // the head on the raised pillow, a slow breath
+    if (patient) { // the head on the raised pillow (your body's eyes: poseBody), a slow breath
       const bx = BEDS[this.bed] ?? 0, top = this.bedTops?.[this.bed] ?? BED.top;
-      cam.position.set(bx, top + 0.42 + Math.sin(this.t * 1.3) * 0.006, IN.z0 + 0.55);
+      if (this.eye) cam.position.copy(this.eye);
+      else cam.position.set(bx, top + 0.42, IN.z0 + 0.55);
+      cam.position.y += Math.sin(this.t * 1.3) * 0.006;
     } else if (this.seat) {
       cam.position.set(this.seat.x - Math.sin(this.seat.yaw) * 0.08, this.seat.y + 0.72, this.seat.z - Math.cos(this.seat.yaw) * 0.08);
     } else {
@@ -772,7 +867,15 @@ export class HospitalRoom {
       cam.position.set(this.pos.x, EYE + bob, this.pos.z);
     }
     const dir = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), Math.cos(this.yaw) * Math.cos(this.pitch));
-    cam.lookAt(cam.position.clone().add(dir));
+    if (third) { // beside the bed, looking at you lying in it
+      const bx = BEDS[this.bed] ?? 0, top = this.bedTops?.[this.bed] ?? BED.top;
+      const c = this.bodyC || _bt.set(bx, top + 0.3, HIPS_Z - 0.2), cp = this.tpPitch;
+      cam.position.set(c.x - Math.sin(this.tpYaw) * Math.cos(cp) * 2.3, c.y - Math.sin(cp) * 2.3, c.z - Math.cos(this.tpYaw) * Math.cos(cp) * 2.3);
+      cam.position.x = Math.max(IN.x0 + 0.2, Math.min(IN.x1 - 0.2, cam.position.x));
+      cam.position.y = Math.max(0.4, Math.min(IN.H - 0.15, cam.position.y));
+      cam.position.z = Math.max(IN.z0 + 0.2, Math.min(PART.z - 0.2, cam.position.z));
+      cam.lookAt(c);
+    } else cam.lookAt(cam.position.clone().add(dir));
     if (this.ecgTex) this.ecgTex.offset.x = (this.t * 0.22) % 1;
     if (this.clocks) {
       const d = new Date(), s = d.getSeconds() + d.getMilliseconds() / 1000, m = d.getMinutes() + s / 60, h = (d.getHours() % 12) + m / 60;
@@ -930,12 +1033,14 @@ export class HospitalWard {
   getUp() {
     if (this.role !== 'patient' || this.active) return;
     this.audio?.play?.('click');
+    this.room.returnBody(this.player?.rig);
     this.room.getUp();
     this.role = 'visitor';
     this.card(null);
     this.hud?.flash('Discharged · the way out: the glass doors past reception', 'good', 3200);
   }
   outside() {
+    this.room.returnBody(this.player?.rig);
     this.show(false);
     this.role = null; this.active = false;
     this.player.frozen = false;
@@ -988,7 +1093,7 @@ export class HospitalWard {
   }
   /** The HUD's objective line inside. */
   hudLine() {
-    if (this.role === 'patient') return this.active ? `Recovering in bed ${this.room.bed + 1} · ${fmt(this.left())}` : 'Fit again · press E to get up';
+    if (this.role === 'patient') return (this.active ? `Recovering in bed ${this.room.bed + 1} · ${fmt(this.left())}` : 'Fit again · press E to get up') + ' · R: view';
     if (this.room.seat) return 'Sitting by the bed · E to stand up';
     return 'Medical centre · visit a patient in the ward, the way out: the glass doors';
   }
@@ -1008,6 +1113,7 @@ export class HospitalWard {
         const v = this.room.visitorsOf(this.room.bed);
         for (const n of v) if (!this.visitSeen?.has(n)) { this.visitSeen?.add(n); this.hud?.flash(`${n} came to visit you`, 'good', 3000); }
       } catch { /* (decor) */ }
+      try { this.room.poseBody(this.player?.rig, dt); } catch (e) { console.warn('hospital: body', e); } // (you, lying in your bed)
       this.card(this.active ? ['RECOVERING', fmt(this.left()), `Medical centre · bed ${this.room.bed + 1} · rest until you are fit`] : ['FIT AGAIN', '✓', 'Press E to get up and walk out'], !this.active);
     } else this.card(null);
     void dt;
@@ -1035,6 +1141,7 @@ export class HospitalWard {
 
   /** Back to the main menu / the village / out of multiplayer: out of the scene at once. */
   reset() {
+    this.room.returnBody(this.player?.rig);
     if (this.inside) { this.show(false); this.player.frozen = false; }
     this.room.releasePortal();
     this.card(null);

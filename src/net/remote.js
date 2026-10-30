@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { R, ST, F, fallDecode } from './protocol.js';
 import { twoBone, seatsFor } from '../game/carpeople.js';
 import { world } from '../world/world.js';
+import { bedArms, INTERIOR_ID as HOSPITAL } from '../game/hospitalroom.js';
 
 const RING = 16;              // snapshots kept per player
 const DELAY = 120;            // ms of interpolation buffer (at least; more when rows arrive later: Remote.delay)
@@ -403,6 +404,7 @@ export class RemotePlayers {
       // would stand on (Oct 30, the user: "he sinks through the floor", "it's like you go through the stairs")
       if (r.interior) onFloor(rig, r.animAcc, st, seated ? pos.y - 0.45 : pos.y);
       else rig.update(r.animAcc, st);
+      if (fall && r.interior === HOSPITAL) bedArms(rig); // (a patient in a hospital bed: the arms by its side, as you see yourself)
       r.animAcc = 0;
       if (inVeh && r.inCar) carLegs(rig, r); // (drivers and passengers: the bench 'sit' pose hangs the legs straight down through the car floor)
       else if (inVeh && r.onSled) sledLegs(rig); // (astride the snowmobile: knees bent, feet on the running boards)

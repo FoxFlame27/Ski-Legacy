@@ -659,8 +659,14 @@ export class Police {
     }
     const W = this.w;
     if (W && (this.excluded?.() || this.prison?.active)) { this.clear(); return; }
-    // hiding in a chalet (Oct 30, the user): they lose you there, the chase is over (not while being fined / arrested)
-    if (W && !W.scene && globalThis.window?.__game?.chalets?.inside) { this.escaped("The police can't find you in here · you escaped"); return; }
+    // hiding in a chalet (Oct 30, the user): the police are still looking but can't find you: the WANTED box says so,
+    // the escape time runs on while you stay inside (they lose you once it is up); out again, the chase goes on for
+    // the time that is left (not while being fined / arrested)
+    const hiding = !!(W && !W.scene && globalThis.window?.__game?.chalets?.inside);
+    if (hiding) {
+      W.t += dt; W.esc += dt; W.near = Infinity;
+      if (W.esc >= TUNING.escapeS) { this.escaped('They never found you · you escaped'); return; }
+    }
     const paused = !!this.paused?.();
     try {
       if (W && !paused) this.chase(dt, W);
@@ -671,7 +677,7 @@ export class Police {
       this.wrecks(dt);
     } catch (e) { if (!this.err) { this.err = true; console.warn('police', e); } }
     this.siren(paused);
-    this.hudFrame(paused);
+    this.hudFrame(paused && !hiding, hiding);
     try { this.netFrame(dt); } catch (e) { console.warn('police mp', e); }
   }
 
@@ -1439,10 +1445,14 @@ export class Police {
     this.sirenOn = true;
     this.audio?.setSiren?.({ on: true, dist: bd, doppler: clamp(343 / (343 - clamp(closing, -60, 60)), 0.85, 1.18) });
   }
-  hudFrame(paused) {
+  hudFrame(paused, hiding = false) {
     const W = this.w;
     if (!W || paused) { this.setHud(false); return; }
     const S = W.scene;
+    if (hiding) { // (in a chalet: the box stays up, the escape time runs)
+      this.setHud(true, mmss(W.t), "Hiding · the police are still looking for you · stay inside", `${mmss(W.esc)} <em>/ ${mmss(TUNING.escapeS)} · hidden</em>`, W.esc / TUNING.escapeS, 0, 'THEY CAN\'T FIND YOU', 2, false, true);
+      return;
+    }
     const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : `Pulled over · stay in the car · ${usd(this.fineNow())} fine`) : 'Under arrest')
       : W.fleeing ? 'Fleeing · they will ram you · stop to give up'
         : W.reached ? `Pull over now: stop to pay the ${usd(this.fineNow())} fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : `Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`;

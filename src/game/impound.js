@@ -336,9 +336,10 @@ export class Impound {
     // (Oct 30, the user: "make sure the countdown for the tow truck starts immediately once you get out of the car, not
     // once you are far enough": it runs from the moment you're out, near the car or not; only driving it again, or
     // parking it properly, stops it)
-    if (!e.warned) { e.warned = true; R.hud?.flash(`Your car is ${what} · it will be towed if you leave it there`, 'bad', 3600); }
+    // (Oct 30, the user: "don't show this message at the top in the middle, since you already have it in the bottom
+    // left": no banner, the parking card says it; the last warning is only its sound)
     e.abandonT = (e.abandonT || 0) + step;
-    if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still ${what} · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
+    if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.audio?.play?.('error'); }
     if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.parkHud(null); this.tow(e, what); return; }
     // the card: the countdown running, from the moment you're out
     this.parkHud(this.parkText(e, sp, d));

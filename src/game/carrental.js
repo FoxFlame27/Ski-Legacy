@@ -78,6 +78,9 @@ export class CarRental {
     this.inside = false;
     this.current = null; // your car that is out (a parking entry, rental: true)
     this.towed = null;   // multiplayer: your wreck while the truck fetches it (the others still see it)
+    this.kept = [];      // your other cars standing in the world (Oct 30, the user: "your car gets replaced when you buy a new
+                         // car"): bought another one, the one out before stays parked where it is, yours to drive; getting
+                         // in makes it the one out (keepCurrent, makeCurrent)
     this.ui = new CarRentalUI({ hud: o.hud, audio: o.audio });
     if (!this.L) return;
     const L = this.L;
@@ -107,12 +110,16 @@ export class CarRental {
     if (o.drive) {
       o.drive.locked = (e) => (e.rental || e.free ? null : 'Buy a car at the Autohaus in Legacy Village');
       o.drive.onWreck = (e) => this.wrecked(e);
+      // getting into another of your cars parked in the world: it becomes the one out
+      const enter = o.drive.enter.bind(o.drive);
+      o.drive.enter = (e) => { if (e?.kept && !o.drive.d && !o.drive.entering && !this.makeCurrent(e)) return; return enter(e); };
     }
     try { this.impound = new Impound(this, { fee: WRECK_FEE }); } catch (e) { console.warn('rental car park', e); this.impound = null; }
     try { this.ownerTags = new OwnerTags({ scene: o.scene, camera: o.camera, rental: this }); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     // the save: your garage, the car that is out back in your bay
     this.migrate();
     if (o.save.rental) { try { this.current = this.spawn(o.save.rental); } catch (e) { console.warn('rental car', e); } }
+    this.spawnKept();
   }
 
   // ------------------------------------------------------------------ your garage (save.garage; save.rental: the one out)
@@ -279,7 +286,7 @@ export class CarRental {
   spawn(cfg, p = this.carSpot, free = false) {
     const id = cfg.id, spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
     if (!spec || !gltf || !this.parking || !p) return null;
-    if (p === this.carSpot && !free && this.mp) p = this.impound?.freeBay?.() || p; // (multiplayer: a bay no other player's car stands in)
+    if (p === this.carSpot && !free) p = this.impound?.freeBay?.() || p; // (a bay no other car stands in: another of yours, another player's)
     const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group;
     car.name = free ? 'admin-car' : 'rental-car';
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;
@@ -320,6 +327,8 @@ export class CarRental {
     const ci = this.colliders.indexOf(e.collider); if (ci >= 0) this.colliders.splice(ci, 1);
     const bi = this.cameraBlockers?.indexOf(e.block); if (bi >= 0) this.cameraBlockers.splice(bi, 1);
     const wi = this.drive?.wrecks?.indexOf(e); if (wi >= 0) this.drive.wrecks.splice(wi, 1);
+    const ki = this.kept.indexOf(e); if (ki >= 0) this.kept.splice(ki, 1);
+    for (const b of e.held || []) b.taken = false;
     e.smokeFx?.clear?.();
     e.wrecked = null;
     if (this.drive) this.drive._cc = null;
@@ -344,17 +353,18 @@ export class CarRental {
     if (!this.spend(total)) return;
     cfg.price = total;
     this.garage.unshift(cfg);
-    this.putOut(cfg, `${spec.label} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}`);
+    const prev = this.current && this.keepable(this.current) ? this.label(this.current.cfg?.id) : null;
+    this.putOut(cfg, `${spec.label} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}${prev ? ` · your ${prev} stays where you parked it` : ''}`);
   }
   rent(cfg) { return this.buy(cfg); } // (the old name)
-  /** One of your cars (by plate) into your bay, free; the one out before goes home to your garage. */
+  /** One of your cars (by plate) into your bay, free; the one out before stays where it is parked (keepCurrent). */
   takeOut(plate) {
     const cfg = this.garage.find((c) => c.plate === plate);
     if (!cfg || this.save.rental?.plate === plate) return;
     const no = this.busy(); if (no) { this.hud?.flash(no, 'bad', 2600); this.audio?.play?.('error'); return; }
-    if (this.mp) { this.mp.switchCar?.(plate); return; } // multiplayer: the server swaps it (placeOwned)
+    if (this.mp) { this.moveNext = plate; this.mp.switchCar?.(plate); return; } // multiplayer: the server swaps it (placeOwned: into your bay)
     this.garage.splice(this.garage.indexOf(cfg), 1); this.garage.unshift(cfg);
-    this.putOut(cfg, `Your ${this.label(cfg.id)} waits in the ${this.where()} · ${cfg.plate}`);
+    this.putOut(cfg, `Your ${this.label(cfg.id)} waits in the ${this.where()} · ${cfg.plate}`, true);
   }
   /** Sell one of your cars back (by plate) for sellValue(); the one out sold: the next of yours takes its bay. */
   sell(plate) {
@@ -365,6 +375,7 @@ export class CarRental {
     if (this.mp) { this.mp.sellCar?.(plate); return; } // multiplayer: the server pays (placeOwned)
     const v = this.sellValue(cfg);
     this.garage.splice(this.garage.indexOf(cfg), 1);
+    const k = this.kept.find((x) => x.cfg?.plate === plate); if (k && !k.driving) this.remove(k); // (sold where it stood)
     this.save.money += v;
     this.hud?.setMoney?.(this.save.money, v);
     this.audio?.play?.('cash');
@@ -372,20 +383,68 @@ export class CarRental {
     else this.writeSave();
     this.hud?.flash(`${this.label(cfg.id)} sold · +$${v.toLocaleString('en-US')}`, 'good', 3200);
   }
-  /** `cfg` (a garage entry, or null: none) is the car out: in your bay, the one there before gone home. */
-  putOut(cfg, msg) {
-    if (this.current && !this.current.driving) { this.remove(this.current); this.current = null; }
+  /** `cfg` (a garage entry, or null: none) is the car out: in your bay (or a free bay beside it). The one out before
+   *  stays parked where it is (keepCurrent; one being towed or held in the tow yard goes home to your garage). A car of
+   *  yours already standing in the world becomes the one out where it stands, unless `move` (MY CARS: into your bay). */
+  putOut(cfg, msg, move = false) {
+    this.keepCurrent();
     this.save.rental = cfg || null;
-    if (cfg) this.current = this.spawn(cfg);
+    const k = cfg ? this.kept.find((x) => x.cfg?.plate === cfg.plate) : null;
+    if (k && !move) { this.kept.splice(this.kept.indexOf(k), 1); k.kept = false; k.cfg = cfg; this.current = k; }
+    else { if (k && !k.driving) this.remove(k); if (cfg) this.current = this.spawn(cfg); }
     this.writeSave();
     if (msg) this.hud?.flash(msg, 'gold', 3400);
+  }
+  /** Can your car out stay parked in the world as one of your other cars? (in your garage, parked, not wrecked, towed
+   *  or held in the tow yard) */
+  keepable(e) { return !!(e && e.rental && !e.driving && !e.wrecked && !e.towing && !e.impound && this.garage.some((c) => c.plate === e.cfg?.plate)); }
+  /** The car out: kept parked where it is (this.kept), or gone home to your garage. this.current is null after. */
+  keepCurrent() {
+    const e = this.current;
+    if (!e) return;
+    if (this.keepable(e)) { e.kept = true; if (!this.kept.includes(e)) this.kept.push(e); this.current = null; }
+    else if (!e.driving) { this.remove(e); this.current = null; }
+  }
+  /** drive.js: you get into another car of yours parked in the world: it is the one out now (multiplayer: the server
+   *  makes it cars[0]); the one out before stays where it is. False: not now (it says why). */
+  makeCurrent(e) {
+    const cur = this.current, cfg = this.garage.find((c) => c.plate === e.cfg?.plate);
+    if (!cfg) { this.remove(e); return false; } // (no longer yours: sold)
+    if (cur && (cur.towing || cur.driving)) { this.hud?.flash(`Your ${this.label(cur.cfg?.id)} is with the tow truck · wait until it is home`, 'bad', 2800); this.audio?.play?.('error'); return false; }
+    if (this.towed) { this.hud?.flash('Your car is with the tow truck · wait until it is home', 'bad', 2800); this.audio?.play?.('error'); return false; }
+    if (cur) { if (this.keepable(cur) || cur.impound) { cur.kept = true; this.kept.push(cur); } else this.remove(cur); }
+    this.kept.splice(this.kept.indexOf(e), 1);
+    e.kept = false; e.cfg = cfg;
+    this.current = e;
+    this.save.rental = cfg;
+    if (this.mp) { this.quiet = cfg.plate; this.mp.switchCar?.(cfg.plate); }
+    else { this.garage.splice(this.garage.indexOf(cfg), 1); this.garage.unshift(cfg); }
+    this.writeSave();
+    return true;
+  }
+  /** Your other cars (the garage, but the one out) parked in free bays of the Autohaus car park (a new session; no
+   *  free bay: they wait in the garage, MY CARS). */
+  spawnKept() {
+    if (!this.impound?.freeBay) return;
+    for (const cfg of this.garage) {
+      if (cfg.plate === this.save.rental?.plate || this.kept.some((k) => k.cfg?.plate === cfg.plate)) continue;
+      const p = this.impound.freeBay(true);
+      if (!p) break;
+      let e = null;
+      try { e = this.spawn(cfg, p); } catch (err) { console.warn('rental car', err); }
+      if (!e) continue;
+      e.kept = true; this.kept.push(e);
+    }
   }
 
   /** Your garage and the car out rebuilt from the save (switching between the single-player and multiplayer saves). */
   resync() {
     if (this.current && !this.current.driving) { try { this.remove(this.current); } catch (e) { console.warn('rental car', e); } this.current = null; }
+    for (const k of this.kept.slice()) if (!k.driving) { try { this.remove(k); } catch (e) { console.warn('rental car', e); } }
+    this.kept = this.kept.filter((k) => k.driving);
     this.migrate();
     if (this.save.rental) { try { this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } }
+    this.spawnKept();
   }
   /** Multiplayer: the server's garage (profile cars, cars[0] the one out; net/session.js): the save follows it and the
    *  car out is put in your bay when it changed (bought, switched, sold). */
@@ -393,12 +452,17 @@ export class CarRental {
     const list = (cars || []).map((c) => normConfig(c)).filter((c) => RENTALS.some((r) => r.id === c.id));
     const first = list[0] || null, was = this.save.rental?.plate || null;
     this.save.garage = list;
-    if ((first?.plate || null) !== was || !this.current) this.putOut(first, msg);
+    for (const k of this.kept.slice()) if (!k.driving && !list.some((c) => c.plate === k.cfg?.plate)) this.remove(k); // (sold, gone)
+    if (this.quiet && this.quiet === first?.plate) msg = null; // (makeCurrent: you just got into it, nothing to say)
+    const move = !!this.moveNext && this.moveNext === first?.plate;
+    this.quiet = null; this.moveNext = null;
+    if ((first?.plate || null) !== was || !this.current) this.putOut(first, msg, move);
     else { this.save.rental = first; this.writeSave(); if (msg) this.hud?.flash(msg, 'gold', 3400); }
   }
   /** Multiplayer: the server sold you `cfg` (its plate checked): put it in the yard. (old name; placeOwned) */
   placeRented(cfg, cars) {
-    if (cars) return this.placeOwned(cars, `${this.label(cfg.id)} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}`);
+    const prev = this.current && this.keepable(this.current) ? this.label(this.current.cfg?.id) : null;
+    if (cars) return this.placeOwned(cars, `${this.label(cfg.id)} bought · ${cfg.plate} · yours for good · it waits in the ${this.where()}${prev ? ` · your ${prev} stays where you parked it` : ''}`);
     const c = normConfig(cfg);
     this.save.garage = [c, ...this.garage.filter((x) => x.plate !== c.plate)];
     this.putOut(c, `${this.label(c.id)} bought · ${c.plate} · it waits in the ${this.where()}`);
@@ -445,6 +509,7 @@ export class CarRental {
     }
     const back = () => {
       if (!mine || lost || this.save.rental?.plate !== mine.plate || this.current) return; // (another of yours out meanwhile: that one stays)
+      const k = this.kept.find((x) => x.cfg?.plate === mine.plate); if (k && !k.driving) this.remove(k);
       this.current = this.spawn(this.save.rental);
       if (this.current) this.hud?.flash(`Your ${this.label(mine.id)} is repaired · it waits in the ${this.where()}`, 'good', 3600);
     };

@@ -180,13 +180,16 @@ export class Impound {
     } catch (e) { console.warn('rental car park: cars', e); }
   }
 
-  /** Multiplayer: the pose of the free bay nearest the hall (your bay if no other player's car stands in it): every
-   *  player's car used to wait in the very same bay, one over the other. */
-  freeBay() {
-    const mp = this.R.mp;
-    if (!mp?.carNear || !this.byDoor || !this.pose) return null;
-    const b = this.byDoor.find((x) => !this.pound?.includes(x) && (x === this.own || !x.taken) && !mp.carNear(x.x, x.z, 2.5));
-    return b ? this.pose(b) : null;
+  /** The pose of the free bay nearest the hall: your bay unless a car stands in it (another of yours, or in multiplayer
+   *  another player's: every player's car used to wait in the very same bay, one over the other); else the next free
+   *  one. other: never your own bay (your other cars, kept parked: carrental.js spawnKept). Null: none free. */
+  freeBay(other = false) { const b = this.freeBayOf(other); return b ? this.pose(b) : null; }
+  freeBayOf(other = false) {
+    const mp = this.R.mp, cars = this.R.parking?.cars || [];
+    if (!this.byDoor || !this.pose) return null;
+    return this.byDoor.find((x) => !this.pound?.includes(x) && !(other && x === this.own) && (x === this.own || !x.taken)
+      && !cars.some((e) => !e.driving && e.car && Math.hypot(e.car.position.x - x.x, e.car.position.z - x.z) < 2.5)
+      && !mp?.carNear?.(x.x, x.z, 2.5)) || null;
   }
   /** In this car park (anywhere on it)? */
   inLot(x, z, pad = 0.5) {
@@ -309,11 +312,15 @@ export class Impound {
     if (!(dt > 0)) return;
     const R = this.R, e = R.current;
     this.yardHud(e);
+    for (const k of R.kept || []) if (k.impound && this.released(k.impound)) { // (another car of yours, left in the tow yard: free again where it stands)
+      k.impound = null;
+      if (this.save.impound?.plate === (k.cfg?.plate || null)) { this.save.impound = null; R.writeSave?.(); }
+    }
     if (!e) { this.parkHud(null); return; }
     if (e.impound && this.released(e.impound)) { // (its 3 minutes are up: back in your bay)
       e.impound = null;
       if (this.save.impound) { this.save.impound = null; R.writeSave?.(); }
-      if (!e.driving && !e.towing) { this.place(e, this.own); if (R.drive) R.drive._cc = null; }
+      if (!e.driving && !e.towing) { this.place(e, this.freeBayOf() || this.own); if (R.drive) R.drive._cc = null; }
       R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000);
     }
     if (e.wrecked || e.towing || e.impound || !R.player) { e.abandonT = 0; this.parkHud(null); return; }

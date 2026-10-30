@@ -1,7 +1,7 @@
 // Drive the parked cars: E beside one ("Drive BMW X3"), a fade and you are in the driver's seat (your skis on your
 // back); E again at a standstill and you step out by the driver's door, the car stays where you left it.
 //   W throttle · S brake, then reverse · A/D steer · SPACE handbrake · R first person / chase · C look back
-//   H horn · L headlights (on by themselves at night) · E get out (stopped)
+//   H horn · L headlights (on by themselves at night) · E get out (stopped) · U unstuck (slow, every 10 s)
 // A car game on snow: an engine with an automatic gearbox (D/R; the Tesla one gear, instant torque), top speed and
 // pull per car; grip from the surface (ploughed roads and car parks hold, loose snow less, groomed pistes and ice are
 // slippery): under- and oversteer, handbrake slides; a spring per wheel (body roll, pitch under braking and
@@ -18,7 +18,7 @@ import { keysHTML } from '../ui/hud.js';
 import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
 import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot, cabinFill, cabinLight } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
-import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { busRoads, laneDistance, roadAt, ROAD_HALF } from './bus/roads.js';
 import { speedLimitAt } from './bus/speedlimits.js';
 import { TyreTracks } from './tyretracks.js';
 import { addDent, applyDents, repairInstance } from './cardamage.js';
@@ -63,6 +63,12 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const CRASH_V = 70 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
 const EXTREME_V = 150 / 3.6; // ...and this fast: the car's wrecked at once
 const KNOCK_V = 30 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
+// U, unstuck (Oct 30 2026, the user: "sometimes when your car is stuck it moves forward or backward automatically to
+// unstick itself", chose: no moving by itself, an unstuck key instead; R was taken: the camera): under this speed, every
+// UNSTUCK_CD ms, to a clear lane / bay within UNSTUCK_R m; the hint once slow with the pedal down UNSTUCK_HINT s
+const UNSTUCK_V = 5 / 3.6, UNSTUCK_CD = 10000, UNSTUCK_R = 60, UNSTUCK_HINT = 3;
+// at rest off the pedals the collisions may shift the car at most this far (m) from where it settled (step())
+const REST_SLACK = 0.15;
 const RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_SIN = Math.sin(15 * Math.PI / 180); // (Oct 30, the user: "why can i still not break thru the guard rails when i am going faster than 100kph": 80 km/h straight into the rail meant hitting it at over 50 deg at 100 km/h, hardly ever; now over 100 km/h and at 15 deg or more into it: a real hit, not a scrape along it) // (railBreak)
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 && !c.rock ? 'metal' : 'rock') : 'building');
@@ -382,6 +388,13 @@ export class Drive {
         if (performance.now() - (this.flipMsgT || 0) > 2000) { this.flipMsgT = performance.now(); this.hud?.flash('F · Flip car back', 'good', 1900); }
         if (input?.hit?.('KeyF')) this.unflip();
       }
+      // U: unstuck (Oct 30 2026, the user: "add an unstuck key"; R is the camera, so U). The hint only once you've
+      // been slow with the pedal down for ~3 s (stuck); the key works whenever you're slow (unstuck())
+      const slow = this.speed < UNSTUCK_V;
+      const pushing = thr || (d.gear === 'R' && brk); // (the throttle, or S reversing)
+      d.stuckT = d.crash || held || !slow ? 0 : pushing ? (d.stuckT || 0) + dt : Math.max(0, (d.stuckT || 0) - dt * 0.5);
+      if (pushing && d.stuckT > UNSTUCK_HINT && d.flipT <= 1 && performance.now() - (this.stuckMsgT || 0) > 2600) { this.stuckMsgT = performance.now(); this.hud?.flash('U · Unstuck', 'good', 2400); }
+      if (input?.hit?.('KeyU') && !d.crash && !held) this.unstuck();
       // after a crash: the car comes to rest, then you're out beside it
       if (d.crash) { d.crash.t += dt; if (d.crash.t > 1.9 && this.speed < 1.2 && Math.abs(d.crash.rollTo - d.crash.roll) < 0.05) this.wreckOut(); }
     } catch (err) { console.warn('drive', err); try { this.abort(); } catch { this.d = null; } }
@@ -457,6 +470,7 @@ export class Drive {
     const rate = Math.min((steerIn ? 4.2 : 3.6) / (1 + au / 18), Math.max(lock * (steerIn ? 5.1 : 5), steerIn ? 0.32 : 0.35));
     d.steer += clamp(steerIn * lock - d.steer, -rate * dt, rate * dt);
     const delta = d.steer;
+    let held0 = false; // (the car held still this step: hill hold / the brakes at a standstill; the rest anchor below)
     if (!d.air) {
       // loads on the axles: static, plus the weight moving with the acceleration (nose down braking, squat pulling)
       const Wt = m * G * cosT;
@@ -534,8 +548,8 @@ export class Drive {
       // braking to a stop doesn't roll it backwards; parked stays put; and at a standstill off the pedals it holds
       // (hill hold: no creep down a gentle slope, unless the slope is beyond what the tyres can hold)
       if (Fbrake > 0 && Math.sign(u) !== Math.sign(u0) && u0 !== 0) u = 0;
-      if (d.gear === 'P' || (d.gear === 'D' && !thr && brk && Math.abs(u) < 0.3)) { u = 0; v *= 0.5; }
-      if (!thr && !(d.gear === 'R' && brk) && Math.abs(u) < 0.5 && Math.abs(gF) < 0.6 * mu * Wt) { u = 0; v = 0; r = 0; }
+      if (d.gear === 'P' || (d.gear === 'D' && !thr && brk && Math.abs(u) < 0.3)) { u = 0; v *= 0.5; held0 = true; }
+      if (!thr && !(d.gear === 'R' && brk) && Math.abs(u) < 0.5 && Math.abs(gF) < 0.6 * mu * Wt) { u = 0; v = 0; r = 0; held0 = true; }
       // at walking pace the tyres just roll where they point (no slip maths at ~0 speed): turning about the rear
       // axle (the middle swings out b r), forwards or back
       const kd = clamp((Math.abs(u) - 1) / 3, 0, 1);
@@ -579,9 +593,25 @@ export class Drive {
       } else d.gi = 0;
       d.rpm = clamp(Math.max(IDLE + thr * 600, rpmAt(d.gi)), IDLE, REDLINE * rev);
     }
+    // (Oct 30 2026, the user: "sometimes when your car is stuck it moves forward or backward automatically to unstick
+    // itself"): wedged (a tree and a rail, two parked cars, a bank and a wall), the push out of each overlap shoved the
+    // car into the next one; the sideways shares cancelled, the share along its length didn't, and at 120 steps a
+    // second that crept the car out forwards or backwards on its own. Now at rest off the pedals (no throttle in D,
+    // no S in R, held still by the hill hold / the brakes this step) the collisions may move it at most REST_SLACK
+    // from where it settled: a stuck car just sits there until you drive it out (or U, unstuck). Driving (or sliding
+    // down a slope too steep for the tyres) the collisions are as before: no driving through things, the bounces kept
+    const pedal = (d.gear === 'D' && thrKey) || (d.gear === 'R' && brkKey);
+    const rest = held0 && !pedal && !d.air && !d.crash;
+    if (!rest) d.restAt = null;
+    else if (!d.restAt) d.restAt = { x: d.x, z: d.z };
     this.terrainHit(g1);
     this.collide();
     this.bash(dt);
+    const A = this.d === d && rest && !d.crash ? d.restAt : null;
+    if (A) {
+      const ox = d.x - A.x, oz = d.z - A.z, o = Math.hypot(ox, oz);
+      if (o > REST_SLACK) { d.x = A.x + (ox / o) * REST_SLACK; d.z = A.z + (oz / o) * REST_SLACK; d.vx = 0; d.vz = 0; d.yawRate = 0; }
+    }
   }
 
   // into the mountain: the ground ahead rising steeper than ~40 degrees (a rock face, a steep bank; never a road, a
@@ -1063,6 +1093,71 @@ export class Drive {
     }).catch(() => { this.flipping = false; });
   }
 
+  // U: unstuck (Oct 30 2026, the user: "sometimes when your car is stuck it moves forward or backward automatically to
+  // unstick itself", chose "no automatic moving", "an unstuck key" instead): slow (under 5 km/h), not wanted ("Not
+  // while the police are after you": no escaping a chase by it), every 10 s. Behind a short fade: upright on the
+  // nearest clear spot (unstuckSpot), facing along the road / bay, stopped. (Multiplayer: the car's pose goes out
+  // as always, net/carride.js pose())
+  unstuck() {
+    const d = this.d;
+    if (!d || d.crash || this.flipping || this.unsticking) return;
+    const now = performance.now();
+    if (this.isWanted?.()) { this.hud?.flash('Not while the police are after you', 'bad', 1900); return; }
+    if (this.speed >= UNSTUCK_V) { this.hud?.flash('Unstuck: only when stuck (stopped)', 'bad', 1600); return; }
+    const left = UNSTUCK_CD - (now - (this.unstuckT || -1e9));
+    if (left > 0) { this.hud?.flash(`Unstuck again in ${Math.ceil(left / 1000)} s`, 'bad', 1500); return; }
+    this.unsticking = true;
+    this.transition.fade(async () => {
+      try {
+        if (this.d !== d || d.crash) return;
+        const sp = this.unstuckSpot();
+        if (!sp) { this.hud?.flash('No clear spot nearby', 'bad', 1800); return; }
+        this.unstuckT = performance.now();
+        d.x = sp.x; d.z = sp.z; d.yaw = sp.yaw;
+        d.y = this.world.groundHeight(sp.x, sp.z, (sp.y ?? d.y) + 3) + 0.25;
+        d.vx = 0; d.vz = 0; d.vy = 0; d.yawRate = 0; d.air = true; d.steer = 0;
+        d.pitch = 0; d.roll = 0; d.pitchV = 0; d.rollV = 0; d.flipT = 0; d.stuckT = 0; d.restAt = null;
+        d.la = 0; d.lat = 0; d.thrP = 0; d.brkP = 0; d.gear = 'D'; d.gi = 0; d.railT = 0; d.railSlide = 0;
+        this.tyres?.end?.(); // (no tyre strip from where it was)
+        this.cam.ready = false; // (the camera starts afresh behind it)
+        this.hud?.flash('Unstuck', 'good', 1400);
+      } finally { this.unsticking = false; }
+    }).catch(() => { this.unsticking = false; });
+  }
+  // the nearest place the car fits (its box clear of cars, buildings, trees, rails: clearAt along its length): the
+  // right-hand lane of a road (facing the way of the lane nearer the car's heading) or a car-park bay (nose out),
+  // within UNSTUCK_R m; else the nearest flat (under ~11 degrees), clear ground within 30 m, as it faces; else null
+  unstuckSpot() {
+    const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw), R2 = UNSTUCK_R * UNSTUCK_R;
+    const r = d.w / 2 + 0.15, k = Math.max(0, d.half - r);
+    const fits = (x, z, yaw) => { const ax = Math.sin(yaw), az = Math.cos(yaw); for (const t of [k, 0, -k]) if (!this.clearAt(x + ax * t, z + az * t, r, d.e)) return false; return true; };
+    const cands = [], q = {};
+    for (const rd of busRoads.roads) for (let i = 0; i < rd.n; i++) {
+      const dx = rd.X[i] - d.x, dz = rd.Z[i] - d.z, d2 = dx * dx + dz * dz;
+      if (d2 > R2) continue;
+      roadAt(rd, rd.S[i], q);
+      let hx = q.dx, hz = q.dz;
+      if (hx * fx + hz * fz < 0) { hx = -hx; hz = -hz; }
+      const x = q.x - hz * 1.6, z = q.z + hx * 1.6; // (the right-hand lane, as the traffic keeps: traffic.js LANE)
+      cands.push({ x, z, y: q.y, yaw: Math.atan2(hx, hz), d2: (x - d.x) ** 2 + (z - d.z) ** 2 });
+    }
+    for (const L of busRoads.lots) {
+      if (L.impound || L.building || !L.bays?.length || (L.x - d.x) ** 2 + (L.z - d.z) ** 2 > (UNSTUCK_R + 40) ** 2) continue; // (never into the impound's pound / the Autohaus's own bays)
+      for (const b of L.bays) { const d2 = (b.x - d.x) ** 2 + (b.z - d.z) ** 2; if (d2 <= R2 && !b.taken) cands.push({ x: b.x, z: b.z, y: null, yaw: Math.atan2(b.hx, b.hz), d2 }); }
+    }
+    cands.sort((a, b) => a.d2 - b.d2);
+    let tries = 0;
+    for (const c of cands) { if (fits(c.x, c.z, c.yaw)) return c; if (++tries > 160) break; }
+    // no road or car park near: flat, clear ground, rings out from the car
+    const W = this.world, e = 1.4;
+    for (let rr = 3; rr <= 30; rr += 3) for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2, x = d.x + Math.sin(a) * rr, z = d.z + Math.cos(a) * rr, h = W.groundHeight(x, z, d.y + 3);
+      const gx = (W.groundHeight(x + e, z, h + 1) - W.groundHeight(x - e, z, h + 1)) / (2 * e), gz = (W.groundHeight(x, z + e, h + 1) - W.groundHeight(x, z - e, h + 1)) / (2 * e);
+      if (Math.hypot(gx, gz) < 0.2 && fits(x, z, d.yaw)) return { x, z, y: h, yaw: d.yaw };
+    }
+    return null;
+  }
+
   // ------------------------------------------------------------------ crashes
   // a dent where it hit (n: from what you hit toward the car, world): into the car's frame (cardamage.js)
   dent(nx, nz, hard) {
@@ -1266,7 +1361,7 @@ export class Drive {
       const el = document.createElement('div');
       el.id = 'drive-hud';
       el.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-      const rows = [[['W'], 'Throttle'], [['S'], 'Brake · reverse'], [['A', 'D'], 'Steer'], [['SPACE'], 'Handbrake'], [['R'], 'Camera · inside / chase'], [['C'], 'Look back'], [['H'], 'Horn'], [['L'], 'Headlights'], [['E'], 'Get out (stopped)']];
+      const rows = [[['W'], 'Throttle'], [['S'], 'Brake · reverse'], [['A', 'D'], 'Steer'], [['SPACE'], 'Handbrake'], [['R'], 'Camera · inside / chase'], [['C'], 'Look back'], [['H'], 'Horn'], [['L'], 'Headlights'], [['E'], 'Get out (stopped)'], [['U'], 'Unstuck (stuck, slow)']];
       el.innerHTML = `<div class="ch-card paper"><div class="ch-head">CAR</div>${rows.map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${keysHTML(k)}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
       (document.getElementById('hud') || document.body).appendChild(el);
       this.cardEl = el;

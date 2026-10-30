@@ -30,7 +30,7 @@ import { LivePortal } from './liveportal.js';
 import { isMP, MP } from '../net/mode.js';
 import { ST, fallFlags } from '../net/protocol.js';
 
-export const STAY_S = 45; // the recovery (game seconds in bed before you may get up)
+export const STAY_S = 10; // the recovery (game seconds in bed before you may get up; Oct 30, the user: "only need to rest 10 sec")
 export const INTERIOR_ID = 'hospital';
 const EYE = 1.62, R = 0.26, UP = new THREE.Vector3(0, 1, 0);
 // the inside of the walls (the house is 15 x 12 m outside, its walls 0.2 m thick), the ceiling

@@ -236,10 +236,15 @@ export class RemoteVehicles {
     const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed && !c.ghost;
     c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
-    g.position.set(c.x, c.y, c.z);
-    _e.set(c.pitch || 0, c.yaw, c.roll || 0, 'YXZ');
-    g.quaternion.setFromEuler(_e);
-    if (bed?.posed) g.quaternion.copy(bed.g.quaternion); // (pitched and rolled with the truck)
+    if (bed?.posed) {
+      g.position.set(c.x, c.y, c.z);
+      g.quaternion.copy(bed.g.quaternion); // (pitched and rolled with the truck)
+    } else {
+      this.settleCar(c, dt, driving);
+      g.position.set(c.x, c.dy, c.z);
+      _e.set(c.dp, c.yaw, c.dr, 'YXZ');
+      g.quaternion.setFromEuler(_e);
+    }
     g.updateMatrixWorld(true); // (the seats are read from it this frame)
     if (!show) return;
     for (const w of c.inst.wheels) {
@@ -254,6 +259,50 @@ export class RemoteVehicles {
     // the owner's name over it while nobody drives it (Oct 29, the user: "everything you own has your name above if
     // you are not in it")
     if (driving) { if (c.tag.visible) c.tag.visible = false; } else tagScale(c.tag, d);
+  }
+
+  // On the ground as it is HERE (Oct 30, the user: "for other people, in some cars it looks like the car is floating in
+  // the air ... super high"): the y that came in (the owner's car origin: their presence row while they drive, the
+  // parked 'at') was drawn as it was, with no pitch while driving, so anything that made it disagree with this
+  // screen's ground floated the car: an 'at' sent before the car settled (only a move of 0.5 m sends a new one), a lot
+  // / deck / slab one client has and the other not, a slope (no pitch sent: one end in the air). Now an upright car
+  // stands on this screen's ground (groundHeight, the received y as the hint: a bridge or deck at its level counts),
+  // pitched and rolled by the ground under its four wheels; the received y only for a jump (well above the ground for
+  // a moment, < 1.2 s) and for a wreck lying on its side or roof (its origin up off the ground, kept within reach of it).
+  // Draws into c.dy / c.dp / c.dr (c.y / c.pitch / c.roll stay what came in).
+  settleCar(c, dt, driving) {
+    const t = c.t, S = t.size, len = S?.z || 4.6, wb = Math.max(2.4, len * 0.6) / 2, tr = Math.max(0.5, (S?.x || 1.9) / 2 - 0.15);
+    const lying = c.wreck || Math.abs(c.pitch || 0) > 0.35 || Math.abs(c.roll || 0) > 0.35;
+    const first = c.dy === undefined;
+    // (parked: the ground there checked twice a second, not every frame)
+    if (!driving && !first && c.setRef === c.atRef && (c.setT -= dt) > 0) return;
+    c.setRef = c.atRef; c.setT = 0.5;
+    const yaw = c.yaw, fx = Math.sin(yaw), fz = Math.cos(yaw), lx = fz, lz = -fx, hint = c.y + 1;
+    const H = (f, l) => world.groundHeight(c.x + fx * f + lx * l, c.z + fz * f + lz * l, hint);
+    const hFL = H(wb, tr), hFR = H(wb, -tr), hRL = H(-wb, tr), hRR = H(-wb, -tr);
+    let ground = (hFL + hFR + hRL + hRR) / 4;
+    if (!Number.isFinite(ground)) ground = c.y;
+    const pitchG = Math.max(-0.6, Math.min(0.6, Math.atan2((hRL + hRR) / 2 - (hFL + hFR) / 2, wb * 2)));
+    const rollG = Math.max(-0.6, Math.min(0.6, Math.atan2((hFL + hRL) / 2 - (hFR + hRR) / 2, tr * 2)));
+    let y, p, r;
+    if (lying) {
+      // (a wreck: as it lies on their screen, its origin no higher above this ground than the car is big)
+      y = Math.max(ground - 0.2, Math.min(ground + Math.max(S?.x || 1.9, S?.y || 1.5) + 0.3, c.y)); p = c.pitch || 0; r = c.roll || 0;
+      c.airT = 0;
+    } else {
+      const off = c.y - ground;
+      if (driving && off > 0.6) c.airT = (c.airT || 0) + dt; else c.airT = 0;
+      const jump = c.airT > 0 && c.airT < 1.2;
+      y = jump ? c.y : ground + (driving ? 0.02 : 0.03);
+      // (driving: the roll that came in is the body's own, ground and bend lean; the pitch from the ground here)
+      p = jump ? (c.dp ?? 0) : pitchG; r = driving ? (c.roll || 0) : rollG;
+    }
+    if (first || !driving) { c.dy = y; c.dp = p; c.dr = r; return; }
+    // (driving: eased, so a jump's landing or a kerb is a quick settle, not a step)
+    const k = 1 - Math.exp(-dt * 14), kr = 1 - Math.exp(-dt * 10);
+    c.dy += (y - c.dy) * k;
+    if (Math.abs(y - c.dy) > 3) c.dy = y;
+    c.dp += (p - c.dp) * kr; c.dr += (r - c.dr) * kr;
   }
 
   // ---------------------------------------------------------------- tow trucks

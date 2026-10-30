@@ -263,7 +263,9 @@ export class RemoteVehicles {
     // drawn in the nearest free bay of that lot (unstack) and solid there; the latch is left for a spot with no lot)
     const mp = !driving && c.posed ? this.o.localCar?.()?.group?.position : null, dm = mp ? Math.hypot(mp.x - c.x, mp.z - c.z) : Infinity;
     if (dm < 2) c.ghost = true; else if (dm > 5.5) c.ghost = false;
-    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed && !away && !c.ghost;
+    // (Oct 30 2026, the user: "there are still some invisible things at the parking lot": solid only while it is drawn,
+    // exactly where it is drawn (unstack's bay too); never a box where no car shows)
+    const solid = show && this.o.ridingPid?.() !== r.pid && !bed?.posed && !c.ghost;
     c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
     if (bed?.posed) {

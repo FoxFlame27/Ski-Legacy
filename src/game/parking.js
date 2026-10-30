@@ -234,6 +234,7 @@ export class ParkingLots {
     const inst = carInstance(carTemplate(gltf, length, name), { paint }), car = inst.group; // (shared, merged per material, glass tinted)
     try { setPlates(inst, carTemplate(gltf, length, name)); } catch { /* (no plate spots on this model) */ }
     car.name = 'parked-car';
+    car.userData.noSolid = true; // (Oct 30 2026, the user: "there are still some invisible things at the parking lot where all your cars spawn ... I think it's an invisible car": world/solidify.js boxed in every car standing in the car parks' group whose collider it did not know of yet (a car put in a bay after its pass began: joining multiplayer, putBack, spawnKept, MY CARS) or whose collider was off (the one you drove off in): car-shaped boxes left standing in the bay once the car had gone. A car is never a prop: its own collider moves and goes with it)
     const yaw = Math.atan2(bay.hx, bay.hz) + (noseIn ? Math.PI : 0); // (backed in: nose out to the aisle; or driven in nose first)
     car.position.set(bay.x, world.height(bay.x, bay.z) + 0.03, bay.z);
     car.rotation.y = yaw;

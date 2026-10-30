@@ -326,6 +326,7 @@ export class CarRental {
     if (p === this.carSpot) p = this.impound?.freeBay?.() || this.yardSpot() || p; // (a bay no other car stands in: another of yours, another player's; none left: the yard's bays in front of the hall)
     const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group;
     car.name = 'rental-car';
+    car.userData.noSolid = true; // (Oct 30 2026, the user: "there are still some invisible things at the parking lot where all your cars spawn ... I think it's an invisible car": world/solidify.js boxed in every car standing in the car parks' group whose collider it did not know of yet (a car put in a bay after its pass began: joining multiplayer, putBack, spawnKept, MY CARS) or whose collider was off (the one you drove off in): car-shaped boxes left standing in the bay once the car had gone. A car is never a prop: its own collider moves and goes with it)
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;
     (this.parking.group.parent ? this.parking.group : this.scene).add(car);
     const collider = { x: p.x, z: p.z, hw: 0.97, hd: spec.length / 2, rot: -p.yaw, h: 1.7, car: true };

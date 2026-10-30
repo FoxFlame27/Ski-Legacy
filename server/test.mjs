@@ -265,6 +265,24 @@ try {
   const drv = await a.req('seatClaim', { k: 'car', v: 'Alice' });
   const pas = await b.req('seatClaim', { k: 'car', v: 'Alice' });
   ok(drv.ok && drv.d.seat === 0 && pas.ok && pas.d.seat === 1, 'allowed: Alice drives (seat 0), Bob is the front passenger (seat 1)');
+  { // a full car refuses: Alice's car a two-seater (the Huracan: one passenger seat, Bob's), whatever n the client sends
+    const ac = server.onlineByKey('alice'), pa = server.profileOf('alice'), cars0 = pa.cars, veh0 = ac.vehs.car;
+    const car0 = { id: 'car_lamborghini_huracan' };
+    pa.cars = [car0]; ac.vehs.car = null;
+    const cz = new Fake(url); await cz.open();
+    const rz = await cz.req('register', { name: 'Hitcher' }); await cz.req('login', { v: PROTO, name: 'Hitcher', token: rz.d.token });
+    const pz = cz.req('perm', { kind: 'carRide', to: 'Alice' });
+    const az = await a.next('permAsk', (d) => d.kind === 'carRide' && d.from === 'Hitcher');
+    await a.req('permAnswer', { rid: az.rid, allow: true }); await pz;
+    const fz = await cz.req('seatClaim', { k: 'car', v: 'Alice', n: 7 });
+    ok(!fz.ok && fz.err === 'full' && fz.d.n === 2 && fz.d.taken === 2, 'a full car (a two-seater, Bob in its passenger seat): a third player is refused (full 2/2), n: 7 or not');
+    car0.id = 'car_mercedes_gls';
+    const gz = await cz.req('seatClaim', { k: 'car', v: 'Alice', n: 7 });
+    ok(gz.ok && gz.d.seat === 2 && gz.d.n === 5, 'the Mercedes GLS: 5 seats in all, not 7 (the client\'s n capped by the model)');
+    pa.cars = cars0; ac.vehs.car = veh0;
+    await cz.req('seatRelease'); cz.close();
+    await a.next('leave', (d) => d.name === 'Hitcher');
+  }
   await a.req('seatRelease'); await b.req('seatRelease');
   // single use: every boarding / every visit needs a new yes
   const noSeat2 = await b.req('seatClaim', { k: 'car', v: 'Alice' });
@@ -1009,6 +1027,63 @@ try {
     const re = await g3.req('login', { v: PROTO, name: 'Host Hal', token: r1.d.token });
     ok(re.ok && re.d.resumed && Array.isArray(re.d.guests) && re.d.guests.includes('Guest Gil'), 'a resumed login carries the chalet guest list (the guests are still allowed in)');
     g2.close(); g3.close();
+    await sleep(100);
+  }
+
+  // ---------------------------------------------------------------- a police chase carries on after a rejoin
+  console.log('wanted');
+  {
+    const wa = await a.req('profileSet', { key: 'wanted', value: { h: 3.4, e: 12.6, t: 95, f: true, why: 'traffic' } });
+    ok(wa.ok && JSON.stringify(server.profileOf('alice').wanted) === JSON.stringify({ h: 3.4, e: 13, t: 95, f: true, why: 'traffic' }), 'profileSet wanted: the chase is kept in the profile');
+    const wb = await a.req('profileSet', { key: 'wanted', value: { h: 9, e: 0, t: 0 } });
+    const wc = await a.req('profileSet', { key: 'wanted', value: { h: 2, e: -1, t: 0 } });
+    ok(!wb.ok && wb.err === 'bad_value' && !wc.ok && server.profileOf('alice').wanted.h === 3.4, 'profileSet wanted: out-of-range stars / escape time refused');
+    const pr = await a.req('profile');
+    ok(pr.ok && pr.d.profile.wanted?.h === 3.4, 'the chase comes back with the profile (login)');
+    const wn = await a.req('profileSet', { key: 'wanted', value: null });
+    ok(wn.ok && !('wanted' in server.profileOf('alice')), 'profileSet wanted null: the chase is over');
+  }
+
+  // ---------------------------------------------------------------- arrested with a wanted driver: the passengers too
+  console.log('accomplices');
+  {
+    const dn = new Fake(url), pm = new Fake(url), be = new Fake(url);
+    await dn.open(); await pm.open(); await be.open();
+    const rd = await dn.req('register', { name: 'Driver Dan' }), rp = await pm.req('register', { name: 'Passenger Pam' }), rbe = await be.req('register', { name: 'Bystander Bea' });
+    await dn.req('login', { v: PROTO, name: 'Driver Dan', token: rd.d.token });
+    await pm.req('login', { v: PROTO, name: 'Passenger Pam', token: rp.d.token });
+    await be.req('login', { v: PROTO, name: 'Bystander Bea', token: rbe.d.token });
+    const early = await dn.req('policeArrest', { seconds: 90 });
+    ok(!early.ok && early.err === 'not_jailed', 'policeArrest: refused while the driver is not in prison himself');
+    const rideP = pm.req('perm', { kind: 'carRide', to: 'Driver Dan' });
+    const ask = await dn.next('permAsk', (d) => d.kind === 'carRide');
+    await dn.req('permAnswer', { rid: ask.rid, allow: true });
+    await rideP;
+    const seat = await pm.req('seatClaim', { k: 'car', v: 'Driver Dan' });
+    ok(seat.ok && seat.d.seat === 1, 'Pam rides in Dan\'s car (seat 1)');
+    await dn.req('jail', { seconds: 90, reason: 'fleeing the police' });
+    const arr = await dn.req('policeArrest', { seconds: 90 });
+    ok(arr.ok && arr.d.passengers.length === 1 && arr.d.passengers[0] === 'Passenger Pam', 'policeArrest: the server arrests the passengers in its own seat registry');
+    const got = await pm.next('arrested');
+    const Pp = server.profileOf('passenger pam');
+    ok(got && got.by === 'Driver Dan' && got.seconds === 90 && got.fine === 1500 && got.jailUntil > Date.now() + 80000, 'Pam is told: arrested with Driver Dan, 90 s, $1,500 fine');
+    ok(Pp.money === 500 - 1500 && Pp.jailUntil === got.jailUntil, 'Pam is charged the accomplice fine (into debt) and her sentence is the server\'s');
+    const pmoney = await pm.next('money', (d) => d.why === 'accomplice');
+    ok(pmoney && pmoney.v === -1000 && pmoney.delta === -1500, 'Pam\'s client gets the new money');
+    ok(server.onlineByKey('passenger pam').seat === null && !server.hasGrant('carRide', 'driver dan', 'passenger pam'), 'Pam is out of the car (seat released, ride used up)');
+    await sleep(50);
+    const Pb = server.profileOf('bystander bea');
+    ok(!be.events.some((m) => m.t === 'arrested') && Pb.money === 500 && !Pb.jailUntil, 'a player not in the car is untouched');
+    // spam: in again at once, a second arrest within the cooldown does nothing
+    const rideP2 = pm.req('perm', { kind: 'carRide', to: 'Driver Dan' });
+    const ask2 = await dn.next('permAsk', (d) => d.kind === 'carRide');
+    await dn.req('permAnswer', { rid: ask2.rid, allow: true });
+    await rideP2;
+    await pm.req('seatClaim', { k: 'car', v: 'Driver Dan' });
+    const again = await dn.req('policeArrest', { seconds: 90 });
+    await sleep(50);
+    ok(!again.ok && again.err === 'cooldown' && !pm.events.some((m) => m.t === 'arrested') && Pp.money === -1000 && server.onlineByKey('passenger pam').seat?.v === 'Driver Dan', 'a second policeArrest within the cooldown is refused (Pam stays seated, not charged again)');
+    dn.close(); pm.close(); be.close();
     await sleep(100);
   }
 

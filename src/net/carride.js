@@ -13,11 +13,11 @@
 import * as THREE from 'three';
 import { MP } from './mode.js';
 import { net } from './client.js';
-import { ST, F } from './protocol.js';
+import { ST, F, W_SHIFT } from './protocol.js';
 import { makeTag } from './remote.js';
 
 const OWN_TAG_OFF = true;
-import { carSeats, seatWorld } from './vehicles.js';
+import { carSeats, seatWorld, parseVeh } from './vehicles.js';
 import { busRoads } from '../game/bus/roads.js';
 
 const ASK_REACH = 2.2;  // m from the car's body
@@ -35,6 +35,7 @@ export class CarRide {
     this.v = { cur: undefined, driving: false, x: 0, z: 0, t: 0 }; // what the server was last told about your car
     this.tag = null;
     this.placed = false;  // your car put back where you left it (once per session)
+    this.wanted = null;   // riding with a wanted driver: { owner, stars, search, arrest } (police.js rideW: the WANTED box)
   }
   get g() { return window.__game; }
 
@@ -64,7 +65,7 @@ export class CarRide {
       // (lean: the body's roll, rolling over in a crash too: the others turn the car as it is here; x/y/z is then the
       // origin of the car as it lies, not its middle)
       o.st = ST.drive; o.crouch = d.steer || 0; o.lean = (d.roll || 0) + (d.crash?.roll || 0);
-      o.flags = F.car | (d.lights ? F.lights : 0) | (d.crash ? F.wreck : 0);
+      o.flags = F.car | (d.lights ? F.lights : 0) | (d.crash ? F.wreck : 0) | (g.police?.wantedBits?.() || 0); // (wanted: your passengers see it)
     } else if (this.ride) { o.st = ST.ride; o.crouch = 0; o.lean = 0; o.flags = 0; o.vx = 0; o.vy = 0; o.vz = 0; }
   }
 
@@ -104,6 +105,38 @@ export class CarRide {
     this.ownerTag(cur, driving);
     // riding: something else took you out of the seat (a race start, a teleport): the server lets you go too
     if (this.ride && g.player.seat !== this.seat) this.end(false);
+    this.wantedFrame(g);
+  }
+
+  // Riding with a wanted driver (the stars in their presence flags, police.js wantedBits): the WANTED box for you too,
+  // read-only, and the chase music (police.js rideHud); a flash when it starts (Oct 30, the user: "can you tell
+  // passengers wanted too"). Arrested, you go to prison with them (onArrested).
+  wantedFrame(g) {
+    const r = this.ride && this.mp.remotes?.players.get(this.ride.pid);
+    const f = r && r.flags & F.car ? r.flags : 0, stars = (f & F.wanted) >>> W_SHIFT;
+    const was = this.wanted;
+    if (!stars) { if (was) { this.wanted = null; if (g.police) g.police.rideW = null; } return; }
+    const W = this.wanted ||= { owner: '', stars: 0, search: false, arrest: false };
+    W.owner = this.ride.owner; W.stars = stars; W.search = !!(f & F.wSearch); W.arrest = !!(f & F.wArrest);
+    if (g.police) g.police.rideW = W;
+    if (!was) g.hud?.flash(`WANTED · you're riding with ${W.owner} · caught, you go to prison too`, 'bad', 4200);
+  }
+
+  /** The police arrested the driver of the car you ride in (server 'arrested'): out of the car, into a cell. */
+  onArrested(d) {
+    const g = this.g;
+    if (!g || !d) return;
+    if (this.ride) this.end(true, false); // (the server already took your seat)
+    if (this.wanted) { this.wanted = null; if (g.police) g.police.rideW = null; }
+    const by = String(d.by || 'the driver').slice(0, 24), fine = Number(d.fine) || 0;
+    if (fine > 0) { g.hud?.setMoney?.(g.save.money, -fine); g.audio?.play?.('cash'); }
+    const msg = `Arrested with ${by} · you were in the car${fine > 0 ? ` · -$${Math.round(fine).toLocaleString('en-US')}` : ''}`;
+    const pr = g.prison;
+    if (pr?.jail && Number.isFinite(d.jailUntil)) {
+      if (MP.profile) { MP.profile.jailUntil = d.jailUntil; MP.profile.jailReason = d.reason; }
+      try { pr.jail(d.seconds, d.reason || `Arrested with ${by}`, { until: d.jailUntil }); } catch (e) { console.warn('[mp] arrested: prison', e); }
+    }
+    g.hud?.flash(msg, 'bad', 5000);
   }
 
   // Back in the world: your car where you left it (profile cars[0].at, the server keeps it) if that spot is free, else
@@ -164,12 +197,27 @@ export class CarRide {
     }
     const owner = best && rem.players.get(best.pid);
     if (!owner) return null;
-    if (this.prompt.pid !== best.pid) {
-      this.prompt.pid = best.pid;
-      this.prompt.label = `Ask ${owner.name} for a ride`;
-      this.prompt.act = () => this.ask(owner.name, best.pid);
+    // every passenger seat taken (Oct 30, the user: "no option at all to ask to join a car, it just says car full"):
+    // no ask, just "<owner>'s car · full"
+    const full = this.riders(owner.name, rem) >= carSeats(best.t).length - 1;
+    if (this.prompt.pid !== best.pid || this.prompt.full !== full) {
+      this.prompt.pid = best.pid; this.prompt.full = full;
+      this.prompt.label = full ? `${owner.name}'s car · full` : `Ask ${owner.name} for a ride`;
+      this.prompt.act = full ? () => this.g.hud.flash(`${owner.name}'s car is full`, 'bad', 2000) : () => this.ask(owner.name, best.pid);
     }
     return this.prompt;
+  }
+
+  /** The passengers in <owner>'s car: the server's seat registry ('seats' broadcasts), or the players whose presence
+   *  has them in its passenger seats, whichever counts more. */
+  riders(owner, rem) {
+    let reg = 0, pres = 0;
+    for (const [s] of this.mp.seatsOf('car', owner)) if (s !== 0) reg++;
+    for (const r of rem?.players.values() || []) {
+      parseVeh(r);
+      if (r.vehK === 'car' && r.vehOwner === owner && r.vehSeat > 0) pres++;
+    }
+    return Math.max(reg, pres);
   }
 
   async ask(owner, pid) {
@@ -182,6 +230,7 @@ export class CarRide {
       if (!r?.allow) { if (!r?.error) hud.flash(r?.reason === 'timeout' ? `${owner} did not answer` : `${owner} said no`, 'bad', 2600); return; }
       const c = this.mp.vehicles?.carOf(pid);
       if (!c) { hud.flash(`${owner}'s car is gone`, 'bad', 2200); return; }
+      if (this.riders(owner, this.mp.remotes) >= carSeats(c.t).length - 1) { hud.flash(`${owner}'s car is full`, 'bad', 2200); return; } // (filled up meanwhile)
       const s = await this.mp.claimSeat('car', owner, { n: carSeats(c.t).length });
       if (!s) return;
       if (!this.board(owner, pid, s.seat)) this.mp.releaseSeat();
@@ -238,6 +287,7 @@ export class CarRide {
     const r = this.ride;
     if (!r) return;
     this.ride = null;
+    if (this.wanted) { this.wanted = null; if (this.g?.police) this.g.police.rideW = null; }
     if (release) this.mp.releaseSeat();
     const g = this.g, p = g?.player;
     if (!p) return;

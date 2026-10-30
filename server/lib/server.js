@@ -47,7 +47,10 @@ const NAME_RE = /^[A-Za-z0-9_ -]{3,16}$/;
 // seats per vehicle kind at most; the client sends its vehicle's real seat count as n (Oct 30: every seat of every
 // coupled car of a train: Wolkenspitzbahn and Legacy Express 4 cars x 48 = 192, a ski bus 36, a gondola cabin 6, a
 // chair up to 6) and that is the vehicle's capacity: the lowest free one is assigned, one more is refused ('full')
-export const SEAT_CAPS = { bus: 48, train: 256, express: 256, gondola: 8, chair: 6, heli: 4, car: 7, sled: 2 };
+export const SEAT_CAPS = { bus: 48, train: 256, express: 256, gondola: 8, chair: 6, heli: 4, car: 5, sled: 2 };
+// a player's car: its seats in all (the driver's too) per model, as in real life (src/net/vehicles.js carSeats); not
+// listed: 5. Oct 30, the user: "the Mercedes GLS is a 5 seater not a 7 seater"
+export const CAR_SEATS = { car_mercedes_sls: 2, car_lamborghini_huracan: 2 };
 // presence state enum (client src/net/protocol.js mirrors this)
 export const STATE = { walk: 0, ski: 1, drive: 2, ride: 3, sit: 4, fly: 5, fall: 6 };
 // weather (world/sky.js NEXT): the world's weather moves on every 80-180 s
@@ -69,6 +72,11 @@ export const nameKey = (s) => normName(s).toLowerCase();
 export const validName = (s) => NAME_RE.test(s) && /[A-Za-z0-9]/.test(s);
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const JAIL_MAX_S = 300, JAIL_SLACK = 3000; // (the longest sentence; the client's clock estimate may run a little ahead)
+// riding in a wanted driver's car when the police arrest them (Oct 30, the user: "if a passenger is with a wanted person in
+// a car they both go in prison if caught"): every passenger the seat registry has in the driver's car is jailed for the
+// driver's sentence and fined the accomplice fine (half the police's base $3,000 arrest fine: game/police.js arrestFine);
+// one such arrest per driver per ARREST_COOLDOWN_MS
+export const ACCOMPLICE_FINE = 1500, ACCOMPLICE_JAIL_S = 90, ARREST_COOLDOWN_MS = 60 * 1000;
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
 // the vehicle kinds 'veh' accepts (setVeh); /health lists them, so a redeploy can be checked from outside
@@ -208,7 +216,7 @@ class World {
     if (!SEAT_CAPS[k]) return { err: 'bad_vehicle' };
     v = str(v, 48);
     if (!v) return { err: 'bad_vehicle' };
-    const cap = clamp(isInt(n) ? n : SEAT_CAPS[k], 1, SEAT_CAPS[k]);
+    let cap = clamp(isInt(n) ? n : SEAT_CAPS[k], 1, SEAT_CAPS[k]);
     let first = 0;
     if (k === 'car') {
       // a player's car: vehicle id = the owner's name. Seat 0 (driver) is the owner's; anyone else needs the
@@ -216,6 +224,9 @@ class World {
       const owner = this.server.onlineByKey(nameKey(v));
       if (!owner || owner.world !== this) return { err: 'owner_away' };
       v = owner.name;
+      // no more seats than the owner's car has (its model: the car shown, else the profile's): a full car refuses
+      const model = owner.vehs?.car?.cfg?.id || owner.profile?.cars?.[0]?.id;
+      if (model) cap = Math.min(cap, CAR_SEATS[model] || SEAT_CAPS.car);
       if (owner !== c) {
         if (!this.server.hasGrant('carRide', owner.key, c.key)) return { err: 'no_permission' };
         first = 1;
@@ -942,6 +953,7 @@ export class GameServer {
       }
       case 'enter': return reply(this.enter(c, d));
       case 'jail': return reply(this.jail(c, d));
+      case 'policeArrest': return reply(this.policeArrest(c, d));
       case 'seatClaim': return reply(w.claimSeat(c, d));
       case 'seatRelease': w.releaseSeat(c); return reply({});
       case 'skip': return reply(w.skip(c, d));
@@ -1247,6 +1259,37 @@ export class GameServer {
     return { d: { jailUntil: P.jailUntil, reason, now } };
   }
 
+  /** The police arrested you in your car (police.js arrest(), after your own 'jail'): your passengers go to prison too.
+   *  Only the players the server's own seat registry has in your car's passenger seats; you must be serving a sentence
+   *  yourself; once per ARREST_COOLDOWN_MS. Each passenger: out of the car, jailed (as long as you, at most), charged
+   *  ACCOMPLICE_FINE (a game charge: into debt down to DEBT_FLOOR), told 'arrested'. */
+  policeArrest(c, d) {
+    const w = c.world, now = Date.now(), P = c.profile;
+    if (now - (c.arrestAt || 0) < ARREST_COOLDOWN_MS) return { err: 'cooldown' };
+    if (!(P.jailUntil > now)) return { err: 'not_jailed' };
+    c.arrestAt = now;
+    const left = Math.max(1, Math.round((P.jailUntil - now) / 1000));
+    const seconds = Math.min(left, clamp(isNum(d?.seconds) ? Math.round(d.seconds) : ACCOMPLICE_JAIL_S, 1, JAIL_MAX_S));
+    const reason = `Arrested with ${c.name}`;
+    const m = w.seats.get(`car|${c.name}`), names = [];
+    for (const [s, pid] of m ? [...m.entries()] : []) {
+      const g = w.players.get(pid);
+      if (s === 0 || !g || g === c || g.seat?.k !== 'car' || g.seat.v !== c.name) continue;
+      w.releaseSeat(g);
+      const G = g.profile;
+      G.jailUntil = Math.min(now + JAIL_MAX_S * 1000, Math.max(G.jailUntil || 0, now + seconds * 1000));
+      G.jailReason = reason;
+      const fine = Math.max(0, Math.min(ACCOMPLICE_FINE, Math.floor(G.money - DEBT_FLOOR)));
+      if (fine) this.debit(g, fine, 'accomplice', DEBT_FLOOR);
+      this.store.profiles.save();
+      g.send('money', { v: G.money, why: 'accomplice', delta: -fine });
+      g.send('arrested', { by: c.name, seconds, fine, jailUntil: G.jailUntil, reason, now });
+      names.push(g.name);
+      this.log(`[jail] ${g.name}: ${seconds} s, ${reason}, -$${fine}`);
+    }
+    return { d: { passengers: names } };
+  }
+
   permRequest(c, d, reqId) {
     const kind = d.kind;
     if (kind !== 'carRide' && kind !== 'chaletVisit') return c.res(reqId, false, null, 'bad_kind');
@@ -1465,6 +1508,12 @@ export class GameServer {
         if (v.hospital != null && !(isNum(v.hospital?.until) && v.hospital.until > 0)) return { err: 'bad_value' };
         P.pos = { x: v.x, z: v.z, y: v.y, h: v.h, skis: !!v.skis };
         if (v.hospital != null) P.pos.hospital = { until: Math.min(Math.round(v.hospital.until), Date.now() + 600000) }; // (10 min ahead at most)
+        break;
+      }
+      case 'wanted': { // a police chase under way (game/police.js persist): it carries on at your next login (Oct 30)
+        if (v === null) { delete P.wanted; break; }
+        if (!v || typeof v !== 'object' || !isNum(v.h) || v.h < 1 || v.h >= 6 || !isNum(v.e) || v.e < 0 || v.e > 600 || !isNum(v.t) || v.t < 0 || v.t > 86400) return { err: 'bad_value' };
+        P.wanted = { h: Math.round(v.h * 100) / 100, e: Math.round(v.e), t: Math.round(v.t), f: !!v.f, why: (str(v.why, 16) ?? '').replace(/[^\w-]/g, '') || 'resume' };
         break;
       }
       default: return { err: 'bad_key' };

@@ -38,7 +38,7 @@ const PASSENGER = new THREE.Vector3(-ANCHORS.seat.x, ANCHORS.seat.y, ANCHORS.sea
 const _door = new THREE.Vector3();
 
 /** The seat points of a car template in the car's frame (+x the driver's side, +z forward): 0 the driver, 1 the front
- *  passenger, 2.. the back (outboard behind the driver, behind the passenger, the middle; a third row: then those).
+ *  passenger, 2.. the back (outboard behind the driver, behind the passenger, the middle): 5 in a five-seater, 2 in a two-seater.
  *  A seat point is where a seated rig's seat goes (its hip 0.1 m above), as drive.js seats you (carpeople.js SEATS). */
 export function carSeats(t) {
   if (!t) return null;
@@ -54,7 +54,6 @@ export function carSeats(t) {
     if (S.r) {
       const r = S.r.slice(1);
       out.push(pt(S.r[0], r), pt(-S.r[0], r), pt(0, r));
-      if (S.r3) { const r3 = S.r3.slice(1); out.push(pt(S.r3[0], r3), pt(-S.r3[0], r3)); }
     }
   } else { // (no seat hints: by the driver's eye, as carpeople.js fillByEye)
     const E = driverEye(t), y = E.y - 0.78, z = E.z - 0.04;

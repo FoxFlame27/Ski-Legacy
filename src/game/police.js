@@ -61,7 +61,7 @@ import { makeFallbackFigure } from './jobs/props.js';
 import { resetRig } from './jobs/actors.js';
 import { net } from '../net/client.js';
 import { isMP } from '../net/mode.js';
-import { ST } from '../net/protocol.js';
+import { ST, F, W_SHIFT } from '../net/protocol.js';
 import { presentation } from './presentation/index.js';
 import { HeliModel } from './heli/model.js';
 import { nightUniform } from '../world/village.js';
@@ -693,6 +693,13 @@ export class Police {
     this.w = null;        // the chase: { t, esc, fleeing, reached, grace, stopT, scene, why, heat, search, seen, lkp, rb, flats, ... } (start())
     this.cool = 0;
     this.time = 0;
+    // a chase is kept (save.wanted; multiplayer: the profile's 'wanted', net/session.js push): left and back (a reload,
+    // the menu, quitting the game, a rejoin), it carries on (Oct 30, the user: "if you leave and rejoin while in a police
+    // chase, the police chase should just continue"): persistStep / resumeStep
+    this.persistT = 0; this.persistKey = ''; this.resumeT = 0;
+    this.onLeave = () => { try { this.persistNow(); } catch { /* (leaving) */ } };
+    globalThis.addEventListener?.('pagehide', this.onLeave);
+    globalThis.addEventListener?.('beforeunload', this.onLeave);
     this.netT = 0; this.netSent = false;
     this.sirenOn = false;
     this.lightsT = 0;
@@ -1078,6 +1085,7 @@ export class Police {
     }
     const W = this.w;
     if (W && (this.excluded?.() || this.prison?.active)) { this.clear(); return; }
+    if (!W) this.resumeStep(dt);
     // hiding in a chalet (Oct 30, the user): the police are still looking but can't find you: the WANTED box says so,
     // the escape time runs on while you stay inside (they lose you once it is up); out again, the chase goes on for
     // the time that is left (not while being fined / arrested)
@@ -1116,9 +1124,63 @@ export class Police {
     // fleeing) it eases back after 1.5 s; the chase over (escaped / fined / arrested): back at once
     const cw = this.w, cwant = !!cw && (cw.fleeing || !cw.scene);
     this.cmT = cwant ? 0 : (this.cmT || 0) + dt;
-    try { this.audio?.chaseMusic?.(!!cw && (cwant || this.cmT < 1.5)); } catch { /* (silent) */ }
+    // (multiplayer: riding in a wanted driver's car (net/carride.js sets rideW): the chase music and the WANTED box too)
+    const rw = !cw && this.rideW;
+    this.rideT = rw ? (this.rideT || 0) + (paused ? 0 : dt) : 0;
+    try { this.audio?.chaseMusic?.((!!cw && (cwant || this.cmT < 1.5)) || (!!rw && !rw.arrest)); } catch { /* (silent) */ }
     this.hudFrame(paused && !hiding, hiding);
     try { this.netFrame(dt); } catch (e) { console.warn('police mp', e); }
+    this.persistStep(dt);
+  }
+
+  // ---------------------------------------------------------------- a chase kept across leaving and coming back
+  // while wanted: { h: heat (the stars), e: escape time built up, t: chase time, f: fleeing, why } in save.wanted, written
+  // when the stars or fleeing change and every 5 s (multiplayer: writeSave pushes it to the server profile); gone
+  // when the chase ends (escaped, fined, arrested: forget())
+  chaseSnap(W) {
+    return { h: Math.round(clamp(W.heat, 1, 5.99) * 100) / 100, e: Math.round(clamp(W.esc, 0, 600)), t: Math.round(clamp(W.t, 0, 86400)), f: !!W.fleeing,
+      why: String(W.why || 'resume').replace(/[^\w-]/g, '').slice(0, 16) || 'resume' };
+  }
+  persistStep(dt) {
+    const W = this.w;
+    if (!W || !this.save || this.jailing) return;
+    const key = `${this.stars(W)}|${W.fleeing ? 1 : 0}`;
+    if (key === this.persistKey && (this.persistT -= dt) > 0) return;
+    this.persistKey = key; this.persistT = 5;
+    this.save.wanted = this.chaseSnap(W);
+    this.writeSave?.();
+  }
+  /** Leaving (the window closing, Electron quit): the chase as it is now; multiplayer: straight to the server. */
+  persistNow() {
+    const W = this.w;
+    if (!W || !this.save || this.jailing) return;
+    const v = this.save.wanted = this.chaseSnap(W);
+    this.writeSave?.();
+    if (isMP() && net.open) net.send('profileSet', { key: 'wanted', value: v });
+  }
+  forget() {
+    this.persistKey = ''; this.resumeT = 0;
+    if (this.save?.wanted) { this.save.wanted = null; this.writeSave?.(); }
+  }
+  // back in the world with a chase kept: after 3 s out and about (not in a menu, a race, an interior, the prison, a
+  // seat), it starts again at that level: DISPATCHED, the patrol cars coming up from behind as usual, the escape time
+  // built up kept
+  resumeStep(dt) {
+    const s = this.save?.wanted, G = globalThis.window?.__game;
+    if (!s || !Number.isFinite(s.h) || this.jailing || this.excluded?.() || this.paused?.() || this.prison?.active || ((this.player?.frozen || this.player?.seat) && !this.drive?.active)
+      || G?.interior?.active || G?.carRental?.inside || G?.prison?.inside || !this.target()) { if (this.resumeT > 0) this.resumeT = 0; return; }
+    if ((this.resumeT += dt) < 3) return;
+    this.resumeT = -5; // (no patrol car could be placed: try again in a while)
+    this.start(String(s.why || 'resume'));
+    const W = this.w;
+    if (!W) return;
+    W.heat = clamp(s.h, 1, 5.99); W.t = Math.max(0, s.t || 0);
+    this.L = LEVELS[this.stars(W)];
+    W.esc = clamp(s.e || 0, 0, this.L.escS - 1);
+    if (s.f) { W.fleeing = true; W.reinT = 1.5; }
+    this.persistKey = ''; this.resumeT = 0;
+    this.note('The police are still after you');
+    this.hud?.flash?.('The police are still after you', 'bad', 3600);
   }
 
   chase(dt, W) {
@@ -1154,7 +1216,7 @@ export class Police {
     this.roadblockStep(dt, W, T, L);
     if (!live.length) {
       // nobody left after you (wrecked): the next car is on its way; meanwhile out of sight (the helicopter aside)
-      if (!W.fleeing || W.scene) { this.clear(); return; }
+      if (!W.fleeing || W.scene) { this.clear(); this.forget(); return; }
       W.near = Infinity;
       this.sight(dt, W, T, live, L);
       return;
@@ -2419,11 +2481,16 @@ export class Police {
   // (the prison does its own fade and takes you out of the car: main.js prisonClear; the patrol cars wait where they
   // are until you are in the cell)
   arrest() {
+    this.forget();
     const pr = this.prison;
     if (pr?.jail) {
       try {
+        // (multiplayer: arrested in (or wrecked out of) your car, your passengers go to prison with you: the server jails
+        // and fines every player its seat registry has in your car, after your own 'jail' request (sent first, same socket))
+        const inCar = isMP() && this.w?.scene?.why !== 'foot'; // (caught on foot, away from the car: not them)
         this.w = null; this.jailing = 4; this.hideHeli(); this.fixCar();
         pr.jail(TUNING.jailS, 'fleeing the police');
+        if (inCar && net.open) net.request('policeArrest', { seconds: TUNING.jailS }).catch((e) => console.warn('[mp] policeArrest', e?.code || e));
         return;
       } catch (e) { console.warn('police: prison', e); this.jailing = 0; }
     }
@@ -2442,7 +2509,7 @@ export class Police {
   }
   // the chase over: the patrol cars drive off (out of sight: gone)
   end(why) {
-    this.w = null; this.cool = TUNING.cooldownS; this.wreckE = null;
+    this.w = null; this.cool = TUNING.cooldownS; this.wreckE = null; this.forget();
     for (const u of this.units) if (u.on) { u.mode = 'leave'; u.ram = false; u.gone = 0; u.leaveTo = null; u.path = null; u.role = 'chase'; }
     this.fixCar(); this.L = LEVELS[1]; this.rq.length = 0; this.radioText = '';
     void why;
@@ -2502,6 +2569,7 @@ export class Police {
   }
   hudFrame(paused, hiding = false) {
     const W = this.w;
+    if (!W && !paused && this.rideW) { this.rideHud(this.rideW); return; }
     if (!W || paused) { this.setHud(false); return; }
     const S = W.scene, H = this._hs, C = this.hudStr ||= { t: -1, e: -1, eS: -1, n: -1, rb: -1, ts: '', es: '', ns: '', rbs: '' };
     const escS = this.L.escS;
@@ -2545,6 +2613,24 @@ export class Police {
     H.near = C.ns;
     this.setHud(true, H);
   }
+  // multiplayer, a passenger in a wanted driver's car (net/carride.js: R = { owner, stars, search, arrest } from the
+  // driver's presence flags): the WANTED box, read-only (Oct 30, the user: "can you tell passengers wanted too")
+  rideHud(R) {
+    const H = this._hs;
+    H.t = mmss(this.rideT || 0);
+    H.msg = R.arrest ? `${R.owner} is under arrest · you too` : `Riding with ${R.owner} · caught, you go to prison too`;
+    H.hot = !R.search && !R.arrest; H.search = R.search && !R.arrest; H.gain = H.search;
+    H.stars = clamp(R.stars, 1, 5); H.cars = 0; H.air = false; H.tyres = ''; H.rb = ''; H.radio = ''; H.esc = ''; H.frac = 0;
+    H.near = 'PASSENGER';
+    H.state = R.arrest ? 'ARRESTED' : R.search ? 'SEARCHING' : 'PURSUIT'; H.stateCls = R.arrest ? '' : R.search ? 'lost' : 'hot';
+    this.setHud(true, H);
+  }
+  /** Your wanted state for your presence row while you drive your car (net/carride.js pose): your passengers see it. */
+  wantedBits() {
+    const W = this.w;
+    if (!W || W.scene?.kind === 'fine') return 0;
+    return (this.stars(W) << W_SHIFT) | (W.search && !W.scene ? F.wSearch : 0) | (W.scene?.kind === 'arrest' ? F.wArrest : 0);
+  }
   /** Trail map: the patrol cars while you are wanted (blue dots). */
   mapMarkers() {
     if (!this.w) return [];
@@ -2570,6 +2656,7 @@ export class Police {
 
   dispose() {
     this.disposed = true;
+    globalThis.removeEventListener?.('pagehide', this.onLeave); globalThis.removeEventListener?.('beforeunload', this.onLeave);
     this.clear(true);
     this.unblock?.();
     for (const u of this.units) { u.g.removeFromParent(); u.smoke?.clear?.(); const i = this.colliders?.indexOf(u.col); if (i >= 0) this.colliders.splice(i, 1); }

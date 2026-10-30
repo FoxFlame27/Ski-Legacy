@@ -202,6 +202,7 @@ export class Multiplayer {
     on('permRevoked', (d) => this.c.hud.flash(d.kind === 'carRide' ? `${d.owner} took back the car ride` : `${d.owner} took back the chalet visit`, 'bad', 3000));
     on('kickInterior', (d) => { this.interior = null; this.c.onKickInterior?.(d.interior); });
     on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
+    on('arrested', (d) => this.carRide.onArrested(d)); // (the driver of the car you ride in was arrested: you too)
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
     on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.done.set(d.pid, d); if (d.closeAt) r.closeAt = d.closeAt; } });
     on('raceBoard', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.board = d.rows; r.boardAt = performance.now(); } });
@@ -312,6 +313,7 @@ export class Multiplayer {
       records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
       dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,
       pos: p.pos && Number.isFinite(p.pos.x) ? { ...p.pos } : null, // (where you were: kept on the server, Oct 30)
+      wanted: p.wanted && Number.isFinite(p.wanted.h) ? { ...p.wanted } : null, // (a police chase you left in: police.js resumes it)
     });
     // (the character you picked in the menu is the one you play)
     this.money = { server: p.money, pending: 0 };
@@ -386,6 +388,7 @@ export class Multiplayer {
     send('dayPass', s.dayPass ?? -1);
     send('tickets', s.tickets || 0);
     if (s.pos) send('pos', s.pos); // (where you were: back there at your next login)
+    send('wanted', s.wanted || null); // (a police chase under way: it carries on at your next login, game/police.js)
   }
 
   // ---------------------------------------------------------------- money: the server's number wins

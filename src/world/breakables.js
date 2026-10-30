@@ -162,13 +162,16 @@ class Breakables {
       hide: () => {
         line.off = true;
         for (const im of s.ims) { im.instanceMatrix.array.fill(0, s.k * 16, s.k * 16 + 16); im.instanceMatrix.needsUpdate = true; }
+        // (a thin box can span several sections: parked while any of them is down, back only when the last one
+        // stands again; before, the first section back put the box up across a neighbour still broken through: an
+        // invisible wall in the gap)
         e.boxes.length = 0;
-        for (const c of s.boxes || []) if (c.x < 1e8) { e.boxes.push(c, c.x, c.z); c.x = 1e9; c.z = 1e9; }
+        for (const c of s.boxes || []) { if (!c.railDown) { c.x0 = c.x; c.z0 = c.z; c.x = 1e9; c.z = 1e9; } c.railDown = (c.railDown || 0) + 1; e.boxes.push(c); }
       },
       show: () => {
         line.off = false;
         for (const im of s.ims) { _m.identity().toArray(im.instanceMatrix.array, s.k * 16); im.instanceMatrix.needsUpdate = true; }
-        for (let i = 0; i < e.boxes.length; i += 3) { e.boxes[i].x = e.boxes[i + 1]; e.boxes[i].z = e.boxes[i + 2]; }
+        for (const c of e.boxes) if (--c.railDown <= 0) { c.railDown = 0; c.x = c.x0; c.z = c.z0; }
         e.boxes.length = 0;
       },
     };

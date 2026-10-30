@@ -123,6 +123,11 @@ export class CarRental {
     if (o.drive) {
       o.drive.locked = (e) => (e.rental ? null : 'Buy a car at the Autohaus in Legacy Village');
       o.drive.onWreck = (e) => this.wrecked(e);
+      // (Oct 30 2026, the user: "why are my cars being shown in the parking lot when the tow truck is towing": a car of
+      // yours the truck has is not shoved off its bed by the car you drive, nor sent back to its first bay as a car
+      // left astray: it stays with the truck until the truck is done with it)
+      o.drive.withTruck = (e) => this.withTruck(e);
+      o.drive.aboard = (e) => this.aboard(e);
       // getting into another of your cars parked in the world: it becomes the one out
       const enter = o.drive.enter.bind(o.drive);
       o.drive.enter = (e) => { if (e?.kept && !o.drive.d && !o.drive.entering && !this.makeCurrent(e)) return; return enter(e); };
@@ -159,6 +164,20 @@ export class CarRental {
   where() { return this.impound?.own ? 'car park beside the Autohaus' : 'yard out front'; }
   /** What a car of yours sells back for: half what you paid (an old rental, never priced: half today's price). */
   sellValue(cfg) { return Math.round(((Number.isFinite(cfg?.price) ? cfg.price : this.cost(cfg).total) * SELL_SHARE) / 50) * 50; }
+  /** Your car `e` loaded on a tow truck: on its bed, or being lifted onto it (net/tow.js carAboard: the same test). */
+  aboard(e) {
+    const T = this.truck;
+    if (!e || !T) return false;
+    return (T.trucks || [T]).some((t) => t.job?.e === e && (t.job.onBed || t.job.phase === 'load'));
+  }
+  /** The tow truck has your car `e` (on its way to it, winching it, carrying it home), or the car with that plate. */
+  // (Oct 30 2026, the user: "why are my cars being shown in the parking lot when the tow truck is towing": a car is in
+  // one place only: on the truck while it is towed, then in the tow yard or its bay; never a second copy spawned in
+  // the car park meanwhile: putOut, resync, spawnKept)
+  withTruck(e) {
+    if (typeof e === 'string') { const pl = e; e = [this.towed, this.current, ...this.kept, ...(this.parking?.cars || [])].find((x) => x?.cfg?.plate === pl && x.car?.parent && this.withTruck(x)); return !!e; }
+    return !!(e && (e.towing || this.towed === e || this.truck?.has?.(e) || this.aboard(e)));
+  }
   /** Can the car that is out be swapped / sold now? (not while you drive it; one the tow truck has goes home from
    *  the truck: wrecked() / impound.js only put it back while it is still the one out) */
   busy() {
@@ -455,7 +474,7 @@ export class CarRental {
     this.save.rental = cfg || null;
     const k = cfg ? this.kept.find((x) => x.cfg?.plate === cfg.plate) : null;
     if (k && !move) { this.kept.splice(this.kept.indexOf(k), 1); k.kept = false; k.cfg = cfg; this.current = k; }
-    else { if (k && !k.driving) this.remove(k); if (cfg) this.current = this.spawn(cfg); }
+    else { if (k && !k.driving) this.remove(k); if (cfg && !this.withTruck(cfg.plate)) this.current = this.spawn(cfg); } // (on the tow truck: not a second one in your bay; the truck brings it: wrecked back)
     this.writeSave();
     if (msg) this.hud?.flash(msg, 'gold', 3400);
   }
@@ -495,7 +514,7 @@ export class CarRental {
   spawnKept() {
     if (!this.impound?.freeBay) return;
     for (const cfg of this.garage) {
-      if (cfg.plate === this.save.rental?.plate || this.kept.some((k) => k.cfg?.plate === cfg.plate)) continue;
+      if (cfg.plate === this.save.rental?.plate || this.kept.some((k) => k.cfg?.plate === cfg.plate) || this.withTruck(cfg.plate)) continue; // (with the tow truck: not in a bay too)
       const p = this.impound.freeBay(true);
       if (!p) break;
       let e = null;
@@ -512,7 +531,7 @@ export class CarRental {
     this.kept = this.kept.filter((k) => k.driving);
     this.migrate();
     this.purgeAdminCars();
-    if (this.save.rental) { try { this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } }
+    if (this.save.rental && !this.withTruck(this.save.rental.plate)) { try { this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } } // (your wreck still on the truck: it comes home from there)
     this.spawnKept();
   }
   /** Multiplayer: the server's garage (profile cars, cars[0] the one out; net/session.js): the save follows it and the

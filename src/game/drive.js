@@ -783,7 +783,7 @@ export class Drive {
     const m1 = MASS[d.e.name] || 1700, I1 = (m1 * (4 * d.half * d.half + d.w * d.w)) / 12;
     const others = [];
     for (const c of this.traffic?.cars || []) if (c.mode !== 'gone' && c.g.visible && Math.abs(c.x - d.x) < 9 && Math.abs(c.z - d.z) < 9) others.push({ kind: 'traffic', o: c, x: c.x, z: c.z, yaw: c.yaw, hw: c.w / 2 - 0.08, hd: c.l / 2, m: MASS[c.name] || 1700, vx: Math.sin(c.yaw) * (c.mode === 'knocked' ? 0 : c.v) * (c.rev ? -1 : 1) + (c.kvx || 0), vz: Math.cos(c.yaw) * (c.mode === 'knocked' ? 0 : c.v) * (c.rev ? -1 : 1) + (c.kvz || 0) });
-    for (const e of this.parking?.cars || []) if (e !== d.e && !e.driving && Math.abs(e.car.position.x - d.x) < 9 && Math.abs(e.car.position.z - d.z) < 9) others.push({ kind: 'parked', o: e, x: e.car.position.x, z: e.car.position.z, yaw: e.car.rotation.y, hw: 0.9, hd: e.length / 2, m: MASS[e.name] || 1700, vx: e.slide?.vx || 0, vz: e.slide?.vz || 0 });
+    for (const e of this.parking?.cars || []) if (e !== d.e && !e.driving && !this.aboard?.(e) && Math.abs(e.car.position.x - d.x) < 9 && Math.abs(e.car.position.z - d.z) < 9) others.push({ kind: 'parked', o: e, x: e.car.position.x, z: e.car.position.z, yaw: e.car.rotation.y, hw: 0.9, hd: e.length / 2, m: MASS[e.name] || 1700, vx: e.slide?.vx || 0, vz: e.slide?.vz || 0 }); // (not your car on a tow truck's bed: Oct 30 2026)
     for (const B of others) {
       const hit = obb(A, B);
       if (!hit) continue;
@@ -1165,6 +1165,10 @@ export class Drive {
     for (let i = this.wrecks.length - 1; i >= 0; i--) {
       const e = this.wrecks[i];
       try {
+        // (Oct 30 2026, the user: "why are my cars being shown in the parking lot when the tow truck is towing": a car of
+        // yours left astray went back to its first bay out of sight, also while the tow truck was fetching or carrying
+        // it: one in the car park and the truck on with it. The truck has it: no going home on its own; carrental.js)
+        if (e.astray && !e.wrecked && this.withTruck?.(e)) e.astray = null;
         if (e.wrecked || e.astray) {
           const W = e.wrecked || e.astray, g = e.car;
           W.t += dt;

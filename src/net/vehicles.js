@@ -237,14 +237,23 @@ export class RemoteVehicles {
         c.pitch = vc.tilt?.[0] || 0; c.roll = vc.tilt?.[1] || 0; c.wreck = !!vc.wreck; // (a wreck as it lies: on its side, its roof)
         c.atT = this.time; c.bay = null; c.unT = 0; // (when it parked there: the later of two in one spot moves, unstack)
       }
-      if (vc.at && !vc.wreck && !r.vtow?.car) this.unstack(c, vc.at, dt);
     }
     // (on their tow truck's bed: it rides with the truck, not where it lay)
-    const bed = !driving && r.vtow?.car ? this.tows.get(r.pid) : null;
+    const towing = !driving && !!r.vtow?.car;
+    const bed = towing ? this.tows.get(r.pid) : null;
     if (bed?.posed) { bedLocal(LEN[cfg.id], _b).applyMatrix4(bed.g.matrixWorld); c.x = _b.x; c.y = _b.y; c.z = _b.z; c.yaw = bed.yaw; c.posed = true; }
+    // (Oct 30 2026, the user: "why are my cars being shown in the parking lot when the tow truck is towing": with the
+    // truck, the car is on its bed or nowhere: not left standing where it was parked (its 'at') while the truck's pose
+    // is not in yet, and not standing where the bed was once the truck is done, until its new spot ('at') comes in;
+    // never moved into a free bay meanwhile (unstack), nor holding one for another car)
+    if (towing) c.bedAt = vc.at || null;
+    else if (driving || (vc.at && vc.at !== c.bedAt)) c.bedAt = undefined;
+    const away = !driving && (towing ? !bed?.posed : c.bedAt !== undefined);
+    c.towed = towing || away;
+    if (!driving && vc.at && !vc.wreck && !c.towed) this.unstack(c, vc.at, dt);
     const g = c.group;
     const d = c.posed ? _d.set(c.x, c.y, c.z).sub(cam).length() : Infinity;
-    const show = outdoors && c.posed && d < VEH_FAR;
+    const show = outdoors && c.posed && d < VEH_FAR && !away;
     if (g.visible !== show) g.visible = show;
     // (not while you ride in it: you sit inside its box)
     // (nor while it stands where your own car is: every player's car starts in the same bay by the Autohaus, and their
@@ -254,7 +263,7 @@ export class RemoteVehicles {
     // drawn in the nearest free bay of that lot (unstack) and solid there; the latch is left for a spot with no lot)
     const mp = !driving && c.posed ? this.o.localCar?.()?.group?.position : null, dm = mp ? Math.hypot(mp.x - c.x, mp.z - c.z) : Infinity;
     if (dm < 2) c.ghost = true; else if (dm > 5.5) c.ghost = false;
-    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed && !c.ghost;
+    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed && !away && !c.ghost;
     c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
     if (bed?.posed) {
@@ -293,11 +302,11 @@ export class RemoteVehicles {
     if ((c.unT -= dt) > 0) return;
     c.unT = 0.5;
     const R = window.__game?.carRental, pound = R?.impound?.pound || [], NEAR = 2.5;
-    const mine = (R?.parking?.cars || []).filter((e) => !e.driving && e.car?.parent);
+    const mine = (R?.parking?.cars || []).filter((e) => !e.driving && e.car?.parent && !R.aboard?.(e)); // (not yours on a tow truck's bed: Oct 30 2026)
     const held = (x, z, earlier) => {
       for (const e of mine) if (Math.hypot(e.car.position.x - x, e.car.position.z - z) < NEAR) return true; // (yours, or a parked car here)
       for (const o of this.cars.values()) {
-        if (o === c || !o.posed || o.driven) continue;
+        if (o === c || !o.posed || o.driven || o.towed) continue; // (with their tow truck: in no bay)
         if (earlier && !(o.atT < c.atT || (o.atT === c.atT && o.pid < c.pid))) continue;
         if (Math.hypot(o.x - x, o.z - z) < NEAR) return true;
       }

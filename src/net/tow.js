@@ -51,7 +51,11 @@ export class TowMp {
     if (!net.open) return;
     this.sent = true;
     const r = (v) => Math.round(v * 100) / 100;
-    net.send('veh', { k: 'tow', at: [r(T.x), r(T.g.position.y), r(T.z), r(T.yaw)], v: r(T.v || 0), car: !!(j.onBed || j.phase === 'load') });
+    // (Oct 30 2026, the user: "why are my cars being shown in the parking lot when the tow truck is towing": car only
+    // when the car on the bed is the one the others see (carride.js: the car out, or your wreck); another car of yours
+    // out meanwhile, parked in its bay, was drawn on their screens on the truck's bed instead)
+    const R = window.__game?.carRental, shown = R ? R.current || R.towed || null : j.e;
+    net.send('veh', { k: 'tow', at: [r(T.x), r(T.g.position.y), r(T.z), r(T.yaw)], v: r(T.v || 0), car: !!((j.onBed || j.phase === 'load') && j.e === shown) });
   }
 
   /** Loaded on the truck (on its bed, or being lifted onto it): your car rides with the truck, not where it stood. */

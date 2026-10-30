@@ -175,7 +175,7 @@ export class CarRide {
     const g = this.g;
     if (g.drive?.clearAt && !g.drive.clearAt(x, z, 1.1, own)) return false;
     for (const r of this.mp.remotes?.players.values() || []) { const a = r.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < near) return false; } // (another player's car)
-    for (const c of this.mp.vehicles?.cars?.values() || []) if (c.posed && !c.driven && Math.hypot(c.x - x, c.z - z) < near) return false; // (as drawn here)
+    for (const c of this.mp.vehicles?.cars?.values() || []) if (c.posed && !c.driven && !c.towed && Math.hypot(c.x - x, c.z - z) < near) return false; // (as drawn here; not one with its tow truck: Oct 30 2026)
     for (const k of g.carRental?.kept || []) if (k !== own && !k.driving && k.car?.parent && Math.hypot(k.car.position.x - x, k.car.position.z - z) < 2.5) return false; // (your other cars)
     return true;
   }

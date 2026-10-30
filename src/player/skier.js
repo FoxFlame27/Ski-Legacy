@@ -85,6 +85,7 @@ const _sq = [new THREE.Quaternion(), new THREE.Quaternion(), new THREE.Quaternio
 const _ah = { q: new THREE.Quaternion(), d: new THREE.Vector3(), c: new THREE.Vector3(), n: new THREE.Vector3(), t: new THREE.Vector3(), x: new THREE.Vector3(), s: new THREE.Quaternion() };
 const _sk = { up: new THREE.Vector3(), f: new THREE.Vector3(), r: new THREE.Vector3(), q: new THREE.Quaternion() };
 const _bq = new THREE.Quaternion(), _bp = new THREE.Vector3();
+const _bn = Array.from({ length: 8 }, () => new THREE.Vector3()), _bq2 = new THREE.Quaternion(); // (poseBench)
 const DOWN = new THREE.Vector3(0, -1, 0);
 function aimBone(bone, from, to, pivot) {
   const u = _ik.u.subVectors(from, pivot).normalize();
@@ -611,6 +612,7 @@ export class SkierRig {
     this.hipDrop = this.hipRest.y - lUp0.y; this.hipHalfW = Math.abs(lUp0.x - this.hipRest.x);
     this._joint = new THREE.Vector3();
     this.legLen = worldPos(b.lUp, _v1).distanceTo(worldPos(b.lLeg, _v2)) + worldPos(b.lLeg, _v1).distanceTo(worldPos(b.lFoot, _v2));
+    this.thighLen = worldPos(b.lUp, _v1).distanceTo(worldPos(b.lLeg, _v2)); this.shinLen = this.legLen - this.thighLen; // (poseBench)
     this.footRest = { l: worldQuat(b.lFoot, new THREE.Quaternion()), r: worldQuat(b.rFoot, new THREE.Quaternion()) };
     this.shoulderW = worldPos(b.lArm, _v1).distanceTo(worldPos(b.rArm, _v2));
     this.eyeOffset = new THREE.Vector3(0, 0.08, 0.07); // just in front of the head bone: looking down shows your own body
@@ -993,6 +995,11 @@ export class SkierRig {
     // helmet cam goes round with the body, so it stays where it always is, below the eye)
     const hideGear = this.fp && st.mode === 'fall';
     if (hideGear !== this.fpGearHidden) { this.fpGearHidden = hideGear; this.gear.visible = !hideGear; this.body.visible = !hideGear; }
+    // sitting on a bench / a chair (st.bench): no skis on the feet, no poles in the hands (every frame: others show the gear)
+    const benchSit = st.mode === 'sit' && !!st.bench && !!st.seat;
+    if (benchSit) this.gear.visible = false;
+    else if (this.benchGearHidden) this.gear.visible = !this.fpGearHidden;
+    this.benchGearHidden = benchSit;
 
     const fwd = this._fwd.set(Math.sin(st.heading), 0, Math.cos(st.heading));
     const right = this._right.crossVectors(fwd, UP).normalize(); // character's right
@@ -1201,6 +1208,7 @@ export class SkierRig {
   poseSit(dt, st, fwd, right) {
     const b = this.b;
     if (!st.seat) return;
+    if (st.bench) { this.poseBench(dt, st, fwd, right); return; }
     this.gait.t += dt;
     const seat = st.seat; // world position of the seat surface (center)
     const hip = seat.clone().addScaledVector(UP, 0.1);
@@ -1226,6 +1234,93 @@ export class SkierRig {
       this.aimHand(i, fwd.clone().addScaledVector(UP, -0.25), UP.clone().negate()); // palms resting on the thighs
     }
     rotateWorld(b.head, UP, Math.sin(this.gait.t * 0.2) * 0.4 + (st.lookYaw || 0) * 0.7);
+  }
+
+  // ---------------------------------------------------------------- seated on a bench / a chair (seating.js)
+  // st.seat: the seat point on the seat surface; st.bench: its shape along the facing from there (m): back = the
+  // backrest's front face (null: none), front = the seat's front edge, floorY, recline (the backrest's lean, rad),
+  // legs: 'out' (a deck chair / lounger: the legs along the seat). The pelvis sits on the seat against the backrest, or
+  // further forward when the seat is deeper than the thighs, so the knees always come just past the front edge; thighs
+  // along the seat, shins down to the ground in front, feet flat on it (two-bone IK, never through the seat); a high
+  // seat perches you nearer its edge with the thighs sloping, the feet hanging only if the ground is still out of reach.
+  poseBench(dt, st, fwd, right) {
+    const b = this.b, B = st.bench, seat = st.seat, T = _bn;
+    this.gait.t += dt;
+    const Lt = this.thighLen, Ls = this.shinLen, HY = 0.09; // HY: the hip joints over the seat surface (the buttocks under them)
+    const out = B.legs === 'out';
+    const hasBack = Number.isFinite(B.back);
+    const front = Number.isFinite(B.front) ? B.front : 0.24, back = hasBack ? B.back : front - 0.5;
+    const recline = clamp(B.recline || 0, 0, 1.1);
+    // the ground in front of the seat (snow, a deck, a platform, a floor), never above the seat
+    let gy = Number.isFinite(B.floorY) ? B.floorY : seat.y - 0.45;
+    const probe = T[0].copy(seat).addScaledVector(fwd, front + 0.12);
+    const gh = world.groundHeight(probe.x, probe.z, gy + 0.1);
+    if (Number.isFinite(gh) && gh > gy - 0.5 && gh < seat.y - 0.2) gy = gh;
+    const footY = gy + this.ankleH;
+    // thigh pitch (down) and shin tilt (forward) that put the feet on the ground from this seat height
+    const legAngles = (dy) => {
+      const th = Math.asin(clamp((dy - Ls * Math.cos(0.12)) / Lt, -0.33, 0.45));
+      return [th, Math.acos(clamp((dy - Lt * Math.sin(th)) / Ls, 0, 1))];
+    };
+    const [th0] = out ? [0] : legAngles(seat.y + HY - footY);
+    // the pelvis: against the backrest (reclined: down in the crease), but the knees past the front edge, a sloping
+    // thigh clear of it, and the buttocks still on the seat
+    const rest = back + (recline > 0.5 ? 0.04 : 0.13);
+    let zJ = hasBack ? rest : -Infinity;
+    if (!out) {
+      zJ = Math.max(zJ, front + 0.04 - Lt * Math.cos(th0));
+      if (th0 > 0.05) zJ = Math.max(zJ, front - 0.06 / Math.tan(th0));
+    } else if (!hasBack) zJ = front - (Lt + Ls) * 0.75;
+    zJ = Math.min(zJ, front - 0.07);
+    const lean = hasBack && zJ <= rest + 0.04 ? Math.max(0.06, recline) : 0;
+    const hip = T[1].copy(seat).addScaledVector(fwd, zJ).addScaledVector(UP, HY + this.upLegDrop);
+    b.hips.position.copy(b.hips.parent.worldToLocal(hip));
+    b.hips.updateMatrixWorld(true);
+    if (lean) rotateWorld(b.hips, right, lean * 0.3); // (the pelvis rolls back a little, the spine takes the rest)
+    this.fixPosture(right);
+    if (lean) {
+      rotateWorld(b.spine0, right, lean * 0.45);
+      rotateWorld(b.spine1, right, lean * 0.25);
+      if (b.neck) rotateWorld(b.neck, right, -lean * 0.55); // (eyes ahead, not up at the sky)
+    }
+    // legs
+    for (let i = 0; i < 2; i++) {
+      const [up, leg, foot, fr] = this._legs[i];
+      const side = i === 0 ? -1 : 1;
+      const J = worldPos(up, T[2]);
+      const knee = T[3], ankle = T[4], pole = T[5];
+      let pitch = 0;
+      if (out) {
+        // stretched out along the seat, the knees a little bent, the heels resting just past its front end
+        const reach = Math.min((Lt + Ls) * 0.9, Math.max(Lt, T[6].subVectors(seat, J).dot(fwd) + front + 0.08));
+        ankle.copy(J).addScaledVector(fwd, reach).addScaledVector(right, side * 0.03);
+        ankle.y = Math.max(seat.y + 0.14, footY);
+        pole.copy(UP).addScaledVector(fwd, 0.3).addScaledVector(right, side * 0.25).normalize();
+        pitch = -0.85; // (toes up)
+      } else {
+        const [th, ph] = legAngles(J.y - footY);
+        knee.copy(J).addScaledVector(fwd, Lt * Math.cos(th)).addScaledVector(UP, -Lt * Math.sin(th)).addScaledVector(right, side * 0.025);
+        ankle.copy(knee).addScaledVector(fwd, Ls * Math.sin(ph)).addScaledVector(UP, -Ls * Math.cos(ph)).addScaledVector(right, side * 0.01);
+        pole.copy(knee).sub(T[6].addVectors(J, ankle).multiplyScalar(0.5)).normalize(); // (the knee exactly there)
+        pitch = clamp((ankle.y - footY) * 4, 0, 0.45); // (flat on the ground; hanging feet droop)
+      }
+      solveTwoBone(up, leg, foot, ankle, pole);
+      _bq2.setFromAxisAngle(UP, st.heading + side * 0.07).multiply(_q1.setFromAxisAngle(X_AXIS, pitch)).multiply(fr);
+      setWorldQuat(foot, _bq2);
+    }
+    // arms: the hands resting on the thighs (reclined: in the lap), elbows out and back
+    this.relaxShoulders();
+    for (let i = 0; i < 2; i++) {
+      const [arm, fore, hand] = this._arms[i];
+      const [up, leg] = this._legs[i];
+      const side = i === 0 ? -1 : 1;
+      const J = worldPos(up, T[2]), K = worldPos(leg, T[3]);
+      const along = T[7].subVectors(K, J).normalize();
+      const tgt = T[4].copy(J).lerp(K, recline > 0.5 ? 0.25 : 0.42).addScaledVector(UP, 0.1).addScaledVector(right, -side * 0.015);
+      solveTwoBone(arm, fore, hand, tgt, T[5].copy(right).multiplyScalar(side).addScaledVector(UP, -1).addScaledVector(fwd, -0.4).normalize());
+      this.aimHand(i, along.addScaledVector(UP, -0.2), T[6].copy(UP).negate()); // palms down on the thighs
+    }
+    rotateWorld(b.head, UP, Math.sin(this.gait.t * 0.2) * 0.35 + (st.lookYaw || 0) * 0.7);
   }
 
   // Skiing. Built every frame from a few smoothed signals so nothing pops, and driven by the motion of

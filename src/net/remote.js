@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { R, ST, F, fallDecode } from './protocol.js';
 import { twoBone, seatsFor } from '../game/carpeople.js';
+import { seatAt } from '../game/seating.js';
 import { world } from '../world/world.js';
 import { bedArms, INTERIOR_ID as HOSPITAL } from '../game/hospitalroom.js';
 
@@ -374,13 +375,14 @@ export class RemotePlayers {
     else if (r.state === ST.ski) { st.mode = 'ski'; st.seat = null; }
     else if (fall) { st.mode = 'fall'; st.seat = null; this.fallPose(r, st); }
     else { st.mode = speed > 0.1 ? 'walk' : 'idle'; st.seat = null; }
+    st.bench = !inVeh && r.state === ST.sit ? benchFor(r, pos) : null; // (on a bench / a chair: the rig's seated pose on it, as they see it)
     st.heading = inVeh ? r.seatYaw : r.yaw;
     st.speed = seated ? 0 : speed;
     st.crouch = seated || fall ? 0 : r.crouch; st.lean = seated || fall ? 0 : r.lean; st.edge = st.lean * 0.6;
     st.air = !seated && !fall && !!(r.flags & F.air); st.tuck = !seated && !fall && !!(r.flags & F.tuck);
     st.carry = !inVeh && !fall && !!(r.flags & F.carry);
     st.normal = UP;
-    const skisVisible = !inVeh && (r.state === ST.ski || st.carry || (fall && !!(r.flags & F.skisOn)));
+    const skisVisible = !inVeh && !st.bench && (r.state === ST.ski || st.carry || (fall && !!(r.flags & F.skisOn)));
     if (r.skisShown !== skisVisible) { r.skisShown = skisVisible; rig.setSkisVisible(skisVisible); }
     // walking with skis: on the back (the rig's carry pose), never on the feet
     const carry = st.carry && r.state !== ST.ski;
@@ -433,6 +435,16 @@ export class RemotePlayers {
   }
 
   dispose() { this.clear(); this.o.vehicles?.dispose(); }
+}
+
+// sitting on a bench or a chair (ST.sit, not in a vehicle): the seat they sit on (game/seating.js registers the world's
+// benches and deck chairs on every client, so it is found at their seat point; a chairlift's seat is none: its pose);
+// inside (a chalet's sofa or chair, a hospital visitor's chair) a plain chair, its floor where onFloor puts it
+const _chair = { back: -0.2, front: 0.25, floorY: 0, recline: 0, legs: null };
+function benchFor(r, pos) {
+  if (r.interior) { _chair.floorY = pos.y - 0.45; return _chair; }
+  if (!r.benchSeat || Math.abs(r.benchSeat.x - pos.x) > 0.35 || Math.abs(r.benchSeat.z - pos.z) > 0.35 || Math.abs(r.benchSeat.y - pos.y) > 0.2) r.benchSeat = seatAt('world', pos.x, pos.y, pos.z);
+  return r.benchSeat;
 }
 
 // a car seat, not a bench: the legs stretched forward to the footwell (knees up, feet flat on that car's floor ahead),

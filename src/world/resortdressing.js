@@ -15,7 +15,7 @@ import { drawnHeight } from './settle.js';
 import { hash2 } from '../core/noise.js';
 import { sponsorAtlas, bannerUV, pickBanner } from './sponsors.js';
 import { quality, onQualityChange } from '../engine/quality.js';
-import { propSeats, registerBench } from '../game/seating.js';
+import { propSeats, propProfile, registerBench } from '../game/seating.js';
 import { buildPisteFences } from './pistefence.js';
 import { meshGround } from '../modes/parkour/kit.js';
 
@@ -1398,10 +1398,11 @@ function buildTerraces(group, colliders, models, index) {
   if (!dc.geometry) return;
   const deck = new THREE.InstancedMesh(dc.geometry, dc.material, chairs.length);
   deck.name = 'deckchairs';
+  const DP = propProfile('deck_chair', 0.95, 'y'); // (as baked: 0.95 m tall; the sling ~0.41 m up, reclined)
   chairs.forEach((c, i) => {
     const y = groundMin(c.x, c.z, 0.75) - 0.02;
     deck.setMatrixAt(i, mat4(c.x, y, c.z, c.yaw));
-    registerBench({ x: c.x, y: y + 0.38, z: c.z, yaw: c.yaw, n: 1, off: -0.12, floorY: y }); // (sit in it)
+    registerBench({ x: c.x, y: y + DP.h, z: c.z, yaw: c.yaw, n: 1, off: DP.off, floorY: y, back: DP.back, front: DP.front, recline: DP.recline, legs: DP.legs }); // (sit in it)
   });
   deck.castShadow = true; deck.receiveShadow = true; deck.computeBoundingSphere();
   group.add(deck);

@@ -468,7 +468,7 @@ export function buildStations(scene, colliders = [], models = null) {
       for (let s = st.s0 + 16; s < st.s1 - 10; s += 24) {
         const bp = besideLine(s, side * 4.8);
         const b = bench.clone(); b.position.set(bp.x, bp.y + 0.06, bp.z); b.lookAt(besideLine(s, 0).x, bp.y + 0.06, besideLine(s, 0).z); group.add(b);
-        seatsFromObject(b, [-0.55, 0, 0.55].map((x) => ({ x, y: 0.5, z: 0, yaw: Math.PI, floor: 0 }))); // (its backrest on +z: you face -z)
+        seatsFromObject(b, [-0.55, 0, 0.55].map((x) => ({ x, y: 0.5, z: 0, yaw: Math.PI, floor: 0, back: -0.22, front: 0.225 }))); // (its backrest on +z: you face -z)
         colliders.push({ x: bp.x, z: bp.z, r: 0.6, top: bp.y + 0.55 }); // (low: jumped over)
         const lp = besideLine(s + 12, side * 5.3);
         if (LP) lampAt.push([lp.x, lp.y + 0.06, lp.z, Math.atan2(-(-lp.dz * side), -(lp.dx * side))]);

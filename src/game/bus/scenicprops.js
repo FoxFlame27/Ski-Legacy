@@ -122,7 +122,7 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
       const x = cx + lx * sd * 2.6, z = cz + lz * sd * 2.6;
       put('wood', benchWood, x, H(x, z), z, yaw);
       put('iron', benchLeg, x, H(x, z), z, yaw);
-      try { registerBench({ x, y: H(x, z) + 0.475, z, yaw, width: 1.8, off: -0.04, floorY: H(x, z) }); } catch { /* (no seating) */ }
+      try { registerBench({ x, y: H(x, z) + 0.475, z, yaw, width: 1.8, off: -0.04, floorY: H(x, z), back: -0.28, front: 0.19 }); } catch { /* (no seating) */ }
     }
     put('wood', boardPosts, cx, H(cx, cz), cz, yaw + Math.PI); // (the board faces the benches' way back: read it, then turn round)
     put('board', boardBack, cx, H(cx, cz), cz, yaw + Math.PI);

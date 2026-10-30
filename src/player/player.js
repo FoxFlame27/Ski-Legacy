@@ -332,6 +332,7 @@ export class Player {
     st.lookYaw = fp ? this.lookYaw * 0.5 : 0;
     st.lookPitch = fp ? this.lookPitch * 0.4 : 0;
     st.seat = this.seat?.pos;
+    st.bench = this.mode === 'sit' ? this.seat?.bench || null : null; // (a bench / chair: seating.js; the rig's seated pose on it)
     st.carry = this.hasSkis && !this.skisOn;
     st.airY = this.mode === 'walk' ? this.footJumpY || 0 : 0;
     st.fallT = this.fallT / 0.6; st.fallSide = this.fallSide;

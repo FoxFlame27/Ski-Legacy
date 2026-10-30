@@ -1073,7 +1073,7 @@ export class Police {
       this.jailing -= dt;
       for (const u of this.units) if (u.on && u.officer) this.poseOfficer(u.officer, dt);
       if (this.jailing <= 0 || this.prison?.inside) { this.jailing = 0; this.clear(true); }
-      this.siren(true); this.hudFrame(true);
+      this.siren(true); this.hudFrame(true); this.audio?.chaseMusic?.(false); // (arrested: the chase music goes)
       return;
     }
     const W = this.w;
@@ -1112,6 +1112,11 @@ export class Police {
       }
     } catch (e) { if (!this.err) { this.err = true; console.warn('police', e); } }
     this.siren(paused);
+    // the chase music (audio.chaseMusic: only over the freeride music) while wanted; pulled over for a fine (not
+    // fleeing) it eases back after 1.5 s; the chase over (escaped / fined / arrested): back at once
+    const cw = this.w, cwant = !!cw && (cw.fleeing || !cw.scene);
+    this.cmT = cwant ? 0 : (this.cmT || 0) + dt;
+    try { this.audio?.chaseMusic?.(!!cw && (cwant || this.cmT < 1.5)); } catch { /* (silent) */ }
     this.hudFrame(paused && !hiding, hiding);
     try { this.netFrame(dt); } catch (e) { console.warn('police mp', e); }
   }

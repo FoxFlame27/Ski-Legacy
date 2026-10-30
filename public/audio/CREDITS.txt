@@ -150,6 +150,14 @@ race_sweat.m4a      "Sweat Time !" by Loyalty Freak Music, same album
 race_road.m4a       "Road 1 Fight" by Komiku, album "Helice Awesome Dance Adventure !!"
                     https://archive.org/details/Komiku-HeliceAwesomeDanceAdventure            CC0 1.0
 
+Police chase tracks (the 'chase' playlist while you are wanted; trimmed, faded, loudness-matched):
+chase_fight.m4a     "Fight, run, breath deeply" by Komiku, album "It's Time For Adventure! Vol 2"
+                    https://archive.org/details/Komiku-ItsTimeForAdventureVol2                CC0 1.0
+chase_run.m4a       "Run ! That boss was a bearing wall !" by Komiku, album "Its Time For Adventure! Vol 4"
+                    https://archive.org/details/Komiku-Its_Time_For_Adventure_Vol4            CC0 1.0
+chase_intense.m4a   "Intense fight" by Komiku, album "The Adventure Goes On, Vol. 2"
+                    https://archive.org/details/komiku-the-adventure-goes-on-vol.-2           CC0 1.0
+
 ANNOUNCER (public/audio/voice/, mono AAC 56 kbps)
 -------------------------------------------------
 Generated for this game with the macOS text-to-speech voice "Daniel" (`say`),

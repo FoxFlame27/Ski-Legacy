@@ -64,10 +64,12 @@ const MUSIC = {
   ],
   race: [{ name: 'race_fire' }, { name: 'race_sweat' }, { name: 'race_road' }, { name: 'race_punk', w: 0.2 }],
   results: [{ name: 'results_win', once: true }, { name: 'results_loop' }],
+  // a police chase (game/police.js -> chaseMusic): tense, driving tracks while you are wanted
+  chase: [{ name: 'chase_run' }, { name: 'chase_fight' }, { name: 'chase_intense' }],
 };
-const MUSIC_SHUFFLE = new Set(['freeride', 'race']);
+const MUSIC_SHUFFLE = new Set(['freeride', 'race', 'chase']);
 // how loud each context sits under the game (x music volume)
-const MUSIC_LEVEL = { menu: 0.85, freeride: 0.45, race: 0.7, results: 0.8 };
+const MUSIC_LEVEL = { menu: 0.85, freeride: 0.45, race: 0.7, results: 0.8, chase: 0.7 };
 // per-track loudness trim (the files are matched to about -17 dB RMS; the menu track peaks early)
 const TRACK_GAIN = { menu_hitech: 1.35 };
 export const MUSIC_CONTEXTS = Object.keys(MUSIC);
@@ -108,7 +110,7 @@ export class Audio {
     this.buf = {};          // decoded recordings by name
     this.voice = {};        // decoded announcer lines by key
     this.loops = {};        // running sample loops (carve, scrape, ...)
-    this.musicCtx = null;   // 'menu' | 'freeride' | 'race' | 'results' | null
+    this.musicCtx = null;   // 'menu' | 'freeride' | 'race' | 'results' | 'chase' | null
     this.deck = null;       // the playing music track
     this.autoAnnounce = true; // crash in a race -> "Wipeout!"
     this.failed = new Set();
@@ -149,7 +151,8 @@ export class Audio {
 
     this.sfx = ctx.createGain(); this.sfx.gain.value = this.sfxVolume; this.sfx.connect(this.master);
     this.musicBus = ctx.createGain(); this.musicBus.gain.value = this.musicVolume; this.musicBus.connect(this.master);
-    this.duck = ctx.createGain(); this.duck.connect(this.musicBus); // announcer ducking
+    this.duck = ctx.createGain(); // announcer ducking, then a little under a near siren (setSiren)
+    this.sirenDuck = ctx.createGain(); this.duck.connect(this.sirenDuck).connect(this.musicBus);
     this.voiceBus = ctx.createGain(); this.voiceBus.gain.value = 0.95; this.voiceBus.connect(this.master);
 
     // shared noise buffers (procedural fallbacks + helicopter)
@@ -538,7 +541,9 @@ export class Audio {
     if (!this.siren) { if (!on) return; this.siren = this.sirenNodes(); }
     const N = this.siren, t = this.ctx.currentTime;
     const live = on && !paused ? 1 : 0;
-    N.bus.gain.setTargetAtTime(live * 0.9 / (1 + Math.pow(dist / 35, 1.3)), t, on ? 0.05 : 0.04);
+    const lv = live * 0.9 / (1 + Math.pow(dist / 35, 1.3));
+    N.bus.gain.setTargetAtTime(lv, t, on ? 0.05 : 0.04);
+    this.sirenDuck?.gain.setTargetAtTime(1 - 0.3 * clamp(lv / 0.5, 0, 1), t, 0.3); // the music ~3 dB down under a close siren
     N.air.frequency.setTargetAtTime(9000 / (1 + dist / 90), t, 0.1);
     const f = (Math.floor(t / 0.6) % 2 ? 587 : 440) * doppler;
     N.o1.frequency.setTargetAtTime(f, t, 0.012);
@@ -1343,7 +1348,7 @@ export class Audio {
 
   // ---------------------------------------------------------------- music
   /**
-   * Switch the soundtrack context with a crossfade: 'menu' | 'freeride' | 'race' | 'results' | null (silence).
+   * Switch the soundtrack context with a crossfade: 'menu' | 'freeride' | 'race' | 'results' | 'chase' | null (silence).
    * Calling with the current context does nothing (safe to call every frame).
    */
   music(context) {
@@ -1356,6 +1361,15 @@ export class Audio {
     if (!c) return;
     this.playlist = { ctx: c, i: MUSIC_SHUFFLE.has(c) ? this.pickTrack(c) : 0 };
     this.startTrack(MUSIC[c][this.playlist.i], c === 'results' ? 0.15 : 1.2);
+  }
+
+  /**
+   * Police chase (game/police.js, every frame): the 'chase' tracks while it is on, only in place of the freeride music
+   * (never over a race, the menu or results); back to the freeride music when it is over. Crossfaded like music().
+   */
+  chaseMusic(on) {
+    if (on) { if (this.musicCtx === 'freeride') this.music('chase'); }
+    else if (this.musicCtx === 'chase') this.music('freeride');
   }
 
   // weighted shuffle (MUSIC_SHUFFLE contexts): skips `once` tracks and the last few played in this context

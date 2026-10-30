@@ -150,7 +150,7 @@ export function pathRound(ax, az, bx, bz, hx, hz) {
 }
 
 const CSS = `
-#taxi-meter { position: absolute; right: 22px; bottom: 132px; box-sizing: border-box; width: max(270px, calc(var(--u) * 340)); padding: calc(var(--u) * 14) calc(var(--u) * 30) calc(var(--u) * 18) calc(var(--u) * 30);
+#taxi-meter { position: absolute; right: 22px; bottom: 132px; box-sizing: border-box; width: max(284px, calc(var(--u) * 340)); padding: calc(var(--u) * 14) calc(var(--u) * 30) calc(var(--u) * 18) calc(var(--u) * 30);
   color: var(--blue, #1546c8); pointer-events: none; isolation: isolate; filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 14) rgba(0, 20, 60, 0.3));
   animation: tm-in 0.45s cubic-bezier(.2,.9,.2,1) backwards; }
 #taxi-meter[hidden] { display: none; }
@@ -173,8 +173,12 @@ const CSS = `
 #taxi-meter .tm-grid div + div { text-align: right; }
 #taxi-meter small { display: block; font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim, #4f72d4); white-space: nowrap; }
 #taxi-meter .tm-grid b { display: block; margin-top: calc(var(--u) * 3); font: italic 700 calc(var(--u) * 30)/1 var(--num); font-variant-numeric: tabular-nums; white-space: nowrap; }
-#taxi-meter .tm-line { display: grid; grid-template-columns: calc(var(--u) * 92) minmax(0, 1fr) auto; align-items: baseline; gap: calc(var(--u) * 8); margin-top: calc(var(--u) * 8); }
-#taxi-meter .tm-line span { font: italic 700 max(15px, calc(var(--u) * 21))/1.1 var(--num); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* (Oct 30 2026, the user: "some text is sticking out of the UI in job": PASSENGER ran past its 92u column on small screens
+   (the label stops shrinking at 11px), and a long stop cut off as "Hotel Gletsche...": the column is at least the label, the
+   name wraps between words (the card 284px at least, so "Gletscherblick" fits), the extra line and the passenger's words too) */
+#taxi-meter .tm-line { display: grid; grid-template-columns: max(calc(var(--u) * 92), 83px) minmax(0, 1fr) auto; align-items: baseline; gap: calc(var(--u) * 8); margin-top: calc(var(--u) * 8); }
+#taxi-meter .tm-line span { font: italic 700 max(15px, calc(var(--u) * 21))/1.1 var(--num); letter-spacing: 0.02em; overflow-wrap: break-word; }
+#taxi-meter .tm-extra, #taxi-meter .tm-say { overflow-wrap: break-word; }
 #taxi-meter .tm-line em { font: 700 var(--t-sm)/1 var(--ui); font-style: normal; color: var(--blue-dim, #4f72d4); font-variant-numeric: tabular-nums; white-space: nowrap; }
 #taxi-meter .tm-line:has(span:empty), #taxi-meter .tm-grid:has(b:empty) { display: none; }
 #taxi-meter .tm-extra { margin-top: calc(var(--u) * 6); font: 700 var(--t-xs)/1.2 var(--ui); letter-spacing: 0.04em; color: var(--blue-dim, #4f72d4); }
@@ -295,7 +299,9 @@ export class Taxi {
       brief: !car ? 'Drive guests round the resort in your own car. Buy a car at the Autohaus first, then come back.'
         : this.duty ? 'You are on duty: the dispatcher sends fares to your car. End your shift here, or with T in your car.'
           : 'Drive guests between bus stops, lift stations, hotels, car parks and the chalets in your own car. The meter pays by distance, with a tip for a quick, smooth ride; knocks and crashes cost you, a wreck or a police chase costs the fare.',
-      reward: 0, payText: `$${TARIFF.min}–1,500 a fare`, bonus: 1, tipText: 'up to 25%', minutes: 'per fare', diff: 1,
+      // (Oct 30 2026, the user: "some text is sticking out of the UI in job": "$40–1,500 a fare" ran off the note; the time
+      // beside it already says "per fare")
+      reward: 0, payText: `$${TARIFF.min}–1,500`, bonus: 1, tipText: 'up to 25%', minutes: 'per fare', diff: 1,
       locked: (!car || !!dmg) && !this.duty, lockText: !car ? 'Buy a car at the Autohaus first' : dmg,
       takeText: !car ? 'BUY A CAR FIRST' : this.duty ? 'END MY SHIFT' : dmg ? 'REPAIR YOUR CAR FIRST' : 'GO ON DUTY',
       take: () => (this.duty ? this.goOffDuty() : this.goOnDuty()),

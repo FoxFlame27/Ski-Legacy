@@ -27,6 +27,13 @@ const CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 const PINS = ['#d0342c', '#1546c8', '#e09a00', '#129a46'];
 const TILT = [-2.2, 1.7, -1.2, 2.4, -1.8];
 const money = (v) => `$${Math.round(v || 0).toLocaleString('en-US')}`;
+// the pay on a note: the amount whole, the rest small beside it (Oct 30 2026, the user: "some text is sticking out of the UI
+// in job": the taxi's "$40–1,500 a fare" in one big nowrap line ran off the note)
+const payHTML = (o) => {
+  if (!o.payText) return `<span class="jb-amt">${money(o.reward)}</span>`;
+  const [, amt, rest] = String(o.payText).match(/^(\S+)\s*(.*)$/s) || [, String(o.payText), ''];
+  return `<span class="jb-amt">${esc(amt)}</span>${rest ? ` <span class="jb-per">${esc(rest)}</span>` : ''}`;
+};
 
 function root() {
   let el = document.getElementById('jobboard');
@@ -125,7 +132,7 @@ export class JobBoardUI {
         <div class="jb-kind">${ICONS[o.type] || ''}${esc(KIND[o.type] || 'Job')}</div>
         <h3 class="jb-title">${esc(o.title)}</h3>
         <p class="jb-brief">${esc(o.brief)}</p>
-        <div class="jb-foot"><span class="jb-pay">${o.payText ? esc(o.payText) : money(o.reward)}${tip}</span>
+        <div class="jb-foot"><span class="jb-pay">${payHTML(o)}${tip}</span>
           <span class="jb-side"><span class="jb-time">${CLOCK}${esc(o.minutes)}</span>${diffHTML(o.diff)}</span></div>
       </button>`;
   }

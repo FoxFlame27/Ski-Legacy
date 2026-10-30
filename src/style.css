@@ -72,6 +72,9 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 #flash.bad { color: var(--bad); }
 #flash.good { color: #fff; }
 #flash.gold { color: var(--gold); }
+/* (Oct 30 2026, the user: "some text is sticking out of the UI in job": a long job message, a fare's "+$640 · 'Wow, you got me
+   there fast! And so smooth!'" or "Taxi cancelled · '...'", ran off a small screen on one line: one line while it fits, then wraps) */
+#flash { width: max-content; max-width: min(92vw, 860px); box-sizing: border-box; white-space: normal; text-align: center; overflow-wrap: anywhere; }
 #money { position: absolute; left: 22px; bottom: 22px; padding: 6px 16px 6px 14px; border-radius: 14px; font-family: var(--num); font-size: 34px; font-weight: 600; letter-spacing: 0.02em; display: flex; align-items: baseline; gap: 2px; }
 #money .cur { color: var(--gold); font-size: 26px; margin-right: 2px; }
 #money-delta { margin-left: 10px; font-size: 18px; opacity: 0; transition: opacity 0.3s; }

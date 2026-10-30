@@ -123,3 +123,26 @@
 
 .jb-hint { position: absolute; left: 0; right: 0; bottom: calc(var(--u) * 6); text-align: center; font: 700 var(--t-xs)/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255, 232, 200, 0.75); }
 .jb-hint kbd { display: inline-block; margin: 0 calc(var(--u) * 3); padding: calc(var(--u) * 2) calc(var(--u) * 6); border-radius: calc(var(--u) * 3); background: rgba(255, 240, 220, 0.18); font: inherit; color: #fff; }
+
+/* every text fits its note, card and button (Oct 30 2026, the user: "some text is sticking out of the UI in job"): the
+   taxi note's "$40–1,500 a fare" (nowrap at 38u) ran past the paper and pushed the time and difficulty off it (on every
+   note the foot did not wrap), the greyed-out note's stamp ("Your car is damaged · repair it at the Werkstatt first ($500)")
+   lay over the title, and buttons and facts kept to one line. Now: the foot wraps (time and difficulty under the pay, still
+   right), the amount stays whole, any rest of the pay small beside it, the stamp sits in the flow above the title (the
+   note grows taller), long words break, buttons wrap to two lines and the card's facts wrap. Same look when it all fits. */
+.jb-note, .jb-card { min-width: 0; overflow-wrap: anywhere; }
+.jb-note { min-width: min(calc(var(--u) * 200), 100%); }
+.jb-title, .jb-brief, .jb-from, .jb-status, .jb-note-busy, .jb-empty, .jb-fact b { min-width: 0; overflow-wrap: anywhere; }
+.jb-foot { flex-wrap: wrap; row-gap: calc(var(--u) * 6); }
+.jb-pay { min-width: 0; white-space: normal; line-height: 0.95; }
+.jb-pay .jb-amt, .jb-pay .jb-per { white-space: nowrap; }
+.jb-pay .jb-per { font: 700 calc(var(--u) * 17)/1 var(--num); font-style: italic; letter-spacing: 0.02em; color: var(--blue); }
+.jb-side { margin-left: auto; min-width: 0; }
+.jb-lock { position: relative; top: auto; right: auto; align-self: flex-end; max-width: 100%; margin: calc(var(--u) * -18) calc(var(--u) * -12) calc(var(--u) * 2) 0; overflow-wrap: anywhere; }
+.jb-plank { max-width: 100%; box-sizing: border-box; white-space: normal; text-align: center; overflow-wrap: anywhere; }
+.jb-btn { height: auto; min-height: calc(var(--u) * 46); }
+.jb-btn span { white-space: normal; overflow-wrap: anywhere; line-height: 1.1; padding-top: calc(var(--u) * 11); padding-bottom: calc(var(--u) * 11); }
+.jb-card .jb-acts { flex-wrap: wrap; }
+.jb-card .jb-acts .jb-btn { flex: 1 1 auto; min-width: 0; }
+.jb-facts { display: flex; flex-wrap: wrap; }
+.jb-fact { min-width: 0; }

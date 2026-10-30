@@ -10,6 +10,8 @@
 // - Towing: your car left empty ON a road (any lane, a junction), not in a car park or a lay-by, while you are
 //   AWAY_R m or more from it for TOW_AFTER s, is fetched by the rental's tow truck (towtruck.js, as for a wreck). The
 //   fee is the wreck fee (carrental.js WRECK_FEE), charged when the truck sets out; the car ends in an impound bay.
+//   (Oct 30: also a car left in a car park but not properly in a bay, or across a car park's entrance; never one left
+//   in a bay, a lay-by or anywhere off the roads: where(), and the parking card that says which it is)
 // - Pick-up: an impounded car is locked until the next in-game day (save.day: main.js counts a day each midnight):
 //   E at it says "Impounded · available tomorrow"; from then on it is yours to drive again.
 // Kept in save.impound = { day, bay, plate } (the rental's plate: it ties the impound to that car).
@@ -38,18 +40,33 @@ export function backIn(rec) {
   return `back in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 export function untilTomorrow(rec) { return backIn(rec); } // (the old name, still imported)
-export const STRAY_BACK = 180; // s left off the road and outside any car park / lay-by (with you away) before it goes back to its bay
+// (STRAY_BACK, the 3-minute return of a car left off the road, is gone: Oct 30, the user: a car "just on terrain" is
+// fine where it is; only a road or a blocked car park gets it towed)
 export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
 export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called
 export const AWAY_R = 40;       // m: "away" from your car
 const LOT = { hw: 18, hd: 9 };  // the car park's half length (along the road) and half depth (two rows of bays)
 const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's far end)
+// properly in a bay (Oct 30, the user: "park properly within the slots, but give them a tiny bit of room for error"):
+// the car's centre inside the bay's lines, its heading within BAY_YAW of the bay's (either way round: nose in or backed
+// in), and its body at most BAY_TOL m over the lines
+const BAY_YAW = 20 * Math.PI / 180, BAY_COS = Math.cos(BAY_YAW), BAY_TOL = 0.5, CAR_HW = 0.95;
+const MOUTH = { out: 9, lat: ROAD_HALF + 2.5 }; // in front of a car park's entrance: up to 9 m out from its edge, the access road's width + 2.5 m
+const clock = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
 const YARD_CSS = `
 #tow-yard { position: absolute; left: 22px; bottom: 92px; min-width: calc(var(--u, 1px) * 300); padding: calc(var(--u, 1px) * 12) calc(var(--u, 1px) * 30) calc(var(--u, 1px) * 14) calc(var(--u, 1px) * 24);
   background: #fff; color: var(--blue, #1546c8); clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; }
 #tow-yard[hidden] { display: none; }
 body.wanted #tow-yard { bottom: auto; top: calc(var(--u, 1px) * 150); } /* (the WANTED box has the corner) */
+#park-card { position: absolute; left: 22px; bottom: 92px; max-width: calc(var(--u, 1px) * 460); padding: calc(var(--u, 1px) * 11) calc(var(--u, 1px) * 30) calc(var(--u, 1px) * 13) calc(var(--u, 1px) * 24);
+  background: #fff; color: var(--blue, #1546c8); clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; }
+#park-card[hidden] { display: none; }
+body.wanted #park-card { bottom: auto; top: calc(var(--u, 1px) * 150); }
+#park-card .pk-head { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 24); letter-spacing: 0.04em; line-height: 1.1; }
+#park-card.good .pk-head { color: #1f9d55; }
+#park-card.bad .pk-head { color: #ff4d3d; }
+#park-card .pk-sub { margin-top: calc(var(--u, 1px) * 4); font-size: calc(var(--u, 1px) * 15); font-weight: 700; color: var(--blue-dim, #4f72d4); }
 #tow-yard .ty-head { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 20); letter-spacing: 0.08em; color: #ff4d3d; }
 #tow-yard .ty-t { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 52); line-height: 1; font-variant-numeric: tabular-nums; }
 #tow-yard .ty-sub { margin-top: calc(var(--u, 1px) * 4); font-size: calc(var(--u, 1px) * 15); font-weight: 700; color: var(--blue-dim, #4f72d4); }`;
@@ -205,66 +222,179 @@ export class Impound {
     return { x: e.car.position.x, y: e.car.position.y, z: e.car.position.z, impounded: !!(e.impound || e.towing), car: e };
   }
 
-  // properly parked: in a car park, the rental's yard / lot or a lay-by
-  parked(e) {
-    const g = e.car, x = g.position.x, z = g.position.z;
-    if (this.inLot(x, z)) return true;
-    for (const L of busRoads.lots) {
-      if (L.hw === undefined || L.ux === undefined) continue;
+  // ------------------------------------------------------------------ where a car stands (Oct 30)
+  // The tow rules (the user: "cars don't get towed if they are parked on a parking lot, and they also don't get towed if
+  // they are just on terrain; they only get towed if they are on a road ... also if they park in front of a parking lot
+  // blocking the parking lot"):
+  //   'bay'   in a car park's bay, properly (BAY_YAW / BAY_TOL)             fine
+  //   'lot'   in a car park but not properly in a bay (the aisle, across the lines, crooked)   towed
+  //   'mouth' in front of a car park's entrance                              towed
+  //   'road'  on a road (a lane, a junction, a roundabout)                   towed
+  //   'layby' in a lay-by, 'yard' on a building's forecourt (the Autohaus yard, the medical centre, the police
+  //           station), 'free' anywhere else off the roads (the snow, a verge, a chalet's drive)   fine
+  // { kind, ok, lot, bay, n (the bay's number), why ('aisle' | 'angle' | 'lines') }
+  /** The car parks with painted bays: the Autohaus car park and the others (parking.js lotBays). */
+  bayLots() {
+    const out = this._bl || (this._bl = []);
+    out.length = 0;
+    if (this.lot?.bays?.length) out.push(this.lot);
+    for (const L of busRoads.lots) if (L !== this.lot && !L.building && L.bays?.length && L.ux !== undefined) out.push(L);
+    return out;
+  }
+  /** Where a car of length len standing at (x, z) heading yaw is, for the tow rules. */
+  where(x, z, yaw, len = 4.6) {
+    const fx = Math.sin(yaw), fz = Math.cos(yaw), hl = len / 2, lots = this.bayLots();
+    for (const L of lots) {
       const dx = x - L.x, dz = z - L.z;
-      if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + 0.8 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + 0.8) return true; // (a car park, the rental's lot)
+      if (Math.abs(dx * L.ux + dz * L.uz) > L.hw + 0.3 || Math.abs(dx * L.vx + dz * L.vz) > L.hd + 0.3) continue;
+      // in this car park: the bay its centre is in (between the lines)
+      let best = null, bd = Infinity;
+      for (let i = 0; i < L.bays.length; i++) {
+        const b = L.bays[i], bx = x - b.x, bz = z - b.z;
+        if (Math.abs(bx) > 4 || Math.abs(bz) > 4) continue;
+        const al = bx * b.hx + bz * b.hz, ac = bx * b.hz - bz * b.hx; // (along the bay, across it)
+        if (Math.abs(al) > b.hd || Math.abs(ac) > b.hw) continue;
+        const d = Math.hypot(al, ac);
+        if (d < bd) { bd = d; best = { b, n: i + 1, al, ac }; }
+      }
+      if (!best) return { kind: 'lot', ok: false, lot: L, why: 'aisle' };
+      const { b, n, al, ac } = best;
+      const cl = fx * b.hx + fz * b.hz, cc = fx * b.hz - fz * b.hx; // (the car's heading along / across the bay)
+      if (Math.abs(cl) < BAY_COS) return { kind: 'lot', ok: false, lot: L, bay: b, n, why: 'angle' };
+      // how far its body reaches past the bay's lines (its box: half length along its heading, half width across)
+      const overL = Math.abs(al) + Math.abs(cl) * hl + Math.abs(cc) * CAR_HW - b.hd;
+      const overA = Math.abs(ac) + Math.abs(cc) * hl + Math.abs(cl) * CAR_HW - b.hw;
+      if (overL > BAY_TOL || overA > BAY_TOL) return { kind: 'lot', ok: false, lot: L, bay: b, n, why: 'lines' };
+      return { kind: 'bay', ok: true, lot: L, bay: b, n };
     }
-    for (const lb of busRoads.laybys || []) { const lx = Math.sin(lb.yaw), lz = Math.cos(lb.yaw), dx = x - lb.x, dz = z - lb.z; if (Math.abs(dx * lx + dz * lz) < 11 && Math.abs(dx * lz - dz * lx) < 3.5) return true; }
-    return false;
+    // in front of a car park's entrance (its centre or either end): blocking the way in
+    for (const L of lots) {
+      if (!Number.isFinite(L.ex) || !Number.isFinite(L.dirx)) continue;
+      for (const k of [0, 0.8, -0.8]) {
+        const px = x + fx * hl * k - L.ex, pz = z + fz * hl * k - L.ez;
+        const out = px * L.dirx + pz * L.dirz + 2, lat = Math.abs(px * L.dirz - pz * L.dirx); // (out: from the car park's edge)
+        if (out > -0.3 && out < MOUTH.out && lat < MOUTH.lat) return { kind: 'mouth', ok: false, lot: L };
+      }
+    }
+    for (const lb of busRoads.laybys || []) { const lx = Math.sin(lb.yaw), lz = Math.cos(lb.yaw), dx = x - lb.x, dz = z - lb.z; if (Math.abs(dx * lx + dz * lz) < 11 && Math.abs(dx * lz - dz * lx) < 3.5) return { kind: 'layby', ok: true }; }
+    // a building's forecourt (the Autohaus yard, the medical centre, the police station): fine unless its centre is on a lane
+    const lane = busRoads.roads.length ? laneDistance(x, z) : Infinity;
+    for (const L of busRoads.lots) {
+      if (!L.building || L.ux === undefined || L.hold) continue;
+      const dx = x - L.x, dz = z - L.z;
+      if (Math.abs(dx * L.ux + dz * L.uz) < L.hw && Math.abs(dx * L.vx + dz * L.vz) < L.hd && lane > ROAD_HALF - 0.5) return { kind: 'yard', ok: true, lot: L };
+    }
+    if (busRoads.roads.length) {
+      const h = hl - 0.4;
+      for (const k of [0, 1, -1]) if ((k ? laneDistance(x + fx * h * k, z + fz * h * k) : lane) < ROAD_HALF + 0.2) return { kind: 'road', ok: false };
+    }
+    return { kind: 'free', ok: true };
   }
-  // is the car standing on a road (a lane or a junction), not in a car park, the rental's yard or a lay-by?
-  blocking(e) {
-    if (!busRoads.roads.length || this.parked(e)) return false;
-    const g = e.car, x = g.position.x, z = g.position.z, yaw = g.rotation.y, fx = Math.sin(yaw), fz = Math.cos(yaw), h = (e.length || 4.6) / 2 - 0.4;
-    for (const k of [0, 1, -1]) if (laneDistance(x + fx * h * k, z + fz * h * k) < ROAD_HALF + 0.2) return true;
-    return false;
-  }
+  spotOf(e) { const g = e.car; return this.where(g.position.x, g.position.z, g.rotation.y, e.length || 4.6); }
+  // (the old names: properly parked / left where it gets towed)
+  parked(e) { return this.spotOf(e).ok; }
+  blocking(e) { return !this.spotOf(e).ok; }
 
   // ------------------------------------------------------------------ per frame (carrental.js update)
   update(dt) {
     if (!(dt > 0)) return;
     const R = this.R, e = R.current;
     this.yardHud(e);
-    if (!e) return;
+    if (!e) { this.parkHud(null); return; }
     if (e.impound && this.released(e.impound)) { // (its 3 minutes are up: back in your bay)
       e.impound = null;
       if (this.save.impound) { this.save.impound = null; R.writeSave?.(); }
       if (!e.driving && !e.towing) { this.place(e, this.own); if (R.drive) R.drive._cc = null; }
       R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000);
     }
-    if (e.driving || e.wrecked || e.towing || e.impound || !R.truck || !R.player) { e.abandonT = 0; return; }
+    if (e.wrecked || e.towing || e.impound || !R.player) { e.abandonT = 0; this.parkHud(null); return; }
+    if (e.driving) { e.abandonT = 0; e.warned = false; e.warned2 = false; e.drove = true; e.spot = null; this.driveHint(e, dt); return; }
+    this.clk = (this.clk || 0) + dt;
+    // just got out (Oct 30, the user: "indicate to them if they are parked properly, and if it is not parked properly
+    // also indicate it to them"): where it stands, at once
+    if (e.drove) { e.drove = false; e.outAt = this.clk; this.t = 0; }
     this.t -= dt;
     if (this.t > 0) return;
-    const step = 0.5 - this.t; // (s since the last check)
+    const step = Math.min(1, 0.5 - this.t); // (s since the last check)
     this.t = 0.5;
     const p = R.player.pos, d = Math.hypot(p.x - e.car.position.x, p.z - e.car.position.z);
-    const block = this.blocking(e);
-    // left off the road and outside any car park (in the snow, on a verge): back in its bay after 3 minutes, no fee
-    // (Oct 29, the user: "if you leave your car behind not on the road or a parking lot it should go back to a parking
-    // lot after 3 min")
-    if (!block) {
+    const sp = e.spot = this.spotOf(e);
+    // off the road (the snow, a verge, a lay-by, a forecourt) or properly in a bay: fine, it stays where it is
+    if (sp.ok || !R.truck || !busRoads.roads.length) {
       e.abandonT = 0; e.warned = false; e.warned2 = false;
-      if (d < AWAY_R || !busRoads.roads.length || this.parked(e)) { e.strayT = 0; return; }
-      e.strayT = (e.strayT || 0) + step;
-      if (e.strayT >= STRAY_BACK) {
-        e.strayT = 0;
-        this.place(e, this.own);
-        if (R.drive) R.drive._cc = null;
-        R.hud?.flash(`Your car was left out in the snow · it's back in your bay at the Autohaus`, 'good', 4200);
-      }
+      this.parkHud(e.outAt != null && this.clk - e.outAt < 7 ? this.parkText(e, sp, d) : null);
       return;
     }
-    e.strayT = 0;
-    if (d < 15) { e.abandonT = 0; e.warned2 = false; return; } // (you came back)
-    if (d > 25 && !e.warned) { e.warned = true; R.hud?.flash('Your car is blocking the road · it will be towed if you leave it there', 'bad', 3600); }
-    if (d >= AWAY_R) e.abandonT = (e.abandonT || 0) + step;
-    if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still blocking the road · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
-    if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.tow(e); }
+    // on a road, or blocking a car park: the warnings, then the tow truck
+    const what = sp.kind === 'road' ? 'blocking the road' : sp.kind === 'mouth' ? 'blocking the car park entrance' : 'not parked in a bay';
+    if (d < 15) { e.abandonT = 0; e.warned2 = false; } // (you came back)
+    else {
+      if (d > 25 && !e.warned) { e.warned = true; R.hud?.flash(`Your car is ${what} · it will be towed if you leave it there`, 'bad', 3600); }
+      if (d >= AWAY_R) e.abandonT = (e.abandonT || 0) + step;
+      if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still ${what} · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
+      if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.parkHud(null); this.tow(e, what); return; }
+    }
+    // the card: just out of the car, walking away from it, the countdown running
+    this.parkHud((e.outAt != null && this.clk - e.outAt < 7) || d >= 15 ? this.parkText(e, sp, d) : null);
+  }
+
+  // the card's words for where it stands: [good, head, sub]
+  parkText(e, sp, d = 0) {
+    const name = sp.lot?.name || 'car park', bay = sp.bay && sp.bay === this.own ? 'Your bay' : sp.n ? `Bay ${sp.n}` : null;
+    const left = `it will be towed in ${clock(TOW_AFTER - (e.abandonT || 0))}`;
+    switch (sp.kind) {
+      case 'bay': return [true, '✓ Parked properly', `${bay} · ${name}`];
+      case 'lot': return [false, sp.why === 'angle' ? `✗ Crooked in ${bay.toLowerCase()}` : sp.why === 'lines' ? `✗ Over the lines · ${bay.toLowerCase()}` : '✗ Not in a bay',
+        `${sp.why === 'angle' ? 'Straighten up inside the lines' : 'Park inside the lines'} or ${left}`];
+      case 'mouth': return [false, '✗ Blocking the car park entrance', `Park in a bay or ${left}`];
+      case 'road': return [false, '✗ On the road', `It will be towed in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
+      case 'layby': return [true, '✓ Parked in the lay-by', 'Fine here'];
+      case 'yard': return [true, `✓ Parked · ${sp.lot?.name || 'forecourt'}`, 'Fine here'];
+      default: return [true, '✓ Parked off the road', 'Fine here'];
+    }
+  }
+
+  // While you drive slowly in a car park (or stop across its entrance): live, so you can correct it before you get out
+  driveHint(e, dt) {
+    this.hintT = (this.hintT || 0) - dt;
+    if (this.hintT > 0) return;
+    this.hintT = 0.15;
+    const D = this.R.drive?.d;
+    if (!D || D.e !== e) { this.parkHud(null); return; }
+    const v = Math.hypot(D.vx || 0, D.vz || 0), sp = v < 4 ? this.where(D.x, D.z, D.yaw, e.length || 4.6) : null;
+    let t = null;
+    if (sp?.kind === 'bay') t = [true, `In ${sp.bay === this.own ? 'your bay' : `bay ${sp.n}`} ✓`, `Parked properly · ${sp.lot?.name || 'car park'} · E to get out`];
+    else if (sp?.kind === 'lot') {
+      const b = sp.bay === this.own ? 'your bay' : `bay ${sp.n}`;
+      t = sp.why === 'angle' ? [false, 'Not in a bay — straighten up', `Line it up with ${b}`]
+        : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', `Move into the middle of ${b}`]
+        : [false, 'Not in a bay', 'Pull into a free bay, inside the lines'];
+    } else if (sp?.kind === 'mouth' && v < 1) t = [false, 'Blocking the entrance', 'Drive in and park in a bay'];
+    this.parkHud(t, true);
+  }
+
+  // The parking card (bottom left, the tow yard card's place and style): green when it is fine, red when it gets towed
+  parkHud(t, driving = false) {
+    if (!t && !this.pkEl) return;
+    if (!this.pkEl) {
+      if (typeof document === 'undefined') return;
+      if (!document.getElementById('tow-yard-css')) { const st = document.createElement('style'); st.id = 'tow-yard-css'; st.textContent = YARD_CSS; document.head.appendChild(st); }
+      const el = document.createElement('div');
+      el.id = 'park-card'; el.hidden = true;
+      el.innerHTML = '<div class="pk-head"></div><div class="pk-sub"></div>';
+      (document.getElementById('hud') || document.body).appendChild(el);
+      this.pkEl = el; this.$pkHead = el.querySelector('.pk-head'); this.$pkSub = el.querySelector('.pk-sub'); this.pkC = {};
+    }
+    const C = this.pkC;
+    if (!t) { if (!this.pkEl.hidden) this.pkEl.hidden = true; return; }
+    const [good, head, sub] = t, cls = good ? 'good' : 'bad';
+    if (C.cls !== cls) { this.pkEl.classList.remove('good', 'bad'); this.pkEl.classList.add(cls); C.cls = cls; }
+    if (C.head !== head) this.$pkHead.textContent = C.head = head;
+    if (C.sub !== sub) this.$pkSub.textContent = C.sub = sub;
+    if (this.pkEl.hidden) {
+      this.pkEl.hidden = false;
+      if (driving) document.querySelector('#drive-hud .ch-card')?.classList.add('out'); // (the controls card shares the corner: it fades out)
+    }
   }
 
   // The tow yard card (Oct 30, the user: "while your car is in the tow yard, show the whole time how long until you get
@@ -298,7 +428,7 @@ export class Impound {
   // the truck fetches it (the wreck fee, now); it ends in an impound bay, locked until tomorrow
   // Multiplayer (R.mp, net/session.js): the server charges the fee and keeps the impound (its day: the world's) in your
   // profile, so it holds across reconnects; the bay is one no other player's car stands in.
-  tow(e) {
+  tow(e, what = 'blocking the road') {
     const R = this.R, fee = this.fee, mp = R.mp;
     e.towing = true; e.abandonT = 0;
     const free = (this.pound || []).findIndex((b) => !b.taken && !mp?.carNear?.(b.x, b.z, 2));
@@ -319,7 +449,7 @@ export class Impound {
       R.hud?.setMoney?.(this.save.money, -fee);
     }
     R.audio?.play?.('cash');
-    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · to the tow yard by the Autohaus · ${backIn(this.save.impound)}`, 'bad', 6500);
+    R.hud?.flash(`Your car was left ${what.replace('not parked in a bay', 'outside the bays')} · towed · -$${fee.toLocaleString('en-US')} · to the tow yard by the Autohaus · ${backIn(this.save.impound)}`, 'bad', 6500);
     const done = (car) => {
       car.towing = false;
       if (mp && R.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends; the impound stays)

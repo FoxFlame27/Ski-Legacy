@@ -242,8 +242,42 @@ export class ParkingLots {
     car.add(block);
     car.updateMatrixWorld(true);
     cameraBlockers?.push(block);
-    (this.cars ||= []).push({ car, inst, t: carTemplate(gltf, length, name), far: null, full: car.children[0], name, length, paint, collider, block, bay, held: [bay] });
+    // (deco: a decorative car, not a player's: gone in multiplayer, setDecoOff())
+    (this.cars ||= []).push({ car, inst, t: carTemplate(gltf, length, name), far: null, full: car.children[0], name, length, paint, collider, block, bay, held: [bay], deco: { yaw, cols: colliders, blockers: cameraBlockers } });
     return bay;
+  }
+
+  /** Multiplayer (main.js setAIOn; Oct 30, the user: "remove all parked cars in multiplayer"): the decorative parked
+   *  cars (the car parks', the Autohaus car park's) are taken out of the world (scene, colliders, camera blockers, the
+   *  cars list drive.js / traffic.js read); the players' own cars stay. Back as they were in single player. */
+  setDecoOff(off) {
+    off = !!off;
+    if (off === !!this.decoOff) return;
+    this.decoOff = off;
+    const drop = (arr, o) => { const i = arr ? arr.indexOf(o) : -1; if (i >= 0) arr.splice(i, 1); };
+    if (off) {
+      this.decoHidden = (this.cars || []).filter((p) => p.deco && !p.driving);
+      if (!this.decoHidden.length) return;
+      const gone = new Set(this.decoHidden);
+      this.cars = this.cars.filter((p) => !gone.has(p));
+      for (const p of this.decoHidden) {
+        p.car.removeFromParent();
+        drop(p.deco.cols, p.collider); drop(p.deco.blockers, p.block);
+        if (p.bay) p.bay.taken = false;
+      }
+      return;
+    }
+    for (const p of this.decoHidden || []) {
+      const b = p.bay;
+      if (b) { p.car.position.set(b.x, world.height(b.x, b.z) + 0.03, b.z); b.taken = true; p.collider.x = b.x; p.collider.z = b.z; }
+      p.car.rotation.set(0, p.deco.yaw, 0); p.collider.rot = -p.deco.yaw;
+      p.slide = null; p.astray = null; p.wrecked = null; p.damage = 0;
+      this.group.add(p.car); p.car.updateMatrixWorld(true);
+      if (!p.deco.cols.includes(p.collider)) p.deco.cols.push(p.collider);
+      if (p.deco.blockers && !p.deco.blockers.includes(p.block)) p.deco.blockers.push(p.block);
+      (this.cars ||= []).push(p);
+    }
+    this.decoHidden = [];
   }
 
   /** Per frame: the lamps come on at dusk; parked cars: detailed close to the camera, one mesh further out. */

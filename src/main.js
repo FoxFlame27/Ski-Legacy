@@ -1327,6 +1327,7 @@ function setAIOn(on) {
   try { traffic?.setOff(!on); } catch (e) { console.warn('mp traffic', e); }
   try { npcs?.setOff(!on); } catch (e) { console.warn('mp npcs', e); }
   try { snowcats?.setOff(!on); } catch (e) { console.warn('mp snowcats', e); }
+  try { parking?.setDecoOff?.(!on); prison?.outside3d?.showPatrol?.(on); if (drive) drive._cc = null; } catch (e) { console.warn('mp parked cars', e); } // (multiplayer: no decorative parked cars, only the players')
   if (crowds?.group) crowds.group.visible = on;
   if (express) express.noPassengers = !on; // (the trains' seated passengers)
   if (railway) { railway.noPassengers = !on; if (railway.people?.group) railway.people.group.visible = on; }

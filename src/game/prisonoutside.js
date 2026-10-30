@@ -468,6 +468,7 @@ export function buildPrisonOutside(P, L) {
   }
   for (const x of [porch.x0, porch.x1]) { const p = w(x, BZ + porch.z); colliders.push({ x: p.x, z: p.z, r: 0.16 }); }
   // the patrol car, nose to the house, in the first POLIZEI bay (lights off)
+  let patrol = null; // (multiplayer: no parked cars but the players', showPatrol(false))
   try {
     const car = buildPoliceCar(models);
     const cx = BAYS.lines[0] + 1.35, cz = (BAYS.z0 + BAYS.z1) / 2;
@@ -477,6 +478,8 @@ export function buildPrisonOutside(P, L) {
     g.add(car.g);
     const p = w(cx, cz), sz = car.size || { x: 1.9, z: 4.7 };
     colliders.push({ x: p.x, z: p.z, hw: sz.x / 2 + 0.05, hd: sz.z / 2 + 0.05, rot: -(yaw0 + Math.PI) });
+    patrol = { group: car.g, collider: colliders[colliders.length - 1] };
+    car.g.userData.noMerge = true; // (hidden as a whole in multiplayer: never welded into the forecourt's merged meshes)
   } catch (e) { console.warn('prison: patrol car', e); }
   // the parking signs at the bays' heads (by the house, facing the road): a blue European "P" on a galvanised post with
   // an additional panel under it, "Polizei" (between the two patrol bays) and "Besucher / Visitors" (the visitors' bay)
@@ -616,6 +619,13 @@ export function buildPrisonOutside(P, L) {
   const d = w(DX, FRONT + 2.6);
   return {
     group: g, colliders,
+    /** Multiplayer (main.js setAIOn): the parked patrol car out of the world (and its collider), back in single player. */
+    showPatrol(on) {
+      if (!patrol || patrol.group.visible === !!on) return;
+      patrol.group.visible = !!on;
+      const all = P.colliders, i = all ? all.indexOf(patrol.collider) : -1;
+      if (!on && i >= 0) all.splice(i, 1); else if (on && all && i < 0) all.push(patrol.collider);
+    },
     house, // (the house itself: its frame is the interior's windows' frame, prison.js; hidden in their view)
     door: { x: d.x, z: d.z, yaw: yaw0 },
     update(n, t) {

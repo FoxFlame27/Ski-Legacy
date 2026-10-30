@@ -46,6 +46,7 @@ const EXIT = { x: 0, z: IN.z1 - 0.15 };
 export const BEDS = [-6.0, -2.0, 2.0, 6.0];
 const CAB_SIDE = [1, -1, 1, -1];
 const BED = { len: 2.1, w: 1.0, top: 0.61 };
+const BED_STRETCH = 1.3; // (the Meshy bed lengthened: a grown-up's feet on the mattress)
 const BED_Z = IN.z0 + 0.02 + BED.len / 2; // (the bed's middle)
 // a patient lying in bed (the presence row's root: the hips; the head on the pillow toward the wall)
 const HIPS_Z = IN.z0 + 1.0;
@@ -484,8 +485,11 @@ export class HospitalRoom {
         // the mattress top: the height most of the model's top surface sits at between the boards
         const top = m.userData.size?.y ? Math.min(0.75, Math.max(0.38, m.userData.size.y * 0.53)) : BED.top; // (Meshy's bed: the mattress at ~53 % of its height)
         this.bedTops[i] = top;
+        // (Oct 30, the user: "please make the bed longer": the feet stuck out past its end) stretched 30 % along its
+        // length, the head end staying at the wall
+        m.scale.z *= BED_STRETCH; m.position.z += (BED.len * (BED_STRETCH - 1)) / 2;
       });
-      this.obstacles.push([bx - 0.55, bx + 0.55, z0, z0 + BED.len + 0.08]);
+      this.obstacles.push([bx - 0.55, bx + 0.55, z0, z0 + BED.len * BED_STRETCH + 0.08]);
       // the bed-head unit on the wall: a larch rail with the reading light under a hood, the gas outlets, the call button
       this.bedHead(bx, z0, i);
       // the cabinet at the head on the chair's side, the monitor and the drip on the other

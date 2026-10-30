@@ -123,15 +123,17 @@ export class CarRide {
     if (!was) g.hud?.flash(`WANTED · you're riding with ${W.owner} · caught, you go to prison too`, 'bad', 4200);
   }
 
-  /** The police arrested the driver of the car you ride in (server 'arrested'): out of the car, into a cell. */
+  /** The police arrested the driver of the car you ride (or rode) in during the chase (server 'arrested'): out of the
+   *  car, into a cell, wherever you are now (Oct 30 2026: getting out before they caught him doesn't get you off). */
   onArrested(d) {
     const g = this.g;
     if (!g || !d) return;
+    const aboard = !!this.ride;
     if (this.ride) this.end(true, false); // (the server already took your seat)
     if (this.wanted) { this.wanted = null; if (g.police) g.police.rideW = null; }
     const by = String(d.by || 'the driver').slice(0, 24), fine = Number(d.fine) || 0;
     if (fine > 0) { g.hud?.setMoney?.(g.save.money, -fine); g.audio?.play?.('cash'); }
-    const msg = `Arrested with ${by} · you were in the car${fine > 0 ? ` · -$${Math.round(fine).toLocaleString('en-US')}` : ''}`;
+    const msg = `${aboard ? `Arrested with ${by}` : `${by} was caught`} · you're going to jail too${fine > 0 ? ` · -$${Math.round(fine).toLocaleString('en-US')}` : ''}`;
     const pr = g.prison;
     if (pr?.jail && Number.isFinite(d.jailUntil)) {
       if (MP.profile) { MP.profile.jailUntil = d.jailUntil; MP.profile.jailReason = d.reason; }
@@ -296,7 +298,10 @@ export class CarRide {
     if (!r) return;
     this.ride = null;
     if (this.cab) { cabinLight(this.cab.inst, this.cab.t, { on: false }); this.cab = null; }
-    if (this.wanted) { this.wanted = null; if (this.g?.police) this.g.police.rideW = null; }
+    // (stepping out of a wanted driver's car (Oct 30 2026, the user: "even if the passenger steps out and the person
+    // driving gets caught the passenger goes free, fix that"): you were in it, so you are still in it: the server keeps
+    // you as an accomplice until the chase is over (server.js accompliceStep); a warning as you go)
+    if (this.wanted) { if (stand && release && !this.wanted.arrest) this.g?.hud?.flash(`You rode with ${this.wanted.owner || 'a wanted driver'} · caught, you go to jail too`, 'bad', 4200); this.wanted = null; if (this.g?.police) this.g.police.rideW = null; }
     if (release) this.mp.releaseSeat();
     const g = this.g, p = g?.player;
     if (!p) return;

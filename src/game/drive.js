@@ -606,7 +606,7 @@ export class Drive {
     const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
     let px = 0, pz = 0, n = 0, solid = false, kind = 'snow';
     let rpx = 0, rpz = 0, rn = 0, rBest = 0, rK = -1; // (guardrails: their own push, a glancing collision below; the line hit hardest)
-    let mpCar = null, poles = 0;
+    let mpCar = null, copCar = null, poles = 0;
     const R = d.w / 2, sp = Math.hypot(d.vx, d.vz);
     for (const k of [d.half - R, 0, -(d.half - R)]) {
       const cx = d.x + fx * k, cz = d.z + fz * k;
@@ -656,6 +656,7 @@ export class Drive {
             if (!c.soft && !c.net) solid = true;
             kind = kindOf(c);
             if (c.mp && c.car) mpCar = c; // (another player's car: police.js onHit)
+            if (c.police === 'remote') copCar = c; // (another player's patrol car (net/vehicles.js): police.js onHit 'police', you're wanted: Oct 30 2026)
           }
         }
       }
@@ -667,6 +668,7 @@ export class Drive {
     d.x += px; d.z += pz;
     const vn = d.vx * nx + d.vz * nz;
     if (mpCar && vn < 0) this.hitReport('player-car', -vn);
+    if (copCar && vn < 0) this.hitReport('police', -vn); // (Oct 30 2026, the user: "if you crash into a police car even when you're not wanted you should be wanted")
     // into something solid (a trunk, a building, a rock, a lift tower) at 40 km/h or more: a crash
     if (solid && -vn > CRASH_V && this.canCrash()) { this.crash(-vn, nx, nz, kind); return; }
     if (solid && -vn > KNOCK_V) this.knock(-vn, nx, nz);

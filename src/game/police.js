@@ -86,6 +86,10 @@ export const TUNING = {
   noSpotS: 75,       // s: never spotted in this long (they never got near you): they give up
   heatPerS: 1 / 36,  // stars a second while they have you in sight, fleeing (a star every ~36 s)
   heatHitCop: 0.35,  // you hitting a patrol car
+  // (Oct 30 2026, the user: "if you crash into a police car even when you're not wanted you should be wanted"): your
+  // car into a patrol car at this closing speed (km/h) or more, not wanted: wanted at once, fleeing (copHit); a slow
+  // nudge while parking (under it) isn't
+  copRamKmh: 15,
   heatWreck: 0.8,    // you wrecking one
   heatHit: 0.2,      // hitting traffic / people mid-chase
   heatBlock: 0.5,    // through (or round) a roadblock
@@ -866,15 +870,14 @@ export class Police {
   // ---------------------------------------------------------------- the trigger
   /** drive.js onHit: your car hit `kind` ('traffic' | 'parked' | 'person' | 'player-car' | 'player') at v m/s closing. */
   reportHit(kind, v) {
+    if (kind === 'police') { if (v * 3.6 >= TUNING.copRamKmh) this.copHit(null, v); return; } // (another player's patrol car, multiplayer: drive.js)
     if (this.w) { if (v * 3.6 >= TUNING.triggerKmh && this.w.fleeing && (this.w.hitT || 0) < this.time - 1) { this.w.hitT = this.time; this.addHeat(this.w, TUNING.heatHit); } return; } // (mid-chase: hotter)
     if (this.cool > 0 || !(v * 3.6 >= TUNING.triggerKmh)) return;
     if (!this.drive?.active || this.excluded?.() || this.paused?.() || this.prison?.active) return;
     this.start(kind);
   }
   start(why) {
-    this.w = { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, haltT: 0, halted: false, side: '', pulled: false, laneT: 0, footT: 0, scene: null, why,
-      heat: 1, search: false, spotted: false, seen: false, unseenT: 0, noSpotT: 0, lkp: { x: 0, z: 0, vx: 0, vz: 0, t: 0 }, reinT: 4, rbT: 8, spikeT: 6, chatT: 6, rankT: 0,
-      near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0, trail: [], trimT: 0 };
+    this.w = this.chaseState(why);
     this.rq.length = 0; this.radioText = ''; this.L = LEVELS[1]; this.escT = 0;
     if (!this.spawn(0)) { this.w = null; return; }
     const T = this.target();
@@ -882,6 +885,45 @@ export class Police {
     this.slam('PULL OVER', 'POLICE · STOP AT THE SIDE OF THE ROAD', 0);
     this.radio(`Dispatch: collision reported ${T ? this.where(T) : ''}. Unit responding.`);
     this.audio?.play?.('error');
+  }
+  // a new chase's state (start, copHit)
+  chaseState(why) {
+    return { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, haltT: 0, halted: false, side: '', pulled: false, laneT: 0, footT: 0, scene: null, why,
+      heat: 1, search: false, spotted: false, seen: false, unseenT: 0, noSpotT: 0, lkp: { x: 0, z: 0, vx: 0, vz: 0, t: 0 }, reinT: 4, rbT: 8, spikeT: 6, chatT: 6, rankT: 0,
+      near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0, trail: [], trimT: 0 };
+  }
+  // you rammed a patrol car (Oct 30 2026, the user: "if you crash into a police car even when you're not wanted you
+  // should be wanted"): copRamKmh+ closing (hits, your car into it); u the one you hit (null: another player's patrol
+  // car, multiplayer: drive.js reports 'police', and one of yours is sent). Not wanted (it driving off after a stop,
+  // say): a chase at once, it after you as if you had fled a stop (two stars, PURSUIT). Pulled over / being waved
+  // down: fleeing now, the officer runs back to his car. Already fleeing: hotter (heatHitCop: the stars), as before.
+  // (Wanted is local to you: this.w, so wantedBits / the presence row and the kept chase (save.wanted) follow on.)
+  copHit(u, v) {
+    if (!this.drive?.active || this.jailing || this.excluded?.() || this.prison?.active) return;
+    let W = this.w;
+    if (!W) {
+      if (this.paused?.()) return;
+      if (u?.on && !u.wrecked) {
+        this.w = W = this.chaseState('police');
+        this.rq.length = 0; this.radioText = ''; this.L = LEVELS[1]; this.escT = 0;
+        this.dropOfficer(u); // (one still out by it: back in at once)
+        u.mode = 'chase'; u.role = 'chase'; u.ram = false; u.gone = 0; u.leaveTo = null; u.path = null; u.repath = 0; u.stuckN = 0;
+        const T = this.target();
+        if (T) { W.spotted = W.seen = W.reached = true; W.lkp.x = T.x; W.lkp.z = T.z; W.lkp.t = this.time; }
+      } else { this.start('police'); W = this.w; if (!W) return; }
+    }
+    const S = W.scene;
+    if (this.committed(S)) return; // (being arrested already)
+    if (!W.fleeing) {
+      this.flee(W);
+      if (W.heat < 2) { W.heat = 2; this.levelUp(W, 2); } // (flee's addHeat waits while a scene is on: a stop)
+      if (S) { if (S.u?.officer) { S.step = 'back'; S.abort = true; } else W.scene = null; } // (as driving off mid-stop: sceneStep)
+      W.copHitT = this.time; // (the same hit's next frames: not hotter again)
+      this.slam('WANTED', 'YOU HIT A POLICE CAR', 0.4);
+      this.note("You hit a police car · you're wanted");
+      try { this.audio?.police?.('star'); } catch { /* (silent) */ }
+    } else if ((W.copHitT || 0) < this.time - 1.5) { W.copHitT = this.time; this.addHeat(W, TUNING.heatHitCop); }
+    void v;
   }
 
   // ---------------------------------------------------------------- the patrol cars
@@ -2401,14 +2443,15 @@ export class Police {
         const word = u.hitKind === 'tbone' ? 'T-BONED!' : u.hitKind === 'headon' || head ? 'HEAD-ON!' : pit ? 'PIT!' : u.hitKind === 'box' ? 'BOXED IN!' : 'RAMMED!';
         this.impact(u, d, d.x + rx, d.z + rz, nx, nz, eff, word, true);
         if (Math.random() < 0.45) this.radio(pit ? 'PIT maneuver! He is spinning out!' : `Contact! Suspect rammed ${this.where(d)}!`);
-      } else if (closing > KNOCK_V && yours > KNOCK_V * 0.6) {
-        // you drove into them: your knock, their damage, and (not fleeing yet) now you are
-        this.drive.knock(closing, nx, nz);
-        u.dmg += Math.max(0, closing * 3.6 - TUNING.wreckKmh) * TUNING.wreckPer;
-        if (W && !W.fleeing && closing * 3.6 >= TUNING.triggerKmh) this.flee(W);
-        if (W?.fleeing && (W.copHitT || 0) < this.time - 1.5) { W.copHitT = this.time; this.addHeat(W, TUNING.heatHitCop); }
-        if (u.role === 'block' && W?.rb) W.rb.smashed = true;
-        this.impact(u, d, d.x + rx, d.z + rz, nx, nz, closing, u.role === 'block' ? 'SMASHED THROUGH!' : '', false);
+      } else if (closing * 3.6 >= TUNING.copRamKmh && yours * 3.6 >= TUNING.copRamKmh * 0.6) {
+        // you drove into them: (a knock and up) your knock, their damage; wanted / fleeing now, or hotter (copHit: Oct 30
+        // 2026, the user: "if you crash into a police car even when you're not wanted you should be wanted"; before,
+        // only mid-chase over 25 km/h; a patrol car stopped at a roadside stop or driving off after it counts too)
+        const hard = closing > KNOCK_V && yours > KNOCK_V * 0.6;
+        if (hard) { this.drive.knock(closing, nx, nz); u.dmg += Math.max(0, closing * 3.6 - TUNING.wreckKmh) * TUNING.wreckPer; }
+        this.copHit(u, closing);
+        if (hard && u.role === 'block' && W?.rb) W.rb.smashed = true;
+        if (hard) this.impact(u, d, d.x + rx, d.z + rz, nx, nz, closing, u.role === 'block' ? 'SMASHED THROUGH!' : '', false);
       }
       if (u.dmg >= 100) { (this.fx ||= new Fx(this.scene)).debris(u.x, u.y + 0.9, u.z, -nx, -nz, 22, 7, true); this.wreck(u); }
       if (performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); try { this.audio?.impact ? this.audio.impact('car', Math.min(1, 0.3 + closing / 15)) : this.audio?.play?.('land', 0.6); } catch { /* (silent) */ } }
@@ -2654,7 +2697,10 @@ export class Police {
     this.w = null; this.jailing = 6; this.jailTry = 0; this.hideHeli(); this.fixCar();
     this.setPin(true);
     this.tryJail(); // (update(): tried again if the prison didn't take it, then arrestFallback)
-    if (inCar && isMP() && net.open) net.request('policeArrest', { seconds: TUNING.jailS }).catch((e) => console.warn('[mp] policeArrest', e?.code || e));
+    // (Oct 30 2026, the user: "even if the passenger steps out and the person driving gets caught the passenger goes
+    // free, fix that, he/she should also go to prison": sent on foot too (foot: not who sits in the car now), the
+    // server also jails everyone who rode with you in this chase, wherever they are: server.js accompliceStep)
+    if (isMP() && net.open) net.request('policeArrest', { seconds: TUNING.jailS, foot: !inCar }).catch((e) => console.warn('[mp] policeArrest', e?.code || e));
   }
   // into the prison (its own fade; it takes you out of the car / the lift / the interior: main.js prisonClear). The
   // sentence is local first (multiplayer: the server's 'jail' answer only corrects the time), so a failed request still
@@ -2863,7 +2909,7 @@ export class Police {
   /** Your wanted state for your presence row while you drive your car (net/carride.js pose): your passengers see it. */
   wantedBits() {
     const W = this.w;
-    if (!W || W.scene?.kind === 'fine') return 0;
+    if (!W || (W.scene?.kind === 'fine' && !W.fleeing)) return 0; // (Oct 30 2026: fled a stop / rammed the patrol car while the officer runs back: wanted already)
     return (this.stars(W) << W_SHIFT) | (W.search && !W.scene ? F.wSearch : 0) | (this.committed(W.scene) ? F.wArrest : 0);
   }
   /** Trail map: the patrol cars while you are wanted (blue dots). */

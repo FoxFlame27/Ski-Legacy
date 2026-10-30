@@ -1169,6 +1169,37 @@ try {
     await sleep(100);
   }
 
+  // (Oct 30 2026, the user: "even if the passenger steps out and the person driving gets caught the passenger goes free,
+  // fix that, he/she should also go to prison"): in the car at any point of the chase, out of it or not: jailed too;
+  // a ride before the chase: free
+  console.log('accomplices who stepped out');
+  {
+    const dv = new Fake(url), rr = new Fake(url), ev = new Fake(url);
+    await dv.open(); await rr.open(); await ev.open();
+    const toks = [];
+    for (const [f, n] of [[dv, 'Driver Dee'], [rr, 'Rider Rob'], [ev, 'Early Eve']]) { const r = await f.req('register', { name: n }); toks.push(r.d.token); await f.req('login', { v: PROTO, name: n, token: r.d.token }); }
+    const ride = async (f) => { const p = f.req('perm', { kind: 'carRide', to: 'Driver Dee' }); const q = await dv.next('permAsk', (d) => d.kind === 'carRide'); await dv.req('permAnswer', { rid: q.rid, allow: true }); await p; return f.req('seatClaim', { k: 'car', v: 'Driver Dee' }); };
+    const pres = () => dv.send('p', [Date.now(), 5, 1, 5, 0, 0, 0, 0, 0, 0, 0, 128]);
+    ok((await ride(ev)).ok, 'Eve rides with Dee before any chase');
+    pres(); await sleep(60);
+    await ev.req('seatRelease'); // (out before the chase)
+    await dv.req('profileSet', { key: 'wanted', value: { h: 2, e: 0, t: 5, f: true, why: 'traffic' } });
+    ok((await ride(rr)).ok, 'Rob gets in once Dee is wanted');
+    pres(); await sleep(60);
+    await rr.req('seatRelease'); // (steps out mid-chase)
+    pres(); await sleep(60);
+    await dv.req('profileSet', { key: 'wanted', value: null }); // (police.js arrest(): forget() goes first)
+    await dv.req('jail', { seconds: 90, reason: 'fleeing the police' });
+    const ar = await dv.req('policeArrest', { seconds: 90, foot: false });
+    ok(ar.ok && ar.d.passengers.length === 1 && ar.d.passengers[0] === 'Rider Rob', 'policeArrest: Rob, who stepped out mid-chase, is arrested too; Eve is not');
+    const gr = await rr.next('arrested');
+    ok(gr && gr.by === 'Driver Dee' && server.profileOf('rider rob').jailUntil > Date.now() + 80000, 'Rob is told and jailed wherever he is');
+    await sleep(50);
+    ok(!ev.events.some((m) => m.t === 'arrested') && !server.profileOf('early eve').jailUntil, 'Eve (rode before the chase only) stays free');
+    dv.close(); rr.close(); ev.close();
+    await sleep(100);
+  }
+
   // ---------------------------------------------------------------- the in-game admin panel ('admin': Rafael only)
   console.log('admin panel');
   {

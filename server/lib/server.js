@@ -100,6 +100,14 @@ const JAIL_MAX_S = 300, JAIL_SLACK = 3000; // (the longest sentence; the client'
 // driver's sentence and fined the accomplice fine (half the police's base $3,000 arrest fine: game/police.js arrestFine);
 // one such arrest per driver per ARREST_COOLDOWN_MS
 export const ACCOMPLICE_FINE = 1500, ACCOMPLICE_JAIL_S = 90, ARREST_COOLDOWN_MS = 60 * 1000;
+// (Oct 30 2026, the user: "even if the passenger steps out and the person driving gets caught the passenger goes free,
+// fix that, he/she should also go to prison"): anyone in a wanted driver's car at any point of the chase stays an
+// accomplice (c.accomplices: their name keys, accompliceStep) until the chase is over, out of the car or not, and is
+// jailed with the driver wherever they are (offline: in their profile, the cell at their next login). The chase as the
+// server sees it: the driver's presence flags carry the stars (protocol.js F.wanted, while driving) or their profile
+// has 'wanted' (police.js keeps it while wanted, also on foot). Over for ACCOMPLICE_KEEP_MS: forgotten (the grace: the
+// driver's client forgets the chase just before its 'policeArrest'). Riding only before the chase: free.
+const WANTED_BITS = 7 << 26, PRES_FLAGS = 12, ACCOMPLICE_KEEP_MS = 10 * 1000;
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
 // the vehicle kinds 'veh' accepts (setVeh); /health lists them, so a redeploy can be checked from outside
@@ -1117,6 +1125,26 @@ export class GameServer {
     row.push(c.interior || 0);
     c.pres = row;
     c.world.dirty.set(c.pid, row);
+    this.accompliceStep(c, now);
+  }
+  // a wanted driver's passengers, kept as accomplices for the whole chase (ACCOMPLICE_KEEP_MS above; policeArrest)
+  accompliceStep(c, now = Date.now()) {
+    const w = c.world;
+    if (!w || !c.name) return;
+    const on = !!c.profile?.wanted || ((c.pres?.[PRES_FLAGS] | 0) & WANTED_BITS) !== 0;
+    if (!on) {
+      if (!c.accomplices) return;
+      c.chaseOff ||= now;
+      if (now - c.chaseOff > ACCOMPLICE_KEEP_MS) { c.accomplices = null; c.chaseOff = 0; }
+      return;
+    }
+    c.chaseOff = 0;
+    const m = w.seats.get(`car|${c.name}`);
+    if (!m) return;
+    for (const [s, pid] of m) {
+      const g = s === 0 ? null : w.players.get(pid);
+      if (g && g !== c && g.key) (c.accomplices ||= new Set()).add(g.key);
+    }
   }
 
   // ---------------------------------------------------------------- messages
@@ -1484,10 +1512,12 @@ export class GameServer {
     return { d: { jailUntil: P.jailUntil, reason, now } };
   }
 
-  /** The police arrested you in your car (police.js arrest(), after your own 'jail'): your passengers go to prison too.
-   *  Only the players the server's own seat registry has in your car's passenger seats; you must be serving a sentence
-   *  yourself; once per ARREST_COOLDOWN_MS. Each passenger: out of the car, jailed (as long as you, at most), charged
-   *  ACCOMPLICE_FINE (a game charge: into debt down to DEBT_FLOOR), told 'arrested'. */
+  /** The police arrested you (police.js arrest(), after your own 'jail'): your passengers go to prison too.
+   *  The players the server's own seat registry has in your car's passenger seats now (not when you were caught on
+   *  foot: d.foot), and every accomplice of this chase (c.accomplices: in your car at any point of it, wherever they
+   *  are now; Oct 30 2026); you must be serving a sentence yourself; once per ARREST_COOLDOWN_MS. Each one: out of a
+   *  car seat, jailed (as long as you, at most), charged ACCOMPLICE_FINE (a game charge: into debt down to
+   *  DEBT_FLOOR), told 'arrested' (offline: the sentence and the fine in their profile). */
   policeArrest(c, d) {
     const w = c.world, now = Date.now(), P = c.profile;
     if (now - (c.arrestAt || 0) < ARREST_COOLDOWN_MS) return { err: 'cooldown' };
@@ -1496,21 +1526,31 @@ export class GameServer {
     const left = Math.max(1, Math.round((P.jailUntil - now) / 1000));
     const seconds = Math.min(left, clamp(isNum(d?.seconds) ? Math.round(d.seconds) : ACCOMPLICE_JAIL_S, 1, JAIL_MAX_S));
     const reason = `Arrested with ${c.name}`;
-    const m = w.seats.get(`car|${c.name}`), names = [];
-    for (const [s, pid] of m ? [...m.entries()] : []) {
+    if (w) this.accompliceStep(c, now); // (whoever is aboard right now counts too, if the chase is still on)
+    const m = w?.seats.get(`car|${c.name}`), names = [], keys = new Set();
+    if (!d?.foot) for (const [s, pid] of m ? [...m.entries()] : []) {
       const g = w.players.get(pid);
-      if (s === 0 || !g || g === c || g.seat?.k !== 'car' || g.seat.v !== c.name) continue;
-      w.releaseSeat(g);
-      const G = g.profile;
+      if (s === 0 || !g || g === c || g.seat?.k !== 'car' || g.seat.v !== c.name || !g.key) continue;
+      keys.add(g.key);
+    }
+    for (const k of c.accomplices || []) if (k !== c.key) keys.add(k); // (stepped out since: still in it, Oct 30 2026)
+    c.accomplices = null; c.chaseOff = 0;
+    for (const k of keys) {
+      const g = this.online.get(k) || null, G = g?.profile || this.profileOf(k);
+      if (!G) continue;
+      if (g?.seat?.k === 'car') g.world?.releaseSeat(g); // (out of whatever car they are in now)
       G.jailUntil = Math.min(now + JAIL_MAX_S * 1000, Math.max(G.jailUntil || 0, now + seconds * 1000));
       G.jailReason = reason;
       const fine = Math.max(0, Math.min(ACCOMPLICE_FINE, Math.floor(G.money - DEBT_FLOOR)));
-      if (fine) this.debit(g, fine, 'accomplice', DEBT_FLOOR);
+      if (fine) this.debit({ profile: G }, fine, 'accomplice', DEBT_FLOOR);
       this.store.profiles.save();
-      g.send('money', { v: G.money, why: 'accomplice', delta: -fine });
-      g.send('arrested', { by: c.name, seconds, fine, jailUntil: G.jailUntil, reason, now });
-      names.push(g.name);
-      this.log(`[jail] ${g.name}: ${seconds} s, ${reason}, -$${fine}`);
+      if (g) {
+        g.send('money', { v: G.money, why: 'accomplice', delta: -fine });
+        g.send('arrested', { by: c.name, seconds, fine, jailUntil: G.jailUntil, reason, now });
+      }
+      const nm = g?.name || G.name || k;
+      names.push(nm);
+      this.log(`[jail] ${nm}: ${seconds} s, ${reason}, -$${fine}${g ? '' : ' (offline)'}`);
     }
     return { d: { passengers: names } };
   }

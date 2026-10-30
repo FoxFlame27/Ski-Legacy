@@ -871,6 +871,39 @@ try {
     const c9 = await g2.f.req('carRepair', { damage: 0.5, flat: 'clerk' });
     delete gcar().impound;
     ok(!c8.ok && c8.err === 'busy' && !c9.ok && c9.err === 'busy' && P().money === 5000, '...not while the tow truck has it or it is in the tow yard (no charge)');
+    // CRASH DAMAGE kept on the car (carDamage: dents and the damage share) until it is repaired
+    console.log('car damage');
+    const dents = [[0.95, 0.6, 2.1, 0.7, 0.15, 42.5], [-0.9, 0.6, -2.0, 0.5, 0.08, 7]];
+    await g2.f.req('veh', { k: 'car', at: [5, 0, 6, 0] });
+    const dm1 = await g2.f.req('carDamage', { damage: 0.234567, dents, plate: gcar().plate });
+    ok(dm1.ok && gcar().damage === 0.235 && gcar().dents.length === 2 && gcar().dents[0][5] === 42.5 && dm1.d.damage === 0.235, 'crash damage kept on the car: its share (0..1, rounded) and its dents');
+    const seenD = await hal.f.next('veh', (d) => d.k === 'car' && d.pid === g2.l.d.pid && d.veh?.cfg?.dents?.length === 2);
+    ok(!!seenD && seenD.veh.at?.[0] === 5, '...the others see its dents (the parked spot kept)');
+    const bd1 = await g2.f.req('carDamage', { damage: 'lots' }), bd2 = await g2.f.req('carDamage', { damage: 0.5, dents: Array.from({ length: 13 }, () => [0, 0, 0, 0.5, 0.1, 1]) });
+    const bd3 = await g2.f.req('carDamage', { damage: 0.5, dents: [[0, 0, 0, 0.5, 0.1]] }), bd4 = await g2.f.req('carDamage', { damage: 0.5, dents: [[0, 0, 0, 0.5, 0.1, 1e6]] });
+    const bd5 = await g2.f.req('carDamage', { damage: 0.5, dents: 'many' }), bd6 = await g2.f.req('carDamage', { damage: 0.5, plate: 'ZZ 999999' });
+    ok([bd1, bd2, bd3, bd4, bd5].every((r) => !r.ok && r.err === 'bad_value') && !bd6.ok && bd6.err === 'no_car' && gcar().damage === 0.235 && gcar().dents.length === 2,
+      'bad damage / too many dents / a dent not 6 small numbers: refused (bad_value); a plate not yours: no_car; the record as it was');
+    const dm2 = await g2.f.req('carDamage', { damage: 3 });
+    ok(dm2.ok && gcar().damage === 1 && !gcar().dents, '...the share clamped to 1; no dents sent: none kept');
+    await g2.f.req('carDamage', { damage: 0.3, dents });
+    g2.f.close(); await sleep(100);
+    g2 = await relog('Tow Gus', gus.token);
+    const lc = g2.l.d.profile.cars[0];
+    ok(g2.l.ok && lc.damage === 0.3 && lc.dents?.length === 2 && lc.dents[1][2] === -2, '...still there after logging in again');
+    P().money = 5000;
+    const rd = await g2.f.req('carRepair', { damage: 0.3 });
+    ok(rd.ok && gcar().damage == null && gcar().dents == null, 'repaired at the Werkstatt: the damage and the dents are gone');
+    await g2.f.req('carDamage', { damage: 0.2, dents });
+    const rc = await g2.f.req('carRepair', { damage: 0.2, flat: 'clerk' });
+    ok(rc.ok && gcar().damage == null && gcar().dents == null, "...and by the clerk's flat-fee repair");
+    const zd = await g2.f.req('carDamage', { damage: 0.1, dents }), z0 = await g2.f.req('carDamage', { damage: 0, dents: [] });
+    ok(zd.ok && z0.ok && gcar().damage == null && gcar().dents == null, '...no damage and no dents sent: the record cleared');
+    await g2.f.req('carDamage', { damage: 0.6, dents });
+    const wt = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
+    const wbusy = await g2.f.req('carDamage', { damage: 0.9, dents });
+    ok(wt.ok && gcar().damage == null && gcar().dents == null && !wbusy.ok && wbusy.err === 'busy', 'a wreck: it comes home repaired (damage cleared; no damage taken while the truck has it)');
+    await g2.f.req('towDone');
     // the sums for every model: towing + the full repair far below a new one, the wreck bill never above the sell-back
     const sane = Object.entries(CATALOG.cars).every(([id, list]) => wreckBill(id) === Math.min(Math.round(list * CATALOG.carSell / 50) * 50, CATALOG.wreckFee + repairPrice(id, 1))
       && CATALOG.wreckFee + repairPrice(id, 1) < list * 0.5 && repairPrice(id, 0.5) <= repairPrice(id, 1) && repairPrice(id, 1) === Math.round(list * CATALOG.repairRate / 50) * 50);

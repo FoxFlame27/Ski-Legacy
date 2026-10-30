@@ -30,6 +30,7 @@ import { fitModel } from '../core/assets.js';
 import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (the yard on the drawn terrain's own triangles)
 import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
 import { Werkstatt } from './werkstatt.js'; // the repair garage beside the Autohaus (its prices: repairCost below)
+import { applyDents, packDents, unpackDents } from './cardamage.js'; // (your cars' dents and damage kept until repaired: carDamage)
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 import { mergeStatic } from '../engine/merge.js'; // (the hall's boxes welded per material)
 
@@ -319,6 +320,7 @@ export class CarRental {
     (this.parking.cars ||= []).push(e);
     if (this.drive) this.drive._cc = null; // (drive.js re-collects the cars' colliders)
     if (!free) { this.impound?.claim?.(e); this.impound?.adopt(e); } // (its bay taken; towed: in its impound bay, locked until tomorrow)
+    if (!free) this.restoreDamage(e); // (its dents and damage as you left them)
     return e;
   }
   /** A free bay in the yard in front of the hall (YARD.bayLines: three), when the car park has none left. */
@@ -345,6 +347,48 @@ export class CarRental {
     e.label = spec.label;
     return e;
   }
+  // ------------------------------------------------------------------ crash damage, kept (Oct 30, the user: "when you
+  // leave your car, the damage should be saved"): each car of yours keeps its dents, smashed lamps and damage % when you
+  // get out, walk away, switch cars, rejoin or reload, until it is repaired (the Werkstatt, the clerk, a wreck's tow).
+  // save.carDamage { [plate]: { p: damage %, d: packed dents (cardamage.js packDents) } }; multiplayer: the server's car
+  // record too (carDamage: damage 0..1, dents), built back into save.carDamage from the profile (net/session.js)
+  damageMap() { const S = this.save; return S.carDamage && typeof S.carDamage === 'object' && !Array.isArray(S.carDamage) ? S.carDamage : (S.carDamage = {}); }
+  dmgSig(e) { const L = e.dents || []; return `${Math.round((e.damage || 0) * 10)}|${L.length}|${L.length ? L[L.length - 1].seed : ''}`; }
+  /** A car of yours just put in the world (spawn): its kept dents and damage on it. */
+  restoreDamage(e) {
+    const D = this.save.carDamage?.[e.cfg?.plate];
+    if (D && typeof D === 'object') {
+      e.damage = Math.max(0, Math.min(99, Number(D.p) || 0)); // (99 at most: 100 is a wreck)
+      e.dents = unpackDents(D.d);
+      if (e.dents.length) { try { applyDents(e.inst, e); } catch (err) { console.warn('car damage: dents', err); } }
+    }
+    e.dmgSig = this.dmgSig(e);
+  }
+  /** Twice a second: a car of yours whose damage changed (a knock, a crash, a repair) is written down (and told to the server). */
+  trackDamage(dt) {
+    if ((this.dmgT = (this.dmgT || 0) - dt) > 0) return;
+    this.dmgT = 0.5;
+    for (const e of [this.current, ...this.kept]) {
+      if (!e || !e.rental || e.wrecked || !e.cfg?.plate) continue;
+      const sig = this.dmgSig(e);
+      if (sig === e.dmgSig) continue;
+      e.dmgSig = sig;
+      const plate = e.cfg.plate, map = this.damageMap(), pct = Math.max(0, Math.min(99, e.damage || 0)), dents = packDents(e);
+      if (pct <= 0 && !dents.length) delete map[plate];
+      else map[plate] = { p: Math.round(pct * 10) / 10, d: dents };
+      for (const k of Object.keys(map)) if (!this.garage.some((c) => c.plate === k)) delete map[k]; // (sold cars: nothing kept)
+      this.writeSave();
+      this.mp?.damage?.(plate, pct / 100, dents);
+    }
+  }
+  /** Nothing kept for that car (a wreck: it comes home repaired; or it is gone). */
+  dropDamage(plate) {
+    const map = this.save.carDamage;
+    if (!plate || !map?.[plate]) return;
+    delete map[plate];
+    this.writeSave();
+  }
+
   // a car gone from the world (returned, or the wreck off the truck)
   remove(e) {
     if (!e) return;
@@ -511,6 +555,7 @@ export class CarRental {
     // wrecked by a police ram (police.js sets e.policeWreck): no bill, no repair; the car is gone from your garage (the
     // next car of yours, if any, waits in your bay)
     const lost = !!(mine && e.policeWreck);
+    if (mine) this.dropDamage(mine.plate); // (towed home repaired, or gone: nothing kept)
     if (lost) {
       e.rental = false;
       if (this.current === e) this.current = null;
@@ -698,6 +743,7 @@ export class CarRental {
   /** Per frame, outside too: the tow truck, the sign and lamps at night. */
   update(dt) {
     if (!this.L) return;
+    try { this.trackDamage(dt); } catch (e) { console.warn('car damage', e); }
     this.truck?.update(dt);
     this.impound?.update(dt); // (your car left on a road: towed to the impound)
     try { this.werkstatt?.update(dt); } catch (e) { console.warn('Werkstatt', e); this.werkstatt = null; } // (a repair under way, its card, its lights at night)

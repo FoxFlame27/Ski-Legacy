@@ -314,6 +314,8 @@ export class Multiplayer {
       rental: car ? { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, custom: !!car.custom, ...(car.price != null ? { price: car.price } : {}) } : null,
       garage: (p.cars || []).map((c) => ({ id: c.id, paint: c.paint, interior: c.interior, rims: c.rims, plate: c.plate, custom: !!c.custom, ...(c.price != null ? { price: c.price } : {}) })), // (AUTOHAUS: every car you own; cars[0] is out)
       impound: car?.impound ? { day: car.impound.day, until: car.impound.until, bay: car.impound.bay | 0, plate: car.plate } : null, // (the server keeps it: impound.js)
+      // (each car's crash damage, kept on the server until it is repaired: carrental.js carDamage, by plate)
+      carDamage: Object.fromEntries((p.cars || []).filter((c) => c && (c.damage > 0 || c.dents?.length)).map((c) => [c.plate, { p: Math.round((Number(c.damage) || 0) * 1000) / 10, d: Array.isArray(c.dents) ? c.dents : [] }])),
       stats: { races: 0, wins: 0, topSpeed: 0, distance: 0, earned: 0, ...(p.stats || {}) },
       records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
       dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,
@@ -564,6 +566,13 @@ export class Multiplayer {
       if (e.code !== 'busy') console.warn('[mp] tow:', e.code || e.message);
       return e.data?.impound ? { impound: e.data.impound } : null;
     }
+  }
+  /** Your car's crash damage changed (carrental.js trackDamage): kept on the server's car record (by plate) until it is
+   *  repaired; the car out shows its dents to the others. damage 0..1, dents: cardamage.js packDents. */
+  carDamage(plate, damage, dents) {
+    const car = (MP.profile?.cars || []).find((c) => c.plate === plate);
+    if (car) { if (damage > 0 || dents?.length) { car.damage = damage; car.dents = dents; } else { delete car.damage; delete car.dents; } }
+    net.request('carDamage', { plate, damage, dents }).catch((e) => { if (e?.code !== 'busy') console.warn('[mp] car damage:', e?.code || e?.message); });
   }
   /** The truck has unloaded your car: the server's tow record ends. */
   towDone() { net.request('towDone').catch(() => {}); }

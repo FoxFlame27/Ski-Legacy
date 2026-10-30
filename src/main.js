@@ -1438,6 +1438,7 @@ function applyMpSave() {
     plateCheck: (p) => multiplayer.plateCheck(p), plateIssue: () => multiplayer.plateIssue(), // (the configurator: plates unique for everyone)
     tow: (kind, home, bay) => multiplayer.tow(kind, home, bay), towDone: () => multiplayer.towDone(), // (the tow truck: the fee and the impound on the server)
     repair: (damage, plate, flat) => multiplayer.repairCar(damage, plate, flat), // (the Werkstatt / the Autohaus clerk's flat fee: the server prices and charges the repair)
+    damage: (plate, frac, dents) => multiplayer.carDamage(plate, frac, dents), // (your car's dents and damage kept on the server until repaired)
     carNear: (x, z, r) => multiplayer.carRide.carNear(x, z, r), // (an impound bay with another player's car in it)
   } : null;
   if (outfitShop) outfitShop.buyHook = on ? (id) => multiplayer.buyOutfit(id) : null;

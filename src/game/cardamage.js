@@ -18,6 +18,26 @@ export function addDent(e, dirX, dirZ, hard, size) {
   return dent;
 }
 
+// Kept (Oct 30, the user: "when you leave your car, the damage should be saved"): e.dents compactly in the save's
+// carDamage (by plate: carrental.js) and on the server's car record (multiplayer: the others see them too), until a repair
+/** e.dents for a save / the server: [[x, y, z, r, depth, seed], ...] (the last DENTS_MAX, cm-rounded). */
+export const DENTS_MAX = 12;
+const r2 = (v) => Math.round(v * 100) / 100;
+export function packDents(e) {
+  return (e?.dents || []).slice(-DENTS_MAX).map((D) => [r2(D.x), r2(D.y), r2(D.z), r2(D.r), r2(D.depth), Math.round((D.seed || 0) * 10) / 10]);
+}
+/** packDents' list back into dents (bad entries left out). */
+export function unpackDents(list) {
+  const out = [];
+  if (!Array.isArray(list)) return out;
+  for (const a of list.slice(-DENTS_MAX)) {
+    if (!Array.isArray(a) || a.length < 6 || !a.every((v) => Number.isFinite(v) && Math.abs(v) <= 100)) continue;
+    const [x, y, z, r, depth, seed] = a, l = Math.hypot(x, z) || 1;
+    out.push({ x, y, z, ux: x / l, uz: z / l, r: Math.max(0.1, Math.min(1.2, r)), depth: Math.max(0, Math.min(0.3, depth)), seed });
+  }
+  return out;
+}
+
 /** Bring an instance (cars.js carInstance) up to date with e.dents (idempotent: only the new ones are applied). */
 export function applyDents(inst, e) {
   const list = e?.dents;

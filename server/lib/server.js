@@ -136,6 +136,12 @@ export function busPrize(def, i, n, time) {
 const CANTONS = ['VS', 'GR', 'BE', 'UR', 'OW', 'TI', 'ZH', 'LU'];
 export const cleanPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 \-]/g, '').replace(/\s+/g, ' ').replace(/^[ -]+/, '').slice(0, 8).trim();
 const plateKey = (s) => cleanPlate(s).replace(/[ -]/g, '');
+// A car's crash damage (client game/cardamage.js, carrental.js carDamage): damage 0..1, dents at most DENTS_MAX of
+// [x, y, z, r, depth, seed] (the car's own frame, m; seed 0..100), kept on the car until it is repaired
+export const DENTS_MAX = 12;
+const validDents = (a) => Array.isArray(a) && a.length <= DENTS_MAX && a.every((d) => Array.isArray(d) && d.length === 6 && d.every((x) => isNum(x) && Math.abs(x) <= 100));
+/** The look of a car everyone sees ('veh' cfg): model, paint, trim, rims, plate; its dents while it has any. */
+const carLook = (car) => ({ id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, ...(car.dents?.length ? { dents: car.dents } : {}) });
 
 function newProfile(name) {
   return {
@@ -1147,6 +1153,7 @@ export class GameServer {
       case 'tow': return reply(this.tow(c, d));
       case 'towDone': return reply(this.towDone(c));
       case 'carRepair': return reply(this.carRepair(c, d));
+      case 'carDamage': return reply(this.carDamage(c, d));
       case 'raceJoin': return reply(w.raceJoin(c, d));
       case 'raceLeave': return reply(w.raceLeave(c));
       case 'raceSolo': return reply(w.raceSolo(c, d));
@@ -1322,7 +1329,7 @@ export class GameServer {
       if (k === 'car') {
         const car = c.profile.cars?.[0];
         if (!car) return { err: 'no_car' };
-        v = { k, cfg: { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate } };
+        v = { k, cfg: carLook(car) };
       } else {
         const h = c.world?.heli.copies.find((x) => x.key === c.key);
         if (!h) return { err: 'not_renting' };
@@ -1366,6 +1373,7 @@ export class GameServer {
     const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };
     car.at = home;
+    if (d.kind === 'wreck') this.clearDamage(c, car); // (a wreck comes home repaired)
     if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), until: now + IMPOUND_MS, bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 }; // (the tow yard: 3 min)
     this.store.profiles.save();
     return { d: { money: P.money, fee: paid, impound: car.impound || null, at: home } };
@@ -1386,7 +1394,41 @@ export class GameServer {
     const fee = d.flat ? (frac > 0 ? CLERK_REPAIR : 0) : repairPrice(car.id, frac);
     if (fee <= 0) return { err: 'no_damage', d: { money: P.money } };
     if (!this.debit(c, fee, 'repair')) return { err: 'money', d: { money: P.money, fee } };
+    this.clearDamage(c, car);
+    this.store.profiles.save();
     return { d: { money: P.money, fee } };
+  }
+  /** Your car's crash damage, kept on it (game/carrental.js carDamage): { plate?, damage (0..1), dents } (the car out
+   *  when no plate). It stays until the car is repaired (carRepair, a wreck's tow), so leaving the car, switching cars,
+   *  logging out or a reload finds it as it was; the car out shows its dents to the others too ('veh' cfg). Not while
+   *  the tow truck has a wreck (it comes home repaired). */
+  carDamage(c, d) {
+    const P = c.profile, k = d.plate != null ? plateKey(d.plate) : null;
+    const car = k ? (P.cars || []).find((x) => plateKey(x.plate) === k) : P.cars?.[0];
+    if (!car) return { err: 'no_car' };
+    if (!isNum(d.damage) || (d.dents != null && !validDents(d.dents))) return { err: 'bad_value' };
+    if (car.tow?.kind === 'wreck') return { err: 'busy' };
+    const frac = Math.round(clamp(d.damage, 0, 1) * 1000) / 1000, dents = (d.dents || []).map((a) => a.map((x) => Math.round(x * 100) / 100));
+    if (frac <= 0 && !dents.length) this.clearDamage(c, car);
+    else {
+      car.damage = frac;
+      if (dents.length) car.dents = dents; else delete car.dents;
+      this.showLook(c, car);
+    }
+    this.store.profiles.save();
+    return { d: { damage: car.damage || 0, dents: car.dents || [] } };
+  }
+  clearDamage(c, car) {
+    if (!car || (car.damage == null && car.dents == null)) return;
+    delete car.damage; delete car.dents;
+    this.showLook(c, car);
+  }
+  // (the car out: its 'veh' record's look again, with or without dents, to everyone else)
+  showLook(c, car) {
+    const v = c.vehs?.car;
+    if (!v || car !== c.profile.cars?.[0] || !v.cfg || v.cfg.plate !== car.plate) return;
+    c.vehs.car = { ...v, cfg: carLook(car) };
+    c.world?.broadcast('veh', { pid: c.pid, k: 'car', veh: c.vehs.car }, c);
   }
   /** The truck has unloaded your car (in its bay / the impound): the tow record ends. */
   towDone(c) {

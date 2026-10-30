@@ -14,7 +14,7 @@ import { CAR_MODELS, carTemplate, carInstance, driverEye } from '../game/cars.js
 import { dressCar, normConfig } from '../game/carconfig.js';
 import { seatsFor } from '../game/carpeople.js';
 import { lampsOn, Smoke, hazardPhase } from '../game/carlights.js';
-import { addDent, applyDents, repairInstance } from '../game/cardamage.js';
+import { addDent, applyDents, repairInstance, unpackDents } from '../game/cardamage.js';
 import { HeliModel, ANCHORS } from '../game/heli/model.js';
 import { nightUniform } from '../world/village.js';
 import { buildTowTruck, beaconsOn, groundPose, bedLocal, TOW_HALF } from '../game/towtruck.js';
@@ -171,10 +171,11 @@ export class RemoteVehicles {
   wreckLook(c, dt, show) {
     if (c.wreck && !c.dented) {
       c.dented = true;
-      try { const e = { dents: [] }; addDent(e, 0, 1, 1, c.t.size); addDent(e, 0.8, 0.5, 0.7, c.t.size); applyDents(c.inst, e); } catch { /* (no dents on this model) */ }
+      try { repairInstance(c.inst); const e = { dents: [] }; addDent(e, 0, 1, 1, c.t.size); addDent(e, 0.8, 0.5, 0.7, c.t.size); applyDents(c.inst, e); } catch { /* (no dents on this model) */ }
     } else if (!c.wreck && c.dented) {
       c.dented = false;
       try { repairInstance(c.inst); } catch { /* (as it was) */ }
+      c.dentSig = null; this.carDents(c); // (its own kept dents back, if any)
     }
     if (c.wreck && show) {
       try {
@@ -183,6 +184,19 @@ export class RemoteVehicles {
         c.smoke.update(dt, b, this.o.camera?.() || null, nightUniform.value, _d.set(0, 0, 1).applyQuaternion(c.group.quaternion));
       } catch { c.smoke = c.smoke || null; }
     } else if (c.smoke) c.smoke.clear?.();
+  }
+  // the dents the owner's car keeps (cfg.dents: their crashes, kept until it is repaired: carrental.js carDamage), on
+  // this copy of it; again only when the record's dents change (a repair takes them all out)
+  carDents(c) {
+    const L = c.cfg?.dents, sig = Array.isArray(L) && L.length ? `${L.length}|${L.map((a) => a?.[5]).join(',')}` : '';
+    if (sig === c.dentSig) return;
+    const had = !!c.dentSig;
+    c.dentSig = sig;
+    if (c.dented) return; // (a wreck: its wreck look until it is whole again: wreckLook)
+    try {
+      if (had) repairInstance(c.inst);
+      if (sig) applyDents(c.inst, { dents: unpackDents(L) });
+    } catch { /* (no dents on this model) */ }
   }
   dropCar(pid) {
     const c = this.cars.get(pid);
@@ -203,6 +217,7 @@ export class RemoteVehicles {
       const key = `${cfg.id}|${cfg.paint}|${cfg.interior}|${cfg.rims}|${cfg.plate}`; // (only when the record changes)
       if (!c || c.key !== key) { const old = c; if (old) this.dropCar(r.pid); c = this.makeCar(r, cfg, key); if (!c) return; if (old?.posed) { c.x = old.x; c.y = old.y; c.z = old.z; c.yaw = old.yaw; c.posed = true; } }
       c.cfg = cfg;
+      this.carDents(c);
     }
     const driving = r.state === ST.drive && !!(r.flags & F.car);
     c.driven = driving;

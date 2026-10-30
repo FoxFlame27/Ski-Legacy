@@ -33,6 +33,19 @@ const BAY = { w: 5.4, d: 5.6 };            // the private parking beside each ho
 const BAY_SET = 3.4;                       // m from the pad's front edge to the bays (beside the house's front wall)
 export const DRIVE_W = 3.2;                // the drive: a lane from the road's plowed edge to the bays
 const BANK = 0.7;                          // tan 35 degrees: the terraces' banks
+// the village's ground (its legs, hairpins, terraces and car park): kept clear by the bus roads' routing, so the
+// valley road passes below it at the junction (JUNCTION_NEAR) instead of cutting across the plots
+export const CHALET_SITE = { x0: XL - 30, x1: XE + 30, z0: LEG_Z[3] - 40, z1: LEG_Z[0] + 30 };
+export const inChaletSite = (x, z) => x > CHALET_SITE.x0 && x < CHALET_SITE.x1 && z > CHALET_SITE.z0 && z < CHALET_SITE.z1;
+/** A stop road passing the village (its straight line within ~150 m of the site) goes by the junction: this point. */
+export function chaletWaypoint(a, b) {
+  const m = 150, x0 = CHALET_SITE.x0 - m, x1 = CHALET_SITE.x1 + m, z0 = CHALET_SITE.z0 - m, z1 = CHALET_SITE.z1 + m;
+  for (let k = 0; k <= 64; k++) {
+    const x = a.x + ((b.x - a.x) * k) / 64, z = a.z + ((b.z - a.z) * k) / 64;
+    if (x > x0 && x < x1 && z > z0 && z < z1) return { x: JUNCTION_NEAR.x, z: CHALET_SITE.z1 + 8 };
+  }
+  return null;
+}
 export const CHALET_PLACE = { x: 500, z: 1075, label: 'Chalet village', r: 200 };
 
 const hash = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };

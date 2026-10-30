@@ -14,7 +14,7 @@ import { layout, VILLAGE_BUILDINGS, PISTE_WIDTH, ensureRaceCells } from '../../w
 import { RAIL } from '../../world/railroute.js';
 import { planScenic, shapeScenic } from './scenic.js'; // the scenic mountain road (Panoramastrasse) + its roundabout
 import { planScenicLoop } from './scenicloop.js'; // the Passstrasse and the loop round the back of the mountains
-import { planChaletVillage, planAlmdorfStop } from './chaletroad.js'; // the Chaletweg up through the chalet village (Almdorf)
+import { planChaletVillage, planAlmdorfStop, inChaletSite, chaletWaypoint } from './chaletroad.js'; // the Chaletweg up through the chalet village (Almdorf)
 import { planScenicBus, planWestgratBus } from './scenicbus.js'; // the ski bus's stops up the scenic roads
 import { planRentalRoad } from './rentalroad.js'; // the Westgratstrasse: across from the car rental, up the Westgrat
 import { clearRouteCache } from './scenicnet.js'; // (the routing's ground samples: freed once the roads are planned)
@@ -475,7 +475,12 @@ export function planBusRoads(stops) {
       if (via < best * 1.35 && Math.hypot(s.x - l.x, s.z - l.z) < best) { from = l; best = Math.hypot(s.x - l.x, s.z - l.z); }
     }
     let pts = null;
-    try { pts = route(from, s, { obstacles }); } catch (e) { console.warn('bus road', e); }
+    try {
+      // (round the chalet village's ground, by its junction on the valley road: game/bus/chaletroad.js)
+      const w = chaletWaypoint(from, s), o = { obstacles, bad: inChaletSite };
+      if (w) { const p1 = route(from, w, o), p2 = p1 && route(w, s, o); pts = p2 ? p1.concat(p2.slice(1)) : route(from, s, o); }
+      else pts = route(from, s, o);
+    } catch (e) { console.warn('bus road', e); }
     if (!pts) { s.noRoad = true; continue; }
     // a road carrying on from a stop where another ends (a stop on the way) starts at that road's height: one
     // continuous bench through the stop (no step in the carved ground where the two roads meet)

@@ -111,9 +111,13 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 // (corrected by the first seconds of play, see autoQuality; such a drop lasts that session only)
 if (save.qualitySet !== 'user' || !normalizeQuality(save.quality)) {
   const d = detectQuality(renderer);
+  // (Oct 30, the user: "default settings is performance": every machine starts on Performance; SUPER PERFORMANCE only
+  // when the player picks it in SETTINGS (live windows stay on Performance), the frame-rate drops stop there too)
+  const autoFloor = (q) => (q === 'super' ? 'performance' : q);
+  d.quality = 'performance';
   save.quality = d.quality;
   // (a lower preset the frame rate needed last time: start there, see autoQ)
-  const cap = normalizeQuality(save.qualityCap);
+  const cap = autoFloor(normalizeQuality(save.qualityCap));
   if (cap && QUALITY_ORDER.indexOf(cap) < QUALITY_ORDER.indexOf(d.quality)) { save.quality = cap; d.quality = `${cap} (capped by the last session)`; }
   save.qualitySet = 'auto';
   console.info(`Graphics: ${d.quality} (detected: ${d.gpu || 'unknown GPU'}, ${d.mem} GB, ${d.cores} cores)`);
@@ -662,8 +666,7 @@ function startGame() {
   writeSave();
   audio.music('freeride');
   if (!player.hasSkis) {
-    setTimeout(() => hud.flash('Welcome to Legacy Village', 'good', 3000), 600);
-    audio.announce('welcome', { delay: 0.6 });
+    setTimeout(() => hud.flash('Welcome to Legacy Village', 'good', 3000), 600); // (no spoken welcome: Oct 30, the user asked it gone)
   }
 }
 
@@ -1789,6 +1792,7 @@ const autoQ = { t: 0, frames: 0, windows: 0, done: !!navigator.webdriver, watch:
 function autoDrop(fps, steps) {
   let to = quality.name;
   for (let i = 0; i < steps; i++) to = lowerQuality(to) || to;
+  if (to === 'super') to = 'performance'; // (Super only by the player's own pick)
   if (to === quality.name) return false;
   applyQuality(to, false);
   if (save.qualitySet !== 'user') { save.qualityCap = to; writeSave(); }

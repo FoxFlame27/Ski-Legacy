@@ -74,7 +74,8 @@ export class CarRide {
   frame(dt) {
     const g = this.g;
     if (!g) return;
-    if (!this.placed) { this.placed = true; try { this.putBack(); } catch (e) { console.warn('[mp] car spot', e); } }
+    // (once the other players' records are in: their parked cars' spots are known, putBack keeps clear of them)
+    if (!this.placed && this.mp.remotes) { this.placed = true; try { this.putBack(); } catch (e) { console.warn('[mp] car spot', e); } }
     // (your wreck while the tow truck fetches it is still your car to the others: lying there, then on the truck's bed,
     // where it rides with the truck as the others draw it: net/tow.js, vehicles.js; told like driving: no spot)
     const cur = g.carRental?.current || g.carRental?.towed || null, V = this.v;
@@ -144,16 +145,21 @@ export class CarRide {
 
   // Back in the world: your car where you left it (profile cars[0].at, the server keeps it) if that spot is free, else
   // a free spot beside it, the nearest free car park bay, or the rental's yard (Oct 29, the user)
+  // (Oct 30 2026, the user: "make sure cars don't stack on the parking lot": with no spot kept (a new car, the first
+  // session) it stayed in the bay spawn gave it, the first Autohaus bay, the same for every player: now that bay is
+  // checked like a kept spot. A bay counts as free with no other player's parked car (their record, or where it is
+  // drawn here: vehicles.js unstack) and none of your other kept cars within 2.5 m: its own neighbours stay usable)
   putBack() {
-    const g = this.g, R = g.carRental, cur = R?.current, at = MP.profile?.cars?.[0]?.at;
-    if (!cur || !at || g.drive?.d?.e === cur || cur.impound || cur.towing) return; // (impounded: it stays in its impound bay)
+    const g = this.g, R = g.carRental, cur = R?.current;
+    if (!cur || g.drive?.d?.e === cur || cur.impound || cur.towing) return; // (impounded: it stays in its impound bay)
+    const p0 = cur.car.position, at = MP.profile?.cars?.[0]?.at || [p0.x, p0.y, p0.z, cur.car.rotation.y];
     const yaw = at[3], fx = Math.sin(yaw), fz = Math.cos(yaw);
     const cands = [[0, 0], [2.8, 0], [-2.8, 0], [0, 6], [0, -6], [5.6, 0], [-5.6, 0]].map(([s, f]) => ({ x: at[0] + fz * s + fx * f, z: at[2] - fx * s + fz * f, yaw }));
-    const bays = [];
-    for (const L of busRoads.lots || []) for (const b of L.bays || []) if (!b.taken) bays.push({ x: b.x, z: b.z, yaw: Math.atan2(b.hx || 0, b.hz || 1), d: Math.hypot(b.x - at[0], b.z - at[2]) });
+    const bays = [], pound = R.impound?.pound || [];
+    for (const L of busRoads.lots || []) for (const b of L.bays || []) if (!b.taken && !pound.includes(b)) bays.push({ x: b.x, z: b.z, yaw: Math.atan2(b.hx || 0, b.hz || 1), d: Math.hypot(b.x - at[0], b.z - at[2]), bay: true });
     bays.sort((a, b) => a.d - b.d);
-    cands.push(...bays.slice(0, 12));
-    const spot = cands.find((c) => this.spotFree(c.x, c.z, cur));
+    cands.push(...bays.slice(0, 24));
+    const spot = cands.find((c) => this.spotFree(c.x, c.z, cur, c.bay ? 2.5 : 4.5));
     if (!spot) return; // (nowhere free: it stays in the yard, where resync put it)
     const p = cur.car.position;
     if (Math.hypot(p.x - spot.x, p.z - spot.z) < 0.3) return;
@@ -165,10 +171,12 @@ export class CarRide {
     for (const p of this.mp.remotes?.players.values() || []) { const a = p.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < r) return true; }
     return false;
   }
-  spotFree(x, z, own) {
+  spotFree(x, z, own, near = 4.5) {
     const g = this.g;
     if (g.drive?.clearAt && !g.drive.clearAt(x, z, 1.1, own)) return false;
-    for (const r of this.mp.remotes?.players.values() || []) { const a = r.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < 4.5) return false; } // (another player's car)
+    for (const r of this.mp.remotes?.players.values() || []) { const a = r.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < near) return false; } // (another player's car)
+    for (const c of this.mp.vehicles?.cars?.values() || []) if (c.posed && !c.driven && Math.hypot(c.x - x, c.z - z) < near) return false; // (as drawn here)
+    for (const k of g.carRental?.kept || []) if (k !== own && !k.driving && k.car?.parent && Math.hypot(k.car.position.x - x, k.car.position.z - z) < 2.5) return false; // (your other cars)
     return true;
   }
 

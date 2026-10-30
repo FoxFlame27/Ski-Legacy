@@ -23,6 +23,7 @@ import { Ambulance } from '../game/heli/ambulance.js';
 import { SLED, SEAT as SLED_SEAT } from '../game/snowmobile.js';
 import { fitModel } from '../core/assets.js';
 import { world } from '../world/world.js';
+import { busRoads } from '../game/bus/roads.js';
 
 const LEN = Object.fromEntries(CAR_MODELS);
 const VEH_FAR = 1800;   // m: vehicles beyond are not drawn
@@ -233,7 +234,9 @@ export class RemoteVehicles {
       if (vc.at && c.atRef !== vc.at) {
         c.atRef = vc.at; c.x = vc.at[0]; c.y = vc.at[1]; c.z = vc.at[2]; c.yaw = vc.at[3]; c.posed = true;
         c.pitch = vc.tilt?.[0] || 0; c.roll = vc.tilt?.[1] || 0; c.wreck = !!vc.wreck; // (a wreck as it lies: on its side, its roof)
+        c.atT = this.time; c.bay = null; c.unT = 0; // (when it parked there: the later of two in one spot moves, unstack)
       }
+      if (vc.at && !vc.wreck && !r.vtow?.car) this.unstack(c, vc.at, dt);
     }
     // (on their tow truck's bed: it rides with the truck, not where it lay)
     const bed = !driving && r.vtow?.car ? this.tows.get(r.pid) : null;
@@ -246,6 +249,8 @@ export class RemoteVehicles {
     // (nor while it stands where your own car is: every player's car starts in the same bay by the Autohaus, and their
     // car's box over yours walled yours in; it is solid again once yours has left it)
     // (latched: from overlapping (< 2 m apart) until the two are 5.5 m apart, so a car you drive up to stays solid)
+    // (Oct 30 2026, the user: "make sure cars don't stack on the parking lot": a car parked in your car's spot is now
+    // drawn in the nearest free bay of that lot (unstack) and solid there; the latch is left for a spot with no lot)
     const mp = !driving && c.posed ? this.o.localCar?.()?.group?.position : null, dm = mp ? Math.hypot(mp.x - c.x, mp.z - c.z) : Infinity;
     if (dm < 2) c.ghost = true; else if (dm > 5.5) c.ghost = false;
     const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed && !c.ghost;
@@ -274,6 +279,40 @@ export class RemoteVehicles {
     // the owner's name over it while nobody drives it (Oct 29, the user: "everything you own has your name above if
     // you are not in it")
     tagScale(c.tag, d); // (driven or parked: "<name>'s car" over it; their own name tag hides while they sit in it, remote.js)
+  }
+
+  // Two cars in one spot (Oct 30 2026, the user: "make sure cars don't stack on the parking lot"): every player's car
+  // could come back in the same bay (the first Autohaus bay: each joined before the other's car was known), drawn one
+  // inside the other. On this screen only: a parked car whose spot (< 2.5 m) is held by one there before it (your own
+  // cars, the parked other people's cars, another player's car that parked there earlier: atT) is drawn in the nearest
+  // free bay of that lot (parking.js lotBays: L.bays, the Autohaus car park's too; never the tow yard's), solid there;
+  // back in its own spot once that is free. Checked twice a second. No lot there (a lay-by, the road): left as it is
+  // (the ghost latch, updateCar). Only the drawing moves: the record, carNear / spotFree, are the owner's real spot.
+  unstack(c, at, dt) {
+    if ((c.unT -= dt) > 0) return;
+    c.unT = 0.5;
+    const R = window.__game?.carRental, pound = R?.impound?.pound || [], NEAR = 2.5;
+    const mine = (R?.parking?.cars || []).filter((e) => !e.driving && e.car?.parent);
+    const held = (x, z, earlier) => {
+      for (const e of mine) if (Math.hypot(e.car.position.x - x, e.car.position.z - z) < NEAR) return true; // (yours, or a parked car here)
+      for (const o of this.cars.values()) {
+        if (o === c || !o.posed || o.driven) continue;
+        if (earlier && !(o.atT < c.atT || (o.atT === c.atT && o.pid < c.pid))) continue;
+        if (Math.hypot(o.x - x, o.z - z) < NEAR) return true;
+      }
+      return false;
+    };
+    const home = () => { if (c.bay) { c.bay = null; c.x = at[0]; c.z = at[2]; c.yaw = at[3]; c.setT = 0; } };
+    if (!held(at[0], at[2], true)) { home(); return; }
+    if (c.bay && !held(c.bay.x, c.bay.z, false)) return; // (its bay still free: stays)
+    // the lot it stands in (the nearest bay within 8 m), its bays nearest first
+    let lot = null, bd = 8;
+    for (const L of busRoads.lots || []) for (const b of L.bays || []) { const d = Math.hypot(b.x - at[0], b.z - at[2]); if (d < bd) { bd = d; lot = L; } }
+    if (!lot) { home(); return; }
+    const free = lot.bays.filter((b) => !pound.includes(b)).sort((a, b) => Math.hypot(a.x - at[0], a.z - at[2]) - Math.hypot(b.x - at[0], b.z - at[2]))
+      .find((b) => !held(b.x, b.z, false));
+    if (!free) { home(); return; } // (the lot full: as it is, the latch)
+    c.bay = free; c.x = free.x; c.z = free.z; c.yaw = Math.atan2(free.hx || 0, free.hz || 1); c.setT = 0; // (settleCar: on the ground there now)
   }
 
   // On the ground as it is HERE (Oct 30, the user: "for other people, in some cars it looks like the car is floating in

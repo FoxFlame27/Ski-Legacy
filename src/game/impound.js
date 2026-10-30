@@ -163,6 +163,7 @@ export class Impound {
     // your bay: the one nearest the hall's door; the impound: the far end of the back row (away from the road)
     const byDoor = bays.slice().sort((a, b) => Math.hypot(a.x - door.x, a.z - door.z) - Math.hypot(b.x - door.x, b.z - door.z));
     this.own = byDoor[0];
+    this.byDoor = byDoor;
     const back = bays.filter((b) => b !== this.own && ((b.x - L.x) * L.vx + (b.z - L.z) * L.vz) < 0);
     this.pound = (back.length ? back : bays.filter((b) => b !== this.own)).sort((a, b) => Math.hypot(b.x - door.x, b.z - door.z) - Math.hypot(a.x - door.x, a.z - door.z)).slice(0, IMPOUND_BAYS);
     R.carSpot = pose(this.own); // (rented and bought cars wait here now, not in the yard)
@@ -179,6 +180,14 @@ export class Impound {
     } catch (e) { console.warn('rental car park: cars', e); }
   }
 
+  /** Multiplayer: the pose of the free bay nearest the hall (your bay if no other player's car stands in it): every
+   *  player's car used to wait in the very same bay, one over the other. */
+  freeBay() {
+    const mp = this.R.mp;
+    if (!mp?.carNear || !this.byDoor || !this.pose) return null;
+    const b = this.byDoor.find((x) => !this.pound?.includes(x) && (x === this.own || !x.taken) && !mp.carNear(x.x, x.z, 2.5));
+    return b ? this.pose(b) : null;
+  }
   /** In this car park (anywhere on it)? */
   inLot(x, z, pad = 0.5) {
     const L = this.lot;

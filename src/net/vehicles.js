@@ -213,7 +213,12 @@ export class RemoteVehicles {
     const show = outdoors && c.posed && d < VEH_FAR;
     if (g.visible !== show) g.visible = show;
     // (not while you ride in it: you sit inside its box)
-    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed;
+    // (nor while it stands where your own car is: every player's car starts in the same bay by the Autohaus, and their
+    // car's box over yours walled yours in; it is solid again once yours has left it)
+    // (latched: from overlapping (< 2 m apart) until the two are 5.5 m apart, so a car you drive up to stays solid)
+    const mp = !driving && c.posed ? this.o.localCar?.()?.group?.position : null, dm = mp ? Math.hypot(mp.x - c.x, mp.z - c.z) : Infinity;
+    if (dm < 2) c.ghost = true; else if (dm > 5.5) c.ghost = false;
+    const solid = c.posed && outdoors && this.o.ridingPid?.() !== r.pid && !bed?.posed && !c.ghost;
     c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
     g.position.set(c.x, c.y, c.z);

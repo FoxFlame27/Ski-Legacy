@@ -279,6 +279,7 @@ export class CarRental {
   spawn(cfg, p = this.carSpot, free = false) {
     const id = cfg.id, spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
     if (!spec || !gltf || !this.parking || !p) return null;
+    if (p === this.carSpot && !free && this.mp) p = this.impound?.freeBay?.() || p; // (multiplayer: a bay no other player's car stands in)
     const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group;
     car.name = free ? 'admin-car' : 'rental-car';
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;

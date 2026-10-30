@@ -129,7 +129,7 @@ function footprint(meshes, yaw, name, tile = null) {
   const ox = (minx + maxx) / 2, oz = (minz + maxz) / 2, c = Math.cos(yaw), s = Math.sin(yaw);
   let gMin = Infinity, gMax = -Infinity;
   for (const [x, z] of [[minx, minz], [maxx, minz], [minx, maxz], [maxx, maxz], [ox, oz]]) { const g = drawnHeight(x, z); gMin = Math.min(gMin, g); gMax = Math.max(gMax, g); }
-  const lo = gMin + 0.12, hi = gMax + HEAD;
+  const lo = gMin + 0.12, hi = gMax + HEAD, gHug = gMax + LIFT;
   if (maxy < lo + LIFT * 0.5) return null; // flat on the snow
   const cells = new Map();
   const mark = (u, v, h) => {
@@ -151,6 +151,19 @@ function footprint(meshes, yaw, name, tile = null) {
       const ya = W[a * 3 + 1], yb = W[b * 3 + 1], yd = W[d * 3 + 1];
       const ymax = ya > yb ? (ya > yd ? ya : yd) : (yb > yd ? yb : yd), ymin = ya < yb ? (ya < yd ? ya : yd) : (yb < yd ? yb : yd);
       if (ymax < lo || ymin > hi) continue;
+      // (geometry draped on the ground, every corner under LIFT over the snow right there: a car park's surface and its
+      // painted lines, a yard, kerbs. On a slope a triangle's top is well over the ground at its low end, and the Autohaus
+      // car park's lines became a row of invisible walls across it: your car could not drive out of its bay)
+      if (ymin <= gHug) {
+        const AG = (tris[k0].ag ||= new Float32Array(W.length / 3).fill(NaN));
+        let hug = true;
+        for (const vi of [a, b, d]) {
+          let h = AG[vi];
+          if (h !== h) h = AG[vi] = W[vi * 3 + 1] - drawnHeight(W[vi * 3], W[vi * 3 + 2]);
+          if (h >= LIFT) { hug = false; break; }
+        }
+        if (hug) continue;
+      }
       // (most triangles of a detailed model: small and inside the band, their corners' cells will do)
       if (ymin >= lo && ymax <= hi && UV) {
         const ua = UV[a * 2], va = UV[a * 2 + 1], ub = UV[b * 2], vb = UV[b * 2 + 1], ud = UV[d * 2], vd = UV[d * 2 + 1];

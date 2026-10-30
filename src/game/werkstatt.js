@@ -39,6 +39,8 @@ const DOOR = { x0: -5.9, x1: -1.1, h: 3.7 };   // the open bay in the front wall
 const BAY = { x: -3.5, z: -0.6, hw: 1.6, hl: 2.9 }; // the repair box (the car's middle inside it)
 const BENCH = { x: 3.4, z: -ID + 0.4 };        // the workbench (on foot: E here)
 const REPAIR_S = 4;                            // the repair's few seconds
+const SLAB = 0.15;                             // the floor slab's top over the ground's highest point under it
+const WIN = { x0: 1.0, x1: 4.4, y0: 1.1, y1: 2.6 }; // the office window's opening in the front wall (right of the bay)
 const ROAD_GAP = [6, 8, 10];                   // the apron's depth (road edge to the bay), tried in turn
 
 const CSS = `
@@ -170,13 +172,16 @@ export class Werkstatt {
     // (nothing flat enough: either side, further along, on steeper ground)
     if (!best) for (const du of [26, 31, 36, 44, 52, 60, 70]) for (const sd of [away, -away]) for (const g of ROAD_GAP) tryAt({ u: sd * du, pen: 6 }, g, 4);
     if (!best) return null;
-    // the floor: the ground's highest point under the building (its walls reach down to the lowest, under the snow)
+    // the floor: a level concrete slab a hand above the ground's highest point under the building and the bay's
+    // threshold (the drawn terrain, every 2 m vertex of it: none pokes through), its walls reaching down to the lowest
+    // (Oct 30, the user: "make the floor in the garage straight": it followed the slope before)
     let top = -Infinity;
-    for (let lx = -IW; lx <= IW + 0.01; lx += 1.4) for (let lz = -ID; lz <= ID + 0.01; lz += 1.3) {
+    for (let lx = -W / 2; lx <= W / 2 + 0.01; lx += 0.5) for (let lz = -D / 2; lz <= D / 2 + 0.81; lz += 0.5) {
+      if (lz > D / 2 && (lx < DOOR.x0 - 0.3 || lx > DOOR.x1 + 0.3)) continue;
       const x = best.x + best.ax * lx + best.fx * lz, z = best.z + best.az * lx + best.fz * lz;
       top = Math.max(top, world.meshHeight ? world.meshHeight(x, z) : world.height(x, z));
     }
-    best.y = Number.isFinite(top) ? top : world.height(best.x, best.z);
+    best.y = (Number.isFinite(top) ? top : world.height(best.x, best.z)) + SLAB;
     best.yaw = Math.atan2(best.fx, best.fz);
     return best;
   }
@@ -189,7 +194,7 @@ export class Werkstatt {
     g.position.set(S.x, S.y, S.z); g.rotation.y = S.yaw;
     const MH = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z));
     const gy = (lx, lz) => { const p = this.w(lx, lz); return MH(p.x, p.z) - S.y; };
-    const base = Math.min(S.lo, S.y) - S.y - 0.6; // (the walls' foot, under the snow at the lowest corner)
+    const base = Math.min(S.lo, S.y) - S.y - 0.6; // (the walls' foot, under the snow at the lowest corner; the floor: y 0)
     const add = (geo, mat, x, y, z, shadow = true, parent = g) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = shadow; o.receiveShadow = true; parent.add(o); return o; };
     const B = (w, h, d, mat, x, y, z, shadow, parent) => add(worldUV(new THREE.BoxGeometry(w, h, d)), mat, x, y, z, shadow, parent);
     // self-lit at night (update(): more at night): the inner boards, the floor, the props
@@ -211,10 +216,19 @@ export class Werkstatt {
     // the bay; the plinth along the front except across the bay
     const fz0 = D / 2 - T / 2, fzO = D / 2 + 0.01, pierW = DOOR.x0 + W / 2, rightW = W / 2 - DOOR.x1;
     B(pierW, wallH, T + 0.12, m.stone, -W / 2 + pierW / 2, wallY, fz0 + 0.06);
-    B(rightW, wallH, T, m.larchOut, DOOR.x1 + rightW / 2, wallY, fz0);
-    B(rightW - T, H, 0.02, inner, DOOR.x1 + (rightW - T) / 2, H / 2, ID - 0.01, false);
+    // (the right part round the office window's opening: a real hole through the wall, glazed: see below)
+    const { x0: wx0, x1: wx1, y0: wy0, y1: wy1 } = WIN, wcx = (wx0 + wx1) / 2, wcy = (wy0 + wy1) / 2, ww = wx1 - wx0, wh = wy1 - wy0;
+    B(wx0 - DOOR.x1, wallH, T, m.larchOut, (DOOR.x1 + wx0) / 2, wallY, fz0);
+    B(W / 2 - wx1, wallH, T, m.larchOut, (wx1 + W / 2) / 2, wallY, fz0);
+    B(ww, wy0 - base, T, m.larchOut, wcx, (wy0 + base) / 2, fz0);
+    B(ww, H - wy1, T, m.larchOut, wcx, (H + wy1) / 2, fz0);
+    const board = (x0, x1, y0, y1) => B(x1 - x0, y1 - y0, 0.02, inner, (x0 + x1) / 2, (y0 + y1) / 2, ID - 0.01, false);
+    board(DOOR.x1, wx0, 0, H); board(wx1, IW, 0, H); board(wx0, wx1, 0, wy0); board(wx0, wx1, wy1, H);
     B(DOOR.x1 - DOOR.x0, H - DOOR.h, T, m.larchOut, (DOOR.x0 + DOOR.x1) / 2, (H + DOOR.h) / 2, fz0);
-    B(rightW + 0.14, 0.9 - base, 0.14, m.stone, DOOR.x1 + rightW / 2 + 0.07, (0.9 + base) / 2 - 0.2, D / 2 + 0.07);
+    const SD = 5.6; // (the side door; the plinth stops either side of it, a stone step up to it)
+    B(SD - 0.6 - DOOR.x1, 0.9 - base, 0.14, m.stone, (DOOR.x1 + SD - 0.6) / 2, (0.9 + base) / 2 - 0.2, D / 2 + 0.07);
+    B(W / 2 + 0.14 - SD - 0.6, 0.9 - base, 0.14, m.stone, (SD + 0.6 + W / 2 + 0.14) / 2, (0.9 + base) / 2 - 0.2, D / 2 + 0.07);
+    B(1.3, -base, 0.6, m.stone, SD, base / 2, D / 2 + 0.3);
     B(DOOR.x1 - DOOR.x0 + 0.3, 0.32, 0.36, m.glulam, (DOOR.x0 + DOOR.x1) / 2, DOOR.h + 0.16, D / 2 + 0.05); // (the lintel)
     // the roll-up door, rolled up: its drum box over the opening inside, a hand's width of slats below it, the guide rails
     const slatT = canvasTex(64, 256, (c, w, h) => { c.fillStyle = '#c9ccd0'; c.fillRect(0, 0, w, h); for (let y = 0; y < h; y += 16) { c.fillStyle = '#9ea2a8'; c.fillRect(0, y, w, 3); c.fillStyle = '#e4e6e9'; c.fillRect(0, y + 3, w, 2); } });
@@ -223,18 +237,31 @@ export class Werkstatt {
     B(DOOR.x1 - DOOR.x0 + 0.2, 0.55, 0.55, m.steel, (DOOR.x0 + DOOR.x1) / 2, DOOR.h + 0.2, ID - 0.3);
     add(new THREE.BoxGeometry(DOOR.x1 - DOOR.x0, 0.32, 0.05), slat, (DOOR.x0 + DOOR.x1) / 2, DOOR.h - 0.16, ID - 0.06);
     for (const x of [DOOR.x0 + 0.06, DOOR.x1 - 0.06]) B(0.1, DOOR.h, 0.12, steel, x, DOOR.h / 2, ID - 0.06);
-    // the office window (warm, lit at night) and the side door (dark larch, a little window)
+    // the office window (Oct 30, the user: "fix this window so you can look in from outside and look out from inside":
+    // it was an opaque lit plane, flush with the inner boards, flickering against them): a framed opening through the
+    // wall, its reveals lined, a steel sash with two mullions round clear tinted glass (both faces, see-through; the
+    // lit workshop shows through it at night, the glass itself a warm sheen then), an oak sill outside and in.
+    // Still solid (the wall's collider runs across it).
+    const ft = 0.08; // (the casing's width)
+    for (const [z, d] of [[fzO + 0.02, 0.05], [ID - 0.025, 0.05]]) { // (the casing, outside and in)
+      B(ww + 2 * ft, ft, d, m.glulam, wcx, wy1 + ft / 2, z, false);
+      for (const x of [wx0 - ft / 2, wx1 + ft / 2]) B(ft, wh, d, m.glulam, x, wcy, z, false);
+    }
+    for (const y of [wy0 + 0.015, wy1 - 0.015]) B(ww, 0.03, T, inner, wcx, y, fz0, false); // (the reveals)
+    for (const x of [wx0 + 0.015, wx1 - 0.015]) B(0.03, wh, T, inner, x, wcy, fz0, false);
+    B(ww, 0.06, 0.08, steel, wcx, wy0 + 0.06, fz0, false); B(ww, 0.06, 0.08, steel, wcx, wy1 - 0.06, fz0, false); // (the sash)
+    for (const x of [wx0 + 0.06, wx1 - 0.06, wx0 + ww / 3, wx0 + 2 * ww / 3]) B(0.06, wh - 0.12, 0.08, steel, x, wcy, fz0, false);
+    B(ww + 0.3, 0.06, 0.26, m.oak, wcx, wy0 - 0.03, D / 2 + 0.08, false); // (the sills)
+    B(ww + 0.1, 0.05, 0.2, m.oak, wcx, wy0 - 0.025, ID - 0.08, false);
+    this.glassMat = new THREE.MeshStandardMaterial({ color: 0xc4dbe6, emissive: 0xffd6a0, emissiveIntensity: 0.05, roughness: 0.06, metalness: 0.15,
+      transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide });
+    { const gl = add(new THREE.PlaneGeometry(ww - 0.1, wh - 0.1), this.glassMat, wcx, wcy, fz0, false); gl.receiveShadow = false; gl.renderOrder = 2; gl.userData.noMerge = true; }
+    // the side door (dark larch, a little window), on its step
     this.winMat = new THREE.MeshStandardMaterial({ color: 0x9fb4c4, emissive: 0xffe2b8, emissiveIntensity: 0.3, roughness: 0.15, metalness: 0.2 });
-    const wx0 = 1.0, wx1 = 4.4, wy0 = 1.1, wy1 = 2.6;
-    B(wx1 - wx0 + 0.16, wy1 - wy0 + 0.16, 0.08, steel, (wx0 + wx1) / 2, (wy0 + wy1) / 2, fzO + 0.03, false);
-    add(new THREE.PlaneGeometry(wx1 - wx0, wy1 - wy0), this.winMat, (wx0 + wx1) / 2, (wy0 + wy1) / 2, fzO + 0.075, false);
-    for (const x of [(2 * wx0 + wx1) / 3, (wx0 + 2 * wx1) / 3]) B(0.06, wy1 - wy0, 0.04, steel, x, (wy0 + wy1) / 2, fzO + 0.09, false);
-    B(wx1 - wx0 + 0.3, 0.06, 0.22, m.oak, (wx0 + wx1) / 2, wy0 - 0.08, fzO + 0.1, false);
-    { const iw = add(new THREE.PlaneGeometry(wx1 - wx0, wy1 - wy0), this.winMat, (wx0 + wx1) / 2, (wy0 + wy1) / 2, ID - 0.02, false); iw.rotation.y = Math.PI; }
     const doorMat = new THREE.MeshStandardMaterial({ color: 0x4a2e1a, roughness: 0.7 });
-    B(1.0, 2.15, 0.08, doorMat, 5.6, 1.075 + gy(5.6, D / 2), fzO + 0.04, false);
-    add(new THREE.PlaneGeometry(0.42, 0.5), this.winMat, 5.6, 1.6 + gy(5.6, D / 2), fzO + 0.085, false);
-    B(0.06, 0.24, 0.06, steel, 5.25, 1.05 + gy(5.6, D / 2), fzO + 0.1, false);
+    B(1.0, 2.15, 0.08, doorMat, SD, 1.075, fzO + 0.04, false);
+    add(new THREE.PlaneGeometry(0.42, 0.5), this.winMat, SD, 1.6, fzO + 0.085, false);
+    B(0.06, 0.24, 0.06, steel, SD - 0.35, 1.05, fzO + 0.1, false);
     // the gables (back and front), larch
     const gable = new THREE.Shape(); gable.moveTo(-W / 2, 0); gable.lineTo(W / 2, 0); gable.lineTo(0, RISE); gable.closePath();
     const gGeo = new THREE.ExtrudeGeometry(gable, { depth: T, bevelEnabled: false });
@@ -259,10 +286,13 @@ export class Werkstatt {
       B(2 * IW - 2, 0.05, 0.14, this.stripMat, 0, H - 0.33, z, false);
     }
     B(0.24, 0.32, 2 * ID, glu, 0, H + RISE - 0.3, 0);
-    // the floor: concrete, the yellow repair box with REPARATUR, oil stains, a drain; the apron outside: packed snow
-    // over asphalt from the bay to the road's edge, fading into the snow at its sides (both on the drawn terrain's own
-    // triangles: world/groundpatch.js)
+    // the floor: a level concrete slab (its top: y 0, down to the walls' foot under the snow), on it the yellow repair
+    // box with REPARATUR, oil stains, a drain; a concrete ramp from the bay's sill down to the apron where the ground
+    // falls away; the apron outside: packed snow over asphalt from the bay to the road's edge, fading into the snow at
+    // its sides (on the drawn terrain's own triangles: world/groundpatch.js)
     g.updateMatrixWorld(true);
+    const conc = lit(new THREE.MeshStandardMaterial({ color: 0x8c8a85, roughness: 0.9 }), 0.06);
+    B(W - 0.04, -base, D - 0.04, conc, 0, base / 2, 0);
     const floorT = canvasTex(1024, 768, (c, w, h) => {
       const r = rng(17), X = (lx) => ((lx + IW) / (2 * IW)) * w, Z = (lz) => ((lz + ID) / (2 * ID)) * h;
       c.fillStyle = '#8f8d88'; c.fillRect(0, 0, w, h);
@@ -277,10 +307,38 @@ export class Werkstatt {
       c.save(); c.translate(X(BAY.x), Z(BAY.z + BAY.hl) + 34); c.fillText('REPARATUR', 0, 0); c.restore();
       c.fillStyle = '#5d5c58'; c.fillRect(X(BAY.x) - 30, Z(BAY.z) - 8, 60, 16); // (the drain)
     });
-    const floorMat = groundDecal(lit(new THREE.MeshStandardMaterial({ map: floorT, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 0.1)); // (the decal after the clone: clone() drops onBeforeCompile)
+    const floorMat = lit(new THREE.MeshStandardMaterial({ map: floorT, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }), 0.1);
+    add(new THREE.PlaneGeometry(2 * IW, 2 * ID), floorMat, 0, 0.004, 0, false).rotation.x = -Math.PI / 2;
     const toLocal = (v) => g.worldToLocal(v), corners = (x0, x1, z0, z1) => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([lx, lz]) => { const p = this.w(lx, lz); return [p.x, p.z]; });
-    const floor = new THREE.Mesh(groundPatchGeometry(corners(-IW, IW, -ID, ID), { lift: 0.05, toLocal, uv: (x, z) => { const [lx, lz] = this.local(x, z); return [(lx + IW) / (2 * IW), 1 - (lz + ID) / (2 * ID)]; } }), floorMat);
-    floor.receiveShadow = true; floor.renderOrder = 1; g.add(floor);
+    // the ramp: as gentle as the apron allows (1 in 7 at the least), across the bay a little wider than it, until it
+    // meets the ground (none where the ground at the sill is level with the floor)
+    const RX0 = DOOR.x0 - 0.3, RX1 = DOOR.x1 + 0.3, rMax = Math.max(1, S.gap - 0.4);
+    const dropAt = (d) => Math.min(gy(RX0, D / 2 + d), gy((RX0 + RX1) / 2, D / 2 + d), gy(RX1, D / 2 + d)); // (the ground, floor-relative)
+    let rk = 0, rL = 0;
+    if (dropAt(0.3) < -0.06) {
+      let need = Infinity;
+      for (let d = 0.5; d <= rMax + 1e-6; d += 0.25) need = Math.min(need, -dropAt(d) / d);
+      rk = Math.min(0.35, Math.max(1 / 7, need));
+      rL = rMax;
+      for (let d = 0.5; d <= rMax + 1e-6; d += 0.25) if (-rk * d <= dropAt(d)) { rL = d; break; }
+      rL = Math.min(rMax, rL + 0.4); // (its toe under the snow)
+      const rGeo = new THREE.BoxGeometry(RX1 - RX0, 1, rL + 0.02), pp = rGeo.attributes.position, foot = Math.min(base, -rk * rL - 0.5);
+      for (let i = 0; i < pp.count; i++) { const d = Math.max(0, pp.getZ(i) + rL / 2 - 0.02); pp.setY(i, pp.getY(i) > 0 ? -rk * d : foot); }
+      rGeo.computeVertexNormals();
+      add(worldUV(rGeo), conc, (RX0 + RX1) / 2, 0, D / 2 + rL / 2 - 0.02);
+    }
+    // walkable and drivable: the slab level (cars sit level in the box), the ramp down from its sill (world.groundHeight)
+    {
+      const Y = S.y, hw = W / 2, hd = D / 2;
+      let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+      for (const [x, z] of corners(-hw, hw, -hd, hd + rL)) { minx = Math.min(minx, x); maxx = Math.max(maxx, x); minz = Math.min(minz, z); maxz = Math.max(maxz, z); }
+      this.surface = world.addSurface({ bounds: { minx: minx - 1, minz: minz - 1, maxx: maxx + 1, maxz: maxz + 1 }, height: (x, z) => {
+        const [lx, lz] = this.local(x, z);
+        if (lx > -hw && lx < hw && lz > -hd && lz <= hd) return Y;
+        if (rL > 0 && lz > hd && lz < hd + rL && lx > RX0 && lx < RX1) return Y - rk * (lz - hd);
+        return null;
+      } });
+    }
     const AX0 = -W / 2 - 0.6, AX1 = W / 2 + 0.6, AZ0 = D / 2 - 0.05, AZ1 = D / 2 + S.gap - 0.1, AW = AX1 - AX0, AD = AZ1 - AZ0;
     const apronT = canvasTex(1024, 512, (c, w, h) => {
       const r = rng(23);
@@ -308,7 +366,7 @@ export class Werkstatt {
     B(DOOR.x1 - DOOR.x0 - 0.6, 0.1, 0.22, steel, (DOOR.x0 + DOOR.x1) / 2, DOOR.h + 0.42, fzO + 0.2, false);
     add(new THREE.BoxGeometry(DOOR.x1 - DOOR.x0 - 0.8, 0.03, 0.14), this.lampMat, (DOOR.x0 + DOOR.x1) / 2, DOOR.h + 0.36, fzO + 0.2, false);
 
-    // the props (Meshy; each a procedural stand-in until it loads), lit at night like the boards
+    // the props (Meshy; each a procedural stand-in until it loads), lit at night like the boards, on the level floor (y 0)
     const props = new THREE.Group(); g.add(props);
     const prop = (name, fit, lx, lz, ry, y, stand, onModel) => {
       const pg = new THREE.Group(); pg.position.set(lx, y, lz); pg.rotation.y = ry; props.add(pg);
@@ -316,28 +374,27 @@ export class Werkstatt {
       swapInModel(pg, `decor/${name}`, fit, fb, (mdl) => { onModel?.(mdl); this.litModel(mdl); });
       return pg;
     };
-    const fy = (lx, lz) => Math.max(-0.4, gy(lx, lz)); // (on the floor)
     // the workbench under the tool wall (back wall, workshop half)
-    prop('garage_workbench', { size: 2.0, axis: 'x' }, BENCH.x, BENCH.z, 0, fy(BENCH.x, BENCH.z), (fb) => {
+    prop('garage_workbench', { size: 2.0, axis: 'x' }, BENCH.x, BENCH.z, 0, 0, (fb) => {
       B(2.0, 0.08, 0.75, m.oak, 0, 0.88, 0, true, fb);
       B(1.9, 0.8, 0.68, new THREE.MeshStandardMaterial({ color: 0x24407a, roughness: 0.6, metalness: 0.3 }), 0, 0.42, 0, true, fb);
     });
-    prop('garage_toolwall', { size: 2.4, axis: 'x' }, BENCH.x, -ID + 0.26, 0, fy(BENCH.x, BENCH.z) + 0.93, (fb) => {
+    prop('garage_toolwall', { size: 2.4, axis: 'x' }, BENCH.x, -ID + 0.26, 0, 0.93, (fb) => {
       B(2.4, 1.3, 0.04, new THREE.MeshStandardMaterial({ color: 0xb9bcc0, roughness: 0.7 }), 0, 0.75, -0.2, false, fb);
       for (let i = 0; i < 9; i++) B(0.05, 0.3 + (i % 3) * 0.08, 0.03, steel, -1.0 + i * 0.25, 0.9, -0.16, false, fb);
     });
     // the two-post lift in the workshop half (standing free, its arms folded), stretched to a car's width between posts
     const LIFT = { x: 3.3, z: 0.4, s: 1.45 };
-    prop('garage_lift', { size: 3.5, axis: 'y' }, LIFT.x, LIFT.z, 0, fy(LIFT.x, LIFT.z), (fb) => {
+    prop('garage_lift', { size: 3.5, axis: 'y' }, LIFT.x, LIFT.z, 0, 0, (fb) => {
       for (const sx of [-1, 1]) { B(0.3, 3.5, 0.3, red, sx * 1.45, 1.75, -0.3, true, fb); B(0.4, 0.06, 1.8, red, sx * 1.45, 0.03, 0.2, true, fb); }
       B(3.2, 0.2, 0.2, red, 0, 3.4, -0.3, true, fb);
     }, (mdl) => { mdl.scale.x *= LIFT.s; });
     // tyre stacks, oil drums
-    const tyres = (lx, lz) => prop('garage_tyres', { size: 0.95, axis: 'y' }, lx, lz, lx * 1.7, fy(lx, lz), (fb) => {
+    const tyres = (lx, lz) => prop('garage_tyres', { size: 0.95, axis: 'y' }, lx, lz, lx * 1.7, 0, (fb) => {
       for (let i = 0; i < 4; i++) add(new THREE.TorusGeometry(0.24, 0.085, 8, 18), rubber, 0, 0.1 + i * 0.22, 0, true, fb).rotation.x = Math.PI / 2;
     });
     tyres(IW - 0.5, ID - 0.6); tyres(IW - 1.25, ID - 0.55); tyres(0.0, -ID + 0.5);
-    prop('garage_drums', { size: 1.4, axis: 'xz' }, -IW + 0.85, -ID + 0.75, 0.3, fy(-IW + 0.85, -ID + 0.75), (fb) => {
+    prop('garage_drums', { size: 1.4, axis: 'xz' }, -IW + 0.85, -ID + 0.75, 0.3, 0, (fb) => {
       for (const [x, z, c] of [[-0.35, -0.15, 0x1d4fa8], [0.35, -0.15, 0x1d4fa8], [0, 0.4, 0xb8231c]]) add(new THREE.CylinderGeometry(0.29, 0.29, 0.88, 16), new THREE.MeshStandardMaterial({ color: c, roughness: 0.45, metalness: 0.4 }), x, 0.44, z, true, fb);
     });
     // the wrought-iron bracket sign right of the bay (the gilded spanners), sticking out toward the road
@@ -347,7 +404,7 @@ export class Werkstatt {
     });
     void signP;
     // a yellow-black kerb stop at the back of the repair box
-    B(1.6, 0.12, 0.22, yellow, BAY.x, fy(BAY.x, -ID + 0.5) + 0.06, -ID + 0.5);
+    B(1.6, 0.12, 0.22, yellow, BAY.x, 0.06, -ID + 0.5);
 
     // (performance pass: the building's boxes welded per material; the props' stand-ins stay to be swapped)
     try { mergeStatic(g, { skip: [props] }); } catch (e) { console.warn('Werkstatt: merge', e); }
@@ -495,6 +552,7 @@ export class Werkstatt {
     if (this.postMat) this.postMat.emissiveIntensity = 0.05 + 0.75 * n;
     if (this.lampMat) this.lampMat.emissiveIntensity = 0.2 + 2.4 * n;
     if (this.winMat) this.winMat.emissiveIntensity = 0.3 + 0.9 * n;
+    if (this.glassMat) this.glassMat.emissiveIntensity = 0.05 + 0.55 * n; // (a warm sheen on the office glass at night)
     if (this.stripMat) this.stripMat.emissiveIntensity = 1.4 + 2.2 * n;
     if (Math.abs(n - (this._n ?? -1)) > 0.01) { this._n = n; for (const mt of this.litMats) mt.emissiveIntensity = (mt.userData.lit ?? 0.1) + 0.42 * n; }
   }

@@ -18,6 +18,7 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { inChaletSite } from './bus/chaletroad.js'; // (the chalet village: its drives and private bays count as parked)
 import { planRentalPark } from './bus/autohaus.js'; // (the car park's site: planned with the roads)
 import { lotMaterial } from './bus/bus.js';
 import { groundDecal } from '../world/groundpatch.js';
@@ -232,7 +233,8 @@ export class Impound {
   //   'mouth' in front of a car park's entrance                              towed
   //   'road'  on a road (a lane, a junction, a roundabout)                   towed
   //   'layby' in a lay-by, 'yard' on a building's forecourt (the Autohaus yard, the medical centre, the police
-  //           station), 'free' anywhere else off the roads (the snow, a verge, a chalet's drive)   fine
+  //           station), 'free' in the chalet village (its drives, its private bays)   fine
+  //   'snow'  anywhere else off the roads and car parks: back to your bay after TOW_AFTER s (no fee)
   // { kind, ok, lot, bay, n (the bay's number), why ('aisle' | 'angle' | 'lines') }
   /** The car parks with painted bays: the Autohaus car park and the others (parking.js lotBays). */
   bayLots() {
@@ -289,7 +291,10 @@ export class Impound {
       const h = hl - 0.4;
       for (const k of [0, 1, -1]) if ((k ? laneDistance(x + fx * h * k, z + fz * h * k) : lane) < ROAD_HALF + 0.2) return { kind: 'road', ok: false };
     }
-    return { kind: 'free', ok: true };
+    // (Oct 30, the user: "if you park it somewhere not on a road or parking lot, put a countdown that it will despawn in
+    // 30 sec": out on the snow it goes back to your bay; the chalet village's drives and private bays still count)
+    if (inChaletSite(x, z)) return { kind: 'free', ok: true };
+    return { kind: 'snow', ok: false };
   }
   spotOf(e) { const g = e.car; return this.where(g.position.x, g.position.z, g.rotation.y, e.length || 4.6); }
   // (the old names: properly parked / left where it gets towed)
@@ -325,7 +330,19 @@ export class Impound {
     this.t = 0.5;
     const p = R.player.pos, d = Math.hypot(p.x - e.car.position.x, p.z - e.car.position.z);
     const sp = e.spot = this.spotOf(e);
-    // off the road (the snow, a verge, a lay-by, a forecourt) or properly in a bay: fine, it stays where it is
+    // out on the snow, off every road and car park: 30 s, then it's back in your bay (no truck, no fee)
+    if (sp.kind === 'snow') {
+      e.abandonT = (e.abandonT || 0) + step;
+      if (e.abandonT >= TOW_AFTER) {
+        e.abandonT = 0; this.parkHud(null);
+        const b = this.freeBayOf();
+        if (b) { this.place(e, b); if (R.drive) R.drive._cc = null; R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000); }
+        return;
+      }
+      this.parkHud(this.parkText(e, sp, d));
+      return;
+    }
+    // a lay-by, a forecourt, the chalet village or properly in a bay: fine, it stays where it is
     if (sp.ok || !R.truck || !busRoads.roads.length) {
       e.abandonT = 0; e.warned = false; e.warned2 = false;
       this.parkHud(e.outAt != null && this.clk - e.outAt < 7 ? this.parkText(e, sp, d) : null);
@@ -356,6 +373,7 @@ export class Impound {
         `${sp.why === 'angle' ? 'Straighten up inside the lines' : 'Park inside the lines'} or ${left}`];
       case 'mouth': return [false, '✗ Blocking the car park entrance', `Park in a bay or ${left}`];
       case 'road': return [false, '✗ On the road', `It will be towed in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
+      case 'snow': return [false, '✗ Not on a road or in a car park', `It goes back to your bay in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
       case 'layby': return [true, '✓ Parked in the lay-by', 'Fine here'];
       case 'yard': return [true, `✓ Parked · ${sp.lot?.name || 'forecourt'}`, 'Fine here'];
       default: return [true, '✓ Parked off the road', 'Fine here'];
@@ -377,6 +395,7 @@ export class Impound {
         : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', 'Pull into the bay, inside the lines']
         : [false, 'Not in a bay', 'Pull into a free bay, inside the lines'];
     } else if (sp?.kind === 'mouth' && v < 1) t = [false, 'Blocking the entrance', 'Drive in and park in a bay'];
+    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', 'Leave it here and it goes back to your bay in 30 sec · park in a car park or a lay-by']; // (Oct 30, the user: "and indicate it to the user")
     this.parkHud(t, true);
   }
 

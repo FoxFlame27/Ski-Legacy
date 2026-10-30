@@ -22,6 +22,7 @@ import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
 import { MpTransit } from './transit.js';
 import { DEVICE_PREFS } from '../game/economy.js';
+import { breakables } from '../world/breakables.js'; // (knocked poles, broken guardrails: shared with the world)
 
 const ACCOUNTS_KEY = 'ski-legacy-mp-accounts';
 const SEND_HZ = 12;
@@ -167,6 +168,7 @@ export class Multiplayer {
     MP.warps.clear(); for (const x of w.warps || []) MP.warps.set(x.key, { off: x.off, rate: x.rate, since: x.since });
     MP.heli = w.heli || null;
     MP.queues.clear(); for (const q of w.queues || []) MP.queues.set(q.race, q);
+    try { breakables.remoteList(w.brk); } catch (e) { console.warn('[mp] brk', e); } // (knocked in the last 90 s: already down)
   }
 
   bind() {
@@ -204,6 +206,9 @@ export class Multiplayer {
     on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
     on('arrested', (d) => this.carRide.onArrested(d)); // (the driver of the car you ride in was arrested: you too)
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
+    // poles / signs knocked flying, guardrail sections broken through: yours to the server, everyone else's here
+    breakables.send = (d) => { if (MP.active) net.send('brk', d); };
+    on('brk', (d) => { try { breakables.remote(d); } catch (e) { console.warn('[mp] brk', e); } });
     on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.done.set(d.pid, d); if (d.closeAt) r.closeAt = d.closeAt; } });
     on('raceBoard', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.board = d.rows; r.boardAt = performance.now(); } });
     on('raceQueue', (d) => {

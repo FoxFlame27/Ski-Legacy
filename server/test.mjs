@@ -1145,6 +1145,49 @@ try {
     ok(disk.rafael?.money === 2500000 && disk.rafael.owned.includes('legend'), "Rafael's admin money and unlocks persist (on disk)");
   }
 
+  // ---------------------------------------------------------------- knocked poles, broken guardrails ('brk')
+  console.log('breakables');
+  {
+    const mk = async (name) => { const f = new Fake(url); await f.open(); const r = await f.req('register', { name }); f.l = await f.req('login', { v: PROTO, name, token: r.d.token }); return f; };
+    const k1 = await mk('Knocker'), k2 = await mk('Watcher');
+    ok(k1.l.d.world.id === k2.l.d.world.id && Array.isArray(k2.l.d.world.brk), 'the world snapshot carries the knocked list (brk)');
+    const W = server.worlds.get(k1.l.d.world.id);
+    const r1 = await k1.req('brk', { k: 'pole', id: '1234,-5678', v: [8.5, 4.2, -3.1] });
+    const ev = await k2.next('brk', (d) => d.id === '1234,-5678');
+    ok(r1.ok && ev && ev.k === 'pole' && ev.v[0] === 8.5 && ev.v[2] === -3.1 && ev.pid === k1.l.d.pid, 'a knocked pole is relayed to the others in the world (id, flight, who)');
+    await sleep(50);
+    ok(!k1.events.some((m) => m.t === 'brk'), '...not back to the one who knocked it');
+    const rr = await k1.req('brk', { k: 'rail', id: '-100,200', v: [20, 3, 1] });
+    ok(rr.ok && !!(await k2.next('brk', (d) => d.k === 'rail' && d.id === '-100,200')), 'a broken guardrail section is relayed too');
+    const again = await k2.req('brk', { k: 'pole', id: '1234,-5678', v: [1, 2, 3] });
+    ok(!again.ok && again.err === 'down', 'knocking one already down is not relayed again');
+    const bads = [{ k: 'tree', id: '1,2', v: [1, 2, 3] }, { k: 'pole', id: 'x,2', v: [1, 2, 3] }, { k: 'pole', id: '12345678,2', v: [1, 2, 3] }, { k: 'pole', id: '1,2', v: [1, 2] },
+      { k: 'pole', id: '1,2', v: [1, 'a', 3] }, { k: 'pole', id: '1,2', v: [1, 2, 999] }, { k: 'pole', id: 7, v: [1, 2, 3] }];
+    let refused = 0;
+    for (const d of bads) { const r = await k1.req('brk', d); if (!r.ok && r.err === 'bad_brk') refused++; }
+    ok(refused === bads.length && !W.brk.has('pole|1,2') && !W.brk.has('tree|1,2'), 'bad kinds, ids and flights are refused (bad_brk), nothing kept');
+    // the rate limit: 10 a second at most
+    await sleep(1100);
+    k2.events.length = 0;
+    const res = await Promise.all(Array.from({ length: 16 }, (_, i) => k1.req('brk', { k: 'pole', id: `${i},${900 + i}`, v: [1, 1, 1] })));
+    await sleep(100);
+    const got = k2.events.filter((m) => m.t === 'brk').length, rated = res.filter((r) => !r.ok && r.err === 'rate').length;
+    ok(got >= 10 && got <= 11 && rated === 16 - got, `over 10 knocks a second are refused (rate) and not relayed (${got} relayed, ${rated} refused)`);
+    // a player joining within the 90 s: the knocks come with the world, already down
+    const k3 = await mk('Latecomer');
+    const list = k3.l.d.world.brk || [];
+    const p0 = list.find((x) => x.k === 'pole' && x.id === '1234,-5678'), r0 = list.find((x) => x.k === 'rail' && x.id === '-100,200');
+    ok(p0 && r0 && p0.v[1] === 4.2 && p0.age >= 0 && p0.age < 90000, 'a joiner gets the knocked poles and broken guardrails (flight, age)');
+    // 90 s later: gone from the list (standing again for everyone)
+    for (const e of W.brk.values()) e.at -= 91000;
+    const k4 = await mk('Laterstill');
+    ok((k4.l.d.world.brk || []).length === 0 && W.brk.size === 0, 'after 90 s the knocks are forgotten (a joiner gets none)');
+    const r9 = await k2.req('brk', { k: 'pole', id: '1234,-5678', v: [1, 2, 3] });
+    ok(r9.ok && !!(await k1.next('brk', (d) => d.id === '1234,-5678' && d.pid === k2.l.d.pid)), '...and can be knocked again');
+    k1.close(); k2.close(); k3.close(); k4.close();
+    await sleep(50);
+  }
+
   // ---------------------------------------------------------------- persistence
   a.close(); b.close();
   await sleep(150);

@@ -96,6 +96,12 @@ export const repairPrice = (id, frac) => (frac > 0 ? Math.max(CATALOG.repairMin 
 // THE AUTOHAUS CLERK (game/carrental.js clerkDialog): "Repair my car" at his desk, a flat fee for any damage, wherever
 // the car is parked (the client's CLERK_REPAIR mirrors it; the price is never taken from the client)
 export const CLERK_REPAIR = 500;
+// Knocked poles / signs and broken guardrail sections (client world/breakables.js): relayed to the rest of the world
+// and remembered this long (they stand again after 90 s), so a player joining meanwhile gets them already down
+export const BRK_MS = 90 * 1000;
+export const BRK_HZ = 10;              // knocks a player may send a second
+const BRK_MAX = 400;                   // remembered per world at most (the oldest dropped)
+const BRK_ID_RE = /^-?\d{1,7},-?\d{1,7}$/; // a spot rounded to 10 cm: "x*10,z*10"
 export const wreckBill = (id) => Math.min(round50((CATALOG.cars[id] || 0) * (CATALOG.carSell ?? 0.5)), (CATALOG.wreckFee ?? 1500) + repairPrice(id, 1));
 // race queues: how many racers start a race (always at least 2; alone: a practice race, raceSolo) and its countdown once they are in
 const raceNeed = (race) => Math.max(2, CATALOG.races[race]?.need ?? 2); // (Oct 30, the user: "you can't race with less than 2 people", bus races too)
@@ -154,6 +160,7 @@ class World {
     this.races = new Map();   // rid -> race
     this.nextRid = 1;
     this.dirty = new Map();   // pid -> presence row, sent with the next tick
+    this.brk = new Map();     // 'k|id' -> { k, id, v, at }: knocked poles / broken guardrails of the last BRK_MS
   }
 
   get size() { return this.players.size; }
@@ -178,7 +185,33 @@ class World {
       heli: this.heliMsg(),
       queues: [...this.queues.keys()].map((r) => this.queueMsg(r)),
       races: [...this.races.values()].filter((r) => !r.done).map((r) => this.raceStartMsg(r)),
+      brk: this.brkList(now),
     };
+  }
+
+  // ---------------------------------------------------------------- knocked poles, broken guardrails
+  /** 'brk' { k: 'pole' | 'rail', id: 'x,z' (10 cm), v: [vx, vy, vz] }: relayed to everyone else, kept BRK_MS. */
+  knock(c, d) {
+    const k = d.k, id = str(d.id, 20), v = d.v;
+    if ((k !== 'pole' && k !== 'rail') || !id || !BRK_ID_RE.test(id)) return { err: 'bad_brk' };
+    if (!Array.isArray(v) || v.length !== 3 || !v.every((x) => isNum(x) && Math.abs(x) <= 60)) return { err: 'bad_brk' };
+    if (!c.brkBucket.take()) return { err: 'rate' };
+    const now = Date.now(), key = `${k}|${id}`;
+    this.brkPrune(now);
+    if (this.brk.has(key)) return { err: 'down' }; // (already down: someone knocked it first)
+    const e = { k, id, v: v.map((x) => Math.round(x * 100) / 100), at: now };
+    this.brk.set(key, e);
+    if (this.brk.size > BRK_MAX) this.brk.delete(this.brk.keys().next().value);
+    this.broadcast('brk', { k, id, v: e.v, pid: c.pid }, c);
+    return {};
+  }
+  brkPrune(now = Date.now()) {
+    for (const [key, e] of this.brk) if (now - e.at >= BRK_MS) this.brk.delete(key); else break; // (in time order)
+  }
+  /** The knocks still down: [{ k, id, v, age }] (age: ms since). */
+  brkList(now = Date.now()) {
+    this.brkPrune(now);
+    return [...this.brk.values()].map((e) => ({ k: e.k, id: e.id, v: e.v, age: now - e.at }));
   }
 
   tick(now) {
@@ -597,6 +630,7 @@ class Client {
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
     this.bucket = new Bucket(240, 80);   // requests and events
     this.pBucket = new Bucket(60, 30);   // presence rows (the client sends 12 a second)
+    this.brkBucket = new Bucket(BRK_HZ, BRK_HZ); // knocked poles / broken guardrails (World.knock)
     this.refused = 0; this.refusedT = 0; // messages refused by the rate limit in the current FLOOD_WINDOW_MS
     this.dropped = 0;      // the connection dropped at (ms; 0 = connected): the player is held for a reconnect
     this.graceT = null;
@@ -1048,6 +1082,7 @@ export class GameServer {
         return reply({});
       }
       case 'enter': return reply(this.enter(c, d));
+      case 'brk': return reply(w.knock(c, d));
       case 'jail': return reply(this.jail(c, d));
       case 'policeArrest': return reply(this.policeArrest(c, d));
       case 'seatClaim': return reply(w.claimSeat(c, d));

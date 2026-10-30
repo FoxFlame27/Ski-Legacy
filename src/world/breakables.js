@@ -11,11 +11,16 @@
 // loses a little speed (a clack, no crash). After 90 s, once you are 25 m away or not looking that way (or after
 // 2 more minutes, with a quick grow-in), it stands where it was again: the copy gone, instance / object and collider
 // back. On foot or on skis nothing breaks (the collider stays as it was: the player's collisions never knock).
-// Local only (each player sees their own knocked poles). Cheap: a 16 m grid for the traffic's lookups, at most 30
+// Multiplayer (Oct 30, the user: "also for other people the guard rails don't break"): your own knocks (not the
+// traffic's) go to the server ('brk' { k: 'pole' | 'rail', id, v }: id the pole's / the rail line's spot rounded to
+// 10 cm, the same on every client; v the flight's start velocity), at most 10 a second; everyone else in the world
+// knocks the same pole / breaks the same section (the same flight, nobody charged), and a player joining within the
+// 90 s gets them already down (session.js: remote(), remoteList()). Single player: nothing sent. Cheap: a 16 m grid for the traffic's lookups, at most 30
 // knocked at a time (the oldest stands up again early), no allocation per frame (a copy is built once per pole, on
 // its first knock, and kept for the next).
 import * as THREE from 'three';
 import { world } from './world.js';
+import { busRoads } from '../game/bus/roads.js'; // (the guardrails' line colliders: a section another player broke)
 
 export const BREAK_V = 8 / 3.6; // m/s: slower than this a pole is just a bump
 const RESPAWN = 90;             // s
@@ -30,6 +35,9 @@ const _q = new THREE.Quaternion(), _qd = new THREE.Quaternion(), _up = new THREE
 const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sph = new THREE.Sphere(), _c = new THREE.Color();
 const IDENT = new THREE.Matrix4();
 const ground = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z));
+const NET_HZ = 10;              // knocks sent a second at most (the server's limit too)
+// (a spot's id: x, z rounded to 10 cm; ids are looked up with their neighbours too, against a rounding edge)
+const spotId = (x, z) => `${Math.round(x * 10)},${Math.round(z * 10)}`;
 
 // an instance's own copy of an instanced geometry: the shared attributes, its own entries of the per-instance ones
 function sliceGeometry(src, k) {
@@ -55,6 +63,10 @@ class Breakables {
     this.down = [];
     this.scene = null; this.audio = null; this.camera = null;
     this.stamp = 0;
+    this.send = null;   // multiplayer (session.js): (msg) => sent to the server; null in single player
+    this.quiet = false; // (knocks that are not yours to send: the traffic's, another player's)
+    this.netTok = NET_HZ; this.netT = 0;
+    this.byId = null; this.byIdN = -1; this.railIds = null; this.railsOf = null; this.railsN = -1;
   }
 
   /** main.js: where the knocked copies go, the clack, the camera (respawning out of view). */
@@ -71,6 +83,7 @@ class Breakables {
       c: collider, h, kind, loud, down: false, t: 0, grow: -1, x: collider.x, z: collider.z, copy: null, stamp: 0,
       parts: parts.map((p) => (Array.isArray(p) ? { im: p[0], k: p[1], m0: new Float32Array(16) } : { obj: p, s0: new THREE.Vector3() })),
       p: new THREE.Vector3(), v: new THREE.Vector3(), w: new THREE.Vector3(), base: 0, rest: 0, bounces: 0,
+      nk: 'pole', nid: spotId(collider.x, collider.z),
     };
     for (const p of e.parts) if (p.obj) { p.obj.userData.noMerge = true; p.obj.userData.noCollide = true; }
     collider.breakable = e;
@@ -120,10 +133,17 @@ class Breakables {
     const joined = near?.seg && !near.off && (t < 0.5 ? Math.hypot(near.bx - L.ax, near.bz - L.az) : Math.hypot(near.ax - L.bx, near.az - L.bz)) < 0.05;
     let n = 0;
     for (const line of joined ? [L, near] : [L]) {
-      const e = line.brk || (line.brk = this.railEntry(line));
+      const e = this.railOf(line);
       if (e && this.knock(e, vx * 0.7 + (Math.random() - 0.5) * 2, vz * 0.7 + (Math.random() - 0.5) * 2)) n++;
     }
     return n > 0;
+  }
+
+  // a guardrail line's breakable entry (made on first use), with its network id (the line's middle)
+  railOf(line) {
+    const e = line.brk || (line.brk = this.railEntry(line));
+    if (e && !e.nk) { e.nk = 'rail'; e.nid = spotId((line.ax + line.bx) / 2, (line.az + line.bz) / 2); }
+    return e;
   }
 
   // the breakable entry of one guardrail line (its drawn section: seg.ims at seg.k)
@@ -196,8 +216,8 @@ class Breakables {
     return n;
   }
 
-  /** Knock pole e flying (a car moving (vx, vz)). -> true if it was standing */
-  knock(e, vx, vz) {
+  /** Knock pole e flying (a car moving (vx, vz); fv: the flight's start velocity, given: another player's knock). -> true if it was standing */
+  knock(e, vx, vz, fv = null) {
     if (!e || e.down || !this.scene) return false;
     if (this.down.length >= MAX_DOWN) this.restore(this.down[0]);
     let copy;
@@ -218,7 +238,8 @@ class Breakables {
     // the flight: off the bumper, a kick up, a tumble
     const sp = Math.hypot(vx, vz), k = Math.min(1, 16 / Math.max(sp, 1e-3)) * 1.05; // (never faster than ~17 m/s)
     e.p.set(e.x, e.cy ?? e.base + e.h * 0.5, e.z);
-    e.v.set(vx * k + (Math.random() - 0.5) * 1.5, Math.min(7, 2 + sp * 0.3), vz * k + (Math.random() - 0.5) * 1.5);
+    if (fv) { e.v.set(fv[0], fv[1], fv[2]); vx = fv[0]; vz = fv[2]; }
+    else e.v.set(vx * k + (Math.random() - 0.5) * 1.5, Math.min(7, 2 + sp * 0.3), vz * k + (Math.random() - 0.5) * 1.5);
     _a.set(vz, 0, -vx).normalize();
     e.w.copy(_a).multiplyScalar(4 + Math.random() * 5);
     e.w.y += (Math.random() - 0.5) * 4;
@@ -228,9 +249,75 @@ class Breakables {
     if (this.audio?.impact) {
       const cam = this.camera?.position, d = cam ? Math.hypot(cam.x - e.x, cam.z - e.z) : 0;
       const amt = e.loud * Math.min(1, 0.35 + sp / 25) * Math.max(0, 1 - d / 80);
-      if (amt > 0.03) try { this.audio.impact(e.kind, amt); } catch { /* (silent) */ }
+      if (amt > 0.03 && !this.silent) try { this.audio.impact(e.kind, amt); } catch { /* (silent) */ }
     }
+    if (this.send && !this.quiet && e.nk) this.emit(e);
     return true;
+  }
+
+  // ---------------------------------------------------------------- multiplayer
+  // your knock to the server (at most NET_HZ a second: the rest stay yours alone)
+  emit(e) {
+    const now = performance.now() / 1000;
+    this.netTok = Math.min(NET_HZ, this.netTok + (now - this.netT) * NET_HZ); this.netT = now;
+    if (this.netTok < 1) return;
+    this.netTok--;
+    const r = (n) => Math.round(n * 100) / 100;
+    try { this.send({ k: e.nk, id: e.nid, v: [r(e.v.x), r(e.v.y), r(e.v.z)] }); } catch { /* (offline: yours alone) */ }
+  }
+
+  // the entry another player's knock names (k 'pole' | 'rail', id a spot), or null
+  lookup(k, id) {
+    const m = /^(-?\d+),(-?\d+)$/.exec(String(id));
+    if (!m) return null;
+    let map;
+    if (k === 'rail') {
+      const rails = busRoads.rails;
+      if (!rails?.length) return null;
+      if (this.railsOf !== rails || this.railsN !== rails.length) {
+        this.railsOf = rails; this.railsN = rails.length; this.railIds = new Map();
+        for (const L of rails) if (L?.seg) { const sid = spotId((L.ax + L.bx) / 2, (L.az + L.bz) / 2); if (!this.railIds.has(sid)) this.railIds.set(sid, L); }
+      }
+      map = this.railIds;
+    } else {
+      if (this.byIdN !== this.list.length) {
+        this.byIdN = this.list.length; this.byId = new Map();
+        for (const e of this.list) if (!this.byId.has(e.nid)) this.byId.set(e.nid, e);
+      }
+      map = this.byId;
+    }
+    const x = +m[1], z = +m[2];
+    let hit = map.get(`${x},${z}`);
+    for (let i = 0; i < 9 && !hit; i++) hit = map.get(`${x + (i % 3) - 1},${z + Math.floor(i / 3) - 1}`);
+    return hit ? (k === 'rail' ? this.railOf(hit) : hit) : null;
+  }
+
+  /**
+   * Another player knocked a pole / broke a guardrail section (session.js, the server's 'brk' { k, id, v }): the same
+   * one knocked here, the same flight, nobody charged. age: ms since (a joiner's list): the flight played forward, the
+   * 90 s counted from then. Already down here: nothing. -> true if it was knocked
+   */
+  remote(d, age = 0) {
+    if (!d || !this.scene || !Array.isArray(d.v) || d.v.length !== 3 || !d.v.every(Number.isFinite)) return false;
+    age = Math.max(0, +age || 0) / 1000;
+    if (age >= RESPAWN) return false;
+    const e = this.lookup(d.k, d.id);
+    if (!e || e.down) return false;
+    this.quiet = true; this.silent = age > 0.5;
+    let ok = false;
+    try { ok = this.knock(e, d.v[0], d.v[2], d.v); } finally { this.quiet = false; this.silent = false; }
+    if (ok && age > 0) {
+      // (knocked a while ago: where it flew to by now)
+      for (let t = 0; t < Math.min(age, 8) && e.rest < 2; t += 1 / 30) { e.t = t; this.fly(e, 1 / 30); }
+      e.t = age;
+    }
+    return ok;
+  }
+
+  /** The world's knocks of the last 90 s (session.js: the world snapshot's brk [{ k, id, v, age }]). */
+  remoteList(list) {
+    if (!Array.isArray(list)) return;
+    for (const d of list) try { this.remote(d, d?.age || 0); } catch (err) { console.warn('breakables', err); }
   }
 
   // the flying copy of e: a group at its middle, each part as drawn (an instance: its own one-instance mesh, sharing
@@ -321,8 +408,11 @@ class Breakables {
         const c = cars[i];
         if (!c || !(Math.abs(c.v) > BREAK_V) || c.mode === 'parked' || c.mode === 'gone' || !Number.isFinite(c.x)) continue;
         const fx = Math.sin(c.yaw || 0), fz = Math.cos(c.yaw || 0), vx = fx * c.v, vz = fz * c.v;
-        this.sweep(c.x + fx * 1.4, c.z + fz * 1.4, 1.0, vx, vz);
-        this.sweep(c.x - fx * 1.4, c.z - fz * 1.4, 1.0, vx, vz);
+        this.quiet = true; // (the traffic is each player's own: its knocks stay local)
+        try {
+          this.sweep(c.x + fx * 1.4, c.z + fz * 1.4, 1.0, vx, vz);
+          this.sweep(c.x - fx * 1.4, c.z - fz * 1.4, 1.0, vx, vz);
+        } finally { this.quiet = false; }
       }
     }
     if (!this.down.length) return;
@@ -359,44 +449,49 @@ class Breakables {
         }
       }
       if (e.rest >= 2) continue; // (lying in the snow)
-      const copy = e.copy;
-      if (!copy) continue;
-      _v.copy(_up).applyQuaternion(copy.quaternion);
-      if (e.rest === 0) {
-        // flying: gravity, the tumble, a bounce off the snow (its lower end)
-        e.v.y -= GRAVITY * dt;
-        e.p.addScaledVector(e.v, dt);
-        const wl = e.w.length();
-        if (wl > 1e-4) { _qd.setFromAxisAngle(_a.copy(e.w).divideScalar(wl), wl * dt); copy.quaternion.premultiply(_qd); }
-        const gy = ground(e.p.x, e.p.z), low = e.p.y - Math.abs(_v.y) * e.h * 0.5 - 0.04;
-        if (low < gy) {
-          e.p.y += gy - low;
-          if (e.v.y < 0) {
-            e.bounces++;
-            e.v.y = -e.v.y * 0.35; e.v.x *= 0.55; e.v.z *= 0.55; e.w.multiplyScalar(0.45);
-            if (e.bounces >= 3 || e.v.y < 1.0) e.rest = 1;
-          }
-        }
-        if (e.t > 6) e.rest = 1;
-        if (e.rest === 1) { // lay it down: its long axis turned flat (keeping its roll)
-          _h.set(_v.x, 0, _v.z);
-          if (_h.lengthSq() < 1e-4) _h.set(e.v.x || 1, 0, e.v.z);
-          _h.normalize();
-          _qd.setFromUnitVectors(_v, _h);
-          e.qT = (e.qT || new THREE.Quaternion()).copy(_qd).multiply(copy.quaternion);
-        }
-      } else {
-        // settling: sliding to a stop, turning flat onto the snow
-        const f = Math.min(1, dt * 6);
-        e.v.x *= 1 - f * 0.6; e.v.z *= 1 - f * 0.6;
-        e.p.x += e.v.x * dt; e.p.z += e.v.z * dt;
-        copy.quaternion.slerp(e.qT, f);
-        const gy = ground(e.p.x, e.p.z) + 0.05;
-        e.p.y += (gy - e.p.y) * f;
-        if (copy.quaternion.angleTo(e.qT) < 0.01 && Math.abs(gy - e.p.y) < 0.01) { copy.quaternion.copy(e.qT); e.p.y = gy; e.rest = 2; }
-      }
-      copy.position.copy(e.p);
+      this.fly(e, dt);
     }
+  }
+
+  // one step of a knocked pole's flight / settling
+  fly(e, dt) {
+    const copy = e.copy;
+    if (!copy) return;
+    _v.copy(_up).applyQuaternion(copy.quaternion);
+    if (e.rest === 0) {
+      // flying: gravity, the tumble, a bounce off the snow (its lower end)
+      e.v.y -= GRAVITY * dt;
+      e.p.addScaledVector(e.v, dt);
+      const wl = e.w.length();
+      if (wl > 1e-4) { _qd.setFromAxisAngle(_a.copy(e.w).divideScalar(wl), wl * dt); copy.quaternion.premultiply(_qd); }
+      const gy = ground(e.p.x, e.p.z), low = e.p.y - Math.abs(_v.y) * e.h * 0.5 - 0.04;
+      if (low < gy) {
+        e.p.y += gy - low;
+        if (e.v.y < 0) {
+          e.bounces++;
+          e.v.y = -e.v.y * 0.35; e.v.x *= 0.55; e.v.z *= 0.55; e.w.multiplyScalar(0.45);
+          if (e.bounces >= 3 || e.v.y < 1.0) e.rest = 1;
+        }
+      }
+      if (e.t > 6) e.rest = 1;
+      if (e.rest === 1) { // lay it down: its long axis turned flat (keeping its roll)
+        _h.set(_v.x, 0, _v.z);
+        if (_h.lengthSq() < 1e-4) _h.set(e.v.x || 1, 0, e.v.z);
+        _h.normalize();
+        _qd.setFromUnitVectors(_v, _h);
+        e.qT = (e.qT || new THREE.Quaternion()).copy(_qd).multiply(copy.quaternion);
+      }
+    } else {
+      // settling: sliding to a stop, turning flat onto the snow
+      const f = Math.min(1, dt * 6);
+      e.v.x *= 1 - f * 0.6; e.v.z *= 1 - f * 0.6;
+      e.p.x += e.v.x * dt; e.p.z += e.v.z * dt;
+      copy.quaternion.slerp(e.qT, f);
+      const gy = ground(e.p.x, e.p.z) + 0.05;
+      e.p.y += (gy - e.p.y) * f;
+      if (copy.quaternion.angleTo(e.qT) < 0.01 && Math.abs(gy - e.p.y) < 0.01) { copy.quaternion.copy(e.qT); e.p.y = gy; e.rest = 2; }
+    }
+    copy.position.copy(e.p);
   }
 }
 

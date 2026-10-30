@@ -1145,11 +1145,22 @@ export class Police {
       if (W.grace <= 0 && moving) this.flee(W);
     }
     // boxed in: patrol cars within holdR of you for holdS in all (faster the more of them there are round you; it
-    // ebbs away twice as fast when they're further): they get out and arrest you, whatever your speed (you can't sit it
-    // out in the car, nor drive off: drive.held)
-    let boxN = 0;
-    for (const u of live) if (hyp(u.x, u.z, T.x, T.z) < TUNING.holdR) boxN++;
-    W.holdT = boxN ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
+    // ebbs away twice as fast when they're further): they get out and arrest you (you can't sit it out in the car)
+    // (Oct 30, the user: "you should only be boxed if you're really boxed": the clock runs only while you are slow
+    // (under ~9 km/h) AND hemmed in: patrol cars on two sides (two within holdR at least 100 degrees apart round you),
+    // or one right against you (within 7 m) while you are all but stopped. Driving on past them, it ebbs away.)
+    let boxN = 0, boxed = false;
+    const slow = (T.sp || 0) < 2.5, pinned = (T.sp || 0) < 0.8;
+    const angs = [];
+    for (const u of live) {
+      const d = hyp(u.x, u.z, T.x, T.z);
+      if (d >= TUNING.holdR) continue;
+      boxN++; angs.push(Math.atan2(u.x - T.x, u.z - T.z));
+      if (pinned && d < 7) boxed = true;
+    }
+    if (slow && !boxed) for (let i = 0; i < angs.length && !boxed; i++) for (let j = i + 1; j < angs.length; j++) { const a = Math.abs(Math.atan2(Math.sin(angs[i] - angs[j]), Math.cos(angs[i] - angs[j]))); if (a > (100 * Math.PI) / 180) { boxed = true; break; } }
+    if (!slow) boxed = false;
+    W.holdT = boxed ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
     if (W.holdT >= TUNING.holdS) { W.holdT = 0; this.begin(W, 'arrest', lead, 'held'); return; }
     // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;

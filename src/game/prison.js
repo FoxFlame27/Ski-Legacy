@@ -19,7 +19,7 @@
 // request stores jailUntil in your profile, and a login before then puts you back in the cell for the rest.
 // Single player: save.jail = { until (Date.now ms), reason } does the same across a reload.
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { roomEnvironment } from '../engine/roomenv.js';
 import { fitModel, loadGLB } from '../core/assets.js';
 import { busRoads } from './bus/roads.js';
 import { makeSign, nightUniform } from '../world/village.js';
@@ -72,9 +72,7 @@ export class PrisonRoom {
     this.portal = new LivePortal({ name: 'Prison' });
     this.frames = null;
     try {
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
-      pmrem.dispose();
+      this.scene.environment = roomEnvironment(renderer, 0.03); // (made once per blur, shared: engine/roomenv.js)
       this.scene.environmentIntensity = 0.35;
     } catch (e) { console.warn('prison env', e); }
     this.buildShell();

@@ -7,6 +7,20 @@ import { bakeGeometry, makeLOD, fitModel, dequantize, clusterDecimate } from '..
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { drawnHeight } from './settle.js';
 
+// The lines' cars (Oct 30 2026, the user: "why does loading actually take so long"): every line of a lift type baked
+// and decimated the same Meshy cabin / chair at the same size, three tiers each, line after line. Baked once per
+// model, size and tier now; each line gets its own copy (it moves its copy to hang from the grip).
+const bakedCars = new WeakMap();
+function bakedCar(gltf, opts) {
+  if (!gltf) return bakeGeometry(gltf, opts);
+  let per = bakedCars.get(gltf);
+  if (!per) bakedCars.set(gltf, (per = new Map()));
+  const k = `${opts.size}|${opts.axis}|${opts.decimate || 0}`;
+  if (!per.has(k)) per.set(k, bakeGeometry(gltf, opts));
+  const b = per.get(k);
+  return { geometry: b.geometry ? b.geometry.clone() : null, material: b.material, size: b.size ? b.size.clone() : b.size };
+}
+
 const CAR_HI = 32; // m: lift cars in full Meshy detail within this (a lighter copy out to 110 m, the light one beyond)
 
 const CFG = {
@@ -412,8 +426,8 @@ class LiftLine {
     // cars (instanced)
     // gondola cabins stay full detail (you ride inside them); chairs get a light LOD
     // cars: full Meshy detail near the player, a light decimated version for the rest of the line
-    const hi = bakeGeometry(models[c.model], { size: c.carH, axis: 'y' });
-    const lo = bakeGeometry(models[c.model], { size: c.carH, axis: 'y', decimate: 0.08 }); // (beyond 110 m: 2.6k triangles a cabin, was 4.1k at 0.05)
+    const hi = bakedCar(models[c.model], { size: c.carH, axis: 'y' });
+    const lo = bakedCar(models[c.model], { size: c.carH, axis: 'y', decimate: 0.08 }); // (beyond 110 m: 2.6k triangles a cabin, was 4.1k at 0.05)
     if (hi.geometry) {
       hi.geometry.computeBoundingBox?.();
       const bb = hi.geometry.boundingBox;
@@ -430,7 +444,7 @@ class LiftLine {
       this.carFar = mk(lo, false);
       // (performance pass) a middle tier: the full Meshy cabin (57k triangles) only within CAR_HI m (the one you ride
       // in, the station you stand at), a 5x lighter copy (no shadow) out to the near range, the light one beyond
-      const mid = bakeGeometry(models[c.model], { size: c.carH, axis: 'y', decimate: 0.02 });
+      const mid = bakedCar(models[c.model], { size: c.carH, axis: 'y', decimate: 0.02 });
       if (mid.geometry) this.carMid = mk(mid, false);
     }
     this.scene.add(group);

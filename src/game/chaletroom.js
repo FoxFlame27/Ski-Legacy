@@ -41,7 +41,7 @@
 //   is in this frame; the build mode writes and loads it (this module does not touch it).
 // ---------------------------------------------------------------------------------------------------------------
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { roomEnvironment } from '../engine/roomenv.js';
 import { loadGLB } from '../core/assets.js';
 import {
   HX, IX, IZ, T, G, GC, FL, COLLAR, DORMER, IT, STAIR, HOLE, DOOR, ROOMS, EXTERIOR, INTERIOR, RAILS,
@@ -209,9 +209,7 @@ export class ChaletRoom {
     this.scene = new THREE.Scene(); this.scene.name = 'chalet-interior-scene';
     this.scene.background = new THREE.Color(0xcfdceb);
     try { // (a soft room environment for the reflections; damped by uIntEnv)
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-      pmrem.dispose();
+      this.scene.environment = roomEnvironment(renderer, 0.04); // (made once per blur, shared: engine/roomenv.js)
     } catch (e) { /* (no WebGL: headless checks) */ }
     this.house = new THREE.Group(); this.house.name = 'chalet-interior';
     this.scene.add(this.house);

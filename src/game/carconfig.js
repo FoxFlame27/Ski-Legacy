@@ -151,6 +151,12 @@ export function plateSpots(t) {
     const parts = [...(t.body || t.parts || []), ...(t.lamps?.parts || [])].filter((p) => !p.material.transparent || p.material.opacity >= 0.9);
     const meshes = parts.map((p) => new THREE.Mesh(p.geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })));
     const L = t.size.z / 2, rc = new THREE.Raycaster(), o = new THREE.Vector3();
+    // (Oct 30 2026, the user: "why does loading actually take so long": these 44 rays were cast at every triangle of
+    // the whole car, seconds at boot for the parked cars and the patrol car. Each set of rays now goes only at the
+    // triangles whose bounds reach into the box round those rays (nearHits): the same hits, the nearest first)
+    const tris = parts.map((p) => triBounds(p.geometry));
+    const nearHits = (box) => meshes.map((me, i) => clipToBox(me, tris[i], box)).filter(Boolean);
+    const segBox = (box, from, dir, far) => box.expandByPoint(from).expandByPoint(o.copy(from).addScaledVector(dir, far));
     for (const k of [0, 1]) {
       const sp = k ? spec.r : spec.f;
       if (!sp) continue; // (no plate there)
@@ -164,15 +170,20 @@ export function plateSpots(t) {
         continue;
       }
       // the surface at the plate's centre (straight in), then 1 m out along the plate's facing from there
-      rc.set(o.set(0, y, s * (L + 1)), new THREE.Vector3(0, 0, -s)); rc.far = 2.5;
-      const h0 = rc.intersectObjects(meshes, false)[0];
+      const o0 = new THREE.Vector3(0, y, s * (L + 1)), d0 = new THREE.Vector3(0, 0, -s);
+      const near0 = nearHits(segBox(new THREE.Box3(), o0, d0, 2.5));
+      rc.set(o.copy(o0), d0); rc.far = 2.5;
+      const h0 = rc.intersectObjects(near0, false)[0];
       if (!h0) continue;
       const A = h0.point.clone().addScaledVector(n, 1);
       const ds = []; let centre = null;
-      for (const u of [-0.24, -0.16, -0.08, 0, 0.08, 0.16, 0.24]) for (const v of [-0.045, 0, 0.045]) {
+      const US = [-0.24, -0.16, -0.08, 0, 0.08, 0.16, 0.24], VS = [-0.045, 0, 0.045], back = n.clone().negate(), fan = new THREE.Box3(), from = new THREE.Vector3();
+      for (const u of US) for (const v of VS) segBox(fan, from.copy(A).addScaledVector(x, u).addScaledVector(up, v), back, 2.5);
+      const nearFan = nearHits(fan);
+      for (const u of US) for (const v of VS) {
         o.copy(A).addScaledVector(x, u).addScaledVector(up, v);
         rc.set(o, n.clone().negate()); rc.far = 2.5;
-        const h = rc.intersectObjects(meshes, false)[0];
+        const h = rc.intersectObjects(nearFan, false)[0];
         if (!h) continue;
         ds.push(h.distance);
         if (!u && !v) centre = h.distance;
@@ -203,6 +214,39 @@ export function plateSpots(t) {
   return t.plates;
 }
 const plateGeo = new THREE.PlaneGeometry(PLATE_W, PLATE_H);
+// plateSpots' ray sets: every triangle's vertices and bounds, in the order three's Mesh.raycast walks them (indexed or
+// not, within the draw range), once per part ...
+function triBounds(geo) {
+  const P = geo.attributes.position, I = geo.index, v = new THREE.Vector3(), r = geo.drawRange;
+  const start = Math.max(0, r.start), end = Math.min(I ? I.count : P.count, r.start + r.count), n = Math.max(0, Math.floor((end - start) / 3));
+  const id = new Uint32Array(n * 3), bb = new Float32Array(n * 6);
+  for (let t = 0; t < n; t++) {
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let k = 0; k < 3; k++) {
+      const j = start + t * 3 + k, vi = I ? I.getX(j) : j;
+      id[t * 3 + k] = vi; v.fromBufferAttribute(P, vi);
+      if (v.x < x0) x0 = v.x; if (v.x > x1) x1 = v.x; if (v.y < y0) y0 = v.y; if (v.y > y1) y1 = v.y; if (v.z < z0) z0 = v.z; if (v.z > z1) z1 = v.z;
+    }
+    bb.set([x0, y0, z0, x1, y1, z1], t * 6);
+  }
+  return { id, bb, n };
+}
+// ... and a stand-in mesh of only the triangles whose bounds reach into the box (null: none). A ray within the box can
+// hit no other triangle, and they keep their order, so the hits (and which comes first at a tie) are the same.
+function clipToBox(mesh, T, box, eps = 1e-3) {
+  const keep = [], { bb, id } = T, a = box.min, b = box.max;
+  for (let t = 0; t < T.n; t++) {
+    const q = t * 6;
+    if (bb[q] > b.x + eps || bb[q + 3] < a.x - eps || bb[q + 1] > b.y + eps || bb[q + 4] < a.y - eps || bb[q + 2] > b.z + eps || bb[q + 5] < a.z - eps) continue;
+    keep.push(id[t * 3], id[t * 3 + 1], id[t * 3 + 2]);
+  }
+  if (!keep.length) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', mesh.geometry.attributes.position);
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+  g.boundingSphere = mesh.geometry.boundingSphere; // (null: raycast() works it out from the same positions)
+  return new THREE.Mesh(g, mesh.material);
+}
 
 // ---------------------------------------------------------------- interiors (a recolour inside the material)
 // The trim's colour from the texture's own light and shade (lum), only where the seats are for a model whose cabin is

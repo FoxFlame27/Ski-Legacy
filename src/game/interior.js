@@ -6,7 +6,7 @@
 // the OUTFITS corner on the left wall shows your own skier on a podium between the clothing rails: look at
 // it and press E to open the outfit shop (ui/outfitshop.js), which swings the camera round to the podium.
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { roomEnvironment } from '../engine/roomenv.js';
 import { makeSki, SKI_LENGTH } from '../player/skier.js';
 import { SKIS } from './economy.js';
 import { fitModel } from '../core/assets.js';
@@ -235,9 +235,7 @@ export class ShopInterior {
     this.textures = [];
     this.flames = [];
 
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    this.scene.environment = roomEnvironment(renderer, 0.04); // (made once per blur, shared: engine/roomenv.js)
     this.scene.environmentIntensity = 0.22;
 
     this.buildMaterials();

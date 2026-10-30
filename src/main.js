@@ -20,7 +20,7 @@ import { Village } from './world/village.js';
 import { Lifts } from './world/lifts.js';
 import { Railway, RAIL_PRICE } from './world/railway.js'; // the Wolkenspitzbahn (transport agent)
 import { Decor } from './world/decor.js';
-import { loadAll } from './core/assets.js';
+import { loadAll, loadGLB } from './core/assets.js';
 import { Input } from './core/input.js';
 import { Audio } from './core/audio.js';
 import { SkierRig } from './player/skier.js';
@@ -58,6 +58,7 @@ import { HospitalWard } from './game/hospitalroom.js'; // the medical centre ins
 import { Prison } from './game/prison.js'; // the village police station: jail(seconds, reason), visits (game/prison.js)
 import { planBusRoads } from './game/bus/roads.js'; // plowed roads for the ski bus (vehicles agent)
 import { Crowds } from './world/crowds.js';
+import { FAN_MODELS } from './world/fans.js'; // (their models get a head start: BOOT_FETCHED)
 import { Snowcats } from './world/snowcats.js';
 import { Flags } from './world/flags.js';
 import { presentation } from './game/presentation/index.js';
@@ -80,6 +81,7 @@ import { breakables } from './world/breakables.js'; // little poles and signs a 
 import { busRoads } from './game/bus/roads.js';
 import { SunGlare } from './world/sunglare.js';
 import { PisteLights } from './world/pistelights.js'; // static: installs its light-pool shader chunk before any material compiles
+import { bootDone } from './engine/afterboot.js'; // (the cars' far LODs etc. wait for the menu: Oct 30 2026, loading time)
 import { Headlamp } from './world/headlamp.js';
 import { SKIS, PRICES, save, loadSave, writeSave, resetSave, skiById } from './game/economy.js';
 import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, screenDPR, QUALITY_LABELS, QUALITY_ORDER } from './engine/quality.js';
@@ -186,6 +188,20 @@ const MODEL_LIST = [
   'tow_truck', // the CAR RENTAL's tow truck (game/towtruck.js)
   'car1', // the police patrol car (game/police.js buildPoliceCar; the old Meshy police_car only if it fails to load)
 ].filter((n, i, a) => n !== 'safety_net' && a.indexOf(n) === i);
+// (Oct 30 2026, the user: "why does loading actually take so long") the models the boot's systems fetch for themselves
+// (the fans, the Autohaus / police station / medical centre props, the officer): asked for while the mountains are laid
+// out, they are in by the time those systems want them. They were only asked for in the middle of the long build
+// below, which holds the main thread, so their files and pictures were only taken in at its end, the boot sitting
+// idle for them (~13 s in the headless check). Only a head start: each system still loads its own (the same cached
+// promise); a name here that is gone or unused costs one fetch and nothing else.
+const BOOT_FETCHED = [
+  ...FAN_MODELS,
+  ...['lantern_wall', 'parking_sign', 'planter_spruce', 'bollard_steel', 'litter_bin', 'grit_box', 'garage_workbench', 'garage_toolwall', 'garage_lift', 'garage_tyres',
+    'garage_drums', 'garage_signbracket', 'notice_frame', 'plant_ficus', 'plant_monstera', 'lamp_pendant', 'lamp_banker'].map((n) => `decor/${n}`),
+  'snow/drift_long', 'snow/snow_heap', 'snow/snow_mound', 'prison/visit_desk', 'prison/guard_desk', 'police/police_car', 'piste/bnet_panel',
+  ...['reception_desk', 'waiting_bench', 'hospital_bed', 'bedside_cabinet', 'patient_monitor', 'iv_stand', 'visitor_chair', 'medicine_cabinet', 'medical_cart', 'privacy_screen'].map((n) => `hospital/${n}`),
+  'furniture/picture_mountain', 'police_officer_rigged', 'police_officer_anims',
+];
 
 let menu = null;
 let talk = null; // conversations: the camera moves in on whoever you talk to (src/game/talk.js)
@@ -242,12 +258,16 @@ function clipsFor(charId) {
 
 async function boot() {
   setLoad(0.02, 'Shaping the mountains…');
+  // (Oct 30 2026, the user: "why does loading actually take so long": the models are asked for first, so the files
+  // stream in and their pictures decode off the main thread while the mountains are laid out below; they were only
+  // requested after that, seconds into the boot. Same models, same order of use: `await modelsLoading` further down)
+  const modelsLoading = loadAll(MODEL_LIST, (n, total, name) => setLoad(0.05 + (n / total) * 0.55, `Loading ${name.replace(/_/g, ' ')}…`));
+  for (const n of BOOT_FETCHED) loadGLB(n); // (their head start: see BOOT_FETCHED)
   initLayout();
   initSecrets(); // the secrets shape their tunnels / couloirs into the terrain before any of it is built
   try { planPisteFences(); } catch (e) { console.warn('piste fences', e); } // nets / rope lines along every run (after the secrets: their trailheads stay open)
   if (BUS_RIDE) { try { planBusRoads(layout.busStops); } catch (e) { console.warn('bus roads / car parks', e); } } // the ski bus's roads are carved in before the terrain is built too
   terrain = new Terrain(scene);
-  const modelsLoading = loadAll(MODEL_LIST, (n, total, name) => setLoad(0.05 + (n / total) * 0.55, `Loading ${name.replace(/_/g, ' ')}…`));
   // the eight World Racing courses stand on the mountains around the resort: their regions shape the terrain, so
   // they are registered now, before any of it is built (one per task while the models stream in)
   try { console.log('World Racing courses on the mountains:', await registerFreeWorldCourses(), 'ms'); } catch (e) { console.warn('free-world courses', e); }
@@ -483,12 +503,12 @@ async function boot() {
   let guard = 0;
   while (terrain.update(player.pos.x, player.pos.z, 40) > 0 && guard++ < 400) {
     setLoad(0.7 + Math.min(0.15, guard / 600), 'Streaming terrain…');
-    await new Promise((r) => setTimeout(r, 0));
+    await nextTask();
   }
   setLoad(0.86, 'Planting trees…');
   guard = 0;
   while (vegetation.update(player.pos.x, player.pos.z, 0, 40) > 0 && guard++ < 200) {
-    await new Promise((r) => setTimeout(r, 0));
+    await nextTask();
   }
   // props onto the ground as drawn, now that every terrain edit is in (world/settle.js: no floating downhill sides)
   if (new URLSearchParams(location.search).has('settle')) console.info('Props settled', JSON.stringify(settleProps([village.group, decor.group, dressing, jobs.group]))); // (off until checked in game: ?settle)
@@ -532,16 +552,24 @@ async function boot() {
   setLoad(1, 'Ready');
   player.rigChar = save.character;
   menu.setReady();
+  bootDone(); // (the work that waits for the menu starts now: engine/afterboot.js)
   window.__game.ready = true;
   requestAnimationFrame(loop);
 }
 
+// The streaming loops' breather between 40 ms slices: a message to ourselves (Oct 30 2026, the user: "why does loading
+// actually take so long": a setTimeout(0) nested this deep waits at least 4 ms each time, hundreds of times in the
+// boot's pre-stream: ~10 % of it idle). The page still repaints and other tasks still run in between.
+const taskPort = new MessageChannel(), taskWaiters = [];
+taskPort.port1.onmessage = () => taskWaiters.shift()?.();
+function nextTask() { return new Promise((r) => { taskWaiters.push(r); taskPort.port2.postMessage(0); }); }
+
 // Stream terrain + trees around a point (behind a loading card or a fade).
 async function streamAround(x, z) {
   let guard = 0;
-  while (terrain.update(x, z, 40) > 0 && guard++ < 400) await new Promise((r) => setTimeout(r, 0));
+  while (terrain.update(x, z, 40) > 0 && guard++ < 400) await nextTask();
   guard = 0;
-  while (vegetation.update(x, z, 0, 40) > 0 && guard++ < 200) await new Promise((r) => setTimeout(r, 0));
+  while (vegetation.update(x, z, 0, 40) > 0 && guard++ < 200) await nextTask();
 }
 
 // ------------------------------------------------------------------ where you are, kept in the save

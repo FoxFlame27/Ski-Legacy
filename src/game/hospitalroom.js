@@ -20,7 +20,7 @@
 // its back with the bed's head end raised; HospitalRoom.mpPose), a visitor walks or sits on a bed's chair (state sit).
 // No server state: the stay is the client's own (the server takes any interior id but a chalet's).
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { roomEnvironment } from '../engine/roomenv.js';
 import { busRoads, HOSPITAL_LOT } from './bus/roads.js';
 import { HOUSE } from './hospital.js';
 import { makeSign, nightUniform } from '../world/village.js';
@@ -176,9 +176,7 @@ export class HospitalRoom {
     this.portal = new LivePortal({ name: 'Medical centre', tint: 0xf6f3ee });
     this.frame = null;
     try {
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
-      pmrem.dispose();
+      this.scene.environment = roomEnvironment(renderer, 0.03); // (made once per blur, shared: engine/roomenv.js)
       this.scene.environmentIntensity = 0.35;
     } catch (e) { console.warn('hospital env', e); }
     const step = (n, f) => { try { f(); } catch (e) { console.warn(`hospital room: ${n}`, e); } };

@@ -8,7 +8,7 @@
 // the world (the hall itself hidden) into a target the window planes show by screen position (gl_FragCoord).
 // Walk with WASD + mouse; look at a car or the clerk and press E (carrental.js).
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { roomEnvironment } from '../engine/roomenv.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { fitModel, loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye } from './cars.js';
@@ -68,9 +68,7 @@ export class CarRentalRoom {
     this.obstacles = []; this.aimables = []; this.tables = [];
     this.cfg = null; // the configurator: { table, step, yaw, pitch, dist } (carrental.js configure())
     this.models = models; this.cars = cars; this.renderer = renderer;
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
-    pmrem.dispose();
+    this.scene.environment = roomEnvironment(renderer, 0.03); // (made once per blur, shared: engine/roomenv.js)
     this.scene.environmentIntensity = 0.55;
     this.buildShell(renderer);
     this.buildLights();

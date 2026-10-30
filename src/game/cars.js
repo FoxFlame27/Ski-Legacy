@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshoptSimplifier } from 'meshoptimizer';
+import { afterBoot } from '../engine/afterboot.js'; // (the far LODs wait for the menu)
 import { fitModel, dequantize } from '../core/assets.js';
 
 /** Car models: [model name, real length (m)]. Add a car here (and to MODEL_LIST) and it parks / drives too. */
@@ -1363,6 +1364,7 @@ function meanColour(tex) {
 // group, so each car keeps its own colour out there (farMesh).
 async function buildLod(t) {
   await MeshoptSimplifier.ready;
+  await afterBoot(); // (Oct 30 2026, the user: "why does loading actually take so long": after the menu, one car per idle moment; the full model until then)
   const model = (t.name || '').replace(/_full$/, '');
   const pos = [], col = [], pnt = [], idx = [];
   let base = 0;

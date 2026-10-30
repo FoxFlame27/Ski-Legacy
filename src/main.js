@@ -54,6 +54,7 @@ import { Drive } from './game/drive.js'; // drive the parked cars yourself (vehi
 import { CarRental } from './game/carrental.js'; // AUTOHAUS (was the car rental): buy cars (showroom inside), your garage, the repair bill, the tow truck
 import { Taxi } from './game/taxi.js'; // LEGACY TAXI: drive fares in your car (the board's TAXI note, or T in the car)
 import { Police } from './game/police.js'; // POLICE: hit something while driving and they come after you (game/police.js)
+import { HospitalWard } from './game/hospitalroom.js'; // the medical centre inside: wake up in a hospital bed, visits (game/hospitalroom.js)
 import { Prison } from './game/prison.js'; // the village police station: jail(seconds, reason), visits (game/prison.js)
 import { planBusRoads } from './game/bus/roads.js'; // plowed roads for the ski bus (vehicles agent)
 import { Crowds } from './world/crowds.js';
@@ -196,6 +197,7 @@ let drive = null; // the car you drive (game/drive.js)
 let chaletSeatPrompt = null; // inside your chalet: Sit down / Stand up (game/seating.js)
 let chalets = null; // the chalet village: the houses, renting one, its interior (game/chalets.js)
 let carRental = null; // CAR RENTAL: the building, its showroom, your rental, the tow truck (game/carrental.js)
+let hospitalWard = null; // the MEDICAL CENTRE inside: the ward and its beds (game/hospitalroom.js)
 let prison = null; // the PRISON: the village police station and its cells (game/prison.js)
 let police = null; // the patrol cars after a collision (game/police.js)
 let taxi = null; // LEGACY TAXI: fares round the resort in your car (game/taxi.js)
@@ -412,11 +414,16 @@ async function boot() {
       canStart: () => started && !busIntro && !modes?.active && !races?.active && !transition.active && !mpLeaving });
     await prison.ready;
   } catch (e) { console.warn('prison: ' + (e?.stack || e)); prison = null; }
+  // the medical centre inside (game/hospitalroom.js): the rescue's ambulance brings you round in a bed; anyone can visit
+  try {
+    hospitalWard = new HospitalWard({ scene, camera, renderer, hud, audio, transition, player, getPost: () => post, clearActivity: prisonClear,
+      canStart: () => started && !busIntro && !modes?.active && !races?.active && !transition.active && !mpLeaving });
+  } catch (e) { console.warn('hospital ward: ' + (e?.stack || e)); hospitalWard = null; }
   try {
     if (drive) police = new Police({ scene, models, player, camera, drive, traffic, carRental, jobs, hud, audio, save, writeSave, colliders, vegetation, transition,
       mp: () => (isMP() ? multiplayer : null), getPrison: () => prison,
       excluded: () => !started || !!busIntro || !!modes?.active || !!races?.active, // (a chase there ends at once)
-      paused: () => interior.active || !!chalets?.inside || !!carRental?.inside || !!prison?.inside }); // (inside: the chase waits)
+      paused: () => interior.active || !!chalets?.inside || !!carRental?.inside || !!prison?.inside || !!hospitalWard?.inside }); // (inside: the chase waits)
   } catch (e) { console.warn('police: ' + (e?.stack || e)); police = null; }
   try { chalets = new Chalets({ scene, camera, renderer, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, spend, transition, player, getPost: () => post, getHour: () => env.hour }); } catch (e) { console.warn('chalets: ' + (e?.stack || e)); chalets = null; }
   seating.init({ save, chaletAPI: chaletInteriorAPI, catalog: FURNITURE_BY_ID, chalets });
@@ -452,7 +459,7 @@ async function boot() {
         S.traffic = traffic; S.skibus = skibus; S.carRental = carRental; S.snowcats = snowcats; S.multiplayer = isMP() ? multiplayer : null;
         return S;
       },
-      enabled: () => started && !paused && !busIntro && !modes?.active && !interior.active && !chalets?.inside && !carRental?.inside && !prison?.inside
+      enabled: () => started && !paused && !busIntro && !modes?.active && !interior.active && !chalets?.inside && !carRental?.inside && !prison?.inside && !hospitalWard?.inside
         && !heli.active && !sleds.active && !drive?.active && !seating.seated && !transition.active && !skibus?.riding
         && !railway?.riding && !express?.riding && !player.frozen,
     });
@@ -531,7 +538,7 @@ function outdoorSpot() {
   if (isMP() && (multiplayer?.carRide?.ride || multiplayer?.interior)) return null; // (multiplayer: kept on the server too; not riding in someone's car)
   if (!started || busIntro || !player || wipeoutBusy || transition?.active) return null;
   if (modes?.active || races?.active) return null;
-  if (interior?.active || chalets?.inside || carRental?.inside || prison?.inside || prison?.active) return null;
+  if (interior?.active || chalets?.inside || carRental?.inside || prison?.inside || prison?.active || hospitalWard?.inside) return null;
   if (heliRiding() || sleds?.active) return null;
   if (drive?.active) {
     try { const sp = drive.exitSpot(drive.d); return { x: sp.x, z: sp.z, y: drive.d.y, h: sp.heading, skis: false }; } catch { return null; }
@@ -746,6 +753,7 @@ async function backToMenu(opts = {}) {
   carRental?.leave(true);
   chalets?.leave(true);
   prison?.reset(); // (a sentence goes on from the save / the server profile when you play on)
+  hospitalWard?.reset();
   player.frozen = false;
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
@@ -1390,10 +1398,12 @@ function mpPose(o) {
   // visit's yes is single use, and reporting you outside half-way in used it up (the guest was then shown out)
   else if (chalets?.busy && multiplayer?.interior?.startsWith?.('chalet:')) { o.interior = multiplayer.interior; o.hold = true; return; }
   else if (prison?.inside) { o.interior = 'prison'; room = prison.room; } // (jailed: in your cell; visiting: the corridor)
+  else if (hospitalWard?.inside) { o.interior = 'hospital'; room = hospitalWard.room; } // (a patient in bed, a visitor)
   if (room?.pos && Number.isFinite(room.yaw)) { // (the shop / rental: where you walk, not the camera, which swings off to a preview or the clerk)
     o.x = room.pos.x; o.y = room.pos.y || 0; o.z = room.pos.z; o.yaw = room.yaw;
     o.vx = room.vel?.x || 0; o.vy = 0; o.vz = room.vel?.z || 0; o.st = MPST.walk; o.crouch = 0; o.lean = 0; o.flags = 0;
     if (paused) { o.vx = 0; o.vz = 0; } // (paused inside: standing, not walking on the spot)
+    if (room === hospitalWard?.room && hospitalWard.room.mpPose(o)) return; // (lying in your hospital bed / sitting by one)
     // sitting on your chalet's sofa / chair / bed edge (seating.js chaletFrame): seated there for the others too
     const cs = room === chalets?.room ? seating.chalet?.seat : null;
     if (cs) { o.x = cs.x; o.y = cs.y; o.z = cs.z; o.yaw = cs.yaw; o.vx = 0; o.vz = 0; o.st = MPST.sit; }
@@ -1427,6 +1437,7 @@ function mpScene(id) {
   if (id === 'skishop') return interior?.scene || null;
   if (id === 'carrental') return carRental?.room?.scene || null;
   if (id === 'prison') return prison?.room?.scene || null;
+  if (id === 'hospital') return hospitalWard?.room?.scene || null;
   if (id && id.startsWith('chalet:')) return chalets?.room?.scene || null;
   return null;
 }
@@ -1436,6 +1447,7 @@ function mpView() {
   if (interior.active) { v.interior = 'skishop'; v.camera = interior.camera; }
   else if (carRental?.inside) { v.interior = 'carrental'; v.camera = carRental.room.camera; }
   else if (prison?.inside) { v.interior = 'prison'; v.camera = prison.room.camera; }
+  else if (hospitalWard?.inside) { v.interior = 'hospital'; v.camera = hospitalWard.room.camera; }
   else if (chalets?.inside && chalets.current) { v.interior = `chalet:${chalets.current.id}`; v.camera = chalets.room.camera; }
   // (a chalet door still fading: no change reported half-way; a visit's yes is single use and leaving would end it)
   else if (chalets?.busy && multiplayer?.interior?.startsWith?.('chalet:')) { v.interior = multiplayer.interior; v.camera = camera; }
@@ -1516,6 +1528,8 @@ function findInteraction() {
   if (rental) return rental;
   const jail = prison?.interaction(p); // the PRISON's door: visit
   if (jail) return jail;
+  const ward = hospitalWard?.interaction(p); // the MEDICAL CENTRE's glass doors: visit
+  if (ward) return ward;
   const chalet = chalets?.interaction(p); // a chalet's front door (rent it / go in)
   if (chalet) return chalet;
   const sledPrompt = sleds.interaction(p);
@@ -1684,6 +1698,7 @@ function returnToVillage(message = 'Back in Legacy Village') {
   if (interior.active) { interior.active = false; post.setView(scene, camera); document.getElementById('crosshair').hidden = true; }
   carRental?.leave(true);
   chalets?.leave(true);
+  hospitalWard?.reset();
   player.setSkisOn(false);
   player.teleport(4, 34, Math.PI);
   player.camYaw = 0;
@@ -1776,6 +1791,7 @@ function applyQuality(name, persist = true) {
   if (interior.active) post.setView(interior.scene, interior.camera);
   if (carRental?.inside) post.setView(carRental.room.scene, carRental.room.camera);
   if (prison?.inside) post.setView(prison.room.scene, prison.room.camera);
+  if (hospitalWard?.inside) post.setView(hospitalWard.room.scene, hospitalWard.room.camera);
   if (chalets?.inside) post.setView(chalets.room.scene, chalets.room.camera);
   resetDynRes();
   setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
@@ -1909,6 +1925,10 @@ function loopUpdate() {
     seating.leftChalet();
     prison.frame(dt, menu ? null : input, save.sensitivity);
     interaction = null;
+  } else if (hospitalWard?.inside) { // inside the MEDICAL CENTRE (its own scene): in your bed, or walking the ward
+    seating.leftChalet();
+    hospitalWard.frame(dt, menu ? null : input, save.sensitivity);
+    interaction = null;
   } else if (started && !menu && !busIntro) {
     seating.leftChalet();
     if (input.hit('KeyM') && !inSession) openMap();
@@ -2007,6 +2027,7 @@ function loopUpdate() {
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
   if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
+  hospitalWard?.update(dt); // the stay in bed (its card), the window view linked
   prison?.update(dt); // the sentence's clock (a sentence from before resumes), the station's lamp
   taxi?.update(dt, started && !menu && !inSession && !paused ? input : null); // (after the car moved: the passenger in its back seat)
   try { police?.update(paused ? 0 : dt); } catch (e) { loopFault('police', e); } // (after your car moved: they chase, ram, pull you over)
@@ -2114,6 +2135,8 @@ function loopUpdate() {
       hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || chaletSeatPrompt || null, objective: objective() || '' });
     } else if (prison?.inside) {
       hud.frame({ speed: 0, loc: 'Legacy Village Prison', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: prison.target?.label || null, objective: prison.hudLine() });
+    } else if (hospitalWard?.inside) {
+      hud.frame({ speed: 0, loc: 'Medical Centre', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: hospitalWard.target?.label || null, objective: hospitalWard.hudLine() });
     } else if (carRental?.inside) {
       hud.frame({ speed: 0, loc: 'Autohaus', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the salesman and press E' });
     } else if (inSession) hud.frame({
@@ -2215,7 +2238,7 @@ Promise.race([intro?.scheduled, new Promise((r) => setTimeout(r, intro ? 2500 : 
 
 window.__game = {
   get player() { return player; }, env, layout, world, scene, camera, renderer,
-  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get prison() { return prison; }, get police() { return police; }, get chalets() { return chalets; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
+  get races() { return races; }, get lifts() { return lifts; }, get railway() { return railway; }, get express() { return express; }, get village() { return village; }, get post() { return post; }, get interior() { return interior; }, get menu() { return menu; }, get showcase() { return showcase; }, get modes() { return modes; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get talk() { return talk; }, get heli() { return heli; }, get sleds() { return sleds; }, get traffic() { return traffic; }, get drive() { return drive; }, get carRental() { return carRental; }, get prison() { return prison; }, get hospitalWard() { return hospitalWard; }, get police() { return police; }, get chalets() { return chalets; }, get pisteLights() { return pisteLights; }, get crowds() { return crowds; }, get snowcats() { return snowcats; }, get flags() { return flags; }, get outfitShop() { return outfitShop; }, get admin() { return admin; }, transition,
   // handles for building new systems inside the running game (dev tests)
   get terrain() { return terrain; }, get secrets() { return secrets; }, get vegetation() { return vegetation; }, get atmosphere() { return atmosphere; }, get backdrop() { return backdrop; }, get glare() { return glare; }, get npcs() { return npcs; }, get dressing() { return dressing; }, propDetail, get decor() { return decor; },
   streamAround, applyQuality, autoQ, get quality() { return quality; }, get dynRes() { return dynRes; }, get started() { return started; }, get paused() { return paused; },

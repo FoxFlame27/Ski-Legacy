@@ -488,7 +488,10 @@ export class Rescue {
     p.rig.setSkisVisible(p.hasSkis);
     this.cleanup();
     h.state = 'parked';
-    this.charge(H ? 'Treated at the medical centre and released' : 'Rescue and ambulance');
+    // (Oct 30, the user: "wake up in a hospital bed once you go to the hospital": game/hospitalroom.js, behind this fade)
+    let inBed = false;
+    if (H) { try { inBed = !!globalThis.__game?.hospitalWard?.admit?.(); } catch (e) { console.warn('hospital ward', e); } }
+    this.charge(inBed ? 'Brought to the medical centre' : H ? 'Treated at the medical centre and released' : 'Rescue and ambulance');
   }
 
   // the ambulance fee, straight off your balance (it can go below zero: shops, lifts and passes then refuse)

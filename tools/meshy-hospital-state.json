@@ -1,0 +1,52 @@
+{
+  "hospital_bed": {
+    "preview": "01a18c9a-73fb-7056-a5b0-fd306d8182fd",
+    "refine": "01a18ca0-983d-753f-8c1f-e5929efd1612",
+    "done": true
+  },
+  "bedside_cabinet": {
+    "preview": "01a18c9a-73e5-74b6-9ca6-5fc874914d7d",
+    "refine": "01a18c9e-205c-7382-bcaf-c6afa61b9114",
+    "done": true
+  },
+  "patient_monitor": {
+    "preview": "01a18c9a-73c5-7467-97f9-fdf01d8debf4",
+    "refine": "01a18c9f-f25c-7708-81c6-635bd1293ff4",
+    "done": true
+  },
+  "iv_stand": {
+    "preview": "01a18c9a-73e2-7238-afc9-4c865c8f168a",
+    "refine": "01a18ca2-af63-77ed-bbc7-a69bd4a21b23",
+    "done": true
+  },
+  "privacy_screen": {
+    "preview": "01a18c9a-7416-73c8-9189-461c9ef4505f",
+    "refine": "01a18c9f-8ecd-738f-ac85-4dbbf984d523",
+    "done": true
+  },
+  "visitor_chair": {
+    "preview": "01a18c9a-7403-716f-ad3b-249d6a6c1ad8",
+    "refine": "01a18ca2-2a10-7693-aebd-1b516d7a371f",
+    "done": true
+  },
+  "reception_desk": {
+    "preview": "01a18c9a-73c7-7547-ac59-59848d183e1e",
+    "refine": "01a18ca2-0938-723a-b4b5-46ec3566eb74",
+    "done": true
+  },
+  "waiting_bench": {
+    "preview": "01a18c9a-740b-7118-9d46-26f13a897560",
+    "refine": "01a18c9e-a4ff-7682-8c72-54806d64c8d3",
+    "done": true
+  },
+  "medical_cart": {
+    "preview": "01a18c9a-73f6-714d-8d44-a9ee56086456",
+    "refine": "01a18ca1-6241-7100-baac-493228765ad9",
+    "done": true
+  },
+  "medicine_cabinet": {
+    "preview": "01a18c9a-73c9-703a-8ed3-4a4908bd5b1a",
+    "refine": "01a18ca1-a503-7246-b1ee-f13bb55eefa1",
+    "done": true
+  }
+}

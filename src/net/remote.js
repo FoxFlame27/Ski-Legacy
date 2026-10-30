@@ -408,12 +408,12 @@ export class RemotePlayers {
       else if (inVeh && r.onSled) sledLegs(rig); // (astride the snowmobile: knees bent, feet on the running boards)
     }
     // the snow thrown up as they go down and land from a throw (the body's own puffs come from the rig: placeFallen)
-    if (fall && d < 120 && rig.pushFx) {
+    if (fall && !r.interior && d < 120 && rig.pushFx) { // (inside: a patient lying in a hospital bed, no snow)
       if (!r.wasFall) rig.pushFx({ type: 'crash', x: pos.x, y: pos.y, z: pos.z, amount: clamp(speed / 18, 0.3, 1), vx: r.vel.x, vz: r.vel.z });
       else if (r.wasAir && !st.fallAir) rig.pushFx({ type: 'impact', x: pos.x, y: pos.y, z: pos.z, amount: clamp(Math.abs(r.vel.y) / 10 + speed / 20, 0.3, 1) });
     }
     r.wasFall = fall; r.wasAir = fall && !!st.fallAir;
-    if ((r.state === ST.ski || fall) && d < 120 && this.o.fx) {
+    if ((r.state === ST.ski || (fall && !r.interior)) && d < 120 && this.o.fx) {
       const fi = r.fxInfo;
       fi.grounded = !st.air && !fall; fi.speed = fall ? 0 : speed; fi.sideslip = fall ? 0 : Math.abs(r.lean) * 0.15; fi.lean = fall ? 0 : r.lean;
       this.o.fx(9000 + r.pid * 4, rig, fi, dt);

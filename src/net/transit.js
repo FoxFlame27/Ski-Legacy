@@ -55,6 +55,8 @@ export class MpTransit {
       addEventListener('blur', () => { this.space = false; });
     }
     net.on('relogin', () => this.relogin());
+    // the buses' shared hold-ups (server busHold records: game/bus/bus.js setHold): everyone places a held-up bus the same
+    net.on('busHold', (d) => { if (MP.active) this.sys.skibus?.line?.setHold?.(d); });
   }
 
   /** main.js: the transport systems. */
@@ -70,12 +72,23 @@ export class MpTransit {
       rail: { time: () => s.lineTime('train|rail') / 1000, rate: () => rate('train|rail') },
       express: { time: (dir) => s.lineTime(dir > 0 ? 'express|e' : 'express|w') / 1000, rate: (dir) => rate(dir > 0 ? 'express|e' : 'express|w') },
       lifts: { time: (l) => s.lineTime(l.mpKey ||= `${liftKind(l)}|L${l.mpId}`) / 1000 },
-      bus: { time: (r) => s.lineTime(r.mpKey ||= `bus|${r.mpLine}`) / 1000, rate: (r) => rate(r.mpKey ||= `bus|${r.mpLine}`) },
+      // (+ the hold-ups: the server clock they are stamped with, who you are, and the report of a bus you drive)
+      bus: {
+        time: (r) => s.lineTime(r.mpKey ||= `bus|${r.mpLine}`) / 1000, rate: (r) => rate(r.mpKey ||= `bus|${r.mpLine}`),
+        now: () => net.serverNow(), pid: () => MP.pid, report: (d) => net.send('busHold', d),
+      },
     };
     S.skibus?.line?.setMp?.(this.hooks.bus);
+    this.fetchHolds();
     if (S.railway) S.railway.mp = this.hooks.rail;
     if (S.express) S.express.mp = this.hooks.express;
     if (S.lifts) S.lifts.mp = this.hooks.lifts;
+  }
+  // the hold-ups standing now (joined a world / back after a reconnect)
+  fetchHolds() {
+    const L = this.sys.skibus?.line;
+    if (!L?.setHolds || !MP.active) return;
+    net.request('busHolds').then((d) => { if (MP.active && this.sys.skibus?.line === L) L.setHolds(d?.holds || []); }, () => {});
   }
   stop() {
     const S = this.sys;
@@ -467,6 +480,7 @@ export class MpTransit {
   relogin() {
     // the seats went with the old connection: claim yours again (the same seat if it is still free)
     this.s.skipHeld = null;
+    this.fetchHolds();
     this.ready = null; this.pending = false; this.liftWait = null;
     const m = this.mine;
     if (!m || !this.riding(m)) { this.mine = null; return; }

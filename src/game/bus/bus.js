@@ -37,6 +37,29 @@ const BAY = 7; // the bus stops this far before the end of the road (its middle)
 const STOP_GAP = 6, PASS_WAIT = 3, PASS_V = 5, HORN_T = 2, RAM_T = 20, RAM_V = 4.2;
 const CATCH = 0.15, CATCH_MAX = 0.4; // extra speed over the timetable's while behind it (share), and at most
 const LATE_HOLD = 4;                 // s a bus that got to a stop after its timetable left still stands there
+// Multiplayer: one bus, one place for everyone (Oct 30, the user: "why do I see a bus but other people don't
+// sometimes?"). A bus held up near you is driven by your client (clearAhead, fleetDrive) and reported to the server
+// (busHold: how far behind its timetable it is, s, how fast that grows, how far out in the other lane, pushing through
+// or not, how long held up) about 4 times a second; the server stamps the record with its clock and sends it to
+// everyone, and every other client places that bus from it: the timetable `d` s ago, that lane offset (followStep,
+// eased). A record whose reports stopped (its driver went away) ages out the same way everywhere, the server included
+// (holdAt: the delay caught up at CATCH s/s, the lane offset eased back): everyone converges. A client following a
+// record that sees the bus run into something there (its own player, its car, ... mustTake) drives it from then on
+// (its report has the longer delay: the server hands it the record). Single player: no records, as before.
+// Mirror of server/lib/server.js busHoldAt / BUS_HOLD (keep the two the same).
+export const HOLD = { FRESH: 1, CATCH: 0.2, SHIFT: 0.35, MAX: 60 };
+const REPORT_MS = 250;               // a bus you drive off its timetable: reported this often (and at once on a change)
+export function holdAt(rec, now, out = {}) {
+  const el = Math.max(0, (now - rec.at) / 1000), f = Math.min(el, HOLD.FRESH), late = el - f;
+  out.fresh = el < HOLD.FRESH;
+  out.d = clamp(rec.d + (rec.dd || 0) * f - HOLD.CATCH * late, 0, HOLD.MAX);
+  out.sh = clamp((rec.sh || 0) + (rec.sv || 0) * f - HOLD.SHIFT * late, 0, 1);
+  out.ram = !!rec.ram && out.fresh;
+  out.bt = (rec.bt || 0) + (out.fresh ? el : 0);
+  out.done = !out.fresh && out.d <= 0 && out.sh <= 0;
+  out.own = rec.own;
+  return out;
+}
 const game = () => { try { return globalThis.__game || null; } catch { return null; } }; // (main.js: the audio, multiplayer)
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -1122,6 +1145,7 @@ export class BusLine {
     // routes on a timetable
     this.fleet = [];
     this.fleetClock = 0;
+    this.holds = new Map(); // multiplayer: bus id -> the server's hold-up record for it (setHold; HOLD)
     try { this.buildFleet(scene, colliders); } catch (e) { console.warn('bus fleet', e); this.fleet = []; }
     this.lamps = addLamps(this.bus.shell, this.bus.shell.userData.size); // (after the fleet's shells were cloned: each its own)
   }
@@ -1300,6 +1324,7 @@ export class BusLine {
       if (r.s >= t.s1 - 0.05) { r.done = true; r.v = 0; r.arrive = 1.2; }
     } else r.arrive -= dt;
     this.place(t, r.s);
+    if (r.ram) this.ramContact(this.bus.group.position, this.yaw || 0, r.v, this, dt * this.timeScale);
     setLamps(this.lamps, r.v, vPrev, dt);
     const seat = this.seatPose();
     if (r.done && r.arrive <= 0 && !r.exitSent) {
@@ -1327,21 +1352,23 @@ export class BusLine {
   // out (slowly round something standing: PASS_V), passes with room to spare and pulls back in once its lane is clear
   // beside and behind it. Held up RAM_T in all (Oct 30: "make sure the bus just drives or rams through after 20 sec,
   // otherwise the bus is late for the next bus stops"): it drives on through at RAM_V; a car in the way is shoved
-  // aside, a person is hit as by any vehicle (vehiclehits.js)
-  clearAhead(t, r, dt, want = BUS.cruise, g = this.bus.group.position, self = null) {
+  // aside, a person is hit as by any vehicle (vehiclehits.js). probe: only the speed limit, nothing changed (no
+  // timers, horn or overtaking: mustTake asks whether a bus placed from a hold-up record would run into something)
+  clearAhead(t, r, dt, want = BUS.cruise, g = this.bus.group.position, self = null, probe = false) {
     const me = self || this, obs = this.obstacles();
     const sh = r.shift || 0;
     const look = 30 + (r.v * r.v) / (2 * CLEAR_DEC), far = Math.max(look, 150);
     // anything near at all? (most of the time nothing is: cheap)
     let any = false;
     for (let k = 0; k < obs.length && !any; k++) { const o = obs[k]; if (o.fleet !== me && Math.abs(o.x - g.x) < far + 12 && Math.abs(o.z - g.z) < far + 12) any = true; }
+    if (!any && probe) return Infinity;
     if (!any) { r.heldT = 0; r.slowT = 0; r.blockT = 0; r.passing = false; r.ram = false; r.horn = 0; if (sh < 0.05) r.passV = Infinity; return Infinity; }
     const i0 = roadAt(t, r.s - BUS.len, _p).i, i1 = roadAt(t, r.s + far, _p).i + 1;
     // the lateral band the bus sweeps: where it is now to the lane it is heading for
     const busLat = BUS.lane * (1 - 2 * sh), tgtLat = r.passing ? -BUS.lane : BUS.lane;
     const lo = Math.min(busLat, tgtLat), hi = Math.max(busLat, tgtLat);
     let lim = Infinity, blocker = null, own = null, otherNear = false, otherAhead = Infinity, ownBeside = false;
-    let touch = null, tGap = Infinity, tLat = 0, tux = 0, tuz = 0;
+    let tGap = Infinity;
     for (const o of obs) {
       if (o.fleet === me) continue;
       const reach = o.kind === 'ped' ? look + 12 : far + 12; // (people: only where it might have to stop for them)
@@ -1379,8 +1406,9 @@ export class BusLine {
       const room = gap - keep, v = room > 0 ? Math.sqrt(vo * vo + 2 * CLEAR_DEC * room) : 0;
       if (v < lim) { lim = v; blocker = o; }
       if (inOwn && (!own || gap < own.gap)) own = { gap, vo, along };
-      if (gap < tGap) { tGap = gap; touch = o; tLat = latC; tux = ux; tuz = uz; }
+      if (gap < tGap) tGap = gap;
     }
+    if (probe) return lim;
     // overtaking: held up behind something in its own lane, standing (PASS_WAIT) or going clearly slower than the bus
     // wants to (1.5 s; Oct 29, the user: "the bus still doesn't overtake, it just drives behind the car super slow").
     // The road it needs: the bus closes the gap, its own length, the other's and a margin at the speed difference, at
@@ -1408,26 +1436,13 @@ export class BusLine {
     r.heldT = held ? (r.heldT || 0) + dt : 0;
     r.blockT = held || (r.passing && r.v < 2) ? (r.blockT || 0) + dt : Math.max(0, (r.blockT || 0) - dt * 0.5);
     if (r.heldT > 3 && blocker?.car && this.traffic?.despawn && !r.ram) { this.traffic.despawn(blocker.car); r.heldT = 0; } // (a traffic car: off the road)
-    if (held && blocker.kind !== 'bus' && blocker.kind !== 'thing') {
+    if (held && blocker.kind !== 'bus' && blocker.kind !== 'train') {
       if (r.heldT > HORN_T && !(r.horn > 0)) { r.horn = 1; this.honk(g, 1); }
       else if (r.heldT > HORN_T + 6 && r.horn === 1) { r.horn = 2; this.honk(g, 0.8); }
     } else if (!held) r.horn = 0;
     if (!r.ram && r.blockT > RAM_T) { r.ram = true; r.ramFree = 0; }
     if (r.ram) {
-      lim = Math.max(lim, RAM_V);
-      // a car against its front: shoved aside (to the side it is on, a little forward)
-      if (touch && tGap < 0.6 && (touch.car || touch.park)) {
-        const T = (this._shoved ||= new WeakMap()), key = touch.car || touch.park, now = performance.now();
-        if (!(now - (T.get(key) || 0) < 600)) {
-          T.set(key, now);
-          const side = tLat >= busLat ? 1 : -1, sx = -tuz * side, sz = tux * side, sp = 4.5;
-          const vx = (sx * 0.85 + tux * 0.5) * sp, vz = (sz * 0.85 + tuz * 0.5) * sp;
-          try {
-            if (touch.car) { if (this.traffic?.knock) this.traffic.knock(touch.car, vx, vz, (Math.random() - 0.5) * 1.2); else this.traffic?.despawn?.(touch.car); }
-            else this.traffic?.you?.shove?.(touch.park, vx, vz, (Math.random() - 0.5) * 0.8);
-          } catch { /* (it drives on regardless) */ }
-        }
-      }
+      lim = Math.max(lim, RAM_V); // (what its front runs into is shoved aside: ramContact)
       r.ramFree = !blocker || tGap > 12 ? (r.ramFree || 0) + dt : 0;
       if (r.ramFree > 1.5) { r.ram = false; r.blockT = 0; }
     }
@@ -1441,6 +1456,46 @@ export class BusLine {
       const d = this.ride ? 0 : p ? Math.hypot(p.x - g.x, p.z - g.z) : 0;
       if (d < 140) a.play('horn', amount * clamp(1.15 - d / 120, 0.12, 1));
     } catch { /* (silent) */ }
+  }
+  // Pushing through (RAM_T up: r.ram): whatever of yours its body runs into is bumped out of the way, to the side it
+  // is on (the verge when dead ahead) and a little forward, never driven through: a traffic car knocked aside
+  // (traffic.js knock), a parked car shoved (drive.js shove), your car or snowmobile pushed, a patrol car knocked
+  // (police.js kx / kz), a tow truck, the ambulance, a parked helicopter or snowmobile moved over. The other players'
+  // vehicles are bumped on their own screens (the bus is the same bus there: HOLD); people are knocked over by the
+  // moving bus (vehiclehits.js). g: the bus's middle, yaw its heading, v its speed, self: the bus (not itself).
+  ramContact(g, yaw, v, self, dt) {
+    if (!(dt > 0)) return;
+    const obs = this.obstacles(), fx = Math.sin(yaw), fz = Math.cos(yaw), now = performance.now();
+    const T = (this._shoved ||= new WeakMap());
+    for (const o of obs) {
+      if (!o.how || o.fleet === self) continue;
+      const dx = o.x - g.x, dz = o.z - g.z;
+      if (Math.abs(dx) > 16 || Math.abs(dz) > 16) continue;
+      if (o.y !== undefined && Math.abs(o.y - g.y) > 4) continue;
+      const along = dx * fx + dz * fz, lat = -dx * fz + dz * fx; // (lat > 0: right of the bus, the verge side)
+      const ca = Math.abs(Math.sin(o.yaw) * fx + Math.cos(o.yaw) * fz), sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+      const across = o.hw * ca + o.hd * sa, alongE = o.hw * sa + o.hd * ca;
+      if (Math.abs(along) > BUS.len / 2 + alongE + 0.5) continue;
+      const pen = BUS.width / 2 + across + 0.25 - Math.abs(lat);
+      if (pen <= 0) continue;
+      const side = lat > -0.3 ? 1 : -1, sx = -fz * side, sz = fx * side; // (out to that side)
+      const sp = Math.max(2.5, v * 1.1 + 1.5), vx = (sx * 0.85 + fx * 0.5) * sp, vz = (sz * 0.85 + fz * 0.5) * sp;
+      const step = Math.min(pen, sp * dt), mx = sx * step + fx * Math.min(step, Math.max(0, v) * dt) * 0.5, mz = sz * step + fz * Math.min(step, Math.max(0, v) * dt) * 0.5;
+      const key = o.ref || o.car || o.park, again = key ? !(now - (T.get(key) || 0) < 600) : false;
+      const spin = (Math.random() - 0.5) * 1.2;
+      try {
+        switch (o.how) {
+          case 'traffic': if (again) { T.set(key, now); if (this.traffic?.knock) this.traffic.knock(o.car, vx, vz, spin); else this.traffic?.despawn?.(o.car); } break;
+          case 'park': if (again) { T.set(key, now); (this.traffic?.you || game()?.drive)?.shove?.(o.park, vx, vz, spin * 0.7); } break;
+          case 'police': if (again) { T.set(key, now); const u = o.ref; u.kx = vx; u.kz = vz; u.kyaw = spin; u.v = 0; } break;
+          case 'drive': case 'sledd': { const d = o.ref; d.x += mx; d.z += mz; d.vx = (d.vx || 0) + (vx - (d.vx || 0)) * 0.5; d.vz = (d.vz || 0) + (vz - (d.vz || 0)) * 0.5; break; }
+          case 'tow': { const t = o.ref; t.x += mx; t.z += mz; t.place?.(); break; }
+          case 'amb': { const a = o.ref; a.x += mx; a.z += mz; a.place?.(); break; }
+          case 'heli': { const h = o.ref, f = h.flight; if (h.state === 'parked' && !h.active && f?.pos) { f.pos.x += mx; f.pos.z += mz; h.syncModel?.(); } break; }
+          case 'sled': { const q = o.ref; q.x += mx; q.z += mz; game()?.sleds?.pose?.(q); break; }
+        }
+      } catch { /* (it drives on regardless) */ }
+    }
   }
   // something's speed along its heading, from its motion (other players' cars: no speed is sent)
   motionV(o, x, z, yaw) {
@@ -1456,8 +1511,15 @@ export class BusLine {
     return m.v;
   }
   // everything the bus must not drive through, as boxes { x, y, z, yaw, hw, hd, v, car (a traffic car), park (a
-  // parked car's entry), kind ('car' | 'you' | 'ped' | 'bus' | 'thing'), fleet (the bus it is, for the buses) };
-  // built once a frame (this._frame)
+  // parked car's entry), kind ('car' | 'you' | 'ped' | 'bus' | 'train' | 'veh'), fleet (the bus it is, for the buses),
+  // how / ref (how ramContact bumps it out of the way, and what: null for the other players' vehicles, the trains,
+  // the snow ploughs) }; built once a frame (this._frame). (Oct 30, the user: "make sure the bus can not drive
+  // through a tow truck, car, human, police car or heli"): the traffic, parked cars (yours left there among them),
+  // your car, the vehicles that register with traffic.js (the patrol cars, the tow trucks (the Autohaus's three),
+  // your helicopter on the ground or just over it (the rescue's too: the same helicopter), the ambulance (yours and
+  // the other players' rescues), the snow ploughs, the trains, the other buses), the snowmobiles (parked, yours),
+  // you and the people about; multiplayer: the other players on foot, their cars, tow trucks, patrol cars,
+  // snowmobiles, helicopters parked and their rescue helicopters on the snow
   obstacles() {
     const out = (this._obs ||= []);
     if (this._obsFrame === this._frame && this._obsFrame !== undefined) return out;
@@ -1465,15 +1527,31 @@ export class BusLine {
     const pool = (this._obsPool ||= []);
     out.length = 0;
     let n = 0;
-    const add = (x, y, z, yaw, hw, hd, v = 0, kind = 'car', car = null, fleet = null, park = null) => {
-      const o = (pool[n++] ||= {}); o.x = x; o.y = y; o.z = z; o.yaw = yaw; o.hw = hw; o.hd = hd; o.v = v; o.kind = kind; o.car = car; o.fleet = fleet; o.park = park; out.push(o);
+    const add = (x, y, z, yaw, hw, hd, v = 0, kind = 'car', car = null, fleet = null, park = null, how = null, ref = null) => {
+      const o = (pool[n++] ||= {}); o.x = x; o.y = y; o.z = z; o.yaw = yaw; o.hw = hw; o.hd = hd; o.v = v; o.kind = kind; o.car = car; o.fleet = fleet; o.park = park; o.how = how; o.ref = ref; out.push(o);
     };
     const tr = this.traffic, G = game();
-    for (const c of tr?.cars || []) if (c.mode !== 'gone' && c.sinkT === undefined) add(c.x, c.y, c.z, c.yaw, c.w / 2, c.l / 2, c.mode === 'road' ? c.v : 0, 'car', c);
-    for (const e of tr?.parking?.cars || []) if (!e.driving) { const p = e.car.position; add(p.x, p.y, p.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 0, 'car', null, null, e); }
+    for (const c of tr?.cars || []) if (c.mode !== 'gone' && c.sinkT === undefined) add(c.x, c.y, c.z, c.yaw, c.w / 2, c.l / 2, c.mode === 'road' ? c.v : 0, 'car', c, null, null, 'traffic', c);
+    for (const e of tr?.parking?.cars || []) if (!e.driving) { const p = e.car.position; add(p.x, p.y, p.z, e.car.rotation.y, 0.97, (e.length || 4.6) / 2, 0, 'car', null, null, e, 'park', e); }
     const d = tr?.you?.d || G?.drive?.d;
-    if (d) add(d.x, d.y, d.z, d.yaw, d.w / 2, d.half, this.motionV(d, d.x, d.z, d.yaw), 'you');
-    for (const b of trafficBlockers()) add(b.x, b.y, b.z, b.yaw, b.hw, b.hd, b.v || 0, b.fleet ? 'bus' : b.car ? 'car' : 'thing', null, b.fleet || null); // (the fleet's buses among them)
+    if (d) add(d.x, d.y, d.z, d.yaw, d.w / 2, d.half, this.motionV(d, d.x, d.z, d.yaw), 'you', null, null, null, 'drive', d);
+    // (the blockers: whose box is whose, for bumping them out of the way)
+    const refs = (this._refs ||= new Map());
+    refs.clear();
+    try { for (const u of G?.police?.units || []) if (u.on && u.box) refs.set(u.box, u); } catch { /* (no police) */ }
+    try { const T = G?.carRental?.truck; for (const t of T?.trucks || (T ? [T] : [])) if (t.box) refs.set(t.box, t); } catch { /* (no tow trucks) */ }
+    const amb = G?.heli?.rescue?.amb, hf = G?.heli?.flight;
+    for (const b of trafficBlockers()) {
+      let ref = refs.get(b) || null, how = ref ? (ref.box?.police ? 'police' : 'tow') : null;
+      if (!ref && amb && b === amb.box) { ref = amb; how = 'amb'; }
+      else if (!ref && hf?.pos && b.hw === 2.0 && Math.abs(b.x - hf.pos.x) < 2 && Math.abs(b.z - hf.pos.z) < 2) { ref = G.heli; how = 'heli'; }
+      add(b.x, b.y, b.z, b.yaw, b.hw, b.hd, b.v || 0, b.fleet ? 'bus' : b.push && b.hd > 6 ? 'train' : b.police ? 'car' : 'veh', null, b.fleet || null, null, how, ref); // (the fleet's buses among them)
+    }
+    // the snowmobiles: parked about (each its own collider, away at 1e9 while driven) and the one you drive
+    const SL = G?.sleds;
+    if (SL?.list?.length) for (const q of SL.list) if (q.collider && Math.abs(q.collider.x) < 1e8 && q !== SL.d?.s) add(q.x, q.y, q.z, q.heading || 0, 0.62, 1.45, 0, 'veh', null, null, null, 'sled', q);
+    const sd = SL?.d;
+    if (sd && Number.isFinite(sd.x)) add(sd.x, sd.y, sd.z, sd.heading || 0, 0.62, 1.45, (sd.vx || 0) * Math.sin(sd.heading || 0) + (sd.vz || 0) * Math.cos(sd.heading || 0), 'you', null, null, null, 'sledd', sd);
     // bus:0 (waiting at the village or the depot, or the one you ride; in multiplayer its cabin is the fleet bus you ride)
     if (this.bus.group.visible && !this.ride?.mp) { const g = this.bus.group.position; add(g.x, g.y, g.z, this.yaw || 0, BUS.width / 2, BUS.len / 2, this.ride ? this.ride.v : 0, 'bus', null, this); }
     // you, on foot or on skis (not riding anything, not in a car: your car is above)
@@ -1498,6 +1576,17 @@ export class BusLine {
         V.tows?.forEach((w) => box(w, undefined, 1.2, 3.5));
         V.police?.forEach((list) => { for (const u of list || []) box(u, undefined, 0.95, 2.4); });
         V.sleds?.forEach((q) => { if (q.shown !== false) box(q, q.y, 0.6, 1.5); });
+        // their helicopters standing somewhere and the rescue helicopters set down for them: the cabin and the tail
+        // colliders (net/vehicles.js solid; away at 1e9 while flying or not drawn) -> one box over both
+        const heli = (w) => {
+          const c = w?.cabinCol, t = w?.tailCol;
+          if (!c || !t || !(Math.abs(c.x) < 1e8) || !(Math.abs(t.x) < 1e8)) return;
+          const dx = c.x - t.x, dz = c.z - t.z, L = Math.hypot(dx, dz) || 1, ux = dx / L, uz = dz / L;
+          const fx = c.x + ux * (c.r || 2.1), fz = c.z + uz * (c.r || 2.1), bx = t.x - ux * (t.r || 0.7), bz = t.z - uz * (t.r || 0.7);
+          add((fx + bx) / 2, undefined, (fz + bz) / 2, Math.atan2(ux, uz), c.r || 2.1, Math.hypot(fx - bx, fz - bz) / 2, 0, 'veh');
+        };
+        V.helis?.forEach(heli);
+        V.rescues?.forEach(heli);
       }
     }
     return out;
@@ -1587,12 +1676,13 @@ export class BusLine {
   /** Multiplayer (later): the fleet's clock (s) from a shared one. */
   setFleetClock(t) { this.fleetClock = t; }
 
-  // where bus b's timetable has it at the fleet's clock: { dir (0 out, 1 back), s, v, mark }
-  fleetTarget(b, out = {}) {
+  // where bus b's timetable has it at the fleet's clock (less `late` s: a held-up bus, HOLD): { dir (0 out, 1 back),
+  // s, v, mark, tau (s into that way) }
+  fleetTarget(b, out = {}, late = 0) {
     const r = b.route, c = r.cycle;
-    let tau = ((((this.mp ? this.mp.time(r) : this.fleetClock) + b.phase) % c) + c) % c; // (multiplayer: its round's shared timeline)
-    if (tau < r.out.dur) { out.dir = 0; dirAt(r.out, tau, out); return out; }
-    tau -= r.out.dur; out.dir = 1; dirAt(r.back, tau, out); return out;
+    let tau = ((((this.mp ? this.mp.time(r) : this.fleetClock) + b.phase - late) % c) + c) % c; // (multiplayer: its round's shared timeline)
+    if (tau < r.out.dur) { out.dir = 0; out.tau = tau; dirAt(r.out, tau, out); return out; }
+    tau -= r.out.dur; out.dir = 1; out.tau = tau; dirAt(r.back, tau, out); return out;
   }
 
   // bus b exactly where its timetable T has it (no delay)
@@ -1675,9 +1765,10 @@ export class BusLine {
       const g = this.bus.group.position;
       if (Math.hypot(g.x - p.x, g.z - p.z) > 90) this.parkInDepot();
     }
-    const T = (this._ft ||= {});
+    const T = (this._ft ||= {}), TH = (this._fth ||= {});
     if (this.mp) this.mpBus0();
     this._frame = (this._frame | 0) + 1; // (the obstacles: once a frame)
+    const now = this.mp ? this.mp.now?.() ?? Date.now() : 0, me = this.mp ? this.mp.pid?.() : 0;
     for (const b of this.fleet) {
       if (b.taken) continue;
       this.fleetTarget(b, T);
@@ -1685,9 +1776,26 @@ export class BusLine {
       b.near = d < FLEET_SHOW;
       const st = b.st;
       b.vPrev = st && !st.mark ? st.v : 0;
-      // far from you (or new): exactly where the timetable has it; near you: the timetable plus its own delay
-      if (!st || d > FLEET_SIM || (st.lag > 180 && d > 600)) this.fleetReset(b, T);
-      else this.fleetDrive(b, st, T, dt);
+      // multiplayer: the bus's shared hold-up record (HOLD), if it has one
+      const H = this.mp ? this.holdFor(b, now) : null;
+      // driving it yourself (held up near you, reported): until it is out of your range, or someone else (reporting
+      // since you took it) holds it further back, or as far back for a while (they see the same block: following
+      // them is no worse for what you see; mustTake takes it back if it is)
+      if (b.own && (!st || d > FLEET_SIM || (H && H.own !== me && H.fresh && this.holds.get(b.id).at > (b.ownAt || 0) && this.yields(b, st, H, now)))) { b.own = false; b.gaveUp = now; }
+      if (H && !b.own) {
+        // placed from the record: where its timetable was H.d s ago, out in the other lane by H.sh
+        this.followStep(b, this.fleetTarget(b, TH, H.d), H, dt, d);
+        // ...unless it would run into something you see there: then you drive it (and report it, with the longer delay)
+        if (d < FLEET_SIM && !H.ram && now - (b.gaveUp || -1e9) > 1000 && this.mustTake(b, dt)) {
+          const s2 = b.st;
+          b.own = true; b.ownAt = now; b.repAt = 0;
+          s2.passing = H.sh >= 0.5; s2.passV = s2.passing ? PASS_V : Infinity; s2.ram = false; s2.blockT = H.bt; s2.heldT = 0; s2.slowT = 0; s2.horn = 0;
+          s2.lagS = Math.max(0, (T.dir === s2.dir ? T.s : s2.s) - s2.s);
+        }
+      } else if (!st || d > FLEET_SIM || (st.lag > 180 && d > 600)) this.fleetReset(b, T); // far from you (or new): exactly where the timetable has it
+      else this.fleetDrive(b, st, T, dt); // near you: the timetable plus its own delay
+      // (multiplayer: held up near you -> reported; back on time -> cleared)
+      if (this.mp && b.st && (b.own || (!H && d < FLEET_SIM))) this.holdReport(b, now);
       b.d = d;
     }
     // two waiting at one stop queue one behind the other (by how far each stands short of the stop)
@@ -1726,6 +1834,7 @@ export class BusLine {
         b.x = g.x; b.y = g.y; b.z = g.z;
         b.collider.x = mine ? 1e9 : g.x; b.collider.z = g.z; b.collider.rot = -b.yaw;
         setLamps(b.lamps, b.v, b.vPrev ?? b.v, dt);
+        if (st.ram && !st.mark) this.ramContact(g, b.yaw, b.v, b, dt); // (pushing through: bumped out of its way)
       } else {
         roadAt(P, sq, _p);
         b.x = _p.x; b.y = _p.y; b.z = _p.z; b.yaw = Math.atan2(_p.dx, _p.dz);
@@ -1745,9 +1854,96 @@ export class BusLine {
     if (this.mp === hook) return;
     if (this.ride?.mp) this.abort();
     this.mp = hook || null;
-    for (const b of this.fleet) b.st = null; // (re-placed from the timetable next frame)
+    this.holds.clear();
+    for (const b of this.fleet) { b.st = null; b.own = false; b.repAt = 0; } // (re-placed from the timetable next frame)
     if (!this.mp && !this.parkInDepot()) this.parkAtVillage();
     else this.mpBus0();
+  }
+  // ---- the hold-ups (HOLD): the server's records
+  /** A 'busHold' broadcast: { bus, d, dd, sh, sv, ram, bt, own, at } or { bus, clear }. */
+  setHold(d) {
+    if (!d || typeof d.bus !== 'string') return;
+    if (d.clear) { this.holds.delete(d.bus); return; }
+    if (!Number.isFinite(d.d) || !Number.isFinite(d.at)) return;
+    this.holds.set(d.bus, d);
+  }
+  /** The records standing now (joining a world: net/transit.js fetchHolds). */
+  setHolds(list) { this.holds.clear(); for (const d of list || []) this.setHold(d); }
+  // bus b's record now (aged: holdAt), or null (none, or aged out: forgotten)
+  holdFor(b, now) {
+    const rec = this.holds.get(b.id);
+    if (!rec) return null;
+    const H = holdAt(rec, now, (b.hrec ||= {}));
+    if (H.done) { this.holds.delete(b.id); return null; }
+    return H;
+  }
+  // how far behind its timetable bus b is (s on its round's timeline): when its timetable was where it is now
+  // (standing at a stop it got to: the time it has stood there counted in)
+  delayOf(b, st) {
+    const r = b.route, c = r.cycle, P = st.dir ? r.back : r.out;
+    const at = st.mark && Math.abs(st.s - st.mark.s) < 1 ? st.mark.t + Math.min(st.dwell || 0, st.mark.dwell) : timeAt(P, st.s);
+    const tau = ((((this.mp ? this.mp.time(r) : this.fleetClock) + b.phase) % c) + c) % c;
+    const D = ((((tau - (st.dir ? r.out.dur : 0) - at) % c) + c) % c);
+    return D > c / 2 ? 0 : Math.min(D, HOLD.MAX); // (never ahead of it)
+  }
+  // a bus you drive near you (fleetDrive): off its timetable (behind, out in the other lane, pushing through) ->
+  // reported (REPORT_MS, at once when it pulls out / in or starts pushing through); back on it -> cleared
+  holdReport(b, now) {
+    const st = b.st, off = st.lagS > 0.3 || (st.shift || 0) > 0.01 || st.passing || st.ram;
+    if (!off) {
+      if (b.own) { b.own = false; b.repAt = 0; if (this.holds.get(b.id)?.own === this.mp.pid?.()) this.holds.delete(b.id); try { this.mp.report?.({ bus: b.id, d: 0, sh: 0 }); } catch { /* (offline) */ } }
+      return;
+    }
+    if (!b.own) { b.own = true; b.ownAt = now; }
+    const D = this.delayOf(b, st), pass = !!st.passing, ram = !!st.ram;
+    if (b.repAt && now - b.repAt < REPORT_MS && pass === b.repPass && ram === b.repRam) return;
+    const h = b.repAt ? (now - b.repAt) / 1000 : 0;
+    b.repDD = h > 0.05 ? clamp((D - b.repD) / h, -4, 32) : st.v < 0.3 && !st.mark ? 1 : 0; // (standing: the timetable runs away at 1 s/s)
+    b.repAt = now; b.repD = D; b.repPass = pass; b.repRam = ram;
+    const r2 = (x) => Math.round(x * 1000) / 1000;
+    try { this.mp.report?.({ bus: b.id, d: r2(D), dd: r2(b.repDD), sh: r2(clamp(st.shift || 0, 0, 1)), sv: r2(clamp(st.shiftV || 0, -1, 1)), ram, bt: r2(clamp(st.blockT || 0, 0, 600)) }); } catch { /* (offline) */ }
+  }
+  // someone else's record for the bus you drive: theirs clearly further back, or about as far for 2.5 s
+  yields(b, st, H, now) {
+    const D = this.delayOf(b, st);
+    return H.d >= D + 0.25 || (H.d >= D - 0.25 && now - (b.ownAt || 0) > 2500);
+  }
+  // bus b placed from its record H (TH: its timetable H.d s ago): eased onto it (no pop when a new report comes),
+  // straight there when it is far from where it was drawn or far from you
+  followStep(b, TH, H, dt, dist) {
+    let st = b.st;
+    const rate = this.mp?.rate?.(b.route) || 1;
+    if (!st || st.dir !== TH.dir || Math.abs(TH.s - st.s) > 40 || dist > FLEET_SIM) {
+      this.fleetReset(b, TH); st = b.st; st.shift = H.sh;
+    } else {
+      const prev = st.s, pred = st.s + TH.v * rate * dt;
+      st.s = pred + (TH.s - pred) * (1 - Math.exp(-dt * 3));
+      if (TH.mark && Math.abs(st.s - TH.mark.s) < 0.25) st.s = TH.mark.s;
+      st.v += (clamp((st.s - prev) / Math.max(1e-3, dt), 0, 40) - st.v) * Math.min(1, dt * 8);
+      const sh0 = st.shift || 0;
+      st.shift = clamp(sh0 + (H.sh - sh0) * (1 - Math.exp(-dt * 3)), 0, 1);
+      st.shiftV = (st.shift - sh0) / Math.max(1e-3, dt);
+    }
+    st.mark = TH.mark && Math.abs(st.s - TH.mark.s) < 0.5 ? TH.mark : null;
+    if (st.mark) st.v = 0;
+    st.dwell = 0; st.hold = st.mark ? Math.max(0, st.mark.t + st.mark.dwell - TH.tau) : 0;
+    st.passing = H.sh >= 0.5; st.ram = H.ram; st.blockT = H.bt;
+    st.heldT = 0; st.slowT = 0; st.horn = 0; st.passV = Infinity;
+    st.lagS = 0; st.lag = H.d;
+  }
+  // a bus placed from someone else's record: would it run into something you see (going faster than it may to stop
+  // short of it: clearAhead, probing only)?
+  mustTake(b, dt) {
+    const st = b.st;
+    if (!st || st.mark || st.v < 0.8) return false;
+    const P = st.dir ? b.route.back : b.route.out;
+    const next = P.marks.find((m) => m.s > st.s + 0.05) || P.marks[P.marks.length - 1];
+    const view = (st.view ||= { n: P.n, X: P.X, Y: P.Y, Z: P.Z, S: P.S });
+    if (view.X !== P.X) { view.n = P.n; view.X = P.X; view.Y = P.Y; view.Z = P.Z; view.S = P.S; }
+    view.s1 = next.s;
+    let lim = Infinity;
+    try { lim = this.clearAhead(view, st, dt, BUS.cruise, b.group.position, b, true); } catch { return false; }
+    return st.v > lim + 0.8;
   }
   // bus:0 is out of the game in multiplayer (its cabin shows only round you, in the fleet bus you ride)
   mpBus0() {

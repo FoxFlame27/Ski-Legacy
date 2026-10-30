@@ -47,6 +47,25 @@ const NAME_RE = /^[A-Za-z0-9_ -]{3,16}$/;
 // seats per vehicle kind at most; the client sends its vehicle's real seat count as n (Oct 30: every seat of every
 // coupled car of a train: Wolkenspitzbahn and Legacy Express 4 cars x 48 = 192, a ski bus 36, a gondola cabin 6, a
 // chair up to 6) and that is the vehicle's capacity: the lowest free one is assigned, one more is refused ('full')
+// The ski buses' shared hold-ups (game/bus/bus.js, net/transit.js): a bus held up by something in its lane runs
+// behind its timetable (a delay, s) and may be out in the other lane overtaking (sh 0..1) or pushing through (ram).
+// The client driving it (the one that sees the block: busHold) reports that state a few times a second; the server
+// keeps one record per bus, stamps it with its clock and broadcasts it, and everyone places that bus from it. A record
+// whose reports stopped ages out the same way on every client and here (busHoldAt): the delay caught up at CATCH s/s,
+// the lane offset eased back at SHIFT /s. Another client takes a fresh record over only with a longer delay (it sees
+// something the reporter doesn't), a stale one (STALE_MS) freely. Mirror of bus.js holdAt (keep the two the same).
+export const BUS_IDS = new Set(['bus:1', 'bus:2', 'bus:3', 'bus:4', 'bus:5', 'bus:6', 'bus:7']); // (bus.js FLEET_N 8: bus:0 is never shared)
+export const BUS_HOLD = { FRESH: 1, CATCH: 0.2, SHIFT: 0.35, MAX: 60, STALE_MS: 2000, TAKE: 0.5 };
+export function busHoldAt(rec, now, out = {}) {
+  const el = Math.max(0, (now - rec.at) / 1000), f = Math.min(el, BUS_HOLD.FRESH), late = el - f;
+  out.fresh = el < BUS_HOLD.FRESH;
+  out.d = clamp(rec.d + (rec.dd || 0) * f - BUS_HOLD.CATCH * late, 0, BUS_HOLD.MAX);
+  out.sh = clamp((rec.sh || 0) + (rec.sv || 0) * f - BUS_HOLD.SHIFT * late, 0, 1);
+  out.ram = !!rec.ram && out.fresh;
+  out.bt = (rec.bt || 0) + (out.fresh ? el : 0);
+  out.done = !out.fresh && out.d <= 0 && out.sh <= 0;
+  return out;
+}
 export const SEAT_CAPS = { bus: 48, train: 256, express: 256, gondola: 8, chair: 6, heli: 4, car: 5, sled: 2 };
 // a player's car: its seats in all (the driver's too) per model, as in real life (src/net/vehicles.js carSeats); not
 // listed: 5. Oct 30, the user: "the Mercedes GLS is a 5 seater not a 7 seater"
@@ -88,6 +107,7 @@ const VEH_KINDS = ['car', 'heli', 'tow', 'police', 'rescue', 'sled'];
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const _bh = {}; // (busHoldAt's scratch: World.tick)
 // THE WERKSTATT's prices (game/carrental.js repairCost / wreckFee: the same sums): a repair, the damage share (0..1) of
 // repairRate of the model's list price, at least repairMin, $50 steps; a wreck, the tow (wreckFee) and the full repair,
 // at most what the car sells back for (carSell of its list price)
@@ -155,6 +175,7 @@ class World {
     this.holds = new Map();   // vkey -> Set(pid) holding the skip key
     this.vmeta = new Map();   // vkey -> { line, rate }
     this.warps = new Map();   // wkey 'kind|line' -> { off, rate, since }
+    this.busHolds = new Map(); // bus id -> its hold-up record (busHold): { bus, d, dd, sh, sv, ram, bt, own, at }
     this.heli = { copies: [], padAt: 0, next: 1 };
     this.queues = new Map();  // race id -> { members: [pid], startAt: 0, timer }
     this.races = new Map();   // rid -> race
@@ -182,6 +203,7 @@ class World {
       clock: this.clockMsg(now),
       seats: [...this.seats.entries()].map(([vk, m]) => this.seatsMsg(vk, m)),
       warps: [...this.warps.entries()].map(([k, w]) => ({ key: k, ...w })),
+      busHolds: [...this.busHolds.values()],
       heli: this.heliMsg(),
       queues: [...this.queues.keys()].map((r) => this.queueMsg(r)),
       races: [...this.races.values()].filter((r) => !r.done).map((r) => this.raceStartMsg(r)),
@@ -222,6 +244,7 @@ class World {
       this.broadcast('clock', this.clockMsg(now));
     }
     for (const r of this.races.values()) if (!r.done && now >= r.at) this.raceBoard(r);
+    if (this.busHolds.size) for (const [id, rec] of this.busHolds) if (busHoldAt(rec, now, _bh).done) { this.busHolds.delete(id); this.broadcast('busHold', { bus: id, clear: true, at: now }); } // (aged out: on time again)
     if (this.dirty.size) {
       const rows = [...this.dirty.values()];
       this.dirty.clear();
@@ -348,6 +371,34 @@ class World {
     w.rate = rate;
     this.warps.set(wkey, w);
     this.broadcast('warp', { key: wkey, ...w });
+  }
+
+  // ---------------------------------------------------------------- the ski buses' hold-ups (BUS_HOLD)
+  // busHold { bus, d (s behind its timetable), dd (how fast that grows, s/s), sh (0..1 out in the other lane), sv
+  // (its rate), ram (pushing through), bt (s held up so far) }; d 0, sh 0, no ram: back on its timetable (cleared)
+  busHold(c, d) {
+    const id = str(d.bus, 8);
+    if (!id || !BUS_IDS.has(id)) return { err: 'bad_bus' };
+    if (!isNum(d.d) || d.d < 0 || d.d > BUS_HOLD.MAX) return { err: 'bad_value' };
+    if (d.sh !== undefined && (!isNum(d.sh) || d.sh < 0 || d.sh > 1)) return { err: 'bad_value' };
+    c.busBucket ||= new Bucket(20, 10); // (a client reports at most ~4 a second per bus it drives)
+    if (!c.busBucket.take()) return { err: 'rate_limited' };
+    const now = Date.now();
+    let rec = this.busHolds.get(id);
+    const aged = rec ? busHoldAt(rec, now, {}) : null;
+    if (aged?.done) { this.busHolds.delete(id); rec = null; }
+    // someone else's fresh record: only a longer delay takes it over (that client sees something holding it up)
+    if (rec && rec.own !== c.pid && now - rec.at < BUS_HOLD.STALE_MS && !(d.d > aged.d + BUS_HOLD.TAKE)) return { err: 'held', d: { own: rec.own, d: aged.d } };
+    const sh = isNum(d.sh) ? d.sh : 0, ram = d.ram === true;
+    if (d.d === 0 && sh === 0 && !ram) { // (on time again)
+      if (rec) { this.busHolds.delete(id); this.broadcast('busHold', { bus: id, clear: true, at: now }); }
+      return { d: { clear: true } };
+    }
+    const num = (v, a, b) => (isNum(v) ? clamp(v, a, b) : 0);
+    rec = { bus: id, d: d.d, dd: num(d.dd, -4, 32), sh, sv: num(d.sv, -1, 1), ram, bt: num(d.bt, 0, 600), own: c.pid, at: now };
+    this.busHolds.set(id, rec);
+    this.broadcast('busHold', rec);
+    return { d: { own: true } };
   }
 
   // ---------------------------------------------------------------- helicopter copies at the pad
@@ -1088,6 +1139,8 @@ export class GameServer {
       case 'seatClaim': return reply(w.claimSeat(c, d));
       case 'seatRelease': w.releaseSeat(c); return reply({});
       case 'skip': return reply(w.skip(c, d));
+      case 'busHold': return reply(w.busHold(c, d));
+      case 'busHolds': return reply({ d: { holds: [...w.busHolds.values()], now: Date.now() } });
       case 'heliRent': return reply(w.heliRent(c));
       case 'heliReturn': return reply(w.heliReturn(c));
       case 'veh': return reply(this.setVeh(c, d));

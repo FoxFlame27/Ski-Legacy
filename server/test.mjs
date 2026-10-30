@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR, busHoldAt, BUS_HOLD } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -144,6 +144,55 @@ try {
   const wp3 = await b.next('warp', (d) => d.key === 'bus|line1' && d.rate === 1);
   ok(wp3 && wp3.off > 0, 'released: back to x1, the extra time kept as an offset');
   await a.req('seatRelease');
+
+  // ---------------------------------------------------------------- the ski buses' shared hold-ups (busHold)
+  console.log('bus hold-ups');
+  {
+    const w = server.worlds.get(la.d.world.id);
+    const h1 = await a.req('busHold', { bus: 'bus:3', d: 5, dd: 1, sh: 0.4, sv: 0.2, ram: false, bt: 4 });
+    const ev1 = await b.next('busHold', (d) => d.bus === 'bus:3' && !d.clear);
+    ok(h1.ok && h1.d.own === true && ev1 && ev1.own === pidA && ev1.d === 5 && ev1.sh === 0.4 && Math.abs(ev1.at - Date.now()) < 1000,
+      'Alice reports bus:3 held up 5 s: Bob gets the record (her pid, the server time stamp, the lane offset)');
+    const bad = await Promise.all([
+      a.req('busHold', { bus: 'bus:0', d: 1 }), a.req('busHold', { bus: 'bus:99', d: 1 }), a.req('busHold', { bus: 'bus:3', d: 61 }),
+      a.req('busHold', { bus: 'bus:3', d: -1 }), a.req('busHold', { bus: 'bus:3', d: 2, sh: 2 }), a.req('busHold', { bus: 'bus:3', d: 'x' }),
+    ]);
+    ok(bad[0].err === 'bad_bus' && bad[1].err === 'bad_bus' && bad.slice(2).every((r) => !r.ok && r.err === 'bad_value'),
+      'refused: bus:0 / an unknown bus (bad_bus), a delay over 60 s, negative, not a number, a lane offset over 1 (bad_value)');
+    const hb = await b.req('busHold', { bus: 'bus:3', d: 5.2 });
+    ok(!hb.ok && hb.err === 'held' && hb.d.own === pidA && w.busHolds.get('bus:3').own === pidA, "Bob can't take Alice's fresh record with about the same delay (held)");
+    const hb2 = await b.req('busHold', { bus: 'bus:3', d: 9, ram: true, bt: 21 });
+    const ev2 = await a.next('busHold', (d) => d.bus === 'bus:3' && d.own === pidB);
+    ok(hb2.ok && ev2 && ev2.d === 9 && ev2.ram === true && ev2.bt === 21, 'Bob sees it held up longer (9 s, pushing through): his record takes over, Alice is told');
+    const ca = await a.req('busHold', { bus: 'bus:3', d: 0, sh: 0 });
+    ok(!ca.ok && ca.err === 'held' && w.busHolds.has('bus:3'), "Alice can't clear Bob's fresh record");
+    const list = await a.req('busHolds');
+    ok(list.ok && list.d.holds.length === 1 && list.d.holds[0].bus === 'bus:3' && list.d.holds[0].own === pidB && w.snapshot().busHolds.length === 1,
+      'busHolds (and the world snapshot) list the records standing');
+    const cb = await b.req('busHold', { bus: 'bus:3', d: 0, sh: 0 });
+    const ev3 = await a.next('busHold', (d) => d.bus === 'bus:3' && d.clear);
+    ok(cb.ok && cb.d.clear && ev3 && !w.busHolds.has('bus:3'), 'Bob: on time again -> cleared for everyone');
+    // the aging, the same on every client (bus.js holdAt): extrapolated while fresh, then caught up / eased back
+    const rec = { d: 10, dd: 1, sh: 1, sv: 0, ram: true, bt: 3, at: 0 };
+    const x1 = busHoldAt(rec, 500, {}), x2 = busHoldAt(rec, 3000, {}), x3 = busHoldAt(rec, 1000 + 1000 * (11 / BUS_HOLD.CATCH), {});
+    ok(x1.fresh && Math.abs(x1.d - 10.5) < 1e-9 && x1.ram && x1.sh === 1 && Math.abs(x1.bt - 3.5) < 1e-9, 'aging: fresh -> the delay grows at its reported rate (10.5 s after 0.5 s), still pushing through');
+    ok(!x2.fresh && Math.abs(x2.d - (11 - 2 * BUS_HOLD.CATCH)) < 1e-9 && !x2.ram && Math.abs(x2.sh - (1 - 2 * BUS_HOLD.SHIFT)) < 1e-9 && !x2.done,
+      'aging: stale -> caught up at CATCH s/s, the lane offset eased back, no longer pushing through');
+    ok(x3.d === 0 && x3.sh === 0 && x3.done && busHoldAt({ d: 70, at: 0 }, 0, {}).d === BUS_HOLD.MAX, 'aging: fully caught up -> done; never over 60 s');
+    // a stale record (its reporter went quiet) is anyone's; the server ages records out by itself
+    await a.req('busHold', { bus: 'bus:5', d: 3 });
+    w.busHolds.get('bus:5').at = Date.now() - BUS_HOLD.STALE_MS - 100;
+    const hs = await b.req('busHold', { bus: 'bus:5', d: 1 });
+    ok(hs.ok && w.busHolds.get('bus:5').own === pidB, "a stale record is taken over freely (even with a shorter delay)");
+    w.busHolds.get('bus:5').at = Date.now() - 1000 * (BUS_HOLD.FRESH + 1 / BUS_HOLD.CATCH) - 500; w.busHolds.get('bus:5').dd = 0;
+    const ev4 = await a.next('busHold', (d) => d.bus === 'bus:5' && d.clear, 1500);
+    ok(ev4 && !w.busHolds.has('bus:5'), 'the server ages a quiet record out by itself (caught up: cleared for everyone)');
+    // rate limited
+    const burst = await Promise.all(Array.from({ length: 40 }, (_, i) => a.req('busHold', { bus: 'bus:6', d: 1 + i * 0.01 })));
+    ok(burst.some((r) => r.err === 'rate_limited') && burst.filter((r) => r.ok).length >= 15, 'a flood of reports is rate limited');
+    await sleep(100);
+    await a.req('busHold', { bus: 'bus:6', d: 0, sh: 0 });
+  }
 
   // ---------------------------------------------------------------- number plates: unique across everyone
   console.log('plates');

@@ -9,7 +9,18 @@ import { SKIS } from '../game/economy.js';
 import { OUTFIT_ITEMS, OUTFIT_KITS, ensureOutfits } from '../game/outfits.js';
 import { WEATHER } from '../world/sky.js';
 import { world } from '../world/world.js';
-import { isMP } from '../net/mode.js';
+import { isMP, MP } from '../net/mode.js';
+import { loadAccount } from '../net/session.js';
+
+// (Oct 30, the user: "remove the admin panel for everyone, single player too, except for the player Rafael"): only the
+// account named Rafael opens it (multiplayer: the name you're logged in with; single player: this computer's saved
+// multiplayer account); for everybody else F2 / ` does nothing at all (no message)
+const ADMINS = new Set(['rafael']);
+export function isAdmin() {
+  let name = isMP() ? MP.name : null;
+  if (!name) { try { name = loadAccount()?.name || null; } catch { name = null; } }
+  return !!name && ADMINS.has(String(name).trim().toLowerCase());
+}
 
 const OPEN_KEYS = new Set(['F2', 'Backquote']);
 const FLY_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyC', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight', 'KeyT', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -65,7 +76,7 @@ export class AdminPanel {
   /** Why the panel can't open right now (null = it can). */
   refusal() {
     const c = this.ctx;
-    if (isMP()) return 'Admin panel · off in multiplayer';
+    if (!isAdmin()) return 'menu'; // (not an admin: silently nothing)
     if (!c.started || c.paused || this.transition?.active) return 'menu';
     if (c.modes?.active || c.races?.active) return 'Admin panel · free ride only';
     if (c.interior?.active) return 'Admin panel · not inside the shop';

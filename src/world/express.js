@@ -38,7 +38,7 @@ export const EXPRESS_LIVERY = true; // the railcar in Legacy blue (false: the Wo
 const CARS = 4;                     // two two-car units in multiple: cab, car, car, cab (the middle cabs meet)
 const FLIP = [false, true, false, true]; // car k turned round (its cab facing back)
 const PITCH = CAR.len + CAR.gap;    // m between car centres
-const PER_DIR = 4;                  // trains each way round the ring (one every ~8 min; Oct 29, the user: 4 trains, shorter waits in multiplayer. Double track: they never meet)
+const PER_DIR = 8;                  // trains each way round the ring (one every ~4 min; Oct 30, the user: 8 trains. Double track: they never meet)
 export const FAST = 10;             // Space: the timetable runs this much faster while you ride
 const NEAR = 420, FAR = 4500;       // m from the viewer: full cars / the far version / hidden
 const STATION_R = 10;              // m round a station's board point where E boards (besides anywhere on its platforms)

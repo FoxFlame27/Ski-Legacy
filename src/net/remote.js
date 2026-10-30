@@ -13,7 +13,7 @@ import { R, ST, F, fallDecode } from './protocol.js';
 import { twoBone, seatsFor } from '../game/carpeople.js';
 import { seatAt } from '../game/seating.js';
 import { world } from '../world/world.js';
-import { bedArms, INTERIOR_ID as HOSPITAL } from '../game/hospitalroom.js';
+import { posePatient, patientSpot, INTERIOR_ID as HOSPITAL } from '../game/hospitalroom.js';
 
 const RING = 16;              // snapshots kept per player
 const DELAY = 120;            // ms of interpolation buffer (at least; more when rows arrive later: Remote.delay)
@@ -359,6 +359,11 @@ export class RemotePlayers {
     if (r.scene !== scene) this.attach(r, scene);
     if (!rig.root.visible) { rig.root.visible = true; rig.gear.visible = true; rig.snapNext = true; r.mHas = false; }
     rig.root.position.copy(pos);
+    // a patient in a hospital bed (lying there, ST.fall inside the hospital): on the bed as you see it here, every frame
+    const patient = !inVeh && r.interior === HOSPITAL && r.state === ST.fall;
+    if (patient) patientSpot(pos.x, rig.root.position);
+    if (r.patient && !patient && rig.gear) rig.gear.visible = true; // (out of bed: the skis and poles back as the rig shows them)
+    r.patient = patient;
     // the gait's speed: the row's velocity, but never more than they really move here (smoothed): standing still
     // (paused with ESC mid-run, a stalled row) they stand idle, not running on the spot (Oct 30, the user)
     if (!late) {
@@ -382,7 +387,7 @@ export class RemotePlayers {
     st.air = !seated && !fall && !!(r.flags & F.air); st.tuck = !seated && !fall && !!(r.flags & F.tuck);
     st.carry = !inVeh && !fall && !!(r.flags & F.carry);
     st.normal = UP;
-    const skisVisible = !inVeh && !st.bench && (r.state === ST.ski || st.carry || (fall && !!(r.flags & F.skisOn)));
+    const skisVisible = !inVeh && !st.bench && !patient && (r.state === ST.ski || st.carry || (fall && !!(r.flags & F.skisOn)));
     if (r.skisShown !== skisVisible) { r.skisShown = skisVisible; rig.setSkisVisible(skisVisible); }
     // walking with skis: on the back (the rig's carry pose), never on the feet
     const carry = st.carry && r.state !== ST.ski;
@@ -404,9 +409,10 @@ export class RemotePlayers {
       // inside (a chalet's stairs and upper floor, the Autohaus mezzanine, the ski shop, the prison): the floor is the
       // row's own height (their feet), not the world's terrain under the interior's coordinates, which the rig's feet
       // would stand on (Oct 30, the user: "he sinks through the floor", "it's like you go through the stairs")
-      if (r.interior) onFloor(rig, r.animAcc, st, seated ? pos.y - 0.45 : pos.y);
+      // (a patient in a hospital bed: posed exactly as you see yourself lying there, hospitalroom.js posePatient)
+      if (patient) posePatient(rig, r.animAcc);
+      else if (r.interior) onFloor(rig, r.animAcc, st, seated ? pos.y - 0.45 : pos.y);
       else rig.update(r.animAcc, st);
-      if (fall && r.interior === HOSPITAL) bedArms(rig); // (a patient in a hospital bed: the arms by its side, as you see yourself)
       r.animAcc = 0;
       if (inVeh && r.inCar) carLegs(rig, r); // (drivers and passengers: the bench 'sit' pose hangs the legs straight down through the car floor)
       else if (inVeh && r.onSled) sledLegs(rig); // (astride the snowmobile: knees bent, feet on the running boards)

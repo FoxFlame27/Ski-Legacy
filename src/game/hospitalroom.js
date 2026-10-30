@@ -82,6 +82,37 @@ export function bedArms(rig) {
     }
   }
 }
+
+// this ward's mattress tops as the beds' models measured them here (HospitalRoom), for the other players lying in them
+let wardTops = null;
+const _pst = { mode: 'fall', heading: 0, speed: 0, crouch: 0, lean: 0, edge: 0, tuck: false, air: false, normal: UP,
+  fall: { pitch: PITCH, roll: 0, ball: 0, getUp: 0 }, fallSide: 1, fallHeading: 0, fallAir: false, fallT: 1, carry: false, airY: 0 };
+/** Where another player lying in a bed rests (the rig's root): the bed nearest their x, on this ward's mattress (your
+ *  own bed's spot in poseBody: x, the mattress + 4 cm, HIPS_Z), not the height their own client measured and sent. */
+export function patientSpot(x, out) {
+  let bed = 0, bd = Infinity;
+  BEDS.forEach((bx, i) => { const d = Math.abs(x - bx); if (d < bd) { bd = d; bed = i; } });
+  return out.set(BEDS[bed], (wardTops?.[bed] ?? BED.top) + 0.04, HIPS_Z);
+}
+/** Another player in a hospital bed (net/remote.js: ST.fall inside the hospital), posed exactly as your own body in
+ *  bed (poseBody): the root on patientSpot, the mattress its floor, flat on the back (the pose set here, not decoded
+ *  from the row's lossy pitch / flags), no blend, the arms by the side and the legs straight along the bed, the head
+ *  showing, no skis, no poles, no snow. */
+export function posePatient(rig, dt) {
+  if (!rig?.root || !rig.b?.hips) return;
+  patientSpot(rig.root.position.x, rig.root.position);
+  const top = rig.root.position.y;
+  if (!rig.bedUnculled) { rig.bedUnculled = true; rig.root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; }); } // (lying, outside the standing pose's bounds)
+  rig.snapNext = true;
+  rig.setHeadHidden?.(false);
+  const own = Object.prototype.hasOwnProperty.call(world, 'groundHeight'), g0 = world.groundHeight;
+  world.groundHeight = () => top;
+  try { rig.update(Math.min(dt, 0.1), _pst); } catch (e) { console.warn('hospital: patient', e); } finally { if (own) world.groundHeight = g0; else delete world.groundHeight; }
+  if (rig.fx?.length) rig.fx.length = 0;
+  if (rig.gear) rig.gear.visible = false;
+  bedArms(rig);
+}
+
 // the house's windows (hospital.js: ground floor, sill-to-lintel 1.15 .. 2.45 m)
 const WIN = {
   front: [[-5.2, 1.4, 1.3], [5.2, 1.4, 1.3]],
@@ -478,7 +509,7 @@ export class HospitalRoom {
       for (const sx of [-1, 1]) { this.box(0.05, 0.05, 0.5, M.birch, sx * 0.28, 0.64, -0.02, 0, true, fb); this.box(0.04, 0.2, 0.04, M.birch, sx * 0.28, 0.54, 0.2, 0, true, fb); }
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) this.box(0.04, 0.42, 0.04, M.birch, sx * 0.23, 0.21, sz * 0.21, 0, true, fb);
     };
-    this.bedTops = BEDS.map(() => BED.top);
+    this.bedTops = wardTops = BEDS.map(() => BED.top); // (wardTops: the other players' patients lie on these too)
     BEDS.forEach((bx, i) => {
       const cs = CAB_SIDE[i];
       this.furn('bed', bx, BED_Z, 0, bedFb, (m) => {

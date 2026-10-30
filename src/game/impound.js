@@ -333,15 +333,15 @@ export class Impound {
     }
     // on a road, or blocking a car park: the warnings, then the tow truck
     const what = sp.kind === 'road' ? 'blocking the road' : sp.kind === 'mouth' ? 'blocking the car park entrance' : 'not parked in a bay';
-    if (d < 15) { e.abandonT = 0; e.warned2 = false; } // (you came back)
-    else {
-      if (d > 25 && !e.warned) { e.warned = true; R.hud?.flash(`Your car is ${what} · it will be towed if you leave it there`, 'bad', 3600); }
-      if (d >= AWAY_R) e.abandonT = (e.abandonT || 0) + step;
-      if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still ${what} · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
-      if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.parkHud(null); this.tow(e, what); return; }
-    }
-    // the card: just out of the car, walking away from it, the countdown running
-    this.parkHud((e.outAt != null && this.clk - e.outAt < 7) || d >= 15 ? this.parkText(e, sp, d) : null);
+    // (Oct 30, the user: "make sure the countdown for the tow truck starts immediately once you get out of the car, not
+    // once you are far enough": it runs from the moment you're out, near the car or not; only driving it again, or
+    // parking it properly, stops it)
+    if (!e.warned) { e.warned = true; R.hud?.flash(`Your car is ${what} · it will be towed if you leave it there`, 'bad', 3600); }
+    e.abandonT = (e.abandonT || 0) + step;
+    if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still ${what} · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
+    if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.parkHud(null); this.tow(e, what); return; }
+    // the card: the countdown running, from the moment you're out
+    this.parkHud(this.parkText(e, sp, d));
   }
 
   // the card's words for where it stands: [good, head, sub]

@@ -59,7 +59,7 @@ const CRASH_V = 70 / 3.6; // m/s: into something solid (or head-on into a car) t
 const EXTREME_V = 150 / 3.6; // ...and this fast: the car's wrecked at once
 const KNOCK_V = 30 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
-const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
+const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 && !c.rock ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
 // kerb weights (kg), for the knocks between cars
 const MASS = { car_bmw_x3: 1900, car_audi_rs6: 2100, car_vw_golf_gti: 1450, car_tesla_m3: 1850, car_mercedes_sls: 1620, car_porsche_taycan: 2300,
@@ -458,7 +458,7 @@ export class Drive {
       // (the tyres' load sensitivity: cornering hard, the weight moving onto the outside wheels costs a little grip;
       // tw: track width)
       const tw = Math.max(1.4, d.w - 0.3), ltK = 1 - 0.06 * Math.min(1, (Math.abs(d.lat || 0) * hcg) / (tw * 0.5 * G));
-      const mu = s.mu * ltK, capF = mu * Fzf, capR = mu * Fzr;
+      const mu = s.mu * ltK * (d.gripK ?? 1), capF = mu * Fzf, capR = mu * Fzr; // (gripK: police.js, spiked tyres / a PIT)
       // the engine (through the gears) and the brakes
       let Fdrive = 0, Fbrake = 0;
       if (!s.road) thr *= 0.6; // (a gentler throttle on snow: less wheelspin)
@@ -500,7 +500,7 @@ export class Drive {
       const Fyr = -capR * Math.sqrt(Math.max(0, 1 - kr * kr)) * latR * tyre(ar) * kLow;
       // resistances: rolling (snow drags more), air (sets the top speed), slope
       const topF = spec.electric ? Fmax * 0.42 : Fmax * Math.pow(RATIOS[RATIOS.length - 1] / RATIOS[0], 0.85) * 0.66;
-      const drag = (topF / (spec.top * spec.top)) * u * au;
+      const drag = (topF / (spec.top * spec.top)) * u * au * (d.dragK ?? 1); // (dragK: police.js, flat tyres: a lower top speed)
       const roll = s.roll * Wt * sgn * Math.min(1, au / 0.5);
       const gF = -G * (gx * fx + gz * fz) * cosT * m, gL = -G * (gx * lx + gz * lz) * cosT * m;
       d.downhill = gF / (m * G) * Math.sign(u || 1); // (the slope's pull along the way you go: + downhill)
@@ -521,7 +521,7 @@ export class Drive {
         const rMax = (latOk * (s.road ? 1.3 : 1.2)) / Math.max(Math.abs(u), 2);
         const rT = clamp((u / L) * Math.tan(delta), -rMax, rMax);
         const over = r * rT < 0 || Math.abs(r) > Math.abs(rT);
-        const hbK = hb && au > 0.5 ? 0.15 : 1;
+        const hbK = (hb && au > 0.5 ? 0.15 : 1) * (d.escK ?? 1); // (escK: police.js, a PIT spinning you out)
         r += (rT - r) * (1 - Math.exp(-dt * (s.road ? 7 : 3.5) * (over ? 1 : s.road ? 0.8 : 0.25) * hbK));
         v = b * r + (v - b * r) * Math.exp(-dt * (s.road ? 6 : 2) * hbK);
       }

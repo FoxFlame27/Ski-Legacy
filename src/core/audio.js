@@ -983,6 +983,58 @@ export class Audio {
       for (let i = 0; i < 9; i++) burst('highpass', 3500 + Math.random() * 4000, 1, 0.16 * a * (1 - i / 12), 0.05 + Math.random() * 0.08, 0.08 + Math.random() * 0.45);
     } catch { /* (silent crash) */ }
   }
+  // ---------------------------------------------------------------- the police chase (game/police.js)
+  /** A police ram / you smashing into a patrol car (amount 0..1): the crash, a long grinding scrape of metal, glass
+   *  bursting (glass), a deep boom you feel more than hear. */
+  ramHit(amount = 0.6, glass = true) {
+    if (!this.ctx) return;
+    const a = clamp(Number.isFinite(amount) ? amount : 0.6, 0.1, 1), B = this.buf, rnd = (lo, hi) => lo + Math.random() * (hi - lo);
+    try {
+      this.carCrash(Math.max(0.35, a));
+      if (B.metal_scrape) this.shot('metal_scrape', { vol: 0.3 + 0.45 * a, rate: rnd(0.68, 0.85), delay: 0.04, dur: 0.45 + 0.7 * a, lp: 4000 + 3000 * a });
+      else this.sweep(0.5 + 0.6 * a, 2800, 800, 0.16 * a);
+      if (glass && B.glass) this.shot('glass', { sprite: true, vol: 0.25 + 0.45 * a, rate: rnd(1.0, 1.18), delay: rnd(0.07, 0.15) });
+      else if (glass) for (let i = 0; i < 6; i++) this.tone(3200 + Math.random() * 3800, 0.05 + Math.random() * 0.06, 'triangle', 0.035 * a, 0.9, 0.06 + Math.random() * 0.35);
+      this.tone(46, 0.55 + 0.35 * a, 'sine', 0.75 * a, 0.55); // (the boom)
+    } catch { /* (silent) */ }
+  }
+  /** Short police sounds: 'radio' (a squelch and a chirp before a line of chatter), 'spikes' (tyres bursting on a
+   *  spike strip: a bang and the hiss of the air), 'star' (the wanted level going up). */
+  police(name) {
+    if (!this.ctx) return;
+    try {
+      if (name === 'radio') { this.burst(0.09, 2300, 0.07, 'bandpass'); this.tone(1720, 0.045, 'square', 0.02, 1, 0.06); this.burst(0.05, 2600, 0.04, 'bandpass'); return; }
+      if (name === 'spikes') { this.burst(0.08, 900, 0.7, 'lowpass'); this.tone(90, 0.2, 'sine', 0.5, 0.5); this.sweep(0.7, 6000, 2500, 0.12); return; }
+      if (name === 'star') { this.tone(660, 0.12, 'square', 0.03); this.tone(880, 0.16, 'square', 0.03, 1, 0.1); }
+    } catch { /* (silent) */ }
+  }
+  /** The police helicopter over you, every frame while it flies (on: false fades it): the rotor's beat (amplitude-
+   *  modulated brown noise at the blade rate), a turbine whine; dist (m), doppler pitch factor. */
+  setChopper({ on = false, dist = 80, doppler = 1, paused = false } = {}) {
+    if (!this.ctx) return;
+    if (!this.chopper) {
+      if (!on) return;
+      try {
+        const ctx = this.ctx;
+        const src = ctx.createBufferSource(); src.buffer = this.brown; src.loop = true;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700; lp.Q.value = 0.8;
+        const am = ctx.createGain(); am.gain.value = 0.55;
+        const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 19;
+        const depth = ctx.createGain(); depth.gain.value = 0.5; lfo.connect(depth).connect(am.gain);
+        const wh = ctx.createOscillator(); wh.type = 'sine'; wh.frequency.value = 2900;
+        const wg = ctx.createGain(); wg.gain.value = 0.006;
+        const bus = ctx.createGain(); bus.gain.value = 0;
+        src.connect(lp).connect(am).connect(bus); wh.connect(wg).connect(bus); bus.connect(this.sfx);
+        src.start(0, Math.random()); lfo.start(); wh.start();
+        this.chopper = { bus, lfo, wh, lp };
+      } catch { return; }
+    }
+    const N = this.chopper, t = this.ctx.currentTime, live = on && !paused ? 1 : 0;
+    N.bus.gain.setTargetAtTime(live * 1.6 / (1 + Math.pow(Math.max(0, dist) / 55, 1.3)), t, 0.15);
+    N.lfo.frequency.setTargetAtTime(19 * doppler, t, 0.1);
+    N.wh.frequency.setTargetAtTime(2900 * doppler, t, 0.1);
+    N.lp.frequency.setTargetAtTime(400 + 9000 / (1 + dist / 60), t, 0.2);
+  }
   /** Getting in: an electric car's chime (a combustion engine's start is setCar's crank / firing, driven by drive.js). */
   carStart(electric) {
     if (!this.ctx) return;

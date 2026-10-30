@@ -1328,7 +1328,7 @@ function mpPose(o) {
   }
   // paused (ESC): you stand still on the others' screens too (Oct 30, the user): no speed for them to lead you along,
   // no tuck / lean / air (your last frame's velocity kept you gliding there)
-  if (paused) { o.vx = 0; o.vy = 0; o.vz = 0; o.lean = 0; if (o.st !== MPST.fall) { o.crouch = 0; o.flags &= ~(MPF.air | MPF.tuck); } }
+  if (paused) { o.vx = 0; o.vy = 0; o.vz = 0; o.lean = 0; if (o.st !== MPST.fall) { o.crouch = 0; o.flags &= ~(MPF.air | MPF.tuck); } o.flags |= MPF.paused; } // (PAUSED over you on the others' screens)
 }
 function mpScene(id) {
   if (id === 'skishop') return interior?.scene || null;

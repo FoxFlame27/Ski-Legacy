@@ -367,6 +367,14 @@ export class RemotePlayers {
     const tagOn = d < TAG_FAR;
     if (r.tag.visible !== tagOn) r.tag.visible = tagOn;
     if (tagOn) { const k = r.tag.userData.base * Math.max(0.6, Math.min(1, 1.15 - d / 220)); r.tag.scale.set(k * (512 / 96), k, 1); }
+    // in the pause menu (F.paused): a grey PAUSED label over their name (Oct 30, the user)
+    const paused = tagOn && !!(r.flags & F.paused);
+    if (paused && !r.pauseTag) { r.pauseTag = makeTag('⏸ PAUSED', '#6b7280'); r.pauseTag.position.set(0, 2.55, 0); }
+    if (r.pauseTag) {
+      if (r.pauseTag.parent !== r.rig.root) r.rig.root.add(r.pauseTag);
+      if (r.pauseTag.visible !== paused) r.pauseTag.visible = paused;
+      if (paused) { const k = r.tag.scale.y * 0.85; r.pauseTag.scale.set(k * (512 / 96), k, 1); }
+    }
     r.animAcc += dt;
     if (d < ANIM_NEAR || r.animAcc > (d < ANIM_NEAR * 3 ? 0.06 : 0.15)) {
       // inside (a chalet's stairs and upper floor, the Autohaus mezzanine, the ski shop, the prison): the floor is the

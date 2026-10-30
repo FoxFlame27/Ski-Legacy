@@ -689,6 +689,9 @@ export class Police {
    */
   constructor(o) {
     Object.assign(this, o);
+    // (Oct 30, the user: "make sure you don't accidentally pay the fine: a button to confirm, or you just drive away"):
+    // pulled over, ENTER pays (E would get you out of the car)
+    if (typeof addEventListener === 'function') addEventListener('keydown', (e) => { if (e.code === 'Enter' && !e.repeat && this.w?.scene?.ask && !this.w.scene.paid) this.payNow = true; });
     this.units = [];      // the patrol cars (built once, reused, up to MAXU): see unit()
     this.w = null;        // the chase: { t, esc, fleeing, reached, grace, stopT, scene, why, heat, search, seen, lkp, rb, flats, ... } (start())
     this.cool = 0;
@@ -2393,7 +2396,7 @@ export class Police {
     }
     // you drive off (or run off) mid-scene: fleeing again; the officer back to his car
     const off = T.car ? S.kind === 'fine' && T.sp > 4.5 : T.foot && S.kind === 'fine' && T.sp > 2.6 && S.step !== 'pull'; // (an arrest in the car: held, drive.js)
-    if (off && (S.step === 'pull' || S.step === 'walk' || (S.step === 'talk' && !S.said))) {
+    if (off && (S.step === 'pull' || S.step === 'walk' || (S.step === 'talk' && !S.paid && (S.kind === 'fine' || !S.said)))) {
       this.flee(W);
       if (u.officer) { S.step = 'back'; S.abort = true; } else { W.scene = null; return; }
     }
@@ -2432,7 +2435,7 @@ export class Police {
         if (S.kind === 'fine') {
           const f = this.fineNow();
           this.say('Officer', `${this.record() ? 'You again? ' : ''}Collision back there: ${usd(f)} fine.`); // (short: the long lines ran off the screen)
-          this.charge(f); this.addRecord();
+          S.ask = true; this.payNow = false; // (paid only on ENTER; driving / running off instead: fleeing)
         } else {
           const f = this.arrestNow(), a = usd(f);
           this.say('Officer', S.why === 'wrecked' ? `You're under arrest! ${a}.` : T.car ? `Out of the car! Arrested · ${a}.` : `Stop! You're under arrest · ${a}.`); // (Oct 30, the user: the lines ran off the screen: short now)
@@ -2440,7 +2443,8 @@ export class Police {
         }
       }
       if (S.kind === 'arrest' && S.t > 2.2 && !S.jailed) { S.jailed = true; this.arrest(); return; }
-      if (S.kind === 'fine' && S.t > 3.4) { S.step = 'back'; S.t = 0; this.note('Fine paid · drive safely'); }
+      if (S.kind === 'fine' && S.ask && !S.paid && this.payNow) { this.payNow = false; S.paid = true; S.paidT = S.t; this.charge(this.fineNow()); this.addRecord(); }
+      if (S.kind === 'fine' && S.paid && S.t - S.paidT > 2.2) { S.step = 'back'; S.t = 0; this.note('Fine paid · drive safely'); }
       return;
     }
     if (S.step === 'back') {
@@ -2595,7 +2599,7 @@ export class Police {
       this.setHud(true, H);
       return;
     }
-    const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : `Pulled over · stay in the car · ${usd(this.fineNow())} fine`) : 'Under arrest')
+    const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : (S.ask && !S.paid ? `ENTER: pay the ${usd(this.fineNow())} fine · or drive away` : `Pulled over · ${usd(this.fineNow())} fine`)) : 'Under arrest')
       : W.search ? 'They lost you · stay out of sight'
         : W.fleeing ? (W.seen ? 'Fleeing · break their line of sight' : 'Out of sight · keep going')
           : W.reached ? `Pull over now: stop to pay the ${usd(this.fineNow())} fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : `Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`;

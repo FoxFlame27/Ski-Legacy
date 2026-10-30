@@ -94,7 +94,7 @@ export class Modes {
   /** FREE RIDE: race a course right where it stands on its mountain (E at its start house, see
    *  modes/parkour/freeworld.js): the same session as RACE (14 AI, intro, checkpoints, results), no teleport to a
    *  far map and no course atmosphere. o.result({ place, time, dnf }) -> prize money shown on the results card;
-   *  o.retry() -> false when RACE AGAIN can't be paid. After the finish BACK TO START takes you up to the start again. */
+   *  o.retry() (unused now: no RACE AGAIN). After the finish one OK and you stay where you are (Oct 30 2026). */
   startFree(courseId, { difficulty = 'medium', result, retry, prizeMult, bots, syncGo, grid, others, mp, home, practice = false } = {}) { // (practice: alone, no prize)
     this.end();
     // (a course object: a race laid on a piste, the ski bus's free races: modes/race/busraces.js)
@@ -102,7 +102,7 @@ export class Modes {
     this.group = course.build(this.scene, this.models); // (the free world built it already: reused)
     if (this.group && !this.group.parent) this.scene.add(this.group);
     this.course = course;
-    this.current = { mode: 'race', courseId: course.id, difficulty, free: true, retry, home }; // (home: { label, place() } instead of BACK TO START)
+    this.current = { mode: 'race', courseId: course.id, difficulty, free: true, retry, home }; // (home: kept for callers, unused: no teleport after a race, Oct 30 2026)
     this.session = new RaceSession({
       scene: this.scene, course, mode: 'race', difficulty, botCount: bots ?? this.botCount, // (multiplayer: bots 0, syncGo: the shared start)
       player: this.player, makeRig: this.makeRig, botCharacters: this.botCharacters(),
@@ -115,25 +115,13 @@ export class Modes {
     this.session.start();
   }
 
-  // RACE AGAIN (back to the start, entry fee as usual) or BACK TO START ('continue': standing at the start, no race)
-  async exitFree(choice) {
+  // The results' OK (or Escape): the race ends right where you are, on the snow, control back; no fade and no teleport
+  // (Oct 30 2026, the user: "make sure when you're done with a race you just stay where you are, you don't get an option
+  // to spawn somewhere"; replaces Oct 27's "return to the start" and the bus races' BACK TO THE BUS STOP). Prize money
+  // and records were booked when the results came up (session.showResults).
+  async exitFree() {
     if (!this.current?.free) return;
-    if (choice === 'retry' && this.current.retry?.() !== false && this.session?.restart) {
-      await this.transition.fade(() => this.session?.restart());
-      this.lock?.();
-      return;
-    }
-    // CONTINUE: back up to the course's start (Oct 27, the user: "if you're done racing you return to the start of
-    // the race, rn you're stuck at the end of the race and have to walk all the way back up"): you stand at the start
-    // wand again, E races it again (or ski the course on your own)
-    const s = this.session, c = this.course, s0 = c?.start?.s, home = this.current.home;
-    await this.transition.fade(async () => {
-      this.end();
-      try {
-        if (home?.place) await home.place(); // (a bus race: back to its board beside the bus stop)
-        else if (s && Number.isFinite(s0)) { s.placePlayer(s0, 0, 0); await this.stream?.(this.player.pos.x, this.player.pos.z); }
-      } catch (e) { console.warn('Race: back to the start failed', e); }
-    });
+    this.end();
     // (the course stays standing: the free world drops its meshes once you are far away)
     this.course = this.group = null;
     this.current = null;

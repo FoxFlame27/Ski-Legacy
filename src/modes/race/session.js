@@ -80,6 +80,11 @@ const GATE_PENALTY = 0.5;          // s per missed slalom gate (forgiving: never
 const GATE_FLAG = 0.75, GATE_TOL = 4; // (4 m: generous)
 const RESULTS_DELAY = 2.6;         // s after the line before the results
 const RESULTS_MAX_WAIT = 6;        // ...or longer while the field is about to finish
+// Every open-world race (the courses, the bus races, the practice race, multiplayer) ends with one OK (Enter / Escape)
+// and you stay right where you are, skis on the snow, control back (Oct 30 2026, the user: "make sure when you're done
+// with a race you just stay where you are, you don't get an option to spawn somewhere": no RACE AGAIN, no BACK TO START /
+// BACK TO THE BUS STOP, no teleport after the results)
+const STAY_PUT = [['continue', 'OK', 'ENTER']];
 const MP_RESULTS_WAIT = 75;        // multiplayer: s after your finish to wait for the server's result (it closes a
                                    // race 60 s after the first finisher) before showing provisional standings
 const FINISH_BRAKE = 9;            // m/s^2 ski-out after the line
@@ -581,7 +586,7 @@ export class RaceSession {
     if (!this.active || this.disposed) return;
     this.takeCrashEvents();
     if (!(dt > 0)) return;
-    if (input?.hit?.('Backspace') && this.state !== 'results' && !this.mp) { this.restart(); return; } // (no restarts in a shared race)
+    if (input?.hit?.('Backspace') && !this.finished && !this.mp) { this.restart(); return; } // (no restarts in a shared race, nor once you are over the line: you stay there, Oct 30 2026)
     this.floodlights?.update(dt);
     if (this.state === 'intro') { this.updateIntro(dt); return; }
     this.clock += dt;
@@ -1415,20 +1420,20 @@ export class RaceSession {
       if (res.mine.dnf) this.resultsArgs.time = NaN;
       this.resultsArgs.difficulty = `MULTIPLAYER · ${rows.length} RACERS`;
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
+      this.resultsArgs.choices = STAY_PUT;
     } else if (this.mp) {
       this.resultsArgs.difficulty = 'MULTIPLAYER · PROVISIONAL';
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
+      this.resultsArgs.choices = STAY_PUT;
     } else if (this.freeRide) {
-      // free ride: the podium earns prize money (paid once per run), then RACE AGAIN or BACK TO START (Modes.exitFree)
+      // free ride: the podium earns prize money (paid once per run), then OK: you stay right where you are (Modes.exitFree)
       try {
         const prize = this.freeRide.result?.({ place: race ? place : 0, time: this.finalTime, dnf: !Number.isFinite(this.finalTime) });
         if (prize > 0) this.resultsArgs.prize = prize;
         if (Number.isFinite(this.freeRide.prizeMult) && race) this.resultsArgs.prizeMult = this.freeRide.prizeMult; // (the AI field's factor)
       } catch (e) { console.warn('Race: free-ride result failed', e); }
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
+      this.resultsArgs.choices = STAY_PUT;
     } else if (this.choices) this.resultsArgs.choices = this.choices;
     if (this.practice) { delete this.resultsArgs.prize; delete this.resultsArgs.prizeMult; this.resultsArgs.difficulty = 'PRACTICE RACE · NO PRIZE'; }
     this.presentResults();

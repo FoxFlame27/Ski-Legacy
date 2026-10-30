@@ -7,7 +7,7 @@
 //
 // Beside each stop stands a race board (the job board's notice board with a FREE RACE header and the race's poster):
 // E there opens the race card and takes you to the start gate (a short fade: it is 100-400 m down the piste); E at
-// the start gate itself does the same. After the race BACK TO THE BUS STOP brings you back to the board.
+// the start gate itself does the same. After the race you stay where you are (one OK, no teleport: Oct 30 2026, the user).
 //
 //   const bus = new BusRaces({ scene, models, colliders, stops: skibus.stops, sites: jobs.sites });
 //   bus.update(dt, player, modes);   // meshes built / dropped by distance (twice a second)
@@ -394,7 +394,7 @@ export class BusRaces {
     return null;
   }
 
-  /** Where BACK TO THE BUS STOP puts you: in front of the race board, facing it (else the start). */
+  /** In front of the race board, facing it (else the start); no longer used after a race (Oct 30 2026: you stay put). */
   homeOf(e) {
     const b = e.board;
     if (!b) return { x: e.start.x, z: e.start.z, heading: e.start.heading };

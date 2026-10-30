@@ -214,7 +214,7 @@ export class TrailMap {
           <div class="mp-head">ON THE MAP</div>
           <div class="tm-grid">${sym('hut', 'Mountain hut')}${sym('bus', 'Ski bus')}${sym('park', 'Terrain park')}${sym('heli', 'Heli-ski')}
           ${sym('shop', 'Ski shop')}${sym('car', 'Autohaus')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}${sym('car mycar', 'Your car')}${sym('car impound', 'Impounded car')}
-          ${sym('secret', 'Secret found')}${sym('jobs', 'Job board')}</div>
+          ${sym('secret', 'Landmark')}${sym('jobs', 'Job board')}</div>
         </div>
       </div>
       <div class="tm-hints">

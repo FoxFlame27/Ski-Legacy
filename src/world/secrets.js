@@ -855,21 +855,19 @@ export class Secrets {
     this.built.delete(d.id);
   }
 
+  // (Oct 30, the user: "don't say secret anymore, it is just a normal part of the map now": the two left, the
+  // Adlertor and the Försterweg, are plain places: no "Secret found" card, no finder's reward or bonus, always on the
+  // trail map and always named as your location; a visit is only remembered in the save)
   discover(d) {
     this.save.secrets.push(d.id);
-    const n = this.save.secrets.length, total = SECRET_LIST.length;
-    this.hud.flash(`Secret found · ${d.name} (${n}/${total})`, 'gold', 3400);
-    this.earn?.(d.reward || 500);
-    // every secret found: the big finder's bonus (Oct 29: $10,000, with five more secrets out there)
-    if (n === total) setTimeout(() => { this.hud.flash(`Every secret found · +$${ALL_FOUND_BONUS.toLocaleString('en-US')}`, 'gold', 3800); this.earn?.(ALL_FOUND_BONUS); }, 3800);
     this.writeSave();
   }
 
-  /** the secret you are in, once you have found it (main.js shows it as the location) */
-  locationName() { return this.current && this.isFound(this.current.id) ? this.current.name : null; }
+  /** the place you are in (main.js shows it as the location) */
+  locationName() { return this.current ? this.current.name : null; }
 
-  /** found secrets for the trail map */
+  /** every place for the trail map */
   mapMarkers() {
-    return this.defs.filter((d) => this.isFound(d.id)).map((d) => ({ x: d.center.x, z: d.center.z, label: d.name }));
+    return this.defs.map((d) => ({ x: d.center.x, z: d.center.z, label: d.name }));
   }
 }

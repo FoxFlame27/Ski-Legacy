@@ -11,7 +11,6 @@
 import { save, writeSave, resetSave, skiById } from '../game/economy.js';
 import { QUALITY_ORDER, QUALITY_LABELS, normalizeQuality } from '../engine/quality.js';
 import { fmtTime, CONTROLS, keysHTML } from './hud.js';
-import { SECRET_LIST } from '../world/secrets/list.js';
 import { PLAYER_CHARACTERS } from '../game/characters.js';
 
 // ------------------------------------------------------------------ brush art
@@ -547,7 +546,6 @@ export class Menu {
       ['Top speed', `${Math.round(st.topSpeed * 3.6)} km/h`],
       ['Longest jump', st.longestJump >= 1 ? `${Math.round(st.longestJump)} m` : '—'], ['Biggest air', st.bestAir >= 0.1 ? `${st.bestAir.toFixed(1)} s` : '—'],
       ['Distance skied', `${(st.distance / 1000).toFixed(1)} km`],
-      ['Secrets found', `${(save.secrets || []).filter((id) => SECRET_LIST.some((q) => q.id === id)).length} / ${SECRET_LIST.length}`],
       ['Prize money', `$${fmtMoney(st.earned)}`], ['Skis', ski], ['Day', String(save.day)],
     ];
     const recs = this.fetchCourses().map((c) => {

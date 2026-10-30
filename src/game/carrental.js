@@ -304,7 +304,7 @@ export class CarRental {
   spawn(cfg, p = this.carSpot, free = false) {
     const id = cfg.id, spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
     if (!spec || !gltf || !this.parking || !p) return null;
-    if (p === this.carSpot && !free) p = this.impound?.freeBay?.() || p; // (a bay no other car stands in: another of yours, another player's)
+    if (p === this.carSpot && !free) p = this.impound?.freeBay?.() || this.yardSpot() || p; // (a bay no other car stands in: another of yours, another player's; none left: the yard's bays in front of the hall)
     const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group;
     car.name = free ? 'admin-car' : 'rental-car';
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;
@@ -318,8 +318,17 @@ export class CarRental {
     e.dress = (i, tt) => dressCar(i, tt, e.cfg);
     (this.parking.cars ||= []).push(e);
     if (this.drive) this.drive._cc = null; // (drive.js re-collects the cars' colliders)
-    if (!free) this.impound?.adopt(e); // (towed: in its impound bay, locked until tomorrow)
+    if (!free) { this.impound?.claim?.(e); this.impound?.adopt(e); } // (its bay taken; towed: in its impound bay, locked until tomorrow)
     return e;
+  }
+  /** A free bay in the yard in front of the hall (YARD.bayLines: three), when the car park has none left. */
+  yardSpot() {
+    const cars = this.parking?.cars || [], L = YARD.bayLines;
+    for (let i = 0; i < L.length - 1; i++) {
+      const p = { ...this.w((L[i] + L[i + 1]) / 2, YARD.carZ), yaw: this.yaw0 };
+      if (!cars.some((e) => !e.driving && e.car?.parent && Math.hypot(e.car.position.x - p.x, e.car.position.z - p.z) < 2.5) && !this.mp?.carNear?.(p.x, p.z, 2.5)) return p;
+    }
+    return null;
   }
   // admin panel (ui/admin.js): a free car of a random model from the fleet, parked at { x, z, yaw }; yours to drive
   // like a rental, no fee (a wreck of it: just towed away). One at a time: the last one goes when a new one comes.
@@ -415,13 +424,17 @@ export class CarRental {
   }
   /** Can your car out stay parked in the world as one of your other cars? (in your garage, parked, not wrecked, towed
    *  or held in the tow yard) */
-  keepable(e) { return !!(e && e.rental && !e.driving && !e.wrecked && !e.towing && !e.impound && this.garage.some((c) => c.plate === e.cfg?.plate)); }
+  // (one in the tow yard stays there too: impound.js lets it go into a free bay when its time is up; one on the tow
+  // truck's bed goes on to the tow yard: impound.js tow)
+  keepable(e) { return !!(e && e.rental && !e.driving && !e.wrecked && this.garage.some((c) => c.plate === e.cfg?.plate)); }
   /** The car out: kept parked where it is (this.kept), or gone home to your garage. this.current is null after. */
   keepCurrent() {
     const e = this.current;
     if (!e) return;
-    if (this.keepable(e)) { e.kept = true; if (!this.kept.includes(e)) this.kept.push(e); this.current = null; }
-    else if (!e.driving) { this.remove(e); this.current = null; }
+    if (this.keepable(e)) {
+      e.kept = true; if (!this.kept.includes(e)) this.kept.push(e); this.current = null;
+      if (!e.towing) { const g = e.car.position; e.home = { x: g.x, z: g.z, yaw: e.car.rotation.y }; } // (shoved later: back here, not into the bay it first stood in, maybe another car's now)
+    } else if (!e.driving) { this.remove(e); this.current = null; }
   }
   /** drive.js: you get into another car of yours parked in the world: it is the one out now (multiplayer: the server
    *  makes it cars[0]); the one out before stays where it is. False: not now (it says why). */
@@ -526,8 +539,15 @@ export class CarRental {
       setTimeout(() => this.hud?.flash(`Car wrecked · -$${fee.toLocaleString('en-US')} (tow $${WRECK_FEE.toLocaleString('en-US')} + full repair $${(fee - WRECK_FEE).toLocaleString('en-US')}) · the tow truck takes it to the Autohaus · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
     }
     const back = () => {
-      if (!mine || lost || this.save.rental?.plate !== mine.plate || this.current) return; // (another of yours out meanwhile: that one stays)
-      const k = this.kept.find((x) => x.cfg?.plate === mine.plate); if (k && !k.driving) this.remove(k);
+      if (!mine || lost) return;
+      const k = this.kept.find((x) => x.cfg?.plate === mine.plate);
+      if (this.save.rental?.plate !== mine.plate || this.current) { // (another of yours out meanwhile: that one stays; this one waits in a free bay, still yours)
+        const cfg = this.garage.find((c) => c.plate === mine.plate), p = !k && cfg ? this.impound?.freeBay?.(true) : null;
+        const e = p ? this.spawn(cfg, p) : null;
+        if (e) { e.kept = true; this.kept.push(e); this.hud?.flash(`Your ${this.label(mine.id)} is repaired · it waits in the ${this.where()}`, 'good', 3600); }
+        return;
+      }
+      if (k && !k.driving) this.remove(k);
       this.current = this.spawn(this.save.rental);
       if (this.current) this.hud?.flash(`Your ${this.label(mine.id)} is repaired · it waits in the ${this.where()}`, 'good', 3600);
     };

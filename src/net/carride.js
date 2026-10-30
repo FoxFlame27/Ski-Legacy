@@ -22,7 +22,7 @@ import { busRoads } from '../game/bus/roads.js';
 
 const ASK_REACH = 2.2;  // m from the car's body
 const TAG_FAR = 130;
-const _old = new THREE.Vector3(), _dv = new THREE.Vector3(), _v = new THREE.Vector3();
+const _old = new THREE.Vector3(), _dv = new THREE.Vector3(), _v = new THREE.Vector3(), _eu = new THREE.Euler();
 
 export class CarRide {
   constructor(mp) {
@@ -61,8 +61,10 @@ export class CarRide {
       const ahead = still ? 0 : Math.min(0.1, Math.max(0, (performance.now() - (g.drive.poseT || 0)) / 1000));
       o.x = p.x + d.vx * ahead; o.y = p.y; o.z = p.z + d.vz * ahead; o.yaw = d.yaw + (d.yawRate || 0) * ahead;
       o.vx = still ? 0 : d.vx; o.vy = 0; o.vz = still ? 0 : d.vz;
-      o.st = ST.drive; o.crouch = d.steer || 0; o.lean = 0;
-      o.flags = F.car | (d.lights ? F.lights : 0);
+      // (lean: the body's roll, rolling over in a crash too: the others turn the car as it is here; x/y/z is then the
+      // origin of the car as it lies, not its middle)
+      o.st = ST.drive; o.crouch = d.steer || 0; o.lean = (d.roll || 0) + (d.crash?.roll || 0);
+      o.flags = F.car | (d.lights ? F.lights : 0) | (d.crash ? F.wreck : 0);
     } else if (this.ride) { o.st = ST.ride; o.crouch = 0; o.lean = 0; o.flags = 0; o.vx = 0; o.vy = 0; o.vz = 0; }
   }
 
@@ -76,7 +78,8 @@ export class CarRide {
     const cur = g.carRental?.current || g.carRental?.towed || null, V = this.v;
     const driving = !!(cur && (g.drive?.d?.e === cur || this.mp.towMp?.carAboard(cur)));
     // tell the server when your car comes, goes, is driven, or stands somewhere new (checked once a second)
-    let tell = cur !== V.cur || driving !== V.driving;
+    const wreck = !!cur?.wrecked;
+    let tell = cur !== V.cur || driving !== V.driving || wreck !== V.wreck;
     if (!tell && cur && !driving && (V.t += dt) > 1) {
       V.t = 0;
       const p = cur.car.position;
@@ -84,13 +87,18 @@ export class CarRide {
     }
     if (tell) {
       const had = V.cur !== undefined && V.cur !== null;
-      V.cur = cur; V.driving = driving; V.t = 0;
+      V.cur = cur; V.driving = driving; V.wreck = wreck; V.t = 0;
       if (!cur) { if (had) net.request('veh', { k: 'car', off: true }).catch(() => {}); }
       else if (driving) net.request('veh', { k: 'car' }).catch(() => {});
       else {
         const p = cur.car.position;
         V.x = p.x; V.z = p.z;
-        net.request('veh', { k: 'car', at: [p.x, p.y, p.z, cur.car.rotation.y] }).catch(() => {});
+        // (its heading from the whole turn, YXZ as the others build it: a wreck on its side or roof keeps its tilt)
+        _eu.setFromQuaternion(cur.car.quaternion, 'YXZ');
+        const msg = { k: 'car', at: [p.x, p.y, p.z, _eu.y] };
+        if (Math.abs(_eu.x) > 0.03 || Math.abs(_eu.z) > 0.03) msg.tilt = [_eu.x, _eu.z];
+        if (wreck) msg.wreck = true;
+        net.request('veh', msg).catch(() => {});
       }
     }
     this.ownerTag(cur, driving);

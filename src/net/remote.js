@@ -10,7 +10,8 @@
 // No allocations per frame: snapshot slots, vectors and the rig state objects are all reused.
 import * as THREE from 'three';
 import { R, ST, F, fallDecode } from './protocol.js';
-import { twoBone } from '../game/carpeople.js';
+import { twoBone, seatsFor } from '../game/carpeople.js';
+import { world } from '../world/world.js';
 
 const RING = 16;              // snapshots kept per player
 const DELAY = 120;            // ms of interpolation buffer (at least; more when rows arrive later: Remote.delay)
@@ -70,11 +71,14 @@ class Remote {
     this.vtow = info.vehs?.tow || null;   // their tow truck out on a job ({ k: 'tow', at, v, car }: net/tow.js)
     this.vpolice = info.vehs?.police || null; // the patrol cars chasing them ({ k: 'police', cars: [[x, y, z, yaw, v]] }: game/police.js)
     this.vrescue = info.vehs?.rescue || null; // the rescue helicopter / ambulance coming for them (net/rescue.js)
+    this.vsled = info.vehs?.sled || null; // the snowmobile they drive / left parked ({ k: 'sled', at? }: net/sled.js)
     this.fa = 0; this.fb = 0; this.ff = 0;   // a wipeout: the flags either side of the sample and the blend (fallDecode)
     this.fallSt = { pitch: 0, roll: 0, ball: 0, getUp: 0 }; this.wasFall = false; this.wasAir = false; this.hideRig = false;
     this.ok = false; this.inLocal = false;
     this.vehStr = 0; this.vehK = ''; this.vehOwner = ''; this.vehSeat = -1; // the parsed `kind:id:seat` (vehicles.js)
     this.seatPos = new THREE.Vector3(); this.seatYaw = 0;
+    this.mx = 0; this.mz = 0; this.mspd = 0; this.mHas = false; // (how fast they really move here: poseOne)
+    this.inCar = false; this.carG = null; this.carT = null; this.carSeat = 0; // (the car seat they sit in: vehicles.js seatFor)
     this.animAcc = 0;
     this.st = { mode: 'idle', heading: 0, speed: 0, crouch: 0, lean: 0, edge: 0, tuck: false, plow: 0, skid: 0, normal: UP, air: false, flip: 0, grab: 0, spinVel: 0, charge: 0, lookYaw: 0, lookPitch: 0, seat: null, carry: false, airY: 0, fall: null };
     this.seat = new THREE.Vector3();
@@ -136,7 +140,7 @@ export class RemotePlayers {
     if (!info || info.pid === this.selfPid) return null;
     let r = this.players.get(info.pid);
     if (!r) { r = new Remote(info); this.players.set(info.pid, r); }
-    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; r.vrescue = info.vehs.rescue || null; } }
+    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; r.vrescue = info.vehs.rescue || null; r.vsled = info.vehs.sled || null; } }
     if (info.pres) r.push(info.pres, this.o.now());
     if (info.interior !== undefined) r.interior = info.interior || null;
     return r;
@@ -159,7 +163,7 @@ export class RemotePlayers {
   }
 
   /** A vehicle a player shows changed ('veh' broadcast: k 'car' | 'heli', veh or null). */
-  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; else if (k === 'police') r.vpolice = veh || null; else if (k === 'rescue') r.vrescue = veh || null; }
+  setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; else if (k === 'police') r.vpolice = veh || null; else if (k === 'rescue') r.vrescue = veh || null; else if (k === 'sled') r.vsled = veh || null; }
 
   onRows(rows) {
     if (!Array.isArray(rows)) return;
@@ -251,6 +255,9 @@ export class RemotePlayers {
       if (!seated) r.pos.x += newest.n[5] * dt, r.pos.y += newest.n[6] * dt, r.pos.z += newest.n[7] * dt;
       r.yaw = newest.n[4];
       r.vel.set(newest.n[5], newest.n[6], newest.n[7]);
+      // (no newer row for a while: a stalled window, a dropped connection: they stand there, not running on the spot
+      // with the last row's speed; Oct 30, the user)
+      if (t - newest.n[0] > EXTRAPOLATE) r.vel.set(0, 0, 0);
       r.crouch = newest.n[9]; r.lean = newest.n[10];
     } else {
       const o = r.slot(r.count - 1); // older than anything we have: the oldest
@@ -327,10 +334,17 @@ export class RemotePlayers {
     if (!rig) return;
     const scene = (r.interior ? this.o.getScene?.(r.interior) : this.o.scene) || this.o.scene;
     if (r.scene !== scene) this.attach(r, scene);
-    if (!rig.root.visible) { rig.root.visible = true; rig.gear.visible = true; rig.snapNext = true; }
+    if (!rig.root.visible) { rig.root.visible = true; rig.gear.visible = true; rig.snapNext = true; r.mHas = false; }
     rig.root.position.copy(pos);
-    // the rig's pose from the state
-    const st = r.st, speed = Math.hypot(r.vel.x, r.vel.z);
+    // the gait's speed: the row's velocity, but never more than they really move here (smoothed): standing still
+    // (paused with ESC mid-run, a stalled row) they stand idle, not running on the spot (Oct 30, the user)
+    if (!late) {
+      const step = r.mHas ? Math.hypot(pos.x - r.mx, pos.z - r.mz) : 0;
+      r.mx = pos.x; r.mz = pos.z; r.mHas = true;
+      if (dt > 0) r.mspd += (Math.min(60, step / dt) - r.mspd) * (1 - Math.exp(-dt * 6));
+    }
+    const st = r.st, speed = Math.min(Math.hypot(r.vel.x, r.vel.z), r.mspd * 1.25 + 0.1);
+    st.airY = 0;
     const seated = inVeh || r.state === ST.sit || r.state === ST.ride || r.state === ST.drive || r.state === ST.fly;
     const fall = !seated && r.state === ST.fall;
     st.fall = null;
@@ -355,9 +369,14 @@ export class RemotePlayers {
     if (tagOn) { const k = r.tag.userData.base * Math.max(0.6, Math.min(1, 1.15 - d / 220)); r.tag.scale.set(k * (512 / 96), k, 1); }
     r.animAcc += dt;
     if (d < ANIM_NEAR || r.animAcc > (d < ANIM_NEAR * 3 ? 0.06 : 0.15)) {
-      rig.update(r.animAcc, st);
+      // inside (a chalet's stairs and upper floor, the Autohaus mezzanine, the ski shop, the prison): the floor is the
+      // row's own height (their feet), not the world's terrain under the interior's coordinates, which the rig's feet
+      // would stand on (Oct 30, the user: "he sinks through the floor", "it's like you go through the stairs")
+      if (r.interior) onFloor(rig, r.animAcc, st, seated ? pos.y - 0.45 : pos.y);
+      else rig.update(r.animAcc, st);
       r.animAcc = 0;
-      if (inVeh && r.vehK === 'car') carLegs(rig); // (the bench 'sit' pose hangs the legs straight down: through the car floor)
+      if (inVeh && r.inCar) carLegs(rig, r); // (drivers and passengers: the bench 'sit' pose hangs the legs straight down through the car floor)
+      else if (inVeh && r.onSled) sledLegs(rig); // (astride the snowmobile: knees bent, feet on the running boards)
     }
     // the snow thrown up as they go down and land from a throw (the body's own puffs come from the rig: placeFallen)
     if (fall && d < 120 && rig.pushFx) {
@@ -385,18 +404,49 @@ export class RemotePlayers {
   dispose() { this.clear(); this.o.vehicles?.dispose(); }
 }
 
-// a car seat, not a bench: the legs stretched forward to the footwell (knees up, feet on the floor ahead), as
-// drive.js seats you (placeRig) and carpeople.js seats the traffic's people
-const _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
-function carLegs(rig) {
+// a car seat, not a bench: the legs stretched forward to the footwell (knees up, feet flat on that car's floor ahead),
+// as carpeople.js seats the traffic's drivers (per model: the floor height in front of the front / rear seats) and
+// drive.js seats you (placeRig). In the car's own frame (pitched, rolled with it)
+const _q = new THREE.Quaternion(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
+function carLegs(rig, r) {
+  const b = rig.b, g = r.carG;
+  if (!b?.hips || !b.lUp || !b.rUp || !g) return;
+  rig.root.updateMatrixWorld(true);
+  g.updateMatrixWorld(true);
+  const hip = g.worldToLocal(_hip.setFromMatrixPosition(b.hips.matrixWorld));
+  const S = seatsFor(r.carT), front = r.carSeat < 2;
+  const floor = S?.floor ? (front ? S.floor[0] : S.floor[1] ?? S.floor[0]) : null;
+  const drop = floor != null ? clamp(hip.y - floor - 0.09, 0.13, 0.3) : 0.26;
+  // (a low sports car: the legs out nearly straight; an SUV's upright seat: the knees up, the feet nearer)
+  const ahead = front ? clamp(0.95 - (floor != null ? hip.y - floor : 0.3) * 0.8, 0.55, 0.8) : 0.55;
+  g.getWorldQuaternion(_q);
+  for (const [side, up, leg, foot] of [[1, b.lUp, b.lLeg, b.lFoot], [-1, b.rUp, b.rLeg, b.rFoot]]) {
+    g.localToWorld(_tgt.set(hip.x + side * 0.14, hip.y - drop, hip.z + ahead));
+    _pole.set(side * 0.15, 1, 0.5).normalize().applyQuaternion(_q);
+    try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
+  }
+}
+
+// a rig posed inside an interior (its own scene and coordinates): the feet on the floor at y, not on the world's terrain
+// under those coordinates (the rig's feet ask world.groundHeight: overridden for the call, as busintro.js withGround)
+let _floorY = 0;
+const floorAt = () => _floorY;
+function onFloor(rig, dt, st, y) {
+  const own = Object.prototype.hasOwnProperty.call(world, 'groundHeight'), g0 = world.groundHeight;
+  _floorY = y; world.groundHeight = floorAt;
+  try { rig.update(dt, st); } finally { if (own) world.groundHeight = g0; else delete world.groundHeight; }
+}
+
+// astride a snowmobile: the knees out and bent, the feet on the running boards either side, a little ahead of the hip
+function sledLegs(rig) {
   const b = rig.b;
   if (!b?.hips || !b.lUp || !b.rUp) return;
   const q = rig.root.quaternion;
   rig.root.updateMatrixWorld(true);
   _hip.setFromMatrixPosition(b.hips.matrixWorld);
   for (const [side, up, leg, foot] of [[1, b.lUp, b.lLeg, b.lFoot], [-1, b.rUp, b.rLeg, b.rFoot]]) {
-    _tgt.set(side * 0.14, -0.26, 0.74).applyQuaternion(q).add(_hip);
-    _pole.set(side * 0.15, 1, 0.5).normalize().applyQuaternion(q);
+    _tgt.set(side * 0.27, -0.5, 0.3).applyQuaternion(q).add(_hip);
+    _pole.set(side * 0.4, 0.6, 1).normalize().applyQuaternion(q);
     try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
   }
 }

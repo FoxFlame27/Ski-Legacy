@@ -17,6 +17,7 @@ hooks for the next wave of features. Singleplayer is unchanged whenever `isMP()`
 | Your car / rides | `src/net/carride.js` | Your car shown to everyone (and put back where you left it), "Ask <owner> for a ride", riding as a passenger. |
 | Shared transport | `src/net/transit.js` | The trains, the express, the gondolas and chairlifts on the shared timelines; boarding waits for the real vehicle and claims a seat; seats go back when you get off; SPACE through `holdSkip`; the other riders' seats as drawn here. |
 | Helicopter pad | `src/net/heli.js` | The pad's copy (shown when the server has one), renting through the server, returning, your copy shown to everyone. |
+| Your snowmobile | `src/net/sled.js` | The snowmobile you drive shown to everyone: your presence row is its pose (`F.sled`), `veh {k:'sled', at}` where you left it. |
 | Overlays | `src/net/ui.js` | The status pill, the race line, the speed-up line and the Y/N permission prompt. |
 | Menu | `src/ui/menu.js` | PLAY offers SINGLEPLAYER or MULTIPLAYER. On the first multiplayer launch it asks for a name, then shows connecting, an error, or the world. |
 
@@ -159,7 +160,7 @@ whose `.data` is `d`.
 | `seatRelease` | – | broadcast `seats` |
 | `skip` | `{k, v, on, rate?, line?}` | the speed-up hold (below) · `not_aboard` |
 | `heliRent` / `heliReturn` | – | `{id, money}` · `not_yet {waitMs}`, `money`, `already_renting` / `not_renting` |
-| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) · `{k: 'police', cars: [[x, y, z, yaw, v], ...]}` (the 1-2 patrol cars chasing you, game/police.js, ~6/s, not stored) · `{k: 'rescue', h: [x, y, z, yaw, pitch, roll, rpm] \| null, a: [x, y, z, yaw, v] \| null, s: 0-3, rope, l}` (the rescue helicopter / ambulance coming for you after a wipeout, net/rescue.js, ~6/s, not stored; s: 0 in the snow, 1 on the winch, 2 in the cabin, 3 in the ambulance) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
+| `veh` | `{k: 'car' \| 'heli', at?: [x, y, z, yaw], off?: true}` (a car also `tilt?: [pitch, roll]`, `wreck?: true`: a wreck as it lies, on its side or roof, dented and steaming; not stored) · `{k: 'tow', at, v, car}` (your tow truck on a job, ~6/s, not stored) · `{k: 'police', cars: [[x, y, z, yaw, v], ...]}` (the 1-2 patrol cars chasing you, game/police.js, ~6/s, not stored) · `{k: 'rescue', h: [x, y, z, yaw, pitch, roll, rpm] \| null, a: [x, y, z, yaw, v] \| null, s: 0-3, rope, l}` (the rescue helicopter / ambulance coming for you after a wipeout, net/rescue.js, ~6/s, not stored; s: 0 in the snow, 1 on the winch, 2 in the cabin, 3 in the ambulance) · `{k: 'sled', at?: [x, y, z, yaw]}` (the snowmobile you drive, net/sled.js: no `at` while you drive it, `at` where you left it; not stored) | `{veh}`: the vehicle you show (below), broadcast `veh` · `no_car`, `not_renting`, `bad_vehicle`, `bad_value` |
 | `tow` | `{kind: 'wreck' \| 'tow', home: [x, y, z, yaw], bay?}` | `{money, fee, impound: {day, bay} \| null, at}`: the server's fee (`catalog.wreckFee`, once per tow; like a fine it may go below zero, down to `DEBT_FLOOR`; deeper, the truck still comes and `fee` is 0); the car's spot becomes `home`; `tow` also impounds it until the next world day · `no_car`, `busy`, `bad_kind`, `bad_value` |
 | `towDone` | – | the tow record ends (the truck unloaded your car); your truck leaves the others' view |
 | `raceJoin` / `raceLeave` | `{race}` (a course id) | queue state · `in_race`, `bad_race` |
@@ -197,7 +198,7 @@ whose `.data` is `d`.
 | `skip` | `{k, v, holding, aboard, active}` |
 | `warp` | `{key: 'kind\|line', off, rate, since}` |
 | `heli` | `{copies: [{id, name, since}], padAt, copyMs}` |
-| `veh` | `{pid, k: 'car' \| 'heli' \| 'tow' \| 'police' \| 'rescue', veh: {k, cfg?, id?, at?, v?, car?, cars?, h?, a?, s?, rope?, l?} \| null}` (also `vehs: {car, heli, tow, police, rescue}` in `join` and the world snapshot) |
+| `veh` | `{pid, k: 'car' \| 'heli' \| 'tow' \| 'police' \| 'rescue' \| 'sled', veh: {k, cfg?, id?, at?, v?, car?, cars?, h?, a?, s?, rope?, l?} \| null}` (also `vehs: {car, heli, tow, police, rescue, sled}` in `join` and the world snapshot) |
 | `permAsk` | `{rid, kind, from, pid, ref, timeoutMs}` (to the owner) |
 | `permClosed` / `permRevoked` / `kickInterior` / `seatLost` | the prompt went away / a grant was taken back / you must leave that interior / you were taken out of a car |
 | `raceQueue` | `{race, n, names, startAt (0 = waiting for players), need: 2, waitMs}` |
@@ -217,22 +218,34 @@ The client sends about 12 per second and leaves no allocation per frame. Each ro
   In `fall` (a wipeout: a crash, thrown by a car or bus, lying there for the rescue) `crouch` is the body's pitch,
   `lean` its roll, and `flags` carry the tuck, the get-up, the side, the tumble axis and still-in-the-air
   (`protocol.js` `fallFlags` / `fallDecode`); the others pose the tumble from them (`net/remote.js` `fallPose`).
-- `flags` is `F`: `air 1, tuck 2, skisOn 4, carry 8, hasSkis 16, moving 32, lights 64, car 128`.
+- `flags` is `F`: `air 1, tuck 2, skisOn 4, carry 8, hasSkis 16, moving 32, lights 64, car 128, sled 1<<23, wreck 1<<24`.
+- **Driving a snowmobile** (`F.sled`, state `drive`, net/sled.js): `x/y/z/yaw` is the snowmobile's pose on the snow,
+  `crouch` its pitch, `lean` its roll, `F.lights` its headlight. The others draw it (`vehicles.js updateSled`) and seat
+  the rider astride it; parked, `veh {k:'sled', at}` keeps it where it was left (the parked ones round the resort are
+  each client's own).
 - **Driving your car** (`F.car`): `x/y/z/yaw` is the car's pose, `vx/vz` its velocity, `crouch` the steering angle,
-  `F.lights` the headlights.
+  `lean` the body's roll, `F.lights` the headlights. Crashing (`F.wreck`, drive.js crash): `lean` includes the roll-over
+  and `x/y/z` is the car's origin as it lies, so the others turn the car the same way (the driver hidden once it is
+  over on its side); then `veh {k:'car', at, tilt, wreck}` keeps the wreck where it lies until the tow truck loads it.
 - **Flying a helicopter** (`state` fly): `x/y/z/yaw` is the helicopter's pose, `crouch` its pitch, `lean` its roll,
   `F.lights` the rotor at flight power.
 - **Riding in someone's car** (`state` ride, vehicle `car:Owner:seat`): `x/y/z` is your seat; the other clients seat
   you in that seat of the owner's car as they draw it.
-- **Inside the ski shop or the car rental**: the room's walker position (`pos`, floor height), `yaw` and walking
-  `vel`, not its camera (the camera swings off to the outfit preview, the clerk or the configured car).
+- **Inside the ski shop, the car rental, a chalet or the prison**: the room's walker position (`pos`: y is the feet,
+  on the stairs and the upper floors too), `yaw` and walking `vel` (zero while paused), not its camera (the camera
+  swings off to the outfit preview, the clerk or the configured car). Sitting on your chalet's furniture
+  (`seating.chalet.seat`): `state` sit at the seat. The others stand the avatar's feet on that height
+  (`remote.js onFloor`), not on the world's terrain under the interior's coordinates.
+- **Sitting** (benches, deck chairs, lifts: `state` sit) the others pose the seated rig at `x/y/z`, facing `yaw`.
+  A remote standing still (paused with ESC, a stalled row) stands idle: the gait's speed never exceeds how fast the
+  avatar really moves on your screen.
 
 The server prepends the pid and appends the vehicle and interior from its own records:
 
 `[pid, ts, x, y, z, yaw, vx, vy, vz, state, crouch, lean, flags, 'kind:id:seat' | 0, interiorId | 0]`
 
-While seated, `x/y/z` is the seat position (`player.pos` is the seat). Inside an interior, the position is that
-interior's own camera in its own scene, minus 1.6 m. The game sends no presence until the server has approved the
+While seated, `x/y/z` is the seat position (`player.pos` is the seat). Inside an interior, the position is in that
+interior's own scene and coordinates (its walker; without one, its camera minus 1.6 m). The game sends no presence until the server has approved the
 interior change.
 
 ### The shared clock

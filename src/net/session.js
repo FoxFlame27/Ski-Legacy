@@ -17,6 +17,7 @@ import { RemoteVehicles } from './vehicles.js';
 import { CarRide } from './carride.js';
 import { TowMp } from './tow.js';
 import { RescueMp } from './rescue.js';
+import { SledMp } from './sled.js';
 import { MpHeli } from './heli.js';
 import { MpUI } from './ui.js';
 import { MpTransit } from './transit.js';
@@ -63,6 +64,7 @@ export class Multiplayer {
     this.carRide = new CarRide(this); // your car shown to everyone, rides in other players' cars
     this.towMp = new TowMp(this);     // your tow truck shown to everyone (its pose, your car on its bed)
     this.rescueMp = new RescueMp(this); // your rescue helicopter and ambulance shown to everyone (net/rescue.js)
+    this.sledMp = new SledMp(this);   // the snowmobile you drive shown to everyone (net/sled.js)
     this.heliMp = new MpHeli(this);   // the helicopter pad and your copy
     this.transit = new MpTransit(this); // the shared trains, express, gondolas / chairlifts (and buses): seats, timelines
     this.vehicles = null;             // the other players' cars and helicopters (per world: setWorld)
@@ -226,7 +228,7 @@ export class Multiplayer {
       if (this.interior) net.request('enter', { interior: this.interior }).catch(() => { this.interior = null; });
       // resumed: the server held you through the drop (same world and pid, seat, chalet plot, car, helicopter, race
       // entry): nothing to undo. Otherwise (away longer than the grace period) the rides start over
-      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); this.towMp.reset(); this.rescueMp.reset(); }
+      if (!d.resumed) { this.carRide.reset(); this.heliMp.reset(); this.towMp.reset(); this.rescueMp.reset(); this.sledMp.reset(); }
       this.c.hud.flash(d.resumed ? 'Reconnected' : 'Reconnected · back in the world', 'good', 2000);
       net.emit('relogin', d); // (wave-2 systems: claim your seat again; the server keeps it if it held you)
       // a race that ended while you were away: its results now
@@ -269,7 +271,7 @@ export class Multiplayer {
   leave() {
     if (!MP.active) return;
     if (this.race.start && !this.race.finished) net.send('raceFinish', { rid: this.race.start.rid, dnf: true });
-    try { this.carRide.dispose(); this.towMp.dispose(); this.rescueMp.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.dispose(); this.towMp.dispose(); this.rescueMp.dispose(); this.sledMp.dispose(); this.heliMp.detach(); this.transit.stop(); } catch (e) { console.warn('[mp] vehicles', e); }
     for (const off of this.offs) off();
     this.offs.length = 0;
     clearTimeout(this.pushT); this.pushT = null;
@@ -731,7 +733,7 @@ export class Multiplayer {
     if (day != null && s.day !== day) s.day = day; // (the day pass and the jobs count the world's days)
     this.guestUI();
     this.guardMoney();
-    try { this.carRide.frame(dt); this.towMp.frame(dt); this.heliMp.frame(dt); this.rescueMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
+    try { this.carRide.frame(dt); this.towMp.frame(dt); this.heliMp.frame(dt); this.rescueMp.frame(dt); this.sledMp.frame(dt); } catch (e) { console.warn('[mp] vehicles', e); }
     try { this.transit.update(); } catch (e) { console.warn('[mp] transit', e); }
     // presence
     this.sendAcc += dt;
@@ -740,7 +742,7 @@ export class Multiplayer {
       const p = this.pose;
       p.hold = false;
       this.c.pose(p);
-      this.carRide.pose(p); this.heliMp.pose(p); // (driving / flying: the vehicle's pose; riding with someone)
+      this.carRide.pose(p); this.heliMp.pose(p); this.sledMp.pose(p); // (driving / flying: the vehicle's pose; riding with someone)
       // inside, the walk speed from the step since the last row (the rooms' avatars walk instead of gliding)
       const L = this.lastPos, now2 = performance.now(), sdt = Math.max(0.02, (now2 - L.t) / 1000);
       if (p.interior && p.interior === L.interior && !p.vx && !p.vz) { p.vx = (p.x - L.x) / sdt; p.vz = (p.z - L.z) / sdt; if (Math.hypot(p.vx, p.vz) > 6) p.vx = p.vz = 0; }

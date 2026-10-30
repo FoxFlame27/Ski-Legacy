@@ -13,12 +13,15 @@ import { makeTag } from './remote.js';
 import { CAR_MODELS, carTemplate, carInstance, driverEye } from '../game/cars.js';
 import { dressCar, normConfig } from '../game/carconfig.js';
 import { seatsFor } from '../game/carpeople.js';
-import { lampsOn } from '../game/carlights.js';
+import { lampsOn, Smoke, hazardPhase } from '../game/carlights.js';
+import { addDent, applyDents, repairInstance } from '../game/cardamage.js';
 import { HeliModel, ANCHORS } from '../game/heli/model.js';
 import { nightUniform } from '../world/village.js';
 import { buildTowTruck, beaconsOn, groundPose, bedLocal, TOW_HALF } from '../game/towtruck.js';
 import { buildPoliceCar, policeLights, policeGround, policeModelReady } from '../game/police.js';
 import { Ambulance } from '../game/heli/ambulance.js';
+import { SLED, SEAT as SLED_SEAT } from '../game/snowmobile.js';
+import { fitModel } from '../core/assets.js';
 import { world } from '../world/world.js';
 
 const LEN = Object.fromEntries(CAR_MODELS);
@@ -106,6 +109,7 @@ export class RemoteVehicles {
     this.tows = new Map();  // pid -> their tow truck out on a job: { g, beacons, beaconMat, beaconLight, col, x, z, yaw, posed, shown }
     this.police = new Map(); // pid -> the patrol cars chasing them: [{ m, col, x, z, yaw, tx, tz, tyaw, tv, age, posed, shown }]
     this.rescues = new Map(); // pid -> the rescue coming for them: { model, rope, amb, ...poses } (updateRescue)
+    this.sleds = new Map();   // pid -> the snowmobile they drive / left parked: { g, tag, x, y, z, yaw, pitch, roll, posed, shown } (updateSled)
     this.remotes = null;
     this.time = 0;
   }
@@ -122,6 +126,7 @@ export class RemoteVehicles {
       this.updateRescue(r, dt, cam, outdoors);
       this.updateCar(r, dt, cam, outdoors);
       this.updateHeli(r, dt, cam, outdoors);
+      this.updateSled(r, dt, cam, outdoors);
     }
   }
 
@@ -146,9 +151,28 @@ export class RemoteVehicles {
     this.cars.set(r.pid, c);
     return c;
   }
+  // a wrecked car (F.wreck while it crashes, veh wreck while it lies there and rides the tow truck): dented, steam
+  // from the bonnet; repaired once the record says it is whole again
+  wreckLook(c, dt, show) {
+    if (c.wreck && !c.dented) {
+      c.dented = true;
+      try { const e = { dents: [] }; addDent(e, 0, 1, 1, c.t.size); addDent(e, 0.8, 0.5, 0.7, c.t.size); applyDents(c.inst, e); } catch { /* (no dents on this model) */ }
+    } else if (!c.wreck && c.dented) {
+      c.dented = false;
+      try { repairInstance(c.inst); } catch { /* (as it was) */ }
+    }
+    if (c.wreck && show) {
+      try {
+        c.smoke ||= new Smoke(this.o.scene);
+        const b = _b.set(0, c.t.size.y * 0.78, c.t.size.z / 2 - 0.8); c.group.localToWorld(b);
+        c.smoke.update(dt, b, this.o.camera?.() || null, nightUniform.value, _d.set(0, 0, 1).applyQuaternion(c.group.quaternion));
+      } catch { c.smoke = c.smoke || null; }
+    } else if (c.smoke) c.smoke.clear?.();
+  }
   dropCar(pid) {
     const c = this.cars.get(pid);
     if (!c) return;
+    if (c.smoke) { c.smoke.clear?.(); c.smoke.mesh?.removeFromParent(); }
     c.group.removeFromParent();
     c.tag.material.map.dispose(); c.tag.material.dispose();
     const L = this.o.colliders, i = L ? L.indexOf(c.col) : -1;
@@ -168,12 +192,18 @@ export class RemoteVehicles {
     const driving = r.state === ST.drive && !!(r.flags & F.car);
     c.driven = driving;
     if (driving) {
-      c.x = r.pos.x; c.y = r.pos.y; c.z = r.pos.z; c.yaw = r.yaw; c.steer = r.crouch;
+      // (crashing, F.wreck: rolling over, lean = its roll; x/y/z is the car's origin as it lies, so the same roll here
+      // puts it where it is on their screen, not upright in the air with the driver floating in it)
+      c.x = r.pos.x; c.y = r.pos.y; c.z = r.pos.z; c.yaw = r.yaw; c.steer = r.crouch; c.pitch = 0; c.roll = r.lean || 0;
+      c.wreck = !!(r.flags & F.wreck);
       c.u = r.vel.x * Math.sin(r.yaw) + r.vel.z * Math.cos(r.yaw);
       c.posed = true;
     } else {
       c.u = 0; c.steer *= Math.exp(-dt * 3);
-      if (vc.at && c.atRef !== vc.at) { c.atRef = vc.at; c.x = vc.at[0]; c.y = vc.at[1]; c.z = vc.at[2]; c.yaw = vc.at[3]; c.posed = true; }
+      if (vc.at && c.atRef !== vc.at) {
+        c.atRef = vc.at; c.x = vc.at[0]; c.y = vc.at[1]; c.z = vc.at[2]; c.yaw = vc.at[3]; c.posed = true;
+        c.pitch = vc.tilt?.[0] || 0; c.roll = vc.tilt?.[1] || 0; c.wreck = !!vc.wreck; // (a wreck as it lies: on its side, its roof)
+      }
     }
     // (on their tow truck's bed: it rides with the truck, not where it lay)
     const bed = !driving && r.vtow?.car ? this.tows.get(r.pid) : null;
@@ -187,7 +217,8 @@ export class RemoteVehicles {
     c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
     if (!c.posed) return;
     g.position.set(c.x, c.y, c.z);
-    g.rotation.set(0, c.yaw, 0);
+    _e.set(c.pitch || 0, c.yaw, c.roll || 0, 'YXZ');
+    g.quaternion.setFromEuler(_e);
     if (bed?.posed) g.quaternion.copy(bed.g.quaternion); // (pitched and rolled with the truck)
     g.updateMatrixWorld(true); // (the seats are read from it this frame)
     if (!show) return;
@@ -196,8 +227,10 @@ export class RemoteVehicles {
       if (c.u) w.roll.rotation.x = (w.roll.rotation.x + (c.u * dt) / (w.r || 0.34)) % (Math.PI * 2);
     }
     if (c.inst.steering) c.inst.steering.col.quaternion.setFromAxisAngle(c.inst.steering.axis, -c.steer * 3);
-    const lit = driving ? ((r.flags & F.lights) || nightUniform.value > 0.2 ? 2 : 1) : 0;
-    if (lit !== c.lit) { c.lit = lit; try { lampsOn(c.inst, lit === 2 ? 1 : 0, lit === 2 ? 1 : 0, 0, { drl: lit === 1 ? 1 : 0 }); } catch { /* (no lamps) */ } }
+    this.wreckLook(c, dt, show);
+    const lit = c.wreck ? -1 : driving ? ((r.flags & F.lights) || nightUniform.value > 0.2 ? 2 : 1) : 0;
+    if (lit === -1) { c.lit = -1; try { lampsOn(c.inst, nightUniform.value > 0.2 ? 1 : 0, 0.55, 0, { hazard: hazardPhase() }); } catch { /* (no lamps) */ } } // (a wreck: hazards, dim tails)
+    else if (lit !== c.lit) { c.lit = lit; try { lampsOn(c.inst, lit === 2 ? 1 : 0, lit === 2 ? 1 : 0, 0, { drl: lit === 1 ? 1 : 0 }); } catch { /* (no lamps) */ } }
     // the owner's name over it while nobody drives it (Oct 29, the user: "everything you own has your name above if
     // you are not in it")
     if (driving) { if (c.tag.visible) c.tag.visible = false; } else tagScale(c.tag, d);
@@ -328,6 +361,7 @@ export class RemoteVehicles {
         try { w.model = new HeliModel(this.o.models()); } catch (err) { console.warn('[mp] rescue helicopter', err); }
         if (w.model) {
           w.model.addTo(this.o.scene);
+          w.model.root.visible = false; // (H.shown false until placed: shown below; it stood unposed over your own pad helicopter)
           w.rope = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1, 6), new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.6 }));
           w.rope.frustumCulled = false; w.rope.visible = false;
           this.o.scene.add(w.rope);
@@ -466,11 +500,70 @@ export class RemoteVehicles {
     this.helis.delete(pid);
   }
 
+  // ---------------------------------------------------------------- snowmobiles
+  // The snowmobile another player drives (net/sled.js): driving (state drive, flag F.sled) their presence row is its
+  // pose on the snow (pitch, roll in crouch / lean: interpolated like everyone's rows); parked, where they left it
+  // ('veh' { k: 'sled', at }), tilted to the snow here, their name over it. The parked ones round the resort are each
+  // client's own (game/snowmobile.js).
+  updateSled(r, dt, cam, outdoors) {
+    const driving = r.state === ST.drive && !!(r.flags & F.sled);
+    const at = !driving ? r.vsled?.at || null : null;
+    let w = this.sleds.get(r.pid);
+    if (!driving && !at) { if (w?.shown) { w.shown = false; w.g.visible = false; } if (w) w.posed = false; return; }
+    if (!w) {
+      const models = this.o.models();
+      if (!models?.snowmobile) return; // (the glTF still loading)
+      const g = new THREE.Group();
+      g.name = `mp-sled-${r.name}`;
+      try { g.add(fitModel(models.snowmobile, { size: SLED.len, axis: 'z', rotateY: Math.PI / 2 })); } catch (e) { console.warn('[mp] snowmobile', e); return; }
+      g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      const tag = makeTag(`${r.name}'s snowmobile`, '#0f2f6b');
+      tag.position.set(0, 1.9, 0);
+      g.add(tag);
+      g.visible = false;
+      this.o.scene.add(g);
+      w = { g, tag, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, atRef: null, posed: false, shown: false };
+      this.sleds.set(r.pid, w);
+    }
+    if (driving) {
+      w.x = r.pos.x; w.y = r.pos.y; w.z = r.pos.z; w.yaw = r.yaw; w.pitch = r.crouch; w.roll = r.lean; w.posed = true; w.atRef = null;
+    } else if (w.atRef !== at) {
+      // parked: on the snow here, tilted to it (as snowmobile.js pose())
+      w.atRef = at; w.x = at[0]; w.z = at[2]; w.yaw = at[3];
+      const fx = Math.sin(w.yaw), fz = Math.cos(w.yaw), gh = (x, z) => world.groundHeight(x, z, at[1] + 2);
+      const f = gh(w.x + fx * 1.2, w.z + fz * 1.2), b = gh(w.x - fx * 1.2, w.z - fz * 1.2);
+      const l = gh(w.x + fz * 0.55, w.z - fx * 0.55), rr = gh(w.x - fz * 0.55, w.z + fx * 0.55);
+      const top = Math.max(f, b, l, rr);
+      w.pitch = Math.atan2(b - f, 2.4); w.roll = Math.atan2(l - rr, 1.1);
+      w.y = Number.isFinite(top) && Math.abs(top - at[1]) < 3 ? top - 0.04 : at[1];
+      w.posed = true;
+    }
+    const g = w.g;
+    g.position.set(w.x, w.y, w.z);
+    _e.set(w.pitch, w.yaw, w.roll, 'YXZ');
+    g.quaternion.setFromEuler(_e);
+    g.updateMatrixWorld(true); // (the seat is read from it this frame)
+    const d = _d.set(w.x, w.y, w.z).sub(cam).length();
+    const show = outdoors && d < VEH_FAR;
+    if (w.shown !== show) { w.shown = show; g.visible = show; }
+    if (!show) return;
+    if (driving) { if (w.tag.visible) w.tag.visible = false; } else tagScale(w.tag, d);
+  }
+  dropSled(pid) {
+    const w = this.sleds.get(pid);
+    if (!w) return;
+    w.g.removeFromParent();
+    w.tag.material.map.dispose(); w.tag.material.dispose();
+    this.sleds.delete(pid);
+  }
+
   // ---------------------------------------------------------------- the seat an avatar sits in
   /** Remote r seated in a vehicle drawn here (or in your car): its seat point into out, r.seatYaw; else false. */
   seatFor(r, out) {
     r.inLocal = false;
     r.hideRig = false;
+    r.onSled = false;
+    r.inCar = false;
     parseVeh(r);
     if (r.vrescue && this.rescueSeat(r, out)) return true; // (on the winch, in the cabin; hidden in the ambulance)
     if (r.hideRig) return false;
@@ -478,6 +571,13 @@ export class RemoteVehicles {
       const yaw = this.o.transitSeat(r.vehK, r.vehOwner, r.vehSeat, out);
       if (yaw !== null && yaw !== undefined) { r.seatYaw = yaw; return true; }
       return false;
+    }
+    if (r.state === ST.drive && (r.flags & F.sled)) { // astride their snowmobile
+      const w = this.sleds.get(r.pid);
+      if (!w?.posed) return false;
+      out.copy(SLED_SEAT); w.g.localToWorld(out);
+      r.seatYaw = w.yaw; r.onSled = true;
+      return true;
     }
     if (r.state === ST.fly) {
       const h = this.helis.get(r.pid);
@@ -495,18 +595,21 @@ export class RemoteVehicles {
       if (!L) return false;
       r.inLocal = true;
       r.seatYaw = L.yaw;
+      r.inCar = true; r.carG = L.group; r.carT = L.t; r.carSeat = seat; // (remote.js carLegs: the feet in this car's footwell)
       return seatWorld(L.group, L.t, seat, out);
     }
     const o = owner === r.name ? r : this.remotes?.byName(owner);
     const c = o && this.cars.get(o.pid);
     if (!c?.posed) return false;
+    if (Math.abs(c.roll || 0) > 0.6) { r.hideRig = true; return false; } // (rolled over: inside the car, as on their screen)
     r.seatYaw = c.yaw;
+    r.inCar = true; r.carG = c.group; r.carT = c.t; r.carSeat = seat; // (drivers too: remote.js carLegs)
     return seatWorld(c.group, c.t, seat, out);
   }
 
   /** A remote player's car as drawn (for the ride prompt and the passenger's seat), or null. */
   carOf(pid) { const c = this.cars.get(pid); return c?.posed ? c : null; }
 
-  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); this.dropRescue(pid); }
-  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); for (const pid of [...this.rescues.keys()]) this.dropRescue(pid); }
+  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); this.dropRescue(pid); this.dropSled(pid); }
+  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); for (const pid of [...this.rescues.keys()]) this.dropRescue(pid); for (const pid of [...this.sleds.keys()]) this.dropSled(pid); }
 }

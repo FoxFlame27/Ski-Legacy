@@ -673,13 +673,15 @@ try {
     ok(!same || (pv && pv.veh.cars.length === 2 && pv.veh.cars[0][0] === 10 && pv.veh.cars[0][3] === 1.2 && pv.veh.cars[1][4] === 12.35), "the others see Pia's patrol cars (poses and speeds, rounded)");
     const bad1 = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 3]] });
     ok(!bad1.ok && bad1.err === 'bad_value', 'a patrol car pose must be [x, y, z, yaw, v]');
-    const bad2 = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 3, 0, 0], [1, 2, 3, 0, 0], [1, 2, 3, 0, 0]] });
-    ok(!bad2.ok && bad2.err === 'bad_value', 'at most two patrol cars');
+    const eight = await pia.f.req('veh', { k: 'police', cars: Array.from({ length: 8 }, (_, i) => [i, 2, 3, 0, 0]) });
+    ok(eight.ok && eight.d.veh.cars.length === 8, 'up to eight patrol cars (five stars: the chasers and a roadblock)');
+    const bad2 = await pia.f.req('veh', { k: 'police', cars: Array.from({ length: 9 }, () => [1, 2, 3, 0, 0]) });
+    ok(!bad2.ok && bad2.err === 'bad_value', 'at most eight patrol cars');
     const bad3 = await pia.f.req('veh', { k: 'police', cars: [] });
     const bad4 = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 'x', 0, 0]] });
     ok(!bad3.ok && !bad4.ok && bad4.err === 'bad_value', 'no cars / not numbers: refused (send off: true instead)');
     const fast = await pia.f.req('veh', { k: 'police', cars: [[1, 2, 3, 0, 500]] });
-    ok(fast.ok && fast.d.veh.cars[0][4] === 60, 'a patrol car speed is clamped');
+    ok(fast.ok && fast.d.veh.cars[0][4] === 75, 'a patrol car speed is clamped');
     const late = await join('Cop Rae');
     const seen = late.l.d.world.players.find((p) => p.name === 'Cop Pia');
     ok(late.l.d.world.id !== pia.l.d.world.id || seen?.vehs?.police?.cars?.length === 1, 'a player who joins sees the patrol cars at once (vehs in the world snapshot)');
@@ -699,6 +701,26 @@ try {
     const offRs = await pia.f.req('veh', { k: 'rescue', off: true });
     const offRe = same ? await quinn.f.next('veh', (d) => d.k === 'rescue' && d.pid === pia.l.d.pid && d.veh === null) : true;
     ok(offRs.ok && offRs.d.veh === null && offRe, 'off: the rescue is gone for everyone');
+    // a wrecked car as it lies (tilt [pitch, roll], wreck): drive.js wreckOut, net/carride.js
+    server.profileOf('cop pia').cars = [{ id: 'car_vw_golf_gti', paint: 'white', plate: 'PIA 1' }];
+    const wk = await pia.f.req('veh', { k: 'car', at: [1, 2, 3, 0.5], tilt: [0.1, 9], wreck: true });
+    ok(wk.ok && wk.d.veh.tilt[1] === 3.15 && wk.d.veh.wreck === true && server.profileOf('cop pia').cars[0].at?.[0] === 1, 'a wrecked car: its tilt (clamped) and the wreck flag');
+    const wb = await pia.f.req('veh', { k: 'car', at: [1, 2, 3, 0.5], tilt: [0.1] });
+    ok(!wb.ok && wb.err === 'bad_value', 'a tilt must be [pitch, roll]');
+    await pia.f.req('veh', { k: 'car', off: true }); server.profileOf('cop pia').cars = [];
+    // the snowmobile a player drives (net/sled.js): shown while driving, then parked where they left it
+    const sd = await pia.f.req('veh', { k: 'sled' });
+    const sdE = same ? await quinn.f.next('veh', (d) => d.k === 'sled' && d.pid === pia.l.d.pid && d.veh) : true;
+    ok(sd.ok && sd.d.veh.k === 'sled' && !sd.d.veh.at && sdE, "the others see Pia's snowmobile while she drives it");
+    const sp = await pia.f.req('veh', { k: 'sled', at: [10.123, 20, 30, 1.5] });
+    ok(sp.ok && sp.d.veh.at[0] === 10.12 && sp.d.veh.at[3] === 1.5, '...parked where she left it (at)');
+    const sb = await pia.f.req('veh', { k: 'sled', at: [1, 2, 'x', 0] });
+    ok(!sb.ok && sb.err === 'bad_value', 'a snowmobile at [x, y, z, yaw] must be numbers');
+    const late2 = await join('Sled Sue');
+    const seen2 = late2.l.d.world.players.find((p) => p.name === 'Cop Pia');
+    ok(late2.l.d.world.id !== pia.l.d.world.id || seen2?.vehs?.sled?.at?.[0] === 10.12, 'a player who joins sees the parked snowmobile (vehs in the world snapshot)');
+    const sOff = await pia.f.req('veh', { k: 'sled', off: true });
+    ok(sOff.ok && sOff.d.veh === null, 'off: the snowmobile is gone');
     // the fines go through 'spend' with reason 'game': they may take you into debt
     server.profileOf('cop pia').money = 300;
     const fine = await pia.f.req('spend', { amount: 500, reason: 'game' });

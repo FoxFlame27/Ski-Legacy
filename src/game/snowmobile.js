@@ -44,7 +44,7 @@ const _p = new THREE.Vector3(), _dir = new THREE.Vector3();
 const MAX_SLEDS = 15; // parked sleds round the resort, placed at random each session (each drawn only within 380 m of the camera)
 const VILLAGE_SLEDS = 5; // ...of them in Legacy Village
 const SLED_MARKS = [['sled-ski-l', 0.95, -0.5, 0.12], ['sled-ski-r', 0.95, 0.5, 0.12], ['sled-track', -0.9, 0, 0.42]];
-const SEAT = new THREE.Vector3(0, 0.74, -0.32);   // the rider's seat (sled frame: +z forward, y up from the snow)
+export const SEAT = new THREE.Vector3(0, 0.74, -0.32);   // the rider's seat (sled frame: +z forward, y up from the snow)
 const TRACK = new THREE.Vector3(0, 0.2, -1.35);   // where the track throws snow
 const LAMP = new THREE.Vector3(0, 0.78, 1.1);     // headlight
 

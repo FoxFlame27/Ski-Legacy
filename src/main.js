@@ -1292,7 +1292,7 @@ function mpPose(o) {
   o.interior = null;
   if (interior.active) { o.interior = 'skishop'; cam = interior.camera; room = interior; }
   else if (carRental?.inside) { o.interior = 'carrental'; cam = carRental.room?.camera; room = carRental.room; }
-  else if (chalets?.inside && chalets.current) { o.interior = `chalet:${chalets.current.id}`; cam = chalets.room?.camera; }
+  else if (chalets?.inside && chalets.current) { o.interior = `chalet:${chalets.current.id}`; cam = chalets.room?.camera; room = chalets.room; } // (the walker's feet: on the stairs and upstairs too)
   // a chalet door still fading (as mpView): the approved chalet stays your interior and no row goes out meanwhile; a
   // visit's yes is single use, and reporting you outside half-way in used it up (the guest was then shown out)
   else if (chalets?.busy && multiplayer?.interior?.startsWith?.('chalet:')) { o.interior = multiplayer.interior; o.hold = true; return; }
@@ -1300,6 +1300,10 @@ function mpPose(o) {
   if (room?.pos && Number.isFinite(room.yaw)) { // (the shop / rental: where you walk, not the camera, which swings off to a preview or the clerk)
     o.x = room.pos.x; o.y = room.pos.y || 0; o.z = room.pos.z; o.yaw = room.yaw;
     o.vx = room.vel?.x || 0; o.vy = 0; o.vz = room.vel?.z || 0; o.st = MPST.walk; o.crouch = 0; o.lean = 0; o.flags = 0;
+    if (paused) { o.vx = 0; o.vz = 0; } // (paused inside: standing, not walking on the spot)
+    // sitting on your chalet's sofa / chair / bed edge (seating.js chaletFrame): seated there for the others too
+    const cs = room === chalets?.room ? seating.chalet?.seat : null;
+    if (cs) { o.x = cs.x; o.y = cs.y; o.z = cs.z; o.yaw = cs.yaw; o.vx = 0; o.vz = 0; o.st = MPST.sit; }
     return;
   }
   if (cam) { // (inside: the interior's own camera is you)

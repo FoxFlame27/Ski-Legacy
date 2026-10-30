@@ -67,6 +67,8 @@ const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const JAIL_MAX_S = 300, JAIL_SLACK = 3000; // (the longest sentence; the client's clock estimate may run a little ahead)
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
+// the vehicle kinds 'veh' accepts (setVeh); /health lists them, so a redeploy can be checked from outside
+const VEH_KINDS = ['car', 'heli', 'tow', 'police', 'rescue', 'sled'];
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -530,7 +532,7 @@ class Client {
     this.pres = null;      // the last presence row
     this.interior = null;  // server-approved interior id ('skishop', 'carrental', 'chalet:7', ...)
     this.seat = null;      // { k, v, seat }
-    this.vehs = { car: null, heli: null, tow: null, police: null, rescue: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
+    this.vehs = { car: null, heli: null, tow: null, police: null, rescue: null, sled: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
     this.queue = null;     // race id queued for
     this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
@@ -586,7 +588,7 @@ export class GameServer {
     this.http = http.createServer((req, res) => {
       if (req.url === '/health' || req.url === '/ws/health') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, proto: PROTO, worlds: this.worlds.size, players: this.online.size }));
+        res.end(JSON.stringify({ ok: true, proto: PROTO, worlds: this.worlds.size, players: this.online.size, veh: VEH_KINDS }));
         return;
       }
       if (req.url.startsWith('/admin/')) {
@@ -1037,7 +1039,7 @@ export class GameServer {
   // Leaving the world takes them out of everyone's view (the 'leave' broadcast) until you are back.
   setVeh(c, d) {
     const k = d?.k;
-    if (k !== 'car' && k !== 'heli' && k !== 'tow' && k !== 'police' && k !== 'rescue') return { err: 'bad_vehicle' };
+    if (!VEH_KINDS.includes(k)) return { err: 'bad_vehicle' };
     let v = null;
     if (k === 'tow' && !d.off) {
       // your tow truck out on a job for your car (towtruck.js: only the owner's client drives it): its pose, speed and
@@ -1046,12 +1048,12 @@ export class GameServer {
       if (!validAt(d.at) || (d.v != null && !isNum(d.v))) return { err: 'bad_value' };
       v = { k, at: d.at.map((x) => Math.round(x * 100) / 100), v: Math.round(clamp(d.v || 0, -30, 30) * 100) / 100, car: !!d.car };
     } else if (k === 'police' && !d.off) {
-      // the patrol cars chasing you (game/police.js: local to you, the offender): up to two poses [x, y, z, yaw, v],
-      // streamed a few times a second while you are wanted; never stored
-      if (!Array.isArray(d.cars) || !d.cars.length || d.cars.length > 2) return { err: 'bad_value' };
+      // the patrol cars chasing you (game/police.js: local to you, the offender): up to eight poses [x, y, z, yaw, v]
+      // (the chasers and a roadblock's two at five stars), streamed a few times a second while you are wanted; never stored
+      if (!Array.isArray(d.cars) || !d.cars.length || d.cars.length > 8) return { err: 'bad_value' };
       if (!d.cars.every((a) => Array.isArray(a) && a.length === 5 && a.every(isNum))) return { err: 'bad_value' };
       const r2 = (x) => Math.round(x * 100) / 100;
-      v = { k, cars: d.cars.map((a) => [r2(a[0]), r2(a[1]), r2(a[2]), r2(a[3]), r2(clamp(a[4], -60, 60))]) };
+      v = { k, cars: d.cars.map((a) => [r2(a[0]), r2(a[1]), r2(a[2]), r2(a[3]), r2(clamp(a[4], -75, 75))]) };
     } else if (k === 'rescue' && !d.off) {
       // the rescue coming for you after a bad wipeout (game/heli/rescue.js, net/rescue.js: local to you, the casualty):
       // the helicopter [x, y, z, yaw, pitch, roll, rpm], the ambulance [x, y, z, yaw, v] (either may be null, not both),
@@ -1063,6 +1065,14 @@ export class GameServer {
       const r2 = (x) => Math.round(x * 100) / 100;
       v = { k, h: d.h ? d.h.map((x, i) => r2(i === 6 ? clamp(x, 0, 1) : x)) : null, a: d.a ? d.a.map((x, i) => r2(i === 4 ? clamp(x, -40, 40) : x)) : null,
         s: clamp(d.s | 0, 0, 3), rope: r2(clamp(d.rope || 0, 0, 80)), l: !!d.l };
+    } else if (k === 'sled' && !d.off) {
+      // the snowmobile you drive (game/snowmobile.js, net/sled.js): { k: 'sled' } while you drive it (your presence row
+      // is then its pose, flag F.sled), { k: 'sled', at } where you left it. Never stored (the sleds are your own client's)
+      v = { k };
+      if (d.at != null) {
+        if (!validAt(d.at)) return { err: 'bad_value' };
+        v.at = d.at.map((x) => Math.round(x * 100) / 100);
+      }
     } else if (!d.off) {
       if (k === 'car') {
         const car = c.profile.cars?.[0];
@@ -1079,6 +1089,13 @@ export class GameServer {
         // (while the truck has it, the spot kept is where the tow ends: the impound bay or its own bay)
         if (k === 'car' && !c.profile.cars[0].tow) { c.profile.cars[0].at = v.at; this.store.profiles.save(); }
       }
+      // a car lying wrecked (drive.js wreckOut: on its side, on its roof): tilt [pitch, roll] and wreck (hazards, smoke,
+      // dents) so everyone sees it as it lies; never stored (the tow takes it home repaired)
+      if (k === 'car' && d.tilt != null) {
+        if (!Array.isArray(d.tilt) || d.tilt.length !== 2 || !d.tilt.every(isNum)) return { err: 'bad_value' };
+        v.tilt = d.tilt.map((x) => Math.round(clamp(x, -3.15, 3.15) * 100) / 100);
+      }
+      if (k === 'car' && d.wreck) v.wreck = true;
     }
     c.vehs[k] = v;
     c.world?.broadcast('veh', { pid: c.pid, k, veh: v }, c);

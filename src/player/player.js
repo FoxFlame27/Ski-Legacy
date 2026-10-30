@@ -417,9 +417,8 @@ export class Player {
       const turns = Math.floor((Math.abs(T.spin) + Math.abs(T.flip)) / Math.PI + 0.5);
       if (turns > this.rotSnd && Math.abs(T.spinVel) + Math.abs(T.flipVel) > 2.5) this.audio?.play('spin', clamp((Math.abs(T.spinVel) + Math.abs(T.flipVel)) / 8, 0.3, 1));
       this.rotSnd = Math.max(this.rotSnd, turns);
-    } else {
-      this.steerToward(steerIn, dt);
     }
+    const groundSteer = !this.air; // on the snow the steering eases in per substep (below): same turn at any fps
 
     const ctl = this.ctl;
     ctl.steer = this.steer;
@@ -429,10 +428,25 @@ export class Player {
     ctl.go = k.front && !k.back;   // W: double-pole off when slow, tuck at speed
     ctl.tuck = ctl.go;
     ctl.move = steerIn !== 0 || k.front; // anything that should get a parked skier going
-    const steps = Math.max(1, Math.ceil(dt / SUBSTEP - 1e-9));
-    const h = dt / steps;
-    for (let s = 0; s < steps && this.mode === 'ski'; s++) this.skiStep(h, ctl);
-    if (this.mode !== 'ski') return; // crashed during the step
+    // Fixed 1/120 s steps (Oct 30, multiplayer: "we both had the same skis but he overtook me easily"): the substep
+    // used to be dt split evenly (1/120 s at 60 fps, 1/144 at 144 Hz, 1/240 at 240 Hz), and shorter substeps
+    // carved with less speed loss and took off over the 2 m terrain triangles' creases more often (the brief hops
+    // gain speed): off the groomed runs and on the race courses a 240 Hz screen was up to ~6% faster. Now every
+    // machine integrates exactly the same steps; the time left over (< 1/120 s) is shown by moving the drawn
+    // position along the velocity (extrapolated, taken back before the next steps).
+    if (this._skiDisp && this.pos.equals(this._skiDisp)) this.pos.copy(this._skiSim); // (moved from outside: keep that)
+    this._skiAcc = Math.min((this._skiAcc || 0) + dt, 0.1);
+    for (; this._skiAcc >= SUBSTEP - 1e-9 && this.mode === 'ski'; this._skiAcc -= SUBSTEP) {
+      if (groundSteer) { this.steerToward(steerIn, SUBSTEP); ctl.steer = this.steer; }
+      this.skiStep(SUBSTEP, ctl);
+    }
+    if (this.mode !== 'ski') { this._skiAcc = 0; this._skiDisp = null; return; } // crashed during the step
+    const lead = Math.max(0, this._skiAcc);
+    if (lead > 0 && this.vel.lengthSq() > 1e-8) {
+      (this._skiSim ||= new THREE.Vector3()).copy(this.pos);
+      this.pos.addScaledVector(this.vel, lead);
+      (this._skiDisp ||= new THREE.Vector3()).copy(this.pos);
+    } else this._skiDisp = null;
     this.animateSki(dt, ctl);
   }
 

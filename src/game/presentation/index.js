@@ -12,6 +12,7 @@
 // the apex plays in slow motion and normal speed is back for the landing.
 // The race intro, replays and the podium (src/modes/race/session.js + this folder) run on real time.
 import { smoothstep } from '../../core/noise.js';
+import { isMP } from '../../net/mode.js';
 
 export const BIG_AIR = 1.2;        // s of predicted (or actual) airtime that counts as a big air
 export const SLOW_SCALE = 0.35;    // world speed at the bottom of a slow-motion moment
@@ -55,6 +56,9 @@ export class Presentation {
    */
   update(rawDt, { player, paused = false } = {}) {
     if (paused || !(rawDt > 0)) return this.timeScale;
+    // multiplayer: never slow your own world down. Everyone else keeps real time, so each big air's slow motion
+    // (~1 s of real time lost, ~40 m at 144 km/h) left you behind your friends (Oct 30: "he overtook me easily")
+    if (isMP()) { this.slow = null; this.timeScale = 1; return 1; }
     this.cooldown = Math.max(0, this.cooldown - rawDt);
     if (player && !this.cinematic) this.watchAir(player);
     const s = this.slow;

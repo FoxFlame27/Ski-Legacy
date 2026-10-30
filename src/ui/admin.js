@@ -216,7 +216,8 @@ export class AdminPanel {
     const p = this.ctx.player;
     if (!p?.ski) return;
     const racing = this.ctx.modes?.active || this.ctx.races?.active;
-    if (this.boost && !racing) {
+    // (never in multiplayer: a boost switched on in free ride used to stay on after joining a world, 1.6x speed)
+    if (this.boost && !racing && !isMP()) {
       if (!p.ski._boost) {
         this.baseSki = p.ski;
         p.ski = { ...p.ski, speed: (p.ski.speed || 1) * BOOST.speed, grip: (p.ski.grip || 1) * BOOST.grip, _boost: true };

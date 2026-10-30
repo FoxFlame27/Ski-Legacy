@@ -22,6 +22,15 @@
 // whatever is added later) in amber, the valley roads in grey, the roundabouts, the car parks (P) and the road names
 // along them. Their geometry is built once into world-space Path2Ds (rebuilt only when the network changes) and
 // stroked under a view transform; the zoom-out limit fits the whole network, the races and the express.
+// (Oct 30 2026, the user: "can you maybe make the map clearer, it's super messy": a row of layer switches over the map
+// (Pistes & lifts, Races, Roads & car parks, Buses & train, Places, Jobs, Mine; remembered per viewer), detail that fades
+// in with the zoom (zoomed out: peaks, the village, the lifts, the piste colours, the main roads), icons placed by
+// priority with the ones that would sit on another folded into it ("+2", named in its tooltip), labels that never
+// overlap (no more forced ones), one icon style (a rounded badge, white rim, white glyph), the legend folded away
+// behind a button and listing only the layers that are on, and a tooltip with the name and details of whatever you
+// point at (pistes, lifts, roads, stops, buildings, races) instead of every name written on the map. The static map is
+// drawn into a cache only when the view, the layers or the hover change (and once a second for the markers); each
+// frame only blits it and draws you, the mark, the other players and the patrol cars.)
 import { world, MAIN_SUMMIT } from '../world/world.js';
 import { layout, VILLAGE_BUILDINGS } from '../world/layout.js';
 import { PISTE_COLORS } from '../world/resortdressing.js';
@@ -29,6 +38,7 @@ import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing
 import { busRaceEntries } from '../modes/race/busraces.js'; // the ski bus's free races on the pistes (gold tape)
 import { brushSVG, brushClip, esc } from './menu.js';
 import { busRoads } from '../game/bus/roads.js'; // the road network (valley roads, scenic roads, roundabouts, car parks)
+import { CHALET_PLACE } from '../game/bus/chaletroad.js'; // (the chalet village's spot before game/chalets.js has built it)
 
 // relief levels: tile size (m) at 64 px per tile, shown from zoom `from` (CSS px per m), contour interval (m)
 const LEVELS = [
@@ -47,6 +57,75 @@ const GRADES = ['Easy', 'Intermediate', 'Difficult', 'Expert'];
 const RACE_GRADES = [['Easy', '#2fbf5b'], ['Medium', '#2f7bff'], ['Hard', '#e23b3b'], ['Expert', '#161616']];
 
 export { LEVELS, TPX, FONT, UI, BLUE, NAVY, RED, EXPRESS };
+
+// the layers you switch on and off over the map (Oct 30 2026, the user: "make the map clearer"): [id, name, colour]
+const LAYERS = [
+  ['pistes', 'Pistes & lifts', '#2f7bff'],
+  ['races', 'Races', '#e23b3b'],
+  ['roads', 'Roads & car parks', '#6f7788'],
+  ['transit', 'Buses & train', EXPRESS],
+  ['places', 'Places', '#1f5fd6'],
+  ['jobs', 'Jobs', '#7a4a22'],
+  ['mine', 'Mine', GOLD],
+];
+const LAYER_KEY = 'ski-legacy-map-layers';
+/** 0..1: how far something that shows from zoom `from` has faded in (nothing below 3/4 of it). */
+const fadeIn = (s, from) => Math.min(1, Math.max(0, (s - from * 0.75) / (from * 0.25)));
+const segDist = (px, pz, ax, az, bx, bz) => {
+  const dx = bx - ax, dz = bz - az, l = dx * dx + dz * dz, t = l ? Math.min(1, Math.max(0, ((px - ax) * dx + (pz - az) * dz) / l)) : 0;
+  return Math.hypot(px - ax - dx * t, pz - az - dz * t);
+};
+const fmtLen = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m / 10) * 10} m`);
+const ptx = (p) => p[0] ?? p.x, ptz = (p) => p[1] ?? p.z;
+
+// One icon style for everything on the map (Oct 30 2026, the user: "cleaner icons"): a rounded badge (a disc for the
+// round ones) in the thing's colour, a white rim and a white glyph drawn in a 9-px-radius box. Also the legend's.
+const carGlyph = (g, I) => {
+  g.beginPath(); g.roundRect(-6, -1, 12, 4.2, 1.5); g.fill();
+  g.beginPath(); g.moveTo(-3.5, -1); g.lineTo(-2, -4.8); g.lineTo(2.5, -4.8); g.lineTo(4, -1); g.closePath(); g.fill();
+  g.fillStyle = I.fill; for (const wx of [-3.5, 3.5]) { g.beginPath(); g.arc(wx, 3.3, 1.6, 0, Math.PI * 2); g.fill(); }
+};
+const houseGlyph = (g) => { g.beginPath(); g.moveTo(0, -6.5); g.lineTo(6.5, -0.5); g.lineTo(6.5, 5.5); g.lineTo(-6.5, 5.5); g.lineTo(-6.5, -0.5); g.closePath(); g.fill(); };
+const textGlyph = (t, px, font = UI, w = 800, it = '') => (g) => { g.font = `${it}${w} ${px}px ${font}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t, 0, 0.7); };
+const ICONS = {
+  lot: { fill: BLUE, glyph: textGlyph('P', 12.5) },
+  depot: { fill: '#c99400', glyph: textGlyph('B', 12.5) },
+  bus: { fill: BLUE, glyph: textGlyph('BUS', 6.8) },
+  train: { fill: RED, glyph: (g) => { g.lineWidth = 1.8; g.beginPath(); g.roundRect(-4.5, -6, 9, 10, 2.2); g.stroke(); g.fillRect(-4.5, -1.5, 9, 1.6); g.beginPath(); g.moveTo(-3, 4); g.lineTo(-5, 7); g.moveTo(3, 4); g.lineTo(5, 7); g.stroke(); } },
+  hut: { fill: '#b8452a', glyph: houseGlyph },
+  shop: { fill: '#1f5fd6', glyph: (g) => { g.lineWidth = 2.2; g.beginPath(); g.moveTo(-5, 5.5); g.lineTo(3, -5.5); g.moveTo(-1.5, 5.5); g.lineTo(6, -5.5); g.stroke(); } },
+  car: { fill: '#1f5fd6', glyph: carGlyph },
+  garage: { fill: '#1f5fd6', glyph: (g) => { g.lineWidth = 2.6; g.beginPath(); g.moveTo(-4.5, 4.5); g.lineTo(2, -2); g.stroke(); g.lineWidth = 2; g.beginPath(); g.arc(3, -3, 3, Math.PI * 0.95, Math.PI * 2.55); g.stroke(); } },
+  police: { fill: '#1f3fa8', glyph: (g) => { for (const bx of [-5, -1.5, 2]) g.fillRect(bx, -6, 2, 12); g.fillRect(-6, -6, 12, 1.6); g.fillRect(-6, 4.4, 12, 1.6); } },
+  med: { fill: RED, glyph: (g) => { g.fillRect(-6, -2, 12, 4); g.fillRect(-2, -6, 4, 12); } },
+  heli: { fill: RED, round: true, glyph: textGlyph('H', 13, FONT, 700, 'italic ') },
+  drop: { fill: RED, round: true, glyph: (g) => { g.beginPath(); g.moveTo(0, -5); g.lineTo(5.5, 4); g.lineTo(-5.5, 4); g.closePath(); g.fill(); } },
+  board: { fill: '#7a4a22', glyph: (g) => { g.lineWidth = 1.6; g.strokeRect(-4.5, -5, 9, 11); g.fillRect(-2.5, -6.5, 5, 2.5); g.fillRect(-2.5, -1.5, 5, 1.3); g.fillRect(-2.5, 1.5, 5, 1.3); } },
+  job: { fill: GOLD, round: true, glyph: textGlyph('!', 13) },
+  secret: { fill: '#c98a00', round: true, glyph: (g) => { g.beginPath(); g.moveTo(0, -6); g.lineTo(5, 0); g.lineTo(0, 6); g.lineTo(-5, 0); g.closePath(); g.fill(); } },
+  chalet: { fill: GOLD, glyph: houseGlyph },
+  chaletv: { fill: '#8a3a12', glyph: houseGlyph }, // (the chalet village, Almdorf)
+  mycar: { fill: GOLD, glyph: carGlyph },
+  impound: { fill: '#6f7788', glyph: carGlyph },
+  myheli: { fill: GOLD, glyph: textGlyph('H', 13, FONT, 700, 'italic ') },
+  dot: { fill: RED, round: true },
+};
+export function mapIcon(g, kind, x, y, r = 9) {
+  const I = ICONS[kind] || ICONS.dot;
+  g.save();
+  g.translate(x, y);
+  g.beginPath();
+  if (I.round) g.arc(0, 0, r, 0, Math.PI * 2); else g.roundRect(-r, -r, 2 * r, 2 * r, r * 0.36);
+  g.shadowColor = 'rgba(8,20,60,0.35)'; g.shadowBlur = 3; g.shadowOffsetY = 1;
+  g.fillStyle = I.fill; g.fill();
+  g.shadowColor = 'transparent';
+  g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+  g.scale(r / 9, r / 9);
+  g.fillStyle = g.strokeStyle = '#fff';
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  I.glyph?.(g, I);
+  g.restore();
+}
 /** A race's colour on the map (its difficulty; Expert's black as ink). */
 export const raceInk = (c) => (c === '#141414' ? '#161616' : c || BLUE);
 
@@ -163,11 +242,13 @@ export class TrailMap {
     this.$where.innerHTML = where ? `You are here · <b>${esc(where)}</b>` : 'Legacy Valley';
     this.resize();
     this.fitBounds();
+    this.baseKey = null;
     cancelAnimationFrame(this.raf);
     const loop = () => {
       if (!this.isOpen) return;
-      this.buildTiles();
+      this.tilesBuilt = this.buildTiles() > 0;
       this.draw();
+      if (this.hoverAt) this.updateHover();
       this.raf = requestAnimationFrame(loop);
     };
     this.raf = requestAnimationFrame(loop);
@@ -178,8 +259,31 @@ export class TrailMap {
     this.root.hidden = true;
     cancelAnimationFrame(this.raf);
     this.drag = null;
+    this.hideTip();
     this.onClose?.();
   }
+
+  // ---------------------------------------------------------------- layers (Oct 30 2026, the user: "make the map clearer")
+  // on by default; your choice is remembered in this browser (localStorage, which may be unavailable: then just this session)
+  loadLayers() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(LAYER_KEY) || 'null'); } catch { saved = null; }
+    this.layers = {};
+    for (const [id] of LAYERS) this.layers[id] = saved && typeof saved[id] === 'boolean' ? saved[id] : true;
+  }
+  /** Is a layer on? (always, on maps without the switches: ui/travel.js's route picker) */
+  on(id) { return !this.layers || this.layers[id] !== false; }
+  setLayer(id, v) {
+    this.layers[id] = v;
+    try { localStorage.setItem(LAYER_KEY, JSON.stringify(this.layers)); } catch { /* storage unavailable: this session only */ }
+    this.syncLayers();
+  }
+  syncLayers() {
+    for (const b of this.root.querySelectorAll('.tm-layer')) { const on = this.on(b.dataset.layer); b.classList.toggle('off', !on); b.setAttribute('aria-pressed', String(on)); }
+    for (const sec of this.root.querySelectorAll('.tm-legend [data-layer]')) sec.hidden = !this.on(sec.dataset.layer);
+    this.hot = null; this.hideTip();
+  }
+  layerKey() { return LAYERS.map(([id]) => (this.on(id) ? 1 : 0)).join(''); }
 
   // ---------------------------------------------------------------- DOM
   build() {
@@ -187,7 +291,10 @@ export class TrailMap {
     r.className = 'trailmap';
     const sw = (c, label) => `<div class="tm-row"><i class="tm-sw" style="--c:${c}"></i><span>${label}</span></div>`;
     const sym = (cls, label, c = '') => `<div class="tm-row"><i class="tm-sym ${cls}"${c ? ` style="--c:${c}"` : ''}></i><span>${label}</span></div>`;
-    // (compact: two columns where the entries are short)
+    const ico = (kind, label) => `<div class="tm-row"><canvas class="tm-ico" data-ico="${kind}"></canvas><span>${label}</span></div>`;
+    const sec = (layer, head, body) => `<div class="tm-lsec"${layer ? ` data-layer="${layer}"` : ''}><div class="mp-head">${head}</div>${body}</div>`;
+    // (Oct 30 2026, the user: the layer switches over the map, the legend folded behind a button (only the layers that
+    // are on), a tooltip for what you point at; compact: two columns where the entries are short)
     r.innerHTML = `
       <div class="tm-head">
         <div class="menu-title" style="width:calc(var(--u) * 290)">${brushSVG(77, 320, 100)}<span>TRAIL MAP</span></div>
@@ -197,30 +304,30 @@ export class TrailMap {
         <div class="tm-map paper" style="--clip:${brushClip(171, 3, 4)}">
           <canvas class="tm-canvas"></canvas>
           <div class="tm-scale"><i></i><span></span></div>
-        </div>
-        <div class="tm-legend menu-panel" style="--clip:${brushClip(172, 5, 4)}">
-          <div class="mp-head">RACES</div>
-          <div class="tm-grid">${RACE_GRADES.map(([n, c]) => sym('pin', n, c)).join('')}</div>
-          <div class="tm-grid">${sym('finish', 'Finish')}${sym('tape', 'Race line', '#2f7bff')}</div>
-          <div class="mp-head">LEGACY EXPRESS</div>
-          <div class="tm-grid">${sym('express', 'Line')}${sym('xtunnel', 'Tunnel')}</div>
-          ${sym('xstop', 'Station · one per race')}
-          <div class="mp-head">PISTES</div>
-          <div class="tm-grid">${[0, 1, 2, 3].map((i) => sw(PISTE_COLORS[i], GRADES[i])).join('')}</div>
-          <div class="mp-head">LIFTS</div>
-          <div class="tm-grid">${sym('gondola', 'Gondola')}${sym('chair', 'Chairlift')}</div>
-          <div class="mp-head">ROADS</div>
-          <div class="tm-grid">${sym('road', 'Road')}${sym('scenic', 'Scenic road')}${sym('lot', 'Car park')}${sym('ring', 'Roundabout')}</div>
-          <div class="mp-head">ON THE MAP</div>
-          <div class="tm-grid">${sym('hut', 'Mountain hut')}${sym('bus', 'Ski bus')}${sym('park', 'Terrain park')}${sym('heli', 'Heli-ski')}
-          ${sym('shop', 'Ski shop')}${sym('car', 'Autohaus')}${sym('med', 'Medical centre')}${sym('chalet', 'Your chalet')}${sym('car mycar', 'Your car')}${sym('car impound', 'Impounded car')}
-          ${sym('secret', 'Landmark')}${sym('jobs', 'Job board')}</div>
+          <div class="tm-tip" hidden></div>
+          <div class="tm-over">
+            <div class="tm-bar">
+              <div class="tm-layers">${LAYERS.map(([id, n, c]) => `<button class="tm-layer" data-layer="${id}" style="--c:${c}" aria-pressed="true"><i></i>${n}</button>`).join('')}</div>
+              <button class="tm-legbtn" aria-expanded="false">Legend</button>
+            </div>
+            <div class="tm-legend menu-panel" hidden style="--clip:${brushClip(172, 5, 4)}">
+              ${sec('', 'MAP', `<div class="tm-grid">${ico('you', 'You')}${ico('peak', 'Summit')}${ico('mark', 'Marked spot')}${ico('cluster', 'More here')}</div>`)}
+              ${sec('pistes', 'PISTES & LIFTS', `<div class="tm-grid">${[0, 1, 2, 3].map((i) => sw(PISTE_COLORS[i], GRADES[i])).join('')}${sym('gondola', 'Gondola')}${sym('chair', 'Chairlift')}${sym('park', 'Terrain park')}${ico('heli', 'Heli-ski')}${ico('drop', 'Drop zone')}${ico('pnum', 'Piste number')}</div>`)}
+              ${sec('races', 'RACES', `<div class="tm-grid">${RACE_GRADES.map(([n, c]) => sym('pin', n, c)).join('')}${sym('finish', 'Finish')}${sym('tape', 'Race line', '#2f7bff')}</div>`)}
+              ${sec('roads', 'ROADS & CAR PARKS', `<div class="tm-grid">${sym('road', 'Road')}${sym('scenic', 'Scenic road')}${ico('lot', 'Car park')}${sym('ring', 'Roundabout')}${ico('depot', 'Bus depot')}</div>`)}
+              ${sec('transit', 'BUSES & TRAIN', `<div class="tm-grid">${sym('express', 'Legacy Express')}${sym('xtunnel', 'Tunnel')}${ico('xstop', 'Station')}${ico('bus', 'Ski bus')}${ico('train', 'Railway')}</div>`)}
+              ${sec('places', 'PLACES', `<div class="tm-grid">${ico('chaletv', 'Chalets (Almdorf)')}${ico('hut', 'Mountain hut')}${ico('shop', 'Ski shop')}${ico('car', 'Autohaus')}${ico('garage', 'Werkstatt')}${ico('med', 'Medical centre')}${ico('police', 'Police')}${ico('secret', 'Landmark')}</div>`)}
+              ${sec('jobs', 'JOBS', `<div class="tm-grid">${ico('board', 'Job board')}${ico('job', 'Job target')}</div>`)}
+              ${sec('mine', 'MINE', `<div class="tm-grid">${ico('chalet', 'Your chalet')}${ico('mycar', 'Your car')}${ico('impound', 'Impounded')}${ico('myheli', 'Your heli')}</div>`)}
+            </div>
+          </div>
         </div>
       </div>
       <div class="tm-hints">
         <span class="hint"><i class="kc">M</i><em>Close</em></span>
         <span class="hint"><i class="kc kc-word">DRAG</i><em>Move</em></span>
         <span class="hint"><i class="kc kc-word">SCROLL</i><em>Zoom</em></span>
+        <span class="hint"><i class="kc kc-word">POINT</i><em>Info</em></span>
         <span class="hint"><i class="kc kc-word">CLICK</i><em>Mark a place</em></span>
         <span class="hint"><i class="kc">R</i><em>Back to you</em></span>
       </div>`;
@@ -228,24 +335,34 @@ export class TrailMap {
     this.g = this.canvas.getContext('2d');
     this.$where = r.querySelector('.tm-where');
     this.$scale = r.querySelector('.tm-scale');
+    this.$tip = r.querySelector('.tm-tip');
+    this.$legend = r.querySelector('.tm-legend');
+    this.loadLayers();
+    for (const c of r.querySelectorAll('canvas.tm-ico')) this.legendIcon(c);
+    for (const b of r.querySelectorAll('.tm-layer')) b.addEventListener('click', () => this.setLayer(b.dataset.layer, !this.on(b.dataset.layer)));
+    const lb = r.querySelector('.tm-legbtn');
+    lb.addEventListener('click', () => { const open = this.$legend.hidden; this.$legend.hidden = !open; lb.setAttribute('aria-expanded', String(open)); lb.classList.toggle('on', open); });
+    this.syncLayers();
     // clicks inside the panels never reach main.js's "click outside closes the map"
     for (const el of r.querySelectorAll('.tm-map, .tm-legend, .tm-head, .tm-hints')) el.addEventListener('click', (e) => e.stopPropagation());
     const cv = this.canvas;
     cv.addEventListener('pointerdown', (e) => { this.drag = { x: e.clientX, y: e.clientY, vx: this.view.x, vz: this.view.z, moved: 0 }; cv.setPointerCapture(e.pointerId); cv.classList.add('grab'); });
     cv.addEventListener('pointermove', (e) => {
-      if (!this.drag) { this.hover(e); return; }
+      if (!this.drag) { this.hoverAt = { clientX: e.clientX, clientY: e.clientY }; return; } // (looked up once a frame)
       this.drag.moved = Math.max(this.drag.moved, Math.hypot(e.clientX - this.drag.x, e.clientY - this.drag.y));
+      if (this.drag.moved > 4) this.hideTip();
       this.view.x = this.drag.vx - (e.clientX - this.drag.x) / this.view.s;
       this.view.z = this.drag.vz - (e.clientY - this.drag.y) / this.view.s;
     });
     const up = () => { this.drag = null; cv.classList.remove('grab'); };
     cv.addEventListener('pointerup', (e) => { if (this.drag && this.drag.moved < 5) this.pick(e); up(); });
     cv.addEventListener('pointercancel', up);
-    cv.addEventListener('pointerleave', () => { this.hot = null; });
+    cv.addEventListener('pointerleave', () => { this.hot = null; this.hoverAt = null; this.hideTip(); });
     cv.addEventListener('wheel', (e) => {
       e.preventDefault(); e.stopPropagation();
       const rc = cv.getBoundingClientRect();
       this.zoomAt(e.clientX - rc.left, e.clientY - rc.top, Math.pow(1.0018, -e.deltaY));
+      this.hoverAt = { clientX: e.clientX, clientY: e.clientY }; // (what's under the pointer after the zoom)
     }, { passive: false });
     cv.addEventListener('dblclick', (e) => { const rc = cv.getBoundingClientRect(); this.zoomAt(e.clientX - rc.left, e.clientY - rc.top, 1.8); });
     // keys while open (capture: the game's input never sees them, so M doesn't reopen the map)
@@ -283,21 +400,126 @@ export class TrailMap {
   spotAt(e) {
     const rc = this.canvas.getBoundingClientRect(), px = e.clientX - rc.left, py = e.clientY - rc.top;
     let best = null, bd = 1e9;
-    for (const s of this.spots || []) {
+    for (const list of [this.spots, this.dynSpots]) for (const s of list || []) {
       const b = s.box, d = b ? (px > b[0] && px < b[2] && py > b[1] && py < b[3] ? -9 : 1e9) : Math.hypot(s.x - px, s.y - py) - s.r;
       if (d < 10 && d < bd) { bd = d; best = s; }
     }
     return best;
   }
-  hover(e) { const s = this.spotAt(e); this.hot = s; this.canvas.classList.toggle('pick', !!s); }
+  hover(e) { this.hoverAt = { clientX: e.clientX, clientY: e.clientY }; this.updateHover(); }
+  // what the pointer is on (a place, else a piste, lift, road, line or race under it): the highlight and the tooltip
+  // (Oct 30 2026, the user: "hover/click for info" instead of every name written on the map)
+  updateHover() {
+    const e = this.hoverAt;
+    this.hoverAt = null;
+    if (!e || this.drag) return;
+    const s = this.spotAt(e), line = s ? null : this.lineAt(e);
+    this.hot = s || (line?.race ? line : null); // (a race line lights its race up too)
+    this.canvas.classList.toggle('pick', !!(s || line));
+    const it = s || line;
+    if (!it) { this.hideTip(); return; }
+    let tip = typeof it.tip === 'function' ? it.tip() : it.tip;
+    tip = tip ? { ...tip } : { title: it.label };
+    if (it.more?.length) tip.more = it.more;
+    const rc = this.canvas.getBoundingClientRect();
+    this.showTip(tip, e.clientX - rc.left, e.clientY - rc.top);
+  }
+  showTip(t, px, py) {
+    const el = this.$tip;
+    if (!el) return;
+    el.innerHTML = `<b>${esc(t.title || '')}</b>${(t.lines || []).filter(Boolean).map((l) => `<span>${esc(l)}</span>`).join('')}`
+      + (t.more ? `<span class="tm-tmore">Also here: ${t.more.map(esc).join(' · ')}</span>` : '')
+      + '<em>Click to mark</em>';
+    el.hidden = false;
+    const ox = this.canvas.offsetLeft, oy = this.canvas.offsetTop, w = el.offsetWidth, h = el.offsetHeight;
+    const x = px + 16 + w > this.W ? px - 12 - w : px + 16, y = py + 18 + h > this.H ? py - 12 - h : py + 18;
+    el.style.left = `${Math.round(ox + Math.max(4, x))}px`;
+    el.style.top = `${Math.round(oy + Math.max(4, y))}px`;
+  }
+  hideTip() { if (this.$tip) this.$tip.hidden = true; }
+
+  // the line under the pointer (within 7 px): a piste, lift, road, the express, the railway or a race (layers on only)
+  lineAt(e) {
+    const rc = this.canvas.getBoundingClientRect(), v = this.view, s = v.s;
+    const wx = v.x + (e.clientX - rc.left - this.W / 2) / s, wz = v.z + (e.clientY - rc.top - this.H / 2) / s;
+    let best = null, bd = 7 / s;
+    const poly = (pts, mk, step = 1) => {
+      for (let i = step; i < pts.length; i += step) {
+        const a = pts[i - step], b = pts[i], d = segDist(wx, wz, ptx(a), ptz(a), ptx(b), ptz(b));
+        if (d < bd) { bd = d; best = mk; }
+      }
+    };
+    if (this.on('pistes')) {
+      for (const p of layout.pistes) poly(p.pts, { label: p.name, tip: () => this.pisteTip(p) });
+      for (const l of layout.lifts) { const d = segDist(wx, wz, l.bottom.x, l.bottom.z, l.top.x, l.top.z); if (d < bd) { bd = d; best = { label: l.name, tip: () => this.liftTip(l) }; } }
+    }
+    if (this.on('races')) for (const r of this.races()) poly(r.pts, { label: r.name, tip: () => this.raceTip(r), race: r.id });
+    if (this.on('transit')) {
+      const X = layout.express;
+      if (X?.pts?.length) poly(X.pts, { label: X.name, tip: { title: X.name, lines: ['Train', `${X.stations?.length || 0} stations`] } });
+      const R = layout.railway;
+      if (R?.pts?.length) poly(R.pts, { label: R.name, tip: { title: R.name, lines: ['Railway', R.stations?.length ? R.stations.map((q) => q.name).join(' · ') : ''] } });
+      for (const q of layout.railways || []) { const P = q.pts || q.line || q.path; if (P?.length) poly(P, { label: q.name || 'Railway', tip: { title: q.name || 'Railway', lines: ['Railway'] } }); }
+    }
+    if (this.on('roads')) {
+      const C = this.roadCache();
+      if (C && wx > C.box[0] - bd && wx < C.box[2] + bd && wz > C.box[1] - bd && wz < C.box[3] + bd) {
+        for (const r of busRoads.roads) {
+          if (!r?.n || !r.X || r.ringRoad) continue;
+          for (let i = 2; i < r.n; i += 2) {
+            const d = segDist(wx, wz, r.X[i - 2], r.Z[i - 2], r.X[i], r.Z[i]);
+            if (d < bd) { bd = d; best = r; }
+          }
+        }
+        if (best && best.X) {
+          const r = best, name = (r.name || 'Road').replace(/\s*\(.*\)$/, '');
+          best = { label: name, tip: { title: name, lines: [r.scenic && !r.chalet ? 'Scenic road' : r.access ? 'Car park access' : r.chalet ? 'Chalet road' : 'Valley road', r.length ? fmtLen(r.length) : ''] } };
+        }
+      }
+    }
+    if (best) Object.assign(best, { wx, wz });
+    return best;
+  }
+
+  pisteTip(p) {
+    let len = 0;
+    for (let i = 1; i < p.pts.length; i++) len += Math.hypot(ptx(p.pts[i]) - ptx(p.pts[i - 1]), ptz(p.pts[i]) - ptz(p.pts[i - 1]));
+    const a = p.pts[0], b = p.pts[p.pts.length - 1], drop = a && b ? Math.round(Math.abs(world.height(ptx(a), ptz(a)) - world.height(ptx(b), ptz(b)))) : 0;
+    const num = p.number ?? layout.pistes.indexOf(p) + 1;
+    return { title: `${num} · ${p.name}`, lines: [`${GRADES[p.diff] || ''} piste${p.lane ? ' · ski lane' : ''}`, `${fmtLen(len)} · ${drop} m drop`] };
+  }
+  liftTip(l) {
+    const len = Math.hypot(l.top.x - l.bottom.x, l.top.z - l.bottom.z), rise = Math.round(world.height(l.top.x, l.top.z) - world.height(l.bottom.x, l.bottom.z));
+    return { title: l.name, lines: [l.type === 'gondola' ? 'Gondola' : 'Chairlift', `${fmtLen(len)} · ${rise} m up`] };
+  }
+  raceTip(e) {
+    return { title: e.name, lines: [e.bus ? `Free race · ski bus: ${e.stop}` : `${e.D.label} · up to $${(e.rewardMax || e.reward).toLocaleString('en-US')}`,
+      `${(e.length / 1000).toFixed(1)} km · ${e.drop} m drop`] };
+  }
+
   pick(e) {
-    const s = this.spotAt(e), t = this.target;
+    const s = this.spotAt(e) || this.lineAt(e), t = this.target;
     if (s) { this.target = t && Math.hypot(t.x - s.wx, t.z - s.wz) < 1 ? null : { x: s.wx, z: s.wz, label: s.label }; return; }
     // anywhere else: drop a pin right where you clicked (click the pin again to clear it)
     const rc = this.canvas.getBoundingClientRect(), v = this.view;
     const wx = v.x + (e.clientX - rc.left - this.W / 2) / v.s, wz = v.z + (e.clientY - rc.top - this.H / 2) / v.s;
     if (t && Math.hypot(t.x - wx, t.z - wz) * v.s < 14) { this.target = null; return; }
     this.target = { x: wx, z: wz, label: 'Marked spot' };
+  }
+
+  // the legend's icons: drawn with the map's own icon code, so they always match
+  legendIcon(c) {
+    const k = c.dataset.ico, d = 2, w = 24, h = 20, g = c.getContext('2d');
+    c.width = w * d; c.height = h * d;
+    g.scale(d, d);
+    const x = w / 2, y = h / 2;
+    if (k === 'you') this.arrow(g, x, y, 0, 0.62);
+    else if (k === 'peak') { g.fillStyle = NAVY; g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 7.5, y + 6); g.lineTo(x - 7.5, y + 6); g.closePath(); g.fill(); g.stroke(); }
+    else if (k === 'mark') { g.strokeStyle = RED; g.lineWidth = 2.5; g.beginPath(); g.arc(x, y, 6.5, 0, Math.PI * 2); g.stroke(); }
+    else if (k === 'cluster') this.clusterBadge(g, x, y, 3, 8);
+    else if (k === 'xstop') expressStop(g, x, y, 6.5);
+    else if (k === 'pnum') this.pisteBadge(g, x, y, 7, PISTE_COLORS[1], 4);
+    else mapIcon(g, k, x, y, 8);
   }
 
   zoomAt(px, py, k) {
@@ -333,6 +555,7 @@ export class TrailMap {
   // the coarse level everywhere in view first, then the level the zoom wants, nearest the centre first
   buildTiles(budget = BUDGET_MS) {
     const t0 = performance.now(), v = this.view;
+    let n = 0; // (how many were built: the cached map is redrawn while tiles arrive)
     const want = LEVELS.reduce((a, L, i) => (v.s >= L.from ? i : a), 0);
     for (const li of want ? [0, want] : [0]) {
       const { tx0, tx1, tz0, tz1 } = this.range(li), T = LEVELS[li].tile, todo = [];
@@ -341,46 +564,168 @@ export class TrailMap {
       }
       todo.sort((a, b) => a[2] - b[2]);
       for (const [tx, tz] of todo) {
-        tiles.set(li + ':' + tx + ',' + tz, buildTile(li, tx, tz));
+        tiles.set(li + ':' + tx + ',' + tz, buildTile(li, tx, tz)); n++;
         if (tiles.size > MAX_TILES) {
           const old = [...tiles.entries()].sort((a, b) => (a[1].used || 0) - (b[1].used || 0)).slice(0, 400);
           for (const [k] of old) tiles.delete(k);
         }
-        if (performance.now() - t0 > budget) return;
+        if (performance.now() - t0 > budget) return n;
       }
     }
+    return n;
   }
 
   // ---------------------------------------------------------------- drawing
+  // (Oct 30 2026, the user: "keep it performant": the map itself is drawn into a cache only when the view, the layers,
+  // the hover or the mark change, while relief tiles arrive, and once a second for the markers of the other systems;
+  // each frame blits it and draws only what moves: you, the mark's ring, the other players, the patrol cars)
   draw() {
-    const g = this.g, v = this.view, W = this.W, H = this.H, now = performance.now();
+    const v = this.view, now = performance.now(), t = this.target, hot = this.hot;
+    const key = `${v.x}|${v.z}|${v.s}|${this.W}|${this.H}|${this.dpr}|${this.layerKey()}|${hot?.race ?? ''}|${hot?.station ?? ''}|${t ? `${t.x},${t.z}` : ''}`;
+    if (key !== this.baseKey || this.tilesBuilt || now < (this.fadeUntil || 0) || now - (this.baseAt || 0) > 1000) {
+      this.drawBase(now);
+      this.baseKey = key; this.baseAt = now;
+    }
+    const g = this.g;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(this.base, 0, 0);
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    g.fillStyle = '#eef2fa';
-    g.fillRect(0, 0, W, H);
-    this.X = (x) => (x - v.x) * v.s + W / 2;
-    this.Z = (z) => (z - v.z) * v.s + H / 2;
-    this.drawRelief(now);
-    // geometry first (symbols reserve their space), then the labels by priority
-    this.boxes = [];
-    this.queue = [];
-    this.spots = [];
-    this.drawRoads();
-    this.drawVillage();
-    this.drawChalets();
-    this.drawPark();
-    this.drawPistes();
-    this.drawExpress();
-    this.drawRaceLines();
-    this.drawRail();
-    this.drawLifts();
-    this.drawRailway();
-    this.drawPlaces();
-    this.drawExpressStops();
-    this.drawRaceMarks(now);
-    this.drawTarget(now);
+    this.drawLive(now);
+  }
+
+  drawBase(now) {
+    const main = this.g, v = this.view, W = this.W, H = this.H;
+    if (!this.base) { this.base = document.createElement('canvas'); this.baseG = this.base.getContext('2d'); }
+    if (this.base.width !== this.canvas.width || this.base.height !== this.canvas.height) { this.base.width = this.canvas.width; this.base.height = this.canvas.height; }
+    this.g = this.baseG;
+    const g = this.g;
+    try {
+      g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      g.fillStyle = '#eef2fa';
+      g.fillRect(0, 0, W, H);
+      this.X = (x) => (x - v.x) * v.s + W / 2;
+      this.Z = (z) => (z - v.z) * v.s + H / 2;
+      this.drawRelief(now);
+      // geometry first (symbols reserve their space), then the icons by priority (one that would sit on another is
+      // folded into it), then the labels by priority
+      this.boxes = [];
+      this.queue = [];
+      this.spots = [];
+      this.icons = [];
+      this.pins = new Map();
+      this.mk = this.markers?.() || {};
+      if (this.on('roads')) this.drawRoads();
+      this.drawVillage();
+      this.drawChalets();
+      if (this.on('pistes')) { this.drawPark(); this.drawPistes(); }
+      if (this.on('transit')) this.drawExpress();
+      if (this.on('races')) this.drawRaceLines();
+      if (this.on('transit')) this.drawRail();
+      if (this.on('pistes')) this.drawLifts();
+      if (this.on('transit')) this.drawRailway();
+      this.drawPlaces();
+      if (this.on('transit')) this.drawExpressStops();
+      if (this.on('races')) this.drawRaceMarks(now);
+      this.drawTarget(now);
+      this.placeIcons();
+      this.placeLabels();
+      this.drawScale();
+    } finally { this.g = main; }
+  }
+
+  // what moves, every frame, over the cached map: the mark's breathing ring, the hovered race's pulse, the other
+  // players (multiplayer), the patrol cars while you are wanted, and you
+  drawLive(now) {
+    const g = this.g, s = this.view.s, X = this.X, Z = this.Z;
+    this.dynSpots = [];
+    const t = this.target;
+    if (t) {
+      const x = X(t.x), y = Z(t.z), r = 13 + Math.sin(now / 260) * 2;
+      if (this.inView(x, y, 0)) {
+        g.save();
+        g.strokeStyle = 'rgba(255,255,255,0.95)'; g.lineWidth = 6; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+        g.strokeStyle = RED; g.lineWidth = 3; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+        g.restore();
+      }
+    }
+    const pin = this.hot?.race && this.pins?.get(this.hot.race);
+    if (pin) {
+      const ph = (now / 1300) % 1;
+      g.strokeStyle = pin.col; g.globalAlpha = 0.6 * (1 - ph); g.lineWidth = 2.5;
+      g.beginPath(); g.arc(pin.x, pin.cy, pin.r + 3 + ph * 18, 0, Math.PI * 2); g.stroke();
+      g.globalAlpha = 1;
+    }
+    let mk = {};
+    try { mk = this.markers?.() || {}; } catch { mk = {}; }
+    // multiplayer: the other players (net/remote.js mapMarkers), live: a green dot with their heading and their name
+    for (const m of mk.players || []) {
+      const x = X(m.x), y = Z(m.z);
+      if (!this.inView(x, y)) continue;
+      const fx = Math.sin(m.yaw || 0), fz = Math.cos(m.yaw || 0), dx = X(m.x + fx) - x, dy = Z(m.z + fz) - y, l = Math.hypot(dx, dy) || 1;
+      const ux = dx / l, uy = dy / l;
+      g.fillStyle = '#12a150'; g.strokeStyle = '#fff'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(x + ux * 12, y + uy * 12); g.lineTo(x - uy * 5.5, y + ux * 5.5); g.lineTo(x + uy * 5.5, y - ux * 5.5); g.closePath(); g.fill(); // (the heading)
+      g.beginPath(); g.arc(x, y, 7, 0, Math.PI * 2); g.fill(); g.stroke();
+      if (m.label) {
+        g.font = `italic 700 14px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+        g.strokeStyle = 'rgba(255,255,255,0.94)'; g.lineWidth = 4; g.strokeText(m.label, x + 11, y);
+        g.fillStyle = '#0d7a3c'; g.fillText(m.label, x + 11, y);
+        this.dynSpots.push({ x, y, r: 9, wx: m.x, wz: m.z, label: m.label, tip: { title: m.label, lines: ['Player'] } });
+      }
+    }
+    // the patrol cars while you are wanted (game/police.js): blue dots
+    for (const m of mk.police || []) {
+      const x = X(m.x), y = Z(m.z);
+      if (!this.inView(x, y)) continue;
+      g.fillStyle = '#1f4fff'; g.strokeStyle = '#fff'; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, s >= 0.2 ? 7 : 6, 0, Math.PI * 2); g.fill(); g.stroke();
+      this.dynSpots.push({ x, y, r: 8, wx: m.x, wz: m.z, label: 'Police', tip: { title: 'Police patrol', lines: ['You are wanted'] } });
+    }
     this.drawPlayer(now);
-    this.placeLabels();
-    this.drawScale();
+  }
+
+  // ---------------------------------------------------------------- icons (Oct 30 2026, the user: "no overlaps")
+  /** Queue an icon: { x, y (screen), r, prio, kind (mapIcon) or draw(g, o), alpha, wx, wz, label, tip, extra,
+   *  lab (its label's text), labo (label options) }. Placed by priority after the geometry; one that would overlap an
+   *  icon already placed is folded into it: a "+n" on that one, and their names in its tooltip. */
+  icon(o) { if ((o.alpha ?? 1) > 0.04 && this.inView(o.x, o.y, 20)) this.icons.push(o); }
+
+  placeIcons() {
+    const g = this.g, placed = [];
+    this.icons.sort((a, b) => a.prio - b.prio);
+    for (const o of this.icons) {
+      const host = placed.find((p) => Math.hypot(p.x - o.x, p.y - o.y) < p.r + o.r + 1);
+      if (host) { if (o.label) (host.more ||= []).push(o.label); continue; }
+      placed.push(o);
+      g.globalAlpha = o.alpha ?? 1;
+      if (o.draw) o.draw(g, o); else mapIcon(g, o.kind, o.x, o.y, o.r);
+      g.globalAlpha = 1;
+      if (o.box) this.boxes.push(o.box); else this.reserve(o.x, o.y, o.r + 1);
+      if (o.lab) this.label(o.lab, o.x, o.y, { cands: this.around(o.r + 1, 4), alpha: o.alpha, ...o.labo });
+    }
+    for (const p of placed) {
+      if (p.more) this.clusterBadge(g, p.x + p.r * 0.85, p.y - p.r * 0.85, p.more.length + 1);
+      if (p.label) this.spot(p.x, p.spotY ?? p.y, p.r + 2, p.wx, p.wz, p.label, { tip: p.tip, more: p.more, ...p.extra });
+    }
+  }
+
+  /** "+n": n things at this spot (zoom in to see them all). */
+  clusterBadge(g, x, y, n, r = 7) {
+    g.save();
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
+    g.fillStyle = NAVY; g.fill(); g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.stroke();
+    g.fillStyle = '#fff'; g.font = `800 ${n > 9 ? 7.5 : 8.5}px ${UI}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(`+${n - 1}`, x, y + 0.5);
+    g.restore();
+  }
+
+  /** A piste's number on a disc in its colour. */
+  pisteBadge(g, x, y, r, col, num) {
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
+    g.fillStyle = col; g.fill();
+    g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
+    g.fillStyle = '#fff'; g.font = `italic 700 ${Math.round(r * (num > 9 ? 1.2 : 1.4))}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(String(num), x, y + 0.5);
   }
 
   // relief: each level drawn over the coarser one (tiles fade in as they arrive)
@@ -396,6 +741,7 @@ export class TrailMap {
         if (!t) continue;
         t.used = now;
         g.globalAlpha = Math.min(1, (now - t.born) / 280);
+        if (g.globalAlpha < 1) this.fadeUntil = Math.max(this.fadeUntil || 0, t.born + 300); // (still fading in: redraw)
         g.drawImage(t.canvas, this.X(tx * L.tile - STEP), this.Z(tz * L.tile - STEP), sz, sz);
       }
     });
@@ -414,6 +760,7 @@ export class TrailMap {
     const g = this.g, hit = (b) => this.boxes.some((q) => q[0] < b[2] && q[2] > b[0] && q[1] < b[3] && q[3] > b[1]);
     this.queue.sort((a, b) => a.prio - b.prio);
     for (const L of this.queue) {
+      if ((L.alpha ?? 1) < 0.05) continue; // (not faded in yet at this zoom: takes no room either)
       const size = L.size ?? 14, weight = L.weight ?? 700;
       let w, h;
       if (L.card) ({ w, h } = this.cardSize(L.card));
@@ -442,8 +789,9 @@ export class TrailMap {
       pick ??= L.fallback;
       if (!pick) continue;
       this.boxes.push(pick.box);
-      if (L.card) { this.drawCard(L.card, pick.box[0] + pad, pick.box[1] + pad, w, h); L.onPlace?.(pick.box); continue; }
+      if (L.card) { g.globalAlpha = L.alpha ?? 1; this.drawCard(L.card, pick.box[0] + pad, pick.box[1] + pad, w, h); g.globalAlpha = 1; L.onPlace?.(pick.box); continue; }
       g.save();
+      g.globalAlpha = L.alpha ?? 1;
       g.translate(pick.x, pick.y);
       if (pick.ang) g.rotate(pick.ang);
       g.textAlign = pick.ang ? 'center' : pick.align;
@@ -562,20 +910,21 @@ export class TrailMap {
     stroke(C.scenic, wMain, 'rgba(255,255,255,0.95)', '#c9811a');
     stroke(C.ring, wMain, 'rgba(255,255,255,0.95)', '#c9811a');
     g.restore();
-    // the roundabouts: a white island (and the name, zoomed in)
+    // the roundabouts: a white island (and the name, zoomed right in; else in the tooltip)
     for (const q of C.rings) {
       const x = this.X(q.x), y = this.Z(q.z);
-      if (!this.inView(x, y)) continue;
+      if (!this.inView(x, y) || s < 0.05) continue;
       const r = Math.max(2.5, (q.R - 4) * s);
       g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill();
       g.lineWidth = 1.2; g.strokeStyle = '#c9811a'; g.stroke();
       this.reserve(x, y, Math.max(5, q.R * s));
       if (q.name) {
-        this.spot(x, y, Math.max(7, q.R * s), q.x, q.z, q.name);
-        if (s >= 0.16) this.label(q.name, x, y, { size: 12.5, weight: 600, color: '#8a5a0c', prio: 7, cands: this.around(Math.max(6, q.R * s), 5) });
+        this.spot(x, y, Math.max(7, q.R * s), q.x, q.z, q.name, { tip: { title: q.name, lines: ['Roundabout'] } });
+        if (s >= 0.4) this.label(q.name, x, y, { size: 12.5, weight: 600, color: '#8a5a0c', prio: 7, alpha: fadeIn(s, 0.4), cands: this.around(Math.max(6, q.R * s), 5) });
       }
     }
-    // the car parks: the lot's outline zoomed in, a blue P sign
+    // the car parks: the lot's outline zoomed in, a P badge (the big ones from further out; the bus depot a yellow B)
+    const IR = s >= 0.25 ? 10 : 8.5;
     for (const L of C.lots) {
       const x = this.X(L.x), y = this.Z(L.z);
       if (!this.inView(x, y)) continue;
@@ -584,22 +933,16 @@ export class TrailMap {
         for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const px = this.X(L.x + L.ux * a * L.hw + L.vx * b * L.hd), py = this.Z(L.z + L.uz * a * L.hw + L.vz * b * L.hd); if (a === -1 && b === -1) g.moveTo(px, py); else g.lineTo(px, py); }
         g.closePath(); g.fillStyle = 'rgba(138,143,152,0.55)'; g.fill(); g.lineWidth = 1; g.strokeStyle = '#fff'; g.stroke();
       }
-      if (s < 0.06 && L.size !== 'big') continue;
-      const q = s >= 0.2 ? 6.5 : 5;
-      g.fillStyle = L.depot ? '#c99400' : BLUE; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-      g.beginPath(); g.roundRect(x - q, y - q, 2 * q, 2 * q, 2); g.fill(); g.stroke();
-      g.fillStyle = '#fff'; g.font = `800 ${Math.round(q * 1.5)}px ${UI}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(L.depot ? 'B' : 'P', x, y + 0.5);
-      this.reserve(x, y, q + 1);
-      if (L.name) {
-        this.spot(x, y, q + 2, L.x, L.z, L.name);
-        if (s >= (L.depot ? 0.16 : 0.3)) this.label(L.name, x, y, { size: 12.5, weight: 600, color: L.depot ? '#8a6200' : BLUE, prio: 8, cands: this.around(q + 1, 4) });
-      }
+      const big = L.size === 'big' || L.depot, name = L.name || (L.depot ? 'Bus depot' : 'Car park');
+      this.icon({ kind: L.depot ? 'depot' : 'lot', x, y, r: big ? IR : IR - 1.5, prio: big ? 5 : 6.5, alpha: fadeIn(s, big ? 0.06 : 0.16),
+        wx: L.x, wz: L.z, label: name, tip: { title: name, lines: [L.depot ? 'Bus depot' : `Car park${L.size ? ` · ${L.size}` : ''}`] },
+        lab: s >= 0.5 && L.name ? L.name : null, labo: { size: 12.5, weight: 600, color: L.depot ? '#8a6200' : BLUE, prio: 8 } });
     }
     // the road names along them (upright, either side, as near the middle of the view as it fits)
     const cx = this.W / 2, cy = this.H / 2;
     g.font = `italic 700 13px ${FONT}`;
     for (const n of C.labels) {
-      if (n.minor ? s < 0.22 : s < 0.07) continue;
+      if (n.minor ? s < 0.35 : s < 0.1) continue; // (zoomed out: the roads without their names; they're in the tooltip)
       const tw = g.measureText(n.name).width;
       if (n.length * s < tw * 1.6) continue; // (the road too short on screen for its name)
       const cands = [];
@@ -613,7 +956,7 @@ export class TrailMap {
       }
       if (!cands.length) continue;
       cands.sort((a, b) => a[0] - b[0]);
-      this.label(n.name, 0, 0, { size: 13, color: n.scenic ? '#8a5a0c' : '#4a5263', prio: n.minor ? 7.5 : 4.5, cands: cands.slice(0, 14).flatMap((c) => [c[1], c[2]]) });
+      this.label(n.name, 0, 0, { size: 13, color: n.scenic ? '#8a5a0c' : '#4a5263', prio: n.minor ? 7.5 : 4.5, alpha: fadeIn(s, n.minor ? 0.35 : 0.1), cands: cands.slice(0, 14).flatMap((c) => [c[1], c[2]]) });
     }
   }
 
@@ -635,17 +978,29 @@ export class TrailMap {
 
   // the chalet village (game/chalets.js sets layout.chaletVillage): the Chaletweg, each chalet's footprint (yours in
   // gold), the playground; labelled and clickable as a place
+  // (Oct 30 2026, the user: "where are the chalets": Almdorf is in Places as a chalet badge with its name from a medium
+  // zoom out, even before game/chalets.js has built it (then from roads.js's plan, busRoads.chalets / CHALET_PLACE))
   drawChalets() {
-    const C = layout.chaletVillage;
+    const C = layout.chaletVillage, P = C?.center || busRoads.chalets?.place || CHALET_PLACE;
+    const g = this.g, s = this.view.s, cx = this.X(P.x), cy = this.Z(P.z), mine = C?.rented?.();
+    const own = C?.houses.find((h) => h.id === mine);
+    // (your chalet is in the Mine layer: a gold house badge, labelled; the chalet village in Places)
+    if (own && this.on('mine')) this.icon({ kind: 'chalet', x: this.X(own.x), y: this.Z(own.z), r: s >= 0.25 ? 10 : 8.5, prio: 0.7, wx: own.x, wz: own.z,
+      label: own.name || 'Your chalet', tip: { title: 'Your chalet', lines: [own.name || ''] },
+      lab: `YOUR CHALET${own.name ? ` · ${own.name.toUpperCase()}` : ''}`, labo: { size: 12, color: '#8a6a00', prio: 1 } }); // (your chalet: "YOUR CHALET · CHALET 7")
+    if (!this.on('places') || !this.inView(cx, cy, 400 * s + 60)) return;
+    const n = C?.houses.length || busRoads.chalets?.plots?.filter((q) => !q.playground).length || 18, R = s >= 0.25 ? 11 : 10;
+    const tip = { title: 'Almdorf · Chalets', lines: ['Chalet village, up the Chaletweg north of Legacy Village', `${n} chalets to buy · ski bus stop Almdorf`] };
+    if (s < 0.6) this.icon({ kind: 'chaletv', x: cx, y: cy, r: R, prio: 1.4, wx: C?.x ?? P.x, wz: C?.z ?? P.z, label: 'Almdorf · Chalets', tip });
+    else this.spot(cx, cy, Math.max(14, 120 * s), C?.x ?? P.x, C?.z ?? P.z, 'Almdorf · Chalets', { tip });
+    // (its own label, not the icon's: it stays even where the badge folds into your chalet's)
+    this.label('ALMDORF · CHALETS', cx, cy, { size: 15, color: '#8a3a12', prio: 1.5, alpha: fadeIn(s, 0.03), cands: s < 0.6 ? this.around(R + 1, 5) : this.around(Math.max(14, 130 * s), 6) });
     if (!C) return;
-    const g = this.g, s = this.view.s, cx = this.X(C.center.x), cy = this.Z(C.center.z);
-    if (!this.inView(cx, cy, 400 * s + 60)) return;
     g.save();
     g.lineCap = 'round'; g.lineJoin = 'round';
     this.path(C.road);
     g.strokeStyle = '#fff'; g.lineWidth = Math.max(2.5, 9 * s); g.stroke();
     g.strokeStyle = '#8a8f98'; g.lineWidth = Math.max(1.5, 6.5 * s); g.stroke();
-    const mine = C.rented?.();
     for (const h of C.houses) {
       const x = this.X(h.x), y = this.Z(h.z), w = Math.max(3, h.w * s), d = Math.max(4.5, h.d * s);
       g.save(); g.translate(x, y); g.rotate(-h.yaw);
@@ -654,18 +1009,8 @@ export class TrailMap {
       g.restore();
       if (h.num && s > 0.9) { g.fillStyle = '#fff'; g.font = `bold ${Math.round(Math.min(14, 5 * s))}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(h.num), x, y); } // (the house numbers, zoomed in)
     }
-    const own = C.houses.find((h) => h.id === mine);
-    if (own && s < 0.9) { // (your chalet, findable zoomed out: a gold disc on it)
-      const ox = this.X(own.x), oy = this.Z(own.z);
-      g.beginPath(); g.arc(ox, oy, 5.5, 0, Math.PI * 2); g.fillStyle = GOLD; g.fill(); g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
-      this.spot(ox, oy, 8, own.x, own.z, own.name || 'Your chalet');
-    }
-    if (own) this.label(`YOUR CHALET${own.name ? ` · ${own.name.toUpperCase()}` : ''}`, this.X(own.x), this.Z(own.z), { size: 12, color: '#8a6a00', prio: 1, cands: this.around(Math.max(10, 9 * s), 6) }); // (your chalet: "YOUR CHALET · CHALET 7")
     for (const p of C.playground || []) { g.fillStyle = '#2fbf5b'; g.beginPath(); g.arc(this.X(p.x), this.Z(p.z), Math.max(2.5, 4 * s), 0, Math.PI * 2); g.fill(); }
     g.restore();
-    this.reserve(cx, cy, 12);
-    this.spot(cx, cy, Math.max(14, 120 * s), C.x, C.z, C.label);
-    this.label('CHALET VILLAGE', cx, cy, { size: 15, color: '#8a3a12', prio: 2, cands: this.around(Math.max(14, 130 * s), 6) });
   }
 
   drawPark() {
@@ -680,7 +1025,7 @@ export class TrailMap {
     g.stroke();
     g.fillStyle = PARK; g.strokeStyle = '#fff'; g.lineWidth = 1.2;
     const d = Math.max(2.5, Math.min(5, 18 * s));
-    for (const f of p.features || []) {
+    for (const f of s >= 0.08 ? p.features || [] : []) { // (the features zoomed in only)
       const x = this.X(f.x), y = this.Z(f.z);
       if (!this.inView(x, y)) continue;
       g.beginPath(); g.moveTo(x, y - d); g.lineTo(x + d, y); g.lineTo(x, y + d); g.lineTo(x - d, y); g.closePath(); g.fill(); g.stroke();
@@ -689,9 +1034,9 @@ export class TrailMap {
     const m = p.line[Math.floor(p.line.length * 0.45)];
     if (m) {
       const x = this.X(m[0]), y = this.Z(m[1]), r = Math.max(8, (p.halfWidth || 17) * s);
-      this.label((p.name || 'Legacy Park').toUpperCase(), x, y, { size: 15, color: '#c75400', prio: 4, cands: this.around(r, 6) });
+      this.label((p.name || 'Legacy Park').toUpperCase(), x, y, { size: 15, color: '#c75400', prio: 4, alpha: fadeIn(s, 0.1), cands: this.around(r, 6) });
       const d0 = p.drop || { x: p.line[0][0], z: p.line[0][1] };
-      this.spot(this.X(d0.x), this.Z(d0.z), 10, d0.x, d0.z, p.name || 'Legacy Park');
+      this.spot(this.X(d0.x), this.Z(d0.z), 10, d0.x, d0.z, p.name || 'Legacy Park', { tip: { title: p.name || 'Legacy Park', lines: ['Terrain park', `${p.features?.length || 0} features`] } });
     }
   }
 
@@ -712,20 +1057,15 @@ export class TrailMap {
     }
     g.setLineDash([]);
     g.restore();
-    // number badges (and the name when zoomed in)
-    for (const p of pistes) {
+    // number badges from a little way in (the name written zoomed right in; else in the tooltip)
+    const a = fadeIn(s, 0.07);
+    for (const p of a > 0 ? pistes : []) {
       const q = p.pts[Math.floor(p.pts.length * 0.38)];
       if (!q) continue;
-      const x = this.X(q[0] ?? q.x), y = this.Z(q[1] ?? q.z);
-      if (!this.inView(x, y)) continue;
-      const num = p.number ?? layout.pistes.indexOf(p) + 1, r = 10;
-      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
-      g.fillStyle = PISTE_COLORS[p.diff]; g.fill();
-      g.lineWidth = 2; g.strokeStyle = '#fff'; g.stroke();
-      g.fillStyle = '#fff'; g.font = `italic 700 ${num > 9 ? 12.5 : 14}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(String(num), x, y + 0.5);
-      this.reserve(x, y, r + 1);
-      if (s > 0.28) this.label(p.name, x, y, { size: 14, weight: 700, color: p.diff === 3 ? '#161616' : PISTE_COLORS[p.diff], prio: 6, cands: this.around(r) });
+      const x = this.X(ptx(q)), y = this.Z(ptz(q)), num = p.number ?? layout.pistes.indexOf(p) + 1, col = PISTE_COLORS[p.diff];
+      this.icon({ x, y, r: 10, prio: 3, alpha: a, draw: (g2, o) => this.pisteBadge(g2, o.x, o.y, o.r, col, num),
+        wx: ptx(q), wz: ptz(q), label: p.name, tip: () => this.pisteTip(p),
+        lab: s >= 0.45 ? p.name : null, labo: { size: 14, weight: 700, color: p.diff === 3 ? '#161616' : col, prio: 6, alpha: fadeIn(s, 0.45) } });
     }
   }
 
@@ -758,32 +1098,24 @@ export class TrailMap {
     const g = this.g, s = this.view.s, hot = this.hot?.race;
     for (const e of this.races()) {
       const col = raceInk(e.D.color), on = hot === e.id, tag = { race: e.id };
-      const fx = this.X(e.finish.x), fy = this.Z(e.finish.z);
-      if (this.inView(fx, fy)) {
-        const q = s < 0.07 ? 7.5 : 9;
-        finishMark(g, fx, fy, q, col);
-        this.reserve(fx, fy, q / 2 + 3);
-        this.spot(fx, fy, q / 2 + 3, e.finish.x, e.finish.z, `${e.name} · finish`, tag);
-      }
+      const fx = this.X(e.finish.x), fy = this.Z(e.finish.z), q = s < 0.07 ? 7.5 : 9;
+      this.icon({ x: fx, y: fy, r: q / 2 + 3, prio: 2.6, alpha: fadeIn(s, 0.04), draw: (g2) => finishMark(g2, fx, fy, q, col),
+        wx: e.finish.x, wz: e.finish.z, label: `${e.name} · finish`, tip: () => ({ ...this.raceTip(e), title: `${e.name} · finish` }), extra: tag });
       const x = this.X(e.start.x), y = this.Z(e.start.z);
       if (!this.inView(x, y, 60)) continue;
-      const r = on ? 12.5 : 11;
-      if (on) {
-        const ph = (now / 1300) % 1;
-        g.strokeStyle = col; g.globalAlpha = 0.6 * (1 - ph); g.lineWidth = 2.5;
-        g.beginPath(); g.arc(x, y - r * 1.75, r + 3 + ph * 18, 0, Math.PI * 2); g.stroke();
-        g.globalAlpha = 1;
-      }
-      const cy = racePin(g, x, y, r, col), tip = y - cy, gap = 5;
-      this.boxes.push([x - r - 2, cy - r - 2, x + r + 2, y + 1]);
-      this.spot(x, cy, r + 3, e.start.x, e.start.z, e.name, tag);
+      // the pin (an icon: folds what it would cover; it collides by its head)
+      const r = on ? 12.5 : 11, cy = y - r * 1.75, tip = y - cy, gap = 5;
+      this.pins.set(e.id, { x, cy, r, col });
+      this.icon({ x, y: cy, r: r + 1, prio: 1, draw: (g2) => racePin(g2, x, y, r, col), box: [x - r - 2, cy - r - 2, x + r + 2, y + 1],
+        wx: e.start.x, wz: e.start.z, label: e.name, tip: () => this.raceTip(e), extra: tag });
+      if (s < 0.09) continue; // (zoomed out: just the pins; the card is in the tooltip)
       const card = {
         title: e.name.toUpperCase(), color: col, hot: on,
         sub: e.bus ? [['FREE RACE', col], [`  ·  ski bus: ${e.stop}`, NAVY]] // (a bus race: its stop)
           : [[e.D.label.toUpperCase(), col], [`  ·  up to $${(e.rewardMax || e.reward).toLocaleString('en-US')}`, NAVY]], // (the Superhard field's 1st prize)
         more: s >= 0.3 ? `${(e.length / 1000).toFixed(1)} km  ·  ${e.drop} m drop${e.bus ? `  ·  free entry  ·  1st $${e.reward.toLocaleString('en-US')}` : ''}` : null,
       };
-      this.label(e.name, x, cy, { prio: 0.5, force: true, card,
+      this.label(e.name, x, cy, { prio: 0.5, force: on, alpha: fadeIn(s, 0.09), card,
         cands: (w, h) => {
           const c = [[r + gap, 0, 'left'], [-r - gap, 0, 'right'], [0, -r - gap - h / 2, 'center'], [0, tip + gap + h / 2, 'center'],
             [r, -r - h / 2, 'left'], [-r, -r - h / 2, 'right'], [r, tip + h / 2, 'left'], [-r, tip + h / 2, 'right']];
@@ -791,7 +1123,7 @@ export class TrailMap {
           for (const k of [26, 52]) c.push([r + gap + k, 0, 'left'], [-r - gap - k, 0, 'right'], [0, -r - gap - h / 2 - k, 'center'], [0, tip + gap + h / 2 + k, 'center']);
           return c;
         },
-        onPlace: (b) => this.spots.push({ box: b, x: (b[0] + b[2]) / 2, y: (b[1] + b[3]) / 2, r: 0, wx: e.start.x, wz: e.start.z, label: e.name, ...tag }) });
+        onPlace: (b) => this.spots.push({ box: b, x: (b[0] + b[2]) / 2, y: (b[1] + b[3]) / 2, r: 0, wx: e.start.x, wz: e.start.z, label: e.name, tip: () => this.raceTip(e), ...tag }) });
     }
   }
 
@@ -816,8 +1148,7 @@ export class TrailMap {
     }
     cands.sort((a, b) => a[0] - b[0]);
     const flat = cands.flatMap((c) => [c[1], c[2]]);
-    this.label(R.name.toUpperCase(), 0, 0, { size: 14, color: EXPRESS, prio: 2.5, cands: flat });
-    if (s < 0.08) this.label(R.name.toUpperCase(), 0, 0, { size: 14, color: EXPRESS, prio: 7, cands: flat.slice().reverse() });
+    this.label(R.name.toUpperCase(), 0, 0, { size: 14, color: EXPRESS, prio: 2.5, alpha: fadeIn(s, 0.05), cands: flat }); // (once: it's in the tooltip too)
   }
 
   /** The express line style (also the route picker's): P = [[x, z, tunnel 0/1]...], w = line width (px). */
@@ -856,7 +1187,7 @@ export class TrailMap {
     const g = this.g, s = this.view.s, hot = this.hot, races = this.races();
     for (const st of R.stations) {
       const x = this.X(st.x), y = this.Z(st.z), e = st.course && races.find((q) => q.id === st.course);
-      if (e) {
+      if (e && this.on('races')) { // (the dotted link to its race: with the races on)
         const col = raceInk(e.D.color), on = hot && (hot.race === e.id || hot.station === st.id);
         g.save();
         g.lineCap = 'round'; g.setLineDash([0.1, 5.5]);
@@ -869,18 +1200,18 @@ export class TrailMap {
         g.restore();
       }
       if (!this.inView(x, y)) continue;
-      const village = st.id === 'village', r = village ? 8.5 : 6.5, b = st.board || st;
-      expressStop(g, x, y, r, village);
-      this.reserve(x, y, r + 2);
-      this.spot(x, y, r + 2, b.x, b.z, `${R.name} · ${village ? 'Village station' : st.name}`, { station: st.id, race: st.course || undefined });
-      if (village) this.label(R.name.toUpperCase(), x, y, { size: 15, color: EXPRESS, prio: s < 0.08 ? 3 : 1, force: s >= 0.08, cands: this.around(r + 2, 6) });
-      else if (s >= 0.12) this.label(R.name, x, y, { size: 13, color: EXPRESS, prio: 4, cands: this.around(r + 1, 5) });
+      const village = st.id === 'village', r = village ? 9 : 7, b = st.board || st, name = village ? 'Village station' : st.name;
+      this.icon({ x, y, r: r + 1, prio: village ? 1.2 : 2.2, alpha: village ? 1 : fadeIn(s, 0.045), draw: (g2) => expressStop(g2, x, y, r, village),
+        wx: b.x, wz: b.z, label: `${R.name} · ${name}`, extra: { station: st.id, race: st.course || undefined },
+        tip: { title: name, lines: [`${R.name} station`, e ? `Race: ${e.name}` : ''] },
+        lab: village ? R.name.toUpperCase() : s >= 0.25 ? st.name : null,
+        labo: village ? { size: 15, color: EXPRESS, prio: s < 0.08 ? 3 : 1.5 } : { size: 13, color: EXPRESS, prio: 6, alpha: fadeIn(s, 0.25) } });
     }
   }
 
   // railways (layout.railways, when there are any): the classic black-and-white map line, stations as bars
   drawRail() {
-    const g = this.g;
+    const g = this.g, s0 = this.view.s;
     for (const r of layout.railways || []) {
       const pts = r.pts || r.line || r.path;
       if (!pts?.length) continue;
@@ -893,10 +1224,8 @@ export class TrailMap {
       for (const st of r.stations || []) {
         const x = this.X(st.x), y = this.Z(st.z);
         if (!this.inView(x, y)) continue;
-        g.fillStyle = '#fff'; g.strokeStyle = NAVY; g.lineWidth = 2;
-        g.beginPath(); g.roundRect(x - 7, y - 4.5, 14, 9, 2.5); g.fill(); g.stroke();
-        this.reserve(x, y, 8);
-        if (st.name) { this.spot(x, y, 8, st.x, st.z, st.name); this.label(st.name, x, y, { size: 14, color: NAVY, prio: 3, cands: this.around(8) }); }
+        this.icon({ kind: 'train', x, y, r: 9, prio: 2, wx: st.x, wz: st.z, label: st.name, tip: { title: st.name || 'Station', lines: [`${r.name || 'Railway'} station`] },
+          lab: s0 >= 0.1 ? st.name : null, labo: { size: 14, color: NAVY, prio: 3, alpha: fadeIn(s0, 0.1) } });
       }
     }
   }
@@ -910,6 +1239,7 @@ export class TrailMap {
       const len = Math.hypot(bx - ax, by - ay), ux = (bx - ax) / (len || 1), uy = (by - ay) / (len || 1);
       g.save();
       g.lineCap = 'round';
+      if (!gondola && s < 0.06) g.globalAlpha = 0.55; // (zoomed out the gondolas read first)
       g.strokeStyle = 'rgba(255,255,255,0.95)'; g.lineWidth = gondola ? 6 : 5;
       g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
       g.strokeStyle = NAVY; g.lineWidth = gondola ? 2.6 : 1.8;
@@ -928,17 +1258,18 @@ export class TrailMap {
       }
       const st = (x, y, q) => { g.fillStyle = NAVY; g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.rect(x - q, y - q, 2 * q, 2 * q); g.fill(); g.stroke(); this.reserve(x, y, q + 1); };
       st(ax, ay, gondola ? 4.5 : 3.5); st(bx, by, gondola ? 4.5 : 3.5);
-      this.spot(ax, ay, 6, l.bottom.x, l.bottom.z, `${l.name} · valley station`);
-      this.spot(bx, by, 6, l.top.x, l.top.z, `${l.name} · top station`);
+      this.spot(ax, ay, 6, l.bottom.x, l.bottom.z, `${l.name} · valley station`, { tip: () => ({ ...this.liftTip(l), title: `${l.name} · valley station` }) });
+      this.spot(bx, by, 6, l.top.x, l.top.z, `${l.name} · top station`, { tip: () => ({ ...this.liftTip(l), title: `${l.name} · top station` }) });
       if (l.mid) st(this.X(l.mid.x), this.Z(l.mid.z), 3.5);
       g.restore();
       // the name along the line, upright, on either side, at a few points along it
-      if (len > 80 && s >= 0.1) {
+      // (zoomed out: the gondolas' names only; the chairlifts' from a little way in; all of them in the tooltip)
+      if (len > 80 && s >= (gondola ? 0.07 : 0.14)) {
         let ang = Math.atan2(by - ay, bx - ax);
         if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;
         const nx = -Math.sin(ang), ny = Math.cos(ang), off = 11, cands = [];
         for (const t of l.mid ? [0.28, 0.72, 0.5] : [0.5, 0.32, 0.68]) for (const sd of [-1, 1]) cands.push([(bx - ax) * t + nx * off * sd, (by - ay) * t + ny * off * sd, 'center', ang]);
-        this.label(l.name, ax, ay, { size: gondola ? 15 : 14, color: NAVY, prio: gondola ? 2 : 3, cands });
+        this.label(l.name, ax, ay, { size: gondola ? 15 : 14, color: NAVY, prio: gondola ? 2 : 3, alpha: fadeIn(s, gondola ? 0.07 : 0.14), cands });
       }
     }
   }
@@ -968,235 +1299,140 @@ export class TrailMap {
     for (const st of R.stations) {
       const x = this.X(st.x), y = this.Z(st.z);
       if (!this.inView(x, y)) continue;
-      g.fillStyle = RED; g.strokeStyle = '#fff'; g.lineWidth = 1.8;
-      g.beginPath(); g.rect(x - 5.5, y - 5.5, 11, 11); g.fill(); g.stroke();
-      this.reserve(x, y, 7);
-      if (s >= 0.07) this.label(st.name, x, y, { size: 14, color: '#8f1414', prio: 2, cands: this.around(9) });
+      this.icon({ kind: 'train', x, y, r: s >= 0.25 ? 10 : 8.5, prio: 2, wx: st.x, wz: st.z, label: st.name, tip: { title: st.name, lines: [`${R.name} station`] },
+        lab: s >= 0.07 ? st.name : null, labo: { size: 14, color: '#8f1414', prio: 2, alpha: fadeIn(s, 0.07) } });
     }
     // the line's name along its middle stretch
     const m = P[Math.floor(P.length * 0.36)];
-    if (m && s >= 0.05) this.label(R.name, this.X(m[0]), this.Z(m[1]), { size: 14, color: '#1b1f27', prio: 3, cands: this.around(12) });
+    if (m && s >= 0.08) this.label(R.name, this.X(m[0]), this.Z(m[1]), { size: 14, color: '#1b1f27', prio: 3, alpha: fadeIn(s, 0.08), cands: this.around(12) });
   }
 
+  // Everything that is a place, as icons in the one style (placed by priority, folded where they would overlap; the
+  // smaller ones fade in with the zoom; names written zoomed in, always in the tooltip). Summits always; the rest by
+  // layer: Pistes & lifts (heli-ski), Places (huts, the village services, the Autohaus / Werkstatt, landmarks), Jobs,
+  // Mine (your car, the impounded one, the helicopter you rented; your chalet is drawChalets'). The other players and
+  // the patrol cars move: drawLive. (Oct 30 2026, the user: "make the map clearer")
   drawPlaces() {
-    const g = this.g, s = this.view.s, X = this.X, Z = this.Z;
+    const g = this.g, s = this.view.s, X = this.X, Z = this.Z, IR = s >= 0.25 ? 10 : 8.5, mk = this.mk || {};
     // summits
     for (const p of layout.peaks) {
       const sm = p.summit || (p.id === 'legacy' ? MAIN_SUMMIT : null);
       if (!sm) continue;
       const x = X(sm.x), y = Z(sm.z);
       if (!this.inView(x, y)) continue;
-      g.fillStyle = NAVY; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-      g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 7, y + 5); g.lineTo(x - 7, y + 5); g.closePath(); g.fill(); g.stroke();
-      this.reserve(x, y, 8);
-      this.spot(x, y, 8, sm.x, sm.z, `${p.name} summit`);
+      this.icon({ x, y, r: 8, prio: 0, wx: sm.x, wz: sm.z, label: `${p.name} summit`,
+        tip: () => ({ title: p.name, lines: [`Summit · ${Math.round(world.height(sm.x, sm.z))} m`] }),
+        draw: () => { g.fillStyle = NAVY; g.strokeStyle = '#fff'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y - 7.5); g.lineTo(x + 8, y + 5.5); g.lineTo(x - 8, y + 5.5); g.closePath(); g.fill(); g.stroke(); } });
       this.label(p.name.toUpperCase(), x, y, { size: 17, color: NAVY, prio: 1, cands: [[0, 18, 'center'], [0, -18, 'center'], [12, 0, 'left'], [-12, 0, 'right']] });
     }
-    // mountain huts
-    for (const h of layout.huts) {
-      const x = X(h.x), y = Z(h.z);
-      if (!this.inView(x, y)) continue;
-      g.fillStyle = '#b8452a'; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-      g.beginPath(); g.moveTo(x, y - 8); g.lineTo(x + 7, y - 2); g.lineTo(x + 7, y + 6); g.lineTo(x - 7, y + 6); g.lineTo(x - 7, y - 2); g.closePath(); g.fill(); g.stroke();
-      this.reserve(x, y, 9);
-      this.spot(x, y, 9, h.x, h.z, h.name);
-      if (s >= 0.09) this.label(h.name, x, y, { size: 14, color: '#8f2f17', prio: 2, cands: this.around(8) });
+    // ski-bus stops (Buses & train; the village's from far out, the rest fade in)
+    if (this.on('transit')) for (const b of layout.busStops) {
+      const village = b.name === 'Legacy Village';
+      this.icon({ kind: 'bus', x: X(b.x), y: Z(b.z), r: IR, prio: village ? 2.3 : 4, alpha: village ? 1 : fadeIn(s, 0.06), wx: b.x, wz: b.z, label: `Ski bus · ${b.name}`,
+        tip: { title: b.name, lines: ['Ski bus stop'] }, lab: s >= 0.35 && !village ? b.name : null, labo: { size: 13, weight: 600, color: BLUE, prio: 5 } });
     }
-    // ski-bus stops
-    for (const b of layout.busStops) {
-      const x = X(b.x), y = Z(b.z);
-      if (!this.inView(x, y)) continue;
-      g.fillStyle = BLUE; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-      g.beginPath(); g.roundRect(x - 12, y - 7.5, 24, 15, 4); g.fill(); g.stroke();
-      g.fillStyle = '#fff'; g.font = `800 8.5px ${UI}`; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText('BUS', x, y + 0.5);
-      this.boxes.push([x - 13, y - 9, x + 13, y + 9]);
-      this.spot(x, y, 12, b.x, b.z, `Ski bus · ${b.name}`);
-      if (s >= 0.12 && b.name !== 'Legacy Village') this.label(b.name, x, y, { size: 13, weight: 600, color: BLUE, prio: 5, cands: this.around(12) });
-    }
-    // other systems: heli-ski, job boards, the secrets you have found
-    const mk = this.markers?.() || {};
-    for (const m of mk.heli || []) {
+    // heli-ski (Pistes & lifts): the pad, the drop zones zoomed in
+    if (this.on('pistes')) for (const m of mk.heli || []) {
       const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      if (m.kind === 'helipad') {
-        g.fillStyle = '#fff'; g.strokeStyle = RED; g.lineWidth = 2;
-        g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2); g.fill(); g.stroke();
-        g.fillStyle = RED; g.font = `italic 700 13px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('H', x, y + 0.5);
-        this.reserve(x, y, 10);
-        this.spot(x, y, 10, m.x, m.z, 'Heli-ski');
-        if (s >= 0.12) this.label('Heli-ski', x, y, { size: 14, color: RED, prio: 5, cands: this.around(9) });
-      } else if (m.kind === 'drop') {
-        g.fillStyle = RED; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-        g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 6, y + 4); g.lineTo(x - 6, y + 4); g.closePath(); g.fill(); g.stroke();
-        this.reserve(x, y, 7);
-        this.label(m.label, x, y, { size: 13, weight: 600, color: RED, prio: 8, cands: this.around(7) });
-      } else {
-        g.fillStyle = RED; g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill();
-      }
+      if (m.kind === 'helipad') this.icon({ kind: 'heli', x, y, r: IR, prio: 2.5, alpha: fadeIn(s, 0.04), wx: m.x, wz: m.z, label: 'Heli-ski', tip: { title: 'Heli-ski', lines: ['Helicopter pad · flights to the drop zones'] },
+        lab: s >= 0.2 ? 'Heli-ski' : null, labo: { size: 14, color: RED, prio: 5 } });
+      else if (m.kind === 'drop') this.icon({ kind: 'drop', x, y, r: IR - 1.5, prio: 7, alpha: fadeIn(s, 0.1), wx: m.x, wz: m.z, label: m.label, tip: { title: m.label || 'Drop zone', lines: ['Heli-ski drop zone'] },
+        lab: s >= 0.3 ? m.label : null, labo: { size: 13, weight: 600, color: RED, prio: 8 } });
+      else this.icon({ kind: 'dot', x, y, r: 5, prio: 6, wx: m.x, wz: m.z, label: m.label || 'Heli-ski', tip: { title: m.label || 'Heli-ski' } });
     }
-    for (const m of mk.jobs || []) {
+    if (this.on('places')) {
+      // mountain huts
+      for (const h of layout.huts) this.icon({ kind: 'hut', x: X(h.x), y: Z(h.z), r: IR, prio: 3, alpha: fadeIn(s, 0.05), wx: h.x, wz: h.z, label: h.name,
+        tip: { title: h.name, lines: ['Mountain hut'] }, lab: s >= 0.3 ? h.name : null, labo: { size: 14, color: '#8f2f17', prio: 5 } });
+      // the village services (live: roads.js plans the medical centre and the car rental, village.js the ski shop, prison.js
+      // the police station; main.js passes the Autohaus and the Werkstatt, else the car rental straight from roads.js)
+      const CR = busRoads.rental, svc = [];
+      const places = mk.places?.some((m) => m.kind === 'car') || !CR ? mk.places || [] : [...(mk.places || []), { x: CR.ex ?? CR.x, z: CR.ez ?? CR.z, label: 'Autohaus', kind: 'car' }];
+      for (const m of places) svc.push({ ...m, kind: m.kind === 'garage' ? 'garage' : 'car', what: m.kind === 'garage' ? 'Car repairs' : 'Cars to rent and buy' });
+      const shop = window.__game?.village?.shopDoor;
+      if (shop) svc.push({ x: shop.x, z: shop.z, label: 'Ski shop', kind: 'shop', what: 'Skis, boards and gear' });
+      const H = busRoads.hospital;
+      if (H) svc.push({ x: H.ex ?? H.x, z: H.ez ?? H.z, label: 'Medical centre', kind: 'med', what: 'Hospital' });
+      const PD = window.__game?.prison?.door;
+      if (PD) svc.push({ x: PD.x, z: PD.z, label: 'Police / Prison', kind: 'police', what: 'Police station' });
+      const ink = { med: '#b01810', police: '#1f3fa8' };
+      for (const m of svc) this.icon({ kind: m.kind, x: X(m.x), y: Z(m.z), r: IR, prio: 2, alpha: fadeIn(s, 0.045), wx: m.x, wz: m.z, label: m.label,
+        tip: { title: m.label, lines: [m.what] }, lab: s >= 0.18 ? m.label : null, labo: { size: 14, color: ink[m.kind] || '#1f5fd6', prio: 3, alpha: fadeIn(s, 0.18) } });
+      // the landmarks you have found (the Adlertor, the Försterweg...)
+      for (const m of mk.secrets || []) this.icon({ kind: 'secret', x: X(m.x), y: Z(m.z), r: IR - 1, prio: 4, alpha: fadeIn(s, 0.07), wx: m.x, wz: m.z, label: m.label,
+        tip: { title: m.label, lines: ['Landmark · found'] }, lab: s >= 0.3 ? m.label : null, labo: { size: 14, color: '#8a6200', prio: 4 } });
+    }
+    if (this.on('jobs')) for (const m of mk.jobs || []) {
       const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
       if (m.kind === 'search') {
+        if (!this.inView(x, y, 200)) continue;
         g.strokeStyle = GOLD; g.lineWidth = 2; g.setLineDash([5, 4]);
         g.beginPath(); g.arc(x, y, Math.max(8, (m.r || 30) * s), 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
-      } else if (m.kind === 'board') {
-        g.fillStyle = '#7a4a22'; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-        g.beginPath(); g.rect(x - 4.5, y - 4.5, 9, 9); g.fill(); g.stroke();
-        this.reserve(x, y, 6);
-        if (s > 0.35) this.label(m.label, x, y, { size: 13, weight: 600, color: '#6a3d17', prio: 10, cands: this.around(5) });
-      } else {
-        g.fillStyle = GOLD; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
-        g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill(); g.stroke();
-        this.reserve(x, y, 7);
-        if (m.label) this.label(m.label, x, y, { size: 14, color: '#9a6a00', prio: 1, cands: this.around(6) });
-      }
-    }
-    // multiplayer: the other players (net/remote.js mapMarkers), live: a green dot with their heading and their name
-    for (const m of mk.players || []) {
-      const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      const fx = Math.sin(m.yaw || 0), fz = Math.cos(m.yaw || 0), dx = X(m.x + fx) - x, dy = Z(m.z + fz) - y, l = Math.hypot(dx, dy) || 1;
-      const ux = dx / l, uy = dy / l;
-      g.fillStyle = '#12a150'; g.strokeStyle = '#fff'; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(x + ux * 11, y + uy * 11); g.lineTo(x - uy * 5, y + ux * 5); g.lineTo(x + uy * 5, y - ux * 5); g.closePath(); g.fill(); // (the heading)
-      g.beginPath(); g.arc(x, y, 6.5, 0, Math.PI * 2); g.fill(); g.stroke();
-      this.reserve(x, y, 8);
-      this.spot(x, y, 9, m.x, m.z, m.label);
-      this.label(m.label, x, y, { size: 14, weight: 700, color: '#0d7a3c', prio: 0, cands: this.around(8) });
-    }
-    // the patrol cars while you are wanted (game/police.js): blue dots
-    for (const m of mk.police || []) {
-      const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      g.fillStyle = '#1f4fff'; g.strokeStyle = '#fff'; g.lineWidth = 2;
-      g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill(); g.stroke();
-      this.reserve(x, y, 7);
-    }
-    const CR = busRoads.rental; // (the car rental straight from roads.js when main.js passes none)
-    const places = mk.places?.some((m) => m.kind === 'car') || !CR ? mk.places || [] : [...(mk.places || []), { x: CR.ex ?? CR.x, z: CR.ez ?? CR.z, label: 'Autohaus', kind: 'car' }];
-    // places worth finding (the Car Rental): a blue square with a little car, always labelled, clickable as a target
-    for (const m of places) {
-      const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      g.fillStyle = '#1f5fd6'; g.strokeStyle = '#fff'; g.lineWidth = 2;
-      g.beginPath(); g.roundRect(x - 9, y - 9, 18, 18, 4); g.fill(); g.stroke();
-      if (m.kind === 'garage') { // (the Werkstatt: a spanner)
-        g.strokeStyle = '#fff'; g.lineWidth = 2.6; g.lineCap = 'round';
-        g.beginPath(); g.moveTo(x - 4.5, y + 4.5); g.lineTo(x + 2, y - 2); g.stroke();
-        g.lineWidth = 2; g.beginPath(); g.arc(x + 3, y - 3, 3, Math.PI * 0.95, Math.PI * 2.55); g.stroke();
-        g.lineCap = 'butt';
-      } else {
-      // the car: body, cabin, two wheels
-      g.fillStyle = '#fff';
-      g.beginPath(); g.roundRect(x - 6, y - 1, 12, 4, 1.5); g.fill();
-      g.beginPath(); g.moveTo(x - 3.5, y - 1); g.lineTo(x - 2, y - 4.5); g.lineTo(x + 2.5, y - 4.5); g.lineTo(x + 4, y - 1); g.closePath(); g.fill();
-      g.fillStyle = '#1f5fd6';
-      for (const wx of [-3.5, 3.5]) { g.beginPath(); g.arc(x + wx, y + 3.2, 1.6, 0, Math.PI * 2); g.fill(); }
-      }
-      this.reserve(x, y, 11);
-      this.spot(x, y, 11, m.x, m.z, m.label);
-      this.label(m.label, x, y, { size: 14, weight: 700, color: '#1f5fd6', prio: 3, cands: this.around(10) });
-    }
-    // the village services (live: roads.js plans the medical centre and the car rental's lots, village.js the ski shop):
-    // a rounded square each, labelled, clickable as a target (the car rental from busRoads when main.js passes none)
-    const svc = [];
-    const shop = window.__game?.village?.shopDoor;
-    if (shop) svc.push({ x: shop.x, z: shop.z, label: 'Ski shop', kind: 'shop' });
-    const H = busRoads.hospital;
-    if (H) svc.push({ x: H.ex ?? H.x, z: H.ez ?? H.z, label: 'Medical centre', kind: 'med' });
-    const PD = window.__game?.prison?.door; // (the police station: game/prison.js)
-    if (PD) svc.push({ x: PD.x, z: PD.z, label: 'Police / Prison', kind: 'police' });
-    for (const m of svc) {
-      const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      const med = m.kind === 'med', col = med ? RED : '#1f5fd6';
-      g.fillStyle = med ? '#fff' : col; g.strokeStyle = med ? RED : '#fff'; g.lineWidth = 2;
-      g.beginPath(); g.roundRect(x - 9, y - 9, 18, 18, 4); g.fill(); g.stroke();
-      if (med) { g.fillStyle = RED; g.fillRect(x - 6, y - 2, 12, 4); g.fillRect(x - 2, y - 6, 4, 12); } // (the cross)
-      else if (m.kind === 'police') { g.fillStyle = '#fff'; for (const bx of [-5, -1.5, 2]) g.fillRect(x + bx, y - 6, 2, 12); g.fillRect(x - 6, y - 6, 12, 1.6); g.fillRect(x - 6, y + 4.4, 12, 1.6); } // (cell bars)
-      else { // (a pair of skis)
-        g.strokeStyle = '#fff'; g.lineWidth = 2; g.lineCap = 'round';
-        g.beginPath(); g.moveTo(x - 5, y + 5.5); g.lineTo(x + 3, y - 5.5); g.moveTo(x - 1.5, y + 5.5); g.lineTo(x + 6, y - 5.5); g.stroke();
-        g.lineCap = 'butt';
-      }
-      this.reserve(x, y, 11);
-      this.spot(x, y, 11, m.x, m.z, m.label);
-      if (s >= 0.08) this.label(m.label, x, y, { size: 14, weight: 700, color: med ? '#b01810' : col, prio: 3, cands: this.around(10) });
-    }
-    for (const m of mk.secrets || []) {
-      const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      g.fillStyle = '#ffcf5a'; g.strokeStyle = '#7a5600'; g.lineWidth = 1.5;
-      g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 7, y); g.lineTo(x, y + 7); g.lineTo(x - 7, y); g.closePath(); g.fill(); g.stroke();
-      this.reserve(x, y, 8);
-      this.spot(x, y, 8, m.x, m.z, m.label);
-      this.label(m.label, x, y, { size: 14, color: '#8a6200', prio: 4, cands: this.around(7) });
+        this.spot(x, y, Math.max(8, (m.r || 30) * s), m.x, m.z, m.label || 'Search area', { tip: { title: m.label || 'Search area', lines: ['Job · search here'] } });
+      } else if (m.kind === 'board') this.icon({ kind: 'board', x, y, r: IR - 1.5, prio: 7, alpha: fadeIn(s, 0.12), wx: m.x, wz: m.z, label: m.label || 'Job board',
+        tip: { title: m.label || 'Job board', lines: ['Job board'] }, lab: s >= 0.5 ? m.label : null, labo: { size: 13, weight: 600, color: '#6a3d17', prio: 10 } });
+      else this.icon({ kind: 'job', x, y, r: IR, prio: 0.6, wx: m.x, wz: m.z, label: m.label || 'Job', tip: { title: m.label || 'Job', lines: ['Job target'] },
+        lab: m.label || null, labo: { size: 14, color: '#9a6a00', prio: 1 } });
     }
     // what you own (game/ownertags.js, hosted by the car rental): your car (gold; grey while impounded) and the
-    // helicopter you rented, waiting out on the mountain; your chalet has its gold disc (drawChalets)
-    let mine = [];
-    try { mine = window.__game?.carRental?.ownerTags?.mapMarkers?.() || []; } catch { mine = []; }
-    for (const m of mine) {
-      if (m.kind === 'chalet') continue;
-      const x = X(m.x), y = Z(m.z);
-      if (!this.inView(x, y)) continue;
-      const col = m.kind === 'impound' ? '#6f7788' : GOLD;
-      g.fillStyle = col; g.strokeStyle = '#fff'; g.lineWidth = 2;
-      g.beginPath(); g.roundRect(x - 8, y - 8, 16, 16, 4); g.fill(); g.stroke();
-      g.fillStyle = '#fff';
-      if (m.kind === 'heli') { g.font = `italic 700 12px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('H', x, y + 0.5); }
-      else { // (a little car)
-        g.beginPath(); g.roundRect(x - 5.5, y - 0.5, 11, 3.6, 1.4); g.fill();
-        g.beginPath(); g.moveTo(x - 3.2, y - 0.5); g.lineTo(x - 1.8, y - 4); g.lineTo(x + 2.2, y - 4); g.lineTo(x + 3.6, y - 0.5); g.closePath(); g.fill();
-        g.fillStyle = col; for (const wx of [-3.2, 3.2]) { g.beginPath(); g.arc(x + wx, y + 3.3, 1.4, 0, Math.PI * 2); g.fill(); }
+    // helicopter you rented, waiting out on the mountain
+    if (this.on('mine')) {
+      let mine = [];
+      try { mine = window.__game?.carRental?.ownerTags?.mapMarkers?.() || []; } catch { mine = []; }
+      for (const m of mine) {
+        if (m.kind === 'chalet') continue;
+        const kind = m.kind === 'impound' ? 'impound' : m.kind === 'heli' ? 'myheli' : 'mycar';
+        this.icon({ kind, x: X(m.x), y: Z(m.z), r: IR, prio: 0.7, wx: m.x, wz: m.z, label: m.label,
+          tip: { title: m.label, lines: [kind === 'impound' ? 'Impounded · at the police station' : kind === 'myheli' ? 'Your helicopter' : 'Your car'] },
+          lab: m.label, labo: { size: 13.5, weight: 700, color: kind === 'impound' ? '#4a5263' : '#8a6a00', prio: 1 } });
       }
-      this.reserve(x, y, 10);
-      this.spot(x, y, 10, m.x, m.z, m.label);
-      this.label(m.label, x, y, { size: 13.5, weight: 700, color: m.kind === 'impound' ? '#4a5263' : '#8a6a00', prio: 1, cands: this.around(9) });
     }
   }
 
-  // the place you marked: a red ring that breathes, and its name
-  drawTarget(now) {
+  // the place you marked: its name (the breathing red ring is drawLive's)
+  drawTarget() {
     const t = this.target;
     if (!t) return;
-    const g = this.g, x = this.X(t.x), y = this.Z(t.z);
+    const x = this.X(t.x), y = this.Z(t.z);
     if (!this.inView(x, y, 0)) return;
-    const r = 13 + Math.sin(now / 260) * 2;
+    this.reserve(x, y, 16);
+    this.label(`MARKED · ${t.label}`, x, y, { size: 14, color: RED, prio: -1, force: true, cands: [[0, -27, 'center'], [0, 27, 'center'], [21, 0, 'left'], [-21, 0, 'right']] });
+  }
+
+  /** You: a big red arrow in a white halo (Oct 30 2026, the user: "always easy to find"); heading in radians on the map. */
+  arrow(g, x, y, ang, k = 1) {
     g.save();
-    g.strokeStyle = 'rgba(255,255,255,0.95)'; g.lineWidth = 6;
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
-    g.strokeStyle = RED; g.lineWidth = 3;
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+    g.translate(x, y);
+    g.beginPath(); g.arc(0, 0, 17 * k, 0, Math.PI * 2);
+    g.fillStyle = 'rgba(255,255,255,0.82)'; g.fill();
+    g.lineWidth = 1.5; g.strokeStyle = 'rgba(226,35,26,0.55)'; g.stroke();
+    g.rotate(ang);
+    g.scale(k, k);
+    g.shadowColor = 'rgba(8,20,60,0.4)'; g.shadowBlur = 4; g.shadowOffsetY = 1;
+    g.fillStyle = RED; g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(14, 0); g.lineTo(-9, -10); g.lineTo(-4, 0); g.lineTo(-9, 10); g.closePath(); g.stroke(); g.fill();
     g.restore();
-    this.reserve(x, y, r + 3);
-    this.label(`MARKED · ${t.label}`, x, y, { size: 14, color: RED, prio: -1, force: true, cands: [[0, -r - 12, 'center'], [0, r + 12, 'center'], [r + 6, 0, 'left'], [-r - 6, 0, 'right']] });
   }
 
   drawPlayer(now) {
     const g = this.g, p = this.player, x = this.X(p.pos.x), y = this.Z(p.pos.z);
-    const m = 18, ex = Math.min(this.W - m, Math.max(m, x)), ey = Math.min(this.H - m, Math.max(m, y));
+    const m = 20, ex = Math.min(this.W - m, Math.max(m, x)), ey = Math.min(this.H - m, Math.max(m, y));
     g.save();
     if (ex !== x || ey !== y) {
       // off the map: an arrow at the edge pointing to you
       g.translate(ex, ey);
       g.rotate(Math.atan2(y - ey, x - ex));
-      g.fillStyle = RED; g.strokeStyle = '#fff'; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(10, 0); g.lineTo(-7, -7); g.lineTo(-3, 0); g.lineTo(-7, 7); g.closePath(); g.fill(); g.stroke();
+      g.fillStyle = RED; g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.lineJoin = 'round';
+      g.beginPath(); g.moveTo(13, 0); g.lineTo(-9, -9); g.lineTo(-4, 0); g.lineTo(-9, 9); g.closePath(); g.stroke(); g.fill();
       g.restore();
       return;
     }
-    const ph = (now / 1400) % 1; // a soft pulse, then the arrow (heading 0 = +z = down on the map)
-    g.strokeStyle = `rgba(226,35,26,${0.5 * (1 - ph)})`; g.lineWidth = 2;
-    g.beginPath(); g.arc(x, y, 8 + ph * 18, 0, Math.PI * 2); g.stroke();
-    g.translate(x, y);
-    g.rotate(Math.atan2(Math.cos(p.heading), Math.sin(p.heading)));
-    g.fillStyle = RED; g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.lineJoin = 'round';
-    g.beginPath(); g.moveTo(13, 0); g.lineTo(-8, -8.5); g.lineTo(-3.5, 0); g.lineTo(-8, 8.5); g.closePath(); g.stroke(); g.fill();
+    const ph = (now / 1400) % 1; // a soft pulse, then the arrow in its halo (heading 0 = +z = down on the map)
+    g.strokeStyle = `rgba(226,35,26,${0.55 * (1 - ph)})`; g.lineWidth = 2.5;
+    g.beginPath(); g.arc(x, y, 17 + ph * 20, 0, Math.PI * 2); g.stroke();
     g.restore();
-    this.reserve(x, y, 13);
+    this.arrow(g, x, y, Math.atan2(Math.cos(p.heading), Math.sin(p.heading)));
+    this.reserve(x, y, 17);
   }
 
   drawScale() {

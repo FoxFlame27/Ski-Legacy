@@ -92,7 +92,11 @@ export const TUNING = {
   slowMoS: 5,        // real s between two slow-motion hits (single player only)
   stopR: 40,         // m: stopped with a patrol car this close: pulled over
   stopKmh: 3,        // ...below this speed
-  stopS: 3,          // ...for this long
+  stopS: 3,          // ...for this long (fleeing: then you are caught)
+  haltKmh: 1,        // pulled over: fully stopped (below this) ...
+  haltS: 1.5,        // ... for this long, at the side of the road (roadside(): not in a lane, nor on a junction)
+  sideIn: 1.0,       // m: your car's centre at least ROAD_HALF - this off the road's centre line: at the side
+  laneWaitS: 20,     // s stopped in the lane with them close: the officer comes anyway (never stuck there for good)
   spawnMin: 260, spawnMax: 420, // m from you, on the roads, out of sight (Oct 30: nearer, they reach you sooner)
   reachR: 60,        // m: they have reached you (the grace to pull over starts)
   graceS: 6,         // s to pull over once they reach you; still moving after it: fleeing
@@ -484,7 +488,7 @@ body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 #police-hud .pl-msg.hot { background: #d0342c; }
 #police-hud .pl-tip { margin-top: calc(var(--u) * 7); font: 700 max(12px, calc(var(--u) * 15))/1.2 var(--ui); color: #0d1d4a;
-  white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 #police-hud .pl-tip:empty { display: none; }
 #police-hud .pl-esc { margin-top: calc(var(--u) * 14); }
 #police-hud .pl-esc[hidden] { display: none; }
@@ -868,14 +872,14 @@ export class Police {
     this.start(kind);
   }
   start(why) {
-    this.w = { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, footT: 0, scene: null, why,
+    this.w = { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, haltT: 0, halted: false, side: '', pulled: false, laneT: 0, footT: 0, scene: null, why,
       heat: 1, search: false, spotted: false, seen: false, unseenT: 0, noSpotT: 0, lkp: { x: 0, z: 0, vx: 0, vz: 0, t: 0 }, reinT: 4, rbT: 8, spikeT: 6, chatT: 6, rankT: 0,
       near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0, trail: [], trimT: 0 };
     this.rq.length = 0; this.radioText = ''; this.L = LEVELS[1]; this.escT = 0;
     if (!this.spawn(0)) { this.w = null; return; }
     const T = this.target();
-    this.noteUntil = 0; // (the box's own line says it: "Police · pull over and stop", hudFrame)
-    this.slam('PULL OVER', `POLICE · STOP FOR A ${usd(this.fineNow())} FINE`, 0);
+    this.noteUntil = 0; // (the box's own line says it: "Police · pull over", hudFrame)
+    this.slam('PULL OVER', 'POLICE · STOP AT THE SIDE OF THE ROAD', 0);
     this.radio(`Dispatch: collision reported ${T ? this.where(T) : ''}. Unit responding.`);
     this.audio?.play?.('error');
   }
@@ -1085,6 +1089,41 @@ export class Police {
     out.x = d.x + c * lx + s * lz; out.z = d.z - s * lx + c * lz;
     return out;
   }
+  // is (x, z) (your car's centre) at the side of the road? '' yes: on the shoulder / verge (at least ROAD_HALF - sideIn
+  // off the centre line), in a lay-by or a car park, off the roads; 'junction' near where a road joins another;
+  // 'lane' in the driving lanes
+  roadside(x, z) {
+    if (!busRoads.roads.length) return '';
+    for (const L of busRoads.lots) {
+      if (L.hw === undefined || L.ux === undefined) continue;
+      const dx = x - L.x, dz = z - L.z;
+      if (Math.abs(dx * L.ux + dz * L.uz) <= L.hw && Math.abs(dx * L.vx + dz * L.vz) <= L.hd) return '';
+    }
+    for (const lb of busRoads.laybys || []) {
+      const fx = Math.sin(lb.yaw), fz = Math.cos(lb.yaw), dx = x - lb.x, dz = z - lb.z;
+      if (Math.abs(dx * fx + dz * fz) < 10 && Math.abs(dx * fz - dz * fx) < 2.6) return '';
+    }
+    const d = laneDistance(x, z);
+    if (!(d < ROAD_HALF + 2)) return ''; // (off the road)
+    for (const j of busRoads.junctions) if (Math.abs(j.x - x) < 11 && Math.abs(j.z - z) < 11 && hyp(j.x, j.z, x, z) < 11) return 'junction';
+    return d < ROAD_HALF - TUNING.sideIn ? 'lane' : '';
+  }
+  // where the patrol car pulls up when you've pulled over: 7.5 m behind your car, at the same distance off the road's
+  // centre line as you (your car at an angle: still behind you on the shoulder, not out in the lane beside you)
+  curbSpot(car, out) {
+    const P = this.carPoint(car, 0, -car.half - 7.5, out);
+    if (!busRoads.roads.length) return P;
+    const dY = laneDistance(car.x, car.z);
+    if (!(dY < ROAD_HALF + 3) || dY < ROAD_HALF - TUNING.sideIn - 0.3) return P; // (off the roads, or stopped in the lane: straight behind)
+    // outward (away from the centre line) at your car
+    const e = 0.6, gx = laneDistance(car.x + e, car.z) - laneDistance(car.x - e, car.z), gz = laneDistance(car.x, car.z + e) - laneDistance(car.x, car.z - e);
+    const gl = Math.hypot(gx, gz);
+    if (!(gl > 0.2) || !Number.isFinite(gl)) return P;
+    const nx = gx / gl, nz = gz / gl, k = (car.x - P.x) * nx + (car.z - P.z) * nz; // (how far in from your line it is)
+    const qx = P.x + nx * k, qz = P.z + nz * k;
+    if (laneDistance(qx, qz) + 0.4 >= laneDistance(P.x, P.z)) { P.x = qx; P.z = qz; } // (never further into the road: a bend)
+    return P;
+  }
 
   // ---------------------------------------------------------------- per frame
   update(dt) {
@@ -1285,8 +1324,16 @@ export class Police {
     if (wreck && !W.scene && !T.car && wreck.wrecked) { this.wreckE = null; this.begin(W, 'arrest', lead, 'wrecked'); }
     if (W.scene) { this.sceneStep(dt, W, T); return; }
     this.chatter(dt, W, T);
+    // (Oct 30, the user: "make sure the police knows when you are on the side of the road, and you should be fully
+    // stopped"): pulled over = fully stopped (under haltKmh, on foot standing still) for haltS, and (in the car) at
+    // the side of the road: W.side '' there, else 'lane' / 'junction' (the WANTED box says which, hudFrame)
+    const halt = T.car ? T.sp * 3.6 < TUNING.haltKmh : T.foot && T.sp < 0.8;
+    W.haltT = halt ? W.haltT + dt : 0;
+    if (W.haltT >= TUNING.haltS) W.halted = true; // (stopped once: easing over to the side afterwards isn't driving off)
+    W.side = T.car ? this.roadside(T.x, T.z) : '';
+    W.pulled = W.haltT >= TUNING.haltS && !W.side;
     // they reached you: the grace to pull over, then fleeing
-    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.noteUntil = 0; this.radio('Driver, pull over! Pull over now!'); }
+    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.noteUntil = 0; this.radio('Driver, pull over to the side of the road!'); }
     if (W.reached && !W.fleeing) {
       W.grace -= dt;
       const away = (T.vx * (T.x - lead.x) + T.vz * (T.z - lead.z)) / Math.max(1, near); // (on foot: running away from them)
@@ -1295,9 +1342,11 @@ export class Police {
       const now = performance.now(), inCar = !!T.car;
       if (this._wasCar !== inCar) { this._wasCar = inCar; this._swapT = now; }
       const settling = now - (this._swapT || 0) < 2500;
-      const raw = settling ? false : T.car ? T.sp > 4 : T.foot && away > 4;
+      // (in the car, once you have stopped (in the lane, say): moving over to the side at a crawl isn't fleeing,
+      // only really driving off: over ~22 km/h for 1 s; stopped in the lane is never fleeing on its own)
+      const raw = settling ? false : T.car ? T.sp > (W.halted ? 6 : 4) : T.foot && away > 4;
       W.awayT = raw ? (W.awayT || 0) + dt : 0;
-      const moving = raw && (T.car || W.awayT > 1.5);
+      const moving = raw && (T.car ? !W.halted || W.awayT > 1 : W.awayT > 1.5);
       if (W.grace <= 0 && moving) this.flee(W);
     }
     // boxed in: two or more patrol cars within holdR of you for holdS in all (faster the more of them there are round you; it
@@ -1308,12 +1357,19 @@ export class Police {
     for (const u of live) if (hyp(u.x, u.z, T.x, T.z) < TUNING.holdR) boxN++;
     W.holdT = boxN >= 2 ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
     if (W.holdT >= TUNING.holdS) { W.holdT = 0; this.begin(W, 'arrest', lead, 'held'); return; }
-    // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
+    // stopped with them close: pulled over (a fine: fully stopped at the side of the road) or caught (fleeing: arrested
+    // wherever you stop)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;
     // (on foot off the roads: parked as near you as a car gets counts as close)
     const close = near < TUNING.stopR || (T.foot && lead.parked && near < 140);
-    W.stopT = still && close ? W.stopT + dt : 0;
-    if (W.stopT >= TUNING.stopS) { this.begin(W, W.fleeing ? 'arrest' : 'fine', lead, W.fleeing ? 'stopped' : ''); return; }
+    if (W.fleeing) {
+      W.stopT = still && close ? W.stopT + dt : 0;
+      if (W.stopT >= TUNING.stopS) { this.begin(W, 'arrest', lead, 'stopped'); return; }
+    } else {
+      // (stopped in the lane for long with them right there: the officer comes anyway, never stuck there for good)
+      W.laneT = halt && close && W.side ? W.laneT + dt : 0;
+      if ((W.pulled && close) || W.laneT >= TUNING.laneWaitS) { W.laneT = 0; this.begin(W, 'fine', lead); return; }
+    }
     // fleeing on foot: an officer runs after you once his car is close (or as close as it gets)
     if (W.fleeing && T.foot && (near < 16 || (lead.parked && near < 140)) && !lead.officer && lead.role !== 'block') { this.begin(W, 'arrest', lead, 'foot'); return; }
     for (const u of live) this.drivePursuit(u, dt, T, W, u === lead);
@@ -1400,7 +1456,7 @@ export class Police {
     const foot = !this.drive?.active;
     if (W.heat < 2) this.addHeat(W, 2 - W.heat);
     W.reinT = Math.min(W.reinT, 1.5);
-    this.note(`${foot ? 'You ran' : "You're fleeing"} · lose them or you'll be arrested`);
+    this.note(`${foot ? 'You ran off' : "You're fleeing"} · escape or you'll be arrested`);
   }
   // a patrol car joining the chase (the user: "it isn't realistic how the cars spawn ... they should drive behind you
   // like 5 and maybe like 1 car from the other side"): far back on the roads you came by, out of sight, driving up
@@ -2422,7 +2478,7 @@ export class Police {
     W.scene = { kind, u, why, step: 'pull', t: 0, said: false };
     W.stopT = 0;
     for (const x of this.units) if (x.on) x.ram = false;
-    if (kind === 'fine') this.note('Pulled over · stay where you are');
+    if (kind === 'fine') this.noteUntil = 0; // (the box's own line says it: "Pulled over ✓ · the officer is coming", hudFrame)
     else if (why === 'wrecked') this.note('Your car is wrecked · the police are coming for you');
     else if (why === 'stopped') this.note('Stopped · you are under arrest');
     else if (why === 'held') this.note('Boxed in by the police · you are under arrest');
@@ -2511,7 +2567,7 @@ export class Police {
     if (S.step === 'pull') {
       // pull up: behind your car (8 m), or ~8 m short of you on foot
       let px, pz, face = null;
-      if (T.car) { const P = this.carPoint(T.car, 0.3, -T.car.half - 7.5, this._pt ||= {}); px = P.x; pz = P.z; face = T.car.yaw; }
+      if (T.car) { const P = this.curbSpot(T.car, this._pt ||= {}); px = P.x; pz = P.z; face = T.car.yaw; } // (behind you at the roadside)
       else { this.footGoal(u, T, dt); px = u.fg.x; pz = u.fg.z; } // (on foot: as near you as a car gets, footGoal)
       const g = hyp(u.x, u.z, px, pz);
       this.step(u, dt, px, pz, g < 0.8 ? 0 : clamp(1 + g * 0.9, 0, 16), face);
@@ -2756,19 +2812,25 @@ export class Police {
     let msg, tip = '';
     if (S && S.kind === 'fine') {
       if (S.step === 'back' || S.step === 'done') msg = 'Fine paid · drive safely';
-      else if (S.ask && !S.paid) { msg = `Press ENTER to pay the ${fine} fine`; tip = `Or ${foot ? 'run' : 'drive'} off: a chase, and jail if caught.`; }
-      else { msg = 'Pulled over · the officer is coming'; tip = `Wait here. It's just a ${fine} fine.`; }
+      else if (S.ask && !S.paid) { msg = `Press ENTER to pay the ${fine} fine`; tip = `${foot ? 'Run' : 'Drive'} off instead and it's a chase · jail if caught.`; }
+      else { msg = `${foot ? 'Stopped' : 'Pulled over'} ✓ · the officer is coming`; tip = `Stay put: it's just a ${fine} fine.`; }
     } else if (S) {
       if (decided) { msg = "You're under arrest"; tip = "Stay where you are. You're going to jail."; }
       else if (S.abort) { msg = 'You got away from the officer'; tip = 'Keep going and stay out of sight.'; }
       else { msg = 'An officer is running after you!'; tip = 'Outrun him, or he arrests you.'; }
     } else if (W.search) { msg = 'They lost you · stay out of sight'; tip = 'Stay hidden until the bar fills to escape.'; }
-    else if (W.fleeing) { msg = W.seen ? "You're fleeing · lose them or you'll be arrested" : 'Out of sight · keep going'; tip = W.seen ? 'Break their line of sight to escape.' : 'Stay hidden until the bar fills to escape.'; }
-    else {
+    else if (W.fleeing) { msg = W.seen ? "You're fleeing · escape or you'll be arrested" : 'Out of sight · keep going'; tip = W.seen ? 'Break their line of sight to escape.' : 'Stay hidden until the bar fills to escape.'; }
+    else if (W.pulled) { // (fully stopped at the side of the road: they come to you)
+      msg = `${foot ? 'Stopped' : 'Pulled over'} ✓ · wait for the officer`;
+      tip = `Stay put: it's just a ${fine} fine.`;
+    } else if (!foot && W.haltT > 0.6 && W.side) { // (stopped, but in the lane / on a junction: not pulled over yet)
+      msg = W.side === 'junction' ? "You're on a junction · pull over to the side" : "You're in the middle of the road · pull over to the side";
+      tip = `Move onto the shoulder or a lay-by and stop.\nStay put there and you only pay the ${fine} fine.`;
+    } else {
       const g = W.reached && W.grace > 0 ? ` (${Math.ceil(W.grace)})` : '';
-      msg = foot ? `Police · stay where you are${g}` : `Police · pull over and stop${g}`;
-      tip = foot ? `Wait for the officer: just a ${fine} fine.\nRun off: it's a chase, and jail if caught.`
-        : `Stop at the roadside: just a ${fine} fine.\nDrive off: it's a chase, and jail if caught.`;
+      msg = `Police · ${foot ? 'stay where you are' : 'pull over'}${g}`;
+      tip = foot ? `Stand still and wait for the officer.\nStay put and you only pay the ${fine} fine.\nRun off and they'll chase you · jail if caught.`
+        : `Pull over at the side of the road and stop.\nStay put and you only pay the ${fine} fine.\nDrive off and they'll chase you · jail if caught.`;
     }
     const noting = this.noteUntil > performance.now();
     H.msg = noting ? this.noteText : msg;

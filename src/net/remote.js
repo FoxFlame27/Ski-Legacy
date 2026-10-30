@@ -455,9 +455,11 @@ function benchFor(r, pos) {
 
 // a car seat, not a bench: the legs stretched forward to the footwell (knees up, feet flat on that car's floor ahead),
 // as carpeople.js seats the traffic's drivers (per model: the floor height in front of the front / rear seats) and
-// drive.js seats you (placeRig). In the car's own frame (pitched, rolled with it)
+// drive.js seats you (placeRig). In the car's own frame (pitched, rolled with it). r: { carG, carT, carSeat } (also
+// carride.js: you, riding in someone's car, on your own screen; Oct 30, the user: "the feet of the passenger were
+// stuck out of the car")
 const _q = new THREE.Quaternion(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
-function carLegs(rig, r) {
+export function carLegs(rig, r) {
   const b = rig.b, g = r.carG;
   if (!b?.hips || !b.lUp || !b.rUp || !g) return;
   rig.root.updateMatrixWorld(true);

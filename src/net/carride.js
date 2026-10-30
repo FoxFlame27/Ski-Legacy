@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { MP } from './mode.js';
 import { net } from './client.js';
 import { ST, F, W_SHIFT } from './protocol.js';
-import { makeTag } from './remote.js';
+import { makeTag, carLegs } from './remote.js';
 
 const OWN_TAG_OFF = true;
 import { carSeats, seatWorld, parseVeh } from './vehicles.js';
@@ -278,6 +278,10 @@ export class CarRide {
     this.seat.fwd.set(Math.sin(c.yaw), 0, Math.cos(c.yaw));
     _dv.subVectors(this.seat.pos, _old);
     p.pos.add(_dv); p.rig.root.position.add(_dv);
+    // your legs to this car's footwell, as the others see you (remote.js carLegs): player.js poses you in the plain
+    // 'sit' (a bench's: the shins hung 0.36 m under the seat), so the feet went down through the car's floor and out
+    // under it in a low car (Oct 30, the user: "the feet of the passenger were stuck out of the car")
+    if (p.mode === 'sit' && p.rig?.root) { this.legs ||= {}; this.legs.carG = c.group; this.legs.carT = c.t; this.legs.carSeat = r.seat; carLegs(p.rig, this.legs); }
     g.camera.position.add(_dv);
     if (p.camPos?.isVector3) p.camPos.add(_dv);
     // the cabin lit softly round you, its screens glowing (carlights.js cabinLight: the one cabin light)

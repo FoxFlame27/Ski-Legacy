@@ -475,9 +475,9 @@ body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (
 #police-hud .pl-stars svg.on { fill: var(--blue, #1546c8); animation: pl-star 0.6s cubic-bezier(.2,1.4,.4,1) backwards; }
 #police-hud .pl-title b { display: block; font: italic 700 calc(var(--u) * 56)/0.88 var(--num); letter-spacing: 0.04em; color: #ff4d3d; }
 #police-hud .pl-clock { text-align: right; }
-#police-hud small { display: block; font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim, #4f72d4); white-space: nowrap; }
+#police-hud small { display: block; font: 800 var(--t-xs)/1.15 var(--ui); letter-spacing: 0.12em; color: var(--blue-dim, #4f72d4); }
 #police-hud .pl-t { display: block; margin-top: calc(var(--u) * 3); font: italic 700 calc(var(--u) * 46)/0.9 var(--num); font-variant-numeric: tabular-nums; }
-#police-hud .pl-msg { margin: calc(var(--u) * 12) calc(var(--u) * -10) 0 calc(var(--u) * -8); padding: calc(var(--u) * 8) calc(var(--u) * 20) calc(var(--u) * 9) calc(var(--u) * 16);
+#police-hud .pl-msg { margin: calc(var(--u) * 12) 0 0 0; padding: calc(var(--u) * 8) calc(var(--u) * 20) calc(var(--u) * 9) calc(var(--u) * 16);
   background: var(--blue, #1546c8); color: #fff; clip-path: var(--brush-b); font: italic 700 max(15px, calc(var(--u) * 20))/1.12 var(--num); letter-spacing: 0.03em;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 #police-hud .pl-msg.hot { background: #d0342c; }
@@ -489,10 +489,10 @@ body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (
 #police-hud .pl-bar { height: calc(var(--u) * 16); min-height: 10px; margin-top: calc(var(--u) * 6); background: rgba(21, 70, 200, 0.13); clip-path: var(--brush-b); }
 #police-hud .pl-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #1546c8, #3d7bff); transition: width 0.25s linear; }
 #police-hud.gain .pl-bar i { animation: pl-pulse 0.9s ease-in-out infinite; }
-#police-hud .pl-sub { margin-top: calc(var(--u) * 9); align-items: center; }
+#police-hud .pl-sub { margin-top: calc(var(--u) * 9); align-items: center; flex-wrap: wrap; row-gap: calc(var(--u) * 6); } /* (the cars and the distance wrap instead of running out of the box) */
 #police-hud .pl-cars { display: flex; gap: calc(var(--u) * 6); }
 #police-hud .pl-cars svg { width: calc(var(--u) * 36); height: calc(var(--u) * 18); min-width: 26px; min-height: 13px; fill: var(--blue, #1546c8); }
-#police-hud .pl-near { font: 800 var(--t-sm)/1 var(--ui); letter-spacing: 0.08em; white-space: nowrap; color: #d0342c; }
+#police-hud .pl-near { min-width: 0; margin-left: auto; text-align: right; font: 800 var(--t-sm)/1.15 var(--ui); letter-spacing: 0.06em; white-space: normal; overflow-wrap: anywhere; color: #d0342c; }
 #police-hud.gain .pl-near { color: #129a46; }
 #police-hud.search .pl-stars svg.on { animation: pl-starblink 0.9s steps(1) infinite; }
 #police-hud .pl-chips { display: flex; flex-wrap: wrap; gap: calc(var(--u) * 6); margin-top: calc(var(--u) * 10); }
@@ -2516,15 +2516,15 @@ export class Police {
     H.rb = C.rbs;
     H.radio = this.radioText;
     if (hiding) { // (in a chalet: the box stays up, the escape time runs)
-      H.msg = 'Hiding · the police are still looking for you · stay inside'; H.hot = false;
-      H.esc = C.es; H.frac = W.esc / escS; H.near = "THEY CAN'T FIND YOU"; H.gain = true; H.search = true;
+      H.msg = 'Hiding · stay inside'; H.hot = false;
+      H.esc = C.es; H.frac = W.esc / escS; H.near = "CAN'T FIND YOU"; H.gain = true; H.search = true;
       H.state = 'HIDING'; H.stateCls = 'lost';
       this.setHud(true, H);
       return;
     }
     const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : `Pulled over · stay in the car · ${usd(this.fineNow())} fine`) : 'Under arrest')
-      : W.search ? 'They lost you · stay out of sight · keep moving'
-        : W.fleeing ? (W.seen ? 'Fleeing · break their line of sight · stop to give up' : 'Out of sight · keep going, they are close')
+      : W.search ? 'They lost you · stay out of sight'
+        : W.fleeing ? (W.seen ? 'Fleeing · break their line of sight' : 'Out of sight · keep going')
           : W.reached ? `Pull over now: stop to pay the ${usd(this.fineNow())} fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : `Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`;
     H.msg = this.noteUntil > performance.now() ? this.noteText : msg;
     H.hot = !!((W.fleeing && !W.search) || (S && S.kind === 'arrest'));

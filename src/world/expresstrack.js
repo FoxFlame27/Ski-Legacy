@@ -23,7 +23,7 @@
 //   dusk:        track.setNight(n) (0 day .. 1 night)  /  track.setDay(k) (1 day .. 0 night)
 import * as THREE from 'three';
 import { world } from './world.js';
-import { layout } from './layout.js';
+import { layout, PISTE_WIDTH, onPiste } from './layout.js';
 import { EXPRESS, LENGTH, expressAt, TRACK_OFF, TUBE_H, PORTAL_IN, ringDelta } from './expressroute.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
 import { RailBuilder, railMaterials, canvasTex, mouthFade } from './railtrack.js';
@@ -322,6 +322,8 @@ function buildCatenary(steel, s0, s1, kindAt, wires, cols = null) {
       if (kind === 'station' && layout.express?.stations.some((st) => st.side === sd && Math.abs(ringDelta(st.s, s)) < 32)) continue;
       const lat = kind === 'station' ? 9.6 : MAST_LAT;
       const mx = f.x + f.rx * sd * lat, mz = f.z + f.rz * sd * lat;
+      // (where the line crosses a piste at grade, no mast on its groomed width: the wires span it)
+      if (kind !== 'bridge' && kind !== 'station' && onPiste(mx, mz, 1.5)) continue;
       const foot = kind === 'bridge' ? f.y - DECK : f.y - 0.74;
       const top = f.y + MESS_Y + 0.9;
       // H-section mast (two flanges and a web), a concrete foundation block
@@ -552,7 +554,8 @@ function keepOut() {
   };
   for (const e of KEEP_COURSES) { const T = e.course?.track; if (!T) continue; for (let i = 0; i + 3 < T.n; i += 3) mark(T.X[i], T.Z[i], T.X[i + 3], T.Z[i + 3], 32); }
   for (const l of layout.lifts || []) mark(l.bottom.x, l.bottom.z, l.top.x, l.top.z, 14);
-  for (const p of layout.pistes || []) for (let i = 0; i + 1 < p.pts.length; i++) mark(p.pts[i][0], p.pts[i][1], p.pts[i + 1][0], p.pts[i + 1][1], 14);
+  // (a piste: its whole groomed width and a few metres beyond, Oct 30: no pier on the groomed snow)
+  for (const p of layout.pistes || []) for (let i = 0; i + 1 < p.pts.length; i++) mark(p.pts[i][0], p.pts[i][1], p.pts[i + 1][0], p.pts[i + 1][1], (PISTE_WIDTH[p.diff] ?? 14) + 4);
   KEEP = (x, z) => set.has(Math.floor(x / CELL) * 100000 + Math.floor(z / CELL));
   return KEEP;
 }

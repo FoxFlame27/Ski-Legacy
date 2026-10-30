@@ -407,6 +407,21 @@ export function createTerrainMaterial({ clip = false } = {}) {
           snow *= 0.955 + 0.09 * smoothstep(0.25, 0.75, tRelA);
           snow = mix(snow, vec3(0.85, 0.895, 0.955), smoothstep(0.55, 0.8, n2) * 0.35);
           snow = mix(snow, vec3(0.86, 0.89, 0.93), tGroomed * 0.45);
+          // groomer lanes: the snowcats leave the piste in passes ~5.5 m wide down the fall line, each a shade brighter or
+          // duller than its neighbours (the light catches each pass's corduroy a little differently), with a faint
+          // ridge where two passes meet: the striped look of a freshly groomed run, seen from the lift. The lateral
+          // position comes in the length of the run's direction (Terrain.buildNode: 4 + lat / 50; pads and the far
+          // meshes carry none); band-limited so the lanes fade before they shrink under a couple of pixels.
+          {
+            float gpm = length(vData.zw);
+            float lane = (gpm - 4.0) * 50.0 / 5.5;
+            float lfw = fwidth(lane);
+            float gOn = step(1.5, gpm) * tGroomed * (1.0 - smoothstep(0.25, 0.6, lfw)) * (1.0 - smoothstep(180.0, 520.0, tDist));
+            float li = floor(lane), lf = fract(lane);
+            float lh = fract(sin(li * 12.9898 + 4.1) * 43758.5453);
+            float seam = 1.0 - smoothstep(0.0, 0.035 + lfw * 1.5, min(lf, 1.0 - lf));
+            snow *= 1.0 + ((lh - 0.5) * 0.055 - seam * 0.035) * gOn;
+          }
           vec3 alb = snow;
           tRockN = vec3(0.0);
           tCav = 1.0;
@@ -784,7 +799,10 @@ export class Terrain {
           const g = 1 - Math.min(1, Math.max(0, (c.d + 3) / 6));
           dat[k * 4 + 1] = g;
           dat[k * 4] *= 1 - g;
-          dat[k * 4 + 2] = c.dx; dat[k * 4 + 3] = c.dz;
+          // (the direction's length carries the signed distance from the run's centre line: 4 + lat / 50, so the
+          // shader can lay the groomer's lanes parallel to the run; it normalises the direction where it needs it)
+          const m = 4 + Math.max(-100, Math.min(100, c.lat || 0)) / 50;
+          dat[k * 4 + 2] = c.dx * m; dat[k * 4 + 3] = c.dz * m;
         } else if (c.d < 4) dat[k * 4] = 0;
         // pads (stations, huts, race starts) are packed, groomed snow too
         const pad = world.padInfluence(wx, wz);

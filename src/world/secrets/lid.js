@@ -120,7 +120,8 @@ export function* buildLidSteps({ bounds, clip = null, keep = clip ? [clip] : [],
       world.corridorAt(x, z, corr);
       if (corr.groomed) {
         const gr = 1 - Math.min(1, Math.max(0, (corr.d + 3) / 6));
-        d[1] = gr; d[0] *= 1 - gr; d[2] = corr.dx; d[3] = corr.dz;
+        const m = 4 + Math.max(-100, Math.min(100, corr.lat || 0)) / 50; // (as Terrain.buildNode: the groomer lanes' lateral position)
+        d[1] = gr; d[0] *= 1 - gr; d[2] = corr.dx * m; d[3] = corr.dz * m;
       } else if (corr.d < 4) d[0] = 0;
       const pad = world.padInfluence(x, z);
       if (pad > 0.02 && pad > d[1]) { d[1] = Math.min(1, pad * 1.5); d[0] = 0; if (!d[2] && !d[3]) d[2] = 1; }

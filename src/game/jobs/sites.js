@@ -9,7 +9,7 @@ import { BOARD } from './props.js';
 export const CLIFF = Math.tan((40 * Math.PI) / 180); // nothing ever sits on ground steeper than 40 deg
 export const LEVEL = 0.16;    // boards and hand-over points: you stop and stand here
 export const SIDEHILL = 0.5;  // piste-side spots (injured skier, lost items): ~27 deg at most
-const PISTE_W = [24, 20, 16, 14]; // groomed half-width by difficulty (as in layout.js)
+const PISTE_W = [26, 23, 18, 16]; // groomed half-width by difficulty (as in layout.js PISTE_WIDTH)
 const STATION = { gondola: 14, chair: 8 }; // station building length (lifts.js)
 const RIDE = { gondola: 12, chair: 4.5 }; // cable speed m/s (lifts.js)
 export const VILLAGE = { x: 0, z: -4 };

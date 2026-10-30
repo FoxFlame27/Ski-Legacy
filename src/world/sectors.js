@@ -149,6 +149,7 @@ export function buildSectors(kit) {
   // (the bowls and the reshaped areas go into the crag mask: no rock bands on them or within 40 m of them)
   layout.bowls = [...BOWLS, ...AREAS.map((a) => ({ ...a, area: true }))];
   if (globalThis.process?.env?.NOBENCH) return;
+  for (const p of [...pistesA, ...pistesB]) p.benched = true; // (graded here: layout.js gradeRuns grades the others)
   // then the runs themselves: each one graded like a built piste (see pisteBench)
   // (the gentlest first: where a steeper run crosses an easier one it takes the easier one's level, never the reverse)
   const order = ['Talweg', 'Hirschweg', 'Kammweg', 'Höhenweg', 'Almrausch', 'Murmeltier', 'Kammabfahrt', 'Ostkar', 'Steinbock', 'Kamin'];

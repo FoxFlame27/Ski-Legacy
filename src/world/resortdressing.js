@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from './world.js';
-import { layout, PISTE_WIDTH, cannonSpots, VILLAGE_BUILDINGS } from './layout.js';
+import { layout, PISTE_WIDTH, cannonSpots, VILLAGE_BUILDINGS, groomedClearance } from './layout.js';
 import { fitModel, bakeGeometry } from '../core/assets.js';
 import { drawnHeight } from './settle.js';
 import { hash2 } from '../core/noise.js';
@@ -886,8 +886,8 @@ function buildSignposts(group, colliders, index, nets, models) {
       if (accA.at(-1) - sa < 120) continue;
       const accB = arcLengths(b.pts), q = sampleAt(b.pts, accB, Math.max(0, accB.at(-1) - 50));
       const [ax, az] = ahead(a, sa, 70);
-      // on the run's edge on the side the joined run continues to, 3 m in from the groomed edge
-      const rx = -q.dz, rz = q.dx, side = (ax - q.x) * rx + (az - q.z) * rz >= 0 ? 1 : -1, off = PISTE_WIDTH[b.diff] - 3;
+      // beside the run on the side the joined run continues to, just outside its groomed edge
+      const rx = -q.dz, rz = q.dx, side = (ax - q.x) * rx + (az - q.z) * rz >= 0 ? 1 : -1, off = PISTE_WIDTH[b.diff] + 2.5;
       const x = q.x + rx * side * off, z = q.z + rz * side * off;
       if (!sites.some((t) => Math.hypot(t.x - x, t.z - z) < 50)) sites.push({ x, z, facing: Math.atan2(-q.dx, -q.dz), boards: [{ piste: a, toward: [ax, az] }], junction: true });
       break;
@@ -898,7 +898,22 @@ function buildSignposts(group, colliders, index, nets, models) {
     const x = 20, z = 12;
     sites.push({ x, z, facing: Math.atan2(4 - x, 34 - z), boards: ways.map((w) => ({ cells: w.cells, toward: [w.x, w.z], order: -w.z })), way: true });
   }
-  // a sign never stands in a net: step it toward its run
+  // a sign never stands on the groomed snow (Oct 30, the user: "no objects in the middle of the pistes"): a post that
+  // would is moved to the nearest spot beside the runs (2 m clear of every groomed edge, out of the nets, off the pads);
+  // then a sign never stands in a net: step it toward its run
+  const offPiste = (x, z) => groomedClearance(x, z) >= 2 && index.clearance(x, z) >= 2 && !nets.near(x, z, 2.5) && world.padInfluence(x, z) < 0.3;
+  for (const site of sites) {
+    if (site.way || offPiste(site.x, site.z)) continue;
+    let best = null;
+    for (let r = 2; r <= 40 && !best; r += 2) {
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2, x = site.x + Math.cos(a) * r, z = site.z + Math.sin(a) * r;
+        if (offPiste(x, z)) { best = [x, z]; break; }
+      }
+    }
+    if (best) { site.x = best[0]; site.z = best[1]; } else site.drop = true;
+  }
+  for (let i = sites.length - 1; i >= 0; i--) if (sites[i].drop) sites.splice(i, 1);
   for (const site of sites) {
     for (let k = 0; k < 4 && nets.near(site.x, site.z, 2.5); k++) { site.x += Math.sin(site.facing) * 2; site.z += Math.cos(site.facing) * 2; }
   }
@@ -996,8 +1011,10 @@ function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage, co
   const spots = [];
   for (const p of layout.pistes) {
     if (p.lane) continue; // the nets mark a lane's edges
-    const acc = arcLengths(p.pts), L = acc.at(-1), w = PISTE_WIDTH[p.diff] + 0.1;
-    // every ~25 m down both edges, just inside the fence line (Oct 29: the user couldn't tell where the runs go)
+    const acc = arcLengths(p.pts), L = acc.at(-1), w = PISTE_WIDTH[p.diff] + 0.6;
+    // every ~25 m down both edges, just outside the groomed width and inside the fence line (Oct 29: the user couldn't
+    // tell where the runs go; Oct 30: nothing stands on the groomed snow), Alpine style: the right-hand pole (looking
+    // downhill) with an orange top, the left one all in the piste's colour
     const step = 25, n = Math.floor((L - 40) / step);
     for (let k = 0; k <= n; k++) {
       const s = 20 + k * step + ((k * 7) % 5) * 0.4 - 0.8; // a slightly irregular rhythm, like hand-set poles
@@ -1007,6 +1024,7 @@ function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage, co
         const x = q.x + rx * w * side, z = q.z + rz * w * side;
         if (inVillage(x, z) || nearStation(x, z, 40) || nearCannon(x, z, 3.5)) continue;
         if (index.clearance(x, z, p) < 1.5) continue; // inside another piste
+        if (groomedClearance(x, z) < 0.4) continue; // on a groomed path / pad apron, or inside its own run's bend
         if (world.padInfluence(x, z) > 0.05) continue;
         if (nets.near(x, z, 0.8)) continue; // a hazard net stands right here (the nets stand 1.1 m further out)
         world.corridorAt(x, z, _corr);

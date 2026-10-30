@@ -2,9 +2,12 @@
 // terrain park, ski-bus stops and where the safety nets go. Everything is deterministic from the seed, so
 // the infinite world always regenerates identically.
 import { world, MAIN_SUMMIT, MASSIFS, valleyCenter } from './world.js';
-import { mulberry32, hash2, clamp } from '../core/noise.js';
+import { mulberry32, hash2, clamp, smoothstep } from '../core/noise.js';
 import { buildTransport, buildLegacyPeak, buildHochalm } from './transport.js';
 import { buildSectors } from './sectors.js';
+import { gradePistes } from './pistegrade.js';
+import { expressNearest } from './expressroute.js';
+import { railNearest } from './railroute.js';
 
 export const DIFFICULTY = [
   { key: 'easy', label: 'Easy', color: '#2fbf5b', maxSlope: 0.30, length: 520, gates: 34, reward: 600, botSkill: 0.78, entry: 0 },
@@ -12,8 +15,9 @@ export const DIFFICULTY = [
   { key: 'hard', label: 'Hard', color: '#e23b3b', maxSlope: 0.62, length: 1050, gates: 30, reward: 3200, botSkill: 0.95, entry: 150 },
   { key: 'expert', label: 'Expert', color: '#141414', maxSlope: 0.85, length: 1350, gates: 32, reward: 4700, botSkill: 0.99, entry: 300 },
 ];
-// groomed half-width of a piste by difficulty (also used by the snow cannons and piste markers)
-export const PISTE_WIDTH = [24, 20, 16, 14];
+// groomed half-width of a piste by difficulty (also used by the snow cannons and piste markers): 52 / 46 / 36 / 32 m
+// wide (Oct 30: wider runs, the blues and greens the widest)
+export const PISTE_WIDTH = [26, 23, 18, 16];
 
 const ADJ = ['Glacier', 'Eagle', 'Black Pine', 'Thunder', 'Crystal', 'Wolf', 'Edelweiss', 'Avalanche', 'Silver', 'Frost', 'Summit', 'Storm', 'Alpenglow', 'Ibex', 'Powder', 'Granite', 'North Face', 'Kandahar'];
 const NOUN = ['Run', 'Couloir', 'Descent', 'Cup', 'Challenge', 'Slalom', 'Derby', 'Trophy', 'Classic', 'Dash', 'Chute', 'Line'];
@@ -950,6 +954,92 @@ function placeTowers() {
   }
 }
 
+// ---------- nothing on the runs ----------
+// (Oct 30, the user: "make sure they ... have no objects in the middle".) After the towers have moved off the runs
+// where they could (placeTowers), a tower still standing on or right beside a run makes the run swing round it: the
+// line is pushed away from the tower over a smooth bulge (a cosine window a few hundred metres long) until its groomed
+// edge clears the tower by TOWER_CLEAR m (within 40 m of a run's end, by a station, the run starts / ends short of
+// the tower instead), and a run whose end would lie in a building (a mountain hut, the Wolkenplatt station house on
+// the glacier) starts / ends short of it. Then the corridors follow the new lines, and the towers' padding is decided
+// again.
+const TOWER_CLEAR = 7;
+function setCorridor(p) {
+  for (const [k, arr] of world.corridorGrid) {
+    const kept = arr.filter((sg) => sg.meta !== p);
+    if (kept.length !== arr.length) { if (kept.length) world.corridorGrid.set(k, kept); else world.corridorGrid.delete(k); }
+  }
+  world.addCorridor(p.pts, PISTE_WIDTH[p.diff], 'piste', p);
+}
+function clearPistes() {
+  const towers = layout.lifts.flatMap((l) => l.towers);
+  // (a run graded in sectors.js is only moved while its bench is still unbuilt: the bench reads the same points)
+  const benchBuilt = world.cuts.some((c) => c.shaper && c.runs && c.runs.length);
+  const stats = { shifted: 0, towers: 0, trimmed: 0 };
+  for (const p of layout.pistes) {
+    if (p.benched && benchBuilt) continue;
+    const w = PISTE_WIDTH[p.diff], P = p.pts.map((q) => [q[0], q[1]]);
+    let moved = false;
+    for (let pass = 0; pass < 4; pass++) {
+      const acc = arcLengths(P), L = acc.at(-1);
+      let any = false;
+      for (const t of towers) {
+        let best = Infinity, bi = 0, cx = 0, cz = 0;
+        for (let i = 1; i < P.length; i++) {
+          const [ax, az] = P[i - 1], [bx, bz] = P[i];
+          if (Math.abs(ax - t.x) > w + 40 && Math.abs(bx - t.x) > w + 40) continue;
+          const ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, u = clamp(((t.x - ax) * ex + (t.z - az) * ez) / l2, 0, 1);
+          const qx = ax + ex * u, qz = az + ez * u, d = Math.hypot(qx - t.x, qz - t.z);
+          if (d < best) { best = d; bi = i; cx = qx; cz = qz; }
+        }
+        const need = w + TOWER_CLEAR + 0.5 - best;
+        if (need <= 0.25) continue;
+        const sb = acc[bi - 1] + Math.hypot(cx - P[bi - 1][0], cz - P[bi - 1][1]);
+        if (sb < 40 || L - sb < 40) continue; // (by a station: the end is trimmed, below)
+        // away from the tower (or, right over it, to the side of the run's line)
+        let dx = cx - t.x, dz = cz - t.z, dl = Math.hypot(dx, dz);
+        if (dl < 0.5) { const [ax, az] = P[bi - 1], [bx, bz] = P[bi], sl = Math.hypot(bx - ax, bz - az) || 1; dx = -(bz - az) / sl; dz = (bx - ax) / sl; dl = 1; }
+        dx /= dl; dz /= dl;
+        const R = Math.min(90 + need * 5, sb - 10, L - sb - 10);
+        for (let j = 1; j < P.length - 1; j++) {
+          const o = Math.abs(acc[j] - sb);
+          if (o >= R) continue;
+          const f = 0.5 * (1 + Math.cos((Math.PI * o) / R)) * need * 1.05;
+          P[j][0] += dx * f; P[j][1] += dz * f;
+        }
+        any = moved = true; stats.towers++;
+      }
+      if (!any) break;
+    }
+    // a run's ends never lie in a building (the mountain huts, the Wolkenplatt station house) or round a tower it
+    // couldn't swing round there (by a station)
+    const keep = [...layout.huts.map((h) => [h.x, h.z, 13]), ...layout.peaks.filter((pk) => pk.station).map((pk) => [pk.station.x, pk.station.z, 24]),
+      ...towers.map((t) => [t.x, t.z, TOWER_CLEAR])];
+    const inside = (q) => keep.some(([x, z, r]) => Math.hypot(q[0] - x, q[1] - z) < r + w);
+    let a = 0, b = P.length;
+    while (b - a > 12 && inside(P[b - 1])) b--;
+    while (b - a > 12 && inside(P[a])) a++;
+    if (a > 0 || b < P.length) { stats.trimmed++; moved = true; }
+    if (!moved) continue;
+    const Q = P.slice(a, b);
+    p.pts.length = 0; p.pts.push(...Q); // (in place: everything holding the line sees the new one)
+    setCorridor(p);
+    stats.shifted++;
+  }
+  // the towers' padding, against the final lines
+  const runs = layout.pistes.map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] }));
+  for (const t of towers) {
+    let c = Infinity;
+    for (const r of runs) for (let i = 1; i < r.pts.length; i++) {
+      const q0 = r.pts[i - 1], q1 = r.pts[i];
+      if (Math.abs(q0[0] - t.x) > r.w + 60 || Math.abs(q0[1] - t.z) > r.w + 60) continue;
+      c = Math.min(c, segDist(t.x, t.z, q0[0], q0[1], q1[0], q1[1]) - r.w);
+    }
+    t.pad = c < 6;
+  }
+  layout.pisteClear = stats;
+  setCragMask(); // (the crag-free strips follow the moved lines)
+}
+
 // ---------- the Valley Gondola's mid-station race ----------
 // Every gondola stop has a race starting a short walk from where riders step out: the mountains lay theirs
 // out with their pistes (stop races), the Valley Gondola's mid-station is only placed with the other late
@@ -1045,6 +1135,25 @@ function setCragMask() {
   world.pads.forEach((p, i) => { const dh = world.baseHeight(p.x, p.z) - before[i]; if (Math.abs(dh) > 0.005) p.h += dh; });
 }
 
+// ---------- piste grading ----------
+// Every run not graded elsewhere (sectors.js grades the Hirschalm / Ostkar runs) gets an even, capped profile, level
+// across its groomed width (+4 m), with snow banks back to the natural ground (pistegrade.js). The gentlest are graded
+// first: where a steeper run meets an easier one, it takes the easier one's level.
+const _near = {};
+function gradeRuns() {
+  const runs = layout.pistes.filter((p) => !p.benched && p.pts.length > 3).map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 4, diff: p.diff, name: p.name }));
+  runs.sort((a, b) => a.diff - b.diff);
+  const locks = layout.pistes.filter((p) => p.benched).map((p) => ({ pts: p.pts, w: PISTE_WIDTH[p.diff] + 4 }));
+  // (where a run crosses the Legacy Express or the Wolkenspitzbahn it keeps the ground: the lines, their crossings,
+  // bridges and portals were fitted to it)
+  const pinAt = (x, z) => {
+    const e = expressNearest(x, z, _near), ed = e ? e.d : Infinity;
+    const r = railNearest(x, z, _near), rd = r ? r.d : Infinity;
+    return Math.max(1 - smoothstep(30, 60, ed), 1 - smoothstep(20, 45, rd));
+  };
+  world.addCut(gradePistes(runs, locks, pinAt));
+}
+
 // ---------- Legacy Park (terrain park on the upper Legacy Valley; meshes in park.js) ----------
 // The park runs straight down the valley's fall line from its drop-in at PARK_P0.
 const PARK_P0 = { x: -265, z: 340 };
@@ -1119,19 +1228,69 @@ function buildPark() {
   layout.park = park;
 }
 
+// ---------- clearance from the groomed snow ----------
+// Signed distance (m) from (x, z) to the nearest groomed corridor's edge (pistes, races, groomed paths and pad aprons;
+// not the cleared strips under the lifts), < 0 inside; `skip`: a piste whose own corridor doesn't count.
+export function groomedClearance(x, z, skip = null) {
+  const arr = world.corridorGrid.get(Math.floor(x / 64) + ',' + Math.floor(z / 64));
+  let best = 1e9;
+  if (!arr) return best;
+  for (let i = 0; i < arr.length; i++) {
+    const s = arr[i];
+    if (s.kind === 'lift' || (skip && s.meta === skip)) continue;
+    const d = segDist(x, z, s.ax, s.az, s.bx, s.bz) - s.w;
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// is (x, z) on (or within `margin` m of) a named piste's groomed width?
+export function onPiste(x, z, margin = 0) {
+  const arr = world.corridorGrid.get(Math.floor(x / 64) + ',' + Math.floor(z / 64));
+  if (arr) for (let i = 0; i < arr.length; i++) {
+    const s = arr[i];
+    if (s.kind === 'piste' && s.meta && segDist(x, z, s.ax, s.az, s.bx, s.bz) - s.w < margin) return true;
+  }
+  return false;
+}
+
 // ---------- snow cannons (village.js builds them beside the pistes; others keep clear of them) ----------
-export function cannonSpots() {
+// One every ~28 points down each piste, alternating sides, outside the groomed edge (3-8 m beyond it) on its levellest
+// spot there (a cannon stands on its lowest wheel, never with one end hanging over the slope), and never on another
+// run, a groomed path or a pad, at a station or in the village plaza. Planned once (the first call: the nets break for
+// them), so every user sees the same cannons. [{ x, z, yaw }]
+let cannonPlan = null;
+export function cannonSpotsFull() {
+  if (cannonPlan) return cannonPlan;
   const spots = [];
+  const stations = layout.lifts.flatMap((l) => [l.bottom, l.top, ...(l.mid ? [l.mid] : [])]);
   for (const piste of layout.pistes) {
     if (piste.lane) continue; // a lane is lined with nets
     for (let i = 20; i < piste.pts.length - 10; i += 28) {
       const [ax, az] = piste.pts[i], [bx, bz] = piste.pts[i + 1];
-      const l = Math.hypot(bx - ax, bz - az) || 1, w = PISTE_WIDTH[piste.diff] + 3;
-      spots.push([ax - ((bz - az) / l) * w, az + ((bx - ax) / l) * w]);
+      const l = Math.hypot(bx - ax, bz - az) || 1, ux = (bx - ax) / l, uz = (bz - az) / l;
+      const side = (i / 28) % 2 ? 1 : -1, w = PISTE_WIDTH[piste.diff] + 3, yaw = Math.atan2(ux, uz) + side * 1.2;
+      const cy = Math.cos(yaw), sy = Math.sin(yaw);
+      let best = null;
+      for (const along of [0, -6, 6, -12, 12]) for (const out of [0, 2.5, 5]) {
+        const x = ax + ux * along - uz * (w + out) * side, z = az + uz * along + ux * (w + out) * side;
+        if (x * x + z * z < 160 * 160 || groomedClearance(x, z) < 2.2 || world.padInfluence(x, z) > 0.05) continue;
+        if (stations.some((st) => Math.abs(st.x - x) < 40 && Math.abs(st.z - z) < 40 && Math.hypot(st.x - x, st.z - z) < 40)) continue;
+        // the snow under its wheels and frame (~2.6 m footprint)
+        let lo = Infinity, hi = -Infinity;
+        for (const fx of [-1.3, 0, 1.3]) for (const fz of [-1.3, 0, 1.3]) {
+          const h = world.height(x + fx * cy + fz * sy, z - fx * sy + fz * cy);
+          lo = Math.min(lo, h); hi = Math.max(hi, h);
+        }
+        const cost = hi - lo + (Math.abs(along) + out) * 0.01;
+        if (!best || cost < best.cost) best = { x, z, yaw, lo, hi, cost };
+      }
+      if (best && best.hi - best.lo <= 1.1) spots.push({ x: best.x, z: best.z, yaw: best.yaw });
     }
   }
-  return spots;
+  return (cannonPlan = spots);
 }
+export function cannonSpots() { return cannonSpotsFull().map((c) => [c.x, c.z]); }
 
 // ---------- safety nets ----------
 // Where a run borders a real hazard, a run of net stands just outside its groomed edge (1.2 m beyond it)
@@ -1341,6 +1500,15 @@ function planNets() {
   // drop any piste hazard run that duplicates an arena or lane fence (that course / lane runs over the piste)
   const fences = layout.nets.filter((n) => n.arena || n.lane);
   layout.nets = layout.nets.filter((n) => n.arena || n.lane || !fences.some((a) => nearLine(n.line, a.line, 6)));
+  // no net on any run's groomed width (a short gap closed across another run's corner): split there, drop stubs
+  const split = [];
+  for (const n of layout.nets) {
+    let part = [];
+    const flush = () => { if (part.length * NET_STEP >= 20) split.push({ ...n, line: part }); part = []; };
+    for (const q of n.line) { if (onPiste(q[0], q[1], -0.3)) flush(); else part.push(q); }
+    flush();
+  }
+  layout.nets = split;
   netKit = { sampleRun, cannons, runSamples };
   // a narrow tree-free strip just outside every net (so no trunk or branch stands in it)
   for (const net of layout.nets) {
@@ -1798,6 +1966,8 @@ export function initLayout() {
   step('midStations', planMidStations);
   step('valleyMidRace', buildValleyMidRace);
   step('towers', placeTowers);
+  step('pisteClear', clearPistes);       // nothing stands on a run: it swings round lift towers, ends short of buildings
+  step('pisteGrade', gradeRuns);         // every run graded like a real groomed piste (pistegrade.js), before any terrain is built
   step('arenas', planArenas);
   step('nets', planNets);
   planBusStops();

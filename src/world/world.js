@@ -393,9 +393,10 @@ class World {
     }
   }
 
-  // Returns signed info about the nearest corridor: { d: distance minus half-width, kind, dx, dz }
-  corridorAt(x, z, out = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false }) {
-    out.d = 1e9; out.kind = null; out.groomed = false;
+  // Returns signed info about the nearest corridor: { d: distance minus half-width, kind, dx, dz, lat: signed distance
+  // from its centre line (+ = right of it, looking along dx, dz) }
+  corridorAt(x, z, out = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false, lat: 0 }) {
+    out.d = 1e9; out.kind = null; out.groomed = false; out.lat = 0;
     const arr = this.corridorGrid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
     if (!arr) return out;
     for (let i = 0; i < arr.length; i++) {
@@ -409,6 +410,7 @@ class World {
         out.d = d; out.kind = s.kind;
         const il = 1 / Math.sqrt(l2);
         out.dx = ex * il; out.dz = ez * il;
+        out.lat = (ex * (s.az - z) - ez * (s.ax - x)) * il;
         out.groomed = s.kind !== 'lift';
       }
     }

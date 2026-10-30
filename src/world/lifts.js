@@ -331,7 +331,14 @@ class LiftLine {
         m.y += w.d / Math.max(m === a ? 1 - t : t, 0.25) + 0.4;
         continue;
       }
-      const u = clamp(w.u, lo, hi);
+      let u = clamp(w.u, lo, hi);
+      // (never on a run's groomed snow: the nearest spot along the span that stands clear of every run, if any)
+      if (nearRun(this.B.x + this.dir.x * u, this.B.z + this.dir.z * u) < 6) {
+        for (let d = 4; d <= 80; d += 4) {
+          const v = [u + d, u - d].find((q) => q >= lo && q <= hi && nearRun(this.B.x + this.dir.x * q, this.B.z + this.dir.z * q) >= 6);
+          if (v !== undefined) { u = v; break; }
+        }
+      }
       // its top: the rope clears the ground around it, and lifts the low spot (when the tower can't stand on it)
       let y = groundNear(u, 8) + c.carH + this.needAt(u) + 1.2;
       const ref = w.u < u ? a : b, tt = Math.abs(w.u - ref.u) / Math.max(1e-3, Math.abs(u - ref.u));

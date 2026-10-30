@@ -5,6 +5,7 @@ import { fitModel, bakeGeometry, makeLOD, clusterDecimate } from '../core/assets
 import { Snowmaking } from './snowmaking.js';
 import { drawnHeight } from './settle.js';
 import { addStreetLamps } from './pistelights.js';
+import { cannonSpotsFull } from './layout.js';
 
 export const nightUniform = { value: 0 };
 
@@ -281,25 +282,13 @@ export class Village {
         }
         return [lo, hi];
       };
+      // (where they go is planned with the layout, outside the groomed width and off every other run: layout.js
+      // cannonSpotsFull; here each stands on its lowest wheel as the snow is drawn)
       const spots = [];
-      for (const piste of layout.pistes) {
-        if (piste.lane) continue; // a ski lane is lined with nets (layout.cannonSpots skips it too)
-        for (let i = 20; i < piste.pts.length - 10; i += 28) {
-          const [ax, az] = piste.pts[i], [bx, bz] = piste.pts[i + 1];
-          const l = Math.hypot(bx - ax, bz - az) || 1, ux = (bx - ax) / l, uz = (bz - az) / l;
-          const side = (i / 28) % 2 ? 1 : -1;
-          const w = [24, 20, 16, 14][piste.diff] + 3, yaw = Math.atan2(ux, uz) + side * 1.2;
-          // the levellest bit of the piste's edge near here (along it, or a little further out): a cannon stands
-          // on its lowest wheel, never with one end hanging over the slope
-          let best = null;
-          for (const along of [0, -6, 6, -12, 12]) for (const out of [0, 2.5, 5]) {
-            const x = ax + ux * along - uz * (w + out) * side, z = az + uz * along + ux * (w + out) * side;
-            const [lo, hi] = under(x, z, yaw), cost = hi - lo + (Math.abs(along) + out) * 0.01;
-            if (!best || cost < best.cost) best = { x, z, lo, hi, cost };
-          }
-          if (best.hi - best.lo > 1.1) continue; // nowhere level enough here: no cannon
-          spots.push({ x: best.x, z: best.z, y: best.lo - 0.06, yaw });
-        }
+      for (const q of cannonSpotsFull()) {
+        const [lo, hi] = under(q.x, q.z, q.yaw);
+        if (hi - lo > 1.3) continue; // (nowhere level enough here: no cannon)
+        spots.push({ x: q.x, z: q.z, y: lo - 0.06, yaw: q.yaw });
       }
       const inst = new THREE.InstancedMesh(c.geometry, c.material, spots.length);
       const d = new THREE.Object3D();

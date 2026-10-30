@@ -5,6 +5,7 @@
 // (kit.meshGround) or on a flattened pad, nothing floats.
 import * as THREE from 'three';
 import { world } from '../../world/world.js';
+import { layout } from '../../world/layout.js';
 import { fitModel, makeLOD } from '../../core/assets.js';
 import { mulberry32, smoothstep } from '../../core/noise.js';
 import { MeshBuilder, tint, vcMaterial, canvasTexture, bannerTexture, footprintMin, footprintMax, meshGround, clearMeshGround, FONT, BLUE } from './kit.js';
@@ -95,7 +96,7 @@ export function buildPisteRaceMeshes(course, models = {}) {
   const props = new THREE.Group();
   props.name = 'props';
   const dye = new DyeBuilder();
-  buildStart(course, models, props, dye);
+  buildStart(course, models, props, dye, { inward: true });
   buildCheckpoints(course, props, dye);
   buildGates(course, props, dye);
   const T = course.track, fs = course.finishS;
@@ -255,7 +256,7 @@ function inflatableArch(T, s, text, { color = BLUE, band = '#ffffff', sub = 'SKI
 }
 
 // ------------------------------------------------------------------ start
-function buildStart(course, models, group, dye) {
+function buildStart(course, models, group, dye, { inward = false } = {}) {
   const T = course.track, H = course.startHouse;
   const yaw = H.heading;
   // Seat the house by its real depth: the open front sits on H.front (just behind the start line, clear
@@ -325,13 +326,87 @@ function buildStart(course, models, group, dye) {
     g.fillStyle = BLUE; g.fillRect(0, Hh - 26, W, 26);
   });
   const sb = course.start.s + 20, w0 = T.sAt(T.W, sb);
-  const spot = gentleSpot(T, sb, [side * (w0 + 3.2), -side * (w0 + 3.2), side * (w0 + 5)], 2.4, 0.5, 0.8);
+  const lats = [side * (w0 + 3.2), -side * (w0 + 3.2), side * (w0 + 5)];
+  // (Oct 30 2026, the user, at the Valley Classic's start: "move this more to the right so it is not in the
+  // fence". The board stood w0 + 3.2 m off the smoothed course line, which put it right on the piste fence 1.2 m
+  // beyond the real groomed edge, half of it sunk into the net. Now its footprint (board width + 1 m) is checked
+  // against every piste fence / hazard net (layout.nets): on a piste race it slides sideways toward the piste
+  // centre until it stands 1 m clear, never closer than beside the slalom openings (10.5 m off the line + half
+  // the board: it stays beside the start, off the racing line); on a World Racing course, whose own nets bound the
+  // track, it steps outward instead. It keeps its side and faces the gate the same way.)
+  const yawOf = (p, lat) => p.heading + Math.PI - Math.sign(lat) * 0.5;
+  const minLat = 10.5 + bw / 2 + 0.3, maxLat = w0 + 3.2 + 8;
+  const placed = (lat) => {
+    const dir = inward ? -Math.sign(lat) : Math.sign(lat);
+    for (let l = lat; Math.abs(l) >= minLat && Math.abs(l) <= maxLat; l += dir * 0.25) {
+      const p = T.pointAt(sb, l);
+      if (fenceClearance(p.x, p.z, yawOf(p, l), bw / 2 + 0.06) >= 1) return l;
+    }
+    return null;
+  };
+  let spot = null;
+  for (const maxDrop of [0.8, 1.6]) {
+    for (const lat0 of lats) {
+      const l = placed(lat0);
+      if (l !== null) spot = gentleSpot(T, sb, [l], 2.4, 0.5, maxDrop);
+      if (spot) break;
+    }
+    if (spot) break;
+  }
+  spot ||= gentleSpot(T, sb, lats, 2.4, 0.5, 0.8); // (nowhere clear: the old spots)
   if (spot) {
     const board = signBoard(tex, bw, bh, 1.2);
     board.position.set(spot.x, spot.ground - 0.05, spot.z);
-    board.rotation.y = spot.heading + Math.PI - Math.sign(spot.lat) * 0.5; // faces the racers at the gate
+    board.rotation.y = yawOf(spot, spot.lat); // faces the racers at the gate
     group.add(board);
   }
+}
+
+// The piste fences and hazard nets (layout.nets lines, posts every ~2 m) as segments in a 32 m grid, built once
+// the fences are planned (rebuilt if layout.nets changes).
+let fenceGrid = null, fenceGridOf = null, fenceGridN = -1;
+const FG = 32;
+function fenceSegs() {
+  const nets = layout.nets || [];
+  if (fenceGrid && fenceGridOf === nets && fenceGridN === nets.length) return fenceGrid;
+  fenceGrid = new Map(); fenceGridOf = nets; fenceGridN = nets.length;
+  for (const n of nets) {
+    const L = n.line;
+    if (!L || L.length < 2) continue;
+    for (let i = 1; i < L.length; i++) {
+      const ax = L[i - 1][0], az = L[i - 1][1], bx = L[i][0], bz = L[i][1];
+      for (let gx = Math.floor(Math.min(ax, bx) / FG); gx <= Math.floor(Math.max(ax, bx) / FG); gx++) {
+        for (let gz = Math.floor(Math.min(az, bz) / FG); gz <= Math.floor(Math.max(az, bz) / FG); gz++) {
+          const k = gx + ',' + gz;
+          if (!fenceGrid.has(k)) fenceGrid.set(k, []);
+          fenceGrid.get(k).push(ax, az, bx, bz);
+        }
+      }
+    }
+  }
+  return fenceGrid;
+}
+// how far (m) a board of half-width hw centred on (x, z), turned to yaw (its face along local x), stands from
+// the nearest piste fence / net (Infinity: none within ~30 m)
+function fenceClearance(x, z, yaw, hw) {
+  const grid = fenceSegs(), ux = Math.cos(yaw), uz = -Math.sin(yaw);
+  let best = Infinity;
+  const gx0 = Math.floor((x - hw - 4) / FG), gx1 = Math.floor((x + hw + 4) / FG), gz0 = Math.floor((z - hw - 4) / FG), gz1 = Math.floor((z + hw + 4) / FG);
+  for (let gx = gx0; gx <= gx1; gx++) for (let gz = gz0; gz <= gz1; gz++) {
+    const segs = grid.get(gx + ',' + gz);
+    if (!segs) continue;
+    for (let j = 0; j < segs.length; j += 4) {
+      const ax = segs[j], az = segs[j + 1], bx = segs[j + 2], bz = segs[j + 3], dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
+      // the board's width sampled every ~0.3 m against the segment
+      for (let k = -8; k <= 8; k++) {
+        const px = x + ux * hw * (k / 8), pz = z + uz * hw * (k / 8);
+        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / L2));
+        const d = Math.hypot(px - ax - dx * t, pz - az - dz * t);
+        if (d < best) best = d;
+      }
+    }
+  }
+  return best;
 }
 
 // Open-ended timber start shelter (camera-friendly: no back wall), anthracite roof with snow load,

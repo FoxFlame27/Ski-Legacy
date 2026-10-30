@@ -459,7 +459,7 @@ const STAR = '<svg viewBox="0 0 24 24"><path d="M12 1.8l3.1 6.6 7.1.9-5.2 4.9 1.
 const CSS = `
 #police-hud { position: absolute; left: 22px; bottom: 92px; box-sizing: border-box; width: max(300px, calc(var(--u) * 390)); padding: calc(var(--u) * 14) calc(var(--u) * 34) calc(var(--u) * 20) calc(var(--u) * 28);
   color: var(--blue, #1546c8); pointer-events: none; isolation: isolate; filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 14) rgba(0, 20, 60, 0.3));
-  animation: pl-in 0.45s cubic-bezier(.2,.9,.2,1) backwards; }
+  animation: pl-in 0.45s cubic-bezier(.2,.9,.2,1) backwards; zoom: 0.92; } /* (zoom: a touch smaller, Oct 30, the user) */
 #police-hud[hidden] { display: none; }
 /* (white paper with a gently ragged edge in u, as the controls card: the % brush is too torn at this size) */
 #police-hud::before { content: ''; position: absolute; inset: 0; z-index: -1; background: #fff;

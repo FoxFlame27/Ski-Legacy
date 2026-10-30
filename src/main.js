@@ -8,6 +8,8 @@ import '@fontsource/barlow-condensed/700-italic.css';
 import { installHeightFog } from './engine/fog.js';
 import { Post } from './engine/post.js';
 import { PropDetail } from './engine/detail.js';
+import { instanceStatic } from './engine/merge.js'; // (repeated static props -> instanced)
+import { installLazyHiddenMatrices } from './engine/matrices.js'; // (hidden groups skip the per-frame world-matrix pass)
 import { world } from './world/world.js';
 import { layout, initLayout, planPisteFences } from './world/layout.js';
 import { Terrain, terrainUniforms } from './world/terrain.js';
@@ -78,7 +80,7 @@ import { SunGlare } from './world/sunglare.js';
 import { PisteLights } from './world/pistelights.js'; // static: installs its light-pool shader chunk before any material compiles
 import { Headlamp } from './world/headlamp.js';
 import { SKIS, PRICES, save, loadSave, writeSave, resetSave, skiById } from './game/economy.js';
-import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, screenDPR, QUALITY_LABELS } from './engine/quality.js';
+import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, screenDPR, QUALITY_LABELS, QUALITY_ORDER } from './engine/quality.js';
 import { PersonalBests } from './game/bests.js';
 import { TrailMap } from './ui/trailmap.js';
 import { PhotoMode } from './ui/photomode.js';
@@ -99,6 +101,7 @@ let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
 let bests = null; // personal-best cards in free ride (top speed, longest jump, milestones)
 
 installHeightFog();
+installLazyHiddenMatrices();
 loadSave();
 
 const canvas = document.getElementById('game');
@@ -109,6 +112,9 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 if (save.qualitySet !== 'user' || !normalizeQuality(save.quality)) {
   const d = detectQuality(renderer);
   save.quality = d.quality;
+  // (a lower preset the frame rate needed last time: start there, see autoQ)
+  const cap = normalizeQuality(save.qualityCap);
+  if (cap && QUALITY_ORDER.indexOf(cap) < QUALITY_ORDER.indexOf(d.quality)) { save.quality = cap; d.quality = `${cap} (capped by the last session)`; }
   save.qualitySet = 'auto';
   console.info(`Graphics: ${d.quality} (detected: ${d.gpu || 'unknown GPU'}, ${d.mem} GB, ${d.cores} cores)`);
   writeSave();
@@ -468,6 +474,9 @@ async function boot() {
   }
   // props onto the ground as drawn, now that every terrain edit is in (world/settle.js: no floating downhill sides)
   if (new URLSearchParams(location.search).has('settle')) console.info('Props settled', JSON.stringify(settleProps([village.group, decor.group, dressing, jobs.group]))); // (off until checked in game: ?settle)
+  // (performance pass) the village decor's repeated Meshy props (benches, barrels, bins, fences, lamps...) as one
+  // instanced mesh per model part: dozens of draw calls fewer in the village (engine/merge.js)
+  try { const r = instanceStatic(decor.group); console.info('Decor instanced:', JSON.stringify(r)); } catch (e) { console.warn('decor instancing', e); }
   // nothing drawn can be walked, skied or driven through: colliders for whatever part of a village building or prop no
   // collider covered yet (porches, balconies, stairs, annexes, sheds, stall and bench ends...: world/solidify.js), in
   // slices after the boot; the doors and counters you walk up to stay clear (the chalets are left to chalets.js)
@@ -475,12 +484,14 @@ async function boot() {
     const lot = (name) => scene.getObjectByName(name);
     const H = busRoads.hospital, hosp = H ? [{ x: H.ex, z: H.ez }, { x: H.ex + (H.dirx || 0) * 2, z: H.ez + (H.dirz || 0) * 2 }] : []; // (its door step, where you come round)
     const doors = [...village.interactables, carRental?.door, prison?.door, ...hosp].filter(Boolean).map((d) => ({ x: d.x, z: d.z, r: 1.2 }));
+    if (sleds) sleds.collidersReady = false; // (the parked snowmobiles are placed once these are in: game/snowmobile.js)
     solidifyIdle([
       { root: village.group, area: 'village', tiles: true }, { root: decor.group, area: 'village decor', tiles: true }, { root: dressing, area: 'resort dressing' },
       { root: lot('medical-centre'), area: 'medical centre' }, { root: lot('car-rental'), area: 'Autohaus' }, { root: prison?.group, area: 'police station' },
       { root: parking?.group, area: 'car parks' }, { root: skibus?.group, area: 'bus stops' }, { root: jobs?.group, area: 'job boards' },
-    ], colliders, { keepOut: doors }).then((r) => console.info('Solid props: +' + r.added + ' colliders', JSON.stringify(r.areas))).catch((e) => console.warn('solid props', e));
-  }  // graphics preset for the hand-placed props (LOD distances, small-on-screen culling, shadow range)
+    ], colliders, { keepOut: doors }).then((r) => console.info('Solid props: +' + r.added + ' colliders', JSON.stringify(r.areas))).catch((e) => console.warn('solid props', e)).finally(() => { if (sleds) sleds.collidersReady = true; });
+  }
+  // graphics preset for the hand-placed props (LOD distances, small-on-screen culling, shadow range)
   const own = new Set([terrain.group, backdrop.group, pisteLights.group, player.rig.root, player.rig.gear, seller.root, seller.gear]);
   for (const o of scene.children) if ((o.isGroup || o.isMesh) && !own.has(o) && !o.isInstancedMesh) propDetail.add(o);
   // the one-off outfit zone analysis of both player bodies runs behind the loading bar (no hitch on MAN / WOMAN)
@@ -488,6 +499,7 @@ async function boot() {
   setLoad(0.95, 'Compiling shaders…');
   env.update(0.016, camera, player.pos);
   player.update(0.016);
+  propDetail.sweepLights(scene); // (the lighter presets' point lights off before the shaders compile: engine/detail.js)
   renderer.compile(scene, camera);
   setLoad(1, 'Ready');
   player.rigChar = save.character;
@@ -1736,7 +1748,7 @@ function updateDynRes(dt) {
   dynRes.low = fps < quality.fpsDrop ? dynRes.low + 1 : 0;
   dynRes.high = fps > quality.fpsRaise ? dynRes.high + 1 : 0;
   let pr = dynRes.pr;
-  if (dynRes.low >= 2) pr -= fps < quality.fpsDrop * 0.7 ? 0.25 : 0.125;
+  if (dynRes.low >= 2 || (dynRes.low >= 1 && fps < quality.fpsDrop * 0.6)) pr -= fps < quality.fpsDrop * 0.7 ? 0.25 : 0.125; // (a very slow second: at once)
   else if (dynRes.high >= 4) pr += 0.125;
   else return;
   dynRes.low = dynRes.high = 0;
@@ -1768,24 +1780,45 @@ function applyQuality(name, persist = true) {
 
 // The first seconds of play: averaging under 30 fps drops one preset (live, with a note), then measures again,
 // for up to a minute. Not when the player picked the level in SETTINGS (or in automated tests).
-const autoQ = { t: 0, frames: 0, windows: 0, done: !!navigator.webdriver };
-function updateAutoQuality(dt) {
-  if (autoQ.done) return;
-  if (save.qualitySet === 'user') { autoQ.done = true; return; }
-  autoQ.t += dt;
-  if (autoQ.t < 2) return; // streaming and shader warm-up
-  autoQ.frames++;
-  if (autoQ.t < 12) return;
-  const fps = autoQ.frames / (autoQ.t - 2), lower = lowerQuality(quality.name);
-  if (fps < 30 && lower) {
-    applyQuality(lower, false);
-    hud.flash(`Graphics set to ${QUALITY_LABELS[lower]} for a smoother frame rate`, 'good', 3600);
-    console.info(`Graphics: ${fps.toFixed(1)} fps -> ${lower}`);
-  }
-  autoQ.t = 0; autoQ.frames = 0;
-  if (fps >= 30 || !lower || ++autoQ.windows >= 4) autoQ.done = true;
+// (Oct 30, performance pass: "still very slow on some machines": it reacts sooner (5 s windows after a 3 s warm-up),
+// a very slow first window (under 22 fps) drops two presets at once, the target is ~60 fps (under 40 drops one), and
+// after the first minute a slow watchdog keeps going (20 s windows, with dynamic resolution already at its floor). The
+// lowest preset it had to go to is remembered (save.qualityCap) so the next launch starts there; a smooth window at
+// that level (58+ fps) lifts the cap again.)
+const autoQ = { t: 0, frames: 0, windows: 0, done: !!navigator.webdriver, watch: 0 };
+function autoDrop(fps, steps) {
+  let to = quality.name;
+  for (let i = 0; i < steps; i++) to = lowerQuality(to) || to;
+  if (to === quality.name) return false;
+  applyQuality(to, false);
+  if (save.qualitySet !== 'user') { save.qualityCap = to; writeSave(); }
+  hud.flash(`Graphics set to ${QUALITY_LABELS[to]} for a smoother frame rate`, 'good', 3600);
+  console.info(`Graphics: ${fps.toFixed(1)} fps -> ${to}`);
+  return true;
 }
-window.addEventListener('blur', () => { autoQ.t = 0; autoQ.frames = 0; }); // a hidden window says nothing about speed
+function updateAutoQuality(dt) {
+  if (save.qualitySet === 'user') { autoQ.done = true; return; }
+  if (autoQ.done) { // the watchdog: a long slow stretch later on (a heavier part of the world) still drops one preset
+    if (navigator.webdriver) return;
+    autoQ.watch += dt; autoQ.frames++;
+    if (autoQ.watch < 20) return;
+    const fps = autoQ.frames / autoQ.watch;
+    autoQ.watch = 0; autoQ.frames = 0;
+    if (fps < 26 && dynRes.pr <= dynRes.min + 0.01) autoDrop(fps, 1);
+    else if (fps >= 58 && save.qualityCap === quality.name) { save.qualityCap = null; writeSave(); }
+    return;
+  }
+  autoQ.t += dt;
+  if (autoQ.t < 3) return; // streaming and shader warm-up
+  autoQ.frames++;
+  if (autoQ.t < 8) return;
+  const fps = autoQ.frames / (autoQ.t - 3);
+  const dropped = fps < 40 && autoDrop(fps, fps < 22 ? 2 : 1);
+  autoQ.t = 0; autoQ.frames = 0;
+  if (!dropped || ++autoQ.windows >= 5) { autoQ.done = true; autoQ.watch = 0; autoQ.frames = 0; }
+  if (!dropped && fps >= 58 && save.qualityCap === quality.name) { save.qualityCap = null; writeSave(); }
+}
+window.addEventListener('blur', () => { autoQ.t = 0; autoQ.frames = 0; autoQ.watch = 0; }); // a hidden window says nothing about speed
 
 // Menus stay instant: the paused world is frozen (re-rendered 4x/s only, so at full resolution: no blurry world
 // behind the pause menu) and the title panorama runs at ~30 fps at up to 1.5x, so hovers and clicks never wait
@@ -2123,7 +2156,7 @@ function loopUpdate() {
     startHouse = modes.group?.getObjectByName('start-house') || null;
     if (modes.group) propDetail.add(modes.group);
   }
-  propDetail.update(camera);
+  propDetail.update(camera, scene);
   if (startHouse) startHouse.visible = Math.hypot(camera.position.x - startHouse.position.x, camera.position.z - startHouse.position.z) > 4.2;
   mark('propdetail');
   backdrop.update(dt, camera, env);

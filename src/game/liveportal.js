@@ -13,8 +13,11 @@
 // Only ONE live window view runs at a time: claimPortal(owner) frees the previous owner's render target (you are
 // only ever in one interior); every room's renderPortal claims it before drawing.
 import * as THREE from 'three';
+import { quality } from '../engine/quality.js';
 
 let owner = null;
+/** Live window views allowed by the graphics preset (Super Performance: the soft day / night sky instead). */
+export function portalsOn() { return quality.portals !== false; }
 /** The interior about to draw its live window view: the one before it (if another) lets go of its render target. */
 export function claimPortal(o) {
   if (owner && owner !== o) { try { owner.releasePortal?.(); } catch (e) { console.warn('live window release', e); } }
@@ -71,6 +74,7 @@ export class LivePortal {
   render(r, camera, frame) {
     const o = this.world, U = this.material.uniforms;
     if (this.off || !o || !frame || !r?.render) return;
+    if (!portalsOn()) { if (this.rt) this.releasePortal(); return; }
     camera.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     if (!this.meshes.some((m) => m.visible && _frustum.intersectsBox(_box.setFromObject(m)))) return; // (no window in view)

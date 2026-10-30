@@ -2,11 +2,46 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { quality } from '../engine/quality.js';
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
 const cache = new Map();
 const BASE = './models/';
+
+// Texture budget per graphics preset (Oct 30, performance pass): the Meshy models come with 2048 px maps (2.4 GB of
+// GPU memory if every model were drawn at full size: 8 GB Macs lost the WebGL context). Maps larger than the preset's
+// texCap are downscaled once while loading (High / Ultra keep them as they are; base colour gets one step more than
+// the normal / roughness maps, which read the same smaller). Anisotropic filtering likewise by preset.
+const MAPS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
+const shrunk = new WeakSet();
+async function shrinkTexture(tex, cap) {
+  const img = tex?.image;
+  if (!img || shrunk.has(tex) || typeof createImageBitmap !== 'function') return;
+  const w = img.width || 0, h = img.height || 0;
+  if (Math.max(w, h) <= cap) return;
+  shrunk.add(tex);
+  const k = cap / Math.max(w, h);
+  try {
+    const small = await createImageBitmap(img, { resizeWidth: Math.max(1, Math.round(w * k)), resizeHeight: Math.max(1, Math.round(h * k)), resizeQuality: 'high', premultiplyAlpha: 'none', colorSpaceConversion: 'none', imageOrientation: 'none' });
+    tex.image = small;
+    tex.needsUpdate = true;
+    img.close?.(); // (the full-size decode freed at once)
+  } catch { /* keeps the full map */ }
+}
+async function budgetTextures(g) {
+  const cap = quality.texCap || 0, an = quality.aniso || 16, jobs = [];
+  g.scene.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    for (const m of [].concat(o.material)) for (const k of MAPS) {
+      const t = m[k];
+      if (!t) continue;
+      t.anisotropy = an;
+      if (cap) jobs.push(shrinkTexture(t, k === 'map' || k === 'emissiveMap' ? cap : Math.max(256, cap / 2)));
+    }
+  });
+  if (jobs.length) await Promise.all(jobs);
+}
 
 export function loadGLB(name, onProgress) {
   if (!cache.has(name)) {
@@ -18,15 +53,15 @@ export function loadGLB(name, onProgress) {
             o.receiveShadow = true;
             if (o.material) {
               o.material.envMapIntensity = 1;
-              // max anisotropic filtering on every PBR map keeps surfaces crisp at grazing angles
-              for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) {
+              // anisotropic filtering on every PBR map keeps surfaces crisp at grazing angles (16x on High / Ultra)
+              for (const k of MAPS) {
                 if (o.material[k]) o.material[k].anisotropy = 16;
               }
             }
           }
         });
         g.modelName = name; // lets ski code apply per-model frames (player/skier.js)
-        resolve(g);
+        budgetTextures(g).catch(() => {}).then(() => resolve(g));
       }, onProgress, (err) => {
         console.warn('Missing model', name, err?.message || err);
         resolve(null);
@@ -140,14 +175,24 @@ function lowGeometry(geo, frac) {
   return byFrac.get(frac);
 }
 
-// THREE.LOD: full Meshy detail within `near` meters, a decimated copy beyond.
+/** A decimated copy of a (Meshy) geometry, cached: frac = cluster cell as a fraction of its largest dimension. */
+export function decimatedGeometry(geo, frac) { return lowGeometry(geo, frac); }
+
+// THREE.LOD: full Meshy detail within `near` meters, a decimated copy beyond, and (performance pass) a much coarser
+// one from FAR_K x near on (the buildings seen across the valley: a station / hotel was still 30-60k triangles at
+// 1 km; the far copy is a few thousand and nobody can tell at that size).
+const FAR_K = 3, FAR_FRAC = 4;
 export function makeLOD(gltf, opts, near = 140, frac = 0.025) {
   const hi = fitModel(gltf, opts);
   const lo = hi.clone(true);
   lo.traverse((o) => { if (o.isMesh) { o.geometry = lowGeometry(o.geometry, frac); o.castShadow = false; } });
+  const far = hi.clone(true);
+  far.traverse((o) => { if (o.isMesh) { o.geometry = lowGeometry(o.geometry, Math.min(0.12, Math.max(0.05, frac * FAR_FRAC))); o.castShadow = false; } });
   const lod = new THREE.LOD();
   lod.addLevel(hi, 0);
   lod.addLevel(lo, near);
+  lod.addLevel(far, near * FAR_K);
+  lod.userData.solidLevel = 1; // (world/solidify.js takes its footprints from the middle copy)
   lod.userData.size = hi.userData.size;
   lod.autoUpdate = true;
   return lod;

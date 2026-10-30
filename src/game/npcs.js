@@ -402,7 +402,13 @@ export class NPCs {
       }
       w.pos.y = world.height(w.pos.x, w.pos.z);
       w.rig.root.position.copy(w.pos);
-      w.rig.update(dt, { mode: w.speed > 0.1 ? 'walk' : 'idle', heading: w.heading, speed: w.speed, crouch: 0, lean: 0, plow: 0, normal: UP });
+      // animation LOD as the skiers' (performance pass): walkers further off pose at a lower rate
+      const wd = w.pos.distanceTo(playerPos);
+      w.animAcc = (w.animAcc || 0) + dt;
+      if (wd < animNear || w.animAcc > (wd < animNear * 2.5 ? 0.06 : 0.12)) {
+        w.rig.update(w.animAcc, { mode: w.speed > 0.1 ? 'walk' : 'idle', heading: w.heading, speed: w.speed, crouch: 0, lean: 0, plow: 0, normal: UP });
+        w.animAcc = 0;
+      }
     }
     // people near you, for the player's collisions (positions only: the player bumps off them softly)
     const near = this.near;

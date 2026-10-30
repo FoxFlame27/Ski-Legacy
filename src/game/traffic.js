@@ -22,6 +22,7 @@ import { setPlates } from './carconfig.js';
 import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 import { carPath, linkPath, prepPath, followPath } from './carpath.js';
+import { quality } from '../engine/quality.js'; // (Super Performance: fewer cars around you, quality.traffic)
 
 const N_CARS = 12, N_SCENIC = 6, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
@@ -341,9 +342,10 @@ export class Traffic {
         }
         // about six cars on the roads around you (the rest stay spread over the network)
         let near = this.cars.filter((c) => !c.scenic && c.mode !== 'gone' && Math.hypot(c.x - p.x, c.z - p.z) < 420).length;
+        const nearWant = Math.max(2, Math.round(NEAR_WANT * (quality.traffic ?? 1)));
         for (const c of this.cars) {
           if (c.scenic) continue;
-          if (near >= NEAR_WANT) break;
+          if (near >= nearWant) break;
           const d = Math.hypot(c.x - p.x, c.z - p.z);
           if ((c.mode === 'gone' || d > 520) && !this.inSight(c.x, c.z) && this.recycle(c)) near++;
         }
@@ -356,7 +358,7 @@ export class Traffic {
       this.blk = trafficBlockers();
       if (this.enabled && this.blk.length) this.shoveOff(this.blk);
       const glow = night > 0.18 ? Math.min(1, night * 1.4) : 0;
-      const lodR = glow > 0 ? 110 : LOD_R, lit = [], tails = []; // (at night the detailed cars, with their lamps, further out)
+      const lodR = (glow > 0 ? 110 : LOD_R) * (quality.carLod ?? 1), lit = [], tails = []; // (at night the detailed cars, with their lamps, further out; quality.carLod: nearer on the lighter presets)
       this.tailPools ||= [];
       for (const c of this.cars) {
         if (c.sinkT !== undefined) { c.sinkT += dt; c.g.position.y -= dt * 1.8; if (c.sinkT > 0.8) { if (c.toLot) this.toLot(c); else this.despawn(c); } continue; }

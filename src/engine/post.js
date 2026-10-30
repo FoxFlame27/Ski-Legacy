@@ -242,6 +242,7 @@ export class Post {
     this.scene = scene;
     this.camera = camera;
     this.worldScene = scene;
+    renderer.shadowMap.autoUpdate = true; // (a preset change: the old chain may have left it to its every-other-frame rule)
     const size = renderer.getDrawingBufferSize(_size);
     this.useAO = quality.ao > 0;
     this.target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: quality.msaa });
@@ -331,6 +332,16 @@ export class Post {
     u.uTime.value = (u.uTime.value + dt) % 1000;
     u.toneMappingExposure.value = r.toneMappingExposure;
 
+    // the sun's shadow map on the lighter presets (quality.shadow.every): redrawn every other frame while the view
+    // stays put (walking about, standing, looking round), every frame once it moves on (skiing, driving)
+    const every = quality.shadow.every || 1;
+    if (every > 1 && this.scene === this.worldScene) {
+      this.shadowTick = (this.shadowTick || 0) + 1;
+      const moved = !this.shadowAt || this.shadowAt.distanceToSquared(cam.position) > 0.09;
+      r.shadowMap.autoUpdate = false;
+      r.shadowMap.needsUpdate = moved || this.shadowTick % every === 0;
+      if (r.shadowMap.needsUpdate) (this.shadowAt ||= new THREE.Vector3()).copy(cam.position);
+    } else if (this.shadowTick !== undefined) r.shadowMap.autoUpdate = true; // (an interior's own lights / another preset)
     r.setRenderTarget(this.target);
     r.render(this.scene, cam);
 

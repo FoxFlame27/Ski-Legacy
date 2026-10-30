@@ -960,7 +960,7 @@ function buildSignposts(group, colliders, index, nets, models) {
   // the signposts themselves: the Meshy square larch pole (sign_pole, metal cap) stretched to each post's height,
   // 13 cm thick, one instanced draw for the resort
   if (poles.length && models.sign_pole) {
-    const pg = bakeGeometry(models.sign_pole, { size: 1, axis: 'y' });
+    const pg = bakeGeometry(models.sign_pole, { size: 1, axis: 'y', decimate: 0.02 }); // (performance pass: 7.7k -> 3.9k triangles a pole, ~75 of them)
     const k = 0.13 / Math.max(pg.size.x, pg.size.z);
     const inst = new THREE.InstancedMesh(pg.geometry, pg.material, poles.length);
     poles.forEach((q, i) => inst.setMatrixAt(i, mat4(q.x, q.y, q.z, q.yaw, 0, 0, k, q.h, k)));
@@ -1374,7 +1374,7 @@ function buildTerraces(group, colliders, models, index) {
   }
   // the Meshy deck chair (striped canvas on a beech frame, facing +z like the terrace rows), one instanced draw
   if (!chairs.length || !models.deck_chair) return;
-  const dc = bakeGeometry(models.deck_chair, { size: 0.95, axis: 'y' });
+  const dc = bakeGeometry(models.deck_chair, { size: 0.95, axis: 'y', decimate: 0.028 }); // (performance pass: 12k -> ~4k triangles a chair, ~50 of them)
   if (!dc.geometry) return;
   const deck = new THREE.InstancedMesh(dc.geometry, dc.material, chairs.length);
   deck.name = 'deckchairs';

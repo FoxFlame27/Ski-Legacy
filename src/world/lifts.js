@@ -7,6 +7,8 @@ import { bakeGeometry, makeLOD, fitModel, dequantize, clusterDecimate } from '..
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { drawnHeight } from './settle.js';
 
+const CAR_HI = 32; // m: lift cars in full Meshy detail within this (a lighter copy out to 110 m, the light one beyond)
+
 const CFG = {
   gondola: { stationH: 7.5, side: 3.4, spacing: 240, clearance: 16, speed: 18, carGap: 64, carH: 3.1, model: 'gondola_cabin', seatDrop: 2.5, stationSize: 14 },
   chair: { stationH: 5.2, side: 2.6, spacing: 115, clearance: 9, speed: 8, carGap: 28, carH: 3.2, model: 'chairlift_chair', seatDrop: 2.78, stationSize: 8 },
@@ -402,7 +404,7 @@ class LiftLine {
     // gondola cabins stay full detail (you ride inside them); chairs get a light LOD
     // cars: full Meshy detail near the player, a light decimated version for the rest of the line
     const hi = bakeGeometry(models[c.model], { size: c.carH, axis: 'y' });
-    const lo = bakeGeometry(models[c.model], { size: c.carH, axis: 'y', decimate: 0.05 });
+    const lo = bakeGeometry(models[c.model], { size: c.carH, axis: 'y', decimate: 0.08 }); // (beyond 110 m: 2.6k triangles a cabin, was 4.1k at 0.05)
     if (hi.geometry) {
       hi.geometry.computeBoundingBox?.();
       const bb = hi.geometry.boundingBox;
@@ -417,6 +419,10 @@ class LiftLine {
       };
       this.carNear = mk(hi, true);
       this.carFar = mk(lo, false);
+      // (performance pass) a middle tier: the full Meshy cabin (57k triangles) only within CAR_HI m (the one you ride
+      // in, the station you stand at), a 5x lighter copy (no shadow) out to the near range, the light one beyond
+      const mid = bakeGeometry(models[c.model], { size: c.carH, axis: 'y', decimate: 0.02 });
+      if (mid.geometry) this.carMid = mk(mid, false);
     }
     this.scene.add(group);
   }
@@ -537,7 +543,7 @@ class LiftLine {
 
   update(dt, timeScale, viewer, T = null) {
     const d = this.tmp;
-    let nNear = 0, nFar = 0;
+    let nNear = 0, nFar = 0, nMid = 0;
     if (T !== null) this.placeAt(T); // (multiplayer: from the shared timeline)
     for (let i = 0; i < this.cars.length; i++) {
       const car = this.cars[i];
@@ -553,13 +559,17 @@ class LiftLine {
         // gentle swing (steady while crawling through a station)
         d.rotation.z = Math.sin(car.s * 0.15 + i) * 0.025 * (this.inStation(car.s) ? 0.2 : 1);
         d.updateMatrix();
-        const near = !viewer || this.carPos[i].distanceToSquared(viewer) < 110 * 110;
-        if (near) this.carNear.setMatrixAt(nNear++, d.matrix); else this.carFar.setMatrixAt(nFar++, d.matrix);
+        const d2 = viewer ? this.carPos[i].distanceToSquared(viewer) : 0;
+        const near = d2 < 110 * 110;
+        if (near && (d2 < CAR_HI * CAR_HI || !this.carMid)) this.carNear.setMatrixAt(nNear++, d.matrix);
+        else if (near) this.carMid.setMatrixAt(nMid++, d.matrix);
+        else this.carFar.setMatrixAt(nFar++, d.matrix);
       }
     }
     if (this.carNear) {
       this.carNear.count = nNear; this.carFar.count = nFar;
       this.carNear.instanceMatrix.needsUpdate = true; this.carFar.instanceMatrix.needsUpdate = true;
+      if (this.carMid) { this.carMid.count = nMid; this.carMid.instanceMatrix.needsUpdate = true; }
     }
   }
 

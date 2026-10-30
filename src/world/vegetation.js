@@ -469,8 +469,13 @@ export class Vegetation {
     const R = Math.ceil(farR / CELL);
     const pcx = Math.floor(px / CELL), pcz = Math.floor(pz / CELL);
     let missing = 0, generated = 0;
+    // (performance pass: every cell in reach was there last frame and you are still in the same cell: no scan of the
+    // ~2400 cell keys, which made that many strings a frame)
+    const scanKey = pcx * 100003 + pcz + farR * 7.1e9;
+    const settled = this.scanKey === scanKey && this.scanDone;
+    if (!settled) this.scanKey = scanKey;
     // spiral-ish: near cells first
-    for (let ring = 0; ring <= R; ring++) {
+    for (let ring = 0; ring <= R && !settled; ring++) {
       for (let i = -ring; i <= ring; i++) for (let j = -ring; j <= ring; j++) {
         if (Math.max(Math.abs(i), Math.abs(j)) !== ring) continue;
         if ((i * i + j * j) * CELL * CELL > farR * farR) continue;
@@ -481,12 +486,13 @@ export class Vegetation {
         generated++;
       }
     }
+    if (!settled) this.scanDone = missing === 0;
     if (generated || Math.hypot(px - this.lastRebuild.x, pz - this.lastRebuild.y) > 14) {
       this.lastRebuild.set(px, pz);
       this.rebuild(px, pz);
     }
     // evict very far cells
-    if (this.cells.size > 4000) {
+    if (this.cells.size > 4000 && !settled) { // (only as you move on: it walks every key)
       for (const key of this.cells.keys()) {
         const [cx, cz] = key.split(',').map(Number);
         if (Math.hypot(cx - pcx, cz - pcz) * CELL > FAR_R * 1.6) this.cells.delete(key);

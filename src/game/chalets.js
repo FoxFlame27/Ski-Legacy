@@ -22,7 +22,7 @@ import { world } from '../world/world.js';
 import { layout } from '../world/layout.js';
 import { busRoads } from './bus/roads.js';
 import { chaletLampSpots, driveHeight, driveDistance, DRIVE_W } from './bus/chaletroad.js';
-import { loadGLB, fitModel, clusterDecimate } from '../core/assets.js';
+import { loadGLB, fitModel, clusterDecimate, decimatedGeometry } from '../core/assets.js';
 import { addNightGlow, nightUniform } from '../world/village.js';
 import { addStreetLamps } from '../world/pistelights.js';
 import { HX, HZ, G, DOOR, MODEL, FOOT, STEPS, IX, IZ } from './chaletplan.js';
@@ -444,7 +444,8 @@ export class Chalets {
       add(post.clone(), x, y + (FENCE_H + 0.1) / 2, z, yaw, 0xb89c74);
     }
     const stone = new THREE.CylinderGeometry(0.27, 0.29, 0.08, 9);
-    this.items.filter((i) => i.kind === 'stone').forEach((s, i) => add(stone.clone(), s.x, s.y - 0.01, s.z, s.spin, 0x8f9296, 1, 1, 0.8 + 0.2 * hash(i)));
+    // (on the drawn snow: where its 2 m triangles lie over the exact ground, a stone set on that was buried)
+    this.items.filter((i) => i.kind === 'stone').forEach((s, i) => add(stone.clone(), s.x, Math.max(s.y, world.meshHeight(s.x, s.z)) - 0.01, s.z, s.spin, 0x8f9296, 1, 1, 0.8 + 0.2 * hash(i)));
     const mpost = new THREE.BoxGeometry(0.09, 1.0, 0.09), mbox = new THREE.BoxGeometry(0.34, 0.26, 0.3), mroof = new THREE.BoxGeometry(0.38, 0.03, 0.34);
     for (const b of this.items.filter((i) => i.kind === 'mailbox')) {
       add(mpost.clone(), b.x, b.y + 0.5, b.z, b.yaw, 0x6b4a2b);
@@ -723,6 +724,7 @@ export class Chalets {
   }
 
   setInstance(i, hidden) {
+    if (this.lodSplit) { this.farT = 0; return; } // (near / far sets: re-sorted on the next update, the full model's house left out)
     if (!this.inst || i < 0) return;
     for (const im of this.inst) { im.setMatrixAt(i, hidden ? ZERO : _m.multiplyMatrices(im.userData.mats[i], im.userData.local)); im.instanceMatrix.needsUpdate = true; }
   }
@@ -868,6 +870,7 @@ export class Chalets {
       this.windows.material.opacity = Math.min(1, n * 1.3);
     }
     if (!this.inst) return;
+    this.farLod(); // (performance pass: the 80-odd houses decimated while you are well away from the village)
     if (this.inside) return; // (the house stays as it was when you went in)
     const p = this.player?.pos;
     if (!p) return;
@@ -882,6 +885,43 @@ export class Chalets {
       return;
     }
     this.showHi(best);
+  }
+  // (performance pass) the houses' instanced chalet_lo is ~20k triangles a house (~1M for the village, all drawn
+  // whenever any of it is in view, shadows too): houses over 110 m from you are drawn from a decimated copy
+  // instead (a second instanced set, ~6.5k, no shadow). Re-sorted twice a second and whenever the full model moves.
+  farLod() {
+    const p = this.player?.pos;
+    if (!p || !this.inst?.length || (this.farT = (this.farT || 0) - 1) > 0) return;
+    this.farT = 30;
+    try {
+      if (!this.instFar) {
+        this.instFar = this.inst.map((im) => {
+          const f = new THREE.InstancedMesh(decimatedGeometry(im.geometry, 0.035), im.material, im.count);
+          f.castShadow = false; f.receiveShadow = true; f.count = 0; f.name = 'chalet-lo-far';
+          if (!im.boundingSphere) im.computeBoundingSphere();
+          f.boundingSphere = im.boundingSphere.clone(); // (the whole village, as the near set's)
+          im.parent.add(f);
+          return f;
+        });
+        this.lodSplit = true;
+      }
+      const R2 = 110 * 110, H = this.houses;
+      let n = 0, f = 0;
+      for (let i = 0; i < H.length; i++) {
+        if (i === this.hiAt) continue; // (the full model stands there)
+        const q = H[i].frame.position, near = (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < R2;
+        for (let k = 0; k < this.inst.length; k++) {
+          const im = this.inst[k], M = _m.multiplyMatrices(im.userData.mats[i], im.userData.local);
+          if (near) im.setMatrixAt(n, M); else this.instFar[k].setMatrixAt(f, M);
+        }
+        if (near) n++; else f++;
+      }
+      for (let k = 0; k < this.inst.length; k++) {
+        const im = this.inst[k], fm = this.instFar[k];
+        im.count = n; fm.count = f;
+        im.instanceMatrix.needsUpdate = true; fm.instanceMatrix.needsUpdate = true; // (the near set keeps the whole village's bounding sphere from instance())
+      }
+    } catch (e) { console.warn('chalets: far LOD', e); this.lodSplit = false; }
   }
   // the full model, as it comes (its own materials and textures: nothing tinted or cut); it casts no shadow of its
   // own (538k triangles): a stand-in of the low model's shape does, invisible in the picture

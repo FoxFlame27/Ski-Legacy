@@ -7,19 +7,41 @@
 //  - performance: ~60 fps on an M1 MacBook Air (1440 x 900): no MSAA, no bloom / AO, small shadows, shorter reach
 //  - balanced:    2x MSAA, bloom, medium shadows
 //  - high / ultra: 4x MSAA, the full cinematic look (ambient occlusion, broadcast grade, snow sparkle)
+//  - super (SUPER PERFORMANCE, Oct 30, the user: "add a super performance mode that is supeeerrr!!!! optimized"): for
+//    8 GB MacBook Airs and old Intel Macs. ~0.6x render scale, no MSAA / shadows / bloom / AO (only the one cheap
+//    final pass: tone map + a light grade), no live window views, a short draw distance behind thicker haze,
+//    the lowest terrain detail, thin forests, few skiers / walkers / fans, a little snowfall, small textures.
+//    Physics and gameplay are untouched (the same for everyone).
+// Extra fields: portals (false: no live window views), texCap (largest model colour map side, applied while loading;
+// normal / roughness maps get half; absent = as authored), aniso (anisotropic filtering, absent = 16x), traffic
+// (share of the road traffic kept, absent = all), carLod (x the distance cars switch to their one-piece LOD), pointLights (false: none in the world).
 
-export const QUALITY_ORDER = ['performance', 'balanced', 'high', 'ultra'];
-export const QUALITY_LABELS = { performance: 'Performance', balanced: 'Balanced', high: 'High', ultra: 'Ultra' };
+export const QUALITY_ORDER = ['super', 'performance', 'balanced', 'high', 'ultra'];
+export const QUALITY_LABELS = { super: 'Super Performance', performance: 'Performance', balanced: 'Balanced', high: 'High', ultra: 'Ultra' };
 const LEGACY = { low: 'performance', medium: 'balanced' }; // saves from before the presets
 
 export const PRESETS = {
+  super: {
+    scale: 0.6, prCap: 1.25, dynMin: 0.5, dynFloor: 0.5, fpsDrop: 52, fpsRaise: 58,
+    msaa: 0, composer: false, bloom: false, ao: 0, shafts: false, grade: 1, portals: false,
+    shadow: { size: 0, extent: 40, soft: true, terrainCast: 0, propDist: 0 }, // (soft as the others: no shadow-type recompile)
+    terrain: { lodK: 1.15, detail: 0 },
+    veg: { closeR: 12, nearR: 50, farR: 420, maxFar: 6000, rockR: 80, nearShadow: false },
+    clouds: 60, flakes: 2500, crystals: 0,
+    lights: { lit: 3, obj: 2, nearLod: 55, farLod: 600, beamR: 0 },
+    npcs: { skiers: 3, walkers: 1, animNear: 25 },
+    props: { cull: 0.022, shadowDist: 0, lod: 0.5 },
+    fog: 1.9,
+    powder: 0.25,
+    texCap: 512, aniso: 2, traffic: 0.5, carLod: 0.3, pointLights: false,
+  },
   performance: {
     // render scale x devicePixelRatio (capped), dynamic resolution may drop to dynMin x DPR (never below dynFloor)
     // (it was 0.75 x DPR, dropping to 0.5 x DPR: half resolution on Retina, visibly blurry)
     scale: 1, prCap: 2, dynMin: 0.75, dynFloor: 1, fpsDrop: 50, fpsRaise: 57,
     msaa: 0, composer: false, bloom: false, ao: 0, shafts: false, grade: 2, // (the grade is a few ALU ops in the final pass)
     // (soft = three's bilinear PCF: 16 taps, as many as the plain PCF's 17, but no blocky texel edges)
-    shadow: { size: 1024, extent: 55, soft: true, terrainCast: 128, propDist: 70 },
+    shadow: { size: 1024, extent: 55, soft: true, terrainCast: 128, propDist: 70, every: 2 }, // (every: redrawn every other frame while the view stays put, engine/post.js)
     terrain: { lodK: 1.6, detail: 0 },
     veg: { closeR: 22, nearR: 85, farR: 800, maxFar: 22000, rockR: 150, nearShadow: false },
     clouds: 150, flakes: 18000, crystals: 160, // (snowfall stays clearly visible: tiny points, cheap)
@@ -27,9 +49,12 @@ export const PRESETS = {
     npcs: { skiers: 7, walkers: 3, animNear: 45 },
     // big props: skipped when radius / distance < cull, shadows within shadowDist, LOD distances x lod
     // (the decimated LODs read as melted on a Retina screen when close: full detail out to ~140 m even here)
-    props: { cull: 0.011, shadowDist: 70, lod: 1 },
+    props: { cull: 0.011, shadowDist: 70, lod: 0.8 }, // (Oct 30: 112 m; every model also has a far copy from 3x that, assets.js makeLOD)
     fog: 1.25, // hides the shorter forest / terrain reach
     powder: 0.5,
+    pointLights: false, // (no point lights in the world: engine/detail.js sweepLights; the bulbs still glow)
+    carLod: 0.55, // (parked / passing cars: the full model (dozens of parts) out to 38 m, the one-piece LOD beyond)
+    texCap: 1024, aniso: 4, // (model maps: 1024 px colour, 512 px normal / roughness: a quarter of the memory)
   },
   balanced: {
     scale: 1, prCap: 2, dynMin: 0.75, dynFloor: 1, fpsDrop: 45, fpsRaise: 56,
@@ -43,6 +68,7 @@ export const PRESETS = {
     props: { cull: 0.006, shadowDist: 120, lod: 1.2 },
     fog: 1.08,
     powder: 0.8,
+    texCap: 2048, aniso: 8, carLod: 0.8,
   },
   high: {
     scale: 1, prCap: 2, dynMin: 0.75, dynFloor: 1, fpsDrop: 38, fpsRaise: 55,
@@ -82,6 +108,7 @@ export function normalizeQuality(name) {
 
 export function setQuality(name) {
   const q = normalizeQuality(name) || 'high';
+  for (const k of Object.keys(quality)) if (!(k in PRESETS[q])) delete quality[k]; // (super's extra flags don't stick)
   Object.assign(quality, PRESETS[q], { name: q });
   for (const fn of listeners) fn(quality);
   return q;
@@ -113,12 +140,18 @@ export function detectQuality(renderer) {
   const mem = navigator.deviceMemory || 8, cores = navigator.hardwareConcurrency || 8;
   const apple = gpu.match(/Apple M(\d+)\s*(Pro|Max|Ultra)?/i);
   let q;
-  if (mem <= 4 || cores <= 4) q = 'performance';
+  // (Oct 30: still "very slow on some machines": the base M1 / M2 with 8 GB and older Intel graphics start on the
+  // lighter presets; Super Performance for software renderers, 4 GB machines and old Intel HD graphics)
+  const soft = /SwiftShader|llvmpipe|softpipe|Microsoft Basic/i.test(gpu);
+  const oldIntel = /Intel/i.test(gpu) && !/Iris\s*(Pro|Plus|Xe)|Arc/i.test(gpu);
+  if (soft || mem <= 4 || cores <= 2) q = 'super';
+  else if (cores <= 4) q = oldIntel ? 'super' : 'performance';
   else if (apple) {
     const gen = Number(apple[1]), tier = apple[2];
     if (tier) q = gen >= 3 || /Max|Ultra/i.test(tier) ? 'high' : 'balanced';
     else q = gen <= 2 ? 'performance' : 'balanced';
-  } else if (/Intel|Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Microsoft Basic/i.test(gpu)) q = 'performance';
+  } else if (oldIntel) q = 'super';
+  else if (/Intel|Mali|Adreno|PowerVR/i.test(gpu)) q = 'performance';
   else if (/NVIDIA|GeForce|RTX|Radeon RX|Radeon Pro/i.test(gpu)) q = 'high';
   else q = 'balanced';
   return { quality: q, gpu, mem, cores };

@@ -30,6 +30,7 @@ import { fitModel } from '../core/assets.js';
 import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (the yard on the drawn terrain's own triangles)
 import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
+import { mergeStatic } from '../engine/merge.js'; // (the hall's boxes welded per material)
 
 // (Oct 29, AUTOHAUS: bought for good at dealership prices, set against ~$9,000 an hour of jobs (jobs/catalog.js) and the
 // $50,000 chalet: the Golf after an hour or two of jobs, the supercars long-term goals)
@@ -257,6 +258,9 @@ export class CarRental {
       if (this.models.pine_tree) { const t = fitModel(this.models.pine_tree, { size: 2.3, axis: 'y' }); t.position.set(lx, 0.62, lz); t.traverse((m) => { if (m.isMesh) m.castShadow = true; }); g.add(t); }
       const p = this.w(lx, lz); this.colliders.push({ x: p.x, z: p.z, r: 0.45 });
     }
+    // (performance pass: the hall's boxes / show cars and the yard's props welded per material; the hall on its own,
+    // the showroom's window view hides it as a whole)
+    try { mergeStatic(hall); mergeStatic(g, { skip: [hall] }); } catch (e) { console.warn('Autohaus: merge', e); }
     this.scene.add(g);
     this.group = g;
     // solid: the hall (its box), a camera blocker the same size

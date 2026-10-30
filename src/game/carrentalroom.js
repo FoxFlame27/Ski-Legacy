@@ -14,7 +14,7 @@ import { fitModel, loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye } from './cars.js';
 import { dressCar, setPlates } from './carconfig.js';
 import { LAYOUT, buildShell, stairY, setDoors, ceilingAt } from './carrentalshell.js';
-import { claimPortal, dropPortal } from './liveportal.js';
+import { claimPortal, dropPortal, portalsOn } from './liveportal.js';
 // the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 // where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
@@ -129,7 +129,7 @@ export class CarRentalRoom {
   // the world's shadows are refreshed every few seconds, not every frame.
   renderPortal() {
     const o = this.world, r = this.renderer;
-    if (!o || !r || this.portalOff) return; // (portalOff: switched off for this session after slow frames, as the chalets')
+    if (!o || !r || this.portalOff || !portalsOn()) return; // (portalOff: switched off for this session after slow frames, as the chalets'; Super Performance: never)
     const cam = this.camera, meshes = this.portalMeshes();
     cam.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));

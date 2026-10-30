@@ -1189,7 +1189,10 @@ export class FanCrowd {
     this.shadows = shadows;
     parent.add(this.group);
     this.frame = 0;
-    this.visible = true;
+    // (performance pass: hidden until its first update in range: a crowd whose sim never runs (a station far off) drew
+    // ~20 empty instanced meshes and its contact shadows every frame, frustum culling off)
+    this.group.visible = false;
+    this.visible = false;
     // scratch for the pose composer
     this.L = new Float32Array(NB * 4); this.W = new Float32Array(NB * 4); this.Pw = new Float32Array(NB * 3);
     this.tmp = new Float32Array(4);

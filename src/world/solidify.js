@@ -33,7 +33,7 @@ const _m = new THREE.Matrix4(), _mi = new THREE.Matrix4(), _v = new THREE.Vector
 function meshesOf(obj, base, out) {
   if (!obj.visible || obj.userData?.noCollide) return out;
   if (obj.isSkinnedMesh || obj.isPoints || obj.isLine || obj.isSprite || obj.isLight) return out;
-  if (obj.isLOD && obj.levels?.length) { meshesOf(obj.levels.at(-1).object, base, out); return out; }
+  if (obj.isLOD && obj.levels?.length) { meshesOf(obj.levels.at(obj.userData.solidLevel ?? -1).object, base, out); return out; } // (solidLevel: makeLOD's far copy is too coarse for a footprint)
   if (obj.isMesh && obj.geometry?.attributes?.position) {
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     const hidden = mats.every((m) => !m || m.visible === false || m.colorWrite === false || (m.transparent && m.opacity < 0.05));

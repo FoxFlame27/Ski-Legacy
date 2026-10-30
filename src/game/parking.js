@@ -13,6 +13,7 @@ import { nightUniform } from '../world/village.js';
 import { busRoads, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
 import { lotMaterial } from './bus/bus.js';
 import { groundPatch, groundPatchGeometry, frameRect } from '../world/groundpatch.js'; // (paving on the drawn terrain's own triangles) // (the roads' asphalt and snow: the access road carries on into the car park)
+import { quality } from '../engine/quality.js'; // (quality.carLod: the parked cars' full model distance)
 
 const BAY_W = 2.6, BAY_D = 5.5, LINE = 0.12; // (5.5 m deep: the longest car, 5.0 m, fits inside the lines)
 // parked cars: [model, real length (m), which car park] (the car models are the user's own, in MODEL_LIST)
@@ -292,7 +293,7 @@ export class ParkingLots {
             if (p.driving) continue; // (the car you drive: drive.js shows it)
             const d = Math.hypot(p.car.position.x - c.x, p.car.position.z - c.z);
             if (!p.far && p.t.lod) { const m = farMesh(p.t, p.inst); m.visible = false; m.castShadow = true; p.car.add(m); p.far = m; }
-            const near = d < 70 || !p.far; // (the full model to 70 m: the LOD only where it's a few dozen pixels)
+            const near = d < 70 * (quality.carLod ?? 1) || !p.far; // (the full model to 70 m: the LOD only where it's a few dozen pixels; quality.carLod: nearer on the lighter presets)
             p.car.visible = d < 420;
             p.full.visible = near;
             if (p.far) p.far.visible = !near;

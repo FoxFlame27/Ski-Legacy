@@ -106,11 +106,21 @@ export class Snowmobiles {
     const cv = L.chaletVillage;
     if (cv?.center) { other.push({ x: cv.center.x, z: cv.center.z }); if (cv.houses?.length) { const h = cv.houses[Math.floor(rnd() * cv.houses.length)]; other.push({ x: h.x + 10, z: h.z + 10 }); } }
     for (const l of L.lifts || []) { const [ux, uz] = l.dir || [0, 1]; other.push({ x: l.bottom.x - uz * 30 - ux * 10, z: l.bottom.z + ux * 30 - uz * 10 }); }
-    const take = (list, n) => { let k = 0; for (const t of shuffle(list)) { if (k >= n || out.length >= MAX_SLEDS) break; const sp = this.clearSpot(t.x, t.z, 26, out); if (sp) { out.push({ ...sp, heading: rnd() * Math.PI * 2 }); k++; } } };
+    const take = (list, n) => { let k = 0; for (const t of shuffle(list)) { if (k >= n || out.length >= MAX_SLEDS) break; const sp = this.clearSpot(t.x, t.z, 26, out); if (sp) { out.push({ ...sp, heading: this.openHeading(sp.x, sp.z, rnd() * Math.PI * 2) }); k++; } } };
     take(village, VILLAGE_SLEDS);
     take(other, MAX_SLEDS - out.length);
     if (out.length < MAX_SLEDS) take(village, MAX_SLEDS - out.length); // (short of places: more in the village)
     return out;
+  }
+  // a heading with clear snow ahead (nothing solid in the first 12 m): never parked nose-first against a wall
+  openHeading(x, z, h0) {
+    for (let i = 0; i < 16; i++) {
+      const h = h0 + (i * Math.PI * 2) / 16, fx = Math.sin(h), fz = Math.cos(h);
+      let ok = true;
+      for (let k = 2; k <= 12 && ok; k += 2) if (this.blocked(x + fx * k, z + fz * k, 1.3)) ok = false;
+      if (ok) return h;
+    }
+    return h0;
   }
   clearSpot(x0, z0, R, taken = []) {
     const W = this.world;
@@ -282,7 +292,9 @@ export class Snowmobiles {
   // ------------------------------------------------------------------ per frame
   /** @param {object|null} input  the Input while you may drive (null in menus) */
   update(dt, input) {
-    if (this.spawnPending && dt > 0) this.spawnParked();
+    // (main.js holds the spawn (collidersReady false) until world/solidify.js has added the props' drawn footprints:
+    // spots picked before that could be inside a porch / stall / annex box, the sled pinned there, unable to move)
+    if (this.spawnPending && dt > 0 && (this.collidersReady !== false || (this.spawnWait = (this.spawnWait || 0) + dt) > 30)) this.spawnParked();
     const d = this.d;
     // parked sleds far from the camera are not drawn (~40k triangles each)
     this.cullT = (this.cullT || 0) - dt;
@@ -360,7 +372,8 @@ export class Snowmobiles {
       const grip = (ice ? S.gripIce : S.grip) * (handbrake ? 0.25 : 1) * (0.6 + 0.4 * hold) / (1 + Math.abs(u) * 0.025);
       w *= Math.exp(-grip * dt);
       // steering: a quick turn at low speed, wide at full speed; reversing turns the other way
-      const turnRate = S.turn * smooth(0, 3, Math.abs(u)) / (1 + Math.abs(u) * 0.045) * (handbrake ? 1.6 : 1);
+      // (pulling away the track already turns it a little: against a wall at a crawl, it steers away instead of staying pinned)
+      const turnRate = S.turn * smooth(0, 3, Math.max(Math.abs(u), throttle ? 1.2 : 0)) / (1 + Math.abs(u) * 0.045) * (handbrake ? 1.6 : 1);
       d.yawRate += (d.steer * turnRate * Math.sign(u || 1) - d.yawRate) * (1 - Math.exp(-dt * 9));
     } else {
       d.yawRate *= Math.exp(-dt * 2);
@@ -417,6 +430,7 @@ export class Snowmobiles {
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
         if (c.h !== undefined && c.h < 0.4) continue;
+        if (c.top !== undefined && c.top < d.y + 0.45) continue; // (low solid props: a kerb, a step, a drift, paving over the snow: driven over)
         if (c.r !== undefined) {
           const dx = cx - c.x, dz = cz - c.z, l = Math.hypot(dx, dz);
           if (l < c.r + R) hit(l > 1e-3 ? dx / l : 1, l > 1e-3 ? dz / l : 0, c.r + R - l, !!(c.net || c.soft), kindOf(c));

@@ -76,7 +76,7 @@ export function loadSave() {
 let resetting = false; // (a reset in progress: nothing writes the old save back, e.g. the unload handlers in main.js)
 // this machine's settings, not progress: kept in the single-player save even while multiplayer has swapped `save`
 // (a graphics change in multiplayer reloads the page, and was lost; net/session.js restoreSave keeps them too)
-export const DEVICE_PREFS = ['quality', 'qualitySet', 'sensitivity', 'volume'];
+export const DEVICE_PREFS = ['quality', 'qualitySet', 'qualityCap', 'sensitivity', 'volume'];
 export function writeSave() {
   if (resetting) return;
   // multiplayer: `save` holds the server profile, never written over the single-player save; the session pushes

@@ -11,7 +11,8 @@
 //
 //   ground floor (floor G, ceiling GC, cream plaster walls, plank floor, timber ceiling with beams)
 //     entrance hall (the front door in the middle of the front), the open living room / kitchen (the -z end, full
-//     width), the bathroom (front, +z of the hall), the snug (the +z end), the stair (along z, behind the hall)
+//     width), the bathroom (front, +z of the hall), the snug (the +z end), the stair (along z, behind the hall; open
+//     on its back side: a balustrade, the living room's nook beside it)
 //   upper floor (floor FL, timber walls and sloped timber ceiling under the roof, dormers in the middle band)
 //     bedroom A (-z gable), bedroom B (front, middle, dormer), bedroom C (+z gable), the bathroom (back, middle,
 //     dormer), the landing and a corridor along the stairwell
@@ -45,7 +46,7 @@ export const stairY = (z) => G + RISE * Math.max(0, Math.min(STAIR.steps, Math.c
 
 // the rooms (floor rects, for the build mode and the HUD's room name): x0 < x1, z0 < z1
 export const ROOMS = [
-  { id: 'living', name: 'Living room & kitchen', level: 'ground', rects: [[-IX, -IZ, IX, -1.3]] },
+  { id: 'living', name: 'Living room & kitchen', level: 'ground', rects: [[-IX, -IZ, IX, -1.3], [-IX, -1.3, -1.83, 1.72]] }, // (+ the nook beside the open stair)
   { id: 'hall', name: 'Entrance hall', level: 'ground', rects: [[-0.78, -1.3, IX, 1.72]] },
   { id: 'bath0', name: 'Bathroom', level: 'ground', bath: true, rects: [[1.5, 1.72, IX, 4.5]] },
   { id: 'snug', name: 'Snug', level: 'ground', rects: [[-IX, 1.72, 1.5, IZ], [1.5, 4.5, IX, IZ]] },
@@ -79,8 +80,8 @@ export const INTERIOR = [
   // ground
   { level: 'ground', a: [1.7, -1.3], b: [IX, -1.3] },                // hall | living (the rest open)
   { level: 'ground', a: [-0.78, -1.3], b: [-0.78, 1.72] },           // hall | stair
-  { level: 'ground', a: [-1.83, -1.3], b: [-1.83, 1.72] },           // stair | closet
-  { level: 'ground', a: [-IX, -1.3], b: [-1.83, -1.3] },             // closet | living
+  // (no closet behind the stair any more: the stair is open on that side, a balustrade along it, and the space
+  // is a nook of the living room: game/chaletroom.js buildStair)
   { level: 'ground', a: [-IX, 1.72], b: [1.5, 1.72], openings: [d(0.15)] },  // -> the snug
   { level: 'ground', a: [1.5, 1.72], b: [IX, 1.72], openings: [d(2.7)] },    // -> the bathroom
   { level: 'ground', a: [1.5, 1.72], b: [1.5, 4.5] },                // bathroom | snug

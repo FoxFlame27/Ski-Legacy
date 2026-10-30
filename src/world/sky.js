@@ -397,6 +397,8 @@ export class Environment {
   // graphics preset: shadow map size, the area it covers around the player, PCF or soft PCF (main.js)
   setShadowQuality({ size, extent }) {
     const sh = this.sun.shadow;
+    this.sun.castShadow = size > 0; // (Super Performance: no shadow pass at all)
+    if (!size) { sh.map?.dispose(); sh.map = null; this.shadowExtent = extent; return; }
     if (sh.mapSize.x !== size) {
       sh.mapSize.set(size, size);
       sh.map?.dispose();

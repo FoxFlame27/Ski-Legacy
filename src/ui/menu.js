@@ -567,13 +567,13 @@ export class Menu {
   }
 
   scrSettings() {
-    const qs = QUALITY_ORDER; // performance, balanced, high, ultra (engine/quality.js)
+    const qs = QUALITY_ORDER; // super performance, performance, balanced, high, ultra (engine/quality.js)
     const q = normalizeQuality(save.quality) || 'high';
     this.pendingQ = q;
     return {
       logo: 'small', shade: 'left',
       hints: [['updown', 'Select'], ['leftright', 'Adjust'], ['enter', 'Apply'], ['esc', 'Back']],
-      html: `${this.head('SETTINGS', 'Performance runs smoothest on laptops · changing the graphics restarts the game')}
+      html: `${this.head('SETTINGS', 'Performance runs smoothest on laptops, Super Performance on 8 GB / older Macs · changing the graphics restarts the game')}
         <div class="menu-panel settings" data-stagger style="--clip:${brushClip(160, 5, 4)}">
           <div class="mp-row" data-f data-row="quality"><span>Graphics</span><div class="seg">${qs.map((x) => `<button tabindex="-1" data-q="${x}" class="${q === x ? 'on' : ''}">${QUALITY_LABELS[x]}</button>`).join('')}</div></div>
           <div class="mp-row" data-f data-row="sens"><span>Mouse sensitivity</span><input class="m-sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}"></div>

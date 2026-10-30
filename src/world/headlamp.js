@@ -373,9 +373,10 @@ export class Headlamp {
     if (L.castShadow !== hi) { L.castShadow = hi; L.shadow.needsUpdate = true; } // (a shadow change recompiles: preset changes only)
     const ms = quality.name === 'ultra' ? 1024 : 512;
     if (L.shadow.mapSize.x !== ms) { L.shadow.mapSize.set(ms, ms); L.shadow.map?.dispose(); L.shadow.map = null; }
-    this.u.uSteps.value = quality.name === 'performance' ? 3 : hi ? 6 : 4;
-    this.u.uNoise2.value = quality.name === 'performance' ? 0 : 0.35;
-    this.flakeMax = quality.name === 'performance' ? 800 : hi ? FLAKES_MAX : 1100;
+    const low = quality.name === 'performance' || quality.name === 'super';
+    this.u.uSteps.value = quality.name === 'super' ? 2 : low ? 3 : hi ? 6 : 4;
+    this.u.uNoise2.value = low ? 0 : 0.35;
+    this.flakeMax = quality.name === 'super' ? 250 : low ? 800 : hi ? FLAKES_MAX : 1100;
   }
 
   // the head bone's forward and up in its own frame, from the bind pose (the model faces +Z, up +Y)

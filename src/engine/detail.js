@@ -8,14 +8,14 @@ import * as THREE from 'three';
 import { quality, onQualityChange } from './quality.js';
 
 const _c = new THREE.Vector3(), _s = new THREE.Vector3();
-const SLICE = 600; // meshes checked per frame
+const SLICE = 300; // meshes checked per frame (a full pass every ~0.5 s over ~9k meshes)
 
 export class PropDetail {
   constructor() {
     this.items = [];
     this.lods = [];
     this.next = 0;
-    onQualityChange(() => this.applyLOD());
+    onQualityChange(() => { this.applyLOD(); this.lightT = 0; });
   }
 
   add(root) {
@@ -46,7 +46,21 @@ export class PropDetail {
     for (const { lod } of this.lods) lod.levels.forEach((l, i) => { l.distance = lod.userData.lodBase[i] * k; });
   }
 
-  update(camera) {
+  // Point lights on the lighter presets (quality.pointLights === false): every point light in the outdoor scene costs
+  // each lit pixel a loop pass even at intensity 0 (they stay in the shaders so switching them never recompiles).
+  // Their layer mask is cleared instead (a fixed light count: no recompiles either); the lamps' glowing bulbs stay.
+  // Checked every few seconds (lights made later: the tow truck's beacon, the car's dome light).
+  sweepLights(scene) {
+    const off = quality.pointLights === false;
+    scene.traverse((o) => {
+      if (!o.isPointLight) return;
+      if (off && o.userData.lightMask === undefined) { o.userData.lightMask = o.layers.mask; o.layers.mask = 0; }
+      else if (!off && o.userData.lightMask !== undefined) { o.layers.mask = o.userData.lightMask; delete o.userData.lightMask; }
+    });
+  }
+
+  update(camera, scene = null) {
+    if (scene && (this.lightT = (this.lightT || 0) - 1) <= 0) { this.lightT = 240; this.sweepLights(scene); }
     const items = this.items, n = items.length;
     if (!n) return;
     const cam = camera.position, { cull, shadowDist } = quality.props;

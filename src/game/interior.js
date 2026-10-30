@@ -12,7 +12,7 @@ import { SKIS } from './economy.js';
 import { fitModel } from '../core/assets.js';
 import { applyOutfit, outfitZones } from './outfits.js';
 import { world } from '../world/world.js';
-import { claimPortal, dropPortal } from './liveportal.js';
+import { claimPortal, dropPortal, portalsOn } from './liveportal.js';
 
 const W = 16, D = 8, H = 3.6; // room size (x, z, y): 16 m wide so the ski wall holds all 12 pairs
 const HITBOX = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
@@ -1049,7 +1049,7 @@ export class ShopInterior {
   // in view). The world's shadows are refreshed every few seconds, not every frame.
   renderPortal() {
     const o = this.outside, r = this.renderer;
-    if (!o || !r || this.portalOff) return; // (portalOff: switched off for this session after slow frames, as the chalets')
+    if (!o || !r || this.portalOff || !portalsOn()) return; // (portalOff: switched off for this session after slow frames, as the chalets'; Super Performance: never)
     const cam = this.camera;
     cam.updateMatrixWorld();
     _m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);

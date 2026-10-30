@@ -19,6 +19,7 @@ import { fitModel } from '../core/assets.js';
 import { shellMaterials } from './carrentalshell.js';
 import { snowDrift, swapInModel } from './prisonoutside.js';
 import { busRoads, HOSPITAL_LOT } from './bus/roads.js';
+import { mergeStatic } from '../engine/merge.js'; // (the house's boxes welded per material)
 
 const FRONT = HOSPITAL_LOT.front; // (-1.6: roads.js puts the door step 0.6 m out from it, on x = 0)
 export const HOUSE = { W: 15, D: 12, G: 3.4, Hw: 6.4, RISE: 3.4, EAVE: 1.3, GO: 1.0 };
@@ -317,6 +318,9 @@ export class Hospital {
       colliders.push({ x: p.x, z: p.z, hw: 1.35, hd: 0.15, rot: -yaw0 });
     } catch (e) { console.warn('medical centre sign', e); }
 
+    // (performance pass: the house and the forecourt's boxes welded per material; the walls keep their own mesh: their
+    // onBeforeRender drives the night lighting below)
+    try { const keep = new Set([walls]); mergeStatic(house, { keep }); mergeStatic(g, { keep, skip: [house] }); } catch (e) { console.warn('medical centre: merge', e); }
     scene.add(g);
     g.updateMatrixWorld(true);
     // ---- solid: the house (its plinth), a camera blocker the same size

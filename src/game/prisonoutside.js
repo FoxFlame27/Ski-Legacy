@@ -17,6 +17,7 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fitModel, loadGLB, dequantize } from '../core/assets.js';
 import { shellMaterials } from './carrentalshell.js';
 import { buildPoliceCar } from './police.js';
+import { mergeStatic } from '../engine/merge.js'; // (the house's boxes welded per material)
 
 export const HOUSE = { W: 17, D: 10, BZ: -5.8, G: 3.3, Hw: 6.2, RISE: 3.0, EAVE: 1.4, GO: 0.9, DX: -3.2 };
 const { W, D, BZ, G, Hw, RISE, EAVE, GO, DX } = HOUSE;
@@ -102,6 +103,7 @@ export function policeLamp() {
 /** Swap a Meshy model into `group` once `name` has loaded (fitModel(gltf, fit)), removing the group's procedural
  * stand-in (`fallback`, a child of the group); onModel(model) dresses it. A missing model keeps the stand-in. */
 export function swapInModel(group, name, fit, fallback, onModel) {
+  if (fallback) fallback.userData.noMerge = true; // (swapped out later: never welded into a merged mesh, engine/merge.js)
   loadGLB(name).then((gltf) => {
     if (!gltf) return;
     const m = fitModel(gltf, fit);
@@ -607,6 +609,9 @@ export function buildPrisonOutside(P, L) {
     colliders.push({ x: p.x, z: p.z, hw: 1.25, hd: 0.15, rot: -yaw0 });
   } catch (e) { console.warn('prison sign', e); }
 
+  // (performance pass: the house and the forecourt's boxes welded per material: hundreds of draw calls -> a few dozen;
+  // the house on its own, the windows' view hides it as a whole)
+  try { mergeStatic(house); mergeStatic(g, { skip: [house] }); } catch (e) { console.warn('police station: merge', e); }
   P.scene.add(g);
   g.updateMatrixWorld(true);
   // ---- solid: the house (its stone walls), a camera blocker the same size

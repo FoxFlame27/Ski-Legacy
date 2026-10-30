@@ -47,7 +47,7 @@ import {
   HX, IX, IZ, T, G, GC, FL, COLLAR, DORMER, IT, STAIR, HOLE, DOOR, ROOMS, EXTERIOR, INTERIOR, RAILS,
   ceilingUp, ceilingAt, stairY, exteriorLine,
 } from './chaletplan.js';
-import { claimPortal, dropPortal } from './liveportal.js';
+import { claimPortal, dropPortal, portalsOn } from './liveportal.js';
 
 const EYE = 1.62, R0 = 0.28, WALL_OUT = T - 0.1; // (the exterior walls' outward depth: 10 cm inside the model's skin)
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -289,7 +289,7 @@ export class ChaletRoom {
   renderPortal() {
     // (off: drawing the whole world a second time through the windows froze the game on going in, on the user's Mac;
     // the windows show a soft day / night view instead. Oct 29, "the chalets broke again ... it froze as soon as i got in")
-    if (!LIVE_PORTAL || this.portalOff) return; // (portalOff: switched off for this session after slow frames)
+    if (!LIVE_PORTAL || this.portalOff || !portalsOn()) return; // (portalOff: switched off for this session after slow frames; Super Performance: never)
     const o = this.world, r = this.renderer;
     if (!o || !r?.render) return;
     const cam = this.camera;
@@ -429,10 +429,15 @@ export class ChaletRoom {
     for (const r of ROOMS) if (r.bath) for (const q of r.rects) this.plane(q.x0, q.z0, q.x1, q.z1, (r.level === 'up' ? FL : G) + 0.006, M.floorTile);
     const around = [[-IX, -IZ, IX, H.z0], [-IX, H.z1, IX, IZ], [-IX, H.z0, H.x0, H.z1], [H.x1, H.z0, IX, H.z1]];
     for (const [x0, z0, x1, z1] of around) { this.plane(x0, z0, x1, z1, FL, M.floor); this.plane(x0, z0, x1, z1, GC, M.ceiling, true); }
-    const sl = FL - GC + 0.002, sy = (GC + FL) / 2 - 0.005; // (the stairwell's trim: 4 mm under the floor, 6 mm under the ceiling: no face in their planes)
-    this.box(H.x1 - H.x0, sl, 0.04, M.beam, (H.x0 + H.x1) / 2, sy, H.z0);
-    this.box(H.x1 - H.x0, sl, 0.04, M.beam, (H.x0 + H.x1) / 2, sy, H.z1);
-    this.box(0.04, sl, H.z1 - H.z0, M.beam, H.x1, sy, (H.z0 + H.z1) / 2);
+    // the stairwell's fascia: a timber header beam round the whole opening, straddling its edge (the floor's edge,
+    // the walls under / over it: 2 cm proud of each face), its bottom 15-16 cm under the ceiling, its top just under
+    // the floor: no slit anywhere between the floor, the walls and the opening (the x0 side had none: you saw the
+    // upstairs bathroom through the gap over the old closet). The long beams run past the short ones' ends; no two
+    // faces in one plane.
+    const fx = (z, z0, z1) => this.box(H.x1 - H.x0 + 0.13, FL - GC + 0.144, z1 - z0, M.beam, (H.x0 + H.x1) / 2 - 0.005, (GC - 0.15 + FL - 0.006) / 2, (z0 + z1) / 2);
+    fx(H.z0, H.z0 - 0.07, H.z0 + 0.07); fx(H.z1, H.z1 - 0.08, H.z1 + 0.08);
+    const fz = (x0, x1) => this.box(x1 - x0, FL - GC + 0.156, H.z1 - H.z0 + 0.17, M.beam, (x0 + x1) / 2, (GC - 0.16 + FL - 0.004) / 2, (H.z0 + H.z1) / 2 + 0.005);
+    fz(H.x0 - 0.08, H.x0 + 0.08); fz(H.x1 - 0.08, H.x1 + 0.08);
     for (let z = -IZ + 0.9; z < IZ - 0.5; z += 1.5) {
       if (z > H.z0 - 0.2 && z < H.z1 + 0.2) { this.box(IX - H.x1, 0.18, 0.16, M.beam, (H.x1 + IX) / 2, GC - 0.09, z); this.box(H.x0 + IX, 0.18, 0.16, M.beam, (H.x0 - IX) / 2, GC - 0.09, z); } else this.box(2 * IX, 0.18, 0.16, M.beam, 0, GC - 0.09, z);
     }
@@ -550,8 +555,9 @@ export class ChaletRoom {
       const [ax, az] = R.a, [bx, bz] = R.b, L = Math.hypot(bx - ax, bz - az), ux = (bx - ax) / L, uz = (bz - az) / L, ry = Math.atan2(ux, uz) - Math.PI / 2;
       const dy = i * 0.004; // (the two rails cross at the corner: their tops / bottoms never in one plane)
       this.box(L + 0.06, 0.06, 0.08, M.beam, (ax + bx) / 2, FL + 1.0 + dy, (az + bz) / 2, ry);
-      this.box(L, 0.05, 0.05, M.beam, (ax + bx) / 2, FL + 0.1 + dy, (az + bz) / 2, ry);
-      for (let u = 0; u <= L + 1e-6; u += 0.13) this.box(0.035, 0.9, 0.035, M.beam, ax + ux * u, FL + 0.55, az + uz * u);
+      // (the bottom rail sits on the floor's edge, over the stairwell's fascia beam: no gap under the balustrade)
+      this.box(L, 0.07, 0.06, M.beam, (ax + bx) / 2, FL + 0.033 + dy, (az + bz) / 2, ry);
+      for (let u = 0; u <= L + 1e-6; u += 0.13) this.box(0.035, 0.92, 0.035, M.beam, ax + ux * u, FL + 0.51, az + uz * u);
       this.addSolid('up', R.a, R.b, 0.05, [], false, FL, FL + 1.04);
     });
   }
@@ -567,17 +573,63 @@ export class ChaletRoom {
     const bx0 = S.x0 + 0.005, bx1 = S.x1 - 0.005, tx0 = S.x0 - 0.01, tx1 = S.x1 + 0.01;
     for (let k = 0; k < n; k++) {
       const y1 = G + (k + 1) * rise, z0 = S.z0 + k * run, z1 = z0 + run, last = k === n - 1;
-      const by0 = G - 0.01, by1 = y1 - 0.02, bz0 = z0 + 0.02, bz1 = last ? S.z1 - 0.01 : z1 + 0.01;
+      const by0 = G - 0.01, by1 = y1 - 0.02, bz0 = z0 + 0.02, bz1 = last ? S.z1 - 0.01 : z1 + 0.03; // (1 cm into the next body: no slit between them, seen from the open side)
       this.box(bx1 - bx0, by1 - by0, bz1 - bz0, this.M.plaster, (bx0 + bx1) / 2, (by0 + by1) / 2, (bz0 + bz1) / 2);
       const tz0 = z0 - 0.01, tz1 = last ? S.z1 - 0.01 : z1 + 0.03; // (the last: into the stairwell's trim, not under the floor)
       this.box(tx1 - tx0, 0.04, tz1 - tz0, this.M.beam, (tx0 + tx1) / 2, y1 - 0.02, (tz0 + tz1) / 2);
     }
-    // the handrail: it ends short of the hall wall (x -0.78, from z -1.3) instead of running into it
-    const za = S.z0, zb = -1.36, ya = G + 0.95, yb = G + 0.95 + (zb - za) * (rise / run), L = Math.hypot(zb - za, yb - ya);
-    const rail = this.box(0.06, 0.06, L, this.M.beam, S.x1 - 0.045, (ya + yb) / 2, (za + zb) / 2);
-    rail.rotation.x = -Math.atan2(yb - ya, zb - za);
-    this.box(0.08, 1.005, 0.08, this.M.beam, S.x1 - 0.045, G + 0.4975, S.z0 + 0.05); // (its foot 5 mm under the floor)
-    this.solidStair = [[S.x0, S.z0, S.x0, -1.2, 0.02], [S.x1, S.z0, S.x1, -1.2, 0.02]];
+    // The open stair (no closet behind it any more: the living room's nook): a timber stringer along each open side
+    // over the steps' plaster bodies, a balustrade on it (newel at the foot, balusters, handrail); on the back (x0)
+    // side the balusters run on up to the stairwell's header beam where the handrail meets it (a post up to the
+    // beam), the handrail going on along the beam / the upstairs wall on brackets; on the hall side (x1) the
+    // balustrade to the hall wall, then a handrail on the wall on brackets, up to the top.
+    const M = this.M, yN = (z) => G + rise * (1 + (z - S.z0) / run); // (the pitch line: through the nosings)
+    const FB = GC - 0.16;                       // (the header beam's bottom)
+    const XO = S.x0 - 0.03, XI = S.x1 + 0.03;   // (the balustrade lines: on the stringers, the treads' ends buried in them)
+    const zAt = (y) => S.z0 + run * ((y - G) / rise - 1); // (where the pitch line is at y)
+    const along = (x, za, zb, dy, w, h) => { // (a straight member along the pitch, dy over the pitch line)
+      const ya = yN(za) + dy, yb = yN(zb) + dy, L = Math.hypot(zb - za, yb - ya);
+      const m = this.box(w, h, L, M.beam, x, (ya + yb) / 2, (za + zb) / 2); m.rotation.x = -Math.atan2(yb - ya, zb - za); return m;
+    };
+    const stringer = (xc) => { // a band 0.30 under to 0.06 over the pitch line, its foot cut level on the floor, its head under the upper floor
+      const ft = 0.06, fb = 0.3, zA = S.z0 - 0.02, zD = S.z1 - 0.005;
+      const sh = new THREE.Shape();
+      sh.moveTo(zA, G - 0.005); sh.lineTo(zA, yN(zA) + ft); sh.lineTo(zAt(FL - 0.006 - ft), FL - 0.006); sh.lineTo(zD, FL - 0.006);
+      sh.lineTo(zD, yN(zD) - fb); sh.lineTo(zAt(G - 0.005 + fb), G - 0.005); sh.lineTo(zA, G - 0.005);
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.05, bevelEnabled: false, curveSegments: 1 });
+      geo.applyMatrix4(new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0, 0)).setPosition(xc + 0.025, 0, 0));
+      this.house.add(new THREE.Mesh(geo, M.beam));
+    };
+    stringer(XO); stringer(XI);
+    const post = (x, z, y1, w = 0.09) => this.box(w, y1 - (G - 0.005), w, M.beam, x, (y1 + G - 0.005) / 2, z);
+    const balusters = (x, za, zb, top) => {
+      for (let z = za; z < zb; z += 0.135) {
+        const y0 = yN(z) + 0.05, y1 = top(z);
+        if (y1 - y0 > 0.05) this.box(0.035, y1 - y0, 0.035, M.beam, x, (y0 + y1) / 2, z);
+      }
+    };
+    const brackets = (x0, x1, za, zb, dy) => {
+      for (let z = za + 0.1; z < zb; z += 0.75) this.box(x1 - x0, 0.025, 0.03, M.beam, (x0 + x1) / 2, yN(z) + dy - 0.045, z);
+    };
+    const zF = S.z0 + 0.05;                      // the newels at the foot
+    // the back side (x0): newel, handrail up to the post under the header beam, balusters up to the beam
+    const zP = zAt(FB - 0.92);                   // (where the handrail's top meets the beam's bottom)
+    post(XO, zF, yN(zF) + 0.98, 0.1);
+    along(XO, zF, zP, 0.89, 0.07, 0.06);
+    post(XO, zP, FB + 0.01);
+    balusters(XO, zF + 0.12, zAt(FB - 0.06) + 0.05, (z) => Math.min(yN(z) + 0.87, FB + 0.01));
+    along(-1.685, zP + 0.15, S.z1 - 0.06, 0.9, 0.05, 0.05);   // (on the beam's face (x -1.75), then the upstairs wall's (-1.77))
+    brackets(-1.78, -1.69, zP + 0.15, S.z1 - 0.06, 0.9);
+    // the hall side (x1): open to the living room up to the hall wall (its end at z -1.3), then a handrail on the wall
+    const zW = -1.34;
+    post(XI, zF, yN(zF) + 0.98, 0.1);
+    along(XI, zF, zW, 0.89, 0.07, 0.06);
+    post(XI, zW, yN(zW) + 0.95);
+    balusters(XI, zF + 0.12, zW - 0.06, (z) => yN(z) + 0.87);
+    along(-0.905, -1.22, S.z1 - 0.06, 0.9, 0.05, 0.05);       // (the hall wall's face: x -0.84; the beam's: -0.86)
+    brackets(-0.93, -0.79, -1.22, S.z1 - 0.06, 0.9);
+    // walked against from the living room (the nook) and the hall: the stair's sides, foot to top
+    this.solidStair = [[S.x0, S.z0, S.x0, S.z1, 0.04], [S.x1, S.z0, S.x1, -1.2, 0.04]];
   }
 
   // ------------------------------------------------------------------ the bathrooms: the sanitary ware
@@ -726,7 +778,7 @@ export class ChaletRoom {
       if (q.z <= S.z0 && p.z > S.z0 && p.x > S.x0 + 0.05 && p.x < S.x1 - 0.05) this.level = 'stair';
       else {
         for (let i = 0; i < 2; i++) { this.pushSegs(this.solid.ground, p); this.pushSegs(this.solidStair, p); this.pushObjects('ground', p); }
-        if (p.x > S.x0 - R0 && p.x < S.x1 + R0 && p.z > S.z0 && p.z < -1.2) {
+        if (p.x > S.x0 - R0 && p.x < S.x1 + R0 && p.z > S.z0 && p.z < S.z1) { // (the stair's footprint: the nook's side runs its whole length)
           if (q.z <= S.z0) p.z = S.z0; else p.x = p.x < (S.x0 + S.x1) / 2 ? S.x0 - R0 : S.x1 + R0;
         }
       }

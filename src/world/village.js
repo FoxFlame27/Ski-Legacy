@@ -1,7 +1,7 @@
 // The base village (rental shop, ticket office, hotels, lamps, signs) + summit hut + snow cannons.
 import * as THREE from 'three';
 import { world } from './world.js';
-import { fitModel, bakeGeometry, makeLOD } from '../core/assets.js';
+import { fitModel, bakeGeometry, makeLOD, clusterDecimate } from '../core/assets.js';
 import { Snowmaking } from './snowmaking.js';
 import { drawnHeight } from './settle.js';
 import { addStreetLamps } from './pistelights.js';
@@ -112,6 +112,7 @@ function placeOnGround(obj, x, z, yaw, sink = 0.2) {
 }
 
 const faceTo = (x, z, tx, tz) => Math.atan2(tx - x, tz - z);
+const CANNON_NEAR = 90; // m: snow cannons in full detail (with shadows) within this, a light copy beyond
 
 /** Set a posted sign down at (x, z) facing `yaw`: the board level over the higher post's snow, each post reaching down into its own (no post hanging over a slope). */
 export function standSign(sign, x, z, yaw) {
@@ -303,6 +304,14 @@ export class Village {
       });
       inst.castShadow = true; inst.receiveShadow = true;
       add(inst);
+      // (performance pass: ~175 cannons x 12.7k triangles were 2.2M triangles, shadows too, whenever any piste was in
+      // view: only those within CANNON_NEAR m keep the full one; the rest a light copy without a shadow, re-sorted as
+      // you move, see update)
+      inst.computeBoundingSphere();
+      const far = new THREE.InstancedMesh(clusterDecimate(c.geometry, 2.6 * 0.09), c.material, spots.length);
+      far.count = 0; far.receiveShadow = true; far.boundingSphere = inst.boundingSphere.clone();
+      add(far);
+      this.cannonLod = { near: inst, far, mats: spots.map((_, i) => { const m = new THREE.Matrix4(); inst.getMatrixAt(i, m); return m; }), pos: spots.map((q) => [q.x, q.z]), at: null };
       this.snowmaking = new Snowmaking(this.group, this.cannons); // the plumes they blow at dusk / night
     }
   }
@@ -381,5 +390,16 @@ export class Village {
     for (const s of this.signs) s.userData.faceMaterial.emissiveIntensity = on * 0.25;
     // snow cannons run at night / dusk (world/snowmaking.js)
     this.snowmaking?.update(dt, playerPos, on);
+    const C = this.cannonLod; // near / far cannons, re-sorted every 20 m you move
+    if (C && playerPos && (!C.at || Math.hypot(playerPos.x - C.at[0], playerPos.z - C.at[1]) > 20)) {
+      C.at = [playerPos.x, playerPos.z];
+      let n = 0, f = 0;
+      for (let i = 0; i < C.mats.length; i++) {
+        const [x, z] = C.pos[i];
+        if ((x - playerPos.x) ** 2 + (z - playerPos.z) ** 2 < CANNON_NEAR * CANNON_NEAR) C.near.setMatrixAt(n++, C.mats[i]); else C.far.setMatrixAt(f++, C.mats[i]);
+      }
+      C.near.count = n; C.far.count = f;
+      C.near.instanceMatrix.needsUpdate = true; C.far.instanceMatrix.needsUpdate = true;
+    }
   }
 }

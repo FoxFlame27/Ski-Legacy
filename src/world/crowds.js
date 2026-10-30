@@ -19,7 +19,7 @@ import { meshGround } from '../modes/parkour/kit.js';
 // ------------------------------------------------------------------ shared helpers (snowcats / flags use them)
 // Graphics preset -> 0 (performance) .. 4 (ultra). engine/quality.js holds the live preset (it may drop a level
 // while playing); older preset names still map.
-const QUALITY_LEVEL = { performance: 0, low: 1, balanced: 2, medium: 2, high: 3, ultra: 4 };
+const QUALITY_LEVEL = { super: 0, performance: 0, low: 1, balanced: 2, medium: 2, high: 3, ultra: 4 };
 export function qualityLevel(q = quality.name || save.quality) { return QUALITY_LEVEL[q] ?? 3; }
 
 export function mulberry(seed) {
@@ -520,7 +520,7 @@ export class Crowds {
   constructor(scene, o = {}) {
     this.scene = scene;
     this.level = qualityLevel(o.quality);
-    this.density = [0.6, 0.7, 0.85, 1, 1][this.level];
+    this.density = (o.quality || quality.name) === 'super' ? 0.25 : [0.6, 0.7, 0.85, 1, 1][this.level]; // (Super Performance: a thin crowd)
     this.shadows = this.level >= 3;
     this.sets = [];
     this.group = new THREE.Group();

@@ -468,7 +468,7 @@ export class RemoteVehicles {
     let w = this.rescues.get(r.pid);
     if (!vr) { if (w) this.hideRescue(w); return; }
     if (!w) {
-      w = { model: null, rope: null, amb: null, ref: null, age: 0, t: 0, rpm: 0,
+      w = { model: null, rope: null, amb: null, ref: null, age: 0, t: 0, rpm: 0, ambT: 0,
         h: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, tx: 0, ty: 0, tz: 0, tyaw: 0, tp: 0, tr: 0, vx: 0, vy: 0, vz: 0, at: 0, posed: false, shown: false },
         a: { x: 0, z: 0, yaw: 0, tx: 0, tz: 0, tyaw: 0, tv: 0, posed: false, shown: false } };
       this.rescues.set(r.pid, w);
@@ -476,10 +476,18 @@ export class RemoteVehicles {
     const fresh = w.ref !== vr;
     if (fresh) { w.ref = vr; w.age = 0; }
     w.age += dt; w.t += dt;
+    // (Oct 30 2026, the user: "make sure the heli despawns straight after the other person went on the ambulance,
+    // because before, my heli landed on another heli and went through": theirs stood on the pad all through their
+    // ambulance ride.) Their client now sends h: null once it has lifted off and gone (net/rescue.js); and it never
+    // lingers here anyway: nothing new from them for 10 s, it all goes; their helicopter 8 s after they got into the
+    // ambulance (s 3), whatever the rows still say
+    if (w.age > 10) { this.hideRescue(w); w.ref = vr; return; }
+    w.ambT = vr.s === 3 ? w.ambT + dt : 0;
+    const heliOn = !!vr.h && w.ambT < 8;
     const e = 1 - Math.exp(-dt * 7), ahead = Math.min(w.age, 0.35);
     // the helicopter
     const H = w.h;
-    if (vr.h) {
+    if (heliOn) {
       if (!w.model) {
         try { w.model = new HeliModel(this.o.models()); } catch (err) { console.warn('[mp] rescue helicopter', err); }
         if (w.model) {
@@ -529,7 +537,7 @@ export class RemoteVehicles {
         }
       }
     } else if (H.shown) this.hideRescueHeli(w);
-    if (!vr.h) { H.posed = false; if (w.cabinCol) { RemoteVehicles.place(w.cabinCol, false); RemoteVehicles.place(w.tailCol, false); } }
+    if (!heliOn) { H.posed = false; if (w.cabinCol) { RemoteVehicles.place(w.cabinCol, false); RemoteVehicles.place(w.tailCol, false); } }
     // the ambulance
     const A = w.a;
     if (vr.a) {

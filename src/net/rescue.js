@@ -17,12 +17,22 @@ export class RescueMp {
     this.mp = mp;
     this.t = 0;
     this.sent = false;
+    this.list = [];
+    // (Oct 30 2026, the user: "my heli landed on another heli and went through": the other players' rescue
+    // helicopters, for yours to land beside the pad when one stands on it: game/heli/rescue.js padCheck)
+    this.others = () => {
+      const L = this.list, rs = this.mp.vehicles?.rescues;
+      L.length = 0;
+      if (rs) for (const w of rs.values()) if (w.model && w.h.posed && w.ref?.h) L.push(w.h);
+      return L;
+    };
   }
   get h() { return window.__game?.heli || null; }
 
   /** Every frame (session.update): the rescue's pose out while it runs. */
   frame(dt) {
     const h = this.h, R = h?.rescue;
+    if (R && R.others !== this.others) R.others = this.others;
     if (!net.open) return; // (offline: what the server shows is settled once back: sent / reset)
     if (!R?.active) {
       if (this.sent) { this.sent = false; net.request('veh', { k: 'rescue', off: true }).catch(() => {}); }
@@ -35,13 +45,14 @@ export class RescueMp {
     const s = !seat ? 0 : seat === R.ambSeat ? 3 : seat === R.cabinSeat ? 2 : seat === R.winchSeat ? 1 : 0;
     const msg = {
       k: 'rescue',
-      h: f ? [r2(f.pos.x), r2(f.pos.y), r2(f.pos.z), r2(f.yaw), r2(f.pitch), r2(f.roll), r2(Math.min(1, Math.max(0, h.rpm || 0)))] : null,
+      // (gone after handing you to the ambulance, Oct 30 2026: null, the others drop it at once: vehicles.js updateRescue)
+      h: f && !R.gone ? [r2(f.pos.x), r2(f.pos.y), r2(f.pos.z), r2(f.yaw), r2(f.pitch), r2(f.roll), r2(Math.min(1, Math.max(0, h.rpm || 0)))] : null,
       a: amb?.ok && amb.group?.visible ? [r2(amb.x), r2(amb.group.position.y), r2(amb.z), r2(amb.yaw), r2(Math.max(-40, Math.min(40, amb.v || 0)))] : null,
       s,
       rope: R.rope?.visible ? r2(R.ropeLen) : 0,
       l: R.phase === 'arrive' || R.phase === 'ambulance',
     };
-    if (!msg.h && !msg.a) return;
+    if (!msg.h && !msg.a) { if (this.sent) { this.sent = false; net.request('veh', { k: 'rescue', off: true }).catch(() => {}); } return; }
     this.sent = true;
     net.send('veh', msg);
   }

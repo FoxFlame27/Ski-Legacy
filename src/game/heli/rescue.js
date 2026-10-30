@@ -61,9 +61,13 @@ export class Rescue {
     this.ropeLen = 0;
     this.amb = null;          // the ambulance at the pad (made on the first rescue)
     this.ambSeat = { pos: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, 1) };
+    this.liftT = -1;          // seconds since it lifted off again after handing you to the ambulance (-1: not yet)
+    this.gone = false;        // ...and gone (hidden, back on its pad unseen until the rescue ends)
+    this.others = null;       // multiplayer: (out) => the other players' rescue helicopters [{ x, y, z }] (net/rescue.js)
+    this.busyT = 0;
   }
-  /** The helicopter is back on its pad and you are in the ambulance (its rotor can wind down). */
-  get grounded() { return this.phase === 'ambulance'; }
+  /** The helicopter has gone after handing you to the ambulance (its rotor stops). */
+  get grounded() { return this.phase === 'ambulance' && this.gone; }
 
   get active() { return !!this.phase; }
   /** You are in the cabin (inside sound, chase camera). */
@@ -164,6 +168,20 @@ export class Rescue {
       autopilot(f, g, o);
       return o;
     }
+    if (this.phase === 'home') this.padCheck(dt);
+    if (this.phase === 'ambulance') {
+      // (Oct 30 2026, the user: "make sure the heli despawns straight after the other person went on the ambulance,
+      // because before, my heli landed on another heli and went through": it stood on the pad all through your
+      // ambulance ride, and the next player's rescue landed right in it. Now, once you are handed over, it lifts off,
+      // climbs away over the pad for a few seconds and is gone: after() hides it, net/rescue.js stops sending it)
+      if (this.gone || this.liftT < 0) return o;
+      const L = h.pilot.pad || h.home, yaw = L.yaw ?? h.home.yaw;
+      g.x = L.x + Math.sin(yaw) * 400; g.z = L.z + Math.cos(yaw) * 400;
+      g.y = Math.max(f.groundY + f.cgH + 25, (L.y ?? h.home.y) + f.cgH + 90); g.speed = 40; g.stop = 2;
+      autopilot(f, g, o);
+      if (this.liftT < 1.2) { o.fwd = 0; o.turn = 0; o.lift = 1; } // (straight up off the skids first)
+      return o;
+    }
     if (this.phase === 'home' || this.phase === 'arrive' || this.phase === 'out') {
       Object.assign(o, h.pilot.update(dt));
       if (this.phase === 'home' && h.pilot.phase === 'landed') this.go('arrive');
@@ -173,6 +191,53 @@ export class Rescue {
   }
 
   go(phase) { this.phase = phase; this.pt = 0; }
+
+  // (Oct 30 2026, the user: "my heli landed on another heli and went through, because another player got picked up by
+  // a heli before me": every rescue lands on the same pad.) Flying home, a few times a second: is another player's
+  // rescue helicopter standing on (or hovering over) the spot it is heading for? Then land on free flat snow beside
+  // the pad instead (pickPad), and back up to the glide path if it was already coming down.
+  padCheck(dt) {
+    const h = this.h, f = h.flight, P = h.pilot;
+    if (!this.others || !P.pad || (this.busyT -= dt) > 0) return;
+    this.busyT = 0.3;
+    if (Math.hypot(P.pad.x - f.pos.x, P.pad.z - f.pos.z) > 400) return;
+    if (!this.busy(P.pad.x, P.pad.z)) return;
+    const s = this.pickPad();
+    if (!s) return;
+    P.pad = s;
+    if (P.phase === 'align' || P.phase === 'down') P.phase = 'transit';
+  }
+
+  // another player's rescue helicopter on or over (x, z): rotor discs overlapping, lower than 60 m above the snow
+  busy(x, z) {
+    const h = this.h, L = this.others?.() || [], reach = FRAME.rotorR * 2 + 3;
+    for (const o of L) if (Math.hypot(o.x - x, o.z - z) < reach && o.y - h.ground(o.x, o.z) < 60) return true;
+    return false;
+  }
+
+  // free flat snow 15 to 24 m from the pad (first the side away from the ambulance), clear of colliders and of the
+  // other rescue helicopters; null: none (it lands on the pad after all)
+  pickPad() {
+    const h = this.h, H = h.home, veg = h.player.vegetation;
+    for (const r of [17, 20, 15, 24]) {
+      for (const da of [Math.PI / 2, Math.PI, 0, Math.PI * 0.75, Math.PI * 0.25, -Math.PI * 0.75, -Math.PI / 4]) {
+        const a = H.yaw + da, x = H.x + Math.sin(a) * r, z = H.z + Math.cos(a) * r;
+        const e = 2.5, slope = Math.hypot(h.ground(x + e, z) - h.ground(x - e, z), h.ground(x, z + e) - h.ground(x, z - e)) / (2 * e);
+        const e2 = 5.5, slope2 = Math.hypot(h.ground(x + e2, z) - h.ground(x - e2, z), h.ground(x, z + e2) - h.ground(x, z - e2)) / (2 * e2);
+        if (slope > 0.2 || slope2 > 0.2) continue;
+        if (veg?.collide(x, z, FRAME.rotorR + 2, 1.2)) continue;
+        let hit = false;
+        for (const c of h.colliders) {
+          if (c === h.cabinCol || c === h.tailCol || c.x > 1e8) continue;
+          const reach = (c.r ?? Math.hypot(c.hw, c.hd)) + FRAME.rotorR + 1.5;
+          if (Math.abs(x - c.x) < reach && Math.abs(z - c.z) < reach && Math.hypot(x - c.x, z - c.z) < reach) { hit = true; break; }
+        }
+        if (hit || this.busy(x, z)) continue;
+        return { x, z, y: h.ground(x, z), yaw: H.yaw };
+      }
+    }
+    return null;
+  }
 
   settled() {
     const p = this.h.player;
@@ -252,6 +317,7 @@ export class Rescue {
     // off, then the camera follows it); there you are treated and released
     if (this.phase === 'ambulance') {
       const amb = this.amb;
+      if (this.liftT >= 0 && !this.gone && (this.liftT += sdt) > 5) this.vanish();
       if (!this.leaving) amb.drive(sdt);
       amb.flash(0, nightK(h));
       amb.pos(this.ambSeat.pos); this.ambSeat.pos.y += 1.2;
@@ -414,6 +480,7 @@ export class Rescue {
         this.amb.rider = true; this.amb.syncCol(); // (you're in it: its collider never pushes you off your seat)
         this.amb.plan();
         this.shotAt = null;
+        this.liftT = 0; this.gone = false; // (it lifts off now and is gone in a few seconds: controls, after)
         this.go('ambulance');
         this.leaving = false;
       }).catch(() => this.fail());
@@ -525,9 +592,30 @@ export class Rescue {
     }).then(done, done);
   }
 
+  // gone after the hand-over (Oct 30 2026, the user: "make sure the heli despawns straight after the other person went
+  // on the ambulance"): hidden, set back down on its pad unseen and not solid (heli.js syncModel), the rotor stopped;
+  // net/rescue.js sends h: null from now on, so everyone else drops it too. It shows on its pad again once it is over.
+  vanish() {
+    const h = this.h, m = h.model;
+    this.gone = true;
+    m.root.visible = false; m.pool.mesh.visible = false; m.beam.visible = false;
+    h.rpm = 0;
+    h.flight.place(h.home.x, h.home.z, h.home.yaw, h.ground);
+    h.pilot.phase = 'idle';
+    h.syncModel();
+  }
+
   /** End the rescue (heli.abort / finish). */
   cleanup() {
     const p = this.h.player;
+    if (this.liftT >= 0 || this.gone) { // (it had left after the hand-over: back on its pad, shown again)
+      const h = this.h;
+      this.liftT = -1; this.gone = false;
+      h.model.root.visible = true;
+      h.rpm = 0;
+      try { h.place(); } catch (e) { console.warn('rescue: back on the pad', e); }
+    }
+    if (this.h.pilot?.pad && this.h.pilot.pad !== this.h.home) this.h.pilot.pad = this.h.home; // (landed beside the pad: pickPad)
     if (this.rope) this.rope.visible = false;
     this.amb?.hide();
     this.h.audio?.setSiren?.({ on: false });

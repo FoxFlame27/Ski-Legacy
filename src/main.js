@@ -1695,6 +1695,9 @@ function openPause() {
 }
 function closePause() {
   paused = false;
+  // (Oct 30, the user: hit by a car the moment you resume: a vehicle that drove onto your spot while you were paused
+  // only pushes you aside for the first 3 s back)
+  if (vehicleHits) vehicleHits.safeUntil = Math.max(vehicleHits.safeUntil || 0, performance.now() + 3000);
   audio.setPaused(false);
   hud.el.hidden = false;
   menu.hidePause();

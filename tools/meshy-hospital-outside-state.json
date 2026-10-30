@@ -1,0 +1,22 @@
+{
+  "planter_spruce": {
+    "preview": "01a18c9c-f3ce-7778-a40d-8a3644de3fb2",
+    "refine": "01a18ca3-c8a3-716a-ab42-a88a27ffbf9a",
+    "done": true
+  },
+  "bollard_steel": {
+    "preview": "01a18c9c-f3ac-72cf-9cc7-99e86391f8e0",
+    "refine": "01a18c9e-d092-7076-a756-b125792fdb46",
+    "done": true
+  },
+  "litter_bin": {
+    "preview": "01a18c9c-f39e-7428-b07a-0e611b3d462c",
+    "refine": "01a18ca0-4227-73af-8f46-96f1303fcf89",
+    "done": true
+  },
+  "grit_box": {
+    "preview": "01a18c9c-f384-7545-91fb-f4e2667c7baf",
+    "refine": "01a18ca1-6cf3-717f-a8c2-956fab6bc5bf",
+    "done": true
+  }
+}

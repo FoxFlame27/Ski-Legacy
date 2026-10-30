@@ -8,6 +8,7 @@ import { nightUniform } from '../../world/village.js';
 import { glowPoints, glowScale } from './fx.js';
 import { meshyPole } from '../../world/pistelights.js';
 import { floodBank, floodMaterial, floodCenter } from '../../world/meshylights.js';
+import { busRoads } from '../bus/roads.js'; // (the site picked with the roads: bus/roads.js planHeliRoad, its Rettungsweg)
 
 export const PAD_R = 10;
 // preferred spots (open snow 130-200 m from the plaza), first that is clear wins
@@ -21,6 +22,8 @@ const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a
  * bus stops, other pads and every collider (buildings, props, nets).
  */
 export function chooseSite(layout, colliders) {
+  // (picked while the roads were planned, with these same tests, so its road to the medical centre could be carved in)
+  if (busRoads.helipad) return { x: busRoads.helipad.x, z: busRoads.helipad.z, score: 0 };
   const corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false };
   let best = null;
   for (const [x, z] of SPOTS) {

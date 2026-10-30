@@ -187,6 +187,8 @@ function driftGeometry(kind) {
   }).catch(() => null));
   return driftGeo.get(kind);
 }
+/** Resolves once every Meshy drift has loaded (or failed): the drifts made before it have swapped in by then. */
+export const driftsReady = () => Promise.all(Object.keys(DRIFTS).map(driftGeometry));
 let driftMat = null, driftMatFb = null;
 /** The drifts' snow: the ground's (terrain.js: albedo ~0.83 / 0.86 / 0.90 linear, roughness ~0.6), shaded by the
  * drift's vertex colours (fb: the stand-in's, without them). */
@@ -204,6 +206,7 @@ export function snowDrift(kind, len, wid, h, { mat = snowDriftMaterial(), sink =
   const g = new THREE.Group();
   const fb = new THREE.Mesh(new THREE.SphereGeometry(0.5, 22, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat.vertexColors ? snowDriftMaterial(true) : mat);
   fb.scale.set(len, h * 2, wid); fb.position.y = -sink * h; fb.receiveShadow = true; fb.castShadow = false; g.add(fb);
+  fb.userData.noMerge = true; // (swapped out once the drift loads: never welded into a merged mesh, where it would stay)
   driftGeometry(kind in DRIFTS ? kind : 'long').then((geo) => {
     if (!geo) return;
     const m = new THREE.Mesh(geo, mat);
@@ -212,6 +215,130 @@ export function snowDrift(kind, len, wid, h, { mat = snowDriftMaterial(), sink =
     g.remove(fb); g.add(m);
   });
   return g;
+}
+
+// The parking signs at a forecourt's bays (the police station's, the medical centre's: game/hospital.js): a blue
+// European "P" on a galvanised post with an additional panel under it (lines: one or two, badge: the theme's emblem
+// left of them, sub: the smaller plate's two lines). ctx: { g (the lot's group), add, gy, w (lot -> world), colliders,
+// yaw0, snow }; theme: { badge(c, x, y, r), ink, rim } (police: the star badge, black). Returns parkSign(lx, lz, lines,
+// badge, sub).
+export function parkingSigns({ g, add, gy, w, colliders, yaw0, snow }, theme = {}) {
+  const T = { badge: (c, x, y, r) => drawBadge(c, x, y, r, { ring: '#c9a54a', star: '#f4d77a', inner: '#123e86' }), ink: '#111111', rim: '#111111', ...theme };
+  const rrect = (c, x, y, w_, h, r) => { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w_, y, x + w_, y + h, r); c.arcTo(x + w_, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w_, y, r); c.closePath(); };
+  const galv = new THREE.MeshStandardMaterial({ color: 0xaab1b6, metalness: 0.75, roughness: 0.38 });
+  const plateBack = new THREE.MeshStandardMaterial({ color: 0x8e959a, metalness: 0.6, roughness: 0.45 });
+  const faceMat = (t) => new THREE.MeshStandardMaterial({ map: t, roughness: 0.35, metalness: 0.05 });
+  const fitText = (c, t, x, y, max) => { // (too wide: a smaller font, never squashed letters)
+    const m_ = c.measureText(t).width;
+    if (m_ > max) c.font = c.font.replace(/(\d+(?:\.\d+)?)px/, (_, n_) => `${Math.max(8, Math.floor((+n_ * max) / m_))}px`);
+    c.fillText(t, x, y);
+  };
+  const pT = canvasTex(512, 512, (c, cw, ch) => {
+    c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+    c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 46); c.fill();
+    c.fillStyle = '#1d5bb0'; rrect(c, 26, 26, cw - 52, ch - 52, 32); c.fill();
+    c.fillStyle = '#ffffff'; c.font = 'bold 400px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('P', cw / 2, ch / 2 + 22);
+  });
+  const panelT = (lines, badge) => canvasTex(512, 256, (c, cw, ch) => {
+    c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+    c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 22); c.fill();
+    c.strokeStyle = T.rim; c.lineWidth = 9; rrect(c, 20, 20, cw - 40, ch - 40, 14); c.stroke();
+    c.fillStyle = T.ink; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const x = badge ? cw / 2 + 52 : cw / 2;
+    const mx = cw - 70 - (badge ? 104 : 0);
+    if (badge) T.badge(c, 88, ch / 2, 52);
+    if (lines.length === 1) { c.font = 'bold 88px Arial'; fitText(c, lines[0], x, ch / 2 + 6, mx); }
+    else { c.font = 'bold 74px Arial'; fitText(c, lines[0], x, ch / 2 - 40, mx); c.font = 'italic 62px Georgia'; fitText(c, lines[1], x, ch / 2 + 50, mx); }
+  });
+  const plate = (wd, ht, tex_, x, y, z, parent) => {
+    const mats = [plateBack, plateBack, plateBack, plateBack, faceMat(tex_), plateBack];
+    const m = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.02), mats); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
+    add(new THREE.BoxGeometry(wd - 0.02, 0.03, 0.045), snow, x, y + ht / 2 + 0.012, z, parent, false); // (snow along its top edge)
+    return m;
+  };
+  // the Meshy sign (decor/parking_sign: post, a tall P plate, an additional plate under it) once loaded: turned to
+  // face the road, the post on the spot; the readable faces stay canvas, laid on its two plates (found from its
+  // triangles: the parts wider than the post, split at the gap between them), snow on the top plate and the post
+  const topTex = (asp, lines, badge) => canvasTex(512, Math.min(1024, Math.round(512 * asp)), (c, cw, ch) => {
+    c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+    c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 40); c.fill();
+    c.fillStyle = '#1d5bb0'; rrect(c, 24, 24, cw - 48, ch - 48, 28); c.fill();
+    c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const field = ch / cw >= 1.25, pH = field ? ch * 0.58 : ch;
+    c.font = `bold ${Math.round(Math.min(cw * 0.78, pH * 0.8))}px Arial`; c.fillText('P', cw / 2, pH / 2 + (field ? 26 : 22));
+    if (!field) return;
+    const fy0 = pH, fy1 = ch - 52; rrect(c, 52, fy0, cw - 104, fy1 - fy0, 14); c.fill();
+    c.fillStyle = T.ink; const x = badge ? cw / 2 + 40 : cw / 2, mx = cw - 130 - (badge ? 80 : 0), fm = (fy0 + fy1) / 2;
+    if (badge) T.badge(c, 112, fm, Math.min(46, (fy1 - fy0) * 0.36));
+    if (lines.length === 1) { c.font = `bold ${Math.round(Math.min(84, (fy1 - fy0) * 0.5))}px Arial`; fitText(c, lines[0], x, fm + 4, mx); }
+    else { const fs = Math.round(Math.min(66, (fy1 - fy0) * 0.32)); c.font = `bold ${fs}px Arial`; fitText(c, lines[0], x, fm - fs * 0.55, mx); c.font = `italic ${Math.round(fs * 0.85)}px Georgia`; fitText(c, lines[1], x, fm + fs * 0.6, mx); }
+  });
+  const subTex = (asp, lines) => canvasTex(512, Math.max(128, Math.min(1024, Math.round(512 * asp))), (c, cw, ch) => {
+    c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+    c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 22); c.fill();
+    c.strokeStyle = T.rim; c.lineWidth = 9; rrect(c, 20, 20, cw - 40, ch - 40, 14); c.stroke();
+    c.fillStyle = T.ink; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const fs = Math.round(Math.min(70, ch * 0.25)), mx = cw - 80;
+    c.font = `bold ${fs}px Arial`; fitText(c, lines[0], cw / 2, ch / 2 - fs * 0.58, mx);
+    c.font = `italic ${Math.round(fs * 0.85)}px Georgia`; fitText(c, lines[1], cw / 2, ch / 2 + fs * 0.62, mx);
+  });
+  const dressSign = (sg, m, lines, badge, sub) => {
+    const pts = modelPoints(sg, m, 1), tris = modelTris(sg, m);
+    if (pts.length < 50 || !tris.length) return;
+    let H = 0; for (const v of pts) H = Math.max(H, v.y);
+    const ext = (arr, k) => { let lo = Infinity, up = -Infinity; for (const v of arr) { lo = Math.min(lo, v[k]); up = Math.max(up, v[k]); } return [lo, up]; };
+    const hi = pts.filter((v) => v.y > H * 0.5), [hx0, hx1] = ext(hi, 'x'), [hz0, hz1] = ext(hi, 'z');
+    const wa = hx1 - hx0 >= hz1 - hz0 ? 'x' : 'z', da = wa === 'x' ? 'z' : 'x';
+    const med = (arr) => { const s_ = arr.slice().sort((p_, q) => p_ - q); return s_[s_.length >> 1] ?? 0; };
+    const foot = pts.filter((v) => v.y > H * 0.12 && v.y < H * 0.25);
+    if (foot.length < 4) return;
+    const pw = med(foot.map((v) => v[wa])), pd = med(foot.map((v) => v[da]));
+    const rr = foot.map((v) => Math.abs(v[wa] - pw)).sort((p_, q) => p_ - q), thr = rr[Math.floor(rr.length * 0.9)] * 1.5 + 0.02;
+    // the plates: triangles reaching out past the post, above its foot; their height coverage in 1 cm bins
+    const pt = tris.filter((t) => t.some((v) => Math.abs(v[wa] - pw) > thr) && t.every((v) => v.y > H * 0.15));
+    if (pt.length < 4) return;
+    const pv = pt.flat(), [py0, py1] = ext(pv, 'y'), n = Math.max(2, Math.round((py1 - py0) / 0.01)), bins = new Uint8Array(n);
+    const bin = (y) => Math.max(0, Math.min(n - 1, Math.floor(((y - py0) / (py1 - py0)) * n)));
+    for (const t of pt) { const [a, b] = ext(t, 'y'); for (let i = bin(a); i <= bin(b); i++) bins[i] = 1; }
+    let best = [0, 0];
+    for (let i = 1, run = 0; i < n - 1; i++) { run = bins[i] ? 0 : run + 1; if (run > best[1] - best[0]) best = [i - run + 1, i + 1]; }
+    const split = best[1] - best[0] >= 2;
+    const sLo = split ? py0 + (best[0] / n) * (py1 - py0) : py0, sHi = split ? py0 + (best[1] / n) * (py1 - py0) : py0;
+    let md = 0; for (const v of pv) md += v[da]; md /= pv.length;
+    const front = md - pd < -0.002 ? -1 : 1;
+    const ox = wa === 'x' ? pw : pd, oz = wa === 'x' ? pd : pw;
+    const { pivot, toPivot, faceRot } = frontPivot(sg, m, da, front, ox, 0, oz);
+    const face = (y0_, y1_, mk) => {
+      const reg = pv.filter((v) => v.y >= y0_ - 0.005 && v.y <= y1_ + 0.005);
+      if (reg.length < 3 || y1_ - y0_ < 0.05) return null;
+      const [w0, w1] = ext(reg, wa), [d0, d1] = ext(reg, da), fd = (front > 0 ? d1 : d0) + front * 0.004, cw = (w0 + w1) / 2, cy = (y0_ + y1_) / 2;
+      const ww = (w1 - w0) * 0.97, hh = (y1_ - y0_) * 0.97;
+      const f = new THREE.Mesh(new THREE.PlaneGeometry(ww, hh), faceMat(mk(hh / ww)));
+      f.position.copy(wa === 'x' ? toPivot(cw, cy, fd) : toPivot(fd, cy, cw)); f.rotation.y = faceRot; f.receiveShadow = true; pivot.add(f);
+      return f;
+    };
+    const top = face(sHi, py1, (a) => topTex(a, lines, badge));
+    if (split) face(py0, sLo, (a) => subTex(a, sub));
+    if (top) { // (snow along the top plate's edge)
+      const s_ = add(new THREE.BoxGeometry(top.geometry.parameters.width * 0.96, 0.03, 0.05), snow, 0, 0, 0, pivot, false);
+      s_.position.copy(top.position).setY(py1 + 0.012); s_.rotation.y = faceRot; s_.translateZ(-0.024);
+    }
+    if (H > py1 + 0.03) { const c_ = add(new THREE.SphereGeometry(0.06, 12, 8), snow, 0, H, 0, pivot, false); c_.scale.set(1, 0.45, 1); } // (a cap on the post)
+  };
+  const parkSign = (lx, lz, lines, badge, sub) => {
+    const y0 = gy(lx, lz), sg = new THREE.Group(), fb = new THREE.Group();
+    sg.position.set(lx, y0, lz); sg.add(fb); g.add(sg);
+    add(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 12), galv, 0, 1.22, 0, fb);                                       // (the post)
+    add(new THREE.CylinderGeometry(0.034, 0.034, 0.02, 12), galv, 0, 2.48, 0, fb);                                    // (its cap)
+    const cap = add(new THREE.SphereGeometry(0.055, 12, 8), snow, 0, 2.5, 0, fb, false); cap.scale.set(1, 0.5, 1);    // (snow on it)
+    const pnl = panelT(lines, badge);
+    plate(0.6, 0.6, pT, 0, 2.08, 0.045, fb);
+    plate(0.6, 0.3, pnl, 0, 1.6, 0.045, fb);
+    for (const y of [2.25, 1.9, 1.6]) add(new THREE.BoxGeometry(0.1, 0.035, 0.05), galv, 0, y, 0.018, fb, false); // (clamps)
+    swapInModel(sg, 'decor/parking_sign', { size: 2.7, axis: 'y' }, fb, (m) => dressSign(sg, m, lines, badge, sub));
+    const p = w(lx, lz); colliders.push({ x: p.x, z: p.z, hw: 0.42, hd: 0.15, rot: -yaw0 }); // (the post and its plates)
+  };
+  return parkSign;
 }
 
 /**
@@ -385,9 +512,7 @@ export function buildPrisonOutside(P, L) {
     lB(fb, 0.06, 0.06, 0.16, iron, 0, 0.24, 0.1);
     lB(fb, 0.26, 0.4, 0.26, iron, 0, 0, 0.26); add(new THREE.BoxGeometry(0.2, 0.32, 0.2), lanternGlass, 0, 0, 0.26, fb, false);
   });
-  // a brass plate by the door: what it is
-  { const pl = makeSign('POLIZEIINSPEKTION\nPrison · visits welcome', { w: 1.0, h: 0.5, bg: '#f2ede0', fg: '#14263f', border: '#b08d4a', font: 'bold 96px Georgia' });
-    pl.position.set(DX + 1.55, 1.55, D / 2 + 0.04); house.add(pl); }
+  // (no brass plate by the door: Oct 30, the user asked it gone)
 
   // ---- snow banked against the walls (the Meshy drifts: long wind-blown banks, a heap in the back corners, low
   // mounds in front; overlapping so they read as one bank, sunk a little), deeper at the back and sides
@@ -486,115 +611,7 @@ export function buildPrisonOutside(P, L) {
   // the parking signs at the bays' heads (by the house, facing the road): a blue European "P" on a galvanised post with
   // an additional panel under it, "Polizei" (between the two patrol bays) and "Besucher / Visitors" (the visitors' bay)
   {
-    const rrect = (c, x, y, w_, h, r) => { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w_, y, x + w_, y + h, r); c.arcTo(x + w_, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w_, y, r); c.closePath(); };
-    const galv = new THREE.MeshStandardMaterial({ color: 0xaab1b6, metalness: 0.75, roughness: 0.38 });
-    const plateBack = new THREE.MeshStandardMaterial({ color: 0x8e959a, metalness: 0.6, roughness: 0.45 });
-    const faceMat = (t) => new THREE.MeshStandardMaterial({ map: t, roughness: 0.35, metalness: 0.05 });
-    const pT = canvasTex(512, 512, (c, cw, ch) => {
-      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
-      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 46); c.fill();
-      c.fillStyle = '#1d5bb0'; rrect(c, 26, 26, cw - 52, ch - 52, 32); c.fill();
-      c.fillStyle = '#ffffff'; c.font = 'bold 400px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('P', cw / 2, ch / 2 + 22);
-    });
-    const panelT = (lines, badge) => canvasTex(512, 256, (c, cw, ch) => {
-      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
-      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 22); c.fill();
-      c.strokeStyle = '#111111'; c.lineWidth = 9; rrect(c, 20, 20, cw - 40, ch - 40, 14); c.stroke();
-      c.fillStyle = '#111111'; c.textAlign = 'center'; c.textBaseline = 'middle';
-      const x = badge ? cw / 2 + 52 : cw / 2;
-      if (badge) drawBadge(c, 88, ch / 2, 52, { ring: '#c9a54a', star: '#f4d77a', inner: '#123e86' });
-      if (lines.length === 1) { c.font = 'bold 88px Arial'; c.fillText(lines[0], x, ch / 2 + 6); }
-      else { c.font = 'bold 74px Arial'; c.fillText(lines[0], x, ch / 2 - 40); c.font = 'italic 62px Georgia'; c.fillText(lines[1], x, ch / 2 + 50); }
-    });
-    const plate = (wd, ht, tex_, x, y, z, parent) => {
-      const mats = [plateBack, plateBack, plateBack, plateBack, faceMat(tex_), plateBack];
-      const m = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.02), mats); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
-      add(new THREE.BoxGeometry(wd - 0.02, 0.03, 0.045), snow, x, y + ht / 2 + 0.012, z, parent, false); // (snow along its top edge)
-      return m;
-    };
-    // the Meshy sign (decor/parking_sign: post, a tall P plate, an additional plate under it) once loaded: turned to
-    // face the road, the post on the spot; the readable faces stay canvas, laid on its two plates (found from its
-    // triangles: the parts wider than the post, split at the gap between them), snow on the top plate and the post
-    const fitText = (c, t, x, y, max) => { const m_ = c.measureText(t).width; if (m_ <= max) { c.fillText(t, x, y); return; } c.save(); c.translate(x, y); c.scale(max / m_, 1); c.fillText(t, 0, 0); c.restore(); };
-    const topTex = (asp, lines, badge) => canvasTex(512, Math.min(1024, Math.round(512 * asp)), (c, cw, ch) => {
-      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
-      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 40); c.fill();
-      c.fillStyle = '#1d5bb0'; rrect(c, 24, 24, cw - 48, ch - 48, 28); c.fill();
-      c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle';
-      const field = ch / cw >= 1.25, pH = field ? ch * 0.58 : ch;
-      c.font = `bold ${Math.round(Math.min(cw * 0.78, pH * 0.8))}px Arial`; c.fillText('P', cw / 2, pH / 2 + (field ? 26 : 22));
-      if (!field) return;
-      const fy0 = pH, fy1 = ch - 52; rrect(c, 52, fy0, cw - 104, fy1 - fy0, 14); c.fill();
-      c.fillStyle = '#111111'; const x = badge ? cw / 2 + 40 : cw / 2, mx = cw - 130 - (badge ? 80 : 0), fm = (fy0 + fy1) / 2;
-      if (badge) drawBadge(c, 112, fm, Math.min(46, (fy1 - fy0) * 0.36), { ring: '#c9a54a', star: '#f4d77a', inner: '#123e86' });
-      if (lines.length === 1) { c.font = `bold ${Math.round(Math.min(84, (fy1 - fy0) * 0.5))}px Arial`; fitText(c, lines[0], x, fm + 4, mx); }
-      else { const fs = Math.round(Math.min(66, (fy1 - fy0) * 0.32)); c.font = `bold ${fs}px Arial`; fitText(c, lines[0], x, fm - fs * 0.55, mx); c.font = `italic ${Math.round(fs * 0.85)}px Georgia`; fitText(c, lines[1], x, fm + fs * 0.6, mx); }
-    });
-    const subTex = (asp, lines) => canvasTex(512, Math.max(128, Math.min(1024, Math.round(512 * asp))), (c, cw, ch) => {
-      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
-      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 22); c.fill();
-      c.strokeStyle = '#111111'; c.lineWidth = 9; rrect(c, 20, 20, cw - 40, ch - 40, 14); c.stroke();
-      c.fillStyle = '#111111'; c.textAlign = 'center'; c.textBaseline = 'middle';
-      const fs = Math.round(Math.min(70, ch * 0.25)), mx = cw - 80;
-      c.font = `bold ${fs}px Arial`; fitText(c, lines[0], cw / 2, ch / 2 - fs * 0.58, mx);
-      c.font = `italic ${Math.round(fs * 0.85)}px Georgia`; fitText(c, lines[1], cw / 2, ch / 2 + fs * 0.62, mx);
-    });
-    const dressSign = (sg, m, lines, badge, sub) => {
-      const pts = modelPoints(sg, m, 1), tris = modelTris(sg, m);
-      if (pts.length < 50 || !tris.length) return;
-      let H = 0; for (const v of pts) H = Math.max(H, v.y);
-      const ext = (arr, k) => { let lo = Infinity, up = -Infinity; for (const v of arr) { lo = Math.min(lo, v[k]); up = Math.max(up, v[k]); } return [lo, up]; };
-      const hi = pts.filter((v) => v.y > H * 0.5), [hx0, hx1] = ext(hi, 'x'), [hz0, hz1] = ext(hi, 'z');
-      const wa = hx1 - hx0 >= hz1 - hz0 ? 'x' : 'z', da = wa === 'x' ? 'z' : 'x';
-      const med = (arr) => { const s_ = arr.slice().sort((p_, q) => p_ - q); return s_[s_.length >> 1] ?? 0; };
-      const foot = pts.filter((v) => v.y > H * 0.12 && v.y < H * 0.25);
-      if (foot.length < 4) return;
-      const pw = med(foot.map((v) => v[wa])), pd = med(foot.map((v) => v[da]));
-      const rr = foot.map((v) => Math.abs(v[wa] - pw)).sort((p_, q) => p_ - q), thr = rr[Math.floor(rr.length * 0.9)] * 1.5 + 0.02;
-      // the plates: triangles reaching out past the post, above its foot; their height coverage in 1 cm bins
-      const pt = tris.filter((t) => t.some((v) => Math.abs(v[wa] - pw) > thr) && t.every((v) => v.y > H * 0.15));
-      if (pt.length < 4) return;
-      const pv = pt.flat(), [py0, py1] = ext(pv, 'y'), n = Math.max(2, Math.round((py1 - py0) / 0.01)), bins = new Uint8Array(n);
-      const bin = (y) => Math.max(0, Math.min(n - 1, Math.floor(((y - py0) / (py1 - py0)) * n)));
-      for (const t of pt) { const [a, b] = ext(t, 'y'); for (let i = bin(a); i <= bin(b); i++) bins[i] = 1; }
-      let best = [0, 0];
-      for (let i = 1, run = 0; i < n - 1; i++) { run = bins[i] ? 0 : run + 1; if (run > best[1] - best[0]) best = [i - run + 1, i + 1]; }
-      const split = best[1] - best[0] >= 2;
-      const sLo = split ? py0 + (best[0] / n) * (py1 - py0) : py0, sHi = split ? py0 + (best[1] / n) * (py1 - py0) : py0;
-      let md = 0; for (const v of pv) md += v[da]; md /= pv.length;
-      const front = md - pd < -0.002 ? -1 : 1;
-      const ox = wa === 'x' ? pw : pd, oz = wa === 'x' ? pd : pw;
-      const { pivot, toPivot, faceRot } = frontPivot(sg, m, da, front, ox, 0, oz);
-      const face = (y0_, y1_, mk) => {
-        const reg = pv.filter((v) => v.y >= y0_ - 0.005 && v.y <= y1_ + 0.005);
-        if (reg.length < 3 || y1_ - y0_ < 0.05) return null;
-        const [w0, w1] = ext(reg, wa), [d0, d1] = ext(reg, da), fd = (front > 0 ? d1 : d0) + front * 0.004, cw = (w0 + w1) / 2, cy = (y0_ + y1_) / 2;
-        const ww = (w1 - w0) * 0.97, hh = (y1_ - y0_) * 0.97;
-        const f = new THREE.Mesh(new THREE.PlaneGeometry(ww, hh), faceMat(mk(hh / ww)));
-        f.position.copy(wa === 'x' ? toPivot(cw, cy, fd) : toPivot(fd, cy, cw)); f.rotation.y = faceRot; f.receiveShadow = true; pivot.add(f);
-        return f;
-      };
-      const top = face(sHi, py1, (a) => topTex(a, lines, badge));
-      if (split) face(py0, sLo, (a) => subTex(a, sub));
-      if (top) { // (snow along the top plate's edge)
-        const s_ = add(new THREE.BoxGeometry(top.geometry.parameters.width * 0.96, 0.03, 0.05), snow, 0, 0, 0, pivot, false);
-        s_.position.copy(top.position).setY(py1 + 0.012); s_.rotation.y = faceRot; s_.translateZ(-0.024);
-      }
-      if (H > py1 + 0.03) { const c_ = add(new THREE.SphereGeometry(0.06, 12, 8), snow, 0, H, 0, pivot, false); c_.scale.set(1, 0.45, 1); } // (a cap on the post)
-    };
-    const parkSign = (lx, lz, lines, badge, sub) => {
-      const y0 = gy(lx, lz), sg = new THREE.Group(), fb = new THREE.Group();
-      sg.position.set(lx, y0, lz); sg.add(fb); g.add(sg);
-      add(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 12), galv, 0, 1.22, 0, fb);                                       // (the post)
-      add(new THREE.CylinderGeometry(0.034, 0.034, 0.02, 12), galv, 0, 2.48, 0, fb);                                    // (its cap)
-      const cap = add(new THREE.SphereGeometry(0.055, 12, 8), snow, 0, 2.5, 0, fb, false); cap.scale.set(1, 0.5, 1);    // (snow on it)
-      const pnl = panelT(lines, badge);
-      plate(0.6, 0.6, pT, 0, 2.08, 0.045, fb);
-      plate(0.6, 0.3, pnl, 0, 1.6, 0.045, fb);
-      for (const y of [2.25, 1.9, 1.6]) add(new THREE.BoxGeometry(0.1, 0.035, 0.05), galv, 0, y, 0.018, fb, false); // (clamps)
-      swapInModel(sg, 'decor/parking_sign', { size: 2.7, axis: 'y' }, fb, (m) => dressSign(sg, m, lines, badge, sub));
-      const p = w(lx, lz); colliders.push({ x: p.x, z: p.z, hw: 0.42, hd: 0.15, rot: -yaw0 }); // (the post and its plates)
-    };
+    const parkSign = parkingSigns({ g, add, gy, w, colliders, yaw0, snow });
     const hz = BAYS.z0 - 0.3; // (at the bays' heads, clear of the bays and the house's drifts)
     parkSign(BAYS.lines[1], hz, ['Polizei'], true, ['Nur Dienstfahrzeuge', 'Official vehicles only']);
     parkSign((BAYS.lines[2] + BAYS.lines[3]) / 2, hz, ['Besucher', 'Visitors'], false, ['Bitte am Schalter melden', 'Please report inside']);

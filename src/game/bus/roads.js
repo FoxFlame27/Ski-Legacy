@@ -395,6 +395,7 @@ export function roadsideBlocked(x, z, r = 0.3, own = -1, s = 0, { lots = true } 
     for (const L of busRoads.lots) {
       const dx = x - L.x, dz = z - L.z, u = dx * L.ux + dz * L.uz, v = dx * L.vx + dz * L.vz;
       if (Math.abs(u) < L.hw + 1 + r && Math.abs(v) < L.hd + 1 + r) return 'car park';
+      if (L.hospital && Math.abs(u) < L.hw + 1 + r && Math.abs(v) < L.hd + 2 * ROAD_HALF + 4.5 + r) return 'car park'; // (and across the road from its forecourt: nothing in front of it)
       if (Math.hypot(x - L.ex, z - L.ez) < 10 + r) return 'car park';
     }
   }
@@ -493,6 +494,7 @@ export function planBusRoads(stops) {
   try { planRentalRoad(obstacles); } catch (e) { console.warn('Westgratstrasse', e); } // (across from the car rental, up the Westgrat)
   try { planPrison(obstacles); } catch (e) { console.warn('prison site', e); } // (moves nothing planned above)
   try { planHospital(obstacles); } catch (e) { console.warn('hospital site', e); } // (last of all: moves nothing planned above)
+  try { planHeliRoad(obstacles); } catch (e) { console.warn('helipad road', e); } // (the helipad and its road to the medical centre: after it)
   clearRouteCache();
   try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
   try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
@@ -952,6 +954,75 @@ function planHospital(O) {
   if (!best) return;
   busRoads.lots.push(best);
   busRoads.hospital = best;
+}
+
+// The HELIPAD (game/heli/pad.js) and the RETTUNGSWEG, its road to the medical centre: the rescue's ambulance waits by
+// the pad and drives you along it to the door (game/heli/ambulance.js); an ordinary road for everybody else (carved,
+// ploughed, kept clear of trees and props, driven by cars and traffic). The pad's site is picked here, while the roads
+// are planned (before the terrain and the props, so the road can be carved in to it), with heli/pad.js chooseSite's
+// tests (flat open snow off the runs, lifts, stations, race starts, stops), the colliders it used standing in as the
+// planned obstacles, roads and lots; chooseSite then takes busRoads.helipad. The road leaves the pad on its village side
+// (where the ambulance waits: rescue.js, PAD_R + 9 m out toward the village; the hut, the mast and the windsock stand
+// off to its sides and behind) and comes in across the road from the medical centre's drive, straight over it into the
+// forecourt (a T junction on that road). No way across from there: to the nearest point of the network instead.
+// busRoads.helipad = { x, z, tvx, tvz (unit, toward the village) }, busRoads.heliRoad = the road (from the pad).
+export const HELI_SPOTS = [[70, 160], [52, 162], [84, 146], [-62, 142], [92, -128], [128, -72], [12, 214], [-118, 98]]; // (heli/pad.js: open snow 130-200 m from the plaza, first that is clear wins)
+const HELI_PAD_R = 10; // (heli/pad.js PAD_R)
+function planHeliRoad(O) {
+  if (!busRoads.roads.length) return;
+  const R = HELI_PAD_R, corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false }, q = {};
+  const lotOut = (L, x, z) => { const dx = x - L.x, dz = z - L.z; return Math.hypot(Math.max(0, Math.abs(dx * L.ux + dz * L.uz) - L.hw), Math.max(0, Math.abs(dx * L.vx + dz * L.vz) - L.hd)); };
+  const roadD = (x, z) => { let d = Infinity; for (const r of busRoads.roads) for (let i = 0; i < r.n; i++) { const ex = r.X[i] - x, ez = r.Z[i] - z; if (Math.abs(ex) < d && Math.abs(ez) < d) d = Math.min(d, Math.hypot(ex, ez)); } return d; };
+  let site = null;
+  for (const [x, z] of HELI_SPOTS) {
+    let hmin = 1e9, hmax = -1e9, cd = 1e9;
+    for (let a = 0; a < 12; a++) for (const r of [0, 6, 12, 20]) {
+      const px = x + Math.cos((a / 12) * Math.PI * 2) * r, pz = z + Math.sin((a / 12) * Math.PI * 2) * r;
+      if (r <= 12) { const h = world.height(px, pz); hmin = Math.min(hmin, h); hmax = Math.max(hmax, h); }
+      cd = Math.min(cd, world.corridorAt(px, pz, corr).d, roadD(px, pz) - (BENCH + 3)); // (the roads' cleared strips, added once they are carved)
+      for (const L of busRoads.lots) if (L.ux !== undefined) cd = Math.min(cd, lotOut(L, px, pz) - 6); // (and the lots')
+    }
+    let near = 1e9;
+    for (const l of layout.lifts) for (const p of [l.bottom, l.top, l.mid]) if (p) near = Math.min(near, Math.hypot(p.x - x, p.z - z) - 40);
+    for (const r of layout.races) if (r.start && r.finish) near = Math.min(near, Math.hypot(r.start.x - x, r.start.z - z) - 20, Math.hypot(r.finish.x - x, r.finish.z - z) - 20);
+    for (const s of busRoads.stops) near = Math.min(near, Math.hypot(s.x - x, s.z - z) - 10);
+    O.query(x, z, q);
+    near = Math.min(near, q.block + 8, q.net + 16, q.ski + 16, q.rail + 12); // (the village buildings, stations, huts, nets, runs, railway)
+    const pad = world.padInfluence(x, z);
+    const score = (hmax - hmin) * 10 + Math.max(0, 8 - cd) * 4 + Math.max(0, 24 - near) * 3 + pad * 50;
+    if (!site || score < site.score) site = { x, z, score };
+    if (hmax - hmin < 0.8 && cd > 8 && near > 24 && pad === 0) { site = { x, z, score }; break; }
+  }
+  if (!site) return;
+  const l = Math.hypot(site.x, site.z) || 1, tvx = -site.x / l, tvz = -site.z / l; // (toward the village: pad.js toVillage)
+  busRoads.helipad = { x: site.x, z: site.z, tvx, tvz };
+  // the road's way: no lots (6 m round), not round the pad and its hut, and not along another road (a crossing: its own junction)
+  const bad = (x, z) => Math.hypot(x - site.x, z - site.z) < R + 14 || busRoads.lots.some((L) => L.ux !== undefined && lotOut(L, x, z) < 8) || laneDistance(x, z) < 13;
+  const p0 = [site.x + tvx * (R + 3), site.z + tvz * (R + 3)], a = { x: site.x + tvx * (R + 18), z: site.z + tvz * (R + 18) };
+  const H = busRoads.hospital, Hr = H && busRoads.roads[H.ri];
+  let pts = null, end = null;
+  if (Hr) {
+    const m = roadAt(Hr, H.s), nx = -m.dz * H.side, nz = m.dx * H.side; // (toward the medical centre)
+    const b = { x: m.x - nx * (ROAD_HALF + 18), z: m.z - nz * (ROAD_HALF + 18) };
+    O.query(b.x, b.z, q);
+    if (!bad(b.x, b.z) && !bad(a.x, a.z) && q.ski > CLEAR.ski && q.block > CLEAR.block && q.net > CLEAR.net && q.rail > CLEAR.rail) {
+      const way = route(a, b, { obstacles: O, margin: 300, bad });
+      if (way) { pts = [p0, ...way, [m.x - nx * (ROAD_HALF + 7), m.z - nz * (ROAD_HALF + 7)], [m.x, m.z]]; end = { x: m.x, z: m.z, y: m.y, hospital: true }; }
+    }
+  }
+  if (!pts) { // (to the nearest point of the network)
+    const net = nearestRoadPoint(a.x, a.z);
+    const way = net && route(a, { x: net.x, z: net.z }, { obstacles: O, margin: 300, bad: (x, z) => Math.hypot(x - net.x, z - net.z) > 30 && bad(x, z) });
+    if (way) { pts = [p0, ...way]; end = { x: net.x, z: net.z, y: net.y, hospital: false }; }
+  }
+  if (!pts) return;
+  const road = makeRoad(smoothPath(pts), { name: 'Helipad', helipad: true, x: p0[0], z: p0[1] }, { name: 'junction', x: end.x, z: end.z }, { y1: end.y });
+  road.access = true; road.heli = true; road.toHospital = end.hospital; road.name = 'Rettungsweg';
+  busRoads.roads.push(road);
+  busRoads.junctions.push({ x: end.x, z: end.z });
+  busRoads.heliRoad = road;
+  // no trees on the pad (the road's own strip is cleared with the others: shapeRoads)
+  world.addCorridor([[site.x - 0.5, site.z], [site.x + 0.5, site.z]], R + 4, 'lift', { helipad: true });
 }
 
 // The PRISON (game/prison.js, the village police station): like the car rental, a building lot right on a road in

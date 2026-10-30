@@ -17,7 +17,7 @@ import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (
 import { makeSign, standSign, nightUniform, addNightGlow } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
 import { shellMaterials } from './carrentalshell.js';
-import { snowDrift, swapInModel } from './prisonoutside.js';
+import { snowDrift, swapInModel, parkingSigns, driftsReady } from './prisonoutside.js';
 import { busRoads, HOSPITAL_LOT } from './bus/roads.js';
 import { mergeStatic } from '../engine/merge.js'; // (the house's boxes welded per material)
 
@@ -46,18 +46,26 @@ function worldUV(geo) {
 const RED = '#c8102e';
 /** A red cross (arm length r, arm half-width a) at (x, y) on a canvas. */
 function drawCross(c, x, y, r, a = r * 0.34, col = RED) { c.fillStyle = col; c.fillRect(x - r, y - a, 2 * r, 2 * a); c.fillRect(x - a, y - r, 2 * a, 2 * r); }
+/** Set c.font to `weight size family`, the size at most px and small enough for text to fit maxW (never squashed). */
+function fitFont(c, text, weight, family, px, maxW) {
+  c.font = `${weight} ${px}px ${family}`;
+  const m = c.measureText(text).width;
+  if (m > maxW) c.font = `${weight} ${Math.max(8, Math.floor((px * maxW) / m))}px ${family}`;
+}
 
-/** The ARZT · MEDICAL CENTRE board (the village's sign style: a lettered face on a wooden back board), a red cross
- *  either side; its face glows at night (userData.faceMaterial). */
+/** The MEDICAL CENTRE board (the village's sign style: a lettered face on a wooden back board), a red cross in a
+ *  square field at either end, the lettering fitted between them (the canvas the board's own shape: nothing stretched);
+ *  its face glows at night (userData.faceMaterial). */
 export function arztSign(w = 5.2, h = 1.0) {
-  const tex = canvasTex(1024, Math.round((1024 * h) / w), (c, cw, ch) => {
+  const tex = canvasTex(1536, Math.round((1536 * h) / w), (c, cw, ch) => {
     c.fillStyle = '#f7f5ef'; c.fillRect(0, 0, cw, ch);
-    c.strokeStyle = RED; c.lineWidth = 10; c.strokeRect(12, 12, cw - 24, ch - 24);
-    const r = ch * 0.3;
-    drawCross(c, 44 + r, ch / 2, r); drawCross(c, cw - 44 - r, ch / 2, r);
-    c.fillStyle = '#7a0a1c'; c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.font = `bold ${Math.round(ch * 0.4)}px Georgia, "Times New Roman", serif`; c.fillText('ARZT · MEDICAL CENTRE', cw / 2, ch * 0.42);
-    c.font = `600 ${Math.round(ch * 0.15)}px Georgia, serif`; c.fillStyle = '#5a4a3c'; c.fillText('N O T A U F N A H M E   2 4 h   ·   L E G A C Y   V I L L A G E', cw / 2, ch * 0.77);
+    const bw = Math.round(ch * 0.05); c.strokeStyle = RED; c.lineWidth = bw; c.strokeRect(bw, bw, cw - 2 * bw, ch - 2 * bw);
+    const r = ch * 0.27, inset = bw * 2 + ch * 0.12; // (a cross either end, clear of the border)
+    for (const x of [inset + r, cw - inset - r]) drawCross(c, x, ch / 2, r);
+    const x0 = inset + 2 * r + ch * 0.18, maxW = cw - 2 * x0; // (the lettering's room between the crosses)
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = '#7a0a1c'; fitFont(c, 'MEDICAL CENTRE', 'bold', 'Georgia, "Times New Roman", serif', Math.round(ch * 0.4), maxW); c.fillText('MEDICAL CENTRE', cw / 2, ch * 0.4);
+    c.fillStyle = '#5a4a3c'; fitFont(c, 'ARZT  ·  NOTAUFNAHME 24 h  ·  LEGACY VILLAGE', '600', 'Georgia, serif', Math.round(ch * 0.16), maxW); c.fillText('ARZT  ·  NOTAUFNAHME 24 h  ·  LEGACY VILLAGE', cw / 2, ch * 0.76);
   });
   const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.05 });
   const wood = new THREE.MeshStandardMaterial({ color: 0x3a2716, roughness: 0.85 });
@@ -196,16 +204,18 @@ export class Hospital {
       });
     };
     for (const s of [-1, 1]) { lantern(s * 2.05, D / 2 + 0.06, 0, 2.5); lantern(s * (W / 2 + 0.06), D / 2 - 0.6, s * Math.PI / 2, 2.6); }
-    { const pl = makeSign('PRAXIS DR. MED. ALPIN\nAllgemeinmedizin · 24 h', { w: 1.0, h: 0.5, bg: '#f2ede0', fg: '#7a0a1c', border: '#b08d4a', font: 'bold 84px Georgia' });
-      pl.position.set(-2.05, 1.6, D / 2 + 0.04); house.add(pl); }
+    // (no plaque left of the door: Oct 30, the user asked it gone)
 
     // ---- the ambulance canopy over the entrance: four larch posts on stone footings, beams, a low gable roof with
     // snow, its front gable lettered NOTAUFNAHME (lit at night), downlights under it
-    const canopyLetter = canvasTex(1024, 192, (c, cw, ch) => {
+    const LW = 2 * CAN.hw - 0.6, LH = 0.42; // (the lettered strip, m: its canvas the same shape)
+    const canopyLetter = canvasTex(2048, Math.round((2048 * LH) / LW), (c, cw, ch) => {
       c.fillStyle = '#b3172b'; c.fillRect(0, 0, cw, ch);
-      c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = `bold ${Math.round(ch * 0.5)}px Arial`;
-      c.fillText('NOTAUFNAHME', cw / 2 + 40, ch / 2 + 4);
-      c.fillStyle = '#ffffff'; c.fillRect(60, ch / 2 - 46, 92, 92); drawCross(c, 106, ch / 2, 36, 12);
+      const q = Math.round(ch * 0.74), pad = Math.round(ch * 0.4); // (a white field with the red cross at either end)
+      for (const x of [pad, cw - pad - q]) { c.fillStyle = '#ffffff'; c.fillRect(x, (ch - q) / 2, q, q); drawCross(c, x + q / 2, ch / 2, q * 0.38, q * 0.13); }
+      const room = cw - 2 * (pad + q) - 2 * pad;
+      c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      fitFont(c, 'NOTAUFNAHME  ·  EMERGENCY', 'bold', 'Arial', Math.round(ch * 0.6), room); c.fillText('NOTAUFNAHME  ·  EMERGENCY', cw / 2, ch / 2 + ch * 0.03);
     });
     const letterMat = new THREE.MeshStandardMaterial({ map: canopyLetter, emissiveMap: canopyLetter, emissive: 0xffffff, emissiveIntensity: 0.08, roughness: 0.5 });
     const colliders = [];
@@ -230,14 +240,15 @@ export class Hospital {
       const tg = new THREE.ExtrudeGeometry(tri, { depth: 0.1, bevelEnabled: false });
       { const p = tg.attributes.position, uv = tg.attributes.uv; for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i), p.getY(i)); }
       add(tg, M.larchOut, 0, h + 0.12, z1 + 0.12);
-      add(new THREE.PlaneGeometry(2 * hw - 0.6, 0.42), letterMat, 0, h - 0.02, z1 + 0.235, g, false);
+      add(new THREE.PlaneGeometry(LW, LH), letterMat, 0, h - 0.02, z1 + 0.235, g, false);
       B(2 * hw + 0.3, 0.5, 0.08, darkWood, 0, h - 0.02, z1 + 0.19);
       for (const z of [FRONT + 1.6, FRONT + 4.0 + 1.8, FRONT + 6.4]) { const d = add(new THREE.PlaneGeometry(1.2, 0.3), downlight, 0, h - 0.18, z, g, false); d.rotation.x = Math.PI / 2; }
     }
 
     // ---- snow banked against the walls (the Meshy drifts, prisonoutside.js snowDrift): long banks at the back and
     // sides, heaps in the back corners, low mounds at the front corners (the forecourt itself is ploughed)
-    const drift = (kind, x, z, len, wid, h, rot = 0, y = -0.04) => { const d = snowDrift(kind, len, wid, h); d.position.set(x, y, z); d.rotation.y = rot; g.add(d); return d; };
+    const drifts = new THREE.Group(); drifts.name = 'medical-centre-drifts'; g.add(drifts); // (welded into one mesh once the Meshy drifts have loaded: below)
+    const drift = (kind, x, z, len, wid, h, rot = 0, y = -0.04) => { const d = snowDrift(kind, len, wid, h); d.position.set(x, y, z); d.rotation.y = rot; drifts.add(d); return d; };
     { const r = rng(31), back = BZ - D / 2, flip = () => (r() < 0.5 ? 0 : Math.PI);
       for (let x = -W / 2 + 1.9; x < W / 2 - 1.2; x += 3.1 + r() * 0.5) { const wid = 1.4 + r() * 0.4; drift('long', x, back - wid * 0.32, 3.8 + r() * 0.8, wid, 0.6 + r() * 0.3, flip() + (r() - 0.5) * 0.1); }
       for (const sx of [-1, 1]) for (let z = back + 1.8; z < FRONT - 1.5; z += 3.0 + r() * 0.5) {
@@ -255,29 +266,35 @@ export class Hospital {
     // ---- the forecourt: packed snow over asphalt from the house to the road, the AMBULANZ box and bay, the visitors'
     // bays, fading into the snow at its sides
     const X0 = -L.hw + 1.4, X1 = L.hw - 1.4, Z0 = FRONT - 0.2, Z1 = L.hd + 0.5, YW = X1 - X0, YD = Z1 - Z0;
-    const yardT = canvasTex(1024, 640, (c, cw, ch) => {
-      const r = rng(13), X = (lx) => ((lx - X0) / YW) * cw, Z = (lz) => ((lz - Z0) / YD) * ch;
+    const PXM = 1024 / YW; // (the canvas the forecourt's own shape: px per metre both ways, no stretched lettering)
+    const yardT = canvasTex(1024, Math.round(YD * PXM), (c, cw, ch) => {
+      const r = rng(13), X = (lx) => (lx - X0) * PXM, Z = (lz) => (lz - Z0) * PXM;
       c.fillStyle = '#7d7b77'; c.fillRect(0, 0, cw, ch);
       for (let i = 0; i < 9000; i++) { const v = 100 + r() * 40; c.fillStyle = `rgba(${v + 6},${v + 3},${v},0.4)`; c.fillRect(r() * cw, r() * ch, 2, 2); }
       for (let i = 0; i < 70; i++) { const x = r() * cw, y = r() * ch, R = 20 + r() * 80, gr = c.createRadialGradient(x, y, 0, x, y, R); gr.addColorStop(0, 'rgba(236,238,240,0.45)'); gr.addColorStop(1, 'rgba(236,238,240,0)'); c.fillStyle = gr; c.fillRect(x - R, y - R, 2 * R, 2 * R); }
-      const text = (s, lx, lz, col, px) => { c.save(); c.translate(X(lx), Z(lz)); c.rotate(Math.PI); c.fillStyle = col; c.font = `bold ${px}px Arial`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(s, 0, 0); c.restore(); };
-      // the drop-off box under the canopy: yellow, hatched, AMBULANZ (read from the road)
-      const yel = 'rgba(240,196,40,0.92)';
-      c.save(); c.beginPath(); c.rect(X(DROP.x0), Z(DROP.z0), X(DROP.x1) - X(DROP.x0), Z(DROP.z1) - Z(DROP.z0)); c.clip();
+      // lettering read from the road, fitted inside its box (maxW x maxH metres; never past the lines)
+      const text = (s_, lx, lz, col, maxW, maxH) => {
+        c.save(); c.translate(X(lx), Z(lz)); c.rotate(Math.PI); c.fillStyle = col; c.textAlign = 'center'; c.textBaseline = 'middle';
+        fitFont(c, s_, 'bold', 'Arial', Math.round(maxH * PXM * 1.3), maxW * PXM); c.fillText(s_, 0, 0); c.restore();
+      };
+      // the drop-off box under the canopy: yellow, hatched toward the door, AMBULANZ across its road end (on the bare
+      // asphalt: no patch behind it)
+      const yel = 'rgba(240,196,40,0.92)', tz = DROP.z1 - 1.5;
+      c.save(); c.beginPath(); c.rect(X(DROP.x0), Z(DROP.z0), X(DROP.x1) - X(DROP.x0), Z(tz - 1.3) - Z(DROP.z0)); c.clip();
       c.strokeStyle = 'rgba(240,196,40,0.55)'; c.lineWidth = 6;
       for (let t = -20; t < 40; t += 1.2) { c.beginPath(); c.moveTo(X(DROP.x0 + t), Z(DROP.z0)); c.lineTo(X(DROP.x0 + t - 10), Z(DROP.z1)); c.stroke(); }
       c.restore();
-      c.fillStyle = 'rgba(125,123,119,0.92)'; c.fillRect(X(-1.9), Z(DROP.z0 + 2.4), X(1.9) - X(-1.9), Z(DROP.z0 + 5.6) - Z(DROP.z0 + 2.4));
       c.strokeStyle = yel; c.lineWidth = 8; c.strokeRect(X(DROP.x0), Z(DROP.z0), X(DROP.x1) - X(DROP.x0), Z(DROP.z1) - Z(DROP.z0));
-      text('AMBULANZ', 0, DROP.z0 + 4.0, yel, 40);
-      // the AMBULANZ parking bay (left) and the visitors' bays (right)
-      c.strokeStyle = 'rgba(246,246,240,0.92)'; c.lineWidth = 5;
+      c.beginPath(); c.moveTo(X(DROP.x0), Z(tz - 1.3)); c.lineTo(X(DROP.x1), Z(tz - 1.3)); c.stroke();
+      text('AMBULANZ', 0, tz, yel, DROP.x1 - DROP.x0 - 0.9, 1.0);
+      // the AMBULANZ parking bay (left: a yellow box, a cross in it; its board at its head says whose) and the visitors'
+      // bays (right: lines only, their board at their heads)
+      c.strokeStyle = yel; c.lineWidth = 6;
       c.strokeRect(X(AMB.x0), Z(AMB.z0), X(AMB.x1) - X(AMB.x0), Z(AMB.z1) - Z(AMB.z0));
-      text('AMBULANZ', (AMB.x0 + AMB.x1) / 2, AMB.z1 - 1.4, yel, 34);
-      c.save(); c.translate(X((AMB.x0 + AMB.x1) / 2), Z(AMB.z0 + 2.6)); c.fillStyle = 'rgba(246,246,240,0.9)'; c.fillRect(-22, -6, 44, 12); c.fillRect(-6, -22, 12, 44); c.restore();
+      c.save(); c.translate(X((AMB.x0 + AMB.x1) / 2), Z((AMB.z0 + AMB.z1) / 2)); c.fillStyle = 'rgba(246,246,240,0.9)'; c.fillRect(-0.7 * PXM, -0.2 * PXM, 1.4 * PXM, 0.4 * PXM); c.fillRect(-0.2 * PXM, -0.7 * PXM, 0.4 * PXM, 1.4 * PXM); c.restore();
+      c.strokeStyle = 'rgba(246,246,240,0.92)'; c.lineWidth = 5;
       for (const lx of BAYS.lines) { c.beginPath(); c.moveTo(X(lx), Z(BAYS.z0)); c.lineTo(X(lx), Z(BAYS.z1)); c.stroke(); }
       c.beginPath(); c.moveTo(X(BAYS.lines[0]), Z(BAYS.z1)); c.lineTo(X(BAYS.lines.at(-1)), Z(BAYS.z1)); c.stroke();
-      BAYS.lines.slice(0, -1).forEach((lx) => text('BESUCH', lx + 1.4, BAYS.z1 - 1.0, 'rgba(246,246,240,0.92)', 28));
       c.globalCompositeOperation = 'destination-in';
       const fx = c.createLinearGradient(0, 0, cw, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.045, '#000'); fx.addColorStop(0.955, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = fx; c.fillRect(0, 0, cw, ch);
@@ -296,6 +313,22 @@ export class Hospital {
     const kerb = new THREE.MeshStandardMaterial({ color: 0x9a9890, roughness: 0.85 });
     for (const sx of [-1, 1]) for (let z = Z0 + 0.4; z < L.hd - 2.5; z += 2) { const lx = sx * (X1 - 0.1); B(0.22, 0.16, 1.96, kerb, lx, gy(lx, z + 1) + 0.06, z + 1); }
 
+    // ---- the parking signs at the bays' heads, as the police station's (prisonoutside.js parkingSigns): the blue P
+    // with an additional panel, here with the red cross, dark red lettering and a red rim (Oct 30, the user: "put the
+    // same boards for the hospital parking as for the police parking but matching the hospital"; no lettering in the bays)
+    try {
+      const parkSign = parkingSigns({ g, add, gy, w, colliders, yaw0, snow }, {
+        ink: '#7a0a1c', rim: RED,
+        badge: (c, x, y, r) => {
+          c.fillStyle = '#ffffff'; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+          c.strokeStyle = RED; c.lineWidth = Math.max(3, r * 0.12); c.beginPath(); c.arc(x, y, r * 0.88, 0, Math.PI * 2); c.stroke();
+          drawCross(c, x, y, r * 0.58, r * 0.2);
+        },
+      });
+      parkSign((AMB.x0 + AMB.x1) / 2, AMB.z0 - 0.3, ['Ambulanz'], true, ['Nur Einsatzfahrzeuge', 'Emergency vehicles only']);
+      parkSign((BAYS.lines[1] + BAYS.lines[2]) / 2, BAYS.z0 - 0.3, ['Besucher', 'Visitors'], true, ['Patienten & Besucher', 'Patients & visitors']);
+    } catch (e) { console.warn('medical centre: parking signs', e); }
+
     // ---- the Meshy props: benches either side of the door, lamp posts at the forecourt's mouth, the signpost
     const prop = (name, size, axis, lx, lz, ry, col) => {
       if (!models[name]) return null;
@@ -309,6 +342,37 @@ export class Hospital {
     };
     for (const sx of [-1, 1]) prop('wooden_bench', 1.7, 'xz', sx * 5.2, FRONT + 0.75, 0, { hw: 0.9, hd: 0.4 });
     for (const sx of [-1, 1]) { const lamp = prop('lamp_post', 4.2, 'y', sx * (L.hw - 2.4), L.hd - 1.6, sx > 0 ? -Math.PI / 2 : Math.PI / 2, { r: 0.25 }); if (lamp) addNightGlow(lamp, 6); }
+    // the Meshy forecourt props (tools/meshy-hospital-outside.mjs: decor/*): planters with little spruces either side of
+    // the door, bollards before the canopy's front posts, a litter bin by the bench, a grit box by the AMBULANZ bay; a
+    // procedural stand-in each until (or if never) its model loads
+    { const larch = M.larchOut, steel = M.steel, red = new THREE.MeshStandardMaterial({ color: 0xc8102e, roughness: 0.4 });
+      const spruce = new THREE.MeshStandardMaterial({ color: 0x23402c, roughness: 0.9 }), grey = new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.55, metalness: 0.4 });
+      const yellow = new THREE.MeshStandardMaterial({ color: 0xe8b81c, roughness: 0.6 });
+      const meshyProp = (name, fit, lx, lz, ry, stand, col) => {
+        const pg = new THREE.Group(); pg.position.set(lx, gy(lx, lz) - 0.02, lz); pg.rotation.y = ry; g.add(pg);
+        const fb = new THREE.Group(); pg.add(fb); stand(fb);
+        swapInModel(pg, `decor/${name}`, fit, fb);
+        const p = w(lx, lz);
+        colliders.push(col.r ? { x: p.x, z: p.z, r: col.r } : { x: p.x, z: p.z, hw: col.hw, hd: col.hd, rot: -(yaw0 + ry) });
+      };
+      for (const sx of [-1, 1]) {
+        meshyProp('planter_spruce', { size: 0.85, axis: 'xz' }, sx * 2.85, FRONT + 0.55, 0, (fb) => {
+          B(0.8, 0.55, 0.8, larch, 0, 0.27, 0, fb);
+          add(new THREE.ConeGeometry(0.3, 0.9, 10), spruce, 0, 0.95, 0, fb);
+        }, { r: 0.45 });
+        meshyProp('bollard_steel', { size: 0.9, axis: 'y' }, sx * CAN.hw, CAN.posts[1] + 1.7, 0, (fb) => {
+          add(new THREE.CylinderGeometry(0.07, 0.075, 0.9, 12), steel, 0, 0.45, 0, fb);
+          add(new THREE.CylinderGeometry(0.076, 0.076, 0.08, 12), red, 0, 0.72, 0, fb, false);
+        }, { r: 0.12 });
+      }
+      meshyProp('litter_bin', { size: 1.0, axis: 'y' }, 6.55, FRONT + 0.45, 0, (fb) => {
+        add(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8), grey, 0, 0.25, 0, fb);
+        add(new THREE.CylinderGeometry(0.22, 0.2, 0.55, 14), grey, 0, 0.72, 0, fb);
+      }, { r: 0.3 });
+      meshyProp('grit_box', { size: 1.0, axis: 'xz' }, -12.3, 1.2, Math.PI / 2, (fb) => {
+        B(1.0, 0.62, 0.7, yellow, 0, 0.31, 0, fb);
+      }, { hw: 0.52, hd: 0.37 });
+    }
     let postMat = null;
     try {
       const lx = -11.2, lz = L.hd - 4.6, p = w(lx, lz);
@@ -320,7 +384,9 @@ export class Hospital {
 
     // (performance pass: the house and the forecourt's boxes welded per material; the walls keep their own mesh: their
     // onBeforeRender drives the night lighting below)
-    try { const keep = new Set([walls]); mergeStatic(house, { keep }); mergeStatic(g, { keep, skip: [house] }); } catch (e) { console.warn('medical centre: merge', e); }
+    try { const keep = new Set([walls]); mergeStatic(house, { keep }); mergeStatic(g, { keep, skip: [house, drifts] }); } catch (e) { console.warn('medical centre: merge', e); }
+    // (the ~30 drifts: one mesh once the Meshy drifts have swapped in)
+    driftsReady().then(() => { try { mergeStatic(drifts); } catch (e) { console.warn('medical centre: drifts merge', e); } });
     scene.add(g);
     g.updateMatrixWorld(true);
     // ---- solid: the house (its plinth), a camera blocker the same size

@@ -158,7 +158,7 @@ export class Traffic {
       let best = null;
       for (const m of this.main) for (let i = 0; i < m.n; i++) { const d = Math.hypot(m.X[i] - jx, m.Z[i] - jz); if (!best || d < best.d) best = { m, s: m.S[i], d }; }
       const lot = this.lots.find((l) => Math.hypot(l.ex - r.X[0], l.ez - r.Z[0]) < 12);
-      if (best && best.d < 8) this.junctions.push({ access: r, road: best.m, s: best.s, lot });
+      if (best && best.d < 8 && !r.heli) this.junctions.push({ access: r, road: best.m, s: best.s, lot }); // (not the Rettungsweg: no car park at its end)
     }
     // each car's model a weighted draw (cars.js CAR_WEIGHT: the supercars ~1 in 300, the RS6 / e-tron GT / GLS ~1 in
     // 25, ...), seeded per car so the same cars come back each session

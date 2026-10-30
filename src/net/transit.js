@@ -276,11 +276,21 @@ export class MpTransit {
     if (!MP.active || !per) return pref;
     const taken = new Set((MP.seats.get(`${k}|${v}`) || []).map((e) => e[0])), cnt = new Array(cars).fill(0);
     for (const s of taken) if (s >= 0 && s < per * cars) cnt[Math.floor(s / per)]++;
+    // (Oct 30, the user: everyone together in the same car while there's room): the car with the most riders that still
+    // has a free seat (nobody aboard: your preferred seat's car); in it the free seat nearest to someone already sitting
     let best = Math.min(cars - 1, Math.floor(pref / per));
-    for (let c = 0; c < cars; c++) if (cnt[c] < cnt[best]) best = c;
-    const inCar = pref % per;
-    for (let i = 0; i < per; i++) { const s = best * per + ((inCar + i) % per); if (!taken.has(s)) return s; }
-    return pref;
+    for (let c = 0; c < cars; c++) if (cnt[c] < per && (cnt[best] >= per || cnt[c] > cnt[best])) best = c;
+    const inCar = pref % per, base = best * per, mine = [];
+    for (const t of taken) if (t >= base && t < base + per) mine.push(t);
+    let pick = -1, pd = Infinity;
+    for (let i = 0; i < per; i++) {
+      const s = base + ((inCar + i) % per);
+      if (taken.has(s)) continue;
+      let d = mine.length ? Infinity : i; // (an empty car: from your preferred seat on)
+      for (const t of mine) d = Math.min(d, Math.abs(t - s));
+      if (d < pd) { pd = d; pick = s; }
+    }
+    return pick >= 0 ? pick : pref;
   }
   /** The Legacy Express is not in yet (main.js boardExpress): "Legacy Express to X · next train in 0:42 · 190 of 192
    *  seats free in 4 cars · wait on the platform" (a full one: the next with a free seat). */

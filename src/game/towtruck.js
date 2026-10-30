@@ -191,6 +191,7 @@ export function groundPose(g, x, z, yaw) {
 export function bedLocal(len, out) { return out.set(0, BED.y, BED.z + Math.max(0, (BED_FIT - (len || 4.6)) / 2 - 0.15)); }
 export const TOW_HALF = { w: HALF_W, l: HALF_L };
 
+const GIVE_UP_S = 180; // s: a job that hasn't ended by then (the truck stuck, or never reaching the car): done at once (giveUp)
 export class TowTruck {
   /**
    * @param {object} o
@@ -237,7 +238,10 @@ export class TowTruck {
       this.t = (this.t || 0) + dt;
       if (!this.job && this.jobs.length) this.start(this.jobs.shift());
       const j = this.job;
-      if (j) this.step(j, dt);
+      // (Oct 30, the user: when the truck can't get to your car and just drives round, after 3 min the car is simply
+      // taken to the Autohaus car park: the truck is back on its spot and the job ends as if it had brought it)
+      if (j && (j.t = (j.t || 0) + dt) > GIVE_UP_S) this.giveUp(j);
+      else if (j) this.step(j, dt);
       this.place(dt);
       if (j && j.onBed) this.carToBed(j.e);
       // the beacons: two rotating lamps, out of step, while on a job
@@ -493,6 +497,12 @@ export class TowTruck {
     }
   }
 
+  giveUp(j) {
+    this.x = this.park.x; this.z = this.park.z; this.yaw = this.park.yaw; this.v = 0;
+    j.onBed = false;
+    if (j.e?.car) j.e.car.visible = true;
+    this.finish(j);
+  }
   finish(j) {
     this.free(j);
     this.cable.visible = false;

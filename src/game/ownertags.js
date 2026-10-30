@@ -39,8 +39,14 @@ export class OwnerTags {
     const out = [], G = typeof window !== 'undefined' ? window.__game : null;
     const st = this.rental?.impound?.status?.();
     const e = this.rental?.current;
-    if (st) out.push({ key: 'car', x: st.x, y: st.y + 2.2, z: st.z, label: st.impounded ? 'Your car · tow yard' : 'Your car', impounded: st.impounded });
-    else if (e?.car && !e.driving) out.push({ key: 'car', x: e.car.position.x, y: e.car.position.y + 2.2, z: e.car.position.z, label: 'Your car' });
+    // (Oct 30, the user: "above your car say your car": the tag over your own cars reads "Your car", not your name)
+    if (st) out.push({ key: 'car', x: st.x, y: st.y + 2.2, z: st.z, label: st.impounded ? 'Your car · tow yard' : 'Your car', impounded: st.impounded, text: st.impounded ? 'Your car · tow yard' : 'Your car' });
+    else if (e?.car && !e.driving) out.push({ key: 'car', x: e.car.position.x, y: e.car.position.y + 2.2, z: e.car.position.z, label: 'Your car', text: 'Your car' });
+    for (const k of this.rental?.kept || []) { // (your other cars parked in the world)
+      if (!k?.car || k.driving || !k.car.parent) continue;
+      const kp = k.car.position;
+      out.push({ key: `kept:${k.cfg?.plate || k.car.id}`, x: kp.x, y: kp.y + 2.2, z: kp.z, label: 'Your car', text: 'Your car' });
+    }
     const ch = G?.chalets, h = ch?.rented?.();
     if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: MP.active ? `${this.name}'s chalet` : null }); }
     if (MP.active && MP.chalets && ch?.houses && !ch.inside) for (const id in MP.chalets) { // (the other players' chalets)

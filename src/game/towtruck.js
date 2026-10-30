@@ -129,6 +129,30 @@ function findRoof(g) {
   return { z, y, at: (x) => hitY(x, z) };
 }
 
+// (Oct 30, the user: "make the mercedes star better on the front of the tow truck": the model's star is only a few
+// blurry texels on the grille; a real one over it: a dark badge, the chrome ring and the three-pointed star, raised)
+const STAR = { x: RAW.cx, y: 0.86, z: -6.47, r: 0.078 }; // model units: the grille's centre, just proud of its face (z -6.45)
+function mercedesStar() {
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xeef2f6, metalness: 1, roughness: 0.16, envMapIntensity: 1.4 });
+  const star = new THREE.Group();
+  star.name = 'mercedes-star';
+  const badge = new THREE.Mesh(new THREE.CircleGeometry(STAR.r * 1.06, 40), new THREE.MeshStandardMaterial({ color: 0x0d0f12, roughness: 0.5, metalness: 0.3 }));
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(STAR.r * 0.93, STAR.r * 0.09, 10, 48), chrome);
+  ring.position.z = 0.006;
+  star.add(badge, ring);
+  // the three points: slim kite shapes from the hub to the ring (up, lower left, lower right), bevelled for the shine
+  const R = STAR.r * 0.88, w = STAR.r * 0.17;
+  const kite = new THREE.Shape([new THREE.Vector2(0, R), new THREE.Vector2(w, 0), new THREE.Vector2(0, -w * 0.6), new THREE.Vector2(-w, 0)]);
+  const geo = new THREE.ExtrudeGeometry(kite, { depth: STAR.r * 0.05, bevelEnabled: true, bevelThickness: STAR.r * 0.06, bevelSize: STAR.r * 0.03, bevelSegments: 2, curveSegments: 1 });
+  for (const a of [0, (2 * Math.PI) / 3, (-2 * Math.PI) / 3]) { const k = new THREE.Mesh(geo, chrome); k.rotation.z = a; k.position.z = 0.004; star.add(k); }
+  const hub = new THREE.Mesh(new THREE.SphereGeometry(w * 0.75, 12, 8), chrome); hub.scale.z = 0.6; hub.position.z = 0.01;
+  star.add(hub);
+  star.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+  star.position.set(STAR.x, STAR.y, STAR.z);
+  star.rotation.y = Math.PI; // (faces the model's nose, -z)
+  return star;
+}
+
 // ------------------------------------------------------------------ the model (shared with net/vehicles.js)
 /** The truck's model (nose +z, origin on the road under its middle), its amber beacons on the cab roof and their glow:
  *  { g, beacons, beaconMat, beaconLight }. A plain flatbed when the glTF is missing. */
@@ -142,6 +166,7 @@ export function buildTowTruck(models) {
     m.position.set(RAW.cx, 0, RAW.cz); // (re-centred: the model runs nose -z from its origin at the bed's tail; turned, its centre (-cx, -cz) back to 0)
     const s = new THREE.Group(); s.scale.setScalar(S); s.add(m);
     m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    m.add(mercedesStar()); // (in the model's own frame: on the grille, over its texture's blurry star)
     g.add(s);
   } else { // (no model: a plain flatbed so the job still runs)
     const mat = new THREE.MeshStandardMaterial({ color: 0xd8a21a, roughness: 0.5 });

@@ -346,11 +346,12 @@ export class Impound {
 
   // the card's words for where it stands: [good, head, sub]
   parkText(e, sp, d = 0) {
-    const name = sp.lot?.name || 'car park', bay = sp.bay && sp.bay === this.own ? 'Your bay' : sp.n ? `Bay ${sp.n}` : null;
+    // (Oct 30, the user: "don't say bay (number), in which bay, just say pull into bay": no bay numbers on the card)
+    const name = sp.lot?.name || 'car park';
     const left = `it will be towed in ${clock(TOW_AFTER - (e.abandonT || 0))}`;
     switch (sp.kind) {
-      case 'bay': return [true, '✓ Parked properly', `${bay} · ${name}`];
-      case 'lot': return [false, sp.why === 'angle' ? `✗ Crooked in ${bay.toLowerCase()}` : sp.why === 'lines' ? `✗ Over the lines · ${bay.toLowerCase()}` : '✗ Not in a bay',
+      case 'bay': return [true, '✓ Parked properly', name];
+      case 'lot': return [false, sp.why === 'angle' ? '✗ Crooked in the bay' : sp.why === 'lines' ? '✗ Over the lines' : '✗ Not in a bay',
         `${sp.why === 'angle' ? 'Straighten up inside the lines' : 'Park inside the lines'} or ${left}`];
       case 'mouth': return [false, '✗ Blocking the car park entrance', `Park in a bay or ${left}`];
       case 'road': return [false, '✗ On the road', `It will be towed in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
@@ -369,11 +370,10 @@ export class Impound {
     if (!D || D.e !== e) { this.parkHud(null); return; }
     const v = Math.hypot(D.vx || 0, D.vz || 0), sp = v < 4 ? this.where(D.x, D.z, D.yaw, e.length || 4.6) : null;
     let t = null;
-    if (sp?.kind === 'bay') t = [true, `In ${sp.bay === this.own ? 'your bay' : `bay ${sp.n}`} ✓`, `Parked properly · ${sp.lot?.name || 'car park'} · E to get out`];
+    if (sp?.kind === 'bay') t = [true, 'In the bay ✓', `Parked properly · ${sp.lot?.name || 'car park'} · E to get out`];
     else if (sp?.kind === 'lot') {
-      const b = sp.bay === this.own ? 'your bay' : `bay ${sp.n}`;
-      t = sp.why === 'angle' ? [false, 'Not in a bay — straighten up', `Line it up with ${b}`]
-        : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', `Move into the middle of ${b}`]
+      t = sp.why === 'angle' ? [false, 'Not in a bay — straighten up', 'Pull into the bay, straight inside the lines']
+        : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', 'Pull into the bay, inside the lines']
         : [false, 'Not in a bay', 'Pull into a free bay, inside the lines'];
     } else if (sp?.kind === 'mouth' && v < 1) t = [false, 'Blocking the entrance', 'Drive in and park in a bay'];
     this.parkHud(t, true);

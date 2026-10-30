@@ -18,6 +18,7 @@ import { planChaletVillage, planAlmdorfStop } from './chaletroad.js'; // the Cha
 import { planScenicBus, planWestgratBus } from './scenicbus.js'; // the ski bus's stops up the scenic roads
 import { planRentalRoad } from './rentalroad.js'; // the Westgratstrasse: across from the car rental, up the Westgrat
 import { clearRouteCache } from './scenicnet.js'; // (the routing's ground samples: freed once the roads are planned)
+import { planDepot } from './depot.js'; // the bus depot at the village stop and its road (the Depotweg)
 
 const CELL = 20;
 const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
@@ -495,6 +496,7 @@ export function planBusRoads(stops) {
   try { planPrison(obstacles); } catch (e) { console.warn('prison site', e); } // (moves nothing planned above)
   try { planHospital(obstacles); } catch (e) { console.warn('hospital site', e); } // (last of all: moves nothing planned above)
   try { planHeliRoad(obstacles); } catch (e) { console.warn('helipad road', e); } // (the helipad and its road to the medical centre: after it)
+  try { planDepot(obstacles); } catch (e) { console.warn('bus depot', e); } // (the buses' depot off the village stop: after everything, keeps off it all)
   clearRouteCache();
   try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
   try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
@@ -618,7 +620,7 @@ function shapeRoads(roads) {
       if (held && out > 0) continue;
       let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(flat, flat + blend, out); // (flat 2.9 m past the edge: see the berm)
       // (the berm 2.9 m off the edge: the drawn terrain's 2 m triangles under the car park's edge stay flat)
-      if (spacing <= 4 && !L.building && out > 2.9 && out < 6.9 && Math.hypot(x - L.ex, z - L.ez) > 10) {
+      if (spacing <= 4 && (!L.building || L.depot) && out > 2.9 && out < 6.9 && Math.hypot(x - L.ex, z - L.ez) > 10) {
         const t = (out - 2.9) / 4, open = smoothstep(10, 15, Math.hypot(x - L.ex, z - L.ez)); // (tapered at the entrance, no step)
         y += 0.65 * open * (t < 0.4 ? smoothstep(0, 0.4, t) : 1 - smoothstep(0.4, 1, t));
       }
@@ -764,7 +766,7 @@ function planLots(O, stops) {
 // there, while the car park is flat, so the ground stepped by up to ~0.7 m at the entrance (the road's cut below
 // the car park's level at its edge). Kept as it was when the road can't make it up at its own steepest grade.
 function levelIntoLots() {
-  const lots = busRoads.lots.filter((L) => !L.building && L.ux !== undefined);
+  const lots = busRoads.lots.filter((L) => (!L.building || L.depot) && L.ux !== undefined); // (and the bus depot)
   const outOf = (L, x, z) => { const dx = x - L.x, dz = z - L.z; return Math.max(Math.abs(dx * L.ux + dz * L.uz) - L.hw, Math.abs(dx * L.vx + dz * L.vz) - L.hd); };
   for (const r of busRoads.roads) {
     if (r.ringRoad || r.n < 4) continue;

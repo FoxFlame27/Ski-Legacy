@@ -146,7 +146,7 @@ export class Traffic {
     Object.assign(this, { scene, colliders, player, camera, skibus });
     this.cars = [];
     this.enabled = true;
-    const roads = busRoads.roads.filter((r) => !r.scenic); // (the scenic roads and their roundabouts: their own cars below)
+    const roads = busRoads.roads.filter((r) => !r.scenic && !r.depot); // (the scenic roads and their roundabouts: their own cars below; the bus depot's road: buses only)
     if (!roads.length) return;
     this.main = roads.filter((r) => !r.access);
     this.access = roads.filter((r) => r.access);

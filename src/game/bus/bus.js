@@ -16,6 +16,8 @@ import { transition } from '../../ui/transition.js';
 import { trafficBlockers, addTrafficBlocker } from '../traffic.js';
 import { buildRoadSigns } from './roadsigns.js'; // speed limit and warning signs along the roads
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
+import { depotTrips } from './depot.js'; // the bus depot off the village stop: each bus's own bay, its ways in and out
+import { buildDepot } from './depotview.js'; // (its paving, bay lines, lamps and sign)
 
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 26, acc: 1.7, brake: 2.0, lat: 2.6 };
@@ -143,7 +145,7 @@ const ACROSS = [-1, -2 / 3, -1 / 3, 0, 1 / 3, 2 / 3, 1];
 // the strip is cut along that thing's edge: each of its long lines (ACROSS) stops exactly where it enters the other
 // surface, so the two meet edge to edge, never one lying over the other (no coplanar double layer, no z-fighting, no
 // draw-order or depth-offset tricks). endHosts(r) -> [at the start, at the end]: null, or { inside(x, z) }.
-const lotsDrawn = () => busRoads.lots.filter((L) => !L.building && L.ux !== undefined);
+const lotsDrawn = () => busRoads.lots.filter((L) => (!L.building || L.depot) && L.ux !== undefined); // (the bus depot: depotview.js)
 function lotInside(L, pad0 = 0) {
   return (x, z, pad = pad0) => { const dx = x - L.x, dz = z - L.z; return Math.abs(dx * L.ux + dz * L.uz) < L.hw + pad && Math.abs(dx * L.vx + dz * L.vz) < L.hd + pad; };
 }
@@ -892,7 +894,16 @@ export const FLEET_N = 8;              // buses in all: bus:0 (yours, waits at t
 const DWELL_STOP = 16, DWELL_END = 40, DWELL_DEPOT = 45; // s: at a stop on the way, at the terminus, at the village
 const FLEET_SIM = 1300;                // m: nearer you than this a bus drives itself
 const FLEET_SHOW = 1300;               // m: drawn within this (beyond, its timetable alone: cheap)
-const DEPOT_GAP = 16;                  // m: a bus leaving the village starts this far beyond the one waiting there
+const DEPOT_GAP = 16;                  // m: a bus leaving the village starts this far beyond the one waiting there (no depot)
+// With the bus depot (depot.js): a bus back from its round lets its riders off at the village stop (the inbound lane,
+// DWELL_UNLOAD), drives on to its own bay and waits there (the rest of its cycle, at least MIN_LAYOVER), then comes
+// back round to the stop and boards at the sign (DWELL_DEPOT) before it leaves. Every round's cycle is a whole number
+// of SLOT s (the first of FLEET_SLOTS that fits) and each round's buses are given a phase so that no two buses ever
+// stand at (or pull in to) the stop's boarding or alighting bay at once (slotFleet): with every cycle a multiple of
+// the slot, where each bus is in its cycle repeats every slot, so the stop's timetable is the same every slot.
+const DWELL_UNLOAD = 20, MIN_LAYOVER = 60;
+const FLEET_SLOTS = [360, 720, 1080, 1440];
+const SLOT_PAD = 6;                    // s: before and after a halt at the village stop that nobody else may use its bay
 // one direction of a round: the trips (BusLine.leg) joined -> { n, X, Y, Z, S, length, V, marks: [{ s, stop, dwell }],
 // sA, sB, kt: [knot times], ks: [knot arc lengths], dur }
 function fleetDir(trips, startGap, endDwell) {
@@ -904,7 +915,7 @@ function fleetDir(trips, startGap, endDwell) {
       X.push(t.X[i]); Y.push(t.Y[i]); Z.push(t.Z[i]);
     }
     if (k === 0) sA = t.s0 + startGap;
-    marks.push({ s: off + t.s1, stop: t.to, dwell: k === trips.length - 1 ? endDwell : DWELL_STOP });
+    marks.push({ s: off + t.s1, stop: t.to, dwell: t.dwell ?? (k === trips.length - 1 ? endDwell : DWELL_STOP) }); // (the depot's ways: their own dwell at the village)
     off += t.length;
   });
   const n = X.length, P = { n, X: Float32Array.from(X), Y: Float32Array.from(Y), Z: Float32Array.from(Z), S: new Float32Array(n) };
@@ -954,6 +965,58 @@ function dirAt(P, tau, out) {
   return out;
 }
 
+// The fleet's slots (with the depot): every round's cycle the least multiple of SLOT (the first of FLEET_SLOTS that
+// fits) over its longest bus's drive + MIN_LAYOVER, and each round's phase psi (its buses at psi + k cycle / m) such
+// that no two buses are ever at the village stop at once: from pulling in to the alighting bay until through the bend
+// at the road's end on the way to the depot, and from coming round that bend from the depot until pulled away from
+// the boarding bay at the sign (the bend is tight: a bus going round it and one standing in the other lane by the
+// stop would touch), SLOT_PAD before and after. Two buses with cycles Ca, Cb meet at every offset that is a multiple
+// of gcd(Ca, Cb) apart, so their visits are compared modulo that. Greedy, rounds with the most buses first; 5 s steps.
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+const mod = (a, m) => ((a % m) + m) % m;
+const BEND = 14; // m past the road's end (either way) a bus is still round the bend there
+function timeAt(P, s) { // (when way P's timetable first reaches arc length s)
+  const kt = P.kt, ks = P.ks;
+  for (let i = 1; i < ks.length; i++) if (ks[i] >= s) return kt[i - 1] + (kt[i] - kt[i - 1]) * (ks[i] > ks[i - 1] ? (s - ks[i - 1]) / (ks[i] - ks[i - 1]) : 1);
+  return kt[kt.length - 1];
+}
+function slotFleet(routes) {
+  // each bus's visits to the village stop in its own cycle: [start, length]
+  const v = busRoads.stops[0];
+  for (const r of routes) for (const b of r.buses) {
+    const A = b.w.A, B = b.w.B0, mo = A.marks.find((m) => sameStop(m.stop, v)), mb = B.marks[B.marks.length - 2];
+    b.halts = [];
+    if (mo) { const t0 = timeAt(A, mo.s - BAY - BEND); b.halts.push([t0 - SLOT_PAD, mo.t + mo.dwell + 2 * SLOT_PAD - t0]); }
+    if (mb && sameStop(mb.stop, v)) { const t1 = timeAt(B, mb.s + BAY + BEND); b.halts.push([A.dur + mb.t - SLOT_PAD, t1 - mb.t + 2 * SLOT_PAD]); }
+  }
+  const clash = (p, q) => {
+    const g = gcd(p.P, q.P);
+    for (const [a, la] of p.h) for (const [b, lb] of q.h) { const d = mod(b - a, g); if (d < la || g - d < lb) return true; }
+    return false;
+  };
+  const order = routes.slice().sort((a, b) => b.m - a.m || a.idx - b.idx);
+  for (const SLOT of FLEET_SLOTS) {
+    const placed = [];
+    let ok = true;
+    for (const r of order) {
+      r.cycle = Math.ceil((r.base + MIN_LAYOVER) / SLOT) * SLOT;
+      let found = null;
+      for (let psi = 0; psi < r.cycle / r.m && !found; psi += 5) {
+        // (a halt at e in a bus's cycle comes round at clock times e - phase, modulo its cycle)
+        const mine = r.buses.map((b, k) => ({ P: r.cycle, h: b.halts.map(([e, l]) => [e - (psi + (r.cycle * k) / r.m), l]) }));
+        if (mine.some((p, i) => mine.some((q, j) => j > i && clash(p, q)) || placed.some((q) => clash(p, q)))) continue;
+        found = { psi, mine };
+      }
+      if (!found) { ok = false; break; }
+      r.psi = found.psi;
+      placed.push(...found.mine);
+    }
+    if (ok) return SLOT;
+  }
+  routes.forEach((r, ri) => { r.psi = ri * 53; }); // (no slot fits: as before, the rounds just apart)
+  return 0;
+}
+
 // ------------------------------------------------------------------ the line
 export class BusLine {
   constructor({ scene, models, makeRig = null, colliders = null, cameraBlockers = null }) {
@@ -965,6 +1028,7 @@ export class BusLine {
     // speed limit and warning signs (roadsigns.js; the limits are the traffic's, speedlimits.js), after the scenic
     // props so they never stand on a give-way sign or a bench
     if (busRoads.roads.length) { try { busRoads.signs = buildRoadSigns(this.group, colliders).length; } catch (e) { console.warn('road signs', e); } }
+    if (busRoads.depot) { try { buildDepot(this.group, { models, colliders, surf: lotMaterial() }); } catch (e) { console.warn('bus depot', e); } }
     scene.add(this.group);
     this.bus = buildBus(models, makeRig);
     scene.add(this.bus.group);
@@ -982,7 +1046,7 @@ export class BusLine {
     this.chase = { yaw: 0, pitch: 0.1, dist: 18, off: null };
     this.fov = null;
     this.timeScale = 1;
-    this.parkAtVillage();
+    if (!this.parkInDepot()) this.parkAtVillage();
     // the other buses on their rounds (Oct 29, the user: "busses should sometimes randomly drive around ... there
     // should be 8 buses"): bus:0 is this one (you ride it; it waits at the village between rides), bus:1..7 run the
     // routes on a timetable
@@ -1070,7 +1134,17 @@ export class BusLine {
     return null;
   }
 
-  // between rides the bus waits at the village stop
+  // with the depot: between rides the bus waits in its own bay there (bay 0); null when there is no depot
+  parkInDepot() {
+    const T = depotTrips(0);
+    if (!T) return false;
+    this.place(T.in, T.in.s1);
+    this.bus.group.visible = true;
+    this.at = null;
+    return true;
+  }
+  // between rides the bus waits at the village stop (or there for you as you arrive: once you are well away from it,
+  // it is back in its bay at the depot, updateFleet)
   parkAtVillage() {
     const v = busRoads.stops[0], r = busRoads.roads.find((x) => x.from === v);
     if (!r) { this.bus.group.visible = false; return; }
@@ -1260,13 +1334,24 @@ export class BusLine {
     const stops = busRoads.stops.filter((q) => q !== v && !q.noRoad);
     const legs = busRoads.busLegs || [];
     const isLeaf = (q) => !legs.some((l) => l.from === q) && !busRoads.roads.some((r) => r.from === q && !r.access);
+    // a bus's round to terminus L: out (A) and the trips back (with the depot: from and to its own bay k)
+    const depot = !!busRoads.depot;
+    const way = (L, k) => {
+      const out = this.legs(v, L), back = this.legs(L, v);
+      if (!out || !back) return null;
+      if (!depot) return { A: fleetDir(out, DEPOT_GAP, DWELL_END), back, B0: fleetDir(back, 0, DWELL_DEPOT), lay: DWELL_DEPOT };
+      const T = depotTrips(k, BAY);
+      if (!T) return null;
+      T.out.dwell = DWELL_DEPOT; back[back.length - 1].dwell = DWELL_UNLOAD; // (boarding at the sign; off across from it)
+      const trips = [...back, T.in];
+      return { A: fleetDir([T.out, ...out], 0, DWELL_END), back: trips, B0: fleetDir(trips, 0, 0), lay: 0 };
+    };
     const routes = [];
     for (const L of stops) {
       if (!isLeaf(L)) continue;
-      const out = this.legs(v, L), back = this.legs(L, v);
-      if (!out || !back) continue;
-      const A = fleetDir(out, DEPOT_GAP, DWELL_END), B = fleetDir(back, 0, DWELL_DEPOT);
-      routes.push({ to: L, out: A, back: B, cycle: A.dur + B.dur });
+      const w = way(L, 4);
+      if (!w) continue;
+      routes.push({ to: L, cycle: w.A.dur + w.B0.dur + (depot ? MIN_LAYOVER : 0) });
     }
     if (!routes.length) return;
     // the buses over the rounds by their length (every round at least one), spread evenly round each
@@ -1275,23 +1360,38 @@ export class BusLine {
     let sum = routes.reduce((a, r) => a + r.m, 0);
     while (sum > N) { const r = routes.filter((q) => q.m > 1).sort((a, b) => a.cycle / a.m - b.cycle / b.m)[0]; if (!r) break; r.m--; sum--; }
     while (sum < N) { routes.sort((a, b) => b.cycle / b.m - a.cycle / a.m)[0].m++; sum++; }
+    // each bus its own ways (its own bay: bus:k in bay k, bus:0's is bay 0)
     let id = 1;
     routes.forEach((r, ri) => {
       r.idx = ri; r.mpLine = `R${ri}`; // (multiplayer: each round its own shared timeline 'bus|R<idx>')
-      for (let k = 0; k < r.m && id <= N; k++) {
+      r.buses = [];
+      for (let k = 0; k < r.m && id <= N; k++, id++) { const w = way(r.to, id); if (w) r.buses.push({ id, w }); }
+      r.m = r.buses.length;
+    });
+    const live = routes.filter((r) => r.m);
+    if (depot) {
+      for (const r of live) r.base = Math.max(...r.buses.map((b) => b.w.A.dur + b.w.B0.dur));
+      slotFleet(live);
+    } else live.forEach((r, ri) => { r.base = r.cycle; r.psi = ri * 53; });
+    for (const r of live) {
+      r.buses.forEach(({ id: bid, w }, k) => {
         const group = new THREE.Group();
-        group.name = `ski-bus-${id}`;
+        group.name = `ski-bus-${bid}`;
         group.add(this.bus.shell.clone(true)); // (the same geometry and paint as bus:0)
         group.visible = false;
         scene.add(group);
         const collider = { x: 1e9, z: 1e9, hw: BUS.width / 2 + 0.05, hd: BUS.len / 2, rot: 0, soft: true, h: 3.4, bus: true };
         colliders?.push(collider);
-        // (its place in the round: evenly apart, each round shifted so their buses don't leave the village together)
-        const phase = (r.cycle * k) / r.m + ri * 53;
-        this.fleet.push({ id: `bus:${id}`, route: r, phase, group, collider, seats: this.bus.seats.length, yaw: 0, at: null, st: null, v: 0, x: 0, y: 0, z: 0 });
-        id++;
-      }
-    });
+        // its round: the round's own (timeline, terminus, cycle), its own ways (its bay; the rest of the cycle waited
+        // there, or at the stop without a depot)
+        const route = Object.create(r);
+        route.out = w.A;
+        route.back = depot ? fleetDir(w.back, 0, r.cycle - w.A.dur - w.B0.dur) : w.B0;
+        // (its place in the round: evenly apart, each round at its slot so no two meet at the village stop)
+        const phase = r.psi + (r.cycle * k) / r.m;
+        this.fleet.push({ id: `bus:${bid}`, route, phase, group, collider, seats: this.bus.seats.length, yaw: 0, at: null, st: null, v: 0, x: 0, y: 0, z: 0 });
+      });
+    }
     // the traffic brakes for them, follows them (and the bus you ride does too)
     const pool = [];
     this.unblock = addTrafficBlocker((out) => {
@@ -1303,7 +1403,7 @@ export class BusLine {
         out.push(o);
       }
     });
-    this.fleetRoutes = routes.map((r) => ({ to: r.to.name, buses: r.m, cycleMin: +(r.cycle / 60).toFixed(1) }));
+    this.fleetRoutes = live.map((r) => ({ to: r.to.name, buses: r.m, cycleMin: +(r.cycle / 60).toFixed(1) }));
   }
 
   /** Multiplayer (later): the fleet's clock (s) from a shared one. */
@@ -1322,6 +1422,12 @@ export class BusLine {
     if (!this.fleet.length || !(dt > 0)) return;
     dt = Math.min(dt, 0.1);
     this.fleetClock += dt;
+    // your own bus, waiting at the village stop (as you arrived, or after a ride there): once you are well away from it,
+    // back in its bay at the depot, out of the way of the buses coming in to the stop
+    if (!this.mp && !this.ride && this.at && this.at === busRoads.stops[0] && busRoads.depot && p && this.bus.group.visible) {
+      const g = this.bus.group.position;
+      if (Math.hypot(g.x - p.x, g.z - p.z) > 90) this.parkInDepot();
+    }
     const T = (this._ft ||= {});
     if (this.mp) this.mpBus0();
     for (const b of this.fleet) {
@@ -1383,7 +1489,7 @@ export class BusLine {
       if (b.taken || !st) continue;
       const P = st.dir ? b.route.back : b.route.out;
       b.sq = st.s;
-      if (!st.mark) continue;
+      if (!st.mark || st.mark.stop.depot) continue; // (in the depot each in its own bay)
       const k = st.mark.stop.name + st.dir;
       if (!Q.has(k)) Q.set(k, []);
       Q.get(k).push(b);
@@ -1402,7 +1508,7 @@ export class BusLine {
       // drawn near you only (cheap far away: just its timetable)
       const P = st.dir ? b.route.back : b.route.out, sq = Math.max(0, b.sq);
       b.v = st.mark ? 0 : st.v;
-      b.at = st.mark ? st.mark.stop : null;
+      b.at = st.mark && !st.mark.stop.depot ? st.mark.stop : null; // (in its bay at the depot: at no stop)
       if (d < FLEET_SHOW) {
         b.yaw = poseBus(b.group, P, sq, st.shift || 0, st.shiftV || 0, st.v || 0);
         const mine = this.ride?.fleetBus === b && this.ride.mp; // (multiplayer: the one you ride is drawn as bus:0's cabin)
@@ -1430,7 +1536,7 @@ export class BusLine {
     if (this.ride?.mp) this.abort();
     this.mp = hook || null;
     for (const b of this.fleet) b.st = null; // (re-placed from the timetable next frame)
-    if (!this.mp) this.parkAtVillage();
+    if (!this.mp && !this.parkInDepot()) this.parkAtVillage();
     else this.mpBus0();
   }
   // bus:0 is out of the game in multiplayer (its cabin shows only round you, in the fleet bus you ride)

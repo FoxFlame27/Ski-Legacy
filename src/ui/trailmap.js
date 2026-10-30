@@ -538,7 +538,7 @@ export class TrailMap {
     const seen = new Set(), labels = named.filter((n) => { const k = n.name.replace(/\s*\(.*\)$/, ''); if (seen.has(k)) return false; seen.add(k); return true; });
     this._roads = { src: R, key, main, scenic, minor, scenicMinor, ring, labels, box,
       rings: rings.map((q) => ({ x: q.x, z: q.z, R: q.R || 15, name: q.name })),
-      lots: lots.filter((L) => !L.building && Number.isFinite(L.x)).map((L) => ({ x: L.x, z: L.z, hw: L.hw, hd: L.hd, ux: L.ux ?? 1, uz: L.uz ?? 0, vx: L.vx ?? 0, vz: L.vz ?? 1, name: L.name, size: L.size })) };
+      lots: lots.filter((L) => (!L.building || L.depot) && Number.isFinite(L.x)).map((L) => ({ x: L.x, z: L.z, hw: L.hw, hd: L.hd, ux: L.ux ?? 1, uz: L.uz ?? 0, vx: L.vx ?? 0, vz: L.vz ?? 1, name: L.name, size: L.size, depot: !!L.depot })) }; // (the bus depot too: a yellow B)
     return this._roads;
   }
 
@@ -586,13 +586,13 @@ export class TrailMap {
       }
       if (s < 0.06 && L.size !== 'big') continue;
       const q = s >= 0.2 ? 6.5 : 5;
-      g.fillStyle = BLUE; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
+      g.fillStyle = L.depot ? '#c99400' : BLUE; g.strokeStyle = '#fff'; g.lineWidth = 1.5;
       g.beginPath(); g.roundRect(x - q, y - q, 2 * q, 2 * q, 2); g.fill(); g.stroke();
-      g.fillStyle = '#fff'; g.font = `800 ${Math.round(q * 1.5)}px ${UI}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('P', x, y + 0.5);
+      g.fillStyle = '#fff'; g.font = `800 ${Math.round(q * 1.5)}px ${UI}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(L.depot ? 'B' : 'P', x, y + 0.5);
       this.reserve(x, y, q + 1);
       if (L.name) {
         this.spot(x, y, q + 2, L.x, L.z, L.name);
-        if (s >= 0.3) this.label(L.name, x, y, { size: 12.5, weight: 600, color: BLUE, prio: 8, cands: this.around(q + 1, 4) });
+        if (s >= (L.depot ? 0.16 : 0.3)) this.label(L.name, x, y, { size: 12.5, weight: 600, color: L.depot ? '#8a6200' : BLUE, prio: 8, cands: this.around(q + 1, 4) });
       }
     }
     // the road names along them (upright, either side, as near the middle of the view as it fits)

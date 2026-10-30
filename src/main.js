@@ -1559,15 +1559,15 @@ function mpRaceStart(d) {
 // ------------------------------------------------------------------ interactions
 function findInteraction() {
   const p = player.pos;
+  // the WERKSTATT (game/werkstatt.js): E to repair your car in its repair box, also from the driver's seat
+  const werk = races.active || heli.rescuing ? null : carRental?.werkstatt?.interaction(p);
+  if (werk) return werk;
   if (player.mode === 'sit' || races.active || heli.rescuing) return null;
   const carPrompt = drive?.interaction(p);
   if (carPrompt) return carPrompt;
   const ride = isMP() ? multiplayer?.carInteraction(p) : null; // (multiplayer: "Ask <owner> for a ride" at their car)
   if (ride) return ride;
   const rental = carRental?.interaction(p); // the CAR RENTAL's door
-  // the WERKSTATT (game/werkstatt.js): E to repair your car in its repair box, also from the driver's seat
-  const werk = races.active || heli.rescuing ? null : carRental?.werkstatt?.interaction(p);
-  if (werk) return werk;
   if (rental) return rental;
   const jail = prison?.interaction(p); // the PRISON's door: visit
   if (jail) return jail;

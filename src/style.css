@@ -160,6 +160,7 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
    Frost wipe left to right (0.05-0.95 s), the flash-freeze hit at 0.95 s (flash, thump, bloom, ice sparks), a glint,
    STUDIO tracking in. Only transform / opacity animate (the compositor keeps it smooth while the game boots). */
 .studio-dom { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.studio-dom > *, .studio-dom .sd-logo > * { will-change: transform, opacity; } /* own compositor layers, rasterised up front: they animate while the boot holds the main thread */
 .sd-lockup { position: relative; display: flex; flex-direction: column; align-items: center; gap: min(6.7vh, 3.8vw); }
 .sd-logo { position: relative; overflow: hidden; height: min(16vh, 10.5vw); animation: sdHit 0.55s cubic-bezier(.2,.9,.2,1) calc(var(--sd-at, 0s) + 0.95s); }
 .sd-logo svg { display: block; height: 100%; width: auto; }

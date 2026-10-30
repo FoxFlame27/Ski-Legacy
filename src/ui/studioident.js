@@ -382,7 +382,11 @@ ${Array.from({ length: 14 }, (_, i) => `<i class="sd-spark" style="--x:${26 + ((
     this.host.appendChild(el);
     this.sound = this.audio?.iceHit?.(delay + STUDIO_HIT_S) || null;
     this.abort = () => {};
-    return Promise.resolve(true);
+    // (Oct 30, the user: "Icecold Studio doesn't work again, you hear the sound but you don't see anything": the game's
+    // boot started in the same task, before the ident was ever committed to the compositor, and then held the main
+    // thread for seconds. Resolve only once two frames have gone up with it (its layers rasterised), so the
+    // compositor can play it on its own while the boot runs.)
+    return new Promise((r) => { let done = false; const go = () => { if (!done) { done = true; r(true); } }; requestAnimationFrame(() => requestAnimationFrame(go)); setTimeout(go, 400); });
   }
 
   /** Static lockup (vector) when the canvas can't play: fades in with the hit sound. */

@@ -48,7 +48,7 @@ export class OwnerTags {
       out.push({ key: `kept:${k.cfg?.plate || k.car.id}`, x: kp.x, y: kp.y + 2.2, z: kp.z, label: 'Your car', text: 'Your car' });
     }
     const ch = G?.chalets, h = ch?.rented?.();
-    if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: MP.active ? `${this.name}'s chalet` : null }); }
+    if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: 'Your chalet' }); // (your own: "Your chalet", Oct 30, the user) }
     if (MP.active && MP.chalets && ch?.houses && !ch.inside) for (const id in MP.chalets) { // (the other players' chalets)
       const owner = MP.chalets[id];
       if (!owner || owner === MP.name) continue;
@@ -58,7 +58,7 @@ export class OwnerTags {
       out.push({ key: `chalet:${id}`, x: p.x, y: p.y + 10.5, z: p.z, label: `${owner}'s chalet`, text: `${owner}'s chalet`, color: BLUE, other: true });
     }
     const heli = G?.heli;
-    if (heli && heli.state === 'parked' && heli.away && heli.flight?.pos) { const p = heli.flight.pos; out.push({ key: 'heli', x: p.x, y: world.height(p.x, p.z) + 4.6, z: p.z, label: 'Your helicopter' }); }
+    if (heli && heli.state === 'parked' && heli.away && heli.flight?.pos) { const p = heli.flight.pos; out.push({ key: 'heli', x: p.x, y: world.height(p.x, p.z) + 4.6, z: p.z, label: 'Your helicopter', text: 'Your helicopter' }); }
     return out;
   }
 

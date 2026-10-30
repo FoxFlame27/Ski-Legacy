@@ -55,7 +55,7 @@ import { quality } from '../engine/quality.js';
 import { setPlates } from './carconfig.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { roadGraph, roadNearest, obb } from './towtruck.js';
-import { addTrafficBlocker } from './traffic.js';
+import { addTrafficBlocker, trafficBlockers } from './traffic.js';
 import { Smoke } from './carlights.js';
 import { makeFallbackFigure } from './jobs/props.js';
 import { resetRig } from './jobs/actors.js';
@@ -146,6 +146,8 @@ const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
 const MODEL = 'police/police_car', CAR1 = 'car1', CAR1_LEN = 5.0, CAR1_W = 1.94; // (CAR1_W: the body, mirrors left out)
 const SEND_DT = 1 / 6;
+const PIN_KEYS = new Set(['KeyE', 'KeyM', 'Space']); // (arrested: setPin)
+const ARREST_MAX = 10, ARREST_OUT = 6; // s: a decided arrest ends in jail this long after it began / the officer got out, whatever happens
 const usd = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const FOOT = new Set([ST.walk, ST.ski, ST.fall]);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -481,6 +483,9 @@ body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (
   background: var(--blue, #1546c8); color: #fff; clip-path: var(--brush-b); font: italic 700 max(15px, calc(var(--u) * 20))/1.12 var(--num); letter-spacing: 0.03em;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 #police-hud .pl-msg.hot { background: #d0342c; }
+#police-hud .pl-tip { margin-top: calc(var(--u) * 7); font: 700 max(12px, calc(var(--u) * 15))/1.2 var(--ui); color: #0d1d4a;
+  white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+#police-hud .pl-tip:empty { display: none; }
 #police-hud .pl-esc { margin-top: calc(var(--u) * 14); }
 #police-hud .pl-esc[hidden] { display: none; }
 #police-hud .pl-row { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--u) * 10); }
@@ -692,6 +697,11 @@ export class Police {
     // (Oct 30, the user: "make sure you don't accidentally pay the fine: a button to confirm, or you just drive away"):
     // pulled over, ENTER pays (E would get you out of the car)
     if (typeof addEventListener === 'function') addEventListener('keydown', (e) => { if (e.code === 'Enter' && !e.repeat && this.w?.scene?.ask && !this.w.scene.paid) this.payNow = true; });
+    // (Oct 30, the user: "make sure when the police officer is with you to arrest you, you can't move"): pinned (setPin)
+    // no E (in / out of a car, doors, seats, jobs), no map, no jump: the keys never reach the game's input (capture,
+    // ahead of input.js's own listener on the window)
+    this.pinned = false;
+    if (typeof addEventListener === 'function') addEventListener('keydown', (e) => { if (this.pinned && PIN_KEYS.has(e.code)) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
     this.units = [];      // the patrol cars (built once, reused, up to MAXU): see unit()
     this.w = null;        // the chase: { t, esc, fleeing, reached, grace, stopT, scene, why, heat, search, seen, lkp, rb, flats, ... } (start())
     this.cool = 0;
@@ -717,7 +727,7 @@ export class Police {
     this._live = []; this._rank = []; // (scratch lists: no allocation per frame)
     this.rq = []; this.radioText = ''; this.radioUntil = 0; this.radioAt = 0; // police radio chatter (radio())
     this.slowT = -1e9; this.puffT = 0; this.puffAt = new THREE.Vector3();
-    this._hs = { t: '', msg: '', hot: false, esc: '', frac: 0, cars: 0, near: '', stars: 1, gain: false, search: false, state: '', stateCls: '', rb: '', air: false, tyres: '', radio: '' };
+    this._hs = { t: '', msg: '', tip: '', hot: false, esc: '', frac: 0, cars: 0, near: '', stars: 1, gain: false, search: false, state: '', stateCls: '', rb: '', air: false, tyres: '', radio: '' };
     policeModelReady(this.models);
     this.officerRigs = []; // the officer's rigs not in use (his own, never the job pool's)
     this.loadOfficer();
@@ -739,13 +749,13 @@ export class Police {
     el.innerHTML = '<div class="pl-lights"><i></i><i></i><i></i><i></i></div>'
       + `<div class="pl-head"><div class="pl-title"><div class="pl-stars">${STAR.repeat(5)}</div><b>WANTED</b></div><div class="pl-clock"><small>CHASE</small><span class="pl-t"></span></div></div>`
       + '<div class="pl-chips"><span class="pl-state"></span><span class="pl-rb" hidden></span><span class="pl-air" hidden>AIR UNIT</span><span class="pl-tyre" hidden></span></div>'
-      + '<div class="pl-msg"></div>'
+      + '<div class="pl-msg"></div><div class="pl-tip"></div>'
       + `<div class="pl-radio" hidden>${RADIO_ICON}<span></span></div>`
       + '<div class="pl-esc"><div class="pl-row"><small>LOSE THEM</small><span class="pl-esc-t"></span></div><div class="pl-bar"><i></i></div><div class="pl-row pl-sub"><span class="pl-cars"></span><span class="pl-near"></span></div></div>';
     const root = document.getElementById('hud') || document.body;
     root.appendChild(el);
     this.el = el;
-    this.$t = el.querySelector('.pl-t'); this.$cars = el.querySelector('.pl-cars'); this.$msg = el.querySelector('.pl-msg'); this.$escBox = el.querySelector('.pl-esc');
+    this.$t = el.querySelector('.pl-t'); this.$cars = el.querySelector('.pl-cars'); this.$msg = el.querySelector('.pl-msg'); this.$tip = el.querySelector('.pl-tip'); this.$escBox = el.querySelector('.pl-esc');
     this.$esc = el.querySelector('.pl-esc-t'); this.$bar = el.querySelector('.pl-bar i'); this.$near = el.querySelector('.pl-near'); this.$stars = [...el.querySelectorAll('.pl-stars svg')];
     this.$state = el.querySelector('.pl-state'); this.$rb = el.querySelector('.pl-rb'); this.$air = el.querySelector('.pl-air'); this.$tyre = el.querySelector('.pl-tyre');
     this.$radio = el.querySelector('.pl-radio'); this.$radioT = el.querySelector('.pl-radio span');
@@ -766,6 +776,7 @@ export class Police {
     const C = this.hudCache;
     if (C.t !== H.t) this.$t.textContent = C.t = H.t;
     if (C.msg !== H.msg) this.$msg.textContent = C.msg = H.msg;
+    if (C.tip !== H.tip && this.$tip) this.$tip.textContent = C.tip = H.tip || '';
     if (C.hot !== H.hot) this.$msg.classList.toggle('hot', C.hot = H.hot);
     if (C.gain !== H.gain) this.el.classList.toggle('gain', C.gain = H.gain);
     if (C.search !== H.search) this.el.classList.toggle('search', C.search = H.search);
@@ -863,7 +874,8 @@ export class Police {
     this.rq.length = 0; this.radioText = ''; this.L = LEVELS[1]; this.escT = 0;
     if (!this.spawn(0)) { this.w = null; return; }
     const T = this.target();
-    this.note(`Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`);
+    this.noteUntil = 0; // (the box's own line says it: "Police · pull over and stop", hudFrame)
+    this.slam('PULL OVER', `POLICE · STOP FOR A ${usd(this.fineNow())} FINE`, 0);
     this.radio(`Dispatch: collision reported ${T ? this.where(T) : ''}. Unit responding.`);
     this.audio?.play?.('error');
   }
@@ -1082,12 +1094,30 @@ export class Police {
     if (this.jailing) { // (arrested: everything goes once you are in the cell)
       this.jailing -= dt;
       for (const u of this.units) if (u.on && u.officer) this.poseOfficer(u.officer, dt);
-      if (this.jailing <= 0 || this.prison?.inside) { this.jailing = 0; this.clear(true); }
+      if (this.drive) this.drive.held = !!this.drive.active;
+      this.setPin(true);
+      // the prison didn't take you (none yet, it threw): again every 1.5 s, three tries in all; then out of the car with
+      // a fade (the fine is paid), never left standing there "under arrest"
+      const pr = this.prison;
+      if (!pr?.active && !pr?.inside && this.time - (this.jailAt || 0) > 1.5) {
+        if ((this.jailTry || 0) < 3) this.tryJail();
+        else { this.jailing = 0; this.arrestFallback(); }
+      }
+      if (this.jailing <= 0 || pr?.inside) { this.jailing = 0; this.clear(true); }
       this.siren(true); this.hudFrame(true); this.audio?.chaseMusic?.(false); // (arrested: the chase music goes)
       return;
     }
     const W = this.w;
     if (W && (this.excluded?.() || this.prison?.active)) { this.clear(); return; }
+    // the watchdog: an arrest once decided (the box says "under arrest") ends in prison within seconds whatever else
+    // happens (the patrol car can't get to you, the officer can't reach you, you went inside somewhere, an error
+    // in the scene): ARREST_OUT s after the officer got out, ARREST_MAX s at most; straight to the prison's fade
+    const SA = W?.scene;
+    if (SA && this.committed(SA) && !SA.jailed) {
+      SA.age = (SA.age || 0) + dt;
+      if (SA.step !== 'pull') SA.outT = (SA.outT || 0) + dt;
+      if (SA.age > ARREST_MAX || SA.outT > ARREST_OUT) { this.forceArrest(W); this.siren(true); this.hudFrame(true); return; }
+    }
     if (!W) this.resumeStep(dt);
     // hiding in a chalet (Oct 30, the user): the police are still looking but can't find you: the WANTED box says so,
     // the escape time runs on while you stay inside (they lose you once it is up); out again, the chase goes on for
@@ -1097,8 +1127,16 @@ export class Police {
       W.t += dt; W.esc += dt; W.near = Infinity; W.seen = false;
       if (W.esc >= this.L.escS) { this.escaped('They never found you · you escaped'); return; }
     }
+    // being arrested in your car: it is held (drive.js: no throttle, no steering, brakes on, no getting out); on foot,
+    // once the officer has you (or is right by you): you can't move (setPin) (outside the try: an error can't undo it)
+    const SP = this.w?.scene, arrested = !!this.jailing || (!!SP && this.committed(SP));
+    if (this.drive) this.drive.held = arrested && !!this.drive.active;
+    let pin = arrested && !!this.drive?.active;
+    if (arrested && !pin) { const o = SP?.u?.officer, T = this.target(); pin = !!this.jailing || SP?.step === 'talk' || !!(o && T && hyp(o.pos.x, o.pos.z, T.x, T.z) < TUNING.footCatchR + 0.5); }
+    this.setPin(pin);
     const paused = !!this.paused?.();
     try {
+      this.gatherBlockers(); // (the buses, the tow truck, the ambulance...: solid to the patrol cars, blockAt)
       if (W && !paused) this.chase(dt, W);
       const W2 = this.w; // (the chase may have ended just now)
       for (const u of this.units) if (u.on || u.wrecked) this.knockStep(u, dt);
@@ -1108,8 +1146,6 @@ export class Police {
       if (dd) { if (this.escT > 0) { this.escT -= dt; dd.escK = this.escT > 0 ? 0.12 : 1; } else if (dd.escK !== undefined && dd.escK !== 1) dd.escK = 1; }
       this.heliStep(dt, W2, W2 ? this.target() : this.target(), paused);
       this.radioFrame();
-      // being arrested in your car: it is held (drive.js: no throttle, no steering, brakes on, no getting out)
-      if (this.drive) this.drive.held = !!((W?.scene?.kind === 'arrest' && !W.scene.abort) || this.jailing) && !!this.drive.active;
       for (const u of this.units) if (u.on) { if (!W) this.leave(u, dt); if (u.on) policeLights(u.m, true, this.time + u.k * 0.21); }
       this.hits(dt);
       this.wrecks(dt);
@@ -1219,6 +1255,7 @@ export class Police {
     this.roadblockStep(dt, W, T, L);
     if (!live.length) {
       // nobody left after you (wrecked): the next car is on its way; meanwhile out of sight (the helicopter aside)
+      if (this.committed(W.scene)) { this.forceArrest(W); return; } // (an arrest decided: prison all the same)
       if (!W.fleeing || W.scene) { this.clear(); this.forget(); return; }
       W.near = Infinity;
       this.sight(dt, W, T, live, L);
@@ -1249,7 +1286,7 @@ export class Police {
     if (W.scene) { this.sceneStep(dt, W, T); return; }
     this.chatter(dt, W, T);
     // they reached you: the grace to pull over, then fleeing
-    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.note(`Pull over now: stop to pay the ${usd(this.fineNow())} fine`); this.radio('Driver, pull over! Pull over now!'); }
+    if (!W.reached && near < TUNING.reachR) { W.reached = true; W.grace = TUNING.graceS; this.noteUntil = 0; this.radio('Driver, pull over! Pull over now!'); }
     if (W.reached && !W.fleeing) {
       W.grace -= dt;
       const away = (T.vx * (T.x - lead.x) + T.vz * (T.z - lead.z)) / Math.max(1, near); // (on foot: running away from them)
@@ -1274,11 +1311,11 @@ export class Police {
     // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;
     // (on foot off the roads: parked as near you as a car gets counts as close)
-    const close = near < TUNING.stopR || (T.foot && lead.parked && near < 90);
+    const close = near < TUNING.stopR || (T.foot && lead.parked && near < 140);
     W.stopT = still && close ? W.stopT + dt : 0;
     if (W.stopT >= TUNING.stopS) { this.begin(W, W.fleeing ? 'arrest' : 'fine', lead, W.fleeing ? 'stopped' : ''); return; }
     // fleeing on foot: an officer runs after you once his car is close (or as close as it gets)
-    if (W.fleeing && T.foot && (near < 16 || (lead.parked && near < 90)) && !lead.officer && lead.role !== 'block') { this.begin(W, 'arrest', lead, 'foot'); return; }
+    if (W.fleeing && T.foot && (near < 16 || (lead.parked && near < 140)) && !lead.officer && lead.role !== 'block') { this.begin(W, 'arrest', lead, 'foot'); return; }
     for (const u of live) this.drivePursuit(u, dt, T, W, u === lead);
   }
   // who sees you (true: the chase ended here). A patrol car: within seeNear always, else within the level's sight
@@ -1363,7 +1400,7 @@ export class Police {
     const foot = !this.drive?.active;
     if (W.heat < 2) this.addHeat(W, 2 - W.heat);
     W.reinT = Math.min(W.reinT, 1.5);
-    this.note(`${foot ? 'Running from the police' : 'Fleeing · they will ram you'} · break their line of sight to lose them`);
+    this.note(`${foot ? 'You ran' : "You're fleeing"} · lose them or you'll be arrested`);
   }
   // a patrol car joining the chase (the user: "it isn't realistic how the cars spawn ... they should drive behind you
   // like 5 and maybe like 1 car from the other side"): far back on the roads you came by, out of sight, driving up
@@ -1758,7 +1795,8 @@ export class Police {
     u.boost = 1 + L.catchUp * clamp((d - TUNING.catchFrom) / 220, 0, 1);
     if (!T.car && !T.foot) { u.parked = false; this.step(u, dt, u.x + Math.sin(u.yaw) * 3, u.z + Math.cos(u.yaw) * 3, 0); return; } // (on a lift, in the helicopter...: they wait)
     // stuck again and again, far and out of sight: back on a road nearer you (the last resort)
-    if (u.stuckN >= 3 && d > 150 && !this.inView(u) && this.spawn(u.k, 250, 420, true)) return;
+    // (stuck over and over even nearer: the same, once you can't see it: never pushed through what it is stuck on)
+    if (((u.stuckN >= 3 && d > 150) || u.stuckN >= 5) && !this.inView(u) && this.spawn(u.k, 250, 420, true)) return;
     const vMax = Math.min(TUNING.vTop, L.vRoad * u.boost);
     // they lost you: spread out over the roads round where you were last seen (the nearest goes there first)
     if (W.search && !u.sees) { this.searchDrive(u, dt, W, vMax); return; }
@@ -1926,7 +1964,7 @@ export class Police {
     const g = hyp(u.x, u.z, u.sx, u.sz);
     this.step(u, dt, u.sx, u.sz, Math.min(vMax * 0.8, 6 + Math.sqrt(2 * A_BRAKE * g)));
   }
-  // on foot: the nearest point a patrol car gets to near you: 9 m short of you by a road, else from the road point
+  // on foot: the nearest point a patrol car gets to near you: 9 m short of you by a road, else from the road point (24 m off it at most: the officer walks the rest)
   // nearest you toward you while the ground is drivable (not steep, nothing solid), up to 9 m short of you
   footGoal(u, T, dt) {
     const F = u.fg;
@@ -1941,7 +1979,7 @@ export class Police {
     const G = roadGraph(), sx = G.X[n.i], sz = G.Z[n.i], dx = (T.x - sx) / n.d, dz = (T.z - sz) / n.d;
     let hp = world.height(sx, sz);
     F.x = sx; F.z = sz;
-    for (let s = 4; s <= Math.min(n.d - 9, 120); s += 4) {
+    for (let s = 4; s <= Math.min(n.d - 9, 24); s += 4) { // (a short way off the road at most: the officer walks the rest)
       const x = sx + dx * s, z = sz + dz * s, h = world.height(x, z);
       if (Math.abs(h - hp) > 4 * 0.55 || this.solidAt(x, z, u.hw + 0.4, u)) break;
       F.x = x; F.z = z; hp = h;
@@ -2054,16 +2092,47 @@ export class Police {
         u.stT = 0; u.stX = u.x; u.stZ = u.z; u.stNeg = false;
       }
     }
+    const ox = u.x, oz = u.z, oyaw = u.yaw;
     u.yaw = wrapPi(u.yaw + (u.v / WB) * Math.tan(u.steer) * dt);
     u.x += Math.sin(u.yaw) * u.v * dt; u.z += Math.cos(u.yaw) * u.v * dt;
+    this.solidMove(u, ox, oz, oyaw);
     this.pushOut(u);
     this.place(u);
     u.noYou = false; u.direct = false;
   }
+  // something solid where the car is now? (three circles along it, how many of them in something; not the guardrails:
+  // pushOut glances off them)
+  hitAt(u) {
+    const s = Math.sin(u.yaw), c = Math.cos(u.yaw), R = u.hw, k = u.hd - R;
+    return (this.solidAt(u.x + s * k, u.z + c * k, R, u, false, true) ? 1 : 0) + (this.solidAt(u.x, u.z, R, u, false, true) ? 1 : 0) + (this.solidAt(u.x - s * k, u.z - c * k, R, u, false, true) ? 1 : 0);
+  }
+  // the move from (ox, oz, oyaw) to where it is now, but never into anything solid (a building, a prop, a parked car, a
+  // bus, the traffic...): along it (the move's x or z alone) if that is free, else it stays where it was and stops
+  // (step(): no progress, it backs up and turns out; drivePursuit: a last resort, back on a road out of sight). Already
+  // in it before the move (something drove into it, a spawn): it moves on as long as it gets no deeper in, pushOut
+  // eases it out
+  solidMove(u, ox, oz, oyaw) {
+    const hn = this.hitAt(u);
+    if (!hn) return false;
+    const nx = u.x, nz = u.z, nyaw = u.yaw;
+    u.x = ox; u.z = oz; u.yaw = oyaw;
+    const ho = this.hitAt(u);
+    if (ho && hn <= ho) { u.x = nx; u.z = nz; u.yaw = nyaw; return false; }
+    const T = this._slide ||= [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    T[0][0] = nx; T[0][1] = oz; T[0][2] = nyaw; T[1][0] = ox; T[1][1] = nz; T[1][2] = nyaw;
+    T[2][0] = nx; T[2][1] = oz; T[2][2] = oyaw; T[3][0] = ox; T[3][1] = nz; T[3][2] = oyaw;
+    for (const [x, z, y] of T) {
+      u.x = x; u.z = z; u.yaw = y;
+      if (this.hitAt(u) <= ho) { u.v *= 0.94; return true; }
+    }
+    u.x = ox; u.z = oz; u.yaw = oyaw;
+    u.v = Math.abs(u.v) > 3 ? -u.v * 0.15 : 0; // (a bump back off it)
+    return true;
+  }
   // something solid at (x, z) within r? (buildings, rocks, poles, parked cars, other players' cars, guardrails; trees);
   // dyn (the probe): also the other patrol car, the traffic and the bus (and the guardrails a little narrower: the aim
   // across a bend's chord grazes them)
-  solidAt(x, z, r, u, dyn = false) {
+  solidAt(x, z, r, u, dyn = false, noRail = false) {
     // your car: steered round unless they mean to ram it (or keep their distance behind it by the speed)
     const d = this.drive?.d;
     if (d && !u.ram && !(dyn && u.noYou) && Math.abs(d.x - x) < 4 + r && Math.abs(d.z - z) < 4 + r) {
@@ -2074,8 +2143,10 @@ export class Police {
     for (const c of this.colliders || []) {
       if (c === u.col || c.net || c.police === 'local' || c === mine) continue;
       let rr = r;
-      if (c.rail) { if (c.top !== undefined && Math.abs(c.top - u.y) > 3.5) continue; if (dyn) rr = Math.max(0.3, r - 0.45); } // (a guardrail: solid)
-      else if (c.soft) continue;
+      if (c.rail) { if (noRail || (c.top !== undefined && Math.abs(c.top - u.y) > 3.5)) continue; if (dyn) rr = Math.max(0.3, r - 0.45); } // (a guardrail: solid)
+      // (soft: you bump off them on foot; but the traffic, the buses and the other players' cars are solid to a patrol
+      // car (Oct 30, the user: "police cars should not be able to drive through buses"); poles, people: not)
+      else if (c.soft && !(c.traffic || c.bus || c.mp || c.car)) continue;
       const size = c.r ?? Math.max(c.hw, c.hd);
       if (Math.abs(c.x - x) > size + rr || Math.abs(c.z - z) > size + rr) continue;
       if (c.r !== undefined) { if (Math.hypot(x - c.x, z - c.z) < c.r + rr) return c; continue; }
@@ -2083,8 +2154,33 @@ export class Police {
       if (Math.abs(lx) < c.hw + rr && Math.abs(lz) < c.hd + rr) return c;
     }
     if (dyn && this.dynAt(x, z, r, u)) return true;
+    const b = this.blockAt(x, z, r, u);
+    if (b) return b;
     const t = this.vegetation?.collide?.(x, z, r, 0.6, true);
     return t ? { x: t.x, z: t.z, r: t.trunk ?? t.r ?? 0.4 } : null;
+  }
+  // the vehicles that aren't colliders (traffic.js trafficBlockers: the tow truck, the ambulance, the helicopter set
+  // down, the snowcats, the trains, the ski buses), gathered once a frame (update) without the patrol cars' own boxes:
+  // as a box { x, z, hw, hd, rot } or null
+  blockAt(x, z, r, u) {
+    const L = this._blk;
+    if (!L?.length) return null;
+    for (const b of L) {
+      if (b.y !== undefined && Math.abs(b.y - u.y) > 4) continue; // (a train in a tunnel, the helicopter in the air)
+      const hw = b.hw || 1.2, hd = b.hd || 3, sz = Math.max(hw, hd);
+      if (Math.abs(b.x - x) > sz + r || Math.abs(b.z - z) > sz + r || !inBox(x, z, r, b.x, b.z, b.yaw || 0, hw, hd)) continue;
+      const o = (this._bo ||= { x: 0, z: 0, hw: 0, hd: 0, rot: 0 });
+      o.x = b.x; o.z = b.z; o.hw = hw; o.hd = hd; o.rot = -(b.yaw || 0);
+      return o;
+    }
+    return null;
+  }
+  gatherBlockers() {
+    const L = (this._blk ||= []);
+    L.length = 0;
+    let any = false; for (const u of this.units) if (u.on) { any = true; break; }
+    if (!any) return;
+    try { for (const b of trafficBlockers()) if (!b.police && Number.isFinite(b.x)) L.push(b); } catch { /* (none) */ }
   }
   // (the probe) the other patrol car, the traffic (stretched a little the way it is moving), the ski bus
   dynAt(x, z, r, u) {
@@ -2164,7 +2260,7 @@ export class Police {
           nx = nlx * c2 - nlz * s2; nz = nlx * s2 + nlz * c2;
         }
         if (!(depth > 0)) break;
-        u.x += nx * Math.min(depth, 1.5); u.z += nz * Math.min(depth, 1.5);
+        u.x += nx * Math.min(depth, 0.35); u.z += nz * Math.min(depth, 0.35); // (a little a frame: never through it to the far side)
         if (o.rail) rail = o; else hit = true;
       }
     }
@@ -2199,15 +2295,16 @@ export class Police {
     for (const u of this.units) {
       if (!u.on) continue;
       const A = (u.A ||= {}); A.x = u.x; A.z = u.z; A.yaw = u.yaw; A.hw = u.hw; A.hd = u.hd;
-      // the traffic: shoved aside
+      // the traffic: apart (the patrol car moved off it)
       for (const c of this.traffic?.cars || []) {
         if (c.mode === 'gone' || !c.g?.visible || Math.abs(c.x - u.x) > 8 || Math.abs(c.z - u.z) > 8) continue;
         const B = (this._tb ||= {}); B.x = c.x; B.z = c.z; B.yaw = c.yaw; B.hw = c.w / 2; B.hd = c.l / 2;
         if (!obb(u.x, u.z, u.yaw, u.hw, u.hd, B)) continue;
         const ct = contact(B, A);
         if (!ct) continue;
-        c.x += ct.nx * ct.depth; c.z += ct.nz * ct.depth;
-        if (Math.abs(u.v) > 2) { this.traffic.knock?.(c, ct.nx * Math.abs(u.v) * 0.6 + Math.sin(u.yaw) * u.v * 0.3, ct.nz * Math.abs(u.v) * 0.6 + Math.cos(u.yaw) * u.v * 0.3, (Math.random() - 0.5) * 2); u.v *= 0.8; }
+        // (the patrol car gives way: it never shoves the traffic aside (Oct 30, the user: only rams on your car))
+        u.x -= ct.nx * Math.min(ct.depth, 0.5); u.z -= ct.nz * Math.min(ct.depth, 0.5); u.v *= 0.7;
+        this.place(u); A.x = u.x; A.z = u.z;
       }
       // your car
       if (!d || d.crash) continue;
@@ -2310,7 +2407,9 @@ export class Police {
   // a patrol car knocked by a hit: it slides and turns, dying away (wrecks too)
   knockStep(u, dt) {
     if (!u.kx && !u.kz && !u.kyaw) return;
+    const ox = u.x, oz = u.z, oyaw = u.yaw;
     u.x += u.kx * dt; u.z += u.kz * dt; u.yaw = wrapPi(u.yaw + u.kyaw * dt);
+    if (this.solidMove(u, ox, oz, oyaw)) { u.kx *= 0.3; u.kz *= 0.3; u.kyaw *= 0.3; } // (knocked into something: it stops there)
     const f = Math.exp(-dt * 3.2);
     u.kx *= f; u.kz *= f; u.kyaw *= f;
     if (Math.abs(u.kx) + Math.abs(u.kz) + Math.abs(u.kyaw) < 0.08) { u.kx = 0; u.kz = 0; u.kyaw = 0; }
@@ -2391,7 +2490,7 @@ export class Police {
   sceneStep(dt, W, T) {
     const S = W.scene, u = S.u;
     S.t += dt;
-    if (!u.on) { W.scene = null; return; }
+    if (!u.on) { if (this.committed(S)) this.forceArrest(W); else W.scene = null; return; } // (its car gone: a decided arrest still ends in prison)
     // the other car stays back (behind the lead, a little to the side)
     // (the others in a fan behind it, three abreast; a roadblock's cars stay where they are)
     let fan = 0;
@@ -2416,7 +2515,8 @@ export class Police {
       else { this.footGoal(u, T, dt); px = u.fg.x; pz = u.fg.z; } // (on foot: as near you as a car gets, footGoal)
       const g = hyp(u.x, u.z, px, pz);
       this.step(u, dt, px, pz, g < 0.8 ? 0 : clamp(1 + g * 0.9, 0, 16), face);
-      if ((g < 2.2 && Math.abs(u.v) < 1) || (S.t > 14 && Math.abs(u.v) < 1.5) || (T.foot && (hyp(u.x, u.z, T.x, T.z) < 14 || g < 3.5) && Math.abs(u.v) < 6)) { u.v = 0; S.step = 'walk'; S.t = 0; this.spawnOfficer(u); }
+      // (it can't get to the spot (blocked, off the road, you on a bench / a lift): after 8 s he gets out where it is)
+      if ((g < 2.2 && Math.abs(u.v) < 1) || (S.t > 8 && Math.abs(u.v) < 3) || S.t > (this.committed(S) ? 5 : 12) || (!T.car && (hyp(u.x, u.z, T.x, T.z) < 14 || g < 3.5) && Math.abs(u.v) < 6)) { u.v = 0; S.step = 'walk'; S.t = 0; this.spawnOfficer(u); }
       return;
     }
     this.step(u, dt, u.x + Math.sin(u.yaw) * 0.3, u.z + Math.cos(u.yaw) * 0.3, 0);
@@ -2425,14 +2525,15 @@ export class Police {
       // to your window (in the car), or to you (on foot: running while you run)
       let tx = T.x, tz = T.z, reach = TUNING.footCatchR * 0.5;
       if (T.car) { const E = driverEye(T.car.t || { size: { x: T.car.w, y: 1.5, z: T.car.half * 2 } }), sg = E.x >= 0 ? 1 : -1; const P = this.carPoint(T.car, sg * (T.car.w / 2 + 0.55), E.z, this._pw ||= {}); tx = P.x; tz = P.z; reach = 0.25; }
-      const run = !T.car && (S.kind === 'arrest' ? T.sp > 1.2 || hyp(o.pos.x, o.pos.z, T.x, T.z) > 6 : false);
+      const run = S.kind === 'arrest' && (T.car ? hyp(o.pos.x, o.pos.z, tx, tz) > 4 : T.sp > 1.2 || hyp(o.pos.x, o.pos.z, T.x, T.z) > 6); // (an arrest: he hurries)
       const left = this.walkOfficer(o, tx, tz, run ? RUN_V : WALK_V, dt);
       this.poseOfficer(o, dt);
       const dist = hyp(o.pos.x, o.pos.z, T.x, T.z);
       // on foot: caught within 4 m
       if ((!T.car && dist < TUNING.footCatchR) || (T.car && left <= reach)) { S.step = 'talk'; S.t = 0; }
-      // outrun on foot (or got into a car): back to the car, the chase goes on
-      else if (!T.car && S.kind === 'arrest' && hyp(o.pos.x, o.pos.z, u.x, u.z) > 110) { S.step = 'back'; S.abort = true; }
+      // outrun on foot (or driven off before he had you): back to the car, the chase goes on (a decided arrest: he
+      // keeps after you; the watchdog jails you anyway: update())
+      else if (S.kind === 'arrest' && !this.committed(S) && hyp(o.pos.x, o.pos.z, u.x, u.z) > 110) { S.step = 'back'; S.abort = true; }
       return;
     }
     if (S.step === 'talk') {
@@ -2445,13 +2546,9 @@ export class Police {
           const f = this.fineNow();
           this.say('Officer', `${this.record() ? 'You again? ' : ''}Collision back there: ${usd(f)} fine.`); // (short: the long lines ran off the screen)
           S.ask = true; this.payNow = false; // (paid only on ENTER; driving / running off instead: fleeing)
-        } else {
-          const f = this.arrestNow(), a = usd(f);
-          this.say('Officer', S.why === 'wrecked' ? `You're under arrest! ${a}.` : T.car ? `Out of the car! Arrested · ${a}.` : `Stop! You're under arrest · ${a}.`); // (Oct 30, the user: the lines ran off the screen: short now)
-          this.charge(f); this.lastArrest = f; this.addRecord();
-        }
+        } else { S.said = false; this.sayArrest(S, T); }
       }
-      if (S.kind === 'arrest' && S.t > 2.2 && !S.jailed) { S.jailed = true; this.arrest(); return; }
+      if (S.kind === 'arrest' && S.t > 2.2 && !S.jailed) { this.forceArrest(W); return; }
       if (S.kind === 'fine' && S.ask && !S.paid && this.payNow) { this.payNow = false; S.paid = true; S.paidT = S.t; this.charge(this.fineNow()); this.addRecord(); }
       if (S.kind === 'fine' && S.paid && S.t - S.paidT > 2.2) { S.step = 'back'; S.t = 0; this.note('Fine paid · drive safely'); }
       return;
@@ -2495,24 +2592,66 @@ export class Police {
   // are until you are in the cell)
   arrest() {
     this.forget();
+    // (multiplayer: arrested in (or wrecked out of) your car, your passengers go to prison with you: the server jails
+    // and fines every player its seat registry has in your car, after your own 'jail' request (sent first, same socket))
+    const inCar = isMP() && this.w?.scene?.why !== 'foot'; // (caught on foot, away from the car: not them)
+    this.w = null; this.jailing = 6; this.jailTry = 0; this.hideHeli(); this.fixCar();
+    this.setPin(true);
+    this.tryJail(); // (update(): tried again if the prison didn't take it, then arrestFallback)
+    if (inCar && isMP() && net.open) net.request('policeArrest', { seconds: TUNING.jailS }).catch((e) => console.warn('[mp] policeArrest', e?.code || e));
+  }
+  // into the prison (its own fade; it takes you out of the car / the lift / the interior: main.js prisonClear). The
+  // sentence is local first (multiplayer: the server's 'jail' answer only corrects the time), so a failed request still
+  // jails you
+  tryJail() {
+    this.jailTry = (this.jailTry || 0) + 1; this.jailAt = this.time;
     const pr = this.prison;
-    if (pr?.jail) {
-      try {
-        // (multiplayer: arrested in (or wrecked out of) your car, your passengers go to prison with you: the server jails
-        // and fines every player its seat registry has in your car, after your own 'jail' request (sent first, same socket))
-        const inCar = isMP() && this.w?.scene?.why !== 'foot'; // (caught on foot, away from the car: not them)
-        this.w = null; this.jailing = 4; this.hideHeli(); this.fixCar();
-        pr.jail(TUNING.jailS, 'fleeing the police');
-        if (inCar && net.open) net.request('policeArrest', { seconds: TUNING.jailS }).catch((e) => console.warn('[mp] policeArrest', e?.code || e));
-        return;
-      } catch (e) { console.warn('police: prison', e); this.jailing = 0; }
-    }
+    if (!pr?.jail) return false;
+    try { pr.jail(TUNING.jailS, 'fleeing the police'); return true; } catch (e) { console.warn('police: prison', e); return false; }
+  }
+  // no prison to go to: out of the car with a fade, everything gone (the arrest fine was paid)
+  arrestFallback() {
     const go = () => {
       try { if (this.drive?.active) this.drive.abort(); } catch (e) { console.warn('police: out of the car', e); }
       this.clear(true);
       this.hud?.flash?.(`Arrested · -${usd(this.lastArrest || TUNING.arrestFine)}`, 'bad', 4000);
     };
-    if (this.transition?.fade) this.transition.fade(go); else go();
+    if (this.transition?.fade) this.transition.fade(go).catch?.(() => go()); else go();
+  }
+  /** An arrest that is decided: it ends in prison, whatever happens. Not yet decided: an officer running after you on
+   *  foot (you can still outrun him), until he has you. */
+  committed(S) { return !!S && S.kind === 'arrest' && !S.abort && (S.why !== 'foot' || S.step === 'talk'); }
+  // the officer's line and the arrest fine (once)
+  sayArrest(S, T) {
+    if (S.said) return;
+    S.said = true;
+    const f = this.arrestNow(), a = usd(f);
+    this.say('Officer', S.why === 'wrecked' ? `You're under arrest! ${a}.` : T?.car ? `Out of the car! Arrested · ${a}.` : `Stop! You're under arrest · ${a}.`); // (Oct 30, the user: the lines ran off the screen: short now)
+    this.charge(f); this.lastArrest = f; this.addRecord();
+  }
+  // to prison now (the scene's end, or the watchdog)
+  forceArrest(W) {
+    const S = W?.scene;
+    if (!S || S.jailed) return;
+    try { this.sayArrest(S, this.target()); } catch (e) { console.warn('police: arrest fine', e); }
+    S.jailed = true;
+    this.arrest();
+  }
+  // arrested: you can't move (on foot: the player frozen, the keys above blocked; in the car: drive.held). Only
+  // undone here if it was set here, never while the prison has you (it unfreezes you itself on the way out)
+  setPin(on) {
+    this.pinned = !!on;
+    const p = this.player;
+    if (!p) return;
+    if (on) {
+      const foot = !this.drive?.active;
+      if (foot && !p.frozen) { p.frozen = true; this._froze = true; }
+      if (foot && this._froze && p.vel && (p.mode === 'walk' || p.mode === 'ski')) { p.vel.x = 0; p.vel.z = 0; }
+    } else if (this._froze) {
+      this._froze = false;
+      const pr = this.prison;
+      if (!(pr?.active || pr?.inside || pr?.busy)) p.frozen = false;
+    }
   }
 
   // ---------------------------------------------------------------- the end of a chase
@@ -2522,6 +2661,7 @@ export class Police {
   }
   // the chase over: the patrol cars drive off (out of sight: gone)
   end(why) {
+    this.setPin(false);
     this.w = null; this.cool = TUNING.cooldownS; this.wreckE = null; this.forget();
     for (const u of this.units) if (u.on) { u.mode = 'leave'; u.ram = false; u.gone = 0; u.leaveTo = null; u.path = null; u.role = 'chase'; }
     this.fixCar(); this.L = LEVELS[1]; this.rq.length = 0; this.radioText = '';
@@ -2529,6 +2669,7 @@ export class Police {
   }
   /** Everything gone at once (an arrest's fade, a race, the prison). */
   clear(quiet = false) {
+    this.setPin(false);
     this.w = null; this.cool = TUNING.cooldownS; this.wreckE = null;
     if (this.drive) this.drive.held = false;
     for (const u of this.units) if (u.on) { u.role = 'chase'; this.despawn(u); }
@@ -2563,7 +2704,7 @@ export class Police {
     const d = T ? hyp(u.x, u.z, T.x, T.z) : 1e9;
     let seen = false;
     try { this.camera?.updateMatrixWorld?.(); _fr.setFromProjectionMatrix(_m.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)); seen = _fr.containsPoint(_v.set(u.x, u.y + 1, u.z)); } catch { /* (gone by distance) */ }
-    if ((d > 160 && !seen) || d > 450 || u.gone > 45 || hyp(u.x, u.z, u.leaveTo.x, u.leaveTo.z) < 15) this.despawn(u);
+    if ((d > 160 && !seen) || d > 450 || u.gone > 45 || hyp(u.x, u.z, u.leaveTo.x, u.leaveTo.z) < 15 || (u.stuckN >= 3 && !seen)) this.despawn(u);
   }
 
   // ---------------------------------------------------------------- sound, HUD, the map, multiplayer
@@ -2602,21 +2743,40 @@ export class Police {
     H.rb = C.rbs;
     H.radio = this.radioText;
     if (hiding) { // (in a chalet: the box stays up, the escape time runs)
-      H.msg = 'Hiding · stay inside'; H.hot = false;
+      H.msg = 'Hiding · stay inside'; H.tip = 'They escape you once the bar is full.'; H.hot = false;
       H.esc = C.es; H.frac = W.esc / escS; H.near = "CAN'T FIND YOU"; H.gain = true; H.search = true;
       H.state = 'HIDING'; H.stateCls = 'lost';
       this.setHud(true, H);
       return;
     }
-    const msg = S ? (S.kind === 'fine' ? (S.step === 'back' || S.step === 'done' ? 'Fine paid' : (S.ask && !S.paid ? `ENTER: pay the ${usd(this.fineNow())} fine · or drive away` : `Pulled over · ${usd(this.fineNow())} fine`)) : 'Under arrest')
-      : W.search ? 'They lost you · stay out of sight'
-        : W.fleeing ? (W.seen ? 'Fleeing · break their line of sight' : 'Out of sight · keep going')
-          : W.reached ? `Pull over now: stop to pay the ${usd(this.fineNow())} fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : `Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`;
-    H.msg = this.noteUntil > performance.now() ? this.noteText : msg;
+    // (Oct 30, the user: "indicate on the screen when you have committed a crime: please pull over ... say it in better
+    // words"): the line (msg) says what to do, the small one under it (tip) what happens if you don't; short (≤ ~45
+    // characters: the box wraps them to two lines at most)
+    const fine = usd(this.fineNow()), foot = !this.drive?.active, decided = this.committed(S);
+    let msg, tip = '';
+    if (S && S.kind === 'fine') {
+      if (S.step === 'back' || S.step === 'done') msg = 'Fine paid · drive safely';
+      else if (S.ask && !S.paid) { msg = `Press ENTER to pay the ${fine} fine`; tip = `Or ${foot ? 'run' : 'drive'} off: a chase, and jail if caught.`; }
+      else { msg = 'Pulled over · the officer is coming'; tip = `Wait here. It's just a ${fine} fine.`; }
+    } else if (S) {
+      if (decided) { msg = "You're under arrest"; tip = "Stay where you are. You're going to jail."; }
+      else if (S.abort) { msg = 'You got away from the officer'; tip = 'Keep going and stay out of sight.'; }
+      else { msg = 'An officer is running after you!'; tip = 'Outrun him, or he arrests you.'; }
+    } else if (W.search) { msg = 'They lost you · stay out of sight'; tip = 'Stay hidden until the bar fills to escape.'; }
+    else if (W.fleeing) { msg = W.seen ? "You're fleeing · lose them or you'll be arrested" : 'Out of sight · keep going'; tip = W.seen ? 'Break their line of sight to escape.' : 'Stay hidden until the bar fills to escape.'; }
+    else {
+      const g = W.reached && W.grace > 0 ? ` (${Math.ceil(W.grace)})` : '';
+      msg = foot ? `Police · stay where you are${g}` : `Police · pull over and stop${g}`;
+      tip = foot ? `Wait for the officer: just a ${fine} fine.\nRun off: it's a chase, and jail if caught.`
+        : `Stop at the roadside: just a ${fine} fine.\nDrive off: it's a chase, and jail if caught.`;
+    }
+    const noting = this.noteUntil > performance.now();
+    H.msg = noting ? this.noteText : msg;
+    H.tip = tip;
     H.hot = !!((W.fleeing && !W.search) || (S && S.kind === 'arrest'));
     H.search = !!W.search && !S;
     H.gain = H.search;
-    H.state = S ? (S.kind === 'arrest' ? 'ARRESTED' : 'PULLED OVER') : W.search ? 'SEARCHING' : W.fleeing ? 'PURSUIT' : W.spotted ? 'RESPONDING' : 'DISPATCHED';
+    H.state = S ? (S.kind === 'arrest' ? (decided ? 'ARRESTED' : S.abort ? 'PURSUIT' : 'FOOT CHASE') : 'PULLED OVER') : W.search ? 'SEARCHING' : W.fleeing ? 'PURSUIT' : 'PULL OVER';
     H.stateCls = S ? '' : W.search ? 'lost' : W.fleeing ? 'hot' : '';
     // the escape: shown once you are fleeing (or lost them); it runs only out of sight
     H.esc = S || !(W.fleeing || W.search) ? '' : C.es;
@@ -2631,7 +2791,7 @@ export class Police {
   rideHud(R) {
     const H = this._hs;
     H.t = mmss(this.rideT || 0);
-    H.msg = R.arrest ? `${R.owner} is under arrest · you too` : `Riding with ${R.owner} · caught, you go to prison too`;
+    H.msg = R.arrest ? `${R.owner} is under arrest · you too` : `Riding with ${R.owner} · caught, you go to prison too`; H.tip = '';
     H.hot = !R.search && !R.arrest; H.search = R.search && !R.arrest; H.gain = H.search;
     H.stars = clamp(R.stars, 1, 5); H.cars = 0; H.air = false; H.tyres = ''; H.rb = ''; H.radio = ''; H.esc = ''; H.frac = 0;
     H.near = 'PASSENGER';
@@ -2642,7 +2802,7 @@ export class Police {
   wantedBits() {
     const W = this.w;
     if (!W || W.scene?.kind === 'fine') return 0;
-    return (this.stars(W) << W_SHIFT) | (W.search && !W.scene ? F.wSearch : 0) | (W.scene?.kind === 'arrest' ? F.wArrest : 0);
+    return (this.stars(W) << W_SHIFT) | (W.search && !W.scene ? F.wSearch : 0) | (this.committed(W.scene) ? F.wArrest : 0);
   }
   /** Trail map: the patrol cars while you are wanted (blue dots). */
   mapMarkers() {

@@ -1828,6 +1828,7 @@ window.addEventListener('blur', () => { autoQ.t = 0; autoQ.frames = 0; autoQ.wat
 // behind the pause menu) and the title panorama runs at ~30 fps at up to 1.5x, so hovers and clicks never wait
 // behind a heavy frame.
 let lastRender = 0, menuRes = false;
+let lampHourPrev = null; // (the helmet lamp: the hour last frame, for the 8 am switch-off)
 function menuThrottle() {
   const inMenu = (!started && !busIntro) || paused;
   if (inMenu !== menuRes) {
@@ -2083,7 +2084,12 @@ function loopUpdate() {
 
   // headlamp (auto at night unless toggled off)
   // headlamp: off in the helicopter (it has its own landing light) and on floodlit pistes
-  const lampOn = !heli.active && !sleds.active && !drive?.active && (player.headlampOn ?? (env.nightFactor > 0.5 && pisteLights.litAt(player.pos.x, player.pos.z) < 0.2));
+  // (Oct 30, the user: "your night light on your helmet should go off at 8 am": at 8:00 a lamp switched on with L goes
+  // back to automatic, and automatic stays off in the day, 8:00 to 17:00)
+  const hr = env.hour ?? 12, lampDay = hr >= 8 && hr < 17;
+  if (lampDay && player.headlampOn && !(lampHourPrev >= 8 && lampHourPrev < 17)) player.headlampOn = undefined;
+  lampHourPrev = hr;
+  const lampOn = !heli.active && !sleds.active && !drive?.active && (player.headlampOn ?? (!lampDay && env.nightFactor > 0.5 && pisteLights.litAt(player.pos.x, player.pos.z) < 0.2));
   headlamp.update(dt, { on: lampOn, rig: player.rig, camera, firstPerson: player.view === 'first', env, pos: player.pos });
   mark('headlamp');
 

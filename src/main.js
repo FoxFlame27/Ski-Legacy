@@ -2242,7 +2242,15 @@ menu = new Menu({
     par: c.par, medals: c.medals, record: save.records?.[c.id] || null,
   })),
   onMainMenu: goToMainMenu,
-  onQuality: (q) => { save.quality = q; save.qualitySet = 'user'; writeSave(); location.reload(); },
+  // (Oct 30, the user: "on super performance mode it automatically puts you in single player": a new preset reloaded the
+  // page, which drops you out of multiplayer. In the game it is switched live now (render scale, shadows, post, fog,
+  // live windows, lights); what is built at load (texture sizes, forest / crowd counts) follows on the next start)
+  onQuality: (q) => {
+    save.quality = q; save.qualitySet = 'user'; writeSave();
+    if (!started && !isMP()) { location.reload(); return; }
+    applyQuality(q);
+    hud.flash(`Graphics: ${QUALITY_LABELS[quality.name] || q} · some details apply on the next start`, 'good', 4200);
+  },
   onSens: (v) => { save.sensitivity = v; if (player) player.sensitivity = v; writeSave(); },
   onVolume: (v) => audio.setVolume(v),
   // multiplayer (net/session.js): MULTIPLAYER -> START, the name on first launch, BACK while connecting

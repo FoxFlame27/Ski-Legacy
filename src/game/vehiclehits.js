@@ -28,8 +28,7 @@ const MARGIN = 0.15;            // touching counts (the player's own collide has
 const NEAR = 15;                // m: broad phase
 const V_MIN = 10 / 3.6;         // m/s: slower vehicles (and slower closing speeds) only push you softly
 const HARD = 50 / 3.6;          // m/s: a hard hit, like a big crash (the rescue helicopter comes)
-const SAFE_MS = 20000;          // invulnerable this long after a hit (Oct 30, the user: "you can't keep hitting the same person, that's mean")
-const SAME_MS = 120000;         // ...and the same vehicle can't knock you over again for this long (it only pushes you)
+const SAFE_MS = 2000;           // invulnerable this long after a hit
 const JUMP = 70;                // m/s: faster "motion" is a teleport (respawned, parked away): not a velocity
 const P_R = 0.3;                // a person's radius (hit by a vehicle: hitPeople)
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -121,7 +120,6 @@ export class VehicleHits {
       const dx = p.x - c.x, dz = p.z - c.z;
       if (dx > NEAR || dx < -NEAR || dz > NEAR || dz < -NEAR) continue; // broad phase
       if (r.vx * r.vx + r.vz * r.vz < V_MIN * V_MIN) continue;          // parked / crawling: the soft push
-      if (r.hitAt && performance.now() - r.hitAt < SAME_MS) continue;     // it knocked you over a moment ago: only the soft push
       const oy = r.o?.y;
       if (Number.isFinite(oy) && (p.y - oy > (c.h || 2) + 0.2 || oy - p.y > 3)) continue; // jumped over it / under a bridge
       // into the box's frame (as player.js collide)
@@ -179,7 +177,6 @@ export class VehicleHits {
     const pl = this.player, p = pl.pos;
     const hard = speed > HARD;
     this.safeUntil = performance.now() + SAFE_MS;
-    r.hitAt = performance.now();
     // out of the box first, then thrown along its line (and a little off the face that hit you) and a bit up
     p.x += nx * (pen + 0.05); p.z += nz * (pen + 0.05);
     const vs = Math.hypot(r.vx, r.vz) || 1;

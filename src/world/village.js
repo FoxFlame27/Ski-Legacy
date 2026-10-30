@@ -47,7 +47,16 @@ export function makeSign(text, { w = 4, h = 1, bg = '#3b2414', fg = '#f5e6c8', f
   g.strokeStyle = border; g.lineWidth = 14; g.strokeRect(16, 16, c.width - 32, c.height - 32);
   g.fillStyle = fg; g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
   const lines = text.split('\n');
-  lines.forEach((ln, i) => g.fillText(ln, c.width / 2, c.height / 2 + (i - (lines.length - 1) / 2) * c.height / (lines.length + 0.3)));
+  // each line shrunk to fit inside the border (Oct 30, the user: "fix this board so the text fits on it")
+  const maxW = c.width - 90, maxH = (c.height - 60) / lines.length;
+  lines.forEach((ln, i) => {
+    let px = parseFloat(/(\d+(?:\.\d+)?)px/.exec(font)?.[1]) || 100;
+    px = Math.min(px, maxH * 0.86);
+    const set = () => { g.font = font.replace(/\d+(?:\.\d+)?px/, `${Math.round(px)}px`); };
+    set();
+    while (px > 14 && g.measureText(ln).width > maxW) { px *= 0.94; set(); }
+    g.fillText(ln, c.width / 2, c.height / 2 + (i - (lines.length - 1) / 2) * c.height / (lines.length + 0.3));
+  });
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 16;

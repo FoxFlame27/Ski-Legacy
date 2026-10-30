@@ -49,7 +49,7 @@ const BED = { len: 2.1, w: 1.0, top: 0.61 };
 const BED_Z = IN.z0 + 0.02 + BED.len / 2; // (the bed's middle)
 // a patient lying in bed (the presence row's root: the hips; the head on the pillow toward the wall)
 const HIPS_Z = IN.z0 + 1.0;
-const PITCH = -Math.PI / 2, TUCK = 0.45;
+const PITCH = -Math.PI / 2, TUCK = 0; // (flat on the back: the tucked pose looked odd in a bed; Oct 30, the user: "just make them lie flat")
 // (the tuck as it goes out in the presence row, 4 bits: your own body in bed posed exactly as the others see it)
 const TUCK_Q = Math.round(TUCK * 15) / 15;
 const _bh = new THREE.Vector3(), _bn = new THREE.Vector3(), _bu = new THREE.Vector3(), _bf = new THREE.Vector3();
@@ -71,6 +71,14 @@ export function bedArms(rig) {
     _bt.copy(hip).addScaledVector(right, s * 0.27).addScaledVector(down, 0.06).addScaledVector(front, 0.02);
     _bp.copy(right).multiplyScalar(s * 0.6).addScaledVector(front, -0.8);
     try { twoBone(arm, fore, hand, _bt, _bp); } catch { /* (the fall pose's arms stay) */ }
+  }
+  // the legs straight out along the bed, side by side (the fall pose sprawls them): feet ~0.9 m down from the hips
+  if (b.lUp && b.lLeg && b.lFoot && b.rUp && b.rLeg && b.rFoot) {
+    for (const [s, up, leg, foot] of [[-1, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
+      _bt.copy(hip).addScaledVector(right, s * 0.11).addScaledVector(down, 0.9).addScaledVector(front, 0.04);
+      _bp.copy(front).multiplyScalar(1).addScaledVector(down, 0.2); // (the knees up toward the ceiling: straight, never bent sideways)
+      try { twoBone(up, leg, foot, _bt, _bp); } catch { /* (the fall pose's legs stay) */ }
+    }
   }
 }
 // the house's windows (hospital.js: ground floor, sill-to-lintel 1.15 .. 2.45 m)
@@ -1035,7 +1043,7 @@ export class HospitalWard {
     this.audio?.play?.('click');
     this.room.returnBody(this.player?.rig);
     this.room.getUp();
-    this.role = 'visitor';
+    this.role = 'visitor'; this.discharged = true; // (a patient on the way out: "get well soon" at the door)
     this.card(null);
     this.hud?.flash('Discharged · the way out: the glass doors past reception', 'good', 3200);
   }
@@ -1063,7 +1071,7 @@ export class HospitalWard {
     this.busy = true;
     this.player.frozen = true;
     this.audio?.play?.('click');
-    this.transition.fade(() => { this.linkWorld(); this.room.place('visitor'); this.role = 'visitor'; this.show(true); })
+    this.transition.fade(() => { this.linkWorld(); this.room.place('visitor'); this.role = 'visitor'; this.discharged = false; this.show(true); })
       .catch((e) => console.warn('hospital', e)).finally(() => { this.busy = false; });
   }
   leave() {
@@ -1072,7 +1080,8 @@ export class HospitalWard {
     this.audio?.play?.('click');
     this.transition.fade(() => this.outside()).catch((e) => console.warn('hospital', e)).finally(() => {
       this.busy = false;
-      this.hud?.flash('Get well soon · ARZT · MEDICAL CENTRE', 'good', 2400);
+      if (this.discharged) this.hud?.flash('Get well soon · ARZT · MEDICAL CENTRE', 'good', 2400); // (only a patient: not after a visit, Oct 30, the user)
+      this.discharged = false;
     });
   }
 

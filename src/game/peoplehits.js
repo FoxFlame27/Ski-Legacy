@@ -27,7 +27,6 @@ import { burst } from '../fx/snowfx.js';
 const TAU = Math.PI * 2;
 const G = 9.81;
 export const SKI_KNOCK = 15 / 3.6;  // m/s: skiing into somebody faster than this knocks you both over
-const AGAIN_MS = 60000;            // ms: the same person can't be knocked over again this soon (a stumble only)
 const VEHICLE_KNOCK = 2;            // m/s: a vehicle hitting somebody faster than this knocks them over (slower: a stumble)
 const FOOT_RUN = 3;                 // m/s closing speed on foot (you move at 4.2): a stumble and a small fine
 const COOLDOWN = 5000;              // ms: one fine per incident
@@ -161,11 +160,6 @@ export function knockPerson(person, impactSpeed, source = 'car', dirX, dirZ) {
       return { fell: false, fine: charge(fineFor('foot', sp), 'Bumped into someone') };
     }
     if (sp < (source === 'ski' ? SKI_KNOCK : VEHICLE_KNOCK)) { t.by.stumble(t.o, dx, dz); return { fell: false, fine: 0 }; }
-    // (Oct 30, the user: "you can't keep hitting the same person, that's mean": somebody knocked over in the last
-    // minute only stumbles aside, no new throw, no new fine)
-    const nowMs = performance.now();
-    if (t.o._knockedAt && nowMs - t.o._knockedAt < AGAIN_MS) { t.by.stumble(t.o, dx, dz); return { fell: false, fine: 0 }; }
-    t.o._knockedAt = nowMs;
     // a vehicle: thrown (launchFor), with the thud of the hit (quieter further from you: traffic hits anywhere near)
     const L = source === 'ski' ? null : launchFor(sp, _launch);
     t.by.knock(t.o, dx, dz, sp, L);
@@ -198,8 +192,6 @@ export function playerHitPerson(c, nx, nz) {
     const closing = -(rvx * nx + rvz * nz);
     if (pl.mode === 'ski') {
       if (rel < SKI_KNOCK || closing < 0.25 * rel) return false; // slow, or only brushing past
-      if (t.o._knockedAt && performance.now() - t.o._knockedAt < AGAIN_MS) return false; // (knocked over a moment ago: the soft bump only)
-      t.o._knockedAt = performance.now();
       // they go over, pushed along your line and away from you
       let px = (rvx / rel) * 0.7 - nx * 0.3, pz = (rvz / rel) * 0.7 - nz * 0.3;
       const pll = Math.hypot(px, pz) || 1;

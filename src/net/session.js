@@ -303,7 +303,7 @@ export class Multiplayer {
       stats: { races: 0, wins: 0, topSpeed: 0, distance: 0, earned: 0, ...(p.stats || {}) },
       records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
       dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,
-      pos: null, // (where you were is single player only)
+      pos: p.pos && Number.isFinite(p.pos.x) ? { ...p.pos } : null, // (where you were: kept on the server, Oct 30)
     });
     // (the character you picked in the menu is the one you play)
     this.money = { server: p.money, pending: 0 };
@@ -377,6 +377,7 @@ export class Multiplayer {
     send('secrets', s.secrets || []);
     send('dayPass', s.dayPass ?? -1);
     send('tickets', s.tickets || 0);
+    if (s.pos) send('pos', s.pos); // (where you were: back there at your next login)
   }
 
   // ---------------------------------------------------------------- money: the server's number wins

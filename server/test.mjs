@@ -466,6 +466,13 @@ try {
   solo.close();
   await sleep(150);
 
+  // ---------------------------------------------------------------- where you were (pos), kept in the profile
+  {
+    const ps = await a.req('profileSet', { key: 'pos', value: { x: 120.5, z: -40.25, y: 3.1, h: 1.2, skis: true } });
+    ok(ps.ok && server.profileOf('alice').pos?.x === 120.5 && server.profileOf('alice').pos.skis === true, 'profileSet pos: where you were is kept');
+    const pb = await a.req('profileSet', { key: 'pos', value: { x: 'far', z: 0, y: 0, h: 0 } });
+    ok(!pb.ok && pb.err === 'bad_value' && server.profileOf('alice').pos.x === 120.5, '...a bad one is refused');
+  }
   // ---------------------------------------------------------------- MAX_PLAYERS (50) per world: the next player opens world 2
   console.log('worlds');
   const crowd = [];

@@ -495,7 +495,7 @@ async function streamAround(x, z) {
 // a new game (reset save) has none, so it starts in Legacy Village.
 const SPOT_LIMIT = 12000;
 function outdoorSpot() {
-  if (isMP()) return null; // (where you were is single player only)
+  if (isMP() && (multiplayer?.carRide?.ride || multiplayer?.interior)) return null; // (multiplayer: kept on the server too; not riding in someone's car)
   if (!started || busIntro || !player || wipeoutBusy || transition?.active) return null;
   if (modes?.active || races?.active) return null;
   if (interior?.active || chalets?.inside || carRental?.inside || prison?.inside || prison?.active) return null;
@@ -1177,11 +1177,11 @@ async function startMultiplayer(sel = {}) {
     const d = await multiplayer.start();
     if (mpCancelled) { multiplayer.leave(); return; }
     menu.mpStatus(`World ${d.world.id} · ${d.world.players.length}/${d.world.max} players`);
-    // (no "where you were" in multiplayer: everyone starts in Legacy Village)
+    // where you were last time online (the profile's pos, Oct 30: "on multiplayer your last position doesn't get
+    // saved"), else Legacy Village
     player.frozen = false;
     player.setSkisOn(false);
-    player.teleport(4, 34, Math.PI);
-    player.resumed = false;
+    if (!restoreSpot()) { player.teleport(4, 34, Math.PI); player.resumed = false; }
     await streamAround(player.pos.x, player.pos.z);
     if (mpCancelled || !isMP()) { multiplayer.leave(); return; }
     startGame();
@@ -1509,7 +1509,7 @@ function openPause() {
     // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
     // with its ambulance ride)
     onVillage: heliRiding() || prison?.active || police?.active ? undefined : // (no RETURN TO VILLAGE during a police chase: the user)
-      !inSession ? () => { returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
+      !inSession ? () => { if (police?.active || prison?.active) { hud.flash('Not while the police are after you', 'bad', 3000); return; } returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: isMP() ? undefined : goToMainMenu,
     onLeaveMP: isMP() ? () => leaveMultiplayer() : undefined, // (multiplayer: LEAVE MULTIPLAYER instead of MAIN MENU)
     onQuit: () => { if (!isMP()) save.hour = freeRideHour() ?? env.hour; rememberSpot(); writeSave(); },

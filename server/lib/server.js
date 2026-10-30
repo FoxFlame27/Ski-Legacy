@@ -1375,6 +1375,12 @@ export class GameServer {
       case 'secrets': if (!Array.isArray(v) || v.length > 200 || !v.every((x) => str(x, 40))) return { err: 'bad_value' }; P.secrets = v; break;
       case 'dayPass': if (!isInt(v)) return { err: 'bad_value' }; P.dayPass = v; break;
       case 'tickets': if (!isInt(v) || v < 0 || v > 999) return { err: 'bad_value' }; P.tickets = v; break;
+      case 'pos': { // where you were (outdoors, on foot / skis): back there at your next login (Oct 30)
+        if (v === null) { delete P.pos; break; }
+        if (!v || typeof v !== 'object' || ![v.x, v.z, v.y, v.h].every((n) => isNum(n) && Math.abs(n) < 40000)) return { err: 'bad_value' };
+        P.pos = { x: v.x, z: v.z, y: v.y, h: v.h, skis: !!v.skis };
+        break;
+      }
       default: return { err: 'bad_key' };
     }
     this.store.profiles.save();

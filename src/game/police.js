@@ -166,6 +166,7 @@ const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
 const MODEL = 'police/police_car', CAR1 = 'car1', CAR1_LEN = 5.0, CAR1_W = 1.94; // (CAR1_W: the body, mirrors left out)
 const SEND_DT = 1 / 6;
+const CALM_V = 3; // m/s: a patrol car slower than this only nudges you on foot (harmless(): vehiclehits.js)
 const PIN_KEYS = new Set(['KeyE', 'KeyM', 'Space']); // (arrested: setPin)
 const ARREST_MAX = 10, ARREST_OUT = 6; // s: a decided arrest ends in jail this long after it began / the officer got out, whatever happens
 const usd = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
@@ -2791,6 +2792,17 @@ export class Police {
   /** An arrest that is decided: it ends in prison, whatever happens. Not yet decided: an officer running after you on
    *  foot (you can still outrun him), until he has you. */
   committed(S) { return !!S && S.kind === 'arrest' && !S.abort && (S.why !== 'foot' || S.step === 'talk'); }
+  /** vehiclehits.js: this patrol car can't knock you over on foot (Oct 30 2026, the user: police cars hit you on foot
+   *  as any car, "below 35 km/h the bump animation only, from 35 km/h a crash", but "don't break arrests": a car pulling
+   *  up next to you or nudging you while an officer arrests you is no hit): the car of the stop / arrest scene (pulling
+   *  up for you, its officer out), any of them once an arrest is decided or you're pinned / jailed, a parked one, a
+   *  roadblock's, or one under CALM_V (~3 m/s). Gone (off, wrecked): nothing to hit with. */
+  harmless(u) {
+    if (!u.on || u.wrecked || this.jailing || this.pinned) return true;
+    if (Math.abs(u.v) < CALM_V || u.parked || u.officer || u.role === 'block') return true;
+    const S = this.w?.scene;
+    return !!S && (S.u === u || this.committed(S));
+  }
   // the officer's line and the arrest fine (once)
   sayArrest(S, T) {
     if (S.said) return;

@@ -16,7 +16,12 @@
 //  - the ski bus you ride (bus:0) and the fleet on their rounds (game/bus/bus.js: line.collider, line.fleet[].collider),
 //  - the CAR RENTAL's tow trucks (game/towtruck.js: carRental.truck.trucks[].collider),
 //  - the snow ploughs (world/snowcats.js: cats[].col),
-//  - multiplayer: the other players' cars (net/vehicles.js: session.vehicles.cars, col; their interpolated pose).
+//  - multiplayer: the other players' cars (net/vehicles.js: session.vehicles.cars, col; their interpolated pose),
+//  - the police: the patrol cars chasing you (game/police.js: police.units[].col) and the ones chasing another player
+//    (net/vehicles.js: session.vehicles.police, pid -> [{ col, y, calm }]). (Oct 30 2026, the user: a patrol car
+//    driving into you on foot "gives the same result: below 35 km/h the bump animation only, from 35 km/h a crash",
+//    the same closing speed; "don't break arrests": one stopping for / arresting the player it's after, or moving under
+//    ~3 m/s, is 'calm' (police.js harmless(u); a remote one's w.calm) and only pushes you (player.js collide), no hit.)
 // Their velocity is measured from the collider's motion frame to frame (the same for every source, the remote cars'
 // interpolation included); a jump (respawn, parked far away at 1e9) resets it. Only vehicles within 15 m are tested;
 // nothing is allocated per frame (one record per collider, made the first time it is seen).
@@ -47,17 +52,18 @@ export class VehicleHits {
    * @param {object} o.player  the Player (pos, vel, mode, crash, shake, camDipV)
    * @param {object} [o.audio]
    * @param {() => boolean} o.enabled  free ride, on foot / on skis outdoors (main.js)
-   * @param {() => object} o.sources  { traffic, skibus, carRental, snowcats, multiplayer } (any may be null)
+   * @param {() => object} o.sources  { traffic, skibus, carRental, snowcats, multiplayer, police } (any may be null)
    */
   constructor({ player, audio = null, enabled, sources }) {
     Object.assign(this, { player, audio, enabled, sources });
-    this.recs = new Map(); // collider -> { col, o (pose owner: .y), what, px, pz, vx, vz, init, f }
+    this.recs = new Map(); // collider -> { col, o (pose owner: .y), what, calm (no hit on you), px, pz, vx, vz, init, f }
     this.list = [];        // this frame's records (the first `n`)
     this.n = 0;
     this.frame = 0;
     this.safeUntil = -1e9;
     this.hit = { hard: false, kmh: 0, what: 'car', pending: false }; // (reused: take())
     this.addRemote = (c) => this.add(c.col, c, 'car'); // (Map.forEach callback, bound once)
+    this.addRemotePolice = (L) => { for (let i = 0; i < L.length; i++) this.add(L[i].col, L[i], 'police car', !!L[i].calm); }; // (the same)
   }
 
   /** main.js, on the 'crash' event: the vehicle hit behind it (null when it was an ordinary wipeout). */
@@ -67,11 +73,12 @@ export class VehicleHits {
     return this.hit;
   }
 
-  add(col, o, what) {
+  // calm: tracked (its velocity known) but it never knocks you over this frame (a patrol car arresting you, Oct 30 2026)
+  add(col, o, what, calm = false) {
     if (!col) return;
     let r = this.recs.get(col);
-    if (!r) { r = { col, o, what, px: 0, pz: 0, vx: 0, vz: 0, init: false, f: 0 }; this.recs.set(col, r); }
-    r.o = o; r.what = what; r.f = this.frame;
+    if (!r) { r = { col, o, what, calm, px: 0, pz: 0, vx: 0, vz: 0, init: false, f: 0 }; this.recs.set(col, r); }
+    r.o = o; r.what = what; r.calm = calm; r.f = this.frame;
     this.list[this.n++] = r;
   }
 
@@ -93,6 +100,11 @@ export class VehicleHits {
     for (const a of Ambulance.all) if (a.col) this.add(a.col, a.group.position, 'rescue ambulance'); // ('Hit by a ...'; yours away while you ride in it)
     const rc = S.multiplayer?.vehicles?.cars;
     if (rc && rc.size) rc.forEach(this.addRemote);
+    // the police (Oct 30 2026, the user: police cars hit you on foot as any car; not while arresting you: calm)
+    const pol = S.police, U = pol?.units;
+    if (U) for (let i = 0; i < U.length; i++) this.add(U[i].col, U[i], 'police car', pol.harmless(U[i]));
+    const rp = S.multiplayer?.vehicles?.police;
+    if (rp && rp.size) rp.forEach(this.addRemotePolice);
     // records of colliders gone for good (a remote car dropped): forgotten now and then
     if ((this.frame & 1023) === 0) for (const [k, r] of this.recs) if (this.frame - r.f > 600) this.recs.delete(k);
   }
@@ -127,6 +139,7 @@ export class VehicleHits {
       const r = this.list[i], c = r.col;
       const dx = p.x - c.x, dz = p.z - c.z;
       if (dx > NEAR || dx < -NEAR || dz > NEAR || dz < -NEAR) continue; // broad phase
+      if (r.calm) continue;                                              // (a patrol car arresting you: Oct 30 2026)
       if (r.vx * r.vx + r.vz * r.vz < V_MIN * V_MIN) continue;          // parked / crawling: the soft push
       const oy = r.o?.y;
       if (Number.isFinite(oy) && (p.y - oy > (c.h || 2) + 0.2 || oy - p.y > 3)) continue; // jumped over it / under a bridge

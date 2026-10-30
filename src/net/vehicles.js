@@ -27,6 +27,7 @@ import { busRoads } from '../game/bus/roads.js';
 
 const LEN = Object.fromEntries(CAR_MODELS);
 const VEH_FAR = 1800;   // m: vehicles beyond are not drawn
+const POLICE_CALM_V = 3; // m/s: a patrol car slower than this only nudges you (w.calm: game/vehiclehits.js; police.js harmless)
 const TAG_FAR = 130;    // m: owner tags hidden beyond
 const _e = new THREE.Euler(0, 0, 0, 'YXZ');
 const _d = new THREE.Vector3();
@@ -442,9 +443,16 @@ export class RemoteVehicles {
       w.x += (gx - w.x) * e; w.z += (gz - w.z) * e; w.yaw = wrapPi(w.yaw + wrapPi(w.tyaw - w.yaw) * e);
       const show = outdoors && _d.set(w.x, w.ty, w.z).sub(cam).length() < VEH_FAR;
       w.col.x = show ? w.x : 1e9; w.col.z = show ? w.z : 1e9; w.col.rot = -w.yaw;
+      // (Oct 30 2026, the user: police cars hit you on foot as any car, "below 35 km/h the bump animation only, from 35
+      // km/h a crash", but "don't break arrests"): it can't knock you over (game/vehiclehits.js reads w.calm) under ~3
+      // m/s by its own speed, or pulling up for the player it's after (within 12 m of them under ~6 m/s: stopping, an
+      // officer getting out; only ever a bump that slow anyway). Its hits are measured from its motion here as every
+      // remote car's.
+      const tvA = Math.abs(w.tv), rp = r.pos;
+      w.calm = tvA < POLICE_CALM_V || (tvA < 6 && !!rp && Math.hypot(rp.x - w.x, rp.z - w.z) < 12);
       if (!show) { if (w.shown) this.hidePolice(w); continue; }
       if (!w.shown) { w.shown = true; w.m.g.visible = true; }
-      policeGround(w.m.g, w.x, w.z, w.yaw, w.ty + 2);
+      w.y = policeGround(w.m.g, w.x, w.z, w.yaw, w.ty + 2); // (its height: vehiclehits.js, a bridge / jumped over it)
       policeLights(w.m, true, (w.t += dt));
     }
   }

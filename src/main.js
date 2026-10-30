@@ -33,7 +33,7 @@ import { Express, EXPRESS_PRICE, FAST as EXPRESS_FAST } from './world/express.js
 import { planExpressScenery, buildExpressScenery } from './world/expressscenery.js'; // the frozen lakes under the Legacy Express's viaducts
 import { NPCs } from './game/npcs.js';
 import { initPeopleHits, playerHitPerson } from './game/peoplehits.js';
-import { VehicleHits } from './game/vehiclehits.js'; // cars, buses, ploughs, the tow truck, other players' cars knock you over
+import { VehicleHits } from './game/vehiclehits.js'; // cars, buses, ploughs, the tow truck, other players' cars, patrol cars knock you over
 import { HUD, CARD_DIALOG } from './ui/hud.js';
 import { travelPicker, fmtMin } from './ui/travel.js'; // route map pickers (bus, train, gondola mid-stations) while CARD_DIALOG is on
 import { ShopInterior } from './game/interior.js';
@@ -457,12 +457,13 @@ async function boot() {
   // getting hit by a moving vehicle on foot or on skis (a wipeout: a strike; 50+ km/h brings the rescue helicopter).
   // Free ride outdoors only: never seated, riding, driving, inside, or in a race session.
   try {
-    const vehicleSources = { traffic: null, skibus: null, carRental: null, snowcats: null, multiplayer: null };
+    const vehicleSources = { traffic: null, skibus: null, carRental: null, snowcats: null, multiplayer: null, police: null };
     vehicleHits = new VehicleHits({
       player, audio,
       sources: () => {
         const S = vehicleSources;
         S.traffic = traffic; S.skibus = skibus; S.carRental = carRental; S.snowcats = snowcats; S.multiplayer = isMP() ? multiplayer : null;
+        S.police = police; // (the patrol cars too, Oct 30 2026, the user: under 35 km/h a bump, 35+ a crash; never while arresting you)
         return S;
       },
       enabled: () => started && !paused && !busIntro && !modes?.active && !interior.active && !chalets?.inside && !carRental?.inside && !prison?.inside && !hospitalWard?.inside

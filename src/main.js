@@ -1301,6 +1301,9 @@ function mpPose(o) {
     o.crouch = Fl.pitch || 0; o.lean = Fl.roll || 0;
     o.flags = (p.skisOn ? MPF.skisOn : 0) | (p.hasSkis ? MPF.hasSkis : 0) | mpFallFlags(p.fallSide, p.fallAir, Fl.ball, Fl.getUp, (Fl.axisHeading || 0) - p.heading);
   }
+  // paused (ESC): you stand still on the others' screens too (Oct 30, the user): no speed for them to lead you along,
+  // no tuck / lean / air (your last frame's velocity kept you gliding there)
+  if (paused) { o.vx = 0; o.vy = 0; o.vz = 0; o.lean = 0; if (o.st !== MPST.fall) { o.crouch = 0; o.flags &= ~(MPF.air | MPF.tuck); } }
 }
 function mpScene(id) {
   if (id === 'skishop') return interior?.scene || null;

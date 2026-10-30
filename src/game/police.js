@@ -1253,7 +1253,14 @@ export class Police {
     if (W.reached && !W.fleeing) {
       W.grace -= dt;
       const away = (T.vx * (T.x - lead.x) + T.vz * (T.z - lead.z)) / Math.max(1, near); // (on foot: running away from them)
-      const moving = T.car ? T.sp > 4 : T.foot && away > 2.2;
+      // (Oct 30, the user: "I stepped out of the car and waited for the police but the game thought I was fleeing"):
+      // getting in or out is never fleeing (2.5 s after it), on foot only really running away counts (4 m/s, for 1.5 s)
+      const now = performance.now(), inCar = !!T.car;
+      if (this._wasCar !== inCar) { this._wasCar = inCar; this._swapT = now; }
+      const settling = now - (this._swapT || 0) < 2500;
+      const raw = settling ? false : T.car ? T.sp > 4 : T.foot && away > 4;
+      W.awayT = raw ? (W.awayT || 0) + dt : 0;
+      const moving = raw && (T.car || W.awayT > 1.5);
       if (W.grace <= 0 && moving) this.flee(W);
     }
     // boxed in: two or more patrol cars within holdR of you for holdS in all (faster the more of them there are round you; it
@@ -2395,7 +2402,9 @@ export class Police {
       this.step(x, dt, b.x, b.z, clamp(hyp(x.x, x.z, b.x, b.z) * 0.8, 0, 14), u.yaw);
     }
     // you drive off (or run off) mid-scene: fleeing again; the officer back to his car
-    const off = T.car ? S.kind === 'fine' && T.sp > 4.5 : T.foot && S.kind === 'fine' && T.sp > 2.6 && S.step !== 'pull'; // (an arrest in the car: held, drive.js)
+    const swapped = performance.now() - (this._swapT || 0) < 2500; // (just got out of / into the car: not running off)
+    if (!!T.car !== this._wasCar) { this._wasCar = !!T.car; this._swapT = performance.now(); }
+    const off = swapped ? false : T.car ? S.kind === 'fine' && T.sp > 4.5 : T.foot && S.kind === 'fine' && T.sp > 4 && S.step !== 'pull'; // (an arrest in the car: held, drive.js)
     if (off && (S.step === 'pull' || S.step === 'walk' || (S.step === 'talk' && !S.paid && (S.kind === 'fine' || !S.said)))) {
       this.flee(W);
       if (u.officer) { S.step = 'back'; S.abort = true; } else { W.scene = null; return; }

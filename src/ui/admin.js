@@ -19,7 +19,7 @@ import { loadAccount } from '../net/session.js';
 // (Oct 30, the user: "remove the admin panel for everyone, single player too, except for the player Rafael"): only the
 // account named Rafael opens it (multiplayer: the name you're logged in with; single player: this computer's saved
 // multiplayer account); for everybody else F2 / ` does nothing at all (no message)
-const ADMINS = new Set(['rafael']);
+const ADMINS = new Set(); // (Oct 30, the user: "delete the admin panel": nobody opens it any more; the server's admin commands stay)
 export function isAdmin() {
   let name = isMP() ? MP.name : null;
   if (!name) { try { name = loadAccount()?.name || null; } catch { name = null; } }

@@ -27,28 +27,42 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 function wrapAngle(a) { return Math.atan2(Math.sin(a), Math.cos(a)); }
 
-export function makeTag(name, color = '#1f5fd1') {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 96;
+// A floating name card in the HUD's style (Oct 30, the user: "make the name tag above look a bit better"): a slanted
+// white card with a soft shadow and a coloured stripe on the left, the name in the HUD's bold italic, shrunk to fit.
+// o.dark: a dark card with white text (the pause badge); o.pause: two pause bars drawn before the text.
+export function makeTag(name, color = '#1f5fd1', o = {}) {
+  const W = 1024, H = 192, c = document.createElement('canvas');
+  c.width = W; c.height = H;
   const g = c.getContext('2d');
-  g.font = 'italic 700 54px "Barlow Condensed", "Arial Narrow", sans-serif';
-  const w = Math.min(500, g.measureText(name).width + 48);
-  const x0 = (512 - w) / 2;
-  g.fillStyle = 'rgba(255,255,255,0.92)';
-  g.beginPath();
-  g.roundRect ? g.roundRect(x0, 14, w, 68, 14) : g.rect(x0, 14, w, 68);
-  g.fill();
-  g.fillStyle = color;
+  const font = (px) => `italic 700 ${px}px "Barlow Condensed", "Arial Narrow", sans-serif`;
+  let px = 104;
+  g.font = font(px);
+  const icon = o.pause ? 60 : 0, pad = 56, maxText = W - 60 - 2 * pad - icon;
+  while (px > 48 && g.measureText(name).width > maxText) g.font = font(px -= 4);
+  const tw = g.measureText(name).width, w = Math.min(W - 60, tw + 2 * pad + icon), x0 = (W - w) / 2, y0 = 30, h = 128, sk = 14;
+  const card = () => { g.beginPath(); g.moveTo(x0 + sk, y0); g.lineTo(x0 + w, y0); g.lineTo(x0 + w - sk, y0 + h); g.lineTo(x0, y0 + h); g.closePath(); };
+  g.save(); g.shadowColor = 'rgba(8,20,48,0.35)'; g.shadowBlur = 18; g.shadowOffsetY = 6;
+  g.fillStyle = o.dark ? 'rgba(22,30,46,0.9)' : 'rgba(255,255,255,0.95)';
+  card(); g.fill(); g.restore();
+  // the coloured stripe down the left edge (clipped to the card's slant)
+  g.save(); card(); g.clip(); g.fillStyle = o.dark ? '#94a3b8' : color; g.fillRect(x0, y0, 20, h); g.restore();
+  const cx = x0 + 20 + (w - 20) / 2, cy = y0 + h / 2 + 4;
+  g.fillStyle = o.dark ? '#f1f5f9' : color;
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(name, 256, 50);
+  if (o.pause) {
+    const ix = cx - (tw + icon) / 2, bh = 50;
+    g.fillRect(ix + 6, cy - bh / 2 - 4, 13, bh); g.fillRect(ix + 28, cy - bh / 2 - 4, 13, bh);
+    g.fillText(name, ix + icon + tw / 2, cy);
+  } else g.fillText(name, cx, cy);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
   const mat = new THREE.SpriteMaterial({ map: tex, depthTest: true, depthWrite: false, transparent: true, sizeAttenuation: false });
   const s = new THREE.Sprite(mat);
   s.center.set(0.5, 0);
   s.renderOrder = 10;
   s.userData.base = 0.05; // fraction of the screen height
-  s.scale.set(s.userData.base * (512 / 96), s.userData.base, 1);
+  s.scale.set(s.userData.base * (512 / 96), s.userData.base, 1); // (the canvas keeps 512:96)
   return s;
 }
 
@@ -374,9 +388,9 @@ export class RemotePlayers {
     const tagOn = d < TAG_FAR;
     if (r.tag.visible !== tagOn) r.tag.visible = tagOn;
     if (tagOn) { const k = r.tag.userData.base * Math.max(0.6, Math.min(1, 1.15 - d / 220)); r.tag.scale.set(k * (512 / 96), k, 1); }
-    // in the pause menu (F.paused): a grey PAUSED label over their name (Oct 30, the user)
+    // in the pause menu (F.paused): a dark "In pause menu" badge over their name (Oct 30, the user)
     const paused = tagOn && !!(r.flags & F.paused);
-    if (paused && !r.pauseTag) { r.pauseTag = makeTag('⏸ PAUSED', '#6b7280'); r.pauseTag.position.set(0, 2.55, 0); }
+    if (paused && !r.pauseTag) { r.pauseTag = makeTag('In pause menu', '#94a3b8', { dark: true, pause: true }); r.pauseTag.position.set(0, 2.55, 0); }
     if (r.pauseTag) {
       if (r.pauseTag.parent !== r.rig.root) r.rig.root.add(r.pauseTag);
       if (r.pauseTag.visible !== paused) r.pauseTag.visible = paused;

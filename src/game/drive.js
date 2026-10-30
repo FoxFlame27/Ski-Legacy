@@ -639,6 +639,9 @@ export class Drive {
           continue;
         }
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
+        // (a small box some collision audit put round a breakable pole (world/solidify.js): ignored, else it stops the
+        // car short of the pole, a "Knock" with car damage and the pole left standing)
+        if (c.solidified && size < 0.7 && (c.brkShadow ??= !!breakables.at(c.x, c.z, 0.6))) continue;
         if (c.r !== undefined) {
           const dx = cx - c.x, dz = cz - c.z, l = Math.hypot(dx, dz);
           if (l < c.r + R) { px += (l > 1e-3 ? dx / l : 1) * (c.r + R - l); pz += (l > 1e-3 ? dz / l : 0) * (c.r + R - l); n++; if (!c.soft && !c.net) solid = true; kind = kindOf(c); }

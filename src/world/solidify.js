@@ -286,7 +286,7 @@ function* solidifySteps(entries, colliders, { out = colliders, keepOut = [], ski
     const A = (res.areas[e.area || root.name || 'props'] ??= { props: 0, solid: 0, partial: 0, bare: 0, skipped: 0, cellsBefore: 0, cellsAfter: 0, added: 0 });
     const items = [];
     for (const it of e.whole ? [root] : root.children) {
-      if (skip(it) || it.userData?.noSolid) continue;
+      if (skip(it) || it.userData?.noSolid || it.userData?.noCollide) continue; // (noCollide: its module's own colliders, e.g. the breakable snow poles and reflector posts: world/breakables.js)
       if (it.isInstancedMesh && it.count > (e.maxInst ?? MAX_INST)) { A.skipped++; continue; }
       if (it.isInstancedMesh && !e.whole) {
         // every instance its own prop (e.blob false: footprint boxes as for any prop, not one circle round it)
@@ -304,6 +304,9 @@ function* solidifySteps(entries, colliders, { out = colliders, keepOut = [], ski
       if (!fp) return;
       if (fp.skip) { A.skipped++; return; }
       if (!fp.cells.size) return;
+      // (a little breakable pole / sign standing here (world/breakables.js): its own collider knocks it flying; a solid
+      // box round it would stop the car short of it, a "Knock" with car damage and the pole left standing)
+      if (fp.cells.size <= 8 && grid.near(fp.ox, fp.oz).some((c) => c.breakable && Math.hypot(c.x - fp.ox, c.z - fp.oz) < 0.6)) { A.skipped++; return; }
       // parked vehicles come and go: leave them to their own colliders
       if (!tiled && grid.near(fp.ox, fp.oz).some((c) => (c.car || c.vehicle) && insideCol(c, fp.ox, fp.oz, 0))) return;
       A.props++;

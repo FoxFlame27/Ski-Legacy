@@ -12,7 +12,7 @@
 // is out at a time (save.rental: it waits in your bay, nose to the road; E beside it to drive; drive.js: every other
 // car only says where to buy one). The configurator's MY CARS list (E at a model you own opens on it) puts another of
 // yours in the bay (free), or sells one back for half what you paid. Wreck it: the bill (wreckFee: the tow and the full
-// repair, 15 % of the car's list price; once; the balance may go below zero, like a fine) and the tow truck (towtruck.js) fetches
+// repair: $2,000 for every car; once; the balance may go below zero, like a fine) and the tow truck (towtruck.js) fetches
 // the very car from wherever it lies and brings it back to your bay, repaired. Wrecked by a police ram: not repaired,
 // gone from your garage. Multiplayer: the server owns the garage (profile cars, cars[0] the one out; net/session.js).
 import * as THREE from 'three';
@@ -57,26 +57,21 @@ const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_mercedes_gls', 'black'], ['
   ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_toyota_gr_yaris', 'white']];
 // upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for sale like the rest)
 const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['car_lamborghini_huracan', 'orange']];
-// the tow truck's bills and the WERKSTATT's (Oct 30, the user: "make sure that there is a garage next to the car
-// dealership where you can repair your car make sure it makes sense with the towing price and the full price of the
-// car"): one formula for every repair, priced off the car's own list price.
-// - a repair at the Werkstatt (werkstatt.js): damage share x REPAIR_RATE of the list price, at least REPAIR_MIN,
-//   rounded to $50 (a Golf knocked to 40 %: $700; wrecked-level 100 %: $1,700; a Huracan at 100 %: $24,750)
+// the tow truck's bills and the WERKSTATT's (Oct 30, the user: "make sure to repair your car is a fixed cost for all
+// cars, the cost should be 500"): one flat price for every repair, whatever the car and the damage.
+// - a repair at the Werkstatt (werkstatt.js): REPAIR_FEE ($500) for any damage (none: nothing to pay)
 // - a car left on a road: towed and held in the tow yard, flat WRECK_FEE (impound.js; server CATALOG.wreckFee)
-// - a wreck: the same tow plus the full repair (repairCost at 100 %), never more than the car sells back for (half its
-//   list price); so towing + repair always stays far below buying a new one (Golf $3,200 of $11,250, Huracan $26,250
-//   of $165,000). Server: repairRate, repairMin, wreckFee, carSell (server.repairPrice / wreckBill: the same sums)
-export const WRECK_FEE = 1500, REPAIR_RATE = 0.15, REPAIR_MIN = 150;
-const listPrice = (id) => RENTALS.find((c) => c.id === id)?.price || 0;
-const round50 = (v) => Math.round(v / 50) * 50;
+// - a wreck: the same tow plus the repair, WRECK_FEE + REPAIR_FEE ($2,000) for every car. Server: repairFee, wreckFee
+//   (server.repairPrice / wreckBill: the same sums)
+export const WRECK_FEE = 1500, REPAIR_FEE = 500;
 // THE AUTOHAUS CLERK (Oct 30, the user: "make it so you can talk to the npc in autohaus and you can pay him 500 to
 // repair your car"): E at the salesman opens a talk (clerkDialog): the car of the day, or "Repair my car", a flat fee
 // for any damage, your car that is out fixed wherever it is parked (server: CLERK_REPAIR, carRepair { flat: 'clerk' })
 export const CLERK_REPAIR = 500;
-/** The Werkstatt's price for car `id` at damage share `frac` (0..1; 0: nothing to repair, $0). */
-export const repairCost = (id, frac) => (frac > 0 ? Math.max(REPAIR_MIN, round50(listPrice(id) * REPAIR_RATE * Math.min(1, frac))) : 0);
-/** A wreck's bill: the tow and the full repair, at most what the car sells back for. */
-export const wreckFee = (id) => Math.min(round50(listPrice(id) * SELL_SHARE), WRECK_FEE + repairCost(id, 1));
+/** The Werkstatt's price for a car at damage share `frac` (0..1): the flat REPAIR_FEE for any car; 0: nothing to repair, $0. */
+export const repairCost = (id, frac) => (frac > 0 ? REPAIR_FEE : 0);
+/** A wreck's bill: the tow and the repair ($2,000, every car). */
+export const wreckFee = (id) => WRECK_FEE + repairCost(id, 1);
 export const SELL_SHARE = 0.5; // a car sold back: half what you paid
 export const GARAGE_MAX = 10; // (Oct 29, the user: "you also can buy more than 1 car so you have multiple cars"): the cars you can own (server: catalog garageMax)
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and

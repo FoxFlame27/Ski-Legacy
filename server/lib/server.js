@@ -108,11 +108,9 @@ const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // 
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const _bh = {}; // (busHoldAt's scratch: World.tick)
-// THE WERKSTATT's prices (game/carrental.js repairCost / wreckFee: the same sums): a repair, the damage share (0..1) of
-// repairRate of the model's list price, at least repairMin, $50 steps; a wreck, the tow (wreckFee) and the full repair,
-// at most what the car sells back for (carSell of its list price)
-const round50 = (v) => Math.round(v / 50) * 50;
-export const repairPrice = (id, frac) => (frac > 0 ? Math.max(CATALOG.repairMin ?? 150, round50((CATALOG.cars[id] || 0) * (CATALOG.repairRate ?? 0.15) * Math.min(1, frac))) : 0);
+// THE WERKSTATT's prices (game/carrental.js repairCost / wreckFee: the same sums): a repair, the flat repairFee ($500)
+// for any car and any damage (none: $0); a wreck, the tow (wreckFee) and the repair ($2,000 for every car)
+export const repairPrice = (id, frac) => (frac > 0 ? (CATALOG.repairFee ?? 500) : 0);
 // THE AUTOHAUS CLERK (game/carrental.js clerkDialog): "Repair my car" at his desk, a flat fee for any damage, wherever
 // the car is parked (the client's CLERK_REPAIR mirrors it; the price is never taken from the client)
 export const CLERK_REPAIR = 500;
@@ -122,7 +120,7 @@ export const BRK_MS = 90 * 1000;
 export const BRK_HZ = 10;              // knocks a player may send a second
 const BRK_MAX = 400;                   // remembered per world at most (the oldest dropped)
 const BRK_ID_RE = /^-?\d{1,7},-?\d{1,7}$/; // a spot rounded to 10 cm: "x*10,z*10"
-export const wreckBill = (id) => Math.min(round50((CATALOG.cars[id] || 0) * (CATALOG.carSell ?? 0.5)), (CATALOG.wreckFee ?? 1500) + repairPrice(id, 1));
+export const wreckBill = (id) => (CATALOG.wreckFee ?? 1500) + repairPrice(id, 1);
 // race queues: how many racers start a race (always at least 2; alone: a practice race, raceSolo) and its countdown once they are in
 const raceNeed = (race) => Math.max(2, CATALOG.races[race]?.need ?? 2); // (Oct 30, the user: "you can't race with less than 2 people", bus races too)
 const raceWait = (race) => (CATALOG.races[race]?.bus ? BUS_RACE_WAIT_MS : RACE_WAIT_MS);
@@ -1380,7 +1378,7 @@ export class GameServer {
   }
   /** THE WERKSTATT (game/werkstatt.js: the repair garage beside the Autohaus): { damage (0..1, the client's), plate? }
    *  repairs your car that is out (or the one with that plate): the price is the server's own (repairPrice: the
-   *  damage share, clamped, of CATALOG.repairRate of that model's list price, at least repairMin). A purchase: it
+   *  flat CATALOG.repairFee for any car and any damage > 0). A purchase: it
    *  needs the money (no debt). Not while the tow truck has the car; nothing to repair: no charge.
    *  { flat: 'clerk' }: the Autohaus clerk's repair, the flat CLERK_REPAIR for any damage (> 0), the car wherever it
    *  is parked (not in the tow yard). */

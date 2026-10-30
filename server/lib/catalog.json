@@ -114,8 +114,7 @@
  },
  "plateCost": 1000,
  "wreckFee": 1500,
- "repairRate": 0.15,
- "repairMin": 150,
+ "repairFee": 500,
  "carSell": 0.5,
  "garageMax": 10,
  "outfits": {

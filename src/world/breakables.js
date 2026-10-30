@@ -86,6 +86,7 @@ class Breakables {
       nk: 'pole', nid: spotId(collider.x, collider.z),
     };
     for (const p of e.parts) if (p.obj) { p.obj.userData.noMerge = true; p.obj.userData.noCollide = true; }
+    else if (p.im) p.im.userData.noCollide = true; // (no solid box from world/solidify.js round it: it would stop the car short, a knock with damage)
     collider.breakable = e;
     this.list.push(e);
     const key = Math.floor(e.x / CELL) * 100003 + Math.floor(e.z / CELL);
@@ -194,6 +195,17 @@ class Breakables {
     post.castShadow = true; post.frustumCulled = false;
     g.add(post);
     return g;
+  }
+
+  /** A breakable pole registered within r of (x, z) (standing or knocked)? (drive.js: a solid box some audit put round one is ignored) */
+  at(x, z, r = 0.6) {
+    const cell = this.grid.get(Math.floor(x / CELL) * 100003 + Math.floor(z / CELL));
+    if (cell) for (const e of cell) if ((e.x - x) ** 2 + (e.z - z) ** 2 < r * r) return e;
+    for (let gx = Math.floor((x - r) / CELL); gx <= Math.floor((x + r) / CELL); gx++) for (let gz = Math.floor((z - r) / CELL); gz <= Math.floor((z + r) / CELL); gz++) {
+      const c2 = this.grid.get(gx * 100003 + gz);
+      if (c2 && c2 !== cell) for (const e of c2) if ((e.x - x) ** 2 + (e.z - z) ** 2 < r * r) return e;
+    }
+    return null;
   }
 
   /** A vehicle at (x, z) (reach r) moving (vx, vz): knocks the poles it touches. -> how many it knocked */

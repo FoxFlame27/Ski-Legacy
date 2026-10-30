@@ -499,6 +499,7 @@ export class Snowmobiles {
           if (dx * dx + dz * dz < reach * reach && breakables.knock(c.breakable, d.vx, d.vz)) { d.vx *= 0.95; d.vz *= 0.95; }
           continue;
         }
+        if (c.solidified && size < 0.7 && (c.brkShadow ??= !!breakables.at(c.x, c.z, 0.6))) continue; // (an audit's box round a breakable pole: drive.js)
         if (c.h !== undefined && c.h < 0.4) continue;
         if (c.top !== undefined && c.top < d.y + 0.45) continue; // (low solid props: a kerb, a step, a drift, paving over the snow: driven over)
         if (c.r !== undefined) {

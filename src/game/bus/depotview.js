@@ -1,6 +1,6 @@
 // The bus depot as drawn (its plan and the buses' ways: depot.js): the paving (the roads' and car parks' own asphalt
 // and snow, bus.js lotMaterial, the Depotweg carrying straight on into it at the mouth), the eight drive-through bays
-// painted on it (white bay lines, a yellow number at each bay's entry), lamp posts along both long sides (lit at night)
+// painted on it (white bay lines, a yellow stop bar in each bay), lamp posts along both long sides (lit at night)
 // and a BUS DEPOT sign by the mouth. Everything standing is solid (colliders).
 import * as THREE from 'three';
 import { world } from '../../world/world.js';
@@ -23,18 +23,6 @@ function signTexture() {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
-function numberTexture() {
-  const c = document.createElement('canvas');
-  c.width = 1024; c.height = 128;
-  const g = c.getContext('2d');
-  g.clearRect(0, 0, 1024, 128);
-  g.fillStyle = '#f2c200'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = 'bold 104px Arial';
-  for (let k = 0; k < 8; k++) g.fillText(String(k + 1), 64 + k * 128, 68); // (bays 1-8: bus:0 in bay 1, bus:k in bay k + 1)
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
 /** Draw the depot (busRoads.depot) into group. */
 export function buildDepot(group, { models = {}, colliders = null, surf }) {
   const D = busRoads.depot;
@@ -82,19 +70,7 @@ export function buildDepot(group, { models = {}, colliders = null, surf }) {
     m.receiveShadow = true;
     g.add(m);
   }
-  // the bay numbers, at the bay's entry (the right aisle side), read by a driver turning in
-  const numTex = numberTexture(), nm = new THREE.MeshStandardMaterial({ map: numTex, transparent: true, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
-  for (let k = 0; k < BAYS; k++) {
-    const [x, z] = at(BL - 1.6, bayV(k));
-    const geo = new THREE.PlaneGeometry(1.6, 1.6);
-    const uv = geo.attributes.uv;
-    for (let i = 0; i < uv.count; i++) uv.setX(i, (k + uv.getX(i)) / 8);
-    const m = new THREE.Mesh(geo, nm);
-    m.rotation.order = 'YXZ';
-    m.rotation.set(-Math.PI / 2, Math.atan2(-L.ux, -L.uz), 0); // (upright for a bus coming in along -u)
-    m.position.set(x, MH(x, z) + 0.07, z);
-    g.add(m);
-  }
+  // (no bay numbers: Oct 30, the user: "remove the numbers for the bus parking"; the lines and stop bars stay)
   // lamp posts along both long sides, their bulbs glowing at night
   const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffd59a, emissiveIntensity: 0, roughness: 0.4 });
   const bulbGeo = new THREE.SphereGeometry(0.16, 10, 8);

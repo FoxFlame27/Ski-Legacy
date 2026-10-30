@@ -12,11 +12,11 @@
 //   the road, the apron reaching the road's edge; clear of every lane, junction, car park, the railway, runs, lifts,
 //   other buildings' colliders and the forest, on the flattest ground (as impound.js plans the car park).
 // - Repair: drive your car into the bay and stop: the card (bottom left, the tow yard card's brush style) shows the
-//   damage and the price, worked out (damage % x 15 % of the car's list price, at least $150, $50 steps: carrental.js
-//   repairCost) and set against a wreck (the tow + the full repair) and a new one; E: pay, the car is held a few seconds
+//   damage and the price (a flat $500 for any car and any damage: carrental.js repairCost; a wreck: the $1,500 tow +
+//   the $500 repair); E: pay, the car is held a few seconds
 //   while the progress card runs, then (behind a fade) the dents come out, the lamps are new, damage 0. On foot: E at
 //   the workbench repairs your car standing in the bay. Multiplayer: the server prices and charges it (net/session.js
-//   repairCar -> server carRepair, from the car's id and the damage share, clamped); the others never saw the knocks'
+//   repairCar -> server carRepair: the flat repairFee for any damage); the others never saw the knocks'
 //   dents (only a wreck's look is shared: net/vehicles.js), so nothing else changes for them.
 //
 // Garage frame: origin on the floor in the middle of the building, +z out of the bay toward the road, +x along it.

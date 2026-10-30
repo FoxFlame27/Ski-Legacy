@@ -42,8 +42,10 @@ const HEARTBEAT_MS = 15000;   // WebSocket-level ping (answered by the browser i
 const HEARTBEAT_MISSES = 3;   // nothing (no pong, no message) for 45 s: the connection is dead (terminated, then the grace period)
 const FLOOD_WINDOW_MS = 10000, FLOOD_KICK = 400; // refused (over the rate limit) messages in 10 s before a kick
 const NAME_RE = /^[A-Za-z0-9_ -]{3,16}$/;
-// seats per vehicle kind (a client may ask for fewer with n): the lowest free one is assigned
-export const SEAT_CAPS = { bus: 48, train: 64, express: 128, gondola: 8, chair: 6, heli: 4, car: 7, sled: 2 };
+// seats per vehicle kind at most; the client sends its vehicle's real seat count as n (Oct 30: every seat of every
+// coupled car of a train: Wolkenspitzbahn and Legacy Express 4 cars x 48 = 192, a ski bus 36, a gondola cabin 6, a
+// chair up to 6) and that is the vehicle's capacity: the lowest free one is assigned, one more is refused ('full')
+export const SEAT_CAPS = { bus: 48, train: 256, express: 256, gondola: 8, chair: 6, heli: 4, car: 7, sled: 2 };
 // presence state enum (client src/net/protocol.js mirrors this)
 export const STATE = { walk: 0, ski: 1, drive: 2, ride: 3, sit: 4, fly: 5, fall: 6 };
 // weather (world/sky.js NEXT): the world's weather moves on every 80-180 s
@@ -164,7 +166,7 @@ class World {
   // ---------------------------------------------------------------- seats
   seatsMsg(vk, m = this.seats.get(vk)) {
     const [k, v] = vk.split('|');
-    return { k, v, occ: m ? [...m.entries()] : [] };
+    return { k, v, occ: m ? [...m.entries()] : [], n: m?.cap || SEAT_CAPS[k] || 0 };
   }
   releaseSeat(c, notify = true) {
     const s = c.seat;
@@ -205,19 +207,20 @@ class World {
     if (k === 'car' && first === 0) pick = 0;
     if (pick < 0 && isInt(seat) && seat >= first && seat < cap && !(m && m.has(seat))) pick = seat; // a free seat asked for
     if (pick < 0) for (let i = first; i < cap; i++) if (!m || !m.has(i)) { pick = i; break; }
-    if (pick < 0) return { err: 'full' };
+    if (pick < 0) return { err: 'full', d: { n: cap, taken: m ? m.size : 0 } };
     if (m && m.has(pick)) {
       // the car's owner takes the wheel back from nobody: seat 0 can only be the owner's anyway
-      return { err: 'full' };
+      return { err: 'full', d: { n: cap, taken: m.size } };
     }
     this.releaseSeat(c);
     if (!m) { m = new Map(); this.seats.set(vk, m); }
     m.set(pick, c.pid);
     c.seat = { k, v, seat: pick };
+    m.cap = cap; // (the 'seats' broadcast carries it: everyone sees how full the vehicle is)
     if (k === 'car' && first === 1) this.server.useGrant('carRide', nameKey(v), c.key); // (aboard: the yes is in use)
     this.broadcast('seats', this.seatsMsg(vk, m));
     this.updateSkip(vk);
-    return { d: { seat: pick, v } };
+    return { d: { seat: pick, v, n: cap, taken: m.size } };
   }
   kickFromCar(ownerName, guestPid = null) {
     const vk = `car|${ownerName}`, m = this.seats.get(vk);
@@ -377,7 +380,7 @@ class World {
     this.broadcast('raceQueue', { race, n: 0, names: [], startAt: 0, need: 2, waitMs: RACE_WAIT_MS });
     this.broadcast('raceStart', this.raceStartMsg(r));
   }
-  raceStartMsg(r) { return { rid: r.rid, race: r.race, at: r.at, grid: r.entrants.map((e) => ({ pid: e.pid, name: e.name, slot: e.slot })) }; }
+  raceStartMsg(r) { return { rid: r.rid, race: r.race, at: r.at, endAt: r.at + RACE_MAX_MS, closeAt: r.closeAt || 0, grid: r.entrants.map((e) => ({ pid: e.pid, name: e.name, slot: e.slot })) }; } // (endAt / closeAt: when it closes: the clients count the last 30 s down)
   // A finish. The server's own clock decides: the client's race time (raw: without gate penalties, pen: the
   // penalties) is trusted only within 3 s of the time the server measured since the shared GO, else the server's
   // time counts. Old clients send `time` (penalties included) instead.
@@ -397,9 +400,9 @@ class World {
       e.fin = now;
       e.prog = { gate: Math.max(e.prog.gate, 9999), s: Infinity, at: e.time };
       // the first one home: the rest have RACE_AFTER_FIRST_MS to finish (the race never waits for someone who left)
-      if (!r.closeT) r.closeT = setTimeout(() => this.safeFinish(r), RACE_AFTER_FIRST_MS);
+      if (!r.closeT) { r.closeAt = now + RACE_AFTER_FIRST_MS; r.closeT = setTimeout(() => this.safeFinish(r), RACE_AFTER_FIRST_MS); }
     }
-    this.broadcast('raceProgress', { rid, pid: e.pid, name: e.name, time: e.time, dnf: e.dnf });
+    this.broadcast('raceProgress', { rid, pid: e.pid, name: e.name, time: e.time, dnf: e.dnf, closeAt: r.closeAt || 0 });
     this.raceBoard(r, true);
     if (r.entrants.every((x) => x.done)) this.finishRace(r);
     return { d: { time: e.time } };

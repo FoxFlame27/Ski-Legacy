@@ -202,7 +202,7 @@ export class Multiplayer {
     on('kickInterior', (d) => { this.interior = null; this.c.onKickInterior?.(d.interior); });
     on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
-    on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) r.done.set(d.pid, d); });
+    on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.done.set(d.pid, d); if (d.closeAt) r.closeAt = d.closeAt; } });
     on('raceBoard', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.board = d.rows; r.boardAt = performance.now(); } });
     on('raceQueue', (d) => { if (d.n) MP.queues.set(d.race, d); else MP.queues.delete(d.race); if (this.race.queued === d.race) this.race.queue = d; });
     on('raceStart', (d) => this.onRaceStart(d));
@@ -617,6 +617,26 @@ export class Multiplayer {
   // Twice a second while you race: your progress to the server (gate index + metres along the course: the live board
   // and, should you drop out, where you got to). The race session's own HUD shows the standings; the overlay board
   // only comes up when you race without it (you left the course).
+  // the last 30 s before the race closes (60 s after the first finisher, or its 10 min limit): a big countdown, so you
+  // know whether you will make it before it is a DNF (Oct 30, the user)
+  closeCountdown(now) {
+    const r = this.race.start;
+    const end = r ? Math.min(r.closeAt || Infinity, r.endAt || Infinity) : Infinity, left = end - now;
+    const show = !!r && now >= r.at && !this.race.finished && left > 0 && left <= 30000;
+    if (!show && !this.cdEl) return;
+    if (!this.cdEl) {
+      const el = document.createElement('div');
+      el.id = 'race-close';
+      el.style.cssText = 'position:absolute;top:calc(var(--u,1px)*120);left:50%;transform:translateX(-50%);padding:calc(var(--u,1px)*10) calc(var(--u,1px)*34) calc(var(--u,1px)*12);background:#fff;color:#d0342c;clip-path:var(--brush-b);filter:drop-shadow(0 6px 14px rgba(0,20,60,0.3));pointer-events:none;text-align:center;font-family:var(--num);font-style:italic;font-weight:700;z-index:12';
+      el.innerHTML = '<div style="font-size:calc(var(--u,1px)*16);letter-spacing:0.08em;color:var(--blue,#1546c8)">FINISH BEFORE THE RACE CLOSES</div><div class="rc-t" style="font-size:calc(var(--u,1px)*58);line-height:1"></div><div style="font-size:calc(var(--u,1px)*15);color:var(--blue-dim,#4f72d4)">or it is a DNF</div>';
+      (document.getElementById('hud') || document.body).appendChild(el);
+      this.cdEl = el; this.cdT = el.querySelector('.rc-t');
+    }
+    if (this.cdEl.hidden === show) this.cdEl.hidden = !show;
+    if (!show) return;
+    const s = Math.ceil(left / 1000), txt = `0:${String(s).padStart(2, '0')}`;
+    if (this.cdT.textContent !== txt) this.cdT.textContent = txt;
+  }
   updateBoard(dt, now) {
     const r = this.race.start;
     if (!r || now < r.at) { if (this.ui?.lines.board) this.ui.setBoard(null); return; }
@@ -765,6 +785,7 @@ export class Multiplayer {
     this.remotes?.update(dt, view);
     this.view = view;
     this.updateBoard(dt, now);
+    this.closeCountdown(now);
     // the status pill
     const w = MP.world;
     if (this.ui) {

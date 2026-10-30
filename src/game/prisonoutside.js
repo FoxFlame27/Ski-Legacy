@@ -12,7 +12,8 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { makeSign, standSign } from '../world/village.js';
-import { fitModel } from '../core/assets.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { fitModel, loadGLB, dequantize } from '../core/assets.js';
 import { shellMaterials } from './carrentalshell.js';
 import { buildPoliceCar } from './police.js';
 
@@ -92,6 +93,82 @@ export function policeLamp() {
   add(new THREE.BoxGeometry(0.34, 0.04, 0.34), iron, 0, -0.34, 0.42);
   for (const [x, z] of [[-0.155, 0.265], [0.155, 0.265], [-0.155, 0.575], [0.155, 0.575]]) add(new THREE.BoxGeometry(0.03, 0.44, 0.03), iron, x, -0.12, z);
   g.userData.glass = glass;
+  return g;
+}
+
+// ---- Meshy decor (tools/meshy-decor.mjs): natural snow drifts and the lanterns / lamps / plants. Nothing waits for
+// them: each spot gets a procedural stand-in at once and the model replaces it when its GLB has loaded.
+/** Swap a Meshy model into `group` once `name` has loaded (fitModel(gltf, fit)), removing the group's procedural
+ * stand-in (`fallback`, a child of the group); onModel(model) dresses it. A missing model keeps the stand-in. */
+export function swapInModel(group, name, fit, fallback, onModel) {
+  loadGLB(name).then((gltf) => {
+    if (!gltf) return;
+    const m = fitModel(gltf, fit);
+    if (!m.children.length) return;
+    m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    if (fallback) group.remove(fallback);
+    group.add(m);
+    onModel?.(m);
+  }).catch((e) => console.warn('decor', name, e));
+}
+
+// the snow drifts' shape: the model's geometry welded smooth, normalised to a unit box (x / z -0.5..0.5, y 0..1),
+// its long side along x; plain snow on it (the ground's colour and sheen: no texture, which reads grey up close)
+const DRIFTS = { long: 'snow/drift_long', heap: 'snow/snow_heap', mound: 'snow/snow_mound' };
+const driftGeo = new Map();
+function driftGeometry(kind) {
+  if (!driftGeo.has(kind)) driftGeo.set(kind, loadGLB(DRIFTS[kind]).then((gltf) => {
+    if (!gltf) return null;
+    gltf.scene.updateMatrixWorld(true);
+    let geo = null;
+    gltf.scene.traverse((o) => {
+      if (!o.isMesh || geo) return;
+      const g = dequantize(o.geometry); g.applyMatrix4(o.matrixWorld);
+      for (const k of Object.keys(g.attributes)) if (k !== 'position') g.deleteAttribute(k);
+      geo = mergeVertices(g, 1e-4);
+    });
+    if (!geo) return null;
+    geo.computeBoundingBox();
+    let b = geo.boundingBox, sz = b.getSize(new THREE.Vector3());
+    if (sz.z > sz.x) { geo.rotateY(Math.PI / 2); geo.computeBoundingBox(); b = geo.boundingBox; sz = b.getSize(new THREE.Vector3()); }
+    const c = b.getCenter(new THREE.Vector3());
+    geo.translate(-c.x, -b.min.y, -c.z); geo.scale(1 / sz.x, 1 / sz.y, 1 / sz.z);
+    geo.computeVertexNormals(); geo.computeBoundingSphere();
+    // (the ground's snow shading, terrain.js: a touch of sky blue in the steep sides and hollows, brighter on the crest)
+    const pa = geo.attributes.position, na = geo.attributes.normal, col = new Float32Array(pa.count * 3);
+    for (let i = 0; i < pa.count; i++) {
+      const k = Math.min(1, Math.max(0, na.getY(i) * 0.65 + pa.getY(i) * 0.45));
+      col[i * 3] = 0.9 + 0.12 * k; col[i * 3 + 1] = 0.94 + 0.08 * k; col[i * 3 + 2] = 1.0 + 0.02 * k;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return geo;
+  }).catch(() => null));
+  return driftGeo.get(kind);
+}
+let driftMat = null, driftMatFb = null;
+/** The drifts' snow: the ground's (terrain.js: albedo ~0.83 / 0.86 / 0.90 linear, roughness ~0.6), shaded by the
+ * drift's vertex colours (fb: the stand-in's, without them). */
+export function snowDriftMaterial(fb = false) {
+  if (fb) return (driftMatFb ??= new THREE.MeshStandardMaterial({ color: new THREE.Color().setRGB(0.84, 0.87, 0.91), roughness: 0.64, metalness: 0 }));
+  return (driftMat ??= new THREE.MeshStandardMaterial({ color: new THREE.Color().setRGB(0.84, 0.87, 0.91), roughness: 0.64, metalness: 0, vertexColors: true }));
+}
+/**
+ * A natural snow drift (kind 'long': a wind-blown bank, 'heap': a ploughed pile, 'mound': a low hump) of len (x) ×
+ * wid (z) × h metres, its base `sink` × h below the group's origin (no floating edge on uneven ground). Returns a
+ * Group at once (a soft procedural lump until the Meshy drift has loaded). (Used by the police station, and free for
+ * the other village lots.)
+ */
+export function snowDrift(kind, len, wid, h, { mat = snowDriftMaterial(), sink = 0.14, shadow = false } = {}) {
+  const g = new THREE.Group();
+  const fb = new THREE.Mesh(new THREE.SphereGeometry(0.5, 22, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat.vertexColors ? snowDriftMaterial(true) : mat);
+  fb.scale.set(len, h * 2, wid); fb.position.y = -sink * h; fb.receiveShadow = true; fb.castShadow = false; g.add(fb);
+  driftGeometry(kind in DRIFTS ? kind : 'long').then((geo) => {
+    if (!geo) return;
+    const m = new THREE.Mesh(geo, mat);
+    m.scale.set(len, h * (1 + sink), wid); m.position.y = -sink * h;
+    m.receiveShadow = true; m.castShadow = shadow;
+    g.remove(fb); g.add(m);
+  });
   return g;
 }
 
@@ -244,28 +321,51 @@ export function buildPrisonOutside(P, L) {
   const sign = polizeiSign(4.2, 1.05); sign.position.set(DX, G + 1.35, D / 2 + 0.06); house.add(sign);
   const lamp = policeLamp(); lamp.position.set(DX - 1.55, 2.55, D / 2); house.add(lamp);
   const lanternGlass = new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffc77a, emissiveIntensity: 0.25 });
-  { const x = DX + 1.55;
-    B(0.12, 0.22, 0.12, iron, x, 2.62, D / 2 + 0.06, house); B(0.04, 0.04, 0.3, iron, x, 2.7, D / 2 + 0.2, house);
-    B(0.26, 0.4, 0.26, iron, x, 2.42, D / 2 + 0.36, house); add(new THREE.BoxGeometry(0.2, 0.32, 0.2), lanternGlass, x, 2.42, D / 2 + 0.36, house, false); }
-  for (const s of [-1, 1]) { const x = s * (W / 2 + 0.2); // (lanterns on the corners too, on a short bracket)
-    B(0.16, 0.06, 0.06, iron, s * (W / 2 + 0.1), 2.74, D / 2 - 0.5, house, false);
-    B(0.26, 0.4, 0.26, iron, x + s * 0.06, 2.5, D / 2 - 0.5, house); add(new THREE.BoxGeometry(0.2, 0.32, 0.2), lanternGlass, x + s * 0.06, 2.5, D / 2 - 0.5, house, false); }
+  // (the lanterns: the Meshy black iron alpine wall lantern, tools/meshy-decor.mjs, its wall plate on the wall and its
+  // panes lit at night through their own texture; a box lantern on a bracket until it has loaded or without it)
+  const lanternMats = [];
+  const lantern = (x, z, ry, y, fbBuild) => {
+    const lg = new THREE.Group(); lg.position.set(x, y, z); lg.rotation.y = ry; house.add(lg);
+    const fb = new THREE.Group(); lg.add(fb); fbBuild(fb);
+    swapInModel(lg, 'decor/lantern_wall', { size: 0.72, axis: 'y' }, fb, (m) => {
+      m.position.set(0, -0.3, 0.2); // (the plate, at the model's back, on the wall; the lantern's middle about here)
+      m.traverse((o) => { if (!o.isMesh || !o.material) return;
+        o.material = o.material.clone(); o.castShadow = false;
+        if (o.material.map) { o.material.emissiveMap = o.material.map; o.material.emissive = new THREE.Color(0xffc77a); o.material.emissiveIntensity = lanternGlass.emissiveIntensity; lanternMats.push(o.material); } });
+    });
+  };
+  const lB = (fb, w_, h, d, mat, x, y, z) => B(w_, h, d, mat, x, y, z, fb); // (the stand-in, in the lantern's own frame)
+  lantern(DX + 1.55, D / 2 + 0.06, 0, 2.42, (fb) => { // (the door's right)
+    lB(fb, 0.12, 0.22, 0.12, iron, 0, 0.2, 0.06); lB(fb, 0.04, 0.04, 0.3, iron, 0, 0.28, 0.2);
+    lB(fb, 0.26, 0.4, 0.26, iron, 0, 0, 0.36); add(new THREE.BoxGeometry(0.2, 0.32, 0.2), lanternGlass, 0, 0, 0.36, fb, false);
+  });
+  for (const s of [-1, 1]) lantern(s * (W / 2 + 0.06), D / 2 - 0.5, s * Math.PI / 2, 2.5, (fb) => { // (on the corners, on the side walls)
+    lB(fb, 0.06, 0.06, 0.16, iron, 0, 0.24, 0.1);
+    lB(fb, 0.26, 0.4, 0.26, iron, 0, 0, 0.26); add(new THREE.BoxGeometry(0.2, 0.32, 0.2), lanternGlass, 0, 0, 0.26, fb, false);
+  });
   // a brass plate by the door: what it is
   { const pl = makeSign('POLIZEIINSPEKTION\nPrison · visits welcome', { w: 1.0, h: 0.5, bg: '#f2ede0', fg: '#14263f', border: '#b08d4a', font: 'bold 96px Georgia' });
     pl.position.set(DX + 1.55, 1.55, D / 2 + 0.04); house.add(pl); }
 
-  // ---- snow banked against the walls (low soft drifts, half sunk), deeper at the back and sides
-  const drift = (x, z, a, h, b, rot = 0) => { const m = add(new THREE.SphereGeometry(1, 22, 10, 0, Math.PI * 2, 0, Math.PI / 2), snow, x, -0.06, z, g); m.scale.set(a, h, b); m.rotation.y = rot; m.castShadow = false; return m; };
-  { const r = rng(17);
-    for (let x = -W / 2 + 1.2; x < W / 2; x += 2.6 + r() * 0.8) drift(x, BZ - D / 2 - 0.25, 1.6 + r() * 0.6, 0.55 + r() * 0.35, 0.9 + r() * 0.3);
-    for (const sx of [-1, 1]) for (let z = BZ - D / 2 + 1; z < FRONT - 0.5; z += 2.4 + r() * 0.6) drift(sx * (W / 2 + 0.25), z, 0.9 + r() * 0.3, 0.45 + r() * 0.3, 1.5 + r() * 0.5);
-    for (const sx of [-1, 1]) { drift(sx * (W / 2 + 0.4), BZ - D / 2 - 0.2, 1.5, 0.8, 1.5); drift(sx * (W / 2 + 0.2), FRONT + 0.1, 1.1, 0.45, 0.9); }
+  // ---- snow banked against the walls (the Meshy drifts: long wind-blown banks, a heap in the back corners, low
+  // mounds in front; overlapping so they read as one bank, sunk a little), deeper at the back and sides
+  const drift = (kind, x, z, len, wid, h, rot = 0, y = -0.04) => { const d = snowDrift(kind, len, wid, h); d.position.set(x, y, z); d.rotation.y = rot; g.add(d); return d; };
+  { const r = rng(17), flip = () => (r() < 0.5 ? 0 : Math.PI), back = BZ - D / 2;
+    // the back wall: long banks end to end (their lee side against the stone)
+    for (let x = -W / 2 + 1.9; x < W / 2 - 1.2; x += 3.1 + r() * 0.5) { const wid = 1.4 + r() * 0.4; drift('long', x, back - wid * 0.32, 3.8 + r() * 0.8, wid, 0.6 + r() * 0.3, flip() + (r() - 0.5) * 0.1); }
+    // the sides, back to front, lower toward the front
+    for (const sx of [-1, 1]) for (let z = back + 1.6; z < FRONT - 0.9; z += 2.8 + r() * 0.4) {
+      const k = (z - back) / D, wid = 1.25 - 0.3 * k + r() * 0.25;
+      drift('long', sx * (W / 2 + wid * 0.3), z, 3.4 + r() * 0.6, wid, 0.75 - 0.3 * k + r() * 0.2, Math.PI / 2 + flip() + (r() - 0.5) * 0.12);
+    }
+    // the back corners: a deeper heap; the front corners: a low mound
+    for (const sx of [-1, 1]) { drift('heap', sx * (W / 2 + 0.35), back - 0.35, 2.7, 2.5, 1.0, r() * 6); drift('mound', sx * (W / 2 + 0.25), FRONT + 0.15, 1.7, 1.2, 0.42, r() * 6); }
     // the front: only a little against the stone, either side of the door (the forecourt is ploughed)
-    for (const x of [-7.6, -5.3, 0.4, 2.6, 4.9, 7.3]) drift(x, FRONT + 0.05, 0.9 + r() * 0.3, 0.22 + r() * 0.1, 0.35);
-    // the ploughed snow along the forecourt's sides, a heap at each front corner (kept off the road)
+    for (const x of [-7.6, -5.3, 0.4, 2.6, 4.9, 7.3]) drift('mound', x, FRONT + 0.12, 1.6 + r() * 0.5, 0.7, 0.24 + r() * 0.1, flip());
+    // the ploughed snow along the forecourt's sides (on the ground's slope), a heap at each front corner (off the road)
     for (const sx of [-1, 1]) {
-      for (let z = 0.5; z < L.hd - 3; z += 2.2) drift(sx * (L.hw - 0.6), z, 0.8 + r() * 0.3, 0.38 + r() * 0.25, 1.4 + r() * 0.4);
-      drift(sx * (L.hw - 0.2), L.hd - 3.4, 1.4, 0.75, 1.2, r());
+      for (let z = 0.6; z < L.hd - 3.5; z += 2.3 + r() * 0.3) { const x = sx * (L.hw - 0.6); drift('long', x, z, 2.9 + r() * 0.5, 1.1 + r() * 0.3, 0.45 + r() * 0.2, Math.PI / 2 + flip() + (r() - 0.5) * 0.15, gy(x, z) - 0.02); }
+      const x = sx * (L.hw - 0.3), z = L.hd - 3.4; drift('heap', x, z, 2.4, 2.0, 0.85, r() * 6, gy(x, z) - 0.03);
     }
   }
 
@@ -366,6 +466,7 @@ export function buildPrisonOutside(P, L) {
       if (postMat) postMat.emissiveIntensity = 0.05 + 0.3 * n;
       lamp.userData.glass.emissiveIntensity = 0.5 + 2.6 * n * (0.8 + 0.2 * Math.sin(t * 2.4));
       lanternGlass.emissiveIntensity = 0.25 + 2.4 * n;
+      for (const m of lanternMats) m.emissiveIntensity = 0.05 + 1.6 * n;
       winLit.emissiveIntensity = 0.3 + 1.1 * n;
       winCell.emissiveIntensity = 0.06 + 0.35 * n;
     },

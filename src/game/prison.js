@@ -23,7 +23,7 @@ import { fitModel, loadGLB } from '../core/assets.js';
 import { busRoads } from './bus/roads.js';
 import { makeSign, nightUniform } from '../world/village.js';
 import { shellMaterials } from './carrentalshell.js';
-import { buildPrisonOutside, polizeiSign, drawBadge } from './prisonoutside.js';
+import { buildPrisonOutside, polizeiSign, drawBadge, swapInModel } from './prisonoutside.js';
 import { policeModelReady } from './police.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
@@ -405,24 +405,35 @@ export class PrisonRoom {
       cs.traverse((o) => { if (o.isMesh) o.castShadow = true; });
       this.obstacles.push([F.x1 - 0.65, F.x1, F.z1 - 0.7, F.z1]);
     }
-    const plant = (x, z, s = 1) => {
-      const g = new THREE.Group(); g.position.set(x, 0, z); S.add(g);
-      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.26 * s, 0.2 * s, 0.5 * s, 16), new THREE.MeshStandardMaterial({ color: 0x8a4a2a, roughness: 0.8 })); pot.position.y = 0.25 * s; g.add(pot);
+    // the plants: Meshy (tools/meshy-decor.mjs: a ficus, a monstera) once loaded, a procedural pot of leaves till then
+    const plant = (x, z, s = 1, kind = 'ficus') => {
+      const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = (x * 7 + z * 3) % 6.28; S.add(g);
+      const fb = new THREE.Group(); g.add(fb);
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.26 * s, 0.2 * s, 0.5 * s, 16), new THREE.MeshStandardMaterial({ color: 0x8a4a2a, roughness: 0.8 })); pot.position.y = 0.25 * s; fb.add(pot);
       const r = rng(Math.round(x * 13 + z * 7)), leaf = new THREE.MeshStandardMaterial({ color: 0x2f6a34, roughness: 0.75 });
-      for (let i = 0; i < 9; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(0.22 * s, 10, 8), leaf); const a = r() * 7, d = r() * 0.2 * s; l.position.set(Math.cos(a) * d, (0.65 + r() * 0.75) * s, Math.sin(a) * d); l.scale.set(1, 1.4, 1); g.add(l); }
-      g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      for (let i = 0; i < 9; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(0.22 * s, 10, 8), leaf); const a = r() * 7, d = r() * 0.2 * s; l.position.set(Math.cos(a) * d, (0.65 + r() * 0.75) * s, Math.sin(a) * d); l.scale.set(1, 1.4, 1); fb.add(l); }
+      fb.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      swapInModel(g, `decor/plant_${kind}`, { size: (kind === 'ficus' ? 1.55 : 1.2) * s, axis: 'y' }, fb, (m) => m.traverse((o) => { if (o.isMesh && o.material) o.material.side = THREE.DoubleSide; })); // (thin leaves: both faces)
       this.obstacles.push([x - 0.3 * s, x + 0.3 * s, z - 0.3 * s, z + 0.3 * s]);
     };
-    plant(F.x0 + 0.55, F.z1 - 0.45); plant(13.05, F.z1 - 0.35, 0.9); plant(16.55, 0.35, 0.9);
+    plant(F.x0 + 0.55, F.z1 - 0.45, 1, 'ficus'); plant(13.05, F.z1 - 0.35, 0.95, 'monstera'); plant(16.55, 0.35, 0.95, 'monstera');
     // the corridor behind the cell block's far wall, the partition either side of the gate: solid
     this.obstacles.push([ROOM.x0 - 1, F.x0 + 0.1, ROOM.z1, F.z1 + 1], [F.x0 - 0.1, F.x0 + 0.1, F.z0, GATE.z0], [F.x0 - 0.1, F.x0 + 0.1, GATE.z1, F.z1]);
     // ---- warm light: three pendants (a shade, a glowing bulb, a point light each), the desk lamp (buildProps)
     const shade = new THREE.MeshStandardMaterial({ color: 0x1f2a24, roughness: 0.5, metalness: 0.3, side: THREE.DoubleSide });
     this.bulbMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd39a, emissiveIntensity: 2.6 });
+    // (the fixtures: the Meshy alpine pendant, tools/meshy-decor.mjs, once loaded; the glowing bulb sits in its mouth)
     for (const [x, z] of [[11.4, 2.5], [14.8, 2.5], [cmx, -2.2]]) {
-      box(0.012, 0.75, 0.012, steel, x, F.H - 0.375, z, 0, false);
-      const sh = add(new THREE.ConeGeometry(0.28, 0.24, 20, 1, true), shade, x, F.H - 0.82, z, 0, false); void sh;
-      add(new THREE.SphereGeometry(0.07, 12, 8), this.bulbMat, x, F.H - 0.9, z, 0, false);
+      const pg = new THREE.Group(); pg.position.set(x, 0, z); S.add(pg);
+      const fb = new THREE.Group(); pg.add(fb);
+      const cord = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.75, 0.012), steel); cord.position.y = F.H - 0.375; fb.add(cord);
+      const sh = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.24, 20, 1, true), shade); sh.position.y = F.H - 0.82; fb.add(sh);
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 8), this.bulbMat); bulb.position.y = F.H - 0.9; pg.add(bulb);
+      swapInModel(pg, 'decor/lamp_pendant', { size: 0.56, axis: 'xz' }, fb, (m) => {
+        const h = m.userData.size.y, y0 = F.H - 0.3 - h; m.position.y = y0; m.traverse((o) => { if (o.isMesh) o.castShadow = false; });
+        const cord2 = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.32, 0.012), steel); cord2.position.y = F.H - 0.16; pg.add(cord2);
+        bulb.position.y = y0 + Math.min(0.12, h * 0.2); bulb.scale.setScalar(0.85);
+      });
       const L = new THREE.PointLight(0xffc98f, 6.5, 10, 1.5); L.position.set(x, F.H - 1.0, z); S.add(L);
     }
     const fill = new THREE.PointLight(0xffd8b0, 2.2, 12, 1.4); fill.position.set(cx, 2.4, 3.5); S.add(fill);
@@ -473,15 +484,25 @@ export class PrisonRoom {
       add(new THREE.PlaneGeometry(0.56, 0.34), new THREE.MeshStandardMaterial({ color: 0x000000, emissiveMap: screen, map: screen, emissive: 0xffffff, emissiveIntensity: 0.9 }), DXk + 0.35 - Math.sin(0.2) * 0.022, top + 0.3, DZ + 0.1 - Math.cos(0.2) * 0.022, Math.PI + 0.2);
       add(new THREE.BoxGeometry(0.06, 0.12, 0.06), dark, DXk + 0.35, top + 0.06, DZ + 0.12);
       add(new THREE.BoxGeometry(0.45, 0.02, 0.15), dark, DXk + 0.3, top + 0.01, DZ - 0.2);
-      // the desk lamp: a weighted foot, two arms, a green shade over a warm bulb
+      // the desk lamp: the Meshy green banker's lamp (tools/meshy-decor.mjs) once loaded; till then (or without it) a
+      // weighted foot, two arms, a green shade over a warm bulb
+      const lampG = new THREE.Group(); S.add(lampG);
+      const fb = new THREE.Group(); lampG.add(fb);
+      const fbAdd = (geo, mat, x, y, z) => { const m = add(geo, mat, x, y, z); fb.attach(m); return m; };
       const lampM = new THREE.MeshStandardMaterial({ color: 0x1f4a32, roughness: 0.35, metalness: 0.4 });
-      add(new THREE.CylinderGeometry(0.09, 0.1, 0.03, 16), lampM, DXk - 0.6, top + 0.015, DZ + 0.15);
-      add(new THREE.CylinderGeometry(0.012, 0.012, 0.36, 8), lampM, DXk - 0.6, top + 0.2, DZ + 0.15).rotation.z = 0.25;
-      add(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8), lampM, DXk - 0.5, top + 0.42, DZ + 0.15).rotation.z = -1.0;
-      const hd = add(new THREE.ConeGeometry(0.09, 0.14, 16, 1, true), lampM, DXk - 0.38, top + 0.44, DZ + 0.15); hd.rotation.z = -0.5; hd.material.side = THREE.DoubleSide;
+      fbAdd(new THREE.CylinderGeometry(0.09, 0.1, 0.03, 16), lampM, DXk - 0.6, top + 0.015, DZ + 0.15);
+      fbAdd(new THREE.CylinderGeometry(0.012, 0.012, 0.36, 8), lampM, DXk - 0.6, top + 0.2, DZ + 0.15).rotation.z = 0.25;
+      fbAdd(new THREE.CylinderGeometry(0.012, 0.012, 0.3, 8), lampM, DXk - 0.5, top + 0.42, DZ + 0.15).rotation.z = -1.0;
+      const hd = fbAdd(new THREE.ConeGeometry(0.09, 0.14, 16, 1, true), lampM, DXk - 0.38, top + 0.44, DZ + 0.15); hd.rotation.z = -0.5; hd.material.side = THREE.DoubleSide;
       this.deskBulb = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd08a, emissiveIntensity: 3 });
-      add(new THREE.SphereGeometry(0.03, 10, 8), this.deskBulb, DXk - 0.37, top + 0.4, DZ + 0.15);
-      const dl = new THREE.PointLight(0xffc27a, 1.6, 2.6, 1.6); dl.position.set(DXk - 0.36, top + 0.3, DZ + 0.15); S.add(dl);
+      const dBulb = fbAdd(new THREE.SphereGeometry(0.03, 10, 8), this.deskBulb, DXk - 0.37, top + 0.4, DZ + 0.15);
+      swapInModel(lampG, 'decor/lamp_banker', { size: 0.46, axis: 'y' }, fb, (m) => {
+        m.position.set(DXk - 0.5, top, DZ + 0.12); m.rotation.y = Math.PI + 0.35;
+        // (its glow: a warm emissive slip under the shade)
+        const glow = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), this.deskBulb); glow.scale.set(1.5, 0.6, 1.5); glow.position.set(DXk - 0.5, top + m.userData.size.y * 0.58, DZ + 0.12); lampG.add(glow);
+      });
+      void dBulb;
+      const dl = new THREE.PointLight(0xffc27a, 1.6, 2.6, 1.6); dl.position.set(DXk - 0.45, top + 0.24, DZ + 0.13); S.add(dl);
       const paper = new THREE.MeshStandardMaterial({ color: 0xf4f2ec, roughness: 0.9 });
       for (let i = 0; i < 3; i++) add(new THREE.BoxGeometry(0.22, 0.006, 0.3), paper, DXk - 0.1 + i * 0.03, top + 0.005 + i * 0.006, DZ + 0.05 - i * 0.02, 0.2 * i);
       add(new THREE.CylinderGeometry(0.04, 0.035, 0.1, 14), new THREE.MeshStandardMaterial({ color: 0x123e86, roughness: 0.4 }), DXk + 0.72, top + 0.05, DZ - 0.15);

@@ -1,0 +1,42 @@
+{
+  "snow_heap": {
+    "preview": "01a18be7-9f4b-754e-99b3-e5ede26e6656",
+    "refine": "01a18be8-d18c-7095-be8c-0a54095ad9b7",
+    "done": true
+  },
+  "snow_mound": {
+    "preview": "01a18be7-9f00-73b6-929f-805b795292d2",
+    "refine": "01a18be8-9338-72cf-8505-d232510cb45e",
+    "done": true
+  },
+  "plant_ficus": {
+    "preview": "01a18be7-a03f-7144-a37f-e4daaf7ab756",
+    "refine": "01a18be9-1a64-77df-9157-7aae71e5a23e",
+    "done": true
+  },
+  "plant_monstera": {
+    "preview": "01a18be7-9f5f-77cc-97b3-ca6c738db4da",
+    "refine": "01a18be8-d5f2-72f8-8281-68c1b29d3fce",
+    "done": true
+  },
+  "lamp_pendant": {
+    "preview": "01a18be7-9f30-76e3-8eb2-0a1774c2eaf6",
+    "refine": "01a18be8-f240-72b0-959a-a4949ce78cb4",
+    "done": true
+  },
+  "lantern_wall": {
+    "preview": "01a18be7-9f5b-7418-a300-6810c0484805",
+    "refine": "01a18be8-b4c6-74a6-b284-f516e1b71cd2",
+    "done": true
+  },
+  "drift_long": {
+    "preview": "01a18beb-5a5b-75f2-8a70-157d368f81b2",
+    "refine": "01a18bec-0d24-752e-9b1b-d90f7804326a",
+    "done": true
+  },
+  "lamp_banker": {
+    "preview": "01a18beb-5a16-7284-90d4-27040d6b05cd",
+    "refine": "01a18bec-2d7a-74fb-855e-b957fe0a51c1",
+    "done": true
+  }
+}

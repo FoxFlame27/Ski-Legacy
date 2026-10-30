@@ -579,7 +579,7 @@ export function buildPrisonOutside(P, L) {
   });
   const bannerMat = new THREE.MeshStandardMaterial({ map: banner, roughness: 0.8, side: THREE.DoubleSide });
   const colliders = [];
-  for (const lx of [-L.hw + 1.0, -L.hw + 2.6]) {
+  for (const lx of [-L.hw + 2.6]) { // (one POLIZEI banner: the outer one went, Oct 30, the user)
     const lz = L.hd - 2.2, y = gy(lx, lz);
     add(new THREE.CylinderGeometry(0.05, 0.06, 7, 10), iron, lx, y + 3.2, lz);
     add(new THREE.SphereGeometry(0.08, 10, 8), new THREE.MeshStandardMaterial({ color: 0xc9a24a, metalness: 0.9, roughness: 0.3 }), lx, y + 6.75, lz);

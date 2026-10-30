@@ -520,8 +520,7 @@ export class CarRental {
       if (mp?.ended) mp.ended(mine); // (multiplayer: the server takes it out of your garage; the next one comes out)
       else if (g[0]) this.putOut(g[0], null);
       this.writeSave();
-      const next = g[0] ? ` · your ${this.label(g[0].id)} waits in the ${this.where()}` : '';
-      setTimeout(() => this.hud?.flash(`Your ${this.label(mine.id)} was wrecked by the police · it will not be repaired · it is gone from your garage${next}`, 'bad', 7000), 2900);
+      setTimeout(() => this.hud?.flash(`Your ${this.label(mine.id)} is gone · wrecked by the police`, 'bad', 6000), 2900);
     } else if (mine) {
       const fee = wreckFee(mine.id);
       e.rental = false;
@@ -536,7 +535,7 @@ export class CarRental {
         this.hud?.setMoney?.(this.save.money, -fee);
       }
       this.audio?.play?.('cash');
-      setTimeout(() => this.hud?.flash(`Car wrecked · -$${fee.toLocaleString('en-US')} (tow $${WRECK_FEE.toLocaleString('en-US')} + full repair $${(fee - WRECK_FEE).toLocaleString('en-US')}) · the tow truck takes it to the Autohaus · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
+      setTimeout(() => this.hud?.flash(`Car wrecked · -$${fee.toLocaleString('en-US')} · back in your bay soon`, 'bad', 5000), 2900); // (short: Oct 30, the user) // (after drive.js's own "Wrecked" line)
     }
     const back = () => {
       if (!mine || lost) return;

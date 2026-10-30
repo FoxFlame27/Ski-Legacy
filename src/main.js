@@ -72,6 +72,8 @@ import { buildPark } from './world/park.js';
 import { initSecrets, Secrets } from './world/secrets.js';
 import { Backdrop } from './world/backdrop.js';
 import { settleProps } from './world/settle.js';
+import { solidifyIdle } from './world/solidify.js';
+import { busRoads } from './game/bus/roads.js';
 import { SunGlare } from './world/sunglare.js';
 import { PisteLights } from './world/pistelights.js'; // static: installs its light-pool shader chunk before any material compiles
 import { Headlamp } from './world/headlamp.js';
@@ -466,7 +468,19 @@ async function boot() {
   }
   // props onto the ground as drawn, now that every terrain edit is in (world/settle.js: no floating downhill sides)
   if (new URLSearchParams(location.search).has('settle')) console.info('Props settled', JSON.stringify(settleProps([village.group, decor.group, dressing, jobs.group]))); // (off until checked in game: ?settle)
-  // graphics preset for the hand-placed props (LOD distances, small-on-screen culling, shadow range)
+  // nothing drawn can be walked, skied or driven through: colliders for whatever part of a village building or prop no
+  // collider covered yet (porches, balconies, stairs, annexes, sheds, stall and bench ends...: world/solidify.js), in
+  // slices after the boot; the doors and counters you walk up to stay clear (the chalets are left to chalets.js)
+  {
+    const lot = (name) => scene.getObjectByName(name);
+    const H = busRoads.hospital, hosp = H ? [{ x: H.ex, z: H.ez }, { x: H.ex + (H.dirx || 0) * 2, z: H.ez + (H.dirz || 0) * 2 }] : []; // (its door step, where you come round)
+    const doors = [...village.interactables, carRental?.door, prison?.door, ...hosp].filter(Boolean).map((d) => ({ x: d.x, z: d.z, r: 1.2 }));
+    solidifyIdle([
+      { root: village.group, area: 'village', tiles: true }, { root: decor.group, area: 'village decor', tiles: true }, { root: dressing, area: 'resort dressing' },
+      { root: lot('medical-centre'), area: 'medical centre' }, { root: lot('car-rental'), area: 'Autohaus' }, { root: prison?.group, area: 'police station' },
+      { root: parking?.group, area: 'car parks' }, { root: skibus?.group, area: 'bus stops' }, { root: jobs?.group, area: 'job boards' },
+    ], colliders, { keepOut: doors }).then((r) => console.info('Solid props: +' + r.added + ' colliders', JSON.stringify(r.areas))).catch((e) => console.warn('solid props', e));
+  }  // graphics preset for the hand-placed props (LOD distances, small-on-screen culling, shadow range)
   const own = new Set([terrain.group, backdrop.group, pisteLights.group, player.rig.root, player.rig.gear, seller.root, seller.gear]);
   for (const o of scene.children) if ((o.isGroup || o.isMesh) && !own.has(o) && !o.isInstancedMesh) propDetail.add(o);
   // the one-off outfit zone analysis of both player bodies runs behind the loading bar (no hitch on MAN / WOMAN)

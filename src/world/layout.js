@@ -136,6 +136,24 @@ function sampleAt(pts, acc, s) {
   return { x: a[0] + (b[0] - a[0]) * t, z: a[1] + (b[1] - a[1]) * t, dx: (b[0] - a[0]) / l, dz: (b[1] - a[1]) / l };
 }
 // distance from (x, z) to segment a-b
+// The edge line between two consecutive run samples (centre points qa / qb, edge points ca / cb with their run-ward
+// unit normals nx, nz; `extra` m further out), round the corner: on the outside of a sharp corner of a run's polyline
+// two edge samples lie up to 25 m apart and the straight net / fence between them cut up to 2 m into the run. Pushes
+// the in-between points ([x, z, nx, nz], at most 2.5 m apart) onto `out`.
+function edgeArc(qa, ca, qb, cb, extra, out) {
+  const ax = ca.x - ca.nx * extra, az = ca.z - ca.nz * extra, bx = cb.x - cb.nx * extra, bz = cb.z - cb.nz * extra;
+  const m = Math.ceil(Math.hypot(bx - ax, bz - az) / 2.5);
+  if (m < 2) return;
+  const ra = Math.hypot(ax - qa.x, az - qa.z), rb = Math.hypot(bx - qb.x, bz - qb.z);
+  const a0 = Math.atan2(az - qa.z, ax - qa.x);
+  let da = Math.atan2(bz - qb.z, bx - qb.x) - a0;
+  while (da > Math.PI) da -= 2 * Math.PI;
+  while (da < -Math.PI) da += 2 * Math.PI;
+  for (let i = 1; i < m; i++) {
+    const t = i / m, ang = a0 + da * t, r = ra + (rb - ra) * t, c = Math.cos(ang), sn = Math.sin(ang);
+    out.push([qa.x + (qb.x - qa.x) * t + c * r, qa.z + (qb.z - qa.z) * t + sn * r, -c, -sn]);
+  }
+}
 function segDist(x, z, ax, az, bx, bz) {
   const ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1;
   const t = clamp(((x - ax) * ex + (z - az) * ez) / l2, 0, 1);
@@ -1269,9 +1287,13 @@ function planNets() {
     }
     parts.push([a, line.length - 1]);
     for (const [p0, p1] of lane ? parts : [best]) {
-      const part = line.slice(p0, p1 + 1);
+      const part = [];
+      for (let i = p0; i <= p1; i++) {
+        part.push(line[i]);
+        if (i < p1) edgeArc(samples[i0 + i].q, samples[i0 + i].sides[side], samples[i0 + i + 1].q, samples[i0 + i + 1].sides[side], extra, part);
+      }
       // (s0 / s1: the stretch of the run it guards, in m along the run: planPisteFences fences the rest)
-      if ((part.length - 1) * NET_STEP >= 20) layout.nets.push({ type, line: part, owner, arena, lane, row, side, s0: samples[i0 + p0].s, s1: samples[i0 + p1].s });
+      if ((p1 - p0) * NET_STEP >= 20) layout.nets.push({ type, line: part, owner, arena, lane, row, side, s0: samples[i0 + p0].s, s1: samples[i0 + p1].s });
     }
   };
 
@@ -1288,7 +1310,8 @@ function planNets() {
       const inA = (i) => A.some(([a, b]) => i >= a && i <= b);
       const B = intervals(n, (i) => S[i].sides[side].hz >= 1 || S[i].sides[side].bend, (i) => blocked(i) || inA(i), pad, 25);
       for (const iv of A) emit(S, side, iv, 'A', p.name, false, 0);
-      for (const iv of B) emit(S, side, iv, 'B', p.name, false, 0);
+      // (a B-net next to an A-net joins it on the A-net's end post: they shared no sample, a 2 m gap)
+      for (const [i0, i1] of B) emit(S, side, [i0 > 0 && inA(i0 - 1) ? i0 - 1 : i0, i1 + 1 < n && inA(i1 + 1) ? i1 + 1 : i1], 'B', p.name, false, 0);
     }
   }
   // World Cup courses: B-nets both sides, all the way down; A-nets as a second row at the hazards
@@ -1451,7 +1474,9 @@ export function planPisteFences() {
         let j = i; while (j + 1 < n && on[j + 1] && (B[j + 1] ? 'B' : 'R') === type) j++;
         // (a fence joins the next one of the other type, or a hazard net, post to post: the line shares the end sample)
         const a = i > 0 && (covered[i - 1] || on[i - 1]) ? i - 1 : i;
-        let part = [];
+        // (and at its far end on to the first post of the hazard net that takes over there: it starts on that sample)
+        const b = j + 1 < n && covered[j + 1] && !on[j + 1] ? j + 1 : j;
+        let part = [], skipped = 0, lastK = -1;
         const flush = () => {
           if ((part.length - 1) * STEP >= 10) {
             fences.push({ type, fence: true, line: part, owner: p.name, diff: p.diff, side, arena: false, lane: false, row: 0, bowl: type === 'R' && bowl[i] === 1 });
@@ -1459,18 +1484,55 @@ export function planPisteFences() {
           }
           part = [];
         };
-        for (let k = a; k <= j; k++) {
+        for (let k = a; k <= b; k++) {
           const c = S[k].sides[side];
           if (part.length) {
             const [px, pz] = part.at(-1), qx = S[k].q.x - S[k - 1].q.x, qz = S[k].q.z - S[k - 1].q.z;
-            if ((c.x - px) * qx + (c.z - pz) * qz < 0.25 * STEP * Math.hypot(qx, qz)) flush();
+            if ((c.x - px) * qx + (c.z - pz) * qz < 0.25 * STEP * Math.hypot(qx, qz)) {
+              // the inside of a tight bend folds back on itself: skip the folded points and carry on from the last
+              // good one once the edge runs forward again (it used to break off there, leaving a gap at every
+              // tight bend), unless the fold goes on for over 20 m or the short cut would cross a run / pad / station
+              if (++skipped <= 10) continue;
+              flush();
+            } else if (skipped && Math.hypot(c.x - px, c.z - pz) > 2.5 && [0.25, 0.5, 0.75].some((t) => blockedAt(px + (c.x - px) * t, pz + (c.z - pz) * t))) flush();
+            skipped = 0;
+          }
+          if (part.length && lastK === k - 1) {
+            const arc = [];
+            edgeArc(S[k - 1].q, S[k - 1].sides[side], S[k].q, c, 0, arc);
+            // (round the corner past another run, a pad or a station: the fence breaks there rather than cut across)
+            for (const pt of arc) if (!blockedAt(pt[0], pt[1])) part.push(pt); else if (part.length) flush();
           }
           part.push([c.x, c.z, c.nx, c.nz]);
+          lastK = k;
+        }
+        // (folded right to its end: it still ends on its last sample, where the next fence or net starts)
+        if (skipped && part.length) {
+          const c = S[b].sides[side], [px, pz] = part.at(-1);
+          if (Math.hypot(c.x - px, c.z - pz) <= 2.5 || ![0.25, 0.5, 0.75].some((t) => blockedAt(px + (c.x - px) * t, pz + (c.z - pz) * t))) part.push([c.x, c.z, c.nx, c.nz]);
         }
         flush();
         i = j;
       }
     }
+  }
+  // close the slivers: a fence that ends within 2.5 m of where the next fence or hazard net on the same edge starts
+  // (or a hazard net ends) runs on to that post (same kind: the two become one); a break that narrow is no way
+  // through, only a hole in the line
+  const tip = (l, end) => (end ? l.at(-1) : l[0]);
+  const near = (u, v) => { const d = Math.hypot(u[0] - v[0], u[1] - v[1]); return d > 0.02 && d < 2.5; };
+  const hazard = layout.nets.filter((h) => !h.fence && !h.arena && !h.lane && !h.row);
+  for (let k = 0; k < fences.length; k++) {
+    const f = fences[k];
+    for (let guard = 0; guard < 8; guard++) {
+      const nx = fences.find((o) => o !== f && o.owner === f.owner && o.side === f.side && near(tip(f.line, true), tip(o.line, false)));
+      if (nx && nx.type === f.type) { const ni = fences.indexOf(nx); f.line.push(...nx.line.slice(1)); fences.splice(ni, 1); if (ni < k) k--; stats.joined = (stats.joined || 0) + 1; continue; }
+      const h = nx || hazard.find((o) => o.owner === f.owner && o.side === f.side && near(tip(f.line, true), tip(o.line, false)));
+      if (h) { f.line.push(tip(h.line, false)); stats.joined = (stats.joined || 0) + 1; }
+      break;
+    }
+    const hp = hazard.find((o) => o.owner === f.owner && o.side === f.side && near(tip(o.line, true), tip(f.line, false)));
+    if (hp) { f.line.unshift(tip(hp.line, true)); stats.joined = (stats.joined || 0) + 1; }
   }
   layout.nets.push(...fences);
   // a narrow tree-free strip just outside every fence, so no trunk stands in it (coarse: 24 m segments, so the

@@ -12,6 +12,7 @@ import { fitModel, makeLOD } from '../../core/assets.js';
 import { mulberry32 } from '../../core/noise.js';
 import { boulderKit, withGround, BOULDER_VARIANTS } from '../../world/boulders.js';
 import { canvasTexture, footprintMin, footprintMax, meshGround, FONT } from './kit.js';
+import { solidify } from '../../world/solidify.js';
 
 // flags: [background, foreground, text] x 4
 export const LOOKS = {
@@ -283,6 +284,13 @@ export function buildCourseScenery(course, models, group) {
     console.warn('Course look: scenery failed for', course.id, e);
   }
   group.add(g);
+  // solid (Oct 30, the user: "make sure you can't go through any objects"): the huts, the hotel chalet, the seracs,
+  // snowmen, firewood, the fire pit, benches, stalls, the stage's pylons... get colliders sized to what is drawn
+  // (world/solidify.js), registered with the course's other props (course.solids: freeworld.js puts them in the shared
+  // colliders while the course stands)
+  if (course.solids) {
+    try { course.sceneryStats = solidify([{ root: g, area: 'course scenery' }], course.solids, { out: course.solids }); } catch (e) { console.warn('Course look: scenery colliders failed for', course.id, e); }
+  }
 }
 
 // --- Sunny Meadow: chalets above the finish, a sun terrace, snowmen

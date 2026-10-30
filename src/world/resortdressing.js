@@ -17,6 +17,7 @@ import { sponsorAtlas, bannerUV, pickBanner } from './sponsors.js';
 import { quality, onQualityChange } from '../engine/quality.js';
 import { propSeats, registerBench } from '../game/seating.js';
 import { buildPisteFences } from './pistefence.js';
+import { meshGround } from '../modes/parkour/kit.js';
 
 const HAS_DOM = typeof document !== 'undefined';
 export const SIGN_FONT = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
@@ -315,6 +316,8 @@ const NET = {
   A: { h: 3.6, post: 5.0, lean: 0.45, sag: 0.1, color: '#e0281d', hem: '#b81e16', postR: 0.055, postH: 3.85, cap: '#ff6a12' },
 };
 export const NET_TYPES = NET;
+// the catch angle along a panel (t 0..1 post to post): none at the posts, full a little way in
+const netLeanW = (t) => Math.min(1, Math.sin(Math.PI * Math.min(1, Math.max(0, t))) * 2.2);
 const POST_COL = '#26282b', ROPE_COL = '#2b2d30';
 const NET_CHUNK = 256, NET_FAR = 470;
 
@@ -467,7 +470,7 @@ export function buildNetRuns(runs) {
     const pts = line.map((p) => [p[0], p[1]]), acc = arcLengths(pts), L = acc.at(-1);
     if (L < 4) continue;
     stats.runs++; stats.length += L;
-    const rs = { owner: run.owner || '', type: run.type, length: L, posts: 0, panels: 0, maxPostErr: 0, maxGap: 0, minGap: Infinity, maxSlope: 0 };
+    const rs = { owner: run.owner || '', type: run.type, side: run.side, length: L, posts: 0, panels: 0, maxPostErr: 0, maxGap: 0, minGap: Infinity, maxSlope: 0, endGap: 0, footFloat: 0, postFloat: 0, midFloat: 0, midBuried: 0 };
     // posts: evenly along the run, nudged toward the run (never past 0.6 m from the groomed edge) when the
     // ground is too steep to plant one
     const n = Math.max(1, Math.round(L / T.post)), posts = [];
@@ -476,14 +479,19 @@ export function buildNetRuns(runs) {
       let i = 1; while (i < line.length - 1 && acc[i] < s) i++;
       const nx = line[i][2], nz = line[i][3];
       let x = q.x, z = q.z, sl = slopeAt(x, z);
-      for (let m = 1; m <= 3 && sl > 0.9 && (nx || nz); m++) {
+      // (never the run's end posts: the next fence or net joins on that very post)
+      for (let m = 1; m <= 3 && sl > 0.9 && (nx || nz) && k > 0 && k < n; m++) {
         const tx = q.x + nx * 0.2 * m, tz = q.z + nz * 0.2 * m, ts = slopeAt(tx, tz);
         if (ts < sl) { x = tx; z = tz; sl = ts; }
       }
-      const g = world.height(x, z);
-      posts.push({ x, z, g, y: g - 0.25, top: g + T.postH, nx, nz, end: k === 0 || k === n, dx: q.dx, dz: q.dz });
+      // standing on the snow as drawn (the 2 m terrain mesh, which leaves the analytic surface on bumps and cut
+      // edges: posts on world.height floated up to 2.8 m), the foot 0.25 m into it (deeper where the exact surface
+      // drops below the drawn one)
+      const g = meshGround(x, z);
+      posts.push({ x, z, g, y: Math.min(g, world.height(x, z)) - 0.25, top: g + T.postH, nx, nz, end: k === 0 || k === n, dx: q.dx, dz: q.dz });
       rs.maxSlope = Math.max(rs.maxSlope, sl);
     }
+    rs.ends = [[posts[0].x, posts[0].z], [posts.at(-1).x, posts.at(-1).z]];
     const colCap = new THREE.Color(T.cap);
     // sponsor banners every few panels on the run side (only where the side facing the run is known)
     let seed = Math.abs(Math.floor(line[0][0] * 7.3 + line[0][1] * 13.1)) % 2147483646 + 1;
@@ -499,7 +507,8 @@ export function buildNetRuns(runs) {
       ch.minx = Math.min(ch.minx, p.x); ch.maxx = Math.max(ch.maxx, p.x); ch.minz = Math.min(ch.minz, p.z); ch.maxz = Math.max(ch.maxz, p.z);
       stats.posts++; rs.posts++;
       // planted at the snow surface at its centre (the base sits 0.25 m below it)
-      const err = Math.abs(p.y + 0.25 - world.height(p.x, p.z));
+      const err = Math.abs(p.g - meshGround(p.x, p.z));
+      rs.postFloat = Math.max(rs.postFloat, p.y - meshGround(p.x, p.z));
       rs.maxPostErr = Math.max(rs.maxPostErr, err);
     }
     // panels between consecutive posts
@@ -520,22 +529,31 @@ export function buildNetRuns(runs) {
         const nx = a.nx + (b.nx - a.nx) * t, nz = a.nz + (b.nz - a.nz) * t, nl = Math.hypot(nx, nz);
         const ux = nl > 0.01 ? nx / nl : -(b.z - a.z) / len, uz = nl > 0.01 ? nz / nl : (b.x - a.x) / len;
         sideU.push([ux, uz]);
-        // the panel's bottom edge is pulled toward the run (the catch angle) and follows the snow
-        const bx = px + ux * T.lean, bz = pz + uz * T.lean;
-        const by = world.height(bx, bz) + 0.1;
+        // the panel's bottom edge is pulled toward the run (the catch angle) between the posts, its side edges
+        // hanging straight down the posts (a full lean right up to them left the foot 0.25-0.4 m off its post), and
+        // follows the snow as drawn
+        const lw = T.lean * netLeanW(t), bx = px + ux * lw, bz = pz + uz * lw;
+        const by = meshGround(bx, bz) + 0.08;
         const ty = a.top + (b.top - a.top) * t - 0.08 - T.sag * 4 * t * (1 - t);
         // gap under the bottom edge, also checked halfway between the columns
         if (j > 0) {
           const q = rowB[j - 1], mx = (q.x + bx) / 2, mz = (q.z + bz) / 2;
-          const gap = (q.y + by) / 2 - world.height(mx, mz);
+          const gap = (q.y + by) / 2 - meshGround(mx, mz);
           rs.maxGap = Math.max(rs.maxGap, gap); rs.minGap = Math.min(rs.minGap, gap);
         }
-        rs.maxGap = Math.max(rs.maxGap, 0.1); rs.minGap = Math.min(rs.minGap, 0.1);
+        rs.maxGap = Math.max(rs.maxGap, 0.08); rs.minGap = Math.min(rs.minGap, 0.08);
         const f = 1 - Math.min(0.45, 0.07 / (ty - by));
         rowB.push({ x: bx, y: by, z: bz });
         rowH.push({ x: bx + (px - bx) * f, y: by + (ty - by) * f, z: bz + (pz - bz) * f });
         rowT.push({ x: px, y: ty, z: pz });
         rowR.push({ x: px, y: ty + 0.028, z: pz });
+      }
+      // (Node checks) the panel's side edges against its posts (beyond the post radius), its foot against the snow as drawn
+      for (const [j, P] of [[0, a], [cols, b]]) for (const q of [rowB[j], rowT[j]]) rs.endGap = Math.max(rs.endGap, Math.hypot(q.x - P.x, q.z - P.z) - T.postR);
+      for (let j = 0; j <= cols; j++) {
+        const d = rowB[j].y - meshGround(rowB[j].x, rowB[j].z);
+        if (j === 0 || j === cols) rs.footFloat = Math.max(rs.footFloat, d);
+        rs.midFloat = Math.max(rs.midFloat, d); rs.midBuried = Math.max(rs.midBuried, -d);
       }
       // mesh body (bottom edge up to the top hem): uv in metres / 0.5 (one texture tile = 0.5 m)
       const ia = [], ib = [];
@@ -565,7 +583,7 @@ export function buildNetRuns(runs) {
         const vary = 0.7 + 0.6 * hash2(Math.floor(p.x * 0.7), Math.floor(p.z * 0.7), 3);
         prof.forEach(([o, hgt], r) => {
           const x = p.x + ux * o, z = p.z + uz * o;
-          rows[r].push(S.v(x, world.height(x, z) + (hgt > 0 ? hgt * taper * vary : hgt), z, r === 2 ? colSnow : colSnow2));
+          rows[r].push(S.v(x, meshGround(x, z) + (hgt > 0 ? hgt * taper * vary : hgt), z, r === 2 ? colSnow : colSnow2));
         });
       }
       for (let r = 0; r < prof.length - 1; r++) for (let j = 0; j < cols; j++) S.quad(rows[r][j], rows[r][j + 1], rows[r + 1][j], rows[r + 1][j + 1]);
@@ -615,7 +633,7 @@ function netBanner(B, a, b, len, T, bh, index) {
     const px = a.x + (b.x - a.x) * t, pz = a.z + (b.z - a.z) * t;
     const nx = a.nx + (b.nx - a.nx) * t, nz = a.nz + (b.nz - a.nz) * t, nl = Math.hypot(nx, nz) || 1;
     const ux = nx / nl, uz = nz / nl;
-    const bx = px + ux * T.lean, bz = pz + uz * T.lean, by = world.height(bx, bz) + 0.1;
+    const lw = T.lean * netLeanW(t), bx = px + ux * lw, bz = pz + uz * lw, by = meshGround(bx, bz) + 0.08;
     const ty = a.top + (b.top - a.top) * t - 0.08 - T.sag * 4 * t * (1 - t);
     const span = ty - by, f0 = 0.13 / span, f1 = Math.min(0.13 + bh, span - 0.16) / span;
     const at = (f, off) => [bx + (px - bx) * f + ux * off, by + (ty - by) * f, bz + (pz - bz) * f + uz * off];

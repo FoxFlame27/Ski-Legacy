@@ -20,6 +20,7 @@
 // the colliders pays for POOL boxes, not thousands.
 import * as THREE from 'three';
 import { world } from './world.js';
+import { meshGround } from '../modes/parkour/kit.js';
 
 const USE_GLB_STAKES = false;
 const CELL = 256, FAR = 480, REPACK = 40;
@@ -52,19 +53,34 @@ function quadGeo(rows, cols) { // rows: [[x, y, z, r, g, b, u, v] x4]...
   return g;
 }
 const rgb = (hex) => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
+// The catch angle: the net's foot is pulled toward the run in the middle of each span, but its side edges hang
+// straight down the posts (a lean that was the same right up to the posts left the net's foot 0.25 m off its
+// post, Oct 30, the user: "the ski nets and poles don't connect"). z (m, toward the run) of the net at (x, y):
+const NCOL = 8;
+const leanW = (x) => Math.min(1, Math.sin(Math.PI * Math.min(1, Math.max(0, x))) * 2.2);
+function netZ(x, y, T, type) { return type === 'R' ? 0 : T.lean * leanW(x) * Math.max(0, 1 - y / 0.955); }
 function panelGeo() {
-  // a 3.5 x 1.6 m panel: one net texture tile is 0.5 m
-  return quadGeo([[[0, 0, 0, 1, 1, 1, 0, 0], [1, 0, 0, 1, 1, 1, 7, 0], [0, 0.955, 0, 1, 1, 1, 0, 3.05], [1, 0.955, 0, 1, 1, 1, 7, 3.05]]], false);
+  // a 3.5 x 1.6 m panel: one net texture tile is 0.5 m; NCOL columns so the foot can bow out between the posts
+  const B = FENCE_TYPES.B, rows = [];
+  for (let j = 0; j < NCOL; j++) {
+    const x0 = j / NCOL, x1 = (j + 1) / NCOL;
+    rows.push([[x0, 0, netZ(x0, 0, B), 1, 1, 1, 7 * x0, 0], [x1, 0, netZ(x1, 0, B), 1, 1, 1, 7 * x1, 0], [x0, 0.955, 0, 1, 1, 1, 7 * x0, 3.05], [x1, 0.955, 0, 1, 1, 1, 7 * x1, 3.05]]);
+  }
+  return quadGeo(rows, false);
 }
-function trimGeo() {
-  const hem = rgb('#e8470f'), rope = rgb('#2b2d30'), snow = rgb('#eef2f7'), snow2 = rgb('#e3e9f2');
+// the hem, the top rope and the wind drift banked against the net's foot (toward the run); drift only: under the
+// Meshy B-net section (it brings its own hem and rope)
+function trimGeo(driftOnly = false) {
+  const B = FENCE_TYPES.B, hem = rgb('#e8470f'), rope = rgb('#2b2d30'), snow = rgb('#eef2f7'), snow2 = rgb('#e3e9f2');
   const q = (y0, y1, z0, z1, col) => [[0, y0, z0, ...col], [1, y0, z0, ...col], [0, y1, z1, ...col], [1, y1, z1, ...col]];
-  const rows = [q(0.955, 0.985, 0, 0, hem), q(0.985, 1.005, 0, 0, rope), q(1.005, 1.005, -0.018, 0.018, rope)];
-  // the wind drift banked against the foot (toward the run)
+  const rows = driftOnly ? [] : [q(0.955, 0.985, 0, 0, hem), q(0.985, 1.005, 0, 0, rope), q(1.005, 1.005, -0.018, 0.018, rope)];
   const prof = [[-0.45, -0.03, snow2], [-0.1, 0.07, snow], [0.25, 0.085, snow], [0.6, -0.03, snow2]];
-  for (let r = 0; r < prof.length - 1; r++) {
-    const [z0, y0, c0] = prof[r], [z1, y1, c1] = prof[r + 1];
-    rows.push([[0, y0, z0, ...c0], [1, y0, z0, ...c0], [0, y1, z1, ...c1], [1, y1, z1, ...c1]]);
+  for (let j = 0; j < NCOL; j++) {
+    const x0 = j / NCOL, x1 = (j + 1) / NCOL, o0 = netZ(x0, 0, B), o1 = netZ(x1, 0, B);
+    for (let r = 0; r < prof.length - 1; r++) {
+      const [z0, y0, c0] = prof[r], [z1, y1, c1] = prof[r + 1];
+      rows.push([[x0, y0, z0 + o0, ...c0], [x1, y0, z0 + o1, ...c0], [x0, y1, z1 + o0, ...c1], [x1, y1, z1 + o1, ...c1]]);
+    }
   }
   return quadGeo(rows, true);
 }
@@ -111,14 +127,47 @@ function glbParts(gltf, dequantize, name, maxTris, norm) {
     for (let i = 0; i < a.count; i++) if (a.getY(i) < y0) { shaft.x += a.getX(i); shaft.z += a.getZ(i); n++; }
   }
   if (n) shaft.divideScalar(n); else box.getCenter(shaft);
-  const M = norm(box, size, shaft);
+  // the lowest point of the middle 60 % of its length (a net section: the foot of the net between its posts)
+  let midMinY = Infinity;
+  for (const p of parts) {
+    const a = p.geo.attributes.position;
+    for (let i = 0; i < a.count; i++) { const x = (a.getX(i) - box.min.x) / (size.x || 1); if (x > 0.2 && x < 0.8) midMinY = Math.min(midMinY, a.getY(i)); }
+  }
+  if (!Number.isFinite(midMinY)) midMinY = box.min.y;
+  const M = norm(box, size, shaft, midMinY);
   for (const p of parts) { p.geo.applyMatrix4(M); p.geo.computeBoundingSphere(); }
   return parts;
+}
+// a post at (x, z) on the snow as it is drawn (the 2 m terrain mesh: between its vertices the analytic surface can
+// bulge above or sag below it, and a post set on world.height floated up to 1.3 m over cut edges), its foot 0.25 m
+// into the snow (deeper where the exact surface drops below the drawn one)
+function postAt(x, z, nx, nz) {
+  const g = meshGround(x, z);
+  return { x, z, g, foot: Math.min(g, world.height(x, z)) - 0.25, nx, nz };
 }
 function postGeo() {
   const g = new THREE.CylinderGeometry(0.9, 1, 1, 6, 1, false);
   g.translate(0, 0.5, 0);
   return g;
+}
+
+// (Node checks) how well one span's net meets its two posts and the snow as drawn: endGap = horizontal distance
+// from the net's side edges (foot and top) to the post axes beyond the post radius; footFloat / postFloat = net foot
+// / post foot above the drawn snow at the posts; midFloat / midBuried = the net's bottom edge over / under the snow
+// between the posts
+const _pv = new THREE.Vector3(), NODE = typeof window === 'undefined';
+function measureSpan(fs, m, a, b, T, type) {
+  const at = (x, y) => _pv.set(x, y, netZ(x, y, T, type)).applyMatrix4(m);
+  for (const [x, P] of [[0, a], [1, b]]) for (const y of [0, type === 'R' ? 1 : 0.955]) {
+    const q = at(x, y);
+    fs.endGap = Math.max(fs.endGap, Math.hypot(q.x - P.x, q.z - P.z) - T.postR);
+    if (y === 0 && type !== 'R') fs.footFloat = Math.max(fs.footFloat, q.y - meshGround(q.x, q.z));
+  }
+  if (type === 'R') return;
+  for (let k = 1; k < 8; k++) {
+    const q = at(k / 8, 0), d = q.y - meshGround(q.x, q.z);
+    fs.midFloat = Math.max(fs.midFloat, d); fs.midBuried = Math.max(fs.midBuried, -d);
+  }
 }
 
 /**
@@ -130,7 +179,7 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
   const group = new THREE.Group();
   group.name = 'piste-fences';
   const cells = new Map(), colGrid = new Map();
-  const stats = { fences: 0, B: 0, R: 0, length: 0, panels: 0, ropes: 0, posts: 0, colliders: 0, cells: 0, drawCalls: 4, pool: POOL };
+  const stats = { fences: 0, B: 0, R: 0, length: 0, panels: 0, ropes: 0, posts: 0, colliders: 0, cells: 0, drawCalls: 4, pool: POOL, perFence: [] };
   const cellAt = (x, z) => {
     const k = Math.floor(x / CELL) + ',' + Math.floor(z / CELL);
     let c = cells.get(k);
@@ -149,6 +198,8 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
     const pts = line.map((p) => [p[0], p[1]]), acc = arcLengths(pts), L = acc.at(-1);
     if (L < 3) continue;
     stats.fences++; stats[f.type === 'R' ? 'R' : 'B']++; stats.length += L;
+    const fs = { owner: f.owner, type: f.type, side: f.side, endGap: 0, footFloat: 0, postFloat: 0, midFloat: 0, midBuried: 0 };
+    stats.perFence.push(fs);
     const n = Math.max(1, Math.round(L / T.post)), posts = [];
     let i = 1;
     for (let k = 0; k <= n; k++) {
@@ -156,19 +207,30 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
       while (i < line.length - 1 && acc[i] < s) i++;
       const a = line[i - 1], b = line[i], t = Math.min(1, Math.max(0, (s - acc[i - 1]) / ((acc[i] - acc[i - 1]) || 1)));
       const x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t;
-      posts.push({ x, z, g: world.height(x, z), nx: a[2] + (b[2] - a[2]) * t, nz: a[3] + (b[3] - a[3]) * t });
+      posts.push(postAt(x, z, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t));
     }
+    // an extra post wherever the drawn snow between two posts leaves the straight line between their feet by more
+    // than 0.15 m (a bump, a berm, a dip), so the net's foot (and the rope) keeps to the snow
+    for (let k = 1; k < posts.length; k++) {
+      const a = posts[k - 1], b = posts[k], len = Math.hypot(b.x - a.x, b.z - a.z);
+      if (len < 1.2) continue;
+      let dev = 0;
+      for (let t = 0.125; t < 1; t += 0.125) dev = Math.max(dev, Math.abs(meshGround(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t) - (a.g + (b.g - a.g) * t)));
+      if (dev > 0.15) { posts.splice(k, 0, postAt((a.x + b.x) / 2, (a.z + b.z) / 2, (a.nx + b.nx) / 2, (a.nz + b.nz) / 2)); k--; }
+    }
+    fs.ends = [[posts[0].x, posts[0].z], [posts.at(-1).x, posts.at(-1).z]];
+    for (const p of posts) fs.postFloat = Math.max(fs.postFloat, p.foot - meshGround(p.x, p.z));
     // posts (planted 0.25 m into the snow); the rope line's poles alternate orange / white
     // (the Meshy stakes: turned along the line, uniformly scaled to the post height, a little jitter)
     posts.forEach((p, k) => {
       const c = cellAt(p.x, p.z);
-      m.compose(pv.set(p.x, p.g - 0.25, p.z), q.identity(), sv.set(T.postR, T.postH + 0.25, T.postR));
+      m.compose(pv.set(p.x, p.foot, p.z), q.identity(), sv.set(T.postR, p.g + T.postH - p.foot, T.postR));
       if (f.type === 'R') {
         c.postR.push(...m.elements);
         c.postRCol.push(...(k % 2 ? colW : colR));
         const a = posts[Math.max(0, k - 1)], b = posts[Math.min(posts.length - 1, k + 1)];
         q.setFromAxisAngle(_up, Math.atan2(-(b.z - a.z), b.x - a.x) + ((k * 7) % 5 - 2) * 0.06);
-        const H = T.postH + 0.25;
+        const H = p.g + T.postH - p.foot;
         m.compose(pv, q, sv.set(H, H, H));
         (k % 2 ? c.poleB : c.poleA).push(...m.elements);
       } else {
@@ -177,21 +239,37 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
       }
       stats.posts++;
     });
-    // spans: a unit quad sheared onto posts a -> b (bottom pulled toward the run by the catch angle)
+    // spans: the unit panel stretched onto posts a -> b (its foot bowed toward the run between them, netZ)
     for (let k = 1; k < posts.length; k++) {
       const a = posts[k - 1], b = posts[k];
       let nx = a.nx + b.nx, nz = a.nz + b.nz;
       const nl = Math.hypot(nx, nz);
       if (nl < 1e-3) { const dl = Math.hypot(b.x - a.x, b.z - a.z) || 1; nx = -(b.z - a.z) / dl; nz = (b.x - a.x) / dl; } else { nx /= nl; nz /= nl; }
-      const lean = T.lean, base = f.type === 'R' ? 0 : 0.05;
+      const base = f.type === 'R' ? 0 : 0.05;
+      // the bow (scales local z: the foot's catch angle and the drift with it): as much as the cross slope allows
+      // with the foot still within 12 cm of the drawn snow (on a steep side slope it closes up toward the posts)
+      let bow = 1;
+      if (f.type !== 'R') {
+        let best = Infinity;
+        for (const sc of [1, 0.7, 0.45, 0.25, 0]) {
+          let dev = 0;
+          for (const t of [0.25, 0.5, 0.75]) {
+            const o = T.lean * leanW(t) * sc;
+            dev = Math.max(dev, Math.abs(a.g + (b.g - a.g) * t + base - meshGround(a.x + (b.x - a.x) * t + nx * o, a.z + (b.z - a.z) * t + nz * o)));
+          }
+          if (dev < best - 0.02) { best = dev; bow = sc; }
+          if (dev <= 0.12) break;
+        }
+      }
       m.set(
-        b.x - a.x, -nx * lean, nx, a.x + nx * lean,
+        b.x - a.x, 0, nx * bow, a.x,
         b.g - a.g, T.h, 0, a.g + base,
-        b.z - a.z, -nz * lean, nz, a.z + nz * lean,
+        b.z - a.z, 0, nz * bow, a.z,
         0, 0, 0, 1,
       );
       const c = cellAt((a.x + b.x) / 2, (a.z + b.z) / 2);
       if (f.type === 'R') { c.rope.push(...m.elements); stats.ropes++; } else { c.panel.push(...m.elements); stats.panels++; }
+      if (NODE) measureSpan(fs, m, a, b, T, f.type);
     }
     // colliders: one thin box per straight stretch of up to ~12 m
     for (let a0 = 0; a0 < posts.length - 1;) {
@@ -287,11 +365,15 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
     loadGLB('piste/bnet_panel'), USE_GLB_STAKES ? loadGLB('piste/rope_pole') : null, USE_GLB_STAKES ? loadGLB('piste/flag_pole') : null,
   ]).then(([gPanel, gRope, gFlag]) => {
     const B = FENCE_TYPES.B;
-    // the section: x 0..1 across the span, y 1 = the net height (whole model B.postH tall, its foot 0.2 m into
-    // the snow), z in metres toward the run
-    const panelParts = glbParts(gPanel, dequantize, 'panel', 600, (box, size) => new THREE.Matrix4()
-      .makeScale(1 / size.x, B.postH / size.y / B.h, B.postH / size.y)
-      .multiply(new THREE.Matrix4().makeTranslation(-box.min.x, -box.min.y - 0.2 * size.y / B.postH, -(box.min.z + box.max.z) / 2)));
+    // the section: x 0..1 across the span (its posts at the span's ends), y in units of the net height; scaled so
+    // the foot of its net (netY: it hangs from 30 % of the model's height) reaches the snow (2 cm over it) and its
+    // posts' tops stand B.postH over the snow, the posts running on down into it; z in metres toward the run
+    const panelParts = glbParts(gPanel, dequantize, 'panel', 600, (box, size, shaft, netY) => {
+      const bot = -0.03, top = B.postH - 0.05, k = (top - bot) / Math.max(1e-6, box.max.y - netY);
+      return new THREE.Matrix4().makeTranslation(0, bot / B.h, 0)
+        .multiply(new THREE.Matrix4().makeScale(1 / size.x, k / B.h, k))
+        .multiply(new THREE.Matrix4().makeTranslation(-box.min.x, -netY, -(box.min.z + box.max.z) / 2));
+    });
     if (panelParts) {
       glb.panel = panelParts.map((p, i) => {
         p.mat.side = THREE.DoubleSide;
@@ -299,7 +381,9 @@ export function buildPisteFences(fences, { netMaterial } = {}) {
         im.instanceMatrix = panel.instanceMatrix;
         return im;
       });
-      panel.visible = trim.visible = false;
+      panel.visible = false;
+      trim.geometry.dispose();
+      trim.geometry = trimGeo(true); // (the drift stays: the section brings its own hem and rope)
     }
     // the stakes: height 1 (the instance scales it to the post height), centred on the shaft
     const stake = (g, name) => {

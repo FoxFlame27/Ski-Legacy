@@ -8,6 +8,11 @@ import { smoothstep, lerp } from '../core/noise.js';
 const DAY_SECONDS = 16 * 60; // real seconds for a full 24h day (1 game hour = 40s)
 
 // Weather types the sky drifts between automatically. snow = snowfall, cloud = overcast, mist = fog banks.
+// (Oct 30 2026, the user approved five more, "but don't go over the top with weather": all subtle and rare, and
+// "no closing ski pistes": weather never closes a piste or a lift. Their extras, each 0..1 and eased in update():
+// wind = gusts (sideways snow, a barely felt push on the skis, louder wind), clear = föhn's far views (less haze),
+// wet = sleet below the rain line near the village, frost = freezing fog's rime tint on the trees, sea = the sea of
+// clouds (the overcast deck low in the valley, sunny above it; atmosphere.js).)
 export const WEATHER = {
   clear:    { label: 'Clear',         snow: 0,    cloud: 0,    mist: 0.1 },
   flurries: { label: 'Snow flurries', snow: 0.34, cloud: 0.3,  mist: 0.15 }, // sun and snow at once
@@ -15,19 +20,50 @@ export const WEATHER = {
   light:    { label: 'Light snow',    snow: 0.55, cloud: 0.75, mist: 0.3 },
   heavy:    { label: 'Heavy snow',    snow: 1,    cloud: 1,    mist: 0.45 },
   mist:     { label: 'Misty',         snow: 0,    cloud: 0.45, mist: 1 },
+  // ("strong wind, snow blowing sideways and fast", short and "you can still see far enough to ski": no whiteout)
+  blizzard: { label: 'Blizzard',      snow: 0.9,  cloud: 1,    mist: 0.5,  wind: 1 },
+  // ("warm, very windy, crystal clear, far views"; the snow a touch heavier and slower)
+  foehn:    { label: 'Föhn',          snow: 0,    cloud: 0.06, mist: 0,    wind: 0.6, clear: 1 },
+  // ("rain/sleet below a height near the village ... turning to wet snow higher up")
+  sleet:    { label: 'Wet snow',      snow: 0.45, cloud: 0.85, mist: 0.35, wet: 1 },
+  // ("thick low fog, white frost look on trees")
+  fog:      { label: 'Freezing fog / Raureif', snow: 0, cloud: 0.4, mist: 1, frost: 1 },
+  // ("a cloud layer filling the valley below a height, sunny above it")
+  inversion: { label: 'Sea of clouds', snow: 0,   cloud: 0,    mist: 0.12, sea: 1 },
 };
 // which weather tends to follow which (a loose real-world progression). Snow comes round regularly: some snow
 // is falling ~40 % of the time and nearly every half hour of play sees it (it used to take three lucky draws in
 // a row, so it hardly ever snowed), while the clear cobalt-sky weather of the logo stays the most common state
-// (~1/3 of the time).
-const NEXT = {
-  clear: ['clear', 'clear', 'flurries', 'cloudy', 'mist'],
+// (~1/3 of the time). (Oct 30 2026, the new ones kept rare: "blizzard only after heavy, föhn and inversion after
+// clear"; clear: 1 in 20 each, heavy: 1 in 4 blizzard, none holds on by itself. Mirrored by the server's
+// WEATHER_NEXT, server/lib/server.js: keep the two in step.)
+export const NEXT = {
+  clear: ['clear', 'clear', 'clear', 'clear', 'clear', 'clear', 'clear', 'clear', 'flurries', 'flurries', 'flurries', 'flurries', 'cloudy', 'cloudy', 'cloudy', 'mist', 'mist', 'mist', 'foehn', 'inversion'],
   flurries: ['clear', 'clear', 'light', 'flurries', 'cloudy'],
-  cloudy: ['light', 'clear', 'flurries', 'heavy', 'clear'],
-  light: ['heavy', 'cloudy', 'flurries', 'light', 'cloudy'],
-  heavy: ['light', 'cloudy'],
-  mist: ['clear', 'flurries', 'cloudy'],
+  cloudy: ['light', 'clear', 'flurries', 'heavy', 'clear', 'cloudy', 'light', 'clear', 'flurries', 'sleet'],
+  light: ['heavy', 'cloudy', 'flurries', 'light', 'cloudy', 'heavy', 'cloudy', 'flurries', 'light', 'sleet'],
+  heavy: ['light', 'cloudy', 'light', 'blizzard'],
+  mist: ['clear', 'flurries', 'cloudy', 'clear', 'flurries', 'cloudy', 'clear', 'flurries', 'cloudy', 'fog'],
+  blizzard: ['heavy', 'light'],
+  foehn: ['clear', 'clear', 'cloudy'],
+  sleet: ['light', 'cloudy', 'cloudy'],
+  fog: ['mist', 'cloudy', 'clear'],
+  inversion: ['clear', 'clear', 'mist'],
 };
+export const pickWeather = (w) => { const o = NEXT[w] || NEXT.clear; return o[Math.floor(Math.random() * o.length)]; };
+/** How long a weather holds (s): 80-180, a blizzard only 60-120 ("a few minutes at most"). Server: weatherHoldMs. */
+export const weatherHold = (w) => (w === 'blizzard' ? 60 + Math.random() * 60 : 80 + Math.random() * 100);
+// (Oct 30 2026: weather side effects, read by the systems that are not handed the Environment: player.js (wind
+// push, glide), drive.js (icy roads), audio.js (wind). Written by Environment.update every frame.)
+export const weatherFx = {
+  gustX: 0, gustZ: 0, // m/s^2 sideways push on the skis (blizzard, föhn gusts; barely noticeable)
+  glide: 1,           // ski glide friction multiplier (föhn: heavier snow, ~6 % more)
+  icy: 0,             // 0..1 icy roads, for a few minutes after heavy snow / blizzard / sleet / freezing fog
+  plough: 0,          // 0..1 the snow ploughs go out more after heavy snow or a blizzard (snowcats.js)
+  wind: 0,            // 0..1 storm wind (audio)
+};
+// (wet snow / freezing fog / heavy snow / blizzard leave the roads icy; ploughs after heavy snow / blizzard)
+const ICY_WX = new Set(['heavy', 'blizzard', 'sleet', 'fog']), PLOUGH_WX = new Set(['heavy', 'blizzard']);
 
 // ---------------------------------------------------------------------------------------------------
 // Time-of-day palette. Keyframes by sun height (sin of the sun's elevation): night, blue hour, civil dusk,
@@ -209,6 +245,16 @@ export class Environment {
     this.cloud = 0; // overcast amount
     this.mist = 0.1; // fog banks / valley mist
     this.weatherTimer = 75; // a clear spell first, then the weather starts changing
+    // (Oct 30 2026, the user: a forecast line "Later: Blizzard"; single player draws it ahead, multiplayer gets it
+    // from the server's clock (net/session.js sets upcoming / upcomingIn))
+    this.upcoming = pickWeather('clear');
+    this.upcomingIn = null; // s until it comes (multiplayer); single player: weatherTimer
+    this.wind = 0; this.clearAir = 0; this.wet = 0; this.frost = 0; this.sea = 0; // eased extras (WEATHER)
+    this.inversionY = null; // the sea of clouds' deck height (atmosphere.js writes it)
+    this.icy = 0; this.plough = 0;
+    // avalanche danger (Oct 30 2026, the user: "1-2 when clear, 3 after snow, 4 after a blizzard"): s since snow fell
+    // / since a blizzard (a quiet spell first: level 2 for a while, then 1)
+    this.sinceSnow = 700; this.sinceBlizzard = 1e9;
     this.snowCover = 0; // 0..1 fresh snow that has built up (rises while it snows, melts away slowly after)
     this.sunDir = new THREE.Vector3();
     this.moonDir = new THREE.Vector3();
@@ -415,8 +461,25 @@ export class Environment {
     this.shadowExtentNow = ext;
   }
 
-  setWeather(name) { if (WEATHER[name]) this.weather = name; }
+  setWeather(name) {
+    if (!WEATHER[name] || name === this.weather) return;
+    this.weather = name;
+    this.upcoming = pickWeather(name); // (the forecast moves on with it; multiplayer: the server's replaces it)
+  }
   get weatherLabel() { return WEATHER[this.weather].label; }
+  /** The small HUD forecast ("Later: Blizzard"), or '' (nothing changing, or the weather held, e.g. a race). */
+  get forecastLabel() {
+    const w = this.upcoming, left = this.weatherTimer < 1e8 ? this.weatherTimer : this.upcomingIn; // (1e9: held by the server / a race)
+    if (!w || w === this.weather || !WEATHER[w] || !(left < 600)) return '';
+    return `Later: ${WEATHER[w].label}`;
+  }
+  /** Avalanche danger level 1-4 (European scale), following the weather (never closes anything). */
+  get avalancheLevel() {
+    if (this.weather === 'blizzard' || this.sinceBlizzard < 480) return 4;
+    if (this.snow > 0.3 || this.sinceSnow < 540) return 3;
+    if (this.snow > 0.1 || this.sinceSnow < 1500) return 2;
+    return 1;
+  }
 
   get timeString() {
     const h = Math.floor(this.hour), m = Math.floor((this.hour - h) * 60);
@@ -429,15 +492,31 @@ export class Environment {
     // weather state machine: every 1.5-3.5 minutes the weather moves on (clear, cloudy, snow, mist...)
     this.weatherTimer -= dt;
     if (this.weatherTimer <= 0) {
-      const opts = NEXT[this.weather];
-      this.setWeather(opts[Math.floor(Math.random() * opts.length)]);
-      this.weatherTimer = 80 + Math.random() * 100;
+      const nx = NEXT[this.weather]?.includes(this.upcoming) ? this.upcoming : pickWeather(this.weather); // (the forecast comes true)
+      this.setWeather(nx);
+      this.weatherTimer = weatherHold(nx);
     }
     const W = WEATHER[this.weather], k = Math.min(1, dt * 0.06); // ~20 s transitions
     this.weatherTarget = W.snow;
     this.snow += (W.snow - this.snow) * k;
     this.cloud += (W.cloud - this.cloud) * k;
     this.mist += (W.mist - this.mist) * k;
+    this.wind += ((W.wind || 0) - this.wind) * k;
+    this.clearAir += ((W.clear || 0) - this.clearAir) * k;
+    this.wet += ((W.wet || 0) - this.wet) * k;
+    this.frost += ((W.frost || 0) - this.frost) * k * 0.5; // (rime grows slowly)
+    this.sea += ((W.sea || 0) - this.sea) * k;
+    // after-effects: icy roads for a few minutes (~4 min to thaw), the ploughs out after heavy snow (~5 min)
+    if (ICY_WX.has(this.weather)) this.icy = Math.min(1, this.icy + dt / 40); else this.icy = Math.max(0, this.icy - dt / 240);
+    if (PLOUGH_WX.has(this.weather)) this.plough = Math.min(1, this.plough + dt / 20); else this.plough = Math.max(0, this.plough - dt / 300);
+    if (this.snow > 0.3) this.sinceSnow = 0; else this.sinceSnow += dt;
+    if (this.weather === 'blizzard') this.sinceBlizzard = 0; else this.sinceBlizzard += dt;
+    // gusts: a slow swell from the west-north-west with lulls (wind 1: ~0.3 m/s^2 at the peak of a gust)
+    const gt = (this.gustT = (this.gustT || 0) + dt);
+    const gust = this.wind * Math.max(0, 0.55 + 0.45 * Math.sin(gt * 0.9) * Math.sin(gt * 0.37 + 1.3)) * 0.3;
+    const wfx = weatherFx;
+    wfx.gustX = gust * 0.93; wfx.gustZ = gust * 0.37;
+    wfx.glide = 1 + this.clearAir * 0.06; wfx.icy = this.icy; wfx.plough = this.plough; wfx.wind = this.wind;
     // fresh snow builds up over ~1.5 minutes of snowfall and settles / melts away over ~8 minutes
     if (this.snowCover < this.snow) this.snowCover += (this.snow - this.snowCover) * Math.min(1, dt / 90);
     else this.snowCover = Math.max(this.snow, this.snowCover - dt / 480);
@@ -457,7 +536,10 @@ export class Environment {
     const sunH = this.sunDir.y;
     this.dayFactor = smoothstep(-0.08, 0.12, sunH);
     this.nightFactor = 1 - smoothstep(-0.18, 0.02, sunH);
-    const overcast = Math.max(this.snow, this.cloud * 0.85);
+    // sea of clouds: below the deck it is a grey, misty day; above it the sun shines (atmosphere.js sets inversionY)
+    const under = this.inversionY == null ? 0 : this.sea * (1 - smoothstep(this.inversionY - 10, this.inversionY + 60, camera.position.y));
+    this.underDeck = under;
+    const overcast = Math.max(this.snow, this.cloud * 0.85, under * 0.8);
     this.overcast = overcast;
     const clearSky = 1 - overcast;
 
@@ -484,7 +566,7 @@ export class Environment {
     // sun disc: HDR (blooms), hidden below the horizon and behind cloud
     const discVis = smoothstep(-0.03, 0.02, sunH) * Math.pow(clearSky, 3);
     samplePalette(PAL.disc, i, f, su.uSunColor.value).multiplyScalar(lerp(30, 70, smoothstep(0.0, 0.3, sunH)) * discVis);
-    this.sunVisible = smoothstep(-0.02, 0.03, sunH) * Math.pow(clearSky, 1.5) * (1 - this.mist * 0.6);
+    this.sunVisible = smoothstep(-0.02, 0.03, sunH) * Math.pow(clearSky, 1.5) * (1 - Math.min(1, this.mist + this.frost * 0.3) * 0.6);
     samplePalette(PAL.disc, i, f, this.sunGlowColor);
     // cirrus wisps: a fair-weather feature, lit white by day and pink/gold at sunset
     su.uCirrus.value = clearSky * clearSky * (1 - this.nightFactor) * 0.9 * this.cirrusAmount;
@@ -500,7 +582,10 @@ export class Environment {
     this.fogColor.lerp(this.tmpB.copy(MIST_FOG).multiply(greyTint), whiteout * 0.6);
     su.uGround.value.copy(this.fogColor);
     this.scene.fog.color.copy(this.fogColor);
-    this.scene.fog.near = (lerp(0.000034, 0.0013, this.snow * this.snow) + this.mist * this.mist * 0.0016 + this.nightFactor * 0.00003) * this.fogScale;
+    // (Oct 30 2026: a blizzard a little thicker than heavy snow, never a whiteout; freezing fog thick and low; föhn
+    // air crystal clear, far views; under the sea of clouds a grey haze)
+    this.scene.fog.near = (lerp(0.000034, 0.0013, this.snow * this.snow) + this.mist * this.mist * 0.0016 + this.nightFactor * 0.00003
+      + this.wind * this.snow * 0.00025 + this.frost * 0.0006 + under * 0.0005) * this.fogScale * (1 - this.clearAir * 0.45);
     this.scene.fog.far = lerp(0.00045, 0.00025, overcast);
 
     // ---- key light: sun by day, moon by night

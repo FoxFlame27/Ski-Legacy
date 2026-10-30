@@ -9,6 +9,8 @@
 //       music bus ┼─> master (save.volume) -> glue compressor -> soft clipper -> speakers
 //       voice bus ┘   (the announcer ducks the music while it speaks)
 
+import { weatherFx } from '../world/sky.js'; // (storm wind: blizzard / föhn, Oct 30 2026)
+
 const BASE = './audio/';
 
 // one-shot / loop recordings (mono AAC). Loaded in this order: the intro's sounds first.
@@ -285,14 +287,15 @@ export class Audio {
       L.rush.src.playbackRate.setTargetAtTime(0.85 + wind * 0.3, t, 0.3);
       this.wind.g.gain.setTargetAtTime(0, t, k); this.whistle.g.gain.setTargetAtTime(0, t, k);
     } else {
-      this.wind.g.gain.setTargetAtTime((0.05 + wind * wind * 0.55) * gust + snow * 0.08 + altitude * 0.00004, t, k);
+      this.wind.g.gain.setTargetAtTime((0.05 + wind * wind * 0.55) * gust + snow * 0.08 + altitude * 0.00004 + weatherFx.wind * 0.1 * (indoor ? 0 : 1), t, k); // (+ a blizzard's / föhn's storm wind, Oct 30 2026)
       this.wind.f.frequency.setTargetAtTime(300 + wind * 1400, t, k);
       this.whistle.g.gain.setTargetAtTime(Math.max(0, wind - 0.4) * 0.05 * gust, t, k);
       this.whistle.f.frequency.setTargetAtTime(900 + wind * 1600, t, k);
     }
     // --- mountain ambience: always there outdoors, more in snowfall and up high
     if (L.mountain) {
-      L.mountain.g.gain.setTargetAtTime(indoor ? 0 : clamp(0.12 + snow * 0.3 + altitude * 0.0001, 0, 0.5), t, 0.6);
+      // (Oct 30 2026, the user: "wind audio louder in blizzard/föhn": weatherFx.wind, sky.js)
+      L.mountain.g.gain.setTargetAtTime(indoor ? 0 : clamp(0.12 + snow * 0.3 + altitude * 0.0001 + weatherFx.wind * 0.16, 0, 0.6), t, 0.6);
       this.ambient.g.gain.setTargetAtTime(0, t, 0.5);
     } else this.ambient.g.gain.setTargetAtTime(indoor ? 0 : 0.03, t, 0.5);
 

@@ -212,6 +212,11 @@ export class Atmosphere {
       uTime: { value: 0 },
       uCam: { value: new THREE.Vector3() },
       uSnow: { value: 0 },
+      // (Oct 30 2026: the snowfall's travel so far, x / z with the wind, y = fall: integrated on the CPU so a change
+      // of wind (a blizzard's gusts) or of fall speed (sleet) never makes the flakes jump; uRain: sleet below the
+      // rain line, the flakes drawn as fast streaks)
+      uSnowOff: { value: new THREE.Vector3() },
+      uRain: { value: 0 },
       uWind: windUniform, // (shared: the wreck steam drifts with it, carlights.js)
       uLight: { value: new THREE.Color(1, 1, 1) },
       uAmbient: { value: new THREE.Color(0.6, 0.65, 0.75) },
@@ -277,16 +282,16 @@ export class Atmosphere {
 
   updateCrystals(camera, snow) {
     if (!this.crystalMesh) return;
-    const t = this.uniforms.uTime.value, B = 7, cam = camera.position, wind = this.uniforms.uWind.value;
+    const t = this.uniforms.uTime.value, B = 7, cam = camera.position, off = this.uniforms.uSnowOff.value;
     const d = this.tmpObj, crystalCap = Math.min(this.crystalMax, quality.crystals);
     let n = 0;
     // no snowfall -> no crystals at all (rank 0 used to slip through at snow == 0)
-    if (snow > 0.004) {
+    if (snow > 0.004 && this.uniforms.uRain.value < 0.5) { // (no wet clumps in the rain)
       for (const f of this.crystalData) {
         if (f.rank >= snow || n >= crystalCap) continue;
-        const x = f.p.x * B + wind.x * t + Math.sin(t * 0.9 + f.phase) * 0.35;
-        const y = f.p.y * B - f.fall * t;
-        const z = f.p.z * B + wind.y * t + Math.cos(t * 0.7 + f.phase) * 0.35;
+        const x = f.p.x * B + off.x + Math.sin(t * 0.9 + f.phase) * 0.35;
+        const y = f.p.y * B - f.fall * off.y;
+        const z = f.p.z * B + off.z + Math.cos(t * 0.7 + f.phase) * 0.35;
         d.position.set(wrapAround(x, cam.x, B), wrapAround(y, cam.y, B), wrapAround(z, cam.z, B));
         d.rotation.set(f.spin.x * t + f.phase, f.spin.y * t, f.spin.z * t);
         d.scale.setScalar(f.size);
@@ -315,12 +320,13 @@ export class Atmosphere {
       transparent: true, depthWrite: false,
       vertexShader: `
         uniform float uTime; uniform vec3 uCam; uniform float uSnow; uniform vec2 uWind; uniform float uFlakeK;
-        attribute float aRank; varying float vAlpha; varying float vRot; varying vec2 vTile; varying float vBlur; varying float vSmall;
+        uniform vec3 uSnowOff; uniform float uRain;
+        attribute float aRank; varying float vAlpha; varying float vRot; varying vec2 vTile; varying float vBlur; varying float vSmall; varying float vRain;
         void main(){
           const float B = 46.0;
           float seed = fract(aRank * 97.13);
           float fall = 0.7 + seed * 0.7;                       // heavier flakes fall faster
-          vec3 drift = vec3(uWind.x, -fall, uWind.y) * uTime;
+          vec3 drift = vec3(uSnowOff.x, -fall * uSnowOff.y, uSnowOff.z);
           drift.x += sin(uTime * (0.6 + seed) + position.y * 40.0) * 0.8;   // flutter
           drift.z += cos(uTime * (0.5 + seed * 0.7) + position.x * 40.0) * 0.8;
           vec3 wp = mod(position * B + drift - uCam + B * 0.5, B) + uCam - B * 0.5;
@@ -329,6 +335,8 @@ export class Atmosphere {
           float d = -mv.z;
           float size = 0.026 + seed * 0.034;                   // flake diameter, meters (big wet flakes)
           size *= 0.8 + 0.45 * uSnow;                         // heavy snow falls in bigger, wetter flakes
+          size *= 1.0 + 0.7 * uRain;                          // (a rain streak: longer than a flake is wide)
+          vRain = uRain;
           gl_PointSize = clamp(size * projectionMatrix[1][1] * 1500.0 / d, 2.0, 96.0);
           vSmall = 1.0 - smoothstep(5.0, 12.0, gl_PointSize); // too few pixels for arms: draw a soft dot
           vBlur = 1.0 - smoothstep(0.25, 1.6, d);              // out-of-focus right in front of the lens
@@ -340,9 +348,15 @@ export class Atmosphere {
         }`,
       fragmentShader: `
         uniform vec3 uLight; uniform vec3 uAmbient;
-        varying float vAlpha; varying float vRot; varying vec2 vTile; varying float vBlur; varying float vSmall;
+        varying float vAlpha; varying float vRot; varying vec2 vTile; varying float vBlur; varying float vSmall; varying float vRain;
         void main(){
           vec2 c = gl_PointCoord - 0.5;
+          if (vRain > 0.5) { // sleet: a thin, faint falling streak (gentle: the user, Oct 30 2026)
+            float st = (1.0 - smoothstep(0.015, 0.06, abs(c.x))) * (1.0 - smoothstep(0.2, 0.5, abs(c.y))) * vAlpha;
+            if (st < 0.02) discard;
+            gl_FragColor = vec4((uAmbient * 1.25 + uLight * 0.55) * 0.9, st * 0.5);
+            return;
+          }
           float cs = cos(vRot), sn = sin(vRot);
           vec2 q = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs) + 0.5;
           // an irregular soft speck (a wet clump, never a star or crystal shape: up close that read as an icon),
@@ -810,7 +824,8 @@ export class Atmosphere {
     const cam = camera.position;
     // slow steady drift for the free clouds
     const wa = 0.7 + Math.sin(this.uniforms.uTime.value * 0.0007) * 0.5;
-    this.drift.x += Math.cos(wa) * 3.2 * dt; this.drift.y += Math.sin(wa) * 3.2 * dt;
+    const dv = 3.2 * (1 + 4 * (env.wind || 0)); // (föhn / blizzard: the clouds race past, Oct 30 2026)
+    this.drift.x += Math.cos(wa) * dv * dt; this.drift.y += Math.sin(wa) * dv * dt;
     if (this.banksDirty || Math.hypot(cam.x - this.banksAt.x, cam.z - this.banksAt.y) > 450) {
       this.banksDirty = false;
       this.banksAt.set(cam.x, cam.z);
@@ -821,7 +836,7 @@ export class Atmosphere {
 
     const cl = env.cloud, sn = env.snow, mi = env.mist;
     const fogBank = Math.max(0, mi - 0.2); // real mist (not the morning haze every clear day has)
-    const covSea = clamp(0.47 + cl * 0.18 + fogBank * 0.5, 0, 0.97);
+    const covSea = clamp(0.47 + cl * 0.18 + fogBank * 0.5 + (env.sea || 0) * 0.25, 0, 0.97); // (+ the sea of clouds)
     const covBank = clamp(0.24 + cl * 0.36 - fogBank * 0.3, 0, 0.9);
     const covWisp = clamp(0.2 + cl * 0.2 + fogBank * 0.4, 0, 0.8);
     const covRing = clamp(0.56 + cl * 0.2 + fogBank * 0.4, 0, 0.97);
@@ -1022,8 +1037,16 @@ export class Atmosphere {
     u.uLight.value.copy(env.sun.color).multiplyScalar(env.sun.intensity / 3.4);
     u.uAmbient.value.copy(env.hemi.color).multiplyScalar(lerp(0.12, 0.9, env.dayFactor));
     u.uFogColor.value.copy(env.fogColor);
-    const wt = u.uTime.value * 0.05;
-    u.uWind.value.set(1.5 + Math.sin(wt) * 2.5 * env.snow + 1, 0.6 + Math.cos(wt * 0.7) * 1.5);
+    const wt = u.uTime.value * 0.05, gale = env.wind || 0;
+    // (Oct 30 2026: a blizzard blows the snow sideways and fast, ~9 m/s from the WNW, as the skier's gusts, sky.js)
+    u.uWind.value.set(1.5 + Math.sin(wt) * 2.5 * env.snow + 1 + gale * 8.5, 0.6 + Math.cos(wt * 0.7) * 1.5 + gale * 3.4);
+    // sleet: rain below the rain line (~110 m above the village), wet snow above it (the camera's side of it)
+    this.villageY ??= world.height(0, 0);
+    const rain = (env.wet || 0) * (1 - smoothstep(this.villageY + 70, this.villageY + 150, camera.position.y));
+    u.uRain.value = rain;
+    u.uSnowOff.value.x += u.uWind.value.x * dt;
+    u.uSnowOff.value.z += u.uWind.value.y * dt;
+    u.uSnowOff.value.y += dt * (1 + 2.8 * rain + 0.4 * gale); // (rain falls ~4x as fast; a blizzard drives it down)
     this.updateCloudLight(env);
 
     // terrain map + regional ground level (the overcast deck and high clouds follow the land, which keeps
@@ -1044,9 +1067,14 @@ export class Atmosphere {
     u.uMist.value = Math.min(1, 0.15 + morning * 0.45 + env.mist * 0.9);
 
     // overcast deck: only in real cloud; low ceiling in snow, higher when merely cloudy
-    const cover = clamp(env.cloud * 0.95 + env.snow * 0.1 - 0.06 + Math.sin(u.uTime.value * 0.002) * 0.05, 0, 0.92);
+    // (Oct 30 2026, the user: the sea of clouds, "reuse the overcast deck at a low altitude": the deck sinks into the
+    // valley below the village, sunny above it; sky.js reads inversionY for the grey day under it)
+    const sea = env.sea || 0;
+    const cover = clamp(lerp(env.cloud * 0.95 + env.snow * 0.1 - 0.06, 0.86, sea) + Math.sin(u.uTime.value * 0.002) * 0.05, 0, 0.92);
     u.uCloudCover.value = cover;
-    const cloudH = (this.regional ?? 0) + 400 + env.cloud * 160 - env.snow * 230 + Math.sin(u.uTime.value * 0.0015) * 60;
+    const seaH = this.villageY - 110 + Math.sin(u.uTime.value * 0.0015) * 12;
+    const cloudH = lerp((this.regional ?? 0) + 400 + env.cloud * 160 - env.snow * 230 + Math.sin(u.uTime.value * 0.0015) * 60, seaH, sea);
+    env.inversionY = sea > 0.01 ? seaH + 78 : null;
     u.uCloudH.value = cloudH;
     u.uDrift.value.copy(this.drift);
     this.clouds.visible = cover > 0.03;
@@ -1058,11 +1086,11 @@ export class Atmosphere {
     // the deck sorts after the cumulus cards when seen from below (it is in front of them) and before when above
     for (const m of this.clouds.children) m.renderOrder = camera.position.y < cloudH + 39 ? 2 : 0;
     // from above, a flat deck reads as a white sheet: let it thin out and the billowy cards take over
-    u.uDeckAbove.value = 1 - 0.8 * smoothstep(cloudH + 110, cloudH + 500, camera.position.y);
+    u.uDeckAbove.value = 1 - 0.8 * (1 - 0.6 * sea) * smoothstep(cloudH + 110, cloudH + 500, camera.position.y);
 
     // inside the deck -> thick whiteout fog (applied by caller)
     const inside = 1 - smoothstep(15, 70, Math.abs(camera.position.y - (cloudH + 39)));
-    this.cloudInside = inside * cover * THREE.MathUtils.smoothstep(env.cloud, 0.3, 0.8); // whiteout only in real cloud
+    this.cloudInside = inside * cover * THREE.MathUtils.smoothstep(Math.max(env.cloud, sea), 0.3, 0.8); // whiteout only in real cloud
 
     this.updateImpostors(dt, camera, env);
 

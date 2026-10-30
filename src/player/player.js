@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { Tricks, wrapPi, CRASH_IMPACT } from './tricks.js';
+import { weatherFx } from '../world/sky.js'; // (Oct 30 2026: blizzard / föhn gusts, föhn's heavier snow)
 
 const G = 9.81;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -602,9 +603,12 @@ export class Player {
       const mult = this.ski.speed;
       const cda = (tuck ? CDA_TUCK : CDA_STAND + Math.abs(ctl.steer) * 0.06) / (mult * mult);
       const carve = CARVE_DRAG * sp * Math.abs(ctl.steer) * this.turnRateAt(sp, tuck, false);
-      a.addScaledVector(v, -((MU / mult) * ice * G * n.y + DRAG * cda * sp * sp + carve) / sp);
+      a.addScaledVector(v, -((MU / mult) * ice * weatherFx.glide * G * n.y + DRAG * cda * sp * sp + carve) / sp);
     }
     if (push) a.addScaledVector(f, push);
+    // wind gusts nudge the skier sideways (the user: "small, not annoying", "barely noticeable": <= 0.3 m/s^2,
+    // mostly taken by the edges below; only while moving)
+    if (sp > 1 && (weatherFx.gustX || weatherFx.gustZ)) { a.x += weatherFx.gustX; a.z += weatherFx.gustZ; }
     v.addScaledVector(a, h);
 
     // edge grip: pull the velocity onto the skis' line. Within the grip the path just bends (carve);

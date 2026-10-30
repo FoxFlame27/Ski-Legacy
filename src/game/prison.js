@@ -492,7 +492,7 @@ export class PrisonRoom {
         g.restore(); g.fillStyle = '#1546c8'; g.beginPath(); g.arc(x + wd / 2, y + 7, 6, 0, 7); g.fill();
       };
       note(740, 40, 240, 170, ['FUNDBÜRO / Lost & found', 'Ski, poles, 1 left glove', 'ask at the counter'], '#fff7c0', 4);
-      note(740, 240, 240, 140, ['Lawinenwarnstufe 3', 'Avalanche danger:', 'considerable'], '#ffd6c8', 5);
+      { const av = globalThis.__game?.env?.avalancheLevel ?? 3; note(740, 240, 240, 140, [`Lawinenwarnstufe ${av}`, 'Avalanche danger:', ['', 'low', 'moderate', 'considerable', 'high'][av]], '#ffd6c8', 5); } // (Oct 30 2026, the user: the level follows the weather, sky.js avalancheLevel)
       note(80, 350, 300, 150, ['NOTRUF 133', 'Police emergency', 'Bergrettung 140'], '#e8f0ff', 6);
       note(420, 360, 280, 160, ['Speed limit in the', 'village: 30 km/h', 'Fines from $500'], '#ffffff', 7);
     };
@@ -659,7 +659,7 @@ export class PrisonRoom {
   /** The jail board's top 3 ([{ name, n }], most first): the poster canvas redrawn only when it changes. */
   setJailBoard(list) {
     const top = (Array.isArray(list) ? list : []).slice(0, 3).map((e) => ({ name: String(e?.name ?? '?').slice(0, 40), n: Math.max(0, e?.n | 0) }));
-    const key = JSON.stringify(top), B = this.board;
+    const key = JSON.stringify(top) + (globalThis.__game?.env?.avalancheLevel ?? 3), B = this.board; // (+ the avalanche level: redrawn when it changes)
     if (!B || key === B.key) return;
     B.key = key; this.boardTop = top;
     const c = B.tex.image; B.draw(c.getContext('2d'), c.width, c.height); B.tex.needsUpdate = true;
@@ -948,7 +948,7 @@ export class Prison {
   /** Every frame: the countdown, a sentence left over from before (a reload, a login), the cell kept shut. */
   update(dt) {
     const n = nightUniform.value || 0;
-    { const k = isMP() ? MP.jailBoard : this.save?.jailVisits | 0; if (k !== this.boardKey && this.room.board) { this.boardKey = k; this.room.setJailBoard(this.boardList()); } } // (redrawn when it changes)
+    { const k = `${isMP() ? MP.jailBoard : this.save?.jailVisits | 0}|${globalThis.__game?.env?.avalancheLevel ?? 3}`; if (k !== this.boardKey && this.room.board) { this.boardKey = k; this.room.setJailBoard(this.boardList()); } } // (redrawn when it changes)
     try { this.outside3d?.update(n, performance.now() / 1000); } catch (e) { console.warn('prison outside', e); this.outside3d = null; }
     if (this.inside && !this.active && this.role === 'jailed' && !this.busy) this.release(); // (cleared from elsewhere)
     if (this.active) {

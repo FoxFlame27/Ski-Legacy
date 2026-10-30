@@ -464,7 +464,8 @@ export class Vegetation {
   update(px, pz, dt, budgetMs = 4) {
     this.windUniform.value += dt;
     // fresh snow settles on the branches while it snows (shared by the 3D trees and the impostors)
-    this.snowUniform.value = 1 + 0.8 * terrainUniforms.uSnowCover.value;
+    // (+ freezing fog's rime, Oct 30 2026, the user: "white frost look on trees ... a tint", kept gentle: sky.js frost)
+    this.snowUniform.value = 1 + 0.8 * terrainUniforms.uSnowCover.value + 0.5 * (globalThis.__game?.env?.frost || 0);
     const t0 = performance.now(), farR = quality.veg.farR;
     const R = Math.ceil(farR / CELL);
     const pcx = Math.floor(px / CELL), pcz = Math.floor(pz / CELL);

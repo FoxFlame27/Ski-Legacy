@@ -23,6 +23,7 @@ import { speedLimitAt } from './bus/speedlimits.js';
 import { TyreTracks } from './tyretracks.js';
 import { addDent, applyDents, repairInstance } from './cardamage.js';
 import { setPlates } from './carconfig.js';
+import { weatherFx } from '../world/sky.js'; // (icy roads after bad weather)
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
 
@@ -53,6 +54,9 @@ const SURF = {
   shoulder: { mu: 0.72, roll: 0.03, rough: 0.5 },
   snow: { mu: 0.58, roll: 0.05, rough: 1 },
   piste: { mu: 0.4, roll: 0.02, rough: 0.4 },
+  // (Oct 30 2026, the user: icy roads for a few minutes after heavy snow / blizzard / sleet / freezing fog, "only
+  // slightly reduce grip": the road's mu down to 0.88 at the iciest, sky.js weatherFx.icy; set in grip())
+  icyRoad: { mu: 1.0, roll: 0.015, rough: 0.1, road: true },
 };
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -398,7 +402,7 @@ export class Drive {
   // bus roads' own shapes) holds firm (winter tyres); the snowy shoulder / berm bench a little less; off the road
   // the snow is clearly slipperier (it drags too, and it's bumpy) but predictable; groomed pistes slippier still
   grip(x, z) {
-    if (this.onTarmac(x, z)) return SURF.road;
+    if (this.onTarmac(x, z)) { const icy = weatherFx.icy; if (icy < 0.02) return SURF.road; SURF.icyRoad.mu = 1 - 0.12 * icy; return SURF.icyRoad; }
     const c = this.world.corridorAt(x, z, this._corr || (this._corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false }));
     if (c.kind === 'lift' && c.d < 0) return busRoads.roads.length ? SURF.shoulder : SURF.road; // (no bus roads planned: the old corridor test)
     if (c.groomed && c.d < 0) return SURF.piste;

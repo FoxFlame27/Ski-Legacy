@@ -234,7 +234,7 @@ export class Flags {
   update(dt, env) {
     if (!this.cloths) return;
     this.time.value = (this.time.value + dt) % 3600;
-    const target = 0.35 + (env?.snow ?? 0) * 0.6;
+    const target = Math.min(1, 0.35 + (env?.snow ?? 0) * 0.6 + (env?.wind ?? 0) * 0.45); // (+ blizzard / föhn wind, Oct 30 2026)
     this.wind.value += (target - this.wind.value) * Math.min(1, dt * 0.3);
   }
 }

@@ -855,6 +855,9 @@ export class Multiplayer {
       env.hour = h;
       env.weatherTimer = 1e9; // (the server moves the weather on)
       if (this.clock.weather && env.weather !== this.clock.weather) env.setWeather(this.clock.weather);
+      // the forecast (Oct 30 2026: the clock's upcoming / nextAt; an older server sends none: no forecast line)
+      env.upcoming = this.clock.upcoming || null;
+      env.upcomingIn = this.clock.nextAt ? Math.max(0, (this.clock.nextAt - now) / 1000) : null;
     }
     const day = this.dayNow(now), s = this.c.save;
     if (day != null && s.day !== day) s.day = day; // (the day pass and the jobs count the world's days)

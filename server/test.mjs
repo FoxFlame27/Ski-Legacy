@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR, busHoldAt, BUS_HOLD } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR, busHoldAt, BUS_HOLD, WEATHER_NEXT, pickWeather, weatherHoldMs } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -74,6 +74,23 @@ try {
   const joined = await a.next('join', (d) => d.name === 'Bob');
   ok(!!joined, 'Alice is told Bob joined');
   const pidA = la.d.pid, pidB = lb.d.pid;
+
+  // ---------------------------------------------------------------- weather transitions (Oct 30 2026: five new weathers, kept rare)
+  {
+    const keys = Object.keys(WEATHER_NEXT);
+    for (const w of ['blizzard', 'foehn', 'sleet', 'fog', 'inversion']) ok(keys.includes(w) && WEATHER_NEXT[w].length, `weather ${w} exists and moves on`);
+    ok(keys.every((k) => WEATHER_NEXT[k].every((n) => keys.includes(n))), 'every weather transition leads to a known weather');
+    const from = (t) => keys.filter((k) => k !== t && WEATHER_NEXT[k].includes(t));
+    ok(JSON.stringify(from('blizzard')) === '["heavy"]', 'a blizzard only follows heavy snow');
+    ok(JSON.stringify(from('foehn')) === '["clear"]' && JSON.stringify(from('inversion')) === '["clear"]', 'föhn and the sea of clouds only follow clear weather');
+    ok(WEATHER_NEXT.clear.filter((n) => n === 'foehn' || n === 'inversion').length / WEATHER_NEXT.clear.length < 0.15, 'föhn / inversion stay rare');
+    ok(['blizzard', 'foehn', 'sleet', 'fog', 'inversion'].every((w) => !WEATHER_NEXT[w].includes(w)), 'the rare weathers never hold on by themselves');
+    let seq = 0; const r = () => (seq++ % 7) / 7;
+    for (let i = 0, w = 'clear'; i < 50; i++) { w = pickWeather(w, r); if (!keys.includes(w)) { ok(false, 'pickWeather: a known weather'); break; } }
+    ok(pickWeather('nonsense', () => 0) === WEATHER_NEXT.clear[0], 'an unknown weather moves on like clear');
+    ok(weatherHoldMs('blizzard', () => 1) <= 120000 && weatherHoldMs('clear', () => 0) === 80000, 'a blizzard is short (2 min at most)');
+    ok(WEATHER_NEXT.clear.filter((n) => n === 'clear').length / WEATHER_NEXT.clear.length >= 0.4, 'clear weather still holds on most often');
+  }
 
   // ---------------------------------------------------------------- clock sync
   const t0 = Date.now();
@@ -1271,6 +1288,14 @@ try {
     ok(tm.ok && Math.abs(tm.d.clock.hour - 22) < 0.01 && !!ck, "admin time: the world's clock at 22:00, broadcast");
     const wx = await rf.req('admin', { op: 'weather', w: 'heavy' });
     ok(wx.ok && wx.d.clock.weather === 'heavy', 'admin weather: heavy snow');
+    ok(WEATHER_NEXT[wx.d.clock.upcoming] && WEATHER_NEXT.heavy.includes(wx.d.clock.upcoming) && wx.d.clock.nextAt > Date.now(), 'the clock carries the forecast (upcoming weather, nextAt)');
+    const wz = await rf.req('admin', { op: 'weather', w: 'blizzard' });
+    ok(wz.ok && wz.d.clock.weather === 'blizzard' && WEATHER_NEXT.blizzard.includes(wz.d.clock.upcoming), 'admin weather: blizzard, with its forecast');
+    {
+      const Wd = server.worlds.get(lr.d.world.id), fc = Wd.clock.upcoming;
+      Wd.clock.next = Date.now() - 1; Wd.tick(Date.now());
+      ok(Wd.clock.weather === fc && WEATHER_NEXT[fc].includes(Wd.clock.upcoming), 'the forecast comes true: the next weather is the upcoming one');
+    }
     const wb = await rf.req('admin', { op: 'weather', w: 'toString' });
     ok(!wb.ok && wb.err === 'bad_value', 'an unknown weather is refused');
     // no admin helicopters any more (Oct 30, "remove all admin spawned cars"): the op is refused, and one still out

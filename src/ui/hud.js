@@ -156,6 +156,29 @@ export class HUD {
     }
   }
 
+  // (Oct 30 2026, the user: a small forecast line in the weather area, "Later: Blizzard", and the avalanche danger
+  // level as "a small HUD line"; both "small and unobtrusive": one dim line under the clock, refreshed twice a second)
+  wxLine() {
+    const now = performance.now();
+    if (now - (this.wxAt || 0) < 500) return;
+    this.wxAt = now;
+    let el = this.wxEl;
+    if (!el) {
+      const clock = document.getElementById('clock');
+      if (!clock) return;
+      el = this.wxEl = document.createElement('div');
+      el.id = 'wx-sub';
+      el.style.cssText = 'font-size:10px;opacity:.62;margin-top:1px;font-variant-numeric:tabular-nums;';
+      clock.after(el);
+    }
+    const env = globalThis.__game?.env;
+    if (!env) return;
+    const lv = env.avalancheLevel, fc = env.forecastLabel || '';
+    const AV = ['', 'low', 'moderate', 'considerable', 'high'];
+    const txt = [fc, lv ? `Avalanche ${lv} · ${AV[lv]}` : ''].filter(Boolean).join('  ·  ');
+    if (el.textContent !== txt) el.textContent = txt;
+  }
+
   frame({ speed, loc, time, weather, ski, prompt, promptKey = 'E', objective, heading, waypoint, speedo = true }) {
     const sp = $('speedo');
     if (sp.hidden === speedo) sp.hidden = !speedo; // (hidden while riding: lifts, train, bus, heli)
@@ -163,6 +186,7 @@ export class HUD {
     setText('speed-val', String(Math.round(speed * 3.6)));
     setText('loc', loc);
     setText('clock', `${time} · ${weather}`);
+    this.wxLine();
     setText('ski-name', ski);
     const p = $('prompt');
     if (prompt) { p.hidden = false; setText('prompt-text', prompt); p.querySelector('.key').textContent = promptKey; } else p.hidden = true;

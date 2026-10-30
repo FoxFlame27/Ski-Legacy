@@ -345,8 +345,10 @@ export class Snowcats {
       return;
     }
     if (c.mode === 'drive') {
-      c.parkT -= dt;
-      if (c.parkT <= 0) { if (!this.tryPark(c, 40, 450, 30 + rnd() * 60)) c.parkT = 25; }
+      // (Oct 30 2026, the user: after heavy snow or a blizzard the ploughs "go out more often": up to 3x longer on
+      // the road between stops, and shorter stops; this.plough (sky.js) eases back over ~5 min)
+      c.parkT -= dt / (1 + 2 * (this.plough || 0));
+      if (c.parkT <= 0) { if (!this.tryPark(c, 40, 450, (30 + rnd() * 60) * (1 - 0.6 * (this.plough || 0)))) c.parkT = 25; }
       else if (c.queueT > 35) { c.queueT = 15; this.tryPark(c, 25, 260, 8 + rnd() * 8); } // (letting the queue by)
     }
     let vt = Math.min(c.cruise, R.VT[roundAt(R, c.u, _a).i]);
@@ -398,6 +400,7 @@ export class Snowcats {
     }
     const light = Math.max(env.nightFactor, (1 - env.dayFactor) * 0.6);
     this.light = light;
+    this.plough = env.plough || 0; // (sky.js: after heavy snow / a blizzard)
     let any = false;
     this.blk = null;
     for (const c of this.cats) {

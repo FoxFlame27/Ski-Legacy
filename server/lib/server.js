@@ -73,14 +73,26 @@ export const CAR_SEATS = { car_mercedes_sls: 2, car_lamborghini_huracan: 2 };
 // presence state enum (client src/net/protocol.js mirrors this)
 export const STATE = { walk: 0, ski: 1, drive: 2, ride: 3, sit: 4, fly: 5, fall: 6 };
 // weather (world/sky.js NEXT): the world's weather moves on every 80-180 s
-const WEATHER_NEXT = {
-  clear: ['clear', 'clear', 'flurries', 'cloudy', 'mist'],
+// (Oct 30 2026, the user approved five more: blizzard, föhn, sleet, freezing fog, inversion, kept rare: "blizzard
+// only after heavy, föhn and inversion after clear"; weather never closes pistes or lifts: "no closing ski pistes".
+// clear: 1 in 20 föhn, 1 in 20 sea of clouds; heavy: 1 in 4 blizzard (60-120 s). Keep in step with sky.js NEXT.)
+export const WEATHER_NEXT = {
+  clear: ['clear', 'clear', 'clear', 'clear', 'clear', 'clear', 'clear', 'clear', 'flurries', 'flurries', 'flurries', 'flurries', 'cloudy', 'cloudy', 'cloudy', 'mist', 'mist', 'mist', 'foehn', 'inversion'],
   flurries: ['clear', 'clear', 'light', 'flurries', 'cloudy'],
-  cloudy: ['light', 'clear', 'flurries', 'heavy', 'clear'],
-  light: ['heavy', 'cloudy', 'flurries', 'light', 'cloudy'],
-  heavy: ['light', 'cloudy'],
-  mist: ['clear', 'flurries', 'cloudy'],
+  cloudy: ['light', 'clear', 'flurries', 'heavy', 'clear', 'cloudy', 'light', 'clear', 'flurries', 'sleet'],
+  light: ['heavy', 'cloudy', 'flurries', 'light', 'cloudy', 'heavy', 'cloudy', 'flurries', 'light', 'sleet'],
+  heavy: ['light', 'cloudy', 'light', 'blizzard'],
+  mist: ['clear', 'flurries', 'cloudy', 'clear', 'flurries', 'cloudy', 'clear', 'flurries', 'cloudy', 'fog'],
+  blizzard: ['heavy', 'light'],
+  foehn: ['clear', 'clear', 'cloudy'],
+  sleet: ['light', 'cloudy', 'cloudy'],
+  fog: ['mist', 'cloudy', 'clear'],
+  inversion: ['clear', 'clear', 'mist'],
 };
+/** How long weather `w` holds (ms): 80-180 s, a blizzard 60-120 s (the user: short, "a few minutes at most"). */
+export const weatherHoldMs = (w, rnd = Math.random) => (w === 'blizzard' ? 60000 + rnd() * 60000 : 80000 + rnd() * 100000);
+/** The weather after `w` (WEATHER_NEXT), drawn with rnd (0..1). */
+export const pickWeather = (w, rnd = Math.random) => { const o = WEATHER_NEXT[w] || WEATHER_NEXT.clear; return o[Math.floor(rnd() * o.length)]; };
 // max per payout; and EARN_HOURLY over the last hour, all sources, per account. sell: furniture sold back from your
 // chalet (build mode: half its price; the dearest piece is $3,600)
 const EARN_RULES = { job: 6000, secret: 10000, sell: 2000 };
@@ -182,7 +194,9 @@ class World {
     this.nextPid = 1;
     const now = Date.now();
     // the clock: hour at `at` (server ms), advancing 24 h per DAY_MS; the weather and when it moves on
-    this.clock = { hour: 9.5, at: now, day: dayFor(now), weather: 'clear', next: now + 75000 };
+    // (upcoming: the weather already drawn for `next`, sent as the forecast. Oct 30 2026, the user: a forecast line
+    // "Later: Blizzard" in the HUD, "add it to the clock message without breaking old clients")
+    this.clock = { hour: 9.5, at: now, day: dayFor(now), weather: 'clear', next: now + 75000, upcoming: pickWeather('clear') };
     this.seats = new Map();   // vkey 'kind|id' -> Map(seat -> pid)
     this.holds = new Map();   // vkey -> Set(pid) holding the skip key
     this.vmeta = new Map();   // vkey -> { line, rate }
@@ -201,7 +215,8 @@ class World {
   hourAt(now = Date.now()) { return (((this.clock.hour + ((now - this.clock.at) / DAY_MS) * 24) % 24) + 24) % 24; }
   /** The in-game day at `now`: the clock's day, +1 at every midnight since (client: session.dayNow mirrors this). */
   dayAt(now = Date.now()) { return this.clock.day + Math.floor((this.clock.hour + ((now - this.clock.at) / DAY_MS) * 24) / 24); }
-  clockMsg(now = Date.now()) { return { hour: this.hourAt(now), day: this.dayAt(now), at: now, dayMs: DAY_MS, weather: this.clock.weather }; }
+  // (upcoming / nextAt: the forecast, extra fields old clients ignore)
+  clockMsg(now = Date.now()) { return { hour: this.hourAt(now), day: this.dayAt(now), at: now, dayMs: DAY_MS, weather: this.clock.weather, upcoming: this.clock.upcoming, nextAt: Math.round(this.clock.next) }; }
 
   broadcast(t, d, except = null) {
     const s = JSON.stringify({ t, d });
@@ -250,9 +265,9 @@ class World {
 
   tick(now) {
     if (now >= this.clock.next) {
-      const opts = WEATHER_NEXT[this.clock.weather] || WEATHER_NEXT.clear;
       const h = this.hourAt(now), day = this.dayAt(now);
-      this.clock = { hour: h, at: now, day, weather: opts[Math.floor(Math.random() * opts.length)], next: now + 80000 + Math.random() * 100000 };
+      const weather = WEATHER_NEXT[this.clock.upcoming] ? this.clock.upcoming : pickWeather(this.clock.weather); // (the forecast comes true)
+      this.clock = { hour: h, at: now, day, weather, next: now + weatherHoldMs(weather), upcoming: pickWeather(weather) };
       this.broadcast('clock', this.clockMsg(now));
     }
     for (const r of this.races.values()) if (!r.done && now >= r.at) this.raceBoard(r);
@@ -1018,7 +1033,7 @@ export class GameServer {
       }
       case 'weather': {
         if (typeof d.w !== 'string' || !Object.hasOwn(WEATHER_NEXT, d.w)) return { err: 'bad_value' };
-        w.clock = { ...w.clock, weather: d.w, next: now + ADMIN_WEATHER_HOLD_MS };
+        w.clock = { ...w.clock, weather: d.w, next: now + ADMIN_WEATHER_HOLD_MS, upcoming: pickWeather(d.w) };
         w.broadcast('clock', w.clockMsg(now));
         this.log(`[admin] ${c.name}: world ${w.id} weather ${d.w}`);
         return { d: { clock: w.clockMsg(now) } };

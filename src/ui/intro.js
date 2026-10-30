@@ -74,7 +74,12 @@ export class Intro {
         await ident.start(at + 0.5);
         total = (at + 0.5) * 1000 + STUDIO_MS;
       }
-    } finally { sched(); }
+    } finally {
+      // (Oct 30, the user: "now you only see Icecold Studio and not the main intro with SKI LEGACY": the game's boot
+      // holds the main thread for seconds; it now waits until the logo clip has played, and boots during the ident)
+      const clipLeft = clipS && !sig.skipped ? Math.max(0, (total ? total - STUDIO_MS - 500 : 0)) : 0;
+      if (clipLeft > 0) { const t = setTimeout(sched, clipLeft); sig.onSkip.push(() => { clearTimeout(t); sched(); }); } else sched();
+    }
 
     if (!sig.skipped) await wait(total, sig);
     clip?.stop(); clipS?.remove();

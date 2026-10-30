@@ -2316,9 +2316,9 @@ menu = new Menu({
 const skipIntro = new URLSearchParams(location.search).has('nointro');
 const intro = skipIntro ? null : new Intro(audio);
 (intro ? intro.play() : Promise.resolve()).then(() => { menu.show(); audio.music('menu'); });
-// the boot waits until the intro's timeline is laid out and the studio ident is on screen (at most 4 s): the boot blocks
+// the boot waits until the SKI LEGACY clip has played and the studio ident is on screen (at most 9 s): the boot blocks
 // the main thread for seconds, and the intro's own timers would fire late (the studio "took very long to load")
-Promise.race([intro?.scheduled, new Promise((r) => setTimeout(r, intro ? 4000 : 0))]).then(() => boot()).catch((e) => {
+Promise.race([intro?.scheduled, new Promise((r) => setTimeout(r, intro ? 9000 : 0))]).then(() => boot()).catch((e) => {
   console.error(e);
   setLoad(1, 'Error: ' + e.message);
 });

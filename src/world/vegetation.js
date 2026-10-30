@@ -9,6 +9,7 @@ import { bakeGeometry, fitModel, clusterDecimate } from '../core/assets.js';
 import { terrainUniforms } from './terrain.js';
 import { quality, onQualityChange } from '../engine/quality.js';
 import { boulderKit, withGround, BOULDER_VARIANTS } from './boulders.js';
+import { EXPRESS, expressNearest, inExpressTunnel, PORTAL_IN } from './expressroute.js';
 
 
 const CELL = 64;
@@ -22,6 +23,15 @@ const MAX_ROCKS = 1500;
 const ROCK_CLOSE_R = 45, MAX_CLOSE_ROCKS = 96; // boulders this close use the detailed mesh
 const VILLAGE_CLEAR = 160; // no boulders around Legacy Village (centred on the origin): its paths, gardens and plaza
 const BIG_ROCK = 2.6; // boulders from this size up stand tall (player.js collides with them); smaller ones only poke through the snow
+// no boulder on the Legacy Express's formation or at the toes of its cuttings (Oct 30, the user: "so many parts where
+// you go through a mountain": the trains ran straight through granite blocks of up to 4.5 m lying on the tracks, ~430
+// of them round the ring, most between Eagle Peak and Legacy World Downhill). Over a tunnel the rocks lie on its cover.
+const _xn = { d: 1e9, s: 0, side: 0, i: 0 };
+function onExpressBed(x, z, size) {
+  if (!EXPRESS.ready) return false;
+  const n = expressNearest(x, z, _xn);
+  return !!n && n.d < 8.5 + size * 0.6 && !inExpressTunnel(n.s, PORTAL_IN + 3);
+}
 const _q = new THREE.Quaternion(), _qy = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0), _n = new THREE.Vector3();
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _id = new THREE.Quaternion();
 const IMP_W = 256, IMP_H = 512; // impostor bake size
@@ -384,7 +394,7 @@ export class Vegetation {
       } else if (rr < (slope > 0.45 ? 0.05 : 0.006) && this.rockKit) {
         // big boulders keep further off the runs, clear of the nets and border poles at their edges
         world.corridorAt(x, z, c);
-        if (c.d < 2.6 + (1 + r1 * 3.5) * 0.7 || this.nearPad(x, z) || x * x + z * z < VILLAGE_CLEAR * VILLAGE_CLEAR) continue;
+        if (c.d < 2.6 + (1 + r1 * 3.5) * 0.7 || this.nearPad(x, z) || x * x + z * z < VILLAGE_CLEAR * VILLAGE_CLEAR || onExpressBed(x, z, 1 + r1 * 3.5)) continue;
         rocks.push(this.placeRock(x, z, h, hx, hz, r1, r2, hash2(gx, gz, 7), hash2(gx, gz, 8)));
       } else if (rr < 0.16 && slope > 0.12 && slope < 0.8 && this.rockKit) {
         // scree: below a rock wall, stones that broke off lie in loose clusters at its foot
@@ -399,6 +409,7 @@ export class Vegetation {
           const oh = world.height(ox, oz), ohx = world.height(ox + 1, oz) - oh, ohz = world.height(ox, oz + 1) - oh;
           const big = hash2(gx, gz, 40 + k) < 0.12; // now and then a block too big to ski over
           const sz = big ? 2.7 + hash2(gx, gz, 50 + k) * 1.4 : 0.7 + hash2(gx, gz, 50 + k) * 1.4;
+          if (onExpressBed(ox, oz, sz)) continue;
           rocks.push(this.placeRock(ox, oz, oh, ohx, ohz, (sz - 1) / 3.5, hash2(gx, gz, 60 + k), hash2(gx, gz, 70 + k), hash2(gx, gz, 80 + k), sz));
         }
       }

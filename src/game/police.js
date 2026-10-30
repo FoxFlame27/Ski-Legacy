@@ -65,6 +65,7 @@ import { ST, F, W_SHIFT } from '../net/protocol.js';
 import { presentation } from './presentation/index.js';
 import { HeliModel } from './heli/model.js';
 import { nightUniform } from '../world/village.js';
+import { terrainUniforms } from '../world/terrain.js'; // read-only: how hard it is snowing (the searchlight's beam: heli/model.js)
 
 // The officers: a Meshy police officer in a navy winter uniform + hi-vis vest (tools/meshy-officer.mjs,
 // public/models/police_officer_rigged.glb + _anims.glb), loaded in the background (never blocks the start). Until it is
@@ -158,9 +159,9 @@ const LEVELS = [null,
 const MAXU = 8; // patrol cars at most (five stars: five after you and a roadblock's two; server.js setVeh takes eight)
 // the helicopter: m/s (230 km/h: a fast car on a straight slowly gets away), m/s2, m over the ground (60-90), m it
 // sees round it (horizontally), its light's radius on the ground (m), m it trails you by
-const HELI_V = 64, HELI_A = 13, HELI_ALT = 72, HELI_SEE = 170, LIGHT_R = 8, HELI_BACK = 22;
+const HELI_V = 64, HELI_A = 13, HELI_ALT = 72, HELI_SEE = 170, HELI_BACK = 22;
 const RB_DIST = [300, 260, 220, 340]; // m on along your road a roadblock is tried at (the first out of sight)
-const DOWN = new THREE.Vector3(0, -1, 0);
+const _aim = new THREE.Vector3(); // (where the searchlight is aimed: heliStep)
 const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
@@ -733,41 +734,6 @@ function spikeMesh() {
   m.name = 'police-spikes'; m.receiveShadow = true; m.visible = false;
   return m;
 }
-// the helicopter's searchlight: the beam (a soft additive cone, apex at the origin, down -y, unit length and radius:
-// bright along its axis, fading to its edges and towards the ground; seen by day too), the pool of light on the
-// ground (a glow disc draped on the terrain: POOL x POOL vertices, re-laid every frame round where it hits) and the
-// light itself (a THREE.SpotLight, in the scene from the start with intensity 0: no shader recompile when it comes)
-const POOL = 11;
-function searchlight() {
-  const geo = new THREE.CylinderGeometry(0.02, 1, 1, 32, 8, true);
-  geo.translate(0, -0.5, 0);
-  const cone = new THREE.Mesh(geo, new THREE.ShaderMaterial({
-    uniforms: { uI: { value: 0 }, uColor: { value: new THREE.Color(1, 0.95, 0.84) } },
-    vertexShader: `varying float vAlong; varying vec3 vN; varying vec3 vV;
-      void main(){ vAlong = -position.y; vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv; }`,
-    fragmentShader: `uniform float uI; uniform vec3 uColor; varying float vAlong; varying vec3 vN; varying vec3 vV;
-      void main(){ float core = pow(abs(dot(normalize(vN), normalize(vV))), 2.2);
-        float a = uI * core * (1.0 - 0.55 * smoothstep(0.35, 1.0, vAlong)) * smoothstep(0.0, 0.06, vAlong);
-        gl_FragColor = vec4(uColor * a, 1.0); }`,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-  }));
-  cone.frustumCulled = false; cone.renderOrder = 8; cone.name = 'police-searchlight';
-  const pg = new THREE.PlaneGeometry(2, 2, POOL - 1, POOL - 1).rotateX(-Math.PI / 2);
-  pg.attributes.position.setUsage(THREE.DynamicDrawUsage);
-  const pool = new THREE.Mesh(pg, new THREE.MeshBasicMaterial({ map: glow(), color: 0xfff4d8, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8, fog: false }));
-  pool.frustumCulled = false; pool.renderOrder = 8; pool.name = 'police-searchlight-pool';
-  return { cone, pool };
-}
-// the pool of light (searchlight()) laid on the terrain round (cx, cz), r m across
-function drapePool(pool, cx, cz, r) {
-  const P = pool.geometry.attributes.position, step = (2 * r) / (POOL - 1);
-  for (let j = 0; j < POOL; j++) for (let i = 0; i < POOL; i++) {
-    const x = cx - r + i * step, z = cz - r + j * step;
-    P.setXYZ(j * POOL + i, x, world.height(x, z) + 0.3, z);
-  }
-  P.needsUpdate = true;
-}
 const popcount = (b) => (b & 1) + ((b >> 1) & 1) + ((b >> 2) & 1) + ((b >> 3) & 1);
 
 // ------------------------------------------------------------------ the police
@@ -805,8 +771,11 @@ export class Police {
     this.L = LEVELS[1]; this.aLat = A_LAT; // (the wanted level's numbers, set every chase frame)
     this.fx = null;       // sparks and debris (Fx, made on the first hit)
     this.heli = null;     // the police helicopter (4+ stars: heliStep)
-    // its searchlight's light: always in the scene (intensity 0 when off: adding a light later recompiles every shader)
-    this.spot = new THREE.SpotLight(0xfff1d6, 0, 0, 0.12, 0.6, 0);
+    // its searchlight's light: always in the scene (intensity 0 when off: adding a light later recompiles every shader).
+    // (Oct 30 2026, the user: "the light that shines on you is very off. It should be like the other helicopter light"):
+    // the landing light's cone (heli/model.js poolMesh: full out to 0.36 rad, soft from 0.08: penumbra 0.78), its warm
+    // white; no shadows (the landing light casts none)
+    this.spot = new THREE.SpotLight(0xffeecc, 0, 0, 0.36, 0.78, 0);
     this.spot.name = 'police-heli-spot'; this.spot.castShadow = false;
     this.scene?.add(this.spot, this.spot.target);
     this.spikes = [];     // spike strips: { m, on, x, z, ax, az (across the road), t }
@@ -1826,8 +1795,9 @@ export class Police {
         H.x = T.x + Math.sin(a) * r; H.z = T.z + Math.cos(a) * r; H.y = world.height(H.x, H.z) + HELI_ALT + 12;
         H.vx = -Math.sin(a) * 30; H.vz = -Math.cos(a) * 30; H.yaw = Math.atan2(H.vx, H.vz);
         H.ax = H.x - Math.sin(a) * 40; H.az = H.z - Math.cos(a) * 40; H.called = false; H.roll = 0; H.pitch = 0;
-        H.side = Math.random() < 0.5 ? 1 : -1; H.sideS = H.side; H.sideT = 12 + Math.random() * 8; H.seeT = 0; H.sees = false; H.lit = 0;
-        H.model.root.visible = true; H.cone.visible = true; H.pool.visible = true;
+        H.side = Math.random() < 0.5 ? 1 : -1; H.sideS = H.side; H.sideT = 12 + Math.random() * 8; H.seeT = 0; H.sees = false;
+        H.ay = world.height(H.ax, H.az); H.model.lampOn = 0;
+        H.model.root.visible = true;
       }
       H.on = true; H.leaving = false; H.leaveT = 0;
     }
@@ -1881,7 +1851,6 @@ export class Police {
     _e.set(H.pitch, H.yaw, H.roll);
     R.quaternion.setFromEuler(_e);
     const night = clamp(nightUniform?.value ?? 0, 0, 1);
-    try { H.model.update(dt, { rpm: 1, night, time: this.time, lamp: false, camera: this.camera, ground: H.ground, snow: 0 }); } catch (e) { if (!H.err) { H.err = true; console.warn('police heli', e); } }
     // does it see you (~4 times a second): near enough, no ridge between, you not under the mountain (a tunnel)
     if ((H.seeT -= dt) <= 0) {
       H.seeT = 0.25;
@@ -1895,29 +1864,28 @@ export class Police {
     }
     const sees = H.sees;
     if (!H.called && sees && W) { H.called = true; this.radio('Air One: I have the suspect in the light!', true); }
-    // the searchlight: on you while it sees you, else swept ahead of it round the search (or where it flies)
-    let lx, lz;
-    if (sees) { lx = T.x + T.vx * 0.08; lz = T.z + T.vz * 0.08; } else if (sweep) { lx = H.x + Math.sin(H.sw * 2.3) * 45; lz = H.z + Math.cos(H.sw * 1.7) * 45; } else { lx = H.x + H.vx * 0.8 + Math.sin(H.yaw) * 30; lz = H.z + H.vz * 0.8 + Math.cos(H.yaw) * 30; }
-    const kk = 1 - Math.exp(-dt * (sees ? 9 : 1.5));
-    H.ax += (lx - H.ax) * kk; H.az += (lz - H.az) * kk;
-    H.lit += ((H.leaving ? 0 : 1) - H.lit) * (1 - Math.exp(-dt * 3));
-    const ay = world.height(H.ax, H.az), rad = sees ? LIGHT_R : LIGHT_R * 1.4;
-    R.localToWorld(_p.set(0, -1.4, 1.2));
-    _s.set(H.ax - _p.x, ay - _p.y, H.az - _p.z);
-    const len = _s.length() || 1;
-    H.cone.position.copy(_p);
-    H.cone.quaternion.setFromUnitVectors(DOWN, _s.multiplyScalar(1 / len));
-    H.cone.scale.set(rad, len, rad);
-    H.cone.material.uniforms.uI.value = H.lit * (0.22 + 0.4 * night);
-    drapePool(H.pool, H.ax, H.az, rad * 1.3);
-    H.pool.material.opacity = H.lit * (0.35 + 0.6 * night);
+    // the searchlight (Oct 30 2026, the user: "the helicopter from the police, the light that shines on you is very off.
+    // It should be like the other helicopter light"): the helicopter's own landing light (heli/model.js: the lens under
+    // the nose, the faint beam, the lit pool shaded like a spot light on the snow, night only as yours), swung onto you
+    // (model.update aim) while it sees you, swept round the search while it looks for you, off otherwise (coming in,
+    // leaving). Aimed at you a touch ahead (your velocity), at your middle; the aim follows smoothly (a slight lag, no
+    // jitter). Its one SpotLight (this.spot) from the lens to the aim, its target moved and its matrix updated every frame
+    let lx, lz, ly;
+    if (sees) { lx = T.x + T.vx * 0.08; lz = T.z + T.vz * 0.08; ly = (T.y ?? world.height(lx, lz)) + 0.8; } else if (sweep) { lx = H.x + Math.sin(H.sw * 2.3) * 45; lz = H.z + Math.cos(H.sw * 1.7) * 45; ly = world.height(lx, lz); } else { lx = H.x + H.vx * 0.8 + Math.sin(H.yaw) * 30; lz = H.z + H.vz * 0.8 + Math.cos(H.yaw) * 30; ly = world.height(lx, lz); }
+    const kk = 1 - Math.exp(-dt * (sees ? 6 : 1.5));
+    H.ax += (lx - H.ax) * kk; H.az += (lz - H.az) * kk; H.ay += (ly - H.ay) * kk;
+    _aim.set(H.ax, H.ay, H.az);
+    const lampOn = !H.leaving && (sees || sweep);
+    const M = H.model;
+    try { M.update(dt, { rpm: 1, night, time: this.time, lamp: lampOn, camera: this.camera, ground: H.ground, snow: terrainUniforms.uSnowCover.value, aim: _aim }); } catch (e) { if (!H.err) { H.err = true; console.warn('police heli', e); } }
     const S = this.spot;
     if (S) {
-      S.position.copy(_p);
-      S.target.position.set(H.ax, ay, H.az);
+      const lit = M.lit > 0.02 ? M.lit : 0;
+      S.position.copy(M.lampAt);
+      S.target.position.copy(_aim);
       S.target.updateMatrixWorld();
-      S.angle = Math.atan((rad * 1.15) / len);
-      S.intensity = H.lit * (1.6 + 8 * night);
+      // (the lit pool's brightness at that distance: 1.25 / (1 + d^2 0.0011), x pi for a lit surface's own (Lambert))
+      S.intensity = lit * (1.25 * Math.PI) / (1 + M.lampLen * M.lampLen * 0.0011);
     }
     // the sound: the rotor's beat by how far it is from the camera (doppler from the closing speed)
     const cp = this.camera?.position, cd = cp ? Math.hypot(H.x - cp.x, H.y - cp.y, H.z - cp.z) : 100;
@@ -1931,11 +1899,9 @@ export class Police {
       const model = new HeliModel(this.models);
       model.addTo(this.scene);
       model.root.name = 'police-heli';
-      const { cone, pool } = searchlight();
-      this.scene.add(cone, pool);
-      model.root.visible = false; cone.visible = false; pool.visible = false;
-      return { model, cone, pool, on: false, leaving: false, leaveT: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, yaw: 0, roll: 0, pitch: 0, ax: 0, az: 0, sw: 0, sees: false, called: false,
-        side: 1, sideS: 1, sideT: 12, seeT: 0, lit: 0,
+      model.root.visible = false;
+      return { model, on: false, leaving: false, leaveT: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, yaw: 0, roll: 0, pitch: 0, ax: 0, ay: 0, az: 0, sw: 0, sees: false, called: false,
+        side: 1, sideS: 1, sideT: 12, seeT: 0,
         ground: (x, z) => world.height(x, z) };
     } catch (e) { console.warn('police heli', e); return null; }
   }
@@ -1943,7 +1909,7 @@ export class Police {
     const H = this.heli;
     if (!H) return;
     H.on = false; H.leaving = false; H.sees = false;
-    H.model.root.visible = false; H.cone.visible = false; H.pool.visible = false; H.model.pool.mesh.visible = false;
+    H.model.root.visible = false; H.model.pool.mesh.visible = false; H.model.beam.visible = false; H.model.lampOn = 0;
     if (this.spot) this.spot.intensity = 0;
     this.audio?.setChopper?.({ on: false });
   }

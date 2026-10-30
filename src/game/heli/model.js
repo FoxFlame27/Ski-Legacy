@@ -50,7 +50,8 @@ const LIGHTS = [
 ].map(([x, y, z, r, g, b, s, kind]) => ({ p: toLocal(x, y, z), c: new THREE.Color(r, g, b), s, kind }));
 
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion();
+const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+const FWD = new THREE.Vector3(0, 0, 1); // (the beam mesh opens along +z: beamMesh)
 
 // ------------------------------------------------------------------ the Meshy airframe
 // Cuts the model's static rotor head (and loose strands beside it) and its tail rotor stub: our own
@@ -390,6 +391,10 @@ export class HeliModel {
     this.root.add(this.beam);
     this.pool = poolMesh();
     this.lampOn = 0;
+    // where the landing light is this frame (updateLamp: world): the lens, the way it shines, the snow it meets (len m
+    // along it, hit: it does) and how bright (lit 0..1, night only); the police helicopter's SpotLight follows these
+    this.lampAt = new THREE.Vector3(); this.lampDir = new THREE.Vector3(0, -1, 0); this.lampHit = new THREE.Vector3();
+    this.lampLen = 0; this.lampHitOk = false; this.lit = 0;
   }
 
   addTo(scene) { scene.add(this.root, this.pool.mesh); }
@@ -418,7 +423,9 @@ export class HeliModel {
   /**
    * Per frame.
    * @param {number} dt
-   * @param {{rpm: number, night: number, time: number, lamp: boolean, camera: THREE.Camera, ground: (x, z) => number}} s
+   * @param {{rpm: number, night: number, time: number, lamp: boolean, camera: THREE.Camera, ground: (x, z) => number,
+   *   snow?: number, aim?: THREE.Vector3}} s  aim: the light swung onto this world point (the police searchlight) instead
+   *   of fixed LAMP_TILT under the nose
    */
   update(dt, s) {
     const rpm = s.rpm;
@@ -462,22 +469,40 @@ export class HeliModel {
 
     // ---- landing light: beam + lit pool where it meets the snow (night only)
     this.lampOn += ((s.lamp ? 1 : 0) - this.lampOn) * (1 - Math.exp(-dt * 6));
-    const lit = this.lampOn * night;
+    const lit = (this.lit = this.lampOn * night);
     this.beam.visible = this.pool.mesh.visible = lit > 0.02;
-    if (lit > 0.02) this.updateLamp(lit, s.ground, s.snow || 0);
+    if (lit > 0.02) this.updateLamp(lit, s.ground, s.snow || 0, s.aim || null);
   }
 
-  updateLamp(lit, ground, snow) {
-    const lamp = _v.copy(ANCHORS.lamp);
+  updateLamp(lit, ground, snow, aim = null) {
+    // (Oct 30 2026, the user: "the helicopter from the police, the light that shines on you is very off. It should be
+    // like the other helicopter light": the police helicopter now shines this same landing light, swung onto you (aim).
+    // Its root's world matrix brought up to this frame's pose first: localToWorld otherwise used the last render's, the
+    // beam a frame behind the helicopter that moved since)
+    this.root.updateWorldMatrix(true, false);
+    const lamp = this.lampAt.copy(ANCHORS.lamp);
     this.root.localToWorld(lamp);
-    const dir = _w.set(0, -Math.sin(LAMP_TILT), Math.cos(LAMP_TILT)).applyQuaternion(this.root.getWorldQuaternion(_q));
+    const q = this.root.getWorldQuaternion(_q);
+    const dir = this.lampDir;
+    let far = 160;
+    if (aim) {
+      // (aimed: the lens's way to the point, the beam mesh turned onto it in the root's frame; marched a little past it)
+      dir.subVectors(aim, lamp);
+      const l = dir.length();
+      if (l > 0.01) { dir.multiplyScalar(1 / l); far = Math.max(160, l * 1.2); } else dir.set(0, -1, 0);
+      this.beam.quaternion.copy(q).invert().multiply(_q2.setFromUnitVectors(FWD, dir));
+    } else {
+      dir.set(0, -Math.sin(LAMP_TILT), Math.cos(LAMP_TILT)).applyQuaternion(q);
+      this.beam.rotation.set(LAMP_TILT, 0, 0);
+    }
     // march along the beam to the snow
     let d = 0, hit = false;
-    for (let s = 2; s <= 160; s += s < 30 ? 2 : 5) {
+    for (let s = 2; s <= far; s += s < 30 ? 2 : 5) {
       const x = lamp.x + dir.x * s, y = lamp.y + dir.y * s, z = lamp.z + dir.z * s;
       if (y <= ground(x, z)) { d = s; hit = true; break; }
     }
-    const len = hit ? d : 160;
+    const len = hit ? d : far;
+    this.lampLen = len; this.lampHitOk = hit; this.lampHit.copy(lamp).addScaledVector(dir, len);
     this.beam.scale.set(len * Math.tan(0.3), len * Math.tan(0.3), len);
     this.beam.material.uniforms.uI.value = lit * (0.05 + 0.1 * snow) * Math.min(1, 25 / len);
     const P = this.pool;

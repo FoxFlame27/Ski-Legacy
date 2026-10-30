@@ -11,6 +11,7 @@
 // z = L.hd), +x along it. The house: W x D, its front (the door) at z FRONT.
 import * as THREE from 'three';
 import { world } from '../world/world.js';
+import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (paving on the drawn terrain's own triangles)
 import { makeSign, standSign } from '../world/village.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fitModel, loadGLB, dequantize } from '../core/assets.js';
@@ -112,6 +113,45 @@ export function swapInModel(group, name, fit, fallback, onModel) {
   }).catch((e) => console.warn('decor', name, e));
 }
 
+/** A swapped-in model's vertices (every `stride`-th) in `group`'s frame, for laying crisp canvas faces on it. */
+export function modelPoints(group, model, stride = 1) {
+  group.updateWorldMatrix(true, true);
+  const inv = group.matrixWorld.clone().invert(), mat = new THREE.Matrix4(), out = [];
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    mat.multiplyMatrices(inv, o.matrixWorld);
+    const pa = o.geometry.attributes.position;
+    for (let i = 0; i < pa.count; i += stride) out.push(new THREE.Vector3().fromBufferAttribute(pa, i).applyMatrix4(mat));
+  });
+  return out;
+}
+/** The same model's triangles ([a, b, c] Vector3s in `group`'s frame): flat Meshy faces have few vertices inside. */
+export function modelTris(group, model) {
+  group.updateWorldMatrix(true, true);
+  const inv = group.matrixWorld.clone().invert(), mat = new THREE.Matrix4(), out = [];
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    mat.multiplyMatrices(inv, o.matrixWorld);
+    const pa = o.geometry.attributes.position, ix = o.geometry.index, n = ix ? ix.count : pa.count;
+    const P = (k) => new THREE.Vector3().fromBufferAttribute(pa, ix ? ix.getX(k) : k).applyMatrix4(mat);
+    for (let k = 0; k + 2 < n; k += 3) out.push([P(k), P(k + 1), P(k + 2)]);
+  });
+  return out;
+}
+/** Re-seat a swapped-in model (a child of `group`) in a pivot turned so that its front (+1/-1 along the `depth` axis
+ * 'x' or 'z' of the group's frame) faces +z, with the group-frame point (ox, oy, oz) at the pivot's origin. Returns
+ * a function mapping a group-frame point to the pivot's frame and the pivot (canvas faces go in it, facing +z). */
+export function frontPivot(group, model, depth, front, ox, oy, oz) {
+  const pivot = new THREE.Group();
+  group.remove(model); pivot.add(model); group.add(pivot);
+  model.position.x -= ox; model.position.y -= oy; model.position.z -= oz;
+  pivot.rotation.y = depth === 'x' ? -front * Math.PI / 2 : (front > 0 ? 0 : Math.PI);
+  const toPivot = (x, y, z) => new THREE.Vector3(x - ox, y - oy, z - oz);
+  // (a canvas face in the pivot: at toPivot(...) of the model's face, turned to face the model's front)
+  const faceRot = depth === 'x' ? front * Math.PI / 2 : (front > 0 ? 0 : Math.PI);
+  return { pivot, toPivot, faceRot };
+}
+
 // the snow drifts' shape: the model's geometry welded smooth, normalised to a unit box (x / z -0.5..0.5, y 0..1),
 // its long side along x; plain snow on it (the ground's colour and sheen: no texture, which reads grey up close)
 const DRIFTS = { long: 'snow/drift_long', heap: 'snow/snow_heap', mound: 'snow/snow_mound' };
@@ -180,7 +220,7 @@ export function buildPrisonOutside(P, L) {
   const M = shellMaterials(), models = P.models || {};
   const yaw0 = Math.atan2(L.dirx, L.dirz);
   const w = (lx, lz) => ({ x: L.x + L.dirz * lx + L.dirx * lz, z: L.z - L.dirx * lx + L.dirz * lz });
-  const gy = (lx, lz) => { const p = w(lx, lz); return world.height(p.x, p.z) - L.y; }; // (the ground, lot frame)
+  const gy = (lx, lz) => { const p = w(lx, lz); return world.meshHeight(p.x, p.z) - L.y; }; // (the ground as drawn, lot frame)
   const g = new THREE.Group(); g.name = 'prison';
   g.position.set(L.x, L.y, L.z); g.rotation.y = yaw0;
   const add = (geo, mat, x, y, z, parent = g, shadow = true) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; parent.add(m); return m; };
@@ -386,11 +426,16 @@ export function buildPrisonOutside(P, L) {
     const fx = c.createLinearGradient(0, 0, cw, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.045, '#000'); fx.addColorStop(0.955, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
     c.fillStyle = fx; c.fillRect(0, 0, cw, ch);
   });
-  const yard = new THREE.Mesh(new THREE.PlaneGeometry(YW, YD, 28, 16), new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+  // (the drawn terrain's own triangles under it, 4 cm up: world/groundpatch.js; before, a plane of its own laid on
+  // world.height at its vertices: where the ground eases into the road's shoulder the terrain's 2 m triangles poked
+  // up through it)
+  g.updateMatrixWorld(true);
+  const lotXZ = (x, z) => { const dx = x - L.x, dz = z - L.z; return [dx * L.dirz - dz * L.dirx, dx * L.dirx + dz * L.dirz]; };
+  const yard = new THREE.Mesh(groundPatchGeometry([[X0, Z0], [X1, Z0], [X1, Z1], [X0, Z1]].map(([lx, lz]) => { const p = w(lx, lz); return [p.x, p.z]; }), {
+    lift: 0.04, toLocal: (v) => g.worldToLocal(v),
+    uv: (x, z) => { const [lx, lz] = lotXZ(x, z); return [(lx - X0) / YW, 1 - (lz - Z0) / YD]; },
+  }), groundDecal(new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }))); // (a hair nearer, as the car parks)
   yard.receiveShadow = true;
-  { const pa = yard.geometry.attributes.position;
-    for (let i = 0; i < pa.count; i++) { const lx = (X0 + X1) / 2 + pa.getX(i), lz = (Z0 + Z1) / 2 - pa.getY(i); pa.setXYZ(i, lx, gy(lx, lz) + 0.04, lz); }
-    pa.needsUpdate = true; yard.geometry.computeVertexNormals(); }
   yard.renderOrder = 1; g.add(yard);
   // granite kerbs along the forecourt's sides
   const kerb = new THREE.MeshStandardMaterial({ color: 0x9a9890, roughness: 0.85 });
@@ -456,26 +501,98 @@ export function buildPrisonOutside(P, L) {
       if (lines.length === 1) { c.font = 'bold 88px Arial'; c.fillText(lines[0], x, ch / 2 + 6); }
       else { c.font = 'bold 74px Arial'; c.fillText(lines[0], x, ch / 2 - 40); c.font = 'italic 62px Georgia'; c.fillText(lines[1], x, ch / 2 + 50); }
     });
-    const plate = (wd, ht, tex_, x, y, z) => {
+    const plate = (wd, ht, tex_, x, y, z, parent) => {
       const mats = [plateBack, plateBack, plateBack, plateBack, faceMat(tex_), plateBack];
-      const m = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.02), mats); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m);
-      add(new THREE.BoxGeometry(wd - 0.02, 0.03, 0.045), snow, x, y + ht / 2 + 0.012, z, g, false); // (snow along its top edge)
+      const m = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.02), mats); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
+      add(new THREE.BoxGeometry(wd - 0.02, 0.03, 0.045), snow, x, y + ht / 2 + 0.012, z, parent, false); // (snow along its top edge)
       return m;
     };
-    const parkSign = (lx, lz, lines, badge) => {
-      const y0 = gy(lx, lz);
-      add(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 12), galv, lx, y0 + 1.22, lz);                                   // (the post)
-      add(new THREE.CylinderGeometry(0.034, 0.034, 0.02, 12), galv, lx, y0 + 2.48, lz);                                // (its cap)
-      const cap = add(new THREE.SphereGeometry(0.055, 12, 8), snow, lx, y0 + 2.5, lz, g, false); cap.scale.set(1, 0.5, 1); // (snow on it)
-      const zf = lz + 0.045;
-      plate(0.6, 0.6, pT, lx, y0 + 2.08, zf);
-      plate(0.6, 0.3, panelT(lines, badge), lx, y0 + 1.6, zf);
-      for (const y of [y0 + 2.25, y0 + 1.9, y0 + 1.6]) add(new THREE.BoxGeometry(0.1, 0.035, 0.05), galv, lx, y, lz + 0.018, g, false); // (clamps)
-      const p = w(lx, lz); colliders.push({ x: p.x, z: p.z, r: 0.12 });
+    // the Meshy sign (decor/parking_sign: post, a tall P plate, an additional plate under it) once loaded: turned to
+    // face the road, the post on the spot; the readable faces stay canvas, laid on its two plates (found from its
+    // triangles: the parts wider than the post, split at the gap between them), snow on the top plate and the post
+    const fitText = (c, t, x, y, max) => { const m_ = c.measureText(t).width; if (m_ <= max) { c.fillText(t, x, y); return; } c.save(); c.translate(x, y); c.scale(max / m_, 1); c.fillText(t, 0, 0); c.restore(); };
+    const topTex = (asp, lines, badge) => canvasTex(512, Math.min(1024, Math.round(512 * asp)), (c, cw, ch) => {
+      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 40); c.fill();
+      c.fillStyle = '#1d5bb0'; rrect(c, 24, 24, cw - 48, ch - 48, 28); c.fill();
+      c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const field = ch / cw >= 1.25, pH = field ? ch * 0.58 : ch;
+      c.font = `bold ${Math.round(Math.min(cw * 0.78, pH * 0.8))}px Arial`; c.fillText('P', cw / 2, pH / 2 + (field ? 26 : 22));
+      if (!field) return;
+      const fy0 = pH, fy1 = ch - 52; rrect(c, 52, fy0, cw - 104, fy1 - fy0, 14); c.fill();
+      c.fillStyle = '#111111'; const x = badge ? cw / 2 + 40 : cw / 2, mx = cw - 130 - (badge ? 80 : 0), fm = (fy0 + fy1) / 2;
+      if (badge) drawBadge(c, 112, fm, Math.min(46, (fy1 - fy0) * 0.36), { ring: '#c9a54a', star: '#f4d77a', inner: '#123e86' });
+      if (lines.length === 1) { c.font = `bold ${Math.round(Math.min(84, (fy1 - fy0) * 0.5))}px Arial`; fitText(c, lines[0], x, fm + 4, mx); }
+      else { const fs = Math.round(Math.min(66, (fy1 - fy0) * 0.32)); c.font = `bold ${fs}px Arial`; fitText(c, lines[0], x, fm - fs * 0.55, mx); c.font = `italic ${Math.round(fs * 0.85)}px Georgia`; fitText(c, lines[1], x, fm + fs * 0.6, mx); }
+    });
+    const subTex = (asp, lines) => canvasTex(512, Math.max(128, Math.min(1024, Math.round(512 * asp))), (c, cw, ch) => {
+      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 22); c.fill();
+      c.strokeStyle = '#111111'; c.lineWidth = 9; rrect(c, 20, 20, cw - 40, ch - 40, 14); c.stroke();
+      c.fillStyle = '#111111'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const fs = Math.round(Math.min(70, ch * 0.25)), mx = cw - 80;
+      c.font = `bold ${fs}px Arial`; fitText(c, lines[0], cw / 2, ch / 2 - fs * 0.58, mx);
+      c.font = `italic ${Math.round(fs * 0.85)}px Georgia`; fitText(c, lines[1], cw / 2, ch / 2 + fs * 0.62, mx);
+    });
+    const dressSign = (sg, m, lines, badge, sub) => {
+      const pts = modelPoints(sg, m, 1), tris = modelTris(sg, m);
+      if (pts.length < 50 || !tris.length) return;
+      let H = 0; for (const v of pts) H = Math.max(H, v.y);
+      const ext = (arr, k) => { let lo = Infinity, up = -Infinity; for (const v of arr) { lo = Math.min(lo, v[k]); up = Math.max(up, v[k]); } return [lo, up]; };
+      const hi = pts.filter((v) => v.y > H * 0.5), [hx0, hx1] = ext(hi, 'x'), [hz0, hz1] = ext(hi, 'z');
+      const wa = hx1 - hx0 >= hz1 - hz0 ? 'x' : 'z', da = wa === 'x' ? 'z' : 'x';
+      const med = (arr) => { const s_ = arr.slice().sort((p_, q) => p_ - q); return s_[s_.length >> 1] ?? 0; };
+      const foot = pts.filter((v) => v.y > H * 0.12 && v.y < H * 0.25);
+      if (foot.length < 4) return;
+      const pw = med(foot.map((v) => v[wa])), pd = med(foot.map((v) => v[da]));
+      const rr = foot.map((v) => Math.abs(v[wa] - pw)).sort((p_, q) => p_ - q), thr = rr[Math.floor(rr.length * 0.9)] * 1.5 + 0.02;
+      // the plates: triangles reaching out past the post, above its foot; their height coverage in 1 cm bins
+      const pt = tris.filter((t) => t.some((v) => Math.abs(v[wa] - pw) > thr) && t.every((v) => v.y > H * 0.15));
+      if (pt.length < 4) return;
+      const pv = pt.flat(), [py0, py1] = ext(pv, 'y'), n = Math.max(2, Math.round((py1 - py0) / 0.01)), bins = new Uint8Array(n);
+      const bin = (y) => Math.max(0, Math.min(n - 1, Math.floor(((y - py0) / (py1 - py0)) * n)));
+      for (const t of pt) { const [a, b] = ext(t, 'y'); for (let i = bin(a); i <= bin(b); i++) bins[i] = 1; }
+      let best = [0, 0];
+      for (let i = 1, run = 0; i < n - 1; i++) { run = bins[i] ? 0 : run + 1; if (run > best[1] - best[0]) best = [i - run + 1, i + 1]; }
+      const split = best[1] - best[0] >= 2;
+      const sLo = split ? py0 + (best[0] / n) * (py1 - py0) : py0, sHi = split ? py0 + (best[1] / n) * (py1 - py0) : py0;
+      let md = 0; for (const v of pv) md += v[da]; md /= pv.length;
+      const front = md - pd < -0.002 ? -1 : 1;
+      const ox = wa === 'x' ? pw : pd, oz = wa === 'x' ? pd : pw;
+      const { pivot, toPivot, faceRot } = frontPivot(sg, m, da, front, ox, 0, oz);
+      const face = (y0_, y1_, mk) => {
+        const reg = pv.filter((v) => v.y >= y0_ - 0.005 && v.y <= y1_ + 0.005);
+        if (reg.length < 3 || y1_ - y0_ < 0.05) return null;
+        const [w0, w1] = ext(reg, wa), [d0, d1] = ext(reg, da), fd = (front > 0 ? d1 : d0) + front * 0.004, cw = (w0 + w1) / 2, cy = (y0_ + y1_) / 2;
+        const ww = (w1 - w0) * 0.97, hh = (y1_ - y0_) * 0.97;
+        const f = new THREE.Mesh(new THREE.PlaneGeometry(ww, hh), faceMat(mk(hh / ww)));
+        f.position.copy(wa === 'x' ? toPivot(cw, cy, fd) : toPivot(fd, cy, cw)); f.rotation.y = faceRot; f.receiveShadow = true; pivot.add(f);
+        return f;
+      };
+      const top = face(sHi, py1, (a) => topTex(a, lines, badge));
+      if (split) face(py0, sLo, (a) => subTex(a, sub));
+      if (top) { // (snow along the top plate's edge)
+        const s_ = add(new THREE.BoxGeometry(top.geometry.parameters.width * 0.96, 0.03, 0.05), snow, 0, 0, 0, pivot, false);
+        s_.position.copy(top.position).setY(py1 + 0.012); s_.rotation.y = faceRot; s_.translateZ(-0.024);
+      }
+      if (H > py1 + 0.03) { const c_ = add(new THREE.SphereGeometry(0.06, 12, 8), snow, 0, H, 0, pivot, false); c_.scale.set(1, 0.45, 1); } // (a cap on the post)
+    };
+    const parkSign = (lx, lz, lines, badge, sub) => {
+      const y0 = gy(lx, lz), sg = new THREE.Group(), fb = new THREE.Group();
+      sg.position.set(lx, y0, lz); sg.add(fb); g.add(sg);
+      add(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 12), galv, 0, 1.22, 0, fb);                                       // (the post)
+      add(new THREE.CylinderGeometry(0.034, 0.034, 0.02, 12), galv, 0, 2.48, 0, fb);                                    // (its cap)
+      const cap = add(new THREE.SphereGeometry(0.055, 12, 8), snow, 0, 2.5, 0, fb, false); cap.scale.set(1, 0.5, 1);    // (snow on it)
+      const pnl = panelT(lines, badge);
+      plate(0.6, 0.6, pT, 0, 2.08, 0.045, fb);
+      plate(0.6, 0.3, pnl, 0, 1.6, 0.045, fb);
+      for (const y of [2.25, 1.9, 1.6]) add(new THREE.BoxGeometry(0.1, 0.035, 0.05), galv, 0, y, 0.018, fb, false); // (clamps)
+      swapInModel(sg, 'decor/parking_sign', { size: 2.7, axis: 'y' }, fb, (m) => dressSign(sg, m, lines, badge, sub));
+      const p = w(lx, lz); colliders.push({ x: p.x, z: p.z, hw: 0.42, hd: 0.15, rot: -yaw0 }); // (the post and its plates)
     };
     const hz = BAYS.z0 - 0.3; // (at the bays' heads, clear of the bays and the house's drifts)
-    parkSign(BAYS.lines[1], hz, ['Polizei'], true);
-    parkSign((BAYS.lines[2] + BAYS.lines[3]) / 2, hz, ['Besucher', 'Visitors'], false);
+    parkSign(BAYS.lines[1], hz, ['Polizei'], true, ['Nur Dienstfahrzeuge', 'Official vehicles only']);
+    parkSign((BAYS.lines[2] + BAYS.lines[3]) / 2, hz, ['Besucher', 'Visitors'], false, ['Bitte am Schalter melden', 'Please report inside']);
   }
   // the signpost at the forecourt's mouth, facing the road
   let postMat = null;

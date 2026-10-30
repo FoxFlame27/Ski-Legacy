@@ -56,6 +56,16 @@ const ASSETS = [
     tex: 'dark emerald green cased glass shade, glossy, white opal glass inside, polished antique brass stem, foot and pull chain, realistic game textures',
   },
   {
+    id: 'parking_sign', dir: 'decor', polys: 4000, px: 1024, ratio: 1, style: STYLE,
+    prompt: 'A European road parking sign: one straight round galvanised steel post about 2.5 metres tall, at its top a flat square blue sign plate with a white rounded border and a large white letter P, directly below it a smaller flat white rectangular additional plate with a thin black border, both plates clamped flat to the front of the post with metal brackets, plain flat sign faces, seen from the front',
+    tex: 'blue enamel parking sign plate with a white border and a white letter P, plain white additional plate with a thin black border and no text, galvanised grey steel post, brackets and plate backs, light road grime, realistic game textures',
+  },
+  {
+    id: 'notice_frame', dir: 'decor', polys: 3000, px: 1024, ratio: 1, style: STYLE,
+    prompt: 'An empty wall-mounted notice board: a flat portrait rectangular panel about 0.9 metres wide and 1.1 metres tall set in a thick dark larch wood picture frame with a moulded profile and slightly rounded edges, a plain flat cream panel inside the frame, a small brass screw in each corner of the frame, flat back to hang on a wall, seen from the front',
+    tex: 'dark brown oiled larch wood frame with visible fine grain, plain flat off-white cream panel, small polished brass screws, realistic game textures',
+  },
+  {
     id: 'lantern_wall', dir: 'decor', polys: 4000, px: 1024, ratio: 1, style: STYLE,
     prompt: 'A black wrought iron alpine wall lantern: a square lantern with four warm frosted glass panes and a pointed little roof with a finial, hanging from an ornate scrolled iron wall bracket with a wall plate at the back, rustic chalet style',
     tex: 'matte black wrought iron, warm yellow-white frosted glass panes, realistic game textures',

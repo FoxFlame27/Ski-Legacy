@@ -99,7 +99,8 @@ export class RaceStand {
     try { this.group = this.build(models); } catch (e) { console.warn('Racing stand: build failed', e); }
     if (!this.group) return;
     const fx = Math.cos(yaw) * 0.72, fz = -Math.sin(yaw) * 0.72;
-    this.group.position.set(x, Math.min(world.height(x + fx, z + fz), world.height(x - fx, z - fz), world.height(x, z)) - 0.03, z);
+    const gh = (a, b) => Math.min(world.height(a, b), world.meshHeight(a, b)); // (the exact ground or the drawn snow, the lower)
+    this.group.position.set(x, Math.min(gh(x + fx, z + fz), gh(x - fx, z - fz), gh(x, z)) - 0.03, z);
     this.group.rotation.y = yaw;
     this.group.updateMatrixWorld(true);
     scene.add(this.group);

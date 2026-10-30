@@ -655,7 +655,7 @@ export function shapeScenic() {
       const dx = x - L.x, dz = z - L.z;
       if (Math.abs(dx) > 120 || Math.abs(dz) > 120) continue;
       const u = dx * L.ux + dz * L.uz, v = dx * L.vx + dz * L.vz, o = Math.hypot(Math.max(0, Math.abs(u) - L.hw), Math.max(0, Math.abs(v) - L.hd));
-      const w = KEEP_K * Math.max(0, o - 1.5);
+      const w = KEEP_K * Math.max(0, o - (L.flat ?? 1.5)); // (a building lot's wider flat apron: roads.js lotShape)
       lo = Math.max(lo, L.y - w); hi = Math.min(hi, L.y + w);
     }
     // (two of them disagree: pinned into the gap between them, continuous where they just meet)

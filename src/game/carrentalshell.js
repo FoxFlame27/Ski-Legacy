@@ -164,7 +164,7 @@ export function buildShell(g, side, glass, opts = {}) {
   const dl = d.x - bw / 2, dr = d.x + bw / 2; // (the sill either side of the door, a flush threshold in it)
   B(dl - gx0, 0.12, 0.2, m.steel, (gx0 + dl) / 2, 0.06, fz, false);
   B(gx1 - dr, 0.12, 0.2, m.steel, (dr + gx1) / 2, 0.06, fz, false);
-  B(bw - 0.09, 0.012, 0.44, m.steel, d.x, 0.006, fz - 0.06, false);
+  B(bw - 0.09, 0.055, 0.44, m.steel, d.x, 0.0275, fz - 0.06, false); // (5.5 cm: over the yard's paving, 4 cm up, not under it)
   B(bw - 0.09, 0.2, 0.3, m.steel, d.x, d.h + 0.1, fz - 0.08, false); // (the header: the sliding gear)
   for (const sz of [-1, 1]) B(0.18, 0.05, 0.05, new THREE.MeshStandardMaterial({ color: 0x0c0d0e, roughness: 0.3 }), d.x, d.h - 0.02, fz - 0.08 + sz * 0.16, false); // (the motion sensors)
   const leaves = [], lw = (bw - 0.09) / 2, lh = d.h - 0.02, band = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide });

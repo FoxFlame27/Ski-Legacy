@@ -13,6 +13,7 @@
 // z = L.hd), +x along it. The house: W (x) x D (z), its ridge along z, its front gable (the door) at z FRONT.
 import * as THREE from 'three';
 import { world } from '../world/world.js';
+import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (paving on the drawn terrain's own triangles)
 import { makeSign, standSign, nightUniform, addNightGlow } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
 import { shellMaterials } from './carrentalshell.js';
@@ -76,7 +77,7 @@ export class Hospital {
     const M = shellMaterials();
     const yaw0 = Math.atan2(L.dirx, L.dirz);
     const w = (lx, lz) => ({ x: L.x + L.dirz * lx + L.dirx * lz, z: L.z - L.dirx * lx + L.dirz * lz });
-    const gy = (lx, lz) => { const p = w(lx, lz); return world.height(p.x, p.z) - L.y; }; // (the ground, lot frame)
+    const gy = (lx, lz) => { const p = w(lx, lz); return world.meshHeight(p.x, p.z) - L.y; }; // (the ground as drawn, lot frame)
     const g = new THREE.Group(); g.name = 'medical-centre';
     g.position.set(L.x, L.y, L.z); g.rotation.y = yaw0;
     const add = (geo, mat, x, y, z, parent = g, shadow = true) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; parent.add(m); return m; };
@@ -280,11 +281,16 @@ export class Hospital {
       const fx = c.createLinearGradient(0, 0, cw, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.045, '#000'); fx.addColorStop(0.955, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = fx; c.fillRect(0, 0, cw, ch);
     });
-    const yard = new THREE.Mesh(new THREE.PlaneGeometry(YW, YD, 28, 18), new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+    // (the drawn terrain's own triangles under it, 4 cm up: world/groundpatch.js; before, a plane of its own laid on
+    // world.height at its vertices: where the ground eases into the road's shoulder the terrain's 2 m triangles poked
+    // up through it)
+    g.updateMatrixWorld(true);
+    const lotXZ = (x, z) => { const dx = x - L.x, dz = z - L.z; return [dx * L.dirz - dz * L.dirx, dx * L.dirx + dz * L.dirz]; };
+    const yard = new THREE.Mesh(groundPatchGeometry([[X0, Z0], [X1, Z0], [X1, Z1], [X0, Z1]].map(([lx, lz]) => { const p = w(lx, lz); return [p.x, p.z]; }), {
+      lift: 0.04, toLocal: (v) => g.worldToLocal(v),
+      uv: (x, z) => { const [lx, lz] = lotXZ(x, z); return [(lx - X0) / YW, 1 - (lz - Z0) / YD]; },
+    }), groundDecal(new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }))); // (a hair nearer, as the car parks)
     yard.receiveShadow = true;
-    { const pa = yard.geometry.attributes.position;
-      for (let i = 0; i < pa.count; i++) { const lx = (X0 + X1) / 2 + pa.getX(i), lz = (Z0 + Z1) / 2 - pa.getY(i); pa.setXYZ(i, lx, gy(lx, lz) + 0.04, lz); }
-      pa.needsUpdate = true; yard.geometry.computeVertexNormals(); }
     yard.renderOrder = 1; g.add(yard);
     const kerb = new THREE.MeshStandardMaterial({ color: 0x9a9890, roughness: 0.85 });
     for (const sx of [-1, 1]) for (let z = Z0 + 0.4; z < L.hd - 2.5; z += 2) { const lx = sx * (X1 - 0.1); B(0.22, 0.16, 1.96, kerb, lx, gy(lx, z + 1) + 0.06, z + 1); }

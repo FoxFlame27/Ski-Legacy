@@ -602,7 +602,7 @@ function shapeRoads(roads) {
   // car parks' surrounds meet, as there was beside the village car park; on a car park itself its own level)
   const LS = { y: 0, out: 0 };
   const lotShape = (x, z, h0, spacing) => {
-    let h = h0, any = false, outMin = Infinity;
+    let h = h0, any = false, outMin = Infinity, held = false;
     for (const L of busRoads.lots) {
       const dx = x - L.x, dz = z - L.z;
       if (Math.abs(dx) > L.hw + L.hd + 60 || Math.abs(dz) > L.hw + L.hd + 60) continue;
@@ -610,7 +610,11 @@ function shapeRoads(roads) {
       const out = Math.hypot(Math.max(0, Math.abs(u) - L.hw), Math.max(0, Math.abs(v) - L.hd));
       const blend = Math.min(45, 6 + Math.abs(h - L.y) * 3.2);
       if (out > blend + 7.5 && !(L.piles && out < 13)) continue;
-      let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(2.9, 2.9 + blend, out); // (flat 2.9 m past the edge: see the berm)
+      const flat = L.flat ?? 2.9; // (a building lot whose house stands out past its edge: flat under all of it)
+      // (in an earlier car park's flat apron: that one's level, not eased toward this one's: the paving and the 2 m
+      // triangles under its edge stay flat)
+      if (held && out > 0) continue;
+      let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(flat, flat + blend, out); // (flat 2.9 m past the edge: see the berm)
       // (the berm 2.9 m off the edge: the drawn terrain's 2 m triangles under the car park's edge stay flat)
       if (spacing <= 4 && !L.building && out > 2.9 && out < 6.9 && Math.hypot(x - L.ex, z - L.ez) > 10) {
         const t = (out - 2.9) / 4, open = smoothstep(10, 15, Math.hypot(x - L.ex, z - L.ez)); // (tapered at the entrance, no step)
@@ -631,6 +635,7 @@ function shapeRoads(roads) {
       }
       if (out <= 0) { LS.y = y; LS.out = out; return LS; }
       h = y; any = true; outMin = Math.min(outMin, out);
+      if (out <= flat) held = true;
     }
     if (!any) return null;
     LS.y = h; LS.out = outMin;
@@ -1034,7 +1039,9 @@ function planRental(O) {
         if ([...busRoads.junctions, ...busRoads.stops, ...(busRoads.laybys || [])].some((j) => Math.hypot(j.x - cx, j.z - cz) < 50)) continue;
         if (Math.hypot(cx + 190, cz + 160) < 90) continue; // (the Legacy Express's village station)
         const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz); // (u along the road; the front to the road)
-        best = { name: 'Autohaus', building: true, rental: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+        // (flat: the hall stands out 3.9 m past the back edge (carrental.js YARD / LAYOUT): the ground flat under all of
+        // it and the 2 m triangles behind it, else the snow rose through the showroom floor at the back)
+        best = { name: 'Autohaus', building: true, rental: true, flat: 6.8, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
           ex: m.x + nx * (ROAD_HALF + 0.6), ez: m.z + nz * (ROAD_HALF + 0.6), dirx: -nx, dirz: -nz, facing, ri, s, side, score: score0 };
       }
     }

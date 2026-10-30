@@ -10,6 +10,7 @@ import { world } from '../../world/world.js';
 import { coachSeats } from '../../world/coachseat.js';
 import { fitModel } from '../../core/assets.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { conformGeometry } from '../../world/groundpatch.js'; // (the strips laid on the drawn terrain's own triangles where it bends)
 import { busRoads, roadAt, ROAD_HALF, roadsideBlocked, laneDistance } from './roads.js';
 import { transition } from '../../ui/transition.js';
 import { trafficBlockers, addTrafficBlocker } from '../traffic.js';
@@ -686,10 +687,15 @@ function buildRoadMeshes(group, colliders = null) {
       rg.setAttribute('position', new THREE.BufferAttribute(rp, 3));
       rg.setAttribute('uv', new THREE.BufferAttribute(ruv, 2));
       rg.setAttribute('aEnd', new THREE.BufferAttribute(rend, 1));
-      rg.setIndex(ri2); rg.computeVertexNormals();
-      const nrm = rg.attributes.normal; // (a vertex only on the cut-away, zero-area triangles: up)
+      rg.setIndex(ri2);
+      // (the strip's points lie on the drawn terrain, the straight lines between them don't: over a crease of its 2 m
+      // triangles (a berm's foot, a cutting's edge) the snow rose up to 8 cm through the asphalt (Oct 30, the user:
+      // "snow floor mixing with brick floor"). Where the terrain bends up under a triangle by more than 1.5 cm, that
+      // triangle is cut along the terrain's own triangles, 3.5 cm over them (world/groundpatch.js); ~3 % of them)
+      const cg = conformGeometry(rg, { tol: 0.015 });
+      const nrm = cg.attributes.normal; // (a vertex only on zero-area triangles: up)
       for (let k = 0; k < nrm.count; k++) if (!(Math.abs(nrm.getX(k)) + Math.abs(nrm.getY(k)) + Math.abs(nrm.getZ(k)) > 1e-6)) nrm.setXYZ(k, 0, 1, 0);
-      const road = new THREE.Mesh(rg, roadMat);
+      const road = new THREE.Mesh(cg, roadMat);
       road.receiveShadow = true;
       group.add(road);
     }

@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { lotMaterial } from './bus/bus.js';
+import { groundDecal } from '../world/groundpatch.js';
 import { railNearest } from '../world/railroute.js';
 import { layout } from '../world/layout.js';
 import { CAR_MODELS, pickCar } from './cars.js';
@@ -133,7 +134,9 @@ export class Impound {
   build() {
     const R = this.R, L = this.lot, P = R.parking;
     if (!P?.build) return;
-    const paint = new THREE.MeshStandardMaterial({ color: 0xeeefea, roughness: 0.92, metalness: 0, envMapIntensity: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 });
+    // (drawn a hair nearer than the car park's asphalt, as parking.js's paint: before, the asphalt (lotMaterial, pulled
+    // 0.15 % of the distance toward the camera) overtook the lines' 2 cm from ~15 m off: the bays flickered away)
+    const paint = groundDecal(new THREE.MeshStandardMaterial({ color: 0xeeefea, roughness: 0.92, metalness: 0, envMapIntensity: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }), 0.0019);
     P.build(L, lotMaterial(), paint, R.models, R.colliders);
     if (!P.group.parent) R.scene.add(P.group);
     const bays = L.bays || [];

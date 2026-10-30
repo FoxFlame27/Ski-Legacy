@@ -27,6 +27,7 @@ import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate, setPlat
 import { LAYOUT, buildShell } from './carrentalshell.js';
 import { makeSign } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
+import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (the yard on the drawn terrain's own triangles)
 import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 
@@ -157,7 +158,7 @@ export class CarRental {
     this.stripMat = sh.strips; this.litMats = sh.lit; // (the sliding doors stay shut: E at them goes in, through a fade)
     // inside, seen through the glass: the pale polished floor (self-lit: the hall's lights), the backlit sign over the
     // mezzanine, the cars on their turntables (no roof shadow on them), two more upstairs
-    const inFloor = mk(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ color: 0x8c8782, emissive: 0x4a4540, roughness: 0.25, metalness: 0.1 }), 0, 0.02, 0, hall);
+    const inFloor = mk(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ color: 0x8c8782, emissive: 0x4a4540, roughness: 0.25, metalness: 0.1 }), 0, 0.04, 0, hall); // (4 cm: clear of the snow at the hall's front corners, past the lot's sides)
     inFloor.rotation.x = -Math.PI / 2; inFloor.receiveShadow = inFloor.castShadow = false;
     this.glowMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, emissive: 0xffcf98, emissiveIntensity: 0.6, roughness: 0.9 });
     mk(new THREE.PlaneGeometry(9, 1.8), this.glowMat, -4.4, 6.1, -D / 2 + 0.05, hall).receiveShadow = false; // (the backlit AUTOHAUS sign inside)
@@ -218,23 +219,32 @@ export class CarRental {
       const fx = c.createLinearGradient(0, 0, w, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.035, '#000'); fx.addColorStop(0.965, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = fx; c.fillRect(0, 0, w, h);
     });
-    const yard = new THREE.Mesh(new THREE.PlaneGeometry(YW, YD, 28, 14), new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+    // (the drawn terrain's own triangles under it, 4 cm up (world/groundpatch.js): before, a plane of its own laid on
+    // world.height at its vertices, and at the yard's road end, where the ground eases from the flat lot to the road's
+    // height (the road climbs along the frontage), the terrain's 2 m triangles poked up through it up to ~0.4 m)
+    g.updateMatrixWorld(true);
+    const fx = L.dirx, fz = L.dirz, lotXZ = (x, z) => { const dx = x - L.x, dz = z - L.z; return [dx * fz - dz * fx, dx * fx + dz * fz]; };
+    const yardGeo = groundPatchGeometry([[X0, Z0], [X1, Z0], [X1, Z1], [X0, Z1]].map(([lx, lz]) => { const p = this.w(lx, lz); return [p.x, p.z]; }), {
+      lift: 0.04, toLocal: (v) => g.worldToLocal(v),
+      uv: (x, z) => { const [lx, lz] = lotXZ(x, z); return [(lx - X0) / YW, 1 - (lz - Z0) / YD]; },
+    });
+    const yard = new THREE.Mesh(yardGeo, groundDecal(new THREE.MeshStandardMaterial({ map: yardT, roughness: 0.95, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }))); // (drawn a hair nearer, as the car parks: no far terrain LOD over it)
     yard.receiveShadow = true;
-    // (each vertex on the ground: the plane laid flat in the lot frame, then at the terrain's height)
-    const pa = yard.geometry.attributes.position;
-    for (let i = 0; i < pa.count; i++) { const lx = (X0 + X1) / 2 + pa.getX(i), lz = (Z0 + Z1) / 2 - pa.getY(i), p = this.w(lx, lz); pa.setXYZ(i, lx, world.height(p.x, p.z) - L.y + 0.04, lz); }
-    pa.needsUpdate = true; yard.geometry.computeVertexNormals();
     yard.renderOrder = 1;
     g.add(yard);
     // kerbs along the yard's sides (granite, low), on the ground
     const kerb = new THREE.MeshStandardMaterial({ color: 0x9a9890, roughness: 0.85 });
-    for (const sx of [-1, 1]) for (let z = Z0 + 0.6; z < Z1 - 1.5; z += 2) { const p = this.w(sx * (YARD.hw - 0.5), z + 1); mk(new THREE.BoxGeometry(0.22, 0.16, 1.96), kerb, sx * (YARD.hw - 0.5), world.height(p.x, p.z) - L.y + 0.06, z + 1); }
+    for (const sx of [-1, 1]) for (let z = Z0 + 0.6; z < Z1 - 1.5; z += 2) {
+      // (on the drawn snow, tilted with it along their length: the ground eases toward the road's height at the front)
+      const a = this.w(sx * (YARD.hw - 0.5), z + 0.02), b = this.w(sx * (YARD.hw - 0.5), z + 1.98), ya = world.meshHeight(a.x, a.z), yb = world.meshHeight(b.x, b.z);
+      mk(new THREE.BoxGeometry(0.22, 0.16, 1.96), kerb, sx * (YARD.hw - 0.5), (ya + yb) / 2 - L.y + 0.06, z + 1).rotation.x = -Math.asin(Math.max(-0.5, Math.min(0.5, (yb - ya) / 1.96)));
+    }
     // flags at the yard's front corners (blue banners on steel poles), potted spruces either side of the door
     const banner = canvas(128, 512, (c, w, h) => { c.fillStyle = '#16346e'; c.fillRect(0, 0, w, h); c.fillStyle = '#f2c88c'; c.fillRect(0, 0, w, 10); c.fillRect(0, h - 10, w, 10);
       c.save(); c.translate(w / 2, h / 2); c.rotate(-Math.PI / 2); c.fillStyle = '#fff'; c.font = 'italic 700 64px "Barlow Condensed", "Arial Narrow", Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('AUTOHAUS', 0, 4); c.restore(); });
     const bannerMat = new THREE.MeshStandardMaterial({ map: banner, roughness: 0.8, side: THREE.DoubleSide });
     for (const sx of [-1, 1]) {
-      const lx = sx * (YARD.hw - 0.6), lz = Z1 - 1.0, p = this.w(lx, lz), y = world.height(p.x, p.z) - L.y;
+      const lx = sx * (YARD.hw - 0.6), lz = Z1 - 1.0, p = this.w(lx, lz), y = world.meshHeight(p.x, p.z) - L.y;
       mk(new THREE.CylinderGeometry(0.05, 0.06, 7, 10), steel, lx, y + 3.5 - 0.3, lz);
       mk(new THREE.BoxGeometry(1.0, 0.04, 0.04), steel, lx - sx * 0.48, y + 6.4, lz);
       mk(new THREE.PlaneGeometry(0.9, 3.4), bannerMat, lx - sx * 0.48, y + 4.68, lz).castShadow = false;

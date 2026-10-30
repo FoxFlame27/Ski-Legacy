@@ -38,5 +38,15 @@
     "preview": "01a18beb-5a16-7284-90d4-27040d6b05cd",
     "refine": "01a18bec-2d7a-74fb-855e-b957fe0a51c1",
     "done": true
+  },
+  "parking_sign": {
+    "preview": "01a18c09-f296-7126-af11-ad7c41fc4ad1",
+    "refine": "01a18c0a-e73f-77a0-bcf9-cad93745570f",
+    "done": true
+  },
+  "notice_frame": {
+    "preview": "01a18c09-f299-7702-8b42-09c104db8a5d",
+    "refine": "01a18c0b-2bda-77e2-9590-24429b4cee2d",
+    "done": true
   }
 }

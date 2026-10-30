@@ -11,7 +11,8 @@ import { setPlates } from './carconfig.js';
 import { mulberry32 } from '../core/noise.js';
 import { nightUniform } from '../world/village.js';
 import { busRoads, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
-import { lotMaterial } from './bus/bus.js'; // (the roads' asphalt and snow: the access road carries on into the car park)
+import { lotMaterial } from './bus/bus.js';
+import { groundPatch, groundPatchGeometry, frameRect } from '../world/groundpatch.js'; // (paving on the drawn terrain's own triangles) // (the roads' asphalt and snow: the access road carries on into the car park)
 
 const BAY_W = 2.6, BAY_D = 5.5, LINE = 0.12; // (5.5 m deep: the longest car, 5.0 m, fits inside the lines)
 // parked cars: [model, real length (m), which car park] (the car models are the user's own, in MODEL_LIST)
@@ -136,40 +137,40 @@ export class ParkingLots {
       for (const rd of busRoads.roads) for (let i = 0; i < rd.n; i += 2) if (Math.abs(rd.X[i] - x) < r && Math.abs(rd.Z[i] - z) < r && Math.hypot(rd.X[i] - x, rd.Z[i] - z) < r) return true;
       return false;
     };
-    // surface: a grid over the lot that follows the (flattened) terrain as the roads do (the drawn terrain's surface,
-    // world.meshHeight, + 3.5 cm: level with the access road where it meets the edge)
+    // surface: the drawn terrain's own triangles over the lot (world/groundpatch.js), 3.5 cm up: level with the access
+    // road where it meets the edge, and on the terrain everywhere between (before: a 2 m grid of its own, rotated,
+    // its vertices on the terrain but not between them, so the terrain's triangles poked up through it where the
+    // ground is not dead flat: the mouth, and the Autohaus car park on its natural slope (impound.js))
     const MH = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z));
-    const nu = Math.ceil((L.hw * 2) / 2), nv = Math.ceil((L.hd * 2) / 2);
-    const pos = [], uv = [], col = [], idx = [];
+    const toUV = (x, z) => { const dx = x - L.x, dz = z - L.z; return [dx * L.ux + dz * L.uz, dx * L.vx + dz * L.vz]; };
     // the mouth: where the access road meets the edge (its strip ends exactly there, bus.js roadStrip)
     const mx = L.ex - L.dirx * 2, mz = L.ez - L.dirz * 2, ax = -L.dirz, az = L.dirx; // (the edge's middle; along the edge)
-    for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
-      const u = -L.hw + (i / nu) * L.hw * 2, v = -L.hd + (j / nv) * L.hd * 2, [x, z] = at(u, v);
-      pos.push(x, MH(x, z) + 0.035, z); uv.push(u / 6.8, v / 13.5); // (the road texture's own scale)
+    const sg = groundPatchGeometry(frameRect(L.x, L.z, L.ux, L.uz, L.vx, L.vz, -L.hw, L.hw, -L.hd, L.hd), {
+      lift: 0.035,
+      uv: (x, z) => { const [u, v] = toUV(x, z); return [u / 6.8, v / 13.5]; }, // (the road texture's own scale)
       // the edges fade into the snow (no hard slab edge against the bank), except across the mouth: there the
       // road's asphalt carries straight on (its own ploughed edges meet the fade either side)
-      const e = Math.min(L.hw - Math.abs(u), L.hd - Math.abs(v));
-      const lat = Math.abs((x - mx) * ax + (z - mz) * az), inn = (x - mx) * -L.dirx + (z - mz) * -L.dirz;
-      const mouth = inn < 6 ? 1 - Math.min(1, Math.max(0, (lat - (ROAD_HALF - 1)) / 1.6)) : 0;
-      const a = Math.max(Math.min(1, Math.max(0, e / 1.8)), mouth);
-      col.push(1, 1, 1, a * a * (3 - 2 * a));
-      if (i < nu && j < nv) { const a = j * (nu + 1) + i, b = a + nu + 1; idx.push(a, b, a + 1, a + 1, b, b + 1); }
-    }
-    const sg = new THREE.BufferGeometry();
-    sg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    sg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    sg.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
-    sg.setIndex(idx); sg.computeVertexNormals();
+      color: (x, z) => {
+        const [u, v] = toUV(x, z), e = Math.min(L.hw - Math.abs(u), L.hd - Math.abs(v));
+        const lat = Math.abs((x - mx) * ax + (z - mz) * az), inn = (x - mx) * -L.dirx + (z - mz) * -L.dirz;
+        const mouth = inn < 6 ? 1 - Math.min(1, Math.max(0, (lat - (ROAD_HALF - 1)) / 1.6)) : 0;
+        const a = Math.max(Math.min(1, Math.max(0, e / 1.8)), mouth);
+        return [1, 1, 1, a * a * (3 - 2 * a)];
+      },
+    });
     const surface = new THREE.Mesh(sg, surf);
     surface.receiveShadow = true;
     this.group.add(surface);
     // painted bays: rows along both long sides (a middle double row in the big one), crisp white strips
+    // (each line the drawn terrain's triangles under it too, 2 cm over the surface)
     const lp = [], li = [];
     const strip = (u0, v0, u1, v1) => {
-      const du = u1 - u0, dv = v1 - v0, l = Math.hypot(du, dv) || 1, nu2 = (-dv / l) * LINE / 2, nv2 = (du / l) * LINE / 2;
+      const du = u1 - u0, dv = v1 - v0, l = Math.hypot(du, dv) || 1, tu = du / l, tv = dv / l, w = LINE / 2;
+      const [cx, cz] = at(u0, v0), ex = L.ux * tu + L.vx * tv, ez = L.uz * tu + L.vz * tv; // (along the line, world)
+      const { pos, idx } = groundPatch(frameRect(cx, cz, ex, ez, -ez, ex, 0, l, -w, w), { lift: 0.055, height: MH });
       const base = lp.length / 3;
-      for (const [u, v] of [[u0 + nu2, v0 + nv2], [u0 - nu2, v0 - nv2], [u1 + nu2, v1 + nv2], [u1 - nu2, v1 - nv2]]) { const [x, z] = at(u, v); lp.push(x, MH(x, z) + 0.055, z); }
-      li.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      for (const q of pos) lp.push(q);
+      for (const q of idx) li.push(base + q);
     };
     const { bays, lines } = lotBays(L, colliders);
     L.bays = bays;

@@ -23,7 +23,7 @@ import { fitModel, loadGLB } from '../core/assets.js';
 import { busRoads } from './bus/roads.js';
 import { makeSign, nightUniform } from '../world/village.js';
 import { shellMaterials } from './carrentalshell.js';
-import { buildPrisonOutside, polizeiSign, drawBadge, swapInModel } from './prisonoutside.js';
+import { buildPrisonOutside, polizeiSign, drawBadge, swapInModel, modelPoints, frontPivot } from './prisonoutside.js';
 import { policeModelReady } from './police.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
@@ -211,17 +211,50 @@ export class PrisonRoom {
       panelT.generateMipmaps = true; panelT.minFilter = THREE.LinearMipmapLinearFilter; panelT.anisotropy = 16;
       const larch = new THREE.MeshStandardMaterial({ color: 0x3e2c1e, roughness: 0.55 });
       const back = new THREE.MeshStandardMaterial({ color: 0x2a2f36, roughness: 0.6 });
-      const fit = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; S.add(m); return m; };
-      fit(new THREE.BoxGeometry(PW + 0.04, PH + 0.04, 0.02), back, BX, BY, z1 - 0.012);              // (the back board)
+      // (in the board's own frame: on the wall at its middle, +z out into the room; fb: the procedural frame, until
+      // the Meshy one (decor/notice_frame) has loaded)
+      const bg = new THREE.Group(), fb = new THREE.Group(); bg.position.set(BX, BY, z1); bg.rotation.y = Math.PI; bg.add(fb); S.add(bg);
+      const fit = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; fb.add(m); return m; };
+      fit(new THREE.BoxGeometry(PW + 0.04, PH + 0.04, 0.02), back, 0, 0, 0.012);                       // (the back board)
       const panel = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), new THREE.MeshStandardMaterial({ map: panelT, roughness: 0.38, metalness: 0.0 }));
-      panel.position.set(BX, BY, BZ); panel.rotation.y = Math.PI; panel.receiveShadow = true; S.add(panel);
-      const fw = 0.06, fd = 0.045, fz = z1 - fd / 2;                                                   // (the larch frame)
-      fit(new THREE.BoxGeometry(PW + 2 * fw, fw, fd), larch, BX, BY + PH / 2 + fw / 2, fz);
-      fit(new THREE.BoxGeometry(PW + 2 * fw, fw, fd), larch, BX, BY - PH / 2 - fw / 2, fz);
-      fit(new THREE.BoxGeometry(fw, PH, fd), larch, BX - PW / 2 - fw / 2, BY, fz);
-      fit(new THREE.BoxGeometry(fw, PH, fd), larch, BX + PW / 2 + fw / 2, BY, fz);
+      panel.position.set(0, 0, z1 - BZ); panel.receiveShadow = true; bg.add(panel);
+      const fw = 0.06, fd = 0.045, fz = fd / 2;                                                        // (the larch frame)
+      fit(new THREE.BoxGeometry(PW + 2 * fw, fw, fd), larch, 0, PH / 2 + fw / 2, fz);
+      fit(new THREE.BoxGeometry(PW + 2 * fw, fw, fd), larch, 0, -PH / 2 - fw / 2, fz);
+      fit(new THREE.BoxGeometry(fw, PH, fd), larch, -PW / 2 - fw / 2, 0, fz);
+      fit(new THREE.BoxGeometry(fw, PH, fd), larch, PW / 2 + fw / 2, 0, fz);
       const brass = new THREE.MeshStandardMaterial({ color: 0xb8954a, metalness: 0.9, roughness: 0.35 });
-      for (const sx of [-1, 1]) for (const sy of [-1, 1]) { const b = fit(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 12), brass, BX + sx * (PW / 2 + fw / 2), BY + sy * (PH / 2 + fw / 2), z1 - fd - 0.004); b.rotation.x = Math.PI / 2; }
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) { const b = fit(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 12), brass, sx * (PW / 2 + fw / 2), sy * (PH / 2 + fw / 2), fd + 0.004); b.rotation.x = Math.PI / 2; }
+      // the Meshy frame: turned to face the room, its back on the wall; the printed panel laid in its opening (found
+      // from its vertices: the frame's front rim around the middle; the panel kept at its own aspect, centred)
+      swapInModel(bg, 'decor/notice_frame', { size: PH + 2 * fw, axis: 'y', center: true }, fb, (m) => {
+        const pts = modelPoints(bg, m, 1);
+        if (pts.length < 30) return;
+        const ext = (arr, k) => { let lo = Infinity, up = -Infinity; for (const v of arr) { lo = Math.min(lo, v[k]); up = Math.max(up, v[k]); } return [lo, up]; };
+        const [x0_, x1_] = ext(pts, 'x'), [y0_, y1_] = ext(pts, 'y'), [z0_, z1_] = ext(pts, 'z');
+        const da = x1_ - x0_ < z1_ - z0_ ? 'x' : 'z', wa = da === 'x' ? 'z' : 'x';
+        const [w0, w1] = wa === 'x' ? [x0_, x1_] : [z0_, z1_], [d0, d1] = da === 'x' ? [x0_, x1_] : [z0_, z1_];
+        const W_ = w1 - w0, H_ = y1_ - y0_, D_ = Math.max(1e-4, d1 - d0), cw = (w0 + w1) / 2, cy = (y0_ + y1_) / 2;
+        const mid = pts.filter((v) => Math.abs(v[wa] - cw) < W_ * 0.2 && Math.abs(v.y - cy) < H_ * 0.2);
+        let md = (d0 + d1) / 2; if (mid.length) { md = 0; for (const v of mid) md += v[da]; md /= mid.length; }
+        const front = Math.abs(md - (d0 + d1) / 2) > D_ * 0.1 && md < (d0 + d1) / 2 ? -1 : 1; // (the panel sits near the front, the frame deeper behind)
+        const dFront = front > 0 ? d1 : d0, dBack = front > 0 ? d0 : d1;
+        const rim = pts.filter((v) => (mid.length ? front * (v[da] - md) > 0.005 : front * (v[da] - dFront) > -D_ * 0.3)); // (the frame proud of the panel)
+        let iw0 = w0, iw1 = w1, iy0 = y0_, iy1 = y1_;
+        for (const v of rim) {
+          if (Math.abs(v.y - cy) < H_ * 0.1) { if (v[wa] > cw) iw1 = Math.min(iw1, v[wa]); else iw0 = Math.max(iw0, v[wa]); }
+          if (Math.abs(v[wa] - cw) < W_ * 0.1) { if (v.y > cy) iy1 = Math.min(iy1, v.y); else iy0 = Math.max(iy0, v.y); }
+        }
+        if (iw1 - iw0 < W_ * 0.5 || iy1 - iy0 < H_ * 0.5) { iw0 = cw - W_ * 0.42; iw1 = cw + W_ * 0.42; iy0 = cy - H_ * 0.43; iy1 = cy + H_ * 0.43; } // (a flush panel)
+        const ox = wa === 'x' ? cw : dBack, oz = wa === 'x' ? dBack : cw;
+        const { pivot, toPivot, faceRot } = frontPivot(bg, m, da, front, ox, cy, oz);
+        pivot.position.z = 0.003; pivot.scale[da] = Math.min(1, 0.07 / D_); // (no deeper than 7 cm off the wall)
+        const [m0, m1] = mid.length ? ext(mid, da) : [dFront, dFront];
+        const fc = (iw0 + iw1) / 2, fy = (iy0 + iy1) / 2, fd_ = (front > 0 ? m1 : m0) + front * 0.004;
+        bg.remove(panel); pivot.add(panel);
+        panel.position.copy(wa === 'x' ? toPivot(fc, fy, fd_) : toPivot(fd_, fy, fc)); panel.rotation.y = faceRot;
+        panel.scale.setScalar(Math.min(((iw1 - iw0) * 0.97) / PW, ((iy1 - iy0) * 0.97) / PH));
+      });
     }
     this.obstacles.push([5.4, x1, bars - 0.25, bars + 0.35]); // (the counter)
   }

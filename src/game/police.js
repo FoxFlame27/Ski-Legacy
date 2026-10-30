@@ -77,13 +77,12 @@ export const TUNING = {
   fineStep: 500,     // $ more for every earlier fine or arrest (save.policeRecord)
   arrestStep: 1000,  // $ more on an arrest for every earlier one
   jailS: 90,         // prison.jail(seconds)
-  // (Oct 30, the user: "escaping is way too easy, only 14 s: make it 50 s": escS 50 / 60 / 70 / 85 / 100 by level)
   // (escaping: LEVELS[stars].escS s in all out of sight of every patrol car and the helicopter; before Oct 30 it was
   // 90 s further than 100 m from them, whatever they could see)
   loseS: 2.5,        // s nobody has seen you: they have lost you (SEARCHING); the escape clock runs only then
   seeNear: 45,       // m: this close they always see (and hear) you: no hiding behind a bump
   keepEsc: 0.5,      // seen again while they search: this much of the escape time is kept
-  noSpotS: 120,      // s: never spotted in this long (they never got near you): they give up
+  noSpotS: 75,       // s: never spotted in this long (they never got near you): they give up
   heatPerS: 1 / 36,  // stars a second while they have you in sight, fleeing (a star every ~36 s)
   heatHitCop: 0.35,  // you hitting a patrol car
   heatWreck: 0.8,    // you wrecking one
@@ -93,7 +92,7 @@ export const TUNING = {
   stopR: 40,         // m: stopped with a patrol car this close: pulled over
   stopKmh: 3,        // ...below this speed
   stopS: 3,          // ...for this long
-  spawnMin: 190, spawnMax: 320, // m from you, on the roads, out of sight (Oct 30: nearer again: "it takes like 20 s before they are there")
+  spawnMin: 260, spawnMax: 420, // m from you, on the roads, out of sight (Oct 30: nearer, they reach you sooner)
   reachR: 60,        // m: they have reached you (the grace to pull over starts)
   graceS: 6,         // s to pull over once they reach you; still moving after it: fleeing
   footCatchR: 4,     // m: an officer on foot this close: caught
@@ -129,11 +128,11 @@ export const TUNING = {
 // over your speed closing in, the T-bone reach), their sight (m, line of sight) and escS (s out of sight to lose them),
 // a roadblock every `block` s (0: none), spike strips, the helicopter, headOn (blocking cars drive at you)
 const LEVELS = [null,
-  { cars: 1, reinS: 99, vRoad: 52, catchUp: 0.34, ramGap: 1.5, ramMult: 1.5, ramMin: 14, ramExtra: 10, tbone: 60, sightR: 150, escS: 50, block: 0, spikes: false, heli: false, headOn: false },
-  { cars: 2, reinS: 7, vRoad: 54, catchUp: 0.4, ramGap: 1.1, ramMult: 1.6, ramMin: 15, ramExtra: 11, tbone: 70, sightR: 175, escS: 60, block: 0, spikes: false, heli: false, headOn: false },
-  { cars: 3, reinS: 6, vRoad: 57, catchUp: 0.45, ramGap: 0.9, ramMult: 1.7, ramMin: 16, ramExtra: 12, tbone: 85, sightR: 205, escS: 70, block: 30, spikes: false, heli: false, headOn: false },
-  { cars: 4, reinS: 5, vRoad: 60, catchUp: 0.5, ramGap: 0.75, ramMult: 1.8, ramMin: 17, ramExtra: 13, tbone: 95, sightR: 235, escS: 85, block: 26, spikes: true, heli: true, headOn: true },
-  { cars: 6, reinS: 4, vRoad: 63, catchUp: 0.55, ramGap: 0.6, ramMult: 1.9, ramMin: 18, ramExtra: 14, tbone: 105, sightR: 265, escS: 100, block: 22, spikes: true, heli: true, headOn: true },
+  { cars: 1, reinS: 99, vRoad: 52, catchUp: 0.34, ramGap: 1.5, ramMult: 1.5, ramMin: 14, ramExtra: 10, tbone: 60, sightR: 150, escS: 14, block: 0, spikes: false, heli: false, headOn: false },
+  { cars: 2, reinS: 7, vRoad: 54, catchUp: 0.4, ramGap: 1.1, ramMult: 1.6, ramMin: 15, ramExtra: 11, tbone: 70, sightR: 175, escS: 18, block: 0, spikes: false, heli: false, headOn: false },
+  { cars: 3, reinS: 6, vRoad: 57, catchUp: 0.45, ramGap: 0.9, ramMult: 1.7, ramMin: 16, ramExtra: 12, tbone: 85, sightR: 205, escS: 24, block: 30, spikes: false, heli: false, headOn: false },
+  { cars: 4, reinS: 5, vRoad: 60, catchUp: 0.5, ramGap: 0.75, ramMult: 1.8, ramMin: 17, ramExtra: 13, tbone: 95, sightR: 235, escS: 32, block: 26, spikes: true, heli: true, headOn: true },
+  { cars: 6, reinS: 4, vRoad: 63, catchUp: 0.55, ramGap: 0.6, ramMult: 1.9, ramMin: 18, ramExtra: 14, tbone: 105, sightR: 265, escS: 42, block: 22, spikes: true, heli: true, headOn: true },
 ];
 const MAXU = 8; // patrol cars at most (five stars: six after you and a roadblock's two; server.js setVeh takes eight)
 const HELI_V = 58, HELI_A = 9, HELI_ALT = 36, HELI_SEE = 80, LIGHT_R = 15; // the helicopter: m/s (209 km/h), m/s2, m over the ground, m it sees round it, its light's radius
@@ -1145,22 +1144,11 @@ export class Police {
       if (W.grace <= 0 && moving) this.flee(W);
     }
     // boxed in: patrol cars within holdR of you for holdS in all (faster the more of them there are round you; it
-    // ebbs away twice as fast when they're further): they get out and arrest you (you can't sit it out in the car)
-    // (Oct 30, the user: "you should only be boxed if you're really boxed": the clock runs only while you are slow
-    // (under ~9 km/h) AND hemmed in: patrol cars on two sides (two within holdR at least 100 degrees apart round you),
-    // or one right against you (within 7 m) while you are all but stopped. Driving on past them, it ebbs away.)
-    let boxN = 0, boxed = false;
-    const slow = (T.sp || 0) < 2.5, pinned = (T.sp || 0) < 0.8;
-    const angs = [];
-    for (const u of live) {
-      const d = hyp(u.x, u.z, T.x, T.z);
-      if (d >= TUNING.holdR) continue;
-      boxN++; angs.push(Math.atan2(u.x - T.x, u.z - T.z));
-      if (pinned && d < 7) boxed = true;
-    }
-    if (slow && !boxed) for (let i = 0; i < angs.length && !boxed; i++) for (let j = i + 1; j < angs.length; j++) { const a = Math.abs(Math.atan2(Math.sin(angs[i] - angs[j]), Math.cos(angs[i] - angs[j]))); if (a > (100 * Math.PI) / 180) { boxed = true; break; } }
-    if (!slow) boxed = false;
-    W.holdT = boxed ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
+    // ebbs away twice as fast when they're further): they get out and arrest you, whatever your speed (you can't sit it
+    // out in the car, nor drive off: drive.held)
+    let boxN = 0;
+    for (const u of live) if (hyp(u.x, u.z, T.x, T.z) < TUNING.holdR) boxN++;
+    W.holdT = boxN ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
     if (W.holdT >= TUNING.holdS) { W.holdT = 0; this.begin(W, 'arrest', lead, 'held'); return; }
     // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;

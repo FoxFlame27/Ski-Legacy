@@ -48,6 +48,25 @@ export const SEAT = new THREE.Vector3(0, 0.74, -0.32);   // the rider's seat (sl
 const TRACK = new THREE.Vector3(0, 0.2, -1.35);   // where the track throws snow
 const LAMP = new THREE.Vector3(0, 0.78, 1.1);     // headlight
 
+// (placement) the colliders on a 16 m grid, each in every cell within its extent + 3.5 m (the widest test placing
+// makes: clearSpot's 3 m round it, blocked()'s r <= 1.5 round its box); huge ones (> 200 m) are checked everywhere.
+// Parked-away colliders (a sled being driven, at 1e9) and malformed ones never block, so they're left out.
+const NONE = [];
+function colliderGrid(colliders, C = 16) {
+  const map = new Map(), big = [];
+  for (const c of colliders) {
+    const E = (c.r ?? Math.hypot(c.hw, c.hd)) + 3.5;
+    if (!(Math.abs(c.x) < 1e8 && Math.abs(c.z) < 1e8)) continue;
+    if (!(E <= 200)) { big.push(c); continue; }
+    const i0 = Math.floor((c.x - E) / C), i1 = Math.floor((c.x + E) / C), j0 = Math.floor((c.z - E) / C), j1 = Math.floor((c.z + E) / C);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const k = i * 100003 + j, a = map.get(k);
+      if (a) a.push(c); else map.set(k, [c]);
+    }
+  }
+  return { map, big, C };
+}
+
 export class Snowmobiles {
   /**
    * @param {object} o  { scene, models, player, camera, hud, audio, spray, layout, colliders, vegetation, cameraBlockers, world }
@@ -72,9 +91,29 @@ export class Snowmobiles {
     // (placed on the first frame: the chalet village, car parks and stations are all planned by then)
     this.spawnPending = !!models.snowmobile;
   }
+  // placed a few ms a frame (the picking scans thousands of candidate spots: done in one go it froze the game for
+  // seconds just after the start); spawnParked() still does it all at once
   spawnParked() {
     this.spawnPending = false;
+    this.spawnJob = this.spawnQueue = null;
     try { for (const spot of this.pickSpots()) this.add(spot.x, spot.z, spot.heading); } catch (e) { console.warn('snowmobiles: spots', e); }
+  }
+  spawnStep(budget = 3) {
+    const t0 = performance.now();
+    try {
+      if (!this.spawnJob) { this.spawnPending = false; this.spawnJob = this.pickSpotsJob(); }
+      for (;;) {
+        if (this.spawnQueue) { // (then the sleds themselves, within the same budget: each is a 40k-triangle clone)
+          const spot = this.spawnQueue.shift();
+          if (spot) this.add(spot.x, spot.z, spot.heading);
+          if (!this.spawnQueue.length) { this.spawnQueue = null; this.spawnJob = null; return; }
+        } else {
+          const r = this.spawnJob.next();
+          if (r.done) this.spawnQueue = r.value.slice();
+        }
+        if (performance.now() - t0 > budget) return;
+      }
+    } catch (e) { console.warn('snowmobiles: spots', e); this.spawnJob = null; this.spawnQueue = null; }
   }
 
   get active() { return !!this.d; }
@@ -85,7 +124,21 @@ export class Snowmobiles {
   // the map"): VILLAGE_SLEDS round Legacy Village, the rest drawn from the huts, the car parks, the rail and Express
   // stations, the chalet village and the lifts' bottom stations; on clear, gentle snow off the roads, runs, lift lines
   // and tracks, clear of every collider, never two within 40 m.
-  pickSpots() {
+  pickSpots() { const job = this.pickSpotsJob(); for (;;) { const r = job.next(); if (r.done) return r.value; } }
+  // (the grid is only used while this job runs: between slices, blocked() for getting off sees every collider)
+  *pickSpotsJob() {
+    const G = colliderGrid(this.colliders); // (placement only: the colliders bucketed, a candidate checks those near it)
+    yield;
+    const job = this.pickSpotsSteps();
+    for (;;) {
+      this.pgrid = G;
+      let r;
+      try { r = job.next(); } finally { this.pgrid = null; }
+      if (r.done) return r.value;
+      yield;
+    }
+  }
+  *pickSpotsSteps() {
     const out = [], L = this.layout, rnd = Math.random;
     const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
     const village = [{ x: 20, z: -60 }, { x: 46, z: 74 }, { x: -120, z: -20 }, { x: 140, z: 40 }];
@@ -106,10 +159,10 @@ export class Snowmobiles {
     const cv = L.chaletVillage;
     if (cv?.center) { other.push({ x: cv.center.x, z: cv.center.z }); if (cv.houses?.length) { const h = cv.houses[Math.floor(rnd() * cv.houses.length)]; other.push({ x: h.x + 10, z: h.z + 10 }); } }
     for (const l of L.lifts || []) { const [ux, uz] = l.dir || [0, 1]; other.push({ x: l.bottom.x - uz * 30 - ux * 10, z: l.bottom.z + ux * 30 - uz * 10 }); }
-    const take = (list, n) => { let k = 0; for (const t of shuffle(list)) { if (k >= n || out.length >= MAX_SLEDS) break; const sp = this.clearSpot(t.x, t.z, 26, out); if (sp) { out.push({ ...sp, heading: this.openHeading(sp.x, sp.z, rnd() * Math.PI * 2) }); k++; } } };
-    take(village, VILLAGE_SLEDS);
-    take(other, MAX_SLEDS - out.length);
-    if (out.length < MAX_SLEDS) take(village, MAX_SLEDS - out.length); // (short of places: more in the village)
+    const take = function* (list, n) { let k = 0; for (const t of shuffle(list)) { if (k >= n || out.length >= MAX_SLEDS) break; const sp = yield* this.clearSpotSteps(t.x, t.z, 26, out); if (sp) { out.push({ ...sp, heading: this.openHeading(sp.x, sp.z, rnd() * Math.PI * 2) }); k++; } yield; } }.bind(this);
+    yield* take(village, VILLAGE_SLEDS);
+    yield* take(other, MAX_SLEDS - out.length);
+    if (out.length < MAX_SLEDS) yield* take(village, MAX_SLEDS - out.length); // (short of places: more in the village)
     return out;
   }
   // a heading with clear snow ahead (nothing solid in the first 12 m): never parked nose-first against a wall
@@ -122,7 +175,8 @@ export class Snowmobiles {
     }
     return h0;
   }
-  clearSpot(x0, z0, R, taken = []) {
+  clearSpot(x0, z0, R, taken = []) { const job = this.clearSpotSteps(x0, z0, R, taken); for (;;) { const r = job.next(); if (r.done) return r.value; } }
+  *clearSpotSteps(x0, z0, R, taken = []) { // (yields after each ring of candidates)
     const W = this.world;
     const ok = (x, z) => {
       const e = 2, g = Math.hypot(W.height(x + e, z) - W.height(x - e, z), W.height(x, z + e) - W.height(x, z - e)) / (2 * e);
@@ -133,7 +187,7 @@ export class Snowmobiles {
       for (const lot of busRoads.lots || []) { const dx = x - lot.x, dz = z - lot.z; if (Math.abs(dx * (lot.ux ?? 1) + dz * (lot.uz ?? 0)) < (lot.hw || 0) + 3 && Math.abs(dx * (lot.vx ?? 0) + dz * (lot.vz ?? 1)) < (lot.hd || 0) + 3) return false; } // (not in a car park's bays)
       const rn = railNearest(x, z);
       if (rn && rn.d < 9) return false; // (off the railway)
-      for (const k of this.colliders) { const r = (k.r ?? Math.hypot(k.hw, k.hd)) + 3; if (Math.abs(k.x - x) < r && Math.abs(k.z - z) < r && Math.hypot(k.x - x, k.z - z) < r) return false; }
+      for (const k of this.nearColliders(x, z)) { const r = (k.r ?? Math.hypot(k.hw, k.hd)) + 3; if (Math.abs(k.x - x) < r && Math.abs(k.z - z) < r && Math.hypot(k.x - x, k.z - z) < r) return false; }
       if (this.vegetation?.collide?.(x, z, 3)) return false;
       for (const t of taken) if (Math.hypot(t.x - x, t.z - z) < 40) return false;
       return true;
@@ -141,6 +195,7 @@ export class Snowmobiles {
     for (let r = 0; r <= R; r += 3) {
       const n = r ? Math.round(r * 1.2) : 1;
       for (let k = 0; k < n; k++) { const a = (k / n) * Math.PI * 2, x = x0 + Math.cos(a) * r, z = z0 + Math.sin(a) * r; if (ok(x, z)) return { x, z }; }
+      yield;
     }
     return null;
   }
@@ -273,10 +328,18 @@ export class Snowmobiles {
     p.crash?.(side, { kind: 'tumble' });
   }
 
+  // the colliders that may reach (x, z) (any test within 3 m of their extent): from the placement grid while the
+  // parked sleds are being placed, else all of them
+  nearColliders(x, z) {
+    const G = this.pgrid;
+    if (!G) return this.colliders;
+    const a = G.map.get(Math.floor(x / G.C) * 100003 + Math.floor(z / G.C)) || NONE;
+    return G.big.length ? a.concat(G.big) : a;
+  }
   // something solid at (x, z) within r? (trees, rocks, colliders: for getting off)
   blocked(x, z, r) {
     if (this.vegetation?.collide?.(x, z, r)) return true;
-    for (const c of this.colliders) {
+    for (const c of r <= 1.5 ? this.nearColliders(x, z) : this.colliders) {
       if (c.sled) continue;
       const size = c.r ?? Math.max(c.hw, c.hd);
       if (Math.abs(c.x - x) > size + r + 1 || Math.abs(c.z - z) > size + r + 1) continue;
@@ -294,7 +357,8 @@ export class Snowmobiles {
   update(dt, input) {
     // (main.js holds the spawn (collidersReady false) until world/solidify.js has added the props' drawn footprints:
     // spots picked before that could be inside a porch / stall / annex box, the sled pinned there, unable to move)
-    if (this.spawnPending && dt > 0 && (this.collidersReady !== false || (this.spawnWait = (this.spawnWait || 0) + dt) > 30)) this.spawnParked();
+    if (this.spawnJob) this.spawnStep();
+    else if (this.spawnPending && dt > 0 && (this.collidersReady !== false || (this.spawnWait = (this.spawnWait || 0) + dt) > 30)) this.spawnStep();
     const d = this.d;
     // parked sleds far from the camera are not drawn (~40k triangles each)
     this.cullT = (this.cullT || 0) - dt;

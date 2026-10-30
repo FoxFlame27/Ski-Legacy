@@ -27,6 +27,7 @@ import { addNightGlow, nightUniform } from '../world/village.js';
 import { addStreetLamps } from '../world/pistelights.js';
 import { HX, HZ, G, DOOR, MODEL, FOOT, STEPS, IX, IZ } from './chaletplan.js';
 import { ChaletRoom, setChaletInterior } from './chaletroom.js';
+import { quality } from '../engine/quality.js';
 
 export const CHALET_PRICE = 50000; // (bought for good, not rented)
 export const SAVE_LAYOUT = 3;      // save.chalet.layout: the 18-chalet village (Oct 29); older saves are moved onto it
@@ -870,7 +871,7 @@ export class Chalets {
       this.windows.material.opacity = Math.min(1, n * 1.3);
     }
     if (!this.inst) return;
-    this.farLod(); // (performance pass: the 80-odd houses decimated while you are well away from the village)
+    this.farLod(); // (performance pass: the houses decimated while you are well away from them)
     if (this.inside) return; // (the house stays as it was when you went in)
     const p = this.player?.pos;
     if (!p) return;
@@ -889,6 +890,8 @@ export class Chalets {
   // (performance pass) the houses' instanced chalet_lo is ~20k triangles a house (~1M for the village, all drawn
   // whenever any of it is in view, shadows too): houses over 110 m from you are drawn from a decimated copy
   // instead (a second instanced set, ~6.5k, no shadow). Re-sorted twice a second and whenever the full model moves.
+  // The 110 m follows the preset's prop LOD distance (props.lod, 0.8 on Performance): ~70 m on SUPER PERFORMANCE,
+  // where from the village's own street (its spawn) 110 m still took in about half the houses at full detail.
   farLod() {
     const p = this.player?.pos;
     if (!p || !this.inst?.length || (this.farT = (this.farT || 0) - 1) > 0) return;
@@ -905,7 +908,7 @@ export class Chalets {
         });
         this.lodSplit = true;
       }
-      const R2 = 110 * 110, H = this.houses;
+      const R = 110 * Math.min(1, (quality.props?.lod ?? 0.8) / 0.8), R2 = R * R, H = this.houses;
       let n = 0, f = 0;
       for (let i = 0; i < H.length; i++) {
         if (i === this.hiAt) continue; // (the full model stands there)

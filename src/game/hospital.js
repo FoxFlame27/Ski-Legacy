@@ -295,6 +295,7 @@ export class Hospital {
       c.strokeStyle = 'rgba(246,246,240,0.92)'; c.lineWidth = 5;
       for (const lx of BAYS.lines) { c.beginPath(); c.moveTo(X(lx), Z(BAYS.z0)); c.lineTo(X(lx), Z(BAYS.z1)); c.stroke(); }
       c.beginPath(); c.moveTo(X(BAYS.lines[0]), Z(BAYS.z1)); c.lineTo(X(BAYS.lines.at(-1)), Z(BAYS.z1)); c.stroke();
+      c.beginPath(); c.moveTo(X(BAYS.lines[0]), Z(BAYS.z0)); c.lineTo(X(BAYS.lines.at(-1)), Z(BAYS.z0)); c.stroke(); // (closed boxes: the head line too; Oct 30, the user)
       c.globalCompositeOperation = 'destination-in';
       const fx = c.createLinearGradient(0, 0, cw, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.045, '#000'); fx.addColorStop(0.955, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = fx; c.fillRect(0, 0, cw, ch);

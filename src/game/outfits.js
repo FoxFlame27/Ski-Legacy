@@ -703,8 +703,8 @@ float ofSum = 0.0, ofMH = 0.0, ofML = 0.0, ofDark = 0.0;
 
 const ZONE_KEYS = ['J1', 'J2', 'T1', 'T2', 'H', 'L'];
 
-function outfitMaterial(base, zones) {
-  const mat = base.clone();
+/** The recolour uniforms of one model's zones (the look's targets: setLook). */
+function zoneUniforms(zones) {
   const v4 = (n) => Array.from({ length: n }, () => new THREE.Vector4());
   const U = {
     uOfC: { value: v4(MAX_CLUSTERS) }, uOfRole: { value: v4(MAX_CLUSTERS) }, uOfRef: { value: v4(6) }, uOfTgt: { value: v4(6) },
@@ -722,7 +722,14 @@ function outfitMaterial(base, zones) {
   const lb = zones.lensBox;
   U.uOfSplit.value.set(zones.yWaist, zones.yNeck, lb ? 1 : 0, 0);
   if (lb) { U.uOfLens0.value.set(lb.x0, lb.y0, lb.z0); U.uOfLens1.value.set(lb.x1, lb.y1, 9); }
-  mat.userData.outfit = U;
+  return U;
+}
+
+// The live recolour shader: only a fallback now (a bake that failed, see bakeLook), it costs every pixel of the
+// skier ~2x the stock material each frame.
+function outfitMaterial(base, zones) {
+  const mat = base.clone();
+  mat.userData.outfit = zoneUniforms(zones);
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, mat.userData.outfit);
     sh.vertexShader = sh.vertexShader
@@ -879,7 +886,7 @@ export function outfitLook(equipped) {
 
 const FINISH = { matte: [0.82, 0], satin: [0.5, 0], gloss: [0.2, 0], chrome: [0.16, 0.85] };
 const ZONES = new WeakMap(); // geometry -> zones (null = this model cannot be recoloured)
-const RIGS = new WeakMap(); // rig -> { mesh, base, mat }
+const RIGS = new WeakMap(); // rig -> { mesh, base, mat (live-shader fallback), entry (the baked look worn), hook }
 
 function skinnedOf(rig) {
   if (rig?.skinned?.isSkinnedMesh) return rig.skinned;
@@ -966,10 +973,260 @@ function setLook(U, look) {
   U.uOfPbrOn.value.set(look.helmet ? 1 : 0, look.lens ? 1 : 0);
 }
 
+// ---------------------------------------------------------------- baked looks
+// A look is baked once into textures (per model + look, shared by every rig wearing it): the recolour shader above
+// runs ONCE per texel in UV space instead of on every pixel of the skier every frame, and the rig then wears a plain
+// copy of its stock material with the baked maps, so a dressed skier costs exactly what a stock one does (same
+// program, nothing per frame). Oct 30, the user: "some skins make you lag a lot".
+// Albedo at BAKE_SIZE (sRGB), roughness / metalness (helmet finish, lens mirror, matte dark dyes) and the emissive
+// glow (models that have one) at BAKE_AUX. The recolour runs once per texel of the UV islands; a cheap image pass
+// then pads the islands by a few texels (mip-mapped edges keep the new colour) and fills the rest with the original. Baked on the rig's first render (mesh.onBeforeRender: the
+// renderer is at hand there), so applyOutfit needs no renderer; until then the rig keeps what it wore.
+
+const BAKE_SIZE = 1024, BAKE_AUX = 512, BAKE_PAD = 6; // (texels of padding round every island)
+const BAKES = new Map(); // geometry + material + look key -> { id, key, geo, base, zones, look, refs, ready, failed, mat, rts }
+const IDLE = []; // baked looks nobody wears now (oldest first): kept a while for a quick change back (the shop)
+const IDLE_MAX = 4;
+// a rig thrown away without undressing (a remote avatar rebuilt, a menu skier) gives its look back when collected
+const GONE = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry((e) => dropLook(e)) : null;
+const OBR = THREE.Object3D.prototype.onBeforeRender;
+
+function lookKey(look) {
+  const j = look.jacket, t = look.trousers, h = look.helmet, l = look.lens;
+  return [j?.base, j && (j.accent || j.base), t?.base, t && (t.accent || t.base), h?.color, h && (h.finish || 'gloss'),
+    l?.tint, l ? (l.mirror ?? 1) : null].map((v) => v ?? '-').join('|');
+}
+
+function takeLook(geo, base, zones, look, key) {
+  const id = `${geo.uuid}|${base.uuid}|${key}`;
+  let e = BAKES.get(id);
+  if (!e) {
+    e = { id, key, geo, base, zones, look: { jacket: look.jacket, trousers: look.trousers, helmet: look.helmet, lens: look.lens }, refs: 0, ready: false, failed: false, mat: null, rts: [] };
+    BAKES.set(id, e);
+  }
+  const i = IDLE.indexOf(e);
+  if (i >= 0) IDLE.splice(i, 1);
+  e.refs++;
+  return e;
+}
+
+function dropLook(e) {
+  if (--e.refs > 0) return;
+  e.refs = 0;
+  if (!IDLE.includes(e)) IDLE.push(e);
+  while (IDLE.length > IDLE_MAX) {
+    const old = IDLE.shift();
+    BAKES.delete(old.id);
+    old.mat?.dispose();
+    for (const rt of old.rts) rt.dispose();
+    old.mat = null; old.rts = []; old.ready = false;
+  }
+}
+
+/** The rig wears look entry `e` (null: none); the one it wore goes back. */
+function wearLook(rig, st, e) {
+  const old = st.entry;
+  if (old === e) return;
+  if (old) { GONE?.unregister(st); st.entry = null; }
+  if (e) { st.entry = e; GONE?.register(rig, e, st); }
+  if (old) dropLook(old);
+}
+
+let BAKER = null;
+function baker() {
+  if (BAKER) return BAKER;
+  const U = { ...zoneUniforms({ K: 0, roles: {}, ref: Object.fromEntries(ZONE_KEYS.map((z) => [z, [0.5, 0, 0, 0]])), lensBox: null, yWaist: 0, yNeck: 0 }),
+    uMap: { value: null }, uRM: { value: null }, uEm: { value: null }, uHas: { value: new THREE.Vector3() },
+    uDiffuse: { value: new THREE.Color() }, uRough: { value: 1 }, uMetal: { value: 1 }, uEmissive: { value: new THREE.Color() },
+    uMode: { value: 0 }, uSrc: { value: null }, uTexel: { value: 1 } };
+  // the untouched texel of each output (outside the islands), shared by both passes
+  const ORIG = /* glsl */`
+uniform sampler2D uMap;
+uniform sampler2D uRM;
+uniform sampler2D uEm;
+uniform vec3 uHas;
+uniform vec3 uDiffuse;
+uniform float uRough;
+uniform float uMetal;
+uniform vec3 uEmissive;
+uniform int uMode;
+varying vec2 vUv;
+vec4 ofAlbedo() { vec4 c = vec4(uDiffuse, 1.0); if (uHas.x > 0.5) c *= texture2D(uMap, vUv); return c; }
+vec2 ofRM() { vec2 f = vec2(uRough, uMetal); if (uHas.y > 0.5) f *= texture2D(uRM, vUv).gb; return f; }
+vec3 ofEm() { vec3 e = uEmissive; if (uHas.z > 0.5) e *= texture2D(uEm, vUv).rgb; return e; }`;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: U, side: THREE.DoubleSide, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+    vertexShader: /* glsl */`
+attribute vec4 ofZone;
+attribute vec3 ofPos;
+varying vec4 vOfZone;
+varying vec3 vOfPos;
+varying vec2 vUv;
+void main() {
+  vUv = uv; vOfZone = ofZone; vOfPos = ofPos;
+  gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+}`,
+    fragmentShader: /* glsl */`
+${ORIG}
+${OF_PARS}
+void main() {
+  vec4 diffuseColor = ofAlbedo();
+${OF_MAIN}
+  if (uMode == 0) {
+    gl_FragColor = vec4(diffuseColor.rgb, 1.0);
+  } else if (uMode == 1) {
+    vec2 rmf = ofRM();
+    float roughnessFactor = rmf.x, metalnessFactor = rmf.y;
+    roughnessFactor = mix(roughnessFactor, max(roughnessFactor, 0.72), ofDark);
+    roughnessFactor = mix(roughnessFactor, uOfPbr.x, ofMH * uOfPbrOn.x);
+    metalnessFactor = mix(metalnessFactor, uOfPbr.y, ofMH * uOfPbrOn.x);
+    roughnessFactor = mix(roughnessFactor, uOfPbr.z, ofML * uOfPbrOn.y);
+    metalnessFactor = mix(metalnessFactor, uOfPbr.w, ofML * uOfPbrOn.y);
+    gl_FragColor = vec4(1.0, clamp(roughnessFactor, 0.0, 1.0), clamp(metalnessFactor, 0.0, 1.0), 1.0);
+  } else {
+    vec3 em = ofEm() * mix(vec3(1.0), clamp(diffuseColor.rgb / max(ofOld, vec3(0.02)), 0.0, 1.5), ofSum);
+    gl_FragColor = vec4(em / 1.5, 1.0); // (the material's emissiveIntensity 1.5 gives it back)
+  }
+}`,
+  });
+  // pass 2 over the whole texture ([0,1]^2 covered by one triangle): island texels as baked, the texels just outside
+  // take the nearest island texel (within BAKE_PAD), the rest the original
+  const dil = new THREE.ShaderMaterial({
+    uniforms: U, side: THREE.DoubleSide, depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
+    vertexShader: /* glsl */`varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0); }`,
+    fragmentShader: /* glsl */`
+${ORIG}
+uniform sampler2D uSrc;
+uniform float uTexel;
+void main() {
+  vec4 c = texture2D(uSrc, vUv);
+  if (c.a < 0.5) {
+    for (int r = 1; r <= ${BAKE_PAD}; r++) {
+      for (int k = 0; k < 8; k++) {
+        float a = float(k) * 0.7853982;
+        vec4 s = texture2D(uSrc, vUv + vec2(cos(a), sin(a)) * float(r) * uTexel);
+        if (s.a > 0.5) { c = s; break; }
+      }
+      if (c.a > 0.5) break;
+    }
+  }
+  if (c.a > 0.5) gl_FragColor = vec4(c.rgb, 1.0);
+  else if (uMode == 0) gl_FragColor = vec4(ofAlbedo().rgb, 1.0);
+  else if (uMode == 1) gl_FragColor = vec4(1.0, ofRM(), 1.0);
+  else gl_FragColor = vec4(ofEm() / 1.5, 1.0);
+}`,
+  });
+  const qg = new THREE.BufferGeometry();
+  qg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+  qg.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 2, 0, 0, 2]), 2));
+  const quad = new THREE.Mesh(qg, dil), mesh = new THREE.Mesh(qg, mat);
+  quad.frustumCulled = mesh.frustumCulled = false;
+  const scene = new THREE.Scene();
+  scene.add(quad, mesh);
+  scene.matrixWorldAutoUpdate = false;
+  BAKER = { U, mat, quad, mesh, scene, cam: new THREE.OrthographicCamera() };
+  return BAKER;
+}
+
+const _cc = new THREE.Color();
+function bakeLook(renderer, e) {
+  const B = baker(), U = B.U, base = e.base;
+  const Z = zoneUniforms(e.zones);
+  setLook(Z, e.look);
+  for (const k of Object.keys(Z)) U[k].value = Z[k].value;
+  U.uMap.value = base.map || null; U.uRM.value = base.roughnessMap || base.metalnessMap || null; U.uEm.value = base.emissiveMap || null;
+  U.uHas.value.set(base.map ? 1 : 0, U.uRM.value ? 1 : 0, base.emissiveMap ? 1 : 0);
+  U.uDiffuse.value.copy(base.color || _cc.set(1, 1, 1));
+  U.uRough.value = base.roughness ?? 1; U.uMetal.value = base.metalness ?? 0;
+  U.uEmissive.value.copy(base.emissive || _cc.set(0, 0, 0)).multiplyScalar(base.emissiveIntensity ?? 1);
+  B.mesh.geometry = e.geo;
+  const src = base.map;
+  const target = (size, srgb) => new THREE.WebGLRenderTarget(size, size, {
+    depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+    wrapS: src?.wrapS ?? THREE.ClampToEdgeWrapping, wrapT: src?.wrapT ?? THREE.ClampToEdgeWrapping,
+    anisotropy: src?.anisotropy || 1, colorSpace: srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace,
+  });
+  const glow = !!base.emissiveMap;
+  const passes = [[target(BAKE_SIZE, true), 0], [target(BAKE_AUX, false), 1]];
+  if (glow) passes.push([target(BAKE_AUX, true), 2]);
+  const prevRT = renderer.getRenderTarget(), face = renderer.getActiveCubeFace(), mip = renderer.getActiveMipmapLevel();
+  const auto = renderer.autoClear, xr = renderer.xr.enabled, cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
+  renderer.autoClear = false; renderer.xr.enabled = false;
+  const tmps = [];
+  try {
+    for (const [rt, mode] of passes) {
+      const size = rt.width;
+      // 1) the islands, recoloured (alpha 1), on transparent black
+      const tmp = new THREE.WebGLRenderTarget(size, size, { depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, colorSpace: rt.texture.colorSpace });
+      tmps.push(tmp);
+      U.uMode.value = mode;
+      renderer.setRenderTarget(tmp);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, false, false);
+      B.mesh.visible = true; B.quad.visible = false;
+      renderer.render(B.scene, B.cam);
+      // 2) padded + the original outside (mip-mapped once drawn)
+      U.uSrc.value = tmp.texture; U.uTexel.value = 1 / size;
+      renderer.setRenderTarget(rt);
+      B.mesh.visible = false; B.quad.visible = true;
+      renderer.render(B.scene, B.cam);
+    }
+  } finally {
+    renderer.setRenderTarget(prevRT, face, mip);
+    renderer.setClearColor(cc, ca);
+    renderer.autoClear = auto; renderer.xr.enabled = xr;
+    B.mesh.geometry = B.quad.geometry;
+    U.uMap.value = U.uRM.value = U.uEm.value = U.uSrc.value = null;
+    for (const t of tmps) t.dispose();
+  }
+  const mat = base.clone();
+  mat.map = passes[0][0].texture;
+  if (mat.color) mat.color.set(1, 1, 1);
+  mat.roughnessMap = mat.metalnessMap = passes[1][0].texture;
+  mat.roughness = 1; mat.metalness = 1;
+  if (glow) { mat.emissiveMap = passes[2][0].texture; mat.emissive.set(1, 1, 1); mat.emissiveIntensity = 1.5; }
+  mat.userData = { ...base.userData, outfit: Z }; // (the first-person sleeves read the jacket colour: skier.js syncFpArms)
+  e.mat = mat; e.rts = passes.map((p) => p[0]); e.ready = true;
+}
+
+/** Bake the rig's pending look when it is next drawn, then wear it (from the next frame). */
+function bakeOnRender(mesh, st) {
+  if (st.hook) return;
+  const own = Object.prototype.hasOwnProperty.call(mesh, 'onBeforeRender'), prev = mesh.onBeforeRender;
+  st.hook = function (renderer, ...rest) {
+    if (own) mesh.onBeforeRender = prev; else delete mesh.onBeforeRender;
+    st.hook = null;
+    const e = st.entry;
+    if (e && st.mesh === mesh) {
+      if (!e.ready && !e.failed) {
+        try { bakeLook(renderer, e); } catch (err) { console.warn('Outfit bake failed: live recolour instead', err); e.failed = true; }
+      }
+      dressMesh(mesh, st);
+    }
+    if (prev !== OBR) prev.call(this, renderer, ...rest);
+  };
+  mesh.onBeforeRender = st.hook;
+}
+
+function dressMesh(mesh, st) {
+  const e = st.entry;
+  if (!e) { mesh.material = st.base; return; }
+  if (e.ready) { mesh.material = e.mat; return; }
+  if (e.failed) { // the live shader (per rig)
+    if (!st.mat) st.mat = outfitMaterial(st.base, e.zones);
+    setLook(st.mat.userData.outfit, e.look);
+    mesh.material = st.mat;
+    return;
+  }
+  bakeOnRender(mesh, st);
+}
+
 /**
  * Dress a skier rig. `outfit`: the equipped ids ({ jacket, trousers, helmet, lens }, see getEquipped),
  * a look ({ jacket: { base, accent }, trousers: {...}, helmet: { color, finish }, lens: { tint, mirror } }),
- * or null for the skier's original clothes. Only this rig changes (its material is cloned once).
+ * or null for the skier's original clothes. Only this rig changes: it wears the look's baked material (shared with
+ * every rig of the same model in the same look, see bakeLook), from its next render on.
  * Returns false when the model can't be recoloured (it then simply keeps its own look).
  */
 export function applyOutfit(rig, charId, outfit) {
@@ -977,14 +1234,14 @@ export function applyOutfit(rig, charId, outfit) {
     const mesh = skinnedOf(rig);
     if (!mesh) return false;
     let st = RIGS.get(rig);
-    if (!st || st.mesh !== mesh) { st = { mesh, base: mesh.material, mat: null }; RIGS.set(rig, st); }
+    if (!st || st.mesh !== mesh) { st = { mesh, base: mesh.material, mat: null, entry: null, hook: null }; RIGS.set(rig, st); }
     const look = outfit && OUTFIT_SLOTS.some((s) => typeof outfit[s] === 'string') ? outfitLook(outfit) : outfit;
-    if (!look || !OUTFIT_SLOTS.some((s) => look[s])) { mesh.material = st.base; return true; }
+    if (!look || !OUTFIT_SLOTS.some((s) => look[s])) { wearLook(rig, st, null); mesh.material = st.base; return true; }
     const zones = zonesFor(rig, mesh, st.base);
-    if (!zones) { mesh.material = st.base; return false; }
-    if (!st.mat) st.mat = outfitMaterial(st.base, zones);
-    setLook(st.mat.userData.outfit, look);
-    mesh.material = st.mat;
+    if (!zones) { wearLook(rig, st, null); mesh.material = st.base; return false; }
+    const key = lookKey(look);
+    if (st.entry?.key !== key) wearLook(rig, st, takeLook(mesh.geometry, st.base, zones, look, key));
+    dressMesh(mesh, st);
     return true;
   } catch (e) {
     console.warn('applyOutfit failed', e);

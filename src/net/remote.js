@@ -150,6 +150,7 @@ export class RemotePlayers {
     const r = this.players.get(pid);
     if (!r) return;
     this.o.vehicles?.remove(pid);
+    if (r.rig) this.o.applyOutfit?.(r.rig, r.look?.c || 'skier_blue', null); // (gives its baked look back: outfits.js)
     this.detach(r);
     if (r.tag) { r.tag.material.map.dispose(); r.tag.material.dispose(); }
     this.players.delete(pid);
@@ -206,8 +207,14 @@ export class RemotePlayers {
     if (r.rig && r.rigKey) return r.rig; // (rigKey '' = the look changed: rebuild)
     const look = r.look || {};
     const key = `${look.c || 'skier_blue'}|${look.s || 'rental'}`;
+    // only the outfit changed (same body, same skis): re-dressed, not rebuilt (the baked look is shared: outfits.js);
+    // a rig that failed to build is not retried every frame (only on their next look)
+    if (r.rigKey === '' && r.rig && r.rigBuilt === key) { this.o.applyOutfit?.(r.rig, look.c || 'skier_blue', look.o || null); r.rigKey = key; return r.rig; }
+    if (!r.rig && r.rigBuilt === key && r.rigKey) return null;
     const scene = r.scene;
+    if (r.rig) this.o.applyOutfit?.(r.rig, look.c || 'skier_blue', null); // (the old rig gives its baked look back)
     this.detach(r);
+    r.rigBuilt = key;
     try {
       r.rig = this.o.makeRig(look.c || 'skier_blue', look.s || 'rental');
       if (look.o) this.o.applyOutfit?.(r.rig, look.c || 'skier_blue', look.o);

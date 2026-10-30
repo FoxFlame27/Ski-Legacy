@@ -114,6 +114,22 @@ export class RemoteVehicles {
     this.time = 0;
   }
 
+  // a moving collider of its own for a drawn vehicle (in the shared list; parked far away at 1e9 while not shown):
+  // the other players' helicopters standing somewhere, their snowmobiles, the rescue's helicopter on the ground and
+  // its ambulance (Oct 30, the user: "everything should be collidable also moving objects")
+  solid(w, key, shape) {
+    if (!w[key]) { w[key] = { x: 1e9, z: 1e9, rot: 0, mp: true, soft: true, ...shape }; this.o.colliders?.push(w[key]); }
+    return w[key];
+  }
+  unsolid(w, key) {
+    const c = w?.[key];
+    if (!c) return;
+    const L = this.o.colliders, i = L ? L.indexOf(c) : -1;
+    if (i >= 0) L.splice(i, 1);
+    w[key] = null;
+  }
+  static place(c, on, x, z, yaw = 0) { c.x = on ? x : 1e9; c.z = on ? z : 1e9; c.rot = -yaw; }
+
   /** Every frame, before the avatars (RemotePlayers.update). */
   update(dt, remotes, v) {
     this.remotes = remotes;
@@ -392,6 +408,10 @@ export class RemoteVehicles {
         const mine = this.o.localHeli?.();
         const overMine = !!(mine && mine.state === 'parked' && !mine.away && mine.model?.root.visible && Math.hypot(mine.flight.pos.x - H.x, mine.flight.pos.z - H.z) < 4);
         const show = outdoors && !overMine && _d.set(H.x, H.y, H.z).sub(cam).length() < VEH_FAR;
+        // (solid while it stands on the snow: the cabin and the tail, as your own helicopter's, game/heli.js)
+        const down = show && H.y - world.groundHeight(H.x, H.z, H.y + 1) < 1.2, fx = Math.sin(H.yaw), fz = Math.cos(H.yaw);
+        RemoteVehicles.place(this.solid(w, 'cabinCol', { r: 2.1, h: 3, heli: true }), down, H.x + fx * 0.9, H.z + fz * 0.9);
+        RemoteVehicles.place(this.solid(w, 'tailCol', { r: 0.7, h: 2, heli: true }), down, H.x - fx * 4.6, H.z - fz * 4.6);
         if (!show) { if (H.shown) this.hideRescueHeli(w); }
         else {
           if (!H.shown) { H.shown = true; root.visible = true; }
@@ -407,11 +427,11 @@ export class RemoteVehicles {
         }
       }
     } else if (H.shown) this.hideRescueHeli(w);
-    if (!vr.h) H.posed = false;
+    if (!vr.h) { H.posed = false; if (w.cabinCol) { RemoteVehicles.place(w.cabinCol, false); RemoteVehicles.place(w.tailCol, false); } }
     // the ambulance
     const A = w.a;
     if (vr.a) {
-      if (!w.amb) { try { w.amb = new Ambulance({ scene: this.o.scene, models: this.o.models() || {}, world }); } catch (err) { console.warn('[mp] ambulance', err); w.amb = { ok: false }; } }
+      if (!w.amb) { try { w.amb = new Ambulance({ scene: this.o.scene, models: this.o.models() || {}, world, colliders: this.o.colliders }); } catch (err) { console.warn('[mp] ambulance', err); w.amb = { ok: false }; } }
       const amb = w.amb;
       if (amb.ok) {
         const a = vr.a;
@@ -422,21 +442,22 @@ export class RemoteVehicles {
         const gx = A.tx + Math.sin(A.tyaw) * ahead * A.tv, gz = A.tz + Math.cos(A.tyaw) * ahead * A.tv;
         A.x += (gx - A.x) * e; A.z += (gz - A.z) * e; A.yaw = wrapPi(A.yaw + wrapPi(A.tyaw - A.yaw) * e);
         const show = outdoors && _d.set(A.x, a[1], A.z).sub(cam).length() < VEH_FAR;
-        if (!show) { if (A.shown) { A.shown = false; amb.group.visible = false; } }
+        if (!show) { if (A.shown) { A.shown = false; amb.group.visible = false; amb.syncCol(); } }
         else {
           amb.x = A.x; amb.z = A.z; amb.yaw = A.yaw;
-          amb.place();
           if (!A.shown) { A.shown = true; amb.group.visible = true; }
+          amb.place(); // (+ its collider: game/heli/ambulance.js)
           if (vr.l) amb.flash(dt, nightUniform.value); else if (amb.lights) for (const m of amb.lights) m.emissiveIntensity = 0.15;
         }
       }
-    } else { if (A.shown) { A.shown = false; w.amb.group.visible = false; } A.posed = false; }
+    } else { if (A.shown) { A.shown = false; w.amb.group.visible = false; w.amb.syncCol?.(); } A.posed = false; }
   }
   hideRescueHeli(w) { w.h.shown = false; if (w.model) { w.model.root.visible = false; w.model.pool.mesh.visible = false; w.model.beam.visible = false; } if (w.rope) w.rope.visible = false; }
   hideRescue(w) {
     if (w.h.shown) this.hideRescueHeli(w);
+    for (const k of ['cabinCol', 'tailCol']) if (w[k]) RemoteVehicles.place(w[k], false);
     w.h.posed = false; w.a.posed = false; w.ref = null;
-    if (w.a.shown) { w.a.shown = false; w.amb.group.visible = false; }
+    if (w.a.shown) { w.a.shown = false; w.amb.group.visible = false; w.amb.syncCol?.(); }
   }
   dropRescue(pid) {
     const w = this.rescues.get(pid);
@@ -444,6 +465,8 @@ export class RemoteVehicles {
     if (w.model) { w.model.root.removeFromParent(); w.model.pool.mesh.removeFromParent(); }
     if (w.rope) { w.rope.removeFromParent(); w.rope.geometry.dispose(); w.rope.material.dispose(); }
     w.amb?.group?.removeFromParent();
+    if (w.amb?.col) { this.unsolid(w.amb, 'col'); Ambulance.all.delete(w.amb); }
+    for (const k of ['cabinCol', 'tailCol']) this.unsolid(w, k);
     this.rescues.delete(pid);
   }
   /** Where the rescue holds remote r (seatFor): the winch hook, the cabin's front seat; hidden in the ambulance. */
@@ -489,6 +512,11 @@ export class RemoteVehicles {
     root.updateMatrixWorld(true);
     const d = _d.copy(root.position).sub(cam).length();
     const show = outdoors && d < VEH_FAR;
+    { // (solid while it stands parked somewhere, as your own: game/heli.js syncModel)
+      const fx = Math.sin(h.yaw), fz = Math.cos(h.yaw), still = show && !flying;
+      RemoteVehicles.place(this.solid(h, 'cabinCol', { r: 2.1, h: 3, heli: true }), still, root.position.x + fx * 0.9, root.position.z + fz * 0.9);
+      RemoteVehicles.place(this.solid(h, 'tailCol', { r: 0.7, h: 2, heli: true }), still, root.position.x - fx * 4.6, root.position.z - fz * 4.6);
+    }
     if (!show) { if (h.shown) this.hideHeli(h); return; }
     if (!h.shown) { h.shown = true; root.visible = true; }
     const want = flying ? ((r.flags & F.lights) ? 1 : 0.6) : 0;
@@ -496,12 +524,13 @@ export class RemoteVehicles {
     h.model.update(dt, { rpm: h.rpm, night: nightUniform.value, time: this.time, lamp: false, camera: this.o.camera?.() || null, ground: null, snow: 0 });
     if (flying) { if (h.tag.visible) h.tag.visible = false; } else tagScale(h.tag, d);
   }
-  hideHeli(h) { h.shown = false; h.model.root.visible = false; h.model.pool.mesh.visible = false; h.model.beam.visible = false; }
+  hideHeli(h) { h.shown = false; if (h.cabinCol) { RemoteVehicles.place(h.cabinCol, false); RemoteVehicles.place(h.tailCol, false); } h.model.root.visible = false; h.model.pool.mesh.visible = false; h.model.beam.visible = false; }
   dropHeli(pid) {
     const h = this.helis.get(pid);
     if (!h) return;
     h.model.root.removeFromParent(); h.model.pool.mesh.removeFromParent();
     h.tag.material.map.dispose(); h.tag.material.dispose();
+    this.unsolid(h, 'cabinCol'); this.unsolid(h, 'tailCol');
     this.helis.delete(pid);
   }
 
@@ -514,7 +543,7 @@ export class RemoteVehicles {
     const driving = r.state === ST.drive && !!(r.flags & F.sled);
     const at = !driving ? r.vsled?.at || null : null;
     let w = this.sleds.get(r.pid);
-    if (!driving && !at) { if (w?.shown) { w.shown = false; w.g.visible = false; } if (w) w.posed = false; return; }
+    if (!driving && !at) { if (w?.shown) { w.shown = false; w.g.visible = false; } if (w) { w.posed = false; if (w.col) RemoteVehicles.place(w.col, false); } return; }
     if (!w) {
       const models = this.o.models();
       if (!models?.snowmobile) return; // (the glTF still loading)
@@ -551,6 +580,7 @@ export class RemoteVehicles {
     const d = _d.set(w.x, w.y, w.z).sub(cam).length();
     const show = outdoors && d < VEH_FAR;
     if (w.shown !== show) { w.shown = show; g.visible = show; }
+    RemoteVehicles.place(this.solid(w, 'col', { r: 1.15, h: 1.4, sled: true }), show, w.x, w.z); // (as the parked ones: game/snowmobile.js)
     if (!show) return;
     if (driving) { if (w.tag.visible) w.tag.visible = false; } else tagScale(w.tag, d);
   }
@@ -559,6 +589,7 @@ export class RemoteVehicles {
     if (!w) return;
     w.g.removeFromParent();
     w.tag.material.map.dispose(); w.tag.material.dispose();
+    this.unsolid(w, 'col');
     this.sleds.delete(pid);
   }
 

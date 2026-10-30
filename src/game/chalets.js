@@ -288,6 +288,7 @@ export class Chalets {
     if (lo) {
       this.loModel = this.modelGroup(lo);
       this.inst = this.instance(this.loModel, this.houses.map((h) => h.frame.matrixWorld), g, true);
+      for (const im of this.inst) im.userData.noSolid = true; // (re-sorted per frame: world/solidify.js takes solidRoots())
     }
     // the houses' colliders: the body, the front steps (a top you step onto); an invisible camera blocker
     const lbox = (h, x0, x1, z0, z1, extra = {}) => {
@@ -342,6 +343,19 @@ export class Chalets {
     this.buildPlates(g);
     g.updateMatrixWorld(true);
     this.stats('built');
+  }
+  /** The houses as props for world/solidify.js (main.js): the low model standing at every plot (one house for all of
+   * them; the full model has the same walls), so whatever the body box and the front steps leave out (the gable's
+   * porch, its posts, railing and stairs, the woodshed lean-to...) gets colliders too (Oct 30, the user walked through
+   * a porch). Built on demand, never added to the scene. */
+  solidRoots() {
+    if (!this.loModel) return [];
+    return this.houses.map((h) => {
+      const g = new THREE.Group();
+      g.name = h.name; g.matrixAutoUpdate = false; g.matrix.copy(h.frame.matrixWorld);
+      g.add(this.loModel.clone());
+      return { root: g, whole: true, area: 'chalets' };
+    });
   }
   // the chalet model in the house frame (its body centred, its ground at y 0)
   modelGroup(gltf) {
@@ -900,7 +914,7 @@ export class Chalets {
       if (!this.instFar) {
         this.instFar = this.inst.map((im) => {
           const f = new THREE.InstancedMesh(decimatedGeometry(im.geometry, 0.035), im.material, im.count);
-          f.castShadow = false; f.receiveShadow = true; f.count = 0; f.name = 'chalet-lo-far';
+          f.castShadow = false; f.receiveShadow = true; f.count = 0; f.name = 'chalet-lo-far'; f.userData.noSolid = true;
           if (!im.boundingSphere) im.computeBoundingSphere();
           f.boundingSphere = im.boundingSphere.clone(); // (the whole village, as the near set's)
           im.parent.add(f);

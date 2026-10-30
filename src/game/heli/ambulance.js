@@ -24,8 +24,9 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
 export class Ambulance {
-  constructor({ scene, models, world }) {
+  constructor({ scene, models, world, colliders = null }) {
     this.world = world;
+    Ambulance.all.add(this);
     this.ok = !!models.ambulance;
     this.group = new THREE.Group();
     this.group.name = 'ambulance';
@@ -54,6 +55,19 @@ export class Ambulance {
     // the cars stop for it (or round it) like for the bus
     this.box = { x: 0, y: 0, z: 0, yaw: 0, hw: HW, hd: LEN / 2 + 0.2, push: true };
     addTrafficBlocker((out) => { if (!this.group.visible) return; const b = this.box; b.x = this.x; b.y = this.group.position.y; b.z = this.z; b.yaw = this.yaw; out.push(b); });
+    // solid (Oct 30, the user: "make sure I can't walk in the ambulance"): a box collider in the shared list that
+    // follows it, parked or driving (vehiclehits.js knocks you over when it drives into you: Ambulance.all); away
+    // while it is hidden and while `rider` (you're the one carried in it: the rescue's own ride)
+    this.rider = false;
+    this.col = { x: 1e9, z: 1e9, hw: HW - 0.05, hd: LEN / 2, rot: 0, h: 2.7, vehicle: true, ambulance: true };
+    colliders?.push(this.col);
+  }
+  /** The collider onto the van (or away), after it moved / showed / hid. */
+  syncCol() {
+    const c = this.col;
+    if (!c) return;
+    const on = this.group.visible && !this.rider;
+    c.x = on ? this.x : 1e9; c.z = on ? this.z : 1e9; c.rot = -this.yaw;
   }
 
   /** Waiting beside the pad (x, z, facing yaw). */
@@ -62,12 +76,14 @@ export class Ambulance {
     this.x = x; this.z = z; this.yaw = yaw; this.s = 0; this.v = 0; this.t = 0; this.vx = 0; this.vz = 0;
     this.path = null; this.goal = null; this.arrived = false;
     this.lat = 0; this.latT = 0; this.q = 0; this.wait = 0; this.scanT = 0; this.obs.length = 0;
+    this.rider = false;
     this.place();
     this.group.visible = true;
+    this.syncCol();
     for (const m of this.lights) m.emissiveIntensity = 0.15;
   }
 
-  hide() { this.group.visible = false; this.path = null; this.goal = null; this.arrived = false; }
+  hide() { this.group.visible = false; this.path = null; this.goal = null; this.arrived = false; this.syncCol(); }
 
   // the way out: along the Rettungsweg from the pad (straight on into the medical centre's forecourt when it ends across
   // the road from it), else toward the medical centre along the road that passes nearest both, else to the nearest
@@ -144,7 +160,7 @@ export class Ambulance {
     }
     const statics = [];
     for (const c of window.__game?.colliders || []) {
-      if (!c || c.x < minx - 12 || c.x > maxx + 12 || c.z < minz - 12 || c.z > maxz + 12) continue;
+      if (!c || c === this.col || c.x < minx - 12 || c.x > maxx + 12 || c.z < minz - 12 || c.z > maxz + 12) continue;
       const ext = c.r ?? Math.max(c.hw || 0, c.hd || 0);
       if (!(ext >= 0) || ext > 12) continue; // (no buildings: the road keeps clear of them)
       let near = false;
@@ -315,8 +331,10 @@ export class Ambulance {
     _e.set(Math.atan2(b - f, 4), this.yaw, Math.atan2(l - r, 1.8), 'YXZ');
     this.group.quaternion.setFromEuler(_e);
     this.group.updateMatrixWorld(true);
+    this.syncCol();
   }
 
   /** World position of the van (for the camera and the world streaming). */
   pos(out = _v) { return out.set(this.x, this.group.position.y, this.z); }
 }
+Ambulance.all = new Set(); // (every ambulance: yours, the other players' rescues; vehiclehits.js)

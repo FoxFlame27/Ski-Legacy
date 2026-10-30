@@ -501,11 +501,21 @@ async function boot() {
     const H = busRoads.hospital, hosp = H ? [{ x: H.ex, z: H.ez }, { x: H.ex + (H.dirx || 0) * 2, z: H.ez + (H.dirz || 0) * 2 }] : []; // (its door step, where you come round)
     const doors = [...village.interactables, carRental?.door, prison?.door, ...hosp].filter(Boolean).map((d) => ({ x: d.x, z: d.z, r: 1.2 }));
     if (sleds) sleds.collidersReady = false; // (the parked snowmobiles are placed once these are in: game/snowmobile.js)
-    solidifyIdle([
+    // (+ the Almdorf chalets once built: each house's porch, posts, railing and gable stairs, the gardens' props; the
+    // bus roads' depot, signs and roadside props; the helipad; the bus-race boards; the railway stations' platform
+    // furniture, its tunnel portals and viaducts' parapets. The Legacy Express's stream in and out: world/expresstrack.js
+    // does theirs as they're built)
+    Promise.resolve(chalets?.ready).then(() => solidifyIdle([
       { root: village.group, area: 'village', tiles: true }, { root: decor.group, area: 'village decor', tiles: true }, { root: dressing, area: 'resort dressing' },
       { root: lot('medical-centre'), area: 'medical centre' }, { root: lot('car-rental'), area: 'Autohaus' }, { root: prison?.group, area: 'police station' },
       { root: parking?.group, area: 'car parks' }, { root: skibus?.group, area: 'bus stops' }, { root: jobs?.group, area: 'job boards' },
-    ], colliders, { keepOut: doors }).then((r) => console.info('Solid props: +' + r.added + ' colliders', JSON.stringify(r.areas))).catch((e) => console.warn('solid props', e)).finally(() => { if (sleds) sleds.collidersReady = true; });
+      ...(chalets?.solidRoots?.() || []), { root: chalets?.group, area: 'chalet gardens', maxInst: 160, tiles: true },
+      { root: skibus?.line?.group, area: 'bus roads' }, { root: heli?.pad?.group, area: 'helipad' },
+      { root: lot('rail-stations'), area: 'rail stations', blob: false, tiles: true },
+      ...(lot('wolkenspitzbahn')?.children.filter((o) => o.name === 'rail-portal' || o.name === 'rail-viaduct').map((root) => ({ root, whole: true, tiles: true, area: 'Wolkenspitzbahn' })) || []),
+      ...scene.children.filter((o) => o.name === 'bus-race-board').map((root) => ({ root, whole: true, area: 'bus-race boards' })),
+    ], colliders, { keepOut: [...doors, ...(chalets?.houses || []).map((h) => ({ x: h.door.x, z: h.door.z, r: 1.2 }))],
+      skip: (o) => o.name === 'guardrail-stretch' })).then((r) => console.info('Solid props: +' + r.added + ' colliders', JSON.stringify(r.areas))).catch((e) => console.warn('solid props', e)).finally(() => { if (sleds) sleds.collidersReady = true; });
   }
   // graphics preset for the hand-placed props (LOD distances, small-on-screen culling, shadow range)
   const own = new Set([terrain.group, backdrop.group, pisteLights.group, player.rig.root, player.rig.gear, seller.root, seller.gear]);

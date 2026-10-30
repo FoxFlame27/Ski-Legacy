@@ -22,6 +22,7 @@
 // The people about (npcs.near) are hit by the same vehicles (hitPeople): thrown the same way, no fine (not your doing).
 // The drivers don't brake for them, but they keep to the pavements and the waiting areas: it's the odd one crossing.
 import { knockPerson, launchFor, people } from './peoplehits.js';
+import { Ambulance } from './heli/ambulance.js';
 
 const R = 0.35;                 // the player's radius (player.js collide)
 const MARGIN = 0.15;            // touching counts (the player's own collide has just pushed you out to the edge)
@@ -83,6 +84,7 @@ export class VehicleHits {
     if (tr) for (const t of tr.trucks || [tr]) this.add(t.collider, t.g?.position || t, 'tow truck');
     const cats = S.snowcats?.cats;
     if (cats) for (let i = 0; i < cats.length; i++) this.add(cats[i].col, cats[i], 'snow plough');
+    for (const a of Ambulance.all) if (a.col) this.add(a.col, a.group.position, 'rescue ambulance'); // ('Hit by a ...'; yours away while you ride in it)
     const rc = S.multiplayer?.vehicles?.cars;
     if (rc && rc.size) rc.forEach(this.addRemote);
     // records of colliders gone for good (a remote car dropped): forgotten now and then

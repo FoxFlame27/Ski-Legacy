@@ -18,6 +18,7 @@
 //    and so is anything already inside a vehicle's collider (parked cars come and go).
 import * as THREE from 'three';
 import { drawnHeight } from './settle.js';
+import { world } from './world.js';
 
 const CELL = 0.5;  // m: the footprint grid
 const LIFT = 0.3;  // m over the snow: lower geometry (paving, kerbs, drifts, decals) is not an obstacle
@@ -29,11 +30,23 @@ const MAX_INST = 64; // an instanced mesh with more instances is scatter (piste 
 
 const _m = new THREE.Matrix4(), _mi = new THREE.Matrix4(), _v = new THREE.Vector3();
 
+// the ground under a cell: the drawn terrain, or a walkable deck (a platform, a helipad, a bridge) up to just over
+// what is drawn there (settle.js groundAt): a station's benches on its platform get colliders, the platform does not
+function groundAt(x, z, yHint) {
+  let h = drawnHeight(x, z);
+  const arr = world.surfaceGrid?.get(Math.floor(x / 64) + ',' + Math.floor(z / 64));
+  if (arr) for (const sf of arr) { const hs = sf.height(x, z); if (hs !== null && hs > h && hs <= yHint + 0.1) h = hs; }
+  return h;
+}
+
 // every visible, solid-looking mesh under `obj` (only the coarsest level of a LOD), with its world matrices
-function meshesOf(obj, base, out) {
-  if (!obj.visible || obj.userData?.noCollide) return out;
+// (a LOD's level: whatever its own visible flag says. THREE.LOD shows one level at a time by the camera's distance, so
+// the level read here was hidden for every building near the camera at boot, and those got no colliders at all:
+// Oct 30, the user stood inside a hotel's spruce and porch in Legacy Village)
+function meshesOf(obj, base, out, level = false) {
+  if ((!obj.visible && !level) || obj.userData?.noCollide) return out;
   if (obj.isSkinnedMesh || obj.isPoints || obj.isLine || obj.isSprite || obj.isLight) return out;
-  if (obj.isLOD && obj.levels?.length) { meshesOf(obj.levels.at(obj.userData.solidLevel ?? -1).object, base, out); return out; } // (solidLevel: makeLOD's far copy is too coarse for a footprint)
+  if (obj.isLOD && obj.levels?.length) { meshesOf(obj.levels.at(obj.userData.solidLevel ?? -1).object, base, out, true); return out; } // (solidLevel: makeLOD's far copy is too coarse for a footprint)
   if (obj.isMesh && obj.geometry?.attributes?.position) {
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
     const hidden = mats.every((m) => !m || m.visible === false || m.colorWrite === false || (m.transparent && m.opacity < 0.05));
@@ -197,7 +210,7 @@ function footprint(meshes, yaw, name, tile = null) {
   for (const [k, e] of cells) {
     const u = (e.i + 0.5) * CELL, v = (e.j + 0.5) * CELL;
     e.x = ox + u * c + v * s; e.z = oz - u * s + v * c;
-    e.g = drawnHeight(e.x, e.z);
+    e.g = groundAt(e.x, e.z, e.h);
     if (e.h < e.g + LIFT) cells.delete(k);
     else e.tall = e.h >= hi - 0.05 || e.h - e.g > LOW;
   }
@@ -230,8 +243,10 @@ class ColGrid {
 
 /**
  * Add colliders for whatever is drawn but not yet solid.
- * @param {Array<{ root: THREE.Object3D, whole?: boolean, area?: string }>} entries prop groups: each direct child is one
- *   placed prop (whole: the root itself is one, e.g. a building lot)
+ * @param {Array<{ root: THREE.Object3D, whole?: boolean, area?: string, maxInst?: number, blob?: boolean }>} entries prop
+ *   groups: each direct child is one placed prop (whole: the root itself is one, e.g. a building lot); an instanced
+ *   child's instances are props of their own (up to maxInst of them, default MAX_INST; blob false: boxed like any prop
+ *   instead of one circle each). A child with userData.noSolid is left out (its module has its own colliders).
  * @param {object[]} colliders the colliders that already exist (read)
  * @param {{ out?: object[], keepOut?: Array<{x, z, r}>, skip?: (o) => boolean }} o out: where the new colliders go
  *   (default: colliders)
@@ -271,13 +286,14 @@ function* solidifySteps(entries, colliders, { out = colliders, keepOut = [], ski
     const A = (res.areas[e.area || root.name || 'props'] ??= { props: 0, solid: 0, partial: 0, bare: 0, skipped: 0, cellsBefore: 0, cellsAfter: 0, added: 0 });
     const items = [];
     for (const it of e.whole ? [root] : root.children) {
-      if (skip(it)) continue;
-      if (it.isInstancedMesh && it.count > MAX_INST) { A.skipped++; continue; }
+      if (skip(it) || it.userData?.noSolid) continue;
+      if (it.isInstancedMesh && it.count > (e.maxInst ?? MAX_INST)) { A.skipped++; continue; }
       if (it.isInstancedMesh && !e.whole) {
-        // every instance its own prop
+        // every instance its own prop (e.blob false: footprint boxes as for any prop, not one circle round it)
         for (let k = 0; k < it.count; k++) {
           it.getMatrixAt(k, _mi); _m.multiplyMatrices(it.matrixWorld, _mi);
-          items.push({ name: it.name || 'instanced', meshes: [{ mesh: it, m: _m.clone() }], yaw: Math.atan2(_m.elements[8], _m.elements[10]), blob: true });
+          if (Math.abs(_m.determinant()) < 1e-9) continue; // (an instance hidden by a zero matrix)
+          items.push({ name: it.name || 'instanced', meshes: [{ mesh: it, m: _m.clone() }], yaw: Math.atan2(_m.elements[8], _m.elements[10]), blob: e.blob !== false });
         }
       } else {
         const meshes = meshesOf(it, null, []);
@@ -303,7 +319,7 @@ function* solidifySteps(entries, colliders, { out = colliders, keepOut = [], ski
       A.cellsBefore += free.length;
       if (!free.length) { A.solid++; return; }
       if (!covered) A.bare++; else A.partial++;
-      const boxes = (!kept && fp.blob && blob(fp)) || (!kept && !tiled && small(fp)) || mergeCells(free, fp, grid);
+      const boxes = (!kept && fp.blob && blob(fp)) || (!kept && !tiled && small(fp)) || mergeCells(free, fp, grid, keepOut);
       for (const b of boxes) { out.push(b); grid.add(b); }
       A.added += boxes.length; res.added += boxes.length;
       // (after: what is still uncovered, with the new boxes in)
@@ -362,7 +378,7 @@ function nameOf(o) {
 // within 0.25 m), as rotated box colliders in the prop's frame. A rectangle may run on across cells that a collider
 // already covers (they are blocked anyway), so a ring of wall round a building's existing box, or an annex beside
 // it, comes out as a few big boxes instead of dozens of strips.
-function mergeCells(free, fp, grid) {
+function mergeCells(free, fp, grid, keepOut = []) {
   // (a building: mostly walls. Its low bits, sills, steps, a porch deck, a woodshed's roof, are just more of it, so the
   // boxes need not break up at every one of them)
   let nTall = 0;
@@ -375,7 +391,18 @@ function mergeCells(free, fp, grid) {
   for (const e of free) map.set(e.i + ',' + e.j, e);
   const used = new Set(), boxes = [];
   const c = Math.cos(fp.yaw), s = Math.sin(fp.yaw);
-  const covered = new Map(), isCovered = (i, j) => {
+  // (a cell in a doorway's keep-out circle: never spanned, not even where a collider covers it already, e.g. the
+  // front steps' box: a wall's rectangle run on across them would shut the door)
+  const covered = new Map(), kept = new Map(), isKept = (i, j) => {
+    const key = i + ',' + j;
+    let v = kept.get(key);
+    if (v === undefined) {
+      const u = (i + 0.5) * CELL, w = (j + 0.5) * CELL, x = fp.ox + u * c + w * s, z = fp.oz - u * s + w * c;
+      v = keepOut.some((k) => Math.hypot(k.x - x, k.z - z) < k.r);
+      kept.set(key, v);
+    }
+    return v;
+  }, isCovered = (i, j) => {
     const key = i + ',' + j;
     let v = covered.get(key);
     if (v === undefined) {
@@ -403,6 +430,7 @@ function mergeCells(free, fp, grid) {
       if (i < i0 || i > i9 || j < j0 || j > j9) return false;
       const q = map.get(i + ',' + j);
       if (q) return !used.has(i + ',' + j) && cls(q) === k;
+      if (keepOut.length && isKept(i, j)) return false;
       if (has(i, j)) return !fp.cells.get((i + 32768) * 65536 + (j + 32768)).keep; // (drawn, and covered already; never a doorway)
       return isCovered(i, j) || ((e.tall || building) && !outside.has(i + ',' + j)); // (a wall's box may span the closed inside)
     };

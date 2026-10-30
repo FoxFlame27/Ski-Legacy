@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { world } from '../../world/world.js';
 import { makeFallbackFigure } from './props.js';
 import { worldPos, rotateWorld, setWorldQuat, solveTwoBone, SkinSampler, regionVerts, SnowPatch } from './pose.js';
+import { PeopleSim } from '../../world/peoplesim.js';
 
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -95,6 +96,19 @@ export function resetRig(r) {
 }
 
 // ------------------------------------------------------------------ a person on one spot
+// the job people standing or sitting hurt on their spot (not once they ski with you): bumped into like the village's
+// people (game/npcs.js near, via PeopleSim.all; Oct 30, the user: "there should be nothing that you can walk through")
+const STILL = new Set();
+PeopleSim.all.push({
+  near(x, z, r, out) {
+    for (const a of STILL) {
+      if (a.visible === false || (a.pose !== 'stand' && !(a.pose === 'down' && !(a.getUpT >= 0)))) continue;
+      if (Math.abs(a.pos.x - x) < r && Math.abs(a.pos.z - z) < r) out.push(a.pos);
+    }
+    return out;
+  },
+});
+
 export class Actor {
   /**
    * @param {object} o
@@ -114,6 +128,7 @@ export class Actor {
     this.heading = o.heading || 0;
     this.side = o.side || 1;
     this.pos = new THREE.Vector3(o.x, world.groundHeight(o.x, o.z), o.z);
+    STILL.add(this);
     this.pool = o.pool || null;
     this.slot = o.char && this.pool ? this.pool.take(o.char, o.avoid) : null;
     this.rig = this.slot?.rig || null;
@@ -379,6 +394,7 @@ export class Actor {
   }
 
   dispose() {
+    STILL.delete(this);
     if (this.rig) {
       this.group.remove(this.rig.root);
       if (this.rig.gear) this.group.remove(this.rig.gear);

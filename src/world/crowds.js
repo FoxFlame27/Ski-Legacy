@@ -15,6 +15,7 @@ import { save } from '../game/economy.js';
 import { quality } from '../engine/quality.js';
 import { loadFanKits, FanCrowd } from './fans.js';
 import { meshGround } from '../modes/parkour/kit.js';
+import { PeopleSim } from './peoplesim.js';
 
 // ------------------------------------------------------------------ shared helpers (snowcats / flags use them)
 // Graphics preset -> 0 (performance) .. 4 (ultra). engine/quality.js holds the live preset (it may drop a level
@@ -496,6 +497,13 @@ function fanSpots(spots, ground, clear = null) {
   return out;
 }
 
+// the spots a set's people stand on (positions for Crowds.near) and their bounds
+function solidSpots(set, spots) {
+  const b = { x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity };
+  for (const p of spots) { b.x0 = Math.min(b.x0, p.x); b.x1 = Math.max(b.x1, p.x); b.z0 = Math.min(b.z0, p.z); b.z1 = Math.max(b.z1, p.z); }
+  set.spots = spots; set.bounds = spots.length ? b : null;
+}
+
 class FanSet {
   constructor(kits, spots, seed, { parent, name, finish, shadows, lively = false }) {
     this.crowd = new FanCrowd(kits, spots, mulberry(seed), { parent, name, shadows, lively });
@@ -537,6 +545,7 @@ export class Crowds {
     this.treeCells = new Map();
     this.treeClear = (x, z) => this.clearOfTrees(x, z);
     this.player = { x: 0, y: 0, z: 0, speed: 0 };
+    PeopleSim.all.push(this); // (its near(): the spectators are bumped into like the village's people)
     const t0 = performance.now();
     loadFanKits().then((kits) => {
       if (!kits.length) return;
@@ -576,17 +585,32 @@ export class Crowds {
     return true;
   }
   makeArenaSet(d) {
+    const fs = this.kits ? fanSpots(d.spots, meshGround, this.treeClear) : d.spots;
     const set = this.kits
-      ? new FanSet(this.kits, fanSpots(d.spots, meshGround, this.treeClear), d.seed, { parent: this.group, name: d.name, finish: d.finish, shadows: this.shadows, lively: true })
+      ? new FanSet(this.kits, fs, d.seed, { parent: this.group, name: d.name, finish: d.finish, shadows: this.shadows, lively: true })
       : new CrowdSet(d.spots, mulberry(d.seed), { shadows: this.shadows, parent: this.group, name: d.name, finish: d.finish });
+    solidSpots(set, fs);
     this.sets.push(set);
     this.count += set.fans ? set.count : d.spots.length;
   }
   makeCourseSet(d) {
+    const fs = this.kits ? fanSpots(d.spots, meshGround, this.treeClear) : d.spots;
     const set = this.kits
-      ? new FanSet(this.kits, fanSpots(d.spots, meshGround, this.treeClear), d.seed, { parent: d.parent, name: 'crowd-course', finish: d.finish, shadows: this.shadows })
+      ? new FanSet(this.kits, fs, d.seed, { parent: d.parent, name: 'crowd-course', finish: d.finish, shadows: this.shadows })
       : new CrowdSet(d.spots, mulberry(d.seed), { shadows: this.shadows, parent: d.parent, name: 'crowd-course', finish: d.finish });
+    solidSpots(set, fs);
     this.courseSets.push(set);
+  }
+  /** The spectators within r m of (x, z), as positions (the player bumps off them softly: npcs.js near, via
+   * PeopleSim.all; Oct 30, the user: "there should be nothing that you can walk through"). None while hidden. */
+  near(x, z, r, out) {
+    if (!this.group.visible) return out;
+    for (const list of [this.sets, this.courseSets]) for (const set of list) {
+      const b = set.bounds;
+      if (!b || x < b.x0 - r || x > b.x1 + r || z < b.z0 - r || z > b.z1 + r) continue;
+      for (const p of set.spots) if (Math.abs(p.x - x) < r && Math.abs(p.z - z) < r) out.push(p);
+    }
+    return out;
   }
 
   /** Spectators at every resort World Cup arena (call once after buildResortDressing). */

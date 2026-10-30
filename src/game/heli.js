@@ -602,8 +602,8 @@ export class Heli {
     root.position.copy(f.pos);
     root.quaternion.copy(f.quat);
     root.updateMatrixWorld(true);
-    // solid only while it stands still somewhere
-    const still = this.state === 'parked' && f.landed;
+    // solid only while it stands still somewhere (parked, or set down by the rescue: the others can't walk through it)
+    const still = (this.state === 'parked' || this.state === 'rescue') && f.landed;
     const fx = Math.sin(f.yaw), fz = Math.cos(f.yaw);
     this.cabinCol.x = still ? f.pos.x + fx * 0.9 : 1e9; this.cabinCol.z = still ? f.pos.z + fz * 0.9 : 1e9;
     this.tailCol.x = still ? f.pos.x - fx * 4.6 : 1e9; this.tailCol.z = still ? f.pos.z - fz * 4.6 : 1e9;

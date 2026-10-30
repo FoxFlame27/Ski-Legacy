@@ -368,7 +368,7 @@ class LiftLine {
       st.rotation.y = this.yaw + (top ? Math.PI : 0);
       group.add(st);
       const sz = st.userData.size || new THREE.Vector3(c.stationSize, 6, c.stationSize);
-      colliders.push({ x: p.x, z: p.z, hw: sz.x / 2 * 0.85, hd: sz.z / 2 * 0.85, rot: -this.yaw });
+      colliders.push({ x: p.x, z: p.z, hw: sz.x / 2 * 0.95, hd: sz.z / 2 * 0.95, rot: -this.yaw }); // (0.85 left its eaves' posts and steps out)
     }
     if (this.mid) this.buildMid(models, colliders);
     // towers
@@ -383,11 +383,13 @@ class LiftLine {
         const s = Math.min(1, 14 / h);
         tw.scale.set(s, 1, s);
         group.add(tw);
-        colliders.push({ x: t.x, z: t.z, r: 1.0 });
+        // its legs' footprint at the base as drawn (towerFootprint; the r 1 circle it had left the splayed legs out)
+        const fp = towerFootprint(models.lift_tower), ty = this.yaw + Math.PI / 2, lx = fp.ox * h * s, lz = fp.oz * h * s;
+        colliders.push({ x: t.x + lx * Math.cos(ty) + lz * Math.sin(ty), z: t.z - lx * Math.sin(ty) + lz * Math.cos(ty), hw: Math.max(0.7, fp.hx * h * s + 0.1), hd: Math.max(0.7, fp.hz * h * s + 0.1), rot: -ty });
         if (t.pad) pads.push({ t, h, s });
       }
       // towers beside a run wear crash padding around their base
-      if (pads.length) group.add(towerPadding(models.lift_tower, pads, this.yaw + Math.PI / 2));
+      if (pads.length) group.add(towerPadding(models.lift_tower, pads, this.yaw + Math.PI / 2, colliders));
     }
     // haul ropes
     const ropeMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.4, metalness: 0.8 });
@@ -453,7 +455,7 @@ class LiftLine {
     wheel.rotation.y = this.yaw + (top ? Math.PI : 0); // the rope's half loop faces away from the line
     wheel.castShadow = true;
     group.add(wheel);
-    colliders.push({ x: c.x, z: c.z, hw: HALL_W / 2 - 0.4, hd: HALL_LEN / 2 - 0.4, rot: -this.yaw });
+    colliders.push(...podiumColliders(c, this.yaw, sd));
   }
 
   // a chairlift terminal: the Meshy bullwheel under its dome (chairs swing round at the rim), the haul rope's half
@@ -485,7 +487,7 @@ class LiftLine {
     hut.rotation.y = this.yaw + (sd > 0 ? -Math.PI / 2 : Math.PI / 2); // its front (+z) faces the line
     group.add(hut);
     const sz = hut.userData.size || new THREE.Vector3(6.4, 4, 6.4);
-    colliders.push({ x: q.x, z: q.z, hw: sz.x / 2 * 0.9, hd: sz.z / 2 * 0.9, rot: -hut.rotation.y });
+    colliders.push({ x: q.x, z: q.z, hw: sz.x / 2 * 0.97, hd: sz.z / 2 * 0.97, rot: -hut.rotation.y });
   }
 
   // where a rider steps off: the foot of the stair down the podium at (p, side sd), or the nearest clear spot
@@ -528,8 +530,8 @@ class LiftLine {
       hall.position.set(this.mid.x, this.mid.y + HALL_BASE, this.mid.z);
       hall.rotation.y = this.yaw;
       g.add(hall);
-      // the podium (the cabins ride over its deck, through the hall)
-      cols.push({ x: this.mid.x, z: this.mid.z, hw: HALL_W / 2 - 0.4, hd: HALL_LEN / 2 - 0.4, rot: -this.yaw });
+      // the podium (the cabins ride over its deck, through the hall) and its stair
+      cols.push(...podiumColliders(this.mid, this.yaw, this.mid.side));
     } else {
       // the two machine rooms under the platforms (the cabins pass between them, over the pad)
       for (const sd of [1, -1]) {
@@ -961,6 +963,16 @@ function bullwheelMaterial() {
 // the podium under the hall: a concrete base with a timber-clad, windowed band on the long sides, and the stair
 // from the deck down to the pad on the side of the nearby run (local frame as midStationGeometry)
 const podiumCache = new Map();
+// the podium's colliders: its body as drawn (the larch boards stand ~0.3 m proud of the hall: a box 0.4 m inside
+// that left you standing in them) and the stair down its outside (podiumGeometry: same numbers)
+function podiumColliders(c, yaw, side) {
+  const st = -(side || 1), lx = st * ((HALL_W - 0.5) / 2 + 1.05), z0 = 4.8 - 16 * 0.42, z1 = 7.6, lz = (z0 + z1) / 2;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  return [
+    { x: c.x, z: c.z, hw: HALL_W / 2 - 0.05, hd: HALL_LEN / 2 - 0.1, rot: -yaw },
+    { x: c.x + lx * cy + lz * sy, z: c.z - lx * sy + lz * cy, hw: 0.85, hd: (z1 - z0) / 2, rot: -yaw },
+  ];
+}
 function podiumGeometry(side) {
   if (podiumCache.has(side)) return podiumCache.get(side);
   const parts = [];
@@ -1054,7 +1066,7 @@ function footMax(x, z, r) {
   return h;
 }
 
-function towerPadding(gltf, pads, yaw) {
+function towerPadding(gltf, pads, yaw, colliders = null) {
   const fp = towerFootprint(gltf);
   if (!padGeo) {
     // an octagonal wrap 1 m across (scaled per tower), 2.8 m tall, blue with white straps and a red top band
@@ -1093,6 +1105,7 @@ function towerPadding(gltf, pads, yaw) {
     _o.scale.set(w, stretch, w);
     _o.updateMatrix();
     mesh.setMatrixAt(i, _o.matrix);
+    colliders?.push({ x, z, r: 0.53 * w, soft: true, padding: true }); // (the wrap is wider than the tower's own r 1 collider)
   });
   mesh.castShadow = true; mesh.receiveShadow = true;
   mesh.computeBoundingSphere();

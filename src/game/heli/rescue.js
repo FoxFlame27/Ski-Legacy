@@ -115,7 +115,7 @@ export class Rescue {
     this.phase = 'inbound';
     // the ambulance waits beside the pad (side of the pad, facing out)
     if (AMBULANCE_ON) try {
-      if (!this.amb) this.amb = new Ambulance({ scene: h.scene, models: h.models || {}, world: h.world });
+      if (!this.amb) this.amb = new Ambulance({ scene: h.scene, models: h.models || {}, world: h.world, colliders: h.colliders });
       const a = h.home.yaw - Math.PI / 2, d = PAD_R + 9;
       this.amb.park(h.home.x + Math.sin(a) * d, h.home.z + Math.cos(a) * d, a);
     } catch (e) { console.warn('ambulance', e); this.amb = null; }
@@ -411,6 +411,7 @@ export class Rescue {
         p.rig.root.visible = false; p.rig.gear.visible = false;
         this.amb.pos(this.ambSeat.pos); this.ambSeat.pos.y += 1.2;
         p.sitOn(this.ambSeat);
+        this.amb.rider = true; this.amb.syncCol(); // (you're in it: its collider never pushes you off your seat)
         this.amb.plan();
         this.shotAt = null;
         this.go('ambulance');

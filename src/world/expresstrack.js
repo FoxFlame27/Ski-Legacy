@@ -30,6 +30,7 @@ import { RailBuilder, railMaterials, canvasTex, mouthFade } from './railtrack.js
 import { setTerrainClipSet, terrainClipFocus } from './terrain.js';
 import { smoothstep, mulberry32 } from '../core/noise.js';
 import { planExpressStations, buildExpressStation } from './expressstations.js';
+import { solidifyIdle } from './solidify.js';
 
 const CHUNK = 250;
 const GAUGE = 1.0;              // (the Wolkenspitzbahn's railcar: metre gauge)
@@ -796,6 +797,11 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
     for (let i = 0; i < colliders.length; i++) if (!set.has(colliders[i])) colliders[j++] = colliders[i];
     colliders.length = j;
   };
+  const solid = (e) => {
+    if (e.solidified || e.failed || !e.obj?.visible || (e.kind !== 'station' && e.kind !== 'portal' && e.kind !== 'bridge')) return;
+    e.solidified = true;
+    solidifyIdle([{ root: e.obj, area: 'express ' + e.kind, blob: false, tiles: true, whole: e.kind !== 'station' }], colliders).catch((err) => console.warn('Legacy Express: colliders', e.kind, err));
+  };
   const queue = [];
   const update = (v, { inTunnel = null, budget = 4, all = false } = {}) => {
     terrainClipFocus(v.x, v.z);
@@ -807,7 +813,7 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
       if (!e.obj) { if (d < e.buildR) queue.push(e); continue; }
       if (d > e.dropR) { unregister(e.obj); group.remove(e.obj); disposeObj(e.obj); for (const m of e.obj.userData.signs || []) signs.delete(m); e.obj = null; continue; }
       const vis = d < e.visR;
-      if (e.obj.visible !== vis) e.obj.visible = vis;
+      if (e.obj.visible !== vis) { e.obj.visible = vis; solid(e); }
       if (vis && e.obj.userData.inner) {
         const near = e.portalHere || (under && d < 700);
         for (const m of e.obj.userData.inner) if (m.visible !== near) m.visible = near;
@@ -825,6 +831,10 @@ export function buildExpressTrack(scene, { models = null, colliders = [], camera
       applyNight(e.obj);
       if (e.obj.userData.inner) for (const m of e.obj.userData.inner) m.visible = e.portalHere || under;
       if (e.kind === 'station') e.obj.userData.view?.(v, under);
+      // (a station's, a portal's, a viaduct's first build: colliders for whatever of it is drawn and not solid yet, the
+      // platform furniture, railings, shelters' posts, the portal's wing walls, the parapets (world/solidify.js, in
+      // slices; the decks and platforms are walked on). They stay when it is dropped: it comes back the same)
+      solid(e);
       if (!all && performance.now() - t0 > budget) break;
     }
   };

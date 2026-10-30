@@ -733,7 +733,7 @@ export function buildResortDressing(scene, models = {}) {
   const inVillage = (x, z) => Math.hypot(x, z) < 240;
 
   buildSignposts(group, colliders, index, nets, models);
-  buildMarkers(group, index, hazardNets, nearCannon, nearStation, inVillage);
+  buildMarkers(group, index, hazardNets, nearCannon, nearStation, inVillage, colliders);
   const netBuild = buildNetRuns(layout.nets.filter((n) => !n.fence));
   group.add(netBuild.group);
   colliders.push(...netBuild.colliders);
@@ -992,7 +992,7 @@ function nearestArc(p, x, z) {
 }
 
 // ------------------------------------------------------------------ piste border markers
-function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage) {
+function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage, colliders = null) {
   const spots = [];
   for (const p of layout.pistes) {
     if (p.lane) continue; // the nets mark a lane's edges
@@ -1031,6 +1031,8 @@ function buildMarkers(group, index, nets, nearCannon, nearStation, inVillage) {
     _m.copy(mat4(s.x, y, s.z, (i * 2.4) % 6.28, s.lean, -s.lean * 0.7));
     bodies.setMatrixAt(i, _m); tops.setMatrixAt(i, _m);
     bodies.setColorAt(i, colors[s.diff]);
+    // (a thin pole, soft like the road's delineator posts: you bump and slide off it, never a crash)
+    colliders?.push({ x: s.x, z: s.z, r: 0.05, h: POLE_H, soft: true, pole: true });
     // the right-hand edge (looking downhill) carries an orange top, the left one stays in the piste colour
     tops.setColorAt(i, s.right ? orange : colors[s.diff]);
   });

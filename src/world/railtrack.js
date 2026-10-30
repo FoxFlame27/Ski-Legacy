@@ -751,6 +751,7 @@ export function buildRailway(scene) {
   for (const t of tunnels) {
     for (const which of t.end ? [0] : [0, 1]) {
       const p = buildPortal(M.stone, M.paint, t, which, t.name);
+      p.name = 'rail-portal'; // (main.js: world/solidify.js gives its walls colliders)
       const s = which ? t.s1 : t.s0, q = railAt(s, {});
       chunks.push({ group: p, x: q.x, z: q.z, r: 30, far: true });
       group.add(p);
@@ -759,6 +760,7 @@ export function buildRailway(scene) {
   // viaducts
   for (const b of L.bridges || []) {
     const v = buildViaduct(M.stone, b, cols);
+    v.name = 'rail-viaduct'; // (main.js: world/solidify.js gives its parapets colliders; the deck is walked on)
     const q = railAt((b.s0 + b.s1) / 2, {});
     chunks.push({ group: v, x: q.x, z: q.z, r: (b.s1 - b.s0) / 2 + 20, far: true });
     group.add(v);

@@ -75,7 +75,7 @@ export function bedArms(rig) {
   // the legs straight out along the bed, side by side (the fall pose sprawls them): feet ~0.9 m down from the hips
   if (b.lUp && b.lLeg && b.lFoot && b.rUp && b.rLeg && b.rFoot) {
     for (const [s, up, leg, foot] of [[-1, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
-      _bt.copy(hip).addScaledVector(right, s * 0.11).addScaledVector(down, 0.9).addScaledVector(front, 0.04);
+      _bt.copy(hip).addScaledVector(right, s * 0.11).addScaledVector(down, 0.88).addScaledVector(front, 0.17); // (feet on top of the mattress, never sunk into it: the user saw no legs)
       _bp.copy(front).multiplyScalar(1).addScaledVector(down, 0.2); // (the knees up toward the ceiling: straight, never bent sideways)
       try { twoBone(up, leg, foot, _bt, _bp); } catch { /* (the fall pose's legs stay) */ }
     }
@@ -757,7 +757,7 @@ export class HospitalRoom {
     const bx = BEDS[this.bed] ?? 0, top = this.bedTops?.[this.bed] ?? BED.top;
     const st = this._bst ||= { mode: 'fall', heading: 0, speed: 0, crouch: 0, lean: 0, edge: 0, tuck: false, air: false, normal: UP,
       fall: { pitch: PITCH, roll: 0, ball: TUCK_Q, getUp: 0 }, fallSide: 1, fallHeading: 0, fallAir: false, fallT: 1, carry: false, airY: 0, fp: false };
-    rig.root.position.set(bx, top, HIPS_Z);
+    rig.root.position.set(bx, top + 0.04, HIPS_Z); // (+4 cm: lying on the mattress, not in it)
     // (no blend from the standing pose the player's update just made, and the body's settle onto the mattress kept
     // from frame to frame: the rig resets it whenever its mode changes, which it does twice a frame here)
     rig.mode = 'fall'; rig.snapNext = true;
@@ -765,7 +765,7 @@ export class HospitalRoom {
     rig.setHeadHidden(this.restView !== 'third');
     // the floor its fall pose lies on: the mattress (as net/remote.js onFloor), not the world's terrain under these coordinates
     const own = Object.prototype.hasOwnProperty.call(world, 'groundHeight'), g0 = world.groundHeight;
-    world.groundHeight = () => top;
+    world.groundHeight = () => top + 0.04;
     try { rig.update(Math.min(dt, 0.1), st); } catch (e) { console.warn('hospital: body', e); } finally { if (own) world.groundHeight = g0; else delete world.groundHeight; }
     this.lift = rig.fallLift; this.liftV = rig.fallLiftV;
     if (rig.fx?.length) rig.fx.length = 0; // (no snow puffs off a mattress)

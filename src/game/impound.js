@@ -345,8 +345,10 @@ export class Impound {
           this.place(e, to.b); // (upright, along the bay, nose out; multiplayer: net/carride.js sends the new parked spot, as for any place())
           if (R.drive) R.drive._cc = null;
           e.spot = null;
-          R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} was moved to the ${to.L?.name || 'Autohaus car park'}`, 'good', 4000);
-        }
+          // (Oct 30, the user: "indicate to the user why and where it is moved if it doesn't move to the dealership lot")
+          const car = R.label?.(e.cfg?.id) || 'car';
+          R.hud?.flash(to.full ? `The Autohaus car park is full · your ${car} was moved to the nearest car park: ${to.L?.name || 'car park'}` : `Your ${car} was moved to the Autohaus car park`, 'good', 5000);
+        } else R.hud?.flash('Every car park is full · your car stays where it is', 'bad', 4000);
         return;
       }
       this.parkHud(this.parkText(e, sp, d));
@@ -398,9 +400,10 @@ export class Impound {
     if (own) return { b: own, L: this.lot };
     const fb = this.freeBayOf(); // (single player: an other people's car may leave its bay for yours)
     if (fb) return { b: fb, L: this.lot };
-    // the Autohaus car park full: the nearest free bay elsewhere
-    const x = g.position.x, z = g.position.z, cands = [];
-    for (const L of this.bayLots()) if (L !== this.lot) for (const b of L.bays) cands.push({ b, L, d2: (b.x - x) ** 2 + (b.z - z) ** 2 });
+    // the Autohaus car park full: the free bay nearest the AUTOHAUS car park (Oct 30, the user: "it should go to the
+    // nearest lot next to the car dealer lot, not to the person"), never nearest where the car or you stand
+    const A = this.byDoor?.[0] || this.lot?.bays?.[0] || g.position, x = A.x, z = A.z, cands = [];
+    for (const L of this.bayLots()) if (L !== this.lot) for (const b of L.bays) cands.push({ b, L, d2: (b.x - x) ** 2 + (b.z - z) ** 2, full: true });
     cands.sort((a, b) => a.d2 - b.d2);
     for (const c of cands) if (fits(c.b)) return c;
     return null;

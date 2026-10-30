@@ -38,6 +38,8 @@ const ground = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.heig
 const NET_HZ = 10;              // knocks sent a second at most (the server's limit too)
 // (a spot's id: x, z rounded to 10 cm; ids are looked up with their neighbours too, against a rounding edge)
 const spotId = (x, z) => `${Math.round(x * 10)},${Math.round(z * 10)}`;
+// distance from (x, z) to a guardrail line { ax, az, bx, bz }
+const segDist = (x, z, L) => { const ex = L.bx - L.ax, ez = L.bz - L.az, t = Math.max(0, Math.min(1, ((x - L.ax) * ex + (z - L.az) * ez) / (ex * ex + ez * ez || 1))); return Math.hypot(x - L.ax - ex * t, z - L.az - ez * t); };
 
 // an instance's own copy of an instanced geometry: the shared attributes, its own entries of the per-instance ones
 function sliceGeometry(src, k) {
@@ -129,11 +131,20 @@ class Breakables {
   breakRail(rails, k, x, z, vx, vz) {
     const L = rails?.[k];
     if (!L?.seg || L.off || !this.scene) return false;
-    const ex = L.bx - L.ax, ez = L.bz - L.az, t = ((x - L.ax) * ex + (z - L.az) * ez) / (ex * ex + ez * ez || 1);
-    const near = t < 0.5 ? rails[k - 1] : rails[k + 1];
-    const joined = near?.seg && !near.off && (t < 0.5 ? Math.hypot(near.bx - L.ax, near.bz - L.az) : Math.hypot(near.ax - L.bx, near.az - L.bz)) < 0.05;
+    // (Oct 30 2026, the user: "make sure the breaking guardrails above 100 kph works for all cars, everywhere, always,
+    // because right now I don't think it does": the neighbour that broke with it was the one nearer the car's middle;
+    // hit near a section's far end at an angle, the middle was still behind it, so the section behind broke and the car
+    // ran on into the one ahead, still standing, and bounced back. Now the one ahead along the rail, the way the car is
+    // going (and the one behind too when the car's middle is within 1.2 m of that joint); drive.js breaks whatever
+    // else of the run the car's body sweeps through (railHit, d.thru))
+    const ex = L.bx - L.ax, ez = L.bz - L.az, len = Math.hypot(ex, ez) || 1, t = ((x - L.ax) * ex + (z - L.az) * ez) / (len * len);
+    const fwd = vx * ex + vz * ez >= 0;
+    const at = (q, end) => { const o = rails[q]; return o?.seg && !o.off && (end ? Math.hypot(o.ax - L.bx, o.az - L.bz) : Math.hypot(o.bx - L.ax, o.bz - L.az)) < 0.05 ? o : null; }; // (a section joined at L's end (1) / start (0))
+    const lines = [L], ahead = fwd ? at(k + 1, 1) : at(k - 1, 0), behind = fwd ? (t * len < 1.2 ? at(k - 1, 0) : null) : ((1 - t) * len < 1.2 ? at(k + 1, 1) : null);
+    if (ahead) lines.push(ahead);
+    if (behind) lines.push(behind);
     let n = 0;
-    for (const line of joined ? [L, near] : [L]) {
+    for (const line of lines) {
       const e = this.railOf(line);
       if (e && this.knock(e, vx * 0.7 + (Math.random() - 0.5) * 2, vz * 0.7 + (Math.random() - 0.5) * 2)) n++;
     }
@@ -156,7 +167,7 @@ class Breakables {
     _a.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]).normalize();
     const e = {
       c: { x: (a[0] + b[0]) / 2, z: (a[2] + b[2]) / 2 }, h: len, kind: 'metal', loud: 0, down: false, t: 0, grow: -1, copy: null, parts: [],
-      x: (a[0] + b[0]) / 2, z: (a[2] + b[2]) / 2, cy, base: cy - len / 2, q0: new THREE.Quaternion().setFromUnitVectors(_up, _a),
+      x: (a[0] + b[0]) / 2, z: (a[2] + b[2]) / 2, cy, base: cy - len / 2, q0: new THREE.Quaternion().setFromUnitVectors(_up, _a), line,
       p: new THREE.Vector3(), v: new THREE.Vector3(), w: new THREE.Vector3(), rest: 0, bounces: 0, boxes: [],
       make: () => this.railPiece(len),
       hide: () => {
@@ -444,7 +455,9 @@ class Breakables {
       }
       if (e.t >= RESPAWN) {
         const cam = this.camera?.position;
-        const clear = !pos || Math.hypot(pos.x - e.x, pos.z - e.z) > 2.5; // (never up through you or your car)
+        // (never up through you or your car; a guardrail section: 3.5 m clear of its whole length, Oct 30 2026: a car
+        // standing in the gap more than 2.5 m from the section's middle could have the rail come back up through it)
+        const clear = !pos || (e.line ? segDist(pos.x, pos.z, e.line) > 3.5 : Math.hypot(pos.x - e.x, pos.z - e.z) > 2.5);
         if (clear) {
           const far = !cam || Math.hypot(cam.x - e.x, cam.z - e.z) > NEAR;
           let unseen = far;

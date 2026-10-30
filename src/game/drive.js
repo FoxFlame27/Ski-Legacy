@@ -724,10 +724,23 @@ export class Drive {
     if (l < 1e-6) return;
     const nx = px / l, nz = pz / l;
     // (Oct 30, the user: "if you go faster than 100 km/h and then collide into the safety barriers you break through
-    // them"): over 100 km/h and into it at 25 km/h or more, the section breaks (world/breakables.js) and the car goes
+    // them"): over 100 km/h and into it at 15 deg or more, the section breaks (world/breakables.js) and the car goes
     // through with a big hit
-    const into0 = -(d.vx * nx + d.vz * nz);
-    if (rk >= 0 && !d.crash && Math.hypot(d.vx, d.vz) > RAIL_BREAK_V && into0 > Math.hypot(d.vx, d.vz) * RAIL_BREAK_SIN && breakables.breakRail(busRoads.rails, rk, d.x, d.z, d.vx, d.vz)) { this.railBreak(into0, nx, nz); return; }
+    // (Oct 30 2026: the angle also against the line hit itself, its own normal: at a joint the circle touched the next
+    // section's end point too, and that push (radial from the point) tilted the summed normal by ~4 deg: 18 deg into a
+    // straight rail measured 13.7, a scrape. Whichever of the two is steeper counts)
+    const g = rk >= 0 ? busRoads.rails[rk] : null, gl = g ? Math.hypot(g.bx - g.ax, g.bz - g.az) : 0;
+    const gs = gl > 1e-3 && (g.az - g.bz) * nx + (g.bx - g.ax) * nz < 0 ? -1 : 1;
+    const into0 = Math.max(-(d.vx * nx + d.vz * nz), gl > 1e-3 ? -gs * (d.vx * (g.az - g.bz) + d.vz * (g.bx - g.ax)) / gl : -Infinity), sp0 = Math.hypot(d.vx, d.vz);
+    // (Oct 30 2026, the user: "make sure the breaking guardrails above 100 kph works for all cars, everywhere, always,
+    // because right now I don't think it does": it broke, but a car hitting at an angle sweeps W / sin(angle) of rail
+    // with its body (7 m at 15 deg), more than the two sections that broke; the next one along still stood and the
+    // car, slowed to ~65 % by the break (under 100 km/h), bounced off it back onto the road: 1 hit in 4 in a Node
+    // check. Now, once through (d.thru: where it broke), every section the car touches within 12 m of there in the
+    // next 1.5 s (d.start: the drive's clock), still faster than 30 km/h, breaks too at no extra cost: the car carries
+    // on through the gap. A wreck sliding into one at 100+ km/h breaks it too (railBreak: it just slows))
+    if (rk >= 0 && d.thru && sp0 > KNOCK_V && d.start - d.thru.t < 1.5 && Math.hypot(d.x - d.thru.x, d.z - d.thru.z) < 12 && breakables.breakRail(busRoads.rails, rk, d.x, d.z, d.vx, d.vz)) return;
+    if (rk >= 0 && sp0 > RAIL_BREAK_V && into0 > sp0 * RAIL_BREAK_SIN && breakables.breakRail(busRoads.rails, rk, d.x, d.z, d.vx, d.vz)) { d.thru = { x: d.x, z: d.z, t: d.start }; this.railBreak(into0, nx, nz); return; }
     d.x += px; d.z += pz;
     const vn = d.vx * nx + d.vz * nz;
     let tx = -nz, tz = nx, vt = d.vx * tx + d.vz * tz;
@@ -760,6 +773,7 @@ export class Drive {
   // only by the usual rules (the damage reaching 100 %, or into it at 150 km/h+)
   railBreak(into, nx, nz) {
     const d = this.d, e = d.e, add = 6 + into * 0.6;
+    if (d.crash) { d.vx *= 0.64; d.vz *= 0.64; try { this.audio?.impact?.('metal', 0.95); } catch { /* (silent) */ } return; } // (a wreck sliding through: slowed, no more damage)
     if ((into >= EXTREME_V || (e.damage || 0) + add >= 100) && this.canCrash()) { this.crash(Math.max(into, CRASH_V), nx, nz, 'metal'); return; }
     e.damage = Math.min(99, (e.damage || 0) + add);
     this.knockT = performance.now();

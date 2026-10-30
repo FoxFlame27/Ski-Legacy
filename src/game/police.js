@@ -31,11 +31,12 @@
 // THE CHASE, GTA-style (Oct 30, the user: "police chases are actually very bad, they're super easy to get away from and
 // it isn't really fun ... you go 'omg I got rammed, crazy'"):
 //  - A WANTED LEVEL (W.heat, the 1-5 stars): 1 called, 2 fleeing, then up with the time they have you in sight, every
-//    patrol car you hit or wreck, a roadblock run, hitting traffic. Each level (LEVELS) brings more cars (up to six at
-//    five stars, joining from ahead and from the side roads, not only from behind), faster, harder rams (a coordinated
+//    patrol car you hit or wreck, a roadblock run, hitting traffic. Each level (LEVELS) brings more cars (one per star, five at
+//    five stars; they drive up after you from far behind on the roads you came by, at most one from ahead), faster, harder rams (a coordinated
 //    PIT from both sides, T-bones at the junctions, head-on blocks), ROADBLOCKS (3+: two cars across the road on your
 //    way ahead, a narrow gap on the shoulder), SPIKE STRIPS (4+: tyres popped, less grip and top speed: drive.js gripK /
-//    dragK) and the POLICE HELICOPTER (4+: a searchlight that follows you; it sees you from above).
+//    dragK) and the POLICE HELICOPTER (4+: flies in and after you 60-90 m up, its searchlight on you; it sees you from above
+//    unless you're in a tunnel or inside).
 //  - Escaping: the escape clock runs only while NO police car (line of sight through the terrain, the forests and the
 //    buildings, within their sight range) or the helicopter can see you; they lose you after loseS: SEARCHING (the
 //    stars blink), the cars spread out round where you were last seen, the helicopter sweeps its light; seen again:
@@ -106,7 +107,7 @@ export const TUNING = {
   spin: 1.5,         // x the spin a ram puts on your car (the rear quarter: a PIT spins you out)
   junctionM: 260,    // m: the second car cuts you off at the next junction on your road within this far
   cooldownS: 6,
-  holdR: 12,         // m: a patrol car this close to you for holdS (in all; it ebbs away when they're further) ...
+  holdR: 12,         // m: two or more patrol cars this close to you for holdS (in all; it ebbs away when they're further) ...
   holdS: 10,         // s: ... and they get out and arrest you (the user: "you can just sit in your car and they won't arrest you")
   wreckKmh: 15,      // you hitting a patrol car: damage % = (km/h closing - this) x wreckPer; 100 %: wrecked
   wreckPer: 0.9,
@@ -123,19 +124,21 @@ export const TUNING = {
   holdMore: 0.6,     // the box-in clock runs this much faster for every more patrol car within holdR
   searchR: 240,      // m: the search spreads up to this far round your last known position
 };
-// by wanted level (index: the stars): cars after you (more join from ahead / the side roads every reinS s), their road
+// by wanted level (index: the stars): cars after you (one more every reinS s, up from behind: reinforce()), their road
 // speed and catch-up (rubber band, from 90 m back), the rams (ramGap s between two, ramMult / ramMin, ramExtra m/s
 // over your speed closing in, the T-bone reach), their sight (m, line of sight) and escS (s out of sight to lose them),
 // a roadblock every `block` s (0: none), spike strips, the helicopter, headOn (blocking cars drive at you)
 const LEVELS = [null,
   { cars: 1, reinS: 99, vRoad: 52, catchUp: 0.34, ramGap: 1.5, ramMult: 1.5, ramMin: 14, ramExtra: 10, tbone: 60, sightR: 150, escS: 14, block: 0, spikes: false, heli: false, headOn: false },
-  { cars: 2, reinS: 7, vRoad: 54, catchUp: 0.4, ramGap: 1.1, ramMult: 1.6, ramMin: 15, ramExtra: 11, tbone: 70, sightR: 175, escS: 18, block: 0, spikes: false, heli: false, headOn: false },
-  { cars: 3, reinS: 6, vRoad: 57, catchUp: 0.45, ramGap: 0.9, ramMult: 1.7, ramMin: 16, ramExtra: 12, tbone: 85, sightR: 205, escS: 24, block: 30, spikes: false, heli: false, headOn: false },
-  { cars: 4, reinS: 5, vRoad: 60, catchUp: 0.5, ramGap: 0.75, ramMult: 1.8, ramMin: 17, ramExtra: 13, tbone: 95, sightR: 235, escS: 32, block: 26, spikes: true, heli: true, headOn: true },
-  { cars: 6, reinS: 4, vRoad: 63, catchUp: 0.55, ramGap: 0.6, ramMult: 1.9, ramMin: 18, ramExtra: 14, tbone: 105, sightR: 265, escS: 42, block: 22, spikes: true, heli: true, headOn: true },
+  { cars: 2, reinS: 8, vRoad: 54, catchUp: 0.4, ramGap: 1.1, ramMult: 1.6, ramMin: 15, ramExtra: 11, tbone: 70, sightR: 175, escS: 18, block: 0, spikes: false, heli: false, headOn: false },
+  { cars: 3, reinS: 8, vRoad: 57, catchUp: 0.45, ramGap: 0.9, ramMult: 1.7, ramMin: 16, ramExtra: 12, tbone: 85, sightR: 205, escS: 24, block: 30, spikes: false, heli: false, headOn: false },
+  { cars: 4, reinS: 7, vRoad: 60, catchUp: 0.5, ramGap: 0.75, ramMult: 1.8, ramMin: 17, ramExtra: 13, tbone: 95, sightR: 235, escS: 32, block: 26, spikes: true, heli: true, headOn: true },
+  { cars: 5, reinS: 7, vRoad: 63, catchUp: 0.55, ramGap: 0.6, ramMult: 1.9, ramMin: 18, ramExtra: 14, tbone: 105, sightR: 265, escS: 42, block: 22, spikes: true, heli: true, headOn: true },
 ];
-const MAXU = 8; // patrol cars at most (five stars: six after you and a roadblock's two; server.js setVeh takes eight)
-const HELI_V = 58, HELI_A = 9, HELI_ALT = 36, HELI_SEE = 80, LIGHT_R = 15; // the helicopter: m/s (209 km/h), m/s2, m over the ground, m it sees round it, its light's radius
+const MAXU = 8; // patrol cars at most (five stars: five after you and a roadblock's two; server.js setVeh takes eight)
+// the helicopter: m/s (230 km/h: a fast car on a straight slowly gets away), m/s2, m over the ground (60-90), m it
+// sees round it (horizontally), its light's radius on the ground (m), m it trails you by
+const HELI_V = 64, HELI_A = 13, HELI_ALT = 72, HELI_SEE = 170, LIGHT_R = 8, HELI_BACK = 22;
 const RB_DIST = [300, 260, 220, 340]; // m on along your road a roadblock is tried at (the first out of sight)
 const DOWN = new THREE.Vector3(0, -1, 0);
 const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
@@ -639,16 +642,40 @@ function spikeMesh() {
   m.name = 'police-spikes'; m.receiveShadow = true; m.visible = false;
   return m;
 }
-// the helicopter's searchlight: a soft cone (apex at the origin, down -y, unit length and radius) and the pool of light
-// on the ground (a glow disc)
+// the helicopter's searchlight: the beam (a soft additive cone, apex at the origin, down -y, unit length and radius:
+// bright along its axis, fading to its edges and towards the ground; seen by day too), the pool of light on the
+// ground (a glow disc draped on the terrain: POOL x POOL vertices, re-laid every frame round where it hits) and the
+// light itself (a THREE.SpotLight, in the scene from the start with intensity 0: no shader recompile when it comes)
+const POOL = 11;
 function searchlight() {
-  const geo = new THREE.CylinderGeometry(0.03, 1, 1, 24, 1, true);
+  const geo = new THREE.CylinderGeometry(0.02, 1, 1, 32, 8, true);
   geo.translate(0, -0.5, 0);
-  const cone = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xfff3d2, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false }));
+  const cone = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+    uniforms: { uI: { value: 0 }, uColor: { value: new THREE.Color(1, 0.95, 0.84) } },
+    vertexShader: `varying float vAlong; varying vec3 vN; varying vec3 vV;
+      void main(){ vAlong = -position.y; vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform float uI; uniform vec3 uColor; varying float vAlong; varying vec3 vN; varying vec3 vV;
+      void main(){ float core = pow(abs(dot(normalize(vN), normalize(vV))), 2.2);
+        float a = uI * core * (1.0 - 0.55 * smoothstep(0.35, 1.0, vAlong)) * smoothstep(0.0, 0.06, vAlong);
+        gl_FragColor = vec4(uColor * a, 1.0); }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  }));
   cone.frustumCulled = false; cone.renderOrder = 8; cone.name = 'police-searchlight';
-  const pool = new THREE.Mesh(new THREE.CircleGeometry(1, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: glow(), color: 0xfff6dc, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4 }));
-  pool.renderOrder = 8; pool.name = 'police-searchlight-pool';
+  const pg = new THREE.PlaneGeometry(2, 2, POOL - 1, POOL - 1).rotateX(-Math.PI / 2);
+  pg.attributes.position.setUsage(THREE.DynamicDrawUsage);
+  const pool = new THREE.Mesh(pg, new THREE.MeshBasicMaterial({ map: glow(), color: 0xfff4d8, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8, fog: false }));
+  pool.frustumCulled = false; pool.renderOrder = 8; pool.name = 'police-searchlight-pool';
   return { cone, pool };
+}
+// the pool of light (searchlight()) laid on the terrain round (cx, cz), r m across
+function drapePool(pool, cx, cz, r) {
+  const P = pool.geometry.attributes.position, step = (2 * r) / (POOL - 1);
+  for (let j = 0; j < POOL; j++) for (let i = 0; i < POOL; i++) {
+    const x = cx - r + i * step, z = cz - r + j * step;
+    P.setXYZ(j * POOL + i, x, world.height(x, z) + 0.3, z);
+  }
+  P.needsUpdate = true;
 }
 const popcount = (b) => (b & 1) + ((b >> 1) & 1) + ((b >> 2) & 1) + ((b >> 3) & 1);
 
@@ -672,6 +699,10 @@ export class Police {
     this.L = LEVELS[1]; this.aLat = A_LAT; // (the wanted level's numbers, set every chase frame)
     this.fx = null;       // sparks and debris (Fx, made on the first hit)
     this.heli = null;     // the police helicopter (4+ stars: heliStep)
+    // its searchlight's light: always in the scene (intensity 0 when off: adding a light later recompiles every shader)
+    this.spot = new THREE.SpotLight(0xfff1d6, 0, 0, 0.12, 0.6, 0);
+    this.spot.name = 'police-heli-spot'; this.spot.castShadow = false;
+    this.scene?.add(this.spot, this.spot.target);
     this.spikes = [];     // spike strips: { m, on, x, z, ax, az (across the road), t }
     this._live = []; this._rank = []; // (scratch lists: no allocation per frame)
     this.rq = []; this.radioText = ''; this.radioUntil = 0; this.radioAt = 0; // police radio chatter (radio())
@@ -818,7 +849,7 @@ export class Police {
   start(why) {
     this.w = { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, footT: 0, scene: null, why,
       heat: 1, search: false, spotted: false, seen: false, unseenT: 0, noSpotT: 0, lkp: { x: 0, z: 0, vx: 0, vz: 0, t: 0 }, reinT: 4, rbT: 8, spikeT: 6, chatT: 6, rankT: 0,
-      near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0 };
+      near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0, trail: [], trimT: 0 };
     this.rq.length = 0; this.radioText = ''; this.L = LEVELS[1]; this.escT = 0;
     if (!this.spawn(0)) { this.w = null; return; }
     const T = this.target();
@@ -901,12 +932,13 @@ export class Police {
     u.g.add(o);
     u.driver = o;
   }
-  // out of sight 300-500 m from you on the roads, facing the way to you (no roads: off-road behind the camera);
-  // strict (a stuck car put back on a road): only out of sight within lo-hi, else nothing happens (false)
-  spawn(k, lo0 = TUNING.spawnMin, hi0 = TUNING.spawnMax, strict = false, at = null) {
+  // out of sight 260-420 m from you on the roads, facing the way to you (no roads: off-road behind the camera);
+  // strict (a stuck car put back on a road): only out of sight within lo-hi, else nothing happens (false); behind:
+  // not on your way ahead; at: round there (your last known position) instead of you, never near you
+  spawn(k, lo0 = TUNING.spawnMin, hi0 = TUNING.spawnMax, strict = false, at = null, behind = false) {
     if (this.units[k]?.wrecked) k = this.freeUnit(); // (a wreck still stands there: another car)
     if (k < 0) return false;
-    const u = this.unit(k), p = at || this.target();
+    const u = this.unit(k), p = at || this.target(), me = this.target();
     if (!p) return false;
     let best = null;
     try {
@@ -916,13 +948,14 @@ export class Police {
         _fr.setFromProjectionMatrix(_m.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
         const other = this.units.find((x) => x.on && x !== u), cand = [];
         for (let pass = 0; pass < (strict ? 1 : 3) && !cand.length; pass++) {
-          const lo = pass === 2 ? 120 : lo0, hi = pass === 0 ? hi0 : pass === 1 ? Math.max(800, hi0) : 1500;
+          const lo = pass === 2 ? Math.min(lo0, 200) : lo0, hi = pass === 0 ? hi0 : pass === 1 ? Math.max(800, hi0) : 1500;
           for (let i = 0; i < G.N; i += 1) {
             const d = hyp(G.X[i], G.Z[i], p.x, p.z);
             if (d < lo || d > hi) continue;
             if (other && hyp(G.X[i], G.Z[i], other.x, other.z) < (strict ? 80 : 40)) continue;
-            if (strict && p.sp > 3 && (G.X[i] - p.x) * p.vx + (G.Z[i] - p.z) * p.vz > 0) continue; // (put back: behind you)
-            const seen = pass === 0 && _fr.containsPoint(_v.set(G.X[i], world.height(G.X[i], G.Z[i]) + 1, G.Z[i]));
+            if ((strict || (behind && pass < 2)) && p.sp > 3 && (G.X[i] - p.x) * p.vx + (G.Z[i] - p.z) * p.vz > 0) continue; // (put back / backup: behind you)
+            if (at && me && hyp(G.X[i], G.Z[i], me.x, me.z) < 220) continue; // (round where you were seen: never right by you)
+            const seen = pass < 2 && _fr.containsPoint(_v.set(G.X[i], world.height(G.X[i], G.Z[i]) + 1, G.Z[i]));
             if (!seen) cand.push(i);
           }
         }
@@ -953,7 +986,7 @@ export class Police {
     u.stuck = 0; u.rev = 0; u.gone = 0; u.leaveTo = null;
     u.pn = 0; u.gx = 1e9; u.stX = u.x; u.stZ = u.z; u.stT = 0; u.stuckN = 0; u.uturn = 0; u.pitT = 0; u.pitSide = 0; u.ramCool = 0; u.ram = false;
     u.fgT = 0; u.fg.ok = false; u.boost = 1; u.parked = false; u.avoid.turn = 0; u.avoid.vmax = 99; u.dmg = 0;
-    u.sees = false; u.seeT = Math.random() * 0.2; u.rank = 9; u.sT = 0; u.kx = 0; u.kz = 0; u.kyaw = 0; u.goT = 0;
+    u.sees = false; u.seeT = Math.random() * 0.2; u.rank = 9; u.sT = 0; u.kx = 0; u.kz = 0; u.kyaw = 0; u.goT = 0; u.from = 'behind';
     u.y = world.groundHeight(u.x, u.z);
     u.g.visible = true;
     this.seatDriver(u);
@@ -1091,15 +1124,25 @@ export class Police {
     const live = this._live; live.length = 0;
     let chasers = 0;
     for (const u of this.units) if (u.on) { live.push(u); if (u.role !== 'block') chasers++; }
-    // more patrol cars as the level goes up (fleeing: LEVELS cars; one before), from ahead / the side roads / behind
-    // (after a wreck not before backupS: wreck())
+    // your way here (a point every 12 m, the last ~1 km): where the backup comes up behind you from (spawnBehind)
+    const tr = W.trail, tl = tr[tr.length - 1];
+    if (!tl || hyp(tl.x, tl.z, T.x, T.z) > 12) { if (tr.length >= 90) tr.shift(); tr.push({ x: T.x, z: T.z }); }
+    // more after you than the level has (a roadblock's two joined in): the farthest, out of sight, drops out
+    if (W.fleeing && !W.scene && chasers > L.cars && (W.trimT -= dt) <= 0) {
+      W.trimT = 1;
+      let far = null, fd = 180;
+      for (const u of live) { if (u.role === 'block') continue; const d = hyp(u.x, u.z, T.x, T.z); if (d > fd && !this.inView(u)) { fd = d; far = u; } }
+      if (far) { this.despawn(far); live.splice(live.indexOf(far), 1); chasers--; }
+    }
+    // more patrol cars as the level goes up (fleeing: LEVELS cars; one before), every reinS s: up from behind (one
+    // from ahead at 3+ stars) (after a wreck not before backupS: wreck())
     if (!W.scene) {
       W.reinT -= dt;
       const want = W.fleeing ? L.cars : 1;
       if (chasers < want && W.reinT <= 0) {
         W.reinT = W.fleeing ? L.reinS : 4;
         const k = this.freeUnit();
-        if (k >= 0 && this.reinforce(k, T, W)) { live.push(this.units[k]); chasers++; }
+        if (k >= 0 && this.reinforce(k, T, W, chasers)) { live.push(this.units[k]); chasers++; }
       }
     }
     // the roadblocks (3+ stars) and the spike strips (4+) on your way ahead
@@ -1143,12 +1186,13 @@ export class Police {
       const moving = T.car ? T.sp > 4 : T.foot && away > 2.2;
       if (W.grace <= 0 && moving) this.flee(W);
     }
-    // boxed in: patrol cars within holdR of you for holdS in all (faster the more of them there are round you; it
+    // boxed in: two or more patrol cars within holdR of you for holdS in all (faster the more of them there are round you; it
     // ebbs away twice as fast when they're further): they get out and arrest you, whatever your speed (you can't sit it
     // out in the car, nor drive off: drive.held)
+    // (the user: "if there's only 1 police car they shouldn't be able to box you!": two at least)
     let boxN = 0;
     for (const u of live) if (hyp(u.x, u.z, T.x, T.z) < TUNING.holdR) boxN++;
-    W.holdT = boxN ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
+    W.holdT = boxN >= 2 ? (W.holdT || 0) + dt * (1 + TUNING.holdMore * (boxN - 1)) : Math.max(0, (W.holdT || 0) - dt * 2);
     if (W.holdT >= TUNING.holdS) { W.holdT = 0; this.begin(W, 'arrest', lead, 'held'); return; }
     // stopped with them close: pulled over (a fine) or caught (fleeing: arrested)
     const still = T.car ? T.sp * 3.6 < TUNING.stopKmh : T.foot && T.sp < 0.8;
@@ -1244,20 +1288,57 @@ export class Police {
     W.reinT = Math.min(W.reinT, 1.5);
     this.note(`${foot ? 'Running from the police' : 'Fleeing · they will ram you'} · break their line of sight to lose them`);
   }
-  // a patrol car joining the chase: ahead of you on your road (it comes at you), from a side road at the next junction
-  // (a T-bone waiting to happen), else behind you out of sight (spawn())
-  reinforce(k, T, W) {
+  // a patrol car joining the chase (the user: "it isn't realistic how the cars spawn ... they should drive behind you
+  // like 5 and maybe like 1 car from the other side"): far back on the roads you came by, out of sight, driving up
+  // after you (spawnBehind); at 3+ stars, once two are behind you, one (never two at a time) from ahead: down your
+  // road coming at you, or up a side road at the next junction (spawnAhead). Lost you: round where you were last seen
+  reinforce(k, T, W, chasers = 0) {
     const n = (this.rfN = (this.rfN || 0) + 1);
-    if (W.search) return this.spawn(k, 140, 320, false, W.lkp); // (they don't know where you are: round where you were seen)
-    if (W.fleeing && T.car && T.sp > 8 && busRoads.roads.length) {
-      try { if ((n % 3 === 1 && this.spawnAhead(k, T, true)) || (n % 3 !== 0 && this.spawnAhead(k, T, false))) return true; } catch (e) { console.warn('police reinforce', e); }
+    if (W.search) return this.spawn(k, 250, 420, false, W.lkp); // (they don't know where you are: round where you were seen)
+    if (W.fleeing && T.car && T.sp > 8 && busRoads.roads.length && this.L.cars >= 3 && chasers >= 2 && !this.units.some((u) => u.on && u.from === 'ahead')) {
+      try { const side = n % 2 === 0; if (this.spawnAhead(k, T, side) || this.spawnAhead(k, T, !side)) return true; } catch (e) { console.warn('police reinforce', e); }
     }
-    const ok = this.spawn(k, W.fleeing ? 200 : TUNING.spawnMin, W.fleeing ? 360 : TUNING.spawnMax);
-    if (ok && W.fleeing) this.radio(`Unit ${k + 1} joining the pursuit${n % 2 ? ' from behind' : ''}!`);
+    let ok = false;
+    try { ok = this.spawnBehind(k, T, W); } catch (e) { console.warn('police reinforce', e); }
+    if (!ok) ok = this.spawn(k, TUNING.spawnMin, TUNING.spawnMax, false, null, W.fleeing);
+    if (ok && W.fleeing) this.radio(`Unit ${k + 1} joining the pursuit from behind!`);
     return ok;
   }
+  // behind you on the roads you came by (W.trail), 250-370 m back along them (and 200+ m as the crow flies), where
+  // you can't see it (off the screen, or round a bend / behind a crest or a building), facing the way to you
+  spawnBehind(k, T, W) {
+    const tr = W.trail;
+    if (!tr || tr.length < 8 || !busRoads.roads.length) return false;
+    const G = roadGraph();
+    if (!G?.N) return false;
+    const want = 250 + Math.random() * 120, ty = (T.y ?? world.height(T.x, T.z)) + 1.2;
+    let acc = 0, px = T.x, pz = T.z, tries = 0;
+    for (let q = tr.length - 1; q >= 0 && tries < 8; q--) {
+      const c = tr[q];
+      acc += hyp(c.x, c.z, px, pz); px = c.x; pz = c.z;
+      if (acc < want) continue;
+      if (acc > want + 450) break;
+      if (q % 2) continue; // (every other point: ~24 m apart)
+      const nr = roadNearest(c.x, c.z);
+      if (nr.i < 0 || nr.d > 25) continue;
+      const i = nr.i, x0 = G.X[i], z0 = G.Z[i];
+      if (hyp(x0, z0, T.x, T.z) < 200) continue;
+      if (this.units.some((o) => (o.on || o.wrecked) && hyp(o.x, o.z, x0, z0) < 30)) continue;
+      tries++;
+      if (this.inViewXZ(x0, z0) && this.los(T.x, ty, T.z, x0, world.height(x0, z0) + 1.4, z0)) continue; // (in plain view)
+      const b = roadNearest(T.x, T.z), ids = (this._sid ||= { a: new Int32Array(0) });
+      if (ids.a.length !== G.N) ids.a = new Int32Array(G.N);
+      const cnt = b.i >= 0 ? routeIds(i, b.i, ids.a) : 0;
+      if (b.i >= 0 && b.d < 25 && cnt < 2) continue; // (no way from there to you on the roads)
+      const nx = cnt > 1 ? ids.a[Math.min(2, cnt - 1)] : -1;
+      const yaw = nx >= 0 ? Math.atan2(G.X[nx] - x0, G.Z[nx] - z0) : Math.atan2(T.x - x0, T.z - z0);
+      this.put(this.unit(k), x0 - Math.cos(yaw) * LANE, z0 + Math.sin(yaw) * LANE, yaw, 16);
+      return true;
+    }
+    return false;
+  }
   // ahead of you on your road (300-420 m), or (side) up a side road at the next junction (120-420 m on), facing you;
-  // never close and on screen
+  // never close, never in plain view
   spawnAhead(k, T, side) {
     const nr = roadNearest(T.x, T.z);
     if (nr.i < 0 || nr.d > 20) return false;
@@ -1281,11 +1362,14 @@ export class Police {
       if (RA.m < 220) return false;
       yaw = Math.atan2(-RA.dx, -RA.dz);
     }
-    const x = X[j] - Math.cos(yaw) * LANE, z = Z[j] + Math.sin(yaw) * LANE;
-    if (hyp(x, z, T.x, T.z) < 150) return false;
+    const x = X[j] - Math.cos(yaw) * LANE, z = Z[j] + Math.sin(yaw) * LANE, d = hyp(x, z, T.x, T.z);
+    if (d < (side ? 180 : 250)) return false;
     for (const o of this.units) if (o.on && hyp(o.x, o.z, x, z) < 25) return false;
-    if (hyp(x, z, T.x, T.z) < 260 && this.inViewXZ(x, z)) return false;
-    this.put(this.unit(k), x, z, yaw, 18);
+    // (out of sight: off the screen, or round a bend / over a crest / behind a building; far down a straight is fine)
+    if (d < 420 && this.inViewXZ(x, z) && this.los(T.x, (T.y ?? world.height(T.x, T.z)) + 1.2, T.z, x, world.height(x, z) + 1.4, z)) return false;
+    const u = this.unit(k);
+    this.put(u, x, z, yaw, 18);
+    u.from = 'ahead';
     this.radio(side ? `Unit ${k + 1} moving in from the side road, ${this.where({ x, z })}!` : `Unit ${k + 1} coming at him head-on ${this.where({ x, z })}!`);
     return true;
   }
@@ -1339,7 +1423,7 @@ export class Police {
     this.put(u1, cx - sx * g * 1.1, cz - sz * g * 1.1, across + 0.22 * g, 0);
     const u2 = this.unit(k2);
     this.put(u2, cx - sx * g * 5.3 + rdx * 3.5, cz - sz * g * 5.3 + rdz * 3.5, across - 0.35 * g, 0);
-    for (const u of [u1, u2]) { u.role = 'block'; u.v = 0; u.sees = false; }
+    for (const u of [u1, u2]) { u.role = 'block'; u.v = 0; u.sees = false; u.from = 'block'; }
     W.rb = { x: cx, z: cz, dx: rdx, dz: rdz, t: 0, dist: hyp(cx, cz, T.x, T.z), u1, u2 };
     if (L.spikes) this.layStrip(cx + sx * g * 2.6 - rdx * 14, cz + sz * g * 2.6 - rdz * 14, sx, sz);
     this.radio(`Roadblock set up ${this.where(W.rb)}${L.spikes ? ', spikes in the gap' : ''}!`);
@@ -1418,9 +1502,13 @@ export class Police {
   }
 
   // ---------------------------------------------------------------- the police helicopter (4+ stars)
-  // Air One: flies to you (HELI_V, HELI_A: a fast car outruns it on a straight), HELI_ALT over the ground, nose down
-  // with the speed, banking into its turns; its searchlight on you (or sweeping round where you were last seen); it
-  // sees you within HELI_SEE. The chase over: up and away, gone
+  // Air One (the user: "i didn't see the helicopter, make it like shine a light on you and it should fly after you"):
+  // comes in from 300-360 m ahead of you (where you see it come), then flies after you HELI_ALT (64-80 m) over the
+  // ground, HELI_BACK m behind and a little off to one side, matching your speed (up to HELI_V: a fast car on a
+  // straight slowly gets away from it), nose down with the speed, banking into its turns. Its searchlight (the beam,
+  // the pool on the ground and a spot light) is on you while it sees you (within HELI_SEE, no ridge between, not in a
+  // tunnel; inside a chalet the chase waits anyway), else swept round where you were last seen. The chase over: up
+  // and away, gone
   heliStep(dt, W, T, paused) {
     const want = !!(W && W.fleeing && !W.scene && this.L.heli && T);
     let H = this.heli;
@@ -1431,9 +1519,12 @@ export class Police {
     }
     if (want && (!H.on || H.leaving)) {
       if (!H.on) {
-        const a = Math.random() * Math.PI * 2;
-        H.x = T.x + Math.sin(a) * 380; H.z = T.z + Math.cos(a) * 380; H.y = world.height(H.x, H.z) + HELI_ALT + 30;
-        H.vx = 0; H.vz = 0; H.yaw = Math.atan2(T.x - H.x, T.z - H.z); H.ax = T.x; H.az = T.z; H.called = false; H.roll = 0;
+        const cy = this.camera ? Math.atan2(-this.camera.matrixWorld.elements[8], -this.camera.matrixWorld.elements[10]) : 0;
+        const fw = T.sp > 3 ? Math.atan2(T.vx, T.vz) : cy, a = fw + (Math.random() - 0.5) * 1.6, r = 300 + Math.random() * 60;
+        H.x = T.x + Math.sin(a) * r; H.z = T.z + Math.cos(a) * r; H.y = world.height(H.x, H.z) + HELI_ALT + 12;
+        H.vx = -Math.sin(a) * 30; H.vz = -Math.cos(a) * 30; H.yaw = Math.atan2(H.vx, H.vz);
+        H.ax = H.x - Math.sin(a) * 40; H.az = H.z - Math.cos(a) * 40; H.called = false; H.roll = 0; H.pitch = 0;
+        H.side = Math.random() < 0.5 ? 1 : -1; H.sideS = H.side; H.sideT = 12 + Math.random() * 8; H.seeT = 0; H.sees = false; H.lit = 0;
         H.model.root.visible = true; H.cone.visible = true; H.pool.visible = true;
       }
       H.on = true; H.leaving = false; H.leaveT = 0;
@@ -1441,61 +1532,96 @@ export class Police {
     if (!want && H.on && !H.leaving) { H.leaving = true; H.leaveT = 0; }
     if (!H.on) return;
     if (paused || !(dt > 0)) { this.audio?.setChopper?.({ on: true, paused: true }); return; }
-    // where to: you (a little ahead), round your last known position (a sweep), or away
-    let tx, tz, sweep = false;
-    if (H.leaving) {
+    // where to and how fast (the velocity it wants): after you (your velocity, plus the way to its place behind you),
+    // round your last known position (a sweep), or away
+    let wvx, wvz, sweep = false;
+    const fx = T && T.sp > 3 ? T.vx / T.sp : Math.sin(H.yaw), fz = T && T.sp > 3 ? T.vz / T.sp : Math.cos(H.yaw);
+    if (H.leaving || !T) {
       H.leaveT += dt;
       const ox = H.x - (T ? T.x : H.x - 1), oz = H.z - (T ? T.z : H.z), ol = Math.hypot(ox, oz) || 1;
-      tx = H.x + (ox / ol) * 200; tz = H.z + (oz / ol) * 200;
+      wvx = (ox / ol) * 40; wvz = (oz / ol) * 40;
       if (H.leaveT > 14) { this.hideHeli(); return; }
     } else if (W.search) {
       sweep = true;
       H.sw = (H.sw || 0) + dt * 0.55;
       const K = W.lkp, r = 40 + Math.min(TUNING.searchR, W.unseenT * 9);
-      tx = K.x + K.vx * Math.min(W.unseenT, 5) * 0.6 + Math.sin(H.sw) * r; tz = K.z + K.vz * Math.min(W.unseenT, 5) * 0.6 + Math.cos(H.sw) * r;
-    } else { tx = T.x + T.vx * 1.2; tz = T.z + T.vz * 1.2; }
-    const dx = tx - H.x, dz = tz - H.z, dl = Math.hypot(dx, dz) || 1;
-    const vw = Math.min(HELI_V, dl * 0.8 + (sweep ? 0 : 6)), wvx = (dx / dl) * vw, wvz = (dz / dl) * vw;
-    const ax = clamp(wvx - H.vx, -HELI_A * dt, HELI_A * dt), az = clamp(wvz - H.vz, -HELI_A * dt, HELI_A * dt);
+      const tx = K.x + K.vx * Math.min(W.unseenT, 5) * 0.6 + Math.sin(H.sw) * r, tz = K.z + K.vz * Math.min(W.unseenT, 5) * 0.6 + Math.cos(H.sw) * r;
+      const ex = tx - H.x, ez = tz - H.z, el = Math.hypot(ex, ez) || 1, c = Math.min(HELI_V * 0.7, el * 0.6);
+      wvx = (ex / el) * c; wvz = (ez / el) * c;
+    } else {
+      if ((H.sideT -= dt) <= 0) { H.sideT = 12 + Math.random() * 10; H.side = -H.side; } // (it swaps sides now and then)
+      H.sideS += (H.side - H.sideS) * (1 - Math.exp(-dt * 0.35));
+      const tx = T.x + T.vx * 0.4 - fx * HELI_BACK + fz * H.sideS * 14, tz = T.z + T.vz * 0.4 - fz * HELI_BACK - fx * H.sideS * 14;
+      const ex = tx - H.x, ez = tz - H.z, el = Math.hypot(ex, ez) || 1, c = Math.min(45, el * 0.45);
+      wvx = T.vx + (ex / el) * c; wvz = T.vz + (ez / el) * c;
+    }
+    const wl = Math.hypot(wvx, wvz);
+    if (wl > HELI_V) { wvx *= HELI_V / wl; wvz *= HELI_V / wl; }
+    let ax = wvx - H.vx, az = wvz - H.vz;
+    const al = Math.hypot(ax, az), amax = HELI_A * dt;
+    if (al > amax) { ax *= amax / al; az *= amax / al; }
     H.vx += ax; H.vz += az;
     H.x += H.vx * dt; H.z += H.vz * dt;
     const g = Math.max(world.height(H.x, H.z), world.height(H.x + H.vx * 2.5, H.z + H.vz * 2.5));
-    const gy = g + HELI_ALT + (H.leaving ? H.leaveT * 8 : 0);
-    H.y += (gy - H.y) * (1 - Math.exp(-dt * (gy > H.y ? 2.2 : 0.8)));
+    const gy = g + HELI_ALT + Math.sin(this.time * 0.13) * 8 + (H.leaving ? H.leaveT * 8 : 0);
+    H.y += (gy - H.y) * (1 - Math.exp(-dt * (gy > H.y ? 1.6 : 0.6)));
+    // the attitude (the flying helicopter's: heli.js): nose into the way it flies (at you when it hovers), nose down
+    // with the speed and when speeding up, banked into the turn
     const sp = Math.hypot(H.vx, H.vz);
-    if (sp > 4) H.yaw += wrapPi(Math.atan2(H.vx, H.vz) - H.yaw) * (1 - Math.exp(-dt * 1.6));
-    else if (T) H.yaw += wrapPi(Math.atan2(T.x - H.x, T.z - H.z) - H.yaw) * (1 - Math.exp(-dt * 1.2));
-    const latA = (-ax * Math.cos(H.yaw) + az * Math.sin(H.yaw)) / Math.max(dt, 1e-3);
-    H.roll += (clamp(latA * 0.035, -0.4, 0.4) - H.roll) * (1 - Math.exp(-dt * 3));
+    if (sp > 6) H.yaw += wrapPi(Math.atan2(H.vx, H.vz) - H.yaw) * (1 - Math.exp(-dt * 1.4));
+    else if (T) H.yaw += wrapPi(Math.atan2(T.x - H.x, T.z - H.z) - H.yaw) * (1 - Math.exp(-dt * 1.0));
+    const sy = Math.sin(H.yaw), cyw = Math.cos(H.yaw), idt = 1 / Math.max(dt, 1e-3);
+    const latA = (-ax * cyw + az * sy) * idt, fwdA = (ax * sy + az * cyw) * idt;
+    H.roll += (clamp(latA * 0.04, -0.42, 0.42) - H.roll) * (1 - Math.exp(-dt * 2.5));
+    H.pitch += (clamp(clamp(sp / HELI_V, 0, 1) * 0.2 + fwdA * 0.012, -0.18, 0.32) - H.pitch) * (1 - Math.exp(-dt * 2));
     const R = H.model.root;
     R.position.set(H.x, H.y, H.z);
-    _e.set(clamp(sp / HELI_V, 0, 1) * 0.22, H.yaw, H.roll);
+    _e.set(H.pitch, H.yaw, H.roll);
     R.quaternion.setFromEuler(_e);
     const night = clamp(nightUniform?.value ?? 0, 0, 1);
     try { H.model.update(dt, { rpm: 1, night, time: this.time, lamp: false, camera: this.camera, ground: H.ground, snow: 0 }); } catch (e) { if (!H.err) { H.err = true; console.warn('police heli', e); } }
-    // the searchlight: on you while it sees you, else swept ahead of it round the search
-    const sees = !H.leaving && !!T && hyp(H.x, H.z, T.x, T.z) < HELI_SEE;
-    H.sees = sees;
+    // does it see you (~4 times a second): near enough, no ridge between, you not under the mountain (a tunnel)
+    if ((H.seeT -= dt) <= 0) {
+      H.seeT = 0.25;
+      let ok = !H.leaving && !!T && hyp(H.x, H.z, T.x, T.z) < HELI_SEE;
+      if (ok) {
+        const ty = T.y ?? world.height(T.x, T.z);
+        if (typeof world.outsideHeight === 'function' && world.outsideHeight(T.x, T.z) > ty + 2.5) ok = false; // (in a tunnel)
+        for (let i = 1; ok && i < 9; i++) { const f = i / 10, x = H.x + (T.x - H.x) * f, z = H.z + (T.z - H.z) * f; if (world.height(x, z) > H.y + (ty + 1 - H.y) * f) ok = false; }
+      }
+      H.sees = ok;
+    }
+    const sees = H.sees;
     if (!H.called && sees && W) { H.called = true; this.radio('Air One: I have the suspect in the light!', true); }
+    // the searchlight: on you while it sees you, else swept ahead of it round the search (or where it flies)
     let lx, lz;
-    if (sees) { lx = T.x; lz = T.z; } else if (sweep) { lx = H.x + Math.sin(H.sw * 2.3) * 45; lz = H.z + Math.cos(H.sw * 1.7) * 45; } else { lx = H.x + H.vx * 0.8; lz = H.z + H.vz * 0.8; }
-    H.ax += (lx - H.ax) * (1 - Math.exp(-dt * (sees ? 6 : 1.5))); H.az += (lz - H.az) * (1 - Math.exp(-dt * (sees ? 6 : 1.5)));
-    const ay = world.height(H.ax, H.az);
-    _p.set(H.x, H.y - 1.3, H.z);
+    if (sees) { lx = T.x + T.vx * 0.08; lz = T.z + T.vz * 0.08; } else if (sweep) { lx = H.x + Math.sin(H.sw * 2.3) * 45; lz = H.z + Math.cos(H.sw * 1.7) * 45; } else { lx = H.x + H.vx * 0.8 + Math.sin(H.yaw) * 30; lz = H.z + H.vz * 0.8 + Math.cos(H.yaw) * 30; }
+    const kk = 1 - Math.exp(-dt * (sees ? 9 : 1.5));
+    H.ax += (lx - H.ax) * kk; H.az += (lz - H.az) * kk;
+    H.lit += ((H.leaving ? 0 : 1) - H.lit) * (1 - Math.exp(-dt * 3));
+    const ay = world.height(H.ax, H.az), rad = sees ? LIGHT_R : LIGHT_R * 1.4;
+    R.localToWorld(_p.set(0, -1.4, 1.2));
     _s.set(H.ax - _p.x, ay - _p.y, H.az - _p.z);
     const len = _s.length() || 1;
     H.cone.position.copy(_p);
     H.cone.quaternion.setFromUnitVectors(DOWN, _s.multiplyScalar(1 / len));
-    H.cone.scale.set(LIGHT_R, len, LIGHT_R);
-    H.cone.material.opacity = (H.leaving ? 0 : 1) * (0.045 + 0.12 * night);
-    H.pool.position.set(H.ax, ay + 0.35, H.az);
-    H.pool.scale.setScalar(LIGHT_R * 1.1);
-    H.pool.material.opacity = (H.leaving ? 0 : 1) * (0.16 + 0.5 * night);
+    H.cone.scale.set(rad, len, rad);
+    H.cone.material.uniforms.uI.value = H.lit * (0.22 + 0.4 * night);
+    drapePool(H.pool, H.ax, H.az, rad * 1.3);
+    H.pool.material.opacity = H.lit * (0.35 + 0.6 * night);
+    const S = this.spot;
+    if (S) {
+      S.position.copy(_p);
+      S.target.position.set(H.ax, ay, H.az);
+      S.target.updateMatrixWorld();
+      S.angle = Math.atan((rad * 1.15) / len);
+      S.intensity = H.lit * (1.6 + 8 * night);
+    }
     // the sound: the rotor's beat by how far it is from the camera (doppler from the closing speed)
     const cp = this.camera?.position, cd = cp ? Math.hypot(H.x - cp.x, H.y - cp.y, H.z - cp.z) : 100;
     const closing = cp ? -((H.x - cp.x) * H.vx + (H.z - cp.z) * H.vz) / Math.max(1, cd) : 0;
     const A = (this._chop ||= { on: true, dist: 0, doppler: 1, paused: false });
-    A.dist = cd; A.doppler = clamp(343 / (343 - clamp(closing, -50, 50)), 0.88, 1.14);
+    A.dist = cd * 0.8; A.doppler = clamp(343 / (343 - clamp(closing, -50, 50)), 0.88, 1.14);
     this.audio?.setChopper?.(A);
   }
   buildHeli() {
@@ -1506,7 +1632,8 @@ export class Police {
       const { cone, pool } = searchlight();
       this.scene.add(cone, pool);
       model.root.visible = false; cone.visible = false; pool.visible = false;
-      return { model, cone, pool, on: false, leaving: false, leaveT: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, yaw: 0, roll: 0, ax: 0, az: 0, sw: 0, sees: false, called: false,
+      return { model, cone, pool, on: false, leaving: false, leaveT: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, yaw: 0, roll: 0, pitch: 0, ax: 0, az: 0, sw: 0, sees: false, called: false,
+        side: 1, sideS: 1, sideT: 12, seeT: 0, lit: 0,
         ground: (x, z) => world.height(x, z) };
     } catch (e) { console.warn('police heli', e); return null; }
   }
@@ -1515,6 +1642,7 @@ export class Police {
     if (!H) return;
     H.on = false; H.leaving = false; H.sees = false;
     H.model.root.visible = false; H.cone.visible = false; H.pool.visible = false; H.model.pool.mesh.visible = false;
+    if (this.spot) this.spot.intensity = 0;
     this.audio?.setChopper?.({ on: false });
   }
 
@@ -1553,7 +1681,7 @@ export class Police {
     u.boost = 1 + L.catchUp * clamp((d - TUNING.catchFrom) / 220, 0, 1);
     if (!T.car && !T.foot) { u.parked = false; this.step(u, dt, u.x + Math.sin(u.yaw) * 3, u.z + Math.cos(u.yaw) * 3, 0); return; } // (on a lift, in the helicopter...: they wait)
     // stuck again and again, far and out of sight: back on a road nearer you (the last resort)
-    if (u.stuckN >= 3 && d > 150 && !this.inView(u) && this.spawn(u.k, 160, 380, true)) return;
+    if (u.stuckN >= 3 && d > 150 && !this.inView(u) && this.spawn(u.k, 250, 420, true)) return;
     const vMax = Math.min(TUNING.vTop, L.vRoad * u.boost);
     // they lost you: spread out over the roads round where you were last seen (the nearest goes there first)
     if (W.search && !u.sees) { this.searchDrive(u, dt, W, vMax); return; }
@@ -2444,6 +2572,7 @@ export class Police {
     for (const S of this.spikes) { S.m.removeFromParent(); S.m.geometry.dispose(); S.m.material.dispose(); }
     this.spikes.length = 0;
     if (this.heli) { this.heli.model.root.removeFromParent(); this.heli.model.pool.mesh.removeFromParent(); this.heli.cone.removeFromParent(); this.heli.pool.removeFromParent(); this.heli = null; }
+    if (this.spot) { this.spot.removeFromParent(); this.spot.target.removeFromParent(); this.spot.dispose?.(); this.spot = null; }
     this.fx?.dispose(); this.fx = null;
     this.puff?.clear?.();
     this.el?.remove(); this.$slam?.remove(); this.$flash?.remove();

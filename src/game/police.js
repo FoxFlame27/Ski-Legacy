@@ -16,7 +16,7 @@
 //    window, "License and registration... that's a fine ($1,000, +$500 for every earlier one)", walks back; they drive off. Wanted cleared.
 //  - Don't stop (TUNING.graceS after they reach you) and you are fleeing: they ram you (real knocks / crashes through
 //    drive.js: damage), more cars join (the wanted level, below). Out of their sight long enough: escaped.
-//    Rammed / blocked to a stop, or caught on foot within 4 m: arrested ($3,000, +$1,000 for every earlier one; prison.jail(90)). Wrecked by their
+//    Rammed / blocked to a stop, or caught on foot within 4 m: arrested ($3,000, +$1,000 for every earlier one; prison.jail(45)). Wrecked by their
 //    rams: the car is lost (carrental.js: e.policeWreck, the rental ends, no repair) and you are arrested too.
 //  - Multiplayer: the patrol cars are local to the offender; their poses go out as 'veh' { k: 'police', cars } (like
 //    the tow truck, net/tow.js) and the others draw them (net/vehicles.js updatePolice). The officers on foot only here.
@@ -77,7 +77,7 @@ export const TUNING = {
   arrestFine: 3000,  // caught fleeing ($3,000; more each time)
   fineStep: 500,     // $ more for every earlier fine or arrest (save.policeRecord)
   arrestStep: 1000,  // $ more on an arrest for every earlier one
-  jailS: 90,         // prison.jail(seconds)
+  jailS: 45,         // prison.jail(seconds) (Oct 30, the user: "make jail time 45 sec")
   // (escaping: LEVELS[stars].escS s in all out of sight of every patrol car and the helicopter; before Oct 30 it was
   // 90 s further than 100 m from them, whatever they could see)
   loseS: 2.5,        // s nobody has seen you: they have lost you (SEARCHING); the escape clock runs only then

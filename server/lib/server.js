@@ -99,7 +99,7 @@ const JAIL_MAX_S = 300, JAIL_SLACK = 3000; // (the longest sentence; the client'
 // a car they both go in prison if caught"): every passenger the seat registry has in the driver's car is jailed for the
 // driver's sentence and fined the accomplice fine (half the police's base $3,000 arrest fine: game/police.js arrestFine);
 // one such arrest per driver per ARREST_COOLDOWN_MS
-export const ACCOMPLICE_FINE = 1500, ACCOMPLICE_JAIL_S = 90, ARREST_COOLDOWN_MS = 60 * 1000;
+export const ACCOMPLICE_FINE = 1500, ACCOMPLICE_JAIL_S = 45, /* (Oct 30, the user: "make jail time 45 sec") */ ARREST_COOLDOWN_MS = 60 * 1000;
 // (Oct 30 2026, the user: "even if the passenger steps out and the person driving gets caught the passenger goes free,
 // fix that, he/she should also go to prison"): anyone in a wanted driver's car at any point of the chase stays an
 // accomplice (c.accomplices: their name keys, accompliceStep) until the chase is over, out of the car or not, and is

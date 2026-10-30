@@ -25,7 +25,7 @@ import { busRoads } from './bus/roads.js';
 import { makeSign, nightUniform } from '../world/village.js';
 import { shellMaterials } from './carrentalshell.js';
 import { buildPrisonOutside, polizeiSign, drawBadge, swapInModel, modelPoints, frontPivot } from './prisonoutside.js';
-import { policeModelReady } from './police.js';
+import { policeModelReady, bustedBanner } from './police.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
 import { LivePortal } from './liveportal.js';
@@ -809,7 +809,7 @@ export class Prison {
   cellIndex() { return isMP() ? (MP.pid >>> 0) % CELLS.length : 1; }
 
   /** Put the player in a cell for `seconds` (1-300) for `reason`. A sentence while serving one only ever adds time. */
-  jail(seconds, reason = 'Arrested', { until = null } = {}) {
+  jail(seconds, reason = 'Arrested', { until = null, resume = false } = {}) {
     const sec = Math.max(1, Math.min(MAX_SENTENCE, Number(seconds) || 0));
     const now = this.now(), end = until ?? now + sec * 1000;
     const was = this.active;
@@ -838,6 +838,9 @@ export class Prison {
         this.store();
       }
     }
+    // (Oct 30 2026, the user: "make sure it says big and red ... when you get caught by the police": jailed as the
+    // driver's accomplice (net/carride.js 'Arrested with X'): the same full-screen ARRESTED as the driver's (police.js))
+    if (!was && !resume && /^arrested with /i.test(this.reason)) bustedBanner(`The driver was caught · you're going to jail too · ${Math.round(sec)} s`, { audio: this.audio });
     this.active = true;
     if (was && this.inside && this.role === 'jailed') { this.hud?.flash(`Sentence: ${fmt(this.left())} · ${this.reason}`, 'bad', 2600); return; }
     this.toCell();
@@ -964,7 +967,7 @@ export class Prison {
     else if (this.save?.jail?.until) { until = this.save.jail.until; reason = this.save.jail.reason; }
     if (!until) return;
     const left = (until - this.now()) / 1000;
-    if (left > 1) this.jail(left, reason || 'Arrested', { until });
+    if (left > 1) this.jail(left, reason || 'Arrested', { until, resume: true }); // (resume: no ARRESTED banner)
     else if (!isMP()) { delete this.save.jail; this.writeSave?.(); }
   }
 

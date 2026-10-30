@@ -174,6 +174,34 @@ const FOOT = new Set([ST.walk, ST.ski, ST.fall]);
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const hyp = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
+
+/** The full-screen "ARRESTED" moment (Oct 30 2026, the user: "make sure it says big and red with an animation on your
+ *  screen when you get caught by the police, because sometimes you don't know"): a big red word that slams in (1.6 to
+ *  1, a slight overshoot), a white line under it (sub), red / blue police lights pulsing at the screen's edges, then
+ *  all of it fades as the jail's fade takes over (~3 s). On document.body above every layer (z-index: #transition
+ *  is 90; outside #police-hud, so its zoom doesn't touch it), pointer-events: none throughout, removed when done.
+ *  Pure CSS / DOM (CSS below: #busted). audio: a short radio squelch and the wanted chirp (no siren one-shot). Shown
+ *  again within its 3 s: only the line changes. Exported: prison.js shows it for the accomplice ('Arrested with X'). */
+let bustEl = null, bustT = 0, bustGone = 0;
+export function bustedBanner(sub = 'You were caught by the police', { word = 'ARRESTED', audio = null } = {}) {
+  const doc = globalThis.document;
+  if (!doc?.body) return;
+  try {
+    if (!doc.getElementById('police-css')) { const st = doc.createElement('style'); st.id = 'police-css'; st.textContent = CSS; doc.head.appendChild(st); } // (the accomplice: maybe before the police's own)
+    if (bustEl?.isConnected && !bustEl.classList.contains('out')) { bustEl.querySelector('.bs-sub').textContent = sub; return; }
+    clearTimeout(bustT); clearTimeout(bustGone); bustEl?.remove();
+    const el = doc.createElement('div');
+    el.id = 'busted';
+    el.setAttribute('aria-live', 'assertive');
+    el.innerHTML = '<i class="bs-edge bs-r"></i><i class="bs-edge bs-b"></i><div class="bs-card"><b class="bs-word"></b><span class="bs-sub"></span></div>';
+    el.querySelector('.bs-word').textContent = word;
+    el.querySelector('.bs-sub').textContent = sub;
+    doc.body.appendChild(el);
+    bustEl = el;
+    try { audio?.police?.('radio'); setTimeout(() => { try { audio?.police?.('star'); } catch { /* (silent) */ } }, 140); } catch { /* (silent) */ }
+    bustT = setTimeout(() => { el.classList.add('out'); bustGone = setTimeout(() => { el.remove(); if (bustEl === el) bustEl = null; }, 650); }, 2900);
+  } catch (e) { console.warn('police: busted banner', e); }
+}
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const UP = new THREE.Vector3(0, 1, 0);
 const _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _fr = new THREE.Frustum();
@@ -557,7 +585,33 @@ body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (
 @keyframes pl-blink { 0% { opacity: 1; } 50% { opacity: 0.15; } }
 @keyframes pl-in { from { opacity: 0; translate: calc(var(--u) * -40) 0; } }
 @keyframes pl-star { from { scale: 1.8; opacity: 0; } }
-@keyframes pl-pulse { 50% { opacity: 0.6; } }`;
+@keyframes pl-pulse { 50% { opacity: 0.6; } }
+/* (Oct 30 2026, the user: "make sure it says big and red with an animation on your screen when you get caught by the
+   police, because sometimes you don't know": bustedBanner(): on body, above everything (#transition is 90), never in
+   the way (pointer-events: none), its own sizes in vmin (not #police-hud's zoom). The word slams in 1.6 to 1 with an
+   overshoot, the edges pulse red / blue (2.9 s), .out fades it all as the jail's fade comes) */
+#busted { position: fixed; inset: 0; z-index: 2147483000; pointer-events: none; display: grid; place-items: center; overflow: hidden;
+  animation: bs-in 0.18s ease-out backwards; transition: opacity 0.6s ease; }
+#busted * { pointer-events: none; }
+#busted.out { opacity: 0; }
+#busted .bs-edge { position: absolute; inset: 0; opacity: 0; mix-blend-mode: screen; animation: bs-flash 0.5s steps(1) 6; }
+#busted .bs-r { background: radial-gradient(ellipse 120% 95% at 0% 50%, rgba(255, 30, 30, 0.75), rgba(255, 30, 30, 0) 55%), radial-gradient(ellipse 60% 70% at 50% 50%, transparent 55%, rgba(200, 0, 0, 0.55)); }
+#busted .bs-b { background: radial-gradient(ellipse 120% 95% at 100% 50%, rgba(40, 90, 255, 0.8), rgba(40, 90, 255, 0) 55%), radial-gradient(ellipse 60% 70% at 50% 50%, transparent 55%, rgba(0, 40, 220, 0.55)); animation-delay: 0.25s; }
+#busted .bs-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1.6vmin; padding: 0 4vw; text-align: center;
+  animation: bs-shake 0.42s linear 0.32s; }
+#busted .bs-word { display: block; font: italic 900 clamp(64px, 19vmin, 260px)/0.9 var(--num, Impact, 'Arial Black', sans-serif); letter-spacing: 0.04em; text-transform: uppercase;
+  color: #ff2a1f; -webkit-text-stroke: max(2px, 0.35vmin) #fff; paint-order: stroke fill;
+  text-shadow: 0 0 3vmin rgba(255, 0, 0, 0.85), 0 1.2vmin 0 #7a0000, 0 2vmin 5vmin rgba(0, 0, 0, 0.6);
+  animation: bs-slam 0.5s cubic-bezier(.2,.9,.3,1) backwards; }
+#busted .bs-sub { max-width: min(92vw, 1100px); padding: 0.9vmin 2.4vmin; background: rgba(8, 10, 24, 0.72); color: #fff;
+  font: 800 clamp(16px, 3.1vmin, 34px)/1.25 var(--ui, sans-serif); letter-spacing: 0.04em; overflow-wrap: anywhere;
+  animation: bs-sub 0.35s ease-out 0.38s backwards; }
+@keyframes bs-in { from { opacity: 0; } }
+@keyframes bs-slam { 0% { scale: 1.6; opacity: 0; } 55% { scale: 0.94; opacity: 1; } 78% { scale: 1.03; } 100% { scale: 1; } }
+@keyframes bs-flash { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes bs-shake { 0%, 100% { translate: 0 0; } 15% { translate: -1.4vmin 0.6vmin; } 30% { translate: 1.2vmin -0.8vmin; } 45% { translate: -0.9vmin -0.4vmin; } 60% { translate: 0.7vmin 0.5vmin; } 80% { translate: -0.3vmin 0.2vmin; } }
+@keyframes bs-sub { from { opacity: 0; translate: 0 1.5vmin; } }
+@media (prefers-reduced-motion: reduce) { #busted .bs-edge { animation-iteration-count: 1; } #busted .bs-card { animation: none; } }`;
 
 const RADIO_ICON = '<svg viewBox="0 0 16 16"><path d="M7 1h2v5.2l3.6-1.6.8 1.8L9 8.3V15H7V8.3L2.6 6.4l.8-1.8L7 6.2z"/></svg>';
 
@@ -2763,6 +2817,11 @@ export class Police {
     // (multiplayer: arrested in (or wrecked out of) your car, your passengers go to prison with you: the server jails
     // and fines every player its seat registry has in your car, after your own 'jail' request (sent first, same socket))
     const inCar = isMP() && this.w?.scene?.why !== 'foot'; // (caught on foot, away from the car: not them)
+    // (Oct 30 2026, the user: "make sure it says big and red with an animation on your screen when you get caught by
+    // the police, because sometimes you don't know": every arrest ends here (the scene, the watchdog, on foot, in the
+    // car, wrecked): the full-screen ARRESTED with the real sentence and fine, a hard shake in the car (drive.shake))
+    bustedBanner(`You were caught by the police · ${TUNING.jailS} s in jail · ${usd(this.lastArrest || this.arrestNow())} fine`, { audio: this.audio });
+    if (this.drive?.active) this.drive.shake = Math.max(this.drive.shake || 0, 0.7);
     this.w = null; this.jailing = 6; this.jailTry = 0; this.hideHeli(); this.fixCar();
     this.setPin(true);
     this.tryJail(); // (update(): tried again if the prison didn't take it, then arrestFallback)

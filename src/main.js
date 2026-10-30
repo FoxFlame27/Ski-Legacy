@@ -911,7 +911,15 @@ function openRailMap(rw) {
     dests, go: 'RIDE', goLabel: (d) => `Ride to ${d.name.replace(/ Gondola$/, '')}`,
   });
 }
+// (Oct 30, the user: "you can just enter a train or a helicopter or a bus during a chase"): no trains, buses or
+// helicopters while the police are after you (or you are being taken to / sitting in prison)
+function chaseBlocked() {
+  if (!police?.active && !prison?.active) return false;
+  hud.flash('Not while the police are after you', 'bad', 3000); audio.play?.('error');
+  return true;
+}
 function boardRail(st, up, dest = null) {
+  if (chaseBlocked()) return;
   if (isMP() && !multiplayer.transit.railGate(st, up, dest, () => boardRail(st, up, dest))) return; // (multiplayer: wait for the train, a seat in it)
   if (up && !hasPass() && !spend(RAIL_PRICE)) return;
   jobs.onEvent('lift', { rail: true });
@@ -975,6 +983,7 @@ function openExpress(it) {
 // the train for `to` stands at the platform: pay and step in (a short fade into the seat); not in yet: wait on the
 // platform for it (the loop boards you as it stops: express.waiting)
 function boardExpress(from, to) {
+  if (chaseBlocked()) return;
   if (!express.trainIn(from.id, to.id)) {
     if (!hasPass() && save.money < EXPRESS_PRICE) { spend(EXPRESS_PRICE); return; } // (not enough money: says so)
     const wait = express.waitFor(from.id, to.id);
@@ -1113,6 +1122,7 @@ function openHut(it) {
   ], { kicker: 'MOUNTAIN HUT' });
 }
 async function rideBus(dest, from = null) {
+  if (chaseBlocked()) return;
   // the real ride: the bus drives you there over the plowed roads (skibus.js BUS_RIDE)
   if (from && skibus.canRide(from, dest)) { boardBus(from, dest); return; }
   // no road there at all: the branded travel card (as for World Racing) covers the transfer and says so
@@ -1130,6 +1140,7 @@ async function rideBus(dest, from = null) {
 }
 
 function boardBus(from, dest) {
+  if (chaseBlocked()) return;
   if (isMP() && !multiplayer.transit.busGate(from, dest, () => boardBus(from, dest))) return; // (multiplayer: wait for a shared bus, a seat in it)
   transition.fade(async () => {
     if (races.active) races.abort();
@@ -1390,7 +1401,7 @@ function findInteraction() {
   const sledPrompt = sleds.interaction(p);
   if (sledPrompt) return sledPrompt;
   const heliPrompt = heli.interaction(p);
-  if (heliPrompt) return heliPrompt;
+  if (heliPrompt) return police?.active ? { ...heliPrompt, label: 'Helicopter · not while the police are after you', act: () => chaseBlocked() } : heliPrompt;
   const job = jobs.interaction(p);
   if (job) return job;
   const stand = raceStand?.interaction(p); // the RACING stand (RACE just for fun)

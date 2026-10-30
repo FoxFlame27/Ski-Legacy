@@ -104,7 +104,19 @@ export const TUNING = {
   spawnMin: 260, spawnMax: 420, // m from you, on the roads, out of sight (Oct 30: nearer, they reach you sooner)
   reachR: 60,        // m: they have reached you (the grace to pull over starts)
   graceS: 6,         // s to pull over once they reach you; still moving after it: fleeing
-  footCatchR: 4,     // m: an officer on foot this close: caught
+  footCatchR: 1.5,   // m: an officer on foot this close: caught (Oct 30 2026: 4 m before; he runs you down now, footRunV)
+  // (Oct 30 2026, the user: "also it's a bit too easy to escape when you just run away out of your car"): on foot the
+  // officer runs a little faster than your sprint (player.js: 4.2 m/s, x1.5 with Shift: 6.3), slowed by steep ground
+  // as you are (up the slopes or onto a lift you can still get away); he gives up only once you are footLoseM further
+  // off than he ever got (or footLeashM from his car), and the next car's officer may come after footAgainS; the
+  // other patrol cars keep along the roads nearest you meanwhile (footGoal); out of sight on foot (walking) the escape
+  // takes footEscK x as long, hiding in a chalet hideEscK x (they wait outside)
+  footRunV: 6.9,
+  footLoseM: 45,
+  footLeashM: 400,
+  footAgainS: 4,
+  footEscK: 2.2,
+  hideEscK: 2.5,
   vRoad: 52,         // m/s (187 km/h) on the roads near you (the bends ahead slow them: A_LAT)
   vTop: 250 / 3.6,   // m/s: never faster (the user: "up to 250 km/h"): the catch-up and a ram run up to it
   vOff: 25,          // m/s off them
@@ -326,15 +338,17 @@ export function policeLights(m, on, t) {
   m.lens[0].emissiveIntensity = a ? 7 : 0.25; m.lens[1].emissiveIntensity = b ? 7 : 0.25;
   m.glows[0].material.opacity = a ? 0.95 : 0; m.glows[1].material.opacity = b ? 0.95 : 0;
 }
-/** The car's group on the ground at (x, z) facing yaw: its height, pitch and roll from the ground under its wheels. */
-export function policeGround(g, x, z, yaw, yHint = Infinity) {
+/** The car's group on the ground at (x, z) facing yaw: its height, pitch and roll from the ground under its wheels.
+ *  deep false: only the group's own world matrix (the renderer does its children: police.js place() runs a few times a
+ *  car a frame, Oct 30 2026, the chase lag). */
+export function policeGround(g, x, z, yaw, yHint = Infinity, deep = true) {
   const s = Math.sin(yaw), c = Math.cos(yaw), H = (lx, lz) => world.groundHeight(x + s * lz + c * lx, z + c * lz - s * lx, yHint);
   const f = H(0, 1.45), b = H(0, -1.45), l = H(0.8, 0), r = H(-0.8, 0);
   const y = (f + b) / 2;
   _e.set(-Math.atan2(f - b, 2.9), yaw, Math.atan2(l - r, 1.6) * 0.6);
   g.position.set(x, y + 0.02, z);
   g.quaternion.setFromEuler(_e);
-  g.updateMatrixWorld(true);
+  if (deep) g.updateMatrixWorld(true); else g.updateWorldMatrix(false, false);
   return y;
 }
 
@@ -361,6 +375,15 @@ function contact(A, B) {
 const A_LAT = 8.5, A_BRAKE = 11, R_MIN = WB / Math.tan(0.7);
 const FR = [0.15, 0.3, 0.45, 0.6, 0.8, 1]; // (the probe reaches 70 m at 250 km/h: no pole slips between the samples)
 const ANG_L = [0.3, -0.3, 0.6, -0.6, 0.95, -0.95, 1.4, -1.4], ANG_R = ANG_L.map((a) => -a);
+// (Oct 30 2026, the user: "during the police chase it is super laggy": solidAt went over every collider in the resort
+// (thousands: the village's props, the piste markers, the lamps, the guardrails...) ~6-10 times a patrol car a frame
+// and ~50 more on a probe frame (its rays), los() once more per sight check: with four or five cars after you, millions
+// of checks a second. Now each car keeps the ones round it (nearCols: within NEAR_R m, one pass every NEAR_S s, or once
+// it has moved NEAR_MOVE m, or colliders came / went) and looks only at those; anything that moves (the traffic, the
+// buses, the other players' cars, the other patrol cars) is covered by NEAR_SLACK m of slack; a point outside that
+// (an officer's way far off) still goes over them all)
+const NEAR_R = 140, NEAR_S = 0.3, NEAR_MOVE = 20, NEAR_SLACK = 35;
+const PUSH_K = [0, 0, 0], NO_COLS = []; // (pushOut's three circles: no array a call)
 // A* over the road graph (towtruck.js roadGraph) from node a to b: the node ids into out (Int32Array), their count
 // (0: no way); its buffers kept between calls (a stamp instead of clearing them)
 let RT = null;
@@ -849,6 +872,9 @@ export class Police {
   where(T) { const r = this.roadName(T.x, T.z); return r ? `on ${r}` : 'off-road'; }
   // the wanted level: the stars (1-5) from the heat; its numbers (LEVELS) in this.L
   stars(W = this.w) { return W ? clamp(Math.floor(W.heat + 1e-6), 1, 5) : 1; }
+  // s out of sight to lose them: LEVELS escS; walking (not skiing) footEscK x that, hiding in a chalet hideEscK x
+  // (Oct 30 2026, the user: "a bit too easy to escape when you just run away out of your car")
+  escNeed(W = this.w, hiding = false) { return this.L.escS * (hiding ? TUNING.hideEscK : W?.walk ? TUNING.footEscK : 1); }
   addHeat(W, h) {
     if (!W || W.scene) return;
     const s0 = this.stars(W);
@@ -1108,7 +1134,7 @@ export class Police {
     u.col.x = 1e9; u.col.z = 1e9;
   }
   place(u) {
-    u.y = policeGround(u.g, u.x, u.z, u.yaw, u.y + 2);
+    u.y = policeGround(u.g, u.x, u.z, u.yaw, u.y + 2, false);
     u.col.x = u.x; u.col.z = u.z; u.col.rot = -u.yaw;
   }
 
@@ -1117,10 +1143,11 @@ export class Police {
   target() {
     const d = this.drive?.d, p = this.player;
     const t = (this._tg ||= {});
-    if (d) { t.x = d.x; t.z = d.z; t.y = d.y; t.yaw = d.yaw; t.vx = d.vx; t.vz = d.vz; t.car = d; t.foot = false; }
+    if (d) { t.x = d.x; t.z = d.z; t.y = d.y; t.yaw = d.yaw; t.vx = d.vx; t.vz = d.vz; t.car = d; t.foot = false; t.walk = false; }
     else if (p?.pos) {
       t.x = p.pos.x; t.z = p.pos.z; t.y = p.pos.y; t.vx = p.vel?.x || 0; t.vz = p.vel?.z || 0; t.yaw = Math.atan2(t.vx, t.vz); t.car = null;
       t.foot = (p.mode === 'walk' || p.mode === 'ski' || p.mode === 'fall') && !p.seat;
+      t.walk = t.foot && p.mode !== 'ski'; // (on foot, not on skis: the escape takes longer, escNeed)
     } else return null;
     t.sp = Math.hypot(t.vx, t.vz);
     return t;
@@ -1203,10 +1230,14 @@ export class Police {
     // hiding in a chalet (Oct 30, the user): the police are still looking but can't find you: the WANTED box says so,
     // the escape time runs on while you stay inside (they lose you once it is up); out again, the chase goes on for
     // the time that is left (not while being fined / arrested)
-    const hiding = !!(W && !W.scene && globalThis.window?.__game?.chalets?.inside);
+    // (Oct 30 2026, the user: "hiding indoors shouldn't instantly clear the chase: police wait outside for a while"):
+    // the escape takes hideEscK x as long in there; an officer running after you (not yet with you) goes back to his car
+    const inChalet = !!(W && globalThis.window?.__game?.chalets?.inside);
+    if (inChalet && W.scene?.why === 'foot' && !this.committed(W.scene)) { this.dropOfficer(W.scene.u); W.scene = null; W.footT = TUNING.footAgainS; }
+    const hiding = inChalet && !W.scene;
     if (hiding) {
       W.t += dt; W.esc += dt; W.near = Infinity; W.seen = false;
-      if (W.esc >= this.L.escS) { this.escaped('They never found you · you escaped'); return; }
+      if (W.esc >= this.escNeed(W, true)) { this.escaped('They never found you · you escaped'); return; }
     }
     // being arrested in your car: it is held (drive.js: no throttle, no steering, brakes on, no getting out); on foot,
     // once the officer has you (or is right by you): you can't move (setPin) (outside the try: an error can't undo it)
@@ -1296,7 +1327,7 @@ export class Police {
     if (!W) return;
     W.heat = clamp(s.h, 1, 5.99); W.t = Math.max(0, s.t || 0);
     this.L = LEVELS[this.stars(W)];
-    W.esc = clamp(s.e || 0, 0, this.L.escS - 1);
+    W.esc = clamp(s.e || 0, 0, this.escNeed(W) - 1);
     if (s.f) { W.fleeing = true; W.reinT = 1.5; }
     this.persistKey = ''; this.resumeT = 0;
     this.note('The police are still after you');
@@ -1308,6 +1339,8 @@ export class Police {
     const T = this.target();
     if (!T) return;
     const L = this.L = LEVELS[this.stars(W)];
+    W.walk = !!T.walk; // (escNeed)
+    if (W.footT > 0) W.footT -= dt;
     const live = this._live; live.length = 0;
     let chasers = 0;
     for (const u of this.units) if (u.on) { live.push(u); if (u.role !== 'block') chasers++; }
@@ -1413,7 +1446,7 @@ export class Police {
       if ((W.pulled && close) || W.laneT >= TUNING.laneWaitS) { W.laneT = 0; this.begin(W, 'fine', lead); return; }
     }
     // fleeing on foot: an officer runs after you once his car is close (or as close as it gets)
-    if (W.fleeing && T.foot && (near < 16 || (lead.parked && near < 140)) && !lead.officer && lead.role !== 'block') { this.begin(W, 'arrest', lead, 'foot'); return; }
+    if (W.fleeing && T.foot && !(W.footT > 0) && (near < 16 || (lead.parked && near < 140)) && !lead.officer && lead.role !== 'block') { this.begin(W, 'arrest', lead, 'foot'); return; }
     for (const u of live) this.drivePursuit(u, dt, T, W, u === lead);
   }
   // who sees you (true: the chase ended here). A patrol car: within seeNear always, else within the level's sight
@@ -1429,7 +1462,7 @@ export class Police {
         const d = hyp(u.x, u.z, T.x, T.z);
         if (d < TUNING.seeNear) u.sees = true;
         else if (d > L.sightR) u.sees = false;
-        else { budget--; u.sees = this.los(u.x, u.y + 1.35, u.z, T.x, (T.y ?? world.height(T.x, T.z)) + 0.9, T.z); }
+        else { budget--; u.sees = this.los(u.x, u.y + 1.35, u.z, T.x, (T.y ?? world.height(T.x, T.z)) + 0.9, T.z, this.nearCols(u, T.x, T.z, 0)); } // (its own colliders round it when you are within them: Oct 30 2026, the lag)
       }
       if (u.sees) seen = true;
     }
@@ -1457,13 +1490,13 @@ export class Police {
     }
     if (W.scene) return false;
     if (!W.spotted) { W.noSpotT += dt; if (W.noSpotT >= TUNING.noSpotS) { this.escaped('They never found you · you got away'); return true; } }
-    if (W.search) { W.esc += dt; if (W.esc >= L.escS) { this.escaped(); return true; } }
+    if (W.search) { W.esc += dt; if (W.esc >= this.escNeed(W)) { this.escaped(); return true; } }
     return false;
   }
   // a clear line from (ax, ay, az) to (bx, by, bz)? The terrain (sampled along it), anything solid and tall standing
   // in it (buildings: one pass over the colliders, the segment against each box near it) and a forest (3+ tree crowns
   // on the way)
-  los(ax, ay, az, bx, by, bz) {
+  los(ax, ay, az, bx, by, bz, cols = this.colliders || NO_COLS) {
     const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz);
     if (len < 1) return true;
     const n = clamp(Math.ceil(len / 9), 4, 30);
@@ -1474,7 +1507,7 @@ export class Police {
       if (this.vegetation?.collide && i % 2 === 0 && len * f > 12 && len * (1 - f) > 8 && this.vegetation.collide(x, z, 0.8, 99, 'crown') && ++crowns >= 3) return false;
     }
     const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx), z0 = Math.min(az, bz), z1 = Math.max(az, bz), ux = dx / len, uz = dz / len;
-    for (const c of this.colliders || []) {
+    for (const c of cols) {
       if (c.police || c.net || c.soft || c.rail || c.car || c.r !== undefined) continue;
       const sz = Math.max(c.hw, c.hd);
       if (sz < 1.6 || (c.h !== undefined && c.h < 2.4)) continue; // (small things, low walls: seen over)
@@ -2238,7 +2271,7 @@ export class Police {
       if (Math.abs(lx) < d.w / 2 + r && Math.abs(lz) < d.half + r) return (this._yc ||= { x: 0, z: 0, hw: 0, hd: 0, rot: 0 }, Object.assign(this._yc, { x: d.x, z: d.z, hw: d.w / 2, hd: d.half, rot: -d.yaw }));
     }
     const mine = this.drive?.d?.e?.collider;
-    for (const c of this.colliders || []) {
+    for (const c of this.nearCols(u, x, z, r)) {
       if (c === u.col || c.net || c.police === 'local' || c === mine) continue;
       let rr = r;
       if (c.rail) { if (noRail || (c.top !== undefined && Math.abs(c.top - u.y) > 3.5)) continue; if (dyn) rr = Math.max(0.3, r - 0.45); } // (a guardrail: solid)
@@ -2256,6 +2289,21 @@ export class Police {
     if (b) return b;
     const t = this.vegetation?.collide?.(x, z, r, 0.6, true);
     return t ? { x: t.x, z: t.z, r: t.trunk ?? t.r ?? 0.4 } : null;
+  }
+  // the colliders that can be within r of (x, z), for patrol car u: the ones round it (refreshed every NEAR_S s, after
+  // NEAR_MOVE m, or when colliders were added / removed), or all of them for a point beyond that (above NEAR_R)
+  nearCols(u, x, z, r) {
+    const all = this.colliders || NO_COLS;
+    const N = (u.near ||= { list: [], x: 1e9, z: 1e9, t: -1e9, n: -1 });
+    if (this.time - N.t > NEAR_S || this.time < N.t || N.n !== all.length || Math.abs(u.x - N.x) > NEAR_MOVE || Math.abs(u.z - N.z) > NEAR_MOVE) {
+      const L = N.list, cx = u.x, cz = u.z;
+      L.length = 0; N.x = cx; N.z = cz; N.t = this.time; N.n = all.length;
+      for (let i = 0; i < all.length; i++) {
+        const c = all[i], E = NEAR_R + (c.r ?? Math.max(c.hw, c.hd));
+        if (Math.abs(c.x - cx) <= E && Math.abs(c.z - cz) <= E) L.push(c);
+      }
+    }
+    return Math.abs(x - N.x) + r + NEAR_SLACK <= NEAR_R && Math.abs(z - N.z) + r + NEAR_SLACK <= NEAR_R ? N.list : all;
   }
   // the vehicles that aren't colliders (traffic.js trafficBlockers: the tow truck, the ambulance, the helicopter set
   // down, the snowcats, the trains, the ski buses), gathered once a frame (update) without the patrol cars' own boxes:
@@ -2343,7 +2391,8 @@ export class Police {
   pushOut(u) {
     const s = Math.sin(u.yaw), c = Math.cos(u.yaw), R = u.hw;
     let hit = false, rail = null;
-    for (const k of [u.hd - R, 0, -(u.hd - R)]) {
+    const K = PUSH_K; K[0] = u.hd - R; K[1] = 0; K[2] = -(u.hd - R);
+    for (const k of K) {
       for (let it = 0; it < 2; it++) {
         const cx = u.x + s * k, cz = u.z + c * k, o = this.solidAt(cx, cz, R, u);
         if (!o) break;
@@ -2406,6 +2455,7 @@ export class Police {
       }
       // your car
       if (!d || d.crash) continue;
+      if (Math.abs(d.x - u.x) > d.half + d.w + u.hd + u.hw || Math.abs(d.z - u.z) > d.half + d.w + u.hd + u.hw) continue; // (well apart: no contact to test)
       const P = (this._pb ||= {}); P.x = d.x; P.z = d.z; P.yaw = d.yaw; P.hw = d.w / 2 - 0.08; P.hd = d.half;
       const ct = contact(P, A); // (normal from the patrol car to you)
       if (!ct) continue;
@@ -2562,9 +2612,16 @@ export class Police {
     u.officer = null;
     if (u.driver) u.driver.visible = true;
   }
-  walkOfficer(o, tx, tz, v, dt) {
+  // (steep: slowed up the steeps as you are, player.js WALK_FULL 30 degrees to WALK_MAX 50: up the slopes you can get
+  // away from him; Oct 30 2026)
+  walkOfficer(o, tx, tz, v, dt, steep = false) {
     const dx = tx - o.pos.x, dz = tz - o.pos.z, l = Math.hypot(dx, dz);
     if (l < 0.08) { o.st.mode = 'idle'; o.st.speed = 0; return l; }
+    if (steep) {
+      const up = (world.height(o.pos.x + (dx / l) * 1.5, o.pos.z + (dz / l) * 1.5) - world.height(o.pos.x, o.pos.z)) / 1.5;
+      const k = clamp((up - 0.577) / (1.192 - 0.577), 0, 1);
+      if (k > 0) v *= k > 0.97 ? 0.08 : 1 - 0.65 * k * k * (3 - 2 * k);
+    }
     const s = Math.min(l, v * dt);
     o.pos.x += (dx / l) * s; o.pos.z += (dz / l) * s;
     o.pos.y = world.groundHeight(o.pos.x, o.pos.z, o.pos.y + 1.5);
@@ -2592,9 +2649,12 @@ export class Police {
     if (!u.on) { if (this.committed(S)) this.forceArrest(W); else W.scene = null; return; } // (its car gone: a decided arrest still ends in prison)
     // the other car stays back (behind the lead, a little to the side)
     // (the others in a fan behind it, three abreast; a roadblock's cars stay where they are)
+    // (a foot chase: they keep after you along the roads nearest you instead, drivePursuit / footGoal: Oct 30 2026)
+    const footChase = S.why === 'foot' && !this.committed(S) && T.foot;
     let fan = 0;
     for (const x of this.units) {
       if (!x.on || x === u || x.role === 'block') continue;
+      if (footChase) { this.drivePursuit(x, dt, T, W, false); continue; }
       const b = this.carPoint(u, 1.4 + ((fan % 3) - 1) * 3.6, -11 - Math.floor(fan / 3) * 8, this._p2 ||= {});
       fan++;
       this.step(x, dt, b.x, b.z, clamp(hyp(x.x, x.z, b.x, b.z) * 0.8, 0, 14), u.yaw);
@@ -2625,14 +2685,19 @@ export class Police {
       let tx = T.x, tz = T.z, reach = TUNING.footCatchR * 0.5;
       if (T.car) { const E = driverEye(T.car.t || { size: { x: T.car.w, y: 1.5, z: T.car.half * 2 } }), sg = E.x >= 0 ? 1 : -1; const P = this.carPoint(T.car, sg * (T.car.w / 2 + 0.55), E.z, this._pw ||= {}); tx = P.x; tz = P.z; reach = 0.25; }
       const run = S.kind === 'arrest' && (T.car ? hyp(o.pos.x, o.pos.z, tx, tz) > 4 : T.sp > 1.2 || hyp(o.pos.x, o.pos.z, T.x, T.z) > 6); // (an arrest: he hurries)
-      const left = this.walkOfficer(o, tx, tz, run ? RUN_V : WALK_V, dt);
+      const foot = S.kind === 'arrest' && !T.car; // (after you on foot: faster than your sprint, slowed by the steeps)
+      const left = this.walkOfficer(o, tx, tz, run ? (foot ? TUNING.footRunV : RUN_V) : WALK_V, dt, foot);
       this.poseOfficer(o, dt);
       const dist = hyp(o.pos.x, o.pos.z, T.x, T.z);
-      // on foot: caught within 4 m
-      if ((!T.car && dist < TUNING.footCatchR) || (T.car && left <= reach)) { S.step = 'talk'; S.t = 0; }
+      S.best = Math.min(S.best ?? Infinity, dist);
+      S.offT = !T.car && !T.foot ? (S.offT || 0) + dt : 0; // (on a lift, a seat: out of his reach)
+      // on foot: caught within footCatchR (not from under a lift chair: within 2.5 m of your height)
+      if ((!T.car && dist < TUNING.footCatchR && Math.abs((T.y ?? o.pos.y) - o.pos.y) < 2.5) || (T.car && left <= reach)) { S.step = 'talk'; S.t = 0; }
       // outrun on foot (or driven off before he had you): back to the car, the chase goes on (a decided arrest: he
-      // keeps after you; the watchdog jails you anyway: update())
-      else if (S.kind === 'arrest' && !this.committed(S) && hyp(o.pos.x, o.pos.z, u.x, u.z) > 110) { S.step = 'back'; S.abort = true; }
+      // keeps after you; the watchdog jails you anyway: update()). On foot (Oct 30 2026): only once you are footLoseM
+      // further off than he ever got, or he is footLeashM from his car (a car: 110 m from it, as before)
+      else if (S.kind === 'arrest' && !this.committed(S) && (foot ? dist > S.best + TUNING.footLoseM || hyp(o.pos.x, o.pos.z, u.x, u.z) > TUNING.footLeashM || (S.offT > 3 && dist > 3)
+        : hyp(o.pos.x, o.pos.z, u.x, u.z) > 110)) { S.step = 'back'; S.abort = true; if (foot) W.footT = TUNING.footAgainS; }
       return;
     }
     if (S.step === 'talk') {
@@ -2653,6 +2718,9 @@ export class Police {
       return;
     }
     if (S.step === 'back') {
+      // (a foot chase he gave up: out of your sight or well away from you he is back in his car at once, the chase
+      // goes on: another car's officer may come; Oct 30 2026)
+      if (S.abort && S.why === 'foot' && (!this.inViewXZ(o.pos.x, o.pos.z) || hyp(o.pos.x, o.pos.z, T.x, T.z) > 80)) { this.dropOfficer(u); W.scene = null; return; }
       const D = this.doorOf(u, this._pd ||= {});
       const left = this.walkOfficer(o, D.x, D.z, S.abort ? RUN_V : WALK_V * 1.1, dt);
       this.poseOfficer(o, dt);
@@ -2828,7 +2896,7 @@ export class Police {
     if (!W && !paused && this.rideW) { this.rideHud(this.rideW); return; }
     if (!W || paused) { this.setHud(false); return; }
     const S = W.scene, H = this._hs, C = this.hudStr ||= { t: -1, e: -1, eS: -1, n: -1, rb: -1, ts: '', es: '', ns: '', rbs: '' };
-    const escS = this.L.escS;
+    const escS = this.escNeed(W, hiding);
     const ti = Math.floor(W.t);
     if (C.t !== ti) { C.t = ti; C.ts = mmss(W.t); }
     H.t = C.ts;

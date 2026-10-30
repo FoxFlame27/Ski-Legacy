@@ -1087,6 +1087,64 @@ try {
     await sleep(100);
   }
 
+  // ---------------------------------------------------------------- the in-game admin panel ('admin': Rafael only)
+  console.log('admin panel');
+  {
+    const rf = new Fake(url);
+    await rf.open();
+    const rr = await rf.req('register', { name: 'Rafael' });
+    const lr = await rf.req('login', { v: PROTO, name: 'rafael', token: rr.d.token });
+    ok(lr.ok, 'Rafael logs in');
+    const m0 = lr.d.profile.money;
+    const add = await rf.req('admin', { op: 'money', add: 100000 });
+    ok(add.ok && add.d.money === m0 + 100000, `Rafael's admin money add works (+100,000 -> ${add.d?.money})`);
+    const mm = await rf.next('money', (d) => d.why === 'admin');
+    ok(mm && mm.v === m0 + 100000 && mm.delta === 100000, "...and a 'money' update follows (the client's money guard takes it)");
+    const set = await rf.req('admin', { op: 'money', set: 2500000 });
+    ok(set.ok && set.d.money === 2500000, 'admin money set to 2,500,000');
+    const bads = await Promise.all([{ add: 0 }, { add: 1.5 }, { add: 'lots' }, { add: 2e7 }, { set: -1 }, { set: 1e9 }, {}].map((x) => rf.req('admin', { op: 'money', ...x })));
+    ok(bads.every((r) => !r.ok && r.err === 'bad_amount'), 'invalid admin amounts are refused (bad_amount)');
+    ok(server.store.profiles.data.rafael.money === 2500000, '...and change nothing');
+    const nope = await a.req('admin', { op: 'money', add: 100000 });
+    ok(!nope.ok && nope.err === 'forbidden', "a non-Rafael connection is refused ('forbidden')");
+    const nope2 = await a.req('admin', { op: 'unlock', what: 'skis' });
+    ok(!nope2.ok && nope2.err === 'forbidden', '...for every op (unlock too)');
+    const anon = new Fake(url);
+    await anon.open();
+    const an = await anon.req('admin', { op: 'money', add: 100, name: 'Rafael', admin: true });
+    ok(!an.ok && an.err === 'not_logged_in', 'a connection not logged in is refused (a name in the request counts for nothing)');
+    anon.close();
+    const us = await rf.req('admin', { op: 'unlock', what: 'skis' });
+    ok(us.ok && Object.keys(CATALOG.skis).every((id) => us.d.owned.includes(id)), 'admin unlock: every pair of skis');
+    const uo = await rf.req('admin', { op: 'unlock', what: 'outfits' });
+    ok(uo.ok && Object.keys(CATALOG.outfits).every((id) => uo.d.outfits.owned.includes(id)), 'admin unlock: every outfit');
+    const eq = await rf.req('profileSet', { key: 'skis', value: 'legend' });
+    ok(eq.ok, '...and the unlocked skis can be equipped (profileSet skis)');
+    const ps = await rf.req('admin', { op: 'pass', on: true });
+    ok(ps.ok && ps.d.dayPass === server.worlds.get(lr.d.world.id).dayAt(), "admin day pass: today's (the world's day)");
+    const tm = await rf.req('admin', { op: 'time', hour: 22 });
+    const ck = await rf.next('clock', (d) => Math.abs(d.hour - 22) < 0.01);
+    ok(tm.ok && Math.abs(tm.d.clock.hour - 22) < 0.01 && !!ck, "admin time: the world's clock at 22:00, broadcast");
+    const wx = await rf.req('admin', { op: 'weather', w: 'heavy' });
+    ok(wx.ok && wx.d.clock.weather === 'heavy', 'admin weather: heavy snow');
+    const wb = await rf.req('admin', { op: 'weather', w: 'toString' });
+    ok(!wb.ok && wb.err === 'bad_value', 'an unknown weather is refused');
+    const hl = await rf.req('admin', { op: 'heli' });
+    const W = server.worlds.get(lr.d.world.id), padAt = W.heli.padAt;
+    ok(hl.ok && W.heli.copies.some((h) => h.name === 'Rafael' && h.admin), 'admin helicopter: a free copy on his name');
+    const hv = await rf.req('veh', { k: 'heli', at: [10, 50, 10, 0] });
+    ok(hv.ok, '...shown to everyone (veh heli accepted)');
+    await rf.req('heliReturn');
+    ok(W.heli.padAt === padAt && !W.heli.copies.some((h) => h.name === 'Rafael'), "...returned without touching the pad's next helicopter");
+    const bo = await rf.req('admin', { op: 'nope' });
+    ok(!bo.ok && bo.err === 'bad_op', 'an unknown admin op is refused');
+    rf.close();
+    await sleep(100);
+    server.store.flush();
+    const disk = JSON.parse(fs.readFileSync(path.join(dataDir, 'profiles.json'), 'utf8'));
+    ok(disk.rafael?.money === 2500000 && disk.rafael.owned.includes('legend'), "Rafael's admin money and unlocks persist (on disk)");
+  }
+
   // ---------------------------------------------------------------- persistence
   a.close(); b.close();
   await sleep(150);

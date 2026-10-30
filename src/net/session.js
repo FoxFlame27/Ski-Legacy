@@ -415,6 +415,45 @@ export class Multiplayer {
     );
   }
 
+  /** The admin panel (ui/admin.js, the account Rafael only) in multiplayer: its server-owned actions go through the
+   *  server ('admin' { op, ... }, checked against the login there) and its answer is applied here, so nothing reverts.
+   *  Resolves the server's answer (d) or null (refused: the reason is flashed). */
+  async adminOp(op, data = {}, { quiet = false } = {}) {
+    if (!MP.active) return null;
+    const s = this.c.save, was = this.clock;
+    // (the sky follows at once; the server's answer and its 'clock' broadcast confirm it)
+    if (op === 'time') this.adminClock(data.hour);
+    if (op === 'weather') this.adminClock(null, data.w);
+    const guess = this.clock;
+    try {
+      const d = await net.request('admin', { op, ...data });
+      if (d.money != null) this.setServerMoney(d.money); // (the 'money' update shows the rise)
+      if (Array.isArray(d.owned)) { s.owned = [...d.owned]; if (MP.profile) MP.profile.owned = d.owned; }
+      if (d.outfits?.owned) {
+        if (s.outfits) s.outfits.owned = [...d.outfits.owned]; // (in place: the outfit shop keeps a hold of it)
+        else s.outfits = { owned: [...d.outfits.owned], equipped: { ...(d.outfits.equipped || {}) } };
+        if (MP.profile) MP.profile.outfits = d.outfits;
+      }
+      if (d.dayPass != null) { s.dayPass = d.dayPass; s.tickets = d.tickets || 0; this.pushed.dayPass = JSON.stringify(s.dayPass); this.pushed.tickets = JSON.stringify(s.tickets); }
+      if (d.clock) this.clock = d.clock; // (the 'clock' broadcast says the same)
+      return d;
+    } catch (e) {
+      if (this.clock === guess && guess !== was) this.clock = was;
+      if (e.data?.money != null) this.setServerMoney(e.data.money);
+      if (!quiet) this.c.hud.flash(`Admin · ${e.code === 'forbidden' ? 'not allowed on this server' : e.code === 'unknown_type' ? 'the server needs an update' : `refused (${errText(e)})`}`, 'bad', 2400);
+      return null;
+    }
+  }
+
+  /** The admin panel's time slider / weather, shown here at once (the clock the sky follows), before the server's
+   *  answer: hour (0-24) or null, weather or null. */
+  adminClock(hour = null, weather = null) {
+    const was = this.clock;
+    if (!was) return;
+    if (Number.isFinite(hour)) { const now = net.serverNow(); this.clock = { ...was, hour: hour % 24, at: now, day: this.dayNow(now) ?? was.day }; }
+    if (weather) this.clock = { ...this.clock, weather };
+  }
+
   /** Jobs / secrets pay out through the server (limits per payout and per hour). Resolves true when paid. */
   async earn(amount, source = 'job') {
     try { const d = await net.request('earn', { amount: Math.round(amount), source }); this.setServerMoney(d.money); return true; }

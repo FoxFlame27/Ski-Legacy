@@ -2,6 +2,10 @@
 // weather, teleports to every lift station, peak, race start, the park, the helipad and the ski-bus stops,
 // unlock everything, a speed boost, HUD on / off, a free-fly camera, the day pass. Same house style as the
 // menus: white brush paper, blue italic condensed lettering, red section labels. Money goes through the save.
+// Multiplayer (Oct 30, the user: "the admin panel doesn't work on multiplayer, it reverts immediately"): the server
+// owns money, unlocks, the day pass, the world's clock and weather, so those go through it ('admin' requests,
+// net/session.js adminOp; the server checks the login is Rafael's) and its answer is what shows. Teleports, the free
+// camera, the HUD, the boost and the car / snowmobile spawns are this client's own (the server just logs them).
 import './admin.css';
 import * as THREE from 'three';
 import { brushSVG, brushClip, esc } from './menu.js';
@@ -140,8 +144,22 @@ export class AdminPanel {
     }
   }
 
+  // ------------------------------------------------------------------ multiplayer: through the server
+  /** An admin request to the server (multiplayer): resolves its answer or null (refused: already flashed). */
+  mpOp(op, data = {}) {
+    const m = window.__game?.multiplayer;
+    if (!m?.adminOp) { this.hud.flash('Admin · not connected', 'bad', 2000); this.audio?.play('error'); return Promise.resolve(null); }
+    return m.adminOp(op, data).then((d) => { if (!d) this.audio?.play('error'); return d; });
+  }
+  /** Tell the server what this client did by itself (a teleport, a spawn): logged there, nothing to wait for. */
+  mpLog(op, data) { if (isMP()) window.__game?.multiplayer?.adminOp?.(op, data, { quiet: true })?.catch?.(() => {}); }
+
   // ------------------------------------------------------------------ actions
   addMoney(n) {
+    if (isMP()) { // (the server's 'money' update moves the balance: the money guard takes it)
+      this.mpOp('money', { add: Math.round(n) }).then((d) => { if (d) { this.audio?.play('cash'); this.refreshLive(); } });
+      return;
+    }
     const s = this.save;
     s.money = Math.max(0, Math.round(s.money + n));
     this.hud.setMoney(s.money, n);
@@ -154,6 +172,11 @@ export class AdminPanel {
     const inp = this.el.querySelector('.ad-amount');
     const v = Math.floor(Number(String(inp?.value || '').replace(/[^0-9.]/g, '')));
     if (!Number.isFinite(v)) { this.audio?.play('error'); return; }
+    if (isMP()) {
+      if (inp) inp.value = '';
+      this.mpOp('money', { set: Math.min(99999999, Math.max(0, v)) }).then((d) => { if (d) { this.audio?.play('cash'); this.refreshLive(); } });
+      return;
+    }
     const s = this.save, d = Math.min(99999999, Math.max(0, v)) - s.money;
     s.money += d;
     this.hud.setMoney(s.money, d);
@@ -164,12 +187,30 @@ export class AdminPanel {
   }
 
   setHour(h) {
+    if (isMP()) { // your world's clock (everyone in it shares the sky): shown at once, sent at most every 200 ms
+      h = ((h % 24) + 24) % 24;
+      this.env.hour = h;
+      window.__game?.multiplayer?.adminClock?.(h);
+      this.mpHour = h;
+      if (!this.mpHourT) {
+        const send = () => { const v = this.mpHour; this.mpHour = null; if (v != null) this.mpOp('time', { hour: v }); };
+        send();
+        this.mpHourT = setTimeout(() => { this.mpHourT = null; send(); }, 200);
+      }
+      return;
+    }
     this.env.hour = ((h % 24) + 24) % 24;
     this.save.hour = this.env.hour;
     this.writeSave();
   }
 
   setWeather(w) {
+    if (isMP()) { // your world's weather (the server holds it 5 min before it moves on)
+      this.env.setWeather(w);
+      this.mpOp('weather', { w }).then(() => this.isOpen && this.render(false));
+      this.render(false);
+      return;
+    }
     this.env.setWeather(w);
     this.env.weatherTimer = 300; // hold it a while before the weather moves on by itself
     this.render(false);
@@ -177,6 +218,16 @@ export class AdminPanel {
 
   unlockSkis() {
     const s = this.save;
+    if (isMP()) {
+      this.mpOp('unlock', { what: 'skis' }).then((d) => {
+        if (!d) return;
+        if (!s.skis && this.equipSkis) this.equipSkis(SKIS[SKIS.length - 1].id);
+        this.hud.flash('All skis unlocked', 'gold', 2000);
+        this.audio?.play('cash');
+        if (this.isOpen) this.render(false);
+      });
+      return;
+    }
     for (const k of SKIS) if (!s.owned.includes(k.id)) s.owned.push(k.id);
     this.writeSave();
     // no skis yet: put on the best pair so you can head straight out
@@ -187,6 +238,15 @@ export class AdminPanel {
   }
 
   unlockOutfits() {
+    if (isMP()) {
+      this.mpOp('unlock', { what: 'outfits' }).then((d) => {
+        if (!d) return;
+        this.hud.flash('All outfits unlocked', 'gold', 2000);
+        this.audio?.play('cash');
+        if (this.isOpen) this.render(false);
+      });
+      return;
+    }
     const o = ensureOutfits(this.save);
     for (const id of [...OUTFIT_ITEMS.map((i) => i.id), ...OUTFIT_KITS.map((k) => k.id)]) if (!o.owned.includes(id)) o.owned.push(id);
     this.writeSave();
@@ -196,6 +256,7 @@ export class AdminPanel {
   }
 
   givePass() {
+    if (isMP()) { this.mpOp('pass', { on: true }).then((d) => { if (d) { this.hud.flash('Day pass active', 'gold', 2000); if (this.isOpen) this.render(false); } }); return; }
     this.save.dayPass = this.save.day;
     this.writeSave();
     this.hud.flash('Day pass active', 'gold', 2000);
@@ -203,6 +264,7 @@ export class AdminPanel {
   }
 
   resetPass() {
+    if (isMP()) { this.mpOp('pass', { on: false }).then((d) => { if (d) { this.hud.flash('Day pass and tickets reset', 'good', 2000); if (this.isOpen) this.render(false); } }); return; }
     this.save.dayPass = -1;
     this.save.tickets = 0;
     this.writeSave();
@@ -212,6 +274,7 @@ export class AdminPanel {
 
   setBoost(on) {
     this.boost = !!on;
+    this.boostMP = isMP(); // (switched on in one: off when you join or leave a world)
     if (!on) this.restoreSki();
     this.render(false);
   }
@@ -227,8 +290,10 @@ export class AdminPanel {
     const p = this.ctx.player;
     if (!p?.ski) return;
     const racing = this.ctx.modes?.active || this.ctx.races?.active;
-    // (never in multiplayer: a boost switched on in free ride used to stay on after joining a world, 1.6x speed)
-    if (this.boost && !racing && !isMP()) {
+    // (a boost switched on in free ride used to stay on after joining a world, 1.6x speed: it is off once you join
+    // or leave one; switched on in multiplayer, by the admin, it works there too)
+    if (this.boost && this.boostMP !== isMP()) { this.boost = false; this.boostMP = isMP(); }
+    if (this.boost && !racing && (!isMP() || isAdmin())) {
       if (!p.ski._boost) {
         this.baseSki = p.ski;
         p.ski = { ...p.ski, speed: (p.ski.speed || 1) * BOOST.speed, grip: (p.ski.grip || 1) * BOOST.grip, _boost: true };
@@ -282,6 +347,7 @@ export class AdminPanel {
     if (!e) return fail('No cars available');
     this.close(true);
     this.hud.flash(`${e.label || 'Car'} · walk up and press E to drive`, 'good', 2600);
+    this.mpLog('spawn', { kind: 'car' });
   }
 
   // ------------------------------------------------------------------ teleports
@@ -373,6 +439,7 @@ export class AdminPanel {
       await this.streamAround?.(p.x, p.z);
     };
     if (this.transition?.fade) await this.transition.fade(go); else await go();
+    this.mpLog('tp', { x: p.x, z: p.z, label: String(p.label || '').slice(0, 60) });
     this.hud.flash(`${p.label}${p.sub && p.group !== 'RACES' ? ` · ${p.sub}` : ''}`, 'good', 2200);
   }
 
@@ -410,6 +477,7 @@ export class AdminPanel {
     pl.frozen = false;
     pl.teleport(x, z, head);
     if (pl.hasSkis && !pl.isFlatHere?.()) pl.setSkisOn(true);
+    this.mpLog('tp', { x, z, label: 'Free camera drop' });
     this.hud.flash('Dropped here', 'good', 1600);
   }
 
@@ -544,9 +612,14 @@ export class AdminPanel {
     if (a.startsWith('boost:')) return this.setBoost(a.endsWith('1'));
     if (a.startsWith('hud:')) return this.setHud(a.endsWith('1'));
     if (a === 'fly') return this.startFly();
-    if (a === 'sled') return this.ctx.sleds?.spawnNear?.(this.ctx.player);
+    if (a === 'sled') { const r = this.ctx.sleds?.spawnNear?.(this.ctx.player); if (r) this.mpLog('spawn', { kind: 'sled' }); return r; }
     if (a === 'car') return this.spawnCar();
-    if (a === 'heli') { if (this.ctx.heli?.spawnNear?.(this.ctx.player) === false) this.hud?.flash?.('The helicopter is busy right now', 'bad', 2000); return; }
+    if (a === 'heli') {
+      if (this.ctx.heli?.spawnNear?.(this.ctx.player) === false) { this.hud?.flash?.('The helicopter is busy right now', 'bad', 2000); return; }
+      // multiplayer: a free copy on your name at the server, so everyone sees yours parked / flying (net/heli.js)
+      if (isMP()) this.mpOp('heli').then((d) => { const hm = window.__game?.multiplayer?.heliMp; if (d && hm) hm.rented = true; });
+      return;
+    }
     if (a === 'skis') return this.unlockSkis();
     if (a === 'outfits') return this.unlockOutfits();
     if (a === 'pass') return this.givePass();

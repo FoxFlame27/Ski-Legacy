@@ -66,6 +66,10 @@ const WEATHER_NEXT = {
 // chalet (build mode: half its price; the dearest piece is $3,600)
 const EARN_RULES = { job: 6000, secret: 10000, sell: 2000 };
 const EARN_HOURLY = 60000;
+// the in-game admin panel (src/ui/admin.js isAdmin): these accounts (name keys) may send 'admin' requests
+export const ADMIN_KEYS = new Set(['rafael']);
+const ADMIN_MONEY_MAX = 99999999; // (the panel's "set to" limit)
+const ADMIN_WEATHER_HOLD_MS = 5 * 60 * 1000; // (single player holds a picked weather 300 s too)
 
 export const normName = (s) => String(s ?? '').trim().replace(/\s+/g, ' ');
 export const nameKey = (s) => normName(s).toLowerCase();
@@ -331,8 +335,8 @@ class World {
   heliReturn(c) {
     const i = this.heli.copies.findIndex((h) => h.key === c.key);
     if (i < 0) return { err: 'not_renting' };
-    this.heli.copies.splice(i, 1);
-    this.heli.padAt = Math.min(this.heli.padAt, Date.now()); // (it lands back on the pad)
+    const [h] = this.heli.copies.splice(i, 1);
+    if (!h.admin) this.heli.padAt = Math.min(this.heli.padAt, Date.now()); // (it lands back on the pad; an admin's free one never took the pad's)
     if (c.vehs.heli) this.server.setVeh(c, { k: 'heli', off: true });
     this.broadcast('heli', this.heliMsg());
     return {};
@@ -842,6 +846,98 @@ export class GameServer {
     return out(404, { ok: false, error: 'unknown admin command' });
   }
 
+  // ---------------------------------------------------------------- the in-game admin panel (src/ui/admin.js)
+  // Oct 30, the user: "the admin panel doesn't work on multiplayer, it reverts immediately". The panel is for the
+  // account named Rafael only; in multiplayer its server-owned actions come here: 'admin' { op, ... }, accepted only
+  // from a connection LOGGED IN as an admin account (c.key: this server's own login, never a client flag).
+  //   money { add } | { set }   your balance (a 'money' update follows, so the client's money guard takes it)
+  //   unlock { what: 'skis' | 'outfits' }   every pair of skis / every outfit piece and kit in the catalog
+  //   pass { on }               today's day pass (the world's day) | off: no pass, no tickets
+  //   time { hour }             the clock of your world (everyone in it shares the sky)
+  //   weather { w }             your world's weather, held 5 min before it moves on by itself
+  //   heli                      a free helicopter copy on your name (the panel's spawn: everyone sees yours)
+  //   tp { x, z, label } | spawn { kind }   nothing to change here (the client moves / spawns): logged only
+  adminOp(c, d) {
+    const op = str(d.op, 16);
+    if (!c.key || !ADMIN_KEYS.has(c.key)) { this.log(`[admin] refused ${op || '?'} from ${c.name || c.ip}`); return { err: 'forbidden' }; }
+    const P = c.profile, w = c.world, now = Date.now();
+    switch (op) {
+      case 'money': {
+        let v;
+        if (d.add != null) {
+          if (!isInt(d.add) || d.add === 0 || Math.abs(d.add) > 1e7) return { err: 'bad_amount', d: { money: P.money } };
+          v = Math.max(Math.min(P.money, 0), Math.min(ADMIN_MONEY_MAX, P.money + d.add)); // (never below where you were, nor below 0 by it)
+        } else if (d.set != null) {
+          if (!isInt(d.set) || d.set < 0 || d.set > ADMIN_MONEY_MAX) return { err: 'bad_amount', d: { money: P.money } };
+          v = d.set;
+        } else return { err: 'bad_amount', d: { money: P.money } };
+        const delta = v - P.money;
+        P.money = v;
+        this.store.profiles.save();
+        c.send('money', { v, why: 'admin', delta });
+        this.log(`[admin] ${c.name}: money ${d.add != null ? `${d.add >= 0 ? '+' : ''}${d.add}` : `set ${d.set}`} -> ${v}`);
+        return { d: { money: v, delta } };
+      }
+      case 'unlock': {
+        if (d.what === 'skis') {
+          for (const id of Object.keys(CATALOG.skis)) if (!P.owned.includes(id)) P.owned.push(id);
+          this.store.profiles.save();
+          this.log(`[admin] ${c.name}: unlocked all skis`);
+          return { d: { owned: P.owned } };
+        }
+        if (d.what === 'outfits') {
+          P.outfits = P.outfits && Array.isArray(P.outfits.owned) ? P.outfits : { owned: [], equipped: P.outfits?.equipped || {} };
+          for (const id of Object.keys(CATALOG.outfits)) if (!P.outfits.owned.includes(id)) P.outfits.owned.push(id);
+          this.store.profiles.save();
+          this.log(`[admin] ${c.name}: unlocked all outfits`);
+          return { d: { outfits: P.outfits } };
+        }
+        return { err: 'bad_value' };
+      }
+      case 'pass': {
+        if (d.on === false) { P.dayPass = -1; P.tickets = 0; } else P.dayPass = w.dayAt(now);
+        this.store.profiles.save();
+        this.log(`[admin] ${c.name}: day pass ${d.on === false ? 'and tickets reset' : `for day ${P.dayPass}`}`);
+        return { d: { dayPass: P.dayPass, tickets: P.tickets } };
+      }
+      case 'time': {
+        if (!isNum(d.hour) || d.hour < 0 || d.hour > 24) return { err: 'bad_value' };
+        const day = w.dayAt(now); // (the same day, at the new hour: the day pass and the jobs count on)
+        w.clock = { ...w.clock, hour: d.hour % 24, at: now, day };
+        w.broadcast('clock', w.clockMsg(now));
+        this.log(`[admin] ${c.name}: world ${w.id} time ${d.hour.toFixed(2)}`);
+        return { d: { clock: w.clockMsg(now) } };
+      }
+      case 'weather': {
+        if (typeof d.w !== 'string' || !Object.hasOwn(WEATHER_NEXT, d.w)) return { err: 'bad_value' };
+        w.clock = { ...w.clock, weather: d.w, next: now + ADMIN_WEATHER_HOLD_MS };
+        w.broadcast('clock', w.clockMsg(now));
+        this.log(`[admin] ${c.name}: world ${w.id} weather ${d.w}`);
+        return { d: { clock: w.clockMsg(now) } };
+      }
+      case 'heli': {
+        if (!w.heli.copies.some((h) => h.key === c.key)) {
+          w.heli.copies.push({ id: w.heli.next++, key: c.key, name: c.name, since: now, admin: true }); // (free; the pad keeps its own)
+          w.broadcast('heli', w.heliMsg());
+        }
+        this.log(`[admin] ${c.name}: helicopter spawn`);
+        return { d: { ok: true } };
+      }
+      case 'tp': {
+        if (!isNum(d.x) || !isNum(d.z)) return { err: 'bad_value' };
+        this.log(`[admin] ${c.name}: teleport ${str(d.label, 60) || ''} (${Math.round(d.x)}, ${Math.round(d.z)})`);
+        return {};
+      }
+      case 'spawn': {
+        const kind = str(d.kind, 16);
+        if (!kind) return { err: 'bad_value' };
+        this.log(`[admin] ${c.name}: spawn ${kind}`);
+        return {};
+      }
+      default: return { err: 'bad_op' };
+    }
+  }
+
   // ---------------------------------------------------------------- money (server-authoritative)
   debit(c, amount, why, floor = 0) {
     amount = Math.round(amount);
@@ -992,6 +1088,7 @@ export class GameServer {
       case 'plateIssue': return reply({ d: { plate: this.freePlate() } });
       case 'profileSet': return reply(this.profileSet(c, d));
       case 'profile': return reply({ d: { profile: c.profile } });
+      case 'admin': return reply(this.adminOp(c, d));
       case 'chat': { // (short text: a wave-2 hook; relayed to the world)
         const text = str(d.text, 200);
         if (!text) return reply({ err: 'bad_text' });

@@ -156,8 +156,8 @@ export class HUD {
     }
   }
 
-  // (Oct 30 2026, the user: a small forecast line in the weather area, "Later: Blizzard", and the avalanche danger
-  // level as "a small HUD line"; both "small and unobtrusive": one dim line under the clock, refreshed twice a second)
+  // (Oct 30 2026, the user: a small forecast line in the weather area, "Later: Blizzard", "small and unobtrusive": one
+  // dim line under the clock, refreshed twice a second)
   wxLine() {
     const now = performance.now();
     if (now - (this.wxAt || 0) < 500) return;
@@ -173,9 +173,8 @@ export class HUD {
     }
     const env = globalThis.__game?.env;
     if (!env) return;
-    const lv = env.avalancheLevel, fc = env.forecastLabel || '';
-    const AV = ['', 'low', 'moderate', 'considerable', 'high'];
-    const txt = [fc, lv ? `Avalanche ${lv} · ${AV[lv]}` : ''].filter(Boolean).join('  ·  ');
+    // (Oct 30, the user: "remove avalanche": only the forecast here now)
+    const txt = env.forecastLabel || '';
     if (el.textContent !== txt) el.textContent = txt;
   }
 

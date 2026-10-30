@@ -797,7 +797,7 @@ class IntroSound {
     once('brake', 10.2, () => this.hiss(0.6, 0.12, 3000));
     once('open', 11.3, () => { this.hiss(0.9, 0.18, 1800); this.audio.shot?.('car_door', { sprite: [0], vol: 0.25, rate: 0.7 }); });
     once('shut', 16.4, () => { this.hiss(0.8, 0.16, 1800); this.audio.shot?.('car_door', { sprite: [1], vol: 0.3, rate: 0.7 }); });
-    once('horn', 17.2, () => this.audio.play?.('horn', 0.5));
+    once('horn', 17.2, () => (this.audio.horn ? this.audio.horn('bus_short', { dist: 18 }) : this.audio.play?.('horn', 0.5))); // (the coach's air horn, a tap: Oct 30 2026)
     // birdsong
     this.birdT -= dt;
     if (this.birdT < 0) { this.birdT = 0.6 + Math.random() * 2.2; this.chirp(); }

@@ -26,10 +26,17 @@ export function brakeFor(b, v, D, dt, audio = null) {
       const need = (ve * ve) / (2 * gap); // m/s^2 to stand exactly GAP short of you
       ve = need > SERVICE ? Math.max(0, ve - need * dt) : Math.min(v, ve + PULL * dt);
     }
-    // the horn while it comes at you (and once more now and then while you stand in front of it)
+    // the horn while it comes at you (and once more now and then while you stand in front of it): the loco's Typhon
+    // (audio.horn, Oct 30 2026, the user: "make the horn of the bus and train super realistic like in real life"),
+    // in the drivers' patterns: long-short (the "Achtung") from afar, one long warning blast once it is close and
+    // still coming, a single short toot from a train standing in front of you; pitched up by its closing speed
     if (audio && D < HORN_R && (ve > 0.5 || v > 0.5) && (b.horn = (b.horn || 0) - dt) <= 0) {
-      b.horn = ve > 0.5 ? HORN_EVERY : HORN_EVERY * 2;
-      try { audio.play('horn', Math.max(0.2, Math.min(1, 1.15 - D / HORN_R))); } catch (e) { /* (no audio) */ }
+      const moving = ve > 0.5;
+      b.horn = moving ? (D < 160 ? HORN_EVERY * 0.75 : HORN_EVERY) : HORN_EVERY * 2;
+      try {
+        if (audio.horn) audio.horn(!moving ? 'train_short' : D < 160 ? 'train_long' : 'train', { dist: D, doppler: 343 / (343 - Math.min(60, ve)) });
+        else audio.play('horn', Math.max(0.2, Math.min(1, 1.15 - D / HORN_R)));
+      } catch (e) { /* (no audio) */ }
     }
   }
   b.ve = ve;

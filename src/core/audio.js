@@ -197,6 +197,7 @@ export class Audio {
     addEventListener('keydown', unlock, true);
 
     this.loadAll();
+    setTimeout(() => { try { this.prerenderHorns(); } catch { /* (the recorded horn then) */ } }, 1200); // (the air horns: horn())
     if (this.musicCtx) { const c = this.musicCtx; this.musicCtx = null; this.music(c); }
   }
 
@@ -548,6 +549,173 @@ export class Audio {
     const f = (Math.floor(t / 0.6) % 2 ? 587 : 440) * doppler;
     N.o1.frequency.setTargetAtTime(f, t, 0.012);
     N.o2.frequency.setTargetAtTime(f * 1.003, t, 0.012);
+  }
+
+  // ---------------------------------------------------------------- air horns: the bus and the trains (Oct 30 2026, the user:
+  // "make the horn of the bus and train super realistic like in real life"). Both are pneumatic: compressed air
+  // through a diaphragm (a buzzing pulse, rich in harmonics) into flared trumpets whose bells pick out a few
+  // resonances (formants). So each trumpet is a pulse-like wave (HORN_WAVE: harmonics of a narrow pulse, a
+  // little mis-shapen), two copies a few cents apart (the beating of two real trumpets), driven slightly into
+  // saturation (the brassy blare), then through the bell's band-passes. The valve: the pitch scoops up from flat as
+  // the pressure builds (with a hiss of air), sags a touch while the reservoir drains, and drops as it closes, a
+  // "pfff" of exhausting air after it. Rendered ONCE per pattern with an OfflineAudioContext (prerenderHorns, a
+  // second after init) and played as buffers: no graph per honk beyond source -> air low-pass -> level / echo send.
+  //  - bus: a coach's two-tone air horn (Setra / Mercedes Travego / MAN Lion's style): two trumpets together, a
+  //    deep, slightly sour major third (~218 / 279 Hz), a hard quick blare.
+  //  - train: an Alpine loco's Typhon (ÖBB Taurus / SBB Re 460 style): a strong, slightly detuned chord (F#-A-C#,
+  //    ~370 / 440 / 556 Hz), a slower valve with more air, subtle beating in the sustain, a long airy release.
+  // Patterns: bus (one blare), bus2 (an impatient short + long), bus_short (a tap: a greeting), train (long-short,
+  // the "Achtung" at stations and crossings), train_long (one long warning blast: you are on the line close ahead),
+  // train_short (a single toot: a stopped train nudging you off the track).
+  hornSpecs() {
+    const bus = {
+      tones: [{ f: 218, g: 1 }, { f: 279, g: 0.85 }], det: 6, duty: 0.27, tilt: 0.75,
+      formants: [[520, 1.4, 1], [1150, 2, 0.8], [2400, 2.6, 0.45], [3600, 3, 0.18]], body: 0.35, hp: 130, lp: 7500, drive: 2.4,
+      scoop: 0.07, rise: 0.055, sag: 0.012, drop: 0.11, atk: 0.022, rel: 0.085, flutter: [9.5, 0.05],
+      hiss: [0.3, 3800, 0.035], leak: 0.025, pfff: [0.28, 0.09],
+    };
+    const train = {
+      tones: [{ f: 370 * 1.003, g: 0.5 }, { f: 440 * 0.996, g: 1 }, { f: 556, g: 0.9 }], det: 4, duty: 0.36, tilt: 0.85,
+      formants: [[720, 1.2, 1], [1450, 1.8, 0.7], [2900, 2.4, 0.35]], body: 0.4, hp: 210, lp: 8500, drive: 1.9,
+      scoop: 0.12, rise: 0.11, sag: 0.008, drop: 0.15, atk: 0.05, rel: 0.16, flutter: [6, 0.035],
+      hiss: [0.4, 3000, 0.06], leak: 0.03, pfff: [0.34, 0.15],
+    };
+    return {
+      bus: { ...bus, blasts: [[0.02, 0.85]] },
+      bus2: { ...bus, blasts: [[0.02, 0.22], [0.37, 0.7]] },
+      bus_short: { ...bus, blasts: [[0.02, 0.3]] },
+      train: { ...train, blasts: [[0.03, 1.5], [1.85, 0.5]] },
+      train_long: { ...train, blasts: [[0.03, 2.4]] },
+      train_short: { ...train, blasts: [[0.03, 0.45]] },
+    };
+  }
+  /** Render every horn pattern once (offline, in parallel); this.hornBufs fills as each finishes. */
+  prerenderHorns() {
+    if (this.hornBufs || !this.ctx) return;
+    this.hornBufs = {};
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!OAC) return;
+    for (const [k, P] of Object.entries(this.hornSpecs())) {
+      try { this.renderHorn(OAC, P).then((b) => { this.hornBufs[k] = b; }).catch((e) => console.warn('[audio] horn render', k, e?.message || e)); }
+      catch (e) { console.warn('[audio] horn render', k, e?.message || e); }
+    }
+  }
+  renderHorn(OAC, P) {
+    const sr = this.ctx.sampleRate, [lt, ld] = P.blasts[P.blasts.length - 1], len = lt + ld + P.rel + 0.5;
+    const oc = new OAC(1, Math.ceil(len * sr), sr);
+    // the diaphragm's buzz: harmonics of a narrow pulse (its nulls give the honk), tilted, a little uneven
+    const N = 48, re = new Float32Array(N), im = new Float32Array(N);
+    for (let k = 1; k < N; k++) im[k] = (Math.abs(Math.sin(Math.PI * k * P.duty)) + 0.12) / Math.pow(k, P.tilt) * (1 + 0.15 * Math.sin(k * 2.3));
+    const wave = oc.createPeriodicWave(re, im);
+    // saturation (asymmetric: the blare) -> bell resonances + a little of the raw buzz -> high-pass / low-pass
+    const mix = oc.createGain(), drive = oc.createWaveShaper(), curve = new Float32Array(1024), o = 0.2, dv = P.drive;
+    for (let i = 0; i < 1024; i++) { const x = (i / 1023) * 2 - 1; curve[i] = (Math.tanh(dv * (x + o)) - Math.tanh(dv * o)) / Math.tanh(dv); }
+    drive.curve = curve; drive.oversample = '4x';
+    const hp = oc.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = P.hp; hp.Q.value = 0.8;
+    const lp = oc.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = P.lp; lp.Q.value = 0.5;
+    const out = oc.createGain(); out.gain.value = 1; hp.connect(lp).connect(out).connect(oc.destination);
+    mix.connect(drive);
+    const body = oc.createGain(); body.gain.value = P.body; drive.connect(body).connect(hp);
+    for (const [f, q, g] of P.formants) {
+      const bp = oc.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+      const gg = oc.createGain(); gg.gain.value = g * 1.6; drive.connect(bp).connect(gg).connect(hp);
+    }
+    // air: one noise buffer for the hiss, the leak and the exhaust
+    const nb = oc.createBuffer(1, Math.ceil(len * sr), sr), nd = nb.getChannelData(0);
+    for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    const noise = (type, f, q) => {
+      const s = oc.createBufferSource(); s.buffer = nb;
+      const fl = oc.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q;
+      const g = oc.createGain(); g.gain.value = 0; s.connect(fl).connect(g).connect(out); s.start(0);
+      return g.gain;
+    };
+    const hiss = noise('bandpass', P.hiss[1], 0.7), leak = noise('bandpass', 5200, 0.9), pf = noise('highpass', 1300, 0.6);
+    const tones = P.tones.reduce((s, x) => s + x.g, 0);
+    for (const [t0, d] of P.blasts) {
+      const t1 = t0 + d, end = t1 + P.rel;
+      // the valve's envelope: a fast rise with a little overshoot, the sustain sagging with the pressure, a short close
+      const env = oc.createGain(), e = env.gain;
+      e.setValueAtTime(0, t0); e.linearRampToValueAtTime(1.12, t0 + P.atk); e.setTargetAtTime(1, t0 + P.atk, 0.05);
+      e.setValueAtTime(1, Math.max(t0 + P.atk + 0.06, t1 - 0.05)); e.linearRampToValueAtTime(0.9, t1);
+      e.setTargetAtTime(0, t1, P.rel / 3.5);
+      // flutter: the diaphragm's unsteadiness (a slow wobble of level), in series so it is silent between blasts
+      const fl = oc.createGain(); fl.gain.value = 1;
+      const lfo = oc.createOscillator(); lfo.frequency.value = P.flutter[0];
+      const ld2 = oc.createGain(); ld2.gain.value = P.flutter[1]; lfo.connect(ld2).connect(fl.gain);
+      lfo.start(t0); lfo.stop(end + 0.05);
+      fl.connect(env).connect(mix);
+      for (const T of P.tones) for (const side of [-1, 1]) {
+        const osc = oc.createOscillator(); osc.setPeriodicWave(wave);
+        const fq = osc.frequency, f = T.f * (1 + side * 0.0004);
+        fq.setValueAtTime(f * (1 - P.scoop), t0);
+        fq.exponentialRampToValueAtTime(f, t0 + P.rise);
+        fq.linearRampToValueAtTime(f * (1 - P.sag), t1);
+        fq.exponentialRampToValueAtTime(f * (1 - P.drop), end);
+        osc.detune.value = side * P.det + (Math.random() - 0.5) * 2;
+        const og = oc.createGain(); og.gain.value = (T.g / tones) * 0.55;
+        osc.connect(og).connect(fl); osc.start(t0); osc.stop(end + 0.05);
+      }
+      // the hiss as the valve cracks open, the air leaking past the diaphragm, the exhaust "pfff" as it shuts
+      hiss.setValueAtTime(0, t0); hiss.linearRampToValueAtTime(P.hiss[0], t0 + 0.008); hiss.setTargetAtTime(P.hiss[0] * 0.08, t0 + 0.012, P.hiss[2]);
+      hiss.setTargetAtTime(0, t1, 0.02);
+      leak.setValueAtTime(0, t0); leak.linearRampToValueAtTime(P.leak, t0 + P.atk * 2); leak.setTargetAtTime(0, t1, 0.03);
+      pf.setValueAtTime(0, t1); pf.linearRampToValueAtTime(P.pfff[0], t1 + 0.025); pf.setTargetAtTime(0, t1 + 0.03, P.pfff[1]);
+    }
+    return oc.startRendering().then((b) => {
+      const d = b.getChannelData(0);
+      let pk = 1e-6;
+      for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i]));
+      const k = 0.9 / pk;
+      for (let i = 0; i < d.length; i++) d[i] *= k;
+      return b;
+    });
+  }
+  // the valley's answer: a stereo impulse response of the open air between mountains - a diffuse tail and slap-back
+  // echoes off the slopes (0.4-2.7 s: faces 70-460 m away), each duller and wider than the last. Built once, shared.
+  valleyEcho() {
+    if (this.valley) return this.valley;
+    const ctx = this.ctx, sr = ctx.sampleRate, n = Math.round(3.2 * sr);
+    const b = ctx.createBuffer(2, n, sr);
+    const echoes = [[0.42, 0.5], [0.78, 0.36], [1.27, 0.26], [1.9, 0.16], [2.65, 0.09]];
+    for (let c = 0; c < 2; c++) {
+      const d = b.getChannelData(c);
+      for (let i = 0; i < n; i++) { const t = i / sr; d[i] = (Math.random() * 2 - 1) * 0.07 * Math.exp(-t / 0.75) * Math.min(1, t / 0.05); }
+      for (const [at, a] of echoes) {
+        const i0 = Math.round((at + (c ? 0.013 : -0.009) * (1 + at)) * sr), w = Math.round((0.015 + 0.02 * at) * sr);
+        for (let j = 0; j < w * 3 && i0 + j < n; j++) d[i0 + j] += (Math.random() * 2 - 1) * a * Math.exp(-j / w);
+      }
+      let lp = 0; // darker the later (the air and the snow soak up the highs)
+      for (let i = 0; i < n; i++) { lp += (d[i] - lp) * (0.5 - 0.42 * (i / n)); d[i] = lp; }
+    }
+    const conv = ctx.createConvolver(); conv.buffer = b;
+    const ret = ctx.createGain(); ret.gain.value = 0.9;
+    conv.connect(ret).connect(this.sfx);
+    return (this.valley = conv);
+  }
+  /**
+   * Sound an air horn (hornSpecs: 'bus', 'bus2', 'bus_short', 'train', 'train_long', 'train_short') heard from dist m:
+   * quieter with distance, its highs soaked up by the air, more of the mountains' echo the farther off it is; doppler
+   * (a pitch factor from the closing speed) shifts it. Until the buffers have rendered: the recorded air horn.
+   */
+  horn(kind = 'bus', { dist = 0, vol = 1, doppler = 1, delay = 0 } = {}) {
+    if (!this.ctx) return false;
+    if (!this.hornBufs) this.prerenderHorns();
+    const train = kind.startsWith('train'), d = Math.max(0, Number.isFinite(dist) ? dist : 0);
+    const ref = train ? 70 : 24, base = clamp(vol, 0, 1.5) * (train ? 0.62 : 0.5);
+    const g = base / (1 + Math.pow(d / ref, 1.3));
+    const B = this.hornBufs?.[kind];
+    try {
+      if (!B) return this.shot('horn', { vol: 0.3 * clamp(g * 2, 0.1, 1), rate: train ? 1.2 : 0.8, lp: clamp(16000 / (1 + d / 90), 900, 16000) }) || (this.tone(train ? 440 : 220, 0.8, 'sawtooth', 0.06 * clamp(g * 2, 0.1, 1)), true);
+      const ctx = this.ctx, t = ctx.currentTime + delay;
+      const s = ctx.createBufferSource(); s.buffer = B; s.playbackRate.value = clamp(doppler || 1, 0.85, 1.18);
+      const air = ctx.createBiquadFilter(); air.type = 'lowpass'; air.frequency.value = clamp(17000 / (1 + d / 80), 700, 17000); air.Q.value = 0.5;
+      const dry = ctx.createGain(); dry.gain.value = g;
+      const wet = ctx.createGain(); wet.gain.value = base * (train ? 0.34 : 0.22) * (0.35 + 0.65 * clamp(d / 250, 0, 1)) / (1 + Math.pow(d / (ref * 2.6), 1.1));
+      s.connect(air); air.connect(dry).connect(this.sfx); air.connect(wet).connect(this.valleyEcho());
+      s.start(t);
+      s.onended = () => { try { s.disconnect(); air.disconnect(); dry.disconnect(); wet.disconnect(); } catch { /* gone */ } };
+      return true;
+    } catch { return false; }
   }
 
   // ---------------------------------------------------------------- the car you drive (src/game/drive.js)

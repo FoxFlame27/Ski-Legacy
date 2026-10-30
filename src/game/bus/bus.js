@@ -1448,13 +1448,17 @@ export class BusLine {
     }
     return lim;
   }
-  // the horn (main.js's audio), as loud as it is near you
+  // the horn (main.js's audio), as loud as it is near you: the coach's deep two-tone air horn (audio.horn, Oct 30
+  // 2026, the user: "make the horn of the bus and train super realistic like in real life"), one blare the first
+  // time, an impatient short + long the second; heard farther now (its echo off the mountains: audio.valleyEcho)
   honk(g, amount) {
     try {
       const G = game(), a = G?.audio, p = G?.player?.pos;
       if (!a?.play) return;
-      const d = this.ride ? 0 : p ? Math.hypot(p.x - g.x, p.z - g.z) : 0;
-      if (d < 140) a.play('horn', amount * clamp(1.15 - d / 120, 0.12, 1));
+      const d = this.ride ? 4 : p ? Math.hypot(p.x - g.x, p.z - g.z) : 0;
+      if (d > 320) return;
+      if (a.horn) a.horn(amount < 0.9 ? 'bus2' : 'bus', { dist: d, vol: this.ride ? 0.55 : 1 }); // (inside: muffled by the body)
+      else if (d < 140) a.play('horn', amount * clamp(1.15 - d / 120, 0.12, 1));
     } catch { /* (silent) */ }
   }
   // Pushing through (RAM_T up: r.ram): whatever of yours its body runs into is bumped out of the way, to the side it

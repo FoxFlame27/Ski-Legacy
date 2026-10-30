@@ -645,7 +645,7 @@ export class RemoteVehicles {
     if (w.shown !== show) { w.shown = show; g.visible = show; }
     RemoteVehicles.place(this.solid(w, 'col', { r: 1.15, h: 1.4, sled: true }), show, w.x, w.z); // (as the parked ones: game/snowmobile.js)
     if (!show) return;
-    if (driving) { if (w.tag.visible) w.tag.visible = false; } else tagScale(w.tag, d);
+    if (w.tag.visible) w.tag.visible = false; // (no name over a snowmobile, parked or driven: nobody owns one; Oct 30, the user: "make sure you can't own a snowmobile so no name above it")
   }
   dropSled(pid) {
     const w = this.sleds.get(pid);

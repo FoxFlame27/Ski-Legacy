@@ -292,7 +292,7 @@ export class Snowmobiles {
       for (const s of this.list) s.g.visible = s === d?.s || Math.hypot(s.x - c.x, s.z - c.z) < 380;
     }
     if (!d) { this.lamp.intensity = 0; this.marks(null); return; }
-    if (dt <= 0) { this.audio?.setSled?.({ on: true, paused: true }); return; }
+    if (dt <= 0) { this.audio?.setSled?.({ on: true, paused: true }); this.holdCamera(); return; } // (paused: the camera stays put)
     d.offT = Math.max(0, d.offT - dt);
     const key = (a, b) => !!input && (input.down(a) || (b && input.down(b)));
     const throttle = (key('KeyW', 'ArrowUp') ? 1 : 0) - (key('KeyS', 'ArrowDown') ? 1 : 0);
@@ -304,6 +304,7 @@ export class Snowmobiles {
     for (let i = 0; i < n && this.d; i++) this.step(dt / n, throttle, boost, handbrake);
     if (!this.d) return; // (thrown off)
     this.place(dt);
+    this.poseT = performance.now(); // (net/sled.js: the presence row is taken next frame, before this update)
     this.updateSeat();
     const p = this.player;
     p.pos.copy(this.seat.pos);
@@ -311,7 +312,18 @@ export class Snowmobiles {
     p.rig.root.quaternion.copy(d.s.g.quaternion);
     p.rig.root.updateMatrixWorld(true);
     this.placeCamera(dt, input);
+    this.holdCamera(true);
     this.effects(dt, throttle, boost);
+  }
+
+  // paused (dt 0): player.update still runs and would put the camera on the player's own seated camera; the sled's
+  // last camera is kept instead (as drive.js holdCamera)
+  holdCamera(save = false) {
+    const cam = this.camera, H = this.camHold ||= { pos: new THREE.Vector3(), q: new THREE.Quaternion(), fov: 60, near: 0.1, d: null };
+    if (save) { H.pos.copy(cam.position); H.q.copy(cam.quaternion); H.fov = cam.fov; H.near = cam.near; H.d = this.d; return; }
+    if (H.d !== this.d) return;
+    cam.position.copy(H.pos); cam.quaternion.copy(H.q); cam.fov = H.fov; cam.near = H.near;
+    cam.updateProjectionMatrix();
   }
 
   step(dt, throttle, boost, handbrake) {

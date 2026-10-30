@@ -53,9 +53,14 @@ export class CarRide {
   pose(o) {
     const g = this.g, d = g?.drive?.d;
     if (d && d.e && d.e === g.carRental?.current) {
-      const p = d.e.car.position;
-      o.x = p.x; o.y = p.y; o.z = p.z; o.yaw = d.yaw;
-      o.vx = d.vx; o.vy = 0; o.vz = d.vz;
+      // (the row goes out early in the frame, before drive.update: the car is where last frame left it, but the row is
+      // stamped now. One frame's worth (10-50 ms, more on a hitch) of travel on the others' screens jerked the car back
+      // and forth by up to half a metre, worst for a passenger in it (Oct 30, the user: "driving isn't smooth on
+      // multiplayer, especially if you're a passenger"): carried on along its speed to now. Paused: standing still.)
+      const p = d.e.car.position, still = !!g.paused;
+      const ahead = still ? 0 : Math.min(0.1, Math.max(0, (performance.now() - (g.drive.poseT || 0)) / 1000));
+      o.x = p.x + d.vx * ahead; o.y = p.y; o.z = p.z + d.vz * ahead; o.yaw = d.yaw + (d.yawRate || 0) * ahead;
+      o.vx = still ? 0 : d.vx; o.vy = 0; o.vz = still ? 0 : d.vz;
       o.st = ST.drive; o.crouch = d.steer || 0; o.lean = 0;
       o.flags = F.car | (d.lights ? F.lights : 0);
     } else if (this.ride) { o.st = ST.ride; o.crouch = 0; o.lean = 0; o.flags = 0; o.vx = 0; o.vy = 0; o.vz = 0; }

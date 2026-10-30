@@ -324,7 +324,7 @@ export class Drive {
     if (this.sliding.length && dt > 0) this.slideParked(dt);
     if (this.wrecks.length && dt > 0) this.updateWrecks(dt);
     if (!this.d) { this.unstick(); if (this.audio?.railScr?.on) this.audio.setRailScrape(0); return; }
-    if (dt <= 0) { this.audio?.setCar?.({ on: true, paused: true }); this.audio?.setRailScrape?.(0); return; }
+    if (dt <= 0) { this.audio?.setCar?.({ on: true, paused: true }); this.audio?.setRailScrape?.(0); this.holdCamera(); return; }
     try {
       const d = this.d;
       d.offT = Math.max(0, d.offT - dt);
@@ -360,11 +360,13 @@ export class Drive {
       try { this.audio?.setRailScrape?.(d.railT > 0 ? d.railSlide || 0 : 0); } catch { /* (silent) */ }
       if (d.railT <= 0) d.railSlide = 0;
       this.pose(dt);
+      this.poseT = performance.now(); // (net/carride.js: the presence row is taken next frame, before this update)
       this.updateSeat();
       const p = this.player;
       p.pos.copy(this.seat.pos);
       this.placeRig();
       this.placeCamera(dt, input, lookBack);
+      this.holdCamera(true);
       this.effects(dt, thr);
       this.tyres?.update(d); // (tyre tracks in the snow: tyretracks.js)
       // on its side or its roof (more than ~70 degrees for a second, slow): F flips it back onto its wheels
@@ -377,6 +379,17 @@ export class Drive {
       // after a crash: the car comes to rest, then you're out beside it
       if (d.crash) { d.crash.t += dt; if (d.crash.t > 1.9 && this.speed < 1.2 && Math.abs(d.crash.rollTo - d.crash.roll) < 0.05) this.wreckOut(); }
     } catch (err) { console.warn('drive', err); try { this.abort(); } catch { this.d = null; } }
+  }
+
+  // Paused (ESC, photo mode: dt 0): the car's camera stays exactly where the last driven frame put it. (Oct 30, the
+  // user: "when you press esc during driving the car glitches forward and backwards": player.update still runs at
+  // dt 0 and put the camera on the player's own seated chase camera, 8 m back at another angle, until you resumed)
+  holdCamera(save = false) {
+    const cam = this.camera, H = this.camHold ||= { pos: new THREE.Vector3(), q: new THREE.Quaternion(), fov: 60, near: 0.1, d: null };
+    if (save) { H.pos.copy(cam.position); H.q.copy(cam.quaternion); H.fov = cam.fov; H.near = cam.near; H.d = this.d; return; }
+    if (H.d !== this.d) return; // (paused before this drive's first frame: nothing to hold)
+    cam.position.copy(H.pos); cam.quaternion.copy(H.q); cam.fov = H.fov; cam.near = H.near;
+    cam.updateProjectionMatrix();
   }
 
   // surface grip: the ploughed tarmac (a road's plowed width + its packed strip, car parks, junctions, lay-bys: the

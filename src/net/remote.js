@@ -81,14 +81,25 @@ class Remote {
     this.fxInfo = { grounded: true, speed: 0, vel: this.vel, sideslip: 0, plow: 0, lean: 0 };
     this.lastTs = 0;
     this.lag = null;
+    this.lagDev = 0; this.gap = 90; // (how much the lag jitters, ms; the spacing of their rows, ms: Remote.delay)
+    this.dly = null;                 // the playout delay in use (eased toward delay: never jumps)
+    this.sm = new THREE.Vector3(); this.smYaw = 0; this.smOk = false; // the drawn pose (RemotePlayers.smooth)
   }
-  get delay() { return Math.min(MAX_DELAY, Math.max(DELAY, (this.lag ?? 0) + 90)); }
+  // The playout delay: their rows arrive ~10-12 a second (frame-quantised on their side, batched again at 15 Hz by the
+  // server, now and then two in one batch: one dropped, a 170-200 ms gap), each late by the lag plus a jitter. With a
+  // fixed 90 ms margin over the mean lag the drawn time ran past the newest row again and again: extrapolated, then
+  // pulled back as the next row came (Oct 30, the user: "driving isn't smooth on multiplayer, especially if you're a
+  // passenger"). The margin now covers their row spacing and the lag's jitter.
+  get delay() { return Math.min(MAX_DELAY, Math.max(DELAY, (this.lag ?? 0) + Math.max(90, this.gap * 1.15 + this.lagDev * 2.5))); }
+  /** The lead (s): all of the delay in use over the base, so a change of the delay never moves them (at a steady speed). */
+  get lead() { return Math.min(0.3, Math.max(0, (this.dly ?? this.delay) - DELAY) / 1000); }
   push(row, now) {
     if (row[R.ts] <= this.lastTs) return; // (out of order / duplicate)
+    if (this.lastTs) { const g = Math.min(400, row[R.ts] - this.lastTs); this.gap = g > this.gap ? this.gap * 0.7 + g * 0.3 : this.gap * 0.97 + g * 0.03; } // (rises fast, falls slowly)
     this.lastTs = row[R.ts];
     // how late rows arrive (send -> server batch -> here), smoothed: the interpolation delay follows it so there
     // is (nearly) always a newer snapshot to blend toward; ~120 ms on a good connection
-    if (Number.isFinite(now)) { const lag = Math.max(0, now - row[R.ts]); this.lag = this.lag == null ? lag : this.lag * 0.92 + lag * 0.08; }
+    if (Number.isFinite(now)) { const lag = Math.max(0, now - row[R.ts]); if (this.lag == null) this.lag = lag; else { this.lagDev = this.lagDev * 0.92 + Math.abs(lag - this.lag) * 0.08; this.lag = this.lag * 0.92 + lag * 0.08; } }
     this.head = (this.head + 1) % RING;
     const s = this.slots[this.head];
     for (let i = 0; i < 12; i++) s.n[i] = row[i + 1]; // ts, x, y, z, yaw, vx, vy, vz, st, crouch, lean, flags
@@ -263,16 +274,35 @@ export class RemotePlayers {
   update(dt, v) {
     if (!this.players.size) return;
     const now = this.o.now();
+    const ms = Math.min(100, dt * 1000);
     for (const r of this.players.values()) {
-      r.ok = this.sample(r, now - r.delay);
+      // (the delay in use eases toward the wanted one at 5 % of real time: the drawn time never steps back or skips)
+      const want = r.delay;
+      r.dly = r.dly == null ? want : r.dly + clamp(want - r.dly, -ms * 0.05, ms * 0.05);
+      r.ok = this.sample(r, now - r.dly);
       // a player on a slow connection is drawn further back in time (a longer buffer): led forward along their own
       // velocity by the extra, so they show where they are now, not where they were (never seated: seats ride their
       // vehicle)
-      const extra = Math.min(0.3, (r.delay - DELAY) / 1000);
-      if (r.ok && extra > 0 && !r.veh && r.state !== ST.sit && r.state !== ST.ride) r.pos.addScaledVector(r.vel, extra);
+      const extra = r.lead, free = !r.veh && r.state !== ST.sit && r.state !== ST.ride;
+      if (r.ok && extra > 0 && free) r.pos.addScaledVector(r.vel, extra);
+      if (r.ok && free) this.smooth(r, dt); else r.smOk = false;
     }
     this.o.vehicles?.update(dt, this, v); // (their cars and helicopters first: the avatars sit in them)
     for (const r of this.players.values()) if (r.ok) this.poseOne(r, dt, v, false);
+  }
+
+  // The drawn pose runs on along their velocity and is pulled onto the sampled one (a correction spreads over ~0.1 s
+  // instead of a jump: a late row, extrapolation caught up, a turn the extrapolation missed). At a steady speed the
+  // two agree and it adds no lag. Height follows the sample (cars send no vertical speed); a jump of 4 m (a teleport,
+  // a respawn) snaps.
+  smooth(r, dt) {
+    if (!r.smOk || !(dt > 0) || r.sm.distanceToSquared(r.pos) > 16) { r.sm.copy(r.pos); r.smYaw = r.yaw; r.smOk = true; return; }
+    const y = r.pos.y;
+    r.sm.x += r.vel.x * dt; r.sm.z += r.vel.z * dt;
+    const k = 1 - Math.exp(-dt * 14);
+    r.sm.x += (r.pos.x - r.sm.x) * k; r.sm.z += (r.pos.z - r.sm.z) * k; r.sm.y = y;
+    r.smYaw = wrapAngle(r.smYaw + wrapAngle(r.yaw - r.smYaw) * (1 - Math.exp(-dt * 25)));
+    r.pos.copy(r.sm); r.yaw = r.smYaw;
   }
 
   /** After your own car moved this frame (main.js, after drive.update): the avatars riding in it. */

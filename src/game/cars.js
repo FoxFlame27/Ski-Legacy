@@ -147,7 +147,9 @@ function fixMat(model, m) {
 // the real cars: (label, zone) -> 'head' (low beam) | 'high' (high beam: only the low beams' spill) | 'drl' | 'tail'
 // (running + brake) | 'brake' (a lamp's own brake graphic: braking only) | 'third' | 'rev' | 'ind' | 'lensF' | 'lensR'
 // | null (no lamp: housings, chrome, reflectors, the plate, windows); a kind + '*' glows evenly instead of through its
-// texture (a projector's lens, an LED whose texture is the dark unlit part). test: the parts that can be lamps at all.
+// texture (a projector's lens, an LED whose texture is the dark unlit part); a kind + '~' too, but softly (rule.fill:
+// kind -> its share of the lamp's light, default 0.15: a lamp's inner housing lit up behind the lens).
+// test: the parts that can be lamps at all.
 // tex: the zone also has the triangle's texel colour (p.c, p.lum, p.tone: 'dark' | 'grey' | 'white' | 'red' | 'amber'
 // | 'blue' | 'other'), so the glow follows the lamp graphics the texture draws, not the whole housing. The newer
 // models' lamps, found per triangle from where it sits and its texel colour (each checked in front / rear views of
@@ -283,9 +285,15 @@ const LAMP_RULES = {
       if (/glass_light/i.test(l)) return p.front ? 'lensF' : p.rear && ax < 0.2 && p.y < 0.75 ? 'rev' : p.rear ? 'lensR' : null;
       if (p.front) {
         if (ax > 0.9) return 'ind*'; // the side markers in the bumper's corners
-        if (Math.hypot(ax - 0.577, p.y - 0.561) < 0.042) return 'head*'; // the inner projector: the low beam
-        if (Math.hypot(ax - 0.707, p.y - 0.598) < 0.042) return 'high*'; // the outer one: the high beam
-        return p.lum > 120 ? 'drl' : null; // the Y light guides
+        const lo = Math.hypot(ax - 0.577, p.y - 0.561), hi = Math.hypot(ax - 0.707, p.y - 0.598);
+        // the Y light guides (DRL): lit evenly, crisp and the brightest part of the lamp (also where their arms cross
+        // the projectors' circles; the bright bits in the middle of the projectors are their lenses)
+        if (p.lum > 160 && lo > 0.028 && hi > 0.028) return 'drl*';
+        if (lo < 0.042) return 'head*'; // the inner projector: the low beam
+        if (hi < 0.042) return 'high*'; // the outer one: the high beam
+        // the rest of the unit (the dark inner housing behind the lens): with the headlights on the whole lamp glows,
+        // a soft white fill (as on the real car at night), not just the two projectors
+        return 'head~';
       }
       if (!p.rear) return null;
       if (p.third) return p.lum > 100 ? 'third' : null;
@@ -295,6 +303,9 @@ const LAMP_RULES = {
       return p.lum > 100 ? (p.y > 0.815 ? 'brake' : 'tail') : null; // the fins over it: brake; the Y light guide: tail
     },
     lens: { lensF: { color: 0xc9d0d8, opacity: 0.22, roughness: 0.04, metalness: 0.1, glow: 0.5 }, lensR: { color: 0x3c0306, opacity: 0.45, roughness: 0.04, metalness: 0.1, glow: 0.4 } },
+    // (the Y past the bloom threshold, also at night with the low beams on (drl at 0.75 of its own); the outer
+    // projector lit with the low beams too, a step under them; the housing's fill: ~0.8, a glow that doesn't bloom)
+    glow: { drl: 1.7, high: 3 }, fill: { head: 0.14 },
   },
   car_toyota_gr_yaris: {
     test: /LightA_Material|red_glass|glass_light/i, tex: true,
@@ -807,7 +818,11 @@ export function carTemplate(gltf, length, name = '') {
   // (a flat lamp, kind + '*': it glows evenly, not through its texture: a projector's lens, a light guide whose
   // texture is the dark unlit part)
   const flatMats = new Map();
-  const flatFor = (mat) => { if (!flatMats.has(mat)) { const ud = mat.userData; mat.userData = {}; const m = mat.clone(); mat.userData = ud; m.name = `${mat.name}_flat`; m.userData = { ...ud, flat: true }; flatMats.set(mat, m); } return flatMats.get(mat); };
+  const flatFor = (mat, fill = 0) => {
+    const k = fill ? `${mat.uuid}~${fill}` : mat;
+    if (!flatMats.has(k)) { const ud = mat.userData; mat.userData = {}; const m = mat.clone(); mat.userData = ud; m.name = `${mat.name}_${fill ? 'fill' : 'flat'}`; m.userData = { ...ud, flat: true }; if (fill) m.userData.glow = (ud.glow ?? 1) * fill; flatMats.set(k, m); }
+    return flatMats.get(k);
+  };
   const pxCache = new Map();
   const lampSplit = (mat, g, label) => {
     if (rule ? !rule.test.test(label) : !((LAMP.test(label) && !NOT_LAMP.test(label)) || AMBER.test(label))) return false;
@@ -820,13 +835,11 @@ export function carTemplate(gltf, length, name = '') {
       const z = (P.getZ(I[i]) + P.getZ(I[i + 1]) + P.getZ(I[i + 2])) / 3;
       const p = zone(x, y, z);
       if (rule?.tex) { const c = px && U ? triColour(px, mat.map, U, I[i], I[i + 1], I[i + 2]) : (mat.color ? [mat.color.r * 255, mat.color.g * 255, mat.color.b * 255] : [128, 128, 128]); p.c = c; p.tone = tone(c); p.lum = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]; }
-      let kind = rule ? rule.kind(label, p) : genericLamp(label, p), flat = false;
-      if (kind && kind.endsWith('*')) { kind = kind.slice(0, -1); flat = true; }
+      let kind = rule ? rule.kind(label, p) : genericLamp(label, p);
       if (!kind) { keep.push(I[i], I[i + 1], I[i + 2]); continue; }
-      kind = flat ? kind + '*' : kind;
       if (!by.has(kind)) by.set(kind, []);
       by.get(kind).push(I[i], I[i + 1], I[i + 2]);
-      if (flat) kind = kind.slice(0, -1);
+      if (kind.endsWith('*') || kind.endsWith('~')) kind = kind.slice(0, -1);
       if (!anchors.has(kind)) anchors.set(kind, [null, null]);
       const side = anchors.get(kind), s = x < 0 ? 0 : 1;
       side[s] ||= { min: new THREE.Vector3(Infinity, Infinity, Infinity), max: new THREE.Vector3(-Infinity, -Infinity, -Infinity) };
@@ -834,9 +847,9 @@ export function carTemplate(gltf, length, name = '') {
     }
     if (!by.size) return false;
     for (const [key, tri] of by) {
-      const flat = key.endsWith('*'), kind = flat ? key.slice(0, -1) : key;
+      const fill = key.endsWith('~'), flat = fill || key.endsWith('*'), kind = flat ? key.slice(0, -1) : key;
       if (!lampGroups.has(kind)) lampGroups.set(kind, new Map());
-      const map = lampGroups.get(kind), lm = flat ? flatFor(lensFor(mat, kind)) : lensFor(mat, kind);
+      const map = lampGroups.get(kind), lm = flat ? flatFor(lensFor(mat, kind), fill ? rule?.fill?.[kind] ?? 0.15 : 0) : lensFor(mat, kind);
       if (!map.has(lm)) map.set(lm, []);
       const sub = compact(g, tri, null);
       sub.userData.label = label;

@@ -174,6 +174,164 @@ function halos(L) {
   return L.halos;
 }
 
+// The cabin of the car you sit in (driving it, or riding in someone's in multiplayer; first person and chase view): one
+// soft warm fill light in the cabin (the one PointLight for every car: made at boot, intensity 0 until you sit in a
+// car, so switching it never recompiles; short reach, no shadows: it lights the cabin, not the snow round the car),
+// a brief dome light on getting in at night (fading as the doors shut), and the instrument cluster / infotainment
+// screen glowing: the model's own screens where it has them (its emissive cabin parts, or named so), else a small
+// glowing panel on the dash behind the wheel and one in the middle of the dash (found from the driver's eye with a
+// ray, once per car). Subtle by day, brighter at night; nothing on any parked or passing car.
+let fillL = null;
+/** The cabin light (one, shared; made on the first call with a scene). */
+export function cabinFill(scene = null) {
+  if (!fillL && scene) { fillL = new THREE.PointLight(0xffd3a6, 0, 1.9, 1.5); fillL.castShadow = false; fillL.name = 'cabin-fill'; scene.add(fillL); }
+  return fillL;
+}
+const SCREEN = /screen|display|gauge|cluster|lcd|navi|infot|instrument|tacho|speedo/i;
+const _ce = new THREE.Vector3(), _ct = new THREE.Vector3(), _cn = new THREE.Vector3();
+let screenTex = null;
+function screenTextures() {
+  if (screenTex || typeof document === 'undefined') return screenTex;
+  const make = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); draw(g, w, h); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+  const frame = (g, w, h) => { g.clearRect(0, 0, w, h); g.fillStyle = '#05080c'; g.beginPath(); g.roundRect(2, 2, w - 4, h - 4, h * 0.16); g.fill(); };
+  screenTex = {
+    // the instrument cluster: two dials (speed, revs) and a strip of read-outs between them
+    cluster: make(256, 96, (g, w, h) => {
+      frame(g, w, h);
+      for (const cx of [w * 0.22, w * 0.78]) {
+        g.strokeStyle = 'rgba(150,200,255,0.9)'; g.lineWidth = 3; g.beginPath(); g.arc(cx, h * 0.55, h * 0.33, Math.PI * 0.8, Math.PI * 2.2); g.stroke();
+        g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 2;
+        for (let i = 0; i <= 8; i++) { const a = Math.PI * (0.8 + 1.4 * i / 8); g.beginPath(); g.moveTo(cx + Math.cos(a) * h * 0.27, h * 0.55 + Math.sin(a) * h * 0.27); g.lineTo(cx + Math.cos(a) * h * 0.33, h * 0.55 + Math.sin(a) * h * 0.33); g.stroke(); }
+        g.strokeStyle = 'rgba(255,90,40,0.95)'; g.lineWidth = 3; g.beginPath(); g.moveTo(cx, h * 0.55); g.lineTo(cx + Math.cos(Math.PI * 1.15) * h * 0.28, h * 0.55 + Math.sin(Math.PI * 1.15) * h * 0.28); g.stroke();
+      }
+      g.fillStyle = 'rgba(170,215,255,0.55)'; g.fillRect(w * 0.42, h * 0.3, w * 0.16, h * 0.1); g.fillRect(w * 0.42, h * 0.48, w * 0.16, h * 0.06); g.fillRect(w * 0.42, h * 0.62, w * 0.1, h * 0.06);
+    }),
+    // the infotainment screen: a dim map with a route and a bar of tiles
+    centre: make(192, 112, (g, w, h) => {
+      frame(g, w, h);
+      g.fillStyle = 'rgba(40,70,100,0.9)'; g.fillRect(8, 8, w - 16, h * 0.7);
+      g.strokeStyle = 'rgba(120,150,180,0.6)'; g.lineWidth = 2;
+      for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(8, 14 + i * 16); g.lineTo(w - 8, 22 + i * 13); g.stroke(); }
+      g.strokeStyle = 'rgba(90,190,255,1)'; g.lineWidth = 4; g.beginPath(); g.moveTo(w * 0.2, h * 0.7); g.lineTo(w * 0.45, h * 0.4); g.lineTo(w * 0.8, h * 0.25); g.stroke();
+      g.fillStyle = 'rgba(200,225,255,0.6)'; for (let i = 0; i < 4; i++) g.fillRect(12 + i * (w - 24) / 4, h * 0.8, (w - 24) / 4 - 6, h * 0.12);
+    }),
+  };
+  return screenTex;
+}
+// once per car instance: its own screens, else the panels
+function cabinSetup(inst, t) {
+  const L = inst.lamps, full = inst.full, S = t.size, lampMats = new Set((L?.list || []).map((e) => e.m));
+  const C = { own: [], panels: [], on: false, t0: 0 };
+  for (const o of full.children) {
+    if (!o.isMesh || !o.material || Array.isArray(o.material) || !o.material.emissive || lampMats.has(o.material)) continue;
+    const src = o.material, orig = src.userData?.emOrig;
+    const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+    const c = g.boundingSphere.center;
+    // (a screen is small and in the cabin: not a lamp atlas spread over the whole car)
+    const inCabin = g.boundingSphere.radius < 0.45 && Math.abs(c.x) < S.x * 0.42 && Math.abs(c.z) < S.z * 0.3 && c.y > S.y * 0.3 && c.y < S.y * 0.88;
+    if (!(SCREEN.test(src.name || '') || (orig && inCabin))) continue;
+    const m = src.clone(); m.userData = { ...src.userData };
+    m.emissiveMap = orig?.map || null; m.emissive.set(orig ? orig.color : 0x8fb4e0); m.emissiveIntensity = 0;
+    o.material = m; C.own.push({ o, m });
+  }
+  if (!C.own.length) try { panels(inst, t, C, lampMats); } catch (e) { console.warn('cabin screens', e); }
+  return C;
+}
+// the panels: a ray from the driver's eye to where the cluster (behind the wheel) and the centre screen would be; the
+// panel sits on the dash where it lands (only there: a ray that runs on past the dash, to the foot of the windscreen,
+// puts none), a hair toward the eye, turned to the surface (or to the eye, where the surface faces up)
+function panels(inst, t, C, lampMats) {
+  const tex = screenTextures();
+  if (!tex) return;
+  const full = inst.full, sc = t.steering?.c;
+  const eye = sc ? sc.clone().add(_ct.set(0, 0.27, -0.6)) : new THREE.Vector3(Math.min(0.4, t.size.x * 0.2), Math.min(1.36, t.size.y - 0.32), -t.size.z * 0.04);
+  const meshes = full.children.filter((o) => o.isMesh && o.material && !Array.isArray(o.material) && !o.material.transparent && !lampMats.has(o.material) && o.geometry.index);
+  if (!meshes.length) return;
+  const hz = sc ? sc.z : eye.z + 0.6;
+  const spots = [
+    { tex: tex.cluster, w: 0.21, h: 0.079, at: sc ? new THREE.Vector3(sc.x, sc.y + 0.12, sc.z + 0.24) : eye.clone().add(_ct.set(0, -0.16, 0.8)), z0: hz + 0.06, z1: hz + 0.42 },
+    { tex: tex.centre, w: 0.18, h: 0.105, at: sc ? new THREE.Vector3(0, sc.y + 0.08, sc.z + 0.3) : new THREE.Vector3(0, eye.y - 0.22, eye.z + 0.85), z0: hz + 0.02, z1: hz + 0.62 },
+  ];
+  if (/tesla/.test(t.name || '')) spots.shift(); // (no instrument cluster: the one screen in the middle)
+  for (const s of spots) {
+    const d = s.at.clone().sub(eye).normalize(), h = castLocal(meshes, eye, d, 1.6);
+    if (!h) continue;
+    const p = eye.clone().addScaledVector(d, h.t);
+    if (p.z < s.z0 || p.z > s.z1) continue;
+    const back = d.clone().negate(), up = h.n.dot(back) > 0.75;
+    const face = up ? h.n : back;
+    const m = new THREE.MeshBasicMaterial({ name: 'cabin_screen_glow', map: s.tex, transparent: true, alphaTest: 0.05, color: 0x000000, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: false });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(s.w, s.h), m);
+    mesh.name = 'cabin-screen'; mesh.castShadow = false; mesh.receiveShadow = false; mesh.visible = false; mesh.renderOrder = 2;
+    mesh.position.copy(p).addScaledVector(face, up ? 0.006 : 0.02);
+    // (facing out of the dash, upright: the texture's right to the driver's right)
+    mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(face, _ct.set(0, 0, 0), Math.abs(face.y) > 0.95 ? _cn.set(0, 0, 1) : _cn.set(0, 1, 0)));
+    full.add(mesh);
+    C.panels.push({ mesh, m });
+  }
+}
+// the nearest triangle a ray meets, in the car's frame (its parts sit untransformed in it): { t, n (toward the ray's
+// origin) } or null. Plain arrays, once per car (a few ms for the whole body).
+function castLocal(meshes, o, d, far) {
+  let best = far, bn = null;
+  const e1 = [0, 0, 0], e2 = [0, 0, 0], pv = [0, 0, 0], tv = [0, 0, 0], qv = [0, 0, 0];
+  for (const mesh of meshes) {
+    const A = mesh.geometry.attributes.position, I = mesh.geometry.index.array;
+    if (A.isInterleavedBufferAttribute || A.itemSize !== 3) continue;
+    const P = A.array;
+    for (let i = 0; i < I.length; i += 3) {
+      const a = I[i] * 3, b = I[i + 1] * 3, c = I[i + 2] * 3;
+      e1[0] = P[b] - P[a]; e1[1] = P[b + 1] - P[a + 1]; e1[2] = P[b + 2] - P[a + 2];
+      e2[0] = P[c] - P[a]; e2[1] = P[c + 1] - P[a + 1]; e2[2] = P[c + 2] - P[a + 2];
+      pv[0] = d.y * e2[2] - d.z * e2[1]; pv[1] = d.z * e2[0] - d.x * e2[2]; pv[2] = d.x * e2[1] - d.y * e2[0];
+      const det = e1[0] * pv[0] + e1[1] * pv[1] + e1[2] * pv[2];
+      if (det > -1e-12 && det < 1e-12) continue;
+      const inv = 1 / det;
+      tv[0] = o.x - P[a]; tv[1] = o.y - P[a + 1]; tv[2] = o.z - P[a + 2];
+      const u = (tv[0] * pv[0] + tv[1] * pv[1] + tv[2] * pv[2]) * inv;
+      if (u < 0 || u > 1) continue;
+      qv[0] = tv[1] * e1[2] - tv[2] * e1[1]; qv[1] = tv[2] * e1[0] - tv[0] * e1[2]; qv[2] = tv[0] * e1[1] - tv[1] * e1[0];
+      const v = (d.x * qv[0] + d.y * qv[1] + d.z * qv[2]) * inv;
+      if (v < 0 || u + v > 1) continue;
+      const tt = (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) * inv;
+      if (tt <= 0.02 || tt >= best) continue;
+      best = tt;
+      bn = new THREE.Vector3(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]).normalize();
+    }
+  }
+  if (!bn) return null;
+  if (bn.dot(d) > 0) bn.negate();
+  return { t: best, n: bn };
+}
+/**
+ * The cabin of the car you are in (call every frame while you sit in it): inst / t the car instance and template; on:
+ * you are in it (false: everything off); inside: first person (the fill a little brighter).
+ */
+export function cabinLight(inst, t, { on = true, inside = true } = {}) {
+  if (!inst?.full || !t) return;
+  try {
+    const night = clamp01(nightUniform?.value ?? 0), now = performance.now();
+    let C = inst.cabin;
+    if (on && (!C || C.own.some((e) => e.o.material !== e.m))) C = inst.cabin = cabinSetup(inst, t); // (first time, or the car was re-dressed)
+    if (!C) return;
+    if (on && !C.on) C.t0 = now; // (getting in: the dome light, then it fades as the doors shut)
+    C.on = on;
+    const L = fillL;
+    if (L && on) {
+      const age = (now - C.t0) / 1000, dome = night * clamp01((3.4 - age) / 2.2);
+      const eye = t.steering ? _ce.copy(t.steering.c).add(_ct.set(0, 0.27, -0.6)) : _ce.set(0, Math.min(1.36, t.size.y - 0.32), -t.size.z * 0.04);
+      // between the front seats a little ahead of your eyes (the dashboard's and the screens' light), up under the
+      // roof while the dome light is on
+      L.position.set(0, Math.min(t.size.y - 0.18, eye.y - 0.04 + dome * 0.14), eye.z + 0.32 - dome * 0.2);
+      inst.full.localToWorld(L.position);
+      L.intensity = (inside ? 0.35 + night * 3 : night * 2) + dome * 3;
+    } else if (L && !on) L.intensity = 0;
+    const k = on ? 0.35 + night * 0.65 : 0;
+    for (const e of C.own) e.m.emissiveIntensity = e.m.emissiveMap ? k * 1.1 : k * 0.45;
+    for (const e of C.panels) { e.mesh.visible = k > 0; e.m.color.setScalar(0.25 + night * 0.5); }
+  } catch (e) { if (!warned) { warned = true; console.warn('car cabin', e); } }
+}
+
 let poolTex = null;
 function poolTexture() {
   if (poolTex) return poolTex;

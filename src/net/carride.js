@@ -19,6 +19,7 @@ import { makeTag } from './remote.js';
 const OWN_TAG_OFF = true;
 import { carSeats, seatWorld, parseVeh } from './vehicles.js';
 import { busRoads } from '../game/bus/roads.js';
+import { cabinLight } from '../game/carlights.js';
 
 const ASK_REACH = 2.2;  // m from the car's body
 const TAG_FAR = 130;
@@ -279,6 +280,9 @@ export class CarRide {
     p.pos.add(_dv); p.rig.root.position.add(_dv);
     g.camera.position.add(_dv);
     if (p.camPos?.isVector3) p.camPos.add(_dv);
+    // the cabin lit softly round you, its screens glowing (carlights.js cabinLight: the one cabin light)
+    if (this.cab?.inst !== c.inst) { if (this.cab) cabinLight(this.cab.inst, this.cab.t, { on: false }); this.cab = { inst: c.inst, t: c.t }; }
+    cabinLight(c.inst, c.t, { on: true, inside: p.view === 'first' });
     if (input?.hit?.('KeyE')) this.end(true);
   }
 
@@ -287,6 +291,7 @@ export class CarRide {
     const r = this.ride;
     if (!r) return;
     this.ride = null;
+    if (this.cab) { cabinLight(this.cab.inst, this.cab.t, { on: false }); this.cab = null; }
     if (this.wanted) { this.wanted = null; if (this.g?.police) this.g.police.rideW = null; }
     if (release) this.mp.releaseSeat();
     const g = this.g, p = g?.player;

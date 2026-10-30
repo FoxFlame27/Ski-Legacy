@@ -16,7 +16,7 @@ import { loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye, REAL } from './cars.js';
 import { keysHTML } from '../ui/hud.js';
 import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
-import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot } from './carlights.js';
+import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot, cabinFill, cabinLight } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { speedLimitAt } from './bus/speedlimits.js';
@@ -99,10 +99,9 @@ export class Drive {
     Object.assign(this, { scene, player, camera, hud, audio, colliders, vegetation, parking, transition, world, cameraBlockers, input, traffic, freeRide });
     this.tyres = trails ? new TyreTracks(trails) : null; // the tyres' tracks in the snow (tyretracks.js)
     this.pool = null; // the headlights' pool of light on the road (carlights.js)
-    // the cabin's dome light (one, made now with intensity 0: switching it on later recompiles nothing)
-    this.dome = new THREE.PointLight(0xffe2bf, 0, 3.0, 2);
-    this.dome.castShadow = false;
-    scene.add(this.dome);
+    // the cabin's light (one for every car you sit in, carlights.js cabinFill: made now with intensity 0, so switching
+    // it on later recompiles nothing)
+    this.dome = cabinFill(scene);
     this.wrecks = []; // crashed cars waiting to be towed (out of sight)
     this.shake = 0;
     this.sliding = []; // parked cars you shoved, sliding to a stop
@@ -300,6 +299,7 @@ export class Drive {
     if (this.cameraBlockers && !this.cameraBlockers.includes(e.block)) this.cameraBlockers.push(e.block);
     e.driving = false;
     if (!d.crash) e.smokeFx?.clear();
+    cabinLight(d.inst, d.t, { on: false });
     if (this.dome) this.dome.intensity = 0;
     this.tailPool?.update(0, 0, 0, 0, this.world, 0);
     this.d = null;
@@ -989,26 +989,17 @@ export class Drive {
     cam.updateProjectionMatrix();
   }
 
-  // Inside: the materials keep their own look; one small warm dome light under the roof above the front seats lights
-  // the cabin (made at boot with intensity 0, so switching it never recompiles a shader): gentle by day, brighter at
-  // night, off outside (chase view) and when you get out. Screens and gauges glow softly.
+  // Inside: the materials keep their own look; a soft warm fill lights the cabin, the cluster and the screens glow
+  // (carlights.js cabinLight: gentle by day, brighter at night, a brief dome light getting in at night), in first
+  // person and in the chase view (the cabin seen through the windows); off when you get out.
   cabinLight(inside) {
     const d = this.d;
     if (!d?.inst?.full) return;
-    const night = clamp(nightUniform?.value ?? 0, 0, 1);
-    const L = this.dome;
-    if (L) {
-      L.intensity = inside ? 1.0 + night * 3.2 : 0;
-      if (inside) { const eye = d.eyeLocal; L.position.set(eye.x * 0.4, Math.min(d.t.size.y - 0.2, eye.y + 0.08), eye.z + 0.42); d.e.car.localToWorld(L.position); }
-    }
-    if (d.cabinInst !== d.inst) {
-      d.cabinInst = d.inst; d.cabinMats = [];
-      d.inst.full.traverse((o) => {
-        if (!o.isMesh || !o.material || Array.isArray(o.material) || !/screen|display|gauge|cluster|lcd|navi|infot|instrument/i.test(o.material.name || '') || !o.material.emissive) return;
-        const m = o.material.clone(); o.material = m; d.cabinMats.push(m);
-      });
-    }
-    for (const m of d.cabinMats) { m.emissive.set(0x8fb4e0); m.emissiveIntensity = inside ? 0.12 + night * 0.35 : 0; }
+    const was = d.cabinInst && d.cabinInst !== d.inst ? d.cabinInst : null, t0 = was?.cabin?.t0;
+    if (was) cabinLight(was, d.cabinT, { on: false }); // (swapped for the full-detail model: the dome light carries on)
+    d.cabinInst = d.inst; d.cabinT = d.t;
+    cabinLight(d.inst, d.t, { on: true, inside });
+    if (t0 && d.inst.cabin) d.inst.cabin.t0 = t0;
   }
 
   // from inside, the windows nearly clear (the tinted glass seen from outside would darken the whole view)

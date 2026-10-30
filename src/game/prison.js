@@ -746,6 +746,19 @@ export class Prison {
     const was = this.active;
     this.until = was ? Math.max(this.until, end) : end;
     this.reason = String(reason || 'Arrested').slice(0, 80);
+    // (Oct 30, the user: caught and jailed, your car is parked for you in your bay at the Autohaus car park; a wreck
+    // or a car already with the tow truck / in the tow yard stays with it)
+    if (!was) {
+      const park = (left) => {
+        try {
+          const R = globalThis.window?.__game?.carRental, e = R?.current, I = R?.impound;
+          if (!e?.car || !I?.own || e.wrecked || e.towing || e.impound) return;
+          if (e.driving) { if (left > 0) setTimeout(() => park(left - 1), 800); return; } // (still being pulled out of it)
+          I.place(e, I.own); if (R.drive) R.drive._cc = null;
+        } catch (err) { console.warn('prison: park the car', err); }
+      };
+      setTimeout(() => park(8), 600);
+    }
     if (until == null) {
       if (isMP()) {
         net.request('jail', { seconds: sec, reason: this.reason }).then((d) => {

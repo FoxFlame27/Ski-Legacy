@@ -17,7 +17,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Simplex, mulberry32, smoothstep, clamp, lerp } from '../../core/noise.js';
 import { fitModel } from '../../core/assets.js';
 import { world } from '../../world/world.js';
-import { buildBus, BUS } from '../bus/bus.js';
+import { buildBus, BUS, turnWheels } from '../bus/bus.js';
 import { busRoads, stopWaitArea } from '../bus/roads.js';
 import { applyOutfit, getEquipped } from '../outfits.js';
 import { presentationUI } from '../../ui/presentation.js';
@@ -69,7 +69,7 @@ function normalAt(x, z, out = _gn) {
 const T = { busIn: 2, busStop: 11, doorsOpen: 11.3, walk0: 12.1, step: 15.0, gone: 15.9, doorsShut: 16.4, depart: 17.4, end: 26.5 };
 const SHOTS = [6, 12, 17.2, T.end]; // shot ends: A establishing, B arrival, C boarding, D departure
 const ZSTOP = 0;                    // bus centre at the stop
-const DOOR_Z = BUS.len / 2 - 2.0;   // front door (bus local z), on the bus's right (-x)
+const DOOR_Z = BUS.len / 2 - 2.6;   // front door (bus local z), on the bus's right (-x): the Micruss's, just behind its front wheel (Oct 30 2026)
 const LANE = BUS.lane;
 
 function canvasTex(w, h, draw, rep = null) {
@@ -108,7 +108,7 @@ export function attachBusDoors(group, shell) {
   const lamp = new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffe2a8, emissiveIntensity: 1.6 });
   const leaves = [];
   const W = 0.62, H0 = 0.32, H1 = 2.62;
-  for (const zc of [DOOR_Z, -0.45]) {
+  for (const zc of shell.userData?.micruss ? [DOOR_Z] : [DOOR_Z, -0.45]) { // (the Micruss has the one door)
     const hole = new THREE.Mesh(new THREE.PlaneGeometry(W * 2, H1 - H0), dark);
     hole.rotation.y = -Math.PI / 2; hole.position.set(-side - 0.012, (H0 + H1) / 2, zc);
     const step = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, W * 2 - 0.1), lamp);
@@ -635,8 +635,10 @@ export class BusIntro {
     const g = this.bus.group, zf = z + 3, zb = z - 3;
     const a = new THREE.Vector3(RX(zf) - LANE, BASE(zf), zf), b = new THREE.Vector3(RX(zb) - LANE, BASE(zb), zb);
     g.position.addVectors(a, b).multiplyScalar(0.5);
+    const yaw = Math.atan2(a.x - b.x, a.z - b.z);
     g.lookAt(g.position.clone().add(a.sub(b)));
     g.updateMatrixWorld(true);
+    if (this.bus.shell) turnWheels(this.bus.shell, g.position, yaw); // (Oct 30 2026, the user: "make the wheels move too for the bus")
   }
 
   buildSkier() {

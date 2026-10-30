@@ -1,7 +1,8 @@
 // The ski bus at runtime: the plowed roads (a packed-snow strip, snow banks from the plough, orange snow poles),
-// the yellow post bus (Meshy shell, models.ski_bus) with our own simple interior (seats, poles, glass, a driver's
-// cab) and the ride itself: you sit by a window, the bus drives the road to your stop in real time; mouse to look
-// around, R for an outside view, hold Space to fast-forward. Modelled on the Wolkenspitzbahn ride (railway.js).
+// the yellow post bus (the Busscar Micruss, models.ski_bus_micruss: its own cabin behind tinted glass, wheels that
+// roll and steer; without it the old Meshy shell, models.ski_bus, with our own simple interior: seats, poles, glass,
+// a driver's cab) and the ride itself: you sit by a window, the bus drives the road to your stop in real time; mouse
+// to look around, R for an outside view, hold Space to fast-forward. Modelled on the Wolkenspitzbahn ride (railway.js).
 //
 // SkiBus (skibus.js) owns one BusLine: busLine.board(from, to) -> seat; per frame update / updateRide /
 // applyCamera; main.js does the fades, the player's seat and the HUD line.
@@ -794,10 +795,16 @@ function buildRoadMeshes(group, colliders = null) {
 }
 
 // ------------------------------------------------------------------ the bus
-// The Meshy shell (front +z, wheels on y = 0, 12 m long) + our interior. Local frame: x left, y up, z forward.
+// The shell (front +z, wheels on y = 0, 12 m long) + its interior. Local frame: x left, y up, z forward.
+// (Oct 30 2026, the user: "I also have a new bus model, please use this one. Also make it so you can see the people
+// inside through the windows, like the other cars"): the Busscar Micruss (models.ski_bus_micruss; the old Meshy coach,
+// models.ski_bus, only if it is missing). Its own cabin is drawn: seats, racks, the driver's partition, behind tinted
+// glass (transparent, low opacity, no depth write, drawn after the opaque parts, as the cars' glass), and the seats
+// people sit in are its own seats (MIC_SEATS), inside and out: you, the other players and a few passengers.
 export function buildBus(models, makeRig) {
   const group = new THREE.Group();
   group.name = 'ski-bus';
+  if (models.ski_bus_micruss) return buildMicruss(models.ski_bus_micruss, group, makeRig);
   // (the Meshy coach is modelled along x with its cab at -x: turned so the cab leads, toward +z)
   const shell = models.ski_bus ? fitModel(models.ski_bus, { size: BUS.len, axis: 'z', rotateY: Math.PI / 2 }) : fallbackShell();
   // (the coach's paint is metallic: mirroring the bright snow it read pale cream; a satin finish keeps it yellow)
@@ -815,6 +822,185 @@ export function buildBus(models, makeRig) {
   inside.visible = false;
   group.add(inside);
   return { group, shell, inside, seats: inside.userData.seats };
+}
+
+// The Micruss as the model has it (its own units, the scene root's frame: x left, y up, z forward, the wheels' bottoms
+// at y -2.95, 25 units long, the body 7.56 across): its seats, each [x, cushion top y, the cushion's back edge z] (the
+// backrest just behind it), front to back, the right side (-x, the door side) and the left; the bench at the back;
+// the driver's seat (left, +x). Measured from its seat meshes (tools/glb-components.mjs).
+const MIC_SEATS = [
+  ...[-0.01, -3.11, -6.72, -10.33].flatMap((z, k) => [[-2.65, 1.01, z, k, true], [-1.25, 1.01, z, k, false]]),
+  ...[1.86, -1.75, -5.36, -8.97].flatMap((z, k) => [[2.66, 1.01, z, k, true], [1.26, 1.01, z, k, false]]),
+  ...[-2.13, -0.73, 0.70, 2.10].map((x) => [x, 1.01, -12.58, 4, Math.abs(x) > 2]),
+];
+const MIC_DRIVER = [2.12, 1.37, 7.04];
+const MIC_INNER = /^(Interior|InteriorRacks|InteriorWindow|Seats|SeatMetal|SeatPlastic)$/; // (its cabin: hidden far away, no shadows)
+const MIC_GLASS = /^(Windows|InteriorWindow)$/;
+const MIC_REAR_LAMP = { x: 2.9, y: 0.63, h: 1.46, z: -13.35 }; // (its tail lamp clusters: x, mid y, height, back z)
+function buildMicruss(gltf, group, makeRig) {
+  const shell = new THREE.Group();
+  const m = gltf.scene.clone(true);
+  m.updateMatrixWorld(true);
+  const all = new THREE.Box3().setFromObject(m), body = m.getObjectByName('BusBody');
+  const bb = body ? new THREE.Box3().setFromObject(body) : all;
+  // (the bus's own footprint: 2.55 m across the body (the mirrors stick out), 12 m long; the height as wide, so its
+  // floor is at the bus's 0.95 m and its roof at ~3 m; only its length is stretched (the Micruss is a short bus), so
+  // the stops, bays, colliders and the depot all line up as before)
+  const sx = BUS.width / (bb.max.x - bb.min.x), sz = BUS.len / (all.max.z - all.min.z);
+  m.scale.set(sx, sx, sz);
+  m.position.set(-(all.min.x + all.max.x) / 2 * sx, -all.min.y * sx, -(all.min.z + all.max.z) / 2 * sz);
+  m.updateMatrix();
+  shell.add(m);
+  // (the PostBus yellow over its white paint; satin, never mirroring the snow) and its glass and cabin
+  const glass = new THREE.MeshStandardMaterial({ color: 0x24313a, transparent: true, opacity: 0.3, roughness: 0.06, metalness: 0.2, depthWrite: false, side: THREE.DoubleSide });
+  const swap = new Map();
+  m.traverse((o) => {
+    if (!o.isMesh) return;
+    const name = o.material?.name || '';
+    o.castShadow = !MIC_INNER.test(name) && !MIC_GLASS.test(name); o.receiveShadow = true;
+    if (MIC_GLASS.test(name)) { o.material = glass; o.renderOrder = 2; return; }
+    if (name === 'Body' && o.material?.isMeshStandardMaterial) {
+      if (!swap.has(o.material)) { const p = o.material.clone(); p.metalness = Math.min(p.metalness, 0.3); micrussPaint(p); swap.set(o.material, p); }
+      o.material = swap.get(o.material);
+    }
+  });
+  // the wheels (Oct 30 2026, the user: "make the wheels move too for the bus"): each wheel node (Tire_low* front,
+  // Tireback_low* rear: rim and tyre) under a pivot at its centre: `fix` undoes the length stretch (the wheel stays
+  // round), `steer` turns the front ones about y, `spin` rolls them about the axle (x); turnWheels per frame
+  const wheels = [];
+  m.traverse((o) => { if (!o.isMesh && /^Tire(back)?_low/i.test(o.name)) wheels.push(o); });
+  for (const w of wheels) {
+    const front = !/back/i.test(w.name), P = w.parent;
+    const fix = new THREE.Group(), steer = new THREE.Group(), spin = new THREE.Group();
+    fix.name = 'bus-wheel'; steer.name = front ? 'bus-wheel-steer' : 'bus-wheel-rear'; spin.name = 'bus-wheel-spin';
+    fix.position.copy(w.position); fix.scale.set(1, 1, sx / sz);
+    P.add(fix); fix.add(steer); steer.add(spin); spin.add(w);
+    w.position.set(0, 0, 0);
+  }
+  shell.updateMatrixWorld(true);
+  // its wheel radius and wheelbase in metres (the shell's own frame)
+  let r = 0.37, zf = 4.6, zr = -2.2;
+  const tf = wheels.find((w) => !/back/i.test(w.name)), tr = wheels.find((w) => /back/i.test(w.name));
+  if (tf) { const b = new THREE.Box3().setFromObject(tf); r = (b.max.y - b.min.y) / 2 || r; zf = (b.min.z + b.max.z) / 2; }
+  if (tr) { const b = new THREE.Box3().setFromObject(tr); zr = (b.min.z + b.max.z) / 2; }
+  const at = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(m.matrix);
+  const lampP = at(MIC_REAR_LAMP.x, MIC_REAR_LAMP.y, MIC_REAR_LAMP.z);
+  shell.userData = { size: new THREE.Vector3(BUS.width, (all.max.y - all.min.y) * sx, BUS.len), wheelR: r, wheelBase: zf - zr, micruss: true,
+    lamp: { x: Math.abs(lampP.x), y: lampP.y, h: MIC_REAR_LAMP.h * sx, z: lampP.z } };
+  group.add(shell);
+  // the seats you and the others sit in: its own (the seat point on the cushion, the hips a hand in front of the
+  // backrest; facing forward, as the old cabin's: window, side (-x the door side), row)
+  const seats = MIC_SEATS.map(([x, y, z, row, win]) => ({ pos: at(x, y, z + 0.45).add(_c.set(0, 0.03, 0)), yaw: 0, window: win, side: Math.sign(x), row }));
+  const inside = new THREE.Group();
+  inside.name = 'bus-interior';
+  // the driver (bus:0: one of the game's own people, seated at its wheel; the others get a baked one, busPeople)
+  if (makeRig) {
+    try {
+      const rig = makeRig('skier_green', 'rental');
+      if (rig?.root) {
+        rig.gear.visible = false;
+        const seat = at(MIC_DRIVER[0], MIC_DRIVER[1], MIC_DRIVER[2] + 0.45);
+        rig.root.position.copy(seat);
+        for (let k = 0; k < 2; k++) { rig.snapNext = true; rig.update(0.016, { mode: 'sit', seat, heading: 0, speed: 0, lookYaw: 0 }); }
+        rig.root.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.frustumCulled = false; } });
+        inside.add(rig.root);
+        inside.userData.driver = true;
+      }
+    } catch (e) { console.warn('bus driver', e); }
+  }
+  inside.userData.seats = seats;
+  group.add(inside);
+  return { group, shell, inside, seats, micruss: true, driverSeat: at(MIC_DRIVER[0], MIC_DRIVER[1], MIC_DRIVER[2] + 0.45) };
+}
+
+// the Micruss's paint is white (a grey texture): its bright parts PostBus yellow, keeping their shading and panel lines;
+// the black window frames, rubber and trim stay as they are
+function micrussPaint(m) {
+  m.roughness = Math.max(m.roughness, 0.42);
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      {
+        vec3 pc = diffuseColor.rgb;
+        float pl = dot(pc, vec3(0.2126, 0.7152, 0.0722));
+        float pmx = max(pc.r, max(pc.g, pc.b)), pmn = min(pc.r, min(pc.g, pc.b));
+        float paint = smoothstep(0.12, 0.22, pl) * (1.0 - smoothstep(0.16, 0.26, (pmx - pmn) / max(pmx, 1e-4)));
+        vec3 yellow = vec3(0.93, 0.55, 0.006) * clamp(pl / 0.33, 0.5, 1.15);
+        diffuseColor.rgb = mix(pc, yellow, paint);
+      }`);
+  };
+  m.customProgramCacheKey = () => 'micruss-paint';
+  m.needsUpdate = true;
+}
+
+// Per frame for a bus drawn near you (within WHEEL_NEAR; its cabin and passengers within PEOPLE_NEAR): the wheels roll
+// by the distance it moved along its heading / their radius, the front ones steer by how fast it turns per metre
+// (atan(wheelbase x curvature), eased). Works for every bus alike (yours, the fleet, the multiplayer ones, the intro):
+// it only needs where the bus is now.
+const WHEEL_NEAR = 150, PEOPLE_NEAR = 60;
+const _wheelSets = new WeakMap();
+export function turnWheels(shell, pos, yaw) {
+  if (!shell?.userData?.micruss) return;
+  let W = _wheelSets.get(shell);
+  if (!W) {
+    W = { spin: [], steer: [], inner: [], x: pos.x, z: pos.z, yaw, a: 0, r: shell.userData.wheelR || 0.37, wb: shell.userData.wheelBase || 6.7, innerOn: true };
+    shell.traverse((o) => {
+      if (o.name === 'bus-wheel-spin') W.spin.push(o);
+      else if (o.name === 'bus-wheel-steer') W.steer.push(o);
+      else if (o.isMesh && MIC_INNER.test(o.material?.name || '')) W.inner.push(o);
+    });
+    _wheelSets.set(shell, W);
+    return;
+  }
+  const dx = pos.x - W.x, dz = pos.z - W.z;
+  W.x = pos.x; W.z = pos.z;
+  const dyaw = wrapPi(yaw - W.yaw);
+  W.yaw = yaw;
+  if (dx * dx + dz * dz > 400) return; // (placed somewhere else: no roll)
+  const ds = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+  if (Math.abs(ds) > 1e-4) {
+    const a = ds / W.r;
+    for (const s of W.spin) s.rotation.x = (s.rotation.x + a) % (Math.PI * 2);
+    if (Math.abs(ds) > 0.01) W.a += (clamp(Math.atan((W.wb * dyaw) / ds), -0.6, 0.6) - W.a) * 0.25;
+  }
+  for (const s of W.steer) s.rotation.y = W.a;
+}
+// its cabin (seats, racks) and the people in it drawn near you only
+function busNear(shell, people, d, pos, yaw) {
+  if (!_wheelSets.has(shell)) turnWheels(shell, pos, yaw);
+  const W = _wheelSets.get(shell);
+  const on = d < PEOPLE_NEAR;
+  if (W && W.innerOn !== on) { W.innerOn = on; for (const o of W.inner) o.visible = on; }
+  if (people) people.visible = on;
+}
+// A few passengers (Oct 30 2026, the user: "see the people inside through the windows, like the other cars"): the
+// traffic's baked seated people (carpeople.js: the game's skiers in the 'sit' pose, knees bent, plain meshes, no
+// shadows) on some of its seats (by the bus's number; never the seat single player gives you), and a driver at the
+// wheel on the fleet's buses. Null until the traffic's bake is done.
+function busPeople(bus, seed, driver) {
+  const CP = game()?.traffic?.people;
+  if (!CP?.ready) return null;
+  if (!CP.busWait) { CP.busWait = true; CP.ready.then(() => { CP.busDone = true; }); } // (all its looks baked first)
+  const P = CP.figs?.passenger, D = CP.figs?.driver;
+  if (!CP.busDone || !P?.length) return null;
+  const g = new THREE.Group();
+  g.name = 'bus-people';
+  let s = (seed * 2654435761) >>> 0;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const put = (fig, seat) => {
+    const o = new THREE.Group();
+    o.position.copy(seat);
+    for (const p of fig.parts) { const mm = new THREE.Mesh(p.geo, p.mat); mm.castShadow = false; mm.receiveShadow = false; o.add(mm); }
+    g.add(o);
+  };
+  if (driver && bus.driverSeat) put((D?.length ? D : P)[Math.floor(rnd() * 97) % (D?.length || P.length)], bus.driverSeat);
+  const S = bus.seats, keep = S.indexOf(S.find((q) => q.window && q.side < 0 && q.row === 2));
+  const n = 3 + Math.floor(rnd() * 3);
+  const free = S.map((_, i) => i).filter((i) => i !== keep);
+  for (let k = 0; k < n && free.length; k++) {
+    const i = free.splice(Math.floor(rnd() * free.length), 1)[0];
+    put(P[Math.floor(rnd() * P.length)], S[i].pos);
+  }
+  return g;
 }
 
 // PostBus yellow: the coach's own paint is a pale cream. Only that paint is re-coloured (bright, unsaturated
@@ -958,6 +1144,18 @@ function steerShift(r, dt, v) {
 // side, dim as tail lights, bright while it brakes or stands
 function addLamps(parent, size) {
   const mat = new THREE.MeshStandardMaterial({ color: 0x3a0605, emissive: 0xff1608, emissiveIntensity: 0.35, roughness: 0.35 });
+  // (the Micruss: over its own tail lamp clusters, a thin glowing strip on each)
+  const L = parent.userData?.lamp;
+  if (L) {
+    const g = new THREE.BoxGeometry(0.1, L.h * 0.9, 0.03);
+    for (const sx of [-1, 1]) {
+      const m = new THREE.Mesh(g, mat);
+      m.position.set(sx * L.x, L.y, L.z - 0.015);
+      m.userData.noCollide = true; m.castShadow = false;
+      parent.add(m);
+    }
+    return { mat, k: 0 };
+  }
   const geo = new THREE.BoxGeometry(0.26, 0.34, 0.05);
   const w = Math.min(BUS.width, size?.x || BUS.width), l = size?.z || BUS.len;
   for (const sx of [-1, 1]) {
@@ -1209,6 +1407,7 @@ export class BusLine {
   place(t, s, shift = this.ride?.shift || 0) {
     const r = this.ride, g = this.bus.group;
     const yaw = poseBus(g, t, s, shift, r?.shiftV || 0, r?.v || 0);
+    turnWheels(this.bus.shell, g.position, yaw); // (its wheels roll and steer)
     // the collider follows (off while you ride inside)
     const c = this.collider;
     if (c) { c.x = this.ride ? 1e9 : g.position.x; c.z = this.ride ? 1e9 : g.position.z; c.rot = -yaw; this.yaw = yaw; }
@@ -1272,7 +1471,8 @@ export class BusLine {
     return this.seatPose();
   }
 
-  setInside(on) { this.bus.inside.visible = on; this.bus.shell.visible = !on; }
+  // (the Micruss: its own cabin, inside and out: the shell stays, seen from your seat through its glass)
+  setInside(on) { if (this.bus.micruss) { this.bus.inside.visible = true; this.bus.shell.visible = true; return; } this.bus.inside.visible = on; this.bus.shell.visible = !on; }
 
   seatPose() {
     const r = this.ride, g = this.bus.group;
@@ -1649,6 +1849,7 @@ export class BusLine {
         const shell = this.bus.shell.clone(true); // (the same geometry and paint as bus:0)
         group.add(shell);
         const lamps = addLamps(shell, this.bus.shell.userData.size);
+        group.userData.shell = shell; group.userData.bid = bid; // (its wheels and passengers, updateFleet)
         group.visible = false;
         scene.add(group);
         const collider = { x: 1e9, z: 1e9, hw: BUS.width / 2 + 0.05, hd: BUS.len / 2, rot: 0, soft: true, h: 3.4, bus: true };
@@ -1760,6 +1961,12 @@ export class BusLine {
 
   /** Per frame (main.js): the fleet on its rounds. p: where you are (the buses near you drive themselves). */
   updateFleet(dt, p) {
+    // bus:0's passengers and cabin near you only (the fleet's below)
+    if (this.bus.micruss && p && this.bus.group.visible) {
+      const g = this.bus.group.position, d0 = Math.hypot(g.x - p.x, g.z - p.z);
+      if (!this.bus.people && d0 < PEOPLE_NEAR) { this.bus.people = busPeople(this.bus, 0, false); if (this.bus.people) this.bus.group.add(this.bus.people); }
+      busNear(this.bus.shell, this.bus.people, d0, g, this.yaw || 0);
+    }
     if (!this.fleet.length || !(dt > 0)) return;
     dt = Math.min(dt, 0.1);
     this.fleetClock += dt;
@@ -1838,6 +2045,13 @@ export class BusLine {
         b.x = g.x; b.y = g.y; b.z = g.z;
         b.collider.x = mine ? 1e9 : g.x; b.collider.z = g.z; b.collider.rot = -b.yaw;
         setLamps(b.lamps, b.v, b.vPrev ?? b.v, dt);
+        // (its wheels roll and steer within WHEEL_NEAR; its cabin and passengers within PEOPLE_NEAR)
+        if (this.bus.micruss && !mine) {
+          const sh = b.group.userData.shell;
+          if (d < WHEEL_NEAR) turnWheels(sh, g, b.yaw);
+          if (!b.people && d < PEOPLE_NEAR) { b.people = busPeople(this.bus, b.group.userData.bid, true); if (b.people) b.group.add(b.people); }
+          busNear(sh, b.people, d, g, b.yaw);
+        }
         if (st.ram && !st.mark) this.ramContact(g, b.yaw, b.v, b, dt); // (pushing through: bumped out of its way)
       } else {
         roadAt(P, sq, _p);
@@ -2047,6 +2261,7 @@ export class BusLine {
     g.position.copy(b.group.position); g.quaternion.copy(b.group.quaternion);
     if (this.collider) this.collider.x = 1e9;
     this.yaw = b.yaw;
+    turnWheels(this.bus.shell, g.position, b.yaw);
   }
   updateMpRide() {
     const r = this.ride, b = r.fleetBus, st = b.st;

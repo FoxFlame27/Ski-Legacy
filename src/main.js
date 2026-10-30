@@ -181,8 +181,9 @@ const MODEL_LIST = [
   'heli_body', 'floodlight_head_b', 'floodlight_head_c', 'floodlight_mast',
   // living world
   'snowcat',
-  // the ski bus (loaded only while its ride is switched on, see skibus.js BUS_RIDE)
-  ...(BUS_RIDE ? ['ski_bus'] : []),
+  // the ski bus (loaded only while its ride is switched on, see skibus.js BUS_RIDE): the Busscar Micruss (Oct 30 2026,
+  // the user: "I also have a new bus model, please use this one"; the old ski_bus.glb stays on disk, unused)
+  ...(BUS_RIDE ? ['ski_bus_micruss'] : []),
   // the ambulance after a heli rescue (game/heli/ambulance.js)
   'ambulance', 'bus_stop_sign',
   'tow_truck', // the CAR RENTAL's tow truck (game/towtruck.js)
@@ -2119,6 +2120,9 @@ function loopUpdate() {
   if (railway.riding) railway.applyCamera(camera, { ...input, hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   if (express?.riding) express.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   if (skibus.riding) skibus.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
+  // (Oct 30 2026, the user: "you can see the people inside through the windows"): riding the bus you sit in your seat,
+  // seen through its glass from the outside view (R); hidden from your own seat's eye
+  if (skibus.riding && skibus.line?.bus?.micruss) player.rig.root.visible = skibus.line.view === 'outside';
   mark('player');
   // (Oct 30, the user: choosing an outfit, the other players in the shop don't stand in front of your preview: hidden
   // while the outfit shop / the Autohaus configurator is open)

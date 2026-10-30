@@ -2196,7 +2196,7 @@ function loopUpdate() {
         if (performance.now() - lastStrikeAt > STRIKE_RESET_MS) strikes = 0;
         lastStrikeAt = performance.now();
         const what = hitBy ? `Hit by a ${hitBy.what} · ${hitBy.kmh} km/h` : 'Wipeout';
-        if (hitBy && hitBy.kmh > 45) strikes = Math.max(strikes, 1); // (hit by a vehicle above 45 km/h: the rescue helicopter comes at once, free; slower hits are an ordinary fall; Oct 30, the user)
+        if (hitBy) strikes = Math.max(strikes, 1); // (Oct 30, the user: "one hit above 40, heli comes": every vehicle hit that gets here is 40+ km/h (slower ones are a 'bump', vehiclehits.js): the rescue helicopter at once, free)
         if (races.active) { hud.flash(what, 'bad'); wipeoutToVillage(); }
         else if (++strikes < 2) hud.flash(`${what} · one more and the rescue helicopter comes`, 'bad', 3200);
         else {

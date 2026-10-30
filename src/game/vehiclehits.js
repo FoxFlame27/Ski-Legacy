@@ -39,7 +39,7 @@ const MARGIN = 0.15;            // touching counts (the player's own collide has
 const NEAR = 15;                // m: broad phase
 const V_MIN = 10 / 3.6;         // m/s: slower vehicles (and slower closing speeds) only push you softly
 const HARD = 50 / 3.6;          // m/s: a hard hit, like a big crash (the rescue helicopter comes)
-const SOFT = 35 / 3.6;          // m/s: slower hits only knock you over: a 'bump', no strike (Oct 30 2026, the user)
+const SOFT = 40 / 3.6;          // m/s: slower hits only knock you over: a 'bump', no strike (Oct 30 2026, the user: 35, then "one hit above 40, heli comes")
 const SAFE_MS = 2000;           // invulnerable this long after a hit
 const JUMP = 70;                // m/s: faster "motion" is a teleport (respawned, parked away): not a velocity
 const P_R = 0.3;                // a person's radius (hit by a vehicle: hitPeople)
@@ -209,7 +209,7 @@ export class VehicleHits {
     pl.vel.set(tx * h, up, tz * h);
     // the side you go over to: away from the vehicle's line (left / right of its travel)
     const side = (r.vx / vs) * nz - (r.vz / vs) * nx >= 0 ? 1 : -1;
-    const H = this.hit, soft = speed < SOFT; // (under 35 km/h: just the fall, nothing counts; Oct 30 2026, the user)
+    const H = this.hit, soft = speed < SOFT; // (under 40 km/h: just the fall, nothing counts; Oct 30 2026, the user)
     H.hard = hard; H.kmh = Math.round(speed * 3.6); H.what = r.what || 'car'; H.pending = !soft;
     // 25+ km/h: a backward somersault through the air (the legs taken out, the head toward the vehicle); slower a roll
     // over / a topple

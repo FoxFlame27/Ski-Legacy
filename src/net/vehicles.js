@@ -258,7 +258,7 @@ export class RemoteVehicles {
     else if (lit !== c.lit) { c.lit = lit; try { lampsOn(c.inst, lit === 2 ? 1 : 0, lit === 2 ? 1 : 0, 0, { drl: lit === 1 ? 1 : 0 }); } catch { /* (no lamps) */ } }
     // the owner's name over it while nobody drives it (Oct 29, the user: "everything you own has your name above if
     // you are not in it")
-    if (driving) { if (c.tag.visible) c.tag.visible = false; } else tagScale(c.tag, d);
+    tagScale(c.tag, d); // (driven or parked: "<name>'s car" over it; their own name tag hides while they sit in it, remote.js)
   }
 
   // On the ground as it is HERE (Oct 30, the user: "for other people, in some cars it looks like the car is floating in

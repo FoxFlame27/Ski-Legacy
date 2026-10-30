@@ -388,7 +388,7 @@ export class RemotePlayers {
     const carry = st.carry && r.state !== ST.ski;
     if (r.carryShown !== carry) { r.carryShown = carry; rig.setCarry?.(carry); }
     // name tag: a little smaller far away, hidden past TAG_FAR
-    const tagOn = d < TAG_FAR;
+    const tagOn = d < TAG_FAR && !(inVeh && (r.state === ST.drive || r.inCar)); // (in a car: no name over their head, the car's own tag says whose it is; Oct 30, the user)
     if (r.tag.visible !== tagOn) r.tag.visible = tagOn;
     if (tagOn) { const k = r.tag.userData.base * Math.max(0.6, Math.min(1, 1.15 - d / 220)); r.tag.scale.set(k * (512 / 96), k, 1); }
     // in the pause menu (F.paused): a dark "In pause menu" badge over their name (Oct 30, the user)

@@ -102,7 +102,7 @@ export function planChaletVillage(O) {
   const corners = [[J.x, J.z], C0, [XE, LEG_Z[0]], [XE, LEG_Z[1]], [XW, LEG_Z[1]], [XW, LEG_Z[2]], [XE, LEG_Z[2]], [XE, LEG_Z[3]], [XL, LEG_Z[3]]];
   const radii = [0, BEND_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, HAIRPIN_R, 0];
   const up = filleted(corners, radii); // (from the junction up to the car park's entrance)
-  const lot = lotAt({ size: 'small', name: 'Almdorf car park', hw: 14, hd: 9 }, XL, LEG_Z[3], -1, 0);
+  const lot = lotAt({ size: 'small', name: 'Chalet village car park', hw: 14, hd: 9 }, XL, LEG_Z[3], -1, 0);
   const pts = [[lot.ex - lot.dirx * 7, lot.ez - lot.dirz * 7], ...up.slice().reverse()]; // (s = 0 in the car park)
   // the clearances (warned, not fatal: the layout is fixed)
   const q = {};

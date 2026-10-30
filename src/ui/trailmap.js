@@ -318,7 +318,7 @@ export class TrailMap {
               ${sec('races', 'RACES', `<div class="tm-grid">${RACE_GRADES.map(([n, c]) => sym('pin', n, c)).join('')}${sym('finish', 'Finish')}${sym('tape', 'Race line', '#2f7bff')}</div>`)}
               ${sec('roads', 'ROADS & CAR PARKS', `<div class="tm-grid">${sym('road', 'Road')}${sym('scenic', 'Scenic road')}${ico('lot', 'Car park')}${sym('ring', 'Roundabout')}${ico('depot', 'Bus depot')}</div>`)}
               ${sec('transit', 'BUSES & TRAIN', `<div class="tm-grid">${sym('express', 'Legacy Express')}${sym('xtunnel', 'Tunnel')}${ico('xstop', 'Station')}${ico('bus', 'Ski bus')}${ico('train', 'Railway')}</div>`)}
-              ${sec('places', 'PLACES', `<div class="tm-grid">${ico('chaletv', 'Chalets (Almdorf)')}${ico('hut', 'Mountain hut')}${ico('shop', 'Ski shop')}${ico('car', 'Autohaus')}${ico('garage', 'Werkstatt')}${ico('med', 'Medical centre')}${ico('police', 'Police')}${ico('secret', 'Landmark')}</div>`)}
+              ${sec('places', 'PLACES', `<div class="tm-grid">${ico('chaletv', 'Chalet village')}${ico('hut', 'Mountain hut')}${ico('shop', 'Ski shop')}${ico('car', 'Autohaus')}${ico('garage', 'Werkstatt')}${ico('med', 'Medical centre')}${ico('police', 'Police')}${ico('secret', 'Landmark')}</div>`)}
               ${sec('jobs', 'JOBS', `<div class="tm-grid">${ico('board', 'Job board')}${ico('job', 'Job target')}</div>`)}
               ${sec('mine', 'MINE', `<div class="tm-grid">${ico('chalet', 'Your chalet')}${ico('mycar', 'Your car')}${ico('impound', 'Impounded')}${ico('myheli', 'Your heli')}</div>`)}
             </div>
@@ -992,11 +992,11 @@ export class TrailMap {
       lab: `YOUR CHALET${own.name ? ` · ${own.name.toUpperCase()}` : ''}`, labo: { size: 12, color: '#8a6a00', prio: 1 } }); // (your chalet: "YOUR CHALET · CHALET 7")
     if (!this.on('places') || !this.inView(cx, cy, 400 * s + 60)) return;
     const n = C?.houses.length || busRoads.chalets?.plots?.filter((q) => !q.playground).length || 18, R = s >= 0.25 ? 11 : 10;
-    const tip = { title: 'Almdorf · Chalets', lines: ['Chalet village, up the Chaletweg north of Legacy Village', `${n} chalets to buy · ski bus stop Almdorf`] };
-    if (s < 0.6) this.icon({ kind: 'chaletv', x: cx, y: cy, r: R, prio: 1.4, wx: C?.x ?? P.x, wz: C?.z ?? P.z, label: 'Almdorf · Chalets', tip });
-    else this.spot(cx, cy, Math.max(14, 120 * s), C?.x ?? P.x, C?.z ?? P.z, 'Almdorf · Chalets', { tip });
+    const tip = { title: 'Chalet village', lines: ['Up the Chaletweg north of Legacy Village', `${n} chalets to buy · ski bus stop Chalet Village`] }; // (Oct 30, the user: "make sure you see chalet village on the map, don't call anything like that Almdorf")
+    if (s < 0.6) this.icon({ kind: 'chaletv', x: cx, y: cy, r: R, prio: 1.4, wx: C?.x ?? P.x, wz: C?.z ?? P.z, label: 'Chalet village', tip });
+    else this.spot(cx, cy, Math.max(14, 120 * s), C?.x ?? P.x, C?.z ?? P.z, 'Chalet village', { tip });
     // (its own label, not the icon's: it stays even where the badge folds into your chalet's)
-    this.label('ALMDORF · CHALETS', cx, cy, { size: 15, color: '#8a3a12', prio: 1.5, alpha: fadeIn(s, 0.03), cands: s < 0.6 ? this.around(R + 1, 5) : this.around(Math.max(14, 130 * s), 6) });
+    this.label('CHALET VILLAGE', cx, cy, { size: 15, color: '#8a3a12', prio: 1.5, alpha: fadeIn(s, 0.03), cands: s < 0.6 ? this.around(R + 1, 5) : this.around(Math.max(14, 130 * s), 6) });
     if (!C) return;
     g.save();
     g.lineCap = 'round'; g.lineJoin = 'round';

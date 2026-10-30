@@ -5,7 +5,8 @@
 // through post.setView): the front office (stone floor, larch panelling, a timber ceiling, warm pendants, the
 // reception counter of stone and oak behind glass with the desk officer, benches, the wanted posters, a clock), a
 // barred gate into the cell block: a visitor corridor along three cells behind real bars (instanced steel rods: crisp
-// and see-through), cold fluorescent tubes, a bunk bed, a steel toilet and a barred window in each cell, the guard
+// and see-through), cold fluorescent tubes; each cell a Swiss holding cell (game/prisoncell.js: a steel bunk welded
+// to the wall, a stainless combi toilet, a wall table and stool, a caged light, the high barred window); the guard
 // post, a visiting desk; E at the front door leaves.
 //
 //   prison.jail(seconds, reason)  fade, you are in a cell (behind the bars) for that long ("In prison · 1:30 · why"),
@@ -28,6 +29,7 @@ import { policeModelReady } from './police.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
 import { LivePortal } from './liveportal.js';
+import { buildCells, blockWallMaterial } from './prisoncell.js';
 
 export const MAX_SENTENCE = 300; // s (the server's limit too)
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0), R = 0.26; // eye height, the walker's radius
@@ -78,6 +80,10 @@ export class PrisonRoom {
     this.buildShell();
     this.buildBars();
     this.buildLights();
+    try { // the cells' furniture, fittings and lights (game/prisoncell.js)
+      this.cellKit = buildCells(this.scene, { cells: CELLS, cellW: CELL_W, room: ROOM });
+      this.obstacles.push(...this.cellKit.obstacles);
+    } catch (e) { console.warn('prison cells', e); this.cellKit = null; }
     this.buildFront(models);
     this.ready = this.buildProps(makeRig);
   }
@@ -97,22 +103,8 @@ export class PrisonRoom {
     // a yellow line along the bars: visitors keep behind it
     const line = new THREE.Mesh(new THREE.PlaneGeometry(CELL_W * 3, 0.08), new THREE.MeshStandardMaterial({ color: 0xd8b21c, roughness: 0.6 }));
     line.rotation.x = -Math.PI / 2; line.position.set(0, 0.004, bars + 0.75); line.receiveShadow = true; S.add(line);
-    // painted block walls: pale institutional green to 1.25 m, a dark stripe, off-white above, the block joints
-    const wallTex = (u) => tex(512, 512, (g, w, h) => {
-      const split = h * (1 - 1.25 / H);
-      g.fillStyle = '#d9dcd6'; g.fillRect(0, 0, w, split);
-      g.fillStyle = '#8fa39a'; g.fillRect(0, split, w, h - split);
-      g.fillStyle = '#4c5c57'; g.fillRect(0, split - 6, w, 8);
-      g.strokeStyle = 'rgba(70,74,70,0.22)'; g.lineWidth = 2;
-      const bh = h / (H / 0.2), bw = w / 2.5; // (0.2 m x 0.4 m blocks; the texture is 1 m wide)
-      for (let row = 0, y = 0; y < h; row++, y += bh) {
-        g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
-        for (let x = (row % 2) * bw / 2; x < w; x += bw) { g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + bh); g.stroke(); }
-      }
-      const r = rng(u);
-      for (let i = 0; i < 40; i++) { g.fillStyle = `rgba(60,55,45,${0.04 + r() * 0.06})`; g.beginPath(); g.ellipse(r() * w, h - r() * h * 0.5, 6 + r() * 30, 2 + r() * 8, 0, 0, 7); g.fill(); } // (scuffs)
-    });
-    const wallMat = (len, seed) => { const t = wallTex(seed); t.wrapS = THREE.RepeatWrapping; t.repeat.set(len, 1); return new THREE.MeshStandardMaterial({ map: t, roughness: 0.85 }); };
+    // painted concrete block walls: a dark lower band, the joints in relief, grime and scuffs (game/prisoncell.js)
+    const wallMat = (len, seed) => blockWallMaterial(len, seed, H);
     const wall = (len, x, z, rotY, seed = 1) => {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(len, H), wallMat(len, seed));
       m.position.set(x, H / 2, z); m.rotation.y = rotY; m.receiveShadow = true; S.add(m); return m;
@@ -124,8 +116,7 @@ export class PrisonRoom {
     { const a = wall(GATE.z0 - z0, x1 - 0.1, (z0 + GATE.z0) / 2, -Math.PI / 2, 5); void a;
       const b = wall(z1 - GATE.z1, x1 - 0.1, (GATE.z1 + z1) / 2, -Math.PI / 2, 6); void b; }
     // the walls between the cells (and the office): 0.2 m block, both faces painted
-    const block = new THREE.MeshStandardMaterial({ map: wallTex(9), roughness: 0.85 });
-    block.map.wrapS = THREE.RepeatWrapping; block.map.repeat.set(3.6, 1);
+    const block = blockWallMaterial(bars - z0, 9, H);
     for (const x of [-1.8, 1.8, 5.4]) {
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.2, H, bars - z0), block);
       m.position.set(x, H / 2, (bars + z0) / 2); m.castShadow = m.receiveShadow = true; S.add(m);
@@ -297,13 +288,13 @@ export class PrisonRoom {
   // ------------------------------------------------------------ cold fluorescent light
   buildLights() {
     const S = this.scene, { H, x0, x1, z0, z1 } = ROOM;
-    S.add(new THREE.HemisphereLight(0xdfe9f2, 0x3a4044, 0.75));
+    S.add(new THREE.HemisphereLight(0xdde8f2, 0x353b3f, 0.6));
     // one cold key from above the corridor: the bars throw their stripes across the cell floors
-    const key = new THREE.DirectionalLight(0xe4f0ff, 1.25);
+    const key = new THREE.DirectionalLight(0xe2eeff, 1.1);
     key.position.set(1.5, H + 5, 4.5); key.target.position.set(0, 0, -2); S.add(key.target);
     key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
     Object.assign(key.shadow.camera, { left: -10, right: 10, top: 8, bottom: -8, near: 0.5, far: 20 });
-    key.shadow.bias = -0.0005; key.shadow.normalBias = 0.02;
+    key.shadow.bias = -0.0005; key.shadow.normalBias = 0.02; key.shadow.radius = 4; // (soft edges under PCF)
     S.add(key);
     const tubeMat = new THREE.MeshStandardMaterial({ color: 0xf2f8ff, emissive: 0xe8f2ff, emissiveIntensity: 2.2 });
     const housing = new THREE.MeshStandardMaterial({ color: 0xcfd3d6, metalness: 0.3, roughness: 0.5 });
@@ -324,7 +315,7 @@ export class PrisonRoom {
     };
     const lights = [];
     for (const x of [-3.6, 0, 3.6, 7.2]) lights.push(fixture(x, 1.6, 'x', 7, 10));
-    for (const x of CELLS) lights.push(fixture(x, -2.2, 'z', 3.2, 6));
+    // (each cell's own caged ceiling light: game/prisoncell.js)
     this.flicker = lights[2]; // (one tube in the corridor never quite settles)
     void x0; void x1; void z0; void z1;
   }
@@ -531,10 +522,10 @@ export class PrisonRoom {
     const fill = new THREE.PointLight(0xffd8b0, 2.2, 12, 1.4); fill.position.set(cx, 2.4, 3.5); S.add(fill);
   }
 
-  // ------------------------------------------------------------ the Meshy props (bunk beds, toilets, desks), the guard
+  // ------------------------------------------------------------ the Meshy props (desks), the guard
   async buildProps(makeRig) {
-    const S = this.scene, { z0, bars, z1, x1 } = ROOM;
-    const [bed, wc, visit, guard] = await Promise.all(['prison/bunk_bed', 'prison/cell_toilet', 'prison/visit_desk', 'prison/guard_desk'].map((n) => loadGLB(n)));
+    const S = this.scene, { bars, z1, x1 } = ROOM;
+    const [visit, guard] = await Promise.all(['prison/visit_desk', 'prison/guard_desk'].map((n) => loadGLB(n)));
     const place = (gltf, size, axis, x, z, ry, fallback) => {
       let m = gltf ? fitModel(gltf, { size, axis }) : null;
       if (!m || !m.children.length) m = fallback();
@@ -543,13 +534,7 @@ export class PrisonRoom {
       S.add(m); return m;
     };
     const plainBox = (w, h, d, color) => () => { const g = new THREE.Group(); const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color, roughness: 0.6 })); b.position.y = h / 2; g.add(b); return g; };
-    for (const cx of CELLS) {
-      // the bunk along the back wall (its long side, 1.95 m), the steel toilet on the side wall by the bars' far end
-      place(bed, 1.95, 'x', cx - 0.55, z0 + 0.58, 0, plainBox(1.95, 1.6, 0.95, 0x6d737a));
-      this.obstacles.push([cx - 0.55 - 1.0, cx - 0.55 + 1.0, z0, z0 + 1.1]);
-      place(wc, 1.15, 'y', cx + CELL_W / 2 - 0.1 - 0.3, -2.9, -Math.PI / 2, plainBox(0.5, 1.1, 0.6, 0xb8bcc0));
-      this.obstacles.push([cx + CELL_W / 2 - 0.1 - 0.62, cx + CELL_W / 2 - 0.1, -3.25, -2.55]);
-    }
+    // (the cells' bunks and combi toilets: procedural, game/prisoncell.js)
     // the visiting desk at the corridor's left end (stool toward the room), a bench on the far wall
     place(visit, 1.9, 'x', -4.65, 1.6, Math.PI / 2, plainBox(1.9, 1.3, 0.9, 0x3a3d40));
     this.obstacles.push([-5.4, -4.15, 0.6, 2.6]);
@@ -695,6 +680,7 @@ export class PrisonRoom {
       this.flicker.mat.emissiveIntensity = 2.2 * f; this.flicker.L.intensity = this.flicker.I * f;
     }
     this.portal.setDay(1 - (nightUniform.value || 0)); // (the soft sky until the live view is up)
+    this.cellKit?.update(1 - (nightUniform.value || 0)); // (the cells' window daylight)
     if (this.plaqueMat) this.plaqueMat.emissiveIntensity = 0.12;
     if (this.crestMat) this.crestMat.emissiveIntensity = 0.35;
     if (this.clock) {

@@ -898,6 +898,12 @@ function openRail(rw) {
 }
 // the line on the map: every other station, the ride time, uphill $RAIL_PRICE (or the day pass), downhill free
 // "next train in 0:42" / "train in now (leaves in 12 s)" (Oct 30, the user: show how long until it comes when you pick)
+// (+ the seats: "next train in 0:42 · 178 of 192 seats free in 4 cars" / "Full (36/36) · next one in 9:10": net/transit.js)
+function seatNext(info, plain, what) {
+  let i = null;
+  try { i = info(); } catch { i = null; }
+  return i ? multiplayer.transit.pickerText(i, what) : nextIn(plain(), what);
+}
 function nextIn(n, what) {
   if (!n || !Number.isFinite(n.wait)) return '';
   if (n.wait <= 0) return ` · ${what} in now${Number.isFinite(n.left) ? `, leaves in ${Math.max(1, Math.ceil(n.left))} s` : ''}`;
@@ -908,7 +914,7 @@ function openRailMap(rw) {
   const st = rw.station, pass = hasPass(), R = layout.railway;
   const at = (id) => R?.stations.find((s) => s.id === id) || {};
   const dests = railway.destinations(st.id).map((d) => ({
-    name: d.name, x: at(d.id).x, z: at(d.id).z, path: d.pts, meta: `${fmtMin(d.min)} · ${d.km.toFixed(1)} km · ${d.up ? 'uphill' : 'downhill'}${nextIn(railway.nextAt?.(st.id, d.up), 'train')}`,
+    name: d.name, x: at(d.id).x, z: at(d.id).z, path: d.pts, meta: `${fmtMin(d.min)} · ${d.km.toFixed(1)} km · ${d.up ? 'uphill' : 'downhill'}${seatNext(() => multiplayer?.transit?.railNext(st.id, d.up), () => railway.nextAt?.(st.id, d.up), 'train')}`,
     price: d.up && !pass ? RAIL_PRICE : undefined, tag: !d.up ? 'FREE' : pass ? 'DAY PASS' : undefined, short: d.up && !pass && save.money < RAIL_PRICE,
     act: () => { boardRail(st, d.up, d.id); input.lock(); },
   }));
@@ -942,7 +948,7 @@ function boardRail(st, up, dest = null) {
     await streamAround(seat.pos.x, seat.pos.z);
   });
   audio.play('board');
-  hud.flash(up ? `Wolkenspitzbahn to ${to || 'Wolkenplatt'}${hasPass() ? ' · Day pass' : ` · -$${RAIL_PRICE}`}` : `Wolkenspitzbahn to ${to || 'Legacy Village'}`, 'good', 2600);
+  hud.flash((up ? `Wolkenspitzbahn to ${to || 'Wolkenplatt'}${hasPass() ? ' · Day pass' : ` · -$${RAIL_PRICE}`}` : `Wolkenspitzbahn to ${to || 'Legacy Village'}`) + (multiplayer?.transit?.boardTag('train', up) || ''), 'good', 3000); // (+ "Car 2 of 4 · seat 14 (62 of 192)")
 }
 function leaveRail(exit) {
   if (!exit) return;
@@ -970,7 +976,7 @@ function openExpress(it) {
     const e = d.course;
     return {
       name: d.st.name, x: d.st.x, z: d.st.z, path: d.pts, color: e?.D.color, race: e?.id,
-      meta: (e ? `${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`) + nextIn(express.trainFor?.(from.id, d.st.id), 'train'),
+      meta: (e ? `${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`) + seatNext(() => multiplayer?.transit?.expressNext(from.id, d.st.id), () => express.trainFor?.(from.id, d.st.id), 'train'),
       price: pass ? undefined : EXPRESS_PRICE, tag: pass ? 'DAY PASS' : undefined, short: !pass && save.money < EXPRESS_PRICE,
       act: () => { boardExpress(from, d.st); input.lock(); }, info: d,
     };
@@ -994,7 +1000,7 @@ function boardExpress(from, to) {
   if (!express.trainIn(from.id, to.id)) {
     if (!hasPass() && save.money < EXPRESS_PRICE) { spend(EXPRESS_PRICE); return; } // (not enough money: says so)
     const wait = express.waitFor(from.id, to.id);
-    hud.flash(`Legacy Express to ${to.name} · due in ${Math.max(1, Math.ceil(wait ?? 30))} s · wait on the platform`, 'good', 3200);
+    hud.flash((isMP() && multiplayer?.transit?.expressWaitText(from, to)) || `Legacy Express to ${to.name} · due in ${Math.max(1, Math.ceil(wait ?? 30))} s · wait on the platform`, 'good', 3200); // (multiplayer: + its seats; a full one: the next with a free seat)
     return;
   }
   if (isMP() && !multiplayer.transit.expressGate(from, to, () => boardExpress(from, to))) return; // (multiplayer: a seat in it first)
@@ -1011,7 +1017,7 @@ function boardExpress(from, to) {
     express.update(0, { viewer: seat.pos });
   });
   audio.play('board');
-  hud.flash(`Legacy Express to ${to.name}${hasPass() ? ' · Day pass' : ` · -$${EXPRESS_PRICE}`}`, 'good', 2600);
+  hud.flash(`Legacy Express to ${to.name}${hasPass() ? ' · Day pass' : ` · -$${EXPRESS_PRICE}`}${multiplayer?.transit?.boardTag('express') || ''}`, 'good', 3000);
 }
 // off the train onto the platform of that station, beside your car (express.arrival): from there you walk (to the
 // race's start beside the station, into the village)
@@ -1093,7 +1099,7 @@ function openBusMap(stop) {
     // (multiplayer: the shared buses run to a timetable; single player the bus comes for you)
     let n = null;
     try { if (isMP() && skibus.line?.mpNextBus && skibus.netStop) n = skibus.line.mpNextBus(skibus.netStop(stop), skibus.netStop(d)); } catch { n = null; }
-    return { name: d.name, x: d.x, z: d.z, path: r.pts, meta: `${fmtMin(r.min)} ride · ${r.km.toFixed(1)} km${nextIn(n, 'bus')}`, tag: 'FREE', act: () => rideBus(d, stop) };
+    return { name: d.name, x: d.x, z: d.z, path: r.pts, meta: `${fmtMin(r.min)} ride · ${r.km.toFixed(1)} km${seatNext(() => multiplayer?.transit?.busNext(stop, d), () => n, 'bus')}`, tag: 'FREE', act: () => rideBus(d, stop) };
   });
   if (!dests.length) { hud.flash('No bus from here', 'bad', 2400); return; }
   travelPicker({ hud, player, audio }).open({
@@ -1164,7 +1170,7 @@ function boardBus(from, dest) {
     await streamAround(seat.pos.x, seat.pos.z);
   });
   audio.play('board');
-  hud.flash(`Ski bus to ${dest.name}`, 'good', 2400);
+  hud.flash(`Ski bus to ${dest.name}${multiplayer?.transit?.boardTag('bus') || ''}`, 'good', 2800);
   input.lock();
 }
 function leaveBus(exit) {

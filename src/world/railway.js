@@ -432,7 +432,9 @@ export class Railway {
     let seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
     if (pick) { const at = this.seatAt(tr, pick.seat); if (at) { carIdx = at.car; car = tr.cars[carIdx]; seat = at.seat; } }
     const dest = destId && destId !== id ? destId : up ? 'platt' : 'tal';
-    this.ride = { train: tr, car: carIdx, seat, up, from: id, dest, departed: false, wait: 0 };
+    let seatNo = car.seats.indexOf(seat); // (numbered through the cars, car 0's first: the seat registry's index)
+    for (let j = 0; j < carIdx; j++) seatNo += tr.cars[j].seats?.length || 0;
+    this.ride = { train: tr, car: carIdx, seat, seatNo, up, from: id, dest, departed: false, wait: 0 };
     this.look.yaw = 0; this.look.pitch = -0.04;
     this.view = 'seat';
     this.fov = null; this.chase.off = null;
@@ -478,6 +480,20 @@ export class Railway {
     }
     return best;
   }
+  /** Both trains for station `id` heading up / down, soonest first: [{ train, wait, left }] (multiplayer: the next one
+   *  with a free seat, net/transit.js). */
+  departures(id, up) {
+    const w = this.windowAt(id, up), out = [];
+    if (!w) return out;
+    for (const tr of this.trains) {
+      const u = ((((this.t / CYCLE + tr.phase) % 1) + 1) % 1) * CYCLE;
+      const into = (((u - w.u0) % CYCLE) + CYCLE) % CYCLE;
+      out.push(into < w.dur ? { train: tr, wait: 0, left: w.dur - into } : { train: tr, wait: CYCLE - into, left: w.dur });
+    }
+    return out.sort((a, b) => a.wait - b.wait);
+  }
+  get carCount() { return this.trains[0]?.cars.length || 0; }
+  get seatCount() { return this.trains[0]?.seatCount || 0; }
   // the stretch of the cycle (u0, dur) a train stands at station id with its doors open, about to leave up / down
   // (scanned off the timetable once per station and way)
   windowAt(id, up) {

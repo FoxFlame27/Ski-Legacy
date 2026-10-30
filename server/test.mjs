@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -95,6 +95,31 @@ try {
   const s3 = await b.req('seatClaim', { k: 'gondola', v: 'g7', n: 1 });
   const s4 = await a.req('seatClaim', { k: 'gondola', v: 'g7', n: 1 });
   ok(s3.ok && s3.d.seat === 0 && !s4.ok && s4.err === 'full', 'a one-seat cabin: the second claim is refused (full)');
+  ok(s4.d?.n === 1 && s4.d?.taken === 1 && s3.d.n === 1 && s3.d.taken === 1, 'a full claim says the capacity and how many are aboard (1/1); a seat claim says it too');
+  // capacity = the vehicle's real seat count (n): a 2-seat bus run takes 2, the third waits for the next bus
+  const c1 = await a.req('seatClaim', { k: 'bus', v: 'cap-bus', n: 2 });
+  const c2 = await b.req('seatClaim', { k: 'bus', v: 'cap-bus', n: 2 });
+  const cEv = await a.next('seats', (d) => d.v === 'cap-bus' && d.occ.length === 2);
+  ok(c1.ok && c2.ok && c2.d.taken === 2 && cEv?.n === 2, 'a 2-seat bus: two claims seated, the broadcast carries its capacity (n 2, 2 aboard)');
+  const big = await a.req('seatClaim', { k: 'train', v: 'cap-train', n: 192, seat: 150 });
+  ok(big.ok && big.d.seat === 150 && big.d.n === 192, 'a 4-car train (192 seats): a seat in its 4th car can be claimed (no 64-seat limit)');
+  const huge = await b.req('seatClaim', { k: 'express', v: 'cap-x', n: 9999 });
+  ok(huge.ok && huge.d.n === SEAT_CAPS.express, 'n is capped per kind');
+  await a.req('seatRelease'); await b.req('seatRelease');
+  { const w0 = server.worlds.get(la.d.world.id); ok(!w0.seats.get('bus|cap-bus') && !w0.seats.get('train|cap-train'), 'off again: the seats go back'); }
+  // the third player on a full bus: refused (full, 2/2) until a seat is free again
+  await a.req('seatClaim', { k: 'bus', v: 'cap-bus', n: 2 }); await b.req('seatClaim', { k: 'bus', v: 'cap-bus', n: 2 });
+  const cx = new Fake(url); await cx.open();
+  const rx = await cx.req('register', { name: 'Seatless' }); await cx.req('login', { v: PROTO, name: 'Seatless', token: rx.d.token, tt: 'tt-other' });
+  const jx = await a.next('join', (d) => d.name === 'Seatless');
+  ok(jx?.tt === 'tt-other', "a player's timetable fingerprint (game version) comes with their join: another version's trains run other times");
+  const c3f = await cx.req('seatClaim', { k: 'bus', v: 'cap-bus', n: 2 });
+  ok(!c3f.ok && c3f.err === 'full' && c3f.d.n === 2 && c3f.d.taken === 2, 'a third rider on the full 2-seat bus is refused (full 2/2)');
+  await b.req('seatRelease');
+  const c3ok = await cx.req('seatClaim', { k: 'bus', v: 'cap-bus', n: 2 });
+  ok(c3ok.ok && c3ok.d.seat === 1, 'a seat free again: the waiting rider gets it');
+  await cx.req('seatRelease'); await a.req('seatRelease'); cx.close();
+  await a.next('leave', (d) => d.name === 'Seatless');
   const s5 = await a.req('seatClaim', { k: 'train', v: 'rail-0', n: 24, seat: 5 });
   const s6 = await b.req('seatClaim', { k: 'train', v: 'rail-0', n: 24, seat: 5 });
   ok(s5.ok && s5.d.seat === 5 && s6.ok && s6.d.seat === 0, 'a preferred free seat is given; taken, the lowest free one');

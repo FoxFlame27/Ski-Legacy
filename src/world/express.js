@@ -178,7 +178,7 @@ export class Express {
     this.trains = [];
     for (const dir of [1, -1]) for (let k = 0; k < PER_DIR; k++) this.trains.push(new TrainSet(this, dir, k / PER_DIR + (dir > 0 ? 0 : 0.5 / PER_DIR), k));
     // traffic stops for (and is shoved off the line by) the near trains (game/traffic.js)
-    addTrainBlocker(() => this.trains.flatMap((tr) => tr.lod === 2 ? [] : tr.cars.map((c, k) => (k === 0 && this.ride?.train === tr ? this.cabin : c).group)), { hw: CAR.hw, hd: CAR.half });
+    addTrainBlocker(() => this.trains.flatMap((tr) => tr.lod === 2 ? [] : tr.cars.map((c, k) => (k === (this.ride?.car || 0) && this.ride?.train === tr ? this.cabin : c).group)), { hw: CAR.hw, hd: CAR.half });
     this.solid = new CarColliders(colliders, 8, PITCH / 2); // the cars near you are solid (trainstop.js; PITCH: no gaps)
     this.rate = { 1: 1, '-1': 1 }; this.blocked = { 1: false, '-1': false }; // (you on a track: that direction's clock)
     this.passengers = null; // (copied from the Wolkenspitzbahn's once it has seated its own: copyPassengers)
@@ -320,9 +320,9 @@ export class Express {
     const kappa = wrapA(h1 - h0) / 24; // (+: turning left)
     const lean = clamp((st.speed * st.speed * kappa) / G * 0.32, -0.065, 0.065); // (+: leaning left)
     for (let k = 0; k < CARS; k++) {
-      const useCabin = riding && k === 0;
+      const useCabin = riding && k === (this.ride.car || 0); // (the car you sit in: the full cabin stands in for it)
       const c = useCabin ? this.cabin : tr.cars[k];
-      if (riding && k === 0) { tr.cars[0].group.visible = false; tr.cars[0].lo.visible = false; }
+      if (useCabin) { tr.cars[k].group.visible = false; tr.cars[k].lo.visible = false; }
       else { c.group.visible = lod === 0; c.lo.visible = lod === 1; }
       const sc = st.s + d * (1.5 - k) * PITCH;
       const fwd = FLIP[k] ? -d : d; // the way the car's cab (+z) faces, in s
@@ -394,6 +394,23 @@ export class Express {
     }
     return best;
   }
+  /** Every train going dir at station a, soonest first: [{ train, wait, left }] (multiplayer: the next one with a
+   *  free seat, net/transit.js). */
+  departures(a, dir) {
+    const w = this.way(dir), d = w.segs.find((g) => g.kind === 'dwell' && g.st === a), out = [];
+    if (!d) return out;
+    for (const tr of this.trains) {
+      if (tr.dir !== dir) continue;
+      const into = ((((this.u(tr) - d.t0) % w.loop) + w.loop) % w.loop);
+      out.push(into < d.dur ? { train: tr, wait: 0, left: d.dur - into } : { train: tr, wait: w.loop - into, left: d.dur });
+    }
+    return out.sort((x, y) => x.wait - y.wait || y.left - x.left);
+  }
+  /** departures() for the trip fromId -> toId (the shorter way round). */
+  departuresFor(fromId, toId) {
+    const a = this.stIndex(fromId), b = this.stIndex(toId);
+    return a < 0 || b < 0 || a === b ? [] : this.departures(a, this.bestDir(a, b));
+  }
   // On foot near a station (main.js passes the walker): a train each way is brought in soon (its direction's
   // timetable shifted while it is still far off) and held at the platform while you are about (that direction's
   // clock stands still with a few seconds of its stop left). Nobody is ever moved: the trains come to you.
@@ -444,13 +461,20 @@ export class Express {
   }
   /** The seat number single player gives you (the panorama row's window seat): the seat registry's index. */
   preferredSeat() { const c = this.cabin.seats; return Math.max(0, c.indexOf(c.find((s) => s.row === 1 && s.window && s.side > 0) || c.find((s) => s.front && s.window) || c[0])); }
-  get seatCount() { return this.cabin?.seats?.length || 0; }
-  /** Where seat n (in the lead car: the riders' car) of train tr is now: into out, its facing as a heading; null when
-   *  the train is too far to be placed. */
+  /** Seats in a whole train (the seat registry's capacity): every car of it (CARS coupled cars, the cabin's layout each). */
+  get seatCount() { return (this.cabin?.seats?.length || 0) * CARS; }
+  get carCount() { return CARS; }
+  /** A train's seats are numbered through its cars (car 0's first): seat n -> { car, seat } (null: no such seat). */
+  seatAt(n) {
+    const per = this.cabin?.seats?.length || 0, car = per ? Math.floor(n / per) : -1;
+    return per && n >= 0 && car < CARS ? { car, seat: this.cabin.seats[n % per], idx: n % per } : null;
+  }
+  /** Where seat n (any car of the train) of train tr is now: into out, its facing as a heading; null when the train
+   *  is too far to be placed. */
   seatWorldAt(tr, n, out) {
-    const st = this.cabin.seats[n];
+    const at = this.seatAt(n), st = at?.seat;
     if (!st || tr.lod === 2 || tr.lod < 0) return null;
-    const g = this.ride?.train === tr ? this.cabin.group : tr.cars[0].group;
+    const g = this.ride?.train === tr && (this.ride.car || 0) === at.car ? this.cabin.group : tr.cars[at.car].group;
     out.copy(st.pos).applyQuaternion(g.quaternion).add(g.position);
     _mpf.set(Math.sin(st.yaw), 0, Math.cos(st.yaw)).applyQuaternion(g.quaternion);
     return Math.atan2(_mpf.x, _mpf.z);
@@ -519,9 +543,10 @@ export class Express {
     if (!this.mp && n.left < DEPART_MIN) this.off[dir] -= DEPART_MIN - n.left;
     const tr = n.train;
     const segI = w.segs.findIndex((g) => g.kind === 'dwell' && g.st === a);
-    const seat = (pick && this.cabin.seats[pick.seat]) || this.cabin.seats.find((s) => s.row === 1 && s.window && s.side > 0) || this.cabin.seats.find((s) => s.front && s.window) || this.cabin.seats[0];
+    const at = pick ? this.seatAt(pick.seat) : null; // (multiplayer: the seat the server gave you, in whichever car)
+    const seat = at?.seat || this.cabin.seats.find((s) => s.row === 1 && s.window && s.side > 0) || this.cabin.seats.find((s) => s.front && s.window) || this.cabin.seats[0];
     this.wait = null;
-    this.ride = { train: tr, from: a, dest: b, dir, segI, departed: false, exitSent: false, seat };
+    this.ride = { train: tr, from: a, dest: b, dir, segI, departed: false, exitSent: false, seat, car: at ? at.car : 0, seatNo: pick ? pick.seat : this.cabin.seats.indexOf(seat) };
     this.lastDest = b;
     this.look.yaw = 0; this.look.pitch = -0.04;
     this.view = 'seat';

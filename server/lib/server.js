@@ -548,7 +548,7 @@ class Client {
   sendRaw(s) { if (this.ws && this.ws.readyState === 1) this.ws.send(s); }
   send(t, d) { this.sendRaw(JSON.stringify({ t, d })); }
   res(id, ok, d, err) { if (id == null) return; this.sendRaw(JSON.stringify(ok ? { t: 'res', id, ok: true, d } : { t: 'res', id, ok: false, err, d })); }
-  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.plot, vehs: this.vehs }; }
+  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.plot, vehs: this.vehs, tt: this.tt || null }; }
 }
 
 // ------------------------------------------------------------------ the server
@@ -979,6 +979,7 @@ export class GameServer {
     c.profile = this.store.profiles.data[k] ||= newProfile(a.name);
     if (c.profile.jailUntil && c.profile.jailUntil <= Date.now()) { delete c.profile.jailUntil; delete c.profile.jailReason; this.store.profiles.save(); } // (served)
     if (d.look && typeof d.look === 'object') c.look = { c: str(d.look.c, 32), o: d.look.o && JSON.stringify(d.look.o).length < 400 ? d.look.o : null, s: str(d.look.s, 32) };
+    c.tt = str(d.tt, 32); // the client's timetable fingerprint (net/transit.js): another game version runs other times
     this.online.set(k, c);
     this.plotsHint(d.plots);
     this.placeChalet(c); // (your chalet back on its plot, or another free one; before 'join' carries it)
@@ -1016,6 +1017,7 @@ export class GameServer {
       old.look = { c: str(d.look.c, 32), o: d.look.o && JSON.stringify(d.look.o).length < 400 ? d.look.o : null, s: str(d.look.s, 32) };
       old.world.broadcast('look', { pid: old.pid, look: old.look }, old);
     }
+    if (str(d.tt, 32)) old.tt = str(d.tt, 32); // (the same device or another: its game version's timetable)
     this.log(`[+] ${old.name} reconnected -> world ${old.world.id} (resumed${ows ? ', replaced an open socket' : ''})`);
     return { d: this.loginMsg(old, true) };
   }

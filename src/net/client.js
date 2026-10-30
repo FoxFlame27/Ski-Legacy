@@ -94,12 +94,21 @@ export class NetClient {
   sendPresence(row) { if (this.open && this.ws.bufferedAmount < 65536) this.ws.send(JSON.stringify({ t: 'p', d: row })); }
 
   // ---------------------------------------------------------------- clock
-  serverNow() { return performance.now() + this.offset; }
+  // (before the first pong: the system clock, which is the server's give or take NTP, instead of performance.now()
+  // alone: that is ms since this page loaded, so every train, bus and cabin would stand somewhere else for each
+  // player until the first answer came)
+  serverNow() { return this.hasOffset ? performance.now() + this.offset : Date.now(); }
   ping() { this.send('ping', { c: performance.now() }); }
   onPong(d) {
     const now = performance.now(), rtt = now - d.c;
     if (!(rtt >= 0) || rtt > 10000) return;
-    this.samples.push([rtt, d.s - (d.c + rtt / 2)]);
+    const off = d.s - (d.c + rtt / 2);
+    // Each sample puts the true offset within +-rtt/2 of its own. One that overlaps none of the kept ones means the
+    // clock jumped (a laptop that slept: performance.now() stood still; the system clock set): the old samples are
+    // all wrong now, and the quickest of them would otherwise keep the old offset (every train, bus and cabin in the
+    // wrong place) until it fell out of the window 20 s later. Start over from this one.
+    if (this.samples.length && this.samples.every((s) => Math.abs(s[1] - off) > (s[0] + rtt) / 2 + 25)) this.samples.length = 0;
+    this.samples.push([rtt, off]);
     if (this.samples.length > 10) this.samples.shift();
     let best = this.samples[0];
     for (const s of this.samples) if (s[0] < best[0]) best = s;
@@ -107,7 +116,7 @@ export class NetClient {
     const target = best[1];
     this.offset = !this.synced || Math.abs(target - this.offset) > 250 ? target : this.offset + (target - this.offset) * 0.2;
     this.rtt = rtt;
-    this.synced = true;
+    this.synced = true; this.hasOffset = true;
   }
 
   // ---------------------------------------------------------------- connection

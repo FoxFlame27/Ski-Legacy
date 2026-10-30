@@ -101,7 +101,7 @@ export class Multiplayer {
     await this.ensureOpen();
     let d;
     try {
-      d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots() });
+      d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots(), tt: this.transit.fingerprint() });
     } catch (e) {
       if (e.code === 'bad_login') this.forgetAccount(); // (the server has no such name / key: pick a name again)
       throw e;
@@ -162,6 +162,7 @@ export class Multiplayer {
       now: () => net.serverNow(), selfPid: MP.pid, vehicles: this.vehicles,
     });
     for (const p of w.players) { MP.world.players.set(p.pid, { pid: p.pid, name: p.name, chalet: p.chalet }); this.remotes.add(p); }
+    setTimeout(() => this.transit.checkVersions(w.players.filter((p) => p.pid !== MP.pid)), 3000);
     MP.seats.clear(); for (const s of w.seats || []) MP.seats.set(`${s.k}|${s.v}`, s.occ);
     MP.warps.clear(); for (const x of w.warps || []) MP.warps.set(x.key, { off: x.off, rate: x.rate, since: x.since });
     MP.heli = w.heli || null;
@@ -172,7 +173,7 @@ export class Multiplayer {
     for (const off of this.offs) off();
     const on = (t, fn) => this.offs.push(net.on(t, fn));
     on('P', (rows) => this.remotes?.onRows(rows));
-    on('join', (p) => { MP.world?.players.set(p.pid, { pid: p.pid, name: p.name, chalet: p.chalet }); this.remotes?.add(p); this.c.hud.flash(`${p.name} joined`, 'good', 2200); });
+    on('join', (p) => { MP.world?.players.set(p.pid, { pid: p.pid, name: p.name, chalet: p.chalet }); this.remotes?.add(p); this.c.hud.flash(`${p.name} joined`, 'good', 2200); setTimeout(() => this.transit.checkVersions([p]), 2400); }); // (another game version: its trains run other times)
     on('leave', (p) => { MP.world?.players.delete(p.pid); this.remotes?.remove(p.pid); this.c.hud.flash(`${p.name} left`, 'good', 2200); });
     on('look', (d) => this.remotes?.setLook(d.pid, d.look));
     on('clock', (d) => { this.clock = d; });
@@ -218,7 +219,7 @@ export class Multiplayer {
     const acc = this.account();
     if (!acc || !MP.active) return;
     try {
-      const d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots() });
+      const d = await net.request('login', { v: PROTO, name: acc.name, token: acc.token, look: this.look(), plots: this.plots(), tt: this.transit.fingerprint() });
       MP.pid = d.pid; MP.chalets = d.chalets || {};
       this.byeReason = null; // (a 'restart' before this reconnect is not the reason for a later loss)
       this.setServerMoney(d.profile.money);

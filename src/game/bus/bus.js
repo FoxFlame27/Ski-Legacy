@@ -1460,6 +1460,28 @@ export class BusLine {
     }
     return best;
   }
+  /** Every bus from `from` that goes on to `to`, soonest first: [{ bus, wait, left }] (its next stop there each;
+   *  multiplayer: the next one with a free seat, net/transit.js). */
+  mpBuses(from, to) {
+    const out = [];
+    for (const b of this.fleet) {
+      const r = b.route, c = r.cycle;
+      const tau = ((((this.mp ? this.mp.time(r) : this.fleetClock) + b.phase) % c) + c) % c;
+      let best = null;
+      for (let d = 0; d < 2; d++) {
+        const P = d ? r.back : r.out;
+        for (let i = 0; i < P.marks.length; i++) {
+          const m = P.marks[i];
+          if (!sameStop(m.stop, from) || !this.serves(b, d, i, to)) continue;
+          const at = (d ? r.out.dur : 0) + m.t, into = (((tau - at) % c) + c) % c;
+          const n = into < m.dwell ? { bus: b, wait: 0, left: m.dwell - into } : { bus: b, wait: c - into, left: m.dwell };
+          if (!best || n.wait < best.wait) best = n;
+        }
+      }
+      if (best) out.push(best);
+    }
+    return out.sort((x, y) => x.wait - y.wait || y.left - x.left);
+  }
   /** The seat single player gives you (a window seat on the left, row 2): the seat registry's index. */
   preferredSeat() { const S = this.bus.seats; return Math.max(0, S.indexOf(S.find((q) => q.window && q.side < 0 && q.row === 2) || S[0])); }
   get seatCount() { return this.bus.seats.length; }
@@ -1479,7 +1501,7 @@ export class BusLine {
     const b = pick.bus;
     if (!b || b.taken) return null;
     const seat = this.bus.seats[pick.seat] || this.bus.seats[0];
-    this.ride = { mp: true, fleetBus: b, from, to, seat, v: 0, departed: false, exitSent: false, li: 0, legs: [], t: null, s: 0 };
+    this.ride = { mp: true, fleetBus: b, from, to, seat, seatNo: this.bus.seats.indexOf(seat), v: 0, departed: false, exitSent: false, li: 0, legs: [], t: null, s: 0 };
     this.look.yaw = -0.35; this.look.pitch = -0.05;
     this.view = 'seat'; this.fov = null; this.chase.off = null;
     this.bus.group.visible = true;

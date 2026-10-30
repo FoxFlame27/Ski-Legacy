@@ -136,6 +136,20 @@ results_win.m4a     "You Win !! Impressive !!" by Komiku, same album
 results_loop.m4a    "Choose your kart !" by Komiku, same album
                     https://archive.org/details/komiku-incredible-kart-game                 CC0 1.0
 
+In-game tracks added later (freeride / race playlists; trimmed, faded, loudness-matched):
+ride_alive.m4a      "Everyone is so alive" by Loyalty Freak Music, album "ROBOT DANCE !"
+ride_afterparty.m4a "After Party" by Loyalty Freak Music, same album (from 0:01.5)
+ride_feelgood.m4a   "It feels good to be alive too" by Loyalty Freak Music, same album (from 0:04)
+                    https://archive.org/details/LoyaltyFreakMusicROBOTDANCE2017113032423755   CC0 1.0
+ride_robot.m4a      "Dance Robot ACTIVATE" by Loyalty Freak Music, album "ROLLER DISCO DANCE DANCE"
+ride_feet.m4a       "Can't Stop My Feet !" by Loyalty Freak Music, same album
+ride_energy.m4a     "Last Energy For The Day" by Loyalty Freak Music, same album
+race_fire.m4a       "I'M ON FIRE" by Loyalty Freak Music, same album
+race_sweat.m4a      "Sweat Time !" by Loyalty Freak Music, same album
+                    https://archive.org/details/LoyaltyFreakMusic-ROLLERDISCODANCEDANCE       CC0 1.0
+race_road.m4a       "Road 1 Fight" by Komiku, album "Helice Awesome Dance Adventure !!"
+                    https://archive.org/details/Komiku-HeliceAwesomeDanceAdventure            CC0 1.0
+
 ANNOUNCER (public/audio/voice/, mono AAC 56 kbps)
 -------------------------------------------------
 Generated for this game with the macOS text-to-speech voice "Daniel" (`say`),

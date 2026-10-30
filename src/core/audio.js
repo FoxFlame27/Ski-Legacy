@@ -52,13 +52,20 @@ const VOICE_ALIAS = {
   'legacy-world-downhill': 'alpine', downhill: 'alpine', 'ice-canyon': 'icecanyon', 'big-air': 'bigair', 'big-air-line': 'bigair',
 };
 
-// soundtrack: playlists per context (tracks with `once` play a single time, then the list moves on)
+// soundtrack: playlists per context (tracks with `once` play a single time, then the list moves on).
+// MUSIC_SHUFFLE contexts pick a weighted-random track each time instead (never one of the last few played);
+// `w` is a track's relative weight (default 1): the older kart-game tracks sit low so they come up only now and then
 const MUSIC = {
   menu: [{ name: 'menu_hitech' }],
-  freeride: [{ name: 'ride_rocknroll' }, { name: 'ride_city' }],
-  race: [{ name: 'race_punk' }],
+  freeride: [
+    { name: 'ride_alive' }, { name: 'ride_afterparty' }, { name: 'ride_feelgood' },
+    { name: 'ride_robot' }, { name: 'ride_feet' }, { name: 'ride_energy' },
+    { name: 'ride_rocknroll', w: 0.2 }, { name: 'ride_city', w: 0.2 },
+  ],
+  race: [{ name: 'race_fire' }, { name: 'race_sweat' }, { name: 'race_road' }, { name: 'race_punk', w: 0.2 }],
   results: [{ name: 'results_win', once: true }, { name: 'results_loop' }],
 };
+const MUSIC_SHUFFLE = new Set(['freeride', 'race']);
 // how loud each context sits under the game (x music volume)
 const MUSIC_LEVEL = { menu: 0.85, freeride: 0.45, race: 0.7, results: 0.8 };
 // per-track loudness trim (the files are matched to about -17 dB RMS; the menu track peaks early)
@@ -1347,8 +1354,23 @@ export class Audio {
     this.fadeDeck(this.deck, c === 'results' ? 0.5 : 1.4);
     this.deck = null;
     if (!c) return;
-    this.playlist = { ctx: c, i: 0 };
-    this.startTrack(MUSIC[c][0], c === 'results' ? 0.15 : 1.2);
+    this.playlist = { ctx: c, i: MUSIC_SHUFFLE.has(c) ? this.pickTrack(c) : 0 };
+    this.startTrack(MUSIC[c][this.playlist.i], c === 'results' ? 0.15 : 1.2);
+  }
+
+  // weighted shuffle (MUSIC_SHUFFLE contexts): skips `once` tracks and the last few played in this context
+  pickTrack(c) {
+    const list = MUSIC[c], wt = (i) => list[i].w ?? 1;
+    const recent = ((this.musicRecent ||= {})[c] ||= []);
+    const pool = list.map((t, i) => i).filter((i) => !list[i].once);
+    const keep = Math.min(3, pool.length >> 1), avoid = keep ? recent.slice(-keep) : [];
+    let cand = pool.filter((i) => !avoid.includes(i));
+    if (!cand.length) cand = pool;
+    let r = Math.random() * cand.reduce((s, i) => s + wt(i), 0), pick = cand[cand.length - 1];
+    for (const i of cand) { r -= wt(i); if (r < 0) { pick = i; break; } }
+    recent.push(pick);
+    if (recent.length > 4) recent.shift();
+    return pick;
   }
 
   startTrack(track, fadeIn = 1.2) {
@@ -1418,7 +1440,8 @@ export class Audio {
     if (!list || P.ctx !== this.musicCtx) return;
     // skip the one-shot intros (e.g. the results fanfare) when wrapping around
     let i = P.i + 1;
-    if (i >= list.length) { i = list.findIndex((x) => !x.once); if (i < 0) i = 0; }
+    if (MUSIC_SHUFFLE.has(P.ctx)) i = this.pickTrack(P.ctx);
+    else if (i >= list.length) { i = list.findIndex((x) => !x.once); if (i < 0) i = 0; }
     P.i = i;
     this.fadeDeck(this.deck, xf);
     this.startTrack(list[i], Math.max(0.05, xf));

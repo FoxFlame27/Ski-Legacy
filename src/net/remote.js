@@ -161,6 +161,20 @@ export class RemotePlayers {
   }
 
   byName(name) { for (const r of this.players.values()) if (r.name === name) return r; return null; }
+  /** Bodies to bump into (player.js collide: the people list; Oct 30, the user: "we can go through each other while
+   *  skiing, we should bump"): everyone on foot / on skis / tumbling in your interior (null: outdoors), not seated,
+   *  riding or in a vehicle. Fills and returns `out` (its objects reused). */
+  bodies(interior, out) {
+    let n = 0;
+    for (const r of this.players.values()) {
+      if (!r.ok || r.veh || (r.interior || null) !== (interior || null)) continue;
+      if (r.state !== ST.walk && r.state !== ST.ski && r.state !== ST.fall) continue;
+      const b = out[n] || (out[n] = { x: 0, y: 0, z: 0, mp: true });
+      b.x = r.pos.x; b.y = r.pos.y; b.z = r.pos.z; b.pid = r.pid; n++;
+    }
+    out.length = n;
+    return out;
+  }
   /** The trail map: everyone outdoors where they are now (inside a chalet / the Autohaus / the prison: not shown). */
   mapMarkers() {
     const out = [];

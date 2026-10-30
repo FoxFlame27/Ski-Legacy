@@ -90,6 +90,7 @@ import { MP, isMP } from './net/mode.js'; // multiplayer (docs/multiplayer.md): 
 import { net } from './net/client.js';
 import { Multiplayer, errText } from './net/session.js';
 import { ST as MPST, F as MPF, fallFlags as mpFallFlags } from './net/protocol.js';
+const mpBodies = []; // (the other players to bump into: player.people in multiplayer)
 let multiplayer = null; // the multiplayer session (net/session.js), built at the end of boot
 let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
 let bests = null; // personal-best cards in free ride (top speed, longest jump, milestones)
@@ -1232,7 +1233,8 @@ function setAIOn(on) {
   if (express) express.noPassengers = !on; // (the trains' seated passengers)
   if (railway) { railway.noPassengers = !on; if (railway.people?.group) railway.people.group.visible = on; }
   if (modes) modes.botCount = on ? undefined : 0; // (race sessions: no AI field)
-  player.people = on ? () => npcs.near : () => EMPTY_PEOPLE;
+  // (multiplayer: the other players instead, a soft bump off each other: net/remote.js bodies)
+  player.people = on ? () => npcs.near : () => multiplayer?.remotes?.bodies(multiplayer.interior ?? null, mpBodies) || EMPTY_PEOPLE;
 }
 // the swapped save (multiplayer profile <-> single-player save): the player, the rental car, the hooks follow it
 function applyMpSave() {

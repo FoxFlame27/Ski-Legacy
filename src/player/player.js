@@ -1373,7 +1373,13 @@ export class Player {
     const bankT = skiing && !this.air ? clamp(-this.edge * FP_BANK, -FP_BANK_MAX, FP_BANK_MAX) : 0;
     spring(_set, S.roll, S.rollV, bankT, 5.5, h); S.roll = _set.x; S.rollV = _set.v;
     const roll = S.roll;
-    pitch = clamp(pitch, -1.5, 1.3);
+    pitch = clamp(pitch, -1.25, 1.3); // (was -1.5: straight down showed the inside of your own neck and hood)
+    // looking down, the eye goes forward and a little down with the head (as a real head tips), so the camera is never
+    // inside the collar (Oct 30, the user: "if you look down a lot you can see inside yourself by the head")
+    if (pitch < -0.55) {
+      const k = smoothstep(-0.55, -1.25, pitch), fy = yaw0 + S.lead + this.lookYaw;
+      eye.x += Math.sin(fy) * 0.16 * k; eye.z += Math.cos(fy) * 0.16 * k; eye.y -= 0.05 * k;
+    }
     // speed: a fine buzz through the skis (more when skidding), and the shake of hard landings
     const fast = skiing && !this.air ? smoothstep(14, 34, sp) : 0;
     const chatter = skiing && !this.air ? clamp(this.sideslip, 0, 1) * smoothstep(5, 14, sp) : 0;

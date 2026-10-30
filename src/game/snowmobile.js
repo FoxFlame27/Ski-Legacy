@@ -404,7 +404,7 @@ export class Snowmobiles {
       const vn = d.vx * nx + d.vz * nz;
       if (vn < 0) { if (!isSoft && -vn >= hard) { hard = -vn; kind = k; } soft = soft || isSoft; }
     };
-    const kindOf = (c) => (c.net ? 'net' : c.soft ? 'snow' : c.r !== undefined ? (c.r < 0.7 ? 'metal' : 'rock') : 'building');
+    const kindOf = (c) => (c.net ? 'net' : c.soft ? 'snow' : c.r !== undefined ? (c.r < 0.7 && !c.rock ? 'metal' : 'rock') : 'building');
     for (const k of [0.95, -0.85]) {
       const cx = d.x + fx * k, cz = d.z + fz * k, R = 0.72;
       const t = this.vegetation?.collide?.(cx, cz, R, 0.6, 'crown'); // (the whole tree: its branches too)

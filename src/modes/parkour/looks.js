@@ -382,7 +382,12 @@ function rockScenery(course, g, rnd) {
     for (const [u, w] of [[0, 0], [0.45, 0], [-0.45, 0], [0, 0.45], [0, -0.45]]) lo = Math.min(lo, meshGround(x + u * s, z + w * s));
     const sy = 0.75 + rnd() * 0.5, height = kit.height[v] * s * sy;
     const gx = meshGround(x + 0.5, z) - meshGround(x - 0.5, z), gz = meshGround(x, z + 0.5) - meshGround(x, z - 0.5);
-    rocks.push({ x, y: lo - height * 0.22, z, s, v, sx: 0.9 + rnd() * 0.4, sy, ry: rnd() * 6.28, rx: (rnd() - 0.5) * 0.2, rz: (rnd() - 0.5) * 0.2, gx, gz, gh: meshGround(x, z) });
+    const r = { x, y: lo - height * 0.22, z, s, v, sx: 0.9 + rnd() * 0.4, sy, ry: rnd() * 6.28, rx: (rnd() - 0.5) * 0.2, rz: (rnd() - 0.5) * 0.2, gx, gz, gh: meshGround(x, z) };
+    rocks.push(r);
+    // solid (Oct 30, the user: "at some races you can walk through the stones there, make them collide"): registered
+    // with the course's other props outside the nets (course.solids, freeworld.js syncMasts: the shared colliders
+    // the player, the snowmobile and the cars use); a circle as wide as the boulder, top = its real top
+    course.solids?.push({ x, z, r: 0.45 * s * (1 + r.sx) / 2, top: r.y + height, rock: true });
   };
   // the nest: boulders on both sides of the start platform and behind the start house
   for (let k = 0; k < 14; k++) {

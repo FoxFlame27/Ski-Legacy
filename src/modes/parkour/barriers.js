@@ -424,12 +424,17 @@ function buildRocks(ctx, line, rnd) {
       const v = Math.min(BOULDER_VARIANTS - 1, Math.floor(rnd() * BOULDER_VARIANTS));
       const height = ctx.kit.height[v] * s * sy;
       const gh = meshGround(x, z), gx = (meshGround(x + 0.5, z) - meshGround(x - 0.5, z)), gz = (meshGround(x, z + 0.5) - meshGround(x, z - 0.5));
-      c.rocks.push({ x, y: g - height * 0.2, z, s, v, sx: 0.95 + rnd() * 0.3, sy, rx: (rnd() - 0.5) * 0.16, ry: rnd() * 6.28, rz: (rnd() - 0.5) * 0.16, gx, gz, gh });
+      const r = { x, y: g - height * 0.2, z, s, v, sx: 0.95 + rnd() * 0.3, sy, rx: (rnd() - 0.5) * 0.16, ry: rnd() * 6.28, rz: (rnd() - 0.5) * 0.16, gx, gz, gh };
+      c.rocks.push(r);
+      // solid (Oct 30, the user: "at some races you can walk through the stones there, make them collide"): a circle
+      // as wide as the boulder (like vegetation.js's rocks: r = 0.45 s), its top = the real top, so a jump clears it
+      ctx.course.solids?.push({ x, z, r: 0.45 * s * (1 + r.sx) / 2, top: r.y + height, rock: true });
     } else {
       const seed = rnd() * 100;
       const rock = tint('#5f5a54', 0.12, seed);
       const dark = rock.clone().multiplyScalar(0.6), snow = tint('#eef3fa');
       const height = s * sy;
+      ctx.course.solids?.push({ x, z, r: 0.5 * s, top: g + height * 0.8, rock: true }); // (solid, as above)
       c.solid.at(x, g + height * 0.3, z, rnd() * 6.28, (rnd() - 0.5) * 0.25, 0, s * (0.9 + rnd() * 0.35), height, s);
       c.solid.blob(0, 0, 0, (nx, ny, nz) => 0.5 * (1 + 0.16 * Math.sin(nx * 5.1 + seed) * Math.cos(nz * 4.3 - seed) + 0.1 * Math.sin(ny * 9 + seed * 2)), 1,
         (px, py, pz, ny) => (ny > 0.62 ? snow : ny < -0.2 ? dark : rock));

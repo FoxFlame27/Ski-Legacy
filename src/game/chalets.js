@@ -743,17 +743,31 @@ export class Chalets {
       if (owner && mine !== h && !this.canEnter(h)) return { label: `${h.name} · ${owner}'s chalet · ask to visit`, act: () => this.mp.visit(h, owner) };
       if (this.canEnter(h)) return { label: `Go in · ${h.name}${mine === h ? ' (your chalet)' : ''}`, act: () => this.enter(h) };
       if (mine) return { label: `${h.name} · you already own ${mine.name}`, act: () => this.hud?.flash(`You already own ${mine.name}: one chalet each`, 'bad', 2400) };
+      // (Oct 30, the user: no viewing or buying during a police chase)
+      if (globalThis.window?.__game?.police?.active) return { label: `${h.name} for sale · not while the police are after you`, act: () => this.hud?.flash('Not while the police are after you', 'bad', 2600) };
       return (h._buy ||= { label: `${h.name} for sale · $${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.offer(h) });
     }
     return null;
   }
+  // (Oct 30, the user: each chalet can be viewed once, and say so; say it comes unfurnished: you furnish it yourself)
+  viewed(h) { return (this.save.chaletViewed || []).includes(h.id); }
   offer(h) {
-    const say = `A two-storey chalet on the Chaletweg: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. It comes empty: furnish it as you like. Yours for good.`;
+    const say = `A two-storey chalet on the Chaletweg: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. It comes UNFURNISHED: you furnish it yourself (inside, press F for build mode). Yours for good.`;
+    const seen = this.viewed(h);
     this.hud.dialog(h.name, say, [
-      { label: 'Buy this chalet', sub: 'Yours for good', price: `$${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.buy(h) },
-      { label: 'Have a look inside', sub: 'It is open for viewing', act: () => { this.viewing = h; this.enter(h); } },
+      { label: 'Buy this chalet', sub: 'Yours for good · unfurnished: you furnish it yourself', price: `$${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.buy(h) },
+      seen ? { label: 'Have a look inside', sub: 'Already viewed · one viewing per chalet', disabled: true, act: () => this.hud?.flash('You have already viewed this chalet · one viewing each', 'bad', 2600) }
+        : { label: 'Have a look inside', sub: 'One viewing only · empty rooms (unfurnished)', act: () => this.view(h) },
       { label: 'Not now' },
     ], { kicker: `Chalet village · $${CHALET_PRICE.toLocaleString('en-US')}` });
+  }
+  view(h) {
+    if (this.viewed(h) || globalThis.window?.__game?.police?.active) return;
+    (this.save.chaletViewed ||= []).push(h.id);
+    this.writeSave();
+    this.viewing = h;
+    this.enter(h);
+    this.hud?.flash(`Viewing ${h.name} · your one viewing · it comes unfurnished: you furnish it yourself`, 'good', 4200);
   }
   buy(h) {
     if (this.rented()) return;
@@ -762,7 +776,7 @@ export class Chalets {
     const old = this.save.chalet;
     this.save.chalet = { id: h.id, name: h.name, owned: true, rented: true, since: this.save.day ?? 1, furniture: old?.furniture || [], plan: 2, layout: SAVE_LAYOUT };
     this.writeSave();
-    this.hud.flash(`${h.name} is yours · E at its front door to go in`, 'good', 3400);
+    this.hud.flash(`${h.name} is yours · it comes empty: go in and press F to furnish it yourself`, 'good', 4200);
   }
 
   // ------------------------------------------------------------------ in and out (a short fade each way)

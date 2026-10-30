@@ -59,7 +59,7 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const CRASH_V = 70 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
 const EXTREME_V = 150 / 3.6; // ...and this fast: the car's wrecked at once
 const KNOCK_V = 30 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
-const RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_IN = 80 / 3.6; // (Oct 30, the user: into the rail at 80 km/h, not 25) // m/s: faster than this, and into a guardrail this fast: through it (railBreak)
+const RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_SIN = Math.sin(15 * Math.PI / 180); // (Oct 30, the user: "why can i still not break thru the guard rails when i am going faster than 100kph": 80 km/h straight into the rail meant hitting it at over 50 deg at 100 km/h, hardly ever; now over 100 km/h and at 15 deg or more into it: a real hit, not a scrape along it) // (railBreak)
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 && !c.rock ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
@@ -693,7 +693,7 @@ export class Drive {
     // them"): over 100 km/h and into it at 25 km/h or more, the section breaks (world/breakables.js) and the car goes
     // through with a big hit
     const into0 = -(d.vx * nx + d.vz * nz);
-    if (rk >= 0 && !d.crash && Math.hypot(d.vx, d.vz) > RAIL_BREAK_V && into0 > RAIL_BREAK_IN && breakables.breakRail(busRoads.rails, rk, d.x, d.z, d.vx, d.vz)) { this.railBreak(into0, nx, nz); return; }
+    if (rk >= 0 && !d.crash && Math.hypot(d.vx, d.vz) > RAIL_BREAK_V && into0 > Math.hypot(d.vx, d.vz) * RAIL_BREAK_SIN && breakables.breakRail(busRoads.rails, rk, d.x, d.z, d.vx, d.vz)) { this.railBreak(into0, nx, nz); return; }
     d.x += px; d.z += pz;
     const vn = d.vx * nx + d.vz * nz;
     let tx = -nz, tz = nx, vt = d.vx * tx + d.vz * tz;

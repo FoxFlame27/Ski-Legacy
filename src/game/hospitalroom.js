@@ -22,7 +22,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { busRoads, HOSPITAL_LOT } from './bus/roads.js';
-import { HOUSE, arztSign } from './hospital.js';
+import { HOUSE } from './hospital.js';
 import { makeSign, nightUniform } from '../world/village.js';
 import { shellMaterials } from './carrentalshell.js';
 import { swapInModel } from './prisonoutside.js';
@@ -30,6 +30,7 @@ import { LivePortal } from './liveportal.js';
 import { isMP, MP } from '../net/mode.js';
 import { ST, fallFlags } from '../net/protocol.js';
 
+const BEAMS_X = [-6.0, -3.6, -1.2, 1.2, 3.6, 6.0]; // the ceiling's glulam beams (x, every 2.4 m, symmetric about the middle)
 export const STAY_S = 10; // the recovery (game seconds in bed before you may get up; Oct 30, the user: "only need to rest 10 sec")
 export const INTERIOR_ID = 'hospital';
 const EYE = 1.62, R = 0.26, UP = new THREE.Vector3(0, 1, 0);
@@ -232,7 +233,7 @@ export class HospitalRoom {
       geo.attributes.uv.array.forEach((v, i, a) => { a[i] = v * (i % 2 ? (zb - za) : W); });
       const c = this.add(geo, M.larch, 0, H, (za + zb) / 2, 0, false); c.rotation.x = Math.PI / 2;
     }
-    for (let x = x0 + 1.2; x < x1; x += 2.4) this.box(0.18, 0.24, z1 - z0, M.glulam, x, H - 0.12, 0, 0, false);
+    for (const x of BEAMS_X) this.box(0.18, 0.24, z1 - z0, M.glulam, x, H - 0.12, 0, 0, false); // (symmetric: the lights hang in the bays between them)
     // skirting along the walls
     const skirt = new THREE.MeshStandardMaterial({ color: 0x4a2f18, roughness: 0.6 });
     for (const [len, x, z, ry] of [[W, 0, z0 + 0.012, 0], [W, 0, z1 - 0.012, 0], [z1 - z0, x0 + 0.012, 0, Math.PI / 2], [z1 - z0, x1 - 0.012, 0, Math.PI / 2]]) this.box(len, 0.1, 0.02, skirt, x, 0.05, z, ry, false);
@@ -310,7 +311,7 @@ export class HospitalRoom {
     S.add(key);
     // the ward: three round flush ceiling lights (opal glass on a larch ring), a warm point light under each
     const ring = new THREE.MeshStandardMaterial({ color: 0x9c6b3e, roughness: 0.5 });
-    for (const x of [-4.0, 0, 4.0]) {
+    for (const x of [-4.8, 0, 4.8]) { // (bay centres between the beams, BEAMS_X: never cut by one; Oct 30, the user)
       const z = -2.6;
       this.add(new THREE.CylinderGeometry(0.4, 0.4, 0.05, 32), ring, x, H - 0.025, z, 0, false);
       const d = this.add(new THREE.CircleGeometry(0.34, 32), M.glow, x, H - 0.052, z, 0, false); d.rotation.x = Math.PI / 2;
@@ -319,7 +320,7 @@ export class HospitalRoom {
     // the lobby: the Meshy alpine pendants (tools/meshy-decor.mjs, as in the police station), a glowing bulb in each
     const shade = new THREE.MeshStandardMaterial({ color: 0x23302a, roughness: 0.5, metalness: 0.3, side: THREE.DoubleSide });
     const bulbMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd39a, emissiveIntensity: 2.6 });
-    for (const [x, z] of [[-3.4, 3.8], [3.4, 3.8]]) {
+    for (const [x, z] of [[-2.4, 3.8], [2.4, 3.8]]) { // (in the bays between the beams)
       const pg = new THREE.Group(); pg.position.set(x, 0, z); S.add(pg);
       const fb = new THREE.Group(); pg.add(fb);
       const cord = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.7, 0.012), M.steel); cord.position.y = H - 0.35; fb.add(cord);
@@ -350,7 +351,7 @@ export class HospitalRoom {
     recep.position.set(DX + 0.2, 2.62, DZ); recep.rotation.y = Math.PI / 2; this.scene.add(recep);
     for (const s of [-1, 1]) this.box(0.012, H - 2.87, 0.012, M.steel, DX + 0.2, (H + 2.87) / 2, DZ + s * 0.6, 0, false);
     // the ARZT board on the wall behind the counter (hospital.js's own sign), a red cross light under it
-    try { const b = arztSign(2.6, 0.5); b.position.set(x0 + 0.05, 2.62, DZ); b.rotation.y = Math.PI / 2; this.scene.add(b); b.userData.faceMaterial.emissiveIntensity = 0.12; } catch (e) { console.warn('hospital arzt sign', e); }
+    // (no MEDICAL CENTRE board on the side wall: it sat over the window behind the curtains; Oct 30, the user: "delete it")
     // a brass bell and a stack of leaflets on the counter (the Meshy counter carries its own monitor and folders)
     // ---- the waiting side: two benches (the right wall under its window, the front under the right window)
     const benchFb = (fb) => {

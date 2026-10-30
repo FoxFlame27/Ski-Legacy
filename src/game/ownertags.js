@@ -48,7 +48,7 @@ export class OwnerTags {
       out.push({ key: `kept:${k.cfg?.plate || k.car.id}`, x: kp.x, y: kp.y + 2.2, z: kp.z, label: 'Your car', text: 'Your car' });
     }
     const ch = G?.chalets, h = ch?.rented?.();
-    if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: 'Your chalet' }); // (your own: "Your chalet", Oct 30, the user) }
+    if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: 'Your chalet' }); }
     if (MP.active && MP.chalets && ch?.houses && !ch.inside) for (const id in MP.chalets) { // (the other players' chalets)
       const owner = MP.chalets[id];
       if (!owner || owner === MP.name) continue;

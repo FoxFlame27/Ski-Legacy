@@ -31,7 +31,7 @@ import { isMP, MP } from '../net/mode.js';
 import { ST, fallFlags } from '../net/protocol.js';
 
 const BEAMS_X = [-6.0, -3.6, -1.2, 1.2, 3.6, 6.0]; // the ceiling's glulam beams (x, every 2.4 m, symmetric about the middle)
-export const STAY_S = 10; // the recovery (game seconds in bed before you may get up; Oct 30, the user: "only need to rest 10 sec")
+export const STAY_S = 20; // the recovery (game seconds in bed before you may get up; Oct 30, the user: 20 s)
 export const INTERIOR_ID = 'hospital';
 const EYE = 1.62, R = 0.26, UP = new THREE.Vector3(0, 1, 0);
 // the inside of the walls (the house is 15 x 12 m outside, its walls 0.2 m thick), the ceiling

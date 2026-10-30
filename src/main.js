@@ -1686,7 +1686,7 @@ function openPause() {
     // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
     // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
     // with its ambulance ride)
-    onVillage: heliRiding() || prison?.active || police?.active ? undefined : // (no RETURN TO VILLAGE during a police chase: the user)
+    onVillage: heliRiding() || prison?.active || police?.active || hospitalWard?.role === 'patient' ? undefined : // (no RETURN TO VILLAGE during a police chase: the user; nor lying in a hospital bed)
       !inSession ? () => { if (police?.active || prison?.active) { hud.flash('Not while the police are after you', 'bad', 3000); return; } returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: isMP() ? undefined : goToMainMenu,
     onLeaveMP: isMP() ? () => leaveMultiplayer() : undefined, // (multiplayer: LEAVE MULTIPLAYER instead of MAIN MENU)
@@ -1721,6 +1721,7 @@ function prisonClear() {
 }
 // Ski bus back to Legacy Village from anywhere in the world.
 function returnToVillage(message = 'Back in Legacy Village') {
+  if (hospitalWard?.role === 'patient') { hud.flash('Not while you are in the hospital bed', 'bad', 2600); return; } // (Oct 30, the user)
   if (outfitShop?.isOpen) outfitShop.close();
   heli.abort();
   if (races.active) races.abort();

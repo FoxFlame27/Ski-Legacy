@@ -659,6 +659,8 @@ export class Police {
     }
     const W = this.w;
     if (W && (this.excluded?.() || this.prison?.active)) { this.clear(); return; }
+    // hiding in a chalet (Oct 30, the user): they lose you there, the chase is over (not while being fined / arrested)
+    if (W && !W.scene && window.__game?.chalets?.inside) { this.escaped("The police can't find you in here · you escaped"); return; }
     const paused = !!this.paused?.();
     try {
       if (W && !paused) this.chase(dt, W);
@@ -1377,8 +1379,8 @@ export class Police {
   }
 
   // ---------------------------------------------------------------- the end of a chase
-  escaped() {
-    this.hud?.flash?.('You escaped the police', 'good', 3600);
+  escaped(msg = 'You escaped the police') {
+    this.hud?.flash?.(msg, 'good', 4200);
     this.end('escaped');
   }
   // the chase over: the patrol cars drive off (out of sight: gone)

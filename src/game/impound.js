@@ -44,6 +44,15 @@ export const AWAY_R = 40;       // m: "away" from your car
 const LOT = { hw: 18, hd: 9 };  // the car park's half length (along the road) and half depth (two rows of bays)
 const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's far end)
 
+const YARD_CSS = `
+#tow-yard { position: absolute; left: 22px; bottom: 92px; min-width: calc(var(--u, 1px) * 300); padding: calc(var(--u, 1px) * 12) calc(var(--u, 1px) * 30) calc(var(--u, 1px) * 14) calc(var(--u, 1px) * 24);
+  background: #fff; color: var(--blue, #1546c8); clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; }
+#tow-yard[hidden] { display: none; }
+body.wanted #tow-yard { bottom: auto; top: calc(var(--u, 1px) * 150); } /* (the WANTED box has the corner) */
+#tow-yard .ty-head { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 20); letter-spacing: 0.08em; color: #ff4d3d; }
+#tow-yard .ty-t { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 52); line-height: 1; font-variant-numeric: tabular-nums; }
+#tow-yard .ty-sub { margin-top: calc(var(--u, 1px) * 4); font-size: calc(var(--u, 1px) * 15); font-weight: 700; color: var(--blue-dim, #4f72d4); }`;
+
 export class Impound {
   /** @param {import('./carrental.js').CarRental} rental */
   constructor(rental, { fee = 1500 } = {}) {
@@ -217,6 +226,7 @@ export class Impound {
   update(dt) {
     if (!(dt > 0)) return;
     const R = this.R, e = R.current;
+    this.yardHud(e);
     if (!e) return;
     if (e.impound && this.released(e.impound)) { // (its 3 minutes are up: back in your bay)
       e.impound = null;
@@ -252,6 +262,34 @@ export class Impound {
     if (d >= AWAY_R) e.abandonT = (e.abandonT || 0) + step;
     if (e.abandonT >= WARN2_AFTER && !e.warned2) { e.warned2 = true; R.hud?.flash(`Last warning · your car is still blocking the road · the tow truck comes in ${Math.round(TOW_AFTER - WARN2_AFTER)} s`, 'bad', 4200); R.audio?.play?.('error'); }
     if (e.abandonT >= TOW_AFTER) { e.warned2 = false; this.tow(e); }
+  }
+
+  // The tow yard card (Oct 30, the user: "while your car is in the tow yard, show the whole time how long until you get
+  // it back, bottom left; it only goes once you have your car back"): bottom left above the money (with the WANTED box
+  // up: under the place name, top left), the brush style of the other HUD cards; built once, text changed only when it
+  // changes.
+  yardHud(e) {
+    const rec = e && (e.impound || (e.towing && this.save.impound?.plate === (e.cfg?.plate || null) ? this.save.impound : null));
+    if (!rec && !this.hudEl) return;
+    if (!this.hudEl) {
+      if (typeof document === 'undefined') return;
+      if (!document.getElementById('tow-yard-css')) { const st = document.createElement('style'); st.id = 'tow-yard-css'; st.textContent = YARD_CSS; document.head.appendChild(st); }
+      const el = document.createElement('div');
+      el.id = 'tow-yard'; el.hidden = true;
+      el.innerHTML = '<div class="ty-head">TOW YARD</div><div class="ty-t"></div><div class="ty-sub"></div>';
+      (document.getElementById('hud') || document.body).appendChild(el);
+      this.hudEl = el; this.$t = el.querySelector('.ty-t'); this.$sub = el.querySelector('.ty-sub'); this.$head = el.querySelector('.ty-head'); this.hudC = {};
+    }
+    const show = !!rec;
+    if (this.hudEl.hidden === show) this.hudEl.hidden = !show;
+    if (!show) return;
+    const C = this.hudC, left = Number.isFinite(rec.until) ? Math.max(0, Math.ceil((rec.until - nowMs()) / 1000)) : null;
+    const t = left === null ? 'soon' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    const head = e.towing ? 'BEING TOWED' : 'TOW YARD';
+    const sub = `Your ${this.R.label?.(e.cfg?.id) || 'car'} · back in your bay by the Autohaus`;
+    if (C.t !== t) this.$t.textContent = C.t = t;
+    if (C.head !== head) this.$head.textContent = C.head = head;
+    if (C.sub !== sub) this.$sub.textContent = C.sub = sub;
   }
 
   // the truck fetches it (the wreck fee, now); it ends in an impound bay, locked until tomorrow

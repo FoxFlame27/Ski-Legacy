@@ -484,14 +484,15 @@ export function planBusRoads(stops) {
   for (const s of busRoads.stops) if (s.noRoad && s.movedFrom) { s.x = s.movedFrom.x; s.z = s.movedFrom.z; delete s.movedFrom; }
   // car parks (big by the village, medium at a gondola base, small by a hut), each with an access road
   try { planLots(obstacles, stops); } catch (e) { console.warn('car parks', e); }
-  try { planHospital(obstacles); } catch (e) { console.warn('hospital site', e); }
+  try { holdHospitalSite(obstacles); } catch (e) { console.warn('hospital site', e); } // (held: see planHospital)
   try { planLayby(obstacles); } catch (e) { console.warn('lay-by', e); }
   try { planRental(obstacles); } catch (e) { console.warn('car rental site', e); } // (last: moves nothing planned above)
   try { planScenic(obstacles); } catch (e) { console.warn('scenic road', e); } // (after everything: its roads go last)
   try { planScenicLoop(obstacles); } catch (e) { console.warn('scenic loop', e); } // (more scenic roads off the Panorama roundabout)
   try { planChaletVillage(obstacles); } catch (e) { console.warn('chalet village', e); } // (its terraces' cut before the roads' cuts)
   try { planRentalRoad(obstacles); } catch (e) { console.warn('Westgratstrasse', e); } // (across from the car rental, up the Westgrat)
-  try { planPrison(obstacles); } catch (e) { console.warn('prison site', e); } // (last of all: moves nothing planned above)
+  try { planPrison(obstacles); } catch (e) { console.warn('prison site', e); } // (moves nothing planned above)
+  try { planHospital(obstacles); } catch (e) { console.warn('hospital site', e); } // (last of all: moves nothing planned above)
   clearRouteCache();
   try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
   try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
@@ -867,9 +868,10 @@ function planLayby(O) {
   busRoads.layby = busRoads.laybys[0] || null;
 }
 
-// The small hospital (game/hospital.js): at the village edge, on clear level ground off the ski areas, a short walk
-// from a road (13-45 m from its centre line) so the ambulance can drive there. Flattened like a car park (no berm).
-function planHospital(O) {
+// The old medical centre's site (a short walk off a road, 13-45 m from its centre line): held as a lot while the
+// car rental, the lay-bys, the scenic roads, the chalet village and the police station are planned (so they stay
+// where they were planned round it), then let go: the medical centre itself is planned last (planHospital), on a road.
+function holdHospitalSite(O) {
   if (!busRoads.roads.length) return;
   const hw = 13, hd = 10;
   const targets = [{ x: 160, z: 130 }, { x: 260, z: -20 }, { x: -160, z: 150 }, { x: 60, z: 260 }];
@@ -880,20 +882,71 @@ function planHospital(O) {
         const a = (k / n) * Math.PI * 2, cx = t.x + Math.cos(a) * r, cz = t.z + Math.sin(a) * r;
         const net = nearestRoadPoint(cx, cz);
         if (!net || net.d > 45 || net.d < 22) continue;
-        const facing = Math.atan2(net.x - cx, net.z - cz); // the entrance toward the road
-        const yaw = facing + Math.PI / 2;
+        const yaw = Math.atan2(net.x - cx, net.z - cz) + Math.PI / 2;
         const fit = lotFits(cx, cz, yaw, hw, hd, O);
         if (!fit) continue;
-        const ux = Math.sin(yaw), uz = Math.cos(yaw), vx = uz, vz = -ux;
-        const fx = Math.sin(facing), fz = Math.cos(facing);
-        const ex = cx + fx * (hd + 3), ez = cz + fz * (hd + 3);
-        const H = { name: 'Medical centre', building: true, x: cx, z: cz, yaw, y: fit.y, hw, hd, ux, uz, vx, vz, ex, ez, dirx: fx, dirz: fz, facing };
-        busRoads.lots.push(H);
-        busRoads.hospital = H;
+        const ux = Math.sin(yaw), uz = Math.cos(yaw);
+        busRoads.lots.push({ name: 'Medical centre (old site)', building: true, hold: true, x: cx, z: cz, yaw, y: fit.y, hw, hd, ux, uz, vx: uz, vz: -ux });
         return;
       }
     }
   }
+}
+
+// The MEDICAL CENTRE (game/hospital.js): like the police station, a building lot right on a road at the edge of
+// Legacy Village, its forecourt (the covered ambulance bay at the door, an AMBULANZ bay, visitors' bays) on the road's
+// edge and the door facing the road: a straight, gentle stretch, the pad at the road's own height (flush with it),
+// clear of the ski areas, nets, lifts, stations, buildings, the railway, other roads, car parks, junctions, stops,
+// lay-bys, the chalet village and well away from the police station and the Autohaus. Lot frame: u along the road,
+// v toward it (the edge at v = hd). busRoads.hospital = { building lot + ri, s, side }: ex/ez is the door step
+// (the ambulance pulls up 6 m out from it on the forecourt, game/heli/ambulance.js; you come round 2 m out from it).
+export const HOSPITAL_LOT = { hw: 15, hd: 13, front: -1.6 }; // half length, half depth (m); the house front (lot z)
+function planHospital(O) {
+  for (let i = busRoads.lots.length - 1; i >= 0; i--) if (busRoads.lots[i].hold) busRoads.lots.splice(i, 1); // (the old site, held while the others were planned: let go)
+  const q = {}, { hw, hd, front } = HOSPITAL_LOT;
+  const far = [busRoads.prison, busRoads.rental].filter(Boolean), CB = busRoads.chalets?.bounds;
+  let best = null;
+  busRoads.roads.forEach((r, ri) => {
+    if (r.scenic || r.ring) return;
+    for (let s = 30; s < r.length - 30; s += 4) {
+      const m = roadAt(r, s), a = roadAt(r, s - 18), b = roadAt(r, s + 18);
+      const score0 = Math.hypot(m.x - 170, m.z - 120); // (near where it stood: the village's east edge)
+      if (score0 > 320 || (best && score0 > best.score)) continue;
+      const bend = Math.abs(Math.atan2(a.dx * b.dz - a.dz * b.dx, a.dx * b.dx + a.dz * b.dz));
+      if (bend > 0.14 || Math.abs(m.grade) > 0.05) continue;
+      if (Math.max(Math.abs(roadAt(r, s - hw).y - m.y), Math.abs(roadAt(r, s + hw).y - m.y)) > 0.2) continue;
+      for (const side of [1, -1]) {
+        const nx = -m.dz * side, nz = m.dx * side, off = ROAD_HALF + 0.6 + hd;
+        const cx = m.x + nx * off, cz = m.z + nz * off;
+        if (far.some((L) => Math.hypot(L.x - cx, L.z - cz) < 65)) continue; // (well apart: 40 m between them)
+        if (CB && cx > CB.minx - 40 && cx < CB.maxx + 40 && cz > CB.minz - 40 && cz < CB.maxz + 40) continue;
+        let ok = true, lo = Infinity, hi = -Infinity;
+        for (let u = -hw - 4; u <= hw + 4 && ok; u += 4) for (let v = -hd - 4; v <= hd - 1 && ok; v += 4) {
+          const x = cx + m.dx * u - nx * v, z = cz + m.dz * u - nz * v;
+          O.query(x, z, q);
+          if (q.ski < 8 || q.net < 6 || q.block < 4 || q.rail < 8 || q.lift < 4) ok = false;
+          const c = world.corridorAt(x, z);
+          if (c.kind && c.kind !== 'lift' && c.d < 8) ok = false;
+          if (c.kind === 'lift' && c.lot) ok = false; // (another lot's cleared strip)
+          if (Math.abs(u) <= hw && Math.abs(v) <= hd) { const h = world.height(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+        }
+        if (!ok || hi - lo > 4 || Math.abs((hi + lo) / 2 - m.y) > 2.2) continue;
+        if (busRoads.roads.some((o, oi) => { for (let i = 0; i < o.n; i += 2) { const d = Math.hypot(o.X[i] - cx, o.Z[i] - cz); if (d < hw + hd + 8 && (oi !== ri || Math.abs(o.S[i] - s) > hw + 30)) return true; } return false; })) continue;
+        if (busRoads.lots.some((L) => Math.hypot(L.x - cx, L.z - cz) < Math.hypot(L.hw, L.hd) + Math.hypot(hw, hd) + 12)) continue;
+        if ([...busRoads.junctions, ...busRoads.stops, ...(busRoads.laybys || [])].some((j) => Math.hypot(j.x - cx, j.z - cz) < 50)) continue;
+        if (Math.hypot(cx + 190, cz + 160) < 90) continue; // (the Legacy Express's village station)
+        const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz), dfx = -nx, dfz = -nz;
+        // the door step: on the house front (lot z = front), 0.6 m out, on the drive's centre line (lot x = 0)
+        const ez = front + 0.6;
+        best = { name: 'Medical centre', building: true, hospital: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+          ex: cx + dfx * ez, ez: cz + dfz * ez, dirx: dfx, dirz: dfz, facing, ri, s, side, score: score0,
+          road: { x: m.x + nx * (ROAD_HALF + 0.6), z: m.z + nz * (ROAD_HALF + 0.6) } };
+      }
+    }
+  });
+  if (!best) return;
+  busRoads.lots.push(best);
+  busRoads.hospital = best;
 }
 
 // The PRISON (game/prison.js, the village police station): like the car rental, a building lot right on a road in

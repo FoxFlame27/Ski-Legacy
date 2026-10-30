@@ -153,8 +153,8 @@ const MODEL_LIST = [
   'snowmobile', 'wooden_barrel', 'trash_bin', 'market_stall', 'fire_pit',
   // car parks (game/parking.js): pay machine + P sign (lamp_post is above)
   'parking_pay_machine', 'parking_sign',
-  // the medical centre (game/hospital.js) and the one parked car (the user's BMW X3, game/parking.js)
-  'medical_centre', 'car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_tesla_m3', 'car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls',
+  // the parked cars (the user's BMW X3, game/parking.js; the medical centre is procedural now: game/hospital.js)
+  'car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_tesla_m3', 'car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls',
   // shop interior props
   'helmet_shelf', 'boot_rack', 'jacket_rail', 'shop_counter', 'potted_plant', 'glove_bin', 'shop_bench', 'farm_table',
   // race courses + resort dressing
@@ -259,7 +259,7 @@ async function boot() {
   colliders.push(...pisteLights.colliders);
   skibus = new SkiBus({ scene, models, layout, colliders, makeRig, cameraBlockers: village.cameraBlockers }); // stops in the village + at every gondola base (+ the bus, its driver)
   try { parking = new ParkingLots({ scene, models, colliders, cameraBlockers: village.cameraBlockers }); } catch (e) { console.warn('car parks', e); parking = null; } // three car parks (empty)
-  try { new Hospital({ scene, models, colliders }); } catch (e) { console.warn('medical centre', e); } // where the ambulance takes you
+  try { new Hospital({ scene, models, colliders, cameraBlockers: village.cameraBlockers }); } catch (e) { console.warn('medical centre', e); } // where the ambulance takes you
   secrets = new Secrets({ scene, models, terrain, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, earn: (a, l) => earn(a, l, 'secret'), propDetail });
   // living world: fans along the race finishes, flags in the village, snowcats grooming the pistes
   crowds = new Crowds(scene).addResortArenas({ dressing, models, colliders });

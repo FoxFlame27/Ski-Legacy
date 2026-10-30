@@ -30,7 +30,7 @@ import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js';
 import { shellMaterials } from './carrentalshell.js';
 import { swapInModel } from './prisonoutside.js';
 import { mergeStatic } from '../engine/merge.js';
-import { RENTALS, repairCost, wreckFee, WRECK_FEE, REPAIR_RATE, REPAIR_MIN } from './carrental.js';
+import { RENTALS, repairCost, wreckFee } from './carrental.js';
 
 // the building (outer, m): width along the road, depth, wall height, the ridge's rise, wall thickness, eaves
 export const SHOP = { W: 14, D: 11, H: 4.4, RISE: 2.3, T: 0.3, EAVE: 0.9, EAVE_F: 1.3 };
@@ -515,8 +515,9 @@ export class Werkstatt {
       const onFoot = !d && e && this.inside(this.R.player?.pos?.x ?? 1e9, this.R.player?.pos?.z ?? 1e9, 0.3);
       if (here && (d || onFoot)) {
         const q = this.quote(here);
-        const how = q.frac <= 0 ? '' : q.fee === REPAIR_MIN && q.list * REPAIR_RATE * q.frac < REPAIR_MIN ? `Damage ${q.pct}% · the minimum charge ${money(REPAIR_MIN)}` : `Damage ${q.pct}% × ${Math.round(REPAIR_RATE * 100)}% of the ${money(q.list)} list price`;
-        const vs = q.list ? `For comparison: a wreck ${money(q.wreck)} (tow ${money(WRECK_FEE)} + full repair ${money(q.wreck - WRECK_FEE)}) · a new one ${money(q.list)}` : '';
+        // (Oct 30, the user: "don't show the calculation so complicated, show it way easier": just the damage)
+        const how = q.frac <= 0 ? '' : `Damage ${q.pct}%`;
+        const vs = '';
         const label = this.R.label?.(q.id) || 'car';
         if (q.frac <= 0) t = { head: 'WERKSTATT · GARAGE', main: 'No damage', sub: `Your ${label} is as good as new · nothing to repair`, sub2: '' };
         else if (!e) t = { head: 'WERKSTATT · GARAGE', main: 'Drive into the yellow box', sub: `Repair: ${money(q.fee)} · ${how}`, sub2: vs };

@@ -50,7 +50,8 @@ const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's
 // in), and its body at most BAY_TOL m over the lines
 const BAY_YAW = 20 * Math.PI / 180, BAY_COS = Math.cos(BAY_YAW), BAY_TOL = 0.5, CAR_HW = 0.95;
 const MOUTH = { out: 9, lat: ROAD_HALF + 2.5 }; // in front of a car park's entrance: up to 9 m out from its edge, the access road's width + 2.5 m
-const clock = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+// (Oct 30, the user: "make sure the message doesn't say 0:30, it should say 30 sec": "30 sec", "1 min 30 sec")
+const clock = (s) => { s = Math.max(0, Math.ceil(s)); const m = Math.floor(s / 60), r = s % 60; return m ? (r ? `${m} min ${r} sec` : `${m} min`) : `${r} sec`; };
 
 const YARD_CSS = `
 #tow-yard { position: absolute; left: 22px; bottom: 92px; min-width: calc(var(--u, 1px) * 300); padding: calc(var(--u, 1px) * 12) calc(var(--u, 1px) * 30) calc(var(--u, 1px) * 14) calc(var(--u, 1px) * 24);

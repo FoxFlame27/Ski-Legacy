@@ -52,4 +52,6 @@ export const ERR_TEXT = {
   owned: 'You already own one.',
   no_car: 'That car is not yours.',
   garage_full: 'Your garage is full. Sell a car first (MY CARS).',
+  race_full: 'Race full (21/21) · wait for the next race, or do a Practice race (no prize).',
+  in_race: 'You are in a race already.',
 };

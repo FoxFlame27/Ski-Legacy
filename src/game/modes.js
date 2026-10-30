@@ -95,7 +95,7 @@ export class Modes {
    *  modes/parkour/freeworld.js): the same session as RACE (14 AI, intro, checkpoints, results), no teleport to a
    *  far map and no course atmosphere. o.result({ place, time, dnf }) -> prize money shown on the results card;
    *  o.retry() -> false when RACE AGAIN can't be paid. After the finish BACK TO START takes you up to the start again. */
-  startFree(courseId, { difficulty = 'medium', result, retry, prizeMult, bots, syncGo, grid, others, mp, home } = {}) {
+  startFree(courseId, { difficulty = 'medium', result, retry, prizeMult, bots, syncGo, grid, others, mp, home, practice = false } = {}) { // (practice: alone, no prize)
     this.end();
     // (a course object: a race laid on a piste, the ski bus's free races: modes/race/busraces.js)
     const course = typeof courseId === 'object' && courseId ? courseId : getCourse(courseId);
@@ -107,7 +107,7 @@ export class Modes {
       scene: this.scene, course, mode: 'race', difficulty, botCount: bots ?? this.botCount, // (multiplayer: bots 0, syncGo: the shared start)
       player: this.player, makeRig: this.makeRig, botCharacters: this.botCharacters(),
       audio: this.audio, hud: this.hud, raceHud: this.raceHud, trails: this.trails, spray: this.spray,
-      save: this.save, writeSave: this.writeSave, stream: this.stream, syncGo, grid, mp, // (multiplayer: grid { slot, n }, the server's; mp: the field and the result)
+      save: this.save, writeSave: this.writeSave, stream: this.stream, syncGo, grid, mp, practice, // (multiplayer: grid { slot, n }, the server's; mp: the field and the result)
       weather: () => window.__game?.env?.weatherLabel,
       freeRide: { result, prizeMult, others, backLabel: home?.label }, // (prizeMult: the AI field's prize factor; others: multiplayer, the other racers' rows)
       onExit: (choice) => this.exitFree(choice),

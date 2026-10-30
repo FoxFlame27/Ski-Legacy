@@ -43,9 +43,9 @@ export async function buildCatalog() {
     outfits: Object.fromEntries([...OUTFIT_ITEMS, ...OUTFIT_KITS].map((o) => [o.id, o.price || 0])), // (kits too: owning a kit owns its pieces 'kit_x.jacket')
     races: Object.fromEntries([
       ...fw.freeCourses().map((e) => [e.id, { name: e.name, reward: e.reward, entry: e.D.entry }]),
-      // the bus races: free entry, one racer may start one (need 1), prizes by place with someone behind you, else by
+      // the bus races: free entry, 2 racers start one (need 2, as every race; alone: a practice race, raceSolo), prizes by place with someone behind you, else by
       // the time against par (ms); server.finishRace
-      ...BUS_RACE_DEFS.map((d) => [d.id, { name: d.name, reward: d.reward, entry: 0, bus: true, need: 1, par: d.par * 1000, shares: BUS_PRIZE.shares, parShare: BUS_PRIZE.parShare, rest: BUS_PRIZE.rest }]),
+      ...BUS_RACE_DEFS.map((d) => [d.id, { name: d.name, reward: d.reward, entry: 0, bus: true, need: 2, par: d.par * 1000, shares: BUS_PRIZE.shares, parShare: BUS_PRIZE.parShare, rest: BUS_PRIZE.rest }]),
     ]),
     prizeShare: fw.PRIZE_SHARE,
   };

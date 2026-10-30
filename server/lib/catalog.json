@@ -225,7 +225,7 @@
    "reward": 1250,
    "entry": 0,
    "bus": true,
-   "need": 1,
+   "need": 2,
    "par": 89000,
    "shares": [
     1,
@@ -240,7 +240,7 @@
    "reward": 1500,
    "entry": 0,
    "bus": true,
-   "need": 1,
+   "need": 2,
    "par": 152000,
    "shares": [
     1,
@@ -255,7 +255,7 @@
    "reward": 1000,
    "entry": 0,
    "bus": true,
-   "need": 1,
+   "need": 2,
    "par": 99000,
    "shares": [
     1,

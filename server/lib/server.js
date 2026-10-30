@@ -23,7 +23,8 @@ export const TICK_HZ = 15;                 // presence batches per second
 export const DAY_MS = 16 * 60 * 1000;      // one game day (sky.js DAY_SECONDS)
 export const HELI_COPY_MS = 5 * 60 * 1000; // a rental out this long: a new copy waits at the pad
 export const RACE_WAIT_MS = 45 * 1000;     // queue countdown once 2 are in (Oct 30, the user: 45 s, never at once)
-export const BUS_RACE_WAIT_MS = 20 * 1000; // a bus race (catalog races[id].bus: free entry, one racer may start it): its countdown
+export const BUS_RACE_WAIT_MS = RACE_WAIT_MS; // a bus race (catalog races[id].bus: free entry): the same 45 s countdown (Oct 30, the user: "keep the countdown from 45 sec not 20")
+export const RACE_MAX = 21;                 // racers in one race at most (Oct 30, the user: "every race can have max 21 players"): a full field starts at once
 export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ahead (everyone counts down together)
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
 export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
@@ -75,8 +76,8 @@ const VEH_KINDS = ['car', 'heli', 'tow', 'police', 'rescue', 'sled'];
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-// race queues: how many racers start a race (a bus race: 1, else 2) and its countdown once they are in
-const raceNeed = (race) => CATALOG.races[race]?.need ?? 2;
+// race queues: how many racers start a race (always at least 2; alone: a practice race, raceSolo) and its countdown once they are in
+const raceNeed = (race) => Math.max(2, CATALOG.races[race]?.need ?? 2); // (Oct 30, the user: "you can't race with less than 2 people", bus races too)
 const raceWait = (race) => (CATALOG.races[race]?.bus ? BUS_RACE_WAIT_MS : RACE_WAIT_MS);
 // a bus race's prize (src/modes/race/busracedefs.js busRacePrize): the podium shares while someone is behind you,
 // else every finisher is paid by the time against par (ms)
@@ -320,7 +321,7 @@ class World {
   // ---------------------------------------------------------------- race queues and races
   queueMsg(race) {
     const q = this.queues.get(race);
-    return { race, n: q ? q.members.length : 0, names: q ? q.members.map((pid) => this.players.get(pid)?.name).filter(Boolean) : [], startAt: q?.startAt || 0, need: raceNeed(race), waitMs: raceWait(race) };
+    return { race, n: q ? q.members.length : 0, names: q ? q.members.map((pid) => this.players.get(pid)?.name).filter(Boolean) : [], startAt: q?.startAt || 0, need: raceNeed(race), waitMs: raceWait(race), max: RACE_MAX };
   }
   inRace(c) { for (const r of this.races.values()) if (!r.done && r.entrants.some((e) => e.key === c.key && !e.done)) return r; return null; }
   raceJoin(c, { race }) {
@@ -329,6 +330,8 @@ class World {
     // (already queued for it, e.g. a retry after a lost answer: unchanged; leaving and joining again would cancel and
     // restart a running countdown)
     if (c.queue === race && this.queues.get(race)?.members.includes(c.pid)) return { d: this.queueMsg(race) };
+    // a full field (RACE_MAX): refused, wait for the next race (the client offers that, or a practice race)
+    if ((this.queues.get(race)?.members.length || 0) >= RACE_MAX) return { err: 'race_full', d: this.queueMsg(race) };
     this.raceLeave(c, true);
     let q = this.queues.get(race);
     if (!q) { q = { members: [], startAt: 0, timer: null }; this.queues.set(race, q); }
@@ -350,7 +353,7 @@ class World {
     if (!q) return;
     const n = q.members.length, now = Date.now();
     if (n < raceNeed(race)) { if (q.startAt) { q.startAt = 0; clearTimeout(q.timer); } }
-    else if (n >= MAX_PLAYERS) { clearTimeout(q.timer); this.startRace(race); return; } // (only a full field starts at once; everyone in the world queued still waits the 45 s)
+    else if (n >= RACE_MAX) { clearTimeout(q.timer); this.startRace(race); return; } // (only a full field, RACE_MAX racers, starts at once; everyone in the world queued still waits the 45 s)
     else if (!q.startAt) { const wait = raceWait(race); q.startAt = now + wait; q.timer = setTimeout(() => { try { this.startRace(race); } catch (e) { this.server.log(`[err] startRace ${race}: ${e.stack || e}`); } }, wait); }
     if (!n) this.queues.delete(race);
     this.broadcast('raceQueue', this.queueMsg(race));
@@ -388,10 +391,26 @@ class World {
     const r = { rid: this.nextRid++, race, at: now + RACE_LEAD_MS, entrants, done: false };
     r.timer = setTimeout(() => this.safeFinish(r), RACE_LEAD_MS + RACE_MAX_MS);
     this.races.set(r.rid, r);
-    this.broadcast('raceQueue', { race, n: 0, names: [], startAt: 0, need: raceNeed(race), waitMs: raceWait(race) });
+    this.broadcast('raceQueue', { race, n: 0, names: [], startAt: 0, need: raceNeed(race), waitMs: raceWait(race), max: RACE_MAX });
     this.broadcast('raceStart', this.raceStartMsg(r));
   }
-  raceStartMsg(r) { return { rid: r.rid, race: r.race, at: r.at, endAt: r.at + RACE_MAX_MS, closeAt: r.closeAt || 0, grid: r.entrants.map((e) => ({ pid: e.pid, name: e.name, slot: e.slot })) }; } // (endAt / closeAt: when it closes: the clients count the last 30 s down)
+  /** A practice race (Oct 30, the user: "you can race alone but you don't earn any money", "call it a practise race"):
+   *  any race, just you, started at once (the usual RACE_LEAD_MS countdown), out of a queue you were in. No entry fee,
+   *  no prize money, no race / win counted (finishRace), so it can never be used to earn anything. */
+  raceSolo(c, { race }) {
+    if (!CATALOG.races[race]) return { err: 'bad_race' };
+    if (this.inRace(c)) return { err: 'in_race' };
+    this.raceLeave(c, true);
+    const now = Date.now();
+    const r = { rid: this.nextRid++, race, at: now + RACE_LEAD_MS, practice: true, done: false,
+      entrants: [{ pid: c.pid, key: c.key, name: c.name, slot: 0, time: null, done: false, dnf: false, left: false, fin: 0, prog: { gate: 0, s: -Infinity, at: 0 } }] };
+    r.timer = setTimeout(() => this.safeFinish(r), RACE_LEAD_MS + RACE_MAX_MS);
+    this.races.set(r.rid, r);
+    const msg = this.raceStartMsg(r);
+    this.broadcast('raceStart', msg);
+    return { d: msg };
+  }
+  raceStartMsg(r) { return { rid: r.rid, race: r.race, practice: !!r.practice, at: r.at, endAt: r.at + RACE_MAX_MS, closeAt: r.closeAt || 0, grid: r.entrants.map((e) => ({ pid: e.pid, name: e.name, slot: e.slot })) }; } // (endAt / closeAt: when it closes: the clients count the last 30 s down)
   // A finish. The server's own clock decides: the client's race time (raw: without gate penalties, pen: the
   // penalties) is trusted only within 3 s of the time the server measured since the shared GO, else the server's
   // time counts. Old clients send `time` (penalties included) instead.
@@ -475,10 +494,11 @@ class World {
     const def = CATALOG.races[r.race] || { reward: 0 }, share = CATALOG.prizeShare || [1, 0.4, 0.15];
     const n = r.entrants.length;
     const order = this.rankEntrants(r).map((e, i) => {
-      const place = i + 1, prize = !e.dnf && !e.paid ? (def.bus ? busPrize(def, i, n, e.time) : Math.round((def.reward || 0) * (share[i] ?? 0))) : 0;
+      const place = i + 1, prize = !e.dnf && !e.paid && !r.practice ? (def.bus ? busPrize(def, i, n, e.time) : Math.round((def.reward || 0) * (share[i] ?? 0))) : 0;
       const row = { ...this.boardRow(e, place), prize };
       const prof = this.server.profileOf(e.key);
-      if (prof && !e.paid) {
+      if (prof && !e.paid && r.practice) e.paid = true; // (a practice race: nothing paid, nothing counted)
+      else if (prof && !e.paid) {
         e.paid = true; // (once per racer, whatever happens)
         prof.stats.races = (prof.stats.races || 0) + 1;
         if (place === 1 && !e.dnf) prof.stats.wins = (prof.stats.wins || 0) + 1;
@@ -489,16 +509,16 @@ class World {
       return row;
     });
     this.server.store.profiles.save();
-    r.result = { rid: r.rid, race: r.race, order, keys: r.entrants.map((e) => e.key) };
+    r.result = { rid: r.rid, race: r.race, practice: !!r.practice, order, keys: r.entrants.map((e) => e.key) };
     r.endedAt = Date.now();
-    this.broadcast('raceResult', { rid: r.rid, race: r.race, order });
+    this.broadcast('raceResult', { rid: r.rid, race: r.race, practice: !!r.practice, order });
     setTimeout(() => this.races.delete(r.rid), 60000);
   }
   /** The result of a race this player was in that ended in the last minute (for a reconnect that missed it). */
   lastRaceFor(key) {
     let best = null;
     for (const r of this.races.values()) if (r.done && r.result?.keys.includes(key) && (!best || r.endedAt > best.endedAt)) best = r;
-    return best ? { rid: best.rid, race: best.race, order: best.result.order } : null;
+    return best ? { rid: best.rid, race: best.race, practice: !!best.practice, order: best.result.order } : null;
   }
 
   // ---------------------------------------------------------------- joining / leaving
@@ -923,6 +943,7 @@ export class GameServer {
       case 'towDone': return reply(this.towDone(c));
       case 'raceJoin': return reply(w.raceJoin(c, d));
       case 'raceLeave': return reply(w.raceLeave(c));
+      case 'raceSolo': return reply(w.raceSolo(c, d));
       case 'raceFinish': return reply(w.raceFinish(c, d));
       case 'raceProgress': return reply(w.raceProgress(c, d));
       case 'perm': return this.permRequest(c, d, id);

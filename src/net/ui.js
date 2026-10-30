@@ -118,13 +118,13 @@ export class MpUI {
   }
 
   /** The race results from the server: { race name, order: [{ pid, name, place, time (ms), prize, dnf }] }. */
-  results(title, order, selfPid) {
+  results(title, order, selfPid, sub = '') { // (sub: the line under the title, a practice race: "PRACTICE RACE · NO PRIZE")
     this.closeResults();
     const box = document.createElement('div');
     box.className = 'mp-res';
     const rows = order.map((o) => `<span>${o.place ?? '—'}</span><span class="${o.pid === selfPid ? 'me' : ''}">${esc(o.name)}</span>`
       + `<span>${o.dnf ? 'DNF' : fmtTime(o.time / 1000)}</span><span class="prize">${o.prize ? `+$${Math.round(o.prize).toLocaleString('en-US')}` : ''}</span>`).join('');
-    box.innerHTML = `<b class="mp-h">${esc(title)}</b><small>RACE RESULTS · ${order.length} RACERS · CLICK TO CLOSE</small><div class="mp-rows">${rows}</div>`;
+    box.innerHTML = `<b class="mp-h">${esc(title)}</b><small>${sub ? esc(sub) : `RACE RESULTS · ${order.length} RACERS`} · CLICK TO CLOSE</small><div class="mp-rows">${rows}</div>`;
     box.addEventListener('click', () => this.closeResults());
     this.el.appendChild(box);
     this.resBox = box;

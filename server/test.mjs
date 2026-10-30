@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -485,27 +485,25 @@ try {
     await sleep(100);
   }
   {
-    // the ski bus's free races (catalog races[id].bus): free entry even in debt, one racer starts one, every finisher paid
+    // the ski bus's free races (catalog races[id].bus): free entry even in debt, 2 racers needed (as every race), every finisher paid
     console.log('bus races');
     const bus = Object.entries(CATALOG.races).filter(([, d]) => d.bus);
-    ok(bus.length === 3 && bus.every(([, d]) => d.entry === 0 && d.need === 1 && d.par > 0 && d.reward >= 1000 && d.reward <= 1500),
-      'three bus races in the catalog: free entry, one racer may start one, a par time, a modest prize ($1,000-1,500)');
+    ok(bus.length === 3 && bus.every(([, d]) => d.entry === 0 && d.need === 2 && d.par > 0 && d.reward >= 1000 && d.reward <= 1500),
+      'three bus races in the catalog: free entry, 2 racers needed, a par time, a modest prize ($1,000-1,500)');
     const [id, def] = bus[0];
     const B = await racer('Bea');
     const m0 = (server.profileOf('bea').money = -2500); // (deep in debt)
     const jq = await B.f.req('raceJoin', { race: id });
-    ok(jq.ok && jq.d.need === 1 && jq.d.waitMs === 20000, 'a broke player joins a bus race queue (need 1, a 20 s countdown)');
+    ok(jq.ok && jq.d.need === 2 && jq.d.waitMs === 45000, 'a broke player joins a bus race queue (need 2, the 45 s countdown)');
     const q1 = B.world.queues.get(id);
-    ok(q1 && q1.startAt > 0, 'alone in the queue: the countdown runs (no second racer needed)');
-    clearTimeout(q1.timer); B.world.startRace(id); // (the countdown's end, now)
-    const st = await B.f.next('raceStart', (d) => d.race === id);
-    ok(st && st.grid.length === 1 && server.profileOf('bea').money === m0, 'the solo bus race starts and takes no entry fee (money still -$2,500)');
-    const r = B.world.races.get(st.rid);
-    r.at = Date.now() - (def.par - 5000); // (home 5 s under par)
-    await B.f.req('raceFinish', { rid: st.rid, raw: def.par - 5000, pen: 0 });
-    const res = await B.f.next('raceResult', (d) => d.rid === st.rid);
-    const under = Math.round(def.reward * def.parShare);
-    ok(res && res.order[0].prize === under && server.profileOf('bea').money === m0 + under, `alone, under par: paid by the time (${def.parShare * 100} %: $${under}), not as a win`);
+    ok(q1 && !q1.startAt, 'alone in the queue: no countdown (nobody races alone)');
+    B.world.startRace(id); // (forced: one racer is sent back to the queue)
+    await sleep(50);
+    ok(!B.world.races.size || ![...B.world.races.values()].some((r) => r.race === id), 'a forced start with one racer starts nothing');
+    ok(server.profileOf('bea').money === m0, 'no entry fee taken');
+    ok(B.world.queues.get(id)?.members.length === 1 && !B.world.queues.get(id).startAt, '...the lone racer stays queued, still no countdown');
+    await B.f.req('raceLeave'); // (out of the queue: the two-racer race below starts from an empty one)
+    ok(!B.world.queues.get(id), 'left the queue: it is gone');
     // two racers: the winner gets the full prize, the second (nobody behind) the time prize; over par 30 %
     const C = await racer('Cass');
     await B.f.req('raceJoin', { race: id });
@@ -524,6 +522,74 @@ try {
     ok(server.profileOf('cass').money === mC + def.reward && server.profileOf('bea').money === mB + over, 'the server paid both');
     for (const p of [B, C]) p.f.close();
     await sleep(100);
+  }
+  {
+    // a practice race (raceSolo, Oct 30, the user: "you can race alone but you dont earn any money", "call it a practise
+    // race"): any race, just you, at once; no entry fee, no prize money, no race / win counted
+    console.log('practice races');
+    const bus = Object.entries(CATALOG.races).find(([, d]) => d.bus);
+    const [bid, bdef] = bus;
+    const paid = Object.entries(CATALOG.races).find(([, d]) => !d.bus && d.entry > 0)[0];
+    const O = await racer('Opal');
+    const prof = server.profileOf('opal');
+    prof.stats.races = 3; prof.money = 5000; // (not her first race: the entry fee would be due in a real one)
+    const jq = await O.f.req('raceJoin', { race: paid });
+    ok(jq.ok && O.world.queues.get(paid)?.members.includes(O.pid), 'Opal is queued for a race with an entry fee');
+    const sq = await O.f.req('raceSolo', { race: paid });
+    const st = await O.f.next('raceStart', (d) => d.race === paid && d.grid.some((g) => g.pid === O.pid));
+    ok(sq.ok && st && st.practice === true && st.grid.length === 1 && st.at - Date.now() <= 4500, 'raceSolo: a practice race starts at once with one racer (the 3-2-1 lead only)');
+    ok(!O.world.queues.get(paid), '...and she left the queue for it');
+    ok(prof.money === 5000, '...no entry fee taken');
+    const again = await O.f.req('raceSolo', { race: paid });
+    ok(!again.ok && again.err === 'in_race', 'one race at a time: a second raceSolo while racing is refused');
+    const r = O.world.races.get(st.rid);
+    r.at = Date.now() - 50000;
+    await O.f.req('raceFinish', { rid: st.rid, raw: 50000, pen: 0 });
+    const res = await O.f.next('raceResult', (d) => d.rid === st.rid);
+    ok(res && res.practice === true && res.order.length === 1 && res.order[0].place === 1 && res.order[0].prize === 0, 'first of one: no prize money (practice)');
+    await sleep(50);
+    ok(prof.money === 5000 && prof.stats.races === 3 && !(prof.stats.wins > 0) && !(prof.stats.earned > 0), 'nothing paid and nothing counted (no race, no win)');
+    // a free bus race, broke and under par: still nothing
+    prof.money = -800;
+    await O.f.req('raceSolo', { race: bid });
+    const sb = await O.f.next('raceStart', (d) => d.race === bid && d.practice);
+    O.world.races.get(sb.rid).at = Date.now() - (bdef.par - 5000);
+    await O.f.req('raceFinish', { rid: sb.rid, raw: bdef.par - 5000, pen: 0 });
+    const rb = await O.f.next('raceResult', (d) => d.rid === sb.rid);
+    await sleep(50);
+    ok(rb && rb.order[0].prize === 0 && prof.money === -800, 'a practice bus race under par pays nothing either');
+    const bad = await O.f.req('raceSolo', { race: 'nope' });
+    ok(!bad.ok && bad.err === 'bad_race', 'raceSolo: an unknown race is refused');
+    O.f.close();
+    await sleep(100);
+  }
+
+  {
+    // at most RACE_MAX (21) racers in one race (Oct 30, the user): the 21st starts it at once on 21 distinct grid slots,
+    // a 22nd (a full queue) is refused: race_full, the next race
+    console.log('race field cap');
+    const F = [];
+    for (let i = 0; i < RACE_MAX; i++) F.push(await racer(`Field ${i}`));
+    const w = F[0].world;
+    ok(F.every((x) => x.world === w), `${RACE_MAX} racers in one world`);
+    for (const x of F.slice(0, RACE_MAX - 1)) await x.f.req('raceJoin', { race: 'meadow' });
+    const q = w.queues.get('meadow');
+    ok(q && q.members.length === RACE_MAX - 1 && q.startAt > 0 && w.queueMsg('meadow').max === RACE_MAX, `${RACE_MAX - 1} queued: the 45 s countdown runs (queue max ${RACE_MAX})`);
+    await F[RACE_MAX - 1].f.req('raceJoin', { race: 'meadow' });
+    const st = await F[0].f.next('raceStart', (d) => d.race === 'meadow' && d.grid.length === RACE_MAX, 2000);
+    ok(!!st && !w.queues.get('meadow'), `the ${RACE_MAX}st racer: a full field starts at once`);
+    ok(st && new Set(st.grid.map((g) => g.slot)).size === RACE_MAX && st.grid.every((g) => g.slot >= 0 && g.slot < RACE_MAX), `${RACE_MAX} distinct start slots (0-${RACE_MAX - 1})`);
+    // a full queue (as if 21 were waiting): the 22nd is refused
+    const X = await racer('Field Extra');
+    X.world.queues.set('meadow', { members: Array.from({ length: RACE_MAX }, (_, i) => 10000 + i), startAt: Date.now() + 40000, timer: null });
+    const full = await X.f.req('raceJoin', { race: 'meadow' });
+    ok(!full.ok && full.err === 'race_full' && full.d?.max === RACE_MAX && X.world.queues.get('meadow').members.length === RACE_MAX, `a 22nd racer: race_full (the next race), the field stays at ${RACE_MAX}`);
+    const pr = await X.f.req('raceSolo', { race: 'meadow' });
+    ok(pr.ok && pr.d.practice, '...a practice race is still open to them');
+    X.world.queues.delete('meadow');
+    w.finishRace(w.races.get(st.rid));
+    for (const x of [...F, X]) x.f.close();
+    await sleep(150);
   }
 
   // ---------------------------------------------------------------- alone: multiplayer still works (world of 1)

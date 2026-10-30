@@ -205,7 +205,12 @@ export class Multiplayer {
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
     on('raceProgress', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.done.set(d.pid, d); if (d.closeAt) r.closeAt = d.closeAt; } });
     on('raceBoard', (d) => { const r = this.race.start; if (r && r.rid === d.rid) { r.board = d.rows; r.boardAt = performance.now(); } });
-    on('raceQueue', (d) => { if (d.n) MP.queues.set(d.race, d); else MP.queues.delete(d.race); if (this.race.queued === d.race) this.race.queue = d; });
+    on('raceQueue', (d) => {
+      if (d.n) MP.queues.set(d.race, d); else MP.queues.delete(d.race);
+      if (this.race.queued === d.race) this.race.queue = d;
+      // waiting for the next race after a full one: in as soon as the queue has room
+      if (this.race.waitNext === d.race && d.n < (d.max || 21) && !this.race.start) { this.race.waitNext = null; this.raceJoin(d.race); }
+    });
     on('raceStart', (d) => this.onRaceStart(d));
     on('raceResult', (d) => this.onRaceResult(d));
     on('raceDropped', (d) => { if (this.race.queued === d.race) this.race.queued = null; this.c.hud.flash('Race · not enough money for the entry fee', 'bad', 3000); });
@@ -541,14 +546,37 @@ export class Multiplayer {
     try {
       const d = await net.request('raceJoin', { race });
       this.race.queued = race; this.race.queue = d; this.race.finished = false;
-      this.c.hud.flash(d?.need === 1 ? `In the race queue · starts in ${Math.round((d.waitMs || 20000) / 1000)} s (others may join)` : 'In the race queue · at least 2 racers', 'good', 2600); // (need 1: a bus race)
+      // (every race needs at least 2 racers, the countdown runs 45 s once the second is in; alone: raceSolo)
+      this.c.hud.flash(`In the race queue · at least ${Math.max(2, d?.need ?? 2)} racers · starts ${Math.round((d?.waitMs || 45000) / 1000)} s after the 2nd joins`, 'good', 3000);
+      return true;
+    } catch (e) {
+      // a full field (21): wait for the next race (joined as soon as the queue has room) or race it alone
+      if (e.code === 'race_full' && this.c.hud.dialog) {
+        this.c.hud.dialog('Race full', `${e.data?.n ?? 21}/${e.data?.max ?? 21} racers are in. Wait for the next race, or ski it alone.`, [
+          { label: 'Wait for the next race', sub: 'joined as soon as there is room', act: () => { this.race.waitNext = race; this.c.lock?.(); } },
+          { label: 'Practice race (no prize)', sub: 'free · just you · starts at once', act: () => { this.raceSolo(race); this.c.lock?.(); } },
+          { label: 'Not now', secondary: true, act: () => this.c.lock?.() },
+        ]);
+        return false;
+      }
+      this.c.hud.flash(errText(e), 'bad', 2400); return false;
+    }
+  }
+  /** A practice race (Oct 30, the user: "you can race alone but you dont earn any money", "call it a practise race"):
+   *  just you, at once (the server's 3-2-1 lead), out of any queue; no entry fee, no prize, nothing counted. */
+  async raceSolo(race) {
+    try {
+      const d = await net.request('raceSolo', { race });
+      this.race.queued = null; this.race.queue = null; this.race.waitNext = null;
+      if (d?.rid != null && d.grid) this.onRaceStart(d); // (the broadcast raceStart may have come first: onRaceStart skips a repeat)
+      this.c.hud.flash('Practice race · no prize', 'good', 2400);
       return true;
     } catch (e) { this.c.hud.flash(errText(e), 'bad', 2400); return false; }
   }
   raceLeave() { if (this.race.queued) { net.request('raceLeave').catch(() => {}); this.race.queued = null; this.race.queue = null; } }
   onRaceStart(d) {
     const me = d.grid.find((g) => g.pid === MP.pid);
-    if (!me) return;
+    if (!me || this.race.start?.rid === d.rid) return; // (a practice race: its answer and its broadcast, once)
     this.race.queued = null; this.race.queue = null;
     this.race.start = { ...d, slot: me.slot, done: new Map(), board: null, got: net.serverNow(), seen: false }; this.race.finished = false; this.race.result = null;
     this.ui?.closeResults();
@@ -577,16 +605,19 @@ export class Multiplayer {
     this.race.result = { ...d, mine };
     this.ui?.setBoard(null);
     const s = this.c.save.stats;
-    s.races = (s.races || 0) + 1;
-    if (mine.place === 1 && !mine.dnf) s.wins = (s.wins || 0) + 1;
+    if (!d.practice) { // (a practice race counts for nothing)
+      s.races = (s.races || 0) + 1;
+      if (mine.place === 1 && !mine.dnf) s.wins = (s.wins || 0) + 1;
+    }
     // the race's own results screen shows the server's standings (modes/race/session.js asks raceResultFor); only
     // when that session is gone (you left the course) the results card comes up instead
     const sess = window.__game?.modes?.session;
     if (!(sess?.mp && sess.mp.rid === d.rid && !sess.disposed)) {
       const course = window.__game?.modes?.course;
       const title = course?.id === d.race && course.name ? course.name : String(d.race || 'Race').replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
-      this.ui?.results(title, d.order, mine.pid);
+      this.ui?.results(title, d.order, mine.pid, d.practice ? 'PRACTICE RACE · NO PRIZE' : '');
     }
+    if (d.practice) { this.c.hud.flash(`Practice race · no prize${mine.dnf ? ' · DNF' : Number.isFinite(mine.time) ? ` · ${(mine.time / 1000).toFixed(2)} s` : ''}`, 'good', 4200); return; }
     const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th'}`;
     this.c.hud.flash(`Race over · ${ord(mine.place)} of ${d.order.length}${mine.dnf ? ' · DNF' : ''}${mine.prize ? ` · +$${mine.prize.toLocaleString('en-US')}` : ''}`, mine.place === 1 && !mine.dnf ? 'gold' : 'good', 4200);
   }
@@ -662,8 +693,8 @@ export class Multiplayer {
   raceLine(now) {
     const q = this.race.queue;
     if (this.race.queued && q) {
-      if (q.n < (q.need ?? 2) || !q.startAt) return `RACE QUEUE · ${q.n}/${q.need ?? 2} · waiting for players`;
-      return `RACE QUEUE · ${q.n} racers · starting in ${Math.max(0, Math.ceil((q.startAt - now) / 1000))}s`;
+      if (q.n < Math.max(2, q.need ?? 2) || !q.startAt) return `RACE QUEUE · ${q.n}/${Math.max(2, q.need ?? 2)} · waiting for at least 2 racers`;
+      return `RACE QUEUE · ${q.n}/${q.max || 21} racers · starting in ${Math.max(0, Math.ceil((q.startAt - now) / 1000))}s`;
     }
     const r = this.race.start;
     if (r && now < r.at) return `RACE · GO in ${Math.max(0, Math.ceil((r.at - now) / 1000))}s`;

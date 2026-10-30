@@ -198,6 +198,7 @@ export class RaceSession {
     // multiplayer: { rid, field() -> the other racers [{ name, gate, s, time, dnf, off }], finish({ time, raw, pen, dnf })
     // (sent at the line), result() -> the server's final { order, mine } or null }. The server decides the places.
     this.mp = o.mp && typeof o.mp.field === 'function' ? o.mp : null;
+    this.practice = !!o.practice; // a practice race (alone, no prize): no place / medal booked, "PRACTICE RACE · NO PRIZE"
     this.introEnabled = o.intro !== false && !this.syncGo;
     this.introDone = false;
     this.weather = o.weather; // string or () => string for the intro's lower third
@@ -241,7 +242,7 @@ export class RaceSession {
     this.raceHud?.show?.({
       courseName: this.course.name, mode: this.mode, checkpoints: this.cps.length - 1,
       best: getRecord(this.save, this.courseId)?.best ?? undefined,
-      difficulty: this.mode === 'race' && !this.mp ? DIFFICULTY[this.difficulty].label : null, total: this.fieldSize(),
+      difficulty: this.practice ? 'Practice race · no prize' : this.mode === 'race' && !this.mp ? DIFFICULTY[this.difficulty].label : null, total: this.fieldSize(),
     });
   }
   /** Racers in this race: you, the AI field, and in multiplayer the other players. */
@@ -643,7 +644,7 @@ export class RaceSession {
     let weather = typeof this.weather === 'function' ? this.weather() : this.weather;
     if (!weather) weather = globalThis.__game?.env?.weatherLabel;
     if (weather) stats.push(['WEATHER', esc(weather)]);
-    const kicker = this.mode === 'race'
+    const kicker = this.practice ? 'PRACTICE RACE · NO PRIZE' : this.mode === 'race'
       ? `RACE · ${DIFFICULTY[this.difficulty].label} · ${this.bots.length + 1} RACERS`
       : 'WORLD RACING · TIME TRIAL';
     return { kicker: kicker.toUpperCase(), title: c.name, stats };
@@ -1359,7 +1360,7 @@ export class RaceSession {
   // A finished run whose results screen never came up (restart / quit in the ski-out): book the place
   // from the field's real and projected finishing times, exactly as the results screen would.
   flushPending() {
-    if (!this.playerFinished || this.state === 'results' || this.mode !== 'race' || this.placeDone) return;
+    if (!this.playerFinished || this.state === 'results' || this.mode !== 'race' || this.placeDone || this.practice) return;
     const rows = this.raceRows();
     this.commitPlace(rows.findIndex((r) => r.me) + 1);
   }
@@ -1393,7 +1394,7 @@ export class RaceSession {
     const place = res?.mine ? res.mine.place : race ? rows.findIndex((r) => r.me) + 1 : 1;
     const tres = this.playerFinished ? this.commitTime() : { pb: false, previousBest: getRecord(this.save, this.courseId)?.best, medal: null };
     const out = !this.playerFinished || !!res?.mine?.dnf; // (multiplayer: the race closed before you were home)
-    const pres = race ? (out ? { medal: null, newMedal: false } : this.commitPlace(place)) : null;
+    const pres = race ? (out || this.practice ? { medal: null, newMedal: false } : this.commitPlace(place)) : null; // (a practice race: first of one books no place / medal)
     const medal = race ? pres.medal : tres.medal;
     if (tres.pb || medal === 'gold') this.audio?.play?.('chime');
     // the stadium announcer: place, medal, personal best (once; not again after a replay)
@@ -1429,6 +1430,7 @@ export class RaceSession {
       this.resultsArgs.canNext = false;
       this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
     } else if (this.choices) this.resultsArgs.choices = this.choices;
+    if (this.practice) { delete this.resultsArgs.prize; delete this.resultsArgs.prizeMult; this.resultsArgs.difficulty = 'PRACTICE RACE · NO PRIZE'; }
     this.presentResults();
   }
 

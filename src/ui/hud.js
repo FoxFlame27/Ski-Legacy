@@ -275,7 +275,7 @@ export class HUD {
   // Resort race card. An entry of 0 (easy races, and main.js passes 0 for your first race) reads FREE.
   // race.ai (optional, the start houses' races): { levels: [{ key, label, mult }], pick, prizeOf(key) } -> an AI field
   // picker (left / right or a click); the prizes follow the pick and onStart(key) gets it.
-  raceIntro(race, best, { onStart, onClose }) {
+  raceIntro(race, best, { onStart, onClose, onPractice }) { // (onPractice: a "Practice race (no prize)" button: alone, free)
     const fee = race.D.entry || 0;
     const broke = save.money < fee;
     const firstFree = !fee && (save.stats?.races || 0) === 0;
@@ -300,7 +300,7 @@ export class HUD {
       ${aiRow}
       <div class="sub" style="margin-top:14px">Ski through every gate (through the green bar between its two flags) and beat the 14 racers to the finish. A missed gate only adds half a second.</div>
       ${broke ? `<div class="sub" style="color:#ff8a80;font-weight:700">You need $${fmtMoney(fee)} for the entry fee — you have $${fmtMoney(save.money)}. Win easier races first.</div>` : ''}
-      <div class="actions"><button class="btn" data-close>Cancel · Esc</button><button class="btn primary" data-start ${broke ? 'disabled' : ''}>Start · Enter</button></div>`, onClose);
+      <div class="actions"><button class="btn" data-close>Cancel · Esc</button>${onPractice ? '<button class="btn" data-practice>Practice race (no prize) · P</button>' : ''}<button class="btn primary" data-start ${broke ? 'disabled' : ''}>Start · Enter</button></div>`, onClose);
     const card = $('panel-card');
     const startBtn = card.querySelector('[data-start]');
     const setAi = (k) => {
@@ -317,10 +317,13 @@ export class HUD {
     };
     card.querySelectorAll('[data-ai]').forEach((b) => b.addEventListener('click', () => setAi(b.dataset.ai)));
     const go = () => { if (startBtn.disabled) return; removeEventListener('keydown', keys); this.close(); onStart(pick); };
+    const practice = () => { if (!onPractice) return; removeEventListener('keydown', keys); this.close(); onPractice(); };
+    card.querySelector('[data-practice]')?.addEventListener('click', practice);
     // keyboard: Enter or E starts, Esc cancels, left / right pick the AI field
     const keys = (e) => {
       if (!this.panelOpen) { removeEventListener('keydown', keys); return; }
       if (e.code === 'Enter' || e.code === 'KeyE') { e.preventDefault(); go(); }
+      else if (onPractice && e.code === 'KeyP') { e.preventDefault(); practice(); }
       else if (e.code === 'Escape') { removeEventListener('keydown', keys); this.close(); }
       else if (ai && (e.code === 'ArrowLeft' || e.code === 'KeyA')) { e.preventDefault(); stepAi(-1); }
       else if (ai && (e.code === 'ArrowRight' || e.code === 'KeyD')) { e.preventDefault(); stepAi(1); }

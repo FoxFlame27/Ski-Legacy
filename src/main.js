@@ -443,7 +443,7 @@ async function boot() {
       makeRig: (c, s) => makeRig(c, s, { poles: true, ai: true }), applyOutfit,
       fx: (id, r, info, dt) => skierFX(trails, spray, id, r, info, dt),
       pose: mpPose, getScene: mpScene, setAI: setAIOn, applySave: applyMpSave, onLost: (why) => leaveMultiplayer(why),
-      onRaceStart: mpRaceStart, onKickInterior: mpKickInterior,
+      onRaceStart: mpRaceStart, onKickInterior: mpKickInterior, lock: () => input.lock(), // (lock: after a dialog, e.g. race full)
     });
     multiplayer.attachTransit({ railway, express, lifts, skibus, player, expressRate: EXPRESS_FAST }); // (shared trains / cabins: net/transit.js)
   } catch (e) { console.warn('multiplayer: ' + (e?.stack || e)); multiplayer = null; }
@@ -1106,6 +1106,12 @@ function courseInteraction(e) {
       const card = { name: e.name, D: { ...e.D, entry: fee }, reward: e.reward, shares: PRIZE_SHARE, length: e.length, gates: e.course.gates || [], ai };
       hud.raceIntro(card, save.records?.[e.id]?.best, {
         onClose: () => { if (!modes.active) player.frozen = false; },
+        // a practice race (Oct 30, the user): just you, no AI, no entry fee, no prize, nothing counted
+        onPractice: () => {
+          if (!player.skisOn) player.setSkisOn(true);
+          transition.fade(() => modes.startFree(e.id, { bots: 0, practice: true, result: () => 0, retry: () => true }))
+            .then(() => input.lock(), (err) => { console.warn('practice race', err); player.frozen = false; });
+        },
         onStart: (pick = e.D.ai) => {
           if (fee && !spend(fee)) { player.frozen = false; return; }
           if (firstFree) hud.flash('First race is free · good luck!', 'gold', 2200);
@@ -1125,7 +1131,7 @@ function courseInteraction(e) {
 // Three races on the pistes below ski-bus stops (the bus is free, so is the entry, even in debt; every finisher is
 // paid: you can always earn your way back). E at the race board beside the stop (or at the start gate below it): the
 // race card, then the race against the Easy AI field right there (the board takes you down to the start gate); after it
-// BACK TO THE BUS STOP. Multiplayer: the server's queue (one racer is enough) and its prizes.
+// BACK TO THE BUS STOP. Multiplayer: the server's queue (at least 2 racers; alone: a practice race, no prize) and its prizes.
 const BROKE_HINT = 'Broke? The ski bus takes you to 3 free races';
 let brokeAt = -1e9;
 function brokeHint() {
@@ -1168,6 +1174,16 @@ function busRaceInteraction({ e, at }) {
             await streamAround(e.start.x, e.start.z);
             modes.startFree(e.course, { difficulty: e.D.ai, result: (r) => busRaceResult(e, r), retry: () => true, home: busRaceHome(e) });
           }).then(() => input.lock(), (err) => { console.warn('bus race', err); player.frozen = false; });
+        },
+        onPractice: () => { // (a practice race: just you, no prize, nothing counted)
+          jobs.onEvent('teleport');
+          transition.fade(async () => {
+            player.frozen = false;
+            if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
+            e.course.build(scene, models);
+            await streamAround(e.start.x, e.start.z);
+            modes.startFree(e.course, { bots: 0, practice: true, result: () => 0, retry: () => true, home: busRaceHome(e) });
+          }).then(() => input.lock(), (err) => { console.warn('practice race', err); player.frozen = false; });
         },
       });
     },
@@ -1470,8 +1486,8 @@ async function mpVisitChalet(h, owner) {
 function mpKickInterior(id) {
   if (chalets?.inside && id === `chalet:${chalets.current?.id}`) { chalets.leave(); hud.flash('The owner closed the door', 'bad', 2600); }
 }
-// a course's start house in multiplayer: the race queue (2+ players; 30 s once two are in; everyone in the world or
-// 15 queued: at once). The start is the server's, the same moment for everyone; no AI field; the server pays
+// a course's start house in multiplayer: the race queue (at least 2 racers, at most 21; 45 s once two are in; a full
+// field of 21: at once) or a practice race alone (raceSolo: no fee, no prize). The start is the server's, the same moment for everyone; no AI field; the server pays
 // queued and walked off (150 m from where you joined) or gone into a building / a vehicle: out of the queue, so
 // you never stay stuck in it (Oct 30, the user)
 let mpQueueAt = null;
@@ -1488,12 +1504,20 @@ function mpCourseInteraction(e) {
   const q = multiplayer?.race.queued === e.id;
   const n = MP.queues?.get(e.id)?.n || 0;
   return {
-    label: q ? `${e.name} · queued (${n}/${Math.max(e.bus ? 1 : 2, n)}) · E to leave the queue` : `${e.bus ? 'Race: ' : ''}${e.name} · race other players${n ? ` · ${n} waiting` : ''} · ${e.bus ? 'free entry · ' : ''}up to $${Math.round(e.reward).toLocaleString('en-US')}`,
+    label: q ? `${e.name} · queued (${n}/21 · at least 2) · E to leave the queue` : `${e.bus ? 'Race: ' : ''}${e.name} · race other players${n ? ` · ${n}/21 waiting` : ''} · ${e.bus ? 'free entry · ' : ''}up to $${Math.round(e.reward).toLocaleString('en-US')}`,
     act: () => {
       if (q) { multiplayer.raceLeave(); hud.flash('Left the race queue', 'good', 1800); return; }
       if (!player.hasSkis && !e.bus) { hud.flash('You need skis to race', 'bad'); return; } // (a bus race lends you a pair)
-      multiplayer.raceJoin(e.id);
-      mpQueueAt = { x: player.pos.x, z: player.pos.z }; // (walking off from the start leaves the queue: mpQueueWatch)
+      // two choices for every race (Oct 30, the user): the queue (at least 2 racers, prize money) or a practice race alone (no prize)
+      hud.dialog(e.name, `Race other players (at least 2, up to 21 · the race starts 45 s after the 2nd joins), or ski it alone as a practice race.`, [
+        { label: 'Join race (needs at least 2 · prize)', sub: `${e.bus ? 'free entry · ' : ''}up to $${Math.round(e.reward).toLocaleString('en-US')}`, act: () => {
+          multiplayer.raceJoin(e.id);
+          mpQueueAt = { x: player.pos.x, z: player.pos.z }; // (walking off from the start leaves the queue: mpQueueWatch)
+          input.lock();
+        } },
+        { label: 'Practice race (no prize)', sub: 'free · just you · starts at once', act: () => { multiplayer.raceSolo(e.id); input.lock(); } },
+        { label: 'Not now', secondary: true, act: () => input.lock() },
+      ]);
     },
   };
 }
@@ -1511,7 +1535,7 @@ function mpRaceStart(d) {
     chalets?.leave(true);
     player.frozen = false;
     if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
-    return modes.startFree(e.bus ? e.course : e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false,
+    return modes.startFree(e.bus ? e.course : e.id, { bots: 0, practice: !!d.practice, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false,
       grid: { slot: d.slot, n: d.n }, others: () => multiplayer.raceOthers(), mp: d.mp, home: e.bus ? busRaceHome(e) : undefined }); // (your grid slot; the other racers, the server's result)
   }).then(() => input.lock(), (err) => console.warn('multiplayer race', err));
 }

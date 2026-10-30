@@ -665,7 +665,7 @@ export class Drive {
       }
       const cars = this.carColliders();
       for (const c of this.colliders) {
-        if (c === d.e.collider || cars.has(c) || c.rail || c.police === 'local') continue; // (other cars: bash(); guardrails: their line colliders; your patrol cars: police.js)
+        if (c === d.e.collider || cars.has(c) || c.rail || c.police === 'local' || (c.bus && !d.crash)) continue; // (other cars: bash(); guardrails: their line colliders; your patrol cars: police.js; the ski buses: bash() too, a heavy box you crash into (Oct 30 2026, "also make it so you can crash into a bus"), only a soft bump while your wreck slides)
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (c.breakable && sp > BREAK_V) { // (a little pole, a sign, a bollard: knocked flying, the car drives on: world/breakables.js)
           const reach = size + R, dx = c.x - cx, dz = c.z - cz;
@@ -800,6 +800,26 @@ export class Drive {
     this._cc = new Set([...(this.traffic?.cars || []).map((c) => c.collider), ...(this.parking?.cars || []).map((e) => e.collider)]);
     return this._cc;
   }
+  // the ski buses near (x, z) as bash() obstacles (Oct 30 2026, the user: "also make it so you can crash into a bus"):
+  // their colliders (bus.js: bus:0's and the fleet's, bus: true; away at 1e9 while not drawn or while you ride it), the
+  // box the bus model's own footprint (its shell's size, else the collider's), 12 t, its velocity the fleet bus's own
+  // (the timetable's speed along its heading: in multiplayer the shared timeline the client draws, net/transit.js);
+  // bus:0 stands whenever it's solid (at the village stop or in its depot bay)
+  busesNear(x, z, out) {
+    const line = globalThis.__game?.skibus?.line || null, fl = line?.fleet || [];
+    if (!this._busC || this._busN !== this.colliders.length || this._busF !== fl.length) {
+      this._busN = this.colliders.length; this._busF = fl.length;
+      this._busC = this.colliders.filter((c) => c.bus);
+      this._busO = new Map(fl.map((b) => [b.collider, b]));
+      const sz = line?.bus?.shell?.userData?.size;
+      this._busFoot = sz && sz.x > 0 && sz.z > 0 ? { hw: clamp(Math.min(sz.x, sz.z) / 2, 1.0, 1.5), hd: clamp(Math.max(sz.x, sz.z) / 2, 4, 8) } : null; // (the length the long side, whichever axis the model has it on)
+    }
+    for (const c of this._busC) {
+      if (Math.abs(c.x - x) > 13 || Math.abs(c.z - z) > 13) continue;
+      const b = this._busO.get(c), yaw = -c.rot, v = b && !b.taken && !b.at ? b.v || 0 : 0;
+      out.push({ kind: 'bus', o: b || line, c, x: c.x, z: c.z, yaw, hw: this._busFoot?.hw ?? c.hw, hd: this._busFoot?.hd ?? c.hd, m: 12000, vx: Math.sin(yaw) * v, vz: Math.cos(yaw) * v });
+    }
+  }
   // Your car against the others (boxes, separating axes): a real knock above a walking pace, both cars get the impulse
   // of the closing speed by their masses (a bounce), the other one a spin from where it was hit: a traffic car slides
   // aside and comes to rest crooked on its road (traffic.js 'knocked' / 'wreck': never beyond the plowed edge + 1 m or
@@ -814,6 +834,7 @@ export class Drive {
     const others = [];
     for (const c of this.traffic?.cars || []) if (c.mode !== 'gone' && c.g.visible && Math.abs(c.x - d.x) < 9 && Math.abs(c.z - d.z) < 9) others.push({ kind: 'traffic', o: c, x: c.x, z: c.z, yaw: c.yaw, hw: c.w / 2 - 0.08, hd: c.l / 2, m: MASS[c.name] || 1700, vx: Math.sin(c.yaw) * (c.mode === 'knocked' ? 0 : c.v) * (c.rev ? -1 : 1) + (c.kvx || 0), vz: Math.cos(c.yaw) * (c.mode === 'knocked' ? 0 : c.v) * (c.rev ? -1 : 1) + (c.kvz || 0) });
     for (const e of this.parking?.cars || []) if (e !== d.e && !e.driving && !this.aboard?.(e) && Math.abs(e.car.position.x - d.x) < 9 && Math.abs(e.car.position.z - d.z) < 9) others.push({ kind: 'parked', o: e, x: e.car.position.x, z: e.car.position.z, yaw: e.car.rotation.y, hw: 0.9, hd: e.length / 2, m: MASS[e.name] || 1700, vx: e.slide?.vx || 0, vz: e.slide?.vz || 0 }); // (not your car on a tow truck's bed: Oct 30 2026)
+    try { this.busesNear(d.x, d.z, others); } catch (err) { if (!this.busWarn) { this.busWarn = true; console.warn('drive: buses', err); } } // (Oct 30 2026, "also make it so you can crash into a bus": 12 t boxes, see busesNear)
     for (const B of others) {
       const hit = obb(A, B);
       if (!hit) continue;
@@ -821,12 +842,12 @@ export class Drive {
       const m2 = B.m, I2 = (m2 * (4 * B.hd * B.hd + 4 * B.hw * B.hw)) / 12;
       // closing speed along the normal (with the turning of both at the contact)
       const r1x = px - d.x, r1z = pz - d.z, r2x = px - B.x, r2z = pz - B.z;
-      const w2 = B.kind === 'traffic' ? B.o.kw || 0 : B.o.slide?.w || 0;
+      const bus = B.kind === 'bus', w2 = bus ? 0 : B.kind === 'traffic' ? B.o.kw || 0 : B.o.slide?.w || 0; // (a bus never spins)
       const v1x = d.vx + d.yawRate * r1z, v1z = d.vz - d.yawRate * r1x, v2x = B.vx + w2 * r2z, v2z = B.vz - w2 * r2x;
       const vn = (v1x - v2x) * nx + (v1z - v2z) * nz;
       const bash = -vn > 1.3 || (B.kind === 'traffic' && B.o.mode !== 'road' && B.o.mode !== 'lot' && B.o.mode !== 'parked' && -vn > 0.2);
       // push apart (by mass when it's a knock; a nudge only moves you), then the impulse when they close
-      const share = bash ? m2 / (m1 + m2) : 1;
+      const share = bash && !bus ? m2 / (m1 + m2) : 1; // (a bus stays where it is: you take the whole overlap)
       d.x += nx * depth * share; d.z += nz * depth * share;
       if (vn >= 0) continue;
       const e = 0.28;
@@ -836,6 +857,13 @@ export class Drive {
       d.yawRate += clamp(((r1z * nx - r1x * nz) * J) / I1, -1.5, 1.5) * 0.5;
       if (!bash) continue; // (a nudge at parking speed: only you bounce)
       this.hitReport(B.kind, -vn); // (police.js: a hit calls the police)
+      if (bus) { // (Oct 30 2026, "also make it so you can crash into a bus": the bus barely notices, never knocked off its route; you bounce, and the car rules for the damage on the closing speed, its own speed in it, so a head-on with a moving bus hurts: a knock above KNOCK_V, a crash above CRASH_V at any angle (a 12 t wall), wrecked above EXTREME_V (crash()))
+        const hard = Math.min(1, -vn / 12);
+        if (-vn > CRASH_V && this.canCrash()) { this.crash(-vn, nx, nz, 'car'); return; }
+        if (-vn > KNOCK_V) this.knock(Math.max(KNOCK_V + 0.1, -vn * (Math.abs(nx * fx + nz * fz) > 0.6 ? 1 : 0.8)), nx, nz); // (a glancing scrape a little softer)
+        if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.35 + 0.45 * hard); else this.audio?.play('land', 0.5 + 0.5 * hard); d.pitchV -= 0.3 * hard; d.rollV += (Math.random() - 0.5) * 0.7 * hard; this.shake = Math.max(this.shake || 0, 0.25 + 0.4 * hard); }
+        continue;
+      }
       const dvx = (-J / m2) * nx, dvz = (-J / m2) * nz, dw = clamp((-(r2z * nx - r2x * nz) * J) / I2, -2.5, 2.5);
       if (B.kind === 'traffic') this.traffic?.knock?.(B.o, B.vx + dvx, B.vz + dvz, w2 + dw);
       else this.shove(B.o, B.vx + dvx, B.vz + dvz, w2 + dw);

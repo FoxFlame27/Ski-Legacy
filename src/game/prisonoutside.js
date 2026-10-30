@@ -381,11 +381,7 @@ export function buildPrisonOutside(P, L) {
     c.strokeStyle = 'rgba(246,246,240,0.92)'; c.lineWidth = 5;
     for (const lx of BAYS.lines) { c.beginPath(); c.moveTo(X(lx), Z(BAYS.z0)); c.lineTo(X(lx), Z(BAYS.z1)); c.stroke(); }
     c.beginPath(); c.moveTo(X(BAYS.lines[0]), Z(BAYS.z1)); c.lineTo(X(BAYS.lines.at(-1)), Z(BAYS.z1)); c.stroke();
-    c.textAlign = 'center'; c.textBaseline = 'middle';
-    BAYS.lines.slice(0, -1).forEach((lx, i) => {
-      c.save(); c.translate(X(lx + 1.35), Z(BAYS.z1 - 1.0)); c.rotate(Math.PI); // (read from the road)
-      c.fillStyle = i < 2 ? 'rgba(80,140,255,0.95)' : 'rgba(246,246,240,0.92)'; c.font = 'bold 30px Arial'; c.fillText(i < 2 ? 'POLIZEI' : 'BESUCH', 0, 0); c.restore();
-    });
+    // (no lettering in the bays: the parking signs on posts at their heads say whose they are)
     c.globalCompositeOperation = 'destination-in';
     const fx = c.createLinearGradient(0, 0, cw, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.045, '#000'); fx.addColorStop(0.955, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');
     c.fillStyle = fx; c.fillRect(0, 0, cw, ch);
@@ -437,6 +433,50 @@ export function buildPrisonOutside(P, L) {
     const p = w(cx, cz), sz = car.size || { x: 1.9, z: 4.7 };
     colliders.push({ x: p.x, z: p.z, hw: sz.x / 2 + 0.05, hd: sz.z / 2 + 0.05, rot: -(yaw0 + Math.PI) });
   } catch (e) { console.warn('prison: patrol car', e); }
+  // the parking signs at the bays' heads (by the house, facing the road): a blue European "P" on a galvanised post with
+  // an additional panel under it, "Polizei" (between the two patrol bays) and "Besucher / Visitors" (the visitors' bay)
+  {
+    const rrect = (c, x, y, w_, h, r) => { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w_, y, x + w_, y + h, r); c.arcTo(x + w_, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w_, y, r); c.closePath(); };
+    const galv = new THREE.MeshStandardMaterial({ color: 0xaab1b6, metalness: 0.75, roughness: 0.38 });
+    const plateBack = new THREE.MeshStandardMaterial({ color: 0x8e959a, metalness: 0.6, roughness: 0.45 });
+    const faceMat = (t) => new THREE.MeshStandardMaterial({ map: t, roughness: 0.35, metalness: 0.05 });
+    const pT = canvasTex(512, 512, (c, cw, ch) => {
+      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 46); c.fill();
+      c.fillStyle = '#1d5bb0'; rrect(c, 26, 26, cw - 52, ch - 52, 32); c.fill();
+      c.fillStyle = '#ffffff'; c.font = 'bold 400px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('P', cw / 2, ch / 2 + 22);
+    });
+    const panelT = (lines, badge) => canvasTex(512, 256, (c, cw, ch) => {
+      c.fillStyle = '#d6dadd'; c.fillRect(0, 0, cw, ch);
+      c.fillStyle = '#ffffff'; rrect(c, 6, 6, cw - 12, ch - 12, 22); c.fill();
+      c.strokeStyle = '#111111'; c.lineWidth = 9; rrect(c, 20, 20, cw - 40, ch - 40, 14); c.stroke();
+      c.fillStyle = '#111111'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const x = badge ? cw / 2 + 52 : cw / 2;
+      if (badge) drawBadge(c, 88, ch / 2, 52, { ring: '#c9a54a', star: '#f4d77a', inner: '#123e86' });
+      if (lines.length === 1) { c.font = 'bold 88px Arial'; c.fillText(lines[0], x, ch / 2 + 6); }
+      else { c.font = 'bold 74px Arial'; c.fillText(lines[0], x, ch / 2 - 40); c.font = 'italic 62px Georgia'; c.fillText(lines[1], x, ch / 2 + 50); }
+    });
+    const plate = (wd, ht, tex_, x, y, z) => {
+      const mats = [plateBack, plateBack, plateBack, plateBack, faceMat(tex_), plateBack];
+      const m = new THREE.Mesh(new THREE.BoxGeometry(wd, ht, 0.02), mats); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m);
+      add(new THREE.BoxGeometry(wd - 0.02, 0.03, 0.045), snow, x, y + ht / 2 + 0.012, z, g, false); // (snow along its top edge)
+      return m;
+    };
+    const parkSign = (lx, lz, lines, badge) => {
+      const y0 = gy(lx, lz);
+      add(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 12), galv, lx, y0 + 1.22, lz);                                   // (the post)
+      add(new THREE.CylinderGeometry(0.034, 0.034, 0.02, 12), galv, lx, y0 + 2.48, lz);                                // (its cap)
+      const cap = add(new THREE.SphereGeometry(0.055, 12, 8), snow, lx, y0 + 2.5, lz, g, false); cap.scale.set(1, 0.5, 1); // (snow on it)
+      const zf = lz + 0.045;
+      plate(0.6, 0.6, pT, lx, y0 + 2.08, zf);
+      plate(0.6, 0.3, panelT(lines, badge), lx, y0 + 1.6, zf);
+      for (const y of [y0 + 2.25, y0 + 1.9, y0 + 1.6]) add(new THREE.BoxGeometry(0.1, 0.035, 0.05), galv, lx, y, lz + 0.018, g, false); // (clamps)
+      const p = w(lx, lz); colliders.push({ x: p.x, z: p.z, r: 0.12 });
+    };
+    const hz = BAYS.z0 - 0.3; // (at the bays' heads, clear of the bays and the house's drifts)
+    parkSign(BAYS.lines[1], hz, ['Polizei'], true);
+    parkSign((BAYS.lines[2] + BAYS.lines[3]) / 2, hz, ['Besucher', 'Visitors'], false);
+  }
   // the signpost at the forecourt's mouth, facing the road
   let postMat = null;
   try {

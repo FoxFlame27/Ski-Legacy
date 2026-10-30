@@ -157,13 +157,72 @@ export class PrisonRoom {
       m.position.set(x, 2.95, z); m.rotation.y = ry; S.add(m); return m;
     };
     CELLS.forEach((cx, i) => plate(`ZELLE ${i + 1}`, cx, bars + 0.06, 0, 0.62));
-    const rules = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.8), new THREE.MeshStandardMaterial({ roughness: 0.7, map: tex(440, 320, (g, w, h) => {
-      g.fillStyle = '#f2efe6'; g.fillRect(0, 0, w, h); g.fillStyle = '#123a6b'; g.fillRect(0, 0, w, 64);
-      g.fillStyle = '#fff'; g.font = 'bold 40px Arial'; g.textAlign = 'center'; g.fillText('BESUCHSZEIT', w / 2, 46);
-      g.fillStyle = '#222'; g.font = '24px Arial'; g.textAlign = 'left';
-      ['Visiting hours: always', 'Stay behind the yellow line', 'Do not pass anything', 'through the bars', 'Polizei Legacy Village'].forEach((t, i) => g.fillText(t, 26, 108 + i * 44));
-    }) }));
-    rules.position.set(2.0, 1.65, z1 - 0.02); rules.rotation.y = Math.PI; S.add(rules);
+    // the visiting-hours notice by the visiting desk: a printed enamel panel in a dark larch frame on the corridor's
+    // far wall (lit by the room lights, not self-lit); a 1024x1280 canvas so it reads up close
+    {
+      const PW = 0.88, PH = 1.1, BX = -3.15, BY = 1.62, BZ = z1 - 0.035;
+      const panelT = tex(1024, 1280, (g, w, h) => {
+        const navy = '#123a6b', ink = '#1d2530', grey = '#5a6470';
+        const fitT = (t, x, y, max) => { const m = g.measureText(t).width; if (m <= max) { g.fillText(t, x, y); return; } g.save(); g.translate(x, y); g.scale(max / m, 1); g.fillText(t, 0, 0); g.restore(); };
+        // the enamel: a warm off-white with a faint vertical sheen
+        const bg = g.createLinearGradient(0, 0, w, h); bg.addColorStop(0, '#f7f5ef'); bg.addColorStop(1, '#ebe7dc');
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+        // the header band: navy, the star badge, the bilingual title, a thin gold rule under it
+        g.fillStyle = navy; g.fillRect(0, 0, w, 250);
+        g.fillStyle = '#c9a54a'; g.fillRect(0, 250, w, 8);
+        drawBadge(g, 128, 125, 86);
+        g.fillStyle = '#ffffff'; g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+        g.font = 'bold 44px Arial'; fitT('POLIZEI · LEGACY VILLAGE', 244, 92, w - 290);
+        g.font = 'bold 76px Arial'; g.fillText('BESUCHSZEIT', 240, 170);
+        g.fillStyle = '#c8d6ea'; g.font = 'italic 40px Georgia'; g.fillText('Visiting hours', 244, 222);
+        // the times block: a clock icon and the hours
+        const cy = 380;
+        g.save(); g.translate(130, cy);
+        g.fillStyle = '#ffffff'; g.strokeStyle = navy; g.lineWidth = 12; g.beginPath(); g.arc(0, 0, 66, 0, Math.PI * 2); g.fill(); g.stroke();
+        g.fillStyle = navy; for (let i = 0; i < 12; i++) { const a = (i * Math.PI) / 6; g.beginPath(); g.arc(Math.sin(a) * 48, -Math.cos(a) * 48, i % 3 ? 3.5 : 6, 0, 7); g.fill(); }
+        g.lineCap = 'round'; g.lineWidth = 9; g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -38); g.stroke();
+        g.lineWidth = 7; g.beginPath(); g.moveTo(0, 0); g.lineTo(30, 14); g.stroke();
+        g.beginPath(); g.arc(0, 0, 8, 0, 7); g.fill(); g.restore();
+        g.fillStyle = ink; g.font = 'bold 54px Arial'; g.fillText('Täglich · Daily', 236, cy - 14);
+        g.fillStyle = navy; g.font = 'bold 60px Arial'; g.fillText('00:00 – 24:00', 236, cy + 56);
+        // the rules: bilingual pairs, each with a small navy bullet, thin dividers between
+        const rules = [
+          ['Bitte am Schalter melden', 'Please report to the counter'],
+          ['Hinter der gelben Linie bleiben', 'Stay behind the yellow line'],
+          ['Keine Gegenstände für die Insassen', 'No items for the inmates'],
+          ['Mobiltelefone aus', 'Phones off'],
+        ];
+        let y = 540;
+        g.strokeStyle = 'rgba(18,58,107,0.18)'; g.lineWidth = 3;
+        g.beginPath(); g.moveTo(60, y - 40); g.lineTo(w - 60, y - 40); g.stroke();
+        for (const [de, en] of rules) {
+          g.fillStyle = navy; g.beginPath(); g.arc(82, y + 18, 13, 0, 7); g.fill();
+          g.fillStyle = ink; g.font = 'bold 44px Arial'; fitT(de, 118, y + 34, w - 180);
+          g.fillStyle = grey; g.font = 'italic 40px Georgia'; fitT(en, 118, y + 88, w - 180);
+          y += 152;
+          g.beginPath(); g.moveTo(60, y - 22); g.lineTo(w - 60, y - 22); g.stroke();
+        }
+        // the footer: the station's name, a navy hairline frame inset round the whole panel
+        g.fillStyle = navy; g.fillRect(0, h - 96, w, 96);
+        g.fillStyle = '#ffffff'; g.font = 'bold 36px Arial'; g.textAlign = 'center';
+        fitT('Polizeiinspektion Legacy Village · Notruf 133', w / 2, h - 36, w - 100);
+        g.strokeStyle = navy; g.lineWidth = 6; g.strokeRect(18, 18, w - 36, h - 36);
+      });
+      panelT.generateMipmaps = true; panelT.minFilter = THREE.LinearMipmapLinearFilter; panelT.anisotropy = 16;
+      const larch = new THREE.MeshStandardMaterial({ color: 0x3e2c1e, roughness: 0.55 });
+      const back = new THREE.MeshStandardMaterial({ color: 0x2a2f36, roughness: 0.6 });
+      const fit = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; S.add(m); return m; };
+      fit(new THREE.BoxGeometry(PW + 0.04, PH + 0.04, 0.02), back, BX, BY, z1 - 0.012);              // (the back board)
+      const panel = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), new THREE.MeshStandardMaterial({ map: panelT, roughness: 0.38, metalness: 0.0 }));
+      panel.position.set(BX, BY, BZ); panel.rotation.y = Math.PI; panel.receiveShadow = true; S.add(panel);
+      const fw = 0.06, fd = 0.045, fz = z1 - fd / 2;                                                   // (the larch frame)
+      fit(new THREE.BoxGeometry(PW + 2 * fw, fw, fd), larch, BX, BY + PH / 2 + fw / 2, fz);
+      fit(new THREE.BoxGeometry(PW + 2 * fw, fw, fd), larch, BX, BY - PH / 2 - fw / 2, fz);
+      fit(new THREE.BoxGeometry(fw, PH, fd), larch, BX - PW / 2 - fw / 2, BY, fz);
+      fit(new THREE.BoxGeometry(fw, PH, fd), larch, BX + PW / 2 + fw / 2, BY, fz);
+      const brass = new THREE.MeshStandardMaterial({ color: 0xb8954a, metalness: 0.9, roughness: 0.35 });
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) { const b = fit(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 12), brass, BX + sx * (PW / 2 + fw / 2), BY + sy * (PH / 2 + fw / 2), z1 - fd - 0.004); b.rotation.x = Math.PI / 2; }
+    }
     this.obstacles.push([5.4, x1, bars - 0.25, bars + 0.35]); // (the counter)
   }
 

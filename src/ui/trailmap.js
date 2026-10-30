@@ -235,7 +235,9 @@ export class TrailMap {
   open() {
     const p = this.player.pos, v = this.view;
     // back to you, unless you were just looking at somewhere close by
-    if (!this.opened || Math.hypot(v.x - p.x, v.z - p.z) > 400) { v.x = p.x; v.z = p.z; }
+    // (Oct 30, the user: "make the map as a default pretty zoomed in": opened on you, close in: the streets, huts and
+    // stops round you readable; scroll out for the rest)
+    if (!this.opened || Math.hypot(v.x - p.x, v.z - p.z) > 400) { v.x = p.x; v.z = p.z; v.s = 0.75; }
     this.opened = true;
     this.root.hidden = false;
     const where = this.locationName?.() || '';

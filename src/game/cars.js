@@ -40,8 +40,9 @@ export const REAL = {
   car_mercedes_sls: [4.64, 1.94, 1.26], car_porsche_taycan: [4.96, 1.97, 1.38],
   car_lamborghini_huracan: [4.52, 1.93, 1.17], car_toyota_gr_yaris: [3.99, 1.81, 1.46],
   car_audi_etron_gt: [4.96, 1.96, 1.38], car_mercedes_gls: [5.21, 1.96, 1.82],
+  car1: [5.0, 1.94, 1.62], // (the police patrol car: an estate with a roof bar, game/police.js)
 };
-const PRECISE = new Set(['car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls']);
+const PRECISE = new Set(['car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls', 'car1']);
 const JUNK = /plane|ground|shadow|floor|backdrop|base_?plate|studio/i;
 const REAR = /tail|rear|back_?light|red_?gla|red_?light|glow_red|reflector/i, FRONT = /head|front_?light|front/i;
 // Which way each model's nose points as it comes in, checked by eye (tools/carlab.html?mode=raw: grille and headlights
@@ -51,6 +52,7 @@ export const FACING = {
   car_bmw_x3: 0, car_audi_rs6: 0, car_audi_rs6_full: 0, car_vw_golf_gti: 0, car_vw_golf_gti_full: 0,
   car_tesla_m3: 0, car_tesla_m3_full: 0, car_mercedes_sls: 0, car_porsche_taycan: 0,
   car_lamborghini_huracan: 0, car_toyota_gr_yaris: 0, car_audi_etron_gt: 0, car_mercedes_gls: 0,
+  car1: 0, // (the police car: its headlamps at +z, an estate's long roof toward -z)
 };
 // parts of a model left out altogether: the SLS's broken-glass overlay (a second skin over every window and lamp
 // lens), its motion-blurred rim discs (invisible at rest, drawn over the real rims) and INT_vetro: a second, inner
@@ -402,6 +404,9 @@ const PLATE_PIECES = {
   car_audi_etron_gt: [[/^gtVehicle_Exterior_mm_misc1$/, [-0.26, 0.26, 0.64, 0.76, -2.41, -2.33]]],
   car_toyota_gr_yaris: [[/Coloured_Material/, [-0.17, 0.17, 0.73, 0.9, -1.885, -1.8]]],
   car_mercedes_gls: [[/^gls_dash_wood$/, [-0.28, 0.28, 0.5, 0.625, 2.59, 2.62], 'face']],
+  // the police car1: its German plates ("GO 380E", in the body atlas 'material'): at the front the plate's face and its
+  // backing (two loose pieces on the bumper, 0.405-0.536), at the back the plate in the tailgate's recess (0.634-0.739)
+  car1: [[/^material$/, [-0.3, 0.34, 0.385, 0.56, 2.45, 2.54]], [/^material$/, [-0.3, 0.34, 0.61, 0.765, -2.44, -2.34]]],
 };
 export const isPlateMat = (m) => PLATE_NAME.test(m?.name || '') && !PLATE_LAMP.test(m?.name || '');
 // g without the connected pieces (welded at 1 mm) that lie wholly inside box (face: just the triangles in it that

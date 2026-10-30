@@ -21,9 +21,12 @@
 //  - Multiplayer: the patrol cars are local to the offender; their poses go out as 'veh' { k: 'police', cars } (like
 //    the tow truck, net/tow.js) and the others draw them (net/vehicles.js updatePolice). The officers on foot only here.
 //    Fines come off save.money (multiplayer: the session's money guard sends them as a 'game' spend: debt allowed).
-// The model: Meshy (tools/meshy-police.mjs: a white estate, blue and neon-yellow livery, POLIZEI on the doors, a
-// roof bar), public/models/police/police_car.glb; the flashing blue lenses are ours, laid over its roof bar. No model:
-// a BMW X3 from the fleet painted white with a POLIZEI band.
+// The model (Oct 30, the user: "its a new model for the police car"): public/models/car1.glb (main.js MODEL_LIST: a
+// German estate in the blue / neon-yellow POLIZEI livery with its own roof bar and plates; ~750k triangles, metres,
+// nose at +z), made a car template like the fleet's (cars.js carTemplate: merged per material, tinted glass, the far
+// LOD beyond 70 m x quality.carLod); the flashing blue lenses are ours, laid over its roof bar. car1 missing: the
+// earlier Meshy model (tools/meshy-police.mjs, public/models/police/police_car.glb); neither: a BMW X3 from the fleet
+// painted white with a POLIZEI band.
 //
 // THE CHASE, GTA-style (Oct 30, the user: "police chases are actually very bad, they're super easy to get away from and
 // it isn't really fun ... you go 'omg I got rammed, crazy'"):
@@ -46,7 +49,9 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { loadGLB } from '../core/assets.js';
-import { carTemplate, carInstance, driverEye } from './cars.js';
+import { carTemplate, carInstance, driverEye, farMesh } from './cars.js';
+import { quality } from '../engine/quality.js';
+import { setPlates } from './carconfig.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { roadGraph, roadNearest, obb } from './towtruck.js';
 import { addTrafficBlocker } from './traffic.js';
@@ -136,7 +141,7 @@ const DOWN = new THREE.Vector3(0, -1, 0);
 const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
-const MODEL = 'police/police_car';
+const MODEL = 'police/police_car', CAR1 = 'car1', CAR1_LEN = 5.0, CAR1_W = 1.94; // (CAR1_W: the body, mirrors left out)
 const SEND_DT = 1 / 6;
 const usd = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const FOOT = new Set([ST.walk, ST.ski, ST.fall]);
@@ -148,11 +153,50 @@ const UP = new THREE.Vector3(0, 1, 0);
 const _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _m = new THREE.Matrix4(), _fr = new THREE.Frustum();
 
 // ------------------------------------------------------------------ the model (shared with net/vehicles.js)
-let gltfP = null, GL = null, settled = false, FIT = null;
-/** Start loading the patrol car's glTF; true once it has loaded (or failed: then the fallback is built). */
-export function policeModelReady() {
-  if (!gltfP) gltfP = loadGLB(MODEL).then((g) => { GL = g; settled = true; }, () => { settled = true; });
+let gltfP = null, GL = null, C1 = null, settled = false, FIT = null;
+/** Start loading the patrol car's glTF (car1: already loading with main.js MODEL_LIST, the same cached promise; the
+ *  old Meshy model only if car1 fails); true once it has loaded (or failed: then the fallback is built). */
+export function policeModelReady(models) {
+  if (models?.[CAR1]) C1 = models[CAR1];
+  if (C1) return true;
+  if (!gltfP) gltfP = loadGLB(CAR1).then((g) => g || Promise.reject(new Error('no car1')))
+    .then((g) => { C1 = g; settled = true; }, () => loadGLB(MODEL).then((g) => { GL = g; settled = true; }, () => { settled = true; }));
   return settled;
+}
+// car1 as a fleet car template (cars.js: fitted to CAR1_LEN, nose +z, wheels on y 0, centred) and its roof bar,
+// measured once: the geometry above the roof line (the bar stands ~10 cm proud of the roof)
+let C1T = null, plateN = 0;
+// a Swiss plate of its own for every patrol car built (Oct 30, the user: "make sure the added german police car has a
+// different swiss numberplate, remove the numberplate underneath": the model's German ones are out of the template)
+const policePlate = () => `VS ${11700 + ((plateN++ * 37) % 300)}`;
+function car1Template(gl) {
+  if (C1T?.gl === gl) return C1T;
+  const t = carTemplate(gl, CAR1_LEN, CAR1), H = t.size.y, bb = new THREE.Box3(), v = new THREE.Vector3();
+  for (const p of t.parts) { const P = p.geometry.attributes.position; for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i); if (v.y > H - 0.06 && Math.abs(v.z) < 1.2) bb.expandByPoint(v); } }
+  const bar = bb.isEmpty() ? { y: H, z: 0, d: 0.28, w: 1.16 }
+    : { y: bb.max.y, z: (bb.min.z + bb.max.z) / 2, d: clamp(bb.max.z - bb.min.z + 0.04, 0.2, 0.45), w: clamp(bb.max.x - bb.min.x + 0.04, 0.9, 1.4) };
+  C1T = { gl, t, bar };
+  return C1T;
+}
+// the car's detailed model near, its one-piece LOD far (THREE.LOD: switched by the renderer every frame, for the
+// chasing cars, the remote players' (net/vehicles.js) and the one parked at the police station alike); the LOD is
+// built in the background (cars.js buildLod): added on the first frame it is in
+function withLod(t, near) {
+  const lod = new THREE.LOD();
+  lod.name = 'police-car-lod';
+  lod.addLevel(near, 0);
+  const addFar = () => {
+    const m = farMesh(t);
+    if (!m) return false;
+    m.castShadow = true; m.receiveShadow = true;
+    lod.addLevel(m, 70 * (quality.carLod ?? 1), 0.1);
+    return true;
+  };
+  if (!addFar()) {
+    const up = THREE.LOD.prototype.update;
+    lod.update = function (cam) { if (t.lod && addFar()) delete this.update; up.call(this, cam); };
+  }
+  return lod;
 }
 // the Meshy model fitted once: nose (its -x) turned to +z, LEN m long, centred, wheels on y 0; its roof bar found by
 // rays straight down along the middle (the highest stretch)
@@ -205,9 +249,19 @@ function bandTexture() {
 export function buildPoliceCar(models) {
   const g = new THREE.Group();
   g.name = 'police-car';
-  const F = fitted();
+  policeModelReady(models);
+  let C = null;
+  if (C1) try { C = car1Template(C1); } catch (e) { console.warn('police car1', e); C = null; }
+  const F = C ? null : fitted();
   let size, bar, eye;
-  if (F) {
+  if (C) {
+    const inst = carInstance(C.t);
+    try { setPlates(inst, C.t, policePlate()); } catch (e) { console.warn('police plates', e); }
+    g.add(withLod(C.t, inst.group));
+    size = new THREE.Vector3(Math.min(C.t.size.x, CAR1_W), C.t.size.y, C.t.size.z); // (the collider: the body, not the mirrors)
+    bar = C.bar;
+    eye = new THREE.Vector3(0.38, 1.18, -0.02); // (the driver's seat: its headrest at z -0.25, the wheel ~0.55 ahead)
+  } else if (F) {
     g.add(F.inner.clone(true));
     size = F.size; bar = F.bar;
     eye = new THREE.Vector3(0.38, Math.min(1.2, size.y - 0.4), 0.05);
@@ -233,18 +287,19 @@ export function buildPoliceCar(models) {
     bar = { y: size.y, z: -0.3, d: 0.28 };
   }
   // the light bar: a dark base and two blue lenses (over the model's own bar), a glow over each
-  const base = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.05, bar.d + 0.06), new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.5 }));
+  const bw = bar.w || 1.16, lw = bw / 2 - 0.06; // (each lens over its half of the bar)
+  const base = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.05, bar.d + 0.06), new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.5 }));
   base.position.set(0, bar.y - 0.07, bar.z);
   g.add(base);
   const lens = [], glows = [];
   for (const sx of [1, -1]) {
     const mat = new THREE.MeshStandardMaterial({ color: 0x0c2a9c, emissive: 0x2f62ff, emissiveIntensity: 0.25, roughness: 0.15, transparent: true, opacity: 0.92 });
-    const l = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, bar.d), mat);
-    l.position.set(sx * 0.29, bar.y - 0.02, bar.z);
+    const l = new THREE.Mesh(new THREE.BoxGeometry(lw, 0.1, bar.d), mat);
+    l.position.set(sx * (lw / 2 + 0.04), bar.y - 0.02, bar.z);
     g.add(l);
     lens.push(mat);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow(), color: 0x6f8fff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
-    sp.position.set(sx * 0.32, bar.y + 0.06, bar.z);
+    sp.position.set(sx * (lw / 2 + 0.07), bar.y + 0.06, bar.z);
     sp.scale.setScalar(2.4);
     g.add(sp);
     glows.push(sp);
@@ -622,7 +677,7 @@ export class Police {
     this.rq = []; this.radioText = ''; this.radioUntil = 0; this.radioAt = 0; // police radio chatter (radio())
     this.slowT = -1e9; this.puffT = 0; this.puffAt = new THREE.Vector3();
     this._hs = { t: '', msg: '', hot: false, esc: '', frac: 0, cars: 0, near: '', stars: 1, gain: false, search: false, state: '', stateCls: '', rb: '', air: false, tyres: '', radio: '' };
-    policeModelReady();
+    policeModelReady(this.models);
     this.officerRigs = []; // the officer's rigs not in use (his own, never the job pool's)
     this.loadOfficer();
     // the traffic brakes for the patrol cars (boxes in its way)

@@ -182,6 +182,7 @@ const MODEL_LIST = [
   // the ambulance after a heli rescue (game/heli/ambulance.js)
   'ambulance', 'bus_stop_sign',
   'tow_truck', // the CAR RENTAL's tow truck (game/towtruck.js)
+  'car1', // the police patrol car (game/police.js buildPoliceCar; the old Meshy police_car only if it fails to load)
 ].filter((n, i, a) => n !== 'safety_net' && a.indexOf(n) === i);
 
 let menu = null;

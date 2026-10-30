@@ -137,6 +137,7 @@ const PLATE_SPOT = {
   car_lamborghini_huracan: { f: null, r: [0.583, 4] }, // (no front plate: Oct 29, the user)
   car_toyota_gr_yaris: { f: [0.473, 0], r: [0.835, 18] }, // (rear up in its recess: Oct 29, the user)
   car_audi_etron_gt: { f: [0.45, 0], r: [0.70, 15] },
+  car1: { f: [0.47, 0], r: [0.687, 14] }, // (the police car: where its German plates were, cars.js PLATE_PIECES; Oct 30, the user: Swiss plates on it)
   car_mercedes_gls: { f: [0.5635, 0, 2.6], r: [1.11, 14] }, // (rear: on the tailgate between the lights, under the star; Oct 29, the user: "way higher like real gls models")
 };
 export const PLATE_W = 0.52, PLATE_H = 0.11; // EU plate, 520 x 110 mm (the models are at their real size)

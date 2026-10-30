@@ -786,6 +786,13 @@ export class Multiplayer {
     this.view = view;
     this.updateBoard(dt, now);
     this.closeCountdown(now);
+    // (Oct 30, the user: "sometimes you get stuck in the race queue") the server's queue doesn't list you (a dropped
+    // connection, a server restart, a missed message): not queued here either, after 4 s of that
+    if (this.race.queued) {
+      const q = MP.queues?.get(this.race.queued), mine = !!q?.names?.includes(MP.name);
+      this.queueLost = mine ? 0 : (this.queueLost || 0) + dt;
+      if (this.queueLost > 4) { this.queueLost = 0; this.race.queued = null; this.race.queue = null; this.c.hud?.flash?.('You are no longer in the race queue · join again at the start', 'bad', 3200); }
+    } else this.queueLost = 0;
     // the status pill
     const w = MP.world;
     if (this.ui) {

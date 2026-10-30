@@ -1367,6 +1367,18 @@ function mpKickInterior(id) {
 }
 // a course's start house in multiplayer: the race queue (2+ players; 30 s once two are in; everyone in the world or
 // 15 queued: at once). The start is the server's, the same moment for everyone; no AI field; the server pays
+// queued and walked off (150 m from where you joined) or gone into a building / a vehicle: out of the queue, so
+// you never stay stuck in it (Oct 30, the user)
+let mpQueueAt = null;
+function mpQueueWatch() {
+  if (!multiplayer?.race?.queued) { mpQueueAt = null; return; }
+  if (!mpQueueAt || !player) return;
+  const away = Math.hypot(player.pos.x - mpQueueAt.x, player.pos.z - mpQueueAt.z) > 150;
+  if (away || drive?.active || heliRiding() || interior.active || chalets?.inside) {
+    multiplayer.raceLeave(); mpQueueAt = null;
+    hud.flash('Left the race queue (you went away from the start)', 'bad', 3000);
+  }
+}
 function mpCourseInteraction(e) {
   const q = multiplayer?.race.queued === e.id;
   const n = MP.queues?.get(e.id)?.n || 0;
@@ -1376,6 +1388,7 @@ function mpCourseInteraction(e) {
       if (q) { multiplayer.raceLeave(); hud.flash('Left the race queue', 'good', 1800); return; }
       if (!player.hasSkis) { hud.flash('You need skis to race', 'bad'); return; }
       multiplayer.raceJoin(e.id);
+      mpQueueAt = { x: player.pos.x, z: player.pos.z }; // (walking off from the start leaves the queue: mpQueueWatch)
     },
   };
 }
@@ -1863,7 +1876,7 @@ function loopUpdate() {
   // (Oct 30, the user: choosing an outfit, the other players in the shop don't stand in front of your preview: hidden
   // while the outfit shop / the Autohaus configurator is open)
   if (multiplayer?.remotes) multiplayer.remotes.visible = !(outfitShop?.isOpen || carRental?.ui?.isOpen);
-  if (multiplayer && isMP()) multiplayer.update(rawDt, mpView()); // presence out, remote players, shared clock, money guard
+  if (multiplayer && isMP()) { multiplayer.update(rawDt, mpView()); mpQueueWatch(); } // presence out, remote players, shared clock, money guard; the race queue watch
   mark('mp');
   // the helicopter: your flight (seat, controls, chase camera) or its trip home; parked: the pad and windsock
   heli.update(dt, started && !menu && !inSession ? input : null);

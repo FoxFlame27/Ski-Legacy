@@ -897,11 +897,18 @@ function openRail(rw) {
   ]);
 }
 // the line on the map: every other station, the ride time, uphill $RAIL_PRICE (or the day pass), downhill free
+// "next train in 0:42" / "train in now (leaves in 12 s)" (Oct 30, the user: show how long until it comes when you pick)
+function nextIn(n, what) {
+  if (!n || !Number.isFinite(n.wait)) return '';
+  if (n.wait <= 0) return ` · ${what} in now${Number.isFinite(n.left) ? `, leaves in ${Math.max(1, Math.ceil(n.left))} s` : ''}`;
+  const sec = Math.ceil(n.wait);
+  return ` · next ${what} in ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
 function openRailMap(rw) {
   const st = rw.station, pass = hasPass(), R = layout.railway;
   const at = (id) => R?.stations.find((s) => s.id === id) || {};
   const dests = railway.destinations(st.id).map((d) => ({
-    name: d.name, x: at(d.id).x, z: at(d.id).z, path: d.pts, meta: `${fmtMin(d.min)} · ${d.km.toFixed(1)} km · ${d.up ? 'uphill' : 'downhill'}`,
+    name: d.name, x: at(d.id).x, z: at(d.id).z, path: d.pts, meta: `${fmtMin(d.min)} · ${d.km.toFixed(1)} km · ${d.up ? 'uphill' : 'downhill'}${nextIn(railway.nextAt?.(st.id, d.up), 'train')}`,
     price: d.up && !pass ? RAIL_PRICE : undefined, tag: !d.up ? 'FREE' : pass ? 'DAY PASS' : undefined, short: d.up && !pass && save.money < RAIL_PRICE,
     act: () => { boardRail(st, d.up, d.id); input.lock(); },
   }));
@@ -963,7 +970,7 @@ function openExpress(it) {
     const e = d.course;
     return {
       name: d.st.name, x: d.st.x, z: d.st.z, path: d.pts, color: e?.D.color, race: e?.id,
-      meta: e ? `${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`,
+      meta: (e ? `${e.D.label} · up to $${e.rewardMax.toLocaleString('en-US')} prize · ${fmtMin(d.min)}` : `${fmtMin(d.min)} · ${d.km.toFixed(0)} km · the ski shop`) + nextIn(express.trainFor?.(from.id, d.st.id), 'train'),
       price: pass ? undefined : EXPRESS_PRICE, tag: pass ? 'DAY PASS' : undefined, short: !pass && save.money < EXPRESS_PRICE,
       act: () => { boardExpress(from, d.st); input.lock(); }, info: d,
     };
@@ -1083,7 +1090,10 @@ function openBusMap(stop) {
   // only stops the bus can drive to are listed (a stop with no road can't be reached by bus at all)
   const dests = busDests(stop).map((d) => {
     const r = skibus.route(stop, d);
-    return { name: d.name, x: d.x, z: d.z, path: r.pts, meta: `${fmtMin(r.min)} ride · ${r.km.toFixed(1)} km`, tag: 'FREE', act: () => rideBus(d, stop) };
+    // (multiplayer: the shared buses run to a timetable; single player the bus comes for you)
+    let n = null;
+    try { if (isMP() && skibus.line?.mpNextBus && skibus.netStop) n = skibus.line.mpNextBus(skibus.netStop(stop), skibus.netStop(d)); } catch { n = null; }
+    return { name: d.name, x: d.x, z: d.z, path: r.pts, meta: `${fmtMin(r.min)} ride · ${r.km.toFixed(1)} km${nextIn(n, 'bus')}`, tag: 'FREE', act: () => rideBus(d, stop) };
   });
   if (!dests.length) { hud.flash('No bus from here', 'bad', 2400); return; }
   travelPicker({ hud, player, audio }).open({

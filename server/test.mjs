@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -776,6 +776,25 @@ try {
     P().money = 5000;
     const r9 = await g2.f.req('carRepair', { damage: 0.2, plate: gcar().plate });
     ok(r9.ok && r9.d.fee === 350 && P().money === 4650, '...your own plate: repaired ($337.50 -> $350)');
+    // THE AUTOHAUS CLERK: { flat: 'clerk' }, a flat $500 (the server's own) for any damage, wherever the car is parked
+    P().money = 2000;
+    const c1 = await g2.f.req('carRepair', { damage: 1, flat: 'clerk', fee: 1 });
+    ok(c1.ok && c1.d.fee === 500 && CLERK_REPAIR === 500 && P().money === 1500, "the clerk's repair: a flat $500, whatever the damage (never a price from the client)");
+    const c2 = await g2.f.req('carRepair', { damage: 0.05, flat: 'clerk', plate: gcar().plate });
+    ok(c2.ok && c2.d.fee === 500 && P().money === 1000, '...a scratch, your own plate: $500 too');
+    const c3 = await g2.f.req('carRepair', { damage: 0, flat: 'clerk' }), c4 = await g2.f.req('carRepair', { damage: -1, flat: 'clerk' });
+    ok(!c3.ok && c3.err === 'no_damage' && !c4.ok && c4.err === 'no_damage' && P().money === 1000, '...no damage: refused, no charge');
+    const c5 = await g2.f.req('carRepair', { damage: 0.5, flat: 'clerk', plate: 'ZZ 999999' }), c6 = await g2.f.req('carRepair', { damage: 0.5, flat: 'cheap' });
+    ok(!c5.ok && c5.err === 'no_car' && !c6.ok && c6.err === 'bad_value' && P().money === 1000, '...a plate that is not yours: no_car; an unknown flat: bad_value (no charge)');
+    P().money = 499;
+    const c7 = await g2.f.req('carRepair', { damage: 0.5, flat: 'clerk' });
+    ok(!c7.ok && c7.err === 'money' && c7.d.fee === 500 && P().money === 499, '...not enough money ($499): refused (no debt)');
+    P().money = 5000; gcar().tow = { kind: 'tow', since: Date.now(), home: [1, 2, 3, 0] };
+    const c8 = await g2.f.req('carRepair', { damage: 0.5, flat: 'clerk' });
+    delete gcar().tow; gcar().impound = { day: 0, until: Date.now() + 60000, bay: 0 };
+    const c9 = await g2.f.req('carRepair', { damage: 0.5, flat: 'clerk' });
+    delete gcar().impound;
+    ok(!c8.ok && c8.err === 'busy' && !c9.ok && c9.err === 'busy' && P().money === 5000, '...not while the tow truck has it or it is in the tow yard (no charge)');
     // the sums for every model: towing + the full repair far below a new one, the wreck bill never above the sell-back
     const sane = Object.entries(CATALOG.cars).every(([id, list]) => wreckBill(id) === Math.min(Math.round(list * CATALOG.carSell / 50) * 50, CATALOG.wreckFee + repairPrice(id, 1))
       && CATALOG.wreckFee + repairPrice(id, 1) < list * 0.5 && repairPrice(id, 0.5) <= repairPrice(id, 1) && repairPrice(id, 1) === Math.round(list * CATALOG.repairRate / 50) * 50);

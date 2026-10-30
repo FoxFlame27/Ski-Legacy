@@ -521,11 +521,12 @@ export class Multiplayer {
   /** The truck has unloaded your car: the server's tow record ends. */
   towDone() { net.request('towDone').catch(() => {}); }
   /** THE WERKSTATT (game/werkstatt.js): repair your car (plate) at damage share `damage` (0..1): the server prices it
-   *  (the same sum as carrental.js repairCost) and takes the money. Resolves { money, fee } or null (refused). */
-  async repairCar(damage, plate) {
+   *  (the same sum as carrental.js repairCost) and takes the money. Resolves { money, fee } or null (refused).
+   *  flat 'clerk': the Autohaus clerk's flat-fee repair (the server's CLERK_REPAIR, carrental.js clerkDialog). */
+  async repairCar(damage, plate, flat) {
     this.guardMoney();
     try {
-      const d = await net.request('carRepair', { damage, plate });
+      const d = await net.request('carRepair', flat ? { damage, plate, flat } : { damage, plate });
       this.setServerMoney(d.money);
       if (d.fee) this.c.hud.setMoney?.(this.c.save.money, -d.fee);
       return d;

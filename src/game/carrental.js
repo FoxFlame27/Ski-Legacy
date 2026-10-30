@@ -68,6 +68,10 @@ const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['
 export const WRECK_FEE = 1500, REPAIR_RATE = 0.15, REPAIR_MIN = 150;
 const listPrice = (id) => RENTALS.find((c) => c.id === id)?.price || 0;
 const round50 = (v) => Math.round(v / 50) * 50;
+// THE AUTOHAUS CLERK (Oct 30, the user: "make it so you can talk to the npc in autohaus and you can pay him 500 to
+// repair your car"): E at the salesman opens a talk (clerkDialog): the car of the day, or "Repair my car", a flat fee
+// for any damage, your car that is out fixed wherever it is parked (server: CLERK_REPAIR, carRepair { flat: 'clerk' })
+export const CLERK_REPAIR = 500;
 /** The Werkstatt's price for car `id` at damage share `frac` (0..1; 0: nothing to repair, $0). */
 export const repairCost = (id, frac) => (frac > 0 ? Math.max(REPAIR_MIN, round50(listPrice(id) * REPAIR_RATE * Math.min(1, frac))) : 0);
 /** A wreck's bill: the tow and the full repair, at most what the car sells back for. */
@@ -607,9 +611,58 @@ export class CarRental {
     this.room.guide(id);
   }
 
+  // the salesman, talked to (E at him): a greeting, the car of the day, or "Repair my car" (CLERK_REPAIR, flat, for
+  // your car that is out wherever it is parked: the Werkstatt's own repair, behind the scenes); Bye / Esc walks away
+  /** Your car that is out and what the clerk's repair of it says: { e, label, plate, frac, pct, why } (why: not now). */
+  clerkQuote() {
+    const e = this.current, cfg = e?.cfg || this.save.rental;
+    const label = this.label(cfg?.id), plate = cfg?.plate || '';
+    let frac = Math.max(0, Math.min(1, (e?.damage || 0) / 100));
+    if (frac <= 0 && e?.dents?.length) frac = 0.01; // (dented, no damage on the clock: still a repair)
+    const q = { e, label, plate, frac, pct: frac > 0 ? Math.max(1, Math.round(frac * 100)) : 0, why: '' };
+    const W = this.werkstatt;
+    if (!this.garage.length) q.why = "You don't own a car yet";
+    else if (!e) q.why = this.save.rental ? `Your ${label} is with the tow truck` : 'None of your cars is out';
+    else if (e.towing || e.wrecked || this.towed === e) q.why = `Your ${label} is with the tow truck · wait until it is home`;
+    else if (e.impound) q.why = `Your ${label} is in the tow yard · ${untilTomorrow(e.impound)}`;
+    else if (e.driving) q.why = `Your ${label} is out on the road`;
+    else if (W && (W.job?.e === e || W.paying)) q.why = `Your ${label} is in the Werkstatt right now`;
+    else if (frac <= 0) q.why = 'Not a scratch on it · nothing to repair';
+    else if (this.clerkPaying) q.why = 'One moment…';
+    else if ((this.save.money || 0) < CLERK_REPAIR) q.why = 'Not enough money';
+    return q;
+  }
+  clerkDialog() {
+    const hud = this.hud;
+    if (!hud?.dialog) { this.recommend(); return; }
+    const q = this.clerkQuote(), car = q.e || this.save.rental ? `${q.label}${q.plate ? ` · ${q.plate}` : ''}${q.e ? ` · damage ${q.pct}%` : ''}` : '';
+    const hellos = ['Grüezi! Welcome to the Autohaus. How can I help you today?', 'Grüezi mitenand! Looking for a new car, or is yours giving you trouble?', 'Hello again! What can I do for you?'];
+    const say = q.e && q.frac > 0 && !q.why ? `Grüezi! Your ${q.label} has seen some knocks, I see. Our mechanic can fix it up for a flat $${CLERK_REPAIR}, wherever it is parked.` : hellos[Math.floor(Math.random() * hellos.length)];
+    hud.dialog('Autohaus · Salesman', say, [
+      { label: 'Car of the day', sub: 'His tip from the showroom floor', act: () => this.recommend() },
+      { label: 'Repair my car', sub: [car, q.why].filter(Boolean).join(' · ') || 'Your car that is out', price: CLERK_REPAIR, disabled: !!q.why, act: () => this.clerkRepair() },
+      { label: 'Bye', secondary: true },
+    ]);
+    hud.onClose = () => this.input?.lock?.(); // (Bye, Esc, or a choice: back to walking)
+  }
+  async clerkRepair() {
+    const q = this.clerkQuote(), e = q.e;
+    if (q.why || !e) { if (q.why) this.hud?.flash(q.why, 'bad', 2600); this.audio?.play?.('error'); return; }
+    if (this.mp?.repair) {
+      this.clerkPaying = true;
+      let r = null;
+      try { r = await this.mp.repair(q.frac, e.cfg?.plate, 'clerk'); } finally { this.clerkPaying = false; }
+      if (!r) return; // (net/session.js said why)
+      this.audio?.play?.('cash');
+    } else if (!this.spend?.(CLERK_REPAIR)) return; // (single player: spend() says when it's short)
+    try { this.drive?.repair?.(e); } catch (err) { console.warn('clerk repair', err); e.damage = 0; e.dents = []; } // (the Werkstatt's repair: dents out, new lamps, damage 0)
+    const lines = ['Our mechanic will fix it up right away!', 'Consider it done, our mechanic is on his way.', 'No problem, our mechanic will have it like new in no time.'];
+    this.hud?.flash(`"${lines[Math.floor(Math.random() * lines.length)]}" · your ${q.label}${q.plate ? ` (${q.plate})` : ''} is repaired where it stands · paid $${CLERK_REPAIR}`, 'good', 4200);
+  }
+
   /** Inside, per frame (main.js): walking, looking, E. Returns what to show as the prompt. */
   frame(dt, input, sensitivity) {
-    const open = this.ui.isOpen;
+    const open = this.ui.isOpen || !!this.hud?.panelOpen; // (the configurator, or the salesman's talk)
     this.target = this.room.update(dt, open ? null : input, sensitivity, open);
     const n = this.target?.kind === 'car' ? this.owns(this.target.id).length : 0;
     if (n) this.target.label = `${this.label(this.target.id)} · yours: ${n} · buy another · take it out · sell`; // (a model you own)
@@ -617,7 +670,7 @@ export class CarRental {
       this.audio?.play?.('click');
       const t = this.target;
       if (t.kind === 'door') this.leave();
-      else if (t.kind === 'clerk') this.recommend();
+      else if (t.kind === 'clerk') this.clerkDialog();
       else this.openCard(t.id, t.paint);
     }
     return this.target;

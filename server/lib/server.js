@@ -81,6 +81,9 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // at most what the car sells back for (carSell of its list price)
 const round50 = (v) => Math.round(v / 50) * 50;
 export const repairPrice = (id, frac) => (frac > 0 ? Math.max(CATALOG.repairMin ?? 150, round50((CATALOG.cars[id] || 0) * (CATALOG.repairRate ?? 0.15) * Math.min(1, frac))) : 0);
+// THE AUTOHAUS CLERK (game/carrental.js clerkDialog): "Repair my car" at his desk, a flat fee for any damage, wherever
+// the car is parked (the client's CLERK_REPAIR mirrors it; the price is never taken from the client)
+export const CLERK_REPAIR = 500;
 export const wreckBill = (id) => Math.min(round50((CATALOG.cars[id] || 0) * (CATALOG.carSell ?? 0.5)), (CATALOG.wreckFee ?? 1500) + repairPrice(id, 1));
 // race queues: how many racers start a race (always at least 2; alone: a practice race, raceSolo) and its countdown once they are in
 const raceNeed = (race) => Math.max(2, CATALOG.races[race]?.need ?? 2); // (Oct 30, the user: "you can't race with less than 2 people", bus races too)
@@ -1173,14 +1176,17 @@ export class GameServer {
   /** THE WERKSTATT (game/werkstatt.js: the repair garage beside the Autohaus): { damage (0..1, the client's), plate? }
    *  repairs your car that is out (or the one with that plate): the price is the server's own (repairPrice: the
    *  damage share, clamped, of CATALOG.repairRate of that model's list price, at least repairMin). A purchase: it
-   *  needs the money (no debt). Not while the tow truck has the car; nothing to repair: no charge. */
+   *  needs the money (no debt). Not while the tow truck has the car; nothing to repair: no charge.
+   *  { flat: 'clerk' }: the Autohaus clerk's repair, the flat CLERK_REPAIR for any damage (> 0), the car wherever it
+   *  is parked (not in the tow yard). */
   carRepair(c, d) {
     const P = c.profile, k = d.plate != null ? plateKey(d.plate) : null;
     const car = k ? (P.cars || []).find((x) => plateKey(x.plate) === k) : P.cars?.[0];
     if (!car) return { err: 'no_car', d: { money: P.money } };
-    if (!isNum(d.damage)) return { err: 'bad_value', d: { money: P.money } };
-    if (car.tow) return { err: 'busy', d: { money: P.money } };
-    const fee = repairPrice(car.id, clamp(d.damage, 0, 1));
+    if (!isNum(d.damage) || (d.flat != null && d.flat !== 'clerk')) return { err: 'bad_value', d: { money: P.money } };
+    if (car.tow || (d.flat && car.impound && Number.isFinite(car.impound.until) && Date.now() < car.impound.until)) return { err: 'busy', d: { money: P.money } };
+    const frac = clamp(d.damage, 0, 1);
+    const fee = d.flat ? (frac > 0 ? CLERK_REPAIR : 0) : repairPrice(car.id, frac);
     if (fee <= 0) return { err: 'no_damage', d: { money: P.money } };
     if (!this.debit(c, fee, 'repair')) return { err: 'money', d: { money: P.money, fee } };
     return { d: { money: P.money, fee } };

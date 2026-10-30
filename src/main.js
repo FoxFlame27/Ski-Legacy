@@ -1400,13 +1400,13 @@ function applyMpSave() {
     ended: (cfg) => multiplayer.carEnded(cfg).then((cars) => carRental.placeOwned(cars, null)), // (wrecked by the police: gone from your garage)
     plateCheck: (p) => multiplayer.plateCheck(p), plateIssue: () => multiplayer.plateIssue(), // (the configurator: plates unique for everyone)
     tow: (kind, home, bay) => multiplayer.tow(kind, home, bay), towDone: () => multiplayer.towDone(), // (the tow truck: the fee and the impound on the server)
+    repair: (damage, plate, flat) => multiplayer.repairCar(damage, plate, flat), // (the Werkstatt / the Autohaus clerk's flat fee: the server prices and charges the repair)
     carNear: (x, z, r) => multiplayer.carRide.carNear(x, z, r), // (an impound bay with another player's car in it)
   } : null;
   if (outfitShop) outfitShop.buyHook = on ? (id) => multiplayer.buyOutfit(id) : null;
 }
 // your presence for the other players (filled ~12x a second, no allocation)
 const _mpDir = new THREE.Vector3();
-    repair: (damage, plate) => multiplayer.repairCar(damage, plate), // (the Werkstatt: the server prices and charges the repair)
 function mpPose(o) {
   let cam = null, room = null;
   o.interior = null;

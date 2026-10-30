@@ -438,7 +438,7 @@ async function boot() {
     save, writeSave, hud, audio, env, layout, input, camera, transition, streamAround, equipSkis,
     ctx: { get player() { return player; }, get modes() { return modes; }, get races() { return races; }, get interior() { return interior; }, get heli() { return heli; }, get sleds() { return sleds; },
       get lifts() { return lifts; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get started() { return started; }, get paused() { return paused; },
-      get secrets() { return secrets; }, get railway() { return railway; }, get carRental() { return carRental; }, get drive() { return drive; }, get chalets() { return chalets; } },
+      get secrets() { return secrets; }, get railway() { return railway; }, get carRental() { return carRental; }, get drive() { return drive; }, get chalets() { return chalets; }, get hospitalWard() { return hospitalWard; } },
   });
 
   // multiplayer: the session object (nothing connects until MULTIPLAYER in the menu)
@@ -561,12 +561,23 @@ function outdoorSpot() {
   if ((player.mode !== 'walk' && player.mode !== 'ski') || player.air || player.frozen || player.seat) return null;
   return { x: player.pos.x, z: player.pos.z, y: player.pos.y, h: player.heading, skis: player.mode === 'ski' && !!player.skisOn };
 }
+// (Oct 30, the user: "if you leave multiplayer while in the hospital bed you rejoin in your hospital bed"): inside the
+// medical centre the spot is its front door; lying in a bed it carries hospital { until (Date.now ms) }, and the next
+// start (a login, a launch, PLAY) admits you to a bed again for the rest of the stay (5 s at least: game/hospitalroom.js)
+function hospitalSpot() {
+  const w = hospitalWard, d = w?.door;
+  if (!w?.inside || !d || !world?.groundHeight) return null;
+  const y = world.groundHeight(d.x, d.z, Infinity);
+  if (!Number.isFinite(y)) return null;
+  return { x: d.x, z: d.z, y, h: d.yaw, skis: false, ...(w.role === 'patient' ? { hospital: { until: Math.round(w.until || Date.now()) } } : {}) };
+}
+let pendingBed = null; // (restoreSpot: the rest of a hospital stay, in seconds, to come round in at startGame)
 function rememberSpot() {
   try {
-    const sp = outdoorSpot();
+    const sp = hospitalSpot() || outdoorSpot();
     if (!sp || ![sp.x, sp.z, sp.y, sp.h].every(Number.isFinite)) return;
     const r = (v) => Math.round(v * 100) / 100;
-    save.pos = { x: r(sp.x), z: r(sp.z), y: r(sp.y), h: r(sp.h), skis: sp.skis };
+    save.pos = { x: r(sp.x), z: r(sp.z), y: r(sp.y), h: r(sp.h), skis: sp.skis, ...(sp.hospital ? { hospital: sp.hospital } : {}) };
   } catch { /* (the last good spot stays) */ }
 }
 // the saved spot if it is still a good place to stand (in the world, on the ground, not in a building / tree / car)
@@ -577,14 +588,16 @@ function savedSpot() {
   try {
     const g = world.groundHeight(sp.x, sp.z, Number.isFinite(sp.y) ? sp.y + 0.5 : Infinity);
     if (!Number.isFinite(g)) return null;
-    if (drive?.clearAt && !drive.clearAt(sp.x, sp.z, 0.3)) return null;
+    const hospital = Number.isFinite(sp.hospital?.until) ? { until: sp.hospital.until } : null;
+    if (!hospital && drive?.clearAt && !drive.clearAt(sp.x, sp.z, 0.3)) return null; // (a hospital stay: in the bed, not at the door)
     const y = Number.isFinite(sp.y) && Math.abs(g - sp.y) < 3 ? sp.y : undefined;
-    return { x: sp.x, z: sp.z, y, h: sp.h, skis: !!sp.skis };
+    return { x: sp.x, z: sp.z, y, h: sp.h, skis: !!sp.skis && !hospital, hospital };
   } catch { return null; }
 }
 // put the player at the saved spot (no streaming: callers stream around it); false = none, the normal spawn stays
 function restoreSpot() {
   const sp = savedSpot();
+  pendingBed = sp?.hospital && hospitalWard?.door ? Math.max(0, (sp.hospital.until - Date.now()) / 1000) : null;
   if (!sp) { if (save.pos) save.pos = null; return false; }
   try {
     player.frozen = false;
@@ -673,6 +686,16 @@ async function wipeoutToVillage() {
   wipeoutBusy = false;
 }
 
+// lying in a hospital bed when you left (save.pos.hospital, restoreSpot): back in a bed for the rest of the stay
+// (not with a prison sentence waiting: game/prison.js puts you back in your cell instead)
+function resumeBed() {
+  const s = pendingBed;
+  pendingBed = null;
+  if (s == null || !hospitalWard || hospitalWard.inside) return;
+  const jailUntil = isMP() ? MP.profile?.jailUntil : save.jail?.until;
+  if (prison?.active || prison?.inside || (Number.isFinite(jailUntil) && jailUntil > Date.now())) return;
+  try { hospitalWard.admit({ seconds: s }); } catch (e) { console.warn('hospital: resume', e); }
+}
 // Leave the menu and drop into the world.
 function startGame() {
   if (started) return;
@@ -687,6 +710,7 @@ function startGame() {
   started = true;
   writeSave();
   audio.music('freeride');
+  resumeBed();
   if (!player.hasSkis) {
     setTimeout(() => hud.flash('Welcome to Legacy Village', 'good', 3000), 600); // (no spoken welcome: Oct 30, the user asked it gone)
   }
@@ -1688,6 +1712,9 @@ function openMap() {
 
 let paused = false;
 const heliRiding = () => !!heli && (heli.active || heli.rescuing || heli.state === 'boarding');
+// lying in a hospital bed (until you get up with E once fit), or on the way into one: no way out of it but the ward's
+// doors (no RETURN TO VILLAGE, admin teleports, the server's move; Oct 30, the user)
+const inHospitalBed = () => hospitalWard?.role === 'patient' || pendingBed != null;
 function openPause() {
   paused = true;
   audio.setPaused(true); // the whole soundscape and the music pause with the game
@@ -1699,7 +1726,7 @@ function openPause() {
     // (a fun race from the RACING stand: RETURN TO VILLAGE takes you back to the stand)
     // (Oct 28, the user: no RETURN TO VILLAGE while you ride the helicopter: a heli-ski flight, boarding, or a rescue
     // with its ambulance ride)
-    onVillage: heliRiding() || prison?.active || police?.active || hospitalWard?.role === 'patient' ? undefined : // (no RETURN TO VILLAGE during a police chase: the user; nor lying in a hospital bed)
+    onVillage: heliRiding() || prison?.active || police?.active || inHospitalBed() ? undefined : // (no RETURN TO VILLAGE during a police chase: the user; nor lying in a hospital bed)
       !inSession ? () => { if (police?.active || prison?.active) { hud.flash('Not while the police are after you', 'bad', 3000); return; } returnToVillage(); closePause(); } : modes.current && !modes.current.free ? () => { closePause(); modes.home(); } : undefined,
     onMainMenu: isMP() ? undefined : goToMainMenu,
     onLeaveMP: isMP() ? () => leaveMultiplayer() : undefined, // (multiplayer: LEAVE MULTIPLAYER instead of MAIN MENU)
@@ -1737,7 +1764,7 @@ function prisonClear() {
 }
 // Ski bus back to Legacy Village from anywhere in the world.
 function returnToVillage(message = 'Back in Legacy Village') {
-  if (hospitalWard?.role === 'patient') { hud.flash('Not while you are in the hospital bed', 'bad', 2600); return; } // (Oct 30, the user)
+  if (inHospitalBed()) { hud.flash('Not while you are in the hospital bed', 'bad', 2600); return; } // (Oct 30, the user)
   if (outfitShop?.isOpen) outfitShop.close();
   heli.abort();
   if (races.active) races.abort();

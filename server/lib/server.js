@@ -1461,7 +1461,10 @@ export class GameServer {
       case 'pos': { // where you were (outdoors, on foot / skis): back there at your next login (Oct 30)
         if (v === null) { delete P.pos; break; }
         if (!v || typeof v !== 'object' || ![v.x, v.z, v.y, v.h].every((n) => isNum(n) && Math.abs(n) < 40000)) return { err: 'bad_value' };
+        // (lying in a hospital bed: hospital { until } (ms): you come round in it again at your next login, Oct 30)
+        if (v.hospital != null && !(isNum(v.hospital?.until) && v.hospital.until > 0)) return { err: 'bad_value' };
         P.pos = { x: v.x, z: v.z, y: v.y, h: v.h, skis: !!v.skis };
+        if (v.hospital != null) P.pos.hospital = { until: Math.min(Math.round(v.hospital.until), Date.now() + 600000) }; // (10 min ahead at most)
         break;
       }
       default: return { err: 'bad_key' };

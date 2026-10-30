@@ -186,7 +186,7 @@ export class Multiplayer {
       if (!g?.player || !Number.isFinite(d?.x) || !Number.isFinite(d?.z)) return;
       // (nor on a train, the express, a bus, a sled, in someone's car or in a race: those keep their own seat and
       // state, and a teleport would leave them riding with you gone)
-      if (g.drive?.active || g.heli?.active || g.interior?.active || g.chalets?.inside || g.carRental?.inside || g.prison?.inside || g.railway?.riding || g.express?.riding
+      if (g.drive?.active || g.heli?.active || g.interior?.active || g.chalets?.inside || g.carRental?.inside || g.prison?.inside || g.hospitalWard?.inside || g.railway?.riding || g.express?.riding
         || g.skibus?.riding || g.sleds?.active || g.modes?.active || this.carRide.ride || this.race.start) { this.c.hud.flash(`The server tried to move you to ${d.to} · get out first`, 'bad', 3000); return; }
       const off = 1.8, x = d.x - Math.sin(d.yaw || 0) * off, z = d.z - Math.cos(d.yaw || 0) * off;
       if (g.admin?.teleport) g.admin.teleport({ x, z, heading: d.yaw || 0, label: `Moved next to ${d.to}`, skis: false });

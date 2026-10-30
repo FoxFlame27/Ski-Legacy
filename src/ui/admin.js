@@ -355,7 +355,8 @@ export class AdminPanel {
 
   async teleport(p) {
     this.close(true); // locks the pointer again inside the click
-    const c = this.ctx, pl = c.player;
+    const c = this.ctx, pl = c.player, hw = c.hospitalWard;
+    if (hw?.role === 'patient') { this.hud.flash('Not while you are in the hospital bed', 'bad', 2600); return; } // (Oct 30, the user)
     const go = async () => {
       if (pl.mode === 'sit') { // riding a lift: step off first
         if (c.lifts) { c.lifts.ride = null; c.lifts.timeScale = 1; }
@@ -364,6 +365,7 @@ export class AdminPanel {
         if (pl.viewBeforeRide) { pl.view = pl.viewBeforeRide; pl.viewBeforeRide = null; }
       }
       c.jobs?.onEvent?.('teleport'); // a running delivery / rescue ends when you jump away
+      if (hw?.inside) hw.reset(); // (visiting the medical centre: out of its scene)
       pl.frozen = false;
       if (!p.skis) pl.setSkisOn(false);
       pl.teleport(p.x, p.z, p.heading);
@@ -403,6 +405,7 @@ export class AdminPanel {
     const pl = this.ctx.player, x = f.pos.x, z = f.pos.z, head = f.yaw + Math.PI;
     this.stopFly();
     if (pl.mode === 'sit') return;
+    if (this.ctx.hospitalWard?.inside) { this.hud.flash(this.ctx.hospitalWard.role === 'patient' ? 'Not while you are in the hospital bed' : 'Leave the medical centre first', 'bad', 2600); return; }
     this.ctx.jobs?.onEvent?.('teleport');
     pl.frozen = false;
     pl.teleport(x, z, head);

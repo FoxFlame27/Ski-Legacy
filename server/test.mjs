@@ -607,6 +607,15 @@ try {
     ok(ps.ok && server.profileOf('alice').pos?.x === 120.5 && server.profileOf('alice').pos.skis === true, 'profileSet pos: where you were is kept');
     const pb = await a.req('profileSet', { key: 'pos', value: { x: 'far', z: 0, y: 0, h: 0 } });
     ok(!pb.ok && pb.err === 'bad_value' && server.profileOf('alice').pos.x === 120.5, '...a bad one is refused');
+    const until = Date.now() + 15000;
+    const ph = await a.req('profileSet', { key: 'pos', value: { x: 50, z: 60, y: 2, h: 0, skis: false, hospital: { until } } });
+    ok(ph.ok && server.profileOf('alice').pos?.hospital?.until === until && server.profileOf('alice').pos.x === 50, 'profileSet pos: lying in a hospital bed is kept (hospital.until)');
+    const pf = await a.req('profileSet', { key: 'pos', value: { x: 50, z: 60, y: 2, h: 0, hospital: { until: Date.now() + 864e5 } } });
+    ok(pf.ok && server.profileOf('alice').pos.hospital.until <= Date.now() + 600000, '...never more than 10 min ahead');
+    const pq = await a.req('profileSet', { key: 'pos', value: { x: 7, z: 8, y: 2, h: 0, hospital: { until: 'soon' } } });
+    ok(!pq.ok && pq.err === 'bad_value' && server.profileOf('alice').pos.x === 50, '...a bad hospital stay is refused');
+    const po = await a.req('profileSet', { key: 'pos', value: { x: 9, z: 9, y: 2, h: 0, skis: false } });
+    ok(po.ok && !server.profileOf('alice').pos.hospital, '...and gone with the next spot outdoors');
   }
   // ---------------------------------------------------------------- MAX_PLAYERS (50) per world: the next player opens world 2
   console.log('worlds');

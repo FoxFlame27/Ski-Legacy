@@ -1,0 +1,32 @@
+{
+  "garage_toolwall": {
+    "preview": "01a18ccd-2d96-735f-aa28-cbdc638af94a",
+    "refine": "01a18ccf-6f90-7712-90bc-45dbb5b4adc0",
+    "done": true
+  },
+  "garage_lift": {
+    "preview": "01a18ccd-2d83-74b0-8a7c-98136de1521e",
+    "refine": "01a18ccf-0bed-70b3-bc96-9b8b6b169a64",
+    "done": true
+  },
+  "garage_tyres": {
+    "preview": "01a18ccd-2d96-75c4-be5a-3766ba07524c",
+    "refine": "01a18ccf-4ef7-75a5-b278-4969bd3ca209",
+    "done": true
+  },
+  "garage_workbench": {
+    "preview": "01a18ccd-2d47-76fe-8e9f-57c836391690",
+    "refine": "01a18cce-e898-77e8-a1ce-fffe04cc47f0",
+    "done": true
+  },
+  "garage_drums": {
+    "preview": "01a18ccd-2d9d-71ce-adb1-331c0b750a8a",
+    "refine": "01a18ccf-b273-7633-94a9-ce33fee8d434",
+    "done": true
+  },
+  "garage_signbracket": {
+    "preview": "01a18ccd-2d57-713e-b65f-261ffb1f17e9",
+    "refine": "01a18cce-63cc-77ee-8507-5c0bc1585f3e",
+    "done": true
+  }
+}

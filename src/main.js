@@ -426,6 +426,7 @@ async function boot() {
       excluded: () => !started || !!busIntro || !!modes?.active || !!races?.active, // (a chase there ends at once)
       paused: () => interior.active || !!chalets?.inside || !!carRental?.inside || !!prison?.inside || !!hospitalWard?.inside }); // (inside: the chase waits)
   } catch (e) { console.warn('police: ' + (e?.stack || e)); police = null; }
+  if (carRental?.werkstatt) carRental.werkstatt.blocked = () => (police?.active ? 'Not while the police are after you' : null); // (no repair mid-chase)
   try { chalets = new Chalets({ scene, camera, renderer, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, spend, transition, player, getPost: () => post, getHour: () => env.hour }); } catch (e) { console.warn('chalets: ' + (e?.stack || e)); chalets = null; }
   seating.init({ save, chaletAPI: chaletInteriorAPI, catalog: FURNITURE_BY_ID, chalets });
   seating.setVillage((x, z) => world.height(x, z), CHALET_HX);
@@ -1405,6 +1406,7 @@ function applyMpSave() {
 }
 // your presence for the other players (filled ~12x a second, no allocation)
 const _mpDir = new THREE.Vector3();
+    repair: (damage, plate) => multiplayer.repairCar(damage, plate), // (the Werkstatt: the server prices and charges the repair)
 function mpPose(o) {
   let cam = null, room = null;
   o.interior = null;
@@ -1550,6 +1552,9 @@ function findInteraction() {
   const ride = isMP() ? multiplayer?.carInteraction(p) : null; // (multiplayer: "Ask <owner> for a ride" at their car)
   if (ride) return ride;
   const rental = carRental?.interaction(p); // the CAR RENTAL's door
+  // the WERKSTATT (game/werkstatt.js): E to repair your car in its repair box, also from the driver's seat
+  const werk = races.active || heli.rescuing ? null : carRental?.werkstatt?.interaction(p);
+  if (werk) return werk;
   if (rental) return rental;
   const jail = prison?.interaction(p); // the PRISON's door: visit
   if (jail) return jail;
@@ -1662,7 +1667,8 @@ function openMap() {
     player, locationName, onClose: () => input.lock(),
     markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [], police: police?.mapMarkers() || [],
       players: multiplayer?.remotes?.mapMarkers?.() || [], // (multiplayer: the other players, live)
-      places: carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Autohaus', kind: 'car' }] : [] }),
+      places: [...(carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Autohaus', kind: 'car' }] : []),
+        ...(carRental?.werkstatt?.door ? [{ x: carRental.werkstatt.door.x, z: carRental.werkstatt.door.z, label: 'Werkstatt · Garage', kind: 'garage' }] : [])] }),
   });
   if (trailMap.toggle()) document.exitPointerLock?.();
 }

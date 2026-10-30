@@ -333,14 +333,14 @@ export class Drive {
       d.start += dt;
       const cranking = !d.spec.electric && d.start < 0.85, live = !d.crash;
       // held (police.js: being arrested): no throttle, no steering, the brakes and the handbrake on, no getting out
-      const held = !!this.held;
+      const held = !!this.held || !!this.servicing; // (servicing: in the Werkstatt's repair box while it is repaired, werkstatt.js)
       const thr = live && !held && !cranking && key('KeyW', 'ArrowUp') ? 1 : 0, brk = held || (live && key('KeyS', 'ArrowDown')) ? 1 : 0;
       const steerIn = live && !held ? (key('KeyA', 'ArrowLeft') ? 1 : 0) - (key('KeyD', 'ArrowRight') ? 1 : 0) : 0;
       const hb = held || (live && key('Space')), lookBack = key('KeyC');
       d.horn = key('KeyH');
       if (input?.hit?.('KeyL')) d.lights = !d.lights;
       if (input?.hit?.('KeyR')) { this.view = this.view === 'chase' ? 'cockpit' : 'chase'; this.cam.ready = false; }
-      if (input?.hit?.('KeyE') && d.offT <= 0 && !d.crash && !held) { this.exit(); if (!this.d) return; }
+      if (input?.hit?.('KeyE') && d.offT <= 0 && !d.crash && !held && !this.eTaken?.()) { this.exit(); if (!this.d) return; } // (eTaken: E is the Werkstatt's Repair this frame, werkstatt.js)
       // the pedals: pressed progressively, not switched (Oct 29, "make driving more realistic"): the throttle opens over
       // ~0.3 s and closes over ~0.15 s, the brake bites over ~0.2 s and lets go over ~0.1 s, so pulling away, lifting
       // off and braking shift the car's weight smoothly instead of in a jolt. (Steering is untouched: its own rack)
@@ -1152,6 +1152,14 @@ export class Drive {
         if (!e.wrecked && !e.astray) { e.smokeFx?.clear(); this.wrecks.splice(i, 1); }
       } catch { e.wrecked = null; this.wrecks.splice(i, 1); }
     }
+  }
+  /** Repaired (the Werkstatt, werkstatt.js): no damage, no dents, every look of it as new (parked and driven). */
+  repair(e) {
+    if (!e) return;
+    e.damage = 0;
+    e.dents = [];
+    for (const inst of new Set([e.inst, this.d?.e === e ? this.d.inst : null])) if (inst) { try { repairInstance(inst); } catch (err) { console.warn('drive: repair', err); } }
+    e.smokeFx?.clear();
   }
   // towed: back where it was parked, as good as new
   tow(e) {

@@ -76,6 +76,12 @@ const VEH_KINDS = ['car', 'heli', 'tow', 'police', 'rescue', 'sled'];
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// THE WERKSTATT's prices (game/carrental.js repairCost / wreckFee: the same sums): a repair, the damage share (0..1) of
+// repairRate of the model's list price, at least repairMin, $50 steps; a wreck, the tow (wreckFee) and the full repair,
+// at most what the car sells back for (carSell of its list price)
+const round50 = (v) => Math.round(v / 50) * 50;
+export const repairPrice = (id, frac) => (frac > 0 ? Math.max(CATALOG.repairMin ?? 150, round50((CATALOG.cars[id] || 0) * (CATALOG.repairRate ?? 0.15) * Math.min(1, frac))) : 0);
+export const wreckBill = (id) => Math.min(round50((CATALOG.cars[id] || 0) * (CATALOG.carSell ?? 0.5)), (CATALOG.wreckFee ?? 1500) + repairPrice(id, 1));
 // race queues: how many racers start a race (always at least 2; alone: a practice race, raceSolo) and its countdown once they are in
 const raceNeed = (race) => Math.max(2, CATALOG.races[race]?.need ?? 2); // (Oct 30, the user: "you can't race with less than 2 people", bus races too)
 const raceWait = (race) => (CATALOG.races[race]?.bus ? BUS_RACE_WAIT_MS : RACE_WAIT_MS);
@@ -941,6 +947,7 @@ export class GameServer {
       case 'veh': return reply(this.setVeh(c, d));
       case 'tow': return reply(this.tow(c, d));
       case 'towDone': return reply(this.towDone(c));
+      case 'carRepair': return reply(this.carRepair(c, d));
       case 'raceJoin': return reply(w.raceJoin(c, d));
       case 'raceLeave': return reply(w.raceLeave(c));
       case 'raceSolo': return reply(w.raceSolo(c, d));
@@ -1152,9 +1159,9 @@ export class GameServer {
     if (d.kind !== 'wreck' && d.kind !== 'tow') return { err: 'bad_kind' };
     if (!validAt(d.home)) return { err: 'bad_value' };
     if (car.tow) return { err: 'busy', d: { money: P.money, impound: car.impound || null } };
-    // (a wreck: the repair bill, CATALOG.wreckRate of the car's list price, at least wreckMin; a tow: the flat wreckFee)
+    // (a wreck: the tow and the full repair, wreckBill; a tow: the flat wreckFee)
     const now = Date.now(), home = d.home.map((x) => Math.round(x * 100) / 100);
-    const fee = d.kind === 'wreck' && CATALOG.wreckRate ? Math.max(CATALOG.wreckMin || 0, Math.round(((CATALOG.cars[car.id] || 0) * CATALOG.wreckRate) / 50) * 50) : CATALOG.wreckFee ?? 1500;
+    const fee = d.kind === 'wreck' ? wreckBill(car.id) : CATALOG.wreckFee ?? 1500;
     // (as the game's other charges: into debt down to DEBT_FLOOR; deeper than that the truck still comes, unpaid)
     const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };
@@ -1162,6 +1169,21 @@ export class GameServer {
     if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), until: now + IMPOUND_MS, bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 }; // (the tow yard: 3 min)
     this.store.profiles.save();
     return { d: { money: P.money, fee: paid, impound: car.impound || null, at: home } };
+  }
+  /** THE WERKSTATT (game/werkstatt.js: the repair garage beside the Autohaus): { damage (0..1, the client's), plate? }
+   *  repairs your car that is out (or the one with that plate): the price is the server's own (repairPrice: the
+   *  damage share, clamped, of CATALOG.repairRate of that model's list price, at least repairMin). A purchase: it
+   *  needs the money (no debt). Not while the tow truck has the car; nothing to repair: no charge. */
+  carRepair(c, d) {
+    const P = c.profile, k = d.plate != null ? plateKey(d.plate) : null;
+    const car = k ? (P.cars || []).find((x) => plateKey(x.plate) === k) : P.cars?.[0];
+    if (!car) return { err: 'no_car', d: { money: P.money } };
+    if (!isNum(d.damage)) return { err: 'bad_value', d: { money: P.money } };
+    if (car.tow) return { err: 'busy', d: { money: P.money } };
+    const fee = repairPrice(car.id, clamp(d.damage, 0, 1));
+    if (fee <= 0) return { err: 'no_damage', d: { money: P.money } };
+    if (!this.debit(c, fee, 'repair')) return { err: 'money', d: { money: P.money, fee } };
+    return { d: { money: P.money, fee } };
   }
   /** The truck has unloaded your car (in its bay / the impound): the tow record ends. */
   towDone(c) {

@@ -1082,12 +1082,19 @@ export class TrailMap {
       if (!this.inView(x, y)) continue;
       g.fillStyle = '#1f5fd6'; g.strokeStyle = '#fff'; g.lineWidth = 2;
       g.beginPath(); g.roundRect(x - 9, y - 9, 18, 18, 4); g.fill(); g.stroke();
+      if (m.kind === 'garage') { // (the Werkstatt: a spanner)
+        g.strokeStyle = '#fff'; g.lineWidth = 2.6; g.lineCap = 'round';
+        g.beginPath(); g.moveTo(x - 4.5, y + 4.5); g.lineTo(x + 2, y - 2); g.stroke();
+        g.lineWidth = 2; g.beginPath(); g.arc(x + 3, y - 3, 3, Math.PI * 0.95, Math.PI * 2.55); g.stroke();
+        g.lineCap = 'butt';
+      } else {
       // the car: body, cabin, two wheels
       g.fillStyle = '#fff';
       g.beginPath(); g.roundRect(x - 6, y - 1, 12, 4, 1.5); g.fill();
       g.beginPath(); g.moveTo(x - 3.5, y - 1); g.lineTo(x - 2, y - 4.5); g.lineTo(x + 2.5, y - 4.5); g.lineTo(x + 4, y - 1); g.closePath(); g.fill();
       g.fillStyle = '#1f5fd6';
       for (const wx of [-3.5, 3.5]) { g.beginPath(); g.arc(x + wx, y + 3.2, 1.6, 0, Math.PI * 2); g.fill(); }
+      }
       this.reserve(x, y, 11);
       this.spot(x, y, 11, m.x, m.z, m.label);
       this.label(m.label, x, y, { size: 14, weight: 700, color: '#1f5fd6', prio: 3, cands: this.around(10) });

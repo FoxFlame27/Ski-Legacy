@@ -520,6 +520,22 @@ export class Multiplayer {
   }
   /** The truck has unloaded your car: the server's tow record ends. */
   towDone() { net.request('towDone').catch(() => {}); }
+  /** THE WERKSTATT (game/werkstatt.js): repair your car (plate) at damage share `damage` (0..1): the server prices it
+   *  (the same sum as carrental.js repairCost) and takes the money. Resolves { money, fee } or null (refused). */
+  async repairCar(damage, plate) {
+    this.guardMoney();
+    try {
+      const d = await net.request('carRepair', { damage, plate });
+      this.setServerMoney(d.money);
+      if (d.fee) this.c.hud.setMoney?.(this.c.save.money, -d.fee);
+      return d;
+    } catch (e) {
+      if (e.data?.money != null) this.setServerMoney(e.data.money);
+      this.c.hud.flash(e.code === 'money' ? `Not enough money for the repair${e.data?.fee ? ` ($${e.data.fee.toLocaleString('en-US')})` : ''}` : e.code === 'busy' ? 'The tow truck has your car' : `Could not repair it · ${errText(e)}`, 'bad', 2600);
+      this.c.audio?.play?.('error');
+      return null;
+    }
+  }
 
   // ---------------------------------------------------------------- interiors and permissions
   /** Tell the server which interior you are in (null = outdoors). Resolves false when it refuses (a chalet). */

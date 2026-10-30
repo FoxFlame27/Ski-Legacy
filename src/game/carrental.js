@@ -11,8 +11,8 @@
 // model more than once too: every car is told apart by its plate): one of them
 // is out at a time (save.rental: it waits in your bay, nose to the road; E beside it to drive; drive.js: every other
 // car only says where to buy one). The configurator's MY CARS list (E at a model you own opens on it) puts another of
-// yours in the bay (free), or sells one back for half what you paid. Wreck it: the repair bill (wreckFee: 10 % of the car's
-// price, at least WRECK_MIN; once; the balance may go below zero, like a fine) and the tow truck (towtruck.js) fetches
+// yours in the bay (free), or sells one back for half what you paid. Wreck it: the bill (wreckFee: the tow and the full
+// repair, 15 % of the car's list price; once; the balance may go below zero, like a fine) and the tow truck (towtruck.js) fetches
 // the very car from wherever it lies and brings it back to your bay, repaired. Wrecked by a police ram: not repaired,
 // gone from your garage. Multiplayer: the server owns the garage (profile cars, cars[0] the one out; net/session.js).
 import * as THREE from 'three';
@@ -29,6 +29,7 @@ import { makeSign } from '../world/village.js';
 import { fitModel } from '../core/assets.js';
 import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (the yard on the drawn terrain's own triangles)
 import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
+import { Werkstatt } from './werkstatt.js'; // the repair garage beside the Autohaus (its prices: repairCost below)
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 import { mergeStatic } from '../engine/merge.js'; // (the hall's boxes welded per material)
 
@@ -55,10 +56,22 @@ const DISPLAY = [['car_audi_rs6', 'graphite'], ['car_mercedes_gls', 'black'], ['
   ['car_bmw_x3', 'blue'], ['car_vw_golf_gti', 'red'], ['car_toyota_gr_yaris', 'white']];
 // upstairs on the mezzanine, the supercars (LAYOUT.upSpots; for sale like the rest)
 const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['car_lamborghini_huracan', 'orange']];
-// the tow truck's bills: a car left on a road (impound.js: towed and impounded, flat; server CATALOG.wreckFee) and a
-// wreck (the repair: WRECK_RATE of the car's list price, at least WRECK_MIN; server: wreckRate, wreckMin)
-export const WRECK_FEE = 1500, WRECK_RATE = 0.1, WRECK_MIN = 2500;
-export const wreckFee = (id) => Math.max(WRECK_MIN, Math.round(((RENTALS.find((c) => c.id === id)?.price || 0) * WRECK_RATE) / 50) * 50);
+// the tow truck's bills and the WERKSTATT's (Oct 30, the user: "make sure that there is a garage next to the car
+// dealership where you can repair your car make sure it makes sense with the towing price and the full price of the
+// car"): one formula for every repair, priced off the car's own list price.
+// - a repair at the Werkstatt (werkstatt.js): damage share x REPAIR_RATE of the list price, at least REPAIR_MIN,
+//   rounded to $50 (a Golf knocked to 40 %: $700; wrecked-level 100 %: $1,700; a Huracan at 100 %: $24,750)
+// - a car left on a road: towed and held in the tow yard, flat WRECK_FEE (impound.js; server CATALOG.wreckFee)
+// - a wreck: the same tow plus the full repair (repairCost at 100 %), never more than the car sells back for (half its
+//   list price); so towing + repair always stays far below buying a new one (Golf $3,200 of $11,250, Huracan $26,250
+//   of $165,000). Server: repairRate, repairMin, wreckFee, carSell (server.repairPrice / wreckBill: the same sums)
+export const WRECK_FEE = 1500, REPAIR_RATE = 0.15, REPAIR_MIN = 150;
+const listPrice = (id) => RENTALS.find((c) => c.id === id)?.price || 0;
+const round50 = (v) => Math.round(v / 50) * 50;
+/** The Werkstatt's price for car `id` at damage share `frac` (0..1; 0: nothing to repair, $0). */
+export const repairCost = (id, frac) => (frac > 0 ? Math.max(REPAIR_MIN, round50(listPrice(id) * REPAIR_RATE * Math.min(1, frac))) : 0);
+/** A wreck's bill: the tow and the full repair, at most what the car sells back for. */
+export const wreckFee = (id) => Math.min(round50(listPrice(id) * SELL_SHARE), WRECK_FEE + repairCost(id, 1));
 export const SELL_SHARE = 0.5; // a car sold back: half what you paid
 export const GARAGE_MAX = 10; // (Oct 29, the user: "you also can buy more than 1 car so you have multiple cars"): the cars you can own (server: catalog garageMax)
 // the lot (frame: +z to the road, its edge at z 13; +x along it): the hall's middle (z), the yard's half width and
@@ -115,6 +128,7 @@ export class CarRental {
       o.drive.enter = (e) => { if (e?.kept && !o.drive.d && !o.drive.entering && !this.makeCurrent(e)) return; return enter(e); };
     }
     try { this.impound = new Impound(this, { fee: WRECK_FEE }); } catch (e) { console.warn('rental car park', e); this.impound = null; }
+    try { this.werkstatt = new Werkstatt(this); } catch (e) { console.warn('Werkstatt', e); this.werkstatt = null; } // (after the car park: it keeps clear of it)
     try { this.ownerTags = new OwnerTags({ scene: o.scene, camera: o.camera, rental: this }); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     // the save: your garage, the car that is out back in your bay
     this.migrate();
@@ -470,7 +484,7 @@ export class CarRental {
 
   // drive.js: a car was wrecked (yours: the repair bill, once); the truck fetches it
   // Your car isn't lost (Oct 29, the user: "once your car gets towed away it's repaired again, so it spawns at the
-  // parking lot so you don't lose your car"): the bill (wreckFee: 10 % of its price, at least WRECK_MIN), then once the
+  // parking lot so you don't lose your car"): the bill (wreckFee: the tow and the full repair), then once the
   // truck has it back, it is repaired and waits in its bay in the car park beside the hall (the same car: model,
   // paint, plate). It stays yours (AUTOHAUS: bought, in your garage)
   wrecked(e) {
@@ -505,7 +519,7 @@ export class CarRental {
         this.hud?.setMoney?.(this.save.money, -fee);
       }
       this.audio?.play?.('cash');
-      setTimeout(() => this.hud?.flash(`Car wrecked · repair bill -$${fee.toLocaleString('en-US')} · the tow truck takes it to the Autohaus · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
+      setTimeout(() => this.hud?.flash(`Car wrecked · -$${fee.toLocaleString('en-US')} (tow $${WRECK_FEE.toLocaleString('en-US')} + full repair $${(fee - WRECK_FEE).toLocaleString('en-US')}) · the tow truck takes it to the Autohaus · repaired and back in your bay as soon as the truck is home (a few minutes)`, 'bad', 6000), 2900); // (after drive.js's own "Wrecked" line)
     }
     const back = () => {
       if (!mine || lost || this.save.rental?.plate !== mine.plate || this.current) return; // (another of yours out meanwhile: that one stays)
@@ -572,7 +586,7 @@ export class CarRental {
     const garage = this.garage.map((c) => ({ ...normConfig(c), label: this.label(c.id), value: this.sellValue(c), out: c.plate === cur?.plate }))
       .sort((a, b) => (b.id === pick) - (a.id === pick)); // (yours of this model first)
     this.ui.open({ cars: RENTALS, cfg: base, current: cur, garage, garageMax: GARAGE_MAX, step: own ? 3 : 0, owned: own,
-      money: this.save.money, wreckFee: wreckFee(pick), cost: (c) => this.cost(c),
+      money: this.save.money, wreckFee: wreckFee(pick), repairFull: repairCost(pick, 1), towFee: WRECK_FEE, cost: (c) => this.cost(c),
       preview: (c, step) => this.room.configure(c, step), drag: (dx, dy) => this.room.orbit(dx, dy),
       rent: (c) => { this.buy(c); this.input?.lock?.(); }, close: () => { this.room.endConfigure(); this.input?.lock?.(); },
       takeOut: (plate) => { this.takeOut(plate); this.input?.lock?.(); }, sell: (plate) => { this.sell(plate); this.input?.lock?.(); },
@@ -614,6 +628,7 @@ export class CarRental {
     if (!this.L) return;
     this.truck?.update(dt);
     this.impound?.update(dt); // (your car left on a road: towed to the impound)
+    try { this.werkstatt?.update(dt); } catch (e) { console.warn('Werkstatt', e); this.werkstatt = null; } // (a repair under way, its card, its lights at night)
     try { this.ownerTags?.update(dt); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     const n = nightUniform?.value ?? 0;
     if (this.signMat) this.signMat.emissiveIntensity = 0.05 + 0.75 * n;

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -744,7 +744,9 @@ try {
     // a wreck: the fee even when it takes the balance below zero (a fine, as in single player); towDone ends it
     server.profileOf('tow gus').money = 100;
     const w1 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
-    ok(w1.ok && w1.d.money === 100 - 2500 && w1.d.fee === 2500 && !w1.d.impound && gcar().tow?.kind === 'wreck', 'a wreck: the repair bill (10 % of the Golf, at least $2,500; a fine: below zero if need be), no impound');
+    ok(w1.ok && w1.d.money === 100 - 3200 && w1.d.fee === 3200 && !w1.d.impound && gcar().tow?.kind === 'wreck', 'a wreck: the tow ($1,500) and the full repair (15 % of the Golf: $1,700) = $3,200 (a fine: below zero if need be), no impound');
+    const busyFix = await g2.f.req('carRepair', { damage: 0.5 });
+    ok(!busyFix.ok && busyFix.err === 'busy' && server.profileOf('tow gus').money === 100 - 3200, 'the Werkstatt cannot repair a car the tow truck has (busy, no charge)');
     await g2.f.req('towDone');
     server.profileOf('tow gus').money = DEBT_FLOOR + 1000;
     const w2 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });
@@ -754,6 +756,31 @@ try {
     const dn = await g2.f.req('towDone');
     const off = await hal.f.next('veh', (d) => d.k === 'tow' && d.veh === null);
     ok(dn.ok && !gcar().tow && JSON.stringify(gcar().at) === JSON.stringify([5, 0, 6, 0]) && !!off, 'towDone: the car is home in its bay, the truck leaves the others\' view');
+    // THE WERKSTATT (game/werkstatt.js): the server prices the repair from the car's own list price and the damage share
+    console.log('werkstatt');
+    const P = () => server.profileOf('tow gus');
+    P().money = 5000;
+    const r1 = await g2.f.req('carRepair', { damage: 0.4 });
+    ok(r1.ok && r1.d.fee === 700 && r1.d.money === 4300 && P().money === 4300, 'a repair: 40 % of 15 % of the Golf ($11,250) = $675 -> $700 ($50 steps), charged by the server');
+    const r2 = await g2.f.req('carRepair', { damage: 7 });
+    ok(r2.ok && r2.d.fee === 1700 && P().money === 2600, '...the damage share clamped to 1: at most the full repair ($1,700)');
+    const r3 = await g2.f.req('carRepair', { damage: 0.01 });
+    ok(r3.ok && r3.d.fee === CATALOG.repairMin && CATALOG.repairMin === 150 && P().money === 2450, '...a scratch: the minimum ($150)');
+    const r4 = await g2.f.req('carRepair', { damage: 0 }), r5 = await g2.f.req('carRepair', { damage: -3 }), r6 = await g2.f.req('carRepair', { damage: 'lots' });
+    ok(!r4.ok && r4.err === 'no_damage' && !r5.ok && r5.err === 'no_damage' && !r6.ok && r6.err === 'bad_value' && P().money === 2450, 'nothing to repair / a bad damage value: refused, no charge');
+    P().money = 300;
+    const r7 = await g2.f.req('carRepair', { damage: 1 });
+    ok(!r7.ok && r7.err === 'money' && r7.d.money === 300 && P().money === 300, 'a repair is a purchase: not enough money, refused (no debt)');
+    const r8 = await g2.f.req('carRepair', { damage: 0.5, plate: 'ZZ 999999' });
+    ok(!r8.ok && r8.err === 'no_car', 'a plate that is not yours: no_car');
+    P().money = 5000;
+    const r9 = await g2.f.req('carRepair', { damage: 0.2, plate: gcar().plate });
+    ok(r9.ok && r9.d.fee === 350 && P().money === 4650, '...your own plate: repaired ($337.50 -> $350)');
+    // the sums for every model: towing + the full repair far below a new one, the wreck bill never above the sell-back
+    const sane = Object.entries(CATALOG.cars).every(([id, list]) => wreckBill(id) === Math.min(Math.round(list * CATALOG.carSell / 50) * 50, CATALOG.wreckFee + repairPrice(id, 1))
+      && CATALOG.wreckFee + repairPrice(id, 1) < list * 0.5 && repairPrice(id, 0.5) <= repairPrice(id, 1) && repairPrice(id, 1) === Math.round(list * CATALOG.repairRate / 50) * 50);
+    ok(sane && wreckBill('car_lamborghini_huracan') === 26250 && repairPrice('car_lamborghini_huracan', 1) === 24750 && wreckBill('car_vw_golf_gti') === 3200,
+      'every model: tow + full repair stays under half the list price (Golf $3,200, Huracan $1,500 + $24,750 = $26,250 of $165,000)');
     g2.f.close(); hal.f.close();
     await sleep(100);
   }

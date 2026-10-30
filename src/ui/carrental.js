@@ -10,7 +10,7 @@
 // what you paid, click twice).
 //   open({ cars: [{ id, label, kind, price, length }], cfg, current: cfg | null, money, cost(cfg) -> { base, extras, total },
 //          preview(cfg, step), drag(dx, dy), rent(cfg) (buys it), close(), step?, owned: n (your cars of this model),
-//          garage: [{ ...cfg, label, value, out }], garageMax, takeOut(plate), sell(plate), wreckFee,
+//          garage: [{ ...cfg, label, value, out }], garageMax, takeOut(plate), sell(plate), wreckFee, repairFull, towFee,
 //          plateCheck?(plate) -> Promise<{ free } | null>, plateIssue?() -> Promise<plate | null> })   (multiplayer: plates are
 //          unique across every player; the plate you type is checked with the server as you type, "taken" shows at once)
 import './outfitshop.css'; // (its rows, tabs, detail card)
@@ -241,7 +241,7 @@ export class CarRentalUI {
           ${line(1, w.label, plus(w.cost))}
           ${line(2, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
           <div class="cr-sum-tot"><span>TOTAL</span><b>${money(cost.total)}</b></div>
-          <ul class="cr-terms"><li>Yours for good · it waits in your bay at the Autohaus · E to drive</li><li>Up to ${v.garageMax || 10} cars, the same model more than once too · each its own plate · one out at a time (MY CARS: pick which) · sell one back for half what you paid</li><li>Wreck it: a repair bill of <b>${money(v.wreckFee ?? 2500)}</b> · the tow truck brings it back repaired · rammed off by the police: not repaired, it is gone</li></ul>
+          <ul class="cr-terms"><li>Yours for good · it waits in your bay at the Autohaus · E to drive</li><li>Up to ${v.garageMax || 10} cars, the same model more than once too · each its own plate · one out at a time (MY CARS: pick which) · sell one back for half what you paid</li><li>Dents and damage: the Werkstatt next door repairs it · up to <b>${money(v.repairFull ?? 1700)}</b> (15 % of the list price at 100 % damage)</li><li>Wreck it: <b>${money(v.wreckFee ?? 3200)}</b> (tow ${money(v.towFee ?? 1500)} + full repair) · the tow truck brings it back repaired · rammed off by the police: not repaired, it is gone</li></ul>
         </div>
         ${v.garage?.length ? `<div class="cr-sum cr-garage paper" style="--clip:${brushClip(741, 4, 3)}"><div class="cr-group">MY CARS · <b>${v.garage.length} / ${v.garageMax || 10}</b></div>${v.garage.map((g) => `<div class="cr-sum-row${g.id === c.id ? ' mine' : ''}" data-car="${esc(g.plate)}"><i class="os-sw cr-sw-paint ${paintOf(g.paint).finish}" style="--c:${css(paintOf(g.paint).hex)}"></i><span><small>${esc(g.plate)} · ${esc(paintOf(g.paint).label)} · RESALE ${money(g.value)}</small><b>${esc(g.label)}</b></span><em>${g.out ? 'IN YOUR BAY' : 'TAKE OUT'}</em><button class="cr-car-sell${this.sellArm === g.plate ? ' armed' : ''}" tabindex="-1" data-sell="${esc(g.plate)}">${this.sellArm === g.plate ? `SURE? +${money(g.value)}` : 'SELL'}</button></div>`).join('')}</div>` : ''}`;
       list.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => this.go(+b.dataset.go)));

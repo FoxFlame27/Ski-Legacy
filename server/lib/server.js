@@ -414,6 +414,16 @@ class World {
   }
 
   // ---------------------------------------------------------------- helicopter copies at the pad
+  /** The old in-game admin panel's free helicopters (Oct 30, the user: "remove all admin spawned cars"; the 'heli'
+   *  admin op is gone): any still out go, a 'heli' update tells everyone (and the vehicle shown with it). */
+  purgeAdminHelis() {
+    const gone = this.heli.copies.filter((h) => h.admin);
+    if (!gone.length) return 0;
+    this.heli.copies = this.heli.copies.filter((h) => !h.admin);
+    for (const h of gone) { const o = [...this.players.values()].find((p) => p.key === h.key); if (o?.vehs?.heli) this.server.setVeh(o, { k: 'heli', off: true }); }
+    this.broadcast('heli', this.heliMsg());
+    return gone.length;
+  }
   heliMsg() { return { copies: this.heli.copies.map((h) => ({ id: h.id, name: h.name, since: h.since })), padAt: this.heli.padAt, copyMs: HELI_COPY_MS }; }
   heliRent(c) {
     const now = Date.now();
@@ -650,6 +660,7 @@ class World {
     c.world = this;
     this.players.set(pid, c);
     this.broadcast('join', c.publicInfo(), c);
+    this.purgeAdminHelis();
     // back in a race you dropped out of (gone longer than the grace period, the race still on): carry on from where
     // you were (your client still runs the race; the server forgets the DNF)
     for (const r of this.races.values()) {
@@ -952,7 +963,7 @@ export class GameServer {
   //   pass { on }               today's day pass (the world's day) | off: no pass, no tickets
   //   time { hour }             the clock of your world (everyone in it shares the sky)
   //   weather { w }             your world's weather, held 5 min before it moves on by itself
-  //   heli                      a free helicopter copy on your name (the panel's spawn: everyone sees yours)
+  //   (heli, the panel's free helicopter: gone, Oct 30 "remove all admin spawned cars"; refused as bad_op)
   //   tp { x, z, label } | spawn { kind }   nothing to change here (the client moves / spawns): logged only
   adminOp(c, d) {
     const op = str(d.op, 16);
@@ -1011,14 +1022,6 @@ export class GameServer {
         w.broadcast('clock', w.clockMsg(now));
         this.log(`[admin] ${c.name}: world ${w.id} weather ${d.w}`);
         return { d: { clock: w.clockMsg(now) } };
-      }
-      case 'heli': {
-        if (!w.heli.copies.some((h) => h.key === c.key)) {
-          w.heli.copies.push({ id: w.heli.next++, key: c.key, name: c.name, since: now, admin: true }); // (free; the pad keeps its own)
-          w.broadcast('heli', w.heliMsg());
-        }
-        this.log(`[admin] ${c.name}: helicopter spawn`);
-        return { d: { ok: true } };
       }
       case 'tp': {
         if (!isNum(d.x) || !isNum(d.z)) return { err: 'bad_value' };

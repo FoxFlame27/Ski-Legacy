@@ -1242,13 +1242,20 @@ try {
     ok(wx.ok && wx.d.clock.weather === 'heavy', 'admin weather: heavy snow');
     const wb = await rf.req('admin', { op: 'weather', w: 'toString' });
     ok(!wb.ok && wb.err === 'bad_value', 'an unknown weather is refused');
+    // no admin helicopters any more (Oct 30, "remove all admin spawned cars"): the op is refused, and one still out
+    // (an old one, put back here by hand) goes when anybody joins the world
     const hl = await rf.req('admin', { op: 'heli' });
     const W = server.worlds.get(lr.d.world.id), padAt = W.heli.padAt;
-    ok(hl.ok && W.heli.copies.some((h) => h.name === 'Rafael' && h.admin), 'admin helicopter: a free copy on his name');
-    const hv = await rf.req('veh', { k: 'heli', at: [10, 50, 10, 0] });
-    ok(hv.ok, '...shown to everyone (veh heli accepted)');
-    await rf.req('heliReturn');
-    ok(W.heli.padAt === padAt && !W.heli.copies.some((h) => h.name === 'Rafael'), "...returned without touching the pad's next helicopter");
+    ok(!hl.ok && hl.err === 'bad_op' && !W.heli.copies.some((h) => h.name === 'Rafael'), 'admin helicopter: refused (bad_op), no free copy');
+    ok(!(await rf.req('veh', { k: 'heli', at: [10, 50, 10, 0] })).ok, '...and nothing to show (veh heli: not renting)');
+    W.heli.copies.push({ id: W.heli.next++, key: 'rafael', name: 'Rafael', since: Date.now(), admin: true });
+    const joiner = new Fake(url);
+    await joiner.open();
+    const jr = await joiner.req('register', { name: 'Heli Joiner' });
+    const jl = await joiner.req('login', { v: PROTO, name: 'heli joiner', token: jr.d.token });
+    const hm = await rf.next('heli', (d) => !d.copies.some((h) => h.name === 'Rafael'));
+    ok(jl.ok && jl.d.world.id === W.id && !W.heli.copies.some((h) => h.admin) && !!hm && W.heli.padAt === padAt, "an old admin helicopter left out is gone when someone joins (everyone told; the pad's untouched)");
+    joiner.close();
     const bo = await rf.req('admin', { op: 'nope' });
     ok(!bo.ok && bo.err === 'bad_op', 'an unknown admin op is refused');
     rf.close();

@@ -5,7 +5,8 @@
 // Multiplayer (Oct 30, the user: "the admin panel doesn't work on multiplayer, it reverts immediately"): the server
 // owns money, unlocks, the day pass, the world's clock and weather, so those go through it ('admin' requests,
 // net/session.js adminOp; the server checks the login is Rafael's) and its answer is what shows. Teleports, the free
-// camera, the HUD, the boost and the car / snowmobile spawns are this client's own (the server just logs them).
+// camera, the HUD, the boost and the snowmobile spawn are this client's own (the server just logs them). No car or
+// helicopter spawns any more (Oct 30, the user: "remove all admin spawned cars").
 import './admin.css';
 import * as THREE from 'three';
 import { brushSVG, brushClip, esc } from './menu.js';
@@ -307,48 +308,8 @@ export class AdminPanel {
     this.baseSki = null;
   }
 
-  // ------------------------------------------------------------------ spawn a car
-  // a random car of the fleet (carrental.js spawnFree: free, drivable like a rental) parked just beside you, facing
-  // the way you face: in front, at either side, behind (then a bit further out), wherever its whole footprint is clear
-  // ground (no building, tree, car or you in it) and fairly level
-  spawnCar() {
-    const c = this.ctx, pl = c.player, rental = c.carRental, drive = c.drive;
-    const fail = (m) => { this.hud.flash(m, 'bad', 2200); this.audio?.play('error'); };
-    if (!pl || !rental?.spawnFree) return fail('No cars available');
-    if (drive?.active || c.sleds?.active || c.heli?.active || pl.mode === 'sit' || pl.mode === 'fall') return fail('Get out first');
-    if (rental.inside || c.chalets?.inside) return fail('Not indoors');
-    const yaw = pl.heading || 0, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = -fz, rz = fx;
-    const HL = 2.65, HW = 1.05; // (the longest car, 5.2 m, with a margin)
-    const px = pl.pos.x, pz = pl.pos.z, py = pl.pos.y;
-    const ok = (x, z) => {
-      if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
-      // not on you
-      const dx = px - x, dz = pz - z;
-      if (Math.abs(dx * rx + dz * rz) < HW + 0.7 && Math.abs(dx * fx + dz * fz) < HL + 0.7) return false;
-      const hs = [];
-      for (const a of [-1, 0, 1]) for (const b of [-1, -0.5, 0, 0.5, 1]) {
-        const sx = x + rx * a * HW + fx * b * HL, sz = z + rz * a * HW + fz * b * HL;
-        if (drive?.clearAt && !drive.clearAt(sx, sz, 0.3)) return false;
-        hs.push(world.groundHeight(sx, sz, py + 1.5));
-      }
-      return Math.max(...hs) - Math.min(...hs) < 1.4;
-    };
-    const cands = [];
-    for (const k of [1, 1.8, 2.8]) {
-      cands.push([px + fx * (HL + 1.2) * k, pz + fz * (HL + 1.2) * k]); // in front
-      cands.push([px + rx * (HW + 1.4) * k + fx * 0.5, pz + rz * (HW + 1.4) * k + fz * 0.5]); // beside, right
-      cands.push([px - rx * (HW + 1.4) * k + fx * 0.5, pz - rz * (HW + 1.4) * k + fz * 0.5]); // beside, left
-      cands.push([px - fx * (HL + 1.2) * k, pz - fz * (HL + 1.2) * k]); // behind
-    }
-    const spot = cands.find(([x, z]) => ok(x, z));
-    if (!spot) return fail('No room for a car here');
-    const [x, z] = spot;
-    const e = rental.spawnFree({ x, z, yaw, y: world.groundHeight(x, z, py + 1.5) });
-    if (!e) return fail('No cars available');
-    this.close(true);
-    this.hud.flash(`${e.label || 'Car'} · walk up and press E to drive`, 'good', 2600);
-    this.mpLog('spawn', { kind: 'car' });
-  }
+  // (spawn a car / a helicopter: removed, Oct 30, the user "remove all admin spawned cars"; carrental.spawnFree and
+  // heli.spawnNear are gone with them)
 
   // ------------------------------------------------------------------ teleports
   /** Every place you can jump to: { group, label, sub, x, z, heading, skis }. */
@@ -575,8 +536,6 @@ export class AdminPanel {
             <div class="mp-row"><span>HUD</span>${seg([['Shown', 'hud:0', !this.hudOff], ['Hidden', 'hud:1', this.hudOff]])}</div>
             <div class="mp-row"><span>Free camera</span><button class="ad-btn" data-act="fly" tabindex="-1">FLY</button></div>
             <div class="mp-row"><span>Snowmobile</span><button class="ad-btn" data-act="sled" tabindex="-1">SPAWN HERE</button></div>
-            <div class="mp-row"><span>Car</span><button class="ad-btn" data-act="car" tabindex="-1">SPAWN CAR</button></div>
-            <div class="mp-row"><span>Helicopter</span><button class="ad-btn" data-act="heli" tabindex="-1">SPAWN HERE</button></div>
             <div class="mp-row"><span>Unlock</span>${seg([['All skis', 'skis', ownsAllSkis], ['All outfits', 'outfits', ownsAllOutfits]])}</div>
             <div class="mp-row"><span>Day pass</span>${seg([[pass ? 'Active' : 'Give pass', 'pass', pass], ['Reset pass & tickets', 'unpass']])}</div>
           </div>
@@ -613,13 +572,6 @@ export class AdminPanel {
     if (a.startsWith('hud:')) return this.setHud(a.endsWith('1'));
     if (a === 'fly') return this.startFly();
     if (a === 'sled') { const r = this.ctx.sleds?.spawnNear?.(this.ctx.player); if (r) this.mpLog('spawn', { kind: 'sled' }); return r; }
-    if (a === 'car') return this.spawnCar();
-    if (a === 'heli') {
-      if (this.ctx.heli?.spawnNear?.(this.ctx.player) === false) { this.hud?.flash?.('The helicopter is busy right now', 'bad', 2000); return; }
-      // multiplayer: a free copy on your name at the server, so everyone sees yours parked / flying (net/heli.js)
-      if (isMP()) this.mpOp('heli').then((d) => { const hm = window.__game?.multiplayer?.heliMp; if (d && hm) hm.rented = true; });
-      return;
-    }
     if (a === 'skis') return this.unlockSkis();
     if (a === 'outfits') return this.unlockOutfits();
     if (a === 'pass') return this.givePass();

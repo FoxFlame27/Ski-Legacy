@@ -1,13 +1,16 @@
-// LEGACY TAXI: drive fares round the resort in your own (rented) car. Go on duty at a job board (the TAXI note) or
-// with T in your car; the dispatcher sends you to someone waiting at a bus stop, a car park, the chalet village, the
-// car rental, the medical centre... (on foot beside the road: the job people's rigs, jobs/actors.js RigPool). Stop
-// beside them and they walk to your car and get in your passenger seat (multiplayer: the seat behind it, the front one
-// stays free for a friend), say where they're going, and the meter runs: an $8 flag fall, $3 every 100 m driven
-// (capped near the usual route, so a detour earns nothing), a fixed mountain surcharge for the climb.
-// Stop at their destination and they get out and pay, with a tip for a quick, smooth ride. Knocks and crashes
-// while they're aboard cost you (they complain); wreck the car and they leave without paying. T again (in your car)
-// or the board ends your shift. Pay goes through main.js earn(..., 'job'): the server's job payout in multiplayer.
-// Only you see your passenger (jobs keep their people local, as every job does).
+// LEGACY TAXI: drive fares round the resort in a car of your own. A job like the others (Oct 30, the user: "make taxi
+// by jobs but only if you have a car"): the TAXI note on every job board, greyed out until you own a car (bought at the
+// Autohaus); take it and you are on duty in your car (the one out; none out: take one out at the Autohaus, MY CARS).
+// The dispatcher sends you to someone waiting at a bus stop, a lift station, a hotel, a car park, the chalet village,
+// the medical centre... (on foot beside the road: the job people's rigs, jobs/actors.js RigPool). Stop beside them and
+// they walk round your car (never through it: walkPath) to the back door on the kerb side and sit in the back seat
+// (carpeople.js seats and legs), say where they're going, and the meter runs: a flag fall, a tick every 100 m driven
+// (capped near the usual route, so a detour earns nothing), a fixed mountain surcharge for the climb, against a time
+// limit (late: a cut and no tip). Stop at their destination and they get out and walk off round the car and pay, with a
+// tip for a quick, smooth ride. Knocks and crashes while they're aboard cost you (they complain); wreck the car and
+// they leave without paying; a police chase (or jail) ends the fare. The board's note or T in your car ends your shift.
+// Pay goes through main.js earn(..., 'job'): the server's job payout in multiplayer (EARN_RULES.job, per payout and per
+// hour). Only you see your passenger (jobs keep their people local, as every job does).
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { busRoads, stopWaitArea, nearestRoadPoint, laneDistance, ROAD_HALF } from './bus/roads.js';
@@ -16,19 +19,23 @@ import { driverEye } from './cars.js';
 import { GUESTS } from './jobs/catalog.js';
 import { makeFallbackFigure } from './jobs/props.js';
 import { CHALET_PLACE } from './bus/chaletroad.js';
-import { MP } from '../net/mode.js';
+import { repairCost } from './carrental.js';
 
-// the tariff (Oct 29, the user: "a realistic way" to earn: an $8 flag fall plus $3 a tick. The resort's road trips are
-// only 1-8 km, so at $3 a km a fare would be $11-32, below every other job; the meter ticks $3 every 100 m instead,
-// a mountain resort's price (a game dollar buys less: a lift ticket is $50), which puts a fare at the asked-for
-// $40-250 by distance, before the tip. One number to change: perKm)
-export const TARIFF = { flag: 8, perKm: 30, climb: 4 /* per 100 m up */, min: 40, max: 300, tipQuick: 0.1, tipSmooth: 0.1 };
+// the tariff: a flag fall plus a tick every 100 m (Oct 29, "a realistic way" to earn), priced as every other job
+// (Oct 30, as a job on the board: jobs/catalog.js pays ~$150 a minute of the job, ~$9,000 an hour): the resort's road
+// trips are 1-8 km, ~1.5-10 min at a mountain road's pace, so $18 every 100 m puts a fare at ~$150-1,500 by distance,
+// before the tip (the drive to the pickup is unpaid, as the walk to a job is). One number to change: perKm
+export const TARIFF = { flag: 60, perKm: 180, climb: 15 /* per 100 m up */, min: 150, max: 2200, tipQuick: 0.1, tipSmooth: 0.1, lateCut: 0.25 };
 const PICK_R = 16;        // m: stop this close to the passenger and they come over
 const DROP_R = 20;        // m: ...and this close to the destination's kerb to let them out
 const STOP_V = 1.6;       // m/s: stopped (enough)
 const WALK_V = 1.5;       // m/s: a passenger walking to / from your car
 const SCARY_V = 125 / 3.6; // m/s: faster than this for a few seconds frightens them
 const SHOW_R = 420;       // m: the passenger is built (from the pool) when you are this close
+const CAR_GAP = 0.55;     // m: a walking passenger keeps this clear of the car's box (walkPath)
+// the hotels round the plaza (world/village.js: their spots) and their names on the dispatcher's list
+const HOTELS = [[62, 34, 'Hotel Alpenrose'], [-74, 44, 'Hotel Edelweiss'], [100, -34, 'Hotel Bergkristall'], [-108, -60, 'Hotel Gletscherblick'],
+  [22, 92, 'Hotel Tannenhof'], [-36, 108, 'Hotel Schneeweiss'], [118, 70, 'Hotel Sonnalp'], [-128, 22, 'Hotel Steinbock']];
 const LINES = {
   hail: ['Hi! Thanks for coming.', 'Oh good, my taxi!', 'Perfect timing.', 'Hello! Am I glad to see you.', 'Grüezi! I booked a cab.'],
   pickup: (to) => [`${to}, please.`, `Could you take me to ${to}?`, `To ${to}, please. No rush.`, `${to}, please. My friends are waiting.`, `Take me to ${to}? Thanks!`],
@@ -36,18 +43,28 @@ const LINES = {
   crash: ['Are you trying to kill me?!', 'That was a crash! I am not paying full fare for this.', 'Unbelievable. Just get me there in one piece.'],
   scary: ['Slow down, please! This is not a race.', 'Could you drive a bit slower? Please?'],
   detour: ['Is this really the way?', 'I think we went the wrong way.'],
-  thanks: ['Thanks, lovely ride!', 'Here you go. Keep the change!', 'Smooth as fresh corduroy. Thank you!', 'Great driving, thanks!'],
-  meh: ['Thanks... I think.', 'We made it. Somehow.', 'Here. Maybe take a driving lesson.'],
+  // paying, in their own words (finish: how the ride went; the only text shown with the money)
+  paidGreat: ['Wow, you got me there fast! And so smooth!', 'Best taxi in the Alps. Keep the change!', 'Quick and smooth as fresh corduroy. Thank you!'],
+  paidFast: ['Wow, you got me there fast!', 'That was quick, thanks!', 'Made it in no time!'],
+  paidSmooth: ['Thanks, smooth ride!', 'Lovely ride, thank you!', 'Nice and relaxed, thanks.'],
+  paidOk: ['Thanks for the ride.', 'Here you go, thanks.', 'Cheers, see you around.'],
+  paidSlow: ['That took forever...', 'Finally. I am so late now.', 'Next time I take the bus.'],
+  paidBumpy: ['Bit of a bumpy ride...', 'We made it. Somehow.', 'Thanks... I think. Mind the kerbs.'],
+  paidScary: ['Never again that fast, please.', 'My heart is still racing...', 'You drive like it is a race!'],
+  paidCrash: ['You crashed! I am not paying full fare.', 'Here. Take a driving lesson.', 'I am lucky to be alive...'],
   wreck: ["I'm out of here!", 'I am walking from here. And I am not paying!'],
   dumped: ['You are leaving me HERE? Forget the fare.', 'This is not where I wanted to go!'],
   late: (n) => `${n} gave up waiting and took the bus`,
+  overdue: ['We are late. I said I was in a hurry!', 'Finally. That took forever.', 'I missed my lesson because of this.'],
+  police: ["I'm not riding with a criminal!", 'Police?! Let me out, NOW!', 'I am not part of this! Let me out!', 'No way. I will walk from here.'],
+  policeWait: ["The police are after you? I'm not getting in!", 'Is that a police car after you? Forget it.'],
 };
 const pick = (a) => a[Math.floor(Math.random() * a.length) % a.length];
 const money = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
 const hyp = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 const far = (m) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
-const _v = new THREE.Vector3(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
+const _v = new THREE.Vector3(), _door = new THREE.Vector3(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
 
 // a car template's seat points (car frame: +x the driver's side, +z forward), as net/vehicles.js carSeats: 0 the
 // driver, 1 the front passenger, 2.. the back
@@ -70,9 +87,9 @@ function carSeats(t) {
   SEATS.set(t, out);
   return out;
 }
-// the passenger's seat: the front passenger seat (multiplayer: the one behind it, when the car has one, so a friend
-// can still ride up front)
-const paxSeat = (list) => (MP.active && list.length > 3 ? 3 : 1);
+// the passenger's seat: the back seat behind the front passenger (the kerb side; a car without a back seat: the front
+// passenger seat). Multiplayer: the front one stays free for a friend either way
+const paxSeat = (list) => (list.length > 3 ? 3 : 1);
 // legs to the footwell (the bench 'sit' pose hangs them straight down through the car floor), as net/remote.js does
 function carLegs(rig) {
   const b = rig.b;
@@ -85,6 +102,51 @@ function carLegs(rig) {
     _pole.set(side * 0.15, 1, 0.5).normalize().applyQuaternion(q);
     try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
   }
+}
+
+// ROUND THE CAR, NOT THROUGH IT (Oct 30, the user): a walking passenger's way between two points in the car's own frame
+// (x across, z along; the car centred), keeping out of its box widened by CAR_GAP (hx, hz): straight when the line is
+// clear, otherwise the shortest way via the box's corners (round the bonnet or round the boot, whichever is shorter).
+// Starting inside the box (stood right against the car): out sideways first. Returns the points after `a` (b last).
+function segHitsBox(ax, az, bx, bz, hx, hz) {
+  // (slab test, the box shrunk a hair so a corner-to-corner leg along its edge counts as clear)
+  const ex = hx - 0.02, ez = hz - 0.02;
+  let t0 = 0, t1 = 1;
+  for (const [p, d, h] of [[ax, bx - ax, ex], [az, bz - az, ez]]) {
+    if (Math.abs(d) < 1e-9) { if (p <= -h || p >= h) return false; continue; }
+    let u = (-h - p) / d, v = (h - p) / d;
+    if (u > v) [u, v] = [v, u];
+    t0 = Math.max(t0, u); t1 = Math.min(t1, v);
+    if (t0 >= t1) return false;
+  }
+  return true;
+}
+export function pathRound(ax, az, bx, bz, hx, hz) {
+  const out = [];
+  if (Math.abs(ax) < hx && Math.abs(az) < hz) { // (inside: the nearer long side first)
+    ax = (ax >= 0 ? 1 : -1) * (hx + 0.05); out.push({ x: ax, z: az });
+  }
+  if (!segHitsBox(ax, az, bx, bz, hx, hz)) { out.push({ x: bx, z: bz }); return out; }
+  // the corners (just outside), a, b: shortest way through those that see each other (6 points, Dijkstra by hand)
+  const cx = hx + 0.05, cz = hz + 0.05;
+  const P = [{ x: ax, z: az }, { x: cx, z: cz }, { x: -cx, z: cz }, { x: -cx, z: -cz }, { x: cx, z: -cz }, { x: bx, z: bz }];
+  const n = P.length, dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+  dist[0] = 0;
+  for (let k = 0; k < n; k++) {
+    let i = -1;
+    for (let j = 0; j < n; j++) if (!done[j] && (i < 0 || dist[j] < dist[i])) i = j;
+    if (i < 0 || dist[i] === Infinity) break;
+    done[i] = true;
+    for (let j = 0; j < n; j++) {
+      if (done[j] || segHitsBox(P[i].x, P[i].z, P[j].x, P[j].z, hx, hz)) continue;
+      const nd = dist[i] + Math.hypot(P[i].x - P[j].x, P[i].z - P[j].z);
+      if (nd < dist[j]) { dist[j] = nd; prev[j] = i; }
+    }
+  }
+  if (prev[n - 1] < 0) { out.push({ x: bx, z: bz }); return out; } // (never: the corners always see round)
+  const way = [];
+  for (let j = n - 1; j > 0; j = prev[j]) way.unshift(P[j]);
+  return out.concat(way);
 }
 
 const CSS = `
@@ -135,10 +197,11 @@ export class Taxi {
    * @param {object} [o.audio]
    * @param {(amount: number, label: string) => void} o.earn   paid as a job (multiplayer: the server's 'job' payout)
    * @param {() => boolean} [o.busy]  another job under way (no taxi duty from the board meanwhile)
-   * @param {object} [o.layout]     world layout (the chalet village)
+   * @param {object} [o.layout]     world layout (the lift stations)
+   * @param {() => boolean} [o.chased]  a police chase (or jail) under way: the fare is off
    */
-  constructor({ scene, player, drive, carRental = null, jobs = null, hud, audio = null, earn, busy = null, layout = null }) {
-    Object.assign(this, { scene, player, drive, carRental, jobs, hud, audio, earn, busy, layout });
+  constructor({ scene, player, drive, carRental = null, jobs = null, hud, audio = null, earn, busy = null, layout = null, chased = null }) {
+    Object.assign(this, { scene, player, drive, carRental, jobs, hud, audio, earn, busy, layout, chased });
     this.duty = false;
     this.fare = null;      // the current fare (see dispatch)
     this.pax = null;       // the passenger's body { slot, rig, fig, root, st, pos, heading, acc }
@@ -156,16 +219,17 @@ export class Taxi {
   }
 
   // ------------------------------------------------------------------ where people wait
-  // Bus stops (their waiting area), car parks, the medical centre, the car rental, the chalet village: each a kerb
-  // point on a road (where you stop) and a spot beside it (where they stand). Places closer than 70 m merge.
+  // Bus stops (their waiting area), the lift stations, the hotels, car parks, the medical centre, the car rental, the
+  // chalet village: each a kerb point on a road (where you stop) and a spot beside it (where they stand). Places closer
+  // than 70 m merge (the first named wins: a bus stop before the lift station beside it).
   buildPlaces() {
     const out = [];
     const near = (x, z) => out.some((p) => hyp(p.x, p.z, x, z) < 70);
     const kerb = (x, z) => { try { return nearestRoadPoint(x, z); } catch { return null; } };
-    const add = (name, ax, az, stand = null) => {
+    const add = (name, ax, az, stand = null, reach = 45) => {
       if (!name || !Number.isFinite(ax) || !Number.isFinite(az)) return;
       const k = kerb(ax, az);
-      if (!k || k.d > 45 || near(k.x, k.z)) return;
+      if (!k || k.d > reach || near(k.x, k.z)) return;
       let sx = stand?.x, sz = stand?.z;
       if (!stand) {
         // beside the road (the side further from any other lane), a step off the plowed edge
@@ -186,6 +250,10 @@ export class Taxi {
       let a = null; try { a = stopWaitArea(s); } catch { a = null; }
       add(s.name === 'Legacy Village' ? 'Legacy Village plaza' : s.name, a ? a.x : s.x, a ? a.z : s.z, a ? { x: a.x, z: a.z } : null);
     }
+    for (const l of this.layout?.lifts || []) { // (the bottom stations: where skiers wait for a ride back)
+      if (l?.bottom && l.name) add(`the ${l.name} station`, l.bottom.x, l.bottom.z, null, 60);
+    }
+    for (const [x, z, name] of HOTELS) add(name, x, z, null, 70);
     for (const L of busRoads.lots || []) {
       const nm = L.rental ? 'the Autohaus' : L === busRoads.hospital || /medical/i.test(L.name || '') ? 'the medical centre' : L.name;
       add(nm, L.ex ?? L.x, L.ez ?? L.z);
@@ -199,44 +267,85 @@ export class Taxi {
   }
 
   // ------------------------------------------------------------------ duty
-  hasCar() { return !!this.drive?.d || !!this.carRental?.current; }
-  /** The TAXI note on the job boards (jobs.js extraOffers): plain data for ui/jobboard.js. */
+  /** Do you own a car? (your garage: single player save.garage, multiplayer the server's profile cars) */
+  hasCar() { return (this.carRental?.garage?.length || 0) > 0; }
+  /** Your car you drive now (a car of your garage: drive.js only lets you into your own) or null. */
+  myDrive() { const d = this.drive?.d; return d && d.e?.rental ? d : null; }
+  /** Your car standing in the world: the one out, else another of yours parked out (carRental.kept). */
+  myCar() { const R = this.carRental; return R?.current?.car || R?.kept?.find?.((e) => e?.car && !e.wrecked)?.car || null; }
+  /** A damaged car can't start a taxi job or take a new fare (Oct 30, the user: "you can not start a taxi ride if your
+   *  car is damaged"): the car you drive (else the one out) with any damage the Werkstatt would repair (its quote: the
+   *  damage %, dents) or wrecked -> the message, '' when it is fine. A fare under way still finishes. */
+  damageBlock() {
+    const e = this.myDrive()?.e || this.carRental?.current;
+    if (!e) return '';
+    let frac = e.wrecked || this.myDrive()?.crash ? 1 : Math.max(0, Math.min(1, (e.damage || 0) / 100));
+    if (frac <= 0 && e.dents?.length) frac = 0.01;
+    if (!(frac > 0)) return '';
+    let fee = 0; try { fee = repairCost(e.cfg?.id || e.name, frac); } catch { fee = 0; }
+    return `Your car is damaged · repair it at the Werkstatt first${fee > 0 ? ` (${money(fee)})` : ''}`;
+  }
+  /** The TAXI note on the job boards (jobs.js extraOffers): plain data for ui/jobboard.js. No car of your own (or your
+   *  car damaged): greyed out (locked), "Buy a car at the Autohaus first" / "Your car is damaged · repair it...". */
   boardOffer() {
-    const car = this.hasCar();
+    const car = this.hasCar(), dmg = car && !this.duty ? this.damageBlock() : '';
     return {
       id: 'taxi', type: 'taxi', title: this.duty ? 'Legacy Taxi · on duty' : 'Legacy Taxi · drive fares',
       client: 'Legacy Taxi dispatch',
       brief: !car ? 'Drive guests round the resort in your own car. Buy a car at the Autohaus first, then come back.'
-        : this.duty ? 'You are on duty: the dispatcher sends fares to your car. Press T in your car to end your shift.'
-          : `Drive guests between bus stops, car parks, the chalets, the lift bases and the passes in your car. $${TARIFF.flag} + $${TARIFF.perKm / 10} per 100 m, a mountain surcharge, tips for a quick, smooth ride; knocks cost you, a wreck costs the fare. T in your car goes on or off duty.`,
-      reward: 0, payText: '$40–250 a fare', bonus: 1, tipText: 'up to 25%', minutes: 'per fare', diff: 1,
-      takeText: !car ? 'BUY A CAR FIRST' : this.duty ? 'END MY SHIFT' : 'GO ON DUTY',
-      take: () => (this.duty ? this.goOffDuty() : this.goOnDuty(true)),
+        : this.duty ? 'You are on duty: the dispatcher sends fares to your car. End your shift here, or with T in your car.'
+          : 'Drive guests between bus stops, lift stations, hotels, car parks and the chalets in your own car. The meter pays by distance, with a tip for a quick, smooth ride; knocks and crashes cost you, a wreck or a police chase costs the fare.',
+      reward: 0, payText: `$${TARIFF.min}–1,500 a fare`, bonus: 1, tipText: 'up to 25%', minutes: 'per fare', diff: 1,
+      locked: (!car || !!dmg) && !this.duty, lockText: !car ? 'Buy a car at the Autohaus first' : dmg,
+      takeText: !car ? 'BUY A CAR FIRST' : this.duty ? 'END MY SHIFT' : dmg ? 'REPAIR YOUR CAR FIRST' : 'GO ON DUTY',
+      take: () => (this.duty ? this.goOffDuty() : this.goOnDuty()),
     };
   }
-  goOnDuty(fromBoard = false) {
+  goOnDuty() {
     if (!this.hasCar()) { this.hud?.flash('Buy a car at the Autohaus first', 'bad', 2600); this.audio?.play('error'); return false; }
     if (this.duty) { this.hud?.flash('Already on taxi duty · T in your car ends your shift', 'gold', 2400); return true; }
-    if (fromBoard && this.busy?.()) { this.hud?.flash('Finish or cancel your current job first', 'bad', 2400); return false; }
+    if (this.busy?.()) { this.hud?.flash('Finish or cancel your current job first', 'bad', 2400); return false; }
+    if (this.chased?.()) { this.hud?.flash('Not while the police are after you', 'bad', 2400); return false; }
+    const dmg = this.damageBlock();
+    if (dmg) { this.hud?.flash(dmg, 'bad', 3000); this.audio?.play('error'); return false; }
     this.duty = true;
     this.shift = { fares: 0, earned: 0 };
-    this.nextT = this.drive?.d ? 3 : 0.5;
-    this.hud?.flash(this.drive?.d ? 'Taxi duty · waiting for a fare' : 'Taxi duty · get in your car', 'gold', 2400);
+    this.nextT = this.myDrive() ? 3 : 0.5;
+    this.hud?.flash(this.myDrive() ? 'Taxi duty · waiting for a fare' : this.myCar() ? 'Taxi duty · get in your car' : 'Taxi duty · take a car out at the Autohaus (MY CARS)', 'gold', 2800);
     this.audio?.play('click');
     return true;
   }
-  goOffDuty(why = '') {
+  goOffDuty(why = '', lines = LINES.dumped) {
     if (!this.duty && !this.fare) return;
     const f = this.fare;
     if (f) {
-      if (f.phase === 'ride') { this.say(f.name, pick(LINES.dumped), 'bad'); this.alight(false); } else this.walkOff();
+      if (f.phase === 'ride') { this.say(f.name, pick(lines), 'bad'); this.alight(false); } else this.walkOff();
       this.fare = null;
     }
     this.duty = false;
     const s = this.shift;
     this.hud?.flash(why || (s.fares ? `Shift over · ${s.fares} fare${s.fares > 1 ? 's' : ''} · ${money(s.earned)}` : 'Off duty'), why ? 'bad' : 'gold', 2800);
   }
-  toggle() { if (this.duty || this.fare) this.goOffDuty(); else this.goOnDuty(); }
+  /** Wanted (the police after you, a chase, jail): the fare is cancelled, nothing paid (Oct 30, the user: "make sure
+   *  the taxi ride gets cancelled when you are in police chase"). Waiting for you: they walk off at once. Aboard: they
+   *  get out as soon as the car stops (step: f.cancel), round the car, and walk off. Your shift goes on, but no new
+   *  fares come while you are wanted (update). */
+  policeCancel() {
+    const f = this.fare;
+    if (!f || f.cancel) return;
+    if (f.phase === 'ride') { f.cancel = true; this.said = `${f.name}: "${pick(LINES.police)}"`; this.saidT = 8; this.sayBad = true; this.hud?.flash(`Taxi cancelled · stop and let ${f.name} out`, 'bad', 3200); this.audio?.play('error'); return; }
+    const line = pick(LINES.policeWait);
+    this.walkOff(); this.fare = null; this.nextT = 8;
+    this.said = `${f.name}: "${line}"`; this.saidT = 6; this.sayBad = true;
+    this.hud?.flash(`Taxi cancelled · '${line}'`, 'bad', 3600);
+  }
+  /** A cancelled fare's passenger out of the car (stopped, or you got out): no pay. */
+  cancelOut(f) {
+    const line = pick(LINES.police);
+    this.alight(false); this.fare = null; this.nextT = 8;
+    this.said = `${f.name}: "${line}"`; this.saidT = 6; this.sayBad = true;
+    this.hud?.flash(`Taxi cancelled · '${line}'`, 'bad', 3600);
+  }
 
   // ------------------------------------------------------------------ a fare
   dispatch(d) {
@@ -258,6 +367,7 @@ export class Taxi {
     this.fare = {
       name: pick(GUESTS), char, from, to, phase: 'pickup', t: 0,
       patience: Math.max(150, toPick / 9 + 120), estKm, capKm: estKm * 1.4 + 0.4, estT: (estKm * 1000) / 12.5 + 25,
+      limit: Math.round(((estKm * 1000) / 12.5 + 25) * 1.6 + 45), late: false, // (the time to get them there: late, a cut and no tip)
       surcharge: Math.round(Math.max(0, dy) / 100 * TARIFF.climb), km: 0, rideT: 0, knocks: 0, crashes: 0, scary: 0, fastT: 0, detour: false,
       dmg: 0, wreck: false,
     };
@@ -319,14 +429,40 @@ export class Taxi {
     out.copy(list[Math.min(list.length - 1, paxSeat(list))]);
     return d.e.car.localToWorld(out);
   }
-  doorPoint(d, out) {
+  doorPoint(d, out, local = false) {
     const list = carSeats(d.t);
     const s = list?.[Math.min(list.length - 1, paxSeat(list))];
     const sg = s && s.x > 0 ? 1 : -1, half = (d.t?.size?.x || 1.9) / 2;
-    out.set(sg * (half + 0.55), 0, s ? s.z : -0.4);
+    out.set(sg * (half + CAR_GAP + 0.1), 0, s ? s.z : -0.4); // (just outside the box walkPath keeps clear of)
+    if (local) return out;
     d.e.car.localToWorld(out);
     out.y = world.groundHeight(out.x, out.z);
     return out;
+  }
+  /** The car's box a passenger walks round (its own frame, centred): half width and half length plus CAR_GAP. */
+  carBox(obj, t, length) {
+    return { hx: (t?.size?.x || 1.9) / 2 + CAR_GAP, hz: (length || t?.size?.z || 4.6) / 2 + CAR_GAP, obj };
+  }
+  /** World waypoints from (ax, az) to (bx, bz) round the car `box` (carBox), as it stands now. */
+  planRound(box, ax, az, bx, bz) {
+    const o = box?.obj;
+    if (!o) return [{ x: bx, z: bz }];
+    o.updateMatrixWorld(true);
+    const a = o.worldToLocal(_v.set(ax, world.groundHeight(ax, az), az)), lax = a.x, laz = a.z;
+    const b = o.worldToLocal(_v.set(bx, world.groundHeight(bx, bz), bz)), lbx = b.x, lbz = b.z;
+    return pathRound(lax, laz, lbx, lbz, box.hx, box.hz).map((q, i, L) => {
+      if (i === L.length - 1) return { x: bx, z: bz };
+      o.localToWorld(_v.set(q.x, 0, q.z));
+      return { x: _v.x, z: _v.z };
+    });
+  }
+  /** Along `way` (world points; the first one dropped as it is reached). Returns the way still left (m). */
+  walkPath(p, way, dt) {
+    if (!way.length) { p.st.mode = 'idle'; p.st.speed = 0; return 0; }
+    let left = this.walk(p, way[0].x, way[0].z, dt);
+    if (left < 0.12 && way.length > 1) { way.shift(); left = this.walk(p, way[0].x, way[0].z, 0); }
+    for (let i = 1; i < way.length; i++) left += hyp(way[i - 1].x, way[i - 1].z, way[i].x, way[i].z);
+    return left;
   }
   posePax(dt, d) {
     const p = this.pax;
@@ -363,25 +499,33 @@ export class Taxi {
     return l - s;
   }
 
-  // out of the car (paid: true) beside its rear door, then they walk off toward their place and go
+  // out of the car (paid: true) beside its rear door (outside the box they walk round), then they walk off toward their
+  // place round the car (planRound: never through it) and go
   alight(paid) {
-    const p = this.pax, f = this.fare, d = this.drive?.d;
+    const p = this.pax, f = this.fare, d = this.myDrive() || this.drive?.d;
     if (!p) return;
     p.seated = false;
-    if (d) this.doorPoint(d, p.pos);
-    else { const pp = this.player?.pos; if (pp) p.pos.set(pp.x + 1.5, world.groundHeight(pp.x + 1.5, pp.z), pp.z); }
+    let box = null;
+    if (d) { this.doorPoint(d, p.pos); box = this.carBox(d.e.car, d.t, d.e.length); p.heading = d.yaw + (this.doorPoint(d, _door, true).x > 0 ? Math.PI / 2 : -Math.PI / 2); }
+    else {
+      const pp = this.player?.pos, car = this.myCar();
+      if (pp) p.pos.set(pp.x + 1.5, world.groundHeight(pp.x + 1.5, pp.z), pp.z);
+      if (car) box = this.carBox(car, null, 5);
+    }
     p.st.mode = 'idle'; p.st.seat = null; p.st.speed = 0;
     p.rig?.snapPose?.();
     const goal = paid && f ? { x: f.to.sx, z: f.to.sz } : { x: p.pos.x + Math.sin(p.heading) * 25, z: p.pos.z + Math.cos(p.heading) * 25 };
-    this.leaving.push({ p, goal, t: 0 });
+    this.leaving.push({ p, way: this.planRound(box, p.pos.x, p.pos.z, goal.x, goal.z), t: 0 });
     this.pax = null;
   }
-  // a passenger who never got in (cancelled, gave up): walks off and goes once out of the way
+  // a passenger who never got in (cancelled, gave up): walks off (round your car when it stands by) and goes once out of the way
   walkOff() {
     const p = this.pax;
     if (!p) return;
     p.seated = false;
-    this.leaving.push({ p, goal: { x: p.pos.x - Math.sin(p.heading) * 30, z: p.pos.z - Math.cos(p.heading) * 30 }, t: 0 });
+    const d = this.myDrive(), box = d ? this.carBox(d.e.car, d.t, d.e.length) : null;
+    const gx = p.pos.x - Math.sin(p.heading) * 30, gz = p.pos.z - Math.cos(p.heading) * 30;
+    this.leaving.push({ p, way: this.planRound(box, p.pos.x, p.pos.z, gx, gz), t: 0 });
     this.pax = null;
   }
   updateLeaving(dt) {
@@ -389,7 +533,7 @@ export class Taxi {
     for (let i = this.leaving.length - 1; i >= 0; i--) {
       const L = this.leaving[i];
       L.t += dt;
-      const left = L.t > 1.2 ? this.walk(L.p, L.goal.x, L.goal.z, dt) : 1;
+      const left = L.t > 1.2 ? this.walkPath(L.p, L.way, dt) : 1;
       if (L.t <= 1.2) { L.p.st.mode = 'idle'; L.p.st.speed = 0; }
       const far = cam ? hyp(L.p.pos.x, L.p.pos.z, cam.x, cam.z) : 999;
       if ((left < 0.3 && far > 25) || far > 120 || L.t > 40) { this.dropPax(L.p); this.leaving.splice(i, 1); continue; }
@@ -401,18 +545,22 @@ export class Taxi {
   update(dt, input) {
     if (!(dt > 0)) return;
     const live = !!input;
-    const d = this.drive?.d || null;
+    const d = this.myDrive();
     try {
-      if (d && !this.wasIn) this.hintT = this.duty || this.busy?.() ? 0 : 12;
+      // (the first time in your car each session, off duty: where the taxi job is)
+      if (d && !this.wasIn && !this.hinted && !this.duty && !this.busy?.()) { this.hintT = 8; this.hinted = true; }
       this.wasIn = !!d;
       if (live) { this.hintT = Math.max(0, this.hintT - dt); this.saidT = Math.max(0, this.saidT - dt); }
-      if (live && d && !d.crash && input.hit?.('KeyT')) this.toggle();
+      // T in your car ends the shift (going on duty is the job board's TAXI note)
+      if (live && d && !d.crash && (this.duty || this.fare) && input.hit?.('KeyT')) this.goOffDuty();
+      const wanted = !!this.chased?.();
+      if (this.fare && wanted) this.policeCancel();
       if (this.duty && !this.hasCar() && !this.fare) this.goOffDuty('Taxi duty over · no car');
       if ((this.duty || this.fare) && this.busy?.()) this.goOffDuty('Taxi shift over · you took another job');
       const f = this.fare;
       if (f && live) this.step(f, dt, d);
-      else if (this.duty && live && d && !d.crash) { this.nextT -= dt; if (this.nextT <= 0) this.dispatch(d); }
-      this.posePax(dt, this.drive?.d || null);
+      else if (this.duty && live && d && !d.crash && !wanted && !this.damageBlock()) { this.nextT -= dt; if (this.nextT <= 0) this.dispatch(d); } // (no new fares while wanted or with a damaged car)
+      this.posePax(dt, d);
       this.updateLeaving(dt);
     } catch (e) { if (!this.err) { this.err = true; console.warn('taxi', e); } }
     this.meter();
@@ -439,13 +587,14 @@ export class Taxi {
         if (d && this.pax && hyp(d.x, d.z, this.pax.pos.x, this.pax.pos.z) < 40) this.pax.heading = Math.atan2(d.x - this.pax.pos.x, d.z - this.pax.pos.z);
         return;
       }
-      // boarding: walking to the rear door; you drive off, they stop where they are and wait
+      // boarding: walking round the car (the shorter way, round the bonnet or the boot; planned afresh each frame from
+      // where they are, so a creeping car is followed) to its back door; you drive off, they stop where they are and wait
       const p = this.pax;
       if (!d || d.crash || !p) { f.phase = 'pickup'; return; }
       if (sp > 2.5) { f.phase = 'pickup'; p.st.mode = 'idle'; p.st.speed = 0; f.from = { ...f.from, sx: p.pos.x, sz: p.pos.z }; return; }
-      const door = this.doorPoint(d, _v);
-      const left = this.walk(p, door.x, door.z, dt);
-      if (left < 0.4 || f.t > 12) {
+      const door = this.doorPoint(d, _door);
+      const left = this.walkPath(p, this.planRound(this.carBox(d.e.car, d.t, d.e.length), p.pos.x, p.pos.z, door.x, door.z), dt);
+      if (left < 0.4 || f.t > 25) {
         p.seated = true; p.rig?.snapPose?.();
         f.phase = 'ride'; f.t = 0; f.dmg = d.e.damage || 0;
         this.audio?.play('click');
@@ -454,6 +603,8 @@ export class Taxi {
       return;
     }
     if (f.phase !== 'ride') return;
+    // cancelled by the police: out as soon as you stop (or get out), nothing paid
+    if (f.cancel) { if (!d || (!d.crash && sp < STOP_V)) this.cancelOut(f); return; } // (a wreck: once it lies still and you are out)
     // riding
     if (!d) {
       // out of the car: wrecked (they leave, no pay), at the destination (paid), anywhere else they wait a little
@@ -469,6 +620,7 @@ export class Taxi {
     if (d.crash) { f.wreck = true; return; } // (out once the wreck comes to rest: drive.js wreckOut)
     f.km += (sp * dt) / 1000;
     f.rideT += dt;
+    if (!f.late && f.rideT > f.limit) { f.late = true; this.say(f.name, pick(LINES.overdue), 'bad'); }
     // knocks and crashes: the car's damage jumping (drive.js knock / crash)
     const dmg = d.e.damage || 0;
     if (dmg > f.dmg + 0.5) {
@@ -490,44 +642,51 @@ export class Taxi {
     const base = Math.max(TARIFF.min, this.fareNow(f));
     const cut = Math.min(0.7, f.knocks * 0.12 + f.crashes * 0.3);
     const fare = Math.round(base * (1 - cut));
-    const smooth = !f.knocks && !f.crashes && !f.scary, quick = f.rideT <= f.estT;
+    const smooth = !f.knocks && !f.crashes && !f.scary, quick = !f.late && f.rideT <= f.estT;
     let tipK = 0;
-    if (!f.crashes) tipK = (quick ? TARIFF.tipQuick : 0) + (smooth ? TARIFF.tipSmooth + Math.random() * 0.05 : 0);
-    const tip = Math.round(base * tipK);
-    const pay = fare + tip;
-    this.say(f.name, pick(tipK > 0.12 ? LINES.thanks : cut > 0 ? LINES.meh : LINES.thanks), cut > 0 ? 'bad' : 'good');
+    if (!f.crashes && !f.late) tipK = (quick ? TARIFF.tipQuick : 0) + (smooth ? TARIFF.tipSmooth + Math.random() * 0.05 : 0);
+    const pay = Math.max(1, Math.round(fare * (f.late ? 1 - TARIFF.lateCut : 1) + base * tipK));
+    // what you see (Oct 30, the user): only the amount and the passenger's own reason, never the sum behind it
+    const why = pick(f.crashes ? LINES.paidCrash : f.late ? LINES.paidSlow : f.knocks ? LINES.paidBumpy : f.scary ? LINES.paidScary
+      : quick && smooth ? LINES.paidGreat : quick ? LINES.paidFast : smooth ? LINES.paidSmooth : LINES.paidOk);
+    const good = !f.crashes && !f.late && !f.knocks && !f.scary;
+    this.said = `${f.name}: "${why}"`; this.saidT = 6; this.sayBad = !good;
     this.alight(true);
     this.fare = null;
     this.nextT = 5 + Math.random() * 6;
     this.shift.fares++; this.shift.earned += pay;
-    try { this.earn?.(pay, `Taxi fare · ${f.to.name}`); } catch (e) { console.warn('taxi pay', e); }
-    const parts = [`Fare ${money(fare)}`];
-    if (cut > 0) parts.push(`−${Math.round(cut * 100)}% for the bumps`);
-    if (tip) parts.push(`tip ${money(tip)}`);
-    setTimeout(() => this.hud?.flash(`${parts.join(' · ')} · ${money(pay)}`, 'gold', 3400), 1800);
+    try { this.earn?.(pay, 'Taxi fare'); } catch (e) { console.warn('taxi pay', e); }
+    this.hud?.flash(`+${money(pay)} · '${why}'`, good ? 'gold' : 'bad', 4200);
   }
 
   // ------------------------------------------------------------------ HUD, waypoint, map
   hudLine() {
-    const f = this.fare, d = this.drive?.d;
+    const f = this.fare, d = this.myDrive();
     if (f) {
       if (f.phase === 'pickup') return d ? `Taxi · pick up ${f.name} at ${f.from.name} · ${Math.max(0, Math.ceil(f.patience / 60))} min` : `Taxi · get back in your car · ${f.name} is waiting`;
       if (f.phase === 'board') return `Taxi · ${f.name} is getting in`;
+      if (f.cancel) return `Taxi cancelled · stop and let ${f.name} out`;
       if (!d) return `Taxi · ${f.name} is waiting in your car · get back in`;
-      return `Taxi · take ${f.name} to ${f.to.name}`;
+      const left = f.limit - f.rideT;
+      return `Taxi · take ${f.name} to ${f.to.name} · ${left > 0 ? mmss(left) + ' left' : 'running late'}`;
     }
-    if (this.duty) return d ? 'Taxi · on duty · waiting for a fare (T: off duty)' : 'Taxi duty · get in your car';
-    if (d && this.hintT > 0) return 'Press T to go on taxi duty and earn fares';
+    const dmg = this.duty ? this.damageBlock() : '';
+    if (dmg) return `Taxi · ${dmg}`;
+    if (this.duty && d && this.chased?.()) return 'Taxi · no fares while the police are after you';
+    if (this.duty) return d ? 'Taxi · on duty · waiting for a fare (T: off duty)' : this.myCar() ? 'Taxi duty · get in your car' : 'Taxi duty · take a car out at the Autohaus (MY CARS)';
+    if (d && this.hintT > 0) return 'Earn fares with your car: take the TAXI note at any job board';
     return '';
   }
   waypoint(pos) {
     const f = this.fare, w = this._wp;
     if (f) {
       if (f.phase === 'ride') { w.x = f.to.x; w.z = f.to.z; w.label = f.to.name; return w; }
-      if (f.phase === 'pickup' && !this.drive?.d && this.carRental?.current?.car) { const c = this.carRental.current.car.position; w.x = c.x; w.z = c.z; w.label = 'Your car'; return w; }
+      const car = this.myDrive() ? null : this.myCar();
+      if (f.phase === 'pickup' && car) { w.x = car.position.x; w.z = car.position.z; w.label = 'Your car'; return w; }
       w.x = f.from.x; w.z = f.from.z; w.label = `${f.name} · ${f.from.name}`; return w;
     }
-    if (this.duty && !this.drive?.d && this.carRental?.current?.car) { const c = this.carRental.current.car.position; w.x = c.x; w.z = c.z; w.label = 'Your car'; return w; }
+    const car = this.duty && !this.myDrive() ? this.myCar() : null;
+    if (car) { w.x = car.position.x; w.z = car.position.z; w.label = 'Your car'; return w; }
     void pos;
     return null;
   }
@@ -543,7 +702,7 @@ export class Taxi {
   // patience; waiting for a fare: FOR HIRE
   meter() {
     if (typeof document === 'undefined') return;
-    const f = this.fare, d = this.drive?.d;
+    const f = this.fare, d = this.myDrive();
     const phase = !d || d.crash ? '' : f ? (f.phase === 'ride' ? 'ride' : 'pick') : this.duty ? 'idle' : '';
     if (!phase) { if (this.el && !this.el.hidden) this.el.hidden = true; return; }
     if (!this.el) {
@@ -565,14 +724,15 @@ export class Taxi {
     const v = this._tmv ||= new Array(13).fill('');
     if (phase === 'ride') {
       v[0] = 'METER RUNNING'; v[1] = `$${this.fareNow(f).toFixed(2)}`;
-      v[2] = 'DISTANCE'; v[3] = `${f.km.toFixed(2)} km`; v[4] = 'TIME'; v[5] = mmss(f.rideT);
+      const left = f.limit - f.rideT;
+      v[2] = 'DISTANCE'; v[3] = `${f.km.toFixed(2)} km`; v[4] = left > 0 ? 'TIME LEFT' : 'LATE'; v[5] = mmss(Math.abs(left));
       v[6] = 'TO'; v[7] = f.to.name; v[8] = far(hyp(d.x, d.z, f.to.x, f.to.z));
       v[9] = 'PASSENGER'; v[10] = f.name; v[11] = '';
-      v[12] = f.surcharge ? `incl. $${f.surcharge} mountain surcharge` : '';
+      v[12] = left > 0 ? '' : `${f.name} is running late`;
     } else if (phase === 'pick') {
       const px = this.pax?.pos.x ?? f.from.sx ?? f.from.x, pz = this.pax?.pos.z ?? f.from.sz ?? f.from.z;
       v[0] = f.phase === 'board' ? 'GETTING IN' : 'PICK UP'; v[1] = f.phase === 'board' ? 'Boarding…' : far(hyp(d.x, d.z, px, pz));
-      v[2] = 'WAITING'; v[3] = mmss(Math.max(0, f.patience)); v[4] = 'FLAG FALL'; v[5] = money(TARIFF.flag);
+      v[2] = 'WAITING'; v[3] = mmss(Math.max(0, f.patience)); v[4] = 'TRIP'; v[5] = far(hyp(f.from.x, f.from.z, f.to.x, f.to.z));
       v[6] = 'AT'; v[7] = f.from.name; v[8] = '';
       v[9] = 'PASSENGER'; v[10] = f.name; v[11] = '';
       v[12] = f.phase === 'board' ? '' : 'Stop beside them and they get in';
@@ -580,7 +740,7 @@ export class Taxi {
       v[0] = 'ON DUTY'; v[1] = 'FOR HIRE';
       v[2] = 'FARES'; v[3] = String(this.shift?.fares || 0); v[4] = 'EARNED'; v[5] = money(this.shift?.earned || 0);
       v[6] = ''; v[7] = ''; v[8] = ''; v[9] = ''; v[10] = ''; v[11] = '';
-      v[12] = 'Waiting for the dispatcher · T: off duty';
+      v[12] = this.damageBlock() || (this.chased?.() ? 'No fares while the police are after you' : 'Waiting for the dispatcher · T: off duty');
     }
     const E = this.tm;
     for (let k = 0; k < 12; k++) if (E[k].textContent !== v[k]) E[k].textContent = v[k];

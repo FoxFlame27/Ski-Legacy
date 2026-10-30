@@ -121,7 +121,7 @@ export class CarRental {
     } catch (e) { console.warn('tow trucks', e); this.truck = null; }
     // drive.js: only your own car lets you in; a wreck of it: the repair bill and the truck
     if (o.drive) {
-      o.drive.locked = (e) => (e.rental || e.free ? null : 'Buy a car at the Autohaus in Legacy Village');
+      o.drive.locked = (e) => (e.rental ? null : 'Buy a car at the Autohaus in Legacy Village');
       o.drive.onWreck = (e) => this.wrecked(e);
       // getting into another of your cars parked in the world: it becomes the one out
       const enter = o.drive.enter.bind(o.drive);
@@ -132,6 +132,7 @@ export class CarRental {
     try { this.ownerTags = new OwnerTags({ scene: o.scene, camera: o.camera, rental: this }); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     // the save: your garage, the car that is out back in your bay
     this.migrate();
+    this.purgeAdminCars();
     if (o.save.rental) { try { this.current = this.spawn(o.save.rental); } catch (e) { console.warn('rental car', e); } }
     this.spawnKept();
   }
@@ -141,7 +142,10 @@ export class CarRental {
    *  known models only), save.rental the garage's entry with its plate (or null). Multiplayer: the profile's cars. */
   migrate() {
     const S = this.save;
-    const fix = (c) => { if (!c || typeof c !== 'object') return null; if (RETIRED[c.id]) c = { ...c, id: RETIRED[c.id] }; return RENTALS.some((r) => r.id === c.id) ? normConfig(c) : null; };
+    // (Oct 30, the user: "remove all admin spawned cars"): the old admin panel's free cars (spawnFree, gone) were never
+    // yours: any trace of one in a save (freeCar, a car marked free / admin) is dropped, never brought back
+    delete S.freeCar; delete S.adminCar;
+    const fix = (c) => { if (!c || typeof c !== 'object' || c.free || c.admin) return null; if (RETIRED[c.id]) c = { ...c, id: RETIRED[c.id] }; return RENTALS.some((r) => r.id === c.id) ? normConfig(c) : null; };
     const g = [];
     for (const c of [...(Array.isArray(S.garage) ? S.garage : []), S.rental]) { const n = fix(c); if (n && !g.some((x) => x.plate === n.plate)) g.push(n); }
     S.garage = g;
@@ -297,12 +301,12 @@ export class CarRental {
   // ------------------------------------------------------------------ rental cars (parking entries drive.js can drive)
   // cfg: carconfig.js normConfig() (the car, its paint, interior, rims, plate): the car in the yard is exactly that one,
   // and so is every look of it drive.js makes (e.dress: driving, the full-detail cockpit)
-  spawn(cfg, p = this.carSpot, free = false) {
+  spawn(cfg, p = this.carSpot) {
     const id = cfg.id, spec = RENTALS.find((c) => c.id === id), gltf = this.models[id];
     if (!spec || !gltf || !this.parking || !p) return null;
-    if (p === this.carSpot && !free) p = this.impound?.freeBay?.() || this.yardSpot() || p; // (a bay no other car stands in: another of yours, another player's; none left: the yard's bays in front of the hall)
+    if (p === this.carSpot) p = this.impound?.freeBay?.() || this.yardSpot() || p; // (a bay no other car stands in: another of yours, another player's; none left: the yard's bays in front of the hall)
     const t = carTemplate(gltf, spec.length, id), inst = dressCar(carInstance(t, { wheels: true }), t, cfg), car = inst.group;
-    car.name = free ? 'admin-car' : 'rental-car';
+    car.name = 'rental-car';
     car.position.set(p.x, world.height(p.x, p.z) + 0.03, p.z); car.rotation.y = p.yaw;
     (this.parking.group.parent ? this.parking.group : this.scene).add(car);
     const collider = { x: p.x, z: p.z, hw: 0.97, hd: spec.length / 2, rot: -p.yaw, h: 1.7, car: true };
@@ -310,12 +314,12 @@ export class CarRental {
     const block = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.5, spec.length - 0.1), new THREE.MeshBasicMaterial());
     block.position.y = 0.8; block.visible = false; car.add(block); car.updateMatrixWorld(true);
     this.cameraBlockers?.push(block);
-    const e = { car, inst, t, far: null, full: car.children[0], name: id, length: spec.length, paint: paintHex(cfg.paint), paintId: cfg.paint, cfg, collider, block, held: [], rental: !free, free, home: { x: p.x, z: p.z, yaw: p.yaw } };
+    const e = { car, inst, t, far: null, full: car.children[0], name: id, length: spec.length, paint: paintHex(cfg.paint), paintId: cfg.paint, cfg, collider, block, held: [], rental: true, home: { x: p.x, z: p.z, yaw: p.yaw } };
     e.dress = (i, tt) => dressCar(i, tt, e.cfg);
     (this.parking.cars ||= []).push(e);
     if (this.drive) this.drive._cc = null; // (drive.js re-collects the cars' colliders)
-    if (!free) { this.impound?.claim?.(e); this.impound?.adopt(e); } // (its bay taken; towed: in its impound bay, locked until tomorrow)
-    if (!free) this.restoreDamage(e); // (its dents and damage as you left them)
+    this.impound?.claim?.(e); this.impound?.adopt(e); // (its bay taken; towed: in its impound bay, locked until tomorrow)
+    this.restoreDamage(e); // (its dents and damage as you left them)
     return e;
   }
   /** A free bay in the yard in front of the hall (YARD.bayLines: three), when the car park has none left. */
@@ -327,20 +331,14 @@ export class CarRental {
     }
     return null;
   }
-  // admin panel (ui/admin.js): a free car of a random model from the fleet, parked at { x, z, yaw }; yours to drive
-  // like a rental, no fee (a wreck of it: just towed away). One at a time: the last one goes when a new one comes.
-  spawnFree(spot) {
-    const kinds = RENTALS.filter((c) => this.models[c.id]);
-    if (!kinds.length || !spot) return null;
-    const spec = kinds[Math.floor(Math.random() * kinds.length)];
-    const paint = PAINTS[Math.floor(Math.random() * PAINTS.length)]?.id;
-    if (this.freeCar && !this.freeCar.driving && !this.freeCar.wrecked) this.remove(this.freeCar);
-    const e = this.spawn(normConfig({ id: spec.id, paint }), spot, true);
-    if (!e) return null;
-    this.freeCar = e;
-    if (Number.isFinite(spot.y)) { e.car.position.y = spot.y + 0.03; e.car.updateMatrixWorld(true); } // (the ground you stand on: a road, a bridge)
-    e.label = spec.label;
-    return e;
+  // (the admin panel's free cars, spawnFree, are gone: Oct 30, the user "remove all admin spawned cars"; every car in
+  // the world now is one somebody bought). Any left in the world (an old 'admin-car', e.free) goes, on load and on join.
+  purgeAdminCars() {
+    for (const e of (this.parking?.cars || []).slice()) {
+      if (!e || !(e.free || e.car?.name === 'admin-car') || e.driving) continue;
+      try { this.remove(e); } catch (err) { console.warn('admin car', err); }
+    }
+    this.freeCar = null;
   }
   // ------------------------------------------------------------------ crash damage, kept (Oct 30, the user: "when you
   // leave your car, the damage should be saved"): each car of yours keeps its dents, smashed lamps and damage % when you
@@ -513,6 +511,7 @@ export class CarRental {
     for (const k of this.kept.slice()) if (!k.driving) { try { this.remove(k); } catch (e) { console.warn('rental car', e); } }
     this.kept = this.kept.filter((k) => k.driving);
     this.migrate();
+    this.purgeAdminCars();
     if (this.save.rental) { try { this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } }
     this.spawnKept();
   }

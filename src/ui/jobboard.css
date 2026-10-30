@@ -112,6 +112,11 @@
 .jb-fact { display: flex; flex-direction: column; gap: calc(var(--u) * 4); font: 800 calc(var(--u) * 10)/1 var(--ui); letter-spacing: 0.14em; text-transform: uppercase; color: #8a93a8; }
 .jb-fact b { font: italic 700 calc(var(--u) * 26)/1 var(--num); letter-spacing: 0.01em; text-transform: none; color: var(--blue); }
 .jb-fact b.tip { color: var(--ok); }
+/* a note you cannot take yet (the taxi without a car of your own): greyed out, its reason stamped on it */
+.jb-note.locked { filter: grayscale(1) drop-shadow(0 calc(var(--u) * 5) calc(var(--u) * 7) rgba(50, 22, 2, 0.3)); opacity: 0.62; }
+.jb-note.locked:hover { opacity: 0.8; }
+.jb-lock { position: absolute; top: calc(var(--u) * 10); right: calc(var(--u) * 10); padding: calc(var(--u) * 3) calc(var(--u) * 8); background: #3a3a3a; color: #fff;
+  font: 800 var(--t-xs)/1.2 var(--ui); letter-spacing: 0.06em; text-transform: uppercase; transform: rotate(4deg); max-width: 60%; text-align: center; }
 .jb-note-busy { font: 700 var(--t-sm)/1.35 var(--ui); color: var(--ko); }
 .jb-card .jb-acts { flex-direction: row; gap: calc(var(--u) * 14); margin-top: calc(var(--u) * 6); }
 .jb-card .jb-acts .jb-btn { flex: 1 0 auto; width: auto; }

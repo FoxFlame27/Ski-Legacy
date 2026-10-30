@@ -52,7 +52,7 @@ import { Hospital } from './game/hospital.js'; // the medical centre the ambulan
 import { Traffic } from './game/traffic.js'; // cars driving the roads (vehicles agent)
 import { Drive } from './game/drive.js'; // drive the parked cars yourself (vehicles agent)
 import { CarRental } from './game/carrental.js'; // AUTOHAUS (was the car rental): buy cars (showroom inside), your garage, the repair bill, the tow truck
-import { Taxi } from './game/taxi.js'; // LEGACY TAXI: drive fares in your car (the board's TAXI note, or T in the car)
+import { Taxi } from './game/taxi.js'; // LEGACY TAXI: drive fares in your own car (a job: the board's TAXI note, once you own a car)
 import { Police } from './game/police.js'; // POLICE: hit something while driving and they come after you (game/police.js)
 import { HospitalWard } from './game/hospitalroom.js'; // the medical centre inside: wake up in a hospital bed, visits (game/hospitalroom.js)
 import { Prison } from './game/prison.js'; // the village police station: jail(seconds, reason), visits (game/prison.js)
@@ -407,7 +407,8 @@ async function boot() {
   // taxi fares in your own car: paid as jobs (multiplayer: the server's 'job' payout)
   try {
     if (drive) {
-      taxi = new Taxi({ scene, player, drive, carRental, jobs, hud, audio, layout, earn: (amount, label) => earn(amount, label, 'job'), busy: () => !!jobs?.job });
+      taxi = new Taxi({ scene, player, drive, carRental, jobs, hud, audio, layout, earn: (amount, label) => earn(amount, label, 'job'), busy: () => !!jobs?.job,
+        chased: () => !!police?.active || !!prison?.active }); // (wanted: the police after you, a chase, jail: the fare is cancelled, no new ones)
       jobs.extraOffers = () => [taxi.boardOffer()];
     }
   } catch (e) { console.warn('taxi: ' + (e?.stack || e)); taxi = null; }

@@ -4,8 +4,9 @@
 // a bigger card with TAKE THE JOB / BACK. Your current job hangs on the board as a yellow note with
 // CANCEL JOB. Esc or a click beside the board closes it (and backs out of a card first).
 // While it is open it blocks the game like a panel (hud.setBlocking): no input, no pause menu on Esc.
+// A locked note (locked: true, the taxi without a car of your own) is greyed out: it reads, its button says lockText.
 // The job logic stays in src/game/jobs.js, which hands over plain data and callbacks:
-//   open({ place, offers: [{ id, type, title, brief, client, reward, bonus, minutes, diff }],
+//   open({ place, offers: [{ id, type, title, brief, client, reward, bonus, minutes, diff, locked?, lockText? }],
 //          current: { title, type, status, client } | null, take(id), cancel(), close() })
 import './jobboard.css';
 import { brushSVG, brushClip, esc } from './menu.js';
@@ -117,9 +118,10 @@ export class JobBoardUI {
 
   noteHTML(o, i, busy) {
     const tip = o.bonus ? '<small>+ TIP</small>' : '';
-    return `<button class="jb-note${busy ? ' busy' : ''}" data-id="${esc(o.id)}" title="${busy ? 'Finish or cancel your current job first' : ''}"
+    const title = busy ? 'Finish or cancel your current job first' : o.locked ? o.lockText || '' : '';
+    return `<button class="jb-note${busy ? ' busy' : ''}${o.locked ? ' locked' : ''}" data-id="${esc(o.id)}" title="${esc(title)}"
         style="--r:${TILT[i % TILT.length]}deg;--clip:${brushClip(31 + i * 7, 5, 3)};--d:${(0.06 + i * 0.06).toFixed(2)}s">
-        <i class="jb-pin" style="--pin:${PINS[i % PINS.length]}"></i>
+        <i class="jb-pin" style="--pin:${PINS[i % PINS.length]}"></i>${o.locked ? `<span class="jb-lock">${esc(o.lockText || 'Locked')}</span>` : ''}
         <div class="jb-kind">${ICONS[o.type] || ''}${esc(KIND[o.type] || 'Job')}</div>
         <h3 class="jb-title">${esc(o.title)}</h3>
         <p class="jb-brief">${esc(o.brief)}</p>
@@ -131,7 +133,7 @@ export class JobBoardUI {
   showDetail(id) {
     const v = this.view, o = v.offers.find((x) => String(x.id) === String(id));
     if (!o) return;
-    const busy = !!v.current;
+    const busy = !!v.current, locked = !busy && !!o.locked;
     const d = this.el.querySelector('.jb-detail');
     d.innerHTML = `<div class="jb-card" style="--clip:${brushClip(57, 7, 4)}">
         <i class="jb-pin" style="--pin:${PINS[v.offers.indexOf(o) % PINS.length]}"></i>
@@ -145,15 +147,15 @@ export class JobBoardUI {
           <span class="jb-fact">Time<b>${esc(o.minutes)}</b></span>
           <span class="jb-fact">Difficulty<b>${diffHTML(o.diff)}</b></span>
         </div>
-        ${busy ? '<div class="jb-note-busy">You are already on a job: finish it or cancel it first.</div>' : ''}
+        ${busy ? '<div class="jb-note-busy">You are already on a job: finish it or cancel it first.</div>' : locked ? `<div class="jb-note-busy">${esc(o.lockText || 'Not available yet')}</div>` : ''}
         <div class="jb-acts">
-          <button class="jb-btn" data-take ${busy ? 'disabled' : ''}>${brushSVG(61, 300, 60, { fill: '#1546c8' })}<span>${esc(o.takeText || 'TAKE THE JOB')}</span></button>
+          <button class="jb-btn" data-take ${busy || locked ? 'disabled' : ''}>${brushSVG(61, 300, 60, { fill: '#1546c8' })}<span>${esc(o.takeText || 'TAKE THE JOB')}</span></button>
           <button class="jb-btn light" data-back>${brushSVG(62, 300, 60, { fill: '#e9eefb' })}<span>BACK</span></button>
         </div></div>`;
     d.hidden = false;
     d.querySelector('[data-take]').onclick = (e) => {
       e.stopPropagation();
-      if (busy) return;
+      if (busy || locked) { this.audio?.play?.('error'); return; }
       this.audio?.play?.('click');
       const take = v.take;
       this.close('take');

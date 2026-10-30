@@ -6,6 +6,7 @@ import { layout } from './layout.js';
 import { fitModel } from '../core/assets.js';
 import { meshHeight } from '../fx/snowfx.js';
 import { propSeats } from '../game/seating.js';
+import { busRoads, laneDistance, ROAD_HALF } from '../game/bus/roads.js';
 
 // Cobblestones with snow packed into the joints; edges of the strip fade into the snow (alpha).
 function cobbleTexture() {
@@ -81,6 +82,26 @@ export class Decor {
       for (let k = 0; k < n; k++) pts.push([ax + ((bx - ax) * k) / n, az + ((bz - az) * k) / n]);
     }
     pts.push(points[points.length - 1]);
+    // a path never runs over a road or a car park: it stops a little short of the plowed edge on each side
+    const offRoad = ([x, z]) => {
+      if (laneDistance(x, z) < ROAD_HALF + width / 2 + 0.4) return false;
+      for (const L of busRoads.lots) {
+        if (L.ux === undefined) continue;
+        const dx = x - L.x, dz = z - L.z;
+        if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + width / 2 + 0.4 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + width / 2 + 0.4) return false;
+      }
+      return true;
+    };
+    if (busRoads.roads.length && !pts.every(offRoad)) {
+      let run = [];
+      for (const q of pts) {
+        if (offRoad(q)) { run.push(q); continue; }
+        if (run.length > 1) this.path(run, width);
+        run = [];
+      }
+      if (run.length > 1) this.path(run, width);
+      return;
+    }
     const pos = [], uv = [], idx = [];
     let v = 0;
     for (let i = 0; i < pts.length; i++) {

@@ -95,20 +95,21 @@ export class Modes {
    *  modes/parkour/freeworld.js): the same session as RACE (14 AI, intro, checkpoints, results), no teleport to a
    *  far map and no course atmosphere. o.result({ place, time, dnf }) -> prize money shown on the results card;
    *  o.retry() -> false when RACE AGAIN can't be paid. After the finish BACK TO START takes you up to the start again. */
-  startFree(courseId, { difficulty = 'medium', result, retry, prizeMult, bots, syncGo, grid, others, mp } = {}) {
+  startFree(courseId, { difficulty = 'medium', result, retry, prizeMult, bots, syncGo, grid, others, mp, home } = {}) {
     this.end();
-    const course = getCourse(courseId);
+    // (a course object: a race laid on a piste, the ski bus's free races: modes/race/busraces.js)
+    const course = typeof courseId === 'object' && courseId ? courseId : getCourse(courseId);
     this.group = course.build(this.scene, this.models); // (the free world built it already: reused)
     if (this.group && !this.group.parent) this.scene.add(this.group);
     this.course = course;
-    this.current = { mode: 'race', courseId: course.id, difficulty, free: true, retry };
+    this.current = { mode: 'race', courseId: course.id, difficulty, free: true, retry, home }; // (home: { label, place() } instead of BACK TO START)
     this.session = new RaceSession({
       scene: this.scene, course, mode: 'race', difficulty, botCount: bots ?? this.botCount, // (multiplayer: bots 0, syncGo: the shared start)
       player: this.player, makeRig: this.makeRig, botCharacters: this.botCharacters(),
       audio: this.audio, hud: this.hud, raceHud: this.raceHud, trails: this.trails, spray: this.spray,
       save: this.save, writeSave: this.writeSave, stream: this.stream, syncGo, grid, mp, // (multiplayer: grid { slot, n }, the server's; mp: the field and the result)
       weather: () => window.__game?.env?.weatherLabel,
-      freeRide: { result, prizeMult, others }, // (prizeMult: the AI field's prize factor; others: multiplayer, the other racers' rows)
+      freeRide: { result, prizeMult, others, backLabel: home?.label }, // (prizeMult: the AI field's prize factor; others: multiplayer, the other racers' rows)
       onExit: (choice) => this.exitFree(choice),
     });
     this.session.start();
@@ -125,11 +126,12 @@ export class Modes {
     // CONTINUE: back up to the course's start (Oct 27, the user: "if you're done racing you return to the start of
     // the race, rn you're stuck at the end of the race and have to walk all the way back up"): you stand at the start
     // wand again, E races it again (or ski the course on your own)
-    const s = this.session, c = this.course, s0 = c?.start?.s;
+    const s = this.session, c = this.course, s0 = c?.start?.s, home = this.current.home;
     await this.transition.fade(async () => {
       this.end();
       try {
-        if (s && Number.isFinite(s0)) { s.placePlayer(s0, 0, 0); await this.stream?.(this.player.pos.x, this.player.pos.z); }
+        if (home?.place) await home.place(); // (a bus race: back to its board beside the bus stop)
+        else if (s && Number.isFinite(s0)) { s.placePlayer(s0, 0, 0); await this.stream?.(this.player.pos.x, this.player.pos.z); }
       } catch (e) { console.warn('Race: back to the start failed', e); }
     });
     // (the course stays standing: the free world drops its meshes once you are far away)

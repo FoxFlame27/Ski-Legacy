@@ -484,6 +484,47 @@ try {
     for (const p of P.slice(0, 3)) p.f.close();
     await sleep(100);
   }
+  {
+    // the ski bus's free races (catalog races[id].bus): free entry even in debt, one racer starts one, every finisher paid
+    console.log('bus races');
+    const bus = Object.entries(CATALOG.races).filter(([, d]) => d.bus);
+    ok(bus.length === 3 && bus.every(([, d]) => d.entry === 0 && d.need === 1 && d.par > 0 && d.reward >= 1000 && d.reward <= 1500),
+      'three bus races in the catalog: free entry, one racer may start one, a par time, a modest prize ($1,000-1,500)');
+    const [id, def] = bus[0];
+    const B = await racer('Bea');
+    const m0 = (server.profileOf('bea').money = -2500); // (deep in debt)
+    const jq = await B.f.req('raceJoin', { race: id });
+    ok(jq.ok && jq.d.need === 1 && jq.d.waitMs === 20000, 'a broke player joins a bus race queue (need 1, a 20 s countdown)');
+    const q1 = B.world.queues.get(id);
+    ok(q1 && q1.startAt > 0, 'alone in the queue: the countdown runs (no second racer needed)');
+    clearTimeout(q1.timer); B.world.startRace(id); // (the countdown's end, now)
+    const st = await B.f.next('raceStart', (d) => d.race === id);
+    ok(st && st.grid.length === 1 && server.profileOf('bea').money === m0, 'the solo bus race starts and takes no entry fee (money still -$2,500)');
+    const r = B.world.races.get(st.rid);
+    r.at = Date.now() - (def.par - 5000); // (home 5 s under par)
+    await B.f.req('raceFinish', { rid: st.rid, raw: def.par - 5000, pen: 0 });
+    const res = await B.f.next('raceResult', (d) => d.rid === st.rid);
+    const under = Math.round(def.reward * def.parShare);
+    ok(res && res.order[0].prize === under && server.profileOf('bea').money === m0 + under, `alone, under par: paid by the time (${def.parShare * 100} %: $${under}), not as a win`);
+    // two racers: the winner gets the full prize, the second (nobody behind) the time prize; over par 30 %
+    const C = await racer('Cass');
+    await B.f.req('raceJoin', { race: id });
+    await C.f.req('raceJoin', { race: id });
+    const q2 = B.world.queues.get(id);
+    clearTimeout(q2.timer); B.world.startRace(id);
+    const st2 = await B.f.next('raceStart', (d) => d.race === id && d.grid.length === 2);
+    const r2 = B.world.races.get(st2.rid);
+    r2.at = Date.now() - (def.par + 20000);
+    const mB = server.profileOf('bea').money, mC = server.profileOf('cass').money;
+    await C.f.req('raceFinish', { rid: st2.rid, raw: def.par + 19000, pen: 0 });
+    await B.f.req('raceFinish', { rid: st2.rid, raw: def.par + 20000, pen: 0 });
+    const res2 = await B.f.next('raceResult', (d) => d.rid === st2.rid);
+    const over = Math.round(def.reward * def.rest);
+    ok(res2 && res2.order[0].name === 'Cass' && res2.order[0].prize === def.reward && res2.order[1].prize === over, `two racers: the winner $${def.reward}, the second over par $${over}`);
+    ok(server.profileOf('cass').money === mC + def.reward && server.profileOf('bea').money === mB + over, 'the server paid both');
+    for (const p of [B, C]) p.f.close();
+    await sleep(100);
+  }
 
   // ---------------------------------------------------------------- alone: multiplayer still works (world of 1)
   const solo = new Fake(url);

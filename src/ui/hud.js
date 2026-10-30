@@ -285,7 +285,8 @@ export class HUD {
     const prizes = () => {
       const r = prize();
       return `<div class="stat">1st place<b>$${fmtMoney(r)}</b></div>
-        <div class="stat">2nd / 3rd<b>$${fmtMoney(Math.round(r * (race.shares?.[1] ?? 0.4)))} / $${fmtMoney(Math.round(r * (race.shares?.[2] ?? 0.15)))}</b></div>`;
+        <div class="stat">2nd / 3rd<b>$${fmtMoney(Math.round(r * (race.shares?.[1] ?? 0.4)))} / $${fmtMoney(Math.round(r * (race.shares?.[2] ?? 0.15)))}</b></div>${race.finisher ? `
+        <div class="stat">Any finish<b>${race.finisher}</b></div>` : ''}`; // (a bus race: every finisher is paid)
     };
     const aiRow = ai ? `<div class="sub" style="margin-top:12px">AI field · the harder the rivals, the bigger the prize</div>
       <div class="ri-ai" style="display:flex;gap:8px;margin-top:6px">${ai.levels.map((l) => `<button class="btn${l.key === pick ? ' primary' : ''}" data-ai="${l.key}" style="flex:1 1 0;min-width:0;padding-left:4px;padding-right:4px">${l.label}<small style="display:block;opacity:0.8;font-size:11px">×${l.mult} · $${fmtMoney(ai.prizeOf(l.key))}</small></button>`).join('')}</div>` : '';

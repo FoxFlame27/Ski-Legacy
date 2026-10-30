@@ -23,6 +23,7 @@ export const TICK_HZ = 15;                 // presence batches per second
 export const DAY_MS = 16 * 60 * 1000;      // one game day (sky.js DAY_SECONDS)
 export const HELI_COPY_MS = 5 * 60 * 1000; // a rental out this long: a new copy waits at the pad
 export const RACE_WAIT_MS = 45 * 1000;     // queue countdown once 2 are in (Oct 30, the user: 45 s, never at once)
+export const BUS_RACE_WAIT_MS = 20 * 1000; // a bus race (catalog races[id].bus: free entry, one racer may start it): its countdown
 export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ahead (everyone counts down together)
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
 export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
@@ -74,6 +75,16 @@ const VEH_KINDS = ['car', 'heli', 'tow', 'police', 'rescue', 'sled'];
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+// race queues: how many racers start a race (a bus race: 1, else 2) and its countdown once they are in
+const raceNeed = (race) => CATALOG.races[race]?.need ?? 2;
+const raceWait = (race) => (CATALOG.races[race]?.bus ? BUS_RACE_WAIT_MS : RACE_WAIT_MS);
+// a bus race's prize (src/modes/race/busracedefs.js busRacePrize): the podium shares while someone is behind you,
+// else every finisher is paid by the time against par (ms)
+export function busPrize(def, i, n, time) {
+  const sh = def.shares || [1, 0.7, 0.5];
+  const share = i < sh.length && i < n - 1 ? sh[i] : isNum(time) && time <= (def.par || 0) ? def.parShare ?? 0.4 : def.rest ?? 0.3;
+  return Math.round((def.reward || 0) * share);
+}
 const CANTONS = ['VS', 'GR', 'BE', 'UR', 'OW', 'TI', 'ZH', 'LU'];
 export const cleanPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 \-]/g, '').replace(/\s+/g, ' ').replace(/^[ -]+/, '').slice(0, 8).trim();
 const plateKey = (s) => cleanPlate(s).replace(/[ -]/g, '');
@@ -309,7 +320,7 @@ class World {
   // ---------------------------------------------------------------- race queues and races
   queueMsg(race) {
     const q = this.queues.get(race);
-    return { race, n: q ? q.members.length : 0, names: q ? q.members.map((pid) => this.players.get(pid)?.name).filter(Boolean) : [], startAt: q?.startAt || 0, need: 2, waitMs: RACE_WAIT_MS };
+    return { race, n: q ? q.members.length : 0, names: q ? q.members.map((pid) => this.players.get(pid)?.name).filter(Boolean) : [], startAt: q?.startAt || 0, need: raceNeed(race), waitMs: raceWait(race) };
   }
   inRace(c) { for (const r of this.races.values()) if (!r.done && r.entrants.some((e) => e.key === c.key && !e.done)) return r; return null; }
   raceJoin(c, { race }) {
@@ -338,9 +349,9 @@ class World {
     const q = this.queues.get(race);
     if (!q) return;
     const n = q.members.length, now = Date.now();
-    if (n < 2) { if (q.startAt) { q.startAt = 0; clearTimeout(q.timer); } }
+    if (n < raceNeed(race)) { if (q.startAt) { q.startAt = 0; clearTimeout(q.timer); } }
     else if (n >= MAX_PLAYERS) { clearTimeout(q.timer); this.startRace(race); return; } // (only a full field starts at once; everyone in the world queued still waits the 45 s)
-    else if (!q.startAt) { q.startAt = now + RACE_WAIT_MS; q.timer = setTimeout(() => { try { this.startRace(race); } catch (e) { this.server.log(`[err] startRace ${race}: ${e.stack || e}`); } }, RACE_WAIT_MS); }
+    else if (!q.startAt) { const wait = raceWait(race); q.startAt = now + wait; q.timer = setTimeout(() => { try { this.startRace(race); } catch (e) { this.server.log(`[err] startRace ${race}: ${e.stack || e}`); } }, wait); }
     if (!n) this.queues.delete(race);
     this.broadcast('raceQueue', this.queueMsg(race));
   }
@@ -363,7 +374,7 @@ class World {
       // prog: the furthest the racer got (gate index passed, metres along the course, race ms at that point)
       entrants.push({ pid, key: c.key, name: c.name, slot: entrants.length, time: null, done: false, dnf: false, left: false, fin: 0, prog: { gate: 0, s: -Infinity, at: 0 } });
     }
-    if (entrants.length < 2) { // (someone could not pay the entry: back to the queue for those left)
+    if (entrants.length < raceNeed(race)) { // (someone could not pay the entry: back to the queue for those left)
       for (const e of entrants) {
         const c = this.players.get(e.pid);
         if (c) {
@@ -377,7 +388,7 @@ class World {
     const r = { rid: this.nextRid++, race, at: now + RACE_LEAD_MS, entrants, done: false };
     r.timer = setTimeout(() => this.safeFinish(r), RACE_LEAD_MS + RACE_MAX_MS);
     this.races.set(r.rid, r);
-    this.broadcast('raceQueue', { race, n: 0, names: [], startAt: 0, need: 2, waitMs: RACE_WAIT_MS });
+    this.broadcast('raceQueue', { race, n: 0, names: [], startAt: 0, need: raceNeed(race), waitMs: raceWait(race) });
     this.broadcast('raceStart', this.raceStartMsg(r));
   }
   raceStartMsg(r) { return { rid: r.rid, race: r.race, at: r.at, endAt: r.at + RACE_MAX_MS, closeAt: r.closeAt || 0, grid: r.entrants.map((e) => ({ pid: e.pid, name: e.name, slot: e.slot })) }; } // (endAt / closeAt: when it closes: the clients count the last 30 s down)
@@ -462,8 +473,9 @@ class World {
     clearTimeout(r.timer); clearTimeout(r.closeT);
     for (const e of r.entrants) if (!e.done) { e.done = true; e.dnf = true; }
     const def = CATALOG.races[r.race] || { reward: 0 }, share = CATALOG.prizeShare || [1, 0.4, 0.15];
+    const n = r.entrants.length;
     const order = this.rankEntrants(r).map((e, i) => {
-      const place = i + 1, prize = !e.dnf && !e.paid ? Math.round((def.reward || 0) * (share[i] ?? 0)) : 0;
+      const place = i + 1, prize = !e.dnf && !e.paid ? (def.bus ? busPrize(def, i, n, e.time) : Math.round((def.reward || 0) * (share[i] ?? 0))) : 0;
       const row = { ...this.boardRow(e, place), prize };
       const prof = this.server.profileOf(e.key);
       if (prof && !e.paid) {

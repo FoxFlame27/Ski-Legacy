@@ -1414,11 +1414,11 @@ export class RaceSession {
       if (res.mine.dnf) this.resultsArgs.time = NaN;
       this.resultsArgs.difficulty = `MULTIPLAYER · ${rows.length} RACERS`;
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['continue', 'BACK TO START', 'ENTER']];
+      this.resultsArgs.choices = [['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
     } else if (this.mp) {
       this.resultsArgs.difficulty = 'MULTIPLAYER · PROVISIONAL';
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['continue', 'BACK TO START', 'ENTER']];
+      this.resultsArgs.choices = [['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
     } else if (this.freeRide) {
       // free ride: the podium earns prize money (paid once per run), then RACE AGAIN or BACK TO START (Modes.exitFree)
       try {
@@ -1427,7 +1427,7 @@ export class RaceSession {
         if (Number.isFinite(this.freeRide.prizeMult) && race) this.resultsArgs.prizeMult = this.freeRide.prizeMult; // (the AI field's factor)
       } catch (e) { console.warn('Race: free-ride result failed', e); }
       this.resultsArgs.canNext = false;
-      this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', 'BACK TO START', 'ENTER']];
+      this.resultsArgs.choices = [['retry', 'RACE AGAIN', 'R'], ['continue', this.freeRide?.backLabel || 'BACK TO START', 'ENTER']];
     } else if (this.choices) this.resultsArgs.choices = this.choices;
     this.presentResults();
   }

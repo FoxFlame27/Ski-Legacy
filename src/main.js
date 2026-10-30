@@ -25,6 +25,7 @@ import { SkierRig } from './player/skier.js';
 import { Player } from './player/player.js';
 import { Trails, Spray, skierFX } from './fx/snowfx.js';
 import { FreeCourses, registerFreeWorldCourses, freeCourses, PRIZE_SHARE, AI_LEVELS, aiLevel, prizeFor } from './modes/parkour/freeworld.js'; // the World Racing courses on the mountains (free ride)
+import { BusRaces, busRaceEntries, BUS_PRIZE } from './modes/race/busraces.js'; // the ski bus's 3 free races on the pistes (free entry, every finisher paid)
 import { buildExpressGround } from './world/expressground.js'; // the Legacy Express: the high-speed line to every race (its ground works)
 import { Express, EXPRESS_PRICE, FAST as EXPRESS_FAST } from './world/express.js'; // the Legacy Express's trains, boarding and the ride
 import { planExpressScenery, buildExpressScenery } from './world/expressscenery.js'; // the frozen lakes under the Legacy Express's viaducts
@@ -187,6 +188,7 @@ let prison = null; // the PRISON: the village police station and its cells (game
 let police = null; // the patrol cars after a collision (game/police.js)
 let taxi = null; // LEGACY TAXI: fares round the resort in your car (game/taxi.js)
 let vehicleHits = null; // getting hit by vehicles on foot / on skis (game/vehiclehits.js)
+let busRaces = null; // the ski bus's free races (modes/race/busraces.js): their courses on the pistes and the boards by the stops
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
 let secrets = null; // hidden tunnels, couloirs, caves (world/secrets.js)
@@ -372,6 +374,7 @@ async function boot() {
   // odd jobs for money: a few job boards (village + summit huts); everything else exists only while a job runs
   talk = new Talk({ camera, player, hud, colliders, blockers: village.cameraBlockers, vegetation });
   jobs = new Jobs({ scene, models, player, hud, audio, save, writeSave, earn: (amount, label) => earn(amount, label), layout, makeRig, talk });
+  try { busRaces = new BusRaces({ scene, models, colliders, stops: skibus.stops, sites: jobs.sites }); } catch (e) { console.warn('bus races: ' + (e?.stack || e)); busRaces = null; } // (a board by each of their stops)
   // heli-skiing: the helipad + the helicopter you fly yourself (every collider exists by now)
   heli = new Heli({ scene, models, player, input, camera, hud, audio, spray, world, layout, colliders, spend, transition, lifts });
   sleds = new Snowmobiles({ scene, models, player, camera, hud, audio, spray, trails, layout, colliders, vegetation, world }); // parked all round the resort (up to 40: lifts, huts, Express stations, race starts and finishes)
@@ -984,7 +987,7 @@ function openExpress(it) {
   const cell = (k, v) => `<div><span>${k}</span><b>${v}</b></div>`;
   travelPicker({ hud, player, audio }).open({
     mode: 'route', title: 'Legacy Express', kicker: pass ? 'DAY PASS ACTIVE · 300 KM/H' : `$${EXPRESS_PRICE} TO ANY RACE · 300 KM/H`,
-    sub: `From <b>${from.name}</b> · pick your station`, listHead: 'STATIONS',
+    sub: `From <b>${from.name}</b> · pick your station${!pass && save.money < EXPRESS_PRICE && busRaces?.list.length ? `<br>${BROKE_HINT}` : ''}`, listHead: 'STATIONS',
     lineStyle: 'express', lines: X ? [X.pts] : [], stops: X?.stations || [], from: { name: from.name, x: from.x, z: from.z },
     dests, go: 'RIDE', goLabel: (d) => `Ride to ${d.name.replace(/ (Giant Slalom|Slalom|Super-G|Downhill)$/, '')}`,
     plan: (d) => {
@@ -998,13 +1001,13 @@ function openExpress(it) {
 function boardExpress(from, to) {
   if (chaseBlocked()) return;
   if (!express.trainIn(from.id, to.id)) {
-    if (!hasPass() && save.money < EXPRESS_PRICE) { spend(EXPRESS_PRICE); return; } // (not enough money: says so)
+    if (!hasPass() && save.money < EXPRESS_PRICE) { spend(EXPRESS_PRICE); brokeHint(); return; } // (not enough money: says so)
     const wait = express.waitFor(from.id, to.id);
     hud.flash((isMP() && multiplayer?.transit?.expressWaitText(from, to)) || `Legacy Express to ${to.name} · due in ${Math.max(1, Math.ceil(wait ?? 30))} s · wait on the platform`, 'good', 3200); // (multiplayer: + its seats; a full one: the next with a free seat)
     return;
   }
   if (isMP() && !multiplayer.transit.expressGate(from, to, () => boardExpress(from, to))) return; // (multiplayer: a seat in it first)
-  if (!hasPass() && !spend(EXPRESS_PRICE)) { express.cancelWait(); return; }
+  if (!hasPass() && !spend(EXPRESS_PRICE)) { express.cancelWait(); brokeHint(); return; }
   jobs.onEvent('lift', { rail: true });
   transition.fade(async () => {
     const seat = express.board(from.id, to.id);
@@ -1081,6 +1084,59 @@ function courseInteraction(e) {
   };
 }
 
+// ------------------------------------------------------------------ the ski bus's free races (modes/race/busraces.js)
+// Three races on the pistes below ski-bus stops (the bus is free, so is the entry, even in debt; every finisher is
+// paid: you can always earn your way back). E at the race board beside the stop (or at the start gate below it): the
+// race card, then the race against the Easy AI field right there (the board takes you down to the start gate); after it
+// BACK TO THE BUS STOP. Multiplayer: the server's queue (one racer is enough) and its prizes.
+const BROKE_HINT = 'Broke? The ski bus takes you to 3 free races';
+let brokeAt = -1e9;
+function brokeHint() {
+  if (!busRaces?.list.length || performance.now() - brokeAt < 8000) return;
+  brokeAt = performance.now();
+  setTimeout(() => hud.flash(`${BROKE_HINT} (free entry · every finisher is paid)`, 'gold', 4200), 1600); // (after "Not enough money")
+}
+function busRaceHome(e) {
+  return {
+    label: 'BACK TO THE BUS STOP',
+    place: async () => { const h = busRaces.homeOf(e); player.teleport(h.x, h.z, h.heading); await streamAround(h.x, h.z); },
+  };
+}
+// a finished bus race (single player): stats and the prize, paid once per run when the results come up
+function busRaceResult(e, { place, time, dnf }) {
+  save.stats.races = (save.stats.races || 0) + 1;
+  if (place === 1 && !dnf) save.stats.wins = (save.stats.wins || 0) + 1;
+  const prize = busRaces.prize(e, { place, time, dnf });
+  if (prize > 0) earn(prize, e.name, 'race');
+  writeSave();
+  return prize;
+}
+function busRaceInteraction({ e, at }) {
+  if (isMP()) return mpCourseInteraction(e);
+  const P = BUS_PRIZE, money = (v) => `$${Math.round(e.reward * v).toLocaleString('en-US')}`;
+  return {
+    label: `Race: ${e.name} · free entry · 1st ${money(1)}${at === 'board' ? ' · to the start' : ''}`,
+    act: () => {
+      player.vel.set(0, 0, 0);
+      player.frozen = true; // (still while deciding)
+      const card = { name: e.name, D: e.D, reward: e.reward, shares: P.shares, length: e.length, gates: e.course.gates || [], finisher: `${money(P.rest)} · under ${Math.floor(e.par / 60)}:${String(e.par % 60).padStart(2, '0')} ${money(P.parShare)}` };
+      hud.raceIntro(card, save.records?.[e.id]?.best, {
+        onClose: () => { if (!modes.active) player.frozen = false; },
+        onStart: () => {
+          jobs.onEvent('teleport'); // (a running delivery / rescue ends: you leave for a race)
+          transition.fade(async () => {
+            player.frozen = false;
+            if (player.hasSkis && !player.skisOn) player.setSkisOn(true); // (no skis: the race lends you a pair)
+            e.course.build(scene, models);
+            await streamAround(e.start.x, e.start.z);
+            modes.startFree(e.course, { difficulty: e.D.ai, result: (r) => busRaceResult(e, r), retry: () => true, home: busRaceHome(e) });
+          }).then(() => input.lock(), (err) => { console.warn('bus race', err); player.frozen = false; });
+        },
+      });
+    },
+  };
+}
+
 // ------------------------------------------------------------------ ski bus
 function openBus(stop) {
   if (CARD_DIALOG) return openBusMap(stop);
@@ -1099,11 +1155,12 @@ function openBusMap(stop) {
     // (multiplayer: the shared buses run to a timetable; single player the bus comes for you)
     let n = null;
     try { if (isMP() && skibus.line?.mpNextBus && skibus.netStop) n = skibus.line.mpNextBus(skibus.netStop(stop), skibus.netStop(d)); } catch { n = null; }
-    return { name: d.name, x: d.x, z: d.z, path: r.pts, meta: `${fmtMin(r.min)} ride · ${r.km.toFixed(1)} km${seatNext(() => multiplayer?.transit?.busNext(stop, d), () => n, 'bus')}`, tag: 'FREE', act: () => rideBus(d, stop) };
+    const br = busRaces?.atStop(d.name); // (a free race starts there: modes/race/busraces.js)
+    return { name: d.name, x: d.x, z: d.z, path: r.pts, color: br ? br.D.color : undefined, meta: `${br ? `Race: ${br.name} · free entry · ` : ''}${fmtMin(r.min)} ride · ${r.km.toFixed(1)} km${seatNext(() => multiplayer?.transit?.busNext(stop, d), () => n, 'bus')}`, tag: 'FREE', act: () => rideBus(d, stop) };
   });
   if (!dests.length) { hud.flash('No bus from here', 'bad', 2400); return; }
   travelPicker({ hud, player, audio }).open({
-    mode: 'route', title: 'Ski bus', kicker: 'FREE SHUTTLE', sub: `From <b>${stop.name}</b> · pick your stop`,
+    mode: 'route', title: 'Ski bus', kicker: busRaces?.list.length ? `FREE SHUTTLE · ${busRaces.list.length} FREE RACES` : 'FREE SHUTTLE', sub: `From <b>${stop.name}</b> · pick your stop`,
     lineStyle: 'bus', lines: skibus.networkLines(), stops: skibus.stops, from: stop, dests, go: 'RIDE',
     goLabel: (d) => `Ride to ${d.name.replace(/ Gondola$/, '')}`,
   });
@@ -1389,17 +1446,17 @@ function mpCourseInteraction(e) {
   const q = multiplayer?.race.queued === e.id;
   const n = MP.queues?.get(e.id)?.n || 0;
   return {
-    label: q ? `${e.name} · queued (${n}/${Math.max(2, n)}) · E to leave the queue` : `${e.name} · race other players${n ? ` · ${n} waiting` : ''} · up to $${Math.round(e.reward).toLocaleString('en-US')}`,
+    label: q ? `${e.name} · queued (${n}/${Math.max(e.bus ? 1 : 2, n)}) · E to leave the queue` : `${e.bus ? 'Race: ' : ''}${e.name} · race other players${n ? ` · ${n} waiting` : ''} · ${e.bus ? 'free entry · ' : ''}up to $${Math.round(e.reward).toLocaleString('en-US')}`,
     act: () => {
       if (q) { multiplayer.raceLeave(); hud.flash('Left the race queue', 'good', 1800); return; }
-      if (!player.hasSkis) { hud.flash('You need skis to race', 'bad'); return; }
+      if (!player.hasSkis && !e.bus) { hud.flash('You need skis to race', 'bad'); return; } // (a bus race lends you a pair)
       multiplayer.raceJoin(e.id);
       mpQueueAt = { x: player.pos.x, z: player.pos.z }; // (walking off from the start leaves the queue: mpQueueWatch)
     },
   };
 }
 function mpRaceStart(d) {
-  const e = freeCourses().find((c) => c.id === d.race);
+  const e = freeCourses().find((c) => c.id === d.race) || busRaceEntries().find((c) => c.id === d.race); // (or a bus race)
   if (!e || modes.active || prison?.active) return; // (in prison: no race start)
   jobs.onEvent('teleport');
   transition.fade(() => {
@@ -1412,8 +1469,8 @@ function mpRaceStart(d) {
     chalets?.leave(true);
     player.frozen = false;
     if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
-    return modes.startFree(e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false,
-      grid: { slot: d.slot, n: d.n }, others: () => multiplayer.raceOthers(), mp: d.mp }); // (your grid slot; the other racers, the server's result)
+    return modes.startFree(e.bus ? e.course : e.id, { bots: 0, syncGo: d.secondsToGo, result: (r) => multiplayer.raceFinished(r), retry: () => false,
+      grid: { slot: d.slot, n: d.n }, others: () => multiplayer.raceOthers(), mp: d.mp, home: e.bus ? busRaceHome(e) : undefined }); // (your grid slot; the other racers, the server's result)
   }).then(() => input.lock(), (err) => console.warn('multiplayer race', err));
 }
 
@@ -1449,6 +1506,8 @@ function findInteraction() {
         : { label: `Buy a hot chocolate ($${PRICES.hotChocolate})`, act: () => { if (spend(PRICES.hotChocolate)) hud.flash('Hot chocolate', 'gold', 2000); } };
     }
   }
+  const busRace = busRaces?.near(p); // a free race's board beside its bus stop, or its start gate on the piste
+  if (busRace) return busRaceInteraction(busRace);
   const stop = skibus.stopNear(p);
   if (stop && busDests(stop).length) return { label: 'Take the ski bus', act: () => openBus(stop) }; // (no road: no bus from here)
   const rw = railway.interaction(p, { hasPass: hasPass() });
@@ -1909,6 +1968,7 @@ function loopUpdate() {
   talk.update(dt); // after the player's camera and the people: the conversation shot, the person talking
   admin.update(dt); // speed boost; the free-fly camera takes over the view
   races.update(dt, player); // the courses on the mountains: meshes built / dropped by distance (guarded inside)
+  busRaces?.update(dt, player, modes); // the bus races' courses on the pistes: ditto
   mark('game');
   npcs.update(dt, player.pos, env, camera);
   mark('npcs');

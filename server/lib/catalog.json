@@ -219,6 +219,51 @@
    "name": "Sky Fang Downhill",
    "reward": 4000,
    "entry": 300
+  },
+  "bus_panorama": {
+   "name": "Panorama Sprint",
+   "reward": 1250,
+   "entry": 0,
+   "bus": true,
+   "need": 1,
+   "par": 89000,
+   "shares": [
+    1,
+    0.7,
+    0.5
+   ],
+   "parShare": 0.4,
+   "rest": 0.3
+  },
+  "bus_valley": {
+   "name": "Valley Classic Cup",
+   "reward": 1500,
+   "entry": 0,
+   "bus": true,
+   "need": 1,
+   "par": 152000,
+   "shares": [
+    1,
+    0.7,
+    0.5
+   ],
+   "parShare": 0.4,
+   "rest": 0.3
+  },
+  "bus_hasen": {
+   "name": "Hasen Derby",
+   "reward": 1000,
+   "entry": 0,
+   "bus": true,
+   "need": 1,
+   "par": 99000,
+   "shares": [
+    1,
+    0.7,
+    0.5
+   ],
+   "parShare": 0.4,
+   "rest": 0.3
   }
  },
  "prizeShare": [

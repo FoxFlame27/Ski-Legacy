@@ -26,6 +26,7 @@ import { world, MAIN_SUMMIT } from '../world/world.js';
 import { layout, VILLAGE_BUILDINGS } from '../world/layout.js';
 import { PISTE_COLORS } from '../world/resortdressing.js';
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
+import { busRaceEntries } from '../modes/race/busraces.js'; // the ski bus's free races on the pistes (gold tape)
 import { brushSVG, brushClip, esc } from './menu.js';
 import { busRoads } from '../game/bus/roads.js'; // the road network (valley roads, scenic roads, roundabouts, car parks)
 
@@ -734,7 +735,7 @@ export class TrailMap {
   // from the pistes). On top of everything: a chequered finish, a pin with a chequered flag at the start and a card
   // (name, difficulty · prize; zoomed in also length · drop), labelled before anything else but the village.
   // Hovering a pin, card, finish or its express station lights the race up; a click marks it (`target`).
-  races() { try { return freeCourses(); } catch { return []; } }
+  races() { try { return [...freeCourses(), ...busRaceEntries()]; } catch { return []; } }
 
   drawRaceLines() {
     const g = this.g, s = this.view.s, hot = this.hot?.race, w0 = Math.min(6, Math.max(3.2, s * 8));
@@ -778,8 +779,9 @@ export class TrailMap {
       this.spot(x, cy, r + 3, e.start.x, e.start.z, e.name, tag);
       const card = {
         title: e.name.toUpperCase(), color: col, hot: on,
-        sub: [[e.D.label.toUpperCase(), col], [`  ·  up to $${(e.rewardMax || e.reward).toLocaleString('en-US')}`, NAVY]], // (the Superhard field's 1st prize)
-        more: s >= 0.3 ? `${(e.length / 1000).toFixed(1)} km  ·  ${e.drop} m drop` : null,
+        sub: e.bus ? [['FREE RACE', col], [`  ·  ski bus: ${e.stop}`, NAVY]] // (a bus race: its stop)
+          : [[e.D.label.toUpperCase(), col], [`  ·  up to $${(e.rewardMax || e.reward).toLocaleString('en-US')}`, NAVY]], // (the Superhard field's 1st prize)
+        more: s >= 0.3 ? `${(e.length / 1000).toFixed(1)} km  ·  ${e.drop} m drop${e.bus ? `  ·  free entry  ·  1st $${e.reward.toLocaleString('en-US')}` : ''}` : null,
       };
       this.label(e.name, x, cy, { prio: 0.5, force: true, card,
         cands: (w, h) => {

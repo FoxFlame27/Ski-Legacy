@@ -83,6 +83,30 @@ export function buildCourseMeshes(course, models = {}) {
   return group;
 }
 
+// The dressing of a race laid on an existing piste (modes/race/busraces.js: the ski bus's free races): the same
+// start house, START arch, checkpoint arches, slalom gates and FINISH portal as a World Racing course, without the
+// nets, structures and arena (the piste has its own fences). course.track: any track with X, Z, W, H, n, length,
+// sAt(arr, s), pointAt(s, lat) and surfaceY(s, lat) (2 m samples from s = 0).
+export function buildPisteRaceMeshes(course, models = {}) {
+  clearMeshGround();
+  course.solids = [];
+  const group = new THREE.Group();
+  group.name = 'course-' + course.id;
+  const props = new THREE.Group();
+  props.name = 'props';
+  const dye = new DyeBuilder();
+  buildStart(course, models, props, dye);
+  buildCheckpoints(course, props, dye);
+  buildGates(course, props, dye);
+  const T = course.track, fs = course.finishS;
+  props.add(finishPortal(course, fs));
+  dye.across(T, fs, 0.6, '#d9221c', -T.sAt(T.W, fs) + 0.2, T.sAt(T.W, fs) - 0.2, false);
+  props.add(dye.build());
+  group.add(props);
+  clearMeshGround();
+  return group;
+}
+
 // ------------------------------------------------------------------ helpers
 // a spot beside the track whose footprint is level enough to stand a structure on
 function gentleSpot(T, s, lats, hw, hd, maxDrop = 0.6) {
@@ -288,7 +312,7 @@ function buildStart(course, models, group, dye) {
     g.fillStyle = BLUE; g.fillRect(0, 0, W, 120);
     g.fillStyle = '#e2231a'; g.fillRect(0, 120, W, 8);
     g.fillStyle = '#ffffff'; g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.font = `italic 700 78px ${FONT}`; g.fillText('WORLD RACING', 44, 62);
+    g.font = `italic 700 78px ${FONT}`; g.fillText(course.boardTitle || 'WORLD RACING', 44, 62);
     g.fillStyle = BLUE; g.font = `italic 700 92px ${FONT}`;
     let fs = 92; while (g.measureText(course.name.toUpperCase()).width > W - 88 && fs > 40) { fs -= 4; g.font = `italic 700 ${fs}px ${FONT}`; }
     g.fillText(course.name.toUpperCase(), 44, 222);

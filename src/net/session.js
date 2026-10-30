@@ -541,7 +541,7 @@ export class Multiplayer {
     try {
       const d = await net.request('raceJoin', { race });
       this.race.queued = race; this.race.queue = d; this.race.finished = false;
-      this.c.hud.flash('In the race queue · at least 2 racers', 'good', 2600);
+      this.c.hud.flash(d?.need === 1 ? `In the race queue · starts in ${Math.round((d.waitMs || 20000) / 1000)} s (others may join)` : 'In the race queue · at least 2 racers', 'good', 2600); // (need 1: a bus race)
       return true;
     } catch (e) { this.c.hud.flash(errText(e), 'bad', 2400); return false; }
   }
@@ -662,7 +662,7 @@ export class Multiplayer {
   raceLine(now) {
     const q = this.race.queue;
     if (this.race.queued && q) {
-      if (q.n < 2 || !q.startAt) return `RACE QUEUE · ${q.n}/2 · waiting for players`;
+      if (q.n < (q.need ?? 2) || !q.startAt) return `RACE QUEUE · ${q.n}/${q.need ?? 2} · waiting for players`;
       return `RACE QUEUE · ${q.n} racers · starting in ${Math.max(0, Math.ceil((q.startAt - now) / 1000))}s`;
     }
     const r = this.race.start;

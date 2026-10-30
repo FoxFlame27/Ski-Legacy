@@ -39,7 +39,7 @@ export class OwnerTags {
     const out = [], G = typeof window !== 'undefined' ? window.__game : null;
     const st = this.rental?.impound?.status?.();
     const e = this.rental?.current;
-    if (st) out.push({ key: 'car', x: st.x, y: st.y + 2.2, z: st.z, label: st.impounded ? 'Impounded car' : 'Your car', impounded: st.impounded });
+    if (st) out.push({ key: 'car', x: st.x, y: st.y + 2.2, z: st.z, label: st.impounded ? 'Your car · tow yard' : 'Your car', impounded: st.impounded });
     else if (e?.car && !e.driving) out.push({ key: 'car', x: e.car.position.x, y: e.car.position.y + 2.2, z: e.car.position.z, label: 'Your car' });
     const ch = G?.chalets, h = ch?.rented?.();
     if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: MP.active ? `${this.name}'s chalet` : null }); }
@@ -71,7 +71,7 @@ export class OwnerTags {
     const seen = new Set();
     for (const o of this.list) {
       let s = this.tags[o.key];
-      const text = o.text || (o.impounded ? `${name} · impounded` : name);
+      const text = o.text || (o.impounded ? `${name} · tow yard` : name);
       if (!s) { s = this.tags[o.key] = makeTag(text, o.color || GOLD); s.userData.impounded = !!o.impounded; s.userData.text = text; this.scene.add(s); }
       if (s.userData.impounded !== !!o.impounded || s.userData.text !== text) { s.removeFromParent(); s.material.map?.dispose(); s.material.dispose(); delete this.tags[o.key]; continue; } // (rebuilt next time)
       s.position.set(o.x, o.y, o.z);

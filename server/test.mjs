@@ -577,7 +577,7 @@ try {
     const t1 = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
     const gw = server.worlds.get(gus.l.d.world.id), gcar = () => server.profileOf('tow gus').cars[0];
     ok(t1.ok && t1.d.fee === CATALOG.wreckFee && CATALOG.wreckFee === 1500 && t1.d.money === m0 - CATALOG.wreckFee, 'towed off a road: the server charges its own fee ($1,500)');
-    ok(t1.d.impound?.day === gw.dayAt() && t1.d.impound.bay === 2 && gcar().impound?.day === gw.dayAt(), '...and impounds the car until the next world day (in the profile)');
+    ok(t1.d.impound?.day === gw.dayAt() && t1.d.impound.bay === 2 && gcar().impound?.day === gw.dayAt() && Math.abs(t1.d.impound.until - Date.now() - 180000) < 5000, '...and puts the car in the tow yard for 3 minutes (in the profile)');
     ok(JSON.stringify(gcar().at) === JSON.stringify([1, 2, 3, 0.5]), "...its parked spot is the impound bay at once");
     const t2 = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
     ok(!t2.ok && t2.err === 'busy' && server.profileOf('tow gus').money === m0 - 1500, 'a second tow while the truck is out is refused (charged once)');
@@ -595,10 +595,10 @@ try {
     let g2 = await relog('Tow Gus', gus.token);
     ok(g2.l.ok && g2.l.d.profile.cars[0].impound?.day === t1.d.impound.day && !g2.l.d.profile.cars[0].tow && g2.l.d.profile.cars[0].at[0] === 1, '...and finds it there after logging in again');
     // a day later the impound is lifted
-    server.profileOf('tow gus').cars[0].impound.day = gw.dayAt() - 1;
+    server.profileOf('tow gus').cars[0].impound.until = Date.now() - 1;
     g2.f.close(); await sleep(100);
     g2 = await relog('Tow Gus', gus.token);
-    ok(g2.l.ok && !g2.l.d.profile.cars[0].impound, 'the next world day the impound is lifted');
+    ok(g2.l.ok && !g2.l.d.profile.cars[0].impound, 'after its 3 minutes the tow yard lets it go');
     // a wreck: the fee even when it takes the balance below zero (a fine, as in single player); towDone ends it
     server.profileOf('tow gus').money = 100;
     const w1 = await g2.f.req('tow', { kind: 'wreck', home: [5, 0, 6, 0] });

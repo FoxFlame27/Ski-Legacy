@@ -460,7 +460,7 @@ export class CarRental {
       this.player.teleport(this.door.x + f.x * 0.8, this.door.z + f.z * 0.8, Math.atan2(f.x, f.z));
       this.player.camYaw = Math.atan2(f.x, f.z) + Math.PI + 0.4;
       this.player.camPitch = -0.12;
-      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is impounded in the car park · free again ${untilTomorrow()}` : `Your ${this.label(this.current.cfg?.id)} waits in the ${this.where()} · E to drive`, 'good', 2800), 400);
+      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is in the tow yard by the Autohaus · ${untilTomorrow(this.current.impound)}` : `Your ${this.label(this.current.cfg?.id)} waits in the ${this.where()} · E to drive`, 'good', 2800), 400);
     };
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }

@@ -21,10 +21,22 @@ import { railNearest } from '../world/railroute.js';
 import { layout } from '../world/layout.js';
 import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
+import { net } from '../net/client.js';
+import { isMP } from '../net/mode.js';
 
 // how long until the impound lifts: the next in-game day starts at midnight (world/sky.js: 1 game hour = 40 real s)
-// (Oct 29, the user: the game-clock time it is free again, "at 00:01 tomorrow", not "in about 14 min (at midnight)")
-export function untilTomorrow() { return 'at 00:01 tomorrow'; }
+// The tow yard (was "impounded"; Oct 30, the user: "when your car is impounded it comes back in 3 min, and change
+// impounded to a different word"): a towed car is held RELEASE_S real seconds (record.until, ms: the server's clock in
+// multiplayer), then it is back in your bay. Old records without `until` keep the next-day rule.
+export const RELEASE_S = 180;
+export const nowMs = () => (isMP() && net.serverNow ? net.serverNow() : Date.now());
+/** "back in 2:41" for a tow yard record (or "back soon"). */
+export function backIn(rec) {
+  if (!Number.isFinite(rec?.until)) return 'back soon';
+  const s = Math.max(0, Math.ceil((rec.until - nowMs()) / 1000));
+  return `back in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+export function untilTomorrow(rec) { return backIn(rec); } // (the old name, still imported)
 export const STRAY_BACK = 180; // s left off the road and outside any car park / lay-by (with you away) before it goes back to its bay
 export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
 export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called
@@ -151,8 +163,8 @@ export class Impound {
   adopt(e) {
     const s = this.save.impound;
     if (!e || !s || !e.cfg || s.plate !== e.cfg.plate) return;
-    if (this.day > s.day) { this.save.impound = null; return; } // (a day has passed: free to go, in your bay)
-    e.impound = { day: s.day };
+    if (this.released(s)) { this.save.impound = null; return; } // (its time is up: free to go, in your bay)
+    e.impound = { day: s.day, until: s.until };
     this.place(e, this.pound?.[s.bay] || this.own);
   }
   place(e, bay) {
@@ -168,10 +180,12 @@ export class Impound {
     e.home = { x: p.x, z: p.z, yaw: p.yaw };
   }
   lockReason(e) {
-    if (e?.towing) return 'Your car · being towed to the Autohaus car park';
-    if (e?.impound) return `Impounded · free again ${untilTomorrow()}`;
+    if (e?.towing) return 'Your car · being towed to the tow yard by the Autohaus';
+    if (e?.impound) return `Tow yard · ${backIn(e.impound)}`;
     return null;
   }
+  // a tow yard record whose time is up (old records without `until`: the next day)
+  released(rec) { return !rec || (Number.isFinite(rec.until) ? nowMs() >= rec.until : this.day > rec.day); }
   /** Where your car is for the map and the name tags: { x, z, impounded } or null. */
   status() {
     const e = this.R.current;
@@ -204,9 +218,11 @@ export class Impound {
     if (!(dt > 0)) return;
     const R = this.R, e = R.current;
     if (!e) return;
-    if (e.impound && this.day > e.impound.day) { // (the next day: yours again)
+    if (e.impound && this.released(e.impound)) { // (its 3 minutes are up: back in your bay)
       e.impound = null;
       if (this.save.impound) { this.save.impound = null; R.writeSave?.(); }
+      if (!e.driving && !e.towing) { this.place(e, this.own); if (R.drive) R.drive._cc = null; }
+      R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000);
     }
     if (e.driving || e.wrecked || e.towing || e.impound || !R.truck || !R.player) { e.abandonT = 0; return; }
     this.t -= dt;
@@ -246,14 +262,15 @@ export class Impound {
     e.towing = true; e.abandonT = 0;
     const free = (this.pound || []).findIndex((b) => !b.taken && !mp?.carNear?.(b.x, b.z, 2));
     const bi = Math.max(0, free);
-    this.save.impound = { day: this.day, bay: bi, plate: e.cfg?.plate || null };
+    this.save.impound = { day: this.day, until: nowMs() + RELEASE_S * 1000, bay: bi, plate: e.cfg?.plate || null };
     if (mp?.tow) {
       const b = this.pound?.[bi], p = b && this.pose ? this.pose(b) : (R.carSpot || { x: e.car.position.x, z: e.car.position.z, yaw: 0 });
       mp.tow('tow', [p.x, world.height(p.x, p.z) + 0.03, p.z, p.yaw], bi).then((d) => {
-        const day = d?.impound?.day;
+        const day = d?.impound?.day, until = d?.impound?.until;
         if (!Number.isFinite(day)) return;
-        if (this.save.impound?.plate === (e.cfg?.plate || null)) this.save.impound.day = day; // (the server's day)
-        if (e.impound) e.impound.day = day;
+        const mine = this.save.impound?.plate === (e.cfg?.plate || null);
+        if (mine) { this.save.impound.day = day; if (Number.isFinite(until)) this.save.impound.until = until; } // (the server's day / time)
+        if (e.impound) { e.impound.day = day; if (Number.isFinite(until)) e.impound.until = until; }
       });
     } else {
       this.save.money -= fee;
@@ -261,12 +278,12 @@ export class Impound {
       R.hud?.setMoney?.(this.save.money, -fee);
     }
     R.audio?.play?.('cash');
-    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · impounded in the car park by the Autohaus · free again ${untilTomorrow()}`, 'bad', 6500);
+    R.hud?.flash(`Your car was left on the road · towed · -$${fee.toLocaleString('en-US')} · to the tow yard by the Autohaus · ${backIn(this.save.impound)}`, 'bad', 6500);
     const done = (car) => {
       car.towing = false;
       if (mp && R.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends; the impound stays)
       if (R.current !== car) return; // (returned meanwhile: a new rental)
-      car.impound = { day: this.save.impound?.day ?? this.day };
+      car.impound = { day: this.save.impound?.day ?? this.day, until: this.save.impound?.until };
       this.place(car, this.pound?.[bi] || this.own);
       if (R.drive) R.drive._cc = null;
     };

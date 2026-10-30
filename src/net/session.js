@@ -299,7 +299,7 @@ export class Multiplayer {
       chalet: p.chalet ? JSON.parse(JSON.stringify(p.chalet)) : null,
       rental: car ? { id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, custom: !!car.custom, ...(car.price != null ? { price: car.price } : {}) } : null,
       garage: (p.cars || []).map((c) => ({ id: c.id, paint: c.paint, interior: c.interior, rims: c.rims, plate: c.plate, custom: !!c.custom, ...(c.price != null ? { price: c.price } : {}) })), // (AUTOHAUS: every car you own; cars[0] is out)
-      impound: car?.impound ? { day: car.impound.day, bay: car.impound.bay | 0, plate: car.plate } : null, // (the server keeps it: impound.js)
+      impound: car?.impound ? { day: car.impound.day, until: car.impound.until, bay: car.impound.bay | 0, plate: car.plate } : null, // (the server keeps it: impound.js)
       stats: { races: 0, wins: 0, topSpeed: 0, distance: 0, earned: 0, ...(p.stats || {}) },
       records: { ...(p.records || {}) }, raceBest: {}, secrets: [...(p.secrets || [])],
       dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,

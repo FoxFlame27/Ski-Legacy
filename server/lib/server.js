@@ -28,6 +28,7 @@ export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after i
 export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
 export const RACE_BOARD_MS = 500;          // the live race board (raceBoard) goes out this often while a race runs
 export const DEBT_FLOOR = -100000;        // the lowest the game's own charges (fees, fines) may take you
+export const IMPOUND_MS = 3 * 60 * 1000;     // the tow yard holds a towed car this long (impound.js RELEASE_S)
 export const GRACE_MS = 60 * 1000;         // a dropped connection keeps its player (world slot, seat, chalet plot, car,
                                            // helicopter, race entry) this long for a reconnect, measured from the last
                                            // message; then the player leaves for real
@@ -1103,7 +1104,7 @@ export class GameServer {
     const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };
     car.at = home;
-    if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 };
+    if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), until: now + IMPOUND_MS, bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 }; // (the tow yard: 3 min)
     this.store.profiles.save();
     return { d: { money: P.money, fee: paid, impound: car.impound || null, at: home } };
   }
@@ -1119,7 +1120,7 @@ export class GameServer {
     let dirty = false;
     for (const car of c.profile?.cars || []) { // (AUTOHAUS: every car you own; one towed may no longer be the one out)
       if (car.tow) { if (Array.isArray(car.tow.home)) car.at = car.tow.home; delete car.tow; dirty = true; }
-      if (car.impound && c.world && c.world.dayAt(now) > car.impound.day) { delete car.impound; dirty = true; } // (by the world's own clock)
+      if (car.impound && (Number.isFinite(car.impound.until) ? now >= car.impound.until : c.world && c.world.dayAt(now) > car.impound.day)) { delete car.impound; dirty = true; } // (the tow yard's 3 min; old records: the world's next day)
     }
     if (dirty) this.store.profiles.save();
   }

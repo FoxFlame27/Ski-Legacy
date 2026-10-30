@@ -45,6 +45,8 @@ const LINES = {
 const pick = (a) => a[Math.floor(Math.random() * a.length) % a.length];
 const money = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
 const hyp = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
+const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+const far = (m) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
 const _v = new THREE.Vector3(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
 
 // a car template's seat points (car frame: +x the driver's side, +z forward), as net/vehicles.js carSeats: 0 the
@@ -86,13 +88,40 @@ function carLegs(rig) {
 }
 
 const CSS = `
-#taxi-meter { position: absolute; right: 22px; bottom: 132px; min-width: 210px; padding: 10px 22px 12px 24px; background: #fff; color: var(--blue, #1546c8);
-  clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; text-align: right; }
-#taxi-meter .tm-head { font-family: var(--num); font-style: italic; font-weight: 700; font-size: 13px; letter-spacing: 0.08em; color: #ff4d3d; }
-#taxi-meter .tm-fare { font-family: var(--num); font-style: italic; font-weight: 700; font-size: 38px; line-height: 1.05; font-variant-numeric: tabular-nums; }
-#taxi-meter .tm-row { font-size: 12px; font-weight: 700; opacity: 0.75; font-variant-numeric: tabular-nums; }
-#taxi-meter .tm-say { font-size: 12px; font-style: italic; margin-top: 4px; max-width: 240px; margin-left: auto; }
-#taxi-meter .tm-say:empty { display: none; }`;
+#taxi-meter { position: absolute; right: 22px; bottom: 132px; box-sizing: border-box; width: max(270px, calc(var(--u) * 340)); padding: calc(var(--u) * 14) calc(var(--u) * 30) calc(var(--u) * 18) calc(var(--u) * 30);
+  color: var(--blue, #1546c8); pointer-events: none; isolation: isolate; filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 14) rgba(0, 20, 60, 0.3));
+  animation: tm-in 0.45s cubic-bezier(.2,.9,.2,1) backwards; }
+#taxi-meter[hidden] { display: none; }
+/* (white paper with a gently ragged edge in u, as the controls card: the % brush is too torn at this size) */
+#taxi-meter::before { content: ''; position: absolute; inset: 0; z-index: -1; background: #fff;
+  clip-path: polygon(0 calc(var(--u) * 4), 18% 0, 41% calc(var(--u) * 5), 64% calc(var(--u) * 1), 87% calc(var(--u) * 5), 100% 0, calc(100% - var(--u) * 4) 34%, 100% 68%,
+    calc(100% - var(--u) * 2) 100%, 73% calc(100% - var(--u) * 5), 48% 100%, 23% calc(100% - var(--u) * 4), 0 100%, calc(var(--u) * 4) 60%, 0 30%); }
+#taxi-meter .tm-strip { height: calc(var(--u) * 9); margin: 0 calc(var(--u) * -8) calc(var(--u) * 10); clip-path: var(--brush-b);
+  background: repeating-linear-gradient(90deg, #ffc21a 0 calc(var(--u) * 12), #14213d calc(var(--u) * 12) calc(var(--u) * 24)); }
+#taxi-meter .tm-top { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--u) * 10); }
+#taxi-meter .tm-tag { padding: calc(var(--u) * 3) calc(var(--u) * 16) calc(var(--u) * 3) calc(var(--u) * 11); background: #ffc21a; color: #14213d; clip-path: var(--brush-b);
+  font: italic 700 calc(var(--u) * 22)/1 var(--num); letter-spacing: 0.1em; }
+#taxi-meter .tm-state { display: flex; align-items: center; gap: calc(var(--u) * 6); font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim, #4f72d4); white-space: nowrap; }
+#taxi-meter .tm-state::before { content: ''; width: calc(var(--u) * 8); height: calc(var(--u) * 8); min-width: 6px; min-height: 6px; border-radius: 50%; background: currentColor; }
+#taxi-meter.ride .tm-state { color: #ff4d3d; }
+#taxi-meter.ride .tm-state::before { animation: tm-blink 1s steps(1) infinite; }
+#taxi-meter .tm-big { margin: calc(var(--u) * 6) 0 calc(var(--u) * 2); font: italic 700 calc(var(--u) * 66)/0.95 var(--num); letter-spacing: 0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#taxi-meter.idle .tm-big { font-size: calc(var(--u) * 44); }
+#taxi-meter .tm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--u) * 12); padding: calc(var(--u) * 8) 0; border-top: 2px solid rgba(21, 70, 200, 0.14); border-bottom: 2px solid rgba(21, 70, 200, 0.14); }
+#taxi-meter .tm-grid div + div { text-align: right; }
+#taxi-meter small { display: block; font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim, #4f72d4); white-space: nowrap; }
+#taxi-meter .tm-grid b { display: block; margin-top: calc(var(--u) * 3); font: italic 700 calc(var(--u) * 30)/1 var(--num); font-variant-numeric: tabular-nums; white-space: nowrap; }
+#taxi-meter .tm-line { display: grid; grid-template-columns: calc(var(--u) * 92) minmax(0, 1fr) auto; align-items: baseline; gap: calc(var(--u) * 8); margin-top: calc(var(--u) * 8); }
+#taxi-meter .tm-line span { font: italic 700 max(15px, calc(var(--u) * 21))/1.1 var(--num); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#taxi-meter .tm-line em { font: 700 var(--t-sm)/1 var(--ui); font-style: normal; color: var(--blue-dim, #4f72d4); font-variant-numeric: tabular-nums; white-space: nowrap; }
+#taxi-meter .tm-line:has(span:empty), #taxi-meter .tm-grid:has(b:empty) { display: none; }
+#taxi-meter .tm-extra { margin-top: calc(var(--u) * 6); font: 700 var(--t-xs)/1.2 var(--ui); letter-spacing: 0.04em; color: var(--blue-dim, #4f72d4); }
+#taxi-meter .tm-say { position: relative; margin-top: calc(var(--u) * 10); padding: calc(var(--u) * 7) calc(var(--u) * 16) calc(var(--u) * 8) calc(var(--u) * 14); background: var(--blue, #1546c8); color: #fff;
+  clip-path: var(--brush-b); font: italic 600 var(--t-sm)/1.3 var(--ui); }
+#taxi-meter .tm-say.bad { background: #d0342c; }
+#taxi-meter .tm-extra:empty, #taxi-meter .tm-say:empty { display: none; }
+@keyframes tm-in { from { opacity: 0; translate: calc(var(--u) * 40) 0; } }
+@keyframes tm-blink { 50% { opacity: 0.15; } }`;
 
 export class Taxi {
   /**
@@ -243,7 +272,7 @@ export class Taxi {
 
   say(name, line, cls = 'good') {
     this.said = `${name}: "${line}"`;
-    this.saidT = 6;
+    this.saidT = 6; this.sayBad = cls === 'bad';
     this.hud?.flash(this.said, cls, 3400);
   }
 
@@ -509,28 +538,56 @@ export class Taxi {
     return [{ x: f.from.x, z: f.from.z, kind: 'target', label: `Taxi · ${f.name}` }, { x: f.to.x, z: f.to.z, kind: 'target', label: `→ ${f.to.name}` }];
   }
 
+  // the taxi card (bottom right, over the speedometer): on duty, in your car. Riding: the meter (the fare, big), the
+  // distance and time, where to and how far still, the passenger, what they said; picking up: how far to them, their
+  // patience; waiting for a fare: FOR HIRE
   meter() {
     if (typeof document === 'undefined') return;
-    const f = this.fare, on = !!f && f.phase === 'ride' && !!this.drive?.d;
-    if (!on) { if (this.el && !this.el.hidden) this.el.hidden = true; return; }
+    const f = this.fare, d = this.drive?.d;
+    const phase = !d || d.crash ? '' : f ? (f.phase === 'ride' ? 'ride' : 'pick') : this.duty ? 'idle' : '';
+    if (!phase) { if (this.el && !this.el.hidden) this.el.hidden = true; return; }
     if (!this.el) {
       if (!document.getElementById('taxi-css')) { const s = document.createElement('style'); s.id = 'taxi-css'; s.textContent = CSS; document.head.appendChild(s); }
       const el = document.createElement('div');
       el.id = 'taxi-meter';
-      el.innerHTML = '<div class="tm-head">TAXI · METER</div><div class="tm-fare"></div><div class="tm-row tm-dist"></div><div class="tm-row tm-to"></div><div class="tm-say"></div>';
+      el.innerHTML = '<div class="tm-strip"></div><div class="tm-top"><span class="tm-tag">TAXI</span><span class="tm-state"></span></div><div class="tm-big"></div>'
+        + '<div class="tm-grid"><div><small></small><b></b></div><div><small></small><b></b></div></div>'
+        + '<div class="tm-line"><small></small><span></span><em></em></div><div class="tm-line"><small></small><span></span><em></em></div><div class="tm-extra"></div><div class="tm-say"></div>';
       (document.getElementById('hud') || document.body).appendChild(el);
       this.el = el;
-      this.elF = el.querySelector('.tm-fare'); this.elD = el.querySelector('.tm-dist'); this.elT = el.querySelector('.tm-to'); this.elS = el.querySelector('.tm-say');
+      const q = (c) => [...el.querySelectorAll(c)];
+      this.tm = [el.querySelector('.tm-state'), el.querySelector('.tm-big'), ...q('.tm-grid small, .tm-grid b'), ...q('.tm-line small, .tm-line span, .tm-line em'), el.querySelector('.tm-extra'), el.querySelector('.tm-say')];
+      this.tmPhase = '';
     }
     this.el.hidden = false;
-    const fare = `$${this.fareNow(f).toFixed(2)}`;
-    const dist = `${f.km.toFixed(2)} km · ${Math.floor(f.rideT / 60)}:${String(Math.floor(f.rideT % 60)).padStart(2, '0')}${f.surcharge ? ` · incl. $${f.surcharge} mountain` : ''}`;
-    const to = `${f.name} → ${f.to.name}`;
+    if (this.tmPhase !== phase) { this.el.classList.remove('ride', 'pick', 'idle'); this.el.classList.add(phase); this.tmPhase = phase; }
     const said = this.saidT > 0 ? this.said : '';
-    if (this.elF.textContent !== fare) this.elF.textContent = fare;
-    if (this.elD.textContent !== dist) this.elD.textContent = dist;
-    if (this.elT.textContent !== to) this.elT.textContent = to;
-    if (this.elS.textContent !== said) this.elS.textContent = said;
+    const v = this._tmv ||= new Array(13).fill('');
+    if (phase === 'ride') {
+      v[0] = 'METER RUNNING'; v[1] = `$${this.fareNow(f).toFixed(2)}`;
+      v[2] = 'DISTANCE'; v[3] = `${f.km.toFixed(2)} km`; v[4] = 'TIME'; v[5] = mmss(f.rideT);
+      v[6] = 'TO'; v[7] = f.to.name; v[8] = far(hyp(d.x, d.z, f.to.x, f.to.z));
+      v[9] = 'PASSENGER'; v[10] = f.name; v[11] = '';
+      v[12] = f.surcharge ? `incl. $${f.surcharge} mountain surcharge` : '';
+    } else if (phase === 'pick') {
+      const px = this.pax?.pos.x ?? f.from.sx ?? f.from.x, pz = this.pax?.pos.z ?? f.from.sz ?? f.from.z;
+      v[0] = f.phase === 'board' ? 'GETTING IN' : 'PICK UP'; v[1] = f.phase === 'board' ? 'Boarding…' : far(hyp(d.x, d.z, px, pz));
+      v[2] = 'WAITING'; v[3] = mmss(Math.max(0, f.patience)); v[4] = 'FLAG FALL'; v[5] = money(TARIFF.flag);
+      v[6] = 'AT'; v[7] = f.from.name; v[8] = '';
+      v[9] = 'PASSENGER'; v[10] = f.name; v[11] = '';
+      v[12] = f.phase === 'board' ? '' : 'Stop beside them and they get in';
+    } else {
+      v[0] = 'ON DUTY'; v[1] = 'FOR HIRE';
+      v[2] = 'FARES'; v[3] = String(this.shift?.fares || 0); v[4] = 'EARNED'; v[5] = money(this.shift?.earned || 0);
+      v[6] = ''; v[7] = ''; v[8] = ''; v[9] = ''; v[10] = ''; v[11] = '';
+      v[12] = 'Waiting for the dispatcher · T: off duty';
+    }
+    const E = this.tm;
+    for (let k = 0; k < 12; k++) if (E[k].textContent !== v[k]) E[k].textContent = v[k];
+    if (E[12].textContent !== v[12]) E[12].textContent = v[12];
+    if (E[13].textContent !== said) E[13].textContent = said;
+    const bad = said && this.sayBad;
+    if (E[13].classList.contains('bad') !== !!bad) E[13].classList.toggle('bad', !!bad);
   }
 
   dispose() {

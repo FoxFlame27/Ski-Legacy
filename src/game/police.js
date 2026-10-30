@@ -55,23 +55,30 @@ export const TUNING = {
   stopR: 40,         // m: stopped with a patrol car this close: pulled over
   stopKmh: 3,        // ...below this speed
   stopS: 3,          // ...for this long
-  spawnMin: 300, spawnMax: 500, // m from you, on the roads, out of sight
+  spawnMin: 260, spawnMax: 420, // m from you, on the roads, out of sight (Oct 30: nearer, they reach you sooner)
   reachR: 60,        // m: they have reached you (the grace to pull over starts)
-  graceS: 8,         // s to pull over once they reach you; still moving after it: fleeing
+  graceS: 6,         // s to pull over once they reach you; still moving after it: fleeing
   footCatchR: 4,     // m: an officer on foot this close: caught
-  vRoad: 42,         // m/s (151 km/h) on the roads (the bends ahead slow them: A_LAT)
-  vOff: 20,          // m/s off them
-  catchUp: 0.35,     // up to this much faster than vRoad while far behind you (150-400 m: GTA's catch-up)
-  ramExtra: 6,       // m/s over your speed at most, closing in for a ram (a PIT: alongside, then a nudge)
-  ramMult: 1.2,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
-  ramGapS: 2.5,      // s a patrol car drops back after a ram before the next
+  vRoad: 52,         // m/s (187 km/h) on the roads near you (the bends ahead slow them: A_LAT)
+  vTop: 250 / 3.6,   // m/s: never faster (the user: "up to 250 km/h"): the catch-up and a ram run up to it
+  vOff: 25,          // m/s off them
+  catchUp: 0.34,     // up to this much faster than vRoad while far behind you (120-370 m: GTA's catch-up; 250 km/h)
+  catchFrom: 120,    // m: the catch-up starts this far behind you
+  ramExtra: 11,      // m/s over your speed at most, closing in for a ram (a PIT: alongside, then a shove)
+  ramMult: 1.7,      // a police ram counts this much harder (push bars): drive.js knock / crash speed
+  ramMin: 15,        // m/s: a PIT / T-bone that connects counts as at least this (always a real knock, never a brush)
+  ramPush: 3.2,      // m/s sideways shove into you on a ram (on top of the impulse)
+  spin: 1.5,         // x the spin a ram puts on your car (the rear quarter: a PIT spins you out)
+  ramGapS: 1.1,      // s a patrol car drops back after a ram before the next (Oct 30: was 2.5)
+  tboneR: 70,        // m: crossing your path (a junction, a side road) this near: it drives into your side
+  junctionM: 260,    // m: the second car cuts you off at the next junction on your road within this far
   cooldownS: 6,
   holdR: 12,         // m: a patrol car this close to you for holdS (in all; it ebbs away when they're further) ...
-  holdS: 12,         // s: ... and they get out and arrest you (the user: "you can just sit in your car and they won't arrest you")
+  holdS: 10,         // s: ... and they get out and arrest you (the user: "you can just sit in your car and they won't arrest you")
   wreckKmh: 15,      // you hitting a patrol car: damage % = (km/h closing - this) x wreckPer; 100 %: wrecked
   wreckPer: 0.9,
-  backupS: 9,        // s after a patrol car is wrecked before another comes (the chase goes on meanwhile)
-  wreckStayS: 45,    // s a wreck stays where it is (then gone once out of sight)      // s after a chase ends before another hit calls them
+  backupS: 7,        // s after a patrol car is wrecked before another comes (the chase goes on meanwhile)
+  wreckStayS: 45,    // s a wreck stays where it is (then gone once out of sight)
 };
 const CRASH_V = 70 / 3.6, KNOCK_V = 30 / 3.6; // (drive.js)
 const LEN = 4.85, WB = 2.95, LANE = 1.6, WALK_V = 1.6, RUN_V = 5.4;
@@ -229,8 +236,8 @@ function contact(A, B) {
 // other patrol car); no progress: back up and turn out (both ways in turn), as a last resort (out of sight, far) put
 // back on a road. Fleeing: a PIT (alongside your rear quarter, then a nudge into it) by the first car, the second cuts
 // you off (routes to where you will be in a few seconds, blocks ahead / PITs from the other side).
-const A_LAT = 8.5, A_BRAKE = 10, R_MIN = WB / Math.tan(0.7);
-const FR = [0.25, 0.5, 0.75, 1];
+const A_LAT = 8.5, A_BRAKE = 11, R_MIN = WB / Math.tan(0.7);
+const FR = [0.15, 0.3, 0.45, 0.6, 0.8, 1]; // (the probe reaches 70 m at 250 km/h: no pole slips between the samples)
 const ANG_L = [0.3, -0.3, 0.6, -0.6, 0.95, -0.95, 1.4, -1.4], ANG_R = ANG_L.map((a) => -a);
 // A* over the road graph (towtruck.js roadGraph) from node a to b: the node ids into out (Int32Array), their count
 // (0: no way); its buffers kept between calls (a stamp instead of clearing them)
@@ -301,6 +308,30 @@ function roadAhead(i, dx, dz, m) {
   }
   return i;
 }
+// from road node i the way (dx, dz) points: the first junction (3+ ways) between m0 and m1 metres on along the roads
+// (as roadAhead: at a fork, the branch most that way) -> JN { i: the node or -1, m: how far on, ex, ez: the way you
+// come into it }; where the second patrol car cuts you off
+const JN = { i: -1, m: 0, ex: 0, ez: 0 };
+function nextJunction(i, dx, dz, m0, m1) {
+  const G = roadGraph(), X = G.X, Z = G.Z;
+  let prev = -1, acc = 0;
+  JN.i = -1;
+  for (let guard = 0; guard < 400 && acc < m1; guard++) {
+    const L = G.adj[i];
+    if (acc >= m0 && L.length >= 3) { JN.i = i; JN.m = acc; JN.ex = dx; JN.ez = dz; return JN; }
+    let best = -1, bd = 0.2, bl = 1;
+    for (let q = 0; q < L.length; q++) {
+      const v = L[q];
+      if (v === prev) continue;
+      const ex = X[v] - X[i], ez = Z[v] - Z[i], el = Math.hypot(ex, ez) || 1, dd = (ex * dx + ez * dz) / el;
+      if (dd > bd) { bd = dd; best = v; bl = el; }
+    }
+    if (best < 0) break;
+    acc += bl; dx = (X[best] - X[i]) / bl; dz = (Z[best] - Z[i]) / bl;
+    prev = i; i = best;
+  }
+  return JN;
+}
 // (x, z) inside the box (cx, cz, yaw: its +z, hw, hd) grown by r?
 function inBox(x, z, r, cx, cz, yaw, hw, hd) {
   const s = Math.sin(yaw), c = Math.cos(yaw), dx = x - cx, dz = z - cz;
@@ -310,26 +341,49 @@ function inBox(x, z, r, cx, cz, yaw, hw, hd) {
 // a patrol car seen from the side (the WANTED box: one per car after you)
 const POLICE_CAR_ICON = '<svg viewBox="0 0 26 13"><path d="M2 9.5V7.2c0-.8.5-1.4 1.3-1.6L7 4.8l3-3.1c.4-.4.9-.6 1.5-.6h5.2c.6 0 1.1.3 1.5.7l2.6 3.1 2.4.5c.9.2 1.5.9 1.5 1.8v2.3c0 .5-.4.9-.9.9h-1.1a2.6 2.6 0 0 0-5.2 0H9.6a2.6 2.6 0 0 0-5.2 0H2.9c-.5 0-.9-.4-.9-.9zM11.8 2.4 9.6 4.9h4.6V2.4zm3.8 0v2.5h4.2l-2.1-2.5z"/><circle cx="7" cy="10.4" r="1.8"/><circle cx="19.2" cy="10.4" r="1.8"/><rect x="12.2" y="0" width="3" height="1.2" rx=".4" fill="#ff4d3d"/></svg>';
 
+const STAR = '<svg viewBox="0 0 24 24"><path d="M12 1.8l3.1 6.6 7.1.9-5.2 4.9 1.4 7.1L12 17.8l-6.4 3.5L7 14.2 1.8 9.3l7.1-.9z"/></svg>';
 const CSS = `
-#police-hud { position: absolute; left: 22px; bottom: 92px; width: 260px; padding: 12px 24px 14px 22px; background: #fff; color: var(--blue, #1546c8);
-  clip-path: var(--brush-a); filter: drop-shadow(0 6px 14px rgba(0, 20, 60, 0.28)); pointer-events: none; }
+#police-hud { position: absolute; left: 22px; bottom: 92px; box-sizing: border-box; width: max(300px, calc(var(--u) * 390)); padding: calc(var(--u) * 14) calc(var(--u) * 34) calc(var(--u) * 20) calc(var(--u) * 28);
+  color: var(--blue, #1546c8); pointer-events: none; isolation: isolate; filter: drop-shadow(0 calc(var(--u) * 6) calc(var(--u) * 14) rgba(0, 20, 60, 0.3));
+  animation: pl-in 0.45s cubic-bezier(.2,.9,.2,1) backwards; }
 #police-hud[hidden] { display: none; }
+/* (white paper with a gently ragged edge in u, as the controls card: the % brush is too torn at this size) */
+#police-hud::before { content: ''; position: absolute; inset: 0; z-index: -1; background: #fff;
+  clip-path: polygon(0 calc(var(--u) * 4), 16% 0, 38% calc(var(--u) * 5), 62% calc(var(--u) * 1), 85% calc(var(--u) * 5), 100% 0, calc(100% - var(--u) * 4) 32%, 100% 66%,
+    calc(100% - var(--u) * 2) 100%, 75% calc(100% - var(--u) * 5), 50% 100%, 25% calc(100% - var(--u) * 4), 0 100%, calc(var(--u) * 4) 62%, 0 28%); }
 body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (the same corner: the box takes it) */
-#police-hud .pl-lights { display: flex; gap: 6px; margin-bottom: 6px; }
-#police-hud .pl-lights i { flex: 1; height: 4px; border-radius: 2px; background: #1546c8; animation: pl-blink 0.5s steps(1) infinite; }
-#police-hud .pl-lights i + i { background: #ff4d3d; animation-delay: 0.25s; }
-#police-hud .pl-head { display: flex; align-items: baseline; justify-content: space-between; font-family: var(--num); font-style: italic; font-weight: 700; }
-#police-hud .pl-head b { font-size: 26px; letter-spacing: 0.06em; color: #ff4d3d; }
-#police-hud .pl-t { font-size: 22px; font-variant-numeric: tabular-nums; }
-#police-hud .pl-cars { display: flex; gap: 4px; margin-left: auto; margin-right: 10px; align-self: center; }
-#police-hud .pl-cars svg { width: 26px; height: 13px; fill: #1546c8; }
-#police-hud .pl-msg { margin-top: 4px; font-size: 13px; font-weight: 700; line-height: 1.3; }
-#police-hud .pl-esc { margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(21, 70, 200, 0.18); }
+#police-hud .pl-lights { display: flex; gap: calc(var(--u) * 6); height: calc(var(--u) * 8); margin: 0 calc(var(--u) * -8) calc(var(--u) * 10); }
+#police-hud .pl-lights i { flex: 1; background: #1546c8; clip-path: var(--brush-b); animation: pl-blink 0.5s steps(1) infinite; }
+#police-hud .pl-lights i:nth-child(even) { background: #ff4d3d; animation-delay: 0.25s; }
+#police-hud .pl-head { display: flex; align-items: flex-end; justify-content: space-between; gap: calc(var(--u) * 12); }
+#police-hud .pl-stars { display: flex; gap: calc(var(--u) * 3); margin-bottom: calc(var(--u) * 2); }
+#police-hud .pl-stars svg { width: calc(var(--u) * 24); height: calc(var(--u) * 24); min-width: 17px; min-height: 17px; fill: rgba(21, 70, 200, 0.15); transition: fill 0.3s ease; }
+#police-hud .pl-stars svg.on { fill: var(--blue, #1546c8); animation: pl-star 0.6s cubic-bezier(.2,1.4,.4,1) backwards; }
+#police-hud .pl-title b { display: block; font: italic 700 calc(var(--u) * 56)/0.88 var(--num); letter-spacing: 0.04em; color: #ff4d3d; }
+#police-hud .pl-clock { text-align: right; }
+#police-hud small { display: block; font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.16em; color: var(--blue-dim, #4f72d4); white-space: nowrap; }
+#police-hud .pl-t { display: block; margin-top: calc(var(--u) * 3); font: italic 700 calc(var(--u) * 46)/0.9 var(--num); font-variant-numeric: tabular-nums; }
+#police-hud .pl-msg { margin: calc(var(--u) * 12) calc(var(--u) * -10) 0 calc(var(--u) * -8); padding: calc(var(--u) * 8) calc(var(--u) * 20) calc(var(--u) * 9) calc(var(--u) * 16);
+  background: var(--blue, #1546c8); color: #fff; clip-path: var(--brush-b); font: italic 700 max(15px, calc(var(--u) * 20))/1.12 var(--num); letter-spacing: 0.03em;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+#police-hud .pl-msg.hot { background: #d0342c; }
+#police-hud .pl-esc { margin-top: calc(var(--u) * 14); }
 #police-hud .pl-esc[hidden] { display: none; }
-#police-hud .pl-esc span { display: block; font-size: 12px; font-weight: 700; color: var(--blue-dim, #4f72d4); font-variant-numeric: tabular-nums; }
-#police-hud .pl-bar { height: 6px; margin-top: 5px; background: rgba(21, 70, 200, 0.14); clip-path: var(--brush-b); }
-#police-hud .pl-bar i { display: block; height: 100%; width: 0; background: #1546c8; }
-@keyframes pl-blink { 0% { opacity: 1; } 50% { opacity: 0.15; } }`;
+#police-hud .pl-row { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--u) * 10); }
+#police-hud .pl-esc-t { font: italic 700 calc(var(--u) * 28)/1 var(--num); font-variant-numeric: tabular-nums; }
+#police-hud .pl-esc-t em { font-style: normal; font-size: 0.7em; color: var(--blue-dim, #4f72d4); }
+#police-hud .pl-bar { height: calc(var(--u) * 16); min-height: 10px; margin-top: calc(var(--u) * 6); background: rgba(21, 70, 200, 0.13); clip-path: var(--brush-b); }
+#police-hud .pl-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #1546c8, #3d7bff); transition: width 0.25s linear; }
+#police-hud.gain .pl-bar i { animation: pl-pulse 0.9s ease-in-out infinite; }
+#police-hud .pl-sub { margin-top: calc(var(--u) * 9); align-items: center; }
+#police-hud .pl-cars { display: flex; gap: calc(var(--u) * 6); }
+#police-hud .pl-cars svg { width: calc(var(--u) * 36); height: calc(var(--u) * 18); min-width: 26px; min-height: 13px; fill: var(--blue, #1546c8); }
+#police-hud .pl-near { font: 800 var(--t-sm)/1 var(--ui); letter-spacing: 0.08em; white-space: nowrap; color: #d0342c; }
+#police-hud.gain .pl-near { color: #129a46; }
+@keyframes pl-blink { 0% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes pl-in { from { opacity: 0; translate: calc(var(--u) * -40) 0; } }
+@keyframes pl-star { from { scale: 1.8; opacity: 0; } }
+@keyframes pl-pulse { 50% { opacity: 0.6; } }`;
 
 // ------------------------------------------------------------------ the police
 export class Police {
@@ -366,21 +420,31 @@ export class Police {
     if (!document.getElementById('police-css')) { const s = document.createElement('style'); s.id = 'police-css'; s.textContent = CSS; document.head.appendChild(s); }
     const el = document.createElement('div');
     el.id = 'police-hud'; el.hidden = true;
-    el.innerHTML = '<div class="pl-lights"><i></i><i></i></div><div class="pl-head"><b>WANTED</b><span class="pl-cars"></span><span class="pl-t"></span></div><div class="pl-msg"></div><div class="pl-esc"><span></span><div class="pl-bar"><i></i></div></div>';
+    el.innerHTML = '<div class="pl-lights"><i></i><i></i><i></i><i></i></div>'
+      + `<div class="pl-head"><div class="pl-title"><div class="pl-stars">${STAR.repeat(5)}</div><b>WANTED</b></div><div class="pl-clock"><small>CHASE</small><span class="pl-t"></span></div></div>`
+      + '<div class="pl-msg"></div>'
+      + '<div class="pl-esc"><div class="pl-row"><small>ESCAPE</small><span class="pl-esc-t"></span></div><div class="pl-bar"><i></i></div><div class="pl-row pl-sub"><span class="pl-cars"></span><span class="pl-near"></span></div></div>';
     (document.getElementById('hud') || document.body).appendChild(el);
     this.el = el;
-    this.$t = el.querySelector('.pl-t'); this.$cars = el.querySelector('.pl-cars'); this.$msg = el.querySelector('.pl-msg'); this.$escBox = el.querySelector('.pl-esc'); this.$esc = el.querySelector('.pl-esc span'); this.$bar = el.querySelector('.pl-bar i');
+    this.$t = el.querySelector('.pl-t'); this.$cars = el.querySelector('.pl-cars'); this.$msg = el.querySelector('.pl-msg'); this.$escBox = el.querySelector('.pl-esc');
+    this.$esc = el.querySelector('.pl-esc-t'); this.$bar = el.querySelector('.pl-bar i'); this.$near = el.querySelector('.pl-near'); this.$stars = [...el.querySelectorAll('.pl-stars svg')];
     this.hudCache = {};
   }
-  setHud(show, t = '', msg = '', esc = '', frac = 0, cars = 0) {
+  // the WANTED box: t the chase clock, msg the one status line (hot: red, fleeing), esc the escape clock ('' hides the
+  // escape part), frac its bar, cars the patrol cars after you, near the nearest one's distance, stars 1-5
+  setHud(show, t = '', msg = '', esc = '', frac = 0, cars = 0, near = '', stars = 1, hot = false, gain = false) {
     if (!this.el) return;
     if (this.el.hidden === show) { this.el.hidden = !show; document.body.classList.toggle('wanted', show); }
     if (!show) return;
     const C = this.hudCache;
     if (C.t !== t) this.$t.textContent = C.t = t;
     if (C.msg !== msg) this.$msg.textContent = C.msg = msg;
+    if (C.hot !== hot) this.$msg.classList.toggle('hot', C.hot = hot);
+    if (C.gain !== gain) this.el.classList.toggle('gain', C.gain = gain);
     if (C.cars !== cars) { C.cars = cars; this.$cars.innerHTML = POLICE_CAR_ICON.repeat(cars); } // (a little patrol car per car after you)
-    if (C.esc !== esc) { this.$esc.textContent = C.esc = esc; this.$escBox.hidden = !esc; }
+    if (C.stars !== stars) { C.stars = stars; for (let i = 0; i < 5; i++) this.$stars[i].classList.toggle('on', i < stars); }
+    if (C.esc !== esc) { C.esc = esc; this.$esc.innerHTML = esc; this.$escBox.hidden = !esc; }
+    if (C.near !== near) this.$near.textContent = C.near = near;
     const w = `${Math.round(frac * 100)}%`;
     if (C.w !== w) this.$bar.style.width = C.w = w;
   }
@@ -538,7 +602,7 @@ export class Police {
     u.col.police = 'wreck'; // (a plain solid box now: your car hits it as any obstacle, drive.js; the other patrol cars steer round it)
     policeLights(u.m, false, 0);
     u.smoke ||= new Smoke(this.scene);
-    if (this.w) { this.w.backupT = TUNING.backupS; this.note('Police car wrecked! · more are on the way'); }
+    if (this.w) { this.w.backupT = TUNING.backupS; this.w.wrecks = (this.w.wrecks || 0) + 1; this.note('Police car wrecked! · more are on the way'); }
     try { this.audio?.impact ? this.audio.impact('car', 1) : this.audio?.play?.('land', 1); } catch { /* (silent) */ }
   }
   // the wrecks: smoking; gone once their time is up and you can't see them (or are far away)
@@ -660,7 +724,7 @@ export class Police {
     if (W.fleeing) return;
     W.fleeing = true;
     const foot = !this.drive?.active;
-    this.note(`${foot ? 'Running from the police' : 'Fleeing · they will ram you'} · stay ${TUNING.escapeR} m away for ${mmss(TUNING.escapeS)} to escape`);
+    this.note(`${foot ? 'Running from the police' : 'Fleeing · they will ram you'} · stay ${TUNING.escapeR} m away for ${mmss(TUNING.escapeS)}`);
   }
 
   // one patrol car chasing (the driving notes: above routeIds). Not fleeing: to where you will be, then tailing 10 m
@@ -672,11 +736,11 @@ export class Police {
     const d = hyp(u.x, u.z, T.x, T.z);
     u.ramCool = Math.max(0, u.ramCool - dt);
     u.ram = false;
-    u.boost = 1 + TUNING.catchUp * clamp((d - 150) / 250, 0, 1);
+    u.boost = 1 + TUNING.catchUp * clamp((d - TUNING.catchFrom) / 250, 0, 1);
     if (!T.car && !T.foot) { u.parked = false; this.step(u, dt, u.x + Math.sin(u.yaw) * 3, u.z + Math.cos(u.yaw) * 3, 0); return; } // (on a lift, in the helicopter...: they wait)
     // stuck again and again, far and out of sight: back on a road nearer you (the last resort)
     if (u.stuckN >= 3 && d > 150 && !this.inView(u) && this.spawn(u.k, 160, 380, true)) return;
-    const vMax = TUNING.vRoad * u.boost;
+    const vMax = Math.min(TUNING.vTop, TUNING.vRoad * u.boost);
     if (T.foot) {
       this.footGoal(u, T, dt);
       const F = u.fg, g = hyp(u.x, u.z, F.x, F.z);
@@ -693,20 +757,41 @@ export class Police {
     const closing = Math.max(4, (Math.sin(u.yaw) * u.v - T.vx) * ex + (Math.cos(u.yaw) * u.v - T.vz) * ez);
     const tl = !lead && W.fleeing ? clamp(d / Math.max(12, Math.abs(u.v)), 2, 7) : clamp(d / closing, 0, 3.5);
     let px = T.x + T.vx * tl, pz = T.z + T.vz * tl;
-    // (further off, you on a road: that far on along it, re-found twice a second)
+    // (further off, you on a road: that far on along it, re-found 2.5 times a second; the second car, fleeing: the
+    // next junction on your way it gets to before you (+1.5 s): it waits there, across your way (T-bone / road block))
     if (d > 40 && busRoads.roads.length) {
       if ((u.goT = (u.goT || 0) - dt) <= 0) {
-        u.goT = 0.5; u.goOk = false;
+        u.goT = 0.4; u.goOk = false; u.goJ = false;
         const n = roadNearest(T.x, T.z);
-        if (n.i >= 0 && n.d < 15) { const G = roadGraph(), j = T.sp > 2 ? roadAhead(n.i, T.vx / T.sp, T.vz / T.sp, T.sp * tl) : n.i; u.goX = G.X[j]; u.goZ = G.Z[j]; u.goOk = true; }
+        if (n.i >= 0 && n.d < 15) {
+          const G = roadGraph(), dx = T.sp > 2 ? T.vx / T.sp : s, dz = T.sp > 2 ? T.vz / T.sp : c;
+          let j = T.sp > 2 ? roadAhead(n.i, dx, dz, T.sp * tl) : n.i;
+          if (!lead && W.fleeing && T.sp > 6) {
+            const J = nextJunction(n.i, dx, dz, 35, TUNING.junctionM);
+            if (J.i >= 0 && (hyp(u.x, u.z, G.X[J.i], G.Z[J.i]) * 1.25) / (TUNING.vRoad * u.boost) < J.m / T.sp + 1.5) { j = J.i; u.goJ = true; }
+          }
+          u.goX = G.X[j]; u.goZ = G.Z[j]; u.goOk = true;
+        }
       }
       if (u.goOk) { px = u.goX; pz = u.goZ; }
+    }
+    // fleeing, it crossing your way ahead of / beside you (a junction, a side road) and getting there about when you
+    // do: straight into your side at full speed (a T-bone: hits() makes it a real crash)
+    const sx = Math.sin(u.yaw - C.yaw) * (lxU >= 0 ? 1 : -1); // (< 0: heading across toward your line)
+    if (W.fleeing && fwd > 9 && d < TUNING.tboneR && u.ramCool <= 0 && lzU > -C.half && Math.abs(lxU) > C.w * 0.5 + u.hw && sx < -0.5
+      && lzU / fwd < 3.5 && Math.abs(lxU) / Math.max(6, Math.abs(u.v) * -sx) < 3.5) {
+      const tt = clamp(Math.abs(lxU) / Math.max(10, Math.abs(u.v) * -sx + 4), 0, 2.5);
+      const P = this.carPoint(C, 0, fwd * tt + C.half * 0.3, this._pt ||= {});
+      u.ram = true; u.direct = true; u.pitT = 0; u.pitSide = 0;
+      this.step(u, dt, P.x, P.z, TUNING.vTop);
+      return;
     }
     // coming at you (oncoming, ahead of you, near): it brakes hard and turns round (a three-point turn on a road)
     // where it is, so it is on your tail as you pass (and in your way while it turns)
     if (fwd > 3 && lzU > -1 && lzU < 25 + Math.max(0, u.v) * 3.2 && Math.cos(u.yaw - C.yaw) < -0.3 && !(W.fleeing && !lead)) {
       u.pitT = 0; u.pitSide = 0;
-      if (u.v > 6) this.step(u, dt, u.x + Math.sin(u.yaw) * 4, u.z + Math.cos(u.yaw) * 4, 0);
+      // (fleeing: braking, it swerves into your line: in your way while it turns)
+      if (u.v > 6) { const P = W.fleeing ? this.carPoint(C, 0, lzU, this._pt ||= {}) : null; this.step(u, dt, P ? P.x : u.x + Math.sin(u.yaw) * 4, P ? P.z : u.z + Math.cos(u.yaw) * 4, 0); }
       else { const P = this.carPoint(C, -LANE, lzU + 15, this._pt ||= {}); this.step(u, dt, P.x, P.z, 6); }
       return;
     }
@@ -729,14 +814,15 @@ export class Police {
         this.step(u, dt, P.x, P.z, lzU < 30 ? 0 : 10);
         return;
       }
-      if (u.ramCool > 0) { this.follow(u, dt, C, lxU > 0 ? 1.2 : -1.2, -C.half - u.hd - 9, fwd, lxU, lzU, vMax, 0); return; } // (just hit you: dropping back)
+      if (u.ramCool > 0) { this.follow(u, dt, C, lxU > 0 ? 1.2 : -1.2, -C.half - u.hd - 4, fwd, lxU, lzU, vMax, 4); return; } // (just hit you: a moment back, then again)
       let other = 0;
       for (const o of this.units) if (o !== u && o.on && o.pitSide) other = o.pitSide;
       this.pit(u, dt, C, fwd, lxU, lzU, vMax, lead ? 0 : -other);
       return;
     }
     u.pitT = 0; u.pitSide = 0;
-    this.step(u, dt, px, pz, vMax);
+    // (waiting at the junction it cut you off at: pulls up on it)
+    this.step(u, dt, px, pz, u.goJ ? Math.min(vMax, 1 + Math.sqrt(2 * A_BRAKE * hyp(u.x, u.z, px, pz))) : vMax);
   }
   // keeping station at (lx, lz) in your car's frame: straight for it while it is well ahead, else along your line there
   // (aiming ahead along it: never a U-turn back to a spot it has overshot, it lets you pass); faster the further back
@@ -756,14 +842,14 @@ export class Police {
     const sg = u.pitSide, lxT = sg * (C.w / 2 + u.hw + 0.45), lzT = -C.half * 0.45 - u.hd;
     if (u.pitT > 0) {
       u.pitT -= dt;
-      const P = this.carPoint(C, sg * (C.w / 2 - 0.5), -C.half * 0.5 + 3 + Math.abs(u.v) * 0.25, this._pt ||= {});
-      this.step(u, dt, P.x, P.z, clamp(fwd + 2, 0, vMax * 1.2));
-      if (u.pitT <= 0) { u.pitSide = 0; u.ramCool = 1; }
+      const P = this.carPoint(C, sg * (C.w / 2 - 1.1), -C.half * 0.5 + 3 + Math.abs(u.v) * 0.25, this._pt ||= {});
+      this.step(u, dt, P.x, P.z, clamp(fwd + 5, 0, vMax * 1.25));
+      if (u.pitT <= 0) { u.pitSide = 0; u.ramCool = 0.4; }
       return;
     }
-    if (fwd <= 6) { const P = this.carPoint(C, 0, -C.half + 1, this._pt ||= {}); this.step(u, dt, P.x, P.z, Math.max(0, fwd) + 3); return; }
-    if (Math.abs(lzT - lzU) < 1.4 && Math.abs(lxT - lxU) < 1.1) u.pitT = 0.9;
-    this.follow(u, dt, C, lxT, lzT, fwd, lxU, lzU, vMax * (1 + TUNING.catchUp) / u.boost, TUNING.ramExtra);
+    if (fwd <= 6) { const P = this.carPoint(C, 0, -C.half + 1, this._pt ||= {}); this.step(u, dt, P.x, P.z, Math.max(0, fwd) + 6); return; }
+    if (Math.abs(lzT - lzU) < 2.2 && Math.abs(lxT - lxU) < 1.6) u.pitT = 1.1;
+    this.follow(u, dt, C, lxT, lzT, fwd, lxU, lzU, TUNING.vTop, TUNING.ramExtra);
   }
   // on foot: the nearest point a patrol car gets to near you: 9 m short of you by a road, else from the road point
   // nearest you toward you while the ground is drivable (not steep, nothing solid), up to 9 m short of you
@@ -819,9 +905,9 @@ export class Police {
     const d = hyp(u.x, u.z, tx, tz);
     // the way: re-planned about once a second, or when the goal has moved 30 m; straight only for the last stretch
     u.repath -= dt;
-    if (d > 25 && busRoads.roads.length) { if (u.repath <= 0 || hyp(tx, tz, u.gx, u.gz) > 30) this.plan(u, tx, tz); }
+    if (d > 25 && busRoads.roads.length && !u.direct) { if (u.repath <= 0 || hyp(tx, tz, u.gx, u.gz) > 30) this.plan(u, tx, tz); }
     else u.pn = 0;
-    const sp = Math.abs(u.v), ld = clamp(5 + sp * 0.55, 6, 28);
+    const sp = Math.abs(u.v), ld = clamp(5 + sp * 0.55, 6, 42);
     let ax = tx, az = tz, onRoad = false, vCurve = 99;
     if (u.pn > 1) {
       const PX = u.PX, PZ = u.PZ, last = u.pn - 1;
@@ -852,7 +938,7 @@ export class Police {
     if ((u.probeT -= dt) <= 0) { u.probeT = 0.14; this.probe(u, want, vt, Math.min(la, d) + 3, onRoad); }
     want += u.avoid.turn;
     const paved = onRoad || !!world.isRoadNear?.(u.x, u.z);
-    let v = Math.min(vt, u.avoid.vmax, vCurve, paved ? TUNING.vRoad * (u.ram ? 1 + TUNING.catchUp : u.boost) : TUNING.vOff + (u.ram ? 6 : 0));
+    let v = Math.min(vt, u.avoid.vmax, vCurve, paved ? Math.min(TUNING.vTop, TUNING.vRoad * (u.ram ? 1 + TUNING.catchUp : u.boost)) : TUNING.vOff + (u.ram ? 6 : 0));
     // pure pursuit: the arc through the aim point (behind it: a U-turn at full lock and a crawl, one way until round)
     const alpha = wrapPi(want - u.yaw);
     let kap;
@@ -877,7 +963,7 @@ export class Police {
       // (the lock the speed allows: never more sideways grip than A_LAT x 1.3)
       const lim = Math.min(0.7, Math.atan((WB * A_LAT * 1.3) / Math.max(1, u.v * u.v)) + 0.02);
       u.steer += clamp(clamp(Math.atan(WB * kap), -lim, lim) - u.steer, -3 * dt, 3 * dt);
-      const acc = u.v < 0 ? 10 : 7.5 * (1 - 0.5 * clamp(u.v / 50, 0, 1));
+      const acc = u.v < 0 ? 10 : 8.5 * (1 - 0.6 * clamp(u.v / TUNING.vTop, 0, 1)); // (0-250 km/h in ~13 s, pursuit-spec)
       u.v += clamp(v - u.v, -A_BRAKE * 1.1 * dt, acc * dt);
       // progress: wanting to go but hardly moved in a second: back up and turn out (the other way each time); a few
       // in a row: drivePursuit puts it back on a road out of sight
@@ -897,7 +983,7 @@ export class Police {
     u.x += Math.sin(u.yaw) * u.v * dt; u.z += Math.cos(u.yaw) * u.v * dt;
     this.pushOut(u);
     this.place(u);
-    u.noYou = false;
+    u.noYou = false; u.direct = false;
   }
   // something solid at (x, z) within r? (buildings, rocks, poles, parked cars, other players' cars, guardrails; trees);
   // dyn (the probe): also the other patrol car, the traffic and the bus (and the guardrails a little narrower: the aim
@@ -941,7 +1027,7 @@ export class Police {
   // roads: no faster than the traffic on the way ahead + 6 m/s once near it (then round it)
   probe(u, want, vt, reach, onRoad) {
     const A = u.avoid, sp = Math.max(Math.abs(u.v), 5);
-    const L = Math.min(clamp(6 + sp * 0.3 + ((sp * sp) / (2 * A_BRAKE)) * 0.6, 7, 40), Math.max(6, reach));
+    const L = Math.min(clamp(6 + sp * 0.3 + ((sp * sp) / (2 * A_BRAKE)) * 0.6, 7, 70), Math.max(6, reach));
     A.vmax = 99;
     if (vt < 1) { A.turn = 0; return; }
     const b0 = this.ray(u, want, L);
@@ -1068,17 +1154,20 @@ export class Police {
       if (u.ram && W?.fleeing) {
         // their ram: real damage (drive.js knock / crash), a spin from where it hit: the point of your car nearest its
         // middle, the push about your middle (a rear quarter: a PIT, you spin out)
-        const eff = closing * TUNING.ramMult;
+        // (a PIT / T-bone that connects is never a brush: at least ramMin; the spin and a sideways shove after the
+        // knock / crash, which sets its own)
+        const eff = Math.max(closing * TUNING.ramMult, TUNING.ramMin);
         const sy = Math.sin(d.yaw), cy = Math.cos(d.yaw), qx = u.x - d.x, qz = u.z - d.z;
         const lx = clamp(qx * cy - qz * sy, -d.w / 2, d.w / 2), lz = clamp(qx * sy + qz * cy, -d.half, d.half);
         const rx = cy * lx + sy * lz, rz = -sy * lx + cy * lz;
-        d.yawRate = clamp((d.yawRate || 0) + clamp((nx * rz - nz * rx) * (0.35 + closing * 0.12), -2.2, 2.2), -3, 3);
         const e = d.e;
         if (eff > CRASH_V && this.drive.canCrash()) this.drive.crash(eff, nx, nz, 'car');
         else if (eff > KNOCK_V) this.drive.knock(eff, nx, nz);
+        d.yawRate = clamp((d.yawRate || 0) + clamp((nx * rz - nz * rx) * (0.5 + closing * 0.16) * TUNING.spin, -3, 3), -3.6, 3.6);
+        d.vx += nx * TUNING.ramPush; d.vz += nz * TUNING.ramPush;
         if (this.drive.d?.crash) { e.policeWreck = true; this.wreckE = e; } // (wrecked by the police: not repaired, carrental.js)
         u.dmg += Math.max(0, closing * 3.6 - TUNING.wreckKmh) * TUNING.wreckPer * 0.35; // (their ram hurts them a little)
-        u.v *= u.pitT > 0 ? 0.85 : 0.5; u.ramCool = TUNING.ramGapS; u.pitT = 0; u.pitSide = 0;
+        u.v *= u.pitT > 0 ? 0.92 : 0.75; u.ramCool = TUNING.ramGapS; u.pitT = 0; u.pitSide = 0;
       } else if (closing > KNOCK_V && yours > KNOCK_V * 0.6) {
         // you drove into them: your knock, their damage, and (not fleeing yet) now you are
         this.drive.knock(closing, nx, nz);
@@ -1356,10 +1445,12 @@ export class Police {
       : W.fleeing ? 'Fleeing · they will ram you · stop to give up'
         : W.reached ? `Pull over now: stop to pay the ${usd(this.fineNow())} fine${W.grace > 0 ? ` (${Math.ceil(W.grace)})` : ''}` : `Police! Stop to pay a ${usd(this.fineNow())} fine, or get away`;
     const msg2 = this.noteUntil > performance.now() ? this.noteText : msg;
-    const near = Number.isFinite(W.near) ? ` · police ${Math.round(W.near)} m` : '';
-    const esc = S ? '' : `Escape ${mmss(W.esc)} / ${mmss(TUNING.escapeS)} · stay ${TUNING.escapeR} m+ away${near}`;
+    const far = !Number.isFinite(W.near) || W.near > TUNING.escapeR;
+    const near = Number.isFinite(W.near) ? `${far ? 'LOSING THEM' : 'TOO CLOSE'} · ${Math.round(W.near)} M` : 'NO POLICE NEAR';
+    const esc = S ? '' : `${mmss(W.esc)} <em>/ ${mmss(TUNING.escapeS)} · ${TUNING.escapeR} m+</em>`;
     let cars = 0; for (const u of this.units) if (u.on) cars++;
-    this.setHud(true, mmss(W.t), msg2, esc, S ? 0 : W.esc / TUNING.escapeS, cars);
+    const stars = clamp(1 + (W.reached ? 1 : 0) + (W.fleeing ? 1 : 0) + ((W.wrecks || 0) > 0 ? 1 : 0) + (W.fleeing && W.t > 60 ? 1 : 0), 1, 5);
+    this.setHud(true, mmss(W.t), msg2, esc, S ? 0 : W.esc / TUNING.escapeS, cars, near, stars, !!(W.fleeing || (S && S.kind === 'arrest')), !S && far);
   }
   /** Trail map: the patrol cars while you are wanted (blue dots). */
   mapMarkers() {
@@ -1379,7 +1470,7 @@ export class Police {
     this.netT = 0;
     this.netSent = true;
     const r = (v) => Math.round(v * 100) / 100;
-    net.send('veh', { k: 'police', cars: live.map((u) => [r(u.x), r(u.y), r(u.z), r(u.yaw), r(clamp(u.v, -60, 60))]) });
+    net.send('veh', { k: 'police', cars: live.map((u) => [r(u.x), r(u.y), r(u.z), r(u.yaw), r(clamp(u.v, -75, 75))]) });
   }
 
   dispose() {

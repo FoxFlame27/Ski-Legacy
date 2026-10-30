@@ -59,7 +59,7 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const CRASH_V = 70 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
 const EXTREME_V = 150 / 3.6; // ...and this fast: the car's wrecked at once
 const KNOCK_V = 30 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
-const RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_IN = 25 / 3.6; // m/s: faster than this, and into a guardrail this fast: through it (railBreak)
+const RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_IN = 80 / 3.6; // (Oct 30, the user: into the rail at 80 km/h, not 25) // m/s: faster than this, and into a guardrail this fast: through it (railBreak)
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 && !c.rock ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');

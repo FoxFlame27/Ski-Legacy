@@ -2237,12 +2237,11 @@ export class Police {
         S.said = true;
         if (S.kind === 'fine') {
           const f = this.fineNow();
-          this.say('Officer', `License and registration, please... You caused a collision back there.${this.record() ? ' And not for the first time.' : ''} That's a ${usd(f)} fine.`);
+          this.say('Officer', `${this.record() ? 'You again? ' : ''}Collision back there: ${usd(f)} fine.`); // (short: the long lines ran off the screen)
           this.charge(f); this.addRecord();
         } else {
           const f = this.arrestNow(), a = usd(f);
-          this.say('Officer', S.why === 'wrecked' ? `Stay right there! You are under arrest. That car is going nowhere. ${a} and you're coming with us.`
-            : T.car ? `Out of the car! You are under arrest for fleeing the police. That's ${a}.` : `Stop right there! You are under arrest for fleeing the police. That's ${a}.`);
+          this.say('Officer', S.why === 'wrecked' ? `You're under arrest! ${a}.` : T.car ? `Out of the car! Arrested · ${a}.` : `Stop! You're under arrest · ${a}.`); // (Oct 30, the user: the lines ran off the screen: short now)
           this.charge(f); this.lastArrest = f; this.addRecord();
         }
       }

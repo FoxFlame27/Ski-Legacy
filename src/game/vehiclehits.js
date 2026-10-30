@@ -9,7 +9,7 @@
 // The vehicles: every moving box collider of
 //  - the traffic's cars (game/traffic.js: car.collider),
 //  - the ski bus you ride (bus:0) and the fleet on their rounds (game/bus/bus.js: line.collider, line.fleet[].collider),
-//  - the CAR RENTAL's tow truck (game/towtruck.js: carRental.truck.collider),
+//  - the CAR RENTAL's tow trucks (game/towtruck.js: carRental.truck.trucks[].collider),
 //  - the snow ploughs (world/snowcats.js: cats[].col),
 //  - multiplayer: the other players' cars (net/vehicles.js: session.vehicles.cars, col; their interpolated pose).
 // Their velocity is measured from the collider's motion frame to frame (the same for every source, the remote cars'
@@ -79,8 +79,8 @@ export class VehicleHits {
       const F = line.fleet;
       if (F) for (let i = 0; i < F.length; i++) this.add(F[i].collider, F[i], 'bus');
     }
-    const tr = S.carRental?.truck;
-    if (tr) this.add(tr.collider, tr.g?.position || tr, 'tow truck');
+    const tr = S.carRental?.truck; // (the fleet of tow trucks: towtruck.js TowFleet; or a single truck)
+    if (tr) for (const t of tr.trucks || [tr]) this.add(t.collider, t.g?.position || t, 'tow truck');
     const cats = S.snowcats?.cats;
     if (cats) for (let i = 0; i < cats.length; i++) this.add(cats[i].col, cats[i], 'snow plough');
     const rc = S.multiplayer?.vehicles?.cars;

@@ -234,7 +234,7 @@ export class RemoteVehicles {
     w.x += (gx - w.x) * k; w.z += (gz - w.z) * k; w.yaw = wrapPi(w.yaw + wrapPi(w.tyaw - w.yaw) * k);
     groundPose(w.g, w.x, w.z, w.yaw);
     const mine = this.o.localTow?.();
-    const overMine = !!(mine && !mine.job && Math.hypot(mine.x - w.x, mine.z - w.z) < 2.5); // (your truck parked right there)
+    const overMine = !!(mine && (mine.trucks || [mine]).some((t) => !t.job && Math.hypot(t.x - w.x, t.z - w.z) < 2.5)); // (one of your trucks parked right there: its TOW bay)
     const show = outdoors && !overMine && _d.set(w.x, w.g.position.y, w.z).sub(cam).length() < VEH_FAR;
     w.col.x = show ? w.x : 1e9; w.col.z = show ? w.z : 1e9; w.col.rot = -w.yaw;
     if (!show) { if (w.shown) this.hideTow(w); return; }

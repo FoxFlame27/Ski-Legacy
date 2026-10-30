@@ -9,6 +9,7 @@
 // The fee and the impound go through the server ('tow' / 'towDone': net/session.js tow()).
 import { net } from './client.js';
 import { ST } from './protocol.js';
+import { MP } from './mode.js';
 
 const SEND_DT = 1 / 6;
 const FOOT = new Set([ST.walk, ST.ski, ST.fall, ST.sit]);
@@ -37,6 +38,9 @@ export class TowMp {
     const T = this.truck;
     if (!T) return;
     if (T.mp !== this.hooks) T.mp = this.hooks;
+    // (the fleet's three TOW bays: yours is pid % 3, so the trucks of different players leave from and park in
+    // different bays and are not drawn inside each other)
+    if ('prefer' in T) { const k = ((MP.pid | 0) % 3 + 3) % 3; if (T.prefer !== k) T.prefer = k; }
     const j = T.job;
     if (!j) {
       if (this.sent) { this.sent = false; net.request('veh', { k: 'tow', off: true }).catch(() => {}); }
@@ -52,7 +56,7 @@ export class TowMp {
 
   /** Loaded on the truck (on its bed, or being lifted onto it): your car rides with the truck, not where it stood. */
   carAboard(e) {
-    const j = this.truck?.job;
+    const T = this.truck, j = T?.trucks ? T.trucks.find((t) => t.job?.e === e)?.job : T?.job; // (the fleet: the truck that has it)
     return !!(e && j && j.e === e && (j.onBed || j.phase === 'load'));
   }
 
@@ -62,6 +66,7 @@ export class TowMp {
   dispose() {
     const T = this.truck;
     if (T && T.mp === this.hooks) T.mp = null;
+    if (T && 'prefer' in T) T.prefer = null;
     this.sent = false;
   }
 }

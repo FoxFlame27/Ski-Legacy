@@ -21,7 +21,7 @@ import { nightUniform } from '../world/village.js';
 import { busRoads } from './bus/roads.js';
 import { carTemplate, carInstance } from './cars.js';
 import { CarRentalRoom } from './carrentalroom.js';
-import { TowTruck } from './towtruck.js';
+import { TowFleet } from './towtruck.js';
 import { CarRentalUI } from '../ui/carrental.js';
 import { PAINTS, normConfig, extrasCost, dressCar, paintOf, randomPlate, setPlates } from './carconfig.js';
 import { LAYOUT, buildShell } from './carrentalshell.js';
@@ -64,7 +64,7 @@ export const GARAGE_MAX = 10; // (Oct 29, the user: "you also can buy more than 
 // (Oct 29: the bigger hall, 32 x 17.5 m: its glass front 0.6 m further from the road than before (the yard 12.3 m
 // deep, the bays and the TOW bay as they were), its back 16.7 m in, its sides 16.3 m out: inside the cleared site)
 const YARD = { hall: -7.9, hw: 16.0, z1: 13.2, bayLines: [-12.4, -9.4, -6.4, -3.4], bayZ: [2.6, 8.4], carX: -7.9, carZ: 5.6,
-  tow: { x: 7.6, z: 6.6, hl: 4.6, hw: 1.9 } };
+  tow: { x: 7.6, zs: [3.4, 6.9, 10.4], hl: 4.6, hw: 1.75 } }; // (three TOW bays side by side, one per truck: towtruck.js TowFleet)
 const paintHex = (id) => paintOf(id).hex;
 
 export class CarRental {
@@ -84,15 +84,23 @@ export class CarRental {
     this.room = new CarRentalRoom({ renderer: o.renderer, models: o.models, makeRig: o.makeRig, cars: RENTALS, display: DISPLAY.map(([id, paint]) => ({ id, paint: paintHex(paint) })), upper: UPPER.map(([id, paint]) => ({ id, paint: paintHex(paint) })) });
     // the showroom's windows look out on the real world from where the hall stands (its own outside hidden for that view)
     this.room.setWorld({ scene: o.scene, frame: this.hall, hide: () => [this.hall, this.player?.rig?.root, this.player?.rig?.gear] });
-    // the tow truck: in its TOW bay along the road, nose to the yard's right end; out: on round to the right onto the
-    // road; back: in from the road at the left of the bay, round into it (so it ends nose first, square in the bay)
-    const P = YARD.tow, park = this.w(P.x, P.z);
+    // the tow trucks (three: towtruck.js TowFleet), each in its own TOW bay along the road, nose to the yard's right end;
+    // out: on round to the right onto the road (each bay its own line past the noses of the bays nearer the road);
+    // back: in from the road at the left of the bays, round into its own (so it ends nose first, square in the bay).
+    // this.truck: the fleet (fetch, busy, update, trucks; the API of the one truck it replaces)
+    const P = YARD.tow, yaw = this.yaw0 + Math.PI / 2;
+    const ways = [ // bay 0 (by the hall), 1, 2 (by the road): [out after the spot], [in before the spot]
+      [[[12.4, 4.4], [14.2, 7.6], [14.6, 11.6], [14.6, 15.8]], [[-1.6, 15.8], [-1.4, 9.0], [-0.4, 5.6], [2.0, 3.8], [4.4, P.zs[0] + 0.1]]],
+      [[[12.6, 8.4], [14.2, 11.6], [14.6, 15.8]], [[-1.2, 15.8], [0.6, 11.2], [3.4, P.zs[1] + 0.3]]],
+      [[[12.4, 11.0], [14.0, 13.2], [14.4, 15.8]], [[-1.0, 15.8], [0.4, 12.6], [3.4, P.zs[2] + 0.3]]],
+    ];
     try {
-      this.truck = new TowTruck({ scene: o.scene, models: o.models, colliders: o.colliders, camera: o.camera, traffic: o.traffic, audio: o.audio,
-        park: { ...park, yaw: this.yaw0 + Math.PI / 2 },
-        yardOut: [park, this.w(12.6, 8.4), this.w(14.2, 11.6), this.w(14.6, 15.8)],
-        yardIn: [this.w(-1.2, 15.8), this.w(0.6, 11.2), this.w(3.4, P.z + 0.3)] });
-    } catch (e) { console.warn('tow truck', e); this.truck = null; }
+      this.truck = new TowFleet({ scene: o.scene, models: o.models, colliders: o.colliders, camera: o.camera, traffic: o.traffic, audio: o.audio },
+        P.zs.map((z, k) => {
+          const park = this.w(P.x, z), [out, inn] = ways[k];
+          return { park: { ...park, yaw }, yardOut: [park, ...out.map(([x, zz]) => this.w(x, zz))], yardIn: inn.map(([x, zz]) => this.w(x, zz)) };
+        }));
+    } catch (e) { console.warn('tow trucks', e); this.truck = null; }
     // drive.js: only your own car lets you in; a wreck of it: the repair bill and the truck
     if (o.drive) {
       o.drive.locked = (e) => (e.rental || e.free ? null : 'Buy a car at the Autohaus in Legacy Village');
@@ -195,10 +203,16 @@ export class CarRental {
       c.strokeStyle = 'rgba(246,246,240,0.92)'; c.lineWidth = 5;
       for (const lx of YARD.bayLines) { c.beginPath(); c.moveTo(X(lx), Z(YARD.bayZ[0])); c.lineTo(X(lx), Z(YARD.bayZ[1])); c.stroke(); }
       c.beginPath(); c.moveTo(X(YARD.bayLines[0]), Z(YARD.bayZ[0])); c.lineTo(X(YARD.bayLines.at(-1)), Z(YARD.bayZ[0])); c.stroke();
+      // the three TOW bays side by side (one per truck), ABSCHLEPPDIENST painted along their left ends
       const t = YARD.tow; c.strokeStyle = 'rgba(232,172,30,0.95)'; c.lineWidth = 6;
-      c.strokeRect(X(t.x - t.hl), Z(t.z - t.hw), X(t.x + t.hl) - X(t.x - t.hl), Z(t.z + t.hw) - Z(t.z - t.hw));
-      c.fillStyle = 'rgba(232,172,30,0.95)'; c.font = 'italic 700 44px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.save(); c.translate(X(t.x + t.hl) - 40, Z(t.z)); c.rotate(-Math.PI / 2); c.fillText('TOW', 0, 0); c.restore();
+      c.fillStyle = 'rgba(232,172,30,0.95)'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      for (const tz of t.zs) {
+        c.strokeRect(X(t.x - t.hl), Z(tz - t.hw), X(t.x + t.hl) - X(t.x - t.hl), Z(tz + t.hw) - Z(tz - t.hw));
+        c.font = 'italic 700 44px Arial';
+        c.save(); c.translate(X(t.x + t.hl) - 40, Z(tz)); c.rotate(-Math.PI / 2); c.fillText('TOW', 0, 0); c.restore();
+      }
+      c.font = 'italic 700 26px Arial';
+      c.save(); c.translate(X(t.x - t.hl) - 22, Z((t.zs[0] + t.zs.at(-1)) / 2)); c.rotate(-Math.PI / 2); c.fillText('ABSCHLEPPDIENST', 0, 0); c.restore();
       // (the sides fade into the snow: alpha)
       c.globalCompositeOperation = 'destination-in';
       const fx = c.createLinearGradient(0, 0, w, 0); fx.addColorStop(0, 'rgba(0,0,0,0)'); fx.addColorStop(0.035, '#000'); fx.addColorStop(0.965, '#000'); fx.addColorStop(1, 'rgba(0,0,0,0)');

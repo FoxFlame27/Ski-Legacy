@@ -200,8 +200,9 @@ export class TowTruck {
    * @param {{x,z}[]} [o.yardIn] the way back in (from the road's edge, ending short of the spot: it drives into its
    *   bay nose first, square, never turning round in it); else yardOut backwards
    */
-  constructor({ scene, models, colliders, camera, park, yardOut, yardIn = null, traffic = null, audio = null }) {
-    Object.assign(this, { scene, colliders, camera, park, yardOut, yardIn: yardIn || yardOut.slice().reverse(), traffic, audio });
+  constructor({ scene, models, colliders, camera, park, yardOut, yardIn = null, traffic = null, audio = null, fleet = null, idx = 0 }) {
+    Object.assign(this, { scene, colliders, camera, park, yardOut, yardIn: yardIn || yardOut.slice().reverse(), traffic, audio, fleet, idx });
+    this.hitBy = null; // what it is held up by (follow(): a sibling truck of the fleet, or anything else)
     this.jobs = []; // wrecks waiting: { e (the parking entry), onDone }
     this.job = null;
     this.state = 'parked';
@@ -343,6 +344,9 @@ export class TowTruck {
     // their tow trucks: each player's truck serves only its owner's car and ignores the others') and the players
     // themselves (net/tow.js hooks)
     for (const c of this.colliders) if (c.mp && !c.tow && c.x < 1e8) add(c.x, c.z, -(c.rot || 0), c.hw ?? c.r ?? 1, c.hd ?? c.r ?? 1, c, 'mp');
+    // the other trucks of the fleet while they are out on a job (parked in their own bays they are off its way); two
+    // holding each other up: the lower-numbered one goes on (no standoff in the yard)
+    for (const o of this.fleet?.trucks || []) if (o !== this && o.job && !(o.hitBy === this && this.idx < o.idx)) add(o.x, o.z, o.yaw, HALF_W, HALF_L, o, 'truck');
     try { this.mp?.others?.(add); } catch { /* */ }
     return out;
   }
@@ -414,6 +418,7 @@ export class TowTruck {
       const alt = this.firstHit(this.predict(j, () => ps.off, look), obs);
       if (!alt || alt.s > hit.s + 1) { ps.len = Math.max(ps.len, ps.s + hit.s + HALF_L * 2 + 8); this.reserve(j); hit = alt; }
     }
+    this.hitBy = hit ? hit.o.ref : null;
     let blocked = false;
     if (hit) { const cap = Math.sqrt(7 * Math.max(0, hit.s - STOP_GAP)); if (cap < v) { v = cap; blocked = cap < 1; } }
     j.held = blocked ? (j.held || 0) + dt : Math.max(0, (j.held || 0) - dt * 2);
@@ -507,6 +512,7 @@ export class TowTruck {
     this.free(j);
     this.cable.visible = false;
     this.job = null;
+    this.hitBy = null;
     this.state = 'parked';
     try { j.onDone?.(j.e); } catch (err) { console.warn('tow truck: done', err); }
   }
@@ -544,6 +550,63 @@ export class TowTruck {
     this.collider.x = this.x; this.collider.z = this.z; this.collider.rot = -this.yaw;
     void _m; void _q;
   }
+}
+
+// ------------------------------------------------------------------ the fleet
+// (Oct 30, the user: "make sure there are three tow trucks parking slots because sometimes more than 3 people will have
+// crashed or be parking illegally, so then pick up a car, bring it back and then go for the next car that has to be
+// impounded"): three trucks, each in its own TOW bay with its own way out and in. A job goes to a free truck (one
+// leaving the yard every STAGGER_S s at most, so they don't nose into each other); all three out: it waits in the
+// queue and the first truck home takes it. Each truck its own 3-min give-up and its own reserved road. The API of the
+// one truck it replaces: fetch(e, onDone), busy, update(dt); trucks / colliders for every truck; job / x / z / yaw /
+// v / g: the truck out on a job (net/tow.js streams that one); prefer: the bay to use first (multiplayer: pid % 3, so
+// the trucks of different players leave from different bays and don't sit inside each other).
+const STAGGER_S = 5;
+export class TowFleet {
+  /** @param {object} o TowTruck's options (scene, models, ...) but the bay; @param {{park,yardOut,yardIn}[]} bays */
+  constructor(o, bays) {
+    this.jobs = []; // waiting for a free truck: { e, onDone }
+    this.prefer = null;
+    this.t = 0; this.lastOut = -Infinity; this._mp = null;
+    this.trucks = [];
+    bays.forEach((b, idx) => this.trucks.push(new TowTruck({ ...o, ...b, fleet: this, idx })));
+  }
+  get colliders() { return this.trucks.map((t) => t.collider); }
+  get busy() { return this.jobs.length > 0 || this.trucks.some((t) => t.busy); }
+  has(e) { return this.jobs.some((j) => j.e === e) || this.trucks.some((t) => t.job?.e === e || t.jobs.some((j) => j.e === e)); }
+  /** A car to fetch (drive.js parking entry); onDone(e) once it's off the truck in the yard. */
+  fetch(e, onDone) {
+    if (this.has(e)) return;
+    e.wrecked && (e.wrecked.tow = true); // (drive.js: the truck fetches it, no vanishing)
+    this.jobs.push({ e, onDone });
+  }
+  // a truck free to go: the preferred bay's first, else the one nearest the road
+  idle() {
+    const T = this.trucks, n = T.length;
+    if (Number.isInteger(this.prefer) && n) { const t = T[((this.prefer % n) + n) % n]; if (!t.busy) return t; }
+    for (let i = n - 1; i >= 0; i--) if (!T[i].busy) return T[i];
+    return null;
+  }
+  update(dt) {
+    if (!(dt > 0)) return;
+    this.t += dt;
+    if (this.jobs.length && this.t - this.lastOut >= STAGGER_S) {
+      const t = this.idle();
+      if (t) { const j = this.jobs.shift(); t.fetch(j.e, j.onDone); this.lastOut = this.t; }
+    }
+    for (const t of this.trucks) t.update(dt);
+  }
+  /** The truck out on a job (else the preferred / first one, parked). */
+  get active() { const T = this.trucks; return T.find((t) => t.job) || T[Number.isInteger(this.prefer) ? ((this.prefer % T.length) + T.length) % T.length : 0] || T[0]; }
+  get job() { return this.active?.job || null; }
+  get x() { return this.active?.x; }
+  get z() { return this.active?.z; }
+  get yaw() { return this.active?.yaw; }
+  get v() { return this.active?.v; }
+  get g() { return this.active?.g; }
+  get collider() { return this.active?.collider; }
+  get mp() { return this._mp; }
+  set mp(v) { this._mp = v; for (const t of this.trucks) t.mp = v; }
 }
 
 // the road graph for other road users that drive the real roads (game/police.js: the patrol cars)

@@ -1750,6 +1750,9 @@ addEventListener('keydown', (e) => { if (e.code === 'Escape' && overlayOpen()) e
 document.addEventListener('pointerlockchange', () => {
   if (!started || document.pointerLockElement) return;
   if (overlayOpen() || performance.now() - escClosedAt < 700) return;
+  // (Oct 30, the user: "when you buy a car you go into the ESC view": the configurator closing and the car going out
+  // re-lock the pointer twice in a row; an unlock in that moment is not the player pausing)
+  if (carRental?.ui?.isOpen || performance.now() - (carRental?.ui?.closedAt ?? -1e9) < 1500) return;
   if (!paused && !transition.active) openPause();
 });
 document.getElementById('panel').addEventListener('click', (e) => { if (e.target.id === 'panel') { hud.close(); input.lock(); } });

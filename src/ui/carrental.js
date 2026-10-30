@@ -61,6 +61,7 @@ export class CarRentalUI {
     clearTimeout(this.plateT); this.plateSeq++;
     const v = this.view;
     this.view = null;
+    this.closedAt = performance.now(); // (main.js: the pointer lock coming back just after must not open the pause menu)
     this.el.hidden = true; this.el.innerHTML = '';
     document.body.classList.remove('carcfg-open');
     this.hud?.setBlocking?.('carrental', false);

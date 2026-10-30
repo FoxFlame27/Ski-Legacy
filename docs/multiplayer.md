@@ -277,11 +277,11 @@ Each line has one timeline:
 ### Races
 
 - **Queue.** E at a course's start house in multiplayer calls `raceJoin`.
-- **Countdown.** It starts when 2 or more players are queued and lasts 30 s.
+- **Countdown.** It starts when 2 or more players are queued and lasts 45 s (more can join meanwhile).
   - A join during the countdown does not reset it.
   - If the queue drops below 2, the countdown is cancelled.
-- **Immediate start.** The race starts at once (with a 4 s lead) when 50 players are queued, or when everyone in
-  the world is queued and that is at least 2.
+- **Immediate start.** Only a full field (50 queued) starts at once (with a 4 s lead); otherwise the 45 s countdown
+  always runs, even when everyone in the world is queued.
 - **Entry.** The server charges the entry fee at the start; the first race is free, as in singleplayer.
 - **Start.** The client runs the normal race session with `bots: 0` and `syncGo`, so the countdown ends at the
   shared GO. Each racer stands on their own `slot` of the session's start grid (`grid: {slot, n}`: abreast, then in

@@ -22,7 +22,7 @@ export const MAX_PLAYERS = 50;
 export const TICK_HZ = 15;                 // presence batches per second
 export const DAY_MS = 16 * 60 * 1000;      // one game day (sky.js DAY_SECONDS)
 export const HELI_COPY_MS = 5 * 60 * 1000; // a rental out this long: a new copy waits at the pad
-export const RACE_WAIT_MS = 30 * 1000;     // queue countdown once 2 are in
+export const RACE_WAIT_MS = 45 * 1000;     // queue countdown once 2 are in (Oct 30, the user: 45 s, never at once)
 export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ahead (everyone counts down together)
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
 export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
@@ -336,7 +336,7 @@ class World {
     if (!q) return;
     const n = q.members.length, now = Date.now();
     if (n < 2) { if (q.startAt) { q.startAt = 0; clearTimeout(q.timer); } }
-    else if (n >= MAX_PLAYERS || n >= this.size) { clearTimeout(q.timer); this.startRace(race); return; }
+    else if (n >= MAX_PLAYERS) { clearTimeout(q.timer); this.startRace(race); return; } // (only a full field starts at once; everyone in the world queued still waits the 45 s)
     else if (!q.startAt) { q.startAt = now + RACE_WAIT_MS; q.timer = setTimeout(() => { try { this.startRace(race); } catch (e) { this.server.log(`[err] startRace ${race}: ${e.stack || e}`); } }, RACE_WAIT_MS); }
     if (!n) this.queues.delete(race);
     this.broadcast('raceQueue', this.queueMsg(race));

@@ -301,16 +301,19 @@ try {
   ok(q1.ok && q1.d.n === 1 && !q1.d.startAt, 'one in the queue: waiting for players (1/2)');
   await b.req('raceJoin', { race: 'meadow' });
   const qe = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 2);
-  ok(qe && qe.startAt - Date.now() > 25000, 'two in the queue (of 3 in the world): the 30 s countdown starts');
+  ok(qe && qe.startAt - Date.now() > 25000, 'two in the queue (of 3 in the world): the 45 s countdown starts');
   await a.req('raceLeave');
   const qc = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 1);
   ok(qc && qc.startAt === 0, 'one leaves: the countdown is cancelled');
   await a.req('raceJoin', { race: 'meadow' });
   const qe2 = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 2 && d.startAt > 0);
   const startAt = qe2?.startAt;
-  await c3.req('raceJoin', { race: 'meadow' }); // everyone in the world is queued: starts at once
+  await c3.req('raceJoin', { race: 'meadow' }); // everyone in the world is queued: it still waits for the countdown
+  const qe3 = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 3);
+  ok(qe3 && qe3.startAt === startAt && qe3.waitMs === 45000, 'everyone in the world queued: no instant start, the 45 s countdown runs on');
+  { const wq = server.worlds.get(la.d.world.id), q = wq.queues.get('meadow'); clearTimeout(q.timer); wq.startRace('meadow'); } // (the countdown's end, now)
   const st = await a.next('raceStart', (d) => d.race === 'meadow');
-  ok(st && st.grid.length === 3 && st.at - Date.now() <= 4500 && new Set(st.grid.map((g) => g.slot)).size === 3, 'everyone in the world queued: the race starts at once (3 on the grid, shared start time)');
+  ok(st && st.grid.length === 3 && st.at - Date.now() <= 4500 && new Set(st.grid.map((g) => g.slot)).size === 3, 'at the countdown\'s end the race starts (3 on the grid, shared start time)');
   ok(startAt > 0, 'a late joiner did not reset the countdown before that');
   const wr = server.worlds.get(la.d.world.id), race = wr.races.get(st.rid);
   race.at = Date.now() - 60000; // (a minute in)

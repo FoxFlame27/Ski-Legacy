@@ -2155,7 +2155,9 @@ function loopUpdate() {
     for (const e of player.events) if (e === 'tooFlat') hud.flash('Too flat to ski here — walk to a slope or a lift', 'bad', 2400);
     else if (e === 'skisOff') hud.flash('Skis off — walk on the flat (G to put them on at a slope)', 'good', 2600);
     else if (e === 'tooSteep') hud.flash('Too steep to walk up — take a lift or the ski bus', 'bad', 2400);
-    // ('bump': knocked over running into somebody, game/peoplehits.js: you just get up, no strike)
+    // ('bump': knocked over running into somebody, game/peoplehits.js: you just get up, no strike; also a vehicle hitting
+    // you under 35 km/h, game/vehiclehits.js: Oct 30 2026, the user: "if a car crashes into you with less than 35 kph
+    // nothing happens you just get the hit/falling animation"; only 35+ km/h hits come here as a 'crash' and count)
     else if (e === 'crash') {
       // sessions respawn at the checkpoint, open-world races fade back; free ride: you get up after the
       // first wipeout, the second (within 3 min, no lift ride between) calls the rescue helicopter

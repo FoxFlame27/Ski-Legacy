@@ -3,6 +3,11 @@
 // ~10 km/h knocks you over: the player's own wipeout ('fall' with a tumble) thrown along the vehicle's line and a bit
 // up, scaled by the speed; an impact sound and a camera shake. It counts as a crash (main.js: a strike; the second
 // brings the rescue helicopter) and a hard hit (50+ km/h) brings the helicopter at once (main.js reads take()).
+// (Oct 30 2026, the user: "make sure if a car crashes into you with less than 35 kph nothing happens you just get the
+// hit/falling animation": below 35 km/h closing speed (the vehicle's speed into you less yours away from it; a remote
+// player's car by its own motion, as every source) you're knocked over the same way but it's a 'bump' (player.crash
+// event: main.js counts no strike, no hospital / helicopter, no message; jobs.js doesn't fail the job) and you get up;
+// 35+ km/h as before: a strike, two to the rescue helicopter.)
 // After a hit you can't be hit again for 2 s. Never while seated / riding / driving, inside, or in a race session
 // (main.js `enabled`). The drivers still brake for you (traffic.js); hits mostly come from stepping out in front.
 //
@@ -29,6 +34,7 @@ const MARGIN = 0.15;            // touching counts (the player's own collide has
 const NEAR = 15;                // m: broad phase
 const V_MIN = 10 / 3.6;         // m/s: slower vehicles (and slower closing speeds) only push you softly
 const HARD = 50 / 3.6;          // m/s: a hard hit, like a big crash (the rescue helicopter comes)
+const SOFT = 35 / 3.6;          // m/s: slower hits only knock you over: a 'bump', no strike (Oct 30 2026, the user)
 const SAFE_MS = 2000;           // invulnerable this long after a hit
 const JUMP = 70;                // m/s: faster "motion" is a teleport (respawned, parked away): not a velocity
 const P_R = 0.3;                // a person's radius (hit by a vehicle: hitPeople)
@@ -190,12 +196,12 @@ export class VehicleHits {
     pl.vel.set(tx * h, up, tz * h);
     // the side you go over to: away from the vehicle's line (left / right of its travel)
     const side = (r.vx / vs) * nz - (r.vz / vs) * nx >= 0 ? 1 : -1;
-    const H = this.hit;
-    H.hard = hard; H.kmh = Math.round(speed * 3.6); H.what = r.what || 'car'; H.pending = true;
+    const H = this.hit, soft = speed < SOFT; // (under 35 km/h: just the fall, nothing counts; Oct 30 2026, the user)
+    H.hard = hard; H.kmh = Math.round(speed * 3.6); H.what = r.what || 'car'; H.pending = !soft;
     // 25+ km/h: a backward somersault through the air (the legs taken out, the head toward the vehicle); slower a roll
     // over / a topple
     const kmh = speed * 3.6;
-    pl.crash(side, { kind: kmh >= 25 ? 'tumble' : kmh >= 15 ? 'roll' : 'slam', pitchVel: kmh >= 25 ? L.spin : 0 });
+    pl.crash(side, { kind: kmh >= 25 ? 'tumble' : kmh >= 15 ? 'roll' : 'slam', pitchVel: kmh >= 25 ? L.spin : 0, event: soft ? 'bump' : undefined });
     if (pl.mode === 'fall') pl.fallAir = true; // (flying: lands on the snow, then slides and tumbles on)
     else H.pending = false;
     pl.shake = Math.max(pl.shake || 0, clamp(0.8 + speed / 18, 1, 2.3)); // (heavier the harder: 2+ at 70+ km/h)

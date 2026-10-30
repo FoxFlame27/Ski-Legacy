@@ -127,6 +127,7 @@ export class Multiplayer {
     MP.pid = d.pid;
     MP.catalog = d.catalog;
     MP.chalets = d.chalets || {};
+    MP.jailBoard = Array.isArray(d.jailBoard) ? d.jailBoard : []; // (the prison's jail board: its top 3, Oct 30 2026)
     MP.status = 'online';
     this.byeReason = null; // (a 'kicked' / 'replaced' from an earlier session must not name the next one's loss)
     this.guests = Array.isArray(d.guests) ? d.guests : [];
@@ -204,6 +205,7 @@ export class Multiplayer {
     on('permRevoked', (d) => this.c.hud.flash(d.kind === 'carRide' ? `${d.owner} took back the car ride` : `${d.owner} took back the chalet visit`, 'bad', 3000));
     on('kickInterior', (d) => { this.interior = null; this.c.onKickInterior?.(d.interior); });
     on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
+    on('jailBoard', (d) => { MP.jailBoard = Array.isArray(d?.top) ? d.top : []; }); // (the top 3 changed: prison.js redraws its posters)
     on('arrested', (d) => this.carRide.onArrested(d)); // (the driver of the car you ride in was arrested: you too)
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
     // poles / signs knocked flying, guardrail sections broken through: yours to the server, everyone else's here

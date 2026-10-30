@@ -1271,6 +1271,7 @@ export class GameServer {
       proto: PROTO, name: c.name, pid: c.pid, now: Date.now(), profile: c.profile, world: w.snapshot(),
       chalets: this.chaletsMsg(), chaletPlot: { id: c.plot, waiting: c.chaletWaiting, moved: !!c.plotMoved },
       catalog: CATALOG,
+      jailBoard: this.jailTop(), // (the prison notice board's top 3: jailVisit below)
       resumed, // true: the same player carried on (same world, pid, seat, chalet plot, vehicles, race entry)
       guests: this.guestNames(c.key), // your chalet's guest list (a resumed player's grants are still there)
       lastRace: w.lastRaceFor(c.key), // the result of a race you were in that ended in the last minute (missed while away?)
@@ -1508,9 +1509,11 @@ export class GameServer {
     if (!isNum(s) || s < 1 || s > JAIL_MAX_S) return { err: 'bad_value' };
     const reason = (str(d.reason, 80) ?? '').trim() || 'Arrested';
     const now = Date.now(), P = c.profile;
+    const visit = this.jailVisit(P, now);
     P.jailUntil = Math.min(now + JAIL_MAX_S * 1000, Math.max(P.jailUntil || 0, now + Math.round(s * 1000)));
     P.jailReason = reason;
     this.store.profiles.save();
+    if (visit) this.jailBoardSend();
     this.log(`[jail] ${c.name}: ${Math.round((P.jailUntil - now) / 1000)} s, ${reason}`);
     return { d: { jailUntil: P.jailUntil, reason, now } };
   }
@@ -1523,6 +1526,7 @@ export class GameServer {
    *  DEBT_FLOOR), told 'arrested' (offline: the sentence and the fine in their profile). */
   policeArrest(c, d) {
     const w = c.world, now = Date.now(), P = c.profile;
+    let visits = 0; // (new prison stays: the jail board)
     if (now - (c.arrestAt || 0) < ARREST_COOLDOWN_MS) return { err: 'cooldown' };
     if (!(P.jailUntil > now)) return { err: 'not_jailed' };
     c.arrestAt = now;
@@ -1542,6 +1546,7 @@ export class GameServer {
       const g = this.online.get(k) || null, G = g?.profile || this.profileOf(k);
       if (!G) continue;
       if (g?.seat?.k === 'car') g.world?.releaseSeat(g); // (out of whatever car they are in now)
+      if (this.jailVisit(G, now)) visits++; // (the prison board: an accomplice's stay counts too)
       G.jailUntil = Math.min(now + JAIL_MAX_S * 1000, Math.max(G.jailUntil || 0, now + seconds * 1000));
       G.jailReason = reason;
       const fine = Math.max(0, Math.min(ACCOMPLICE_FINE, Math.floor(G.money - DEBT_FLOOR)));
@@ -1555,7 +1560,34 @@ export class GameServer {
       names.push(nm);
       this.log(`[jail] ${nm}: ${seconds} s, ${reason}, -$${fine}${g ? '' : ' (offline)'}`);
     }
+    if (visits) this.jailBoardSend();
     return { d: { passengers: names } };
+  }
+
+  // (Oct 30 2026, the user: "turn this into a leaderboard of the top 3 amount of visits at the jail"): the prison
+  // lobby's three GESUCHT posters (game/prison.js) show who has been jailed most. profile.jailVisits: +1 for every
+  // sentence that starts (an arrest's 'jail', or jailed as an accomplice: policeArrest), not for time added to one
+  // being served. The top 3 ({ name, n }, most first, ties by name) go out with the login and as 'jailBoard'
+  // { top } to everyone online whenever they change.
+  jailVisit(P, now = Date.now()) {
+    if (!P || P.jailUntil > now) return false;
+    P.jailVisits = (P.jailVisits | 0) + 1;
+    return true;
+  }
+  jailTop() {
+    const list = [];
+    for (const [k, p] of Object.entries(this.store.profiles.data)) {
+      const n = p?.jailVisits | 0;
+      if (n > 0) list.push({ name: p.name || this.store.accounts?.data?.[k]?.name || k, n });
+    }
+    list.sort((a, b) => b.n - a.n || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return list.slice(0, 3);
+  }
+  jailBoardSend() {
+    const top = this.jailTop(), s = JSON.stringify(top);
+    if (s === this.jailBoardLast) return;
+    this.jailBoardLast = s;
+    this.broadcastAll('jailBoard', { top });
   }
 
   permRequest(c, d, reqId) {

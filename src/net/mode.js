@@ -13,6 +13,7 @@ export const MP = {
   world: null,      // { id, max, players } (live: net/session.js keeps it current)
   profile: null,    // the server profile (money, owned, chalet, cars ...): the authoritative copy
   catalog: null,    // the server's price list (server/lib/catalog.json)
+  jailBoard: null,  // the prison's jail board: the top 3 [{ name, n }] by visits (server: login, 'jailBoard')
   chalets: {},      // chalet id -> owner name, every world (global registry)
   status: 'off',    // 'off' | 'connecting' | 'online' | 'reconnecting'
 };

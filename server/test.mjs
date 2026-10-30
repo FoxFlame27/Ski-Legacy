@@ -953,6 +953,35 @@ try {
     await sleep(100);
   }
 
+  // (Oct 30 2026, the user: "turn this into a leaderboard of the top 3 amount of visits at the jail"): profile.jailVisits
+  // counts each sentence that starts (not time added to one being served); the top 3 come with the login and as 'jailBoard'
+  console.log('jail board');
+  {
+    ok(server.profileOf('jail ivy').jailVisits === 1, 'Ivy: one visit (the shorter and longer sentences while serving did not count)');
+    const bea = await join('Board Bea'), cal = await join('Board Cal'), bk = 'board bea';
+    ok(Array.isArray(bea.l.d.jailBoard) && bea.l.d.jailBoard.some((e) => e.name === 'Jail Ivy' && e.n === 1), 'the login carries the board (Ivy, 1)');
+    await bea.f.req('jail', { seconds: 5, reason: 'x' });
+    const ev1 = await cal.f.next('jailBoard', (d) => d.top.some((e) => e.name === 'Board Bea'));
+    ok(server.profileOf(bk).jailVisits === 1 && !!ev1, "Bea's first arrest: 1 visit, everyone online gets 'jailBoard'");
+    server.profileOf(bk).jailUntil = Date.now() - 1000; // (served)
+    await bea.f.req('jail', { seconds: 5, reason: 'y' });
+    const ev2 = await cal.f.next('jailBoard', (d) => d.top[0]?.name === 'Board Bea');
+    ok(server.profileOf(bk).jailVisits === 2 && ev2?.top[0].n === 2, 'served and arrested again: 2 visits, Bea tops the board');
+    const n0 = cal.f.events.filter((m) => m.t === 'jailBoard').length;
+    await bea.f.req('jail', { seconds: 20, reason: 'z' }); await sleep(50);
+    ok(server.profileOf(bk).jailVisits === 2 && cal.f.events.filter((m) => m.t === 'jailBoard').length === n0, 'more time while serving: no visit, no board message (unchanged)');
+    // the order: most first, ties by name, at most 3
+    const P = server.store.profiles.data, keep = Object.fromEntries(Object.keys(P).map((k) => [k, P[k].jailVisits]));
+    for (const k of Object.keys(P)) delete P[k].jailVisits;
+    P['board cal'].jailVisits = 7; P['jail ivy'].jailVisits = 3; P[bk].jailVisits = 3; P.alice.jailVisits = 1; P.bob.jailVisits = 9;
+    const top = server.jailTop();
+    ok(JSON.stringify(top) === JSON.stringify([{ name: 'Bob', n: 9 }, { name: 'Board Cal', n: 7 }, { name: 'Board Bea', n: 3 }]), 'jailTop: the top 3 by visits, ties by name (Bea before Ivy)');
+    for (const k of Object.keys(P)) { if (keep[k] == null) delete P[k].jailVisits; else P[k].jailVisits = keep[k]; }
+    server.jailBoardLast = null;
+    bea.f.close(); cal.f.close();
+    await sleep(100);
+  }
+
   // ---------------------------------------------------------------- the police: your patrol cars, seen by the others
   console.log('police');
   {
@@ -1152,6 +1181,8 @@ try {
     ok(Pp.money === 500 - 1500 && Pp.jailUntil === got.jailUntil, 'Pam is charged the accomplice fine (into debt) and her sentence is the server\'s');
     const pmoney = await pm.next('money', (d) => d.why === 'accomplice');
     ok(pmoney && pmoney.v === -1000 && pmoney.delta === -1500, 'Pam\'s client gets the new money');
+    { const jb = await be.next('jailBoard', (d) => d.top.some((e) => e.name === 'Driver Dan'));
+      ok(Pp.jailVisits === 1 && server.profileOf('driver dan').jailVisits === 1 && !!jb, 'the jail board: Dan\'s arrest and Pam\'s stay as an accomplice count a visit each (everyone online told)'); }
     ok(server.onlineByKey('passenger pam').seat === null && !server.hasGrant('carRide', 'driver dan', 'passenger pam'), 'Pam is out of the car (seat released, ride used up)');
     await sleep(50);
     const Pb = server.profileOf('bystander bea');

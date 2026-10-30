@@ -437,26 +437,68 @@ export class PrisonRoom {
       for (const x of [x0 + 0.15, x1 - 0.15]) { box(0.05, 0.44, 0.38, steel, x, 0.22, F.z1 - 0.26); }
       this.obstacles.push([x0, x1, F.z1 - 0.5, F.z1]);
     }
-    const posters = tex(1024, 560, (g, w, h) => {
+    // (Oct 30 2026, the user: "turn this into a leaderboard of the top 3 amount of visits at the jail"): the three
+    // GESUCHT posters are the jail board, #1 / #2 / #3 by visits (this.boardTop: [{ name, n }], Prison.boardList: the
+    // server's top 3 in multiplayer, you and two made-up regulars in single player; an empty one: "Your face here?").
+    // Redrawn only when the top 3 changes (setJailBoard). ("make sure the text fits properly": every line is measured
+    // and its font shrunk to fit inside the paper with a margin, a long name cut with "…" below the smallest size,
+    // and kept clear of the pins.)
+    const drawBoard = (g, w, h) => {
+      g.setTransform(1, 0, 0, 1, 0, 0); g.textBaseline = 'alphabetic';
       g.fillStyle = '#b48a5a'; g.fillRect(0, 0, w, h);
       const r = rng(77); for (let i = 0; i < 4000; i++) { g.fillStyle = `rgba(${90 + r() * 60},${60 + r() * 40},${30 + r() * 20},0.35)`; g.fillRect(r() * w, r() * h, 2, 2); }
       g.strokeStyle = '#5a3a20'; g.lineWidth = 22; g.strokeRect(0, 0, w, h);
-      const wanted = (x, y, name, reward, seed) => {
-        const q = rng(seed); g.save(); g.translate(x, y); g.rotate((q() - 0.5) * 0.06);
-        g.fillStyle = '#efe6cf'; g.fillRect(0, 0, 200, 270); g.fillStyle = '#1b1b1b'; g.font = 'bold 40px Georgia'; g.textAlign = 'center'; g.fillText('GESUCHT', 100, 44);
-        g.fillStyle = '#c8c0aa'; g.fillRect(30, 60, 140, 130);
-        g.fillStyle = '#3a3a3a'; g.beginPath(); g.arc(100, 112, 30 + q() * 6, 0, 7); g.fill(); g.beginPath(); g.ellipse(100, 192, 58, 44, 0, Math.PI, 0); g.fill();
-        g.fillStyle = '#c8c0aa'; g.fillRect(84 - q() * 6, 104, 10, 6); g.fillRect(108, 104, 10, 6);
-        g.fillStyle = '#1b1b1b'; g.font = 'bold 20px Georgia'; g.fillText(name, 100, 218); g.font = '18px Georgia'; g.fillStyle = '#8a1a14'; g.fillText(`Belohnung ${reward}`, 100, 246);
-        g.restore(); g.fillStyle = '#c8342c'; g.beginPath(); g.arc(x + 100, y + 8, 7, 0, 7); g.fill();
+      // the largest size from `size` down to `min` at which the line fits `max` px (below min: cut with "…")
+      const fit = (t, x, y, max, size, min, face) => {
+        let px = size;
+        for (; px > min; px--) { g.font = face(px); if (g.measureText(t).width <= max) break; }
+        g.font = face(px);
+        if (g.measureText(t).width > max) { while (t.length > 1 && g.measureText(`${t}…`).width > max) t = t.slice(0, -1).trimEnd(); t += '…'; }
+        g.fillText(t, x, y);
       };
-      wanted(40, 40, '"Der Pistenrowdy"', '$2,000', 1); wanted(270, 60, 'Speeding · Talstrasse', '$1,500', 2); wanted(500, 36, '"Schneeschuh-Sepp"', '$3,000', 3);
-      const note = (x, y, wd, ht, lines, col, seed) => { const q = rng(seed); g.save(); g.translate(x, y); g.rotate((q() - 0.5) * 0.08); g.fillStyle = col; g.fillRect(0, 0, wd, ht); g.fillStyle = '#222'; g.font = '19px Arial'; g.textAlign = 'left'; lines.forEach((t, i) => g.fillText(t, 12, 30 + i * 25)); g.restore(); g.fillStyle = '#1546c8'; g.beginPath(); g.arc(x + wd / 2, y + 7, 6, 0, 7); g.fill(); };
+      const wanted = (x, y, rank, e, seed) => {
+        const q = rng(seed), PW = 200, PH = 270, M = 16, TW = PW - 2 * M, gold = rank === 1;
+        g.save(); g.translate(x, y); g.rotate((q() - 0.5) * 0.06);
+        g.fillStyle = '#efe6cf'; g.fillRect(0, 0, PW, PH);
+        if (gold) { g.strokeStyle = '#c9a54a'; g.lineWidth = 5; g.strokeRect(5, 5, PW - 10, PH - 10); }
+        g.textAlign = 'center'; g.fillStyle = '#1b1b1b';
+        fit('GESUCHT', PW / 2, 54, TW, 38, 20, (px) => `bold ${px}px Georgia`); // (under the pin: it ends at y 15)
+        g.fillStyle = '#c8c0aa'; g.fillRect(36, 66, 128, 116);
+        g.save(); g.beginPath(); g.rect(36, 66, 128, 116); g.clip();
+        g.fillStyle = e ? '#3a3a3a' : '#8f897a'; g.beginPath(); g.arc(100, 112, 26 + q() * 5, 0, 7); g.fill(); g.beginPath(); g.ellipse(100, 186, 54, 42, 0, Math.PI, 0); g.fill();
+        g.fillStyle = '#c8c0aa'; g.fillRect(85 - q() * 5, 105, 9, 5); g.fillRect(107, 105, 9, 5);
+        if (!e) { g.fillStyle = '#efe6cf'; g.font = 'bold 34px Georgia'; g.fillText('?', 100, 124); }
+        g.restore();
+        // the rank: a round badge on the photo's corner (#1 gold)
+        g.fillStyle = gold ? '#d4a82c' : rank === 2 ? '#9aa0a6' : '#a86a3c'; g.beginPath(); g.arc(40, 72, gold ? 21 : 18, 0, 7); g.fill();
+        g.strokeStyle = gold ? '#7a5a0c' : '#3a3a3a'; g.lineWidth = 2; g.stroke();
+        g.fillStyle = gold ? '#2a1c00' : '#111'; g.textBaseline = 'middle';
+        fit(`#${rank}`, 40, 73, gold ? 34 : 28, gold ? 22 : 18, 10, (px) => `bold ${px}px Georgia`);
+        g.textBaseline = 'alphabetic';
+        g.fillStyle = e ? '#1b1b1b' : '#6a6455';
+        fit(e ? String(e.name) : 'Your face here?', PW / 2, 212, TW, 22, 13, (px) => `${e ? 'bold ' : 'italic '}${px}px Georgia`);
+        g.fillStyle = gold && e ? '#9a6a00' : '#8a1a14';
+        fit(e ? `Jailed ${e.n}×` : 'No record yet', PW / 2, 244, TW, 19, 12, (px) => `${gold && e ? 'bold ' : ''}${px}px Georgia`);
+        g.restore(); g.fillStyle = '#c8342c'; g.beginPath(); g.arc(x + PW / 2, y + 8, 7, 0, 7); g.fill();
+      };
+      const top = this.boardTop || [];
+      wanted(40, 40, 1, top[0], 1); wanted(270, 60, 2, top[1], 2); wanted(500, 36, 3, top[2], 3);
+      // the notes: one font size for all their lines, the largest at which the longest fits (a 14 px margin each side),
+      // the first line below the pin
+      const note = (x, y, wd, ht, lines, col, seed) => {
+        const q = rng(seed); g.save(); g.translate(x, y); g.rotate((q() - 0.5) * 0.08); g.fillStyle = col; g.fillRect(0, 0, wd, ht); g.fillStyle = '#222'; g.textAlign = 'left';
+        let px = 19; for (; px > 11; px--) { g.font = `${px}px Arial`; if (lines.every((t) => g.measureText(t).width <= wd - 28)) break; }
+        lines.forEach((t, i) => fit(t, 14, 40 + i * Math.round(px * 1.32), wd - 28, px, px, (s) => `${s}px Arial`));
+        g.restore(); g.fillStyle = '#1546c8'; g.beginPath(); g.arc(x + wd / 2, y + 7, 6, 0, 7); g.fill();
+      };
       note(740, 40, 240, 170, ['FUNDBÜRO / Lost & found', 'Ski, poles, 1 left glove', 'ask at the counter'], '#fff7c0', 4);
       note(740, 240, 240, 140, ['Lawinenwarnstufe 3', 'Avalanche danger:', 'considerable'], '#ffd6c8', 5);
       note(80, 350, 300, 150, ['NOTRUF 133', 'Police emergency', 'Bergrettung 140'], '#e8f0ff', 6);
       note(420, 360, 280, 160, ['Speed limit in the', 'village: 30 km/h', 'Fines from $500'], '#ffffff', 7);
-    });
+    };
+    this.boardTop = null;
+    const posters = tex(1024, 560, drawBoard);
+    this.board = { tex: posters, draw: drawBoard, key: '' };
     add(new THREE.BoxGeometry(2.3, 1.26, 0.04), new THREE.MeshStandardMaterial({ color: 0x5a3a20, roughness: 0.7 }), 11.3, 1.85, F.z1 - 0.03, 0, false);
     add(new THREE.PlaneGeometry(2.2, 1.2), new THREE.MeshStandardMaterial({ map: posters, roughness: 0.85 }), 11.3, 1.85, F.z1 - 0.055, Math.PI, false);
     for (const x of [14.7]) {
@@ -614,6 +656,14 @@ export class PrisonRoom {
    * whose local frame is this room's frame for that wing (the cell block looks out of the house's front, the cells'
    * barred windows over the forecourt; the office's door is the front door, its window the left side's).
    */
+  /** The jail board's top 3 ([{ name, n }], most first): the poster canvas redrawn only when it changes. */
+  setJailBoard(list) {
+    const top = (Array.isArray(list) ? list : []).slice(0, 3).map((e) => ({ name: String(e?.name ?? '?').slice(0, 40), n: Math.max(0, e?.n | 0) }));
+    const key = JSON.stringify(top), B = this.board;
+    if (!B || key === B.key) return;
+    B.key = key; this.boardTop = top;
+    const c = B.tex.image; B.draw(c.getContext('2d'), c.width, c.height); B.tex.needsUpdate = true;
+  }
   setWorld(o) {
     this.frames = o && o.scene && o.cells && o.office ? { cells: o.cells, office: o.office } : null;
     this.portal.setWorld(this.frames ? o : null);
@@ -783,7 +833,10 @@ export class Prison {
         net.request('jail', { seconds: sec, reason: this.reason }).then((d) => {
           if (d && Number.isFinite(d.jailUntil)) { this.until = d.jailUntil; if (MP.profile) { MP.profile.jailUntil = d.jailUntil; MP.profile.jailReason = d.reason; } }
         }).catch((e) => console.warn('[mp] jail', e?.code || e));
-      } else this.store();
+      } else {
+        if (!was && this.save) this.save.jailVisits = (this.save.jailVisits | 0) + 1; // (the jail board: a new stay, Oct 30 2026)
+        this.store();
+      }
     }
     this.active = true;
     if (was && this.inside && this.role === 'jailed') { this.hud?.flash(`Sentence: ${fmt(this.left())} · ${this.reason}`, 'bad', 2600); return; }
@@ -883,9 +936,19 @@ export class Prison {
     return '';
   }
 
+  /** The lobby's jail board (Oct 30 2026, "a leaderboard of the top 3 amount of visits at the jail"): multiplayer:
+   *  the server's top 3 (MP.jailBoard: login, 'jailBoard'); single player: you (save.jailVisits) among two made-up
+   *  regulars with small counts, so the board looks alive offline. */
+  boardList() {
+    if (isMP()) return MP.jailBoard || [];
+    const me = { name: 'You', n: this.save?.jailVisits | 0 };
+    return [me, { name: '"Der Pistenrowdy"', n: 3 }, { name: '"Schneeschuh-Sepp"', n: 2 }].filter((e) => e.n > 0).sort((a, b) => b.n - a.n);
+  }
+
   /** Every frame: the countdown, a sentence left over from before (a reload, a login), the cell kept shut. */
   update(dt) {
     const n = nightUniform.value || 0;
+    { const k = isMP() ? MP.jailBoard : this.save?.jailVisits | 0; if (k !== this.boardKey && this.room.board) { this.boardKey = k; this.room.setJailBoard(this.boardList()); } } // (redrawn when it changes)
     try { this.outside3d?.update(n, performance.now() / 1000); } catch (e) { console.warn('prison outside', e); this.outside3d = null; }
     if (this.inside && !this.active && this.role === 'jailed' && !this.busy) this.release(); // (cleared from elsewhere)
     if (this.active) {

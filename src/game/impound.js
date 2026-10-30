@@ -234,7 +234,8 @@ export class Impound {
   //   'road'  on a road (a lane, a junction, a roundabout)                   towed
   //   'layby' in a lay-by, 'yard' on a building's forecourt (the Autohaus yard, the medical centre, the police
   //           station), 'free' in the chalet village (its drives, its private bays)   fine
-  //   'snow'  anywhere else off the roads and car parks: back to your bay after TOW_AFTER s (no fee)
+  //   'snow'  anywhere else off the roads and car parks: moved to a free bay of the Autohaus car park after TOW_AFTER s
+  //           (no fee; snowSpot)
   // { kind, ok, lot, bay, n (the bay's number), why ('aisle' | 'angle' | 'lines') }
   /** The car parks with painted bays: the Autohaus car park and the others (parking.js lotBays). */
   bayLots() {
@@ -292,7 +293,8 @@ export class Impound {
       for (const k of [0, 1, -1]) if ((k ? laneDistance(x + fx * h * k, z + fz * h * k) : lane) < ROAD_HALF + 0.2) return { kind: 'road', ok: false };
     }
     // (Oct 30, the user: "if you park it somewhere not on a road or parking lot, put a countdown that it will despawn in
-    // 30 sec": out on the snow it goes back to your bay; the chalet village's drives and private bays still count)
+    // 30 sec": out on the snow it is moved to the Autohaus car park (snowSpot); the chalet village's drives and private
+    // bays still count)
     if (inChaletSite(x, z)) return { kind: 'free', ok: true };
     return { kind: 'snow', ok: false };
   }
@@ -330,13 +332,21 @@ export class Impound {
     this.t = 0.5;
     const p = R.player.pos, d = Math.hypot(p.x - e.car.position.x, p.z - e.car.position.z);
     const sp = e.spot = this.spotOf(e);
-    // out on the snow, off every road and car park: 30 s, then it's back in your bay (no truck, no fee)
+    // out on the snow, off every road and car park: 30 s from getting out, then it's moved to a free bay of the Autohaus
+    // car park (no truck, no fee). (Oct 30 2026, the user: "no, not return to bay, just return to parking lot or road",
+    // then "if it is despawned because it is off-road, spawn it next to the dealership lot": any free bay there, not
+    // only your own; snowSpot)
     if (sp.kind === 'snow') {
       e.abandonT = (e.abandonT || 0) + step;
       if (e.abandonT >= TOW_AFTER) {
         e.abandonT = 0; this.parkHud(null);
-        const b = this.freeBayOf();
-        if (b) { this.place(e, b); if (R.drive) R.drive._cc = null; R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000); }
+        const to = this.snowSpot(e);
+        if (to) {
+          this.place(e, to.b); // (upright, along the bay, nose out; multiplayer: net/carride.js sends the new parked spot, as for any place())
+          if (R.drive) R.drive._cc = null;
+          e.spot = null;
+          R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} was moved to the ${to.L?.name || 'Autohaus car park'}`, 'good', 4000);
+        }
         return;
       }
       this.parkHud(this.parkText(e, sp, d));
@@ -362,6 +372,40 @@ export class Impound {
     this.parkHud(this.parkText(e, sp, d));
   }
 
+  /** The bay a car left out on the snow is moved to (Oct 30 2026, the user: "if it is despawned because it is off-road,
+   *  spawn it next to the dealership lot"): the first free bay of the Autohaus car park (nearest the hall's door, the
+   *  tow yard's bays aside), one where() rates a proper 'bay' for this car, its whole length clear of cars (parked,
+   *  yours, traffic: drive.js clearAt, as unstuckSpot; other players': their records, carNear). Full: freeBayOf(), then
+   *  the nearest free bay in another car park. { b: the bay, L: its car park }, or null: none anywhere (it stays where it is). */
+  snowSpot(e) {
+    const R = this.R, g = e?.car, len = e?.length || 4.6, mp = isMP() ? R.mp || {} : null, D = R.drive;
+    if (!g) return null;
+    const r = CAR_HW + 0.1, k = Math.max(0, len / 2 - r), cars = R.parking?.cars || [];
+    const yawOf = (b) => Math.atan2(b.hx, b.hz); // (as pose(): backed in, nose out to the aisle)
+    const fits = (b) => {
+      if (this.pound?.includes(b)) return false; // (never into the tow yard's bays)
+      const yaw = yawOf(b);
+      if (this.where(b.x, b.z, yaw, len).kind !== 'bay') return false;
+      if (mp?.carNear?.(b.x, b.z, 2.5)) return false;
+      if (cars.some((c) => c !== e && !c.driving && c.car?.parent && Math.hypot(c.car.position.x - b.x, c.car.position.z - b.z) < 2.5)) return false;
+      if (!D?.clearAt) return true;
+      const ax = Math.sin(yaw), az = Math.cos(yaw);
+      for (const t of [k, 0, -k]) if (!D.clearAt(b.x + ax * t, b.z + az * t, r, e)) return false;
+      return true;
+    };
+    // the Autohaus car park first (autohaus.js plans it beside the hall; build() sorted its bays by the door)
+    const own = (this.byDoor || []).find(fits);
+    if (own) return { b: own, L: this.lot };
+    const fb = this.freeBayOf(); // (single player: an other people's car may leave its bay for yours)
+    if (fb) return { b: fb, L: this.lot };
+    // the Autohaus car park full: the nearest free bay elsewhere
+    const x = g.position.x, z = g.position.z, cands = [];
+    for (const L of this.bayLots()) if (L !== this.lot) for (const b of L.bays) cands.push({ b, L, d2: (b.x - x) ** 2 + (b.z - z) ** 2 });
+    cands.sort((a, b) => a.d2 - b.d2);
+    for (const c of cands) if (fits(c.b)) return c;
+    return null;
+  }
+
   // the card's words for where it stands: [good, head, sub]
   parkText(e, sp, d = 0) {
     // (Oct 30, the user: "don't say bay (number), in which bay, just say pull into bay": no bay numbers on the card)
@@ -373,7 +417,7 @@ export class Impound {
         `${sp.why === 'angle' ? 'Straighten up inside the lines' : 'Park inside the lines'} or ${left}`];
       case 'mouth': return [false, '✗ Blocking the car park entrance', `Park in a bay or ${left}`];
       case 'road': return [false, '✗ On the road', `It will be towed in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
-      case 'snow': return [false, '✗ Not on a road or in a car park', `It goes back to your bay in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
+      case 'snow': return [false, '✗ Not on a road or in a car park', `It will be moved to the Autohaus car park in ${clock(TOW_AFTER - (e.abandonT || 0))}`];
       case 'layby': return [true, '✓ Parked in the lay-by', 'Fine here'];
       case 'yard': return [true, `✓ Parked · ${sp.lot?.name || 'forecourt'}`, 'Fine here'];
       default: return [true, '✓ Parked off the road', 'Fine here'];
@@ -395,7 +439,7 @@ export class Impound {
         : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', 'Pull into the bay, inside the lines']
         : [false, 'Not in a bay', 'Pull into a free bay, inside the lines'];
     } else if (sp?.kind === 'mouth' && v < 1) t = [false, 'Blocking the entrance', 'Drive in and park in a bay'];
-    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', 'Leave it here and it goes back to your bay in 30 sec · park in a car park or a lay-by']; // (Oct 30, the user: "and indicate it to the user")
+    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', 'Leave it here and it will be moved to the Autohaus car park in 30 sec · park in a car park or a lay-by']; // (Oct 30, the user: "and indicate it to the user"; Oct 30 2026: "spawn it next to the dealership lot")
     this.parkHud(t, true);
   }
 

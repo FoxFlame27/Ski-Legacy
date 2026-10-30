@@ -15,6 +15,7 @@ import { busRoads, roadAt, ROAD_HALF, roadsideBlocked, laneDistance } from './ro
 import { transition } from '../../ui/transition.js';
 import { trafficBlockers, addTrafficBlocker } from '../traffic.js';
 import { buildRoadSigns } from './roadsigns.js'; // speed limit and warning signs along the roads
+import { breakables } from '../../world/breakables.js'; // (the snow poles and reflector posts: knocked flying by a car)
 import { buildScenicProps } from './scenicprops.js'; // benches, view boards, walls, give-way signs, the roundabouts' islands
 import { depotTrips } from './depot.js'; // the bus depot off the village stop: each bus's own bay, its ways in and out
 import { buildDepot } from './depotview.js'; // (its paving, bay lines, lamps and sign)
@@ -449,13 +450,17 @@ class Guardrails {
     const m = pts.length;
     if (m < 2) return;
     const tan = (k) => { const a = pts[Math.max(0, k - 1)], b = pts[Math.min(m - 1, k + 1)], f = k === 0 || k === m - 1 ? 1 : 0.5; return [(b[0] - a[0]) * f, (b[2] - a[2]) * f]; };
+    const s0 = this.segs.length;
     for (let k = 0; k < m - 1; k++) this.segs.push({ a: pts[k], b: pts[k + 1], ta: tan(k), tb: tan(k + 1) });
     // colliders along the standing stretch (not the buried ends): the car's lines, and thin boxes (merged along
     // straight bits, up to 12 m) for everything else
     let k0 = 0, k1 = m - 1;
     while (k0 < m && pts[k0][3] > 0.35) k0++;
     while (k1 >= 0 && pts[k1][3] > 0.35) k1--;
-    for (let k = k0; k < k1; k++) this.addRail(pts[k][0], pts[k][2], pts[k + 1][0], pts[k + 1][2]);
+    for (let k = k0; k < k1; k++) {
+      const rk = this.addRail(pts[k][0], pts[k][2], pts[k + 1][0], pts[k + 1][2]);
+      if (busRoads.rails?.[rk]) busRoads.rails[rk].seg = this.segs[s0 + k]; // (its drawn section: broken through at 100 km/h+, world/breakables.js)
+    }
     if (!this.colliders) return;
     // the boxes: exactly as high as the drawn beam (its top BEAM_TOP over the rail's foot, which the shader lays
     // along the run linearly between the points, less the terminal's sink). A box's top slopes with the beam: topA
@@ -480,7 +485,9 @@ class Guardrails {
       }
       const ax = pts[a][0], az = pts[a][2], bx = pts[b][0], bz = pts[b][2], l = Math.hypot(bx - ax, bz - az) || 1;
       const topA = topAt(a), topB = topAt(b);
-      this.colliders.push({ x: (ax + bx) / 2, z: (az + bz) / 2, hw: 0.075, hd: l / 2 + 0.06, rot: -Math.atan2(bx - ax, bz - az), h: BEAM_TOP, top: Math.max(topA, topB), topA, topB, soft: true, rail: true, noStep: true });
+      const box = { x: (ax + bx) / 2, z: (az + bz) / 2, hw: 0.075, hd: l / 2 + 0.06, rot: -Math.atan2(bx - ax, bz - az), h: BEAM_TOP, top: Math.max(topA, topB), topA, topB, soft: true, rail: true, noStep: true };
+      this.colliders.push(box);
+      for (let q = a; q < b; q++) (this.segs[s0 + q].boxes ||= []).push(box); // (parked away while that section is broken)
       this.boxes++;
       a = b;
     }
@@ -525,6 +532,7 @@ class Guardrails {
         im.name = mat === galv ? 'guardrail' : 'guardrail-reflectors';
         im.userData.guardrail = true;
         holder.add(im);
+        list.forEach((s, k) => { (s.ims ||= []).push(im); s.k = k; }); // (hidden while broken through: world/breakables.js)
       }
       const lod = new THREE.LOD();
       lod.name = 'guardrail-stretch';
@@ -650,6 +658,7 @@ function buildRoadMeshes(group, colliders = null) {
       if (!busRoads.railGrid.has(key)) busRoads.railGrid.set(key, []);
       busRoads.railGrid.get(key).push(k);
     }
+    return k;
   };
   const rails = new Guardrails(colliders, addRail);
   const CH = 60; // samples per chunk (~240 m)
@@ -708,30 +717,36 @@ function buildRoadMeshes(group, colliders = null) {
   } catch (e) { console.warn('guardrails', e); }
   const o = new THREE.Object3D();
   const instanced = (geo, mat, list, y0 = 0) => {
-    if (!list.length) return;
+    if (!list.length) return null;
     const im = new THREE.InstancedMesh(geo, mat, list.length);
     list.forEach(([x, y, z, ry], k) => { o.position.set(x, y + y0, z); o.rotation.set(0, ry || 0, 0); o.updateMatrix(); im.setMatrixAt(k, o.matrix); });
     im.castShadow = true;
+    im.userData.noCollide = true; // (their own thin colliders below; knocked flying by a car: world/breakables.js)
     group.add(im);
+    return im;
   };
   // (Oct 28, the user: "make sure the light reflectors and snow pole measurers on the side of the road are
   // collidable"): thin round colliders, soft like the guardrails (you bump and slide off; never a crash)
+  const poleCs = [], postCs = [];
   if (colliders) {
-    for (const [x, y, z] of poles) colliders.push({ x, z, r: 0.06, h: 2.2, top: y + 2.2, soft: true, pole: true });
-    for (const [x, y, z] of posts) colliders.push({ x, z, r: 0.09, h: 1.05, top: y + 1.05, soft: true, pole: true });
+    for (const [x, y, z] of poles) colliders.push(poleCs[poleCs.length] = { x, z, r: 0.06, h: 2.2, top: y + 2.2, soft: true, pole: true });
+    for (const [x, y, z] of posts) colliders.push(postCs[postCs.length] = { x, z, r: 0.09, h: 1.05, top: y + 1.05, soft: true, pole: true });
   }
   // orange snow poles with a black tip (2.2 m)
   const pole = new THREE.CylinderGeometry(0.03, 0.035, 2.2, 6); pole.translate(0, 1.0, 0);
   const tip = new THREE.CylinderGeometry(0.032, 0.032, 0.4, 6); tip.translate(0, 1.95, 0);
-  instanced(pole, new THREE.MeshStandardMaterial({ color: 0xff6418, roughness: 0.55 }), poles);
-  instanced(tip, new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.6 }), poles);
+  const poleIm = instanced(pole, new THREE.MeshStandardMaterial({ color: 0xff6418, roughness: 0.55 }), poles);
+  const tipIm = instanced(tip, new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.6 }), poles);
   // white reflector posts (1.05 m, black band, an amber reflector facing the road)
   const post = new THREE.BoxGeometry(0.12, 1.05, 0.12); post.translate(0, 0.5, 0);
   const band = new THREE.BoxGeometry(0.125, 0.2, 0.125); band.translate(0, 0.87, 0);
   const refl = new THREE.BoxGeometry(0.05, 0.12, 0.02); refl.translate(0, 0.87, 0.07);
-  instanced(post, new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.5 }), posts);
-  instanced(band, new THREE.MeshStandardMaterial({ color: 0x18191b, roughness: 0.5 }), posts);
-  instanced(refl, new THREE.MeshStandardMaterial({ color: 0xffa21a, emissive: 0xff8a00, emissiveIntensity: 0.35, roughness: 0.3 }), posts);
+  const postIm = instanced(post, new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.5 }), posts);
+  const bandIm = instanced(band, new THREE.MeshStandardMaterial({ color: 0x18191b, roughness: 0.5 }), posts);
+  const reflIm = instanced(refl, new THREE.MeshStandardMaterial({ color: 0xffa21a, emissive: 0xff8a00, emissiveIntensity: 0.35, roughness: 0.3 }), posts);
+  // (Oct 30, the user: "if you crash into little poles they detach and fly away but respawn back after 90 sec")
+  poleCs.forEach((c, k) => breakables.add(c, [[poleIm, k], [tipIm, k]], { h: 2.2, loud: 0.35 }));
+  postCs.forEach((c, k) => breakables.add(c, [[postIm, k], [bandIm, k], [reflIm, k]], { h: 1.05, loud: 0.4 }));
 }
 
 // ------------------------------------------------------------------ the bus

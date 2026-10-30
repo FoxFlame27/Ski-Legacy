@@ -1,0 +1,403 @@
+// Little poles that a car knocks flying (Oct 30, the user: "make sure if you crash into little poles they detach and
+// fly away but respawn back after 90 sec"; "also traffic signs"): the roads' snow poles and reflector posts, the
+// speed-limit / warning signs and the roundabouts' give-way signs on their single posts, the piste markers, the car
+// parks' and the police station's / medical centre's P signs, the bus stop signs, the medical centre's bollards.
+//
+// Each registers its collider here (add(collider, parts)): `collider.breakable` points back at it. A car (yours:
+// drive.js, the snowmobile, and the traffic: update()) running into one faster than 8 km/h knocks it (knock()): the
+// pole is hidden where it stood (its instance scaled to nothing, or the object hidden), its collider parked away
+// (x, z = 1e9: no longer in anything's way), and a copy of it flies off the car's bumper: a simple rigid-body arc
+// (the car's velocity + an upward kick, a spin), a bounce or two on the snow, then it lies down flat. The car only
+// loses a little speed (a clack, no crash). After 90 s, once you are 25 m away or not looking that way (or after
+// 2 more minutes, with a quick grow-in), it stands where it was again: the copy gone, instance / object and collider
+// back. On foot or on skis nothing breaks (the collider stays as it was: the player's collisions never knock).
+// Local only (each player sees their own knocked poles). Cheap: a 16 m grid for the traffic's lookups, at most 30
+// knocked at a time (the oldest stands up again early), no allocation per frame (a copy is built once per pole, on
+// its first knock, and kept for the next).
+import * as THREE from 'three';
+import { world } from './world.js';
+
+export const BREAK_V = 8 / 3.6; // m/s: slower than this a pole is just a bump
+const RESPAWN = 90;             // s
+const GROW_AFTER = 120;         // s past RESPAWN: still in view and near, it grows back in anyway
+const NEAR = 25;                // m: closer than this (and in view) it waits
+const MAX_DOWN = 30;
+const CELL = 16;
+const GRAVITY = 9.81;
+
+const _m = new THREE.Matrix4(), _w = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _v = new THREE.Vector3(), _a = new THREE.Vector3();
+const _q = new THREE.Quaternion(), _qd = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0), _h = new THREE.Vector3();
+const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sph = new THREE.Sphere(), _c = new THREE.Color();
+const IDENT = new THREE.Matrix4();
+const ground = (x, z) => (world.meshHeight ? world.meshHeight(x, z) : world.height(x, z));
+
+// an instance's own copy of an instanced geometry: the shared attributes, its own entries of the per-instance ones
+function sliceGeometry(src, k) {
+  const g = new THREE.BufferGeometry();
+  for (const [name, a] of Object.entries(src.attributes)) {
+    if (a.isInstancedBufferAttribute) {
+      const n = a.itemSize;
+      g.setAttribute(name, new THREE.InstancedBufferAttribute(a.array.slice(k * n, k * n + n), n, a.normalized));
+    } else g.setAttribute(name, a);
+  }
+  if (src.index) g.setIndex(src.index);
+  for (const gr of src.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
+  if (!src.boundingSphere) src.computeBoundingSphere();
+  g.boundingSphere = src.boundingSphere.clone();
+  g.boundingBox = src.boundingBox?.clone() ?? null;
+  return g;
+}
+
+class Breakables {
+  constructor() {
+    this.list = [];
+    this.grid = new Map();
+    this.down = [];
+    this.scene = null; this.audio = null; this.camera = null;
+    this.stamp = 0;
+  }
+
+  /** main.js: where the knocked copies go, the clack, the camera (respawning out of view). */
+  init({ scene, audio = null, camera = null }) { Object.assign(this, { scene, audio, camera }); }
+
+  /**
+   * Register a breakable pole. collider: its entry in the shared colliders ({x, z, r} or a box); parts: what is drawn,
+   * each [instancedMesh, index] or an Object3D (kept out of merges and of world/solidify.js from now on).
+   * o.h: its height (m); o.kind: the impact sound ('metal'); o.loud: 0..1 how loud its clack is.
+   */
+  add(collider, parts, { h = collider?.h ?? 1.5, kind = 'metal', loud = 0.5 } = {}) {
+    if (!collider || !parts?.length || !Number.isFinite(collider.x)) return null;
+    const e = {
+      c: collider, h, kind, loud, down: false, t: 0, grow: -1, x: collider.x, z: collider.z, copy: null, stamp: 0,
+      parts: parts.map((p) => (Array.isArray(p) ? { im: p[0], k: p[1], m0: new Float32Array(16) } : { obj: p, s0: new THREE.Vector3() })),
+      p: new THREE.Vector3(), v: new THREE.Vector3(), w: new THREE.Vector3(), base: 0, rest: 0, bounces: 0,
+    };
+    for (const p of e.parts) if (p.obj) { p.obj.userData.noMerge = true; p.obj.userData.noCollide = true; }
+    collider.breakable = e;
+    this.list.push(e);
+    const key = Math.floor(e.x / CELL) * 100003 + Math.floor(e.z / CELL);
+    let cell = this.grid.get(key);
+    if (!cell) this.grid.set(key, (cell = []));
+    cell.push(e);
+    return e;
+  }
+
+  /**
+   * Instanced poles whose thin colliders (pole: true) were made elsewhere (the piste markers): each instance of
+   * ims[0] matched to the collider standing on its spot; every mesh of ims shares the instance index. -> how many
+   */
+  adoptInstances(ims, colliders, o = {}) {
+    ims = (ims || []).filter((m) => m?.isInstancedMesh);
+    if (!ims.length || !colliders?.length) return 0;
+    const key = (x, z) => Math.round(x * 4) * 1000003 + Math.round(z * 4);
+    const at = new Map();
+    for (const c of colliders) if (c?.pole && c.r !== undefined && !c.breakable && Number.isFinite(c.x)) at.set(key(c.x, c.z), c);
+    const first = ims[0];
+    first.updateWorldMatrix(true, false);
+    let n = 0;
+    for (let k = 0; k < first.count; k++) {
+      first.getMatrixAt(k, _m); _m.premultiply(first.matrixWorld);
+      const c = at.get(key(_m.elements[12], _m.elements[14]));
+      if (c && this.add(c, ims.map((m) => [m, k]), o)) n++;
+    }
+    for (const m of ims) m.userData.noCollide = true;
+    return n;
+  }
+
+  /**
+   * A guardrail broken through (Oct 30, the user: "if you go faster than 100 km/h and then collide into the safety
+   * barriers you break through them"; drive.js railHit): rails: busRoads.rails (the car's line colliders; bus.js
+   * links each to its drawn 4 m section, `seg`), k: the line hit, (x, z): where, (vx, vz): the car. That section and
+   * its neighbour nearer the impact (~8 m) break: their lines off (line.off), the thin boxes along them parked away,
+   * their instances hidden, and a bent beam with a post torn off each flies and tumbles like a pole; back after 90 s
+   * like the poles. -> true if anything broke (false: not a drawn guardrail, or already broken there)
+   */
+  breakRail(rails, k, x, z, vx, vz) {
+    const L = rails?.[k];
+    if (!L?.seg || L.off || !this.scene) return false;
+    const ex = L.bx - L.ax, ez = L.bz - L.az, t = ((x - L.ax) * ex + (z - L.az) * ez) / (ex * ex + ez * ez || 1);
+    const near = t < 0.5 ? rails[k - 1] : rails[k + 1];
+    const joined = near?.seg && !near.off && (t < 0.5 ? Math.hypot(near.bx - L.ax, near.bz - L.az) : Math.hypot(near.ax - L.bx, near.az - L.bz)) < 0.05;
+    let n = 0;
+    for (const line of joined ? [L, near] : [L]) {
+      const e = line.brk || (line.brk = this.railEntry(line));
+      if (e && this.knock(e, vx * 0.7 + (Math.random() - 0.5) * 2, vz * 0.7 + (Math.random() - 0.5) * 2)) n++;
+    }
+    return n > 0;
+  }
+
+  // the breakable entry of one guardrail line (its drawn section: seg.ims at seg.k)
+  railEntry(line) {
+    const s = line.seg, a = s.a, b = s.b;
+    if (!s.ims?.length) return null;
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) || 4;
+    const cy = (a[1] - a[3] + b[1] - b[3]) / 2 + 0.53;
+    _a.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]).normalize();
+    const e = {
+      c: { x: (a[0] + b[0]) / 2, z: (a[2] + b[2]) / 2 }, h: len, kind: 'metal', loud: 0, down: false, t: 0, grow: -1, copy: null, parts: [],
+      x: (a[0] + b[0]) / 2, z: (a[2] + b[2]) / 2, cy, base: cy - len / 2, q0: new THREE.Quaternion().setFromUnitVectors(_up, _a),
+      p: new THREE.Vector3(), v: new THREE.Vector3(), w: new THREE.Vector3(), rest: 0, bounces: 0, boxes: [],
+      make: () => this.railPiece(len),
+      hide: () => {
+        line.off = true;
+        for (const im of s.ims) { im.instanceMatrix.array.fill(0, s.k * 16, s.k * 16 + 16); im.instanceMatrix.needsUpdate = true; }
+        e.boxes.length = 0;
+        for (const c of s.boxes || []) if (c.x < 1e8) { e.boxes.push(c, c.x, c.z); c.x = 1e9; c.z = 1e9; }
+      },
+      show: () => {
+        line.off = false;
+        for (const im of s.ims) { _m.identity().toArray(im.instanceMatrix.array, s.k * 16); im.instanceMatrix.needsUpdate = true; }
+        for (let i = 0; i < e.boxes.length; i += 3) { e.boxes[i].x = e.boxes[i + 1]; e.boxes[i].z = e.boxes[i + 2]; }
+        e.boxes.length = 0;
+      },
+    };
+    return e;
+  }
+
+  // a torn-off piece of guardrail: the beam bent in the middle (along local y), a post still bolted on
+  railPiece(len) {
+    if (!this.railMat) {
+      this.railMat = new THREE.MeshStandardMaterial({ color: 0xd9dee3, metalness: 0.7, roughness: 0.42 });
+      this.postMat = new THREE.MeshStandardMaterial({ color: 0x9aa1a7, metalness: 0.6, roughness: 0.5 });
+    }
+    const g = new THREE.Group();
+    g.name = 'broken-guardrail'; g.userData.noMerge = true; g.userData.noCollide = true;
+    const half = new THREE.BoxGeometry(0.05, len / 2, 0.31);
+    for (const sd of [-1, 1]) {
+      const m = new THREE.Mesh(half, this.railMat);
+      m.position.set(0.12, sd * len * 0.24, 0); m.rotation.z = sd * 0.22; // (kinked where the car hit it)
+      m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false;
+      g.add(m);
+    }
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.95), this.postMat);
+    post.position.set(0.05, len * 0.22, 0.42); post.rotation.x = 0.3;
+    post.castShadow = true; post.frustumCulled = false;
+    g.add(post);
+    return g;
+  }
+
+  /** A vehicle at (x, z) (reach r) moving (vx, vz): knocks the poles it touches. -> how many it knocked */
+  sweep(x, z, r, vx, vz) {
+    if (vx * vx + vz * vz < BREAK_V * BREAK_V) return 0;
+    let n = 0;
+    for (let gx = Math.floor((x - r - 1) / CELL); gx <= Math.floor((x + r + 1) / CELL); gx++) {
+      for (let gz = Math.floor((z - r - 1) / CELL); gz <= Math.floor((z + r + 1) / CELL); gz++) {
+        const cell = this.grid.get(gx * 100003 + gz);
+        if (!cell) continue;
+        for (let i = 0; i < cell.length; i++) {
+          const e = cell[i];
+          if (e.down) continue;
+          const reach = r + (e.c.r ?? Math.max(e.c.hw || 0, e.c.hd || 0));
+          const dx = e.x - x, dz = e.z - z;
+          if (dx * dx + dz * dz < reach * reach && this.knock(e, vx, vz)) n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  /** Knock pole e flying (a car moving (vx, vz)). -> true if it was standing */
+  knock(e, vx, vz) {
+    if (!e || e.down || !this.scene) return false;
+    if (this.down.length >= MAX_DOWN) this.restore(this.down[0]);
+    let copy;
+    try { copy = e.copy || (e.copy = e.make ? e.make(e) : this.makeCopy(e)); } catch (err) { console.warn('breakables', err); return false; }
+    if (!copy) return false;
+    // hide it where it stood, its collider out of the way
+    if (e.hide) e.hide(e);
+    for (const p of e.parts) {
+      if (p.im) {
+        const arr = p.im.instanceMatrix.array;
+        for (let i = 0; i < 16; i++) { p.m0[i] = arr[p.k * 16 + i]; arr[p.k * 16 + i] = 0; }
+        p.im.instanceMatrix.needsUpdate = true;
+      } else { p.s0.copy(p.obj.scale); p.obj.visible = false; }
+    }
+    e.c.x = 1e9; e.c.z = 1e9;
+    e.down = true; e.t = 0; e.grow = -1; e.rest = 0; e.bounces = 0;
+    this.down.push(e);
+    // the flight: off the bumper, a kick up, a tumble
+    const sp = Math.hypot(vx, vz), k = Math.min(1, 16 / Math.max(sp, 1e-3)) * 1.05; // (never faster than ~17 m/s)
+    e.p.set(e.x, e.cy ?? e.base + e.h * 0.5, e.z);
+    e.v.set(vx * k + (Math.random() - 0.5) * 1.5, Math.min(7, 2 + sp * 0.3), vz * k + (Math.random() - 0.5) * 1.5);
+    _a.set(vz, 0, -vx).normalize();
+    e.w.copy(_a).multiplyScalar(4 + Math.random() * 5);
+    e.w.y += (Math.random() - 0.5) * 4;
+    copy.position.copy(e.p); if (e.q0) copy.quaternion.copy(e.q0); else copy.quaternion.identity(); copy.scale.setScalar(1);
+    this.scene.add(copy);
+    // the clack (quieter far from the camera: the traffic's)
+    if (this.audio?.impact) {
+      const cam = this.camera?.position, d = cam ? Math.hypot(cam.x - e.x, cam.z - e.z) : 0;
+      const amt = e.loud * Math.min(1, 0.35 + sp / 25) * Math.max(0, 1 - d / 80);
+      if (amt > 0.03) try { this.audio.impact(e.kind, amt); } catch { /* (silent) */ }
+    }
+    return true;
+  }
+
+  // the flying copy of e: a group at its middle, each part as drawn (an instance: its own one-instance mesh, sharing
+  // the geometry and material; an object: its meshes)
+  makeCopy(e) {
+    const g = new THREE.Group();
+    g.name = 'knocked-pole';
+    g.userData.noMerge = true; g.userData.noCollide = true;
+    let base = Infinity;
+    const W = [];
+    for (const p of e.parts) {
+      if (p.im) {
+        p.im.updateWorldMatrix(true, false);
+        p.im.getMatrixAt(p.k, _m);
+        const m = new THREE.Matrix4().multiplyMatrices(p.im.matrixWorld, _m);
+        W.push(m);
+        base = Math.min(base, m.elements[13]);
+      } else {
+        p.obj.updateWorldMatrix(true, true);
+        W.push(null);
+        base = Math.min(base, p.obj.matrixWorld.elements[13]);
+      }
+    }
+    if (!Number.isFinite(base)) base = ground(e.x, e.z);
+    e.base = Math.max(base, ground(e.x, e.z) - 0.4);
+    _inv.makeTranslation(-e.x, -(e.base + e.h * 0.5), -e.z);
+    e.parts.forEach((p, i) => {
+      if (p.im) {
+        const m = new THREE.InstancedMesh(sliceGeometry(p.im.geometry, p.k), p.im.material, 1);
+        m.setMatrixAt(0, IDENT);
+        if (p.im.instanceColor) { p.im.getColorAt(p.k, _c); m.setColorAt(0, _c); }
+        m.matrixAutoUpdate = false; m.matrix.multiplyMatrices(_inv, W[i]);
+        m.castShadow = p.im.castShadow; m.receiveShadow = p.im.receiveShadow;
+        m.frustumCulled = false;
+        g.add(m);
+      } else {
+        p.obj.traverse((o) => {
+          if (!o.isMesh || o.isSkinnedMesh || !o.visible) return;
+          const m = o.isInstancedMesh ? null : new THREE.Mesh(o.geometry, o.material);
+          if (!m) return;
+          m.matrixAutoUpdate = false; m.matrix.multiplyMatrices(_inv, o.matrixWorld);
+          m.castShadow = o.castShadow; m.receiveShadow = o.receiveShadow;
+          m.frustumCulled = false;
+          g.add(m);
+        });
+      }
+    });
+    return g.children.length ? g : null;
+  }
+
+  // stands up again where it was
+  restore(e) {
+    if (!e.down) return;
+    if (e.show) e.show(e);
+    for (const p of e.parts) {
+      if (p.im) {
+        p.im.instanceMatrix.array.set(p.m0, p.k * 16);
+        p.im.instanceMatrix.needsUpdate = true;
+      } else { p.obj.scale.copy(p.s0); p.obj.visible = true; }
+    }
+    e.c.x = e.x; e.c.z = e.z;
+    e.down = false; e.grow = -1;
+    if (e.copy?.parent) e.copy.parent.remove(e.copy);
+    const i = this.down.indexOf(e);
+    if (i >= 0) this.down.splice(i, 1);
+  }
+
+  // growing back in view: its parts scaled g (0..1) about their own origins
+  growTo(e, g) {
+    for (const p of e.parts) {
+      if (p.im) {
+        const arr = p.im.instanceMatrix.array, o = p.k * 16;
+        for (let i = 0; i < 12; i++) arr[o + i] = p.m0[i] * g;
+        for (let i = 12; i < 16; i++) arr[o + i] = p.m0[i];
+        p.im.instanceMatrix.needsUpdate = true;
+      } else { p.obj.visible = true; p.obj.scale.copy(p.s0).multiplyScalar(Math.max(1e-3, g)); }
+    }
+  }
+
+  /**
+   * Every frame (main.js): the flights, the respawns, the traffic's knocks.
+   * pos: the player (no pole stands up into you); cars: the traffic's cars ({x, z, yaw, v, mode}).
+   */
+  update(dt, pos = null, cars = null) {
+    if (!(dt > 0)) return;
+    if (cars) {
+      for (let i = 0; i < cars.length; i++) {
+        const c = cars[i];
+        if (!c || !(Math.abs(c.v) > BREAK_V) || c.mode === 'parked' || c.mode === 'gone' || !Number.isFinite(c.x)) continue;
+        const fx = Math.sin(c.yaw || 0), fz = Math.cos(c.yaw || 0), vx = fx * c.v, vz = fz * c.v;
+        this.sweep(c.x + fx * 1.4, c.z + fz * 1.4, 1.0, vx, vz);
+        this.sweep(c.x - fx * 1.4, c.z - fz * 1.4, 1.0, vx, vz);
+      }
+    }
+    if (!this.down.length) return;
+    let frustum = false;
+    for (let i = this.down.length - 1; i >= 0; i--) {
+      const e = this.down[i];
+      if (!e) continue;
+      e.t += dt;
+      if (e.grow >= 0) { // growing back in
+        e.grow = Math.min(1, e.grow + dt / 0.45);
+        this.growTo(e, e.grow);
+        if (e.grow >= 1) { e.grow = 0; this.restore(e); }
+        continue;
+      }
+      if (e.t >= RESPAWN) {
+        const cam = this.camera?.position;
+        const clear = !pos || Math.hypot(pos.x - e.x, pos.z - e.z) > 2.5; // (never up through you or your car)
+        if (clear) {
+          const far = !cam || Math.hypot(cam.x - e.x, cam.z - e.z) > NEAR;
+          let unseen = far;
+          if (!far) {
+            if (!frustum) { frustum = true; this.camera.updateMatrixWorld(); _pm.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse); _fr.setFromProjectionMatrix(_pm); }
+            _sph.center.set(e.x, e.base + e.h * 0.5, e.z); _sph.radius = e.h * 0.6 + 0.3;
+            unseen = !_fr.intersectsSphere(_sph);
+          }
+          if (unseen) { this.restore(e); continue; }
+          if (e.t > RESPAWN + GROW_AFTER && e.show) { this.restore(e); continue; } // (a guardrail section: just back)
+          if (e.t > RESPAWN + GROW_AFTER) { // (still right there in view: a quick grow-in)
+            if (e.copy?.parent) e.copy.parent.remove(e.copy);
+            e.c.x = e.x; e.c.z = e.z;
+            e.grow = 0; this.growTo(e, 0);
+            continue;
+          }
+        }
+      }
+      if (e.rest >= 2) continue; // (lying in the snow)
+      const copy = e.copy;
+      if (!copy) continue;
+      _v.copy(_up).applyQuaternion(copy.quaternion);
+      if (e.rest === 0) {
+        // flying: gravity, the tumble, a bounce off the snow (its lower end)
+        e.v.y -= GRAVITY * dt;
+        e.p.addScaledVector(e.v, dt);
+        const wl = e.w.length();
+        if (wl > 1e-4) { _qd.setFromAxisAngle(_a.copy(e.w).divideScalar(wl), wl * dt); copy.quaternion.premultiply(_qd); }
+        const gy = ground(e.p.x, e.p.z), low = e.p.y - Math.abs(_v.y) * e.h * 0.5 - 0.04;
+        if (low < gy) {
+          e.p.y += gy - low;
+          if (e.v.y < 0) {
+            e.bounces++;
+            e.v.y = -e.v.y * 0.35; e.v.x *= 0.55; e.v.z *= 0.55; e.w.multiplyScalar(0.45);
+            if (e.bounces >= 3 || e.v.y < 1.0) e.rest = 1;
+          }
+        }
+        if (e.t > 6) e.rest = 1;
+        if (e.rest === 1) { // lay it down: its long axis turned flat (keeping its roll)
+          _h.set(_v.x, 0, _v.z);
+          if (_h.lengthSq() < 1e-4) _h.set(e.v.x || 1, 0, e.v.z);
+          _h.normalize();
+          _qd.setFromUnitVectors(_v, _h);
+          e.qT = (e.qT || new THREE.Quaternion()).copy(_qd).multiply(copy.quaternion);
+        }
+      } else {
+        // settling: sliding to a stop, turning flat onto the snow
+        const f = Math.min(1, dt * 6);
+        e.v.x *= 1 - f * 0.6; e.v.z *= 1 - f * 0.6;
+        e.p.x += e.v.x * dt; e.p.z += e.v.z * dt;
+        copy.quaternion.slerp(e.qT, f);
+        const gy = ground(e.p.x, e.p.z) + 0.05;
+        e.p.y += (gy - e.p.y) * f;
+        if (copy.quaternion.angleTo(e.qT) < 0.01 && Math.abs(gy - e.p.y) < 0.01) { copy.quaternion.copy(e.qT); e.p.y = gy; e.rest = 2; }
+      }
+      copy.position.copy(e.p);
+    }
+  }
+}
+
+export const breakables = new Breakables();

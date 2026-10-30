@@ -18,6 +18,7 @@ import { fitModel, loadGLB, dequantize } from '../core/assets.js';
 import { shellMaterials } from './carrentalshell.js';
 import { buildPoliceCar } from './police.js';
 import { mergeStatic } from '../engine/merge.js'; // (the house's boxes welded per material)
+import { breakables } from '../world/breakables.js'; // (the parking signs: knocked flying by a car)
 
 export const HOUSE = { W: 17, D: 10, BZ: -5.8, G: 3.3, Hw: 6.2, RISE: 3.0, EAVE: 1.4, GO: 0.9, DX: -3.2 };
 const { W, D, BZ, G, Hw, RISE, EAVE, GO, DX } = HOUSE;
@@ -337,6 +338,7 @@ export function parkingSigns({ g, add, gy, w, colliders, yaw0, snow }, theme = {
     for (const y of [2.25, 1.9, 1.6]) add(new THREE.BoxGeometry(0.1, 0.035, 0.05), galv, 0, y, 0.018, fb, false); // (clamps)
     swapInModel(sg, 'decor/parking_sign', { size: 2.7, axis: 'y' }, fb, (m) => dressSign(sg, m, lines, badge, sub));
     const p = w(lx, lz); colliders.push({ x: p.x, z: p.z, hw: 0.42, hd: 0.15, rot: -yaw0 }); // (the post and its plates)
+    breakables.add(colliders[colliders.length - 1], [sg], { h: 2.5, loud: 0.6 }); // (a car knocks it flying, back after 90 s: world/breakables.js)
   };
   return parkSign;
 }

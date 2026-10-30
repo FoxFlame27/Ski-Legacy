@@ -76,6 +76,7 @@ import { initSecrets, Secrets } from './world/secrets.js';
 import { Backdrop } from './world/backdrop.js';
 import { settleProps } from './world/settle.js';
 import { solidifyIdle } from './world/solidify.js';
+import { breakables } from './world/breakables.js'; // little poles and signs a car knocks flying (back after 90 s)
 import { busRoads } from './game/bus/roads.js';
 import { SunGlare } from './world/sunglare.js';
 import { PisteLights } from './world/pistelights.js'; // static: installs its light-pool shader chunk before any material compiles
@@ -144,6 +145,7 @@ env.hour = save.hour;
 
 const input = new Input(canvas);
 const audio = new Audio();
+breakables.init({ scene, audio, camera }); // (little poles and signs a car knocks flying: world/breakables.js)
 const hud = new HUD();
 const buildMode = new BuildMode({ save, writeSave, spend, hud, audio, input, refund: (n) => earn(n, 'Sold', 'sell') }); // (refund: multiplayer only)
 const raceHud = new RaceHud({ hud, audio });
@@ -269,6 +271,7 @@ async function boot() {
   // safety nets, piste signs + markers, patrol huts; Legacy Park (its corridor is registered by initLayout)
   dressing = buildResortDressing(scene, models);
   colliders.push(...(dressing.userData.colliders || []));
+  try { breakables.adoptInstances([dressing.getObjectByName('piste-markers'), dressing.getObjectByName('piste-marker-tops')], dressing.userData.colliders, { h: 1.85, loud: 0.3 }); } catch (e) { console.warn('piste markers: breakable', e); } // (a car knocks them flying: world/breakables.js)
   park = buildPark(scene, models);
   colliders.push(...(park.userData.colliders || []));
   // floodlight masts along the pistes for night skiing (before the pre-stream: each mast clears a few trees)
@@ -2065,6 +2068,7 @@ function loopUpdate() {
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
   if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
+  try { breakables.update(paused ? 0 : dt, player.pos, traffic?.cars); } catch (e) { loopFault('breakables', e); } // knocked poles and signs: their flight, back after 90 s; the traffic's knocks
   hospitalWard?.update(dt); // the stay in bed (its card), the window view linked
   prison?.update(dt); // the sentence's clock (a sentence from before resumes), the station's lamp
   taxi?.update(dt, started && !menu && !inSession && !paused ? input : null); // (after the car moved: the passenger in its back seat)

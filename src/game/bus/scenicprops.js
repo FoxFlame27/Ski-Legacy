@@ -12,6 +12,7 @@ import { world } from '../../world/world.js';
 import { busRoads, roadAt, ROAD_HALF, laneDistance } from './roads.js';
 import { fitModel } from '../../core/assets.js';
 import { registerBench } from '../seating.js'; // (the benches can be sat on)
+import { breakables } from '../../world/breakables.js'; // (the give-way signs: knocked flying by a car)
 
 const rnd = (i) => { const v = Math.sin(i * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
 
@@ -159,6 +160,7 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
   }
   // ---- the roundabouts
   let signs = 0;
+  const giveWays = [];
   for (const ring of busRoads.roundabouts || []) {
     for (const a of ring.arms || []) {
       const ox = Math.sin(a.ang), oz = Math.cos(a.ang); // (outward along the arm)
@@ -166,11 +168,8 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
       const d = ring.R + 11, off = ROAD_HALF + 1.4;
       const x = ring.x + ox * d + rx * off, z = ring.z + oz * d + rz * off, y = H(x, z), yaw = Math.atan2(ox, oz);
       if (laneDistance(x, z) < ROAD_HALF + 0.8) continue; // (on another arm's lane)
-      put('pole', signPole, x, y, z, yaw);
-      put('giveWay', triFace, x, y, z, yaw);
-      put('giveWayBack', triFace, x, y, z, yaw + Math.PI);
-      put('round', discFace, x, y, z, yaw);
-      put('roundBack', discFace, x, y, z, yaw + Math.PI);
+      // (each sign its own small group, out of the merge: a car knocks it flying, back after 90 s: world/breakables.js)
+      giveWays.push([x, y, z, yaw]);
       signs++;
     }
     // the island: one of the forest's pines on the snow dome's crown, a fingerpost toward the arms, boulders round its foot
@@ -223,6 +222,18 @@ export function buildScenicProps(group, { colliders = null, models = null } = {}
     mesh.name = 'scenic-' + key;
     root.add(mesh);
     meshes++;
+  }
+  for (const [x, y, z, yaw] of giveWays) {
+    const sg = new THREE.Group();
+    sg.name = 'scenic-give-way'; sg.position.set(x, y, z); sg.rotation.y = yaw;
+    for (const [key, geo, ry] of [['pole', signPole, 0], ['giveWay', triFace, 0], ['giveWayBack', triFace, Math.PI], ['round', discFace, 0], ['roundBack', discFace, Math.PI]]) {
+      const m = new THREE.Mesh(geo, M[key]);
+      m.rotation.y = ry; m.castShadow = !['giveWayBack', 'roundBack'].includes(key); m.receiveShadow = true;
+      sg.add(m);
+    }
+    root.add(sg);
+    const c = { x, z, r: 0.08, h: 2.65, top: y + 2.65, soft: true, pole: true };
+    if (colliders) { colliders.push(c); breakables.add(c, [sg], { h: 2.65, loud: 0.55 }); }
   }
   group.add(root);
   busRoads.scenicProps = { meshes, walls, views, signs };

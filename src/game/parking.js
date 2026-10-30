@@ -14,6 +14,7 @@ import { busRoads, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
 import { lotMaterial } from './bus/bus.js';
 import { groundPatch, groundPatchGeometry, frameRect } from '../world/groundpatch.js'; // (paving on the drawn terrain's own triangles) // (the roads' asphalt and snow: the access road carries on into the car park)
 import { quality } from '../engine/quality.js'; // (quality.carLod: the parked cars' full model distance)
+import { breakables } from '../world/breakables.js'; // (the P sign: knocked flying by a car)
 
 const BAY_W = 2.6, BAY_D = 5.5, LINE = 0.12; // (5.5 m deep: the longest car, 5.0 m, fits inside the lines)
 // parked cars: [model, real length (m), which car park] (the car models are the user's own, in MODEL_LIST)
@@ -220,7 +221,8 @@ export class ParkingLots {
     const pm = beside(-0.6, 6.2, 0.6); // (1.4 m outside the edge: still the car park's flat, no berm by the mouth)
     if (pm) prop('parking_pay_machine', 1.75, pm[0], pm[1], Math.atan2(sx, sz) + Math.PI, 0.6);
     const ps = beside(3, -7.6, 0.25);
-    if (ps) prop('parking_sign', 2.7, ps[0], ps[1], Math.atan2(L.dirx, L.dirz), 0.25);
+    const pSign = ps ? prop('parking_sign', 2.7, ps[0], ps[1], Math.atan2(L.dirx, L.dirz), 0.25) : null;
+    if (pSign) breakables.add(colliders[colliders.length - 1], [pSign], { h: 2.7, loud: 0.6 }); // (a car knocks it flying, back after 90 s: world/breakables.js)
   }
 
   // The BMW (a detailed model: 110 meshes, transmission glass): glass made plain tinted see-through (transmission

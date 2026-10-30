@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { world } from '../../world/world.js';
 import { planRoadSigns } from './speedlimits.js';
+import { breakables } from '../../world/breakables.js';
 
 const COLS = 6, ROWS = 4, CELL = 256;
 const CELLS = ['30', '40', '50', '60', '80', '100', '120', 'curveL', 'curveR', 'hairpinL', 'hairpinR', 'windL', 'windR', 'steepDown8', 'steepDown10', 'steepDown12', 'steepUp8', 'steepUp10', 'steepUp12', 'backRound', 'backTri'];
@@ -120,8 +121,12 @@ export function buildRoadSigns(group, colliders = null) {
     const y0 = Math.min(ground, s.y0) - 0.3;
     o.position.set(s.x - fx * 0.05, y0, s.z - fz * 0.05); o.rotation.set(0, 0, 0); o.scale.set(1, Math.max(0.5, top + 0.1 - y0), 1); o.updateMatrix();
     posts.setMatrixAt(k, o.matrix);
-    colliders?.push({ x: s.x, z: s.z, r: 0.08, h: PANEL_Y + 0.45, top: top + 0.45, soft: true, pole: true });
+    const c = { x: s.x, z: s.z, r: 0.08, h: PANEL_Y + 0.45, top: top + 0.45, soft: true, pole: true };
+    colliders?.push(c);
+    // (Oct 30, the user: "also traffic signs": a car knocks it flying, back after 90 s: world/breakables.js)
+    if (colliders) breakables.add(c, [[posts, k], [im, k * 2], [im, k * 2 + 1]], { h: PANEL_Y + 0.45, loud: 0.55 });
   });
+  im.userData.noCollide = true; posts.userData.noCollide = true; // (their own thin colliders: world/solidify.js leaves them be)
   geo.setAttribute('aCell', new THREE.InstancedBufferAttribute(cells, 2));
   im.name = 'road-signs'; posts.name = 'road-sign-posts';
   posts.castShadow = true; // (the panels' alpha cut-out would cast a square shadow: none)

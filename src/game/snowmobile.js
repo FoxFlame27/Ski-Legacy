@@ -17,6 +17,7 @@ import { freeCourses } from '../modes/parkour/freeworld.js';
 import { VILLAGE_BUILDINGS } from '../world/layout.js';
 import { RAIL, railAt, railNearest } from '../world/railroute.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 
 // Off until verified in the game (the browser queue ran out before the check): with it off nothing is placed, no
 // light or sound is created and every main.js hook is inert. Dev override: ?flags=sleds (or localStorage 'sl.flags').
@@ -493,6 +494,11 @@ export class Snowmobiles {
         if (c === d.s.collider) continue;
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
+        if (c.breakable && d.vx * d.vx + d.vz * d.vz > BREAK_V * BREAK_V) { // (a piste marker, a snow pole: knocked flying: world/breakables.js)
+          const reach = size + R, dx = c.x - cx, dz = c.z - cz;
+          if (dx * dx + dz * dz < reach * reach && breakables.knock(c.breakable, d.vx, d.vz)) { d.vx *= 0.95; d.vz *= 0.95; }
+          continue;
+        }
         if (c.h !== undefined && c.h < 0.4) continue;
         if (c.top !== undefined && c.top < d.y + 0.45) continue; // (low solid props: a kerb, a step, a drift, paving over the snow: driven over)
         if (c.r !== undefined) {

@@ -23,6 +23,7 @@ import { speedLimitAt } from './bus/speedlimits.js';
 import { TyreTracks } from './tyretracks.js';
 import { addDent, applyDents, repairInstance } from './cardamage.js';
 import { setPlates } from './carconfig.js';
+import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
 
 // per car: name, pull (m/s^2 at low speed), top speed (m/s), electric (one gear)
@@ -58,6 +59,7 @@ const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const CRASH_V = 70 / 3.6; // m/s: into something solid (or head-on into a car) this fast or faster: a crash (damage)
 const EXTREME_V = 150 / 3.6; // ...and this fast: the car's wrecked at once
 const KNOCK_V = 30 / 3.6; // ...a knock (below a crash): a few % of damage and a small dent, you drive on
+const RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_IN = 25 / 3.6; // m/s: faster than this, and into a guardrail this fast: through it (railBreak)
 // what you hit, by its collider: nets, people / traffic, poles and lift towers (thin), rocks (round), buildings (boxes)
 const kindOf = (c) => (c.net ? 'net' : c.soft ? 'soft' : c.r !== undefined ? (c.r < 0.7 && !c.rock ? 'metal' : 'rock') : 'building');
 const vegKind = (t) => ('s' in t && !('trunk' in t) ? 'rock' : 'tree');
@@ -603,9 +605,9 @@ export class Drive {
   collide() {
     const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
     let px = 0, pz = 0, n = 0, solid = false, kind = 'snow';
-    let rpx = 0, rpz = 0, rn = 0; // (guardrails: their own push, a glancing collision below)
-    let mpCar = null;
-    const R = d.w / 2;
+    let rpx = 0, rpz = 0, rn = 0, rBest = 0, rK = -1; // (guardrails: their own push, a glancing collision below; the line hit hardest)
+    let mpCar = null, poles = 0;
+    const R = d.w / 2, sp = Math.hypot(d.vx, d.vz);
     for (const k of [d.half - R, 0, -(d.half - R)]) {
       const cx = d.x + fx * k, cz = d.z + fz * k;
       const t = this.vegetation?.collide?.(cx, cz, R, 0.6, 'crown'); // (the whole tree: its branches too)
@@ -618,12 +620,12 @@ export class Drive {
         const cell = RG.get(gx * 100003 + gz);
         if (cell) for (const k of cell) {
           const g = busRoads.rails[k];
-          if (g.stamp === stamp) continue;
+          if (g.stamp === stamp || g.off) continue; // (off: broken through, world/breakables.js)
           g.stamp = stamp;
           const ex = g.bx - g.ax, ez = g.bz - g.az, l2 = ex * ex + ez * ez || 1;
           const t2 = clamp(((cx - g.ax) * ex + (cz - g.az) * ez) / l2, 0, 1), qx = g.ax + ex * t2, qz = g.az + ez * t2;
           const dx = cx - qx, dz = cz - qz, l = Math.hypot(dx, dz), o = R + 0.12 - l;
-          if (o > 0 && l > 1e-4) { rpx += (dx / l) * o; rpz += (dz / l) * o; rn++; }
+          if (o > 0 && l > 1e-4) { rpx += (dx / l) * o; rpz += (dz / l) * o; rn++; if (o > rBest) { rBest = o; rK = k; } }
         }
         }
       }
@@ -631,6 +633,11 @@ export class Drive {
       for (const c of this.colliders) {
         if (c === d.e.collider || cars.has(c) || c.rail || c.police === 'local') continue; // (other cars: bash(); guardrails: their line colliders; your patrol cars: police.js)
         const size = c.r ?? Math.max(c.hw, c.hd);
+        if (c.breakable && sp > BREAK_V) { // (a little pole, a sign, a bollard: knocked flying, the car drives on: world/breakables.js)
+          const reach = size + R, dx = c.x - cx, dz = c.z - cz;
+          if (dx * dx + dz * dz < reach * reach && breakables.knock(c.breakable, d.vx, d.vz)) poles++;
+          continue;
+        }
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
         if (c.r !== undefined) {
           const dx = cx - c.x, dz = cz - c.z, l = Math.hypot(dx, dz);
@@ -650,7 +657,8 @@ export class Drive {
         }
       }
     }
-    if (rn) this.railHit(rpx, rpz);
+    if (poles) { const f = Math.max(0.8, 1 - 0.05 * poles); d.vx *= f; d.vz *= f; d.pitchV -= 0.05; d.rollV += (Math.random() - 0.5) * 0.08; } // (a clack, a little speed lost)
+    if (rn) this.railHit(rpx, rpz, rK);
     if (!n) return;
     const l = Math.hypot(px, pz) || 1, nx = px / l, nz = pz / l;
     d.x += px; d.z += pz;
@@ -672,10 +680,15 @@ export class Drive {
   // the angle); the nose is turned toward the rail's direction (the car glances off and runs along it) and given a
   // little yaw away from it. A head-on hit loses most of its speed but rolls back a bit. The sound: a thud by the
   // speed into the rail (audio.railHit) and a scrape loop while it slides along it (audio.setRailScrape, update()).
-  railHit(px, pz) {
+  railHit(px, pz, rk = -1) {
     const d = this.d, l = Math.hypot(px, pz);
     if (l < 1e-6) return;
     const nx = px / l, nz = pz / l;
+    // (Oct 30, the user: "if you go faster than 100 km/h and then collide into the safety barriers you break through
+    // them"): over 100 km/h and into it at 25 km/h or more, the section breaks (world/breakables.js) and the car goes
+    // through with a big hit
+    const into0 = -(d.vx * nx + d.vz * nz);
+    if (rk >= 0 && !d.crash && Math.hypot(d.vx, d.vz) > RAIL_BREAK_V && into0 > RAIL_BREAK_IN && breakables.breakRail(busRoads.rails, rk, d.x, d.z, d.vx, d.vz)) { this.railBreak(into0, nx, nz); return; }
     d.x += px; d.z += pz;
     const vn = d.vx * nx + d.vz * nz;
     let tx = -nz, tz = nx, vt = d.vx * tx + d.vz * tz;
@@ -702,6 +715,23 @@ export class Drive {
     }
     d.railSlide = Math.max(d.railSlide || 0, vt); // (the scrape loop's speed: update())
     d.railT = 0.12;
+  }
+
+  // through a guardrail (railHit): a big hit, ~35 % of the speed gone, damage and a dent, the crash sound; wrecked
+  // only by the usual rules (the damage reaching 100 %, or into it at 150 km/h+)
+  railBreak(into, nx, nz) {
+    const d = this.d, e = d.e, add = 6 + into * 0.6;
+    if ((into >= EXTREME_V || (e.damage || 0) + add >= 100) && this.canCrash()) { this.crash(Math.max(into, CRASH_V), nx, nz, 'metal'); return; }
+    e.damage = Math.min(99, (e.damage || 0) + add);
+    this.knockT = performance.now();
+    try { this.dent(nx, nz, Math.min(0.8, 0.4 + into / 40)); } catch (err) { console.warn('drive: dent', err); }
+    d.vx *= 0.64; d.vz *= 0.64;
+    const side = Math.random() < 0.5 ? -1 : 1;
+    d.yawRate = clamp(d.yawRate + side * 0.5, -2, 2);
+    d.pitchV -= 0.7; d.rollV += side * 0.4;
+    this.shake = Math.max(this.shake || 0, 0.7);
+    try { this.audio?.impact?.('metal', 0.95); this.audio?.carCrash?.(0.45); } catch { /* (silent) */ }
+    this.hud?.flash(`Through the guardrail · car damage ${Math.round(e.damage)}%`, 'bad', 2200);
   }
 
   // on foot (or skis) inside a parked car's footprint (never meant to happen): out to the nearer side of it

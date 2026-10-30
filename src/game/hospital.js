@@ -20,6 +20,7 @@ import { shellMaterials } from './carrentalshell.js';
 import { snowDrift, swapInModel, parkingSigns, driftsReady } from './prisonoutside.js';
 import { busRoads, HOSPITAL_LOT } from './bus/roads.js';
 import { mergeStatic } from '../engine/merge.js'; // (the house's boxes welded per material)
+import { breakables } from '../world/breakables.js'; // (the bollards: knocked flying by a car)
 
 const FRONT = HOSPITAL_LOT.front; // (-1.6: roads.js puts the door step 0.6 m out from it, on x = 0)
 export const HOUSE = { W: 15, D: 12, G: 3.4, Hw: 6.4, RISE: 3.4, EAVE: 1.3, GO: 1.0 };
@@ -355,6 +356,7 @@ export class Hospital {
         swapInModel(pg, `decor/${name}`, fit, fb);
         const p = w(lx, lz);
         colliders.push(col.r ? { x: p.x, z: p.z, r: col.r } : { x: p.x, z: p.z, hw: col.hw, hd: col.hd, rot: -(yaw0 + ry) });
+        if (name === 'bollard_steel') breakables.add(colliders[colliders.length - 1], [pg], { h: 0.9, loud: 0.6 }); // (a car knocks it flying, back after 90 s)
       };
       for (const sx of [-1, 1]) {
         meshyProp('planter_spruce', { size: 0.85, axis: 'xz' }, sx * 2.85, FRONT + 0.55, 0, (fb) => {

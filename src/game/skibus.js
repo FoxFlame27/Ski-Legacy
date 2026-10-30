@@ -9,6 +9,7 @@ import { fitModel } from '../core/assets.js';
 import { busRoads, roadAt, ROAD_HALF } from './bus/roads.js';
 import { BusLine } from './bus/bus.js';
 import { propSeats } from './seating.js';
+import { breakables } from '../world/breakables.js'; // (the stop signs: knocked flying by a car)
 
 // the printed face of a stop's sign plate: SKI BUS over the stop's name, dark green on post-bus yellow
 function stopFaceMaterial(name) {
@@ -130,6 +131,7 @@ export class SkiBus {
       sign.rotation.y = s.heading;
       this.group.add(sign);
       colliders.push({ x: s.x, z: s.z, r: 0.6 });
+      breakables.add(colliders[colliders.length - 1], [sign], { h: 2.6, loud: 0.6 }); // (a car knocks it flying, back after 90 s: world/breakables.js)
     }
     if (models.wooden_bench) {
       // bench beside the sign, facing the same way

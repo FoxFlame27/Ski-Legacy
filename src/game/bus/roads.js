@@ -19,6 +19,7 @@ import { planScenicBus, planWestgratBus } from './scenicbus.js'; // the ski bus'
 import { planRentalRoad } from './rentalroad.js'; // the Westgratstrasse: across from the car rental, up the Westgrat
 import { clearRouteCache } from './scenicnet.js'; // (the routing's ground samples: freed once the roads are planned)
 import { planDepot } from './depot.js'; // the bus depot at the village stop and its road (the Depotweg)
+import { planAutohausGrounds } from './autohaus.js'; // the Autohaus car park and the Werkstatt's site beside the hall
 import { planMouths, mouthLane, mouthCorner, mouthNear, MOUTH_BERM } from './junctions.js'; // the junctions' joined surfaces and rounded corners
 
 const CELL = 20;
@@ -499,6 +500,7 @@ export function planBusRoads(stops) {
   try { planHospital(obstacles); } catch (e) { console.warn('hospital site', e); } // (last of all: moves nothing planned above)
   try { planHeliRoad(obstacles); } catch (e) { console.warn('helipad road', e); } // (the helipad and its road to the medical centre: after it)
   try { planDepot(obstacles); } catch (e) { console.warn('bus depot', e); } // (the buses' depot off the village stop: after everything, keeps off it all)
+  try { planAutohausGrounds(obstacles); } catch (e) { console.warn('Autohaus car park / Werkstatt', e); } // (beside the hall, clear of every lot above: levelled by the cut below)
   clearRouteCache();
   try { levelIntoLots(); } catch (e) { console.warn('car park entrances', e); }
   try { levelIntoJunctions(); } catch (e) { console.warn('junction heights', e); }
@@ -612,6 +614,22 @@ function shapeRoads(roads) {
   // (every car park near the point in turn, each easing into the ground the ones before left: no step where two
   // car parks' surrounds meet, as there was beside the village car park; on a car park itself its own level)
   const LS = { y: 0, out: 0 };
+  // A lot's level at (u, v) in its frame (clamped to its rect: the flat apron round it has its edge's level): L.y, or
+  // with L.toRoad (the Autohaus's yard and car park, the Werkstatt, the police station's and medical centre's
+  // forecourts, all on a road's edge) eased from L.y to the road's own height along its front edge: at f (toward the
+  // road) = L.toRoad it is L.y, at the edge it is the road's (smoothstep between; -Infinity: the road's all the way
+  // back). The road climbs along a frontage (up to ~4 %), so a flat lot met it with a step up to ~0.5 m at one end and
+  // a dip at the other (Oct 30, the user: "parking lots and roads should always stay straight").
+  const lotLevel = (L, u, v) => {
+    if (L.toRoad === undefined || L.dirx === undefined) return L.y;
+    const uc = clamp(u, -L.hw, L.hw), vc = clamp(v, -L.hd, L.hd);
+    const sg = L.dirx * L.vx + L.dirz * L.vz >= 0 ? 1 : -1, f = sg * vc; // (the front edge: v = sg * hd)
+    const w = L.toRoad <= -L.hd ? 1 : smoothstep(L.toRoad, L.hd, f);
+    if (w <= 0) return L.y;
+    const nr = nearest(L.x + L.ux * uc + L.vx * sg * L.hd, L.z + L.uz * uc + L.vz * sg * L.hd);
+    if (!(nr.d < ROAD_HALF + 8)) return L.y;
+    return L.y + clamp(nr.y - L.y, -2, 2) * w;
+  };
   const lotShape = (x, z, h0, spacing) => {
     let h = h0, any = false, outMin = Infinity, held = false;
     for (const L of busRoads.lots) {
@@ -625,7 +643,8 @@ function shapeRoads(roads) {
       // (in an earlier car park's flat apron: that one's level, not eased toward this one's: the paving and the 2 m
       // triangles under its edge stay flat)
       if (held && out > 0) continue;
-      let y = out <= 0 ? L.y : L.y + (h - L.y) * smoothstep(flat, flat + blend, out); // (flat 2.9 m past the edge: see the berm)
+      const ly = lotLevel(L, u, v);
+      let y = out <= 0 ? ly : ly + (h - ly) * smoothstep(flat, flat + blend, out); // (flat 2.9 m past the edge: see the berm)
       // (the berm 2.9 m off the edge: the drawn terrain's 2 m triangles under the car park's edge stay flat)
       if (spacing <= 4 && (!L.building || L.depot) && out > 2.9 && out < 6.9 && Math.hypot(x - L.ex, z - L.ez) > 10) {
         const t = (out - 2.9) / 4, open = smoothstep(10, 15, Math.hypot(x - L.ex, z - L.ez)); // (tapered at the entrance, no step)
@@ -681,7 +700,10 @@ function shapeRoads(roads) {
         const r = roads[nr.ri];
         const b = berm(nr.ri, nr.side, nr.s, r.length, x, z);
         const t = (nr.d - BERM_IN) / b.W;
-        if (b.H > 0.01 && t > 0 && t < 1) out += b.H * (t < 0.38 ? smoothstep(0, 0.38, t) : 1 - smoothstep(0.38, 1, t));
+        // (eased away beside a lot on the road's edge: no ridge of snow between the road and a car park or forecourt,
+        // nor a wall of it standing at the lot's side edge, where the lot's own level takes over)
+        const nearLot = lot ? smoothstep(2.9, 9, lot.out) : 1;
+        if (b.H > 0.01 && t > 0 && t < 1) out += b.H * nearLot * (t < 0.38 ? smoothstep(0, 0.38, t) : 1 - smoothstep(0.38, 1, t));
       }
       return out;
     },
@@ -959,7 +981,7 @@ function planHospital(O) {
         const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz), dfx = -nx, dfz = -nz;
         // the door step: on the house front (lot z = front), 0.6 m out, on the drive's centre line (lot x = 0)
         const ez = front + 0.6;
-        best = { name: 'Medical centre', building: true, hospital: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+        best = { name: 'Medical centre', building: true, hospital: true, toRoad: front + 0.6, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
           ex: cx + dfx * ez, ez: cz + dfz * ez, dirx: dfx, dirz: dfz, facing, ri, s, side, score: score0,
           road: { x: m.x + nx * (ROAD_HALF + 0.6), z: m.z + nz * (ROAD_HALF + 0.6) } };
       }
@@ -1078,7 +1100,7 @@ function planPrison(O) {
         if ([...busRoads.junctions, ...busRoads.stops, ...(busRoads.laybys || [])].some((j) => Math.hypot(j.x - cx, j.z - cz) < 50)) continue;
         if (Math.hypot(cx + 190, cz + 160) < 90) continue; // (the Legacy Express's village station)
         const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz);
-        best = { name: 'Police / Prison', building: true, prison: true, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+        best = { name: 'Police / Prison', building: true, prison: true, toRoad: 0, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
           ex: m.x + nx * (ROAD_HALF + 0.6), ez: m.z + nz * (ROAD_HALF + 0.6), dirx: -nx, dirz: -nz, facing, ri, s, side, score: score0 };
       }
     }
@@ -1126,7 +1148,9 @@ function planRental(O) {
         const yaw = Math.atan2(m.dx, m.dz), facing = Math.atan2(-nx, -nz); // (u along the road; the front to the road)
         // (flat: the hall stands out 3.9 m past the back edge (carrental.js YARD / LAYOUT): the ground flat under all of
         // it and the 2 m triangles behind it, else the snow rose through the showroom floor at the back)
-        best = { name: 'Autohaus', building: true, rental: true, flat: 6.8, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
+        // (toRoad: the yard eases from the hall's level at its glass front (lot z 1.15: carrental.js YARD / LAYOUT) to the
+        // road's height along its front edge: roads.js lotLevel)
+        best = { name: 'Autohaus', building: true, rental: true, flat: 6.8, toRoad: 1.15, x: cx, z: cz, yaw, y: m.y, hw, hd, ux: m.dx, uz: m.dz, vx: m.dz, vz: -m.dx,
           ex: m.x + nx * (ROAD_HALF + 0.6), ez: m.z + nz * (ROAD_HALF + 0.6), dirx: -nx, dirz: -nz, facing, ri, s, side, score: score0 };
       }
     }

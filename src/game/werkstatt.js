@@ -24,8 +24,7 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { nightUniform, makeSign, standSign } from '../world/village.js';
 import { busRoads, laneDistance, roadsideBlocked, ROAD_HALF } from './bus/roads.js';
-import { railNearest } from '../world/railroute.js';
-import { layout } from '../world/layout.js';
+import { planWerkstattSite } from './bus/autohaus.js'; // (its site: planned with the roads)
 import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js';
 import { shellMaterials } from './carrentalshell.js';
 import { swapInModel } from './prisonoutside.js';
@@ -41,7 +40,6 @@ const BENCH = { x: 3.4, z: -ID + 0.4 };        // the workbench (on foot: E here
 const REPAIR_S = 4;                            // the repair's few seconds
 const SLAB = 0.15;                             // the floor slab's top over the ground's highest point under it
 const WIN = { x0: 1.0, x1: 4.4, y0: 1.1, y1: 2.6 }; // the office window's opening in the front wall (right of the bay)
-const ROAD_GAP = [6, 8, 10];                   // the apron's depth (road edge to the bay), tried in turn
 
 const CSS = `
 #werk-card { position: absolute; left: 22px; bottom: 92px; width: calc(var(--u, 1px) * 430); padding: calc(var(--u, 1px) * 12) calc(var(--u, 1px) * 30) calc(var(--u, 1px) * 14) calc(var(--u, 1px) * 24);
@@ -97,81 +95,12 @@ export class Werkstatt {
   plan() {
     const R = this.R, RL = R.L;
     if (!RL || !busRoads.roads.length) return null;
-    const road = busRoads.roads[RL.ri] || null;
-    const fx = RL.dirx, fz = RL.dirz, ux = fz, uz = -fx; // (the Autohaus lot: f toward the road, u along it)
-    const imp = R.impound?.lot || null;
-    const impU = imp ? (imp.x - RL.x) * ux + (imp.z - RL.z) * uz : 40;
-    const away = impU >= 0 ? -1 : 1;
-    const cands = [26, 28, 31, 35, 40].map((du) => ({ u: away * du, pen: 0 }));
-    if (imp) for (const extra of [10, 13, 17]) cands.push({ u: Math.sign(impU || 1) * (Math.abs(impU) + imp.hw + extra), pen: 4 });
-    const { W, D } = SHOP, corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false };
-    const nearLift = (x, z) => (layout.lifts || []).some((l) => {
-      const ax = l.bottom.x, az = l.bottom.z, ex = l.top.x - ax, ez = l.top.z - az, t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
-      return Math.hypot(ax + ex * t - x, az + ez * t - z) < 8;
-    });
-    // the nearest point of the Autohaus's road to (x, z), its direction there
-    const nearestRoad = (x, z) => {
-      const rds = road ? [road] : busRoads.roads;
-      let best = null;
-      for (const r of rds) for (let i = 1; i < r.n - 1; i++) {
-        const d = (r.X[i] - x) ** 2 + (r.Z[i] - z) ** 2;
-        if (!best || d < best.d) best = { d, x: r.X[i], z: r.Z[i], dx: r.X[i + 1] - r.X[i - 1], dz: r.Z[i + 1] - r.Z[i - 1] };
-      }
-      if (!best) return null;
-      const l = Math.hypot(best.dx, best.dz) || 1; best.dx /= l; best.dz /= l;
-      return best;
-    };
-    let best = null;
-    const tryAt = (cand, gap, rise = 2.2) => {
-      // a point on the Autohaus's side of the road, abreast of the candidate; the road there; the garage square to it
-      const bx = RL.x + ux * cand.u + fx * RL.hd, bz = RL.z + uz * cand.u + fz * RL.hd;
-      const rp = nearestRoad(bx, bz);
-      if (!rp) return;
-      let nx = -rp.dz, nz = rp.dx; // (the road's normal toward the Autohaus's side)
-      if ((bx - rp.x) * nx + (bz - rp.z) * nz < 0) { nx = -nx; nz = -nz; }
-      const off = ROAD_HALF + gap + D / 2, cx = rp.x + nx * off, cz = rp.z + nz * off;
-      const F = { x: -nx, z: -nz }, A = { x: F.z, z: -F.x }; // (garage +z: toward the road; +x along it)
-      const at = (lx, lz) => [cx + A.x * lx + F.x * lz, cz + A.z * lx + F.z * lz];
-      let lo = Infinity, hi = -Infinity, bad = 0;
-      for (let lx = -W / 2 - 1; lx <= W / 2 + 1.01; lx += 2) for (let lz = -D / 2 - 1; lz <= D / 2 + 1.01; lz += 2) {
-        const [x, z] = at(lx, lz);
-        if (laneDistance(x, z) < ROAD_HALF + 1.2) return;
-        if (roadsideBlocked(x, z, 0.4, -1, 0, { lots: true })) return; // (a junction, a car park, a lay-by)
-        const rn = railNearest(x, z);
-        if (rn && rn.d < 12) return;
-        world.corridorAt(x, z, corr);
-        if (corr.kind && corr.kind !== 'lift' && corr.d < 3) return;
-        if (nearLift(x, z)) return;
-        if (imp) { const dx = x - imp.x, dz = z - imp.z; if (Math.abs(dx * imp.ux + dz * imp.uz) < imp.hw + 2 && Math.abs(dx * imp.vx + dz * imp.vz) < imp.hd + 2) return; }
-        const h = world.height(x, z);
-        lo = Math.min(lo, h); hi = Math.max(hi, h);
-        const sl = Math.hypot(world.height(x + 1, z) - h, world.height(x, z + 1) - h);
-        try { if (world.forest(x, z, h, sl) > 0.25) bad++; } catch { /* (no forest map) */ }
-      }
-      if (hi - lo > rise) return;
-      // the apron: from the bay to the road's edge (no junction mouth on it)
-      for (let lz = D / 2 + 1; lz < D / 2 + gap - 1.5; lz += 2) for (const lx of [DOOR.x0, (DOOR.x0 + DOOR.x1) / 2, DOOR.x1]) {
-        const [x, z] = at(lx, lz);
-        const why = roadsideBlocked(x, z, 0.4);
-        if (why && why !== 'lane') bad += 4;
-      }
-      // colliders standing in it (signs, lamps, other buildings): each one counts heavily against the spot
-      let hits = 0;
-      const ex = W / 2 + 1, ez = D / 2 + gap;
-      for (const c of R.colliders) {
-        if (!c || c.car || !Number.isFinite(c.x) || c.x > 1e8) continue;
-        const r = c.r ?? Math.hypot(c.hw || 0, c.hd || 0), dx = c.x - cx, dz = c.z - cz;
-        if (Math.abs(dx) > ex + ez + r || Math.abs(dz) > ex + ez + r) continue;
-        const la = dx * A.x + dz * A.z, lf = dx * F.x + dz * F.z;
-        if (Math.abs(la) < ex + r && lf < ez + r && lf > -D / 2 - 1 - r) hits++;
-      }
-      const score = (hi - lo) * 2 + bad * 2 + hits * 12 + Math.abs(cand.u) * 0.03 + gap * 0.25 + cand.pen;
-      if (!best || score < best.score) best = { x: cx, z: cz, ax: A.x, az: A.z, fx: F.x, fz: F.z, lo, hi, gap, score, hits };
-    };
-    for (const c of cands) for (const g of ROAD_GAP) tryAt(c, g);
-    // (nothing flat enough: either side, further along, on steeper ground)
-    if (!best) for (const du of [26, 31, 36, 44, 52, 60, 70]) for (const sd of [away, -away]) for (const g of ROAD_GAP) tryAt({ u: sd * du, pen: 6 }, g, 4);
+    // (planned with the roads, bus/autohaus.js: a building lot the roads' cut levels, the apron flush with the road and
+    // no plough berm across it; fallback: the same planning here, on the ground as it is)
+    const lot = busRoads.werkstatt;
+    const best = lot?.site ? { ...lot.site } : planWerkstattSite(RL, R.impound?.lot || null, { colliders: R.colliders });
     if (!best) return null;
+    const { W, D } = SHOP;
     // the floor: a level concrete slab a hand above the ground's highest point under the building and the bay's
     // threshold (the drawn terrain, every 2 m vertex of it: none pokes through), its walls reaching down to the lowest
     // (Oct 30, the user: "make the floor in the garage straight": it followed the slope before)
@@ -415,7 +344,7 @@ export class Werkstatt {
     // the roadside sign by the apron (on its posts), if the verge there is free
     try {
       const lx = DOOR.x1 + 2.6, lz = D / 2 + S.gap - 2.4, p = this.w(lx, lz);
-      if (!roadsideBlocked(p.x, p.z, 1.4) && laneDistance(p.x, p.z) > ROAD_HALF + 1.4) {
+      if (!roadsideBlocked(p.x, p.z, 1.4, -1, 0, { lots: false }) && laneDistance(p.x, p.z) > ROAD_HALF + 1.4) { // (lots: its own apron is one now, bus/autohaus.js)
         const post = makeSign('WERKSTATT\nRepairs · Reparatur', { w: 2.4, h: 0.9, font: 'bold 92px Georgia', posts: true, postH: 1.1, pole: R.models?.sign_pole });
         R.scene.add(standSign(post, p.x, p.z, S.yaw + 0.5));
         this.postMat = post.userData.faceMaterial;

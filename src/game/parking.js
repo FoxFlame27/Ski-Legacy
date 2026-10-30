@@ -101,7 +101,7 @@ export class ParkingLots {
       const paint = decal(new THREE.MeshStandardMaterial({ color: 0xeeefea, roughness: 0.92, metalness: 0, envMapIntensity: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }), 0.0019);
       this.bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffd59a, emissiveIntensity: 0, roughness: 0.4 });
       for (const L of busRoads.lots) {
-        if (L.building) continue; // (the hospital's site: game/hospital.js)
+        if (L.building || L.impound) continue; // (the hospital's site: game/hospital.js; the Autohaus car park: impound.js builds it)
         try { this.build(L, surf, paint, models, colliders); } catch (e) { console.warn('car park', L.name, e); }
       }
       scene.add(this.group);
@@ -110,7 +110,7 @@ export class ParkingLots {
       // close to the camera, a one-mesh version further out (update())
       try {
         const rnd = mulberry32(4417);
-        const lots = busRoads.lots.filter((l) => !l.building && l.bays?.length);
+        const lots = busRoads.lots.filter((l) => !l.building && !l.impound && l.bays?.length); // (the Autohaus car park: impound.js fills it)
         const colours = [null, 0xf2f2f0, 0x1b1d22, 0x9aa0a6, 0x24324e, 0x7a1d1d, 0x5d6166, 0xd8d2c4, 0x2f4a3a, 0xb8b1a3];
         const kinds = CAR_MODELS.filter(([name]) => models[name]), kindNames = kinds.map(([n]) => n), lenOf = new Map(kinds);
         for (const lot of lots) {

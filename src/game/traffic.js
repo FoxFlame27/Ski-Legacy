@@ -150,7 +150,7 @@ export class Traffic {
     if (!roads.length) return;
     this.main = roads.filter((r) => !r.access);
     this.access = roads.filter((r) => r.access);
-    this.lots = busRoads.lots.filter((l) => !l.building && !l.scenic && l.bays?.length);
+    this.lots = busRoads.lots.filter((l) => !l.building && !l.scenic && !l.impound && l.bays?.length); // (not the Autohaus car park: its bays are your cars')
     // junctions: where each access road meets a bus road
     this.junctions = [];
     for (const r of this.access) {

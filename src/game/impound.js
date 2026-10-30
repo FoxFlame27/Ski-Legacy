@@ -18,10 +18,9 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
+import { planRentalPark } from './bus/autohaus.js'; // (the car park's site: planned with the roads)
 import { lotMaterial } from './bus/bus.js';
 import { groundDecal } from '../world/groundpatch.js';
-import { railNearest } from '../world/railroute.js';
-import { layout } from '../world/layout.js';
 import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 import { net } from '../net/client.js';
@@ -45,7 +44,6 @@ export function untilTomorrow(rec) { return backIn(rec); } // (the old name, sti
 export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
 export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called
 export const AWAY_R = 40;       // m: "away" from your car
-const LOT = { hw: 18, hd: 9 };  // the car park's half length (along the road) and half depth (two rows of bays)
 const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's far end)
 // properly in a bay (Oct 30, the user: "park properly within the slots, but give them a tiny bit of room for error"):
 // the car's centre inside the bay's lines, its heading within BAY_YAW of the bay's (either way round: nose in or backed
@@ -89,62 +87,16 @@ export class Impound {
   get day() { return this.save.day ?? 1; }
 
   // ------------------------------------------------------------------ the site
-  // Beside the rental's lot along its road (either side), its front on the road's edge, else a little further in;
-  // clear of the lanes, other car parks, the railway, runs and lifts, colliders and forest, on the flattest ground.
+  // Planned with the roads (bus/autohaus.js planRentalPark, busRoads.rentalPark), before the terrain: the roads' cut
+  // levels it like every other car park (its surface on the road's profile, flush with the road along its front, no
+  // plough berm through its bays). (Before, it was planned here at run time, on the natural slope, with the road's berm
+  // running through its front row: Oct 30, the user: "something that is higher so I can't park there".) Fallback (no
+  // site planned): the same planning here, on the ground as it is.
   plan() {
-    const R = this.R, RL = R.L;
+    const RL = this.R.L;
     if (!RL) return null;
-    const fx = RL.dirx, fz = RL.dirz, ux = fz, uz = -fx; // (v: toward the road; u: along it)
-    const { hw, hd } = LOT;
-    const corr = { d: 1e9, kind: null, dx: 0, dz: 1, groomed: false };
-    const nearLift = (x, z) => (layout.lifts || []).some((l) => {
-      const ax = l.bottom.x, az = l.bottom.z, ex = l.top.x - ax, ez = l.top.z - az, t = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez || 1)));
-      return Math.hypot(ax + ex * t - x, az + ez * t - z) < 8;
-    });
-    let best = null;
-    const tryAt = (cu, cv, fallback = false) => {
-      const cx = RL.x + ux * cu + fx * cv, cz = RL.z + uz * cu + fz * cv;
-      let lo = Infinity, hi = -Infinity, sum = 0, n = 0, bad = 0;
-      for (let u = -hw - 1; u <= hw + 1; u += 3) for (let v = -hd - 1; v <= hd + 1; v += 3) {
-        const x = cx + ux * u + fx * v, z = cz + uz * u + fz * v;
-        if (busRoads.roads.length && laneDistance(x, z) < ROAD_HALF + 0.8) return;
-        const rn = railNearest(x, z);
-        if (rn && rn.d < 12) return;
-        world.corridorAt(x, z, corr);
-        if (corr.kind && corr.kind !== 'lift' && corr.d < 3) return; // (runs, lanes; a lift's wide corridor covers the rental too:)
-        if (nearLift(x, z)) return; // (its line itself)
-        const h = world.height(x, z);
-        lo = Math.min(lo, h); hi = Math.max(hi, h); sum += h; n++;
-        const sl = Math.hypot(world.height(x + 1, z) - h, world.height(x, z + 1) - h);
-        try { if (world.forest(x, z, h, sl) > 0.25) bad++; } catch { /* (no forest map) */ }
-      }
-      if (hi - lo > (fallback ? 6 : 3.5)) return;
-      for (const L of busRoads.lots) {
-        if (L === RL || !Number.isFinite(L.x)) continue;
-        if (Math.hypot(L.x - cx, L.z - cz) < Math.hypot(L.hw || 0, L.hd || 0) + Math.hypot(hw, hd) + 4) return;
-      }
-      // colliders standing in it (buildings, lamps, signs): each one counts against the spot
-      const ex = hw + 1, ez = hd + 1;
-      for (const c of R.colliders) {
-        if (!c || c.car || !Number.isFinite(c.x) || c.x > 1e8) continue;
-        const r = c.r ?? Math.hypot(c.hw || 0, c.hd || 0), dx = c.x - cx, dz = c.z - cz;
-        if (Math.abs(dx) > ex + hd + r + 20 || Math.abs(dz) > ex + hd + r + 20) continue;
-        if (Math.abs(dx * ux + dz * uz) < ex + r && Math.abs(dx * fx + dz * fz) < ez + r) bad += 3;
-      }
-      const mean = sum / n;
-      // the front's middle (the mouth) should reach the road
-      const mx = cx + fx * (hd + 2), mz = cz + fz * (hd + 2), md = busRoads.roads.length ? laneDistance(mx, mz) : 0;
-      const score = (hi - lo) + Math.abs(mean - RL.y) * 0.4 + bad * 2 + Math.max(0, md - ROAD_HALF - 3) * 0.6 + Math.abs(cu) * 0.02 + (fallback ? 20 : 0);
-      if (!best || score < best.score) best = { cx, cz, y: mean, score, bad };
-    };
-    for (const side of [1, -1]) for (const du of [36, 39, 43, 48]) for (const dv of [3.4, 1, -1.5, -4]) tryAt(side * du, dv);
-    if (!best || best.bad > 6) for (const du of [-12, 0, 12]) tryAt(du, -30, true); // (else behind the hall)
-    if (!best) return null;
-    const { cx, cz } = best;
-    return {
-      name: 'Autohaus car park', size: 'big', impound: true, x: cx, z: cz, y: best.y, yaw: Math.atan2(ux, uz), hw, hd, ux, uz, vx: fx, vz: fz,
-      ex: cx + fx * (hd + 2), ez: cz + fz * (hd + 2), dirx: fx, dirz: fz,
-    };
+    if (busRoads.rentalPark) return busRoads.rentalPark;
+    return planRentalPark(RL, { colliders: this.R.colliders });
   }
 
   // the car park itself (parking.js builds it like the others), the own bay, the impound bays, other people's cars

@@ -41,12 +41,12 @@ export class CarRentalUI {
     this.cfg = { ...view.cfg, interior: 'orig' }; // (no trim step: the factory cabin, at no cost)
     this.step = view.step || 0;
     this.openedAt = performance.now();
-    this.plateTaken = false; this.plateSeq = 0; clearTimeout(this.plateT);
+    this.plateTaken = false; this.plateMine = false; this.plateSeq = 0; clearTimeout(this.plateT);
     // multiplayer: a random plate is the server's (nobody else has it); a custom one is checked
     this.sellArm = null; // (the plate of the car whose SELL was clicked once: click again to sell it)
     if (view.plateIssue && !this.cfg.custom) this.issuePlate();
-    else if (view.plateCheck && this.cfg.custom) this.checkPlate(this.cfg.plate, 0);
     this.render(true);
+    if (this.cfg.custom) this.checkPlate(this.cfg.plate, 0); // (after the first render: it updates the note in place)
     this.el.hidden = false;
     document.body.classList.add('carcfg-open');
     this.hud?.setBlocking?.('carrental', true);
@@ -119,22 +119,30 @@ export class CarRentalUI {
     this.close('sell'); v.sell?.(plate);
   }
   // ---------------------------------------------------------------- multiplayer plates (unique across every player)
+  // (Oct 30, the user: "indicate already that the plate is taken while you are typing it"): at once against your own
+  // cars (single player too: a plate is on one car only), then with the server (multiplayer: every player's plates)
   checkPlate(text, delay = 280) {
     const v = this.view;
+    const key = (p) => String(p || '').replace(/[ -]/g, '').toUpperCase();
+    this.plateMine = !!v?.garage?.some((g) => key(g.plate) === key(text));
+    this.plateTaken = this.plateMine;
+    this.plateNote(); this.renderDetail();
     if (!v?.plateCheck) return;
     const seq = ++this.plateSeq;
     clearTimeout(this.plateT);
     this.plateT = setTimeout(async () => {
       const r = await v.plateCheck(text);
       if (seq !== this.plateSeq || this.view !== v || !r) return;
-      this.plateTaken = r.free === false;
+      this.plateMine = this.plateMine || !!r.mine;
+      this.plateTaken = r.free === false || this.plateMine; // (on another of your cars: taken for a new one too)
       this.plateNote();
       this.renderDetail();
     }, delay);
   }
+  plateTakenText(plate) { return this.plateMine ? `${plate} is already on one of your cars · type another` : `${plate} is taken · type another`; }
   async issuePlate() {
     const v = this.view, seq = ++this.plateSeq;
-    this.plateTaken = false;
+    this.plateTaken = false; this.plateMine = false;
     const plate = await v.plateIssue();
     if (!plate || seq !== this.plateSeq || this.view !== v || this.cfg.custom) return;
     this.cfg.plate = plate;
@@ -147,7 +155,7 @@ export class CarRentalUI {
     const el = this.el?.querySelector('.cr-plate-note');
     if (!el) return;
     el.classList.toggle('taken', !!this.plateTaken);
-    el.textContent = this.plateTaken ? `${this.cfg.plate} is taken · type another` : this.cfg.custom ? `Your own text · ${plus(PLATE_COST)}` : 'A random local plate · included';
+    el.textContent = this.plateTaken ? this.plateTakenText(this.cfg.plate) : this.cfg.custom ? `Your own text · ${plus(PLATE_COST)}` : 'A random local plate · included';
   }
   shake() { const b = this.el.querySelector('.os-act'); b?.classList.remove('nope'); void b?.offsetWidth; b?.classList.add('nope'); }
 
@@ -203,7 +211,7 @@ export class CarRentalUI {
           <div class="cr-plate"><i class="cr-ch"></i><input class="cr-plate-in" maxlength="8" spellcheck="false" autocomplete="off" value="${esc(c.plate)}"><i class="cr-ch cr-ct"></i></div>
           <div class="cr-plate-acts">
             <button class="brush-btn mid cr-mini" data-random tabindex="-1">${brushSVG(391, 220, 60, { fill: '#dfe7fb' })}<span>RANDOM</span></button>
-            <span class="cr-plate-note${this.plateTaken ? ' taken' : ''}">${this.plateTaken ? `${esc(c.plate)} is taken · type another` : c.custom ? `Your own text · ${plus(PLATE_COST)}` : 'A random local plate · included'}</span>
+            <span class="cr-plate-note${this.plateTaken ? ' taken' : ''}">${this.plateTaken ? esc(this.plateTakenText(c.plate)) : c.custom ? `Your own text · ${plus(PLATE_COST)}` : 'A random local plate · included'}</span>
           </div>
           <p class="os-note">Type your own: 1 to 8 letters and digits. It goes on the front and the back.</p>
         </div>`;
@@ -213,13 +221,12 @@ export class CarRentalUI {
         if (t !== inp.value) inp.value = t;
         if (!t.replace(/[ -]/g, '')) return;
         this.cfg.plate = t; this.cfg.custom = true;
-        this.plateTaken = false; this.plateNote();
         this.checkPlate(t);
         this.preview(); this.renderDetail();
       });
       list.querySelector('[data-random]').addEventListener('click', () => {
         this.cfg.plate = randomPlate(); this.cfg.custom = false; inp.value = this.cfg.plate;
-        this.plateTaken = false; this.plateNote();
+        this.plateTaken = false; this.plateMine = false; this.plateNote();
         if (this.view.plateIssue) this.issuePlate(); // (multiplayer: one nobody has)
         this.audio?.play?.('tick'); this.preview(); this.renderDetail();
       });

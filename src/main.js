@@ -1860,6 +1860,9 @@ function loopUpdate() {
   if (express?.riding) express.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   if (skibus.riding) skibus.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   mark('player');
+  // (Oct 30, the user: choosing an outfit, the other players in the shop don't stand in front of your preview: hidden
+  // while the outfit shop / the Autohaus configurator is open)
+  if (multiplayer?.remotes) multiplayer.remotes.visible = !(outfitShop?.isOpen || carRental?.ui?.isOpen);
   if (multiplayer && isMP()) multiplayer.update(rawDt, mpView()); // presence out, remote players, shared clock, money guard
   mark('mp');
   // the helicopter: your flight (seat, controls, chase camera) or its trip home; parked: the pad and windsock

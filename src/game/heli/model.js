@@ -469,7 +469,8 @@ export class HeliModel {
 
     // ---- landing light: beam + lit pool where it meets the snow (night only)
     this.lampOn += ((s.lamp ? 1 : 0) - this.lampOn) * (1 - Math.exp(-dt * 6));
-    const lit = (this.lit = this.lampOn * night);
+    // (Oct 30, the user, of the police searchlight: "make it also at day": aimed (the police), it shines by day too)
+    const lit = (this.lit = this.lampOn * (s.aim ? Math.max(night, 0.6) : night));
     this.beam.visible = this.pool.mesh.visible = lit > 0.02;
     if (lit > 0.02) this.updateLamp(lit, s.ground, s.snow || 0, s.aim || null);
   }

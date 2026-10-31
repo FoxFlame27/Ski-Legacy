@@ -41,6 +41,7 @@ import { applyOutfit, getEquipped, outfitZones } from './game/outfits.js';
 import { OutfitShop } from './ui/outfitshop.js';
 import { SKIER_MODELS, PLAYER_CHARACTERS } from './game/characters.js';
 import { AdminPanel } from './ui/admin.js';
+import { AdminNew } from './ui/adminnew.js'; // "Admin · new", Icey27 only: F10 / Ctrl+Shift+A (Oct 31 2026)
 import { Heli } from './game/heli.js';
 import { Snowmobiles } from './game/snowmobile.js'; // drivable snowmobiles (vehicles agent)
 import { Intro } from './ui/intro.js';
@@ -239,6 +240,7 @@ let gondolaRides = 0;
 let headlamp;
 let outfitShop = null;
 let admin = null; // F2 / ` admin panel (free ride only)
+let adminNew = null; // (Oct 31 2026, the user: "can you add an admin panel, 'new', only for Icey27": ui/adminnew.js)
 
 // Skiers carry poles: you (shown in third person only, see SkierRig) and the race bots (ai: a light pole stand-in
 // away from the camera); the resort's skiers, villagers, clerks and the menu showcase have none.
@@ -468,6 +470,9 @@ async function boot() {
       get lifts() { return lifts; }, get skibus() { return skibus; }, get jobs() { return jobs; }, get started() { return started; }, get paused() { return paused; },
       get secrets() { return secrets; }, get railway() { return railway; }, get carRental() { return carRental; }, get drive() { return drive; }, get chalets() { return chalets; }, get hospitalWard() { return hospitalWard; } },
   });
+  // "Admin · new" (Icey27 only; multiplayer: every action applied by the server): its teleports reuse the old panel's
+  adminNew = new AdminNew({ save, writeSave, hud, audio, env, input, transition,
+    ctx: { get started() { return started; }, get paused() { return paused; }, get lifts() { return lifts; }, get admin() { return admin; } } });
 
   // multiplayer: the session object (nothing connects until MULTIPLAYER in the menu)
   try {
@@ -1828,6 +1833,7 @@ function prisonClear() {
   if (outfitShop?.isOpen) outfitShop.close();
   if (admin?.fly) admin.stopFly?.();
   if (admin?.isOpen) admin.close(false);
+  if (adminNew?.isOpen) adminNew.close(false);
   if (trailMap?.isOpen) trailMap.toggle();
   heli.abort();
   if (races.active) races.abort();
@@ -1861,7 +1867,7 @@ addEventListener('keydown', (e) => { if (e.code === 'Escape' && paused) closePau
 
 // Overlays that free the mouse on purpose (panels, dialogs, map, admin, photo mode, outfits, conversations):
 // opening one, or closing it with Esc, releases pointer lock too, and that must never open the pause menu
-const overlayOpen = () => input.cursorFree || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!photo?.active || !!outfitShop?.isOpen
+const overlayOpen = () => input.cursorFree || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!adminNew?.isOpen || !!photo?.active || !!outfitShop?.isOpen
   || !!talk?.active || !document.getElementById('map').hidden || document.getElementById('travel')?.hidden === false; // (travel: route / flight map pickers)
 let escClosedAt = -1e9;
 addEventListener('keydown', (e) => { if (e.code === 'Escape' && overlayOpen()) escClosedAt = performance.now(); }, true); // capture: before the overlay closes itself

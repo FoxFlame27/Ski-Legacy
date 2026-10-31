@@ -207,6 +207,9 @@ export class Multiplayer {
     on('seatLost', (d) => { this.carRide.onSeatLost(d); this.c.onSeatLost?.(d); });
     on('jailBoard', (d) => { MP.jailBoard = Array.isArray(d?.top) ? d.top : []; }); // (the top 3 changed: prison.js redraws its posters)
     on('arrested', (d) => this.carRide.onArrested(d)); // (the driver of the car you ride in was arrested: you too)
+    // "Admin · new" (Oct 31 2026, Icey27's panel, ui/adminnew.js): the server's banner for everyone, a note to you, out of
+    // prison / the chase / the tow yard: handed to the panel (it is there for everyone, open or not)
+    for (const t of ['adminMsg', 'adminNote', 'adminRelease']) on(t, (d) => dispatchEvent(new CustomEvent('ski-admin', { detail: { t, d: d || {}, mp: this } })));
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
     on('parked', (d) => this.remotes?.setParked(d.pid, d.cars)); // (every other car of theirs parked in the world, Oct 31 2026)
     // poles / signs knocked flying, guardrail sections broken through: yours to the server, everyone else's here

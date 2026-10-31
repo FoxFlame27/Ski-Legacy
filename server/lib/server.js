@@ -97,8 +97,11 @@ export const pickWeather = (w, rnd = Math.random) => { const o = WEATHER_NEXT[w]
 // chalet (build mode: half its price; the dearest piece is $3,600)
 const EARN_RULES = { job: 6000, secret: 10000, sell: 2000 };
 const EARN_HOURLY = 60000;
-// the in-game admin panel (src/ui/admin.js isAdmin): these accounts (name keys) may send 'admin' requests
-export const ADMIN_KEYS = new Set(['rafael']);
+// the in-game admin panel: these accounts (name keys) may send 'admin' requests (Oct 31 2026, the user: "can you add an
+// admin panel, 'new', only for Icey27": the account named Icey27 and nobody else; src/ui/adminnew.js "Admin · new")
+export const ADMIN_KEYS = new Set(['icey27']);
+// (Oct 31 2026) admin requests: at most ADMIN_RATE_CAP in a burst, ADMIN_RATE_HZ a second after (the time slider sends 5)
+const ADMIN_RATE_CAP = 30, ADMIN_RATE_HZ = 6, ADMIN_SAY_MAX = 140;
 const ADMIN_MONEY_MAX = 99999999; // (the panel's "set to" limit)
 const ADMIN_WEATHER_HOLD_MS = 5 * 60 * 1000; // (single player holds a picked weather 300 s too)
 
@@ -997,7 +1000,7 @@ export class GameServer {
 
   // ---------------------------------------------------------------- the in-game admin panel (src/ui/admin.js)
   // Oct 30, the user: "the admin panel doesn't work on multiplayer, it reverts immediately". The panel is for the
-  // account named Rafael only; in multiplayer its server-owned actions come here: 'admin' { op, ... }, accepted only
+  // account named Icey27 only (Oct 31 2026: was Rafael's; ADMIN_KEYS); in multiplayer its server-owned actions come here: 'admin' { op, ... }, accepted only
   // from a connection LOGGED IN as an admin account (c.key: this server's own login, never a client flag).
   //   money { add } | { set }   your balance (a 'money' update follows, so the client's money guard takes it)
   //   unlock { what: 'skis' | 'outfits' }   every pair of skis / every outfit piece and kit in the catalog
@@ -1009,6 +1012,7 @@ export class GameServer {
   adminOp(c, d) {
     const op = str(d.op, 16);
     if (!c.key || !ADMIN_KEYS.has(c.key)) { this.log(`[admin] refused ${op || '?'} from ${c.name || c.ip}`); return { err: 'forbidden' }; }
+    if (!(c.adminBucket ||= new Bucket(ADMIN_RATE_CAP, ADMIN_RATE_HZ)).take()) { this.log(`[admin] ${c.name}: ${op || '?'} refused (rate)`); return { err: 'rate' }; } // (Oct 31 2026)
     const P = c.profile, w = c.world, now = Date.now();
     switch (op) {
       case 'money': {
@@ -1075,8 +1079,111 @@ export class GameServer {
         this.log(`[admin] ${c.name}: spawn ${kind}`);
         return {};
       }
-      default: return { err: 'bad_op' };
+      default: return this.adminNew(c, op, d);
     }
+  }
+
+  // ---------------------------------------------------------------- "Admin · new" (src/ui/adminnew.js; Oct 31 2026)
+  // (Oct 31 2026, the user: "can you add an admin panel, 'new', only for Icey27"; the old one "reverted immediately" in
+  // multiplayer): everything it changes is changed HERE, on the server's own records, and sent to whoever it concerns,
+  // so nothing reverts. Only after adminOp's checks (logged in as Icey27, rate). Every action goes to the log. No car,
+  // no helicopter is ever spawned (Oct 30, the user: "remove all admin spawned cars"). Targets by name (any case):
+  //   players                      online players in your world: name, money, position, jailed / wanted / impounded
+  //   give { name, amount }        money to (or, negative, from) anyone, online or not (never below 0 by it); told at once
+  //   tpTo { name } | tpHere { name }   you to them (their spot comes back) | them to you (they get 'adminTp')
+  //   kick { name }                off the server (they can join again)
+  //   release { name, what: 'jail' | 'chase' | 'impound' }   out of prison | the police chase over | cars out of the tow yard
+  //   reset { name, confirm }      their progress back to a new player's (confirm: the name typed again); online: kicked
+  //   say { text }                 a banner for everyone on the server ('adminMsg')
+  adminNew(c, op, d) {
+    const who = (k = nameKey(d.name)) => ({ k, P: this.profileOf(k), g: this.online.get(k) || null });
+    const label = (t) => t.P?.name || this.store.accounts.data[t.k]?.name || t.g?.name || t.k;
+    const note = (g, text) => g?.send('adminNote', { text, by: c.name });
+    switch (op) {
+      case 'players': {
+        const players = [...(c.world?.players.values() || [])].map((g) => ({
+          name: g.name, pid: g.pid, money: g.profile?.money ?? 0, pos: g.pres ? [g.pres[2], g.pres[3], g.pres[4]] : null, inside: g.pres?.[14] || null,
+          jailed: (g.profile?.jailUntil || 0) > Date.now(), wanted: !!g.profile?.wanted, impound: (g.profile?.cars || []).some((car) => carHeld(car)),
+        }));
+        return { d: { players, world: c.world?.id ?? null } };
+      }
+      case 'give': {
+        const t = who(), a = d.amount;
+        if (!t.P) return { err: 'no_player' };
+        if (!isInt(a) || a === 0 || Math.abs(a) > 1e7) return { err: 'bad_amount' };
+        const was = t.P.money, v = Math.max(Math.min(was, 0), Math.min(ADMIN_MONEY_MAX, was + a)), delta = v - was;
+        t.P.money = v; // (an online player's c.profile is this same object)
+        this.store.profiles.save();
+        if (t.g) { t.g.send('money', { v, why: 'admin', delta }); note(t.g, delta >= 0 ? `${c.name} gave you $${delta.toLocaleString('en-US')}` : `${c.name} took $${(-delta).toLocaleString('en-US')}`); }
+        this.log(`[admin] ${c.name}: money ${delta >= 0 ? '+' : ''}${delta} for ${label(t)}${t.g ? '' : ' (offline)'} -> ${v}`);
+        return { d: { name: label(t), balance: v, delta, online: !!t.g } }; // (balance, not money: the panel's own money stays)
+      }
+      case 'tpTo': case 'tpHere': {
+        const t = who();
+        if (!t.g) return { err: 'not_online' };
+        if (t.g === c) return { err: 'self' };
+        if (t.g.world !== c.world) return { err: 'other_world' };
+        const from = op === 'tpTo' ? t.g : c, r = from.pres;
+        if (!r) return { err: 'no_position' };
+        if (r[14]) return { err: 'inside' };
+        const at = { x: r[2], y: r[3], z: r[4], yaw: r[5], to: from.name };
+        if (op === 'tpHere') t.g.send('adminTp', at);
+        this.log(`[admin] ${c.name}: teleport ${op === 'tpTo' ? `self -> ${t.g.name}` : `${t.g.name} -> self`}`);
+        return { d: op === 'tpTo' ? at : { moved: t.g.name } };
+      }
+      case 'kick': {
+        const t = who();
+        if (!t.g) return { err: 'not_online' };
+        if (t.g === c) return { err: 'self' };
+        this.adminKick(t.g);
+        this.log(`[admin] ${c.name}: kicked ${t.g.name}`);
+        return { d: { kicked: t.g.name } };
+      }
+      case 'release': {
+        const t = who(), what = d.what, now = Date.now();
+        if (!t.P) return { err: 'no_player' };
+        let was = false;
+        if (what === 'jail') { was = (t.P.jailUntil || 0) > now; delete t.P.jailUntil; delete t.P.jailReason; }
+        else if (what === 'chase') { was = !!t.P.wanted || !!t.g?.accomplices; delete t.P.wanted; if (t.g) { t.g.accomplices = null; t.g.chaseOff = 0; } }
+        else if (what === 'impound') { for (const car of t.P.cars || []) if (car.impound) { delete car.impound; was = true; } }
+        else return { err: 'bad_value' };
+        this.store.profiles.save();
+        if (t.g) { t.g.send('adminRelease', { what }); note(t.g, what === 'jail' ? `${c.name} let you out of prison` : what === 'chase' ? `${c.name} called off the police` : `${c.name} released your car from the tow yard`); }
+        this.log(`[admin] ${c.name}: release ${what} for ${label(t)}${was ? '' : ' (nothing to release)'}${t.g ? '' : ' (offline)'}`);
+        return { d: { name: label(t), what, was, online: !!t.g } };
+      }
+      case 'reset': {
+        const t = who();
+        if (!t.P) return { err: 'no_player' };
+        if (t.k === c.key) return { err: 'self' };
+        if (nameKey(d.confirm) !== t.k) return { err: 'confirm' }; // (the panel's confirm step: the name typed again)
+        const name = label(t);
+        if (t.g) { t.g.send('adminNote', { text: `${c.name} reset your progress · join again to start fresh`, by: c.name, bye: true }); this.adminKick(t.g); } // (first: out of the world, the chalet plot freed)
+        for (const car of t.P.cars || []) if (car.plate && this.plates.get(plateKey(car.plate)) === t.k) this.plates.delete(plateKey(car.plate));
+        const fresh = newProfile(name), created = t.P.created;
+        for (const key of Object.keys(t.P)) delete t.P[key];
+        Object.assign(t.P, fresh, created ? { created } : {}); // (in place: a reference still held sees the new one)
+        this.earnedBy.delete(t.k);
+        this.store.profiles.save(0);
+        this.log(`[admin] ${c.name}: reset the progress of ${name}${t.g ? ' (kicked)' : ' (offline)'}`);
+        return { d: { name, online: !!t.g } };
+      }
+      case 'say': {
+        const text = normName(str(d.text, 400) ?? '').slice(0, ADMIN_SAY_MAX);
+        if (!text) return { err: 'bad_value' };
+        this.broadcastAll('adminMsg', { text, from: c.name });
+        this.log(`[admin] ${c.name}: message to all (${this.online.size} online): ${JSON.stringify(text)}`);
+        return { d: { n: this.online.size } };
+      }
+      default: return { err: 'bad_op' }; // (heli, spawning cars: gone for good)
+    }
+  }
+  /** Off the server now, as /admin/kick does ('bye' kicked, 4001; out of the world at once, no grace period). */
+  adminKick(g) {
+    g.kicked = true;
+    try { g.send('bye', { reason: 'kicked' }); } catch { /* closed */ }
+    try { g.ws?.close(4001, 'kicked'); } catch { /* closed */ }
+    try { clearTimeout(g.graceT); this.onClose(g); } catch (e) { this.log(`[err] kick ${g.name}: ${e.stack || e}`); }
   }
 
   // ---------------------------------------------------------------- money (server-authoritative)

@@ -1,0 +1,38 @@
+/* "Admin · new" (ui/adminnew.js; Oct 31 2026, the user: "can you add an admin panel, 'new', only for Icey27"): the old
+   panel's paper and lettering (admin.css .ad-*), its own layer, the players list, and the server message banner. */
+#adminnew { position: fixed; inset: 0; z-index: 58; color: var(--blue); font-family: var(--ui); transition: opacity 0.2s ease; }
+#adminnew.in { animation: fadeIn 0.25s ease backwards; }
+#adminnew.out { opacity: 0; pointer-events: none; }
+#adminnew .an-right { display: flex; flex-direction: column; gap: calc(var(--u) * 12); }
+#adminnew .an-plist { width: 100%; flex: 0 1 auto; max-height: 46%; display: flex; flex-direction: column; }
+#adminnew .an-plist .ad-list { min-height: calc(var(--u) * 60); }
+#adminnew .ad-tp { flex: 1 1 0; min-height: calc(var(--u) * 200); }
+#adminnew .an-name, #adminnew .an-confirm { width: calc(var(--u) * 230); font-size: calc(var(--u) * 20); }
+#adminnew .an-msg { width: calc(var(--u) * 260); font-size: calc(var(--u) * 18); }
+#adminnew .an-amount { width: calc(var(--u) * 130); }
+#adminnew .an-alt { background: transparent; color: var(--blue); }
+#adminnew .an-alt:hover { background: rgba(21, 70, 200, 0.1); }
+#adminnew .an-danger { background: var(--red); border-color: var(--red); }
+#adminnew .an-danger:hover { filter: brightness(0.9); }
+#adminnew .an-sm { padding: calc(var(--u) * 4) calc(var(--u) * 10); font-size: calc(var(--u) * 15); }
+#adminnew .an-result { min-height: calc(var(--u) * 26); padding-top: calc(var(--u) * 6); border-top: 1px solid rgba(21, 70, 200, 0.12); font: 600 var(--t-xs)/1.3 var(--ui); color: var(--blue); }
+#adminnew .an-result.bad { color: var(--red); }
+#adminnew .an-pl { display: flex; align-items: center; gap: calc(var(--u) * 10); border-top: 1px solid rgba(21, 70, 200, 0.1); }
+#adminnew .an-pick { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: calc(var(--u) * 3); padding: calc(var(--u) * 6) calc(var(--u) * 8);
+  border: 0; background: none; cursor: pointer; text-align: left; color: var(--blue); }
+#adminnew .an-pick:hover { background: linear-gradient(90deg, rgba(21, 70, 200, 0.1), rgba(21, 70, 200, 0)); box-shadow: inset calc(var(--u) * 4) 0 0 var(--red); }
+#adminnew .an-pick small { font: 600 var(--t-xs)/1 var(--ui); text-transform: none; color: var(--blue-dim); }
+#adminnew .an-meta { display: flex; align-items: center; flex-wrap: wrap; gap: calc(var(--u) * 6); font: 600 var(--t-xs)/1 var(--ui); color: var(--blue-dim); font-variant-numeric: tabular-nums; }
+#adminnew .an-meta .ch-dot { background: rgba(21, 70, 200, 0.4); }
+#adminnew .an-tag { padding: calc(var(--u) * 2) calc(var(--u) * 6); border-radius: calc(var(--u) * 3); background: var(--red); color: #fff; font: 800 calc(var(--u) * 11)/1 var(--ui); letter-spacing: 0.12em; font-style: normal; }
+#adminnew .an-acts { flex: none; display: flex; gap: calc(var(--u) * 6); }
+#adminnew .an-empty { padding: calc(var(--u) * 10) calc(var(--u) * 8); font: 600 var(--t-xs)/1.3 var(--ui); color: var(--blue-dim); }
+
+/* the server message: across the top for 8 s, for everyone */
+#admin-banner { position: fixed; left: 50%; top: calc(var(--u) * 90); z-index: 60; transform: translateX(-50%); pointer-events: none; max-width: 80vw; transition: opacity 0.4s ease, transform 0.4s ease; }
+#admin-banner.in { animation: fadeIn 0.3s ease backwards; }
+#admin-banner.out { opacity: 0; transform: translateX(-50%) translateY(calc(var(--u) * -12)); }
+#admin-banner .anb { display: flex; flex-direction: column; align-items: center; gap: calc(var(--u) * 8); padding: calc(var(--u) * 16) calc(var(--u) * 40); color: var(--blue);
+  text-align: center; filter: drop-shadow(0 8px 18px rgba(0, 20, 60, 0.3)); }
+#admin-banner .anb b { font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.2em; color: var(--red); }
+#admin-banner .anb span { font: italic 700 calc(var(--u) * 30)/1.15 var(--num); letter-spacing: 0.02em; overflow-wrap: anywhere; }

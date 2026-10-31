@@ -1268,31 +1268,31 @@ try {
     await sleep(100);
   }
 
-  // ---------------------------------------------------------------- the in-game admin panel ('admin': Rafael only)
+  // ---------------------------------------------------------------- the in-game admin panel ('admin': Icey27 only)
   console.log('admin panel');
   {
     const rf = new Fake(url);
     await rf.open();
-    const rr = await rf.req('register', { name: 'Rafael' });
-    const lr = await rf.req('login', { v: PROTO, name: 'rafael', token: rr.d.token });
-    ok(lr.ok, 'Rafael logs in');
+    const rr = await rf.req('register', { name: 'Icey27' });
+    const lr = await rf.req('login', { v: PROTO, name: 'icey27', token: rr.d.token });
+    ok(lr.ok, 'Icey27 logs in');
     const m0 = lr.d.profile.money;
     const add = await rf.req('admin', { op: 'money', add: 100000 });
-    ok(add.ok && add.d.money === m0 + 100000, `Rafael's admin money add works (+100,000 -> ${add.d?.money})`);
+    ok(add.ok && add.d.money === m0 + 100000, `Icey27's admin money add works (+100,000 -> ${add.d?.money})`);
     const mm = await rf.next('money', (d) => d.why === 'admin');
     ok(mm && mm.v === m0 + 100000 && mm.delta === 100000, "...and a 'money' update follows (the client's money guard takes it)");
     const set = await rf.req('admin', { op: 'money', set: 2500000 });
     ok(set.ok && set.d.money === 2500000, 'admin money set to 2,500,000');
     const bads = await Promise.all([{ add: 0 }, { add: 1.5 }, { add: 'lots' }, { add: 2e7 }, { set: -1 }, { set: 1e9 }, {}].map((x) => rf.req('admin', { op: 'money', ...x })));
     ok(bads.every((r) => !r.ok && r.err === 'bad_amount'), 'invalid admin amounts are refused (bad_amount)');
-    ok(server.store.profiles.data.rafael.money === 2500000, '...and change nothing');
+    ok(server.store.profiles.data.icey27.money === 2500000, '...and change nothing');
     const nope = await a.req('admin', { op: 'money', add: 100000 });
-    ok(!nope.ok && nope.err === 'forbidden', "a non-Rafael connection is refused ('forbidden')");
+    ok(!nope.ok && nope.err === 'forbidden', "a non-Icey27 connection is refused ('forbidden')");
     const nope2 = await a.req('admin', { op: 'unlock', what: 'skis' });
     ok(!nope2.ok && nope2.err === 'forbidden', '...for every op (unlock too)');
     const anon = new Fake(url);
     await anon.open();
-    const an = await anon.req('admin', { op: 'money', add: 100, name: 'Rafael', admin: true });
+    const an = await anon.req('admin', { op: 'money', add: 100, name: 'Icey27', admin: true });
     ok(!an.ok && an.err === 'not_logged_in', 'a connection not logged in is refused (a name in the request counts for nothing)');
     anon.close();
     const us = await rf.req('admin', { op: 'unlock', what: 'skis' });
@@ -1322,23 +1322,95 @@ try {
     // (an old one, put back here by hand) goes when anybody joins the world
     const hl = await rf.req('admin', { op: 'heli' });
     const W = server.worlds.get(lr.d.world.id), padAt = W.heli.padAt;
-    ok(!hl.ok && hl.err === 'bad_op' && !W.heli.copies.some((h) => h.name === 'Rafael'), 'admin helicopter: refused (bad_op), no free copy');
+    ok(!hl.ok && hl.err === 'bad_op' && !W.heli.copies.some((h) => h.name === 'Icey27'), 'admin helicopter: refused (bad_op), no free copy');
     ok(!(await rf.req('veh', { k: 'heli', at: [10, 50, 10, 0] })).ok, '...and nothing to show (veh heli: not renting)');
-    W.heli.copies.push({ id: W.heli.next++, key: 'rafael', name: 'Rafael', since: Date.now(), admin: true });
+    W.heli.copies.push({ id: W.heli.next++, key: 'icey27', name: 'Icey27', since: Date.now(), admin: true });
     const joiner = new Fake(url);
     await joiner.open();
     const jr = await joiner.req('register', { name: 'Heli Joiner' });
     const jl = await joiner.req('login', { v: PROTO, name: 'heli joiner', token: jr.d.token });
-    const hm = await rf.next('heli', (d) => !d.copies.some((h) => h.name === 'Rafael'));
+    const hm = await rf.next('heli', (d) => !d.copies.some((h) => h.name === 'Icey27'));
     ok(jl.ok && jl.d.world.id === W.id && !W.heli.copies.some((h) => h.admin) && !!hm && W.heli.padAt === padAt, "an old admin helicopter left out is gone when someone joins (everyone told; the pad's untouched)");
     joiner.close();
     const bo = await rf.req('admin', { op: 'nope' });
     ok(!bo.ok && bo.err === 'bad_op', 'an unknown admin op is refused');
+    // "Admin · new" (Oct 31 2026, the user: "can you add an admin panel, 'new', only for Icey27"): its ops are refused
+    // to everybody else, and Icey27's change the server's own records, told to whoever they concern
+    {
+      server.onlineByKey('icey27').adminBucket = null; // (a fresh rate allowance for these)
+      const mk = async (name) => { const f = new Fake(url); await f.open(); const r = await f.req('register', { name }); f.l = await f.req('login', { v: PROTO, name, token: r.d.token }); return f; };
+      const T = await mk('Tess Target'), K = await mk('Kim Kickme');
+      const off = new Fake(url); await off.open(); await off.req('register', { name: 'Olli Offline' }); off.close(); // (never logged in: offline)
+      const ops = [{ op: 'players' }, { op: 'give', name: 'Tess Target', amount: 1000 }, { op: 'tpTo', name: 'Tess Target' }, { op: 'tpHere', name: 'Tess Target' },
+        { op: 'kick', name: 'Kim Kickme' }, { op: 'release', name: 'Tess Target', what: 'jail' }, { op: 'reset', name: 'Tess Target', confirm: 'Tess Target' },
+        { op: 'say', text: 'hi' }, { op: 'time', hour: 3 }, { op: 'weather', w: 'clear' }];
+      const refused = await Promise.all([a, T].flatMap((f) => ops.map((o) => f.req('admin', { ...o, admin: true, name0: 'Icey27' }))));
+      ok(refused.every((r) => !r.ok && r.err === 'forbidden'), `admin new: every op refused to non-Icey27 accounts ('forbidden', ${refused.length} tries)`);
+      ok(server.profileOf('tess target').money === 500 && !!server.onlineByKey('kim kickme'), '...and nothing changed (money, still online)');
+      const W = server.worlds.get(lr.d.world.id);
+      const pl = await rf.req('admin', { op: 'players' });
+      ok(pl.ok && pl.d.players.some((p) => p.name === 'Tess Target' && p.money === 500) && pl.d.players.length === W.size, 'admin players: everyone in your world, with their money');
+      const g = await rf.req('admin', { op: 'give', name: 'tess TARGET', amount: 1234 });
+      const gm = await T.next('money', (d) => d.why === 'admin'), gn = await T.next('adminNote');
+      ok(g.ok && g.d.balance === 1734 && g.d.delta === 1234 && g.d.online && server.profileOf('tess target').money === 1734, 'admin give: Tess +$1,234 (her profile on the server)');
+      ok(gm && gm.v === 1734 && gm.delta === 1234 && gn && /gave you \$1,234/.test(gn.text), '...and she is told at once (money update + note)');
+      const tk = await rf.req('admin', { op: 'give', name: 'Tess Target', amount: -5000000 });
+      ok(tk.ok && tk.d.balance === 0 && server.profileOf('tess target').money === 0, 'admin take: never below $0 by it');
+      const go = await rf.req('admin', { op: 'give', name: 'Olli Offline', amount: 300 });
+      ok(go.ok && !go.d.online && server.profileOf('olli offline').money === 800, 'admin give: an offline player too (by name)');
+      const gx = await Promise.all([rf.req('admin', { op: 'give', name: 'Nobody Here', amount: 5 }), rf.req('admin', { op: 'give', name: 'Tess Target', amount: 1.5 })]);
+      ok(gx[0].err === 'no_player' && gx[1].err === 'bad_amount', 'admin give: unknown name / bad amount refused');
+      const tm = await rf.req('admin', { op: 'time', hour: 6.5 });
+      const tc = await T.next('clock', (d) => Math.abs(d.hour - 6.5) < 0.01);
+      ok(tm.ok && !!tc, "admin time: 06:30 for the whole world (Tess's clock)");
+      const wk = Object.keys(WEATHER_NEXT).find((k) => k !== W.clock.weather);
+      const wx = await rf.req('admin', { op: 'weather', w: wk });
+      const wc = await T.next('clock', (d) => d.weather === wk);
+      ok(wx.ok && !!wc && W.clock.weather === wk, `admin weather: ${wk} for the whole world (Tess's clock)`);
+      const say = await rf.req('admin', { op: 'say', text: '  Lifts close   in 5 minutes ' });
+      const sm = await T.next('adminMsg'), sa = await a.next('adminMsg');
+      ok(say.ok && sm && sm.text === 'Lifts close in 5 minutes' && sm.from === 'Icey27' && !!sa, 'admin say: a banner for everyone');
+      ok((await rf.req('admin', { op: 'say', text: '   ' })).err === 'bad_value', 'admin say: an empty message is refused');
+      const P = server.profileOf('tess target');
+      P.jailUntil = Date.now() + 60000; P.jailReason = 'Speeding'; P.wanted = { h: 2, e: 0, t: 0, f: false, why: 'x' };
+      P.cars = [{ id: 'hatch', plate: 'TT 1', impound: { day: 1, until: Date.now() + 100000, bay: 0 } }];
+      const rj = await rf.req('admin', { op: 'release', name: 'Tess Target', what: 'jail' });
+      const re = await T.next('adminRelease', (d) => d.what === 'jail');
+      ok(rj.ok && rj.d.was && !P.jailUntil && !P.jailReason && !!re, 'admin release: out of prison (profile cleared, she is told)');
+      const rc = await rf.req('admin', { op: 'release', name: 'Tess Target', what: 'chase' });
+      const ri = await rf.req('admin', { op: 'release', name: 'Tess Target', what: 'impound' });
+      ok(rc.ok && !P.wanted && ri.ok && ri.d.was && !P.cars[0].impound, 'admin release: the chase over, the car out of the tow yard');
+      ok((await rf.req('admin', { op: 'release', name: 'Tess Target', what: 'heli' })).err === 'bad_value', 'admin release: unknown kind refused');
+      ok((await rf.req('admin', { op: 'tpHere', name: 'Tess Target' })).err === 'no_position', 'admin tpHere: refused before you have a position');
+      rf.send('p', [Date.now(), 70, 12, 80, 1, 0, 0, 0, 0, 0, 0, 0]); T.send('p', [Date.now(), 20, 5, 30, 0, 0, 0, 0, 0, 0, 0, 0]);
+      await sleep(120);
+      const th = await rf.req('admin', { op: 'tpHere', name: 'Tess Target' });
+      const ta = await T.next('adminTp');
+      ok(th.ok && ta && ta.x === 70 && ta.z === 80 && ta.to === 'Icey27', 'admin tpHere: Tess is sent your spot (adminTp)');
+      const tt = await rf.req('admin', { op: 'tpTo', name: 'Tess Target' });
+      ok(tt.ok && tt.d.x === 20 && tt.d.z === 30, "admin tpTo: Tess's spot comes back to you");
+      ok((await rf.req('admin', { op: 'kick', name: 'Icey27' })).err === 'self', 'admin kick: not yourself');
+      const kc = new Promise((r) => K.ws.on('close', (code, why) => r([code, String(why)])));
+      const kk = await rf.req('admin', { op: 'kick', name: 'kim kickme' });
+      const [kcode, kwhy] = await kc;
+      ok(kk.ok && kcode === 4001 && kwhy === 'kicked' && !server.onlineByKey('kim kickme') && !W.players.has(K.l.d.pid), 'admin kick: off the server (4001 kicked), out of the world at once');
+      ok((await rf.req('admin', { op: 'kick', name: 'kim kickme' })).err === 'not_online', 'admin kick: not online any more');
+      P.money = 9999; P.owned = ['legend']; server.plates.set('TT1', 'tess target');
+      const rn = await rf.req('admin', { op: 'reset', name: 'Tess Target', confirm: 'Tess' });
+      ok(!rn.ok && rn.err === 'confirm' && server.profileOf('tess target').money === 9999, 'admin reset: refused without the confirm step (the name typed again)');
+      const tcl = new Promise((r) => T.ws.on('close', (code) => r(code)));
+      const rs = await rf.req('admin', { op: 'reset', name: 'Tess Target', confirm: 'tess target' });
+      const P2 = server.profileOf('tess target');
+      ok(rs.ok && (await tcl) === 4001 && P2.money === 500 && !P2.owned.length && !P2.cars.length && P2.name === 'Tess Target' && !server.plates.has('TT1'), 'admin reset: a new player\'s profile, plates freed, kicked');
+      server.onlineByKey('icey27').adminBucket = null;
+      const burst = await Promise.all(Array.from({ length: 40 }, () => rf.req('admin', { op: 'players' })));
+      ok(burst.some((r) => r.err === 'rate') && burst.filter((r) => r.ok).length <= 31, 'admin ops are rate limited');
+    }
     rf.close();
     await sleep(100);
     server.store.flush();
     const disk = JSON.parse(fs.readFileSync(path.join(dataDir, 'profiles.json'), 'utf8'));
-    ok(disk.rafael?.money === 2500000 && disk.rafael.owned.includes('legend'), "Rafael's admin money and unlocks persist (on disk)");
+    ok(disk.icey27?.money === 2500000 && disk.icey27.owned.includes('legend'), "Icey27's admin money and unlocks persist (on disk)");
   }
 
   // ---------------------------------------------------------------- knocked poles, broken guardrails ('brk')

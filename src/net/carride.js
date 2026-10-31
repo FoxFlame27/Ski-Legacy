@@ -111,7 +111,9 @@ export class CarRide {
     this.wantedFrame(g);
   }
 
-  // Your other cars parked in the world (carrental.js kept: spawnKept's bays, the one out before staying where it is
+  // Your other cars parked in the world (carrental.js kept: spawnKept's saved spots or free bays (keptSpot, checked
+  // with carNear / spotFree below: joining, they stand where you left them before the first report goes out, Oct 31
+  // 2026, the user), the one out before staying where it is
   // parked (keepCurrent), a repaired wreck's free bay, MY CARS, impound.js letting one out): their spots to the server
   // ('parked', the whole list; one not in it is in your garage), so everyone draws them in the same bays (Oct 31
   // 2026, the user: "how come another player can see all his cars in the parking lot, but I only see 1 of them? Fix

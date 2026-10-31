@@ -31,6 +31,7 @@ import { groundPatchGeometry, groundDecal } from '../world/groundpatch.js'; // (
 import { Impound, untilTomorrow } from './impound.js'; // the big car park beside the hall: your car's bay, the impound, towing cars left on a road
 import { Werkstatt } from './werkstatt.js'; // the repair garage beside the Autohaus (its prices: repairCost below)
 import { applyDents, packDents, unpackDents } from './cardamage.js'; // (your cars' dents and damage kept until repaired: carDamage)
+import { isMP, MP } from '../net/mode.js'; // (multiplayer: your other cars' saved spots, the server profile's cars[i].at: keptSpot)
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 import { mergeStatic } from '../engine/merge.js'; // (the hall's boxes welded per material)
 
@@ -523,17 +524,49 @@ export class CarRental {
   }
   /** Your other cars (the garage, but the one out) parked in free bays of the Autohaus car park (a new session; no
    *  free bay: they wait in the garage, MY CARS). */
+  // (Oct 31 2026, the user, after commit a3b4a8e: joining multiplayer, your other cars went into free bays first and were
+  // reported from there, so for half a second the others saw the last session's spots and your cars never came back
+  // where you left them: now each goes straight to its saved spot (keptSpot: the server profile's cars[i].at) while
+  // that spot is still good, else a free bay as before; spawned once, where it ends up (no move after, no collider
+  // left behind), then carride.js keptFrame reports the list as usual. Single player: the save's spots if it has any
+  // (save.keptAt), else free bays as always)
   spawnKept() {
     if (!this.impound?.freeBay) return;
     for (const cfg of this.garage) {
       if (cfg.plate === this.save.rental?.plate || this.kept.some((k) => k.cfg?.plate === cfg.plate) || this.withTruck(cfg.plate)) continue; // (with the tow truck: not in a bay too)
-      const p = this.impound.freeBay(true);
-      if (!p) break;
+      let p = null;
+      try { p = this.keptSpot(cfg); } catch (err) { console.warn('rental car spot', err); }
+      p ||= this.impound.freeBay(true);
+      if (!p) continue; // (no saved spot and no free bay: it waits in your garage; the next one may still have its spot)
       let e = null;
       try { e = this.spawn(cfg, p); } catch (err) { console.warn('rental car', err); }
       if (!e) continue;
       e.kept = true; this.kept.push(e);
     }
+  }
+  /** Where one of your other cars was left (multiplayer: the server profile's cars[i].at, i > 0; single player:
+   *  save.keptAt[plate], when the save has it) as a spawn pose { x, z, yaw }, or null when there is none or it is no
+   *  good: off the ground, in the tow yard, or not free (a building, a tree, another player's car, as recorded or as
+   *  drawn here: net/carride.js carNear / spotFree; one of your own cars already put back). */
+  // (Oct 31 2026, the user: "put each kept car at its saved spot ... if that spot is still valid ... on the ground, not
+  // inside another player's car, and not in the tow yard"; only else a free bay)
+  keptSpot(cfg) {
+    const plate = cfg?.plate;
+    if (!plate) return null;
+    const mp = isMP(), L = mp ? MP.profile?.cars || [] : null;
+    const at = mp ? L.find((c, i) => i > 0 && c?.plate === plate)?.at : this.save.keptAt?.[plate];
+    if (!Array.isArray(at) || at.length < 4 || !at.slice(0, 4).every(Number.isFinite)) return null;
+    const [x, y, z, yaw] = at, h = world.height(x, z);
+    if (!Number.isFinite(h) || Math.abs(y - h) > 1.5) return null; // (on the ground: not on a deck, a roof, under the snow)
+    if ((this.impound?.pound || []).some((b) => Math.hypot(b.x - x, b.z - z) < 2.5)) return null; // (not in the tow yard: a held car's spot)
+    if (mp) {
+      const ride = window.__game?.multiplayer?.carRide; // (carrental.mp is set only after resync: the session's own CarRide)
+      if (ride && (ride.carNear(x, z, 2.5) || !ride.spotFree(x, z, null, 2.5))) return null;
+    } else {
+      if (this.drive?.clearAt && !this.drive.clearAt(x, z, 1.1)) return null;
+      if (this.kept.some((k) => !k.driving && k.car?.parent && Math.hypot(k.car.position.x - x, k.car.position.z - z) < 2.5)) return null;
+    }
+    return { x, z, yaw };
   }
 
   /** Your garage and the car out rebuilt from the save (switching between the single-player and multiplayer saves). */
@@ -554,8 +587,11 @@ export class CarRental {
     this.purgeAdminCars();
     const r = this.save.rental, k = r ? this.kept.find((x) => x.cfg?.plate === r.plate && this.withTruck(x)) : null;
     if (k) { this.kept.splice(this.kept.indexOf(k), 1); k.kept = false; k.cfg = r; this.current = k; }
-    else if (r && !this.withTruck(r.plate)) { try { this.current = this.spawn(r); } catch (e) { console.warn('rental car', e); } } // (your wreck still on the truck: it comes home from there)
+    // (your other cars first, at their saved spots (keptSpot); then the one out into a free bay, which keeps clear of
+    // them: put first, it could take the bay another of yours was left in and push that one off to a free bay, though
+    // net/carride.js putBack moves the one out on to its own saved spot a frame later. Oct 31 2026, the user)
     this.spawnKept();
+    if (!k && r && !this.withTruck(r.plate)) { try { this.current = this.spawn(r); } catch (e) { console.warn('rental car', e); } } // (your wreck still on the truck: it comes home from there)
   }
   /** Multiplayer: the server's garage (profile cars, cars[0] the one out; net/session.js): the save follows it and the
    *  car out is put in your bay when it changed (bought, switched, sold). */

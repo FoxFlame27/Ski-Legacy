@@ -88,7 +88,7 @@ import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, scr
 import { PersonalBests } from './game/bests.js';
 import { TrailMap } from './ui/trailmap.js';
 import { PhotoMode } from './ui/photomode.js';
-import { Chalets } from './game/chalets.js'; // the chalet village (Almdorf): rent a chalet, its interior
+import { Chalets } from './game/chalets.js'; // the chalet village: rent a chalet, its interior
 import { seating } from './game/seating.js'; // sitting down on benches, chairs, sofas, bed edges (the whole map + your chalet)
 import { chaletInteriorAPI } from './game/chaletroom.js';
 import { HX as CHALET_HX } from './game/chaletplan.js';
@@ -524,7 +524,7 @@ async function boot() {
     const H = busRoads.hospital, hosp = H ? [{ x: H.ex, z: H.ez }, { x: H.ex + (H.dirx || 0) * 2, z: H.ez + (H.dirz || 0) * 2 }] : []; // (its door step, where you come round)
     const doors = [...village.interactables, carRental?.door, prison?.door, ...hosp].filter(Boolean).map((d) => ({ x: d.x, z: d.z, r: 1.2 }));
     if (sleds) sleds.collidersReady = false; // (the parked snowmobiles are placed once these are in: game/snowmobile.js)
-    // (+ the Almdorf chalets once built: each house's porch, posts, railing and gable stairs, the gardens' props; the
+    // (+ the chalet village's chalets once built: each house's porch, posts, railing and gable stairs, the gardens' props; the
     // bus roads' depot, signs and roadside props; the helipad; the bus-race boards; the railway stations' platform
     // furniture, its tunnel portals and viaducts' parapets. The Legacy Express's stream in and out: world/expresstrack.js
     // does theirs as they're built)

@@ -1,4 +1,4 @@
-// The chalet village (Almdorf): an Austrian chalet resort on the gentle forested slope (~10 degrees, falling north)
+// The chalet village: an Austrian chalet resort on the gentle forested slope (~10 degrees, falling north)
 // between the village -> Sonnenkopf road and the Legacy Express, a little way north of Legacy Village. Pure layout
 // (no THREE): runs in Node too; world/chalets.js builds the houses from busRoads.chalets.
 //   - the Chaletweg: a T junction off the valley road, a wide bend (R 40 m) onto the lowest terrace, then up the
@@ -217,13 +217,13 @@ export function planChaletVillage(O) {
 }
 
 /**
- * The ski bus stop "Almdorf" (after every road is shaped: planBusRoads calls it last). It stands on the valley road
+ * The ski bus stop "Chalet Village" (after every road is shaped: planBusRoads calls it last). It stands on the valley road
  * at the Chaletweg's junction, so the 12 m bus never has to turn into the village's lanes: the road from the village
- * stop past the junction is split there for the bus network (busRoads.busLegs: village -> Almdorf -> the next stop,
- * slices of the same road, nothing new built or carved), so every ride along it stops at Almdorf on the way, and a
- * ride from Almdorf goes either way. bus.js (parent) and skibus.js (besideBay) look the legs up first.
+ * stop past the junction is split there for the bus network (busRoads.busLegs: village -> the chalet village -> the next stop,
+ * slices of the same road, nothing new built or carved), so every ride along it stops at the chalet village on the way, and a
+ * ride from the chalet village goes either way. bus.js (parent) and skibus.js (besideBay) look the legs up first.
  */
-export function planAlmdorfStop() {
+export function planChaletStop() {
   const V = busRoads.chalets;
   if (!V) return;
   if (CHALET_DRIVES.on) try { planChaletDrives(V); } catch (e) { console.warn('chalet drives', e); } // (after every road's cut: last word)
@@ -237,7 +237,7 @@ export function planAlmdorfStop() {
     for (let k = 1; k < n; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z[k] - Z[k - 1]);
     return { from, to, n, X, Y, Z, S, length: S[n - 1], busLeg: true, base: r0, s0: r0.S[a] };
   };
-  const stop = { x: J.x, z: J.z, heading: 0, name: 'Chalet Village', chalets: true }; // (the stop formerly called Almdorf)
+  const stop = { x: J.x, z: J.z, heading: 0, name: 'Chalet Village', chalets: true }; // (Oct 31, the user: "don't call anything like that, just chalet village")
   busRoads.stops.push(stop); // (the same array as layout.busStops: the trail map and the stop list show it)
   busRoads.busLegs = [slice(0, iJ, r0.from, stop), slice(iJ, r0.n - 1, stop, r0.to)];
 }
@@ -245,7 +245,7 @@ export function planAlmdorfStop() {
 /**
  * The street lamps of the chalet village (Legacy Village's lamp post): along the Chaletweg every ~27 m at its edge
  * (sides alternating, shifted along or across to the other side when a spot is taken), a pair at the junction with
- * the valley road (the bus stop "Almdorf"), round the car park at the top. Kept off every lane (the hairpins' other
+ * the valley road (the bus stop "Chalet Village"), round the car park at the top. Kept off every lane (the hairpins' other
  * legs, the valley road), the car park and its entrance, and every plot's drive, parking bay, fence, gate, steps
  * and garden props (`items`: villagePlacements), and clear of the colliders already standing (the bus stop's sign
  * and shelter). Pure: [{ x, z, s, yaw (facing the road), where }].
@@ -315,7 +315,7 @@ export function chaletLampSpots(V, items = [], colliders = []) {
  * Each chalet's drive (the road's plowed edge -> its parking bay) and the bay itself, graded smooth (Oct 29, the
  * user: "fix the driveways by the chalets, make them smooth and flat"). Before, the ground there was whatever the
  * pad's cut and the road's embankment (registered after it) made of it between them: lumps, a step at the bay.
- * Now one cut, registered after every road's (planAlmdorfStop calls it), has the last word:
+ * Now one cut, registered after every road's (planChaletStop calls it), has the last word:
  *  - the bay: dead flat at the pad's level;
  *  - the drive: a straight ramp from the road's plowed edge (3.4 m from the lane's centre line) to the bay, level
  *    across (it follows the road's own grade at the road end only);

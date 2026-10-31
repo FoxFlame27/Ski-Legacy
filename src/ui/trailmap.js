@@ -104,7 +104,7 @@ const ICONS = {
   job: { fill: GOLD, round: true, glyph: textGlyph('!', 13) },
   secret: { fill: '#c98a00', round: true, glyph: (g) => { g.beginPath(); g.moveTo(0, -6); g.lineTo(5, 0); g.lineTo(0, 6); g.lineTo(-5, 0); g.closePath(); g.fill(); } },
   chalet: { fill: GOLD, glyph: houseGlyph },
-  chaletv: { fill: '#8a3a12', glyph: houseGlyph }, // (the chalet village, Almdorf)
+  chaletv: { fill: '#8a3a12', glyph: houseGlyph }, // (the chalet village)
   mycar: { fill: GOLD, glyph: carGlyph },
   impound: { fill: '#6f7788', glyph: carGlyph },
   myheli: { fill: GOLD, glyph: textGlyph('H', 13, FONT, 700, 'italic ') },
@@ -980,7 +980,7 @@ export class TrailMap {
 
   // the chalet village (game/chalets.js sets layout.chaletVillage): the Chaletweg, each chalet's footprint (yours in
   // gold), the playground; labelled and clickable as a place
-  // (Oct 30 2026, the user: "where are the chalets": Almdorf is in Places as a chalet badge with its name from a medium
+  // (Oct 30 2026, the user: "where are the chalets": the chalet village is in Places as a chalet badge with its name from a medium
   // zoom out, even before game/chalets.js has built it (then from roads.js's plan, busRoads.chalets / CHALET_PLACE))
   drawChalets() {
     const C = layout.chaletVillage, P = C?.center || busRoads.chalets?.place || CHALET_PLACE;
@@ -992,7 +992,7 @@ export class TrailMap {
       lab: `YOUR CHALET${own.name ? ` · ${own.name.toUpperCase()}` : ''}`, labo: { size: 12, color: '#8a6a00', prio: 1 } }); // (your chalet: "YOUR CHALET · CHALET 7")
     if (!this.on('places') || !this.inView(cx, cy, 400 * s + 60)) return;
     const n = C?.houses.length || busRoads.chalets?.plots?.filter((q) => !q.playground).length || 18, R = s >= 0.25 ? 11 : 10;
-    const tip = { title: 'Chalet village', lines: ['Up the Chaletweg north of Legacy Village', `${n} chalets to buy · ski bus stop Chalet Village`] }; // (Oct 30, the user: "make sure you see chalet village on the map, don't call anything like that Almdorf")
+    const tip = { title: 'Chalet village', lines: ['Up the Chaletweg north of Legacy Village', `${n} chalets to buy · ski bus stop Chalet Village`] }; // (Oct 30, the user: "make sure you see chalet village on the map, don't call anything like that the chalet village")
     if (s < 0.6) this.icon({ kind: 'chaletv', x: cx, y: cy, r: R, prio: 1.4, wx: C?.x ?? P.x, wz: C?.z ?? P.z, label: 'Chalet village', tip });
     else this.spot(cx, cy, Math.max(14, 120 * s), C?.x ?? P.x, C?.z ?? P.z, 'Chalet village', { tip });
     // (its own label, not the icon's: it stays even where the badge folds into your chalet's)

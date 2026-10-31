@@ -14,7 +14,7 @@ import { layout, VILLAGE_BUILDINGS, PISTE_WIDTH, ensureRaceCells } from '../../w
 import { RAIL } from '../../world/railroute.js';
 import { planScenic, shapeScenic } from './scenic.js'; // the scenic mountain road (Panoramastrasse) + its roundabout
 import { planScenicLoop } from './scenicloop.js'; // the Passstrasse and the loop round the back of the mountains
-import { planChaletVillage, planAlmdorfStop, inChaletSite, chaletWaypoint } from './chaletroad.js'; // the Chaletweg up through the chalet village (Almdorf)
+import { planChaletVillage, planChaletStop, inChaletSite, chaletWaypoint } from './chaletroad.js'; // the Chaletweg up through the chalet village
 import { planScenicBus, planWestgratBus } from './scenicbus.js'; // the ski bus's stops up the scenic roads
 import { planRentalRoad } from './rentalroad.js'; // the Westgratstrasse: across from the car rental, up the Westgrat
 import { clearRouteCache } from './scenicnet.js'; // (the routing's ground samples: freed once the roads are planned)
@@ -417,7 +417,7 @@ export function roadsideBlocked(x, z, r = 0.3, own = -1, s = 0, { lots = true } 
  * and of every road's lane (>= 1.5 m off its plowed edge).
  */
 export function stopWaitArea(stop) {
-  // (a stop part way along a road, as Almdorf at the chalet village's junction: its bus legs, as skibus.js besideBay)
+  // (a stop part way along a road, as the chalet village's stop at its junction: its bus legs, as skibus.js besideBay)
   const legs = busRoads.busLegs || [];
   const r = legs.find((q) => q.to === stop) || busRoads.roads.find((q) => q.to === stop) || legs.find((q) => q.from === stop) || busRoads.roads.find((q) => q.from === stop);
   if (!r) return null;
@@ -512,7 +512,7 @@ export function planBusRoads(stops) {
   try { planMouths(); } catch (e) { console.warn('junction mouths', e); busRoads.mouths = []; } // (before the cuts: the berms round their corners)
   shapeRoads(busRoads.roads.filter((r) => !r.scenic)); // (the scenic roads, appended last, carve their own cut: same indices)
   try { shapeScenic(); } catch (e) { console.warn('scenic road cut', e); }
-  try { planAlmdorfStop(); } catch (e) { console.warn('Almdorf bus stop', e); } // (the chalet village's stop: the valley road split at its junction for the bus)
+  try { planChaletStop(); } catch (e) { console.warn('chalet village bus stop', e); } // (the chalet village's stop: the valley road split at its junction for the bus)
   try { planScenicBus(); } catch (e) { console.warn('mountain bus stops', e); } // (the bus up the scenic roads: its stops and legs)
   try { planWestgratBus(); } catch (e) { console.warn('Westgrat bus stop', e); } // (and up the Westgratstrasse)
   busRoads.ready = true;

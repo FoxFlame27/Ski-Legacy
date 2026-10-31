@@ -1,4 +1,4 @@
-// The chalet's plan (pure data, no THREE): the Almdorf chalets (game/chalets.js outside, game/chaletroom.js inside)
+// The chalet's plan (pure data, no THREE): the chalet village's chalets (game/chalets.js outside, game/chaletroom.js inside)
 // are all the same house, so one plan serves every one of them. House frame, metres: +x = the front (the entrance
 // side, facing the road), z along the house (its long side), y up from the ground outside (the pad).
 // The outside model (chalet.glb, the user's Meshy chalet, its ground clutter trimmed off) is scaled to a person by

@@ -1352,7 +1352,7 @@ export class BusLine {
   get speed() { return this.ride ? this.ride.v : 0; }
 
   // the stop's end of the network: the road whose end is at this stop
-  parent(stop) { return busRoads.busLegs?.find((r) => r.to === stop) || busRoads.roads.find((r) => r.to === stop) || null; } // (the legs through Almdorf first: chaletroad.js)
+  parent(stop) { return busRoads.busLegs?.find((r) => r.to === stop) || busRoads.roads.find((r) => r.to === stop) || null; } // (the legs through the chalet village first: chaletroad.js)
   // roads from a stop up to the village (the network is a tree rooted at the village)
   toRoot(stop) {
     const out = [];

@@ -3,7 +3,7 @@
 // way, at a bend) to the Gipfelblick car park; and from the roundabout over the Passstrasse to the Ostal and up the
 // Hochalmstrasse to the Hochalm viewpoint. The bus network is a tree of legs rooted at the village (bus.js parent /
 // legs); each new stop gets one leg from the stop below it: pieces of the scenic roads joined end to end, round the
-// roundabouts the way the traffic goes. Planned last (roads.js planBusRoads, after the Almdorf stop), pure layout.
+// roundabouts the way the traffic goes. Planned last (roads.js planBusRoads, after the chalet village stop), pure layout.
 // (roads.js imports this module and it imports roads.js: its bindings are only used inside functions)
 import { busRoads, roadAt } from './roads.js';
 

@@ -1,4 +1,4 @@
-// Inside a chalet of the Almdorf chalet village: ITS OWN SCENE, like the ski shop and the car rental (main.js renders
+// Inside a chalet of the chalet village: ITS OWN SCENE, like the ski shop and the car rental (main.js renders
 // it through post.setView while you are in; game/chalets.js fades you in at a chalet's front door and out again).
 // Every chalet is the same house (game/chaletplan.js: the plan), so ONE interior serves them all; going in carries the
 // view to that chalet: its windows show the real world from where it stands (a live portal render of the game's

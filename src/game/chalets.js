@@ -1,6 +1,6 @@
-// THE CHALET VILLAGE (Almdorf): two-storey chalets (the user's Meshy chalet: white plaster below, timber above,
+// THE CHALET VILLAGE: two-storey chalets (the user's Meshy chalet: white plaster below, timber above,
 // snowy roofs) on terraces on both sides of the Chaletweg up the gentle forested slope north of Legacy Village (its
-// layout, its ground and its road: game/bus/chaletroad.js, part of busRoads; its bus stop "Almdorf" at the junction
+// layout, its ground and its road: game/bus/chaletroad.js, part of busRoads; its bus stop "Chalet Village" at the junction
 // with the valley road). 18 chalets, numbered up the Chaletweg ("Chalet 1" is the first you reach from the valley
 // road): a blue enamel number plaque by each front door and the number on the mailbox at the garden gate. Every plot:
 // the chalet facing the road, a snowy garden inside ONE continuous picket fence (gaps for the drive and the gate),

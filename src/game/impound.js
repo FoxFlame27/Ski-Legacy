@@ -42,8 +42,8 @@ export function backIn(rec) {
 export function untilTomorrow(rec) { return backIn(rec); } // (the old name, still imported)
 // (STRAY_BACK, the 3-minute return of a car left off the road, is gone: Oct 30, the user: a car "just on terrain" is
 // fine where it is; only a road or a blocked car park gets it towed)
-export const TOW_AFTER = 60; // (Oct 29, the user: towed after 30 s; Oct 31 2026: "make sure a car only gets towed after 1 min instead of 30 sec")
-export const WARN2_AFTER = 45;    // s left blocking a road with you away before the truck is called
+export const TOW_AFTER = 120; // (Oct 29, the user: towed after 30 s; Oct 31 2026: 1 min, then "increase all time before your car gets towed, for everything": 2 min, on a road, in a car park, at its entrance or on the snow)
+export const WARN2_AFTER = 100;    // s left blocking a road with you away before the truck is called
 export const AWAY_R = 40;       // m: "away" from your car
 const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's far end)
 // properly in a bay (Oct 30, the user: "park properly within the slots, but give them a tiny bit of room for error"):

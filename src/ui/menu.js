@@ -223,6 +223,9 @@ export class Menu {
     this.onMultiplayer = o.onMultiplayer; // MULTIPLAYER ... START: main.js connects (see mpName / mpStatus / mpError)
     this.onMpName = o.onMpName;           // the name typed on first launch -> main.js registers it
     this.onMpCancel = o.onMpCancel;       // BACK while connecting
+    // SETTINGS · Account (Oct 31 2026): accountInfo() -> { name, renamedAt } | null (the multiplayer account stored here);
+    // onAccountRename(name) / onAccountDelete(typedName, resetSinglePlayer) -> Promise<{ ok, text?, name? }> (main.js)
+    this.accountInfo = o.accountInfo; this.onAccountRename = o.onAccountRename; this.onAccountDelete = o.onAccountDelete;
     this.mpMode = false;                  // PLAY -> MULTIPLAYER picked (the showcase's START then goes online)
     this.mpState = { error: '', text: '', value: '' };
     this.prefs = loadPrefs();
@@ -354,6 +357,7 @@ export class Menu {
       case 'controls': return this.scrControls();
       case 'stats': return this.scrStats();
       case 'settings': return this.scrSettings();
+      case 'account': return this.scrAccount();
       case 'pause': return this.scrPause();
       case 'playmode': return this.scrPlayMode();
       case 'mpname': return this.scrMpName();
@@ -577,6 +581,7 @@ export class Menu {
           <div class="mp-row" data-f data-row="sens"><span>Mouse sensitivity</span><input class="m-sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}"></div>
           <div class="mp-row" data-f data-row="vol"><span>Volume</span><input class="m-vol" type="range" min="0" max="1" step="0.05" value="${save.volume ?? 0.8}"></div>
           <div class="mp-row" data-f data-row="skier"><span>Skier</span><button class="mp-skier" tabindex="-1">Change skier</button></div>
+          ${this.accountInfo ? '<div class="mp-row" data-f data-row="account"><span>Account</span><button class="mp-skier mp-acct" tabindex="-1">Rename / delete</button></div>' : ''}
           ${this.mpActive?.() ? '' : '<div class="mp-row" data-f data-row="reset"><span>Progress</span><button class="mp-danger" tabindex="-1">Reset all progress</button></div>'}
         </div>`,
       after: (el) => this.bindSettings(el),
@@ -595,7 +600,8 @@ export class Menu {
     vol.addEventListener('input', () => { save.volume = parseFloat(vol.value); writeSave(); this.onVolume?.(save.volume); });
     // sliders give the keyboard back to the menu once released
     for (const s of [sens, vol]) s.addEventListener('change', () => s.blur());
-    el.querySelector('.mp-skier')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
+    el.querySelector('.mp-skier:not(.mp-acct)')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
+    el.querySelector('.mp-acct')?.addEventListener('click', () => { this.audio?.play('click'); this.acctState = null; this.go('account', 1); });
     const reset = el.querySelector('.mp-danger');
     reset?.addEventListener('click', () => {
       this.audio?.play('click');
@@ -629,8 +635,77 @@ export class Menu {
     const kind = row?.dataset.row;
     if (kind === 'quality') { if (this.pendingQ && this.pendingQ !== save.quality) this.onQuality?.(this.pendingQ); }
     else if (kind === 'skier') row.querySelector('.mp-skier').click();
+    else if (kind === 'account') row.querySelector('.mp-acct').click();
     else if (kind === 'reset') row.querySelector('.mp-danger').click();
     else if (row?.dataset.act) row.click();
+  }
+
+  // SETTINGS · Account (Oct 31 2026, the user: "also in settings add a delete account, or rename every 15 days"): your
+  // multiplayer name. RENAME: a new name once every 15 days (the server checks it as it does a new name: 3-16 letters,
+  // free in any case, not reserved; another case of your own counts as a rename); locked, it says how many days are
+  // left. DELETE: type your name, then DELETE ACCOUNT turns into DELETE FOREVER (a second, final click); the box also
+  // clears the single-player save. main.js does the rest (net/session.js renameAccount / deleteAccount).
+  scrAccount() {
+    const info = this.accountInfo?.() || null, st = (this.acctState ||= { msg: '', bad: false, busy: false });
+    const DAY = 24 * 3600 * 1000, left = info?.renamedAt ? info.renamedAt + 15 * DAY - Date.now() : 0, days = left > 0 ? Math.ceil(left / DAY) : 0;
+    const name = info?.name || '';
+    const body = !info ? '<div class="sc-note">No multiplayer account on this device yet. Pick a name under PLAY · MULTIPLAYER.</div>' : `
+          <div class="acct-msg${st.bad ? ' bad' : ''}">${esc(st.msg)}</div>
+          <div class="mp-row" data-f data-row="rename"><span>New name</span>${days
+            ? `<em class="acct-lock">You can rename again in ${days} day${days === 1 ? '' : 's'}</em>`
+            : '<div class="acct-line"><input class="mpn-input acct-name" maxlength="16" spellcheck="false" autocomplete="off" placeholder="3-16 letters"><button class="mp-skier acct-rename" tabindex="-1">Rename</button></div>'}</div>
+          ${name.toLowerCase() === 'icey27' ? '<div class="acct-msg bad acct-admin">Renaming removes your admin access</div>' : ''}
+          <div class="mp-row" data-f data-row="confirm"><span>Delete account</span><div class="acct-line"><input class="mpn-input acct-confirm" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Type ${esc(name)}"><button class="mp-danger acct-delete" tabindex="-1" disabled>Delete account</button></div></div>
+          <label class="mp-row acct-check" data-f data-row="spreset"><span>Also reset my single-player progress</span><input type="checkbox" class="acct-sp" tabindex="-1"></label>
+          <div class="sc-note">A new name once every 15 days. Deleting removes your name, money, chalet, cars and prison visits from the server for good; your single-player save stays unless you tick the box.</div>`;
+    return {
+      logo: 'small', shade: 'left', hints: [['updown', 'Select'], ['enter', 'Confirm'], ['esc', 'Back']],
+      html: `${this.head('ACCOUNT', name ? `Multiplayer · ${name}` : 'Multiplayer')}
+        <div class="menu-panel settings acct" data-stagger style="--clip:${brushClip(161, 5, 4)}"><div class="mp-head">ACCOUNT</div>${body}</div>`,
+      after: (el) => this.bindAccount(el, name),
+      keys: { enter: () => this.accountEnter() },
+      back: () => this.go('settings', -1),
+    };
+  }
+
+  bindAccount(el, name) {
+    const st = this.acctState, msg = (t, bad = false) => { st.msg = t; st.bad = bad; const m = el.querySelector('.acct-msg'); if (m) { m.textContent = t; m.classList.toggle('bad', bad); } };
+    const inp = el.querySelector('.acct-name'), ren = el.querySelector('.acct-rename');
+    const conf = el.querySelector('.acct-confirm'), del = el.querySelector('.acct-delete'), sp = el.querySelector('.acct-sp');
+    const busy = (on) => { st.busy = on; for (const b of [ren, del]) if (b) b.disabled = on || (b === del && !matches()); };
+    const matches = () => !!conf && conf.value.trim().replace(/\s+/g, ' ').toLowerCase() === name.toLowerCase();
+    ren?.addEventListener('click', async () => {
+      if (st.busy) return;
+      const v = String(inp.value || '').trim().replace(/\s+/g, ' ');
+      if (!/^[A-Za-z0-9_ -]{3,16}$/.test(v) || !/[A-Za-z0-9]/.test(v)) return msg('Names are 3-16 letters, digits, spaces, _ or -.', true);
+      if (v === name) return msg('That is already your name.', true);
+      this.audio?.play('click'); busy(true); msg('Renaming…');
+      const r = await Promise.resolve(this.onAccountRename?.(v)).catch((e) => ({ ok: false, text: e?.message })) || { ok: false };
+      busy(false);
+      if (!r.ok) return msg(r.text || 'Something went wrong', true);
+      st.msg = `You are ${r.name || v} now.`; st.bad = false;
+      if (this.cur?.name === 'account') this.go('account', 0); // (the 15-day lock shows)
+    });
+    conf?.addEventListener('input', () => { del.disabled = st.busy || !matches(); delete del.dataset.armed; del.textContent = 'Delete account'; del.classList.remove('armed'); });
+    del?.addEventListener('click', async () => {
+      if (st.busy || !matches()) return;
+      this.audio?.play('click');
+      if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = 'Delete forever'; del.classList.add('armed'); return msg('This cannot be undone. Click DELETE FOREVER to delete the account.', true); }
+      busy(true); msg('Deleting…');
+      const r = await Promise.resolve(this.onAccountDelete?.(conf.value.trim(), !!sp?.checked)).catch((e) => ({ ok: false, text: e?.message })) || { ok: false };
+      busy(false);
+      if (!r.ok) msg(r.text || 'Something went wrong', true);
+    });
+  }
+
+  // Enter: in a field, its button; on a field's row, into the field; on the box's row, ticks it
+  accountEnter() {
+    const a = document.activeElement;
+    if (a?.classList?.contains('acct-name')) return this.cur?.el.querySelector('.acct-rename')?.click();
+    if (a?.classList?.contains('acct-confirm')) return this.cur?.el.querySelector('.acct-delete')?.click();
+    const row = this.focusables[this.fi], kind = row?.dataset.row;
+    if (kind === 'rename' || kind === 'confirm') { const i = row.querySelector('input'); if (i) { i.focus(); return; } }
+    if (kind === 'spreset') { const c = row.querySelector('input'); c.checked = !c.checked; }
   }
 
   scrPause() {

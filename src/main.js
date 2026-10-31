@@ -1462,6 +1462,37 @@ async function mpRegister(name) {
     else menu.mpError(errText(e));
   }
 }
+// SETTINGS · Account (Oct 31 2026, the user: "also in settings add a delete account, or rename every 15 days"): the
+// server does the checks (server/lib/accounts.js); the menu gets { ok, text?, name? }. A rename keeps you logged in (in
+// a session: a fresh login as the new name). A delete forgets the stored account and goes back to the main menu
+// (PLAY · MULTIPLAYER then asks for a new name); with the box ticked the single-player save (and the race ghosts) go too.
+async function accountRename(name) {
+  if (!multiplayer) return { ok: false, text: 'Multiplayer is not available' };
+  try {
+    const d = await multiplayer.renameAccount(name);
+    if (isMP()) hud.flash(`You are ${d.name} now`, 'good', 3000);
+    return { ok: true, name: d.name };
+  } catch (e) {
+    if (e.code === 'rename_wait') return { ok: false, text: `You can rename again in ${e.data?.days ?? 15} day${e.data?.days === 1 ? '' : 's'}.` };
+    if (e.code === 'in_race') return { ok: false, text: 'Finish your race first.' };
+    return { ok: false, text: errText(e) };
+  }
+}
+async function accountDelete(typed, resetSP) {
+  if (!multiplayer) return { ok: false, text: 'Multiplayer is not available' };
+  try { await multiplayer.deleteAccount(typed); } catch (e) { return { ok: false, text: errText(e) }; }
+  console.log('[account] multiplayer account deleted'); // (the server logs it too)
+  if (resetSP) {
+    if (isMP()) multiplayer.leave(); // (the single-player save comes back first, then it is cleared)
+    try { for (const k of Object.keys(localStorage)) if (k.startsWith('ski-legacy-ghost-')) localStorage.removeItem(k); } catch { /* storage unavailable */ }
+    resetSave(); // (the save gone, the page reloads into the main menu)
+    return { ok: true };
+  }
+  if (isMP()) leaveMultiplayer();
+  else if (!started) menu.show();
+  else menu.go('settings', -1);
+  return { ok: true };
+}
 // LEAVE MULTIPLAYER, or the connection is gone (message: shown in the menu)
 let mpLeaving = false;
 function leaveMultiplayer(message = null) {
@@ -2404,6 +2435,10 @@ menu = new Menu({
   onMpName: (name) => mpRegister(name),
   onMpCancel: () => { mpCancelled = true; if (!isMP()) net.close('cancel'); },
   mpActive: () => isMP(),
+  // SETTINGS · Account (Oct 31 2026, the user: "also in settings add a delete account, or rename every 15 days")
+  accountInfo: () => multiplayer?.account() || null,
+  onAccountRename: (name) => accountRename(name),
+  onAccountDelete: (typed, resetSP) => accountDelete(typed, resetSP),
 });
 const skipIntro = new URLSearchParams(location.search).has('nointro');
 const intro = skipIntro ? null : new Intro(audio);

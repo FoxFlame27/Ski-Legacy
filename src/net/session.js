@@ -81,6 +81,39 @@ export class Multiplayer {
   account() { return loadAccount(this.url); }
   forgetAccount() { storeAccount(this.url, null); }
 
+  // SETTINGS · Account (Oct 31 2026, the user: "also in settings add a delete account, or rename every 15 days"): the
+  // server checks the stored token (server/lib/accounts.js). In a session: on its connection; from the main menu: on a
+  // short connection of its own, closed after.
+  async accountOp(t, extra) {
+    const acc = this.account();
+    if (!acc) { const e = new Error('no account'); e.code = 'no_account'; throw e; }
+    const own = !MP.active && !net.open;
+    try {
+      if (own) await net.connect(this.url);
+      return await net.request(t, { name: acc.name, token: acc.token, ...extra });
+    } finally { if (own) net.close('account'); } // (a connection that failed stops retrying too)
+  }
+  /** A new name (once every 15 days): the stored account follows (new name, new token), so you stay logged in. In a
+   *  session the server signed the old name out: a fresh login as the new one (everyone sees it join). Throws (.code
+   *  name_taken / name_invalid / name_reserved / rename_wait (e.data.days) / ...). */
+  async renameAccount(newName) {
+    const d = await this.accountOp('accountRename', { newName }).catch((e) => {
+      // (renamed on another device: the lock's start kept here too, so SETTINGS shows the days left)
+      const acc = this.account(), until = e?.data?.until;
+      if (e?.code === 'rename_wait' && acc && Number.isFinite(until)) storeAccount(this.url, { ...acc, renamedAt: until - 15 * 24 * 3600 * 1000 });
+      throw e;
+    });
+    storeAccount(this.url, { name: d.name, token: d.token, renamedAt: d.renamedAt });
+    if (MP.active) { MP.name = d.name; net.reconnect('renamed'); } // ('reopen' -> relogin() with the stored account)
+    return d;
+  }
+  /** Gone for good (confirm: your name typed again): the stored account is forgotten; the caller leaves multiplayer. */
+  async deleteAccount(confirm) {
+    const d = await this.accountOp('accountDelete', { confirm });
+    this.forgetAccount();
+    return d;
+  }
+
   // ---------------------------------------------------------------- connect / log in
   async ensureOpen() {
     if (net.open) return;

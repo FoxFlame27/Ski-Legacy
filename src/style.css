@@ -480,6 +480,17 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 .seg button.pending { outline: 2px dashed var(--red); outline-offset: 2px; }
 .mp-danger { border-color: var(--ko); color: var(--ko); }
 .mp-skier:hover { background: var(--blue); color: #fff; }
+/* SETTINGS · Account (Oct 31 2026: rename every 15 days, delete; ui/menu.js scrAccount) */
+.acct .acct-line { display: flex; align-items: center; gap: calc(var(--u) * 10); }
+.acct .acct-line .mpn-input { width: calc(var(--u) * 210); margin-top: 0; }
+.acct .acct-lock { font: 600 var(--t-sm)/1.3 var(--ui); font-style: normal; color: var(--blue-dim); text-align: right; }
+.acct .acct-msg { min-height: 1.4em; font: 600 var(--t-sm)/1.4 var(--ui); color: var(--blue); }
+.acct .acct-msg.bad { color: #c4262e; }
+.acct .acct-check { cursor: pointer; }
+.acct .acct-check input { width: calc(var(--u) * 22); height: calc(var(--u) * 22); accent-color: var(--ko); }
+.mp-danger:disabled { opacity: 0.4; cursor: default; }
+.mp-danger.armed { background: var(--ko); color: #fff; }
+.acct .sc-note { margin-top: calc(var(--u) * 14); }
 
 /* =================== BRUSH UI (everything matches the main menu) =================== */
 :root {

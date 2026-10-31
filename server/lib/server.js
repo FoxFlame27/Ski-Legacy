@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { Store } from './store.js';
+import { accountOp, adminName } from './accounts.js'; // (SETTINGS · Account: rename every 15 days / delete, Oct 31 2026)
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const CATALOG = JSON.parse(fs.readFileSync(path.join(here, 'catalog.json'), 'utf8'));
@@ -1306,6 +1307,9 @@ export class GameServer {
     if (m.t === 'ping') { c.send('pong', { c: d.c, s: Date.now() }); return; }
     if (m.t === 'register') return reply(this.register(c, d));
     if (m.t === 'login') return reply(this.login(c, d, conn));
+    // (Oct 31 2026, the user: "also in settings add a delete account, or rename every 15 days"): token-checked, logged in or
+    // not (SETTINGS in the main menu has no session); lib/accounts.js
+    if (m.t === 'accountRename' || m.t === 'accountDelete') return reply(accountOp(this, c, m.t, d));
     if (!c.world) return c.res(id, false, null, 'not_logged_in');
     const w = c.world;
     switch (m.t) {
@@ -1378,6 +1382,9 @@ export class GameServer {
     if (!validName(name)) return { err: 'name_invalid' };
     const k = nameKey(name), acc = this.store.accounts.data;
     if (acc[k]) return { err: 'name_taken' };
+    // (Icey27 can be registered while free, so its owner can claim it on a fresh server; ADMIN_REGISTER=0 locks it, and a
+    // rename can never take it: accounts.js, Oct 31 2026)
+    if (adminName(k) && !(this.adminRegister ?? process.env.ADMIN_REGISTER !== '0')) return { err: 'name_reserved' };
     const now = Date.now(), list = (this.regByIp.get(c.ip) || []).filter((t) => now - t < 3600000);
     if (list.length >= this.regPerHour) return { err: 'rate' };
     list.push(now); this.regByIp.set(c.ip, list);

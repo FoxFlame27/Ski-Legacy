@@ -57,4 +57,11 @@ export const ERR_TEXT = {
   garage_full: 'Your garage is full. Sell a car first (MY CARS).',
   race_full: 'Race full (21/21) · wait for the next race, or do a Practice race (no prize).',
   in_race: 'You are in a race already.',
+  // SETTINGS · Account (Oct 31 2026: rename every 15 days, delete; server/lib/accounts.js)
+  name_reserved: 'That name is reserved. Pick another one.',
+  same_name: 'That is already your name.',
+  rename_wait: 'You can rename only once every 15 days.',
+  not_yours: 'You can only change your own account.',
+  confirm: 'Type your name exactly to confirm.',
+  no_account: 'No multiplayer account on this device yet.',
 };

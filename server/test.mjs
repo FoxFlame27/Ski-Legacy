@@ -44,6 +44,7 @@ class Fake {
 }
 
 const server = new GameServer({ dataDir, log: () => {}, regPerHour: 1000 });
+server.adminRegister = true; // (the admin tests register Icey27, as ADMIN_REGISTER=1 does; reserved otherwise: account rename / delete)
 const port = await server.listen(0);
 const url = `ws://127.0.0.1:${port}/ws`;
 console.log(`server on ${url}`);
@@ -1480,6 +1481,79 @@ try {
     const gone = await obs.f.next('parked', (d) => d.pid === pia.pid && !d.cars.length);
     ok(!!gone && !server.profileOf('piet').cars[1].at, 'home to her garage: gone from everyone');
     pia.f.close(); obs.f.close(); late.f.close();
+    await sleep(50);
+  }
+
+  // ---------------------------------------------------------------- SETTINGS · Account: rename every 15 days, delete (Oct 31 2026)
+  {
+    console.log('account rename / delete');
+    const reg = async (name) => { const f = new Fake(url); await f.open(); const r = await f.req('register', { name }); const l = await f.req('login', { v: PROTO, name, token: r.d.token }); return { f, l, pid: l.d.pid, token: r.d.token }; };
+    const ren = await reg('Renate'), tak = await reg('Takeo'), wit = await reg('Witness');
+    server.profileOf('renate').money = 123456;
+    server.profileOf('renate').jailVisits = 99; // (top of the prison board)
+    const taken = await ren.f.req('accountRename', { name: 'Renate', token: ren.token, newName: 'tAKEO' });
+    ok(!taken.ok && taken.err === 'name_taken' && server.store.accounts.data.renate, 'a rename to a taken name (any case) is refused');
+    const resv = await ren.f.req('accountRename', { name: 'Renate', token: ren.token, newName: 'Admin' });
+    const icey = await ren.f.req('accountRename', { name: 'Renate', token: ren.token, newName: 'ICEY27' });
+    ok(!resv.ok && resv.err === 'name_reserved' && !icey.ok && ['name_reserved', 'name_taken'].includes(icey.err), 'nobody else may take a reserved name (Admin) or the admin name Icey27 by a rename');
+    {
+      // (Icey27 free, e.g. after a deletion: still nobody else's, by a rename or a registration; Oct 31 2026)
+      const keep = server.store.accounts.data.icey27, keepP = server.store.profiles.data.icey27;
+      delete server.store.accounts.data.icey27; delete server.store.profiles.data.icey27;
+      server.adminRegister = false;
+      const rr = await ren.f.req('accountRename', { name: 'Renate', token: ren.token, newName: 'icey27' });
+      const rg = await wit.f.req('register', { name: 'ICEY27' });
+      server.adminRegister = true;
+      ok(!rr.ok && rr.err === 'name_reserved' && !rg.ok && rg.err === 'name_reserved' && !server.store.accounts.data.icey27, 'a free Icey27 is reserved: no rename or registration takes it');
+      if (keep) server.store.accounts.data.icey27 = keep;
+      if (keepP) server.store.profiles.data.icey27 = keepP;
+    }
+    const theirs = await tak.f.req('accountRename', { name: 'Renate', token: ren.token, newName: 'Hijack' });
+    const guess = await wit.f.req('accountRename', { name: 'Renate', token: 'nope', newName: 'Hijack' });
+    const delOther = await tak.f.req('accountDelete', { name: 'Renate', token: tak.token, confirm: 'Renate' });
+    ok(!theirs.ok && theirs.err === 'not_yours' && !guess.ok && guess.err === 'bad_login' && !delOther.ok && delOther.err === 'bad_login'
+      && server.store.accounts.data.renate && !server.store.accounts.data.hijack, "another user can't rename or delete someone else's account");
+    const r1 = await ren.f.req('accountRename', { name: 'Renate', token: ren.token, newName: 'Renata' });
+    ok(r1.ok && r1.d.name === 'Renata' && typeof r1.d.token === 'string' && r1.d.token !== ren.token, 'rename Renate -> Renata (a new token)');
+    ok(!server.store.accounts.data.renate && server.store.accounts.data.renata?.renamedAt > 0 && !server.profileOf('renate') && server.profileOf('renata')?.money === 123456 && server.profileOf('renata').name === 'Renata',
+      'the account and the profile moved to the new name (money kept)');
+    ok(!!(await wit.f.next('leave', (d) => d.name === 'Renate')), 'everyone sees the old name leave');
+    ok(server.jailTop()[0]?.name === 'Renata', 'the prison board shows the new name');
+    const oldTok = await (async () => { const f = new Fake(url); await f.open(); const r = await f.req('login', { v: PROTO, name: 'Renate', token: ren.token }); f.close(); return r; })();
+    ok(!oldTok.ok && oldTok.err === 'bad_login', 'the old name / token no longer logs in');
+    ren.f.close();
+    const re = new Fake(url); await re.open();
+    const rl = await re.req('login', { v: PROTO, name: 'Renata', token: r1.d.token });
+    ok(rl.ok && rl.d.name === 'Renata' && rl.d.profile.money === 123456, 'the new name logs in with the new token, same profile');
+    ok(!!(await wit.f.next('join', (d) => d.name === 'Renata')), 'everyone sees the new name join');
+    const r2 = await re.req('accountRename', { name: 'Renata', token: r1.d.token, newName: 'RENATA' });
+    ok(!r2.ok && r2.err === 'rename_wait' && r2.d.days === 15, 'a second rename within 15 days is refused with the days left (15)');
+    server.store.accounts.data.renata.renamedAt -= 15 * 24 * 3600 * 1000 + 1000; // (15 days later)
+    const r3 = await re.req('accountRename', { name: 'Renata', token: r1.d.token, newName: 'RENATA' });
+    ok(r3.ok && r3.d.name === 'RENATA' && server.store.accounts.data.renata?.name === 'RENATA' && server.profileOf('renata')?.money === 123456, 'only the case of your own name changed: a rename (15 days later)');
+    const same = await re.req('accountRename', { name: 'RENATA', token: r3.d.token, newName: 'RENATA' });
+    ok(!same.ok && (same.err === 'same_name' || same.err === 'rename_wait'), 'the very same name is no rename');
+    re.close();
+
+    // delete: the account, the profile and the chalet plot gone
+    const plot = (server.plotIds || [...Array(64).keys()]).find((id) => !server.chalets.has(id));
+    server.profileOf('takeo').money = 100000;
+    const buy = await tak.f.req('buy', { kind: 'chalet', id: plot });
+    ok(buy.ok && server.chalets.get(plot) === 'takeo', `Takeo owns the chalet on plot ${plot}`);
+    const wrongConfirm = await tak.f.req('accountDelete', { name: 'Takeo', token: tak.token, confirm: 'Tak' });
+    ok(!wrongConfirm.ok && wrongConfirm.err === 'confirm' && server.store.accounts.data.takeo, 'a delete needs your name typed again');
+    const del = await tak.f.req('accountDelete', { name: 'Takeo', token: tak.token, confirm: 'takeo' });
+    ok(del.ok && del.d.deleted === 'Takeo' && !server.store.accounts.data.takeo && !server.profileOf('takeo') && !server.online.has('takeo'), 'delete removes the account and the profile, signed out');
+    ok(!server.chalets.has(plot) && !!(await wit.f.next('chalet', (d) => d.id === plot && d.owner === null)), 'the chalet plot is free again (everyone told)');
+    ok(!!(await wit.f.next('leave', (d) => d.name === 'Takeo')), 'everyone sees the deleted player leave');
+    const after = await tak.f.req('login', { v: PROTO, name: 'Takeo', token: tak.token });
+    ok(!after.ok && after.err === 'bad_login', 'a deleted account no longer logs in');
+    const again = await tak.f.req('register', { name: 'Takeo' });
+    ok(again.ok, 'the name is free to register again');
+    server.store.flush();
+    const disk = JSON.parse(fs.readFileSync(path.join(dataDir, 'accounts.json'), 'utf8')), diskP = JSON.parse(fs.readFileSync(path.join(dataDir, 'profiles.json'), 'utf8'));
+    ok(disk.renata && !disk.renate && diskP.renata?.money === 123456 && !diskP.renate && !diskP.takeo?.chalet, 'on disk too');
+    tak.f.close(); wit.f.close();
     await sleep(50);
   }
 

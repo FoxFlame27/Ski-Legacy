@@ -521,11 +521,12 @@ export class MpTransit {
 
 function fmtWait(s) { s = Math.max(1, Math.ceil(s)); return s < 90 ? `${s} s` : clock(s); }
 function clock(s) { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
-// seat no (0-based, numbered through the cars) of cap: "Car 2 of 4 · seat 14 (62 of 192)" / "Seat 12 of 36"
+// seat no (0-based, numbered through the cars) of cap: "Carriage 2 of 4 · seat 62 of 192 seats" / "Seat 12 of 36 seats"
+// (Oct 31 2026, the user: "don't say seat 8 (8 of 192), just say seat 8 of 192 seats"; "carriage", not "car")
 function seatText(no, cap, cars = 1) {
-  if (cars > 1) { const per = Math.round(cap / cars); return `Carriage ${Math.floor(no / per) + 1} of ${cars} · seat ${(no % per) + 1} (${no + 1} of ${cap})`; }
-  return `Seat ${no + 1} of ${cap}`;
+  if (cars > 1) { const per = Math.round(cap / cars); return `Carriage ${Math.floor(no / per) + 1} of ${cars} · seat ${no + 1} of ${cap} seats`; }
+  return `Seat ${no + 1} of ${cap} seats`;
 }
 // "178 of 192 seats free in 4 cars" / "36 seats free" (nobody aboard)
-function seatsFree(n) { return `${n.free === n.cap ? `${n.cap} seats free` : `${n.free} of ${n.cap} seats free`}${n.cars > 1 ? ` in ${n.cars} cars` : ''}`; }
+function seatsFree(n) { return `${n.free === n.cap ? `${n.cap} seats free` : `${n.free} of ${n.cap} seats free`}${n.cars > 1 ? ` in ${n.cars} carriages` : ''}`; }
 function liftKind(l) { return l.spec.type === 'chair' ? 'chair' : 'gondola'; }

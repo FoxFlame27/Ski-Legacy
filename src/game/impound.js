@@ -314,14 +314,16 @@ export class Impound {
       k.impound = null;
       if (this.save.impound?.plate === (k.cfg?.plate || null)) { this.save.impound = null; R.writeSave?.(); }
       if (!k.driving && !k.towing) { const b = this.freeBayOf(true); if (b) { this.place(k, b); if (R.drive) R.drive._cc = null; } }
-      R.hud?.flash(`Your ${R.label?.(k.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000); // (Oct 31 2026: as the car out says it)
+      if (!k.arrivedSaid) R.hud?.flash(`Your ${R.label?.(k.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000); // (Oct 31 2026: as the car out says it; not again after the card's "has arrived")
+      k.arrivedSaid = false;
     }
     if (!e) { this.parkHud(null); return; }
     if (e.impound && this.released(e.impound)) { // (its 3 minutes are up: back in your bay)
       e.impound = null;
       if (this.save.impound) { this.save.impound = null; R.writeSave?.(); }
       if (!e.driving && !e.towing) { const b = this.freeBayOf(); if (b) { this.place(e, b); if (R.drive) R.drive._cc = null; } } // (no bay free: it stays where it is, never into a bay a car stands in)
-      R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000);
+      if (!e.arrivedSaid) R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000);
+      e.arrivedSaid = false;
     }
     if (e.wrecked || e.towing || e.impound || !R.player) { e.abandonT = 0; this.parkHud(null); return; }
     if (e.driving) { e.abandonT = 0; e.warned = false; e.warned2 = false; e.drove = true; e.spot = null; this.driveHint(e, dt); return; }
@@ -488,6 +490,13 @@ export class Impound {
       const rec = e.impound || (e.towing && s?.plate === (e.cfg?.plate || null) ? s : null);
       if (!rec) continue;
       const left = Number.isFinite(rec.until) ? Math.max(0, Math.ceil((rec.until - nowMs()) / 1000)) : null;
+      // (Oct 31 2026, the user: "once it is 0 sec, say it has arrived in the parking lot and then remove the thing on the
+      // bottom left": at 0 the card lets it go, once, with that message; the release later says nothing more)
+      if (left === 0) {
+        if (!e.arrivedSaid) { e.arrivedSaid = true; R.hud?.flash(`Your ${R.label?.(e.cfg?.id) || 'car'} has arrived in your bay by the Autohaus`, 'good', 4500); }
+        continue;
+      }
+      e.arrivedSaid = false;
       out.push({ e, rec, left, name: R.label?.(e.cfg?.id) || 'car' });
     }
     return out.sort((a, b) => (a.left ?? Infinity) - (b.left ?? Infinity));

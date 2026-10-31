@@ -119,9 +119,14 @@ export class Modes {
   // (Oct 30 2026, the user: "make sure when you're done with a race you just stay where you are, you don't get an option
   // to spawn somewhere"; replaces Oct 27's "return to the start" and the bus races' BACK TO THE BUS STOP). Prize money
   // and records were booked when the results came up (session.showResults).
+  // (Oct 31 2026, the user: "make sure that when you are done with a race, also the practice race, you spawn back in the
+  // village after; you don't get any other option": OK and a fade, and you stand in Legacy Village (toVillage, main.js))
   async exitFree() {
     if (!this.current?.free) return;
-    this.end();
+    await this.transition.fade(async () => {
+      this.end();
+      try { await this.toVillage?.(); } catch (e) { console.warn('Race: back to the village failed', e); }
+    });
     // (the course stays standing: the free world drops its meshes once you are far away)
     this.course = this.group = null;
     this.current = null;

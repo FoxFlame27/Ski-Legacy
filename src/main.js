@@ -366,6 +366,7 @@ async function boot() {
     stream: streamAround,
     toMenu: backToMenu,
     toWorld: backToStand, // a fun race from the RACING stand ends back there, in free ride
+    toVillage: async () => { returnToVillage('Race over · back in Legacy Village'); await streamAround(player.pos.x, player.pos.z); }, // (every race and practice race ends in the village: Oct 31 2026, the user)
     lock: () => input.lock(),
   });
   // (the old open-world gate races are gone: free ride races the World Racing courses where they stand, see

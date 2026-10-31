@@ -135,6 +135,7 @@ export class VehicleHits {
     if (!held) try { this.hitPeople(); } catch (e) { if (!this.warnedP) { this.warnedP = true; console.warn('vehicle hits people', e); } }
     const pl = this.player;
     if (pl.mode !== 'ski' && pl.mode !== 'walk') return;
+    if (pl.flying) return; // (Icey27's fly mode, ui/adminnew.js: cars and buses pass through you; Oct 31 2026)
     if (performance.now() < this.safeUntil) return;
     let on = held; // (paused: the game's own checks say no while the menu is open; the hit still counts)
     if (!held) try { on = !!this.enabled(); } catch { on = false; }

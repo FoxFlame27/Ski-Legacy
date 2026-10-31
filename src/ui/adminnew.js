@@ -11,6 +11,12 @@
 // message banner for everyone, teleports to the village, the chalet village, the Autohaus, the medical centre, the
 // police station and every gondola's summit. It never spawns a car or a helicopter (Oct 30, the user: "remove all
 // admin spawned cars").
+// FLY MODE (Oct 31 2026, the user: "and fly mode?"): the panel's switch or V (Icey27 only; for anyone else V does
+// nothing): WASD along where the camera looks, Space up, Shift / C down, Ctrl or the wheel 10 / 40 / 150 m/s, through
+// everything (player.js updateFly); a "✈ FLY" badge meanwhile. On foot or on skis only (refused in a car, on a lift, a
+// train, the bus, inside; off when you get into one); off when you leave multiplayer or the account isn't Icey27;
+// leaving it puts you down standing on the ground below. The others see you in the air (protocol.js F.flying, which
+// the server passes on for the admin only). Money for everyone online (and offline, ticked): 'giveAll' on the server.
 import './admin.css';
 import './adminnew.css';
 import { brushSVG, brushClip, esc } from './menu.js';
@@ -22,6 +28,7 @@ import { CHALET_PLACE } from '../game/bus/chaletroad.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
 import { loadAccount } from '../net/session.js';
+import { FLY_SPEEDS, FLY_NAMES } from '../player/player.js';
 
 const ADMIN_NAME = 'icey27'; // (the name key; the server's ADMIN_KEYS is what counts in multiplayer)
 const WEATHERS = Object.keys(WEATHER || { clear: 1, cloudy: 1, light: 1, heavy: 1, mist: 1 });
@@ -71,10 +78,22 @@ export class AdminNew {
     this.confirming = false;
     addEventListener('keydown', (e) => this.onKey(e), true);
     addEventListener('ski-admin', (e) => this.onServer(e.detail || {})); // (net/session.js: what the server sends)
+    this.flyMP = false; // (multiplayer when the fly mode went on: leaving it turns it off)
+    this.badge = null; this.badgeKey = '';
   }
 
   // ------------------------------------------------------------------ open / close
   onKey(e) {
+    // V: the fly mode (Icey27 only; V is free in the game: only the race session's own dialog uses it, while a race runs)
+    if (e.code === 'KeyV' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable || !isAdminNew()) return; // (typing; anyone else)
+      const c = this.ctx, g = window.__game || {};
+      if (!c.started || c.paused || this.isOpen || this.hud.panelOpen || g.modes?.active || g.races?.active) return;
+      e.preventDefault();
+      if (!e.repeat) this.toggleFly();
+      return;
+    }
     const hit = e.code === 'F10' || (e.code === 'KeyA' && e.ctrlKey && e.shiftKey);
     if (hit) {
       if (!isAdminNew()) return; // (anyone else: nothing at all)
@@ -263,6 +282,76 @@ export class AdminNew {
     this.teleport({ label: `Next to ${d.to}`, x: d.x - Math.sin(d.yaw || 0) * off, z: d.z - Math.cos(d.yaw || 0) * off, heading: d.yaw || 0, skis: false });
   }
 
+  /** Money for everyone online in your world (ticked: every account, offline ones too). The server: 'giveAll'. */
+  async giveAll(sign) {
+    const raw = Math.floor(Number(String(this.el.querySelector('.an-amount-all')?.value || '').replace(/[^0-9]/g, '')));
+    if (!(raw > 0)) { this.say('Enter an amount for everyone', true); return; }
+    const offline = !!this.el.querySelector('.an-offline')?.checked;
+    const d = await this.op('giveAll', { amount: sign * Math.min(10000000, raw), offline });
+    if (!d) return;
+    this.audio?.play('cash');
+    this.say(`${sign > 0 ? 'Gave' : 'Took'} ${money(raw)} ${sign > 0 ? 'to' : 'from'} ${d.n} player${d.n === 1 ? '' : 's'} online${d.offline ? ` and ${d.offline} offline` : ''}`);
+    this.refreshPlayers();
+  }
+
+  // ------------------------------------------------------------------ fly mode (Oct 31 2026, the user: "and fly mode?")
+  /** Why you can't fly now, or null: on foot or on skis only, outdoors, no race. */
+  flyRefusal() {
+    const g = window.__game || {}, p = g.player;
+    if (!p || !this.ctx.started) return 'Fly mode · not now';
+    if (g.drive?.active || g.heli?.active || g.heli?.state === 'boarding' || g.sleds?.active || g.railway?.riding || g.express?.riding || g.skibus?.riding || p.mode === 'sit') {
+      return 'Fly mode · on foot or on skis only (not in a car, on a lift, a train or the bus)';
+    }
+    if (g.interior?.active || g.chalets?.inside || g.carRental?.inside || g.prison?.inside || g.prison?.active || g.hospitalWard?.inside) return 'Fly mode · not inside';
+    if (g.modes?.active || g.races?.active) return 'Fly mode · not in a race';
+    return null;
+  }
+  get flying() { return !!window.__game?.player?.flying; }
+  toggleFly() { return this.flying ? this.flyOff(true, 'Fly mode off') : this.flyOn(); }
+  flyOn() {
+    if (!isAdminNew()) return false;
+    const why = this.flyRefusal();
+    if (why) { this.hud.flash(why, 'bad', 2600); this.say(why, true); return false; }
+    const p = window.__game.player;
+    if (!p.startFly()) { this.hud.flash('Fly mode · on foot or on skis only', 'bad', 2600); return false; }
+    this.flyMP = isMP();
+    this.hud.flash('Fly mode · WASD where you look · Space up · Shift / C down · Ctrl or wheel: speed · V off', 'gold', 4200);
+    this.audio?.play('click');
+    this.syncFly();
+    return true;
+  }
+  /** Off. place: put down standing on the ground / the surface below (false: where you are, seated in a car already). */
+  flyOff(place = true, msg = '') {
+    const p = window.__game?.player;
+    if (!p?.flying) return false;
+    p.stopFly(place);
+    if (msg) this.hud.flash(msg, 'good', 2200);
+    this.syncFly();
+    return true;
+  }
+  /** Every frame (main.js): off for any other account, out of multiplayer, in a vehicle or inside; the badge. */
+  update() {
+    const p = window.__game?.player;
+    if (p?.flying) {
+      if (!isAdminNew()) this.flyOff(true, 'Fly mode off · Icey27 only');
+      else if (this.flyMP && !isMP()) this.flyOff(true, 'Fly mode off · you left multiplayer');
+      else if (!this.flyMP && isMP()) this.flyOff(true, 'Fly mode off');
+      else { const why = this.flyRefusal(); if (why) this.flyOff(false, 'Fly mode off'); } // (got into something: where you are)
+    }
+    this.syncFly();
+  }
+  syncFly() {
+    const p = window.__game?.player, on = !!p?.flying && this.ctx.started;
+    const key = on ? `${p.flySpeed}` : '';
+    if (key === this.badgeKey) return;
+    this.badgeKey = key;
+    const el = this.badge ||= container('admin-flybadge');
+    if (on) el.innerHTML = `<div class="afb paper" style="--clip:${brushClip(5304, 4, 3)}"><b>✈ FLY</b><span>${FLY_NAMES[p.flySpeed] || ''} · ${FLY_SPEEDS[p.flySpeed] || 0} m/s</span></div>`;
+    el.hidden = !on;
+    const sw = this.el.querySelector('.an-fly');
+    if (sw) { sw.classList.toggle('on', on); sw.setAttribute('aria-checked', String(on)); sw.querySelector('b').textContent = on ? 'ON' : 'OFF'; }
+  }
+
   // ------------------------------------------------------------------ teleports
   /** The named places: { label, sub, x, z, heading, skis }. */
   places() {
@@ -315,7 +404,7 @@ export class AdminNew {
     if (!this.players.length) return '<div class="an-empty">Nobody online in your world</div>';
     const me = String(MP.name || '').toLowerCase();
     return this.players.map((p) => {
-      const tags = [p.jailed && 'PRISON', p.wanted && 'WANTED', p.impound && 'TOW YARD', p.inside && 'INSIDE'].filter(Boolean).map((t) => `<i class="an-tag">${t}</i>`).join('');
+      const tags = [p.jailed && 'PRISON', p.wanted && 'WANTED', p.impound && 'TOW YARD', p.inside && 'INSIDE', p.flying && 'FLYING'].filter(Boolean).map((t) => `<i class="an-tag">${t}</i>`).join('');
       const pos = p.pos ? `${Math.round(p.pos[0])}, ${Math.round(p.pos[2])}` : '—';
       const self = String(p.name).toLowerCase() === me;
       return `<div class="an-pl"><button class="an-pick" tabindex="-1" data-pick="${esc(p.name)}"><span class="ad-pl-name">${esc(p.name)}${self ? ' <small>(you)</small>' : ''}</span>
@@ -341,11 +430,14 @@ export class AdminNew {
             <div class="mp-head">${mp ? 'PLAYER' : 'YOU'}</div>
             ${mp ? `<div class="mp-row"><span>Name</span><span class="ad-set"><input class="ad-amount an-name" list="an-names" type="text" placeholder="Player name" spellcheck="false" maxlength="16" value="${esc(this.target)}"><datalist id="an-names">${names}</datalist></span></div>` : `<div class="mp-row"><span>Balance</span><b data-live="money">${money(this.save.money)}</b></div>`}
             <div class="mp-row"><span>Money</span><span class="ad-set"><input class="ad-amount an-amount" type="text" inputmode="numeric" placeholder="Amount" spellcheck="false" data-enter="give"><button class="ad-btn" data-act="give" tabindex="-1">GIVE</button><button class="ad-btn an-alt" data-act="take" tabindex="-1">TAKE</button></span></div>
+            ${mp ? `<div class="mp-row"><span>Everyone</span><span class="ad-set"><input class="ad-amount an-amount an-amount-all" type="text" inputmode="numeric" placeholder="Amount" spellcheck="false" data-enter="giveall"><button class="ad-btn" data-act="giveall" tabindex="-1">GIVE ALL</button><button class="ad-btn an-alt" data-act="takeall" tabindex="-1">TAKE</button></span></div>
+            <div class="mp-row an-sub"><span></span><label class="an-check"><input class="an-offline" type="checkbox" tabindex="-1"> including offline players</label></div>` : ''}
             <div class="mp-row"><span>Release</span>${seg([['Prison', 'rel:jail'], ['Police chase', 'rel:chase'], ['Tow yard', 'rel:impound']])}</div>
             ${mp ? `<div class="mp-row"><span>Kick</span><button class="ad-btn an-alt" data-act="kick" tabindex="-1">KICK</button></div>
             <div class="mp-row"><span>Progress</span>${this.confirming
               ? `<span class="ad-set"><input class="ad-amount an-confirm" type="text" placeholder="Type the name again" spellcheck="false" data-enter="reset"><button class="ad-btn an-danger" data-act="reset" tabindex="-1">RESET</button><button class="ad-btn an-alt" data-act="noreset" tabindex="-1">CANCEL</button></span>`
               : '<button class="ad-btn an-danger" data-act="reset" tabindex="-1">RESET…</button>'}</div>` : ''}
+            <div class="mp-row"><span>Fly mode <i class="kc">V</i></span><button class="an-switch an-fly${this.flying ? ' on' : ''}" role="switch" aria-checked="${this.flying}" data-act="fly" tabindex="-1"><i></i><b>${this.flying ? 'ON' : 'OFF'}</b></button></div>
             <div class="an-result${this.resultBad ? ' bad' : ''}">${esc(this.result)}</div>
           </div>
           <div class="menu-panel ad-panel" style="--clip:${brushClip(2712, 5, 4)}">
@@ -389,6 +481,9 @@ export class AdminNew {
     this.audio?.play('click');
     if (a === 'give') return this.give(1);
     if (a === 'take') return this.give(-1);
+    if (a === 'giveall') return this.giveAll(1);
+    if (a === 'takeall') return this.giveAll(-1);
+    if (a === 'fly') { if (this.flying) this.flyOff(true, 'Fly mode off'); else if (this.flyOn()) this.close(true); return; } // (on: the panel closes, off you go)
     if (a.startsWith('rel:')) return this.release(a.slice(4));
     if (a === 'kick') return this.kick();
     if (a === 'reset') return this.reset();

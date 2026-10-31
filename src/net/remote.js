@@ -383,11 +383,19 @@ export class RemotePlayers {
     else if (r.state === ST.ski) { st.mode = 'ski'; st.seat = null; }
     else if (fall) { st.mode = 'fall'; st.seat = null; this.fallPose(r, st); }
     else { st.mode = speed > 0.1 ? 'walk' : 'idle'; st.seat = null; }
+    // (Oct 31 2026, the user: "and fly mode?"): Icey27 flying (F.flying, only ever passed on by the server for the admin):
+    // standing in the air at the row's height, not snapped to the ground under them (airY lifts the rig by it, as the
+    // player's own rig: player.js); the idle pose, no walking on the spot however fast they fly
+    const flying = !seated && !fall && !r.interior && r.state !== ST.ski && !!(r.flags & F.flying);
+    if (flying) {
+      const gy = world.groundHeight(pos.x, pos.z, pos.y + 0.3);
+      st.mode = 'idle'; st.airY = Number.isFinite(gy) ? pos.y - gy : 0;
+    }
     st.bench = !inVeh && r.state === ST.sit ? benchFor(r, pos) : null; // (on a bench / a chair: the rig's seated pose on it, as they see it)
     st.heading = inVeh ? r.seatYaw : r.yaw;
-    st.speed = seated ? 0 : speed;
-    st.crouch = seated || fall ? 0 : r.crouch; st.lean = seated || fall ? 0 : r.lean; st.edge = st.lean * 0.6;
-    st.air = !seated && !fall && !!(r.flags & F.air); st.tuck = !seated && !fall && !!(r.flags & F.tuck);
+    st.speed = seated || flying ? 0 : speed;
+    st.crouch = seated || fall || flying ? 0 : r.crouch; st.lean = seated || fall || flying ? 0 : r.lean; st.edge = st.lean * 0.6;
+    st.air = !seated && !fall && !flying && !!(r.flags & F.air); st.tuck = !seated && !fall && !!(r.flags & F.tuck);
     st.carry = !inVeh && !fall && !!(r.flags & F.carry);
     st.normal = UP;
     const skisVisible = !inVeh && !st.bench && !patient && (r.state === ST.ski || st.carry || (fall && !!(r.flags & F.skisOn)));

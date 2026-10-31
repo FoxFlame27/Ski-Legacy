@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR, busHoldAt, BUS_HOLD, WEATHER_NEXT, pickWeather, weatherHoldMs } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR, busHoldAt, BUS_HOLD, WEATHER_NEXT, pickWeather, weatherHoldMs, PRES_FLY } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -1390,6 +1390,44 @@ try {
       ok(th.ok && ta && ta.x === 70 && ta.z === 80 && ta.to === 'Icey27', 'admin tpHere: Tess is sent your spot (adminTp)');
       const tt = await rf.req('admin', { op: 'tpTo', name: 'Tess Target' });
       ok(tt.ok && tt.d.x === 20 && tt.d.z === 30, "admin tpTo: Tess's spot comes back to you");
+      // FLY MODE (Oct 31 2026, the user: "and fly mode?"): the presence fly bit (PRES_FLY) is passed on for the admin's
+      // login only; anyone else sending it has it stripped by the server (no client flag ever counts for them)
+      {
+        const fl = PRES_FLY | 8 | 16; // (+ carry, hasSkis: kept)
+        T.send('p', [Date.now(), 21, 140, 31, 0, 0, 0, 0, 0, 0, 0, fl]);
+        rf.send('p', [Date.now(), 71, 160, 81, 1, 0, 5, 0, 0, 0, 0, fl]);
+        await sleep(120);
+        const tg = server.onlineByKey('tess target'), ig = server.onlineByKey('icey27');
+        ok(tg.pres[12] === (8 | 16) && !tg.flying && tg.pres[3] === 140, "fly mode: a non-admin's fly flag is stripped by the server (no exemption for them; the other bits kept)");
+        ok(ig.pres[12] === fl && ig.flying && ig.pres[3] === 160, "fly mode: Icey27's fly flag and height are passed on as sent");
+        server.onlineByKey('icey27').adminBucket = null;
+        const fp = await rf.req('admin', { op: 'players' });
+        ok(fp.ok && fp.d.players.find((p) => p.name === 'Icey27')?.flying === true && fp.d.players.find((p) => p.name === 'Tess Target')?.flying === false, 'fly mode: the panel lists who flies (the admin only)');
+        T.send('p', [Date.now(), 21, 4, 31, 0, 0, 0, 0, 6, 0, 0, fl]); // (a wipeout: bits 8-22 are the tumble's, untouched)
+        rf.send('p', [Date.now(), 70, 12, 80, 1, 0, 0, 0, 0, 0, 0, 0]);
+        await sleep(120);
+        ok(tg.pres[12] === fl && !tg.flying && !ig.flying, "fly mode: a wipeout's flags pass unchanged; the admin's flag off when not flying");
+      }
+      // "Give to everyone online" (Oct 31 2026): refused to anyone but Icey27; every online profile in the world changes,
+      // offline accounts only when ticked; everyone told
+      {
+        server.onlineByKey('icey27').adminBucket = null;
+        const nopes = await Promise.all([T.req('admin', { op: 'giveAll', amount: 1000 }), a.req('admin', { op: 'giveAll', amount: 1000, offline: true, admin: true })]);
+        const online = [...W.players.values()].filter((g) => g.key && g.profile), m0 = new Map(online.map((g) => [g.key, g.profile.money]));
+        const o0 = server.profileOf('olli offline').money;
+        ok(nopes.every((r) => !r.ok && r.err === 'forbidden') && online.every((g) => g.profile.money === m0.get(g.key)) && server.profileOf('olli offline').money === o0, "admin giveAll: refused to non-admins ('forbidden'), nothing changed");
+        const ga = await rf.req('admin', { op: 'giveAll', amount: 2500 });
+        const gtm = await T.next('money', (d) => d.why === 'admin' && d.delta === 2500), gtn = await T.next('adminNote', (d) => /gave everyone \$2,500/.test(d.text));
+        ok(ga.ok && ga.d.n === online.length && online.length >= 3 && online.every((g) => server.profileOf(g.key).money === m0.get(g.key) + 2500) && server.profileOf('olli offline').money === o0, `admin giveAll: +$2,500 for every online profile in the world (${online.length}), offline accounts untouched`);
+        ok(!!gtm && !!gtn, '...and each player is told (money update + note)');
+        const gb = await rf.req('admin', { op: 'giveAll', amount: -2500 });
+        ok(gb.ok && online.every((g) => g.profile.money === m0.get(g.key)), 'admin giveAll: a negative amount takes it back');
+        const gof = await rf.req('admin', { op: 'giveAll', amount: 100, offline: true });
+        ok(gof.ok && gof.d.offline >= 1 && server.profileOf('olli offline').money === o0 + 100 && online.every((g) => g.profile.money === m0.get(g.key) + 100), 'admin giveAll: including offline players when ticked');
+        await rf.req('admin', { op: 'giveAll', amount: -100, offline: true });
+        ok((await rf.req('admin', { op: 'giveAll', amount: 1.5 })).err === 'bad_amount' && (await rf.req('admin', { op: 'giveAll', amount: 2e7 })).err === 'bad_amount', 'admin giveAll: bad amounts refused');
+        ok(online.every((g) => g.profile.money === m0.get(g.key)), '...and everyone is back where they were');
+      }
       ok((await rf.req('admin', { op: 'kick', name: 'Icey27' })).err === 'self', 'admin kick: not yourself');
       const kc = new Promise((r) => K.ws.on('close', (code, why) => r([code, String(why)])));
       const kk = await rf.req('admin', { op: 'kick', name: 'kim kickme' });

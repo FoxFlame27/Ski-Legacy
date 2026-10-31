@@ -89,6 +89,11 @@ const FP_LEAD_MAX = 0.2;            // ...at most this far (rad)
 const FP_BANK = 0.12;               // head roll per radian of body inclination...
 const FP_BANK_MAX = 6 * DEG;        // ...at most (a steady horizon)
 
+// FLY MODE ("Admin · new", Icey27 only: ui/adminnew.js; Oct 31 2026, the user: "and fly mode?"): slow / normal / fast
+// (m/s; Ctrl or the mouse wheel steps it), how quickly you get up to it (1/s) and how quickly you stop when you let go
+export const FLY_SPEEDS = [10, 40, 150], FLY_NAMES = ['SLOW', 'NORMAL', 'FAST'];
+const FLY_ACCEL = 2.6, FLY_BRAKE = 4.5;
+
 const _n = new THREE.Vector3(), _f = new THREE.Vector3(), _l = new THREE.Vector3(), _a = new THREE.Vector3();
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _fo = new THREE.Vector3(), _jit = new THREE.Vector3();
 const _cf = new THREE.Vector3(), _cr = new THREE.Vector3(), _dir = new THREE.Vector3();
@@ -138,6 +143,9 @@ export class Player {
     this.vel = new THREE.Vector3();
     this.heading = Math.PI; // facing -Z (toward the mountain)
     this.mode = 'walk'; // walk | ski | sit | fall
+    // (Oct 31 2026, the user: "and fly mode?"): flying (Icey27's admin panel, ui/adminnew.js): the mode stays walk / ski
+    // underneath, but no physics run at all: no gravity, no terrain, no colliders, no wipeouts (updateFly)
+    this.flying = false; this.flySpeed = 1; // (FLY_SPEEDS index)
     this.hasSkis = false;
     this.skisOn = false;
     this.ski = { speed: 1, grip: 1 };
@@ -246,6 +254,68 @@ export class Player {
     this.rig.snapPose?.(); // no blend from the old pose (e.g. lying in the snow) at the new place
   }
 
+  // ------------------------------------------------------------------ fly mode (Icey27 only: ui/adminnew.js)
+  // (Oct 31 2026, the user: "and fly mode?": WASD along where the camera looks (up / down too), Space up, Shift or C
+  // down, Ctrl or the mouse wheel the speed (10 / 40 / 150 m/s), eased in and out; through everything, no gravity, no
+  // wipeouts; leaving it puts you down standing on the ground or the nearest surface below.) Not seated (a car, a lift,
+  // the bus, a train, a bench): false. The panel (adminnew.js) checks the account, the vehicles, the interiors.
+  startFly() {
+    if (this.flying) return true;
+    if (this.mode === 'sit') return false;
+    if (this.mode === 'fall') this.mode = this.skisOn ? 'ski' : 'walk';
+    this.resetFall(); this.resetAirState();
+    this.footAir = false; this.footJumpY = 0; this.footJumpV = 0; this.walkSlip = 0; this.steepT = 0; this.flatT = 0;
+    this.brakeStopT = 0; this.launch = 0; this.crouch = 0.2; this.plow = 0; this.sideslip = 0; this.tuck = false;
+    this.vel.set(0, 0, 0); this.parked = false; this.hold = false;
+    this.flying = true;
+    this.rig.setCarry?.(this.hasSkis); // (skis on your back while you fly)
+    return true;
+  }
+  // place: down on the ground / the surface below, standing (false: where you are, e.g. seated in a car already)
+  stopFly(place = true) {
+    if (!this.flying) return;
+    this.flying = false;
+    this.vel.set(0, 0, 0);
+    if (place) {
+      const yaw = this.camYaw, pitch = this.camPitch; // (the camera stays as you looked)
+      this.teleport(this.pos.x, this.pos.z, this.heading, this.pos.y);
+      this.camYaw = yaw; this.camPitch = pitch;
+    }
+    this.rig.setCarry?.(this.hasSkis && !this.skisOn);
+  }
+  // slow / normal / fast: Ctrl goes round (wrap), the wheel steps up (forward) or down
+  flyStep(d, wrap = false) {
+    const n = FLY_SPEEDS.length;
+    this.flySpeed = wrap ? (this.flySpeed + d + n) % n : clamp(this.flySpeed + d, 0, n - 1);
+  }
+  updateFly(dt) {
+    const inp = this.input;
+    if (inp.hit('ControlLeft') || inp.hit('ControlRight')) this.flyStep(1, true);
+    if (inp.wheel) this.flyStep(inp.wheel < 0 ? 1 : -1);
+    // where the camera looks (last frame's view: pitch included) and its right
+    this.camera.getWorldDirection(_cf);
+    _cr.crossVectors(_cf, UP);
+    if (_cr.lengthSq() < 1e-6) _cr.set(Math.cos(this.heading), 0, -Math.sin(this.heading)); // (straight up / down)
+    _cr.normalize();
+    const k = (c) => (inp.down(c) ? 1 : 0);
+    const fwd = k('KeyW') - k('KeyS'), side = k('KeyD') - k('KeyA');
+    const up = k('Space') - Math.max(k('ShiftLeft'), k('ShiftRight'), k('KeyC'));
+    _dir.set(0, 0, 0).addScaledVector(_cf, fwd).addScaledVector(_cr, side).addScaledVector(UP, up);
+    const moving = _dir.lengthSq() > 1e-6;
+    if (moving) _dir.normalize().multiplyScalar(FLY_SPEEDS[this.flySpeed] || 40);
+    this.vel.lerp(_dir, 1 - Math.exp(-dt * (moving ? FLY_ACCEL : FLY_BRAKE))); // (smoothly up to speed, smoothly to a stop)
+    if (!moving && this.vel.lengthSq() < 0.01) this.vel.set(0, 0, 0);
+    this.pos.addScaledVector(this.vel, dt);
+    this.pos.y = clamp(this.pos.y, -500, 9000);
+    // facing: the way you fly (third person: turning toward the camera's heading; first person: the look folds in)
+    if (Math.hypot(this.vel.x, this.vel.z) > 0.5) {
+      if (this.view === 'first') { this.heading = wrapPi(this.heading + this.lookYaw); this.lookYaw = 0; }
+      else this.heading = dampAngle(this.heading, Math.atan2(_cf.x, _cf.z), dt * 8);
+    }
+    this.travelYaw = this.heading; this.prevVelYaw = this.heading;
+    this.parked = false;
+  }
+
   // Forget a crash completely (teleports, getting up).
   resetFall() {
     const F = this.fall;
@@ -279,7 +349,7 @@ export class Player {
   update(dt) {
     const inp = this.input;
     if (inp.hit('KeyR') && !(this.mode === 'sit' && this.viewBeforeRide)) this.view = this.view === 'third' ? 'first' : 'third';
-    if (inp.hit('KeyG') && this.hasSkis && (this.mode === 'walk' || (this.mode === 'ski' && !this.air && this.speed < 2))) {
+    if (inp.hit('KeyG') && !this.flying && this.hasSkis && (this.mode === 'walk' || (this.mode === 'ski' && !this.air && this.speed < 2))) {
       // skis go on anywhere (Oct 27, the user): on the flat you pole yourself off with W
       this.setSkisOn(!this.skisOn);
     }
@@ -294,18 +364,21 @@ export class Player {
     } else {
       this.camYaw -= inp.mdx * sens;
       this.camPitch = clamp(this.camPitch - inp.mdy * sens, -1.2, 0.6);
-      this.camDist = clamp(this.camDist + inp.wheel * 0.5, 2.2, 12);
+      if (!this.flying) this.camDist = clamp(this.camDist + inp.wheel * 0.5, 2.2, 12); // (flying: the wheel steps the speed)
     }
 
-    if (this.mode === 'ski') this.updateSki(dt);
+    // (flying, then seated somewhere by something else (a car, a lift, a bench): flying ends where you are, no landing)
+    if (this.flying && this.mode === 'sit') this.stopFly(false);
+    if (this.flying) this.updateFly(dt);
+    else if (this.mode === 'ski') this.updateSki(dt);
     else if (this.mode === 'walk') this.updateWalk(dt);
     else if (this.mode === 'fall') this.updateFall(dt);
     else if (this.mode === 'sit') this.updateSit(dt);
-    this.grounded = !this.air && !(this.mode === 'fall' && this.fallAir);
+    this.grounded = !this.flying && !this.air && !(this.mode === 'fall' && this.fallAir);
 
     const sp = this.speed;
-    if (this.mode === 'ski' && !this.air) this.distance += sp * dt;
-    this.topSpeed = Math.max(this.topSpeed, this.mode === 'ski' ? sp : 0);
+    if (this.mode === 'ski' && !this.air && !this.flying) this.distance += sp * dt;
+    this.topSpeed = Math.max(this.topSpeed, this.mode === 'ski' && !this.flying ? sp : 0);
 
     this.rig.root.position.copy(this.pos);
     // first person: a wipeout pulls the camera out of your head to watch the tumble from behind (third-person
@@ -343,6 +416,15 @@ export class Player {
     // first person: the rig hides the body (gloves on the pole grips), holds the poles low and wide,
     // and hides the skis while they sweep past the eye in flips and crashes
     st.fp = fp;
+    // flying: standing (the idle pose, skis on your back) in the air where you are; airY is your height over the ground
+    // under you (the rig's feet ask world.groundHeight: it lifts the whole body by it, as for a jump on foot)
+    if (this.flying) {
+      const gy = world.groundHeight(this.pos.x, this.pos.z, this.pos.y + 0.3);
+      st.mode = 'idle'; st.speed = 0; st.air = false; st.flip = 0; st.grab = 0; st.spinVel = 0; st.charge = 0; st.crouch = 0;
+      st.lean = 0; st.edge = 0; st.tuck = false; st.plow = 0; st.skid = 0; st.normal = UP; st.fall = null; st.fallAir = false;
+      st.heading = this.heading; st.carry = this.hasSkis; st.bench = null; st.seat = null;
+      st.airY = Number.isFinite(gy) ? this.pos.y - gy : 0;
+    }
     this.rig.update(dt, st);
     // body thuds while tumbling (the rig's ground contact reports them)
     if (this.mode === 'fall' && this.rig.fx) for (const e of this.rig.fx) if (e.type === 'impact' && !e.heard) { e.heard = true; this.audio?.play('thud', e.amount); }
@@ -864,7 +946,7 @@ export class Player {
   // Wipeout: tumble (forward somersaults), roll (sideways) or slam (topple over), slide to a stop
   // on the snow, lie there a moment, then get back up. Emits one 'crash' event per wipeout.
   crash(side = 1, opts = {}) {
-    if (this.mode === 'fall') return;
+    if (this.mode === 'fall' || this.flying) return; // (flying: nothing knocks you over, Oct 31 2026)
     const v = this.vel, sp = v.length(), vh = Math.hypot(v.x, v.z);
     // (Oct 31 2026, the user: "make sure if you jump and crash under 60 kph on skis then nothing happens": a ski wipeout
     // (a bad landing, a slam into the ground, a hit on a tree or rock) under 60 km/h is only the fall: you get up, no

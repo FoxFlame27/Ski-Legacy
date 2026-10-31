@@ -124,6 +124,11 @@ export const ACCOMPLICE_FINE = 1500, ACCOMPLICE_JAIL_S = 45, /* (Oct 30, the use
 // has 'wanted' (police.js keeps it while wanted, also on foot). Over for ACCOMPLICE_KEEP_MS: forgotten (the grace: the
 // driver's client forgets the chase just before its 'policeArrest'). Riding only before the chase: free.
 const WANTED_BITS = 7 << 26, PRES_FLAGS = 12, ACCOMPLICE_KEEP_MS = 10 * 1000;
+// (Oct 31 2026, the user: "and fly mode?"): src/net/protocol.js F.flying, a presence flag bit (state walk; in state fall,
+// ST_FALL, bits 8-22 are the wipeout's): the admin's fly mode. Passed on for an ADMIN_KEYS login only (c.key, this
+// server's own login, never a client flag): from anyone else it is stripped (onPresence), so no avatar floats for them
+export const PRES_FLY = 1 << 22;
+const ST_FALL = 6;
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
 // the vehicle kinds 'veh' accepts (setVeh); /health lists them, so a redeploy can be checked from outside
@@ -1096,6 +1101,8 @@ export class GameServer {
   //   release { name, what: 'jail' | 'chase' | 'impound' }   out of prison | the police chase over | cars out of the tow yard
   //   reset { name, confirm }      their progress back to a new player's (confirm: the name typed again); online: kicked
   //   say { text }                 a banner for everyone on the server ('adminMsg')
+  //   giveAll { amount, offline }  (Oct 31 2026, "Give to everyone online") money to (or from) everyone online in your
+  //                                world, you too; offline: true, every other account as well (never below 0 by it)
   adminNew(c, op, d) {
     const who = (k = nameKey(d.name)) => ({ k, P: this.profileOf(k), g: this.online.get(k) || null });
     const label = (t) => t.P?.name || this.store.accounts.data[t.k]?.name || t.g?.name || t.k;
@@ -1105,6 +1112,7 @@ export class GameServer {
         const players = [...(c.world?.players.values() || [])].map((g) => ({
           name: g.name, pid: g.pid, money: g.profile?.money ?? 0, pos: g.pres ? [g.pres[2], g.pres[3], g.pres[4]] : null, inside: g.pres?.[14] || null,
           jailed: (g.profile?.jailUntil || 0) > Date.now(), wanted: !!g.profile?.wanted, impound: (g.profile?.cars || []).some((car) => carHeld(car)),
+          flying: !!g.flying, // (the admin's fly mode, onPresence; Oct 31 2026)
         }));
         return { d: { players, world: c.world?.id ?? null } };
       }
@@ -1118,6 +1126,23 @@ export class GameServer {
         if (t.g) { t.g.send('money', { v, why: 'admin', delta }); note(t.g, delta >= 0 ? `${c.name} gave you $${delta.toLocaleString('en-US')}` : `${c.name} took $${(-delta).toLocaleString('en-US')}`); }
         this.log(`[admin] ${c.name}: money ${delta >= 0 ? '+' : ''}${delta} for ${label(t)}${t.g ? '' : ' (offline)'} -> ${v}`);
         return { d: { name: label(t), balance: v, delta, online: !!t.g } }; // (balance, not money: the panel's own money stays)
+      }
+      case 'giveAll': {
+        const a = d.amount, withOffline = d.offline === true;
+        if (!isInt(a) || a === 0 || Math.abs(a) > 1e7) return { err: 'bad_amount' };
+        const targets = new Map(); // key -> { P, g }
+        for (const g of c.world?.players.values() || []) if (g.key && g.profile) targets.set(g.key, { P: g.profile, g });
+        if (withOffline) for (const [k, P] of Object.entries(this.store.profiles.data)) if (!targets.has(k) && !this.online.has(k)) targets.set(k, { P, g: null });
+        let n = 0, off = 0, total = 0;
+        for (const { P, g } of targets.values()) {
+          const was = P.money || 0, v = Math.max(Math.min(was, 0), Math.min(ADMIN_MONEY_MAX, was + a)), delta = v - was;
+          P.money = v; total += delta;
+          if (g) { n++; g.send('money', { v, why: 'admin', delta }); if (g !== c && delta) note(g, delta >= 0 ? `${c.name} gave everyone $${delta.toLocaleString('en-US')}` : `${c.name} took $${(-delta).toLocaleString('en-US')} from everyone`); }
+          else off++;
+        }
+        this.store.profiles.save();
+        this.log(`[admin] ${c.name}: money ${a >= 0 ? '+' : ''}${a} for everyone (${n} online in world ${c.world?.id ?? '?'}${withOffline ? `, ${off} offline` : ''}; ${total >= 0 ? '+' : ''}${total} in all)`);
+        return { d: { amount: a, n, offline: off, total } };
       }
       case 'tpTo': case 'tpHere': {
         const t = who();
@@ -1272,6 +1297,14 @@ export class GameServer {
     const row = [c.pid, Math.round(ts)];
     for (let i = 1; i <= 11; i++) row.push(isNum(d[i]) ? Math.round(d[i] * 100) / 100 : 0);
     row[9] = clamp(row[9] | 0, 0, 15); // state
+    // the fly mode's bit (PRES_FLY): the admin's only. (There are no speed / teleport plausibility checks on presence
+    // here to exempt it from; c.flying is the server's own record of it: the panel's players list shows it.)
+    const fly = row[9] !== ST_FALL && ((row[PRES_FLAGS] | 0) & PRES_FLY) !== 0;
+    c.flying = fly && !!c.key && ADMIN_KEYS.has(c.key);
+    if (fly && !c.flying) {
+      row[PRES_FLAGS] = (row[PRES_FLAGS] | 0) & ~PRES_FLY;
+      if (!c.flyRefused) { c.flyRefused = true; this.log(`[admin] fly flag stripped from ${c.name || c.ip} (not an admin)`); }
+    }
     // the vehicle and the interior are the server's own records (seat registry, approved interior)
     row.push(c.seat ? `${c.seat.k}:${c.seat.v}:${c.seat.seat}` : 0);
     row.push(c.interior || 0);

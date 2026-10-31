@@ -13,6 +13,10 @@ export const F = { air: 1, tuck: 2, skisOn: 4, carry: 8, hasSkis: 16, moving: 32
 // (wanted: driving your car with the police after you (game/police.js wantedBits): bits 26-28 the stars (1-5), wSearch:
 // they lost you, wArrest: being arrested. Your passengers see the WANTED box from it: net/carride.js)
 export const W_SHIFT = 26;
+// (Oct 31 2026, the user: "and fly mode?"): flying (Icey27's fly mode, ui/adminnew.js; state walk, never fall, so this
+// bit is free: bits 8-22 are the wipeout's only in state fall): the others see you standing in the air where you are,
+// not snapped to the ground (net/remote.js). The server strips it from anyone but the admin (server.js onPresence).
+F.flying = 1 << 22;
 // A wipeout (state fall: thrown by a car, a crash, lying in the snow for the rescue): crouch = the body's pitch
 // (somersault), lean = its roll; the flags (with the ski bits): F.air = still flying from the throw, bit 8 = went over
 // to the left, bits 9-12 the tuck (0..15), 13-17 the get-up (0..31), 18-22 the tumble axis relative to yaw (1/32 turns)

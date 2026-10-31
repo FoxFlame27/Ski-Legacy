@@ -1592,6 +1592,9 @@ function mpPose(o) {
   o.flags = (p.air ? MPF.air : 0) | (p.tuck ? MPF.tuck : 0) | (p.skisOn ? MPF.skisOn : 0) | (p.hasSkis && !p.skisOn ? MPF.carry : 0) | (p.hasSkis ? MPF.hasSkis : 0);
   // a wipeout (thrown by a car, a crash, lying there for the rescue): the tumble itself, so the others see you go
   // flying, roll, lie in the snow and get up (protocol.js fallFlags; Oct 29, the user: "i only see him stand still")
+  // flying (Icey27's fly mode; Oct 31 2026, the user: "and fly mode?"): on foot for the others, standing in the air
+  // (MPF.flying: remote.js doesn't put you on the ground; the server passes the bit on for the admin only)
+  if (p.flying) { o.st = MPST.walk; o.crouch = 0; o.lean = 0; o.flags = (p.hasSkis ? MPF.carry | MPF.hasSkis : 0) | MPF.flying; }
   if (o.st === MPST.fall && p.fall) {
     const Fl = p.fall;
     o.crouch = Fl.pitch || 0; o.lean = Fl.roll || 0;
@@ -1865,6 +1868,7 @@ function prisonClear() {
   if (admin?.fly) admin.stopFly?.();
   if (admin?.isOpen) admin.close(false);
   if (adminNew?.isOpen) adminNew.close(false);
+  adminNew?.flyOff(false); // (Icey27's fly mode: off where you are, the cell's door takes you; Oct 31 2026)
   if (trailMap?.isOpen) trailMap.toggle();
   heli.abort();
   if (races.active) races.abort();
@@ -2126,7 +2130,7 @@ function loopUpdate() {
     seating.leftChalet();
     if (input.hit('KeyM') && !inSession) openMap();
     if (input.hit('KeyL')) player.headlampOn = !player.headlampOn;
-    interaction = inSession ? null : findInteraction();
+    interaction = inSession || player.flying ? null : findInteraction(); // (flying, Icey27's fly mode: no doors, seats, lifts or tows by E; Oct 31 2026)
     if (interaction && input.hit('KeyE')) { audio.play('click'); interaction.act(); }
   }
   if (started) { try { buildMode.update(dt, input); } catch (e) { loopFault('build mode', e); } } // (no-op until you're inside your rented chalet)
@@ -2149,8 +2153,8 @@ function loopUpdate() {
   let rideLine = null, ridePrompt = null; // riding: the line for the top-left card, the stop to get off at (E)
   railway.update(dt, { viewer: camera.position, fast: railway.riding && !menu && input.down('Space'), player: railway.riding || express?.riding ? null : player.pos, audio }); // (player: the trains stop for you on the track)
   mark('railway');
-  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space'), walker: player.mode !== 'sit' && !heli.active && !drive?.active && !sleds.active ? player.pos : null, player: railway.riding || express.riding ? null : player.pos, audio });
-  if (express && !express.riding && express.wait && !transition.active) { // waiting on a platform for your train
+  express?.update(dt, { viewer: camera.position, fast: express.riding && !menu && input.down('Space'), walker: player.mode !== 'sit' && !player.flying && !heli.active && !drive?.active && !sleds.active ? player.pos : null, player: railway.riding || express.riding ? null : player.pos, audio });
+  if (express && !express.riding && express.wait && !transition.active && !player.flying) { // waiting on a platform for your train
     const w = express.wait, ws = express.waiting(player.pos);
     if (ws === 'ready') boardExpress(express.stations[w.from], express.stations[w.dest]);
     else if (ws === 'gone') hud.flash('Legacy Express · you left the platform', 'good', 1800);
@@ -2224,7 +2228,7 @@ function loopUpdate() {
   drive?.update(dt, started && !menu && !inSession ? input : null); // the car you drive: physics, cameras, sound
   if (isMP()) multiplayer?.late(dt, started && !menu && !inSession ? input : null); // (riders in your car; you in theirs)
   carRental?.update(dt); // the tow truck, the rental's sign at night
-  try { breakables.update(paused ? 0 : dt, player.pos, traffic?.cars); } catch (e) { loopFault('breakables', e); } // knocked poles and signs: their flight, back after 90 s; the traffic's knocks
+  try { breakables.update(paused ? 0 : dt, player.flying ? null : player.pos, traffic?.cars); } catch (e) { loopFault('breakables', e); } // knocked poles and signs: their flight, back after 90 s; the traffic's knocks
   hospitalWard?.update(dt); // the stay in bed (its card), the window view linked
   prison?.update(dt); // the sentence's clock (a sentence from before resumes), the station's lamp
   taxi?.update(dt, started && !menu && !inSession && !paused ? input : null); // (after the car moved: the passenger in its back seat)
@@ -2239,12 +2243,13 @@ function loopUpdate() {
   mark('jobs');
   talk.update(dt); // after the player's camera and the people: the conversation shot, the person talking
   admin.update(dt); // speed boost; the free-fly camera takes over the view
+  adminNew?.update(dt); // (Icey27's fly mode: its HUD badge; off in a vehicle, out of multiplayer, for any other account)
   races.update(dt, player); // the courses on the mountains: meshes built / dropped by distance (guarded inside)
   busRaces?.update(dt, player, modes); // the bus races' courses on the pistes: ditto
   mark('game');
   npcs.update(dt, player.pos, env, camera);
   mark('npcs');
-  const fastRide = heli.active || !!express?.riding; // (a fast trip: a bigger streaming budget, ahead of it)
+  const fastRide = heli.active || !!express?.riding || (player.flying && player.speed > 60); // (flying fast too: Icey27's fly mode) // (a fast trip: a bigger streaming budget, ahead of it)
   const streamAt = admin.streamPos || (express?.riding ? express.streamPos : null) || heli.streamPos; // ahead of the helicopter / the express / free camera, otherwise where you are
   terrain.update(streamAt.x, streamAt.z, fastRide ? 8 : 5);
   mark('terrain');
@@ -2265,7 +2270,7 @@ function loopUpdate() {
   terrainUniforms.uSparkle.value = env.dayFactor * (1 - env.snow * 0.7) + env.nightFactor * 0.25;
 
   // snow FX for the player
-  const info = { grounded: player.mode === 'ski' && !player.air, speed: player.speed, vel: player.vel, sideslip: player.sideslip, plow: player.plow, lean: player.lean };
+  const info = { grounded: player.mode === 'ski' && !player.air && !player.flying, speed: player.speed, vel: player.vel, sideslip: player.sideslip, plow: player.plow, lean: player.lean };
   skierFX(trails, spray, 0, player.rig, info, dt);
   player._wasAir = player.air;
   if (player.events.length) {
@@ -2317,7 +2322,7 @@ function loopUpdate() {
   // audio
   audio.setState({
     speed: heli.active ? heli.speed * 0.35 : player.mode === 'sit' ? 4 : player.speed, grounded: !player.air, sideslip: player.sideslip + player.plow * 0.5,
-    skiing: player.mode === 'ski', riding: player.mode === 'sit' && !heli.active && !sleds.active && !drive?.active, altitude: player.pos.y, snow: env.snow,
+    skiing: player.mode === 'ski' && !player.flying, riding: player.mode === 'sit' && !heli.active && !sleds.active && !drive?.active, altitude: player.pos.y, snow: env.snow,
   });
 
   // HUD

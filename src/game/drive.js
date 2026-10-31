@@ -15,7 +15,7 @@ import { nightUniform } from '../world/village.js';
 import { loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye, REAL } from './cars.js';
 import { keysHTML } from '../ui/hud.js';
-import { SEAT_EYE, SEAT_LIFT, seatHip, seatsFor, seatLegs, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
+import { SEAT_EYE, SEAT_LIFT, seatHip, seatsFor, seatLegs, underRoof, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
 import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot, cabinFill, cabinLight } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, roadAt, ROAD_HALF } from './bus/roads.js';
@@ -1383,6 +1383,11 @@ export class Drive {
       const seat = seatsFor(d.t), tv = g.worldToLocal(wpos(b.neck || b.head)).sub(g.worldToLocal(wpos(b.hips)));
       const want = 0.6 * Math.atan(seat ? -seat.d[3] : 0.4), cur = Math.atan2(-tv.z, tv.y), rec = clamp(want - cur, 0, 0.6);
       leanBack(b, new THREE.Vector3(-1, 0, 0).applyQuaternion(g.quaternion), rec, 0.25, -(rec + 0.25) * 0.85);
+      // (Oct 31 2026: since the seats went SEAT_LIFT up, the user's "you still don't sit properly on a chair", the head
+      // top came through the roof in the chase view in the low cars: leant back further, just until it is under this
+      // car's roof, before the hands go to the wheel; carpeople.js underRoof. Inside the head is folded away, so the
+      // cockpit camera stays exactly where the user put it, Oct 27: "move the camera a bit higher")
+      if (!inside) underRoof(rig, g, d.t, 0, { wheel: true });
       const S = d.t.steering, c = S ? S.c : new THREE.Vector3().copy(d.eyeLocal).add(new THREE.Vector3(0, -0.27, 0.6));
       const tilt = S?.tilt ?? 0.38, ca = Math.cos(tilt), sa = Math.sin(tilt), rr = (S?.rimR ?? 0.185) * 0.97;
       const turn = clamp(d.steer * 3, -1.75, 1.75); // (the wheel's own angle: updateBody)
@@ -1404,7 +1409,7 @@ export class Drive {
       // the legs (carpeople.js seatLegs, Oct 31 2026, the user: "you still don't sit properly on a chair"): bent at the
       // knee into the footwell, the heels on this car's floor, the right foot on the throttle (before: a fixed point
       // 0.74 m ahead, as far as the legs reach, so they stuck out stiff and straight, the boots through the floor)
-      seatLegs(rig, g, d.t, 0, { driver: true });
+      seatLegs(rig, g, d.t, 0, { driver: true, roof: false });
       // your eyes (the camera inside), in the car's frame: ahead of and above the head joint
       d.eyeRig = g.worldToLocal(wpos(b.head).add(new THREE.Vector3(0, 0.09, 0.085).applyQuaternion(g.quaternion)));
     } catch (e) { d.eyeRig = null; if (!this.rigErr) { this.rigErr = true; console.warn('drive seat', e); } } // (the pose stays as the rig made it)

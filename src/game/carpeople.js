@@ -142,6 +142,123 @@ export function leanBack(b, R, rec, neck = -rec * 0.6, head = -rec * 0.3) {
   rotW(b.spine0, R, rec * 0.55); rotW(b.spine1, R, rec * 0.45); rotW(b.neck, R, neck); rotW(b.head, R, head);
 }
 
+// THE HEAD UNDER THE ROOF (Oct 31 2026: with the seats SEAT_LIFT higher, after the user's "you still don't sit properly
+// on a chair", a seated rig's head top went 3-24 cm over the roof lining in the low cars and most back seats, so it
+// came through the roof in the chase view): as the traffic's people are kept under it (fill: put, leant back by the
+// seat and lowered at most 5 cm), a live rig (the passengers, the other players, the taxi's fare, you at the wheel in
+// the chase view) is brought down just as far as it takes to have its head top ROOF_GAP under that car's roof (SEATS
+// roof: the same per-car table and cabin raycasts as the floors). A passenger: leant back first (the pelvis rolling
+// back about the hip joints, so the hips stay on the cushion, and the spine with it; the neck and head turned forward
+// again, the eyes level) up to LEAN (~34 degrees all told, as people sit in a back seat), then the hips let down into
+// the cushion up to SEAT_LIFT (where they sat before the seats went up), then leant back further (LEAN_HARD: the
+// Taycan's, e-tron GT's and GR Yaris's back seats, the SLS, the Huracan) and let down the rest. You at the wheel
+// (o.wheel): let down first, then leant back with the hips slid forward on the cushion as far as the shoulders go
+// back (a slouch, as in a low sports car), so the hands stay on the wheel. Never lower than keeps the heels on the
+// floor where seatLegs puts them (posed after it, unchanged). It measures the head every pose (its crown found once
+// per rig on its mesh), so it does nothing where the head fits (the GLS's back seats) and never adds up from frame to
+// frame (other players are posed only now and then: it only ever moves a head that is over the line).
+const ROOF_GAP = 0.02, SINK_MAX = 0.12; // (m: under the lining; the hips let down at most)
+const LEAN = 0.6, LEAN_HARD = 0.9; // (rad of extra lean for a passenger; at most, before the last let-down)
+const _headTop = new WeakMap(), _rq = new THREE.Quaternion(), _rq2 = new THREE.Quaternion(), _rR = new THREE.Vector3();
+const _rU = new THREE.Vector3(), _rv = new THREE.Vector3(), _rC = new THREE.Vector3(), _rP = new THREE.Vector3();
+// the rig's head top: the vertices of its seated mesh within 6 cm of the highest one (the crown), as points in its head bone's
+// frame (a few dozen: whichever is highest as the head turns; once per rig, not while the head is folded away for the
+// cockpit camera)
+function headTopOf(rig) {
+  if (_headTop.has(rig)) return _headTop.get(rig);
+  const b = rig.b;
+  let m = rig.skinned;
+  if (!m) rig.root.traverse((o) => { if (!m && o.isSkinnedMesh) m = o; });
+  const P = m?.geometry?.attributes?.position;
+  if (!P || !b.head || b.head.scale.x < 0.5) return null;
+  rig.root.updateMatrixWorld(true);
+  _rq.copy(wquat(rig.root)).invert();
+  const W = [], Y = [];
+  let best = -Infinity;
+  for (let i = 0; i < P.count; i++) {
+    m.getVertexPosition(i, _rv).applyMatrix4(m.matrixWorld);
+    const y = _rP.copy(_rv).applyQuaternion(_rq).y;
+    W.push(_rv.x, _rv.y, _rv.z); Y.push(y); best = Math.max(best, y);
+  }
+  let pts = [];
+  for (let i = 0; i < Y.length; i++) if (Y[i] > best - 0.06) pts.push(i);
+  const step = Math.max(1, Math.floor(pts.length / 48));
+  pts = pts.filter((_, k) => k % step === 0).map((i) => b.head.worldToLocal(new THREE.Vector3(W[i * 3], W[i * 3 + 1], W[i * 3 + 2])));
+  _headTop.set(rig, pts);
+  return pts;
+}
+/** Keeps a seated rig's head top under its car's roof (see above): g the car (its frame), t its template, seat 0 the
+ *  driver, 1 the front passenger, 2.. the back; o.wheel (drive.js: you, your hands then going to the wheel): the hips
+ *  slid forward on the cushion by as much as the lean takes the shoulders back, so the wheel stays in reach. Before
+ *  the legs and arms are posed. Returns how far (m) the head top is still over the line (0: under it). */
+export function underRoof(rig, g, t, seat = 0, o = {}) {
+  const b = rig?.b;
+  if (!b?.head || !b.hips || !b.spine0 || !b.lUp || !b.rUp || !t) return 0;
+  const S = seatsFor(t), front = seat < 2;
+  const roof = S?.roof ? (front ? S.roof[0] : S.roof[1] ?? S.roof[0]) : t.size?.y ? t.size.y - 0.05 : null;
+  const p = roof == null ? null : headTopOf(rig);
+  if (!p) return 0;
+  rig.root.updateMatrixWorld(true);
+  if (g) { g.updateMatrixWorld(true); g.getWorldQuaternion(_rq2); } else _rq2.identity();
+  const R = _rR.set(-1, 0, 0).applyQuaternion(_rq2), U = _rU.set(0, 1, 0).applyQuaternion(_rq2); // (lean back: about the figure's right)
+  const loc = (v) => (g ? g.worldToLocal(v) : v);
+  let top = p[0]; // (the highest of the head's points, found by over())
+  const over = () => {
+    let y = -Infinity;
+    for (const q of p) { const h = loc(b.head.localToWorld(_rv.copy(q))).y; if (h > y) { y = h; top = q; } }
+    return y - (roof - ROOF_GAP);
+  };
+  const hipMid = (v) => v.setFromMatrixPosition(b.lUp.matrixWorld).add(_rP.setFromMatrixPosition(b.rUp.matrixWorld)).multiplyScalar(0.5);
+  let ex = over(), leant = 0, sunk = 0;
+  if (ex <= 0) return 0;
+  // (let down no further than keeps the heels on the floor as seatLegs puts them: its hip-to-ankle drop not clamped)
+  const fl = S?.floor ? (front ? S.floor[0] : S.floor[1] ?? S.floor[0]) : null;
+  const sinkMax = Math.min(SINK_MAX, fl == null ? SEAT_LIFT : Math.max(0, loc(hipMid(_rC)).y - (fl + SOLE - 0.045)));
+  const shoulders = () => (b.lArm && b.rArm ? loc(_rC.setFromMatrixPosition(b.lArm.matrixWorld).add(_rP.setFromMatrixPosition(b.rArm.matrixWorld)).multiplyScalar(0.5)).z : 0);
+  const sh0 = o.wheel ? shoulders() : 0;
+  const leanTo = (max) => {
+    for (let k = 0; k < 8 && ex > 0.002 && leant < max - 1e-3; k++) {
+      // the angle that would bring the top down by ex were the body stiff about the hip joints (the neck and head
+      // turning forward again take back about a third of it: 1.5 times that)
+      const T = loc(b.head.localToWorld(_rv.copy(top))).sub(loc(hipMid(_rC))), r = Math.hypot(T.y, T.z), a0 = Math.atan2(-T.z, T.y);
+      const a = Math.min(max - leant, Math.max(0.01, 1.5 * (Math.acos(Math.max(-1, Math.min(1, (T.y - ex) / r))) - a0)));
+      leant += a;
+      // the pelvis rolled back about the hip joints' line (they stay put), then the spine, the head level again
+      const hc = hipMid(_rC), q = _rq.setFromAxisAngle(R, a * 0.4);
+      const hp = _rP.setFromMatrixPosition(b.hips.matrixWorld).sub(hc).applyQuaternion(q).add(hc);
+      setWQ(b.hips, q.multiply(wquat(b.hips)));
+      b.hips.position.copy(b.hips.parent.worldToLocal(hp));
+      b.hips.updateMatrixWorld(true);
+      leanBack(b, R, a * 0.6, -a * 0.65, -a * 0.35);
+      ex = over();
+    }
+  };
+  // the hips (and all of the body) let down into the cushion, at most to max all told
+  const sinkTo = (max) => {
+    const s = Math.min(max - sunk, ex);
+    if (s <= 0) return;
+    sunk += s;
+    b.hips.position.copy(b.hips.parent.worldToLocal(_rP.setFromMatrixPosition(b.hips.matrixWorld).addScaledVector(U, -s)));
+    b.hips.updateMatrixWorld(true);
+    ex = over();
+  };
+  leanTo(o.wheel ? 0 : LEAN);
+  // (a passenger no lower than before the seats went up, as the traffic's, then leant back further; you at the wheel
+  // as low as your heels allow first, the slouch after, so your feet stay nearer the pedals)
+  sinkTo(o.wheel ? sinkMax : Math.min(SEAT_LIFT, sinkMax));
+  leanTo(LEAN_HARD);
+  sinkTo(sinkMax);
+  if (o.wheel) {
+    // (the slouch: the hips slid forward along the car as far as the shoulders went back; the head's height as it is)
+    const dz = sh0 - shoulders();
+    if (dz > 0) {
+      b.hips.position.copy(b.hips.parent.worldToLocal(_rP.setFromMatrixPosition(b.hips.matrixWorld).addScaledVector(_rC.set(0, 0, 1).applyQuaternion(_rq2), dz)));
+      b.hips.updateMatrixWorld(true);
+    }
+  }
+  return Math.max(0, ex);
+}
+
 // A seated rig's legs in a car seat, the same for you at the wheel (drive.js placeRig), you riding with someone
 // (net/carride.js), the other players in their cars (net/remote.js carLegs), the taxi's passenger and the traffic's
 // baked people (Oct 31 2026, the user: "you still don't sit properly on a chair, please fix it"): the thighs out of the
@@ -156,13 +273,17 @@ export function leanBack(b, R, rec, neck = -rec * 0.6, head = -rec * 0.3) {
 // g: the car (an Object3D: its frame, +z forward, +x the driver's left); null: the rig's own world is that frame (the
 // bake). t: its template (the floor from seatsFor, the wheel) or o.floor (the frame's y). seat: 0 the driver, 1 the
 // front passenger, 2.. the back. o.driver: the feet on the pedals, the knees under the wheel; o.hands: the hands back on
-// the thighs (the 'sit' pose rested them where its own thighs were).
+// the thighs (the 'sit' pose rested them where its own thighs were); o.roof false: the head not fitted under the roof
+// here (underRoof, called before).
 const _lq = new THREE.Quaternion(), _lq2 = new THREE.Quaternion(), _lq3 = new THREE.Quaternion(), _lJ = new THREE.Vector3(), _lK = new THREE.Vector3();
 const _lT = new THREE.Vector3(), _lP = new THREE.Vector3(), _lU = new THREE.Vector3(), _lA = new THREE.Vector3(), _lB = new THREE.Vector3(), _lE = new THREE.Euler();
 const SOLE = 0.2; // (m) the ankle joint over the floor with the boot's heel on it (the heel is skinned to the shin and swings down behind as it slopes; measured on the rigs in each car)
 export function seatLegs(rig, g, t, seat = 0, o = {}) {
   const b = rig?.b;
   if (!b?.hips || !b.lUp || !b.rUp || !b.lLeg || !b.rLeg || !b.lFoot || !b.rFoot) return;
+  // (the head under this car's roof first, leant back as far as that takes: underRoof; o.roof false: done already,
+  // drive.js before the hands go to the wheel. Oct 31 2026, the head through the roof after the seats went up)
+  if (t && o.roof !== false) underRoof(rig, g, t, seat);
   rig.root.updateMatrixWorld(true);
   if (g) { g.updateMatrixWorld(true); g.getWorldQuaternion(_lq); } else _lq.identity();
   const S = t ? seatsFor(t) : null, front = seat < 2;

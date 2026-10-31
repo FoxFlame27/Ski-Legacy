@@ -182,6 +182,7 @@ export class Heli {
     const broke = save.money < HELI_PRICE, H = this.home;
     const eta = (km) => (40 + (km * 1000) / 42) / 60; // spool-up and climb, then ~150 km/h
     const fly = (zone) => {
+      if (this.blocked?.()) { lock(); return; } // (wanted: before paying, Oct 31 2026)
       // multiplayer: the server rents it (its price; one copy at a time, net/heli.js)
       if (this.mp) { this.mp.rent().then((ok) => { if (ok && this.state === 'parked') { this.plan = zone; this.board(); } }); lock(); return; }
       if (this.spend(HELI_PRICE)) { this.plan = zone; this.board(); }
@@ -221,13 +222,15 @@ export class Heli {
     const broke = save.money < HELI_PRICE;
     this.hud.dialog('Heli-Ski', 'Untouched powder on the far peaks. You take the controls: fly anywhere you like, hover low over fresh snow and jump out to ski.', [
       { label: 'Fly the helicopter', sub: broke ? `$${HELI_PRICE} · you have $${save.money}` : `$${HELI_PRICE} · you are the pilot`, disabled: broke,
-        act: () => { if (this.mp) this.mp.rent().then((ok) => { if (ok && this.state === 'parked') this.board(); }); else if (this.spend(HELI_PRICE)) this.board(); lock(); } },
+        act: () => { if (this.blocked?.()) { lock(); return; } if (this.mp) this.mp.rent().then((ok) => { if (ok && this.state === 'parked') this.board(); }); else if (this.spend(HELI_PRICE)) this.board(); lock(); } },
       { label: 'Not now', act: lock },
     ]);
   }
 
+  // (Oct 31 2026, the user: "during a chase you can't enter train, bus, helicopter": main.js sets blocked, it says
+  // "Not while the police are after you"; the rescue helicopter (rescueMe) never asks it)
   board() {
-    if (this.state !== 'parked') return;
+    if (this.state !== 'parked' || this.blocked?.()) return;
     this.state = 'boarding';
     this.transition.fade(async () => {
       const p = this.player;

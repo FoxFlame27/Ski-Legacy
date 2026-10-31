@@ -1189,6 +1189,9 @@ export class Audio {
       if (name === 'radio') { this.burst(0.09, 2300, 0.07, 'bandpass'); this.tone(1720, 0.045, 'square', 0.02, 1, 0.06); this.burst(0.05, 2600, 0.04, 'bandpass'); return; }
       if (name === 'spikes') { this.burst(0.08, 900, 0.7, 'lowpass'); this.tone(90, 0.2, 'sine', 0.5, 0.5); this.sweep(0.7, 6000, 2500, 0.12); return; }
       if (name === 'star') { this.tone(660, 0.12, 'square', 0.03); this.tone(880, 0.16, 'square', 0.03, 1, 0.1); }
+      // (Oct 31 2026, the user: the police "will come inside to arrest you": police.js raidStep) three hard knocks, then
+      // the front door banging open
+      if (name === 'door') { for (let i = 0; i < 3; i++) { this.tone(78, 0.16, 'sine', 0.6, 0.55, i * 0.26); this.tone(190, 0.05, 'triangle', 0.12, 0.6, i * 0.26); } this.tone(55, 0.45, 'sine', 0.75, 0.45, 1.05); this.tone(120, 0.12, 'square', 0.06, 0.5, 1.05); }
     } catch { /* (silent) */ }
   }
   /** The police helicopter over you, every frame while it flies (on: false fades it): the rotor's beat (amplitude-

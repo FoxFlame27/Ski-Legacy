@@ -761,6 +761,10 @@ export class Chalets {
       // multiplayer (net/session.js sets this.mp = { ownerOf(id) -> name | null, visit(h, owner) }): somebody
       // else's chalet is not for sale; E asks the owner to let you in
       const owner = this.mp?.ownerOf(h.id);
+      // (Oct 31 2026, the user: "you can't immediately enter a chalet, you have to wait 30 sec after the chase starts"):
+      // your own, a viewing, a visit to someone else's: police.js chaletWait (local per player, multiplayer too)
+      const wait = (owner && mine !== h) || this.canEnter(h) ? this.chaseWait() : 0;
+      if (wait > 0) return { label: `The police are right behind you · wait ${wait} sec`, act: () => this.waitFlash() };
       if (owner && mine !== h && !this.canEnter(h)) return { label: `${h.name} · ${owner}'s chalet · ask to visit`, act: () => this.mp.visit(h, owner) };
       if (this.canEnter(h)) return { label: `Go in · ${h.name}${mine === h ? ' (your chalet)' : ''}`, act: () => this.enter(h) };
       if (mine) return { label: `${h.name} · you already own ${mine.name}`, act: () => this.hud?.flash(`You already own ${mine.name}: one chalet each`, 'bad', 2400) };
@@ -821,8 +825,12 @@ export class Chalets {
     cv.addEventListener('webglcontextlost', (e) => { e.preventDefault(); console.warn('WebGL context lost', this.inside ? '(inside a chalet)' : ''); this.room?.releasePortal(); });
     cv.addEventListener('webglcontextrestored', () => { console.warn('WebGL context restored'); if (this.inside) this.leave(true); });
   }
+  // s still to wait before a door lets you in mid-chase (police.js chaletWait; 0: go in)
+  chaseWait() { try { return globalThis.window?.__game?.police?.chaletWait?.() || 0; } catch { return 0; } }
+  waitFlash() { const w = this.chaseWait(); this.hud?.flash(`The police are right behind you · wait ${w} sec`, 'bad', 2400); this.audio?.play?.('error'); }
   enter(h) {
     if (this.inside || this.busy || this.transition?.active) return;
+    if (this.chaseWait() > 0) { this.waitFlash(); return; } // (a multiplayer visit let in mid-chase, too: Oct 31 2026)
     this.busy = true;
     this.player.frozen = true;
     this.audio?.play?.('click');

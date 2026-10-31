@@ -79,6 +79,7 @@ import { settleProps } from './world/settle.js';
 import { solidifyIdle } from './world/solidify.js';
 import { breakables } from './world/breakables.js'; // little poles and signs a car knocks flying (back after 90 s)
 import { busRoads } from './game/bus/roads.js';
+import { RoadTunnels } from './game/bus/tunnelview.js'; // (Oct 31 2026: the road tunnels' meshes, walls, darkness inside)
 import { SunGlare } from './world/sunglare.js';
 import { PisteLights } from './world/pistelights.js'; // static: installs its light-pool shader chunk before any material compiles
 import { bootDone } from './engine/afterboot.js'; // (the cars' far LODs etc. wait for the menu: Oct 30 2026, loading time)
@@ -226,6 +227,7 @@ let busRaces = null; // the ski bus's free races (modes/race/busraces.js): their
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
 let secrets = null; // hidden tunnels, couloirs, caves (world/secrets.js)
+let roadTunnels = null; // the scenic roads' tunnels (game/bus/tunnelview.js)
 const jobFrame = { active: false }; // reused every frame
 const propDetail = new PropDetail();
 let startHouse = null, startHouseGroup = null;
@@ -301,6 +303,7 @@ async function boot() {
   skibus = new SkiBus({ scene, models, layout, colliders, makeRig, cameraBlockers: village.cameraBlockers }); // stops in the village + at every gondola base (+ the bus, its driver)
   try { parking = new ParkingLots({ scene, models, colliders, cameraBlockers: village.cameraBlockers }); } catch (e) { console.warn('car parks', e); parking = null; } // three car parks (empty)
   try { new Hospital({ scene, models, colliders, cameraBlockers: village.cameraBlockers }); } catch (e) { console.warn('medical centre', e); } // where the ambulance takes you
+  try { roadTunnels = new RoadTunnels({ scene, terrain, colliders, cameraBlockers: village.cameraBlockers }); } catch (e) { console.warn('road tunnels', e); roadTunnels = null; } // (after the ski bus: its road meshes and guardrail lines)
   secrets = new Secrets({ scene, models, terrain, colliders, cameraBlockers: village.cameraBlockers, hud, audio, save, writeSave, earn: (a, l) => earn(a, l, 'secret'), propDetail });
   // living world: fans along the race finishes, flags in the village, snowcats grooming the pistes
   crowds = new Crowds(scene).addResortArenas({ dressing, models, colliders });
@@ -416,6 +419,7 @@ async function boot() {
   try { busRaces = new BusRaces({ scene, models, colliders, stops: skibus.stops, sites: jobs.sites }); } catch (e) { console.warn('bus races: ' + (e?.stack || e)); busRaces = null; } // (a board by each of their stops)
   // heli-skiing: the helipad + the helicopter you fly yourself (every collider exists by now)
   heli = new Heli({ scene, models, player, input, camera, hud, audio, spray, world, layout, colliders, spend, transition, lifts });
+  heli.blocked = () => chaseBlocked(); // (no flying off mid-chase: Oct 31 2026)
   sleds = new Snowmobiles({ scene, models, player, camera, hud, audio, spray, trails, layout, colliders, vegetation, world }); // parked all round the resort (up to 40: lifts, huts, Express stations, race starts and finishes)
   // cars on the roads (needs the player: it keeps away from you and stops for you)
   try { traffic = new Traffic({ scene, models, colliders, player, camera, skibus, makeRig }); } catch (e) { console.warn('traffic: ' + (e?.stack || e)); traffic = null; }
@@ -996,6 +1000,7 @@ function talkToSeller() {
 }
 
 function boardLift(st) {
+  if (chaseBlocked()) return;
   const line = st.line;
   if (!player.hasSkis) { hud.flash('Rent skis first', 'bad'); audio.play('error'); return; }
   if (isMP() && !multiplayer.transit.liftGate(st, () => boardLift(st))) return; // (multiplayer: a seat in the next cabin, when it is there)
@@ -1068,11 +1073,16 @@ function openRailMap(rw) {
 }
 // (Oct 30, the user: "you can just enter a train or a helicopter or a bus during a chase"): no trains, buses or
 // helicopters while the police are after you (or you are being taken to / sitting in prison)
+// (Oct 31 2026, the user: "during a chase you can't enter train, bus, helicopter"): the lifts too (boardLift), the
+// helicopter's own boarding (heli.blocked), and while being taken away (police.jailing); the rescue helicopter stays
 function chaseBlocked() {
-  if (!police?.active && !prison?.active) return false;
+  if (!police?.active && !police?.jailing && !prison?.active) return false;
   hud.flash('Not while the police are after you', 'bad', 3000); audio.play?.('error');
   return true;
 }
+// (wanted: the prompt says so at once, E only flashes it: Oct 31 2026)
+chaseBlocked.on = () => !!(police?.active || police?.jailing || prison?.active);
+function chaseGate(it) { return chaseBlocked.on() ? { label: `${it.label} · not while the police are after you`, act: () => chaseBlocked() } : it; }
 function boardRail(st, up, dest = null) {
   if (chaseBlocked()) return;
   if (isMP() && !multiplayer.transit.railGate(st, up, dest, () => boardRail(st, up, dest))) return; // (multiplayer: wait for the train, a seat in it)
@@ -1138,7 +1148,7 @@ function openExpress(it) {
 // the train for `to` stands at the platform: pay and step in (a short fade into the seat); not in yet: wait on the
 // platform for it (the loop boards you as it stops: express.waiting)
 function boardExpress(from, to) {
-  if (chaseBlocked()) return;
+  if (chaseBlocked()) { if (express?.wait) express.cancelWait(); return; } // (waiting on the platform: not each frame)
   if (!express.trainIn(from.id, to.id)) {
     if (!hasPass() && save.money < EXPRESS_PRICE) { spend(EXPRESS_PRICE); brokeHint(); return; } // (not enough money: says so)
     const wait = express.waitFor(from.id, to.id);
@@ -1684,15 +1694,17 @@ function findInteraction() {
   const busRace = busRaces?.near(p); // a free race's board beside its bus stop, or its start gate on the piste
   if (busRace) return busRaceInteraction(busRace);
   const stop = skibus.stopNear(p);
-  if (stop && busDests(stop).length) return { label: 'Take the ski bus', act: () => openBus(stop) }; // (no road: no bus from here)
+  if (stop && busDests(stop).length) return chaseGate({ label: 'Take the ski bus', act: () => openBus(stop) }); // (no road: no bus from here)
   const rw = railway.interaction(p, { hasPass: hasPass() });
-  if (rw) return { label: rw.label, act: () => openRail(rw) };
+  if (rw) return chaseGate({ label: rw.label, act: () => openRail(rw) });
   const ex = express?.interaction(p, { hasPass: hasPass() }); // a station's platform (waiting for your train: E cancels)
+  if (ex && !ex.cancel && chaseBlocked.on()) return chaseGate(ex);
   if (ex) return { label: ex.label, act: () => { if (ex.cancel) { express.cancelWait(); hud.flash('Legacy Express · not waiting', 'good', 1600); } else openExpress(ex); } };
   const st = lifts.nearestStation(p);
   if (st && st.dist < (st.line.spec.type === 'gondola' ? 20 : 13)) {
     const s = st.line.spec;
     const price = hasPass() ? 'Day pass' : `$${s.price}`;
+    if (chaseBlocked.on()) return chaseGate({ label: st.stop ? `${st.stop.name} · ${s.name}` : `Ride ${s.name}` });
     if (st.stop) {
       return {
         label: `${st.stop.name} · ${s.name}`,
@@ -2327,6 +2339,7 @@ function loopUpdate() {
   snowcats.update(dt, camera, env, player, renderer);
   mark('snowcats');
   secrets.update(dt, { player, camera, env, active: started && !paused && !inSession });
+  roadTunnels?.update(dt, camera); // (built near, lids with the terrain's finest LOD, the interior only when near)
   mark('secrets');
   flags.update(dt, env);
   parking?.update(camera); // car-park lamps at night; parked cars detailed only up close
@@ -2346,6 +2359,7 @@ function loopUpdate() {
   mark('glare');
   railway.lateUpdate(camera, env, atmosphere, dt); // tunnels: the daylight fades out deep inside
   express?.lateUpdate(camera, env, atmosphere, dt); // (the Legacy Express's tunnels too; the cabin light after both)
+  roadTunnels?.lateUpdate(camera, env, atmosphere, dt); // (and the road tunnels: darker inside, no snowfall)
   mark('railLate');
   busIntro?.update(frozen ? 0 : rawDt); // (after everything else: it poses the camera)
   return dt;

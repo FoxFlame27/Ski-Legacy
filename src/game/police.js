@@ -120,6 +120,14 @@ export const TUNING = {
   footAgainS: 4,
   footEscK: 2.2,
   hideEscK: 2.5,
+  // (Oct 31 2026, the user: "you can't immediately enter a chalet, you have to wait 30 sec after the chase starts"):
+  // no chalet door for chaletWaitS s of a chase (chaletWait, chalets.js); "if the police is nearby they know you entered
+  // the chalet and will come inside to arrest you": a patrol car / its officer within raidSeeR m of you (or the
+  // helicopter with you in view) as you go in: they park outside, an officer to the door, raidMin-raidMax s later the
+  // arrest in there (raidIn / raidStep / raidOut)
+  chaletWaitS: 30,
+  raidSeeR: 80,
+  raidMin: 8, raidMax: 12,
   vRoad: 52,         // m/s (187 km/h) on the roads near you (the bends ahead slow them: A_LAT)
   vTop: 250 / 3.6,   // m/s: never faster (the user: "up to 250 km/h"): the catch-up and a ram run up to it
   vOff: 25,          // m/s off them
@@ -955,7 +963,7 @@ export class Police {
   chaseState(why) {
     return { t: 0, esc: 0, fleeing: false, reached: false, grace: 0, stopT: 0, haltT: 0, halted: false, side: '', pulled: false, laneT: 0, footT: 0, scene: null, why,
       heat: 1, search: false, spotted: false, seen: false, unseenT: 0, noSpotT: 0, lkp: { x: 0, z: 0, vx: 0, vz: 0, t: 0 }, reinT: 4, rbT: 8, spikeT: 6, chatT: 6, rankT: 0,
-      near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0, trail: [], trimT: 0 };
+      near: Infinity, flats: 0, rb: null, copHitT: 0, wrecks: 0, holdT: 0, trail: [], trimT: 0, since: this.time, raid: null };
   }
   // you rammed a patrol car (Oct 30 2026, the user: "if you crash into a police car even when you're not wanted you
   // should be wanted"): copRamKmh+ closing (hits, your car into it); u the one you hit (null: another player's patrol
@@ -1278,8 +1286,17 @@ export class Police {
     // (Oct 30 2026, the user: "hiding indoors shouldn't instantly clear the chase: police wait outside for a while"):
     // the escape takes hideEscK x as long in there; an officer running after you (not yet with you) goes back to his car
     const inChalet = !!(W && globalThis.window?.__game?.chalets?.inside);
+    // (Oct 31 2026, the user: "if the police is nearby they know you entered the chalet and will come inside to arrest
+    // you"): seen going in: raidIn (W.raid); out again while they wait outside: raidOut, the chase is back on
+    if (W && inChalet !== !!this._inCh) { try { if (inChalet) this.raidIn(W); else if (W.raid) this.raidOut(W); } catch (e) { W.raid = null; console.warn('police: chalet raid', e); } }
+    this._inCh = inChalet;
+    if (inChalet && W.raid) { // (they come in: arrested in there, raidStep)
+      let done = false;
+      try { done = this.raidStep(dt, W); } catch (e) { console.warn('police: chalet raid', e); W.raid = null; if (this.committed(W.scene)) { this.forceArrest(W); done = true; } }
+      if (done) { this.siren(true); this.hudFrame(true); return; }
+    }
     if (inChalet && W.scene?.why === 'foot' && !this.committed(W.scene)) { this.dropOfficer(W.scene.u); W.scene = null; W.footT = TUNING.footAgainS; }
-    const hiding = inChalet && !W.scene;
+    const hiding = inChalet && !W.scene && !W.raid; // (seen going in: no hiding, raidStep)
     if (hiding) {
       W.t += dt; W.esc += dt; W.near = Infinity; W.seen = false;
       if (W.esc >= this.escNeed(W, true)) { this.escaped('They never found you · you escaped'); return; }
@@ -1324,9 +1341,108 @@ export class Police {
     const rw = !cw && this.rideW;
     this.rideT = rw ? (this.rideT || 0) + (paused ? 0 : dt) : 0;
     try { this.audio?.chaseMusic?.((!!cw && (cwant || this.cmT < 1.5)) || (!!rw && !rw.arrest)); } catch { /* (silent) */ }
-    this.hudFrame(paused && !hiding, hiding);
+    this.hudFrame(paused && !hiding && !(inChalet && this.w?.raid), hiding); // (the raid: the box stays up, hudFrame)
     try { this.netFrame(dt); } catch (e) { console.warn('police mp', e); }
     this.persistStep(dt);
+  }
+
+  // ---------------------------------------------------------------- into a chalet mid-chase (Oct 31 2026, the user)
+  /** chalets.js: s to wait before a chalet's door lets you in (0: go ahead). "You can't immediately enter a chalet, you
+   *  have to wait 30 sec after the chase starts" (a chase kept and resumed starts again: W.since); being arrested:
+   *  never. Local per player (this.w), multiplayer too. */
+  chaletWait() {
+    const W = this.w;
+    if (!W) return 0;
+    if (this.jailing || this.committed(W.scene)) return TUNING.chaletWaitS;
+    return Math.max(0, Math.ceil(TUNING.chaletWaitS - (this.time - (W.since ?? -1e9))));
+  }
+  // just went in (update: chalets.inside on): "if the police is nearby they know you entered the chalet" (a patrol car
+  // or its officer within raidSeeR m, or the helicopter with you in view): W.raid, they come in after raidMin-raidMax
+  // s. Nobody saw you: W.raid stays null, the old hiding (the chase waits, hideEscK x the escape time)
+  raidIn(W) {
+    W.raid = null;
+    if (this.jailing || this.committed(W.scene)) return;
+    const T = this.target();
+    if (!T) return;
+    const R2 = TUNING.raidSeeR;
+    let seen = this.airEye();
+    for (const u of this.units) {
+      if (seen) break;
+      if (!u.on || u.wrecked) continue;
+      if (hyp(u.x, u.z, T.x, T.z) < R2 || (u.officer && hyp(u.officer.pos.x, u.officer.pos.z, T.x, T.z) < R2)) seen = true;
+    }
+    if (!seen) return;
+    const h = globalThis.window?.__game?.chalets?.current;
+    W.raid = { t: 0, x: h?.door?.x ?? T.x, z: h?.door?.z ?? T.z, at: TUNING.raidMin + Math.random() * (TUNING.raidMax - TUNING.raidMin), u: null, inside: false, knock: false };
+    if (!W.fleeing) this.flee(W);
+    W.search = false; W.seen = true; W.spotted = true; W.unseenT = 0; W.esc = 0;
+    const K = W.lkp; K.x = T.x; K.z = T.z; K.vx = 0; K.vz = 0; K.t = W.t;
+    this.noteUntil = 0; // (the box's own line says it: hudFrame)
+    this.radio('Suspect went into a chalet! All units to the door, we go in!', true);
+    this.hud?.flash?.("🚨 The police saw you go in · they're coming in", 'bad', 4500);
+    try { this.audio?.police?.('star'); } catch { /* (silent) */ }
+  }
+  // while you are in there (true: arrested now): the patrol cars to the road nearest the door (footGoal) and parked,
+  // the nearest one's officer out and to the door, in (he is gone from outside); 2.5 s before the time is up the
+  // knock, the door, "Police! You're under arrest" (the arrest decided: the WANTED box says so, you can't move or
+  // leave: setPin); then the same arrest as outside (forceArrest: ARRESTED, the fine, jail; accomplices: arrest())
+  raidStep(dt, W) {
+    const R = W.raid, T = this.target() || { x: R.x, z: R.z };
+    R.t += dt; W.t += dt; W.seen = true; W.search = false;
+    let lead = R.u?.on && !R.u.wrecked ? R.u : null;
+    if (!lead) {
+      let bd = Infinity;
+      for (const u of this.units) if (u.on && !u.wrecked && u.role !== 'block') { const d = hyp(u.x, u.z, R.x, R.z); if (d < bd) { bd = d; lead = u; } }
+      R.u = lead;
+    }
+    let near = Infinity;
+    for (const u of this.units) {
+      if (!u.on || u.wrecked || u.role === 'block') continue;
+      near = Math.min(near, hyp(u.x, u.z, R.x, R.z));
+      if (u === lead && (u.officer || R.inside)) { u.v = 0; this.step(u, dt, u.x + Math.sin(u.yaw) * 0.3, u.z + Math.cos(u.yaw) * 0.3, 0); continue; }
+      this.footGoal(u, T, dt);
+      const F = u.fg, g = hyp(u.x, u.z, F.x, F.z), stop = u === lead ? 0.8 : 9; // (the others pull up short of it)
+      u.parked = g < stop + 2.7 && Math.abs(u.v) < 1.5;
+      this.step(u, dt, F.x, F.z, g < stop ? 0 : Math.min(TUNING.vTop, this.L.vRoad, 1.5 + Math.sqrt(10 * (g - stop))));
+    }
+    W.near = near;
+    // the officer: out once his car is parked (or after 6 s wherever it is), to the door and in
+    if (lead && !R.inside && (lead.officer || lead.parked || R.t > 6)) {
+      const o = lead.officer || this.spawnOfficer(lead);
+      lead.v = 0;
+      const left = this.walkOfficer(o, R.x, R.z, RUN_V, dt);
+      this.poseOfficer(o, dt);
+      if (left < 0.5) { this.dropOfficer(lead); if (lead.driver) lead.driver.visible = false; R.inside = true; } // (in: not by his car)
+    }
+    if (!R.knock && R.t >= R.at - 2.5) {
+      R.knock = true;
+      try { this.audio?.police?.('door'); } catch { /* (silent) */ }
+      W.scene = { kind: 'arrest', u: lead, why: 'chalet', step: 'talk', t: 0, said: false };
+      this.sayArrest(W.scene, T);
+    }
+    if (R.t >= R.at) { this.forceArrest(W); return true; }
+    return false;
+  }
+  // out of the chalet while they wait outside (not yet in): "they're right there, so the chase resumes": seen, the
+  // escape clock from nothing; the officer at the door (or by his car near you) runs after you on foot
+  raidOut(W) {
+    const R = W.raid;
+    W.raid = null;
+    if (this.committed(W.scene)) return;
+    const T = this.target();
+    W.search = false; W.seen = true; W.spotted = true; W.unseenT = 0; W.esc = 0; W.footT = 0;
+    if (T) { const K = W.lkp; K.x = T.x; K.z = T.z; K.vx = T.vx; K.vz = T.vz; K.t = W.t; }
+    for (const u of this.units) if (u.on) { u.sees = true; u.seeT = 0.3; u.sT = 0; }
+    const u = R?.u;
+    if (u?.on && !u.wrecked && !W.scene && T?.foot && (u.officer || R.inside || hyp(u.x, u.z, T.x, T.z) < 60)) {
+      const inside = R.inside && !u.officer;
+      this.begin(W, 'arrest', u, 'foot');
+      const o = this.spawnOfficer(u);
+      if (inside) { o.pos.x = R.x; o.pos.z = R.z; o.pos.y = world.groundHeight(R.x, R.z, o.pos.y + 2); } // (he was at the door)
+      W.scene.step = 'walk'; W.scene.t = 0;
+    }
+    this.radio('Suspect is out of the chalet! Get him!', true);
+    this.note("They were waiting outside · run!");
   }
 
   // ---------------------------------------------------------------- a chase kept across leaving and coming back
@@ -2909,7 +3025,7 @@ export class Police {
     this.forget();
     // (multiplayer: arrested in (or wrecked out of) your car, your passengers go to prison with you: the server jails
     // and fines every player its seat registry has in your car, after your own 'jail' request (sent first, same socket))
-    const inCar = isMP() && this.w?.scene?.why !== 'foot'; // (caught on foot, away from the car: not them)
+    const why = this.w?.scene?.why, inCar = isMP() && why !== 'foot' && why !== 'chalet'; // (caught on foot, away from the car (in a chalet too): not them; the server's accompliceStep still jails who rode with you)
     // (Oct 30 2026, the user: "make sure it says big and red with an animation on your screen when you get caught by
     // the police, because sometimes you don't know": every arrest ends here (the scene, the watchdog, on foot, in the
     // car, wrecked): the full-screen ARRESTED with the real sentence and fine, a hard shake in the car (drive.shake))
@@ -2960,7 +3076,8 @@ export class Police {
     if (S.said) return;
     S.said = true;
     const f = this.arrestNow(), a = usd(f);
-    this.say('Officer', S.why === 'wrecked' ? `You're under arrest! ${a}.` : T?.car ? `Out of the car! Arrested · ${a}.` : `Stop! You're under arrest · ${a}.`); // (Oct 30, the user: the lines ran off the screen: short now)
+    if (S.why === 'chalet') this.say('Officer', `Police! You're under arrest · ${a}.`); // (Oct 31 2026: in the chalet, raidStep)
+    else this.say('Officer', S.why === 'wrecked' ? `You're under arrest! ${a}.` : T?.car ? `Out of the car! Arrested · ${a}.` : `Stop! You're under arrest · ${a}.`); // (Oct 30, the user: the lines ran off the screen: short now)
     this.charge(f); this.lastArrest = f; this.addRecord();
   }
   // to prison now (the scene's end, or the watchdog)
@@ -3081,6 +3198,12 @@ export class Police {
     if (C.rb !== rbm) { C.rb = rbm; C.rbs = rbm >= 0 ? `ROADBLOCK · ${rbm} M` : ''; }
     H.rb = C.rbs;
     H.radio = this.radioText;
+    if (W.raid && !S) { // (Oct 31 2026: seen going into the chalet: they're coming in, raidStep)
+      H.msg = "🚨 The police saw you go in · they're coming in"; H.tip = "Stay and you're arrested · they're right outside."; H.hot = true;
+      H.esc = ''; H.frac = 0; H.near = 'AT THE DOOR'; H.gain = false; H.search = false; H.state = 'COMING IN'; H.stateCls = 'hot';
+      this.setHud(true, H);
+      return;
+    }
     if (hiding) { // (in a chalet: the box stays up, the escape time runs)
       H.msg = 'Hiding · stay inside'; H.tip = 'They escape you once the bar is full.'; H.hot = false;
       H.esc = C.es; H.frac = W.esc / escS; H.near = "CAN'T FIND YOU"; H.gain = true; H.search = true;

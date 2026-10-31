@@ -45,7 +45,10 @@ export class OwnerTags {
     for (const k of this.rental?.kept || []) { // (your other cars parked in the world)
       if (!k?.car || k.driving || !k.car.parent) continue;
       const kp = k.car.position;
-      out.push({ key: `kept:${k.cfg?.plate || k.car.id}`, x: kp.x, y: kp.y + 2.2, z: kp.z, label: 'Your car', text: 'Your car' });
+      // (Oct 31 2026, the user: "you can see your other cars and drive them": each keeps its own "Your car"; only one
+      // with the tow truck or in the tow yard reads "tow yard", as the car out does)
+      const imp = !!(k.impound || k.towing);
+      out.push({ key: `kept:${k.cfg?.plate || k.car.id}`, x: kp.x, y: kp.y + 2.2, z: kp.z, label: imp ? 'Your car · tow yard' : 'Your car', impounded: imp, text: imp ? 'Your car · tow yard' : 'Your car' });
     }
     const ch = G?.chalets, h = ch?.rented?.();
     if (h?.frame && !ch.inside) { const p = h.frame.position; out.push({ key: 'chalet', x: p.x, y: p.y + 10.5, z: p.z, label: 'Your chalet', text: 'Your chalet' }); }

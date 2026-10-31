@@ -446,6 +446,9 @@ export class CarRental {
     const cfg = this.garage.find((c) => c.plate === plate);
     if (!cfg || this.save.rental?.plate === plate) return;
     const no = this.busy(); if (no) { this.hud?.flash(no, 'bad', 2600); this.audio?.play?.('error'); return; }
+    // (Oct 31 2026, the user: "while your car is with the tow truck you don't see that car in the parking lot, but you
+    // can see your other cars and drive them": only the car the truck has can't come out of MY CARS; any other can)
+    if (this.withTruck(plate)) { this.hud?.flash(`Your ${this.label(cfg.id)} is with the tow truck · wait until it is home`, 'bad', 2800); this.audio?.play?.('error'); return; }
     if (this.mp) { this.moveNext = plate; this.mp.switchCar?.(plate); return; } // multiplayer: the server swaps it (placeOwned: into your bay)
     this.garage.splice(this.garage.indexOf(cfg), 1); this.garage.unshift(cfg);
     this.putOut(cfg, `Your ${this.label(cfg.id)} waits in the ${this.where()} · ${cfg.plate}`, true);
@@ -474,7 +477,10 @@ export class CarRental {
     this.keepCurrent();
     this.save.rental = cfg || null;
     const k = cfg ? this.kept.find((x) => x.cfg?.plate === cfg.plate) : null;
-    if (k && !move) { this.kept.splice(this.kept.indexOf(k), 1); k.kept = false; k.cfg = cfg; this.current = k; }
+    // (Oct 31 2026, the user: "while your car is with the tow truck you don't see that car in the parking lot": one with
+    // the truck, or held in the tow yard, is never taken off the truck / out of the tow yard into your bay as a second
+    // copy: it becomes the one out where it is and comes home from there)
+    if (k && (!move || k.impound || this.withTruck(k))) { this.kept.splice(this.kept.indexOf(k), 1); k.kept = false; k.cfg = cfg; this.current = k; }
     else { if (k && !k.driving) this.remove(k); if (cfg && !this.withTruck(cfg.plate)) this.current = this.spawn(cfg); } // (on the tow truck: not a second one in your bay; the truck brings it: wrecked back)
     this.writeSave();
     if (msg) this.hud?.flash(msg, 'gold', 3400);
@@ -498,9 +504,14 @@ export class CarRental {
   makeCurrent(e) {
     const cur = this.current, cfg = this.garage.find((c) => c.plate === e.cfg?.plate);
     if (!cfg) { this.remove(e); return false; } // (no longer yours: sold)
-    if (cur && (cur.towing || cur.driving)) { this.hud?.flash(`Your ${this.label(cur.cfg?.id)} is with the tow truck · wait until it is home`, 'bad', 2800); this.audio?.play?.('error'); return false; }
-    if (this.towed) { this.hud?.flash('Your car is with the tow truck · wait until it is home', 'bad', 2800); this.audio?.play?.('error'); return false; }
-    if (cur) { if (this.keepable(cur) || cur.impound) { cur.kept = true; this.kept.push(cur); } else this.remove(cur); }
+    // (Oct 31 2026, the user: "you can see your other cars and drive them, because right now I think for all my cars it
+    // says your car is being towed even when that car is just parked there": the car out being towed (cur.towing), or
+    // your wreck with the truck (this.towed), refused every other car of yours. Now only the car the truck has is
+    // refused (drive.js shows its lock: impound.js lockReason); the one out with the truck stays with it as one of your
+    // other cars (kept: impound.js tow's done still takes it to the tow yard; wrecked's back() puts it in a free bay))
+    if (this.withTruck(e)) { this.hud?.flash(`Your ${this.label(e.cfg?.id)} is with the tow truck · wait until it is home`, 'bad', 2800); this.audio?.play?.('error'); return false; }
+    if (cur?.driving) { this.hud?.flash('Park your car first', 'bad', 2400); this.audio?.play?.('error'); return false; }
+    if (cur) { if (this.keepable(cur) || cur.impound || this.withTruck(cur)) { cur.kept = true; if (!this.kept.includes(cur)) this.kept.push(cur); } else this.remove(cur); }
     this.kept.splice(this.kept.indexOf(e), 1);
     e.kept = false; e.cfg = cfg;
     this.current = e;
@@ -526,13 +537,24 @@ export class CarRental {
   }
 
   /** Your garage and the car out rebuilt from the save (switching between the single-player and multiplayer saves). */
+  // (Oct 31 2026, the user: "while your car is with the tow truck you don't see that car in the parking lot": a car of
+  // yours the truck has was removed here too, so withTruck no longer found it and a second copy came back in a bay
+  // while the truck still carried the first; now it stays with the truck, the one out again when its plate is)
   resync() {
-    if (this.current && !this.current.driving) { try { this.remove(this.current); } catch (e) { console.warn('rental car', e); } this.current = null; }
-    for (const k of this.kept.slice()) if (!k.driving) { try { this.remove(k); } catch (e) { console.warn('rental car', e); } }
-    this.kept = this.kept.filter((k) => k.driving);
+    const held = (e) => !!(e && (e.driving || this.withTruck(e)));
+    const cur = this.current;
+    if (cur && !cur.driving) {
+      if (this.withTruck(cur)) { cur.kept = true; if (!this.kept.includes(cur)) this.kept.push(cur); }
+      else { try { this.remove(cur); } catch (e) { console.warn('rental car', e); } }
+      this.current = null;
+    }
+    for (const k of this.kept.slice()) if (!held(k)) { try { this.remove(k); } catch (e) { console.warn('rental car', e); } }
+    this.kept = this.kept.filter(held);
     this.migrate();
     this.purgeAdminCars();
-    if (this.save.rental && !this.withTruck(this.save.rental.plate)) { try { this.current = this.spawn(this.save.rental); } catch (e) { console.warn('rental car', e); } } // (your wreck still on the truck: it comes home from there)
+    const r = this.save.rental, k = r ? this.kept.find((x) => x.cfg?.plate === r.plate && this.withTruck(x)) : null;
+    if (k) { this.kept.splice(this.kept.indexOf(k), 1); k.kept = false; k.cfg = r; this.current = k; }
+    else if (r && !this.withTruck(r.plate)) { try { this.current = this.spawn(r); } catch (e) { console.warn('rental car', e); } } // (your wreck still on the truck: it comes home from there)
     this.spawnKept();
   }
   /** Multiplayer: the server's garage (profile cars, cars[0] the one out; net/session.js): the save follows it and the

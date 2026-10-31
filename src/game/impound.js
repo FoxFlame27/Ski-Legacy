@@ -42,8 +42,8 @@ export function backIn(rec) {
 export function untilTomorrow(rec) { return backIn(rec); } // (the old name, still imported)
 // (STRAY_BACK, the 3-minute return of a car left off the road, is gone: Oct 30, the user: a car "just on terrain" is
 // fine where it is; only a road or a blocked car park gets it towed)
-export const TOW_AFTER = 30; // (Oct 29, the user: a second warning after 15 s, towed after 30 s)
-export const WARN2_AFTER = 15;    // s left blocking a road with you away before the truck is called
+export const TOW_AFTER = 60; // (Oct 29, the user: towed after 30 s; Oct 31 2026: "make sure a car only gets towed after 1 min instead of 30 sec")
+export const WARN2_AFTER = 45;    // s left blocking a road with you away before the truck is called
 export const AWAY_R = 40;       // m: "away" from your car
 const IMPOUND_BAYS = 4;         // bays kept free for towed cars (the back row's far end)
 // properly in a bay (Oct 30, the user: "park properly within the slots, but give them a tiny bit of room for error"):
@@ -447,7 +447,7 @@ export class Impound {
         : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', 'Pull into the bay, inside the lines']
         : [false, 'Not in a bay', 'Pull into a free bay, inside the lines'];
     } else if (sp?.kind === 'mouth' && v < 1) t = [false, 'Blocking the entrance', 'Drive in and park in a bay'];
-    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', 'Leave it here and it will be moved to the Autohaus car park in 30 sec · park in a car park or a lay-by']; // (Oct 30, the user: "and indicate it to the user"; Oct 30 2026: "spawn it next to the dealership lot")
+    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', `Leave it here and it will be moved to the Autohaus car park in ${clock(TOW_AFTER)} · park in a car park or a lay-by`]; // (Oct 30, the user: "and indicate it to the user"; Oct 30 2026: "spawn it next to the dealership lot")
     this.parkHud(t, true);
   }
 

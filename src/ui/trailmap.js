@@ -31,13 +31,16 @@
 // point at (pistes, lifts, roads, stops, buildings, races) instead of every name written on the map. The static map is
 // drawn into a cache only when the view, the layers or the hover change (and once a second for the markers); each
 // frame only blits it and draws you, the mark, the other players and the patrol cars.)
+// (Oct 31 2026, the user: "draw the tunnel stretches of the roads distinctly: a darker, dashed road with small portal
+// marks at each end", the name in the tooltip ("Kalkwand-Tunnel · 560 m"), in the Roads layer: busRoads.tunnels, each
+// tunnel's stretch of its road (sF0..sF1) as a Path2D in roadCache, stroked over the road in drawRoads, hovered in lineAt.)
 import { world, MAIN_SUMMIT } from '../world/world.js';
 import { layout, VILLAGE_BUILDINGS } from '../world/layout.js';
 import { PISTE_COLORS } from '../world/resortdressing.js';
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
 import { busRaceEntries } from '../modes/race/busraces.js'; // the ski bus's free races on the pistes (gold tape)
 import { brushSVG, brushClip, esc } from './menu.js';
-import { busRoads } from '../game/bus/roads.js'; // the road network (valley roads, scenic roads, roundabouts, car parks)
+import { busRoads, roadAt } from '../game/bus/roads.js'; // the road network (valley roads, scenic roads, roundabouts, car parks)
 import { CHALET_PLACE } from '../game/bus/chaletroad.js'; // (the chalet village's spot before game/chalets.js has built it)
 
 // relief levels: tile size (m) at 64 px per tile, shown from zoom `from` (CSS px per m), contour interval (m)
@@ -467,6 +470,11 @@ export class TrailMap {
     if (this.on('roads')) {
       const C = this.roadCache();
       if (C && wx > C.box[0] - bd && wx < C.box[2] + bd && wz > C.box[1] - bd && wz < C.box[3] + bd) {
+        let tun = null, td = Infinity; // (Oct 31 2026, the user: the tunnel's name in the tooltip, "Kalkwand-Tunnel · 560 m")
+        for (const T of C.tunnels) for (let i = 1; i < T.pts.length; i++) {
+          const a = T.pts[i - 1], b = T.pts[i], dd = segDist(wx, wz, a[0], a[1], b[0], b[1]);
+          if (dd < td) { td = dd; tun = T; }
+        }
         for (const r of busRoads.roads) {
           if (!r?.n || !r.X || r.ringRoad) continue;
           for (let i = 2; i < r.n; i += 2) {
@@ -474,7 +482,10 @@ export class TrailMap {
             if (d < bd) { bd = d; best = r; }
           }
         }
-        if (best && best.X) {
+        // (a hair of slack: the tunnel wins over its own road, which runs under it)
+        if (tun && td < bd + 1.5 / s) { bd = Math.min(bd, td); best = { label: tun.name, tip: { title: `${tun.name} · ${Math.round(tun.length)} m`, lines: ['Road tunnel', tun.road] } }; }
+        else tun = null;
+        if (!tun && best && best.X) {
           const r = best, name = (r.name || 'Road').replace(/\s*\(.*\)$/, '');
           best = { label: name, tip: { title: name, lines: [r.scenic && !r.chalet ? 'Scenic road' : r.access ? 'Car park access' : r.chalet ? 'Chalet road' : 'Valley road', r.length ? fmtLen(r.length) : ''] } };
         }
@@ -870,7 +881,8 @@ export class TrailMap {
     const R = busRoads.roads;
     if (!R?.length) return null;
     const lots = busRoads.lots || [], rings = busRoads.roundabouts || [];
-    const key = `${R.length}:${lots.length}:${rings.length}:${busRoads.ready ? 1 : 0}`;
+    const tuns = busRoads.tunnels || [];
+    const key = `${R.length}:${lots.length}:${rings.length}:${tuns.length}:${busRoads.ready ? 1 : 0}`;
     const c0 = this._roads;
     if (c0 && c0.src === R && c0.key === key) return c0;
     const main = new Path2D(), scenic = new Path2D(), minor = new Path2D(), scenicMinor = new Path2D(), ring = new Path2D();
@@ -895,7 +907,19 @@ export class TrailMap {
     // (the same name on two pieces: labelled once, from the longer)
     named.sort((a, b) => b.length - a.length);
     const seen = new Set(), labels = named.filter((n) => { const k = n.name.replace(/\s*\(.*\)$/, ''); if (seen.has(k)) return false; seen.add(k); return true; });
-    this._roads = { src: R, key, main, scenic, minor, scenicMinor, ring, labels, box,
+    // the road tunnels (Oct 31 2026, the user: "a darker, dashed road with small portal marks at each end"): each one's
+    // stretch of its road (portal to portal, a point every ~6 m) and its two portals (x, z, the road's direction there)
+    const tunnel = new Path2D(), tunnels = [], TQ = {};
+    for (const t of tuns) {
+      const r = t.road;
+      if (!r?.n || !r.X || !(t.sF1 > t.sF0)) continue;
+      const pts = [], k = Math.max(2, Math.ceil((t.sF1 - t.sF0) / 6));
+      for (let j = 0; j <= k; j++) { roadAt(r, t.sF0 + ((t.sF1 - t.sF0) * j) / k, TQ); pts.push([TQ.x, TQ.z]); }
+      pts.forEach(([x, z], j) => (j ? tunnel.lineTo(x, z) : tunnel.moveTo(x, z)));
+      const ends = [t.sF0, t.sF1].map((sv) => { roadAt(r, sv, TQ); return { x: TQ.x, z: TQ.z, dx: TQ.dx, dz: TQ.dz }; });
+      tunnels.push({ name: t.name || 'Tunnel', length: t.length || t.sF1 - t.sF0, road: (r.name || 'Road').replace(/\s*\(.*\)$/, ''), pts, ends });
+    }
+    this._roads = { src: R, key, main, scenic, minor, scenicMinor, ring, labels, box, tunnel, tunnels,
       rings: rings.map((q) => ({ x: q.x, z: q.z, R: q.R || 15, name: q.name })),
       lots: lots.filter((L) => (!L.building || L.depot) && Number.isFinite(L.x)).map((L) => ({ x: L.x, z: L.z, hw: L.hw, hd: L.hd, ux: L.ux ?? 1, uz: L.uz ?? 0, vx: L.vx ?? 0, vz: L.vz ?? 1, name: L.name, size: L.size, depot: !!L.depot })) }; // (the bus depot too: a yellow B)
     return this._roads;
@@ -920,7 +944,30 @@ export class TrailMap {
     stroke(C.main, wMain, 'rgba(255,255,255,0.95)', '#6f7788');
     stroke(C.scenic, wMain, 'rgba(255,255,255,0.95)', '#c9811a');
     stroke(C.ring, wMain, 'rgba(255,255,255,0.95)', '#c9811a');
+    // the tunnels (Oct 31 2026, the user: "a darker, dashed road"): the road under them washed out to the paper, then
+    // a dark slate dash down it (world space: the dash in CSS px / s, so it keeps its size at every zoom)
+    if (C.tunnels.length) {
+      g.lineCap = 'butt';
+      g.strokeStyle = 'rgba(246,247,249,0.97)'; g.lineWidth = (wMain + 0.8) / s; g.stroke(C.tunnel);
+      g.setLineDash([5 / s, 3.5 / s]); g.strokeStyle = '#3b4150'; g.lineWidth = Math.max(1.6, wMain * 0.62) / s; g.stroke(C.tunnel);
+      g.setLineDash([]); g.lineCap = 'round';
+    }
     g.restore();
+    // the portals: a small dark bracket across the road at each end, its wings pointing out of the mountain
+    if (C.tunnels.length && s >= 0.04) {
+      const hw = wMain / 2 + 2.6, wing = Math.max(2, Math.min(4.5, 3 * s + 1.5));
+      g.save(); g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = '#2a2f3a'; g.lineWidth = Math.max(1.4, Math.min(2.4, wMain * 0.4));
+      for (const T of C.tunnels) T.ends.forEach((e, j) => {
+        const x = this.X(e.x), y = this.Z(e.z);
+        if (!this.inView(x, y, 20)) return;
+        const o = j ? 1 : -1, ax = e.dx * o, ay = e.dz * o, nx = -e.dz, ny = e.dx; // (a: out of the tunnel; n: across)
+        g.beginPath();
+        g.moveTo(x + nx * hw + ax * wing, y + ny * hw + ay * wing); g.lineTo(x + nx * hw, y + ny * hw);
+        g.lineTo(x - nx * hw, y - ny * hw); g.lineTo(x - nx * hw + ax * wing, y - ny * hw + ay * wing);
+        g.stroke();
+      });
+      g.restore();
+    }
     // the roundabouts: a white island (and the name, zoomed right in; else in the tooltip)
     for (const q of C.rings) {
       const x = this.X(q.x), y = this.Z(q.z);

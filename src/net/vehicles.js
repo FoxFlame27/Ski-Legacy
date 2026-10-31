@@ -368,7 +368,7 @@ export class RemoteVehicles {
     }
     if (c.inst.steering) c.inst.steering.col.quaternion.setFromAxisAngle(c.inst.steering.axis, -c.steer * 3);
     this.wreckLook(c, dt, show);
-    const lit = c.wreck ? -1 : driving ? ((r.flags & F.lights) || nightUniform.value > 0.2 ? 2 : 1) : 0;
+    const lit = c.wreck ? -1 : driving ? ((r.flags & F.lights) || nightUniform.value > 0.2 || busRoads.tunnelAt?.(c.x, c.z, c.dy) ? 2 : 1) : 0; // (Oct 31 2026, the user: headlights on inside a tunnel, as at night: worked out here from where the car is)
     if (lit === -1) { c.lit = -1; try { lampsOn(c.inst, nightUniform.value > 0.2 ? 1 : 0, 0.55, 0, { hazard: hazardPhase() }); } catch { /* (no lamps) */ } } // (a wreck: hazards, dim tails)
     else if (lit !== c.lit) { c.lit = lit; try { lampsOn(c.inst, lit === 2 ? 1 : 0, lit === 2 ? 1 : 0, 0, { drl: lit === 1 ? 1 : 0 }); } catch { /* (no lamps) */ } }
     // the owner's name over it while nobody drives it (Oct 29, the user: "everything you own has your name above if

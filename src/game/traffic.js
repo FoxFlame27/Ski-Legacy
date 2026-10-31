@@ -388,10 +388,11 @@ export class Traffic {
           // lamps on while it drives at night (parked: off); the brake lights whenever it brakes
           // knocked aside: its lights stay on (braking while it slides), the hazards flash; at rest (a wreck)
           // hazards, dim tails, the headlights on at night
-          const live = near && c.mode !== 'parked' && c.mode !== 'wreck', on = glow > 0 && live ? glow : 0;
+          // (Oct 31 2026, the user: "headlights switch on automatically while inside a tunnel ... the same as at night")
+          const live = near && c.mode !== 'parked' && c.mode !== 'wreck', on = !live ? 0 : glow > 0 ? glow : busRoads.tunnelAt?.(c.x, c.z, c.y) ? 1 : 0;
           if (near && c.mode === 'wreck') lampsOn(c.inst, glow, 0.55, 0, { hazard: hazardPhase() });
           else lampsOn(c.inst, on, on, live ? c.brake : 0, { drl: live && !on && c.mode !== 'knocked' ? 1 : 0, reverse: live && c.rev, hazard: live && c.mode === 'knocked' ? hazardPhase() : null });
-          if (on && d < 120) lit.push([d, c]);
+          if (on && d < 120) lit.push([d, c, on]); // (on: glow at night, 1 in a tunnel by day)
           if (live && d < 70 && (on || (night > 0.05 && (c.inst.lamps?.bs || 0) > 0.02))) tails.push([d, c]);
         } else if (c.inst.lamps?.key && c.inst.lamps.key !== '0|0|0|0|false') lampsOn(c.inst, 0, 0, 0);
         const off = c.mode === 'gone' || !this.enabled;
@@ -403,7 +404,7 @@ export class Traffic {
         const c = lit[k]?.[1];
         if (!c && !this.pools[k]) continue;
         const P = (this.pools[k] ||= new LightPool(this.scene));
-        if (c) P.update(c.x, c.z, c.yaw, c.l / 2, world, glow); else P.update(0, 0, 0, 0, world, 0);
+        if (c) P.update(c.x, c.z, c.yaw, c.l / 2, world, lit[k][2]); else P.update(0, 0, 0, 0, world, 0);
       }
       // the tail lights' red glow on the snow behind the two nearest (stronger while they brake)
       try {

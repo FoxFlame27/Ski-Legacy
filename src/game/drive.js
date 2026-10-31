@@ -1110,7 +1110,10 @@ export class Drive {
 
   effects(dt, thr) {
     const d = this.d, night = nightUniform?.value ?? 0;
-    const on = d.lights || night > 0.2 ? 1 : 0;
+    // (Oct 31 2026, the user: "car headlights switch on automatically while you're inside a tunnel and go back to the
+    // previous state after leaving, the same as at night": d.lights (your L switch) is left as it was, d.tunnelLit only adds)
+    d.tunnelLit = !d.crash && !!busRoads.tunnelAt?.(d.x, d.z, d.y);
+    const on = d.lights || d.tunnelLit || night > 0.2 ? 1 : 0;
     const braking = !d.crash && (d.gear === 'R' ? d.la > 2 : d.la < -2); // (slowing, either way; not pulling away in R)
     // the car's own lamps glow (head and tail at night, the brake lights whenever it brakes); crashed, they stay on
     // (the tails dim) and the hazards flash

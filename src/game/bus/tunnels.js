@@ -271,6 +271,27 @@ export function addTunnelCuts() {
     }
   }
   busRoads.tunnelAt = inRoadTunnel;
+  world.skirtFloor = tunnelSkirtFloor; // (terrain.js: the coarse nodes' skirts stop over the tubes)
+}
+
+/**
+ * How low a coarse terrain node's skirt may hang at (x, z): over a road tunnel's tube (portal to portal + 3 m, and
+ * one grid step st round it, so the skirt's bottom edge between two of its corners stays out too) 0.4 m over the
+ * crown; -Infinity elsewhere. (Oct 31 2026, the user, in a road tunnel: "there are also more spikes sticking out
+ * through the inside of the tunnel": the coarse LODs skip the covered trench and keep the mountain whole over the
+ * tube, and a 512 m node's skirt (10.2 m) or a 1024 m node's (20.5 m) hung from it through the ceiling, up to 1.3 m
+ * into the tube, a dark curtain across it wherever such a node's edge crossed a tunnel)
+ */
+export function tunnelSkirtFloor(x, z, st = 4) {
+  let f = -Infinity;
+  for (const t of busRoads.tunnels || []) {
+    const b = t.path.bounds, m = st + TUBE.Wi + 4;
+    if (x < b.minx - m || x > b.maxx + m || z < b.minz - m || z > b.maxz + m) continue;
+    t.path.project(x, z, Q);
+    if (Q.dist === Infinity || Q.s < t.pF0 - 3 - st || Q.s > t.pF1 + 3 + st || Math.abs(Q.d) > TUBE.Wi + 1 + st) continue;
+    f = Math.max(f, t.floor(Math.min(t.pF1, Math.max(t.pF0, Q.s))) + TUBE.Hc + 0.4);
+  }
+  return f;
 }
 
 /**

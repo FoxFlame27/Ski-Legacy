@@ -814,10 +814,17 @@ export class Terrain {
       }
     }
     // skirts hide LOD cracks; generous because coarse LODs drop the crags' cliff bands (up to ~14 m)
-    const skirt = Math.max(2, size * 0.02);
+    // (Oct 31 2026, the user, in a road tunnel: "there are also more spikes sticking out through the inside of the
+    // tunnel": the coarse nodes keep the mountain whole over a tube (covered cuts skipped) and their skirts hung
+    // 10-20 m down from it at the 512 m / 1024 m nodes' edges, through the tube's ceiling as far as 1.3 m into it
+    // (Schrofen-Tunnel, Hochalm-Tunnel; Node check): over a road tunnel a coarse skirt now stops above its crown,
+    // world.skirtFloor from game/bus/tunnels.js)
+    const skirt = Math.max(2, size * 0.02), sf = st > 3 ? world.skirtFloor : null;
     for (let k = 0; k < ringLen; k++) {
       const src = this.ring[k], d = V * V + k;
-      pos[d * 3] = pos[src * 3]; pos[d * 3 + 1] = pos[src * 3 + 1] - skirt; pos[d * 3 + 2] = pos[src * 3 + 2];
+      let sy = pos[src * 3 + 1] - skirt;
+      if (sf) { const f = sf(x0 + pos[src * 3], z0 + pos[src * 3 + 2], st); if (f > sy) sy = Math.min(pos[src * 3 + 1], f); }
+      pos[d * 3] = pos[src * 3]; pos[d * 3 + 1] = sy; pos[d * 3 + 2] = pos[src * 3 + 2];
       nor[d * 3] = nor[src * 3]; nor[d * 3 + 1] = nor[src * 3 + 1]; nor[d * 3 + 2] = nor[src * 3 + 2];
       for (let q = 0; q < 4; q++) dat[d * 4 + q] = dat[src * 4 + q];
       mac[d] = mac[src];

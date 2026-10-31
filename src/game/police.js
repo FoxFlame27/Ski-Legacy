@@ -35,8 +35,9 @@
 //    five stars; they drive up after you from far behind on the roads you came by, at most one from ahead), faster, harder rams (a coordinated
 //    PIT from both sides, T-bones at the junctions, head-on blocks), ROADBLOCKS (3+: two cars across the road on your
 //    way ahead, a narrow gap on the shoulder), SPIKE STRIPS (4+: tyres popped, less grip and top speed: drive.js gripK /
-//    dragK) and the POLICE HELICOPTER (4+: flies in and after you 60-90 m up, its searchlight on you; it sees you from above
-//    unless you're in a tunnel or inside).
+//    dragK) and the POLICE HELICOPTER (3+, or 45 s into fleeing: flies in to where they last had you, then after you
+//    60-90 m up, its searchlight on you; a tunnel, a bridge, buildings or thick forest hide you from it; while it has
+//    you the escape clock stops and it guides the patrol cars: heliStep, Oct 31 2026).
 //  - Escaping: the escape clock runs only while NO police car (line of sight through the terrain, the forests and the
 //    buildings, within their sight range) or the helicopter can see you; they lose you after loseS: SEARCHING (the
 //    stars blink), the cars spread out round where you were last seen, the helicopter sweeps its light; seen again:
@@ -64,6 +65,7 @@ import { isMP } from '../net/mode.js';
 import { ST, F, W_SHIFT } from '../net/protocol.js';
 import { presentation } from './presentation/index.js';
 import { HeliModel } from './heli/model.js';
+import { breakables, AI_RAIL_V } from '../world/breakables.js'; // (a patrol car through a guardrail at 100 km/h+: aiRail)
 import { nightUniform } from '../world/village.js';
 import { terrainUniforms } from '../world/terrain.js'; // read-only: how hard it is snowing (the searchlight's beam: heli/model.js)
 
@@ -160,6 +162,10 @@ const MAXU = 8; // patrol cars at most (five stars: five after you and a roadblo
 // the helicopter: m/s (230 km/h: a fast car on a straight slowly gets away), m/s2, m over the ground (60-90), m it
 // sees round it (horizontally), its light's radius on the ground (m), m it trails you by
 const HELI_V = 64, HELI_A = 13, HELI_ALT = 72, HELI_SEE = 170, HELI_BACK = 22;
+// (Oct 31 2026, the user: "add something to the police helicopter, what does it even do?"): m it keeps you in view once
+// it has you (out of its view and this far: lost), s out of its view before it has lost you (a lamp post or a single
+// crown in the way is nothing), s of fleeing before it is called (3+ stars at once): a short chase stays cars only
+const HELI_KEEP = 400, HELI_HIDE = 1.25, HELI_CALL_S = 45;
 const RB_DIST = [300, 260, 220, 340]; // m on along your road a roadblock is tried at (the first out of sight)
 const _aim = new THREE.Vector3(); // (where the searchlight is aimed: heliStep)
 const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
@@ -547,6 +553,11 @@ body.wanted #drive-hud .ch-card, body.wanted #controls-hint { opacity: 0; } /* (
 #police-hud .pl-tip { margin-top: calc(var(--u) * 7); font: 700 max(12px, calc(var(--u) * 15))/1.2 var(--ui); color: #0d1d4a;
   white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
 #police-hud .pl-tip:empty { display: none; }
+/* (Oct 31 2026, the user: "Show a small line in the WANTED box: 'Police helicopter is tracking you'": hudFrame H.heli) */
+#police-hud .pl-heli { margin-top: calc(var(--u) * 7); font: 800 max(12px, calc(var(--u) * 14))/1.2 var(--ui); letter-spacing: 0.02em; color: #d0342c; }
+#police-hud .pl-heli.lost { color: #129a46; }
+#police-hud .pl-heli.come { color: #0d1d4a; }
+#police-hud .pl-heli[hidden] { display: none; }
 #police-hud .pl-esc { margin-top: calc(var(--u) * 14); }
 #police-hud .pl-esc[hidden] { display: none; }
 #police-hud .pl-row { display: flex; align-items: baseline; justify-content: space-between; gap: calc(var(--u) * 10); }
@@ -782,7 +793,7 @@ export class Police {
     this._live = []; this._rank = []; // (scratch lists: no allocation per frame)
     this.rq = []; this.radioText = ''; this.radioUntil = 0; this.radioAt = 0; // police radio chatter (radio())
     this.slowT = -1e9; this.puffT = 0; this.puffAt = new THREE.Vector3();
-    this._hs = { t: '', msg: '', tip: '', hot: false, esc: '', frac: 0, cars: 0, near: '', stars: 1, gain: false, search: false, state: '', stateCls: '', rb: '', air: false, tyres: '', radio: '' };
+    this._hs = { t: '', msg: '', tip: '', hot: false, esc: '', frac: 0, cars: 0, near: '', stars: 1, gain: false, search: false, state: '', stateCls: '', rb: '', air: false, heli: '', heliCls: '', tyres: '', radio: '' };
     policeModelReady(this.models);
     this.officerRigs = []; // the officer's rigs not in use (his own, never the job pool's)
     this.loadOfficer();
@@ -806,7 +817,7 @@ export class Police {
     el.innerHTML = '<div class="pl-lights"><i></i><i></i><i></i><i></i></div>'
       + `<div class="pl-head"><div class="pl-title"><div class="pl-stars">${STAR.repeat(5)}</div><b>WANTED</b></div><div class="pl-clock"><small>CHASE</small><span class="pl-t"></span></div></div>`
       + '<div class="pl-chips"><span class="pl-state"></span><span class="pl-rb" hidden></span><span class="pl-air" hidden>AIR UNIT</span><span class="pl-tyre" hidden></span></div>'
-      + '<div class="pl-msg"></div><div class="pl-tip"></div>'
+      + '<div class="pl-msg"></div><div class="pl-tip"></div><div class="pl-heli" hidden></div>'
       + `<div class="pl-radio" hidden>${RADIO_ICON}<span></span></div>`
       + '<div class="pl-esc"><div class="pl-row"><small>LOSE THEM</small><span class="pl-esc-t"></span></div><div class="pl-bar"><i></i></div><div class="pl-row pl-sub"><span class="pl-cars"></span><span class="pl-near"></span></div></div>';
     const root = document.getElementById('hud') || document.body;
@@ -815,7 +826,7 @@ export class Police {
     this.$t = el.querySelector('.pl-t'); this.$cars = el.querySelector('.pl-cars'); this.$msg = el.querySelector('.pl-msg'); this.$tip = el.querySelector('.pl-tip'); this.$escBox = el.querySelector('.pl-esc');
     this.$esc = el.querySelector('.pl-esc-t'); this.$bar = el.querySelector('.pl-bar i'); this.$near = el.querySelector('.pl-near'); this.$stars = [...el.querySelectorAll('.pl-stars svg')];
     this.$state = el.querySelector('.pl-state'); this.$rb = el.querySelector('.pl-rb'); this.$air = el.querySelector('.pl-air'); this.$tyre = el.querySelector('.pl-tyre');
-    this.$radio = el.querySelector('.pl-radio'); this.$radioT = el.querySelector('.pl-radio span');
+    this.$radio = el.querySelector('.pl-radio'); this.$radioT = el.querySelector('.pl-radio span'); this.$heli = el.querySelector('.pl-heli');
     // the big word on a hit ("PIT!") and the red flash round the screen's edge
     this.$slam = document.createElement('div'); this.$slam.id = 'police-slam'; this.$slam.innerHTML = '<b></b><small></small>';
     this.$flash = document.createElement('div'); this.$flash.id = 'police-flash';
@@ -825,7 +836,8 @@ export class Police {
   // the WANTED box from H (this._hs, filled by hudFrame): t the chase clock, msg the status line (hot: red), esc the
   // escape clock ('' hides the escape part), frac its bar, cars the patrol cars after you, near (seen / out of sight),
   // stars 1-5 (search: blinking), state the PURSUIT / SEARCHING chip (stateCls hot / lost), rb the roadblock chip
-  // ('' hides it), air the helicopter, tyres (popped), radio the chatter line ('' hides it)
+  // ('' hides it), air the helicopter, heli its line (heliCls: lost / come; '' hides it), tyres (popped), radio the
+  // chatter line ('' hides it)
   setHud(show, H = this._hs) {
     if (!this.el) return;
     if (this.el.hidden === show) { this.el.hidden = !show; document.body.classList.toggle('wanted', show); }
@@ -845,6 +857,7 @@ export class Police {
     if (C.stateCls !== H.stateCls) { C.stateCls = H.stateCls; this.$state.className = `pl-state ${H.stateCls}`; }
     if (C.rb !== H.rb) { C.rb = H.rb; this.$rb.textContent = H.rb; this.$rb.hidden = !H.rb; }
     if (C.air !== H.air) this.$air.hidden = !(C.air = H.air);
+    if (C.heli !== H.heli && this.$heli) { C.heli = H.heli; this.$heli.textContent = H.heli || ''; this.$heli.hidden = !H.heli; this.$heli.className = `pl-heli ${H.heliCls || ''}`; }
     if (C.tyres !== H.tyres) { C.tyres = H.tyres; this.$tyre.textContent = H.tyres; this.$tyre.hidden = !H.tyres; }
     if (C.radio !== H.radio) {
       C.radio = H.radio; this.$radio.hidden = !H.radio;
@@ -1122,10 +1135,10 @@ export class Police {
     if (best >= 0) this.unwreck(this.units[best]);
     return best;
   }
-  unwreck(u) { u.wrecked = false; u.smoke?.clear(); u.g.visible = false; u.col.x = 1e9; u.col.z = 1e9; u.col.police = 'local'; u.kx = u.kz = u.kyaw = 0; if (u.driver) u.driver.visible = true; }
+  unwreck(u) { u.wrecked = false; u.thruK = false; u.smoke?.clear(); u.g.visible = false; u.col.x = 1e9; u.col.z = 1e9; u.col.police = 'local'; u.kx = u.kz = u.kyaw = 0; if (u.driver) u.driver.visible = true; }
   // (the user: "make it so you can hit the police cars too") wrecked: it stops where it is, lights out, smoking,
   // still solid; out of the chase (no ram, not counted for your escape); another comes after backupS
-  wreck(u) {
+  wreck(u, why = '') {
     if (u.wrecked) return;
     this.dropOfficer(u);
     u.on = false; u.wrecked = true; u.wreckT = TUNING.wreckStayS; u.v = 0; u.ram = false; u.path = null;
@@ -1136,10 +1149,16 @@ export class Police {
       const W = this.w;
       W.reinT = Math.max(W.reinT, TUNING.backupS); W.wrecks = (W.wrecks || 0) + 1;
       if (W.rb && (W.rb.u1 === u || W.rb.u2 === u)) this.releaseBlock(W);
-      this.addHeat(W, TUNING.heatWreck);
-      this.note('Police car wrecked! · more are on the way');
-      this.radio(`Unit ${u.k + 1} is down! Unit down! Send backup!`, true);
-      this.slam('WRECKED!', 'POLICE CAR DESTROYED · MORE HEAT', 0.15);
+      if (why === 'rail') { // (through a guardrail on its own: no heat for you; railThrough)
+        this.note('A police car went through the guardrail!');
+        this.radio(`Unit ${u.k + 1} is through the guardrail! Unit down!`, true);
+        this.slam('WRECKED!', 'POLICE CAR THROUGH THE GUARDRAIL', 0.15);
+      } else {
+        this.addHeat(W, TUNING.heatWreck);
+        this.note('Police car wrecked! · more are on the way');
+        this.radio(`Unit ${u.k + 1} is down! Unit down! Send backup!`, true);
+        this.slam('WRECKED!', 'POLICE CAR DESTROYED · MORE HEAT', 0.15);
+      }
     }
     u.role = 'chase';
     try { this.audio?.impact ? this.audio.impact('car', 1) : this.audio?.play?.('land', 1); } catch { /* (silent) */ }
@@ -1492,7 +1511,7 @@ export class Police {
       }
       if (u.sees) seen = true;
     }
-    if (this.heli?.on && this.heli.sees) seen = true;
+    if (this.airEye()) seen = true; // (Oct 31 2026: the helicopter while it has you in view, heliStep: no escape clock)
     W.seen = seen;
     if (seen) {
       const K = W.lkp; K.x = T.x; K.z = T.z; K.vx = T.vx; K.vz = T.vz; K.t = W.t;
@@ -1663,7 +1682,7 @@ export class Police {
       R.dist = d;
       if (along > 20 && d < 120) { this.addHeat(W, TUNING.heatBlock); this.radio(`He's through the roadblock ${this.where(R)}! After him!`, true); this.releaseBlock(W); }
       else if (R.t > 50 || (d > 650 && R.t > 8)) this.releaseBlock(W);
-    } else if (L.block && W.fleeing && !W.scene && !W.search && T.car && (W.rbT -= dt) <= 0) {
+    } else if (L.block && W.fleeing && !W.scene && !W.search && T.car && (W.rbT -= dt * (this.airEye() ? 1.6 : 1)) <= 0) { // (Oct 31 2026: the helicopter on you calls your road ahead: roadblocks sooner)
       W.rbT = this.placeRoadblock(W, T, L) ? L.block : 3;
     }
     if (L.spikes && W.fleeing && !W.scene && !W.search && T.car && (W.spikeT -= dt) <= 0) {
@@ -1780,8 +1799,18 @@ export class Police {
   // the pool on the ground and a spot light) is on you while it sees you (within HELI_SEE, no ridge between, not in a
   // tunnel; inside a chalet the chase waits anyway), else swept round where you were last seen. The chase over: up
   // and away, gone
+  // (Oct 31 2026, the user: "add something to the police helicopter, what does it even do?"): before, it flew after
+  // your live position at 4+ stars and, within 170 m with no ridge between, counted as one more pair of eyes (no
+  // escape clock while it saw you). Now a real air unit, fair: called at 3 stars or after HELI_CALL_S s of fleeing
+  // (fleeing is 2 stars at once: "2+" alone would bring it into every chase); it flies to where the police last had
+  // you (W.lkp), never to where you really are until it sees you itself (heliSight: buildings, bridges, tunnels, thick
+  // forest hide you); once it has you it keeps you to HELI_KEEP m, and loses you HELI_HIDE s out of its view (or past
+  // HELI_KEEP): "the helicopter lost you", it circles the last spot. While it has you: no escape clock (sight()), the
+  // patrol cars are guided (roadblocks sooner, the junction cut-offs reach further: airEye()), the WANTED box says
+  // so (hudFrame: H.heli), the radio calls it, it is on the trail map (mapMarkers). The chase over: away
   heliStep(dt, W, T, paused) {
-    const want = !!(W && W.fleeing && !W.scene && this.L.heli && T);
+    if (W && W.fleeing && !W.scene && !paused) W.fleeT = (W.fleeT || 0) + dt;
+    const want = !!(W && W.fleeing && !W.scene && T && (this.stars(W) >= 3 || (W.fleeT || 0) >= HELI_CALL_S));
     let H = this.heli;
     if (!H) {
       if (!want) return;
@@ -1796,8 +1825,10 @@ export class Police {
         H.vx = -Math.sin(a) * 30; H.vz = -Math.cos(a) * 30; H.yaw = Math.atan2(H.vx, H.vz);
         H.ax = H.x - Math.sin(a) * 40; H.az = H.z - Math.cos(a) * 40; H.called = false; H.roll = 0; H.pitch = 0;
         H.side = Math.random() < 0.5 ? 1 : -1; H.sideS = H.side; H.sideT = 12 + Math.random() * 8; H.seeT = 0; H.sees = false;
+        H.eye = false; H.lost = false; H.lostT = 0; H.hidT = 0;
         H.ay = world.height(H.ax, H.az); H.model.lampOn = 0;
         H.model.root.visible = true;
+        this.radio("Air One is up. Inbound to the suspect's last known position.");
       }
       H.on = true; H.leaving = false; H.leaveT = 0;
     }
@@ -1806,26 +1837,30 @@ export class Police {
     if (paused || !(dt > 0)) { this.audio?.setChopper?.({ on: true, paused: true }); return; }
     // where to and how fast (the velocity it wants): after you (your velocity, plus the way to its place behind you),
     // round your last known position (a sweep), or away
+    // (Oct 31 2026: after you only while it sees you itself (H.eye); else to where the police last had you, W.lkp (live
+    // while a patrol car sees you), circling it once it has lost you)
     let wvx, wvz, sweep = false;
-    const fx = T && T.sp > 3 ? T.vx / T.sp : Math.sin(H.yaw), fz = T && T.sp > 3 ? T.vz / T.sp : Math.cos(H.yaw);
+    const P = H.eye || !W || !W.spotted ? T : W.lkp, psp = P ? Math.hypot(P.vx || 0, P.vz || 0) : 0;
+    const fx = psp > 3 ? P.vx / psp : Math.sin(H.yaw), fz = psp > 3 ? P.vz / psp : Math.cos(H.yaw);
     if (H.leaving || !T) {
       H.leaveT += dt;
       const ox = H.x - (T ? T.x : H.x - 1), oz = H.z - (T ? T.z : H.z), ol = Math.hypot(ox, oz) || 1;
       wvx = (ox / ol) * 40; wvz = (oz / ol) * 40;
       if (H.leaveT > 14) { this.hideHeli(); return; }
-    } else if (W.search) {
+    } else if (!H.sees && (W.search || H.lost)) {
       sweep = true;
       H.sw = (H.sw || 0) + dt * 0.55;
-      const K = W.lkp, r = 40 + Math.min(TUNING.searchR, W.unseenT * 9);
+      const K = W.lkp, r = 40 + Math.min(TUNING.searchR, Math.max(W.unseenT, W.seen ? 0 : H.lostT) * 9); // (a patrol car still on you: tight round you, W.lkp live)
       const tx = K.x + K.vx * Math.min(W.unseenT, 5) * 0.6 + Math.sin(H.sw) * r, tz = K.z + K.vz * Math.min(W.unseenT, 5) * 0.6 + Math.cos(H.sw) * r;
       const ex = tx - H.x, ez = tz - H.z, el = Math.hypot(ex, ez) || 1, c = Math.min(HELI_V * 0.7, el * 0.6);
       wvx = (ex / el) * c; wvz = (ez / el) * c;
     } else {
       if ((H.sideT -= dt) <= 0) { H.sideT = 12 + Math.random() * 10; H.side = -H.side; } // (it swaps sides now and then)
       H.sideS += (H.side - H.sideS) * (1 - Math.exp(-dt * 0.35));
-      const tx = T.x + T.vx * 0.4 - fx * HELI_BACK + fz * H.sideS * 14, tz = T.z + T.vz * 0.4 - fz * HELI_BACK - fx * H.sideS * 14;
+      const pvx = P.vx || 0, pvz = P.vz || 0;
+      const tx = P.x + pvx * 0.4 - fx * HELI_BACK + fz * H.sideS * 14, tz = P.z + pvz * 0.4 - fz * HELI_BACK - fx * H.sideS * 14;
       const ex = tx - H.x, ez = tz - H.z, el = Math.hypot(ex, ez) || 1, c = Math.min(45, el * 0.45);
-      wvx = T.vx + (ex / el) * c; wvz = T.vz + (ez / el) * c;
+      wvx = pvx + (ex / el) * c; wvz = pvz + (ez / el) * c;
     }
     const wl = Math.hypot(wvx, wvz);
     if (wl > HELI_V) { wvx *= HELI_V / wl; wvz *= HELI_V / wl; }
@@ -1841,7 +1876,7 @@ export class Police {
     // with the speed and when speeding up, banked into the turn
     const sp = Math.hypot(H.vx, H.vz);
     if (sp > 6) H.yaw += wrapPi(Math.atan2(H.vx, H.vz) - H.yaw) * (1 - Math.exp(-dt * 1.4));
-    else if (T) H.yaw += wrapPi(Math.atan2(T.x - H.x, T.z - H.z) - H.yaw) * (1 - Math.exp(-dt * 1.0));
+    else if (P) H.yaw += wrapPi(Math.atan2(P.x - H.x, P.z - H.z) - H.yaw) * (1 - Math.exp(-dt * 1.0));
     const sy = Math.sin(H.yaw), cyw = Math.cos(H.yaw), idt = 1 / Math.max(dt, 1e-3);
     const latA = (-ax * cyw + az * sy) * idt, fwdA = (ax * sy + az * cyw) * idt;
     H.roll += (clamp(latA * 0.04, -0.42, 0.42) - H.roll) * (1 - Math.exp(-dt * 2.5));
@@ -1851,19 +1886,26 @@ export class Police {
     _e.set(H.pitch, H.yaw, H.roll);
     R.quaternion.setFromEuler(_e);
     const night = clamp(nightUniform?.value ?? 0, 0, 1);
-    // does it see you (~4 times a second): near enough, no ridge between, you not under the mountain (a tunnel)
+    // does it see you (~4 times a second, heliSight): to find you HELI_SEE m, to keep you HELI_KEEP. H.eye: in view now
+    // (sight(): you are seen; your last known position); H.sees: it has you (still, HELI_HIDE s after you went out of
+    // its view: then lost, H.lost, the radio says so and it circles where it last had you)
     if ((H.seeT -= dt) <= 0) {
       H.seeT = 0.25;
-      let ok = !H.leaving && !!T && hyp(H.x, H.z, T.x, T.z) < HELI_SEE;
-      if (ok) {
-        const ty = T.y ?? world.height(T.x, T.z);
-        if (typeof world.outsideHeight === 'function' && world.outsideHeight(T.x, T.z) > ty + 2.5) ok = false; // (in a tunnel)
-        for (let i = 1; ok && i < 9; i++) { const f = i / 10, x = H.x + (T.x - H.x) * f, z = H.z + (T.z - H.z) * f; if (world.height(x, z) > H.y + (ty + 1 - H.y) * f) ok = false; }
+      if (H.leaving || !T || !W) { H.sees = false; H.eye = false; H.hidT = 0; }
+      else if ((H.eye = this.heliSight(H, T, H.sees ? HELI_KEEP : HELI_SEE))) {
+        H.hidT = 0;
+        if (!H.sees) {
+          H.sees = true; H.lost = false; H.lostT = 0;
+          this.radio(`${H.called ? 'Air One has the suspect again' : 'Air One: I have the suspect in the light'}${T.sp > 4 ? `, heading ${this.compass(T.vx, T.vz)}` : ''} ${this.where(T)}!`, true);
+          H.called = true;
+        }
+      } else if (H.sees && ((H.hidT += 0.25) >= HELI_HIDE || hyp(H.x, H.z, T.x, T.z) > HELI_KEEP)) {
+        H.sees = false; H.lost = true; H.lostT = 0; H.hidT = 0;
+        this.radio(`Air One: lost visual ${this.where(W.lkp)}. Searching the area.`, true);
       }
-      H.sees = ok;
     }
-    const sees = H.sees;
-    if (!H.called && sees && W) { H.called = true; this.radio('Air One: I have the suspect in the light!', true); }
+    if (H.lost) H.lostT += dt;
+    const sees = H.eye;
     // the searchlight (Oct 30 2026, the user: "the helicopter from the police, the light that shines on you is very off.
     // It should be like the other helicopter light"): the helicopter's own landing light (heli/model.js: the lens under
     // the nose, the faint beam, the lit pool shaded like a spot light on the snow, night only as yours), swung onto you
@@ -1871,11 +1913,11 @@ export class Police {
     // leaving). Aimed at you a touch ahead (your velocity), at your middle; the aim follows smoothly (a slight lag, no
     // jitter). Its one SpotLight (this.spot) from the lens to the aim, its target moved and its matrix updated every frame
     let lx, lz, ly;
-    if (sees) { lx = T.x + T.vx * 0.08; lz = T.z + T.vz * 0.08; ly = (T.y ?? world.height(lx, lz)) + 0.8; } else if (sweep) { lx = H.x + Math.sin(H.sw * 2.3) * 45; lz = H.z + Math.cos(H.sw * 1.7) * 45; ly = world.height(lx, lz); } else { lx = H.x + H.vx * 0.8 + Math.sin(H.yaw) * 30; lz = H.z + H.vz * 0.8 + Math.cos(H.yaw) * 30; ly = world.height(lx, lz); }
+    if (sees) { lx = T.x + T.vx * 0.08; lz = T.z + T.vz * 0.08; ly = (T.y ?? world.height(lx, lz)) + 0.8; } else if (H.sees && W) { lx = W.lkp.x; lz = W.lkp.z; ly = world.height(lx, lz) + 0.8; } else if (sweep) { lx = H.x + Math.sin(H.sw * 2.3) * 45; lz = H.z + Math.cos(H.sw * 1.7) * 45; ly = world.height(lx, lz); } else { lx = H.x + H.vx * 0.8 + Math.sin(H.yaw) * 30; lz = H.z + H.vz * 0.8 + Math.cos(H.yaw) * 30; ly = world.height(lx, lz); }
     const kk = 1 - Math.exp(-dt * (sees ? 6 : 1.5));
     H.ax += (lx - H.ax) * kk; H.az += (lz - H.az) * kk; H.ay += (ly - H.ay) * kk;
     _aim.set(H.ax, H.ay, H.az);
-    const lampOn = !H.leaving && (sees || sweep);
+    const lampOn = !H.leaving && (H.sees || sweep);
     const M = H.model;
     try { M.update(dt, { rpm: 1, night, time: this.time, lamp: lampOn, camera: this.camera, ground: H.ground, snow: terrainUniforms.uSnowCover.value, aim: _aim }); } catch (e) { if (!H.err) { H.err = true; console.warn('police heli', e); } }
     const S = this.spot;
@@ -1901,17 +1943,67 @@ export class Police {
       model.root.name = 'police-heli';
       model.root.visible = false;
       return { model, on: false, leaving: false, leaveT: 0, x: 0, y: 0, z: 0, vx: 0, vz: 0, yaw: 0, roll: 0, pitch: 0, ax: 0, ay: 0, az: 0, sw: 0, sees: false, called: false,
-        side: 1, sideS: 1, sideT: 12, seeT: 0,
+        side: 1, sideS: 1, sideT: 12, seeT: 0, eye: false, lost: false, lostT: 0, hidT: 0,
         ground: (x, z) => world.height(x, z) };
     } catch (e) { console.warn('police heli', e); return null; }
   }
   hideHeli() {
     const H = this.heli;
     if (!H) return;
-    H.on = false; H.leaving = false; H.sees = false;
+    H.on = false; H.leaving = false; H.sees = false; H.eye = false; H.lost = false; H.lostT = 0; H.hidT = 0;
     H.model.root.visible = false; H.model.pool.mesh.visible = false; H.model.beam.visible = false; H.model.lampOn = 0;
     if (this.spot) this.spot.intensity = 0;
     this.audio?.setChopper?.({ on: false });
+  }
+
+  // the helicopter has you in view now (sight(): no escape clock; the patrol cars guided: roadblockStep, drivePursuit)
+  airEye() { const H = this.heli; return !!(H?.on && !H.leaving && H.eye); }
+  // (Oct 31 2026, the user: "breaking line of sight loses it: tunnels, under bridges, inside buildings, dense forest,
+  // or getting more than ~400 m away"): does the helicopter at H see you (T) within range m? Not: further; in a tunnel
+  // (the mountain over you: outsideHeight); under a bridge, a deck, a viaduct (a surface well above you: groundHeight);
+  // a ridge between (the terrain along the line); a building between or over you (your own colliders round you, the
+  // nearCols grid, each box as tall as its h, else 4-12 m by its size; the line from up there drops steeply, so only
+  // what is near you counts); thick forest (tree crowns on 3 of 5 points over and round you: a road through the trees
+  // is open to the sky, the woods beside it are not). ~4 times a second, no allocation
+  heliSight(H, T, range) {
+    const d = hyp(H.x, H.z, T.x, T.z);
+    if (d > range) return false;
+    const ty = T.y ?? world.height(T.x, T.z), ey = ty + 1;
+    if (typeof world.outsideHeight === 'function' && world.outsideHeight(T.x, T.z) > ty + 2.5) return false;
+    if (typeof world.groundHeight === 'function' && world.groundHeight(T.x, T.z, Infinity) > ty + 2.5) return false;
+    for (let i = 1; i < 9; i++) { const f = i / 10, x = H.x + (T.x - H.x) * f, z = H.z + (T.z - H.z) * f; if (world.height(x, z) > H.y + (ey - H.y) * f) return false; }
+    const V = this.vegetation;
+    if (V?.collide) {
+      let n = 0;
+      for (let i = 0; i < 5; i++) {
+        const x = T.x + (i === 1 ? 4 : i === 2 ? -4 : 0), z = T.z + (i === 3 ? 4 : i === 4 ? -4 : 0);
+        if (V.collide(x, z, 0.3, 99, 'crown') && ++n >= 3) return false;
+        if (n + (4 - i) < 3) break; // (3 can't be reached any more)
+      }
+    }
+    if (d < 1) return true;
+    const PU = (this._heliU ||= { x: 0, z: 0, near: null });
+    PU.x = T.x; PU.z = T.z;
+    const ux = (H.x - T.x) / d, uz = (H.z - T.z) / d, reach = Math.min(d, NEAR_R), rise = (H.y - ey) / d;
+    const x0 = Math.min(T.x, T.x + ux * reach), x1 = Math.max(T.x, T.x + ux * reach), z0 = Math.min(T.z, T.z + uz * reach), z1 = Math.max(T.z, T.z + uz * reach);
+    for (const c of this.nearCols(PU, T.x, T.z, 0)) {
+      if (c.police || c.net || c.soft || c.rail || c.car || c.r !== undefined) continue;
+      const sz = Math.max(c.hw, c.hd);
+      if (sz < 1.6 || (c.h !== undefined && c.h < 2.4)) continue; // (small things, low walls)
+      if (c.x + sz < x0 || c.x - sz > x1 || c.z + sz < z0 || c.z - sz > z1) continue;
+      // (the line from you up to it, in the box's frame: the slab test; t0 how far from you it enters the box)
+      const cs = Math.cos(-c.rot), sn = Math.sin(-c.rot);
+      const px = (T.x - c.x) * cs - (T.z - c.z) * sn, pz = (T.x - c.x) * sn + (T.z - c.z) * cs;
+      const vx = ux * cs - uz * sn, vz = ux * sn + uz * cs;
+      let t0 = 0, t1 = reach;
+      if (Math.abs(vx) < 1e-6) { if (Math.abs(px) > c.hw) continue; } else { let ta = (-c.hw - px) / vx, tb = (c.hw - px) / vx; if (ta > tb) { const t = ta; ta = tb; tb = t; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); }
+      if (t0 > t1) continue;
+      if (Math.abs(vz) < 1e-6) { if (Math.abs(pz) > c.hd) continue; } else { let ta = (-c.hd - pz) / vz, tb = (c.hd - pz) / vz; if (ta > tb) { const t = ta; ta = tb; tb = t; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); }
+      if (t0 > t1) continue;
+      const top = c.top ?? world.height(c.x, c.z) + (c.h ?? clamp(Math.min(c.hw, c.hd) * 1.2, 4, 12));
+      if (ey + rise * t0 < top) return false;
+    }
+    return true;
   }
 
   // ---------------------------------------------------------------- police radio
@@ -1920,7 +2012,7 @@ export class Police {
   chatter(dt, W, T) {
     if ((W.chatT -= dt) > 0) return;
     W.chatT = 6 + Math.random() * 4;
-    const R = Math.random(), heli = !!this.heli?.on && !this.heli.leaving;
+    const R = Math.random(), heli = !!this.heli?.on && !this.heli.leaving, air = this.airEye();
     if (W.search) {
       this.radio(R < 0.35 ? `All units, search the area ${this.where(W.lkp)}.` : R < 0.7 ? "Check the side roads! He can't have gone far." : heli ? 'Air One sweeping the area. Nothing yet.' : 'Anyone have eyes on him? Report!');
       return;
@@ -1930,7 +2022,7 @@ export class Police {
     const kmh = Math.round(T.sp * 3.6 / 10) * 10;
     if (W.flats && R < 0.3) { this.radio("He's on the rims! Stay on him!"); return; }
     if (dmg > 50 && R < 0.3) { this.radio('Suspect vehicle is smoking. Keep the pressure on!'); return; }
-    if (heli && R < 0.25) { this.radio(`Air One has eyes on the suspect, ${this.where(T)}.`); return; }
+    if (air && R < 0.3) { this.radio(`Air unit has the suspect${T.sp > 4 ? `, heading ${this.compass(T.vx, T.vz)}` : ''} ${this.where(T)}.`); return; } // (Oct 31 2026, the user: "Air unit has the suspect, heading north on the Talstrasse")
     if (T.sp > 6 && R < 0.6) { this.radio(`Suspect heading ${this.compass(T.vx, T.vz)} ${this.where(T)}${kmh >= 100 ? `, ${kmh} km/h` : ''}!`); return; }
     this.radio(R < 0.8 ? 'Box him in! Unit two, take the left side!' : 'Cut him off at the next junction!');
   }
@@ -1984,7 +2076,11 @@ export class Police {
             // (rank 1 the first junction; rank 2+ the one after it: a net of cut-offs on your way)
             let J = nextJunction(n.i, dx, dz, 35, TUNING.junctionM);
             if (rank >= 2 && J.i >= 0) { const m0 = J.m; J = nextJunction(J.i, J.ex, J.ez, 25, TUNING.junctionM); J.m += m0; }
-            if (J.i >= 0 && (hyp(u.x, u.z, G.X[J.i], G.Z[J.i]) * 1.25) / (L.vRoad * u.boost) < J.m / T.sp + 1.5) { j = J.i; u.goJ = true; }
+            const inTime = () => J.i >= 0 && (hyp(u.x, u.z, G.X[J.i], G.Z[J.i]) * 1.25) / (L.vRoad * u.boost) < J.m / T.sp + 1.5;
+            // (Oct 31 2026: with the helicopter on you they know your way further ahead: the next junction can't be made in
+            // time, the one after it is cut off instead (without it they just follow on))
+            if (!inTime() && J.i >= 0 && this.airEye()) { const m0 = J.m; J = nextJunction(J.i, J.ex, J.ez, 25, TUNING.junctionM); J.m += m0; }
+            if (inTime()) { j = J.i; u.goJ = true; }
           }
           u.goX = G.X[j]; u.goZ = G.Z[j]; u.goOk = true;
         }
@@ -2430,6 +2526,14 @@ export class Police {
           nx = nlx * c2 - nlz * s2; nz = nlx * s2 + nlz * c2;
         }
         if (!(depth > 0)) break;
+        // (Oct 31 2026, the user: "Traffic and police cars only bounce off guardrails. Only your car breaks through: make
+        // them break through too"): its nose into a guardrail over 100 km/h at 15 deg or more (your car's rule:
+        // world/breakables.js aiRail): the sections break (synced as yours) and it goes on through, out of the chase
+        // (railThrough). A scrape along it, slower, its side or tail: the glance below as before
+        if (o.rail && k === K[0] && u.v > AI_RAIL_V) {
+          const into = breakables.aiRail(u, cx, cz, R, s * u.v + u.kx, c * u.v + u.kz);
+          if (into) { this.railThrough(u, into); return; }
+        }
         u.x += nx * Math.min(depth, 0.35); u.z += nz * Math.min(depth, 0.35); // (a little a frame: never through it to the far side)
         if (o.rail) rail = o; else hit = true;
       }
@@ -2576,15 +2680,36 @@ export class Police {
       if (presentation.slowMo({ scale: 0.3, easeIn: 0.03, hold: 0.25, easeOut: 0.22, reason: 'police' })) this.slowT = performance.now();
     }
   }
+  // (Oct 31 2026, the user: "make them break through too"): a patrol car through a guardrail (pushOut; world/breakables.js
+  // aiRail): ~35 % of its speed gone, it slides on through the gap (knockStep: the next sections it touches break too)
+  // and comes to rest off the road beyond, wrecked: out of the chase, backup on its way (wreck 'rail': no heat for
+  // you, it did it itself)
+  railThrough(u, into) {
+    const vx = Math.sin(u.yaw) * u.v + u.kx, vz = Math.cos(u.yaw) * u.v + u.kz;
+    u.kx = vx * 0.64; u.kz = vz * 0.64; u.kyaw = (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.min(0.6, into * 0.03)); u.v = 0;
+    u.thruK = true; // (knockStep: a long slide, well clear of the road, not the short shove of a ram)
+    if (u.on) this.wreck(u, 'rail');
+  }
   // a patrol car knocked by a hit: it slides and turns, dying away (wrecks too)
   knockStep(u, dt) {
     if (!u.kx && !u.kz && !u.kyaw) return;
+    // (Oct 31 2026: knocked / sliding through a guardrail at 100 km/h+ (15 deg+), or on through the gap it broke: those
+    // sections break too (world/breakables.js aiRail), ~35 % of the slide's speed gone on a fresh break)
+    if (Math.abs(u.kx) + Math.abs(u.kz) > 30 / 3.6 && busRoads.railGrid?.size) {
+      const s = Math.sin(u.yaw), c = Math.cos(u.yaw), R = u.hw, h = u.hd - R;
+      for (const k of [h, 0, -h]) {
+        const into = breakables.aiRail(u, u.x + s * k + u.kx * dt, u.z + c * k + u.kz * dt, R, u.kx, u.kz);
+        if (!into) continue;
+        if (into > 0.02) { u.kx *= 0.64; u.kz *= 0.64; }
+        break;
+      }
+    }
     const ox = u.x, oz = u.z, oyaw = u.yaw;
     u.x += u.kx * dt; u.z += u.kz * dt; u.yaw = wrapPi(u.yaw + u.kyaw * dt);
     if (this.solidMove(u, ox, oz, oyaw)) { u.kx *= 0.3; u.kz *= 0.3; u.kyaw *= 0.3; } // (knocked into something: it stops there)
-    const f = Math.exp(-dt * 3.2);
+    const f = Math.exp(-dt * (u.thruK ? 1.3 : 3.2));
     u.kx *= f; u.kz *= f; u.kyaw *= f;
-    if (Math.abs(u.kx) + Math.abs(u.kz) + Math.abs(u.kyaw) < 0.08) { u.kx = 0; u.kz = 0; u.kyaw = 0; }
+    if (Math.abs(u.kx) + Math.abs(u.kz) + Math.abs(u.kyaw) < 0.08) { u.kx = 0; u.kz = 0; u.kyaw = 0; u.thruK = false; }
     this.place(u);
   }
 
@@ -2945,6 +3070,11 @@ export class Police {
     let cars = 0; for (const u of this.units) if (u.on) cars++;
     H.cars = cars;
     H.air = !!(this.heli?.on && !this.heli.leaving);
+    // (Oct 31 2026, the user: "Show a small line in the WANTED box: 'Police helicopter is tracking you'"; "The helicopter
+    // lost you"): while it has you, once it lost you (then searching), on its way
+    const HL = this.heli;
+    H.heli = !H.air ? '' : HL.sees ? '🚁 Police helicopter is tracking you' : HL.lost ? (HL.lostT < 8 ? '🚁 The helicopter lost you' : '🚁 The helicopter is searching the area') : '🚁 Police helicopter on its way';
+    H.heliCls = !H.air || HL.sees ? '' : HL.lost ? 'lost' : 'come';
     const nf = popcount(W.flats || 0);
     H.tyres = nf ? (nf === 1 ? '1 TYRE FLAT' : `${nf} TYRES FLAT`) : '';
     const rbm = W.rb && !S ? Math.round((W.rb.dist || 0) / 10) * 10 : -1;
@@ -2972,7 +3102,7 @@ export class Police {
       else if (S.abort) { msg = 'You got away from the officer'; tip = 'Keep going and stay out of sight.'; }
       else { msg = 'An officer is running after you!'; tip = 'Outrun him, or he arrests you.'; }
     } else if (W.search) { msg = 'They lost you · stay out of sight'; tip = 'Stay hidden until the bar fills to escape.'; }
-    else if (W.fleeing) { msg = W.seen ? "You're fleeing · escape or you'll be arrested" : 'Out of sight · keep going'; tip = W.seen ? 'Break their line of sight to escape.' : 'Stay hidden until the bar fills to escape.'; }
+    else if (W.fleeing) { msg = W.seen ? "You're fleeing · escape or you'll be arrested" : 'Out of sight · keep going'; tip = W.seen ? (this.airEye() ? 'Lose the helicopter: a tunnel, a bridge, buildings or thick forest.' : 'Break their line of sight to escape.') : 'Stay hidden until the bar fills to escape.'; }
     else if (W.pulled) { // (fully stopped at the side of the road: they come to you)
       msg = `${foot ? 'Stopped' : 'Pulled over'} ✓ · wait for the officer`;
       tip = `Stay put: it's just a ${fine} fine.`;
@@ -3008,7 +3138,7 @@ export class Police {
     H.t = mmss(this.rideT || 0);
     H.msg = R.arrest ? `${R.owner} is under arrest · you too` : `Riding with ${R.owner} · caught, you go to prison too`; H.tip = '';
     H.hot = !R.search && !R.arrest; H.search = R.search && !R.arrest; H.gain = H.search;
-    H.stars = clamp(R.stars, 1, 5); H.cars = 0; H.air = false; H.tyres = ''; H.rb = ''; H.radio = ''; H.esc = ''; H.frac = 0;
+    H.stars = clamp(R.stars, 1, 5); H.cars = 0; H.air = false; H.heli = ''; H.tyres = ''; H.rb = ''; H.radio = ''; H.esc = ''; H.frac = 0;
     H.near = 'PASSENGER';
     H.state = R.arrest ? 'ARRESTED' : R.search ? 'SEARCHING' : 'PURSUIT'; H.stateCls = R.arrest ? '' : R.search ? 'lost' : 'hot';
     this.setHud(true, H);
@@ -3019,10 +3149,13 @@ export class Police {
     if (!W || (W.scene?.kind === 'fine' && !W.fleeing)) return 0; // (Oct 30 2026: fled a stop / rammed the patrol car while the officer runs back: wanted already)
     return (this.stars(W) << W_SHIFT) | (W.search && !W.scene ? F.wSearch : 0) | (this.committed(W.scene) ? F.wArrest : 0);
   }
-  /** Trail map: the patrol cars while you are wanted (blue dots). */
+  /** Trail map: the patrol cars while you are wanted (blue dots); the police helicopter while it is out (Oct 31 2026,
+   *  the user: "It's on the trail map as a police heli icon while it's out": ui/trailmap.js kind 'heli'). */
   mapMarkers() {
-    if (!this.w) return [];
-    return this.units.filter((u) => u.on).map((u) => ({ x: u.x, z: u.z, kind: 'police', label: 'Police' }));
+    const out = this.w ? this.units.filter((u) => u.on).map((u) => ({ x: u.x, z: u.z, kind: 'police', label: 'Police' })) : [];
+    const H = this.heli;
+    if (H?.on) out.push({ x: H.x, z: H.z, kind: 'heli', label: 'Police helicopter', sees: !!H.sees && !H.leaving });
+    return out;
   }
   // your patrol cars to the other players: 'veh' { k: 'police', cars: [[x, y, z, yaw, v], ...] } ~6 times a second;
   // { k: 'police', off: true } once they are gone

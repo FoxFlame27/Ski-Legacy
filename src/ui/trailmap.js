@@ -99,6 +99,7 @@ const ICONS = {
   police: { fill: '#1f3fa8', glyph: (g) => { for (const bx of [-5, -1.5, 2]) g.fillRect(bx, -6, 2, 12); g.fillRect(-6, -6, 12, 1.6); g.fillRect(-6, 4.4, 12, 1.6); } },
   med: { fill: RED, glyph: (g) => { g.fillRect(-6, -2, 12, 4); g.fillRect(-2, -6, 4, 12); } },
   heli: { fill: RED, round: true, glyph: textGlyph('H', 13, FONT, 700, 'italic ') },
+  policeheli: { fill: '#1f3fa8', round: true, glyph: textGlyph('H', 13, FONT, 700, 'italic ') }, // (the police helicopter while it is out: drawLive)
   drop: { fill: RED, round: true, glyph: (g) => { g.beginPath(); g.moveTo(0, -5); g.lineTo(5.5, 4); g.lineTo(-5.5, 4); g.closePath(); g.fill(); } },
   board: { fill: '#7a4a22', glyph: (g) => { g.lineWidth = 1.6; g.strokeRect(-4.5, -5, 9, 11); g.fillRect(-2.5, -6.5, 5, 2.5); g.fillRect(-2.5, -1.5, 5, 1.3); g.fillRect(-2.5, 1.5, 5, 1.3); } },
   job: { fill: GOLD, round: true, glyph: textGlyph('!', 13) },
@@ -679,6 +680,14 @@ export class TrailMap {
     for (const m of mk.police || []) {
       const x = X(m.x), y = Z(m.z);
       if (!this.inView(x, y)) continue;
+      // (Oct 31 2026, the user: "It's on the trail map as a police heli icon while it's out": a navy round H, a pulsing
+      // red ring while it has you in its light)
+      if (m.kind === 'heli') {
+        if (m.sees) { g.strokeStyle = '#d0342c'; g.lineWidth = 2.5; g.globalAlpha = 0.5 + 0.4 * Math.sin(now / 180); g.beginPath(); g.arc(x, y, 13, 0, Math.PI * 2); g.stroke(); g.globalAlpha = 1; }
+        mapIcon(g, 'policeheli', x, y, 9);
+        this.dynSpots.push({ x, y, r: 10, wx: m.x, wz: m.z, label: 'Police helicopter', tip: { title: 'Police helicopter', lines: [m.sees ? 'It is tracking you' : 'Searching for you'] } });
+        continue;
+      }
       g.fillStyle = '#1f4fff'; g.strokeStyle = '#fff'; g.lineWidth = 2;
       g.beginPath(); g.arc(x, y, s >= 0.2 ? 7 : 6, 0, Math.PI * 2); g.fill(); g.stroke();
       this.dynSpots.push({ x, y, r: 8, wx: m.x, wz: m.z, label: 'Police', tip: { title: 'Police patrol', lines: ['You are wanted'] } });

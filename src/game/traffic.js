@@ -23,6 +23,7 @@ import { CarPeople } from './carpeople.js';
 import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 import { carPath, linkPath, prepPath, followPath } from './carpath.js';
 import { quality } from '../engine/quality.js'; // (Super Performance: fewer cars around you, quality.traffic)
+import { breakables } from '../world/breakables.js'; // (a knocked car through a guardrail at 100 km/h+: aiRail)
 
 const N_CARS = 12, N_SCENIC = 6, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
@@ -833,9 +834,10 @@ export class Traffic {
     return false;
   }
   // the car's body at (x, z, yaw) (three circles along it) on the way and clear of everything hard
+  // (loose: through a guardrail, knocked / a wreck: off the road, only the hard things count: slide)
   canBe(c, x, z, yaw) {
-    const h = Math.max(0, c.l / 2 - c.w / 2), fx = Math.sin(yaw) * h, fz = Math.cos(yaw) * h;
-    for (const k of [0, 1, -1]) if (!this.onWay(c, x + fx * k, z + fz * k) || this.hard(c, x + fx * k, z + fz * k, c.w / 2)) return false;
+    const h = Math.max(0, c.l / 2 - c.w / 2), fx = Math.sin(yaw) * h, fz = Math.cos(yaw) * h, loose = !!c.loose && (c.mode === 'knocked' || c.mode === 'wreck');
+    for (const k of [0, 1, -1]) if ((!loose && !this.onWay(c, x + fx * k, z + fz * k)) || this.hard(c, x + fx * k, z + fz * k, c.w / 2)) return false;
     return true;
   }
   // away from the nearest road's centre line (unit), or null off the network
@@ -953,6 +955,7 @@ export class Traffic {
     }
     if (c.bay) { c.bay.traffic = false; c.bay = null; }
     c.bad = null;
+    c.loose = !!c.loose && (c.mode === 'knocked' || c.mode === 'wreck') && !this.onWay(c, c.x, c.z); // (knocked again out there beyond the rail: never pulled back in through it)
     c.mode = 'knocked'; c.path = null; c.rev = false; c.v = 0; c.brake = 1; c.pause = 0; c.nextJ = undefined;
     c.kvx = vx; c.kvz = vz; c.kw = clamp(w, -3, 3);
     c.off = 0; c.offT = 0; c.offQ = 0; c.pass = null; c.wd = { x: c.x, z: c.z, t: 0 }; // (it rests where it stops: the 5-minute watchdog)
@@ -967,8 +970,25 @@ export class Traffic {
     if (!c.kvx && !c.kvz && Math.abs(c.kw) < 0.05) c.kw = 0;
     // it stays on its road (the plowed edge + 1 m) and never goes into a guardrail, tree, rock, wall or the bus: the
     // push that way is taken out (it slides on along the road), and where even that is blocked it stops there
-    this.pullIn(c);
+    if (!c.loose) this.pullIn(c);
     let nx = c.x + c.kvx * dt, nz = c.z + c.kvz * dt, ny = wrapPi(c.yaw + c.kw * dt);
+    // (Oct 31 2026, the user: "Traffic and police cars only bounce off guardrails. Only your car breaks through: make
+    // them break through too"): your car's rule (drive.js railHit; world/breakables.js aiRail): sliding into a
+    // guardrail over 100 km/h at 15 deg or more, the sections break (the follow-through the way it slides, synced as
+    // yours), it goes on through with ~35 % of its speed gone, spinning a little, and comes to rest off the road
+    // beyond (c.loose: no plowed-edge limit, no pull back in; 'wreck' there until the watchdog / recycling takes it).
+    // Slower, or a scrape along it: the old glance. A car driving its lane never touches a rail (placeOnRoad)
+    if (Math.abs(c.kvx) + Math.abs(c.kvz) > 30 / 3.6 && busRoads.railGrid?.size) {
+      const h = Math.max(0, c.l / 2 - c.w / 2), fx = Math.sin(ny) * h, fz = Math.cos(ny) * h;
+      for (const k of [1, 0, -1]) {
+        const into = breakables.aiRail(c, nx + fx * k, nz + fz * k, c.w / 2, c.kvx, c.kvz);
+        if (!into) continue;
+        if (into > 0.02) { c.kvx *= 0.64; c.kvz *= 0.64; c.kw = clamp(c.kw + (Math.random() < 0.5 ? -1 : 1) * 0.6, -3, 3); }
+        c.loose = true;
+        nx = c.x + c.kvx * dt; nz = c.z + c.kvz * dt; ny = wrapPi(c.yaw + c.kw * dt);
+        break;
+      }
+    }
     if (!this.canBe(c, nx, nz, ny)) {
       const n = this.outward(c.x, c.z), vn = n ? c.kvx * n.x + c.kvz * n.z : 0;
       if (n && vn > 0) { c.kvx -= n.x * vn; c.kvz -= n.z * vn; }

@@ -23,6 +23,9 @@ import { world } from './world.js';
 import { busRoads } from '../game/bus/roads.js'; // (the guardrails' line colliders: a section another player broke)
 
 export const BREAK_V = 8 / 3.6; // m/s: slower than this a pole is just a bump
+// (Oct 31 2026: an AI car through a guardrail: your car's rule, drive.js RAIL_BREAK_V / RAIL_BREAK_SIN: over 100 km/h
+// and into it at 15 deg or more; aiRail)
+export const AI_RAIL_V = 100 / 3.6, AI_RAIL_SIN = Math.sin(15 * Math.PI / 180);
 const RESPAWN = 90;             // s
 const GROW_AFTER = 120;         // s past RESPAWN: still in view and near, it grows back in anyway
 const NEAR = 25;                // m: closer than this (and in view) it waits
@@ -149,6 +152,48 @@ class Breakables {
       if (e && this.knock(e, vx * 0.7 + (Math.random() - 0.5) * 2, vz * 0.7 + (Math.random() - 0.5) * 2)) n++;
     }
     return n > 0;
+  }
+
+  /**
+   * (Oct 31 2026, the user: "Traffic and police cars only bounce off guardrails. Only your car breaks through: make
+   * them break through too"): your car's rule (drive.js railHit) for an AI car (traffic.js slide, police.js pushOut /
+   * knockStep). (x, z): one of its body circles (radius r), (vx, vz): its velocity, car: its own state (car.thru: where
+   * it last broke through, as drive.js d.thru). The drawn, standing guardrail line that circle touches deepest: over
+   * AI_RAIL_V and into it at AI_RAIL_SIN or more (the line's own normal, from the car's side): it breaks (breakRail:
+   * the follow-through the way the car goes); once through, every section that car touches within 12 m of there in
+   * the next 1.5 s, still faster than 30 km/h, breaks too (it carries on through the gap). Below that, or a scrape
+   * along it: nothing (the caller bounces it off as before). Not quiet: synced to the others ('brk') as yours.
+   * -> 0 nothing broke, else the speed into the rail (m/s; the follow-through: 0.01). Cheap: the 16 m rail grid
+   * (bus.js railGrid), no allocation
+   */
+  aiRail(car, x, z, r, vx, vz) {
+    const RG = busRoads.railGrid, rails = busRoads.rails;
+    if (!RG?.size || !rails || !this.scene || !car) return 0;
+    const sp = Math.hypot(vx, vz), now = performance.now() / 1000, T = car.thru;
+    const follow = !!T && now - T.t < 1.5 && Math.hypot(x - T.x, z - T.z) < 12 && sp > 30 / 3.6;
+    if (!follow && sp <= AI_RAIL_V) return 0;
+    let k = -1, best = 0;
+    for (let gx = Math.floor((x - r - 1) / 16); gx <= Math.floor((x + r + 1) / 16); gx++) for (let gz = Math.floor((z - r - 1) / 16); gz <= Math.floor((z + r + 1) / 16); gz++) {
+      const cell = RG.get(gx * 100003 + gz);
+      if (cell) for (const q of cell) { const L = rails[q]; if (!L?.seg || L.off) continue; const o = r + 0.15 - segDist(x, z, L); if (o > best) { best = o; k = q; } }
+    }
+    if (k < 0) return 0;
+    let into = 0.01;
+    if (!follow) {
+      const L = rails[k], ex = L.bx - L.ax, ez = L.bz - L.az, el = Math.hypot(ex, ez) || 1;
+      let nx = -ez / el, nz = ex / el; // (the line's normal, turned to the car's side of it)
+      if ((x - L.ax) * nx + (z - L.az) * nz < 0) { nx = -nx; nz = -nz; }
+      into = -(vx * nx + vz * nz);
+      if (into < sp * AI_RAIL_SIN) return 0; // (a scrape along it)
+    }
+    if (!this.breakRail(rails, k, x, z, vx, vz)) return 0;
+    if (!follow) {
+      car.thru = { x, z, t: now };
+      // (the crash of it, quieter far from the camera: the rail's own pieces fly silent, loud 0)
+      const cam = this.camera?.position, d = cam ? Math.hypot(cam.x - x, cam.z - z) : 0, amt = 0.95 * Math.max(0, 1 - d / 140);
+      if (amt > 0.03) try { this.audio?.impact?.('metal', amt); } catch { /* (silent) */ }
+    }
+    return into;
   }
 
   // a guardrail line's breakable entry (made on first use), with its network id (the line's middle)

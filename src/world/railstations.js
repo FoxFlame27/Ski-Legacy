@@ -53,6 +53,33 @@ function nameBoard(name, alt, wM = 5.2) {
   g.userData.face = face.material;
   return g;
 }
+// a name board as a free-standing sign (Oct 31 2026, the user: "the board doesn't look good, please fix all of these
+// area boards": its posts were thin poles 3.2 m long hung off the board's middle, not standing on anything): nb
+// (nameBoard, centred on its origin, front +z) mounted on two posts BEHIND it under its ends (inset 0.35 m, as thick
+// as its 0.06 m rim x2), from the ground at each post (world.groundHeight, so they never float or sink) up to its
+// top edge, on small concrete footings. o: the ground point under its centre; yaw: its front's heading; bottom: the
+// board's bottom edge over o. Pushes the posts' colliders. Returns the group (origin at o).
+const SIGN_POST = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.6, metalness: 0.3 });
+const SIGN_FOOT = new THREE.MeshStandardMaterial({ color: 0x9a968f, roughness: 0.9 });
+function nameSign(nb, wM, o, yaw, colliders, { bottom = 2.3 } = {}) {
+  const g = new THREE.Group(), hM = wM / 4, P = 0.12, pz = -(0.035 + P / 2);
+  g.position.set(o.x, o.y, o.z); g.rotation.y = yaw;
+  nb.position.set(0, bottom + hM / 2, 0);
+  g.add(nb);
+  const top = bottom + hM + 0.06, cx = Math.cos(yaw), cz = -Math.sin(yaw), bx = -Math.sin(yaw), bz = -Math.cos(yaw);
+  for (const sx of [-1, 1]) {
+    const x = sx * (wM / 2 - 0.35), wx = o.x + cx * x + bx * -pz, wz = o.z + cz * x + bz * -pz;
+    const y0 = world.groundHeight(wx, wz, o.y + 3) - o.y, h = top - y0;
+    if (h <= 0.2) continue;
+    const post = new THREE.Mesh(new THREE.BoxGeometry(P, h, P), SIGN_POST);
+    post.position.set(x, y0 + h / 2, pz); post.castShadow = true;
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.2, 0.34), SIGN_FOOT);
+    foot.position.set(x, y0, pz); foot.receiveShadow = true;
+    g.add(post, foot);
+    colliders.push({ x: wx, z: wz, r: 0.12 });
+  }
+  return g;
+}
 // departures board: the ride times off the timetable (railroute.js), the interval between the two trains
 function timetableBoard(stationName, id) {
   const trip = Math.round(PROFILE.trip / 60), every = Math.round(CYCLE / 2 / 60);
@@ -485,14 +512,12 @@ export function buildStations(scene, colliders = [], models = null) {
       }
       // name boards on posts at both ends of the platform
       for (const s of [st.s0 + 10, st.s1 - 10]) {
-        const p = besideLine(s, side * 5.6);
+        // (Oct 31 2026: free-standing on its posts, nameSign; facing the track, its posts on the platform; the
+        // posts' own colliders instead of one 0.6 m disc under the board's middle, where nothing stood)
+        const p = besideLine(s, side * 5.6), c = besideLine(s, 0);
         const nb = nameBoard(st.name, rec.alt, 3.0);
-        nb.position.set(p.x, p.y + 2.9, p.z);
-        nb.lookAt(besideLine(s, 0).x, p.y + 2.9, besideLine(s, 0).z);
-        const postMat = new THREE.MeshStandardMaterial({ color: 0x2f3338, roughness: 0.6 });
-        for (const sx of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.2, 0.1), postMat); post.position.set(sx * 1.3, -1.35, -0.08); nb.add(post); }
-        group.add(nb); signs.push(nb.userData.face);
-        colliders.push({ x: p.x, z: p.z, r: 0.6 });
+        const o = { x: p.x, y: Math.max(p.y, world.groundHeight(p.x, p.z, p.y + 3)), z: p.z }; // (the platform, or the snow over it)
+        group.add(nameSign(nb, 3.0, o, Math.atan2(c.x - p.x, c.z - p.z), colliders, { bottom: 2.2 })); signs.push(nb.userData.face);
       }
     }
     if (st.id === 'platt') {
@@ -530,15 +555,16 @@ export function buildStations(scene, colliders = [], models = null) {
       const nb = nameBoard(st.name, rec.alt, meshyTop ? 4.4 : 6.0);
       if (meshyTop) {
         // on two posts at the terrace's front edge, facing the village
-        nb.position.copy(house.position).addScaledVector(az, -8.9).add(new THREE.Vector3(0, 2.9, 0));
-        nb.quaternion.copy(house.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
-        const postMat = new THREE.MeshStandardMaterial({ color: 0x2f3338, roughness: 0.6 });
-        for (const sx of [-1, 1]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.4, 0.1), postMat); post.position.set(sx * 1.9, -1.45, -0.08); nb.add(post); }
+        // (Oct 31 2026: free-standing on its posts, nameSign, each post on the ground)
+        const o = new THREE.Vector3().copy(house.position).addScaledVector(az, -8.9);
+        o.y = Math.max(house.position.y, world.groundHeight(o.x, o.z, house.position.y + 3));
+        group.add(nameSign(nb, 4.4, o, Math.atan2(-az.x, -az.z), colliders, { bottom: 2.3 }));
       } else {
         nb.position.copy(house.position).addScaledVector(az, -0.9).add(new THREE.Vector3(0, 8.0, 0));
         nb.quaternion.copy(house.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+        group.add(nb);
       }
-      group.add(nb); signs.push(nb.userData.face);
+      signs.push(nb.userData.face);
       const door = new THREE.Vector3(0, 0, -2.6).applyMatrix4(m).add(house.position);
       rec.house = { x: c.x, z: c.z, r: Math.max(sz.len, sz.depth) / 2 + 2 };
       rec.board = { x: door.x, z: door.z };

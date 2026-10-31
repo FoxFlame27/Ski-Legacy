@@ -64,25 +64,52 @@ function nameTex(name) {
     g.font = `600 50px ${FONT}`; g.fillText(EXPRESS_NAME.toUpperCase(), w / 2, h * 0.8);
   });
 }
-const FRAME_MAT = { m: null };
-// a board wM wide (4:1), printed both sides, on two posts standing on the ground at y0 (board centre `up` over it)
-function boardMesh(name, wM, mats, { up = 2.9, posts = true } = {}) {
-  const t = nameTex(name);
-  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : 0xa5141c, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0 });
-  mats.push(mat);
-  const hM = wM / 4, g = new THREE.Group();
-  for (const sd of [1, -1]) {
-    const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, hM), mat);
-    face.position.set(0, up, sd * 0.045); face.rotation.y = sd > 0 ? 0 : Math.PI;
-    g.add(face);
-  }
+const FRAME_MAT = { m: null }, FOOT_MAT = { m: null };
+export const SIGN = { post: 0.12, depth: 0.07, inset: 0.35 }; // post section = the frame's rim (0.06 a side) x2
+// A free-standing station name sign (Oct 31 2026, the user, with a screenshot: "fix these kind of stuff, look, the
+// board doesn't look good, please fix all of these area boards": the posts stood IN FRONT of the board (at its
+// centre plane, 0.1 m thick, poking 5 mm through both printed faces), reached only to its middle, floated over /
+// sank into the ground, had no feet, and the board was printed on both sides with no back). Now: a solid panel
+// wM wide (4:1) with a little thickness, printed on its front (+z) only, a dark back face and its rim; two posts
+// BEHIND it (their front faces flush with the panel's back), under its ends inset SIGN.inset, as thick as the
+// rim, from the ground at each post (gy(sx): the ground's height there over the group's origin, so they never
+// float or sink) up to the board's top edge, each on a small concrete footing. bottom: the board's bottom edge
+// over the origin (2.2-2.5 m). The group's origin is on the ground under the board's centre.
+export function signMesh(t, wM, mats, { bottom = 2.3, gy = () => 0, color = 0xa5141c } = {}) {
+  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : color, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0 });
+  mats?.push(mat);
+  const hM = wM / 4, g = new THREE.Group(), cy = bottom + hM / 2, D = SIGN.depth, P = SIGN.post;
   const fm = FRAME_MAT.m ??= new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.6, metalness: 0.3 });
-  const back = new THREE.Mesh(new THREE.BoxGeometry(wM + 0.12, hM + 0.12, 0.07), fm);
-  back.position.y = up; back.castShadow = true;
-  g.add(back);
-  if (posts) for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.1, up, 0.1), fm); p.position.set(sx * (wM / 2 - 0.4), up / 2, 0); p.castShadow = true; g.add(p); }
+  const ft = FOOT_MAT.m ??= new THREE.MeshStandardMaterial({ color: 0x9a968f, roughness: 0.9 });
+  // the panel: a dark box (its back face and its rim, 0.06 m round the print) and the print just proud of its front
+  const back = new THREE.Mesh(new THREE.BoxGeometry(wM + 0.12, hM + 0.12, D), fm);
+  back.position.y = cy; back.castShadow = true; back.receiveShadow = true;
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, hM), mat);
+  face.position.set(0, cy, D / 2 + 0.004);
+  g.add(back, face);
+  // the posts behind it, ground -> the board's top edge, on concrete footings (sunk 0.1 m: no gap on a slope)
+  const top = cy + hM / 2 + 0.06, pz = -(D / 2 + P / 2);
+  for (const sx of [-1, 1]) {
+    const x = sx * (wM / 2 - SIGN.inset), y0 = gy(sx), h = top - y0;
+    if (h <= 0.2) continue;
+    const p = new THREE.Mesh(new THREE.BoxGeometry(P, h, P), fm);
+    p.position.set(x, y0 + h / 2, pz); p.castShadow = true;
+    const f = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.2, 0.34), ft);
+    f.position.set(x, y0 + 0.0, pz); f.receiveShadow = true;
+    g.add(p, f);
+  }
+  g.userData.face = mat;
   return g;
 }
+// the express board: the station's name over "LEGACY EXPRESS", on its posts (signMesh); yaw turns its front to face
+function boardMesh(name, wM, mats, opts) { return signMesh(nameTex(name), wM, mats, opts); }
+// where a sign's posts stand (world x, z), its origin p and its yaw (local x = (cos yaw, -sin yaw), the posts on -z)
+export function signPosts(p, yaw, wM) {
+  const cx = Math.cos(yaw), cz = -Math.sin(yaw), bx = -Math.sin(yaw), bz = -Math.cos(yaw), b = SIGN.depth / 2 + SIGN.post / 2;
+  return [-1, 1].map((sx) => { const x = sx * (wM / 2 - SIGN.inset); return { sx, x: p[0] + cx * x + bx * b, z: p[2] + cz * x + bz * b }; });
+}
+// the yaw that turns a sign's front to the station frame's lateral direction s (+1 right of +s, -1 left)
+const faceLat = (heading, s) => heading + (s > 0 ? -Math.PI / 2 : Math.PI / 2);
 function placeAt(o, p, yaw) { o.position.set(p[0], p[1], p[2]); o.rotation.y = yaw; return o; }
 
 // ------------------------------------------------------------------ props (instanced)
@@ -120,7 +147,9 @@ function stationLayout(st, models) {
   if (h) { L.house = { ...h, sz: houseSize(h) }; }
   // the board on the square behind the building, facing away from the track (toward the start / the village)
   const depth = L.house ? L.house.sz.z : 0;
-  L.square = { u: 0, lat: st.side * (HOUSE_LAT + depth + 3.5) };
+  // (Oct 31 2026, the user: "the board doesn't look good": it stood against the building's back wall; now 4.5 m
+  // clear of the model's whole footprint, eaves included)
+  L.square = { u: 0, lat: st.side * (HOUSE_LAT + depth + 4.5) };
   return L;
 }
 
@@ -142,8 +171,10 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], model
       registerBench({ x: p[0], y: p[1] + BP.h, z: p[2], yaw: st.heading + (b.sd > 0 ? -Math.PI / 2 : Math.PI / 2), width: 1.9, off: BP.off, floorY: p[1], back: BP.back, front: BP.front, recline: BP.recline });
     }
     for (const l of rec.lay.lamps) colliders.push({ ...at(l.u, l.lat), r: 0.2 });
-    for (const b of rec.lay.boards) for (const du of [-1.1, 1.1]) colliders.push({ ...at(b.u + du, b.lat), r: 0.12 });
-    for (const du of [-1.8, 1.8]) colliders.push({ ...at(rec.lay.square.u + du, rec.lay.square.lat), r: 0.12 });
+    // the name boards' posts (signMesh: exactly where they are drawn; Oct 31 2026, the user: "fix all of these area
+    // boards"; small colliders, none where nothing stands)
+    for (const b of rec.lay.boards) for (const q of signPosts(F.P(b.u, b.lat), faceLat(st.heading, -b.sd), 3.0)) colliders.push({ x: q.x, z: q.z, r: 0.12 });
+    for (const q of signPosts(F.P(rec.lay.square.u, rec.lay.square.lat), faceLat(st.heading, st.side), 5.2)) colliders.push({ x: q.x, z: q.z, r: 0.12 });
     // the glazed canopy's steel columns (canopy(): every 6 m along its length, 0.3 m in front of the building)
     for (let u = -CAN_LEN / 2; u <= CAN_LEN / 2 + 0.01; u += 6) colliders.push({ ...at(u, st.side * (HOUSE_LAT - 0.3)), r: 0.16 });
     const H = rec.lay.house;
@@ -255,10 +286,14 @@ function buildStation(rec, M, models) {
   }
   // the name boards along both platforms (facing the track) and on the square behind the building
   const mats = [];
-  for (const b of rec.lay.boards) grp.add(placeAt(boardMesh(rec.name, 3.0, mats), F.P(b.u, b.lat, PLAT_Y), rec.heading + Math.PI / 2));
-  const sq = rec.lay.square, sp = F.P(sq.u, sq.lat, -0.12);
+  // (Oct 31 2026: free-standing signs, signMesh; the platform ones face the track, their posts on the platform's
+  // paving; the square's faces away from the track, toward the start / the village, its posts each on the snow)
+  for (const b of rec.lay.boards) grp.add(placeAt(boardMesh(rec.name, 3.0, mats, { bottom: 2.2 }), F.P(b.u, b.lat, PLAT_Y), faceLat(rec.heading, -b.sd)));
+  const sq = rec.lay.square, sp = F.P(sq.u, sq.lat, -0.12), syaw = faceLat(rec.heading, side);
   sp[1] = world.groundHeight(sp[0], sp[2], rec.y + 3);
-  grp.add(placeAt(boardMesh(rec.name, 5.2, mats, { up: 3.4 }), sp, rec.heading + Math.PI / 2));
+  const sg = {};
+  for (const q of signPosts(sp, syaw, 5.2)) sg[q.sx] = world.groundHeight(q.x, q.z, rec.y + 3) - sp[1];
+  grp.add(placeAt(boardMesh(rec.name, 5.2, mats, { bottom: 2.4, gy: (sx) => sg[sx] ?? 0 }), sp, syaw));
   // benches facing the track
   const P = props(models);
   if (P.bench) {

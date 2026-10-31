@@ -12,6 +12,7 @@ import { mulberry32 } from '../core/noise.js';
 import { makeLOD, bakeGeometry } from '../core/assets.js';
 import { crisp } from './train.js';
 import { seatsFromObject } from '../game/seating.js';
+import { breakables } from './breakables.js'; // (the platform lamps: snapped off by a car over 100 km/h, Oct 31 2026)
 
 // the station buildings are Meshy models (rail_station_valley / _halt / _glacier, main.js MODEL_LIST); without
 // them (or with this off) the procedural buildings below stand in
@@ -405,6 +406,7 @@ export function buildStations(scene, colliders = [], models = null) {
   const signs = [];
   const list = [];
   const pools = []; // lamp light pools on the platforms (x, y, z, radius)
+  const lampPools = []; // (Oct 31 2026: [breakable lamp, its pool's index]: the pool folded away while it is down)
   const plat = new B(), platHall = new B();
   for (const st of RAIL.stations) {
     const side = st.side;
@@ -491,16 +493,18 @@ export function buildStations(scene, colliders = [], models = null) {
       group.add(tt);
       colliders.push({ x: tp.x, z: tp.z, r: 0.5 });
       const { bench, lamp } = platformProps(M.paint, M.wood, lampMat);
-      const LP = MESHY_STATIONS ? lampParts(models) : false, lampAt = [];
+      const LP = MESHY_STATIONS ? lampParts(models) : false, lampAt = [], lampBrk = []; let lampIms = [];
       for (let s = st.s0 + 16; s < st.s1 - 10; s += 24) {
         const bp = besideLine(s, side * 4.8);
         const b = bench.clone(); b.position.set(bp.x, bp.y + 0.06, bp.z); b.lookAt(besideLine(s, 0).x, bp.y + 0.06, besideLine(s, 0).z); group.add(b);
         seatsFromObject(b, [-0.55, 0, 0.55].map((x) => ({ x, y: 0.5, z: 0, yaw: Math.PI, floor: 0, back: -0.22, front: 0.225 }))); // (its backrest on +z: you face -z)
         colliders.push({ x: bp.x, z: bp.z, r: 0.6, top: bp.y + 0.55 }); // (low: jumped over)
         const lp = besideLine(s + 12, side * 5.3);
+        let l = null;
         if (LP) lampAt.push([lp.x, lp.y + 0.06, lp.z, Math.atan2(-(-lp.dz * side), -(lp.dx * side))]);
-        else { const l = lamp.clone(); l.position.set(lp.x, lp.y + 0.06, lp.z); group.add(l); }
-        colliders.push({ x: lp.x, z: lp.z, r: 0.25 });
+        else { l = lamp.clone(); l.position.set(lp.x, lp.y + 0.06, lp.z); group.add(l); }
+        const lc = { x: lp.x, z: lp.z, r: 0.25 };
+        colliders.push(lc); lampBrk.push([lc, l, pools.length]); // (its pool: the next one pushed)
         const pp = besideLine(s + 12, side * 4.0);
         pools.push([pp.x, pp.y + 0.09, pp.z, 4.2]);
       }
@@ -509,7 +513,12 @@ export function buildStations(scene, colliders = [], models = null) {
         const o = new THREE.Object3D();
         lampAt.forEach(([x, y, z, yaw], i) => { o.position.set(x, y, z); o.rotation.set(0, yaw, 0); o.updateMatrix(); post.setMatrixAt(i, o.matrix); lan.setMatrixAt(i, o.matrix); });
         for (const im of [post, lan]) { im.instanceMatrix.needsUpdate = true; im.castShadow = true; im.receiveShadow = true; im.computeBoundingSphere(); group.add(im); }
+        lampIms = [post, lan];
       }
+      // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec"; the
+      // station lamps too (open point after 6bf82f9): each platform lamp (its Meshy post + lantern instances, or the
+      // procedural one) a breakable street lamp: world/breakables.js; its light pool folded away while it is down)
+      lampBrk.forEach(([lc, l, pi], i) => { const e = breakables.add(lc, l ? [l] : lampIms.map((im) => [im, i]), { h: 4.3, loud: 0.7, lamp: true }); if (e) lampPools.push([e, pi]); });
       // name boards on posts at both ends of the platform
       for (const s of [st.s0 + 10, st.s1 - 10]) {
         // (Oct 31 2026: free-standing on its posts, nameSign; facing the track, its posts on the platform; the
@@ -599,6 +608,10 @@ export function buildStations(scene, colliders = [], models = null) {
     pm.visible = false;
     group.add(pm);
     poolMat.userData.mesh = pm;
+    // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph": a knocked platform lamp's pool (its quad)
+    // collapsed onto its first corner while it is down (breakables sets light.out), back with it)
+    const pa = g.getAttribute('position'), P0 = pa.array.slice();
+    for (const [e, i] of lampPools) e.light = { set out(v) { for (let j = i * 12; j < i * 12 + 12; j++) pa.array[j] = v ? P0[i * 12 + (j % 3)] : P0[j]; pa.needsUpdate = true; } };
   }
   const platM = new THREE.Mesh(plat.build(), M.stone);
   platM.receiveShadow = true;

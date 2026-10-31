@@ -110,6 +110,25 @@ class Breakables {
   }
 
   /**
+   * (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec"; the express
+   * stations' platform lamps, open point after 6bf82f9) A pole whose drawn mesh is built again (a station rebuilt in
+   * range: world/expressstations.js): e's parts are now `parts` (as add()); still down: hidden at once, its m0 the new
+   * instance's matrix (restore() / growTo() put it back from that)
+   */
+  rebind(e, parts) {
+    if (!e || !parts?.length) return;
+    e.parts = parts.map((p) => (Array.isArray(p) ? { im: p[0], k: p[1], m0: new Float32Array(16) } : { obj: p, s0: new THREE.Vector3() }));
+    for (const p of e.parts) {
+      if (p.obj) { p.obj.userData.noMerge = true; p.obj.userData.noCollide = true; if (e.down) { p.s0.copy(p.obj.scale); p.obj.visible = false; } continue; }
+      p.im.userData.noCollide = true;
+      if (!e.down) continue;
+      const arr = p.im.instanceMatrix.array;
+      for (let i = 0; i < 16; i++) { p.m0[i] = arr[p.k * 16 + i]; arr[p.k * 16 + i] = 0; }
+      p.im.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  /**
    * Instanced poles whose thin colliders (pole: true) were made elsewhere (the piste markers): each instance of
    * ims[0] matched to the collider standing on its spot; every mesh of ims shares the instance index. -> how many
    */

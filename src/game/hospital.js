@@ -343,7 +343,10 @@ export class Hospital {
       return m;
     };
     for (const sx of [-1, 1]) prop('wooden_bench', 1.7, 'xz', sx * 5.2, FRONT + 0.75, 0, { hw: 0.9, hd: 0.4 });
-    for (const sx of [-1, 1]) { const lamp = prop('lamp_post', 4.2, 'y', sx * (L.hw - 2.4), L.hd - 1.6, sx > 0 ? -Math.PI / 2 : Math.PI / 2, { r: 0.25 }); if (lamp) addNightGlow(lamp, 6); }
+    // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec"; the two
+    // lamp posts at the medical centre too (open point after 6bf82f9): each a breakable street lamp (lamp: only over
+    // 100 km/h, heavier flight, glass tinkle, back after 90 s; synced as a 'pole' over 'brk': world/breakables.js))
+    for (const sx of [-1, 1]) { const lamp = prop('lamp_post', 4.2, 'y', sx * (L.hw - 2.4), L.hd - 1.6, sx > 0 ? -Math.PI / 2 : Math.PI / 2, { r: 0.25 }); if (lamp) { addNightGlow(lamp, 6); breakables.add(colliders[colliders.length - 1], [lamp], { h: 4.2, loud: 0.7, lamp: true }); } }
     // the Meshy forecourt props (tools/meshy-hospital-outside.mjs: decor/*): planters with little spruces either side of
     // the door, bollards before the canopy's front posts, a litter bin by the bench, a grit box by the AMBULANZ bay; a
     // procedural stand-in each until (or if never) its model loads

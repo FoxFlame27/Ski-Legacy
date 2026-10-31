@@ -65,7 +65,7 @@ import { isMP } from '../net/mode.js';
 import { ST, F, W_SHIFT } from '../net/protocol.js';
 import { presentation } from './presentation/index.js';
 import { HeliModel } from './heli/model.js';
-import { breakables, AI_RAIL_V } from '../world/breakables.js'; // (a patrol car through a guardrail at 100 km/h+: aiRail)
+import { breakables, AI_RAIL_V, BREAK_V } from '../world/breakables.js'; // (a patrol car through a guardrail at 100 km/h+: aiRail; poles / lamps knocked: sweep)
 import { nightUniform } from '../world/village.js';
 import { terrainUniforms } from '../world/terrain.js'; // read-only: how hard it is snowing (the searchlight's beam: heli/model.js)
 
@@ -2461,6 +2461,15 @@ export class Police {
     const ox = u.x, oz = u.z, oyaw = u.yaw;
     u.yaw = wrapPi(u.yaw + (u.v / WB) * Math.tan(u.steer) * dt);
     u.x += Math.sin(u.yaw) * u.v * dt; u.z += Math.cos(u.yaw) * u.v * dt;
+    // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph"; open point after 6bf82f9: the patrol cars
+    // knock poles, signs, reflector posts as the traffic does (over 8 km/h) and snap street lamps off only over 100 km/h
+    // (world/breakables.js sweep: e.minV), before solidMove / pushOut so a knocked one is no longer in the way; synced
+    // as yours ('brk': the patrol cars are the offender's own), a little speed lost)
+    if (Math.abs(u.v) > BREAK_V) {
+      const fs = Math.sin(u.yaw), fc = Math.cos(u.yaw), vx = fs * u.v + (u.kx || 0), vz = fc * u.v + (u.kz || 0), k = u.hd - u.hw;
+      const n = breakables.sweep(u.x + fs * k, u.z + fc * k, u.hw, vx, vz) + breakables.sweep(u.x - fs * k, u.z - fc * k, u.hw, vx, vz);
+      if (n) u.v *= Math.max(0.85, 1 - 0.05 * n);
+    }
     this.solidMove(u, ox, oz, oyaw);
     this.pushOut(u);
     this.place(u);

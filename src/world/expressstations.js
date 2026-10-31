@@ -17,6 +17,7 @@ import { RailBuilder, canvasTex } from './railtrack.js';
 import { bakeGeometry, makeLOD } from '../core/assets.js';
 import { crisp } from './train.js';
 import { propProfile, registerBench } from '../game/seating.js';
+import { breakables } from './breakables.js'; // (the platform lamps: snapped off by a car over 100 km/h, Oct 31 2026)
 
 export const PLAT_Y = 0.25;                   // platform top over the top of rail (the squares lie at -0.12)
 const EDGE = 3.9, BACK = 8.7;                 // platform edge / back, m from the centre line
@@ -170,7 +171,7 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], model
       const p = F.P(b.u, b.lat, PLAT_Y);
       registerBench({ x: p[0], y: p[1] + BP.h, z: p[2], yaw: st.heading + (b.sd > 0 ? -Math.PI / 2 : Math.PI / 2), width: 1.9, off: BP.off, floorY: p[1], back: BP.back, front: BP.front, recline: BP.recline });
     }
-    for (const l of rec.lay.lamps) colliders.push({ ...at(l.u, l.lat), r: 0.2 });
+    for (const l of rec.lay.lamps) colliders.push((l.c = { ...at(l.u, l.lat), r: 0.2 })); // (l.c: its breakable, buildStation)
     // the name boards' posts (signMesh: exactly where they are drawn; Oct 31 2026, the user: "fix all of these area
     // boards"; small colliders, none where nothing stands)
     for (const b of rec.lay.boards) for (const q of signPosts(F.P(b.u, b.lat), faceLat(st.heading, -b.sd), 3.0)) colliders.push({ x: q.x, z: q.z, r: 0.12 });
@@ -214,15 +215,19 @@ function platform(b, F, sd, u0, u1, { back = BACK, y = PLAT_Y } = {}) {
   b.face(F.P(u0, sd * back, y), F.P(u1, sd * back, y), F.P(u1, sd * back, -1.4), F.P(u0, sd * back, -1.4), mid, K.wall, 3);
   for (const u of [u0, u1]) b.face(F.P(u, sd * EDGE, y), F.P(u, sd * back, y), F.P(u, sd * back, -1.4), F.P(u, sd * EDGE, -0.8), mid, K.wallDark, 3);
 }
-// a lamp: a slim pole and a flat LED head leaning out over the platform's edge
-function lamp(steel, lamps, F, l) {
-  const K = COL();
-  const X = [F.rx * l.sd, 0, F.rz * l.sd], Z = [F.dx, 0, F.dz];
-  const c = F.P(l.u, l.lat, PLAT_Y);
-  steel.obx([c[0], c[1] + 2.4, c[2]], X, Z, 0.06, 2.4, 0.06, K.steel);
-  const h = F.P(l.u, l.lat - l.sd * 0.45, PLAT_Y + 4.75);
-  steel.obx(h, X, Z, 0.5, 0.06, 0.2, K.steelDark);
-  lamps.obx([h[0], h[1] - 0.07, h[2]], X, Z, 0.42, 0.012, 0.14, K.lamp);
+// a lamp: a slim pole and a flat LED head leaning out over the platform's edge (Oct 31 2026, the user: "make sure you
+// break these lamps after 100 kph, and they respawn after 90 sec": one lamp in its own frame (x toward the track side
+// it stands on, the head leaning out 0.45 m along -x), instanced per lamp in buildStation so each can be knocked off)
+let LAMPG = null;
+function lampGeo() {
+  if (LAMPG) return LAMPG;
+  const K = COL(), X = [1, 0, 0], Z = [0, 0, 1], steel = new XB(), led = new XB();
+  steel.obx([0, 2.4, 0], X, Z, 0.06, 2.4, 0.06, K.steel);
+  steel.obx([-0.45, 4.75, 0], X, Z, 0.5, 0.06, 0.2, K.steelDark);
+  led.obx([-0.45, 4.68, 0], X, Z, 0.42, 0.012, 0.14, K.lamp);
+  LAMPG = { steel: steel.build(), led: led.build() };
+  for (const g of [LAMPG.steel, LAMPG.led]) if (g) g.userData.shared = true; // (never disposed with a station)
+  return LAMPG;
 }
 // the Wolkenspitzbahn valley station's platform canopy (railstations.js buildCanopy): steel columns, a glazed
 // lean-to roof, snow along its low edge. Local frame: x along the track, z away from it, front edge at z = 0.
@@ -246,13 +251,27 @@ function canopy(steelMat, glassMat, len, width) {
 function buildStation(rec, M, models) {
   const { F } = rec, side = rec.side;
   const grp = new THREE.Group();
-  const conc = new XB({ uv: true }), steel = new XB(), lamps = new XB();
+  const conc = new XB({ uv: true });
   for (const sd of [-1, 1]) platform(conc, F, sd, -PLATFORM / 2, PLATFORM / 2);
-  for (const l of rec.lay.lamps) lamp(steel, lamps, F, l);
   const add = (b, mat, cast = true) => { const g = b.build(); if (!g) return null; const m = new THREE.Mesh(g, mat); m.castShadow = cast; m.receiveShadow = true; m.matrixAutoUpdate = false; grp.add(m); return m; };
   add(conc, M.concrete, false);
-  add(steel, M.mast);
-  add(lamps, M.lampX, false);
+  // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec"; the station
+  // lamps too, open point after 6bf82f9): the platform lamps instanced (yaw: lampGeo's x along the side's own right),
+  // each a breakable street lamp on its planned collider (l.c); the station is built again in range: the same
+  // breakable re-pointed at the new instances (breakables.rebind; one still down stays hidden): world/breakables.js
+  const LG = lampGeo();
+  if (LG.steel && LG.led) {
+    const list = rec.lay.lamps.map((l) => { const p = F.P(l.u, l.lat, PLAT_Y); return [p[0], p[1], p[2], Math.atan2(-l.sd * F.dx, -l.sd * F.dz)]; });
+    const post = instanced(LG.steel, M.mast, list), head = instanced(LG.led, M.lampX, list, { cast: false });
+    if (post && head) {
+      grp.add(post, head);
+      rec.lay.lamps.forEach((l, k) => {
+        if (!l.c) return;
+        const parts = [[post, k], [head, k]];
+        if (l.c.breakable) breakables.rebind(l.c.breakable, parts); else breakables.add(l.c, parts, { h: 4.8, loud: 0.7, lamp: true });
+      });
+    }
+  }
   // the building and the canopy in front of it: local x along the track, z away from it (a right-handed basis)
   const az = new THREE.Vector3(F.rx * side, 0, F.rz * side), ax = new THREE.Vector3(F.dx * side, 0, F.dz * side);
   const basis = new THREE.Matrix4().makeBasis(ax, new THREE.Vector3(0, 1, 0), az);

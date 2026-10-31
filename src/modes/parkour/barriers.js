@@ -285,8 +285,43 @@ function postStations(line, sp) {
   return st;
 }
 
+// (Oct 31 2026, the user: the course B-nets and A-nets of the World Racing courses were never in the shared colliders:
+// in free ride (outside a race, where only the course's own constrain held you in) you skied and walked straight
+// through every one, and from outside the course into it. Each net run now gets the 'net' kind of collider the piste
+// nets use (resortdressing.js / pistefence.js: net: true, the soft catch of player.js bounce, 'net' in drive.js and
+// snowmobile.js kindOf, no wipeout, no damage), exactly along the drawn net: the run's own line (edgeLine, a point
+// every ~1 m at lateral w + 0.6 for a B-net, w + AOFF for an A-net, the same line the panels hang on) is cut into
+// straight stretches of up to 16 m whose points all lie within 0.15 m of the stretch's chord, one thin box (0.4 m
+// thick, centred on the net, its ends 0.05 m past the stretch's ends so stretches meet) per stretch, to the net's top
+// (the highest snow under the stretch + the net's height: jumped over above it, as the panel is drawn). Never across
+// the course: a run follows one side only. The inside face of a B-net box is at least w + 0.25 (0.6 - 0.2 thick - 0.15
+// chord), so a racer, held within w - 0.3 (courses.js constrain), stays 0.2 m clear with the 0.35 m radius; A-nets
+// stand further out. Merged stretches keep the count down (pistefence.js's reason for its pool): a 3 km course is a
+// few hundred boxes, and only the courses standing near you are registered (freeworld.js syncMasts).)
+function netColliders(ctx, line, N, kind) {
+  const S = ctx.course.solids, P = line.pts;
+  if (!S || P.length < 2) return;
+  for (let i0 = 0; i0 < P.length - 1;) {
+    let j = i0 + 1;
+    for (let k = i0 + 2; k < P.length; k++) {
+      const ax = P[i0].x, az = P[i0].z, dx = P[k].x - ax, dz = P[k].z - az, L = Math.hypot(dx, dz);
+      if (L > 16) break;
+      let ok = true;
+      for (let m = i0 + 1; m < k && ok; m++) ok = Math.abs((P[m].x - ax) * dz - (P[m].z - az) * dx) / (L || 1) <= 0.15;
+      if (!ok) break;
+      j = k;
+    }
+    const a = P[i0], b = P[j], L = Math.hypot(b.x - a.x, b.z - a.z);
+    let y = -Infinity;
+    for (let m = i0; m <= j; m++) y = Math.max(y, P[m].y);
+    if (L > 0.05) S.push({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, hw: 0.2, hd: L / 2 + 0.05, rot: -Math.atan2(b.x - a.x, b.z - a.z), top: y + N.H, h: N.H, net: true, noStep: true, courseNet: kind, raceProp: 'net' });
+    i0 = j;
+  }
+}
+
 function buildNet(ctx, line, N, rnd, kind) {
   const { chunk, layout } = ctx;
+  netColliders(ctx, line, N, kind);
   const ST = postStations(line, N.sp);
   const n = ST.length - 1;
   const a = {}, b = {}, q = {};

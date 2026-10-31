@@ -8,6 +8,7 @@
 // ~2.6 km (FreeCourses.update). E at a start house races the course against the 14 AI exactly like RACE mode
 // (game/modes.js startFree reuses modes/race/session.js); after the finish you ski on from the finish area.
 import { COURSES, getCourse } from './courses.js';
+import { pisteRaceCourses } from './props.js';
 
 const BUILD_D = 1700;  // m from the course line: build its meshes
 const DROP_D = 2600;   // m: dispose them again
@@ -77,6 +78,14 @@ export function freeCourses() {
     entries[entries.length - 1].rewardMax = prizeFor(entries[entries.length - 1], 'superhard');
   }
   return entries;
+}
+
+// take one course's colliders out of the shared array again (in place: everyone holds this array)
+function dropCols(C, cols) {
+  const gone = new Set(cols);
+  let j = 0;
+  for (let i = 0; i < C.length; i++) if (!gone.has(C[i])) C[j++] = C[i];
+  C.length = j;
 }
 
 // distance from (x, z) to a course line (sampled every ~30 m)
@@ -154,13 +163,17 @@ export class FreeCourses {
     for (const e of list) {
       const up = !!e.course.group;
       if (up && !e.mastCols) { e.mastCols = [...(e.course.floodlights || []).map((m) => ({ x: m.x, z: m.z, r: 0.2, h: 11 })), ...(e.course.solids || [])]; C.push(...e.mastCols); }
-      else if (!up && e.mastCols) {
-        const gone = new Set(e.mastCols);
-        let j = 0;
-        for (let i = 0; i < C.length; i++) if (!gone.has(C[i])) C[j++] = C[i];
-        C.length = j;
-        e.mastCols = null;
-      }
+      else if (!up && e.mastCols) { dropCols(C, e.mastCols); e.mastCols = null; }
+    }
+    // (Oct 31 2026, the user: the bus races' start house, arches, FINISH portal and start board were walked through:
+    // a bus race course (modes/race/busraces.js) gathers course.solids the same way (props.js buildPisteRaceMeshes)
+    // but nobody registered them. props.js remembers every piste race course it built (pisteRaceCourses): their solids
+    // are registered here while the course's group stands and removed after its dispose, like the courses' above.)
+    this.pisteCols ||= new Map();
+    for (const course of pisteRaceCourses) {
+      const up = !!course.group, cols = this.pisteCols.get(course);
+      if (up && !cols) { const cs = [...(course.solids || [])]; this.pisteCols.set(course, cs); C.push(...cs); }
+      else if (!up && cols) { dropCols(C, cols); this.pisteCols.delete(course); }
     }
   }
 

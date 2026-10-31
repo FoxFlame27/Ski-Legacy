@@ -91,6 +91,7 @@ export function buildCourseMeshes(course, models = {}) {
 export function buildPisteRaceMeshes(course, models = {}) {
   clearMeshGround();
   course.solids = [];
+  pisteRaceCourses.add(course); // (freeworld.js syncMasts: these solids enter the shared colliders while the course stands)
   const group = new THREE.Group();
   group.name = 'course-' + course.id;
   const props = new THREE.Group();
@@ -107,6 +108,14 @@ export function buildPisteRaceMeshes(course, models = {}) {
   clearMeshGround();
   return group;
 }
+
+// (Oct 31 2026, the user, at the bus races: their start house, arches, FINISH portal and start board were walked
+// through. A bus race course (modes/race/busraces.js PisteCourse) collects its colliders in course.solids like a World
+// Racing course, but nothing ever put them in the shared colliders: BusRaces keeps no list of them. Every piste race
+// course built here is remembered in this set, and freeworld.js FreeCourses.syncMasts registers its solids while its
+// group stands (course.group: set by PisteCourse.build, cleared by dispose) and takes them out again after, exactly
+// as it does for the World Racing courses.)
+export const pisteRaceCourses = new Set();
 
 // ------------------------------------------------------------------ helpers
 // a spot beside the track whose footprint is level enough to stand a structure on
@@ -198,7 +207,7 @@ function upwards(P, I) {
 // Inflatable race arch: a fat tube rising from two weighted feet, rounded corners, white bands,
 // a banner panel on both faces of the top beam. Feet sit on the rendered snow at each side; the arch
 // grows taller with its span so wide World Cup pistes still get a well-proportioned arch.
-function inflatableArch(T, s, text, { color = BLUE, band = '#ffffff', sub = 'SKI LEGACY', extra = 1.3 } = {}) {
+function inflatableArch(T, s, text, { color = BLUE, band = '#ffffff', sub = 'SKI LEGACY', extra = 1.3, solids = null } = {}) {
   const g = new THREE.Group();
   const f = frameAt(T, s);
   const w = T.sAt(T.W, s);
@@ -207,6 +216,15 @@ function inflatableArch(T, s, text, { color = BLUE, band = '#ffffff', sub = 'SKI
   const R = half > 14 ? 0.75 : 0.55, cr = R * 3.1;
   const yL = meshGround(f.x - f.rx * half, f.z - f.rz * half), yR = meshGround(f.x + f.rx * half, f.z + f.rz * half);
   const top = Math.max(yL, yR) + height;
+  // (Oct 31 2026, the user: the START arch's legs and every CHECKPOINT arch's legs were skied and walked straight
+  // through, at the World Racing courses and the bus races. Each leg is now one solid round collider exactly where
+  // the tube is drawn: centred on the leg's foot at lateral -half / +half (w + extra: 0.9 m for START, 1.3 m for a
+  // checkpoint), radius R (the tube itself, 0.55 m, 0.75 m on a wide piste; not the wider sand-bag foot, which is
+  // 0.38 m tall and skied over), up to the arch's top. A racer never reaches it: the course keeps the skier within
+  // w - 0.3 of the centre line (courses.js constrain) and the leg's inside face is at w + extra - R, at least
+  // w + 0.15, so the skier's 0.35 m radius stays clear by 0.1 m or more; the beam overhead is far above any jump.
+  // Nothing spans the course: the two legs only. course.solids via `solids`: freeworld.js syncMasts.)
+  if (solids) for (const [sx, y0] of [[-1, yL], [1, yR]]) solids.push({ x: f.x + f.rx * half * sx, z: f.z + f.rz * half * sx, r: R, top, h: top - y0, noStep: true, raceProp: 'arch' });
   // path in the cross-section plane (x = lateral, y = height), then placed in world space
   const pts2 = [];
   const add = (x, y) => pts2.push(new THREE.Vector2(x, y));
@@ -278,11 +296,26 @@ function buildStart(course, models, group, dye, { inward = false } = {}) {
     m.rotation.y = yaw;
     m.name = 'start-house'; // main.js hides it while the chase camera is inside it (the racer lines up in it)
     group.add(m);
+    // (Oct 31 2026, the user: the start house of every World Racing course and bus race was walked and skied
+    // through. The Meshy hut is a closed building (its vertices fill the whole footprint at every height up to the
+    // roof): one solid box over the model exactly as it is seated, its fitted width and depth (fitModel centres it on
+    // H.x / H.z), turned to the course, from its foot to its roof. Its open front is H.front, 2.1 m behind the start
+    // line, and the racer lines up at the start line (slot 0 of the grid, the only racer that collides): the box's
+    // front face stays 1.75 m clear of the skier's 0.35 m radius, and the course runs away from it downhill. The AI
+    // field lining up beside it never collides. noStep: never a step up onto its roof.)
+    course.solids?.push({ x: H.x, z: H.z, hw: H.halfWidth, hd: H.depth / 2, rot: -yaw, top: m.position.y + (size?.y || 3.6), noStep: true, raceProp: 'house' });
   } else {
     seat(3.7, 3.05);
     const shelter = startShelter(H, course);
     shelter.name = 'start-house';
     group.add(shelter);
+    // (Oct 31 2026, the user, as above: the procedural shelter is open at both ends (no back wall, the racer's
+    // camera looks through it), so only its two timber side walls are solid: each one box exactly over the drawn
+    // wall at x = +-2.45 in the shelter's frame, 0.3 m thick (the 0.26 m corner posts and the window strip on the
+    // outside), 3.96 m long (the walls and corner posts, end to end), to the roof's front height. Walking through it
+    // from the open back to the open front still works, as it is drawn.)
+    const c = Math.cos(yaw), sn = Math.sin(yaw);
+    for (const sx of [-1, 1]) course.solids?.push({ x: H.x + sx * 2.47 * c, z: H.z - sx * 2.47 * sn, hw: 0.15, hd: 1.98, rot: -yaw, top: shelter.position.y + 3.5, noStep: true, raceProp: 'house' });
   }
   // --- start wand + timing posts in front of the house
   const f = frameAt(T, course.start.s + 0.6);
@@ -303,7 +336,7 @@ function buildStart(course, models, group, dye, { inward = false } = {}) {
   group.add(m);
   // --- START arch over the track below the gate (house style: blue tube, red bands)
   const LC = lookOf(course).colors || {};
-  group.add(inflatableArch(T, course.start.s + 12, 'START', { sub: course.name.toUpperCase(), color: LC.arch || BLUE, band: LC.band || RED, extra: 0.9 }));
+  group.add(inflatableArch(T, course.start.s + 12, 'START', { sub: course.name.toUpperCase(), color: LC.arch || BLUE, band: LC.band || RED, extra: 0.9, solids: course.solids }));
   dye.across(T, course.start.s + 0.6, 0.14, BLUE, -1.3, 1.3, false);
   // --- course board beside the house
   const side = -1;
@@ -476,7 +509,7 @@ function buildCheckpoints(course, group, dye) {
   for (const cp of course.checkpoints) {
     if (cp.index === 0) continue;
     const LC = lookOf(course).colors || {};
-    const arch = inflatableArch(T, cp.s, `CHECKPOINT ${cp.index}`, { sub: course.name.toUpperCase(), color: LC.arch || BLUE, band: LC.band || '#ffffff' });
+    const arch = inflatableArch(T, cp.s, `CHECKPOINT ${cp.index}`, { sub: course.name.toUpperCase(), color: LC.arch || BLUE, band: LC.band || '#ffffff', solids: course.solids });
     group.add(arch);
     group.add(checkpointDisc(T, cp.s, cp.index, total, arch));
     const w = T.sAt(T.W, cp.s);
@@ -675,6 +708,12 @@ function finishPortal(course, s) {
   for (const [sx, y0] of [[-1, yL], [1, yR]]) {
     const x = f.x + f.rx * span * sx, z = f.z + f.rz * span * sx;
     const hgt = yBeam - y0 + 0.6;
+    // (Oct 31 2026, the user: the FINISH arch's legs were skied and walked through, at every World Racing course and
+    // bus race. Each clad tower is now one solid box exactly as drawn: TW (1.6 m) square, turned to the course, from
+    // the snow up to the top of the beam. It stands at lateral +-(w + 2.4), its inside face at w + 1.6, far outside
+    // the w - 0.3 a racer is held within (courses.js constrain), and behind the finish-area boards; the beam spans the
+    // course 8.6 m up, so nothing stands across the racing line. course.solids: freeworld.js syncMasts.)
+    course.solids?.push({ x, z, hw: TW / 2, hd: TW / 2, rot: -f.heading, top: yBeam + BH, h: yBeam + BH - y0, noStep: true, raceProp: 'portal' });
     b.at(x, y0 - 0.6, z, f.heading);
     b.box(0, hgt / 2, 0, TW, hgt, TW, red, red);
     b.box(0, 0.6 + 0.14, 0, TW + 0.24, 0.28, TW + 0.24, dark); // plinth at the snow line
@@ -863,7 +902,7 @@ function buildCrowd(course, models, group) {
         // only on level-ish snow beside the course
         const y = meshGround(p.x, p.z);
         if (Math.abs(meshGround(p.x + 0.6, p.z) - y) > 0.4 || Math.abs(meshGround(p.x, p.z + 0.6) - y) > 0.4) continue;
-        spots.push({ x: p.x, y, z: p.z, yaw: p.heading + (sd > 0 ? -Math.PI / 2 : Math.PI / 2) + (rnd() - 0.5) * 0.6 });
+        spots.push({ x: p.x, y, z: p.z, yaw: p.heading + (sd > 0 ? -Math.PI / 2 : Math.PI / 2) + (rnd() - 0.5) * 0.6, s, lat });
       }
     }
   }
@@ -883,7 +922,7 @@ function buildCrowd(course, models, group) {
           if (nearStructure(course, p.x, p.z)) continue;
           const y = meshGround(p.x, p.z);
           if (Math.abs(meshGround(p.x + 0.6, p.z) - y) > 0.4 || Math.abs(meshGround(p.x, p.z + 0.6) - y) > 0.4) continue;
-          spots.push({ x: p.x, y, z: p.z, yaw: p.heading + (sd > 0 ? -Math.PI / 2 : Math.PI / 2) + (rnd() - 0.5) * 0.6 });
+          spots.push({ x: p.x, y, z: p.z, yaw: p.heading + (sd > 0 ? -Math.PI / 2 : Math.PI / 2) + (rnd() - 0.5) * 0.6, s, lat });
         }
       }
     }
@@ -904,6 +943,7 @@ function buildCrowd(course, models, group) {
     }
   }
   if (!spots.length) return;
+  crowdColliders(course, spots);
   const geo = fanGeometries();
   const jm = new THREE.InstancedMesh(geo.jacket, new THREE.MeshStandardMaterial({ roughness: 0.75 }), spots.length);
   const rm = new THREE.InstancedMesh(geo.rest, vcMaterial({ roughness: 0.8 }), spots.length);
@@ -919,6 +959,40 @@ function buildCrowd(course, models, group) {
   });
   for (const m of [jm, rm]) { m.castShadow = true; m.receiveShadow = true; m.computeBoundingSphere(); group.add(m); }
   group.userData.crowd = spots.length;
+}
+// (Oct 31 2026, the user: the spectators along the finish straight and the lower course were walked and skied
+// through. A soft push is enough, and hundreds of people one collider each would weigh on every system that scans
+// the shared colliders, so the standing fans are grouped: per side of the course, every 4 m of course (by the s the
+// fan was placed at) that has fans gets one soft box exactly over them: in the course's frame at the bin's middle,
+// from the innermost to the outermost fan and from the first to the last one as they really stand (fitted to their
+// world positions, so it hugs them on a bend), plus 0.3 m all round (a person's shoulders). They all stand behind
+// the finish-area boards or the B-nets (rows 1.5 m and more past the course edge w, the boards and nets at w + 0.6):
+// the boxes' inside faces are at about w + 1.05 or further, so a racer, held within w - 0.3 (courses.js constrain),
+// never reaches one. soft: a padded push, no wipeout, no car damage. The seated fans on the grandstands are already
+// inside the grandstands' own boxes.)
+function crowdColliders(course, spots) {
+  if (!course.solids) return;
+  const T = course.track, bins = new Map();
+  for (const sp of spots) {
+    if (!Number.isFinite(sp.s)) continue; // (seated on a grandstand)
+    const k = (sp.lat > 0 ? 1 : -1) * (Math.floor(sp.s / 4) + 1);
+    if (!bins.has(k)) bins.set(k, []);
+    bins.get(k).push(sp);
+  }
+  for (const list of bins.values()) {
+    // the bin's own frame (the course's heading at its middle): the box is fitted to the fans' real positions in
+    // it, so it hugs them on a bend too (the run-out's curve)
+    let sa = Infinity, sb = -Infinity, y = -Infinity;
+    for (const sp of list) { sa = Math.min(sa, sp.s); sb = Math.max(sb, sp.s); y = Math.max(y, sp.y); }
+    const p = T.pointAt((sa + sb) / 2, 0), h = p.heading, ax = Math.sin(h), az = Math.cos(h), nx = Math.cos(h), nz = -Math.sin(h);
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const sp of list) {
+      const dx = sp.x - p.x, dz = sp.z - p.z, u = dx * nx + dz * nz, v = dx * ax + dz * az;
+      u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+    }
+    const uc = (u0 + u1) / 2, vc = (v0 + v1) / 2;
+    course.solids.push({ x: p.x + nx * uc + ax * vc, z: p.z + nz * uc + az * vc, hw: (u1 - u0) / 2 + 0.3, hd: (v1 - v0) / 2 + 0.3, rot: -h, top: y + 1.85, soft: true, noStep: true, crowd: true, raceProp: 'crowd' });
+  }
 }
 function nearStructure(course, x, z) {
   for (const f of course.flats) {

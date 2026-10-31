@@ -22,6 +22,7 @@ import {
 } from './expressroute.js';
 import { brakeFor, release, latOf, CarColliders } from './trainstop.js';
 import { buildCar, CAR, trainUniforms } from './train.js';
+import { furnishExpress } from './expressinterior.js';
 import { world } from './world.js';
 import { layout } from './layout.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
@@ -165,7 +166,8 @@ export class Express {
     this.courses = new Map(freeCourses().map((e) => [e.id, e]));
     // the cars: one full railcar (the cabin you ride in: interior, seats, passengers) and light ones for every
     // other place in every train (its Meshy body, underframe and bogies sharing the cabin's geometry)
-    this.cabin = buildCar({ number: 1 });
+    this.cabin = buildCar({ number: 1, express: true });
+    furnishExpress(this.cabin); // (Oct 31 2026: "make it realistic, use Meshy models for the train interior")
     this.cabin.group.name = 'express-cabin';
     this.cabin.group.visible = false;
     this.paintSrc = this.cabin.lo.children[0]?.material || null;

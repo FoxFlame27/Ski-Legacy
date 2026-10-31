@@ -439,7 +439,7 @@ function noseZ(x, y) {
  * Build one car (cab at its +z end). Returns { group, lo (far LOD group), seats: [{ pos (car frame, seat
  * surface), yaw (0 = facing +z), window, side, face, front (panorama row) }], bogies: [Mesh, Mesh] }.
  */
-export function buildCar({ number = 1 } = {}) {
+export function buildCar({ number = 1, express = false } = {}) {
   const M = materials();
   const F = CAR.floor;
   const group = new THREE.Group();
@@ -540,7 +540,7 @@ export function buildCar({ number = 1 } = {}) {
     return 0.78 * along * up * toward;
   };
   inn.lightFn = light; met.lightFn = light;
-  const seats = buildInterior(inn, met);
+  const seats = buildInterior(inn, met, { express });
   const interior = new THREE.Mesh(inn.build(), M.inside);
   interior.receiveShadow = true;
   const metal = new THREE.Mesh(met.build(), M.insideMetal);
@@ -590,7 +590,7 @@ export function buildCar({ number = 1 } = {}) {
     l.rotation.y = s > 0 ? Math.PI / 2 : -Math.PI / 2;
     group.add(l);
   }
-  group.userData = { bogies, seats, number, dest, seatMesh };
+  group.userData = { bogies, seats, number, dest, seatMesh, seatMeshes };
   // outside views: the Meshy body instead of our shell, glass and cabin (the bogies and the underframe stay)
   let proc = null, body = null;
   if (BODY) {
@@ -737,20 +737,25 @@ function pantograph(sh, z) {
 // textures (TX).
 const CEIL_Y = CAR.roofTop - 0.2, CEIL_RISE = 0.085, CEIL_X = 0.82; // the vault: its edge height, rise, half width
 const vaultY = (x) => CEIL_Y + CEIL_RISE * (1 - Math.min(1, (x / CEIL_X) ** 2));
-function buildInterior(g, m) {
+// the cabin layout, for the Legacy Express's own furnishing (expressinterior.js)
+export const CABIN = { BAY, BAYS_Z0, BAYS_N, LOUNGE, CEIL_Y, CEIL_X, H, HW, W: HW - 0.07 };
+function buildInterior(g, m, { express = false } = {}) {
   const F = CAR.floor, W = HW - 0.07;
   const zA = -H + 0.12, zB = CAR.cabZ;
+  // (Legacy Express, Oct 31 2026: "the interior of the train is very ugly, make it realistic": a grey-blue floor,
+  // cooler light grey wall panels; its tables and luggage racks are expressinterior.js's, not drawn here)
+  const PANEL_ = express ? '#d5d9de' : PANEL;
   // floor: speckled rubber, the lighter aisle strip, tread lines at the doors
   g.tx = TX.floor;
-  g.box(0, F - 0.03, (zA + zB) / 2, W * 2, 0.06, zB - zA, FLOOR);
-  g.box(0, F + 0.002, (zA + zB) / 2, CAR.aisle * 2 - 0.06, 0.004, zB - zA - 0.3, AISLE);
+  g.box(0, F - 0.03, (zA + zB) / 2, W * 2, 0.06, zB - zA, express ? '#4a5664' : FLOOR);
+  g.box(0, F + 0.002, (zA + zB) / 2, CAR.aisle * 2 - 0.06, 0.004, zB - zA - 0.3, express ? '#5f6d7e' : AISLE);
   for (const dz of doorZs()) for (let k = -3; k <= 3; k++) g.box(0, F + 0.004, dz + k * 0.16, W * 2 - 0.1, 0.004, 0.03, '#2f3236');
   // side walls under the windows (laminate), heater ducts, wooden sills
   g.tx = TX.laminate;
   for (const s of [1, -1]) {
-    g.box(s * (W - 0.02), (F + CAR.winLo) / 2, (zA + zB) / 2, 0.04, CAR.winLo - F, zB - zA, PANEL);
+    g.box(s * (W - 0.02), (F + CAR.winLo) / 2, (zA + zB) / 2, 0.04, CAR.winLo - F, zB - zA, PANEL_);
     g.box(s * (W - 0.11), F + 0.1, (zA + zB) / 2, 0.14, 0.2, zB - zA - 0.3, '#bdbdb8');
-    g.box(s * (W - 0.06), CAR.winLo - 0.01, (zA + zB) / 2, 0.15, 0.035, zB - zA, SILL);
+    g.box(s * (W - 0.06), CAR.winLo - 0.01, (zA + zB) / 2, 0.15, 0.035, zB - zA, express ? '#8f969e' : SILL);
   }
   // ---- ceiling: perforated vault panels (a seam at every bay), the light coves, the air grille
   const zc0 = zA, zc1 = zB, xs = [];
@@ -774,7 +779,7 @@ function buildInterior(g, m) {
   g.tx = TX.metal;
   for (let z = zc0 + 0.3; z < zc1 - 0.2; z += 0.07) g.box(0, vaultY(0) - 0.014, z, 0.15, 0.006, 0.035, '#c3c7cc');
   // ---- luggage racks over the side windows: brackets at the pillars, a perforated shelf, a round front rail
-  for (const s of [1, -1]) {
+  for (const s of (express ? [] : [1, -1])) {
     const yR = CAR.winHi - 0.04, x0 = s * (HW - 0.06), x1 = s * (HW - 0.4), rz0 = BAYS_Z0, rz1 = BAYS_Z0 + BAYS_N * BAY;
     g.tx = TX.ceiling;
     g.box((x0 + x1) / 2, yR, (rz0 + rz1) / 2, Math.abs(x1 - x0), 0.012, rz1 - rz0, '#b9bec4');
@@ -826,6 +831,7 @@ function buildInterior(g, m) {
       seatPair(xc, zb + 0.14, 1, 0);
       seatPair(xc, zb + BAY - 0.14, -1, 0);
       const s = Math.sign(xc);
+      if (express) continue; // (rounded tables: expressinterior.js)
       g.tx = TX.laminate;
       g.box(s * (W - 0.23), F + 0.74, zb + BAY / 2, 0.42, 0.035, 0.52, TABLE);
       m.tx = TX.metal;

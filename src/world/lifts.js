@@ -6,6 +6,7 @@ import { world } from './world.js';
 import { bakeGeometry, makeLOD, fitModel, dequantize, clusterDecimate } from '../core/assets.js';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { drawnHeight } from './settle.js';
+import { solidifyIdle } from './solidify.js'; // (the gondola stations' colliders from what is drawn, Oct 31 2026)
 
 // The lines' cars (Oct 30 2026, the user: "why does loading actually take so long"): every line of a lift type baked
 // and decimated the same Meshy cabin / chair at the same size, three tiers each, line after line. Baked once per
@@ -384,6 +385,7 @@ class LiftLine {
     for (const [p, top] of [[this.spec.bottom, false], [this.spec.top, true]]) {
       if (this.termHall) { this.buildTerminal(p, top, models, colliders, group); continue; }
       if (this.spec.type === 'chair' && MESHY_CHAIR && models.chair_terminal && models.chair_bullwheel) { this.buildChairTerminal(p, top, models, colliders, group); continue; }
+      if (this.spec.type === 'gondola' && models.gondola_station) { this.buildStation(p, top, models, colliders, group); continue; }
       const st = makeLOD(models.gondola_station, { size: c.stationSize, axis: 'z' }, 160, 0.02);
       st.position.set(p.x, p.y - 0.3, p.z);
       st.rotation.y = this.yaw + (top ? Math.PI : 0);
@@ -477,6 +479,37 @@ class LiftLine {
     wheel.castShadow = true;
     group.add(wheel);
     colliders.push(...podiumColliders(c, this.yaw, sd));
+  }
+
+  // a gondola end station (Oct 31 2026, the user: "please make the gondola station way better, the Meshy models are
+  // very bad, please fix that"): the new Meshy D-Line station (models/gondola_station.glb at the valley, the compact
+  // models/gondola_station_top.glb at the summit; stationModel fits it to the line, its long side along the cable,
+  // its open portal facing the line, the cabin lanes cut clear), the built bullwheel under its canopy at rope height
+  // with the haul rope's half loop round the back, and colliders taken from what is drawn (world/solidify.js: its
+  // walls, glass and columns, not one box round the whole: the boarding spot by the bullwheel stays open to walk in)
+  buildStation(p, top, models, colliders, group) {
+    const c = this.cfg, own = top && models.gondola_station_top;
+    const f = STATION_FIT[own ? 'top' : 'valley'];
+    const fit = stationModel(own ? models.gondola_station_top : models.gondola_station, f, c.side, c.stationH);
+    const st = makeLOD({ scene: fit.root }, { size: fit.size.z, axis: 'z' }, 160, 0.02);
+    const yaw = this.yaw + (top ? Math.PI : 0), cy = Math.cos(yaw), sy = Math.sin(yaw);
+    // (local +z points down the line from either end: the building's centre sits f.zc m along it from the bullwheel)
+    st.position.set(p.x + sy * f.zc, p.y - 0.3, p.z + cy * f.zc);
+    st.rotation.y = yaw;
+    st.name = 'gondola-station';
+    group.add(st);
+    (this.stationBack ??= {})[top ? 'top' : 'bottom'] = fit.size.z / 2 - f.zc; // (riders step off behind it: updateRide)
+    const wheel = new THREE.Mesh(bullwheelGeometry(c.side), bullwheelMaterial());
+    wheel.position.set(p.x, p.y + c.stationH, p.z);
+    wheel.rotation.y = yaw; // (the rope's half loop on local -z: away from the line)
+    wheel.scale.y = 0.6; // (its drive shaft up to the canopy's underside, not out through the roof)
+    wheel.castShadow = true;
+    group.add(wheel);
+    // (the drawn walls between 0.3 and 2 m get boxes, merged; eaves, canopy and the bullwheel overhead are passed
+    // under; the boarding spot round the bullwheel never gets one, so you walk right up to the cabins)
+    group.updateMatrixWorld(true);
+    solidifyIdle([{ root: st, whole: true, area: 'gondola station', blob: false }], colliders, { keepOut: [{ x: p.x, z: p.z, r: 3.2 }] })
+      .catch((e) => console.warn('gondola station colliders', e));
   }
 
   // a chairlift terminal: the Meshy bullwheel under its dome (chairs swing round at the rim), the haul rope's half
@@ -881,6 +914,69 @@ function hallModel(gltf, side) {
   return root;
 }
 
+// ------------------------------------------------------------------ Meshy gondola end stations
+// (Oct 31 2026, the user: "please make the gondola station way better, the Meshy models are very bad, please fix
+// that": the old models/gondola_station.glb (a 114k-triangle 14 m square block, the same at both ends, one box
+// collider round all of it) is now a Doppelmayr D-Line style station from tools/meshy-gondola.mjs: a curved glass and
+// steel canopy over the bullwheel on a concrete base with big glass walls; the valley one long with its ticket hall,
+// the summit one compact (models/gondola_station_top.glb).)
+// Fitted frame (the station's own, before it is set on the line): z along the cable, +z down the line (the open
+// portal the cabins ride out of), the bullwheel at z 0 on the ground's origin, y up from the base, x across.
+//  len: the building's length along the line; zc: its centre along z from the bullwheel (behind it: the hall);
+//  minW / minH: at least this wide and tall (both cabin lanes, x +-side, and the hangers over the rope fit under
+//  the canopy); turn: the gltf's own turn so that its length runs along z and the portal faces +z.
+// (checked on the generated models with an ASCII footprint / end-view dump: the valley station is an oval concrete
+// plinth under an arched canopy on legs at x +-9, both short ends open portals, a glazed core block (the ticket hall)
+// from 0.3 m behind the bullwheel back; the summit one is a solid glass block at one end (the gltf's +x, turned
+// to the back) and the open canopy hall in front, its portal ~7 m tall as drawn (stretched up to clear the grips))
+const STATION_FIT = {
+  valley: { len: 21, zc: -3.2, minW: 14, minH: 12.8, turn: 0 },
+  top: { len: 19, zc: -3.5, minW: 13, minH: 12.3, turn: -Math.PI / 2 },
+};
+const stationFits = new Map();
+function stationModel(gltf, f, side, ropeY) {
+  const key = gltf;
+  if (stationFits.has(key)) return stationFits.get(key);
+  const fitted = fitModel(gltf, { size: f.len, axis: 'z', rotateY: f.turn });
+  const sz = fitted.userData.size;
+  fitted.scale.set(Math.max(1, f.minW / sz.x), Math.max(1, f.minH / sz.y), 1);
+  fitted.updateMatrixWorld(true);
+  // the cabin lanes (each +-1.4 m round the rope's offset, from the cabin's floor to over its grip) in front of the
+  // bullwheel, and the half loop round it: whatever of the model stands there is cut out (cabins and the ride camera
+  // pass clean through; the bullwheel and the rope are built)
+  const y0 = ropeY - 3.6, y1 = ropeY + 0.9;
+  const cut = (x, y, z) => {
+    if (y < y0 || y > y1) return false;
+    const zs = z + f.zc, ax = Math.abs(x);
+    if (zs > -0.4 && ax > side - 1.4 && ax < side + 1.4) return true;
+    return zs <= -0.4 && Math.abs(Math.hypot(x, zs + 0.4) - side) < 1.4; // (the turn round the back)
+  };
+  const root = new THREE.Group();
+  fitted.traverse((o) => {
+    if (!o.isMesh) return;
+    const geo = dequantize(o.geometry);
+    geo.applyMatrix4(o.matrixWorld);
+    const p = geo.attributes.position, src = geo.index ? geo.index.array : null, n = src ? src.length : p.count;
+    const keep = [];
+    for (let t = 0; t < n; t += 3) {
+      const a = src ? src[t] : t, b = src ? src[t + 1] : t + 1, c = src ? src[t + 2] : t + 2;
+      if (!cut((p.getX(a) + p.getX(b) + p.getX(c)) / 3, (p.getY(a) + p.getY(b) + p.getY(c)) / 3, (p.getZ(a) + p.getZ(b) + p.getZ(c)) / 3)) keep.push(a, b, c);
+    }
+    geo.setIndex(keep);
+    geo.computeBoundingSphere();
+    // (no faint glow Meshy may bake in: a station's steel and glass never light up by themselves)
+    const material = o.material.clone();
+    if (material.emissive) { material.emissiveMap = null; material.emissive.setRGB(0, 0, 0); }
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    root.add(mesh);
+  });
+  const box = new THREE.Box3().setFromObject(root);
+  const fit = { root, size: box.getSize(new THREE.Vector3()) };
+  stationFits.set(key, fit);
+  return fit;
+}
+
 // a terminal's bullwheel (radius r = the rope's offset from the line): a steel wheel just above the rope, the
 // gearbox and drive shaft up to the roof, and the haul rope's half loop round it (local -z: away from the line)
 const wheelGeos = new Map();
@@ -1258,8 +1354,10 @@ export class Lifts {
     const end = r.up ? spec.top : spec.bottom;
     const dir = line.dir.clone().multiplyScalar(r.up ? 1 : -1);
     // step out beyond the station, facing downhill
-    const ex = end.x + dir.x * (line.cfg.stationSize * 0.5 + 9) + line.sideV.x * 4;
-    const ez = end.z + dir.z * (line.cfg.stationSize * 0.5 + 9) + line.sideV.z * 4;
+    // (clear of the back of the new, longer gondola station too: Oct 31 2026, the D-Line station)
+    const out = Math.max(line.cfg.stationSize * 0.5 + 9, (line.stationBack?.[r.up ? 'top' : 'bottom'] ?? 0) + 5);
+    const ex = end.x + dir.x * out + line.sideV.x * 4;
+    const ez = end.z + dir.z * out + line.sideV.z * 4;
     const [gx, gz] = world.gradient(ex, ez);
     const heading = Math.hypot(gx, gz) > 0.03 ? Math.atan2(-gx, -gz) : Math.atan2(dir.x, dir.z);
     return { exit: { x: ex, z: ez, heading } };

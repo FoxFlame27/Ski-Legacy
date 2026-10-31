@@ -870,13 +870,14 @@ function buildMicruss(gltf, group, makeRig) {
   // the wheels (Oct 30 2026, the user: "make the wheels move too for the bus"): each wheel node (Tire_low* front,
   // Tireback_low* rear: rim and tyre) under a pivot at its centre: `fix` undoes the length stretch (the wheel stays
   // round), `steer` turns the front ones about y, `spin` rolls them about the axle (x); turnWheels per frame
+  const WHEEL_K = 1.22;
   const wheels = [];
   m.traverse((o) => { if (!o.isMesh && /^Tire(back)?_low/i.test(o.name)) wheels.push(o); });
   for (const w of wheels) {
     const front = !/back/i.test(w.name), P = w.parent;
     const fix = new THREE.Group(), steer = new THREE.Group(), spin = new THREE.Group();
     fix.name = 'bus-wheel'; steer.name = front ? 'bus-wheel-steer' : 'bus-wheel-rear'; spin.name = 'bus-wheel-spin';
-    fix.position.copy(w.position); fix.scale.set(1, 1, sx / sz);
+    fix.position.copy(w.position); fix.scale.set(WHEEL_K, WHEEL_K, WHEEL_K * sx / sz); // (bigger wheels: WHEEL_K)
     P.add(fix); fix.add(steer); steer.add(spin); spin.add(w);
     w.position.set(0, 0, 0);
   }
@@ -886,6 +887,10 @@ function buildMicruss(gltf, group, makeRig) {
   const tf = wheels.find((w) => !/back/i.test(w.name)), tr = wheels.find((w) => /back/i.test(w.name));
   if (tf) { const b = new THREE.Box3().setFromObject(tf); r = (b.max.y - b.min.y) / 2 || r; zf = (b.min.z + b.max.z) / 2; }
   if (tr) { const b = new THREE.Box3().setFromObject(tr); zr = (b.min.z + b.max.z) / 2; }
+  // (Oct 31 2026, the user: "make the wheels bigger for the bus too": the wheels WHEEL_K the model's size; the body lifted
+  // by what that adds under the axle, so the tyres still stand on the road)
+  m.position.y += r * (1 - 1 / WHEEL_K);
+  shell.updateMatrixWorld(true);
   const at = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(m.matrix);
   const lampP = at(MIC_REAR_LAMP.x, MIC_REAR_LAMP.y, MIC_REAR_LAMP.z);
   shell.userData = { size: new THREE.Vector3(BUS.width, (all.max.y - all.min.y) * sx, BUS.len), wheelR: r, wheelBase: zf - zr, micruss: true,

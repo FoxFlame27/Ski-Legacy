@@ -1799,9 +1799,9 @@ function openPause() {
 }
 function closePause() {
   paused = false;
-  // (Oct 30, the user: hit by a car the moment you resume: a vehicle that drove onto your spot while you were paused
-  // only pushes you aside for the first 3 s back)
-  if (vehicleHits) vehicleHits.safeUntil = Math.max(vehicleHits.safeUntil || 0, performance.now() + 3000);
+  // (Oct 31 2026, the user: "you should resume and then you get hit, so you still feel it": a vehicle that ran into you
+  // while the menu was open throws you now; the old 3 s of grace after resuming is gone)
+  try { vehicleHits?.resumed(); } catch (e) { console.warn('vehicle hits: resume', e); }
   audio.setPaused(false);
   hud.el.hidden = false;
   menu.hidePause();
@@ -2178,7 +2178,7 @@ function loopUpdate() {
   taxi?.update(dt, started && !menu && !inSession && !paused ? input : null); // (after the car moved: the passenger in its back seat)
   try { police?.update(paused ? 0 : dt); } catch (e) { loopFault('police', e); } // (after your car moved: they chase, ram, pull you over)
   chalets?.update(dt); // the full-detail chalet nearest you
-  try { vehicleHits?.update(dt); } catch (e) { loopFault('vehicle hits', e); } // after every vehicle moved: a car / bus running into you
+  try { vehicleHits?.update(dt, paused && isMP() ? Math.min(0.3, realDt) : 0); } catch (e) { loopFault('vehicle hits', e); } // after every vehicle moved: a car / bus running into you
   mark('drive');
   modes.update(dt, input); // after the player (positions, checkpoints, barriers, respawns)
   mark('modes');

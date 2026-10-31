@@ -109,9 +109,14 @@ export class VehicleHits {
     if ((this.frame & 1023) === 0) for (const [k, r] of this.recs) if (this.frame - r.f > 600) this.recs.delete(k);
   }
 
-  /** Per frame, after every vehicle moved (main.js). dt: the game's (0 while paused). */
-  update(dt) {
-    if (!(dt > 0)) return;
+  /** Per frame, after every vehicle moved (main.js). dt: the game's (0 while paused); pausedDt: the real frame time while
+   *  the pause menu is open (multiplayer: the others' cars still drive). */
+  update(dt, pausedDt = 0) {
+    // (Oct 31 2026, the user: "you can still just pause the game and you won't feel the hit if you get driven over while
+    // you're paused; you should resume and then you get hit": paused, a vehicle running into you is only remembered (the
+    // hardest one); closing the menu (resumed()) throws you with it then)
+    const held = !(dt > 0);
+    if (held) { if (!(pausedDt > 0)) return; dt = pausedDt; }
     this.frame++;
     try { this.collect(); } catch (e) { if (!this.warned) { this.warned = true; console.warn('vehicle hits', e); } return; }
     // velocities from the motion (every vehicle, so it's known before one gets near)
@@ -127,12 +132,12 @@ export class VehicleHits {
       }
       r.px = x; r.pz = z;
     }
-    try { this.hitPeople(); } catch (e) { if (!this.warnedP) { this.warnedP = true; console.warn('vehicle hits people', e); } }
+    if (!held) try { this.hitPeople(); } catch (e) { if (!this.warnedP) { this.warnedP = true; console.warn('vehicle hits people', e); } }
     const pl = this.player;
     if (pl.mode !== 'ski' && pl.mode !== 'walk') return;
     if (performance.now() < this.safeUntil) return;
-    let on = false;
-    try { on = !!this.enabled(); } catch { on = false; }
+    let on = held; // (paused: the game's own checks say no while the menu is open; the hit still counts)
+    if (!held) try { on = !!this.enabled(); } catch { on = false; }
     if (!on) return;
     const p = pl.pos;
     for (let i = 0; i < this.n; i++) {
@@ -165,6 +170,7 @@ export class VehicleHits {
       const nx = nlx * c2 - nlz * s2, nz = nlx * s2 + nlz * c2; // (world: out of the box toward you)
       const closing = vn - (pl.vel.x * nx + pl.vel.z * nz);
       if (closing < V_MIN) continue; // (running / skiing away from it about as fast)
+      if (held) { if (!this.heldHit || closing > this.heldHit.speed) this.heldHit = { r: { vx: r.vx, vz: r.vz, what: r.what }, nx, nz, pen: Math.max(0, pen - MARGIN), speed: closing }; return; }
       this.knock(r, nx, nz, Math.max(0, pen - MARGIN), closing);
       return;
     }
@@ -192,6 +198,15 @@ export class VehicleHits {
         knockPerson(q, Math.max(vs * 0.6, into), 'traffic', r.vx / vs, r.vz / vs, c); // (c: kept out of it, Oct 31 2026)
       }
     }
+  }
+
+  /** The pause menu closed: a hit taken while it was open lands now. */
+  resumed() {
+    const h = this.heldHit;
+    this.heldHit = null;
+    const pl = this.player;
+    if (!h || (pl.mode !== 'ski' && pl.mode !== 'walk')) return;
+    this.knock(h.r, h.nx, h.nz, h.pen, h.speed);
   }
 
   knock(r, nx, nz, pen, speed) {

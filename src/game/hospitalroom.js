@@ -30,7 +30,7 @@ import { LivePortal } from './liveportal.js';
 import { isMP, MP } from '../net/mode.js';
 import { ST, fallFlags } from '../net/protocol.js';
 import { world } from '../world/world.js';
-import { twoBone } from './carpeople.js';
+import { twoBone, wpos, wquat, setWQ } from './carpeople.js';
 
 const BEAMS_X = [-6.0, -3.6, -1.2, 1.2, 3.6, 6.0]; // the ceiling's glulam beams (x, every 2.4 m, symmetric about the middle)
 export const STAY_S = 20; // the recovery (game seconds in bed before you may get up; Oct 30, the user: 20 s)
@@ -55,32 +55,111 @@ const PITCH = -Math.PI / 2, TUCK = 0; // (flat on the back: the tucked pose look
 const TUCK_Q = Math.round(TUCK * 15) / 15;
 const _bh = new THREE.Vector3(), _bn = new THREE.Vector3(), _bu = new THREE.Vector3(), _bf = new THREE.Vector3();
 const _ba = new THREE.Vector3(), _bl = new THREE.Vector3(), _br = new THREE.Vector3(), _bt = new THREE.Vector3(), _bp = new THREE.Vector3();
+const _bq = new THREE.Quaternion(), _bq2 = new THREE.Quaternion(), _bm = new THREE.Matrix4(); // (bedArms: the neck's tip, the feet's turn)
 
 /** A patient's arms lying by its side (after the rig's fall pose, which sprawls one arm out as on the snow): the hands
- *  beside the hips on the mattress, the elbows a little out. Your own body in bed and the other players' (net/remote.js). */
-export function bedArms(rig) {
+ *  beside the hips on the mattress, the elbows a little out. Your own body in bed and the other players' (net/remote.js).
+ *  (Oct 31 2026, the user, a screenshot of lying in bed 2: "also this is wrong please fix this": the legs in floating
+ *  pieces along the bed, the hands beside the hips cut off from the arms, the jacket filling the picture. The rig was
+ *  never stretched with the bed (it lies in the scene, never under the bed's model: its scale stays 1, uniform); the
+ *  body lay ~17 cm INSIDE the mattress (the mattress top guessed at 53 % of the Meshy bed's height, 0.44 m, where its
+ *  real top is 0.61 m, HospitalRoom: now measured on the model), so the elbows (their pole pointed down) and the legs
+ *  sank through it, and only the bits the old lift (ankles 17 cm above the hips) pushed out showed: boots, shins, knees
+ *  with the blanket between them, the hands without their arms. Now everything is placed from the mattress the body
+ *  lies on (`floor`: the fall pose's floor, the rig's root height): the legs straight along the bed within their reach
+ *  (thigh + shin, measured on the rig), the heels on the mattress, the toes up; the hands on the mattress beside the
+ *  hips with the elbows out and a touch up, never down into it; the head tipped up a little onto the pillow.) */
+export function bedArms(rig, floor = rig?.root?.position?.y) {
   const b = rig?.b;
   if (!b?.hips || !b.lArm || !b.rArm) return;
   rig.root.updateMatrixWorld(true);
+  // (the surface the body rests on: the fall pose's floor less the 2 cm it sinks in; Oct 31 2026, the user)
+  const surf = (Number.isFinite(floor) ? floor : rig.root.position.y) - 0.02;
+  // flat on the back: the fall pose leaves the trunk reclined ~30 deg about the hips (the shoulders off the mattress,
+  // the seat 12 cm into it); turned about the hips to a whisker over level (the bed's head end barely raised), then
+  // the whole body set on the mattress by its lowest point of the trunk (measured once on the rig's skin). (Oct 31
+  // 2026, the user: "also this is wrong please fix this")
+  if (b.neck) {
+    const hp = wpos(b.hips), u = wpos(b.neck).sub(hp).normalize(), uh = _bt.set(u.x, 0, u.z);
+    if (uh.lengthSq() > 1e-6) {
+      uh.normalize().multiplyScalar(Math.cos(0.12)).addScaledVector(UP, Math.sin(0.12));
+      try { setWQ(b.hips, _bq.setFromUnitVectors(u, uh).multiply(wquat(b.hips))); } catch { /* (as the fall pose left it) */ }
+    }
+    const back = rig.bedBack ??= trunkBottom(rig);
+    if (Number.isFinite(back)) {
+      hp.y = surf + 0.01 - back;
+      b.hips.position.copy(b.hips.parent.worldToLocal(hp)); b.hips.updateMatrixWorld(true);
+    }
+  }
   const hip = _bh.setFromMatrixPosition(b.hips.matrixWorld);
   const ls = _bl.setFromMatrixPosition(b.lArm.matrixWorld), rs = _br.setFromMatrixPosition(b.rArm.matrixWorld);
   const right = _bn.subVectors(rs, ls).normalize(); // (the body's right)
   const down = _ba.copy(ls).add(rs).multiplyScalar(0.5); down.subVectors(hip, down).normalize(); // shoulders -> hips
   const front = _bf.copy(UP).addScaledVector(down, -UP.dot(down));
   if (front.lengthSq() < 1e-6) front.set(0, 1, 0); else front.normalize();
-  for (const [s, arm, fore, hand] of [[-1, b.lArm, b.lFore, b.lHand], [1, b.rArm, b.rFore, b.rHand]]) {
-    _bt.copy(hip).addScaledVector(right, s * 0.27).addScaledVector(down, 0.06).addScaledVector(front, 0.02);
-    _bp.copy(right).multiplyScalar(s * 0.6).addScaledVector(front, -0.8);
-    try { twoBone(arm, fore, hand, _bt, _bp); } catch { /* (the fall pose's arms stay) */ }
+  const downH = _bu.set(down.x, 0, down.z); if (downH.lengthSq() < 1e-6) downH.set(0, 0, 1); else downH.normalize();
+  // the head tipped up a little (the chin toward the chest), resting on the pillow, looking down along the body
+  // (Oct 31 2026, the user: "the eye at the head on the pillow, looking down the body toward the feet")
+  for (const [bn, a] of [[b.spine2, 0.12], [b.neck, 0.45]]) {
+    if (!bn) continue;
+    _bq.setFromAxisAngle(_bp.crossVectors(front, down).normalize(), a);
+    try { setWQ(bn, _bq.multiply(wquat(bn))); } catch { /* (the fall pose's neck stays) */ }
   }
-  // the legs straight out along the bed, side by side (the fall pose sprawls them): feet ~0.9 m down from the hips
+  // the arms by the side: the wrists on the mattress beside the hips (never further than the arm reaches), the elbows
+  // out to the side and a little up (Oct 31 2026, the user: "the hands float beside the hips, disconnected from the
+  // arms": the old pole sent the elbows down through the mattress, so only the hands showed above it)
+  const side = Math.max(0.24, (rig.hipHalfW || 0.17) + 0.08);
+  for (const [s, arm, fore, hand] of [[-1, b.lArm, b.lFore, b.lHand], [1, b.rArm, b.rFore, b.rHand]]) {
+    if (!fore || !hand) continue;
+    const sh = wpos(arm), reach = 0.97 * (sh.distanceTo(wpos(fore)) + wpos(fore).distanceTo(wpos(hand)));
+    _bt.copy(hip).addScaledVector(right, s * side).addScaledVector(downH, 0.02); _bt.y = surf + 0.04;
+    const d = _bt.clone().sub(sh), dy = d.y; d.y = 0;
+    const dh = Math.sqrt(Math.max(0, reach * reach - dy * dy)); // (in reach: pulled in toward the shoulder, the height kept)
+    if (d.length() > dh) { d.setLength(dh); _bt.set(sh.x + d.x, _bt.y, sh.z + d.z); }
+    _bp.copy(right).multiplyScalar(s).addScaledVector(front, 0.35);
+    try { twoBone(arm, fore, hand, _bt, _bp); } catch { /* (the fall pose's arms stay) */ }
+    // the hand flat on the sheet, the palm down, the fingers toward the feet (never down through the mattress)
+    try { rig.aimHand?.(s < 0 ? 0 : 1, _bp.copy(downH).addScaledVector(right, s * 0.15).normalize(), _bt.set(0, -1, 0)); } catch { /* (as the forearm turns it) */ }
+  }
+  // the legs straight out along the bed, side by side (the fall pose sprawls them): each ankle as far down the bed as
+  // the leg reaches (thigh + shin, ~0.38 + 0.38 m on the skiers: a whisker short of it, so the knee never locks and the
+  // skin never tears), at the heel's height on the mattress; the knees toward the ceiling; the toes up
   if (b.lUp && b.lLeg && b.lFoot && b.rUp && b.rLeg && b.rFoot) {
-    for (const [s, up, leg, foot] of [[-1, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
-      _bt.copy(hip).addScaledVector(right, s * 0.11).addScaledVector(down, 0.88).addScaledVector(front, 0.17); // (feet on top of the mattress, never sunk into it: the user saw no legs)
-      _bp.copy(front).multiplyScalar(1).addScaledVector(down, 0.2); // (the knees up toward the ceiling: straight, never bent sideways)
-      try { twoBone(up, leg, foot, _bt, _bp); } catch { /* (the fall pose's legs stay) */ }
+    // the turn from standing (the bind frame: the body's left +x, up +y, front +z) to lying: its left, up (toward the
+    // head) and front (to the ceiling), a right-handed orthonormal frame
+    _bq.setFromRotationMatrix(_bm.makeBasis(_bp.crossVectors(front, down).normalize(), _bu.copy(down).negate(), front));
+    const downH2 = _bu.set(down.x, 0, down.z); if (downH2.lengthSq() < 1e-6) downH2.set(0, 0, 1); else downH2.normalize();
+    for (const [s, up, leg, foot, fr] of [[-1, b.lUp, b.lLeg, b.lFoot, rig.footRest?.l], [1, b.rUp, b.rLeg, b.rFoot, rig.footRest?.r]]) {
+      const pu = wpos(up), reach = 0.985 * (pu.distanceTo(wpos(leg)) + wpos(leg).distanceTo(wpos(foot)));
+      const dy = surf + 0.1 - pu.y, dl = 0.02; // (the ankle 10 cm over the mattress: the heel and the calf on it; a touch apart)
+      const along = Math.sqrt(Math.max(0, reach * reach - dy * dy - dl * dl));
+      _bt.copy(pu).addScaledVector(downH2, along).addScaledVector(right, s * dl); _bt.y = surf + 0.1;
+      try { twoBone(up, leg, foot, _bt, front); } catch { /* (the fall pose's legs stay) */ }
+      if (fr) try { setWQ(foot, _bq2.copy(_bq).multiply(fr)); } catch { /* (the shin's turn) */ }
     }
   }
+}
+
+/** How far the lowest point of a lying rig's trunk (its skin on the hips, the spine and the shoulders: the seat and the
+ *  back) is above (+) / below (-) its hips joint, in its pose now; once per rig (bedArms caches it). (Oct 31 2026, the
+ *  user: the patient lay in the mattress; the fall pose's probes are for snow, the seat sank 12 cm.) */
+function trunkBottom(rig) {
+  const mesh = rig.skinned, b = rig.b;
+  if (!mesh?.isSkinnedMesh || !mesh.skeleton) return NaN;
+  const bones = mesh.skeleton.bones, set = new Set([b.hips, b.spine0, b.spine1, b.spine2, b.lSh, b.rSh].filter(Boolean).map((x) => bones.indexOf(x)));
+  const pos = mesh.geometry.attributes.position, si = mesh.geometry.attributes.skinIndex, sw = mesh.geometry.attributes.skinWeight;
+  if (!si || !sw) return NaN;
+  mesh.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  let lo = Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    let bi = -1, bw = 0;
+    for (let k = 0; k < 4; k++) { const w = sw.getComponent(i, k); if (w > bw) { bw = w; bi = si.getComponent(i, k); } }
+    if (!set.has(bi)) continue;
+    mesh.getVertexPosition(i, v); v.applyMatrix4(mesh.matrixWorld);
+    if (v.y < lo) lo = v.y;
+  }
+  return lo === Infinity ? NaN : lo - _bh.setFromMatrixPosition(b.hips.matrixWorld).y;
 }
 
 // this ward's mattress tops as the beds' models measured them here (HospitalRoom), for the other players lying in them
@@ -110,7 +189,7 @@ export function posePatient(rig, dt) {
   try { rig.update(Math.min(dt, 0.1), _pst); } catch (e) { console.warn('hospital: patient', e); } finally { if (own) world.groundHeight = g0; else delete world.groundHeight; }
   if (rig.fx?.length) rig.fx.length = 0;
   if (rig.gear) rig.gear.visible = false;
-  bedArms(rig);
+  bedArms(rig, top);
 }
 
 // the house's windows (hospital.js: ground floor, sill-to-lintel 1.15 .. 2.45 m)
@@ -202,6 +281,24 @@ export class HospitalRoom {
     const M = MODELS[key];
     if (M) swapInModel(g, M.name, { size: M.size, axis: M.axis, rotateY: M.rotateY }, fb, (m) => { try { onModel?.(m, g); } catch (e) { console.warn('hospital model', key, e); } });
     return g;
+  }
+  /** The top of a bed model's mattress (y) under the patient (hips to heels, along the middle), or null if no ray hits
+   *  it. (Oct 31 2026, the user: the body lay in the mattress; see the bed's onModel.) */
+  mattressTop(g, m, bx) {
+    try {
+      g.updateWorldMatrix(true, true);
+      const ray = this._mray ||= new THREE.Raycaster(), o = new THREE.Vector3(), dn = new THREE.Vector3(0, -1, 0), ys = [];
+      for (let z = HIPS_Z + 0.1; z <= HIPS_Z + 1.2; z += 0.1) {
+        for (const dx of [-0.15, 0, 0.15]) {
+          ray.set(o.set(bx + dx, 2.5, z), dn); ray.far = 2.5;
+          const h = ray.intersectObject(m, true).find((x) => x.point.y > 0.3 && x.point.y < 1.0);
+          if (h) ys.push(h.point.y);
+        }
+      }
+      if (ys.length < 6) return null;
+      ys.sort((a, b) => a - b);
+      return Math.min(0.85, Math.max(0.38, ys[Math.floor(ys.length / 2)]));
+    } catch { return null; }
   }
   mats() {
     if (this._m) return this._m;
@@ -510,13 +607,16 @@ export class HospitalRoom {
     this.bedTops = wardTops = BEDS.map(() => BED.top); // (wardTops: the other players' patients lie on these too)
     BEDS.forEach((bx, i) => {
       const cs = CAB_SIDE[i];
-      this.furn('bed', bx, BED_Z, 0, bedFb, (m) => {
-        // the mattress top: the height most of the model's top surface sits at between the boards
-        const top = m.userData.size?.y ? Math.min(0.75, Math.max(0.38, m.userData.size.y * 0.53)) : BED.top; // (Meshy's bed: the mattress at ~53 % of its height)
-        this.bedTops[i] = top;
+      this.furn('bed', bx, BED_Z, 0, bedFb, (m, g) => {
         // (Oct 30, the user: "please make the bed longer": the feet stuck out past its end) stretched 30 % along its
-        // length, the head end staying at the wall
+        // length, the head end staying at the wall (only the bed's model: the patient lies in the scene, never under it)
         m.scale.z *= BED_STRETCH; m.position.z += (BED.len * (BED_STRETCH - 1)) / 2;
+        // the mattress top, measured on the model: straight down onto it along the middle, where the body lies (hips
+        // to heels: past the pillow and the folded blanket at the head end), the median of the hits. (Oct 31 2026, the
+        // user's screenshot of lying in bed 2, "also this is wrong please fix this": the guess before, 53 % of the
+        // model's height, put the top at 0.44 m where the mattress is at 0.61 m, so the patient lay inside it, the legs
+        // and the arms showing only in pieces where they poked out of the blanket.)
+        this.bedTops[i] = this.mattressTop(g, m, bx) ?? (m.userData.size?.y ? Math.min(0.75, Math.max(0.38, m.userData.size.y * 0.74)) : BED.top);
       });
       this.obstacles.push([bx - 0.55, bx + 0.55, z0, z0 + BED.len * BED_STRETCH + 0.08]);
       // the bed-head unit on the wall: a larch rail with the reading light under a hood, the gas outlets, the call button
@@ -803,14 +903,22 @@ export class HospitalRoom {
     this.lift = rig.fallLift; this.liftV = rig.fallLiftV;
     if (rig.fx?.length) rig.fx.length = 0; // (no snow puffs off a mattress)
     if (rig.gear) rig.gear.visible = false; // (no skis or poles in bed)
-    bedArms(rig);
-    // the eyes: up the head from the neck, toward the face (lying on your back: up), a little above
+    bedArms(rig, top + 0.04);
+    // the eyes: over the head on the pillow, lifted clear of the chest, looking down the body to the feet. (Oct 31 2026,
+    // the user's screenshot, "also this is wrong please fix this": the camera sat inside the body, the jacket's
+    // polygons filling the bottom of the picture. The eye was 10 cm off the head joint of a body sunk into the
+    // mattress (its top mis-measured: HospitalRoom.mattressTop), level with the puffed-up jacket's chest a hand away.
+    // Now the head (folded away in first person: setHeadHidden) lies on the measured mattress, and the eye goes
+    // up from the head joint (16 cm or more, about where the eyes of a head raised on the pillow are), 0.1 m clear of the chest:
+    // nothing of the body within the near plane, the chest and belly in the foreground, the legs and the feet down the
+    // bed beyond them, and the room.)
     rig.root.updateMatrixWorld(true);
     const h = _bh.setFromMatrixPosition(rig.b.head.matrixWorld);
-    const u = rig.b.neck ? _bu.subVectors(h, _bn.setFromMatrixPosition(rig.b.neck.matrixWorld)).normalize() : _bu.set(0, 0.5, -0.87);
-    const f = _bf.copy(UP).addScaledVector(u, -UP.dot(u));
-    if (f.lengthSq() < 1e-6) f.set(0, 0, 1); else f.normalize();
-    (this.eye ||= new THREE.Vector3()).copy(h).addScaledVector(u, 0.1).addScaledVector(f, 0.1).addScaledVector(UP, 0.03);
+    const hipP = _bt.setFromMatrixPosition(rig.b.hips.matrixWorld);
+    const dn = _bu.set(hipP.x - h.x, 0, hipP.z - h.z); if (dn.lengthSq() < 1e-6) dn.set(0, 0, 1); else dn.normalize(); // (head -> feet, level)
+    const chest = rig.b.spine2 ? _bn.setFromMatrixPosition(rig.b.spine2.matrixWorld).y : h.y;
+    (this.eye ||= new THREE.Vector3()).copy(h).addScaledVector(dn, -0.04); // (a touch back from the collar, toward the wall)
+    this.eye.y = Math.max(h.y + 0.16, chest + 0.24); // (the chest's top ~0.13 m over its bone: the eye 0.1 m over that)
     (this.bodyC ||= new THREE.Vector3()).setFromMatrixPosition(rig.b.hips.matrixWorld).addScaledVector(UP, 0.12);
   }
   /** Out of bed (up, out of the door, back to the menu): the rig back where it came from, walking again. */

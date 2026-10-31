@@ -227,17 +227,24 @@ export function planChaletStop() {
   const V = busRoads.chalets;
   if (!V) return;
   if (CHALET_DRIVES.on) try { planChaletDrives(V); } catch (e) { console.warn('chalet drives', e); } // (after every road's cut: last word)
-  const J = V.junction, r0 = V.road.exitAt1?.road;
-  if (!r0) return;
-  let iJ = 0;
-  for (let i = 0; i < r0.n; i++) if (Math.abs(r0.S[i] - J.s) < Math.abs(r0.S[iJ] - J.s)) iJ = i;
-  if (iJ < 8 || iJ > r0.n - 8) return; // (too near either end to stop there)
+  // (Oct 31 2026, the user: "you should also be able to take the bus to chalet village": never left out quietly.
+  // The road the bus passes the junction on: the valley road the Chaletweg leaves (exitAt1), or, should the valley
+  // road's route round the village change again, whichever main road passes nearest; a junction too near either of
+  // its ends (no room for the bay) puts the stop a few samples along it instead of dropping it)
+  const J = V.junction;
+  let r0 = null, iJ = 0, best = Infinity;
+  for (const r of [V.road.exitAt1?.road, ...busRoads.roads.filter((q) => !q.access && !q.scenic)]) {
+    if (!r) continue;
+    for (let i = 0; i < r.n; i++) { const d = Math.hypot(r.X[i] - J.x, r.Z[i] - J.z); if (d < best - 0.01) { best = d; r0 = r; iJ = i; } } // (ties: the valley road)
+  }
+  if (!r0 || best > 25 || r0.n < 24) { console.warn('chalet village bus stop: no bus road by the junction', { best: Math.round(best) }); return; }
+  if (iJ < 8 || iJ > r0.n - 9) { const k = clamp(iJ, 8, r0.n - 9); console.warn('chalet village bus stop: junction near a road end, the stop moved', Math.round(r0.S[k] - r0.S[iJ]), 'm along it'); iJ = k; }
   const slice = (a, b, from, to) => {
     const n = b - a + 1, X = r0.X.slice(a, b + 1), Y = r0.Y.slice(a, b + 1), Z = r0.Z.slice(a, b + 1), S = new Float32Array(n);
     for (let k = 1; k < n; k++) S[k] = S[k - 1] + Math.hypot(X[k] - X[k - 1], Z[k] - Z[k - 1]);
     return { from, to, n, X, Y, Z, S, length: S[n - 1], busLeg: true, base: r0, s0: r0.S[a] };
   };
-  const stop = { x: J.x, z: J.z, heading: 0, name: 'Chalet Village', chalets: true }; // (Oct 31, the user: "don't call anything like that, just chalet village")
+  const stop = { x: r0.X[iJ], z: r0.Z[iJ], heading: 0, name: 'Chalet Village', chalets: true }; // (Oct 31, the user: "don't call anything like that, just chalet village")
   busRoads.stops.push(stop); // (the same array as layout.busStops: the trail map and the stop list show it)
   busRoads.busLegs = [slice(0, iJ, r0.from, stop), slice(iJ, r0.n - 1, stop, r0.to)];
 }

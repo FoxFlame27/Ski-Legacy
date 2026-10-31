@@ -21,6 +21,7 @@ import { clearRouteCache } from './scenicnet.js'; // (the routing's ground sampl
 import { planDepot } from './depot.js'; // the bus depot at the village stop and its road (the Depotweg)
 import { planAutohausGrounds } from './autohaus.js'; // the Autohaus car park and the Werkstatt's site beside the hall
 import { planMouths, mouthLane, mouthCorner, mouthNear, MOUTH_BERM } from './junctions.js'; // the junctions' joined surfaces and rounded corners
+import { tunnelWorks } from './tunnels.js'; // (Oct 31 2026: the road tunnels: no roadside props in them)
 
 const CELL = 20;
 const MAX_GRADE = 0.135;     // (alpine post roads: up to ~13 % in places)
@@ -393,6 +394,7 @@ export function laneDistance(x, z, own = -1, s = 0, win = 0) {
 export function roadsideBlocked(x, z, r = 0.3, own = -1, s = 0, { lots = true } = {}) {
   if (!busRoads.roads.length) return null;
   if (laneDistance(x, z, own, s, 40) < ROAD_HALF + 0.3 + r) return 'lane';
+  if (busRoads.tunnels?.length && tunnelWorks(x, z, r + 1)) return 'tunnel'; // (the tube's walls and the headwalls do the guardrails' job)
   for (const j of busRoads.junctions) if (Math.abs(j.x - x) < 14 + r && Math.abs(j.z - z) < 14 + r && Math.hypot(j.x - x, j.z - z) < 14 + r) return 'junction';
   if (mouthLane(x, z) < ROAD_HALF + 0.3 + r) return 'junction'; // (on a junction's rounded corner)
   if (lots) {

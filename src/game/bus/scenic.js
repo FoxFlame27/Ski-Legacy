@@ -17,6 +17,7 @@
 import { world } from '../../world/world.js';
 import { expressNearest } from '../../world/expressroute.js';
 import { routeH, minRadius, selfClearance, smoothRoute } from './scenicnet.js';
+import { planRoadTunnels, tunnelCore, tunnelEnd, tunnelCorridors, addTunnelCuts } from './tunnels.js'; // (Oct 31 2026: the road tunnels)
 import {
   busRoads, route, smoothPath, makeRoad, roadAt, laneDistance, berm, ROAD_HALF, BENCH, BERM_IN, CLEAR,
 } from './roads.js';
@@ -591,6 +592,10 @@ export function shapeScenic() {
       bank[i] = (t / w) * f;
     }
   }
+  // (Oct 31 2026, the user: "add tunnels for the cars, so like roads going through tunnels, but don't add any new
+  // roads": the stretches through a ridge in a deep cutting become tunnels (tunnels.js), planned on the natural
+  // ground before this cut; the cut leaves their segments out and its cutting ends at each portal's headwall)
+  try { planRoadTunnels(roads); } catch (e) { console.warn('road tunnels', e); busRoads.tunnels = []; for (const r of roads) delete r.tunnels; }
   const bankOff = (sg, t, side, d) => {
     const b = sg.ka + (sg.kb - sg.ka) * t;
     if (!b) return 0;
@@ -601,6 +606,7 @@ export function shapeScenic() {
   for (const r of roads) {
     const ri = busRoads.roads.indexOf(r);
     for (let i = 0; i < r.n - 1; i++) {
+      if (r.tunnels && tunnelCore(r, r.S[i], r.S[i + 1])) continue; // (inside a tunnel: no open cutting, the mountain stays)
       const sg = { ax: r.X[i], az: r.Z[i], bx: r.X[i + 1], bz: r.Z[i + 1], ay: r.Y[i], by: r.Y[i + 1], ri, sa: r.S[i], sb: r.S[i + 1], r, ka: r.bank[i], kb: r.bank[i + 1] };
       const R = REACH, x0 = Math.min(sg.ax, sg.bx) - R, x1 = Math.max(sg.ax, sg.bx) + R, z0 = Math.min(sg.az, sg.bz) - R, z1 = Math.max(sg.az, sg.bz) + R;
       minx = Math.min(minx, x0); minz = Math.min(minz, z0); maxx = Math.max(maxx, x1); maxz = Math.max(maxz, z1);
@@ -611,6 +617,7 @@ export function shapeScenic() {
         arr.push(sg);
       }
     }
+    if (r.tunnels) { tunnelCorridors(r, BENCH + 3, (line, w) => world.addCorridor(line, w, 'lift', { busRoad: true, scenic: true })); continue; } // (narrow over a tunnel)
     const line = [];
     for (let i = 0; i < r.n; i += 3) line.push([r.X[i], r.Z[i]]);
     line.push([r.X[r.n - 1], r.Z[r.n - 1]]);
@@ -777,9 +784,15 @@ export function shapeScenic() {
       const kept = keepBand(x, z, h, out);
       if (globalThis.__scDbg) globalThis.__scDbg.push({ bands: [...BANDS].map((v) => +v.toFixed(2)), best: [...BEST.entries()].map(([k, v]) => [k, v.map((q) => +q.toFixed(2))]), h, out, kept, Ad: A.d, Ay: A.y, As: A.s, An: A.r.name, kd: keepBand.d });
       // (and a bus road's where its centre line is the nearer one: the T junctions' mouths)
-      return kept === out ? out : out + (kept - out) * Math.max(smoothstep(bench(A), bench(A) + 6, A.d), smoothstep(-1.5, 1.5, A.d - keepBand.d));
+      const res = kept === out ? out : out + (kept - out) * Math.max(smoothstep(bench(A), bench(A) + 6, A.d), smoothstep(-1.5, 1.5, A.d - keepBand.d));
+      // (past a tunnel's portal: never below its end slope, the headwall's top and up at this batter; the mountain
+      // over the tube stays as it was; eased out toward another stretch nearly as near: no step where they swap)
+      let lim = A.r.tunnels ? tunnelEnd(x, z, A.r, A.s) : -Infinity;
+      if (lim > res && B.d < Infinity) lim = res + (lim - res) * smoothstep(0, 24, B.d - A.d);
+      return lim > res ? Math.max(res, Math.min(h, lim)) : res; // (a fill stays a fill)
     },
   });
+  try { addTunnelCuts(); } catch (e) { console.warn('road tunnel cuts', e); } // (the cuttings, the trench under the mountain: after this cut)
 }
 
 // The scenic traffic's tour (traffic.js drives a few cars round it, out and back, in the right-hand lane): out of the

@@ -838,6 +838,19 @@ const MIC_SEATS = [
 const MIC_DRIVER = [2.12, 1.37, 7.04];
 const MIC_INNER = /^(Interior|InteriorRacks|InteriorWindow|Seats|SeatMetal|SeatPlastic)$/; // (its cabin: hidden far away, no shadows)
 const MIC_GLASS = /^(Windows|InteriorWindow)$/;
+// (Oct 31 2026, the user: "make sure the windows of the bus are tinted from the outside": dark privacy glass seen from
+// outside; while the camera is inside a bus, the glass goes light so you see out (busGlass, per frame in updateFleet))
+const MIC_GLASSES = new Set(), _glassV = new THREE.Vector3();
+function busGlass(groups) {
+  const cam = globalThis.__game?.camera?.position;
+  let inBus = false;
+  if (cam) for (const g of groups) {
+    if (!g?.visible) continue;
+    _glassV.copy(cam); g.worldToLocal(_glassV);
+    if (Math.abs(_glassV.x) < BUS.width / 2 && Math.abs(_glassV.z) < BUS.len / 2 && _glassV.y > 0 && _glassV.y < 3.3) { inBus = true; break; }
+  }
+  for (const m of MIC_GLASSES) { m.opacity = inBus ? 0.16 : 0.82; m.color.setHex(inBus ? 0x6f8796 : 0x0e151b); }
+}
 const MIC_REAR_LAMP = { x: 2.9, y: 0.63, h: 1.46, z: -13.35 }; // (its tail lamp clusters: x, mid y, height, back z)
 function buildMicruss(gltf, group, makeRig) {
   const shell = new THREE.Group();
@@ -855,7 +868,8 @@ function buildMicruss(gltf, group, makeRig) {
   m.updateMatrix();
   shell.add(m);
   // (the PostBus yellow over its white paint; satin, never mirroring the snow) and its glass and cabin
-  const glass = new THREE.MeshStandardMaterial({ color: 0x24313a, transparent: true, opacity: 0.3, roughness: 0.06, metalness: 0.2, depthWrite: false, side: THREE.DoubleSide });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x0e151b, transparent: true, opacity: 0.82, roughness: 0.06, metalness: 0.3, depthWrite: false, side: THREE.DoubleSide });
+  MIC_GLASSES.add(glass); // (tinted from outside, clear from inside: busGlass, per frame)
   const swap = new Map();
   m.traverse((o) => {
     if (!o.isMesh) return;
@@ -1987,6 +2001,7 @@ export class BusLine {
 
   /** Per frame (main.js): the fleet on its rounds. p: where you are (the buses near you drive themselves). */
   updateFleet(dt, p) {
+    if (MIC_GLASSES.size) busGlass([this.bus.group, ...this.fleet.map((b) => b.group)]);
     // bus:0's passengers and cabin near you only (the fleet's below)
     if (this.bus.micruss && p && this.bus.group.visible) {
       const g = this.bus.group.position, d0 = Math.hypot(g.x - p.x, g.z - p.z);

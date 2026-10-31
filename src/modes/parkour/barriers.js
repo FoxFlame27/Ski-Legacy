@@ -519,6 +519,16 @@ function buildBoards(ctx, line, rnd) {
     c.solid.box(0, H / 2 + 0.02, 0, 0.26, H + 0.04, sp - 0.08, white, blue);
     c.solid.box(0, 0.04, 0, 0.6, 0.12, sp * 0.9, frame);
     layout.posts.push(cx, y, cz, y + H, 3);
+    // (Oct 31 2026, the user, at the Glacier Super-G's finish arena, standing inside a row of them: "make sure all
+    // these are collidable", then at the printed side "these too should be collidable". These are the padded
+    // advertising boards of every World Racing finish arena ('arena' barrier runs, finishIn / finish / runout): from
+    // behind, at night, the unprinted backs read as dark grey slabs with the blue top rail, stepping down the slope
+    // board by board. They had no collider at all. Now each board is one thin oriented box exactly as drawn (0.26 m
+    // thick, its own length, 1.04 m tall from its foot: h / top), registered with the course's other props outside
+    // the nets (course.solids: freeworld.js syncMasts puts them in the shared colliders while the course stands, for
+    // the player on foot and on skis, cars and snowmobiles). soft: padded, a solid stop with no wipeout and no car
+    // damage, like the piste nets; noStep: jumped over, never walked along on top.)
+    ctx.course.solids?.push({ x: cx, z: cz, hw: 0.13, hd: (sp - 0.08) / 2, rot: -yaw, h: H + 0.04, top: y + H + 0.04, soft: true, noStep: true, board: true });
     // printed face: a level banner on the board (both ends at the board's own level)
     boardFace(c.banner, a, b, y + 0.14, H * 0.84, pickBanner(course.id, rnd));
   }

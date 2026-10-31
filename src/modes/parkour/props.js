@@ -359,6 +359,11 @@ function buildStart(course, models, group, dye, { inward = false } = {}) {
     board.position.set(spot.x, spot.ground - 0.05, spot.z);
     board.rotation.y = yawOf(spot, spot.lat); // faces the racers at the gate
     group.add(board);
+    // (Oct 31 2026, the user: "make sure all these are collidable": the course board beside every start house was
+    // walked through as well. One thin box over the drawn board and its two posts (bw + 0.12 wide, 0.26 m deep
+    // round the face and the posts behind it, 3.6 m to the top of the face), soft like a sign panel.)
+    const yb = board.rotation.y, ob = -0.02; // (the posts stand 0.08 m behind the face: the box centred between)
+    course.solids?.push({ x: spot.x + Math.sin(yb) * ob, z: spot.z + Math.cos(yb) * ob, hw: bw / 2 + 0.06, hd: 0.13, rot: -yb, h: 1.2 + bh + 0.06, top: spot.ground - 0.05 + 1.2 + bh + 0.06, soft: true, noStep: true });
   }
 }
 

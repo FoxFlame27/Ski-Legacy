@@ -250,7 +250,9 @@ export class Express {
     if (this.cabin.inside !== inside) { this.cabin.inside = inside; this.cabin.setInside?.(inside); }
     this.cabin.group.visible = !!this.ride;
     this.copyPassengers();
-    if (this.passengers) { const vis = !!this.ride && !this.noPassengers; if (vis !== this.passengers.visible) this.passengers.visible = vis; }
+    // (Oct 31 2026, the user, the rule set for the buses: "in multiplayer, only real players": the seated NPC passengers
+    // ride in single player only; in multiplayer the other riders are the real players in their seats, net/transit.js)
+    if (this.passengers) { const vis = !!this.ride && !this.noPassengers && !this.mp; if (vis !== this.passengers.visible) this.passengers.visible = vis; }
     // the line's own LOD (track, tunnels, stations) round the viewer
     if (viewer && this.track?.update) {
       try { this.track.update(viewer, { inTunnel: this.ride && this.view !== 'trackside' ? inExpressTunnel(this.camS ?? this.ride.train.state.s, -80) : null }); }

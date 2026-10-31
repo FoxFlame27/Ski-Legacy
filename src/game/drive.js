@@ -15,7 +15,7 @@ import { nightUniform } from '../world/village.js';
 import { loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye, REAL } from './cars.js';
 import { keysHTML } from '../ui/hud.js';
-import { SEAT_EYE, seatHip, seatsFor, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
+import { SEAT_EYE, SEAT_LIFT, seatHip, seatsFor, seatLegs, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
 import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot, cabinFill, cabinLight } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
 import { busRoads, laneDistance, roadAt, ROAD_HALF } from './bus/roads.js';
@@ -25,7 +25,9 @@ import { addDent, applyDents, repairInstance } from './cardamage.js';
 import { setPlates } from './carconfig.js';
 import { weatherFx } from '../world/sky.js'; // (icy roads after bad weather)
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
-const COCKPIT_RAISE = 0.1; // m: the cockpit camera over your eyes (the seated rig's)
+// m: the cockpit camera over your eyes (the seated rig's; that body now sits SEAT_LIFT higher in the seat, Oct 31 2026,
+// so the camera stays where the user set it: "move the camera a bit higher", Oct 27)
+const COCKPIT_RAISE = 0.1 - SEAT_LIFT;
 
 // per car: name, pull (m/s^2 at low speed), top speed (m/s), electric (one gear)
 export const CAR_SPECS = {
@@ -1385,12 +1387,10 @@ export class Drive {
         const palm = radial.clone().multiplyScalar(-0.75).addScaledVector(A, 0.35).normalize().applyQuaternion(g.quaternion);
         if (rig.aimHand) rig.aimHand(i, fingers, palm); else if (hand && fore) setWQ(hand, wquat(fore));
       }
-      const hip = g.worldToLocal(wpos(b.hips));
-      for (const [i, up, leg, foot] of [[0, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
-        const side = i === 0 ? 1 : -1;
-        const tgt = g.localToWorld(new THREE.Vector3(hip.x + side * 0.14, hip.y - 0.26, hip.z + 0.74));
-        twoBone(up, leg, foot, tgt, new THREE.Vector3(side * 0.15, 1, 0.5).normalize().applyQuaternion(g.quaternion));
-      }
+      // the legs (carpeople.js seatLegs, Oct 31 2026, the user: "you still don't sit properly on a chair"): bent at the
+      // knee into the footwell, the heels on this car's floor, the right foot on the throttle (before: a fixed point
+      // 0.74 m ahead, as far as the legs reach, so they stuck out stiff and straight, the boots through the floor)
+      seatLegs(rig, g, d.t, 0, { driver: true });
       // your eyes (the camera inside), in the car's frame: ahead of and above the head joint
       d.eyeRig = g.worldToLocal(wpos(b.head).add(new THREE.Vector3(0, 0.09, 0.085).applyQuaternion(g.quaternion)));
     } catch (e) { d.eyeRig = null; if (!this.rigErr) { this.rigErr = true; console.warn('drive seat', e); } } // (the pose stays as the rig made it)

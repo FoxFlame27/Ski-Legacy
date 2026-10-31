@@ -10,7 +10,7 @@
 // No allocations per frame: snapshot slots, vectors and the rig state objects are all reused.
 import * as THREE from 'three';
 import { R, ST, F, fallDecode } from './protocol.js';
-import { twoBone, seatsFor } from '../game/carpeople.js';
+import { twoBone, seatLegs } from '../game/carpeople.js';
 import { seatAt } from '../game/seating.js';
 import { world } from '../world/world.js';
 import { posePatient, patientSpot, INTERIOR_ID as HOSPITAL } from '../game/hospitalroom.js';
@@ -453,29 +453,15 @@ function benchFor(r, pos) {
   return r.benchSeat;
 }
 
-// a car seat, not a bench: the legs stretched forward to the footwell (knees up, feet flat on that car's floor ahead),
-// as carpeople.js seats the traffic's drivers (per model: the floor height in front of the front / rear seats) and
-// drive.js seats you (placeRig). In the car's own frame (pitched, rolled with it). r: { carG, carT, carSeat } (also
-// carride.js: you, riding in someone's car, on your own screen; Oct 30, the user: "the feet of the passenger were
-// stuck out of the car")
-const _q = new THREE.Quaternion(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
+// a car seat, not a bench: the legs bent into the footwell, the heels on that car's floor, the hands back on the thighs
+// (carpeople.js seatLegs: as drive.js seats you and the traffic's people sit), in the car's own frame (pitched, rolled
+// with it). r: { carG, carT, carSeat } (also carride.js: you, riding in someone's car, on your own screen; Oct 30, the
+// user: "the feet of the passenger were stuck out of the car"; Oct 31 2026, the user: "you still don't sit properly on
+// a chair": the old fixed target was as far as the legs reach, so they stuck out stiff and straight)
+const _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
 export function carLegs(rig, r) {
-  const b = rig.b, g = r.carG;
-  if (!b?.hips || !b.lUp || !b.rUp || !g) return;
-  rig.root.updateMatrixWorld(true);
-  g.updateMatrixWorld(true);
-  const hip = g.worldToLocal(_hip.setFromMatrixPosition(b.hips.matrixWorld));
-  const S = seatsFor(r.carT), front = r.carSeat < 2;
-  const floor = S?.floor ? (front ? S.floor[0] : S.floor[1] ?? S.floor[0]) : null;
-  const drop = floor != null ? clamp(hip.y - floor - 0.09, 0.13, 0.3) : 0.26;
-  // (a low sports car: the legs out nearly straight; an SUV's upright seat: the knees up, the feet nearer)
-  const ahead = front ? clamp(0.95 - (floor != null ? hip.y - floor : 0.3) * 0.8, 0.55, 0.8) : 0.55;
-  g.getWorldQuaternion(_q);
-  for (const [side, up, leg, foot] of [[1, b.lUp, b.lLeg, b.lFoot], [-1, b.rUp, b.rLeg, b.rFoot]]) {
-    g.localToWorld(_tgt.set(hip.x + side * 0.14, hip.y - drop, hip.z + ahead));
-    _pole.set(side * 0.15, 1, 0.5).normalize().applyQuaternion(_q);
-    try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
-  }
+  if (!r?.carG) return;
+  seatLegs(rig, r.carG, r.carT, r.carSeat | 0, { driver: (r.carSeat | 0) === 0, hands: true });
 }
 
 // a rig posed inside an interior (its own scene and coordinates): the feet on the floor at y, not on the world's terrain

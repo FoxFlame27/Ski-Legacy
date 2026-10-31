@@ -12,7 +12,7 @@ import { ST, F } from './protocol.js';
 import { makeTag } from './remote.js';
 import { CAR_MODELS, carTemplate, carInstance, driverEye } from '../game/cars.js';
 import { dressCar, normConfig } from '../game/carconfig.js';
-import { seatsFor } from '../game/carpeople.js';
+import { seatsFor, SEAT_LIFT } from '../game/carpeople.js';
 import { lampsOn, Smoke, hazardPhase } from '../game/carlights.js';
 import { addDent, applyDents, repairInstance, unpackDents } from '../game/cardamage.js';
 import { HeliModel, ANCHORS } from '../game/heli/model.js';
@@ -48,8 +48,9 @@ export function carSeats(t) {
   if (out) return out;
   out = [];
   const S = seatsFor(t);
-  // (carpeople.js hipAt for a hip 0.1 m over the seat point, minus that 0.1 m)
-  const pt = (x, s) => new THREE.Vector3(x, s[0] - 0.01, s[1] + s[2] * (0.1 - 0.15) + 0.13);
+  // (carpeople.js hipAt for a hip 0.1 m over the seat point, minus that 0.1 m; SEAT_LIFT: on the cushion, not sunk 8 cm
+  // into it, Oct 31 2026, the user: "you still don't sit properly on a chair")
+  const pt = (x, s) => new THREE.Vector3(x, s[0] - 0.01 + SEAT_LIFT, s[1] + s[2] * (0.1 - 0.15) + 0.13);
   if (S) {
     const front = S.d.slice(1);
     out.push(pt(S.d[0], front), pt(-S.d[0], S.p || front));

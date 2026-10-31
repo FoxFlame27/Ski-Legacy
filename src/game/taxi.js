@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { busRoads, stopWaitArea, nearestRoadPoint, laneDistance, ROAD_HALF } from './bus/roads.js';
-import { seatsFor, twoBone } from './carpeople.js';
+import { seatsFor, seatLegs, SEAT_LIFT } from './carpeople.js';
 import { driverEye } from './cars.js';
 import { GUESTS } from './jobs/catalog.js';
 import { makeFallbackFigure } from './jobs/props.js';
@@ -64,7 +64,7 @@ const money = (v) => `$${Math.round(v).toLocaleString('en-US')}`;
 const hyp = (ax, az, bx, bz) => Math.hypot(ax - bx, az - bz);
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 const far = (m) => (m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`);
-const _v = new THREE.Vector3(), _door = new THREE.Vector3(), _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
+const _v = new THREE.Vector3(), _door = new THREE.Vector3();
 
 // a car template's seat points (car frame: +x the driver's side, +z forward), as net/vehicles.js carSeats: 0 the
 // driver, 1 the front passenger, 2.. the back
@@ -75,7 +75,7 @@ function carSeats(t) {
   if (out) return out;
   out = [];
   const S = seatsFor(t);
-  const pt = (x, s) => new THREE.Vector3(x, s[0] - 0.01, s[1] + s[2] * (0.1 - 0.15) + 0.13);
+  const pt = (x, s) => new THREE.Vector3(x, s[0] - 0.01 + SEAT_LIFT, s[1] + s[2] * (0.1 - 0.15) + 0.13); // (SEAT_LIFT: on the cushion, not sunk into it)
   if (S) {
     const front = S.d.slice(1);
     out.push(pt(S.d[0], front), pt(-S.d[0], S.p || front));
@@ -90,20 +90,6 @@ function carSeats(t) {
 // the passenger's seat: the back seat behind the front passenger (the kerb side; a car without a back seat: the front
 // passenger seat). Multiplayer: the front one stays free for a friend either way
 const paxSeat = (list) => (list.length > 3 ? 3 : 1);
-// legs to the footwell (the bench 'sit' pose hangs them straight down through the car floor), as net/remote.js does
-function carLegs(rig) {
-  const b = rig.b;
-  if (!b?.hips || !b.lUp || !b.rUp) return;
-  const q = rig.root.quaternion;
-  rig.root.updateMatrixWorld(true);
-  _hip.setFromMatrixPosition(b.hips.matrixWorld);
-  for (const [side, up, leg, foot] of [[1, b.lUp, b.lLeg, b.lFoot], [-1, b.rUp, b.rLeg, b.rFoot]]) {
-    _tgt.set(side * 0.14, -0.26, 0.74).applyQuaternion(q).add(_hip);
-    _pole.set(side * 0.15, 1, 0.5).normalize().applyQuaternion(q);
-    try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
-  }
-}
-
 // ROUND THE CAR, NOT THROUGH IT (Oct 30, the user): a walking passenger's way between two points in the car's own frame
 // (x across, z along; the car centred), keeping out of its box widened by CAR_GAP (hx, hz): straight when the line is
 // clear, otherwise the shortest way via the box's corners (round the bonnet or round the boot, whichever is shorter).
@@ -489,7 +475,9 @@ export class Taxi {
     p.rig.root.position.copy(p.pos);
     try {
       p.rig.update(p.acc || 1 / 60, p.st);
-      if (p.seated) carLegs(p.rig);
+      // (the legs into the footwell, knees bent, heels on the floor, hands on the thighs: carpeople.js seatLegs, as
+      // everyone in a car; Oct 31 2026, the user: "you still don't sit properly on a chair")
+      if (p.seated && d) { const list = carSeats(d.t); seatLegs(p.rig, d.e.car, d.t, list ? Math.min(list.length - 1, paxSeat(list)) : 1, { hands: true }); }
     } catch (e) { if (!this.poseErr) { this.poseErr = true; console.warn('taxi passenger pose', e); } }
     if (p.rig.fx) p.rig.fx.length = 0;
     p.acc = 0;

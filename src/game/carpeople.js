@@ -69,7 +69,7 @@ function bake(mesh, tris) {
 const SEATS = [
   { name: 'car_vw_golf_gti', traffic: true, size: [4.30, 1.47], wheel: [0.919, 0.297], d: [0.35, 0.436, -0.209, -0.44], r: [0.37, 0.461, -1.085, -0.5], floor: [0.21, 0.22], roof: [1.40, 1.37] },
   { name: 'car_vw_golf_gti_full', size: [4.30, 1.49], wheel: [0.922, 0.306], d: [0.35, 0.45, -0.21, -0.44], r: [0.37, 0.473, -1.08, -0.5], floor: [0.277, 0.24], roof: [1.40, 1.39] },
-  { name: 'car_bmw_x3', traffic: true, size: [4.70, 1.68], wheel: [1.065, 0.307], d: [0.373, 0.632, -0.238, -0.44], r: [0.38, 0.631, -1.079, -0.37], floor: [0.40, 0.33], roof: [1.60, 1.59] },
+  { name: 'car_bmw_x3', traffic: true, size: [4.70, 1.68], wheel: [1.065, 0.307], d: [0.373, 0.632, -0.238, -0.44], r: [0.38, 0.631, -1.079, -0.37], floor: [0.40, 0.39], roof: [1.60, 1.59] },
   // (the RS6's driver's seat sits 10 cm further forward than the passenger's; the full model has the same seats)
   { name: 'car_audi_rs6', traffic: true, size: [5.00, 1.50], wheel: [0.916, 0.469], d: [0.381, 0.432, 0.0, -0.57], p: [0.407, -0.10, -0.43], r: [0.38, 0.455, -0.986, -0.37], floor: [0.295, 0.23], roof: [1.377, 1.38] },
   // (a glass roof: the height under it)
@@ -77,16 +77,25 @@ const SEATS = [
   { name: 'car_tesla_m3_full', size: [4.70, 1.46], wheel: [0.914, 0.668], d: [0.47, 0.395, -0.105, -0.17], r: [0.38, 0.394, -0.97, -0.17], floor: [0.28, 0.27], roof: [1.37, 1.37] },
   // (the SLS: a two-seater, no rear seats; low, its cushions 0.29 m off the ground. The Taycan: the rear seats' feet
   // in the battery's "foot garages")
-  { name: 'car_mercedes_sls', traffic: true, size: [4.64, 1.26], wheel: [0.768, -0.095], d: [0.43, 0.29, -0.675, -0.32], r: null, floor: [0.24, 0.24], roof: [1.17, 1.15] },
-  { name: 'car_porsche_taycan', traffic: true, size: [4.96, 1.36], wheel: [0.834, 0.352], d: [0.37, 0.37, -0.255, -0.27], r: [0.38, 0.47, -1.08, -0.4], floor: [0.30, 0.30], roof: [1.28, 1.22] },
+  { name: 'car_mercedes_sls', traffic: true, size: [4.64, 1.26], wheel: [0.768, -0.095], d: [0.43, 0.29, -0.675, -0.32], r: null, floor: [0.20, 0.20], roof: [1.17, 1.15] },
+  { name: 'car_porsche_taycan', traffic: true, size: [4.96, 1.36], wheel: [0.834, 0.352], d: [0.37, 0.37, -0.255, -0.27], r: [0.38, 0.47, -1.08, -0.4], floor: [0.25, 0.24], roof: [1.28, 1.22] },
   // (Oct 29: the Huracán, a two-seater, low; the GR Yaris; the e-tron GT; the GLS. Oct 30, the user: "the Mercedes
   // GLS is a 5 seater not a 7 seater": no third row, the driver, the front passenger and three in the back)
-  { name: 'car_lamborghini_huracan', traffic: true, size: [4.52, 1.18], wheel: [0.779, 0.359], d: [0.37, 0.27, -0.24, -0.5], r: null, floor: [0.15, 0.15], roof: [1.15, 1.10] },
-  { name: 'car_toyota_gr_yaris', traffic: true, size: [3.99, 1.44], wheel: [0.918, 0.277], d: [0.35, 0.47, -0.26, -0.47], r: [0.38, 0.54, -1.085, -0.35], floor: [0.21, 0.23], roof: [1.40, 1.37] },
-  { name: 'car_audi_etron_gt', traffic: true, size: [4.96, 1.38], wheel: [0.918, 0.402], d: [0.37, 0.36, -0.255, -0.37], r: [0.38, 0.475, -0.995, -0.5], floor: [0.24, 0.24], roof: [1.30, 1.28] },
+  { name: 'car_lamborghini_huracan', traffic: true, size: [4.52, 1.18], wheel: [0.779, 0.359], d: [0.37, 0.27, -0.24, -0.5], r: null, floor: [0.18, 0.18], roof: [1.15, 1.10] },
+  { name: 'car_toyota_gr_yaris', traffic: true, size: [3.99, 1.44], wheel: [0.918, 0.277], d: [0.35, 0.47, -0.26, -0.47], r: [0.38, 0.54, -1.085, -0.35], floor: [0.25, 0.23], roof: [1.40, 1.37] },
+  { name: 'car_audi_etron_gt', traffic: true, size: [4.96, 1.38], wheel: [0.918, 0.402], d: [0.37, 0.36, -0.255, -0.37], r: [0.38, 0.475, -0.995, -0.5], floor: [0.26, 0.25], roof: [1.30, 1.28] },
+  // (Oct 31 2026, the user: "you still don't sit properly on a chair": the floors in front of the seats measured again
+  // in the footwells (the Taycan's was 5 cm too high, the SLS's 4 cm, the X3's rear 6 cm too low): seatLegs puts the
+  // heels on them)
   { name: 'car_mercedes_gls', traffic: true, size: [5.20, 1.86], wheel: [1.156, 0.625], d: [0.42, 0.79, -0.01, -0.4], r: [0.42, 0.73, -1.16, -0.33], floor: [0.50, 0.49], roof: [1.66, 1.77] },
 ];
 const DEPTH = 0.13, DEPTH_U = 0.11; // hip joint / shoulder joints to the backrest (pelvis, shoulder blades, jacket)
+/** (m) How much higher a rig sits in a car seat than its plain 'sit' pose puts it (the pelvis 0.1 m over the seat point,
+ *  so the hip joints were level with the cushion's surface: the seat of the trousers sunk 8 cm into it, the thighs
+ *  through its raised front edge and the legs stiff and straight out, the boots under the floor; Oct 31 2026, the user:
+ *  "you still don't sit properly on a chair"): the hip joints ~6 cm over the cushion, as a body sits on one. Every
+ *  seat point (drive.js seatHip, net/vehicles.js and taxi.js carSeats, the traffic's figures) is lifted by it. */
+export const SEAT_LIFT = 0.06;
 const RECLINE = 0.2; // (rad) a passenger's back leant into a car seat (they recline ~10-30 degrees), the head levelled
 const RIGHT = new THREE.Vector3(-1, 0, 0);
 const _seat = new WeakMap();
@@ -105,14 +114,14 @@ export function seatsFor(t) {
 }
 // a seat's hip joint (car frame) for someone whose hip joint is hipY above the seat surface: on the cushion (pressed
 // in a little), DEPTH in front of the backrest at that height
-function hipAt(x, s, hipY) { return new THREE.Vector3(x, s[0] - 0.01 + hipY, s[1] + s[2] * (hipY - 0.15) + DEPTH); }
+function hipAt(x, s, hipY) { return new THREE.Vector3(x, s[0] - 0.01 + SEAT_LIFT + hipY, s[1] + s[2] * (hipY - 0.15) + DEPTH); }
 // where a baked figure's seat point goes (car frame) on a seat s ([cushion y, backrest z, lean]) at x: on the cushion,
 // its back against the backrest where it touches first (the hips in a seat that leans back further than the figure,
 // the shoulders in a more upright one)
 function originAt(x, s, hip, chest) {
   const back = (h) => s[1] + s[2] * (h - 0.15);
   const oz = Math.max(back(hip.y) + DEPTH - hip.z, chest ? back(chest.y) + DEPTH_U - chest.z : -Infinity);
-  return new THREE.Vector3(x - hip.x, s[0] - 0.01, oz);
+  return new THREE.Vector3(x - hip.x, s[0] - 0.01 + SEAT_LIFT, oz);
 }
 /** The driver's hip joint in a car template's frame for a rig whose hip is hipY above its seat point (drive.js: you),
  *  or null without seat hints. reach: the seat slid forward so the wheel's centre is no further ahead than that. */
@@ -131,6 +140,70 @@ function rotW(bone, axis, angle) {
 export function leanBack(b, R, rec, neck = -rec * 0.6, head = -rec * 0.3) {
   if (!b) return;
   rotW(b.spine0, R, rec * 0.55); rotW(b.spine1, R, rec * 0.45); rotW(b.neck, R, neck); rotW(b.head, R, head);
+}
+
+// A seated rig's legs in a car seat, the same for you at the wheel (drive.js placeRig), you riding with someone
+// (net/carride.js), the other players in their cars (net/remote.js carLegs), the taxi's passenger and the traffic's
+// baked people (Oct 31 2026, the user: "you still don't sit properly on a chair, please fix it"): the thighs out of the
+// seat rising a little to the knees, the shins down and forward into the footwell, the heels on that car's floor (SEATS
+// floor), the boots nearly flat (the driver's right on the throttle, toes up). Before: a fixed point 0.74 m ahead and
+// 0.26 m below the pelvis, as far as the legs reach, so they went out dead straight from the hips; the ski boots are
+// skinned mostly to the shins, so they turned with them and stood straight up, toes to the roof: from the driver's eyes
+// two stiff legs with the boots raised toward the windscreen. Now the shin's slope is chosen (~34 degrees from upright in
+// the front, ~20 in the back, the boots follow it about half) and the thigh takes up the rest of the drop from the hip
+// to the heel; where that would lift the knee into the steering wheel (a low sports car: the Taycan, the Huracan, the
+// hips hardly above the heels) or more than 0.2 m over the hip, the shins slope out further instead.
+// g: the car (an Object3D: its frame, +z forward, +x the driver's left); null: the rig's own world is that frame (the
+// bake). t: its template (the floor from seatsFor, the wheel) or o.floor (the frame's y). seat: 0 the driver, 1 the
+// front passenger, 2.. the back. o.driver: the feet on the pedals, the knees under the wheel; o.hands: the hands back on
+// the thighs (the 'sit' pose rested them where its own thighs were).
+const _lq = new THREE.Quaternion(), _lq2 = new THREE.Quaternion(), _lq3 = new THREE.Quaternion(), _lJ = new THREE.Vector3(), _lK = new THREE.Vector3();
+const _lT = new THREE.Vector3(), _lP = new THREE.Vector3(), _lU = new THREE.Vector3(), _lA = new THREE.Vector3(), _lB = new THREE.Vector3(), _lE = new THREE.Euler();
+const SOLE = 0.2; // (m) the ankle joint over the floor with the boot's heel on it (the heel is skinned to the shin and swings down behind as it slopes; measured on the rigs in each car)
+export function seatLegs(rig, g, t, seat = 0, o = {}) {
+  const b = rig?.b;
+  if (!b?.hips || !b.lUp || !b.rUp || !b.lLeg || !b.rLeg || !b.lFoot || !b.rFoot) return;
+  rig.root.updateMatrixWorld(true);
+  if (g) { g.updateMatrixWorld(true); g.getWorldQuaternion(_lq); } else _lq.identity();
+  const S = t ? seatsFor(t) : null, front = seat < 2;
+  const floor = o.floor ?? (S?.floor ? (front ? S.floor[0] : S.floor[1] ?? S.floor[0]) : null);
+  const Lt = wpos(b.lUp).distanceTo(wpos(b.lLeg)), Ls = wpos(b.lLeg).distanceTo(wpos(b.lFoot));
+  // (the steering wheel rim's lowest point, the driver's knees a hand under it)
+  const W = o.driver && t?.steering?.c ? t.steering.c.y - (t.steering.rimR ?? 0.185) * Math.cos(t.steering.tilt ?? 0.38) : null;
+  for (const [i, up, leg, foot] of [[0, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
+    const side = i === 0 ? 1 : -1; // (+x: the figure's left)
+    const J = _lJ.setFromMatrixPosition(up.matrixWorld);
+    if (g) g.worldToLocal(J);
+    // the drop from the hip joint to the ankle, the heel on the floor (no floor known: an average car's)
+    const dy = Math.min(0.5, Math.max(-0.05, floor != null ? J.y - floor - SOLE : 0.15));
+    const rise = Math.max(0.06, Math.min(0.2, W != null ? W - 0.07 - J.y : 0.2)); // (the knee joint over the hip joint, at most)
+    let phi = front ? 0.6 : 0.35; // (the shin from upright, rad)
+    phi = Math.max(phi, Math.acos(Math.min(1, (rise + dy) / Ls)));
+    phi = Math.min(phi, 1.25);
+    const th = Math.asin(Math.min(0.6, Math.max(-0.8, (dy - Ls * Math.cos(phi)) / Lt))); // (the thigh's pitch, down > 0)
+    const K = _lK.set(J.x + side * 0.02, J.y - Lt * Math.sin(th), J.z + Lt * Math.cos(th));
+    _lT.set(K.x + side * 0.01, K.y - Ls * Math.cos(phi), K.z + Ls * Math.sin(phi));
+    // the pole: the knee exactly there (from the middle of the hip-to-ankle line)
+    _lP.addVectors(J, _lT).multiplyScalar(0.5).sub(K).negate();
+    if (g) { g.localToWorld(_lT); _lP.applyQuaternion(_lq); }
+    try { twoBone(up, leg, foot, _lT, _lP); } catch { continue; } // (the pose stays as the rig made it)
+    // the boot: ahead along the car, toes up about half the shin's slope (skinned half to the shin: never bent double)
+    const fr = rig.footRest?.[i === 0 ? 'l' : 'r'];
+    if (fr && foot.parent) {
+      const pitch = -phi * 0.5 + 0.08 - (o.driver && i === 1 ? 0.12 : 0);
+      setWQ(foot, _lq2.copy(_lq).multiply(_lq3.setFromEuler(_lE.set(pitch, -side * 0.07, 0, 'YXZ'))).multiply(fr));
+    }
+  }
+  if (!o.hands || !b.lArm || !b.rArm) return;
+  // the hands resting on the thighs as they are now, the elbows out and back, palms down (as skier.js poseSit)
+  _lU.set(0, 1, 0).applyQuaternion(_lq);
+  for (const [i, arm, fore, hand, up, leg] of [[0, b.lArm, b.lFore, b.lHand, b.lUp, b.lLeg], [1, b.rArm, b.rFore, b.rHand, b.rUp, b.rLeg]]) {
+    if (!fore || !hand) continue;
+    const side = i === 0 ? 1 : -1, Jw = wpos(up), Kw = wpos(leg);
+    const tgt = _lA.copy(Jw).lerp(Kw, 0.55).addScaledVector(_lU, 0.1);
+    try { twoBone(arm, fore, hand, tgt, _lB.set(side, -1, -0.4).normalize().applyQuaternion(_lq)); } catch { continue; }
+    if (rig.aimHand) rig.aimHand(i, Kw.sub(Jw).normalize().addScaledVector(_lU, -0.2), _lU.clone().negate());
+  }
 }
 
 export class CarPeople {
@@ -191,14 +264,10 @@ export class CarPeople {
     poseSeated(rig, driver ? 'thighs' : n % 2 ? 'lap' : 'thighs', driver ? 0 : n % 2 ? 0.35 : -0.25, 0.35);
     const hip = wpos(b.hips), chest = b.lArm && b.rArm ? wpos(b.lArm).add(wpos(b.rArm)).multiplyScalar(0.5) : null;
     // (a driver: where this figure sits in its car)
-    const O = S ? originAt(S.d[0], S.d.slice(1), hip, chest) : null, hipCar = O ? hip.clone().add(O) : null;
-    // legs stretched out to the pedals / the floor ahead (feet flat on it, knees up), so no boot pokes out under the car
-    const drop = S ? Math.min(0.26, Math.max(0.13, hipCar.y - S.floor[0] - 0.09)) : fitted ? 0.2 : 0.24;
-    const ahead = S ? 0.7 : fitted ? 0.62 : 0.72;
-    for (const [i, up, leg, foot] of [[0, b.lUp, b.lLeg, b.lFoot], [1, b.rUp, b.rLeg, b.rFoot]]) {
-      const side = i === 0 ? 1 : -1;
-      twoBone(up, leg, foot, hip.clone().add(new THREE.Vector3(side * 0.13, -drop, ahead)), new THREE.Vector3(side * 0.15, 1, 0.5).normalize());
-    }
+    const O = S ? originAt(S.d[0], S.d.slice(1), hip, chest) : null;
+    // legs to the floor ahead (seatLegs: knees bent, heels on that model's floor, feet flat; a passenger, baked for any
+    // car, and the plain driver: an average car's floor, ~0.2 m under the cushion), so no boot pokes out under the car
+    seatLegs(rig, null, null, driver ? 0 : 1, { driver, floor: S ? S.floor[0] - O.y : -0.19 - SEAT_LIFT });
     rig.root.updateMatrixWorld(true);
     const eye = wpos(b.head).add(new THREE.Vector3(0, 0.09, 0.08));
     if (driver) {

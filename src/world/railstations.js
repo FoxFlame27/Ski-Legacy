@@ -325,6 +325,100 @@ function buildGlacierStation(M, steel, { terraceOnly = false } = {}) {
   return grp;
 }
 
+// (Oct 31 2026, the user: the halt cabins, rail_station_halt, at the Legacy Express stations ("Sunny Meadow") and the
+// Wolkenspitzbahn stops show "a strange green, map-like texture with white blobs" on the roof, "it should be a snowy
+// roof, like the other huts". The cause is the model's own texture, not the LOD copies: its one atlas paints the roof
+// green moss with white snow patches (the emissive map lights those patches too), already at full detail; the
+// decimated copies keep that look but fold the roof's top and its underside together, so wood shows through too.
+// So the roof's triangles get their own mesh with a plain snow material, on every LOD level, the rest of the model
+// keeping all its maps. The roof at full detail: faces looking up (normal y > 0.3) in the top third of the model
+// (above the eaves); the decimated copies cannot be judged by their normals (vertex clustering tilts them), so a
+// triangle there is roof when two of its vertices carry the uv of a full-detail roof (or roof underside) vertex
+// (clusterDecimate copies one source vertex's uv exactly). The snow colour is the station houses' roof snow
+// (buildStationHouse, '#f3f6fa'), pulled a little forward (polygonOffset) over the folded-in underside.)
+const ROOF_T = 0.66, ROOF_NY = 0.3;
+let ROOF_SNOW = null;
+const roofKeyCache = new WeakMap(), roofSplitCache = new WeakMap();
+function roofSnowMaterial() {
+  if (!ROOF_SNOW) {
+    ROOF_SNOW = new THREE.MeshStandardMaterial({ color: '#f3f6fa', roughness: 0.85, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+    ROOF_SNOW.userData.shared = true; // (one for every station: never disposed with a chunk / course)
+  }
+  return ROOF_SNOW;
+}
+const uvKey = (uv, i) => Math.fround(uv.getX(i)) + ',' + Math.fround(uv.getY(i));
+// one triangle's height in the model (0 bottom .. 1 top) and its face normal's y
+function triFacts(pos, a, b, c, y0, dy) {
+  const ax = pos.getX(a), ay = pos.getY(a), az = pos.getZ(a);
+  const ux = pos.getX(b) - ax, uy = pos.getY(b) - ay, uz = pos.getZ(b) - az;
+  const vx = pos.getX(c) - ax, vy = pos.getY(c) - ay, vz = pos.getZ(c) - az;
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, l = Math.hypot(nx, ny, nz);
+  return { t: ((ay + pos.getY(b) + pos.getY(c)) / 3 - y0) / dy, ny: l > 1e-12 ? ny / l : 0 };
+}
+// split a geometry into { body, roof }: two index subsets sharing its attributes (cached: the model's and the LOD
+// copies' geometries are shared by every station); keys = null for the full-detail geometry (it collects them)
+function splitRoof(geo, keys) {
+  if (roofSplitCache.has(geo)) return roofSplitCache.get(geo);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  let out = null;
+  if (pos && uv) {
+    let y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < pos.count; i++) { const y = pos.getY(i); if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const dy = Math.max(1e-9, y1 - y0);
+    const idx = geo.index, count = idx ? idx.count : pos.count;
+    const body = [], roof = [];
+    const hiKeys = keys ? null : new Set();
+    for (let k = 0; k + 2 < count; k += 3) {
+      const a = idx ? idx.getX(k) : k, b = idx ? idx.getX(k + 1) : k + 1, c = idx ? idx.getX(k + 2) : k + 2;
+      const f = triFacts(pos, a, b, c, y0, dy);
+      let isRoof;
+      if (!keys) {
+        isRoof = f.t > ROOF_T && f.ny > ROOF_NY;
+        if (f.t > ROOF_T && (isRoof || f.ny < -ROOF_NY)) for (const i of [a, b, c]) hiKeys.add(uvKey(uv, i)); // (top and underside)
+      } else isRoof = f.t > ROOF_T - 0.06 && (keys.has(uvKey(uv, a)) + keys.has(uvKey(uv, b)) + keys.has(uvKey(uv, c))) >= 2;
+      (isRoof ? roof : body).push(a, b, c);
+    }
+    if (hiKeys) roofKeyCache.set(geo, hiKeys);
+    if (roof.length) {
+      const sub = (list) => {
+        const g = new THREE.BufferGeometry();
+        for (const [name, attr] of Object.entries(geo.attributes)) g.setAttribute(name, attr);
+        g.setIndex(new THREE.BufferAttribute(pos.count > 65535 ? new Uint32Array(list) : new Uint16Array(list), 1));
+        g.boundingBox = geo.boundingBox?.clone() ?? null; g.boundingSphere = geo.boundingSphere?.clone() ?? null;
+        if (!g.boundingSphere) g.computeBoundingSphere();
+        g.userData.shared = true; // (cached for every station: never disposed with an express chunk)
+        return g;
+      };
+      out = { body: sub(body), roof: sub(roof) };
+    }
+  }
+  roofSplitCache.set(geo, out);
+  return out;
+}
+/** Give a makeLOD'd rail_station_halt a snowy roof on every LOD level (see above). Call it right after makeLOD. */
+export function snowRoof(lod) {
+  if (!lod || lod.userData.snowRoof) return lod;
+  lod.userData.snowRoof = true; // (once per building)
+  const levels = lod?.levels?.length ? lod.levels.map((l) => l.object) : [lod];
+  const meshesOf = (o) => { const list = []; o.traverse((m) => { if (m.isMesh && !m.userData.snowRoof && !Array.isArray(m.material)) list.push(m); }); return list; };
+  const hiGeos = meshesOf(levels[0]).map((m) => m.geometry); // (the model's own, before level 0 is split)
+  for (const g of hiGeos) splitRoof(g, null); // (collects the roof's uv keys first)
+  levels.forEach((obj, li) => {
+    meshesOf(obj).forEach((m, k) => {
+      const keys = li === 0 ? null : roofKeyCache.get(hiGeos[k]);
+      if (li > 0 && !keys) return;
+      const split = li === 0 ? roofSplitCache.get(m.geometry) : splitRoof(m.geometry, keys);
+      if (!split) return;
+      m.geometry = split.body;
+      const r = new THREE.Mesh(split.roof, roofSnowMaterial());
+      r.userData.snowRoof = true;
+      r.castShadow = m.castShadow; r.receiveShadow = m.receiveShadow;
+      m.add(r); // (a child: the mesh's own transform)
+    });
+  });
+  return lod;
+}
+
 // platform canopy: steel columns, a glazed lean-to roof, lamps under it
 function buildCanopy(steelMat, glassMat, len, width) {
   const S = new B(), G = new B();
@@ -424,6 +518,7 @@ export function buildStations(scene, colliders = [], models = null) {
       // stone plinth that reaches into the ground
       const big = st.id === 'tal';
       const bld = makeLOD(models[meshyKey], { size: big ? 22 : 8.6, axis: 'x' }, 260, 0.05);
+      if (meshyKey === 'rail_station_halt') snowRoof(bld); // (Oct 31 2026, the user: a snowy roof, not the model's green one)
       bld.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; crisp(o.material); } });
       const sz = bld.userData.size;
       const bp = besideLine(mid, side * (1.75 + 4.2 + 1.2));

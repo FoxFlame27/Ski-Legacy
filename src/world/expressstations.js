@@ -16,6 +16,7 @@ import { XB, lin } from './expresstrack.js';
 import { RailBuilder, canvasTex } from './railtrack.js';
 import { bakeGeometry, makeLOD } from '../core/assets.js';
 import { crisp } from './train.js';
+import { snowRoof } from './railstations.js'; // (Oct 31 2026: the halt's snowy roof)
 import { propProfile, registerBench } from '../game/seating.js';
 import { breakables } from './breakables.js'; // (the platform lamps: snapped off by a car over 100 km/h, Oct 31 2026)
 
@@ -279,6 +280,9 @@ function buildStation(rec, M, models) {
   if (H) {
     try {
       const bld = makeLOD(H.gltf, { size: H.size, axis: 'x' }, 260, 0.05);
+      // (Oct 31 2026, the user: the halt's roof showed "a strange green, map-like texture with white blobs", "it should
+      // be a snowy roof, like the other huts": railstations.js snowRoof, on every LOD level, its other maps kept)
+      if (H.key === 'rail_station_halt') snowRoof(bld);
       bld.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; crisp(o.material); } });
       bld.levels[0].object.traverse((o) => { if (o.isMesh) o.geometry.userData.shared = true; }); // (the model's own geometry: never disposed)
       const sz = bld.userData.size;

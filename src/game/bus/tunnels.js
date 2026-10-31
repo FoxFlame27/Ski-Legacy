@@ -37,7 +37,14 @@ const APP = 30;            // m clear of junctions, stops, lay-bys... before eac
 const MAX_N = 6;
 export const HP = 9.2;     // m: the portal headwall over the road (the end slope starts on its top)
 const K_END = 0.8;         // the end slope over a portal (the scenic cut's own batter: scenic.js CUT_K)
-const SLOT = TUBE.Wi + 1.6; // the trench's half-width (the tube's outer wall at Wi + 0.4: inside it)
+// the trench's half-width: its flat floor (the road's height) reaches 3.2 m past the tube's wall, so no triangle of the
+// finest terrain mesh (a 2 m grid: 2.83 m across) that has a corner up on the trench's steep side wall reaches back
+// over the tube's wall into it (Oct 31 2026, the user, of a road tunnel: "this black pointy thing is wrong"; with the
+// floor only 1.6 m past the wall (Wi + 1.6) such triangles leaned 0.3-2.7 m high into the tube along its walls, the
+// whole tunnel long: dark terrain slivers just in front of the white wall)
+const SLOT = TUBE.Wi + 3.2;
+const LID_MIN = 1.2;       // m: the lid (the mountain drawn over the trench) at least this far over the tube's crown
+const LID_PORTAL = 3;      // m in front of each portal plane where the lid's grid corners are lifted (> 2.83: a cell)
 // (Austrian names, west to east: "Kalkwand-Tunnel" in the Austrian style)
 const NAMES = ['Kalkwand-Tunnel', 'Lärchkogel-Tunnel', 'Gamsleiten-Tunnel', 'Schrofen-Tunnel', 'Steinbock-Tunnel', 'Hochalm-Tunnel', 'Zirbenwald-Tunnel', 'Felsentor-Tunnel'];
 const P = {}, Q = {};
@@ -145,10 +152,41 @@ function makeTunnel(c, name) {
       return t < h ? t : h;
     },
   };
+  // The lid over the trench (tunnelview.js, secrets/lid.js: a copy of the finest terrain mesh, clipped at the portal
+  // planes) and the mountain ridden over the tube (addTunnelCuts) take their heights from lidLift and their carved
+  // corners from lidCut. (Oct 31 2026, the user, at night looking into the Kalkwand-Tunnel: "tunnels are good but this
+  // black pointy thing is wrong": a big black wedge in the tube's upper right a few metres in, from the ceiling down
+  // to the road. It was the lid: its 2 m grid triangles that cross a portal plane have corners in front of it, down in
+  // the open cutting at the road's height, and the lid clipped at the plane took its height there from them, so its
+  // first metre or two sloped down from the end slope's top (HP over the road) into the tube, as low as the road,
+  // with the terrain's material, unlit by the tube's lamps: black. Found in all six tunnels (Node check: up to 5.8 m
+  // into the tube, within 1 m of a portal plane), and inside the lid stood only 0.2 m over the crown in places, under
+  // it by 0.9 m at the Schrofen-Tunnel's east portal.) Now:
+  //  - every lid corner over the trench between the portal planes stands at least LID_MIN over the crown
+  //  - its corners up to LID_PORTAL m in front of a portal plane, across the tube and a cell beyond, stand on the
+  //    headwall's top (HP over the road, inside the 3.6 m deep headwall: hidden), so the clipped edge at the plane is
+  //    over the crown too
+  //  - lidCut counts those front corners as carved, so the lid takes every triangle round them: its outer edges keep
+  //    the terrain's own heights (no crack where the lid meets the terrain)
+  const LQ = {};
+  const portalZone = (ps, ad) => ad <= Wi + LID_PORTAL && ((ps >= pF0 - LID_PORTAL && ps < pF0) || (ps > pF1 && ps <= pF1 + LID_PORTAL));
+  const lidCut = (x, z) => {
+    path.project(x, z, LQ);
+    if (LQ.dist === Infinity) return Infinity;
+    return portalZone(LQ.s, Math.abs(LQ.d)) ? -Infinity : slotSurface(LQ.s, Math.abs(LQ.d));
+  };
+  const lidLift = (x, z, h) => {
+    path.project(x, z, LQ);
+    if (LQ.dist === Infinity) return h;
+    const ps = LQ.s, ad = Math.abs(LQ.d);
+    if (portalZone(ps, ad)) return Math.max(h, floor(ps) + HP);
+    if (ps >= pF0 && ps <= pF1 && slotSurface(ps, ad) < h - 0.01) return Math.max(h, floor(ps) + Hc + LID_MIN);
+    return h;
+  };
   const mid = path.at((pF0 + pF1) / 2, {});
   const t = {
     name, road: r, ri: c.ri, sF0: c.sF0, sF1: c.sF1, length: c.sF1 - c.sF0,
-    deep: c.deep, path, off, pF0, pF1, floor, slot, slotSurface, slotHalf: SLOT, HP,
+    deep: c.deep, path, off, pF0, pF1, floor, slot, slotSurface, slotHalf: SLOT, HP, lidCut, lidLift,
     center: { x: mid.x, z: mid.z },
     /** (x, y, z) inside the tube (y: optional; under the crown) */
     inside(x, y, z, pad = 0.4) {
@@ -213,13 +251,13 @@ export function tunnelCorridors(r, w, add) {
 // above; one per ~120 m of tunnel, so the surface grid only asks it near).
 export function addTunnelCuts() {
   for (const t of busRoads.tunnels || []) {
-    const { path, floor, pF0, pF1, slotSurface } = t;
+    const { path, floor, pF0, pF1, slotSurface, lidLift } = t;
     world.addCut(t.slot);
     const SQ = {}, pad = SLOT + 4;
     const height = (x, z) => {
       path.project(x, z, SQ);
       if (SQ.dist === Infinity || SQ.s < pF0 || SQ.s > pF1 || slotSurface(SQ.s, Math.abs(SQ.d)) === Infinity) return null;
-      return world.outsideHeight(x, z);
+      return lidLift(x, z, world.outsideHeight(x, z)); // (as the lid is drawn: Oct 31 2026, tunnels.js makeTunnel)
     };
     // (anyone over the tube's crown is on the mountain; inside it you are on the road)
     const over = (x, z) => { path.project(x, z, SQ); return SQ.dist === Infinity ? Infinity : floor(SQ.s) + TUBE.Hc + 1.2; };

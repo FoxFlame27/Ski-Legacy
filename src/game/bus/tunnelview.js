@@ -23,9 +23,15 @@ import { buildLidSteps, updateLidVisibility, lidMaterial } from '../../world/sec
 import { slice, late, sharedMaterial } from '../../world/secrets/slice.js';
 import { canvasTexture } from '../../modes/parkour/kit.js';
 import { mulberry32, smoothstep, clamp } from '../../core/noise.js';
+import { quality } from '../../engine/quality.js';
 
 const BUILD_R = 1150, DROP_R = 1450; // m from the tube (the finest terrain LOD shows the trench up to ~1 km out)
 const SHOW_R = 320;                  // the interior (tube, lights, decals) drawn within this of the tube
+// ... and only while the terrain round it is surely at its finest LOD (128 m nodes, each split from its 256 m parent
+// within 256 x lodK of the camera: 294 m on the lowest preset), where the trench is carved and the lid drawn. (Oct 31
+// 2026, the user: "this black pointy thing is wrong": a coarser LOD can't step from the cutting up to the mountain at
+// a portal and leans into the tube's mouth; past this the plug in the headwall's face hides it)
+const showR = () => Math.min(SHOW_R, 256 * (quality.terrain?.lodK ?? 2.5) - 30);
 const KERB = 3.45;                   // the kerb's face (the road's plowed half width 3.4 + 5 cm)
 const LAMP_EVERY = 4.5, LAMP_V = 1.5; // luminaires every 4.5 m, two rows 1.5 m off the centre line
 const LAMP = [1.0, 0.93, 0.8];       // warm white LED
@@ -328,14 +334,20 @@ function* buildTunnel(t) {
   snow.name = 'road-tunnel-snow'; snow.receiveShadow = true;
   group.add(snow);
   for (const s of signs) group.add(s);
-  // (far off, while the interior is not drawn: a dark plug 10 m inside each opening, never a view into the trench)
+  // (far off, while the interior is not drawn: a dark plug filling each opening, never a view into the trench.
+  // Oct 31 2026, the user: "this black pointy thing is wrong": the plug now stands 5 cm inside the headwall's front
+  // face, not 10 m in, and is the whole opening (the headwall's 2 cm wider arch, 6 cm more all round, its rim inside
+  // the concrete): a far terrain LOD (a 4 m grid and coarser: no lid, the trench not carved) can't step from the
+  // cutting's floor up to the mountain at the portal plane, its triangles there lean 1-2 m into the tube's mouth, and
+  // from the plug at 10 m in they stood in front of it; the bare trench of the finest LOD showed there too, the tube
+  // being hidden that far off. Behind the face both are hidden now.)
   const plugs = [];
   {
-    const ps = new THREE.Shape(), N = 12;
-    ps.moveTo(-Wi, -0.2); ps.lineTo(-Wi, TUBE.Hs);
-    for (let k = 1; k < N; k++) { const a = (Math.PI * k) / N, v = -Wi * Math.cos(a); ps.lineTo(v, archH(v)); }
-    ps.lineTo(Wi, TUBE.Hs); ps.lineTo(Wi, -0.2);
-    for (const [s, dir] of [[pF0 + 10, 1], [pF1 - 10, -1]]) {
+    const ps = new THREE.Shape(), N = 16, w = Wi + 0.08;
+    ps.moveTo(-w, -0.3); ps.lineTo(-w, TUBE.Hs);
+    for (let k = 1; k < N; k++) { const a = (Math.PI * k) / N, v = -w * Math.cos(a); ps.lineTo(v, archH(v * Wi / w) + 0.08); }
+    ps.lineTo(w, TUBE.Hs); ps.lineTo(w, -0.3);
+    for (const [s, dir] of [[pF0 - 3 + 0.05, 1], [pF1 + 3 - 0.05, -1]]) {
       const m = new THREE.Mesh(new THREE.ShapeGeometry(ps), MAT.plug());
       path.at(s, F);
       m.position.set(F.x, floor(s), F.z);
@@ -383,15 +395,18 @@ function* buildTunnel(t) {
   // --- the lid over the trench, per ~100 m (each section between its two planes: a long curving tunnel never lies
   // behind its own portal's plane)
   const lids = [];
-  const near = (x, z) => { path.project(x, z, Q); return Q.dist !== Infinity && Q.s > pF0 - 2 && Q.s < pF1 + 2 && Q.dist < t.slotHalf + 4; };
-  const cutAt = (x, z) => { path.project(x, z, Q); return Q.dist === Infinity ? Infinity : t.slotSurface(Q.s, Math.abs(Q.d)); };
+  // (Oct 31 2026, the user: "this black pointy thing is wrong": the lid's corners just in front of each portal plane
+  // are lifted onto the headwall's top and the lid kept over the crown all along (tunnels.js lidLift / lidCut), so no
+  // lid triangle slopes down into the tube at a portal; near() reaches those corners, 4 m in front of the planes)
+  const near = (x, z) => { path.project(x, z, Q); return Q.dist !== Infinity && Q.s > pF0 - 4 && Q.s < pF1 + 4 && Q.dist < t.slotHalf + 4; };
+  const cutAt = t.lidCut, lift = t.lidLift;
   const plane = (s, d) => { const p = path.point(s, 0, {}); return { x: p.x, z: p.z, nx: p.tx * d, nz: p.tz * d }; };
   const pad = t.slotHalf + 8;
   for (let a = pF0; a < pF1 - 0.5; a += 100) {
     const b = Math.min(pF1, a + 100);
     let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
     for (let s = a; s <= b + 1e-6; s += 5) { path.at(Math.min(s, b), F); minx = Math.min(minx, F.x); maxx = Math.max(maxx, F.x); minz = Math.min(minz, F.z); maxz = Math.max(maxz, F.z); }
-    const lid = yield* buildLidSteps({ bounds: { minx: minx - pad, minz: minz - pad, maxx: maxx + pad, maxz: maxz + pad }, near, keep: [[plane(a, 1), plane(b, -1)]], cutAt });
+    const lid = yield* buildLidSteps({ bounds: { minx: minx - pad, minz: minz - pad, maxx: maxx + pad, maxz: maxz + pad }, near, keep: [[plane(a, 1), plane(b, -1)]], cutAt, lift });
     for (const c of lid.chunks) { c.mesh.name = 'road-tunnel-lid'; group.add(c.mesh); }
     lids.push(lid);
   }
@@ -480,9 +495,10 @@ export class RoadTunnels {
     }
     if (!this.job && want) this.job = { t: want, it: buildTunnel(want) };
     if (this.job) this.step(3);
+    const R = showR();
     for (const [t, b] of this.built) {
       for (const lid of b.lids) updateLidVisibility(lid, this.terrain);
-      b.interior.visible = t.camD < SHOW_R;
+      b.interior.visible = t.camD < R;
       for (const p of b.plugs) p.visible = !b.interior.visible;
       // camera blockers only near the tube
       const on = t.camD < 120;

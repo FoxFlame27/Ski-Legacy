@@ -6,7 +6,7 @@ import { quality } from '../engine/quality.js';
 import { Townsfolk } from '../world/townsfolk.js';
 import { PeopleSim, away } from '../world/peoplesim.js';
 import { getRunIndex } from '../world/crowds.js';
-import { newFall, newStumble, stepFall, landed } from './peoplehits.js';
+import { newFall, newStumble, stepFall, landed, keepClear } from './peoplehits.js';
 
 const G = 9.81;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -220,10 +220,12 @@ export class NPCs {
 
   // ---- knocked over / stumbling (game/peoplehits.js: you ran into them). o: a skier or walker record. L: a vehicle's
   // throw (peoplehits.js launchFor): flying first (the root lifted off the snow), then the tumble.
-  knock(o, dx, dz, speed, L = null) {
+  // col: the vehicle's box (kept out of it: peoplehits.js keepClear, Oct 31 2026)
+  knock(o, dx, dz, speed, L = null, col = null) {
     const h = o.heading || 0, dr = -dx * Math.cos(h) + dz * Math.sin(h); // the push toward their right (+) / left
     const side = Math.abs(dr) > 0.25 ? Math.sign(dr) : Math.random() < 0.5 ? -1 : 1;
     o.down = newFall(side, dx, dz, speed, L);
+    o.down.col = col;
     o.resume = false;
   }
   stumble(o, dx, dz) { o.down = newStumble(dx, dz); o.resume = false; }
@@ -234,6 +236,7 @@ export class NPCs {
       done = stepFall(F, dt, o.heading || 0);
       const p = o.pos;
       p.x += F.vx * dt; p.z += F.vz * dt;
+      keepClear(F, p, dt); // (never inside the car that hit them)
       // thrown into a wall, a stall, a lamp post (the village's colliders): stopped there, the push off it gone
       if (o.kind === 'walker' && (F.vx || F.vz)) this.wall(F, p);
       const gy = world.height(p.x, p.z);
@@ -242,7 +245,7 @@ export class NPCs {
       o.rig.root.position.copy(p);
       const n = world.normal(p.x, p.z, _n) || UP;
       o.rig.update(dt, { mode: 'fall', heading: o.heading || 0, speed: 0, crouch: 0, lean: 0, tuck: false, plow: 0, normal: n, air: false,
-        fall: F, fallSide: F.side, fallHeading: F.hd ?? o.heading ?? 0, fallAir: !!F.air, fallT: F.t / 0.6 });
+        fall: F, fallSide: F.side, fallHeading: F.hd ?? o.heading ?? 0, fallAir: !!F.air, fallT: F.t / 0.6, flail: F.fl || 0 });
       if (o.rig.fx?.length) this.fx(o.id, o.rig, { grounded: false, speed: 0, vel: o.vel || _ZERO, sideslip: 0, plow: 0, lean: 0 }, dt); // (the body's puffs)
     } catch (e) { console.warn('npc fall', e); done = true; }
     if (done) {

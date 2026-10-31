@@ -1674,12 +1674,17 @@ export class SkierRig {
     // snow (skis along the slope) when getting up
     const n = st.normal || UP;
     const footQ = this.skiQuat(fwd, n, 0).multiply(_rqa.setFromAxisAngle(X_AXIS, ball * 0.35));
+    // (Oct 31 2026, the user, people knocked over by a car: "the arms flail, and the head and limbs follow through":
+    // st.flail 0..1, NPCs only (game/peoplehits.js stepFall fl): the limbs thrash out of step, the head lolls; the
+    // player and the remote avatars send none and pose as before)
+    const fl = clamp(st.flail || 0, 0, 1), ft = this.time;
     for (let i = 0; i < 2; i++) {
       const [up, leg, foot, fr] = i === 0 ? [b.lUp, b.lLeg, b.lFoot, this.footRest.l] : [b.rUp, b.rLeg, b.rFoot, this.footRest.r];
       const s = i === 0 ? -1 : 1;
       const ankle = root.clone().addScaledVector(fwd, P.footF + this.footFwd).addScaledVector(right, s * P.footW);
       ankle.y = world.groundHeight(ankle.x, ankle.z, root.y + 0.5);
       ankle.addScaledVector(n, P.footH + this.ankleH + 0.03);
+      if (fl > 0.01) ankle.addScaledVector(fwd, Math.sin(ft * 9.5 + i * 2.6) * 0.2 * fl).addScaledVector(UP, (0.12 + Math.sin(ft * 7.3 + i * 1.9) * 0.12) * fl).addScaledVector(right, s * 0.1 * fl);
       const pole = fwd.clone().addScaledVector(right, s * P.knee).addScaledVector(UP, ball * 0.3).normalize();
       solveTwoBone(up, leg, foot, ankle, pole);
       setWorldQuat(foot, footQ.clone().multiply(fr));
@@ -1693,11 +1698,16 @@ export class SkierRig {
       const a = s === side ? P.g : P.t;
       const sh = worldPos(arm, new THREE.Vector3());
       const tgt = sh.clone().addScaledVector(fwd, a[0]).addScaledVector(UP, a[1]).addScaledVector(right, s * a[2]);
+      if (fl > 0.01) { // (flung out and windmilling: up and out, each arm in its own rhythm)
+        const ph = ft * (10.5 + i * 2.3) + i * 2.1;
+        tgt.lerp(sh, 0.35 * fl).addScaledVector(UP, (0.35 + Math.sin(ph) * 0.3) * fl).addScaledVector(fwd, Math.cos(ph * 0.8) * 0.3 * fl).addScaledVector(right, s * (0.3 + 0.15 * Math.sin(ph * 1.3)) * fl);
+      }
       const elbow = right.clone().multiplyScalar(s).addScaledVector(UP, -0.6).addScaledVector(fwd, -0.4).normalize();
       solveTwoBone(arm, fore, hand, tgt, elbow);
       this.relaxHand(i, UP.clone().negate().addScaledVector(right, -s * 0.5).normalize(), 0.1);
     }
-    rotateWorld(b.neck, right, P.neck);
+    rotateWorld(b.neck, right, P.neck + (fl > 0.01 ? (Math.sin(ft * 8.2) * 0.3 - 0.15) * fl : 0));
+    if (fl > 0.01) rotateWorld(b.head, fwd, Math.sin(ft * 6.1 + 1) * 0.3 * fl);
     this.skiPos = null;
   }
 

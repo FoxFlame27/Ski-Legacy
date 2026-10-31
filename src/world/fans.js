@@ -1197,6 +1197,7 @@ export class FanCrowd {
     this.L = new Float32Array(NB * 4); this.W = new Float32Array(NB * 4); this.Pw = new Float32Array(NB * 3);
     this.tmp = new Float32Array(4);
     this.stale = new Uint8Array(n).fill(1);
+    this.rag = new Uint8Array(n); // 1: the skeleton comes from a SkierRig (poseFromRig: knocked over by a car), not poseDyn
     this.lists = this.meshes.flatMap((row) => row.map((mesh) => new Float32Array(mesh.instanceMatrix.count * 2)));
     this.cnt = new Int32Array(this.lists.length);
   }
@@ -1455,6 +1456,7 @@ FanCrowd.prototype.updateDyn = function (dt, c) {
   const n = this.n, D = this.dyn, t = c.time;
   for (let i = 0; i < n; i++) {
     if (this.lod[i] < 0) continue;
+    if (this.rag[i]) continue; // (knocked over: the rig's fall poses it, poseFromRig)
     if (!this.inView[i]) { this.stale[i] = 1; continue; }
     const l = this.lod[i];
     const busy = D.walk[i] > 0.02 || D.talk[i] > 0.04 || (D.holdW[i] > 0.02 && D.holdW[i] < 0.98);
@@ -1491,6 +1493,34 @@ FanCrowd.prototype.updateDyn = function (dt, c) {
     }
     this.blobs.instanceMatrix.needsUpdate = true;
   }
+};
+
+// (Oct 31 2026, the user: "on single player the bot getting hit just falls over, that's a very bad animation. Use the
+// same animation as in multiplayer on real people") Somebody knocked over by a car is posed by a SkierRig built on
+// the same character model (game/peoplehits.js crowdFall): the player's own wipeout poses (poseFall, placeFallen:
+// thrown, tumbling, sprawled on the snow, rolling over and pushing up), as a remote player's avatar shows them. Its
+// bones, taken in the rig's root frame (the model space here: metres, feet at 0, facing +z), become person i's row of
+// skinning matrices; the instance matrix is the rig root's place (setPlace). The prop hides meanwhile.
+// rig: a SkierRig made from kitOf(i).root, posed this frame; off: true hands the person back to poseDyn.
+const _rgM = new THREE.Matrix4(), _rgI = new THREE.Matrix4(), _rgP = new THREE.Vector3(), _rgQ = new THREE.Quaternion(), _rgS = new THREE.Vector3();
+FanCrowd.prototype.kitOf = function (i) { return this.kits[this.kit[i]]; };
+FanCrowd.prototype.poseFromRig = function (i, rig, off = false) {
+  if (off) { this.rag[i] = 0; this.stale[i] = 1; return; }
+  const kit = this.kits[this.kit[i]], Q0i = kit.Q0i, P0 = kit.P0, pal = this.pal, o = i * ROW * 4;
+  const bones = (rig._fanBones ??= (() => { const m = {}; rig.body.traverse((b) => { if (b.isBone && b.name in BI) m[b.name] = b; }); /* (the last of a name, as the rig's own) */ return BONE_NAMES.map((n) => m[n]); })());
+  if (bones.some((b) => !b)) return;
+  rig.root.updateMatrixWorld(true);
+  _rgI.copy(rig.root.matrixWorld).invert();
+  for (let b = 0; b < NBA; b++) {
+    _rgM.multiplyMatrices(_rgI, bones[b].matrixWorld).decompose(_rgP, _rgQ, _rgS);
+    const x = _rgQ.x, y = _rgQ.y, z = _rgQ.z, w = _rgQ.w, bo = b * 4, bx = Q0i[bo], by = Q0i[bo + 1], bz = Q0i[bo + 2], bw = Q0i[bo + 3];
+    writeSkin(pal, o + b * 12, w * bx + x * bw + y * bz - z * by, w * by - x * bz + y * bw + z * bx, w * bz + x * by - y * bx + z * bw, w * bw - x * bx - y * by - z * bz,
+      _rgP.x, _rgP.y, _rgP.z, P0[b * 3], P0[b * 3 + 1], P0[b * 3 + 2]);
+    if (b === BI.RightHand && kit.G) writeSkin(pal, o + PROP * 12, 0, 0, 0, 1, _rgP.x, _rgP.y, _rgP.z, kit.G.x, kit.G.y, kit.G.z);
+  }
+  pal[(i * ROW + NB * 3) * 4 + 3] = 0; // (no prop: poseDyn puts the carried skis back)
+  this.rag[i] = 1;
+  this.tex.needsUpdate = true;
 };
 
 const _ks = new Int32Array(12), _ws = new Float32Array(12);

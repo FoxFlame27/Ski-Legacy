@@ -899,7 +899,7 @@ export class Drive {
           const dx = p.x - d.x, dz = p.z - d.z, lz = dx * fx + dz * fz, lx = dx * fz - dz * fx;
           if (Math.abs(lz) > d.half + 0.3 || Math.abs(lx) > d.w / 2 + 0.3) continue;
           const l = Math.hypot(dx, dz) || 1, closing = Math.max(sp * 0.5, (d.vx * dx + d.vz * dz) / l);
-          const r = knockPerson(p, closing, 'car', d.vx / sp, d.vz / sp);
+          const r = knockPerson(p, closing, 'car', d.vx / sp, d.vz / sp, d.e.collider); // (the car's box: the body is kept out of it, Oct 31 2026)
           if (r?.fell) { d.vx *= 0.9; d.vz *= 0.9; this.audio?.play('land', 0.5); this.hitReport('person', closing); }
           else if (!r) { // (people hits off: the car just bumps softly off them)
             const nx = -dx / l, nz = -dz / l, vn = d.vx * nx + d.vz * nz;

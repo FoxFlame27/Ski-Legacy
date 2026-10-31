@@ -98,7 +98,7 @@ export class PeopleSim {
   spawn(p, x, z, yaw, { shown = false, vmax = null } = {}) {
     p.x = x; p.z = z; p.yaw = yaw; p.v = 0;
     p.y = this.groundY(x, z, p); p.gx = x; p.gz = z;
-    p.alpha = shown ? 1 : 0; p.fadeTo = 1; p.onStage = true; p.down = null;
+    p.alpha = shown ? 1 : 0; p.fadeTo = 1; p.onStage = true; this.dropDown(p);
     p.path = null; p.onArrive = null; p.face = null; p.look = null; p.talkTo = 0; p.holdTo = 0; p.group = null; p.ghostAt = null; p.carry = 0;
     if (vmax) p.vmax = vmax;
     const D = this.crowd.dyn;
@@ -116,7 +116,16 @@ export class PeopleSim {
    * Knocked over toward (dx, dz) (unit): falls flat, lies a moment, gets up and carries on (game/peoplehits.js). L: a
    * vehicle's throw (peoplehits.js launchFor: vh, vy, spin, twist, lie, up): thrown instead (updateThrown).
    */
-  knock(p, dx, dz, speed = 6, L = null) {
+  knock(p, dx, dz, speed = 6, L = null, col = null) {
+    // (Oct 31 2026, the user: "on single player the bot getting hit just falls over, that's a very bad animation. Use
+    // the same animation as in multiplayer on real people": near the player the person is posed by a real rig through
+    // the player's own wipeout (PeopleSim.ragdoll: game/peoplehits.js crowdFall); far off, or with no rig free, the
+    // rigid tip-over / throw below)
+    this.dropDown(p);
+    if (PeopleSim.ragdoll) {
+      const K = PeopleSim.ragdoll.begin(this, p, dx, dz, speed, L, col);
+      if (K) { p.down = K; p.v = 0; return; }
+    }
     if (L) {
       const c = BODY_C * (this.crowd.scl[p.i * 2 + 1] || 1);
       p.down = {
@@ -127,11 +136,18 @@ export class PeopleSim {
     p.v = 0;
   }
   /** A stumble: tips with the push and steps back up (0.8 s). */
-  stumble(p, dx, dz) { p.down = { t: 0, fall: false, dx, dz, s: 0, slide: 0.45, dur: 0.8 }; p.v = 0; }
+  stumble(p, dx, dz) { this.dropDown(p); p.down = { t: 0, fall: false, dx, dz, s: 0, slide: 0.45, dur: 0.8 }; p.v = 0; }
+  /** Off the snow / out of a fall at once (a rig posing them goes back to the pool). */
+  dropDown(p) {
+    const K = p.down;
+    p.down = null;
+    if (K?.rig) { try { PeopleSim.ragdoll?.end(this, p, K); } catch (e) { console.warn('crowd rig fall', e); } }
+  }
   // one frame of a knocked-over / stumbling person: the whole figure tips over about its feet toward the push
   updateDown(p, dt) {
     const K = p.down, i = p.i;
     K.t += dt;
+    if (K.rig) { if (PeopleSim.ragdoll.step(this, p, K, dt)) { this.dropDown(p); p.stuck = 0; } else this.calm(p, dt); return; }
     if (K.thrown) { this.updateThrown(p, K, dt); return; }
     let a, done = false, slideT;
     if (K.fall) {
@@ -230,20 +246,8 @@ export class PeopleSim {
       K.h = restH(c, K.a, K.r);
     }
     // a wall in the way (lamps, stalls, buildings): out of it, the speed into it gone
-    if (K.vx || K.vz) {
-      const cell = this.grid.size ? this.grid.get(Math.floor(p.x / 8) * 65536 + Math.floor(p.z / 8)) : null;
-      if (cell) for (const ob of cell) {
-        if (Math.abs(p.x - ob.x) > ob.reach || Math.abs(p.z - ob.z) > ob.reach) continue;
-        const [ux, uz, d] = away(ob, p.x, p.z);
-        if (d >= 0.35) continue;
-        p.x += ux * (0.35 - d); p.z += uz * (0.35 - d);
-        const vn = K.vx * ux + K.vz * uz;
-        if (vn < 0) {
-          K.vx -= ux * vn * 1.2; K.vz -= uz * vn * 1.2; K.vx *= 0.5; K.vz *= 0.5;
-          if (-vn > 2) PeopleSim.onLand?.(p.x, gy + K.h, p.z, -vn, 0, 0);
-        }
-      }
-    }
+    const thump = this.wallStop(p, K);
+    if (thump > 2) PeopleSim.onLand?.(p.x, gy + K.h, p.z, thump, 0, 0);
     // the figure: turned about its centre, the centre placed K.h over the snow
     const g2 = this.groundY(p.x, p.z, p);
     this.crowd.setPlace(i, p.x, g2, p.z, p.yaw);
@@ -253,6 +257,25 @@ export class PeopleSim {
     m[o + 12] = p.x - m[o + 4] * k; m[o + 13] = g2 + K.h - m[o + 5] * k; m[o + 14] = p.z - m[o + 6] * k;
     p.y = g2; p.gx = p.x; p.gz = p.z;
     this.calm(p, dt);
+  }
+
+  /**
+   * A body sliding / flying at (V.vx, V.vz) into a wall (lamps, stalls, buildings: the obstacles): out of it (0.35 m),
+   * the speed into it gone (and half the rest). Returns the speed it hit with (m/s, 0 none).
+   */
+  wallStop(p, V) {
+    let hit = 0;
+    if (!(V.vx || V.vz)) return hit;
+    const cell = this.grid.size ? this.grid.get(Math.floor(p.x / 8) * 65536 + Math.floor(p.z / 8)) : null;
+    if (cell) for (const ob of cell) {
+      if (Math.abs(p.x - ob.x) > ob.reach || Math.abs(p.z - ob.z) > ob.reach) continue;
+      const [ux, uz, d] = away(ob, p.x, p.z);
+      if (d >= 0.35) continue;
+      p.x += ux * (0.35 - d); p.z += uz * (0.35 - d);
+      const vn = V.vx * ux + V.vz * uz;
+      if (vn < 0) { V.vx -= ux * vn * 1.2; V.vz -= uz * vn * 1.2; V.vx *= 0.5; V.vz *= 0.5; hit = Math.max(hit, -vn); }
+    }
+    return hit;
   }
 
   update(dt) {
@@ -265,10 +288,10 @@ export class PeopleSim {
       if (p.alpha !== p.fadeTo) {
         const s = dt * p.fadeRate;
         p.alpha = p.fadeTo > p.alpha ? Math.min(p.fadeTo, p.alpha + s) : Math.max(p.fadeTo, p.alpha - s);
-        if (p.alpha <= 0 && p.fadeTo <= 0) { p.onStage = false; p.path = null; p.v = 0; p.down = null; D.alpha[p.i] = 0; continue; }
+        if (p.alpha <= 0 && p.fadeTo <= 0) { p.onStage = false; p.path = null; p.v = 0; this.dropDown(p); D.alpha[p.i] = 0; continue; }
       }
       if (p.down) {
-        try { this.updateDown(p, dt); } catch (e) { p.down = null; console.warn('crowd person fall', e); }
+        try { this.updateDown(p, dt); } catch (e) { this.dropDown(p); console.warn('crowd person fall', e); }
         continue;
       }
       let ax = 0, az = 0; // avoidance
@@ -370,3 +393,6 @@ export class PeopleSim {
 PeopleSim.all = [];      // every simulation (the player bumps off their people: npcs.js)
 PeopleSim.player = null; // {x, z}: walking people step round the player
 PeopleSim.onLand = null; // (x, y, z, m/s down, vx, vz): a thrown person landed / hit a wall (game/peoplehits.js landed)
+// a rig to pose somebody knocked over (game/peoplehits.js crowdFall): begin(sim, p, dx, dz, speed, L, col) -> the fall
+// (p.down, .rig) or null (the rigid fall then); step(sim, p, K, dt) -> true when back on their feet; end(sim, p, K)
+PeopleSim.ragdoll = null;

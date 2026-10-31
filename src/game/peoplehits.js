@@ -11,6 +11,15 @@
 //    while (several seconds; 60+ km/h: 8-12 s) and get up slowly. Below ~8 km/h it's the old fall / stumble.
 //  - traffic, the ski buses, the ploughs, the tow truck running into somebody (game/vehiclehits.js): the same throw,
 //    source 'traffic' (no fine: not your doing)
+//  - (Oct 31 2026, the user: "on single player the NPC you crash into has a really bad getting-hit animation" and "the
+//    bot getting hit just falls over, that's a very bad animation. Use the same animation as in multiplayer on real
+//    people") the village's walking people (an instanced crowd: world/peoplesim.js) tipped over stiff as a plank. Near
+//    you they are now posed by a real rig on the same character (crowdFall below): the player's own wipeout as a
+//    remote player's avatar shows it (player/skier.js poseFall / placeFallen, driven by newFall / stepFall like the
+//    NPC skiers and villagers): thrown along the car's line, the arms and legs flailing in the air (stepFall's fl, the
+//    rig's st.flail), a bounce and a slide on the snow (world.groundHeight under every limb), a couple of seconds on
+//    the snow (launchFor lie), rolled off the side and pushed up through a crouch, a shake of the head, on their way.
+//    The car that hit them is a wall too (keepClear: never driven through), and so are the walls and lamps about.
 // One fine per incident (a few seconds' cooldown); the balance may go below zero, like the rescue fee.
 // Races and World Racing sessions keep the soft bump (enabled() is false there).
 //
@@ -23,6 +32,10 @@
 import { save, writeSave } from './economy.js';
 import { PeopleSim } from '../world/peoplesim.js';
 import { burst } from '../fx/snowfx.js';
+import * as THREE from 'three';
+import { SkierRig } from '../player/skier.js';
+import { world } from '../world/world.js';
+import { away } from '../world/peoplesim.js';
 
 const TAU = Math.PI * 2;
 const G = 9.81;
@@ -49,6 +62,7 @@ let lastFine = -1e9;
 export function initPeopleHits(o) {
   ctx = o;
   PeopleSim.onLand = landed; // (the instanced crowd's people landing from a throw)
+  PeopleSim.ragdoll = crowdFall; // (and posed by a rig while they're down: crowdFall)
 }
 
 /**
@@ -62,7 +76,8 @@ export function launchFor(speed, out = {}) {
   out.vh = Math.min(10, 1.2 + speed * 0.36);
   out.spin = -clamp(speed * 0.3, 2, 8) * (0.8 + Math.random() * 0.4);
   out.twist = (Math.random() - 0.5) * clamp(speed * 0.15, 0.5, 3);
-  out.lie = kmh < 25 ? 1.1 + R * 1.2 : kmh < 60 ? 2.5 + ((kmh - 25) / 35) * 3.5 + R * 1.5 : 8 + R * 4;
+  // (Oct 31 2026: "lie there for ~2-3 s, then get up": 1.6-2.4 s from a nudge, up to ~3.5 s from a hard hit)
+  out.lie = kmh < 25 ? 1.6 + R * 0.8 : 2.2 + clamp((kmh - 25) / 50, 0, 1) * 0.8 + R * 0.6;
   out.up = kmh < 25 ? 1.35 : kmh < 60 ? 1.8 : 2.4;
   return out;
 }
@@ -78,12 +93,15 @@ export function landed(x, y, z, imp, vx = 0, vz = 0) {
     if (!ctx || !(imp > 1)) return;
     const p = ctx.player?.pos, d = p ? Math.hypot(x - p.x, z - p.z) : 0, att = clamp(1 - d / 60, 0, 1);
     const a = clamp(imp / 8, 0.25, 1);
-    if (ctx.spray && d < 120) {
-      _be.x = x; _be.y = y; _be.z = z; _be.amount = a; _bv.x = vx; _bv.z = vz;
-      burst(ctx.spray, _be, _bv);
-    }
+    puff(x, y, z, a, vx, vz, d);
     if (att > 0.05) ctx.audio?.play?.('thud', a * att);
   } catch { /* (a missed puff is fine) */ }
+}
+// a puff of snow at (x, y, z), size a (0..1), drifting (vx, vz); d: how far from you (none past 120 m)
+function puff(x, y, z, a, vx = 0, vz = 0, d = 0) {
+  if (!ctx?.spray || d > 120) return;
+  _be.x = x; _be.y = y; _be.z = z; _be.amount = a; _bv.x = vx; _bv.z = vz;
+  burst(ctx.spray, _be, _bv);
 }
 
 /** The fine for an impact at `speed` (m/s) by `source` ('ski' | 'foot' | 'snowmobile' | 'car'). */
@@ -134,10 +152,12 @@ function charge(amount, what) {
  * @param {number} impactSpeed  closing speed (m/s)
  * @param {'ski'|'foot'|'snowmobile'|'car'|'traffic'} source  ('traffic': somebody else's vehicle, no fine)
  * @param {number} [dirX] @param {number} [dirZ]  the push (default: away from the player)
+ * @param {object} [col]  the vehicle's box collider ({x, z, hw, hd, rot}, kept up to date by its owner): the thrown body
+ *   is kept out of it (keepClear) 
  * @returns {{fell: boolean, fine: number, down?: true}|null}  null: ignored (people hits off, not a person); down:
  *   they're already on the snow / in the air (no new hit, and no bump either)
  */
-export function knockPerson(person, impactSpeed, source = 'car', dirX, dirZ) {
+export function knockPerson(person, impactSpeed, source = 'car', dirX, dirZ, col = null) {
   try {
     if (!ctx || !ctx.enabled(source)) return null;
     const t = target(person);
@@ -162,9 +182,11 @@ export function knockPerson(person, impactSpeed, source = 'car', dirX, dirZ) {
     if (sp < (source === 'ski' ? SKI_KNOCK : VEHICLE_KNOCK)) { t.by.stumble(t.o, dx, dz); return { fell: false, fine: 0 }; }
     // a vehicle: thrown (launchFor), with the thud of the hit (quieter further from you: traffic hits anywhere near)
     const L = source === 'ski' ? null : launchFor(sp, _launch);
-    t.by.knock(t.o, dx, dz, sp, L);
+    t.by.knock(t.o, dx, dz, sp, L, L ? col : null);
     if (L) {
-      const p = ctx.player?.pos, att = p ? clamp(1 - Math.hypot(person.x - p.x, person.z - p.z) / 60, 0, 1) : 1;
+      const p = ctx.player?.pos, pd = p ? Math.hypot(person.x - p.x, person.z - p.z) : 0, att = clamp(1 - pd / 60, 0, 1);
+      // (Oct 31 2026: "a short impact sound and snow puff": the snow kicked up off the boots where they're hit)
+      puff(person.x, Number.isFinite(person.y) ? person.y : world.groundHeight(person.x, person.z), person.z, clamp(sp / 14, 0.3, 0.9), dx * sp * 0.4, dz * sp * 0.4, pd);
       if (att > 0.05) {
         ctx.audio?.play?.('thud', clamp(sp / 16, 0.35, 1) * att);
         if (sp > 11) ctx.audio?.impact?.('car', clamp((sp - 8) / 40, 0.12, 0.45) * att); // (a dent at 40+ km/h)
@@ -247,6 +269,9 @@ function spring(F, k, kv, target, w, dt) {
 /** Advance a fall; heading: the person's (the stumble tips relative to it). true when back on their feet. */
 export function stepFall(F, dt, heading = 0) {
   F.t += dt;
+  // (Oct 31 2026: "the arms flail, and the head and limbs follow through") fl: 0..1 flailing, up quickly in the air,
+  // dying away over the tumble on the snow (the rig's st.flail: player/skier.js poseFall)
+  F.fl = (F.fl || 0) + ((F.air ? 1 : 0) - (F.fl || 0)) * (1 - Math.exp(-dt * (F.air ? 8 : 2.5)));
   if (F.air) {
     // flying: gravity, the somersault and the twist carry on (no friction in the air); the snow takes the speed where
     // it lands, a hard landing bounces, then it tumbles on along the snow (a forward roll with the slide)
@@ -328,3 +353,119 @@ export function stepFall(F, dt, heading = 0) {
   }
   return false;
 }
+
+// a body thrown by a vehicle (F: newFall, with .col the vehicle's box collider, set by the knock) is never inside it:
+// out through the nearest face (0.35 m: the body), carried at least as fast as the box comes on (the car that keeps
+// going shoves them ahead instead of driving through; under them while they fly over its roof: no). p: {x, z}.
+const BODY_R = 0.35;
+export function keepClear(F, p, dt) {
+  const c = F.col;
+  if (!c || !(dt > 0)) return;
+  if (F.cx === undefined) { F.cx = c.x; F.cz = c.z; }
+  let cvx = (c.x - F.cx) / dt, cvz = (c.z - F.cz) / dt;
+  F.cx = c.x; F.cz = c.z;
+  if (cvx * cvx + cvz * cvz > 60 * 60) { cvx = 0; cvz = 0; } // (a jump: parked far away, respawned)
+  if (F.t > 6 || (F.h || 0) > 1.7 || Math.abs(p.x - c.x) > 12 || Math.abs(p.z - c.z) > 12) return;
+  const [ux, uz, d] = away(c, p.x, p.z);
+  if (d >= BODY_R) return;
+  p.x += ux * (BODY_R - d); p.z += uz * (BODY_R - d);
+  const vn = F.vx * ux + F.vz * uz, cn = cvx * ux + cvz * uz;
+  if (vn < cn) { F.vx += ux * (cn - vn); F.vz += uz * (cn - vn); }
+}
+
+// ------------------------------------------------------------------ the crowd's people knocked over (crowdFall)
+// (Oct 31 2026, the user: "on single player the bot getting hit just falls over, that's a very bad animation. Use the
+// same animation as in multiplayer on real people") Somebody of an instanced crowd (world/peoplesim.js) knocked over
+// near you is posed by a SkierRig built on their own character model (world/fans.js FanKit.root, the same skeleton),
+// through the player's wipeout (newFall / stepFall above, the rig's 'fall' mode: poseFall, placeFallen) exactly as a
+// remote player's avatar or an NPC villager (game/npcs.js updateDown); the rig's bones become the person's skinning
+// matrices (FanCrowd.poseFromRig), so they keep their jacket and size. The rig is never drawn itself. Back on their
+// feet: a second on the rig's own stand (its blend out of the fall, a shake of the head), then the crowd's poses again.
+// Cheap: only the people down use a rig (at most RAG_MAX at once, made once per character and kept), within RAG_NEAR
+// of you; anybody else falls the old rigid way.
+const RAG_MAX = 3, RAG_NEAR = 90, SHAKE_T = 1.0;
+const _rigs = new Map(); // FanKit -> [SkierRig]
+let ragUsed = 0;
+const _rgN = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
+const _st = { mode: 'fall', heading: 0, speed: 0, crouch: 0, lean: 0, edge: 0, tuck: false, plow: 0, skid: 0, normal: UP, air: false,
+  fall: null, fallSide: 1, fallHeading: 0, fallAir: false, fallT: 0, flail: 0, lookYaw: 0, lookPitch: 0 };
+function takeRig(kit) {
+  if (ragUsed >= RAG_MAX || !kit?.root) return null;
+  let list = _rigs.get(kit);
+  if (!list) _rigs.set(kit, (list = []));
+  let r = list.find((x) => !x.ragBusy);
+  if (!r) {
+    kit.rigSrc ??= { scene: kit.root, animations: [] }; // (one source per character: the rig's measurements are cached on it)
+    r = new SkierRig(kit.rigSrc, {});
+    list.push(r);
+  }
+  r.ragBusy = true; ragUsed++;
+  return r;
+}
+function stateFor(K, n, flail) {
+  const F = K.F;
+  _st.mode = 'fall'; _st.heading = K.h; _st.normal = n; _st.fall = F; _st.fallSide = F.side; _st.fallHeading = F.hd ?? K.h;
+  _st.fallAir = !!F.air; _st.fallT = F.t / 0.6; _st.flail = flail; _st.lookYaw = 0;
+  return _st;
+}
+function idleState(K, n, lookYaw) {
+  _st.mode = 'idle'; _st.heading = K.h; _st.normal = n; _st.fall = null; _st.fallAir = false; _st.flail = 0; _st.lookYaw = lookYaw;
+  return _st;
+}
+export const crowdFall = {
+  begin(sim, p, dx, dz, speed, L, col) {
+    const crowd = sim.crowd, pl = ctx?.player?.pos;
+    if (!crowd?.poseFromRig || !crowd.dyn || !pl || Math.hypot(p.x - pl.x, p.z - pl.z) > RAG_NEAR) return null;
+    let rig = null;
+    try { rig = takeRig(crowd.kitOf(p.i)); } catch (e) { console.warn('crowd rig', e); }
+    if (!rig) return null;
+    // the side they go over to: the push toward their right (+) / left, as the villagers (npcs.js knock)
+    const h = p.yaw || 0, dr = -dx * Math.cos(h) + dz * Math.sin(h);
+    const side = Math.abs(dr) > 0.25 ? Math.sign(dr) : Math.random() < 0.5 ? -1 : 1;
+    const F = newFall(side, dx, dz, speed, L);
+    F.col = col;
+    const K = { rig: true, fall: true, R: rig, F, h, up: false, ut: 0, t: 0 };
+    // one frame standing first (snapped), so the rig's own 0.3 s blend carries them from upright into the fall
+    try {
+      const gy = world.groundHeight(p.x, p.z, p.y + 1);
+      rig.root.position.set(p.x, gy, p.z);
+      rig.snapNext = true;
+      rig.update(1 / 60, idleState(K, UP, 0));
+      rig.fx.length = 0;
+    } catch (e) { console.warn('crowd rig', e); rig.ragBusy = false; ragUsed--; return null; }
+    return K;
+  },
+  step(sim, p, K, dt) {
+    const F = K.F, r = K.R, crowd = sim.crowd;
+    if (!K.up && stepFall(F, dt, K.h)) { K.up = true; K.ut = 0; K.stumble = true; } // (up: a car can knock them over again)
+    if (!K.up) {
+      p.x += F.vx * dt; p.z += F.vz * dt;
+      keepClear(F, p, dt);                                         // (the car that hit them)
+      const th = sim.wallStop(p, F);                               // (the walls, lamps, stalls about)
+      if (th > 2) F.thud = Math.max(F.thud || 0, th);
+    }
+    const gy = world.groundHeight(p.x, p.z, p.y + 1);
+    if (F.thud) { landed(p.x, gy, p.z, F.thud, F.vx, F.vz); F.thud = 0; }
+    const y = gy + (K.up ? 0 : Math.max(0, F.h || 0)); // (flying: over the snow below, never under it)
+    r.root.position.set(p.x, y, p.z);
+    const n = world.normal(p.x, p.z, _rgN) || UP;
+    if (!K.up) r.update(dt, stateFor(K, n, F.fl || 0));
+    else {
+      // up: the rig blends out of the fall into its stand, a shake of the head (shaking it off), then off they go
+      K.ut += dt;
+      const u = K.ut / SHAKE_T, shake = u > 0.25 && u < 0.9 ? Math.sin((u - 0.25) * 30) * 0.4 * Math.sin(Math.PI * (u - 0.25) / 0.65) : 0;
+      r.update(dt, idleState(K, UP, shake));
+    }
+    // the snow the body throws up where it lands on a limb (placeFallen's contacts)
+    for (const e of r.fx) if (e.type === 'impact' || e.type === 'crash') puff(e.x, e.y, e.z, e.amount * 0.7, F.vx * 0.3, F.vz * 0.3);
+    r.fx.length = 0;
+    crowd.setPlace(p.i, p.x, y, p.z, K.h);
+    crowd.poseFromRig(p.i, r);
+    p.y = gy; p.gx = p.x; p.gz = p.z; p.yaw = K.h;
+    return K.up && K.ut >= SHAKE_T;
+  },
+  end(sim, p, K) {
+    sim.crowd?.poseFromRig?.(p.i, null, true);
+    if (K.R?.ragBusy) { K.R.ragBusy = false; ragUsed = Math.max(0, ragUsed - 1); }
+  },
+};

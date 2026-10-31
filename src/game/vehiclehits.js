@@ -189,7 +189,7 @@ export class VehicleHits {
         if (Math.abs(lx) >= c.hw + P_R || Math.abs(lz) >= c.hd + P_R) continue;
         const vs = Math.sqrt(v2), into = (r.vx * dx + r.vz * dz) / (Math.hypot(dx, dz) || 1);
         if (into < 0) continue; // (behind its middle, going away: a reversing tail is the other face)
-        knockPerson(q, Math.max(vs * 0.6, into), 'traffic', r.vx / vs, r.vz / vs);
+        knockPerson(q, Math.max(vs * 0.6, into), 'traffic', r.vx / vs, r.vz / vs, c); // (c: kept out of it, Oct 31 2026)
       }
     }
   }

@@ -2128,14 +2128,15 @@ function loopUpdate() {
     ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;
     trainAnnounce(r?.hint);
   } else if (express?.riding) {
+    const wk = express.updateWalk(dt, input, { player, menu: !!menu || transition.active }); // (Oct 31 2026, the user: "walk around inside the Legacy Express while it drives": E up / down, F at a stop)
     const r = express.updateRide();
     if (r?.seat) player.seat = r.seat;
     if (r?.arrive) leaveExpress(r.arrive);
     else if (r?.stop && !menu && input.hit('KeyE')) leaveExpress(express.leaveAtStop());
     else if (!menu && !transition.active && !isMP() && input.hit('Enter')) transition.fade(async () => { const a = express.skip(); if (a) await exitExpress(a); }); // skip to the arrival (the train jumps on to your stop)
     hud.rideHint(null);
-    rideLine = r?.stop ? null : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST}${isMP() ? '' : ' · Enter to skip'}` : null;
-    ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : null;
+    rideLine = r?.stop ? (wk?.line || null) : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST}${isMP() ? '' : ' · Enter to skip'}` : null;
+    ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : wk?.prompt || null;
     expressAnnounce(r?.hint);
   } else if (skibus.riding) {
     const r = skibus.updateRide(dt, !menu && input.down('Space'));

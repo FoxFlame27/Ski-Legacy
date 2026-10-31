@@ -21,7 +21,7 @@ import {
   onExpressBridge, inSpanOf, wrapS, ringDelta, TRACK_OFF,
 } from './expressroute.js';
 import { brakeFor, release, latOf, CarColliders } from './trainstop.js';
-import { buildCar, CAR, trainUniforms } from './train.js';
+import { buildCar, CAR, CABIN, trainUniforms } from './train.js';
 import { furnishExpress } from './expressinterior.js';
 import { world } from './world.js';
 import { layout } from './layout.js';
@@ -55,6 +55,60 @@ const _m = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0), _e = new THREE
 const MP_BOARD_MIN = 4; // s: multiplayer, a train still standing at least this long can be boarded (nobody holds it)
 const _p = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0 }, _q = { x: 0, y: 0, z: 0, dx: 0, dz: 1, grade: 0 };
 const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+// ------------------------------------------------------------------ walking about in the car
+// (user Oct 31 2026: "walk around inside the Legacy Express while it drives": E stands you up from your seat and sits
+// you down again at the nearest free seat; at a stop E still gets you off, so there it is F. You walk in the car's own
+// frame (the train can do 300 km/h under you): the floor, walls, seat pairs, tables and the vestibule screens are
+// boxes in car space; you stay inside the car you boarded (the gangway doors stay shut), its whole length from the
+// rear wall to the cab door. player.mode stays 'sit' ("in a vehicle" for main.js); the avatar is re-posed walking.)
+export const WALK = { r: 0.2, speed: 1.6, eyeH: 1.6, x0: -(CABIN.W - 0.04), x1: CABIN.W - 0.04, z0: -CAR.half + 0.16, z1: CAR.cabZ - 0.05 };
+/** The walls inside a car as boxes in its frame ({ x0, x1, z0, z1 }), from its seat registry (cabin.seats). */
+export function walkBoxes(seats) {
+  const out = [], pairs = new Map();
+  for (const st of seats) {
+    const k = `${Math.sign(st.pos.x)}|${st.pos.z.toFixed(2)}`;
+    const p = pairs.get(k) || { xs: [], z: st.pos.z, face: st.face };
+    p.xs.push(st.pos.x); pairs.set(k, p);
+  }
+  // a seat pair: its cushions, back and pedestal (the back at z - 0.3·face, the cushion's front edge ~0.22 ahead)
+  for (const p of pairs.values()) {
+    const xa = Math.min(...p.xs) - 0.25, xb = Math.max(...p.xs) + 0.25, za = p.z - p.face * 0.36, zb = p.z + p.face * 0.2;
+    out.push({ x0: Math.max(xa, -CABIN.HW), x1: Math.min(xb, CABIN.HW), z0: Math.min(za, zb), z1: Math.max(za, zb), kind: 'seat' });
+  }
+  // the tables at every bay's windows (expressinterior.js: 0.44 x 0.56 at x ±(W - 0.24), mid-bay)
+  for (let b = 0; b < CABIN.BAYS_N; b++) for (const s of [1, -1]) {
+    const z = CABIN.BAYS_Z0 + b * CABIN.BAY + CABIN.BAY / 2, x = s * (CABIN.W - 0.24);
+    out.push({ x0: x - 0.22, x1: x + 0.22, z0: z - 0.28, z1: z + 0.28, kind: 'table' });
+  }
+  // the glass screens beside the vestibules (train.js: 0.6 wide from the wall, 0.75 in from each door)
+  for (const dz of [4.1, -7.05]) for (const s of [1, -1]) {
+    const z = dz + (dz > 0 ? -0.75 : 0.75), xi = s * (CABIN.W - 0.6), xo = s * CABIN.W;
+    out.push({ x0: Math.min(xi, xo), x1: Math.max(xi, xo), z0: z - 0.03, z1: z + 0.03, kind: 'screen' });
+  }
+  return out;
+}
+/** Moves a walker (car frame, { x, z }) by (dx, dz), sliding along the walls and boxes. */
+export function walkMove(w, dx, dz, boxes, r = WALK.r) {
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.08));
+  for (let i = 0; i < n; i++) {
+    w.x += dx / n; w.z += dz / n;
+    for (let it = 0; it < 2; it++) for (const b of boxes) {
+      const cx = clamp(w.x, b.x0, b.x1), cz = clamp(w.z, b.z0, b.z1), ex = w.x - cx, ez = w.z - cz, d2 = ex * ex + ez * ez;
+      if (d2 >= r * r) continue;
+      if (d2 > 1e-10) { const d = Math.sqrt(d2), k = (r - d) / d; w.x += ex * k; w.z += ez * k; }
+      else { // (centre inside the box: out the nearest side)
+        const o = [[b.x0 - r - w.x, 0], [b.x1 + r - w.x, 0], [0, b.z0 - r - w.z], [0, b.z1 + r - w.z]];
+        o.sort((p, q) => Math.abs(p[0] + p[1]) - Math.abs(q[0] + q[1]));
+        w.x += o[0][0]; w.z += o[0][1];
+      }
+    }
+    w.x = clamp(w.x, WALK.x0 + r, WALK.x1 - r); w.z = clamp(w.z, WALK.z0 + r, WALK.z1 - r);
+  }
+  return w;
+}
+const _wq = new THREE.Vector3(), _wr = new THREE.Vector3(), _wu = new THREE.Vector3();
+
 
 // ------------------------------------------------------------------ timetable
 // Both ways round the ring the same: a dwell at every stop, the run to the next (the speed profile's times; the
@@ -368,6 +422,14 @@ export class Express {
       grp.add(c);
     }
     grp.visible = false;
+    // (Oct 31 2026, walking about: the seats these passengers sit in are taken; each instance stands at its seat point)
+    this.takenSeats = new Set();
+    const m4 = new THREE.Matrix4(), v = new THREE.Vector3();
+    for (const im of src) for (let i = 0; i < im.count; i++) {
+      im.getMatrixAt(i, m4); v.setFromMatrixPosition(m4);
+      const k = this.cabin.seats.findIndex((st) => st.pos.distanceToSquared(v) < 0.0025);
+      if (k >= 0) this.takenSeats.add(k);
+    }
     this.cabin.group.getObjectByName('rail-car-proc')?.add(grp) || this.cabin.group.add(grp);
     if (!grp.parent) this.cabin.group.add(grp);
     this.passengers = grp;
@@ -561,11 +623,13 @@ export class Express {
 
   // the rider's seat: { pos (world, seat surface), fwd (world, horizontal) } for player.sitOn / updateSit
   seatPose() {
-    const r = this.ride, car = this.cabin.group;
+    const r = this.ride, car = this.cabin.group, w = r.walk;
     car.updateMatrixWorld(true);
-    const pos = r.seat.pos.clone();
+    // (walking about, Oct 31 2026: your feet on the car's floor, facing where you walk; player.updateSit follows it)
+    const pos = w ? new THREE.Vector3(w.x, CAR.floor, w.z) : r.seat.pos.clone();
     car.localToWorld(pos);
-    const fwd = new THREE.Vector3(Math.sin(r.seat.yaw), 0, Math.cos(r.seat.yaw)).transformDirection(car.matrixWorld);
+    const yaw = w ? w.yaw : r.seat.yaw;
+    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).transformDirection(car.matrixWorld);
     fwd.y = 0; fwd.normalize();
     return { pos, fwd };
   }
@@ -625,7 +689,146 @@ export class Express {
     r.departed = true; r.exitSent = true;
     return this.arrival(r.dest);
   }
-  abort() { this.ride = null; this.camS = undefined; }
+  abort() { this.ride = null; this.camS = undefined; this.walkPlayer = null; }
+  /** While riding: walking about in the car (not in your seat). */
+  get walking() { return !!this.ride?.walk; }
+
+  /**
+   * Walking about in the car you ride in (user Oct 31 2026: "walk around inside the Legacy Express while it drives").
+   * Call every frame while riding, before updateRide(). E stands you up / sits you down at the nearest free seat; at a
+   * stop on the way E gets you off (main.js), so there F does it. WASD / arrows walk (relative to the camera), Shift is
+   * a brisk walk. Returns { prompt, key, line } for the HUD (null fields: nothing to show).
+   */
+  updateWalk(dt, input, { player = null, menu = false } = {}) {
+    const r = this.ride;
+    if (!r) return null;
+    this.walkPlayer = player;
+    const st = r.train.state, atStop = r.departed && st.at >= 0 && !r.exitSent;
+    const key = atStop ? 'KeyF' : 'KeyE';
+    if (!menu && input?.hit?.(key)) { if (r.walk) this.sitDown(); else this.standUp(player); }
+    const w = r.walk;
+    if (w && !menu) {
+      const d = (c) => (input.down?.(c) ? 1 : 0);
+      const f = d('KeyW') + d('ArrowUp') - d('KeyS') - d('ArrowDown'), sd = d('KeyD') + d('ArrowRight') - d('KeyA') - d('ArrowLeft');
+      const look = w.view === 'first' ? w.yaw : w.camYaw + Math.PI; // (forward: where you look / away from the camera)
+      let mx = Math.sin(look) * f - Math.cos(look) * sd, mz = Math.cos(look) * f + Math.sin(look) * sd;
+      const ml = Math.hypot(mx, mz), want = ml > 0 ? WALK.speed * (d('ShiftLeft') || d('ShiftRight') ? 1.5 : 1) : 0;
+      w.speed = lerp(w.speed, want, 1 - Math.exp(-dt * 10));
+      if (ml > 0) {
+        mx /= ml; mz /= ml;
+        const x0 = w.x, z0 = w.z;
+        walkMove(w, mx * w.speed * dt, mz * w.speed * dt, this.walkBoxes);
+        if (w.view !== 'first') w.yaw = w.yaw + wrapA(Math.atan2(mx, mz) - w.yaw) * (1 - Math.exp(-dt * 12));
+        if (dt > 0) w.speed = Math.min(w.speed, Math.hypot(w.x - x0, w.z - z0) / dt); // (against a wall: the legs stop)
+      }
+    } else if (w) w.speed = 0;
+    if (!w) return { prompt: atStop ? null : 'Stand up', key: 'E', line: atStop ? 'F: stand up' : null };
+    const seat = this.nearestFreeSeat();
+    return { prompt: atStop ? null : seat ? 'Sit down' : null, key: 'E', line: atStop ? 'F: sit down' : null };
+  }
+  // the car's walls, seats and tables as boxes (car frame), built once from the cabin's seat registry
+  get walkBoxes() { return (this._walkBoxes ??= walkBoxes(this.cabin.seats)); }
+  standUp(player) {
+    const r = this.ride;
+    if (!r || r.walk) return;
+    // into the aisle beside your seat, facing the way the seat faces
+    const w = { x: 0, z: r.seat.pos.z, yaw: r.seat.yaw, speed: 0, camYaw: r.seat.yaw + Math.PI, camPitch: -0.18,
+      view: (player?.viewBeforeRide || player?.view) === 'first' ? 'first' : 'third', lookPitch: 0, dist: 2.2 };
+    walkMove(w, 0, 0, this.walkBoxes);
+    r.walk = w;
+    if (player?.rig) { player.rig.root.visible = w.view !== 'first'; player.rig.gear.visible = false; }
+  }
+  // the free seat nearest to you (within 1.6 m) in your car: none a seated passenger has (single player). (In
+  // multiplayer the seats are the server's: E sits you back down in the one it gave you, wherever you are; the other
+  // players keep seeing you in it all along, net/transit.js places riders by their seat number.)
+  nearestFreeSeat() {
+    const r = this.ride, w = r?.walk;
+    if (!w) return null;
+    if (this.mp) return r.seat;
+    let best = null, bd = 1.6 * 1.6; // (within reach: 1.6 m)
+    this.cabin.seats.forEach((st, k) => {
+      if (this.takenSeats?.has(k) && st !== r.seat) return;
+      const d = (st.pos.x - w.x) ** 2 + (st.pos.z - w.z) ** 2;
+      if (d < bd) { bd = d; best = st; }
+    });
+    return best;
+  }
+  sitDown() {
+    const r = this.ride, seat = this.nearestFreeSeat();
+    if (!r?.walk || !seat) return false;
+    const per = this.cabin.seats.length;
+    r.seat = seat;
+    if (!this.mp) r.seatNo = (r.car || 0) * per + this.cabin.seats.indexOf(seat);
+    r.walk = null;
+    this.look.yaw = 0; this.look.pitch = -0.04;
+    const pl = this.walkPlayer;
+    if (pl?.rig) { pl.rig.root.visible = false; pl.rig.gear.visible = false; } // (back in the seat's own eye)
+    return true;
+  }
+  // re-pose your avatar walking (player.update posed it seated: player.mode stays 'sit'): its rig once more, on the
+  // car's floor (its feet would look for the ground under the train), the pose not blended with the seated one
+  poseWalker(dt) {
+    const r = this.ride, w = r?.walk, pl = this.walkPlayer, rig = pl?.rig, st = pl?.rigState;
+    if (!w || !rig || !st || typeof rig.update !== 'function') return;
+    rig.root.visible = w.view !== 'first';
+    if (!rig.root.visible) return;
+    const floorY = this.cabin.group.localToWorld(_wq.set(w.x, CAR.floor, w.z)).y;
+    _wr.set(Math.sin(w.yaw), 0, Math.cos(w.yaw)).transformDirection(this.cabin.group.matrixWorld);
+    st.mode = w.speed > 0.1 ? 'walk' : 'idle'; st.seat = null; st.bench = null; st.speed = w.speed;
+    st.heading = Math.atan2(_wr.x, _wr.z); st.air = false; st.airY = 0; st.fp = false; st.flip = 0; st.grab = 0; st.spinVel = 0; st.carry = false;
+    st.normal = _wu.set(0, 1, 0);
+    rig.root.position.copy(pl.pos);
+    const gh = world.groundHeight;
+    world.groundHeight = () => floorY;
+    rig.setHeadHidden?.(false); // (your own first-person setting hid it: walking in third person, it shows)
+    try { rig.snapNext = true; rig.update(dt, st); } finally { world.groundHeight = gh; }
+    rig.gear.visible = false;
+  }
+  // the walking cameras in the car's frame (they lean with it): your third-person orbit, pulled in to stay inside the
+  // car, or your eyes (first person). R switches between them while you walk.
+  walkCamera(camera, input, dt) {
+    const r = this.ride, w = r.walk, car = this.cabin.group, st = r.train.state;
+    const sens = 0.0022 * (input?.sensitivity || 1);
+    if (input?.hit?.('KeyR')) w.view = w.view === 'first' ? 'third' : 'first';
+    const F = CAR.floor;
+    let eye, dir;
+    if (w.view === 'first') {
+      w.yaw -= (input?.mdx || 0) * sens;
+      w.lookPitch = clamp(w.lookPitch - (input?.mdy || 0) * sens, -1.2, 1.1);
+      eye = _a.set(w.x + Math.sin(w.yaw) * 0.08, F + WALK.eyeH, w.z + Math.cos(w.yaw) * 0.08);
+      dir = _c.set(Math.sin(w.yaw) * Math.cos(w.lookPitch), Math.sin(w.lookPitch), Math.cos(w.yaw) * Math.cos(w.lookPitch));
+      camera.near = 0.05;
+    } else {
+      w.camYaw -= (input?.mdx || 0) * sens;
+      w.camPitch = clamp(w.camPitch - (input?.mdy || 0) * sens, -0.9, 0.5);
+      w.dist = clamp(w.dist + (input?.wheel || 0) * 0.25, 0.8, 2.6);
+      const focus = _t.set(w.x, F + 1.45, w.z);
+      const cp = Math.cos(w.camPitch);
+      const off = _b.set(Math.sin(w.camYaw) * cp, -Math.sin(w.camPitch), Math.cos(w.camYaw) * cp);
+      // pulled in at the walls, the ceiling and the end walls (a ray from your head out of the car's inner box)
+      const XW = CABIN.W - 0.1;
+      let t = w.dist;
+      if (Math.abs(off.x) > 1e-4) t = Math.min(t, Math.max(0.3, ((off.x > 0 ? XW : -XW) - focus.x) / off.x));
+      if (off.y > 1e-4) t = Math.min(t, Math.max(0.3, (CABIN.CEIL_Y - 0.08 - focus.y) / off.y));
+      if (off.y < -1e-4) t = Math.min(t, Math.max(0.3, (F + 0.25 - focus.y) / off.y));
+      if (off.z > 1e-4) t = Math.min(t, Math.max(0.3, (WALK.z1 - 0.05 - focus.z) / off.z));
+      if (off.z < -1e-4) t = Math.min(t, Math.max(0.3, (WALK.z0 + 0.05 - focus.z) / off.z));
+      w.camT = w.camT == null ? t : Math.min(t, lerp(w.camT, t, 1 - Math.exp(-dt * 6))); // (in at once, back out softly)
+      eye = _a.copy(focus).addScaledVector(off, w.camT);
+      dir = _c.copy(off).negate();
+      camera.near = 0.05;
+    }
+    car.localToWorld(eye);
+    dir.transformDirection(car.matrixWorld);
+    camera.position.copy(eye);
+    camera.up.copy(_up).transformDirection(car.matrixWorld);
+    camera.lookAt(_b.copy(eye).add(dir));
+    this.camS = st.s + r.dir * 1.5 * PITCH;
+    this.fov = this.fov == null ? 70 : lerp(this.fov, 70, 1 - Math.exp(-dt * 6));
+    camera.fov = this.fov;
+    camera.updateProjectionMatrix();
+    return true;
+  }
   /** While riding: the train's speed (m/s). */
   get speed() { return this.ride ? Math.abs(this.ride.train.state.speed || 0) : 0; }
   // dev: the timetable moved so train `i` stands at arc length s (approximately: its nearest time)
@@ -643,6 +846,7 @@ export class Express {
   applyCamera(camera, input, dt) {
     const r = this.ride;
     if (!r) return false;
+    if (r.walk) { this.view = 'seat'; this.poseWalker(dt); return this.walkCamera(camera, input, dt); } // (walking about: Oct 31 2026)
     if (input?.hit?.('KeyR')) { this.view = VIEWS[(VIEWS.indexOf(this.view) + 1) % VIEWS.length]; this.chase.off = null; this.spot = null; }
     const sens = 0.0022 * (input?.sensitivity || 1);
     const car = this.cabin.group, st = r.train.state;

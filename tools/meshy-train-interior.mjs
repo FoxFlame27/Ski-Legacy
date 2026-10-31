@@ -23,7 +23,10 @@ const FURNITURE = [
   { id: 'train_luggage_rack', name: 'train luggage rack', small: true },
 ];
 const PROMPTS = {
-  train_double_seat: 'A pair of two modern intercity train passenger seats side by side facing forward, high backrests with separate headrests, blue and grey patterned fabric upholstery, armrests, grey plastic shell back, short metal pedestal',
+  // (user Oct 31 2026: the first Meshy "double seat" came out as two seats one behind the other; re-run with
+  // "a modern intercity train double seat: TWO seats side by side on one shared base, about 1.0 m wide, blue-grey
+  // fabric, high backs with headrests, armrests, front view")
+  train_double_seat: 'A modern intercity train double seat: TWO seats side by side on one shared base, about 1.0 m wide, blue-grey fabric, high backs with headrests, armrests, front view, both seats in one row facing the same way, wide and shallow',
   train_luggage_rack: 'A long horizontal overhead train luggage rack shelf, brushed aluminium frame with wall brackets and a smoked glass shelf, wall mounted, flat back',
 };
 

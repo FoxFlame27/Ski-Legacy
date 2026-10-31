@@ -1,12 +1,12 @@
 {
-  "train_double_seat": {
-    "preview": "01a1910e-824a-7708-a7be-d84dfab22fd7",
-    "refine": "01a1910f-fc1f-7082-b7fe-5282f0aa32f3",
-    "done": true
-  },
   "train_luggage_rack": {
     "preview": "01a1910e-8274-719a-8742-7dd0ff40f9b9",
     "refine": "01a1910f-7437-7443-8212-e465e50dec36",
+    "done": true
+  },
+  "train_double_seat": {
+    "preview": "01a19121-99e1-7215-b952-ecab72b95f29",
+    "refine": "01a19124-4376-76be-beb5-3915dfcae2cd",
     "done": true
   }
 }

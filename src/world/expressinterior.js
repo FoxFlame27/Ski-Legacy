@@ -2,7 +2,7 @@
 // realistic, use Meshy models for the train interior"). buildCar({ express: true }) leaves out the Wolkenspitzbahn's
 // box tables and wire racks; here: rounded laminate tables, aluminium luggage racks with a glass shelf over the
 // windows, and, once their GLBs are in (public/models/train, tools/meshy-train-interior.mjs), the Meshy luggage
-// rack once per bay (the Meshy seat came out unusable, see below; the coach seats stay). Missing
+// rack once per bay and the Meshy double seat on every seat pair (re-made Oct 31 2026, see seatGeometry). Missing
 // models: the procedural version stays. Seat positions (cabin.seats) never change.
 import * as THREE from 'three';
 import { loadGLB, bakeGeometry } from '../core/assets.js';
@@ -72,9 +72,64 @@ export function furnishExpress(cabin) {
   }
   root.add(rack);
 
-  // ---- the Meshy rack, when its GLB is there. (The Meshy "double seat", checked Oct 31 2026, came out as two single
-  // seats one behind the other, 0.6 m wide, not a side-by-side pair: no use on a seat pair, so the coach seats stay.)
+  // ---- the Meshy rack, when its GLB is there. (The first Meshy "double seat" came out as two single seats one behind
+  // the other; re-made Oct 31 2026, user: "TWO seats side by side on one shared base, about 1.0 m wide, blue-grey
+  // fabric, high backs with headrests, armrests, front view": checked, 1.9 x 1.23 x 1.83 raw, two backrests side by
+  // side along its x, the backs on its -z side. It replaces the procedural coach seats, one per seat pair.)
   loadGLB('train/train_luggage_rack').then((g) => { if (g) meshyRacks(g, rack, root); }).catch(() => {});
+  loadGLB('train/train_double_seat').then((g) => { if (g) meshySeats(g, cabin, seatMeshes, root); }).catch(() => {});
+}
+
+// ---- the Meshy double seat (user Oct 31 2026: "wire it into expressinterior.js as the coach seat pair (InstancedMesh
+// per car, sized to the existing seat spacing, facing like the seats)"). Fitted to the procedural pair it replaces
+// (coachseat.js, in a seat's frame facing +z: the cushion 0.44 deep round z 0, its top at 0.505; the back and its
+// handle reaching back to z -0.4 and up to ~1.2): 0.94 wide (train.js's seatPair: two seats at ±0.245 round the pair's
+// centre, 0.44 wide each: 0.93 over both, its window side as far out as the procedural one's, not into the wall), 0.64
+// deep from z -0.41 to +0.23, 1.2 tall (the raw model's cushion sits at ~42 % of its height: ~0.5, the procedural one).
+export const SEAT_FIT = { width: 0.94, z0: -0.41, z1: 0.23, height: 1.2 };
+export function seatGeometry(geo) {
+  geo.computeBoundingBox();
+  let bb = geo.boundingBox;
+  if (bb.max.z - bb.min.z > bb.max.x - bb.min.x) geo.rotateY(Math.PI / 2); // (the two seats side by side along x)
+  // the backs: where the tall parts are; turned to -z (the seat faces +z, as the procedural one)
+  geo.computeBoundingBox(); bb = geo.boundingBox;
+  const pos = geo.attributes.position, yCut = bb.min.y + 0.65 * (bb.max.y - bb.min.y);
+  let z = 0, n = 0;
+  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > yCut) { z += pos.getZ(i); n++; }
+  if (n && z / n > (bb.min.z + bb.max.z) / 2) geo.rotateY(Math.PI);
+  geo.computeBoundingBox(); bb = geo.boundingBox;
+  const s = bb.getSize(new THREE.Vector3());
+  geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -bb.min.z);
+  geo.scale(SEAT_FIT.width / s.x, SEAT_FIT.height / s.y, (SEAT_FIT.z1 - SEAT_FIT.z0) / s.z);
+  geo.translate(0, 0, SEAT_FIT.z0);
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+  return geo;
+}
+// the seat pairs of a cabin (its seat registry: two seats per pair, same row z and side): { x, y, z, yaw } each
+export function seatPairs(seats) {
+  const pairs = new Map();
+  for (const st of seats) {
+    const k = `${Math.sign(st.pos.x)}|${st.pos.z.toFixed(3)}`;
+    const p = pairs.get(k) || { x: 0, n: 0, z: st.pos.z, yaw: st.yaw };
+    p.x += st.pos.x; p.n++; pairs.set(k, p);
+  }
+  return [...pairs.values()].map((p) => ({ x: p.x / p.n, y: F, z: p.z, yaw: p.yaw }));
+}
+function meshySeats(gltf, cabin, seatMeshes, root) {
+  const b = bakeGeometry(gltf, { size: 1, axis: 'y' });
+  if (!b?.geometry) return;
+  const geo = seatGeometry(b.geometry.clone());
+  const mat = cabinLit(b.material.clone(), 'meshy-seat');
+  const pairs = seatPairs(cabin.seats);
+  const mesh = new THREE.InstancedMesh(geo, mat, pairs.length);
+  const o = new THREE.Object3D();
+  pairs.forEach((p, i) => { o.position.set(p.x, p.y, p.z); o.rotation.set(0, p.yaw, 0); o.updateMatrix(); mesh.setMatrixAt(i, o.matrix); });
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.receiveShadow = true;
+  mesh.computeBoundingSphere();
+  mesh.name = 'express-meshy-seats';
+  root.add(mesh);
+  for (const sm of seatMeshes) sm.visible = false; // (the procedural coach seats)
 }
 
 // the Meshy rack once per bay on both sides (instead of the procedural tubes and glass)

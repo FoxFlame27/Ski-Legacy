@@ -33,11 +33,11 @@ import { isMP } from '../net/mode.js';
 // multiplayer), then it is back in your bay. Old records without `until` keep the next-day rule.
 export const RELEASE_S = 180;
 export const nowMs = () => (isMP() && net.serverNow ? net.serverNow() : Date.now());
-/** "back in 2:41" for a tow yard record (or "back soon"). */
+/** "back in 2 min 41 sec" for a tow yard record (or "back soon"). (Oct 31 2026: clock()'s words, not "2:41", as the
+ *  user's Oct 30 "it should say 30 sec") */
 export function backIn(rec) {
   if (!Number.isFinite(rec?.until)) return 'back soon';
-  const s = Math.max(0, Math.ceil((rec.until - nowMs()) / 1000));
-  return `back in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  return `back in ${clock((rec.until - nowMs()) / 1000)}`;
 }
 export function untilTomorrow(rec) { return backIn(rec); } // (the old name, still imported)
 // (STRAY_BACK, the 3-minute return of a car left off the road, is gone: Oct 30, the user: a car "just on terrain" is
@@ -69,7 +69,9 @@ body.wanted #park-card { bottom: auto; top: calc(var(--u, 1px) * 150); }
 #park-card .pk-sub { margin-top: calc(var(--u, 1px) * 4); font-size: calc(var(--u, 1px) * 15); font-weight: 700; color: var(--blue-dim, #4f72d4); }
 #tow-yard .ty-head { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 20); letter-spacing: 0.08em; color: #ff4d3d; }
 #tow-yard .ty-t { font-family: var(--num); font-style: italic; font-weight: 700; font-size: calc(var(--u, 1px) * 52); line-height: 1; font-variant-numeric: tabular-nums; }
-#tow-yard .ty-sub { margin-top: calc(var(--u, 1px) * 4); font-size: calc(var(--u, 1px) * 15); font-weight: 700; color: var(--blue-dim, #4f72d4); }`;
+#tow-yard .ty-sub { margin-top: calc(var(--u, 1px) * 4); font-size: calc(var(--u, 1px) * 15); font-weight: 700; color: var(--blue-dim, #4f72d4); }
+#tow-yard .ty-more { margin-top: calc(var(--u, 1px) * 6); font-size: calc(var(--u, 1px) * 14); font-weight: 700; color: var(--blue, #1546c8); line-height: 1.3; white-space: pre-line; }
+#tow-yard .ty-more:empty { display: none; }`;
 
 export class Impound {
   /** @param {import('./carrental.js').CarRental} rental */
@@ -307,11 +309,12 @@ export class Impound {
   update(dt) {
     if (!(dt > 0)) return;
     const R = this.R, e = R.current;
-    this.yardHud(e);
+    this.yardHud();
     for (const k of R.kept || []) if (k.impound && this.released(k.impound)) { // (another car of yours, left in the tow yard: free again, out of the tow yard's bay into a free one)
       k.impound = null;
       if (this.save.impound?.plate === (k.cfg?.plate || null)) { this.save.impound = null; R.writeSave?.(); }
       if (!k.driving && !k.towing) { const b = this.freeBayOf(true); if (b) { this.place(k, b); if (R.drive) R.drive._cc = null; } }
+      R.hud?.flash(`Your ${R.label?.(k.cfg?.id) || 'car'} is back in your bay by the Autohaus`, 'good', 4000); // (Oct 31 2026: as the car out says it)
     }
     if (!e) { this.parkHud(null); return; }
     if (e.impound && this.released(e.impound)) { // (its 3 minutes are up: back in your bay)
@@ -474,28 +477,48 @@ export class Impound {
   // it back, bottom left; it only goes once you have your car back"): bottom left above the money (with the WANTED box
   // up: under the place name, top left), the brush style of the other HUD cards; built once, text changed only when it
   // changes.
-  yardHud(e) {
-    const rec = e && (e.impound || (e.towing && this.save.impound?.plate === (e.cfg?.plate || null) ? this.save.impound : null));
-    if (!rec && !this.hudEl) return;
+  // (Oct 31 2026, the user: "If one of your other cars is in the tow yard, the countdown card isn't shown for it. It only
+  // shows for the car you have out. Fix this.": every car of yours in the tow yard or on the truck's bed, the car out
+  // and the kept ones, the one back soonest on top, a line per other one under it; "30 sec", "1 min 30 sec" (clock).
+  // The parking card has the same corner: while it is up (the car out just left somewhere), this one waits.)
+  yardList() {
+    const R = this.R, s = this.save.impound, out = [];
+    for (const e of [R.current, ...(R.kept || [])]) {
+      if (!e || out.some((o) => o.e === e)) continue;
+      const rec = e.impound || (e.towing && s?.plate === (e.cfg?.plate || null) ? s : null);
+      if (!rec) continue;
+      const left = Number.isFinite(rec.until) ? Math.max(0, Math.ceil((rec.until - nowMs()) / 1000)) : null;
+      out.push({ e, rec, left, name: R.label?.(e.cfg?.id) || 'car' });
+    }
+    return out.sort((a, b) => (a.left ?? Infinity) - (b.left ?? Infinity));
+  }
+  yardHud() {
+    const list = this.yardList();
+    if (!list.length && !this.hudEl) return;
     if (!this.hudEl) {
       if (typeof document === 'undefined') return;
       if (!document.getElementById('tow-yard-css')) { const st = document.createElement('style'); st.id = 'tow-yard-css'; st.textContent = YARD_CSS; document.head.appendChild(st); }
       const el = document.createElement('div');
       el.id = 'tow-yard'; el.hidden = true;
-      el.innerHTML = '<div class="ty-head">TOW YARD</div><div class="ty-t"></div><div class="ty-sub"></div>';
+      el.innerHTML = '<div class="ty-head">TOW YARD</div><div class="ty-t"></div><div class="ty-sub"></div><div class="ty-more"></div>';
       (document.getElementById('hud') || document.body).appendChild(el);
-      this.hudEl = el; this.$t = el.querySelector('.ty-t'); this.$sub = el.querySelector('.ty-sub'); this.$head = el.querySelector('.ty-head'); this.hudC = {};
+      this.hudEl = el; this.$t = el.querySelector('.ty-t'); this.$sub = el.querySelector('.ty-sub'); this.$head = el.querySelector('.ty-head'); this.$more = el.querySelector('.ty-more'); this.hudC = {};
     }
-    const show = !!rec;
-    if (this.hudEl.hidden === show) this.hudEl.hidden = !show;
+    const show = list.length > 0 && !(this.pkEl && !this.pkEl.hidden);
+    if (this.hudEl.hidden === show) {
+      this.hudEl.hidden = !show;
+      if (show && this.R.current?.driving) document.querySelector('#drive-hud .ch-card')?.classList.add('out'); // (the controls card shares the corner: it fades out, as for the parking card)
+    }
     if (!show) return;
-    const C = this.hudC, left = Number.isFinite(rec.until) ? Math.max(0, Math.ceil((rec.until - nowMs()) / 1000)) : null;
-    const t = left === null ? 'soon' : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-    const head = e.towing ? 'BEING TOWED' : 'TOW YARD';
-    const sub = `Your ${this.R.label?.(e.cfg?.id) || 'car'} · back in your bay by the Autohaus`;
+    const C = this.hudC, [first, ...rest] = list, fmt = (o) => (o.left === null ? 'soon' : clock(o.left));
+    const t = fmt(first);
+    const head = first.e.towing ? 'BEING TOWED' : 'TOW YARD';
+    const sub = `Your ${first.name} · back in your bay by the Autohaus`;
+    const more = rest.map((o) => `+ ${o.name} · ${o.e.towing ? 'being towed' : fmt(o)}`).join('\n');
     if (C.t !== t) this.$t.textContent = C.t = t;
     if (C.head !== head) this.$head.textContent = C.head = head;
     if (C.sub !== sub) this.$sub.textContent = C.sub = sub;
+    if (C.more !== more) this.$more.textContent = C.more = more;
   }
 
   // the truck fetches it (the wreck fee, now); it ends in an impound bay, locked until tomorrow

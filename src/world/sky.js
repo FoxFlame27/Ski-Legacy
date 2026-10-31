@@ -252,9 +252,6 @@ export class Environment {
     this.wind = 0; this.clearAir = 0; this.wet = 0; this.frost = 0; this.sea = 0; // eased extras (WEATHER)
     this.inversionY = null; // the sea of clouds' deck height (atmosphere.js writes it)
     this.icy = 0; this.plough = 0;
-    // avalanche danger (Oct 30 2026, the user: "1-2 when clear, 3 after snow, 4 after a blizzard"): s since snow fell
-    // / since a blizzard (a quiet spell first: level 2 for a while, then 1)
-    this.sinceSnow = 700; this.sinceBlizzard = 1e9;
     this.snowCover = 0; // 0..1 fresh snow that has built up (rises while it snows, melts away slowly after)
     this.sunDir = new THREE.Vector3();
     this.moonDir = new THREE.Vector3();
@@ -473,13 +470,6 @@ export class Environment {
     if (!w || w === this.weather || !WEATHER[w] || !(left < 600)) return '';
     return `Later: ${WEATHER[w].label}`;
   }
-  /** Avalanche danger level 1-4 (European scale), following the weather (never closes anything). */
-  get avalancheLevel() {
-    if (this.weather === 'blizzard' || this.sinceBlizzard < 480) return 4;
-    if (this.snow > 0.3 || this.sinceSnow < 540) return 3;
-    if (this.snow > 0.1 || this.sinceSnow < 1500) return 2;
-    return 1;
-  }
 
   get timeString() {
     const h = Math.floor(this.hour), m = Math.floor((this.hour - h) * 60);
@@ -509,8 +499,6 @@ export class Environment {
     // after-effects: icy roads for a few minutes (~4 min to thaw), the ploughs out after heavy snow (~5 min)
     if (ICY_WX.has(this.weather)) this.icy = Math.min(1, this.icy + dt / 40); else this.icy = Math.max(0, this.icy - dt / 240);
     if (PLOUGH_WX.has(this.weather)) this.plough = Math.min(1, this.plough + dt / 20); else this.plough = Math.max(0, this.plough - dt / 300);
-    if (this.snow > 0.3) this.sinceSnow = 0; else this.sinceSnow += dt;
-    if (this.weather === 'blizzard') this.sinceBlizzard = 0; else this.sinceBlizzard += dt;
     // gusts: a slow swell from the west-north-west with lulls (wind 1: ~0.3 m/s^2 at the peak of a gust)
     const gt = (this.gustT = (this.gustT || 0) + dt);
     const gust = this.wind * Math.max(0, 0.55 + 0.45 * Math.sin(gt * 0.9) * Math.sin(gt * 0.37 + 1.3)) * 0.3;

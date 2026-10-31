@@ -19,7 +19,8 @@ export const DIFFICULTY = [
 // wide (Oct 30: wider runs, the blues and greens the widest)
 export const PISTE_WIDTH = [26, 23, 18, 16];
 
-const ADJ = ['Glacier', 'Eagle', 'Black Pine', 'Thunder', 'Crystal', 'Wolf', 'Edelweiss', 'Avalanche', 'Silver', 'Frost', 'Summit', 'Storm', 'Alpenglow', 'Ibex', 'Powder', 'Granite', 'North Face', 'Kandahar'];
+// (Oct 31 2026, the user: "avalanche should go away": no 'Avalanche' run names, Enzian in its slot so the rest stay put)
+const ADJ = ['Glacier', 'Eagle', 'Black Pine', 'Thunder', 'Crystal', 'Wolf', 'Edelweiss', 'Enzian', 'Silver', 'Frost', 'Summit', 'Storm', 'Alpenglow', 'Ibex', 'Powder', 'Granite', 'North Face', 'Kandahar'];
 const NOUN = ['Run', 'Couloir', 'Descent', 'Cup', 'Challenge', 'Slalom', 'Derby', 'Trophy', 'Classic', 'Dash', 'Chute', 'Line'];
 
 export const layout = {

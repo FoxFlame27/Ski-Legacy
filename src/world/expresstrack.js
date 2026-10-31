@@ -37,6 +37,9 @@ const GAUGE = 1.0;              // (the Wolkenspitzbahn's railcar: metre gauge)
 export const DECK = 0.55;       // top of rail -> the viaduct deck's / tunnel floor's top
 const SLAB = 0.25;              // top of rail -> top of the track slab (viaducts, tunnels, the hall)
 const BALLAST_TOP = 0.30;       // top of rail -> top of the ballast
+// (Oct 31 2026, the user: "can you remove the wires above the train track": no overhead line, masts or wires; the
+// code stays, switched off)
+const CATENARY = false;
 const MAST_LAT = TRACK_OFF + 3.1, WIRE_Y = 5.2, MESS_Y = 6.5, MAST_EVERY = 54;
 // tube: half width, springline, crown (the shaper keeps 3 m of ground over TUBE_H, its walls at TUBE_W = 6.4)
 export const TW = 5.7, TS = 2.6, TC = TUBE_H;
@@ -698,7 +701,7 @@ function buildChunkDetail(XMat, c0, c1) {
   const steel = new XB(), lining = new XB({ uv: true, light: true }), lamps = new XB(), wires = [], sl = [], cols = [];
   buildRails(steel, c0, c1);
   sleeperMatrices(sl, c0, c1);
-  buildCatenary(steel, c0, c1, kindFn(pieces), wires, cols);
+  if (CATENARY) buildCatenary(steel, c0, c1, kindFn(pieces), wires, cols);
   for (const p of pieces) if (p.kind === 'tunnel') buildTube(lining, lamps, p.tn, p.a, p.b);
   const grp = new THREE.Group();
   const add = (b, mat, { cast = false } = {}) => { const geo = b.build(); if (!geo) return null; const m = new THREE.Mesh(geo, mat); m.receiveShadow = true; m.castShadow = cast; m.matrixAutoUpdate = false; grp.add(m); return m; };

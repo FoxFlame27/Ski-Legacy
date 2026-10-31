@@ -523,7 +523,7 @@ function fmtWait(s) { s = Math.max(1, Math.ceil(s)); return s < 90 ? `${s} s` : 
 function clock(s) { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
 // seat no (0-based, numbered through the cars) of cap: "Car 2 of 4 · seat 14 (62 of 192)" / "Seat 12 of 36"
 function seatText(no, cap, cars = 1) {
-  if (cars > 1) { const per = Math.round(cap / cars); return `Car ${Math.floor(no / per) + 1} of ${cars} · seat ${(no % per) + 1} (${no + 1} of ${cap})`; }
+  if (cars > 1) { const per = Math.round(cap / cars); return `Carriage ${Math.floor(no / per) + 1} of ${cars} · seat ${(no % per) + 1} (${no + 1} of ${cap})`; }
   return `Seat ${no + 1} of ${cap}`;
 }
 // "178 of 192 seats free in 4 cars" / "36 seats free" (nobody aboard)

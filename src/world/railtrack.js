@@ -246,6 +246,9 @@ function buildTrack(ballast, concrete, steel, s0, s1, offFn, { slab = false } = 
 }
 
 // ------------------------------------------------------------------ overhead line
+// (Oct 31 2026, the user: "can you remove the wires above the train track": no overhead line, masts or wires; the
+// code stays, switched off)
+const CATENARY = false;
 function buildCatenary(steel, concrete, s0, s1, tunnel, offFn, wires = null, cols = null) {
   const f = {};
   const wireY = 5.0;
@@ -692,7 +695,7 @@ export function buildRailway(scene) {
       const mid = (a + b) / 2;
       const tn = tunnels.find((t) => mid > t.s0 && mid < t.s1);
       buildTrack(ballast, concrete, steel, a, b, () => 0, { slab: !!tn });
-      buildCatenary(steel, concrete, a, b, !!tn, () => 0, wires, cols);
+      if (CATENARY) buildCatenary(steel, concrete, a, b, !!tn, () => 0, wires, cols);
       if (tn && tn.end && b > HALL.s0) {
         // the top station's rock hall at the end of the line
         if (a < HALL.s0) buildTube(lining, lampB, tn, a, HALL.s0, () => 0, steel, heads);
@@ -703,7 +706,7 @@ export function buildRailway(scene) {
     const la = Math.max(c0, LOOP.s0), lb = Math.min(c1, LOOP.s1);
     if (lb > la) {
       buildTrack(ballast, concrete, steel, la, lb, loopOffset);
-      buildCatenary(steel, concrete, la, lb, false, loopOffset, wires, cols);
+      if (CATENARY) buildCatenary(steel, concrete, la, lb, false, loopOffset, wires, cols);
     }
     const add = (bd, mat, { cast = true, receive = true } = {}) => {
       const geo = bd.build();

@@ -1,8 +1,8 @@
 // The Legacy Express's own cabin furnishing (user Oct 31 2026: "the interior of the train is very ugly, make it
 // realistic, use Meshy models for the train interior"). buildCar({ express: true }) leaves out the Wolkenspitzbahn's
 // box tables and wire racks; here: rounded laminate tables, aluminium luggage racks with a glass shelf over the
-// windows, and, once their GLBs are in (public/models/train, tools/meshy-train-interior.mjs), the Meshy intercity
-// double seat instanced on every seat pair (instead of the coach seats) and the Meshy rack once per bay. Missing
+// windows, and, once their GLBs are in (public/models/train, tools/meshy-train-interior.mjs), the Meshy luggage
+// rack once per bay (the Meshy seat came out unusable, see below; the coach seats stay). Missing
 // models: the procedural version stays. Seat positions (cabin.seats) never change.
 import * as THREE from 'three';
 import { loadGLB, bakeGeometry } from '../core/assets.js';
@@ -72,64 +72,48 @@ export function furnishExpress(cabin) {
   }
   root.add(rack);
 
-  // ---- the Meshy pieces, when their GLBs are there
-  loadGLB('train/train_double_seat').then((g) => { if (g) meshySeats(cabin, g, seatMeshes, root); }).catch(() => {});
+  // ---- the Meshy rack, when its GLB is there. (The Meshy "double seat", checked Oct 31 2026, came out as two single
+  // seats one behind the other, 0.6 m wide, not a side-by-side pair: no use on a seat pair, so the coach seats stay.)
   loadGLB('train/train_luggage_rack').then((g) => { if (g) meshyRacks(g, rack, root); }).catch(() => {});
 }
 
-// which way a seat model faces: away from its backrest (the side holding most of the geometry high up)
-function facingSign(geo) {
-  geo.computeBoundingBox();
-  const bb = geo.boundingBox, pos = geo.attributes.position, yCut = bb.min.y + 0.7 * (bb.max.y - bb.min.y);
-  let z = 0, n = 0;
-  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > yCut) { z += pos.getZ(i); n++; }
-  return n && z / n > (bb.min.z + bb.max.z) / 2 ? -1 : 1; // backrest towards +z -> faces -z
-}
-
-// the double seat on every seat pair (seats.inst holds the pair's two places one after the other)
-function meshySeats(cabin, gltf, seatMeshes, root) {
-  const b = bakeGeometry(gltf, { size: 1.22, axis: 'y' });
-  if (!b?.geometry) return;
-  const geo = b.geometry.clone();
+// the Meshy rack once per bay on both sides (instead of the procedural tubes and glass)
+// The model (checked Oct 31 2026): 1.9 long along its x, its flat wall plate and brackets on its -z side, the
+// shelf along its bottom. Turned so its length runs along the car and its wall side faces +x, scaled uniformly to
+// one bay (0.36 m deep, ~0.22 m tall), its shelf at the rack height; mirrored onto the -x wall.
+export const RACK_FIT = { depth: 0.36, wallX: CABIN.HW - 0.06, y: RACK_Y - 0.01 };
+export function rackGeometry(geo) {
   geo.computeBoundingBox();
   let bb = geo.boundingBox;
-  // its long side across the car (x), facing +z, centred on its footprint, standing on y 0
-  if (bb.max.z - bb.min.z > bb.max.x - bb.min.x) geo.rotateY(Math.PI / 2);
-  if (facingSign(geo) < 0) geo.rotateY(Math.PI);
+  if (bb.max.x - bb.min.x > bb.max.z - bb.min.z) geo.rotateY(Math.PI / 2); // (its length along the car)
+  // the wall side: where the tall parts (plate, brackets) are
   geo.computeBoundingBox(); bb = geo.boundingBox;
-  geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
-  const sx = 0.96 / (bb.max.x - bb.min.x), sz = Math.min(1.2, 0.62 / (bb.max.z - bb.min.z));
-  geo.scale(sx, 1, sz);
-  const inst = cabin.seats.inst || [], pairs = [];
-  for (let i = 0; i + 1 < inst.length; i += 2) pairs.push({ x: (inst[i].x + inst[i + 1].x) / 2, y: inst[i].y, z: inst[i].z, yaw: inst[i].yaw });
-  if (!pairs.length) return;
-  const mat = cabinLit(b.material.clone(), 'meshy-seat');
-  const mesh = new THREE.InstancedMesh(geo, mat, pairs.length);
-  const o = new THREE.Object3D();
-  pairs.forEach((p, i) => { o.position.set(p.x, p.y, p.z - Math.cos(p.yaw) * 0.04); o.rotation.set(0, p.yaw, 0); o.updateMatrix(); mesh.setMatrixAt(i, o.matrix); });
-  mesh.receiveShadow = true; mesh.name = 'express-meshy-seats';
-  root.add(mesh);
-  for (const sm of seatMeshes) sm.visible = false;
+  const pos = geo.attributes.position, yCut = bb.min.y + 0.6 * (bb.max.y - bb.min.y);
+  let x = 0, n = 0;
+  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > yCut) { x += pos.getX(i); n++; }
+  if (n && x / n < (bb.min.x + bb.max.x) / 2) geo.rotateY(Math.PI);
+  geo.computeBoundingBox(); bb = geo.boundingBox;
+  // wall side at x 0, reaching in to -depth; standing on y 0; centred along z
+  const k = RACK_FIT.depth / (bb.max.x - bb.min.x);
+  geo.translate(-bb.max.x, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
+  geo.scale(k, k, (CABIN.BAY - 0.04) / (bb.max.z - bb.min.z));
+  return geo;
 }
+// a rack's placement on wall side s (+1 / -1) of the bay starting at zb
+export function rackPlace(s, zb) { return { x: s * RACK_FIT.wallX, y: RACK_FIT.y, z: zb + CABIN.BAY / 2, yaw: s > 0 ? 0 : Math.PI }; }
 
 // the Meshy rack once per bay on both sides (instead of the procedural tubes and glass)
 function meshyRacks(gltf, procRack, root) {
   const b = bakeGeometry(gltf, { size: 1, axis: 'y' });
   if (!b?.geometry) return;
-  const geo = b.geometry.clone();
-  geo.computeBoundingBox();
-  let bb = geo.boundingBox;
-  if (bb.max.x - bb.min.x > bb.max.z - bb.min.z) geo.rotateY(Math.PI / 2); // (its length along the car)
-  geo.computeBoundingBox(); bb = geo.boundingBox;
-  geo.translate(-(bb.min.x + bb.max.x) / 2, -(bb.min.y + bb.max.y) / 2, -(bb.min.z + bb.max.z) / 2);
-  geo.scale(0.36 / (bb.max.x - bb.min.x), 0.14 / (bb.max.y - bb.min.y), (CABIN.BAY - 0.04) / (bb.max.z - bb.min.z));
+  const geo = rackGeometry(b.geometry.clone());
   const mat = cabinLit(b.material.clone(), 'meshy-rack');
   const mesh = new THREE.InstancedMesh(geo, mat, CABIN.BAYS_N * 2);
   const o = new THREE.Object3D();
   let i = 0;
   for (const zb of bayZs()) for (const s of [1, -1]) {
-    o.position.set(s * (CABIN.HW - 0.24), RACK_Y + 0.02, zb + CABIN.BAY / 2);
-    o.rotation.set(0, s > 0 ? 0 : Math.PI, 0); o.updateMatrix(); mesh.setMatrixAt(i++, o.matrix);
+    const p = rackPlace(s, zb);
+    o.position.set(p.x, p.y, p.z); o.rotation.set(0, p.yaw, 0); o.updateMatrix(); mesh.setMatrixAt(i++, o.matrix);
   }
   mesh.name = 'express-meshy-racks';
   root.add(mesh);

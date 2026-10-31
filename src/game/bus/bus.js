@@ -26,7 +26,9 @@ import { ST } from '../../net/protocol.js'; // (a remote player's state: seated 
 import { buildJunctionMouths } from './junctionview.js'; // (where a road joins another: one surface, rounded corners, give-way line)
 
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-export const BUS = { len: 12, width: 2.55, floor: 0.95, lane: 1.55, cruise: 26, acc: 1.7, brake: 2.0, lat: 2.6 };
+// (len: Oct 31 2026, the user: "The bus is a bit too stretched": 9.3 m, not 12; the Micruss is 8.44 m long at its
+// 2.55 m width, so only ~1.1x stretched now; the colliders, the queues at a stop, the look-ahead and the door follow it)
+export const BUS = { len: 9.3, width: 2.55, floor: 0.95, lane: 1.55, cruise: 26, acc: 1.7, brake: 2.0, lat: 2.6 };
 const CLEAR_DEC = 1.8, CLEAR_GAP = 4; // braking for something in the lane (m/s^2, within its 2.6 limit); the gap it stops at (m)
 const BAY = 7; // the bus stops this far before the end of the road (its middle)
 // Something in its lane (Oct 30, the user: "make sure the bus stops for you and if the person doesn't move it
@@ -795,7 +797,7 @@ function buildRoadMeshes(group, colliders = null) {
 }
 
 // ------------------------------------------------------------------ the bus
-// The shell (front +z, wheels on y = 0, 12 m long) + its interior. Local frame: x left, y up, z forward.
+// The shell (front +z, wheels on y = 0, BUS.len (9.3 m) long) + its interior. Local frame: x left, y up, z forward.
 // (Oct 30 2026, the user: "I also have a new bus model, please use this one. Also make it so you can see the people
 // inside through the windows, like the other cars"): the Busscar Micruss (models.ski_bus_micruss; the old Meshy coach,
 // models.ski_bus, only if it is missing). Its own cabin is drawn: seats, racks, the driver's partition, behind tinted
@@ -843,9 +845,10 @@ function buildMicruss(gltf, group, makeRig) {
   m.updateMatrixWorld(true);
   const all = new THREE.Box3().setFromObject(m), body = m.getObjectByName('BusBody');
   const bb = body ? new THREE.Box3().setFromObject(body) : all;
-  // (the bus's own footprint: 2.55 m across the body (the mirrors stick out), 12 m long; the height as wide, so its
-  // floor is at the bus's 0.95 m and its roof at ~3 m; only its length is stretched (the Micruss is a short bus), so
-  // the stops, bays, colliders and the depot all line up as before)
+  // (the bus's own footprint: 2.55 m across the body (the mirrors stick out), BUS.len long; the height as wide, so its
+  // floor is at the bus's 0.95 m and its roof at ~3 m; its length only a little stretched (Oct 31 2026, the user: "The
+  // bus is a bit too stretched": 8.44 m at that width, 9.3 m now, ~1.1x, was 12 m, 1.42x; the windows and wheels keep
+  // their real look, the seats, lamps and driver measured from the model follow it, the colliders are BUS.len long))
   const sx = BUS.width / (bb.max.x - bb.min.x), sz = BUS.len / (all.max.z - all.min.z);
   m.scale.set(sx, sx, sz);
   m.position.set(-(all.min.x + all.max.x) / 2 * sx, -all.min.y * sx, -(all.min.z + all.max.z) / 2 * sz);
@@ -964,6 +967,12 @@ export function turnWheels(shell, pos, yaw) {
   }
   for (const s of W.steer) s.rotation.y = W.a;
 }
+// a bus's passengers made for the other mode (multiplayer joined or left since): taken out, to be made again
+function stalePeople(b) {
+  if (!b.people || b.people.userData.mp === isMP()) return false;
+  b.people.removeFromParent();
+  return true;
+}
 // its cabin (seats, racks) and the people in it drawn near you only
 function busNear(shell, people, d, pos, yaw) {
   if (!_wheelSets.has(shell)) turnWheels(shell, pos, yaw);
@@ -975,7 +984,10 @@ function busNear(shell, people, d, pos, yaw) {
 // A few passengers (Oct 30 2026, the user: "see the people inside through the windows, like the other cars"): the
 // traffic's baked seated people (carpeople.js: the game's skiers in the 'sit' pose, knees bent, plain meshes, no
 // shadows) on some of its seats (by the bus's number; never the seat single player gives you), and a driver at the
-// wheel on the fleet's buses. Null until the traffic's bake is done.
+// wheel on the fleet's buses. Null until the traffic's bake is done. Multiplayer (Oct 31 2026, the user: "why are there
+// bots sitting in the bus on multiplayer? Only the driver should sit in the bus. And in the parking lot there are a lot
+// of bots sitting inside. Only in single player"): the driver only (the players riding sit in their seats as before);
+// tagged with the mode it was made for, so joining / leaving redoes it (stalePeople).
 function busPeople(bus, seed, driver) {
   const CP = game()?.traffic?.people;
   if (!CP?.ready) return null;
@@ -994,7 +1006,8 @@ function busPeople(bus, seed, driver) {
   };
   if (driver && bus.driverSeat) put((D?.length ? D : P)[Math.floor(rnd() * 97) % (D?.length || P.length)], bus.driverSeat);
   const S = bus.seats, keep = S.indexOf(S.find((q) => q.window && q.side < 0 && q.row === 2));
-  const n = 3 + Math.floor(rnd() * 3);
+  const n = isMP() ? 0 : 3 + Math.floor(rnd() * 3);
+  g.userData.mp = isMP();
   const free = S.map((_, i) => i).filter((i) => i !== keep);
   for (let k = 0; k < n && free.length; k++) {
     const i = free.splice(Math.floor(rnd() * free.length), 1)[0];
@@ -1820,7 +1833,7 @@ export class BusLine {
       if (!isLeaf(L)) continue;
       const w = way(L, 4);
       if (!w) continue;
-      routes.push({ to: L, cycle: w.A.dur + w.B0.dur + (depot ? MIN_LAYOVER : 0) });
+      routes.push({ to: L, cycle: w.A.dur + w.B0.dur + (depot ? MIN_LAYOVER : 0), chalet: w.A.marks.some((m) => m.stop?.chalets) });
     }
     if (!routes.length) return;
     // the buses over the rounds by their length (every round at least one), spread evenly round each
@@ -1829,6 +1842,14 @@ export class BusLine {
     let sum = routes.reduce((a, r) => a + r.m, 0);
     while (sum > N) { const r = routes.filter((q) => q.m > 1).sort((a, b) => a.cycle / a.m - b.cycle / b.m)[0]; if (!r) break; r.m--; sum--; }
     while (sum < N) { routes.sort((a, b) => b.cycle / b.m - a.cycle / a.m)[0].m++; sum++; }
+    // (Oct 31 2026, the user wants a second bus serving the "Chalet Village" stop): a round through it runs two buses,
+    // half a cycle apart (the wait there about halved); the second one from the round with the most buses (the
+    // shortest wait between them), never a round's only one. The same on every client (the same roads, the same sort)
+    for (const r of routes) {
+      if (!r.chalet || r.m >= 2) continue;
+      const d = routes.filter((q) => q !== r && q.m > 1).sort((a, b) => a.cycle / a.m - b.cycle / b.m || b.m - a.m)[0];
+      if (d) { d.m--; r.m++; } else console.warn('ski bus: no second bus for the chalet village');
+    }
     // each bus its own ways (its own bay: bus:k in bay k, bus:0's is bay 0)
     let id = 1;
     routes.forEach((r, ri) => {
@@ -1964,6 +1985,7 @@ export class BusLine {
     // bus:0's passengers and cabin near you only (the fleet's below)
     if (this.bus.micruss && p && this.bus.group.visible) {
       const g = this.bus.group.position, d0 = Math.hypot(g.x - p.x, g.z - p.z);
+      if (stalePeople(this.bus)) this.bus.people = null;
       if (!this.bus.people && d0 < PEOPLE_NEAR) { this.bus.people = busPeople(this.bus, 0, false); if (this.bus.people) this.bus.group.add(this.bus.people); }
       busNear(this.bus.shell, this.bus.people, d0, g, this.yaw || 0);
     }
@@ -2049,6 +2071,7 @@ export class BusLine {
         if (this.bus.micruss && !mine) {
           const sh = b.group.userData.shell;
           if (d < WHEEL_NEAR) turnWheels(sh, g, b.yaw);
+          if (stalePeople(b)) b.people = null;
           if (!b.people && d < PEOPLE_NEAR) { b.people = busPeople(this.bus, b.group.userData.bid, true); if (b.people) b.group.add(b.people); }
           busNear(sh, b.people, d, g, b.yaw);
         }

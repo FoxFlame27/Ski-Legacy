@@ -35,7 +35,7 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _p = {}, _q = {}, _a = new THREE.Vector3(), _b = new THREE.Vector3(), _f = new THREE.Vector3();
 const TURN_LEAD = 7, OFF_TURN = 0.12; // (a car turning at a junction starts its arc this far before it)
-const BUS_HW = 1.3, BUS_HD = 6; // (the ski bus's footprint: bus.js BUS width 2.55, length 12)
+const BUS_HW = 1.3, BUS_HD = 4.65; // (the ski bus's footprint: bus.js BUS width 2.55, length 9.3 (Oct 31 2026, the user: "The bus is a bit too stretched"; was 12))
 // (Oct 29, the user: "make cars drive way faster up to 150km/h ... but only on big roads"): each road has its speed
 // limits (bus/speedlimits.js: up to 120 on the long straight valley stretches, 50 in the village, 50-60 on the pass
 // roads, 30 on the car parks' roads); a driver keeps to them times his own factor (DRV: some 25 % over, 150 km/h at

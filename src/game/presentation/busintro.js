@@ -69,7 +69,7 @@ function normalAt(x, z, out = _gn) {
 const T = { busIn: 2, busStop: 11, doorsOpen: 11.3, walk0: 12.1, step: 15.0, gone: 15.9, doorsShut: 16.4, depart: 17.4, end: 26.5 };
 const SHOTS = [6, 12, 17.2, T.end]; // shot ends: A establishing, B arrival, C boarding, D departure
 const ZSTOP = 0;                    // bus centre at the stop
-const DOOR_Z = BUS.len / 2 - 2.6;   // front door (bus local z), on the bus's right (-x): the Micruss's, just behind its front wheel (Oct 30 2026)
+const DOOR_Z = BUS.len * 0.283;     // front door (bus local z), on the bus's right (-x): the Micruss's, just behind its front wheel (Oct 30 2026); a share of its length, as the model is (Oct 31 2026, the user: "The bus is a bit too stretched": 2.0 m behind the 9.3 m bus's nose, was 2.6 behind the 12 m one's)
 const LANE = BUS.lane;
 
 function canvasTex(w, h, draw, rep = null) {

@@ -690,6 +690,10 @@ export class Chalets {
     return t;
   }
   updateMarker(dt) {
+    // (Oct 31 2026, the user: "make sure it only says your chalet, remove the house icon above": the gold badge is gone;
+    // the "Your chalet" tag (game/ownertags.js) is the one over it)
+    if (this.marker) this.marker.visible = false;
+    return; // (the old badge code below is kept, unused)
     const h = this.inside ? null : this.rented();
     if (!h || typeof document === 'undefined') { if (this.marker) this.marker.visible = false; return; }
     if (!this.marker) {

@@ -603,6 +603,11 @@ function hospitalSpot() {
   return { x: d.x, z: d.z, y, h: d.yaw, skis: false, ...(w.role === 'patient' ? { hospital: { until: Math.round(w.until || Date.now()) } } : {}) };
 }
 let pendingBed = null; // (restoreSpot: the rest of a hospital stay, in seconds, to come round in at startGame)
+// (Oct 31 2026, the user: "also if you leave while being rescued because you wiped out, and you rejoin, the rescue should
+// continue, not be abandoned"): a rescue under way when you left (save.rescue; multiplayer: the profile's 'rescue'), as
+// game/heli/rescue.js plan() carries it on: restoreSpot puts you where it goes on (lying in the snow, the helicopter's
+// spot aboard, the medical centre's door) for the stream, startGame resumes it (resumeRescue)
+let pendingRescue = null;
 function rememberSpot() {
   try {
     const sp = hospitalSpot() || outdoorSpot();
@@ -627,6 +632,21 @@ function savedSpot() {
 }
 // put the player at the saved spot (no streaming: callers stream around it); false = none, the normal spawn stays
 function restoreSpot() {
+  pendingRescue = null;
+  try { pendingRescue = heli?.rescue?.plan() || null; } catch (e) { console.warn('rescue plan', e); }
+  if (pendingRescue && (Math.abs(pendingRescue.x) > SPOT_LIMIT || Math.abs(pendingRescue.z) > SPOT_LIMIT)) pendingRescue = null;
+  if (pendingRescue) {
+    const R = pendingRescue;
+    pendingBed = null; // (a rescue's own hospital stay comes from it)
+    try {
+      player.frozen = false; player.seat = null;
+      player.setSkisOn(false);
+      player.teleport(R.x, R.z, R.h, R.y);
+      player.rig?.setSkisVisible?.(player.hasSkis);
+      player.resumed = true;
+      return true;
+    } catch (e) { console.warn('restore rescue', e); pendingRescue = null; }
+  }
   const sp = savedSpot();
   pendingBed = sp?.hospital && hospitalWard?.door ? Math.max(0, (sp.hospital.until - Date.now()) / 1000) : null;
   if (!sp) { if (save.pos) save.pos = null; return false; }
@@ -727,6 +747,16 @@ function resumeBed() {
   if (prison?.active || prison?.inside || (Number.isFinite(jailUntil) && jailUntil > Date.now())) return;
   try { hospitalWard.admit({ seconds: s }); } catch (e) { console.warn('hospital: resume', e); }
 }
+// being rescued when you left (pendingRescue, restoreSpot): it carries on (game/heli/rescue.js resume); not with a
+// prison sentence waiting (the cell instead, the rescue forgotten)
+function resumeRescue() {
+  const R = pendingRescue;
+  pendingRescue = null;
+  if (!R || !heli?.rescue) return;
+  const jailUntil = isMP() ? MP.profile?.jailUntil : save.jail?.until;
+  if (prison?.active || prison?.inside || (Number.isFinite(jailUntil) && jailUntil > Date.now())) { heli.rescue.forget(); return; }
+  try { heli.rescue.resume(R, { fallback: wipeoutToVillage }); } catch (e) { console.warn('rescue: resume', e); }
+}
 // Leave the menu and drop into the world.
 function startGame() {
   if (started) return;
@@ -742,6 +772,7 @@ function startGame() {
   writeSave();
   audio.music('freeride');
   resumeBed();
+  resumeRescue();
   if (!player.hasSkis) {
     setTimeout(() => hud.flash('Welcome to Legacy Village', 'good', 3000), 600); // (no spoken welcome: Oct 30, the user asked it gone)
   }
@@ -755,7 +786,7 @@ async function startFromMenu(sel = {}) {
   // (Oct 29, the user: no bus intro: a new game starts straight in Legacy Village)
   // back from the main menu: on where you were (the menu waits in the village); streamed behind the menu
   const sp = savedSpot();
-  if (sp && Math.hypot(player.pos.x - sp.x, player.pos.z - sp.z) > 3 && restoreSpot()) {
+  if (((sp && Math.hypot(player.pos.x - sp.x, player.pos.z - sp.z) > 3) || heli?.rescue?.plan()) && restoreSpot()) { // (or a rescue to carry on)
     await streamAround(player.pos.x, player.pos.z);
     if (started) return;
   }
@@ -816,6 +847,7 @@ async function backToStand() {
 async function backToMenu(opts = {}) {
   if (!opts.mp) rememberSpot(); // (where you were: PLAY, or the next launch, carries on from there; never a multiplayer spot)
   if (outfitShop?.isOpen) outfitShop.close();
+  heli.rescue?.keep(); // (a rescue under way is kept: it carries on when you play on, Oct 31 2026)
   heli.abort();
   if (races.active) races.abort();
   if (player.mode === 'sit') { lifts.ride = null; railway.abort(); express?.abort(); skibus.abort(); sleds.abort(); drive?.abort(); player.seat = null; player.mode = 'walk'; player.rig.root.visible = true; player.rig.gear.visible = true; }

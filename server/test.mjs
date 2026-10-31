@@ -1172,6 +1172,26 @@ try {
     ok(wn.ok && !('wanted' in server.profileOf('alice')), 'profileSet wanted null: the chase is over');
   }
 
+  // ---------------------------------------------------------------- a rescue carries on after a rejoin (Oct 31 2026)
+  console.log('rescue kept');
+  {
+    const t0 = Date.now() - 20000;
+    const ra = await a.req('profileSet', { key: 'rescue', value: { st: 'cabin', x: 120.456, y: 1850.2, z: -340, t0, at: Date.now(), free: true, hp: [200.123, 1900, -300, 1.5] } });
+    const R = server.profileOf('alice').rescue;
+    ok(ra.ok && R?.st === 'cabin' && R.x === 120.46 && R.t0 === t0 && R.free === true && JSON.stringify(R.hp) === JSON.stringify([200.12, 1900, -300, 1.5]), 'profileSet rescue: the stage, the spot, the start, free and the helicopter are kept');
+    const rb = await a.req('profileSet', { key: 'rescue', value: { st: 'flying', x: 1, y: 2, z: 3, t0, at: t0 } });
+    const rc = await a.req('profileSet', { key: 'rescue', value: { st: 'wait', x: 1, y: 2, z: 1e9, t0, at: t0 } });
+    const rd = await a.req('profileSet', { key: 'rescue', value: { st: 'cabin', x: 1, y: 2, z: 3, t0, at: t0, hp: [1, 2] } });
+    const re = await a.req('profileSet', { key: 'rescue', value: { st: 'wait', x: 1, y: 2, z: 3, t0: 'soon', at: t0 } });
+    ok(!rb.ok && rb.err === 'bad_value' && !rc.ok && !rd.ok && !re.ok && server.profileOf('alice').rescue.st === 'cabin', 'profileSet rescue: a bad stage / spot / helicopter / time is refused');
+    const rw = await a.req('profileSet', { key: 'rescue', value: { st: 'wait', x: 5, y: 6, z: 7, t0, at: Date.now() } });
+    ok(rw.ok && server.profileOf('alice').rescue.st === 'wait' && !('hp' in server.profileOf('alice').rescue) && server.profileOf('alice').rescue.free === false, 'profileSet rescue: down in the snow (no helicopter pose, paid)');
+    const pr = await a.req('profile');
+    ok(pr.ok && pr.d.profile.rescue?.st === 'wait' && pr.d.profile.rescue.x === 5, 'the rescue comes back with the profile (login)');
+    const rn = await a.req('profileSet', { key: 'rescue', value: null });
+    ok(rn.ok && !('rescue' in server.profileOf('alice')), 'profileSet rescue null: the rescue is over');
+  }
+
   // ---------------------------------------------------------------- arrested with a wanted driver: the passengers too
   console.log('accomplices');
   {

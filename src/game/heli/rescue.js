@@ -21,6 +21,8 @@ import { PAD_R } from './pad.js';
 import { Ambulance } from './ambulance.js';
 import { busRoads } from '../bus/roads.js';
 import { save, writeSave } from '../economy.js';
+import { isMP } from '../../net/mode.js';
+import { net } from '../../net/client.js';
 
 // The rescue bill (the ambulance): $750, then $150 more for every rescue before it (counted in the save), never
 // over $2,000 (~5 to 13 minutes of jobs: it hurts, it never ruins you); it is charged even into the red (shops,
@@ -36,6 +38,18 @@ const FAR = 1500;          // farther than this, the helicopter starts the shot 
 const START_D = 800;       // ...this far out
 const HOVER_AGL = 12, HOVER_TREES = 27; // winch hover heights above the snow (m)
 const ROPE_DOWN = 2.6, ROPE_UP = 4.2;   // winch times (s)
+// A rescue kept across leaving and coming back (Oct 31 2026, the user: "also if you leave while being rescued because you
+// wiped out, and you rejoin, the rescue should continue, not be abandoned"): while it runs, save.rescue (multiplayer: the
+// profile's 'rescue', net/session.js push) = { st: the stage ('wait' down in the snow, 'winch' the helicopter over you /
+// on the rope, 'cabin' aboard, flying home, 'amb' in the ambulance), x, y, z (where you lay / were picked up), t0 (ms:
+// when the rescue began), at (ms: written), free (hit by a vehicle: no fee), hp [x, y, z, yaw] (aboard: the helicopter) },
+// written on every change of stage and every PERSIST_S; gone once it is over (charge) or given up (cleanup). Back in the
+// world (main.js restoreSpot / startGame: plan, resume): down in the snow or on the winch, the helicopter comes for you
+// again from NEAR_D (quickly); aboard, on in the cabin to the pad; in the ambulance, straight into a hospital bed; more
+// than RESUME_MAX_S since it began (the wait, a long flight home, the ambulance, the bed), all over: out of the medical
+// centre at its door. The fee is only ever taken once, at the end (charge), free stays free.
+const PERSIST_S = 3, NEAR_D = 260, RESUME_MAX_S = 600;
+const STAGES = ['wait', 'winch', 'cabin', 'amb'];
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -44,6 +58,14 @@ const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _u = new THREE.Vector3
 const nightK = (h) => clamp((h.camera && globalThis.__game?.env?.nightFactor) || 0, 0, 1);
 // the front passenger seat (left of the pilot's): you ride there, the rescue pilot flies
 const PASSENGER = new THREE.Vector3(-ANCHORS.seat.x, ANCHORS.seat.y, ANCHORS.seat.z);
+// lying still in the snow (a rescue carried on after a rejoin: as it found you; no crash event, no strike)
+function lieDown(p) {
+  const F = p.fall, side = Math.random() < 0.5 ? -1 : 1;
+  p.mode = 'fall'; p.fallT = 1; p.fallSide = side; p.fallAir = false; p.parked = false;
+  p.vel.set(0, 0, 0);
+  F.t = 1; F.state = 'lie'; F.kind = 'slam'; F.lieT = 0; F.getUp = 0; F.ball = 0; F.bump = false;
+  F.pitch = 0; F.pitchVel = 0; F.pitchTarget = null; F.roll = F.rollRest = F.rollTarget = side * Math.PI / 2; F.rollVel = 0;
+}
 
 export class Rescue {
   constructor(heli) {
@@ -65,6 +87,11 @@ export class Rescue {
     this.gone = false;        // ...and gone (hidden, back on its pad unseen until the rescue ends)
     this.others = null;       // multiplayer: (out) => the other players' rescue helicopters [{ x, y, z }] (net/rescue.js)
     this.busyT = 0;
+    this.t0 = 0; this.pick = null; // (kept across leaving: when it began, where you lay; Oct 31 2026, persistStep)
+    this.persistT = 0; this.persistSt = ''; this.keepSave = false;
+    this.onLeave = () => { try { this.persistNow(); } catch { /* (leaving) */ } };
+    globalThis.addEventListener?.('pagehide', this.onLeave);
+    globalThis.addEventListener?.('beforeunload', this.onLeave);
   }
   /** The helicopter has gone after handing you to the ambulance (its rotor stops). */
   get grounded() { return this.phase === 'ambulance' && this.gone; }
@@ -89,25 +116,38 @@ export class Rescue {
    * Start a rescue for the player lying where they crashed. false: not possible here (main.js uses the old fade).
    * @param {{fallback?: () => void}} o
    */
-  start({ fallback, free = false } = {}) {
+  start({ fallback, free = false, near = false, cabin = null, t0 = null, pick = null, msg = null } = {}) {
     const h = this.h, p = h.player, f = h.flight, W = h.world;
     if (this.phase && h.state !== 'rescue') { try { this.cleanup(); } catch { /* */ } this.phase = null; } // (a rescue left half-done: it never blocks the next one)
     if (this.phase || h.state === 'flying' || h.state === 'boarding') { console.warn('rescue: helicopter busy', this.phase, h.state); return false; }
     // under a tunnel lid or inside a cave: no way to reach you from the air
-    if (Math.abs(W.outsideHeight(p.pos.x, p.pos.z) - W.height(p.pos.x, p.pos.z)) > 2.5) return false;
+    if (!cabin && Math.abs(W.outsideHeight(p.pos.x, p.pos.z) - W.height(p.pos.x, p.pos.z)) > 2.5) return false;
     this.fallback = fallback;
     this.free = free; // (knocked over by a vehicle: not your fault, no fee)
     this.t = 0; this.pt = 0; this.fast = false; this.spot = null; this.attached = false; this.inCabin = false; this.shot.ready = false;
+    // (kept across leaving: when it began, where you lay; Oct 31 2026, persistStep)
+    this.t0 = Number.isFinite(t0) && t0 > 0 ? t0 : Date.now();
+    this.pick = pick && Number.isFinite(pick.x) ? { x: pick.x, y: pick.y, z: pick.z } : { x: p.pos.x, y: p.pos.y, z: p.pos.z };
+    this.persistT = 0; this.persistSt = '';
     h.model.clearRack();
     h.away = null;
-    // where the helicopter starts: its pad, or wherever it is now; from far away it is already on the way
+    // where the helicopter starts: its pad, or wherever it is now; from far away it is already on the way (a rescue
+    // carried on after a rejoin: near, NEAR_D out, so it is with you in moments; aboard: where it was, in the air)
     const d = Math.hypot(f.pos.x - p.pos.x, f.pos.z - p.pos.z);
-    if (d > FAR) {
-      const ux = (f.pos.x - p.pos.x) / d, uz = (f.pos.z - p.pos.z) / d;
-      const x = p.pos.x + ux * START_D, z = p.pos.z + uz * START_D, yaw = Math.atan2(-ux, -uz);
+    if (cabin) {
+      const [x, y, z, yaw] = cabin;
+      f.place(x, z, yaw, h.ground);
+      f.landed = false;
+      f.pos.y = Math.max(y, h.ground(x, z) + f.cgH + 40);
+      f.u = 30; f.vel.set(Math.sin(yaw) * 30, 0, Math.cos(yaw) * 30);
+      h.rpm = 1;
+    } else if (d > FAR || near) {
+      const R = near ? NEAR_D : START_D;
+      const ux = d > 1 ? (f.pos.x - p.pos.x) / d : 0, uz = d > 1 ? (f.pos.z - p.pos.z) / d : 1;
+      const x = p.pos.x + ux * R, z = p.pos.z + uz * R, yaw = Math.atan2(-ux, -uz);
       f.place(x, z, yaw, h.ground);
       let top = h.ground(x, z);
-      for (let k = 1; k <= 8; k++) top = Math.max(top, h.ground(x - ux * START_D * k / 8, z - uz * START_D * k / 8));
+      for (let k = 1; k <= 8; k++) top = Math.max(top, h.ground(x - ux * R * k / 8, z - uz * R * k / 8));
       f.landed = false;
       f.pos.y = Math.max(h.ground(x, z) + f.cgH + 60, top + f.cgH + 45);
       f.u = 38; f.vel.set(Math.sin(yaw) * 38, 0, Math.cos(yaw) * 38);
@@ -123,8 +163,104 @@ export class Rescue {
       const a = h.home.yaw - Math.PI / 2, d = PAD_R + 9;
       this.amb.park(h.home.x + Math.sin(a) * d, h.home.z + Math.cos(a) * d, a);
     } catch (e) { console.warn('ambulance', e); this.amb = null; }
-    h.hud.flash('Rescue helicopter on its way', 'good', 2600);
+    if (cabin) this.intoCabin(msg);
+    else h.hud.flash(msg || 'Rescue helicopter on its way', 'good', 2600);
+    this.persistStep(0);
     return true;
+  }
+
+  // ------------------------------------------------------------------ kept across leaving and coming back
+  // (Oct 31 2026, the user: "also if you leave while being rescued because you wiped out, and you rejoin, the rescue
+  // should continue, not be abandoned": PERSIST_S above)
+  stage() {
+    if (this.phase === 'ambulance') return 'amb';
+    if (this.inCabin || this.phase === 'home' || this.phase === 'arrive' || this.phase === 'out') return 'cabin';
+    return this.attached || this.phase === 'hover' ? 'winch' : 'wait';
+  }
+  snap() {
+    const f = this.h.flight, st = this.stage(), c = this.pick || this.h.player.pos;
+    const r2 = (v) => Math.round((Number.isFinite(v) ? v : 0) * 100) / 100;
+    const o = { st, x: r2(c.x), y: r2(c.y), z: r2(c.z), t0: Math.round(this.t0 || Date.now()), at: Date.now(), free: !!this.free };
+    if (st === 'cabin') o.hp = [r2(f.pos.x), r2(f.pos.y), r2(f.pos.z), r2(f.yaw)];
+    return o;
+  }
+  // while it runs (after(), real seconds): on a change of stage at once, else every PERSIST_S
+  persistStep(dt) {
+    if (!this.phase || (this.leaving && this.phase === 'ambulance')) return; // (handed over at the door: release forgets it)
+    const st = this.stage();
+    if (st === this.persistSt && (this.persistT -= dt) > 0) return;
+    this.persistSt = st; this.persistT = PERSIST_S;
+    save.rescue = this.snap();
+    writeSave();
+  }
+  /** Leaving (the window closing, Electron quit): as it is now; multiplayer: straight to the server. */
+  persistNow() {
+    if (!this.phase) return;
+    const v = save.rescue = this.snap();
+    writeSave();
+    if (isMP() && net.open) net.send('profileSet', { key: 'rescue', value: v });
+  }
+  /** Back to the main menu / out of multiplayer (main.js backToMenu, before heli.abort): kept for when you play on. */
+  keep() { if (this.phase) { this.persistNow(); this.keepSave = true; } }
+  forget() {
+    this.persistSt = '';
+    if (!save.rescue) return;
+    save.rescue = null;
+    writeSave();
+    // (multiplayer: at once, not with the next push: quitting right after the bill must never bring it back to charge again)
+    if (isMP() && net.open) net.send('profileSet', { key: 'rescue', value: null });
+  }
+
+  /**
+   * A kept rescue (save.rescue) as it carries on now: null (none, or not a good one) or { kind: 'wait' (the helicopter
+   * comes for you again), 'cabin' (on in the cabin), 'bed' (straight into a hospital bed), 'done' (all over, out at the
+   * medical centre's door), rec, x, z, y, h (where to put you meanwhile, for main.js to stream around) }.
+   */
+  plan(rec = save.rescue, now = Date.now()) {
+    if (!rec || typeof rec !== 'object' || !STAGES.includes(rec.st) || ![rec.x, rec.z, rec.t0].every(Number.isFinite)) return null;
+    const door = this.door();
+    const late = now - rec.t0 > RESUME_MAX_S * 1000;
+    if (late || rec.st === 'amb') return { kind: late ? 'done' : 'bed', rec, x: door.x, z: door.z, h: door.h };
+    if (rec.st === 'cabin' && Array.isArray(rec.hp) && rec.hp.length === 4 && rec.hp.every(Number.isFinite)) return { kind: 'cabin', rec, x: rec.hp[0], z: rec.hp[2], h: rec.hp[3] };
+    return { kind: 'wait', rec, x: rec.x, z: rec.z, y: Number.isFinite(rec.y) ? rec.y : undefined, h: 0 };
+  }
+  /** Carry a kept rescue on (main.js startGame, the world streamed around plan's spot). */
+  resume(P, { fallback } = {}) {
+    const h = this.h, p = h.player, rec = P?.rec;
+    if (!rec) return false;
+    const o = { fallback, free: !!rec.free, t0: rec.t0 };
+    if (P.kind === 'wait') {
+      // down in the snow where you lay (or the rope), the helicopter close by
+      try { p.frozen = false; p.seat = null; p.teleport(rec.x, rec.z, p.heading, Number.isFinite(rec.y) ? rec.y : undefined); lieDown(p); } catch (e) { console.warn('rescue: lie down', e); }
+      if (this.start({ ...o, near: true, msg: 'Rescue continues · the helicopter is on its way' })) return true;
+    } else if (P.kind === 'cabin') {
+      if (this.start({ ...o, cabin: rec.hp, pick: rec, msg: 'Rescue continues · flying you back to Legacy Village' })) return true;
+    }
+    this.settle(rec, P.kind !== 'done'); // (could not carry it on here: the ambulance brought you in all the same)
+    return true;
+  }
+  // the rest of it at once: into a hospital bed (bed), else out at the medical centre's door; the bill (once)
+  settle(rec, bed) {
+    const h = this.h, p = h.player;
+    this.forget();
+    this.free = !!rec?.free;
+    let inBed = false;
+    if (bed && busRoads.hospital) { try { inBed = !!globalThis.__game?.hospitalWard?.admit?.(); } catch (e) { console.warn('hospital ward', e); } }
+    if (!inBed) {
+      const d = this.door();
+      p.seat = null; p.frozen = false;
+      p.standUp(d.x, d.z, d.h); p.camYaw = d.h + Math.PI;
+      p.rig.root.visible = true; p.rig.gear.visible = true;
+      p.rig.setSkisVisible(p.hasSkis);
+    }
+    this.charge(inBed ? 'Rescue continues · the ambulance brought you to the medical centre' : 'Rescued while you were away · treated at the medical centre and released');
+  }
+  // where you come out: the medical centre's door (facing it), else beside the pad
+  door() {
+    const h = this.h, H = busRoads.hospital;
+    if (H) return { x: H.ex + H.dirx * 2, z: H.ez + H.dirz * 2, h: Math.atan2(-H.dirx, -H.dirz) };
+    const a = h.home.yaw + Math.PI / 2, d = PAD_R + 3, x = h.home.x + Math.sin(a) * d, z = h.home.z + Math.cos(a) * d;
+    return { x, z, h: Math.atan2(h.home.x - x, h.home.z - z) };
   }
 
   // ------------------------------------------------------------------ the flight
@@ -297,6 +433,7 @@ export class Rescue {
     this.fast = !!input?.down?.('Space');
     const sdt = dt * (this.fast ? 4 : 1); // (SPACE: the waits and the winch run faster too)
     this.t += sdt; this.pt += sdt;
+    this.persistStep(dt); // (kept across leaving and coming back, Oct 31 2026)
     // aboard: a watchdog on the progress toward the pad / the medical centre (no clock on the ride itself)
     if (this.phase === 'home' || this.phase === 'ambulance') {
       const P = this.phase === 'home' ? h.flight.pos : this.amb.pos(_w);
@@ -332,6 +469,7 @@ export class Rescue {
     // stay down in the snow until you are picked up (the fall's own get-up waits)
     if (!this.attached && !this.inCabin) {
       p.frozen = true;
+      if (this.pick) { this.pick.x = p.pos.x; this.pick.y = p.pos.y; this.pick.z = p.pos.z; } // (where you lay: a rejoin picks you up there)
       if (p.mode === 'fall' && p.fall?.state === 'lie') p.fall.lieT = Math.min(p.fall.lieT, 0.3);
       if (p.mode === 'ski' || p.mode === 'walk') p.vel.set(0, 0, 0);
     }
@@ -434,7 +572,7 @@ export class Rescue {
   }
 
   // in the cabin, the pilot turns for home
-  intoCabin() {
+  intoCabin(msg = null) {
     const h = this.h, p = h.player, f = h.flight;
     if (!this.phase) return;
     p.viewBeforeRide = p.viewBeforeRide || p.view;
@@ -452,7 +590,8 @@ export class Rescue {
     h.placeCamera(0, true);
     h.pilot.home(h.home, 1.0);
     this.go('home');
-    h.hud.flash('Picked up · flying you back to Legacy Village', 'good', 2600);
+    h.hud.flash(msg || 'Picked up · flying you back to Legacy Village', 'good', 2600);
+    this.persistStep(0);
   }
 
   seatNow() {
@@ -546,9 +685,8 @@ export class Rescue {
     h.audio?.setSiren?.({ on: false });
     p.seat = null;
     h.model.clearRack();
-    const H = busRoads.hospital;
-    if (H) { const x = H.ex + H.dirx * 2, z = H.ez + H.dirz * 2, hd = Math.atan2(-H.dirx, -H.dirz); p.standUp(x, z, hd); p.camYaw = hd + Math.PI; } // (facing the door)
-    else { const a = h.home.yaw + Math.PI / 2, d = PAD_R + 3, x = h.home.x + Math.sin(a) * d, z = h.home.z + Math.cos(a) * d; p.standUp(x, z, Math.atan2(h.home.x - x, h.home.z - z)); }
+    const H = busRoads.hospital, D = this.door();
+    p.standUp(D.x, D.z, D.h); if (H) p.camYaw = D.h + Math.PI; // (facing the door; else beside the pad)
     if (p.viewBeforeRide) { p.view = p.viewBeforeRide; p.viewBeforeRide = null; }
     p.setSkisOn(false);
     p.frozen = false;
@@ -565,6 +703,7 @@ export class Rescue {
   // the ambulance fee, straight off your balance (it can go below zero: shops, lifts and passes then refuse)
   charge(what = 'Rescue and ambulance') {
     const h = this.h, fee = rescueFee();
+    this.forget(); // (over: nothing left to carry on after a rejoin, Oct 31 2026)
     if (this.free) { this.free = false; h.hud.flash(`${what} · free: it was not your fault`, 'good', 4200); return; }
     save.money -= fee;
     save.rescues = (save.rescues | 0) + 1;
@@ -608,6 +747,9 @@ export class Rescue {
   /** End the rescue (heli.abort / finish). */
   cleanup() {
     const p = this.h.player;
+    // (given up or ended from outside (heli.abort): forgotten; back to the main menu / out of multiplayer it is kept
+    // for when you play on: keep(), Oct 31 2026)
+    if (this.keepSave) this.keepSave = false; else if (this.phase) this.forget();
     if (this.liftT >= 0 || this.gone) { // (it had left after the hand-over: back on its pad, shown again)
       const h = this.h;
       this.liftT = -1; this.gone = false;

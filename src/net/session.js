@@ -323,6 +323,7 @@ export class Multiplayer {
       dayPass: p.dayPass ?? -1, tickets: p.tickets || 0,
       pos: p.pos && Number.isFinite(p.pos.x) ? { ...p.pos } : null, // (where you were: kept on the server, Oct 30)
       wanted: p.wanted && Number.isFinite(p.wanted.h) ? { ...p.wanted } : null, // (a police chase you left in: police.js resumes it)
+      rescue: p.rescue && typeof p.rescue.st === 'string' ? { ...p.rescue, ...(Array.isArray(p.rescue.hp) ? { hp: [...p.rescue.hp] } : {}) } : null, // (being rescued when you left: game/heli/rescue.js carries it on, Oct 31 2026)
     });
     // (the character you picked in the menu is the one you play)
     this.money = { server: p.money, pending: 0 };
@@ -398,6 +399,7 @@ export class Multiplayer {
     send('tickets', s.tickets || 0);
     if (s.pos) send('pos', s.pos); // (where you were: back there at your next login)
     send('wanted', s.wanted || null); // (a police chase under way: it carries on at your next login, game/police.js)
+    send('rescue', s.rescue || null); // (being rescued: it carries on at your next login, game/heli/rescue.js; Oct 31 2026)
   }
 
   // ---------------------------------------------------------------- money: the server's number wins

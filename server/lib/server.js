@@ -124,6 +124,7 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isInt = (v) => Number.isInteger(v);
 // the vehicle kinds 'veh' accepts (setVeh); /health lists them, so a redeploy can be checked from outside
 const VEH_KINDS = ['car', 'heli', 'tow', 'police', 'rescue', 'sled'];
+const RESCUE_STAGES = ['wait', 'winch', 'cabin', 'amb']; // (the profile's kept rescue: profileSet 'rescue', Oct 31 2026)
 const validAt = (a) => Array.isArray(a) && a.length === 4 && a.every(isNum); // [x, y, z, yaw]
 const str = (v, max = 64) => (typeof v === 'string' && v.length <= max ? v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1829,6 +1830,20 @@ export class GameServer {
         if (v === null) { delete P.wanted; break; }
         if (!v || typeof v !== 'object' || !isNum(v.h) || v.h < 1 || v.h >= 6 || !isNum(v.e) || v.e < 0 || v.e > 600 || !isNum(v.t) || v.t < 0 || v.t > 86400) return { err: 'bad_value' };
         P.wanted = { h: Math.round(v.h * 100) / 100, e: Math.round(v.e), t: Math.round(v.t), f: !!v.f, why: (str(v.why, 16) ?? '').replace(/[^\w-]/g, '') || 'resume' };
+        break;
+      }
+      case 'rescue': { // being rescued (game/heli/rescue.js persistStep): it carries on at your next login (Oct 31 2026, the
+        // user: "also if you leave while being rescued because you wiped out, and you rejoin, the rescue should continue, not
+        // be abandoned"): { st: 'wait' | 'winch' | 'cabin' | 'amb', x, y, z (where you lay), t0, at (ms, the client's clock),
+        // free (hit by a vehicle: no fee), hp [x, y, z, yaw] (aboard: the helicopter) }; null: over. The fee is the client's
+        // own charge at the end (a debit like any other); the helicopter others see is still the streamed 'veh' rescue
+        if (v === null) { delete P.rescue; break; }
+        const pos = (n) => isNum(n) && Math.abs(n) < 40000;
+        if (!v || typeof v !== 'object' || !RESCUE_STAGES.includes(v.st) || ![v.x, v.y, v.z].every(pos) || !isNum(v.t0) || v.t0 <= 0 || !isNum(v.at) || v.at <= 0) return { err: 'bad_value' };
+        if (v.hp != null && !(Array.isArray(v.hp) && v.hp.length === 4 && v.hp.every(pos))) return { err: 'bad_value' };
+        const r2 = (n) => Math.round(n * 100) / 100;
+        P.rescue = { st: v.st, x: r2(v.x), y: r2(v.y), z: r2(v.z), t0: Math.round(v.t0), at: Math.round(v.at), free: !!v.free };
+        if (v.hp != null) P.rescue.hp = v.hp.map(r2);
         break;
       }
       default: return { err: 'bad_key' };

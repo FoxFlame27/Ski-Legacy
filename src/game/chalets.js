@@ -25,6 +25,7 @@ import { chaletLampSpots, driveHeight, driveDistance, DRIVE_W } from './bus/chal
 import { loadGLB, fitModel, clusterDecimate, decimatedGeometry } from '../core/assets.js';
 import { addNightGlow, nightUniform } from '../world/village.js';
 import { addStreetLamps } from '../world/pistelights.js';
+import { breakables } from '../world/breakables.js'; // (the street lamps: snapped off by a car over 100 km/h)
 import { HX, HZ, G, DOOR, MODEL, FOOT, STEPS, IX, IZ } from './chaletplan.js';
 import { ChaletRoom, setChaletInterior } from './chaletroom.js';
 import { quality } from '../engine/quality.js';
@@ -264,8 +265,8 @@ export class Chalets {
     // the street lamps (Legacy Village's lamp post) along the Chaletweg, at the junction / bus stop and round the
     // car park: their light pools from now on (world/pistelights.js: no THREE lights), the posts in build()
     this.lamps = chaletLampSpots(this.V, this.items, this.colliders || []);
-    for (const l of this.lamps) { l.y = world.height(l.x, l.z) - 0.05; this.colliders?.push({ x: l.x, z: l.z, r: 0.22 }); }
-    addStreetLamps(this.lamps.map((l) => ({ x: l.x, z: l.z, y: l.y + LAMP_LIGHT_Y })));
+    for (const l of this.lamps) { l.y = world.height(l.x, l.z) - 0.05; if (this.colliders) this.colliders.push((l.c = { x: l.x, z: l.z, r: 0.22 })); }
+    addStreetLamps(this.lamps.map((l) => ({ x: l.x, z: l.z, y: l.y + LAMP_LIGHT_Y }))).forEach((s, i) => { this.lamps[i].light = s; });
     const first = this.houses[0];
     const r = this.V.road, road = [];
     for (let i = 0; i < r.n; i += 3) road.push([r.X[i], r.Z[i]]);
@@ -334,7 +335,10 @@ export class Chalets {
     if (lampGl && this.lamps.length) {
       const lamp = this.fit(lampGl, { size: LAMP_H, axis: 'y' });
       addNightGlow(lamp, 6);
-      this.instance(lamp, this.lamps.map((l) => M(l)), g, true);
+      const ims = this.instance(lamp, this.lamps.map((l) => M(l)), g, true);
+      // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec": each
+      // instance a breakable street lamp, its collider and light pool with it: world/breakables.js)
+      if (ims.length) this.lamps.forEach((l, k) => { if (l.c) breakables.add(l.c, ims.map((im) => [im, k]), { h: LAMP_H, loud: 0.7, lamp: true, light: l.light }); });
     }
     this.buildWindows(g);
     this.buildFences(g, by('fence'));

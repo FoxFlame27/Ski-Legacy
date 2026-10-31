@@ -642,7 +642,7 @@ export class Drive {
     const d = this.d, fx = Math.sin(d.yaw), fz = Math.cos(d.yaw);
     let px = 0, pz = 0, n = 0, solid = false, kind = 'snow';
     let rpx = 0, rpz = 0, rn = 0, rBest = 0, rK = -1; // (guardrails: their own push, a glancing collision below; the line hit hardest)
-    let mpCar = null, copCar = null, poles = 0;
+    let mpCar = null, copCar = null, poles = 0, lamps = 0;
     const R = d.w / 2, sp = Math.hypot(d.vx, d.vz);
     for (const k of [d.half - R, 0, -(d.half - R)]) {
       const cx = d.x + fx * k, cz = d.z + fz * k;
@@ -669,9 +669,11 @@ export class Drive {
       for (const c of this.colliders) {
         if (c === d.e.collider || cars.has(c) || c.rail || c.police === 'local' || (c.bus && !d.crash)) continue; // (other cars: bash(); guardrails: their line colliders; your patrol cars: police.js; the ski buses: bash() too, a heavy box you crash into (Oct 30 2026, "also make it so you can crash into a bus"), only a soft bump while your wreck slides)
         const size = c.r ?? Math.max(c.hw, c.hd);
-        if (c.breakable && sp > BREAK_V) { // (a little pole, a sign, a bollard: knocked flying, the car drives on: world/breakables.js)
+        // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph": a street lamp (minV) only over
+        // 100 km/h; slower, its collider below is solid as before, a knock / crash by the speed)
+        if (c.breakable && sp > (c.breakable.minV || BREAK_V)) { // (a little pole, a sign, a bollard: knocked flying, the car drives on: world/breakables.js)
           const reach = size + R, dx = c.x - cx, dz = c.z - cz;
-          if (dx * dx + dz * dz < reach * reach && breakables.knock(c.breakable, d.vx, d.vz)) poles++;
+          if (dx * dx + dz * dz < reach * reach && breakables.knock(c.breakable, d.vx, d.vz)) { poles++; if (c.breakable.lamp) lamps++; }
           continue;
         }
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
@@ -696,6 +698,15 @@ export class Drive {
           }
         }
       }
+    }
+    // (a street lamp snapped off: heavier, ~15 % of the speed gone and a small damage knock, never a crash-stop)
+    if (lamps) {
+      d.vx *= 0.85; d.vz *= 0.85; d.pitchV -= 0.1;
+      const e = d.e; e.damage = Math.min(99, (e.damage || 0) + 2 * lamps);
+      const l = Math.hypot(d.vx, d.vz) || 1;
+      try { this.dent(-d.vx / l, -d.vz / l, 0.25); } catch (err) { console.warn('drive: dent', err); }
+      this.shake = Math.max(this.shake || 0, 0.3);
+      this.hud?.flash(`Lamp post down · car damage ${Math.round(e.damage)}%`, 'bad', 1500);
     }
     if (poles) { const f = Math.max(0.8, 1 - 0.05 * poles); d.vx *= f; d.vz *= f; d.pitchV -= 0.05; d.rollV += (Math.random() - 0.5) * 0.08; } // (a clack, a little speed lost)
     if (rn) this.railHit(rpx, rpz, rK);

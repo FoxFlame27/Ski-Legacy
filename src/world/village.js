@@ -6,6 +6,7 @@ import { Snowmaking } from './snowmaking.js';
 import { drawnHeight } from './settle.js';
 import { addStreetLamps } from './pistelights.js';
 import { cannonSpotsFull } from './layout.js';
+import { breakables } from './breakables.js'; // (the street lamps: snapped off by a car over 100 km/h)
 
 export const nightUniform = { value: 0 };
 
@@ -222,6 +223,7 @@ export class Village {
       lampSpots.push([Math.cos(a) * 34, Math.sin(a) * 34 - 6]);
     }
     lampSpots.push([-6, -36], [12, -36], [-26, -6], [-30, -30]);
+    const lampBrk = []; // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec": world/breakables.js)
     for (const [x, z] of lampSpots) {
       let lamp;
       if (models.lamp_post) {
@@ -238,11 +240,13 @@ export class Village {
         lamp.add(pole, bulb);
       }
       add(placeOnGround(lamp, x, z, faceTo(x, z, 0, -6), 0.05));
-      colliders.push({ x, z, r: 0.25 });
+      const lc = { x, z, r: 0.25 };
+      colliders.push(lc);
+      lampBrk.push(breakables.add(lc, [lamp], { h: 3.6, loud: 0.7, lamp: true }));
     }
     // every lamp lights a warm pool on the snow, the people and the hotels round it at night: the floodlights'
     // light pools (world/pistelights.js), no THREE lights (they were six PointLights, every material paying for them)
-    addStreetLamps(lampSpots.map(([x, z]) => ({ x, z, y: world.height(x, z) + 3.1 })));
+    addStreetLamps(lampSpots.map(([x, z]) => ({ x, z, y: world.height(x, z) + 3.1 }))).forEach((l, i) => { if (lampBrk[i]) lampBrk[i].light = l; }); // (its pool off while it is down)
 
     // --- summit restaurant ---
     for (const hut of layout.huts) {

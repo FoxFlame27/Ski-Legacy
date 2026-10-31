@@ -494,7 +494,7 @@ export class Snowmobiles {
         if (c === d.s.collider) continue;
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;
-        if (c.breakable && d.vx * d.vx + d.vz * d.vz > BREAK_V * BREAK_V) { // (a piste marker, a snow pole: knocked flying: world/breakables.js)
+        if (c.breakable && d.vx * d.vx + d.vz * d.vz > (c.breakable.minV || BREAK_V) ** 2) { // (minV: a street lamp only over 100 km/h, Oct 31 2026) // (a piste marker, a snow pole: knocked flying: world/breakables.js)
           const reach = size + R, dx = c.x - cx, dz = c.z - cz;
           if (dx * dx + dz * dz < reach * reach && breakables.knock(c.breakable, d.vx, d.vz)) { d.vx *= 0.95; d.vz *= 0.95; }
           continue;

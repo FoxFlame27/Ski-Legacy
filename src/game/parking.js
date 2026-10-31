@@ -205,6 +205,9 @@ export class ParkingLots {
           const b = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), this.bulbMat);
           b.position.set(x - L.vx * side * 0.35, world.height(x, z) + 5.15, z - L.vz * side * 0.35);
           this.group.add(b);
+          // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec":
+          // the post and its bulb snapped off together, back after 90 s: world/breakables.js)
+          breakables.add(colliders[colliders.length - 1], [lamp, b], { h: 5.6, loud: 0.7, lamp: true });
         }
       }
     }

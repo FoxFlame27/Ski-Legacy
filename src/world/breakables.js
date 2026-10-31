@@ -26,6 +26,13 @@ export const BREAK_V = 8 / 3.6; // m/s: slower than this a pole is just a bump
 // (Oct 31 2026: an AI car through a guardrail: your car's rule, drive.js RAIL_BREAK_V / RAIL_BREAK_SIN: over 100 km/h
 // and into it at 15 deg or more; aiRail)
 export const AI_RAIL_V = 100 / 3.6, AI_RAIL_SIN = Math.sin(15 * Math.PI / 180);
+// (Oct 31 2026, the user: "make sure you break these lamps after 100 kph, and they respawn after 90 sec": the street
+// lamps (the Meshy lamp post: the village plaza, the Chaletweg, the car parks) are breakables of the 'lamp' kind
+// (add(.., { lamp: true })): only a car faster than LAMP_V snaps one off (e.minV; drive.js, sweep()); at 100 km/h or
+// less its collider stays solid, today's knock / crash. Down: heavier than a pole (a lower, slower arc, less spin),
+// the lantern's glass shatters (a tinkle), its light pool off (e.light.out: world/pistelights.js), back with it after
+// the same 90 s out of view; synced as a 'pole' ('brk': the server knows 'pole' | 'rail', the id its spot))
+export const LAMP_V = 100 / 3.6;
 const RESPAWN = 90;             // s
 const GROW_AFTER = 120;         // s past RESPAWN: still in view and near, it grows back in anyway
 const NEAR = 25;                // m: closer than this (and in view) it waits
@@ -82,13 +89,14 @@ class Breakables {
    * each [instancedMesh, index] or an Object3D (kept out of merges and of world/solidify.js from now on).
    * o.h: its height (m); o.kind: the impact sound ('metal'); o.loud: 0..1 how loud its clack is.
    */
-  add(collider, parts, { h = collider?.h ?? 1.5, kind = 'metal', loud = 0.5 } = {}) {
+  add(collider, parts, { h = collider?.h ?? 1.5, kind = 'metal', loud = 0.5, lamp = false, light = null } = {}) {
     if (!collider || !parts?.length || !Number.isFinite(collider.x)) return null;
     const e = {
       c: collider, h, kind, loud, down: false, t: 0, grow: -1, x: collider.x, z: collider.z, copy: null, stamp: 0,
       parts: parts.map((p) => (Array.isArray(p) ? { im: p[0], k: p[1], m0: new Float32Array(16) } : { obj: p, s0: new THREE.Vector3() })),
       p: new THREE.Vector3(), v: new THREE.Vector3(), w: new THREE.Vector3(), base: 0, rest: 0, bounces: 0,
       nk: 'pole', nid: spotId(collider.x, collider.z),
+      lamp, minV: lamp ? LAMP_V : BREAK_V, light, // (a street lamp: only over 100 km/h; its light pool, off while down)
     };
     for (const p of e.parts) if (p.obj) { p.obj.userData.noMerge = true; p.obj.userData.noCollide = true; }
     else if (p.im) p.im.userData.noCollide = true; // (no solid box from world/solidify.js round it: it would stop the car short, a knock with damage)
@@ -277,7 +285,7 @@ class Breakables {
         if (!cell) continue;
         for (let i = 0; i < cell.length; i++) {
           const e = cell[i];
-          if (e.down) continue;
+          if (e.down || (e.minV > BREAK_V && vx * vx + vz * vz <= e.minV * e.minV)) continue; // (a street lamp: only over 100 km/h)
           const reach = r + (e.c.r ?? Math.max(e.c.hw || 0, e.c.hd || 0));
           const dx = e.x - x, dz = e.z - z;
           if (dx * dx + dz * dz < reach * reach && this.knock(e, vx, vz)) n++;
@@ -304,16 +312,18 @@ class Breakables {
       } else { p.s0.copy(p.obj.scale); p.obj.visible = false; }
     }
     e.c.x = 1e9; e.c.z = 1e9;
+    if (e.light) e.light.out = true; // (a street lamp's pool of light: off while it lies in the snow)
     e.down = true; e.t = 0; e.grow = -1; e.rest = 0; e.bounces = 0;
     this.down.push(e);
     // the flight: off the bumper, a kick up, a tumble
     const sp = Math.hypot(vx, vz), k = Math.min(1, 16 / Math.max(sp, 1e-3)) * 1.05; // (never faster than ~17 m/s)
     e.p.set(e.x, e.cy ?? e.base + e.h * 0.5, e.z);
     if (fv) { e.v.set(fv[0], fv[1], fv[2]); vx = fv[0]; vz = fv[2]; }
+    else if (e.lamp) e.v.set(vx * k * 0.7 + (Math.random() - 0.5), Math.min(3.2, 1 + sp * 0.07), vz * k * 0.7 + (Math.random() - 0.5)); // (a heavy cast-iron post: lower, shorter)
     else e.v.set(vx * k + (Math.random() - 0.5) * 1.5, Math.min(7, 2 + sp * 0.3), vz * k + (Math.random() - 0.5) * 1.5);
     _a.set(vz, 0, -vx).normalize();
-    e.w.copy(_a).multiplyScalar(4 + Math.random() * 5);
-    e.w.y += (Math.random() - 0.5) * 4;
+    e.w.copy(_a).multiplyScalar((4 + Math.random() * 5) * (e.lamp ? 0.5 : 1));
+    e.w.y += (Math.random() - 0.5) * (e.lamp ? 1.5 : 4);
     copy.position.copy(e.p); if (e.q0) copy.quaternion.copy(e.q0); else copy.quaternion.identity(); copy.scale.setScalar(1);
     this.scene.add(copy);
     // the clack (quieter far from the camera: the traffic's)
@@ -321,6 +331,8 @@ class Breakables {
       const cam = this.camera?.position, d = cam ? Math.hypot(cam.x - e.x, cam.z - e.z) : 0;
       const amt = e.loud * Math.min(1, 0.35 + sp / 25) * Math.max(0, 1 - d / 80);
       if (amt > 0.03 && !this.silent) try { this.audio.impact(e.kind, amt); } catch { /* (silent) */ }
+      // (a street lamp: its lantern's glass shattering, a tinkle just after the clang)
+      if (e.lamp && amt > 0.03 && !this.silent) try { this.audio.shot?.('glass', { sprite: true, vol: 0.3 + 0.5 * amt, rate: 1.1 + Math.random() * 0.2, delay: 0.04 }); } catch { /* (silent) */ }
     }
     if (this.send && !this.quiet && e.nk) this.emit(e);
     return true;
@@ -450,6 +462,7 @@ class Breakables {
       } else { p.obj.scale.copy(p.s0); p.obj.visible = true; }
     }
     e.c.x = e.x; e.c.z = e.z;
+    if (e.light) e.light.out = false; // (the street lamp's light back on with it)
     e.down = false; e.grow = -1;
     if (e.copy?.parent) e.copy.parent.remove(e.copy);
     const i = this.down.indexOf(e);

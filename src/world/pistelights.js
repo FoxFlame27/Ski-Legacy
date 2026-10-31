@@ -1200,7 +1200,7 @@ export class PisteLights {
         if (!cell) continue;
         for (let t = 0; t < cell.length; t++) {
           const m = lights[cell[t]];
-          if (m.on <= 0) continue;
+          if (m.on <= 0 || m.out) continue; // (out: a street lamp knocked down, world/breakables.js, Oct 31 2026)
           const dd = (m.lx - cam.x) ** 2 + (m.ly - cam.y) ** 2 + (m.lz - cam.z) ** 2;
           if (dd > R * R) continue;
           const d2 = Math.sqrt(dd) - (m.R || PL_RANGE); // (the key: how near its light comes)

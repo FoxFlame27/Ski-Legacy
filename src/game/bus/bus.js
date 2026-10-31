@@ -600,11 +600,19 @@ function roadStrip(r, MH) {
   // a stop on the way (one road ends where the next one starts): both strips end on the same cross-section (the
   // bisector of their headings) and the texture runs on (v carries on from the road before), so they meet edge to
   // edge; before, the two strips overlapped in a wedge at the stop and z-fought (crossed light / dark bands)
-  const prev = r.access ? null : busRoads.roads.find((o) => !o.access && o.to === r.from);
-  const nexts = r.access ? [] : busRoads.roads.filter((o) => !o.access && o.from === r.to);
+  // (Oct 31 2026, the user, with a screenshot of the Legacy Village stop, 116 m from the gondola: "fix road stuff like
+  // these": the Depotweg (an access road, depot.js) carries on from the village road's start at the stop, but the two
+  // strips each ended square on their own heading (68.6 deg against 63.4 deg) with the texture starting afresh: one
+  // lay over the other in a wedge with a straight seam across the asphalt, the edge lines crossed and the dashed centre
+  // line stopped in the middle with the other's starting offset. Now it is one more stop on the way: the same bisector
+  // cross-section for both, the Depotweg's v running on into the village road's (and on down the valley roads after it))
+  const dep = busRoads.depot;
+  const before = (q) => (dep && q === dep.R0 ? dep.road : busRoads.roads.find((o) => !o.access && o.to === q.from));
+  const prev = dep && r === dep.R0 ? dep.road : r.access ? null : before(r);
+  const nexts = dep && r === dep.road ? [dep.R0] : r.access ? [] : busRoads.roads.filter((o) => !o.access && o.from === r.to);
   const next = nexts.length === 1 ? nexts[0] : null;
   let v0 = 0;
-  for (let q = prev, g = 0; q && g < 20; g++) { v0 += q.length; q = busRoads.roads.find((o) => !o.access && o.to === q.from); }
+  for (let q = prev, g = 0; q && g < 20; g++) { v0 += q.length; q = before(q); }
   const jointDir = (a, b) => { // (unit) bisector of road a's last heading and road b's first
     const d0 = roadDir(a, a.n - 1), d1 = roadDir(b, 0), x = d0[0] + d1[0], z = d0[1] + d1[1], l = Math.hypot(x, z);
     return l > 0.2 ? [x / l, z / l] : null;

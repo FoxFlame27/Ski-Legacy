@@ -4,7 +4,12 @@ import { MP } from '../net/mode.js';
 
 export const SKIS = [
   { id: 'rental', name: 'Rental Carver', model: 'ski_rental', price: 50, rent: true, speed: 1.0, grip: 1.0, desc: 'Basic rental skis. Forgiving and slow-ish. Returned at the end of your stay.' },
-  { id: 'cruiser', name: 'Alpine Cruiser 160', model: 'ski_cruiser', fallback: 'ski_rental', price: 300, speed: 1.015, grip: 1.05, desc: 'Easy-going beginner ski. Smooth and forgiving, a touch quicker than the rentals.' },
+  // (Oct 31 2026, the user: "also replace the Alpine skis 160 with some other skis, use Meshy for the ski models": the
+  // Alpine Cruiser 160 (ski_cruiser.glb, left in public/models unused) is now the Pistenfuchs 165, a new Meshy
+  // all-mountain carver (tools/meshy-ski.mjs -> ski_pistenfuchs.glb). Same id 'cruiser', price and stats, so saves
+  // that own or wear it keep working; only the name, desc and model changed. main.js loads every SKIS model and
+  // player/skier.js fits it to the boots / back like the other Meshy skis: length along +X, binding up +Y)
+  { id: 'cruiser', name: 'Pistenfuchs 165', model: 'ski_pistenfuchs', fallback: 'ski_rental', price: 300, speed: 1.015, grip: 1.05, desc: 'All-mountain carver with a slight rocker tip. Easy to turn, a touch quicker than the rentals.' },
   { id: 'sport', name: 'Sport All-Mountain 170', model: 'ski_sport', price: 800, speed: 1.03, grip: 1.08, desc: 'Lively all-mountain ski. +3% glide speed, better edge hold.' },
   { id: 'park', name: 'Twin Tip Park 168', model: 'ski_park', fallback: 'ski_sport', price: 1000, speed: 1.02, grip: 1.1, desc: 'Twin-tip freestyle ski for the park. Pops off kickers, lands switch.' },
   { id: 'powder', name: 'Powder Hound 184', model: 'ski_powder', fallback: 'ski_sport', price: 1200, speed: 1.03, grip: 1.12, desc: 'Wide freeride ski. Floats off-piste and stays calm at speed.' },

@@ -324,7 +324,9 @@ export function makeGlint() {
 // The casualty's skis: the shop's Meshy rental ski (another loaded ski model as a stand-in), turned into the
 // frame used below: along +y from the tail (y = 0) to the tip (1.68 m), top sheet and binding toward +z.
 // (Meshy skis lie along the file's +x, tip at +x, binding up +y: see player/skier.js)
-const SKI_MODELS = ['ski_rental', 'ski_sport', 'ski_pro', 'ski_cruiser'];
+// (Oct 31 2026, the user's "replace the Alpine skis 160 with some other skis": ski_cruiser is no longer loaded, the
+// shop's beginner ski is the Meshy ski_pistenfuchs now)
+const SKI_MODELS = ['ski_rental', 'ski_sport', 'ski_pro', 'ski_pistenfuchs'];
 let skiGeo = null, skiMat = null;
 function skiPiece() {
   if (skiGeo === null) {

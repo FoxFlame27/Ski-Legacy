@@ -147,6 +147,10 @@ function eigen3(m) {
 // the tip is the end that curls up more (+X when both curl alike).
 const SKI_FRAMES = {
   ski_park: { tip: '-x' }, // the long yellow shovel
+  // (Oct 31 2026, the user: "replace the Alpine skis 160 with some other skis, use Meshy": the Pistenfuchs 165,
+  // tools/meshy-ski.mjs. Both ends curl up alike, so the tip is noted: +X, the binding sits a little behind the
+  // middle toward -X like a real mounting point; length along X, binding up +Y like the other Meshy skis)
+  ski_pistenfuchs: { tip: '+x' },
 };
 const AXES = { '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0], '+z': [0, 0, 1], '-z': [0, 0, -1] };
 

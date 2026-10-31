@@ -447,7 +447,7 @@ export class Impound {
         : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', 'Pull into the bay, inside the lines']
         : [false, 'Not in a bay', 'Pull into a free bay, inside the lines'];
     } else if (sp?.kind === 'mouth' && v < 1) t = [false, 'Blocking the entrance', 'Drive in and park in a bay'];
-    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', `Leave it here and it will be moved to the Autohaus car park in ${clock(TOW_AFTER)} · park in a car park or a lay-by`]; // (Oct 30, the user: "and indicate it to the user"; Oct 30 2026: "spawn it next to the dealership lot")
+    else if (sp?.kind === 'snow' && v < 1) t = [false, 'Not a parking spot', 'Park in a car park']; // (Oct 30, the user: "and indicate it to the user"; Oct 31 2026: "only say park in a car park")
     this.parkHud(t, true);
   }
 

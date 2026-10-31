@@ -161,6 +161,29 @@ export const DENTS_MAX = 12;
 const validDents = (a) => Array.isArray(a) && a.length <= DENTS_MAX && a.every((d) => Array.isArray(d) && d.length === 6 && d.every((x) => isNum(x) && Math.abs(x) <= 100));
 /** The look of a car everyone sees ('veh' cfg): model, paint, trim, rims, plate; its dents while it has any. */
 const carLook = (car) => ({ id: car.id, paint: car.paint, interior: car.interior, rims: car.rims, plate: car.plate, ...(car.dents?.length ? { dents: car.dents } : {}) });
+// (Oct 31 2026, the user: "how come another player can see all his cars in the parking lot, but I only see 1 of them?
+// Fix that, everyone sees all of the cars someone else owns"): a spot [x, y, z, yaw] in the world, numbers in range
+// (the 40 km the rescue's positions allow; a yaw of a few turns, wrapped), rounded to the cm
+const spotOk = (a) => validAt(a) && Math.abs(a[0]) < 40000 && Math.abs(a[2]) < 40000 && a[1] > -2000 && a[1] < 20000 && Math.abs(a[3]) < 100;
+const spotOf = (a) => [a[0], a[1], a[2], Math.atan2(Math.sin(a[3]), Math.cos(a[3]))].map((x) => Math.round(x * 100) / 100);
+/** A car of yours held away from the world: on the tow truck, or in the tow yard until its time is up. */
+const carHeld = (car, now = Date.now()) => !!(car.tow || (car.impound && (!Number.isFinite(car.impound.until) || now < car.impound.until)));
+/** Your other cars parked in the world, as everyone draws them ('parked'; publicInfo.parked): every car you own but
+ *  the one out (cars[0]: its own 'veh' record, driven or parked) with a parked spot (cars[i].at), none held by the
+ *  tow truck or the tow yard. { plate, cfg (carLook), at, tilt?, wreck? } (tilt / wreck: look, the client's last
+ *  report, never stored). */
+function parkedOf(P, look = null, now = Date.now()) {
+  const out = [], L = P?.cars || [];
+  for (let i = 1; i < L.length; i++) {
+    const car = L[i];
+    if (!car || !Array.isArray(car.at) || carHeld(car, now)) continue;
+    const e = { plate: car.plate, cfg: carLook(car), at: car.at }, l = look?.get(plateKey(car.plate));
+    if (l?.tilt) e.tilt = l.tilt;
+    if (l?.wreck) e.wreck = true;
+    out.push(e);
+  }
+  return out;
+}
 
 function newProfile(name) {
   return {
@@ -715,6 +738,8 @@ class Client {
     this.interior = null;  // server-approved interior id ('skishop', 'carrental', 'chalet:7', ...)
     this.seat = null;      // { k, v, seat }
     this.vehs = { car: null, heli: null, tow: null, police: null, rescue: null, sled: null }; // the vehicles you show: { k: 'car', cfg, at? }, { k: 'heli', id, at? }, { k: 'tow', at, v, car } (setVeh)
+    this.parkLook = null;  // your other cars' tilt / wreck as last reported: plate key -> { tilt?, wreck? } (parked)
+    this.parkedSig = null; // the 'parked' list everyone was last sent (parkedOut: only a change goes out)
     this.queue = null;     // race id queued for
     this.plot = null;      // the chalet plot your chalet stands on while you are online (null: none / waiting for one)
     this.chaletWaiting = false; // you own a chalet but every plot is taken: it is placed when one frees up
@@ -728,7 +753,7 @@ class Client {
   sendRaw(s) { if (this.ws && this.ws.readyState === 1) this.ws.send(s); }
   send(t, d) { this.sendRaw(JSON.stringify({ t, d })); }
   res(id, ok, d, err) { if (id == null) return; this.sendRaw(JSON.stringify(ok ? { t: 'res', id, ok: true, d } : { t: 'res', id, ok: false, err, d })); }
-  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.plot, vehs: this.vehs, tt: this.tt || null }; }
+  publicInfo() { return { pid: this.pid, name: this.name, look: this.look, pres: this.pres, interior: this.interior, chalet: this.plot, vehs: this.vehs, parked: parkedOf(this.profile, this.parkLook), tt: this.tt || null }; } // (parked: your other cars in the world, Oct 31 2026)
 }
 
 // ------------------------------------------------------------------ the server
@@ -1197,6 +1222,7 @@ export class GameServer {
       case 'veh': return reply(this.setVeh(c, d));
       case 'tow': return reply(this.tow(c, d));
       case 'towDone': return reply(this.towDone(c));
+      case 'parked': return reply(this.parked(c, d));
       case 'carRepair': return reply(this.carRepair(c, d));
       case 'carDamage': return reply(this.carDamage(c, d));
       case 'raceJoin': return reply(w.raceJoin(c, d));
@@ -1442,6 +1468,7 @@ export class GameServer {
     if (!this.debit(c, fee, 'repair')) return { err: 'money', d: { money: P.money, fee } };
     this.clearDamage(c, car);
     this.store.profiles.save();
+    if (car !== P.cars[0]) this.parkedOut(c);
     return { d: { money: P.money, fee } };
   }
   /** Your car's crash damage, kept on it (game/carrental.js carDamage): { plate?, damage (0..1), dents } (the car out
@@ -1462,6 +1489,7 @@ export class GameServer {
       this.showLook(c, car);
     }
     this.store.profiles.save();
+    if (car !== P.cars[0]) this.parkedOut(c); // (one of your other cars: its dents as everyone draws it)
     return { d: { damage: car.damage || 0, dents: car.dents || [] } };
   }
   clearDamage(c, car) {
@@ -1480,7 +1508,47 @@ export class GameServer {
   towDone(c) {
     this.settleCar(c);
     if (c.vehs.tow) this.setVeh(c, { k: 'tow', off: true });
+    this.parkedOut(c); // (one of your other cars home from the truck: in its bay for everyone)
     return { d: { at: c.profile.cars?.[0]?.at || null } };
+  }
+  /** Your other cars parked in the world (carrental.js kept; net/carride.js keptFrame, sent when one moves, comes or
+   *  goes): { cars: [{ plate, at: [x, y, z, yaw], tilt?: [pitch, roll], wreck? }] }, the whole list: a car of yours
+   *  not in it is in your garage (no spot). The one out (cars[0]) is its 'veh' record's; a car the tow truck or the tow
+   *  yard holds keeps the spot the tow gave it. Kept in the profile (cars[i].at); everyone told ('parked') on a change. */
+  // (Oct 31 2026, the user: "how come another player can see all his cars in the parking lot, but I only see 1 of
+  // them? Fix that, everyone sees all of the cars someone else owns")
+  parked(c, d) {
+    const P = c.profile, L = d?.cars;
+    if (!Array.isArray(L) || L.length > (CATALOG.garageMax ?? 10)) return { err: 'bad_value' };
+    const got = new Map();
+    for (const e of L) {
+      if (!e || typeof e !== 'object' || !spotOk(e.at)) return { err: 'bad_value' };
+      if (e.tilt != null && !(Array.isArray(e.tilt) && e.tilt.length === 2 && e.tilt.every(isNum))) return { err: 'bad_value' };
+      const k = plateKey(e.plate);
+      if (k) got.set(k, e);
+    }
+    const look = new Map(), now = Date.now();
+    let dirty = false;
+    for (let i = 1; i < (P.cars || []).length; i++) {
+      const car = P.cars[i], k = plateKey(car.plate), e = got.get(k);
+      if (carHeld(car, now)) continue;
+      if (!e) { if (car.at) { delete car.at; dirty = true; } continue; }
+      const at = spotOf(e.at);
+      if (!Array.isArray(car.at) || at.some((x, j) => x !== car.at[j])) { car.at = at; dirty = true; }
+      const l = {};
+      if (e.tilt && (Math.abs(e.tilt[0]) > 0.03 || Math.abs(e.tilt[1]) > 0.03)) l.tilt = e.tilt.map((x) => Math.round(clamp(x, -3.15, 3.15) * 100) / 100);
+      if (e.wreck) l.wreck = true;
+      if (l.tilt || l.wreck) look.set(k, l);
+    }
+    c.parkLook = look.size ? look : null;
+    if (dirty) this.store.profiles.save();
+    return { d: { parked: this.parkedOut(c) } };
+  }
+  /** Everyone else in your world told your other cars' spots ('parked' { pid, cars }), when the list changed. */
+  parkedOut(c) {
+    const list = parkedOf(c.profile, c.parkLook), sig = JSON.stringify(list);
+    if (sig !== c.parkedSig) { c.parkedSig = sig; c.world?.broadcast('parked', { pid: c.pid, cars: list }, c); }
+    return list;
   }
   /** A tow that never finished (the owner left mid-tow, the server restarted) ends where it was going; an impound
    *  whose day has passed is lifted. */
@@ -1735,11 +1803,13 @@ export class GameServer {
       const price = base + CATALOG.paints[paint] + CATALOG.interiors[interior] + CATALOG.rims[rims] + (custom ? CATALOG.plateCost : 0);
       if (!this.debit(c, price, 'car')) return { err: 'money', d: { money: P.money } };
       const car = { id: cfg.id, paint, interior, rims, plate, custom, price, since: Date.now() };
-      if (P.cars[0]) delete P.cars[0].at; // (the one out before goes home to your garage)
+      // (the one out before stays parked where it is (carrental.js keepCurrent): its spot kept, one of your other cars
+      // now that everyone sees ('parked'); the client's report takes it home if it went to the garage, Oct 31 2026)
       P.cars.unshift(car);
       this.plates.set(plateKey(plate), c.key);
       if (c.vehs.car) this.setVeh(c, { k: 'car' }); // (the car everyone sees is the new one)
       this.store.profiles.save();
+      this.parkedOut(c);
       return { d: { money: P.money, car, price, cars: P.cars } };
     }
     return { err: 'bad_kind' };
@@ -1755,6 +1825,7 @@ export class GameServer {
     if (this.plates.get(k) === c.key) this.plates.delete(k);
     if (i === 0 && c.vehs.car) this.setVeh(c, { k: 'car', off: true });
     this.store.profiles.save();
+    this.parkedOut(c);
     return { d: { cars: P.cars } };
   }
   /** AUTOHAUS: another car of yours out (free): it moves to cars[0] and starts in your bay (no parked spot). */
@@ -1764,10 +1835,11 @@ export class GameServer {
     if (!k || i < 0) return { err: 'no_car' };
     if (i > 0) {
       const [car] = P.cars.splice(i, 1);
-      delete P.cars[0].at; delete car.at;
+      delete car.at; // (the one out before keeps its spot: it stays parked where it is, one of your other cars now (the client's 'parked' report keeps it right, or takes it home), Oct 31 2026)
       P.cars.unshift(car);
       if (c.vehs.car) this.setVeh(c, { k: 'car', off: true }); // (the client shows the new one in its bay: veh again)
       this.store.profiles.save();
+      this.parkedOut(c);
     }
     return { d: { cars: P.cars } };
   }
@@ -1786,6 +1858,7 @@ export class GameServer {
     if (i === 0 && c.vehs.car) this.setVeh(c, { k: 'car', off: true });
     if (refund > 0) this.credit(c, refund, 'carSell');
     this.store.profiles.save();
+    this.parkedOut(c);
     return { d: { money: P.money, refund, cars: P.cars } };
   }
 

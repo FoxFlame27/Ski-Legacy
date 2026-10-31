@@ -208,6 +208,7 @@ export class Multiplayer {
     on('jailBoard', (d) => { MP.jailBoard = Array.isArray(d?.top) ? d.top : []; }); // (the top 3 changed: prison.js redraws its posters)
     on('arrested', (d) => this.carRide.onArrested(d)); // (the driver of the car you ride in was arrested: you too)
     on('veh', (d) => this.remotes?.setVeh(d.pid, d.k, d.veh));
+    on('parked', (d) => this.remotes?.setParked(d.pid, d.cars)); // (every other car of theirs parked in the world, Oct 31 2026)
     // poles / signs knocked flying, guardrail sections broken through: yours to the server, everyone else's here
     breakables.send = (d) => { if (MP.active) net.send('brk', d); };
     on('brk', (d) => { try { breakables.remote(d); } catch (e) { console.warn('[mp] brk', e); } });

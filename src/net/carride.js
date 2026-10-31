@@ -105,9 +105,39 @@ export class CarRide {
       }
     }
     this.ownerTag(cur, driving);
+    if (this.placed) this.keptFrame(dt, g);
     // riding: something else took you out of the seat (a race start, a teleport): the server lets you go too
     if (this.ride && g.player.seat !== this.seat) this.end(false);
     this.wantedFrame(g);
+  }
+
+  // Your other cars parked in the world (carrental.js kept: spawnKept's bays, the one out before staying where it is
+  // parked (keepCurrent), a repaired wreck's free bay, MY CARS, impound.js letting one out): their spots to the server
+  // ('parked', the whole list; one not in it is in your garage), so everyone draws them in the same bays (Oct 31
+  // 2026, the user: "how come another player can see all his cars in the parking lot, but I only see 1 of them? Fix
+  // that, everyone sees all of the cars someone else owns"). Checked twice a second, sent only when one moved (0.5 m),
+  // came or went. Not the one out (its 'veh' record), nor one the tow truck or the tow yard has.
+  keptFrame(dt, g) {
+    const K = this.k ||= { t: 0, sig: null };
+    if ((K.t -= dt) > 0) return;
+    K.t = 0.5;
+    const R = g.carRental;
+    if (!R) return;
+    const list = [];
+    let sig = '';
+    for (const e of R.kept || []) {
+      if (!e?.car?.parent || e === R.current || e.driving || e.impound || e.towing || R.withTruck?.(e) || !e.cfg?.plate) continue;
+      const p = e.car.position;
+      _eu.setFromQuaternion(e.car.quaternion, 'YXZ');
+      const m = { plate: e.cfg.plate, at: [p.x, p.y, p.z, _eu.y] };
+      if (Math.abs(_eu.x) > 0.03 || Math.abs(_eu.z) > 0.03) m.tilt = [_eu.x, _eu.z];
+      if (e.wrecked) m.wreck = true;
+      list.push(m);
+      sig += `${e.cfg.plate}@${Math.round(p.x * 2)},${Math.round(p.z * 2)},${Math.round(_eu.y * 20)}${m.wreck ? 'w' : ''};`;
+    }
+    if (sig === K.sig) return;
+    K.sig = sig;
+    net.request('parked', { cars: list }).catch(() => { K.sig = null; }); // (refused / dropped: again next check)
   }
 
   // Riding with a wanted driver (the stars in their presence flags, police.js wantedBits): the WANTED box for you too,
@@ -168,13 +198,20 @@ export class CarRide {
   }
   /** Another player's parked car within r m of (x, z)? (impound.js: an impound bay nobody's car stands in) */
   carNear(x, z, r = 2) {
-    for (const p of this.mp.remotes?.players.values() || []) { const a = p.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < r) return true; }
+    for (const p of this.mp.remotes?.players.values() || []) {
+      const a = p.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < r) return true;
+      for (const e of p.vparked || []) { const b = e?.at; if (b && Math.hypot(b[0] - x, b[2] - z) < r) return true; } // (their other cars too, Oct 31 2026)
+    }
     return false;
   }
   spotFree(x, z, own, near = 4.5) {
     const g = this.g;
     if (g.drive?.clearAt && !g.drive.clearAt(x, z, 1.1, own)) return false;
-    for (const r of this.mp.remotes?.players.values() || []) { const a = r.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < near) return false; } // (another player's car)
+    for (const r of this.mp.remotes?.players.values() || []) {
+      const a = r.vcar?.at; if (a && Math.hypot(a[0] - x, a[2] - z) < near) return false; // (another player's car)
+      for (const e of r.vparked || []) { const b = e?.at; if (b && Math.hypot(b[0] - x, b[2] - z) < 2.5) return false; } // (their other cars, in their bays: Oct 31 2026)
+    }
+    for (const m of this.mp.vehicles?.parked?.values() || []) for (const c of m.values()) if (c.posed && Math.hypot(c.x - x, c.z - z) < 2.5) return false; // (as drawn here)
     for (const c of this.mp.vehicles?.cars?.values() || []) if (c.posed && !c.driven && !c.towed && Math.hypot(c.x - x, c.z - z) < near) return false; // (as drawn here; not one with its tow truck: Oct 30 2026)
     for (const k of g.carRental?.kept || []) if (k !== own && !k.driving && k.car?.parent && Math.hypot(k.car.position.x - x, k.car.position.z - z) < 2.5) return false; // (your other cars)
     return true;
@@ -331,11 +368,11 @@ export class CarRide {
   }
 
   /** The connection came back (the server dropped your seat and records): tell it again. */
-  reset() { this.v.cur = undefined; if (this.ride) this.end(true, false); }
+  reset() { this.v.cur = undefined; if (this.k) this.k.sig = null; if (this.ride) this.end(true, false); }
 
   dispose() {
     if (this.ride) this.end(true);
     if (this.tag) { this.tag.removeFromParent(); this.tag.material.map.dispose(); this.tag.material.dispose(); this.tag = null; }
-    this.v.cur = undefined; this.placed = false;
+    this.v.cur = undefined; this.placed = false; this.k = null;
   }
 }

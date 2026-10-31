@@ -1384,6 +1384,33 @@ try {
     await sleep(50);
   }
 
+  // ---------------------------------------------------------------- everyone sees all of a player's parked cars (Oct 31 2026)
+  {
+    console.log('parked cars');
+    const reg = async (name) => { const f = new Fake(url); await f.open(); const r = await f.req('register', { name }); const l = await f.req('login', { v: PROTO, name, token: r.d.token }); return { f, l, pid: l.d.pid }; };
+    const pia = await reg('Piet'), obs = await reg('Oskar');
+    server.profileOf('piet').money = 1000000;
+    const c1 = await pia.f.req('buy', { kind: 'car', cfg: { id: 'car_vw_golf_gti', paint: 'red' } });
+    const c2 = await pia.f.req('buy', { kind: 'car', cfg: { id: 'car_bmw_x3', paint: 'black' } });
+    await pia.f.req('veh', { k: 'car' }); // (driving the X3, cars[0])
+    const pk = await pia.f.req('parked', { cars: [{ plate: c1.d.car.plate, at: [100, 5, 200, 1.5] }, { plate: c2.d.car.plate, at: [1, 1, 1, 0] }] });
+    const pev = await obs.f.next('parked', (d) => d.pid === pia.pid && d.cars.length);
+    ok(pk.ok && pev && pev.cars.length === 1 && pev.cars[0].plate === c1.d.car.plate && pev.cars[0].cfg.id === 'car_vw_golf_gti' && pev.cars[0].at[0] === 100 && server.profileOf('piet').cars[1].at?.[2] === 200,
+      "a car of Piet's parks: everyone is told its spot and look (kept in her profile)");
+    ok(!pev.cars.some((e) => e.plate === c2.d.car.plate), 'no parked entry for the car she is driving (cars[0]: its veh record)');
+    const late = await reg('Lenny');
+    const seen = late.l.d.world.players.find((p) => p.name === 'Piet');
+    ok(seen?.parked?.length === 1 && seen.parked[0].plate === c1.d.car.plate && seen.parked[0].at[3] === 1.5, 'a player who joins gets her parked cars in the world snapshot');
+    const badP = await pia.f.req('parked', { cars: [{ plate: c1.d.car.plate, at: [1e9, 0, 0, 0] }] });
+    const badN = await pia.f.req('parked', { cars: [{ plate: c1.d.car.plate, at: [1, 'x', 0, 0] }] });
+    ok(!badP.ok && badP.err === 'bad_value' && !badN.ok && badN.err === 'bad_value' && server.profileOf('piet').cars[1].at[0] === 100, 'a spot out of range or not numbers is refused');
+    await pia.f.req('parked', { cars: [] });
+    const gone = await obs.f.next('parked', (d) => d.pid === pia.pid && !d.cars.length);
+    ok(!!gone && !server.profileOf('piet').cars[1].at, 'home to her garage: gone from everyone');
+    pia.f.close(); obs.f.close(); late.f.close();
+    await sleep(50);
+  }
+
   // ---------------------------------------------------------------- persistence
   a.close(); b.close();
   await sleep(150);

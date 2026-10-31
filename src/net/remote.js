@@ -87,6 +87,7 @@ class Remote {
     this.vtow = info.vehs?.tow || null;   // their tow truck out on a job ({ k: 'tow', at, v, car }: net/tow.js)
     this.vpolice = info.vehs?.police || null; // the patrol cars chasing them ({ k: 'police', cars: [[x, y, z, yaw, v]] }: game/police.js)
     this.vrescue = info.vehs?.rescue || null; // the rescue helicopter / ambulance coming for them (net/rescue.js)
+    this.vparked = info.parked || null; // their other cars parked in the world ('parked': [{ plate, cfg, at, tilt?, wreck? }], Oct 31 2026)
     this.vsled = info.vehs?.sled || null; // the snowmobile they drive / left parked ({ k: 'sled', at? }: net/sled.js)
     this.fa = 0; this.fb = 0; this.ff = 0;   // a wipeout: the flags either side of the sample and the blend (fallDecode)
     this.fallSt = { pitch: 0, roll: 0, ball: 0, getUp: 0 }; this.wasFall = false; this.wasAir = false; this.hideRig = false;
@@ -156,7 +157,7 @@ export class RemotePlayers {
     if (!info || info.pid === this.selfPid) return null;
     let r = this.players.get(info.pid);
     if (!r) { r = new Remote(info); this.players.set(info.pid, r); }
-    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; r.vrescue = info.vehs.rescue || null; r.vsled = info.vehs.sled || null; } }
+    else { r.name = info.name; if (info.look) r.look = info.look; if (info.vehs) { r.vcar = info.vehs.car || null; r.vheli = info.vehs.heli || null; r.vtow = info.vehs.tow || null; r.vpolice = info.vehs.police || null; r.vrescue = info.vehs.rescue || null; r.vsled = info.vehs.sled || null; } if (info.parked !== undefined) r.vparked = info.parked || null; }
     if (info.pres) r.push(info.pres, this.o.now());
     if (info.interior !== undefined) r.interior = info.interior || null;
     return r;
@@ -180,6 +181,8 @@ export class RemotePlayers {
   }
 
   /** A vehicle a player shows changed ('veh' broadcast: k 'car' | 'heli', veh or null). */
+  /** Their other cars parked in the world changed ('parked' broadcast: the whole list). */
+  setParked(pid, cars) { const r = this.players.get(pid); if (r) r.vparked = Array.isArray(cars) ? cars : null; }
   setVeh(pid, k, veh) { const r = this.players.get(pid); if (!r) return; if (k === 'car') r.vcar = veh || null; else if (k === 'heli') r.vheli = veh || null; else if (k === 'tow') r.vtow = veh || null; else if (k === 'police') r.vpolice = veh || null; else if (k === 'rescue') r.vrescue = veh || null; else if (k === 'sled') r.vsled = veh || null; }
 
   onRows(rows) {

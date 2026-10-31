@@ -10,7 +10,8 @@
 import * as THREE from 'three';
 import { ST, F } from './protocol.js';
 import { makeTag } from './remote.js';
-import { CAR_MODELS, carTemplate, carInstance, driverEye } from '../game/cars.js';
+import { CAR_MODELS, carTemplate, carInstance, driverEye, farMesh } from '../game/cars.js';
+import { quality } from '../engine/quality.js'; // (quality.carLod: their parked cars' full model distance, as parking.js)
 import { dressCar, normConfig } from '../game/carconfig.js';
 import { seatsFor, SEAT_LIFT } from '../game/carpeople.js';
 import { lampsOn, Smoke, hazardPhase } from '../game/carlights.js';
@@ -111,6 +112,8 @@ export class RemoteVehicles {
     this.tows = new Map();  // pid -> their tow truck out on a job: { g, beacons, beaconMat, beaconLight, col, x, z, yaw, posed, shown }
     this.police = new Map(); // pid -> the patrol cars chasing them: [{ m, col, x, z, yaw, tx, tz, tyaw, tv, age, posed, shown }]
     this.rescues = new Map(); // pid -> the rescue coming for them: { model, rope, amb, ...poses } (updateRescue)
+    this.parked = new Map();  // pid -> Map(plate -> car): their other cars parked in the world (updateParked, Oct 31 2026)
+    this.seq = 0;
     this.sleds = new Map();   // pid -> the snowmobile they drive / left parked: { g, tag, x, y, z, yaw, pitch, roll, posed, shown } (updateSled)
     this.remotes = null;
     this.time = 0;
@@ -143,6 +146,7 @@ export class RemoteVehicles {
       this.updatePolice(r, dt, cam, outdoors);
       this.updateRescue(r, dt, cam, outdoors);
       this.updateCar(r, dt, cam, outdoors);
+      this.updateParked(r, dt, cam, outdoors);
       this.updateHeli(r, dt, cam, outdoors);
       this.updateSled(r, dt, cam, outdoors);
     }
@@ -150,6 +154,11 @@ export class RemoteVehicles {
 
   // ---------------------------------------------------------------- cars
   makeCar(r, cfg, key) {
+    const c = this.buildCar(r, cfg, key);
+    if (c) this.cars.set(r.pid, c);
+    return c;
+  }
+  buildCar(r, cfg, key) {
     const t = carTemplateFor(this.o.models(), cfg.id);
     if (!t) return null;
     let inst;
@@ -157,6 +166,7 @@ export class RemoteVehicles {
     const group = inst.group;
     group.name = `mp-car-${r.name}`;
     group.visible = false;
+    group.userData.noSolid = true; // (never boxed in by world/solidify.js: its own collider moves and goes with it, commit a2d9a2b)
     const tag = makeTag(`${r.name}'s car`, '#0f2f6b');
     tag.position.set(0, (t.size?.y || 1.5) + 0.55, 0);
     group.add(tag);
@@ -165,9 +175,7 @@ export class RemoteVehicles {
     // far away while it isn't placed
     const col = { x: 1e9, z: 1e9, hw: (t.size?.x || 1.9) / 2, hd: (t.size?.z || 4.6) / 2, rot: 0, h: 1.7, car: true, mp: true };
     this.o.colliders?.push(col);
-    const c = { pid: r.pid, key, t, inst, group, tag, col, x: 0, y: 0, z: 0, yaw: 0, steer: 0, u: 0, lit: -1, posed: false, driven: false, atRef: null };
-    this.cars.set(r.pid, c);
-    return c;
+    return { pid: r.pid, key, t, inst, group, tag, col, x: 0, y: 0, z: 0, yaw: 0, steer: 0, u: 0, lit: -1, posed: false, driven: false, atRef: null, seq: ++this.seq };
   }
   // a wrecked car (F.wreck while it crashes, veh wreck while it lies there and rides the tow truck): dented, steam
   // from the bonnet; repaired once the record says it is whole again
@@ -204,12 +212,86 @@ export class RemoteVehicles {
   dropCar(pid) {
     const c = this.cars.get(pid);
     if (!c) return;
+    this.freeCar(c);
+    this.cars.delete(pid);
+  }
+  freeCar(c) {
     if (c.smoke) { c.smoke.clear?.(); c.smoke.mesh?.removeFromParent(); }
     c.group.removeFromParent();
     c.tag.material.map.dispose(); c.tag.material.dispose();
     const L = this.o.colliders, i = L ? L.indexOf(c.col) : -1;
     if (i >= 0) L.splice(i, 1);
-    this.cars.delete(pid);
+  }
+
+  // ---------------------------------------------------------------- their other cars, parked
+  // (Oct 31 2026, the user: "how come another player can see all his cars in the parking lot, but I only see 1 of
+  // them? Fix that, everyone sees all of the cars someone else owns"): every car of theirs parked in the world but the
+  // one out (the server's 'parked' list: plate, look, spot; the one out is updateCar's, driven or parked): one car per
+  // plate, on your ground (settleCar), "<name>'s car" over it, kept out of your cars' and the others' bays (unstack),
+  // solid only while drawn and exactly where (the ghost latch over your own car as updateCar's), the full model near,
+  // the far LOD further out (as parking.js), none beyond VEH_FAR. Gone when the list drops it or they leave.
+  updateParked(r, dt, cam, outdoors) {
+    const list = r.vparked;
+    let m = this.parked.get(r.pid);
+    if (!m) { if (!list?.length) return; m = new Map(); m.ref = null; this.parked.set(r.pid, m); }
+    if (m.ref !== list) { // (a new list: the cars it no longer has go)
+      m.ref = list;
+      for (const [pl, c] of m) if (!list?.some((e) => e?.plate === pl)) { this.freeCar(c); m.delete(pl); }
+    }
+    if (!list) return;
+    const out = r.vcar?.cfg?.plate, lp = this.o.localCar?.()?.group?.position;
+    for (const e of list) {
+      if (!e?.cfg || !e.plate || !Array.isArray(e.at) || e.at.length !== 4) continue;
+      let c = m.get(e.plate);
+      if (e.plate === out) { if (c) { this.freeCar(c); m.delete(e.plate); } continue; } // (the one out now: updateCar draws it)
+      if (!c || c.cfg !== e.cfg) {
+        const key = `${e.cfg.id}|${e.cfg.paint}|${e.cfg.interior}|${e.cfg.rims}|${e.cfg.plate}`;
+        if (c && c.key !== key) { this.freeCar(c); m.delete(e.plate); c = null; }
+        if (!c) { c = this.buildCar(r, e.cfg, key); if (!c) continue; m.set(e.plate, c); }
+        c.cfg = e.cfg;
+        this.carDents(c);
+      }
+      const at = e.at;
+      if (c.atRef !== at) {
+        // (a new list sends every spot again: only a car that really moved counts as parked there later, unstack's atT)
+        if (!c.posed || Math.hypot(at[0] - c.ax, at[2] - c.az) > 0.3) c.atT = this.time;
+        c.atRef = at; c.ax = at[0]; c.az = at[2];
+        c.x = at[0]; c.y = at[1]; c.z = at[2]; c.yaw = at[3]; c.posed = true;
+        c.pitch = e.tilt?.[0] || 0; c.roll = e.tilt?.[1] || 0; c.wreck = !!e.wreck;
+        c.bay = null; c.unT = 0;
+      }
+      if (!c.wreck) this.unstack(c, at, dt);
+      const g = c.group, d = _d.set(c.x, c.y, c.z).sub(cam).length();
+      const show = outdoors && d < VEH_FAR;
+      if (g.visible !== show) g.visible = show;
+      const dm = lp ? Math.hypot(lp.x - c.x, lp.z - c.z) : Infinity;
+      if (dm < 2) c.ghost = true; else if (dm > 5.5) c.ghost = false;
+      const solid = show && !c.ghost;
+      c.col.x = solid ? c.x : 1e9; c.col.z = solid ? c.z : 1e9; c.col.rot = -c.yaw;
+      if (!show) continue;
+      this.settleCar(c, dt, false);
+      if (g.position.x !== c.x || g.position.y !== c.dy || g.position.z !== c.z || c.dYaw !== c.yaw || c.dP !== c.dp || c.dR !== c.dr) {
+        g.position.set(c.x, c.dy, c.z); c.dYaw = c.yaw; c.dP = c.dp; c.dR = c.dr;
+        _e.set(c.dp, c.yaw, c.dr, 'YXZ'); g.quaternion.setFromEuler(_e);
+        g.updateMatrixWorld(true);
+      }
+      // (the cheap LOD: the full model to 70 m (quality.carLod), one mesh further out; checked twice a second)
+      if ((c.lodT = (c.lodT || 0) - dt) <= 0) {
+        c.lodT = 0.5;
+        if (!c.far && c.t.lod) { const fm = farMesh(c.t, c.inst); if (fm) { fm.visible = false; fm.castShadow = true; g.add(fm); c.far = fm; } }
+        const near = d < 70 * (quality.carLod ?? 1) || !c.far;
+        if (c.inst.full) c.inst.full.visible = near;
+        if (c.far) c.far.visible = !near;
+      }
+      if (c.wreck || c.dented) this.wreckLook(c, dt, show);
+      tagScale(c.tag, d);
+    }
+  }
+  dropParked(pid) {
+    const m = this.parked.get(pid);
+    if (!m) return;
+    for (const c of m.values()) this.freeCar(c);
+    this.parked.delete(pid);
   }
   updateCar(r, dt, cam, outdoors) {
     const vc = r.vcar;
@@ -308,11 +390,13 @@ export class RemoteVehicles {
     const mine = (R?.parking?.cars || []).filter((e) => !e.driving && e.car?.parent && !R.aboard?.(e)); // (not yours on a tow truck's bed: Oct 30 2026)
     const held = (x, z, earlier) => {
       for (const e of mine) if (Math.hypot(e.car.position.x - x, e.car.position.z - z) < NEAR) return true; // (yours, or a parked car here)
-      for (const o of this.cars.values()) {
-        if (o === c || !o.posed || o.driven || o.towed) continue; // (with their tow truck: in no bay)
-        if (earlier && !(o.atT < c.atT || (o.atT === c.atT && o.pid < c.pid))) continue;
-        if (Math.hypot(o.x - x, o.z - z) < NEAR) return true;
-      }
+      const other = (o) => {
+        if (o === c || !o.posed || o.driven || o.towed) return false; // (with their tow truck: in no bay)
+        if (earlier && !(o.atT < c.atT || (o.atT === c.atT && (o.pid < c.pid || (o.pid === c.pid && o.seq < c.seq))))) return false;
+        return Math.hypot(o.x - x, o.z - z) < NEAR;
+      };
+      for (const o of this.cars.values()) if (other(o)) return true;
+      for (const pm of this.parked.values()) for (const o of pm.values()) if (other(o)) return true; // (their other cars too, Oct 31 2026)
       return false;
     };
     const home = () => { if (c.bay) { c.bay = null; c.x = at[0]; c.z = at[2]; c.yaw = at[3]; c.setT = 0; } };
@@ -776,6 +860,6 @@ export class RemoteVehicles {
   /** A remote player's car as drawn (for the ride prompt and the passenger's seat), or null. */
   carOf(pid) { const c = this.cars.get(pid); return c?.posed ? c : null; }
 
-  remove(pid) { this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); this.dropRescue(pid); this.dropSled(pid); }
-  dispose() { for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); for (const pid of [...this.rescues.keys()]) this.dropRescue(pid); for (const pid of [...this.sleds.keys()]) this.dropSled(pid); }
+  remove(pid) { this.dropParked(pid); this.dropCar(pid); this.dropHeli(pid); this.dropTow(pid); this.dropPolice(pid); this.dropRescue(pid); this.dropSled(pid); }
+  dispose() { for (const pid of [...this.parked.keys()]) this.dropParked(pid); for (const pid of [...this.cars.keys()]) this.dropCar(pid); for (const pid of [...this.helis.keys()]) this.dropHeli(pid); for (const pid of [...this.tows.keys()]) this.dropTow(pid); for (const pid of [...this.police.keys()]) this.dropPolice(pid); for (const pid of [...this.rescues.keys()]) this.dropRescue(pid); for (const pid of [...this.sleds.keys()]) this.dropSled(pid); }
 }

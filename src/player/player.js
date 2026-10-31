@@ -659,7 +659,7 @@ export class Player {
       if (t > 1e-6) v.multiplyScalar(Math.max(0, t - IMPACT_FRICTION * Math.max(0, -vn - IMPACT_FREE)) / t);
       this.absorbImpact(-vn);
       // (groomed runs are forgiving: their rock bands are skied like a piste)
-      if (-vn > CRASH_IMPACT && !this.onGroomedRun(p.x, p.z, p.y)) this.crash(Math.random() < 0.5 ? -1 : 1, { kind: 'tumble' });
+      if (-vn > CRASH_IMPACT && !this.onGroomedRun(p.x, p.z, p.y)) this.crash(Math.random() < 0.5 ? -1 : 1, { kind: 'tumble', ski: true });
     } else if (t > 1e-6) {
       v.multiplyScalar(s / t); // smooth transitions keep their speed (the normal force does no work)
     }
@@ -727,7 +727,7 @@ export class Player {
       this.reportTrick(res);
       const kind = res.cause === 'flip' ? 'tumble' : res.cause === 'sideways' ? 'roll' : impact > 16 ? 'tumble' : 'roll';
       this.crash(Math.sign(yawErr) || (Math.random() < 0.5 ? -1 : 1), {
-        kind, flip: res.cause === 'flip' ? this.flip : 0, pitchVel: res.cause === 'flip' ? flipVel : 0, impact,
+        kind, flip: res.cause === 'flip' ? this.flip : 0, pitchVel: res.cause === 'flip' ? flipVel : 0, impact, ski: true,
       });
       return;
     }
@@ -866,6 +866,10 @@ export class Player {
   crash(side = 1, opts = {}) {
     if (this.mode === 'fall') return;
     const v = this.vel, sp = v.length(), vh = Math.hypot(v.x, v.z);
+    // (Oct 31 2026, the user: "make sure if you jump and crash under 60 kph on skis then nothing happens": a ski wipeout
+    // (a bad landing, a slam into the ground, a hit on a tree or rock) under 60 km/h is only the fall: you get up, no
+    // strike, no rescue helicopter; main.js counts a 'bump' as nothing)
+    if (opts.ski && !opts.event && sp < 60 / 3.6) opts = { ...opts, event: 'bump' };
     this.mode = 'fall';
     this.fallT = 0;
     this.fallSide = side || (Math.random() < 0.5 ? -1 : 1);
@@ -1216,7 +1220,7 @@ export class Player {
         const hard = -vn;
         this.vel.x -= nx * vn * 1.3; this.vel.z -= nz * vn * 1.3;
         this.vel.multiplyScalar(0.3);
-        this.crash(Math.random() < 0.5 ? -1 : 1, { kind: hard > 12 ? 'roll' : 'slam' });
+        this.crash(Math.random() < 0.5 ? -1 : 1, { kind: hard > 12 ? 'roll' : 'slam', ski: true });
       } else {
         this.vel.x -= nx * vn; this.vel.z -= nz * vn;
       }

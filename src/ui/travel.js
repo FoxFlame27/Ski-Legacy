@@ -15,6 +15,8 @@
 //                           color?: race colour (the list shows a race pin in it), race?: course id }],
 //                 home?: { x, z } (chart), go: 'RIDE' | 'FLY', goNote?, goDisabled?, onCancel? })
 import './travel.css';
+import { kc } from './prompts.js'; // keycaps that follow the device in use (keyboard / controller)
+import { arrowCaps } from './hud.js';
 import { TrailMap, NAVY, RED, BLUE, FONT, EXPRESS, racePin, raceInk, finishMark, expressStop } from './trailmap.js';
 import { MAIN_SUMMIT } from '../world/world.js';
 import { layout } from '../world/layout.js';
@@ -70,14 +72,14 @@ export class RoutePicker extends TrailMap {
           <div class="tv-list"></div>
           <div class="tv-plan"></div>
           <button class="tv-go"><span></span></button>
-          <button class="tv-cancel"><i class="kc">ESC</i>Cancel</button>
+          <button class="tv-cancel">${kc('cancel')}Cancel</button>
         </div>
       </div>
       <div class="tv-hints">
-        <span class="hint"><i class="kc kc-arrow up"></i><i class="kc kc-arrow down"></i><em>Choose</em></span>
-        <span class="hint"><i class="kc">ENTER</i><em class="tv-hgo">Ride</em></span>
-        <span class="hint"><i class="kc kc-word">CLICK</i><em>A stop on the map</em></span>
-        <span class="hint"><i class="kc">ESC</i><em>Cancel</em></span>
+        <span class="hint">${arrowCaps('updown')}<em>Choose</em></span>
+        <span class="hint">${kc('confirm')}<em class="tv-hgo">Ride</em></span>
+        <span class="hint kb-only"><i class="kc kc-word">CLICK</i><em>A stop on the map</em></span>
+        <span class="hint">${kc('cancel')}<em>Cancel</em></span>
       </div>`;
     this.canvas = r.querySelector('.tv-canvas');
     this.g = this.canvas.getContext('2d');

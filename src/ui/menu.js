@@ -15,6 +15,7 @@ import { PLAYER_CHARACTERS } from '../game/characters.js';
 import { SETTING_DEFAULTS } from '../core/settings.js';
 import { ACTIONS, KB_DEFAULTS, PAD_DEFAULTS, bindsOf, keyLabel, padGlyph } from '../core/bindings.js';
 import * as gp from '../core/gamepad.js'; // padInfo(), onNextPadButton(cb), 'padchange' (controller support, Nov 1 2026)
+import { K, usingPad, onPromptChange } from './prompts.js'; // the hint bar's keycaps follow the device in use
 import * as inputMod from '../core/input.js'; // setRemapPaused(on): no key remapping while a new key is captured
 
 // ------------------------------------------------------------------ SETTINGS rows
@@ -240,13 +241,20 @@ const KEYMAP = {
   Enter: 'enter', NumpadEnter: 'enter', Space: 'enter', Escape: 'back', Backspace: 'back',
 };
 
-const KEYCAPS = {
+// the bottom hint bar's keycaps: arrows / ENTER / ESC on the keyboard, the D-PAD and the confirm / back buttons on a
+// controller (Switch confirms with A on the right, backs out with B at the bottom; Xbox A / B; PlayStation ✕ / ○)
+const KEYCAPS_KB = {
   updown: '<i class="kc kc-arrow up"></i><i class="kc kc-arrow down"></i>',
   leftright: '<i class="kc kc-arrow left"></i><i class="kc kc-arrow right"></i>',
   enter: '<i class="kc">ENTER</i>',
   esc: '<i class="kc">ESC</i>',
 };
-const hintsHTML = (list) => list.map(([k, label]) => `<span class="hint"${/back/i.test(label) ? ' data-hint-back style="cursor:pointer;pointer-events:auto"' : ''}>${KEYCAPS[k] || ''}<em>${label}</em></span>`).join(''); // (ESC · BACK is clickable)
+// (data-k: the prompts.js safety net must not read a controller "A" as the keyboard's A = left)
+const padCap = (id) => { const t = K(id); return `<i class="kc${t.length > 1 ? ' kc-word' : ''}" data-k="${id}">${t}</i>`; };
+const PAD_ID = { updown: 'updown', leftright: 'leftright', enter: 'confirm', esc: 'cancel' };
+const keycap = (k) => (usingPad() ? (PAD_ID[k] ? padCap(PAD_ID[k]) : '') : KEYCAPS_KB[k] || '');
+// (mouse-only hints, "Drag to rotate", aren't shown on a controller: the menus have no pointer there)
+const hintsHTML = (list) => list.filter(([, label]) => !(usingPad() && /^(drag|click|scroll)\b/i.test(label))).map(([k, label]) => `<span class="hint"${/back/i.test(label) ? ' data-hint-back style="cursor:pointer;pointer-events:auto"' : ''}>${keycap(k)}<em>${label}</em></span>`).join(''); // (ESC · BACK is clickable)
 
 // ------------------------------------------------------------------ menu
 
@@ -312,6 +320,8 @@ export class Menu {
     this.stage = this.el.querySelector('.menu-stage');
     this.hintsEl = this.el.querySelector('.menu-hints');
     this.hintsEl.addEventListener('click', (e) => { if (e.target.closest('[data-hint-back]')) this.back(false); });
+    // keyboard <-> controller (or another controller family): the hint bar swaps its keycaps at once
+    onPromptChange(() => { if (this.hintsEl && this.curHints) this.hintsEl.innerHTML = hintsHTML(this.curHints); });
     if (this.built) return;
     this.built = true;
     // capture phase: the menu owns the keyboard while it is visible (game input never sees these keys)
@@ -541,7 +551,7 @@ export class Menu {
       logo: 'small', shade: 'full',
       hints: [['updown', 'Select'], ['leftright', 'Keyboard / controller'], ['enter', 'Change'], ['esc', 'Back']],
       html: `${this.head('CONTROLS', 'Keyboard, mouse and controller · Xbox, PlayStation and Switch · select a key or button to change it')}
-        <div class="ctl-wrap ctl-v2">
+        <div class="ctl-wrap ctl-v2" data-no-swap>
           <div class="menu-panel settings ctl-main" data-col="${this.ctlCol}" data-stagger style="--clip:${brushClip(170, 5, 4)}"><div class="set-scroll">
             ${famRow}
             <div class="ctl-cols"><span>ACTION</span><span>KEYBOARD</span><span>CONTROLLER</span></div>
@@ -645,7 +655,7 @@ export class Menu {
       this.capture = { kind: 'pad', id, cell };
       cell.classList.add('wait');
       cell.textContent = 'Press a button…';
-      this.ctlStatus(`${a.label}: press a controller button · Esc cancels`);
+      this.ctlStatus(`${a.label}: press a controller button · wait a few seconds to cancel`);
       this.capture.stop = gp.onNextPadButton((i) => { if (this.capture?.kind === 'pad' && this.capture.id === id) this.assignPad(id, i); });
       this.capture.t = setTimeout(() => { if (this.capture?.id === id) { this.cancelCapture(); this.ctlStatus('No button pressed'); } }, 6000);
     } else {
@@ -940,7 +950,7 @@ export class Menu {
     reset?.addEventListener('click', () => {
       this.audio?.play('click');
       if (reset.dataset.confirm) resetSave();
-      else { reset.dataset.confirm = '1'; reset.textContent = 'Click again to confirm'; }
+      else { reset.dataset.confirm = '1'; reset.textContent = usingPad() ? 'Press again to confirm' : 'Click again to confirm'; }
     });
   }
 
@@ -1045,7 +1055,7 @@ export class Menu {
     del?.addEventListener('click', async () => {
       if (st.busy || !matches()) return;
       this.audio?.play('click');
-      if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = 'Delete forever'; del.classList.add('armed'); return msg('This cannot be undone. Click DELETE FOREVER to delete the account.', true); }
+      if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = 'Delete forever'; del.classList.add('armed'); return msg(`This cannot be undone. ${usingPad() ? 'Select' : 'Click'} DELETE FOREVER to delete the account.`, true); }
       busy(true); msg('Deleting…');
       const r = await Promise.resolve(this.onAccountDelete?.(conf.value.trim(), !!sp?.checked)).catch((e) => ({ ok: false, text: e?.message })) || { ok: false };
       busy(false);
@@ -1097,6 +1107,7 @@ export class Menu {
     this.el.dataset.shade = def.shade || 'left';
     this.el.classList.toggle('logo-big', def.logo === 'big');
     this.hintsEl.innerHTML = hintsHTML(def.hints || []);
+    this.curHints = def.hints || [];
 
     this.stage.querySelectorAll('.menu-screen.exit').forEach((s) => s.remove());
     const prev = this.stage.querySelector('.menu-screen.current');

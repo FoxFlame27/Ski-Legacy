@@ -50,6 +50,7 @@ import { submitTime, submitPlace, sessionMedals, getRecord, ordinal } from './re
 import { FarRacers, FAR_IN, FAR_OUT } from './farbots.js';
 import { GateBars } from './gatebars.js';
 import { CourseFloodlights } from './floodlights.js';
+import { usingPad } from '../../ui/prompts.js'; // (BUTTON PROMPTS: keyboard or controller)
 
 const LEAD_IN = 1.4;               // s on the grid before the "3"
 const INTRO_LEAD_IN = 0.7;         // ...after the intro (the camera is already behind the racer)
@@ -838,7 +839,7 @@ export class RaceSession {
     btn.className = 'brush-btn rr-btn pres-replay-btn';
     btn.tabIndex = -1;
     btn.dataset.choice = 'replay';
-    btn.innerHTML = `${brushSVG(379)}<span>WATCH REPLAY<i class="kc">V</i></span>`;
+    btn.innerHTML = `${brushSVG(379)}<span>WATCH REPLAY${usingPad() ? '' : '<i class="kc">V</i>'}</span>`; // (a controller: the d-pad + confirm, V has no button)
     host.prepend(btn);
     const pick = () => { const fin = this.raceHud?.pending; if (typeof fin === 'function') fin('replay'); };
     btn.addEventListener('mousedown', (e) => e.preventDefault());

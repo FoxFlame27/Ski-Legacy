@@ -21,6 +21,7 @@ import { adaptChalet, currentRawAPI, discoverChaletAPI } from './chaletadapter.j
 import { LampPool } from './lamps.js';
 import { BuildMenu } from '../../ui/buildmenu.js';
 import { isMP } from '../../net/mode.js';
+import { K } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 const NO_FURNITURE = [];
 
 const REACH = 6; // metres you can place from
@@ -123,7 +124,7 @@ export class BuildMode {
   hudLine() {
     if (!this.chalet || !this.wasActive || !this.chalet.active()) return null; // (only while you're inside it)
     if (!this.on) {
-      if (this.lampAim) return `Press E to switch the ${this.lampAim.item.name.toLowerCase()} ${this.lampAim.rec.on === false ? 'on' : 'off'}`;
+      if (this.lampAim) return `Press ${K('interact')} to switch the ${this.lampAim.item.name.toLowerCase()} ${this.lampAim.rec.on === false ? 'on' : 'off'}`;
       return this.input.cursorFree ? 'Mouse free · TAB to look around · F to furnish' : 'Press F to furnish your chalet · TAB frees the mouse';
     }
     if (this.moving) return `Moving the ${this.moving.item.name.toLowerCase()} · click to put it down`;

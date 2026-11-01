@@ -67,8 +67,9 @@ import { presentation } from './presentation/index.js';
 import { HeliModel } from './heli/model.js';
 import { breakables, AI_RAIL_V, BREAK_V } from '../world/breakables.js'; // (a patrol car through a guardrail at 100 km/h+: aiRail; poles / lamps knocked: sweep)
 import { nightUniform } from '../world/village.js';
-import { rumble } from '../core/gamepad.js'; // (controller vibration: rams, the arrest)
+import { rumble, currentPad, padInfo } from '../core/gamepad.js'; // (controller vibration: rams, the arrest; paying a fine with the confirm button)
 import { terrainUniforms } from '../world/terrain.js'; // read-only: how hard it is snowing (the searchlight's beam: heli/model.js)
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 // The officers: a Meshy police officer in a navy winter uniform + hi-vis vest (tools/meshy-officer.mjs,
 // public/models/police_officer_rigged.glb + _anims.glb), loaded in the background (never blocks the start). Until it is
@@ -2984,10 +2985,15 @@ export class Police {
         if (S.kind === 'fine') {
           const f = this.fineNow();
           this.say('Officer', `${this.record() ? 'You again? ' : ''}Collision back there: ${usd(f)} fine.`); // (short: the long lines ran off the screen)
-          S.ask = true; this.payNow = false; // (paid only on ENTER; driving / running off instead: fleeing)
+          S.ask = true; this.payNow = false; this.padPayHeld = true; // (paid only on ENTER (a controller: its confirm button); driving / running off instead: fleeing)
         } else { S.said = false; this.sayArrest(S, T); }
       }
       if (S.kind === 'arrest' && S.t > 2.2 && !S.jailed) { this.forceArrest(W); return; }
+      if (S.kind === 'fine' && S.ask && !S.paid && !this.payNow) { // (a controller: the confirm button, a fresh press)
+        const b = !!currentPad()?.buttons?.[padInfo().family === 'switch' ? 1 : 0]?.pressed;
+        if (b && !this.padPayHeld) this.payNow = true;
+        this.padPayHeld = b;
+      }
       if (S.kind === 'fine' && S.ask && !S.paid && this.payNow) { this.payNow = false; S.paid = true; S.paidT = S.t; this.charge(this.fineNow()); this.addRecord(); }
       if (S.kind === 'fine' && S.paid && S.t - S.paidT > 2.2) { S.step = 'back'; S.t = 0; this.note('Fine paid · drive safely'); }
       return;
@@ -3230,7 +3236,7 @@ export class Police {
     let msg, tip = '';
     if (S && S.kind === 'fine') {
       if (S.step === 'back' || S.step === 'done') msg = 'Fine paid · drive safely';
-      else if (S.ask && !S.paid) { msg = `Press ENTER to pay the ${fine} fine`; tip = `${foot ? 'Run' : 'Drive'} off instead and it's a chase · jail if caught.`; }
+      else if (S.ask && !S.paid) { msg = `Press ${K('confirm')} to pay the ${fine} fine`; tip = `${foot ? 'Run' : 'Drive'} off instead and it's a chase · jail if caught.`; }
       else { msg = `${foot ? 'Stopped' : 'Pulled over'} ✓ · the officer is coming`; tip = `Stay put: it's just a ${fine} fine.`; }
     } else if (S) {
       if (decided) { msg = "You're under arrest"; tip = "Stay where you are. You're going to jail."; }

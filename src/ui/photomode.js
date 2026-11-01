@@ -4,6 +4,8 @@
 // nothing else has to know photo mode exists; main.js only freezes the frame time while `active`.
 import * as THREE from 'three';
 import { world } from '../world/world.js';
+import { kc } from './prompts.js'; // keycaps that follow the device in use (keyboard / controller)
+import { currentPad, padActive } from '../core/gamepad.js'; // (the right stick orbits, the triggers zoom)
 
 const _focus = new THREE.Vector3(), _off = new THREE.Vector3();
 
@@ -26,11 +28,12 @@ export class PhotoMode {
     this.el.hidden = true;
     this.el.innerHTML = `<div class="pm-bar paper">
         <span class="pm-kick">PHOTO MODE</span>
-        <span class="hint"><i class="kc kc-word">MOUSE</i><em>Orbit</em></span>
-        <span class="hint"><i class="kc kc-word">SCROLL</i><em>Zoom</em></span>
-        <span class="hint"><i class="kc">Q</i><i class="kc">E</i><em>Height</em></span>
-        <span class="hint"><i class="kc">H</i><em>Hide this</em></span>
-        <span class="hint"><i class="kc">P</i><em>Back to the game</em></span>
+        <span class="hint">${kc('look')}<em>Orbit</em></span>
+        <span class="hint kb-only"><i class="kc kc-word">SCROLL</i><em>Zoom</em></span>
+        <span class="hint pad-only">${kc('brake')}${kc('sprint')}<em>Zoom</em></span>
+        <span class="hint">${kc('pickup')}${kc('interact')}<em>Height</em></span>
+        <span class="hint">${kc('horn')}<em>Hide this</em></span>
+        <span class="hint">${kc('photo')}<em>Back to the game</em></span>
       </div>`;
     document.body.appendChild(this.el);
     addEventListener('keydown', (e) => {
@@ -105,6 +108,15 @@ export class PhotoMode {
     this.last = now;
     if (this.keys.has('KeyQ')) this.orbit.lift = Math.max(-0.9, this.orbit.lift - dt * 1.5);
     if (this.keys.has('KeyE')) this.orbit.lift = Math.min(6, this.orbit.lift + dt * 1.5);
+    // a controller: the right stick orbits, the left / right triggers zoom in / out (the buttons the hint bar names)
+    const gp = padActive() ? currentPad() : null;
+    if (gp) {
+      const ax = gp.axes || [], rx = Math.abs(ax[2] || 0) > 0.14 ? ax[2] : 0, ry = Math.abs(ax[3] || 0) > 0.14 ? ax[3] : 0;
+      this.orbit.yaw -= rx * dt * 2.4;
+      this.orbit.pitch = Math.min(1.35, Math.max(-0.35, this.orbit.pitch + ry * dt * 1.6));
+      const zt = (gp.buttons[6]?.value || 0) - (gp.buttons[7]?.value || 0);
+      if (Math.abs(zt) > 0.05) this.orbit.dist = Math.min(45, Math.max(1.6, this.orbit.dist * Math.pow(1.9, zt * dt * 2)));
+    }
     const o = this.orbit, f = this.focus(_focus), cam = this.camera;
     cam.position.set(f.x + Math.sin(o.yaw) * Math.cos(o.pitch) * o.dist, f.y + Math.sin(o.pitch) * o.dist, f.z + Math.cos(o.yaw) * Math.cos(o.pitch) * o.dist);
     const g = world.groundHeight(cam.position.x, cam.position.z, cam.position.y + 2) + 0.35;

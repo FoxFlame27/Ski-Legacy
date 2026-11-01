@@ -10,6 +10,7 @@
 import './admin.css';
 import * as THREE from 'three';
 import { brushSVG, brushClip, esc } from './menu.js';
+import { K, kc, usingPad, onPromptChange } from './prompts.js'; // button prompts: keyboard keys or the controller in use
 import { SKIS } from '../game/economy.js';
 import { OUTFIT_ITEMS, OUTFIT_KITS, ensureOutfits } from '../game/outfits.js';
 import { WEATHER } from '../world/sky.js';
@@ -454,10 +455,17 @@ export class AdminPanel {
     if (!on) { if (el) el.hidden = true; return; }
     if (!el) { el = document.createElement('div'); el.id = 'admin-fly'; document.body.appendChild(el); }
     const k = (t) => `<i class="kc${t.length > 1 ? ' kc-word' : ''}">${t}</i>`;
-    el.innerHTML = `<div class="ad-fly paper" style="--clip:${brushClip(77, 4, 3)}"><b>FREE CAMERA</b>
+    // (data-no-swap: written for the device in use; a controller: the left stick flies, jump / LB up · down, the
+    // sprint trigger fast, Menu back; the drop and off keys are keyboard only)
+    el.innerHTML = usingPad()
+      ? `<div class="ad-fly paper" data-no-swap style="--clip:${brushClip(77, 4, 3)}"><b>FREE CAMERA</b>
+      <span>${k(K('move'))} fly</span><span>${k(K('jump'))} / ${k(K('pickup'))} up · down</span><span>${k(K('sprint'))} fast</span>
+      <span>${k(K('esc'))} back</span></div>`
+      : `<div class="ad-fly paper" data-no-swap style="--clip:${brushClip(77, 4, 3)}"><b>FREE CAMERA</b>
       <span>${k('W')}${k('A')}${k('S')}${k('D')} fly</span><span>${k('SPACE')} / ${k('C')} up · down</span><span>${k('SHIFT')} fast</span>
       <span>${k('T')} drop here</span><span>${k('ESC')} back</span>${this.flyOffKey ? `<span>${k(this.flyOffKey)} off</span>` : ''}</div>`;
     el.hidden = false;
+    if (!this.flySwap) this.flySwap = onPromptChange(() => { if (this.fly && !document.getElementById('admin-fly')?.hidden) this.flyHint(true); });
   }
 
   /** Every frame (after the player has placed the camera): boost + free-fly camera. */
@@ -523,7 +531,7 @@ export class AdminPanel {
         <div class="ad-col">
           <div class="menu-head">
             <div class="menu-title" style="width:calc(var(--u) * ${Math.round(w * 0.9)})">${brushSVG(41, w, 100)}<span>${title}</span></div>
-            <div class="menu-sub ad-sub">Free ride tools <i class="ch-dot"></i> <i class="kc">F2</i> or <i class="kc">\`</i> or <i class="kc kc-word">ESC</i> to close</div>
+            <div class="menu-sub ad-sub">Free ride tools <i class="ch-dot"></i> <span class="kb-only"><i class="kc">F2</i> or <i class="kc">\`</i> or </span>${kc('cancel')} to close</div>
           </div>
           <div class="menu-panel ad-panel" style="--clip:${brushClip(171, 5, 4)}">
             <div class="mp-head">MONEY</div>

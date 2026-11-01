@@ -23,6 +23,7 @@ import { busRoads } from '../bus/roads.js';
 import { save, writeSave } from '../economy.js';
 import { isMP } from '../../net/mode.js';
 import { net } from '../../net/client.js';
+import { K } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 // The rescue bill (the ambulance): $750, then $150 more for every rescue before it (counted in the save), never
 // over $2,000 (~5 to 13 minutes of jobs: it hurts, it never ruins you); it is charged even into the red (shops,
@@ -103,11 +104,11 @@ export class Rescue {
   /** Objective line while it runs. */
   hudLine() {
     switch (this.phase) {
-      case 'inbound': return 'Rescue helicopter on its way · hold SPACE to speed up';
+      case 'inbound': return `Rescue helicopter on its way · hold ${K('jump')} to speed up`;
       case 'settle': case 'pickup': return 'The rescue helicopter is landing beside you';
       case 'hover': return this.attached ? 'Hold on · winching you up' : 'The rescue helicopter is lowering the winch';
-      case 'home': case 'arrive': return 'Flying back to Legacy Village · hold SPACE to speed up';
-      case 'ambulance': return `Ambulance to the medical centre · $${rescueFee()} · hold SPACE to speed up`;
+      case 'home': case 'arrive': return `Flying back to Legacy Village · hold ${K('jump')} to speed up`;
+      case 'ambulance': return `Ambulance to the medical centre · $${rescueFee()} · hold ${K('jump')} to speed up`;
       default: return '';
     }
   }

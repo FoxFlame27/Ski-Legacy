@@ -16,6 +16,8 @@
 import './outfitshop.css'; // (its rows, tabs, detail card)
 import './carrental.css';
 import { brushSVG, brushClip, esc } from './menu.js';
+import { K, kc } from './prompts.js'; // keycaps that follow the device in use (keyboard / controller)
+import { arrowCaps } from './hud.js';
 import { PAINTS, RIMS, FINISH, PLATE_COST, paintOf, rimOf, cleanPlate, randomPlate } from '../game/carconfig.js';
 
 const STEPS = [
@@ -175,11 +177,11 @@ export class CarRentalUI {
         <div class="os-detail cr-detail paper" style="--clip:${brushClip(517, 5, 4)}"></div>
       </div>
       <div class="os-foot">
-        <span class="hint"><i class="kc kc-arrow left"></i><i class="kc kc-arrow right"></i><em>Step</em></span>
-        <span class="hint"><i class="kc kc-arrow up"></i><i class="kc kc-arrow down"></i><em>Choose</em></span>
-        <span class="hint"><i class="kc">ENTER</i><em>Next · buy</em></span>
-        <span class="hint"><i class="kc">ESC</i><em>Close</em></span>
-        <span class="hint"><em>Drag to turn</em></span>
+        <span class="hint">${arrowCaps('leftright')}<em>Step</em></span>
+        <span class="hint">${arrowCaps('updown')}<em>Choose</em></span>
+        <span class="hint">${kc('confirm')}<em>Next · buy</em></span>
+        <span class="hint">${kc('cancel')}<em>Close</em></span>
+        <span class="hint kb-only"><em>Drag to turn</em></span>
       </div>`;
     this.renderStep(true);
     this.bind();
@@ -242,7 +244,7 @@ export class CarRentalUI {
           ${line(1, w.label, plus(w.cost))}
           ${line(2, c.plate, c.custom ? plus(PLATE_COST) : 'Included')}
           <div class="cr-sum-tot"><span>TOTAL</span><b>${money(cost.total)}</b></div>
-          <ul class="cr-terms"><li>Yours for good · it waits in your bay at the Autohaus · E to drive</li><li>Up to ${v.garageMax || 10} cars, the same model more than once too · each its own plate · one out at a time (MY CARS: pick which) · sell one back for half what you paid</li><li>Dents and damage: the Werkstatt next door repairs it · a flat <b>${money(v.repairFull ?? 500)}</b> for any car and any damage</li><li>Wreck it: <b>${money(v.wreckFee ?? 2000)}</b> (tow ${money(v.towFee ?? 1500)} + repair ${money(v.repairFull ?? 500)}) · the tow truck brings it back repaired · rammed off by the police: not repaired, it is gone</li></ul>
+          <ul class="cr-terms"><li>Yours for good · it waits in your bay at the Autohaus · ${K('interact')} to drive</li><li>Up to ${v.garageMax || 10} cars, the same model more than once too · each its own plate · one out at a time (MY CARS: pick which) · sell one back for half what you paid</li><li>Dents and damage: the Werkstatt next door repairs it · a flat <b>${money(v.repairFull ?? 500)}</b> for any car and any damage</li><li>Wreck it: <b>${money(v.wreckFee ?? 2000)}</b> (tow ${money(v.towFee ?? 1500)} + repair ${money(v.repairFull ?? 500)}) · the tow truck brings it back repaired · rammed off by the police: not repaired, it is gone</li></ul>
         </div>
         ${v.garage?.length ? `<div class="cr-sum cr-garage paper" style="--clip:${brushClip(741, 4, 3)}"><div class="cr-group">MY CARS · <b>${v.garage.length} / ${v.garageMax || 10}</b></div>${v.garage.map((g) => `<div class="cr-sum-row${g.id === c.id ? ' mine' : ''}" data-car="${esc(g.plate)}"><i class="os-sw cr-sw-paint ${paintOf(g.paint).finish}" style="--c:${css(paintOf(g.paint).hex)}"></i><span><small>${esc(g.plate)} · ${esc(paintOf(g.paint).label)} · RESALE ${money(g.value)}</small><b>${esc(g.label)}</b></span><em>${g.out ? 'IN YOUR BAY' : 'TAKE OUT'}</em><button class="cr-car-sell${this.sellArm === g.plate ? ' armed' : ''}" tabindex="-1" data-sell="${esc(g.plate)}">${this.sellArm === g.plate ? `SURE? +${money(g.value)}` : 'SELL'}</button></div>`).join('')}</div>` : ''}`;
       list.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => this.go(+b.dataset.go)));

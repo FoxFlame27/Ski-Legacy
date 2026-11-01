@@ -18,6 +18,9 @@ import { VILLAGE_BUILDINGS } from '../world/layout.js';
 import { RAIL, railAt, railNearest } from '../world/railroute.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
+import { K, usingPad } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+/** The sled's controls in the keys in use: "W throttle · S brake · A/D steer ...", or the controller's stick and buttons. */
+const sledKeys = (hb) => `${usingPad() ? `${K('move')} throttle · brake · steer` : `${K('forward')} throttle · ${K('back')} brake · ${K('left')}/${K('right')} steer`} · ${K('sprint')} boost${hb ? ` · ${K('jump')} handbrake` : ''} · ${K('interact')} get off`;
 
 // Off until verified in the game (the browser queue ran out before the check): with it off nothing is placed, no
 // light or sound is created and every main.js hook is inert. Dev override: ?flags=sleds (or localStorage 'sl.flags').
@@ -221,7 +224,7 @@ export class Snowmobiles {
     if (!SLEDS_ON || !this.models.snowmobile) return null;
     const h = p.heading || 0;
     const x = p.pos.x + Math.sin(h) * 3 + Math.cos(h) * 1.5, z = p.pos.z + Math.cos(h) * 3 - Math.sin(h) * 1.5;
-    this.hud?.flash('Snowmobile · E to drive', 'good', 2200);
+    this.hud?.flash(`Snowmobile · ${K('interact')} to drive`, 'good', 2200);
     return this.add(x, z, h);
   }
 
@@ -270,7 +273,7 @@ export class Snowmobiles {
     const c = this.cam;
     c.yaw = s.heading + Math.PI; c.pitch = 0.24; c.ready = false; c.lastMouse = 0;
     this.audio?.play('board');
-    this.hud?.flash('W throttle · S brake · A/D steer · SHIFT boost · E get off when stopped', 'good', 4800);
+    this.hud?.flash(`${sledKeys(false)} when stopped`, 'good', 4800);
   }
 
   // off at a standstill: beside the seat (left, else right, else behind) on clear snow; the sled stays parked
@@ -669,6 +672,6 @@ export class Snowmobiles {
 
   /** Objective line while you drive. */
   hudLine() {
-    return this.d ? 'W throttle · S brake · A/D steer · SHIFT boost · SPACE handbrake · E get off' : '';
+    return this.d ? sledKeys(true) : '';
   }
 }

@@ -29,6 +29,9 @@ import { travelPicker, fmtMin } from '../ui/travel.js'; // the flight planner
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
 import { CARD_DIALOG } from '../ui/hud.js';
 import { addTrafficBlocker } from './traffic.js'; // (cars stop for it on a road)
+import { K, usingPad } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+/** "press W" on the keyboard, "L STICK forward" on a controller. */
+const goKey = () => (usingPad() ? `${K('move')} forward` : `press ${K('forward')}`);
 
 export const HELI_PRICE = 1500; // a treat: ~10 min of jobs (Oct 29 rebalance: was $300)
 const JUMP_AGL = 6;          // jump out from at most this high (skids above the snow, m)...
@@ -326,7 +329,7 @@ export class Heli {
       this.plan = null; // (the trip is over: it flies home)
       this.state = 'auto';
       this.pilot.home(this.home, 1.6);
-      this.hud.flash('Fresh powder · press W to go', 'gold', 2600);
+      this.hud.flash(`Fresh powder · ${goKey()} to go`, 'gold', 2600);
     }
     this.hudUI.show(false);
   }
@@ -357,7 +360,7 @@ export class Heli {
     this.awayT = 0;
     f.hold = 0;
     this.audio.play('board');
-    this.hud.flash(flat ? 'Landed · the helicopter waits here' : 'Fresh powder · W to go · the helicopter waits here', 'gold', 2800);
+    this.hud.flash(flat ? 'Landed · the helicopter waits here' : `Fresh powder · ${goKey()} to go · the helicopter waits here`, 'gold', 2800);
     this.hudUI.show(false);
   }
 
@@ -496,7 +499,7 @@ export class Heli {
         const L = this.land;
         let prompt = null, key = null, warn = false;
         if (!this.spun) prompt = `Starting the turbine · rotor ${Math.round(this.rpm * 100)}%`;
-        else if (f.landed) { prompt = J.ok ? 'Get out · SPACE lift off' : 'Lift off'; key = J.ok ? 'E' : 'SPACE'; }
+        else if (f.landed) { prompt = J.ok ? `Get out · ${K('jump')} lift off` : 'Lift off'; key = J.ok ? 'E' : 'SPACE'; }
         else if (J.ok) { prompt = J.label; key = 'E'; }
         else if (L.label) { prompt = L.label; key = L.ok ? 'SHIFT' : null; warn = L.warn; }
         else if (J.label) { prompt = J.label; warn = J.warn; }
@@ -690,7 +693,7 @@ export class Heli {
   hudLine() {
     if (this.state === 'rescue') return this.rescue.hudLine();
     if (!this.active) return '';
-    return LAND_ANYWHERE ? 'Set down on flat open snow (SHIFT), or hover low over a steep slope and jump out (E)' : 'Hover low and slow over fresh snow, then E to jump out';
+    return LAND_ANYWHERE ? `Set down on flat open snow (${K('sprint')}), or hover low over a steep slope and jump out (${K('interact')})` : `Hover low and slow over fresh snow, then ${K('interact')} to jump out`;
   }
 
   /** Map markers: the helipad, the drop zones and the helicopter itself while it's out. */

@@ -14,7 +14,6 @@ import { world as WORLD } from '../world/world.js';
 import { nightUniform } from '../world/village.js';
 import { loadGLB } from '../core/assets.js';
 import { carTemplate, carInstance, driverEye, REAL } from './cars.js';
-import { keysHTML } from '../ui/hud.js';
 import { SEAT_EYE, SEAT_LIFT, seatHip, seatsFor, seatLegs, underRoof, leanBack, twoBone, setWQ, wquat, wpos } from './carpeople.js';
 import { lampsOn, LightPool, Smoke, hazardPhase, headlampSpot, cabinFill, cabinLight } from './carlights.js';
 import { knockPerson, peopleNear } from './peoplehits.js';
@@ -27,6 +26,7 @@ import { weatherFx } from '../world/sky.js'; // (icy roads after bad weather)
 import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera shake)
 import { rumble } from '../core/gamepad.js'; // (controller vibration: crashes, knocks, landings, rough ground)
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
+import { K, kc, usingPad, onPromptChange } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 // m: the cockpit camera over your eyes (the seated rig's; that body now sits SEAT_LIFT higher in the seat, Oct 31 2026,
 // so the camera stays where the user set it: "move the camera a bit higher", Oct 27)
 const COCKPIT_RAISE = 0.1 - SEAT_LIFT;
@@ -389,15 +389,15 @@ export class Drive {
       const upY = _w.set(0, 1, 0).applyQuaternion(d.e.car.quaternion).y;
       d.flipT = !d.crash && upY < 0.34 && this.speed < 2 ? (d.flipT || 0) + dt : 0;
       if (d.flipT > 1) {
-        if (performance.now() - (this.flipMsgT || 0) > 2000) { this.flipMsgT = performance.now(); this.hud?.flash('F · Flip car back', 'good', 1900); }
-        if (input?.hit?.('KeyF')) this.unflip();
+        if (performance.now() - (this.flipMsgT || 0) > 2000) { this.flipMsgT = performance.now(); this.hud?.flash(`${usingPad() ? K('unstuck') : 'F'} · Flip car back`, 'good', 1900); }
+        if (input?.hit?.('KeyF') || input?.hit?.('KeyU')) this.unflip(); // (U too: the controller's unstuck button, F has none)
       }
       // U: unstuck (Oct 30 2026, the user: "add an unstuck key"; R is the camera, so U). The hint only once you've
       // been slow with the pedal down for ~3 s (stuck); the key works whenever you're slow (unstuck())
       const slow = this.speed < UNSTUCK_V;
       const pushing = thr || (d.gear === 'R' && brk); // (the throttle, or S reversing)
       d.stuckT = d.crash || held || !slow ? 0 : pushing ? (d.stuckT || 0) + dt : Math.max(0, (d.stuckT || 0) - dt * 0.5);
-      if (pushing && d.stuckT > UNSTUCK_HINT && d.flipT <= 1 && performance.now() - (this.stuckMsgT || 0) > 2600) { this.stuckMsgT = performance.now(); this.hud?.flash('U · Unstuck', 'good', 2400); }
+      if (pushing && d.stuckT > UNSTUCK_HINT && d.flipT <= 1 && performance.now() - (this.stuckMsgT || 0) > 2600) { this.stuckMsgT = performance.now(); this.hud?.flash(`${K('unstuck')} · Unstuck`, 'good', 2400); }
       if (input?.hit?.('KeyU') && !d.crash && !held) this.unstuck();
       // after a crash: the car comes to rest, then you're out beside it
       if (d.crash) { d.crash.t += dt; if (d.crash.t > 1.9 && this.speed < 1.2 && Math.abs(d.crash.rollTo - d.crash.roll) < 0.05) this.wreckOut(); }
@@ -1431,8 +1431,14 @@ export class Drive {
       const el = document.createElement('div');
       el.id = 'drive-hud';
       el.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-      const rows = [[['W'], 'Throttle'], [['S'], 'Brake · reverse'], [['A', 'D'], 'Steer'], [['SPACE'], 'Handbrake'], [['R'], 'Camera · inside / chase'], [['C'], 'Look back'], [['H'], 'Horn'], [['L'], 'Headlights'], [['E'], 'Get out (stopped)'], [['U'], 'Unstuck (stuck, slow)']];
-      el.innerHTML = `<div class="ch-card paper"><div class="ch-head">CAR</div>${rows.map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${keysHTML(k)}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
+      // (the keys in use: the keyboard, or the controller's buttons: RT gas, LT brake; rebuilt when the device changes)
+      const fill = () => {
+        const pad = usingPad(), out = el.firstElementChild?.classList.contains('out');
+        const rows = [[pad ? kc('sprint') : kc('forward'), 'Throttle'], [pad ? kc('brake') : kc('back'), 'Brake · reverse'], [pad ? kc('steer') : kc('left') + kc('right'), 'Steer'], [kc('jump'), 'Handbrake'], [kc('view'), 'Camera · inside / chase'], [kc('lookback'), 'Look back'], [kc('horn'), 'Horn'], [kc('lights'), 'Headlights'], [kc('interact'), 'Get out (stopped)'], [kc('unstuck'), 'Unstuck (stuck, slow)']];
+        el.innerHTML = `<div class="ch-card paper${out ? ' out' : ''}"><div class="ch-head">CAR</div>${rows.map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
+      };
+      fill();
+      onPromptChange(fill);
       (document.getElementById('hud') || document.body).appendChild(el);
       this.cardEl = el;
     }
@@ -1440,7 +1446,7 @@ export class Drive {
     clearTimeout(this.cardT);
     this.cardEl.hidden = !on;
     card.classList.remove('out');
-    if (on) this.cardT = setTimeout(() => card.classList.add('out'), 12000);
+    if (on) this.cardT = setTimeout(() => this.cardEl.firstElementChild?.classList.add('out'), 12000); // (the card now: re-rendered when the device changes)
   }
 }
 void REAL;

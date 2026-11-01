@@ -5,6 +5,7 @@ import { ACTION, bindsOf, padGlyph, keyLabel } from '../core/bindings.js'; // (N
 import * as gp from '../core/gamepad.js'; // padInfo(): the connected controller (its family picks the glyphs) // (SETTINGS: speed unit, clock format, forecast line)
 import { brushSVG, brushClip } from './menu.js'; // (used at call time only: menu.js imports this module too)
 import './travel.css';
+import { K, kc, usingPad, padFam, onPromptChange } from './prompts.js'; // button prompts: keyboard keys or the controller in use
 
 const $ = (id) => document.getElementById(id);
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -107,13 +108,25 @@ export function controlsTable(family = null) {
   ];
 }
 
+/**
+ * An inline key name in running text ("Start · ENTER" / "Start · A"): a <kbd> styled as plain text that prompts.js
+ * re-labels when the device changes (data-k: an action id or 'confirm' / 'cancel' / 'esc' / ...).
+ */
+export const pk = (id) => `<kbd class="pk" data-k="${id}">${K(id)}</kbd>`;
+
+/**
+ * Arrow keycaps that read D-PAD while a controller is in use (both are in the page; style.css shows one by
+ * body.using-pad, so they swap live). d: 'updown' | 'leftright'.
+ */
+export const arrowCaps = (d) => `<span class="kb-only">${d === 'updown' ? '<i class="kc kc-arrow up"></i><i class="kc kc-arrow down"></i>' : '<i class="kc kc-arrow left"></i><i class="kc kc-arrow right"></i>'}</span><i class="kc kc-word pad-only" data-k="${d}">${K(d)}</i>`;
+
 /** Keycaps for a list of key labels (drawn with CSS, no icon font). */
 export const keysHTML = (keys) => keys.map((k) => (k === '+' ? '<b class="kc-plus">+</b>' : `<i class="kc${String(k).length > 1 ? ' kc-word' : ''}">${k}</i>`)).join('');
 
 // first-time hint: the essentials, bottom-left, once per save (save.tutorial), in the current bindings: the keyboard, or
 // the connected controller's buttons
 function hintRows() {
-  const f = padFamilyNow(), L = (id) => bindLabel(id, f);
+  const f = usingPad() ? padFam() : null, L = (id) => bindLabel(id, f); // (the device in use, not just a connected one)
   const steer = f ? ['L STICK'] : [L('left'), L('right')], fs = f ? ['L STICK ↑↓'] : [L('forward'), L('back')];
   return [
     [keysHTML(steer), 'Steer'],
@@ -160,7 +173,10 @@ export class HUD {
       this.el.appendChild(el);
     }
     this.hintShown = true;
-    el.innerHTML = `<div class="ch-card paper"><div class="ch-head">CONTROLS</div>${hintRows().map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
+    // (data-no-swap: already in the device's labels; a controller "A" must not be read as the keyboard's A = left)
+    const render = () => { el.innerHTML = `<div class="ch-card paper" data-no-swap><div class="ch-head">CONTROLS</div>${hintRows().map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`; };
+    render();
+    if (!this.hintSwap) this.hintSwap = onPromptChange(() => { const e = $('controls-hint'); if (e && !e.hidden) render(); });
     el.classList.remove('out');
     el.hidden = false;
     clearTimeout(this.hintSeenT);
@@ -371,7 +387,7 @@ export class HUD {
       ${aiRow}
       <div class="sub" style="margin-top:14px">Ski through every gate (through the green bar between its two flags) and beat the 14 racers to the finish. A missed gate only adds half a second.</div>
       ${broke ? `<div class="sub" style="color:#ff8a80;font-weight:700">You need $${fmtMoney(fee)} for the entry fee — you have $${fmtMoney(save.money)}. Win easier races first.</div>` : ''}
-      <div class="actions"><button class="btn" data-close>Cancel · Esc</button>${onPractice ? '<button class="btn" data-practice>Practice race (no prize) · P</button>' : ''}<button class="btn primary" data-start ${broke ? 'disabled' : ''}>Start · Enter</button></div>`, onClose);
+      <div class="actions"><button class="btn" data-close>Cancel · ${pk('cancel')}</button>${onPractice ? `<button class="btn" data-practice>Practice race (no prize)<span class="kb-only"> · P</span></button>` : ''}<button class="btn primary" data-start ${broke ? 'disabled' : ''}>Start · ${pk('confirm')}</button></div>`, onClose);
     const card = $('panel-card');
     const startBtn = card.querySelector('[data-start]');
     const setAi = (k) => {
@@ -426,12 +442,12 @@ export class HUD {
       <h3>Settings</h3>
       <div class="ctl">
         <b>Graphics</b><select id="q-sel">${['low', 'medium', 'high', 'ultra'].map((q) => `<option value="${q}" ${save.quality === q ? 'selected' : ''}>${q[0].toUpperCase() + q.slice(1)}</option>`).join('')}</select>
-        <b>Mouse</b><input id="sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}">
+        <b>${usingPad() ? 'Mouse (keyboard)' : 'Mouse'}</b><input id="sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}">
         <b>Time of day</b><span><button class="btn" data-time="7">Dawn</button> <button class="btn" data-time="12">Noon</button> <button class="btn" data-time="17.5">Dusk</button> <button class="btn" data-time="22">Night</button></span>
       </div>
       <h3>Controls</h3>
       <div class="ctl">
-        ${controlsTable().map((g) => g.rows.map(([k, label]) => `<b>${g.title === 'IN THE AIR' ? 'Air · ' : ''}${k.join(' ')}</b>${label}`).join('')).join('')}
+        ${controlsTable(usingPad() ? padFam() : null).map((g) => g.rows.map(([k, label]) => `<b>${g.title === 'IN THE AIR' ? 'Air · ' : ''}${k.join(' ')}</b>${label}`).join('')).join('')}
       </div>
       <div class="actions"><button class="btn" data-reset>Reset progress</button><button class="btn" data-quit>Quit</button><button class="btn primary" data-close>Resume</button></div>`);
     const card = $('panel-card');
@@ -469,14 +485,14 @@ export class HUD {
       const foot = c.price ? `<span class="do-price">${c.price}</span>` : c.state ? `<span class="do-state${/free/i.test(c.state) ? ' free' : ''}">${c.state}</span>` : '';
       const note = c.short ? `<span class="do-note">You have $${fmtMoney(save.money)}</span>` : '';
       return `<button class="dlg-opt" data-opt="${i}" style="--i:${n};--clip:${brushClip(60 + i * 5, 6, 4)}" ${o.disabled ? 'disabled' : ''}>
-        <span class="do-key"><i class="kc">${n + 1}</i></span>
+        <span class="do-key"><i class="kc kb-only">${n + 1}</i></span>
         <span class="do-body"><span class="do-title">${o.label}</span>${c.sub ? `<span class="do-sub">${c.sub}</span>` : ''}</span>
         ${foot || note ? `<span class="do-foot">${foot}${note}</span>` : ''}<i class="do-bar"></i></button>`;
     };
     this.open(`<div class="dialog dlg">${kicker ? `<div class="dlg-kicker"><i></i>${kicker}</div>` : ''}<div class="who">${title}</div><div class="say">${say || ''}</div>
       ${prim.length ? `<div class="dlg-cards">${prim.map((i, n) => card(i, n)).join('')}</div>` : ''}
       <div class="dlg-foot">${sec.map((i) => `<button class="dlg-sec" data-opt="${i}" ${options[i].disabled ? 'disabled' : ''}>${options[i].label}</button>`).join('')}
-        <span class="dlg-hints">${prim.length > 1 ? `<span class="hint"><i class="kc kc-arrow left"></i><i class="kc kc-arrow right"></i><em>Choose</em></span>` : ''}${prim.length ? '<span class="hint"><i class="kc">ENTER</i><em>Select</em></span>' : ''}<span class="hint"><i class="kc">ESC</i><em>Close</em></span></span></div></div>`,
+        <span class="dlg-hints">${prim.length > 1 ? `<span class="hint">${arrowCaps('leftright')}<em>Choose</em></span>` : ''}${prim.length ? `<span class="hint">${kc('confirm')}<em>Select</em></span>` : ''}<span class="hint">${kc('cancel')}<em>Close</em></span></span></div></div>`,
     undefined, 'dlg-card-host');
     const root = $('panel-card').querySelector('.dialog');
     const btns = [...root.querySelectorAll('[data-opt]')];

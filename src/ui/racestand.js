@@ -10,6 +10,9 @@ import './jobboard.css';
 import './racestand.css';
 import { brushSVG, brushClip, esc, medalHTML } from './menu.js';
 import { fmtTime } from './hud.js';
+import { K } from './prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+/** A hint keycap for an action / special ('updown', 'confirm', 'cancel'...): the key, or the controller's button (re-labels itself). */
+const kb = (id) => `<kbd data-k="${id}">${K(id)}</kbd>`;
 
 const DIFFS = [['easy', 'EASY'], ['medium', 'MEDIUM'], ['hard', 'HARD'], ['superhard', 'SUPERHARD']];
 const ord = (n) => (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
@@ -109,7 +112,7 @@ export class RaceStandUI {
             </div>
           </div>
         </div>
-        <div class="jb-hint"><kbd>↑</kbd><kbd>↓</kbd> course <kbd>←</kbd><kbd>→</kbd> difficulty <kbd>Enter</kbd> start <kbd>Esc</kbd> close</div>
+        <div class="jb-hint">${kb('updown')} course ${kb('leftright')} difficulty ${kb('confirm')} start ${kb('cancel')} close</div>
       </div>`;
     this.detail();
     const board = this.el.querySelector('.jb-board');

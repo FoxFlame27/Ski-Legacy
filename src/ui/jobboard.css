@@ -92,6 +92,7 @@
 .jb-btn.light span { color: var(--blue); }
 .jb-btn.danger span { color: #fff; }
 .jb-btn:hover { transform: translateX(calc(var(--u) * 6)); }
+.jb-btn:focus-visible { transform: translateX(calc(var(--u) * 6)); outline: 2px solid currentColor; outline-offset: 3px; } /* (the d-pad / arrow keys picked it) */
 .jb-btn:active { transform: translateX(calc(var(--u) * 6)) scale(0.98); }
 .jb-btn:disabled { cursor: default; opacity: 0.45; transform: none; }
 

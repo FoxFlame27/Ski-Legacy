@@ -22,6 +22,7 @@
 import { MP } from './mode.js';
 import { net } from './client.js';
 import { ERR_TEXT } from './protocol.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 const RAIL_RATE = 6;      // the single-player SPACE rates (railway.js, lifts: main.js)
 const LIFT_RATE = 16;
@@ -223,7 +224,7 @@ export class MpTransit {
       w.retry();
     } else if (ahead < behind) { // (it went by while the seat was being claimed)
       this.liftWait = null; this.s.releaseSeat(); this.mine = null;
-      this.flash('Missed it · E for the next one', 'bad', 2000);
+      this.flash(`Missed it · ${K('interact')} for the next one`, 'bad', 2000);
     }
   }
 

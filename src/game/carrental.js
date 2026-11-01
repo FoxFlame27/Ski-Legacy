@@ -34,6 +34,7 @@ import { applyDents, packDents, unpackDents } from './cardamage.js'; // (your ca
 import { isMP, MP } from '../net/mode.js'; // (multiplayer: your other cars' saved spots, the server profile's cars[i].at: keptSpot)
 import { OwnerTags } from './ownertags.js'; // your name over your car, chalet, rented helicopter (and their map markers)
 import { mergeStatic } from '../engine/merge.js'; // (the hall's boxes welded per material)
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 // (Oct 29, AUTOHAUS: bought for good at dealership prices, set against ~$9,000 an hour of jobs (jobs/catalog.js) and the
 // $50,000 chalet: the Golf after an hour or two of jobs, the supercars long-term goals)
@@ -708,7 +709,7 @@ export class CarRental {
       this.player.teleport(this.door.x + f.x * 0.8, this.door.z + f.z * 0.8, Math.atan2(f.x, f.z));
       this.player.camYaw = Math.atan2(f.x, f.z) + Math.PI + 0.4;
       this.player.camPitch = -0.12;
-      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is in the tow yard by the Autohaus · ${untilTomorrow(this.current.impound)}` : `Your ${this.label(this.current.cfg?.id)} waits in the ${this.where()} · E to drive`, 'good', 2800), 400);
+      if (this.current) setTimeout(() => this.hud?.flash(this.current?.impound ? `Your car is in the tow yard by the Autohaus · ${untilTomorrow(this.current.impound)}` : `Your ${this.label(this.current.cfg?.id)} waits in the ${this.where()} · ${K('interact')} to drive`, 'good', 2800), 400);
     };
     if (now) out(); else { this.audio?.play?.('click'); this.transition.fade(out); }
   }

@@ -6,6 +6,7 @@ import './buildmenu.css';
 import { brushSVG, brushClip } from './menu.js';
 import { CATEGORIES, FURNITURE } from '../game/build/catalog.js';
 import { getThumb } from '../game/build/furniture.js';
+import { kc as pk } from './prompts.js'; // (BUTTON PROMPTS: keycaps in the keys / controller buttons in use)
 
 const fmt = (n) => n.toLocaleString('en-US');
 const kc = (k) => `<i class="kc">${k}</i>`;
@@ -70,11 +71,11 @@ export class BuildMenu {
       `<span class="bm-mode paper ${look ? 'look' : ''}" style="--clip:${brushClip(321, 4, 4)}">${look ? 'LOOK AROUND' : 'CURSOR'}</span>`,
       hint(kc('TAB'), look ? 'Free the mouse' : 'Look around'),
       look ? '' : hint(kc('RMB'), 'Hold to look'),
-      hint(kc('WASD'), 'Walk'),
+      hint(pk('move'), 'Walk'),
       hint(kc(look ? 'CLICK' : 'CLICK'), 'Buy &amp; place'),
-      hint(kc('R') + kc('WHEEL'), 'Rotate'),
-      hint(kc('Q'), 'Move'),
-      hint(kc('X'), 'Sell 50%'),
+      hint(pk('view') + kc('WHEEL'), 'Rotate'),
+      hint(pk('pickup'), 'Move'),
+      hint(pk('alt'), 'Sell 50%'),
       hint(kc('⌫'), 'Empty hand'),
       hint(kc('F'), 'Done'),
     ].join('');

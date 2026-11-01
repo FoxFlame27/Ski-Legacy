@@ -28,6 +28,7 @@ import { layout } from './layout.js';
 import { freeCourses } from '../modes/parkour/freeworld.js';
 import { addTrainBlocker } from '../game/traffic.js';
 import { smoothstep, clamp, lerp } from '../core/noise.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 // the track agent's module (track, viaducts, tunnels, stations): loaded lazily so
 // the trains run (and the game boots) whether it is there or not
@@ -500,7 +501,7 @@ export class Express {
     const w = this.wait;
     if (w && this.onPlatform(this.stations[w.from], p, 25)) {
       const n = this.nextAt(w.from, w.dir);
-      return { from: this.stations[w.from], cancel: true, label: `Waiting for the ${EXPRESS_NAME} to ${this.stations[w.dest].name} · ${n && n.wait > 0 ? `due in ${Math.ceil(n.wait)} s` : 'boarding'} · E to cancel` };
+      return { from: this.stations[w.from], cancel: true, label: `Waiting for the ${EXPRESS_NAME} to ${this.stations[w.dest].name} · ${n && n.wait > 0 ? `due in ${Math.ceil(n.wait)} s` : 'boarding'} · ${K('interact')} to cancel` };
     }
     const price = hasPass ? 'Day pass' : `$${EXPRESS_PRICE}`;
     for (let k = 0; k < this.stations.length; k++) {
@@ -664,7 +665,7 @@ export class Express {
     const next = this.stations[st.at >= 0 && !r.departed ? r.dest : st.next];
     const mins = Math.max(1, Math.round(eta / 60));
     const hint = !r.departed ? `${EXPRESS_NAME} to ${dest.name} · departs in ${Math.ceil(st.left)} s`
-      : stop ? `${stop.name} · press E to get off here`
+      : stop ? `${stop.name} · press ${K('interact')} to get off here`
       : next === dest ? `${EXPRESS_NAME} · next stop ${dest.name} · ${mins} min`
       : `${EXPRESS_NAME} to ${dest.name} · next stop ${next.name} · ${mins} min`;
     return { seat, hint, stop, eta };

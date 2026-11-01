@@ -31,6 +31,7 @@ import { isMP, MP } from '../net/mode.js';
 import { ST, fallFlags } from '../net/protocol.js';
 import { world } from '../world/world.js';
 import { twoBone, wpos, wquat, setWQ } from './carpeople.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 const BEAMS_X = [-6.0, -3.6, -1.2, 1.2, 3.6, 6.0]; // the ceiling's glulam beams (x, every 2.4 m, symmetric about the middle)
 export const STAY_S = 20; // the recovery (game seconds in bed before you may get up; Oct 30, the user: 20 s)
@@ -1243,8 +1244,8 @@ export class HospitalWard {
   }
   /** The HUD's objective line inside. */
   hudLine() {
-    if (this.role === 'patient') return (this.active ? `Recovering in bed ${this.room.bed + 1} · ${fmt(this.left())}` : 'Fit again · press E to get up') + ' · R: view';
-    if (this.room.seat) return 'Sitting by the bed · E to stand up';
+    if (this.role === 'patient') return (this.active ? `Recovering in bed ${this.room.bed + 1} · ${fmt(this.left())}` : `Fit again · press ${K('interact')} to get up`) + ` · ${K('view')}: view`;
+    if (this.room.seat) return `Sitting by the bed · ${K('interact')} to stand up`;
     return 'Medical centre · visit a patient in the ward, the way out: the glass doors';
   }
 
@@ -1255,7 +1256,7 @@ export class HospitalWard {
     if (this.role === 'patient') {
       if (this.active && this.now() >= this.until) {
         this.active = false;
-        this.hud?.flash('You feel fit again · press E to get up', 'good', 3200);
+        this.hud?.flash(`You feel fit again · press ${K('interact')} to get up`, 'good', 3200);
         this.audio?.play?.('board');
       }
       // a visitor sat down by your bed (multiplayer)
@@ -1264,7 +1265,7 @@ export class HospitalWard {
         for (const n of v) if (!this.visitSeen?.has(n)) { this.visitSeen?.add(n); this.hud?.flash(`${n} came to visit you`, 'good', 3000); }
       } catch { /* (decor) */ }
       try { this.room.poseBody(this.player?.rig, dt); } catch (e) { console.warn('hospital: body', e); } // (you, lying in your bed)
-      this.card(this.active ? ['RECOVERING', fmt(this.left()), `Medical centre · bed ${this.room.bed + 1} · rest until you are fit`] : ['FIT AGAIN', '✓', 'Press E to get up and walk out'], !this.active);
+      this.card(this.active ? ['RECOVERING', fmt(this.left()), `Medical centre · bed ${this.room.bed + 1} · rest until you are fit`] : ['FIT AGAIN', '✓', `Press ${K('interact')} to get up and walk out`], !this.active);
     } else this.card(null);
     void dt;
   }

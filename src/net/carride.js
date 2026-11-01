@@ -20,6 +20,7 @@ const OWN_TAG_OFF = true;
 import { carSeats, seatWorld, parseVeh } from './vehicles.js';
 import { busRoads } from '../game/bus/roads.js';
 import { cabinLight } from '../game/carlights.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 const ASK_REACH = 2.2;  // m from the car's body
 const TAG_FAR = 130;
@@ -299,7 +300,7 @@ export class CarRide {
     p.rig.snapPose?.();
     p.rig.gear.visible = false; // (your skis stay out of the cabin)
     g.audio?.play?.('board');
-    g.hud.flash(`${owner}'s car · ${seat === 1 ? 'front seat' : 'back seat'} · E to get out · R first person / chase`, 'good', 3600);
+    g.hud.flash(`${owner}'s car · ${seat === 1 ? 'front seat' : 'back seat'} · ${K('interact')} to get out · ${K('view')} first person / chase`, 'good', 3600);
     return true;
   }
 

@@ -26,6 +26,7 @@ import { CAR_MODELS, pickCar } from './cars.js';
 import { mulberry32 } from '../core/noise.js';
 import { net } from '../net/client.js';
 import { isMP } from '../net/mode.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 // how long until the impound lifts: the next in-game day starts at midnight (world/sky.js: 1 game hour = 40 real s)
 // The tow yard (was "impounded"; Oct 30, the user: "when your car is impounded it comes back in 3 min, and change
@@ -441,7 +442,7 @@ export class Impound {
     if (!D || D.e !== e) { this.parkHud(null); return; }
     const v = Math.hypot(D.vx || 0, D.vz || 0), sp = v < 4 ? this.where(D.x, D.z, D.yaw, e.length || 4.6) : null;
     let t = null;
-    if (sp?.kind === 'bay') t = [true, 'In the bay ✓', `Parked properly · ${sp.lot?.name || 'car park'} · E to get out`];
+    if (sp?.kind === 'bay') t = [true, 'In the bay ✓', `Parked properly · ${sp.lot?.name || 'car park'} · ${K('interact')} to get out`];
     else if (sp?.kind === 'lot') {
       t = sp.why === 'angle' ? [false, 'Not in a bay — straighten up', 'Pull into the bay, straight inside the lines']
         : sp.why === 'lines' ? [false, 'Not in a bay — over the lines', 'Pull into the bay, inside the lines']

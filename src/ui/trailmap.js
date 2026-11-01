@@ -40,6 +40,7 @@ import { PISTE_COLORS } from '../world/resortdressing.js';
 import { freeCourses } from '../modes/parkour/freeworld.js'; // the World Racing courses on the mountains
 import { busRaceEntries } from '../modes/race/busraces.js'; // the ski bus's free races on the pistes (gold tape)
 import { brushSVG, brushClip, esc } from './menu.js';
+import { K, kc } from './prompts.js'; // keycaps that follow the device in use (keyboard / controller)
 import { busRoads, roadAt } from '../game/bus/roads.js'; // the road network (valley roads, scenic roads, roundabouts, car parks)
 import { CHALET_PLACE } from '../game/bus/chaletroad.js'; // (the chalet village's spot before game/chalets.js has built it)
 
@@ -330,12 +331,13 @@ export class TrailMap {
         </div>
       </div>
       <div class="tm-hints">
-        <span class="hint"><i class="kc">M</i><em>Close</em></span>
-        <span class="hint"><i class="kc kc-word">DRAG</i><em>Move</em></span>
-        <span class="hint"><i class="kc kc-word">SCROLL</i><em>Zoom</em></span>
-        <span class="hint"><i class="kc kc-word">POINT</i><em>Info</em></span>
-        <span class="hint"><i class="kc kc-word">CLICK</i><em>Mark a place</em></span>
-        <span class="hint"><i class="kc">R</i><em>Back to you</em></span>
+        <span class="hint">${kc('map')}<em>Close</em></span>
+        <span class="hint kb-only"><i class="kc kc-word">DRAG</i><em>Move</em></span>
+        <span class="hint pad-only"><i class="kc kc-word" data-k="updown">${K('updown')}</i><em>Move</em></span>
+        <span class="hint kb-only"><i class="kc kc-word">SCROLL</i><em>Zoom</em></span>
+        <span class="hint kb-only"><i class="kc kc-word">POINT</i><em>Info</em></span>
+        <span class="hint kb-only"><i class="kc kc-word">CLICK</i><em>Mark a place</em></span>
+        <span class="hint kb-only"><i class="kc" data-no-swap>R</i><em>Back to you</em></span>
       </div>`;
     this.canvas = r.querySelector('.tm-canvas');
     this.g = this.canvas.getContext('2d');

@@ -3,7 +3,7 @@
 // rotor gauge while it spools up, a prompt bottom-centre ("E  Jump out and ski" when low and slow over
 // open snow) and the controls card bottom-left. It lives inside #hud, so the pause menu hides it too.
 import { brushClip } from '../../ui/menu.js';
-import { keysHTML } from '../../ui/hud.js';
+import { kc, usingPad, onPromptChange } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 const CSS = `
 body.in-heli #speedo, body.in-heli #prompt, body.in-heli #ride-hint, body.in-heli #controls-hint { display: none !important; }
@@ -33,14 +33,16 @@ body.in-heli #speedo, body.in-heli #prompt, body.in-heli #ride-hint, body.in-hel
 #heli-hud .hh-keys.out { opacity: 0; translate: calc(var(--u) * -24) 0; }
 `;
 
-const KEYS = [
-  [keysHTML(['W', 'S']), 'Speed up · slow down'],
-  [keysHTML(['A', 'D']), 'Turn'],
-  [keysHTML(['SPACE']), 'Climb'],
-  [keysHTML(['SHIFT']), 'Descend · land on flat snow'],
-  [keysHTML(['MOUSE']), 'Look around'],
-  [keysHTML(['E']), 'Get out · or jump out hovering low'],
+// (the keys in use: the keyboard, or the controller's buttons; re-rendered when the device changes)
+const KEYS = () => [
+  ...(usingPad() ? [[kc('move'), 'Speed up · slow down · turn']]
+    : [[kc('forward') + kc('back'), 'Speed up · slow down'], [kc('left') + kc('right'), 'Turn']]),
+  [kc('jump'), 'Climb'],
+  [kc('sprint'), 'Descend · land on flat snow'],
+  [kc('look'), 'Look around'],
+  [kc('interact'), 'Get out · or jump out hovering low'],
 ];
+const keysCard = () => `<div class="ch-card paper"><div class="ch-head">HELICOPTER</div>${KEYS().map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
 
 export class HeliHud {
   constructor() {
@@ -66,11 +68,12 @@ export class HeliHud {
         <div class="hh-rotor" hidden><span class="rh-label">ROTOR</span><div class="hh-bar"><i></i></div></div>
       </div>
       <div class="hh-prompt" hidden><span class="key">E</span><span class="hh-ptext"></span></div>
-      <div class="hh-keys" hidden><div class="ch-card paper"><div class="ch-head">HELICOPTER</div>${KEYS.map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div></div>`;
+      <div class="hh-keys" hidden>${keysCard()}</div>`;
     (document.getElementById('hud') || document.body).appendChild(el);
     const q = (s) => el.querySelector(s);
     this.$ = { kmh: q('.hh-kmh'), alt: q('.hh-alt'), vs: q('.hh-vs'), rotor: q('.hh-rotor'), bar: q('.hh-bar i'), prompt: q('.hh-prompt'), key: q('.hh-prompt .key'), ptext: q('.hh-ptext'), keys: q('.hh-keys') };
     this.el = el;
+    onPromptChange(() => { this.$.keys.innerHTML = keysCard(); });
   }
 
   /** Show / hide the flight HUD (and swap out the speedometer and prompt of the free-ride HUD). */

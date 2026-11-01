@@ -5,6 +5,8 @@
 // accents. Keyboard + mouse, Esc closes.
 import './outfitshop.css';
 import { brushSVG, brushClip, esc } from './menu.js';
+import { kc } from './prompts.js'; // keycaps that follow the device in use (keyboard / controller)
+import { arrowCaps } from './hud.js';
 import { OUTFIT_ITEMS, OUTFIT_KITS, OUTFIT_SLOTS, outfitItem, ownsOutfit, getEquipped, setEquipped, ensureOutfits } from '../game/outfits.js';
 
 const TABS = [
@@ -222,11 +224,11 @@ export class OutfitShop {
         <div class="os-detail paper" style="--clip:${brushClip(511, 5, 4)}"></div>
       </div>
       <div class="os-foot">
-        <span class="hint"><i class="kc kc-arrow left"></i><i class="kc kc-arrow right"></i><em>Category</em></span>
-        <span class="hint"><i class="kc kc-arrow up"></i><i class="kc kc-arrow down"></i><em>Choose</em></span>
-        <span class="hint"><i class="kc">ENTER</i><em>Buy / wear</em></span>
-        <span class="hint"><i class="kc">ESC</i><em>Close</em></span>
-        <span class="hint"><em>Drag to turn</em></span>
+        <span class="hint">${arrowCaps('leftright')}<em>Category</em></span>
+        <span class="hint">${arrowCaps('updown')}<em>Choose</em></span>
+        <span class="hint">${kc('confirm')}<em>Buy / wear</em></span>
+        <span class="hint">${kc('cancel')}<em>Close</em></span>
+        <span class="hint kb-only"><em>Drag to turn</em></span>
       </div>`;
     this.renderList();
     this.renderSelection();

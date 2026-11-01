@@ -4,6 +4,7 @@
 // All sizes are in the CSS unit --u (see style.css) so the layout scales with the window.
 import { brushSVG, brushClip, medalHTML, esc, replay } from './menu.js';
 import { fmtTime } from './hud.js';
+import { kc, usingPad } from './prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 export const ordinal = (n) => {
   const t = n % 100;
@@ -452,7 +453,10 @@ export class RaceHud {
 
     // (open-world races bring their own: one OK, you stay where you are, Oct 30 2026)
     const choices = custom || [['retry', 'RETRY', 'R'], canNext ? ['next', 'NEXT', 'ENTER'] : null, ['menu', 'MENU', 'ESC']].filter(Boolean);
-    const actions = choices.map(([id, label, key], i) => `<button class="brush-btn rr-btn" tabindex="-1" data-choice="${id}">${brushSVG(370 + i * 3)}<span>${label}<i class="kc">${key}</i></span></button>`).join('');
+    // (the keycaps re-label themselves for a controller (ENTER -> its confirm button, ESC -> back); a letter key has no
+    // button on these screens (a controller picks with the d-pad and confirms): left out)
+    const pad = usingPad();
+    const actions = choices.map(([id, label, key], i) => `<button class="brush-btn rr-btn" tabindex="-1" data-choice="${id}">${brushSVG(370 + i * 3)}<span>${label}${pad && key === 'ENTER' ? kc('confirm') : pad && key === 'ESC' ? kc('cancel') : pad ? '' : `<i class="kc">${key}</i>`}</span></button>`).join('');
 
     const el = this.resEl;
     el.innerHTML = `<div class="rr-shade"></div>

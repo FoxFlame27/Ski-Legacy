@@ -23,6 +23,7 @@ import { MpUI } from './ui.js';
 import { MpTransit } from './transit.js';
 import { DEVICE_PREFS } from '../game/economy.js';
 import { breakables } from '../world/breakables.js'; // (knocked poles, broken guardrails: shared with the world)
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 const ACCOUNTS_KEY = 'ski-legacy-mp-accounts';
 const SEND_HZ = 12;
@@ -839,7 +840,7 @@ export class Multiplayer {
   skipLine(k, v) {
     const s = MP.skip.get(`${k}|${v}`);
     if (!s || s.aboard <= 1) return '';
-    return s.active ? `Speeding up · everyone is holding SPACE` : `Hold SPACE to speed up (${s.holding}/${s.aboard} holding)`;
+    return s.active ? `Speeding up · everyone is holding ${K('jump')}` : `Hold ${K('jump')} to speed up (${s.holding}/${s.aboard} holding)`;
   }
   /** Helicopter copies at the pad: resolves { id } or null (not_yet: d.waitMs). */
   async heliRent() {

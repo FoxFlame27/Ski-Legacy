@@ -2,6 +2,7 @@
 // Canvas clip + DOM/CSS scenes + WebAudio hits; skippable with any key or click.
 import '@fontsource-variable/source-serif-4/opsz.css'; // calm editorial serif for the studio + mountain cards
 import { IntroClip, CLIP_MS } from './introclip.js';
+import { usingPad, onPromptChange } from './prompts.js'; // (a controller: "any button")
 import { StudioIdent, STUDIO_MS, STUDIO_LEAVE_MS } from './studioident.js';
 
 const wait = (ms, sig) => new Promise((res) => {
@@ -50,7 +51,8 @@ export class Intro {
     this.el.addEventListener('pointerdown', this.skip, { once: true });
     const hint = document.createElement('div');
     hint.className = 'intro-skip';
-    hint.textContent = 'Press any key to skip';
+    hint.textContent = usingPad() ? 'Press any button to skip' : 'Press any key to skip';
+    const unswap = onPromptChange(() => { if (hint.isConnected) hint.textContent = usingPad() ? 'Press any button to skip' : 'Press any key to skip'; else unswap(); });
     this.el.appendChild(hint);
 
     let clipS = null, studioS = null, clip = null, ident = null, total = 0;

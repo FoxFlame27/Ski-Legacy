@@ -20,6 +20,7 @@
 import './admin.css';
 import './adminnew.css';
 import { brushSVG, brushClip, esc } from './menu.js';
+import { kc } from './prompts.js'; // button prompts: keyboard keys or the controller in use
 import { WEATHER } from '../world/sky.js';
 import { world } from '../world/world.js';
 import { layout } from '../world/layout.js';
@@ -410,7 +411,7 @@ export class AdminNew {
         <div class="ad-col">
           <div class="menu-head">
             <div class="menu-title" style="width:calc(var(--u) * ${Math.round(w * 0.9)})">${brushSVG(2710, w, 100)}<span>ADMIN · NEW</span></div>
-            <div class="menu-sub ad-sub">${esc(this.me())} <i class="ch-dot"></i> ${mp ? `World ${MP.world?.id ?? '?'} · applied by the server` : 'Single player · your own game'} <i class="ch-dot"></i> <i class="kc">F10</i> or <i class="kc kc-word">ESC</i> to close</div>
+            <div class="menu-sub ad-sub">${esc(this.me())} <i class="ch-dot"></i> ${mp ? `World ${MP.world?.id ?? '?'} · applied by the server` : 'Single player · your own game'} <i class="ch-dot"></i> <span class="kb-only"><i class="kc">F10</i> or </span>${kc('cancel')} to close</div>
           </div>
           <div class="menu-panel ad-panel" style="--clip:${brushClip(2711, 5, 4)}">
             <div class="mp-head">${mp ? 'PLAYER' : 'YOU'}</div>
@@ -423,7 +424,7 @@ export class AdminNew {
             <div class="mp-row"><span>Progress</span>${this.confirming
               ? `<span class="ad-set"><input class="ad-amount an-confirm" type="text" placeholder="Type the name again" spellcheck="false" data-enter="reset"><button class="ad-btn an-danger" data-act="reset" tabindex="-1">RESET</button><button class="ad-btn an-alt" data-act="noreset" tabindex="-1">CANCEL</button></span>`
               : '<button class="ad-btn an-danger" data-act="reset" tabindex="-1">RESET…</button>'}</div>` : ''}
-            <div class="mp-row"><span>Free camera <i class="kc">V</i></span><button class="an-switch an-cam${this.freeCam ? ' on' : ''}" role="switch" aria-checked="${this.freeCam}" data-act="cam" tabindex="-1"><i></i><b>${this.freeCam ? 'ON' : 'OFF'}</b></button></div>
+            <div class="mp-row"><span>Free camera <i class="kc kb-only" data-no-swap>V</i></span><button class="an-switch an-cam${this.freeCam ? ' on' : ''}" role="switch" aria-checked="${this.freeCam}" data-act="cam" tabindex="-1"><i></i><b>${this.freeCam ? 'ON' : 'OFF'}</b></button></div>
             <div class="an-result${this.resultBad ? ' bad' : ''}">${esc(this.result)}</div>
           </div>
           <div class="menu-panel ad-panel" style="--clip:${brushClip(2712, 5, 4)}">

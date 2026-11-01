@@ -10,6 +10,11 @@
 //          current: { title, type, status, client } | null, take(id), cancel(), close() })
 import './jobboard.css';
 import { brushSVG, brushClip, esc } from './menu.js';
+import { K, usingPad, onPromptChange } from './prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+/** A hint keycap for an action / special ('updown', 'confirm', 'cancel'...): the key, or the controller's button (re-labels itself). */
+const kb = (id) => `<kbd data-k="${id}">${K(id)}</kbd>`;
+/** The board's hint: "Click a note to read it  ESC close", or the controller's d-pad / buttons. */
+const hintHTML = () => (usingPad() ? `${kb('select')} pick a note ${kb('confirm')} read it ${kb('cancel')} close` : `Click a note to read it ${kb('cancel')} close`);
 
 const ICONS = {
   // a parcel with tape
@@ -59,6 +64,7 @@ export class JobBoardUI {
     this.view = null;
     this.el = null;
     this.onKey = (e) => this.key(e);
+    onPromptChange(() => { const h = this.view && this.el?.querySelector('.jb-hint'); if (h) h.innerHTML = hintHTML(); }); // (keyboard <-> controller)
   }
 
   get isOpen() { return !!this.view; }
@@ -86,7 +92,20 @@ export class JobBoardUI {
   }
 
   key(e) {
-    if (!this.view || e.code !== 'Escape') return;
+    if (!this.view) return;
+    // the arrow keys / a controller's d-pad pick a note or a button, Enter (the confirm button) presses it
+    if (/^Arrow/.test(e.code) || ((e.code === 'Enter' || e.code === 'NumpadEnter') && this.el.contains(document.activeElement) && document.activeElement !== this.el)) {
+      e.preventDefault(); e.stopPropagation();
+      const d = this.el.querySelector('.jb-detail');
+      const list = [...this.el.querySelectorAll(d.hidden ? '.jb-cork button' : '.jb-detail button')].filter((b) => !b.disabled);
+      if (!list.length) return;
+      const at = list.indexOf(document.activeElement);
+      if (e.code === 'Enter' || e.code === 'NumpadEnter') { if (at >= 0) list[at].click(); return; }
+      const dir = e.code === 'ArrowLeft' || e.code === 'ArrowUp' ? -1 : 1;
+      list[at < 0 ? 0 : (at + dir + list.length) % list.length].focus({ focusVisible: true });
+      return;
+    }
+    if (e.code !== 'Escape') return;
     e.preventDefault(); e.stopPropagation();
     if (!this.el.querySelector('.jb-detail').hidden) this.back();
     else this.close();
@@ -109,7 +128,7 @@ export class JobBoardUI {
         <div class="jb-plank"><b>Jobs</b> · <em>${esc(v.place || '')}</em></div>
         <div class="jb-cork">${current}${notes || (cur ? '' : '<div class="jb-empty">Nothing pinned up right now.<br>Check back later.</div>')}</div>
         <div class="jb-detail" hidden></div>
-        <div class="jb-hint">Click a note to read it <kbd>Esc</kbd> close</div>
+        <div class="jb-hint">${hintHTML()}</div>
       </div>`;
     const board = this.el.querySelector('.jb-board');
     this.el.onclick = (e) => {
@@ -160,6 +179,7 @@ export class JobBoardUI {
           <button class="jb-btn light" data-back>${brushSVG(62, 300, 60, { fill: '#e9eefb' })}<span>BACK</span></button>
         </div></div>`;
     d.hidden = false;
+    d.querySelector('[data-take]:not([disabled]), [data-back]')?.focus({ focusVisible: true });
     d.querySelector('[data-take]').onclick = (e) => {
       e.stopPropagation();
       if (busy || locked) { this.audio?.play?.('error'); return; }

@@ -1,5 +1,6 @@
 // Ski Legacy — main entry: boot, loading, game loop and gameplay glue.
 import * as THREE from 'three';
+import { K, usingPad } from './ui/prompts.js'; // button prompts: installs the keycap swapper first thing (keyboard key or the controller's button)
 import '@fontsource-variable/inter';
 import '@fontsource/barlow-condensed/600.css';
 import '@fontsource/barlow-condensed/700.css';
@@ -696,7 +697,7 @@ function trainAnnounce(hint) {
     if (!hint) { /* nothing new */ }
     else if ((m = /departing for (.+)$/.exec(hint))) key = /Legacy Village/.test(m[1]) ? 'rail_dep_down' : 'rail_dep_up';
     else if ((m = /next stop ([^·]+?) ·/.exec(hint))) key = RAIL_KEY[m[1].trim()] ? `rail_next_${RAIL_KEY[m[1].trim()]}` : null;
-    else if ((m = /^(.+?) · (arrived|press E to get off here)/.exec(hint))) key = RAIL_KEY[m[1].trim()] ? `rail_arr_${RAIL_KEY[m[1].trim()]}` : null;
+    else if ((m = /^(.+?) · (arrived|press .+? to get off here)/.exec(hint))) key = RAIL_KEY[m[1].trim()] ? `rail_arr_${RAIL_KEY[m[1].trim()]}` : null;
     if (key && !railAnn.said.has(key)) { railAnn.said.add(key); railAnn.pending.push(key); }
     if (railAnn.pending.length && !audio.speaking && audio.announce(railAnn.pending[0])) railAnn.pending.shift();
   } catch { /* the PA never breaks the ride */ }
@@ -716,7 +717,7 @@ function expressAnnounce(hint) {
       key = 'dep'; lines = [{ lang: 'de', text: `Legacy Express nach ${m[1]}. Bitte einsteigen.` }, { lang: 'en', text: `Legacy Express to ${m[1]}. Please board, the doors are closing.` }];
     } else if ((m = /next stop (.+?) · \d+ min/.exec(hint))) {
       key = `next:${m[1]}`; lines = [{ lang: 'de', text: `Nächster Halt: ${m[1]}.` }, { lang: 'en', text: `Next stop: ${m[1]}.` }];
-    } else if ((m = /^(.+?) · press E to get off here/.exec(hint))) {
+    } else if ((m = /^(.+?) · press .+? to get off here/.exec(hint))) {
       key = `at:${m[1]}`; lines = [{ lang: 'de', text: `${m[1]}.` }, { lang: 'en', text: `${m[1]}.` }];
     } else if ((m = /^(.+?) · arrived/.exec(hint))) {
       key = `arr:${m[1]}`; lines = [{ lang: 'de', text: `${m[1]}. Bitte aussteigen.` }, { lang: 'en', text: `${m[1]}. This is your stop, please mind the gap.` }];
@@ -726,7 +727,7 @@ function expressAnnounce(hint) {
   } catch { /* the PA never breaks the ride */ }
 }
 // riding: the ride's hint for the top-left card (its speed is on the speedometer); hold Space fast-forwards
-function rideText(h) { return h ? `${h.replace(/ · \d+ km\/h/, '')} · hold Space to speed up` : null; }
+function rideText(h) { return h ? `${h.replace(/ · \d+ km\/h/, '')} · hold ${K('jump')} to speed up` : null; }
 // the speedometer's label while you ride something instead of your skis
 function vehicleName() {
   if (railway?.riding) return 'Wolkenspitzbahn';
@@ -971,7 +972,7 @@ function exitShop() {
     player.camYaw = Math.atan2(f.x, f.z) + 0.5;
     player.camPitch = -0.12;
     player.camPos.copy(player.pos).add(new THREE.Vector3(Math.sin(player.camYaw) * 4, 1.8, Math.cos(player.camYaw) * 4));
-  }).then(() => { if (player.hasSkis && !player.skisOn) setTimeout(() => hud.flash('Press G to put your skis on', 'good', 2600), 300); });
+  }).then(() => { if (player.hasSkis && !player.skisOn) setTimeout(() => hud.flash(`Press ${K('skis')} to put your skis on`, 'good', 2600), 300); });
 }
 
 function shopAction(t) {
@@ -1661,7 +1662,7 @@ function mpCourseInteraction(e) {
   const q = multiplayer?.race.queued === e.id;
   const n = MP.queues?.get(e.id)?.n || 0;
   return {
-    label: q ? `${e.name} · queued (${n}/21 · at least 2) · E to leave the queue` : `${e.bus ? 'Race: ' : ''}${e.name} · race other players${n ? ` · ${n}/21 waiting` : ''} · ${e.bus ? 'free entry · ' : ''}up to $${Math.round(e.reward).toLocaleString('en-US')}`,
+    label: q ? `${e.name} · queued (${n}/21 · at least 2) · ${K('interact')} to leave the queue` : `${e.bus ? 'Race: ' : ''}${e.name} · race other players${n ? ` · ${n}/21 waiting` : ''} · ${e.bus ? 'free entry · ' : ''}up to $${Math.round(e.reward).toLocaleString('en-US')}`,
     act: () => {
       if (q) { multiplayer.raceLeave(); hud.flash('Left the race queue', 'good', 1800); return; }
       if (!player.hasSkis && !e.bus) { hud.flash('You need skis to race', 'bad'); return; } // (a bus race lends you a pair)
@@ -2205,7 +2206,7 @@ function loopUpdate() {
     else if (r?.stop && !menu && input.hit('KeyE')) leaveExpress(express.leaveAtStop());
     else if (!menu && !transition.active && !isMP() && input.hit('Enter')) transition.fade(async () => { const a = express.skip(); if (a) await exitExpress(a); }); // skip to the arrival (the train jumps on to your stop)
     hud.rideHint(null);
-    rideLine = r?.stop ? (wk?.line || null) : r?.hint ? `${r.hint} · hold Space ×${EXPRESS_FAST}${isMP() ? '' : ' · Enter to skip'}` : null;
+    rideLine = r?.stop ? (wk?.line || null) : r?.hint ? `${r.hint} · hold ${K('jump')} ×${EXPRESS_FAST}${isMP() || usingPad() ? '' : ' · Enter to skip'}` : null;
     ridePrompt = r?.stop ? `Get off at ${r.stop.name}` : wk?.prompt || null;
     expressAnnounce(r?.hint);
   } else if (skibus.riding) {
@@ -2303,7 +2304,7 @@ function loopUpdate() {
   player._wasAir = player.air;
   if (player.events.length) {
     for (const e of player.events) if (e === 'tooFlat') hud.flash('Too flat to ski here — walk to a slope or a lift', 'bad', 2400);
-    else if (e === 'skisOff') hud.flash('Skis off — walk on the flat (G to put them on at a slope)', 'good', 2600);
+    else if (e === 'skisOff') hud.flash(`Skis off — walk on the flat (${K('skis')} to put them on at a slope)`, 'good', 2600);
     else if (e === 'tooSteep') hud.flash('Too steep to walk up — take a lift or the ski bus', 'bad', 2400);
     // ('bump': knocked over running into somebody, game/peoplehits.js: you just get up, no strike; also a vehicle hitting
     // you under 35 km/h, game/vehiclehits.js: Oct 30 2026, the user: "if a car crashes into you with less than 35 kph
@@ -2362,7 +2363,7 @@ function loopUpdate() {
     if (interior.active) {
       hud.frame({
         speed: 0, loc: 'Ski Rental & Shop', time: env.timeString, weather, ski, heading: 0, waypoint: null,
-        prompt: shopTarget?.label || null, objective: player.hasSkis ? '' : 'Look at a pair of skis and press E',
+        prompt: shopTarget?.label || null, objective: player.hasSkis ? '' : `Look at a pair of skis and press ${K('interact')}`,
       });
     } else if (chalets?.inside) {
       hud.frame({ speed: 0, loc: chalets.roomName(), time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: chalets.target?.label || chaletSeatPrompt || null, objective: objective() || '' });
@@ -2371,7 +2372,7 @@ function loopUpdate() {
     } else if (hospitalWard?.inside) {
       hud.frame({ speed: 0, loc: 'Medical Centre', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: hospitalWard.target?.label || null, objective: hospitalWard.hudLine() });
     } else if (carRental?.inside) {
-      hud.frame({ speed: 0, loc: 'Autohaus', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : 'Look at a car or the salesman and press E' });
+      hud.frame({ speed: 0, loc: 'Autohaus', time: env.timeString, weather, ski, heading: 0, waypoint: null, prompt: carRental.target?.label || null, objective: carRental.current ? '' : `Look at a car or the salesman and press ${K('interact')}` });
     } else if (inSession) hud.frame({
       speed: player.speed, loc: modes.course?.name || 'World Racing', time: env.timeString, weather, ski,
       prompt: null, objective: '', heading: camYaw, waypoint: null,

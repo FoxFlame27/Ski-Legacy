@@ -29,6 +29,7 @@ export const RAIL_MESHY_TUNNEL_LAMPS = true; // the Meshy four-flood banks on th
 export const RAIL_TERRAIN_CLIP = true; // no terrain inside the tubes behind the portals (terrain.js clip volumes)
 import { smoothstep, clamp, lerp, mulberry32 } from '../core/noise.js';
 import { world } from './world.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 export const RAIL_PRICE = 50; // uphill (Oct 29 rebalance: was $30)
 const ALT0 = 1245; // the village's altitude above sea level (signs)
@@ -555,7 +556,7 @@ export class Railway {
       stop = { name: sta.name, exit: { ...sta.exit, name: sta.name } };
     }
     const kmh = Math.round(st.speed * 3.6);
-    const hint = stop ? `${stop.name} · press E to get off here` : !r.departed ? `${RAIL_NAME} · departing for ${RAIL.stations.find((x) => x.id === r.dest)?.name || (r.up ? 'Wolkenplatt' : 'Legacy Village')}` : `${RAIL_NAME} · next stop ${next} · ${kmh} km/h`;
+    const hint = stop ? `${stop.name} · press ${K('interact')} to get off here` : !r.departed ? `${RAIL_NAME} · departing for ${RAIL.stations.find((x) => x.id === r.dest)?.name || (r.up ? 'Wolkenplatt' : 'Legacy Village')}` : `${RAIL_NAME} · next stop ${next} · ${kmh} km/h`;
     return { seat, hint, stop };
   }
   /** Get off at a halt (Wolkensee, Adlerwald) while the train stands there: the exit spot (main.js fades out, then

@@ -240,6 +240,12 @@ h1 { font-family: var(--num); font-size: 104px; font-weight: 700; letter-spacing
 /* keycaps in hint bars and buttons (arrows are drawn, not font glyphs) */
 .kc { position: relative; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: max(18px, calc(var(--u) * 24)); height: max(17px, calc(var(--u) * 22)); padding: 0 max(4px, calc(var(--u) * 6));
   border: 1.5px solid currentColor; border-radius: max(4px, calc(var(--u) * 5)); font: 700 var(--t-xs)/1 var(--ui); font-style: normal; letter-spacing: 0.06em; }
+/* BUTTON PROMPTS (Nov 1 2026, ui/prompts.js): body.using-pad while a controller is in use. .kb-only shows only on the
+   keyboard (mouse hints, keys with no controller button), .pad-only only on a controller (D-PAD, R STICK); .pk is a key
+   named inside running text ("Start · ENTER"), plain text that re-labels itself. */
+body.using-pad .kb-only, body:not(.using-pad) .pad-only { display: none !important; }
+span.kb-only:not(.hint) { display: contents; }
+kbd.pk { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; text-transform: none; }
 .kc-arrow { padding: 0; width: max(18px, calc(var(--u) * 24)); }
 .kc-arrow::before { content: ''; width: 28%; height: 28%; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; }
 .kc-arrow.left::before { transform: translateX(25%) rotate(45deg); }

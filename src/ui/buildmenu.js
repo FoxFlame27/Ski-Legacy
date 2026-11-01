@@ -6,7 +6,8 @@ import './buildmenu.css';
 import { brushSVG, brushClip } from './menu.js';
 import { CATEGORIES, FURNITURE } from '../game/build/catalog.js';
 import { getThumb } from '../game/build/furniture.js';
-import { kc as pk, usingPad, onPromptChange } from './prompts.js'; // (BUTTON PROMPTS: keycaps in the keys / controller buttons in use)
+import { kc as pk, usingPad, onPromptChange } from './prompts.js';
+import { vmouseOn } from '../core/gamepad.js'; // (the controller's virtual mouse) // (BUTTON PROMPTS: keycaps in the keys / controller buttons in use)
 
 const fmt = (n) => n.toLocaleString('en-US');
 const kc = (k) => `<i class="kc">${k}</i>`;
@@ -55,6 +56,7 @@ export class BuildMenu {
     this.list.addEventListener('scroll', () => this.syncTabs(), { passive: true });
     this.setMode('cursor');
     onPromptChange(() => this.setMode(this.mode)); // (keyboard <-> controller: the hints swap)
+    addEventListener('vmousechange', () => this.setMode(this.mode)); // (the controller's virtual mouse on / off)
     this.refreshThumbs();
   }
 
@@ -68,8 +70,24 @@ export class BuildMenu {
     this.cross.hidden = this.el.hidden || mode !== 'look';
     document.body.classList.toggle('build-cursor', mode === 'cursor' && !this.el.hidden);
     const look = mode === 'look', pad = usingPad(); // (a controller: no mouse, no TAB: aim with the dot, d-pad browses)
+    if (pad && vmouseOn()) { // the controller's virtual mouse: the left stick points, confirm clicks, back right-clicks
+      this.foot.innerHTML = [
+        `<span class="bm-mode paper" style="--clip:${brushClip(321, 4, 4)}">MOUSE</span>`,
+        hint(pk('vmouse'), 'Mouse off'),
+        hint(pk('move'), 'Point'),
+        hint(pk('confirm'), 'Click · buy &amp; place'),
+        hint(pk('cancel'), 'Empty hand'),
+        hint(pk('look'), 'Look'),
+        hint(pk('view'), 'Rotate'),
+        hint(pk('pickup'), 'Move'),
+        hint(pk('alt'), 'Sell 50%'),
+        hint(pk('map'), 'Done'),
+      ].join('');
+      return;
+    }
     this.foot.innerHTML = [
       `<span class="bm-mode paper ${look ? 'look' : ''}" style="--clip:${brushClip(321, 4, 4)}">${pad ? 'AIM' : look ? 'LOOK AROUND' : 'CURSOR'}</span>`,
+      pad ? hint(pk('vmouse'), 'Mouse on') : '',
       pad ? '' : hint(kc('TAB'), look ? 'Free the mouse' : 'Look around'),
       look || pad ? '' : hint(kc('RMB'), 'Hold to look'),
       hint(pk('move'), 'Walk'),
@@ -79,7 +97,7 @@ export class BuildMenu {
       hint(pk('pickup'), 'Move'),
       hint(pk('alt'), 'Sell 50%'),
       hint(pad ? pk('restart') : kc('⌫'), 'Empty hand'),
-      hint(pk('furnish'), 'Done'),
+      hint(pad ? pk('map') : pk('furnish'), 'Done'),
     ].join('');
   }
 

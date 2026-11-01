@@ -12,7 +12,9 @@
 // On a controller (Nov 1 2026): the furnish button (core/bindings.js 'furnish', shared with skis) opens it in LOOK mode
 // (aim with the centre dot, right stick looks), the d-pad left / right ('prevItem' / 'nextItem', also [ ] on the
 // keyboard) browses the catalogue, jump (the bottom button; Space) buys and places the item in hand, restart (d-pad
-// down) empties the hand.
+// down) empties the hand. Inside the chalet the map button (View / Share / Minus) opens / closes it too, and the left
+// stick click turns the controller's VIRTUAL MOUSE on / off (core/gamepad.js): CURSOR mode then, the left stick moves
+// a cursor, the confirm button clicks (the catalogue, placing), the back button right-clicks (empties the hand).
 //
 // It talks to the chalet module only through ./chaletadapter.js (see the interface documented there).
 // main.js calls buildMode.update(dt, input) every frame; that also discovers the chalet API.
@@ -26,6 +28,7 @@ import { LampPool } from './lamps.js';
 import { BuildMenu } from '../../ui/buildmenu.js';
 import { isMP } from '../../net/mode.js';
 import { K, usingPad } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+import { setBuildMode, vmouseOn } from '../../core/gamepad.js'; // (the controller's virtual mouse; Minus opens build mode in here)
 const NO_FURNITURE = [];
 
 const REACH = 6; // metres you can place from
@@ -73,6 +76,7 @@ export class BuildMode {
     this.wheel = 0;
     this.queued = { click: false, cancel: false };
     discoverChaletAPI();
+    setBuildMode(this);
 
     addEventListener('mousemove', (e) => {
       Object.assign(this.mouse, { x: e.clientX, y: e.clientY, overMenu: !!this.menu?.owns(e.target), seen: true });
@@ -129,13 +133,14 @@ export class BuildMode {
     if (!this.chalet || !this.wasActive || !this.chalet.active()) return null; // (only while you're inside it)
     if (!this.on) {
       if (this.lampAim) return `Press ${K('interact')} to switch the ${this.lampAim.item.name.toLowerCase()} ${this.lampAim.rec.on === false ? 'on' : 'off'}`;
-      if (usingPad()) return `Press ${K('furnish')} to furnish your chalet`; // (TAB: the mouse, not on a controller)
+      if (usingPad()) return `Press ${K('map')} to furnish your chalet`; // (TAB: the mouse, not on a controller; the map button opens it in here)
       return this.input.cursorFree ? `Mouse free · TAB to look around · ${K('furnish')} to furnish` : `Press ${K('furnish')} to furnish your chalet · TAB frees the mouse`;
     }
-    const click = usingPad() ? K('jump') : 'click';
+    const click = !usingPad() ? 'click' : vmouseOn() ? K('confirm') : K('jump');
     if (this.moving) return `Moving the ${this.moving.item.name.toLowerCase()} · ${click} to put it down`;
     if (this.item) return `${this.item.name} · $${fmt(this.item.price)} · ${click} to buy and place`;
-    return usingPad() ? `Furnish your chalet · ${K('prevItem')} ${K('nextItem')} pick from the catalogue` : 'Furnish your chalet · pick something from the catalogue';
+    if (usingPad() && vmouseOn()) return 'Furnish your chalet · click something in the catalogue';
+    return usingPad() ? `Furnish your chalet · ${K('prevItem')} ${K('nextItem')} pick · ${K('vmouse')} mouse` : 'Furnish your chalet · pick something from the catalogue';
   }
 
   /** Called by main.js every frame. */
@@ -163,8 +168,12 @@ export class BuildMode {
     }
     if (this.save.money !== this.lastMoney) { this.lastMoney = this.save.money; this.menu.setMoney(this.save.money); }
     // a controller took over: LOOK mode (no cursor to point with: aim with the centre dot)
-    const pad = usingPad();
-    if (pad !== this.padAim) { this.padAim = pad; if (pad && !this.look) this.setLook(true); else this.menu?.setMode(this.look ? 'look' : 'cursor'); }
+    const pad = usingPad(), vm = vmouseOn();
+    if (pad !== this.padAim) { this.padAim = pad; if (pad && !this.look && !vm) this.setLook(true); else this.menu?.setMode(this.look ? 'look' : 'cursor'); }
+    // the controller's virtual mouse (left stick click): CURSOR mode while it's on, back to aiming with the dot after
+    if (vm && this.look) this.setLook(false);
+    else if (!vm && this.vmWas && pad && !this.look) this.setLook(true);
+    this.vmWas = vm;
     // browse the catalogue ([ ] / the d-pad): the next / previous piece in hand
     const step = (input.hit('BracketRight') ? 1 : 0) - (input.hit('BracketLeft') ? 1 : 0);
     if (step && !this.moving) this.menu?.step(step);
@@ -201,7 +210,7 @@ export class BuildMode {
       this.menu.show(true);
       this.menu.status('');
       this.padAim = usingPad();
-      this.setLook(this.padAim); // the mouse is free to use the catalogue (a controller: LOOK mode, aim with the dot)
+      this.setLook(this.padAim && !vmouseOn()); // the mouse is free to use the catalogue (a controller: LOOK mode, aim with the dot)
       renderThumbs((id, url) => this.menu?.setThumb(id, url)); // lazily, the first time
       this.audio?.play('click');
     } else {
@@ -235,7 +244,7 @@ export class BuildMode {
   worldRay() {
     const cam = this.chalet.camera;
     if (!cam) return null;
-    if (this.on && !document.pointerLockElement && this.mouse.seen && !usingPad()) {
+    if (this.on && !document.pointerLockElement && this.mouse.seen && (!usingPad() || vmouseOn())) { // (the controller: from its virtual mouse)
       const r = this.input.canvas.getBoundingClientRect();
       _ndc.set(((this.mouse.x - r.left) / r.width) * 2 - 1, -((this.mouse.y - r.top) / r.height) * 2 + 1);
       this.raycaster.setFromCamera(_ndc, cam);

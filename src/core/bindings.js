@@ -6,6 +6,7 @@
 //
 // Controller buttons use the W3C "standard" gamepad layout (Chrome / Electron map Xbox, DualShock 4, DualSense and the
 // Switch Pro controller to it). By POSITION:
+// (Inside your chalet the map button (View / Share / Minus) opens build mode instead: gamepad.js.)
 //   0 bottom (Xbox A · PS Cross · Switch B)      1 right (Xbox B · PS Circle · Switch A)
 //   2 left (Xbox X · PS Square · Switch Y)       3 top (Xbox Y · PS Triangle · Switch X)
 //   4 LB · L1 · L     5 RB · R1 · R     6 LT · L2 · ZL     7 RT · R2 · ZR
@@ -40,8 +41,11 @@ export const ACTIONS = [
   { id: 'prevItem', label: 'Previous furniture (build mode)', code: 'BracketLeft', group: 'ACTIONS', ctx: true },
   { id: 'nextItem', label: 'Next furniture (build mode)', code: 'BracketRight', group: 'ACTIONS', ctx: true },
   { id: 'duty', label: 'Taxi: off duty (in your car)', code: 'KeyT', group: 'ACTIONS', ctx: true },
+  // (Nov 1 2026, the user: "you should be able to furnish with like a fake mouse that you can unlock by pressing the
+  // joystick down and re-lock by pressing it again"): controller only, a cursor the left stick moves (core/gamepad.js)
+  { id: 'vmouse', label: 'Virtual mouse (chalet / menus)', code: '', group: 'ACTIONS', padOnly: true, ctx: true },
   // menus and screens
-  { id: 'map', label: 'Trail map', code: 'KeyM', group: 'MENUS' },
+  { id: 'map', label: 'Trail map · furnish (controller, in your chalet)', code: 'KeyM', group: 'MENUS' },
   { id: 'photo', label: 'Photo mode', code: 'KeyP', group: 'MENUS' },
   { id: 'pause', label: 'Pause menu', code: 'Escape', group: 'MENUS' },
 ];
@@ -78,6 +82,7 @@ export const PAD_DEFAULTS = {
   duty: 4,      // with pickup (LB): taxi off duty while you drive (pickup is chalet build mode only)
   prevItem: 14, // with unstuck (d-pad left): browse the furniture in build mode (unstuck is the car only)
   nextItem: 15, // with lights (d-pad right): (car lights / headlamp aren't used inside the chalet)
+  vmouse: 10,   // with lookback (left stick click): the virtual mouse on / off when you aren't driving
 };
 
 // (Nov 1 2026, the user: "also make the Home button on Switch unstuck, and something else on the other controllers"):

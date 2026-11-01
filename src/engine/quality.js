@@ -34,46 +34,45 @@ export const QUALITY_LABELS = { super: 'Super Performance', performance: 'Perfor
 const LEGACY = { low: 'performance', medium: 'balanced' }; // saves from before the presets
 
 export const PRESETS = {
+  // (Nov 1 2026, the user: "Performance looks worse with the same fps, the others look better: make Performance and
+  // Super Performance like before, keep the rest"): these two are back to their look before the Nov 1 perf pass
   super: {
-    // (Nov 1 perf pass: within a 0.9 MP drawing buffer whatever the screen; dynamic resolution down to ~0.55 of it)
-    scale: 0.6, prCap: 1.25, mp: 0.9, dynMP: 0.55, dynMin: 0.5, dynFloor: 0.5, fpsDrop: 52, fpsRaise: 58,
+    scale: 0.6, prCap: 1.25, dynMin: 0.5, dynFloor: 0.5, fpsDrop: 52, fpsRaise: 58,
     msaa: 0, composer: false, bloom: false, ao: 0, shafts: false, grade: 1, portals: false,
     shadow: { size: 0, extent: 40, soft: true, terrainCast: 0, propDist: 0 }, // (soft as the others: no shadow-type recompile)
-    terrain: { lodK: 1.1, detail: 0 },
-    veg: { closeR: 12, nearR: 45, farR: 380, maxFar: 5000, rockR: 70, nearShadow: false },
-    clouds: 50, flakes: 2500, crystals: 0,
-    lights: { lit: 2, obj: 1, nearLod: 50, farLod: 500, beamR: 0 },
-    npcs: { skiers: 2, walkers: 1, animNear: 20 },
-    props: { cull: 0.024, shadowDist: 0, lod: 0.45 },
-    fog: 2,
-    powder: 0.2,
-    texCap: 512, aniso: 2, traffic: 0.35, carLod: 0.3, pointLights: false,
-    lowCpu: 2, // (far systems update at a lower rate: see the main loop)
+    terrain: { lodK: 1.15, detail: 0 },
+    veg: { closeR: 12, nearR: 50, farR: 420, maxFar: 6000, rockR: 80, nearShadow: false },
+    clouds: 60, flakes: 2500, crystals: 0,
+    lights: { lit: 3, obj: 2, nearLod: 55, farLod: 600, beamR: 0 },
+    npcs: { skiers: 3, walkers: 1, animNear: 25 },
+    props: { cull: 0.022, shadowDist: 0, lod: 0.5 },
+    fog: 1.9,
+    powder: 0.25,
+    texCap: 512, aniso: 2, traffic: 0.5, carLod: 0.3, pointLights: false,
+    lowCpu: 2, // (far systems update at a lower rate: invisible)
     fx: 0,
   },
   performance: {
-    // PERFORMANCE (Nov 1 perf pass, the user: "11 fps on Performance on my Mac mini M2 is just too bad ... at least
-    // 60 fps on Performance with a major graphics drop"): a 1.6 MP drawing buffer whatever the screen (a 4K / 5K
-    // monitor at 2x was drawn at 8+ MP: ~1080p now, upscaled by the browser and sharpened in the final pass), dynamic
-    // resolution down to ~0.55 of it under 50 fps; no shadows, no MSAA / bloom / AO, the one cheap final pass; shorter
-    // forests / rocks / terrain detail behind more haze; fewer skiers, walkers, cars, lamps, clouds, flakes; small
-    // textures. Target: 60 fps on an M2 / Intel Iris laptop.
-    scale: 1, prCap: 2, mp: 1.6, dynMP: 0.55, dynMin: 0.75, dynFloor: 1, fpsDrop: 50, fpsRaise: 57,
+    // render scale x devicePixelRatio (capped), dynamic resolution may drop to dynMin x DPR (never below dynFloor)
+    // (it was 0.75 x DPR, dropping to 0.5 x DPR: half resolution on Retina, visibly blurry)
+    scale: 1, prCap: 2, dynMin: 0.75, dynFloor: 1, fpsDrop: 50, fpsRaise: 57,
     msaa: 0, composer: false, bloom: false, ao: 0, shafts: false, grade: 2, // (the grade is a few ALU ops in the final pass)
-    shadow: { size: 0, extent: 40, soft: true, terrainCast: 0, propDist: 0 }, // (no shadow pass at all)
-    terrain: { lodK: 1.3, detail: 0 },
-    veg: { closeR: 16, nearR: 65, farR: 560, maxFar: 10000, rockR: 100, nearShadow: false },
-    clouds: 90, flakes: 8000, crystals: 0,
-    lights: { lit: 3, obj: 2, nearLod: 70, farLod: 800, beamR: 0 },
-    npcs: { skiers: 3, walkers: 2, animNear: 30 },
+    // (soft = three's bilinear PCF: 16 taps, as many as the plain PCF's 17, but no blocky texel edges)
+    shadow: { size: 1024, extent: 55, soft: true, terrainCast: 128, propDist: 70, every: 2 }, // (every: redrawn every other frame while the view stays put, engine/post.js)
+    terrain: { lodK: 1.6, detail: 0 },
+    veg: { closeR: 22, nearR: 85, farR: 800, maxFar: 22000, rockR: 150, nearShadow: false },
+    clouds: 150, flakes: 18000, crystals: 160, // (snowfall stays clearly visible: tiny points, cheap)
+    lights: { lit: 5, obj: 3, nearLod: 90, farLod: 1200, beamR: 0 },
+    npcs: { skiers: 7, walkers: 3, animNear: 45 },
     // big props: skipped when radius / distance < cull, shadows within shadowDist, LOD distances x lod
-    props: { cull: 0.016, shadowDist: 0, lod: 0.6 },
-    fog: 1.6, // hides the shorter forest / terrain reach
-    powder: 0.3,
+    // (the decimated LODs read as melted on a Retina screen when close: full detail out to ~140 m even here)
+    props: { cull: 0.011, shadowDist: 70, lod: 0.8 }, // (Oct 30: 112 m; every model also has a far copy from 3x that, assets.js makeLOD)
+    fog: 1.25, // hides the shorter forest / terrain reach
+    powder: 0.5,
     pointLights: false, // (no point lights in the world: engine/detail.js sweepLights; the bulbs still glow)
-    traffic: 0.5, carLod: 0.4, // (half the road traffic around you; the one-piece car LOD from 28 m)
-    texCap: 512, aniso: 2, // (model maps: 512 px colour, 256 px normal / roughness)
-    lowCpu: 1, // (far systems update at a lower rate: see the main loop)
+    carLod: 0.55, // (parked / passing cars: the full model (dozens of parts) out to 38 m, the one-piece LOD beyond)
+    texCap: 1024, aniso: 4, // (model maps: 1024 px colour, 512 px normal / roughness: a quarter of the memory)
+    lowCpu: 1, // (far systems update at a lower rate: invisible)
     fx: 0,
   },
   balanced: {

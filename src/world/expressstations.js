@@ -2,9 +2,9 @@
 // Village and the race stations) is the same at-grade station, built like the Wolkenspitzbahn's (railstations.js):
 //   - two side platforms (240 m, either side of the double track: the station's side faces the course's start /
 //     the village), styled like the Wolkenspitzbahn's (stone coping, white safety line, paving)
-//   - the Wolkenspitzbahn's own station building (its Meshy models: rail_station_valley at the village,
-//     rail_station_halt at the races) behind the station-side platform, its front to the track, on the snow,
-//     with the valley station's glazed platform canopy in front of it
+//   - the Wolkenspitzbahn's own station building (stationbuildings.js: the valley station at the village, the halt
+//     at the races) behind the station-side platform, its front to the track, on the snow, with the platform
+//     canopy in front of it
 //   - the red name boards (the station's name, "LEGACY EXPRESS") on posts along both platforms and one on the
 //     station square behind the building (facing the start), benches, lamps, walkable platforms, colliders
 // (No module-level calls into expresstrack.js: the two modules import each other.)
@@ -13,35 +13,23 @@ import { world } from './world.js';
 import { layout } from './layout.js';
 import { PLATFORM, EXPRESS_NAME } from './expressroute.js';
 import { XB, lin } from './expresstrack.js';
-import { RailBuilder, canvasTex } from './railtrack.js';
-import { bakeGeometry, makeLOD } from '../core/assets.js';
-import { crisp } from './train.js';
-import { snowRoof } from './railstations.js'; // (Oct 31 2026: the halt's snowy roof)
+import { canvasTex } from './railtrack.js';
+import { bakeGeometry } from '../core/assets.js';
+import { stationBuilding, stationCanopy, stationPlan, registerStation, STATION_SIZE } from './stationbuildings.js';
 import { propProfile, registerBench } from '../game/seating.js';
 import { breakables } from './breakables.js'; // (the platform lamps: snapped off by a car over 100 km/h, Oct 31 2026)
 
 export const PLAT_Y = 0.25;                   // platform top over the top of rail (the squares lie at -0.12)
 const EDGE = 3.9, BACK = 8.7;                 // platform edge / back, m from the centre line
 const HOUSE_LAT = 10.3;                       // the building's front line, m from the centre line (behind the masts)
-const CAN_LEN = 36, CAN_W = 4.4;              // the glazed canopy in front of the building
+const CAN_LEN = 36, CAN_W = 4.4;              // the platform canopy in front of the building
 const FONT = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
 const RED = '#a5141c', WHITE = '#f4f2ed';
 
-// the station building's model: the Wolkenspitzbahn's valley station at the village, its halt at the races (either
-// one if the other is missing); size: its width along the track
-function houseModel(st, models) {
-  const want = st.course ? ['rail_station_halt', 'rail_station_valley'] : ['rail_station_valley', 'rail_station_halt'];
-  for (const key of want) if (models?.[key]?.scene) return { key, gltf: models[key], size: key === 'rail_station_valley' ? 22 : 8.6 };
-  return null;
-}
-// the model's size once fitted (fitModel: width `size` along x), without building it
-function houseSize(h) {
-  const m = h.gltf.scene;
-  m.updateMatrixWorld(true);
-  const d = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3());
-  const k = h.size / (d.x || 1);
-  return { x: d.x * k, y: d.y * k, z: d.z * k };
-}
+// the station building: the Wolkenspitzbahn's valley station at the village, its halt at the races (stationbuildings.js;
+// sz: its footprint, x along the track, z away from it)
+const APRON = -(HOUSE_LAT - BACK); // (the paving in front of the doors, from the platform's back edge)
+function houseKind(st) { const kind = st.course ? 'halt' : 'valley'; return { kind, sz: STATION_SIZE[kind], plan: stationPlan(kind, { apron: APRON }) }; }
 
 // a station's frame: u along the line (+s), lat to the right; y over the top of rail
 function stFrame(st) {
@@ -105,6 +93,19 @@ export function signMesh(t, wM, mats, { bottom = 2.3, gy = () => 0, color = 0xa5
 }
 // the express board: the station's name over "LEGACY EXPRESS", on its posts (signMesh); yaw turns its front to face
 function boardMesh(name, wM, mats, opts) { return signMesh(nameTex(name), wM, mats, opts); }
+// the same board hung on the station building's front (no posts; centred on its origin, its print on +z)
+function wallBoard(name, wM, mats) {
+  const t = nameTex(name), hM = wM / 4, g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : 0xa5141c, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0 });
+  mats.push(mat);
+  const fm = FRAME_MAT.m ??= new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.6, metalness: 0.3 });
+  const back = new THREE.Mesh(new THREE.BoxGeometry(wM + 0.12, hM + 0.12, SIGN.depth), fm);
+  back.castShadow = true; back.receiveShadow = true;
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, hM), mat);
+  face.position.z = SIGN.depth / 2 + 0.004;
+  g.add(back, face);
+  return g;
+}
 // where a sign's posts stand (world x, z), its origin p and its yaw (local x = (cos yaw, -sin yaw), the posts on -z)
 export function signPosts(p, yaw, wM) {
   const cx = Math.cos(yaw), cz = -Math.sin(yaw), bx = -Math.sin(yaw), bz = -Math.cos(yaw), b = SIGN.depth / 2 + SIGN.post / 2;
@@ -145,8 +146,7 @@ function stationLayout(st, models) {
     for (const u of [-112, -88, -64, -40, 40, 64, 88, 112]) L.lamps.push({ u, lat: sd * 7.9, sd });
     for (const u of own ? [-100, -30, 30, 100] : [-100, -50, 0, 50, 100]) L.boards.push({ u, lat: sd * 7.7, sd });
   }
-  const h = houseModel(st, models);
-  if (h) { L.house = { ...h, sz: houseSize(h) }; }
+  L.house = houseKind(st);
   // the board on the square behind the building, facing away from the track (toward the start / the village)
   const depth = L.house ? L.house.sz.z : 0;
   // (Oct 31 2026, the user: "the board doesn't look good": it stood against the building's back wall; now 4.5 m
@@ -177,10 +177,13 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], model
     // boards"; small colliders, none where nothing stands)
     for (const b of rec.lay.boards) for (const q of signPosts(F.P(b.u, b.lat), faceLat(st.heading, -b.sd), 3.0)) colliders.push({ x: q.x, z: q.z, r: 0.12 });
     for (const q of signPosts(F.P(rec.lay.square.u, rec.lay.square.lat), faceLat(st.heading, st.side), 5.2)) colliders.push({ x: q.x, z: q.z, r: 0.12 });
-    // the glazed canopy's steel columns (canopy(): every 6 m along its length, 0.3 m in front of the building)
+    // the canopy's steel columns (stationCanopy(): every 6 m along its length, 0.3 m in front of the building)
     for (let u = -CAN_LEN / 2; u <= CAN_LEN / 2 + 0.01; u += 6) colliders.push({ ...at(u, st.side * (HOUSE_LAT - 0.3)), r: 0.16 });
+    // the building, walk in (Nov 1 2026, the user: "make it so you can go inside"): its walls, counters and benches
+    // solid, its floor and the paving in front of its doors walkable (stationbuildings.js registerStation; its local x
+    // along the track toward +s on the station side, z away from the track)
     const H = rec.lay.house;
-    if (H) colliders.push({ ...at(0, st.side * (HOUSE_LAT + H.sz.z / 2)), hw: (H.sz.z / 2) * 0.9, hd: (H.sz.x / 2) * 0.9, rot: -st.heading }); // (hd: along the track)
+    if (H) { const o = F.P(0, st.side * HOUSE_LAT, -0.2); registerStation(H.plan, { x: o[0], y: o[1], z: o[2] }, new THREE.Vector3(F.rx * st.side, 0, F.rz * st.side), colliders); }
     // both platforms are walkable (their tops stand 0.37 m over the squares: you step up onto them)
     for (const sd of [-1, 1]) {
       const cs = [F.P(-PLATFORM / 2, sd * EDGE), F.P(PLATFORM / 2, sd * EDGE), F.P(-PLATFORM / 2, sd * BACK), F.P(PLATFORM / 2, sd * BACK)];
@@ -230,25 +233,6 @@ function lampGeo() {
   for (const g of [LAMPG.steel, LAMPG.led]) if (g) g.userData.shared = true; // (never disposed with a station)
   return LAMPG;
 }
-// the Wolkenspitzbahn valley station's platform canopy (railstations.js buildCanopy): steel columns, a glazed
-// lean-to roof, snow along its low edge. Local frame: x along the track, z away from it, front edge at z = 0.
-function canopy(steelMat, glassMat, len, width) {
-  const S = new RailBuilder(), G = new RailBuilder();
-  for (let x = -len / 2; x <= len / 2 + 0.01; x += 6) {
-    S.box(x, 1.6, width - 0.3, 0.18, 3.2, 0.18, '#3d4249');
-    S.bar([x, 3.2, width - 0.3], [x, 3.55, 0.2], 0.07, '#3d4249');
-  }
-  S.box(0, 3.25, width - 0.3, len + 0.3, 0.16, 0.2, '#3d4249');
-  S.box(0, 3.6, 0.15, len + 0.3, 0.16, 0.2, '#3d4249');
-  G.box(0, 3.45, width / 2, len, 0.04, width, '#ffffff');
-  S.box(0, 3.5, width - 0.6, len, 0.14, 0.8, '#eef3f9');
-  const grp = new THREE.Group();
-  const s = new THREE.Mesh(S.build(), steelMat); s.castShadow = true; s.receiveShadow = true;
-  const g = new THREE.Mesh(G.build(), glassMat);
-  grp.add(s, g);
-  return grp;
-}
-
 function buildStation(rec, M, models) {
   const { F } = rec, side = rec.side;
   const grp = new THREE.Group();
@@ -274,41 +258,35 @@ function buildStation(rec, M, models) {
     }
   }
   // the building and the canopy in front of it: local x along the track, z away from it (a right-handed basis)
+  const mats = [];
   const az = new THREE.Vector3(F.rx * side, 0, F.rz * side), ax = new THREE.Vector3(F.dx * side, 0, F.dz * side);
   const basis = new THREE.Matrix4().makeBasis(ax, new THREE.Vector3(0, 1, 0), az);
   const H = rec.lay.house;
   if (H) {
     try {
-      const bld = makeLOD(H.gltf, { size: H.size, axis: 'x' }, 260, 0.05);
-      // (Oct 31 2026, the user: the halt's roof showed "a strange green, map-like texture with white blobs", "it should
-      // be a snowy roof, like the other huts": railstations.js snowRoof, on every LOD level, its other maps kept)
-      if (H.key === 'rail_station_halt') snowRoof(bld);
-      bld.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; crisp(o.material); } });
-      bld.levels[0].object.traverse((o) => { if (o.isMesh) o.geometry.userData.shared = true; }); // (the model's own geometry: never disposed)
-      const sz = bld.userData.size;
-      const holder = new THREE.Group();
-      const hp = F.P(0, side * HOUSE_LAT, -0.1);
-      holder.position.set(hp[0], hp[1], hp[2]);
-      holder.quaternion.setFromRotationMatrix(basis);
-      bld.position.set(0, 0, sz.z / 2);
-      bld.rotation.y = Math.PI; // the model's front (+z) faces the track (-z here)
-      holder.add(bld);
-      // (no plinth: it stands on the snow of the station square, flattened to platform level in expressground.js;
-      // Oct 27, the user: "a weird platform under them, they should be on snow")
-      bld.position.y = -0.18;
-      grp.add(holder);
+      // (no plinth worth the name: it stands on the snow of the station square, flattened to platform level in
+      // expressground.js; Oct 27, the user: "a weird platform under them, they should be on snow")
+      const others = (layout.express?.stations || []).filter((o) => o.id !== rec.id).slice(0, 3);
+      const departures = { title: 'ABFAHRT · DEPARTURES', rows: [...others.map((o, i) => [o.name, EXPRESS_NAME, `Gleis ${(i % 2) + 1}`]), ['Next train', EXPRESS_NAME, 'see platform']] };
+      const bld = stationBuilding(H.kind, { plinth: 0.6, apron: APRON, departures });
+      const hp = F.P(0, side * HOUSE_LAT, -0.2);
+      bld.position.set(hp[0], hp[1], hp[2]);
+      bld.quaternion.setFromRotationMatrix(basis);
+      const ba = bld.userData.board, bm = wallBoard(rec.name, ba.w, mats);
+      bm.position.set(ba.x, ba.y, ba.z - 0.05); bm.rotation.y = Math.PI; // (its print, +z, to the track)
+      bld.add(bm);
+      grp.add(bld);
       rec.cameraBlockers?.push(bld);
     } catch (e) { console.warn('Legacy Express station building', e); }
   }
   {
-    const can = canopy(M.mast, M.glass, CAN_LEN, CAN_W);
+    const can = stationCanopy(CAN_LEN, CAN_W);
     const cp = F.P(0, side * (HOUSE_LAT - CAN_W), PLAT_Y);
     can.position.set(cp[0], cp[1], cp[2]);
     can.quaternion.setFromRotationMatrix(basis);
     grp.add(can);
   }
   // the name boards along both platforms (facing the track) and on the square behind the building
-  const mats = [];
   // (Oct 31 2026: free-standing signs, signMesh; the platform ones face the track, their posts on the platform's
   // paving; the square's faces away from the track, toward the start / the village, its posts each on the snow)
   for (const b of rec.lay.boards) grp.add(placeAt(boardMesh(rec.name, 3.0, mats, { bottom: 2.2 }), F.P(b.u, b.lat, PLAT_Y), faceLat(rec.heading, -b.sd)));

@@ -171,7 +171,7 @@ const CHARACTERS = SKIER_MODELS;
 const MODEL_LIST = [
   ...CHARACTERS.flatMap((c) => [`${c.id}_rigged`, `${c.id}_anims`]),
   ...SKIS.map((s) => s.model), 'ski_pole',
-  'rail_station_valley', 'rail_station_halt', 'rail_station_glacier', 'rail_car2', // the Wolkenspitzbahn's stations (Meshy)
+  'rail_car2', // the Wolkenspitzbahn's railcar (Meshy; its stations are procedural: world/stationbuildings.js)
   // job props (all optional: jobs fall back to built-in props)
   'job_board', 'delivery_backpack', 'patrol_backpack', 'mail_bag', 'ski_glove', 'ski_goggles', 'beanie', 'compact_camera', 'rescue_sled', 'smartphone',
   'rental_shop', 'gondola_cabin', 'chairlift_chair', 'lift_tower',

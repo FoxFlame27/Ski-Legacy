@@ -1,7 +1,8 @@
-// The Wolkenspitzbahn's stations: platforms along the track, the station buildings (the valley station in
-// Legacy Village: stone ground floor, timber upper floor, a deep snowy roof and a glazed platform canopy; a
-// timber halt at Wolkensee by the frozen lake; the top station's glass hall on the glacier, its platform in a
-// rock hall under the ice; Adlerwald, a request halt below the Adlerhorn, has a timber halt like Wolkensee's), name
+// The Wolkenspitzbahn's stations: platforms along the track, the station buildings (procedural: stationbuildings.js;
+// the valley station in Legacy Village: stone ground floor, timber upper floor, a deep snowy roof and the platform
+// canopy; a timber halt at Wolkensee by the frozen lake; the top station's granite, concrete and glass terminal on
+// the glacier, its platform in a rock hall under the ice; Adlerwald, a request halt below the Adlerhorn, has a
+// timber halt like Wolkensee's), name
 // boards, timetable boards, benches and lamps. Each station also says where you
 // board (board) and where you step out on arrival (exit).
 import * as THREE from 'three';
@@ -9,13 +10,13 @@ import { world } from './world.js';
 import { RAIL, railAt, PROFILE, CYCLE, DWELL_MID, haltArrival } from './railroute.js';
 import { RailBuilder as B, railMaterials, canvasTex } from './railtrack.js';
 import { mulberry32 } from '../core/noise.js';
-import { makeLOD, bakeGeometry } from '../core/assets.js';
-import { crisp } from './train.js';
+import { bakeGeometry } from '../core/assets.js';
+import { stationBuilding, stationCanopy, registerStation } from './stationbuildings.js';
 import { seatsFromObject } from '../game/seating.js';
 import { breakables } from './breakables.js'; // (the platform lamps: snapped off by a car over 100 km/h, Oct 31 2026)
 
-// the station buildings are Meshy models (rail_station_valley / _halt / _glacier, main.js MODEL_LIST); without
-// them (or with this off) the procedural buildings below stand in
+// the station buildings and the canopy are procedural (stationbuildings.js; Nov 1 2026, the user: the Meshy station
+// models were "blurry and weird from the outside"); the platform lanterns are the Meshy lamp_post (off: procedural)
 export const MESHY_STATIONS = true;
 
 const ALT0 = 1245;
@@ -136,155 +137,15 @@ function buildPlatform(b, s0, s1, side, width = 4.2) {
   }
 }
 
-// ------------------------------------------------------------------ the valley station building
-// Local frame: x along the track (toward s1), z away from the track (the building's back), y up from the
-// platform. Front (toward the track) at z = 0.
-function buildStationHouse(stone, wood, glass, warm, { len = 24, depth = 11, floors = 2, clock = true } = {}) {
-  const S = new B(), W = new B(), G = new B(), L = new B();
-  const rnd = mulberry32(7741);
-  const h1 = 3.8, h2 = floors > 1 ? 3.0 : 0;
-  // the plinth: dressed stone a little proud of the walls, 5 m deep (wherever the ground falls away, the building
-  // still stands on it)
-  S.box(0, -2.45, depth / 2, len + 0.16, 5.0, depth + 0.16, '#6e6a63');
-  S.box(0, 0.03, depth / 2, len + 0.22, 0.1, depth + 0.22, '#8f8a81');
-  // stone ground floor: courses of slightly varied tone
-  for (let y = 0; y < h1; y += 0.5) {
-    for (const [x0, x1, z0, z1, n] of [[-len / 2, len / 2, 0, 0.6, 'f'], [-len / 2, len / 2, depth - 0.6, depth, 'b'], [-len / 2, -len / 2 + 0.6, 0, depth, 'l'], [len / 2 - 0.6, len / 2, 0, depth, 'r']]) {
-      const v = 0.82 + rnd() * 0.16, col = new THREE.Color(0.62 * v, 0.6 * v, 0.56 * v).getHexString();
-      S.box((x0 + x1) / 2, y + 0.25, (z0 + z1) / 2, x1 - x0, 0.48, z1 - z0, '#' + col);
-      void n;
-    }
-  }
-  // openings on the front: the main door, windows (dark glass, warm at night), the ticket window
-  const openings = [];
-  for (let x = -len / 2 + 2.2; x <= len / 2 - 2.2; x += 3.2) openings.push(x);
-  for (const x of openings) {
-    const door = Math.abs(x) < 1.7;
-    const w = door ? 2.4 : 1.5, hgt = door ? 2.9 : 1.6, y0 = door ? 0 : 1.1;
-    G.box(x, y0 + hgt / 2, -0.03, w, hgt, 0.06, '#ffffff');
-    L.box(x, y0 + hgt / 2, 0.05, w - 0.05, hgt - 0.05, 0.02, '#ffffff');
-    S.box(x, y0 + hgt + 0.18, -0.08, w + 0.5, 0.36, 0.2, '#b9b3a8'); // lintel
-    if (!door) S.box(x, y0 - 0.08, -0.12, w + 0.3, 0.12, 0.28, '#b9b3a8'); // sill
-  }
-  // timber upper floor: vertical boards, windows with shutters
-  if (h2) {
-    for (const [x0, x1, z0, z1] of [[-len / 2, len / 2, 0, 0.3], [-len / 2, len / 2, depth - 0.3, depth], [-len / 2, -len / 2 + 0.3, 0, depth], [len / 2 - 0.3, len / 2, 0, depth]]) {
-      const n = Math.round(Math.max(x1 - x0, z1 - z0) / 0.32);
-      for (let i = 0; i < n; i++) {
-        const t0 = i / n, t1 = (i + 1) / n, tone = 0.85 + rnd() * 0.2;
-        const col = '#' + new THREE.Color(0.36 * tone, 0.22 * tone, 0.13 * tone).getHexString();
-        if (x1 - x0 > z1 - z0) W.box(x0 + (x1 - x0) * (t0 + t1) / 2, h1 + h2 / 2, (z0 + z1) / 2, (x1 - x0) / n - 0.015, h2, z1 - z0, col);
-        else W.box((x0 + x1) / 2, h1 + h2 / 2, z0 + (z1 - z0) * (t0 + t1) / 2, x1 - x0, h2, (z1 - z0) / n - 0.015, col);
-      }
-    }
-    W.box(0, h1 + 0.06, depth / 2, len + 0.3, 0.14, depth + 0.3, '#4a2f1c'); // floor beam
-    for (const x of openings) {
-      G.box(x, h1 + 1.45, -0.02, 1.2, 1.3, 0.04, '#ffffff');
-      L.box(x, h1 + 1.45, 0.05, 1.15, 1.25, 0.02, '#ffffff');
-      for (const sx of [-1, 1]) W.box(x + sx * 0.95, h1 + 1.45, -0.06, 0.55, 1.4, 0.06, '#6b2a1d'); // shutters
-    }
-  }
-  // roof: gabled along the length, deep overhangs, a thick snow cover
-  const top = h1 + h2, ridge = top + depth * 0.32, over = 1.4;
-  const roofSlab = (sideZ) => {
-    // a slab from the eave (z = -over or depth + over) to the ridge (z = depth / 2)
-    const za = sideZ < 0 ? -over : depth + over, zb = depth / 2;
-    const ya = top - 0.15, yb = ridge;
-    const x0 = -len / 2 - over, x1 = len / 2 + over;
-    const nrm = sideZ < 0 ? [0, Math.cos(0.6), -Math.sin(0.6)] : [0, Math.cos(0.6), Math.sin(0.6)];
-    for (const [dy, col] of [[0, '#3a3633'], [0.32, '#f3f6fa']]) {
-      const a = W.v(x0, ya + dy, za, ...nrm, col), b2 = W.v(x1, ya + dy, za, ...nrm, col), c = W.v(x1, yb + dy, zb, ...nrm, col), d = W.v(x0, yb + dy, zb, ...nrm, col);
-      if (sideZ < 0) W.quad(b2, a, d, c); else W.quad(a, b2, c, d);
-    }
-    // the snow's thickness at the eave
-    const e0 = W.v(x0, ya, za, 0, 0, sideZ < 0 ? -1 : 1, '#e9eef5'), e1 = W.v(x1, ya, za, 0, 0, sideZ < 0 ? -1 : 1, '#e9eef5'), e2 = W.v(x1, ya + 0.32, za, 0, 0, sideZ < 0 ? -1 : 1, '#f3f6fa'), e3 = W.v(x0, ya + 0.32, za, 0, 0, sideZ < 0 ? -1 : 1, '#f3f6fa');
-    if (sideZ < 0) W.quad(e1, e0, e3, e2); else W.quad(e0, e1, e2, e3);
-  };
-  roofSlab(-1); roofSlab(1);
-  // gable ends
-  for (const sx of [-1, 1]) {
-    const x = sx * len / 2;
-    const a = W.v(x, top, -0.0, sx, 0, 0, '#5a3a22'), b2 = W.v(x, top, depth, sx, 0, 0, '#5a3a22'), c = W.v(x, ridge - 0.1, depth / 2, sx, 0, 0, '#5a3a22');
-    if (sx > 0) W.tri(b2, a, c); else W.tri(a, b2, c);
-  }
-  // clock on the front, at the eave's middle
-  if (clock) {
-    S.box(0, top + 0.9, -over + 0.6, 1.5, 1.5, 0.2, '#f5f3ee');
-    S.box(0, top + 0.9, -over + 0.48, 0.08, 0.6, 0.03, '#111111');
-    S.box(0.18, top + 0.95, -over + 0.47, 0.42, 0.06, 0.03, '#111111');
-  }
-  const grp = new THREE.Group();
-  const add = (bd, mat, cast = true) => { const geo = bd.build(); if (!geo) return; const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; grp.add(m); };
-  add(S, stone); add(W, wood); add(G, glass, false); add(L, warm, false);
-  grp.userData.size = { len, depth, height: ridge + 0.4 };
-  return grp;
-}
-
-// ------------------------------------------------------------------ the top station on the glacier
-// The train arrives in the rock hall under the ice; the station building stands on the glacier above it: a stone
-// ground floor with big windows, a glazed upper hall under a flat roof (red fascia, the name board), a weather
-// station on the roof, and a timber viewing terrace in front with a railing, telescopes and benches, looking down
-// the glacier and the Wolkental to Legacy Village. Local frame: x along the front, z back, front at z = 0.
-function buildGlacierStation(M, steel, { terraceOnly = false } = {}) {
-  const S = new B(), W = new B(), G = new B(), L = new B(), P = new B();
+// ------------------------------------------------------------------ the top station's terrace on the glacier
+// The train arrives in the rock hall under the ice; the station building stands on the glacier above it
+// (stationbuildings.js 'glacier', behind this), and in front of it a timber viewing terrace with a railing,
+// telescopes and benches, looking down the glacier and the Wolkental to Legacy Village. Local frame: x along the
+// front, z back, the building's front at z = 0.
+function buildGlacierTerrace(M, steel) {
+  const W = new B(), P = new B();
   const rnd = mulberry32(9931);
-  const len = 24, depth = 13, h1 = 4.2, h2 = 3.6, top = h1 + h2;
-  if (!terraceOnly) {
-  // stone ground floor (a skirt below the ground hides any step of the pad), coursed blocks of varied tone
-  const course = (x0, x1, z0, z1, y0, y1) => {
-    for (let y = y0; y < y1 - 1e-6; y += 0.5) {
-      const v = 0.8 + rnd() * 0.17, col = '#' + new THREE.Color(0.6 * v, 0.585 * v, 0.55 * v).getHexString();
-      S.box((x0 + x1) / 2, y + Math.min(0.5, y1 - y) / 2, (z0 + z1) / 2, x1 - x0, Math.min(0.5, y1 - y) - 0.02, z1 - z0, col);
-    }
-  };
-  course(-len / 2, len / 2, depth - 0.6, depth, -3.5, h1);
-  course(-len / 2, -len / 2 + 0.6, 0, depth, -3.5, h1);
-  course(len / 2 - 0.6, len / 2, 0, depth, -3.5, h1);
-  // the front: piers between big windows and the door in the middle
-  const bays = [-10.2, -6.2, -2.2, 2.2, 6.2, 10.2];
-  for (let i = 0; i < bays.length - 1; i++) {
-    const a = bays[i], b = bays[i + 1], mid = (a + b) / 2, door = Math.abs(mid) < 1;
-    course(a - 0.6, a + 0.6, 0, 0.6, -1.5, h1); // pier
-    if (door) {
-      G.box(mid, 1.6, 0.25, b - a - 1.2, 3.2, 0.06, '#ffffff');
-      L.box(mid, 1.6, 0.4, b - a - 1.3, 3.1, 0.02, '#ffffff');
-      course(a + 0.6, b - 0.6, 0, 0.6, 3.3, h1); // lintel
-      S.box(mid, 3.25, -0.05, b - a - 0.9, 0.16, 0.3, '#bdb7ab');
-    } else {
-      course(a + 0.6, b - 0.6, 0, 0.6, -1.5, 0.8); // sill wall
-      G.box(mid, 2.05, 0.25, b - a - 1.2, 2.5, 0.06, '#ffffff');
-      L.box(mid, 2.05, 0.4, b - a - 1.3, 2.4, 0.02, '#ffffff');
-      course(a + 0.6, b - 0.6, 0, 0.6, 3.3, h1);
-      S.box(mid, 0.78, -0.08, b - a - 1.0, 0.1, 0.34, '#bdb7ab');
-    }
-  }
-  course(bays[0] - 0.6 - (len / 2 + bays[0] - 0.6), bays[0] - 0.6, 0, 0.6, -1.5, h1); // corner piece left
-  course(bays.at(-1) + 0.6, len / 2, 0, 0.6, -1.5, h1);
-  // the floor slab between the storeys, then the glazed hall: steel posts, glass, the warm interior behind
-  S.box(0, h1 + 0.12, depth / 2, len + 0.3, 0.26, depth + 0.3, '#9a958c');
-  const posts = [];
-  for (let x = -len / 2; x <= len / 2 + 1e-6; x += 2.4) posts.push([x, 0.25], [x, depth - 0.25]);
-  for (let z = 2.4; z < depth - 1; z += 2.4) posts.push([-len / 2 + 0.25, z], [len / 2 - 0.25, z]);
-  for (const [x, z] of posts) P.box(x, h1 + h2 / 2 + 0.12, z, 0.16, h2, 0.16, '#2f3338');
-  for (const [z, nz] of [[0.25, -1], [depth - 0.25, 1]]) { G.box(0, h1 + h2 / 2 + 0.12, z, len - 0.2, h2 - 0.1, 0.05, '#ffffff'); L.box(0, h1 + h2 / 2 + 0.12, z - nz * 0.6, len - 1.2, h2 - 0.6, 0.02, '#ffffff'); }
-  for (const x of [-len / 2 + 0.25, len / 2 - 0.25]) { G.box(x, h1 + h2 / 2 + 0.12, depth / 2, 0.05, h2 - 0.1, depth - 0.2, '#ffffff'); }
-  P.box(0, h1 + 1.1, 0.18, len, 0.08, 0.1, '#2f3338'); // transom
-  // flat roof: a deep fascia (red band under a dark cap), snow on top
-  S.box(0, top + 0.45, depth / 2, len + 1.6, 0.5, depth + 1.6, '#55595f');
-  P.box(0, top + 0.32, -0.81, len + 1.62, 0.36, 0.06, '#a5141c');
-  P.box(0, top + 0.32, depth + 0.81, len + 1.62, 0.36, 0.06, '#a5141c');
-  for (const sx of [-1, 1]) P.box(sx * (len / 2 + 0.81), top + 0.32, depth / 2, 0.06, 0.36, depth + 1.62, '#a5141c');
-  S.box(0, top + 0.82, depth / 2, len + 1.3, 0.26, depth + 1.3, '#f2f5f9');
-  // weather station on the roof: a small cabin, a lattice mast with an anemometer and a dish
-  S.box(len / 2 - 4, top + 2.1, depth - 3.6, 4.2, 2.4, 3.6, '#d9d6cf', '#f2f5f9');
-  G.box(len / 2 - 4, top + 2.3, depth - 5.43, 3.2, 1.0, 0.04, '#ffffff');
-  const mx = len / 2 - 1.6, mz = depth - 1.6, mh = 9;
-  for (const [dx, dz] of [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]]) P.bar([mx + dx, top + 1, mz + dz], [mx + dx * 0.4, top + 1 + mh, mz + dz * 0.4], 0.035, '#c9cdd2', 4);
-  for (let k = 1; k < 6; k++) { const y = top + 1 + (k * mh) / 6, f = 1 - 0.6 * (k / 6); P.box(mx, y, mz, 0.6 * f + 0.06, 0.04, 0.6 * f + 0.06, '#c9cdd2'); }
-  P.bar([mx - 0.9, top + mh + 0.6, mz], [mx + 0.9, top + mh + 0.6, mz], 0.03, '#2f3338', 4);
-  for (const sx of [-1, 1]) P.cylY(mx + sx * 0.9, top + mh + 0.5, mz, 0.12, 0.16, 8, '#e6e8ea');
-  P.cylY(mx, top + mh + 0.2, mz, 0.04, 1.4, 6, '#2f3338');
-  }
+  const len = 24;
   // the viewing terrace in front: timber deck, steel railing, telescopes and benches
   const dz0 = -8.5;
   for (let x = -len / 2; x < len / 2 - 1e-6; x += 0.6) {
@@ -320,121 +181,8 @@ function buildGlacierStation(M, steel, { terraceOnly = false } = {}) {
   }
   const grp = new THREE.Group();
   const add = (bd, mat, cast = true) => { const geo = bd.build(); if (!geo) return; const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; grp.add(m); };
-  add(S, M.stone); add(W, M.wood); add(P, steel); add(G, M.glass, false); add(L, M.warm, false);
-  grp.userData.size = { len, depth, height: top + 1, deck: -dz0 };
-  return grp;
-}
-
-// (Oct 31 2026, the user: the halt cabins, rail_station_halt, at the Legacy Express stations ("Sunny Meadow") and the
-// Wolkenspitzbahn stops show "a strange green, map-like texture with white blobs" on the roof, "it should be a snowy
-// roof, like the other huts". The cause is the model's own texture, not the LOD copies: its one atlas paints the roof
-// green moss with white snow patches (the emissive map lights those patches too), already at full detail; the
-// decimated copies keep that look but fold the roof's top and its underside together, so wood shows through too.
-// So the roof's triangles get their own mesh with a plain snow material, on every LOD level, the rest of the model
-// keeping all its maps. The roof at full detail: faces looking up (normal y > 0.3) in the top third of the model
-// (above the eaves); the decimated copies cannot be judged by their normals (vertex clustering tilts them), so a
-// triangle there is roof when two of its vertices carry the uv of a full-detail roof (or roof underside) vertex
-// (clusterDecimate copies one source vertex's uv exactly). The snow colour is the station houses' roof snow
-// (buildStationHouse, '#f3f6fa'), pulled a little forward (polygonOffset) over the folded-in underside.)
-const ROOF_T = 0.66, ROOF_NY = 0.3;
-let ROOF_SNOW = null;
-const roofKeyCache = new WeakMap(), roofSplitCache = new WeakMap();
-function roofSnowMaterial() {
-  if (!ROOF_SNOW) {
-    ROOF_SNOW = new THREE.MeshStandardMaterial({ color: '#f3f6fa', roughness: 0.85, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
-    ROOF_SNOW.userData.shared = true; // (one for every station: never disposed with a chunk / course)
-  }
-  return ROOF_SNOW;
-}
-const uvKey = (uv, i) => Math.fround(uv.getX(i)) + ',' + Math.fround(uv.getY(i));
-// one triangle's height in the model (0 bottom .. 1 top) and its face normal's y
-function triFacts(pos, a, b, c, y0, dy) {
-  const ax = pos.getX(a), ay = pos.getY(a), az = pos.getZ(a);
-  const ux = pos.getX(b) - ax, uy = pos.getY(b) - ay, uz = pos.getZ(b) - az;
-  const vx = pos.getX(c) - ax, vy = pos.getY(c) - ay, vz = pos.getZ(c) - az;
-  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, l = Math.hypot(nx, ny, nz);
-  return { t: ((ay + pos.getY(b) + pos.getY(c)) / 3 - y0) / dy, ny: l > 1e-12 ? ny / l : 0 };
-}
-// split a geometry into { body, roof }: two index subsets sharing its attributes (cached: the model's and the LOD
-// copies' geometries are shared by every station); keys = null for the full-detail geometry (it collects them)
-function splitRoof(geo, keys) {
-  if (roofSplitCache.has(geo)) return roofSplitCache.get(geo);
-  const pos = geo.attributes.position, uv = geo.attributes.uv;
-  let out = null;
-  if (pos && uv) {
-    let y0 = Infinity, y1 = -Infinity;
-    for (let i = 0; i < pos.count; i++) { const y = pos.getY(i); if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    const dy = Math.max(1e-9, y1 - y0);
-    const idx = geo.index, count = idx ? idx.count : pos.count;
-    const body = [], roof = [];
-    const hiKeys = keys ? null : new Set();
-    for (let k = 0; k + 2 < count; k += 3) {
-      const a = idx ? idx.getX(k) : k, b = idx ? idx.getX(k + 1) : k + 1, c = idx ? idx.getX(k + 2) : k + 2;
-      const f = triFacts(pos, a, b, c, y0, dy);
-      let isRoof;
-      if (!keys) {
-        isRoof = f.t > ROOF_T && f.ny > ROOF_NY;
-        if (f.t > ROOF_T && (isRoof || f.ny < -ROOF_NY)) for (const i of [a, b, c]) hiKeys.add(uvKey(uv, i)); // (top and underside)
-      } else isRoof = f.t > ROOF_T - 0.06 && (keys.has(uvKey(uv, a)) + keys.has(uvKey(uv, b)) + keys.has(uvKey(uv, c))) >= 2;
-      (isRoof ? roof : body).push(a, b, c);
-    }
-    if (hiKeys) roofKeyCache.set(geo, hiKeys);
-    if (roof.length) {
-      const sub = (list) => {
-        const g = new THREE.BufferGeometry();
-        for (const [name, attr] of Object.entries(geo.attributes)) g.setAttribute(name, attr);
-        g.setIndex(new THREE.BufferAttribute(pos.count > 65535 ? new Uint32Array(list) : new Uint16Array(list), 1));
-        g.boundingBox = geo.boundingBox?.clone() ?? null; g.boundingSphere = geo.boundingSphere?.clone() ?? null;
-        if (!g.boundingSphere) g.computeBoundingSphere();
-        g.userData.shared = true; // (cached for every station: never disposed with an express chunk)
-        return g;
-      };
-      out = { body: sub(body), roof: sub(roof) };
-    }
-  }
-  roofSplitCache.set(geo, out);
-  return out;
-}
-/** Give a makeLOD'd rail_station_halt a snowy roof on every LOD level (see above). Call it right after makeLOD. */
-export function snowRoof(lod) {
-  if (!lod || lod.userData.snowRoof) return lod;
-  lod.userData.snowRoof = true; // (once per building)
-  const levels = lod?.levels?.length ? lod.levels.map((l) => l.object) : [lod];
-  const meshesOf = (o) => { const list = []; o.traverse((m) => { if (m.isMesh && !m.userData.snowRoof && !Array.isArray(m.material)) list.push(m); }); return list; };
-  const hiGeos = meshesOf(levels[0]).map((m) => m.geometry); // (the model's own, before level 0 is split)
-  for (const g of hiGeos) splitRoof(g, null); // (collects the roof's uv keys first)
-  levels.forEach((obj, li) => {
-    meshesOf(obj).forEach((m, k) => {
-      const keys = li === 0 ? null : roofKeyCache.get(hiGeos[k]);
-      if (li > 0 && !keys) return;
-      const split = li === 0 ? roofSplitCache.get(m.geometry) : splitRoof(m.geometry, keys);
-      if (!split) return;
-      m.geometry = split.body;
-      const r = new THREE.Mesh(split.roof, roofSnowMaterial());
-      r.userData.snowRoof = true;
-      r.castShadow = m.castShadow; r.receiveShadow = m.receiveShadow;
-      m.add(r); // (a child: the mesh's own transform)
-    });
-  });
-  return lod;
-}
-
-// platform canopy: steel columns, a glazed lean-to roof, lamps under it
-function buildCanopy(steelMat, glassMat, len, width) {
-  const S = new B(), G = new B();
-  for (let x = -len / 2; x <= len / 2 + 0.01; x += 6) {
-    S.box(x, 1.6, width - 0.3, 0.18, 3.2, 0.18, '#3d4249');
-    S.bar([x, 3.2, width - 0.3], [x, 3.55, 0.2], 0.07, '#3d4249');
-  }
-  S.box(0, 3.25, width - 0.3, len + 0.3, 0.16, 0.2, '#3d4249');
-  S.box(0, 3.6, 0.15, len + 0.3, 0.16, 0.2, '#3d4249');
-  G.box(0, 3.45, width / 2, len, 0.04, width, '#ffffff');
-  // snow lying on the glass along its low edge
-  S.box(0, 3.5, width - 0.6, len, 0.14, 0.8, '#eef3f9');
-  const grp = new THREE.Group();
-  const s = new THREE.Mesh(S.build(), steelMat); s.castShadow = true; s.receiveShadow = true;
-  const g = new THREE.Mesh(G.build(), glassMat);
-  grp.add(s, g);
+  add(W, M.wood); add(P, steel);
+  grp.userData.size = { len, deck: -dz0 };
   return grp;
 }
 
@@ -490,6 +238,17 @@ function lampParts(models) {
   return LAMP;
 }
 
+// the departures board in the valley station's hall / the screens in the top station's (off the timetable, railroute.js)
+function departuresFor(id) {
+  const trip = Math.round(PROFILE.trip / 60), every = Math.round(CYCLE / 2 / 60), halts = RAIL.stations.filter((st) => st.halt);
+  const min = (t) => `${Math.max(1, Math.round(t / 60))} min`;
+  const up = id !== 'platt';
+  const rows = [[up ? 'Wolkenplatt · Gletscher' : 'Legacy Village', `via ${halts.map((st) => st.name).join(' · ')}`, `${trip} min`]];
+  for (const st of halts.slice(0, 2)) { const tA = haltArrival(st.id); if (tA !== null) rows.push([st.name, 'halt', min(up ? tA : PROFILE.trip - tA - DWELL_MID)]); }
+  rows.push(['Next train', 'Wolkenspitzbahn', `every ${every} min`]);
+  return { title: 'ABFAHRT · DEPARTURES', rows };
+}
+
 // ------------------------------------------------------------------ all stations
 export function buildStations(scene, colliders = [], models = null) {
   const M = railMaterials();
@@ -510,70 +269,37 @@ export function buildStations(scene, colliders = [], models = null) {
     buildPlatform(st.underground ? platHall : plat, st.s0 + 4, st.s1 - 4, side, st.underground ? 5.55 : 4.2); // (underground: to the rock hall's wall)
     const P = besideLine(mid, side * 3.6);
     rec.board = { x: P.x, z: P.z };
-    // the building beside the platform (its front faces the track)
-    const toTrack = Math.atan2(-(-_f.dz * side), -(_f.dx * side)); void toTrack;
-    const meshyKey = st.id === 'tal' ? 'rail_station_valley' : st.halt ? 'rail_station_halt' : null;
-    if (meshyKey && MESHY_STATIONS && models?.[meshyKey]) {
-      // the Meshy building: its front (+z) to the track, its front line 1.2 m behind the platform's back edge, on a
-      // stone plinth that reaches into the ground
+    // the building beside the platform (stationbuildings.js: the valley station, a halt): its front to the track, its
+    // front line 1.2 m behind the platform's back edge, on a stone plinth that reaches 5 m into the ground
+    if (st.id === 'tal' || st.halt) {
       const big = st.id === 'tal';
-      const bld = makeLOD(models[meshyKey], { size: big ? 22 : 8.6, axis: 'x' }, 260, 0.05);
-      if (meshyKey === 'rail_station_halt') snowRoof(bld); // (Oct 31 2026, the user: a snowy roof, not the model's green one)
-      bld.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; crisp(o.material); } });
-      const sz = bld.userData.size;
-      const bp = besideLine(mid, side * (1.75 + 4.2 + 1.2));
-      const az = new THREE.Vector3(-bp.dz * side, 0, bp.dx * side), ax = new THREE.Vector3(bp.dx * side, 0, bp.dz * side);
-      const m = new THREE.Matrix4().makeBasis(ax, new THREE.Vector3(0, 1, 0), az);
-      const holder = new THREE.Group();
-      holder.position.set(bp.x, bp.y + 0.04, bp.z);
-      holder.quaternion.setFromRotationMatrix(m);
-      bld.position.set(0, 0, sz.z / 2);
-      bld.rotation.y = Math.PI; // the model's front (+z) faces the track (-z here)
-      holder.add(bld);
-      const plinth = new THREE.Mesh(new THREE.BoxGeometry(sz.x * 0.96, 5, sz.z * 0.96), new THREE.MeshStandardMaterial({ color: 0x6e6a63, roughness: 0.9 }));
-      plinth.position.set(0, -2.5, sz.z / 2);
-      holder.add(plinth);
-      group.add(holder);
-      const c = new THREE.Vector3(0, 0, sz.z / 2).applyMatrix4(m).add(holder.position);
-      colliders.push({ x: c.x, z: c.z, hw: (sz.x / 2) * 0.88, hd: (sz.z / 2) * 0.88, rot: -Math.atan2(az.x, az.z) });
-      rec.house = { x: c.x, z: c.z, r: Math.max(sz.x, sz.z) / 2 + 2 };
-      if (big) {
-        const can = buildCanopy(steel, M.glass, 30, 4.4);
-        can.position.copy(holder.position).addScaledVector(az, -4.4);
-        can.quaternion.copy(holder.quaternion);
-        group.add(can);
-        for (let x = -15; x <= 15.01; x += 6) colliders.push({ x: can.position.x + ax.x * x + az.x * 4.1, z: can.position.z + ax.z * x + az.z * 4.1, r: 0.15 }); // its steel columns
-      }
-      const ex = besideLine(mid + 4, side * 4.3);
-      rec.exit = { x: ex.x, z: ex.z, heading: Math.atan2(az.x, az.z) };
-    } else if (st.id === 'tal' || st.halt) {
-      const big = st.id === 'tal';
-      const house = buildStationHouse(M.stone, M.wood, M.glass, M.warm, big ? { len: 24, depth: 11, floors: 2 } : { len: 11, depth: 7, floors: 1, clock: false });
+      const bld = stationBuilding(big ? 'valley' : 'halt', { plinth: 5, apron: -1.2, departures: big ? departuresFor(st.id) : null });
       const bp = besideLine(mid, side * (1.75 + 4.2 + 1.2));
       // local z away from the track, local x along it (right-handed: x = z x up)
-      const az = new THREE.Vector3(-bp.dz * side, 0, bp.dx * side);
-      const ax = new THREE.Vector3(bp.dx * side, 0, bp.dz * side);
+      const az = new THREE.Vector3(-bp.dz * side, 0, bp.dx * side), ax = new THREE.Vector3(bp.dx * side, 0, bp.dz * side);
       const m = new THREE.Matrix4().makeBasis(ax, new THREE.Vector3(0, 1, 0), az);
-      house.position.set(bp.x, bp.y + 0.06, bp.z);
-      house.quaternion.setFromRotationMatrix(m);
-      group.add(house);
-      const sz = house.userData.size;
-      const c = new THREE.Vector3(0, 0, sz.depth / 2).applyMatrix4(m).add(house.position);
-      colliders.push({ x: c.x, z: c.z, hw: sz.len / 2, hd: sz.depth / 2, rot: -Math.atan2(az.x, az.z) });
-      rec.house = { x: c.x, z: c.z, r: Math.max(sz.len, sz.depth) / 2 + 2 };
+      bld.position.set(bp.x, bp.y + 0.04, bp.z);
+      bld.quaternion.setFromRotationMatrix(m);
+      group.add(bld);
+      const sz = bld.userData.size, rot = -Math.atan2(az.x, az.z);
+      void rot;
+      // walk in (Nov 1 2026, the user: "make it so you can go inside"): its walls, counter and benches solid, its floor
+      // and the paving in front of its doors walkable (stationbuildings.js registerStation)
+      registerStation(bld.userData.plan, bld.position, az, colliders);
+      const c = new THREE.Vector3(0, 0, sz.z / 2).applyMatrix4(m).add(bld.position);
+      rec.house = { x: c.x, z: c.z, r: Math.max(sz.x, sz.z) / 2 + 2 };
+      // the name board on the building's front
+      const ba = bld.userData.board, nb = nameBoard(st.name, rec.alt, ba.w);
+      nb.position.set(ba.x, ba.y, ba.z - 0.05); nb.rotation.y = Math.PI; // (its print, +z, to the track)
+      bld.add(nb); signs.push(nb.userData.face);
       if (big) {
-        const can = buildCanopy(steel, M.glass, 30, 4.4);
-        can.position.copy(house.position).addScaledVector(az, -4.4);
-        can.quaternion.copy(house.quaternion);
+        const can = stationCanopy(30, 4.4);
+        can.position.copy(bld.position).addScaledVector(az, -4.4);
+        can.quaternion.copy(bld.quaternion);
         group.add(can);
-        // its steel columns (buildCanopy(): every 6 m along it, 0.3 m in front of the building)
+        // its steel columns (stationCanopy(): every 6 m along it, 0.3 m in front of its back edge)
         for (let x = -15; x <= 15.01; x += 6) colliders.push({ x: can.position.x + ax.x * x + az.x * 4.1, z: can.position.z + ax.z * x + az.z * 4.1, r: 0.15 });
       }
-      // name board on the building's front, over the door
-      const nb = nameBoard(st.name, rec.alt, big ? 6.4 : 4.2);
-      nb.position.copy(house.position).addScaledVector(az, -0.12).add(new THREE.Vector3(0, big ? 4.5 : 3.2, 0));
-      nb.quaternion.copy(house.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
-      group.add(nb); signs.push(nb.userData.face);
       // exit (arrival): on the platform by the door, facing the village / the lake
       const ex = besideLine(mid + 4, side * 4.3);
       rec.exit = { x: ex.x, z: ex.z, heading: Math.atan2(az.x, az.z) };
@@ -630,8 +356,7 @@ export function buildStations(scene, colliders = [], models = null) {
       const above = besideLine(mid, 0);
       const gy = world.height(above.x, above.z);
       const fl = Math.hypot(above.x, above.z) || 1, fx = -above.x / fl, fz = -above.z / fl; // toward the village
-      const meshyTop = MESHY_STATIONS && models?.rail_station_glacier;
-      const house = buildGlacierStation(M, steel, { terraceOnly: !!meshyTop });
+      const house = buildGlacierTerrace(M, steel);
       const sz = house.userData.size;
       // local z (back) = -front; x = z x up: the right-handed basis of the valley station
       const az = new THREE.Vector3(-fx, 0, -fz), ax = new THREE.Vector3(-fz, 0, fx);
@@ -642,32 +367,25 @@ export function buildStations(scene, colliders = [], models = null) {
       group.add(house);
       // the terrace's two benches (no backrest), looking out to the front (-z), the deck at y 0.28
       seatsFromObject(house, [-3.2, 3.6].flatMap((x) => [-0.55, 0, 0.55].map((k) => ({ x: x + k, y: 0.77, z: -8.5 + 2.1, yaw: Math.PI, floor: 0.28 }))));
-      if (meshyTop) {
-        // the Meshy summit station behind the terrace (its front, +z, toward the village)
-        const bld = makeLOD(models.rail_station_glacier, { size: 14, axis: 'y' }, 300, 0.05);
-        bld.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; crisp(o.material); } });
-        const bs = bld.userData.size;
-        bld.position.set(0, 0, bs.z / 2 + 0.2);
-        bld.rotation.y = Math.PI;
-        const plinth = new THREE.Mesh(new THREE.BoxGeometry(bs.x * 0.96, 5, bs.z * 0.96), new THREE.MeshStandardMaterial({ color: 0x77736c, roughness: 0.9 }));
-        plinth.position.set(0, -2.45, bs.z / 2 + 0.2);
-        house.add(bld, plinth);
-        sz.len = Math.max(sz.len, bs.x); sz.depth = bs.z + 0.2;
-      }
+      // the glacier terminal behind the terrace (stationbuildings.js; its front toward the village), its walls solid
+      const bld = stationBuilding('glacier', { plinth: 3.5, departures: departuresFor(st.id) });
+      bld.position.set(0, 0, 0.2);
+      house.add(bld);
+      const ba = bld.userData.board, tb = nameBoard(st.name, rec.alt, ba.w);
+      tb.position.set(ba.x, ba.y, ba.z - 0.05); tb.rotation.y = Math.PI; // (on the tower, over the roof)
+      bld.add(tb); signs.push(tb.userData.face);
+      const rot = -Math.atan2(az.x, az.z);
+      void rot;
+      registerStation(bld.userData.plan, house.position, az, colliders, { zOff: 0.2 }); // (walk in, as the valley station)
+      const bs = bld.userData.size;
+      sz.depth = bs.z + 0.2;
       const c = new THREE.Vector3(0, 0, sz.depth / 2).applyMatrix4(m).add(house.position);
-      colliders.push({ x: c.x, z: c.z, hw: sz.len / 2, hd: sz.depth / 2, rot: -Math.atan2(az.x, az.z) });
-      const nb = nameBoard(st.name, rec.alt, meshyTop ? 4.4 : 6.0);
-      if (meshyTop) {
-        // on two posts at the terrace's front edge, facing the village
-        // (Oct 31 2026: free-standing on its posts, nameSign, each post on the ground)
-        const o = new THREE.Vector3().copy(house.position).addScaledVector(az, -8.9);
-        o.y = Math.max(house.position.y, world.groundHeight(o.x, o.z, house.position.y + 3));
-        group.add(nameSign(nb, 4.4, o, Math.atan2(-az.x, -az.z), colliders, { bottom: 2.3 }));
-      } else {
-        nb.position.copy(house.position).addScaledVector(az, -0.9).add(new THREE.Vector3(0, 8.0, 0));
-        nb.quaternion.copy(house.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
-        group.add(nb);
-      }
+      // the name board on two posts at the terrace's front edge, facing the village
+      // (Oct 31 2026: free-standing on its posts, nameSign, each post on the ground)
+      const nb = nameBoard(st.name, rec.alt, 4.4);
+      const o = new THREE.Vector3().copy(house.position).addScaledVector(az, -8.9);
+      o.y = Math.max(house.position.y, world.groundHeight(o.x, o.z, house.position.y + 3));
+      group.add(nameSign(nb, 4.4, o, Math.atan2(-az.x, -az.z), colliders, { bottom: 2.3 }));
       signs.push(nb.userData.face);
       const door = new THREE.Vector3(0, 0, -2.6).applyMatrix4(m).add(house.position);
       rec.house = { x: c.x, z: c.z, r: Math.max(sz.len, sz.depth) / 2 + 2 };

@@ -500,7 +500,7 @@ export class Player {
     const imp = POP_MIN + (POP_MAX - POP_MIN) * Math.pow(charge, 0.85);
     this.vel.addScaledVector(n, imp);
     this.parked = false;
-    rumble.tick(0.2 + 0.4 * charge); // (the pop off the snow, felt in the controller)
+    if (this.mode === 'ski') rumble.tick(0.2 + 0.4 * charge); // (the pop off the snow, felt in the controller; on skis only: Nov 1 2026, the user "not when you jump normally without skis")
     if (!this.air) { this.pos.addScaledVector(n, 0.03); this.takeoff('pop'); }
     else {
       // late pop just off a lip: a deliberate jump after all (keys held through the lip stay latched)
@@ -772,7 +772,7 @@ export class Player {
     this.absorbV += Math.min(14, impact * 1.3);
     this.camDipV -= Math.min(5, impact * 0.32);
     this.shake = Math.max(this.shake, clamp((impact - 5) / 10, 0, 0.7));
-    if (impact > 1.5) rumble.land(clamp((impact - 1.5) / 11, 0, 1)); // (the controller: harder the bigger the drop)
+    if (impact > 1.5 && this.mode === 'ski') rumble.land(clamp((impact - 1.5) / 11, 0, 1)); // (the controller: harder the bigger the drop; skis only)
     if (impact > 2.2) this.audio?.play('land', clamp(impact / 12, 0.12, 1));
     if (impact > 1.5) this.fx({ type: 'land', x: this.pos.x, y: this.pos.y, z: this.pos.z, amount: clamp(impact / 10, 0.1, 1) });
   }
@@ -1110,7 +1110,7 @@ export class Player {
     if (this.footAir) {
       this.footJumpY = (this.footJumpY || 0) + this.footJumpV * dt;
       this.footJumpV -= 9.81 * dt;
-      if (this.footJumpY <= 0) { this.footJumpY = 0; this.footAir = false; this.audio?.play('step'); this.shake = 0.15; rumble.tick(0.2); }
+      if (this.footJumpY <= 0) { this.footJumpY = 0; this.footAir = false; this.audio?.play('step'); this.shake = 0.15; } // (no rumble: a plain jump on foot)
     }
     p.y = ground + (this.footJumpY || 0);
     this.collide(0, p.y + 0.02); // (+2 cm: standing on a top you stepped up onto)

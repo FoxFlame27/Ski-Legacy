@@ -19,7 +19,8 @@ import { RAIL, railAt, railNearest } from '../world/railroute.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 import { K, usingPad } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
-import { nearColliders } from './nearcols.js'; // (Nov 1 perf pass: the colliders round the sled, not all of them)
+import { nearColliders } from './nearcols.js';
+import { rumble } from '../core/gamepad.js'; // (Nov 1 2026, the user: "the controllers should vibrate on snowmobiles too") // (Nov 1 perf pass: the colliders round the sled, not all of them)
 /** The sled's controls in the keys in use: "W throttle · S brake · A/D steer ...", or the controller's stick and buttons. */
 const sledKeys = (hb) => `${usingPad() ? `${K('move')} throttle · brake · steer` : `${K('forward')} throttle · ${K('back')} brake · ${K('left')}/${K('right')} steer`} · ${K('sprint')} boost${hb ? ` · ${K('jump')} handbrake` : ''} · ${K('interact')} get off`;
 
@@ -464,7 +465,7 @@ export class Snowmobiles {
       d.vy = Math.min(d.vy, 7) - G * dt; d.y += d.vy * dt; d.airT += dt;
       if (d.y <= g1) {
         const impact = -d.vy;
-        if (impact > 3) { d.suspV -= impact * 0.9; this.audio?.play('land', Math.min(1, impact / 12)); }
+        if (impact > 3) { d.suspV -= impact * 0.9; this.audio?.play('land', Math.min(1, impact / 12)); rumble.land(Math.min(1, (impact - 3) / 10)); }
         d.y = g1; d.vy = 0; d.air = false; d.airT = 0;
       }
     }
@@ -545,13 +546,13 @@ export class Snowmobiles {
     const l = Math.hypot(px, pz) || 1, nx = px / l, nz = pz / l;
     d.x += px; d.z += pz;
     const vn = d.vx * nx + d.vz * nz;
-    if (hard > SLED.crash && !soft && this.player.crash) { try { this.audio?.impact?.(kind, Math.min(1, hard / 16)); } catch { /* (silent) */ } this.throwOff(Math.sign(d.vx * Math.cos(d.heading) - d.vz * Math.sin(d.heading)) || 1); return; }
+    if (hard > SLED.crash && !soft && this.player.crash) { rumble.crash(Math.min(1, hard / 18)); try { this.audio?.impact?.(kind, Math.min(1, hard / 16)); } catch { /* (silent) */ } this.throwOff(Math.sign(d.vx * Math.cos(d.heading) - d.vz * Math.sin(d.heading)) || 1); return; }
     if (vn < 0) {
       d.vx -= nx * vn * 1.3; d.vz -= nz * vn * 1.3; // a soft bounce back
       const loss = Math.max(0.5, 1 - (-vn) * 0.04);
       d.vx *= loss; d.vz *= loss;
       d.suspV -= Math.min(2, -vn * 0.15);
-      if (-vn > 2.5 && d.bumpT <= 0) { if (this.audio?.impact) this.audio.impact(soft && !hard ? 'snow' : kind, Math.min(0.8, -vn / 14)); else this.audio?.play('land', Math.min(1, -vn / 10)); d.bumpT = 0.4; }
+      if (-vn > 2.5 && d.bumpT <= 0) { rumble.bump(Math.min(1, -vn / 12)); if (this.audio?.impact) this.audio.impact(soft && !hard ? 'snow' : kind, Math.min(0.8, -vn / 14)); else this.audio?.play('land', Math.min(1, -vn / 10)); d.bumpT = 0.4; }
     }
   }
 
@@ -633,6 +634,8 @@ export class Snowmobiles {
     const target = clamp(0.18 + sp / SLED.vboost * 0.65 + load * 0.25 + (d.air && throttle > 0 ? 0.25 : 0), 0, 1.1);
     d.rpm += (target - d.rpm) * (1 - Math.exp(-dt * (target > d.rpm ? 5 : 2.5)));
     this.audio?.setSled?.({ on: true, rpm: d.rpm, load, speed: sp });
+    // the engine and the track through the controller: a light buzz with the revs, rougher with speed (none in the air)
+    if (!d.air) rumble.hold(clamp(sp / SLED.vboost, 0, 1) * 0.18, 0.06 + d.rpm * 0.14 + load * 0.06);
     // snow spray from the track
     if (this.spray && !d.air && (sp > 2 || (throttle && sp < 6))) {
       d.sprayT += dt * (6 + sp * 1.4 + load * 10);

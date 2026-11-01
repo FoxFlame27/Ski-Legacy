@@ -20,6 +20,7 @@ import { GUESTS } from './jobs/catalog.js';
 import { makeFallbackFigure } from './jobs/props.js';
 import { CHALET_PLACE } from './bus/chaletroad.js';
 import { repairCost } from './carrental.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 // the tariff: a flag fall plus a tick every 100 m (Oct 29, "a realistic way" to earn), priced as every other job
 // (Oct 30, as a job on the board: jobs/catalog.js pays ~$150 a minute of the job, ~$9,000 an hour): the resort's road
@@ -667,7 +668,7 @@ export class Taxi {
     const dmg = this.duty ? this.damageBlock() : '';
     if (dmg) return `Taxi · ${dmg}`;
     if (this.duty && d && this.chased?.()) return 'Taxi · no fares while the police are after you';
-    if (this.duty) return d ? 'Taxi · on duty · waiting for a fare (T: off duty)' : this.myCar() ? 'Taxi duty · get in your car' : 'Taxi duty · take a car out at the Autohaus (MY CARS)';
+    if (this.duty) return d ? `Taxi · on duty · waiting for a fare (${K('duty')}: off duty)` : this.myCar() ? 'Taxi duty · get in your car' : 'Taxi duty · take a car out at the Autohaus (MY CARS)';
     if (d && this.hintT > 0) return 'Earn fares with your car: take the TAXI note at any job board';
     return '';
   }
@@ -734,7 +735,7 @@ export class Taxi {
       v[0] = 'ON DUTY'; v[1] = 'FOR HIRE';
       v[2] = 'FARES'; v[3] = String(this.shift?.fares || 0); v[4] = 'EARNED'; v[5] = money(this.shift?.earned || 0);
       v[6] = ''; v[7] = ''; v[8] = ''; v[9] = ''; v[10] = ''; v[11] = '';
-      v[12] = this.damageBlock() || (this.chased?.() ? 'No fares while the police are after you' : 'Waiting for the dispatcher · T: off duty');
+      v[12] = this.damageBlock() || (this.chased?.() ? 'No fares while the police are after you' : `Waiting for the dispatcher · ${K('duty')}: off duty`);
     }
     const E = this.tm;
     for (let k = 0; k < 12; k++) if (E[k].textContent !== v[k]) E[k].textContent = v[k];

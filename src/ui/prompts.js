@@ -101,6 +101,22 @@ const listeners = new Set();
 /** fn() whenever the device, the controller family or the bindings change. Returns an unsubscribe function. */
 export function onPromptChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
+/**
+ * A canvas texture (THREE.CanvasTexture) whose drawing names a key (draw(g, w, h) uses K()): drawn again when the
+ * device or the bindings change (world signs: "Press E · pick a course" -> "Press X · pick a course"). Returns tex.
+ */
+export function liveKeyTexture(tex, draw) {
+  const ref = typeof WeakRef === 'function' ? new WeakRef(tex) : { deref: () => tex };
+  const off = onPromptChange(() => {
+    const t = ref.deref(), c = t?.image;
+    if (!t || !c?.getContext) { off(); return; }
+    c.width = c.width; // (clears it and resets the context state)
+    draw(c.getContext('2d'), c.width, c.height);
+    t.needsUpdate = true;
+  });
+  return tex;
+}
+
 let installed = false;
 export function installPromptSwap() {
   if (installed || typeof document === 'undefined') return;

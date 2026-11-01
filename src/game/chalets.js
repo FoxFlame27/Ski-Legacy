@@ -29,6 +29,7 @@ import { breakables } from '../world/breakables.js'; // (the street lamps: snapp
 import { HX, HZ, G, DOOR, MODEL, FOOT, STEPS, IX, IZ } from './chaletplan.js';
 import { ChaletRoom, setChaletInterior } from './chaletroom.js';
 import { quality } from '../engine/quality.js';
+import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
 export const CHALET_PRICE = 50000; // (bought for good, not rented)
 export const SAVE_LAYOUT = 3;      // save.chalet.layout: the 18-chalet village (Oct 29); older saves are moved onto it
@@ -781,7 +782,7 @@ export class Chalets {
   // (Oct 30, the user: each chalet can be viewed once, and say so; say it comes unfurnished: you furnish it yourself)
   viewed(h) { return (this.save.chaletViewed || []).includes(h.id); }
   offer(h) {
-    const say = `A two-storey chalet on the Chaletweg: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. It comes UNFURNISHED: you furnish it yourself (inside, press F for build mode). Yours for good.`;
+    const say = `A two-storey chalet on the Chaletweg: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. It comes UNFURNISHED: you furnish it yourself (inside, press ${K('furnish')} for build mode). Yours for good.`;
     const seen = this.viewed(h);
     this.hud.dialog(h.name, say, [
       { label: 'Buy this chalet', sub: 'Yours for good · unfurnished: you furnish it yourself', price: `$${CHALET_PRICE.toLocaleString('en-US')}`, act: () => this.buy(h) },
@@ -805,7 +806,7 @@ export class Chalets {
     const old = this.save.chalet;
     this.save.chalet = { id: h.id, name: h.name, owned: true, rented: true, since: this.save.day ?? 1, furniture: old?.furniture || [], plan: 2, layout: SAVE_LAYOUT };
     this.writeSave();
-    this.hud.flash(`${h.name} is yours · it comes empty: go in and press F to furnish it yourself`, 'good', 4200);
+    this.hud.flash(`${h.name} is yours · it comes empty: go in and press ${K('furnish')} to furnish it yourself`, 'good', 4200);
   }
 
   // ------------------------------------------------------------------ in and out (a short fade each way)

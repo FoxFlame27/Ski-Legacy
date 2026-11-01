@@ -389,8 +389,8 @@ export class Drive {
       const upY = _w.set(0, 1, 0).applyQuaternion(d.e.car.quaternion).y;
       d.flipT = !d.crash && upY < 0.34 && this.speed < 2 ? (d.flipT || 0) + dt : 0;
       if (d.flipT > 1) {
-        if (performance.now() - (this.flipMsgT || 0) > 2000) { this.flipMsgT = performance.now(); this.hud?.flash(`${usingPad() ? K('unstuck') : 'F'} · Flip car back`, 'good', 1900); }
-        if (input?.hit?.('KeyF') || input?.hit?.('KeyU')) this.unflip(); // (U too: the controller's unstuck button, F has none)
+        if (performance.now() - (this.flipMsgT || 0) > 2000) { this.flipMsgT = performance.now(); this.hud?.flash(`${K('furnish')} · Flip car back`, 'good', 1900); }
+        if (input?.hit?.('KeyF') || input?.hit?.('KeyU')) this.unflip(); // (U too: unstuck flips it as well)
       }
       // U: unstuck (Oct 30 2026, the user: "add an unstuck key"; R is the camera, so U). The hint only once you've
       // been slow with the pedal down for ~3 s (stuck); the key works whenever you're slow (unstuck())

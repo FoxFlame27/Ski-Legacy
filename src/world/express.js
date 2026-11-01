@@ -723,9 +723,9 @@ export class Express {
         if (dt > 0) w.speed = Math.min(w.speed, Math.hypot(w.x - x0, w.z - z0) / dt); // (against a wall: the legs stop)
       }
     } else if (w) w.speed = 0;
-    if (!w) return { prompt: atStop ? null : 'Stand up', key: 'E', line: atStop ? 'F: stand up' : null };
+    if (!w) return { prompt: atStop ? null : 'Stand up', key: 'E', line: atStop ? `${K('furnish')}: stand up` : null };
     const seat = this.nearestFreeSeat();
-    return { prompt: atStop ? null : seat ? 'Sit down' : null, key: 'E', line: atStop ? 'F: sit down' : null };
+    return { prompt: atStop ? null : seat ? 'Sit down' : null, key: 'E', line: atStop ? `${K('furnish')}: sit down` : null };
   }
   // the car's walls, seats and tables as boxes (car frame), built once from the cabin's seat registry
   get walkBoxes() { return (this._walkBoxes ??= walkBoxes(this.cabin.seats)); }

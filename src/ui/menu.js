@@ -709,7 +709,10 @@ export class Menu {
   assignPad(id, i) {
     if (i === 16) { this.ctlStatus('The Home / guide button is reserved', true); return; }
     const b = bindsOf(save), old = b.pad[id];
-    const other = Object.keys(b.pad).find((k) => k !== id && b.pad[k] === i);
+    // (a ctx action shares its button with a normal one: a normal action swaps only with the normal one on the button,
+    // a ctx action only with a ctx one, core/bindings.js)
+    const ctx = (k) => !!ACTIONS.find((x) => x.id === k)?.ctx;
+    const other = Object.keys(b.pad).find((k) => k !== id && b.pad[k] === i && ctx(k) === ctx(id));
     const pad = { ...b.pad, [id]: i };
     if (other && old != null) pad[other] = old;
     this.storeBinds('pad', pad, PAD_DEFAULTS);

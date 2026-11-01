@@ -281,7 +281,9 @@ export class Player {
   update(dt) {
     const inp = this.input;
     if (inp.hit('KeyR') && !(this.mode === 'sit' && this.viewBeforeRide)) this.view = this.view === 'third' ? 'first' : 'third';
-    if (inp.hit('KeyG') && this.hasSkis && (this.mode === 'walk' || (this.mode === 'ski' && !this.air && this.speed < 2))) {
+    // (not while frozen: inside a chalet / an interior the hidden outdoor player stays as it is, and the controller's
+    // skis button there is also the chalet's FURNISH, core/bindings.js)
+    if (inp.hit('KeyG') && !this.frozen && this.hasSkis && (this.mode === 'walk' || (this.mode === 'ski' && !this.air && this.speed < 2))) {
       // skis go on anywhere (Oct 27, the user): on the flat you pole yourself off with W
       this.setSkisOn(!this.skisOn);
     }

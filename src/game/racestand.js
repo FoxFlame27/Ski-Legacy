@@ -11,6 +11,7 @@ import { world } from '../world/world.js';
 import { fitModel } from '../core/assets.js';
 import { BOARD } from './jobs/props.js';
 import { edgeDist } from './jobs/sites.js';
+import { K, liveKeyTexture } from '../ui/prompts.js'; // (BUTTON PROMPTS: the interact key / button on the signs)
 
 const READ_R = 2.3; // read the stand from in front of it (like a job board)
 
@@ -39,7 +40,7 @@ function headerTex() {
   });
 }
 function posterTex() {
-  return signTex(768, 512, (g, W, H) => {
+  const draw = (g, W, H) => {
     const sky = g.createLinearGradient(0, 0, 0, H);
     sky.addColorStop(0, '#0b3593'); sky.addColorStop(0.55, '#3a74db'); sky.addColorStop(1, '#eaf1fc');
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
@@ -58,8 +59,9 @@ function posterTex() {
     g.fillText('8 COURSES · 14 AI RIVALS', W / 2, 168);
     g.fillStyle = '#13348f';
     g.font = 'italic bold 36px Arial, sans-serif';
-    g.fillText('Press E · pick a course', W / 2, H - 40);
-  });
+    g.fillText(`Press ${K('interact')} · pick a course`, W / 2, H - 40);
+  };
+  return liveKeyTexture(signTex(768, 512, draw), draw);
 }
 
 // a slalom gate flag on a pole (stand-alone: 1.9 m)

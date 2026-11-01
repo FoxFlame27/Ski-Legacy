@@ -15,6 +15,7 @@ import { carTemplate, carInstance, driverEye } from './cars.js';
 import { dressCar, setPlates } from './carconfig.js';
 import { LAYOUT, buildShell, stairY, setDoors, ceilingAt } from './carrentalshell.js';
 import { claimPortal, dropPortal, portalsOn } from './liveportal.js';
+import { K, liveKeyTexture } from '../ui/prompts.js'; // (BUTTON PROMPTS: the interact key / button on the signs)
 // the full-detail models (their interiors) for the configurator's cockpit view (as drive.js)
 const FULL = { car_audi_rs6: 'car_audi_rs6_full', car_vw_golf_gti: 'car_vw_golf_gti_full', car_tesla_m3: 'car_tesla_m3_full' };
 // where the configurator's camera looks from, per step (round the car from its nose: 0 front, pi the back), how far
@@ -269,13 +270,14 @@ export class CarRentalRoom {
       sp.position.set(at[0], under ? LAYOUT.FL - 0.4 : ROOM.H - 0.4, at[1] + (under ? 1.6 : 1.2)); sp.target.position.set(at[0], 0.5, at[1]);
       S.add(sp, sp.target);
       // its price stand: a brushed steel post with a card (model, price)
-      const card = tex(512, 320, (g, w, h) => {
+      const drawCard = (g, w, h) => {
         g.fillStyle = '#fbf8f2'; g.fillRect(0, 0, w, h); g.fillStyle = '#1546c8'; g.fillRect(0, 0, w, 14);
         g.textAlign = 'left'; g.fillStyle = '#8a2a1c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
         g.fillStyle = '#1546c8'; g.font = 'italic 700 72px "Barlow Condensed", "Arial Narrow", sans-serif'; g.fillText(spec.label, 34, 152);
         g.fillStyle = '#8f1d14'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; const pr = `$${spec.price.toLocaleString("en-US")}`; g.fillText(pr, 34, 270); const px = 34 + g.measureText(pr).width + 16;
-        g.fillStyle = 'rgba(30,40,70,0.65)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('E to buy', px, 262);
-      });
+        g.fillStyle = 'rgba(30,40,70,0.65)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText(`${K('interact')} to buy`, px, 262);
+      };
+      const card = liveKeyTexture(tex(512, 320, drawCard), drawCard);
       const stand = new THREE.Group();
       box(0.05, 1.05, 0.05, rim, 0, 0.52, 0, stand);
       box(0.36, 0.02, 0.36, rim, 0, 0.01, 0, stand);
@@ -309,13 +311,14 @@ export class CarRentalRoom {
       spin.add(hit); this.aimables.push(hit);
       this.tables.push({ spin, speed: 0, id: d.id, inst, t, spec, x: at[0], z: at[1], y: FL, up: true });
       // its price card on a steel stand, at the balustrade in front of it
-      const card = tex(512, 320, (g, w, h) => {
+      const drawCard = (g, w, h) => {
         g.fillStyle = '#16181c'; g.fillRect(0, 0, w, h); g.fillStyle = '#e2b81c'; g.fillRect(0, 0, w, 14);
         g.textAlign = 'left'; g.fillStyle = '#e2b81c'; g.font = '700 30px "Inter Variable", Arial, sans-serif'; g.fillText(spec.kind.toUpperCase(), 34, 72);
         g.fillStyle = '#f4f2ee'; g.font = `italic 700 ${spec.label.length > 18 ? 56 : 72}px "Barlow Condensed", "Arial Narrow", sans-serif`; g.fillText(spec.label, 34, 152);
         g.fillStyle = '#e2b81c'; g.font = 'italic 700 96px "Barlow Condensed", "Arial Narrow", sans-serif'; const pr = `$${spec.price.toLocaleString("en-US")}`; g.fillText(pr, 34, 270); const px = 34 + g.measureText(pr).width + 16;
-        g.fillStyle = 'rgba(244,242,238,0.7)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText('E to buy', px, 262);
-      });
+        g.fillStyle = 'rgba(244,242,238,0.7)'; g.font = '500 26px "Inter Variable", Arial, sans-serif'; g.fillText(`${K('interact')} to buy`, px, 262);
+      };
+      const card = liveKeyTexture(tex(512, 320, drawCard), drawCard);
       const stand = new THREE.Group();
       box(0.05, 1.05, 0.05, rim, 0, 0.52, 0, stand);
       box(0.36, 0.02, 0.36, rim, 0, 0.01, 0, stand);

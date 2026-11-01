@@ -120,7 +120,7 @@ const tap = (code) => { fireKey('keydown', code); fireKey('keyup', code); };
 // codes the actions bound to a button produce
 function codesFor(i) {
   const pad = bindsOf(save).pad, out = [];
-  for (const id in pad) if (pad[id] === i) out.push(ACTION_CODE[id]);
+  for (const id in pad) if (pad[id] === i && !out.includes(ACTION_CODE[id])) out.push(ACTION_CODE[id]); // (every action on it: ctx ones share)
   if (pad.sprint === i && safe(vehicleMode) && !out.includes('KeyW')) out.push('KeyW'); // (the gas pedal)
   return out.filter(Boolean);
 }

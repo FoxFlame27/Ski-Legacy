@@ -34,6 +34,12 @@ export const ACTIONS = [
   { id: 'alt', label: 'Sell (chalet build mode)', code: 'KeyX', group: 'ACTIONS' },
   { id: 'unstuck', label: 'Unstuck car', code: 'KeyU', group: 'ACTIONS' },
   { id: 'restart', label: 'Restart race', code: 'Backspace', group: 'ACTIONS' },
+  // context actions (ctx): only do something in one place, so on a controller they share a button with an action that
+  // does nothing there (gamepad.js presses the codes of every action bound to the pressed button)
+  { id: 'furnish', label: 'Furnish chalet · stand up (train) · flip car', code: 'KeyF', group: 'ACTIONS', ctx: true },
+  { id: 'prevItem', label: 'Previous furniture (build mode)', code: 'BracketLeft', group: 'ACTIONS', ctx: true },
+  { id: 'nextItem', label: 'Next furniture (build mode)', code: 'BracketRight', group: 'ACTIONS', ctx: true },
+  { id: 'duty', label: 'Taxi: off duty (in your car)', code: 'KeyT', group: 'ACTIONS', ctx: true },
   // menus and screens
   { id: 'map', label: 'Trail map', code: 'KeyM', group: 'MENUS' },
   { id: 'photo', label: 'Photo mode', code: 'KeyP', group: 'MENUS' },
@@ -47,7 +53,8 @@ export const KB_DEFAULTS = Object.fromEntries(ACTIONS.filter((a) => !a.padOnly).
 
 /**
  * Default controller button per action (standard-layout index), modelled on how other games do it: the right trigger
- * (RT / R2 / ZR) with the stick forward sprints, bottom button jumps, left button interacts.
+ * (RT / R2 / ZR) with the stick forward sprints, bottom button jumps, left button interacts. A button may carry
+ * several actions (the ctx ones join another): it presses all their codes.
  */
 export const PAD_DEFAULTS = {
   jump: 0,      // A · Cross · B
@@ -66,6 +73,11 @@ export const PAD_DEFAULTS = {
   map: 8,       // View · Share · Minus
   photo: 12,    // d-pad up
   pause: 9,     // Menu · Options · Plus
+  // context actions, sharing a button with one that does nothing in that place:
+  furnish: 3,   // with skis (Y): F in your chalet (skis can't go on in there), in a train seat, in a flipped car
+  duty: 4,      // with pickup (LB): taxi off duty while you drive (pickup is chalet build mode only)
+  prevItem: 14, // with unstuck (d-pad left): browse the furniture in build mode (unstuck is the car only)
+  nextItem: 15, // with lights (d-pad right): (car lights / headlamp aren't used inside the chalet)
 };
 
 /** The current bindings (save.binds over the defaults). */
@@ -98,6 +110,6 @@ export function keyLabel(code = '') {
   if (code.startsWith('Numpad')) return `NUM ${code.slice(6)}`;
   const m = { ShiftLeft: 'SHIFT', ShiftRight: 'R SHIFT', ControlLeft: 'CTRL', ControlRight: 'R CTRL', AltLeft: 'ALT',
     AltRight: 'R ALT', MetaLeft: 'CMD', MetaRight: 'R CMD', Space: 'SPACE', Escape: 'ESC', Backspace: 'BACKSPACE',
-    Enter: 'ENTER', Tab: 'TAB', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', CapsLock: 'CAPS' };
+    Enter: 'ENTER', Tab: 'TAB', BracketLeft: '[', BracketRight: ']', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', CapsLock: 'CAPS' };
   return m[code] || code.toUpperCase();
 }

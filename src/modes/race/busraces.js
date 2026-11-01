@@ -20,6 +20,7 @@ import { fitModel } from '../../core/assets.js';
 import { buildPisteRaceMeshes } from '../parkour/props.js';
 import { laneDistance, ROAD_HALF } from '../../game/bus/roads.js';
 import { BUS_RACE_DEFS, BUS_PRIZE, busRacePrize } from './busracedefs.js';
+import { K, liveKeyTexture } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the interact key / button on the signs)
 
 export { BUS_RACE_DEFS, BUS_PRIZE, busRacePrize };
 
@@ -236,7 +237,7 @@ function headerTex() {
   });
 }
 function posterTex(e) {
-  return signTex(768, 512, (g, W, H) => {
+  const draw = (g, W, H) => {
     const sky = g.createLinearGradient(0, 0, 0, H);
     sky.addColorStop(0, '#0b3593'); sky.addColorStop(0.55, '#3a74db'); sky.addColorStop(1, '#eaf1fc');
     g.fillStyle = sky; g.fillRect(0, 0, W, H);
@@ -254,8 +255,9 @@ function posterTex(e) {
     g.font = 'bold 32px Arial, sans-serif';
     g.fillText(`${(e.length / 1000).toFixed(1)} KM · ${e.drop} M DROP · 1ST $${e.reward.toLocaleString('en-US')}`, W / 2, 158);
     g.fillStyle = '#13348f'; g.font = 'italic bold 34px Arial, sans-serif';
-    g.fillText('Press E · we take you to the start', W / 2, H - 40);
-  });
+    g.fillText(`Press ${K('interact')} · we take you to the start`, W / 2, H - 40);
+  };
+  return liveKeyTexture(signTex(768, 512, draw), draw);
 }
 function gateFlag(color) {
   const g = new THREE.Group();

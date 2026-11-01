@@ -9,6 +9,10 @@
 // save.chalet.furniture = [{ id, x, y, z, rot, on? }] (the interior root's frame = the chalet's house frame).
 // Q picks a placed piece up to move it, X sells it back for half its price. E toggles a lamp (in or out of
 // build mode); lamps really light the room (lamps.js).
+// On a controller (Nov 1 2026): the furnish button (core/bindings.js 'furnish', shared with skis) opens it in LOOK mode
+// (aim with the centre dot, right stick looks), the d-pad left / right ('prevItem' / 'nextItem', also [ ] on the
+// keyboard) browses the catalogue, jump (the bottom button; Space) buys and places the item in hand, restart (d-pad
+// down) empties the hand.
 //
 // It talks to the chalet module only through ./chaletadapter.js (see the interface documented there).
 // main.js calls buildMode.update(dt, input) every frame; that also discovers the chalet API.
@@ -21,7 +25,7 @@ import { adaptChalet, currentRawAPI, discoverChaletAPI } from './chaletadapter.j
 import { LampPool } from './lamps.js';
 import { BuildMenu } from '../../ui/buildmenu.js';
 import { isMP } from '../../net/mode.js';
-import { K } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+import { K, usingPad } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 const NO_FURNITURE = [];
 
 const REACH = 6; // metres you can place from
@@ -125,11 +129,13 @@ export class BuildMode {
     if (!this.chalet || !this.wasActive || !this.chalet.active()) return null; // (only while you're inside it)
     if (!this.on) {
       if (this.lampAim) return `Press ${K('interact')} to switch the ${this.lampAim.item.name.toLowerCase()} ${this.lampAim.rec.on === false ? 'on' : 'off'}`;
-      return this.input.cursorFree ? 'Mouse free · TAB to look around · F to furnish' : 'Press F to furnish your chalet · TAB frees the mouse';
+      if (usingPad()) return `Press ${K('furnish')} to furnish your chalet`; // (TAB: the mouse, not on a controller)
+      return this.input.cursorFree ? `Mouse free · TAB to look around · ${K('furnish')} to furnish` : `Press ${K('furnish')} to furnish your chalet · TAB frees the mouse`;
     }
-    if (this.moving) return `Moving the ${this.moving.item.name.toLowerCase()} · click to put it down`;
-    if (this.item) return `${this.item.name} · $${fmt(this.item.price)} · click to buy and place`;
-    return 'Furnish your chalet · pick something from the catalogue';
+    const click = usingPad() ? K('jump') : 'click';
+    if (this.moving) return `Moving the ${this.moving.item.name.toLowerCase()} · ${click} to put it down`;
+    if (this.item) return `${this.item.name} · $${fmt(this.item.price)} · ${click} to buy and place`;
+    return usingPad() ? `Furnish your chalet · ${K('prevItem')} ${K('nextItem')} pick from the catalogue` : 'Furnish your chalet · pick something from the catalogue';
   }
 
   /** Called by main.js every frame. */
@@ -156,6 +162,12 @@ export class BuildMode {
       return;
     }
     if (this.save.money !== this.lastMoney) { this.lastMoney = this.save.money; this.menu.setMoney(this.save.money); }
+    // a controller took over: LOOK mode (no cursor to point with: aim with the centre dot)
+    const pad = usingPad();
+    if (pad !== this.padAim) { this.padAim = pad; if (pad && !this.look) this.setLook(true); else this.menu?.setMode(this.look ? 'look' : 'cursor'); }
+    // browse the catalogue ([ ] / the d-pad): the next / previous piece in hand
+    const step = (input.hit('BracketRight') ? 1 : 0) - (input.hit('BracketLeft') ? 1 : 0);
+    if (step && !this.moving) this.menu?.step(step);
 
     // rotate: R (90 deg, Shift+R back) or the wheel over the room (15 deg)
     if (this.item) {
@@ -167,7 +179,7 @@ export class BuildMode {
     this.updateGhost(dt);
     this.updateHover();
 
-    const click = this.queued.click || input.hit('Enter') || input.hit('NumpadEnter');
+    const click = this.queued.click || input.hit('Enter') || input.hit('NumpadEnter') || input.hit('Space'); // (Space: the controller's bottom button; E would also work the door you face)
     const cancel = this.queued.cancel || input.hit('Backspace');
     this.queued.click = this.queued.cancel = false;
     if (cancel) this.cancel();
@@ -188,7 +200,8 @@ export class BuildMode {
       this.lastMoney = -1;
       this.menu.show(true);
       this.menu.status('');
-      this.setLook(false); // the mouse is free to use the catalogue
+      this.padAim = usingPad();
+      this.setLook(this.padAim); // the mouse is free to use the catalogue (a controller: LOOK mode, aim with the dot)
       renderThumbs((id, url) => this.menu?.setThumb(id, url)); // lazily, the first time
       this.audio?.play('click');
     } else {
@@ -222,7 +235,7 @@ export class BuildMode {
   worldRay() {
     const cam = this.chalet.camera;
     if (!cam) return null;
-    if (this.on && !document.pointerLockElement && this.mouse.seen) {
+    if (this.on && !document.pointerLockElement && this.mouse.seen && !usingPad()) {
       const r = this.input.canvas.getBoundingClientRect();
       _ndc.set(((this.mouse.x - r.left) / r.width) * 2 - 1, -((this.mouse.y - r.top) / r.height) * 2 + 1);
       this.raycaster.setFromCamera(_ndc, cam);

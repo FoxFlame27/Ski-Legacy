@@ -6,7 +6,7 @@ import './buildmenu.css';
 import { brushSVG, brushClip } from './menu.js';
 import { CATEGORIES, FURNITURE } from '../game/build/catalog.js';
 import { getThumb } from '../game/build/furniture.js';
-import { kc as pk } from './prompts.js'; // (BUTTON PROMPTS: keycaps in the keys / controller buttons in use)
+import { kc as pk, usingPad, onPromptChange } from './prompts.js'; // (BUTTON PROMPTS: keycaps in the keys / controller buttons in use)
 
 const fmt = (n) => n.toLocaleString('en-US');
 const kc = (k) => `<i class="kc">${k}</i>`;
@@ -54,6 +54,7 @@ export class BuildMenu {
     });
     this.list.addEventListener('scroll', () => this.syncTabs(), { passive: true });
     this.setMode('cursor');
+    onPromptChange(() => this.setMode(this.mode)); // (keyboard <-> controller: the hints swap)
     this.refreshThumbs();
   }
 
@@ -66,18 +67,19 @@ export class BuildMenu {
     this.mode = mode;
     this.cross.hidden = this.el.hidden || mode !== 'look';
     document.body.classList.toggle('build-cursor', mode === 'cursor' && !this.el.hidden);
-    const look = mode === 'look';
+    const look = mode === 'look', pad = usingPad(); // (a controller: no mouse, no TAB: aim with the dot, d-pad browses)
     this.foot.innerHTML = [
-      `<span class="bm-mode paper ${look ? 'look' : ''}" style="--clip:${brushClip(321, 4, 4)}">${look ? 'LOOK AROUND' : 'CURSOR'}</span>`,
-      hint(kc('TAB'), look ? 'Free the mouse' : 'Look around'),
-      look ? '' : hint(kc('RMB'), 'Hold to look'),
+      `<span class="bm-mode paper ${look ? 'look' : ''}" style="--clip:${brushClip(321, 4, 4)}">${pad ? 'AIM' : look ? 'LOOK AROUND' : 'CURSOR'}</span>`,
+      pad ? '' : hint(kc('TAB'), look ? 'Free the mouse' : 'Look around'),
+      look || pad ? '' : hint(kc('RMB'), 'Hold to look'),
       hint(pk('move'), 'Walk'),
-      hint(kc(look ? 'CLICK' : 'CLICK'), 'Buy &amp; place'),
-      hint(pk('view') + kc('WHEEL'), 'Rotate'),
+      hint(pk('prevItem') + pk('nextItem'), 'Browse'),
+      hint(pad ? pk('jump') : kc('CLICK'), 'Buy &amp; place'),
+      hint(pk('view') + (pad ? '' : kc('WHEEL')), 'Rotate'),
       hint(pk('pickup'), 'Move'),
       hint(pk('alt'), 'Sell 50%'),
-      hint(kc('⌫'), 'Empty hand'),
-      hint(kc('F'), 'Done'),
+      hint(pad ? pk('restart') : kc('⌫'), 'Empty hand'),
+      hint(pk('furnish'), 'Done'),
     ].join('');
   }
 
@@ -111,6 +113,12 @@ export class BuildMenu {
   jumpCategory(cat) {
     const head = this.el.querySelector(`[data-cat-head="${cat}"]`);
     if (head) this.list.scrollTo({ top: head.offsetTop - this.list.offsetTop - 4, behavior: 'smooth' });
+  }
+
+  /** The next (d 1) / previous (d -1) piece of the catalogue in hand ([ ] / the controller's d-pad). */
+  step(d) {
+    const n = FURNITURE.length;
+    if (n) this.select(this.index < 0 ? (d > 0 ? 0 : n - 1) : (this.index + d + n) % n);
   }
 
   select(i, scroll = true) {

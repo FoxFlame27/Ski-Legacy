@@ -102,7 +102,7 @@ export class MpUI {
     if (key === this.guestKey) return;
     this.guestKey = key;
     this.guestsEl.hidden = !key;
-    this.guestsEl.innerHTML = key ? `<small>GUESTS IN YOUR CHALET · TAB FREES THE MOUSE</small>${names.map((n) => `<span>${esc(n)}<button data-g="${esc(n)}">SEND OUT</button></span>`).join('')}` : '';
+    this.guestsEl.innerHTML = key ? `<small>GUESTS IN YOUR CHALET<span class="kb-only"> · TAB FREES THE MOUSE</span></small>${names.map((n) => `<span>${esc(n)}<button data-g="${esc(n)}">SEND OUT</button></span>`).join('')}` : '';
   }
   /** The shared-transport speed-up line, e.g. "Hold SPACE to speed up (2/3 holding)" ('' hides it). */
   setSkip(text) { if (text !== this.lines.skip) { this.lines.skip = text; this.skipEl.textContent = text; this.skipEl.hidden = !text; } }

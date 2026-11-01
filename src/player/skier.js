@@ -1213,6 +1213,7 @@ export class SkierRig {
     const b = this.b;
     if (!st.seat) return;
     if (st.bench) { this.poseBench(dt, st, fwd, right); return; }
+    if (st.sled) { this.poseSled(dt, st, fwd, right); return; }
     this.gait.t += dt;
     const seat = st.seat; // world position of the seat surface (center)
     const hip = seat.clone().addScaledVector(UP, 0.1);
@@ -1238,6 +1239,51 @@ export class SkierRig {
       this.aimHand(i, fwd.clone().addScaledVector(UP, -0.25), UP.clone().negate()); // palms resting on the thighs
     }
     rotateWorld(b.head, UP, Math.sin(this.gait.t * 0.2) * 0.4 + (st.lookYaw || 0) * 0.7);
+  }
+
+  // ---------------------------------------------------------------- astride a snowmobile (game/snowmobile.js)
+  // st.sled: { grip, foot (seat-relative, the rider's LEFT side; x = to the left, y = up, z = forward), pivot (the
+  // steering column, m ahead of the seat), turn (rad at full lock), steer (-1..1, + = left) }. Leant a little forward,
+  // both fists round the handlebar grips (the bars turn with the steering), the feet on the running boards, knees out.
+  // In the seat's yaw frame: the snowmobile tilts the whole rig to its pitch / roll afterwards (root quaternion).
+  poseSled(dt, st, fwd, right) {
+    const b = this.b, S = st.sled, seat = st.seat, T = _bn;
+    const hip = T[0].copy(seat).addScaledVector(UP, 0.1);
+    b.hips.position.copy(b.hips.parent.worldToLocal(T[1].copy(hip)));
+    b.hips.updateMatrixWorld(true);
+    this.fixPosture(right);
+    const steer = clamp(S.steer || 0, -1, 1);
+    rotateWorld(b.spine1, right, -0.12); // leant forward over the bars
+    rotateWorld(b.spine2, right, -0.06);
+    rotateWorld(b.spine1, fwd, -steer * 0.05); // a touch into the turn
+    rotateWorld(b.neck, right, 0.1); // the eyes up the trail again
+    // legs: the feet on the running boards either side, knees bent and out
+    for (let i = 0; i < 2; i++) {
+      const [up, leg, foot, fr] = i === 0 ? [b.lUp, b.lLeg, b.lFoot, this.footRest.l] : [b.rUp, b.rLeg, b.rFoot, this.footRest.r];
+      if (!up || !leg || !foot) continue;
+      const side = i === 0 ? -1 : 1;
+      const ankle = T[2].copy(seat).addScaledVector(right, side * S.foot.x).addScaledVector(UP, S.foot.y).addScaledVector(fwd, S.foot.z);
+      const pole = T[3].copy(fwd).addScaledVector(right, side * 0.7).addScaledVector(UP, 0.4).normalize();
+      solveTwoBone(up, leg, foot, ankle, pole);
+      if (fr) setWorldQuat(foot, _bq2.setFromAxisAngle(UP, st.heading - side * 0.15).multiply(_q1.setFromAxisAngle(X_AXIS, -0.05)).multiply(fr));
+    }
+    // arms: the fists on the grips; the bars turn about the steering column (+steer: the left grip comes back)
+    this.relaxShoulders(0.5);
+    const th = steer * S.turn, c = Math.cos(th), s = Math.sin(th);
+    for (let i = 0; i < 2; i++) {
+      const [arm, fore, hand] = i === 0 ? [b.lArm, b.lFore, b.lHand] : [b.rArm, b.rFore, b.rHand];
+      if (!arm || !fore || !hand) continue;
+      const side = i === 0 ? -1 : 1, gx = -side * S.grip.x, gz = S.grip.z - S.pivot; // (gx: + = to the left)
+      const lx = gx * c + gz * s, lz = S.pivot - gx * s + gz * c;
+      // the wrist a little behind and above the bar, so the bar lies in the palm
+      const tgt = T[4].copy(seat).addScaledVector(right, -lx).addScaledVector(UP, S.grip.y + 0.04).addScaledVector(fwd, lz - 0.07);
+      const pole = T[5].copy(right).multiplyScalar(side * 0.8).addScaledVector(UP, -0.6).addScaledVector(fwd, -0.3).normalize();
+      solveTwoBone(arm, fore, hand, tgt, pole);
+      // fingers forward and over the bar, the palm down on it (the knuckles turned in with the bars)
+      const dir = T[6].copy(fwd).applyAxisAngle(UP, th).addScaledVector(UP, -0.45);
+      this.aimHand(i, dir, T[7].copy(UP).negate().addScaledVector(fwd, -0.2));
+    }
+    rotateWorld(b.head, UP, (st.lookYaw || 0) * 0.7);
   }
 
   // ---------------------------------------------------------------- seated on a bench / a chair (seating.js)
@@ -1863,7 +1909,7 @@ export class SkierRig {
 
   updateGear(dt, st, fwd, right) {
     if (!this.skis.length) return;
-    if (this.carry && st.mode !== 'sit') { this.placeOnBack(fwd); this.poleDirOk = false; return; }
+    if (this.carry && (st.mode !== 'sit' || st.sled)) { this.placeOnBack(fwd); this.poleDirOk = false; return; } // (astride a snowmobile: on the back, the hands on the bars)
     const b = this.b;
     const n = st.normal || UP;
     // skis under the boots

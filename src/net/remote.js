@@ -10,7 +10,8 @@
 // No allocations per frame: snapshot slots, vectors and the rig state objects are all reused.
 import * as THREE from 'three';
 import { R, ST, F, fallDecode } from './protocol.js';
-import { twoBone, seatLegs } from '../game/carpeople.js';
+import { seatLegs } from '../game/carpeople.js';
+import { RIDER as SLED_RIDER } from '../game/snowmobile.js';
 import { seatAt } from '../game/seating.js';
 import { world } from '../world/world.js';
 import { live } from '../core/settings.js'; // (SETTINGS · Player names)
@@ -385,6 +386,7 @@ export class RemotePlayers {
     else if (fall) { st.mode = 'fall'; st.seat = null; this.fallPose(r, st); }
     else { st.mode = speed > 0.1 ? 'walk' : 'idle'; st.seat = null; }
     st.bench = !inVeh && r.state === ST.sit ? benchFor(r, pos) : null; // (on a bench / a chair: the rig's seated pose on it, as they see it)
+    st.sled = inVeh && r.onSled ? sledPose(r, dt, late) : null; // (astride their snowmobile: hands on the bars, feet on the boards)
     st.heading = inVeh ? r.seatYaw : r.yaw;
     st.speed = seated ? 0 : speed;
     st.crouch = seated || fall ? 0 : r.crouch; st.lean = seated || fall ? 0 : r.lean; st.edge = st.lean * 0.6;
@@ -419,7 +421,7 @@ export class RemotePlayers {
       else rig.update(r.animAcc, st);
       r.animAcc = 0;
       if (inVeh && r.inCar) carLegs(rig, r); // (drivers and passengers: the bench 'sit' pose hangs the legs straight down through the car floor)
-      else if (inVeh && r.onSled) sledLegs(rig); // (astride the snowmobile: knees bent, feet on the running boards)
+      else if (inVeh && r.onSled && r.sledG) { rig.root.quaternion.copy(r.sledG.quaternion); rig.root.updateMatrixWorld(true); } // (tilted with the snowmobile, as yours: game/snowmobile.js)
     }
     // the snow thrown up as they go down and land from a throw (the body's own puffs come from the rig: placeFallen)
     if (fall && !r.interior && d < 120 && rig.pushFx) { // (inside: a patient lying in a hospital bed, no snow)
@@ -462,7 +464,6 @@ function benchFor(r, pos) {
 // with it). r: { carG, carT, carSeat } (also carride.js: you, riding in someone's car, on your own screen; Oct 30, the
 // user: "the feet of the passenger were stuck out of the car"; Oct 31 2026, the user: "you still don't sit properly on
 // a chair": the old fixed target was as far as the legs reach, so they stuck out stiff and straight)
-const _hip = new THREE.Vector3(), _tgt = new THREE.Vector3(), _pole = new THREE.Vector3();
 export function carLegs(rig, r) {
   if (!r?.carG) return;
   seatLegs(rig, r.carG, r.carT, r.carSeat | 0, { driver: (r.carSeat | 0) === 0, hands: true });
@@ -478,16 +479,14 @@ function onFloor(rig, dt, st, y) {
   try { rig.update(dt, st); } finally { if (own) world.groundHeight = g0; else delete world.groundHeight; }
 }
 
-// astride a snowmobile: the knees out and bent, the feet on the running boards either side, a little ahead of the hip
-function sledLegs(rig) {
-  const b = rig.b;
-  if (!b?.hips || !b.lUp || !b.rUp) return;
-  const q = rig.root.quaternion;
-  rig.root.updateMatrixWorld(true);
-  _hip.setFromMatrixPosition(b.hips.matrixWorld);
-  for (const [side, up, leg, foot] of [[1, b.lUp, b.lLeg, b.lFoot], [-1, b.rUp, b.rLeg, b.rFoot]]) {
-    _tgt.set(side * 0.27, -0.5, 0.3).applyQuaternion(q).add(_hip);
-    _pole.set(side * 0.4, 0.6, 1).normalize().applyQuaternion(q);
-    try { twoBone(up, leg, foot, _tgt, _pole); } catch { /* (the pose stays as the rig made it) */ }
+// astride a snowmobile (the rig's poseSled, as you ride one): the bars turned by how fast they turn (the row's yaw)
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+function sledPose(r, dt, late) {
+  const P = r.sledPose ??= { ...SLED_RIDER, steer: 0 };
+  if (!late && dt > 0) {
+    const rate = r.sledYaw === undefined ? 0 : wrapPi(r.seatYaw - r.sledYaw) / dt;
+    P.steer += (Math.max(-1, Math.min(1, rate / 1.4)) - P.steer) * (1 - Math.exp(-dt * 6));
   }
+  r.sledYaw = r.seatYaw;
+  return P;
 }

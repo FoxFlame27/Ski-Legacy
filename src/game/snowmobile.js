@@ -45,12 +45,17 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const _v = new THREE.Vector3(), _w = new THREE.Vector3(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _ray = new THREE.Raycaster();
-const _p = new THREE.Vector3(), _dir = new THREE.Vector3();
+const _p = new THREE.Vector3(), _dir = new THREE.Vector3(), _rq = new THREE.Quaternion(), _ro = new THREE.Vector3();
 // marks it leaves in the snow (fx/snowfx.js trails): [id, metres ahead of the centre, metres to the right, width]
 const MAX_SLEDS = 15; // parked sleds round the resort, placed at random each session (each drawn only within 380 m of the camera)
 const VILLAGE_SLEDS = 5; // ...of them in Legacy Village
 const SLED_MARKS = [['sled-ski-l', 0.95, -0.5, 0.12], ['sled-ski-r', 0.95, 0.5, 0.12], ['sled-track', -0.9, 0, 0.42]];
 export const SEAT = new THREE.Vector3(0, 0.74, -0.32);   // the rider's seat (sled frame: +z forward, y up from the snow)
+// the rider astride it (player/skier.js poseSled), from the seat point, the rider's LEFT side (x = to the left): the
+// handlebar grips (measured on the model: the bar at y 1.41, z 0.17, its grips inside the hand guards at |x| 0.40),
+// the steering column (m ahead of the seat) the bars turn about by `turn` rad at full lock (one mesh: the fists turn
+// them), the feet on the running boards (top at y ~0.44, |x| ~0.36)
+export const RIDER = { grip: new THREE.Vector3(0.4, 0.67, 0.49), pivot: 0.46, turn: 0.2, foot: new THREE.Vector3(0.33, -0.21, 0.27) };
 const TRACK = new THREE.Vector3(0, 0.2, -1.35);   // where the track throws snow
 const LAMP = new THREE.Vector3(0, 0.78, 1.1);     // headlight
 
@@ -83,7 +88,7 @@ export class Snowmobiles {
     this.list = [];
     this.d = null;        // the one you drive: state
     this.cam = { yaw: 0, pitch: 0.24, dist: 6.6, lastMouse: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), ready: false };
-    this.seat = { pos: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, 1) };
+    this.seat = { pos: new THREE.Vector3(), fwd: new THREE.Vector3(0, 0, 1), sled: { ...RIDER, steer: 0 } }; // (sled: the rider's pose, hands on the bars)
     this.prompt = { label: 'Drive snowmobile', act: null };
     this.hint = '';
     this.lamp = { intensity: 0, position: new THREE.Vector3() }; // (stand-in while switched off)
@@ -268,6 +273,7 @@ export class Snowmobiles {
       s, x: s.x, z: s.z, y: s.y, vx: 0, vy: 0, vz: 0, heading: s.heading, yawRate: 0, air: false, airT: 0,
       pitch: 0, roll: 0, pitchV: 0, rollV: 0, susp: 0, suspV: 0, rpm: 0, steer: 0, offT: 0.5, bumpT: 0, sprayT: 0,
     };
+    this.seat.sled.steer = 0;
     s.collider.x = 1e9; s.collider.z = 1e9;
     this.updateSeat();
     p.sitOn(this.seat);
@@ -381,6 +387,7 @@ export class Snowmobiles {
     const steerIn = (key('KeyA', 'ArrowLeft') ? 1 : 0) - (key('KeyD', 'ArrowRight') ? 1 : 0);
     const boost = key('ShiftLeft', 'ShiftRight'), handbrake = key('Space');
     d.steer += (steerIn - d.steer) * (1 - Math.exp(-dt * 7));
+    this.seat.sled.steer = d.steer; // (the rider's fists turn the bars: player/skier.js poseSled)
     if (input?.hit?.('KeyE') && d.offT <= 0) { if (this.dismount()) return; }
     const n = Math.max(1, Math.ceil(dt / (1 / 90)));
     for (let i = 0; i < n && this.d; i++) this.step(dt / n, throttle, boost, handbrake);
@@ -390,9 +397,15 @@ export class Snowmobiles {
     this.updateSeat();
     const p = this.player;
     p.pos.copy(this.seat.pos);
-    p.rig.root.position.copy(this.seat.pos);
-    p.rig.root.quaternion.copy(d.s.g.quaternion);
-    p.rig.root.updateMatrixWorld(true);
+    // the rig (posed upright on the seat this frame) onto the seat as the sled moved and tilted; the skis and poles on
+    // your back (the gear, in world space) go with it
+    const root = p.rig.root;
+    _ro.copy(root.position); _rq.copy(root.quaternion).invert();
+    root.position.copy(this.seat.pos);
+    root.quaternion.copy(d.s.g.quaternion);
+    _rq.premultiply(root.quaternion);
+    for (const o of p.rig.gear?.children || NONE) { o.position.sub(_ro).applyQuaternion(_rq).add(root.position); o.quaternion.premultiply(_rq); }
+    root.updateMatrixWorld(true);
     this.placeCamera(dt, input);
     this.holdCamera(true);
     this.effects(dt, throttle, boost);

@@ -826,7 +826,7 @@ export class RemoteVehicles {
       const w = this.sleds.get(r.pid);
       if (!w?.posed) return false;
       out.copy(SLED_SEAT); w.g.localToWorld(out);
-      r.seatYaw = w.yaw; r.onSled = true;
+      r.seatYaw = w.yaw; r.onSled = true; r.sledG = w.g; // (remote.js: the rig tilted with it)
       return true;
     }
     if (r.state === ST.fly) {

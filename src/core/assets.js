@@ -181,17 +181,70 @@ export function decimatedGeometry(geo, frac) { return lowGeometry(geo, frac); }
 // THREE.LOD: full Meshy detail within `near` meters, a decimated copy beyond, and (performance pass) a much coarser
 // one from FAR_K x near on (the buildings seen across the valley: a station / hotel was still 30-60k triangles at
 // 1 km; the far copy is a few thousand and nobody can tell at that size).
+// (Nov 1 2026, the user: "even on Ultra ... it's like some ugly thing before it gets rendered": the decimated copies
+// showed while they were still several pixels off. Only the props in the scene at boot had their distances scaled by
+// the preset (engine/detail.js); everything built later (stations, snowcats, course props) swapped at the base
+// distances, the coarse far copy a few hundred metres out, and the middle copy dropped its shadow.) Now every makeLOD
+// picks its level itself (SmoothLOD): the switch distances grow with the decimation's cluster size (each copy
+// stays within ~LOD_ERR_PX pixels of the full model at the reference screen), the preset's quality.props.lod, the
+// screen (a narrower view / zoom or a taller screen keeps the detail further) and come back with some hysteresis
+// (no flicker at the line). The middle copy keeps the full model's shadow (detail.js still drops it past shadowDist).
 const FAR_K = 3, FAR_FRAC = 4;
+const LOD_ERR_PX = 2; // a copy's cluster size on screen at the switch (x 1 / quality.props.lod: ~0.8 px on Ultra)
+const PX_REF = (2 * Math.tan((65 / 2) * Math.PI / 180)) / 1080; // one pixel's angle: a 65° view, 1080 px tall
+const TAN_REF = Math.tan((65 / 2) * Math.PI / 180);
+const _lv1 = new THREE.Vector3(), _lv2 = new THREE.Vector3();
+let _scrH = 0, _scrT = -1;
+function screenK(camera) {
+  // the screen's height (refreshed now and then: no layout read per LOD per frame), clamped so a Retina screen doesn't
+  // double the full-detail reach
+  const now = typeof performance !== 'undefined' ? performance.now() : 0;
+  if (now - _scrT > 1000 || _scrT < 0) {
+    _scrT = now;
+    _scrH = typeof innerHeight !== 'undefined' ? innerHeight * Math.min(2, globalThis.devicePixelRatio || 1) : 1080;
+  }
+  const fovK = camera.isPerspectiveCamera ? TAN_REF / Math.tan((camera.fov / 2) * Math.PI / 180) : 1;
+  return Math.min(1.35, Math.max(0.75, _scrH / 1080)) * fovK * (camera.zoom || 1);
+}
+// (a subclass, so clones of it keep picking their level this way)
+class SmoothLOD extends THREE.LOD {
+  update(camera) {
+    const levels = this.levels;
+    if (levels.length < 2) return;
+    _lv1.setFromMatrixPosition(camera.matrixWorld);
+    _lv2.setFromMatrixPosition(this.matrixWorld);
+    const base = this.userData.lodBase;
+    const k = Math.max(0.2, quality.props?.lod ?? 1) * screenK(camera);
+    const d = _lv1.distanceTo(_lv2);
+    levels[0].object.visible = true;
+    let i = 1;
+    for (; i < levels.length; i++) {
+      let ld = (base ? base[i] : levels[i].distance) * k;
+      if (levels[i].object.visible) ld *= 1 - levels[i].hysteresis; // (back to the finer copy a little nearer)
+      if (d >= ld) { levels[i - 1].object.visible = false; levels[i].object.visible = true; } else break;
+    }
+    this._currentLevel = i - 1;
+    for (; i < levels.length; i++) levels[i].object.visible = false;
+  }
+}
+
 export function makeLOD(gltf, opts, near = 140, frac = 0.025) {
   const hi = fitModel(gltf, opts);
   const lo = hi.clone(true);
-  lo.traverse((o) => { if (o.isMesh) { o.geometry = lowGeometry(o.geometry, frac); o.castShadow = false; } });
+  lo.traverse((o) => { if (o.isMesh) o.geometry = lowGeometry(o.geometry, frac); }); // (keeps the model's castShadow)
+  const farFrac = Math.min(0.12, Math.max(0.05, frac * FAR_FRAC));
   const far = hi.clone(true);
-  far.traverse((o) => { if (o.isMesh) { o.geometry = lowGeometry(o.geometry, Math.min(0.12, Math.max(0.05, frac * FAR_FRAC))); o.castShadow = false; } });
-  const lod = new THREE.LOD();
+  far.traverse((o) => { if (o.isMesh) { o.geometry = lowGeometry(o.geometry, farFrac); o.castShadow = false; } });
+  // each copy's switch: no nearer than its decimation's clusters (a share of the model's size) allow
+  const sz = hi.userData.size || new THREE.Vector3(1, 1, 1), L = Math.max(sz.x, sz.y, sz.z);
+  const nearD = Math.max(near, (frac * L) / (LOD_ERR_PX * PX_REF));
+  const farD = Math.max(near * FAR_K, nearD * 1.5, (farFrac * L) / (LOD_ERR_PX * PX_REF));
+  const lod = new SmoothLOD();
   lod.addLevel(hi, 0);
-  lod.addLevel(lo, near);
-  lod.addLevel(far, near * FAR_K);
+  lod.addLevel(lo, nearD, 0.08);
+  lod.addLevel(far, farD, 0.08);
+  lod.userData.lodBase = [0, nearD, farD]; // (scaled live by the preset: SmoothLOD.update; detail.js leaves it alone)
+  lod.userData.lodSelf = true;
   lod.userData.solidLevel = 1; // (world/solidify.js takes its footprints from the middle copy)
   lod.userData.size = hi.userData.size;
   lod.autoUpdate = true;

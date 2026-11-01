@@ -23,7 +23,7 @@ const SPACING = 6.5;
 // of the Express, so the trees right by you could be blobs or flat cards.) Now every swap is a screen-door cross-fade
 // over a band of 8-28 m keyed to the camera's distance in the shaders, the sets are rebuilt round the camera itself
 // (each NEAR_STEP m) and reach NEAR_PAD m past their bands, so no tree is ever missing from the level it should show.
-const FAR_R = 1500; // impostor reach generated at least (cells)
+const FAR_R = 1500; // cells within this of you (or farR, if more) are never evicted
 const DEC_FINE = 0.032, DEC_COARSE = 0.08; // the cluster cells of levels 1 and 2 (share of the tree's height)
 const NEAR_STEP = 4, NEAR_PAD = 8; // 3D levels: rebuilt each NEAR_STEP m the camera moves, built NEAR_PAD m beyond their bands
 const FAR_STEP = 30, FAR_PAD = 70; // impostors: rebuilt (time-sliced) each FAR_STEP m, from FAR_PAD m inside nearR
@@ -50,6 +50,9 @@ const IMP_W = 256, IMP_H = 512; // one baked view
 const IMP_COLS = 4, IMP_ROWS = 4, IMP_N = IMP_COLS * IMP_ROWS; // views round the tree (every 22.5°), in one atlas
 const IMP_Y0 = -0.03, IMP_Y1 = 1.03; // the bake's vertical extent (tree heights): a margin so the mips don't bleed
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const cellKey = (cx, cz) => cx * 100003 + cz;
+// the furthest any tree's or boulder's collision radius reaches from its centre (crown: 0.4 x 26 m at most; rocks ~2 m)
+const REACH_MAX = 11;
 
 // Where each level hands over (metres from the camera) and how wide its cross-fade band is, from the preset.
 function treeTiers(veg) {
@@ -224,7 +227,8 @@ function needleLum(tex, fallback) {
 export class Vegetation {
   constructor(scene, renderer, models) {
     this.scene = scene;
-    this.cells = new Map();
+    this.cells = new Map(); // 'cx,cz' -> cell (heli/collide.js reads it)
+    this.cellsN = new Map(); // the same cells by numeric key (cellKey): the per-frame lookups make no strings
     this.windUniform = { value: 0 };
     this.snowUniform = { value: 1 };
     this.farRUniform = { value: quality.veg.farR }; // impostors dissolve toward this distance
@@ -240,6 +244,7 @@ export class Vegetation {
     this.nearDirty = true;
     this.farDirty = true;
     this.farJob = null;
+    this.farAge = 0;
     this.farJobState = { x: 0, z: 0, pcx: 0, pcz: 0, k: 0, offs: null };
     this.eyeScan = { key: NaN, done: false };
     this.streamScan = { key: NaN, done: false };
@@ -705,12 +710,13 @@ export class Vegetation {
   }
 
   getCell(cx, cz, create) {
-    const key = cx + ',' + cz;
-    let cell = this.cells.get(key);
+    let cell = this.cellsN.get(cellKey(cx, cz));
     if (!cell && create) {
       world.ensureFeatures(cx * CELL, cz * CELL, (cx + 1) * CELL, (cz + 1) * CELL);
       cell = this.genCell(cx, cz);
-      this.cells.set(key, cell);
+      cell.cx = cx; cell.cz = cz;
+      this.cells.set(cx + ',' + cz, cell);
+      this.cellsN.set(cellKey(cx, cz), cell);
     }
     return cell;
   }
@@ -743,7 +749,7 @@ export class Vegetation {
     let missing = 0;
     for (let k = 0; k < offs.length; k += 2) {
       const cx = pcx + offs[k], cz = pcz + offs[k + 1];
-      if (this.cells.has(cx + ',' + cz)) continue;
+      if (this.cellsN.has(cellKey(cx, cz))) continue;
       if (this.genCount > 0 && performance.now() - t0 > budgetMs) { missing++; continue; }
       this.getCell(cx, cz, true);
       this.genCount++;
@@ -769,7 +775,7 @@ export class Vegetation {
     let missing = this.genAround(ex, ez, T.r2 + T.b2 + NEAR_PAD + CELL, t0, budgetMs, this.eyeScan);
     if (this.genCount) this.nearDirty = this.farDirty = true;
     const nearGen = this.genCount;
-    missing += this.genAround(px, pz, Math.max(farR, FAR_R) + CELL, t0, budgetMs, this.streamScan);
+    missing += this.genAround(px, pz, farR + CELL, t0, budgetMs, this.streamScan);
     if (this.genCount > nearGen) this.farDirty = true;
     if (this.nearDirty || Math.hypot(ex - this.nearEye.x, ez - this.nearEye.y) > NEAR_STEP) {
       this.nearDirty = false;
@@ -785,21 +791,24 @@ export class Vegetation {
     const behind = Math.hypot(ex - this.farEye.x, ez - this.farEye.y);
     const job = this.farJob;
     if (job && Math.hypot(ex - job.x, ez - job.z) > FAR_STEP * 2) this.farJob = null; // (outrun: start over from here)
-    if (!this.farJob && (this.farDirty || behind > FAR_STEP)) this.startFar(ex, ez);
+    this.farAge += dt;
+    // (new cells keep arriving at the far edge as you move: they join at most every 0.5 s)
+    if (!this.farJob && ((this.farDirty && (this.farAge > 0.5 || dt === 0)) || behind > FAR_STEP)) this.startFar(ex, ez);
     if (this.farJob) this.stepFar(dt === 0 || behind > FAR_PAD - 2 * NEAR_PAD ? Infinity : 1.2);
     // evict cells far from both the camera and the streaming point (only as you move on: it walks every key)
-    const evictR = (Math.max(farR, FAR_R) + FAR_PAD) * 1.3 + CELL;
+    const evictR = Math.max(farR + FAR_PAD, FAR_R) * 1.3 + CELL;
     if (!this.streamScan.done || !this.eyeScan.done) this.evict(px, pz, ex, ez, evictR);
     return missing;
   }
 
   evict(px, pz, ex, ez, evictR) {
     const R = Math.ceil(evictR / CELL);
-    if (this.cells.size < Math.PI * R * R * 1.2) return;
+    if (this.cellsN.size < Math.PI * R * R * 1.2) return;
     const pcx = px / CELL, pcz = pz / CELL, ecx = ex / CELL, ecz = ez / CELL;
-    for (const key of this.cells.keys()) {
-      const c = key.indexOf(','), cx = +key.slice(0, c), cz = +key.slice(c + 1);
-      if (Math.hypot(cx - pcx, cz - pcz) > R && Math.hypot(cx - ecx, cz - ecz) > R) this.cells.delete(key);
+    for (const [key, { cx, cz }] of this.cellsN) {
+      if (Math.hypot(cx - pcx, cz - pcz) <= R || Math.hypot(cx - ecx, cz - ecz) <= R) continue;
+      this.cellsN.delete(key);
+      this.cells.delete(cx + ',' + cz);
     }
   }
 
@@ -812,7 +821,7 @@ export class Vegetation {
     const offs = this.cellOffsets(reach + CELL);
     const pcx = Math.floor(ex / CELL), pcz = Math.floor(ez / CELL);
     for (let k = 0; k < offs.length; k += 2) {
-      const cell = this.cells.get((pcx + offs[k]) + ',' + (pcz + offs[k + 1]));
+      const cell = this.cellsN.get(cellKey(pcx + offs[k], pcz + offs[k + 1]));
       if (!cell) continue;
       for (const t of cell.trees) {
         const dx = t.x - ex, dz = t.z - ez, d2 = dx * dx + dz * dz;
@@ -856,7 +865,7 @@ export class Vegetation {
     const pcx = Math.floor(ex / CELL), pcz = Math.floor(ez / CELL);
     let rockTotal = 0;
     for (let k = 0; k < offs.length && rockTotal < MAX_ROCKS; k += 2) {
-      const cell = this.cells.get((pcx + offs[k]) + ',' + (pcz + offs[k + 1]));
+      const cell = this.cellsN.get(cellKey(pcx + offs[k], pcz + offs[k + 1]));
       if (!cell) continue;
       for (const r of cell.rocks) {
         if (rockTotal >= MAX_ROCKS) break;
@@ -895,7 +904,7 @@ export class Vegetation {
     const lo = Math.max(0, this.tiers.r2 - FAR_PAD), lo2 = lo * lo, hi = farR + FAR_PAD, hi2 = hi * hi;
     const offs = j.offs, cnt = this.farCnt, nT = this.types.length, TURN = 1 / (Math.PI * 2);
     while (j.k < offs.length) {
-      const cell = this.cells.get((j.pcx + offs[j.k]) + ',' + (j.pcz + offs[j.k + 1]));
+      const cell = this.cellsN.get(cellKey(j.pcx + offs[j.k], j.pcz + offs[j.k + 1]));
       j.k += 2;
       if (cell) for (const t of cell.trees) {
         const dx = t.x - j.x, dz = t.z - j.z, d2 = dx * dx + dz * dz;
@@ -920,16 +929,22 @@ export class Vegetation {
     });
     this.farEye.set(j.x, j.z);
     this.farJob = null;
+    this.farAge = 0;
   }
 
   // Returns the first obstacle hit within radius r of (x,z), or null.
   /** The tree or rock at (x, z) within r, or null. Rocks smaller than `minRock` (size) are skied over.
    *  `trunkOnly`: trees count only by their trunk, so a skier brushes through the branches. */
   /** The tree or rock at (x, z) within r: trunkOnly true = the stem only; 'crown' = the whole tree (its branches). */
+  // (performance pass, Nov 1 2026: only the cells the circle can reach (a tree's crown is at most REACH_MAX across its
+  // foot), usually one, by numeric key; it was all 3 x 3 cells with string keys, several times per car sub-step)
   collide(x, z, r, minRock = 0, trunkOnly = false) {
-    const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
-    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
-      const cell = this.cells.get((cx + i) + ',' + (cz + j));
+    const R = r + REACH_MAX;
+    // (a cell's trees stand on its grid points, jittered up to SPACING before its west / north edge)
+    const cx0 = Math.floor((x - R) / CELL), cx1 = Math.floor((x + R + SPACING) / CELL);
+    const cz0 = Math.floor((z - R) / CELL), cz1 = Math.floor((z + R + SPACING) / CELL);
+    for (let cx = cx0; cx <= cx1; cx++) for (let cz = cz0; cz <= cz1; cz++) {
+      const cell = this.cellsN.get(cellKey(cx, cz));
       if (!cell) continue;
       for (const t of cell.trees) {
         const dx = x - t.x, dz = z - t.z, tr = trunkOnly === 'crown' ? t.crown ?? t.r : trunkOnly ? t.trunk ?? t.r : t.r;

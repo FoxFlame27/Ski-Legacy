@@ -945,13 +945,15 @@ export class Terrain {
     return mesh;
   }
 
-  computeDesired(px, pz) {
+  // (ax, az: a second point that gets the same detail, ahead of a moving player; the nearer of the two counts)
+  computeDesired(px, pz, ax = px, az = pz) {
     const desired = new Map();
     const rx = Math.floor(px / ROOT_SIZE), rz = Math.floor(pz / ROOT_SIZE), lodK = quality.terrain.lodK;
     const visit = (n) => {
       const cx = n.x + n.size / 2, cz = n.z + n.size / 2;
       const dx = Math.max(Math.abs(px - cx) - n.size / 2, 0), dz = Math.max(Math.abs(pz - cz) - n.size / 2, 0);
-      const d = Math.hypot(dx, dz);
+      const ex = Math.max(Math.abs(ax - cx) - n.size / 2, 0), ez = Math.max(Math.abs(az - cz) - n.size / 2, 0);
+      const d = Math.min(Math.hypot(dx, dz), Math.hypot(ex, ez));
       if (n.size > MIN_SIZE && d < n.size * lodK) {
         const h = n.size / 2;
         visit(new TNode(n.x, n.z, h)); visit(new TNode(n.x + h, n.z, h));
@@ -967,9 +969,21 @@ export class Terrain {
 
   update(px, pz, budgetMs = 6) {
     terrainUniforms.uIcy.value = globalThis.__game?.env?.icy || 0;
+    // (Nov 1 2026: a point ahead of you by your speed (up to 1 s / 70 m) gets the same detail as where you are, so the
+    // finer patches in the way you are heading are built before you get there, not after you pass the old centre)
+    const now = performance.now(), sv = this.streamVel ||= { x: 0, z: 0, px, pz, t: now };
+    const sdt = (now - sv.t) / 1000;
+    if (sdt > 0.05) {
+      const vx = (px - sv.px) / sdt, vz = (pz - sv.pz) / sdt;
+      if (Math.hypot(vx, vz) > 250 || sdt > 1) { sv.x = 0; sv.z = 0; } // (a teleport / a pause)
+      else { const k = Math.min(1, sdt * 2.5); sv.x += (vx - sv.x) * k; sv.z += (vz - sv.z) * k; }
+      sv.px = px; sv.pz = pz; sv.t = now;
+    }
+    const sp = Math.hypot(sv.x, sv.z), ahead = sp > 4 ? Math.min(1, 70 / sp) : 0;
+    const ax = px + sv.x * ahead, az = pz + sv.z * ahead;
     if (Math.hypot(px - this.lastCenter.x, pz - this.lastCenter.y) > 24) {
       this.lastCenter.set(px, pz);
-      this.desired = this.computeDesired(px, pz);
+      this.desired = this.computeDesired(px, pz, ax, az);
       this.queue = [...this.desired.values()].filter((n) => !this.active.has(n.key)).sort((a, b) => a.dist - b.dist);
     }
     const t0 = performance.now();

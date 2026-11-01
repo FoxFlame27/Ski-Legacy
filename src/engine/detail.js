@@ -1,6 +1,7 @@
 // Prop detail for the graphics preset, applied to the hand-placed world (village, lifts, decor, resort dressing,
 // race courses) from the outside, so those modules stay untouched:
-//  - THREE.LOD switch distances scale with quality.props.lod (fewer full-detail Meshy models around you)
+//  - THREE.LOD switch distances scale with quality.props.lod (fewer full-detail Meshy models around you; makeLOD's
+//    own LODs do that themselves, every frame, wherever they are built: core/assets.js)
 //  - meshes too small on screen to matter are skipped (bounding radius / distance < quality.props.cull)
 //  - props further than quality.props.shadowDist stop casting shadows
 // Skipping uses an empty layer mask (not .visible, which the modules themselves switch). Time-sliced.
@@ -8,7 +9,7 @@ import * as THREE from 'three';
 import { quality, onQualityChange, gpuCaps } from './quality.js';
 
 const _c = new THREE.Vector3(), _s = new THREE.Vector3();
-const SLICE = 300;
+const SLICE = 300, WALK_SLICE = 700;
 const MAPS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap', 'specularMap']; // meshes checked per frame (a full pass every ~0.5 s over ~9k meshes)
 
 export class PropDetail {
@@ -16,7 +17,8 @@ export class PropDetail {
     this.items = [];
     this.lods = [];
     this.next = 0;
-    onQualityChange(() => { this.applyLOD(); this.lightT = 0; });
+    this.walk = []; // the time-sliced scene walk of the light / anisotropy sweeps (sweepStep)
+    onQualityChange(() => { this.applyLOD(); this.lightT = 0; this.walk.length = 0; });
   }
 
   add(root) {
@@ -24,6 +26,7 @@ export class PropDetail {
     root.updateMatrixWorld(true);
     root.traverse((o) => {
       if (o.isLOD) {
+        if (o.userData.lodSelf) return; // (assets.js makeLOD: scales its own distances by the preset and the screen)
         if (!o.userData.lodBase) {
           o.userData.lodBase = o.levels.map((l) => l.distance);
           this.lods.push({ lod: o, root });
@@ -53,11 +56,12 @@ export class PropDetail {
   // Checked every few seconds (lights made later: the tow truck's beacon, the car's dome light).
   sweepLights(scene) {
     const off = quality.pointLights === false;
-    scene.traverse((o) => {
-      if (!o.isPointLight) return;
-      if (off && o.userData.lightMask === undefined) { o.userData.lightMask = o.layers.mask; o.layers.mask = 0; }
-      else if (!off && o.userData.lightMask !== undefined) { o.layers.mask = o.userData.lightMask; delete o.userData.lightMask; }
-    });
+    scene.traverse((o) => { if (o.isPointLight) this.lightOne(o, off); });
+  }
+
+  lightOne(o, off) {
+    if (off && o.userData.lightMask === undefined) { o.userData.lightMask = o.layers.mask; o.layers.mask = 0; }
+    else if (!off && o.userData.lightMask !== undefined) { o.layers.mask = o.userData.lightMask; delete o.userData.lightMask; }
   }
 
   // Anisotropic filtering on Ultra / Super Ultra (quality.maxAniso): every material map in the world at the GPU's
@@ -67,9 +71,14 @@ export class PropDetail {
     const want = quality.maxAniso ? gpuCaps.maxAniso || 16 : 0;
     if (!want && !this.anisoSet) return; // (the lighter presets: nothing to do, no traversal)
     this.anisoSet = !!want;
-    scene.traverse((o) => {
-      if (!o.isMesh || !o.material) return;
-      for (const m of Array.isArray(o.material) ? o.material : [o.material]) for (const k of MAPS) {
+    scene.traverse((o) => { if (o.isMesh && o.material) this.anisoOne(o, want); });
+  }
+
+  anisoOne(o, want) {
+    const mats = o.material;
+    for (let i = 0, n = Array.isArray(mats) ? mats.length : 1; i < n; i++) {
+      const m = Array.isArray(mats) ? mats[i] : mats;
+      for (const k of MAPS) {
         const t = m[k], img = t?.image;
         if (!t || t.isRenderTargetTexture || t.isVideoTexture || !img || !(img.width > 0 || img.data)) continue;
         const ud = t.userData;
@@ -81,11 +90,32 @@ export class PropDetail {
           t.anisotropy = ud.anisoBase; delete ud.anisoBase; t.needsUpdate = true;
         }
       }
-    });
+    }
+  }
+
+  // The two sweeps above, time-sliced (performance pass, Nov 1 2026: a whole scene.traverse of ~14k objects every 240
+  // frames was a hitch every ~4 s): one walk every 240 frames, WALK_SLICE objects a frame, no allocation.
+  sweepStep(scene) {
+    if (!this.walk.length) {
+      if ((this.lightT = (this.lightT || 0) - 1) > 0) return;
+      this.lightT = 240;
+      this.walkOff = quality.pointLights === false;
+      this.walkAniso = quality.maxAniso ? gpuCaps.maxAniso || 16 : 0;
+      this.walkAnisoDo = !!this.walkAniso || !!this.anisoSet; // (the lighter presets: nothing to restore, lights only)
+      this.walk.push(scene);
+    }
+    const walk = this.walk, off = this.walkOff, want = this.walkAniso, doAniso = this.walkAnisoDo;
+    for (let n = 0; n < WALK_SLICE && walk.length; n++) {
+      const o = walk.pop(), ch = o.children;
+      for (let i = 0; i < ch.length; i++) walk.push(ch[i]);
+      if (o.isPointLight) this.lightOne(o, off);
+      else if (doAniso && o.isMesh && o.material) this.anisoOne(o, want);
+    }
+    if (!walk.length) this.anisoSet = !!want;
   }
 
   update(camera, scene = null) {
-    if (scene && (this.lightT = (this.lightT || 0) - 1) <= 0) { this.lightT = 240; this.sweepLights(scene); this.sweepAniso(scene); }
+    if (scene) this.sweepStep(scene);
     const items = this.items, n = items.length;
     if (!n) return;
     const cam = camera.position, { cull, shadowDist } = quality.props;

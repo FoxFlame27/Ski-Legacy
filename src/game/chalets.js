@@ -907,6 +907,11 @@ export class Chalets {
     const p = this.player?.pos;
     if (!p) return;
     const b = this.V.bounds;
+    // (Nov 1 2026: the full model is fetched well before you reach a house, so the low one never stands in up close)
+    const pre = HI_R * 4;
+    if (!this.hiModel && !this.hiLoading && p.x > b.minx - pre && p.x < b.maxx + pre && p.z > b.minz - pre && p.z < b.maxz + pre) {
+      this.hiLoading = loadGLB('chalet').then((gl) => { if (gl) this.makeHi(gl); }).catch(() => null);
+    }
     if (p.x < b.minx - HI_R || p.x > b.maxx + HI_R || p.z < b.minz - HI_R || p.z > b.maxz + HI_R) { if (this.hiAt >= 0) this.showHi(-1); return; }
     let best = -1, bd = HI_R;
     for (let i = 0; i < this.houses.length; i++) { const f = this.houses[i].frame.position, d = Math.hypot(p.x - f.x, p.z - f.z); if (d < bd) { bd = d; best = i; } }

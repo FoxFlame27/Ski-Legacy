@@ -1166,7 +1166,7 @@ export class Drive {
     const d = this.d;
     if (!d || d.crash || this.flipping || this.unsticking) return;
     const now = performance.now();
-    if (this.isWanted?.()) { this.hud?.flash('Not while the police are after you', 'bad', 1900); return; }
+    if (this.isWanted?.()) { this.hud?.flash('Not while you are being arrested', 'bad', 1900); return; } // (police.js: a chase is fine, an officer with you isn't)
     if (this.speed >= UNSTUCK_V) { this.hud?.flash('Unstuck: only when stuck (stopped)', 'bad', 1600); return; }
     const left = UNSTUCK_CD - (now - (this.unstuckT || -1e9));
     if (left > 0) { this.hud?.flash(`Unstuck again in ${Math.ceil(left / 1000)} s`, 'bad', 1500); return; }

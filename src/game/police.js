@@ -811,8 +811,10 @@ export class Police {
     this.unblock = addTrafficBlocker((out) => { for (const u of this.units) if (u.on) { u.box.x = u.x; u.box.y = u.y; u.box.z = u.z; u.box.yaw = u.yaw; out.push(u.box); } });
     // drive.js: your car hit something (chained: another listener keeps working)
     if (this.drive) { const prev = this.drive.onHit; this.drive.onHit = (kind, v, what) => { try { prev?.(kind, v, what); } finally { this.reportHit(kind, v); } }; }
-    // drive.js: U, unstuck, refused while wanted (Oct 30 2026, "Not while the police are after you": no escaping a chase by it)
-    if (this.drive) this.drive.isWanted = () => this.active;
+    // drive.js: U, unstuck (Nov 1 2026, the user: "make it so you can unstuck while police are after you but not while you
+    // are getting arrested"): allowed in a chase; refused once an officer is dealing with you (pulled over, the fine,
+    // the arrest, on the way to jail)
+    if (this.drive) this.drive.isWanted = () => this.active && (!!this.jailing || !!this.w?.scene);
     this.buildHud();
   }
 

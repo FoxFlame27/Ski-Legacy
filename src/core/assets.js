@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { quality } from '../engine/quality.js';
+import { enhanceMeshy } from './meshylook.js';
 
 const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
@@ -61,7 +62,9 @@ export function loadGLB(name, onProgress) {
           }
         });
         g.modelName = name; // lets ski code apply per-model frames (player/skier.js)
-        budgetTextures(g).catch(() => {}).then(() => resolve(g));
+        // (then the Balanced+ crispness pass on the Meshy materials: filtering, detail layer, metal / roughness fix-up;
+        // nothing on Performance / Super Performance: core/meshylook.js)
+        budgetTextures(g).catch(() => {}).then(() => { try { enhanceMeshy(g); } catch (e) { console.warn('meshylook', e); } resolve(g); });
       }, onProgress, (err) => {
         console.warn('Missing model', name, err?.message || err);
         resolve(null);

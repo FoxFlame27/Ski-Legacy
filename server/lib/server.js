@@ -140,7 +140,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const _bh = {}; // (busHoldAt's scratch: World.tick)
 // THE WERKSTATT's prices (game/carrental.js repairCost / wreckFee: the same sums): a repair, the flat repairFee ($500)
 // for any car and any damage (none: $0); a wreck, the tow (wreckFee) and the repair ($2,000 for every car)
-export const repairPrice = (id, frac) => (frac > 0 ? (CATALOG.repairFee ?? 500) : 0);
+// (Nov 1 2026: the Werkstatt's price varies with the damage, carrental.js repairCost: $500 x share, $5 steps, min $5)
+export const repairPrice = (id, frac) => { const F = CATALOG.repairFee ?? 500; return frac > 0 ? Math.min(F, Math.max(5, Math.round((F * Math.min(1, frac)) / 5) * 5)) : 0; };
 // THE AUTOHAUS CLERK (game/carrental.js clerkDialog): "Repair my car" at his desk, a flat fee for any damage, wherever
 // the car is parked (the client's CLERK_REPAIR mirrors it; the price is never taken from the client)
 export const CLERK_REPAIR = 500;

@@ -74,7 +74,9 @@ export const PARK_TOW_FEE = 500;
 // for any damage, your car that is out fixed wherever it is parked (server: CLERK_REPAIR, carRepair { flat: 'clerk' })
 export const CLERK_REPAIR = 500;
 /** The Werkstatt's price for a car at damage share `frac` (0..1): the flat REPAIR_FEE for any car; 0: nothing to repair, $0. */
-export const repairCost = (id, frac) => (frac > 0 ? REPAIR_FEE : 0);
+// (Nov 1 2026, the user: "the damage price in the garage should vary, max 500, for like 1% damage it should be very
+// cheap"): $500 x the damage share, in $5 steps, at least $5 (1 %: $5, 40 %: $200, a wreck / 100 %: $500)
+export const repairCost = (id, frac) => (frac > 0 ? Math.min(REPAIR_FEE, Math.max(5, Math.round((REPAIR_FEE * Math.min(1, frac)) / 5) * 5)) : 0);
 /** A wreck's bill: the tow and the repair ($2,000, every car). */
 export const wreckFee = (id) => WRECK_FEE + repairCost(id, 1);
 export const SELL_SHARE = 0.5; // a car sold back: half what you paid

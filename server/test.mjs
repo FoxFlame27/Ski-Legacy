@@ -855,13 +855,13 @@ try {
     const P = () => server.profileOf('tow gus');
     P().money = 5000;
     const r1 = await g2.f.req('carRepair', { damage: 0.4 });
-    ok(r1.ok && r1.d.fee === 500 && r1.d.money === 4500 && P().money === 4500 && CATALOG.repairFee === 500, 'a repair at 40 %: the flat $500, charged by the server');
+    ok(r1.ok && r1.d.fee === 200 && r1.d.money === 4800 && P().money === 4800 && CATALOG.repairFee === 500, 'a repair at 40 %: $200 (500 x the damage), charged by the server');
     const r2 = await g2.f.req('carRepair', { damage: 7 });
-    ok(r2.ok && r2.d.fee === 500 && P().money === 4000, '...the damage share clamped to 1: $500 too');
+    ok(r2.ok && r2.d.fee === 500 && P().money === 4300, '...the damage share clamped to 1: $500 at most');
     const r3 = await g2.f.req('carRepair', { damage: 0.01 });
-    ok(r3.ok && r3.d.fee === 500 && P().money === 3500, '...a scratch: $500 too');
+    ok(r3.ok && r3.d.fee === 5 && P().money === 4295, '...a scratch (1 %): $5');
     const r4 = await g2.f.req('carRepair', { damage: 0 }), r5 = await g2.f.req('carRepair', { damage: -3 }), r6 = await g2.f.req('carRepair', { damage: 'lots' });
-    ok(!r4.ok && r4.err === 'no_damage' && !r5.ok && r5.err === 'no_damage' && !r6.ok && r6.err === 'bad_value' && P().money === 3500, 'nothing to repair / a bad damage value: refused, no charge');
+    ok(!r4.ok && r4.err === 'no_damage' && !r5.ok && r5.err === 'no_damage' && !r6.ok && r6.err === 'bad_value' && P().money === 4295, 'nothing to repair / a bad damage value: refused, no charge');
     P().money = 300;
     const r7 = await g2.f.req('carRepair', { damage: 1 });
     ok(!r7.ok && r7.err === 'money' && r7.d.money === 300 && P().money === 300, 'a repair is a purchase: not enough money, refused (no debt)');
@@ -869,7 +869,7 @@ try {
     ok(!r8.ok && r8.err === 'no_car', 'a plate that is not yours: no_car');
     P().money = 5000;
     const r9 = await g2.f.req('carRepair', { damage: 0.2, plate: gcar().plate });
-    ok(r9.ok && r9.d.fee === 500 && P().money === 4500, '...your own plate: repaired ($500)');
+    ok(r9.ok && r9.d.fee === 100 && P().money === 4900, '...your own plate: repaired ($100 at 20 %)');
     // THE AUTOHAUS CLERK: { flat: 'clerk' }, a flat $500 (the server's own) for any damage, wherever the car is parked
     P().money = 2000;
     const c1 = await g2.f.req('carRepair', { damage: 1, flat: 'clerk', fee: 1 });
@@ -923,7 +923,7 @@ try {
     ok(wt.ok && gcar().damage == null && gcar().dents == null && !wbusy.ok && wbusy.err === 'busy', 'a wreck: it comes home repaired (damage cleared; no damage taken while the truck has it)');
     await g2.f.req('towDone');
     // the sums for every model: the repair a flat $500 whatever the car and the damage (none: $0), a wreck $2,000
-    const sane = Object.keys(CATALOG.cars).every((id) => [0.01, 0.3, 0.5, 1, 7].every((f) => repairPrice(id, f) === 500)
+    const sane = Object.keys(CATALOG.cars).every((id) => [[0.01, 5], [0.3, 150], [0.5, 250], [1, 500], [7, 500]].every(([f, v]) => repairPrice(id, f) === v)
       && repairPrice(id, 0) === 0 && repairPrice(id, -1) === 0 && wreckBill(id) === 2000);
     ok(sane && Object.keys(CATALOG.cars).length >= 10 && wreckBill('car_lamborghini_huracan') === 2000 && repairPrice('car_lamborghini_huracan', 1) === 500 && wreckBill('car_vw_golf_gti') === 2000,
       'every model: a repair $500 at any damage, a wreck $1,500 tow + $500 = $2,000 (Golf and Huracan alike)');

@@ -48,8 +48,9 @@ function nameBoard(name, alt, wM = 5.2) {
     g.font = `600 52px ${FONT}`; g.fillText(`${alt.toLocaleString('en-US')} m  ·  WOLKENSPITZBAHN`, w / 2, h * 0.8);
   });
   const g = new THREE.Group();
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, wM / 4), new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : 0xa5141c, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0 }));
-  face.position.z = 0.04;
+  // (the print 1.5 cm proud of its box and polygon-offset: 5 mm before, it flickered at a distance)
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, wM / 4), new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : 0xa5141c, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }));
+  face.position.z = 0.05;
   const back = new THREE.Mesh(new THREE.BoxGeometry(wM + 0.12, wM / 4 + 0.12, 0.07), new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.7 }));
   g.add(back, face);
   g.userData.face = face.material;
@@ -273,7 +274,7 @@ export function buildStations(scene, colliders = [], models = null) {
     // front line 1.2 m behind the platform's back edge, on a stone plinth that reaches 5 m into the ground
     if (st.id === 'tal' || st.halt) {
       const big = st.id === 'tal';
-      const bld = stationBuilding(big ? 'valley' : 'halt', { plinth: 5, apron: -1.2, departures: big ? departuresFor(st.id) : null });
+      const bld = stationBuilding(big ? 'valley' : 'halt', { plinth: 5, apron: -1.2, departures: big ? departuresFor(st.id) : null, name: st.name });
       const bp = besideLine(mid, side * (1.75 + 4.2 + 1.2));
       // local z away from the track, local x along it (right-handed: x = z x up)
       const az = new THREE.Vector3(-bp.dz * side, 0, bp.dx * side), ax = new THREE.Vector3(bp.dx * side, 0, bp.dz * side);
@@ -283,8 +284,8 @@ export function buildStations(scene, colliders = [], models = null) {
       group.add(bld);
       const sz = bld.userData.size, rot = -Math.atan2(az.x, az.z);
       void rot;
-      // walk in (Nov 1 2026, the user: "make it so you can go inside"): its walls, counter and benches solid, its floor
-      // and the paving in front of its doors walkable (stationbuildings.js registerStation)
+      // closed (Nov 1 2026, the user: "remove the interior actually"): its footprint solid, the paving in front of its
+      // doors walkable (stationbuildings.js registerStation)
       registerStation(bld.userData.plan, bld.position, az, colliders);
       const c = new THREE.Vector3(0, 0, sz.z / 2).applyMatrix4(m).add(bld.position);
       rec.house = { x: c.x, z: c.z, r: Math.max(sz.x, sz.z) / 2 + 2 };
@@ -368,7 +369,7 @@ export function buildStations(scene, colliders = [], models = null) {
       // the terrace's two benches (no backrest), looking out to the front (-z), the deck at y 0.28
       seatsFromObject(house, [-3.2, 3.6].flatMap((x) => [-0.55, 0, 0.55].map((k) => ({ x: x + k, y: 0.77, z: -8.5 + 2.1, yaw: Math.PI, floor: 0.28 }))));
       // the glacier terminal behind the terrace (stationbuildings.js; its front toward the village), its walls solid
-      const bld = stationBuilding('glacier', { plinth: 3.5, departures: departuresFor(st.id) });
+      const bld = stationBuilding('glacier', { plinth: 3.5, departures: departuresFor(st.id), name: st.name });
       bld.position.set(0, 0, 0.2);
       house.add(bld);
       const ba = bld.userData.board, tb = nameBoard(st.name, rec.alt, ba.w);
@@ -376,7 +377,7 @@ export function buildStations(scene, colliders = [], models = null) {
       bld.add(tb); signs.push(tb.userData.face);
       const rot = -Math.atan2(az.x, az.z);
       void rot;
-      registerStation(bld.userData.plan, house.position, az, colliders, { zOff: 0.2 }); // (walk in, as the valley station)
+      registerStation(bld.userData.plan, house.position, az, colliders, { zOff: 0.2 }); // (closed; the step to its doors walkable)
       const bs = bld.userData.size;
       sz.depth = bs.z + 0.2;
       const c = new THREE.Vector3(0, 0, sz.depth / 2).applyMatrix4(m).add(house.position);

@@ -9,6 +9,8 @@ import { cannonSpotsFull } from './layout.js';
 import { breakables } from './breakables.js'; // (the street lamps: snapped off by a car over 100 km/h)
 
 export const nightUniform = { value: 0 };
+// the station clocks' hands (stationbuildings.js): x the game's hour (0-24), y real seconds in the minute (0-60)
+export const clockUniform = { value: new THREE.Vector2(10.17, 0) };
 
 // Bright texels (lit windows, lanterns) glow at night.
 export function addNightGlow(root, strength = 2.5) {
@@ -381,6 +383,7 @@ export class Village {
   update(dt, env, spray, playerPos) {
     const night = env.nightFactor;
     nightUniform.value = Math.max(night, (1 - env.dayFactor) * 0.6);
+    clockUniform.value.set(Number.isFinite(env.hour) ? env.hour : 10.17, (performance.now() / 1000) % 60);
     const on = nightUniform.value;
     for (const L of this.lights) {
       L.intensity = on * 40;

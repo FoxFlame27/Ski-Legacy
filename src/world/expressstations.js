@@ -23,6 +23,10 @@ export const PLAT_Y = 0.25;                   // platform top over the top of ra
 const EDGE = 3.9, BACK = 8.7;                 // platform edge / back, m from the centre line
 const HOUSE_LAT = 10.3;                       // the building's front line, m from the centre line (behind the masts)
 const CAN_LEN = 36, CAN_W = 4.4;              // the platform canopy in front of the building
+// the building's base over the top of rail: on the square's snow (-0.12, expressground.js), so its apron (0.12 over
+// the base) lies 12 cm over the snow (Nov 1 2026, the user: "the floors are glitching like crazy in the station": the
+// base at -0.2 put the hall's floor and the apron exactly in the square's plane, and they z-fought with the snow)
+const HOUSE_Y = -0.12;
 const FONT = '"Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
 const RED = '#a5141c', WHITE = '#f4f2ed';
 
@@ -66,7 +70,7 @@ export const SIGN = { post: 0.12, depth: 0.07, inset: 0.35 }; // post section = 
 // float or sink) up to the board's top edge, each on a small concrete footing. bottom: the board's bottom edge
 // over the origin (2.2-2.5 m). The group's origin is on the ground under the board's centre.
 export function signMesh(t, wM, mats, { bottom = 2.3, gy = () => 0, color = 0xa5141c } = {}) {
-  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : color, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0 });
+  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : color, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
   mats?.push(mat);
   const hM = wM / 4, g = new THREE.Group(), cy = bottom + hM / 2, D = SIGN.depth, P = SIGN.post;
   const fm = FRAME_MAT.m ??= new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.6, metalness: 0.3 });
@@ -75,7 +79,7 @@ export function signMesh(t, wM, mats, { bottom = 2.3, gy = () => 0, color = 0xa5
   const back = new THREE.Mesh(new THREE.BoxGeometry(wM + 0.12, hM + 0.12, D), fm);
   back.position.y = cy; back.castShadow = true; back.receiveShadow = true;
   const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, hM), mat);
-  face.position.set(0, cy, D / 2 + 0.004);
+  face.position.set(0, cy, D / 2 + 0.015); // (1.5 cm proud, polygon-offset: no flicker at a distance)
   g.add(back, face);
   // the posts behind it, ground -> the board's top edge, on concrete footings (sunk 0.1 m: no gap on a slope)
   const top = cy + hM / 2 + 0.06, pz = -(D / 2 + P / 2);
@@ -96,13 +100,13 @@ function boardMesh(name, wM, mats, opts) { return signMesh(nameTex(name), wM, ma
 // the same board hung on the station building's front (no posts; centred on its origin, its print on +z)
 function wallBoard(name, wM, mats) {
   const t = nameTex(name), hM = wM / 4, g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : 0xa5141c, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0 });
+  const mat = new THREE.MeshStandardMaterial({ map: t, color: t ? 0xffffff : 0xa5141c, roughness: 0.5, emissiveMap: t, emissive: 0xffffff, emissiveIntensity: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
   mats.push(mat);
   const fm = FRAME_MAT.m ??= new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.6, metalness: 0.3 });
   const back = new THREE.Mesh(new THREE.BoxGeometry(wM + 0.12, hM + 0.12, SIGN.depth), fm);
   back.castShadow = true; back.receiveShadow = true;
   const face = new THREE.Mesh(new THREE.PlaneGeometry(wM, hM), mat);
-  face.position.z = SIGN.depth / 2 + 0.004;
+  face.position.z = SIGN.depth / 2 + 0.015; // (1.5 cm proud of its box, polygon-offset: no flicker at a distance)
   g.add(back, face);
   return g;
 }
@@ -179,11 +183,11 @@ export function planExpressStations({ colliders = [], cameraBlockers = [], model
     for (const q of signPosts(F.P(rec.lay.square.u, rec.lay.square.lat), faceLat(st.heading, st.side), 5.2)) colliders.push({ x: q.x, z: q.z, r: 0.12 });
     // the canopy's steel columns (stationCanopy(): every 6 m along its length, 0.3 m in front of the building)
     for (let u = -CAN_LEN / 2; u <= CAN_LEN / 2 + 0.01; u += 6) colliders.push({ ...at(u, st.side * (HOUSE_LAT - 0.3)), r: 0.16 });
-    // the building, walk in (Nov 1 2026, the user: "make it so you can go inside"): its walls, counters and benches
-    // solid, its floor and the paving in front of its doors walkable (stationbuildings.js registerStation; its local x
-    // along the track toward +s on the station side, z away from the track)
+    // the building, closed (Nov 1 2026, the user: "remove the interior actually"): its footprint solid, the paving in
+    // front of its doors walkable (stationbuildings.js registerStation; its local x along the track toward +s on the
+    // station side, z away from the track)
     const H = rec.lay.house;
-    if (H) { const o = F.P(0, st.side * HOUSE_LAT, -0.2); registerStation(H.plan, { x: o[0], y: o[1], z: o[2] }, new THREE.Vector3(F.rx * st.side, 0, F.rz * st.side), colliders); }
+    if (H) { const o = F.P(0, st.side * HOUSE_LAT, HOUSE_Y); registerStation(H.plan, { x: o[0], y: o[1], z: o[2] }, new THREE.Vector3(F.rx * st.side, 0, F.rz * st.side), colliders); }
     // both platforms are walkable (their tops stand 0.37 m over the squares: you step up onto them)
     for (const sd of [-1, 1]) {
       const cs = [F.P(-PLATFORM / 2, sd * EDGE), F.P(PLATFORM / 2, sd * EDGE), F.P(-PLATFORM / 2, sd * BACK), F.P(PLATFORM / 2, sd * BACK)];
@@ -268,8 +272,8 @@ function buildStation(rec, M, models) {
       // expressground.js; Oct 27, the user: "a weird platform under them, they should be on snow")
       const others = (layout.express?.stations || []).filter((o) => o.id !== rec.id).slice(0, 3);
       const departures = { title: 'ABFAHRT · DEPARTURES', rows: [...others.map((o, i) => [o.name, EXPRESS_NAME, `Gleis ${(i % 2) + 1}`]), ['Next train', EXPRESS_NAME, 'see platform']] };
-      const bld = stationBuilding(H.kind, { plinth: 0.6, apron: APRON, departures });
-      const hp = F.P(0, side * HOUSE_LAT, -0.2);
+      const bld = stationBuilding(H.kind, { plinth: 0.6, apron: APRON, departures, name: rec.name });
+      const hp = F.P(0, side * HOUSE_LAT, HOUSE_Y);
       bld.position.set(hp[0], hp[1], hp[2]);
       bld.quaternion.setFromRotationMatrix(basis);
       const ba = bld.userData.board, bm = wallBoard(rec.name, ba.w, mats);

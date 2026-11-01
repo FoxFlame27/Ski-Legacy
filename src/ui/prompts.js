@@ -73,7 +73,7 @@ function labelMap() {
   return m;
 }
 
-const SEL = '.kc, .keycap, kbd';
+const SEL = '.kc, .keycap, kbd, .key'; // (.key: the interaction prompt, index.html #prompt)
 let lastState = '';
 function stateKey() { return `${isPad() ? 'pad' : 'kb'}:${fam()}:${JSON.stringify(save?.binds || {})}`; }
 
@@ -81,12 +81,14 @@ function relabel(el, map, pad) {
   if (el.closest?.('[data-no-swap]')) return;
   if (el.dataset.k) { const t = K(el.dataset.k, pad); if (el.textContent !== t) el.textContent = t; return; }
   if (el.children.length) return; // (an icon keycap: leave it)
-  if (el.dataset.kb == null) el.dataset.kb = el.textContent.trim();
+  // the game wrote a new key into it (el.textContent = 'G'): that's the new keyboard label
+  if (el.dataset.kb == null || (el._swapT != null && el.textContent !== el._swapT)) el.dataset.kb = el.textContent.trim();
   const orig = el.dataset.kb;
   const id = map.get(orig.toUpperCase());
   const t = pad && id ? K(id, true) : orig;
+  el._swapT = t;
   if (el.textContent !== t) el.textContent = t;
-  el.classList.toggle('kc-word', t.length > 1);
+  if (el.classList.contains('kc')) el.classList.toggle('kc-word', t.length > 1);
 }
 
 function sweep(root = document) {
@@ -105,8 +107,14 @@ export function installPromptSwap() {
   installed = true;
   const start = () => {
     new MutationObserver((muts) => {
-      for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) sweep(n);
-    }).observe(document.body, { childList: true, subtree: true });
+      for (const m of muts) {
+        for (const n of m.addedNodes) if (n.nodeType === 1) sweep(n);
+        // text changed inside an existing keycap (textContent / innerText set by the game)
+        const t = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+        const cap = t?.closest?.(SEL);
+        if (cap) relabel(cap, labelMap(), isPad());
+      }
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
     sweep();
   };
   if (document.body) start(); else addEventListener('DOMContentLoaded', start, { once: true });

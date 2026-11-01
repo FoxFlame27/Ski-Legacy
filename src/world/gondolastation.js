@@ -8,7 +8,7 @@
 // window (valley) and the lift's name on lit signs. The summit station is a little shorter, its roof flatter, without
 // ticket window and turnstiles.
 //
-// Station frame (the same footprint, cable path and bullwheel as the Meshy station had): origin on the station's
+// Station frame (the same cable path and bullwheel as the Meshy station had): origin on the station's
 // ground at the bullwheel's axis, +z down the line (the open portal the cabins ride out of), the cable lanes at
 // x = +-side, the rope's half loop round the bullwheel on -z, y up. Built in a canonical layout with the entrance on -x
 // and mirrored (mx = -1) when the other side has the better ground. Per material one merged mesh (base / steel /
@@ -25,10 +25,13 @@ import { nightUniform } from './village.js';
 
 export const STATION_DECK = 4.35; // m: the boarding deck over the station's ground (the cabins' floor: rope 7.5 - cabin 3.1)
 const DECK = STATION_DECK;
-const W2 = 7.2;   // half width of the plinth / hall (across the line)
+// (Nov 1 2026, the user: "the gondola stations are nice but a bit big": ~15-20 % less bulk: the hall 0.7 m narrower,
+// ~3 m shorter behind the loop and 1 m shorter at the portal, the roof lower and flatter with less overhang; the cabin
+// path, the bullwheel, the deck height and boarding unchanged)
+const W2 = 6.5;   // half width of the plinth / hall (across the line)
 const LANE = 1.3; // half width of a cabin channel round its rope
 const WALL = 0.25;
-const DIMS = { valley: { zb: -13.6, zf: 7.2, rise: 1.5 }, top: { zb: -12.6, zf: 6.2, rise: 1.2 } };
+const DIMS = { valley: { zb: -11.4, zf: 6.2, rise: 1.25 }, top: { zb: -10.8, zf: 5.6, rise: 1.0 } };
 
 const C = {
   stone: '#77736c', laneFloor: '#5f615f', conc: '#a8a9a5', pave: '#c2c2bd', yellow: '#f1c40a', wood: '#b07f4f',
@@ -105,6 +108,13 @@ class Kit {
   vquad(kind, x0, z0, x1, z1, y0, y1, col) {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute([x0, y0, z0, x1, y0, z1, x1, y1, z1, x0, y0, z0, x1, y1, z1, x0, y1, z0], 3));
+    g.computeVertexNormals();
+    return this.add(kind, g, col);
+  }
+  // a flat quad through four points ([x, y, z], in order round it: a sloping stair balustrade's glass)
+  quad(kind, a, b, c, d, col) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute([...a, ...b, ...c, ...a, ...c, ...d], 3));
     g.computeVertexNormals();
     return this.add(kind, g, col);
   }
@@ -212,6 +222,82 @@ function signQuad(out, c, n, w, h, uv) {
   out.uv.push(u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1);
 }
 
+// the shared roof of a station hall: warm larch soffit underneath, satin white fascias, the snow on top (thick in
+// the middle, rounded over the edges); a shallow vault across the hall from zr0 to zr1
+const ROOF_T = 0.38; // the roof's thickness
+const roofEaves = (rMax) => Math.max(9.4, rMax + 2.0); // the vault's eaves: over the rope (and the grips) by 2 m
+const portalHeader = (ropeY, rMax) => Math.max(ropeY + 1.35, rMax + 1.25); // a portal's header beam: over the conveyor
+function hallRoof(K, Wr, roofTop, roofBot, zr0, zr1) {
+  const clamp = THREE.MathUtils.clamp;
+  K.sheet('base', -Wr, Wr, zr0, zr1, 28, 1, (x) => roofBot(x), C.wood, true);
+  for (const sx of [-1, 1]) K.box('metal', sx * Wr - 0.06, sx * Wr, roofBot(Wr) - 0.02, roofTop(Wr) + 0.01, zr0, zr1, C.white);
+  const n = 14, top = [], bot = [];
+  for (let i = 0; i <= n; i++) { const x = -Wr + (2 * Wr * i) / n; top.push([x, roofTop(x) + 0.01]); bot.unshift([x, roofBot(x) - 0.02]); }
+  const section = [...top, ...bot];
+  K.shapeZ('metal', section, zr1, C.white);
+  K.add('metal', new THREE.ShapeGeometry(new THREE.Shape(section.map(([x, y]) => new THREE.Vector2(x, y)))).rotateY(Math.PI).translate(0, 0, zr0), C.white);
+  K.sheet('base', -Wr - 0.04, Wr + 0.04, zr0 - 0.04, zr1 + 0.04, 40, Math.max(10, Math.round((zr1 - zr0) / 1.6)), (x, z) => {
+    const d = Math.min(Wr - Math.abs(x), z - zr0, zr1 - z), xr = clamp(x, -Wr, Wr);
+    if (d <= 0.02) return roofTop(xr) - 0.035;
+    return roofTop(xr) + 0.05 + 0.24 * smooth(Math.min(1, d / 0.8)) + 0.025 * Math.sin(x * 1.7 + z * 0.9) * Math.min(1, d);
+  }, C.snow);
+}
+// downlights in a portal's canopy, z m along the line
+function downlights(K, roofBot, z) {
+  for (const x of [-4.5, -2.25, 0, 2.25, 4.5]) {
+    const g = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 12);
+    g.translate(x, roofBot(x) - 0.02, z);
+    K.add('light', g, C.white);
+  }
+}
+// the cabins' guide rail and the tyre conveyor over both lanes (x = +-s) from z0 to z1, hung from the roof
+function conveyors(K, s, ropeY, roofBot, z0, z1) {
+  const yr = ropeY + 0.5, ycv = ropeY + 1.0;
+  for (const sx of [-1, 1]) {
+    const x = sx * s;
+    K.box('metal', x - 0.06, x + 0.06, yr - 0.1, yr + 0.1, z0, z1, C.steel);
+    K.box('metal', x - 0.22, x + 0.22, ycv - 0.18, ycv + 0.18, z0, z1, C.anth);
+    for (let z = z0 + 0.8; z < z1; z += 3) K.bar('metal', [x, ycv + 0.18, z], [x, roofBot(x) - 0.2, z], 0.1, C.steel);
+    for (let z = z0 + 0.4; z < z1 - 0.2; z += 0.9) {
+      const g = new THREE.CylinderGeometry(0.17, 0.17, 0.12, 10);
+      g.rotateZ(Math.PI / 2);
+      g.translate(x, ycv - 0.3, z);
+      K.add('metal', g, C.rubber);
+    }
+  }
+}
+// one merged mesh per material (mirrored for mx = -1) plus the signs (sm: their material, q: their quads), placed
+function assemble(K, mx, sm, q, px, py, pz, yaw) {
+  const M = materials();
+  const group = new THREE.Group();
+  group.name = 'gondola-station';
+  for (const k of ['base', 'metal', 'glass', 'light']) {
+    const g = K.merge(k, mx < 0);
+    if (!g) continue;
+    const m = new THREE.Mesh(g, M[k]);
+    m.castShadow = k === 'base' || k === 'metal';
+    m.receiveShadow = k === 'base' || k === 'metal';
+    if (k === 'glass') { m.renderOrder = 1; m.userData.noCollide = true; }
+    group.add(m);
+  }
+  if (sm && q.pos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(q.nor, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(q.uv, 2));
+    g.computeBoundingSphere();
+    const m = new THREE.Mesh(g, sm);
+    m.receiveShadow = true;
+    group.add(m);
+  }
+  group.position.set(px, py, pz);
+  group.rotation.y = yaw;
+  group.updateMatrix();
+  for (const c of group.children) { c.updateMatrix(); c.matrixAutoUpdate = false; }
+  group.updateMatrixWorld(true);
+  return group;
+}
+
 /**
  * Build one gondola end station.
  * o: { x, y, z: the bullwheel's foot (the station's ground), yaw (local +z down the line), top (summit station),
@@ -254,10 +340,10 @@ export function buildGondolaStation(o) {
   const yb = gMin - 0.8;
 
   // the roof: a shallow vault across the hall, overhanging the walls, cantilevered out over the portal
-  const Wr = W2 + 0.9, R = D.rise, tR = 0.38, E = Math.max(9.8, rMax + 2.3);
-  const roofTop = (x) => E + R * (1 - (x / Wr) ** 2), roofBot = (x) => roofTop(x) - tR;
-  const zr0 = ZB - 0.9, zr1 = ZF + 1.8;
-  const pt = Math.max(ropeY + 1.6, rMax + 1.4); // the portal's header (over the grips and the conveyor)
+  const Wr = W2 + 0.6, R = D.rise, E = roofEaves(rMax);
+  const roofTop = (x) => E + R * (1 - (x / Wr) ** 2), roofBot = (x) => roofTop(x) - ROOF_T;
+  const zr0 = ZB - 0.6, zr1 = ZF + 1.4;
+  const pt = portalHeader(ropeY, rMax); // the portal's header (over the grips and the conveyor)
   const curve = (x0, x1, dy = 0, n = 14) => { const out = []; for (let i = 0; i <= n; i++) { const x = x0 + ((x1 - x0) * i) / n; out.push([x, roofBot(x) - dy]); } return out; };
   const arc = (r, from, to, n = 18) => { const out = []; for (let i = 0; i <= n; i++) { const t = from + ((to - from) * i) / n; out.push([r * Math.cos(t), -r * Math.sin(t)]); } return out; };
 
@@ -337,7 +423,7 @@ export function buildGondolaStation(o) {
   K.box('light', -0.35, 0.35, DECK + 1.05, DECK + 1.07, 0.7, 1.2, C.white);
   K.box('metal', -0.08, 0.08, DECK, DECK + 1.3, 2.4, 2.56, C.yellow, { r: 0.03 }); // the emergency stop's post
   // the operator's glass cabin (behind the loop, on the entrance side)
-  const bx0 = -W2 + 0.4, bx1 = -W2 + 3.8, bz0 = ZB + 3.1, bz1 = ZB + 6.0, bh = DECK + 2.7;
+  const bx0 = -W2 + 0.4, bx1 = -W2 + 3.4, bz0 = ZB + 3.1, bz1 = ZB + 6.0, bh = DECK + 2.7;
   K.box('metal', bx0, bx1, DECK, DECK + 0.95, bz0, bz1, C.anth, { r: 0.04 });
   for (const [x0, z0, x1, z1] of [[bx0, bz0, bx1, bz0], [bx1, bz0, bx1, bz1], [bx1, bz1, bx0, bz1], [bx0, bz1, bx0, bz0]]) K.vquad('glass', x0, z0, x1, z1, DECK + 0.95, bh, C.white);
   for (const [x, z] of [[bx0, bz0], [bx1, bz0], [bx1, bz1], [bx0, bz1]]) K.box('metal', x - 0.06, x + 0.06, DECK + 0.9, bh, z - 0.06, z + 0.06, C.anth);
@@ -346,9 +432,9 @@ export function buildGondolaStation(o) {
   K.box('light', bx0 + 0.4, bx1 - 0.4, bh - 0.03, bh, (bz0 + bz1) / 2 - 0.05, (bz0 + bz1) / 2 + 0.05, C.white);
   K.box('metal', bx0 + 0.1, bx1 - 0.1, DECK + 0.95, DECK + 1.0, bz1 - 0.6, bz1 - 0.1, C.steel); // its desk at the window
   // the turnstiles (valley): a row across the deck behind the loop, the glass wings swung open
-  const zt = ZB + 6.4, gates = [];
-  if (!top) for (let i = 0; i < 8; i++) {
-    const x = -2.9 + i * 1.3;
+  const zt = -6.2, gates = []; // (~1 m behind the loop's balustrade)
+  if (!top) for (let i = 0; i < 7; i++) {
+    const x = -2.6 + i * 1.25;
     gates.push(x);
     K.box('metal', x - 0.11, x + 0.11, DECK, DECK + 1.0, zt - 0.45, zt + 0.45, C.anth, { r: 0.03 });
     K.box('light', x - 0.07, x + 0.07, DECK + 1.0, DECK + 1.015, zt - 0.3, zt + 0.1, C.white);
@@ -403,40 +489,14 @@ export function buildGondolaStation(o) {
   // the island's nose: a low steel rail across its front
   K.bar('metal', [-Ri + 0.15, DECK + 0.95, ZF - 0.15], [Ri - 0.15, DECK + 0.95, ZF - 0.15], 0.06, C.steel, true);
   for (const x of [-Ri + 0.15, Ri - 0.15]) K.bar('metal', [x, DECK, ZF - 0.15], [x, DECK + 0.98, ZF - 0.15], 0.05, C.steel, true);
-  // the roof: warm larch soffit underneath, satin white fascias, the snow on top (thick in the middle, rounded over
-  // the edges)
-  K.sheet('base', -Wr, Wr, zr0, zr1, 28, 1, (x) => roofBot(x), C.wood, true);
-  for (const sx of [-1, 1]) K.box('metal', sx * Wr - 0.06, sx * Wr, roofBot(Wr) - 0.02, roofTop(Wr) + 0.01, zr0, zr1, C.white);
-  const section = [...curve(-Wr, Wr, 0).map(([x]) => [x, roofTop(x) + 0.01]), ...curve(Wr, -Wr, 0.02)];
-  K.shapeZ('metal', section, zr1, C.white);
-  K.add('metal', new THREE.ShapeGeometry(new THREE.Shape(section.map(([x, y]) => new THREE.Vector2(x, y)))).rotateY(Math.PI).translate(0, 0, zr0), C.white);
-  K.sheet('base', -Wr - 0.04, Wr + 0.04, zr0 - 0.04, zr1 + 0.04, 40, 14, (x, z) => {
-    const d = Math.min(Wr - Math.abs(x), z - zr0, zr1 - z), xr = clamp(x, -Wr, Wr);
-    if (d <= 0.02) return roofTop(xr) - 0.035;
-    return roofTop(xr) + 0.05 + 0.24 * smooth(Math.min(1, d / 0.8)) + 0.025 * Math.sin(x * 1.7 + z * 0.9) * Math.min(1, d);
-  }, C.snow);
+  hallRoof(K, Wr, roofTop, roofBot, zr0, zr1);
   // LED strips under the soffit and downlights in the portal's canopy
-  for (const x of [-xc + 0.8, -1.1, 1.1, xc - 0.8]) K.box('light', x - 0.05, x + 0.05, roofBot(x) - 0.05, roofBot(x) - 0.015, ZB + 0.4, ZF + 1.5, C.white);
-  for (const x of [-5, -2.5, 0, 2.5, 5]) {
-    const g = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 12);
-    g.translate(x, roofBot(x) - 0.02, ZF + 1.0);
-    K.add('light', g, C.white);
-  }
+  for (const x of [-xc + 0.8, -1.1, 1.1, xc - 0.8]) K.box('light', x - 0.05, x + 0.05, roofBot(x) - 0.05, roofBot(x) - 0.015, ZB + 0.4, ZF + 1.1, C.white);
+  downlights(K, roofBot, ZF + 0.8);
 
   // ---------------------------------------------------------------- the cable loop: guide rail, tyre conveyor
   const yr = ropeY + 0.5, ycv = ropeY + 1.0;
-  for (const sx of [-1, 1]) {
-    const x = sx * s;
-    K.box('metal', x - 0.06, x + 0.06, yr - 0.1, yr + 0.1, 0, zFlat, C.steel);
-    K.box('metal', x - 0.22, x + 0.22, ycv - 0.18, ycv + 0.18, 0, zFlat, C.anth);
-    for (let z = 0.8; z < zFlat; z += 3) K.bar('metal', [x, ycv + 0.18, z], [x, roofBot(x) - 0.2, z], 0.1, C.steel);
-    for (let z = 0.4; z < zFlat - 0.2; z += 0.9) {
-      const g = new THREE.CylinderGeometry(0.17, 0.17, 0.12, 10);
-      g.rotateZ(Math.PI / 2);
-      g.translate(x, ycv - 0.3, z);
-      K.add('metal', g, C.rubber);
-    }
-  }
+  conveyors(K, s, ropeY, roofBot, 0, zFlat);
   K.arcTube('metal', s, 0.08, yr, C.steel);
   K.arcTube('metal', s, 0.22, ycv, C.anth, 4);
   for (const t of [Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4]) {
@@ -445,53 +505,26 @@ export function buildGondolaStation(o) {
   }
 
   // the name boards' backing plates over the portal and on the back gable
-  const sh = Math.min(1.1, roofBot(3.3) - pt - 0.6), rb3 = roofBot(3.3);
-  if (sh > 0.45) {
+  const sh = Math.min(1.0, roofBot(3.3) - pt - 0.55), rb3 = roofBot(3.3);
+  if (sh > 0.4) {
     K.box('metal', -sh * 3 - 0.1, sh * 3 + 0.1, pt + 0.4, pt + 0.5 + sh, ZF - 0.12, ZF + 0.05, C.dark);
     K.box('metal', -sh * 3 - 0.1, sh * 3 + 0.1, rb3 - 0.4 - sh, rb3 - 0.3, ZB - 0.05, ZB + 0.12, C.dark);
   }
 
   // ---------------------------------------------------------------- meshes
-  const M = materials();
-  const group = new THREE.Group();
-  group.name = 'gondola-station';
-  for (const k of ['base', 'metal', 'glass', 'light']) {
-    const g = K.merge(k, mx < 0);
-    if (!g) continue;
-    const m = new THREE.Mesh(g, M[k]);
-    m.castShadow = k === 'base' || k === 'metal';
-    m.receiveShadow = k === 'base' || k === 'metal';
-    if (k === 'glass') { m.renderOrder = 1; m.userData.noCollide = true; }
-    group.add(m);
-  }
   // the signs (built in the mirrored frame, so the letters read the right way round)
   const place = String(o.place || '').replace(/^the\s+/i, '');
   const sub = (top ? 'Summit station' : 'Valley station') + (place && !/^summit$/i.test(place) ? ' · ' + place : '');
-  const sm = signMaterial(o.name || 'Gondola', sub);
-  if (sm) {
-    const q = { pos: [], nor: [], uv: [] }, X = (x) => x * mx;
-    if (sh > 0.45) {
-      signQuad(q, [0, pt + 0.45 + sh / 2, ZF + 0.07], [0, 0, 1], sh * 6, sh, UV.name);
-      signQuad(q, [0, rb3 - 0.35 - sh / 2, ZB - 0.07], [0, 0, -1], sh * 6, sh, UV.name);
-    }
-    signQuad(q, [X(-W2 - 0.04), DECK - 0.55, ZB + 6.5], [-mx, 0, 0], 5.4, 0.9, UV.name);
-    signQuad(q, [X(W2 + 0.04), DECK - 0.55, (ZB + ZF) / 2], [mx, 0, 0], 5.4, 0.9, UV.name);
-    if (canY + 0.95 < DECK - 0.1) signQuad(q, [X(-W2 - 0.04), canY + 0.6, zd], [-mx, 0, 0], 1.8, 0.675, UV.entrance);
-    if (tickets) signQuad(q, [X(-W2 - 0.04), gd + 2.85, ZB + 6.1], [-mx, 0, 0], 1.6, 0.6, UV.tickets);
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(q.nor, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(q.uv, 2));
-    g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, sm);
-    m.receiveShadow = true;
-    group.add(m);
+  const q = { pos: [], nor: [], uv: [] }, X = (x) => x * mx;
+  if (sh > 0.4) {
+    signQuad(q, [0, pt + 0.45 + sh / 2, ZF + 0.07], [0, 0, 1], sh * 6, sh, UV.name);
+    signQuad(q, [0, rb3 - 0.35 - sh / 2, ZB - 0.07], [0, 0, -1], sh * 6, sh, UV.name);
   }
-  group.position.set(px, py, pz);
-  group.rotation.y = yaw;
-  group.updateMatrix();
-  for (const c of group.children) { c.updateMatrix(); c.matrixAutoUpdate = false; }
-  group.updateMatrixWorld(true);
+  signQuad(q, [X(-W2 - 0.04), DECK - 0.55, ZB + 6.5], [-mx, 0, 0], 5.4, 0.9, UV.name);
+  signQuad(q, [X(W2 + 0.04), DECK - 0.55, (ZB + ZF) / 2], [mx, 0, 0], 5.4, 0.9, UV.name);
+  if (canY + 0.95 < DECK - 0.1) signQuad(q, [X(-W2 - 0.04), canY + 0.6, zd], [-mx, 0, 0], 1.8, 0.675, UV.entrance);
+  if (tickets) signQuad(q, [X(-W2 - 0.04), gd + 2.85, ZB + 6.1], [-mx, 0, 0], 1.6, 0.6, UV.tickets);
+  const group = assemble(K, mx, signMaterial(o.name || 'Gondola', sub), q, px, py, pz, yaw);
 
   // ---------------------------------------------------------------- colliders
   const cols = [];
@@ -533,4 +566,249 @@ export function buildGondolaStation(o) {
   // the bullwheel's drive shaft (bullwheelGeometry: 7.15 m over the rope at scale 1) up to the soffit
   const shaftScale = clamp((roofBot(0) - 0.05 - ropeY) / 7.15, 0.3, 1.2);
   return { group, colliders: cols, back: -ZB, shaftScale, surfaces: [surf] };
+}
+
+// ------------------------------------------------------------------ the mid-station
+// (Nov 1 2026, the user: "the MID stations — fix those!": the Meshy hall on its podium, models/gondola_terminal.glb,
+// is gone.) A pass-through intermediate station in the same language as the end stations: an elongated hall on a
+// stone-clad plinth that the haul rope runs straight through at station height (the line is straight; lifts.js
+// levels the rope to 7.5 m over the pad for +-13 m round the station), both ends open portals over the two cabin
+// channels, sized from the real rope heights. The boarding deck at the cabins' floor along both outer platforms
+// (boarding gates where the cabins crawl, +-9 m round the centre), the guide rails and tyre conveyors over both lanes
+// the length of the level rope, the operator's glass cabin on the island between the lanes, glazed long walls and
+// gables over the outer platforms between slim steel frames, the vaulted roof cantilevered over both portals, and an
+// outside stair up the long wall on the side of the nearby run (mid.side) to a door onto that platform; the lift's name
+// over both portals and on the plinth.
+// Frame: origin on the pad at the station's centre, +z up the line, the lanes at x = +-side, built with the stair on
+// -x and mirrored (mx = -1) for the other side (mx = +1 puts it on lifts.js +sideV). Five draw calls.
+// Colliders: the plinth (top at the deck), the long walls (a gap for the door), the end glazing over the outer
+// platforms, the channels' edges (deck + 1.1 m), the stair's balustrade, the operator's cabin; the deck and the stair
+// are walkable. Riders get off at the foot of the stair (lifts.js midExit: 10.6 m out, 1.8 m down the line).
+const MID_W2 = 6.6, MID_HL = 11.5, STAIR_W = 1.6, LAND0 = 4.4, LAND1 = 6.6;
+/**
+ * o: { x, y, z: the station's centre on its pad, yaw (local +z up the line), mx (+1 / -1: the stair's side), side (the
+ *      rope's offset), ropeY (rope height over the pad), carH, name (the lift), place (the station's name),
+ *      ropeAt(z) -> [up-lane, down-lane] rope height over the pad z m along the line (either way) }
+ * Returns { group, colliders, surfaces }.
+ */
+export function buildGondolaMidStation(o) {
+  const { x: px, y: py, z: pz, yaw, side: s, ropeY, carH, ropeAt } = o;
+  const mx = o.mx < 0 ? -1 : 1, W = MID_W2, HL = MID_HL, Ro = s + LANE, Ri = s - LANE;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const toW = (x, z) => { const X = x * mx; return { x: px + X * cy + z * sy, z: pz - X * sy + z * cy }; };
+  const gAt = (x, z) => { const q = toW(x, z); return world.height(q.x, q.z) - py; };
+  const clamp = THREE.MathUtils.clamp;
+
+  // the rope through the hall and a little past both portals: the portals and the roof clear its highest point, the
+  // channel floors its lowest cabin; the guide rails run as far as it stays level
+  let rMax = ropeY, rMin = ropeY, zF = HL - 0.4, zB = -HL + 0.4;
+  for (let z = 0; z <= HL + 2.6; z += 0.5) for (const sg of [1, -1]) {
+    const [a, b] = ropeAt(sg * z);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    rMax = Math.max(rMax, a, b);
+    if (z <= HL + 0.5) rMin = Math.min(rMin, a, b);
+    if (Math.max(Math.abs(a - ropeY), Math.abs(b - ropeY)) > 0.25) {
+      if (sg > 0) zF = Math.min(zF, z - 0.5); else zB = Math.max(zB, 0.5 - z);
+    }
+  }
+  zF = Math.max(1.5, zF); zB = Math.min(-1.5, zB);
+  const lf = clamp(rMin - carH - 0.5, 0.4, DECK - 1.1); // the channels' floor
+
+  // the stair: up the outside of the long wall on -x, toward +z, to the landing at the door
+  const xo = -W - STAIR_W, xi = -W, xm = (xo + xi) / 2;
+  const gd = clamp(gAt(xm, LAND0 - 7.4), -3, DECK - 1.2);
+  const rise = DECK - gd, nSteps = Math.max(3, Math.round(rise / 0.175)), dzs = 0.29, run = nSteps * dzs, zFoot = LAND0 - run;
+  let gMin = Math.min(gd, 0);
+  for (const gx of [-W, 0, W, xo]) for (const gz of [-HL, -HL / 2, 0, HL / 2, HL, zFoot]) gMin = Math.min(gMin, gAt(gx, gz));
+  const yb = gMin - 0.8;
+
+  // the roof: the same shallow vault, cantilevered out over both portals
+  const Wr = W + 0.6, R = 1.1, E = roofEaves(rMax);
+  const roofTop = (x) => E + R * (1 - (x / Wr) ** 2), roofBot = (x) => roofTop(x) - ROOF_T;
+  const zr1 = HL + 1.3, zr0 = -zr1;
+  const pt = portalHeader(ropeY, rMax);
+  const curve = (x0, x1, dy = 0, n = 14) => { const out = []; for (let i = 0; i <= n; i++) { const x = x0 + ((x1 - x0) * i) / n; out.push([x, roofBot(x) - dy]); } return out; };
+
+  const K = new Kit();
+  // ---------------------------------------------------------------- plinth, deck, channels
+  K.box('base', -W, W, yb, lf, -HL, HL, C.stone, { top: C.laneFloor });
+  for (const [x0, x1] of [[Ro, W], [-W, -Ro], [-Ri, Ri]]) K.box('base', x0, x1, lf, DECK, -HL, HL, C.conc, { r: 0.04, top: C.pave });
+  for (const sx of [-1, 1]) K.box('base', sx * W - 0.03, sx * W + 0.03, lf - 0.08, lf - 0.02, -HL, HL, C.dark);
+  for (const sz of [-1, 1]) K.box('base', -W, W, lf - 0.08, lf - 0.02, sz * HL - 0.03, sz * HL + 0.03, C.dark);
+  // the machine rooms' louvres in the plinth on the far side
+  for (const [z0, z1] of [[-8.5, -5.5], [5.5, 8.5]]) {
+    K.box('metal', W - 0.02, W + 0.02, 0.5, 2.3, z0, z1, C.dark);
+    for (let k = 0; k < 7; k++) K.box('metal', W, W + 0.07, 0.62 + k * 0.25, 0.68 + k * 0.25, z0 + 0.05, z1 - 0.05, C.anth);
+  }
+  // the stair: the landing's stone block, the flight (solid down to the pad), glass balustrade, handrails, canopy
+  K.box('base', xo, xi, yb, DECK, LAND0, LAND1, C.stone, { top: C.pave });
+  for (let k = 0; k < nSteps; k++) K.box('base', xo, xi - 0.01, yb, gd + (rise * (k + 1)) / nSteps, zFoot + k * dzs, zFoot + (k + 1) * dzs + 0.005, C.conc, { top: C.pave });
+  const xg = xo + 0.06, yh = 0.95;
+  K.quad('glass', [xg, gd + 0.1, zFoot + 0.15], [xg, DECK + 0.1, LAND0], [xg, DECK + 1.0, LAND0], [xg, gd + 1.0, zFoot + 0.15], C.white);
+  K.vquad('glass', xg, LAND0, xg, LAND1 - 0.06, DECK + 0.08, DECK + 1.0, C.white);
+  K.vquad('glass', xg, LAND1 - 0.06, xi, LAND1 - 0.06, DECK + 0.08, DECK + 1.0, C.white);
+  K.bar('metal', [xg, gd + yh + 0.08, zFoot + 0.15], [xg, DECK + yh + 0.08, LAND0], 0.06, C.steel, true);
+  K.bar('metal', [xg, DECK + yh + 0.08, LAND0], [xg, DECK + yh + 0.08, LAND1 - 0.06], 0.06, C.steel, true);
+  K.bar('metal', [xg, DECK + yh + 0.08, LAND1 - 0.06], [xi, DECK + yh + 0.08, LAND1 - 0.06], 0.06, C.steel, true);
+  for (let k = 0; k <= 3; k++) { const t = k / 3, z = zFoot + 0.15 + (LAND0 - zFoot - 0.15) * t, y = gd + (DECK - gd) * t; K.bar('metal', [xg, y, z], [xg, y + yh + 0.08, z], 0.05, C.steel, true); }
+  for (const z of [LAND1 - 0.06]) K.bar('metal', [xg, DECK, z], [xg, DECK + yh + 0.08, z], 0.05, C.steel, true);
+  K.bar('metal', [xi - 0.09, gd + 0.9, zFoot], [xi - 0.09, DECK + 0.9, LAND0], 0.05, C.steel, true); // the wall's handrail
+  const canY = DECK + 2.75;
+  K.box('metal', xo - 0.25, xi, canY, canY + 0.14, LAND0 - 0.5, LAND1 + 0.3, C.white, { r: 0.03 });
+  K.box('base', xo - 0.21, xi, canY + 0.14, canY + 0.24, LAND0 - 0.46, LAND1 + 0.26, C.snow, { r: 0.04 });
+  K.box('light', xo + 0.5, xo + 0.7, canY - 0.02, canY, LAND0, LAND1 - 0.2, C.white);
+  // the door through the long wall onto the outer platform: frame, lintel, the glass leaves slid open
+  const d0 = LAND0 + 0.25, d1 = LAND1 - 0.2, doorH = 2.5;
+  for (const z of [d0, d1]) K.box('metal', -W - 0.02, -W + 0.14, DECK, DECK + doorH, z - 0.05, z + 0.05, C.anth);
+  K.box('metal', -W - 0.02, -W + 0.14, DECK + doorH - 0.1, DECK + doorH, d0, d1, C.anth);
+  K.vquad('glass', -W + 0.2, d0 + 0.05, -W + 0.2, d0 + 0.5, DECK, DECK + doorH - 0.1, C.white);
+  K.vquad('glass', -W + 0.2, d1 - 0.5, -W + 0.2, d1 - 0.05, DECK, DECK + doorH - 0.1, C.white);
+
+  // ---------------------------------------------------------------- the platforms
+  const zl = HL - 0.25;
+  for (const sx of [-1, 1]) {
+    K.box('base', sx * (Ro + 0.3), sx * (Ro + 0.45), DECK, DECK + 0.012, -zl, zl, C.yellow);
+    K.box('base', sx * (Ri - 0.45), sx * (Ri - 0.3), DECK, DECK + 0.012, -zl, zl, C.yellow);
+  }
+  // the outer platforms' edge: glass balustrades toward both ends, the boarding gates where the cabins crawl
+  const rb = Ro + 0.1, yb0 = DECK + 0.08, yb1 = DECK + 1.0, zg = 3.6, ze = HL - 0.3;
+  for (const sx of [-1, 1]) {
+    const x = sx * rb;
+    for (const [z0, z1] of [[-ze, -zg - 0.1], [zg + 0.1, ze]]) {
+      K.vquad('glass', x, z0, x, z1, yb0, yb1, C.white);
+      const n = Math.max(1, Math.round((z1 - z0) / 2));
+      for (let k = 0; k <= n; k++) { const z = z0 + ((z1 - z0) * k) / n; K.bar('metal', [x, DECK, z], [x, yb1 + 0.04, z], 0.05, C.steel, true); }
+      K.bar('metal', [x, yb1 + 0.04, z0], [x, yb1 + 0.04, z1], 0.06, C.steel, true);
+    }
+    for (const z of [-zg + 0.1, 0, zg - 0.1]) {
+      K.box('metal', x - 0.09, x + 0.09, DECK, DECK + 1.15, z - 0.09, z + 0.09, C.yellow, { r: 0.03 });
+      K.box('light', x - 0.095, x + 0.095, DECK + 1.15, DECK + 1.17, z - 0.07, z + 0.07, C.white);
+    }
+    for (const [z0, z1] of [[-zg + 0.2, -1.77], [-1.73, -0.1], [0.1, 1.73], [1.77, zg - 0.2]]) {
+      K.vquad('glass', x, z0, x, z1, DECK + 0.25, DECK + 0.95, C.white);
+      K.box('metal', x - 0.03, x + 0.03, DECK + 0.93, DECK + 0.99, z0, z1, C.yellow);
+    }
+  }
+  // the island's noses: a low steel rail across each end
+  for (const sz of [-1, 1]) {
+    const z = sz * (HL - 0.15);
+    K.bar('metal', [-Ri + 0.15, DECK + 0.95, z], [Ri - 0.15, DECK + 0.95, z], 0.06, C.steel, true);
+    for (const x of [-Ri + 0.15, Ri - 0.15]) K.bar('metal', [x, DECK, z], [x, DECK + 0.98, z], 0.05, C.steel, true);
+  }
+  // the operator's glass cabin on the island, between the crawling cabins
+  const bx = Ri - 0.85, bz = 1.7, bh = DECK + 2.6;
+  K.box('metal', -bx, bx, DECK, DECK + 0.95, -bz, bz, C.anth, { r: 0.04 });
+  for (const [x0, z0, x1, z1] of [[-bx, -bz, bx, -bz], [bx, -bz, bx, bz], [bx, bz, -bx, bz], [-bx, bz, -bx, -bz]]) K.vquad('glass', x0, z0, x1, z1, DECK + 0.95, bh, C.white);
+  for (const [x, z] of [[-bx, -bz], [bx, -bz], [bx, bz], [-bx, bz]]) K.box('metal', x - 0.06, x + 0.06, DECK + 0.9, bh, z - 0.06, z + 0.06, C.anth);
+  K.box('metal', -bx - 0.2, bx + 0.2, bh, bh + 0.2, -bz - 0.2, bz + 0.2, C.white, { r: 0.04 });
+  K.box('metal', -bx - 0.21, bx + 0.21, bh + 0.02, bh + 0.1, -bz - 0.21, bz + 0.21, C.blue);
+  K.box('light', -0.05, 0.05, bh - 0.03, bh, -bz + 0.4, bz - 0.4, C.white);
+  for (const sx of [-1, 1]) K.box('metal', sx * (bx - 0.5) - 0.4, sx * (bx - 0.5) + 0.4, DECK + 0.95, DECK + 1.0, -bz + 0.2, bz - 0.2, C.steel); // the desks at the windows
+  for (const sz of [-1, 1]) K.box('metal', -0.08, 0.08, DECK, DECK + 1.3, sz * (bz + 1.2) - 0.08, sz * (bz + 1.2) + 0.08, C.yellow, { r: 0.03 }); // emergency stops
+
+  // ---------------------------------------------------------------- the hall: frames, glass, roof
+  const nb = Math.max(4, Math.round((2 * HL - 0.4) / 4.2)), zc = [];
+  for (let i = 0; i <= nb; i++) zc.push(-HL + 0.2 + ((2 * HL - 0.4) * i) / nb);
+  const xc = W - 0.2, yW = roofBot(W - 0.08) - 0.02;
+  for (const z of zc) {
+    for (const sx of [-1, 1]) K.box('metal', sx * xc - 0.15, sx * xc + 0.15, DECK, roofBot(xc), z - 0.15, z + 0.15, C.steel, { r: 0.04 });
+    const n = 10;
+    for (let k = 0; k < n; k++) {
+      const x0 = -xc + (2 * xc * k) / n, x1 = -xc + (2 * xc * (k + 1)) / n;
+      K.bar('metal', [x0, roofBot(x0) - 0.13, z], [x1, roofBot(x1) - 0.13, z], 0.2, C.steel);
+    }
+  }
+  // the long glazed walls (on -x round the door)
+  const cutDoor = (z0, z1, sx) => (sx > 0 || z1 <= d0 - 0.1 || z0 >= d1 + 0.1 ? [[z0, z1]] : [[z0, d0 - 0.1], [d1 + 0.1, z1]].filter(([a, b]) => b - a > 0.2));
+  for (const sx of [-1, 1]) {
+    const x = sx * (W - 0.08);
+    for (let i = 0; i < nb; i++) {
+      const z0 = zc[i] + 0.15, z1 = zc[i + 1] - 0.15, zm = (z0 + z1) / 2;
+      for (const [a, b] of cutDoor(z0, z1, sx)) K.vquad('glass', x, a, x, b, DECK + 0.1, yW, C.white);
+      if (sx > 0 || zm < d0 - 0.1 || zm > d1 + 0.1) K.box('metal', x - 0.04, x + 0.04, DECK + 0.02, yW, zm - 0.04, zm + 0.04, C.anth);
+    }
+    for (const y of [DECK + 0.1, DECK + 1.1]) for (const [a, b] of cutDoor(zc[0], zc[nb], sx)) K.box('metal', x - 0.05, x + 0.05, y - 0.04, y + 0.04, a, b, C.anth);
+    K.box('metal', x - 0.05, x + 0.05, yW - 0.08, yW, zc[0], zc[nb], C.anth);
+  }
+  if (DECK + doorH < yW - 0.3) K.vquad('glass', -W + 0.08, d0 - 0.1, -W + 0.08, d1 + 0.1, DECK + doorH, yW, C.white); // (over the door)
+  // both ends: the open portal over the channels between two steel posts, the header beam (house blue), glass above
+  // it and full height either side over the outer platforms
+  const xa = Ro + 0.15;
+  for (const sz of [-1, 1]) {
+    const zg1 = sz * (HL - 0.12);
+    for (const sx of [-1, 1]) {
+      const pts = [[xa, DECK + 0.1], [W, DECK + 0.1], ...curve(W, xa, 0.02)];
+      K.shapeZ('glass', sx > 0 ? pts : pts.map(([x, y]) => [-x, y]), zg1, C.white);
+      K.box('metal', sx * (Ro + 0.12) - 0.15, sx * (Ro + 0.12) + 0.15, DECK, pt, zg1 - 0.15, zg1 + 0.15, C.steel, { r: 0.04 });
+      const xmu = W * 0.5 + xa * 0.5;
+      K.box('metal', sx * xmu - 0.04, sx * xmu + 0.04, DECK, roofBot(xmu), zg1 - 0.04, zg1 + 0.04, C.anth);
+      K.box('metal', sx * xa, sx * W, DECK + 1.06, DECK + 1.14, zg1 - 0.05, zg1 + 0.05, C.anth);
+    }
+    if (roofBot(xa) - 0.1 > pt + 0.45) K.shapeZ('glass', [[-xa, pt + 0.4], [xa, pt + 0.4], ...curve(xa, -xa, 0.02)], zg1, C.white);
+    const zA = sz * (HL - 0.35), zBm = sz * (HL + 0.05);
+    K.box('metal', -W, W, pt, pt + 0.4, Math.min(zA, zBm), Math.max(zA, zBm), C.blue, { r: 0.04 });
+    K.box('light', -Ro, Ro, pt - 0.02, pt, sz * (HL - 0.15) - 0.05, sz * (HL - 0.15) + 0.05, C.white);
+  }
+  hallRoof(K, Wr, roofTop, roofBot, zr0, zr1);
+  for (const x of [-xc + 0.8, -1.1, 1.1, xc - 0.8]) K.box('light', x - 0.05, x + 0.05, roofBot(x) - 0.05, roofBot(x) - 0.015, zr0 + 0.3, zr1 - 0.3, C.white);
+  for (const sz of [-1, 1]) downlights(K, roofBot, sz * (HL + 0.75));
+
+  // ---------------------------------------------------------------- the rope's lanes: guide rails, tyre conveyors
+  conveyors(K, s, ropeY, roofBot, zB, zF);
+
+  // the name boards' backing plates over both portals
+  const sh = Math.min(1.0, roofBot(3.3) - pt - 0.55);
+  if (sh > 0.4) for (const sz of [-1, 1]) {
+    const z0 = sz * (HL - 0.12), z1 = sz * (HL + 0.05);
+    K.box('metal', -sh * 3 - 0.1, sh * 3 + 0.1, pt + 0.4, pt + 0.5 + sh, Math.min(z0, z1), Math.max(z0, z1), C.dark);
+  }
+
+  // ---------------------------------------------------------------- meshes
+  const q = { pos: [], nor: [], uv: [] }, X = (x) => x * mx;
+  if (sh > 0.4) for (const sz of [-1, 1]) signQuad(q, [0, pt + 0.45 + sh / 2, sz * (HL + 0.07)], [0, 0, sz], sh * 6, sh, UV.name);
+  signQuad(q, [X(-W - 0.04), DECK - 0.55, -7.2], [-mx, 0, 0], 5.4, 0.9, UV.name);
+  signQuad(q, [X(W + 0.04), DECK - 0.55, 0], [mx, 0, 0], 5.4, 0.9, UV.name);
+  signQuad(q, [X(xo - 0.04), DECK - 1.0, (LAND0 + LAND1) / 2], [-mx, 0, 0], 1.8, 0.675, UV.entrance);
+  const place = String(o.place || 'Mid-station');
+  const sub = /mid-?station/i.test(place) ? place : `Mid-station · ${place}`;
+  const group = assemble(K, mx, signMaterial(o.name || 'Gondola', sub), q, px, py, pz, yaw);
+
+  // ---------------------------------------------------------------- colliders
+  const cols = [];
+  const yA = (y) => py + y;
+  const boxC = (x0, x1, z0, z1, extra = {}) => {
+    if (x1 < x0) [x0, x1] = [x1, x0];
+    const c = toW((x0 + x1) / 2, (z0 + z1) / 2);
+    cols.push({ x: c.x, z: c.z, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, rot: -yaw, ...extra });
+  };
+  boxC(-W, W, -HL, HL, { top: yA(DECK - 0.05) });     // the plinth (walked on from the deck)
+  boxC(W - WALL, W, -HL, HL);                          // the long glazed walls (the door's gap on -x)
+  boxC(-W, -W + WALL, -HL, d0); boxC(-W, -W + WALL, d1, HL);
+  for (const sz of [-1, 1]) {                          // the end glazing over the outer platforms
+    const z0 = sz * (HL - 0.3), z1 = sz * HL;
+    boxC(Ro + 0.1, W, Math.min(z0, z1), Math.max(z0, z1)); boxC(-W, -Ro - 0.1, Math.min(z0, z1), Math.max(z0, z1));
+  }
+  const edgeTop = { top: yA(DECK + 1.1) };
+  boxC(Ro, Ro + 0.2, -HL, HL, edgeTop); boxC(-Ro - 0.2, -Ro, -HL, HL, edgeTop); // the channels' edges
+  boxC(xo - 0.02, xo + 0.14, zFoot + 0.3, LAND1, { top: yA(DECK + 1.0) });       // the stair's balustrade
+  boxC(xo, xi, LAND1 - 0.14, LAND1 + 0.02, { top: yA(DECK + 1.0) });
+  boxC(-bx, bx, -bz, bz);                                                        // the operator's cabin
+
+  // ---------------------------------------------------------------- walkable: the platforms, the island, the stair
+  const cs = [[xo - 0.5, -HL], [W, -HL], [xo - 0.5, HL], [W, HL]].map(([x, z]) => toW(x, z));
+  const surf = world.addSurface({
+    bounds: { minx: Math.min(...cs.map((c) => c.x)) - 0.5, maxx: Math.max(...cs.map((c) => c.x)) + 0.5, minz: Math.min(...cs.map((c) => c.z)) - 0.5, maxz: Math.max(...cs.map((c) => c.z)) + 0.5 },
+    height(x, z) {
+      const dx = x - px, dz = z - pz, lx = (dx * cy - dz * sy) * mx, lz = dx * sy + dz * cy;
+      if (lx < -W - 0.02) {
+        if (lx < xo - 0.05 || lz < zFoot || lz > LAND1) return null;
+        return lz >= LAND0 ? py + DECK : py + gd + ((lz - zFoot) / run) * rise; // (the stair, the landing)
+      }
+      if (lz < -HL || lz > HL || lx > W) return null;
+      const r = Math.abs(lx);
+      if (r > Ri && r < Ro) return null; // (the channels: the balustrades keep you out)
+      return py + DECK;
+    },
+  });
+  return { group, colliders: cols, surfaces: [surf] };
 }

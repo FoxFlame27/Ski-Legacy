@@ -3,10 +3,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { world } from './world.js';
-import { bakeGeometry, makeLOD, fitModel, dequantize, clusterDecimate } from '../core/assets.js';
+import { bakeGeometry, makeLOD, dequantize, clusterDecimate } from '../core/assets.js';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { drawnHeight } from './settle.js';
-import { buildGondolaStation } from './gondolastation.js'; // (the gondola end stations, built: Nov 1 2026)
+import { buildGondolaStation, buildGondolaMidStation } from './gondolastation.js'; // (the gondola stations, built: Nov 1 2026)
 
 // The lines' cars (Oct 30 2026, the user: "why does loading actually take so long"): every line of a lift type baked
 // and decimated the same Meshy cabin / chair at the same size, three tiers each, line after line. Baked once per
@@ -34,13 +34,13 @@ const MID_HALF = 9, MID_RAMP = 36, MID_SLOW = 0.1; // (0.1 x 18 m/s: the same ~1
 // multiplayer (net/transit.js): the cabins / chairs also crawl through the bottom and top stations (+-half m of the
 // bullwheel, ramping back to line speed over ramp m), so the one you wait for visibly comes in and you board it there
 const END_DWELL = { gondola: { half: 7, ramp: 30, slow: 0.1 }, chair: { half: 4, ramp: 14, slow: 0.15 } };
-const MID_LEN = 26, MID_W = 15; // station hall (along / across the line)
+const MID_LEN = 26; // the rope's level stretch through the mid-station (+-13 m: gondolastation.js's hall is 23 m long)
 
 // ground clearance under the cabins (cabin / chair bottom over the snow, both ways, out of the stations):
 // lifts.js adds or raises towers until the whole line keeps it (see LiftLine.fitClearance)
 const GONDOLA_CLEAR = 4.5, CHAIR_CLEAR = 2.8, PROFILE_STEP = 2;
 
-const _o = new THREE.Object3D(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _p = new THREE.Vector3(), _p2 = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1), _c = new THREE.Color();
+const _o = new THREE.Object3D(), _p2 = new THREE.Vector3(), _c = new THREE.Color();
 
 // distance from (x, z) to the edge of the nearest run (pistes and races; lift corridors don't count)
 function nearRun(x, z) {
@@ -73,8 +73,6 @@ class LiftLine {
     this.sideV = new THREE.Vector3(-spec.dir[1], 0, spec.dir[0]);
     this.yaw = Math.atan2(spec.dir[0], spec.dir[1]);
     this.mid = spec.mid && spec.type === 'gondola' ? spec.mid : null;
-    // gondola terminals: the Meshy hall on its podium (the cabins ride level through it at deck height)
-    this.termHall = spec.type === 'gondola' && MESHY_TERMINAL && !!models.gondola_terminal;
     // support points (stations + towers), each { u (horizontal dist), y }
     const spots = spec.towers || defaultTowers(spec, c.spacing);
     this.supports = [{ u: 0, y: B.y, fixed: true }];
@@ -252,11 +250,6 @@ class LiftLine {
       const k = smoothstep(MID_LEN / 2 + 16, MID_LEN / 2, Math.abs(u - this.mid.u));
       if (k > 0) out.y = lerp(out.y, this.mid.y + this.cfg.stationH, k);
     }
-    // through a terminal hall too (deck height, level with its floor)
-    if (this.termHall) {
-      const k = smoothstep(HALL_LEN / 2 + TERM_SHIFT + 16, HALL_LEN / 2 + TERM_SHIFT, Math.min(u, this.L - u));
-      if (k > 0) out.y = lerp(out.y, u < this.L / 2 ? this.B.y : this.T.y, k);
-    }
     out.addScaledVector(this.sideV, side * this.cfg.side);
     return out;
   }
@@ -283,7 +276,7 @@ class LiftLine {
   needAt(u) {
     // (by the mid-station the cabins come down to its deck: 4.4 m over the levelled pad)
     if (this.spec.type === 'gondola') {
-      const nearDeck = (this.mid && Math.abs(u - this.mid.u) < MID_LEN / 2 + 17) || (this.termHall && Math.min(u, this.L - u) < HALL_LEN / 2 + TERM_SHIFT + 17);
+      const nearDeck = this.mid && Math.abs(u - this.mid.u) < MID_LEN / 2 + 17;
       return nearDeck ? GONDOLA_CLEAR - 0.5 : GONDOLA_CLEAR;
     }
     const ds = Math.min(u, this.L - u);
@@ -381,9 +374,7 @@ class LiftLine {
     const group = new THREE.Group();
     this.group = group;
     // stations
-    this.termSides = {};
     for (const [p, top] of [[this.spec.bottom, false], [this.spec.top, true]]) {
-      if (this.termHall) { this.buildTerminal(p, top, models, colliders, group); continue; }
       if (this.spec.type === 'chair' && MESHY_CHAIR && models.chair_terminal && models.chair_bullwheel) { this.buildChairTerminal(p, top, models, colliders, group); continue; }
       if (this.spec.type === 'gondola') { this.buildStation(p, top, colliders, group); continue; }
       // (a chairlift whose Meshy terminal parts did not load: the built bullwheel on a plain steel column)
@@ -399,7 +390,7 @@ class LiftLine {
       group.add(col);
       colliders.push({ x: p.x, z: p.z, r: 0.8 });
     }
-    if (this.mid) this.buildMid(models, colliders);
+    if (this.mid) this.buildMid(colliders);
     // towers
     if (models.lift_tower) {
       const pads = [];
@@ -456,35 +447,6 @@ class LiftLine {
       if (mid.geometry) this.carMid = mk(mid, false);
     }
     this.scene.add(group);
-  }
-
-  // a gondola terminal: the Meshy hall on its podium, its stair on the side with the levelest ground, and a
-  // bullwheel under the arch that the haul rope swings round behind the boarding point
-  buildTerminal(p, top, models, colliders, group) {
-    // the hall sits TERM_SHIFT m out along the line from the boarding point (the bullwheel), so little of it
-    // stands behind the station (the village plaza's lamps and the bus stops there stay clear)
-    const sv = this.sideV, out = HALL_W / 2 + 2.8, f = top ? -TERM_SHIFT : TERM_SHIFT;
-    const c = { x: p.x + this.dir.x * f, y: p.y, z: p.z + this.dir.z * f };
-    const score = (sd) => Math.abs(world.height(c.x + sv.x * sd * out, c.z + sv.z * sd * out) - p.y) + (this.blocked(c.x + sv.x * sd * out, c.z + sv.z * sd * out) ? 20 : 0);
-    const sd = score(1) <= score(-1) ? 1 : -1;
-    this.termSides[top ? 'top' : 'bottom'] = sd;
-    (this.termCenters ??= {})[top ? 'top' : 'bottom'] = c;
-    const m = new THREE.Mesh(podiumGeometry(sd), midStationMaterial());
-    m.position.set(c.x, p.y - 0.05, c.z);
-    m.rotation.y = this.yaw;
-    m.castShadow = true; m.receiveShadow = true;
-    m.updateMatrix(); m.matrixAutoUpdate = false;
-    group.add(m);
-    const hall = makeLOD({ scene: hallModel(models.gondola_terminal, sd) }, { size: HALL_LEN, axis: 'z' }, 180, 0.015);
-    hall.position.set(c.x, p.y + HALL_BASE, c.z);
-    hall.rotation.y = this.yaw;
-    group.add(hall);
-    const wheel = new THREE.Mesh(bullwheelGeometry(this.cfg.side), bullwheelMaterial());
-    wheel.position.set(p.x, p.y + this.cfg.stationH, p.z);
-    wheel.rotation.y = this.yaw + (top ? Math.PI : 0); // the rope's half loop faces away from the line
-    wheel.castShadow = true;
-    group.add(wheel);
-    colliders.push(...podiumColliders(c, this.yaw, sd));
   }
 
   // a gondola end station (Nov 1 2026, the user: "also the gondola stop models are still super ugly, fix that"; the
@@ -545,10 +507,11 @@ class LiftLine {
     colliders.push({ x: q.x, z: q.z, hw: sz.x / 2 * 0.97, hd: sz.z / 2 * 0.97, rot: -hut.rotation.y });
   }
 
-  // where a rider steps off: the foot of the stair down the podium at (p, side sd), or the nearest clear spot
-  stairExit(p, sd, hall) {
+  // where a rider steps off at the mid-station: beside the foot of its stair (side sd), or the nearest clear spot
+  // (layout.js stopExit: the same 10.6 m out, 1.8 m down the line)
+  stairExit(p, sd) {
     const sv = this.sideV, d = this.dir;
-    const out = hall ? HALL_W / 2 + 2.8 : 10.6, back = hall ? 2.6 : 1.8;
+    const out = 10.6, back = 1.8;
     let x = 0, z = 0;
     for (const [o, b] of [[out, back], [out, back + 3], [out + 2, back], [out, back - 3], [out + 2, back + 4], [out + 4, back]]) {
       x = p.x + sv.x * sd * o - d.x * b; z = p.z + sv.z * sd * o - d.z * b;
@@ -559,43 +522,20 @@ class LiftLine {
     const away = gl > 0.03 && (-gx * sv.x * sd - gz * sv.z * sd) / gl > -0.2;
     return { x, z, heading: away ? Math.atan2(-gx, -gz) : Math.atan2(-d.x, -d.z) };
   }
-  terminalExit(top) {
-    const key = top ? 'top' : 'bottom';
-    this._termExit ??= {};
-    return (this._termExit[key] ??= this.stairExit(this.termCenters?.[key] || (top ? this.spec.top : this.spec.bottom), this.termSides[key] || 1, true));
-  }
 
-  // the mid-station: the Meshy hall on a podium (MESHY_MID) or the built steel-and-timber hall
-  buildMid(models, colliders) {
-    if (this.midGroup) {
-      this.group.remove(this.midGroup);
-      for (const c of this.midColliders) { const i = colliders.indexOf(c); if (i >= 0) colliders.splice(i, 1); }
-    }
-    const g = new THREE.Group(), cols = [];
-    this.midGroup = g; this.midColliders = cols;
-    this.hall = !!(this.useHall ?? MESHY_MID) && !!models.gondola_terminal;
-    const m = new THREE.Mesh(this.hall ? podiumGeometry(this.mid.side) : midStationGeometry(this.mid.side), midStationMaterial());
-    m.position.set(this.mid.x, this.mid.y - 0.05, this.mid.z);
-    m.rotation.y = this.yaw;
-    m.castShadow = true; m.receiveShadow = true;
-    m.updateMatrix(); m.matrixAutoUpdate = false;
-    g.add(m);
-    if (this.hall) {
-      const hall = makeLOD({ scene: hallModel(models.gondola_terminal, this.mid.side) }, { size: HALL_LEN, axis: 'z' }, 180, 0.015);
-      hall.position.set(this.mid.x, this.mid.y + HALL_BASE, this.mid.z);
-      hall.rotation.y = this.yaw;
-      g.add(hall);
-      // the podium (the cabins ride over its deck, through the hall) and its stair
-      cols.push(...podiumColliders(this.mid, this.yaw, this.mid.side));
-    } else {
-      // the two machine rooms under the platforms (the cabins pass between them, over the pad)
-      for (const sd of [1, -1]) {
-        const ox = this.sideV.x * sd * 6.4, oz = this.sideV.z * sd * 6.4;
-        cols.push({ x: this.mid.x + ox, z: this.mid.z + oz, hw: 1.3, hd: MID_LEN / 2 - 1, rot: -this.yaw });
-      }
-    }
-    colliders.push(...cols);
-    this.group.add(g);
+  // the mid-station (Nov 1 2026, the user: "the MID stations — fix those!"; the Meshy hall on its podium before it):
+  // built by world/gondolastation.js, a pass-through hall in the end stations' style that the rope runs straight
+  // through at station height (cableAt levels it over +-13 m), its stair and exit on the side of the nearby run
+  // (mid.side: sideV * side); colliders and the walkable deck / stair from the station
+  buildMid(colliders) {
+    const c = this.cfg, m = this.mid;
+    const st = buildGondolaMidStation({
+      x: m.x, y: m.y, z: m.z, yaw: this.yaw, mx: m.side || 1, side: c.side, ropeY: c.stationH, carH: c.carH,
+      name: this.spec.name, place: m.name,
+      ropeAt: (z) => [this.cableAt(m.u + z, 1, _p2).y - m.y, this.cableAt(m.u + z, -1, _p2).y - m.y],
+    });
+    this.group.add(st.group);
+    colliders.push(...st.colliders);
   }
 
   update(dt, timeScale, viewer, T = null) {
@@ -645,9 +585,7 @@ class LiftLine {
 
   // where a rider steps off at the mid-station: at the foot of the stairs on the side of the nearby run
   midExit() {
-    if (this._midExit?.hall === this.hall) return this._midExit;
-    this._midExit = { ...this.stairExit(this.mid, this.mid.side || 1, this.hall), hall: this.hall };
-    return this._midExit;
+    return (this._midExit ??= this.stairExit(this.mid, this.mid.side || 1));
   }
   // is (x, z) inside (or within 0.6 m of) a collider? (same box convention as player.collide)
   blocked(x, z) {
@@ -690,230 +628,9 @@ function defaultTowers(spec, spacing) {
   return out;
 }
 
-// ------------------------------------------------------------------ mid-station building
-// A pass-through hall: galvanised steel portal frames, a standing-seam roof with a snow load, a warm timber
-// ceiling and the house-blue fascia, timber-clad machine rooms with windows under the two boarding platforms, a
-// centre platform between the lines and a stair down to the pad on the side of the nearby run. The cabins ride
-// through on the haul rope; nothing runs along the lines at cabin height (the ride camera follows the cabin
-// through the hall, right along the line).
-// Local frame: +z up the line, +x = the station's left looking up the line (world -sideV); y up from the pad.
-let midMat = null;
-function midStationMaterial() {
-  if (midMat) return midMat;
-  midMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.72, metalness: 0.08 });
-  // surface detail on the plain vertex colours: board-formed concrete on the grey faces, vertical larch grain on
-  // the warm ones, box-projected in world space (no UVs needed), a little rougher where darker
-  const conc = { value: podiumTexture('concrete') }, wood = { value: podiumTexture('wood') };
-  midMat.onBeforeCompile = (sh) => {
-    sh.uniforms.uConc = conc; sh.uniforms.uWood = wood;
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vPodW;\nvarying vec3 vPodN;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPodW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvPodN = normalize(mat3(modelMatrix) * objectNormal);');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D uConc;\nuniform sampler2D uWood;\nvarying vec3 vPodW;\nvarying vec3 vPodN;')
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        vec3 an = abs(vPodN);
-        vec2 puv = an.x > an.y && an.x > an.z ? vPodW.zy : (an.z > an.y ? vPodW.xy : vPodW.xz);
-        float warm = clamp((vColor.r - vColor.b) * 5.0, 0.0, 1.0);
-        float pd = mix(texture2D(uConc, puv * 0.16).r, texture2D(uWood, vec2(puv.x * 0.9, puv.y * 0.11)).r, warm);
-        diffuseColor.rgb *= mix(0.58, 1.2, pd);`)
-      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = clamp(roughnessFactor * mix(1.12, 0.9, pd), 0.0, 1.0);');
-  };
-  midMat.customProgramCacheKey = () => 'podium-detail';
-  return midMat;
-}
-// 512 px detail maps (grey, 0.5 = no change): concrete with 1.4 m formwork seams, blotches and run-off streaks;
-// larch with fine vertical grain and a few knots
-function podiumTexture(kind) {
-  const N = 512, data = new Uint8Array(N * N * 4);
-  const h = (x, y) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
-  const vnoise = (x, y) => {
-    const xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
-    const wx = (v) => ((v % 16) + 16) % 16; // tiles every 16 cells
-    const a = h(wx(xi), wx(yi)), b = h(wx(xi + 1), wx(yi)), c = h(wx(xi), wx(yi + 1)), d = h(wx(xi + 1), wx(yi + 1));
-    return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
-  };
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    const u = (x / N) * 16, v = (y / N) * 16;
-    let t;
-    if (kind === 'concrete') {
-      t = 0.5 + (vnoise(u, v) - 0.5) * 0.4 + (vnoise(u * 4, v * 4) - 0.5) * 0.22 + (h(x, y) - 0.5) * 0.1;
-      if (y % 128 < 4 || x % 256 < 3) t -= 0.22; // formwork joints
-      t -= Math.max(0, vnoise(u * 3, v * 0.25) - 0.6) * 0.9; // streaks running down
-    } else {
-      const g = Math.sin(u * 9 + vnoise(u * 2, v * 0.3) * 6) * 0.5 + 0.5; // grain lines along v
-      t = 0.5 + (g - 0.5) * 0.3 + (vnoise(u * 6, v * 0.5) - 0.5) * 0.28 + (h(x, y) - 0.5) * 0.08;
-      const kx = (u % 4) - 2, ky = (v % 5.3) - 2.6; // a few knots
-      if (h(Math.floor(u / 4), Math.floor(v / 5.3)) > 0.7) t -= Math.max(0, 0.35 - Math.hypot(kx, ky * 0.6)) * 0.9;
-    }
-    const k = (y * N + x) * 4, b = Math.max(0, Math.min(255, Math.round(t * 255)));
-    data[k] = data[k + 1] = data[k + 2] = b; data[k + 3] = 255;
-  }
-  const tex = new THREE.DataTexture(data, N, N);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps = true; tex.anisotropy = 8;
-  tex.needsUpdate = true;
-  return tex;
-}
-const midGeoCache = new Map();
-function midStationGeometry(side) {
-  if (midGeoCache.has(side)) return midGeoCache.get(side);
-  const parts = [];
-  const box = (x, y, z, sx, sy, sz, col, rx = 0) => {
-    const g = new THREE.BoxGeometry(sx, sy, sz).toNonIndexed();
-    g.applyMatrix4(new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(rx, 0, 0)), _s.set(1, 1, 1)));
-    const n = g.attributes.position.count, cols = new Float32Array(n * 3);
-    _c.set(col);
-    for (let i = 0; i < n; i++) { cols[i * 3] = _c.r; cols[i * 3 + 1] = _c.g; cols[i * 3 + 2] = _c.b; }
-    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    parts.push(g);
-  };
-  const STEEL = '#9aa1a8', STEEL_D = '#6b7178', WOOD = ['#80593a', '#77522f', '#8a6240'], GLASS = '#26384a', ROOF = '#4a5057', SNOW = '#eef3f9', BLUE = '#1546c8', CONC = '#8b8e93', WHITE = '#f2f2ef';
-  const CEIL = ['#b98a5a', '#ad7f50', '#c29463']; // larch boards under the roof
-  const L = MID_LEN, W = MID_W, deck = 4.3, roofY = 10.2, hl = L / 2, hw = W / 2;
-  // concrete plinths under the machine rooms
-  for (const sx of [-1, 1]) box(sx * 6.4, 0.2, 0, 2.9, 0.6, L - 1.2, CONC);
-  // machine rooms: timber boards over a dark core, windows, a door on the stair side
-  for (const sx of [-1, 1]) {
-    box(sx * 6.4, deck / 2, 0, 2.5, deck - 0.2, L - 2, '#4a3524');
-    const boards = 26;
-    for (let i = 0; i < boards; i++) {
-      const z = -hl + 1 + (i + 0.5) * ((L - 2) / boards);
-      box(sx * (6.4 + 1.27), deck / 2, z, 0.06, deck - 0.3, (L - 2) / boards - 0.03, WOOD[i % 3]);
-    }
-    for (const z of [-8, -3, 3, 8]) {
-      box(sx * (6.4 + 1.32), 2.4, z, 0.06, 1.3, 2.4, WHITE);
-      box(sx * (6.4 + 1.35), 2.4, z, 0.05, 1.1, 2.2, GLASS);
-    }
-    // deck slab + steel edge
-    box(sx * 6.25, deck, 0, 2.7, 0.3, L, '#9a9ea4');
-    box(sx * (6.25 + 1.37), deck, 0, 0.08, 0.36, L, STEEL);
-  }
-  // centre platform between the two lines, on slim columns
-  box(0, deck, 0, 3.0, 0.3, L - 6, '#9a9ea4');
-  for (const z of [-8, 0, 8]) box(0, deck / 2, z, 0.35, deck, 0.35, STEEL);
-  // railings along the platform edges toward the cabins (yellow safety edge stripe on the deck)
-  for (const x of [-4.86, 4.86, -1.46, 1.46]) {
-    box(x, deck + 0.17, 0, 0.12, 0.04, x === -1.46 || x === 1.46 ? L - 6 : L, '#f1c40f');
-  }
-  // outer railings, open where the stair comes up (on the run's side, world sideV * side = local -x)
-  const st = -(side || 1), gap = [4.6, 7.4];
-  for (const sx of [-1, 1]) {
-    for (let z = -hl + 0.5; z <= hl - 0.5; z += 2.1) if (sx !== st || z < gap[0] - 0.3 || z > gap[1] + 0.3) box(sx * 7.55, deck + 0.55, z, 0.05, 1.1, 0.05, STEEL_D);
-    if (sx !== st) box(sx * 7.55, deck + 1.1, 0, 0.07, 0.07, L - 0.6, STEEL_D);
-    else {
-      box(sx * 7.55, deck + 1.1, (-hl + 0.3 + gap[0]) / 2, 0.07, 0.07, gap[0] + hl - 0.3, STEEL_D);
-      box(sx * 7.55, deck + 1.1, (gap[1] + hl - 0.3) / 2, 0.07, 0.07, hl - 0.3 - gap[1], STEEL_D);
-    }
-  }
-  // portal frames: columns from the ground to the roof beam, every 6.5 m
-  for (let z = -hl + 0.4; z <= hl; z += (L - 0.8) / 4) {
-    for (const sx of [-1, 1]) box(sx * (hw - 0.3), roofY / 2, z, 0.4, roofY, 0.4, STEEL);
-    box(0, roofY - 0.35, z, W - 0.2, 0.5, 0.35, STEEL);
-  }
-  // timber ceiling: larch boards along the hall just under the pitched roof, above the portal beams
-  for (const sx of [-1, 1]) {
-    const n = 7, x0 = 0.1, x1 = 5.15, bw = (x1 - x0) / n;
-    for (let i = 0; i < n; i++) {
-      const ax = x0 + (i + 0.5) * bw;
-      const g = new THREE.BoxGeometry(bw - 0.025, 0.05, L + 2.2).toNonIndexed();
-      g.applyMatrix4(new THREE.Matrix4().compose(_p.set(sx * ax, roofY + 0.45 - ax * 0.1, 0), _q.setFromEuler(_e.set(0, 0, -sx * 0.1)), _s.set(1, 1, 1)));
-      const m = g.attributes.position.count, cc = new Float32Array(m * 3);
-      _c.set(CEIL[(i + (sx > 0 ? 1 : 0)) % 3]);
-      for (let k = 0; k < m; k++) { cc[k * 3] = _c.r; cc[k * 3 + 1] = _c.g; cc[k * 3 + 2] = _c.b; }
-      g.setAttribute('color', new THREE.BufferAttribute(cc, 3));
-      parts.push(g);
-    }
-  }
-  // roof: two gently pitched standing-seam slabs, snow load on top, house-blue fascia with a white band
-  for (const sx of [-1, 1]) {
-    const g = new THREE.BoxGeometry(hw + 1.2, 0.32, L + 2.4).toNonIndexed();
-    g.applyMatrix4(new THREE.Matrix4().compose(_p.set(sx * (hw + 1.2) / 2, roofY + 0.25, 0), _q.setFromEuler(_e.set(0, 0, -sx * 0.1)), _s.set(1, 1, 1)));
-    const n = g.attributes.position.count, cols = new Float32Array(n * 3);
-    _c.set(ROOF);
-    for (let i = 0; i < n; i++) { cols[i * 3] = _c.r; cols[i * 3 + 1] = _c.g; cols[i * 3 + 2] = _c.b; }
-    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    parts.push(g);
-    const sn = new THREE.BoxGeometry(hw + 1.0, 0.26, L + 2.1).toNonIndexed();
-    sn.applyMatrix4(new THREE.Matrix4().compose(_p.set(sx * (hw + 1.0) / 2, roofY + 0.5, 0), _q.setFromEuler(_e.set(0, 0, -sx * 0.1)), _s.set(1, 1, 1)));
-    const m2 = sn.attributes.position.count, c2 = new Float32Array(m2 * 3);
-    _c.set(SNOW);
-    for (let i = 0; i < m2; i++) { c2[i * 3] = _c.r; c2[i * 3 + 1] = _c.g; c2[i * 3 + 2] = _c.b; }
-    sn.setAttribute('color', new THREE.BufferAttribute(c2, 3));
-    parts.push(sn);
-  }
-  for (const sz of [-1, 1]) {
-    box(0, roofY - 0.25, sz * (hl + 1.15), W + 2.6, 0.7, 0.12, BLUE);
-    box(0, roofY - 0.42, sz * (hl + 1.22), W + 2.6, 0.12, 0.04, WHITE);
-  }
-  for (const sx of [-1, 1]) box(sx * (hw + 1.25), roofY - 0.25, 0, 0.12, 0.7, L + 2.4, BLUE);
-  // stair down the outside of the wall, from the platform's railing gap to the pad
-  const steps = 16, rise = deck / steps, run = 0.42, sxs = st * 8.55, z0 = gap[0] + 0.2;
-  for (let i = 0; i < steps; i++) box(sxs, deck - (i + 1) * rise - 0.04, z0 - (i + 0.5) * run, 1.5, 0.08, run + 0.02, '#9a9ea4');
-  box(sxs, deck - 0.04, (z0 + gap[1]) / 2, 1.5, 0.08, gap[1] - z0 + 0.1, '#9a9ea4'); // landing at the top
-  // stringers + handrails (they slope down toward -z: rotate about x by -angle)
-  const sl = Math.hypot(steps * run, deck), ang = Math.atan2(deck, steps * run), zc = z0 - (steps * run) / 2;
-  for (const o of [-0.78, 0.78]) {
-    box(sxs + o, deck / 2 - 0.12, zc, 0.08, 0.3, sl, STEEL_D, -ang);
-    box(sxs + o, deck / 2 + 0.85, zc, 0.05, 0.05, sl, STEEL_D, -ang);
-  }
-  const geo = mergeGeometries(parts);
-  parts.forEach((p) => p.dispose());
-  geo.computeBoundingSphere();
-  midGeoCache.set(side, geo);
-  return geo;
-}
-
-// ------------------------------------------------------------------ Meshy mid-station hall
-// The Meshy terminal (models/gondola_terminal.glb: a white arched glass hall between four timber rooms) sits on a
-// concrete-and-timber podium, its floor level with the boarding deck: the cabins ride through the arch over the
-// floor (both lanes pass between the rooms) and riders step off onto a stair down the podium. Anything of the
-// model inside the cabin lanes (railings across the ends, posts) and the drone-like gadget on the roof is cut out.
-// Fitted frame: z along the line (HALL_LEN), x across (widened to HALL_W so both lanes clear the rooms), y up
-// from the model's base; its floor is at HALL_FLOOR.
-const MESHY_MID = true; // false = the built hall (midStationGeometry); Lifts.setMidModel swaps at run time
-// (?meshyterm / ?meshychair in the page URL switch an unverified station style on for a test)
+// (?meshychair in the page URL switches the chairlift terminal style on for a test)
 const urlFlag = (k) => typeof location !== 'undefined' && new RegExp(`[?&]${k}(&|=|$)`).test(location.search);
-const MESHY_TERMINAL = false || urlFlag('meshyterm'); // gondola base / top terminals: the same hall on its podium (off: the user prefers the original station models)
 const MESHY_CHAIR = true || urlFlag('meshychair'); // chairlift terminals: built bullwheel + the Meshy chair_terminal hut
-const TERM_SHIFT = 6; // a terminal hall's centre, out along the line from the boarding point
-const HALL_LEN = 26, HALL_W = 27.7, HALL_FLOOR = 0.0475 * HALL_LEN, DECK = 4.3, HALL_BASE = DECK - HALL_FLOOR;
-const hallCache = new Map();
-function hallModel(gltf, side) {
-  const key = side || 1;
-  if (hallCache.has(key)) return hallCache.get(key);
-  const fitted = fitModel(gltf, { size: HALL_LEN, axis: 'z' });
-  fitted.scale.x = HALL_W / fitted.userData.size.x;
-  fitted.updateMatrixWorld(true);
-  const st = -key, root = new THREE.Group();
-  const cut = (x, y, z) => {
-    const ax = Math.abs(x);
-    if (ax > 1.6 && ax < 5.25 && y > HALL_FLOOR + 0.06 && y < 8.4) return true; // the cabin lanes (+ the ride camera)
-    if (ax < 5.25 && Math.abs(z) > HALL_LEN / 2 - 1.4 && y > HALL_FLOOR + 0.06 && y < HALL_FLOOR + 1.9) return true; // railings across the ends
-    if (ax < 1.7 && Math.abs(z) > HALL_LEN / 2 - 2.6 && y > HALL_FLOOR + 0.06 && y < 9.4) return true; // posts in the arch openings (the ride camera passes them)
-    if (ax < 2.6 && Math.abs(z) < 4.5 && y > 12.25) return true; // roof gadget
-    if (x * st > HALL_W / 2 - 1.1 && z > 4.0 && z < 8.0 && y > HALL_FLOOR + 0.05 && y < 3.4) return true; // stair gap in the railing
-    return false;
-  };
-  fitted.traverse((o) => {
-    if (!o.isMesh) return;
-    const geo = dequantize(o.geometry);
-    geo.applyMatrix4(o.matrixWorld);
-    const p = geo.attributes.position, src = geo.index ? geo.index.array : null, n = src ? src.length : p.count;
-    const keep = [];
-    for (let t = 0; t < n; t += 3) {
-      const a = src ? src[t] : t, b = src ? src[t + 1] : t + 1, c = src ? src[t + 2] : t + 2;
-      const x = (p.getX(a) + p.getX(b) + p.getX(c)) / 3, y = (p.getY(a) + p.getY(b) + p.getY(c)) / 3, z = (p.getZ(a) + p.getZ(b) + p.getZ(c)) / 3;
-      if (!cut(x, y, z)) keep.push(a, b, c);
-    }
-    geo.setIndex(keep);
-    geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, o.material);
-    mesh.castShadow = true; mesh.receiveShadow = true;
-    root.add(mesh);
-  });
-  hallCache.set(key, root);
-  return root;
-}
 
 // a terminal's bullwheel (radius r = the rope's offset from the line): a steel wheel just above the rope, the
 // gearbox and drive shaft up to the roof, and the haul rope's half loop round it (local -z: away from the line)
@@ -1013,75 +730,6 @@ const ropeLoopMaterial = () => (loopMat ??= new THREE.MeshStandardMaterial({ col
 function bullwheelMaterial() {
   wheelMat ??= new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.55 });
   return wheelMat;
-}
-
-// the podium under the hall: a concrete base with a timber-clad, windowed band on the long sides, and the stair
-// from the deck down to the pad on the side of the nearby run (local frame as midStationGeometry)
-const podiumCache = new Map();
-// the podium's colliders: its body as drawn (the larch boards stand ~0.3 m proud of the hall: a box 0.4 m inside
-// that left you standing in them) and the stair down its outside (podiumGeometry: same numbers)
-function podiumColliders(c, yaw, side) {
-  const st = -(side || 1), lx = st * ((HALL_W - 0.5) / 2 + 1.05), z0 = 4.8 - 16 * 0.42, z1 = 7.6, lz = (z0 + z1) / 2;
-  const cy = Math.cos(yaw), sy = Math.sin(yaw);
-  return [
-    { x: c.x, z: c.z, hw: HALL_W / 2 - 0.05, hd: HALL_LEN / 2 - 0.1, rot: -yaw },
-    { x: c.x + lx * cy + lz * sy, z: c.z - lx * sy + lz * cy, hw: 0.85, hd: (z1 - z0) / 2, rot: -yaw },
-  ];
-}
-function podiumGeometry(side) {
-  if (podiumCache.has(side)) return podiumCache.get(side);
-  const parts = [];
-  const box = (x, y, z, sx, sy, sz, col, rx = 0) => {
-    const g = new THREE.BoxGeometry(sx, sy, sz).toNonIndexed();
-    g.applyMatrix4(new THREE.Matrix4().compose(_p.set(x, y, z), _q.setFromEuler(_e.set(rx, 0, 0)), _s.set(1, 1, 1)));
-    const n = g.attributes.position.count, cols = new Float32Array(n * 3);
-    _c.set(col);
-    for (let i = 0; i < n; i++) { cols[i * 3] = _c.r; cols[i * 3 + 1] = _c.g; cols[i * 3 + 2] = _c.b; }
-    g.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-    parts.push(g);
-  };
-  const W = HALL_W - 0.5, L = HALL_LEN - 0.6, top = HALL_BASE + 0.1, hw = W / 2, hl = L / 2;
-  const CONC = '#8f9297', CONC_D = '#74777c', WOOD = ['#80593a', '#77522f', '#8a6240'], GLASS = '#26384a', WHITE = '#f2f2ef', STEEL_D = '#6b7178';
-  box(0, (top - 4) / 2, 0, W, top + 4, L, CONC); // the core, down into the ground
-  box(0, top - 0.12, 0, W + 0.3, 0.24, L + 0.3, CONC_D); // deck edge under the hall's floor
-  for (const sx of [-1, 1]) {
-    // larch boards over the long sides, with windows into the machine rooms
-    const boards = 30;
-    for (let i = 0; i < boards; i++) {
-      const z = -hl + 0.6 + (i + 0.5) * ((L - 1.2) / boards);
-      box(sx * (hw + 0.04), 1.75, z, 0.06, 2.3, (L - 1.2) / boards - 0.03, WOOD[i % 3]);
-    }
-    for (const z of [-8.5, -3, 3, 8.5]) {
-      box(sx * (hw + 0.09), 1.85, z, 0.06, 1.2, 2.6, WHITE);
-      box(sx * (hw + 0.12), 1.85, z, 0.05, 1.0, 2.4, GLASS);
-    }
-  }
-  for (const sz of [-1, 1]) {
-    // the ends under the cabin lanes: larch boards over a concrete plinth, a steel fascia under the deck
-    const boards = 34;
-    for (let i = 0; i < boards; i++) {
-      const x = -hw + 0.6 + (i + 0.5) * ((W - 1.2) / boards);
-      box(x, 1.75, sz * (hl + 0.04), (W - 1.2) / boards - 0.03, 2.3, 0.06, WOOD[i % 3]);
-    }
-    box(0, 0.3, sz * (hl + 0.03), W - 0.4, 0.6, 0.06, CONC_D);
-    box(0, top - 0.45, sz * (hl + 0.08), W + 0.2, 0.35, 0.08, STEEL_D);
-  }
-  // stair down the outside of the podium, from the hall's floor to the pad
-  const st = -(side || 1), steps = 16, rise = DECK / steps, run = 0.42, sxs = st * (hw + 1.05), z0 = 4.8, z1 = 7.6;
-  for (let i = 0; i < steps; i++) box(sxs, DECK - (i + 1) * rise - 0.04, z0 - (i + 0.5) * run, 1.5, 0.08, run + 0.02, '#9a9ea4');
-  box(sxs, DECK - 0.04, (z0 + z1) / 2, 1.5, 0.08, z1 - z0 + 0.1, '#9a9ea4'); // landing at the top
-  const sl = Math.hypot(steps * run, DECK), ang = Math.atan2(DECK, steps * run), zc = z0 - (steps * run) / 2;
-  for (const o of [-0.78, 0.78]) {
-    box(sxs + o, DECK / 2 - 0.12, zc, 0.08, 0.3, sl, STEEL_D, -ang);
-    box(sxs + o, DECK / 2 + 0.85, zc, 0.05, 0.05, sl, STEEL_D, -ang);
-  }
-  box(sxs + st * 0.78, DECK + 0.55, (z0 + z1) / 2, 0.05, 1.1, z1 - z0, STEEL_D); // landing rail
-  box(sxs + st * 0.78, DECK + 1.1, (z0 + z1) / 2, 0.07, 0.07, z1 - z0, STEEL_D);
-  const geo = mergeGeometries(parts);
-  parts.forEach((p) => p.dispose());
-  geo.computeBoundingSphere();
-  podiumCache.set(side, geo);
-  return geo;
 }
 
 // ------------------------------------------------------------------ crash padding around tower bases
@@ -1185,12 +833,6 @@ export class Lifts {
   get mp() { return this._mp || null; }
   set mp(v) { this._mp = v || null; for (const l of this.lines) l.setDwell(!!v); }
 
-  /** Swap every mid-station to the Meshy hall (the gltf of models/gondola_terminal) or back to the built hall (null). */
-  setMidModel(gltf) {
-    if (gltf) this.models.gondola_terminal = gltf;
-    for (const l of this.lines) if (l.mid) { l.useHall = !!gltf; l.buildMid(this.models, this.colliders); }
-  }
-
   /** Debug: per lift, the lowest cabin / chair bottom over the ground along the line (both ways, out of the stations) and the towers added for it. */
   clearanceReport() {
     return this.lines.map((l) => {
@@ -1287,7 +929,6 @@ export class Lifts {
       return { seat };
     }
     this.ride = null;
-    if (line.termHall) return { exit: line.terminalExit(r.up) }; // down the stair beside the terminal hall
     const spec = line.spec;
     const end = r.up ? spec.top : spec.bottom;
     const dir = line.dir.clone().multiplyScalar(r.up ? 1 : -1);

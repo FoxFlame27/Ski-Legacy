@@ -175,7 +175,6 @@ const MODEL_LIST = [
   // job props (all optional: jobs fall back to built-in props)
   'job_board', 'delivery_backpack', 'patrol_backpack', 'mail_bag', 'ski_glove', 'ski_goggles', 'beanie', 'compact_camera', 'rescue_sled', 'smartphone',
   'rental_shop', 'gondola_cabin', 'chairlift_chair', 'lift_tower',
-  'gondola_terminal', // the gondola mid-station hall (lifts.js MESHY_MID)
   'chair_terminal', 'chair_bullwheel', // the chairlift terminals: operator hut + bullwheel (lifts.js MESHY_CHAIR)
   'pine_tree', 'pine_tree2', 'hotel_chalet', 'mountain_hut', 'race_arch', 'ticket_booth', 'snow_cannon', 'lamp_post',
   // decoration props

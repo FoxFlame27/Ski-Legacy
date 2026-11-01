@@ -1,6 +1,7 @@
 // Ski gear catalogue, lift prices and persistent save data.
 import { migrateCharacter } from './characters.js';
 import { MP } from '../net/mode.js';
+import { SETTING_KEYS } from '../core/settings.js';
 
 export const SKIS = [
   { id: 'rental', name: 'Rental Carver', model: 'ski_rental', price: 50, rent: true, speed: 1.0, grip: 1.0, desc: 'Basic rental skis. Forgiving and slow-ish. Returned at the end of your stay.' },
@@ -81,7 +82,7 @@ export function loadSave() {
 let resetting = false; // (a reset in progress: nothing writes the old save back, e.g. the unload handlers in main.js)
 // this machine's settings, not progress: kept in the single-player save even while multiplayer has swapped `save`
 // (a graphics change in multiplayer reloads the page, and was lost; net/session.js restoreSave keeps them too)
-export const DEVICE_PREFS = ['quality', 'qualitySet', 'qualityCap', 'sensitivity', 'volume'];
+export const DEVICE_PREFS = ['quality', 'qualitySet', 'qualityCap', 'sensitivity', 'volume', ...SETTING_KEYS]; // (+ the SETTINGS screen's, core/settings.js)
 export function writeSave() {
   if (resetting) return;
   // multiplayer: `save` holds the server profile, never written over the single-player save; the session pushes

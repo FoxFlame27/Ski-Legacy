@@ -21,6 +21,7 @@ import * as THREE from 'three';
 import { world } from '../world/world.js';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { Tricks, wrapPi, CRASH_IMPACT } from './tricks.js';
+import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera shake)
 import { weatherFx } from '../world/sky.js'; // (Oct 30 2026: blizzard / föhn gusts, föhn's heavier snow)
 
 const G = 9.81;
@@ -1324,7 +1325,7 @@ export class Player {
     // high-speed buffeting: a few layered low-amplitude oscillations (no per-frame noise)
     const t = now * 0.001;
     const fast = this.mode === 'ski' && !this.air ? smoothstep(15, 36, sp) : 0;
-    const vib = fast * 0.009 + this.shake * 0.05;
+    const vib = live.camShake ? fast * 0.009 + this.shake * 0.05 : 0;
     const jitter = _jit.set(
       (Math.sin(t * 57) * 0.6 + Math.sin(t * 31.7 + 1) * 0.4) * vib,
       (Math.sin(t * 49 + 2) * 0.6 + Math.sin(t * 23.3) * 0.4) * vib,
@@ -1389,7 +1390,7 @@ export class Player {
       cam.position.y += this.camDip;
       cam.up.set(0, 1, 0);
       cam.lookAt(focus);
-      const fov = this.tpFov + clamp(sp - 10, 0, 30) * 0.4 + this.fovKick * 2 + this.airBlend * 2;
+      const fov = this.tpFov + (live.fov - 65) + clamp(sp - 10, 0, 30) * 0.4 + this.fovKick * 2 + this.airBlend * 2;
       cam.fov = lerp(cam.fov, fov, 1 - Math.exp(-dt * 3));
     }
     cam.updateProjectionMatrix();
@@ -1474,7 +1475,7 @@ export class Player {
     // speed: a fine buzz through the skis (more when skidding), and the shake of hard landings
     const fast = skiing && !this.air ? smoothstep(14, 34, sp) : 0;
     const chatter = skiing && !this.air ? clamp(this.sideslip, 0, 1) * smoothstep(5, 14, sp) : 0;
-    const amp = fast * 0.0022 + chatter * 0.0035 + this.shake * 0.014;
+    const amp = live.camShake ? fast * 0.0022 + chatter * 0.0035 + this.shake * 0.014 : 0;
     const t = S.t;
     const buzz = (a, b, c) => (Math.sin(t * a + c) * 0.6 + Math.sin(t * b + c * 1.7) * 0.4) * amp;
     S.e.set(pitch + buzz(71, 43.7, 0.3), yaw0 + S.lead + this.lookYaw + Math.PI + buzz(53, 31.3, 1.9) * 0.5, roll + buzz(59, 37.1, 4.1) * 0.7, 'YXZ');
@@ -1498,7 +1499,7 @@ export class Player {
     cam.position.copy(eye);
     cam.quaternion.copy(q);
     cam.near = FP_NEAR;
-    const fov = (this.fpFov || FP_FOV) + clamp(sp - 10, 0, 30) * FP_FOV_SPEED + this.fovKick * 2.5;
+    const fov = (this.fpFov || FP_FOV) + (live.fov - 65) + clamp(sp - 10, 0, 30) * FP_FOV_SPEED + this.fovKick * 2.5;
     cam.fov = lerp(cam.fov, fov, 1 - Math.exp(-h * 3));
     // when not dragging the mouse, the view slowly re-centers on the skis while skiing
     if (skiing && now - this.lastMouse > 1500) {

@@ -24,6 +24,7 @@ import { TyreTracks } from './tyretracks.js';
 import { addDent, applyDents, repairInstance } from './cardamage.js';
 import { setPlates } from './carconfig.js';
 import { weatherFx } from '../world/sky.js'; // (icy roads after bad weather)
+import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera shake)
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 // m: the cockpit camera over your eyes (the seated rig's; that body now sits SEAT_LIFT higher in the seat, Oct 31 2026,
 // so the camera stays where the user set it: "move the camera a bit higher", Oct 27)
@@ -1033,7 +1034,7 @@ export class Drive {
       cam.up.set(0, 1, 0);
       cam.lookAt(eye.add(dir));
       cam.near = 0.05;
-      cam.fov += (72 + sp * 0.08 - cam.fov) * (1 - Math.exp(-dt * 4));
+      cam.fov += (72 + (live.fov - 65) + sp * 0.08 - cam.fov) * (1 - Math.exp(-dt * 4));
       d.inst.full.visible = true;
       this.cabinGlass(true);
       this.cabinLight(true);
@@ -1069,7 +1070,7 @@ export class Drive {
       cam.up.set(0, 1, 0);
       cam.lookAt(focus);
       cam.near = 0.1;
-      cam.fov += (62 + sp * 0.2 - cam.fov) * (1 - Math.exp(-dt * 3));
+      cam.fov += (62 + (live.fov - 65) + sp * 0.2 - cam.fov) * (1 - Math.exp(-dt * 3));
       this.cabinGlass(false);
       this.cabinLight(false);
       p.view = 'third';
@@ -1077,7 +1078,7 @@ export class Drive {
     }
     // shake: a crash (strong, dying away), rough snow at speed (subtle)
     // (a crash: a hard random jolt dying away; rough snow: a smooth wobble that grows with speed, never jitter)
-    const k = this.shake * this.shake * 0.16, kr = rough * Math.min(1, sp / 25) * 0.01, tt = performance.now() / 1000;
+    const sk = live.camShake ? 1 : 0, k = this.shake * this.shake * 0.16 * sk, kr = rough * Math.min(1, sp / 25) * 0.01 * sk, tt = performance.now() / 1000;
     if (k > 1e-4) cam.position.add(_w.set((Math.random() - 0.5) * k, (Math.random() - 0.5) * k, (Math.random() - 0.5) * k));
     if (kr > 1e-4) cam.position.add(_w.set(Math.sin(tt * 19.3) * kr * 0.6, (Math.sin(tt * 27.1) + Math.sin(tt * 41.7 + 1.3) * 0.5) * kr, Math.sin(tt * 23.9 + 0.7) * kr * 0.4));
     cam.updateProjectionMatrix();

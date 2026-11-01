@@ -141,7 +141,7 @@ export class Audio {
     }
     const ctx = (this.ctx = new (window.AudioContext || window.webkitAudioContext)());
     this.master = ctx.createGain();
-    this.master.gain.value = this.volume;
+    this.master.gain.value = this.muted ? 0 : this.volume;
     // glue: a gentle bus compressor, then a soft clipper so the sum never hard-clips
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -12; comp.knee.value = 10; comp.ratio.value = 6; comp.attack.value = 0.004; comp.release.value = 0.22;
@@ -155,7 +155,7 @@ export class Audio {
     this.musicBus = ctx.createGain(); this.musicBus.gain.value = this.musicVolume; this.musicBus.connect(this.master);
     this.duck = ctx.createGain(); // announcer ducking, then a little under a near siren (setSiren)
     this.sirenDuck = ctx.createGain(); this.duck.connect(this.sirenDuck).connect(this.musicBus);
-    this.voiceBus = ctx.createGain(); this.voiceBus.gain.value = 0.95; this.voiceBus.connect(this.master);
+    this.voiceBus = ctx.createGain(); this.voiceBus.gain.value = this.voiceVolume ?? 0.95; this.voiceBus.connect(this.master);
 
     // shared noise buffers (procedural fallbacks + helicopter)
     const len = ctx.sampleRate * 2;
@@ -397,7 +397,11 @@ export class Audio {
     return true;
   }
 
-  setVolume(v) { this.volume = v; if (this.master) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02); }
+  setVolume(v) { this.volume = v; if (this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : v, this.ctx.currentTime, 0.02); }
+  /** SETTINGS · Mute in background: silence everything while the window is out of focus (the volume stays set). */
+  setMuted(m) { this.muted = !!m; this.setVolume(this.volume); }
+  /** Announcer / train PA volume 0..1. */
+  setVoiceVolume(v) { this.voiceVolume = clamp(+v || 0, 0, 1); if (this.voiceBus) this.voiceBus.gain.setTargetAtTime(this.voiceVolume, this.ctx.currentTime, 0.05); }
   /** Music volume 0..1, separate from the master / SFX volume. */
   setMusicVolume(v) { this.musicVolume = clamp(+v || 0, 0, 1); if (this.musicBus) this.musicBus.gain.setTargetAtTime(this.musicVolume, this.ctx.currentTime, 0.05); }
   /** Sound-effects volume 0..1 (everything but music and announcer). */

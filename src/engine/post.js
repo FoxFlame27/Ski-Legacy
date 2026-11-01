@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { quality, screenDPR } from './quality.js';
+import { live } from '../core/settings.js'; // (SETTINGS: bloom, speed streaks, vignette, brightness)
 
 const QUAD_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -326,11 +327,12 @@ export class Post {
     const r = this.renderer, cam = this.camera, u = this.final.material.uniforms;
     u.uDamage.value = damage;
     // streaks fade in from ~75 km/h, full by ~140 km/h; eased so bumps in speed don't flicker them
-    const target = this.scene === this.worldScene ? THREE.MathUtils.smoothstep(speed || 0, 21, 39) : 0;
+    const target = this.scene === this.worldScene && live.speedFx ? THREE.MathUtils.smoothstep(speed || 0, 21, 39) : 0;
     this.speedFx += (target - this.speedFx) * (1 - Math.exp(-dt * 3));
     u.uSpeed.value = this.speedFx;
     u.uTime.value = (u.uTime.value + dt) % 1000;
-    u.toneMappingExposure.value = r.toneMappingExposure;
+    u.toneMappingExposure.value = r.toneMappingExposure * live.brightness;
+    u.uVignette.value = live.vignette ? 0.18 : 0;
 
     // the sun's shadow map on the lighter presets (quality.shadow.every): redrawn every other frame while the view
     // stays put (walking about, standing, looking round), every frame once it moves on (skiing, driving)
@@ -345,8 +347,9 @@ export class Post {
     r.setRenderTarget(this.target);
     r.render(this.scene, cam);
 
-    if (this.bloom.enabled) u.tBloom.value = this.bloom.renderTexture(r, this.target.texture);
-    u.uBloom.value = this.bloom.enabled ? 1 : 0;
+    const bloomOn = this.bloom.enabled && live.bloom;
+    if (bloomOn) u.tBloom.value = this.bloom.renderTexture(r, this.target.texture);
+    u.uBloom.value = bloomOn ? 1 : 0;
     if (this.useAO) {
       const a = this.aoQuad.material.uniforms, P = cam.projectionMatrix.elements;
       u.uNearFar.value.set(cam.near, cam.far);

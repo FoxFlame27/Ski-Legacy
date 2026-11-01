@@ -23,6 +23,7 @@ import { Decor } from './world/decor.js';
 import { loadAll, loadGLB } from './core/assets.js';
 import { Input } from './core/input.js';
 import { Audio } from './core/audio.js';
+import { live, syncLive } from './core/settings.js'; // SETTINGS screen (Nov 1 2026): values the systems read live
 import { SkierRig } from './player/skier.js';
 import { Player } from './player/player.js';
 import { Trails, Spray, skierFX } from './fx/snowfx.js';
@@ -109,6 +110,7 @@ let bests = null; // personal-best cards in free ride (top speed, longest jump, 
 installHeightFog();
 installLazyHiddenMatrices();
 loadSave();
+syncLive(save);
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
@@ -131,7 +133,7 @@ if (save.qualitySet !== 'user' || !normalizeQuality(save.quality)) {
 }
 save.quality = setQuality(save.quality);
 const DPR = screenDPR();
-const basePR = () => Math.min(DPR * quality.scale, quality.prCap);
+const basePR = () => Math.min(DPR * quality.scale, quality.prCap) * live.renderScale; // (SETTINGS · Render scale)
 
 renderer.setPixelRatio(basePR());
 renderer.setSize(innerWidth, innerHeight);
@@ -143,8 +145,8 @@ renderer.shadowMap.type = quality.shadow.soft ? THREE.PCFSoftShadowMap : THREE.P
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 32000);
 const env = new Environment(renderer, scene);
-env.setShadowQuality(quality.shadow);
-env.fogScale = quality.fog;
+env.setShadowQuality(shadowSpec());
+env.fogScale = quality.fog * live.fog;
 env.hour = save.hour;
 
 const input = new Input(canvas);
@@ -322,6 +324,7 @@ async function boot() {
   rig.addTo(scene);
   player = new Player({ rig, input, camera, colliders, vegetation, audio });
   player.sensitivity = save.sensitivity;
+  player.view = live.defaultView === 'first' ? 'first' : 'third'; // (SETTINGS · Starting view)
   player.cameraBlockers = village.cameraBlockers;
   player.onStep = (x, z, heading, side) => trails.footprint(x, z, heading, side);
   // flat loading areas where standing on skis is fine: lift stations and race starts
@@ -1981,8 +1984,8 @@ function applyQuality(name, persist = true) {
     renderer.shadowMap.type = quality.shadow.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     scene.traverse((o) => { if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true; });
   }
-  env.setShadowQuality(quality.shadow);
-  env.fogScale = quality.fog;
+  env.setShadowQuality(shadowSpec());
+  env.fogScale = quality.fog * live.fog;
   post.dispose();
   post = new Post(renderer, scene, camera);
   if (interior.active) post.setView(interior.scene, interior.camera);
@@ -2050,7 +2053,8 @@ function menuThrottle() {
     renderer.setSize(innerWidth, innerHeight);
     post?.setSize(innerWidth, innerHeight);
   }
-  const now = performance.now(), gap = paused ? 250 : !started ? 30 : 0;
+  // (SETTINGS · Frame rate limit: 30 or 60 fps in the game; 1 ms of slack so a 60 Hz screen never skips a frame at 60)
+  const now = performance.now(), gap = paused ? 250 : !started ? 30 : live.fpsCap ? 1000 / live.fpsCap - 1 : 0;
   if (gap && now - lastRender < gap) return true;
   lastRender = now;
   return false;
@@ -2079,6 +2083,7 @@ function loopFault(where, e) {
 function loop() {
   requestAnimationFrame(loop);
   if (menuThrottle()) return;
+  if (live.showFps) fpsTick();
   let dt = 0;
   try { dt = loopUpdate(); } catch (e) { loopFault('update', e); }
   try {
@@ -2410,10 +2415,60 @@ function loopUpdate() {
   return dt;
 }
 
+// ---------------------------------------------------------------- SETTINGS (Nov 1 2026, the user: "a lot more settings")
+// The sun's shadows follow the preset unless SETTINGS · Shadows is off (no shadow pass at all, as on Super Performance).
+function shadowSpec() { return live.shadows ? quality.shadow : { ...quality.shadow, size: 0 }; }
+// HUD pieces on / off, HUD scale and notification size: body classes and CSS variables (style.css "SETTINGS · HUD")
+function applyHudPrefs() {
+  const b = document.body.classList;
+  b.toggle('hud-no-speedo', !live.showSpeedo);
+  b.toggle('hud-no-info', !live.showInfo);
+  b.toggle('hud-no-money', !live.showMoney);
+  document.documentElement.style.setProperty('--hud-scale', String(live.hudScale || 1));
+  document.documentElement.style.setProperty('--flash-scale', String({ s: 0.85, m: 1, l: 1.3 }[live.flashSize] || 1));
+  if (fpsEl) fpsEl.hidden = !live.showFps;
+}
+// SETTINGS · Show FPS: frames actually drawn, averaged over half a second (top centre, above the HUD and menus)
+let fpsEl = null, fpsN = 0, fpsAt = 0;
+function fpsTick() {
+  if (!fpsEl) {
+    fpsEl = document.createElement('div');
+    fpsEl.id = 'fps-counter';
+    document.body.appendChild(fpsEl);
+  }
+  fpsEl.hidden = false;
+  fpsN++;
+  const now = performance.now();
+  if (!fpsAt) fpsAt = now;
+  if (now - fpsAt >= 500) { fpsEl.textContent = `${Math.round((fpsN * 1000) / (now - fpsAt))} FPS`; fpsN = 0; fpsAt = now; }
+}
+// a value changed in SETTINGS (menu.js has stored it): the systems that need a call get one; the others read `live`
+function applySetting(k) {
+  syncLive(save);
+  switch (k) {
+    case 'renderScale': resetDynRes(); setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr); break;
+    case 'shadows': env.setShadowQuality(shadowSpec()); break;
+    case 'fog': env.fogScale = quality.fog * live.fog; break;
+    case 'musicVolume': audio.setMusicVolume(live.musicVolume); break;
+    case 'sfxVolume': audio.setSfxVolume(live.sfxVolume); break;
+    case 'voiceVolume': audio.setVoiceVolume(live.voiceVolume); break;
+    case 'muteUnfocused': audio.setMuted(live.muteUnfocused && !document.hasFocus()); break;
+    case 'defaultView': if (player && !player.viewBeforeRide && player.mode !== 'sit') player.view = live.defaultView === 'first' ? 'first' : 'third'; break;
+    default: applyHudPrefs();
+  }
+}
+
 // intro plays while the world loads in the background; then the menu over the live panorama
 audio.init();
 audio.setVolume(save.volume ?? 0.8);
-audio.setMusicVolume(save.musicVolume ?? 0.7);
+audio.setMusicVolume(live.musicVolume);
+audio.setSfxVolume(live.sfxVolume);
+audio.setVoiceVolume(live.voiceVolume);
+// (SETTINGS · Mute in background: silent while another window has the focus)
+addEventListener('blur', () => { if (live.muteUnfocused) audio.setMuted(true); });
+addEventListener('focus', () => audio.setMuted(false));
+document.addEventListener('visibilitychange', () => audio.setMuted(live.muteUnfocused && document.hidden));
+applyHudPrefs();
 menu = new Menu({
   characters: PLAYER_CHARACTERS, audio,
   onStart: (sel) => startFromMenu(sel),
@@ -2435,6 +2490,7 @@ menu = new Menu({
   },
   onSens: (v) => { save.sensitivity = v; if (player) player.sensitivity = v; writeSave(); },
   onVolume: (v) => audio.setVolume(v),
+  onSetting: (k) => applySetting(k), // every other SETTINGS row (core/settings.js): applied at once
   // multiplayer (net/session.js): MULTIPLAYER -> START, the name on first launch, BACK while connecting
   onMultiplayer: (sel) => startMultiplayer(sel),
   onMpName: (name) => mpRegister(name),

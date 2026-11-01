@@ -1,4 +1,5 @@
 // Keyboard + pointer-lock mouse input.
+import { live } from './settings.js';
 // down(code): held · hit(code): pressed this frame · up(code): released this frame.
 export class Input {
   constructor(canvas) {
@@ -28,7 +29,7 @@ export class Input {
     addEventListener('blur', () => { this.keys.clear(); this.released.clear(); });
     addEventListener('mousemove', (e) => {
       if (!this.locked && !this.lookDrag) return;
-      this.mdx += e.movementX; this.mdy += e.movementY;
+      this.mdx += e.movementX; this.mdy += live.invertY ? -e.movementY : e.movementY; // (SETTINGS · Invert mouse Y)
     });
     addEventListener('wheel', (e) => { this.wheel += Math.sign(e.deltaY); }, { passive: true });
     document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === canvas; });

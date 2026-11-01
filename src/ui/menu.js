@@ -12,6 +12,52 @@ import { save, writeSave, resetSave, skiById } from '../game/economy.js';
 import { QUALITY_ORDER, QUALITY_LABELS, normalizeQuality } from '../engine/quality.js';
 import { fmtTime, CONTROLS, keysHTML } from './hud.js';
 import { PLAYER_CHARACTERS } from '../game/characters.js';
+import { SETTING_DEFAULTS } from '../core/settings.js';
+
+// ------------------------------------------------------------------ SETTINGS rows
+// (Nov 1 2026, the user: "a lot more settings"): a section header (a string) or a row. kind 'range' (a slider, its
+// value shown by fmt), 'toggle' (Off / On) or 'choice' (segmented options [value, label]). Values live flat in the save
+// (defaults: core/settings.js); main.js applies each change at once (Menu onSetting), the systems read core/settings.js `live`.
+const pct = (v) => `${Math.round(v * 100)}%`;
+const TOGGLE_OPTS = [[false, 'Off'], [true, 'On']];
+const SET_ROWS = [
+  'GRAPHICS',
+  { kind: 'quality', label: 'Graphics preset' },
+  { key: 'renderScale', label: 'Render scale', kind: 'range', min: 0.5, max: 1, step: 0.05, fmt: pct },
+  { key: 'shadows', label: 'Shadows', kind: 'toggle' },
+  { key: 'bloom', label: 'Bloom (glowing lights)', kind: 'toggle' },
+  { key: 'fog', label: 'Haze', kind: 'choice', opts: [[0.6, 'Light'], [1, 'Normal'], [1.4, 'Heavy']] },
+  { key: 'brightness', label: 'Brightness', kind: 'range', min: 0.7, max: 1.3, step: 0.05, fmt: pct },
+  { key: 'fpsCap', label: 'Frame rate limit', kind: 'choice', opts: [[30, '30'], [60, '60'], [0, 'Unlimited']] },
+  { key: 'fullscreen', label: 'Fullscreen', kind: 'toggle' },
+  'AUDIO',
+  { key: 'volume', label: 'Master volume', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct, def: 0.8 },
+  { key: 'musicVolume', label: 'Music', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: 'sfxVolume', label: 'Sound effects', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: 'voiceVolume', label: 'Announcer & PA', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct },
+  { key: 'muteUnfocused', label: 'Mute in background', kind: 'toggle' },
+  'CONTROLS',
+  { key: 'sensitivity', label: 'Mouse sensitivity', kind: 'range', min: 0.3, max: 2.5, step: 0.1, fmt: (v) => `${v.toFixed(1)}x`, def: 1 },
+  { key: 'invertY', label: 'Invert mouse Y', kind: 'toggle' },
+  'CAMERA',
+  { key: 'fov', label: 'Field of view', kind: 'range', min: 50, max: 95, step: 1, fmt: (v) => `${Math.round(v)}°` },
+  { key: 'defaultView', label: 'Starting view', kind: 'choice', opts: [['third', 'Third person'], ['first', 'First person']] },
+  { key: 'camShake', label: 'Camera shake', kind: 'toggle' },
+  { key: 'speedFx', label: 'Speed streaks', kind: 'toggle' },
+  { key: 'vignette', label: 'Vignette', kind: 'toggle' },
+  'HUD',
+  { key: 'speedUnit', label: 'Speed unit', kind: 'choice', opts: [['kmh', 'km/h'], ['mph', 'mph']] },
+  { key: 'clock12', label: 'Clock', kind: 'choice', opts: [[false, '24-hour'], [true, '12-hour']] },
+  { key: 'showSpeedo', label: 'Speedometer', kind: 'toggle' },
+  { key: 'showInfo', label: 'Location & clock', kind: 'toggle' },
+  { key: 'showForecast', label: 'Weather forecast line', kind: 'toggle' },
+  { key: 'showMoney', label: 'Money', kind: 'toggle' },
+  { key: 'nameTags', label: 'Player names (multiplayer)', kind: 'toggle' },
+  { key: 'hudScale', label: 'HUD size', kind: 'range', min: 0.8, max: 1.3, step: 0.05, fmt: pct },
+  { key: 'flashSize', label: 'Notification size', kind: 'choice', opts: [['s', 'Small'], ['m', 'Normal'], ['l', 'Large']] },
+  { key: 'showFps', label: 'Show FPS', kind: 'toggle' },
+];
+const SET_BY_KEY = Object.fromEntries(SET_ROWS.filter((r) => r.key).map((r) => [r.key, r]));
 
 // ------------------------------------------------------------------ brush art
 
@@ -219,6 +265,7 @@ export class Menu {
     this.onQuality = o.onQuality;
     this.onSens = o.onSens;
     this.onVolume = o.onVolume;
+    this.onSetting = o.onSetting;         // (key, value): every other SETTINGS row (core/settings.js), applied by main.js
     this.mpActive = o.mpActive;           // () => true while in multiplayer (settings hide "Reset all progress")
     this.onMultiplayer = o.onMultiplayer; // MULTIPLAYER ... START: main.js connects (see mpName / mpStatus / mpError)
     this.onMpName = o.onMpName;           // the name typed on first launch -> main.js registers it
@@ -572,22 +619,55 @@ export class Menu {
     const qs = QUALITY_ORDER; // super performance, performance, balanced, high, ultra (engine/quality.js)
     const q = normalizeQuality(save.quality) || 'high';
     this.pendingQ = q;
+    const rows = SET_ROWS.map((r) => {
+      if (typeof r === 'string') return `<div class="mp-head set-sec">${esc(r)}</div>`;
+      if (r.kind === 'quality') {
+        return `<div class="mp-row" data-f data-row="quality"><span>${esc(r.label)}</span><div class="seg">${qs.map((x) => `<button tabindex="-1" data-q="${x}" class="${q === x ? 'on' : ''}">${QUALITY_LABELS[x]}</button>`).join('')}</div></div>`;
+      }
+      const v = this.prefValue(r);
+      if (r.kind === 'range') {
+        return `<div class="mp-row" data-f data-row="range" data-key="${r.key}"><span>${esc(r.label)}</span><div class="set-range"><input type="range" tabindex="-1" min="${r.min}" max="${r.max}" step="${r.step}" value="${v}"><em>${esc(r.fmt(v))}</em></div></div>`;
+      }
+      const opts = r.kind === 'toggle' ? TOGGLE_OPTS : r.opts;
+      return `<div class="mp-row" data-f data-row="choice" data-key="${r.key}"><span>${esc(r.label)}</span><div class="seg">${opts.map(([ov, ol], i) => `<button tabindex="-1" data-i="${i}" class="${ov === v ? 'on' : ''}">${esc(ol)}</button>`).join('')}</div></div>`;
+    }).join('');
     return {
       logo: 'small', shade: 'left',
       hints: [['updown', 'Select'], ['leftright', 'Adjust'], ['enter', 'Apply'], ['esc', 'Back']],
-      html: `${this.head('SETTINGS', 'Performance runs smoothest on laptops, Super Performance on 8 GB / older Macs · changing the graphics restarts the game')}
-        <div class="menu-panel settings" data-stagger style="--clip:${brushClip(160, 5, 4)}">
-          <div class="mp-row" data-f data-row="quality"><span>Graphics</span><div class="seg">${qs.map((x) => `<button tabindex="-1" data-q="${x}" class="${q === x ? 'on' : ''}">${QUALITY_LABELS[x]}</button>`).join('')}</div></div>
-          <div class="mp-row" data-f data-row="sens"><span>Mouse sensitivity</span><input class="m-sens" type="range" min="0.3" max="2.5" step="0.1" value="${save.sensitivity}"></div>
-          <div class="mp-row" data-f data-row="vol"><span>Volume</span><input class="m-vol" type="range" min="0" max="1" step="0.05" value="${save.volume ?? 0.8}"></div>
+      html: `${this.head('SETTINGS', 'Performance runs smoothest on laptops, Super Performance on 8 GB / older Macs · changing the graphics preset restarts the game')}
+        <div class="menu-panel settings set-main" data-stagger style="--clip:${brushClip(160, 5, 4)}"><div class="set-scroll">
+          ${rows}
+          <div class="mp-head set-sec">PLAYER</div>
           <div class="mp-row" data-f data-row="skier"><span>Skier</span><button class="mp-skier" tabindex="-1">Change skier</button></div>
           ${this.accountInfo ? '<div class="mp-row" data-f data-row="account"><span>Account</span><button class="mp-skier mp-acct" tabindex="-1">Rename / delete</button></div>' : ''}
           ${this.mpActive?.() ? '' : '<div class="mp-row" data-f data-row="reset"><span>Progress</span><button class="mp-danger" tabindex="-1">Reset all progress</button></div>'}
-        </div>`,
+        </div></div>`,
       after: (el) => this.bindSettings(el),
       keys: { left: () => this.adjustSetting(-1), right: () => this.adjustSetting(1), enter: () => this.activateSetting() },
       back: () => this.go(this.inGame ? 'pause' : 'main', -1),
     };
+  }
+
+  // the current value of a SETTINGS row (the save, or its default; Fullscreen asks the document)
+  prefValue(r) {
+    if (r.key === 'fullscreen') return !!document.fullscreenElement;
+    return save[r.key] ?? r.def ?? SETTING_DEFAULTS[r.key];
+  }
+
+  // store a SETTINGS value and apply it at once (main.js: onSens / onVolume as before, onSetting for the rest)
+  setPref(r, v) {
+    if (r.key === 'fullscreen') {
+      try {
+        if (v && !document.fullscreenElement) document.documentElement.requestFullscreen?.()?.catch?.(() => this.fsSync?.());
+        else if (!v && document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => this.fsSync?.());
+      } catch { this.fsSync?.(); }
+      return;
+    }
+    if (r.key === 'sensitivity') { save.sensitivity = v; writeSave(); this.onSens?.(v); return; }
+    save[r.key] = v;
+    writeSave();
+    if (r.key === 'volume') this.onVolume?.(v);
+    else this.onSetting?.(r.key, v);
   }
 
   bindSettings(el) {
@@ -595,11 +675,22 @@ export class Menu {
       this.audio?.play('click');
       if (b.dataset.q !== save.quality) this.onQuality?.(b.dataset.q);
     }));
-    const sens = el.querySelector('.m-sens'), vol = el.querySelector('.m-vol');
-    sens.addEventListener('input', () => this.onSens?.(parseFloat(sens.value)));
-    vol.addEventListener('input', () => { save.volume = parseFloat(vol.value); writeSave(); this.onVolume?.(save.volume); });
-    // sliders give the keyboard back to the menu once released
-    for (const s of [sens, vol]) s.addEventListener('change', () => s.blur());
+    for (const row of el.querySelectorAll('[data-row="range"]')) {
+      const r = SET_BY_KEY[row.dataset.key], inp = row.querySelector('input'), out = row.querySelector('em');
+      inp.addEventListener('input', () => { const v = parseFloat(inp.value); out.textContent = r.fmt(v); this.setPref(r, v); });
+      inp.addEventListener('change', () => inp.blur()); // (sliders give the keyboard back to the menu once released)
+    }
+    for (const row of el.querySelectorAll('[data-row="choice"]')) {
+      row.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => { this.audio?.play('click'); this.pickChoice(row, Number(b.dataset.i)); }));
+    }
+    // Fullscreen follows the document (F11, Esc, the Electron menu)
+    const fsSync = () => {
+      if (!el.isConnected) { document.removeEventListener('fullscreenchange', fsSync); return; }
+      const row = el.querySelector('[data-key="fullscreen"]');
+      if (row) this.markChoice(row, document.fullscreenElement ? 1 : 0);
+    };
+    document.addEventListener('fullscreenchange', fsSync);
+    this.fsSync = fsSync; // (a refused request puts the row back)
     el.querySelector('.mp-skier:not(.mp-acct)')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
     el.querySelector('.mp-acct')?.addEventListener('click', () => { this.audio?.play('click'); this.acctState = null; this.go('account', 1); });
     const reset = el.querySelector('.mp-danger');
@@ -608,6 +699,22 @@ export class Menu {
       if (reset.dataset.confirm) resetSave();
       else { reset.dataset.confirm = '1'; reset.textContent = 'Click again to confirm'; }
     });
+  }
+
+  markChoice(row, i) { row.querySelectorAll('[data-i]').forEach((b) => b.classList.toggle('on', Number(b.dataset.i) === i)); }
+
+  // a segmented / on-off row: option i is picked, stored and applied
+  pickChoice(row, i) {
+    const r = SET_BY_KEY[row.dataset.key];
+    const opts = r.kind === 'toggle' ? TOGGLE_OPTS : r.opts;
+    i = ((i % opts.length) + opts.length) % opts.length;
+    this.markChoice(row, i);
+    this.setPref(r, opts[i][0]);
+  }
+
+  choiceIndex(row) {
+    const r = SET_BY_KEY[row.dataset.key], opts = r.kind === 'toggle' ? TOGGLE_OPTS : r.opts, v = this.prefValue(r);
+    return Math.max(0, opts.findIndex(([ov]) => ov === v));
   }
 
   adjustSetting(d) {
@@ -620,12 +727,15 @@ export class Menu {
       this.pendingQ = qs[i];
       bs.forEach((b) => b.classList.toggle('pending', b.dataset.q === this.pendingQ && this.pendingQ !== save.quality));
       this.audio?.play('tick');
-    } else if (kind === 'sens' || kind === 'vol') {
+    } else if (kind === 'range') {
       const inp = row.querySelector('input');
       const step = parseFloat(inp.step) || 0.1;
       const v = Math.min(parseFloat(inp.max), Math.max(parseFloat(inp.min), parseFloat(inp.value) + d * step));
       inp.value = String(Math.round(v * 100) / 100);
       inp.dispatchEvent(new Event('input'));
+      this.audio?.play('tick');
+    } else if (kind === 'choice') {
+      this.pickChoice(row, this.choiceIndex(row) + d); // (wraps round; an on / off row flips either way)
       this.audio?.play('tick');
     }
   }
@@ -634,6 +744,7 @@ export class Menu {
     const row = this.focusables[this.fi];
     const kind = row?.dataset.row;
     if (kind === 'quality') { if (this.pendingQ && this.pendingQ !== save.quality) this.onQuality?.(this.pendingQ); }
+    else if (kind === 'choice') { this.pickChoice(row, this.choiceIndex(row) + 1); this.audio?.play('click'); }
     else if (kind === 'skier') row.querySelector('.mp-skier').click();
     else if (kind === 'account') row.querySelector('.mp-acct').click();
     else if (kind === 'reset') row.querySelector('.mp-danger').click();
@@ -791,6 +902,7 @@ export class Menu {
     if (i === this.fi) return;
     list.forEach((b, j) => b.classList.toggle('is-focus', j === i));
     this.fi = i;
+    if (list[i].closest('.set-scroll')) list[i].scrollIntoView({ block: 'nearest' }); // (SETTINGS: the long list scrolls with the focus)
     if (!silent) this.audio?.play('tick');
   }
 

@@ -1,5 +1,6 @@
 // HUD + menus (DOM overlay). Deliberately minimal.
 import { SKIS, GEAR_YOU_OWN, PRICES, save, writeSave } from '../game/economy.js';
+import { live } from '../core/settings.js'; // (SETTINGS: speed unit, clock format, forecast line)
 import { brushSVG, brushClip } from './menu.js'; // (used at call time only: menu.js imports this module too)
 import './travel.css';
 
@@ -35,6 +36,8 @@ export const fmtTime = (t) => {
   return `${m}:${((c - m * 6000) / 100).toFixed(2).padStart(5, '0')}`;
 };
 const setText = (id, v) => { const e = $(id); if (e.textContent !== v) e.textContent = v; };
+// "14:05" -> "2:05 PM" (SETTINGS · Clock: 12-hour)
+const to12h = (t) => { const [h, m] = String(t).split(':'); const H = +h || 0; return `${H % 12 || 12}:${m || '00'} ${H < 12 ? 'AM' : 'PM'}`; };
 
 /**
  * Every control, grouped for the menu's CONTROLS screen: [keys, action, detail?].
@@ -174,7 +177,7 @@ export class HUD {
     const env = globalThis.__game?.env;
     if (!env) return;
     // (Oct 30, the user: "remove avalanche": only the forecast here now)
-    const txt = env.forecastLabel || '';
+    const txt = live.showForecast ? env.forecastLabel || '' : '';
     if (el.textContent !== txt) el.textContent = txt;
   }
 
@@ -182,9 +185,11 @@ export class HUD {
     const sp = $('speedo');
     if (sp.hidden === speedo) sp.hidden = !speedo; // (hidden while riding: lifts, train, bus, heli)
     if (this.hintAt && speed > 2 && performance.now() - this.hintAt > 3000) this.fadeHint();
-    setText('speed-val', String(Math.round(speed * 3.6)));
+    const mph = live.speedUnit === 'mph';
+    setText('speed-val', String(Math.round(speed * (mph ? 2.23694 : 3.6))));
+    setText('speed-unit', mph ? 'MPH' : 'KM/H');
     setText('loc', loc);
-    setText('clock', `${time} · ${weather}`);
+    setText('clock', `${live.clock12 ? to12h(time) : time} · ${weather}`);
     this.wxLine();
     setText('ski-name', ski);
     const p = $('prompt');

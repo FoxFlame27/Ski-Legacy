@@ -921,3 +921,30 @@ body.photo-mode #racehud, body.photo-mode #ride-hint, body.photo-mode #crosshair
 .mpn-err { min-height: 1.5em; margin-top: calc(var(--u) * 10); font: 600 var(--t-sm)/1.4 var(--ui); color: #c4262e; }
 .mpw-text { margin-top: calc(var(--u) * 6); font: italic 700 calc(var(--u) * 26)/1.2 var(--num); letter-spacing: 0.04em; color: var(--blue); }
 .mpw-text.bad { color: #c4262e; }
+
+/* ---- SETTINGS · HUD (Nov 1 2026, the user: "a lot more settings"): pieces off, HUD scale, notification size and the
+   FPS counter (main.js applyHudPrefs / fpsTick sets the body classes and the variables) ---- */
+body.hud-no-speedo #speedo, body.hud-no-money #money,
+body.hud-no-info #loc, body.hud-no-info #clock, body.hud-no-info #wx-sub { display: none !important; }
+#info, #waypoint, #money, #speedo, #prompt, #race-hud { zoom: var(--hud-scale, 1); }
+#flash { font-size: calc(20px * var(--flash-scale, 1)); }
+#fps-counter { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 90; padding: 2px 8px; border-radius: 6px; pointer-events: none;
+  background: rgba(0, 14, 44, 0.55); color: #fff; font: 700 11px/1.3 var(--ui); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+
+/* ---- SETTINGS screen: section headers, a scrolling list inside the paper panel (the paper stays put), value labels ---- */
+.menu-panel.settings.set-main { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; width: calc(var(--u) * 700); padding-right: calc(var(--u) * 18); }
+.set-scroll { min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; margin: 0 calc(var(--u) * -14); padding: 0 calc(var(--u) * 26) 0 calc(var(--u) * 14);
+  scrollbar-width: thin; scrollbar-color: rgba(21, 70, 200, 0.45) transparent; }
+.set-scroll::-webkit-scrollbar { width: 6px; }
+.set-scroll::-webkit-scrollbar-thumb { background: rgba(21, 70, 200, 0.45); border-radius: 3px; }
+.set-scroll .mp-head.set-sec { padding: calc(var(--u) * 18) 0 calc(var(--u) * 6); border-bottom: 2px solid rgba(21, 70, 200, 0.18); }
+.set-scroll .mp-head.set-sec:first-child { padding-top: calc(var(--u) * 4); }
+.set-scroll .mp-row { min-height: calc(var(--u) * 42); padding-top: calc(var(--u) * 5); padding-bottom: calc(var(--u) * 5); font-size: var(--t-sm); }
+.set-scroll .mp-row > span { flex: 1 1 auto; min-width: 0; }
+.set-scroll .mp-row > .seg, .set-scroll .mp-row > .set-range, .set-scroll .mp-row > button { flex: none; }
+.set-scroll .mp-row:last-child { border-bottom: 0; }
+.set-range { display: flex; align-items: center; gap: calc(var(--u) * 10); }
+.set-range input[type=range] { width: calc(var(--u) * 200); }
+.set-range em { min-width: calc(var(--u) * 48); text-align: right; font: 700 var(--t-sm)/1 var(--ui); font-style: normal; color: var(--blue-dim); font-variant-numeric: tabular-nums; }
+.set-scroll .seg button { padding: calc(var(--u) * 6) calc(var(--u) * 10); }
+.set-scroll .mp-row[data-row="quality"] > .seg { flex: 0 1 auto; min-width: 0; }

@@ -19,6 +19,7 @@ import { RAIL, railAt, railNearest } from '../world/railroute.js';
 import { busRoads, laneDistance, ROAD_HALF } from './bus/roads.js';
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 import { K, usingPad } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+import { nearColliders } from './nearcols.js'; // (Nov 1 perf pass: the colliders round the sled, not all of them)
 /** The sled's controls in the keys in use: "W throttle · S brake · A/D steer ...", or the controller's stick and buttons. */
 const sledKeys = (hb) => `${usingPad() ? `${K('move')} throttle · brake · steer` : `${K('forward')} throttle · ${K('back')} brake · ${K('left')}/${K('right')} steer`} · ${K('sprint')} boost${hb ? ` · ${K('jump')} handbrake` : ''} · ${K('interact')} get off`;
 
@@ -493,7 +494,9 @@ export class Snowmobiles {
         const dx = cx - t.x, dz = cz - t.z, l = Math.hypot(dx, dz) || 1;
         hit(dx / l, dz / l, R + (t.crown ?? t.r) - l, false, 's' in t && !('trunk' in t) ? 'rock' : 'tree');
       }
-      for (const c of this.colliders) {
+      const near = nearColliders(this._near ||= {}, this.colliders, cx, cz, R + 1, performance.now() / 1000); // (Nov 1 perf pass: the colliders round the sled, game/nearcols.js)
+      for (let ci = 0; ci < near.length; ci++) {
+        const c = near[ci];
         if (c === d.s.collider) continue;
         const size = c.r ?? Math.max(c.hw, c.hd);
         if (Math.abs(c.x - cx) > size + R + 0.5 || Math.abs(c.z - cz) > size + R + 0.5) continue;

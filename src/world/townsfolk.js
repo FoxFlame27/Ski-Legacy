@@ -318,7 +318,7 @@ export class Townsfolk {
     loadFanKits().then((kits) => {
       if (!kits.length) return;
       const rnd = mulberry32(6612);
-      try { if (village?.shopDoor) this.village = new Village({ kits, rnd, parent: this.group, village, layout, colliders, n: quality.name === 'super' ? 20 : 56 }); } catch (e) { console.warn('village people', e); } // (Super Performance: fewer villagers)
+      try { if (village?.shopDoor) this.village = new Village({ kits, rnd, parent: this.group, village, layout, colliders, n: quality.name === 'super' ? 20 : quality.name === 'performance' ? 34 : 56 }); } catch (e) { console.warn('village people', e); } // (Super Performance / Performance (Nov 1 perf pass): fewer villagers)
       try { this.bases = new Bases({ kits, rnd, parent: this.group, layout }); } catch (e) { console.warn('base people', e); }
     }).catch((e) => console.warn('townsfolk', e));
   }

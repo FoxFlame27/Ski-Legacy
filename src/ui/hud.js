@@ -247,23 +247,27 @@ export class HUD {
     if (sp.hidden === speedo) sp.hidden = !speedo; // (hidden while riding: lifts, train, bus, heli)
     if (this.hintAt && speed > 2 && performance.now() - this.hintAt > 3000) this.fadeHint();
     const mph = live.speedUnit === 'mph';
-    setText('speed-val', String(Math.round(speed * (mph ? 2.23694 : 3.6))));
+    // (Nov 1 perf pass: the number 12x a second, not every frame: a text change re-lays out the HUD)
+    const nowMs = performance.now();
+    if (nowMs - (this.speedAt || 0) > 80) { this.speedAt = nowMs; setText('speed-val', String(Math.round(speed * (mph ? 2.23694 : 3.6)))); }
     setText('speed-unit', mph ? 'MPH' : 'KM/H');
     setText('loc', loc);
     setText('clock', `${live.clock12 ? to12h(time) : time} · ${weather}`);
     this.wxLine();
     setText('ski-name', ski);
     const p = $('prompt');
-    if (prompt) { p.hidden = false; setText('prompt-text', prompt); p.querySelector('.key').textContent = promptKey; } else p.hidden = true;
+    // (Nov 1 perf pass: DOM writes only on a change)
+    if (prompt) { if (p.hidden) p.hidden = false; setText('prompt-text', prompt); const pk = p.querySelector('.key'); if (pk.textContent !== promptKey) pk.textContent = promptKey; } else if (!p.hidden) p.hidden = true;
     setText('objective', objective || '');
     const wp = $('waypoint');
     if (waypoint) {
-      wp.hidden = false;
+      if (wp.hidden) wp.hidden = false;
       let d = waypoint.ang - heading;
       d = Math.atan2(Math.sin(d), Math.cos(d));
-      $('wp-arrow').style.transform = `rotate(${(-d * 180) / Math.PI}deg)`;
+      const deg = Math.round((-d * 180) / Math.PI); // (whole degrees: the style is written only when it turns)
+      if (this.wpDeg !== deg) { this.wpDeg = deg; $('wp-arrow').style.transform = `rotate(${deg}deg)`; }
       setText('wp-text', `${waypoint.label} · ${waypoint.dist < 1000 ? Math.round(waypoint.dist) + ' m' : (waypoint.dist / 1000).toFixed(1) + ' km'}`);
-    } else wp.hidden = true;
+    } else if (!wp.hidden) wp.hidden = true;
   }
 
   prompt(text) { const p = $('prompt'); if (text) { p.hidden = false; setText('prompt-text', text); } else p.hidden = true; }

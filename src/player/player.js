@@ -24,6 +24,7 @@ import { Tricks, wrapPi, CRASH_IMPACT } from './tricks.js';
 import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera shake)
 import { rumble } from '../core/gamepad.js'; // (controller vibration: landings, wipeouts, bumps)
 import { weatherFx } from '../world/sky.js'; // (Oct 30 2026: blizzard / föhn gusts, föhn's heavier snow)
+import { nearColliders } from '../game/nearcols.js'; // (Nov 1 perf pass: the colliders round you, not all of them)
 
 const G = 9.81;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -1093,7 +1094,7 @@ export class Player {
     // (groundHeight takes a surface up to 0.6 m above its hint: the hint puts that at WALK_STEP above the boots)
     let ground = world.groundHeight(p.x, p.z, feetY + WALK_STEP - 0.6);
     // low obstacles with a flat top (rocks, benches, bollards, piers under a deck) within a step: stepped up onto
-    for (const c of this.colliders) { if (c.carOnly || c.noStep) continue; // (a vehicles-only barrier: people walk through; a guardrail: jumped over, never walked along on top)
+    for (const c of this.nearCols(p.x, p.z)) { if (c.carOnly || c.noStep) continue; // (a vehicles-only barrier: people walk through; a guardrail: jumped over, never walked along on top)
       if (c.top === undefined || c.top <= ground || c.top > feetY + WALK_STEP) continue;
       const R = 0.35, reach = (c.r ?? Math.max(c.hw, c.hd)) + R;
       if (Math.abs(p.x - c.x) > reach || Math.abs(p.z - c.z) > reach) continue;
@@ -1138,10 +1139,12 @@ export class Player {
   // ------------------------------------------------------------------ collisions
   // `feetY`: height of the skis; obstacles with a known top below it are cleared (jumped over).
   // Colliders without a `top` count as ~2.5 m tall (`above`: height of the skis over the snow).
+  // (Nov 1 perf pass) the colliders round you (game/nearcols.js: refreshed every 0.15 s / 12 m), not the whole world's
+  nearCols(x, z) { return nearColliders(this._nearCols ||= {}, this.colliders, x, z, 2, performance.now() / 1000); }
   collide(speed, feetY = -Infinity, above = 0) {
     const p = this.pos;
     const R = 0.35;
-    for (const c of this.colliders) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
+    for (const c of this.nearCols(p.x, p.z)) { if (c.carOnly) continue; // (a vehicles-only barrier: people walk through)
       if (c.top !== undefined ? feetY > c.top : above > 2.5) continue;
       // cheap reject first: most colliders (nets, signs, markers) are far away
       const reach = (c.r ?? Math.max(c.hw, c.hd)) + R;
@@ -1294,13 +1297,16 @@ export class Player {
         focus.z + Math.cos(this.camYaw) * Math.cos(this.camPitch) * dist,
       );
       // keep above the snow, also halfway so a bump between us doesn't swallow the view
-      const gy = world.groundHeight(desired.x, desired.z, focus.y) + 0.5;
+      // (Nov 1 perf pass: not while a vehicle places the camera after us this frame (cameraTaken: driving, main.js):
+      // its own camera checks the ground and the walls; these two height lookups and the ray were thrown away)
+      const taken = !!this.cameraTaken;
+      const gy = taken ? -Infinity : world.groundHeight(desired.x, desired.z, focus.y) + 0.5;
       if (desired.y < gy) desired.y = gy;
       const mx = (desired.x + focus.x) / 2, mz = (desired.z + focus.z) / 2, my = (desired.y + focus.y) / 2;
-      const gm = world.groundHeight(mx, mz, focus.y) + 0.35;
+      const gm = taken ? -Infinity : world.groundHeight(mx, mz, focus.y) + 0.35;
       if (my < gm) desired.y += (gm - my) * 2;
       // keep the camera out of buildings: pull it in front of the first wall between it and the player
-      if (this.cameraBlockers?.length) {
+      if (!taken && this.cameraBlockers?.length) {
         const to = _l.copy(desired).sub(focus);
         const len = to.length();
         this._ray ??= new THREE.Raycaster();

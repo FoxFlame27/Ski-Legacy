@@ -122,14 +122,17 @@ if (save.qualitySet !== 'user' || !normalizeQuality(save.quality)) {
   const d = detectQuality(renderer);
   // (Oct 30, the user: "default settings is performance": every machine starts on Performance; SUPER PERFORMANCE only
   // when the player picks it in SETTINGS (live windows stay on Performance), the frame-rate drops stop there too)
+  // (Nov 1 perf pass: Performance is sized for ~60 fps on an M2 / Intel Iris at any screen size now (its 1.6 MP pixel
+  // budget, no shadows): the GPU guess (detectQuality, screen size included) is only logged)
   const autoFloor = (q) => (q === 'super' ? 'performance' : q);
+  d.guess = d.quality;
   d.quality = 'performance';
   save.quality = d.quality;
   // (a lower preset the frame rate needed last time: start there, see autoQ)
   const cap = autoFloor(normalizeQuality(save.qualityCap));
   if (cap && QUALITY_ORDER.indexOf(cap) < QUALITY_ORDER.indexOf(d.quality)) { save.quality = cap; d.quality = `${cap} (capped by the last session)`; }
   save.qualitySet = 'auto';
-  console.info(`Graphics: ${d.quality} (detected: ${d.gpu || 'unknown GPU'}, ${d.mem} GB, ${d.cores} cores)`);
+  console.info(`Graphics: ${d.quality} (detected: ${d.gpu || 'unknown GPU'}, ${d.mem} GB, ${d.cores} cores, ${d.screenMP} MP screen; guess ${d.guess})`);
   writeSave();
 }
 save.quality = setQuality(save.quality);
@@ -1935,7 +1938,7 @@ document.getElementById('map').addEventListener('click', () => { document.getEle
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  if (quality.ss) { resetDynRes(); renderer.setPixelRatio(menuRes && !started ? menuPR() : dynRes.pr); } // (the supersampling budget follows the window)
+  if (quality.ss || quality.mp) { resetDynRes(); renderer.setPixelRatio(menuRes && !started ? menuPR() : dynRes.pr); } // (the supersampling / pixel budget follows the window)
   renderer.setSize(innerWidth, innerHeight);
   post?.setSize(innerWidth, innerHeight);
 });
@@ -1955,6 +1958,24 @@ const PANO_LOOK = new THREE.CatmullRomCurve3([
 ], true, 'centripetal');
 let titleT = 0.02, saveTimer = 0, spotTimer = 0, lastDay = env.hour, interaction = null, prevMode = null;
 const tmpLight = new THREE.Color(), tmpLight2 = new THREE.Color();
+const UP_Y = new THREE.Vector3(0, 1, 0), _camDir = new THREE.Vector3(); // (per-frame temporaries: no garbage each frame)
+// (Nov 1 perf pass) the HUD's place name: looked up 4x a second (piste / hut / lift / corridor lookups), not every frame
+let hudLocAt = -1e9, hudLocText = '';
+function hudLocation() {
+  const now = performance.now();
+  if (now - hudLocAt < 250) return hudLocText;
+  hudLocAt = now;
+  hudLocText = (express?.riding && express.locName()) || railway.locName(player.pos) || express?.locName(player.pos) || locationName();
+  return hudLocText;
+}
+// (Nov 1 perf pass) the lighter presets (quality.lowCpu: Performance 1, Super Performance 2) run a few LOD / streaming
+// bookkeeping systems that need no dt every (lowCpu + 1)th frame, staggered so they don't land on the same frame
+let cpuFrame = 0;
+const CPU_SLOT = { dressing: 0, parking: 1 };
+function cpuTurn(key) {
+  const n = (quality.lowCpu || 0) + 1;
+  return n <= 1 || (cpuFrame + (CPU_SLOT[key] || 0)) % n === 0;
+}
 
 // Dynamic resolution: hold the preset's frame rate by scaling the render resolution between its floor and its
 // base scale. Coarse steps with hysteresis: every change reallocates the render targets.
@@ -1962,6 +1983,9 @@ const dynRes = { pr: 1, min: 1, max: 1, acc: 0, frames: 0, low: 0, high: 0 };
 function resetDynRes() {
   dynRes.max = basePR();
   dynRes.min = Math.min(dynRes.max, Math.max(DPR * quality.dynMin, quality.dynFloor));
+  // (Nov 1 perf pass, Performance / Super Performance (quality.dynMP): under the fpsDrop rate the drawing buffer may
+  // shrink to dynMP x the preset's pixel budget (0.55: ~0.74 x the resolution each way), back up as the rate allows)
+  if (quality.dynMP) dynRes.min = Math.min(dynRes.max, Math.max(0.35, dynRes.max * Math.sqrt(quality.dynMP)));
   dynRes.pr = dynRes.max;
   dynRes.low = dynRes.high = dynRes.acc = dynRes.frames = 0;
 }
@@ -2123,6 +2147,7 @@ function loop() {
 // every system's update for one frame; returns the frame's dt (for the render)
 function loopUpdate() {
   if (prof.on) { prof.last = performance.now(); prof.frames++; }
+  cpuFrame++;
   const realDt = clock.getDelta(), rawDt = Math.min(0.05, realDt);
   if (started && !paused) { // paused frames are throttled on purpose
     const frameDt = Math.min(0.25, Math.max(realDt, 1 / 240)); // (a one-off streaming hitch says little)
@@ -2168,7 +2193,7 @@ function loopUpdate() {
   if (started) { try { buildMode.update(dt, input); } catch (e) { loopFault('build mode', e); } } // (no-op until you're inside your rented chalet)
   // the ticket seller idles at the booth window
   if (seller.root.position.distanceToSquared(player.pos) < 150 * 150) {
-    seller.update(dt, { mode: 'idle', heading: talk.yawFor(seller, sellerHeading, dt), speed: 0, crouch: 0, lean: 0, plow: 0, normal: new THREE.Vector3(0, 1, 0) });
+    seller.update(dt, { mode: 'idle', heading: talk.yawFor(seller, sellerHeading, dt), speed: 0, crouch: 0, lean: 0, plow: 0, normal: UP_Y });
   }
 
   // day rollover -> new day, day pass expires
@@ -2236,6 +2261,7 @@ function loopUpdate() {
   } else hud.rideHint(null);
   mark('ride');
 
+  player.cameraTaken = !!drive?.active; // (the car places the camera after this: player.js skips its own ground / wall checks)
   player.update(dt);
   if (railway.riding) railway.applyCamera(camera, { ...input, hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
   if (express?.riding) express.applyCamera(camera, { hit: (c) => input.hit(c), sensitivity: player.sensitivity, mdx: menu ? 0 : input.mdx, mdy: menu ? 0 : input.mdy, wheel: input.wheel }, dt);
@@ -2293,7 +2319,7 @@ function loopUpdate() {
   mark('village');
   decor.update(dt, Math.max(env.nightFactor, (1 - env.dayFactor) * 0.6));
   dressing.userData.setNight?.(Math.max(env.nightFactor, (1 - env.dayFactor) * 0.6)); // same as the village signs
-  dressing.userData.update?.(camera.position); // hides far net chunks (fewer draw calls)
+  if (cpuTurn('dressing')) dressing.userData.update?.(camera.position); // hides far net chunks (fewer draw calls)
   mark('dressing');
 
   // inside the cloud layer: whiteout
@@ -2361,7 +2387,7 @@ function loopUpdate() {
   if (started) {
     const ski = player.hasSkis ? skiById(save.skis)?.name : '';
     const weather = env.weather === 'clear' && env.nightFactor > 0.5 ? 'Clear night' : env.weatherLabel;
-    const cd = camera.getWorldDirection(new THREE.Vector3());
+    const cd = camera.getWorldDirection(_camDir);
     const camYaw = Math.atan2(cd.x, cd.z);
     if (interior.active) {
       hud.frame({
@@ -2381,7 +2407,7 @@ function loopUpdate() {
       prompt: null, objective: '', heading: camYaw, waypoint: null,
     });
     else hud.frame({
-      speed: railway.riding ? railway.speed : express?.riding ? express.speed : skibus.riding ? skibus.speed : drive?.active ? drive.speed : sleds.active ? sleds.speed : heli.active ? heli.speed : player.mode === 'walk' ? 0 : player.speed, loc: (express?.riding && express.locName()) || railway.locName(player.pos) || express?.locName(player.pos) || locationName(), time: env.timeString, weather,
+      speed: railway.riding ? railway.speed : express?.riding ? express.speed : skibus.riding ? skibus.speed : drive?.active ? drive.speed : sleds.active ? sleds.speed : heli.active ? heli.speed : player.mode === 'walk' ? 0 : player.speed, loc: hudLocation(), time: env.timeString, weather,
       ski: vehicleName() || (player.skisOn || !player.hasSkis ? ski : `${ski} (off)`),
       prompt: ridePrompt || interaction?.label || (player.hasSkis && !player.skisOn && player.mode === 'walk' && !player.isFlatHere() ? 'Put on skis' : null), promptKey: ridePrompt || interaction ? 'E' : 'G', objective: races.active ? '' : (rideLine || heli.hudLine() || sleds.hudLine() || taxi?.hudLine() || jobs.hudLine() || objective()),
       heading: camYaw, waypoint: races.active ? null : heli.active ? heli.waypoint(player.pos) || waypoint() : waypoint(), // (also while riding: train, bus, lifts, snowmobile)
@@ -2419,7 +2445,7 @@ function loopUpdate() {
   roadTunnels?.update(dt, camera); // (built near, lids with the terrain's finest LOD, the interior only when near)
   mark('secrets');
   flags.update(dt, env);
-  parking?.update(camera); // car-park lamps at night; parked cars detailed only up close
+  if (cpuTurn('parking')) parking?.update(camera); // car-park lamps at night; parked cars detailed only up close
   mark('living');
   // the racer lines up inside the start house: hide its walls while the camera is in there
   if (modes.group !== startHouseGroup) {

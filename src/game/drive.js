@@ -27,6 +27,7 @@ import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera 
 import { rumble } from '../core/gamepad.js'; // (controller vibration: crashes, knocks, landings, rough ground)
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 import { K, kc, usingPad, onPromptChange } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+import { nearColliders } from './nearcols.js'; // (Nov 1 perf pass: the colliders round the car, not all of them)
 // m: the cockpit camera over your eyes (the seated rig's; that body now sits SEAT_LIFT higher in the seat, Oct 31 2026,
 // so the camera stays where the user set it: "move the camera a bit higher", Oct 27)
 const COCKPIT_RAISE = 0.1 - SEAT_LIFT;
@@ -363,7 +364,7 @@ export class Drive {
       const pd = (v, want, up, down) => (want > v ? Math.min(want, v + up * dt) : Math.max(want, v - down * dt));
       d.thrP = pd(d.thrP || 0, thr, 3.4, 7), d.brkP = pd(d.brkP || 0, brk, 5, 10);
       const thrE = thr ? Math.max(0.05, d.thrP) : d.thrP > 0.02 ? d.thrP : 0, brkE = brk ? Math.max(0.08, d.brkP) : d.brkP > 0.02 ? d.brkP : 0;
-      const n = Math.max(1, Math.ceil(dt / (1 / 120)));
+      const n = Math.max(1, Math.ceil(dt * 120 - 0.05)); // (Nov 1 perf pass: a 60 Hz frame of 16.8 ms is 2 sub-steps, not 3: up to 1/117 s each)
       if (d.crash) this.crashStep(dt);
       else for (let i = 0; i < n; i++) { this.step(dt / n, thrE, brkE, steerIn, hb, thr, brk); if (d.crash) break; }
       if (!d.spec.electric && d.start < 2.4) {
@@ -668,7 +669,10 @@ export class Drive {
         }
       }
       const cars = this.carColliders();
-      for (const c of this.colliders) {
+      // (Nov 1 perf pass: only the colliders round the car, game/nearcols.js; it was the whole world's list, 3x a sub-step)
+      const near = nearColliders(this._near ||= {}, this.colliders, cx, cz, R + 1, performance.now() / 1000);
+      for (let ci = 0; ci < near.length; ci++) {
+        const c = near[ci];
         if (c === d.e.collider || cars.has(c) || c.rail || c.police === 'local' || (c.bus && !d.crash)) continue; // (other cars: bash(); guardrails: their line colliders; your patrol cars: police.js; the ski buses: bash() too, a heavy box you crash into (Oct 30 2026, "also make it so you can crash into a bus"), only a soft bump while your wreck slides)
         const size = c.r ?? Math.max(c.hw, c.hd);
         // (Oct 31 2026, the user: "make sure you break these lamps after 100 kph": a street lamp (minV) only over
@@ -1064,7 +1068,7 @@ export class Drive {
       if (want.y < gy) want.y = gy;
       const bl = this.cameraBlockers;
       if (bl?.length) {
-        const dv = want.clone().sub(focus), len = dv.length();
+        const dv = (this._dv ||= new THREE.Vector3()).subVectors(want, focus), len = dv.length();
         _ray.set(focus, dv.divideScalar(len)); _ray.far = len;
         const hit = _ray.intersectObjects(bl, true)[0];
         if (hit) want.copy(focus).addScaledVector(_ray.ray.direction, Math.max(1.5, hit.distance - 0.4));

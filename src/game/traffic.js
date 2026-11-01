@@ -24,6 +24,7 @@ import { lampsOn, LightPool, hazardPhase } from './carlights.js';
 import { carPath, linkPath, prepPath, followPath } from './carpath.js';
 import { quality } from '../engine/quality.js'; // (Super Performance: fewer cars around you, quality.traffic)
 import { breakables } from '../world/breakables.js'; // (a knocked car through a guardrail at 100 km/h+: aiRail)
+import { nearColliders } from './nearcols.js'; // (Nov 1 perf pass: the colliders round a car, not all of them)
 
 const N_CARS = 12, N_SCENIC = 6, NEAR_WANT = 6, SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, BACK_R = 4.6; // (BACK_R: the arc into / out of a bay)
 // the bus-stop ends of the bus roads are the bus's: cars turn round (or leave, out of sight) this far before them
@@ -815,7 +816,10 @@ export class Traffic {
 
   // ---- what a car may never move into: a guardrail, the bus, a building, a parked car, a rock, a tree (trunk)
   hard(c, x, z, r) {
-    for (const o of this.colliders) {
+    // (Nov 1 perf pass: the colliders round this car, game/nearcols.js, not the whole world's list a probe)
+    const L = nearColliders(c.nearCols ||= {}, this.colliders, x, z, r + 1, performance.now() / 1000, { R: 80, every: 0.25, move: 15 });
+    for (let i = 0; i < L.length; i++) {
+      const o = L[i];
       if (o === c.collider || o.traffic || (o.soft && !o.rail && !o.bus)) continue;
       const R = o.r ?? Math.max(o.hw, o.hd);
       if (Math.abs(o.x - x) > R + r + 0.5 || Math.abs(o.z - z) > R + r + 0.5) continue;

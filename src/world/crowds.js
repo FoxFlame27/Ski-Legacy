@@ -528,7 +528,7 @@ export class Crowds {
   constructor(scene, o = {}) {
     this.scene = scene;
     this.level = qualityLevel(o.quality);
-    this.density = (o.quality || quality.name) === 'super' ? 0.25 : [0.6, 0.7, 0.85, 1, 1][this.level]; // (Super Performance: a thin crowd)
+    this.density = (o.quality || quality.name) === 'super' ? 0.25 : (o.quality || quality.name) === 'performance' ? 0.4 : [0.6, 0.7, 0.85, 1, 1][this.level]; // (Super Performance: a thin crowd; Performance, Nov 1 perf pass: thinner)
     this.shadows = this.level >= 3;
     this.sets = [];
     this.group = new THREE.Group();

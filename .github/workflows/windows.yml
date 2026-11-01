@@ -1,0 +1,70 @@
+# Builds the Windows game (one portable file: Ski Legacy.exe, nothing to install) on a real Windows machine.
+# Runs on every push to legacy-express and on demand (Actions tab -> Windows build -> Run workflow).
+# The exe is kept as a build artifact and attached to the rolling "latest-windows" GitHub Release, so there is a
+# fixed download link to send around:
+#   https://github.com/FoxFlame27/Ski-Legacy/releases/download/latest-windows/Ski-Legacy.exe
+name: Windows build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [legacy-express]
+
+permissions:
+  contents: write # to move the latest-windows tag and update its release
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build Ski Legacy.exe
+        run: npm run app:win
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ski-Legacy-Windows
+          path: release/Ski Legacy.exe
+          if-no-files-found: error
+          compression-level: 0 # the exe is already compressed
+
+      # GitHub turns spaces in release file names into dots, so the release copy gets a dash instead
+      - name: Prepare release file
+        shell: bash
+        run: cp "release/Ski Legacy.exe" release/Ski-Legacy.exe
+
+      - name: Move the latest-windows tag to this commit
+        shell: bash
+        run: |
+          git tag -f latest-windows
+          git push -f origin refs/tags/latest-windows
+
+      - name: Update the latest-windows release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-windows
+          name: Ski Legacy for Windows (latest build)
+          body: |
+            Latest Windows build of Ski Legacy (commit ${{ github.sha }}).
+            Download **Ski-Legacy.exe** and double-click it, nothing to install. Windows 10/11, 64-bit.
+            The first time, Windows SmartScreen may say it "protected your PC" (the game is not code-signed):
+            click **More info**, then **Run anyway**.
+          prerelease: false
+          make_latest: false
+          files: release/Ski-Legacy.exe
+          overwrite_files: true

@@ -22,6 +22,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { world } from './world.js';
 import { nightUniform } from './village.js';
+import { quality } from '../engine/quality.js';
 
 export const STATION_DECK = 4.35; // m: the boarding deck over the station's ground (the cabins' floor: rope 7.5 - cabin 3.1)
 const DECK = STATION_DECK;
@@ -176,10 +177,11 @@ function materials() {
 // the signs: one canvas per station (the lift's name and the station, TICKETS, ENTRANCE)
 const SIGN_W = 1024, SIGN_H = 384, NAME_H = 170;
 const UV = { name: [0, 1 - NAME_H / SIGN_H, 1, 1], tickets: [0, 0, 0.5, 0.5], entrance: [0.5, 0, 1, 0.5] };
-function signMaterial(name, sub) {
+// (extra: { h, draw(g, y0, { font, fit }) }: more canvas under the sign, drawn from y0 down: the mid-station's boards)
+function signMaterial(name, sub, extra = null) {
   if (typeof document === 'undefined') return null;
   const cv = document.createElement('canvas');
-  cv.width = SIGN_W; cv.height = SIGN_H;
+  cv.width = SIGN_W; cv.height = SIGN_H + (extra ? extra.h : 0);
   const g = cv.getContext('2d');
   const font = (w, px) => `${w} ${px}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
   const fit = (txt, w, px, max) => { let s = px; g.font = font(w, s); while (g.measureText(txt).width > max && s > 18) { s -= 2; g.font = font(w, s); } return s; };
@@ -206,6 +208,7 @@ function signMaterial(name, sub) {
     fit(txt, 700, 80, SIGN_W / 2 - 60);
     g.fillText(txt, x0 + SIGN_W / 4, SIGN_H - 192 + 124);
   }
+  if (extra) extra.draw(g, SIGN_H, { font, fit });
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
@@ -570,30 +573,87 @@ export function buildGondolaStation(o) {
 
 // ------------------------------------------------------------------ the mid-station
 // (Nov 1 2026, the user: "the MID stations — fix those!": the Meshy hall on its podium, models/gondola_terminal.glb,
-// is gone.) A pass-through intermediate station in the same language as the end stations: an elongated hall on a
-// stone-clad plinth that the haul rope runs straight through at station height (the line is straight; lifts.js
-// levels the rope to 7.5 m over the pad for +-13 m round the station), both ends open portals over the two cabin
-// channels, sized from the real rope heights. The boarding deck at the cabins' floor along both outer platforms
-// (boarding gates where the cabins crawl, +-9 m round the centre), the guide rails and tyre conveyors over both lanes
-// the length of the level rope, the operator's glass cabin on the island between the lanes, glazed long walls and
-// gables over the outer platforms between slim steel frames, the vaulted roof cantilevered over both portals, and an
-// outside stair up the long wall on the side of the nearby run (mid.side) to a door onto that platform; the lift's name
-// over both portals and on the plinth.
-// Frame: origin on the pad at the station's centre, +z up the line, the lanes at x = +-side, built with the stair on
-// -x and mirrored (mx = -1) for the other side (mx = +1 puts it on lifts.js +sideV). Five draw calls.
-// Colliders: the plinth (top at the deck), the long walls (a gap for the door), the end glazing over the outer
-// platforms, the channels' edges (deck + 1.1 m), the stair's balustrade, the operator's cabin; the deck and the stair
-// are walkable. Riders get off at the foot of the stair (lifts.js midExit: 10.6 m out, 1.8 m down the line).
-const MID_W2 = 6.6, MID_HL = 11.5, STAIR_W = 1.6, LAND0 = 4.4, LAND1 = 6.6;
+// is gone; then: "make it so you can go inside, and there's a nice interior AND a good outside" and "not too big".)
+// A compact pass-through intermediate station in the same language as the end stations: a 20 m hall that the haul
+// rope runs straight through at station height (the line is straight; lifts.js levels the rope to 7.5 m over the pad
+// for +-13 m round the station), both ends open portals over the two cabin channels, the boarding deck at the cabins'
+// floor along both outer platforms (boarding gates where the cabins crawl), the guide rails and tyre conveyors over
+// both lanes, the operator's glass cabin on the island, glazed long walls and gables between slim steel frames, the
+// vaulted roof just over both portals. The entrance side (mid.side: the nearby run) is a little wider than the far
+// side, so its platform is a waiting area (benches, a queue rail, next-cabin screens, pendant lights).
+// The plinth under the deck is a walk-in hall: a lobby behind a glazed stone front with sliding doors under a lit
+// canopy, stone-tiled floor, timber-lined walls, a warm timber ceiling with light panels at 3.6 m (under the cabin
+// channels' floor), the info / ticket desk, a lift-and-piste status board (the lift and the runs round the station),
+// lift-pass gates, the lift core's door, benches, ski racks, lockers, vending machines, and the stair up along the
+// glazed front into the stairwell opening in the deck (a glass balustrade round it) onto the waiting platform. The
+// back-of-house (machine room) strip on the far side keeps its louvres.
+// Frame: origin on the pad at the station's centre, +z up the line, the lanes at x = +-side, built with the entrance
+// on -x and mirrored (mx = -1) for the other side (mx = +1 puts it on lifts.js +sideV). Six draw calls.
+// Colliders: the plinth walls (a gap at the doors, closed to vehicles only), the lobby's furniture, the stair's side
+// and the gates (tops under the deck: walked over up there); the deck level's own colliders (the channels' edges, the
+// stairwell's balustrade, the wall over the doors, the operator's cabin, the platform's benches and rail) are returned
+// as `deckColliders`: lifts.js parks them while the player is down in the lobby (colliders have no bottom, so they
+// would wall it off). Walkable: the lobby floor, the stair (a ramp up to the deck) and the deck. Riders get off in
+// front of the doors (lifts.js midExit: 10.6 m out, 1.8 m down the line).
+const MID_WL = 7.2, MID_WR = 5.8, MID_HL = 10, PW = 0.35; // half widths (entrance side / far side), half length, wall
+export const MID_DECK_UP = 2.5; // m over the pad: above it the deck level's colliders are in place (lifts.js)
+const MC = { tileA: '#9b968e', tileB: '#7f7b74', ceil: '#cfa77a', lining: '#b9864f', oak: '#a8723f', plaster: '#ebe5da', red: '#b3262b' };
+const DIFF_COL = ['#2fa84f', '#1f6fd6', '#d62b2b', '#15181c'];
+
+// the mid-station's extra canvas (under the usual sign): the status board, the next-cabin screen, four small signs
+const MID_EXTRA_H = 640;
+const MPX = { board: [0, 384, 640, 1024], screen: [640, 384, 1024, 576], info: [640, 576, 1024, 688], cabins: [640, 688, 1024, 800], cafe: [640, 800, 1024, 912], lockers: [640, 912, 1024, 1024] };
+function drawMidExtra(g, y0, { font, fit }, o) {
+  const name = String(o.name || 'Gondola');
+  // the status board (640 x 640): the lift, its stops and the runs round the station
+  g.fillStyle = '#121a22'; g.fillRect(0, y0, 640, 640);
+  g.fillStyle = C.blue; g.fillRect(0, y0, 640, 92);
+  g.fillStyle = '#ffffff'; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  fit(name.toUpperCase(), 700, 50, 590); g.fillText(name.toUpperCase(), 26, y0 + 64);
+  g.fillStyle = '#a9bfd6'; g.font = font(600, 24); g.fillText('LIFT & PISTE STATUS', 26, y0 + 128);
+  g.fillStyle = '#2b3946'; g.fillRect(26, y0 + 142, 588, 3);
+  const rows = [{ name: name, lift: true }, ...(o.runs || []).slice(0, 6)];
+  rows.forEach((r, i) => {
+    const y = y0 + 196 + i * 62;
+    if (r.lift) { g.fillStyle = C.blue; g.fillRect(26, y - 34, 40, 40); g.fillStyle = '#fff'; g.fillRect(36, y - 22, 20, 18); }
+    else { g.fillStyle = DIFF_COL[Math.max(0, Math.min(3, r.diff | 0))]; g.beginPath(); g.arc(46, y - 14, 18, 0, Math.PI * 2); g.fill(); if ((r.diff | 0) === 3) { g.strokeStyle = '#d9dde2'; g.lineWidth = 3; g.stroke(); } }
+    g.fillStyle = '#ffffff'; fit(r.name, 600, 32, 400); g.fillText(r.name, 84, y);
+    g.fillStyle = '#39c463'; g.beginPath(); g.arc(560, y - 12, 9, 0, Math.PI * 2); g.fill();
+    g.font = font(700, 22); g.textAlign = 'right'; g.fillText('OPEN', 540, y - 4); g.textAlign = 'left';
+  });
+  g.fillStyle = '#7f93a8'; fit(`${o.place || 'Mid-station'}  ·  ↑ ${o.up || 'Summit'}  ·  ↓ ${o.down || 'Valley'}`, 500, 22, 590);
+  g.fillText(`${o.place || 'Mid-station'}  ·  ↑ ${o.up || 'Summit'}  ·  ↓ ${o.down || 'Valley'}`, 26, y0 + 618);
+  // the next-cabin screen (384 x 192)
+  const [sx0, sy0] = MPX.screen;
+  g.fillStyle = '#0b1016'; g.fillRect(sx0, sy0, 384, 192);
+  g.fillStyle = C.yellow; g.font = font(700, 26); g.fillText('NEXT CABIN', sx0 + 20, sy0 + 40);
+  g.fillStyle = '#ffffff';
+  for (const [k, lbl, t] of [[0, `▲ ${o.up || 'Summit'}`, '0:40'], [1, `▼ ${o.down || 'Valley'}`, '1:10']]) {
+    const y = sy0 + 96 + k * 60;
+    fit(lbl, 600, 30, 250); g.fillText(lbl, sx0 + 20, y);
+    g.font = font(700, 30); g.fillStyle = '#39c463'; g.fillText(t, sx0 + 290, y); g.fillStyle = '#ffffff';
+  }
+  // the small signs (384 x 112 each)
+  for (const [key, txt, bg] of [['info', 'INFO · TICKETS', C.blue], ['cabins', 'CABINS  ▸', C.dark], ['cafe', 'CAFÉ · SNACKS', '#7a4a24'], ['lockers', 'LOCKERS', C.dark]]) {
+    const [x0, yy0] = MPX[key];
+    g.fillStyle = bg; g.fillRect(x0, yy0, 384, 112);
+    g.fillStyle = '#ffffff'; g.textAlign = 'center';
+    fit(txt, 700, 50, 340); g.fillText(txt, x0 + 192, yy0 + 74);
+    g.textAlign = 'left';
+  }
+}
+
 /**
- * o: { x, y, z: the station's centre on its pad, yaw (local +z up the line), mx (+1 / -1: the stair's side), side (the
- *      rope's offset), ropeY (rope height over the pad), carH, name (the lift), place (the station's name),
+ * o: { x, y, z: the station's centre on its pad, yaw (local +z up the line), mx (+1 / -1: the entrance's side), side
+ *      (the rope's offset), ropeY (rope height over the pad), carH, name (the lift), place (the station's name),
+ *      up / down (where the cabins go), runs ([{ name, diff }]: the runs round the station, for the status board),
  *      ropeAt(z) -> [up-lane, down-lane] rope height over the pad z m along the line (either way) }
- * Returns { group, colliders, surfaces }.
+ * Returns { group, colliders, deckColliders (a subset of colliders: the deck level's), surfaces }.
  */
 export function buildGondolaMidStation(o) {
   const { x: px, y: py, z: pz, yaw, side: s, ropeY, carH, ropeAt } = o;
-  const mx = o.mx < 0 ? -1 : 1, W = MID_W2, HL = MID_HL, Ro = s + LANE, Ri = s - LANE;
+  const mx = o.mx < 0 ? -1 : 1, WL = MID_WL, WR = MID_WR, HL = MID_HL, Ro = s + LANE, Ri = s - LANE;
+  const lite = (quality.fx ?? 1) <= 0; // (Performance / Super: the lobby's small props left out)
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   const toW = (x, z) => { const X = x * mx; return { x: px + X * cy + z * sy, z: pz - X * sy + z * cy }; };
   const gAt = (x, z) => { const q = toW(x, z); return world.height(q.x, q.z) - py; };
@@ -612,57 +672,212 @@ export function buildGondolaMidStation(o) {
     }
   }
   zF = Math.max(1.5, zF); zB = Math.min(-1.5, zB);
-  const lf = clamp(rMin - carH - 0.5, 0.4, DECK - 1.1); // the channels' floor
+  // the channels' floor: just under the cabins (lifts.js keeps the rope level through the station, so this is
+  // DECK - 0.45), the lobby's ceiling under it
+  const lf = clamp(rMin - carH - 0.5, 2.9, DECK - 0.45);
+  const CEIL = Math.min(3.6, lf - 0.25), YS = CEIL + 0.04; // the lobby's ceiling, the deck slabs' soffit
 
-  // the stair: up the outside of the long wall on -x, toward +z, to the landing at the door
-  const xo = -W - STAIR_W, xi = -W, xm = (xo + xi) / 2;
-  const gd = clamp(gAt(xm, LAND0 - 7.4), -3, DECK - 1.2);
-  const rise = DECK - gd, nSteps = Math.max(3, Math.round(rise / 0.175)), dzs = 0.29, run = nSteps * dzs, zFoot = LAND0 - run;
-  let gMin = Math.min(gd, 0);
-  for (const gx of [-W, 0, W, xo]) for (const gz of [-HL, -HL / 2, 0, HL / 2, HL, zFoot]) gMin = Math.min(gMin, gAt(gx, gz));
-  const yb = gMin - 0.8;
+  // the ground: the plinth goes down past the lowest of it, the lobby's floor just over the highest inside
+  let gMin = 0, gIn = 0;
+  for (const gx of [-WL - 2.5, -WL, -WL / 2, 0, WR / 2, WR]) for (const gz of [-HL, -HL / 2, 0, HL / 2, HL]) {
+    const g = gAt(gx, gz);
+    gMin = Math.min(gMin, g);
+    if (gx >= -WL && Math.abs(gz) < HL) gIn = Math.max(gIn, g);
+  }
+  const yb = gMin - 0.8, yf = clamp(gIn + 0.08, 0.08, 0.45);
 
-  // the roof: the same shallow vault, cantilevered out over both portals
-  const Wr = W + 0.6, R = 1.1, E = roofEaves(rMax);
-  const roofTop = (x) => E + R * (1 - (x / Wr) ** 2), roofBot = (x) => roofTop(x) - ROOF_T;
-  const zr1 = HL + 1.3, zr0 = -zr1;
+  // the lobby's plan: inside the walls x0i..x1i, |z| < zi; the back-of-house wall at xB; the stair along the glazed
+  // front (x0i..xsI), its foot at zS0 by the +z end, rising toward -z to the deck at zS1; the deck's stairwell
+  // opening over it from zS1 to zO (where the stair is ~1.45 m up: headroom under the ceiling before it)
+  const x0i = -WL + PW, zi = HL - PW, xB = 2.6, xsI = -Ro - 0.7;
+  const rise = DECK - yf, nSt = Math.max(12, Math.round(rise / 0.178)), rr = rise / nSt, dzs = 0.28, run = nSt * dzs;
+  const zS0 = zi - 1.05, zS1 = zS0 - run, zO = zS0 - Math.floor(1.45 / rr) * dzs;
+  const stairY = (lz) => yf + clamp((zS0 - lz) / run, 0, 1) * rise;
+  const zD0 = -3.0, zD1 = -0.6, doorH = 2.6;               // the doors (centred 1.8 m down the line: lifts.js midExit)
+  const gx0 = -3.85, gx1 = -2.95, gatesZ = [zi - 2.1, zi - 1.1, zi - 0.1]; // the lift-pass gates (walked through toward -x)
+  const lc = { x0: -5.35, x1: gx0, z0: zi - 3.35, z1: zi - 2.2 }; // the lift core (its door faces the gates' side)
+
+  // the roof: the same shallow vault over the (slightly asymmetric) hall, just over both portals
+  const xc0 = (WR - WL) / 2, Wr = (WL + WR) / 2 + 0.45, R = 1.0, E = roofEaves(rMax);
+  const roofTop = (x) => E + R * (1 - ((x - xc0) / Wr) ** 2), roofBot = (x) => roofTop(x) - ROOF_T;
+  const zr1 = HL + 0.9, zr0 = -zr1;
   const pt = portalHeader(ropeY, rMax);
   const curve = (x0, x1, dy = 0, n = 14) => { const out = []; for (let i = 0; i <= n; i++) { const x = x0 + ((x1 - x0) * i) / n; out.push([x, roofBot(x) - dy]); } return out; };
 
   const K = new Kit();
-  // ---------------------------------------------------------------- plinth, deck, channels
-  K.box('base', -W, W, yb, lf, -HL, HL, C.stone, { top: C.laneFloor });
-  for (const [x0, x1] of [[Ro, W], [-W, -Ro], [-Ri, Ri]]) K.box('base', x0, x1, lf, DECK, -HL, HL, C.conc, { r: 0.04, top: C.pave });
-  for (const sx of [-1, 1]) K.box('base', sx * W - 0.03, sx * W + 0.03, lf - 0.08, lf - 0.02, -HL, HL, C.dark);
-  for (const sz of [-1, 1]) K.box('base', -W, W, lf - 0.08, lf - 0.02, sz * HL - 0.03, sz * HL + 0.03, C.dark);
-  // the machine rooms' louvres in the plinth on the far side
-  for (const [z0, z1] of [[-8.5, -5.5], [5.5, 8.5]]) {
-    K.box('metal', W - 0.02, W + 0.02, 0.5, 2.3, z0, z1, C.dark);
-    for (let k = 0; k < 7; k++) K.box('metal', W, W + 0.07, 0.62 + k * 0.25, 0.68 + k * 0.25, z0 + 0.05, z1 - 0.05, C.anth);
+  const bench = (x0, x1, z0, z1, y0, back = 0) => { // a timber bench on two steel frames (back: -1 / +1 the side of a backrest on x)
+    K.box('base', x0, x1, y0 + 0.42, y0 + 0.47, z0, z1, MC.oak, { r: 0.015 });
+    for (const z of [z0 + 0.25, z1 - 0.25]) K.box('metal', x0 + 0.04, x1 - 0.04, y0, y0 + 0.42, z - 0.03, z + 0.03, C.anth);
+    if (back) { const xb = back < 0 ? x0 : x1 - 0.05; K.box('base', xb, xb + 0.05, y0 + 0.55, y0 + 0.88, z0, z1, MC.oak, { r: 0.015 }); }
+  };
+  const skiRack = (x0, x1, z0, z1, y0, skis) => { // two rails on posts, skis leaning in it
+    for (const z of [z0, z1]) K.box('metal', x0, x0 + 0.06, y0, y0 + 1.25, z - 0.03, z + 0.03, C.anth);
+    for (const y of [0.45, 1.2]) K.box('metal', x0, x0 + 0.06, y0 + y, y0 + y + 0.05, z0, z1, C.steel);
+    if (skis && !lite) {
+      const cols = [MC.red, C.blue, C.yellow, C.dark, C.white, C.steel];
+      for (let i = 0, n = Math.floor((z1 - z0) / 0.24); i < n; i++) {
+        const z = z0 + 0.15 + i * 0.24, c = cols[i % cols.length];
+        K.bar('base', [x1, y0 + 0.02, z], [x0 + 0.08, y0 + 1.7, z], 0.07, c);
+        K.bar('base', [x1, y0 + 0.02, z + 0.08], [x0 + 0.08, y0 + 1.7, z + 0.08], 0.07, c);
+      }
+    }
+  };
+
+  // ---------------------------------------------------------------- the plinth: foundation, walls, deck slabs
+  K.box('base', -WL, WR, yb, 0, -HL, HL, C.stone);
+  // walls up to the deck slabs' soffit, with openings ([a, b, sill, head] along the wall): stone outside, timber inside
+  const wallZ = (x0, x1, zA, zBb, ops, col) => {
+    let z = zA;
+    for (const [a, b, y0, y1] of ops) {
+      K.box('base', x0, x1, 0, YS, z, a, col);
+      if (y0 > 0.01) K.box('base', x0, x1, 0, y0, a, b, col);
+      K.box('base', x0, x1, y1, YS, a, b, col);
+      z = b;
+    }
+    K.box('base', x0, x1, 0, YS, z, zBb, col);
+  };
+  const wallX = (z0, z1, xA, xBb, ops, col) => {
+    let x = xA;
+    for (const [a, b, y0, y1] of ops) {
+      K.box('base', x, a, 0, YS, z0, z1, col);
+      if (y0 > 0.01) K.box('base', a, b, 0, y0, z0, z1, col);
+      K.box('base', a, b, y1, YS, z0, z1, col);
+      x = b;
+    }
+    K.box('base', x, xBb, 0, YS, z0, z1, col);
+  };
+  // the glazed front (entrance side): stone piers, tall windows into the lobby, the doors
+  const front = [[-9.4, -6.6, 0.3, 3.2], [-6.0, -3.6, 0.3, 3.2], [zD0, zD1, 0, 3.0], [0.0, 2.6, 0.3, 3.2], [3.2, 6.0, 0.3, 3.2], [6.6, 9.4, 0.3, 3.2]];
+  wallZ(-WL, -WL + 0.2, -HL, HL, front, C.stone);
+  wallZ(-WL + 0.2, x0i, -zi, zi, front, MC.lining);
+  const xg = -WL + 0.17;
+  for (const [a, b, y0, y1] of front) {
+    if (a === zD0) continue;
+    K.vquad('glass', xg, a, xg, b, y0, y1, C.white);
+    for (const y of [y0, y1 - 0.06]) K.box('metal', xg - 0.05, xg + 0.05, y, y + 0.06, a, b, C.anth);
+    for (const z of [a + 0.03, (a + b) / 2, b - 0.03]) K.box('metal', xg - 0.05, xg + 0.05, y0, y1, z - 0.03, z + 0.03, C.anth);
   }
-  // the stair: the landing's stone block, the flight (solid down to the pad), glass balustrade, handrails, canopy
-  K.box('base', xo, xi, yb, DECK, LAND0, LAND1, C.stone, { top: C.pave });
-  for (let k = 0; k < nSteps; k++) K.box('base', xo, xi - 0.01, yb, gd + (rise * (k + 1)) / nSteps, zFoot + k * dzs, zFoot + (k + 1) * dzs + 0.005, C.conc, { top: C.pave });
-  const xg = xo + 0.06, yh = 0.95;
-  K.quad('glass', [xg, gd + 0.1, zFoot + 0.15], [xg, DECK + 0.1, LAND0], [xg, DECK + 1.0, LAND0], [xg, gd + 1.0, zFoot + 0.15], C.white);
-  K.vquad('glass', xg, LAND0, xg, LAND1 - 0.06, DECK + 0.08, DECK + 1.0, C.white);
-  K.vquad('glass', xg, LAND1 - 0.06, xi, LAND1 - 0.06, DECK + 0.08, DECK + 1.0, C.white);
-  K.bar('metal', [xg, gd + yh + 0.08, zFoot + 0.15], [xg, DECK + yh + 0.08, LAND0], 0.06, C.steel, true);
-  K.bar('metal', [xg, DECK + yh + 0.08, LAND0], [xg, DECK + yh + 0.08, LAND1 - 0.06], 0.06, C.steel, true);
-  K.bar('metal', [xg, DECK + yh + 0.08, LAND1 - 0.06], [xi, DECK + yh + 0.08, LAND1 - 0.06], 0.06, C.steel, true);
-  for (let k = 0; k <= 3; k++) { const t = k / 3, z = zFoot + 0.15 + (LAND0 - zFoot - 0.15) * t, y = gd + (DECK - gd) * t; K.bar('metal', [xg, y, z], [xg, y + yh + 0.08, z], 0.05, C.steel, true); }
-  for (const z of [LAND1 - 0.06]) K.bar('metal', [xg, DECK, z], [xg, DECK + yh + 0.08, z], 0.05, C.steel, true);
-  K.bar('metal', [xi - 0.09, gd + 0.9, zFoot], [xi - 0.09, DECK + 0.9, LAND0], 0.05, C.steel, true); // the wall's handrail
-  const canY = DECK + 2.75;
-  K.box('metal', xo - 0.25, xi, canY, canY + 0.14, LAND0 - 0.5, LAND1 + 0.3, C.white, { r: 0.03 });
-  K.box('base', xo - 0.21, xi, canY + 0.14, canY + 0.24, LAND0 - 0.46, LAND1 + 0.26, C.snow, { r: 0.04 });
-  K.box('light', xo + 0.5, xo + 0.7, canY - 0.02, canY, LAND0, LAND1 - 0.2, C.white);
-  // the door through the long wall onto the outer platform: frame, lintel, the glass leaves slid open
-  const d0 = LAND0 + 0.25, d1 = LAND1 - 0.2, doorH = 2.5;
-  for (const z of [d0, d1]) K.box('metal', -W - 0.02, -W + 0.14, DECK, DECK + doorH, z - 0.05, z + 0.05, C.anth);
-  K.box('metal', -W - 0.02, -W + 0.14, DECK + doorH - 0.1, DECK + doorH, d0, d1, C.anth);
-  K.vquad('glass', -W + 0.2, d0 + 0.05, -W + 0.2, d0 + 0.5, DECK, DECK + doorH - 0.1, C.white);
-  K.vquad('glass', -W + 0.2, d1 - 0.5, -W + 0.2, d1 - 0.05, DECK, DECK + doorH - 0.1, C.white);
+  // the doors: frame, the glass leaves slid open, the transom, the door operator's box inside
+  for (const z of [zD0 + 0.05, zD1 - 0.05]) K.box('metal', -WL - 0.02, -WL + 0.3, 0, 3.0, z - 0.05, z + 0.05, C.anth);
+  K.box('metal', -WL - 0.02, -WL + 0.3, doorH, doorH + 0.1, zD0, zD1, C.anth);
+  K.vquad('glass', xg, zD0, xg, zD1, doorH + 0.1, 3.0, C.white);
+  K.vquad('glass', -WL + 0.26, zD0 + 0.1, -WL + 0.26, zD0 + 0.7, yf, doorH, C.white);
+  K.vquad('glass', -WL + 0.26, zD1 - 0.7, -WL + 0.26, zD1 - 0.1, yf, doorH, C.white);
+  K.box('metal', x0i, x0i + 0.22, doorH + 0.12, doorH + 0.34, zD0 - 0.1, zD1 + 0.1, C.steel);
+  // the far side (back-of-house, the machine room): stone, its louvres
+  K.box('base', WR - 0.2, WR, 0, YS, -HL, HL, C.stone);
+  for (const [z0, z1] of [[-7, -4], [4, 7]]) {
+    K.box('metal', WR - 0.02, WR + 0.02, 0.5, 2.3, z0, z1, C.dark);
+    for (let k = 0; k < 7; k++) K.box('metal', WR, WR + 0.07, 0.62 + k * 0.25, 0.68 + k * 0.25, z0 + 0.05, z1 - 0.05, C.anth);
+  }
+  // both ends: stone under the portals, a window band into the lobby
+  const endOps = [[-6.2, -3.9, 0.9, 3.0], [-2.8, 1.8, 0.9, 3.0]];
+  for (const sz of [-1, 1]) {
+    const zo0 = sz > 0 ? HL - 0.2 : -HL, zo1 = zo0 + 0.2, zl0 = sz > 0 ? zi : -HL + 0.2, zl1 = zl0 + 0.15;
+    wallX(zo0, zo1, -WL, WR, endOps, C.stone);
+    wallX(zl0, zl1, x0i, xB, endOps, MC.lining);
+    const zw = sz * (HL - 0.1);
+    for (const [a, b, y0, y1] of endOps) {
+      K.vquad('glass', a, zw, b, zw, y0, y1, C.white);
+      for (const y of [y0, y1 - 0.06]) K.box('metal', a, b, y, y + 0.06, zw - 0.05, zw + 0.05, C.anth);
+      for (let k = 0, n = Math.max(1, Math.round((b - a) / 1.5)); k <= n; k++) { const x = a + ((b - a) * k) / n; K.box('metal', x - 0.03, x + 0.03, y0, y1, zw - 0.05, zw + 0.05, C.anth); }
+    }
+  }
+  // the shadow joint under the deck slabs, round the outside
+  for (const [x0, x1] of [[-WL - 0.03, -WL + 0.03], [WR - 0.03, WR + 0.03]]) K.box('base', x0, x1, YS - 0.06, YS, -HL, HL, C.dark);
+  for (const sz of [-1, 1]) K.box('base', -WL, WR, YS - 0.06, YS, sz * HL - 0.03, sz * HL + 0.03, C.dark);
+  // the deck slabs (the stairwell's opening left out of the entrance side's), the island, the channels' floors
+  const slab = (x0, x1, z0, z1) => K.box('base', x0, x1, YS, DECK, z0, z1, C.conc, { r: 0.04, top: C.pave });
+  slab(-WL, -Ro, -HL, zS1); slab(-WL, -Ro, zO, HL); slab(-WL, x0i, zS1, zO); slab(xsI, -Ro, zS1, zO);
+  slab(-Ri, Ri, -HL, HL); slab(Ro, WR, -HL, HL);
+  for (const sx of [-1, 1]) K.box('base', sx * Ri, sx * Ro, YS, lf, -HL, HL, C.conc, { top: C.laneFloor });
+
+  // ---------------------------------------------------------------- the lobby
+  // floor: stone tiles (a two-tone checker), the doormat
+  K.box('base', x0i, xB, 0, yf, -zi, zi, MC.tileA);
+  if (!lite) for (let ix = 0, x = x0i; x < xB - 0.05; ix++, x += 1.2) for (let iz = 0, z = -zi; z < zi - 0.05; iz++, z += 1.2) {
+    if ((ix + iz) & 1) K.box('base', x, Math.min(x + 1.2, xB), yf, yf + 0.006, z, Math.min(z + 1.2, zi), MC.tileB);
+  }
+  K.box('base', x0i, x0i + 1.5, yf, yf + 0.014, zD0 + 0.1, zD1 - 0.1, C.dark);
+  // the back-of-house wall (timber), its staff door
+  K.box('base', xB, xB + 0.25, 0, CEIL, -zi, zi, MC.lining);
+  K.box('metal', xB - 0.03, xB, yf, yf + 2.15, 6.0, 6.95, C.anth);
+  // the timber ceiling (the stairwell open), its light panels
+  K.box('base', x0i, xB, CEIL, YS, -zi, zS1, MC.ceil); K.box('base', x0i, xB, CEIL, YS, zO, zi, MC.ceil); K.box('base', xsI, xB, CEIL, YS, zS1, zO, MC.ceil);
+  for (const x of [-4.1, -1.5, 1.1]) for (let z = -8.4; z <= 8.41; z += 2.4) K.box('light', x - 0.3, x + 0.3, CEIL - 0.02, CEIL, z - 0.6, z + 0.6, C.white);
+  // the stair: solid stone steps with oak treads up along the glazed front, a glass balustrade on its open side,
+  // handrails; its opening in the deck with the glass balustrade round it
+  for (let k = 0; k < nSt; k++) K.box('base', x0i, xsI, 0, yf + rr * (k + 1), zS0 - (k + 1) * dzs, zS0 - k * dzs + 0.004, C.conc, { top: MC.oak });
+  const xr = xsI + 0.03, zq = zS0 - 0.3;
+  K.quad('glass', [xr, stairY(zq) + 0.12, zq], [xr, DECK + 0.12, zS1], [xr, DECK + 1.0, zS1], [xr, stairY(zq) + 1.0, zq], C.white);
+  K.bar('metal', [xr, stairY(zq) + 1.03, zq], [xr, DECK + 1.03, zS1], 0.05, C.steel, true);
+  for (let k = 0; k <= 4; k++) { const z = zq + ((zS1 - zq) * k) / 4, y = stairY(z); K.bar('metal', [xr, y, z], [xr, y + 1.05, z], 0.045, C.steel, true); }
+  K.bar('metal', [x0i + 0.07, yf + 0.9, zS0], [x0i + 0.07, DECK + 0.9, zS1], 0.045, C.steel, true);
+  const yb0 = DECK + 0.08, yb1 = DECK + 1.0, zo = zO + 0.04;
+  K.vquad('glass', xr, zS1 + 0.05, xr, zo, yb0, yb1, C.white);
+  K.vquad('glass', x0i, zo, xr, zo, yb0, yb1, C.white);
+  K.bar('metal', [xr, yb1 + 0.04, zS1 + 0.05], [xr, yb1 + 0.04, zo], 0.06, C.steel, true);
+  K.bar('metal', [x0i, yb1 + 0.04, zo], [xr, yb1 + 0.04, zo], 0.06, C.steel, true);
+  for (const [x, z] of [[xr, zS1 + 0.05], [xr, (zS1 + zo) / 2], [xr, zo], [x0i + 0.05, zo]]) K.bar('metal', [x, DECK, z], [x, yb1 + 0.04, z], 0.05, C.steel, true);
+  // the lift core (plaster, steel doors, the call button, the floor indicator)
+  K.box('base', lc.x0, lc.x1, yf, CEIL, lc.z0, lc.z1, MC.plaster);
+  K.box('metal', lc.x0 + 0.25, lc.x0 + 1.15, yf, yf + 2.15, lc.z1, lc.z1 + 0.03, C.steel);
+  K.box('metal', lc.x0 + 0.18, lc.x0 + 1.22, yf, yf + 2.25, lc.z1 - 0.01, lc.z1 + 0.02, C.anth);
+  K.box('light', lc.x0 + 1.28, lc.x0 + 1.36, yf + 1.0, yf + 1.15, lc.z1, lc.z1 + 0.03, C.white);
+  K.box('light', lc.x0 + 0.5, lc.x0 + 0.9, yf + 2.32, yf + 2.4, lc.z1, lc.z1 + 0.03, C.white);
+  // the lift-pass gates: three cabinets, the readers, the glass wings swung open
+  for (const [i, z] of gatesZ.entries()) {
+    K.box('metal', gx0, gx1, yf, yf + 1.0, z - 0.1, z + 0.1, C.anth, { r: 0.03 });
+    K.box('light', gx0 + 0.1, gx0 + 0.5, yf + 1.0, yf + 1.015, z - 0.06, z + 0.06, C.white);
+    K.box('metal', gx1 - 0.25, gx1 - 0.05, yf + 1.0, yf + 1.12, z - 0.08, z + 0.08, C.yellow, { r: 0.02 });
+    if (i < gatesZ.length - 1) K.vquad('glass', (gx0 + gx1) / 2 - 0.2, z + 0.1, (gx0 + gx1) / 2 - 0.05, z + 0.38, yf + 0.4, yf + 0.95, C.white);
+  }
+  for (const z of [gatesZ[0] + 0.5, gatesZ[2] - 0.5]) K.bar('metal', [(gx0 + gx1) / 2, 3.0, z], [(gx0 + gx1) / 2, CEIL, z], 0.03, C.steel, true); // (the CABINS sign's hangers)
+  // the info / ticket desk (oak, a white top, two screens), the lift's name on the wall behind it
+  K.box('base', -4.6, -0.4, yf, yf + 1.05, -7.0, -6.4, MC.oak, { r: 0.02 });
+  K.box('base', -4.7, -0.3, yf + 1.05, yf + 1.1, -7.05, -6.3, C.white, { r: 0.015 });
+  K.box('light', -4.5, -0.5, yf + 0.9, yf + 0.94, -6.31, -6.29, C.white);
+  for (const x of [-3.4, -1.6]) { K.box('metal', x - 0.28, x + 0.28, yf + 1.2, yf + 1.55, -6.88, -6.84, C.dark); K.box('metal', x - 0.03, x + 0.03, yf + 1.1, yf + 1.2, -6.88, -6.84, C.anth); }
+  K.box('metal', -4.4, -0.6, 2.45, 3.25, -zi, -zi + 0.04, C.dark);
+  for (const x of [-3.3, -1.7]) K.bar('metal', [x, 2.9, -6.7], [x, CEIL, -6.7], 0.03, C.steel, true); // (the INFO sign's hangers)
+  // benches, ski racks, lockers, vending machines (and a bistro table)
+  bench(-1.0, -0.5, -4.4, -1.6, yf); bench(-1.0, -0.5, 0.6, 3.4, yf);
+  skiRack(x0i + 0.02, x0i + 0.6, -6.3, -3.7, yf, true);
+  K.box('metal', xB - 0.5, xB, yf, yf + 2.0, 1.4, 5.4, C.steel);
+  K.box('base', xB - 0.52, xB, yf + 2.0, yf + 2.05, 1.38, 5.42, MC.oak);
+  if (!lite) {
+    for (let z = 1.8; z < 5.39; z += 0.4) K.box('metal', xB - 0.51, xB - 0.49, yf + 0.04, yf + 1.96, z - 0.008, z + 0.008, C.anth);
+    K.box('metal', xB - 0.51, xB - 0.49, yf + 0.99, yf + 1.01, 1.4, 5.4, C.anth);
+  }
+  for (const [z0, z1, col] of [[7.4, 8.4, MC.red], [8.5, 9.5, C.blue]]) {
+    K.box('base', xB - 0.8, xB, yf, yf + 1.85, z0, z1, col, { r: 0.03 });
+    K.box('light', xB - 0.82, xB - 0.8, yf + 0.85, yf + 1.7, z0 + 0.1, z1 - 0.32, C.white);
+    K.box('metal', xB - 0.83, xB - 0.8, yf + 0.25, yf + 0.45, z0 + 0.1, z1 - 0.1, C.dark);
+  }
+  if (!lite) {
+    const g = new THREE.CylinderGeometry(0.04, 0.04, 1.05, 8); g.translate(0.6, yf + 0.525, 8.0); K.add('metal', g, C.anth);
+    const t = new THREE.CylinderGeometry(0.36, 0.36, 0.04, 20); t.translate(0.6, yf + 1.07, 8.0); K.add('base', t, MC.oak);
+    const f = new THREE.CylinderGeometry(0.25, 0.25, 0.03, 16); f.translate(0.6, yf + 0.015, 8.0); K.add('metal', f, C.anth);
+  }
+  // the status board's frame on the back-of-house wall, facing the doors
+  K.box('metal', xB - 0.06, xB, 1.0, 3.2, -2.9, -0.7, C.dark);
+
+  // ---------------------------------------------------------------- outside the doors
+  // the canopy (white steel, snow on it, lit underneath, two tie rods), ski racks either side, a bench, two bollards
+  const cz0 = zD0 - 0.6, cz1 = zD1 + 0.6, cx = -WL - 1.6;
+  K.box('metal', cx, -WL, 2.85, 3.3, cz0, cz1, C.white, { r: 0.03 });
+  K.box('base', cx + 0.04, -WL, 3.3, 3.4, cz0 + 0.04, cz1 - 0.04, C.snow, { r: 0.04 });
+  K.box('light', cx + 0.3, -WL - 0.2, 2.83, 2.85, cz0 + 0.3, cz1 - 0.3, C.white);
+  for (const z of [cz0 + 0.12, cz1 - 0.12]) K.bar('metal', [cx + 0.15, 3.3, z], [-WL, 3.6, z], 0.04, C.steel, true);
+  skiRack(-WL - 0.75, -WL - 0.2, -6.4, -4.2, Math.max(0, gAt(-WL - 0.5, -5.3)), true);
+  skiRack(-WL - 0.75, -WL - 0.2, 0.8, 2.8, Math.max(0, gAt(-WL - 0.5, 1.8)), true);
+  bench(-WL - 0.65, -WL - 0.2, 3.5, 5.6, Math.max(0, gAt(-WL - 0.4, 4.5)), 1);
+  const bollards = [[-WL - 1.9, zD0 - 0.4], [-WL - 1.9, zD1 + 0.4]];
+  for (const [x, z] of bollards) {
+    const g0 = gAt(x, z);
+    const g = new THREE.CylinderGeometry(0.1, 0.12, 0.9, 10); g.translate(x, g0 + 0.45, z); K.add('metal', g, C.anth);
+    const l = new THREE.CylinderGeometry(0.09, 0.09, 0.12, 10); l.translate(x, g0 + 0.84, z); K.add('light', l, C.white);
+  }
 
   // ---------------------------------------------------------------- the platforms
   const zl = HL - 0.25;
@@ -671,7 +886,7 @@ export function buildGondolaMidStation(o) {
     K.box('base', sx * (Ri - 0.45), sx * (Ri - 0.3), DECK, DECK + 0.012, -zl, zl, C.yellow);
   }
   // the outer platforms' edge: glass balustrades toward both ends, the boarding gates where the cabins crawl
-  const rb = Ro + 0.1, yb0 = DECK + 0.08, yb1 = DECK + 1.0, zg = 3.6, ze = HL - 0.3;
+  const rb = Ro + 0.1, zg = 3.6, ze = HL - 0.3;
   for (const sx of [-1, 1]) {
     const x = sx * rb;
     for (const [z0, z1] of [[-ze, -zg - 0.1], [zg + 0.1, ze]]) {
@@ -705,110 +920,166 @@ export function buildGondolaMidStation(o) {
   K.box('light', -0.05, 0.05, bh - 0.03, bh, -bz + 0.4, bz - 0.4, C.white);
   for (const sx of [-1, 1]) K.box('metal', sx * (bx - 0.5) - 0.4, sx * (bx - 0.5) + 0.4, DECK + 0.95, DECK + 1.0, -bz + 0.2, bz - 0.2, C.steel); // the desks at the windows
   for (const sz of [-1, 1]) K.box('metal', -0.08, 0.08, DECK, DECK + 1.3, sz * (bz + 1.2) - 0.08, sz * (bz + 1.2) + 0.08, C.yellow, { r: 0.03 }); // emergency stops
+  // the waiting platform (entrance side): a bench along the glass, the queue rail along the gates, two double-sided
+  // next-cabin screens and pendant lights hung from the rafters
+  bench(x0i, x0i + 0.48, -8.8, -5.4, DECK, -1);
+  const xq = -6.2, zq0 = -3.2, zq1 = 0.6;
+  for (let k = 0; k <= 3; k++) { const z = zq0 + ((zq1 - zq0) * k) / 3; K.bar('metal', [xq, DECK, z], [xq, DECK + 0.95, z], 0.06, C.steel, true); }
+  K.box('metal', xq - 0.02, xq + 0.02, DECK + 0.82, DECK + 0.9, zq0, zq1, C.yellow);
+  const xsc = -5.95, ysc = DECK + 2.75, screens = [-4.9, 4.4];
+  for (const z of screens) {
+    K.box('metal', xsc - 0.7, xsc + 0.7, ysc - 0.37, ysc + 0.37, z - 0.05, z + 0.05, C.dark, { r: 0.02 });
+    for (const dx of [-0.5, 0.5]) K.bar('metal', [xsc + dx, ysc + 0.37, z], [xsc + dx, roofBot(xsc + dx) - 0.12, z], 0.03, C.steel, true);
+  }
+  for (const z of [-8.4, -6.4, -2.4, -0.4, 2.6, 7.6]) {
+    K.bar('metal', [xsc, roofBot(xsc) - 0.12, z], [xsc, DECK + 3.36, z], 0.025, C.anth, true);
+    if (!lite) { const g = new THREE.CylinderGeometry(0.1, 0.26, 0.24, 14, 1, true); g.translate(xsc, DECK + 3.24, z); K.add('metal', g, C.anth); }
+    const l = new THREE.CylinderGeometry(0.2, 0.2, 0.02, 14); l.translate(xsc, DECK + 3.13, z); K.add('light', l, C.white);
+  }
 
   // ---------------------------------------------------------------- the hall: frames, glass, roof
   const nb = Math.max(4, Math.round((2 * HL - 0.4) / 4.2)), zc = [];
   for (let i = 0; i <= nb; i++) zc.push(-HL + 0.2 + ((2 * HL - 0.4) * i) / nb);
-  const xc = W - 0.2, yW = roofBot(W - 0.08) - 0.02;
+  const xcL = -WL + 0.2, xcR = WR - 0.2;
   for (const z of zc) {
-    for (const sx of [-1, 1]) K.box('metal', sx * xc - 0.15, sx * xc + 0.15, DECK, roofBot(xc), z - 0.15, z + 0.15, C.steel, { r: 0.04 });
+    for (const x of [xcL, xcR]) K.box('metal', x - 0.15, x + 0.15, DECK, roofBot(x), z - 0.15, z + 0.15, C.steel, { r: 0.04 });
     const n = 10;
     for (let k = 0; k < n; k++) {
-      const x0 = -xc + (2 * xc * k) / n, x1 = -xc + (2 * xc * (k + 1)) / n;
+      const x0 = xcL + ((xcR - xcL) * k) / n, x1 = xcL + ((xcR - xcL) * (k + 1)) / n;
       K.bar('metal', [x0, roofBot(x0) - 0.13, z], [x1, roofBot(x1) - 0.13, z], 0.2, C.steel);
     }
   }
-  // the long glazed walls (on -x round the door)
-  const cutDoor = (z0, z1, sx) => (sx > 0 || z1 <= d0 - 0.1 || z0 >= d1 + 0.1 ? [[z0, z1]] : [[z0, d0 - 0.1], [d1 + 0.1, z1]].filter(([a, b]) => b - a > 0.2));
-  for (const sx of [-1, 1]) {
-    const x = sx * (W - 0.08);
+  // the long glazed walls: a pane per bay, the sill, the rail-high transom, a mid mullion
+  for (const x of [-WL + 0.08, WR - 0.08]) {
+    const yW = roofBot(x) - 0.02;
     for (let i = 0; i < nb; i++) {
       const z0 = zc[i] + 0.15, z1 = zc[i + 1] - 0.15, zm = (z0 + z1) / 2;
-      for (const [a, b] of cutDoor(z0, z1, sx)) K.vquad('glass', x, a, x, b, DECK + 0.1, yW, C.white);
-      if (sx > 0 || zm < d0 - 0.1 || zm > d1 + 0.1) K.box('metal', x - 0.04, x + 0.04, DECK + 0.02, yW, zm - 0.04, zm + 0.04, C.anth);
+      K.vquad('glass', x, z0, x, z1, DECK + 0.1, yW, C.white);
+      K.box('metal', x - 0.04, x + 0.04, DECK + 0.02, yW, zm - 0.04, zm + 0.04, C.anth);
     }
-    for (const y of [DECK + 0.1, DECK + 1.1]) for (const [a, b] of cutDoor(zc[0], zc[nb], sx)) K.box('metal', x - 0.05, x + 0.05, y - 0.04, y + 0.04, a, b, C.anth);
-    K.box('metal', x - 0.05, x + 0.05, yW - 0.08, yW, zc[0], zc[nb], C.anth);
+    for (const y of [DECK + 0.1, DECK + 1.1, yW - 0.04]) K.box('metal', x - 0.05, x + 0.05, y - 0.04, y + 0.04, zc[0], zc[nb], C.anth);
   }
-  if (DECK + doorH < yW - 0.3) K.vquad('glass', -W + 0.08, d0 - 0.1, -W + 0.08, d1 + 0.1, DECK + doorH, yW, C.white); // (over the door)
   // both ends: the open portal over the channels between two steel posts, the header beam (house blue), glass above
   // it and full height either side over the outer platforms
   const xa = Ro + 0.15;
   for (const sz of [-1, 1]) {
     const zg1 = sz * (HL - 0.12);
     for (const sx of [-1, 1]) {
-      const pts = [[xa, DECK + 0.1], [W, DECK + 0.1], ...curve(W, xa, 0.02)];
-      K.shapeZ('glass', sx > 0 ? pts : pts.map(([x, y]) => [-x, y]), zg1, C.white);
+      const Ws = sx < 0 ? WL : WR, xmu = sx * (Ws + xa) / 2;
+      K.shapeZ('glass', [[sx * xa, DECK + 0.1], [sx * Ws, DECK + 0.1], ...curve(sx * Ws, sx * xa, 0.02)], zg1, C.white);
       K.box('metal', sx * (Ro + 0.12) - 0.15, sx * (Ro + 0.12) + 0.15, DECK, pt, zg1 - 0.15, zg1 + 0.15, C.steel, { r: 0.04 });
-      const xmu = W * 0.5 + xa * 0.5;
-      K.box('metal', sx * xmu - 0.04, sx * xmu + 0.04, DECK, roofBot(xmu), zg1 - 0.04, zg1 + 0.04, C.anth);
-      K.box('metal', sx * xa, sx * W, DECK + 1.06, DECK + 1.14, zg1 - 0.05, zg1 + 0.05, C.anth);
+      K.box('metal', xmu - 0.04, xmu + 0.04, DECK, roofBot(xmu), zg1 - 0.04, zg1 + 0.04, C.anth);
+      K.box('metal', sx * xa, sx * Ws, DECK + 1.06, DECK + 1.14, zg1 - 0.05, zg1 + 0.05, C.anth);
     }
-    if (roofBot(xa) - 0.1 > pt + 0.45) K.shapeZ('glass', [[-xa, pt + 0.4], [xa, pt + 0.4], ...curve(xa, -xa, 0.02)], zg1, C.white);
+    if (Math.min(roofBot(-xa), roofBot(xa)) - 0.1 > pt + 0.45) K.shapeZ('glass', [[-xa, pt + 0.4], [xa, pt + 0.4], ...curve(xa, -xa, 0.02)], zg1, C.white);
     const zA = sz * (HL - 0.35), zBm = sz * (HL + 0.05);
-    K.box('metal', -W, W, pt, pt + 0.4, Math.min(zA, zBm), Math.max(zA, zBm), C.blue, { r: 0.04 });
+    K.box('metal', -WL, WR, pt, pt + 0.4, Math.min(zA, zBm), Math.max(zA, zBm), C.blue, { r: 0.04 });
     K.box('light', -Ro, Ro, pt - 0.02, pt, sz * (HL - 0.15) - 0.05, sz * (HL - 0.15) + 0.05, C.white);
   }
-  hallRoof(K, Wr, roofTop, roofBot, zr0, zr1);
-  for (const x of [-xc + 0.8, -1.1, 1.1, xc - 0.8]) K.box('light', x - 0.05, x + 0.05, roofBot(x) - 0.05, roofBot(x) - 0.015, zr0 + 0.3, zr1 - 0.3, C.white);
-  for (const sz of [-1, 1]) downlights(K, roofBot, sz * (HL + 0.75));
+  // the roof (built round its own centre line, the hall's middle)
+  const KR = new Kit();
+  hallRoof(KR, Wr, (x) => roofTop(x + xc0), (x) => roofBot(x + xc0), zr0, zr1);
+  for (const k of Object.keys(KR.parts)) for (const g of KR.parts[k]) K.parts[k].push(g.translate(xc0, 0, 0));
+  for (const x of [xcL + 0.8, xc0 - 1.1, xc0 + 1.1, xcR - 0.8]) K.box('light', x - 0.05, x + 0.05, roofBot(x) - 0.05, roofBot(x) - 0.015, zr0 + 0.3, zr1 - 0.3, C.white);
+  for (const sz of [-1, 1]) downlights(K, roofBot, sz * (HL + 0.6));
 
   // ---------------------------------------------------------------- the rope's lanes: guide rails, tyre conveyors
   conveyors(K, s, ropeY, roofBot, zB, zF);
 
-  // the name boards' backing plates over both portals
-  const sh = Math.min(1.0, roofBot(3.3) - pt - 0.55);
+  // the name boards' backing plates over both portals (centred on the hall)
+  const sh = Math.min(1.0, Math.min(roofBot(xc0 - 3.2), roofBot(xc0 + 3.2)) - pt - 0.55);
   if (sh > 0.4) for (const sz of [-1, 1]) {
     const z0 = sz * (HL - 0.12), z1 = sz * (HL + 0.05);
-    K.box('metal', -sh * 3 - 0.1, sh * 3 + 0.1, pt + 0.4, pt + 0.5 + sh, Math.min(z0, z1), Math.max(z0, z1), C.dark);
+    K.box('metal', xc0 - sh * 3 - 0.1, xc0 + sh * 3 + 0.1, pt + 0.4, pt + 0.5 + sh, Math.min(z0, z1), Math.max(z0, z1), C.dark);
   }
 
-  // ---------------------------------------------------------------- meshes
+  // ---------------------------------------------------------------- meshes: the signs, boards and screens
   const q = { pos: [], nor: [], uv: [] }, X = (x) => x * mx;
-  if (sh > 0.4) for (const sz of [-1, 1]) signQuad(q, [0, pt + 0.45 + sh / 2, sz * (HL + 0.07)], [0, 0, sz], sh * 6, sh, UV.name);
-  signQuad(q, [X(-W - 0.04), DECK - 0.55, -7.2], [-mx, 0, 0], 5.4, 0.9, UV.name);
-  signQuad(q, [X(W + 0.04), DECK - 0.55, 0], [mx, 0, 0], 5.4, 0.9, UV.name);
-  signQuad(q, [X(xo - 0.04), DECK - 1.0, (LAND0 + LAND1) / 2], [-mx, 0, 0], 1.8, 0.675, UV.entrance);
+  const TOT = SIGN_H + MID_EXTRA_H, ks = SIGN_H / TOT;
+  const uvS = ([u0, v0, u1, v1]) => [u0, 1 - (1 - v0) * ks, u1, 1 - (1 - v1) * ks];
+  const uvP = ([x0, y0, x1, y1]) => [x0 / SIGN_W, 1 - y1 / TOT, x1 / SIGN_W, 1 - y0 / TOT];
+  if (sh > 0.4) for (const sz of [-1, 1]) signQuad(q, [X(xc0), pt + 0.45 + sh / 2, sz * (HL + 0.07)], [0, 0, sz], sh * 6, sh, uvS(UV.name));
+  signQuad(q, [X(-WL - 0.04), 3.97, (zD0 + zD1) / 2], [-mx, 0, 0], 3.6, 0.6, uvS(UV.name));       // over the doors
+  signQuad(q, [X(WR + 0.04), 3.95, 0], [mx, 0, 0], 4.2, 0.7, uvS(UV.name));                       // the far side
+  signQuad(q, [X(cx - 0.02), 3.075, (zD0 + zD1) / 2], [-mx, 0, 0], 1.2, 0.45, uvS(UV.entrance)); // the canopy's front
+  signQuad(q, [X(xB - 0.07), 2.1, -1.8], [-mx, 0, 0], 2.0, 2.0, uvP(MPX.board));                  // the status board
+  signQuad(q, [X(-2.5), 2.85, -zi + 0.05], [0, 0, 1], 3.6, 0.6, uvS(UV.name));                    // behind the desk
+  signQuad(q, [X(-2.5), 2.75, -6.7], [0, 0, 1], 1.6, 0.47, uvP(MPX.info));
+  signQuad(q, [X((gx0 + gx1) / 2 + 0.02), 2.8, gatesZ[1]], [mx, 0, 0], 1.4, 0.41, uvP(MPX.cabins));
+  signQuad(q, [X(xB - 0.01), 2.5, 8.45], [-mx, 0, 0], 1.4, 0.41, uvP(MPX.cafe));
+  signQuad(q, [X(xB - 0.01), 2.5, 3.4], [-mx, 0, 0], 1.2, 0.35, uvP(MPX.lockers));
+  for (const z of screens) for (const sz of [-1, 1]) signQuad(q, [X(xsc), ysc, z + sz * 0.055], [0, 0, sz], 1.3, 0.65, uvP(MPX.screen));
   const place = String(o.place || 'Mid-station');
   const sub = /mid-?station/i.test(place) ? place : `Mid-station · ${place}`;
-  const group = assemble(K, mx, signMaterial(o.name || 'Gondola', sub), q, px, py, pz, yaw);
+  const sm = signMaterial(o.name || 'Gondola', sub, { h: MID_EXTRA_H, draw: (g, y0, f) => drawMidExtra(g, y0, f, { ...o, place }) });
+  const group = assemble(K, mx, sm, q, px, py, pz, yaw);
 
   // ---------------------------------------------------------------- colliders
-  const cols = [];
+  const cols = [], deck = [];
   const yA = (y) => py + y;
   const boxC = (x0, x1, z0, z1, extra = {}) => {
     if (x1 < x0) [x0, x1] = [x1, x0];
     const c = toW((x0 + x1) / 2, (z0 + z1) / 2);
-    cols.push({ x: c.x, z: c.z, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, rot: -yaw, ...extra });
+    const col = { x: c.x, z: c.z, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, rot: -yaw, ...extra };
+    cols.push(col);
+    return col;
   };
-  boxC(-W, W, -HL, HL, { top: yA(DECK - 0.05) });     // the plinth (walked on from the deck)
-  boxC(W - WALL, W, -HL, HL);                          // the long glazed walls (the door's gap on -x)
-  boxC(-W, -W + WALL, -HL, d0); boxC(-W, -W + WALL, d1, HL);
-  for (const sz of [-1, 1]) {                          // the end glazing over the outer platforms
-    const z0 = sz * (HL - 0.3), z1 = sz * HL;
-    boxC(Ro + 0.1, W, Math.min(z0, z1), Math.max(z0, z1)); boxC(-W, -Ro - 0.1, Math.min(z0, z1), Math.max(z0, z1));
-  }
+  const deckC = (...a) => deck.push(boxC(...a));
+  // the plinth's walls (the hall's long glass walls and end glazing stand on them), the doors' gap: vehicles only
+  boxC(-WL, x0i, -HL, zD0); boxC(-WL, x0i, zD1, HL);
+  boxC(-WL - 0.2, x0i, zD0, zD1, { carOnly: true });
+  boxC(WR - PW, WR, -HL, HL);
+  for (const sz of [-1, 1]) boxC(-WL, WR, sz > 0 ? zi : -HL, sz > 0 ? HL : -zi);
+  boxC(xB, xB + 0.25, -zi, zi);                                    // the back-of-house wall
+  // the lobby: the stair's open side and the end under its head (tops under the deck), the lift core, the gates,
+  // the desk, benches, racks, lockers, vending machines, the bistro table
+  const under = { top: yA(3.0) };
+  boxC(xsI - 0.1, xsI + 0.05, zS1 - 0.15, zS0, under);
+  boxC(x0i, xsI + 0.05, zS1 - 0.15, zS1, under);
+  boxC(lc.x0, lc.x1, lc.z0, lc.z1, under);
+  for (const z of gatesZ) boxC(gx0, gx1, z - 0.1, z + 0.1, { top: yA(yf + 1.0) });
+  boxC(-4.7, -0.3, -7.05, -6.3, { top: yA(yf + 1.1) });
+  for (const [z0, z1] of [[-4.4, -1.6], [0.6, 3.4]]) boxC(-1.0, -0.5, z0, z1, { top: yA(yf + 0.47) });
+  boxC(x0i, x0i + 0.6, -6.3, -3.7, { top: yA(yf + 1.25) });
+  boxC(xB - 0.5, xB, 1.4, 5.4, { top: yA(yf + 2.05) });
+  boxC(xB - 0.8, xB, 7.4, 9.5, { top: yA(yf + 1.85) });
+  if (!lite) { const t = toW(0.6, 8.0); cols.push({ x: t.x, z: t.z, r: 0.36, top: yA(yf + 1.09) }); }
+  // outside: the racks, the bench, the bollards
+  for (const [z0, z1] of [[-6.4, -4.2], [0.8, 2.8]]) boxC(-WL - 0.75, -WL - 0.15, z0, z1, { top: yA(Math.max(0, gAt(-WL - 0.5, (z0 + z1) / 2)) + 1.25) });
+  boxC(-WL - 0.65, -WL - 0.15, 3.5, 5.6, { top: yA(Math.max(0, gAt(-WL - 0.4, 4.5)) + 0.47) });
+  for (const [x, z] of bollards) { const b = toW(x, z); cols.push({ x: b.x, z: b.z, r: 0.14, top: yA(gAt(x, z) + 0.9) }); }
+  // the deck level (lifts.js parks these while the player is in the lobby): the wall over the doors, the channels'
+  // edges, the stairwell's balustrade, the operator's cabin, the waiting platform's bench and queue rail
+  deckC(-WL, x0i, zD0, zD1);
   const edgeTop = { top: yA(DECK + 1.1) };
-  boxC(Ro, Ro + 0.2, -HL, HL, edgeTop); boxC(-Ro - 0.2, -Ro, -HL, HL, edgeTop); // the channels' edges
-  boxC(xo - 0.02, xo + 0.14, zFoot + 0.3, LAND1, { top: yA(DECK + 1.0) });       // the stair's balustrade
-  boxC(xo, xi, LAND1 - 0.14, LAND1 + 0.02, { top: yA(DECK + 1.0) });
-  boxC(-bx, bx, -bz, bz);                                                        // the operator's cabin
+  deckC(Ro, Ro + 0.2, -HL, HL, edgeTop); deckC(-Ro - 0.2, -Ro, -HL, HL, edgeTop);
+  deckC(xsI - 0.1, xsI + 0.05, zS1, zO + 0.1, { top: yA(DECK + 1.0) });
+  deckC(x0i, xsI + 0.05, zO, zO + 0.12, { top: yA(DECK + 1.0) });
+  deckC(-bx, bx, -bz, bz);
+  deckC(x0i, x0i + 0.48, -8.8, -5.4, { top: yA(DECK + 0.47) });
+  deckC(xq - 0.05, xq + 0.05, zq0, zq1, { top: yA(DECK + 0.95) });
 
-  // ---------------------------------------------------------------- walkable: the platforms, the island, the stair
-  const cs = [[xo - 0.5, -HL], [W, -HL], [xo - 0.5, HL], [W, HL]].map(([x, z]) => toW(x, z));
-  const surf = world.addSurface({
-    bounds: { minx: Math.min(...cs.map((c) => c.x)) - 0.5, maxx: Math.max(...cs.map((c) => c.x)) + 0.5, minz: Math.min(...cs.map((c) => c.z)) - 0.5, maxz: Math.max(...cs.map((c) => c.z)) + 0.5 },
-    height(x, z) {
-      const dx = x - px, dz = z - pz, lx = (dx * cy - dz * sy) * mx, lz = dx * sy + dz * cy;
-      if (lx < -W - 0.02) {
-        if (lx < xo - 0.05 || lz < zFoot || lz > LAND1) return null;
-        return lz >= LAND0 ? py + DECK : py + gd + ((lz - zFoot) / run) * rise; // (the stair, the landing)
-      }
-      if (lz < -HL || lz > HL || lx > W) return null;
+  // ---------------------------------------------------------------- walkable: the lobby floor, the stair, the deck
+  const local = (x, z) => { const dx = x - px, dz = z - pz; return [(dx * cy - dz * sy) * mx, dx * sy + dz * cy]; };
+  const cs = [[-WL - 2.5, -HL - 1], [WR + 1, -HL - 1], [-WL - 2.5, HL + 1], [WR + 1, HL + 1]].map(([x, z]) => toW(x, z));
+  const bounds = { minx: Math.min(...cs.map((c) => c.x)), maxx: Math.max(...cs.map((c) => c.x)), minz: Math.min(...cs.map((c) => c.z)), maxz: Math.max(...cs.map((c) => c.z)) };
+  const surfaces = [
+    world.addSurface({ bounds, height(x, z) { // the lobby's floor (and the doors' threshold)
+      const [lx, lz] = local(x, z);
+      return lx >= -WL - 0.05 && lx <= WR && Math.abs(lz) <= HL ? py + yf : null;
+    } }),
+    world.addSurface({ bounds, height(x, z) { // the stair: a ramp from the lobby's floor up to the deck
+      const [lx, lz] = local(x, z);
+      return lx >= x0i - 0.05 && lx <= xsI + 0.02 && lz >= zS1 && lz <= zS0 + 0.02 ? py + stairY(lz) : null;
+    } }),
+    world.addSurface({ bounds, height(x, z) { // the deck: the platforms and the island, not the channels nor the stairwell
+      const [lx, lz] = local(x, z);
+      if (lz < -HL || lz > HL || lx < -WL || lx > WR) return null;
       const r = Math.abs(lx);
       if (r > Ri && r < Ro) return null; // (the channels: the balustrades keep you out)
+      if (lx > x0i - 0.02 && lx < xsI + 0.02 && lz > zS1 && lz < zO) return null; // (the stairwell)
       return py + DECK;
-    },
-  });
-  return { group, colliders: cols, surfaces: [surf] };
+    } }),
+  ];
+  return { group, colliders: cols, deckColliders: deck, surfaces, stair: { x: (x0i + xsI) / 2, z0: zS0, z1: zS1, yf } };
 }

@@ -6,7 +6,7 @@ import { world } from './world.js';
 import { bakeGeometry, makeLOD, dequantize, clusterDecimate } from '../core/assets.js';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { drawnHeight } from './settle.js';
-import { buildGondolaStation, buildGondolaMidStation } from './gondolastation.js'; // (the gondola stations, built: Nov 1 2026)
+import { buildGondolaStation, buildGondolaMidStation, MID_DECK_UP } from './gondolastation.js'; // (the gondola stations, built: Nov 1 2026)
 
 // The lines' cars (Oct 30 2026, the user: "why does loading actually take so long"): every line of a lift type baked
 // and decimated the same Meshy cabin / chair at the same size, three tiers each, line after line. Baked once per
@@ -34,7 +34,7 @@ const MID_HALF = 9, MID_RAMP = 36, MID_SLOW = 0.1; // (0.1 x 18 m/s: the same ~1
 // multiplayer (net/transit.js): the cabins / chairs also crawl through the bottom and top stations (+-half m of the
 // bullwheel, ramping back to line speed over ramp m), so the one you wait for visibly comes in and you board it there
 const END_DWELL = { gondola: { half: 7, ramp: 30, slow: 0.1 }, chair: { half: 4, ramp: 14, slow: 0.15 } };
-const MID_LEN = 26; // the rope's level stretch through the mid-station (+-13 m: gondolastation.js's hall is 23 m long)
+const MID_LEN = 26; // the rope's level stretch through the mid-station (+-13 m: gondolastation.js's hall is 20 m long)
 
 // ground clearance under the cabins (cabin / chair bottom over the snow, both ways, out of the stations):
 // lifts.js adds or raises towers until the whole line keeps it (see LiftLine.fitClearance)
@@ -507,8 +507,8 @@ class LiftLine {
     colliders.push({ x: q.x, z: q.z, hw: sz.x / 2 * 0.97, hd: sz.z / 2 * 0.97, rot: -hut.rotation.y });
   }
 
-  // where a rider steps off at the mid-station: beside the foot of its stair (side sd), or the nearest clear spot
-  // (layout.js stopExit: the same 10.6 m out, 1.8 m down the line)
+  // where a rider steps off at the mid-station: in front of its doors (side sd: gondolastation.js's entrance, 1.8 m
+  // down the line, its front 7.2 m out), or the nearest clear spot (layout.js stopExit: the same 10.6 m out, 1.8 m back)
   stairExit(p, sd) {
     const sv = this.sideV, d = this.dir;
     const out = 10.6, back = 1.8;
@@ -523,23 +523,60 @@ class LiftLine {
     return { x, z, heading: away ? Math.atan2(-gx, -gz) : Math.atan2(-d.x, -d.z) };
   }
 
-  // the mid-station (Nov 1 2026, the user: "the MID stations — fix those!"; the Meshy hall on its podium before it):
-  // built by world/gondolastation.js, a pass-through hall in the end stations' style that the rope runs straight
-  // through at station height (cableAt levels it over +-13 m), its stair and exit on the side of the nearby run
-  // (mid.side: sideV * side); colliders and the walkable deck / stair from the station
+  // the mid-station (Nov 1 2026, the user: "the MID stations — fix those!"; the Meshy hall on its podium before it;
+  // then "make it so you can go inside"): built by world/gondolastation.js, a pass-through hall in the end stations'
+  // style that the rope runs straight through at station height (cableAt levels it over +-13 m), a walk-in lobby in
+  // its plinth with the stair up to the deck, its doors and exit on the side of the nearby run (mid.side: sideV *
+  // side); colliders and the walkable floor / stair / deck from the station. Its deck-level colliders (midDeck) are
+  // parked while the player is down in the lobby (colliders have no bottom: they would wall the lobby off), see update
   buildMid(colliders) {
-    const c = this.cfg, m = this.mid;
+    const c = this.cfg, m = this.mid, base = this.spec.name.replace(/ Gondola$/, '');
     const st = buildGondolaMidStation({
       x: m.x, y: m.y, z: m.z, yaw: this.yaw, mx: m.side || 1, side: c.side, ropeY: c.stationH, carH: c.carH,
-      name: this.spec.name, place: m.name,
+      name: this.spec.name, place: m.name, up: this.spec.topName || `${base} summit`, down: this.spec.bottomName || `${base} base`,
+      runs: this.runsNear(m.x, m.z, 170),
       ropeAt: (z) => [this.cableAt(m.u + z, 1, _p2).y - m.y, this.cableAt(m.u + z, -1, _p2).y - m.y],
     });
     this.group.add(st.group);
     colliders.push(...st.colliders);
+    this.midDeck = st.deckColliders;
+    for (const d of this.midDeck) d.x0 = d.x;
+    this.midDeckOn = true;
+  }
+  // the deck level's colliders in place while the player is up there (MID_DECK_UP +- 0.15 m over the pad: on the
+  // stair's upper half or the deck) or away from the station; parked at x = 1e9 while they're down in the lobby or on
+  // the snow by it (a few comparisons a frame, the colliders touched only on a change)
+  midDeckFor(p) {
+    const m = this.mid;
+    let on = true;
+    if (p && Math.abs(p.x - m.x) < 26 && Math.abs(p.z - m.z) < 26) {
+      const up = p.y - m.y;
+      on = this.midDeckOn ? up > MID_DECK_UP - 0.15 : up > MID_DECK_UP + 0.15;
+    }
+    if (on === this.midDeckOn) return;
+    this.midDeckOn = on;
+    for (const d of this.midDeck) d.x = on ? d.x0 : 1e9;
+  }
+  // the runs (pistes, races) passing within r m of (x, z), nearest first: { name, diff } (the mid-station's board)
+  runsNear(x, z, r) {
+    const best = new Map(), cx = Math.floor(x / 64), cz = Math.floor(z / 64);
+    for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
+      const arr = world.corridorGrid?.get(cx + i + ',' + (cz + j));
+      if (arr) for (const sg of arr) {
+        const p = sg.meta;
+        if (sg.kind === 'lift' || !p?.name) continue;
+        const ex = sg.bx - sg.ax, ez = sg.bz - sg.az, l2 = ex * ex + ez * ez || 1;
+        const t = clamp(((x - sg.ax) * ex + (z - sg.az) * ez) / l2, 0, 1);
+        const d = Math.hypot(sg.ax + ex * t - x, sg.az + ez * t - z) - sg.w;
+        if (d < r && d < (best.get(p.name)?.d ?? Infinity)) best.set(p.name, { name: p.name, diff: p.diff ?? 1, d });
+      }
+    }
+    return [...best.values()].sort((a, b) => a.d - b.d).slice(0, 6).map(({ name, diff }) => ({ name, diff }));
   }
 
   update(dt, timeScale, viewer, T = null) {
     const d = this.tmp;
+    if (this.midDeck) this.midDeckFor(viewer);
     let nNear = 0, nFar = 0, nMid = 0;
     if (T !== null) this.placeAt(T); // (multiplayer: from the shared timeline)
     for (let i = 0; i < this.cars.length; i++) {
@@ -583,7 +620,7 @@ class LiftLine {
     return { pos: seat, fwd };
   }
 
-  // where a rider steps off at the mid-station: at the foot of the stairs on the side of the nearby run
+  // where a rider steps off at the mid-station: in front of its doors, on the side of the nearby run
   midExit() {
     return (this._midExit ??= this.stairExit(this.mid, this.mid.side || 1));
   }

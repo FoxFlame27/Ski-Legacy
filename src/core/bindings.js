@@ -56,8 +56,8 @@ export const PAD_DEFAULTS = {
   horn: 1,      // B · Circle · A
   sprint: 7,    // RT · R2 · ZR
   brake: 6,     // LT · L2 · ZL
-  view: 11,     // right stick click
-  alt: 5,       // RB · R1 · R
+  view: 5,      // RB · R1 · R (switch first / third person, like other games)
+  alt: 11,      // right stick click (sell in chalet build mode)
   pickup: 4,    // LB · L1 · L
   lights: 15,   // d-pad right
   lookback: 10, // left stick click

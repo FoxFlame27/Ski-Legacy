@@ -1,0 +1,67 @@
+# Builds the Mac game (Apple Silicon, M1 and newer) on a real Mac: release/Ski Legacy.dmg via tools/make-dmg.sh.
+# Runs on every push to legacy-express and on demand (Actions tab -> Mac build -> Run workflow).
+# The dmg is attached to the rolling "latest-mac" GitHub Release, so there is a fixed download link:
+#   https://github.com/FoxFlame27/Ski-Legacy/releases/download/latest-mac/Ski-Legacy.dmg
+name: Mac build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [legacy-express]
+
+permissions:
+  contents: write # to move the latest-mac tag and update its release
+
+concurrency:
+  group: mac-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest # Apple Silicon runner
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build Ski Legacy.dmg
+        run: bash tools/make-dmg.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ski-Legacy-Mac
+          path: release/Ski Legacy.dmg
+          if-no-files-found: error
+          compression-level: 0 # the dmg is already compressed
+
+      # GitHub turns spaces in release file names into dots, so the release copy gets a dash instead
+      - name: Prepare release file
+        run: cp "release/Ski Legacy.dmg" release/Ski-Legacy.dmg
+
+      - name: Move the latest-mac tag to this commit
+        run: |
+          git tag -f latest-mac
+          git push -f origin refs/tags/latest-mac
+
+      - name: Update the latest-mac release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-mac
+          name: Ski Legacy for Mac (latest build)
+          body: |
+            Latest Mac build of Ski Legacy (commit ${{ github.sha }}). Apple Silicon (M1 and newer).
+            Download **Ski-Legacy.dmg**, open it and drag Ski Legacy into Applications.
+            The game is not from the App Store: the first time, right-click the app, Open, Open.
+            If macOS says it is "damaged", run in Terminal:  xattr -cr "/Applications/Ski Legacy.app"
+          prerelease: false
+          make_latest: false
+          files: release/Ski-Legacy.dmg
+          overwrite_files: true

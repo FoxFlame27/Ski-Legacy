@@ -83,7 +83,7 @@ export const PAD_DEFAULTS = {
 // (Nov 1 2026, the user: "also make the Home button on Switch unstuck, and something else on the other controllers"):
 // per controller family on top of PAD_DEFAULTS. Switch Home and the PS button reach the game (index 16); the Xbox
 // button doesn't (Windows Game Bar / macOS take it), so Xbox keeps unstuck on the d-pad left.
-export const FAMILY_PAD = { switch: { unstuck: 16 }, ps: { unstuck: 16 }, xbox: {} };
+export const FAMILY_PAD = { switch: {}, ps: {}, xbox: {} }; // (Nov 1 2026, the user: "nvm keep unstuck's old button": d-pad left on every controller)
 let activeFamily = 'xbox';
 /** gamepad.js tells which controller family is in use (its defaults differ a little: FAMILY_PAD). */
 export function setPadFamily(f) { activeFamily = FAMILY_PAD[f] ? f : 'xbox'; }

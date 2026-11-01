@@ -561,6 +561,10 @@ export class Impound {
       if (mp && R.mp === mp) mp.towDone?.(); // (multiplayer: the server's tow record ends; the impound stays)
       if (R.current !== car && !R.kept?.includes(car)) return; // (gone meanwhile: sold; another car of yours out meanwhile: this one still ends in the tow yard)
       car.impound = { day: this.save.impound?.day ?? this.day, until: this.save.impound?.until };
+      // (Nov 1 2026, the user: "when your car gets towed it should be repaired when it's back"): dents out, damage 0
+      try { R.drive?.repair?.(car); } catch (err) { console.warn('tow repair', err); car.damage = 0; car.dents = []; }
+      car.damage = 0; car.dents = [];
+      R.dropDamage?.(car.cfg?.plate); // (nothing kept for it: the server clears its record on the tow too)
       this.place(car, this.pound?.[bi] || this.own);
       if (R.drive) R.drive._cc = null;
     };

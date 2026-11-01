@@ -1593,7 +1593,7 @@ export class GameServer {
     const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };
     car.at = home;
-    if (d.kind === 'wreck') this.clearDamage(c, car); // (a wreck comes home repaired)
+    this.clearDamage(c, car); // (a wreck comes home repaired; a car towed for its parking too: Nov 1 2026, the user)
     if (d.kind === 'tow') car.impound = { day: (c.world ? c.world.dayAt(now) : dayFor(now)), until: now + IMPOUND_MS, bay: isInt(d.bay) ? clamp(d.bay, 0, 31) : 0 }; // (the tow yard: 3 min)
     this.store.profiles.save();
     return { d: { money: P.money, fee: paid, impound: car.impound || null, at: home } };

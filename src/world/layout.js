@@ -489,10 +489,10 @@ function span(pts, from, to) {
 const stretch = (pts, r) => (r.span ? span(pts, r.span[0], r.span[1]) : cut(pts, r.frac[0], r.frac[1]));
 
 // Where riders step out at a gondola's top station / mid-station: as lifts.js lets them off (beyond the top
-// station, 4 m to the side of the line; in front of the mid-station's doors).
+// station, 4 m to the side of the line; just in front of the foot of the mid-station's outside stair).
 export function stopExit(lift, stop) {
   const [dx, dz] = lift.dir, sx = -dz, sz = dx;
-  if (stop === 'mid') { const sd = lift.mid.side || 1; return { x: lift.mid.x + sx * sd * 10.6 - dx * 1.8, z: lift.mid.z + sz * sd * 10.6 - dz * 1.8 }; }
+  if (stop === 'mid') { const sd = lift.mid.side || 1; return { x: lift.mid.x + sx * sd * 8.6 - dx * 6.2, z: lift.mid.z + sz * sd * 8.6 - dz * 6.2 }; }
   const off = (lift.type === 'gondola' ? 14 : 8) * 0.5 + 9;
   return { x: lift.top.x + dx * off + sx * 4, z: lift.top.z + dz * off + sz * 4 };
 }

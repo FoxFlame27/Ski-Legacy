@@ -174,9 +174,8 @@ const MODEL_LIST = [
   'rail_station_valley', 'rail_station_halt', 'rail_station_glacier', 'rail_car2', // the Wolkenspitzbahn's stations (Meshy)
   // job props (all optional: jobs fall back to built-in props)
   'job_board', 'delivery_backpack', 'patrol_backpack', 'mail_bag', 'ski_glove', 'ski_goggles', 'beanie', 'compact_camera', 'rescue_sled', 'smartphone',
-  'rental_shop', 'gondola_station', 'gondola_cabin', 'chairlift_chair', 'lift_tower',
+  'rental_shop', 'gondola_cabin', 'chairlift_chair', 'lift_tower',
   'gondola_terminal', // the gondola mid-station hall (lifts.js MESHY_MID)
-  'gondola_station_top', // the compact summit gondola station (lifts.js stationModel; Oct 31 2026, the user: "please make the gondola station way better")
   'chair_terminal', 'chair_bullwheel', // the chairlift terminals: operator hut + bullwheel (lifts.js MESHY_CHAIR)
   'pine_tree', 'pine_tree2', 'hotel_chalet', 'mountain_hut', 'race_arch', 'ticket_booth', 'snow_cannon', 'lamp_post',
   // decoration props

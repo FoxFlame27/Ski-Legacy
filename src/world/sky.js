@@ -4,6 +4,11 @@
 // cool blue aerial perspective and blue ambient so shadowed snow reads blue against a strong warm sun.
 import * as THREE from 'three';
 import { smoothstep, lerp } from '../core/noise.js';
+import { quality, onQualityChange } from '../engine/quality.js';
+
+// realism tier of the graphics preset (the same as world/terrain.js fxLevel; 0 = Performance / Super: untouched)
+const fxOf = (q) => q.fx ?? (q.name === 'superultra' || q.cine ? 4 : 0);
+const _sx = new THREE.Vector3(), _sy = new THREE.Vector3(), _sf = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 
 const DAY_SECONDS = 16 * 60; // real seconds for a full 24h day (1 game hour = 40s)
 
@@ -157,6 +162,7 @@ const SKY_VERT = `varying vec3 vDir;
 const SKY_FRAG = `
   uniform vec3 uSunDir, uMoonDir, uZenith, uMid, uHorizon, uGlow, uHalo, uHaloBroad, uSunColor, uGround, uMoonGlow, uWisp;
   uniform float uDusk, uSunSize, uTime, uCirrus, uOvercast, uHazeK;
+  uniform float uTwilight, uRayK; uniform vec3 uBelt;
   uniform sampler2D uNoise;
   varying vec3 vDir;
   float skyHash(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
@@ -176,6 +182,23 @@ const SKY_FRAG = `
     col = mix(col, hz, exp(-h * uHazeK));
     // the sunset glow climbs higher on the sun's side
     col += uGlow * (uDusk * 0.35) * (az * az * az * az) * exp(-h * 7.0);
+    #if SKY_FX >= 2
+    {
+      // Rayleigh scattering (phase 1 + cos^2): the clear sky is deepest ~90 deg from the sun, a little brighter
+      // toward it and opposite it
+      float cs = dot(d, uSunDir);
+      col *= mix(1.0, 0.87 + 0.2 * cs * cs, uRayK * smoothstep(0.0, 0.3, h));
+      // twilight: the Earth's shadow rises as a blue-grey band on the horizon opposite the sun, the pink Belt of
+      // Venus glowing just above it
+      float anti = 1.0 - az; anti *= anti;
+      float tw = uTwilight * anti;
+      if (tw > 0.001) {
+        col = mix(col, col * vec3(0.6, 0.66, 0.86), tw * smoothstep(0.075, 0.0, e) * smoothstep(-0.08, 0.0, e));
+        float bz = (e - 0.1) / 0.055;
+        col += uBelt * tw * exp(-bz * bz);
+      }
+    }
+    #endif
 
     // aureole: cyan-white glow around the sun (tight + wide lobes), broad bright patch through overcast
     col += uHalo * (exp(-ang * 40.0) + exp(-ang * 12.0) * 0.45 + exp(-ang * 3.5) * 0.12);
@@ -221,12 +244,19 @@ const SKY_FRAG = `
 // The sky the IBL is captured from: a softer, less saturated version (no disc or wisps, snow bounce below),
 // so ambient light is clearly blue in the shade without over-saturating.
 const ENV_FRAG = `
-  uniform vec3 uSunDir, uEnvZenith, uEnvHorizon, uEnvGround, uEnvSun;
+  uniform vec3 uSunDir, uEnvZenith, uEnvHorizon, uEnvGround, uEnvSun, uEnvGlow;
   varying vec3 vDir;
   void main(){
     vec3 d = normalize(vDir);
     float e = d.y;
     vec3 col = mix(uEnvHorizon, uEnvZenith, smoothstep(0.0, 0.65, e));
+    #if SKY_FX >= 1
+      // the bright (warm at dusk) horizon on the sun's side, so glossy paint, glass and ice reflect the real sky
+      vec2 dh = d.xz * inversesqrt(max(dot(d.xz, d.xz), 1e-8));
+      vec2 sh = uSunDir.xz * inversesqrt(max(dot(uSunDir.xz, uSunDir.xz), 1e-8));
+      float az = dot(dh, sh) * 0.5 + 0.5;
+      col += uEnvGlow * (az * az * az) * exp(-max(e, 0.0) * 6.0);
+    #endif
     col = mix(col, uEnvGround, smoothstep(0.03, -0.2, e));
     float c = max(dot(d, uSunDir), 0.0);
     col += uEnvSun * (c * c * c * 0.35 + pow(c, 24.0) * 0.8);
@@ -286,6 +316,7 @@ export class Environment {
       uCirrus: { value: 0 },
       uOvercast: { value: 0 },
       uHazeK: { value: 16 }, // horizon haze band sharpness (broad and soft when overcast)
+      uTwilight: { value: 0 }, uRayK: { value: 0 }, uBelt: { value: new THREE.Color() }, // (SKY_FX >= 2)
       uNoise: { value: this.noiseTex },
     };
     this.sky = this.makeSky(30000);
@@ -322,9 +353,11 @@ export class Environment {
       uEnvHorizon: { value: new THREE.Color() },
       uEnvGround: { value: new THREE.Color() },
       uEnvSun: { value: new THREE.Color() },
+      uEnvGlow: { value: new THREE.Color() },
     };
     this.envSky = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false, uniforms: this.envUniforms, vertexShader: SKY_VERT, fragmentShader: ENV_FRAG,
+      defines: { SKY_FX: 0 },
     }));
     this.envScene.add(this.envSky);
     this.envStars = this.stars.clone();
@@ -338,6 +371,11 @@ export class Environment {
     this.envTimer = 0;
     this.envKey = -99; // sun height / weather the IBL was last captured at
     this.scene.environmentIntensity = 1;
+    // graphics preset realism tier: the sky's extra scattering, the environment's sun-side horizon, a sharper
+    // environment map on Super Ultra, light-space shadow snapping (fx 0 = exactly the original)
+    this.fx = -1;
+    this.applyFx(quality);
+    onQualityChange((q) => this.applyFx(q));
 
     this.fogScale = 1; // graphics preset: thicker haze hides a shorter view distance
     this.fogColor = new THREE.Color();
@@ -352,6 +390,7 @@ export class Environment {
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
       uniforms: this.skyUniforms, vertexShader: SKY_VERT, fragmentShader: SKY_FRAG,
+      defines: { SKY_FX: 0 },
     });
     const m = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 24), mat);
     m.frustumCulled = false;
@@ -435,6 +474,25 @@ export class Environment {
     m.frustumCulled = false;
     m.renderOrder = -8;
     return m;
+  }
+
+  applyFx(q) {
+    const fx = fxOf(q);
+    if (fx === this.fx) return;
+    this.fx = fx;
+    for (const m of [this.sky.material, this.envSky.material]) { m.defines.SKY_FX = fx; m.needsUpdate = true; }
+    // Super Ultra: a 512 px environment cube (crisper reflections in paint and glass); 256 otherwise
+    const res = fx >= 4 ? 512 : 256;
+    if (this.envCube.width !== res) {
+      this.envCube.dispose();
+      this.envCube = new THREE.WebGLCubeRenderTarget(res, { type: THREE.HalfFloatType, generateMipmaps: false });
+      this.envCubeCam = new THREE.CubeCamera(0.1, 5000, this.envCube);
+      // the PMREM target and generator are sized by the cube: new ones (the old map stays bound until replaced)
+      if (this.envRT) { this.envRTOld = this.envRT; this.envRT = null; }
+      this.pmrem.dispose();
+      this.pmrem = new THREE.PMREMGenerator(this.renderer);
+    }
+    this.envTimer = 0; // recapture with the new shader
   }
 
   // graphics preset: shadow map size, the area it covers around the player, PCF or soft PCF (main.js)
@@ -561,6 +619,13 @@ export class Environment {
     su.uWisp.value.copy(su.uHorizon.value).lerp(su.uGlow.value, 0.35).multiplyScalar(0.55).addScalar(0.35 * this.dayFactor);
     su.uOvercast.value = overcast;
     su.uHazeK.value = lerp(16, 4.5, overcast);
+    if (this.fx >= 2) {
+      // twilight arch (Earth's shadow + Belt of Venus) from just before sunset until the sun is ~9 deg down
+      su.uTwilight.value = clearSky * smoothstep(0.1, 0.0, sunH) * (1 - smoothstep(-0.06, -0.16, sunH));
+      su.uRayK.value = clearSky * smoothstep(0.02, 0.25, sunH);
+      const hl = su.uHorizon.value.r * 0.2126 + su.uHorizon.value.g * 0.7152 + su.uHorizon.value.b * 0.0722;
+      su.uBelt.value.setRGB(1.0, 0.6, 0.66).multiplyScalar(hl * 0.45);
+    }
     su.uMoonGlow.value.setRGB(0.05, 0.075, 0.13).multiplyScalar(this.nightFactor * (1 - overcast * 0.85) * smoothstep(-0.1, 0.15, this.moonDir.y));
     su.uTime.value += dt;
 
@@ -600,8 +665,10 @@ export class Environment {
     eu.uEnvHorizon.value.copy(su.uHorizon.value).lerp(su.uMid.value, 0.3);
     desaturate(eu.uEnvHorizon.value, 0.7).multiplyScalar(0.35);
     const bounce = this.sun.intensity * Math.max(this.lightDir.y, 0) * 0.85 / Math.PI;
-    eu.uEnvGround.value.copy(this.sun.color).multiplyScalar(bounce * 0.3).add(this.tmpB.copy(eu.uEnvZenith.value).multiplyScalar(0.25));
+    // (realistic tiers: the sunlit snowfield below lights the undersides of cars, people and eaves a little more)
+    eu.uEnvGround.value.copy(this.sun.color).multiplyScalar(bounce * (this.fx >= 2 ? 0.4 : 0.3)).add(this.tmpB.copy(eu.uEnvZenith.value).multiplyScalar(0.25));
     eu.uEnvSun.value.copy(this.sun.color).multiplyScalar(useMoon ? 0 : this.sun.intensity * 0.05);
+    if (this.fx >= 1) eu.uEnvGlow.value.copy(su.uGlow.value).multiplyScalar(clearSky * (0.08 + 0.45 * dusk) * this.dayFactor);
 
     // ---- stars, moon, dome follow the camera
     this.stars.material.uniforms.uNight.value = this.nightFactor * (1 - overcast);
@@ -619,8 +686,19 @@ export class Environment {
     if (ext !== this.shadowExtentNow) this.setShadowFrustum(ext);
     // shadow frustum follows the player, snapped to texels to avoid shimmering
     const texel = (ext * 2) / this.sun.shadow.mapSize.x;
-    const fx = Math.round(focus.x / texel) * texel, fz = Math.round(focus.z / texel) * texel;
-    this.sun.target.position.set(fx, focus.y, fz);
+    if (this.fx >= 1 && Math.abs(this.lightDir.y) < 0.995) {
+      // snapped in the shadow camera's own frame (its right / up axes, as lookAt builds them): the map moves in
+      // whole texels as the player moves, so shadow edges never crawl or shimmer (world x / z snapping only
+      // lined up with the texels for a sun straight overhead)
+      _sf.copy(this.lightDir); // camera z (it looks along -lightDir)
+      _sx.crossVectors(_up, _sf).normalize();
+      _sy.crossVectors(_sf, _sx);
+      const a = Math.round(focus.dot(_sx) / texel) * texel, b = Math.round(focus.dot(_sy) / texel) * texel, c = focus.dot(_sf);
+      this.sun.target.position.copy(_sx).multiplyScalar(a).addScaledVector(_sy, b).addScaledVector(_sf, c);
+    } else {
+      const fx = Math.round(focus.x / texel) * texel, fz = Math.round(focus.z / texel) * texel;
+      this.sun.target.position.set(fx, focus.y, fz);
+    }
     this.sun.position.copy(this.sun.target.position).addScaledVector(this.lightDir, 600);
     this.sun.target.updateMatrixWorld();
 
@@ -635,6 +713,7 @@ export class Environment {
       this.envCubeCam.update(this.renderer, this.envScene);
       this.envRT = this.pmrem.fromCubemap(this.envCube.texture, this.envRT);
       this.scene.environment = this.envRT.texture;
+      if (this.envRTOld) { this.envRTOld.dispose(); this.envRTOld = null; }
     }
   }
 }

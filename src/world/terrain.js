@@ -12,7 +12,15 @@ export const terrainUniforms = {
   uTime: { value: 0 },
   uSparkle: { value: 1 },
   uSnowCover: { value: 0 }, // fresh snow amount (covers trails / rock edges)
+  uIcy: { value: 0 }, // hard frozen pistes after freezing weather (env.icy; Terrain.update), FX >= 1 only
 };
+
+// Realism tier of the graphics preset (quality.fx): 0 = Super Performance / Performance (the original look, untouched),
+// 1 = Balanced (cheap snow shading wins), 2 = High (+ sparkle, sky, tree shading), 3 = Ultra, 4 = Super Ultra (maxed).
+// (falls back to 4 for a 'superultra' / cine preset that predates the fx field)
+export function fxLevel(q = quality) {
+  return q.fx ?? (q.name === 'superultra' || q.cine ? 4 : 0);
+}
 
 // Tileable noise texture: R = fbm, GB = its gradient, A = a second independent fbm.
 // Sampling this is far cheaper than procedural noise per pixel and mipmaps away distant aliasing.
@@ -206,7 +214,7 @@ function clipDepthMaterial() {
 export function createTerrainMaterial({ clip = false } = {}) {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0 });
   // shader detail (graphics preset): 0 = lean (Performance), 1 = full, 2 = cinematic snow micro detail + sparkle
-  mat.defines = { TERRAIN_DETAIL: quality.terrain.detail };
+  mat.defines = { TERRAIN_DETAIL: quality.terrain.detail, TERRAIN_FX: fxLevel() };
   if (clip) mat.defines.TERRAIN_CLIP = 1; // the clip volumes' discard (setTerrainClips)
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, terrainUniforms);
@@ -282,6 +290,8 @@ export function createTerrainMaterial({ clip = false } = {}) {
         }
         float tRock; float tGroomed; float tDist; vec3 tTriW; float tFw; vec3 tRockN;
         vec2 tRelG; float tRelV; float tRelK; float tRelA; // wind-sculpted snow relief at the pixel's scale (gradient, height, strength, grain)
+        float tIce; // scraped hard-pack ice on groomed runs (TERRAIN_FX >= 1), 0 elsewhere
+        uniform float uIcy;
         float tCav; // rock cavities / crevices (0) .. proud faces (1): the sky light reaches less into them
         vec3 tPN; // world-space shading normal (normal_fragment_maps)
         // floodlit pools (night skiing); the terrain lights itself, so it skips the lit-materials patch
@@ -298,6 +308,7 @@ export function createTerrainMaterial({ clip = false } = {}) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
           tDist = length(vWPos - cameraPosition);
+          tIce = 0.0;
           tDx = dFdx(vWPos); tDy = dFdy(vWPos);
           tFw = length(abs(tDx) + abs(tDy)); // metres per pixel (derivatives stay outside branches)
           vec3 wn = normalize(vWNormal);
@@ -499,11 +510,37 @@ export function createTerrainMaterial({ clip = false } = {}) {
             vec3 forestCol = mix(vec3(0.022, 0.040, 0.052), vec3(0.50, 0.56, 0.63), smoothstep(0.4, 0.9, nTexL(vWPos.xz * 0.12, max(log2(32.0 * 0.12 * max(tFw, 1e-3)), 0.0)).r));
             alb = mix(alb, forestCol, forestFar * 0.85);
           }
+          #if TERRAIN_FX >= 1
+          {
+            // km-scale variation: wind-scoured, slightly duller crust beside fresh deposits, so the big slopes never
+            // read as one flat white plane (explicit gradients: anisotropic, no implicit derivatives needed)
+            const vec2 kM = vec2(0.0011);
+            float mac = nTexG(vWPos.xz * kM + vec2(2.3, 5.1), tDx.xz * kM, tDy.xz * kM).a;
+            alb *= mix(1.0, 0.95 + 0.085 * smoothstep(0.25, 0.75, mac), (1.0 - tRock) * (1.0 - uSnowCover * 0.7));
+            // scraped hard-pack / ice on the groomed runs: patches stretched down the fall line on the steeper
+            // pitches, more of them after freezing weather, buried again by fresh snow
+            if (tGroomed > 0.01 && tDist < 900.0) {
+              vec2 pdI = normalize(vData.zw + 1e-4), acI = vec2(-pdI.y, pdI.x);
+              const vec2 kI = vec2(0.018, 0.07);
+              vec2 iq = vec2(dot(vWPos.xz, pdI), dot(vWPos.xz, acI)) * kI;
+              vec2 iqx = vec2(dot(tDx.xz, pdI), dot(tDx.xz, acI)) * kI, iqy = vec2(dot(tDy.xz, pdI), dot(tDy.xz, acI)) * kI;
+              vec4 ic = nTexG(iq + 11.7, iqx, iqy);
+              float pitch = smoothstep(0.06, 0.24, slope);
+              float th = 0.66 - uIcy * 0.12;
+              tIce = smoothstep(th, th + 0.1, ic.r * 0.75 + ic.a * 0.25) * tGroomed * (0.3 + 0.7 * pitch) * (1.0 - uSnowCover)
+                * (1.0 - smoothstep(500.0, 900.0, tDist));
+              alb = mix(alb, vec3(0.6, 0.67, 0.76), tIce * 0.42);
+            }
+          }
+          #endif
           diffuseColor.rgb = alb;
         }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(0.58, 0.92, tRock);
-        roughnessFactor = mix(roughnessFactor, 0.72, tGroomed);`)
+        roughnessFactor = mix(roughnessFactor, 0.72, tGroomed);
+        #if TERRAIN_FX >= 1
+          roughnessFactor = mix(roughnessFactor, 0.17, tIce);
+        #endif`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         {
           // world-space detail normals: drifts, sastrugi, snow grain, corduroy on pistes
@@ -540,6 +577,18 @@ export function createTerrainMaterial({ clip = false } = {}) {
           float fw = fwidth(across) / 0.12;
           float cordFade = (1.0 - smoothstep(0.12, 0.3, fw)) * (1.0 - smoothstep(3.0, 14.0, tDist)) * tGroomed;
           g += vec2(-pd.y, pd.x) * cord * 0.09 * cordFade;
+          #if TERRAIN_FX >= 1
+            // grain at two more scales, rotated against the first: the detail normal never tiles
+            if (fade * onSnow > 0.0) {
+              vec2 gq = mat2(0.6, -0.8, 0.8, 0.6) * vWPos.xz;
+              vec2 gg = ngrad(gq * 1.37 + 5.3) * 0.032;
+              #if TERRAIN_FX >= 3
+                gg += ngrad(gq * 7.9 + 1.1) * 0.016 * (1.0 - smoothstep(10.0, 40.0, tDist));
+              #endif
+              g += gg * fade * onSnow * (1.0 - 0.5 * tGroomed);
+            }
+            g *= 1.0 - 0.8 * tIce; // ice is smooth
+          #endif
           // rock relief (from color_fragment) + sharp close-range detail, triplanar so cliffs aren't smeared
           vec3 rockN = tRockN;
           #if TERRAIN_DETAIL >= 1
@@ -575,11 +624,38 @@ export function createTerrainMaterial({ clip = false } = {}) {
           // white, so the mid-tones read cyan-blue instead of a lavender grey
           #if NUM_DIR_LIGHTS > 0
             float tNdl = saturate(dot(normal, directionalLights[0].direction));
-            vec3 tCool = mix(vec3(0.5, 0.82, 1.18), vec3(1.0), smoothstep(0.15, 1.0, tNdl));
+            #if TERRAIN_FX >= 2
+              // (realistic tiers: sunlit snow keeps more of its white as the light grazes it; the shade stays blue)
+              vec3 tCool = mix(vec3(0.7, 0.88, 1.1), vec3(1.0), smoothstep(0.1, 1.0, tNdl));
+            #else
+              vec3 tCool = mix(vec3(0.5, 0.82, 1.18), vec3(1.0), smoothstep(0.15, 1.0, tNdl));
+            #endif
             reflectedLight.directDiffuse *= mix(vec3(1.0), tCool, sunK * tSnowK);
           #endif
-          reflectedLight.directSpecular *= 1.0 - 0.65 * tSnowK;
-          reflectedLight.indirectSpecular *= 1.0 - 0.45 * tSnowK;
+          float tSpecK = tSnowK;
+          #if TERRAIN_FX >= 1
+            tSpecK *= 1.0 - tIce; // the ice keeps its full sheen and sky reflection
+          #endif
+          reflectedLight.directSpecular *= 1.0 - 0.65 * tSpecK;
+          reflectedLight.indirectSpecular *= 1.0 - 0.45 * tSpecK;
+          #if TERRAIN_FX >= 1 && NUM_DIR_LIGHTS > 0
+          {
+            // directLight = the sun after its shadow map (the scene's only directional light, lit last in
+            // lights_fragment_begin)
+            vec3 sunE = directLight.color;
+            float ndlS = dot(normal, directionalLights[0].direction);
+            // subsurface: light diffusing through the top centimetres of snow softens the terminator, its edge blue
+            // (snow absorbs a little red on the way)
+            float wrapE = saturate((ndlS + 0.4) / 1.4) - saturate(ndlS);
+            reflectedLight.directDiffuse += sunE * wrapE * vec3(0.45, 0.72, 1.0) * 0.55 * BRDF_Lambert(diffuseColor.rgb) * tSnowK;
+            #if TERRAIN_FX >= 2
+              // snow scatters strongly forward: looking toward the sun across it, sunlit snow takes on a silvery sheen
+              float tBack = saturate(dot(-geometryViewDir, directionalLights[0].direction));
+              float tGrz = 1.0 - saturate(dot(normal, geometryViewDir));
+              reflectedLight.directSpecular += sunE * (pow(tBack, 8.0) * tGrz * tGrz * saturate(ndlS + 0.2) * 0.05 * tSnowK * (1.0 - tIce) * (1.0 - 0.5 * uSnowCover));
+            #endif
+          }
+          #endif
           // glints: sparse sun-facing ice facets, a few bright enough to bloom
           #if NUM_DIR_LIGHTS > 0
             vec2 gp1 = vWPos.xz * 16.0, gp2 = vWPos.xz * 4.5 + 0.5;
@@ -588,7 +664,18 @@ export function createTerrainMaterial({ clip = false } = {}) {
               vec2 gp3 = vWPos.xz * 34.0 + 0.25;
               float px3 = max(fwidth(gp3.x), fwidth(gp3.y));
             #endif
-            float sFade = (1.0 - tRock) * uSparkle * (1.0 - smoothstep(70.0, 120.0, tDist));
+            #if TERRAIN_FX >= 3
+              // a coarser facet layer that keeps the snow sparkling out to ~200 m (the finer cells drop under a pixel)
+              vec2 gp4 = vWPos.xz * 1.6 + 0.75;
+              float px4 = max(fwidth(gp4.x), fwidth(gp4.y));
+              #if TERRAIN_FX >= 4
+                float sFade = (1.0 - tRock) * uSparkle * (1.0 - smoothstep(170.0, 260.0, tDist));
+              #else
+                float sFade = (1.0 - tRock) * uSparkle * (1.0 - smoothstep(120.0, 200.0, tDist));
+              #endif
+            #else
+              float sFade = (1.0 - tRock) * uSparkle * (1.0 - smoothstep(70.0, 120.0, tDist));
+            #endif
             if (sFade > 0.0) {
               vec3 gn = normalize(vWNormal);
               vec3 Vw = normalize(cameraPosition - vWPos);
@@ -608,8 +695,18 @@ export function createTerrainMaterial({ clip = false } = {}) {
                   spark += glint(gp3, px3, gt, H) * 0.9 * smoothstep(0.35, 0.85, graze) * (1.0 - smoothstep(16.0, 28.0, tDist));
                 }
               #endif
+              #if TERRAIN_FX >= 3
+                spark += glint(gp4, px4, gn, H) * 0.75 * smoothstep(45.0, 95.0, tDist);
+              #endif
               vec3 sunLit = reflectedLight.directDiffuse / max(diffuseColor.rgb, vec3(0.05));
-              reflectedLight.directSpecular += spark * sFade * 10.0 * sunLit;
+              #if TERRAIN_FX >= 2
+                // up close each ice crystal splits the sun a little like a prism: faint colours in the glints
+                vec3 gTint = 0.72 + 0.28 * cos(6.2832 * (tHash(ivec2(floor(gp1)) + ivec2(3, 71)) + vec3(0.0, 0.33, 0.67)));
+                gTint = mix(vec3(1.0), gTint, 0.6 * (1.0 - smoothstep(4.0, 15.0, tDist)));
+                reflectedLight.directSpecular += spark * sFade * 10.0 * sunLit * gTint;
+              #else
+                reflectedLight.directSpecular += spark * sFade * 10.0 * sunLit;
+              #endif
             }
           #endif
           // night skiing: warm pools under the floodlight masts. The nearest masts light every pixel (beam,
@@ -695,8 +792,9 @@ export class Terrain {
       this.lastCenter.set(1e9, 1e9);
       for (const a of this.active.values()) a.mesh.castShadow = a.node.size <= q.shadow.terrainCast;
       for (const m of [this.material, this.clipMaterial]) {
-        if (m && m.defines.TERRAIN_DETAIL !== q.terrain.detail) {
+        if (m && (m.defines.TERRAIN_DETAIL !== q.terrain.detail || m.defines.TERRAIN_FX !== fxLevel(q))) {
           m.defines.TERRAIN_DETAIL = q.terrain.detail;
+          m.defines.TERRAIN_FX = fxLevel(q);
           m.needsUpdate = true;
         }
       }
@@ -868,6 +966,7 @@ export class Terrain {
   }
 
   update(px, pz, budgetMs = 6) {
+    terrainUniforms.uIcy.value = globalThis.__game?.env?.icy || 0;
     if (Math.hypot(px - this.lastCenter.x, pz - this.lastCenter.y) > 24) {
       this.lastCenter.set(px, pz);
       this.desired = this.computeDesired(px, pz);

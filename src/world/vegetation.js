@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { world } from './world.js';
 import { hash2 } from '../core/noise.js';
 import { bakeGeometry, fitModel, clusterDecimate } from '../core/assets.js';
-import { terrainUniforms } from './terrain.js';
+import { terrainUniforms, fxLevel } from './terrain.js';
 import { quality, onQualityChange } from '../engine/quality.js';
 import { boulderKit, withGround, BOULDER_VARIANTS } from './boulders.js';
 import { EXPRESS, expressNearest, inExpressTunnel, PORTAL_IN } from './expressroute.js';
@@ -169,6 +169,7 @@ export class Vegetation {
       return m;
     };
     const pineMats = this.types.map((t, i) => this.pineMaterial(t.material, lumNorm[i]));
+    this.pineMats = pineMats;
     this.closeMeshes = this.types.map((t, i) => makeInst(t.geometry, pineMats[i], 2500, true));
     this.nearMeshes = this.types.map((t, i) => makeInst(clusterDecimate(t.geometry, 0.09), pineMats[i], MAX_NEAR, true));
 
@@ -194,6 +195,8 @@ export class Vegetation {
     const applyQuality = (q) => {
       this.farRUniform.value = q.veg.farR;
       for (const m of this.nearMeshes) m.castShadow = q.veg.nearShadow;
+      const fx = fxLevel(q); // (realism tier: the pine shading below, High and up)
+      for (const m of this.pineMats) if (m.defines.PINE_FX !== fx) { m.defines.PINE_FX = fx; m.needsUpdate = true; }
       this.lastRebuild.set(1e9, 1e9);
     };
     applyQuality(quality);
@@ -207,6 +210,7 @@ export class Vegetation {
     mat.emissive.setRGB(0, 0, 0);
     mat.emissiveMap = null;
     mat.metalness = 0;
+    mat.defines = { ...(mat.defines || {}), PINE_FX: fxLevel() };
     const wind = this.windUniform, snow = this.snowUniform, uLumNorm = { value: lumNorm };
     mat.onBeforeCompile = (s) => {
       s.uniforms.uWind = wind;
@@ -224,6 +228,12 @@ export class Vegetation {
           vec3 ip = vec3(instanceMatrix[3]);
           transformed.x += sin(uWind * 1.3 + ip.x * 0.1 + ip.z * 0.07) * sway;
           transformed.z += cos(uWind * 1.1 + ip.z * 0.1) * sway * 0.6;
+          #if PINE_FX >= 2
+            // branch flutter: the outer branch tips shiver a little on their own in the wind
+            float rr = length(position.xz) * position.y;
+            transformed.x += sin(uWind * 3.7 + dot(position, vec3(11.0, 7.0, 5.0)) * 9.0 + ip.x) * rr * 0.02;
+            transformed.z += cos(uWind * 3.1 + dot(position, vec3(5.0, 9.0, 13.0)) * 9.0 + ip.z) * rr * 0.02;
+          #endif
           vPineW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;`);
       s.fragmentShader = s.fragmentShader
         .replace('#include <common>', `#include <common>
@@ -246,6 +256,25 @@ export class Vegetation {
             reflectedLight.directDiffuse *= crown;
             reflectedLight.directSpecular *= crown;
             reflectedLight.indirectDiffuse *= pineSkyOcclusion(vPineObj.y);
+            #if PINE_FX >= 2 && NUM_DIR_LIGHTS > 0
+            {
+              // close trees only (the impostors carry the averaged look, so this fades before they take over)
+              float pNear = 1.0 - smoothstep(60.0, 110.0, distance(vPineW, cameraPosition));
+              // needles deep in the crown, near the trunk, see little sky (cone-shaped crown, the model is 1 high)
+              float cr = 0.3 * (1.0 - clamp(vPineObj.y, 0.0, 1.0)) + 0.03;
+              float inner = smoothstep(0.15, 0.9, length(vPineObj.xz) / cr);
+              reflectedLight.indirectDiffuse *= mix(1.0, 0.55 + 0.45 * inner, pNear);
+              // translucency: the thin outer needles glow green-gold when the sun is behind them (directLight = the
+              // sun after its shadow map, so only needles the light really reaches); not the snow on them
+              float pBack = saturate(dot(-geometryViewDir, directionalLights[0].direction));
+              float pAlb = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b));
+              float pTr = pow(pBack, 5.0) * (0.3 + 0.7 * inner) * pNear * (1.0 - smoothstep(0.12, 0.4, pAlb));
+              #if PINE_FX >= 3
+                pTr *= 1.25;
+              #endif
+              reflectedLight.directDiffuse += directLight.color * diffuseColor.rgb * vec3(0.9, 1.25, 0.65) * pTr * 0.45;
+            }
+            #endif
           }`);
     };
     return mat;

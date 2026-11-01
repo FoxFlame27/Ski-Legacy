@@ -1,10 +1,16 @@
 // Post chain: HDR scene render (MSAA per preset) -> [bloom] -> [half-res ambient occlusion + sun shafts] ->
 // one final pass: tone map, sRGB, grade, vignette, speed streaks. The graphics preset (engine/quality.js) decides
 // which steps run; every step stays crisp (no blur on the image, no grain).
+// (Nov 1 2026 graphics pass, Balanced and up only: SMAA after the final pass (quality.smaa); horizon-based ambient
+// occlusion (GTAO, quality.gtao) at the screen's native or half resolution, not the supersampled one; bloom sized from
+// the native resolution so its glow keeps its width when supersampling; MSAA samples up to the GPU's limit (8x on
+// Ultra, 4x once the frame passes ~6 MP); PBR Neutral tone mapping on quality.tone === 'neutral'; a sub-LSB dither
+// against sky banding. Performance / Super Performance run exactly the chain they had.)
 import * as THREE from 'three';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
-import { quality, screenDPR } from './quality.js';
+import { quality, screenDPR, gpuCaps } from './quality.js';
 import { live } from '../core/settings.js'; // (SETTINGS: bloom, speed streaks, vignette, brightness)
 
 const QUAD_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
@@ -80,13 +86,66 @@ const AO_FRAG = `
   uniform vec2 uFullTexel;
   uniform float uRadius, uIntensity, uProjScale, uSamples;
   uniform vec2 uSunUV; uniform float uShafts;
+  uniform float uMaxPx, uDirs, uSteps;
   varying vec2 vUv;
   float bayer2(vec2 a) { a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
   float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+  #ifdef GTAO
+  // Ground-truth-style horizon AO (Jimenez et al. 2016): per pixel uDirs screen-space slices, each searched both
+  // ways for its highest horizon within the world radius, the cosine-weighted visible arc integrated analytically
+  // against the slice-projected normal. The slice angle and step offsets rotate over the same 4 x 4 pattern the
+  // blur below averages out exactly (16x the slices for the cost of uDirs).
+  float gtao(vec3 P, vec3 N, vec2 uv0, float z) {
+    const float HALF_PI = 1.5707963;
+    vec3 V = normalize(-P);
+    float R = uRadius * (1.0 + z * 0.01);
+    float ssR = min(R * uProjScale / z, uMaxPx);   // full-res pixels
+    if (ssR < 1.5) return 1.0;
+    float b = bayer4(gl_FragCoord.xy), jit = fract(b * 4.0) + 0.125;
+    float fallFrom = R * 0.385, fallInv = 1.0 / (R * 0.615);
+    float vis = 0.0;
+    for (int d = 0; d < 4; d++) {
+      if (float(d) >= uDirs) break;
+      float phi = (float(d) + b) * 3.14159265 / uDirs;
+      vec3 dir = vec3(cos(phi), sin(phi), 0.0);
+      vec3 ortho = dir - dot(dir, V) * V;
+      vec3 axis = normalize(cross(ortho, V));
+      vec3 pN = N - axis * dot(N, axis);
+      float pLen = length(pN);
+      if (pLen < 1e-4) { vis += 1.0; continue; }
+      float cosN = clamp(dot(pN, V) / pLen, -1.0, 1.0);
+      float n = sign(dot(ortho, pN)) * acos(cosN);
+      float low0 = cos(n + HALF_PI), low1 = cos(n - HALF_PI);
+      float h0c = low0, h1c = low1;
+      for (int s = 0; s < 12; s++) {
+        if (float(s) >= uSteps) break;
+        float t = (float(s) + jit) / uSteps;
+        vec2 off = dir.xy * max(1.0, t * t * ssR) * uFullTexel;
+        vec3 S1 = viewPos(uv0 + off, viewZ(uv0 + off)) - P;
+        vec3 S0 = viewPos(uv0 - off, viewZ(uv0 - off)) - P;
+        float l1 = length(S1), l0 = length(S0);
+        float c1 = dot(S1, V) / max(l1, 1e-5) - 0.03, c0 = dot(S0, V) / max(l0, 1e-5) - 0.03; // (bias: depth precision)
+        h1c = max(h1c, mix(low1, c1, clamp(1.0 - (l1 - fallFrom) * fallInv, 0.0, 1.0)));
+        h0c = max(h0c, mix(low0, c0, clamp(1.0 - (l0 - fallFrom) * fallInv, 0.0, 1.0)));
+      }
+      float h0 = n + max(-acos(clamp(h0c, -1.0, 1.0)) - n, -HALF_PI);
+      float h1 = n + min(acos(clamp(h1c, -1.0, 1.0)) - n, HALF_PI);
+      float sn = sin(n);
+      vis += pLen * 0.25 * ((cosN + 2.0 * h0 * sn - cos(2.0 * h0 - n)) + (cosN + 2.0 * h1 * sn - cos(2.0 * h1 - n)));
+    }
+    float ao = pow(clamp(vis / uDirs, 0.0, 1.0), uIntensity);
+    return mix(ao, 1.0, smoothstep(90.0, 300.0, z)); // contact shading: the far landscape stays crisp
+  }
+  #endif
   void main() {
+    #ifdef GTAO
+      // (any AO resolution: the full-res depth texel under this pixel)
+      vec2 uv0 = (floor(vUv / uFullTexel) + 0.5) * uFullTexel;
+    #else
     // (a half-res pixel centre is a corner of the full-res depth texels: step onto one texel's centre, so the
     // neighbours below are exactly one texel away instead of rounding either way)
     vec2 uv0 = vUv - 0.5 * uFullTexel;
+    #endif
     float z = viewZ(uv0);
     if (z > 1500.0) { gl_FragColor = vec4(1.0, 0.0, z, 1.0); }
     else {
@@ -99,8 +158,11 @@ const AO_FRAG = `
       vec3 ey = abs(Pu.z - P.z) < abs(P.z - Pd.z) ? Pu - P : P - Pd;
       vec3 cn = cross(ex, ey);
       vec3 N = dot(cn, cn) > 1e-14 ? normalize(cn) : vec3(0.0, 0.0, 1.0);
+      #ifdef GTAO
+      gl_FragColor = vec4(gtao(P, N, uv0, z), 0.0, z, 1.0);
+      #else
       float R = uRadius * (1.0 + z * 0.012);          // a little wider far away (contact shading on buildings)
-      float ssR = min(R * uProjScale / z, 90.0);      // pixels
+      float ssR = min(R * uProjScale / z, uMaxPx);    // pixels (90)
       float rot = bayer4(gl_FragCoord.xy) * 6.2831853;
       float R2 = R * R, sum = 0.0;
       for (int i = 0; i < 16; i++) {
@@ -118,6 +180,7 @@ const AO_FRAG = `
       float ao = max(0.0, 1.0 - sum * uIntensity * 5.0 / (R2 * R2 * R2 * uSamples));
       ao = mix(ao, 1.0, smoothstep(70.0, 220.0, z)); // contact shading only: the far landscape stays crisp
       gl_FragColor = vec4(ao, 0.0, z, 1.0);
+      #endif
     }
     // sun shafts: how much open sky lies between this pixel and the sun (16 taps, jittered by the same pattern)
     if (uShafts > 0.0) {
@@ -159,8 +222,30 @@ const FINAL_FRAG = `
   #include <tonemapping_pars_fragment>
   varying vec2 vUv;
   float hash(float n) { return fract(sin(n * 91.3458) * 47453.5453); }
+  #ifdef TONE_NEUTRAL
+  // Khronos PBR Neutral (as three's NeutralToneMapping): base colours stay as authored up to 0.76, highlights roll
+  // off into white (sunlit snow reads white with its detail, not ACES's grey-cyan). Exposure matched to the old ACES
+  // at mid grey (0.72 / 0.6 ACES -> 0.983 here), then a gentle filmic contrast round mid grey (ACES's punch, minus
+  // its hue skew).
+  vec3 pbrNeutral(vec3 color) {
+    float x = min(color.r, min(color.g, color.b));
+    color -= x < 0.08 ? x - 6.25 * x * x : 0.04;
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < 0.76) return color;
+    float d = 0.24, newPeak = 1.0 - d * d / (peak + d - 0.76);
+    color *= newPeak / peak;
+    return mix(color, vec3(newPeak), 1.0 - 1.0 / (0.15 * (peak - newPeak) + 1.0));
+  }
+  vec3 toneMap(vec3 c) {
+    c = max(c * (toneMappingExposure * 1.365), 0.0);
+    c = 0.18 * pow(c / 0.18, vec3(1.08));
+    return pbrNeutral(c);
+  }
+  #else
+  vec3 toneMap(vec3 c) { return ACESFilmicToneMapping(c); }
+  #endif
   // HDR -> display values (for the sharpening below)
-  vec3 toDisplay(vec3 c) { return sRGBTransferOETF(vec4(ACESFilmicToneMapping(min(c, vec3(64.0))), 1.0)).rgb; }
+  vec3 toDisplay(vec3 c) { return sRGBTransferOETF(vec4(toneMap(min(c, vec3(64.0))), 1.0)).rgb; }
   void main(){
     vec3 col = texture2D(tDiffuse, vUv).rgb;
     if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
@@ -186,7 +271,7 @@ const FINAL_FRAG = `
       col += texture2D(tBloom, vUv).rgb * uBloom;
     #endif
     // tone map + sRGB (as three's OutputPass; sRGBTransferOETF comes with three's shader prefix)
-    col = ACESFilmicToneMapping(col);
+    col = toneMap(col);
     col = sRGBTransferOETF(vec4(col, 1.0)).rgb;
     // Upscale sharpening: when the scene is rendered below the screen's resolution (the Performance /
     // Balanced presets, dynamic resolution) the browser's bilinear stretch softens every edge. An unsharp mask
@@ -207,7 +292,11 @@ const FINAL_FRAG = `
       col = mix(col, col * col * (3.0 - 2.0 * col), 0.22);
       float sat = max(col.r, max(col.g, col.b)) - min(col.r, min(col.g, col.b));
       l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      #ifdef TONE_NEUTRAL
+      col = mix(vec3(l), col, 1.07 + 0.13 * (1.0 - sat)); // (natural: snow keeps only a hint of blue)
+      #else
       col = mix(vec3(l), col, 1.1 + 0.22 * (1.0 - sat));
+      #endif
       col += vec3(-0.008, -0.002, 0.012) * (1.0 - l) * (1.0 - l) + vec3(0.012, 0.006, -0.01) * l * l;
       col = clamp(col, 0.0, 1.0);
     #else
@@ -232,10 +321,24 @@ const FINAL_FRAG = `
       col += vec3(0.93, 0.96, 1.0) * line * dash * edge * on * uSpeed * 0.16;
     }
     col = mix(col, vec3(0.9, 0.92, 1.0), uDamage * 0.5);
+    #ifdef DITHER
+      // triangular dither under one 8-bit step: smooth sky gradients and haze instead of bands
+      vec2 fc = gl_FragCoord.xy;
+      float dn = fract(sin(dot(fc, vec2(12.9898, 78.233))) * 43758.5453) + fract(sin(dot(fc, vec2(39.3468, 11.135))) * 24634.6345) - 1.0;
+      col = clamp(col + dn / 255.0, 0.0, 1.0);
+    #endif
     gl_FragColor = vec4(col, 1.0);
   }`;
 
 const _v = new THREE.Vector3(), _size = new THREE.Vector2();
+
+// MSAA samples for a w x h frame: the preset's, within the GPU's limit; the 8x presets fall back to 4x on a frame of
+// more than ~6 MP (supersampled: the extra samples cost a lot more there and add next to nothing)
+function msaaFor(w, h) {
+  let n = Math.min(quality.msaa || 0, gpuCaps.maxSamples || 4);
+  if (n > 4 && w * h > 6.2e6) n = 4;
+  return n;
+}
 
 export class Post {
   constructor(renderer, scene, camera) {
@@ -246,12 +349,20 @@ export class Post {
     renderer.shadowMap.autoUpdate = true; // (a preset change: the old chain may have left it to its every-other-frame rule)
     const size = renderer.getDrawingBufferSize(_size);
     this.useAO = quality.ao > 0;
-    this.target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: quality.msaa });
+    this.target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: msaaFor(size.x, size.y) });
     if (this.useAO) this.target.depthTexture = new THREE.DepthTexture(size.x, size.y);
 
     // HDR bloom: only genuinely bright things (sun glints, lamps, lit windows) glow, not the snow itself
-    this.bloom = new BloomTexture(new THREE.Vector2(size.x / 2, size.y / 2), 0.12, 0.35, 3.0);
+    // (High and up: a slightly wider, softer filmic glow round the sun glints and lamps)
+    const fx = quality.fx || 0;
+    this.bloom = new BloomTexture(new THREE.Vector2(size.x / 2, size.y / 2), fx >= 3 ? 0.14 : 0.12, fx >= 2 ? 0.45 : 0.35, 3.0);
     this.bloom.enabled = quality.bloom;
+    // SMAA after the final pass (Balanced and up): the final pass draws into an 8-bit target, SMAA blends to the screen
+    if (quality.smaa) {
+      this.ldr = new THREE.WebGLRenderTarget(size.x, size.y, { depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+      this.smaa = new SMAAPass(size.x, size.y);
+      this.smaa.renderToScreen = true;
+    }
 
     const nearFar = { value: new THREE.Vector2(camera.near, camera.far) }, invProj = { value: new THREE.Vector2(1, 1) };
     const depth = { value: this.target.depthTexture || null };
@@ -262,9 +373,11 @@ export class Post {
       this.aoQuad = new FullScreenQuad(new THREE.ShaderMaterial({
         uniforms: {
           tDepth: depth, uNearFar: nearFar, uInvProj: invProj, uFullTexel: { value: new THREE.Vector2() },
-          uRadius: { value: 1.1 }, uIntensity: { value: 0.9 }, uProjScale: { value: 500 }, uSamples: { value: quality.ao > 1 ? 12 : 8 },
+          uRadius: { value: quality.gtao ? 1.6 : 1.1 }, uIntensity: { value: quality.gtao ? 1.25 : 0.9 }, uProjScale: { value: 500 }, uSamples: { value: quality.ao > 1 ? 12 : 8 },
           uSunUV: { value: new THREE.Vector2() }, uShafts: { value: 0 },
+          uMaxPx: { value: 90 }, uDirs: { value: quality.aoDirs || 2 }, uSteps: { value: quality.aoSteps || 6 },
         },
+        defines: quality.gtao ? { GTAO: '' } : {},
         vertexShader: QUAD_VERT, fragmentShader: AO_FRAG, depthTest: false, depthWrite: false,
       }));
       this.aoBlurQuad = new FullScreenQuad(new THREE.ShaderMaterial({
@@ -274,6 +387,8 @@ export class Post {
     }
 
     const defines = { GRADE: quality.grade >= 2 ? 2 : 1 };
+    if (quality.tone === 'neutral') defines.TONE_NEUTRAL = '';
+    if (fx >= 1) defines.DITHER = '';
     if (this.useAO) defines.USE_AO = '';
     if (quality.bloom) defines.USE_BLOOM = '';
     this.final = new FullScreenQuad(new THREE.ShaderMaterial({
@@ -281,7 +396,7 @@ export class Post {
       uniforms: {
         tDiffuse: { value: this.target.texture }, tBloom: { value: null }, tAO: { value: this.aoTex?.texture || null },
         tDepth: depth, uNearFar: nearFar, uInvProj: invProj,
-        uBloom: { value: 1 }, uAO: { value: 0.75 }, uShaftK: { value: 0 }, uSunCol: { value: new THREE.Color() },
+        uBloom: { value: 1 }, uAO: { value: quality.gtao ? 0.85 : 0.75 }, uShaftK: { value: 0 }, uSunCol: { value: new THREE.Color() },
         toneMappingExposure: { value: renderer.toneMappingExposure },
         uTime: { value: 0 }, uSpeed: { value: 0 }, uVignette: { value: 0.18 }, uDamage: { value: 0 }, uAspect: { value: 16 / 9 },
         uTexel: { value: new THREE.Vector2(1, 1) }, uSharp: { value: 0 },
@@ -297,13 +412,21 @@ export class Post {
 
   setSize(w, h) {
     const size = this.renderer.getDrawingBufferSize(_size);
+    const samples = msaaFor(size.x, size.y);
+    if (samples !== this.target.samples) { this.target.samples = samples; this.target.dispose(); } // (re-made on its next use)
     this.target.setSize(size.x, size.y);
-    this.bloom.setSize(size.x, size.y);
+    // supersampling factor (drawing-buffer pixels per screen pixel, >= 1): bloom and GTAO are sized from the screen's
+    // native resolution on Balanced and up (the same glow width, AO at the cost of the screen, not of the supersampling)
+    const fx = quality.fx || 0, ss = fx >= 1 ? Math.max(1, this.renderer.getPixelRatio() / screenDPR()) : 1;
+    this.bloom.setSize(Math.round(size.x / ss), Math.round(size.y / ss));
+    if (this.smaa) { this.ldr.setSize(size.x, size.y); this.smaa.setSize(size.x, size.y); }
     if (this.useAO) {
-      const hw = Math.max(1, Math.round(size.x / 2)), hh = Math.max(1, Math.round(size.y / 2));
+      const k = quality.gtao ? (quality.aoRes || 0.5) / ss : 0.5;
+      const hw = Math.max(1, Math.round(size.x * k)), hh = Math.max(1, Math.round(size.y * k));
       this.aoRaw.setSize(hw, hh);
       this.aoTex.setSize(hw, hh);
       this.aoQuad.material.uniforms.uFullTexel.value.set(1 / size.x, 1 / size.y);
+      this.aoQuad.material.uniforms.uMaxPx.value = (quality.gtao ? 110 : 90) * ss;
       this.aoBlurQuad.material.uniforms.uTexel.value.set(1 / hw, 1 / hh);
     }
     const u = this.final.material.uniforms;
@@ -373,15 +496,22 @@ export class Post {
       r.setRenderTarget(this.aoTex);
       this.aoBlurQuad.render(r);
     }
-    r.setRenderTarget(null);
-    this.final.render(r);
+    if (this.smaa) {
+      r.setRenderTarget(this.ldr);
+      this.final.render(r);
+      this.smaa.render(r, null, this.ldr);
+    } else {
+      r.setRenderTarget(null);
+      this.final.render(r);
+    }
   }
 
   dispose() {
     this.target.depthTexture?.dispose();
     this.target.dispose();
     this.bloom.dispose();
-    for (const t of [this.aoRaw, this.aoTex]) t?.dispose();
+    this.smaa?.dispose();
+    for (const t of [this.aoRaw, this.aoTex, this.ldr]) t?.dispose();
     for (const q of [this.aoQuad, this.aoBlurQuad, this.final]) { if (q) { q.material.dispose(); q.dispose(); } }
   }
 }

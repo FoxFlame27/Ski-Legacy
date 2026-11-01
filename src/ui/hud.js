@@ -104,7 +104,6 @@ export function controlsTable(family = null) {
       [[L('furnish')], 'Furnish your chalet (inside it)'],
       [[L('lights')], 'Headlamp'],
       [[L('map')], 'Trail map'],
-      [[L('photo')], 'Photo mode'],
       [[L('pause')], 'Pause menu'],
       [[L('restart')], 'Restart a race instantly'],
     ], note: 'On foot you can\'t climb steep slopes: take a lift, a gondola or the ski bus.' },

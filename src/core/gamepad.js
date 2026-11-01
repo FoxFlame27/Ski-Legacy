@@ -1,7 +1,7 @@
 // CONTROLLER (Nov 1 2026, the user: "make the game for controller so you can play on controller: Xbox, PS5, PS4 and
 // Nintendo Switch, and make the controller vibrate e.g. when you land while skiing, crash in a car, get hit by a car").
 // Polled once a frame from main.js (poll(), before the frame's update). Everything goes through the keyboard path, so
-// every existing listener (pause, map, photo, interact, admin panels, menus) works unchanged:
+// every existing listener (pause, map, interact, admin panels, menus) works unchanged:
 //   - the left stick holds W A S D (and sets input.stickX / stickY, -1..1),
 //   - the right stick turns the view (input.mdx / mdy like the mouse, with or without pointer lock),
 //   - a button presses the game code of the action(s) bound to it (save.binds.pad over PAD_DEFAULTS, core/bindings.js)
@@ -217,7 +217,6 @@ export function poll() {
         // the screens' own toggles still work from a menu (the map button closes the map)
         const pad = bindsOf(save).pad;
         if (pad.map === i) tap(ACTION_CODE.map || 'KeyM');
-        else if (pad.photo === i) tap(ACTION_CODE.photo || 'KeyP');
       }
       continue;
     }

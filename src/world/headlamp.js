@@ -368,10 +368,10 @@ export class Headlamp {
   }
 
   applyQuality() {
-    const hi = quality.name === 'high' || quality.name === 'ultra';
+    const hi = (quality.fx ?? 0) >= 2; // (High, Ultra, Super Ultra)
     const L = this.light;
     if (L.castShadow !== hi) { L.castShadow = hi; L.shadow.needsUpdate = true; } // (a shadow change recompiles: preset changes only)
-    const ms = quality.name === 'ultra' ? 1024 : 512;
+    const ms = (quality.fx ?? 0) >= 3 ? 1024 : 512;
     if (L.shadow.mapSize.x !== ms) { L.shadow.mapSize.set(ms, ms); L.shadow.map?.dispose(); L.shadow.map = null; }
     const low = quality.name === 'performance' || quality.name === 'super';
     this.u.uSteps.value = quality.name === 'super' ? 2 : low ? 3 : hi ? 6 : 4;

@@ -89,10 +89,9 @@ import { PisteLights } from './world/pistelights.js'; // static: installs its li
 import { bootDone } from './engine/afterboot.js'; // (the cars' far LODs etc. wait for the menu: Oct 30 2026, loading time)
 import { Headlamp } from './world/headlamp.js';
 import { SKIS, PRICES, save, loadSave, writeSave, resetSave, skiById } from './game/economy.js';
-import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, screenDPR, QUALITY_LABELS, QUALITY_ORDER } from './engine/quality.js';
+import { quality, setQuality, normalizeQuality, detectQuality, lowerQuality, screenDPR, QUALITY_LABELS, QUALITY_ORDER, readGpuCaps, presetPixelRatio, gpuCaps } from './engine/quality.js';
 import { PersonalBests } from './game/bests.js';
 import { TrailMap } from './ui/trailmap.js';
-import { PhotoMode } from './ui/photomode.js';
 import { Chalets } from './game/chalets.js'; // the chalet village: rent a chalet, its interior
 import { seating } from './game/seating.js'; // sitting down on benches, chairs, sofas, bed edges (the whole map + your chalet)
 import { chaletInteriorAPI } from './game/chaletroom.js';
@@ -106,7 +105,6 @@ import { Multiplayer, errText } from './net/session.js';
 import { ST as MPST, F as MPF, fallFlags as mpFallFlags } from './net/protocol.js';
 const mpBodies = []; // (the other players to bump into: player.people in multiplayer)
 let multiplayer = null; // the multiplayer session (net/session.js), built at the end of boot
-let photo = null; // photo mode (P): frozen world, free orbit camera, no HUD
 let bests = null; // personal-best cards in free ride (top speed, longest jump, milestones)
 
 installHeightFog();
@@ -116,6 +114,7 @@ syncLive(save);
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
+readGpuCaps(renderer); // (MSAA samples, anisotropy and shadow map size the presets may ask for: engine/quality.js)
 
 // Graphics preset (engine/quality.js): the player's pick, else a fresh guess from the GPU at every launch
 // (corrected by the first seconds of play, see autoQuality; such a drop lasts that session only)
@@ -135,7 +134,10 @@ if (save.qualitySet !== 'user' || !normalizeQuality(save.quality)) {
 }
 save.quality = setQuality(save.quality);
 const DPR = screenDPR();
-const basePR = () => Math.min(DPR * quality.scale, quality.prCap) * live.renderScale; // (SETTINGS · Render scale)
+// (SETTINGS · Render scale; High and up supersample a plain screen within a pixel budget: engine/quality.js presetPixelRatio)
+const basePR = () => presetPixelRatio(DPR, innerWidth, innerHeight) * live.renderScale;
+// the title / menu panorama's resolution: at most 1.5x (instant menus), High and up never below the screen's own
+const menuPR = () => Math.min(dynRes.pr, quality.fx >= 2 ? Math.max(1.5, Math.min(DPR, quality.prCap) * live.renderScale) : 1.5);
 
 renderer.setPixelRatio(basePR());
 renderer.setSize(innerWidth, innerHeight);
@@ -383,10 +385,6 @@ async function boot() {
   races = new FreeCourses({ scene, models, modes, colliders });
   player.onTrick = (t) => { raceHud.trick(t); modes.session?.onTrick?.(t); };
   bests = new PersonalBests({ player, save, writeSave, raceHud, audio });
-  photo = new PhotoMode({
-    scene, camera, player, hud, onExit: () => input.lock(),
-    canEnter: () => started && !paused && !hud.panelOpen && document.getElementById('map').hidden && !modes.active && !races.active && !interior.active && !transition.active && !heli.active && !talk.busy,
-  });
   post = new Post(renderer, scene, camera);
 
   // walk-in ski shop + the ticket seller at the booth window
@@ -1911,9 +1909,9 @@ addEventListener('keydown', (e) => {
     && performance.now() - escClosedAt > 400) { openPause(); input.unlock(); }
 });
 
-// Overlays that free the mouse on purpose (panels, dialogs, map, admin, photo mode, outfits, conversations):
+// Overlays that free the mouse on purpose (panels, dialogs, map, admin, outfits, conversations):
 // opening one, or closing it with Esc, releases pointer lock too, and that must never open the pause menu
-const overlayOpen = () => input.cursorFree || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!admin?.fly || !!adminNew?.isOpen || !!photo?.active || !!outfitShop?.isOpen
+const overlayOpen = () => input.cursorFree || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!admin?.fly || !!adminNew?.isOpen || !!outfitShop?.isOpen
   || !!talk?.active || !document.getElementById('map').hidden || document.getElementById('travel')?.hidden === false; // (travel: route / flight map pickers)
 let escClosedAt = -1e9;
 addEventListener('keydown', (e) => { if (e.code === 'Escape' && (overlayOpen() || padMenu())) escClosedAt = performance.now(); }, true); // capture: before the overlay closes itself
@@ -1937,6 +1935,7 @@ document.getElementById('map').addEventListener('click', () => { document.getEle
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  if (quality.ss) { resetDynRes(); renderer.setPixelRatio(menuRes && !started ? menuPR() : dynRes.pr); } // (the supersampling budget follows the window)
   renderer.setSize(innerWidth, innerHeight);
   post?.setSize(innerWidth, innerHeight);
 });
@@ -1980,11 +1979,15 @@ function updateDynRes(dt) {
   dynRes.low = fps < quality.fpsDrop ? dynRes.low + 1 : 0;
   dynRes.high = fps > quality.fpsRaise ? dynRes.high + 1 : 0;
   let pr = dynRes.pr;
-  if (dynRes.low >= 2 || (dynRes.low >= 1 && fps < quality.fpsDrop * 0.6)) pr -= fps < quality.fpsDrop * 0.7 ? 0.25 : 0.125; // (a very slow second: at once)
-  else if (dynRes.high >= 4) pr += 0.125;
+  // (Nov 1, High and up (quality.dynPanic): supersampling gives way in big steps, never below the screen's native
+  // resolution unless a second runs under 30 fps (then down to dynPanic x DPR), and comes back after 2 good seconds)
+  const panic = quality.dynPanic, far = panic && pr > dynRes.min + 0.4;
+  if (dynRes.low >= 2 || (dynRes.low >= 1 && fps < quality.fpsDrop * 0.6)) pr -= fps < quality.fpsDrop * 0.7 || far ? 0.25 : 0.125; // (a very slow second: at once)
+  else if (dynRes.high >= (panic ? 2 : 4)) pr += panic && pr < dynRes.min ? 0.25 : 0.125;
   else return;
   dynRes.low = dynRes.high = 0;
-  pr = Math.min(dynRes.max, Math.max(railway?.riding || express?.riding ? dynRes.max : dynRes.min, pr)); // (sharp while riding the train)
+  const floor = panic && fps < 30 ? Math.min(dynRes.min, Math.max(0.75, DPR * panic)) : dynRes.min;
+  pr = Math.min(dynRes.max, Math.max(railway?.riding || express?.riding ? dynRes.max : Math.min(floor, dynRes.pr), pr)); // (sharp while riding the train)
   if (Math.abs(pr - dynRes.pr) > 0.01) { dynRes.pr = pr; setRenderScale(pr); }
 }
 
@@ -2008,7 +2011,7 @@ function applyQuality(name, persist = true) {
   if (hospitalWard?.inside) post.setView(hospitalWard.room.scene, hospitalWard.room.camera);
   if (chalets?.inside) post.setView(chalets.room.scene, chalets.room.camera);
   resetDynRes();
-  setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
+  setRenderScale(menuRes && !started ? menuPR() : dynRes.pr);
 }
 
 // The first seconds of play: averaging under 30 fps drops one preset (live, with a note), then measures again,
@@ -2063,7 +2066,7 @@ function menuThrottle() {
   const inMenu = (!started && !busIntro) || paused;
   if (inMenu !== menuRes) {
     menuRes = inMenu;
-    renderer.setPixelRatio(inMenu && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr);
+    renderer.setPixelRatio(inMenu && !started ? menuPR() : dynRes.pr);
     renderer.setSize(innerWidth, innerHeight);
     post?.setSize(innerWidth, innerHeight);
   }
@@ -2126,7 +2129,7 @@ function loopUpdate() {
     updateDynRes(frameDt);
     if (!hud.panelOpen && !interior.active) updateAutoQuality(frameDt);
   }
-  const frozen = paused || !!photo?.active; // the world freezes while the pause menu / photo mode is open
+  const frozen = paused; // the world freezes while the pause menu is open
   presentation.update(rawDt, { player, paused: frozen }); // slow-motion moments (big airs, photo finishes)
   const dt = frozen ? 0 : rawDt * presentation.timeScale;
   const menu = frozen || hud.panelOpen || !document.getElementById('map').hidden;
@@ -2441,7 +2444,12 @@ function loopUpdate() {
 
 // ---------------------------------------------------------------- SETTINGS (Nov 1 2026, the user: "a lot more settings")
 // The sun's shadows follow the preset unless SETTINGS · Shadows is off (no shadow pass at all, as on Super Performance).
-function shadowSpec() { return live.shadows ? quality.shadow : { ...quality.shadow, size: 0 }; }
+// (Ultra / Super Ultra ask for 6144 / 8192 px: only on GPUs that take 16384 px textures, else 4096)
+function shadowSpec() {
+  if (!live.shadows) return { ...quality.shadow, size: 0 };
+  const size = quality.shadow.size;
+  return size > 4096 && gpuCaps.maxTexture < 16384 ? { ...quality.shadow, size: 4096 } : quality.shadow;
+}
 // HUD pieces on / off, HUD scale and notification size: body classes and CSS variables (style.css "SETTINGS · HUD")
 function applyHudPrefs() {
   const b = document.body.classList;
@@ -2470,7 +2478,7 @@ function fpsTick() {
 function applySetting(k) {
   syncLive(save);
   switch (k) {
-    case 'renderScale': resetDynRes(); setRenderScale(menuRes && !started ? Math.min(dynRes.pr, 1.5) : dynRes.pr); break;
+    case 'renderScale': resetDynRes(); setRenderScale(menuRes && !started ? menuPR() : dynRes.pr); break;
     case 'shadows': env.setShadowQuality(shadowSpec()); break;
     case 'fog': env.fogScale = quality.fog * live.fog; break;
     case 'musicVolume': audio.setMusicVolume(live.musicVolume); break;

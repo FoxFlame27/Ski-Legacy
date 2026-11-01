@@ -910,15 +910,6 @@ body.in-race .rh-best, body:has(#race-hud:not([hidden])) .rh-best { display: non
 .tm-sym.car.mycar::before { background: #e7a500; } .tm-sym.car.impound::before { background: #6f7788; } /* (your car / impounded: game/ownertags.js) */
 .tm-hints { flex: none; display: flex; flex-wrap: wrap; gap: calc(var(--u) * 22); font: 600 var(--t-xs)/1 var(--ui); color: rgba(255, 255, 255, 0.88); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); }
 
-/* =================== PHOTO MODE (P, ui/photomode.js) =================== */
-#photomode { position: fixed; left: 0; right: 0; bottom: calc(var(--u) * 28); z-index: 30; display: flex; justify-content: center; pointer-events: none; animation: fadeIn 0.3s ease backwards; }
-#photomode[hidden] { display: none; }
-#photomode.pm-hidden .pm-bar { opacity: 0; }
-.pm-bar { display: flex; align-items: center; gap: calc(var(--u) * 22); padding: calc(var(--u) * 13) calc(var(--u) * 34) calc(var(--u) * 13) calc(var(--u) * 30); color: var(--blue);
-  font: 600 var(--t-xs)/1 var(--ui); --paper: rgba(255, 255, 255, 0.96); filter: drop-shadow(0 calc(var(--u) * 8) calc(var(--u) * 18) rgba(0, 14, 44, 0.3)); transition: opacity 0.3s ease; }
-.pm-kick { font: italic 700 calc(var(--u) * 24)/1 var(--num); letter-spacing: 0.04em; color: var(--blue); margin-right: calc(var(--u) * 6); }
-.pm-bar .hint { gap: max(4px, calc(var(--u) * 6)); }
-body.photo-mode #racehud, body.photo-mode #ride-hint, body.photo-mode #crosshair { display: none !important; }
 
 /* ---------------------------------------------------------------- multiplayer menu screens (ui/menu.js) */
 .mpn-input { display: block; width: 100%; margin-top: calc(var(--u) * 14); padding: calc(var(--u) * 8) calc(var(--u) * 12); border: 0; border-bottom: calc(var(--u) * 3) solid var(--blue);

@@ -404,7 +404,7 @@ export class Drive {
     } catch (err) { console.warn('drive', err); try { this.abort(); } catch { this.d = null; } }
   }
 
-  // Paused (ESC, photo mode: dt 0): the car's camera stays exactly where the last driven frame put it. (Oct 30, the
+  // Paused (ESC: dt 0): the car's camera stays exactly where the last driven frame put it. (Oct 30, the
   // user: "when you press esc during driving the car glitches forward and backwards": player.update still runs at
   // dt 0 and put the camera on the player's own seated chase camera, 8 m back at another angle, until you resumed)
   holdCamera(save = false) {

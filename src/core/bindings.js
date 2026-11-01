@@ -46,7 +46,6 @@ export const ACTIONS = [
   { id: 'vmouse', label: 'Virtual mouse (chalet / menus)', code: '', group: 'ACTIONS', padOnly: true, ctx: true },
   // menus and screens
   { id: 'map', label: 'Trail map · furnish (controller, in your chalet)', code: 'KeyM', group: 'MENUS' },
-  { id: 'photo', label: 'Photo mode', code: 'KeyP', group: 'MENUS' },
   { id: 'pause', label: 'Pause menu', code: 'Escape', group: 'MENUS' },
 ];
 
@@ -75,7 +74,6 @@ export const PAD_DEFAULTS = {
   unstuck: 14,  // d-pad left
   restart: 13,  // d-pad down
   map: 8,       // View · Share · Minus
-  photo: 12,    // d-pad up
   pause: 9,     // Menu · Options · Plus
   // context actions, sharing a button with one that does nothing in that place:
   furnish: 3,   // with skis (Y): F in your chalet (skis can't go on in there), in a train seat, in a flipped car
@@ -98,7 +96,9 @@ export const padDefaults = (f = activeFamily) => ({ ...PAD_DEFAULTS, ...(FAMILY_
 /** The current bindings (save.binds over the defaults). */
 export function bindsOf(save) {
   const b = save?.binds || {};
-  return { kb: { ...KB_DEFAULTS, ...(b.kb || {}) }, pad: { ...padDefaults(), ...(b.pad || {}) } };
+  // (old saves may still carry ids of actions that are gone, e.g. the removed photo mode: only known ids count)
+  const known = (o) => Object.fromEntries(Object.entries(o || {}).filter(([id]) => ACTION[id]));
+  return { kb: { ...KB_DEFAULTS, ...known(b.kb) }, pad: { ...padDefaults(), ...known(b.pad) } };
 }
 
 /** Controller family from Gamepad.id: 'xbox' | 'ps' | 'switch' (default xbox glyphs). */

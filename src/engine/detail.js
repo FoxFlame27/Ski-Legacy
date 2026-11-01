@@ -5,10 +5,11 @@
 //  - props further than quality.props.shadowDist stop casting shadows
 // Skipping uses an empty layer mask (not .visible, which the modules themselves switch). Time-sliced.
 import * as THREE from 'three';
-import { quality, onQualityChange } from './quality.js';
+import { quality, onQualityChange, gpuCaps } from './quality.js';
 
 const _c = new THREE.Vector3(), _s = new THREE.Vector3();
-const SLICE = 300; // meshes checked per frame (a full pass every ~0.5 s over ~9k meshes)
+const SLICE = 300;
+const MAPS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap', 'specularMap']; // meshes checked per frame (a full pass every ~0.5 s over ~9k meshes)
 
 export class PropDetail {
   constructor() {
@@ -59,8 +60,32 @@ export class PropDetail {
     });
   }
 
+  // Anisotropic filtering on Ultra / Super Ultra (quality.maxAniso): every material map in the world at the GPU's
+  // maximum (signs, decals, canvas textures made at 4x / 8x stay crisp at grazing angles); the authored value comes
+  // back on a lighter preset. A changed value needs a re-upload (needsUpdate), once per texture and switch.
+  sweepAniso(scene) {
+    const want = quality.maxAniso ? gpuCaps.maxAniso || 16 : 0;
+    if (!want && !this.anisoSet) return; // (the lighter presets: nothing to do, no traversal)
+    this.anisoSet = !!want;
+    scene.traverse((o) => {
+      if (!o.isMesh || !o.material) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) for (const k of MAPS) {
+        const t = m[k], img = t?.image;
+        if (!t || t.isRenderTargetTexture || t.isVideoTexture || !img || !(img.width > 0 || img.data)) continue;
+        const ud = t.userData;
+        if (want) {
+          if (t.anisotropy >= want) continue;
+          if (ud.anisoBase === undefined) ud.anisoBase = t.anisotropy;
+          t.anisotropy = want; t.needsUpdate = true;
+        } else if (ud.anisoBase !== undefined) {
+          t.anisotropy = ud.anisoBase; delete ud.anisoBase; t.needsUpdate = true;
+        }
+      }
+    });
+  }
+
   update(camera, scene = null) {
-    if (scene && (this.lightT = (this.lightT || 0) - 1) <= 0) { this.lightT = 240; this.sweepLights(scene); }
+    if (scene && (this.lightT = (this.lightT || 0) - 1) <= 0) { this.lightT = 240; this.sweepLights(scene); this.sweepAniso(scene); }
     const items = this.items, n = items.length;
     if (!n) return;
     const cam = camera.position, { cull, shadowDist } = quality.props;

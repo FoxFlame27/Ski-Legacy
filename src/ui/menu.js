@@ -862,7 +862,7 @@ export class Menu {
   }
 
   scrSettings() {
-    const qs = QUALITY_ORDER; // super performance, performance, balanced, high, ultra (engine/quality.js)
+    const qs = QUALITY_ORDER; // super performance, performance, balanced, high, ultra, super ultra (engine/quality.js; the row wraps)
     const q = normalizeQuality(save.quality) || 'high';
     this.pendingQ = q;
     const rows = SET_ROWS.map((r) => {

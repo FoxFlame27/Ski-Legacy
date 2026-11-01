@@ -1430,8 +1430,8 @@ export class TrailMap {
         g.beginPath(); g.arc(x, y, Math.max(8, (m.r || 30) * s), 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
         this.spot(x, y, Math.max(8, (m.r || 30) * s), m.x, m.z, m.label || 'Search area', { tip: { title: m.label || 'Search area', lines: ['Job · search here'] } });
       } else if (m.kind === 'board') this.icon({ kind: 'board', x, y, r: IR - 1.5, prio: 7, alpha: fadeIn(s, 0.12), wx: m.x, wz: m.z, label: m.label || 'Job board',
-        tip: { title: m.label || 'Job board', lines: ['Job board'] }, lab: s >= 0.5 ? m.label : null, labo: { size: 13, weight: 600, color: '#6a3d17', prio: 10 } });
-      else this.icon({ kind: 'job', x, y, r: IR, prio: 0.6, wx: m.x, wz: m.z, label: m.label || 'Job', tip: { title: m.label || 'Job', lines: ['Job target'] },
+        tip: { title: m.label || 'Job board', lines: [m.what || 'Job board'] }, lab: s >= 0.5 ? m.label : null, labo: { size: 13, weight: 600, color: '#6a3d17', prio: 10 } });
+      else this.icon({ kind: 'job', x, y, r: IR, prio: 0.6, wx: m.x, wz: m.z, label: m.label || 'Job', tip: { title: m.label || 'Job', lines: [m.what || 'Job target'] },
         lab: m.label || null, labo: { size: 14, color: '#9a6a00', prio: 1 } });
     }
     // what you own (game/ownertags.js, hosted by the car rental): your car (gold; grey while impounded) and the

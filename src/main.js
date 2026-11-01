@@ -71,6 +71,7 @@ import { Jobs } from './game/jobs.js';
 import { Talk } from './game/talk.js';
 import { Modes } from './game/modes.js';
 import { RaceStandUI } from './ui/racestand.js';
+import { RaceGuide } from './game/raceguide.js'; // off a train / bus at a race: the arrow, a beacon and pennants to its start
 import { RaceHud } from './ui/racehud.js';
 import { transition } from './ui/transition.js';
 import { COURSES, COURSE_MODELS } from './modes/parkour/courses.js';
@@ -233,6 +234,7 @@ let prison = null; // the PRISON: the village police station and its cells (game
 let police = null; // the patrol cars after a collision (game/police.js)
 let taxi = null; // LEGACY TAXI: fares round the resort in your car (game/taxi.js)
 let vehicleHits = null; // getting hit by vehicles on foot / on skis (game/vehiclehits.js)
+let raceGuide = null; // (game/raceguide.js)
 let busRaces = null; // the ski bus's free races (modes/race/busraces.js): their courses on the pistes and the boards by the stops
 let raceStand = null, raceStandUI = null; // the RACING stand (game/racestand.js) and its panel (ui/racestand.js)
 let decor, models, terrain, vegetation, atmosphere, village, lifts, trails, spray, player, races, npcs, post, interior, seller, sellerHeading = 0, shopTarget = null, showcase, modes, backdrop, glare, dressing, park, skibus, jobs, heli, pisteLights, crowds, snowcats, flags;
@@ -426,6 +428,7 @@ async function boot() {
   talk = new Talk({ camera, player, hud, colliders, blockers: village.cameraBlockers, vegetation });
   jobs = new Jobs({ scene, models, player, hud, audio, save, writeSave, earn: (amount, label) => earn(amount, label), layout, makeRig, talk });
   try { busRaces = new BusRaces({ scene, models, colliders, stops: skibus.stops, sites: jobs.sites }); } catch (e) { console.warn('bus races: ' + (e?.stack || e)); busRaces = null; } // (a board by each of their stops)
+  try { raceGuide = new RaceGuide({ scene, hud, busRaces, stand: () => raceStand }); } catch (e) { console.warn('race guide', e); raceGuide = null; }
   // heli-skiing: the helipad + the helicopter you fly yourself (every collider exists by now)
   heli = new Heli({ scene, models, player, input, camera, hud, audio, spray, world, layout, colliders, spend, transition, lifts });
   heli.blocked = () => chaseBlocked(); // (no flying off mid-chase: Oct 31 2026)
@@ -1124,6 +1127,7 @@ function leaveRail(exit) {
     if (player.viewBeforeRide) { player.view = player.viewBeforeRide; player.viewBeforeRide = null; }
     player.headlampOn = player.lampBeforeRide; player.lampBeforeRide = undefined;
     await streamAround(exit.x, exit.z);
+    raceGuide?.guideFrom(player.pos); // (a race near this stop: guided there)
   });
   hud.flash(exit.name ? `${exit.name}` : 'Arrived', 'good', 2400);
 }
@@ -1194,7 +1198,7 @@ async function exitExpress(a) {
   player.rig.setSkisVisible(player.hasSkis);
   await streamAround(a.exit.x, a.exit.z);
   const e = a.course ? freeCourses().find((c) => c.id === a.course) : null;
-  hud.flash(e ? `${a.name} · the start is beside the station` : `${a.name} · Legacy Express`, 'good', 3000);
+  if (!(e && raceGuide?.guideFrom(player.pos, { pick: a.course }))) hud.flash(e ? `${a.name} · the start is beside the station` : `${a.name} · Legacy Express`, 'good', 3000); // (the race you rode to: guided there)
 }
 function leaveExpress(a) {
   if (!a) return;
@@ -1417,6 +1421,7 @@ function leaveBus(exit) {
     if (player.viewBeforeRide) { player.view = player.viewBeforeRide; player.viewBeforeRide = null; }
     player.headlampOn = player.lampBeforeRide; player.lampBeforeRide = undefined;
     await streamAround(exit.x, exit.z);
+    raceGuide?.guideFrom(player.pos, { stop: exit.name }); // (this stop's free race, else one near: guided there)
   });
   hud.flash(`Ski bus · ${exit.name}`, 'good', 2400);
 }
@@ -1797,6 +1802,8 @@ function waypoint() {
   const to = (x, z, label) => ({ label, ang: Math.atan2(x - p.x, z - p.z), dist: Math.hypot(x - p.x, z - p.z) });
   const tw = taxi?.waypoint(p);
   if (tw) return to(tw.x, tw.z, tw.label);
+  const rg = raceGuide?.waypoint(); // off a train / bus at a race: its start (game/raceguide.js)
+  if (rg) return to(rg.x, rg.z, rg.label);
   const jw = jobs.waypoint(p);
   if (jw) return to(jw.x, jw.z, jw.label);
   // a place you marked on the trail map, until you get there
@@ -1821,7 +1828,7 @@ let trailMap = null;
 function openMap() {
   trailMap ??= new TrailMap({
     player, locationName, onClose: () => input.lock(),
-    markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [], police: police?.mapMarkers() || [],
+    markers: () => ({ jobs: [...jobs.mapMarkers(), ...(taxi?.mapMarkers() || []), ...(raceGuide?.mapMarkers() || [])], heli: heli.mapMarkers(), secrets: secrets?.mapMarkers() || [], police: police?.mapMarkers() || [],
       players: multiplayer?.remotes?.mapMarkers?.() || [], // (multiplayer: the other players, live)
       places: [...(carRental?.door ? [{ x: carRental.door.x, z: carRental.door.z, label: 'Autohaus', kind: 'car' }] : []),
         ...(carRental?.werkstatt?.door ? [{ x: carRental.werkstatt.door.x, z: carRental.werkstatt.door.z, label: 'Werkstatt · Garage', kind: 'garage' }] : [])] }),
@@ -2302,6 +2309,7 @@ function loopUpdate() {
   adminNew?.update(dt); // (Icey27's free camera, the old panel's: its switch; off for any other account)
   races.update(dt, player); // the courses on the mountains: meshes built / dropped by distance (guarded inside)
   busRaces?.update(dt, player, modes); // the bus races' courses on the pistes: ditto
+  raceGuide?.update(dt, player.pos, { busy: !!modes.active || player.mode === 'sit' || !!railway?.riding || !!express?.riding || !!skibus?.riding || !!heli?.active }); // (racing / another ride: the guide ends)
   mark('game');
   npcs.update(dt, player.pos, env, camera);
   mark('npcs');
@@ -2407,7 +2415,7 @@ function loopUpdate() {
     else hud.frame({
       speed: railway.riding ? railway.speed : express?.riding ? express.speed : skibus.riding ? skibus.speed : drive?.active ? drive.speed : sleds.active ? sleds.speed : heli.active ? heli.speed : player.mode === 'walk' ? 0 : player.speed, loc: hudLocation(), time: env.timeString, weather,
       ski: vehicleName() || (player.skisOn || !player.hasSkis ? ski : `${ski} (off)`),
-      prompt: ridePrompt || interaction?.label || (player.hasSkis && !player.skisOn && player.mode === 'walk' && !player.isFlatHere() ? 'Put on skis' : null), promptKey: ridePrompt || interaction ? 'E' : 'G', objective: races.active ? '' : (rideLine || heli.hudLine() || sleds.hudLine() || taxi?.hudLine() || jobs.hudLine() || objective()),
+      prompt: ridePrompt || interaction?.label || (player.hasSkis && !player.skisOn && player.mode === 'walk' && !player.isFlatHere() ? 'Put on skis' : null), promptKey: ridePrompt || interaction ? 'E' : 'G', objective: races.active ? '' : (rideLine || heli.hudLine() || sleds.hudLine() || taxi?.hudLine() || raceGuide?.hudLine() || jobs.hudLine() || objective()),
       heading: camYaw, waypoint: races.active ? null : heli.active ? heli.waypoint(player.pos) || waypoint() : waypoint(), // (also while riding: train, bus, lifts, snowmobile)
       speedo: player.mode !== 'sit' || railway.riding || !!express?.riding || skibus.riding || sleds.active || heli.active || !!drive?.active, // (vehicles show their own speed; chairs and gondolas don't)
     });

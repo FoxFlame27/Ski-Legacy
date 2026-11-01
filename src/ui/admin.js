@@ -73,7 +73,8 @@ export class AdminPanel {
     addEventListener('keydown', (e) => this.onKey(e), true);
     document.addEventListener('pointerlockchange', () => {
       // Esc while flying releases the pointer: back to the panel
-      if (this.fly && !document.pointerLockElement) { this.stopFly(); this.open(true); }
+      // (started from "Admin · new": back to that panel instead, ui/adminnew.js)
+      if (this.fly && !document.pointerLockElement) { const back = this.flyBack; this.stopFly(); if (back) back(); else this.open(true); }
     });
   }
 
@@ -405,8 +406,13 @@ export class AdminPanel {
   }
 
   // ------------------------------------------------------------------ free-fly camera
-  startFly() {
+  /** @param {{ back?: () => void, offKey?: string }} [o]  back: what Esc returns to (default: this panel); offKey: a
+   *  key that ends it, shown in the hint (Nov 1 2026: "Admin · new" starts it, ui/adminnew.js, Icey27 only) */
+  startFly(o = {}) {
+    if (this.fly) return;
     const cam = this.camera;
+    this.flyBack = o.back || null;
+    this.flyOffKey = o.offKey || '';
     _e.setFromQuaternion(cam.quaternion, 'YXZ');
     this.fly = { pos: cam.position.clone(), yaw: _e.y, pitch: _e.x, fov: cam.fov, speed: 14 };
     this.streamPos = this.fly.pos;
@@ -420,6 +426,7 @@ export class AdminPanel {
   stopFly() {
     if (!this.fly) return;
     this.fly = null;
+    this.flyBack = null;
     this.streamPos = null;
     this.hud.setBlocking('freecam', false);
     document.body.classList.remove('admin-flying');
@@ -449,7 +456,7 @@ export class AdminPanel {
     const k = (t) => `<i class="kc${t.length > 1 ? ' kc-word' : ''}">${t}</i>`;
     el.innerHTML = `<div class="ad-fly paper" style="--clip:${brushClip(77, 4, 3)}"><b>FREE CAMERA</b>
       <span>${k('W')}${k('A')}${k('S')}${k('D')} fly</span><span>${k('SPACE')} / ${k('C')} up · down</span><span>${k('SHIFT')} fast</span>
-      <span>${k('T')} drop here</span><span>${k('ESC')} back</span></div>`;
+      <span>${k('T')} drop here</span><span>${k('ESC')} back</span>${this.flyOffKey ? `<span>${k(this.flyOffKey)} off</span>` : ''}</div>`;
     el.hidden = false;
   }
 

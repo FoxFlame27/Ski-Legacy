@@ -11,12 +11,12 @@
 // message banner for everyone, teleports to the village, the chalet village, the Autohaus, the medical centre, the
 // police station and every gondola's summit. It never spawns a car or a helicopter (Oct 30, the user: "remove all
 // admin spawned cars").
-// FLY MODE (Oct 31 2026, the user: "and fly mode?"): the panel's switch or V (Icey27 only; for anyone else V does
-// nothing): WASD along where the camera looks, Space up, Shift / C down, Ctrl or the wheel 10 / 40 / 150 m/s, through
-// everything (player.js updateFly); a "✈ FLY" badge meanwhile. On foot or on skis only (refused in a car, on a lift, a
-// train, the bus, inside; off when you get into one); off when you leave multiplayer or the account isn't Icey27;
-// leaving it puts you down standing on the ground below. The others see you in the air (protocol.js F.flying, which
-// the server passes on for the admin only). Money for everyone online (and offline, ticked): 'giveAll' on the server.
+// FREE CAMERA (Nov 1 2026, the user: "remove fly and add the old fly like the old admin panel"): the old panel's free-fly
+// camera (ui/admin.js startFly / stopFly / update, reused through ctx.admin; Icey27 only, gated here by isAdminNew(),
+// not by the old panel's own list): the panel's switch or V. WASD / arrows fly where you look, Space / E up, C / Q down,
+// Shift x6, the wheel sets the speed, T drops you on the snow under the camera, Esc back to this panel, V off. The game
+// is blocked meanwhile (hud 'freecam') and main.js streams the world round the camera (admin.streamPos); your skier
+// stays where it was. Money for everyone online (and offline, ticked): 'giveAll' on the server.
 import './admin.css';
 import './adminnew.css';
 import { brushSVG, brushClip, esc } from './menu.js';
@@ -28,7 +28,6 @@ import { CHALET_PLACE } from '../game/bus/chaletroad.js';
 import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
 import { loadAccount } from '../net/session.js';
-import { FLY_SPEEDS, FLY_NAMES } from '../player/player.js';
 
 const ADMIN_NAME = 'icey27'; // (the name key; the server's ADMIN_KEYS is what counts in multiplayer)
 const WEATHERS = Object.keys(WEATHER || { clear: 1, cloudy: 1, light: 1, heavy: 1, mist: 1 });
@@ -78,20 +77,20 @@ export class AdminNew {
     this.confirming = false;
     addEventListener('keydown', (e) => this.onKey(e), true);
     addEventListener('ski-admin', (e) => this.onServer(e.detail || {})); // (net/session.js: what the server sends)
-    this.flyMP = false; // (multiplayer when the fly mode went on: leaving it turns it off)
-    this.badge = null; this.badgeKey = '';
+    this.camShown = false; // (the switch's last shown state)
   }
 
   // ------------------------------------------------------------------ open / close
   onKey(e) {
-    // V: the fly mode (Icey27 only; V is free in the game: only the race session's own dialog uses it, while a race runs)
+    // V: the free camera (Icey27 only; V is free in the game: only the race session's own dialog uses it, while a race runs)
     if (e.code === 'KeyV' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable || !isAdminNew()) return; // (typing; anyone else)
+      if (this.freeCam) { e.preventDefault(); if (!e.repeat) this.camOff('Free camera off'); return; } // (flying: V ends it, back to the game)
       const c = this.ctx, g = window.__game || {};
       if (!c.started || c.paused || this.isOpen || this.hud.panelOpen || g.modes?.active || g.races?.active) return;
       e.preventDefault();
-      if (!e.repeat) this.toggleFly();
+      if (!e.repeat) this.camStart();
       return;
     }
     const hit = e.code === 'F10' || (e.code === 'KeyA' && e.ctrlKey && e.shiftKey);
@@ -107,6 +106,7 @@ export class AdminNew {
   }
   toggle() {
     if (this.isOpen) return this.close();
+    if (this.freeCam) { this.camOff(); return this.open(); } // (F10 while the free camera is on: back to the panel)
     const c = this.ctx;
     if (!c.started || c.paused || this.transition?.active || (this.hud.panelOpen && !this.isOpen)) return false;
     return this.open();
@@ -294,61 +294,47 @@ export class AdminNew {
     this.refreshPlayers();
   }
 
-  // ------------------------------------------------------------------ fly mode (Oct 31 2026, the user: "and fly mode?")
-  /** Why you can't fly now, or null: on foot or on skis only, outdoors, no race. */
-  flyRefusal() {
-    const g = window.__game || {}, p = g.player;
-    if (!p || !this.ctx.started) return 'Fly mode · not now';
-    if (g.drive?.active || g.heli?.active || g.heli?.state === 'boarding' || g.sleds?.active || g.railway?.riding || g.express?.riding || g.skibus?.riding || p.mode === 'sit') {
-      return 'Fly mode · on foot or on skis only (not in a car, on a lift, a train or the bus)';
-    }
-    if (g.interior?.active || g.chalets?.inside || g.carRental?.inside || g.prison?.inside || g.prison?.active || g.hospitalWard?.inside) return 'Fly mode · not inside';
-    if (g.modes?.active || g.races?.active) return 'Fly mode · not in a race';
+  // ------------------------------------------------------------------ free camera (the old panel's: ui/admin.js)
+  /** Why the free camera can't start now, or null (the old panel's own refusals, without its account list). */
+  camRefusal() {
+    const c = this.ctx, g = window.__game || {};
+    if (!c.started || c.paused || this.transition?.active || !c.admin?.startFly) return 'Free camera · not now';
+    if (g.modes?.active || g.races?.active) return 'Free camera · free ride only';
+    if (g.interior?.active) return 'Free camera · not inside the shop';
+    if (g.prison?.active || g.prison?.inside) return 'Free camera · not in prison';
+    if (g.heli?.active || g.heli?.state === 'boarding') return 'Free camera · not while flying the helicopter';
     return null;
   }
-  get flying() { return !!window.__game?.player?.flying; }
-  toggleFly() { return this.flying ? this.flyOff(true, 'Fly mode off') : this.flyOn(); }
-  flyOn() {
+  get freeCam() { return !!this.ctx.admin?.fly; }
+  toggleCam() { return this.freeCam ? this.camOff('Free camera off') : this.camStart(); }
+  /** On: the panel closes, the old panel's free camera takes the view (Esc comes back to this panel). */
+  camStart() {
     if (!isAdminNew()) return false;
-    const why = this.flyRefusal();
-    if (why) { this.hud.flash(why, 'bad', 2600); this.say(why, true); return false; }
-    const p = window.__game.player;
-    if (!p.startFly()) { this.hud.flash('Fly mode · on foot or on skis only', 'bad', 2600); return false; }
-    this.flyMP = isMP();
-    this.hud.flash('Fly mode · WASD where you look · Space up · Shift / C down · Ctrl or wheel: speed · V off', 'gold', 4200);
-    this.audio?.play('click');
-    this.syncFly();
+    const why = this.camRefusal();
+    if (why) { this.hud.flash(why, 'bad', 2600); this.say(why, true); this.audio?.play('error'); return false; }
+    if (this.isOpen) this.close(false);
+    this.ctx.admin.startFly({ back: () => { if (isAdminNew()) this.open(); }, offKey: 'V' });
+    this.syncCam();
     return true;
   }
-  /** Off. place: put down standing on the ground / the surface below (false: where you are, seated in a car already). */
-  flyOff(place = true, msg = '') {
-    const p = window.__game?.player;
-    if (!p?.flying) return false;
-    p.stopFly(place);
-    if (msg) this.hud.flash(msg, 'good', 2200);
-    this.syncFly();
+  /** Off: back to the game where your skier is (the pointer stays locked). */
+  camOff(msg = '') {
+    if (!this.freeCam) return false;
+    this.ctx.admin.stopFly();
+    if (msg) this.hud.flash(msg, 'good', 1600);
+    this.syncCam();
     return true;
   }
-  /** Every frame (main.js): off for any other account, out of multiplayer, in a vehicle or inside; the badge. */
+  /** Every frame (main.js): off for any other account; the panel's switch. */
   update() {
-    const p = window.__game?.player;
-    if (p?.flying) {
-      if (!isAdminNew()) this.flyOff(true, 'Fly mode off · Icey27 only');
-      else if (this.flyMP && !isMP()) this.flyOff(true, 'Fly mode off · you left multiplayer');
-      else if (!this.flyMP && isMP()) this.flyOff(true, 'Fly mode off');
-      else { const why = this.flyRefusal(); if (why) this.flyOff(false, 'Fly mode off'); } // (got into something: where you are)
-    }
-    this.syncFly();
+    if (this.freeCam && this.ctx.admin.flyBack && !isAdminNew()) this.camOff('Free camera off · Icey27 only');
+    this.syncCam();
   }
-  syncFly() {
-    const p = window.__game?.player, on = !!p?.flying && this.ctx.started;
-    const key = on ? `${p.flySpeed}` : '';
-    if (key === this.badgeKey) return;
-    this.badgeKey = key;
-    const el = this.badge ||= container('admin-flybadge');
-    if (on) el.innerHTML = `<div class="afb paper" style="--clip:${brushClip(5304, 4, 3)}"><b>✈ FLY</b><span>${FLY_NAMES[p.flySpeed] || ''} · ${FLY_SPEEDS[p.flySpeed] || 0} m/s</span></div>`;
-    el.hidden = !on;
-    const sw = this.el.querySelector('.an-fly');
+  syncCam() {
+    const on = this.freeCam;
+    if (on === this.camShown) return;
+    this.camShown = on;
+    const sw = this.el.querySelector('.an-cam');
     if (sw) { sw.classList.toggle('on', on); sw.setAttribute('aria-checked', String(on)); sw.querySelector('b').textContent = on ? 'ON' : 'OFF'; }
   }
 
@@ -404,7 +390,7 @@ export class AdminNew {
     if (!this.players.length) return '<div class="an-empty">Nobody online in your world</div>';
     const me = String(MP.name || '').toLowerCase();
     return this.players.map((p) => {
-      const tags = [p.jailed && 'PRISON', p.wanted && 'WANTED', p.impound && 'TOW YARD', p.inside && 'INSIDE', p.flying && 'FLYING'].filter(Boolean).map((t) => `<i class="an-tag">${t}</i>`).join('');
+      const tags = [p.jailed && 'PRISON', p.wanted && 'WANTED', p.impound && 'TOW YARD', p.inside && 'INSIDE'].filter(Boolean).map((t) => `<i class="an-tag">${t}</i>`).join('');
       const pos = p.pos ? `${Math.round(p.pos[0])}, ${Math.round(p.pos[2])}` : '—';
       const self = String(p.name).toLowerCase() === me;
       return `<div class="an-pl"><button class="an-pick" tabindex="-1" data-pick="${esc(p.name)}"><span class="ad-pl-name">${esc(p.name)}${self ? ' <small>(you)</small>' : ''}</span>
@@ -437,7 +423,7 @@ export class AdminNew {
             <div class="mp-row"><span>Progress</span>${this.confirming
               ? `<span class="ad-set"><input class="ad-amount an-confirm" type="text" placeholder="Type the name again" spellcheck="false" data-enter="reset"><button class="ad-btn an-danger" data-act="reset" tabindex="-1">RESET</button><button class="ad-btn an-alt" data-act="noreset" tabindex="-1">CANCEL</button></span>`
               : '<button class="ad-btn an-danger" data-act="reset" tabindex="-1">RESET…</button>'}</div>` : ''}
-            <div class="mp-row"><span>Fly mode <i class="kc">V</i></span><button class="an-switch an-fly${this.flying ? ' on' : ''}" role="switch" aria-checked="${this.flying}" data-act="fly" tabindex="-1"><i></i><b>${this.flying ? 'ON' : 'OFF'}</b></button></div>
+            <div class="mp-row"><span>Free camera <i class="kc">V</i></span><button class="an-switch an-cam${this.freeCam ? ' on' : ''}" role="switch" aria-checked="${this.freeCam}" data-act="cam" tabindex="-1"><i></i><b>${this.freeCam ? 'ON' : 'OFF'}</b></button></div>
             <div class="an-result${this.resultBad ? ' bad' : ''}">${esc(this.result)}</div>
           </div>
           <div class="menu-panel ad-panel" style="--clip:${brushClip(2712, 5, 4)}">
@@ -483,7 +469,7 @@ export class AdminNew {
     if (a === 'take') return this.give(-1);
     if (a === 'giveall') return this.giveAll(1);
     if (a === 'takeall') return this.giveAll(-1);
-    if (a === 'fly') { if (this.flying) this.flyOff(true, 'Fly mode off'); else if (this.flyOn()) this.close(true); return; } // (on: the panel closes, off you go)
+    if (a === 'cam') return this.toggleCam(); // (on: the panel closes, the free camera takes over)
     if (a.startsWith('rel:')) return this.release(a.slice(4));
     if (a === 'kick') return this.kick();
     if (a === 'reset') return this.reset();

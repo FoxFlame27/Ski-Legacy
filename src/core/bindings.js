@@ -80,10 +80,20 @@ export const PAD_DEFAULTS = {
   nextItem: 15, // with lights (d-pad right): (car lights / headlamp aren't used inside the chalet)
 };
 
+// (Nov 1 2026, the user: "also make the Home button on Switch unstuck, and something else on the other controllers"):
+// per controller family on top of PAD_DEFAULTS. Switch Home and the PS button reach the game (index 16); the Xbox
+// button doesn't (Windows Game Bar / macOS take it), so Xbox keeps unstuck on the d-pad left.
+export const FAMILY_PAD = { switch: { unstuck: 16 }, ps: { unstuck: 16 }, xbox: {} };
+let activeFamily = 'xbox';
+/** gamepad.js tells which controller family is in use (its defaults differ a little: FAMILY_PAD). */
+export function setPadFamily(f) { activeFamily = FAMILY_PAD[f] ? f : 'xbox'; }
+/** The default controller buttons for a family (the one in use by default). */
+export const padDefaults = (f = activeFamily) => ({ ...PAD_DEFAULTS, ...(FAMILY_PAD[f] || {}) });
+
 /** The current bindings (save.binds over the defaults). */
 export function bindsOf(save) {
   const b = save?.binds || {};
-  return { kb: { ...KB_DEFAULTS, ...(b.kb || {}) }, pad: { ...PAD_DEFAULTS, ...(b.pad || {}) } };
+  return { kb: { ...KB_DEFAULTS, ...(b.kb || {}) }, pad: { ...padDefaults(), ...(b.pad || {}) } };
 }
 
 /** Controller family from Gamepad.id: 'xbox' | 'ps' | 'switch' (default xbox glyphs). */

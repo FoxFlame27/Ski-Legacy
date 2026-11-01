@@ -14,7 +14,7 @@
 // onNextPadButton(cb) (rebinding), rumble(strong, weak, ms) and its presets.
 import { save } from '../game/economy.js';
 import { live } from './settings.js';
-import { ACTIONS, bindsOf, padFamily } from './bindings.js';
+import { ACTIONS, bindsOf, padFamily, setPadFamily } from './bindings.js';
 import { fireKey } from './input.js';
 
 const DEAD = 0.22;       // left stick deadzone (radial)
@@ -73,7 +73,7 @@ function announce() {
 function choose(i, gp) {
   if (padIndex === i && padId === (gp?.id || '')) return;
   releaseAll();
-  padIndex = gp ? i : -1; padId = gp?.id || ''; family = gp ? padFamily(gp.id) : 'xbox';
+  padIndex = gp ? i : -1; padId = gp?.id || ''; family = gp ? padFamily(gp.id) : 'xbox'; setPadFamily(family);
   prev = gp ? gp.buttons.map(pressedOf) : [];
   announce();
 }
@@ -147,7 +147,7 @@ export function poll() {
   }
   const gp = padIndex >= 0 ? pads[padIndex] : null;
   if (!gp || !gp.connected) return;
-  if (padId !== gp.id) { padId = gp.id; family = padFamily(gp.id); announce(); }
+  if (padId !== gp.id) { padId = gp.id; family = padFamily(gp.id); setPadFamily(family); announce(); }
   updateRumble(gp, now);
 
   const btn = gp.buttons.map(pressedOf), ax = gp.axes || [];

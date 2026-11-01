@@ -13,7 +13,7 @@ import { QUALITY_ORDER, QUALITY_LABELS, normalizeQuality } from '../engine/quali
 import { fmtTime, controlsTable, keysHTML, bindLabel, padFamilyNow } from './hud.js';
 import { PLAYER_CHARACTERS } from '../game/characters.js';
 import { SETTING_DEFAULTS } from '../core/settings.js';
-import { ACTIONS, KB_DEFAULTS, PAD_DEFAULTS, bindsOf, keyLabel, padGlyph } from '../core/bindings.js';
+import { ACTIONS, KB_DEFAULTS, padDefaults, bindsOf, keyLabel, padGlyph } from '../core/bindings.js';
 import * as gp from '../core/gamepad.js'; // padInfo(), onNextPadButton(cb), 'padchange' (controller support, Nov 1 2026)
 import { K, usingPad, onPromptChange } from './prompts.js'; // the hint bar's keycaps follow the device in use
 import * as inputMod from '../core/input.js'; // setRemapPaused(on): no key remapping while a new key is captured
@@ -707,7 +707,7 @@ export class Menu {
   }
 
   assignPad(id, i) {
-    if (i === 16) { this.ctlStatus('The Home / guide button is reserved', true); return; }
+    if (i === 16 && gp.padInfo?.()?.family === 'xbox') { this.ctlStatus('The Xbox button is reserved', true); return; } // (Switch Home / PS button: usable)
     const b = bindsOf(save), old = b.pad[id];
     // (a ctx action shares its button with a normal one: a normal action swaps only with the normal one on the button,
     // a ctx action only with a ctx one, core/bindings.js)
@@ -715,7 +715,7 @@ export class Menu {
     const other = Object.keys(b.pad).find((k) => k !== id && b.pad[k] === i && ctx(k) === ctx(id));
     const pad = { ...b.pad, [id]: i };
     if (other && old != null) pad[other] = old;
-    this.storeBinds('pad', pad, PAD_DEFAULTS);
+    this.storeBinds('pad', pad, padDefaults());
     this.cancelCapture();
     this.audio?.play('click');
     const fam = this.ctlFamily(), oa = other && ACTIONS.find((a) => a.id === other);

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, CLERK_REPAIR, busHoldAt, BUS_HOLD, WEATHER_NEXT, pickWeather, weatherHoldMs, PRES_FLY } from './lib/server.js';
+import { GameServer, PROTO, CATALOG, DAY_MS, dayFor, DEBT_FLOOR, MAX_PLAYERS, SEAT_CAPS, RACE_MAX, repairPrice, wreckBill, PARK_TOW_FEE, CLERK_REPAIR, busHoldAt, BUS_HOLD, WEATHER_NEXT, pickWeather, weatherHoldMs, PRES_FLY } from './lib/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skilegacy-test-'));
@@ -812,11 +812,11 @@ try {
     ok(!badHome.ok && badHome.err === 'bad_value', 'a tow needs a valid home spot');
     const t1 = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
     const gw = server.worlds.get(gus.l.d.world.id), gcar = () => server.profileOf('tow gus').cars[0];
-    ok(t1.ok && t1.d.fee === CATALOG.wreckFee && CATALOG.wreckFee === 1500 && t1.d.money === m0 - CATALOG.wreckFee, 'towed off a road: the server charges its own fee ($1,500)');
+    ok(t1.ok && t1.d.fee === PARK_TOW_FEE && PARK_TOW_FEE === 500 && t1.d.money === m0 - PARK_TOW_FEE, 'towed off a road: the server charges its own fee ($500)');
     ok(t1.d.impound?.day === gw.dayAt() && t1.d.impound.bay === 2 && gcar().impound?.day === gw.dayAt() && Math.abs(t1.d.impound.until - Date.now() - 180000) < 5000, '...and puts the car in the tow yard for 3 minutes (in the profile)');
     ok(JSON.stringify(gcar().at) === JSON.stringify([1, 2, 3, 0.5]), "...its parked spot is the impound bay at once");
     const t2 = await gus.f.req('tow', { kind: 'tow', home: [1, 2, 3, 0.5], bay: 2 });
-    ok(!t2.ok && t2.err === 'busy' && server.profileOf('tow gus').money === m0 - 1500, 'a second tow while the truck is out is refused (charged once)');
+    ok(!t2.ok && t2.err === 'busy' && server.profileOf('tow gus').money === m0 - PARK_TOW_FEE, 'a second tow while the truck is out is refused (charged once)');
     await gus.f.req('veh', { k: 'car', at: [50, 0, 50, 0] });
     ok(JSON.stringify(gcar().at) === JSON.stringify([1, 2, 3, 0.5]), 'while towed, the car moving does not change the spot it ends in');
     gus.f.send('veh', { k: 'tow', at: [10, 1, 20, 1.2], v: 8, car: true });

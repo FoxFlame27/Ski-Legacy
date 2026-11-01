@@ -25,10 +25,10 @@ import { isMP } from '../../net/mode.js';
 import { net } from '../../net/client.js';
 import { K } from '../../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
 
-// The rescue bill (the ambulance): $750, then $150 more for every rescue before it (counted in the save), never
-// over $2,000 (~5 to 13 minutes of jobs: it hurts, it never ruins you); it is charged even into the red (shops,
+// The rescue bill (the ambulance): $300, then $25 more for every rescue before it (counted in the save), never
+// over $1,000 (it stings a little, it never ruins you); it is charged even into the red (shops,
 // lifts and passes then refuse until you earn it back). (Oct 29 rebalance: was $500 + $125, uncapped.)
-export const FEE_BASE = 750, FEE_STEP = 150, FEE_MAX = 2000;
+export const FEE_BASE = 300, FEE_STEP = 25, FEE_MAX = 1000; // (Nov 1 2026, the user: "the hospital should only cost 300 and keep increasing little bits")
 export const rescueFee = () => Math.min(FEE_MAX, FEE_BASE + FEE_STEP * Math.max(0, save.rescues | 0));
 // The ambulance ride after a rescue (false: the rescue ends the old way, out at the pad, no fee).
 export const AMBULANCE_ON = true; // (checked in the game 2026-10-27)

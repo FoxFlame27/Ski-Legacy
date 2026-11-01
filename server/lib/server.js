@@ -150,6 +150,7 @@ export const BRK_MS = 90 * 1000;
 export const BRK_HZ = 10;              // knocks a player may send a second
 const BRK_MAX = 400;                   // remembered per world at most (the oldest dropped)
 const BRK_ID_RE = /^-?\d{1,7},-?\d{1,7}$/; // a spot rounded to 10 cm: "x*10,z*10"
+export const PARK_TOW_FEE = 500; // (impound.js / carrental.js PARK_TOW_FEE: the tow of a car left outside a car park)
 export const wreckBill = (id) => (CATALOG.wreckFee ?? 1500) + repairPrice(id, 1);
 // race queues: how many racers start a race (always at least 2; alone: a practice race, raceSolo) and its countdown once they are in
 const raceNeed = (race) => Math.max(2, CATALOG.races[race]?.need ?? 2); // (Oct 30, the user: "you can't race with less than 2 people", bus races too)
@@ -1587,7 +1588,7 @@ export class GameServer {
     if (car.tow) return { err: 'busy', d: { money: P.money, impound: car.impound || null } };
     // (a wreck: the tow and the full repair, wreckBill; a tow: the flat wreckFee)
     const now = Date.now(), home = d.home.map((x) => Math.round(x * 100) / 100);
-    const fee = d.kind === 'wreck' ? wreckBill(car.id) : CATALOG.wreckFee ?? 1500;
+    const fee = d.kind === 'wreck' ? wreckBill(car.id) : PARK_TOW_FEE; // (a car left outside a car park: $500, Nov 1 2026)
     // (as the game's other charges: into debt down to DEBT_FLOOR; deeper than that the truck still comes, unpaid)
     const paid = this.debit(c, fee, 'tow', DEBT_FLOOR) ? fee : 0;
     car.tow = { kind: d.kind, since: now, home };

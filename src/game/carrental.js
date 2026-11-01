@@ -66,6 +66,9 @@ const UPPER = [['car_mercedes_sls', 'silver'], ['car_porsche_taycan', 'red'], ['
 // - a wreck: the same tow plus the repair, WRECK_FEE + REPAIR_FEE ($2,000) for every car. Server: repairFee, wreckFee
 //   (server.repairPrice / wreckBill: the same sums)
 export const WRECK_FEE = 1500, REPAIR_FEE = 500;
+// (Nov 1 2026, the user: "the price for your car being left on the road should be 500"): the tow of a car left outside
+// a car park (impound.js); a wreck's tow stays WRECK_FEE
+export const PARK_TOW_FEE = 500;
 // THE AUTOHAUS CLERK (Oct 30, the user: "make it so you can talk to the npc in autohaus and you can pay him 500 to
 // repair your car"): E at the salesman opens a talk (clerkDialog): the car of the day, or "Repair my car", a flat fee
 // for any damage, your car that is out fixed wherever it is parked (server: CLERK_REPAIR, carRepair { flat: 'clerk' })
@@ -134,7 +137,7 @@ export class CarRental {
       const enter = o.drive.enter.bind(o.drive);
       o.drive.enter = (e) => { if (e?.kept && !o.drive.d && !o.drive.entering && !this.makeCurrent(e)) return; return enter(e); };
     }
-    try { this.impound = new Impound(this, { fee: WRECK_FEE }); } catch (e) { console.warn('rental car park', e); this.impound = null; }
+    try { this.impound = new Impound(this, { fee: PARK_TOW_FEE }); } catch (e) { console.warn('rental car park', e); this.impound = null; }
     try { this.werkstatt = new Werkstatt(this); } catch (e) { console.warn('Werkstatt', e); this.werkstatt = null; } // (after the car park: it keeps clear of it)
     try { this.ownerTags = new OwnerTags({ scene: o.scene, camera: o.camera, rental: this }); } catch (e) { console.warn('owner tags', e); this.ownerTags = null; }
     // the save: your garage, the car that is out back in your bay

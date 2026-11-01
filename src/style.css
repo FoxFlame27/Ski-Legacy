@@ -948,3 +948,34 @@ body.hud-no-info #loc, body.hud-no-info #clock, body.hud-no-info #wx-sub { displ
 .set-range em { min-width: calc(var(--u) * 48); text-align: right; font: 700 var(--t-sm)/1 var(--ui); font-style: normal; color: var(--blue-dim); font-variant-numeric: tabular-nums; }
 .set-scroll .seg button { padding: calc(var(--u) * 6) calc(var(--u) * 10); }
 .set-scroll .mp-row[data-row="quality"] > .seg { flex: 0 1 auto; min-width: 0; }
+
+/* ---- CONTROLS screen (Nov 1 2026, controller support + rebinding): the bindings list (keyboard and controller cells,
+   Enter / click waits for a new key or button) beside the fixed-controls reference; both scroll inside their paper ---- */
+.ctl-wrap.ctl-v2 { flex: 0 1 auto; min-height: 0; align-items: stretch; gap: calc(var(--u) * 22); max-width: calc(var(--u) * 1140); }
+.ctl-v2 > .menu-panel { display: flex; flex-direction: column; min-height: 0; }
+.ctl-v2 .set-scroll { flex: 1 1 auto; }
+.menu-panel.settings.ctl-main { flex: 0 1 calc(var(--u) * 660); width: auto; min-width: 0; padding-right: calc(var(--u) * 18); }
+.menu-panel.ctl-ref { flex: 1 1 0; width: auto; min-width: 0; max-width: calc(var(--u) * 460); padding-right: calc(var(--u) * 18); }
+.ctl-fam > span small, .ctl-conn { display: block; margin-top: 2px; font: 500 var(--t-xs)/1.2 var(--ui); color: var(--blue-dim); }
+.ctl-cols, .set-scroll .mp-row.ctl-bind { display: grid; grid-template-columns: minmax(0, 1fr) calc(var(--u) * 124) calc(var(--u) * 124); gap: calc(var(--u) * 8); align-items: center; }
+.ctl-cols { padding: calc(var(--u) * 14) 0 calc(var(--u) * 2); font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.14em; color: var(--blue-dim); }
+.ctl-cols span:not(:first-child) { text-align: center; }
+.cb-label { min-width: 0; overflow-wrap: anywhere; }
+.cb-cell { display: inline-flex; align-items: center; justify-content: center; min-width: 0; height: calc(var(--u) * 32); padding: 0 calc(var(--u) * 6); overflow: hidden;
+  border: 2px solid rgba(21, 70, 200, 0.35); border-radius: calc(var(--u) * 5); background: var(--ice); color: var(--blue); cursor: pointer;
+  font: 700 var(--t-sm)/1 var(--ui); white-space: nowrap; text-overflow: ellipsis; transition: border-color 0.15s ease, background 0.15s ease; }
+.cb-cell:hover:not(:disabled) { border-color: var(--blue); }
+.cb-cell.fixed { border-style: dashed; border-color: rgba(21, 70, 200, 0.2); background: transparent; color: var(--blue-dim); cursor: default; font-weight: 600; font-size: var(--t-xs); }
+.ctl-main[data-col="0"] .ctl-bind.is-focus .cb-kb:not(:disabled), .ctl-main[data-col="1"] .ctl-bind.is-focus .cb-pad:not(:disabled),
+.ctl-main[data-col="0"] .ctl-resets.is-focus [data-reset="kb"], .ctl-main[data-col="1"] .ctl-resets.is-focus [data-reset="pad"] { border-color: var(--red); box-shadow: 0 0 0 2px rgba(255, 77, 61, 0.35); }
+.cb-cell.wait { background: var(--blue); border-color: var(--blue); color: #fff; font-size: var(--t-xs); animation: cbWait 0.9s ease-in-out infinite alternate; }
+@keyframes cbWait { to { opacity: 0.6; } }
+.ctl-status { flex: none; min-height: calc(var(--u) * 26); padding-top: calc(var(--u) * 8); font: 600 var(--t-xs)/1.3 var(--ui); color: var(--blue-dim); }
+.ctl-status.bad { color: var(--red); }
+.rf-cols, .rf-row { display: grid; grid-template-columns: calc(var(--u) * 120) calc(var(--u) * 104) minmax(0, 1fr); gap: calc(var(--u) * 8); align-items: center; }
+.rf-cols { padding-bottom: calc(var(--u) * 4); font: 800 var(--t-xs)/1 var(--ui); letter-spacing: 0.12em; color: var(--blue-dim); }
+.rf-row { min-height: calc(var(--u) * 34); padding: calc(var(--u) * 4) 0; border-top: 1px solid rgba(21, 70, 200, 0.1); }
+.mp-head + .rf-row { border-top: 0; }
+.rf-row .ctl-keys { flex-wrap: wrap; row-gap: calc(var(--u) * 3); min-width: 0; }
+.rf-row .ctl-do { min-width: 0; overflow-wrap: anywhere; }
+.rf-none { font: 600 var(--t-sm)/1 var(--ui); font-style: normal; color: rgba(21, 70, 200, 0.4); }

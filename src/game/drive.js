@@ -25,6 +25,7 @@ import { addDent, applyDents, repairInstance } from './cardamage.js';
 import { setPlates } from './carconfig.js';
 import { weatherFx } from '../world/sky.js'; // (icy roads after bad weather)
 import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera shake)
+import { rumble } from '../core/gamepad.js'; // (controller vibration: crashes, knocks, landings, rough ground)
 import { breakables, BREAK_V } from '../world/breakables.js'; // (little poles and signs: knocked flying, back after 90 s)
 // m: the cockpit camera over your eyes (the seated rig's; that body now sits SEAT_LIFT higher in the seat, Oct 31 2026,
 // so the camera stays where the user set it: "move the camera a bit higher", Oct 27)
@@ -579,7 +580,7 @@ export class Drive {
       else { d.y = g1; d.vy += (vyG - d.vy) * 0.5; }
     } else {
       d.vy = Math.min(d.vy, 6) - G * dt; d.y += d.vy * dt;
-      if (d.y <= g1) { d.pitchV += Math.min(1.5, -d.vy * 0.08); d.y = g1; d.vy = 0; d.air = false; }
+      if (d.y <= g1) { rumble.land(clamp((-d.vy - 1) / 11, 0, 1)); d.pitchV += Math.min(1.5, -d.vy * 0.08); d.y = g1; d.vy = 0; d.air = false; }
     }
     // engine revs and gears
     const wr = 0.34, speedAbs = Math.abs(u);
@@ -707,9 +708,10 @@ export class Drive {
       const l = Math.hypot(d.vx, d.vz) || 1;
       try { this.dent(-d.vx / l, -d.vz / l, 0.25); } catch (err) { console.warn('drive: dent', err); }
       this.shake = Math.max(this.shake || 0, 0.3);
+      rumble.bump(0.55);
       this.hud?.flash(`Lamp post down · car damage ${Math.round(e.damage)}%`, 'bad', 1500);
     }
-    if (poles) { const f = Math.max(0.8, 1 - 0.05 * poles); d.vx *= f; d.vz *= f; d.pitchV -= 0.05; d.rollV += (Math.random() - 0.5) * 0.08; } // (a clack, a little speed lost)
+    if (poles) { rumble.bump(0.2); const f = Math.max(0.8, 1 - 0.05 * poles); d.vx *= f; d.vz *= f; d.pitchV -= 0.05; d.rollV += (Math.random() - 0.5) * 0.08; } // (a clack, a little speed lost)
     if (rn) this.railHit(rpx, rpz, rK);
     if (!n) return;
     const l = Math.hypot(px, pz) || 1, nx = px / l, nz = pz / l;
@@ -724,7 +726,7 @@ export class Drive {
       d.vx -= nx * vn * 1.2; d.vz -= nz * vn * 1.2; // (a soft bounce back)
       d.vx *= 0.85; d.vz *= 0.85;
       d.yawRate *= 0.6;
-      if (-vn > 2 && performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); this.audio?.impact ? this.audio.impact(kind === 'soft' ? 'snow' : kind, Math.min(0.7, -vn / 16)) : this.audio?.play('land', Math.min(1, -vn / 10)); d.pitchV -= Math.min(0.6, -vn * 0.04); }
+      if (-vn > 2 && performance.now() - (this.bangT || 0) > 300) { this.bangT = performance.now(); this.audio?.impact ? this.audio.impact(kind === 'soft' ? 'snow' : kind, Math.min(0.7, -vn / 16)) : this.audio?.play('land', Math.min(1, -vn / 10)); d.pitchV -= Math.min(0.6, -vn * 0.04); rumble.bump(Math.min(0.7, -vn / 16)); }
     }
   }
 
@@ -797,6 +799,7 @@ export class Drive {
     d.yawRate = clamp(d.yawRate + side * 0.5, -2, 2);
     d.pitchV -= 0.7; d.rollV += side * 0.4;
     this.shake = Math.max(this.shake || 0, 0.7);
+    rumble.crash(0.45); // (through the guardrail)
     try { this.audio?.impact?.('metal', 0.95); this.audio?.carCrash?.(0.45); } catch { /* (silent) */ }
     this.hud?.flash(`Through the guardrail · car damage ${Math.round(e.damage)}%`, 'bad', 2200);
   }
@@ -889,7 +892,7 @@ export class Drive {
         const hard = Math.min(1, -vn / 12);
         if (-vn > CRASH_V && this.canCrash()) { this.crash(-vn, nx, nz, 'car'); return; }
         if (-vn > KNOCK_V) this.knock(Math.max(KNOCK_V + 0.1, -vn * (Math.abs(nx * fx + nz * fz) > 0.6 ? 1 : 0.8)), nx, nz); // (a glancing scrape a little softer)
-        if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.35 + 0.45 * hard); else this.audio?.play('land', 0.5 + 0.5 * hard); d.pitchV -= 0.3 * hard; d.rollV += (Math.random() - 0.5) * 0.7 * hard; this.shake = Math.max(this.shake || 0, 0.25 + 0.4 * hard); }
+        if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.35 + 0.45 * hard); else this.audio?.play('land', 0.5 + 0.5 * hard); d.pitchV -= 0.3 * hard; d.rollV += (Math.random() - 0.5) * 0.7 * hard; this.shake = Math.max(this.shake || 0, 0.25 + 0.4 * hard); rumble.bump(0.3 + 0.6 * hard); }
         continue;
       }
       const dvx = (-J / m2) * nx, dvz = (-J / m2) * nz, dw = clamp((-(r2z * nx - r2x * nz) * J) / I2, -2.5, 2.5);
@@ -903,7 +906,7 @@ export class Drive {
       // head-on into another car at 40 km/h or more (closing): a crash
       if (-vn > CRASH_V && Math.abs(nx * fx + nz * fz) > 0.6 && this.canCrash()) { this.crash(-vn, nx, nz, 'car'); return; }
       if (-vn > KNOCK_V) this.knock(-vn * (Math.abs(nx * fx + nz * fz) > 0.6 ? 1 : 0.7), nx, nz);
-      if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.25 + 0.4 * hard); else this.audio?.play('land', 0.4 + 0.6 * hard); d.pitchV -= 0.25 * hard; d.rollV += (Math.random() - 0.5) * 0.6 * hard; }
+      if (performance.now() - (this.bangT || 0) > 250) { this.bangT = performance.now(); if (this.audio?.impact) this.audio.impact('car', 0.25 + 0.4 * hard); else this.audio?.play('land', 0.4 + 0.6 * hard); d.pitchV -= 0.25 * hard; d.rollV += (Math.random() - 0.5) * 0.6 * hard; rumble.bump(0.25 + 0.6 * hard); }
     }
     // people: knocked over (and a fine) when the car's body touches them; the car only bumps softly
     try {
@@ -1020,6 +1023,8 @@ export class Drive {
     const mdx = input?.mdx || 0, mdy = input?.mdy || 0;
     this.shake = Math.max(0, this.shake - dt * 1.6);
     const rough = d.crash ? 0 : this.roughness || 0;
+    // the controller: a light buzz over rough snow at speed, and while the tyres squeal (a skid, a hard stop)
+    if (!d.crash && !d.air && sp > 2) rumble.hold(rough * Math.min(1, sp / 25) * 0.3, Math.max(rough * Math.min(1, sp / 25) * 0.2, (d.squeal || 0) * 0.35));
     if (this.view === 'cockpit') {
       this.look.yaw = clamp(this.look.yaw - mdx * sens, -2.09, 2.09);
       this.look.pitch = clamp(this.look.pitch - mdy * sens, -1.05, 0.5);
@@ -1236,6 +1241,7 @@ export class Drive {
     e.damage = Math.min(99, (e.damage || 0) + add);
     this.dent(nx, nz, Math.min(0.45, (v - KNOCK_V) / 22));
     this.shake = Math.max(this.shake, 0.35);
+    rumble.bump(clamp(0.5 + (v - KNOCK_V) / 20, 0, 1));
     this.hud?.flash(`Knock · car damage ${Math.round(e.damage)}%`, 'bad', 1500);
   }
   // what your car hit (kind: 'traffic' | 'parked' | 'person' | 'player-car', v: the closing speed, m/s) for whoever
@@ -1259,6 +1265,7 @@ export class Drive {
       d.yawRate = clamp(d.yawRate + side * (0.3 + hard * 0.8), -2, 2);
       d.pitchV -= 1.2 * (0.5 + hard); d.rollV += side * 0.6 * (0.4 + hard);
       this.shake = 0.75;
+      rumble.crash(0.5 + 0.5 * hard);
       try { this.audio?.impact ? this.audio.impact(kind, 0.6 + 0.4 * hard) : this.audio?.carCrash?.(0.5); } catch { /* (silent) */ }
       this.hud?.flash(`Crash · car damage ${Math.round(e0.damage)}%`, 'bad', 2200);
       return;
@@ -1276,6 +1283,7 @@ export class Drive {
     d.pitchV -= 1.6 * (0.5 + hard); d.rollV += side * 0.8 * (0.4 + hard);
     d.horn = false; d.squeal = 0; d.load = 0;
     this.shake = 1;
+    rumble.crash(1); // (wrecked)
     try { if (kind !== 'car') this.audio?.impact?.(kind, 1); this.audio?.carCrash?.(0.55 + 0.45 * hard); } catch { /* (silent) */ }
     this.hud?.flash('Crashed · the car is wrecked', 'bad', 2200);
   }

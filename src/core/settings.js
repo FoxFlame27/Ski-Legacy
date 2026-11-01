@@ -18,6 +18,8 @@ export const SETTING_DEFAULTS = {
   muteUnfocused: false,
   // controls
   invertY: false,
+  vibration: true,     // controller rumble (core/gamepad.js)
+  padSens: 1,          // controller right-stick look sensitivity x (0.3..2.5)
   // camera
   fov: 65,             // third-person field of view (first person sits 13 deg wider)
   camShake: true,      // crash / landing / speed shake

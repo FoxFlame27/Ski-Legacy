@@ -82,7 +82,7 @@ export function loadSave() {
 let resetting = false; // (a reset in progress: nothing writes the old save back, e.g. the unload handlers in main.js)
 // this machine's settings, not progress: kept in the single-player save even while multiplayer has swapped `save`
 // (a graphics change in multiplayer reloads the page, and was lost; net/session.js restoreSave keeps them too)
-export const DEVICE_PREFS = ['quality', 'qualitySet', 'qualityCap', 'sensitivity', 'volume', ...SETTING_KEYS]; // (+ the SETTINGS screen's, core/settings.js)
+export const DEVICE_PREFS = ['quality', 'qualitySet', 'qualityCap', 'sensitivity', 'volume', 'binds', ...SETTING_KEYS]; // (+ the SETTINGS screen's, core/settings.js, incl. vibration / padSens; binds: the CONTROLS screen's rebinding)
 export function writeSave() {
   if (resetting) return;
   // multiplayer: `save` holds the server profile, never written over the single-player save; the session pushes
@@ -91,7 +91,7 @@ export function writeSave() {
     MP.onSave?.();
     try {
       const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-      if (s && DEVICE_PREFS.some((k) => save[k] !== undefined && s[k] !== save[k])) {
+      if (s && DEVICE_PREFS.some((k) => save[k] !== undefined && JSON.stringify(s[k]) !== JSON.stringify(save[k]))) {
         for (const k of DEVICE_PREFS) if (save[k] !== undefined) s[k] = save[k];
         localStorage.setItem(KEY, JSON.stringify(s));
       }

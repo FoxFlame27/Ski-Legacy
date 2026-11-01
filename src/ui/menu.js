@@ -10,9 +10,12 @@
 // so each screen fits anything from 1024x640 up to 2880x1800 without overflowing.
 import { save, writeSave, resetSave, skiById } from '../game/economy.js';
 import { QUALITY_ORDER, QUALITY_LABELS, normalizeQuality } from '../engine/quality.js';
-import { fmtTime, CONTROLS, keysHTML } from './hud.js';
+import { fmtTime, controlsTable, keysHTML, bindLabel, padFamilyNow } from './hud.js';
 import { PLAYER_CHARACTERS } from '../game/characters.js';
 import { SETTING_DEFAULTS } from '../core/settings.js';
+import { ACTIONS, KB_DEFAULTS, PAD_DEFAULTS, bindsOf, keyLabel, padGlyph } from '../core/bindings.js';
+import * as gp from '../core/gamepad.js'; // padInfo(), onNextPadButton(cb), 'padchange' (controller support, Nov 1 2026)
+import * as inputMod from '../core/input.js'; // setRemapPaused(on): no key remapping while a new key is captured
 
 // ------------------------------------------------------------------ SETTINGS rows
 // (Nov 1 2026, the user: "a lot more settings"): a section header (a string) or a row. kind 'range' (a slider, its
@@ -20,13 +23,17 @@ import { SETTING_DEFAULTS } from '../core/settings.js';
 // (defaults: core/settings.js); main.js applies each change at once (Menu onSetting), the systems read core/settings.js `live`.
 const pct = (v) => `${Math.round(v * 100)}%`;
 const TOGGLE_OPTS = [[false, 'Off'], [true, 'On']];
+// (Nov 1 2026, the user: "make Settings have a bit fewer settings but add controls so you can change controls"): Bloom,
+// Haze, Announcer, Notification size and the separate HUD pieces left the screen (their save keys and defaults still work);
+// Speed streaks + Vignette are one "Screen effects" row, Location / Money / Forecast / Speedometer one "HUD" choice. A
+// merged row has an id (its data-key), get() -> its value from the save, set(v) -> { saveKey: value } (each applied).
+const HUD_KEYS = ['showSpeedo', 'showInfo', 'showMoney', 'showForecast'];
+const HUD_MODES = { full: [true, true, true, true], min: [true, true, false, false], off: [false, false, false, false] };
 const SET_ROWS = [
   'GRAPHICS',
   { kind: 'quality', label: 'Graphics preset' },
   { key: 'renderScale', label: 'Render scale', kind: 'range', min: 0.5, max: 1, step: 0.05, fmt: pct },
   { key: 'shadows', label: 'Shadows', kind: 'toggle' },
-  { key: 'bloom', label: 'Bloom (glowing lights)', kind: 'toggle' },
-  { key: 'fog', label: 'Haze', kind: 'choice', opts: [[0.6, 'Light'], [1, 'Normal'], [1.4, 'Heavy']] },
   { key: 'brightness', label: 'Brightness', kind: 'range', min: 0.7, max: 1.3, step: 0.05, fmt: pct },
   { key: 'fpsCap', label: 'Frame rate limit', kind: 'choice', opts: [[30, '30'], [60, '60'], [0, 'Unlimited']] },
   { key: 'fullscreen', label: 'Fullscreen', kind: 'toggle' },
@@ -34,27 +41,30 @@ const SET_ROWS = [
   { key: 'volume', label: 'Master volume', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct, def: 0.8 },
   { key: 'musicVolume', label: 'Music', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct },
   { key: 'sfxVolume', label: 'Sound effects', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct },
-  { key: 'voiceVolume', label: 'Announcer & PA', kind: 'range', min: 0, max: 1, step: 0.05, fmt: pct },
   { key: 'muteUnfocused', label: 'Mute in background', kind: 'toggle' },
   'CONTROLS',
+  { kind: 'controls', label: 'Keyboard & controller buttons' },
   { key: 'sensitivity', label: 'Mouse sensitivity', kind: 'range', min: 0.3, max: 2.5, step: 0.1, fmt: (v) => `${v.toFixed(1)}x`, def: 1 },
-  { key: 'invertY', label: 'Invert mouse Y', kind: 'toggle' },
+  { key: 'padSens', label: 'Controller look sensitivity', kind: 'range', min: 0.3, max: 2.5, step: 0.1, fmt: (v) => `${v.toFixed(1)}x` },
+  { key: 'invertY', label: 'Invert look up / down', kind: 'toggle' },
+  { key: 'vibration', label: 'Controller vibration', kind: 'toggle' },
   'CAMERA',
   { key: 'fov', label: 'Field of view', kind: 'range', min: 50, max: 95, step: 1, fmt: (v) => `${Math.round(v)}°` },
   { key: 'defaultView', label: 'Starting view', kind: 'choice', opts: [['third', 'Third person'], ['first', 'First person']] },
   { key: 'camShake', label: 'Camera shake', kind: 'toggle' },
-  { key: 'speedFx', label: 'Speed streaks', kind: 'toggle' },
-  { key: 'vignette', label: 'Vignette', kind: 'toggle' },
+  { key: 'screenFx', label: 'Screen effects (speed streaks, vignette)', kind: 'toggle',
+    get: () => (save.speedFx ?? SETTING_DEFAULTS.speedFx) || (save.vignette ?? SETTING_DEFAULTS.vignette), set: (v) => ({ speedFx: v, vignette: v }) },
   'HUD',
+  { key: 'hudMode', label: 'HUD', kind: 'choice', opts: [['full', 'Full'], ['min', 'Minimal'], ['off', 'Off']],
+    get: () => {
+      const on = HUD_KEYS.map((k) => !!(save[k] ?? SETTING_DEFAULTS[k]));
+      return on.every(Boolean) ? 'full' : on.some(Boolean) ? 'min' : 'off';
+    },
+    set: (v) => Object.fromEntries(HUD_KEYS.map((k, i) => [k, (HUD_MODES[v] || HUD_MODES.full)[i]])) },
+  { key: 'hudScale', label: 'HUD size', kind: 'range', min: 0.8, max: 1.3, step: 0.05, fmt: pct },
   { key: 'speedUnit', label: 'Speed unit', kind: 'choice', opts: [['kmh', 'km/h'], ['mph', 'mph']] },
   { key: 'clock12', label: 'Clock', kind: 'choice', opts: [[false, '24-hour'], [true, '12-hour']] },
-  { key: 'showSpeedo', label: 'Speedometer', kind: 'toggle' },
-  { key: 'showInfo', label: 'Location & clock', kind: 'toggle' },
-  { key: 'showForecast', label: 'Weather forecast line', kind: 'toggle' },
-  { key: 'showMoney', label: 'Money', kind: 'toggle' },
   { key: 'nameTags', label: 'Player names (multiplayer)', kind: 'toggle' },
-  { key: 'hudScale', label: 'HUD size', kind: 'range', min: 0.8, max: 1.3, step: 0.05, fmt: pct },
-  { key: 'flashSize', label: 'Notification size', kind: 'choice', opts: [['s', 'Small'], ['m', 'Normal'], ['l', 'Large']] },
   { key: 'showFps', label: 'Show FPS', kind: 'toggle' },
 ];
 const SET_BY_KEY = Object.fromEntries(SET_ROWS.filter((r) => r.key).map((r) => [r.key, r]));
@@ -309,6 +319,8 @@ export class Menu {
     addEventListener('keydown', (e) => this.onKey(e), true);
     addEventListener('keyup', (e) => this.downKeys.delete(e.code), true);
     addEventListener('blur', () => this.downKeys.clear());
+    // a controller connected / disconnected (core/gamepad.js): the CONTROLS screen shows its buttons
+    addEventListener('padchange', () => { this.ctlFamPick = null; if (this.cur?.name === 'controls') this.refreshControls(); });
   }
 
   /** Main menu (out of game). Also used to come back from the pause menu's MAIN MENU. */
@@ -482,19 +494,240 @@ export class Menu {
   /** main.js: it failed (the menu shows why, BACK returns to SINGLEPLAYER / MULTIPLAYER). */
   mpError(text) { this.mpState.error = text; this.starting = false; this.go('mpwait', 0); }
 
-  // keyboard reference: three white panels (on the snow / in the air / general)
+  // ---------------------------------------------------------------- CONTROLS
+  // (Nov 1 2026, the user: "make the game for controller (Xbox, PS5, PS4, Nintendo Switch) ... update all controls in
+  // Controls ... add controls so you can change controls"). Left: every rebindable action (core/bindings.js ACTIONS) with
+  // its keyboard key and controller button; Enter / a click on a cell waits for the new key or button (a key already in
+  // use swaps with it). Right: the fixed controls and the riding / air / driving reference in both. The controller column
+  // shows the connected controller's buttons, or the family picked on the first row (Xbox / PlayStation / Switch).
+  ctlFamily() { return this.ctlFamPick || padFamilyNow() || this.prefs.padFamily || 'xbox'; }
+
+  bindCellsHTML(a, fam) {
+    const b = bindsOf(save);
+    const kb = a.padOnly ? '<button class="cb-cell cb-kb fixed" tabindex="-1" data-col="0" disabled>—</button>'
+      : `<button class="cb-cell cb-kb" tabindex="-1" data-col="0">${esc(keyLabel(b.kb[a.id]))}</button>`;
+    const pad = a.stick ? '<button class="cb-cell cb-pad fixed" tabindex="-1" data-col="1" disabled>Left stick</button>'
+      : `<button class="cb-cell cb-pad" tabindex="-1" data-col="1">${esc(b.pad[a.id] == null ? '—' : padGlyph(b.pad[a.id], fam))}</button>`;
+    return kb + pad;
+  }
+
+  ctlRefHTML(fam) {
+    const cap = (k) => (k.length === 1 && k[0] === '—' ? '<em class="rf-none">—</em>' : keysHTML(k));
+    const kbT = controlsTable(null), padT = controlsTable(fam);
+    const kbMove = ['forward', 'left', 'back', 'right'].map((id) => bindLabel(id));
+    const fixed = { title: 'ALWAYS', rows: [
+      [['MOUSE'], ['R STICK'], 'Look around'],
+      [kbMove, ['L STICK'], 'Move · steer'],
+      [['↑', '↓', 'ENTER', 'ESC'], ['D-PAD', padGlyph(fam === 'switch' ? 1 : 0, fam), padGlyph(fam === 'switch' ? 0 : 1, fam)], 'Menus: choose · select · back'],
+    ] };
+    const groups = [fixed, ...kbT.slice(0, 3).map((g, gi) => ({ title: g.title, note: g.note,
+      rows: g.rows.map(([k, label]) => [k, padT[gi].rows.find((r) => r[1] === label)?.[0] || ['—'], label]) }))];
+    return `<div class="rf-cols"><span>KEYBOARD</span><span>${esc({ xbox: 'XBOX', ps: 'PLAYSTATION', switch: 'SWITCH' }[fam])}</span><span></span></div>`
+      + groups.map((g) => `<div class="mp-head set-sec">${esc(g.title)}</div>${g.rows.map(([k, p, label]) => `<div class="rf-row"><span class="ctl-keys">${cap(k)}</span><span class="ctl-keys">${cap(p)}</span><span class="ctl-do">${esc(label)}</span></div>`).join('')}${g.note ? `<div class="ctl-note">${esc(g.note)}</div>` : ''}`).join('');
+  }
+
   scrControls() {
-    const panels = CONTROLS.map((g, i) => `<div class="menu-panel ctl-panel" data-stagger style="--clip:${brushClip(170 + i, 5, 4)}">
-        <div class="mp-head">${esc(g.title)}</div>
-        ${g.rows.map(([keys, label, sub]) => `<div class="ctl-row"><span class="ctl-keys">${keysHTML(keys)}</span>`
-          + `<span class="ctl-do">${esc(label)}${sub ? `<small>${esc(sub)}</small>` : ''}</span></div>`).join('')}
-        ${g.note ? `<div class="ctl-note">${esc(g.note)}</div>` : ''}
-      </div>`).join('');
+    const fam = this.ctlFamily(), conn = padFamilyNow();
+    this.ctlCol = this.ctlCol || 0;
+    const famRow = `<div class="mp-row ctl-fam" data-f data-row="family"><span>Controller<small class="ctl-conn">${conn ? 'Connected' : 'None connected · preview'}</small></span>`
+      + `<div class="seg">${[['xbox', 'Xbox'], ['ps', 'PlayStation'], ['switch', 'Switch']].map(([f, l]) => `<button tabindex="-1" data-fam="${f}" class="${fam === f ? 'on' : ''}">${l}</button>`).join('')}</div></div>`;
+    let lastG = '';
+    const rows = ACTIONS.map((a) => {
+      const head = a.group !== lastG ? `<div class="mp-head set-sec">${esc({ MOVE: 'MOVE', ACTIONS: 'ACTIONS', MENUS: 'MENUS & SCREENS' }[a.group] || a.group)}</div>` : '';
+      lastG = a.group;
+      return `${head}<div class="mp-row ctl-bind" data-f data-row="bind" data-id="${a.id}"><span class="cb-label">${esc(a.label)}</span>${this.bindCellsHTML(a, fam)}</div>`;
+    }).join('');
     return {
-      logo: 'small', shade: 'full', hints: [['esc', 'Back']],
-      html: `${this.head('CONTROLS', 'Keyboard and mouse')}<div class="ctl-wrap">${panels}</div>`,
-      back: () => this.go(this.inGame ? 'pause' : 'main', -1),
+      logo: 'small', shade: 'full',
+      hints: [['updown', 'Select'], ['leftright', 'Keyboard / controller'], ['enter', 'Change'], ['esc', 'Back']],
+      html: `${this.head('CONTROLS', 'Keyboard, mouse and controller · Xbox, PlayStation and Switch · select a key or button to change it')}
+        <div class="ctl-wrap ctl-v2">
+          <div class="menu-panel settings ctl-main" data-col="${this.ctlCol}" data-stagger style="--clip:${brushClip(170, 5, 4)}"><div class="set-scroll">
+            ${famRow}
+            <div class="ctl-cols"><span>ACTION</span><span>KEYBOARD</span><span>CONTROLLER</span></div>
+            ${rows}
+            <div class="mp-row ctl-resets" data-f data-row="resets"><span>Defaults</span><div class="seg"><button tabindex="-1" data-reset="kb">Reset keyboard</button><button tabindex="-1" data-reset="pad">Reset controller</button></div></div>
+          </div><div class="ctl-status"></div></div>
+          <div class="menu-panel ctl-ref" data-stagger style="--clip:${brushClip(171, 5, 4)}"><div class="set-scroll">${this.ctlRefHTML(fam)}</div></div>
+        </div>`,
+      after: (el) => this.bindControls(el),
+      keys: {
+        left: () => this.ctlSide(-1), right: () => this.ctlSide(1),
+        enter: () => this.ctlEnter(),
+      },
+      back: () => this.go(this.ctlBack === 'settings' ? 'settings' : this.inGame ? 'pause' : 'main', -1),
     };
+  }
+
+  bindControls(el) {
+    const focusRow = (row) => { const i = this.focusables.indexOf(row); if (i >= 0) this.setFocus(i, true); };
+    el.querySelectorAll('[data-fam]').forEach((b) => b.addEventListener('click', () => { this.audio?.play('click'); this.pickFamily(b.dataset.fam); }));
+    el.querySelectorAll('.cb-cell:not(:disabled)').forEach((c) => c.addEventListener('mouseenter', () => { if (!this.capture) this.setCtlCol(Number(c.dataset.col)); }));
+    el.querySelectorAll('.ctl-bind').forEach((row) => row.querySelectorAll('.cb-cell').forEach((c) => c.addEventListener('click', () => {
+      if (c.disabled) return;
+      this.audio?.play('click');
+      focusRow(row);
+      this.setCtlCol(Number(c.dataset.col));
+      this.startCapture(row.dataset.id, this.ctlCol);
+    })));
+    el.querySelectorAll('[data-reset]').forEach((b) => b.addEventListener('click', () => { this.audio?.play('click'); this.resetBinds(b.dataset.reset); }));
+  }
+
+  setCtlCol(c) {
+    this.ctlCol = c ? 1 : 0;
+    const p = this.cur?.el.querySelector('.ctl-main');
+    if (p) p.dataset.col = String(this.ctlCol);
+  }
+
+  // left / right: the family row picks Xbox / PlayStation / Switch, an action row moves between its keyboard and
+  // controller cells, the defaults row between its two buttons
+  ctlSide(d) {
+    const row = this.focusables[this.fi], kind = row?.dataset.row;
+    if (kind === 'family') {
+      const fs = ['xbox', 'ps', 'switch'];
+      this.pickFamily(fs[(fs.indexOf(this.ctlFamily()) + d + 3) % 3]);
+    } else if (kind === 'bind' || kind === 'resets') { this.setCtlCol(d > 0 ? 1 : 0); this.audio?.play('tick'); }
+  }
+
+  ctlEnter() {
+    const row = this.focusables[this.fi], kind = row?.dataset.row;
+    if (kind === 'family') { const fs = ['xbox', 'ps', 'switch']; this.pickFamily(fs[(fs.indexOf(this.ctlFamily()) + 1) % 3]); }
+    else if (kind === 'resets') row.querySelectorAll('[data-reset]')[this.ctlCol]?.click();
+    else if (kind === 'bind') {
+      const cell = row.querySelector(`.cb-cell[data-col="${this.ctlCol}"]`);
+      if (cell && !cell.disabled) { this.audio?.play('click'); this.startCapture(row.dataset.id, this.ctlCol); }
+      else this.ctlStatus(this.ctlCol ? 'Moving is always the left stick on a controller' : 'This one is controller-only');
+    }
+  }
+
+  pickFamily(f) {
+    this.ctlFamPick = f;
+    this.prefs.padFamily = f;
+    savePrefs(this.prefs);
+    this.audio?.play('tick');
+    this.refreshControls();
+  }
+
+  ctlStatus(text, bad = false) {
+    const s = this.cur?.name === 'controls' ? this.cur.el.querySelector('.ctl-status') : null;
+    if (!s) return;
+    s.textContent = text;
+    s.classList.toggle('bad', bad);
+  }
+
+  // the cells, the family row and the reference after a change (a new binding, a controller plugged in, a family picked)
+  refreshControls() {
+    const el = this.cur?.name === 'controls' ? this.cur.el : null;
+    if (!el) return;
+    const fam = this.ctlFamily(), conn = padFamilyNow();
+    el.querySelectorAll('[data-fam]').forEach((b) => b.classList.toggle('on', b.dataset.fam === fam));
+    const c = el.querySelector('.ctl-conn');
+    if (c) c.textContent = conn ? 'Connected' : 'None connected · preview';
+    for (const row of el.querySelectorAll('.ctl-bind')) {
+      const a = ACTIONS.find((x) => x.id === row.dataset.id);
+      const kb = row.querySelector('.cb-kb'), pad = row.querySelector('.cb-pad'), b = bindsOf(save);
+      if (kb && !a.padOnly && !kb.classList.contains('wait')) kb.textContent = keyLabel(b.kb[a.id]);
+      if (pad && !a.stick && !pad.classList.contains('wait')) pad.textContent = b.pad[a.id] == null ? '—' : padGlyph(b.pad[a.id], fam);
+    }
+    const ref = el.querySelector('.ctl-ref .set-scroll');
+    if (ref) ref.innerHTML = this.ctlRefHTML(fam);
+  }
+
+  // wait for the new key (col 0) or controller button (col 1) of an action; Esc cancels, the controller wait times out
+  startCapture(id, col) {
+    if (this.capture) this.cancelCapture();
+    const a = ACTIONS.find((x) => x.id === id);
+    const row = this.cur?.el.querySelector(`.ctl-bind[data-id="${id}"]`);
+    const cell = row?.querySelector(`.cb-cell[data-col="${col}"]`);
+    if (!a || !cell || cell.disabled) return;
+    if (col === 1) {
+      if (typeof gp.onNextPadButton !== 'function' || !gp.padInfo?.()?.connected) { this.ctlStatus('Connect a controller to change its buttons', true); return; }
+      this.capture = { kind: 'pad', id, cell };
+      cell.classList.add('wait');
+      cell.textContent = 'Press a button…';
+      this.ctlStatus(`${a.label}: press a controller button · Esc cancels`);
+      this.capture.stop = gp.onNextPadButton((i) => { if (this.capture?.kind === 'pad' && this.capture.id === id) this.assignPad(id, i); });
+      this.capture.t = setTimeout(() => { if (this.capture?.id === id) { this.cancelCapture(); this.ctlStatus('No button pressed'); } }, 6000);
+    } else {
+      this.capture = { kind: 'kb', id, cell };
+      cell.classList.add('wait');
+      cell.textContent = 'Press a key…';
+      this.ctlStatus(`${a.label}: press a key · Esc cancels`);
+      inputMod.setRemapPaused?.(true);
+    }
+  }
+
+  cancelCapture() {
+    const c = this.capture;
+    if (!c) return;
+    this.capture = null;
+    clearTimeout(c.t);
+    try { c.stop?.(); } catch { /* the controller module went away */ }
+    if (c.kind === 'kb') setTimeout(() => { if (!this.capture) inputMod.setRemapPaused?.(false); }, 250); // (after the key's keyup)
+    c.cell?.classList.remove('wait');
+    this.ctlStatus('');
+    this.refreshControls();
+  }
+
+  // onKey while a capture is waiting: true = the key was taken
+  captureKey(e) {
+    const c = this.capture;
+    if (c && !e.isTrusted) { // (a synthetic key, e.g. the controller's menu keys, is no new key; its back button cancels)
+      if (e.code === 'Escape' && e.type === 'keydown') { e.preventDefault(); e.stopImmediatePropagation(); this.cancelCapture(); return true; }
+      return c.kind === 'kb';
+    }
+    if (!c) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return true;
+    if (e.code === 'Escape') { this.audio?.play('click'); this.cancelCapture(); return true; }
+    if (c.kind === 'kb') this.assignKey(c.id, e.code);
+    return true;
+  }
+
+  assignKey(id, code) {
+    const b = bindsOf(save), old = b.kb[id];
+    const other = ACTIONS.find((a) => !a.padOnly && a.id !== id && b.kb[a.id] === code);
+    const kb = { ...b.kb, [id]: code };
+    if (other) kb[other.id] = old;
+    this.storeBinds('kb', kb, KB_DEFAULTS);
+    this.cancelCapture();
+    this.audio?.play('click');
+    this.ctlStatus(other ? `${keyLabel(code)} set · ${other.label.split(' · ')[0]} moved to ${keyLabel(old)}` : `${keyLabel(code)} set`);
+  }
+
+  assignPad(id, i) {
+    if (i === 16) { this.ctlStatus('The Home / guide button is reserved', true); return; }
+    const b = bindsOf(save), old = b.pad[id];
+    const other = Object.keys(b.pad).find((k) => k !== id && b.pad[k] === i);
+    const pad = { ...b.pad, [id]: i };
+    if (other && old != null) pad[other] = old;
+    this.storeBinds('pad', pad, PAD_DEFAULTS);
+    this.cancelCapture();
+    this.audio?.play('click');
+    const fam = this.ctlFamily(), oa = other && ACTIONS.find((a) => a.id === other);
+    this.ctlStatus(oa && old != null ? `${padGlyph(i, fam)} set · ${oa.label.split(' · ')[0]} moved to ${padGlyph(old, fam)}` : `${padGlyph(i, fam)} set`);
+  }
+
+  // only what differs from the defaults is stored (save.binds = { kb, pad }); core/input.js reads bindsOf(save)
+  storeBinds(kind, full, defs) {
+    const diff = {};
+    for (const [k, v] of Object.entries(full)) if (v !== defs[k]) diff[k] = v;
+    save.binds = { ...(save.binds || {}), [kind]: diff };
+    writeSave();
+    inputMod.bindingsChanged?.();
+    try { dispatchEvent(new Event('bindschange')); } catch { /* no window */ }
+    this.refreshControls();
+  }
+
+  resetBinds(kind) {
+    if (this.capture) this.cancelCapture();
+    save.binds = { ...(save.binds || {}), [kind]: {} };
+    writeSave();
+    inputMod.bindingsChanged?.();
+    try { dispatchEvent(new Event('bindschange')); } catch { /* no window */ }
+    this.refreshControls();
+    this.ctlStatus(kind === 'kb' ? 'Keyboard back to the defaults' : 'Controller back to the defaults');
   }
 
   fetchCourses() {
@@ -624,6 +857,7 @@ export class Menu {
       if (r.kind === 'quality') {
         return `<div class="mp-row" data-f data-row="quality"><span>${esc(r.label)}</span><div class="seg">${qs.map((x) => `<button tabindex="-1" data-q="${x}" class="${q === x ? 'on' : ''}">${QUALITY_LABELS[x]}</button>`).join('')}</div></div>`;
       }
+      if (r.kind === 'controls') return `<div class="mp-row" data-f data-row="controls"><span>${esc(r.label)}</span><button class="mp-skier mp-ctl" tabindex="-1">Change controls</button></div>`;
       const v = this.prefValue(r);
       if (r.kind === 'range') {
         return `<div class="mp-row" data-f data-row="range" data-key="${r.key}"><span>${esc(r.label)}</span><div class="set-range"><input type="range" tabindex="-1" min="${r.min}" max="${r.max}" step="${r.step}" value="${v}"><em>${esc(r.fmt(v))}</em></div></div>`;
@@ -651,6 +885,7 @@ export class Menu {
   // the current value of a SETTINGS row (the save, or its default; Fullscreen asks the document)
   prefValue(r) {
     if (r.key === 'fullscreen') return !!document.fullscreenElement;
+    if (r.get) return r.get();
     return save[r.key] ?? r.def ?? SETTING_DEFAULTS[r.key];
   }
 
@@ -664,6 +899,13 @@ export class Menu {
       return;
     }
     if (r.key === 'sensitivity') { save.sensitivity = v; writeSave(); this.onSens?.(v); return; }
+    if (r.set) { // a merged row: every save key it stands for, each applied
+      const m = r.set(v);
+      Object.assign(save, m);
+      writeSave();
+      for (const [k, val] of Object.entries(m)) this.onSetting?.(k, val);
+      return;
+    }
     save[r.key] = v;
     writeSave();
     if (r.key === 'volume') this.onVolume?.(v);
@@ -691,7 +933,8 @@ export class Menu {
     };
     document.addEventListener('fullscreenchange', fsSync);
     this.fsSync = fsSync; // (a refused request puts the row back)
-    el.querySelector('.mp-skier:not(.mp-acct)')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
+    el.querySelector('.mp-ctl')?.addEventListener('click', () => { this.audio?.play('click'); this.ctlBack = 'settings'; this.go('controls', 1); });
+    el.querySelector('.mp-skier:not(.mp-acct):not(.mp-ctl)')?.addEventListener('click', () => { this.audio?.play('click'); this.go('showcase', 1); });
     el.querySelector('.mp-acct')?.addEventListener('click', () => { this.audio?.play('click'); this.acctState = null; this.go('account', 1); });
     const reset = el.querySelector('.mp-danger');
     reset?.addEventListener('click', () => {
@@ -747,6 +990,7 @@ export class Menu {
     else if (kind === 'choice') { this.pickChoice(row, this.choiceIndex(row) + 1); this.audio?.play('click'); }
     else if (kind === 'skier') row.querySelector('.mp-skier').click();
     else if (kind === 'account') row.querySelector('.mp-acct').click();
+    else if (kind === 'controls') row.querySelector('.mp-ctl').click();
     else if (kind === 'reset') row.querySelector('.mp-danger').click();
     else if (row?.dataset.act) row.click();
   }
@@ -846,6 +1090,7 @@ export class Menu {
   /** Switch screens with a slide/fade (dir 1 = forward, -1 = back, 0 = crossfade). */
   go(name, dir = 1) {
     this.ensureChrome();
+    if (this.capture) this.cancelCapture(); // (leaving CONTROLS while it waits for a key / button)
     const def = this.buildScreen(name);
     this.screen = name;
     this.el.dataset.screen = name;
@@ -926,6 +1171,7 @@ export class Menu {
 
   onKey(e) {
     if (this.el.hidden || !this.cur?.el.isConnected || this.el.classList.contains('leaving')) return;
+    if (this.capture && this.captureKey(e)) return; // CONTROLS: waiting for a new key / button
     const a = KEYMAP[e.code];
     if (!a) return;
     // a slider the mouse is still holding keeps its own arrow keys
@@ -965,7 +1211,7 @@ export class Menu {
       }
       case 'leavemp': return this.pauseHandlers?.onLeaveMP?.();
       case 'skier': return this.go('showcase', 1);
-      case 'controls': return this.go('controls', 1);
+      case 'controls': this.ctlBack = null; return this.go('controls', 1);
       case 'stats': return this.go('stats', 1);
       case 'settings': return this.go('settings', 1);
       case 'back': return this.back(!fromClick);

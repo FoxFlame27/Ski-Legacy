@@ -67,6 +67,7 @@ import { presentation } from './presentation/index.js';
 import { HeliModel } from './heli/model.js';
 import { breakables, AI_RAIL_V, BREAK_V } from '../world/breakables.js'; // (a patrol car through a guardrail at 100 km/h+: aiRail; poles / lamps knocked: sweep)
 import { nightUniform } from '../world/village.js';
+import { rumble } from '../core/gamepad.js'; // (controller vibration: rams, the arrest)
 import { terrainUniforms } from '../world/terrain.js'; // read-only: how hard it is snowing (the searchlight's beam: heli/model.js)
 
 // The officers: a Meshy police officer in a navy winter uniform + hi-vis vest (tools/meshy-officer.mjs,
@@ -2788,6 +2789,7 @@ export class Police {
     try { this.audio?.ramHit?.(0.3 + 0.7 * k, k > 0.15); } catch { /* (silent) */ }
     const D = this.drive;
     D.shake = Math.max(D.shake || 0, 0.6 + 0.65 * k);
+    rumble.hit(k); // (rammed by the police, felt in the controller)
     const cam = this.camera;
     if (cam?.isPerspectiveCamera) { cam.fov = Math.min(cam.fov + 4 + 11 * k, 110); cam.updateProjectionMatrix(); } // (drive.js eases it back)
     if (!d.crash) {
@@ -3040,6 +3042,7 @@ export class Police {
     // car, wrecked): the full-screen ARRESTED with the real sentence and fine, a hard shake in the car (drive.shake))
     bustedBanner(`You were caught by the police · ${TUNING.jailS} s in jail · ${usd(this.lastArrest || this.arrestNow())} fine`, { audio: this.audio });
     if (this.drive?.active) this.drive.shake = Math.max(this.drive.shake || 0, 0.7);
+    rumble(0.55, 0.7, 600); // (caught: a medium jolt in the controller)
     this.w = null; this.jailing = 6; this.jailTry = 0; this.hideHeli(); this.fixCar();
     this.setPin(true);
     this.tryJail(); // (update(): tried again if the prison didn't take it, then arrestFallback)

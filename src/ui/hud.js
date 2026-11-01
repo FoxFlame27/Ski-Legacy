@@ -1,6 +1,8 @@
 // HUD + menus (DOM overlay). Deliberately minimal.
 import { SKIS, GEAR_YOU_OWN, PRICES, save, writeSave } from '../game/economy.js';
-import { live } from '../core/settings.js'; // (SETTINGS: speed unit, clock format, forecast line)
+import { live } from '../core/settings.js';
+import { ACTION, bindsOf, padGlyph, keyLabel } from '../core/bindings.js'; // (Nov 1 2026: rebindable keys, controller glyphs)
+import * as gp from '../core/gamepad.js'; // padInfo(): the connected controller (its family picks the glyphs) // (SETTINGS: speed unit, clock format, forecast line)
 import { brushSVG, brushClip } from './menu.js'; // (used at call time only: menu.js imports this module too)
 import './travel.css';
 
@@ -39,48 +41,89 @@ const setText = (id, v) => { const e = $(id); if (e.textContent !== v) e.textCon
 // "14:05" -> "2:05 PM" (SETTINGS · Clock: 12-hour)
 const to12h = (t) => { const [h, m] = String(t).split(':'); const H = +h || 0; return `${H % 12 || 12}:${m || '00'} ${H < 12 ? 'AM' : 'PM'}`; };
 
+/** The connected controller's family ('xbox' | 'ps' | 'switch'), or null when none is connected (core/gamepad.js). */
+export function padFamilyNow() {
+  try { const p = gp.padInfo?.(); return p?.connected ? p.family || 'xbox' : null; } catch { return null; }
+}
+
+const STICK_DIR = { forward: 'L STICK ↑', back: 'L STICK ↓', left: 'L STICK ←', right: 'L STICK →' };
 /**
- * Every control, grouped for the menu's CONTROLS screen: [keys, action, detail?].
- * keys: key labels drawn as keycaps; '+' joins a combination.
+ * The current label of an action (core/bindings.js ACTIONS id): its keyboard key (save.binds over the defaults), or with a
+ * controller family, its button glyph ('L STICK ↑' for the movement rows, which are always the left stick).
  */
-export const CONTROLS = [
-  { title: 'ON THE SNOW', rows: [
-    [['A', 'D'], 'Steer left / right', 'Pivot on the spot when stopped'],
-    [['W'], 'Pole yourself on, tuck for speed', 'On the flat or standing still: W pushes with your poles'],
-    [['S'], 'Brake', 'Snowplow, hockey stop when fast'],
-    [['S', '+', 'A', 'D'], 'Skid turn'],
-    [['SPACE'], 'Hold to crouch, release to jump', 'Tap for a small hop'],
-  ] },
-  { title: 'IN THE AIR', rows: [
-    [['A', 'D'], 'Spin'],
-    [['W'], 'Front flip'],
-    [['S'], 'Back flip'],
-    [['SHIFT'], 'Grab'],
-  ], note: 'Flips need a jump or a kicker. Land a spin switch and you pivot back automatically.' },
-  { title: 'GENERAL', rows: [
-    [['MOUSE'], 'Look around'],
-    [['E'], 'Interact'],
-    [['R'], 'First / third person'],
-    [['G'], 'Skis on / off'],
-    [['M'], 'Trail map'],
-    [['P'], 'Photo mode'],
-    [['ESC'], 'Pause menu'],
-    [['BACKSPACE'], 'Restart a race instantly'],
-  ], note: 'On foot you can\'t climb steep slopes: take a lift, a gondola or the ski bus.' },
-];
+export function bindLabel(id, family = null) {
+  const b = bindsOf(save);
+  if (family) {
+    if (ACTION[id]?.stick) return STICK_DIR[id];
+    return b.pad[id] == null ? '—' : padGlyph(b.pad[id], family);
+  }
+  return ACTION[id]?.padOnly ? '—' : keyLabel(b.kb[id] || '');
+}
+
+/**
+ * Every control, grouped for the CONTROLS reference: [keys, action, detail?], from the current bindings (Nov 1 2026,
+ * rebinding; keyboard, or the given controller family's glyphs). keys: labels drawn as keycaps; '+' joins a combination.
+ */
+export function controlsTable(family = null) {
+  const L = (id) => bindLabel(id, family), pad = !!family;
+  const steer = pad ? ['L STICK'] : [L('left'), L('right')];
+  return [
+    { title: 'ON THE SNOW', rows: [
+      [steer, 'Steer left / right', 'Pivot on the spot when stopped'],
+      [[L('forward')], 'Pole yourself on, tuck for speed', 'On the flat or standing still: push with your poles'],
+      [pad ? [L('back'), L('brake')] : [L('back')], 'Brake', 'Snowplow, hockey stop when fast'],
+      [pad ? [L('back'), '+', 'L STICK'] : [L('back'), '+', L('left'), L('right')], 'Skid turn'],
+      [[L('jump')], 'Hold to crouch, release to jump', 'Tap for a small hop'],
+    ] },
+    { title: 'IN THE AIR', rows: [
+      [steer, 'Spin'],
+      [[L('forward')], 'Front flip'],
+      [[L('back')], 'Back flip'],
+      [[L('sprint')], 'Grab'],
+    ], note: 'Flips need a jump or a kicker. Land a spin switch and you pivot back automatically.' },
+    { title: 'DRIVING', rows: [
+      [[L('forward')], 'Accelerate'],
+      [pad ? [L('back'), L('brake')] : [L('back')], 'Brake, then reverse'],
+      [steer, 'Steer'],
+      [[L('jump')], 'Handbrake'],
+      [[L('horn')], 'Horn'],
+      [[L('lookback')], 'Look back'],
+      [[L('lights')], 'Lights'],
+      [[L('view')], 'Chase / cockpit camera'],
+      [[L('interact')], 'Get out'],
+      [[L('unstuck')], 'Unstuck the car'],
+    ] },
+    { title: 'GENERAL', rows: [
+      [[pad ? 'R STICK' : 'MOUSE'], 'Look around'],
+      [[L('interact')], 'Interact'],
+      [[L('view')], 'First / third person'],
+      [[L('skis')], 'Skis on / off'],
+      [[L('lights')], 'Headlamp'],
+      [[L('map')], 'Trail map'],
+      [[L('photo')], 'Photo mode'],
+      [[L('pause')], 'Pause menu'],
+      [[L('restart')], 'Restart a race instantly'],
+    ], note: 'On foot you can\'t climb steep slopes: take a lift, a gondola or the ski bus.' },
+  ];
+}
 
 /** Keycaps for a list of key labels (drawn with CSS, no icon font). */
-export const keysHTML = (keys) => keys.map((k) => (k === '+' ? '<b class="kc-plus">+</b>' : `<i class="kc${k.length > 1 ? ' kc-word' : ''}">${k}</i>`)).join('');
+export const keysHTML = (keys) => keys.map((k) => (k === '+' ? '<b class="kc-plus">+</b>' : `<i class="kc${String(k).length > 1 ? ' kc-word' : ''}">${k}</i>`)).join('');
 
-// first-time hint: the essentials, bottom-left, once per save (save.tutorial)
-const HINT_ROWS = [
-  [keysHTML(['A', 'D']), 'Steer'],
-  [keysHTML(['W', 'S']), 'Go / tuck · brake'],
-  [keysHTML(['SPACE']), 'Hold, release to jump'],
-  ['<em class="ch-label">IN THE AIR</em>', `${keysHTML(['A', 'D'])} spin <i class="ch-dot"></i> ${keysHTML(['W', 'S'])} flip <i class="ch-dot"></i> ${keysHTML(['SHIFT'])} grab`],
-  [keysHTML(['M']), 'Trail map'],
-  [keysHTML(['ESC']), 'Pause · all controls'],
-];
+// first-time hint: the essentials, bottom-left, once per save (save.tutorial), in the current bindings: the keyboard, or
+// the connected controller's buttons
+function hintRows() {
+  const f = padFamilyNow(), L = (id) => bindLabel(id, f);
+  const steer = f ? ['L STICK'] : [L('left'), L('right')], fs = f ? ['L STICK ↑↓'] : [L('forward'), L('back')];
+  return [
+    [keysHTML(steer), 'Steer'],
+    [keysHTML(fs), 'Go / tuck · brake'],
+    [keysHTML([L('jump')]), 'Hold, release to jump'],
+    ['<em class="ch-label">IN THE AIR</em>', `${keysHTML(steer)} spin <i class="ch-dot"></i> ${keysHTML(fs)} flip <i class="ch-dot"></i> ${keysHTML([L('sprint')])} grab`],
+    [keysHTML([L('map')]), 'Trail map'],
+    [keysHTML([L('pause')]), 'Pause · all controls'],
+  ];
+}
 
 export class HUD {
   constructor() {
@@ -117,7 +160,7 @@ export class HUD {
       this.el.appendChild(el);
     }
     this.hintShown = true;
-    el.innerHTML = `<div class="ch-card paper"><div class="ch-head">CONTROLS</div>${HINT_ROWS.map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
+    el.innerHTML = `<div class="ch-card paper"><div class="ch-head">CONTROLS</div>${hintRows().map(([k, t]) => `<div class="ch-row"><span class="ch-keys">${k}</span><span class="ch-do">${t}</span></div>`).join('')}</div>`;
     el.classList.remove('out');
     el.hidden = false;
     clearTimeout(this.hintSeenT);
@@ -130,7 +173,7 @@ export class HUD {
     if (!this.hintKeys) {
       this.hintKeys = true;
       addEventListener('keydown', (e) => {
-        if (this.hintAt && MOVE_KEYS.has(e.code) && performance.now() - this.hintAt > 3000) this.fadeHint();
+        if (this.hintAt && (MOVE_KEYS.has(e.code) || ['forward', 'back', 'left', 'right'].some((id) => bindsOf(save).kb[id] === e.code)) && performance.now() - this.hintAt > 3000) this.fadeHint();
       });
     }
   }
@@ -388,7 +431,7 @@ export class HUD {
       </div>
       <h3>Controls</h3>
       <div class="ctl">
-        ${CONTROLS.map((g) => g.rows.map(([k, label]) => `<b>${g.title === 'IN THE AIR' ? 'Air · ' : ''}${k.join(' ')}</b>${label}`).join('')).join('')}
+        ${controlsTable().map((g) => g.rows.map(([k, label]) => `<b>${g.title === 'IN THE AIR' ? 'Air · ' : ''}${k.join(' ')}</b>${label}`).join('')).join('')}
       </div>
       <div class="actions"><button class="btn" data-reset>Reset progress</button><button class="btn" data-quit>Quit</button><button class="btn primary" data-close>Resume</button></div>`);
     const card = $('panel-card');

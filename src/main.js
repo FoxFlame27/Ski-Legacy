@@ -22,6 +22,7 @@ import { Railway, RAIL_PRICE } from './world/railway.js'; // the Wolkenspitzbahn
 import { Decor } from './world/decor.js';
 import { loadAll, loadGLB } from './core/assets.js';
 import { Input } from './core/input.js';
+import { attachInput, setMenuMode as padMenuMode, setVehicleMode as padVehicleMode, poll as padPoll, rumble } from './core/gamepad.js'; // CONTROLLER (Nov 1 2026): Xbox / PlayStation / Switch, rumble
 import { Audio } from './core/audio.js';
 import { live, syncLive } from './core/settings.js'; // SETTINGS screen (Nov 1 2026): values the systems read live
 import { SkierRig } from './player/skier.js';
@@ -150,6 +151,7 @@ env.fogScale = quality.fog * live.fog;
 env.hour = save.hour;
 
 const input = new Input(canvas);
+attachInput(input); // (the controller feeds the same Input: core/gamepad.js)
 const audio = new Audio();
 breakables.init({ scene, audio, camera }); // (little poles and signs a car knocks flying: world/breakables.js)
 const hud = new HUD();
@@ -1897,14 +1899,29 @@ function returnToVillage(message = 'Back in Legacy Village') {
   player.camYaw = 0;
   hud.flash(message, 'good', 2400);
 }
-addEventListener('keydown', (e) => { if (e.code === 'Escape' && paused) closePause(); });
+addEventListener('keydown', (e) => {
+  if (e.code !== 'Escape') return;
+  if (paused) { closePause(); return; }
+  // (Nov 1 2026, controller: the Menu button / Esc without pointer lock (playing on a controller the mouse is never
+  // grabbed) opens the pause menu itself; with pointer lock, losing the lock does it (below)). Not when Esc just closed
+  // an overlay (escClosedAt, set in the capture phase before it closed itself)
+  // (synthetic: the controller's Menu button, or a key rebound to PAUSE, while the pointer is locked: let it go too)
+  if (started && (!input.locked || !e.isTrusted) && !busIntro && !transition.active && !overlayOpen() && !padMenu()
+    && performance.now() - escClosedAt > 400) { openPause(); input.unlock(); }
+});
 
 // Overlays that free the mouse on purpose (panels, dialogs, map, admin, photo mode, outfits, conversations):
 // opening one, or closing it with Esc, releases pointer lock too, and that must never open the pause menu
 const overlayOpen = () => input.cursorFree || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!admin?.fly || !!adminNew?.isOpen || !!photo?.active || !!outfitShop?.isOpen
   || !!talk?.active || !document.getElementById('map').hidden || document.getElementById('travel')?.hidden === false; // (travel: route / flight map pickers)
 let escClosedAt = -1e9;
-addEventListener('keydown', (e) => { if (e.code === 'Escape' && overlayOpen()) escClosedAt = performance.now(); }, true); // capture: before the overlay closes itself
+addEventListener('keydown', (e) => { if (e.code === 'Escape' && (overlayOpen() || padMenu())) escClosedAt = performance.now(); }, true); // capture: before the overlay closes itself
+// the controller drives the menus (arrows / Enter / Esc) while one of these is open (core/gamepad.js)
+const padMenu = () => !started || !!busIntro || paused || hud.panelOpen || !!trailMap?.isOpen || !!admin?.isOpen || !!adminNew?.isOpen || !!outfitShop?.isOpen
+  || !!talk?.active || !document.getElementById('map').hidden || document.getElementById('travel')?.hidden === false
+  || !!carRental?.ui?.isOpen || !!raceStandUI?.isOpen;
+padMenuMode(padMenu);
+padVehicleMode(() => !!drive?.active); // (RT / R2 / ZR is the gas in a car; on the snowmobile it stays its boost)
 document.addEventListener('pointerlockchange', () => {
   if (!started || document.pointerLockElement) return;
   if (overlayOpen() || performance.now() - escClosedAt < 700) return;
@@ -2076,8 +2093,17 @@ function loopFault(where, e) {
   if (now - f.at > 10000) { console.error(`[loop] ${where} failed${f.n > 1 ? ` (x${f.n})` : ''}:`, e); f.at = now; f.n = 0; }
   loopFaults.set(k, f);
 }
+// RUMBLE catch-all (Nov 1 2026): any sudden camera shake (the skier's, the car's) is felt in the controller too; the
+// big moments call rumble() themselves first, harder (a weaker call during a stronger rumble is dropped)
+let lastShake = 0;
+function shakeRumble() {
+  const s = Math.max(player?.shake || 0, drive?.active ? drive.shake || 0 : 0);
+  if (s > lastShake + 0.12 && s > 0.2) rumble.bump(Math.min(1, s * 0.7));
+  lastShake = s;
+}
 function loop() {
   requestAnimationFrame(loop);
+  try { padPoll(); } catch (e) { loopFault('gamepad', e); } // (the controller: before the menu throttle, so menus answer it)
   if (menuThrottle()) return;
   if (live.showFps) fpsTick();
   let dt = 0;
@@ -2087,6 +2113,7 @@ function loop() {
     post.render(dt, player.mode === 'ski' ? player.speed : 0, player.mode === 'fall' ? Math.max(0, 1 - player.fallT * 2) : 0);
   } catch (e) { loopFault('render', e); }
   mark('render');
+  try { shakeRumble(); } catch (e) { loopFault('rumble', e); }
   input.endFrame();
 }
 // every system's update for one frame; returns the frame's dt (for the render)

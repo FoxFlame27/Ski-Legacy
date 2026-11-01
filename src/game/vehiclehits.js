@@ -33,6 +33,7 @@
 // The drivers don't brake for them, but they keep to the pavements and the waiting areas: it's the odd one crossing.
 import { knockPerson, launchFor, people } from './peoplehits.js';
 import { Ambulance } from './heli/ambulance.js';
+import { rumble } from '../core/gamepad.js'; // (controller vibration: hit by a vehicle)
 
 const R = 0.35;                 // the player's radius (player.js collide)
 const MARGIN = 0.15;            // touching counts (the player's own collide has just pushed you out to the edge)
@@ -233,6 +234,7 @@ export class VehicleHits {
     if (pl.mode === 'fall') pl.fallAir = true; // (flying: lands on the snow, then slides and tumbles on)
     else H.pending = false;
     pl.shake = Math.max(pl.shake || 0, clamp(0.8 + speed / 18, 1, 2.3)); // (heavier the harder: 2+ at 70+ km/h)
+    rumble.hit(clamp(speed / 20, 0.3, 1)); // (the controller: a hard jolt, harder the faster it was)
     pl.camDipV = (pl.camDipV || 0) - clamp(2 + speed * 0.2, 3, 7.5);
     pl.fovKick = Math.max(pl.fovKick || 0, hard ? 0.8 : 0.4);
     try { this.audio?.impact?.('car', hard ? clamp(speed / 25, 0.6, 1) : clamp(speed / 28, 0.2, 0.5)); } catch { /* (silent) */ }

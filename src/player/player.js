@@ -22,6 +22,7 @@ import { world } from '../world/world.js';
 import { clamp, lerp, smoothstep } from '../core/noise.js';
 import { Tricks, wrapPi, CRASH_IMPACT } from './tricks.js';
 import { live } from '../core/settings.js'; // (SETTINGS: field of view, camera shake)
+import { rumble } from '../core/gamepad.js'; // (controller vibration: landings, wipeouts, bumps)
 import { weatherFx } from '../world/sky.js'; // (Oct 30 2026: blizzard / föhn gusts, föhn's heavier snow)
 
 const G = 9.81;
@@ -496,6 +497,7 @@ export class Player {
     const imp = POP_MIN + (POP_MAX - POP_MIN) * Math.pow(charge, 0.85);
     this.vel.addScaledVector(n, imp);
     this.parked = false;
+    rumble.tick(0.2 + 0.4 * charge); // (the pop off the snow, felt in the controller)
     if (!this.air) { this.pos.addScaledVector(n, 0.03); this.takeoff('pop'); }
     else {
       // late pop just off a lip: a deliberate jump after all (keys held through the lip stay latched)
@@ -767,6 +769,7 @@ export class Player {
     this.absorbV += Math.min(14, impact * 1.3);
     this.camDipV -= Math.min(5, impact * 0.32);
     this.shake = Math.max(this.shake, clamp((impact - 5) / 10, 0, 0.7));
+    if (impact > 1.5) rumble.land(clamp((impact - 1.5) / 11, 0, 1)); // (the controller: harder the bigger the drop)
     if (impact > 2.2) this.audio?.play('land', clamp(impact / 12, 0.12, 1));
     if (impact > 1.5) this.fx({ type: 'land', x: this.pos.x, y: this.pos.y, z: this.pos.z, amount: clamp(impact / 10, 0.1, 1) });
   }
@@ -901,6 +904,7 @@ export class Player {
     this.flip = 0; this.yawFx = 0; this.yawFxV = 0; this.airSteer = 0;
     this.absorb = 0; this.absorbV = 0;
     this.shake = 1;
+    rumble.crash(opts.event === 'bump' ? clamp(sp / 30, 0.1, 0.5) : clamp(sp / 25, 0.4, 1)); // (the controller)
     this.audio?.play('crash');
     this.fx({ type: 'crash', x: this.pos.x, y: this.pos.y, z: this.pos.z, amount: clamp(sp / 18, 0.3, 1), vx: v.x, vz: v.z });
     this.events.push(opts.event || 'crash'); // ('bump': ran into somebody, main.js counts no strike)
@@ -922,6 +926,7 @@ export class Player {
         v.addScaledVector(n, -v.dot(n)).multiplyScalar(Math.max(0.2, 1 - imp * 0.05));
         this.fallAir = false;
         this.shake = Math.max(this.shake, 0.8);
+        rumble.land(clamp(imp / 10, 0.3, 1));
         this.audio?.play('land', clamp(imp / 10, 0.3, 1));
         this.fx({ type: 'impact', x: p.x, y: p.y, z: p.z, amount: clamp(imp / 10, 0.3, 1) });
       }
@@ -1102,7 +1107,7 @@ export class Player {
     if (this.footAir) {
       this.footJumpY = (this.footJumpY || 0) + this.footJumpV * dt;
       this.footJumpV -= 9.81 * dt;
-      if (this.footJumpY <= 0) { this.footJumpY = 0; this.footAir = false; this.audio?.play('step'); this.shake = 0.15; }
+      if (this.footJumpY <= 0) { this.footJumpY = 0; this.footAir = false; this.audio?.play('step'); this.shake = 0.15; rumble.tick(0.2); }
     }
     p.y = ground + (this.footJumpY || 0);
     this.collide(0, p.y + 0.02); // (+2 cm: standing on a top you stepped up onto)
@@ -1213,7 +1218,7 @@ export class Player {
       const hard = -vn;
       this.vel.x -= nx * vn * 1.25; this.vel.z -= nz * vn * 1.25; // a soft 25 % bounce back off the net
       this.vel.multiplyScalar(Math.max(0.45, 1 - hard * 0.035));
-      if (hard > 3) { this.audio?.play('land', Math.min(1, hard / 14)); this.shake = Math.max(this.shake || 0, Math.min(0.5, hard / 16)); }
+      if (hard > 3) { rumble.bump(Math.min(1, hard / 14)); this.audio?.play('land', Math.min(1, hard / 14)); this.shake = Math.max(this.shake || 0, Math.min(0.5, hard / 16)); }
       return;
     }
     if (vn < 0) {

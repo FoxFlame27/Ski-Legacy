@@ -27,8 +27,11 @@ export const ACTIONS = [
   { id: 'interact', label: 'Interact · get in / out', code: 'KeyE', group: 'ACTIONS' },
   { id: 'view', label: 'First / third person', code: 'KeyR', group: 'ACTIONS' },
   { id: 'skis', label: 'Skis on / off', code: 'KeyG', group: 'ACTIONS' },
-  { id: 'horn', label: 'Horn · lights', code: 'KeyQ', group: 'ACTIONS' },
-  { id: 'alt', label: 'Secondary action', code: 'KeyX', group: 'ACTIONS' },
+  { id: 'horn', label: 'Horn (car)', code: 'KeyH', group: 'ACTIONS' },
+  { id: 'lights', label: 'Headlamp · car lights', code: 'KeyL', group: 'ACTIONS' },
+  { id: 'lookback', label: 'Look back (car)', code: 'KeyC', group: 'ACTIONS' },
+  { id: 'pickup', label: 'Pick up (chalet build mode)', code: 'KeyQ', group: 'ACTIONS' },
+  { id: 'alt', label: 'Sell (chalet build mode)', code: 'KeyX', group: 'ACTIONS' },
   { id: 'unstuck', label: 'Unstuck car', code: 'KeyU', group: 'ACTIONS' },
   { id: 'restart', label: 'Restart race', code: 'Backspace', group: 'ACTIONS' },
   // menus and screens
@@ -55,6 +58,9 @@ export const PAD_DEFAULTS = {
   brake: 6,     // LT · L2 · ZL
   view: 11,     // right stick click
   alt: 5,       // RB · R1 · R
+  pickup: 4,    // LB · L1 · L
+  lights: 15,   // d-pad right
+  lookback: 10, // left stick click
   unstuck: 14,  // d-pad left
   restart: 13,  // d-pad down
   map: 8,       // View · Share · Minus

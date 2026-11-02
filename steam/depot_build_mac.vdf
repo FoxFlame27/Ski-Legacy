@@ -1,0 +1,15 @@
+// SteamPipe depot script (template): macOS universal: release/steam/mac/mac-universal (npm run steam:mac, on a Mac). Launch option: Ski Legacy.app
+// Replace MAC_DEPOT with the depot ID from Steamworks (or use npm run steam:vdf). Paths are relative to this file.
+"DepotBuild"
+{
+	"DepotID" "MAC_DEPOT"
+	"ContentRoot" "../release/steam/mac/mac-universal/"
+	"FileMapping"
+	{
+		"LocalPath" "*"
+		"DepotPath" "."
+		"Recursive" "1"
+	}
+	"FileExclusion" "steam_appid.txt" // dev only: Steam gives release builds their App ID
+	"FileExclusion" "*.pdb"
+}

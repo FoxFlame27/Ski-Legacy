@@ -1,0 +1,15 @@
+// SteamPipe depot script (template): Windows x64: release/steam/win/win-unpacked (npm run steam:win). Launch option: Ski Legacy.exe
+// Replace WIN_DEPOT with the depot ID from Steamworks (or use npm run steam:vdf). Paths are relative to this file.
+"DepotBuild"
+{
+	"DepotID" "WIN_DEPOT"
+	"ContentRoot" "../release/steam/win/win-unpacked/"
+	"FileMapping"
+	{
+		"LocalPath" "*"
+		"DepotPath" "."
+		"Recursive" "1"
+	}
+	"FileExclusion" "steam_appid.txt" // dev only: Steam gives release builds their App ID
+	"FileExclusion" "*.pdb"
+}

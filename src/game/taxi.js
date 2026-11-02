@@ -21,6 +21,7 @@ import { makeFallbackFigure } from './jobs/props.js';
 import { CHALET_PLACE } from './bus/chaletroad.js';
 import { repairCost } from './carrental.js';
 import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+import { steamTaxiFare } from '../core/steam.js'; // STEAM achievements (no-ops without Steam)
 
 // the tariff: a flag fall plus a tick every 100 m (Oct 29, "a realistic way" to earn), priced as every other job
 // (Oct 30, as a job on the board: jobs/catalog.js pays ~$150 a minute of the job, ~$9,000 an hour): the resort's road
@@ -650,6 +651,7 @@ export class Taxi {
     this.fare = null;
     this.nextT = 5 + Math.random() * 6;
     this.shift.fares++; this.shift.earned += pay;
+    steamTaxiFare(); // (Steam achievements, a no-op without Steam)
     try { this.earn?.(pay, 'Taxi fare'); } catch (e) { console.warn('taxi pay', e); }
     this.hud?.flash(`+${money(pay)} · '${why}'`, good ? 'gold' : 'bad', 4200);
   }

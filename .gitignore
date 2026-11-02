@@ -17,3 +17,9 @@ crystal.glb
 *.pem
 *.key
 server/data/
+
+# Steam: the dev-only App ID file (Steam provides the App ID to release builds) and SteamCMD config / logs
+steam_appid.txt
+steam/config.local.json
+steam/output/
+steamcmd/

@@ -1,0 +1,59 @@
+# Builds the three Steam depot folders (Windows, macOS universal, Linux / Steam Deck) as build artifacts.
+# Manual only (Actions tab -> Steam builds -> Run workflow). Nothing is uploaded to Steam and no secrets are used:
+# download the artifacts, unpack them into release/steam/<os>/... and upload with SteamCMD (steam/README.md).
+name: Steam builds
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: steam:win
+            name: Ski-Legacy-Steam-Windows
+            path: release/steam/win/win-unpacked
+          - os: macos-latest
+            script: steam:mac
+            name: Ski-Legacy-Steam-Mac
+            path: release/steam/mac/mac-universal
+          - os: ubuntu-latest
+            script: steam:linux
+            name: Ski-Legacy-Steam-Linux
+            path: release/steam/linux/linux-unpacked
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build ${{ matrix.script }}
+        run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false # (no signing certificates in CI; the mac app is signed ad hoc)
+
+      # artifacts (zip) drop symlinks and the executable bit: the mac .app (Electron Framework symlinks) and the Linux
+      # folder (the ski-legacy binary) go in a tar, unpack with: tar -xf <file> -C release/steam/<os>/<folder>
+      - name: Pack (mac / Linux)
+        if: runner.os != 'Windows'
+        run: tar -C "${{ matrix.path }}" -cf "release/steam/${{ matrix.name }}.tar" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ runner.os == 'Windows' && matrix.path || format('release/steam/{0}.tar', matrix.name) }}
+          if-no-files-found: error

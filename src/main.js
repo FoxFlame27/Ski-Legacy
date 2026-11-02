@@ -100,6 +100,7 @@ import { HX as CHALET_HX } from './game/chaletplan.js';
 import { FURNITURE_BY_ID } from './game/build/catalog.js';
 import { BuildMode } from './game/build/buildmode.js'; // chalet build mode (F inside your rented chalet)
 import { startObjective } from './game/build/objectives.js';
+import { steamTick, steamRaceResult } from './core/steam.js'; // STEAM: achievements + rich presence (no-ops without Steam, core/steam.js)
 import { MP, isMP } from './net/mode.js'; // multiplayer (docs/multiplayer.md): every AI system and the save check isMP()
 import { net } from './net/client.js';
 import { Multiplayer, errText } from './net/session.js';
@@ -1210,6 +1211,7 @@ function leaveExpress(a) {
 function courseResult(e, { place, dnf }, ai = 'medium') {
   save.stats.races = (save.stats.races || 0) + 1;
   if (place === 1 && !dnf) save.stats.wins = (save.stats.wins || 0) + 1;
+  try { steamRaceResult({ place, dnf, wins: save.stats.wins, courseId: e.id, allIds: freeCourses().map((c) => c.id) }); } catch (err) { /* (Steam: optional) */ }
   const prize = races.prize(e, place, dnf, ai); // (scaled by the AI field you picked: freeworld.js AI_LEVELS)
   if (prize > 0) earn(prize);
   try { crowds?.cheer(e.finish.x, e.finish.z); } catch (err) { /* (cosmetic) */ }
@@ -1277,6 +1279,7 @@ function busRaceHome(e) {
 function busRaceResult(e, { place, time, dnf }) {
   save.stats.races = (save.stats.races || 0) + 1;
   if (place === 1 && !dnf) save.stats.wins = (save.stats.wins || 0) + 1;
+  try { steamRaceResult({ place, dnf, wins: save.stats.wins }); } catch (err) { /* (Steam: optional) */ }
   const prize = busRaces.prize(e, { place, time, dnf });
   if (prize > 0) earn(prize, e.name, 'race');
   writeSave();
@@ -2424,7 +2427,10 @@ function loopUpdate() {
     bests?.update(dt, inSession || !!races.active || heli.active);
     saveTimer += dt;
     spotTimer += dt;
-    if (spotTimer > 1) { spotTimer = 0; rememberSpot(); } // (written with the save below, and on quit)
+    if (spotTimer > 1) {
+      spotTimer = 0; rememberSpot();
+      try { steamTick({ save, player, express, heli, loc: inSession ? modes.course?.name || 'World Racing' : hudLocation() }); } catch (err) { /* (Steam: optional) */ }
+    } // (written with the save below, and on quit)
     if (saveTimer > 5) { saveTimer = 0; save.hour = freeRideHour() ?? env.hour; writeSave(); }
   }
 

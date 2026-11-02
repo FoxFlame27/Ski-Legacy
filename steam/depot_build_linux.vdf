@@ -1,0 +1,15 @@
+// SteamPipe depot script (template): Linux x64 / Steam Deck: release/steam/linux/linux-unpacked (npm run steam:linux). Launch option: ski-legacy
+// Replace LINUX_DEPOT with the depot ID from Steamworks (or use npm run steam:vdf). Paths are relative to this file.
+"DepotBuild"
+{
+	"DepotID" "LINUX_DEPOT"
+	"ContentRoot" "../release/steam/linux/linux-unpacked/"
+	"FileMapping"
+	{
+		"LocalPath" "*"
+		"DepotPath" "."
+		"Recursive" "1"
+	}
+	"FileExclusion" "steam_appid.txt" // dev only: Steam gives release builds their App ID
+	"FileExclusion" "*.pdb"
+}

@@ -13,13 +13,19 @@
     "app:install": "npm run app:package && rm -rf \"/Applications/Ski Legacy.app\" && cp -R \"release/Ski Legacy-darwin-arm64/Ski Legacy.app\" /Applications/",
     "app:dmg": "bash tools/make-dmg.sh",
     "app:win": "vite build && electron-builder --win portable --x64 && node tools/win-tidy.mjs",
-    "app:win:icon": "node tools/make-icon-ico.mjs"
+    "app:win:icon": "node tools/make-icon-ico.mjs",
+    "steam:win": "vite build && electron-builder --win dir --x64 -c.directories.output=release/steam/win -c.extraMetadata.steamBuild=true",
+    "steam:mac": "vite build && electron-builder --mac dir --universal -c.directories.output=release/steam/mac -c.extraMetadata.steamBuild=true && codesign --force --deep --sign - \"release/steam/mac/mac-universal/Ski Legacy.app\"",
+    "steam:linux": "vite build && electron-builder --linux dir --x64 -c.directories.output=release/steam/linux -c.extraMetadata.steamBuild=true",
+    "steam:all": "npm run steam:win && npm run steam:linux",
+    "steam:vdf": "node steam/make-vdf.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.1.0",
     "@fontsource-variable/source-serif-4": "^5.3.1",
     "@fontsource/barlow-condensed": "^5.1.0",
     "@fontsource/exo-2": "^5.3.0",
+    "steamworks.js": "^0.4.0",
     "three": "0.169.0"
   },
   "devDependencies": {
@@ -45,7 +51,11 @@
       "dist/**/*",
       "electron/**/*",
       "package.json",
-      "!node_modules/**/*"
+      "!node_modules/**/*",
+      "node_modules/steamworks.js/index.js",
+      "node_modules/steamworks.js/package.json",
+      "node_modules/steamworks.js/LICENSE",
+      "node_modules/steamworks.js/dist/**/*.{node,dll,so,dylib}"
     ],
     "asar": false,
     "win": {
@@ -58,10 +68,57 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Ski Legacy.exe"
+      "artifactName": "Ski Legacy.exe",
+      "files": [
+        "!node_modules/steamworks.js/dist/{osx,linux64}/**"
+      ]
     },
     "portable": {
       "artifactName": "Ski Legacy.exe"
+    },
+    "mac": {
+      "category": "public.app-category.sports-games",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "files": [
+        "!node_modules/steamworks.js/dist/{win64,linux64}/**"
+      ],
+      "x64ArchFiles": "**/node_modules/steamworks.js/dist/osx/*"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Game",
+      "icon": "build/icon.png",
+      "executableName": "ski-legacy",
+      "files": [
+        "!node_modules/steamworks.js/dist/{win64,osx}/**"
+      ]
     }
+  },
+  "steam": {
+    "appId": 0,
+    "depots": {
+      "windows": 0,
+      "mac": 0,
+      "linux": 0
+    },
+    "buildDesc": "Ski Legacy",
+    "setLive": ""
   }
 }

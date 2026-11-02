@@ -1,8 +1,9 @@
-// Ski Legacy desktop app shell (macOS and Windows): serves the built game over a custom app:// protocol
+// Ski Legacy desktop app shell (macOS, Windows, Linux / Steam Deck): serves the built game over a custom app:// protocol
 // (so ES modules + fetch of GLB assets work) in a fullscreen, GPU-accelerated window.
-const { app, BrowserWindow, protocol, net, Menu, shell } = require('electron');
+const { app, BrowserWindow, protocol, net, Menu, shell, ipcMain } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { initSteam, registerIpc: registerSteamIpc } = require('./steam.cjs'); // STEAM: optional Steamworks (no App ID / no Steam: skipped)
 
 const isMac = process.platform === 'darwin';
 
@@ -28,10 +29,14 @@ const MIME = {
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.woff': 'font/woff', '.woff2': 'font/woff2',
 };
 
-// One copy of the game at a time (double-clicking the .exe again just brings the running game back)
-if (!app.requestSingleInstanceLock()) {
+// One copy of the game at a time (double-clicking the .exe again just brings the running game back).
+// Steam (electron/steam.cjs) starts before 'ready': a Steam build started outside Steam quits here while Steam
+// relaunches it; without a Steam App ID nothing happens.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock || !initSteam(app)) {
   app.quit();
 } else {
+  registerSteamIpc(ipcMain);
   app.on('second-instance', () => {
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return;
@@ -75,7 +80,7 @@ function createWindow() {
     show: false,
     fullscreenable: true,
     autoHideMenuBar: true,
-    webPreferences: { backgroundThrottling: false, contextIsolation: true, sandbox: true },
+    webPreferences: { backgroundThrottling: false, contextIsolation: true, sandbox: true, preload: path.join(__dirname, 'preload.cjs') }, // (preload: window.steam)
   });
   if (!isMac) {
     win.removeMenu();

@@ -30,6 +30,7 @@ import { isMP, MP } from '../net/mode.js';
 import { net } from '../net/client.js';
 import { LivePortal } from './liveportal.js';
 import { buildCells, blockWallMaterial } from './prisoncell.js';
+import { steamArrested } from '../core/steam.js'; // STEAM achievements (no-ops without Steam)
 
 export const MAX_SENTENCE = 300; // s (the server's limit too)
 const EYE = 1.62, UP = new THREE.Vector3(0, 1, 0), R = 0.26; // eye height, the walker's radius
@@ -816,6 +817,7 @@ export class Prison {
     this.reason = String(reason || 'Arrested').slice(0, 80);
     // (Oct 30, the user: caught and jailed, your car is parked for you in your bay at the Autohaus car park; a wreck
     // or a car already with the tow truck / in the tow yard stays with it)
+    if (!was && !resume) steamArrested(); // (Steam achievements, a no-op without Steam)
     if (!was) {
       const park = (left) => {
         try {

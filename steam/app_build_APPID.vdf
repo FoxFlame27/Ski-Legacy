@@ -1,0 +1,19 @@
+// SteamPipe app build script (template). Replace APPID / *_DEPOT with your numbers from Steamworks and rename the
+// file to app_build_<APPID>.vdf, or let `npm run steam:vdf` write filled-in copies to steam/output/scripts/.
+// Paths are relative to this file. Run from the game folder:
+//   steamcmd +login <steam_user> +run_app_build "<full path>/steam/app_build_APPID.vdf" +quit
+"AppBuild"
+{
+	"AppID" "APPID"
+	"Desc" "Ski Legacy build"
+	"ContentRoot" "../release/steam/"
+	"BuildOutput" "./output/"
+	"Preview" "0"
+	"SetLive" "" // leave empty and set the branch live by hand in Steamworks (safer); "beta" works for a beta branch
+	"Depots"
+	{
+		"WIN_DEPOT" "depot_build_windows.vdf"
+		"MAC_DEPOT" "depot_build_mac.vdf"
+		"LINUX_DEPOT" "depot_build_linux.vdf"
+	}
+}

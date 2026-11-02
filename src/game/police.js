@@ -70,6 +70,7 @@ import { nightUniform } from '../world/village.js';
 import { rumble, currentPad, padInfo } from '../core/gamepad.js'; // (controller vibration: rams, the arrest; paying a fine with the confirm button)
 import { terrainUniforms } from '../world/terrain.js'; // read-only: how hard it is snowing (the searchlight's beam: heli/model.js)
 import { K } from '../ui/prompts.js'; // (BUTTON PROMPTS: the key / controller button in use)
+import { steamPoliceEscaped } from '../core/steam.js'; // STEAM achievements (no-ops without Steam)
 
 // The officers: a Meshy police officer in a navy winter uniform + hi-vis vest (tools/meshy-officer.mjs,
 // public/models/police_officer_rigged.glb + _anims.glb), loaded in the background (never blocks the start). Until it is
@@ -3127,6 +3128,7 @@ export class Police {
 
   // ---------------------------------------------------------------- the end of a chase
   escaped(msg = 'You escaped the police') {
+    steamPoliceEscaped(); // (Steam achievements, a no-op without Steam)
     this.hud?.flash?.(msg, 'good', 4200);
     this.end('escaped');
   }

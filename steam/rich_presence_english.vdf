@@ -1,0 +1,10 @@
+// Rich presence localization (Steamworks -> Community -> Rich Presence -> upload this file).
+// The game sets steam_display = #Status_Location and loc = where you are (src/core/steam.js richLocation).
+"lang"
+{
+	"Language" "english"
+	"Tokens"
+	{
+		"#Status_Location" "%loc%"
+	}
+}

@@ -207,6 +207,7 @@ bool Save::load(platform::Platform& p) {
 }
 
 bool Save::write(platform::Platform& p) {
+  if (mpWrite) { dirty_ = false; lastWrite_ = clock; return mpWrite(*this); }
   std::string s = toJson().dump();
   bool ok = p.writeSave(file_, std::vector<uint8_t>(s.begin(), s.end()));
   if (ok) { dirty_ = false; lastWrite_ = clock; }

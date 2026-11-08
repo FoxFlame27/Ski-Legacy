@@ -1,8 +1,11 @@
 // The front-end menus and the in-game card dialogs (src/ui/menu.js, the card dialog of src/ui/hud.js, the shops).
 //
 //   MAIN        PLAY · CONTROLS · STATS · SETTINGS · QUIT (over the live world)
-//   PLAY        SINGLEPLAYER · MULTIPLAYER (Phase 6: says so) · BACK; then CHOOSE YOUR SKIER the first time (MAN /
-//               WOMAN on the 3D showcase, left / right or drag to turn) and START
+//   PLAY        SINGLEPLAYER · MULTIPLAYER · BACK; then CHOOSE YOUR SKIER the first time (MAN / WOMAN on the 3D
+//               showcase, left / right or drag to turn) and START
+//   MULTIPLAYER (Phase 6) the server and its worlds (the server's /health), your account: a name to register (typed;
+//               the platform's user name suggested) or JOIN A WORLD with the stored one, USE ANOTHER NAME; the pause
+//               menu online: the world's players and LEAVE MULTIPLAYER
 //   PAUSE       RESUME · CONTROLS · STATS · SETTINGS · MAIN MENU · RETURN TO VILLAGE · QUIT GAME (Esc / Menu / +)
 //   SETTINGS    menu.js SET_ROWS: graphics (the six presets, render scale, shadows, brightness, frame rate limit,
 //               fullscreen), audio, controls, camera, HUD, player (skier, account, reset progress)
@@ -66,7 +69,16 @@ struct Dialog {
 
 class Menus {
 public:
-  enum class Screen { None, Main, PlayMode, Showcase, Controls, Stats, Settings, Pause, Dialog, Confirm };
+  enum class Screen { None, Main, PlayMode, Showcase, Controls, Stats, Settings, Pause, Dialog, Confirm, Multiplayer };
+  /// (Phase 6) what the MULTIPLAYER screen shows and does (game.cpp fills it from the session)
+  struct Mp {
+    std::function<std::string()> account, status, server, health;   // stored name ("" none), the last line, URL, worlds
+    std::function<bool()> busy, online;
+    std::function<std::vector<std::string>()> players;              // your world: "World 3 · 4/50", then the names
+    std::function<void(const std::string& name)> registerName;
+    std::function<void()> join, forget, leave, opened, closed;     // (closed: BACK out of the screen)
+    std::string suggested;                                          // the name field's first value
+  } mp;
   struct Hooks {
     std::function<void()> start, resume, quit, mainMenu, village;
     std::function<void(const std::string& key)> setting;   // a SETTINGS value changed (already in the save)
@@ -89,6 +101,8 @@ public:
   /// opens a card dialog (rebuild() fills it)
   void openDialog(Dialog d);
   bool dialogOpen() const { return screen_ == Screen::Dialog; }
+  /// the open dialog rebuilt (an answer from the server came in: the shop's chips follow)
+  void refreshDialog() { if (screen_ == Screen::Dialog && dialog_.rebuild) dialog_.rebuild(dialog_); }
   /// the frame: input, then drawing (call between Ui::begin / end)
   void frame(const UiNav& nav, double dt, double now);
   /// (autotest) the focused item's label, and focusing an item by its label
@@ -124,6 +138,9 @@ private:
   void scrControls();
   void scrDialog();
   void scrConfirm();
+  void scrMultiplayer(const UiNav& nav);
+  std::string nameField_;
+  bool nameFieldInit_ = false;
   void handle(const UiNav& nav);
   void back();
   void setFocus(int i);

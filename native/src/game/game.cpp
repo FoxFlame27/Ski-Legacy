@@ -36,6 +36,9 @@
 #include "game/rescue.h"
 #include "game/chalets.h"
 #include "game/snowmobile.h"
+#include "game/mp_session.h"
+#include "game/mp_view.h"
+#include "net/websocket.h"
 #include "core/prompts.h"
 #include "engine/ui.h"
 #include "world/scenery.h"
@@ -176,17 +179,19 @@ int runGame(const GameOptions& opt) {
   SL_INFO("assets: %s | data: %s", paths.publicRoot.c_str(), paths.dataRoot.c_str());
 
   // (Phase 4) the save: progress, settings, bindings (the autotest plays a fresh save of its own)
-  Save save(opt.autotest ? std::string("autotest-save.json") : opt.saveName);
-  if (!opt.autotest && !opt.verifyHeights) save.load(*plat);
+  bool mptest = !opt.mptest.empty();
+  Save save(opt.autotest ? std::string("autotest-save.json") : mptest ? std::string("mptest-save.json") : opt.saveName);
+  if (!opt.autotest && !mptest && !opt.verifyHeights) save.load(*plat);
 
   World world;
   world.load(*plat, paths);
   if (opt.verifyHeights) return verifyHeights(*plat, paths, world);
   if (opt.autotest) save.write(*plat);   // (a fresh autotest save on disk)
+  if (mptest) { save.money = 1234; save.characterChosen = true; save.write(*plat); }   // (the single-player save the test checks comes back)
 
   Quality q = Quality::preset(opt.qualitySet || save.quality.empty() ? opt.quality : save.quality);
   platform::WindowDesc wd;
-  wd.width = opt.width; wd.height = opt.height; wd.fullscreen = opt.fullscreen || (!opt.autotest && save.settingOn("fullscreen")); wd.vsync = opt.vsync && !opt.autotest;
+  wd.width = opt.width; wd.height = opt.height; wd.fullscreen = opt.fullscreen || (!opt.autotest && save.settingOn("fullscreen")); wd.vsync = opt.vsync && !opt.autotest && !mptest;
   if (!plat->createWindow(wd)) return 3;
   static platform::Platform* sPlat = plat.get();
   auto dev = gfx::createGLDevice([](const char* n) { return sPlat->glProcAddress(n); });
@@ -398,7 +403,7 @@ int runGame(const GameOptions& opt) {
   bool started = !opt.menu || opt.autotest;   // in the game (else the main menu over the live world)
   bool showcaseOn = false;
   double showcaseYaw = PI * 0.85, menuT = 0;
-  auto flash = [&](const std::string& t, Hud::Flash k) { hud.flash(t, k, simTime); };
+  auto flash = [&](const std::string& t, Hud::Flash k) { hud.flash(t, k, simTime); if (mptest) SL_INFO("[mptest] flash: %s", t.c_str()); };
   auto fmtM = [](int64_t v) {
     std::string n = std::to_string(v < 0 ? -v : v), o;
     for (size_t i = 0; i < n.size(); i++) { if (i && (n.size() - i) % 3 == 0) o += ','; o += n[i]; }
@@ -443,6 +448,39 @@ int runGame(const GameOptions& opt) {
   pc.unmark = [&]() { tmap.mark.on = false; };
   pc.fade = [&]() { fadeT = 0; };
 
+  // ---------------------------------------------------------------- (Phase 6) multiplayer: the session and its glue
+  // (the host's hooks are filled in below, once the rides and the shops exist; net/session.js's main.js context)
+  Multiplayer mp{MpHost{}};
+  MpView mpv;
+  net::HttpGet mpHealth;
+  std::string mpHealthLine;
+  {
+    const char* env = std::getenv("SKI_LEGACY_SERVER");
+    mp.url = !opt.mptest.empty() ? opt.mptest : !opt.server.empty() ? opt.server : env && *env ? std::string(env) : std::string(net::kDefaultServerUrl);
+  }
+  bool aiOn = true;            // (multiplayer: no traffic, townsfolk or decorative cars: the other players instead)
+  bool jailQuiet = false;      // (a sentence the server already knows: not reported again)
+  int mpRaceRid = -1;
+  pc.earnFrom = [&](int64_t a, const std::string& source) {
+    if (mp.active()) mp.earn(a, source == "sell" ? "sell" : "job");
+    else { save.earn(a); save.markDirty(); }
+  };
+  pc.earn = [&](int64_t a) { pc.earnFrom(a, "job"); };
+  pc.raceSolo = [&](const std::string& race) {
+    mpRaceRid = -1;
+    mp.net.request("raceSolo", {{"race", race}}, [&](const net::NetResult& r) { if (r.ok) mpRaceRid = int(r.d.value("rid", -1)); });
+  };
+  pc.raceFinished = [&](double t, bool dnf) {
+    if (mpRaceRid < 0) return;
+    mp.net.request("raceFinish", {{"rid", mpRaceRid}, {"time", std::llround(t * 1000)}, {"raw", std::llround(t * 1000)}, {"pen", 0}, {"dnf", dnf}}, [](const net::NetResult&) {});
+    mpRaceRid = -1;
+  };
+  pc.onJail = [&](double seconds, const std::string& reason, bool onFoot) {
+    if (!mp.active() || jailQuiet) return;
+    mp.jail(seconds, reason);
+    mp.policeArrest(onFoot);   // (after the sentence: your passengers, and anyone who rode with you in the chase, too)
+  };
+
   // riding a lift (main.js boardLift / leaveLift)
   Player::View viewBeforeRide = player.view;
   bool restoreView = false;
@@ -477,7 +515,7 @@ int runGame(const GameOptions& opt) {
   };
   std::string prompt, rideLine;
   // (Phase 3) what you ride: a car (you drive), a ski bus, the Wolkenspitzbahn, the Legacy Express
-  enum class Ride { None, Car, Bus, Rail, Express, Sled } rideKind = Ride::None;
+  enum class Ride { None, Car, Bus, Rail, Express, Sled, Passenger } rideKind = Ride::None;   // (Passenger: in another player's car)
   int busDestSel = 0, expressDestSel = 0;
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
@@ -525,6 +563,20 @@ int runGame(const GameOptions& opt) {
             const SkiDef* k = skiById(id);
             if (!k || save.skis == id) return;
             if (save.ownsSki(id)) { equipSkis(id); flash(std::string(k->name) + " equipped", Hud::Flash::Good); return; }
+            if (mp.active()) {   // (Phase 6: the server sells it: its price, your money, your skis)
+              if (save.money < k->price) { flash("Not enough money (" + fmtM(k->price) + " needed)", Hud::Flash::Bad); return; }
+              mp.buy("skis", {{"id", id}}, [&, id](bool ok, const nlohmann::json& d) {
+                if (!ok) return;
+                save.owned.clear();
+                for (auto& o : d.value("owned", nlohmann::json::array())) if (o.is_string()) save.owned.push_back(o.get<std::string>());
+                if (mp.profile.is_object()) mp.profile["owned"] = d.value("owned", nlohmann::json::array());
+                equipSkis(id);
+                const SkiDef* k2 = skiById(id);
+                flash(std::string(k2 ? k2->name : id.c_str()) + (k2 && k2->rent ? " rented" : " purchased"), Hud::Flash::Gold);
+                menus.refreshDialog();
+              });
+              return;
+            }
             if (!spend(k->price)) return;
             save.owned.push_back(id);
             equipSkis(id);
@@ -556,6 +608,20 @@ int runGame(const GameOptions& opt) {
           o.act = [&, id, slot]() {
             const OutfitDef* od = outfitById(id);
             if (!od) return;
+            if (!save.ownsOutfit(id) && mp.active()) {   // (Phase 6: bought at the server, then worn)
+              if (save.money < od->price) { flash("Not enough money (" + fmtM(od->price) + " needed)", Hud::Flash::Bad); return; }
+              mp.buy("outfit", {{"id", id}}, [&, id, slot](bool ok, const nlohmann::json& d) {
+                if (!ok) return;
+                save.outfits.owned.clear();
+                if (d.contains("outfits") && d["outfits"].contains("owned")) for (auto& o : d["outfits"]["owned"]) if (o.is_string()) save.outfits.owned.push_back(o.get<std::string>());
+                save.outfits.equipped[save.character][slot] = id;
+                save.write(*plat);
+                const OutfitDef* o2 = outfitById(id);
+                flash(std::string(o2 ? o2->name : id.c_str()) + " bought", Hud::Flash::Gold);
+                menus.refreshDialog();
+              });
+              return;
+            }
             if (!save.ownsOutfit(id)) { if (!spend(od->price)) return; save.outfits.owned.push_back(id); flash(std::string(od->name) + " bought", Hud::Flash::Gold); }
             save.outfits.equipped[save.character][slot] = id;
             save.write(*plat);
@@ -604,6 +670,20 @@ int runGame(const GameOptions& opt) {
     const CarSpec* spec = transport.car(model);
     if (!spec) return -1;
     if (int(save.garage.size()) >= GARAGE_MAX) { flash("Your garage is full (" + std::to_string(GARAGE_MAX) + " cars): sell one first", Hud::Flash::Bad); return -1; }
+    if (mp.active()) {   // (Phase 6, AUTOHAUS: the server prices it, issues a plate nobody has; your garage from it)
+      mp.buy("car", {{"cfg", {{"id", model}, {"paint", "white"}, {"interior", "orig"}, {"rims", "orig"}}}}, [&, model](bool ok, const nlohmann::json& d) {
+        if (!ok || !d.contains("car")) return;
+        Save::Car c;
+        c.id = model; c.plate = d["car"].value("plate", std::string()); c.price = int(d["car"].value("price", 0)); c.paint = d["car"].value("paint", std::string("white"));
+        save.garage.insert(save.garage.begin(), c);
+        save.rentalPlate = c.plate;
+        if (d.contains("cars")) mp.profile["cars"] = d["cars"];
+        drive.addOwned(model, c.plate, 0);
+        const CarSpec* sp2 = transport.car(model);
+        flash("Bought: " + (sp2 ? sp2->label : model) + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
+      });
+      return -1;
+    }
     if (!spend(int64_t(spec->price))) return -1;
     Save::Car c;
     c.id = model; c.plate = newPlate(); c.price = int(spec->price);
@@ -655,6 +735,18 @@ int runGame(const GameOptions& opt) {
         o.state = "Sell " + fmtM(value);
         std::string plate = c.plate;
         o.act = [&, plate, value]() {
+          if (mp.active()) {   // (Phase 6: the server buys it back: half what you paid)
+            for (const auto& e : drive.parked) if (e.owned && e.plate == plate && e.driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
+            mp.carSell(plate, [&, plate](bool ok, const nlohmann::json& d) {
+              if (!ok) return;
+              drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [&](const Drive::Parked& e) { return e.owned && e.plate == plate; }), drive.parked.end());
+              save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
+              if (!save.garage.empty() && save.rentalPlate == plate) save.rentalPlate = save.garage[0].plate;
+              flash("Sold for " + fmtM(d.value("refund", 0)), Hud::Flash::Gold);
+              menus.refreshDialog();
+            });
+            return;
+          }
           for (size_t i = 0; i < drive.parked.size(); i++)
             if (drive.parked[i].owned && drive.parked[i].plate == plate) {
               if (drive.parked[i].driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
@@ -692,6 +784,17 @@ int runGame(const GameOptions& opt) {
       r.label = "Repair it"; r.sub = "Every dent and scratch \xC2\xB7 from $5 up to " + fmtM(REPAIR_FEE);
       r.price = fee; r.disabled = fee <= 0 || save.money < fee;
       r.act = [&, plate, fee]() {
+        if (mp.active()) {   // (Phase 6: the server prices the repair, carrental.js repairCost, and takes the money)
+          double dmg = 0;
+          for (auto& p : drive.parked) if (p.owned && p.plate == plate) dmg = p.damage;
+          mp.carRepair(dmg / 100, plate, [&, plate](bool ok, const nlohmann::json& d) {
+            if (!ok) return;
+            for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
+            if (Save::Car* c = garageEntry(plate)) c->damage = 0;
+            flash("Repaired \xC2\xB7 -" + fmtM(d.value("fee", 0)), Hud::Flash::Good);
+          });
+          return;
+        }
         if (!spend(fee)) return;
         for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
         if (Save::Car* c = garageEntry(plate)) c->damage = 0;
@@ -739,7 +842,11 @@ int runGame(const GameOptions& opt) {
   drive.onWreck = [&](int idx) {
     if (idx < 0 || size_t(idx) >= drive.parked.size() || !drive.parked[size_t(idx)].owned) return;
     int fee = wreckFee();
-    save.spend(fee, true);
+    if (mp.active()) {   // (Phase 6: the server charges the tow + repair and records the tow; the car ends in a bay)
+      double bx = 0, bz = 0, byaw = 0;
+      drive.freeBay(bx, bz, byaw);
+      mp.tow("wreck", dvec3(bx, world.height(bx, bz), bz), byaw, 0, {});
+    } else save.spend(fee, true);
     save.write(*plat);
     tows.push_back({idx, drive.parked[size_t(idx)].plate, simTime + 20, 0, "wreck"});
     flash("Wrecked \xC2\xB7 tow + repair -" + fmtM(fee).substr(0) + " \xC2\xB7 the tow truck brings it back to the Autohaus", Hud::Flash::Bad);
@@ -822,6 +929,244 @@ int runGame(const GameOptions& opt) {
     flash("Progress reset: a new save", Hud::Flash::Good);
   };
   menus.hooks.flash = [&](const std::string& t, int k) { flash(t, k == 1 ? Hud::Flash::Bad : k == 2 ? Hud::Flash::Gold : Hud::Flash::Good); };
+
+  // ---------------------------------------------------------------- (Phase 6) the multiplayer session's hooks
+  // the garage, the skier, the jail and the trains follow the swapped save (main.js applyMpSave)
+  auto syncGarage = [&]() {
+    drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [](const Drive::Parked& e) { return e.owned && !e.forSale && !e.driving; }), drive.parked.end());
+    for (const Save::Car& c : save.garage) {
+      bool have = false;
+      for (const auto& e : drive.parked) have = have || (e.owned && e.plate == c.plate);
+      if (!have) drive.addOwned(c.id, c.plate, c.damage);
+    }
+    nlohmann::json& imp = save.data("impound", nlohmann::json::array());
+    for (auto& r : imp) for (auto& e : drive.parked) if (e.owned && e.plate == r.value("plate", std::string())) e.impoundDay = r.value("day", 0);
+  };
+  mp.host.save = &save;
+  mp.host.plat = plat.get();
+  mp.host.flash = [&](const std::string& t, int k) { flash(t, k == 1 ? Hud::Flash::Bad : k == 2 ? Hud::Flash::Gold : Hud::Flash::Good); };
+  mp.host.setAI = [&](bool on) { aiOn = on; };
+  mp.host.applySave = [&]() {
+    syncGarage();
+    rig.load(assets, rigColour());
+    player.hasSkis = !save.skis.empty();
+    if (rideKind == Ride::None && player.mode != PlayerMode::Sit) player.setSkisOn(false);
+    pc.online = mp.active();
+    // the trains on the world's shared timelines (transit.js): every client places them from the server's clock
+    if (mp.active()) {
+      railway.mpTime = [&]() { return mp.lineTime("train|rail") / 1000.0; };
+      express.mpTime = [&](int dir) { return mp.lineTime(dir > 0 ? "express|e" : "express|w") / 1000.0; };
+    } else { railway.mpTime = nullptr; express.mpTime = nullptr; }
+    // a chalet bought at the server (one each, the plot free; session.js buyChalet)
+    if (mp.active()) pc.buyChalet = [&](int plot, const std::string& nm, std::function<void(bool)> done) {
+      mp.buy("chalet", {{"id", plot}, {"name", nm}, {"meta", {{"plan", 2}, {"layout", 3}}}}, [&, plot, done](bool ok, const nlohmann::json& d) {
+        if (ok && d.contains("chalet")) { save.data("chalet") = d["chalet"]; mp.profile["chalet"] = d["chalet"]; mp.chaletOwners[plot] = mp.name; mp.chaletPlot = plot; }
+        done(ok);
+      });
+    };
+    else pc.buyChalet = nullptr;
+    // a sentence you left in (the server's jailUntil): back in the cell (here, not again by the single-player resume)
+    if (mp.active()) jailResumed = true;
+    const nlohmann::json& jl = save.data("jail");
+    if (mp.active() && jl.value("left", 0.0) > 1 && !police.jailed()) { jailQuiet = true; police.jail(jl.value("left", 0.0), jl.value("reason", std::string("Arrested"))); jailQuiet = false; }
+    if (mp.active()) {
+      const nlohmann::json& pos = save.data("pos");
+      if (pos.contains("x") && pos.contains("z") && pos["x"].is_number() && rideKind == Ride::None && !police.jailed()) player.teleport(pos["x"].get<double>(), pos["z"].get<double>(), pos.value("h", PI));
+    }
+  };
+  mp.host.onLost = [&](const std::string& why) {
+    if (rideKind == Ride::Passenger) { rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
+    started = false;
+    menus.inGame = false;
+    menus.open(Menus::Screen::Main);
+    plat->setRelativeMouse(false);
+    flash(why, Hud::Flash::Bad);
+  };
+  mp.host.onKickInterior = [&](const std::string& id) {
+    if (id.rfind("chalet:", 0) == 0 && chalets.visiting()) { rooms.leave(); flash("The owner closed the door", Hud::Flash::Bad); }
+  };
+  mp.host.adminTp = [&](double x, double z, double yaw, const std::string& to) {
+    if (rideKind != Ride::None || rooms.inside() || races.active()) { flash("The server tried to move you to " + to + " \xC2\xB7 get out first", Hud::Flash::Bad); return; }
+    player.teleport(x - std::sin(yaw) * 1.8, z - std::cos(yaw) * 1.8, yaw);
+    flash("Moved next to " + to, Hud::Flash::Good);
+  };
+  mp.host.onArrested = [&](const nlohmann::json& d) {
+    if (rideKind == Ride::Passenger) { rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
+    std::string by = d.value("by", std::string("the driver"));
+    int64_t fine = d.value("fine", 0);
+    jailQuiet = true;
+    police.jail(std::max(1.0, d.value("seconds", 45.0)), d.value("reason", "Arrested with " + by));
+    jailQuiet = false;
+    flash(by + " was caught \xC2\xB7 you're going to jail too" + (fine > 0 ? " \xC2\xB7 -" + fmtM(fine) : std::string()), Hud::Flash::Bad);
+  };
+  mp.host.onSeatLost = [&](const nlohmann::json& d) {
+    if (d.value("k", std::string()) == "car" && rideKind == Ride::Passenger) {
+      rideKind = Ride::None;
+      player.standUp(player.pos.x + 2.2, player.pos.z, player.heading);
+      flash("Out of " + d.value("v", std::string("the")) + "'s car", Hud::Flash::Bad);
+    }
+  };
+  mp.host.plots = [&]() { std::vector<int> v; for (const ChaletHouse& h : playData.chalets) v.push_back(h.id); return v; };
+  mp.host.transitFingerprint = []() { return std::string("native-phase6"); };
+  // your presence (main.js mpPose): the car's pose while you drive, the sled's on a snowmobile, else you
+  mp.host.pose = [&](MpPose& o) {
+    o.x = player.pos.x; o.y = player.pos.y; o.z = player.pos.z; o.yaw = player.heading;
+    o.vx = player.vel.x; o.vy = player.vel.y; o.vz = player.vel.z;
+    if (rooms.inside()) {
+      Interiors::Room r = rooms.room();
+      o.interior = r == Interiors::Room::Prison ? "prison" : r == Interiors::Room::Hospital ? "hospital" : chalets.insidePlot() >= 0 ? "chalet:" + std::to_string(chalets.insidePlot()) : "";
+      o.st = int(net::St::Walk);
+      return;
+    }
+    if (rideKind == Ride::Car) {
+      dvec3 p = drive.pos();
+      dvec2 v = drive.vel();
+      o.x = p.x; o.y = p.y; o.z = p.z; o.yaw = drive.yaw(); o.vx = v.x; o.vy = 0; o.vz = v.y;
+      o.st = int(net::St::Drive);
+      o.flags = net::F::car | (drive.lights() ? net::F::lights : 0u) | (police.wanted() ? uint32_t(std::clamp(police.stars(), 1, 5)) << net::F::W_SHIFT : 0u);
+      return;
+    }
+    if (rideKind == Ride::Sled) {
+      dvec3 p;
+      double yaw;
+      if (sleds.current(p, yaw)) { o.x = p.x; o.y = p.y; o.z = p.z; o.yaw = yaw; }
+      o.st = int(net::St::Drive);
+      o.flags = net::F::sled;
+      return;
+    }
+    if (rideKind == Ride::Passenger || rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) { o.st = int(net::St::Ride); o.vx = o.vy = o.vz = 0; return; }
+    o.st = player.mode == PlayerMode::Sit ? int(net::St::Sit) : player.mode == PlayerMode::Ski ? int(net::St::Ski) : player.mode == PlayerMode::Fall ? int(net::St::Fall) : int(net::St::Walk);
+    o.crouch = player.crouch; o.lean = player.lean;
+    o.flags = (player.air ? net::F::air : 0u) | (player.tuck ? net::F::tuck : 0u) | (player.skisOn ? net::F::skisOn : 0u) |
+              (player.hasSkis && !player.skisOn ? net::F::carry : 0u) | (player.hasSkis ? net::F::hasSkis : 0u);
+    if (player.mode == PlayerMode::Fall) {
+      const FallState& F = player.fall;
+      o.crouch = F.pitch; o.lean = F.roll;
+      o.flags = (player.skisOn ? net::F::skisOn : 0u) | (player.hasSkis ? net::F::hasSkis : 0u) |
+                net::fallFlags(player.fallSide, player.air, F.ball, F.getUp, F.axisHeading - player.heading);
+    }
+  };
+  mpv.myCarSeat = [&](int seat, dvec3& p, double& yaw) {
+    if (rideKind != Ride::Car) return false;
+    yaw = drive.yaw();
+    dvec3 f(std::sin(yaw), 0, std::cos(yaw)), rt(f.z, 0, -f.x);
+    p = drive.pos() + f * (seat <= 1 ? 0.15 : -0.75) + rt * (seat == 1 || seat == 3 ? -0.42 : 0.42) + dvec3(0, 0.45, 0);
+    return true;
+  };
+  // the chalets of the others (MP.chalets), buying through the server, visiting with the owner's yes
+  pc.chaletOwner = [&](int plot) -> std::string {
+    if (!mp.active()) return "";
+    auto it = mp.chaletOwners.find(plot);
+    return it != mp.chaletOwners.end() && it->second != mp.name ? it->second : "";
+  };
+  pc.visitChalet = [&](int plot, const std::string& owner, std::function<void(bool, const nlohmann::json&)> done) {
+    mp.ask("chaletVisit", "", plot, [&, plot, owner, done](bool allow, const std::string& why) {
+      if (!allow) { flash(why.empty() ? owner + " did not let you in" : why, Hud::Flash::Bad); done(false, nlohmann::json::array()); return; }
+      mp.chaletFurniture(plot, [&, plot, done](bool, const nlohmann::json& furniture) {
+        mp.setInterior("chalet:" + std::to_string(plot), [&, furniture, done](bool ok) {
+          if (!ok) flash("Not allowed in", Hud::Flash::Bad);
+          done(ok, furniture);
+        });
+      });
+    });
+  };
+  // the MULTIPLAYER screen
+  auto healthUrl = [&]() {
+    net::Url u;
+    if (!u.parse(mp.url)) return std::string();
+    std::string base = (u.tls ? "https://" : "http://") + (u.host.find(':') != std::string::npos ? "[" + u.host + "]" : u.host) + ":" + std::to_string(u.port);
+    return base + (u.path.rfind("/ws", 0) == 0 ? "/ws/health" : "/health");
+  };
+  menus.mp.account = [&]() { auto a = mp.account(); return a ? a->name : std::string(); };
+  menus.mp.status = [&]() { return mp.statusLine(); };
+  menus.mp.server = [&]() { return mp.url; };
+  menus.mp.health = [&]() {
+    if (mpHealth.done() && mpHealthLine.empty()) {
+      auto j = nlohmann::json::parse(mpHealth.body, nullptr, false);
+      if (mpHealth.status == 200 && j.is_object())
+        mpHealthLine = "Online \xC2\xB7 " + std::to_string(j.value("worlds", 0)) + (j.value("worlds", 0) == 1 ? " world \xC2\xB7 " : " worlds \xC2\xB7 ") +
+                       std::to_string(j.value("players", 0)) + " players \xC2\xB7 you join the fullest world with room (up to " + std::to_string(net::MAX_PLAYERS) + ")";
+      else mpHealthLine = "The server does not answer" + (mpHealth.error.empty() ? std::string() : " (" + mpHealth.error + ")");
+    }
+    return mpHealthLine;
+  };
+  menus.mp.busy = [&]() { return mp.connecting(); };
+  menus.mp.online = [&]() { return mp.active(); };
+  menus.mp.players = [&]() {
+    std::vector<std::string> v{"World " + std::to_string(mp.worldId) + " \xC2\xB7 " + std::to_string(mp.players.size() + 1) + "/" + std::to_string(mp.worldMax)};
+    v.push_back(mp.name + " (you)");
+    for (auto& [id, r] : mp.players) v.push_back(r.name);
+    return v;
+  };
+  menus.mp.opened = [&]() { if (!mpHealth.busy()) { mpHealthLine.clear(); mpHealth.start(healthUrl()); } };
+  menus.mp.registerName = [&](const std::string& nm) {
+    mp.registerName(nm, [&](bool ok, const std::string& msg) { if (ok) flash("Registered as " + msg + " \xC2\xB7 JOIN A WORLD", Hud::Flash::Good); });
+  };
+  menus.mp.forget = [&]() { mp.forgetAccount(); };
+  menus.mp.closed = [&]() { if (!mp.active() && !mp.connecting()) mp.net.close("menu"); };   // (a socket left open after REGISTER)
+  menus.mp.join = [&]() {
+    mp.start([&](bool ok, const std::string& msg) {
+      if (!ok) { flash(msg, Hud::Flash::Bad); return; }
+      menus.close();
+      if (showcaseOn) showcaseOn = false;
+      started = true;
+      if (rideKind == Ride::None && player.mode != PlayerMode::Sit && save.data("pos").empty()) { player.setSkisOn(false); player.teleport(4, 34, PI); }
+      if (!opt.autotest && !mptest) plat->setRelativeMouse(true);
+      flash("Multiplayer \xC2\xB7 world " + std::to_string(mp.worldId) + " \xC2\xB7 " + std::to_string(mp.players.size() + 1) + " player(s) here", Hud::Flash::Good);
+    });
+  };
+  menus.mp.leave = [&]() {
+    if (rideKind == Ride::Passenger) { rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
+    if (rooms.inside()) rooms.leave();
+    races.abort();
+    mp.leave();
+    started = false;
+    menus.open(Menus::Screen::Main, -1);
+    flash("Back to single player", Hud::Flash::Good);
+  };
+  {
+    std::string un;
+    for (char c : plat->userName()) if (std::isalnum(static_cast<unsigned char>(c))) un += c;
+    if (un.size() > 10) un.resize(10);
+    if (un.size() < 3) un = "Skier";
+    menus.mp.suggested = un + std::to_string(10 + unsigned(plat->timeSeconds() * 1000) % 90);
+  }
+  // E near another player's car: ask the owner (they get Y / N), then the server seats you in it (carride.js)
+  auto askRide = [&](const std::string& owner) {
+    flash("Asking " + owner + " for a ride...", Hud::Flash::Good);
+    mp.ask("carRide", owner, -1, [&, owner](bool allow, const std::string& why) {
+      if (!allow) { flash(why.empty() ? owner + " said no" : why, Hud::Flash::Bad); return; }
+      mp.claimSeat("car", owner, 5, [&, owner](bool ok, const nlohmann::json& d) {
+        if (!ok) { flash(net::errText(d.value("err", std::string())), Hud::Flash::Bad); return; }
+        if (rideKind != Ride::None || player.mode == PlayerMode::Sit) { mp.releaseSeat(); return; }
+        int pid = -1;
+        for (auto& [id, r] : mp.players) if (r.name == owner) pid = id;
+        mp.ride = Multiplayer::CarRide{owner, pid, int(d.value("seat", 1)), true};
+        dvec3 sp = player.pos, sf(std::sin(player.heading), 0, std::cos(player.heading));
+        mp.rideSeat(sp, sf);
+        player.setSkisOn(false);
+        player.sitOn(sp, sf);
+        rideKind = Ride::Passenger;
+        flash("Riding with " + owner + " \xC2\xB7 " + prompts::K(input, Action::Interact) + " gets out", Hud::Flash::Good);
+      });
+    });
+  };
+  std::string mpSeatWant;
+  double mpKeptT = 0;
+  std::vector<Traffic::Car> trafficBackup;
+  mp.host.setAI = [&](bool on) {
+    aiOn = on;
+    if (!on) { trafficBackup = traffic.list; traffic.list.clear(); }
+    else if (traffic.list.empty()) traffic.list = trafficBackup;
+  };
+  // (Phase 6) the multiplayer check (--mptest): the menus, a fresh name, a world, presence, purchases at the server,
+  // chat, a dropped connection resumed, leaving (the single-player save back)
+  struct MpT { int step = 0, f = 0, rq = 0; bool asked = false; double t0 = 0; bool ok = true; std::string name; int64_t m0 = 0; int sent0 = 0; bool waiting = false; nlohmann::json prof; bool got = false; } mt;
+  if (mptest) {
+    mp.forgetAccount();   // (only this test server's entry)
+    mt.name = "Native" + std::to_string(1000 + unsigned(plat->timeSeconds() * 977) % 9000);
+    menus.mp.suggested = mt.name;
+  }
   if (!started) menus.open(Menus::Screen::Main);
 
   while (running) {
@@ -835,7 +1180,33 @@ int runGame(const GameOptions& opt) {
     double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : 0.1) : std::min(0.25, now - last);
     last = now;
     UiNav nav = navBuilder.build(ev, *plat, input, now);
-    if (opt.autotest) { nav = UiNav{}; nav.mouse = vec2(-1); }
+    if (opt.autotest || mptest) { nav = UiNav{}; nav.mouse = vec2(-1); }
+    // (Phase 6) the network: events, presence out, the other players, the shared clock, the money guard
+    mp.update(std::min(0.25, frameDt), paused);
+    pc.online = mp.active();
+    if (mp.active() && started && !menus.isOpen() && !tmap.isOpen()) {
+      auto pressedKey = [&](platform::Key k) { return std::find(ev.pressed.begin(), ev.pressed.end(), k) != ev.pressed.end(); };
+      if (mpv.chatOpen) {   // the chat line: typed letters, Enter sends, Esc closes (the player stands still meanwhile)
+        bool shift = plat->keyDown(platform::Key::ShiftLeft) || plat->keyDown(platform::Key::ShiftRight);
+        std::vector<platform::Key> keys = ev.pressed;
+        keys.insert(keys.end(), ev.repeated.begin(), ev.repeated.end());
+        for (platform::Key k : keys) {
+          int ki = int(k);
+          if (ki >= int(platform::Key::KeyA) && ki <= int(platform::Key::KeyZ)) mpv.chatText += char((shift ? 'A' : 'a') + ki - int(platform::Key::KeyA));
+          else if (ki >= int(platform::Key::Digit0) && ki <= int(platform::Key::Digit9)) mpv.chatText += char('0' + ki - int(platform::Key::Digit0));
+          else if (k == platform::Key::Space) mpv.chatText += ' ';
+          else if (k == platform::Key::Backspace && !mpv.chatText.empty()) mpv.chatText.pop_back();
+        }
+        if (mpv.chatText.size() > 120) mpv.chatText.resize(120);
+        if (pressedKey(platform::Key::Enter)) { mp.sendChat(mpv.chatText); mpv.chatOpen = false; mpv.chatText.clear(); }
+        else if (pressedKey(platform::Key::Escape)) { mpv.chatOpen = false; mpv.chatText.clear(); }
+        input.clear();
+      } else if (pressedKey(platform::Key::Enter)) { mpv.chatOpen = true; input.clear(); }
+      if (!mp.asks.empty() && !mpv.chatOpen) {   // the owner's answer: Y / N (controller: d-pad up / down)
+        if (pressedKey(platform::Key::KeyY) || input.padPressed(12)) mp.answerPerm(mp.asks.front().rid, true);
+        else if (pressedKey(platform::Key::KeyN) || input.padPressed(13)) mp.answerPerm(mp.asks.front().rid, false);
+      }
+    }
 
     // (Phase 4) the pause menu (Esc / Menu / +), the trail map (M / View / Minus); menus and dialogs take the input
     bool uiOpen = menus.isOpen() || tmap.isOpen();
@@ -943,6 +1314,186 @@ int runGame(const GameOptions& opt) {
         }
         default: break;
       }
+    }
+    // (Phase 6) --mptest: the main menu -> PLAY -> MULTIPLAYER -> REGISTER (a fresh name) -> JOIN A WORLD; presence for
+    // a few seconds (the other players seen with --mp-peers); rental skis bought at the ski shop and a day pass at the
+    // ticket seller (the money checked against the server's profile); chat; a dropped connection resumed; LEAVE
+    // MULTIPLAYER (the single-player save back)
+    if (mptest) {
+      double el = now - mt.t0;
+      mt.f++;
+      auto next = [&]() { mt.step++; mt.t0 = now; mt.f = 0; mt.waiting = false; mt.asked = false; mt.got = false; mt.rq++; input.releaseInjected(); };
+      auto fail = [&](const std::string& what) { mt.ok = false; SL_WARN("[mptest] FAILED: %s (screen %d, focus '%s', status '%s')", what.c_str(), int(menus.screen()), menus.focusedLabel().c_str(), mp.statusLine().c_str()); };
+      // the server's own copy of the profile (one request at a time: a late answer of an earlier one is ignored)
+      auto profile = [&]() {
+        if (mt.asked) return;
+        mt.asked = true; mt.got = false;
+        int id = ++mt.rq;
+        mp.net.request("profile", nlohmann::json::object(), [&, id](const net::NetResult& r) {
+          if (id != mt.rq) return;
+          mt.prof = r.ok ? r.d.value("profile", nlohmann::json::object()) : nlohmann::json();
+          mt.got = true; mt.asked = false;
+        });
+      };
+      switch (mt.step) {
+        case 0: if (mt.t0 == 0) mt.t0 = now; if (el > 1.0) { started = false; menus.open(Menus::Screen::Main); next(); } break;
+        case 1: if (el > 0.5 && menus.focusLabel("PLAY")) { nav.confirm = true; next(); } break;
+        case 2: if (el > 0.5) { if (menus.screen() != Menus::Screen::PlayMode) fail("PLAY -> the play mode screen"); else if (menus.focusLabel("MULTIPLAYER")) { nav.confirm = true; next(); } } break;
+        case 3:
+          if (el > 0.5 && !mt.waiting) {
+            if (menus.screen() != Menus::Screen::Multiplayer) { fail("MULTIPLAYER -> its screen"); next(); break; }
+            SL_INFO("[mptest] MULTIPLAYER screen: server %s, %s", mp.url.c_str(), menus.mp.health().c_str());
+            if (menus.focusLabel("REGISTER")) { nav.confirm = true; mt.waiting = true; }
+          }
+          if (mt.waiting && mp.account()) { SL_INFO("[mptest] registered '%s' (token stored for %s)", mp.account()->name.c_str(), mp.url.c_str()); next(); }
+          if (el > 15) { fail("register"); next(); }
+          break;
+        case 4:
+          if (!mt.waiting && el > 0.5) { if (menus.focusLabel("JOIN A WORLD")) { nav.confirm = true; mt.waiting = true; } }
+          if (mp.active() && started) {
+            SL_INFO("[mptest] joined world %d as %s (pid %d): %zu other player(s), money $%lld (server), clock %.2f h, weather %s", mp.worldId, mp.name.c_str(), mp.pid, mp.players.size(),
+                    (long long)save.money, mp.hourNow().value_or(-1), mp.weather().c_str());
+            if (save.money != 500) fail("a new profile's money is $500");
+            mt.sent0 = mp.presenceSent;
+            player.setSkisOn(false); player.teleport(6, 30, PI);
+            next();
+          }
+          if (el > 20) { fail("join"); next(); }
+          break;
+        case 5:   // presence: walking about for a few seconds
+          input.inject(Action::Forward, true);
+          input.injectMove(std::sin(el * 0.8) * 0.6f, 1.f);
+          if (el > opt.mpSeconds) {
+            int sent = mp.presenceSent - mt.sent0;
+            SL_INFO("[mptest] presence: %d rows sent in %.1f s (%.1f / s, %d frames), at (%.1f, %.1f, %.1f), rtt %.0f ms", sent, el, sent / el, mt.f, player.pos.x, player.pos.y, player.pos.z, mp.net.rtt());
+            if (sent < 3) fail("presence rows");
+            next();
+          }
+          break;
+        case 6:   // the other players
+          if (opt.mpPeers <= 0) { next(); break; }
+          {
+            int seen = 0;
+            for (auto& [id, r] : mp.players) if (r.ok) seen++;
+            if (seen >= opt.mpPeers && !mt.waiting) {
+              for (auto& [id, r] : mp.players)
+                SL_INFO("[mptest] remote player %s (pid %d): at (%.1f, %.1f, %.1f), state %d, flags 0x%x, look %s, %.0f m away, delay %.0f ms -> drawn", r.name.c_str(), id, r.sm.x, r.sm.y,
+                        r.sm.z, r.st, r.flags, r.look.dump().c_str(), glm::length(r.sm - player.pos), r.dly);
+              // stand a few metres from the first one, facing it (the screenshot shows the avatar and its name card)
+              const RemotePlayer& r0 = mp.players.begin()->second;
+              input.releaseInjected();
+              player.teleport(r0.sm.x + 6, r0.sm.z + 6, std::atan2(-6.0, -6.0));
+              mt.waiting = true; mt.t0 = now;
+            } else if (mt.waiting && el > 2.5) {
+              if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "mp");
+              mt.step = 49;   // (on to the car ride, when a peer has a car out)
+              next();
+            } else if (el > 40) { fail("the other player(s) never showed up (" + std::to_string(seen) + "/" + std::to_string(opt.mpPeers) + ")"); next(); }
+          }
+          break;
+        case 50: {   // a ride in another player's car (carride.js): E "Ask <owner> for a ride", their yes, the seat, E out
+          const RemotePlayer* owner = nullptr;
+          for (auto& [id, r] : mp.players) if (r.vehs.contains("car") && r.vehs["car"].is_object() && r.vehs["car"].contains("at")) owner = &r;
+          if (!owner) { if (el > 12) { SL_INFO("[mptest] car ride: no other player has a car out (skipped)"); mt.step = 6; next(); } break; }
+          const nlohmann::json& at = owner->vehs["car"]["at"];
+          double cx = at[0].get<double>(), cz = at[2].get<double>(), cyaw = at[3].get<double>();
+          if (!mt.waiting) {
+            mt.waiting = true; mt.t0 = now; mt.f = 1;
+            player.teleport(cx + std::cos(cyaw) * 3.2, cz - std::sin(cyaw) * 3.2, cyaw - PI / 2);
+            SL_INFO("[mptest] car ride: %s's %s parked at (%.1f, %.1f): walking up to it", owner->name.c_str(), owner->vehs["car"]["cfg"].value("id", std::string("?")).c_str(), cx, cz);
+          }
+          input.inject(Action::Interact, mt.f == 6 && rideKind == Ride::None);
+          if (mt.f == 5) SL_INFO("[mptest] car ride: prompt '%s'", prompt.c_str());
+          if (rideKind == Ride::Passenger && mt.prof.is_null()) {
+            mt.prof = nlohmann::json::object(); mt.m0 = int64_t(now * 1000);
+            SL_INFO("[mptest] car ride: seated in %s's car, seat %d (the server's registry: %s)", mp.ride.owner.c_str(), mp.ride.seat, mp.mySeat.c_str());
+            if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "car");
+          }
+          if (!mt.prof.is_null() && now * 1000 - double(mt.m0) > 3000 && rideKind == Ride::Passenger) input.inject(Action::Interact, true);
+          if (!mt.prof.is_null() && rideKind == Ride::None && player.mode != PlayerMode::Sit) {
+            SL_INFO("[mptest] car ride: got out at (%.1f, %.1f), seat released -> ok", player.pos.x, player.pos.z);
+            mt.prof = nlohmann::json(); input.releaseInjected();
+            mt.step = 6; next();
+          } else if (el > 30) { fail("the car ride"); mt.prof = nlohmann::json(); mt.step = 6; next(); }
+          break;
+        }
+        case 7:   // rental skis at the ski shop: bought at the server
+          if (mt.f == 1) { input.releaseInjected(); player.setSkisOn(false); player.teleport(-31.5, -16.0, std::atan2(-8.5, -2.0)); mt.m0 = save.money; }
+          input.inject(Action::Interact, mt.f == 4);
+          if (el > 1.0 && mt.f > 8 && !mt.waiting) {
+            if (!menus.dialogOpen()) { fail("E at the ski shop opens it"); next(); break; }
+            if (menus.focusLabel("Rental Carver")) { nav.confirm = true; mt.waiting = true; }
+          }
+          if (mt.waiting && save.skis == "rental" && !mt.got && el < 20) profile();
+          if (mt.got) {
+            int64_t sm = mt.prof.value("money", int64_t(-1));
+            bool own = false;
+            for (auto& o : mt.prof.value("owned", nlohmann::json::array())) own = own || o == "rental";
+            bool ok = sm == mt.m0 - kSkis[0].price && own && save.money == sm && mt.prof.value("skis", std::string()) == "rental";
+            SL_INFO("[mptest] buy: %s at the ski shop: money $%lld -> $%lld here, the server's profile: money $%lld, owned %s, skis %s -> %s", kSkis[0].name, (long long)mt.m0,
+                    (long long)save.money, (long long)sm, mt.prof.value("owned", nlohmann::json::array()).dump().c_str(), mt.prof.value("skis", std::string("-")).c_str(), ok ? "ok" : "FAILED");
+            if (!ok) fail("the purchase at the server");
+            menus.close();
+            mt.prof = nlohmann::json(); mt.got = false;
+            next();
+          }
+          if (el > 20) { fail("the ski purchase never came back"); menus.close(); next(); }
+          break;
+        case 8:   // a day pass at the ticket seller: a game charge ('spend') and the pass pushed with the profile
+          if (mt.f == 1) { player.teleport(15, -44, PI); mt.m0 = save.money; }
+          input.inject(Action::Interact, mt.f == 4);
+          if (el > 1.0 && mt.f > 8 && !mt.waiting) {
+            if (!menus.dialogOpen()) { fail("E at the ticket seller opens it"); next(); break; }
+            if (menus.focusLabel("Day pass")) { nav.confirm = true; mt.waiting = true; SL_INFO("[mptest] ticket seller: '%s' chosen (prompt was '%s', day %d, day pass %d)", menus.focusedLabel().c_str(), prompt.c_str(), save.day, save.dayPass); }
+          }
+          if (mt.waiting && el > 5 && !mt.got) { menus.close(); profile(); }
+          if (mt.got) {
+            int64_t sm = mt.prof.value("money", int64_t(-1));
+            bool ok = sm == mt.m0 - Prices::dayPass && mt.prof.value("dayPass", -9) == save.day && save.money == sm;
+            SL_INFO("[mptest] day pass: $%lld -> $%lld, the server's profile: money $%lld, dayPass %d (world day %d) -> %s", (long long)mt.m0, (long long)save.money, (long long)sm,
+                    mt.prof.value("dayPass", -9), save.day, ok ? "ok" : "FAILED");
+            if (!ok) fail("the day pass at the server");
+            mt.prof = nlohmann::json(); mt.got = false;
+            next();
+          }
+          if (el > 20) { fail("the day pass never came back"); menus.close(); next(); }
+          break;
+        case 9:   // chat: relayed to the world (us too)
+          if (mt.f == 1) { mp.sendChat("hello from the native client"); mt.waiting = true; }
+          {
+            bool back = false;
+            for (auto& l : mp.chat) back = back || (l.from == mp.name && l.text == "hello from the native client");
+            if (back) { SL_INFO("[mptest] chat: sent and relayed back (%zu line(s))", mp.chat.size()); next(); }
+            else if (el > 10) { fail("chat"); next(); }
+          }
+          break;
+        case 10:   // the connection drops: the server holds us, the reconnect resumes the same player
+          if (mt.f == 1) { mt.sent0 = mp.pid; mp.net.simulateDrop(); mt.waiting = true; SL_INFO("[mptest] connection dropped (no close frame): reconnecting..."); }
+          if (mt.waiting && el > 1 && mp.net.isOpen() && mp.resumed && mp.pid == mt.sent0) {
+            SL_INFO("[mptest] reconnected after %.1f s: resumed, world %d, pid %d, %zu other player(s), status '%s'", el, mp.worldId, mp.pid, mp.players.size(), mp.statusLine().c_str());
+            next();
+          }
+          if (el > 25) { fail("reconnect (resumed)"); next(); }
+          break;
+        case 11:   // LEAVE MULTIPLAYER from the pause menu
+          input.inject(Action::Pause, mt.f == 4);
+          if (el > 1.0 && mt.f > 8 && !mt.waiting) {
+            if (menus.screen() != Menus::Screen::Pause) { fail("the pause menu"); next(); break; }
+            if (menus.focusLabel("LEAVE MULTIPLAYER")) { nav.confirm = true; mt.waiting = true; }
+          }
+          if (mt.waiting && el > 2.5) {
+            bool ok = !mp.active() && !started && menus.screen() == Menus::Screen::Main && save.money == 1234 && !mp.net.isOpen();
+            SL_INFO("[mptest] left multiplayer: back at the main menu, the single-player save back (money $%lld, expected $1234) -> %s", (long long)save.money, ok ? "ok" : "FAILED");
+            if (!ok) fail("leave");
+            next();
+          }
+          break;
+        default:
+          SL_INFO("[mptest] %s", mt.ok ? "PASS" : "FAIL");
+          running = false;
+          break;
+      }
+      if (mt.step < 12 && now - mt.t0 > 60) { fail("step " + std::to_string(mt.step) + " stuck"); next(); }
     }
     if (opt.autotest && at == AT::Map) {
       if (phaseFrame == 1 && rideKind == Ride::None) { player.setSkisOn(false); player.teleport(4, 34, PI); }   // (back in the village: the map opens on you)
@@ -1354,7 +1905,7 @@ int runGame(const GameOptions& opt) {
       if (races.active() && oddJobs.active()) oddJobs.drop();
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
     }
-    folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
+    if (aiOn) folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
     // the career (economy.js stats): top speed, distance skied
     if (started && player.mode == PlayerMode::Ski) {
       static double lastDist = player.distance;
@@ -1442,6 +1993,24 @@ int runGame(const GameOptions& opt) {
         if (sleds.speed() < 1.2) prompt = "Get off";
         if (interact && sleds.getOff()) { interact = false; rideKind = Ride::None; rig.skisInRide = true; }
       }
+    } else if (rideKind == Ride::Passenger) {
+      // (Phase 6, carride.js) in another player's car: seated in it as it is drawn here; E gets out by your door
+      dvec3 sp, sf;
+      if (!mp.active() || !mp.ride.on) { rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
+      else {
+        if (mp.rideSeat(sp, sf)) player.setSeat(sp, sf);
+        rideLine = "Riding with " + mp.ride.owner;
+        prompt = "Get out";
+        if (interact) {
+          interact = false;
+          double h = player.heading;
+          std::string owner = mp.ride.owner;
+          mp.releaseSeat();
+          rideKind = Ride::None;
+          player.standUp(player.pos.x + std::cos(h) * 1.8, player.pos.z - std::sin(h) * 1.8, h);
+          toast = "Out of " + owner + "'s car"; toastUntil = simTime + 2;
+        }
+      }
     } else if (rescue.carried()) {
       dvec3 sp, sf;
       if (rescue.seat(sp, sf)) player.setSeat(sp, sf);
@@ -1477,6 +2046,11 @@ int runGame(const GameOptions& opt) {
           if (drive.buyRequest >= 0) { openCarSale(drive.buyRequest); drive.buyRequest = -1; }
           else if (drive.active()) {
             rideKind = Ride::Car;
+            if (mp.active()) for (const auto& e : drive.parked)
+              if (e.driving && e.owned && !e.plate.empty() && e.plate != save.rentalPlate) {
+                std::string plate = e.plate;
+                mp.carSwitch(plate, [&, plate](bool ok, const nlohmann::json&) { if (ok) save.rentalPlate = plate; });
+              }
             player.setSkisOn(false);
             dvec3 sp, sf;
             drive.seat(sp, sf);
@@ -1504,6 +2078,7 @@ int runGame(const GameOptions& opt) {
       } else if (rst >= 0) {
         bool down = input.down(Action::Back);
         prompt = railway.label(rst, down);
+        if (interact && !railway.trainReady(rst, !down)) { interact = false; flash("No train at the platform \xC2\xB7 wait for the next one (multiplayer: on the shared timetable)", Hud::Flash::Bad); }
         bool railPaid = interact && (down || save.hasPass() || spend(transport.rail.price));
         if (railPaid && !railway.board(rst, !down) && !down && !save.hasPass()) save.money += transport.rail.price;   // (no train: refunded)
         else if (railPaid) {
@@ -1522,6 +2097,7 @@ int runGame(const GameOptions& opt) {
         int k = ((expressDestSel % n) + n) % n;
         int dest = k >= xst ? k + 1 : k;
         prompt = transport.express.name + " to " + express.station(dest).name + "   ([ ] choose)";
+        if (interact && !express.trainReady(xst, dest)) { interact = false; flash("No train at the platform \xC2\xB7 wait for the next one (multiplayer: on the shared timetable)", Hud::Flash::Bad); }
         bool xPaid = interact && (save.hasPass() || spend(transport.express.price));
         if (xPaid && !express.board(xst, dest)) { if (!save.hasPass()) save.money += transport.express.price; }
         else if (xPaid) {
@@ -1535,6 +2111,35 @@ int runGame(const GameOptions& opt) {
         }
       }
     }
+    // (Phase 6) beside another player's car: ask for a ride
+    if (mp.active() && started && rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !rooms.inside()) {
+      std::string owner;
+      if (mp.carNear(player.pos, 2.2, owner) >= 0) {
+        prompt = "Ask " + owner + " for a ride";
+        if (interact) { interact = false; askRide(owner); }
+      }
+    }
+    // (Phase 6, transit.js) a seat in the server's registry on the shared bus / train / cabin you ride (the others see
+    // you seated in it; a full vehicle says so), SPACE held on a shared timeline (the line speeds up only while everyone
+    // aboard holds it)
+    if (mp.active()) {
+      std::string k, v, line;
+      int n = 0;
+      double rate = 1;
+      if (rideKind == Ride::Bus && buses.rideBus() >= 0) { k = "bus"; v = "bus:" + std::to_string(buses.rideBus() % 7 + 1); n = 36; rate = 8; }
+      else if (rideKind == Ride::Rail && railway.rideTrain() >= 0) { k = "train"; v = "rail-" + std::to_string(railway.rideTrain()); n = railway.seatCount(); rate = 6; line = "train|rail"; }
+      else if (rideKind == Ride::Express && express.riding()) { k = "express"; v = express.rideVehicle(); n = 192; rate = transport.express.fast; line = express.rideDir() > 0 ? "express|e" : "express|w"; }
+      else if (rideKind == Ride::None && player.mode == PlayerMode::Sit && lifts.riding()) { v = lifts.rideVehicle(k, n); rate = 16; }
+      std::string want = k.empty() || v.empty() ? std::string() : k + "|" + v;
+      if (want != mpSeatWant && rideKind != Ride::Passenger) {
+        mpSeatWant = want;
+        if (want.empty()) mp.releaseSeat();
+        else mp.claimSeat(k, v, n, [&](bool ok, const nlohmann::json& d) {
+          if (!ok && d.value("err", std::string()) == "full") flash("Full (" + std::to_string(d.value("taken", 0)) + "/" + std::to_string(d.value("n", 0)) + ") \xC2\xB7 you ride standing", Hud::Flash::Bad);
+        });
+      }
+      if (!want.empty() && !line.empty()) mp.holdSkip(k, v, fastHeld, rate, line);
+    } else mpSeatWant.clear();
     // (Phase 5) the police station / the prison, the medical centre, the chalets, the races (start houses, bus race boards,
     // the RACING stand), the job boards and a job's own spots
     if (started && rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !races.active() && !police.arrestedNow()) {
@@ -1583,6 +2188,11 @@ int runGame(const GameOptions& opt) {
       hour = std::fmod(hour + frameDt * 24.0 / (16 * 60), 24.0);   // sky.js DAY_SECONDS
       if (hour < h0) { save.day++; save.markDirty(); }               // (main.js: midnight, a new day: the day pass runs out)
       save.hour = hour;
+    }
+    if (mp.active()) {   // (Phase 6) the world's clock and weather (the server moves them on; everyone in the world shares them)
+      if (auto h = mp.hourNow()) { hour = *h; save.hour = hour; }
+      int w = Weather::byId(mp.weather());
+      if (w >= 0 && !races.active()) weather.serverSet(w, Weather::byId(mp.upcomingWeather()), mp.upcomingIn());
     }
     light = timeOfDay(hour, dayLight);
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
@@ -1656,7 +2266,19 @@ int runGame(const GameOptions& opt) {
     // you far away: PARK_TOW_FEE)
     for (const auto& e : drive.parked)
       if (e.owned && !e.plate.empty())
-        if (Save::Car* c = garageEntry(e.plate); c && std::fabs(c->damage - e.damage) > 0.01) { c->damage = e.damage; save.markDirty(); }
+        if (Save::Car* c = garageEntry(e.plate); c && std::fabs(c->damage - e.damage) > 0.01) { c->damage = e.damage; save.markDirty(); if (mp.active()) mp.carDamage(e.plate, e.damage / 100); }
+    if (mp.active() && started) {   // (Phase 6, carride.js frame / keptFrame) your car out and your other cars parked
+      Multiplayer::CarReport cr;
+      std::vector<Multiplayer::Kept> kept;
+      for (const auto& e : drive.parked) {
+        if (!e.owned || e.plate.empty()) continue;
+        bool out = e.driving || e.plate == save.rentalPlate;
+        if (out && !cr.has) { cr.has = true; cr.driving = e.driving; cr.wreck = e.wrecked; cr.plate = e.plate; cr.pos = e.driving ? drive.pos() : dvec3(e.x, e.y, e.z); cr.yaw = e.driving ? drive.yaw() : e.yaw; }
+        else if (!e.driving && e.impoundDay <= save.day) kept.push_back({e.plate, dvec3(e.x, e.y, e.z), e.yaw, e.wrecked});
+      }
+      mp.reportCar(cr);
+      if ((mpKeptT += frameDt) > 0.5) { mpKeptT = 0; mp.reportKept(kept); }
+    }
     for (size_t k = 0; k < tows.size();) {
       Tow& t = tows[k];
       int idx = -1;
@@ -1667,6 +2289,7 @@ int runGame(const GameOptions& opt) {
       double bx, bz, byaw;   // (back to a free bay at the Autohaus car park)
       if (drive.freeBay(bx, bz, byaw)) { e.x = bx; e.z = bz; e.yaw = byaw; e.y = world.height(bx, bz) + 0.03; }
       if (t.why == "wreck") { e.wrecked = false; e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0; }
+      if (mp.active()) mp.towDone();
       save.markDirty();
       flash("Your " + e.spec->label + " is back at the Autohaus car park" + (t.why == "wreck" ? ", repaired" : ""), Hud::Flash::Good);
       tows.erase(tows.begin() + long(k));
@@ -1691,9 +2314,10 @@ int runGame(const GameOptions& opt) {
           if ((onRoad || offRoads) && !inLot && std::hypot(e.x - player.pos.x, e.z - player.pos.z) >= 40) t += 1; else t = 0;
           if (t >= 120) {
             t = 0;
-            save.spend(WRECK_FEE, true);
             double bx, bz, byaw;
             if (drive.freeBay(bx, bz, byaw)) { e.x = bx; e.z = bz; e.yaw = byaw; e.y = world.height(bx, bz) + 0.03; }
+            if (mp.active()) mp.tow("tow", dvec3(e.x, e.y, e.z), e.yaw, 0, [&](bool, const nlohmann::json&) { mp.towDone(); });   // (the server's fee and its tow yard)
+            else save.spend(WRECK_FEE, true);
             e.impoundDay = save.day + 1;
             nlohmann::json& imp = save.data("impound", nlohmann::json::array());
             imp.push_back({{"plate", e.plate}, {"day", e.impoundDay}});
@@ -1728,6 +2352,7 @@ int runGame(const GameOptions& opt) {
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
     bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide;
+    if (mptest && pendingPng.empty()) rendered = false;   // (llvmpipe: the network test draws only its screenshots, so it runs at a real frame rate)
     if (const char* shot = std::getenv("SKI_LEGACY_SHOT"); shot && at == AT::Ski) {   // (debug: a fixed camera "x,y,z,tx,ty,tz")
       double v[6] = {0};
       if (std::sscanf(shot, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
@@ -1798,6 +2423,7 @@ int runGame(const GameOptions& opt) {
       police.hud(ui, u5);
       rescue.hud(ui, u5);
       chalets.hud(ui, u5);
+      if (mp.active()) mpv.hud(ui, mp, cam, renderer.width(), renderer.height(), u5, save.setting("nameTags", 1) != 0, mp.interior(), "Y", "N");
     }
     menus.loading.clear();
     menus.frame(nav, frameDt, simTime);
@@ -1836,6 +2462,7 @@ int runGame(const GameOptions& opt) {
       police.addDraw(vdraw, cam.pos);
       rescue.addDraw(vdraw, cam.pos);
       sleds.addDraw(vdraw, cam.pos);
+      if (mp.active()) mpv.addDraw(mp, vdraw, vmodels, sleds.model(), sleds.fit(), cam.pos, mp.interior());
       vdraw.submit(renderer, *dev, cam.pos);
     }
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
@@ -1850,11 +2477,12 @@ int runGame(const GameOptions& opt) {
     if (drawVillage) chalets.draw(renderer, cam.pos);
     people.begin();
     if (!indoor) {
-      folk.add(people, cam.pos);
+      if (aiOn) folk.add(people, cam.pos);
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }
     police.addPeople(people, cam.pos);
+    if (mp.active()) mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt);
     people.submit(renderer, cam.pos, opt.autotest ? 28 : 48);
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
     bool hideRig = (player.view == Player::View::First && player.mode != PlayerMode::Fall) || (rideKind == Ride::Car && drive.cockpit()) ||
@@ -1871,6 +2499,7 @@ int runGame(const GameOptions& opt) {
     fpsN++;
     fpsT += plat->timeSeconds() - now;
     if (fpsT > 0.5 || (opt.autotest && fpsN >= 20)) { fps = fpsN / std::max(1e-6, fpsT); fpsN = 0; fpsT = 0; }
+    if (mptest && !pendingPng.empty() && rendered) { writePng(renderer, pendingPng); SL_INFO("[mptest] wrote %s", pendingPng.c_str()); pendingPng.clear(); }
     if (opt.autotest) {
       if (!pendingPng.empty() && rendered) { writePng(renderer, pendingPng); pendingPng.clear(); }
       phaseFrame++;
@@ -2063,7 +2692,9 @@ int runGame(const GameOptions& opt) {
     audio.stop(*plat);
     return ok ? 0 : 1;
   }
+  if (mp.active()) mp.leave();   // (quitting online: the profile pushed, close code 1000)
   audio.stop(*plat);
+  if (mptest) return mt.ok && mt.step >= 12 ? 0 : 1;
   return 0;
 }
 

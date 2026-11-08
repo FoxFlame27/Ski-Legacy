@@ -23,6 +23,7 @@ file(GLOB_RECURSE SL_SOURCES CONFIGURE_DEPENDS
   src/world/*.cpp src/world/*.h
   src/player/*.cpp src/player/*.h
   src/game/*.cpp src/game/*.h
+  src/net/*.cpp src/net/*.h
   src/platform/*.h)
 if(SL_PLATFORM STREQUAL "sdl")
   file(GLOB SL_PLATFORM_SOURCES CONFIGURE_DEPENDS src/platform/sdl/*.cpp src/platform/sdl/*.h)
@@ -48,6 +49,11 @@ else()
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(ski_legacy PRIVATE Threads::Threads)
+# (Phase 6) the multiplayer client's TLS (net/socket_stream.cpp); Winsock and the certificate store on Windows
+target_link_libraries(ski_legacy PRIVATE mbedtls mbedx509 mbedcrypto)
+if(WIN32)
+  target_link_libraries(ski_legacy PRIVATE ws2_32 crypt32)
+endif()
 if(APPLE)
   set_target_properties(ski_legacy PROPERTIES MACOSX_BUNDLE OFF)
 endif()
@@ -100,30 +106,35 @@ if(SL_EXPORT_DATA)
 endif()
 
 # ---------------------------------------------------------------- packaging: assets next to the executable
-# Only the models the game loads (not the whole 240 MB public/ folder) plus the exported world data (native/data:
-# world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin, transport.json / .bin, fonts/).
-set(SL_PHASE1_MODELS skier_red_rigged skier_red_anims ski_carver ski_pole pine_tree pine_tree2 rental_shop
-  ticket_booth hotel_chalet lamp_post mountain_hut)
-# Phase 2: the resort's props (export_resort.mjs lists them in resort.json), the lift cars, the chair bullwheel's
-# material
-set(SL_PHASE2_MODELS sign_pole map_board snow_cannon lift_tower chair_terminal chair_bullwheel christmas_tree
-  wooden_bench wooden_barrel trash_bin market_stall fire_pit picnic_table outdoor_ski_rack wooden_sled firewood_pile
-  snowman wooden_fence patrol_hut deck_chair gondola_cabin chairlift_chair)
-# Phase 3: the cars (traffic, parked, the Autohaus, yours), the Micruss ski bus, the railcar's Meshy body, the
-# transport's props (transport.json) and the GLB materials its baked meshes use
-set(SL_PHASE3_MODELS car_bmw_x3 car_audi_rs6 car_vw_golf_gti car_tesla_m3 car_mercedes_sls car_porsche_taycan
-  car_lamborghini_huracan car_toyota_gr_yaris car_audi_etron_gt car_mercedes_gls ski_bus_micruss rail_car2 bus_stop_sign
-  parking_pay_machine parking_sign floodlight_head_c)
+# Only the models the game loads (not the whole public/ folder) plus the exported world data (native/data). The list
+# is derived from what the game actually loads: tools/list_models.mjs collects every model the exported data names
+# (the resort's props, the transport's vehicles, the courses, job boards, snowmobiles, the furniture catalogue...) and
+# every model the C++ names (literals, and names built from a literal prefix / suffix: "furniture/" + id, "skier_" +
+# colour + "_rigged"), into ${CMAKE_BINARY_DIR}/models.txt (~150 models, ~160 MB). Without Node: the fallback list below.
+set(SL_FALLBACK_MODELS skier_red_rigged skier_red_anims skier_blue_rigged skier_blue_anims ski_carver ski_rental pine_tree
+  pine_tree2 rental_shop ticket_booth hotel_chalet lamp_post mountain_hut sign_pole map_board snow_cannon lift_tower
+  chair_terminal chair_bullwheel christmas_tree wooden_bench wooden_barrel trash_bin market_stall fire_pit picnic_table
+  outdoor_ski_rack wooden_sled firewood_pile snowman wooden_fence patrol_hut deck_chair gondola_cabin chairlift_chair
+  car_bmw_x3 car_audi_rs6 car_vw_golf_gti car_tesla_m3 car_mercedes_sls car_porsche_taycan car_lamborghini_huracan
+  car_toyota_gr_yaris car_audi_etron_gt car_mercedes_gls ski_bus_micruss rail_car2 bus_stop_sign parking_pay_machine
+  parking_sign floodlight_head_c)
 if(SL_COPY_ASSETS)
-  set(_dst $<TARGET_FILE_DIR:ski_legacy>/assets)
-  set(_cmds)
-  foreach(m ${SL_PHASE1_MODELS} ${SL_PHASE2_MODELS} ${SL_PHASE3_MODELS})
-    list(APPEND _cmds COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      ${CMAKE_CURRENT_SOURCE_DIR}/../public/models/${m}.glb ${_dst}/models/${m}.glb)
-  endforeach()
+  set(_list ${CMAKE_BINARY_DIR}/models.txt)
+  find_program(SL_NODE_COPY NAMES node nodejs)
+  if(SL_NODE_COPY)
+    file(GLOB_RECURSE _cpp CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h)
+    add_custom_command(OUTPUT ${_list}
+      COMMAND ${SL_NODE_COPY} ${CMAKE_CURRENT_SOURCE_DIR}/tools/list_models.mjs ${_list}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/list_models.mjs ${_cpp} ${SL_DATA_OUTPUTS}
+      COMMENT "Listing the models the game loads (models.txt)" VERBATIM)
+  else()
+    string(REPLACE ";" "\n" _fb "${SL_FALLBACK_MODELS}")
+    file(WRITE ${_list} "${_fb}\n")
+  endif()
+  add_custom_target(sl_models ALL DEPENDS ${_list})
+  add_dependencies(ski_legacy sl_models)
   add_custom_command(TARGET ski_legacy POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${_dst}/models ${_dst}/data
-    ${_cmds}
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/data ${_dst}/data
-    COMMENT "Copying the game's assets to ${_dst}")
+    COMMAND ${CMAKE_COMMAND} -DLIST=${_list} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/../public/models
+            -DDST=$<TARGET_FILE_DIR:ski_legacy>/assets -DDATA=${CMAKE_CURRENT_SOURCE_DIR}/data -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CopyAssets.cmake
+    COMMENT "Copying the game's assets next to the executable (assets/)")
 endif()

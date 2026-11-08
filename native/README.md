@@ -6,9 +6,10 @@ A portable C++20 rewrite of Ski Legacy (the Three.js / Electron game in `../src`
 **Phase 1** (engine core, the real terrain, the skier, forests), **Phase 2** (the village and the resort: buildings,
 props, signs, gondola and railway stations, all 18 gondolas and chairlifts in motion, boarding and riding them, day /
 night lighting), **Phase 3** (roads, tunnels, car parks, your car, traffic, the ski buses, the Wolkenspitzbahn and
-the Legacy Express), **Phase 4** (menus, HUD, trail map, the economy and saving) and **Phase 5** (races, jobs and the
+the Legacy Express), **Phase 4** (menus, HUD, trail map, the economy and saving), **Phase 5** (races, jobs and the
 taxi, the police / prison / impound, the rescue and the hospital, chalets and build mode, people, snowmobiles, weather)
-are done. Later phases are listed at the end of this file.
+and **Phase 6** (multiplayer: a C++ client for the game's Node server over wss://) are done. Phase 7 is listed at the
+end of this file.
 
 ---
 
@@ -45,9 +46,15 @@ transport 57.9 → 9.9, resort 24.1 → 5.3, world.json 2.2 → 0.5, crag 1.2 �
 
 Run from anywhere inside the repository: the game finds `public/` (models) and `native/data/` (exported world data)
 by walking up from the executable. For a self-contained folder, configure with `-DSL_COPY_ASSETS=ON`: the models the
-game uses (`SL_PHASE1_MODELS` + `SL_PHASE2_MODELS` + `SL_PHASE3_MODELS` in `CMakeLists.txt`, ~75 MB) and `native/data`
-(~28 MB) are copied to `assets/` next to the executable (not the whole 240 MB `public/`).
-`SKI_LEGACY_ASSETS=/path/to/assets` overrides both.
+game loads and `native/data` (~40 MB) are copied to `assets/` next to the executable (not the whole `public/`), and the
+game uses that folder first. The model list is derived from what the game actually loads: `tools/list_models.mjs`
+collects every model the exported data names (the resort's props, the transport's cars and buses, the courses' pieces,
+the job boards, the snowmobiles, the furniture catalogue) and every model the C++ names (literals, and names it builds
+from a literal prefix / suffix: `"furniture/" + id`, `"skier_" + colour + "_rigged"`) into `build/models.txt`
+(148 models, 158 MB today; regenerated when the data or a source file changes), and `cmake/CopyAssets.cmake` copies
+them after the build (Node is needed for the list; without it a fallback list of the Phase 1-3 models is used). The
+full autotest runs from such a folder without a single "model not found". `SKI_LEGACY_ASSETS=/path/to/assets`
+overrides both.
 
 ### macOS (Mac mini M2 / MacBook Air)
 ```sh
@@ -91,6 +98,8 @@ cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --b
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
 | `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled`). Uses its own fresh save (`autotest-save.json`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
+| `--server URL` | (Phase 6) the multiplayer server (else `SKI_LEGACY_SERVER`, else the game's `wss://138-199-163-183.sslip.io/ws`) |
+| `--mptest URL [--mp-peers N] [--mp-seconds S]` | (Phase 6) the multiplayer check against a running server: the menus (PLAY -> MULTIPLAYER -> REGISTER a fresh name -> JOIN A WORLD), presence for S s (default 8), N other players seen (their avatars and name cards; a screenshot with `--png`), a ride in another player's car when one is parked, rental skis bought at the ski shop and a day pass at the ticket seller (checked against the server's own copy of the profile), chat, a dropped connection resumed, LEAVE MULTIPLAYER (the single-player save back); exit 0 / 1. Own save `mptest-save.json` |
 
 ### Headless test (Linux, Mesa llvmpipe)
 ```sh
@@ -141,6 +150,11 @@ places, **R** / the wheel turns, **Q** picks a piece up, **X** sells it, **E** t
 hand, the left stick click switches the controller's virtual mouse. Snowmobile: **E** beside one, **W S A D**, **Shift**
 boost, **Space** handbrake, **E** (stopped) off.
 
+**Multiplayer (Phase 6):** **E** beside another player's car asks them for a ride (they answer **Y** / **N**, controller
+d-pad up / down; you sit in the seat the server gives you, **E** gets out); at another player's chalet door **E** asks to
+visit; **Enter** opens the chat line (Enter sends, Esc closes); the pause menu lists the world's players and has LEAVE
+MULTIPLAYER.
+
 **Vehicles (Phase 3, drive.js's keys):** **E** beside your car drives it (at the Autohaus: buys one, see below), **E** at
 a standstill gets out; **W** / RT throttle, **S** / LT brake then reverse, **A D** / left stick steer (analog),
 **Space** / bottom button handbrake, **R** chase / cockpit view, **C** / LS look back, **H** horn, **L** lights,
@@ -166,6 +180,9 @@ native/
                                              races, the RACING stand, the job sites, taxi places, the police / hospital /
                                              impound sites, the chalets and their plan, the furniture catalogue -> play.*
   tools/export_fonts.mjs, datafile.mjs       the UI fonts (WOFF / WOFF2 -> TTF); zstd writing + the grid filter
+  tools/list_models.mjs, cmake/CopyAssets.cmake   (Phase 6) the models the game loads -> build/models.txt; the
+                                             -DSL_COPY_ASSETS=ON copy
+  tools/mp_peer.mjs                          (Phase 6) a JS test player for --mptest (walks, chats, parks a car, says yes)
   cmake/CheckNodeModules.cmake               the data step's "run npm install" check
   data/  (generated, git-ignored)            world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin,
                                              transport.json / .bin, each as .zst (~28 MB); fonts/
@@ -190,12 +207,18 @@ native/
     engine/canvas2d, engine/mesh_kit         software 2D canvas (sign textures, stb_truetype), procedural geometry kit
     engine/ui                                the immediate-mode 2D layer (SDF text, shapes, the house style)
     player/                                  player.js physics port, the skier rig (model, clips, procedural stance)
+    net/                                     (Phase 6) stream.h: THE network interface (TCP / TLS byte stream; desktop:
+                                             socket_stream.cpp = BSD sockets / Winsock + mbedTLS, a Switch build swaps in
+                                             nn::socket + nn::ssl), websocket (RFC 6455 client on a worker thread, HTTP GET),
+                                             client (client.js: events, requests, clock sync, reconnects), protocol.h
     game/                                    main loop, spawn, HUD, autotest; vehicles (models, instanced draw),
                                              drive (drive.js + the Autohaus), traffic, buses, trains (Wolkenspitzbahn,
                                              Legacy Express); (Phase 4) menus, hud, trailmap, economy (+ save); (Phase 5)
                                              play (the shared context) / play_data, races, jobs (+ taxi), police (+ prison,
                                              vehicle / people hits), rescue (+ hospital), chalets (+ build mode), interiors,
-                                             people (+ PeopleSim), snowmobile, weather, shapes
+                                             people (+ PeopleSim), snowmobile, weather, shapes; (Phase 6) mp_session
+                                             (session.js: account, login, the save swap, presence, the server economy,
+                                             seats, rides, chat), mp_view (the other players drawn, name cards, overlays)
 ```
 
 **Layering.** `game → player/world → engine → gfx + platform`. Only `platform/sdl` includes SDL; only `gfx/gl`
@@ -542,8 +565,7 @@ the `--brush-a` / `--brush-b` paper silhouettes, ragged paper panels, blue itali
 labels, keycaps (`.kc`) with the PlayStation symbols and arrows drawn as shapes.
 
 **Menus** (`game/menus`, menu.js): the main menu over the live world (a slow orbit over the village; a loading
-screen while the world builds) — PLAY · CONTROLS · STATS · SETTINGS · QUIT; PLAY → SINGLEPLAYER / MULTIPLAYER (says
-Phase 6) → CHOOSE YOUR SKIER the first time (MAN / WOMAN on the 3D showcase: the skier on the plaza, left / right
+screen while the world builds) — PLAY · CONTROLS · STATS · SETTINGS · QUIT; PLAY → SINGLEPLAYER / MULTIPLAYER (Phase 6) → CHOOSE YOUR SKIER the first time (MAN / WOMAN on the 3D showcase: the skier on the plaza, left / right
 picks, drag or the right stick turns it; the rig reloads `skier_red` / `skier_blue`) → START. Pause (Esc / Menu /
 Options / +): RESUME · CONTROLS · STATS · SETTINGS · MAIN MENU · RETURN TO VILLAGE · QUIT GAME; the simulation stops
 under it. **SETTINGS** has menu.js's rows: graphics (the six presets — applied at the next start, as the web game
@@ -614,9 +636,9 @@ world ready in 15.29 s (the trail map's relief builds on the worker threads mean
 - **Look**: the brush shapes are approximations of the SVG / CSS ones (no drop-shadow filter, the strokes' bristle
   tails are coarser), no screen transitions beyond a slide-in, no menu sounds (audio is Phase 7); the Inter font is the
   variable font's default instance (weight 400: no bold Inter), no kerning (GPOS).
-- **Menus**: MULTIPLAYER and the account are stubs (Phase 6); the graphics preset needs a restart; music volume, bloom,
-  camera shake, screen effects and player names are stored but have nothing to drive yet; no virtual mouse; text entry
-  (multiplayer names) not needed yet.
+- **Menus**: MULTIPLAYER and the account were stubs (Phase 6 made them real, with a typed name field); the graphics
+  preset needs a restart; music volume, bloom, camera shake and screen effects are stored but have nothing to drive yet;
+  no virtual mouse.
 - **Shops**: one card dialog instead of the walk-in ski shop and the outfit shop's 3D podium; outfits are bought and
   stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet; no kits.
 - **Cars**: no configurator (paint, rims, interior, custom plates), no showroom interior or salesman, no tow truck
@@ -785,11 +807,170 @@ world ready in 21.61 s ...
 - **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people,
   no fans.js keyframes (cheering, flags), no chat groups.
 - Snowmobiles are free to take (as snowmobile.js: no rental counter); the rider uses the seated rig, not skier.js's
-  handlebar IK. `-DSL_COPY_ASSETS=ON` does not list the Phase 5 models yet (car1, heli_body, ambulance, chalet / chalet_lo,
-  furniture/*, prison/*, hospital/*, fan_*, police_officer_*, job_board, snowmobile): run from the repository.
+  handlebar IK. (`-DSL_COPY_ASSETS=ON` lists every model the game loads since Phase 6.)
 - The trail map shows no races, jobs, chalets or the police yet.
 - Not ported yet: the player's helicopter (heli/*: flights, pads), snowcats and ploughs, snowmaking spray, flags, the
   parkour mode, multiplayer bits of all of the above.
+
+---
+
+## What Phase 6 ports
+
+Multiplayer against the **existing Node server** (`server/`, unchanged: its 415 tests still pass), speaking the JS game's
+protocol exactly (`src/net/protocol.js`, `server/lib/server.js`, `docs/multiplayer.md`): JSON text frames `{ t, d, id? }`,
+answers `{ t: 'res', id, ok, d | err }`, presence rows `[ts, x, y, z, yaw, vx, vy, vz, state, crouch, lean, flags]` with
+the same state enum and flag bits (air, tuck, skis on / carried, car, lights, wreck, sled, paused, the wanted stars,
+the wipeout's packed tumble), the server stamping pid, vehicle (`kind:id:seat`) and interior.
+
+**The network layer** (`src/net/`). `stream.h` is the one interface a console port replaces: a blocking TCP / TLS byte
+stream with timeouts. The desktop implementation (`socket_stream.cpp`) is BSD sockets / Winsock (non-blocking, `poll`)
+with **mbedTLS 3.6.2** (FetchContent, the release tarball, pinned by SHA-256) for `wss://`: TLS 1.2 / 1.3, the
+certificate chain and the host name verified against the system's bundle (`SSL_CERT_FILE`, the usual Linux / BSD /
+macOS paths, the Windows ROOT store) plus the two Let's Encrypt roots built in (`ca_roots.h`: the server's Caddy
+certificate is Let's Encrypt, so it verifies on any machine). On Switch the same interface goes on `nn::socket` (or
+NEX's transport) with `nn::ssl`. `websocket.cpp` is a small RFC 6455 client (the HTTP upgrade with the
+`Sec-WebSocket-Accept` check, masked frames, fragments, ping -> pong for the server's heartbeat, the close handshake and
+its codes; 1006 for a dropped line) on a detached worker thread, so DNS, connects and TLS never stall a frame; plus a
+one-shot HTTP GET (the server's `/health`). `client.cpp` is `client.js`: events, requests with ids and timeouts (a late
+frame extends them, as the JS does for a busy main thread), clock sync (ping / pong every 2 s, the best of 10 samples by
+round trip, small corrections eased in, a jump restarts), the liveness check (20 s of silence: reconnect), reconnects
+with the same backoff (0.3 / 1 / 2 / 3 / 5 s for up to 120 s, then "Connection lost"), close code 1000 for LEAVE (the
+server lets you go at once) and 4000 for a stale socket (the server holds you for a minute).
+
+**The session** (`game/mp_session`, session.js):
+- **Accounts** as the JS does them: a unique name registered once; the server issues a secret token (there is no
+  password in this protocol), stored per server URL through `Platform::writeSave` (`ski-legacy-mp-accounts.json`, the
+  JS game's `localStorage['ski-legacy-mp-accounts']`); `bad_login` forgets it (pick a name again); rename (every 15 days)
+  and delete go through the same token-checked `accountRename` / `accountDelete`.
+- **Joining**: `login { v, name, token, look, plots, tt }`; the server puts you in the fullest world with room (up to 50
+  players; it was 15 when the plan was written): the protocol has no world list, so the MULTIPLAYER screen shows the
+  server's `/health` (worlds, players online) and the pause menu lists your world and its players. A login after a drop
+  resumes the held player (same world, pid, seat, chalet plot, car).
+- **The save swap**: the server profile goes into the save (money, skis, outfits, the chalet, the garage with each
+  car's damage and the tow yard, stats, records, secrets, the day pass and tickets, where you were, a sentence you left
+  in); the single-player save is set aside untouched and comes back on leave, keeping this machine's settings
+  (economy.js DEVICE_PREFS). While online the save file only receives the device settings (`Save::mpWrite`); the parts
+  the player owns go to the server with `profileSet` 1.5 s after a change.
+- **Server-authoritative economy** exactly as the JS: the **money guard** (any drop of the money is a `spend` the server
+  checks, game charges may go into debt down to -$100,000; a rise that did not come from the server is undone); skis,
+  outfits, cars (the server prices them and issues a plate nobody has), chalets: `buy`; MY CARS: `carSell`, driving
+  another of your cars: `carSwitch`; the Werkstatt: `carRepair` (the server's price); crash damage: `carDamage`; a wreck
+  or a car left on a road: `tow` / `towDone` (the server's fee, its tow yard); job payouts and furniture sold back: `earn`
+  (`job` / `sell`, the server's caps); races are practice races (`raceSolo` / `raceFinish`, no fee, no prize).
+- **Police**: an arrest is the server's sentence (`jail`) and then `policeArrest` (your passengers and anyone who rode
+  with you in the chase go to prison too); `arrested` jails you when the driver you rode with is caught; a sentence
+  left unserved puts you back in the cell at the next login.
+- **The world's clock and weather** from the server (the hour, the in-game day the day pass counts, the weather and its
+  forecast in the HUD), and the **Wolkenspitzbahn / Legacy Express on the shared timelines** (`lineTime`: the server
+  clock plus each line's speed-up): every client places every train at the same spot; nobody jumps the timetable, you
+  board a train standing at the platform, and SPACE speeds the line up only while everyone aboard holds it (`skip`).
+- **Seats** in the server's registry on the bus / train / Express / cabin / chair you ride (`seatClaim` with the
+  vehicle's seat count, `seatRelease`), so the others see you seated in it and a full vehicle says so.
+- **Car rides** (carride.js): your car out (`veh` with its spot, or driven: your presence is the car's pose with
+  steering, lights, wreck, the wanted stars) and your other cars parked (`parked`) are shown to everyone; beside another
+  player's car **E** asks the owner (`perm carRide`; they get "Allow X to get in your car?" Y / N), the server seats you
+  (seat 1 front, 2.. back) and you ride in that seat of their car as it is drawn here; **E** gets out; `seatLost` (the
+  owner left or took it back) puts you out. The players riding in your car sit in its seats.
+- **Chalets of others**: the global registry (who owns which plot), buying through the server (one each), visiting
+  another player's chalet with their yes (`perm chaletVisit`, `chaletFurniture`: their furniture inside, `enter` with the
+  server's approval), your guest list, `kickInterior`.
+- **Interiors**: you are shown only to players in the same interior (`enter`: `prison`, `hospital`, `chalet:<plot>`).
+- **Admin**: the banner (`adminMsg`) across the top, notes (`adminNote`), releases, `adminTp`.
+- **Chat**: the server relays it (the JS game has no chat UI yet; here **Enter** opens a chat line, the last lines show
+  bottom left).
+- **Leaving**: LEAVE MULTIPLAYER (the profile pushed, close 1000), the server kicking you / another login (4001) /
+  a restart / 120 s without a connection: back to the main menu with the reason.
+
+**The other players** (`game/mp_view`, remote.js / vehicles.js): each as the game's character for their look (People:
+skiing with skis on, the tuck, walking or running by their speed, seated on a lift / bus / train / sled, lying after a
+wipeout), from a 16-row ring of their presence played out ~120-400 ms behind the server's clock (the delay follows each
+player's lag, row spacing and jitter, eased), a short extrapolation when rows are late; their car (model from the
+server's `veh` record) driven or parked, their other cars, their snowmobile; a name card over each head within 150 m
+(PAUSED, WANTED stars; SETTINGS -> Player names); the status pill (name · world · players, "reconnecting..."), the
+owner's Y / N prompt with its 30 s bar, the admin banner, chat. Traffic, the townsfolk and the race field are off
+online (the other players instead), as `setAI(false)` does in the JS.
+
+**Menus**: PLAY -> **MULTIPLAYER**: the server and its worlds (`/health`), your name (registered: JOIN A WORLD, USE
+ANOTHER NAME; else a name field, typed, the platform's user name suggested) -> REGISTER -> JOIN A WORLD; the pause menu
+online: the players and LEAVE MULTIPLAYER; SETTINGS -> Account shows your multiplayer name.
+
+**Connecting to the real server**: just PLAY -> MULTIPLAYER (the default is the game's server,
+`wss://138-199-163-183.sslip.io/ws`, TLS verified with the built-in Let's Encrypt roots); `--server wss://host/ws` or
+`SKI_LEGACY_SERVER` for another one, `ws://` for a local one:
+```sh
+cd server && npm install && PORT=8787 npm start      # ws://127.0.0.1:8787 (data in server/data)
+./native/build/ski_legacy --server ws://127.0.0.1:8787/ws
+```
+
+**The test** (`--mptest`), against a local server with the JS test player (`tools/mp_peer.mjs`, which earns two job
+payouts, buys a Golf through the server, parks it on the plaza and says yes to everything):
+```sh
+(cd server && PORT=8790 DATA_DIR=/tmp/sl-mp node index.js &)
+node native/tools/mp_peer.mjs ws://127.0.0.1:8790/ws 100 car &
+SDL_AUDIODRIVER=dummy xvfb-run -a -s "-screen 0 1280x720x24" ./native/build/ski_legacy --mptest ws://127.0.0.1:8790/ws --mp-peers 1 --png /tmp/mp.png
+```
+```
+[mptest] MULTIPLAYER screen: server ws://127.0.0.1:8790/ws, Online · 1 world · 1 players · you join the fullest world with room (up to 50)
+[mptest] registered 'Native5695' (token stored for ws://127.0.0.1:8790/ws)
+[mptest] joined world 1 as Native5695 (pid 2): 1 other player(s), money $500 (server), clock 10.13 h, weather clear
+[mptest] presence: 95 rows sent in 8.0 s (11.9 / s, 71937 frames), at (7.0, -0.0, 0.4), rtt 2 ms
+[mptest] remote player JsPeer1830 (pid 1): at (-1.0, -0.0, 33.3), state 0, flags 0x0, look {"c":"skier_red","o":null,"s":"rental"}, 34 m away, delay 171 ms -> drawn
+[mptest] car ride: JsPeer1830's car_vw_golf_gti parked at (16.0, 24.0): walking up to it
+[mptest] car ride: prompt 'Ask JsPeer1830 for a ride'
+[mptest] car ride: seated in JsPeer1830's car, seat 1 (the server's registry: car|JsPeer1830)
+[mptest] car ride: got out at (16.2, 22.6), seat released -> ok
+[mptest] buy: Rental Carver at the ski shop: money $500 -> $450 here, the server's profile: money $450, owned ["rental"], skis rental -> ok
+[mptest] day pass: $450 -> $300, the server's profile: money $300, dayPass 3502 (world day 3502) -> ok
+[mptest] chat: sent and relayed back (1 line(s))
+[mptest] connection dropped (no close frame): reconnecting...
+[mptest] reconnected after 1.0 s: resumed, world 1, pid 2, 1 other player(s), status 'Native5695 · WORLD 1 · 2/50 PLAYERS'
+[mptest] left multiplayer: back at the main menu, the single-player save back (money $1234, expected $1234) -> ok
+[mptest] PASS
+[peer] Native5695 asks carRide: allowed
+[peer] Native5695 is riding in my car (car:JsPeer1830:1)
+[peer] chat Native5695: hello from the native client
+[peer] saw Native5695 (pid 2): 254 presence rows, last at (15.0, -0.2, -44.0) state 0 flags 33554432
+[peer] PASS: the native player was seen
+```
+Two native clients against each other (`--mptest ... --mp-peers 1` twice) see each other the same way (both PASS). With
+`--png` the test writes `_mp` (the other player and their name card) and `_car` (riding in their car, drawn from their
+`veh` record). The single-player autotest is unchanged and still passes, now run from the `-DSL_COPY_ASSETS=ON` folder
+(no "model not found"):
+```
+assets: .../native/build/assets | data: .../native/build/assets/data
+world ready in 22.18 s: 315 terrain nodes, 1908 trees in range, 29404 resort props, 18 lifts, 766 MB textures
+[autotest] 4522 frames (308.4 s simulated) in 811.9 s wall: avg 5.6 fps
+[autotest] ski ok, building collision ok, gondola ride ok
+[autotest] drive ok, traffic ok, bus ok, Wolkenspitzbahn ok, Legacy Express ok
+[autotest] menus ok, settings ok, shop ok, save / reload ok, lift / car charges ok, trail map ok
+[autotest] race + records ok, job ok, police chase + jail ok, chalet + furniture ok, weather ok, snowmobile ok (people drawn 18)
+[autotest] PASS
+```
+
+### Known gaps (Phase 6)
+- **No world picker**: the protocol has none (the server assigns the fullest world with room); the MULTIPLAYER screen
+  shows the server's world / player counts instead.
+- **Accounts are name + server-issued token** (the JS game's scheme; there is no password to type). On Switch the
+  name field wants the software keyboard applet (here: typed, or the suggested platform user name).
+- **Races online are practice races** (`raceSolo`): the server's race queues (2-21 racers, the synced start, the live
+  board, the results card with prize money) are not wired to the native race session yet.
+- **Shared timelines**: the trains are on them; the gondolas / chairlifts and the ski buses still run on the local
+  clock (lifts.js / bus.js's time-based placement and the shared bus hold-ups are not ported), so a remote rider is
+  drawn where their own client puts their seat (their presence), not in your local cabin; the bus seat registry uses
+  `bus:1..7` by the local bus index.
+- **Remote vehicles**: cars are drawn from their model id (no paint / rims / plate / dents, no seated driver model,
+  no wheels turning, no lights); the tow truck, patrol cars chasing them, the rescue helicopter / ambulance and rented
+  helicopters of other players (`veh` tow / police / rescue / heli) are not drawn; the helicopter pad (`heliRent`) is
+  not ported (the player helicopter is not ported at all yet).
+- **Interiors** are the native boxes at a quiet spot (Phase 5): two native clients see each other inside, but a JS
+  client inside the same chalet has other room coordinates.
+- A car in the server's tow yard (3 minutes) shows as "available tomorrow" (the next world day, 16 minutes) until then;
+  the server's impound bay number is not used.
+- Knocked poles / guardrails (`brk`), the transit version check (`tt`: sent as `native-phase6`, so JS clients warn that
+  this player's lifts and buses run at other times), the jail board posters, the guests' "send out" buttons (the list is
+  shown) and the admin panels are not ported. Bodies of other players don't collide with you.
+- The `/health` request and the WebSocket run on worker threads; a Switch build replaces `net/socket_stream.cpp` and
+  must still meet Nintendo's online requirements (Nintendo Account, NSO entitlement, the network service agreement).
 
 ---
 
@@ -811,7 +992,8 @@ What has to come from Nintendo (none of it can be in this repository):
 4. **Lotcheck**: Nintendo's certification. Plan for the guidelines from the start: correct controller UI terms and
    button glyphs per region, the controller applet, save data commit and size limits, behaviour when suspended /
    resumed / the console sleeps, no crashes or hangs on long play, loading-screen times, age ratings (IARC / per
-   region), and online rules if Phase 6 ships online (Nintendo Account, NSO, network service agreements).
+   region), and online rules for Phase 6's multiplayer (Nintendo Account, NSO, network service agreements; the socket
+   and TLS layer is `net/stream.h`: implement it on `nn::socket` / NEX with `nn::ssl`).
 5. **Performance budget**: Tegra X1 — target 30 fps (docked 1080p dynamic-res, handheld 720p). The engine is built
    for it: quality presets (`--quality low` ≈ handheld), render scale for dynamic resolution, worker threads for
    streaming (3 cores), instancing, LODs, a single shadow map. Phase 7 adds ASTC textures, packed vertex formats and
@@ -829,5 +1011,5 @@ What has to come from Nintendo (none of it can be in this repository):
 | **3 (done)** | vehicles and transport: car physics (`drive.js`, damage), roads with their terrain cuts and tunnels, traffic and parking, the Autohaus, the ski bus and its routes, the railways (Wolkenspitzbahn, Legacy Express) with stations and swept track; still open: snowmobile, helicopter, car lights / sounds / wheels |
 | **4 (done)** | menus, HUD and economy: title / pause / settings (the web settings incl. rebinding UI with controller glyphs), trail map, money, ski / outfit shop, tickets and day pass, lift / train charges, the Autohaus garage, Werkstatt, tow and rescue fees, save games through `Platform::writeSave` (the web save's JSON shape), autosave; the data step in the build, zstd data |
 | **5 (done)** | gameplay: races (the World Racing courses with their meshes, the bus races, the RACING stand, practice, the AI field, records, prizes, the race guide), jobs and the taxi, police / prison / impound, vehicle and people hits, the rescue helicopter + ambulance + hospital, chalets and build mode (virtual mouse), townsfolk / skiers / crowds, snowmobiles, weather and snowfall; still open: the player helicopter, parkour mode, snowcats / snowmaking / flags |
-| **6** | multiplayer: keep the existing Node server (`server/`) and its protocol; write a C++ client (WebSocket over TLS, e.g. a small libwebsockets / IXWebSocket client behind the platform layer, since console sockets go through `nn::socket` / NEX) with interpolation of remote skiers, car rides, chat |
+| **6 (done)** | multiplayer: the existing Node server (`server/`, unchanged) and its protocol; a C++ client (`net/`: an RFC 6455 WebSocket over TLS with mbedTLS behind `net/stream.h`, the one file a Switch build swaps for `nn::socket` / `nn::ssl` / NEX), accounts, worlds, presence with interpolated remote skiers / walkers / cars / sleds and name cards, the server-authoritative economy, police / jail / impound, chalets of others, car rides, transit seats, the shared train timelines, the world clock / weather, chat, the admin banner, reconnects; `--mptest`. Still open: race queues, lift / bus shared timelines, the other players' tow / police / rescue / helicopters |
 | **7** | audio (mixer, `public/audio` samples, Ogg decoding, 3D sound), weather / time of day / night lighting, snow FX, post (bloom, sun glare), and Switch performance: ASTC textures, packed vertices, GPU profiling, dynamic resolution, memory budget, Lotcheck pass |

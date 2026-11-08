@@ -31,6 +31,11 @@ public:
   void fillColliders(std::vector<Collider>& out) const;
   size_t count() const { return sleds_.size(); }
   dvec3 pos(size_t i) const { return sleds_[i].pos; }
+  /// (Phase 6) the snowmobile model and its fit, for the other players' sleds
+  const Model* model() const { return model_.get(); }
+  const mat4& fit() const { return fit_; }
+  /// the sled you ride: its pose (presence: x / y / z / yaw are the snowmobile's, flag F.sled)
+  bool current(dvec3& p, double& yaw) const { if (cur_ < 0) return false; p = sleds_[size_t(cur_)].pos; yaw = sleds_[size_t(cur_)].yaw; return true; }
 private:
   struct Sled { dvec3 pos{0}; double yaw = 0, v = 0, vs = 0, vy = 0, bounce = 0; bool air = false; };
   PlayCtx& c_;

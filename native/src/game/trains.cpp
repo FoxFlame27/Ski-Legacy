@@ -76,7 +76,8 @@ dvec3 Railway::trackPoint(double s, bool loop) const {
 void Railway::update(double dt, bool fast, const dvec3&) {
   if (trains_.empty()) return;
   double scale = ride_.on && fast ? 6 : 1;
-  t_now_ = std::fmod(t_now_ + dt * scale, t_.rail.cycle * 1000);
+  if (mpTime) t_now_ = std::fmod(mpTime(), t_.rail.cycle * 1000);   // (multiplayer: the shared timeline)
+  else t_now_ = std::fmod(t_now_ + dt * scale, t_.rail.cycle * 1000);
   for (auto& tr : trains_) tr.st = trainState(t_now_, tr.phase);
   if (ride_.on && trains_[size_t(ride_.train)].st.at != ride_.from) ride_.departed = true;
 }
@@ -107,18 +108,37 @@ std::string Railway::label(int st, bool down) const {
 }
 
 // board: the timetable jumps so train 0 stands at the platform with its doors open; a window seat in its leading car
+bool Railway::trainReady(int st, bool up) const {
+  if (!mpTime) return true;
+  int nst = int(t_.rail.stations.size());
+  if (st == 0) up = true;
+  if (st == nst - 1) up = false;
+  int dir = up ? 1 : -1;
+  for (const auto& tr : trains_) if (tr.st.at == st && (tr.st.dir == dir || st == 0 || st == nst - 1)) return true;
+  return false;
+}
+
 bool Railway::board(int st, bool up) {
   if (trains_.empty() || st < 0) return false;
   int nst = int(t_.rail.stations.size());
   if (st == 0) up = true;
   if (st == nst - 1) up = false;
   int dir = up ? 1 : -1;
-  double want = boardingU(st, dir), C = t_.rail.cycle;
-  double u = std::fmod(std::fmod(t_now_ / C + trains_[0].phase, 1.0) + 1.0, 1.0) * C;
-  t_now_ += want - u;
-  for (auto& tr : trains_) tr.st = trainState(t_now_, tr.phase);
+  int train = 0;
+  if (mpTime) {
+    // multiplayer (transit.js): nobody brings or holds a train: the one standing at this platform, going your way
+    train = -1;
+    for (size_t k = 0; k < trains_.size(); k++)
+      if (trains_[k].st.at == st && (trains_[k].st.dir == dir || st == 0 || st == nst - 1)) train = int(k);
+    if (train < 0) return false;
+  } else {
+    double want = boardingU(st, dir), C = t_.rail.cycle;
+    double u = std::fmod(std::fmod(t_now_ / C + trains_[0].phase, 1.0) + 1.0, 1.0) * C;
+    t_now_ += want - u;
+    for (auto& tr : trains_) tr.st = trainState(t_now_, tr.phase);
+  }
   ride_ = Ride{};
-  ride_.on = true; ride_.train = 0; ride_.car = up ? 0 : ncars_ - 1; ride_.up = up; ride_.from = st; ride_.dest = up ? nst - 1 : 0;
+  ride_.on = true; ride_.train = train; ride_.car = up ? 0 : ncars_ - 1; ride_.up = up; ride_.from = st; ride_.dest = up ? nst - 1 : 0;
   return true;
 }
 
@@ -250,6 +270,7 @@ Express::State Express::trainState(const Way& w, double u) const {
 double Express::u(int k) const {
   const Train& tr = trains_[size_t(k)];
   double L = way(tr.dir).loop;
+  if (mpTime) return std::fmod(std::fmod(mpTime(tr.dir) + tr.phase * L, L) + L, L);   // (multiplayer: the direction's shared timeline)
   return std::fmod(std::fmod(t_now_ + off_[tr.dir > 0 ? 0 : 1] + tr.phase * L, L) + L, L);
 }
 void Express::update(double dt, bool fast, const dvec3&) {
@@ -283,6 +304,14 @@ int Express::stationNear(const dvec3& p) const {
 
 // board: the quicker way round; the next train that way is brought in to stand at the platform (express.js serve /
 // NUDGE: that direction's timetable shifted, its trains keep their spacing), you take a seat in its first car
+bool Express::trainReady(int from, int to) const {
+  if (!mpTime) return true;
+  if (trains_.empty() || from == to || from < 0 || to < 0) return false;
+  int dir = rideTime(from, to, 1) <= rideTime(from, to, -1) ? 1 : -1;
+  for (const auto& tr : trains_) if (tr.dir == dir && tr.st.at == from && tr.st.left >= 4) return true;
+  return false;
+}
+
 bool Express::board(int from, int to) {
   if (trains_.empty() || from == to || from < 0 || to < 0) return false;
   int dir = rideTime(from, to, 1) <= rideTime(from, to, -1) ? 1 : -1;
@@ -297,12 +326,27 @@ bool Express::board(int from, int to) {
     double d = std::remainder(want - u(int(k)), L);
     if (std::fabs(d) < std::fabs(best)) { best = d; bk = int(k); }
   }
-  if (bk < 0) return false;
-  off_[dir > 0 ? 0 : 1] += best;
-  update(0, false, dvec3(0));
+  if (mpTime) {
+    // multiplayer: the train standing at this platform now (at least 4 s before it leaves, transit.js BOARD_MIN)
+    bk = -1;
+    for (size_t k = 0; k < trains_.size(); k++)
+      if (trains_[k].dir == dir && trains_[k].st.at == from && trains_[k].st.left >= 4) bk = int(k);
+    if (bk < 0) return false;
+  } else {
+    if (bk < 0) return false;
+    off_[dir > 0 ? 0 : 1] += best;
+    update(0, false, dvec3(0));
+  }
   ride_ = Ride{};
   ride_.on = true; ride_.train = bk; ride_.from = from; ride_.to = to;
   return true;
+}
+
+std::string Express::rideVehicle() const {
+  if (!ride_.on) return "";
+  int dir = trains_[size_t(ride_.train)].dir, n = 0;
+  for (int k = 0; k < ride_.train; k++) if (trains_[size_t(k)].dir == dir) n++;
+  return std::string("express-") + (dir > 0 ? "e" : "w") + std::to_string(n);
 }
 
 void Express::carMatrix(int k, int car, glm::dmat4& M) const {

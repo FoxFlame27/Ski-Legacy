@@ -129,6 +129,7 @@ void Menus::open(Screen s, int dir) {
   captureAction_ = -1;
   ctlStatus_.clear();
   if (s == Screen::Showcase) chi_ = save_.character == "skier_red" ? 0 : 1;
+  if (s == Screen::Multiplayer && mp.opened) mp.opened();
   if (s == Screen::Settings) {
     // start on the first row, the quality row
     focus_ = 0;
@@ -166,6 +167,7 @@ void Menus::back() {
     case Screen::Pause: if (hooks.resume) hooks.resume(); break;
     case Screen::Dialog: close(); break;
     case Screen::Confirm: open(confirmBack_, -1); break;
+    case Screen::Multiplayer: if (mp.closed) mp.closed(); open(Screen::PlayMode, -1); break;
     default: break;
   }
 }
@@ -312,7 +314,24 @@ void Menus::frame(const UiNav& nav, double dt, double now) {
     if (dialog_.rebuild) dialog_.rebuild(dialog_);
     focus_ = 0; scroll_ = scrollTarget_ = 0;
   } else if (screen_ == Screen::Pause && nav.menu) { if (hooks.resume) hooks.resume(); }
-  else handle(nav);
+  else if (screen_ == Screen::Multiplayer) {
+    // the name field takes the typed letters (W A S D, Space and Backspace are text there, not navigation)
+    UiNav n2 = nav;
+    bool field = focus_ == 0 && mp.account && mp.account().empty();
+    if (field) {
+      bool shift = plat_.keyDown(platform::Key::ShiftLeft) || plat_.keyDown(platform::Key::ShiftRight);
+      for (platform::Key k : nav.keys) {
+        int ki = int(k);
+        char c = 0;
+        if (ki >= int(platform::Key::KeyA) && ki <= int(platform::Key::KeyZ)) c = char((shift ? 'A' : 'a') + (ki - int(platform::Key::KeyA)));
+        else if (ki >= int(platform::Key::Digit0) && ki <= int(platform::Key::Digit9)) c = char('0' + (ki - int(platform::Key::Digit0)));
+        else if (k == platform::Key::Space) c = ' ';
+        if (c) { if (nameField_.size() < 16) nameField_ += c; n2.up = n2.down = n2.left = n2.right = n2.confirm = false; n2.tabPrev = n2.tabNext = false; }
+        if (k == platform::Key::Backspace) { if (!nameField_.empty()) nameField_.pop_back(); n2.cancel = false; }
+      }
+    }
+    handle(n2);
+  } else handle(nav);
   if (screen_ == Screen::None) return;
   scroll_ += (scrollTarget_ - scroll_) * float(1 - std::exp(-dt * 14));
   items_.clear();
@@ -327,6 +346,7 @@ void Menus::frame(const UiNav& nav, double dt, double now) {
     case Screen::Controls: scrControls(); break;
     case Screen::Dialog: scrDialog(); break;
     case Screen::Confirm: scrConfirm(); break;
+    case Screen::Multiplayer: scrMultiplayer(nav); break;
     default: break;
   }
   if (!items_.empty()) focus_ = std::clamp(focus_, 0, int(items_.size()) - 1);
@@ -367,10 +387,60 @@ void Menus::scrPlayMode() {
   };
   button(x, y, 430 * u_, 100 * u_, 54 * u_, "SINGLEPLAYER", 41, single);
   y += 106 * u_;
-  button(x, y, 430 * u_, 100 * u_, 54 * u_, "MULTIPLAYER", 43, [this] { if (hooks.flash) hooks.flash("Multiplayer comes with Phase 6 (the C++ client for the game's server)", 1); });
+  button(x, y, 430 * u_, 100 * u_, 54 * u_, "MULTIPLAYER", 43, [this] {
+    if (!save_.characterChosen) save_.characterChosen = true;   // (the skier you play: SETTINGS -> Skier changes it)
+    open(Screen::Multiplayer);
+  });
   y += 116 * u_;
   button(x, y, 250 * u_, 62 * u_, 28 * u_, "BACK", 13, [this] { back(); });
   drawHints({{"updown", "Select"}, {"enter", "Confirm"}, {"esc", "Back"}});
+}
+
+// (Phase 6) MULTIPLAYER: the server, its worlds, your account; JOIN A WORLD logs in (the server picks the world: the
+// fullest one with room, up to 50 players)
+void Menus::scrMultiplayer(const UiNav& nav) {
+  (void)nav;
+  drawShade(2);
+  drawLogo(false);
+  float x = 110 * u_, y = 150 * u_;
+  std::string acc = mp.account ? mp.account() : "";
+  bool busy = mp.busy && mp.busy();
+  heading(x, y, "MULTIPLAYER", "Ski with everyone in your world Â· up to 50 players a world Â· the server keeps your money, cars and chalet");
+  float py = y + 150 * u_, pw = 560 * u_, ph = 196 * u_;
+  panel(x, py, pw, ph);
+  float fs = std::max(12.f, 15 * u_);
+  ui_.text(x + 30 * u_, py + 18 * u_, std::max(11.f, 11 * u_), UiFont::Body, red, "SERVER");
+  ui_.textFit(x + 30 * u_, py + 36 * u_, pw - 60 * u_, fs, UiFont::Body, blue, mp.server ? mp.server() : "");
+  std::string h = mp.health ? mp.health() : "";
+  ui_.textFit(x + 30 * u_, py + 60 * u_, pw - 60 * u_, fs, UiFont::Body, blueDim, h.empty() ? "Checking the worlds..." : h);
+  ui_.text(x + 30 * u_, py + 92 * u_, std::max(11.f, 11 * u_), UiFont::Body, red, acc.empty() ? "PICK A NAME" : "YOUR NAME");
+  if (acc.empty()) {
+    if (!nameFieldInit_) { nameField_ = mp.suggested; nameFieldInit_ = true; }
+    bool foc = focus_ == 0;
+    float fx = x + 30 * u_, fy = py + 112 * u_, fw = pw - 60 * u_, fh = 46 * u_;
+    ui_.roundRect(fx, fy, fw, fh, 6 * u_, a(blue, foc ? 0.12f : 0.06f));
+    ui_.roundRectStroke(fx, fy, fw, fh, 6 * u_, 2, foc ? blue : a(blue, 0.4f));
+    bool caret = foc && std::fmod(t_, 1.0) < 0.55;
+    ui_.text(fx + 14 * u_, fy + (fh - ui_.lineHeight(26 * u_, UiFont::CondItalic)) / 2, 26 * u_, UiFont::CondItalic, blue, nameField_ + (caret ? "|" : ""));
+    Item it;
+    it.x = fx; it.y = fy; it.w = fw; it.h = fh; it.label = "name";
+    it.activate = [this] { if (mp.registerName) mp.registerName(nameField_); };
+    items_.push_back(it);
+  } else ui_.text(x + 30 * u_, py + 112 * u_, 34 * u_, UiFont::CondItalic, blue, acc);
+  std::string st = mp.status ? mp.status() : "";
+  if (!st.empty()) ui_.textWrapped(x + 30 * u_, py + 164 * u_, pw - 60 * u_, std::max(11.f, 13 * u_), UiFont::Body, busy ? blueDim : ko, st);
+  float by = py + ph + 26 * u_;
+  if (acc.empty()) {
+    button(x, by, 430 * u_, 90 * u_, 48 * u_, busy ? "REGISTERING..." : "REGISTER", 47, [this] { if (mp.registerName) mp.registerName(nameField_); }, busy);
+    by += 96 * u_;
+  } else {
+    button(x, by, 430 * u_, 90 * u_, 48 * u_, busy ? "JOINING..." : "JOIN A WORLD", 47, [this] { if (mp.join) mp.join(); }, busy);
+    by += 96 * u_;
+    button(x, by, 360 * u_, 70 * u_, 34 * u_, "USE ANOTHER NAME", 29, [this] { if (mp.forget) mp.forget(); nameFieldInit_ = false; }, busy);
+    by += 82 * u_;
+  }
+  button(x, by, 250 * u_, 62 * u_, 28 * u_, "BACK", 13, [this] { back(); });
+  drawHints({{"updown", "Select"}, {"enter", acc.empty() ? "Register" : "Join"}, {"esc", "Back"}});
 }
 
 void Menus::pickChar(int i) {
@@ -430,9 +500,20 @@ void Menus::scrPause() {
   button(x, y, 360 * u_, h, 36 * u_, "CONTROLS", 31, [this] { ctlBack_ = Screen::None; open(Screen::Controls); }); y += step;
   button(x, y, 360 * u_, h, 36 * u_, "STATS", 7, [this] { open(Screen::Stats); }); y += step;
   button(x, y, 360 * u_, h, 36 * u_, "SETTINGS", 11, [this] { open(Screen::Settings); }); y += step;
-  button(x, y, 360 * u_, h, 36 * u_, "MAIN MENU", 23, [this] { if (hooks.mainMenu) hooks.mainMenu(); }); y += step;
+  bool online = mp.online && mp.online();
+  if (online) { button(x, y, 500 * u_, h, 36 * u_, "LEAVE MULTIPLAYER", 23, [this] { if (mp.leave) mp.leave(); }); y += step; }
+  else { button(x, y, 360 * u_, h, 36 * u_, "MAIN MENU", 23, [this] { if (hooks.mainMenu) hooks.mainMenu(); }); y += step; }
   button(x, y, 500 * u_, h, 36 * u_, "RETURN TO VILLAGE", 19, [this] { if (hooks.village) hooks.village(); }); y += step + 8 * u_;
   button(x, y, 250 * u_, 62 * u_, 28 * u_, "QUIT GAME", 13, [this] { if (hooks.quit) hooks.quit(); });
+  if (online && mp.players) {   // (the world's players: session.js status pill, as a list)
+    std::vector<std::string> names = mp.players();
+    float px = float(ui_.width()) - 420 * u_, py = 170 * u_, pw = 330 * u_, rh = 30 * u_;
+    float ph = 60 * u_ + rh * float(std::min<size_t>(names.size(), 16));
+    panel(px, py, pw, ph);
+    ui_.text(px + 24 * u_, py + 16 * u_, std::max(11.f, 12 * u_), UiFont::Body, red, names.empty() ? "ONLINE" : upper(names[0]));
+    for (size_t i = 1; i < names.size() && i < 17; i++)
+      ui_.textFit(px + 24 * u_, py + 22 * u_ + rh * float(i), pw - 48 * u_, std::max(13.f, 18 * u_), UiFont::CondItalic, blue, names[i]);
+  }
   drawHints({{"updown", "Select"}, {"enter", "Confirm"}, {"esc", "Resume"}});
 }
 
@@ -624,7 +705,12 @@ void Menus::scrSettings() {
     ry += rowH;
   };
   actionRow("Skier", "Change skier", false, [this] { open(Screen::Showcase); }, "skier");
-  actionRow("Account", "Signed in as " + plat_.userName(), false, [this] { if (hooks.flash) hooks.flash("Online accounts come with multiplayer (Phase 6): this save is on this device", 0); }, "account");
+  {
+    std::string acc = mp.account ? mp.account() : "";
+    actionRow("Account", acc.empty() ? "Signed in as " + plat_.userName() : "Multiplayer: " + acc, false, [this, acc] {
+      if (hooks.flash) hooks.flash(acc.empty() ? "This save is on this device Â· PLAY -> MULTIPLAYER registers a name on the server" : "Your multiplayer name on this device: " + acc, 0);
+    }, "account");
+  }
   actionRow("Progress", "Reset all progress", true, [this] {
     confirmText_ = "Reset all progress? Money, skis, cars and stats start over.";
     confirmYes_ = [this] { if (hooks.resetProgress) hooks.resetProgress(); open(Screen::Settings, -1); };

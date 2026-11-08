@@ -29,6 +29,7 @@ public:
   std::vector<int> destinations(int from) const;
   bool board(int from, int to);
   bool riding() const { return ride_.on; }
+  int rideBus() const { return ride_.on ? ride_.bus : -1; }   // (Phase 6: the seat registry's 'bus:<n>')
   struct RideState { dvec3 seat{0}, fwd{0, 0, 1}; std::string hint; bool arrived = false; dvec3 exit{0}; };   // exit: x, z, heading
   RideState rideState() const;
   void abort() { ride_.on = false; }

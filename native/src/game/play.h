@@ -5,6 +5,7 @@
 #pragma once
 #include "core/input.h"
 #include "core/math.h"
+#include <nlohmann/json.hpp>
 #include <functional>
 #include <string>
 #include <utility>
@@ -52,6 +53,15 @@ struct PlayCtx {
   std::function<void(double x, double z, const std::string& label)> mark;   // the HUD's waypoint (trail map mark)
   std::function<void()> unmark;
   std::function<void()> fade;                                       // a short fade to dark (covers a teleport)
+  // (Phase 6) multiplayer: the server is authoritative (net/session.js); unset in single player
+  bool online = false;                                              // races are practice races (no fee, no prize)
+  std::function<void(int64_t amount, const std::string& source)> earnFrom;   // payouts by source ('job', 'sell')
+  std::function<void(const std::string& race)> raceSolo;            // a practice race at the server
+  std::function<void(double time, bool dnf)> raceFinished;          // your finish, at the line
+  std::function<std::string(int plot)> chaletOwner;                 // another player's chalet ("" none)
+  std::function<void(int plot, const std::string& name, std::function<void(bool)> done)> buyChalet;
+  std::function<void(int plot, const std::string& owner, std::function<void(bool, const nlohmann::json& furniture)> done)> visitChalet;
+  std::function<void(double seconds, const std::string& reason, bool onFoot)> onJail;   // a sentence starts
   std::string K(Action a) const;
 };
 

@@ -9,6 +9,7 @@
 #pragma once
 #include <nlohmann/json.hpp>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,10 @@ inline int wreckFee() { return WRECK_FEE + repairCost(1); }
 /// rescue.js: $300, +$25 per earlier rescue, at most $1,000
 constexpr int RESCUE_FEE_BASE = 300, RESCUE_FEE_STEP = 25, RESCUE_FEE_MAX = 1000;
 
+/// economy.js DEVICE_PREFS: this machine's settings, not progress (besides every SETTINGS key): kept in the
+/// single-player save while multiplayer has swapped the save for the server profile (Phase 6)
+inline constexpr const char* kDevicePrefs[] = {"quality", "qualitySet", "qualityCap", "sensitivity", "volume", "binds"};
+
 /// core/settings.js SETTING_DEFAULTS (+ the menu's volume / sensitivity)
 nlohmann::json settingDefaults();
 
@@ -46,6 +51,9 @@ public:
   void reset();                                        // a new save (economy.js `save` defaults)
   bool load(platform::Platform& p);                    // false: no save yet (defaults kept)
   bool write(platform::Platform& p);                   // writeSave()
+  /// (Phase 6) while multiplayer runs, write() calls this instead: the profile lives on the server, only the device
+  /// settings go into the stored file, and the session pushes the parts the player owns (economy.js writeSave)
+  std::function<bool(Save&)> mpWrite;
   void markDirty() { dirty_ = true; }
   /// (Phase 5) the web save's other keys in their JSON shape (records, jobs, chalet, policeRecord, impound, jail...):
   /// the entry (created as `def` when missing or of another type); written back with the save

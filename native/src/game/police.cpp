@@ -541,6 +541,7 @@ void Police::jail(double seconds, const std::string& reason) {
   r["longest"] = std::max(r.value("longest", 0.0), seconds);
   c_.save->data("jail") = {{"left", seconds}, {"reason", reason}};
   c_.save->markDirty();
+  if (c_.onJail) c_.onJail(seconds, reason, !c_.driving);   // (Phase 6: the server's sentence, your passengers too)
   SL_INFO("prison: %.0f s (%s)", seconds, reason.c_str());
 }
 

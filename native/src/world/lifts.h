@@ -66,6 +66,13 @@ public:
   bool riding() const { return ride_.line != nullptr; }
   LiftLine* rideLine() const { return ride_.line; }
   double rideProgress() const;   // 0..1 along the ride
+  /// (Phase 6) the cabin / chair you ride as the server's vehicle id ('L<line>-<car>'), its kind and seats; "" if none
+  std::string rideVehicle(std::string& kind, int& seats) const {
+    if (!ride_.line) return "";
+    kind = ride_.line->gondola ? "gondola" : "chair";
+    seats = ride_.line->gondola ? 6 : 4;
+    return "L" + std::to_string(ride_.line - lines_.data()) + "-" + std::to_string(ride_.idx);
+  }
   std::vector<LiftLine>& lines() { return lines_; }
   double timeScale = 1;
 

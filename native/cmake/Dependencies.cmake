@@ -79,6 +79,21 @@ FetchContent_Declare(zstd
   GIT_SHALLOW TRUE
   SOURCE_SUBDIR build/cmake)
 
+# ---------------------------------------------------------------- mbedTLS: TLS for the multiplayer client (wss://, Phase 6)
+# The release tarball (generated sources included: no Perl / Python step). Only the libraries: no programs, no tests.
+# Linked by net/ (socket_stream.cpp); a Switch build swaps that file for nn::socket + nn::ssl and drops this.
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+set(DISABLE_PACKAGE_CONFIG_AND_INSTALL ON CACHE BOOL "" FORCE)
+set(GEN_FILES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(mbedtls
+  URL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2
+  URL_HASH SHA256=8b54fb9bcf4d5a7078028e0520acddefb7900b3e66fec7f7175bb5b7d85ccdca
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+
 # ---------------------------------------------------------------- header-only libraries
 FetchContent_Declare(cgltf
   GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
@@ -93,7 +108,7 @@ FetchContent_Declare(json
   URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 
-FetchContent_MakeAvailable(SDL2 glm meshoptimizer libwebp glad json zstd)
+FetchContent_MakeAvailable(SDL2 glm meshoptimizer libwebp glad json zstd mbedtls)
 FetchContent_GetProperties(cgltf)
 if(NOT cgltf_POPULATED)
   FetchContent_Populate(cgltf)
@@ -107,7 +122,7 @@ add_library(sl_headeronly INTERFACE)
 target_include_directories(sl_headeronly SYSTEM INTERFACE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR} ${libwebp_SOURCE_DIR}/src ${zstd_SOURCE_DIR}/lib)
 
 # quiet the third-party code
-foreach(t SDL2-static meshoptimizer webp webpdecode webpdsp webputils sharpyuv glad libzstd_static)
+foreach(t SDL2-static meshoptimizer webp webpdecode webpdsp webputils sharpyuv glad libzstd_static mbedtls mbedx509 mbedcrypto everest p256m)
   if(TARGET ${t})
     set_target_properties(${t} PROPERTIES FOLDER "third_party")
     if(MSVC)

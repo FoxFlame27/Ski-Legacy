@@ -4,6 +4,7 @@
 //   ski_legacy --autotest [--frames N] [--png out.png]   load, ski a run for N frames, walk into a hotel, ride a gondola,
 //                                                        print stats, exit 0 on success
 //   ski_legacy --verify-heights                          compare the C++ terrain with the JavaScript reference samples
+//   ski_legacy --mptest ws://127.0.0.1:8787/ws [--mp-peers N]   the multiplayer check against a running server
 #include "game/game.h"
 #include "core/log.h"
 #include <SDL.h>   // SDL_main on Windows / macOS
@@ -31,11 +32,16 @@ int main(int argc, char** argv) {
     else if (a == "--bindings") o.bindings = next();
     else if (a == "--neutral") o.toneMap = 1;
     else if (a == "--hour") o.hour = std::atof(next().c_str());
+    else if (a == "--server") o.server = next();
+    else if (a == "--mptest") o.mptest = next();
+    else if (a == "--mp-peers") o.mpPeers = std::max(0, std::atoi(next().c_str()));
+    else if (a == "--mp-seconds") o.mpSeconds = std::max(1.0, std::atof(next().c_str()));
     else if (a == "--size") { std::string s = next(); std::sscanf(s.c_str(), "%dx%d", &o.width, &o.height); }
     else if (a == "--help" || a == "-h") {
       std::puts("ski_legacy [--quality low|medium|high|ultra] [--spawn village|piste] [--fullscreen] [--size WxH] [--no-vsync]\n"
                 "           [--bindings binds.json] [--neutral] [--hour 0-24] [--no-menu] [--save name.json]\n"
-                "           [--autotest [--frames N] [--png out.png]] [--verify-heights]");
+                "           [--autotest [--frames N] [--png out.png]] [--verify-heights]\n"
+                "           [--server wss://host/ws] [--mptest ws://127.0.0.1:PORT/ws [--mp-peers N] [--mp-seconds S]]");
       return 0;
     } else SL_WARN("unknown option %s", a.c_str());
   }

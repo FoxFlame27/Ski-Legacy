@@ -30,6 +30,13 @@ public:
   bool riding() const { return ride_.on; }
   double cycle() const { return t_.rail.cycle; }
   bool insideView = false;   // the seat view: the car you ride in drawn with its cabin
+  /// (Phase 6, transit.js) multiplayer: the line's shared timeline (s: the server clock + its speed-up, 'train|rail');
+  /// set, the trains run on it, nobody jumps the timetable, and you board only a train standing at the platform
+  std::function<double()> mpTime;
+  int rideTrain() const { return ride_.on ? ride_.train : -1; }
+  /// (multiplayer) a train stands at station `st` going your way (board() would take you): check before paying
+  bool trainReady(int st, bool up) const;
+  int seatCount() const { return ncars_ * 48; }
 
 private:
   struct State { double s = 0; int dir = 0; double speed = 0; int at = -1; std::string leg; };
@@ -67,6 +74,13 @@ public:
   bool riding() const { return ride_.on; }
   double rideTime(int a, int b, int dir) const;
   bool insideView = false;
+  /// (Phase 6) multiplayer: each direction on its shared timeline (s; 'express|e' up, 'express|w' down)
+  std::function<double(int dir)> mpTime;
+  /// the train you ride as the server's vehicle id ('express-e0'...), "" when not riding
+  std::string rideVehicle() const;
+  int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
+  /// (multiplayer) a train for `to` stands at `from` for 4 s more: check before paying
+  bool trainReady(int from, int to) const;
 
 private:
   struct Seg { bool dwell; int st, a, b, ia, ib; double t0, dur; };

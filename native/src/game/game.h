@@ -1,4 +1,4 @@
-// The game (Phases 1-4): boots the platform, renderer and world, runs the main loop (fixed 120 Hz simulation with
+// The game (Phases 1-6): boots the platform, renderer and world, runs the main loop (fixed 120 Hz simulation with
 // interpolated rendering), and hosts the skier on the mountain. Also the headless --autotest and --verify-heights.
 #pragma once
 #include <string>
@@ -20,6 +20,11 @@ struct GameOptions {
   std::string bindings;          // JSON file with web-style { kb: {...}, pad: {...} } overrides
   int toneMap = 0;               // 0 ACES, 1 Neutral
   double hour = -1;              // time of day to start at (default 10:00; it runs on 24 h / 16 min like sky.js)
+  // (Phase 6) multiplayer
+  std::string server;            // --server URL (else SKI_LEGACY_SERVER, else the game's wss:// server)
+  std::string mptest;            // --mptest ws://127.0.0.1:PORT/ws: the multiplayer check against a server
+  int mpPeers = 0;               // --mp-peers N: the check also waits for N other players to show up
+  double mpSeconds = 8;          // --mp-seconds S: presence sent this long
 };
 
 int runGame(const GameOptions& opt);

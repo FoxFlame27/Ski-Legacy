@@ -47,6 +47,9 @@ public:
   int furnitureCount() const;
   int houseNear(const dvec3& p, double r) const;
   std::string objective() const;
+  /// (Phase 6) the plot id of the chalet you are in (-1 outside): the presence's interior 'chalet:<id>'
+  int insidePlot() const;
+  bool visiting() const { return visiting_ && inside(); }
 private:
   struct Fit { std::shared_ptr<Model> model; mat4 local{1}; vec3 dims{1}; };
   const Fit* fitFor(const FurnitureDef& d);
@@ -60,6 +63,8 @@ private:
   std::vector<std::pair<std::string, Fit>> fits_;
   int insideHouse_ = -1;
   bool build_ = false, vmouse_ = false;
+  bool visiting_ = false;                       // (Phase 6) in another player's chalet
+  nlohmann::json guestFurniture_ = nlohmann::json::array();
   int cat_ = 0, item_ = 0;
   std::string hand_;           // the item in hand ("" none)
   double rot_ = 0;

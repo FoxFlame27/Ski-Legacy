@@ -215,6 +215,9 @@ bool Races::interact(std::string& prompt, bool pressed) {
 
 // ---------------------------------------------------------------- the session
 bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool teleport) {
+  // (Phase 6) multiplayer: a practice race (session.js raceSolo: just you, no entry fee, no prize, nothing counted;
+  // the server's queues for 2+ racers are not ported yet)
+  if (c_.online) { forMoney = false; practice = true; ai = 0; if (c_.raceSolo) c_.raceSolo(co.id); }
   if (forMoney && !co.bus && co.entry > 0 && !c_.spend(co.entry)) return false;
   auto s = std::make_unique<Session>();
   s->c = &co;
@@ -320,6 +323,7 @@ void Races::showResults() {
   std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.t < b.t; });
   for (size_t i = 0; i < rows.size(); i++) if (rows[i].you) s.place = int(i) + 1;
   int field = int(rows.size());
+  if (c_.online && c_.raceFinished) c_.raceFinished(s.finalTime, false);
   // the prize (freeworld.js prize / busracedefs.js busRacePrize) and records.js submitPlace
   if (s.forMoney) {
     if (s.c->bus) {

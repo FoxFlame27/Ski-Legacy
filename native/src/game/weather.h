@@ -10,6 +10,7 @@
 #include "engine/renderer.h"
 #include "game/shapes.h"
 #include "game/vehicles.h"
+#include <algorithm>
 #include <string>
 
 namespace sl {
@@ -28,6 +29,8 @@ public:
   /// the falling snow round the camera
   void drawSnow(Renderer& r, VehicleDraw& vd, gfx::Device& dev, Shapes& shapes, const Camera& cam, double dt, bool indoors);
   void set(int w);   // setWeather (the forecast moves on)
+  /// (Phase 6) multiplayer: the world's weather from the server's clock, its forecast and when it comes (s)
+  void serverSet(int w, int next, double in) { if (w >= 0) set(w); if (next >= 0 && next < N) next_ = next; timer = std::max(0.0, in) + 5; }
   int current() const { return cur_; }
   std::string label() const { return def(cur_).label; }
   std::string forecast() const;   // "Later: Blizzard" or ""

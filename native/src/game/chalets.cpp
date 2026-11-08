@@ -76,6 +76,7 @@ void Chalets::load(AssetManager& assets) {
 }
 
 bool Chalets::owned() const { return ownedHouse() >= 0; }
+int Chalets::insidePlot() const { return inside() && insideHouse_ >= 0 ? c_.data->chalets[size_t(insideHouse_)].id : -1; }
 int Chalets::ownedHouse() const {
   const nlohmann::json& ch = c_.save->data("chalet");
   if (!ch.is_object() || !ch.value("owned", false) || !ch.contains("id")) return -1;
@@ -98,6 +99,15 @@ int Chalets::houseNear(const dvec3& p, double r) const {
 
 bool Chalets::buy(int i) {
   if (i < 0 || owned()) return false;
+  if (c_.buyChalet) {   // (Phase 6) multiplayer: the server sells it (one each, the plot free) and takes the money
+    const ChaletHouse& h = c_.data->chalets[size_t(i)];
+    c_.buyChalet(h.id, h.name, [this, i](bool ok) {
+      if (!ok) return;
+      c_.flash(c_.data->chalets[size_t(i)].name + " is yours \xC2\xB7 unfurnished: " + c_.K(Action::Furnish) + " inside to furnish it", 2);
+      goInside(i);
+    });
+    return false;
+  }
   if (!c_.spend(c_.data->chaletPrice)) return false;
   const ChaletHouse& h = c_.data->chalets[size_t(i)];
   nlohmann::json& ch = c_.save->data("chalet");
@@ -115,7 +125,7 @@ void Chalets::goInside(int i) {
   if (c_.fade) c_.fade();
   double ox = h.doorX + std::cos(h.yaw) * 1.5 * 0 + std::sin(h.yaw + PI / 2) * 1.2, oz = h.doorZ + std::cos(h.yaw + PI / 2) * 1.2;
   double heading = h.yaw + PI / 2;
-  rooms_.enter(Interiors::Room::Chalet, [this, ox, oz, heading]() { build_ = false; vmouse_ = false; insideHouse_ = -1; if (c_.fade) c_.fade(); c_.teleport(ox, oz, heading, false); });
+  rooms_.enter(Interiors::Room::Chalet, [this, ox, oz, heading]() { build_ = false; vmouse_ = false; insideHouse_ = -1; visiting_ = false; if (c_.fade) c_.fade(); c_.teleport(ox, oz, heading, false); });
   rebuildFurniture();
 }
 
@@ -162,7 +172,9 @@ void Chalets::rebuildFurniture() {
   if (!inside()) return;
   // the room's own props stay; the furniture is re-added from the save
   rooms_.props.clear();
-  const nlohmann::json& ch = c_.save->data("chalet");
+  const nlohmann::json& own = c_.save->data("chalet");
+  nlohmann::json guest = {{"furniture", guestFurniture_}};
+  const nlohmann::json& ch = visiting_ ? guest : own;   // (Phase 6: visiting, the owner's furniture)
   if (!ch.contains("furniture") || !ch["furniture"].is_array()) return;
   double G = c_.data->chaletPlan.floorY;
   int idx = 0;
@@ -243,7 +255,7 @@ void Chalets::sell(int i) {
   const FurnitureDef* d = c_.data->furnitureById(ch["furniture"][size_t(i)].value("id", std::string()));
   int refund = d ? int(std::round(d->price * c_.data->sellRefund)) : 0;
   ch["furniture"].erase(size_t(i));
-  c_.earn(refund);
+  if (c_.earnFrom) c_.earnFrom(refund, "sell"); else c_.earn(refund);
   c_.save->markDirty();
   rebuildFurniture();
   c_.flash((d ? d->name : std::string("Furniture")) + " sold \xC2\xB7 +" + fmtMoney(refund), 0);
@@ -271,6 +283,21 @@ bool Chalets::interact(std::string& prompt, bool pressed) {
   const ChaletHouse& h = c_.data->chalets[size_t(i)];
   int mine = ownedHouse();
   if (mine == i) { prompt = h.name + " \xC2\xB7 go inside"; if (pressed) goInside(i); return true; }
+  // (Phase 6) another player's chalet: ask them (they get Y / N), then in you go with their furniture
+  std::string other = c_.chaletOwner ? c_.chaletOwner(h.id) : "";
+  if (!other.empty()) {
+    prompt = other + "'s chalet \xC2\xB7 ask to visit";
+    if (pressed && c_.visitChalet) {
+      c_.flash("Asking " + other + " to let you in...", 0);
+      c_.visitChalet(h.id, other, [this, i](bool ok, const nlohmann::json& furniture) {
+        if (!ok) return;
+        guestFurniture_ = furniture.is_array() ? furniture : nlohmann::json::array();
+        visiting_ = true;
+        goInside(i);
+      });
+    }
+    return true;
+  }
   if (mine >= 0) { prompt = h.name; if (pressed) c_.flash("You already own " + c_.data->chalets[size_t(mine)].name + " (one each)", 1); return true; }
   prompt = h.name + " for sale \xC2\xB7 " + fmtMoney(c_.data->chaletPrice);
   if (pressed) {

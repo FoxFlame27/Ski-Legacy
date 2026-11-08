@@ -4,7 +4,9 @@
 //   3. the repository: <repo>/public (models, audio) and <repo>/native/data (exported world data), found by walking
 //      up from the executable, then from the source tree the binary was built from
 #pragma once
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace sl {
 namespace platform { class Platform; }
@@ -16,6 +18,8 @@ public:
   std::string model(const std::string& name) const { return publicRoot + "/models/" + name + ".glb"; }
   /// "world.json" -> absolute path in the exported data folder.
   std::string data(const std::string& file) const { return dataRoot + "/" + file; }
+  /// Reads an exported data file: "<file>.zst" (zstd, as tools/datafile.mjs writes it) inflated, else the plain file.
+  bool readData(platform::Platform& p, const std::string& file, std::vector<uint8_t>& out) const;
   std::string publicRoot, dataRoot;
 };
 } // namespace sl

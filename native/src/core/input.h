@@ -36,6 +36,9 @@ public:
   void update(platform::Platform& p, const platform::Events& ev);
   /// Forget all held state (focus lost, menus).
   void clear();
+  /// (menus closing) actions held right now stay ignored until released: the key or button that closed a menu does
+  /// not also jump / pause in the game
+  void holdOff() { holdOff_.fill(true); }
 
   bool down(Action a) const { return down_[size_t(a)]; }
   /// Edge triggered: true once per press, consumed by the call (so a press is seen by exactly one fixed tick).
@@ -54,6 +57,20 @@ public:
   /// Last time (s) the mouse / right stick moved (the camera's auto-follow waits for it to rest).
   double lastLookTime() const { return lastLook_; }
 
+  /// (Phase 4, menus) the active controller's raw state this frame and button edges (any button, by position)
+  bool padConnected() const { return havePad_; }
+  const platform::GamepadState& padState() const { return gp_; }
+  bool padPressed(int b) const { return havePad_ && b >= 0 && b < platform::kPadButtons && gp_.buttons[b] > 0.5f && prevButtons_[size_t(b)] <= 0.5f; }
+  bool padDown(int b) const { return havePad_ && b >= 0 && b < platform::kPadButtons && gp_.buttons[b] > 0.5f; }
+  /// the current bindings as the web save's `binds` ({ kb: {...}, pad: {...} }, only what differs from the defaults)
+  nlohmann::json bindingsJson() const;
+  static platform::Key defaultKey(Action a);
+  static int defaultPad(Action a);
+
+  // SETTINGS (core/settings.js): mouse / controller look sensitivity, invert Y, controller vibration
+  float mouseSens = 1, padSens = 1;
+  bool invertY = false, vibration = true;
+
   /// Rumble on the active controller (no-op without one). low / high 0..1.
   void rumble(platform::Platform& p, float low, float high, uint32_t ms);
 
@@ -67,14 +84,16 @@ public:
 
 private:
   void setDown(size_t i, bool d);
-  std::array<bool, kActionCount> down_{};
+  std::array<bool, kActionCount> down_{}, holdOff_{};
   std::array<int, kActionCount> pressed_{}, released_{};
   std::array<int8_t, kActionCount> forced_ = filled(-1);
   bool forcedMove_ = false;
   float fmx_ = 0, fmy_ = 0;
   static std::array<int8_t, kActionCount> filled(int8_t v) { std::array<int8_t, kActionCount> a; a.fill(v); return a; }
   float moveX_ = 0, moveY_ = 0, lookX_ = 0, lookY_ = 0, wheel_ = 0;
-  bool padActive_ = false;
+  bool padActive_ = false, havePad_ = false;
+  platform::GamepadState gp_{};
+  std::array<float, platform::kPadButtons> prevButtons_{};
   int activePad_ = -1;
   platform::PadFamily family_ = platform::PadFamily::Xbox;
   double lastLook_ = -1e9;

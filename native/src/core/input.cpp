@@ -52,6 +52,18 @@ void Input::resetBindings() {
   }
 }
 
+platform::Key Input::defaultKey(Action a) { return platform::keyFromCode(kKbDefault[size_t(a)]); }
+int Input::defaultPad(Action a) { return kPadDefault[size_t(a)]; }
+
+nlohmann::json Input::bindingsJson() const {
+  nlohmann::json kbj = nlohmann::json::object(), padj = nlohmann::json::object();
+  for (size_t i = 0; i < kActionCount; i++) {
+    if (!kActions[i].padOnly && kb[i] != defaultKey(Action(i))) kbj[kActions[i].id] = platform::keyCode(kb[i]);
+    if (pad[i] != kPadDefault[i] && pad[i] >= 0) padj[kActions[i].id] = pad[i];
+  }
+  return nlohmann::json{{"kb", kbj}, {"pad", padj}};
+}
+
 void Input::applyBindings(const nlohmann::json& b) {
   auto find = [](const std::string& id) -> int {
     for (size_t i = 0; i < kActionCount; i++) if (id == kActions[i].id) return int(i);
@@ -89,8 +101,11 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     if (activePad_ < 0 || (touched && i != activePad_)) activePad_ = i;
     if (i == activePad_) { gp = s; havePad = true; }
   }
+  for (int k = 0; k < platform::kPadButtons; k++) prevButtons_[size_t(k)] = havePad_ ? gp_.buttons[k] : 0.f;
+  havePad_ = havePad;
+  gp_ = havePad ? gp : platform::GamepadState{};
   if (havePad) family_ = gp.family;
-  bool anyKey = !ev.pressed.empty() || ev.mouseDX != 0 || ev.mouseDY != 0;
+  bool anyKey = !ev.pressed.empty() || ev.mouseDX != 0 || ev.mouseDY != 0 || ev.mouseMoved || ev.mousePressed;
   bool anyPad = false;
   if (havePad) {
     for (float v : gp.buttons) anyPad = anyPad || v > 0.5f;
@@ -103,6 +118,7 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     bool d = kb[i] != Key::Unknown && p.keyDown(kb[i]);
     if (havePad && pad[i] >= 0 && pad[i] < platform::kPadButtons) d = d || gp.buttons[pad[i]] > 0.5f;
     if (forced_[i] >= 0) d = forced_[i] > 0;
+    else if (holdOff_[i]) { if (d) d = false; else holdOff_[i] = false; }
     setDown(i, d);
   }
   // arrow keys move too (player.js reads both)
@@ -125,18 +141,18 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     if (sx < -0.5f) setDown(size_t(Action::Left), true);
     if (sx > 0.5f) setDown(size_t(Action::Right), true);
   }
-  lookX_ = ev.mouseDX; lookY_ = ev.mouseDY; wheel_ = ev.wheel;
+  lookX_ = ev.mouseDX * mouseSens; lookY_ = ev.mouseDY * mouseSens * (invertY ? -1.f : 1.f); wheel_ = ev.wheel;
   if (havePad) {
     auto dz = [](float v) { return std::fabs(v) < 0.15f ? 0.f : (v - (v > 0 ? 0.15f : -0.15f)) / 0.85f; };
     float rx = dz(gp.rightX), ry = dz(gp.rightY);
-    lookX_ += rx * std::fabs(rx) * 18.f; // ~ mouse pixels per frame at full deflection
-    lookY_ += ry * std::fabs(ry) * 12.f;
+    lookX_ += rx * std::fabs(rx) * 18.f * padSens; // ~ mouse pixels per frame at full deflection
+    lookY_ += ry * std::fabs(ry) * 12.f * padSens * (invertY ? -1.f : 1.f);
   }
   if (lookX_ != 0 || lookY_ != 0) lastLook_ = p.timeSeconds();
 }
 
 void Input::rumble(platform::Platform& p, float low, float high, uint32_t ms) {
-  if (activePad_ >= 0) p.rumble(activePad_, low, high, ms);
+  if (activePad_ >= 0 && vibration) p.rumble(activePad_, low, high, ms);
 }
 
 } // namespace sl

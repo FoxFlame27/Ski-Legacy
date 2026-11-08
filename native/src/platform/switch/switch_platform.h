@@ -18,7 +18,10 @@
 //      X = 3, L/R = 4/5, ZL/ZR = 6/7 (digital on Switch: report 0 or 1), Minus/Plus = 8/9, stick clicks 10/11,
 //      d-pad 12-15, Home is reserved by the system (index 16 never fires).
 //    - Controller applet (nn::hid::ShowControllerSupport) when no controller is connected / to pick players.
-//    - keyDown(): always false (no keyboard); setRelativeMouse(): no-op.
+//    - keyDown(): always false (no keyboard); setRelativeMouse(): no-op; Events::mouse*: no pointer (-1) unless the
+//      touch screen is mapped to it in handheld mode (menus accept a tap as a click); setFullscreen / setVsync: no-op.
+//    - Menus (Phase 4) confirm with A (index 1) and back out with B (index 0) on Switch, like every Switch game:
+//      core/prompts.cpp confirmButton() / backButton() swap them for PadFamily::Switch.
 //
 //  Rumble (nn::hid vibration)
 //    - rumble(low, high, ms): HD Rumble amplitude/frequency pairs (low band ~160 Hz, high band ~320 Hz).
@@ -27,7 +30,8 @@
 //    - readFile: the read-only ROM file system ("rom:/" mounted with nn::fs::MountRom); package assets/ there.
 //    - saveDir/writeSave/readSave: the user's save data ("save:/" via nn::fs::MountSaveData for the preselected
 //      account), commit after every write (nn::fs::CommitSaveData). Keep saves small; journal size is declared in
-//      the application's .nmeta.
+//      the application's .nmeta. The game writes one JSON save (game/economy.cpp, ~10 KB, "ski-legacy-save-v1.json")
+//      on purchases, settings changes and every 60 s (autosave); writeSave must be atomic (write + commit).
 //
 //  User account (nn::account)
 //    - userName(): nickname of the preselected user (StartupUserAccount in .nmeta). Online play needs a Nintendo

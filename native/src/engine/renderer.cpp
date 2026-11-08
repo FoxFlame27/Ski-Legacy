@@ -412,7 +412,7 @@ void Renderer::endFrame() {
   dev_->bindRenderTarget(shadow_, set_.shadowSize, set_.shadowSize);
   dev_->clear(0, 0, 0, 0, false, true);
   dev_->bindUniformBuffer(0, shadowUbo_);
-  drawItems(true);
+  if (shadowsOn) drawItems(true);   // (off: the cleared map shadows nothing)
 
   // main pass (HDR)
   dev_->bindRenderTarget(hdr_, rw_, rh_);

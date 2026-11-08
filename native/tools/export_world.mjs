@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeData, filterGrid } from './datafile.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(HERE, '../../src');
@@ -67,7 +68,7 @@ const cm = world.cragMask;
 {
   const buf = Buffer.alloc(cm.nx * cm.nz * 2);
   for (let i = 0; i < cm.nx * cm.nz; i++) buf.writeUInt16LE(Math.min(65535, Math.max(0, Math.round(cm.d[i] * 10))), i * 2);
-  fs.writeFileSync(path.join(OUT, 'crag.bin'), buf);
+  writeData(OUT, 'crag.bin', buf);
 }
 log('crag mask', cm.nx, 'x', cm.nz);
 
@@ -114,19 +115,25 @@ const regAt = (x, z) => { // the C++ bilinear region delta
   for (const t of regTiles.values()) {
     let mx = 0;
     for (const v of t.d) mx = Math.max(mx, Math.abs(v));
-    const scale = Math.max(mx, 1e-6) / 32767;
-    const b = Buffer.alloc(12 + RS1 * RS1 * 3 + ((RS1 * RS1 * 3) % 4 ? 4 - ((RS1 * RS1 * 3) % 4) : 0));
-    b.writeInt32LE(t.tx, 0); b.writeInt32LE(t.tz, 4); b.writeFloatLE(scale, 8);
-    for (let k = 0; k < RS1 * RS1; k++) b.writeInt16LE(Math.round(t.d[k] / scale), 12 + k * 2);
-    for (let k = 0; k < RS1 * RS1; k++) b.writeUInt8(t.f[k] < 0 ? 255 : Math.round(Math.min(1, t.f[k]) * 254), 12 + RS1 * RS1 * 2 + k);
+    // (8 m grid, already ~0.5 m off the JS inside the regions: a 5 mm step is plenty and compresses far better)
+    const scale = Math.max(mx / 32767, 0.005);
+    const N = RS1 * RS1, q = new Int16Array(N), f = Buffer.alloc(N);
+    for (let k = 0; k < N; k++) q[k] = Math.round(t.d[k] / scale);
+    for (let k = 0; k < N; k++) f[k] = t.f[k] < 0 ? 255 : Math.round(Math.min(1, t.f[k]) * 254);
+    const fd = Buffer.alloc(N);
+    for (let k = 0; k < N; k++) fd[k] = (f[k] - (k ? f[k - 1] : 0)) & 255;
+    const h = Buffer.alloc(12);
+    h.writeInt32LE(t.tx, 0); h.writeInt32LE(t.tz, 4); h.writeFloatLE(scale, 8);
+    chunksR.push(h, filterGrid(q, RS1), fd);
     // (the deltas as the C++ reads them back: the cut tiles are taken against these)
-    for (let k = 0; k < RS1 * RS1; k++) t.d[k] = Math.round(t.d[k] / scale) * scale;
-    chunksR.push(b);
+    for (let k = 0; k < N; k++) t.d[k] = q[k] * scale;
   }
+  // SLR2: per tile tx, tz (int32), scale (float), the filtered int16 grid (datafile.mjs filterGrid), the forest bytes
+  // as differences (255 = outside every region)
   const head = Buffer.alloc(16);
-  head.write('SLRG', 0); head.writeInt32LE(RCELL, 4); head.writeInt32LE(RTILE, 8); head.writeInt32LE(chunksR.length, 12);
-  fs.writeFileSync(path.join(OUT, 'regions.bin'), Buffer.concat([head, ...chunksR]));
-  log('region tiles', chunksR.length);
+  head.write('SLR2', 0); head.writeInt32LE(RCELL, 4); head.writeInt32LE(RTILE, 8); head.writeInt32LE(regTiles.size, 12);
+  writeData(OUT, 'regions.bin', Buffer.concat([head, ...chunksR]));
+  log('region tiles', regTiles.size);
 }
 
 // ---------------------------------------------------------------- terrain cuts -> sparse delta tiles
@@ -174,16 +181,19 @@ for (const [tx, tz] of tileList) {
     d[j * S1 + i] = v; mx = Math.max(mx, Math.abs(v));
   }
   if (mx < 0.003) continue;
-  const scale = mx / 32767;
-  const b = Buffer.alloc(12 + S1 * S1 * 2);
-  b.writeInt32LE(tx, 0); b.writeInt32LE(tz, 4); b.writeFloatLE(scale, 8);
-  for (let k = 0; k < S1 * S1; k++) b.writeInt16LE(Math.round(d[k] / scale), 12 + k * 2);
-  chunks.push(b); kept++;
+  // (a 1 mm step at the finest: within the 2.5 mm the physics surface is checked to, and it compresses well)
+  const scale = Math.max(mx / 32767, 0.001);
+  const q = new Int16Array(S1 * S1);
+  for (let k = 0; k < S1 * S1; k++) q[k] = Math.round(d[k] / scale);
+  const h = Buffer.alloc(12);
+  h.writeInt32LE(tx, 0); h.writeInt32LE(tz, 4); h.writeFloatLE(scale, 8);
+  chunks.push(h, filterGrid(q, S1)); kept++;
 }
 {
+  // SLC2: per tile tx, tz (int32), scale (float), the filtered int16 grid (datafile.mjs filterGrid)
   const head = Buffer.alloc(16);
-  head.write('SLCT', 0); head.writeInt32LE(CELL, 4); head.writeInt32LE(TILE, 8); head.writeInt32LE(kept, 12);
-  fs.writeFileSync(path.join(OUT, 'cuts.bin'), Buffer.concat([head, ...chunks]));
+  head.write('SLC2', 0); head.writeInt32LE(CELL, 4); head.writeInt32LE(TILE, 8); head.writeInt32LE(kept, 12);
+  writeData(OUT, 'cuts.bin', Buffer.concat([head, ...chunks]));
 }
 log('cut tiles', kept, 'of', tileList.length, 'candidates');
 
@@ -237,11 +247,15 @@ const out = {
   spawn: { village: { x: 4, z: 34, heading: Math.PI } },
   refs,
 };
-fs.writeFileSync(path.join(OUT, 'world.json'), JSON.stringify(out));
-log('wrote', path.join(OUT, 'world.json'), (fs.statSync(path.join(OUT, 'world.json')).size / 1024).toFixed(0) + ' KB');
+log('wrote', path.join(OUT, 'world.json.zst'), (writeData(OUT, 'world.json', JSON.stringify(out)) / 1024).toFixed(0) + ' KB');
 
 // ---------------------------------------------------------------- Phase 2: the resort (its own process: loader hooks)
 {
   const r = spawnSync(process.execPath, [path.join(HERE, 'export_resort.mjs')], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('export_resort.mjs failed'); process.exitCode = 1; }
+}
+// ---------------------------------------------------------------- Phase 4: the UI fonts
+{
+  const r = spawnSync(process.execPath, [path.join(HERE, 'export_fonts.mjs')], { stdio: 'inherit' });
+  if (r.status !== 0) { console.error('export_fonts.mjs failed'); process.exitCode = 1; }
 }

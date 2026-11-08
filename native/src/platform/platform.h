@@ -58,7 +58,13 @@ struct Events {
   bool resized = false;
   bool focusLost = false;
   float mouseDX = 0, mouseDY = 0, wheel = 0;
+  // (Phase 4, menus) the pointer in drawable pixels (top-left origin) while it is not captured, and button edges
+  float mouseX = -1, mouseY = -1;
+  bool mouseMoved = false;
+  uint8_t mouseButtons = 0;                  // held: bit 0 left, 1 right, 2 middle
+  uint8_t mousePressed = 0, mouseReleased = 0; // edges this frame (same bits)
   std::vector<Key> pressed, released; // edges this frame (keyboard)
+  std::vector<Key> repeated;          // key auto-repeat this frame (menus: held arrows step through lists)
 };
 
 // ---------------------------------------------------------------- audio
@@ -75,8 +81,12 @@ public:
   virtual void* glProcAddress(const char* name) = 0;  // GL loader hook (nullptr on non-GL backends)
   virtual void swapBuffers() = 0;
   virtual void drawableSize(int& w, int& h) const = 0;
-  virtual void setRelativeMouse(bool on) = 0;
+  virtual void setRelativeMouse(bool on) = 0;   // capture the mouse for looking (the game asks on a click in play)
   virtual bool relativeMouse() const = 0;
+  /// (Phase 4, SETTINGS) desktop: borderless fullscreen / windowed, vsync. A console ignores both (always full screen).
+  virtual void setFullscreen(bool on) = 0;
+  virtual bool fullscreen() const = 0;
+  virtual void setVsync(bool on) = 0;
 
   // input
   virtual void pollEvents(Events& out) = 0;

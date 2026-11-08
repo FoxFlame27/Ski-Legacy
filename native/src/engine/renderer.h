@@ -81,6 +81,10 @@ class Renderer {
 public:
   bool init(gfx::Device& dev, const RenderSettings& s);
   void resize(int w, int h);
+  /// (SETTINGS) 3D resolution scale and the sun's shadows, live
+  void setRenderScale(float s) { set_.renderScale = s; resize(w_, h_); }
+  float renderScale() const { return set_.renderScale; }
+  bool shadowsOn = true;
   int width() const { return w_; }
   int height() const { return h_; }
   gfx::Texture noiseTexture() const { return noise_; }

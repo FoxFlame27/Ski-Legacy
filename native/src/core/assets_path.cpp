@@ -3,6 +3,7 @@
 #include "platform/platform.h"
 #include <cstdlib>
 #include <filesystem>
+#include <zstd.h>
 
 namespace sl {
 namespace fs = std::filesystem;
@@ -10,7 +11,7 @@ namespace fs = std::filesystem;
 bool AssetPaths::init(platform::Platform& p) {
   auto ok = [&](const fs::path& pub, const fs::path& data) {
     std::error_code ec;
-    if (fs::exists(pub / "models", ec) && fs::exists(data / "world.json", ec)) {
+    if (fs::exists(pub / "models", ec) && (fs::exists(data / "world.json.zst", ec) || fs::exists(data / "world.json", ec))) {
       publicRoot = fs::weakly_canonical(pub).generic_string();
       dataRoot = fs::weakly_canonical(data).generic_string();
       return true;
@@ -29,5 +30,17 @@ bool AssetPaths::init(platform::Platform& p) {
 #endif
   SL_ERROR("assets not found: set SKI_LEGACY_ASSETS or build with -DSL_COPY_ASSETS=ON");
   return false;
+}
+bool AssetPaths::readData(platform::Platform& p, const std::string& file, std::vector<uint8_t>& out) const {
+  std::vector<uint8_t> z;
+  if (p.readFile(data(file + ".zst"), z)) {
+    unsigned long long n = ZSTD_getFrameContentSize(z.data(), z.size());
+    if (n == ZSTD_CONTENTSIZE_ERROR || n == ZSTD_CONTENTSIZE_UNKNOWN || n > (1ull << 33)) { SL_ERROR("%s.zst: not a zstd frame with a size", file.c_str()); return false; }
+    out.resize(size_t(n));
+    size_t r = ZSTD_decompress(out.data(), out.size(), z.data(), z.size());
+    if (ZSTD_isError(r) || r != out.size()) { SL_ERROR("%s.zst: %s", file.c_str(), ZSTD_isError(r) ? ZSTD_getErrorName(r) : "short"); out.clear(); return false; }
+    return true;
+  }
+  return p.readFile(data(file), out);
 }
 } // namespace sl

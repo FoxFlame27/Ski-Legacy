@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { writeData } from './datafile.mjs';
 
 register('./resort_hooks.mjs', import.meta.url);
 
@@ -597,9 +598,9 @@ function makePack(name) {
     const canvasOut = {};
     for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops }; }
     const out = { version: 3, generated: new Date().toISOString(), bin: `${name}.bin`, props: propsOut, materials: mats, meshes, instanced: inst, canvases: canvasOut, ...ex };
-    fs.writeFileSync(path.join(OUT, `${name}.bin`), Buffer.concat(parts));
-    fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(out));
-    log(`wrote ${name}.json`, (fs.statSync(path.join(OUT, `${name}.json`)).size / 1024).toFixed(0), `KB, ${name}.bin`, (off / 1048576).toFixed(1), 'MB;',
+    const zb = writeData(OUT, `${name}.bin`, Buffer.concat(parts));
+    const js = JSON.stringify(out), zj = writeData(OUT, `${name}.json`, js);
+    log(`wrote ${name}.json`, (js.length / 1024).toFixed(0), `KB (${(zj / 1024).toFixed(0)} KB packed), ${name}.bin`, (off / 1048576).toFixed(1), `MB (${(zb / 1048576).toFixed(1)} MB packed);`,
       mats.length, 'materials,', Object.keys(canvasOut).length, 'canvases; models used:', [...new Set(propsOut.map((p) => p.model))].join(' '));
   }
   return { capture, localModel, sampleSurfaces, colliderOut, finish, blob, matKey, imIndex, packGeo };
@@ -722,3 +723,4 @@ transport.capture(tScene);
   transport.finish({ colliders: transport.colliderOut(tCols), surfaces, net });
 }
 console.warn = _warn; console.info = _info;
+process.exit(process.exitCode ?? 0); // (the game's modules leave timers running: the export is done)

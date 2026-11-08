@@ -269,9 +269,23 @@ World::World() : N_(SEED), N2_(SEED + 101), peak_(std::make_unique<Peak>()), vca
 }
 World::~World() = default;
 
+// tools/datafile.mjs filterGrid undone: two byte planes (low, high) of zig-zagged residuals of the planar predictor
+// (left + up - up-left), modulo 2^16
+static void unfilterGrid(const uint8_t* src, int S1, int16_t* v) {
+  size_t N = size_t(S1) * S1;
+  for (int j = 0; j < S1; j++)
+    for (int i = 0; i < S1; i++) {
+      size_t k = size_t(j) * S1 + i;
+      uint16_t z = uint16_t(src[k] | (src[N + k] << 8));
+      int r = int(z >> 1) ^ -int(z & 1);
+      int p = i && j ? v[k - 1] + v[k - S1] - v[k - S1 - 1] : i ? v[k - 1] : j ? v[k - S1] : 0;
+      v[k] = int16_t(uint16_t(p + r));
+    }
+}
+
 bool World::load(platform::Platform& p, const AssetPaths& paths) {
   std::vector<uint8_t> bytes;
-  if (!p.readFile(paths.data("world.json"), bytes)) { SL_WARN("world data missing: %s", paths.data("world.json").c_str()); return false; }
+  if (!paths.readData(p, "world.json", bytes)) { SL_WARN("world data missing: %s", paths.data("world.json").c_str()); return false; }
   nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
   if (j.is_discarded()) { SL_ERROR("world.json: parse error"); return false; }
 
@@ -309,7 +323,7 @@ bool World::load(platform::Platform& p, const AssetPaths& paths) {
     auto& c = j["crag"];
     crag_.x0 = c["x0"]; crag_.z0 = c["z0"]; crag_.cell = c["cell"]; crag_.nx = c["nx"]; crag_.nz = c["nz"];
     std::vector<uint8_t> b;
-    if (p.readFile(paths.data(c["file"].get<std::string>()), b) && b.size() >= size_t(crag_.nx) * crag_.nz * 2) {
+    if (paths.readData(p, c["file"].get<std::string>(), b) && b.size() >= size_t(crag_.nx) * crag_.nz * 2) {
       crag_.d.resize(size_t(crag_.nx) * crag_.nz);
       for (size_t i = 0; i < crag_.d.size(); i++) crag_.d[i] = float(uint16_t(b[i * 2] | (b[i * 2 + 1] << 8))) / 10.f;
     } else { crag_.nx = crag_.nz = 0; SL_WARN("crag mask missing"); }
@@ -317,17 +331,17 @@ bool World::load(platform::Platform& p, const AssetPaths& paths) {
   // cuts
   {
     std::vector<uint8_t> b;
-    if (p.readFile(paths.data(j["cuts"]["file"].get<std::string>()), b) && b.size() >= 16 && std::memcmp(b.data(), "SLCT", 4) == 0) {
+    if (paths.readData(p, j["cuts"]["file"].get<std::string>(), b) && b.size() >= 16 && std::memcmp(b.data(), "SLC2", 4) == 0) {
       auto i32 = [&](size_t o) { int32_t v; std::memcpy(&v, b.data() + o, 4); return v; };
       cutCell_ = i32(4); cutTile_ = i32(8);
       int n = i32(12), S1 = cutTile_ + 1;
-      size_t o = 16, tileBytes = 12 + size_t(S1) * S1 * 2;
+      size_t N = size_t(S1) * S1, o = 16, tileBytes = 12 + N * 2;
       for (int t = 0; t < n && o + tileBytes <= b.size(); t++, o += tileBytes) {
         CutTile ct;
         int32_t tx = i32(o), tz = i32(o + 4);
         std::memcpy(&ct.scale, b.data() + o + 8, 4);
-        ct.v.resize(size_t(S1) * S1);
-        std::memcpy(ct.v.data(), b.data() + o + 12, ct.v.size() * 2);
+        ct.v.resize(N);
+        unfilterGrid(b.data() + o + 12, S1, ct.v.data());
         cuts_.emplace(cellKey(tx, tz), std::move(ct));
       }
     } else SL_WARN("terrain cuts missing");
@@ -335,18 +349,20 @@ bool World::load(platform::Platform& p, const AssetPaths& paths) {
   // (Phase 3) the courses' regions: 8 m tiles of height deltas + forest density (export_world.mjs)
   if (j.contains("regions")) {
     std::vector<uint8_t> b;
-    if (p.readFile(paths.data(j["regions"]["file"].get<std::string>()), b) && b.size() >= 16 && std::memcmp(b.data(), "SLRG", 4) == 0) {
+    if (paths.readData(p, j["regions"]["file"].get<std::string>(), b) && b.size() >= 16 && std::memcmp(b.data(), "SLR2", 4) == 0) {
       auto i32 = [&](size_t o) { int32_t v; std::memcpy(&v, b.data() + o, 4); return v; };
       regCell_ = i32(4); regTile_ = i32(8);
       int n = i32(12), S1 = regTile_ + 1;
-      size_t raw = size_t(S1) * S1 * 3, tileBytes = 12 + raw + (raw % 4 ? 4 - raw % 4 : 0), o = 16;
+      size_t N = size_t(S1) * S1, tileBytes = 12 + N * 3, o = 16;
       for (int t = 0; t < n && o + tileBytes <= b.size(); t++, o += tileBytes) {
         RegTile rt;
         int32_t tx = i32(o), tz = i32(o + 4);
         std::memcpy(&rt.scale, b.data() + o + 8, 4);
-        rt.v.resize(size_t(S1) * S1);
-        std::memcpy(rt.v.data(), b.data() + o + 12, rt.v.size() * 2);
-        rt.f.assign(b.data() + o + 12 + rt.v.size() * 2, b.data() + o + 12 + rt.v.size() * 3);
+        rt.v.resize(N);
+        unfilterGrid(b.data() + o + 12, S1, rt.v.data());
+        rt.f.resize(N);
+        uint8_t acc = 0;
+        for (size_t k = 0; k < N; k++) { acc = uint8_t(acc + b[o + 12 + N * 2 + k]); rt.f[k] = acc; }   // (stored as differences)
         regs_.emplace(cellKey(tx, tz), std::move(rt));
       }
     } else SL_WARN("course regions missing (regions.bin)");

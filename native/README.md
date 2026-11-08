@@ -5,42 +5,60 @@ A portable C++20 rewrite of Ski Legacy (the Three.js / Electron game in `../src`
 
 **Phase 1** (engine core, the real terrain, the skier, forests), **Phase 2** (the village and the resort: buildings,
 props, signs, gondola and railway stations, all 18 gondolas and chairlifts in motion, boarding and riding them, day /
-night lighting) and **Phase 3** (roads, tunnels, car parks, your car, traffic, the ski buses, the Wolkenspitzbahn and
-the Legacy Express) are done. Later phases are listed at the end of this file.
+night lighting), **Phase 3** (roads, tunnels, car parks, your car, traffic, the ski buses, the Wolkenspitzbahn and
+the Legacy Express) and **Phase 4** (menus, HUD, trail map, the economy and saving) are done. Later phases are listed
+at the end of this file.
 
 ---
 
 ## Building
 
 Dependencies are fetched by CMake (`FetchContent`) and pinned to exact tags; nothing has to be installed system-wide
-except a compiler, CMake ≥ 3.20, Ninja (optional) and **Python 3** (glad generates the OpenGL loader at configure
-time from the specification it ships; no network access is needed for that step).
+except a compiler, CMake ≥ 3.20, Ninja (optional), **Python 3** (glad generates the OpenGL loader at configure
+time from the specification it ships; no network access is needed for that step) and **Node.js ≥ 22.15** with the
+repository's `node_modules` (`npm install` in the repo root): the exported world data is not committed, the build
+makes it.
 
 ```sh
+npm install                                # once, in the repo root (three.js, the fonts: the exporters need them)
 cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build native/build
-./native/build/ski_legacy                 # windowed, starts in the village
-./native/build/ski_legacy --spawn piste   # starts at the top of a run
+cmake --build native/build                 # also exports native/data with Node when needed (~2-4 min the first time)
+./native/build/ski_legacy                  # windowed, the main menu over the village
+./native/build/ski_legacy --spawn piste    # starts at the top of a run
 ```
 
+**The data step.** `native/data/*.zst` (and `data/fonts/`) are generated and git-ignored. A CMake custom command runs
+`node native/tools/export_world.mjs` (which runs `export_resort.mjs` / `export_net.mjs` / `export_fonts.mjs`) whenever
+an output is missing or older than the exporter scripts (`native/tools/*.mjs`) or any of the game's JavaScript sources
+(`src/**/*.js`). It first checks that `node_modules` has three.js and the fonts and stops with "run npm install in the
+repo root" if not; without Node at all the configure step stops when the data is missing (and only warns when it is
+there). `-DSL_EXPORT_DATA=OFF` skips the step (data provided by other means). Node older than 22.15 has no zstd: it
+writes the same files uncompressed (the game reads either).
+
+**Data size.** Every exported file is zstd-compressed (level 19, a window up to 128 MB; the C++ inflates it in one shot
+through `AssetPaths::readData`); the terrain-cut and course-region tiles are stored as planar-predicted, zig-zagged
+int16 residuals in two byte planes (lossless after quantising to 1 mm / 5 mm: the physics surface still matches the
+JS to 2.4 mm). 111.8 MB of `.bin` / `.json` became 28.0 MB of `.zst` (25 %): cuts 13.2 → 5.9 MB, regions 13.2 → 6.2,
+transport 57.9 → 9.9, resort 24.1 → 5.3, world.json 2.2 → 0.5, crag 1.2 → 0.07.
+
 Run from anywhere inside the repository: the game finds `public/` (models) and `native/data/` (exported world data)
-by walking up from the executable. For a self-contained folder, configure with `-DSL_COPY_ASSETS=ON`: the ~40 MB of
-models the game uses (`SL_PHASE1_MODELS` + `SL_PHASE2_MODELS` + `SL_PHASE3_MODELS` in `CMakeLists.txt`, ~75 MB) and
-`native/data` (~107 MB since Phase 3) are
-copied to `assets/` next to the executable (not the whole 240 MB `public/`). `SKI_LEGACY_ASSETS=/path/to/assets`
-overrides both.
+by walking up from the executable. For a self-contained folder, configure with `-DSL_COPY_ASSETS=ON`: the models the
+game uses (`SL_PHASE1_MODELS` + `SL_PHASE2_MODELS` + `SL_PHASE3_MODELS` in `CMakeLists.txt`, ~75 MB) and `native/data`
+(~28 MB) are copied to `assets/` next to the executable (not the whole 240 MB `public/`).
+`SKI_LEGACY_ASSETS=/path/to/assets` overrides both.
 
 ### macOS (Mac mini M2 / MacBook Air)
 ```sh
 xcode-select --install           # Apple clang + Python 3
-brew install cmake ninja
+brew install cmake ninja node && npm install
 cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build native/build
 ```
 macOS supports OpenGL up to 4.1 core (deprecated but working on Apple silicon); the renderer uses nothing newer.
 A Metal path, if ever wanted, is a new `gfx/` backend (see Architecture).
 
 ### Windows (Visual Studio 2022)
-Install "Desktop development with C++" (includes CMake and Ninja) and Python 3 (python.org or the VS installer).
+Install "Desktop development with C++" (includes CMake and Ninja), Python 3 (python.org or the VS installer) and
+Node.js 22 LTS (nodejs.org), then `npm install` in the repo root.
 From a *x64 Native Tools* prompt:
 ```bat
 cmake -S native -B native\build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -53,19 +71,23 @@ native\build\ski_legacy.exe
 ```sh
 sudo apt install build-essential cmake ninja-build python3 libgl1-mesa-dev libx11-dev libxext-dev \
                  libasound2-dev libpulse-dev   # audio headers optional (SDL falls back to silence)
+# Node.js >= 22.15 (nodejs.org / NodeSource), then in the repo root:
+npm install
 cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build native/build
 ```
 
 ### Command line
 | option | |
 |---|---|
-| `--quality low\|medium\|high\|ultra` | graphics preset (terrain LOD, shadow map, tree distances, render scale) |
+| `--quality low\|medium\|high\|ultra` | graphics preset (terrain LOD, shadow map, tree distances, render scale); else the SETTINGS preset of the save |
+| `--no-menu` | straight into the game (no main menu) |
+| `--save name.json` | another save slot (default `ski-legacy-save-v1.json` in the platform's save directory) |
 | `--spawn village\|piste` | start on the village plaza (as the web game) or at the top of a run |
 | `--size 1600x900`, `--fullscreen`, `--no-vsync` | window |
 | `--bindings binds.json` | rebinding, same shape as the web save's `binds` (`{"kb":{"jump":"KeyJ"},"pad":{"jump":1}}`) |
 | `--neutral` | Khronos PBR Neutral tone mapping instead of ACES filmic |
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
-| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; print stats, exit 0 / 1 (`out.png` + `_village` `_ride` `_drive` `_bus` `_train` `_express`) |
+| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map`). Uses its own fresh save (`autotest-save.json`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
 
 ### Headless test (Linux, Mesa llvmpipe)
@@ -75,7 +97,8 @@ SDL_AUDIODRIVER=dummy xvfb-run -a -s "-screen 0 1280x720x24" ./native/build/ski_
 ```
 `SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier` switches parts of the scene off for profiling (`novillage`: the
 whole resort); `sidecam` looks at the rider from the side while riding, `chairtest` makes the autotest ride a chairlift,
-`vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola).
+`vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `maptest`
+straight with the trail map.
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 
 Reference run (a Linux container without a GPU: Mesa llvmpipe software rendering on 4 CPU cores, 1280×720,
@@ -103,7 +126,10 @@ check and the three rides: ~2000 frames in ~8 min at 4 fps, output under "Phase 
 | pause | Esc | Menu / Options / + |
 
 All 24 actions of the web game are mapped (interact, horn, lights, map, ...); the ones without gameplay yet do
-nothing so far.
+nothing so far. **Menus** (Phase 4): D-pad / left stick / arrows / W A S D move, the confirm button (Xbox A, PS ✕,
+Switch A — the right button) / Enter / Space chooses, the back button (Xbox B, PS ○, Switch B) / Esc / Backspace goes
+back, LB / RB or Q / E switch tabs, the mouse hovers, clicks and scrolls; **M** / View / Minus opens the trail map;
+everything can be rebound under SETTINGS → CONTROLS (stored in the save).
 
 **Vehicles (Phase 3, drive.js's keys):** **E** beside your car drives it (at the Autohaus: buys one, see below), **E** at
 a standstill gets out; **W** / RT throttle, **S** / LT brake then reverse, **A D** / left stick steer (analog),
@@ -126,8 +152,10 @@ native/
   tools/export_world.mjs                     runs the JS world code in Node, writes native/data/ (then runs:)
   tools/export_resort.mjs, resort_hooks.mjs  builds the resort and the transport with the game's own modules in Node,
                                              writes resort.* and transport.* (export_net.mjs: the vehicles' data)
-  data/                                      world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin,
-                                             transport.json / .bin, fonts/ (~107 MB)
+  tools/export_fonts.mjs, datafile.mjs       the UI fonts (WOFF / WOFF2 -> TTF); zstd writing + the grid filter
+  cmake/CheckNodeModules.cmake               the data step's "run npm install" check
+  data/  (generated, git-ignored)            world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin,
+                                             transport.json / .bin, each as .zst (~28 MB); fonts/
   src/
     main.cpp                                 command line
     platform/platform.h                      THE platform interface (window/surface, input, rumble, time,
@@ -137,7 +165,8 @@ native/
     gfx/gfx.h                                thin rendering interface (buffers, textures, programs, vertex inputs,
                                              render targets, pipeline state, draws)
     gfx/gl/gl_device.cpp                     OpenGL 4.1 core backend (glad)
-    core/                                    noise.js port, input mapping (bindings.js), job system, asset paths, log
+    core/                                    noise.js port, input mapping (bindings.js), button prompts (prompts.js),
+                                             job system, asset paths + zstd data reading, log
     engine/                                  asset manager (cgltf + meshoptimizer + libwebp), models / skinning /
                                              animation, renderer (shadow map, PBR, terrain, sky, tone mapping, HUD),
                                              procedural audio, quality presets, shaders
@@ -146,10 +175,11 @@ native/
                                              lifts (lifts.js motion + riding), gondola_station (gondolastation.js),
                                              transport (roads, decks, timetables' data), rail_sweep (the track)
     engine/canvas2d, engine/mesh_kit         software 2D canvas (sign textures, stb_truetype), procedural geometry kit
+    engine/ui                                the immediate-mode 2D layer (SDF text, shapes, the house style)
     player/                                  player.js physics port, the skier rig (model, clips, procedural stance)
     game/                                    main loop, spawn, HUD, autotest; vehicles (models, instanced draw),
                                              drive (drive.js + the Autohaus), traffic, buses, trains (Wolkenspitzbahn,
-                                             Legacy Express)
+                                             Legacy Express); (Phase 4) menus, hud, trailmap, economy (+ save)
 ```
 
 **Layering.** `game → player/world → engine → gfx + platform`. Only `platform/sdl` includes SDL; only `gfx/gl`
@@ -483,6 +513,106 @@ world ready in 13.60 s ...
 
 ---
 
+## What Phase 4 ports
+
+**The 2D layer** (`engine/ui`): an immediate-mode UI drawn after the 3D frame in a handful of draws — rectangles,
+rounded rectangles and outlines (signed distance in the shader, anti-aliased), circles, triangles, polygons, lines,
+gradients, textured quads, a CPU clip stack for scrolling lists — and text from signed-distance glyph atlases (one
+2048² R8 atlas baked at start-up with stb_truetype, so any size stays crisp) in the game's own fonts:
+`export_fonts.mjs` converts **Barlow Condensed** 500 / 600 / 700 / 700 italic / 800 italic (`@fontsource`, WOFF) and
+**Inter** (`@fontsource-variable/inter`, WOFF2: Brotli plus a port of the glyf / loca transform) to TTF. The house
+style is approximated with it: menu.js's paint strokes (blunt cap, wavy edges, the bristle tail, seeded per label),
+the `--brush-a` / `--brush-b` paper silhouettes, ragged paper panels, blue italic condensed lettering, red section
+labels, keycaps (`.kc`) with the PlayStation symbols and arrows drawn as shapes.
+
+**Menus** (`game/menus`, menu.js): the main menu over the live world (a slow orbit over the village; a loading
+screen while the world builds) — PLAY · CONTROLS · STATS · SETTINGS · QUIT; PLAY → SINGLEPLAYER / MULTIPLAYER (says
+Phase 6) → CHOOSE YOUR SKIER the first time (MAN / WOMAN on the 3D showcase: the skier on the plaza, left / right
+picks, drag or the right stick turns it; the rig reloads `skier_red` / `skier_blue`) → START. Pause (Esc / Menu /
+Options / +): RESUME · CONTROLS · STATS · SETTINGS · MAIN MENU · RETURN TO VILLAGE · QUIT GAME; the simulation stops
+under it. **SETTINGS** has menu.js's rows: graphics (the six presets — applied at the next start, as the web game
+restarts —, render scale and shadows live, brightness, frame rate limit, fullscreen), audio (master / effects drive
+the procedural audio; music has nothing to drive yet), controls (sensitivity, controller look sensitivity, invert Y,
+vibration), camera (field of view, starting view, camera shake, screen effects), HUD (full / minimal / off, size,
+km/h / mph, 12 / 24 h clock, player names, show FPS), player (change skier, account — a stub that names the
+platform user —, reset all progress with a confirmation). **CONTROLS**: every action of `bindings.js` with its
+keyboard key and controller button, the controller family (the connected one, or Xbox / PlayStation / Switch to
+preview) with `prompts.js`'s glyphs, left / right picks the column, Enter captures the next key (a taken key is
+swapped) or button, resets per device, and a reference panel of what each control does; bindings are stored in the
+save's `binds` as the web game does. STATS: the career. Every screen is navigable with the D-pad / left stick
+(held: repeats), the family's confirm / back buttons (Switch: A right / B bottom, `core/prompts` `confirmButton`),
+LB / RB (Q / E) for tabs, the keyboard (arrows / W A S D, Enter / Space, Esc / Backspace) and the mouse (hover,
+click, wheel, sliders and segments by click). Button names follow the device in use live (`prompts::K()`).
+
+**HUD** (`game/hud`, hud.js): white brush pills with blue italic lettering — location (village / the nearest run /
+backcountry / the lift you ride), clock · weather, the objective line (rent skis, buy a pass), the waypoint arrow and
+distance to a trail-map mark, the flash line (good / bad / gold, ≥ 5.5 s), money with the last change fading beside
+it, the speedometer with your skis or car, the interaction prompt with its keycap, the ride hint, the controls hint
+card once per save (`save.tutorial`), FPS; all scaled by the HUD size setting and switched by the HUD mode.
+
+**Trail map** (`game/trailmap`, trailmap.js condensed; M / View / Minus): the relief shaded from the terrain itself
+(trailmap.js `buildTile`: hillshade from the north-west, rock, forest tint, contours) at two levels computed on the
+worker threads at start-up; roads (valley grey, scenic amber, access), the Wolkenspitzbahn and the Legacy Express
+(violet, dashed in tunnels), pistes in their grade colours with names zoomed in, lifts with names, huts, bus stops,
+stations, services (ski shop, tickets, Autohaus, Werkstatt, medical centre, police), car parks, summits, your car and
+you; drag / wheel or left stick / triggers to pan and zoom, R / Y back to you, a click (or confirm) marks a place
+(the HUD's waypoint points there), hover / centre tooltips, a legend.
+
+**Economy and saving** (`game/economy`, economy.js): the save in the web game's JSON shape (money, skis, owned,
+character, dayPass, tickets, day, hour, stats, records, quality, tutorial, outfits, binds, garage, rental, rescues
+and the flat device settings of `DEVICE_PREFS`; unknown keys kept as they were) through `Platform::writeSave`
+(`ski-legacy-save-v1.json`, atomic), written on every purchase / setting and every 60 s (autosave), on quit and on
+MAIN MENU. Prices and charges, from the JS: the **ski shop** at the rental shop (all twelve `SKIS`, rent / buy /
+equip) with the outfit tabs (jackets, trousers, helmets, goggle lenses: buy once, wear per character); the **ticket
+seller** (day pass $150 for the game day, gondola tickets $50); **lifts** charge their `layout.js` price (skis
+needed first; a day pass or a gondola ticket covers them; riding down is free); the **Wolkenspitzbahn** uphill $50 and
+the **Legacy Express** $75 unless you have the pass; the **Autohaus**: E at a car for sale opens its card (price,
+garage count; up to 10 cars, a plate each), the car waits in a free bay of the Autohaus car park, MY CARS at the
+counter sells one back for half; the **Werkstatt**: drive in and stop, repair priced by the damage (`repairCost`:
+$5 steps up to $500); a **wreck** costs the tow + repair ($2,000, even into the red) and the car comes back to the
+Autohaus repaired 20 s later; a car of yours **left on a road** with you 250 m away for 60 s is towed ($500); the
+**rescue**: the second wipeout within 3 min (no lift ride between) brings you round at the medical centre for
+rescue.js's fee ($300 + $25 per earlier rescue, at most $1,000); a hot chocolate at the huts ($8). Midnight is a new
+day (the pass runs out).
+
+Autotest output (llvmpipe, 1280×720, medium; the Phase 4 lines and the summary):
+```
+world ready in 15.29 s (the trail map's relief builds on the worker threads meanwhile)
+[autotest] menu: main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER (MAN, WOMAN) -> START: ok
+[autotest] settings: HUD size 100% -> 105% (right on the focused row) -> ok
+[autotest] shop: rented the Rental Carver: $500 -> $450, skis 'rental' -> ok
+[autotest] save: wrote autotest-save.json, reloaded: money $450 (expected $450), skis 'rental', HUD size 1.05, character skier_blue -> ok
+[autotest] skied 80 m along the run (42 m from the start), dropped 19 m, top speed 53.9 km/h, final 53.9 km/h, 1 landings, 0 crashes
+[autotest] lift ticket: $450 -> $400 (the Legacy Gondola's price $50, no day pass) -> ok
+[autotest] autohaus: bought the BMW X3: $25400 -> $2900 (price $22500), garage 1 -> ok
+...
+[autotest] map: open, relief ready yes, 73 items drawn, hover 'Bus stop · Legacy Village' -> ok
+[autotest] 2097 frames (157.8 s simulated) in 544.9 s wall: avg 3.8 fps
+[autotest] ski ok, building collision ok, gondola ride ok
+[autotest] drive ok, traffic ok, bus ok, Wolkenspitzbahn ok, Legacy Express ok
+[autotest] menus ok, settings ok, shop ok, save / reload ok, lift / car charges ok, trail map ok
+[autotest] PASS
+```
+
+### Known gaps (Phase 4)
+- **Look**: the brush shapes are approximations of the SVG / CSS ones (no drop-shadow filter, the strokes' bristle
+  tails are coarser), no screen transitions beyond a slide-in, no menu sounds (audio is Phase 7); the Inter font is the
+  variable font's default instance (weight 400: no bold Inter), no kerning (GPOS).
+- **Menus**: MULTIPLAYER and the account are stubs (Phase 6); the graphics preset needs a restart; music volume, bloom,
+  camera shake, screen effects and player names are stored but have nothing to drive yet; no virtual mouse; text entry
+  (multiplayer names) not needed yet.
+- **Shops**: one card dialog instead of the walk-in ski shop and the outfit shop's 3D podium; outfits are bought and
+  stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet; no kits.
+- **Cars**: no configurator (paint, rims, interior, custom plates), no showroom interior or salesman, no tow truck
+  driving (the car reappears), the impound is a fee when it is towed rather than a yard you pay at.
+- **Rescue**: no helicopter or ambulance ride (you come round at the medical centre), no hospital ward; no jobs or
+  race prizes to earn money yet (Phase 5), so a new save has $500 and the autotest grants itself the car's price.
+- **Trail map**: no layer switches, races, jobs, secrets or road names; labels are placed without collision tests; one
+  relief level pair (no 128 m detail tiles).
+- No chalets or furnishing (moved to Phase 5).
+
+---
+
 ## Nintendo Switch plan
 
 What has to come from Nintendo (none of it can be in this repository):
@@ -517,7 +647,7 @@ What has to come from Nintendo (none of it can be in this repository):
 | **2 (done)** | the village and resort (every building, prop, sign, signpost, net, marker, snow cannon of `village.js` / `decor.js` / `resortdressing.js`), gondola stations (C++ port) and railway station buildings, gondolas and chairlifts in motion with boarding and riding, colliders and walkable decks, day / night |
 | **2b** | still to do from the old Phase 2 list: huts' interiors, the terrain park and kickers (`park.js`, tricks scoring from `tricks.js`), boulders, the full `skier.js` rig (poles, pole plants, first-person gloves), streamed piste fences, flags, crowds, snowcats |
 | **3 (done)** | vehicles and transport: car physics (`drive.js`, damage), roads with their terrain cuts and tunnels, traffic and parking, the Autohaus, the ski bus and its routes, the railways (Wolkenspitzbahn, Legacy Express) with stations and swept track; still open: snowmobile, helicopter, car lights / sounds / wheels |
-| **4** | menus, HUD and economy: title / pause / settings (all web settings incl. rebinding UI with controller glyphs), trail map, money, shops, rentals, chalets and furnishing, save games through `Platform::writeSave` (same JSON shape as the web save) |
-| **5** | gameplay: races (World Racing courses = terrain regions, gates, bots, leaderboards), jobs, police / prison / hospital, NPCs and crowds, parkour courses |
+| **4 (done)** | menus, HUD and economy: title / pause / settings (the web settings incl. rebinding UI with controller glyphs), trail map, money, ski / outfit shop, tickets and day pass, lift / train charges, the Autohaus garage, Werkstatt, tow and rescue fees, save games through `Platform::writeSave` (the web save's JSON shape), autosave; the data step in the build, zstd data |
+| **5** | gameplay: chalets and furnishing, races (World Racing courses = terrain regions, gates, bots, leaderboards), jobs, police / prison / hospital, NPCs and crowds, parkour courses |
 | **6** | multiplayer: keep the existing Node server (`server/`) and its protocol; write a C++ client (WebSocket over TLS, e.g. a small libwebsockets / IXWebSocket client behind the platform layer, since console sockets go through `nn::socket` / NEX) with interpolation of remote skiers, car rides, chat |
 | **7** | audio (mixer, `public/audio` samples, Ogg decoding, 3D sound), weather / time of day / night lighting, snow FX, post (bloom, sun glare), and Switch performance: ASTC textures, packed vertices, GPU profiling, dynamic resolution, memory budget, Lotcheck pass |

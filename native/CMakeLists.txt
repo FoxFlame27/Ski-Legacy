@@ -33,7 +33,7 @@ endif()
 add_executable(ski_legacy src/main.cpp ${SL_SOURCES} ${SL_PLATFORM_SOURCES})
 target_include_directories(ski_legacy PRIVATE src)
 target_link_libraries(ski_legacy PRIVATE SDL2::SDL2-static SDL2::SDL2main glm::glm meshoptimizer webpdecoder glad
-  nlohmann_json::nlohmann_json sl_headeronly)
+  nlohmann_json::nlohmann_json sl_headeronly libzstd_static)
 if(NOT TARGET webpdecoder)
   target_link_libraries(ski_legacy PRIVATE webp)
 endif()
@@ -50,6 +50,53 @@ find_package(Threads REQUIRED)
 target_link_libraries(ski_legacy PRIVATE Threads::Threads)
 if(APPLE)
   set_target_properties(ski_legacy PROPERTIES MACOSX_BUNDLE OFF)
+endif()
+
+# ---------------------------------------------------------------- the exported world data (native/data, generated)
+# native/data/*.zst are not committed: the build runs the exporter (node tools/export_world.mjs, which runs
+# export_resort.mjs / export_net.mjs / export_fonts.mjs) when they are missing or older than the exporter scripts or the
+# game's JavaScript sources they read (~2 min). Needs Node.js (>= 22.15 for zstd; older Node writes uncompressed data)
+# and the repository's node_modules (npm install in the repo root). SL_EXPORT_DATA=OFF skips the step (data provided).
+option(SL_EXPORT_DATA "Regenerate native/data with Node when it is missing or out of date" ON)
+set(SL_DATA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/data)
+set(SL_DATA_FILES world.json crag.bin cuts.bin regions.bin resort.json resort.bin transport.json transport.bin)
+set(SL_FONT_FILES barlow-condensed-500.ttf barlow-condensed-600.ttf barlow-condensed-700.ttf barlow-condensed-700-italic.ttf
+  barlow-condensed-800-italic.ttf inter.ttf)
+set(SL_DATA_OUTPUTS)
+foreach(f ${SL_DATA_FILES})
+  list(APPEND SL_DATA_OUTPUTS ${SL_DATA_DIR}/${f}.zst)
+endforeach()
+foreach(f ${SL_FONT_FILES})
+  list(APPEND SL_DATA_OUTPUTS ${SL_DATA_DIR}/fonts/${f})
+endforeach()
+if(SL_EXPORT_DATA)
+  find_program(SL_NODE NAMES node nodejs)
+  set(_have_data ON)
+  foreach(o ${SL_DATA_OUTPUTS})
+    if(NOT EXISTS ${o})
+      set(_have_data OFF)
+    endif()
+  endforeach()
+  if(NOT SL_NODE)
+    if(_have_data)
+      message(WARNING "Node.js not found: native/data is used as it is (not regenerated when the JS changes)")
+    else()
+      message(FATAL_ERROR "native/data is missing and Node.js was not found. Install Node.js (>= 22.15) and run npm install "
+        "in the repo root; the build then exports the world data (node native/tools/export_world.mjs).")
+    endif()
+  else()
+    file(GLOB_RECURSE SL_JS_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../src/*.js)
+    file(GLOB SL_TOOL_SCRIPTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/*.mjs)
+    add_custom_command(OUTPUT ${SL_DATA_OUTPUTS}
+      COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR}/.. -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckNodeModules.cmake
+      COMMAND ${SL_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/export_world.mjs
+      DEPENDS ${SL_TOOL_SCRIPTS} ${SL_JS_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckNodeModules.cmake
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+      COMMENT "Exporting the world data with Node (native/data, ~2 min)"
+      VERBATIM USES_TERMINAL)
+    add_custom_target(sl_data ALL DEPENDS ${SL_DATA_OUTPUTS})
+    add_dependencies(ski_legacy sl_data)
+  endif()
 endif()
 
 # ---------------------------------------------------------------- packaging: assets next to the executable

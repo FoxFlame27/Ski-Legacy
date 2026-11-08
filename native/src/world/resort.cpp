@@ -285,7 +285,7 @@ std::shared_ptr<Model> Resort::transportModel(const nlohmann::json& parts) {
 bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf) {
   auto jp = std::make_shared<nlohmann::json>();
   std::vector<uint8_t> jb, bin;
-  if (!plat.readFile(paths.data(name + ".json"), jb) || !plat.readFile(paths.data(name + ".bin"), bin)) {
+  if (!paths.readData(plat, name + ".json", jb) || !paths.readData(plat, name + ".bin", bin)) {
     SL_WARN("%s: native/data/%s.json / .bin missing (node native/tools/export_resort.mjs)", name.c_str(), name.c_str());
     return false;
   }

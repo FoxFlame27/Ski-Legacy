@@ -181,7 +181,7 @@ const std::vector<int>* Scenery::collidersNear(double x, double z) const {
 
 bool Scenery::loadVillage(platform::Platform& p, const AssetPaths& paths) {
   std::vector<uint8_t> bytes;
-  if (!p.readFile(paths.data("world.json"), bytes)) return false;
+  if (!paths.readData(p, "world.json", bytes)) return false;
   nlohmann::json j = nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
   if (j.is_discarded()) return false;
   ModelLoadOptions o;

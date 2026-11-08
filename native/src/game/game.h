@@ -1,4 +1,4 @@
-// The game (Phases 1-2): boots the platform, renderer and world, runs the main loop (fixed 120 Hz simulation with
+// The game (Phases 1-4): boots the platform, renderer and world, runs the main loop (fixed 120 Hz simulation with
 // interpolated rendering), and hosts the skier on the mountain. Also the headless --autotest and --verify-heights.
 #pragma once
 #include <string>
@@ -11,6 +11,9 @@ struct GameOptions {
   std::string png;            // autotest: write the last frame here
   bool verifyHeights = false;
   std::string quality = "medium";
+  bool qualitySet = false;       // --quality given (else the save's SETTINGS preset)
+  bool menu = true;              // start at the main menu (--no-menu: straight into the game)
+  std::string saveName = "ski-legacy-save-v1.json";   // --save NAME (the autotest uses its own, fresh)
   int width = 1280, height = 720;
   bool fullscreen = false, vsync = true;
   std::string spawn;             // village | piste (default: village; piste for --autotest)

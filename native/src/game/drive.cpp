@@ -101,7 +101,10 @@ std::string Drive::prompt(const dvec3& pos, bool canUse) {
   if (best->wrecked) return best->spec->label + " - wrecked";
   if (best->forSale && !best->owned) {
     char b[160];
-    std::snprintf(b, sizeof b, "Buy %s - $%.0f (free until the economy, Phase 4)", best->spec->label.c_str(), best->spec->price);
+    std::snprintf(b, sizeof b, "Buy %s - $%s", best->spec->label.c_str(), [](double v) {
+      std::string n = std::to_string(int64_t(v)), o;
+      for (size_t i = 0; i < n.size(); i++) { if (i && (n.size() - i) % 3 == 0) o += ','; o += n[i]; }
+      return o; }(best->spec->price).c_str());
     return b;
   }
   if (!best->owned) return "Buy a car at the Autohaus in Legacy Village";
@@ -122,14 +125,50 @@ bool Drive::interact(const dvec3& pos) {
   }
   if (bi < 0 || parked[size_t(bi)].wrecked) return false;
   Parked& e = parked[size_t(bi)];
-  if (e.forSale && !e.owned) { e.owned = true; events.push_back({VehicleEvent::Type::Bump, 0.2f, "Bought: " + e.spec->label + " - E to drive"}); return true; }
+  if (e.forSale && !e.owned) { buyRequest = bi; return true; }
   if (!e.owned) return false;
   return enter(bi);
 }
 
-int Drive::buy(const std::string& model) {
-  for (size_t i = 0; i < parked.size(); i++) if (parked[i].forSale && parked[i].name == model) { parked[i].owned = true; return int(i); }
+int Drive::saleIndex(const std::string& model) const {
+  for (size_t i = 0; i < parked.size(); i++) if (parked[i].forSale && parked[i].name == model) return int(i);
   return -1;
+}
+bool Drive::freeBay(double& x, double& z, double& yaw) const {
+  const Lot* lot = nullptr;
+  for (const Lot& L : t_.lots) if (L.impound) { lot = &L; break; }
+  if (!lot) return false;
+  std::vector<Bay> bays = lot->bays;
+  if (bays.empty())
+    for (double side : {-1.0, 1.0})
+      for (double u = -lot->hw + 1.6; u <= lot->hw - 1.6; u += 2.6) {
+        double v = side * (lot->hd - 2.85);
+        bays.push_back({lot->x + lot->ux * u + lot->vx * v, lot->z + lot->uz * u + lot->vz * v, -lot->vx * side, -lot->vz * side});
+      }
+  // the bays the display cars leave free (every other one), then any bay nobody stands in
+  for (int pass = 0; pass < 2; pass++)
+    for (size_t k = 0; k < bays.size(); k++) {
+      if (pass == 0 && k % 2 == 0) continue;
+      const Bay& b = bays[k];
+      bool taken = false;
+      for (const Parked& e : parked) taken = taken || (!e.driving && std::hypot(e.x - b.x, e.z - b.z) < 2.0);
+      if (taken) continue;
+      x = b.x; z = b.z; yaw = std::atan2(b.hx, b.hz);
+      return true;
+    }
+  return false;
+}
+int Drive::addOwned(const std::string& model, const std::string& plate, double damage) {
+  const CarSpec* spec = t_.car(model);
+  const VehicleModel* vm = models_.car(model);
+  if (!spec || !vm) return -1;
+  Parked e;
+  e.name = model; e.spec = spec; e.vm = vm; e.owned = true; e.plate = plate; e.damage = damage; e.length = spec->length;
+  double x = t_.autohaus.x + 6, z = t_.autohaus.z + 6, yaw = 0;
+  freeBay(x, z, yaw);
+  e.x = x; e.z = z; e.yaw = yaw; e.y = world_.height(x, z) + 0.03;
+  parked.push_back(e);
+  return int(parked.size()) - 1;
 }
 int Drive::nearestOwned(const dvec3& p) const {
   int bi = -1;
@@ -655,6 +694,7 @@ void Drive::crash(double v, double nx, double nz) {
   shake_ = 1;
   e0.wrecked = true;
   events.push_back({VehicleEvent::Type::Crash, 1.0f, "Crashed - the car is wrecked"});
+  if (onWreck) onWreck(d.e);
 }
 
 void Drive::crashStep(double h) {

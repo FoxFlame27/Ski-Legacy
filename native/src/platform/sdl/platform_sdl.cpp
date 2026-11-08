@@ -105,21 +105,39 @@ public:
         case SDL_KEYDOWN:
         case SDL_KEYUP: {
           Key k = mapScancode(ev.key.keysym.scancode);
-          if (k == Key::Unknown || ev.key.repeat) break;
+          if (k == Key::Unknown) break;
+          if (ev.key.repeat) { if (ev.type == SDL_KEYDOWN) e.repeated.push_back(k); break; }
           keys_[size_t(k)] = ev.type == SDL_KEYDOWN;
           (ev.type == SDL_KEYDOWN ? e.pressed : e.released).push_back(k);
           break;
         }
-        case SDL_MOUSEMOTION: if (rel_) { e.mouseDX += float(ev.motion.xrel); e.mouseDY += float(ev.motion.yrel); } break;
+        case SDL_MOUSEMOTION:
+          if (rel_) { e.mouseDX += float(ev.motion.xrel); e.mouseDY += float(ev.motion.yrel); }
+          else e.mouseMoved = true;
+          break;
         case SDL_MOUSEWHEEL: e.wheel += float(ev.wheel.preciseY); break;
-        case SDL_MOUSEBUTTONDOWN: if (!rel_) setRelativeMouse(true); break;
+        case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: {
+          uint8_t bit = ev.button.button == SDL_BUTTON_LEFT ? 1 : ev.button.button == SDL_BUTTON_RIGHT ? 2 : ev.button.button == SDL_BUTTON_MIDDLE ? 4 : 0;
+          if (ev.type == SDL_MOUSEBUTTONDOWN) e.mousePressed |= bit; else e.mouseReleased |= bit;
+          break;
+        }
         case SDL_CONTROLLERDEVICEADDED: openPad(ev.cdevice.which); break;
         case SDL_CONTROLLERDEVICEREMOVED: closePad(ev.cdevice.which); break;
         default: break;
       }
     }
+    // the pointer (window points -> drawable pixels: high-DPI displays)
+    int mx = 0, my = 0, ww = 1, wh = 1, dw = 1, dh = 1;
+    Uint32 mb = SDL_GetMouseState(&mx, &my);
+    if (win_) { SDL_GetWindowSize(win_, &ww, &wh); SDL_GL_GetDrawableSize(win_, &dw, &dh); }
+    e.mouseX = rel_ ? -1.f : float(mx) * float(dw) / float(std::max(1, ww));
+    e.mouseY = rel_ ? -1.f : float(my) * float(dh) / float(std::max(1, wh));
+    e.mouseButtons = uint8_t(((mb & SDL_BUTTON_LMASK) ? 1 : 0) | ((mb & SDL_BUTTON_RMASK) ? 2 : 0) | ((mb & SDL_BUTTON_MMASK) ? 4 : 0));
   }
   bool keyDown(Key k) const override { return keys_[size_t(k)]; }
+  void setFullscreen(bool on) override { if (win_) SDL_SetWindowFullscreen(win_, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0); }
+  bool fullscreen() const override { return win_ && (SDL_GetWindowFlags(win_) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0; }
+  void setVsync(bool on) override { SDL_GL_SetSwapInterval(on ? 1 : 0); }
 
   int gamepadCount() const override { return int(pads_.size()); }
   void gamepad(int i, GamepadState& s) const override {

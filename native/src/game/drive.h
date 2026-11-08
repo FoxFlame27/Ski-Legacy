@@ -38,8 +38,17 @@ public:
   bool enter(int parkedIndex);
   /// (autotest) brought to a stop at once
   void stopNow() { d_.vx = d_.vz = d_.vy = 0; d_.yawRate = 0; d_.offT = 0; d_.crash = false; }
-  /// buy a car at the Autohaus (economy is Phase 4: free) -> parked index, -1 if none
-  int buy(const std::string& model);
+  /// (Phase 4) a car of yours: a new owned car of `model` in a free bay of the Autohaus car park (your garage)
+  /// -> parked index, -1 if the model is unknown
+  int addOwned(const std::string& model, const std::string& plate, double damage);
+  /// (autotest) the for-sale display car of a model (-1 if none)
+  int saleIndex(const std::string& model) const;
+  /// E at a car for sale: interact() leaves its index here for the game to sell it (the economy, Phase 4)
+  int buyRequest = -1;
+  /// your car wrecked (the tow + repair bill, the tow truck): the parked index
+  std::function<void(int)> onWreck;
+  /// where your garage's cars stand (the Autohaus car park's bays)
+  bool freeBay(double& x, double& z, double& yaw) const;
 
   // ---- per tick / frame
   void fixedUpdate(double h, const DriveInput& in, double now);
@@ -73,6 +82,7 @@ public:
     const CarSpec* spec = nullptr;
     const VehicleModel* vm = nullptr;
     double x = 0, y = 0, z = 0, yaw = 0, length = 4.7, damage = 0;
+    std::string plate;                  // (Phase 4) your car's plate (save.garage)
     bool owned = false, forSale = false, driving = false, wrecked = false;
     double svx = 0, svz = 0, sw = 0;   // shoved: sliding to a stop
   };

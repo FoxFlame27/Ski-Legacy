@@ -8,6 +8,7 @@
 #pragma once
 #include "core/math.h"
 #include "core/noise.h"
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -64,6 +65,16 @@ public:
   double forest(double x, double z, double h, double slope) const;
   double cragAllow(double x, double z) const;
   double cutDelta(double x, double z) const;
+  /// (Phase 3) the World Racing courses' regions as exported (8 m bilinear delta over base + pads), and whether (x, z)
+  /// is inside one (their forest density replaces the analytic one there)
+  double regionDelta(double x, double z) const;
+  bool inRegion(double x, double z) const;
+  /// world.roadSurface (roads.js): (x, z, drawn terrain height, yHint) -> the road's surface or NaN. Replaces the
+  /// terrain where it applies, like the JS (a road in a tunnel lies under the mountain).
+  std::function<double(double, double, double, double)> roadSurface;
+  /// Walkable decks given as functions (the railways' track beds, the Legacy Express's viaducts): NaN off them; taken
+  /// like a sampled surface (above the ground, not far above yHint).
+  void addDeck(std::function<double(double, double)> f) { decks_.push_back(std::move(f)); }
 
   const std::vector<Massif>& massifs() const { return massifs_; }
   const std::vector<Pad>& pads() const { return pads_; }
@@ -89,6 +100,10 @@ private:
 
   struct Crag { double x0 = 0, z0 = 0, cell = 10; int nx = 0, nz = 0; std::vector<float> d; } crag_;
   struct CutTile { float scale; std::vector<int16_t> v; };
+  struct RegTile { float scale; std::vector<int16_t> v; std::vector<uint8_t> f; };
+  int regCell_ = 8, regTile_ = 32;
+  std::unordered_map<int64_t, RegTile> regs_;
+  std::vector<std::function<double(double, double)>> decks_;
   int cutCell_ = 2, cutTile_ = 32;
   std::unordered_map<int64_t, CutTile> cuts_;
 

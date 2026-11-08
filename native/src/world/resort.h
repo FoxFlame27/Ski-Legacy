@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <nlohmann/json_fwd.hpp>
 
 namespace sl {
 class World;
@@ -31,6 +32,11 @@ public:
   Resort(gfx::Device& dev, World& world, AssetManager& assets) : dev_(dev), world_(world), assets_(assets) {}
   /// Loads the resort data; false (and nothing changes) without it.
   bool load(platform::Platform& p, const AssetPaths& paths, Scenery& scenery);
+  /// (Phase 3) transport.json's `net` and its bin (the vehicles' data: world/transport.h), null without it
+  const nlohmann::json* transportNet() const;
+  const std::vector<uint8_t>& transportBin() const { return tbin_; }
+  /// A vehicle's procedural parts (export_net.mjs localModel: [{ mat, verts, vOff, ... }]) as one model
+  std::shared_ptr<Model> transportModel(const nlohmann::json& parts);
   void update(double dt, const dvec3& cam);
   void submit(Renderer& r, bool props = true, bool meshes = true);
   Lifts& lifts() { return lifts_; }
@@ -42,6 +48,10 @@ private:
   struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; };
   struct Chunk { std::shared_ptr<Model> model; dvec3 origin; dvec3 bmin, bmax; bool shadow = true; };
   void rebuild(const dvec3& cam);
+  bool loadPack(platform::Platform& p, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf);
+  std::shared_ptr<nlohmann::json> tjson_;
+  std::vector<uint8_t> tbin_;
+  std::vector<Material> tmats_;
 
   gfx::Device& dev_;
   World& world_;

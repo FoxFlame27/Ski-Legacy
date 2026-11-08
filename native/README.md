@@ -3,9 +3,10 @@
 A portable C++20 rewrite of Ski Legacy (the Three.js / Electron game in `../src`), built so it can ship on
 **Nintendo Switch** once the project has NintendoSDK access, and runs today on **macOS, Windows and Linux**.
 
-**Phase 1** (engine core, the real terrain, the skier, forests) and **Phase 2** (the village and the resort: buildings,
+**Phase 1** (engine core, the real terrain, the skier, forests), **Phase 2** (the village and the resort: buildings,
 props, signs, gondola and railway stations, all 18 gondolas and chairlifts in motion, boarding and riding them, day /
-night lighting) are done. Later phases are listed at the end of this file.
+night lighting) and **Phase 3** (roads, tunnels, car parks, your car, traffic, the ski buses, the Wolkenspitzbahn and
+the Legacy Express) are done. Later phases are listed at the end of this file.
 
 ---
 
@@ -24,7 +25,8 @@ cmake --build native/build
 
 Run from anywhere inside the repository: the game finds `public/` (models) and `native/data/` (exported world data)
 by walking up from the executable. For a self-contained folder, configure with `-DSL_COPY_ASSETS=ON`: the ~40 MB of
-models the game uses (`SL_PHASE1_MODELS` + `SL_PHASE2_MODELS` in `CMakeLists.txt`) and `native/data` (~32 MB) are
+models the game uses (`SL_PHASE1_MODELS` + `SL_PHASE2_MODELS` + `SL_PHASE3_MODELS` in `CMakeLists.txt`, ~75 MB) and
+`native/data` (~107 MB since Phase 3) are
 copied to `assets/` next to the executable (not the whole 240 MB `public/`). `SKI_LEGACY_ASSETS=/path/to/assets`
 overrides both.
 
@@ -63,7 +65,7 @@ cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --b
 | `--bindings binds.json` | rebinding, same shape as the web save's `binds` (`{"kb":{"jump":"KeyJ"},"pad":{"jump":1}}`) |
 | `--neutral` | Khronos PBR Neutral tone mapping instead of ACES filmic |
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
-| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; print stats, exit 0 / 1 (`out.png` + `out_village.png` + `out_ride.png`) |
+| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; print stats, exit 0 / 1 (`out.png` + `_village` `_ride` `_drive` `_bus` `_train` `_express`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
 
 ### Headless test (Linux, Mesa llvmpipe)
@@ -72,14 +74,17 @@ SDL_AUDIODRIVER=dummy xvfb-run -a -s "-screen 0 1280x720x24" ./native/build/ski_
 ./native/build/ski_legacy --verify-heights
 ```
 `SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier` switches parts of the scene off for profiling (`novillage`: the
-whole resort); `sidecam` looks at the rider from the side while riding, `chairtest` makes the autotest ride a chairlift.
+whole resort); `sidecam` looks at the rider from the side while riding, `chairtest` makes the autotest ride a chairlift,
+`vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola).
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 
 Reference run (a Linux container without a GPU: Mesa llvmpipe software rendering on 4 CPU cores, 1280×720,
 medium): world ready in ~7 s (the resort's canvases and 23 gondola stations are built at load); 600 frames = 10 s of
 skiing down the Panorama run (54 km/h, a charged jump and landing), then the walk into a hotel (stopped at its wall)
 and the gondola ride (30 s at 18 m/s, ×16 to the mid-station, off at its stair), 3-7 fps (software rasterisation; a
-real GPU is orders of magnitude faster). See "Phase 2" below for the output.
+real GPU is orders of magnitude faster). See "Phase 2" below for the output. Since Phase 3 the world is ready in ~14 s
+(the transport pack, the swept track and guardrails, ten car models) and the run goes on with the drive, the traffic
+check and the three rides: ~2000 frames in ~8 min at 4 fps, output under "Phase 3".
 
 ---
 
@@ -98,7 +103,15 @@ real GPU is orders of magnitude faster). See "Phase 2" below for the output.
 | pause | Esc | Menu / Options / + |
 
 All 24 actions of the web game are mapped (interact, horn, lights, map, ...); the ones without gameplay yet do
-nothing so far. Lifts: **E** (interact; controller: left button) at a station boards (at a mid-station: up, or down
+nothing so far.
+
+**Vehicles (Phase 3, drive.js's keys):** **E** beside your car drives it (at the Autohaus: buys one, see below), **E** at
+a standstill gets out; **W** / RT throttle, **S** / LT brake then reverse, **A D** / left stick steer (analog),
+**Space** / bottom button handbrake, **R** chase / cockpit view, **C** / LS look back, **H** horn, **L** lights,
+**U** unstuck (slow, every 10 s: onto the nearest clear lane), **F** flip back onto the wheels. At a bus stop or a
+Legacy Express station **E** rides, **[ ]** (controller: d-pad left / right) choose the destination; at a
+Wolkenspitzbahn station E boards (at a halt: up, or down while holding S), E gets off at a halt; **hold Space** runs the
+bus x8, the Wolkenspitzbahn x6, the Express x10 (as the web game). Rumble: knocks, crashes, landings, guardrails. Lifts: **E** (interact; controller: left button) at a station boards (at a mid-station: up, or down
 while holding S); riding, **hold Space** fast-forwards ×16 (main.js), **E** gets you off while the cabin crawls
 through a mid-station; you step out at the top / bottom automatically. Controllers are read by position (`SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS=0`), so the
 Switch Pro Controller's B is "bottom" exactly as in the web version. Rumble: landings, bumps, crashes.
@@ -111,8 +124,10 @@ Switch Pro Controller's B is "bottom" exactly as in the web version. Rumble: lan
 native/
   CMakeLists.txt, cmake/Dependencies.cmake   build + pinned third-party code
   tools/export_world.mjs                     runs the JS world code in Node, writes native/data/ (then runs:)
-  tools/export_resort.mjs, resort_hooks.mjs  builds the resort with the game's own modules in Node, writes resort.*
-  data/                                      world.json, crag.bin, cuts.bin, resort.json, resort.bin, fonts/ (~32 MB)
+  tools/export_resort.mjs, resort_hooks.mjs  builds the resort and the transport with the game's own modules in Node,
+                                             writes resort.* and transport.* (export_net.mjs: the vehicles' data)
+  data/                                      world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin,
+                                             transport.json / .bin, fonts/ (~107 MB)
   src/
     main.cpp                                 command line
     platform/platform.h                      THE platform interface (window/surface, input, rumble, time,
@@ -128,10 +143,13 @@ native/
                                              procedural audio, quality presets, shaders
     world/                                   world.js / wolkenspitze.js / legacypeak.js height port, quadtree terrain,
                                              scenery (trees from vegetation.js, colliders), resort (Phase 2 data),
-                                             lifts (lifts.js motion + riding), gondola_station (gondolastation.js)
+                                             lifts (lifts.js motion + riding), gondola_station (gondolastation.js),
+                                             transport (roads, decks, timetables' data), rail_sweep (the track)
     engine/canvas2d, engine/mesh_kit         software 2D canvas (sign textures, stb_truetype), procedural geometry kit
     player/                                  player.js physics port, the skier rig (model, clips, procedural stance)
-    game/                                    main loop, spawn, HUD, autotest
+    game/                                    main loop, spawn, HUD, autotest; vehicles (models, instanced draw),
+                                             drive (drive.js + the Autohaus), traffic, buses, trains (Wolkenspitzbahn,
+                                             Legacy Express)
 ```
 
 **Layering.** `game → player/world → engine → gfx + platform`. Only `platform/sdl` includes SDL; only `gfx/gl`
@@ -204,8 +222,8 @@ node native/tools/export_world.mjs      # ~35 s
 ### Known gaps (Phase 1, as updated by Phase 2)
 - No huts' interiors, roads, cars, people, races, menus, economy, saves in use, network (lifts, stations and the
   village: Phase 2).
-- Terrain cuts are baked data (re-export after JS changes); tunnels' covered cuts, the parkour regions and the roads'
-  cuts (built at runtime in the web game) are not included. Trees ignore cuts' forest thinning (a few trees may
+- Terrain cuts are baked data (re-export after JS changes); tunnels' covered cuts are left out (Phase 3 added the
+  roads' and the Legacy Express's cuts and the courses' regions). Trees ignore cuts' forest thinning (a few trees may
   stand on the railway bed). No boulders / scree yet.
 - No freestyle tricks or park features (the physics treat jumps as plain airs), no other skiers to bump into.
 - The skier's pose is a few procedural layers on the clips, not `skier.js`'s full rig (poles, pole plants,
@@ -303,8 +321,8 @@ resort: 7221 props in 28 sets, 440 mesh chunks, 23 gondola stations, 33 canvases
 ### Known gaps (Phase 2)
 - **Railway station buildings** (`stationbuildings.js`) are exported as baked geometry with their canvas textures
   replayed, not ported as a C++ builder (the gondola stations are); their normal maps and the station clocks' moving
-  hands (a shader on the game's hour) are missing (static faces). The Legacy Express's stations are not included (its
-  line is built at runtime on the World Racing courses: Phase 3), nor platforms, track or trains.
+  hands (a shader on the game's hour) are missing (static faces). The platforms, track, trains and the Legacy Express came with
+  Phase 3.
 - Prices, tickets and the day pass are not charged (the economy is Phase 4); the mid-station's up / down choice is
   "E = up, S + E = down" instead of the dialog / trail-map card. No multiplayer dwell / shared timeline.
 - The seated pose is a few bends on the rig (no IK onto the seat edge / footrest as `skier.js`); the gondola cabin's
@@ -316,6 +334,152 @@ resort: 7221 props in 28 sets, 440 mesh chunks, 23 gondola stations, 33 canvases
   are not in yet; RoundedBox bevels are plain boxes; no cabin interiors.
 - The resort data is ~24 MB (`resort.bin` 16 MB, `resort.json` 7 MB, mostly the canvases' command lists): fine for
   desktop, to be compressed / baked to textures for the Switch package (Phase 7).
+
+---
+
+## What Phase 3 ports
+
+**How the transport gets here.** Both exporters now plan the world in `main.js`'s order before anything is built: the
+piste fences, `planBusRoads` (roads.js: the A* roads, car parks, lay-bys, the scenic roads and their roundabouts, the
+chalet village, the road tunnels, the depot, the Autohaus / Werkstatt sites), `registerFreeWorldCourses` (the World
+Racing courses' regions own the terrain inside their bounds), `planExpressScenery` and `buildExpressGround` (the Legacy
+Express's line is fitted on that final ground). So:
+- `export_world.mjs` writes the roads' and the Express's cuts, pads and corridors with the rest (cuts.bin), and the
+  courses' **regions** as 8 m tiles of height deltas over base + pads with their forest density (`regions.bin`); the
+  2 m cut tiles are taken against the C++'s own interpolation of the regions, so on roads, roadbeds and pistes the C++
+  height matches the JS at every grid point. `--verify-heights` reports the region points separately.
+- `export_resort.mjs` (one process for both packs now, `makePack()`) builds the resort as before (now on the planned
+  roads, as decor.js expects), then the transport with the game's own modules — `SkiBus` (stop signs, `BusLine`'s road
+  strips, guardrails, snow poles and reflector posts, road signs, scenic props, the depot), `ParkingLots`,
+  `RoadTunnels` (every tube, portal and rock cut built at once), `buildRailway` (tunnel linings and lamps, portals,
+  viaducts), the rail stations' platforms, `buildExpressTrack` (every viaduct, portal and station; the 65 km of bed,
+  rails and sleepers are swept in C++ instead: captured they were ~150 MB), the frozen lakes, the Autohaus hall
+  (`CarRental.buildOutside`) and the medical centre — and captures it like the resort into `transport.json / .bin`
+  (instance lists over 64 go to the bin as float32; instanced meshes sharing a geometry are merged; vehicles and
+  additive light pools and the shader-bent guardrail sections are left out).
+- `export_net.mjs` adds `net`: every road's centre line with speedlimits.js's profile (signed limit, braked envelopes
+  of the limit and the bends both ways), stops, bus legs, car parks and bays, junctions, lay-bys, the 12 263 guardrail
+  lines, the road tunnels' tubes, the parked cars, per car model the fit `cars.js fitCar` computes (nose +z, wheels on
+  y 0, real length) with the nodes it leaves out and its glass materials, drive.js's `CAR_SPECS` / `MASS` / `DRIVE`,
+  the Autohaus prices; the Micruss's fit, glass, paint and seats; the Wolkenspitzbahn (line, stations with their door /
+  exit spots, tunnels, viaducts, passing loop, speed profile, timetable constants, the railcar: the Meshy body's
+  stretch as a matrix, the procedural cabin / underframe / bogie / far LOD as local meshes, the rider's seat); the
+  Legacy Express (ring, stations, tunnels, viaducts, speed profile).
+
+**Roads** (`world/transport.cpp`): roads.js `roadAt`, `laneDistance`, the road's smooth surface for
+`World::groundHeight` (`world.roadSurface`: the exact height + 3.5 cm across the ploughed width, eased into the drawn
+terrain over the shoulder; inside a road tunnel below its crown the tube's floor, so cars and people go through the
+mountain while the terrain stays whole over it), drive.js's `onTarmac`, the speed limit where you are, the railways'
+walkable track decks (railroute.js `railDeckHeight`, expressroute.js `expressDeckHeight`) as `World` decks.
+
+**Your car** (`game/drive.cpp`, drive.js): the bicycle model step by step — the automatic gearbox (P / D / R, six ratios
+and the final drive, shift points that hold a gear downhill, the electric cars' single gear and power limit), the
+torque curve, engine braking, the pedals pressed progressively, load transfer, the friction circle per axle with
+traction control / ABS, the handbrake locking the rear, the slip-angle tyre curve, ESC, hill hold, the walking-pace
+blend, air drag setting each car's top speed, surfaces (tarmac, shoulder, groomed piste, snow), crests (small jumps,
+landings), the rest anchor (no creeping out when wedged). Collisions: tree trunks / crowns, the resort's and the
+transport's colliders, terrain walls (a knock / crash into the mountain), the guardrails (a glancing slide with
+restitution and friction; over 100 km/h and 15° into it they break and you go through, 90 s), breakable poles, signs
+and street lamps (knocked away, the lamp over 100 km/h), other cars and the buses (`obb` + impulses: the traffic car
+is knocked aside, a parked car slides to a stop, a bus is a 12 t wall). Damage: knock / crash / wrecked (at 100 % or
+150 km/h, rolling over on a slope), unstuck (U), flip back (F), the springs (pitch and roll from the four wheels' snow,
+squat, dive and lean), the chase camera (lags into turns, pulls back with speed, eases behind, look back) and the
+cockpit camera with mouse look. The **Autohaus** (carrental.js): the ten cars for sale stand in its car park's bays; E
+buys one (free until the economy, Phase 4), then it is yours to drive; every other parked car says where to buy one.
+
+**Traffic** (`game/traffic.cpp`, traffic.js): 12 cars on the valley roads + 6 on the scenic network (models drawn by
+cars.js's spawn weights, seeded), each on its right-hand lane at speedlimits.js's target times its driver's factor,
+braking for the bends ahead, following at a time gap (`followV` / `lookFor`), stopping for you, your car and the buses,
+turning at junctions onto the car parks' access roads, parking a while and driving out again, turning round before a
+bus stop's dead end (the lane offset carries it across), lane offsets steered (`toRoad`), knocked aside when hit;
+about six kept round you, recycled out of sight. **Parked cars**: parking.js's 102, solid.
+
+**Ski buses** (`game/buses.cpp`, bus.js): the network as a tree rooted at the village (`parent`, `toRoot`, `legs`, both
+roads and bus legs), each trip with `leg()`'s speed profile (cruise, the bends, from and to a standstill in the
+bays), the Micruss on its axles in the right-hand lane (`poseBus`), the fleet of 8 (bus 0 waits at the village, the
+others go round village -> a stop -> village with a dwell), braking for the traffic, your car, you and each other.
+Riding: E at a stop (choose the destination), the bus waiting there (or bus 0) takes you, a window seat, the legs
+driven in turn, Space x8, out by the front door.
+
+**Wolkenspitzbahn** (`game/trains.cpp`, railway.js / railroute.js): the timetable exactly (`tripS` with the halts'
+dwells, `trainState`, `boardingU`, the cycle and the termini dwells that put both meetings on the passing loop), two
+trains of four cars placed between their bogies (the down train on the loop's second track), boarding at a station's
+door (the timetable jumps so a train stands there), the next stop / halts / get off / arrive, Space x6.
+
+**Legacy Express** (express.js): the segment timetable both ways (dwell, run, ... from the speed profile's running
+times), 16 trains (8 each way, double track), four cars each with the flipped cabs, boarding at any station for a
+chosen destination (the quicker way round; that direction's timetable shifted so a train stands at the platform),
+the ride, Space x10.
+
+**The track** (`world/rail_sweep.cpp`): the Wolkenspitzbahn's bed (ballast, the tunnels' slab, the loop's second
+track) and the Express's (the double-track ballast prism, slabs on the viaducts and in the tubes, the tubes' lining),
+both lines' rails, swept along the lines in 250 m chunks with railtrack.js / expresstrack.js's cross-sections; 212 481
+sleepers instanced within 320 m of the camera. The roads' **guardrails** are swept here too, from busRoads.rails (bus.js bends
+its rail sections along their lines in the vertex shader with per-instance Hermite attributes, which a capture cannot
+keep): a galvanised two-band beam 0.45-0.8 m over the ground with a post every 2 m, per 256 m cell.
+
+**Performance**: every car / bus / railcar of a model in one instanced draw per LOD per frame (`VehicleDraw`: matrix
+instancing, the car models' meshoptimizer LOD past 70 m, the railcars' exported far mesh past 220 / 420 m, nothing past
+300 m (traffic) / 4.5 km (trains)); the traffic not simulated beyond 600 m and updated at a quarter of the rate past
+300 m; the track chunks drawn by distance (rails 800 m, linings 900 m, bed 2.6 km); the car textures capped at
+512 px. (`MatrixInstanceBatch` now builds its vertex inputs in node order: multi-node GLBs whose nodes reference their
+meshes out of order drew parts with another node's transform.)
+
+Autotest output (llvmpipe, 1280×720, medium; the full run, abridged):
+```
+world: 313 pads, 24795 corridor segments, 6049 cut tiles, 4015 region tiles, crag 648x916
+resort + transport: 31819 props (7245 resort), 1231 mesh chunks, 23 gondola stations, 14790 colliders, 54 surfaces
+transport: 20 roads, 10 bus legs, 13 stops, 17 car parks, 12263 guardrail lines, 6 road tunnels, 102 parked cars, 10 car models; rail ok (4 stations), express ok (9 stations)
+rail sweep: 292 track chunks, 212481 sleepers
+guardrails: 11175 lines swept in 106 cells
+drive: 112 parked cars (10 for sale at the Autohaus)
+traffic: 18 cars on 2 roads (3 access roads, 3 junctions, 7 scenic roads)
+buses: 8 in the fleet, 13 stops
+railway: Wolkenspitzbahn, 2 trains of 4 cars, cycle 691 s (trip 263 s)
+express: Legacy Express, 16 trains, 9 stations, a round 1419 s
+world ready in 13.60 s ...
+[autotest] drive: BMW X3 bought at the Autohaus, on road 1 (3855 m long) at (329.7, -219.6, 1539.5)
+[autotest] drive t=  5.8s  pos=(   291.7,  -225.8,   1574.5)  ground  -225.8  speed= 75.2 km/h  BMW X3 - D2 - limit 50 km/h
+[autotest] drive t=  9.8s  pos=(   306.0,  -237.2,   1654.1)  ground  -237.2  speed= 78.9 km/h  BMW X3 - D2 - limit 80 km/h
+[autotest] drive: 359 m in 20.0 s, top 80.6 km/h, deepest below the ground 0.00 m, damage 0% -> ok
+[autotest] traffic: 18 cars, 10 driving; the furthest moved 291 m along its road, 1.6 m off the centre line (its lane: 1.6 m) -> ok
+[autotest] bus t= 19.7s  at (   118.7,     2.9,    224.7)   63.7 km/h  [Ski bus to Sonnenkopf Gondola - 1.8 km - 64 km/h]
+[autotest] bus: rode 24.0 s, moved 290 m -> ok
+[autotest] train t= 22.2s  at (  1367.4,   222.0,  -1101.7)    0.0 km/h  [Wolkensee - get off here]
+[autotest] train: rode 32.0 s, moved 2743 m -> ok
+[autotest] express: rode 24.0 s, moved 4439 m -> ok
+[autotest] 1995 frames (149.5 s simulated) in 478.6 s wall: avg 4.2 fps
+[autotest] ski ok, building collision ok, gondola ride ok
+[autotest] drive ok, traffic ok, bus ok, Wolkenspitzbahn ok, Legacy Express ok
+[autotest] PASS
+```
+
+### Known gaps (Phase 3)
+- **Courses' regions** come as an 8 m grid (mean 0.48 m, max ~4 m off the JS inside the regions, exact on roads and
+  roadbeds); the courses themselves (gates, ramps, props) are Phase 5. Outside the regions `--verify-heights` now
+  reads up to 0.24 m on `height` (the roads' benches and berms between 2 m grid points; `meshHeight`, the physics
+  surface, is still exact to 2.5 mm). The data grew to ~107 MB (regions 13 MB, cuts 13 MB, transport 58 MB): to be
+  compressed / baked for the Switch package (Phase 7).
+- **Cars**: no moving wheels or steering wheel, no dents (damage is a number), no headlights / tail lights / light
+  pools (the L key only toggles the flag), no engine / tyre / horn sounds (audio is Phase 7), no tyre tracks; the
+  cockpit view shows the car's own interior only as far as its GLB has one (no `_full` models, no seated driver's
+  hands); paint colours of the parked / traffic cars are the models' own; the Autohaus showroom (inside), the
+  configurator, the garage / selling, the Werkstatt, the tow truck, police, taxi and bad drivers are not ported.
+- Knocked poles, signs, lamps and broken guardrail sections lose their colliders for 90 s but stay drawn.
+- **Traffic** turns into a car park bay and out of it without the arcs (it appears in / leaves the bay), the scenic
+  roads' cars drive them as ordinary roads (no `scenicWalk` round the roundabouts), no tow zones, trains / helicopter
+  blockers, people in the cars.
+- **Buses**: no overtaking / ramming, the fleet's rounds are a simple rotation (not bus.js's slotted timetable), no
+  passengers or driver, no turn-round fade at intermediate stops (the seat view inside the Micruss and the R chase
+  view are there).
+- **Trains**: the Express wears the Wolkenspitzbahn's red (no Legacy blue livery), no seated passengers; the default
+  view is the chase camera (in a tunnel: close behind the train, the sky and sun faded out, no terrain drawn) — R gives
+  the seat view in the procedural cabin, whose lounge seat looks at the dark cab partition (the JS's glazed cab and
+  the Express's Meshy seats are not reproduced); no trains braking for you on the track, no clocks / departure boards; the Express's stations and the Wolkenspitzbahn's platforms are captured
+  meshes (their furniture's colliders as exported).
+- The road tunnels' lids are left out (the C++ terrain keeps the mountain whole over the tubes), no terrain clip
+  volumes at the railway portals (the tubes' lining is drawn inside the mountain); snowmobiles and the helicopter are
+  not ported yet.
 
 ---
 
@@ -352,7 +516,7 @@ What has to come from Nintendo (none of it can be in this repository):
 | **1 (done)** | engine core, platform + gfx layers, exact terrain, skier physics + camera, trees, village buildings, HUD, autotest |
 | **2 (done)** | the village and resort (every building, prop, sign, signpost, net, marker, snow cannon of `village.js` / `decor.js` / `resortdressing.js`), gondola stations (C++ port) and railway station buildings, gondolas and chairlifts in motion with boarding and riding, colliders and walkable decks, day / night |
 | **2b** | still to do from the old Phase 2 list: huts' interiors, the terrain park and kickers (`park.js`, tricks scoring from `tricks.js`), boulders, the full `skier.js` rig (poles, pole plants, first-person gloves), streamed piste fences, flags, crowds, snowcats |
-| **3** | vehicles and transport: car physics (`drive.js`, damage, lights), roads with their terrain cuts and tunnels, traffic and parking, the ski bus and its routes, the railways (Wolkenspitzbahn, Legacy Express) with stations, snowmobile, helicopter |
+| **3 (done)** | vehicles and transport: car physics (`drive.js`, damage), roads with their terrain cuts and tunnels, traffic and parking, the Autohaus, the ski bus and its routes, the railways (Wolkenspitzbahn, Legacy Express) with stations and swept track; still open: snowmobile, helicopter, car lights / sounds / wheels |
 | **4** | menus, HUD and economy: title / pause / settings (all web settings incl. rebinding UI with controller glyphs), trail map, money, shops, rentals, chalets and furnishing, save games through `Platform::writeSave` (same JSON shape as the web save) |
 | **5** | gameplay: races (World Racing courses = terrain regions, gates, bots, leaderboards), jobs, police / prison / hospital, NPCs and crowds, parkour courses |
 | **6** | multiplayer: keep the existing Node server (`server/`) and its protocol; write a C++ client (WebSocket over TLS, e.g. a small libwebsockets / IXWebSocket client behind the platform layer, since console sockets go through `nn::socket` / NEX) with interpolation of remote skiers, car rides, chat |

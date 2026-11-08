@@ -24,6 +24,11 @@ struct Collider {
   double hw = 0, hd = 0, rot = 0; // half extents and rotation (player.js convention: rot = -yaw)
   double top = 1e30;              // world y of the top (can be jumped over); 1e30 = tall
   bool soft = false;              // a net / fence: a soft bump, never a wipeout
+  // (Phase 3)
+  bool rail = false;              // a guardrail's own collider (cars slide along busRoads.rails instead)
+  double brk = 0;                 // breakable (world/breakables.js): a car faster than this (m/s) knocks it flying
+  bool lamp = false;              // ...a street lamp
+  mutable double downUntil = -1;  // knocked down until this time (s): no collider
 };
 
 struct Tree { float x, y, z, s, rot, trunk, crown; uint8_t type; };
@@ -49,6 +54,9 @@ public:
   /// Phase 1 placements (world.json): only when there is no resort data.
   bool hasResort() const { return !colliderGrid_.empty(); }
   size_t treesDrawn() const { return drawn_; }
+  /// (Phase 3) moving bodies the player bumps into: parked / traffic cars, the buses, the trains near you (refilled
+  /// by the vehicles every frame)
+  std::vector<Collider> dynamic;
 
   static constexpr double CELL = 64, SPACING = 6.5;
 

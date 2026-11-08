@@ -47,7 +47,11 @@ void MatrixInstanceBatch::init(gfx::Device& d, const Model& m, uint32_t capacity
   model_ = &m;
   capacity_ = std::max(1u, capacity);
   buf_ = d.createBuffer(gfx::BufferUsage::Vertex, nullptr, sizeof(Inst) * capacity_, true);
-  for (auto& mesh : m.meshes)
+  // (one vertex input per primitive in NODE order, as submitInstances walks them: a model whose nodes reference its
+  // meshes out of order, or share one, drew a primitive with another node's buffers before)
+  for (auto& node : m.nodes) {
+    if (node.mesh < 0) continue;
+    const Mesh& mesh = m.meshes[size_t(node.mesh)];
     for (auto& p : mesh.primitives) {
       const uint32_t is = sizeof(Inst);
       auto a = baseAttribs(p);
@@ -56,6 +60,7 @@ void MatrixInstanceBatch::init(gfx::Device& d, const Model& m, uint32_t capacity
       a.push_back({11, 1, 4, gfx::AttribType::Float, false, 32, is, true});
       inputs_.push_back(d.createVertexInput(a, {p.vbo, buf_}, p.ibo));
     }
+  }
 }
 void MatrixInstanceBatch::upload(gfx::Device& d, const std::vector<Inst>& inst) {
   count_ = uint32_t(std::min<size_t>(inst.size(), capacity_));

@@ -187,6 +187,20 @@ glm::dmat4 mat34(const nlohmann::json& a) {
   for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) m[c][r] = a[size_t(r * 4 + c)].get<double>();
   return m;
 }
+// an instance list: inline (`inst`: rows of 12) or in the bin (`instOff` / `instN`: float32 x 12 each)
+std::vector<glm::dmat4> instList(const nlohmann::json& e, const std::vector<uint8_t>& bin) {
+  std::vector<glm::dmat4> out;
+  if (e.contains("inst")) { for (auto& a : e["inst"]) out.push_back(mat34(a)); return out; }
+  size_t off = e.value("instOff", size_t(0)), n = e.value("instN", size_t(0));
+  if (off + n * 48 > bin.size()) return out;
+  const float* f = reinterpret_cast<const float*>(bin.data() + off);
+  for (size_t i = 0; i < n; i++, f += 12) {
+    glm::dmat4 m(1);
+    for (int r = 0; r < 3; r++) for (int c = 0; c < 4; c++) m[c][r] = f[r * 4 + c];
+    out.push_back(m);
+  }
+  return out;
+}
 
 std::shared_ptr<Model> modelFromBin(gfx::Device& dev, const uint8_t* bin, size_t binSize, const nlohmann::json& m, const Material& mat,
                                     dvec3* bmin = nullptr, dvec3* bmax = nullptr) {
@@ -229,15 +243,57 @@ std::shared_ptr<Model> modelFromBin(gfx::Device& dev, const uint8_t* bin, size_t
 } // namespace
 
 bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& scenery) {
-  std::vector<uint8_t> jb, bin;
-  if (!plat.readFile(paths.data("resort.json"), jb) || !plat.readFile(paths.data("resort.bin"), bin)) {
-    SL_WARN("resort: native/data/resort.json / resort.bin missing (node native/tools/export_resort.mjs)");
-    return false;
-  }
-  nlohmann::json j = nlohmann::json::parse(jb.begin(), jb.end(), nullptr, false);
-  if (j.is_discarded()) return false;
   { std::vector<uint8_t> f; if (plat.readFile(paths.data("fonts/barlow-condensed-500.ttf"), f)) fonts_.regular.load(std::move(f)); }
   { std::vector<uint8_t> f; if (plat.readFile(paths.data("fonts/barlow-condensed-700.ttf"), f)) fonts_.bold.load(std::move(f)); }
+  std::vector<Collider> cols;
+  size_t nSurf = 0;
+  if (!loadPack(plat, paths, "resort", cols, nSurf)) return false;
+  size_t nResort = nProps_;
+  if (!loadPack(plat, paths, "transport", cols, nSurf)) SL_WARN("transport: native/data/transport.json missing (Phase 3 data; node native/tools/export_resort.mjs)");
+  scenery.setColliders(std::move(cols));
+  SL_INFO("resort + transport: %zu props (%zu resort), %zu mesh chunks, %zu gondola stations, %zu colliders, %zu surfaces", nProps_, nResort, chunks_.size(),
+          stations_.size(), scenery.colliders().size(), nSurf);
+  return true;
+}
+
+const nlohmann::json* Resort::transportNet() const {
+  if (!tjson_ || !tjson_->contains("net")) return nullptr;
+  return &(*tjson_)["net"];
+}
+
+std::shared_ptr<Model> Resort::transportModel(const nlohmann::json& parts) {
+  auto model = std::make_shared<Model>();
+  Mesh mesh;
+  for (auto& p : parts) {
+    int mi = p["mat"];
+    auto m = modelFromBin(dev_, tbin_.data(), tbin_.size(), p, mi >= 0 && size_t(mi) < tmats_.size() ? tmats_[size_t(mi)] : Material{});
+    if (!m) continue;
+    Primitive pr = std::move(m->meshes[0].primitives[0]);
+    pr.material = int(model->materials.size());
+    model->materials.push_back(m->materials[0]);
+    model->bmin = glm::min(model->bmin, pr.bmin); model->bmax = glm::max(model->bmax, pr.bmax);
+    mesh.primitives.push_back(std::move(pr));
+  }
+  if (mesh.primitives.empty()) return nullptr;
+  model->meshes.push_back(std::move(mesh));
+  Node n; n.mesh = 0;
+  model->nodes.push_back(n);
+  model->roots.push_back(0);
+  return model;
+}
+
+bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf) {
+  auto jp = std::make_shared<nlohmann::json>();
+  std::vector<uint8_t> jb, bin;
+  if (!plat.readFile(paths.data(name + ".json"), jb) || !plat.readFile(paths.data(name + ".bin"), bin)) {
+    SL_WARN("%s: native/data/%s.json / .bin missing (node native/tools/export_resort.mjs)", name.c_str(), name.c_str());
+    return false;
+  }
+  *jp = nlohmann::json::parse(jb.begin(), jb.end(), nullptr, false);
+  nlohmann::json& j = *jp;
+  if (j.is_discarded()) return false;
+  jb.clear(); jb.shrink_to_fit();
+  size_t props0 = nProps_, chunks0 = chunks_.size(), cols0 = cols.size();
 
   ModelLoadOptions mo;
   mo.maxTextureSize = 1024;
@@ -287,7 +343,7 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
   auto matAt = [&](int i) { return i >= 0 && size_t(i) < mats.size() ? mats[size_t(i)] : Material{}; };
 
   // ---- instanced sets (GLB props and repeated procedural pieces), split into 512 m cells
-  auto addSet = [&](std::shared_ptr<Model> model, const nlohmann::json& inst, float glow, bool shadow) {
+  auto addSet = [&](std::shared_ptr<Model> model, const std::vector<glm::dmat4>& inst, float glow, bool shadow) {
     if (!model) return;
     if (glow > 0) { auto m2 = std::make_shared<Model>(*model); for (auto& mt : m2->materials) mt.glow = glow; model = m2; }
     PropSet ps;
@@ -295,8 +351,7 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
     ps.shadow = shadow;
     vec3 dim = model->bmax - model->bmin;
     std::map<int64_t, size_t> cellOf;
-    for (auto& a : inst) {
-      glm::dmat4 M = mat34(a);
+    for (const glm::dmat4& M : inst) {
       double sc = std::cbrt(std::fabs(glm::determinant(glm::dmat3(M))));
       ps.radius = std::max(ps.radius, float(glm::length(dim) * 0.5 * sc));
       int64_t cx = int64_t(std::floor(M[3][0] / PROP_CELL)), cz = int64_t(std::floor(M[3][2] / PROP_CELL));
@@ -318,8 +373,8 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
     }
     props_.push_back(std::move(ps));
   };
-  for (auto& p : j["props"]) addSet(assets_.model(p["model"].get<std::string>(), mo), p["inst"], p.value("glow", 0.f), true);
-  for (auto& m : j["instanced"]) addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), m["inst"], 0, true);
+  for (auto& p : j["props"]) addSet(assets_.model(p["model"].get<std::string>(), mo), instList(p, bin), p.value("glow", 0.f), true);
+  for (auto& m : j["instanced"]) addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), instList(m, bin), 0, true);
 
   // ---- baked procedural meshes
   for (auto& m : j["meshes"]) {
@@ -359,8 +414,7 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
   }
 
   // ---- lifts, colliders, walkable surfaces
-  lifts_.load(dev_, assets_, j["lifts"]);
-  std::vector<Collider> cols;
+  if (j.contains("lifts")) lifts_.load(dev_, assets_, j["lifts"]);
   for (auto& c : j["colliders"]) {
     Collider k;
     k.x = c["x"]; k.z = c["z"];
@@ -368,10 +422,11 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
     else { k.hw = c["hw"]; k.hd = c["hd"]; k.rot = c.value("rot", 0.0); }
     if (c.contains("top")) k.top = c["top"];
     k.soft = c.value("soft", 0) != 0;
+    k.rail = c.value("rail", 0) != 0;
+    k.brk = c.value("brk", 0.0);
+    k.lamp = c.value("lamp", 0) != 0;
     cols.push_back(k);
   }
-  scenery.setColliders(std::move(cols));
-  size_t nSurf = 0;
   for (auto& s : j["surfaces"]) {
     SampledSurface S;
     S.x0 = s["x0"]; S.z0 = s["z0"]; S.step = s["step"]; S.nx = s["nx"]; S.nz = s["nz"]; S.base = s["base"];
@@ -382,8 +437,8 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
     world_.addSurface(std::move(S));
     nSurf++;
   }
-  SL_INFO("resort: %zu props in %zu sets, %zu mesh chunks, %zu gondola stations, %zu canvases, %zu colliders, %zu surfaces",
-          nProps_, props_.size(), chunks_.size(), stations_.size(), canvasTex.size(), scenery.colliders().size(), nSurf);
+  SL_INFO("%s: %zu props, %zu mesh chunks, %zu canvases, %zu colliders", name.c_str(), nProps_ - props0, chunks_.size() - chunks0, canvasTex.size(), cols.size() - cols0);
+  if (name == "transport") { tjson_ = jp; tbin_ = std::move(bin); tmats_ = mats; }
   return true;
 }
 

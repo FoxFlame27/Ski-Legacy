@@ -43,6 +43,8 @@ const PATCHES = [
 ];
 
 export async function load(url, context, nextLoad) {
+  // (stylesheets the UI modules import: nothing in Node)
+  if (/\.(css|svg|png|jpe?g|webp)(\?.*)?$/.test(url)) return { format: 'module', source: 'export default "";', shortCircuit: true };
   const r = await nextLoad(url, context);
   const p = PATCHES.find((q) => url.endsWith(q.file));
   if (!p) return r;

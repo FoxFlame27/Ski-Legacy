@@ -548,11 +548,10 @@ void Player::collide(double speed, double feetY, double above) {
   const double R = 0.35;
   const std::vector<int>* near = scenery_->hasResort() ? scenery_->collidersNear(p.x, p.z) : nullptr;
   size_t n = scenery_->hasResort() ? (near ? near->size() : 0) : scenery_->colliders().size();
-  for (size_t ci = 0; ci < n; ci++) {
-    const Collider& c = scenery_->colliders()[near ? size_t((*near)[ci]) : ci];
-    if (c.top < 1e29 ? feetY > c.top : above > 2.5) continue;
+  auto test = [&](const Collider& c) {
+    if (c.top < 1e29 ? feetY > c.top : above > 2.5) return;
     double reach = (c.r >= 0 ? c.r : std::max(c.hw, c.hd)) + R;
-    if (std::fabs(p.x - c.x) > reach || std::fabs(p.z - c.z) > reach) continue;
+    if (std::fabs(p.x - c.x) > reach || std::fabs(p.z - c.z) > reach) return;
     if (c.r >= 0) {
       double dx = p.x - c.x, dz = p.z - c.z, d = std::hypot(dx, dz);
       if (d < c.r + R) {
@@ -574,7 +573,9 @@ void Player::collide(double speed, double feetY, double above) {
         bounce(nx, nz, speed, c.soft);
       }
     }
-  }
+  };
+  for (size_t ci = 0; ci < n; ci++) test(scenery_->colliders()[near ? size_t((*near)[ci]) : ci]);
+  for (const Collider& c : scenery_->dynamic) test(c);   // (Phase 3: vehicles)
   // trees: the trunk stops you; the boughs are a soft bump (player.js)
   if (above < 2.5) {
     if (const Tree* t = scenery_->treeAt(p.x, p.z, R, false)) {

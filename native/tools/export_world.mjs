@@ -6,8 +6,12 @@
 //                    pistes, huts, peaks, bus stops), building placements, spawn points and reference heights
 //                    (for `ski_legacy --verify-heights`)
 //   data/crag.bin    the crag mask (distance from each 10 m grid node to the nearest groomed run, uint16 dm)
-//   data/cuts.bin    the terrain cuts (piste grading, freeride bowls, secrets' trails, the railway's roadbed...)
-//                    as sparse tiles of height deltas on the 2 m grid the physics mesh uses
+//   data/cuts.bin    the terrain cuts (piste grading, freeride bowls, secrets' trails, the railway's roadbed, the bus
+//                    roads' benches and car parks, the Legacy Express's roadbed...) as sparse tiles of height deltas on
+//                    the 2 m grid the physics mesh uses
+//   data/regions.bin (Phase 3) the World Racing courses' regions (they own the terrain inside their bounds; the Legacy
+//                    Express runs through them) as tiles of height deltas over the base terrain on an 8 m grid, with
+//                    the regions' forest density
 //   data/resort.*    (Phase 2, written by export_resort.mjs, run at the end in its own process): the village, the
 //                    resort dressing, lifts and stations as built by the game's own modules
 //
@@ -38,6 +42,15 @@ L.initLayout();
 log('layout done');
 try { S.initSecrets(); log('secrets done'); } catch (e) { log('secrets skipped:', e.message); }
 const { layout } = L;
+// (Phase 3) main.js's planning before the terrain is built, in its order: the piste fences, the bus roads (cuts, car
+// parks, corridors), the World Racing courses' regions, the Legacy Express's lakes and ground
+globalThis.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
+try { L.planPisteFences(); } catch (e) { log('piste fences skipped:', e.message); }
+try { (await import(path.join(SRC, 'game/bus/roads.js'))).planBusRoads(layout.busStops); log('bus roads planned'); } catch (e) { log('bus roads skipped:', e.message); }
+const FREE = await import(path.join(SRC, 'modes/parkour/freeworld.js'));
+try { await FREE.registerFreeWorldCourses(); log('courses registered:', world.regions.length); } catch (e) { log('courses skipped:', e.message); }
+try { (await import(path.join(SRC, 'world/expressscenery.js'))).planExpressScenery(FREE.freeCourses()); } catch (e) { log('express scenery skipped:', e.message); }
+try { (await import(path.join(SRC, 'world/expressground.js'))).buildExpressGround(FREE.freeCourses()); log('express ground built'); } catch (e) { log('express ground skipped:', e.message); }
 
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
@@ -58,24 +71,75 @@ const cm = world.cragMask;
 }
 log('crag mask', cm.nx, 'x', cm.nz);
 
-// ---------------------------------------------------------------- terrain cuts -> sparse delta tiles
-// delta(x, z) = applyCuts(height without cuts) - height without cuts, as the terrain looks from outside (covered
-// cuts, e.g. tunnel trenches under a lid, are left out: tunnels are a later phase)
-const CELL = 2, TILE = 32, TW = TILE * CELL; // 64 m tiles of 32 x 32 cells (33 x 33 samples)
-const cuts = world.cuts;
-world.cuts = [];
-const noCut = (x, z) => world.height(x, z, 0);
-world.cuts = cuts;
-const delta = (x, z) => {
-  const save = world.cuts; world.cuts = [];
-  const h0 = world.height(x, z, 0);
-  world.cuts = save;
-  world._outside = true;
-  const h1 = world.applyCuts(x, z, h0, 0);
-  world._outside = false;
-  return h1 - h0;
+// ---------------------------------------------------------------- the courses' regions -> 8 m delta tiles
+// regDelta(x, z) = height with the regions (no cuts) - height without them (base + pads); 256 m tiles of 32 x 32 cells.
+// The C++ terrain adds it (bilinear) to base + pads; the 2 m cut tiles below are taken relative to that, so wherever a
+// cut tile lies (roads, the railways' roadbeds, pistes) the C++ height matches the JS one exactly at the grid points.
+const RCELL = 8, RTILE = 32, RTW = RCELL * RTILE, RS1 = RTILE + 1;
+const regions = world.regions.slice(), cutsAll = world.cuts;
+const hNo = (x, z) => { const rg = world.regions, c = world.cuts; world.regions = []; world.cuts = []; try { return world.height(x, z, 0); } finally { world.regions = rg; world.cuts = c; } };
+const hReg = (x, z) => { const c = world.cuts; world.cuts = []; try { return world.height(x, z, 0); } finally { world.cuts = c; } };
+const regTiles = new Map(); // key -> { tx, tz, d: Float64Array, f: Float32Array }
+const rk = (tx, tz) => tx * 100000 + tz;
+for (const R of regions) {
+  const b = R.bounds;
+  for (let tx = Math.floor(b.minx / RTW); tx <= Math.floor(b.maxx / RTW); tx++) for (let tz = Math.floor(b.minz / RTW); tz <= Math.floor(b.maxz / RTW); tz++) {
+    if (regTiles.has(rk(tx, tz))) continue;
+    const d = new Float64Array(RS1 * RS1), f = new Float32Array(RS1 * RS1);
+    let mx = 0, inR = false;
+    for (let j = 0; j < RS1; j++) for (let i = 0; i < RS1; i++) {
+      const x = tx * RTW + i * RCELL, z = tz * RTW + j * RCELL;
+      const v = hReg(x, z) - hNo(x, z);
+      d[j * RS1 + i] = v; mx = Math.max(mx, Math.abs(v));
+      const rg = world.regionAt(x, z);
+      if (rg?.forest) {
+        inR = true;
+        const h = world.height(x, z, 0), slope = Math.hypot(world.height(x + 1, z) - h, world.height(x, z + 1) - h);
+        f[j * RS1 + i] = world.forest(x, z, h, slope);
+      } else f[j * RS1 + i] = -1; // (outside every region: the analytic forest)
+    }
+    if (mx < 0.003 && !inR) continue;
+    regTiles.set(rk(tx, tz), { tx, tz, d, f });
+  }
+  log('region', R.id, 'tiles so far', regTiles.size);
+}
+const regAt = (x, z) => { // the C++ bilinear region delta
+  const tx = Math.floor(x / RTW), tz = Math.floor(z / RTW), t = regTiles.get(rk(tx, tz));
+  if (!t) return 0;
+  const fx = (x - tx * RTW) / RCELL, fz = (z - tz * RTW) / RCELL, i = Math.min(RTILE - 1, Math.floor(fx)), j = Math.min(RTILE - 1, Math.floor(fz)), u = fx - i, v = fz - j, D = t.d;
+  return (D[j * RS1 + i] * (1 - u) + D[j * RS1 + i + 1] * u) * (1 - v) + (D[(j + 1) * RS1 + i] * (1 - u) + D[(j + 1) * RS1 + i + 1] * u) * v;
 };
-void noCut;
+{
+  const chunksR = [];
+  for (const t of regTiles.values()) {
+    let mx = 0;
+    for (const v of t.d) mx = Math.max(mx, Math.abs(v));
+    const scale = Math.max(mx, 1e-6) / 32767;
+    const b = Buffer.alloc(12 + RS1 * RS1 * 3 + ((RS1 * RS1 * 3) % 4 ? 4 - ((RS1 * RS1 * 3) % 4) : 0));
+    b.writeInt32LE(t.tx, 0); b.writeInt32LE(t.tz, 4); b.writeFloatLE(scale, 8);
+    for (let k = 0; k < RS1 * RS1; k++) b.writeInt16LE(Math.round(t.d[k] / scale), 12 + k * 2);
+    for (let k = 0; k < RS1 * RS1; k++) b.writeUInt8(t.f[k] < 0 ? 255 : Math.round(Math.min(1, t.f[k]) * 254), 12 + RS1 * RS1 * 2 + k);
+    // (the deltas as the C++ reads them back: the cut tiles are taken against these)
+    for (let k = 0; k < RS1 * RS1; k++) t.d[k] = Math.round(t.d[k] / scale) * scale;
+    chunksR.push(b);
+  }
+  const head = Buffer.alloc(16);
+  head.write('SLRG', 0); head.writeInt32LE(RCELL, 4); head.writeInt32LE(RTILE, 8); head.writeInt32LE(chunksR.length, 12);
+  fs.writeFileSync(path.join(OUT, 'regions.bin'), Buffer.concat([head, ...chunksR]));
+  log('region tiles', chunksR.length);
+}
+
+// ---------------------------------------------------------------- terrain cuts -> sparse delta tiles
+// delta(x, z) = the height as the terrain looks from outside (covered cuts, e.g. tunnel trenches under a lid, left out:
+// the C++ terrain keeps the mountain whole over a tube) - (base + pads + the region delta as the C++ interpolates it)
+const CELL = 2, TILE = 32, TW = TILE * CELL; // 64 m tiles of 32 x 32 cells (33 x 33 samples)
+const cuts = cutsAll;
+const delta = (x, z) => {
+  world._outside = true;
+  const h1 = world.height(x, z, 0);
+  world._outside = false;
+  return h1 - (hNo(x, z) + regAt(x, z));
+};
 const tiles = new Set();
 const tk = (tx, tz) => tx * 100000 + tz;
 for (const c of cuts) {
@@ -92,11 +156,7 @@ for (const c of cuts) {
     for (let j = 0; j < TW && !hit; j += STEP) for (let i = 0; i < TW && !hit; i += STEP) {
       const x = tx * TW + i + STEP / 2, z = tz * TW + j + STEP / 2;
       if (x < b.minx || x > b.maxx || z < b.minz || z > b.maxz) continue;
-      const h0 = world.height(x, z, 0); // (with all cuts; compare with this cut alone)
-      const save = world.cuts; world.cuts = [];
-      const hb = world.height(x, z, 0);
-      world.cuts = save;
-      if (Math.abs(h0 - hb) > 0.003) hit = true;
+      if (Math.abs(world.height(x, z, 0) - hReg(x, z)) > 0.003) hit = true; // (this cut moves the ground here)
     }
     if (hit) for (let a = -1; a <= 1; a++) for (let d = -1; d <= 1; d++) tiles.add(tk(tx + a, tz + d));
   }
@@ -159,11 +219,12 @@ for (let i = 0; i < 100; i++) { const p = pistes[i % pistes.length].pts; const q
 for (const [x, z] of pts) {
   const h = world.height(x, z, 0);
   const slope = Math.hypot(world.height(x + 1, z) - h, world.height(x, z + 1) - h);
-  refs.push([r3(x), r3(z), world.baseHeight(x, z, 0), world.baseHeight(x, z, 8), world.baseHeight(x, z, 64), h, world.meshHeight(x, z), world.forest(x, z, h, slope)]);
+  refs.push([r3(x), r3(z), world.baseHeight(x, z, 0), world.baseHeight(x, z, 8), world.baseHeight(x, z, 64), h, world.meshHeight(x, z), world.forest(x, z, h, slope), world.regionAt(x, z) ? 1 : 0]);
 }
 
 const out = {
-  version: 1,
+  version: 3,
+  regions: { file: 'regions.bin', cell: RCELL, tile: RTILE, list: regions.map((r) => ({ id: r.id, bounds: r.bounds })) },
   generated: new Date().toISOString(),
   seed: 7331,
   massifs: MASSIFS.map((m) => m.id),

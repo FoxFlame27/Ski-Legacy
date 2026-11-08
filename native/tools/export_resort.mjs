@@ -1,4 +1,4 @@
-// Ski Legacy native port: resort exporter (Phase 2).
+// Ski Legacy native port: resort + transport exporter (Phases 2-3).
 //
 // Builds the resort exactly as the web game does (world/village.js, decor.js, resortdressing.js, lifts.js on the
 // layout of layout.js, with secrets and piste fences planned first like main.js), in Node with real THREE but no
@@ -12,6 +12,10 @@
 //                     walkable surfaces (decks, stairs) sampled on a 0.25 m grid
 //   data/resort.bin   the meshes' vertices / indices and the surfaces' samples
 //   data/fonts/barlow-condensed-700.ttf   the signs' font (from @fontsource/barlow-condensed, WOFF -> TTF)
+//
+//   data/transport.json + .bin (Phase 3): the roads, car parks, road tunnels, railway and Legacy Express track and
+//                     stations as built by their own modules (same capture), plus `net` (export_net.mjs): the data the
+//                     C++ vehicles run on (road centre lines and speed profiles, stops, bays, timetables, vehicle fits)
 //
 // Usage (from the repo root):  node native/tools/export_resort.mjs      (also run by export_world.mjs)
 import { register } from 'node:module';
@@ -141,7 +145,17 @@ class RecCanvas {
   toDataURL() { return 'data:,'; }
   addEventListener() {}
 }
-globalThis.document = { createElement: (t) => (t === 'canvas' ? new RecCanvas() : { style: {}, appendChild() {}, addEventListener() {} }), body: { appendChild() {} }, addEventListener() {} };
+// (a DOM stand-in: the transport's modules import UI helpers that touch the page at load)
+const fakeEl = () => new Proxy({ style: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false }, dataset: {}, children: [], childNodes: [] }, {
+  get: (o, k) => (k in o ? o[k] : k === 'getBoundingClientRect' ? () => ({ left: 0, top: 0, width: 0, height: 0 }) : typeof k === 'string' && /^(query|getElement)/.test(k) ? () => null : typeof k === 'string' && /^[a-z]/.test(k) ? () => fakeEl() : undefined),
+  set: (o, k, v) => { o[k] = v; return true; },
+});
+globalThis.document = { createElement: (t) => (t === 'canvas' ? new RecCanvas() : fakeEl()), createElementNS: () => fakeEl(), body: fakeEl(), head: fakeEl(), documentElement: fakeEl(),
+  addEventListener() {}, removeEventListener() {}, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, createTextNode: () => fakeEl() };
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
+globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+globalThis.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+globalThis.performance ??= { now: () => Date.now() };
 globalThis.window ??= globalThis;
 globalThis.OffscreenCanvas = class extends RecCanvas { constructor(w, h) { super(); this.width = w; this.height = h; } };
 globalThis.requestAnimationFrame = () => 0;
@@ -242,6 +256,7 @@ globalThis.__slStation = (kind, o, r) => {
   stations.push(s);
 };
 
+
 const assetsMod = await import(pathToFileURL(path.join(SRC, 'core/assets.js')));
 const worldMod = await import(pathToFileURL(path.join(SRC, 'world/world.js')));
 const L = await import(pathToFileURL(path.join(SRC, 'world/layout.js')));
@@ -252,11 +267,24 @@ L.initLayout();
 try { S.initSecrets(); } catch (e) { log('secrets skipped:', e.message); }
 try { L.planPisteFences(); } catch (e) { log('piste fences skipped:', e.message); }
 log('layout ready');
+// (Phase 3) the rest of main.js's planning, in its order, before anything is built: the bus roads (their cuts, car
+// parks, tunnels), the World Racing courses' regions, the Legacy Express's lakes and ground (the line fitted on the
+// final ground). export_world.mjs plans the same, so the terrain data agrees.
+const roadsMod = await import(pathToFileURL(path.join(SRC, 'game/bus/roads.js')));
+const freeMod = await import(pathToFileURL(path.join(SRC, 'modes/parkour/freeworld.js')));
+const { busRoads } = roadsMod;
+try { roadsMod.planBusRoads(L.layout.busStops); log('bus roads planned:', busRoads.roads.length); } catch (e) { log('bus roads skipped:', e.message); }
+try { await freeMod.registerFreeWorldCourses(); log('world racing courses registered:', world.regions.length); } catch (e) { log('courses skipped:', e.message); }
+try { (await import(pathToFileURL(path.join(SRC, 'world/expressscenery.js')))).planExpressScenery(freeMod.freeCourses()); } catch (e) { log('express scenery skipped:', e.message); }
+try { (await import(pathToFileURL(path.join(SRC, 'world/expressground.js')))).buildExpressGround(freeMod.freeCourses()); log('express ground built:', L.layout.express?.stations?.length, 'stations'); } catch (e) { log('express ground skipped:', e.message); }
 
+const CAR_NAMES = ['car_bmw_x3', 'car_audi_rs6', 'car_vw_golf_gti', 'car_tesla_m3', 'car_mercedes_sls', 'car_porsche_taycan', 'car_lamborghini_huracan', 'car_toyota_gr_yaris', 'car_audi_etron_gt', 'car_mercedes_gls'];
 const MODELS = ['rental_shop', 'gondola_cabin', 'chairlift_chair', 'lift_tower', 'chair_terminal', 'chair_bullwheel', 'hotel_chalet', 'mountain_hut', 'race_arch',
   'ticket_booth', 'snow_cannon', 'lamp_post', 'wooden_bench', 'outdoor_ski_rack', 'snowman', 'firewood_pile', 'wooden_fence', 'christmas_tree', 'picnic_table',
   'wooden_sled', 'deck_chair', 'map_board', 'sign_pole', 'truss_pylon', 'snowmobile', 'wooden_barrel', 'trash_bin', 'market_stall', 'fire_pit',
-  'grandstand', 'timing_board', 'start_house', 'patrol_hut', 'piste/bnet_panel', 'piste/flag_pole', 'piste/rope_pole'];
+  'grandstand', 'timing_board', 'start_house', 'patrol_hut', 'piste/bnet_panel', 'piste/flag_pole', 'piste/rope_pole',
+  // (Phase 3) the transport's own
+  'rail_car2', 'floodlight_head_b', 'floodlight_head_c', 'floodlight_mast', 'parking_pay_machine', 'parking_sign', 'bus_stop_sign', 'ski_bus_micruss', ...CAR_NAMES];
 const models = {};
 await Promise.all(MODELS.map(async (n) => { models[n] = await loadGLB(n); }));
 log('models loaded', Object.values(models).filter(Boolean).length, '/', MODELS.length);
@@ -266,9 +294,9 @@ const { Lifts } = await import(pathToFileURL(path.join(SRC, 'world/lifts.js')));
 const { Decor } = await import(pathToFileURL(path.join(SRC, 'world/decor.js')));
 const { buildResortDressing } = await import(pathToFileURL(path.join(SRC, 'world/resortdressing.js')));
 
-// (the surfaces the secrets / layout registered before the resort is built are not the resort's: tunnels are later)
-const surfBefore = new Set();
-for (const arr of world.surfaceGrid.values()) for (const s of arr) surfBefore.add(s);
+const surfAll = () => { const s = new Set(); for (const arr of world.surfaceGrid.values()) for (const q of arr) s.add(q); return s; };
+// (the surfaces the secrets / layout / express ground registered before the resort is built are not the resort's)
+const surfBefore = surfAll();
 const scene = new THREE.Scene();
 const colliders = [];
 const village = new Village(scene, models, colliders, L.layout);
@@ -283,35 +311,34 @@ log('resort dressing built');
 void decor;
 
 const railBuilt = new Set(); // surfaces the rail build added that are not the stations' paving
-const surfBeforeRail = new Set();
-for (const arr of world.surfaceGrid.values()) for (const q of arr) surfBeforeRail.add(q);
+const surfBeforeRail = surfAll();
 // the Wolkenspitzbahn's station buildings (stationbuildings.js: the valley station in Legacy Village, the halts, the
-// glacier terminal) where railstations.js stands them; only the buildings, their colliders and their paving are
-// kept (the platforms, track and trains are the railway's: a later phase)
+// glacier terminal) where railstations.js stands them: the buildings, their colliders and paving go with the resort;
+// the rest of the stations (platforms, signs, lamps) with the transport
 const railScene = new THREE.Group();
 const railCols = [], railSurfs = new Set();
+let railStations = null;
 globalThis.__slRailCols = railCols;
 globalThis.__slRegStation = (fn) => {
-  const before = new Set();
-  for (const arr of world.surfaceGrid.values()) for (const q of arr) before.add(q);
+  const before = surfAll();
   const r = fn();
   for (const arr of world.surfaceGrid.values()) for (const q of arr) if (!before.has(q)) railSurfs.add(q);
   return r;
 };
+const railColsAll = [];
 try {
   const { buildStations } = await import(pathToFileURL(path.join(SRC, 'world/railstations.js')));
-  buildStations(railScene, [], models);
+  railStations = buildStations(railScene, railColsAll, models);
   log('rail stations built:', railCols.length, 'colliders');
 } catch (e) { log('rail stations skipped:', e.message); }
 globalThis.__slRegStation = null;
 colliders.push(...railCols);
 for (const arr of world.surfaceGrid.values()) for (const q of arr) if (!surfBeforeRail.has(q)) railBuilt.add(q);
-// (only the tagged buildings / canopies from the rail scene)
 railScene.updateMatrixWorld(true);
 const railKeep = [];
 railScene.traverse((o) => { if (o.userData?.slRail) railKeep.push(o); });
 for (const o of railKeep) { const w = o.matrixWorld.clone(); o.parent?.remove(o); o.matrixAutoUpdate = false; o.matrix.copy(w); scene.add(o); }
-log('rail station buildings / canopies kept:', railKeep.map((o) => o.name + '@' + o.matrix.elements[12].toFixed(0) + ',' + o.matrix.elements[13].toFixed(0) + ',' + o.matrix.elements[14].toFixed(0)).join(' '));
+log('rail station buildings / canopies kept:', railKeep.length);
 
 // snow cannons: the near / far split is made per frame from the player's position: all near for the capture
 {
@@ -321,49 +348,10 @@ log('rail station buildings / canopies kept:', railKeep.map((o) => o.name + '@' 
 // lift cars are animated by the C++ lifts: their (empty) instanced meshes are skipped
 for (const l of lifts.lines) for (const k of ['carNear', 'carMid', 'carFar']) if (l[k]) l[k].userData.slSkip = true;
 
-// ---------------------------------------------------------------- walk the scene
-scene.updateMatrixWorld(true);
-const props = new Map();      // key model|glow -> { model, glow, inst: [] }
-const mats = [], matIndex = new Map();
-const usedCanvas = new Set();
+// ---------------------------------------------------------------- capture: a scene -> one data pack (json + bin)
 const r4 = (v) => Math.round(v * 1e4) / 1e4;
 const m34 = (m) => { const e = m.elements; return [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14]].map(r4); };
-function addProp(model, glow, M) {
-  if (!model) return;
-  const k = model + '|' + (glow || 0);
-  if (!props.has(k)) props.set(k, { model, glow: glow || 0, inst: [] });
-  props.get(k).inst.push(m34(M));
-}
 const lin = (c) => (c ? [r4(c.r), r4(c.g), r4(c.b)] : [1, 1, 1]);
-function texRef(t) {
-  if (!t) return null;
-  const img = t.image;
-  if (img && img._id !== undefined) { usedCanvas.add(img._id); return { canvas: img._id, wrapS: t.wrapS === THREE.RepeatWrapping, wrapT: t.wrapT === THREE.RepeatWrapping, flipY: t.flipY !== false } };
-  return null;
-}
-function matKey(m) {
-  const g = m.userData?.slMat;
-  const d = {
-    color: lin(m.color), opacity: r4(m.opacity ?? 1), transparent: !!m.transparent, double: m.side === THREE.DoubleSide,
-    rough: r4(m.roughness ?? 0.8), metal: r4(m.metalness ?? 0), vc: !!m.vertexColors,
-    emissive: m.emissive ? lin(m.emissive).map((v) => r4(v * (m.emissiveIntensity ?? 1))) : [0, 0, 0],
-    map: texRef(m.map), emissiveMap: texRef(m.emissiveMap), alphaTest: r4(m.alphaTest || 0),
-    glow: m.userData?.slGlow || 0, glb: g ? { model: g.model, index: g.index } : null,
-    // a sign's face lights faintly at night (village.js / resortdressing.js setNight: emissive x night x 0.25)
-    nightEmissive: m.emissiveMap && (m.emissiveIntensity ?? 1) === 0 ? 0.25 : 0,
-    // emissive x (day + (night - day) x night): stationbuildings.js nightScaled; other shader-patched glows: night only
-    night: m.userData?.slNight || (m.onBeforeCompile && !m.userData?.slGlow && m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b) > 0 && String(m.onBeforeCompile).includes('uNight') ? [0, 0.45] : null),
-    basic: !!m.isMeshBasicMaterial,
-  };
-  const k = JSON.stringify(d);
-  if (!matIndex.has(k)) { matIndex.set(k, mats.length); mats.push(d); }
-  return matIndex.get(k);
-}
-
-// raw meshes: per material and 256 m cell, vertices baked to world space relative to the cell's origin
-const CELL = 256;
-const chunks = new Map(); // key -> { mat, ox, oy, oz, pos[], nor[], uv[], col[], idx[] }
-const instanced = [];     // { mat, geo: {pos, nor, uv, col, idx}, inst: [] }
 const _v = new THREE.Vector3(), _n = new THREE.Vector3(), _nm = new THREE.Matrix3();
 // (a tiling canvas texture's repeat / offset baked into the uv: the C++ materials have no uv transform)
 const uvXf = (mat) => { const t = mat?.map; return t && t.repeat && (t.repeat.x !== 1 || t.repeat.y !== 1 || t.offset.x || t.offset.y) ? [t.repeat.x, t.repeat.y, t.offset.x, t.offset.y] : null; };
@@ -387,175 +375,350 @@ function geoArrays(geo, M, ox, oy, oz, uvx = null) {
   if (M && M.determinant() < 0) for (let t = 0; t + 2 < idx.length; t += 3) { const a = idx[t + 1]; idx[t + 1] = idx[t + 2]; idx[t + 2] = a; }
   return { pos, nor, uv, col, idx };
 }
-function addRaw(geo, material, M) {
-  if (!geo?.attributes?.position || !material) return;
-  const mats_ = [].concat(material);
-  const groups = Array.isArray(material) && geo.groups.length ? geo.groups : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count, materialIndex: 0 }];
-  geo.computeBoundingSphere();
-  const c = geo.boundingSphere.center.clone().applyMatrix4(M);
-  const cx = Math.floor(c.x / CELL), cz = Math.floor(c.z / CELL);
-  for (const gr of groups) {
-    const mat = mats_[gr.materialIndex ?? 0];
-    if (!mat || mat.visible === false) continue;
-    const mi = matKey(mat);
-    const key = mi + '|' + cx + '|' + cz;
-    if (!chunks.has(key)) chunks.set(key, { mat: mi, ox: (cx + 0.5) * CELL, oy: Math.round(c.y), oz: (cz + 0.5) * CELL, pos: [], nor: [], uv: [], col: [], idx: [], hasCol: false });
-    const ch = chunks.get(key);
-    const a = geoArrays(geo, M, ch.ox, ch.oy, ch.oz, uvXf(mat));
-    const base = ch.pos.length / 3;
-    const vs = a.pos.length / 3;
-    for (let i = 0; i < a.pos.length; i++) ch.pos.push(a.pos[i]);
-    for (let i = 0; i < a.nor.length; i++) ch.nor.push(a.nor[i]);
-    for (let i = 0; i < a.uv.length; i++) ch.uv.push(a.uv[i]);
-    if (a.col) { ch.hasCol = true; for (let i = 0; i < a.col.length; i++) ch.col.push(a.col[i]); } else for (let i = 0; i < vs * 3; i++) ch.col.push(1);
-    const idx = a.idx.slice(gr.start, gr.start + gr.count);
-    for (const i of idx) ch.idx.push(base + i);
+
+function makePack(name) {
+  const props = new Map();      // key model|glow -> { model, glow, inst: [] }
+  const mats = [], matIndex = new Map();
+  const usedCanvas = new Set();
+  const CELL = 256;
+  const chunks = new Map(); // key -> { mat, ox, oy, oz, pos[], nor[], uv[], col[], idx[] }
+  const instanced = [];     // { mat, geo: {pos, nor, uv, col, idx}, inst: [] }
+  const shared = new Map(); // geometry|material -> instanced entry
+  const imIndex = new Map(); // InstancedMesh -> its instanced entry index (breakables)
+  let skipped = 0;
+  function addProp(model, glow, M) {
+    if (!model) return;
+    const k = model + '|' + (glow || 0);
+    if (!props.has(k)) props.set(k, { model, glow: glow || 0, inst: [] });
+    props.get(k).inst.push(m34(M));
   }
+  function texRef(t) {
+    if (!t) return null;
+    const img = t.image;
+    if (img && img._id !== undefined) { usedCanvas.add(img._id); return { canvas: img._id, wrapS: t.wrapS === THREE.RepeatWrapping, wrapT: t.wrapT === THREE.RepeatWrapping, flipY: t.flipY !== false }; }
+    return null;
+  }
+  function matKey(m) {
+    const g = m.userData?.slMat;
+    const d = {
+      color: lin(m.color), opacity: r4(m.opacity ?? 1), transparent: !!m.transparent, double: m.side === THREE.DoubleSide,
+      rough: r4(m.roughness ?? 0.8), metal: r4(m.metalness ?? 0), vc: !!m.vertexColors,
+      emissive: m.emissive ? lin(m.emissive).map((v) => r4(v * (m.emissiveIntensity ?? 1))) : [0, 0, 0],
+      map: texRef(m.map), emissiveMap: texRef(m.emissiveMap), alphaTest: r4(m.alphaTest || 0),
+      glow: m.userData?.slGlow || 0, glb: g ? { model: g.model, index: g.index } : null,
+      // a sign's face lights faintly at night (village.js / resortdressing.js setNight: emissive x night x 0.25)
+      nightEmissive: m.emissiveMap && (m.emissiveIntensity ?? 1) === 0 ? 0.25 : 0,
+      // emissive x (day + (night - day) x night): stationbuildings.js nightScaled; other shader-patched glows: night only
+      night: m.userData?.slNight || (m.onBeforeCompile && !m.userData?.slGlow && m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b) > 0 && String(m.onBeforeCompile).includes('uNight') ? [0, 0.45] : null),
+      basic: !!m.isMeshBasicMaterial,
+    };
+    const k = JSON.stringify(d);
+    if (!matIndex.has(k)) { matIndex.set(k, mats.length); mats.push(d); }
+    return matIndex.get(k);
+  }
+  // raw meshes: per material and 256 m cell, vertices baked to world space relative to the cell's origin
+  function addRaw(geo, material, M) {
+    if (!geo?.attributes?.position || !material) return;
+    const mats_ = [].concat(material);
+    const groups = Array.isArray(material) && geo.groups.length ? geo.groups : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count, materialIndex: 0 }];
+    geo.computeBoundingSphere();
+    const c = geo.boundingSphere.center.clone().applyMatrix4(M);
+    const cx = Math.floor(c.x / CELL), cz = Math.floor(c.z / CELL);
+    for (const gr of groups) {
+      const mat = mats_[gr.materialIndex ?? 0];
+      if (!mat || mat.visible === false) continue;
+      const mi = matKey(mat);
+      const key = mi + '|' + cx + '|' + cz;
+      if (!chunks.has(key)) chunks.set(key, { mat: mi, ox: (cx + 0.5) * CELL, oy: Math.round(c.y), oz: (cz + 0.5) * CELL, pos: [], nor: [], uv: [], col: [], idx: [], hasCol: false });
+      const ch = chunks.get(key);
+      const a = geoArrays(geo, M, ch.ox, ch.oy, ch.oz, uvXf(mat));
+      const base = ch.pos.length / 3;
+      const vs = a.pos.length / 3;
+      for (let i = 0; i < a.pos.length; i++) ch.pos.push(a.pos[i]);
+      for (let i = 0; i < a.nor.length; i++) ch.nor.push(a.nor[i]);
+      for (let i = 0; i < a.uv.length; i++) ch.uv.push(a.uv[i]);
+      if (a.col) { ch.hasCol = true; for (let i = 0; i < a.col.length; i++) ch.col.push(a.col[i]); } else for (let i = 0; i < vs * 3; i++) ch.col.push(1);
+      const idx = a.idx.slice(gr.start, gr.start + gr.count);
+      for (const i of idx) ch.idx.push(base + i);
+    }
+  }
+  let geoUse = new Map();
+  function visit(o) {
+    if (o.visible === false) return;
+    if (o.userData.slSkip) { skipped++; return; }
+    // (the cars on show (the Autohaus, the medical centre's ambulance...): vehicles are the C++ build's own)
+    if (o.isMesh && /^(car_|car1$|ski_bus|ambulance|tow_truck)/.test([].concat(o.material)[0]?.userData?.slMat?.model || '')) { skipped++; return; }
+    // (additive light pools on the snow / platforms: the C++ renderer has no additive pass yet; drawn as plain glass
+    // they were bright slabs)
+    if (o.isMesh && [].concat(o.material)[0]?.blending === THREE.AdditiveBlending) { skipped++; return; }
+    // (the guardrails' sections are bent along their lines in the vertex shader (bus.js bendMaterial, per-instance
+    // Hermite attributes): the C++ build sweeps them from busRoads.rails instead, rail_sweep.cpp)
+    if (o.isMesh && String([].concat(o.material)[0]?.customProgramCacheKey?.() || '').startsWith('busrail-')) { skipped++; return; }
+    if (o.userData.slFit) {
+      const f = new THREE.Matrix4().fromArray(o.userData.slFit.fit);
+      let glow = 0;
+      o.traverse((q) => { if (q.isMesh && q.material?.userData?.slGlow) glow = q.material.userData.slGlow; });
+      addProp(o.userData.slFit.model, glow, o.matrixWorld.clone().multiply(f));
+      return;
+    }
+    if (o.isLOD && o.levels?.length) { visit(o.levels[0].object); return; }
+    if (o.isMesh && !o.isSkinnedMesh) {
+      const sl = o.geometry?.userData?.sl;
+      const glow = o.material?.userData?.slGlow || 0;
+      if (o.isInstancedMesh) {
+        const im = new THREE.Matrix4();
+        const n = o.count;
+        if (sl) {
+          const f = new THREE.Matrix4().fromArray(sl.fit);
+          for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addProp(sl.model, glow, o.matrixWorld.clone().multiply(im).multiply(f)); }
+        } else if ((n >= 8 || o.geometry.attributes.position.count > 200) && !Array.isArray(o.material)) {
+          // (instanced meshes sharing a geometry and material, a chunk's sleepers or poles each: one set)
+          const mi = matKey(o.material), k = o.geometry.uuid + '|' + mi;
+          if (!shared.has(k)) { shared.set(k, { mat: mi, geo: geoArrays(o.geometry, null, 0, 0, 0, uvXf(o.material)), inst: [] }); instanced.push(shared.get(k)); }
+          const e = shared.get(k);
+          imIndex.set(o, { set: instanced.indexOf(e), base: e.inst.length });
+          for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); e.inst.push(m34(o.matrixWorld.clone().multiply(im))); }
+        } else for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addRaw(o.geometry, o.material, o.matrixWorld.clone().multiply(im)); }
+      } else if (sl) addProp(sl.model, glow, o.matrixWorld.clone().multiply(new THREE.Matrix4().fromArray(sl.fit)));
+      else if ((geoUse.get(o.geometry) || 0) >= 3 && o.geometry.attributes.position.count > 200) {
+        const mi = matKey(o.material), k = o.geometry.uuid + '|' + mi;
+        if (!shared.has(k)) { const e = { mat: mi, geo: geoArrays(o.geometry, null, 0, 0, 0, uvXf(o.material)), inst: [] }; shared.set(k, e); instanced.push(e); }
+        shared.get(k).inst.push(m34(o.matrixWorld));
+      } else addRaw(o.geometry, o.material, o.matrixWorld);
+    }
+    for (const c of o.children) visit(c);
+  }
+  function capture(sc) {
+    sc.updateMatrixWorld(true);
+    geoUse = new Map();
+    sc.traverse((o) => { if (o.isMesh && !o.isInstancedMesh && !o.geometry?.userData?.sl && !Array.isArray(o.material)) geoUse.set(o.geometry, (geoUse.get(o.geometry) || 0) + 1); });
+    visit(sc);
+    log(`${name}: captured props`, [...props.values()].reduce((a, p) => a + p.inst.length, 0), 'in', props.size, 'batches;', chunks.size, 'mesh chunks;', instanced.length, 'instanced meshes;', skipped, 'skipped');
+  }
+
+  // ---- binary blob
+  const parts = [];
+  let off = 0;
+  function blob(typed) {
+    const b = Buffer.from(typed.buffer, typed.byteOffset, typed.byteLength);
+    const pad = (4 - (b.length % 4)) % 4;
+    const at = off;
+    parts.push(b); if (pad) parts.push(Buffer.alloc(pad));
+    off += b.length + pad;
+    return at;
+  }
+  // 28 bytes a vertex: position f32 x3, normal i8 x3 (+pad), uv f32 x2, colour u8 x3 (+pad)
+  function packGeo(a, hasCol) {
+    const n = a.pos.length / 3, buf = Buffer.alloc(n * 28);
+    const q = (v) => Math.max(-127, Math.min(127, Math.round(v * 127)));
+    for (let i = 0; i < n; i++) {
+      const o = i * 28;
+      buf.writeFloatLE(a.pos[i * 3], o); buf.writeFloatLE(a.pos[i * 3 + 1], o + 4); buf.writeFloatLE(a.pos[i * 3 + 2], o + 8);
+      buf.writeInt8(q(a.nor[i * 3]), o + 12); buf.writeInt8(q(a.nor[i * 3 + 1]), o + 13); buf.writeInt8(q(a.nor[i * 3 + 2]), o + 14);
+      buf.writeFloatLE(a.uv[i * 2], o + 16); buf.writeFloatLE(a.uv[i * 2 + 1], o + 20);
+      for (let k = 0; k < 3; k++) buf.writeUInt8(hasCol && a.col ? Math.max(0, Math.min(255, Math.round(Math.sqrt(Math.max(0, a.col[i * 3 + k])) * 255))) : 255, o + 24 + k);
+    }
+    const idx = n < 65536 ? Uint16Array.from(a.idx) : Uint32Array.from(a.idx);
+    return { verts: n, vOff: blob(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)), tris: a.idx.length / 3, iOff: blob(idx), i16: n < 65536 };
+  }
+  // long instance lists go to the bin (float32 x 12 each: world space, mm precision 13 km out)
+  const instOut = (inst) => (inst.length > 64 ? { instOff: blob(Float32Array.from(inst.flat())), instN: inst.length } : { inst });
+
+  // A group's meshes in its own frame (a vehicle's procedural parts), merged per material: [{ mat, verts, ... }]
+  function localModel(root) {
+    root.updateMatrixWorld(true);
+    const inv = root.matrixWorld.clone().invert(), per = new Map();
+    root.traverse((o) => {
+      if (!o.isMesh || o.isSkinnedMesh || o.userData.slSkip) return;
+      for (let p = o; p && p !== root; p = p.parent) if (p.visible === false && p !== o) return;
+      const mats_ = [].concat(o.material);
+      const groups = Array.isArray(o.material) && o.geometry.groups.length ? o.geometry.groups : [{ start: 0, count: o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count, materialIndex: 0 }];
+      const Ms = [];
+      if (o.isInstancedMesh) { const im = new THREE.Matrix4(); for (let i = 0; i < o.count; i++) { o.getMatrixAt(i, im); Ms.push(inv.clone().multiply(o.matrixWorld).multiply(im)); } }
+      else Ms.push(inv.clone().multiply(o.matrixWorld));
+      for (const M of Ms) for (const gr of groups) {
+        const mat = mats_[gr.materialIndex ?? 0];
+        if (!mat || mat.visible === false) continue;
+        const mi = matKey(mat);
+        if (!per.has(mi)) per.set(mi, { pos: [], nor: [], uv: [], col: [], idx: [], hasCol: false });
+        const ch = per.get(mi), a = geoArrays(o.geometry, M, 0, 0, 0, uvXf(mat)), base = ch.pos.length / 3, vs = a.pos.length / 3;
+        for (const v of a.pos) ch.pos.push(v);
+        for (const v of a.nor) ch.nor.push(v);
+        for (const v of a.uv) ch.uv.push(v);
+        if (a.col) { ch.hasCol = true; for (const v of a.col) ch.col.push(v); } else for (let i = 0; i < vs * 3; i++) ch.col.push(1);
+        for (const i of a.idx.slice(gr.start, gr.start + gr.count)) ch.idx.push(base + i);
+      }
+    });
+    return [...per.entries()].filter(([, c]) => c.idx.length).map(([mi, c]) => ({ mat: mi, ...packGeo(c, c.hasCol) }));
+  }
+
+  function sampleSurfaces(set) {
+    const out = [];
+    const STEP = 0.25;
+    for (const s of set) {
+      const b = s.bounds;
+      const nx = Math.floor((b.maxx - b.minx) / STEP) + 2, nz = Math.floor((b.maxz - b.minz) / STEP) + 2;
+      if (nx * nz > 4e6) { log('surface too large, skipped', JSON.stringify(b)); continue; }
+      const h = new Float32Array(nx * nz);
+      let any = false, lo = Infinity;
+      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+        const v = s.height(b.minx + i * STEP, b.minz + j * STEP);
+        h[j * nx + i] = v === null || v === undefined || !Number.isFinite(v) ? NaN : v;
+        if (Number.isFinite(h[j * nx + i])) { any = true; lo = Math.min(lo, v); }
+      }
+      if (!any) continue;
+      // int16 centimetres over the lowest sample (-32768 = not over it)
+      const q = new Int16Array(nx * nz);
+      for (let k = 0; k < q.length; k++) q[k] = Number.isFinite(h[k]) ? Math.min(32767, Math.round((h[k] - lo) * 100)) : -32768;
+      out.push({ x0: b.minx, z0: b.minz, step: STEP, nx, nz, base: lo, off: blob(q) });
+    }
+    return out;
+  }
+
+  function colliderOut(cs) {
+    return cs.filter((c) => c && !c.carOnly && !c.car && !c.bus && !c.mp && !c.police && Number.isFinite(c.x) && Math.abs(c.x) < 1e8).map((c) => {
+      const o = { x: r4(c.x), z: r4(c.z) };
+      if (c.r !== undefined) o.r = r4(c.r); else { o.hw = r4(c.hw); o.hd = r4(c.hd); o.rot = r4(c.rot || 0); }
+      if (c.top !== undefined && Number.isFinite(c.top)) o.top = r4(c.top);
+      if (c.soft || c.net) o.soft = 1;
+      if (c.rail) o.rail = 1;
+      if (c.breakable) { o.brk = r4(c.breakable.minV || 0); if (c.breakable.lamp) o.lamp = 1; }
+      return o;
+    });
+  }
+
+  function finish(extra) {
+    const meshes = [...chunks.values()].filter((c) => c.idx.length).map((c) => ({ mat: c.mat, origin: [c.ox, c.oy, c.oz], ...packGeo(c, c.hasCol) }));
+    const inst = instanced.map((m) => ({ mat: m.mat, ...packGeo(m.geo, !!m.geo.col), ...instOut(m.inst) }));
+    const propsOut = [...props.values()].map((p) => ({ model: p.model, glow: p.glow, ...instOut(p.inst) }));
+    const ex = typeof extra === 'function' ? extra() : extra;
+    // (a canvas drawn into another: its commands go along)
+    for (const id of usedCanvas) { const c = canvases.get(id); for (const op of c.ops) if (op[0] === 'drawImage' && op[1] >= 0) usedCanvas.add(op[1]); }
+    const canvasOut = {};
+    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops }; }
+    const out = { version: 3, generated: new Date().toISOString(), bin: `${name}.bin`, props: propsOut, materials: mats, meshes, instanced: inst, canvases: canvasOut, ...ex };
+    fs.writeFileSync(path.join(OUT, `${name}.bin`), Buffer.concat(parts));
+    fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(out));
+    log(`wrote ${name}.json`, (fs.statSync(path.join(OUT, `${name}.json`)).size / 1024).toFixed(0), `KB, ${name}.bin`, (off / 1048576).toFixed(1), 'MB;',
+      mats.length, 'materials,', Object.keys(canvasOut).length, 'canvases; models used:', [...new Set(propsOut.map((p) => p.model))].join(' '));
+  }
+  return { capture, localModel, sampleSurfaces, colliderOut, finish, blob, matKey, imIndex, packGeo };
 }
 
-// geometry shared by several plain meshes (a cached bullwheel, a sign post...): drawn instanced
-const geoUse = new Map();
-scene.traverse((o) => { if (o.isMesh && !o.isInstancedMesh && !o.geometry?.userData?.sl && !Array.isArray(o.material)) geoUse.set(o.geometry, (geoUse.get(o.geometry) || 0) + 1); });
-const shared = new Map(); // geometry|material -> instanced entry
-let skipped = 0;
-function visit(o) {
-  if (o.visible === false) return;
-  if (o.userData.slSkip) { skipped++; return; }
-  if (o.userData.slFit) {
-    const f = new THREE.Matrix4().fromArray(o.userData.slFit.fit);
-    let glow = 0;
-    o.traverse((q) => { if (q.isMesh && q.material?.userData?.slGlow) glow = q.material.userData.slGlow; });
-    addProp(o.userData.slFit.model, glow, o.matrixWorld.clone().multiply(f));
-    return;
-  }
-  if (o.isLOD && o.levels?.length) { visit(o.levels[0].object); return; }
-  if (o.isMesh && !o.isSkinnedMesh) {
-    const sl = o.geometry?.userData?.sl;
-    const glow = o.material?.userData?.slGlow || 0;
-    if (o.isInstancedMesh) {
-      const im = new THREE.Matrix4();
-      const n = o.count;
-      if (sl) {
-        const f = new THREE.Matrix4().fromArray(sl.fit);
-        for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addProp(sl.model, glow, o.matrixWorld.clone().multiply(im).multiply(f)); }
-      } else if (n >= 8 && !Array.isArray(o.material)) {
-        const a = geoArrays(o.geometry, null, 0, 0, 0, uvXf(o.material));
-        const inst = [];
-        for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); inst.push(m34(o.matrixWorld.clone().multiply(im))); }
-        instanced.push({ mat: matKey(o.material), geo: a, inst });
-      } else for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addRaw(o.geometry, o.material, o.matrixWorld.clone().multiply(im)); }
-    } else if (sl) addProp(sl.model, glow, o.matrixWorld.clone().multiply(new THREE.Matrix4().fromArray(sl.fit)));
-    else if ((geoUse.get(o.geometry) || 0) >= 3 && o.geometry.attributes.position.count > 200) {
-      const mi = matKey(o.material), k = o.geometry.uuid + '|' + mi;
-      if (!shared.has(k)) { const e = { mat: mi, geo: geoArrays(o.geometry, null, 0, 0, 0, uvXf(o.material)), inst: [] }; shared.set(k, e); instanced.push(e); }
-      shared.get(k).inst.push(m34(o.matrixWorld));
-    } else addRaw(o.geometry, o.material, o.matrixWorld);
-  }
-  for (const c of o.children) visit(c);
+// ================================================================ pack 1: the resort (Phase 2)
+const resort = makePack('resort');
+resort.capture(scene);
+{
+  const surfSet = new Set();
+  for (const arr of world.surfaceGrid.values()) for (const s of arr) if (!surfBefore.has(s) && (!railBuilt.has(s) || railSurfs.has(s))) surfSet.add(s);
+  const surfaces = resort.sampleSurfaces(surfSet);
+  log('resort surfaces', surfaces.length);
+  // ---- lift lines
+  const lines = lifts.lines.map((l) => {
+    const sp = l.spec;
+    const ride = (up) => {
+      const end = up ? sp.top : sp.bottom, dir = l.dir.clone().multiplyScalar(up ? 1 : -1);
+      const out = Math.max(l.cfg.stationSize * 0.5 + 9, (l.stationBack?.[up ? 'top' : 'bottom'] ?? 0) + 5);
+      const ex = end.x + dir.x * out + l.sideV.x * 4, ez = end.z + dir.z * out + l.sideV.z * 4;
+      const [gx, gz] = world.gradient(ex, ez);
+      return { x: r4(ex), z: r4(ez), heading: r4(Math.hypot(gx, gz) > 0.03 ? Math.atan2(-gx, -gz) : Math.atan2(dir.x, dir.z)) };
+    };
+    return {
+      id: sp.id ?? null, name: sp.name, type: sp.type, main: !!sp.main, price: sp.price ?? 0, village: !!sp.village,
+      bottomName: sp.bottomName || null, topName: sp.topName || null,
+      bottom: [sp.bottom.x, sp.bottom.y, sp.bottom.z], top: [sp.top.x, sp.top.y, sp.top.z],
+      B: [l.B.x, l.B.y, l.B.z], T: [l.T.x, l.T.y, l.T.z], L: l.L, dir: [l.dir.x, l.dir.z], yaw: l.yaw,
+      cfg: l.cfg, mid: l.mid ? { u: l.mid.u, x: l.mid.x, y: l.mid.y, z: l.mid.z, name: l.mid.name, side: l.mid.side || 1 } : null,
+      supports: l.supports.map((s) => [r4(s.u), r4(s.y)]),
+      towers: l.towers.map((t) => [r4(t.x), r4(t.z), r4(t.g), r4(t.top)]),
+      cars: l.cars.map((c) => r4(c.s)),
+      carSize: l.carSize ? [r4(l.carSize.x), r4(l.carSize.z)] : null,
+      exitUp: ride(true), exitDown: ride(false), midExit: l.mid ? (({ x, z, heading }) => ({ x: r4(x), z: r4(z), heading: r4(heading) }))(l.midExit()) : null,
+    };
+  });
+  resort.finish({ lifts: lines, stations, colliders: resort.colliderOut(colliders), surfaces });
 }
-visit(scene);
-log('captured: props', [...props.values()].reduce((a, p) => a + p.inst.length, 0), 'in', props.size, 'batches;', chunks.size, 'mesh chunks;', instanced.length, 'instanced meshes;', skipped, 'skipped');
 
-// ---------------------------------------------------------------- binary blob
-const parts = [];
-let off = 0;
-function blob(typed) {
-  const b = Buffer.from(typed.buffer, typed.byteOffset, typed.byteLength);
-  const pad = (4 - (b.length % 4)) % 4;
-  const at = off;
-  parts.push(b); if (pad) parts.push(Buffer.alloc(pad));
-  off += b.length + pad;
-  return at;
+// ================================================================ pack 2: the transport (Phase 3)
+// Built as main.js builds it after the resort: the ski bus's stops, roads (strips, guardrails, snow poles, reflector
+// posts, road signs, scenic props, the depot) and buses; the car parks and their parked cars; the road tunnels; the
+// Wolkenspitzbahn's track, tunnels, viaducts and platforms; the Legacy Express's line (every chunk, viaduct, portal and
+// station built at once); its frozen lakes; the Autohaus's hall. The moving things (buses, cars, trains) are left out
+// of the capture: their models, fits and the data they run on (roads, lanes, stops, timetables) go to `net`.
+const tScene = new THREE.Scene();
+const tCols = [];
+const surfBeforeT = surfAll();
+const tryStep = async (label, fn) => { try { const r = await fn(); log(label, 'built'); return r; } catch (e) { log(label, 'skipped:', e.stack?.split('\n').slice(0, 3).join(' | ') || e.message); return null; } };
+const { SkiBus } = await import(pathToFileURL(path.join(SRC, 'game/skibus.js')));
+const skibus = await tryStep('ski bus stops + roads', () => new SkiBus({ scene: tScene, models, layout: L.layout, colliders: tCols }));
+if (skibus?.line) {
+  skibus.line.bus.group.userData.slSkip = true;
+  for (const b of skibus.line.fleet || []) if (b.group) b.group.userData.slSkip = true;
 }
-// 28 bytes a vertex: position f32 x3, normal i8 x3 (+pad), uv f32 x2, colour u8 x3 (+pad)
-function packGeo(a, hasCol) {
-  const n = a.pos.length / 3, buf = Buffer.alloc(n * 28);
-  const q = (v) => Math.max(-127, Math.min(127, Math.round(v * 127)));
-  for (let i = 0; i < n; i++) {
-    const o = i * 28;
-    buf.writeFloatLE(a.pos[i * 3], o); buf.writeFloatLE(a.pos[i * 3 + 1], o + 4); buf.writeFloatLE(a.pos[i * 3 + 2], o + 8);
-    buf.writeInt8(q(a.nor[i * 3]), o + 12); buf.writeInt8(q(a.nor[i * 3 + 1]), o + 13); buf.writeInt8(q(a.nor[i * 3 + 2]), o + 14);
-    buf.writeFloatLE(a.uv[i * 2], o + 16); buf.writeFloatLE(a.uv[i * 2 + 1], o + 20);
-    for (let k = 0; k < 3; k++) buf.writeUInt8(hasCol && a.col ? Math.max(0, Math.min(255, Math.round(Math.sqrt(Math.max(0, a.col[i * 3 + k])) * 255))) : 255, o + 24 + k);
-  }
-  const idx = n < 65536 ? Uint16Array.from(a.idx) : Uint32Array.from(a.idx);
-  return { verts: n, vOff: blob(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)), tris: a.idx.length / 3, iOff: blob(idx), i16: n < 65536 };
-}
-const meshes = [...chunks.values()].filter((c) => c.idx.length).map((c) => ({ mat: c.mat, origin: [c.ox, c.oy, c.oz], ...packGeo(c, c.hasCol) }));
-const inst = instanced.map((m) => ({ mat: m.mat, ...packGeo(m.geo, !!m.geo.col), inst: m.inst }));
-
-// ---------------------------------------------------------------- walkable surfaces (decks, stairs): sampled
-const surfSet = new Set();
-for (const arr of world.surfaceGrid.values()) for (const s of arr) if (!surfBefore.has(s) && (!railBuilt.has(s) || railSurfs.has(s))) surfSet.add(s);
-const surfaces = [];
-const STEP = 0.25;
-for (const s of surfSet) {
-  const b = s.bounds;
-  const nx = Math.floor((b.maxx - b.minx) / STEP) + 2, nz = Math.floor((b.maxz - b.minz) / STEP) + 2;
-  if (nx * nz > 4e6) { log('surface too large, skipped', JSON.stringify(b)); continue; }
-  const h = new Float32Array(nx * nz);
-  let any = false, lo = Infinity;
-  for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
-    const v = s.height(b.minx + i * STEP, b.minz + j * STEP);
-    h[j * nx + i] = v === null || v === undefined || !Number.isFinite(v) ? NaN : v;
-    if (Number.isFinite(h[j * nx + i])) { any = true; lo = Math.min(lo, v); }
-  }
-  if (!any) continue;
-  // int16 centimetres over the lowest sample (-32768 = not over it)
-  const q = new Int16Array(nx * nz);
-  for (let k = 0; k < q.length; k++) q[k] = Number.isFinite(h[k]) ? Math.min(32767, Math.round((h[k] - lo) * 100)) : -32768;
-  surfaces.push({ x0: b.minx, z0: b.minz, step: STEP, nx, nz, base: lo, off: blob(q) });
-}
-log('surfaces', surfaces.length);
-
-// ---------------------------------------------------------------- lift lines
-const lines = lifts.lines.map((l) => {
-  const sp = l.spec;
-  const ride = (up) => {
-    const end = up ? sp.top : sp.bottom, dir = l.dir.clone().multiplyScalar(up ? 1 : -1);
-    const out = Math.max(l.cfg.stationSize * 0.5 + 9, (l.stationBack?.[up ? 'top' : 'bottom'] ?? 0) + 5);
-    const ex = end.x + dir.x * out + l.sideV.x * 4, ez = end.z + dir.z * out + l.sideV.z * 4;
-    const [gx, gz] = world.gradient(ex, ez);
-    return { x: r4(ex), z: r4(ez), heading: r4(Math.hypot(gx, gz) > 0.03 ? Math.atan2(-gx, -gz) : Math.atan2(dir.x, dir.z)) };
-  };
-  return {
-    id: sp.id ?? null, name: sp.name, type: sp.type, main: !!sp.main, price: sp.price ?? 0, village: !!sp.village,
-    bottomName: sp.bottomName || null, topName: sp.topName || null,
-    bottom: [sp.bottom.x, sp.bottom.y, sp.bottom.z], top: [sp.top.x, sp.top.y, sp.top.z],
-    B: [l.B.x, l.B.y, l.B.z], T: [l.T.x, l.T.y, l.T.z], L: l.L, dir: [l.dir.x, l.dir.z], yaw: l.yaw,
-    cfg: l.cfg, mid: l.mid ? { u: l.mid.u, x: l.mid.x, y: l.mid.y, z: l.mid.z, name: l.mid.name, side: l.mid.side || 1 } : null,
-    supports: l.supports.map((s) => [r4(s.u), r4(s.y)]),
-    towers: l.towers.map((t) => [r4(t.x), r4(t.z), r4(t.g), r4(t.top)]),
-    cars: l.cars.map((c) => r4(c.s)),
-    carSize: l.carSize ? [r4(l.carSize.x), r4(l.carSize.z)] : null,
-    exitUp: ride(true), exitDown: ride(false), midExit: l.mid ? (({ x, z, heading }) => ({ x: r4(x), z: r4(z), heading: r4(heading) }))(l.midExit()) : null,
-  };
+const parking = await tryStep('car parks', async () => new (await import(pathToFileURL(path.join(SRC, 'game/parking.js')))).ParkingLots({ scene: tScene, models, colliders: tCols }));
+for (const e of parking?.cars || []) e.car.userData.slSkip = true;
+const roadTunnels = await tryStep('road tunnels', async () => {
+  const { RoadTunnels } = await import(pathToFileURL(path.join(SRC, 'game/bus/tunnelview.js')));
+  const rt = new RoadTunnels({ scene: tScene, terrain: null, colliders: tCols });
+  for (const t of rt.tunnels) { rt.job = null; rt.buildNear(t.samples?.[0]?.[0] ?? 0, t.samples?.[0]?.[1] ?? 0, 1e9); }
+  if (rt.warm) rt.warm.userData.slSkip = true;
+  for (const b of rt.built.values()) { for (const lid of b.lids || []) { const o = lid?.mesh || lid; if (o?.userData) o.userData.slSkip = true; } if (b.darkDecal?.userData) b.darkDecal.userData.slSkip = true; for (const p of b.plugs || []) if (p?.isObject3D) p.userData.slSkip = true; }
+  return rt;
 });
-
-// ---------------------------------------------------------------- canvases
-const canvasOut = {};
-for (const id of usedCanvas) {
-  const c = canvases.get(id);
-  // (a canvas drawn into another: its commands go along)
-  for (const op of c.ops) if (op[0] === 'drawImage' && op[1] >= 0) usedCanvas.add(op[1]);
-}
-for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops }; }
-
-const colOut = colliders.filter((c) => !c.carOnly && Number.isFinite(c.x)).map((c) => {
-  const o = { x: r4(c.x), z: r4(c.z) };
-  if (c.r !== undefined) o.r = r4(c.r); else { o.hw = r4(c.hw); o.hd = r4(c.hd); o.rot = r4(c.rot || 0); }
-  if (c.top !== undefined && Number.isFinite(c.top)) o.top = r4(c.top);
-  if (c.soft) o.soft = 1;
-  return o;
+const railTrack = await tryStep('Wolkenspitzbahn track', async () => {
+  const { buildRailway, setTunnelLampModel } = await import(pathToFileURL(path.join(SRC, 'world/railtrack.js')));
+  try { const { meshyHead, HEADS } = await import(pathToFileURL(path.join(SRC, 'world/pistelights.js'))); if (models.floodlight_head_c) setTunnelLampModel(meshyHead(models.floodlight_head_c, HEADS.floodlight_head_c)); } catch (e) { log('rail tunnel lamps', e.message); }
+  const t = buildRailway(tScene);
+  tCols.push(...(t.colliders || []));
+  // (the ballast bed, sleepers, rails and rack are swept by the C++ build: rail_sweep.cpp; the tunnels' linings and
+  // lamps, the portals and the viaducts are captured)
+  const M = t.materials || {};
+  t.group.traverse((o) => { if (o.isMesh && (o.material === M.ballast || o.material === M.concrete || o.material === M.steel)) o.userData.slSkip = true; });
+  return t;
 });
+// the rail stations' platforms, signs and lamps (the buildings went with the resort)
+tScene.add(railScene);
+tCols.push(...railColsAll.filter((c) => !railCols.includes(c)));
+const xtrack = await tryStep('Legacy Express line', async () => {
+  const { buildExpressTrack } = await import(pathToFileURL(path.join(SRC, 'world/expresstrack.js')));
+  const t = buildExpressTrack(tScene, { models, colliders: tCols, courses: freeMod.freeCourses() });
+  // (the line's bed, rails, sleepers and tube linings, 65 km of them, are swept by the C++ build from the line's data:
+  // native/src/world/rail_sweep.cpp; captured here they were ~150 MB. The viaducts, portals and stations are captured)
+  for (const e of t.ents || []) {
+    if (e.kind === 'bed' || e.kind === 'detail') continue;
+    try { e.obj = e.build(); } catch (err) { log('express', e.kind, 'failed', err.message); continue; }
+    for (const c of e.obj.userData.colliders || []) tCols.push(c);
+    e.obj.visible = true;
+    if (e.kind === 'station') e.obj.userData.view?.({ x: e.x, y: 1e4, z: e.z }, false);
+    t.group.add(e.obj);
+  }
+  return t;
+});
+await tryStep('Legacy Express lakes', async () => (await import(pathToFileURL(path.join(SRC, 'world/expressscenery.js')))).buildExpressScenery(tScene));
+await tryStep('Autohaus hall', async () => {
+  const { CarRental } = await import(pathToFileURL(path.join(SRC, 'game/carrental.js')));
+  const o = Object.create(CarRental.prototype);
+  Object.assign(o, { scene: tScene, models, colliders: tCols, L: busRoads.rental });
+  if (!o.L) throw new Error('no Autohaus site');
+  o.yaw0 = Math.atan2(o.L.dirx, o.L.dirz);
+  o.buildOutside();
+});
+await tryStep('medical centre', async () => new (await import(pathToFileURL(path.join(SRC, 'game/hospital.js')))).Hospital({ scene: tScene, models, colliders: tCols }));
 
-const out = {
-  version: 2, generated: new Date().toISOString(), bin: 'resort.bin',
-  props: [...props.values()], materials: mats, meshes, instanced: inst, canvases: canvasOut,
-  lifts: lines, stations, colliders: colOut, surfaces,
-};
-fs.writeFileSync(path.join(OUT, 'resort.bin'), Buffer.concat(parts));
-fs.writeFileSync(path.join(OUT, 'resort.json'), JSON.stringify(out));
-log('wrote resort.json', (fs.statSync(path.join(OUT, 'resort.json')).size / 1024).toFixed(0), 'KB, resort.bin', (off / 1048576).toFixed(1), 'MB;',
-  colOut.length, 'colliders,', mats.length, 'materials,', Object.keys(canvasOut).length, 'canvases; models used:', [...new Set([...props.values()].map((p) => p.model))].join(' '));
+if (process.env.SL_STATS) {
+  tScene.updateMatrixWorld(true);
+  const tri = (root) => { let n = 0; root.traverse((o) => { if (o.isMesh && o.visible !== false && !o.userData.slSkip) { const g = o.geometry, t = g.index ? g.index.count / 3 : g.attributes.position.count / 3; n += t * (o.isInstancedMesh ? o.count : 1); } }); return n; };
+  for (const c of tScene.children) log('stats', c.name || c.type, (tri(c) / 1e6).toFixed(2), 'M tris', c.children.length, 'children');
+  if (xtrack) { const by = {}; for (const e of xtrack.ents) if (e.obj) by[e.kind] = (by[e.kind] || 0) + tri(e.obj); log('stats express', JSON.stringify(by)); }
+}
+const transport = makePack('transport');
+transport.capture(tScene);
+{
+  const surfSet = new Set();
+  for (const arr of world.surfaceGrid.values()) for (const s of arr) if (!surfBeforeT.has(s) && !s.roadTunnel) surfSet.add(s);
+  const surfaces = transport.sampleSurfaces(surfSet);
+  log('transport surfaces', surfaces.length);
+  const net = await (await import('./export_net.mjs')).exportNet({ THREE, SRC, world, L, busRoads, skibus, parking, roadTunnels, railStations, xtrack, models, freeMod, loadGLB, pack: transport, log, r4 });
+  transport.finish({ colliders: transport.colliderOut(tCols), surfaces, net });
+}
 console.warn = _warn; console.info = _info;

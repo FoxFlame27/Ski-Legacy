@@ -14,6 +14,12 @@
 #include "player/player.h"
 #include "player/skier_rig.h"
 #include "world/resort.h"
+#include "world/rail_sweep.h"
+#include "world/transport.h"
+#include "game/buses.h"
+#include "game/drive.h"
+#include "game/traffic.h"
+#include "game/trains.h"
 #include "world/scenery.h"
 #include "world/terrain.h"
 #include "world/world.h"
@@ -63,17 +69,25 @@ int verifyHeights(platform::Platform& p, const AssetPaths& paths, World& world) 
   std::vector<uint8_t> b;
   if (!p.readFile(paths.data("world.json"), b)) return 2;
   auto j = nlohmann::json::parse(b.begin(), b.end(), nullptr, false);
-  double e[6] = {0};
+  double e[6] = {0}, eReg[3] = {0}, sumReg = 0;
+  int nReg = 0;
   const char* names[6] = {"baseHeight(spacing 0)", "baseHeight(spacing 8)", "baseHeight(spacing 64)", "height", "meshHeight", "forest"};
   for (auto& r : j["refs"]) {
     double x = r[0], z = r[1];
     double h = world.height(x, z);
     double slope = std::hypot(world.height(x + 1, z) - h, world.height(x, z + 1) - h);
     double v[6] = {world.baseHeight(x, z, 0), world.baseHeight(x, z, 8), world.baseHeight(x, z, 64), h, world.meshHeight(x, z), world.forest(x, z, h, slope)};
-    for (int k = 0; k < 6; k++) e[k] = std::max(e[k], std::fabs(v[k] - r[2 + k].get<double>()));
+    // (Phase 3: points inside a World Racing course's region are compared on their own: the regions come as an 8 m grid)
+    bool inReg = r.size() > 8 && r[8].get<int>() != 0;
+    for (int k = 0; k < 6; k++) {
+      double d = std::fabs(v[k] - r[2 + k].get<double>());
+      if (inReg && k >= 3) { eReg[k - 3] = std::max(eReg[k - 3], d); if (k == 3) { sumReg += d; nReg++; } }
+      else e[k] = std::max(e[k], d);
+    }
   }
-  SL_INFO("verify-heights: %zu reference points from the JavaScript world", j["refs"].size());
+  SL_INFO("verify-heights: %zu reference points from the JavaScript world (%d in the courses' regions)", j["refs"].size(), nReg);
   for (int k = 0; k < 6; k++) SL_INFO("  max |C++ - JS| %-24s %.4f %s", names[k], e[k], k == 5 ? "" : "m");
+  if (nReg) SL_INFO("  in the regions (8 m grid): height max %.3f m, mean %.3f m; meshHeight max %.3f m; forest max %.3f", eReg[0], sumReg / nReg, eReg[1], eReg[2]);
   bool ok = e[0] < 0.05 && e[3] < 0.25;
   SL_INFO("verify-heights: %s", ok ? "PASS" : "FAIL");
   return ok ? 0 : 1;
@@ -187,6 +201,32 @@ int runGame(const GameOptions& opt) {
   bool haveResort = resort.load(*plat, paths, scenery);
   if (!haveResort) scenery.loadVillage(*plat, paths);   // (Phase 1 placements without the resort data)
   Lifts& lifts = resort.lifts();
+  // (Phase 3) the transport: roads, car parks, railways (data), the swept track, the vehicles
+  Transport transport;
+  if (const nlohmann::json* net = resort.transportNet()) transport.load(*net, resort.transportBin());
+  if (transport.loaded()) world.roadSurface = [&](double x, double z, double mesh, double yHint) { return transport.roadSurface(world, x, z, mesh, yHint); };
+  if (transport.rail.ok) world.addDeck([&](double x, double z) { return transport.railDeckHeight(x, z); });
+  if (transport.express.ok) world.addDeck([&](double x, double z) { return transport.expressDeckHeight(x, z); });
+  RailSweep sweep;
+  sweep.build(*dev, transport);
+  sweep.buildGuardrails(*dev, transport, world);
+  VehicleModels vmodels;
+  vmodels.load(*dev, assets, transport, resort);
+  Drive drive(world, scenery, transport, vmodels);
+  Traffic traffic(world, transport, vmodels);
+  BusLine buses(world, transport, vmodels);
+  Railway railway(world, transport, vmodels);
+  Express express(world, transport, vmodels);
+  if (transport.loaded()) { drive.init(); traffic.init(); buses.init(); }
+  railway.init();
+  express.init();
+  std::vector<Obb> busBoxes;
+  drive.gatherOthers = [&](std::vector<OtherBody>& out) {
+    traffic.others(out, drive.pos());
+    for (const Obb& b : busBoxes) if (std::hypot(b.x - drive.pos().x, b.z - drive.pos().z) < 20) { OtherBody o; o.box = b; o.mass = 12000; o.kind = 1; out.push_back(o); }
+  };
+  drive.onKnock = [&](const OtherBody& b, double vx, double vz, double w) { if (b.kind == 0) traffic.knock(b.id, vx, vz, w); };
+  VehicleDraw vdraw;
   Player player(world, &scenery);
   SkierRig rig;
   if (!rig.load(assets)) SL_WARN("skier model missing: the player is invisible");
@@ -225,6 +265,7 @@ int runGame(const GameOptions& opt) {
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
   bool drawTerrain = !off("noterrain"), drawTrees = !off("notrees"), drawVillage = !off("novillage"), drawSkier = !off("noskier");
   bool running = true, paused = false;
+  bool vehTest = off("vehtest");   // (debug: the autotest starts with the Phase 3 vehicles)
   double acc = 0, last = plat->timeSeconds(), fpsT = 0, fps = 0, simTime = 0;
   int fpsN = 0, frame = 0;
   double startT = plat->timeSeconds(), hintUntil = 12;
@@ -257,11 +298,35 @@ int runGame(const GameOptions& opt) {
     toastUntil = simTime + 2;
   };
   std::string prompt, rideLine;
+  // (Phase 3) what you ride: a car (you drive), a ski bus, the Wolkenspitzbahn, the Legacy Express
+  enum class Ride { None, Car, Bus, Rail, Express } rideKind = Ride::None;
+  int busDestSel = 0, expressDestSel = 0;
+  double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
+  bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
+  dvec3 rideCamPos{0};
+  bool rideCamReady = false;
+  auto standOff = [&](const dvec3& e, const std::string& what) {   // (x, z, heading)
+    player.standUp(e.x, e.y, e.z);
+    rig.skisInRide = true;
+    if (restoreView) { player.view = viewBeforeRide; restoreView = false; }
+    rideKind = Ride::None;
+    toast = what; toastUntil = simTime + 2.5;
+  };
 
   // autotest phases after the run: walk into a hotel (collision), then ride a gondola
-  enum class AT { Ski, Collide, Lift, Done } at = AT::Ski;
+  enum class AT { Ski, Collide, Lift, Drive, Bus, Rail, Express, Done } at = AT::Ski;
+  if (vehTest && opt.autotest) at = AT::Drive;
   int phaseFrame = 0;
-  bool skiOk = true, collideOk = true, liftOk = true;
+  bool skiOk = true, collideOk = true, liftOk = true, driveOk = true, trafficOk = true, busOk = true, railOk = true, expressOk = true;
+  // (Phase 3 autotest) drive 20 s on a road; a traffic car follows its lane; ride the bus, the Wolkenspitzbahn, the Express
+  int testCar = -1;
+  double driveT = 0, driveTop = 0, driveDist = 0, driveMaxSink = 0;
+  dvec3 driveStart{0}, drivePrev{0};
+  int testRoad = -1;
+  std::vector<dvec3> traffic0;
+  double rideTest = 0;
+  dvec3 ridePos0{0};
+  bool rideBoarded = false;
   double skiDist = 0, skiDrop = 0, skiDistStart = 0;
   const Collider* hotel = nullptr;
   dvec3 walkStart{0};
@@ -355,6 +420,47 @@ int runGame(const GameOptions& opt) {
       }
     }
 
+    // (Phase 3 autotest) the car: bought at the Autohaus, put on a long road, driven 20 s along its right-hand lane
+    DriveInput din;
+    if (opt.autotest && at == AT::Drive) {
+      if (phaseFrame == 0) {
+        input.releaseInjected();
+        testCar = drive.buy("car_bmw_x3");
+        if (testCar < 0) testCar = drive.nearestOwned(player.pos);
+        double bestL = 0;
+        for (size_t ri = 0; ri < transport.roads.size(); ri++) {
+          const Road& r = transport.roads[ri];
+          if (r.access || r.depot || r.scenic || r.length < 900) continue;
+          if (r.length > bestL) { bestL = r.length; testRoad = int(ri); }
+        }
+        if (testCar >= 0 && testRoad >= 0) {
+          const Road& r = transport.roads[size_t(testRoad)];
+          RoadPoint p = roadAt(r, 150);
+          auto& e = drive.parked[size_t(testCar)];
+          e.x = p.x - p.dz * 1.6; e.z = p.z + p.dx * 1.6; e.yaw = std::atan2(p.dx, p.dz); e.y = world.groundHeight(e.x, e.z, p.y + 1) + 0.03;
+          player.setSkisOn(false);
+          player.teleport(e.x + std::cos(e.yaw) * 2.6, e.z - std::sin(e.yaw) * 2.6, e.yaw);
+          driveStart = dvec3(e.x, e.y, e.z); drivePrev = driveStart;
+          SL_INFO("[autotest] drive: %s bought at the Autohaus, on road %d (%.0f m long) at (%.1f, %.1f, %.1f)", e.spec->label.c_str(), testRoad, r.length, e.x, e.y, e.z);
+          traffic0.clear();
+          for (auto& c : traffic.list) traffic0.push_back(dvec3(c.odo, c.road, c.mode == Traffic::Car::Mode::Road ? 1 : 0));
+        } else { driveOk = false; SL_WARN("[autotest] drive: no car / road"); }
+      }
+      input.inject(Action::Interact, phaseFrame == 2);
+      if (drive.active() && testRoad >= 0) {
+        // steer toward a point 25 m ahead on the right-hand lane; hold ~80 km/h
+        const Road& r = transport.roads[size_t(testRoad)];
+        Transport::RoadHit rh = transport.nearestRoad(drive.pos().x, drive.pos().z, 30);
+        double s = rh.road == testRoad ? rh.s : 150;
+        RoadPoint q = roadAt(r, std::min(r.length, s + 25));
+        double tx = q.x - q.dz * 1.6, tz = q.z + q.dx * 1.6;
+        double err = wrapPi(std::atan2(tx - drive.pos().x, tz - drive.pos().z) - drive.yaw());
+        din.steer = float(clamp(err * 2.2, -1, 1));
+        din.throttle = drive.speed() < 22 ? 1.f : 0.f;
+        din.brake = drive.speed() > 26 ? 0.5f : 0.f;
+      }
+    }
+
     // fixed-step simulation (edge-triggered inputs are seen by the first tick of the frame)
     if (!paused) acc += frameDt;
     bool first = true;
@@ -369,12 +475,25 @@ int runGame(const GameOptions& opt) {
       ctl.jumpPressed = first && input.takePressed(Action::Jump);
       ctl.jumpReleased = first && input.takeReleased(Action::Jump);
       player.fixedUpdate(STEP, ctl);
+      if (rideKind == Ride::Car) {
+        DriveInput di = din;
+        if (!opt.autotest || at != AT::Drive) {
+          di.throttle = (input.down(Action::Forward) || input.down(Action::Sprint) || input.moveY() > 0.5f) ? 1.f : 0.f;
+          di.brake = (input.down(Action::Back) || input.down(Action::Brake) || input.moveY() < -0.5f) ? 1.f : 0.f;
+          di.steer = -input.moveX();
+        }
+        di.handbrake = input.down(Action::Jump);
+        di.lookBack = input.down(Action::LookBack);
+        di.horn = input.down(Action::Horn);
+        drive.fixedUpdate(STEP, di, simTime);
+      } else drive.fixedUpdate(STEP, DriveInput{}, simTime);
       acc -= STEP;
       simTime += STEP;
       first = false;
     }
     PlayerFrameControls fc;
-    fc.toggleView = input.takePressed(Action::View);
+    fc.toggleView = rideKind != Ride::None ? false : input.takePressed(Action::View);
+    if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) { seatView = !seatView; rideCamReady = false; }
     fc.toggleSkis = input.takePressed(Action::Skis);
     fc.lookX = paused ? 0 : input.lookX(); fc.lookY = paused ? 0 : input.lookY(); fc.wheel = input.wheel();
     fc.now = opt.autotest ? simTime : now; fc.lastLook = opt.autotest ? -1e9 : input.lastLookTime();
@@ -401,7 +520,59 @@ int runGame(const GameOptions& opt) {
     lifts.update(paused ? 0 : frameDt, player.pos);
     prompt.clear(); rideLine.clear();
     bool interact = input.takePressed(Action::Interact);
-    if (player.mode == PlayerMode::Sit) {
+    bool nextItem = input.takePressed(Action::NextItem), prevItem = input.takePressed(Action::PrevItem);
+    bool fastHeld = !paused && input.down(Action::Jump);
+    // (Phase 3) the vehicles move first, then the rider is seated on them
+    double vdt = paused ? 0 : frameDt;
+    busBoxes.clear();
+    buses.boxes(busBoxes);
+    traffic.update(vdt, player.pos, &drive, busBoxes, cam.pos);
+    buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
+    railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
+    express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
+    if (rideKind == Ride::Car) {
+      DriveFrameInput dfi;
+      dfi.toggleView = input.takePressed(Action::View);
+      dfi.toggleLights = input.takePressed(Action::Lights);
+      dfi.unstuck = input.takePressed(Action::Unstuck);
+      dfi.flip = input.takePressed(Action::Furnish);
+      dfi.lookX = paused ? 0 : input.lookX(); dfi.lookY = paused ? 0 : input.lookY();
+      dfi.now = simTime;
+      drive.frame(vdt, dfi);
+      dvec3 sp, sf;
+      drive.seat(sp, sf);
+      player.setSeat(sp, sf);
+      rideLine = drive.label() + "   " + std::to_string(int(std::round(drive.speed() * 3.6))) + " km/h";
+      if (drive.speed() < 2.0) prompt = "Get out";
+      dvec3 ex;
+      if (interact && drive.exit(ex)) standOff(ex, "Parked");
+      for (const VehicleEvent& e : drive.events) {
+        float a = e.amount;
+        switch (e.type) {
+          case VehicleEvent::Type::Crash: input.rumble(*plat, 0.9f * a, 0.7f * a, 500); audio.thud(a); break;
+          case VehicleEvent::Type::Knock: case VehicleEvent::Type::Break: input.rumble(*plat, 0.6f * a, 0.5f * a, 300); audio.thud(a * 0.7f); break;
+          case VehicleEvent::Type::Land: input.rumble(*plat, 0.3f + 0.5f * a, 0.2f, 140); break;
+          default: if (a > 0) input.rumble(*plat, 0.3f * a, 0.3f * a, 120); break;
+        }
+        if (!e.text.empty()) { toast = e.text; toastUntil = simTime + 2; }
+      }
+      drive.events.clear();
+    } else if (rideKind == Ride::Bus) {
+      BusLine::RideState rs = buses.rideState();
+      player.setSeat(rs.seat, rs.fwd);
+      rideLine = rs.hint + "   hold " + std::string(input.usingGamepad() ? padLabel(input.padFamily(), input.pad[size_t(Action::Jump)]) : "SPACE") + " x8";
+      if (rs.arrived) { buses.abort(); standOff(rs.exit, "Off the bus at " + buses.stopName(-1)); toast = rs.hint; }
+    } else if (rideKind == Ride::Rail || rideKind == Ride::Express) {
+      TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
+      player.setSeat(tr.seat, tr.fwd);
+      rideLine = tr.hint + "   hold " + std::string(input.usingGamepad() ? padLabel(input.padFamily(), input.pad[size_t(Action::Jump)]) : "SPACE") + (rideKind == Ride::Rail ? " x6" : " x10");
+      if (tr.arrived) { if (rideKind == Ride::Rail) railway.abort(); else express.abort(); standOff(tr.exit, tr.hint); }
+      else if (tr.atStop) {
+        prompt = "Get off at " + tr.stop;
+        dvec3 ex;
+        if (interact && railway.leaveAtStop(ex)) { railway.abort(); standOff(ex, "Off at " + tr.stop); }
+      }
+    } else if (player.mode == PlayerMode::Sit) {
       Lifts::RideState rs = lifts.updateRide();
       if (rs.arrived) leaveLift(rs.exit, "");
       else if (rs.riding) {
@@ -418,7 +589,74 @@ int runGame(const GameOptions& opt) {
           rideLine = b;
         }
       }
-    } else if (player.mode != PlayerMode::Fall && !lifts.lines().empty()) {
+    }
+    if (rideKind == Ride::None && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && transport.loaded()) {
+      // a car (yours: drive; at the Autohaus: buy), a ski bus stop, a railway station, a Legacy Express station
+      std::string cp = drive.prompt(player.pos, true);
+      int stop = cp.empty() ? buses.stopNear(player.pos) : -1;
+      int rst = cp.empty() && stop < 0 ? railway.stationNear(player.pos) : -1;
+      int xst = cp.empty() && stop < 0 && rst < 0 ? express.stationNear(player.pos) : -1;
+      if (!cp.empty()) {
+        prompt = cp;
+        if (interact && drive.interact(player.pos)) {
+          interact = false;
+          if (drive.active()) {
+            rideKind = Ride::Car;
+            player.setSkisOn(false);
+            dvec3 sp, sf;
+            drive.seat(sp, sf);
+            player.sitOn(sp, sf);
+            toast = drive.label(); toastUntil = simTime + 2;
+          }
+        }
+      } else if (stop >= 0) {
+        std::vector<int> dests = buses.destinations(stop);
+        if (!dests.empty()) {
+          if (nextItem) busDestSel++;
+          if (prevItem) busDestSel--;
+          int k = ((busDestSel % int(dests.size())) + int(dests.size())) % int(dests.size());
+          prompt = "Ski bus to " + buses.stopName(dests[size_t(k)]) + "   ([ ] choose)";
+          if (interact && buses.board(stop, dests[size_t(k)])) {
+            interact = false;
+            rideKind = Ride::Bus;
+            BusLine::RideState rs = buses.rideState();
+            player.sitOn(rs.seat, rs.fwd);
+            viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
+            rideCamReady = false; seatView = true; seatYaw = -0.35; seatPitch = -0.05;
+            toast = "Ski bus to " + buses.stopName(dests[size_t(k)]); toastUntil = simTime + 2;
+          }
+        }
+      } else if (rst >= 0) {
+        bool down = input.down(Action::Back);
+        prompt = railway.label(rst, down);
+        if (interact && railway.board(rst, !down)) {
+          interact = false;
+          rideKind = Ride::Rail;
+          TrainRide tr = railway.ride();
+          player.sitOn(tr.seat, tr.fwd);
+          viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
+          rideCamReady = false; seatView = false; seatYaw = 0; seatPitch = -0.04;   // (the outside view: the cabin's seat view is R)
+          toast = transport.rail.name; toastUntil = simTime + 2;
+        }
+      } else if (xst >= 0 && express.stationCount() > 1) {
+        if (nextItem) expressDestSel++;
+        if (prevItem) expressDestSel--;
+        int n = int(express.stationCount()) - 1;
+        int k = ((expressDestSel % n) + n) % n;
+        int dest = k >= xst ? k + 1 : k;
+        prompt = transport.express.name + " to " + express.station(dest).name + "   ([ ] choose)";
+        if (interact && express.board(xst, dest)) {
+          interact = false;
+          rideKind = Ride::Express;
+          TrainRide tr = express.ride();
+          player.sitOn(tr.seat, tr.fwd);
+          viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
+          rideCamReady = false; seatView = false; seatYaw = 0; seatPitch = -0.04;
+          toast = transport.express.name + " to " + express.station(dest).name; toastUntil = simTime + 2;
+        }
+      }
+    }
+    if (rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !lifts.lines().empty()) {
       Lifts::Station st = lifts.nearestStation(player.pos);
       if (st.line && st.dist < (st.line->gondola ? 20 : 13)) {
         prompt = stationLabel(st);
@@ -432,10 +670,55 @@ int runGame(const GameOptions& opt) {
 
     // streaming + animation
     player.cameraFor(cam);
+    bool camUnderground = false;   // (a train's camera in a tunnel: the tunnel's darkness, no terrain drawn over it)
+    if (rideKind == Ride::Car) drive.cameraFor(cam);
+    else if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+      // the seat view: your eyes over the seat, the mouse looks round (+-120 degrees), easing back ahead
+      float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
+      if (lx != 0 || ly != 0) { rideLookT = simTime; seatYaw = clamp(seatYaw - lx * 0.0022, -2.09, 2.09); seatPitch = clamp(seatPitch - ly * 0.0022, -1.0, 0.6); }
+      if (simTime - rideLookT > 3) { seatYaw *= std::exp(-frameDt * 1.5); seatPitch += (-0.05 - seatPitch) * (1 - std::exp(-frameDt * 1.5)); }
+      double fy = player.heading + seatYaw;
+      camUnderground = rideKind != Ride::Bus && world.height(player.pos.x, player.pos.z) > player.pos.y + 6;
+      dvec3 eye = player.renderPos + dvec3(0, 0.78, 0);
+      cam.lookAt(eye, eye + dvec3(std::sin(fy) * std::cos(seatPitch), std::sin(seatPitch), std::cos(fy) * std::cos(seatPitch)));
+      cam.fovY = 68; cam.nearZ = 0.05f;
+    } else if (rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) {
+      // the chase camera behind the bus / train (bus.js chase: 18 m; railway.js 34 m; express.js 46 m), the mouse
+      // looks round, easing back behind after 1.5 s
+      dvec3 vp;
+      double vyaw, dist, h;
+      if (rideKind == Ride::Bus) { vp = buses.busPos(); vyaw = buses.busYaw(); dist = 16; h = 3; }
+      else { TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride(); vp = tr.trainPos; vyaw = tr.trainYaw; dist = rideKind == Ride::Rail ? 30 : 40; h = 4; }
+      float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
+      if (lx != 0 || ly != 0) { rideLookT = simTime; rideCamYaw -= lx * 0.0022; rideCamPitch = clamp(rideCamPitch + ly * 0.0022, -0.05, 1.0); }
+      double target = vyaw + PI, pitch0 = rideKind == Ride::Bus ? 0.15 : 0.3;   // (the trains run in cuttings: from higher up)
+      if (!rideCamReady) { rideCamYaw = target; rideCamPitch = pitch0; }
+      if (simTime - rideLookT > 1.5) { rideCamYaw += wrapPi(target - rideCamYaw) * (1 - std::exp(-frameDt * 2.5)); rideCamPitch += (pitch0 - rideCamPitch) * (1 - std::exp(-frameDt * 2)); }
+      // (in a tunnel, the mountain over the train: close behind it in the tube, never up on the mountain)
+      bool tube = rideKind != Ride::Bus && world.height(vp.x, vp.z) > vp.y + 6;
+      camUnderground = tube;
+      if (tube) dist = 13;
+      double pitch = tube ? 0.1 : rideCamPitch;
+      dvec3 focus = vp + dvec3(0, tube ? 2.5 : h, 0);
+      dvec3 want = focus + dvec3(std::sin(rideCamYaw) * std::cos(pitch), std::sin(pitch), std::cos(rideCamYaw) * std::cos(pitch)) * dist;
+      if (!tube) want.y = std::max(want.y, world.groundHeight(want.x, want.z, vp.y + 3) + 2.5);
+      if (!rideCamReady || glm::length(want - rideCamPos) > 200) { rideCamPos = want; rideCamReady = true; }
+      rideCamPos += (want - rideCamPos) * (1 - std::exp(-frameDt * 8));
+      cam.lookAt(rideCamPos, focus);
+      cam.fovY = 62; cam.nearZ = 0.2f;
+    }
     terrain.update(cam.pos);
     scenery.update(cam.pos);
     resort.update(frameDt, cam.pos);
     rig.update(frameDt, player, world);
+    scenery.dynamic.clear();
+    if (transport.loaded()) {
+      drive.fillColliders(scenery.dynamic);
+      traffic.fillColliders(scenery.dynamic);
+      buses.fillColliders(scenery.dynamic);
+      railway.fillColliders(scenery.dynamic, player.pos);
+      express.fillColliders(scenery.dynamic, player.pos);
+    }
 
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
@@ -457,17 +740,36 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(player.renderPos + sv * 7.0 + dvec3(0, 0.5, 0), player.renderPos);
     }
     if (rendered) {
-    renderer.beginFrame(cam, light, player.renderPos);
-    if (drawTerrain) terrain.submit(renderer);
-    scenery.submit(renderer, drawTrees, drawVillage && !haveResort);
+    Lighting frameLight = light;
+    if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light
+      frameLight.zenith = frameLight.mid = frameLight.horizon = frameLight.glow = frameLight.fog = vec3(0.004f, 0.005f, 0.007f);
+      frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
+    }
+    renderer.beginFrame(cam, frameLight, player.renderPos);
+    if (drawTerrain && !camUnderground) terrain.submit(renderer);
+    scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
     if (drawVillage) resort.submit(renderer);
-    if (drawSkier) rig.submit(renderer, player.view == Player::View::First && player.mode != PlayerMode::Fall);
+    if (drawVillage) sweep.submit(renderer, cam.pos);
+    if (drawVillage) {
+      vdraw.begin();
+      drive.addDraw(vdraw, cam.pos);
+      traffic.addDraw(vdraw, cam.pos);
+      buses.addDraw(vdraw, cam.pos);
+      railway.addDraw(vdraw, cam.pos);
+      express.addDraw(vdraw, cam.pos);
+      vdraw.submit(renderer, *dev, cam.pos);
+    }
+    bool hideRig = (player.view == Player::View::First && player.mode != PlayerMode::Fall) || (rideKind == Ride::Car && drive.cockpit()) ||
+                   ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView);
+    railway.insideView = rideKind == Ride::Rail && seatView;
+    express.insideView = rideKind == Ride::Express && seatView;
+    if (drawSkier) rig.submit(renderer, hideRig);
 
     // HUD
     {
       float W = float(renderer.width()), H = float(renderer.height()), s = std::max(1.f, H / 360.f);
       char buf[256];
-      double kmh = player.speed() * 3.6;
+      double kmh = (rideKind == Ride::Car ? drive.speed() : rideKind == Ride::Bus ? buses.rideSpeed() : rideKind == Ride::Rail ? railway.ride().speed : rideKind == Ride::Express ? express.ride().speed : player.speed()) * 3.6;
       std::snprintf(buf, sizeof buf, "%3.0f km/h", kmh);
       renderer.hudRect(12 * s, H - 46 * s, 150 * s, 36 * s, vec4(0, 0, 0, 0.35f));
       renderer.hudText(18 * s, H - 42 * s, 2.6f * s, vec4(1), buf);
@@ -577,7 +879,89 @@ int runGame(const GameOptions& opt) {
         if (gotOff || !testLine || phaseFrame > 900 || (!boarded && phaseFrame > 10)) {
           if (!boarded) { liftOk = false; SL_WARN("[autotest] lift: could not board (prompt '%s')", prompt.c_str()); }
           else if (!gotOff) { liftOk = false; SL_WARN("[autotest] lift: still riding after %.0f s", rideT); }
-          at = AT::Done;
+          at = transport.loaded() ? AT::Drive : AT::Done;
+          phaseFrame = 0;
+          input.releaseInjected();
+        }
+      }
+      // ---- (Phase 3) driving 20 s on a road, the traffic, the bus, the Wolkenspitzbahn, the Legacy Express
+      else if (at == AT::Drive) {
+        if (drive.active()) {
+          dvec3 p = drive.pos();
+          driveT += frameDt;
+          driveDist += glm::length(dvec2(p.x - drivePrev.x, p.z - drivePrev.z));
+          drivePrev = p;
+          driveTop = std::max(driveTop, drive.speed());
+          double g = world.groundHeight(p.x, p.z, p.y + 1);
+          if (!drive.air()) driveMaxSink = std::max(driveMaxSink, g - p.y);
+          if (phaseFrame % 20 == 0)
+            SL_INFO("[autotest] drive t=%5.1fs  pos=(%8.1f, %7.1f, %8.1f)  ground %7.1f  speed=%5.1f km/h  %s  limit %d  lane %.1f m", driveT, p.x, p.y, p.z, g,
+                    drive.speed() * 3.6, drive.label().c_str(), transport.speedLimitAt(p.x, p.z), transport.laneDistance(p.x, p.z));
+          if (rendered && driveT >= 12 && driveT < 12.4 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, "drive"));
+        }
+        if (driveT >= 20 || phaseFrame > 400 || (!drive.active() && phaseFrame > 10)) {
+          bool finite = std::isfinite(drive.pos().x) && std::isfinite(drive.pos().y);
+          driveOk = drive.active() && finite && driveDist > 100 && driveTop > 30 / 3.6 && driveMaxSink < 0.5;
+          SL_INFO("[autotest] drive: %.0f m in %.1f s, top %.1f km/h, deepest below the ground %.2f m, damage %.0f%% -> %s", driveDist, driveT, driveTop * 3.6,
+                  driveMaxSink, drive.damage(), driveOk ? "ok" : "FAILED");
+          // the traffic: a car that drove along its lane meanwhile
+          double moved = 0, lane = 0;
+          for (size_t k = 0; k < traffic.list.size() && k < traffic0.size(); k++) {
+            const auto& c = traffic.list[k];
+            if (c.mode != Traffic::Car::Mode::Road) continue;
+            double m = c.odo - traffic0[k].x;   // (metres driven along its lane; a car recycled meanwhile keeps its odometer)
+            if (m > moved) { moved = m; lane = transport.laneDistance(c.x, c.z); }
+          }
+          trafficOk = moved > 50 && lane < 4.5;
+          SL_INFO("[autotest] traffic: %zu cars, %d driving; the furthest moved %.0f m along its road, %.1f m off the centre line (its lane: 1.6 m) -> %s",
+                  traffic.list.size(), traffic.movingCount(), moved, lane, trafficOk ? "ok" : "FAILED");
+          if (drive.active()) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
+          at = AT::Bus; phaseFrame = 0; input.releaseInjected(); rideTest = 0; rideBoarded = false;
+        }
+      } else if (at == AT::Bus || at == AT::Rail || at == AT::Express) {
+        const char* what = at == AT::Bus ? "bus" : at == AT::Rail ? "train" : "express";
+        Ride want = at == AT::Bus ? Ride::Bus : at == AT::Rail ? Ride::Rail : Ride::Express;
+        if (phaseFrame == 1) {
+          dvec3 to(0);
+          bool okp = false;
+          if (at == AT::Bus && !transport.stops.empty()) { to = dvec3(transport.stops[0].x + 2, 0, transport.stops[0].z + 2); okp = true; }
+          if (at == AT::Rail && transport.rail.ok && transport.rail.stations[0].hasBoard) { to = dvec3(transport.rail.stations[0].board.x, 0, transport.rail.stations[0].board.y); okp = true; }
+          if (at == AT::Express && transport.express.ok && transport.express.stations[0].hasBoard) { to = dvec3(transport.express.stations[0].board.x, 0, transport.express.stations[0].board.y); okp = true; }
+          if (okp) { player.setSkisOn(false); player.teleport(to.x, to.z, 0); SL_INFO("[autotest] %s: at (%.1f, %.1f), prompt next frame", what, to.x, to.z); }
+        }
+        input.inject(Action::Interact, phaseFrame == 3);
+        if (phaseFrame == 4 && rideKind != want) SL_WARN("[autotest] %s: could not board (prompt '%s')", what, prompt.c_str());
+        if (rideKind == want) {
+          TrainRide tr;
+          dvec3 vp;
+          double sp;
+          if (at == AT::Bus) { vp = buses.busPos(); sp = buses.rideSpeed(); }
+          else { tr = at == AT::Rail ? railway.ride() : express.ride(); vp = tr.trainPos; sp = tr.speed; }
+          if (!rideBoarded) { rideBoarded = true; ridePos0 = vp; SL_INFO("[autotest] %s: boarded (%s)", what, rideLine.c_str()); }
+          rideTest += frameDt;
+          // (the Wolkenspitzbahn waits 20 s at the valley station: then x6 after 10 s, as Space does)
+          input.inject(Action::Jump, (at == AT::Rail && rideTest > 10) || (at == AT::Express && rideTest > 17));
+          if (phaseFrame % 25 == 0) SL_INFO("[autotest] %s t=%5.1fs  at (%8.1f, %7.1f, %8.1f)  %5.1f km/h  seat y %.1f  [%s]", what, rideTest, vp.x, vp.y, vp.z, sp * 3.6, player.pos.y, rideLine.c_str());
+          // (the seat view first, then R: the outside view)
+          if (rendered && rideTest >= 11 && rideTest < 11.4 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string(what) + (seatView ? "_seat" : "")).c_str()));
+          input.inject(Action::View, rideTest >= 13 && rideTest < 13.1);
+          if (rendered && rideTest >= 15 && rideTest < 15.4 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string(what) + (seatView ? "_seat" : "")).c_str()));
+        }
+        double limit = at == AT::Rail ? 32 : 24;
+        if (rideTest >= limit || phaseFrame > 600 || (phaseFrame > 6 && rideKind != want)) {
+          dvec3 vp = at == AT::Bus ? buses.busPos() : at == AT::Rail ? railway.ride().trainPos : express.ride().trainPos;
+          double moved = rideBoarded ? glm::length(vp - ridePos0) : 0;
+          bool ok = rideBoarded && moved > (at == AT::Bus ? 25 : 60) && std::isfinite(player.pos.y);
+          SL_INFO("[autotest] %s: rode %.1f s, moved %.0f m -> %s", what, rideTest, moved, ok ? "ok" : "FAILED");
+          if (at == AT::Bus) busOk = ok; else if (at == AT::Rail) railOk = ok; else expressOk = ok;
+          if (rideKind == want) {
+            if (at == AT::Bus) buses.abort(); else if (at == AT::Rail) railway.abort(); else express.abort();
+            dvec3 p = player.pos;
+            standOff(dvec3(p.x + 6, p.z + 6, 0), "");
+          }
+          input.releaseInjected();
+          at = at == AT::Bus ? AT::Rail : at == AT::Rail ? AT::Express : AT::Done;
+          phaseFrame = 0; rideTest = 0; rideBoarded = false;
         }
       }
       if (at == AT::Done) running = false;
@@ -587,9 +971,11 @@ int runGame(const GameOptions& opt) {
 
   if (opt.autotest) {
     double wall = plat->timeSeconds() - startT;
-    bool ok = skiOk && collideOk && liftOk;
+    bool ok = skiOk && collideOk && liftOk && driveOk && trafficOk && busOk && railOk && expressOk;
     SL_INFO("[autotest] %d frames (%.1f s simulated) in %.1f s wall: avg %.1f fps", frame, simTime, wall, frame / wall);
     SL_INFO("[autotest] ski %s, building collision %s, gondola ride %s", skiOk ? "ok" : "FAILED", collideOk ? "ok" : "FAILED", liftOk ? "ok" : "FAILED");
+    SL_INFO("[autotest] drive %s, traffic %s, bus %s, Wolkenspitzbahn %s, Legacy Express %s", driveOk ? "ok" : "FAILED", trafficOk ? "ok" : "FAILED",
+            busOk ? "ok" : "FAILED", railOk ? "ok" : "FAILED", expressOk ? "ok" : "FAILED");
     SL_INFO("[autotest] %s", ok ? "PASS" : "FAIL");
     audio.stop(*plat);
     return ok ? 0 : 1;

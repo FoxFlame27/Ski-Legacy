@@ -332,13 +332,32 @@ bool World::load(platform::Platform& p, const AssetPaths& paths) {
       }
     } else SL_WARN("terrain cuts missing");
   }
+  // (Phase 3) the courses' regions: 8 m tiles of height deltas + forest density (export_world.mjs)
+  if (j.contains("regions")) {
+    std::vector<uint8_t> b;
+    if (p.readFile(paths.data(j["regions"]["file"].get<std::string>()), b) && b.size() >= 16 && std::memcmp(b.data(), "SLRG", 4) == 0) {
+      auto i32 = [&](size_t o) { int32_t v; std::memcpy(&v, b.data() + o, 4); return v; };
+      regCell_ = i32(4); regTile_ = i32(8);
+      int n = i32(12), S1 = regTile_ + 1;
+      size_t raw = size_t(S1) * S1 * 3, tileBytes = 12 + raw + (raw % 4 ? 4 - raw % 4 : 0), o = 16;
+      for (int t = 0; t < n && o + tileBytes <= b.size(); t++, o += tileBytes) {
+        RegTile rt;
+        int32_t tx = i32(o), tz = i32(o + 4);
+        std::memcpy(&rt.scale, b.data() + o + 8, 4);
+        rt.v.resize(size_t(S1) * S1);
+        std::memcpy(rt.v.data(), b.data() + o + 12, rt.v.size() * 2);
+        rt.f.assign(b.data() + o + 12 + rt.v.size() * 2, b.data() + o + 12 + rt.v.size() * 3);
+        regs_.emplace(cellKey(tx, tz), std::move(rt));
+      }
+    } else SL_WARN("course regions missing (regions.bin)");
+  }
   // the gondola top station's shoulder height (lazy in world.js; computed once here, with the crag mask in place)
   shoulderLock_ = true;
   shoulderH_ = baseHeight(CROWN_X, CROWN_Z);
   shoulderLock_ = false;
   loaded_ = true;
   for (auto& v : vcache_) v.key = INT64_MIN;
-  SL_INFO("world: %zu pads, %zu corridor segments, %zu cut tiles, crag %dx%d", pads_.size(), corridors_.size(), cuts_.size(), crag_.nx, crag_.nz);
+  SL_INFO("world: %zu pads, %zu corridor segments, %zu cut tiles, %zu region tiles, crag %dx%d", pads_.size(), corridors_.size(), cuts_.size(), regs_.size(), crag_.nx, crag_.nz);
   return true;
 }
 
@@ -492,6 +511,31 @@ double World::cutDelta(double x, double z) const {
   return ((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) * t.scale;
 }
 
+double World::regionDelta(double x, double z) const {
+  if (regs_.empty()) return 0;
+  double tw = double(regCell_ * regTile_);
+  int tx = fl(x / tw), tz = fl(z / tw);
+  auto it = regs_.find(cellKey(tx, tz));
+  if (it == regs_.end()) return 0;
+  const RegTile& t = it->second;
+  double fx = (x - tx * tw) / regCell_, fz = (z - tz * tw) / regCell_;
+  int i = std::min(regTile_ - 1, fl(fx)), j = std::min(regTile_ - 1, fl(fz));
+  double ax = fx - i, az = fz - j;
+  int S1 = regTile_ + 1;
+  const int16_t* v = t.v.data();
+  double a = v[j * S1 + i], b = v[j * S1 + i + 1], c = v[(j + 1) * S1 + i], d = v[(j + 1) * S1 + i + 1];
+  return ((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) * t.scale;
+}
+bool World::inRegion(double x, double z) const {
+  if (regs_.empty()) return false;
+  double tw = double(regCell_ * regTile_);
+  int tx = fl(x / tw), tz = fl(z / tw);
+  auto it = regs_.find(cellKey(tx, tz));
+  if (it == regs_.end()) return false;
+  int S1 = regTile_ + 1, i = std::min(regTile_, int(std::lround((x - tx * tw) / regCell_))), j = std::min(regTile_, int(std::lround((z - tz * tw) / regCell_)));
+  return it->second.f[size_t(j * S1 + i)] != 255;
+}
+
 double World::height(double x, double z, double spacing) const {
   double h = baseHeight(x, z, spacing);
   auto it = padGrid_.find(cellKey(fl(x / 256), fl(z / 256)));
@@ -502,7 +546,7 @@ double World::height(double x, double z, double spacing) const {
       if (d < p.r + p.blend) h = lerp(p.h, h, smoothstep(p.r, p.r + p.blend, d));
     }
   }
-  return h + cutDelta(x, z);
+  return h + regionDelta(x, z) + cutDelta(x, z);
 }
 
 double World::meshHeight(double x, double z) {
@@ -547,6 +591,8 @@ void World::addSurface(SampledSurface s) {
 
 double World::groundHeight(double x, double z, double yHint) {
   double h = meshHeight(x, z);
+  if (roadSurface) { double r = roadSurface(x, z, h, yHint); if (!std::isnan(r)) h = r; }
+  for (auto& f : decks_) { double d = f(x, z); if (!std::isnan(d) && d > h && d <= yHint + 0.6) h = d; }
   if (surfaces_.empty()) return h;
   int64_t cx = int64_t(std::floor(x / 64)), cz = int64_t(std::floor(z / 64));
   auto it = surfGrid_.find((cx << 32) ^ (cz & 0xffffffff));
@@ -611,6 +657,22 @@ bool World::nearPad(double x, double z) const {
 }
 
 double World::forest(double x, double z, double h, double slope) const {
+  // a course's region: its own forest (exported on the region tiles' 8 m grid)
+  if (!regs_.empty()) {
+    double tw = double(regCell_ * regTile_);
+    int tx = fl(x / tw), tz = fl(z / tw);
+    auto it = regs_.find(cellKey(tx, tz));
+    if (it != regs_.end()) {
+      const RegTile& t = it->second;
+      double fx = (x - tx * tw) / regCell_, fz = (z - tz * tw) / regCell_;
+      int i = std::min(regTile_ - 1, fl(fx)), j = std::min(regTile_ - 1, fl(fz)), S1 = regTile_ + 1;
+      uint8_t a = t.f[size_t(j * S1 + i)], b = t.f[size_t(j * S1 + i + 1)], c = t.f[size_t((j + 1) * S1 + i)], d = t.f[size_t((j + 1) * S1 + i + 1)];
+      if (a != 255 && b != 255 && c != 255 && d != 255) {
+        double ax = fx - i, az = fz - j;
+        return ((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 254.0;
+      }
+    }
+  }
   double n = N2_.fbm(x * 0.0022 + 40, z * 0.0022 - 17, 3) * 0.5 + 0.5;
   double tl = 520 + N_.noise(x * 0.001, z * 0.001) * 90;
   double alt = 1 - smoothstep(tl - 120, tl, h);

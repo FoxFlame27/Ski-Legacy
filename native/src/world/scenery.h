@@ -23,6 +23,7 @@ struct Collider {
   double r = -1;                  // circle radius (r >= 0), else an oriented box:
   double hw = 0, hd = 0, rot = 0; // half extents and rotation (player.js convention: rot = -yaw)
   double top = 1e30;              // world y of the top (can be jumped over); 1e30 = tall
+  bool soft = false;              // a net / fence: a soft bump, never a wipeout
 };
 
 struct Tree { float x, y, z, s, rot, trunk, crown; uint8_t type; };
@@ -41,6 +42,12 @@ public:
   /// vegetation.js collide(): the first tree whose trunk (or crown) overlaps a circle of radius r at (x, z).
   const Tree* treeAt(double x, double z, double r, bool crown) const;
   const std::vector<Collider>& colliders() const { return colliders_; }
+  /// Replaces the static colliders (the resort's, from export_resort.mjs) and indexes them on a 32 m grid.
+  void setColliders(std::vector<Collider> c);
+  /// Indices of the colliders that can touch a point in the 32 m cell of (x, z) (padded by their reach + 1 m).
+  const std::vector<int>* collidersNear(double x, double z) const;
+  /// Phase 1 placements (world.json): only when there is no resort data.
+  bool hasResort() const { return !colliderGrid_.empty(); }
   size_t treesDrawn() const { return drawn_; }
 
   static constexpr double CELL = 64, SPACING = 6.5;
@@ -71,6 +78,7 @@ private:
   struct Placed { std::shared_ptr<Model> model; dvec3 pos; mat4 local; float radius; };
   std::vector<Placed> placed_;
   std::vector<Collider> colliders_;
+  std::unordered_map<int64_t, std::vector<int>> colliderGrid_;
 };
 
 } // namespace sl

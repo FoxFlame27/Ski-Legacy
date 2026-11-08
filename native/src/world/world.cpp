@@ -521,6 +521,43 @@ double World::meshHeight(double x, double z) {
   return hd + (hc - hd) * (1 - tx) + (hb - hd) * (1 - tz);
 }
 
+double SampledSurface::at(double x, double z) const {
+  double fx = (x - x0) / step, fz = (z - z0) / step;
+  if (fx < 0 || fz < 0 || fx > nx - 1 || fz > nz - 1) return std::nan("");
+  int i = std::min(int(fx), nx - 2), j = std::min(int(fz), nz - 2);
+  double tx = fx - i, tz = fz - j;
+  auto v = [&](int a, int b) { return h[size_t(b) * size_t(nx) + size_t(a)]; };
+  int16_t a = v(i, j), b = v(i + 1, j), c = v(i, j + 1), d = v(i + 1, j + 1);
+  if (a == -32768 || b == -32768 || c == -32768 || d == -32768) {
+    // at an edge: the nearest sample decides
+    int16_t n = v(tx < 0.5 ? i : i + 1, tz < 0.5 ? j : j + 1);
+    return n == -32768 ? std::nan("") : base + n * 0.01;
+  }
+  return base + ((a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz) * 0.01;
+}
+
+void World::addSurface(SampledSurface s) {
+  int idx = int(surfaces_.size());
+  double x1 = s.x0 + (s.nx - 1) * s.step, z1 = s.z0 + (s.nz - 1) * s.step;
+  for (int64_t cx = int64_t(std::floor(s.x0 / 64)); cx <= int64_t(std::floor(x1 / 64)); cx++)
+    for (int64_t cz = int64_t(std::floor(s.z0 / 64)); cz <= int64_t(std::floor(z1 / 64)); cz++)
+      surfGrid_[(cx << 32) ^ (cz & 0xffffffff)].push_back(idx);
+  surfaces_.push_back(std::move(s));
+}
+
+double World::groundHeight(double x, double z, double yHint) {
+  double h = meshHeight(x, z);
+  if (surfaces_.empty()) return h;
+  int64_t cx = int64_t(std::floor(x / 64)), cz = int64_t(std::floor(z / 64));
+  auto it = surfGrid_.find((cx << 32) ^ (cz & 0xffffffff));
+  if (it == surfGrid_.end()) return h;
+  for (int i : it->second) {
+    double hs = surfaces_[size_t(i)].at(x, z);
+    if (!std::isnan(hs) && hs > h && hs <= yHint + 0.6) h = hs;
+  }
+  return h;
+}
+
 vec3 World::groundNormal(double x, double z, double yHint) {
   const double e = 0.35;
   double hx = groundHeight(x + e, z, yHint) - groundHeight(x - e, z, yHint);

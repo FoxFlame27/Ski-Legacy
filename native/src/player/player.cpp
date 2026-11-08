@@ -39,7 +39,7 @@ double approachAngleDamp(double a, double b, double k) { return dampAngle(a, b, 
 Player::Player(World& world, Scenery* scenery) : world_(world), scenery_(scenery) {}
 
 const char* Player::modeName() const {
-  switch (mode) { case PlayerMode::Walk: return "walk"; case PlayerMode::Ski: return air ? "air" : "ski"; case PlayerMode::Fall: return "crash"; }
+  switch (mode) { case PlayerMode::Walk: return "walk"; case PlayerMode::Ski: return air ? "air" : "ski"; case PlayerMode::Fall: return "crash"; case PlayerMode::Sit: return "ride"; }
   return "";
 }
 
@@ -65,6 +65,25 @@ void Player::teleport(double x, double z, double h) {
   normal = dvec3(world_.groundNormal(x, z));
 }
 
+void Player::sitOn(const dvec3& seat, const dvec3& fwd) {
+  mode = PlayerMode::Sit;
+  vel = dvec3(0);
+  air = ballistic = false; airTime = 0; charging = false; charge = 0; flip = yawFx = yawFxV = airSteer_ = 0;
+  absorb = absorbV = 0; steer = edge = lean = 0; footAir_ = false; footJumpY = 0;
+  fall = FallState{};
+  setSeat(seat, fwd);
+  camFocusInit_ = false;
+}
+void Player::setSeat(const dvec3& seat, const dvec3& fwd) {
+  pos = prevPos = renderPos = seat;
+  if (std::hypot(fwd.x, fwd.z) > 1e-6) heading = std::atan2(fwd.x, fwd.z);
+  normal = dvec3(0, 1, 0);
+}
+void Player::standUp(double x, double z, double h) {
+  mode = skisOn ? PlayerMode::Ski : PlayerMode::Walk;
+  teleport(x, z, h);
+}
+
 void Player::setSkisOn(bool on) {
   if (on && !hasSkis) return;
   if (on && !skisOn) { parked = true; vel = dvec3(0); }
@@ -84,6 +103,7 @@ double Player::turnRateAt(double sp, bool tk, bool brake) const {
 void Player::fixedUpdate(double h, const PlayerControls& c) {
   time_ += h;
   prevPos = pos;
+  if (mode == PlayerMode::Sit) return;   // (the seat is moved by the lift)
   if (mode == PlayerMode::Ski) skiTick(h, c);
   else if (mode == PlayerMode::Walk) walkTick(h, c);
   else fallTick(h);
@@ -526,7 +546,10 @@ void Player::collide(double speed, double feetY, double above) {
   if (!scenery_) return;
   dvec3& p = pos;
   const double R = 0.35;
-  for (const Collider& c : scenery_->colliders()) {
+  const std::vector<int>* near = scenery_->hasResort() ? scenery_->collidersNear(p.x, p.z) : nullptr;
+  size_t n = scenery_->hasResort() ? (near ? near->size() : 0) : scenery_->colliders().size();
+  for (size_t ci = 0; ci < n; ci++) {
+    const Collider& c = scenery_->colliders()[near ? size_t((*near)[ci]) : ci];
     if (c.top < 1e29 ? feetY > c.top : above > 2.5) continue;
     double reach = (c.r >= 0 ? c.r : std::max(c.hw, c.hd)) + R;
     if (std::fabs(p.x - c.x) > reach || std::fabs(p.z - c.z) > reach) continue;
@@ -535,7 +558,7 @@ void Player::collide(double speed, double feetY, double above) {
       if (d < c.r + R) {
         double nx = dx / (d > 0 ? d : 1), nz = dz / (d > 0 ? d : 1);
         p.x = c.x + nx * (c.r + R); p.z = c.z + nz * (c.r + R);
-        bounce(nx, nz, speed, false);
+        bounce(nx, nz, speed, c.soft);
       }
     } else {
       double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
@@ -548,7 +571,7 @@ void Player::collide(double speed, double feetY, double above) {
         double c2 = std::cos(c.rot), s2 = std::sin(c.rot);
         double nx = nlx * c2 - nlz * s2, nz = nlx * s2 + nlz * c2;
         p.x += nx * push; p.z += nz * push;
-        bounce(nx, nz, speed, false);
+        bounce(nx, nz, speed, c.soft);
       }
     }
   }
@@ -643,7 +666,7 @@ void Player::frameUpdate(double dt, double alpha, const PlayerFrameControls& f, 
     camPitch_ = clamp(camPitch_ - f.lookY * sens, -1.2, 0.6);
     camDist_ = clamp(camDist_ - f.wheel * 0.5, 2.2, 12);
   }
-  renderPos = glm::mix(prevPos, pos, alpha);
+  renderPos = mode == PlayerMode::Sit ? pos : glm::mix(prevPos, pos, alpha);
   if (mode == PlayerMode::Ski) animateSki(dt);
   updateCamera(dt, f);
 }
@@ -658,11 +681,12 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
   airBlend_ = lerp(airBlend_, longAir, 1 - std::exp(-dt * (longAir ? 2.5 : 4)));
   double fast = mode == PlayerMode::Ski && !air ? smoothstep(15, 36, sp) : 0;
   double vh = std::hypot(vel.x, vel.z);
-  if (vh > 1.5) travelYaw_ = dampAngle(travelYaw_, std::atan2(vel.x, vel.z), dt * (air ? 3 : 6));
+  const bool sit = mode == PlayerMode::Sit;
+  if (vh > 1.5 && !sit) travelYaw_ = dampAngle(travelYaw_, std::atan2(vel.x, vel.z), dt * (air ? 3 : 6));
   else if (mode != PlayerMode::Fall) travelYaw_ = dampAngle(travelYaw_, heading, dt * 4);
   if (view == View::First && mode != PlayerMode::Fall) {
     // helmet cam (simplified): the eyes over the boots, looking a little down the run
-    double eyeT = mode == PlayerMode::Ski ? FP_EYE_H - clamp(crouch + absorb, 0, 1) * 0.35 : 1.62;
+    double eyeT = mode == PlayerMode::Ski ? FP_EYE_H - clamp(crouch + absorb, 0, 1) * 0.35 : sit ? 0.78 : 1.62;
     fpEye_ = lerp(fpEye_, eyeT, 1 - std::exp(-dt * 12));
     double yaw = heading + lookYaw_;
     double pitch = lookPitch_ + (mode == PlayerMode::Ski ? -15 * DEG : -5 * DEG);
@@ -675,7 +699,7 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
   }
   if (mode != PlayerMode::Walk && f.now - f.lastLook > 1.2) {
     double d = wrapPi(travelYaw_ + PI - camYaw_);
-    double rate = air ? 1.3 : mode == PlayerMode::Fall ? 0.8 : 2.0 + fast * 1.5;
+    double rate = sit ? 2.2 : air ? 1.3 : mode == PlayerMode::Fall ? 0.8 : 2.0 + fast * 1.5;
     camYaw_ += d * (1 - std::exp(-dt * rate));
     camPitch_ = lerp(camPitch_, -0.16 - airBlend_ * 0.1 - fast * 0.03, 1 - std::exp(-dt * 1.5));
   }
@@ -684,13 +708,13 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
   dvec3 a(vel.x, 0, vel.z);
   if (vh > 0.1) a *= ahead / vh;
   camLook_ = glm::mix(camLook_, a, 1 - std::exp(-dt * 4));
-  double focusH = mode == PlayerMode::Fall ? 0.85 : 1.45 - (skiing ? clamp(crouch, 0, 1) * 0.25 : 0);
+  double focusH = sit ? 0.6 : mode == PlayerMode::Fall ? 0.85 : 1.45 - (skiing ? clamp(crouch, 0, 1) * 0.25 : 0);
   double fy = renderPos.y + focusH;
   if (!camFocusInit_ || std::fabs(camFocusY_ - fy) > 40) { camFocusY_ = fy; camFocusInit_ = true; }
-  camFocusY_ = lerp(camFocusY_, fy, 1 - std::exp(-dt * (air ? 9 : 14)));
+  camFocusY_ = lerp(camFocusY_, fy, 1 - std::exp(-dt * (sit ? 60 : air ? 9 : 14)));
   camFocusY_ = clamp(camFocusY_, fy - 2.5, fy + 2.5);
   camFocus_ = dvec3(renderPos.x + camLook_.x, camFocusY_ + camDip_ * 0.5, renderPos.z + camLook_.z);
-  double dist = camDist_ + clamp(sp - 12, 0, 25) * 0.04 + airBlend_ * 0.9 + (mode == PlayerMode::Fall ? 0.6 : 0);
+  double dist = (sit ? std::max(camDist_, 8.0) : camDist_) + clamp(sp - 12, 0, 25) * 0.04 + airBlend_ * 0.9 + (mode == PlayerMode::Fall ? 0.6 : 0);
   dvec3 desired(camFocus_.x + std::sin(camYaw_) * std::cos(camPitch_) * dist, camFocus_.y - std::sin(camPitch_) * dist + 0.3,
                 camFocus_.z + std::cos(camYaw_) * std::cos(camPitch_) * dist);
   double gy = world_.groundHeight(desired.x, desired.z) + 0.5;
@@ -698,7 +722,8 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
   double mx = (desired.x + camFocus_.x) / 2, mz = (desired.z + camFocus_.z) / 2, my = (desired.y + camFocus_.y) / 2;
   double gm = world_.groundHeight(mx, mz) + 0.35;
   if (my < gm) desired.y += (gm - my) * 2;
-  camPos_ = glm::mix(camPos_, desired, 1 - std::exp(-dt * 12));
+  // riding a lift (possibly fast-forwarded): follow tightly so the view never trails the cabin
+  camPos_ = glm::mix(camPos_, desired, 1 - std::exp(-dt * (sit ? 60 : 12)));
   double fov = f.fovSetting + clamp(sp - 10, 0, 30) * 0.4 + fovKick_ * 2 + airBlend_ * 2;
   camFov_ = lerp(camFov_, fov, 1 - std::exp(-dt * 3));
 }

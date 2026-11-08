@@ -53,13 +53,19 @@ if(APPLE)
 endif()
 
 # ---------------------------------------------------------------- packaging: assets next to the executable
-# Only the models Phase 1 loads (not the whole 240 MB public/ folder) plus the exported world data.
+# Only the models the game loads (not the whole 240 MB public/ folder) plus the exported world data (native/data:
+# world.json, crag.bin, cuts.bin, resort.json, resort.bin, fonts/).
 set(SL_PHASE1_MODELS skier_red_rigged skier_red_anims ski_carver ski_pole pine_tree pine_tree2 rental_shop
   ticket_booth hotel_chalet lamp_post mountain_hut)
+# Phase 2: the resort's props (export_resort.mjs lists them in resort.json), the lift cars, the chair bullwheel's
+# material
+set(SL_PHASE2_MODELS sign_pole map_board snow_cannon lift_tower chair_terminal chair_bullwheel christmas_tree
+  wooden_bench wooden_barrel trash_bin market_stall fire_pit picnic_table outdoor_ski_rack wooden_sled firewood_pile
+  snowman wooden_fence patrol_hut deck_chair gondola_cabin chairlift_chair)
 if(SL_COPY_ASSETS)
   set(_dst $<TARGET_FILE_DIR:ski_legacy>/assets)
   set(_cmds)
-  foreach(m ${SL_PHASE1_MODELS})
+  foreach(m ${SL_PHASE1_MODELS} ${SL_PHASE2_MODELS})
     list(APPEND _cmds COMMAND ${CMAKE_COMMAND} -E copy_if_different
       ${CMAKE_CURRENT_SOURCE_DIR}/../public/models/${m}.glb ${_dst}/models/${m}.glb)
   endforeach()
@@ -67,5 +73,5 @@ if(SL_COPY_ASSETS)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${_dst}/models ${_dst}/data
     ${_cmds}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/data ${_dst}/data
-    COMMENT "Copying Phase 1 assets to ${_dst}")
+    COMMENT "Copying the game's assets to ${_dst}")
 endif()

@@ -8,6 +8,8 @@
 //   data/crag.bin    the crag mask (distance from each 10 m grid node to the nearest groomed run, uint16 dm)
 //   data/cuts.bin    the terrain cuts (piste grading, freeride bowls, secrets' trails, the railway's roadbed...)
 //                    as sparse tiles of height deltas on the 2 m grid the physics mesh uses
+//   data/resort.*    (Phase 2, written by export_resort.mjs, run at the end in its own process): the village, the
+//                    resort dressing, lifts and stations as built by the game's own modules
 //
 // The analytic base terrain (world.js baseHeight + wolkenspitze.js + legacypeak.js + noise.js) is ported to C++
 // exactly; only data and the closures (cuts) that would be a large port for Phase 1 come from here.
@@ -15,6 +17,7 @@
 // Usage (from the repo root):  node native/tools/export_world.mjs
 // Re-run whenever src/world/* changes. Takes ~1-2 minutes.
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -175,3 +178,9 @@ const out = {
 };
 fs.writeFileSync(path.join(OUT, 'world.json'), JSON.stringify(out));
 log('wrote', path.join(OUT, 'world.json'), (fs.statSync(path.join(OUT, 'world.json')).size / 1024).toFixed(0) + ' KB');
+
+// ---------------------------------------------------------------- Phase 2: the resort (its own process: loader hooks)
+{
+  const r = spawnSync(process.execPath, [path.join(HERE, 'export_resort.mjs')], { stdio: 'inherit' });
+  if (r.status !== 0) { console.error('export_resort.mjs failed'); process.exitCode = 1; }
+}

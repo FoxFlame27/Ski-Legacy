@@ -15,6 +15,10 @@ struct Material {
   vec3 emissive{0};
   gfx::Texture baseTex, mrTex, normalTex, emissiveTex;
   bool doubleSided = false;
+  bool vertexColor = false;        // multiply the base colour by the vertex colour (procedural meshes)
+  bool colorSqrt = false;          // the vertex colour is stored as sqrt (8-bit packed meshes): squared in the shader
+  float glow = 0;                  // village.js addNightGlow: warm bright texels glow at night x this
+  vec2 emissiveNight{1, 0};        // emissive x (x + y * night) (lights dim by day, signs lit at night)
   enum class Alpha : uint8_t { Opaque, Mask, Blend } alpha = Alpha::Opaque;
 };
 
@@ -26,6 +30,8 @@ struct Primitive {
   std::vector<Lod> lods;
   int material = -1;
   bool skinned = false;
+  uint32_t stride = 32;             // bytes per vertex: pos, normal, uv (+ rgb colour when hasColor)
+  bool hasColor = false;
   vec3 bmin{1e30f}, bmax{-1e30f};   // in the mesh's own space
 };
 

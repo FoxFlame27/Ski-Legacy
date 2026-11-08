@@ -161,6 +161,24 @@ const Tree* Scenery::treeAt(double x, double z, double r, bool crown) const {
   return nullptr;
 }
 
+void Scenery::setColliders(std::vector<Collider> c) {
+  colliders_ = std::move(c);
+  colliderGrid_.clear();
+  const double G = 32;
+  for (size_t i = 0; i < colliders_.size(); i++) {
+    const Collider& k = colliders_[i];
+    double reach = (k.r >= 0 ? k.r : std::hypot(k.hw, k.hd)) + 1.0;
+    for (int64_t cx = int64_t(std::floor((k.x - reach) / G)); cx <= int64_t(std::floor((k.x + reach) / G)); cx++)
+      for (int64_t cz = int64_t(std::floor((k.z - reach) / G)); cz <= int64_t(std::floor((k.z + reach) / G)); cz++)
+        colliderGrid_[key(cx, cz)].push_back(int(i));
+  }
+}
+
+const std::vector<int>* Scenery::collidersNear(double x, double z) const {
+  auto it = colliderGrid_.find(key(int64_t(std::floor(x / 32)), int64_t(std::floor(z / 32))));
+  return it == colliderGrid_.end() ? nullptr : &it->second;
+}
+
 bool Scenery::loadVillage(platform::Platform& p, const AssetPaths& paths) {
   std::vector<uint8_t> bytes;
   if (!p.readFile(paths.data("world.json"), bytes)) return false;

@@ -29,6 +29,16 @@ struct Massif {
 struct Pad { double x, z, r, blend, h; };
 enum class CorridorKind : uint8_t { Piste = 0, Race = 1, Lift = 2 };
 struct CorridorSeg { double ax, az, bx, bz, w; CorridorKind kind; };
+/// A walkable surface above the terrain (a station's deck and stair): world.addSurface's height(x, z) sampled on a
+/// grid by export_resort.mjs (int16 cm over `base`; -32768 = not over it).
+struct SampledSurface {
+  double x0 = 0, z0 = 0, step = 0.25, base = 0;
+  int nx = 0, nz = 0;
+  std::vector<int16_t> h;
+  /// height at (x, z), or NaN where (x, z) is not over it
+  double at(double x, double z) const;
+};
+
 struct CorridorHit { double d = 1e9; CorridorKind kind = CorridorKind::Piste; bool any = false; double dx = 0, dz = 1, lat = 0; bool groomed = false; };
 
 class World {
@@ -43,7 +53,9 @@ public:
   double height(double x, double z, double spacing = 0) const;
   /// The physics surface: world.js meshHeight (2 m grid, same triangulation as the near terrain mesh).
   double meshHeight(double x, double z);
-  double groundHeight(double x, double z, double yHint = 1e30) { (void)yHint; return meshHeight(x, z); }
+  /// world.js groundHeight: the terrain, or the highest walkable surface not far above yHint
+  double groundHeight(double x, double z, double yHint = 1e30);
+  void addSurface(SampledSurface s);
   vec3 groundNormal(double x, double z, double yHint = 1e30);
 
   CorridorHit corridorAt(double x, double z) const;
@@ -84,6 +96,9 @@ private:
   std::unique_ptr<Trough> trough_;
   struct Peak;
   std::unique_ptr<Peak> peak_;
+
+  std::vector<SampledSurface> surfaces_;
+  std::unordered_map<int64_t, std::vector<int>> surfGrid_;      // 64 m cells
 
   struct VCache { int64_t key; double h; };
   std::vector<VCache> vcache_;

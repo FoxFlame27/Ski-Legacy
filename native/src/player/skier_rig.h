@@ -19,6 +19,7 @@ public:
   void update(double dt, const Player& p, World& world);
   void submit(Renderer& r, bool hideBody) const;
   bool loaded() const { return bool(body_); }
+  bool skisInRide = true;   // riding: skis on the feet (a chairlift) or in the cabin's outside rack (a gondola: hidden)
 
 private:
   void bend(int bone, const vec3& modelAxis, float angle);

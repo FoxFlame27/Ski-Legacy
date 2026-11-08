@@ -34,6 +34,7 @@ struct Lighting {
   float fogDensity = 0.000034f, fogFalloff = 0.00045f;
   float exposure = 0.72f;
   int toneMap = 0;  // 0 ACES, 1 Neutral
+  float night = 0;  // village.js nightUniform: 0 by day .. 1 at night (lamps, lit windows, signs)
 };
 
 struct RenderSettings {
@@ -58,6 +59,24 @@ private:
   uint32_t count_ = 0, capacity_ = 0;
 };
 
+/// Instances of one model with full 3x4 world matrices (props, lift towers, cabins): per instance three rows, the
+/// translation relative to the batch origin (double precision on the CPU, camera-relative on the GPU).
+class MatrixInstanceBatch {
+public:
+  struct Inst { vec4 r0, r1, r2; };
+  void init(gfx::Device& d, const Model& m, uint32_t capacity);
+  void upload(gfx::Device& d, const std::vector<Inst>& inst);
+  uint32_t count() const { return count_; }
+  const Model* model() const { return model_; }
+  const std::vector<gfx::VertexInput>& inputs() const { return inputs_; }
+  static Inst pack(const glm::dmat4& world, const dvec3& origin);
+private:
+  const Model* model_ = nullptr;
+  gfx::Buffer buf_;
+  std::vector<gfx::VertexInput> inputs_;
+  uint32_t count_ = 0, capacity_ = 0;
+};
+
 class Renderer {
 public:
   bool init(gfx::Device& dev, const RenderSettings& s);
@@ -65,11 +84,15 @@ public:
   int width() const { return w_; }
   int height() const { return h_; }
   gfx::Texture noiseTexture() const { return noise_; }
+  gfx::Device& device() { return *dev_; }
 
   void beginFrame(const Camera& cam, const Lighting& light, const dvec3& shadowFocus);
   /// A model at world transform (origin + local matrix). pose: skinning (nullptr = rest).
   void submitModel(const Model& m, const dvec3& origin, const mat4& local, const Pose* pose, bool castShadow, int lod = 0, bool visible = true);
   void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow);
+  /// Matrix instances (origin: the batch's origin the instance translations are relative to). matOverride: draw
+  /// every primitive with this material instead (a prop's night glow).
+  void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr);
   void submitTerrain(gfx::VertexInput vi, uint32_t indexCount, const dvec3& origin, bool castShadow, bool visible = true);
   /// Frustum test of a world-space box (for the caller's culling).
   bool visible(const dvec3& bmin, const dvec3& bmax) const;
@@ -88,7 +111,7 @@ public:
 
 private:
   struct Item {
-    enum class Kind : uint8_t { Mesh, Instanced, Terrain } kind;
+    enum class Kind : uint8_t { Mesh, Instanced, InstMat, Terrain } kind;
     gfx::VertexInput vi;
     uint32_t first = 0, count = 0, instances = 1;
     const Material* mat = nullptr;
@@ -98,6 +121,7 @@ private:
     vec3 origin{0};
   };
   void drawItems(bool shadowPass);
+  void drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur);
   void setMaterial(const Material& m);
   void makeNoiseTexture();
   gfx::Program build(const char* name, const char* defines, const char* vs, const char* fs, bool lit);
@@ -108,9 +132,10 @@ private:
   gfx::RenderTarget hdr_, shadow_;
   gfx::Buffer frameUbo_, shadowUbo_, hudVbo_;
   gfx::VertexInput hudVi_, emptyVi_;
-  gfx::Program mesh_, meshSkin_, meshInst_, terrain_, depthMesh_, depthSkin_, depthInst_, depthTerrain_, sky_, post_, hud_;
+  gfx::Program mesh_, meshSkin_, meshInst_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, post_, hud_;
   gfx::Texture noise_, white_;
   std::vector<Item> items_;
+  std::vector<const Item*> blend_;
   std::vector<float> hudVerts_;
   Camera cam_;
   Lighting light_;

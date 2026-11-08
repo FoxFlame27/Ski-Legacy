@@ -81,9 +81,19 @@ void SkierRig::update(double dt, const Player& p, World& world) {
     bend(armL_, vec3(1, 0, 0), -arm); bend(armR_, vec3(1, 0, 0), -arm);
     bend(armL_, vec3(0, 0, 1), -0.35f); bend(armR_, vec3(0, 0, 1), 0.35f);
   }
-  // keep the feet on the ground after bending the legs
+  // seated on a chair / a cabin's bench: thighs forward, knees bent, hands on the lap
+  const bool sit = p.mode == PlayerMode::Sit;
+  if (sit) {
+    bend(upL_, vec3(1, 0, 0), -1.45f); bend(upR_, vec3(1, 0, 0), -1.45f);
+    bend(legL_, vec3(1, 0, 0), 1.4f); bend(legR_, vec3(1, 0, 0), 1.4f);
+    bend(spine_, vec3(1, 0, 0), -0.08f);
+    bend(armL_, vec3(1, 0, 0), -0.45f); bend(armR_, vec3(1, 0, 0), -0.45f);
+    bend(armL_, vec3(0, 0, 1), -0.25f); bend(armR_, vec3(0, 0, 1), 0.25f);
+  }
+  // keep the feet on the ground after bending the legs (seated: the hips on the seat)
   float footY = 0;
-  if (footL_ >= 0 && footR_ >= 0) {
+  if (sit && hips_ >= 0) footY = vec3(fit_ * pose_.global[size_t(hips_)][3]).y - 0.12f;
+  else if (footL_ >= 0 && footR_ >= 0) {
     vec3 fl = vec3(fit_ * pose_.global[size_t(footL_)][3]), fr = vec3(fit_ * pose_.global[size_t(footR_)][3]);
     Pose rest;
     body_->restPose(rest);
@@ -111,8 +121,16 @@ void SkierRig::update(double dt, const Player& p, World& world) {
   body_M_ = M * glm::translate(mat4(1), vec3(0, -footY, 0)) * fit_;
 
   // skis: under the feet, on the snow, along the heading (+ the hockey-stop skid), edged a little into the turn
-  skisVisible_ = ski_ && (ski || p.mode == PlayerMode::Fall) && p.skisOn;
-  if (skisVisible_) {
+  skisVisible_ = ski_ && (ski || p.mode == PlayerMode::Fall || (sit && skisInRide)) && p.skisOn;
+  if (skisVisible_ && sit) {
+    // on the feet, level, along the seat's heading
+    for (int s = 0; s < 2; s++) {
+      int foot = s == 0 ? footL_ : footR_;
+      vec3 fp = foot >= 0 ? vec3(body_M_ * pose_.global[size_t(foot)][3]) : vec3(s == 0 ? 0.13f : -0.13f, -0.5f, 0.5f);
+      skiM_[s] = glm::translate(mat4(1), fp + vec3(0, -0.08f, 0)) * glm::rotate(mat4(1), heading, vec3(0, 1, 0)) *
+                 glm::translate(mat4(1), vec3(0, 0, 0.12f)) * skiFit_;
+    }
+  } else if (skisVisible_) {
     vec3 up = glm::normalize(vec3(n));
     if (p.air) up = vec3(0, 1, 0);
     float yaw = float(p.heading + p.skidYaw * 0.8);

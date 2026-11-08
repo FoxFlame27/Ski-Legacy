@@ -17,6 +17,7 @@ layout(std140) uniform Frame {
   vec4 uFogColor;       // rgb, w unused
   vec4 uFogParams;      // x density at sea level, y height falloff (1/m), z shadow texel size, w exposure
   vec4 uSkyZenith, uSkyMid, uSkyHorizon, uSkyGlow;
+  vec4 uMisc;           // x night (0 day .. 1 night: lamps, windows, signs), yzw unused
 };
 )GLSL";
 
@@ -106,15 +107,24 @@ uniform mat4 uJoints[64];
 #endif
 #ifdef INSTANCED
 layout(location = 5) in vec4 aInst0;   // xyz world position, w uniform scale
-layout(location = 6) in vec4 aInst1;   // x yaw, yzw unused
+layout(location = 6) in vec4 aInst1;   // x yaw, y roll (about the local z axis), zw unused
 #endif
+#ifdef INSTMAT
+layout(location = 9) in vec4 aRow0;    // rows of a 3x4 world matrix (translation relative to uInstOrigin)
+layout(location = 10) in vec4 aRow1;
+layout(location = 11) in vec4 aRow2;
+uniform vec3 uInstOrigin;              // the batch's origin relative to the camera
+#endif
+layout(location = 7) in vec3 aColor;
 uniform mat4 uModel;                   // camera-relative (or the per-model fit transform when instanced)
 out vec3 vRel;
 out vec3 vNormal;
 out vec2 vUV;
+out vec3 vColor;
 void main() {
   vec4 p = vec4(aPos, 1.0);
   vec3 n = aNormal;
+  vColor = aColor;
 #ifdef SKINNED
   mat4 sk = aWeights.x * uJoints[int(aJoints.x)] + aWeights.y * uJoints[int(aJoints.y)]
           + aWeights.z * uJoints[int(aJoints.z)] + aWeights.w * uJoints[int(aJoints.w)];
@@ -124,9 +134,19 @@ void main() {
   p = uModel * p;
   n = mat3(uModel) * n;
 #ifdef INSTANCED
+  if (aInst1.y != 0.0) {
+    float cr = cos(aInst1.y), sr = sin(aInst1.y);
+    p.xy = vec2(cr * p.x - sr * p.y, sr * p.x + cr * p.y);
+    n.xy = vec2(cr * n.x - sr * n.y, sr * n.x + cr * n.y);
+  }
   float c = cos(aInst1.x), s = sin(aInst1.x);
   p.xyz = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z) * aInst0.w + (aInst0.xyz - uCamPos.xyz);
   n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
+#endif
+#ifdef INSTMAT
+  mat3 R = mat3(aRow0.x, aRow1.x, aRow2.x, aRow0.y, aRow1.y, aRow2.y, aRow0.z, aRow1.z, aRow2.z);
+  p.xyz = R * p.xyz + vec3(aRow0.w, aRow1.w, aRow2.w) + uInstOrigin;
+  n = R * n;
 #endif
   vRel = p.xyz;
   vNormal = n;
@@ -139,17 +159,22 @@ inline const char* kMeshFS = R"GLSL(
 in vec3 vRel;
 in vec3 vNormal;
 in vec2 vUV;
+in vec3 vColor;
 out vec4 oColor;
 uniform sampler2D uBase;
 uniform sampler2D uMR;
 uniform sampler2D uNormalMap;
+uniform sampler2D uEmissiveMap;
 uniform vec4 uBaseColor;
 uniform vec4 uMat;        // metallic, roughness, normal scale, alpha cutoff (<0: opaque)
 uniform vec4 uFlags;      // has base tex, has mr tex, has normal tex, double sided
-uniform vec3 uEmissive;
+uniform vec4 uFlags2;     // vertex colour, has emissive map, night glow strength, vertex colour stored as sqrt
+uniform vec3 uEmissive;   // already scaled for the time of day
 void main() {
   vec4 base = uBaseColor;
-  if (uFlags.x > 0.5) base *= texture(uBase, vUV);
+  vec3 texel = vec3(1.0);
+  if (uFlags.x > 0.5) { vec4 t = texture(uBase, vUV); texel = t.rgb; base *= t; }
+  if (uFlags2.x > 0.5) base.rgb *= uFlags2.w > 0.5 ? vColor * vColor : vColor;
   if (uMat.w >= 0.0 && base.a < uMat.w) discard;
   float metallic = uMat.x, rough = uMat.y;
   if (uFlags.y > 0.5) { vec4 mr = texture(uMR, vUV); rough *= mr.g; metallic *= mr.b; }
@@ -162,8 +187,15 @@ void main() {
     n = perturbNormal(n, vRel, vUV, normalize(tn));
   }
   float sh = shadowAt(vRel, normalize(vNormal));
-  vec3 col = shade(base.rgb, metallic, clamp(rough, 0.04, 1.0), n, v, sh, 1.0) + uEmissive;
-  oColor = vec4(applyFog(col, vRel), 1.0);
+  vec3 em = uEmissive;
+  if (uFlags2.y > 0.5) em *= texture(uEmissiveMap, vUV).rgb;
+  // village.js addNightGlow: lit windows / lanterns (warm bright texels) glow at night
+  if (uFlags2.z > 0.0) {
+    float warm = smoothstep(0.35, 0.8, texel.r - texel.b * 0.8) * smoothstep(0.25, 0.6, texel.r);
+    em += vec3(1.0, 0.62, 0.28) * warm * uMisc.x * uFlags2.z;
+  }
+  vec3 col = shade(base.rgb, metallic, clamp(rough, 0.04, 1.0), n, v, sh, 1.0) + em;
+  oColor = vec4(applyFog(col, vRel), base.a);
 }
 )GLSL";
 

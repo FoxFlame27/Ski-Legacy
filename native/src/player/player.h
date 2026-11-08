@@ -36,7 +36,7 @@ struct PlayerFrameControls {
   float fovSetting = 65;
 };
 
-enum class PlayerMode : uint8_t { Walk, Ski, Fall };
+enum class PlayerMode : uint8_t { Walk, Ski, Fall, Sit };   // Sit: riding a lift (lifts.js / player.js sitOn)
 
 struct PlayerEvent { enum class Type : uint8_t { Crash, Bump, Land, Pop, Step, TooSteep, SkisOn, SkisOff } type; float amount = 0; };
 
@@ -54,6 +54,11 @@ public:
   Player(World& world, Scenery* scenery);
 
   void teleport(double x, double z, double heading);
+  /// Riding: seated in a cabin / chair (player.js sitOn / updateSit / standUp). The seat moves with the car: the game
+  /// sets it every frame after the lifts moved.
+  void sitOn(const dvec3& seat, const dvec3& fwd);
+  void setSeat(const dvec3& seat, const dvec3& fwd);
+  void standUp(double x, double z, double heading);
   void setSkisOn(bool on);
   void fixedUpdate(double h, const PlayerControls& c);
   void frameUpdate(double dt, double alpha, const PlayerFrameControls& f, const PlayerControls& c);

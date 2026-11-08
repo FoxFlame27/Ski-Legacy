@@ -1,0 +1,64 @@
+# The Steam Mac build (universal: Intel + Apple Silicon, with Steamworks) as a .dmg holding "Ski Legacy.app", published
+# to the rolling "latest-steam-mac" release on every push to legacy-express (and on demand). Open the .dmg, copy the app
+# out, take it to the computer that uploads to Steam (keep it a .app: AirDrop / USB, not email):
+#   https://github.com/FoxFlame27/Ski-Legacy/releases/download/latest-steam-mac/Ski-Legacy-Steam-Mac.dmg
+name: Steam Mac build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [legacy-express]
+
+permissions:
+  contents: write # to move the latest-steam-mac tag and update its release
+
+concurrency:
+  group: steam-mac-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build the Steam Mac app (universal)
+        run: npm run steam:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Pack it in a .dmg
+        run: |
+          APP="release/steam/mac/mac-universal/Ski Legacy.app"
+          test -d "$APP"
+          rm -rf release/steam/dmg && mkdir -p release/steam/dmg
+          cp -R "$APP" release/steam/dmg/
+          hdiutil create -volname "Ski Legacy Steam" -srcfolder release/steam/dmg -ov -format UDZO release/steam/Ski-Legacy-Steam-Mac.dmg
+
+      - name: Move the latest-steam-mac tag to this commit
+        run: |
+          git tag -f latest-steam-mac
+          git push -f origin refs/tags/latest-steam-mac
+
+      - name: Update the latest-steam-mac release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-steam-mac
+          name: Ski Legacy for Steam - Mac (latest build)
+          body: |
+            The Steam build for macOS (commit ${{ github.sha }}): universal (Intel + Apple Silicon), with Steamworks.
+            Open **Ski-Legacy-Steam-Mac.dmg** and copy **Ski Legacy.app** out. That app is what goes in the Steam macOS
+            depot (steam/README.md); upload it from a Mac so the app's internal links survive.
+          prerelease: true
+          make_latest: false
+          files: release/steam/Ski-Legacy-Steam-Mac.dmg
+          overwrite_files: true

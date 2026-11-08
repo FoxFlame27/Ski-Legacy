@@ -57,6 +57,8 @@ public:
   /// (Phase 3) moving bodies the player bumps into: parked / traffic cars, the buses, the trains near you (refilled
   /// by the vehicles every frame)
   std::vector<Collider> dynamic;
+  /// (Phase 5) inside an interior (prison, hospital, chalet): no tree is in the way
+  bool noTrees = false;
 
   static constexpr double CELL = 64, SPACING = 6.5;
 

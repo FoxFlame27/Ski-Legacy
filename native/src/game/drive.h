@@ -85,8 +85,11 @@ public:
     std::string plate;                  // (Phase 4) your car's plate (save.garage)
     bool owned = false, forSale = false, driving = false, wrecked = false;
     double svx = 0, svz = 0, sw = 0;   // shoved: sliding to a stop
+    int impoundDay = -1;               // (Phase 5, impound.js) towed: locked until this game day
   };
   std::vector<Parked> parked;
+  /// (Phase 5, impound.js lockReason) a car of yours that doesn't let you in: the reason shown, "" when free
+  std::function<std::string(const Parked&)> locked;
 
 private:
   void step(double h, double thr, double brk, double steerIn, bool hb, bool thrKey, bool brkKey);

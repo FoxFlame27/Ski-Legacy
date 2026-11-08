@@ -146,6 +146,7 @@ void Scenery::submit(Renderer& r, bool trees, bool buildings) {
 }
 
 const Tree* Scenery::treeAt(double x, double z, double r, bool crown) const {
+  if (noTrees) return nullptr;
   const double REACH = 6;
   int64_t cx0 = int64_t(std::floor((x - r - REACH) / CELL)), cx1 = int64_t(std::floor((x + r + REACH + SPACING) / CELL));
   int64_t cz0 = int64_t(std::floor((z - r - REACH) / CELL)), cz1 = int64_t(std::floor((z + r + REACH + SPACING) / CELL));

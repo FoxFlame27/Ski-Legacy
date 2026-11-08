@@ -35,6 +35,9 @@ public:
   /// (Phase 3) transport.json's `net` and its bin (the vehicles' data: world/transport.h), null without it
   const nlohmann::json* transportNet() const;
   const std::vector<uint8_t>& transportBin() const { return tbin_; }
+  /// (Phase 5) play.json's `play` (courses, job sites, chalets...: game/play_data.h) and its bin
+  const nlohmann::json* playData() const;
+  const std::vector<uint8_t>& playBin() const { return pbin_; }
   /// A vehicle's procedural parts (export_net.mjs localModel: [{ mat, verts, vOff, ... }]) as one model
   std::shared_ptr<Model> transportModel(const nlohmann::json& parts);
   void update(double dt, const dvec3& cam);
@@ -51,6 +54,8 @@ private:
   bool loadPack(platform::Platform& p, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf);
   std::shared_ptr<nlohmann::json> tjson_;
   std::vector<uint8_t> tbin_;
+  std::shared_ptr<nlohmann::json> pjson_;
+  std::vector<uint8_t> pbin_;
   std::vector<Material> tmats_;
 
   gfx::Device& dev_;

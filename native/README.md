@@ -6,8 +6,9 @@ A portable C++20 rewrite of Ski Legacy (the Three.js / Electron game in `../src`
 **Phase 1** (engine core, the real terrain, the skier, forests), **Phase 2** (the village and the resort: buildings,
 props, signs, gondola and railway stations, all 18 gondolas and chairlifts in motion, boarding and riding them, day /
 night lighting), **Phase 3** (roads, tunnels, car parks, your car, traffic, the ski buses, the Wolkenspitzbahn and
-the Legacy Express) and **Phase 4** (menus, HUD, trail map, the economy and saving) are done. Later phases are listed
-at the end of this file.
+the Legacy Express), **Phase 4** (menus, HUD, trail map, the economy and saving) and **Phase 5** (races, jobs and the
+taxi, the police / prison / impound, the rescue and the hospital, chalets and build mode, people, snowmobiles, weather)
+are done. Later phases are listed at the end of this file.
 
 ---
 
@@ -28,7 +29,7 @@ cmake --build native/build                 # also exports native/data with Node 
 ```
 
 **The data step.** `native/data/*.zst` (and `data/fonts/`) are generated and git-ignored. A CMake custom command runs
-`node native/tools/export_world.mjs` (which runs `export_resort.mjs` / `export_net.mjs` / `export_fonts.mjs`) whenever
+`node native/tools/export_world.mjs` (which runs `export_resort.mjs` / `export_net.mjs` / `export_play.mjs` / `export_fonts.mjs`) whenever
 an output is missing or older than the exporter scripts (`native/tools/*.mjs`) or any of the game's JavaScript sources
 (`src/**/*.js`). It first checks that `node_modules` has three.js and the fonts and stops with "run npm install in the
 repo root" if not; without Node at all the configure step stops when the data is missing (and only warns when it is
@@ -39,7 +40,8 @@ writes the same files uncompressed (the game reads either).
 through `AssetPaths::readData`); the terrain-cut and course-region tiles are stored as planar-predicted, zig-zagged
 int16 residuals in two byte planes (lossless after quantising to 1 mm / 5 mm: the physics surface still matches the
 JS to 2.4 mm). 111.8 MB of `.bin` / `.json` became 28.0 MB of `.zst` (25 %): cuts 13.2 → 5.9 MB, regions 13.2 → 6.2,
-transport 57.9 → 9.9, resort 24.1 → 5.3, world.json 2.2 → 0.5, crag 1.2 → 0.07.
+transport 57.9 → 9.9, resort 24.1 → 5.3, world.json 2.2 → 0.5, crag 1.2 → 0.07. Phase 5 adds `play.json / .bin`
+(the courses' meshes and the gameplay data): 64 MB → 11.2 MB packed.
 
 Run from anywhere inside the repository: the game finds `public/` (models) and `native/data/` (exported world data)
 by walking up from the executable. For a self-contained folder, configure with `-DSL_COPY_ASSETS=ON`: the models the
@@ -87,7 +89,7 @@ cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --b
 | `--bindings binds.json` | rebinding, same shape as the web save's `binds` (`{"kb":{"jump":"KeyJ"},"pad":{"jump":1}}`) |
 | `--neutral` | Khronos PBR Neutral tone mapping instead of ACES filmic |
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
-| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map`). Uses its own fresh save (`autotest-save.json`) |
+| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled`). Uses its own fresh save (`autotest-save.json`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
 
 ### Headless test (Linux, Mesa llvmpipe)
@@ -98,7 +100,7 @@ SDL_AUDIODRIVER=dummy xvfb-run -a -s "-screen 0 1280x720x24" ./native/build/ski_
 `SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier` switches parts of the scene off for profiling (`novillage`: the
 whole resort); `sidecam` looks at the rider from the side while riding, `chairtest` makes the autotest ride a chairlift,
 `vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `maptest`
-straight with the trail map.
+straight with the trail map, `p5test` straight with the Phase 5 checks.
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 
 Reference run (a Linux container without a GPU: Mesa llvmpipe software rendering on 4 CPU cores, 1280×720,
@@ -131,6 +133,14 @@ Switch A — the right button) / Enter / Space chooses, the back button (Xbox B,
 back, LB / RB or Q / E switch tabs, the mouse hovers, clicks and scrolls; **M** / View / Minus opens the trail map;
 everything can be rebound under SETTINGS → CONTROLS (stored in the save).
 
+**Phase 5:** **E** at a course's start house / a bus race board / the RACING stand opens the race card, at a job board the
+offers, at a chalet's door the sale (or: go in), at the police station's / the medical centre's door a visit; **Backspace**
+(d-pad down) is unused in races (no restart: you respawn at the last checkpoint after a wipeout); **T** ends a taxi shift;
+in your chalet **F** (top button) opens build mode: **[ ]** (d-pad left / right) browse the catalogue, **Space** / click
+places, **R** / the wheel turns, **Q** picks a piece up, **X** sells it, **E** toggles a lamp, **Backspace** empties your
+hand, the left stick click switches the controller's virtual mouse. Snowmobile: **E** beside one, **W S A D**, **Shift**
+boost, **Space** handbrake, **E** (stopped) off.
+
 **Vehicles (Phase 3, drive.js's keys):** **E** beside your car drives it (at the Autohaus: buys one, see below), **E** at
 a standstill gets out; **W** / RT throttle, **S** / LT brake then reverse, **A D** / left stick steer (analog),
 **Space** / bottom button handbrake, **R** chase / cockpit view, **C** / LS look back, **H** horn, **L** lights,
@@ -152,6 +162,9 @@ native/
   tools/export_world.mjs                     runs the JS world code in Node, writes native/data/ (then runs:)
   tools/export_resort.mjs, resort_hooks.mjs  builds the resort and the transport with the game's own modules in Node,
                                              writes resort.* and transport.* (export_net.mjs: the vehicles' data)
+  tools/export_play.mjs                      (Phase 5) the courses (meshes + lines, gates, checkpoints, prizes), the bus
+                                             races, the RACING stand, the job sites, taxi places, the police / hospital /
+                                             impound sites, the chalets and their plan, the furniture catalogue -> play.*
   tools/export_fonts.mjs, datafile.mjs       the UI fonts (WOFF / WOFF2 -> TTF); zstd writing + the grid filter
   cmake/CheckNodeModules.cmake               the data step's "run npm install" check
   data/  (generated, git-ignored)            world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin,
@@ -179,7 +192,10 @@ native/
     player/                                  player.js physics port, the skier rig (model, clips, procedural stance)
     game/                                    main loop, spawn, HUD, autotest; vehicles (models, instanced draw),
                                              drive (drive.js + the Autohaus), traffic, buses, trains (Wolkenspitzbahn,
-                                             Legacy Express); (Phase 4) menus, hud, trailmap, economy (+ save)
+                                             Legacy Express); (Phase 4) menus, hud, trailmap, economy (+ save); (Phase 5)
+                                             play (the shared context) / play_data, races, jobs (+ taxi), police (+ prison,
+                                             vehicle / people hits), rescue (+ hospital), chalets (+ build mode), interiors,
+                                             people (+ PeopleSim), snowmobile, weather, shapes
 ```
 
 **Layering.** `game → player/world → engine → gfx + platform`. Only `platform/sdl` includes SDL; only `gfx/gl`
@@ -613,6 +629,170 @@ world ready in 15.29 s (the trail map's relief builds on the worker threads mean
 
 ---
 
+## What Phase 5 ports
+
+**How the gameplay data gets here.** `export_resort.mjs` builds a third pack after the transport, `play.json / .bin`
+(`export_play.mjs`), again with the game's own modules: every World Racing course is registered and *built*
+(`course.build`: start house, START / checkpoint / FINISH arches, the B- and A-nets, slalom gates, tunnels, bridges,
+grandstands, timing boards, floodlight masts... captured like the resort, 20 540 props and 1 233 mesh chunks with their
+colliders), the ski bus's three free races (`BusRaces`: their piste courses' meshes and the race boards beside the stops),
+the RACING stand placed by `RaceStand`'s own rules, `new Sites(...)` (jobs/sites.js: the 6 boards, 54 destinations, 1 963
+piste-side spots, the router's lifts), the taxi's 22 places (`Taxi.buildPlaces`), the police station / prison, the
+Autohaus car park with its impound row, the heli pad and the medical centre (busRoads), the 18 chalets (`Chalets.plan`),
+the chalet's ground floor (`chaletlayout.js planLayout`) and the furniture catalogue (`build/catalog.js`). Per course: the
+line every 2 m (x, y, z, half width, heading, curvature), start / finish / checkpoints, the gates, the prize (freeworld.js
+`coursePrize`), par and medals (courses.js REF_TIMES x MEDAL_K).
+
+**Races** (`game/races`): E at a course's start house (within 24 m) opens the race card: the AI field (Easy / Medium / Hard
+/ Superhard: freeworld.js AI_LEVELS, the prize x 0.6 / 1 / 1.6 / 2.5, the entry fee), a practice run (alone, no prize);
+the bus races' boards: free entry, every finisher paid (busracedefs.js busRacePrize: podium 100 / 70 / 50 %, else 40 %
+under par, 30 %); the RACING stand in the village: any course, just for fun, a fade and you stand at its start. The session
+(session.js condensed): the grid, 1.4 s and 3-2-1-GO (held), the clock, checkpoints with the split against the fastest AI
+racer, slalom gates between the turning pole and the outer pole (missed: +0.5 s, the next gate's green bar), the B-nets
+bouncing you back into the track (restitution, a little speed scrubbed), respawns at the last checkpoint behind a fade
+(a wipeout after 1.4 s, stuck 5 s, off the course 9 m for 1.5 s, fallen 7 m below it), WRONG WAY, the finish (time from the
+line crossing), the ski-out brake, the results card after 2.6 s (or when the field is home), records.js `submitTime` /
+`submitPlace` into `save.records[course]` (best, medal by time, splits, runs, best place, best place per field, race
+medal), the prize, career stats; OK and a fade back to Legacy Village (modes.js exitFree). **The AI field**: 14 racers on
+bots.js DIFFICULTY's paces; each follows a speed profile of the course itself (lateral grip 17.5 m/s² in its curvature,
+gravity down its grade, drag, braking room: a forward and a backward pass) scaled so the run takes the course's reference
+time x its pace, weaving across the track, braking into the finish area; drawn as the six skier characters (tuck / carve,
+leaning into the turns). **The race guide** (raceguide.js): off the bus or a train at a stop with a race within 600 m
+(the bus race of that stop first): the waypoint, the objective line with the distance, a tall glowing pillar over it and
+pennant poles every 30 m on the way; it ends there, after 180 s or when you wander off. The crowd stands along a course's
+finish while you are within 700 m of it.
+
+**Jobs** (`game/jobs`): job_board.glb at the six hubs; E: catalog.js `generateOffers` ported exactly (FNV over the UTF-16
+id `board|day|slot|re-pins`, mulberry32, the slots' types, CARGO's pools and kinds, the rescue's `descentFor`, the guide's
+SKILLS, pay / tip / par / limit), with the Router's travel-time estimates (sites.js: downhill / flat / uphill, via any lift);
+the same three offers all game day, a slot re-pinned when its job ends (`save.jobs.gens`). Delivery: the pack on your back,
+the destination's person and a glowing ring, handed over within 3 m (the tip scales down from par to the limit), a
+wipeout loses it; rescue: the casualty lying by the piste with the crossed skis, then the akja towed behind you (over 19 m/s
+for 6 s: too rough) or the stuck beginner following your tracks down to the hut / lift / village; guide: the guest skis
+your tracks at their skill's pace (lost after 20 s over 150 m). Fail texts and success texts from catalog.js. **Taxi**
+(taxi.js): the TAXI note on every board (a car of your own needed), the dispatcher's fare at one of the nearer places, they
+walk to your car when you stop within 16 m, the destination 900 m+ away, the tariff ($60 + $180 a km + $15 per 100 m
+climbed, $150-2,200), the time limit, tips for quick (under 70 %) and smooth (no knocks) rides, late: -25 %, a crash:
+half; knocks make them complain; a police chase ends the fare; T ends the shift.
+
+**Police** (`game/police`): wanted when your car hits traffic / a parked car / a person at 25+ km/h, a patrol car at 15+,
+or speeding 40 km/h over the limit past the station; police.js TUNING and LEVELS (cars, reinforcements, road speed,
+catch-up, ram gaps, sight range, the escape time). Patrol cars (car1.glb in its POLIZEI livery, the flashing blue roof
+bar) appear out of sight 260-420 m away on the roads behind you, follow the roads while far (the lane toward you), cut
+straight at you when close (or when a road leads nowhere), ram the rear quarter while you flee (the impacts are drive.js's
+own bash: knocks, crashes, damage; hitting them raises the heat). Stop with them within 40 m: pulled over, the officer
+(police_officer_rigged.glb) walks to your window: pay $1,000 (+$500 for each earlier fine / arrest) or drive off. Not
+stopping within 6 s of them reaching you: fleeing (2 stars, then a star every 36 s in sight). Escape: out of every patrol
+car's sight (line of sight through the terrain, a road tunnel hides you) and the helicopter's: SEARCHING after 2.5 s,
+escaped after the level's time (x2.2 on foot); seen again: half the time kept. The helicopter (4+ stars or 45 s fleeing:
+heli_body.glb, 72 m up, 64 m/s) keeps over you with its searchlight cone. Arrested when boxed in (two cars within 12 m for
+10 s), stopped while fleeing with them close, or caught by the officer on foot (he runs 6.9 m/s, slowed on steep ground,
+gives up beyond reach): the ARRESTED banner (the word slamming in, red / blue at the edges), $3,000 (+$1,000 each time),
+45 s in prison. **Prison** (prison.js): the cell block as an interior (three cells behind the bars, bunks, toilets, the
+guard's desk and the visiting desk, the front office): "In prison · 0:45", walking the cell, released at the station's
+door; `save.jail` resumes a sentence after a reload; E at the station's door visits it (the visitors' book: a local
+leaderboard of visits, arrests, fines, the longest sentence). **Hits** (vehiclehits.js / peoplehits.js): traffic, the
+buses and patrol cars running into you on foot or on skis knock you over along their line (launchFor's arc), under
+35 km/h a bump, 35-45 km/h a strike (the second: the rescue), 45+ km/h the rescue at once; 2 s safe after; your car
+throws the village's people (they lie and get up), $12 per km/h (200-1,500) and the police. **Impound** (impound.js):
+your car left empty on a road or out on the snow (not in a car park, a lay-by or the chalet village) with you 40 m+ away
+for 2 minutes is towed to the impound row of the Autohaus car park ($1,500, the wreck fee), locked until the next game day
+("Impounded · available tomorrow"; `save.impound`). (Replaces Phase 4's 60 s / 250 m / $500.)
+
+**Rescue** (`game/rescue`, heli/rescue.js + ambulance.js + hospitalroom.js): instead of the fade, the rescue helicopter
+comes from its pad (from 1.5 km+ it starts on its way, 800 m out), cruises 45 m up, hovers 12 m over you and winches you
+up (2.6 + 4.2 s), flies you home (the chase camera, Space x4), the ambulance at the pad drives the Rettungsweg (the road
+roads.js planned for it) to the medical centre with its blue lights, the bill (rescue.js), and you come round in a bed of
+the ward (four beds, the Meshy hospital furniture): RECOVERING for 8 s, then E gets you up and out of the front doors; a
+watchdog (45 s without getting closer) sends you straight to the medical centre. E at its door visits the ward.
+
+**Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a
+door: buy ($50,000, one each, `save.chalet` in the web shape), look inside, or go into yours. The interior: chaletplan.js's
+ground floor (the walls split at the windows and doors, the stair block), oak floor, larch ceiling, the front door leads
+out. **Build mode** (buildmode.js / placement.js / catalog.js): the furnish button opens the catalogue (the six rooms'
+tabs, all 45 pieces and prices), the item in hand follows the centre dot (or the cursor: the controller's virtual mouse,
+gamepad.js, the left stick moves it, confirm clicks) as a blue / red blueprint ghost on the 0.25 m grid (placement.js
+`onFloor`, SAT `boxesOverlap`, `boxHitsWall`, the stair block; small decor sits on furniture; wall items hang where the aim
+meets a wall (`rayWall`) at their mount height; ceiling lamps hang from the ceiling); the Meshy furniture GLBs fitted by
+`fitScales` (height exact, footprint within -23 / +30 %, rugs laid flat, long sides turned); place (bought), move (Q), sell
+(X, half back), lamps on / off (E, glowing bulbs), all in `save.chalet.furniture` (the house frame).
+
+**People** (`game/people`): one renderer for every person: the six skier characters (with skis), the eight fan_*
+townsfolk and the police officer, posed from shared poses built once per character (idle and walking / running cycles in
+phases, a skiing crouch, a tuck, seated, lying, waving: the skier_*_anims clips retargeted by bone name), the nearest 48
+within 220 m, the lighter LOD past 35 m, shadows within 40 m. **PeopleSim**: 56 townsfolk walking between the hotels'
+doors, the ski shop, the gondola, the market, the fire pit, the tree, the trail map, the bus stop (round the colliders,
+lingering at the sights, fewer at night), skiers carving down the pistes near you; knocked over by your car.
+
+**Snowmobiles** (`game/snowmobile`, snowmobile.js): 15 parked (five in the village, the rest at the huts and lift bases),
+E to ride, SLED's handling (throttle / boost / brake / reverse, traction-limited climbing, skids on ice and side slopes,
+crests, bumps off trees and colliders, thrown off at 12.5 m/s straight in), the chase camera, E (stopped) off.
+
+**Weather** (`game/weather`, sky.js): the eleven states (clear, flurries, cloudy, light / heavy snow, misty, blizzard,
+föhn, wet snow, freezing fog, sea of clouds), NEXT's progression with the hold times, the forecast in the HUD ("Later:
+Blizzard"), the eased snow / cloud / mist / wind / clear-air / wet / frost values, the overcast deck greying the sky by the
+hour's light level, sky.js's fog formula (whiter in snow and mist), the sun dimmed behind cloud, the gusts on the skis,
+the falling snow (2 200 flakes at heavy snow in a box round the camera, blown sideways in a blizzard); held during a race.
+
+Autotest output (llvmpipe, 1280×720, medium; the Phase 5 lines and the summary):
+```
+play: 20540 props, 1233 mesh chunks, 272 canvases, 11018 colliders
+play: 11 courses, 3 bus races, 6 job boards, 54 destinations, 1963 spots, 22 taxi places, 18 chalets, 45 furniture items
+people: 15 characters (6 skiers, 8 townsfolk, the police officer)
+snowmobiles: 15 parked (5 in the village)
+world ready in 21.61 s ...
+[autotest] race: Sunny Meadow (Easy, 1317 m, 190 m drop, par 72.0 s, entry $0, 0 gates, 3 checkpoints) -> started
+[autotest] race: finished in 1:18.14, place 7, money $4775 -> $3275
+[autotest] race: records[meadow] = {"best":78.14,"bestRace":7,"byDifficulty":{"medium":7},"medal":"silver","raceMedal":null,"runs":1,"splits":[30.25,46.547]}, in the save file yes -> ok
+[autotest] race: OK -> back in Legacy Village (4, 34) ok
+[autotest] job board Legacy Village: Fondue cheese to Sonnenkopf Hütte · delivery · $1130 (+340 tip) · limit 810 s
+[autotest] job board Legacy Village: Skier down · Hasenweg · rescue · $2200 (+550 tip) · limit 810 s
+[autotest] job board Legacy Village: Guide Yuki to Adlerhorn Hütte · escort · $1190 (+360 tip) · limit 795 s
+[autotest] job: delivered: money $3275 -> $4745 (+1470; reward $1130 + tip), jobs done 0 -> 1 -> ok
+[autotest] police: wanted (fleeing 2*) at (57, 110)
+[autotest] police: ARRESTED after 32.9 s
+[autotest] police: jail timer 45.0 s -> 41.0 s, in the cell yes -> ok
+[autotest] police: released outside the station (142, 264) ok; record {"arrests":1,"fined":3000,"longest":45.0} -> ok
+[autotest] chalet: bought Chalet 1: $61745 -> $11745, inside yes -> ok
+[autotest] chalet: build mode, placed the Wingback Armchair at (-2.97, -5.03): $11745 -> $10845, 1 pieces -> ok
+[autotest] chalet: left it (outside), in the save: {"furniture":[{"id":"armchair",...}],"id":0,"layout":3,"name":"Chalet 1","owned":true,...} -> ok
+[autotest] weather: Heavy snow, snow 0.30, cloud 0.30, fog density 0.000214, 1 change(s) -> ok
+[autotest] snowmobile: rode 12 m in 2 s, top 42 km/h -> ok
+[autotest] 4522 frames (308.4 s simulated) in 785.8 s wall: avg 5.8 fps
+[autotest] ski ok, building collision ok, gondola ride ok
+[autotest] drive ok, traffic ok, bus ok, Wolkenspitzbahn ok, Legacy Express ok
+[autotest] menus ok, settings ok, shop ok, save / reload ok, lift / car charges ok, trail map ok
+[autotest] race + records ok, job ok, police chase + jail ok, chalet + furniture ok, weather ok, snowmobile ok
+[autotest] PASS
+```
+
+### Known gaps (Phase 5)
+- **Races**: no ghosts (the time trial mode is gone in the web game too), no broadcast presentation (intro flyover, podium,
+  replays, photo finish), the AI racers follow a speed profile (bots.js simulates each racer's own physics, lines, jumps and
+  mistakes), no contact between racers, no RACE AGAIN; the course meshes stand everywhere (the web game builds them within
+  1.7 km); the low-poly spectators of props.js are replaced by the character crowd.
+- **Jobs**: the people are drawn but have no lines of dialogue beyond the flash texts; the guest follows a simplified
+  trail; no pack fitting to the jacket (a box on your back); no job board notice-board UI (the card dialog); the taxi's
+  passengers don't sit visibly in the car and walk straight to the door; no lost & found.
+- **Police**: no roadblocks or spike strips, no PIT / T-bone choreography beyond aiming at the rear quarter, no radio
+  road names (compass only), no siren audio (Phase 7), no chalet raids, no slow motion; patrol cars don't brake for the
+  bends or avoid obstacles off the roads.
+- **Interiors** are boxes and the game's furniture GLBs at a quiet spot (not chaletroom.js / prison.js / hospitalroom.js's
+  modelled rooms with their windows onto the real world, LivePortal); only the chalet's ground floor; placed lamps glow but
+  don't light the room (no point lights yet); the hospital bed view is the standing first-person view.
+- **Rescue**: no landing on flat snow (always the winch), no rope physics; the ambulance follows the road's centre lane
+  without dodging.
+- **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people,
+  no fans.js keyframes (cheering, flags), no chat groups.
+- Snowmobiles are free to take (as snowmobile.js: no rental counter); the rider uses the seated rig, not skier.js's
+  handlebar IK. `-DSL_COPY_ASSETS=ON` does not list the Phase 5 models yet (car1, heli_body, ambulance, chalet / chalet_lo,
+  furniture/*, prison/*, hospital/*, fan_*, police_officer_*, job_board, snowmobile): run from the repository.
+- The trail map shows no races, jobs, chalets or the police yet.
+- Not ported yet: the player's helicopter (heli/*: flights, pads), snowcats and ploughs, snowmaking spray, flags, the
+  parkour mode, multiplayer bits of all of the above.
+
+---
+
 ## Nintendo Switch plan
 
 What has to come from Nintendo (none of it can be in this repository):
@@ -648,6 +828,6 @@ What has to come from Nintendo (none of it can be in this repository):
 | **2b** | still to do from the old Phase 2 list: huts' interiors, the terrain park and kickers (`park.js`, tricks scoring from `tricks.js`), boulders, the full `skier.js` rig (poles, pole plants, first-person gloves), streamed piste fences, flags, crowds, snowcats |
 | **3 (done)** | vehicles and transport: car physics (`drive.js`, damage), roads with their terrain cuts and tunnels, traffic and parking, the Autohaus, the ski bus and its routes, the railways (Wolkenspitzbahn, Legacy Express) with stations and swept track; still open: snowmobile, helicopter, car lights / sounds / wheels |
 | **4 (done)** | menus, HUD and economy: title / pause / settings (the web settings incl. rebinding UI with controller glyphs), trail map, money, ski / outfit shop, tickets and day pass, lift / train charges, the Autohaus garage, Werkstatt, tow and rescue fees, save games through `Platform::writeSave` (the web save's JSON shape), autosave; the data step in the build, zstd data |
-| **5** | gameplay: chalets and furnishing, races (World Racing courses = terrain regions, gates, bots, leaderboards), jobs, police / prison / hospital, NPCs and crowds, parkour courses |
+| **5 (done)** | gameplay: races (the World Racing courses with their meshes, the bus races, the RACING stand, practice, the AI field, records, prizes, the race guide), jobs and the taxi, police / prison / impound, vehicle and people hits, the rescue helicopter + ambulance + hospital, chalets and build mode (virtual mouse), townsfolk / skiers / crowds, snowmobiles, weather and snowfall; still open: the player helicopter, parkour mode, snowcats / snowmaking / flags |
 | **6** | multiplayer: keep the existing Node server (`server/`) and its protocol; write a C++ client (WebSocket over TLS, e.g. a small libwebsockets / IXWebSocket client behind the platform layer, since console sockets go through `nn::socket` / NEX) with interpolation of remote skiers, car rides, chat |
 | **7** | audio (mixer, `public/audio` samples, Ogg decoding, 3D sound), weather / time of day / night lighting, snow FX, post (bloom, sun glare), and Switch performance: ASTC textures, packed vertices, GPU profiling, dynamic resolution, memory budget, Lotcheck pass |

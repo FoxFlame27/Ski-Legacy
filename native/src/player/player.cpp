@@ -2,6 +2,7 @@
 #include "world/scenery.h"
 #include "world/world.h"
 #include <cstdlib>
+#include <algorithm>
 
 namespace sl {
 
@@ -384,6 +385,16 @@ void Player::crash(int side, FallState::Kind kind, bool ski, double flipAngle, d
   absorb = absorbV = 0;
   shake_ = 1;
   events.push_back({bump ? PlayerEvent::Type::Bump : PlayerEvent::Type::Crash, float(clamp(sp / 25, 0.2, 1))});
+}
+
+void Player::knockDown(int side, const dvec3& v, int kind, bool strike) {
+  if (mode == PlayerMode::Fall || mode == PlayerMode::Sit) return;
+  if (mode == PlayerMode::Walk && skisOn) skisOn = false;
+  vel = v;
+  air = true;
+  crash(side, FallState::Kind(std::clamp(kind, 0, 2)), false, 0, kind == 1 ? 8 : 0);
+  fallAir_ = true;
+  if (!events.empty()) events.back().type = strike ? PlayerEvent::Type::Crash : PlayerEvent::Type::Bump;
 }
 
 void Player::fallTick(double dt) {

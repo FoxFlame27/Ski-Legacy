@@ -250,10 +250,16 @@ bool Resort::load(platform::Platform& plat, const AssetPaths& paths, Scenery& sc
   if (!loadPack(plat, paths, "resort", cols, nSurf)) return false;
   size_t nResort = nProps_;
   if (!loadPack(plat, paths, "transport", cols, nSurf)) SL_WARN("transport: native/data/transport.json missing (Phase 3 data; node native/tools/export_resort.mjs)");
+  if (!loadPack(plat, paths, "play", cols, nSurf)) SL_WARN("play: native/data/play.json missing (Phase 5 data; node native/tools/export_resort.mjs)");
   scenery.setColliders(std::move(cols));
   SL_INFO("resort + transport: %zu props (%zu resort), %zu mesh chunks, %zu gondola stations, %zu colliders, %zu surfaces", nProps_, nResort, chunks_.size(),
           stations_.size(), scenery.colliders().size(), nSurf);
   return true;
+}
+
+const nlohmann::json* Resort::playData() const {
+  if (!pjson_ || !pjson_->contains("play")) return nullptr;
+  return &(*pjson_)["play"];
 }
 
 const nlohmann::json* Resort::transportNet() const {
@@ -439,6 +445,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   }
   SL_INFO("%s: %zu props, %zu mesh chunks, %zu canvases, %zu colliders", name.c_str(), nProps_ - props0, chunks_.size() - chunks0, canvasTex.size(), cols.size() - cols0);
   if (name == "transport") { tjson_ = jp; tbin_ = std::move(bin); tmats_ = mats; }
+  if (name == "play") { pjson_ = jp; pbin_ = std::move(bin); }
   return true;
 }
 

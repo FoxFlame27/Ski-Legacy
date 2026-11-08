@@ -59,7 +59,7 @@ endif()
 # and the repository's node_modules (npm install in the repo root). SL_EXPORT_DATA=OFF skips the step (data provided).
 option(SL_EXPORT_DATA "Regenerate native/data with Node when it is missing or out of date" ON)
 set(SL_DATA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/data)
-set(SL_DATA_FILES world.json crag.bin cuts.bin regions.bin resort.json resort.bin transport.json transport.bin)
+set(SL_DATA_FILES world.json crag.bin cuts.bin regions.bin resort.json resort.bin transport.json transport.bin play.json play.bin)
 set(SL_FONT_FILES barlow-condensed-500.ttf barlow-condensed-600.ttf barlow-condensed-700.ttf barlow-condensed-700-italic.ttf
   barlow-condensed-800-italic.ttf inter.ttf)
 set(SL_DATA_OUTPUTS)

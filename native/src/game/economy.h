@@ -47,6 +47,13 @@ public:
   bool load(platform::Platform& p);                    // false: no save yet (defaults kept)
   bool write(platform::Platform& p);                   // writeSave()
   void markDirty() { dirty_ = true; }
+  /// (Phase 5) the web save's other keys in their JSON shape (records, jobs, chalet, policeRecord, impound, jail...):
+  /// the entry (created as `def` when missing or of another type); written back with the save
+  nlohmann::json& data(const std::string& key, const nlohmann::json& def = nlohmann::json::object()) {
+    auto it = extra_.find(key);
+    if (it == extra_.end() || it->type() != def.type()) { extra_[key] = def; return extra_[key]; }
+    return *it;
+  }
   /// autosave: writes when dirty and `interval` seconds have passed
   void tick(platform::Platform& p, double now, double interval = 60);
   const std::string& fileName() const { return file_; }

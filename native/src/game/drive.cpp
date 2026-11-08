@@ -108,6 +108,7 @@ std::string Drive::prompt(const dvec3& pos, bool canUse) {
     return b;
   }
   if (!best->owned) return "Buy a car at the Autohaus in Legacy Village";
+  if (locked) { std::string why = locked(*best); if (!why.empty()) return why; }
   return "Drive " + best->spec->label;
 }
 
@@ -127,6 +128,7 @@ bool Drive::interact(const dvec3& pos) {
   Parked& e = parked[size_t(bi)];
   if (e.forSale && !e.owned) { buyRequest = bi; return true; }
   if (!e.owned) return false;
+  if (locked && !locked(e).empty()) return false;
   return enter(bi);
 }
 

@@ -63,6 +63,11 @@ public:
   void fixedUpdate(double h, const PlayerControls& c);
   void frameUpdate(double dt, double alpha, const PlayerFrameControls& f, const PlayerControls& c);
   void cameraFor(Camera& cam) const;
+  /// (Phase 5, vehiclehits.js / peoplehits.js knock) thrown over by a vehicle or a person: velocity v, kind 0 slam,
+  /// 1 tumble, 2 roll; `strike`: a Crash event (counts toward the rescue), else a Bump (you just get up)
+  void knockDown(int side, const dvec3& v, int kind, bool strike);
+  /// (Phase 5) the camera shake / FOV punch of a hit
+  void shake(double amount) { shake_ = std::max(shake_, amount); }
 
   // state
   PlayerMode mode = PlayerMode::Walk;

@@ -722,5 +722,9 @@ transport.capture(tScene);
   const net = await (await import('./export_net.mjs')).exportNet({ THREE, SRC, world, L, busRoads, skibus, parking, roadTunnels, railStations, xtrack, models, freeMod, loadGLB, pack: transport, log, r4 });
   transport.finish({ colliders: transport.colliderOut(tCols), surfaces, net });
 }
+// ================================================================ pack 3: the gameplay data (Phase 5)
+try {
+  await (await import('./export_play.mjs')).exportPlay({ THREE, SRC, world, L, busRoads, skibus, models, freeMod, loadGLB, makePack, cols: [...colliders, ...tCols], log, r4 });
+} catch (e) { log('play pack failed:', e.stack?.split('\n').slice(0, 4).join(' | ')); process.exitCode = 1; }
 console.warn = _warn; console.info = _info;
 process.exit(process.exitCode ?? 0); // (the game's modules leave timers running: the export is done)

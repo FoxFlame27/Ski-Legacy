@@ -24,6 +24,18 @@
 #include "game/hud.h"
 #include "game/menus.h"
 #include "game/trailmap.h"
+#include "game/play.h"
+#include "game/play_data.h"
+#include "game/people.h"
+#include "game/shapes.h"
+#include "game/weather.h"
+#include "game/interiors.h"
+#include "game/races.h"
+#include "game/jobs.h"
+#include "game/police.h"
+#include "game/rescue.h"
+#include "game/chalets.h"
+#include "game/snowmobile.h"
 #include "core/prompts.h"
 #include "engine/ui.h"
 #include "world/scenery.h"
@@ -282,6 +294,61 @@ int runGame(const GameOptions& opt) {
       if (!j.is_discarded() && j.contains("layout")) for (auto& h : j["layout"]["huts"]) huts.push_back({h.value("name", std::string("Mountain hut")), h.value("x", 0.0), h.value("z", 0.0)});
     }
   }
+  // ---------------------------------------------------------------- (Phase 5) races, jobs, police, rescue, chalets, people, weather
+  PlayData playData;
+  if (const nlohmann::json* pj = resort.playData()) playData.load(*pj, resort.playBin());
+  Shapes shapes;
+  shapes.init(*dev);
+  People people;
+  people.load(assets);
+  PeopleSim folk;
+  folk.setKinds(people.fanKinds, people.skierKinds);
+  {
+    std::vector<std::vector<dvec2>> pl;
+    for (auto& ps : pistes) pl.push_back(ps.pts);
+    folk.init(world, pl, opt.autotest ? 28 : 56, opt.autotest ? 6 : 14);
+  }
+  Weather weather;
+  weather.init(unsigned(plat->timeSeconds() * 1000) ^ 0x5eedu, opt.autotest);
+  PlayCtx pc;
+  pc.plat = plat.get(); pc.world = &world; pc.scenery = &scenery; pc.transport = &transport; pc.player = &player; pc.drive = &drive; pc.traffic = &traffic;
+  pc.save = &save; pc.input = &input; pc.people = &people; pc.folk = &folk; pc.shapes = &shapes; pc.lifts = &lifts; pc.weather = &weather; pc.assets = &assets;
+  pc.dev = dev.get(); pc.data = &playData; pc.autotest = opt.autotest;
+  for (auto& ps : pistes) pc.pistes.push_back({ps.name, ps.pts});
+  Interiors rooms(pc);
+  world.addDeck([&](double x, double z) { return rooms.deck(x, z); });
+  Races races(pc);
+  Jobs oddJobs(pc);
+  Police police(pc, rooms);
+  Rescue rescue(pc, rooms);
+  Chalets chalets(pc, rooms);
+  police.load(assets);
+  rescue.load(assets);
+  chalets.load(assets);
+  Snowmobiles sleds(pc);
+  sleds.load(assets);
+  sleds.place();
+  std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
+  VehicleDraw snowDraw;
+  double fadeT = -1;   // a short fade to dark covering a teleport (transition.js)
+  bool jailResumed = false;
+  drive.gatherOthers = [&](std::vector<OtherBody>& out) {
+    traffic.others(out, drive.pos());
+    for (const Obb& b : busBoxes) if (std::hypot(b.x - drive.pos().x, b.z - drive.pos().z) < 20) { OtherBody o; o.box = b; o.mass = 12000; o.kind = 1; out.push_back(o); }
+    police.others(out, drive.pos());
+  };
+  drive.onKnock = [&](const OtherBody& b, double vx, double vz, double w) {
+    double kmh = glm::length(drive.vel() - dvec2(b.vx, b.vz)) * 3.6;
+    if (b.kind == 0) { traffic.knock(b.id, vx, vz, w); if (!races.active()) police.callFor("a car was rammed", kmh); }
+    else if (b.kind == 3) { police.knockUnit(b.id, vx, vz); police.hitCop(b.id, kmh); }
+    else if (b.kind == 2 && !races.active()) police.callFor("a parked car was hit", kmh);
+  };
+  // (impound.js) a car of yours towed to the impound row: locked until the next game day
+  drive.locked = [&](const Drive::Parked& e) -> std::string { return e.impoundDay > save.day ? "Impounded \xC2\xB7 available tomorrow at the Autohaus car park" : ""; };
+  {
+    nlohmann::json& imp = save.data("impound", nlohmann::json::array());
+    for (auto& r : imp) for (auto& e : drive.parked) if (e.owned && e.plate == r.value("plate", std::string())) e.impoundDay = r.value("day", 0);
+  }
   const Piste* run = nullptr;
   for (auto& ps : pistes) if (ps.peak == "legacy" && ps.pts.size() > 20) { run = &ps; break; }
   if (!run && !pistes.empty()) run = &pistes[0];
@@ -364,6 +431,17 @@ int runGame(const GameOptions& opt) {
   };
   applySetting("");
   if (save.settingStr("defaultView", "third") == "first") player.view = Player::View::First;
+  // (Phase 5) the services the gameplay systems use
+  pc.menus = &menus; pc.hud = &hud;
+  pc.flash = [&](const std::string& t, int k) { flash(t, k == 1 ? Hud::Flash::Bad : k == 2 ? Hud::Flash::Gold : Hud::Flash::Good); };
+  pc.spend = [&](int64_t a) { return spend(a); };
+  pc.earn = [&](int64_t a) { save.earn(a); save.markDirty(); };
+  pc.charge = [&](int64_t a) { save.spend(a, true); save.markDirty(); };
+  pc.money = [&](int64_t v) { return fmtM(v); };
+  pc.teleport = [&](double x, double z, double h, bool skis) { player.setSkisOn(skis); player.teleport(x, z, h); };
+  pc.mark = [&](double x, double z, const std::string& l) { tmap.mark.on = true; tmap.mark.x = x; tmap.mark.z = z; tmap.mark.label = l; };
+  pc.unmark = [&]() { tmap.mark.on = false; };
+  pc.fade = [&]() { fadeT = 0; };
 
   // riding a lift (main.js boardLift / leaveLift)
   Player::View viewBeforeRide = player.view;
@@ -399,7 +477,7 @@ int runGame(const GameOptions& opt) {
   };
   std::string prompt, rideLine;
   // (Phase 3) what you ride: a car (you drive), a ski bus, the Wolkenspitzbahn, the Legacy Express
-  enum class Ride { None, Car, Bus, Rail, Express } rideKind = Ride::None;
+  enum class Ride { None, Car, Bus, Rail, Express, Sled } rideKind = Ride::None;
   int busDestSel = 0, expressDestSel = 0;
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
@@ -573,6 +651,7 @@ int runGame(const GameOptions& opt) {
         int value = int(std::round(c.price * SELL_SHARE / 50.0)) * 50;
         o.label = (spec ? spec->label : c.id) + " \xC2\xB7 " + c.plate;
         o.sub = "Damage " + std::to_string(int(std::round(c.damage))) + "% \xC2\xB7 sell back for " + fmtM(value);
+        for (const auto& e : drive.parked) if (e.owned && e.plate == c.plate && e.impoundDay > save.day) o.sub += " \xC2\xB7 IMPOUNDED: available tomorrow (the fee is paid)";
         o.state = "Sell " + fmtM(value);
         std::string plate = c.plate;
         o.act = [&, plate, value]() {
@@ -668,9 +747,13 @@ int runGame(const GameOptions& opt) {
   double leftOnRoadT = 0;
 
   // autotest phases after the run: walk into a hotel (collision), then ride a gondola
-  enum class AT { Menu, Ski, Collide, Lift, Drive, Bus, Rail, Express, Map, Done } at = AT::Menu;
+  enum class AT { Menu, Ski, Collide, Lift, Drive, Bus, Rail, Express, Map, Race, Job, Police, Chalet, Weather, Done } at = AT::Menu;
   if (vehTest && opt.autotest) at = AT::Drive;
   if (off("maptest") && opt.autotest) at = AT::Map;   // (debug: straight to the trail map)
+  if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
+  // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
+  bool raceOk = true, jobOk = true, policeOk = true, chaletOk = true, weatherOk = true, sledOk = true;
+  struct P5T { const Course* course = nullptr; int resF = -1, jailF = -1, arrestF = -1; int64_t money0 = 0; double jail0 = 0; int done0 = 0, furn0 = 0; bool releasedChecked = false; Jobs::Offer offer; bool haveOffer = false; } t5;
   // (Phase 4 autotest) the menus, a purchase, save / reload, the trail map
   bool menuOk = true, settingOk = true, buyOk = true, saveOk = true, mapOk = true, chargeOk = true;
   int skiFrame0 = 0, menuStep = 0;
@@ -711,6 +794,10 @@ int runGame(const GameOptions& opt) {
   menus.hooks.mainMenu = [&]() { save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
   menus.hooks.village = [&]() {
     menus.close();
+    if (police.jailed() || police.arrestedNow()) { flash("You are serving a sentence", Hud::Flash::Bad); return; }
+    if (rescue.active()) { flash("The rescue is under way", Hud::Flash::Bad); return; }
+    if (rooms.inside()) rooms.leave();
+    races.abort();
     if (rideKind == Ride::None && player.mode != PlayerMode::Sit) { player.setSkisOn(false); player.teleport(4, 34, PI); flash("Back in Legacy Village", Hud::Flash::Good); }
     else flash("Get off first", Hud::Flash::Bad);
   };
@@ -745,7 +832,7 @@ int runGame(const GameOptions& opt) {
     if (ev.focusLost) { input.clear(); plat->setRelativeMouse(false); }
     input.update(*plat, ev);
     double now = plat->timeSeconds();
-    double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : 0.1) : std::min(0.25, now - last);
+    double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : 0.1) : std::min(0.25, now - last);
     last = now;
     UiNav nav = navBuilder.build(ev, *plat, input, now);
     if (opt.autotest) { nav = UiNav{}; nav.mouse = vec2(-1); }
@@ -862,6 +949,192 @@ int runGame(const GameOptions& opt) {
       input.inject(Action::Map, phaseFrame == 2);
       if (phaseFrame >= 6 && phaseFrame < 12) nav.zoomIn = 1;
       if (phaseFrame == 30) nav.cancel = true;
+    }
+
+    // (Phase 5 autotest) a race (start -> finish -> records), a job (taken at the village board, delivered: paid), a police
+    // chase (wanted, the officer catches you on foot: ARRESTED, the jail timer, released), a chalet bought and a piece of
+    // furniture placed, a weather change
+    if (opt.autotest && (at == AT::Race || at == AT::Job || at == AT::Police || at == AT::Chalet || at == AT::Weather)) {
+      int f = phaseFrame;
+      auto nextPhase = [&](AT a) { at = a; phaseFrame = -1; input.releaseInjected(); };
+      if (at == AT::Race) {
+        if (f == 0) {
+          input.releaseInjected();
+          t5.course = nullptr;
+          for (const Course& c : playData.courses) if (!t5.course || c.length < t5.course->length) t5.course = &c;
+          if (t5.course) {
+            save.earn(2000);
+            t5.money0 = save.money;
+            raceOk = races.start(*t5.course, 1, true, false, true);
+            SL_INFO("[autotest] race: %s (%s, %.0f m, %d m drop, par %.1f s, entry $%d, %zu gates, %zu checkpoints) -> %s", t5.course->name.c_str(), t5.course->diff.c_str(),
+                    t5.course->length, t5.course->drop, t5.course->par, t5.course->entry, t5.course->gates.size(), t5.course->checkpoints.size(), raceOk ? "started" : "FAILED");
+          } else { raceOk = false; SL_WARN("[autotest] race: no course (play.json)"); }
+        }
+        if (t5.course && races.active() && !races.finished() && !races.frozen()) {
+          const CourseLine& L = t5.course->line;
+          CourseLine::Proj pr = L.project(player.pos.x, player.pos.z, races.progress() + t5.course->start.s, 120);
+          dvec3 tgt = L.point(std::min(L.length(), pr.s + 26), 0);
+          double err = wrapPi(std::atan2(tgt.x - player.pos.x, tgt.z - player.pos.z) - player.heading);
+          float steer = float(clamp(err * 2.4, -1, 1));
+          double sp = player.speed();
+          input.inject(Action::Forward, sp < 19);
+          input.inject(Action::Back, sp > 25 || (std::fabs(err) > 0.7 && sp > 12));
+          input.injectMove(-steer, sp < 19 ? 1.f : 0.f);
+          if (f % 100 == 0) SL_INFO("[autotest] race t=%6.2fs  %5.0f m down the course  %5.1f km/h  lat %5.1f", races.raceTime(), races.progress(), sp * 3.6, pr.lat);
+        } else if (races.finished()) input.releaseInjected();
+        if (races.resultsUp() && t5.resF < 0) {
+          t5.resF = f;
+          SL_INFO("[autotest] race: finished in %s, place %d, money $%lld -> $%lld", fmtRaceTime(races.raceTime()).c_str(), races.place(), (long long)t5.money0, (long long)save.money);
+          for (auto& row : races.lastRows) SL_INFO("[autotest]   %s", row.c_str());
+          if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "race");
+        }
+        if (t5.resF >= 0 && f == t5.resF + 8) {
+          const nlohmann::json& rec = save.data("records")[t5.course->id];
+          bool recOk = rec.is_object() && rec.contains("best") && rec["best"].is_number() && rec.value("runs", 0) >= 1 && rec.contains("bestRace") && rec["bestRace"].is_number();
+          save.write(*plat);
+          Save s2(save.fileName());
+          bool reload = s2.load(*plat) && s2.data("records").contains(t5.course->id);
+          raceOk = raceOk && recOk && reload;
+          SL_INFO("[autotest] race: records[%s] = %s, in the save file %s -> %s", t5.course->id.c_str(), rec.dump().c_str(), reload ? "yes" : "NO", raceOk ? "ok" : "FAILED");
+          races.confirmResults();
+        }
+        if (t5.resF >= 0 && f == t5.resF + 12) {
+          bool home = std::hypot(player.pos.x - 4, player.pos.z - 34) < 30 && !races.active();
+          raceOk = raceOk && home;
+          SL_INFO("[autotest] race: OK -> back in Legacy Village (%.0f, %.0f) %s", player.pos.x, player.pos.z, home ? "ok" : "FAILED");
+          nextPhase(AT::Job);
+        }
+        if (f > 3600 && t5.resF < 0) { raceOk = false; SL_WARN("[autotest] race: not finished after %.0f s (%.0f m down)", races.raceTime(), races.progress()); races.abort(); nextPhase(AT::Job); }
+      } else if (at == AT::Job) {
+        const JobHub* hub = nullptr;
+        for (auto& h : playData.hubs) if (h.id == "village") hub = &h;
+        if (!hub && !playData.hubs.empty()) hub = &playData.hubs[0];
+        if (!hub) { jobOk = false; SL_WARN("[autotest] job: no job board"); nextPhase(AT::Police); }
+        else {
+          if (f == 1) { player.setSkisOn(false); player.teleport(hub->fx + std::sin(hub->yaw) * 0.8, hub->fz + std::cos(hub->yaw) * 0.8, hub->yaw + PI); t5.money0 = save.money; t5.done0 = oddJobs.done(); }
+          input.inject(Action::Interact, f == 3);
+          if (f == 6) {
+            auto offers = oddJobs.offers(*hub);
+            t5.haveOffer = false;
+            for (auto& o : offers) if (o.type == "delivery") { t5.offer = o; t5.haveOffer = true; break; }
+            if (!menus.dialogOpen() || !t5.haveOffer) { jobOk = false; SL_WARN("[autotest] job: the board did not open / no delivery (prompt '%s', %zu offers)", prompt.c_str(), offers.size()); }
+            else {
+              for (auto& o : offers) SL_INFO("[autotest] job board %s: %s \xC2\xB7 %s \xC2\xB7 $%d (+%d tip) \xC2\xB7 limit %d s", hub->name.c_str(), o.title.c_str(), o.type.c_str(), o.reward, o.bonus, o.limit);
+              if (!menus.focusLabel(t5.offer.title)) { jobOk = false; SL_WARN("[autotest] job: offer not on the board"); }
+            }
+          }
+          if (f == 7 && jobOk) nav.confirm = true;
+          if (f == 8 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "job");
+          if (f == 9) {
+            if (!oddJobs.active()) { jobOk = false; SL_WARN("[autotest] job: not taken"); nextPhase(AT::Police); }
+            else { const auto& d = oddJobs.current()->dest; player.teleport(d.x + 1.2, d.z + 0.6, 0); SL_INFO("[autotest] job: taken '%s', at the destination (%.1f, %.1f)", oddJobs.current()->title.c_str(), d.x, d.z); }
+          }
+          input.inject(Action::Interact, f == 12);
+          if (f == 15) {
+            int64_t gain = save.money - t5.money0;
+            jobOk = jobOk && !oddJobs.active() && oddJobs.done() == t5.done0 + 1 && gain >= t5.offer.reward;
+            SL_INFO("[autotest] job: delivered (prompt was '%s'): money $%lld -> $%lld (+%lld; reward $%d + tip), jobs done %d -> %d -> %s", prompt.c_str(), (long long)t5.money0, (long long)save.money,
+                    (long long)gain, t5.offer.reward, t5.done0, oddJobs.done(), jobOk ? "ok" : "FAILED");
+            nextPhase(AT::Police);
+          }
+        }
+      } else if (at == AT::Police) {
+        if (f == 1) {
+          // on foot beside the valley road below the village, then a patrol car rammed (wanted, fleeing at once)
+          dvec3 at0(4, 0, 34);
+          Transport::RoadHit h = transport.nearestRoad(40, 120, 200);
+          if (h.road >= 0) { RoadPoint q = roadAt(transport.roads[size_t(h.road)], h.s); at0 = dvec3(q.x - q.dz * 7, 0, q.z + q.dx * 7); }
+          player.setSkisOn(false);
+          player.teleport(at0.x, at0.z, 0);
+          police.hitCop(0, 40);
+          SL_INFO("[autotest] police: wanted (%s) at (%.0f, %.0f)", police.status().c_str(), at0.x, at0.z);
+        }
+        if (f > 1 && f % 40 == 0 && t5.arrestF < 0) SL_INFO("[autotest] police t=%4.1fs  %s, %zu patrol cars%s", f * frameDt, police.status().c_str(), police.units(), police.heliUp() ? ", the helicopter" : "");
+        if (police.arrestedNow() && t5.arrestF < 0) { t5.arrestF = f; SL_INFO("[autotest] police: ARRESTED after %.1f s", f * frameDt); }
+        if (t5.arrestF >= 0 && f == t5.arrestF + 8 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "police");
+        if (police.jailed() && t5.jailF < 0) { t5.jailF = f; t5.jail0 = police.jailLeft(); SL_INFO("[autotest] police: in prison, %.0f s (%s)", t5.jail0, police.objective().c_str()); }
+        if (t5.jailF >= 0 && f == t5.jailF + 32 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "jail");
+        if (t5.jailF >= 0 && f == t5.jailF + 40) {
+          double left = police.jailLeft();
+          bool tick = left < t5.jail0 - 3 && left > 0 && rooms.room() == Interiors::Room::Prison;
+          policeOk = policeOk && tick && t5.jail0 >= 44;
+          SL_INFO("[autotest] police: jail timer %.1f s -> %.1f s, in the cell %s -> %s", t5.jail0, left, rooms.room() == Interiors::Room::Prison ? "yes" : "NO", tick ? "ok" : "FAILED");
+        }
+        if (t5.jailF >= 0 && f == t5.jailF + 42) police.skipJail(0.3);
+        if (t5.jailF >= 0 && f == t5.jailF + 50) {
+          bool out = !police.jailed() && !rooms.inside() && playData.prison.ok && std::hypot(player.pos.x - playData.prison.x, player.pos.z - playData.prison.z) < 40;
+          policeOk = policeOk && out;
+          const nlohmann::json& r = save.data("policeRecord");
+          SL_INFO("[autotest] police: released outside the station (%.0f, %.0f) %s; record %s -> %s", player.pos.x, player.pos.z, out ? "ok" : "FAILED", r.dump().c_str(), policeOk ? "ok" : "FAILED");
+          nextPhase(AT::Chalet);
+        }
+        if (f > 1400 && t5.jailF < 0) { policeOk = false; SL_WARN("[autotest] police: no arrest (%s, %zu units)", police.status().c_str(), police.units()); police.clear("autotest"); nextPhase(AT::Chalet); }
+      } else if (at == AT::Chalet) {
+        if (playData.chalets.empty()) { chaletOk = false; SL_WARN("[autotest] chalet: no chalets"); nextPhase(AT::Weather); }
+        else {
+          const ChaletHouse& h = playData.chalets[0];
+          if (f == 1) { save.earn(60000); t5.money0 = save.money; player.setSkisOn(false); player.teleport(h.doorX, h.doorZ, h.yaw - PI / 2); }
+          input.inject(Action::Interact, f == 3);
+          if (f == 6) { if (!menus.dialogOpen() || !menus.focusLabel("Buy this chalet")) { chaletOk = false; SL_WARN("[autotest] chalet: no sale dialog (prompt '%s')", prompt.c_str()); } }
+          if (f == 7 && chaletOk) nav.confirm = true;
+          if (f == 11) {
+            bool b = chalets.owned() && rooms.room() == Interiors::Room::Chalet && save.money == t5.money0 - playData.chaletPrice;
+            chaletOk = chaletOk && b;
+            SL_INFO("[autotest] chalet: bought %s: $%lld -> $%lld, inside %s -> %s", h.name.c_str(), (long long)t5.money0, (long long)save.money, rooms.room() == Interiors::Room::Chalet ? "yes" : "no", b ? "ok" : "FAILED");
+            t5.furn0 = chalets.furnitureCount();
+          }
+          input.inject(Action::Furnish, f == 13);
+          if (f == 16) {
+            if (!chalets.building()) { chaletOk = false; SL_WARN("[autotest] chalet: build mode did not open"); }
+            int64_t m0 = save.money;
+            bool placed = false;
+            double px = 0, pz = 0;
+            for (const Rect2& r : playData.chaletPlan.rects) {
+              for (double x = r.x0 + 0.75; x < r.x1 - 0.5 && !placed; x += 0.5)
+                for (double z = r.z0 + 0.75; z < r.z1 - 0.5 && !placed; z += 0.5)
+                  if (chalets.place("armchair", x, z, 0)) { placed = true; px = x; pz = z; }
+              if (placed) break;
+            }
+            const FurnitureDef* fd = playData.furnitureById("armchair");
+            bool ok = placed && chalets.furnitureCount() == t5.furn0 + 1 && fd && save.money == m0 - fd->price;
+            chaletOk = chaletOk && ok;
+            SL_INFO("[autotest] chalet: build mode, placed the %s at (%.2f, %.2f): $%lld -> $%lld, %d pieces -> %s", fd ? fd->name.c_str() : "?", px, pz, (long long)m0, (long long)save.money, chalets.furnitureCount(), ok ? "ok" : "FAILED");
+            input.inject(Action::NextItem, true);
+          }
+          if (f == 17) input.inject(Action::NextItem, false);
+          if (f == 20 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "build");
+          input.inject(Action::Furnish, f == 24);
+          if (f == 27) { dvec3 e = rooms.toWorld(playData.chaletModel.IX - 0.6, 0, playData.chaletModel.doorZ); player.teleport(e.x, e.z, PI / 2); player.pos.y = rooms.toWorld(0, 0, 0).y; }
+          input.inject(Action::Interact, f == 29);
+          if (f == 33) {
+            save.write(*plat);
+            Save s2(save.fileName());
+            bool saved = s2.load(*plat) && s2.data("chalet").value("owned", false) && s2.data("chalet")["furniture"].size() == size_t(chalets.furnitureCount());
+            bool out = !rooms.inside();
+            chaletOk = chaletOk && out && saved;
+            SL_INFO("[autotest] chalet: left it (%s), in the save: %s -> %s", out ? "outside" : "STILL INSIDE", s2.data("chalet").dump().substr(0, 160).c_str(), chaletOk ? "ok" : "FAILED");
+            nextPhase(AT::Weather);
+          }
+        }
+      } else if (at == AT::Weather) {
+        if (f == 1) { t5.money0 = 0; SL_INFO("[autotest] weather: %s -> Heavy snow", weather.label().c_str()); weather.set(Weather::byId("heavy")); player.setSkisOn(false); player.teleport(4, 34, PI); }
+        if (f == 60) {
+          weatherOk = weather.label() == "Heavy snow" && weather.snow > 0.2 && weather.cloud > 0.2;
+          SL_INFO("[autotest] weather: %s, snow %.2f, cloud %.2f, fog density %.6f, %d change(s) -> %s", weather.label().c_str(), weather.snow, weather.cloud, double(light.fogDensity), weather.changes, weatherOk ? "ok" : "FAILED");
+          if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "weather");
+        }
+        // the snowmobile: on, throttle 4 s, off
+        if (f == 64) {
+          if (sleds.count() == 0) { sledOk = false; SL_WARN("[autotest] snowmobile: none parked"); nextPhase(AT::Done); }
+          else { dvec3 sp = sleds.pos(0); t5.jail0 = 0; player.teleport(sp.x + 1.6, sp.z, 0); }
+        }
+        input.inject(Action::Interact, f == 66 || f == 120);
+        if (f == 68) { if (rideKind != Ride::Sled) { sledOk = false; SL_WARN("[autotest] snowmobile: could not get on (prompt '%s')", prompt.c_str()); } ridePos0 = player.pos; }
+        input.inject(Action::Forward, f >= 70 && f < 90);
+        if (f == 90) { double moved = glm::length(dvec2(player.pos.x - ridePos0.x, player.pos.z - ridePos0.z)); sledOk = sledOk && rideKind == Ride::Sled && moved > 8 && sleds.speed() > 20 / 3.6; SL_INFO("[autotest] snowmobile: rode %.0f m in 2 s, top %.0f km/h -> %s", moved, sleds.speed() * 3.6, sledOk ? "ok" : "FAILED"); if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "sled"); }
+        input.inject(Action::Back, f >= 90 && f < 118 && rideKind == Ride::Sled && sleds.speed() > 0.6);   // (brake to a stop, not on into reverse)
+        if (f == 124) { if (rideKind == Ride::Sled) { sledOk = false; SL_WARN("[autotest] snowmobile: could not get off"); } nextPhase(AT::Done); }
+      }
     }
 
     // autotest pilot: tuck down the run, steering toward a point 35 m ahead on its line
@@ -995,6 +1268,12 @@ int runGame(const GameOptions& opt) {
       ctl.jumpDown = input.down(Action::Jump);
       ctl.jumpPressed = first && input.takePressed(Action::Jump);
       ctl.jumpReleased = first && input.takeReleased(Action::Jump);
+      // (Phase 5) held on the grid during a race's countdown, arrested, waiting for the rescue; the virtual mouse
+      // takes the left stick in build mode
+      ctl.frozen = races.frozen() || police.arrestedNow() || (rescue.active() && !rescue.carried() && rooms.room() != Interiors::Room::Hospital) || rescue.inBed();
+      if (chalets.vmouse()) { ctl.moveX = ctl.moveY = 0; ctl.steer = 0; ctl.front = ctl.back = false; }
+      // (weather: a blizzard's gusts push the skis a little, sky.js weatherFx)
+      if (player.mode == PlayerMode::Ski && !player.air && weather.wind > 0.01) { player.vel.x += weather.gustX * STEP; player.vel.z += weather.gustZ * STEP; }
       player.fixedUpdate(STEP, ctl);
       if (rideKind == Ride::Car) {
         DriveInput di = din;
@@ -1019,11 +1298,14 @@ int runGame(const GameOptions& opt) {
     fc.lookX = paused ? 0 : input.lookX(); fc.lookY = paused ? 0 : input.lookY(); fc.wheel = input.wheel();
     fc.now = opt.autotest ? simTime : now; fc.lastLook = opt.autotest ? -1e9 : input.lastLookTime();
     player.frameUpdate(frameDt, acc / STEP, fc, ctl);
+    if (started && !paused && !races.active()) police.vehicleHits(frameDt, busBoxes);
 
     for (const PlayerEvent& e : player.events) {
       switch (e.type) {
         case PlayerEvent::Type::Crash: {
           nCrash++; audio.thud(1); input.rumble(*plat, 0.9f * e.amount, 0.6f * e.amount, 400);
+          oddJobs.onCrash();
+          if (races.active() || rescue.active() || rooms.inside()) break;   // (a race session owns its wipeouts: session.js)
           // main.js: you get up after the first wipeout; the second within 3 min (no lift ride between) calls the rescue
           if (simTime - lastStrikeAt > 180) strikes = 0;
           lastStrikeAt = simTime;
@@ -1043,7 +1325,36 @@ int runGame(const GameOptions& opt) {
     }
     player.events.clear();
     maxSpeed = std::max(maxSpeed, player.speed());
-    if (rescueAt > 0 && simTime >= rescueAt) { rescueAt = -1; doRescue(); }
+    // (Phase 5) getting hit by a vehicle at 45+ km/h: the rescue at once (vehiclehits.js); the rescue helicopter instead of the fade
+    if (started && !races.active()) {
+      Police::Hit h = police.takeHit();
+      if (h.pending && h.rescue && !rescue.active() && rescueAt < 0) { strikes = 0; rescueAt = simTime + 3; flash("Hit by a " + h.what + " at " + std::to_string(h.kmh) + " km/h \xC2\xB7 the mountain rescue is on its way", Hud::Flash::Bad); }
+    }
+    if (rescueAt > 0 && simTime >= rescueAt) {
+      rescueAt = -1;
+      if (rideKind == Ride::None && player.mode != PlayerMode::Sit && !rooms.inside() && !races.active()) rescue.start(); else if (!races.active()) doRescue();
+    }
+    // (Phase 5) the gameplay systems' frame
+    pc.now = simTime;
+    pc.driving = rideKind == Ride::Car;
+    pc.riding = rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express || (player.mode == PlayerMode::Sit && !rescue.carried());
+    if (started && !jailResumed) {
+      jailResumed = true;
+      const nlohmann::json& jl = save.data("jail");
+      if (!opt.autotest && jl.value("left", 0.0) > 0.5) police.jail(jl.value("left", 0.0), jl.value("reason", std::string("Arrested")));
+    }
+    if (started && !paused) {
+      weather.update(frameDt);
+      races.update(frameDt);
+      oddJobs.update(frameDt);
+      police.update(frameDt);
+      police.peopleHits(frameDt);
+      rescue.update(frameDt, input.down(Action::Jump));
+      if (police.fleeing()) { oddJobs.policeChase(); if (races.active()) police.clear("race"); }
+      if (races.active() && oddJobs.active()) oddJobs.drop();
+      if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
+    }
+    folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
     // the career (economy.js stats): top speed, distance skied
     if (started && player.mode == PlayerMode::Ski) {
       static double lastDist = player.distance;
@@ -1094,23 +1405,47 @@ int runGame(const GameOptions& opt) {
           default: if (a > 0) input.rumble(*plat, 0.3f * a, 0.3f * a, 120); break;
         }
         if (!e.text.empty()) { toast = e.text; toastUntil = simTime + 2; }
+        if (e.type == VehicleEvent::Type::Knock || e.type == VehicleEvent::Type::Crash) oddJobs.onCarKnock(e.type == VehicleEvent::Type::Crash);
       }
       drive.events.clear();
     } else if (rideKind == Ride::Bus) {
       BusLine::RideState rs = buses.rideState();
       player.setSeat(rs.seat, rs.fwd);
       rideLine = rs.hint + "   hold " + prompts::K(input, Action::Jump) + " x8";
-      if (rs.arrived) { buses.abort(); standOff(rs.exit, "Off the bus at " + buses.stopName(-1)); toast = rs.hint; }
+      if (rs.arrived) { std::string stopN = buses.stopName(-1); buses.abort(); standOff(rs.exit, "Off the bus at " + stopN); toast = rs.hint; races.guideFrom(player.pos, stopN); }
     } else if (rideKind == Ride::Rail || rideKind == Ride::Express) {
       TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
       player.setSeat(tr.seat, tr.fwd);
       rideLine = tr.hint + "   hold " + prompts::K(input, Action::Jump) + (rideKind == Ride::Rail ? " x6" : " x10");
-      if (tr.arrived) { if (rideKind == Ride::Rail) railway.abort(); else express.abort(); standOff(tr.exit, tr.hint); }
+      if (tr.arrived) { if (rideKind == Ride::Rail) railway.abort(); else express.abort(); standOff(tr.exit, tr.hint); races.guideFrom(player.pos, tr.stop); }
       else if (tr.atStop) {
         prompt = "Get off at " + tr.stop;
         dvec3 ex;
         if (interact && railway.leaveAtStop(ex)) { railway.abort(); standOff(ex, "Off at " + tr.stop); }
       }
+    } else if (rideKind == Ride::Sled) {
+      // (Phase 5) the snowmobile (snowmobile.js)
+      Snowmobiles::In si;
+      if (!paused) {
+        si.throttle = (input.down(Action::Forward) || input.moveY() > 0.5f) ? 1.f : 0.f;
+        si.brake = (input.down(Action::Back) || input.down(Action::Brake) || input.moveY() < -0.5f) ? 1.f : 0.f;
+        si.steer = -input.moveX();
+        si.boost = input.down(Action::Sprint);
+        si.handbrake = input.down(Action::Jump);
+      }
+      if (sleds.update(vdt, si)) { rideKind = Ride::None; rig.skisInRide = true; }
+      else {
+        dvec3 sp, sf;
+        sleds.seat(sp, sf);
+        player.setSeat(sp, sf);
+        rideLine = "Snowmobile   " + std::to_string(int(std::round(sleds.speed() * 3.6))) + " km/h";
+        if (sleds.speed() < 1.2) prompt = "Get off";
+        if (interact && sleds.getOff()) { interact = false; rideKind = Ride::None; rig.skisInRide = true; }
+      }
+    } else if (rescue.carried()) {
+      dvec3 sp, sf;
+      if (rescue.seat(sp, sf)) player.setSeat(sp, sf);
+      rideLine = std::string("Mountain rescue   hold ") + prompts::K(input, Action::Jump) + " x4";
     } else if (player.mode == PlayerMode::Sit) {
       Lifts::RideState rs = lifts.updateRide();
       if (rs.arrived) leaveLift(rs.exit, "");
@@ -1200,6 +1535,17 @@ int runGame(const GameOptions& opt) {
         }
       }
     }
+    // (Phase 5) the police station / the prison, the medical centre, the chalets, the races (start houses, bus race boards,
+    // the RACING stand), the job boards and a job's own spots
+    if (started && rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !races.active() && !police.arrestedNow()) {
+      std::string p5;
+      bool used = police.interact(p5, interact) || rescue.interact(p5, interact) || chalets.interact(p5, interact) || races.interact(p5, interact) || oddJobs.interact(p5, interact) ||
+                  sleds.interact(p5, interact);
+      if (sleds.active()) { rideKind = Ride::Sled; rig.skisInRide = false; }
+      if (!p5.empty()) prompt = p5;
+      if (used) interact = false;
+    }
+    if (started && !menus.isOpen() && !tmap.isOpen()) chalets.update(frameDt, cam, nav);
     // (Phase 4) the shops and counters on foot: the ski shop, the ticket seller, the Autohaus counter (your cars), the
     // huts; in your car at the Werkstatt: the repair
     if (rideKind == Ride::Car && werkstattLot && drive.speed() < 2.0 && prompt.rfind("Get out", 0) == 0) {
@@ -1239,6 +1585,8 @@ int runGame(const GameOptions& opt) {
       save.hour = hour;
     }
     light = timeOfDay(hour, dayLight);
+    { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
+    if (rooms.inside()) light = rooms.lighting(light);
 
     // streaming + animation
     player.cameraFor(cam);
@@ -1279,6 +1627,8 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(rideCamPos, focus);
       cam.fovY = 62; cam.nearZ = 0.2f;
     }
+    if (rescue.carried()) rescue.camera(cam);
+    if (rideKind == Ride::Sled) sleds.camera(cam, frameDt);
     // (Phase 4) the main menu's slow orbit over the village; the skier showcase (the skier on the plaza, turned by a
     // drag / the right stick, the camera off to the side so the menu column stays clear)
     menuT += frameDt;
@@ -1321,27 +1671,39 @@ int runGame(const GameOptions& opt) {
       flash("Your " + e.spec->label + " is back at the Autohaus car park" + (t.why == "wreck" ? ", repaired" : ""), Hud::Flash::Good);
       tows.erase(tows.begin() + long(k));
     }
-    if (transport.loaded() && rideKind != Ride::Car) {
+    // (Phase 5, impound.js) your car left empty on a road or out on the snow (not in a car park, a lay-by or the chalet
+    // village), you 40 m or more away for 2 minutes: the tow truck fetches it (the wreck fee) to the impound row of the
+    // Autohaus car park, where it stays locked until the next game day
+    if (transport.loaded() && rideKind != Ride::Car && started) {
       leftOnRoadT += frameDt;
       if (leftOnRoadT > 1) {
         leftOnRoadT = 0;
         static std::unordered_map<std::string, double> away;
-        for (const auto& e : drive.parked) {
-          if (!e.owned || e.driving || e.wrecked || e.plate.empty()) continue;
+        for (auto& e : drive.parked) {
+          if (!e.owned || e.driving || e.wrecked || e.plate.empty() || e.impoundDay > save.day) continue;
           bool onRoad = transport.laneDistance(e.x, e.z) < 4.2;
           bool inLot = false;
-          for (const Lot& L : transport.lots) inLot = inLot || std::hypot(e.x - L.x, e.z - L.z) < std::max(L.hw, L.hd) + 4;
+          for (const Lot& L : transport.lots) inLot = inLot || std::hypot(e.x - L.x, e.z - L.z) < std::max(L.hw, L.hd) + 3;
+          for (const dvec3& lb : transport.laybys) inLot = inLot || std::hypot(e.x - lb.x, e.z - lb.y) < 12;
+          for (const ChaletHouse& ch : playData.chalets) inLot = inLot || std::hypot(e.x - ch.x, e.z - ch.z) < 16;
+          bool offRoads = !onRoad && !inLot && transport.laneDistance(e.x, e.z) > 6;
           double& t = away[e.plate];
-          if (onRoad && !inLot && std::hypot(e.x - player.pos.x, e.z - player.pos.z) > 250) t += 1; else t = 0;
-          bool queued = false;
-          for (const Tow& w : tows) queued = queued || w.plate == e.plate;
-          if (t > 60 && !queued) {
+          if ((onRoad || offRoads) && !inLot && std::hypot(e.x - player.pos.x, e.z - player.pos.z) >= 40) t += 1; else t = 0;
+          if (t >= 120) {
             t = 0;
-            save.spend(PARK_TOW_FEE, true);
-            tows.push_back({-1, e.plate, simTime, PARK_TOW_FEE, "road"});
-            flash("Your " + e.spec->label + " was towed off the road \xC2\xB7 -" + fmtM(PARK_TOW_FEE), Hud::Flash::Bad);
+            save.spend(WRECK_FEE, true);
+            double bx, bz, byaw;
+            if (drive.freeBay(bx, bz, byaw)) { e.x = bx; e.z = bz; e.yaw = byaw; e.y = world.height(bx, bz) + 0.03; }
+            e.impoundDay = save.day + 1;
+            nlohmann::json& imp = save.data("impound", nlohmann::json::array());
+            imp.push_back({{"plate", e.plate}, {"day", e.impoundDay}});
+            save.markDirty();
+            flash("Your " + e.spec->label + " was towed to the impound (Autohaus car park) \xC2\xB7 -" + fmtM(WRECK_FEE) + " \xC2\xB7 available tomorrow", Hud::Flash::Bad);
           }
         }
+        // (the next day: free again)
+        nlohmann::json& imp = save.data("impound", nlohmann::json::array());
+        for (size_t k = 0; k < imp.size();) { if (imp[k].value("day", 0) <= save.day) { imp.erase(k); save.markDirty(); } else k++; }
       }
     }
     save.clock = simTime;
@@ -1357,12 +1719,15 @@ int runGame(const GameOptions& opt) {
       buses.fillColliders(scenery.dynamic);
       railway.fillColliders(scenery.dynamic, player.pos);
       express.fillColliders(scenery.dynamic, player.pos);
+      police.fillColliders(scenery.dynamic);
+      sleds.fillColliders(scenery.dynamic);
     }
+    rooms.fillColliders(scenery.dynamic);
 
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
-    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % 4 == 0 || pngVillage || pngRide;
+    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide;
     if (const char* shot = std::getenv("SKI_LEGACY_SHOT"); shot && at == AT::Ski) {   // (debug: a fixed camera "x,y,z,tx,ty,tz")
       double v[6] = {0};
       if (std::sscanf(shot, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
@@ -1383,13 +1748,15 @@ int runGame(const GameOptions& opt) {
     if (started && !tmap.isOpen() && !menus.isOpen()) {
       HudFrame hf;
       hf.speed = rideKind == Ride::Car ? drive.speed() : rideKind == Ride::Bus ? buses.rideSpeed() : rideKind == Ride::Rail ? railway.ride().speed : rideKind == Ride::Express ? express.ride().speed : player.speed();
-      hf.speedo = player.mode != PlayerMode::Sit || rideKind == Ride::Car;
+      hf.speedo = player.mode != PlayerMode::Sit || rideKind == Ride::Car || rideKind == Ride::Sled;
+      if (rideKind == Ride::Sled) hf.speed = sleds.speed();
       hf.hour = hour;
       hf.fps = float(fps);
       hf.prompt = menus.isOpen() ? std::string() : prompt;
       hf.promptKey = prompts::K(input, Action::Interact);
       hf.rideHint = rideLine;
       if (rideKind == Ride::Car) hf.skiName = drive.label();
+      else if (rideKind == Ride::Sled) hf.skiName = "Snowmobile";
       else if (const SkiDef* sk = skiById(save.skis)) hf.skiName = sk->name;
       // where you are (trailmap.js locationName, condensed): riding, the village, the nearest run, the backcountry
       if (rideKind == Ride::None && player.mode == PlayerMode::Sit && lifts.rideLine()) hf.location = lifts.rideLine()->name;
@@ -1410,7 +1777,27 @@ int runGame(const GameOptions& opt) {
         hf.wpAngle = -hf.wpAngle;   // (screen: + = right)
         if (hf.wpDist < 25) tmap.mark.on = false;
       }
+      hf.weather = weather.label();
+      hf.forecast = weather.forecast();
+      {
+        std::string o5 = police.objective();
+        if (o5.empty()) o5 = rescue.objective();
+        if (o5.empty()) o5 = races.objective();
+        if (o5.empty()) o5 = oddJobs.objective();
+        if (o5.empty()) o5 = chalets.objective();
+        if (!o5.empty()) hf.objective = o5;
+        if (rooms.room() == Interiors::Room::Prison) hf.location = "Polizei \xC2\xB7 Legacy Village";
+        else if (rooms.room() == Interiors::Room::Hospital) hf.location = "Medical centre";
+        else if (rooms.room() == Interiors::Room::Chalet) hf.location = "Chalet village";
+        if (races.active()) hf.waypoint = false;
+      }
       hud.draw(ui, hf, save, input, simTime);
+      float u5 = std::clamp(std::min(float(renderer.height()) / 800.f, float(renderer.width()) / 1280.f), 0.55f, 2.2f) * float(save.setting("hudScale", 1));
+      races.hud(ui, u5);
+      oddJobs.hud(ui, u5);
+      police.hud(ui, u5);
+      rescue.hud(ui, u5);
+      chalets.hud(ui, u5);
     }
     menus.loading.clear();
     menus.frame(nav, frameDt, simTime);
@@ -1421,6 +1808,12 @@ int runGame(const GameOptions& opt) {
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
     }
+    if (fadeT >= 0) {   // (transition.js: a short fade to dark and back over a teleport)
+      fadeT += frameDt;
+      float a = fadeT < 0.12 ? 1.f : float(std::max(0.0, 1 - (fadeT - 0.12) / 0.45));
+      ui.rect(0, 0, float(renderer.width()), float(renderer.height()), vec4(0.01f, 0.02f, 0.05f, a));
+      if (fadeT > 0.6) fadeT = -1;
+    }
     if (rendered) {
     Lighting frameLight = light;
     if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light
@@ -1428,21 +1821,44 @@ int runGame(const GameOptions& opt) {
       frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
     }
     renderer.beginFrame(cam, frameLight, player.renderPos);
-    if (drawTerrain && !camUnderground) terrain.submit(renderer);
-    scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
-    if (drawVillage) resort.submit(renderer);
-    if (drawVillage) sweep.submit(renderer, cam.pos);
-    if (drawVillage) {
+    bool indoor = rooms.inside();
+    if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
+    if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
+    if (drawVillage && !indoor) resort.submit(renderer);
+    if (drawVillage && !indoor) sweep.submit(renderer, cam.pos);
+    if (drawVillage && !indoor) {
       vdraw.begin();
       drive.addDraw(vdraw, cam.pos);
       traffic.addDraw(vdraw, cam.pos);
       buses.addDraw(vdraw, cam.pos);
       railway.addDraw(vdraw, cam.pos);
       express.addDraw(vdraw, cam.pos);
+      police.addDraw(vdraw, cam.pos);
+      rescue.addDraw(vdraw, cam.pos);
+      sleds.addDraw(vdraw, cam.pos);
       vdraw.submit(renderer, *dev, cam.pos);
     }
+    // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
+    // the falling snow
+    if (indoor) rooms.draw(renderer);
+    else if (drawVillage) {
+      oddJobs.draw(renderer, cam.pos, jobBoard.get());
+      races.draw(renderer, cam.pos);
+      police.draw(renderer, cam.pos);
+      rescue.draw(renderer, cam.pos);
+    }
+    if (drawVillage) chalets.draw(renderer, cam.pos);
+    people.begin();
+    if (!indoor) {
+      folk.add(people, cam.pos);
+      races.addPeople(people, cam.pos);
+      oddJobs.addPeople(people, cam.pos);
+    }
+    police.addPeople(people, cam.pos);
+    people.submit(renderer, cam.pos, opt.autotest ? 28 : 48);
+    weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
     bool hideRig = (player.view == Player::View::First && player.mode != PlayerMode::Fall) || (rideKind == Ride::Car && drive.cockpit()) ||
-                   ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView);
+                   ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || rescue.carried();
     railway.insideView = rideKind == Ride::Rail && seatView;
     express.insideView = rideKind == Ride::Express && seatView;
     if (drawSkier) rig.submit(renderer, hideRig);
@@ -1618,7 +2034,7 @@ int runGame(const GameOptions& opt) {
         }
         if (phaseFrame == 33) {
           if (tmap.isOpen()) { mapOk = false; SL_WARN("[autotest] map: cancel did not close it"); }
-          at = AT::Done;
+          at = AT::Race; phaseFrame = 0;
         }
       }
       if (at == AT::Done) running = false;
@@ -1633,13 +2049,16 @@ int runGame(const GameOptions& opt) {
 
   if (opt.autotest) {
     double wall = plat->timeSeconds() - startT;
-    bool ok = skiOk && collideOk && liftOk && driveOk && trafficOk && busOk && railOk && expressOk && menuOk && settingOk && buyOk && saveOk && mapOk && chargeOk;
+    bool ok = skiOk && collideOk && liftOk && driveOk && trafficOk && busOk && railOk && expressOk && menuOk && settingOk && buyOk && saveOk && mapOk && chargeOk &&
+              raceOk && jobOk && policeOk && chaletOk && weatherOk && sledOk;
     SL_INFO("[autotest] %d frames (%.1f s simulated) in %.1f s wall: avg %.1f fps", frame, simTime, wall, frame / wall);
     SL_INFO("[autotest] ski %s, building collision %s, gondola ride %s", skiOk ? "ok" : "FAILED", collideOk ? "ok" : "FAILED", liftOk ? "ok" : "FAILED");
     SL_INFO("[autotest] drive %s, traffic %s, bus %s, Wolkenspitzbahn %s, Legacy Express %s", driveOk ? "ok" : "FAILED", trafficOk ? "ok" : "FAILED",
             busOk ? "ok" : "FAILED", railOk ? "ok" : "FAILED", expressOk ? "ok" : "FAILED");
     SL_INFO("[autotest] menus %s, settings %s, shop %s, save / reload %s, lift / car charges %s, trail map %s", menuOk ? "ok" : "FAILED", settingOk ? "ok" : "FAILED",
             buyOk ? "ok" : "FAILED", saveOk ? "ok" : "FAILED", chargeOk ? "ok" : "FAILED", mapOk ? "ok" : "FAILED");
+    SL_INFO("[autotest] race + records %s, job %s, police chase + jail %s, chalet + furniture %s, weather %s, snowmobile %s (people drawn %zu)", raceOk ? "ok" : "FAILED", jobOk ? "ok" : "FAILED",
+            policeOk ? "ok" : "FAILED", chaletOk ? "ok" : "FAILED", weatherOk ? "ok" : "FAILED", sledOk ? "ok" : "FAILED", people.drawn());
     SL_INFO("[autotest] %s", ok ? "PASS" : "FAIL");
     audio.stop(*plat);
     return ok ? 0 : 1;

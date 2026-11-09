@@ -48,7 +48,7 @@ export async function load(url, context, nextLoad) {
   const r = await nextLoad(url, context);
   const p = PATCHES.find((q) => url.endsWith(q.file));
   if (!p) return r;
-  let src = String(r.source);
+  let src = String(r.source).replace(/\r\n/g, "\n"); // (a Windows checkout has CRLF line endings: the anchors are written with \n)
   for (const [a, b] of p.edits) {
     if (!src.includes(a)) throw new Error(`resort_hooks: patch anchor not found in ${p.file}: ${a.slice(0, 60)}`);
     src = src.replace(a, b);

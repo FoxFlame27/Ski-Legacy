@@ -1,0 +1,3 @@
+# keep LF in the native exporters and the JS sources they patch (resort_hooks anchors)
+native/tools/*.mjs text eol=lf
+src/**/*.js text eol=lf

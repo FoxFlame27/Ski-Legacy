@@ -72,11 +72,11 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
 
-      - name: "Configure (macOS: a universal arm64 + x86_64 Ski Legacy.app)"
+      - name: "Configure (macOS: Ski Legacy.app for Apple silicon (arm64; the x86_64 slice fails in libwebp with Xcode 26))"
         if: runner.os == 'macOS'
         run: >
           cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSL_COPY_ASSETS=ON -DSL_MACOS_BUNDLE=ON
-          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 
       - name: Configure (Linux)
         if: runner.os == 'Linux'
@@ -128,7 +128,7 @@ jobs:
           name: Ski Legacy native (latest build)
           body: |
             Latest native C++ build of Ski Legacy (commit ${{ github.sha }}): the port in native/ (see native/README.md).
-            - **Ski-Legacy-Native-Mac.dmg**: open it and drag Ski Legacy into Applications (universal: Apple silicon and Intel,
+            - **Ski-Legacy-Native-Mac.dmg**: open it and drag Ski Legacy into Applications (Apple silicon: M1 and newer,
               macOS 11+). Not signed: the first time right-click the app, Open, Open (or `xattr -cr "/Applications/Ski Legacy.app"`).
             - **Ski-Legacy-Native-Windows.zip**: unzip and run SkiLegacy.exe (Windows 10+, OpenGL 4.1).
             - **Ski-Legacy-Native-Linux.tar.gz**: untar and run ./ski-legacy.sh (x86_64, OpenGL 4.1).

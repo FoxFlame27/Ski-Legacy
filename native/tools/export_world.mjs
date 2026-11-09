@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { writeData, filterGrid } from './datafile.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -34,10 +34,10 @@ fs.mkdirSync(OUT, { recursive: true });
 const t0 = Date.now();
 const log = (...a) => console.log(`[export ${((Date.now() - t0) / 1000).toFixed(1)}s]`, ...a);
 
-const L = await import(path.join(SRC, 'world/layout.js'));
-const S = await import(path.join(SRC, 'world/secrets.js'));
-const { world, MASSIFS } = await import(path.join(SRC, 'world/world.js'));
-const { WOLKENSPITZE } = await import(path.join(SRC, 'world/wolkenspitze.js'));
+const L = await import(pathToFileURL(path.join(SRC, 'world/layout.js')).href);
+const S = await import(pathToFileURL(path.join(SRC, 'world/secrets.js')).href);
+const { world, MASSIFS } = await import(pathToFileURL(path.join(SRC, 'world/world.js')).href);
+const { WOLKENSPITZE } = await import(pathToFileURL(path.join(SRC, 'world/wolkenspitze.js')).href);
 
 L.initLayout();
 log('layout done');
@@ -47,11 +47,11 @@ const { layout } = L;
 // parks, corridors), the World Racing courses' regions, the Legacy Express's lakes and ground
 globalThis.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
 try { L.planPisteFences(); } catch (e) { log('piste fences skipped:', e.message); }
-try { (await import(path.join(SRC, 'game/bus/roads.js'))).planBusRoads(layout.busStops); log('bus roads planned'); } catch (e) { log('bus roads skipped:', e.message); }
-const FREE = await import(path.join(SRC, 'modes/parkour/freeworld.js'));
+try { (await import(pathToFileURL(path.join(SRC, 'game/bus/roads.js')).href)).planBusRoads(layout.busStops); log('bus roads planned'); } catch (e) { log('bus roads skipped:', e.message); }
+const FREE = await import(pathToFileURL(path.join(SRC, 'modes/parkour/freeworld.js')).href);
 try { await FREE.registerFreeWorldCourses(); log('courses registered:', world.regions.length); } catch (e) { log('courses skipped:', e.message); }
-try { (await import(path.join(SRC, 'world/expressscenery.js'))).planExpressScenery(FREE.freeCourses()); } catch (e) { log('express scenery skipped:', e.message); }
-try { (await import(path.join(SRC, 'world/expressground.js'))).buildExpressGround(FREE.freeCourses()); log('express ground built'); } catch (e) { log('express ground skipped:', e.message); }
+try { (await import(pathToFileURL(path.join(SRC, 'world/expressscenery.js')).href)).planExpressScenery(FREE.freeCourses()); } catch (e) { log('express scenery skipped:', e.message); }
+try { (await import(pathToFileURL(path.join(SRC, 'world/expressground.js')).href)).buildExpressGround(FREE.freeCourses()); log('express ground built'); } catch (e) { log('express ground skipped:', e.message); }
 
 const r3 = (v) => Math.round(v * 1000) / 1000;
 

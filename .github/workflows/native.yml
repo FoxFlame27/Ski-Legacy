@@ -82,9 +82,9 @@ jobs:
         if: runner.os == 'Linux'
         run: cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSL_COPY_ASSETS=ON
 
-      - name: Configure (Windows, Visual Studio 2022)
+      - name: Configure (Windows, the newest Visual Studio on the runner)
         if: runner.os == 'Windows'
-        run: cmake -S native -B native/build -G "Visual Studio 17 2022" -A x64 -DSL_COPY_ASSETS=ON
+        run: cmake -S native -B native/build -A x64 -DSL_COPY_ASSETS=ON
 
       - name: Build (exports the world data, converts the audio, compiles, gathers the assets)
         run: cmake --build native/build --config Release --parallel

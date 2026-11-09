@@ -1,6 +1,9 @@
 # Ski Legacy — native (C++20) port. See README.md.
 #   cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build native/build
 cmake_minimum_required(VERSION 3.20)
+# CMake 4 (Homebrew, GitHub's macOS runners) refuses dependencies that still say cmake_minimum_required(< 3.5)
+# (glad 0.1.36): let them configure with the 3.5 policies
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version for fetched dependencies")
 project(SkiLegacy VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)

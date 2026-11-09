@@ -1,6 +1,7 @@
 // Where the game's data lives at run time.
 //   1. $SKI_LEGACY_ASSETS (a folder with models/ and data/)
-//   2. assets/ next to the executable (packaged builds: cmake -DSL_COPY_ASSETS=ON)
+//   2. assets/ next to the executable (packaged builds: cmake -DSL_COPY_ASSETS=ON), or in the macOS bundle's
+//      Contents/Resources/assets (Phase 7 packaging)
 //   3. the repository: <repo>/public (models, audio) and <repo>/native/data (exported world data), found by walking
 //      up from the executable, then from the source tree the binary was built from
 #pragma once

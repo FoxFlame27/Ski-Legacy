@@ -19,6 +19,15 @@ layout(std140) uniform Frame {
   vec4 uSkyZenith, uSkyMid, uSkyHorizon, uSkyGlow;
   vec4 uMisc;           // x night (0 day .. 1 night: lamps, windows, signs), yzw unused
 };
+// (Phase 7) point and spot lights (lamps, headlights): per light three vec4s: position (camera-relative) + range,
+// colour x intensity + cos of the outer cone (< -1.5: a point light), direction + cos of the inner cone
+#ifndef SL_MAX_LIGHTS
+#define SL_MAX_LIGHTS 16
+#endif
+layout(std140) uniform Lights {
+  vec4 uLightCount;
+  vec4 uLight[48];
+};
 )GLSL";
 
 inline const char* kLighting = R"GLSL(
@@ -30,9 +39,13 @@ float shadowAt(vec3 rel, vec3 n) {
   vec4 s = uShadowMat * vec4(rel + n * 0.08, 1.0);
   vec3 p = s.xyz / s.w;
   if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
+#ifdef SL_LOW
+  float sh = texture(uShadowMap, p);   // (simplified shaders: one hardware-filtered tap)
+#else
   float t = uFogParams.z, sum = 0.0;
   for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) sum += texture(uShadowMap, vec3(p.xy + vec2(x, y) * t, p.z));
   float sh = sum / 9.0;
+#endif
   // fade out toward the map's border
   vec2 e = min(p.xy, 1.0 - p.xy);
   return mix(1.0, sh, smoothstep(0.0, 0.06, min(e.x, e.y)));
@@ -42,7 +55,8 @@ float shadowAt(vec3 rel, vec3 n) {
 vec3 shade(vec3 albedo, float metallic, float rough, vec3 n, vec3 v, float shadow, float ao) {
   vec3 l = uSunDir.xyz;
   vec3 h = normalize(l + v);
-  float nl = max(dot(n, l), 0.0), nv = max(dot(n, v), 1e-3), nh = max(dot(n, h), 0.0), vh = max(dot(v, h), 0.0);
+  // (Phase 7: clamped to 1 as well: pow(1 - x, 5) of a dot product a hair over 1 was NaN, which the bloom spread into blocks)
+  float nl = clamp(dot(n, l), 0.0, 1.0), nv = clamp(dot(n, v), 1e-3, 1.0), nh = clamp(dot(n, h), 0.0, 1.0), vh = clamp(dot(v, h), 0.0, 1.0);
   vec3 f0 = mix(vec3(0.04), albedo, metallic);
   float a = max(rough * rough, 0.002), a2 = a * a;
   float dd = nh * nh * (a2 - 1.0) + 1.0;
@@ -60,6 +74,25 @@ vec3 shade(vec3 albedo, float metallic, float rough, vec3 n, vec3 v, float shado
   vec3 fenv = f0 + (max(vec3(1.0 - rough), f0) - f0) * pow(1.0 - nv, 5.0);
   amb += env * fenv * (1.0 - rough * 0.7) * ao * 0.6;
   return direct + amb;
+}
+
+// (Phase 7) the lamps' and headlights' light pools: diffuse with a smooth range falloff (inverse square, windowed)
+vec3 localLights(vec3 albedo, vec3 n, vec3 rel) {
+  vec3 sum = vec3(0.0);
+  int cnt = int(uLightCount.x);
+  for (int i = 0; i < SL_MAX_LIGHTS; i++) {
+    if (i >= cnt) break;
+    vec4 a = uLight[i * 3], b = uLight[i * 3 + 1], c = uLight[i * 3 + 2];
+    vec3 d = a.xyz - rel;
+    float dist = length(d);
+    if (dist > a.w) continue;
+    vec3 l = d / max(dist, 1e-3);
+    float win = clamp(1.0 - pow(dist / a.w, 4.0), 0.0, 1.0);
+    float att = win * win / (dist * dist + 1.0);
+    float spot = b.w < -1.5 ? 1.0 : smoothstep(b.w, c.w, dot(-l, c.xyz));
+    sum += b.rgb * (att * spot * max(dot(n, l), 0.0));
+  }
+  return sum * albedo / PI;
 }
 
 // fog.js: exponential height fog integrated along the view ray + valley haze + aerial perspective
@@ -113,6 +146,7 @@ layout(location = 6) in vec4 aInst1;   // x yaw, y roll (about the local z axis)
 layout(location = 9) in vec4 aRow0;    // rows of a 3x4 world matrix (translation relative to uInstOrigin)
 layout(location = 10) in vec4 aRow1;
 layout(location = 11) in vec4 aRow2;
+layout(location = 12) in vec4 aTint;   // (Phase 7) per instance: paint colour / livery (a = 0: the model's own)
 uniform vec3 uInstOrigin;              // the batch's origin relative to the camera
 #endif
 layout(location = 7) in vec3 aColor;
@@ -121,8 +155,10 @@ out vec3 vRel;
 out vec3 vNormal;
 out vec2 vUV;
 out vec3 vColor;
+out vec4 vTint;
 void main() {
   vec4 p = vec4(aPos, 1.0);
+  vTint = vec4(0.0);
   vec3 n = aNormal;
   vColor = aColor;
 #ifdef SKINNED
@@ -147,6 +183,7 @@ void main() {
   mat3 R = mat3(aRow0.x, aRow1.x, aRow2.x, aRow0.y, aRow1.y, aRow2.y, aRow0.z, aRow1.z, aRow2.z);
   p.xyz = R * p.xyz + vec3(aRow0.w, aRow1.w, aRow2.w) + uInstOrigin;
   n = R * n;
+  vTint = aTint;
 #endif
   vRel = p.xyz;
   vNormal = n;
@@ -160,6 +197,7 @@ in vec3 vRel;
 in vec3 vNormal;
 in vec2 vUV;
 in vec3 vColor;
+in vec4 vTint;
 out vec4 oColor;
 uniform sampler2D uBase;
 uniform sampler2D uMR;
@@ -170,10 +208,16 @@ uniform vec4 uMat;        // metallic, roughness, normal scale, alpha cutoff (<0
 uniform vec4 uFlags;      // has base tex, has mr tex, has normal tex, double sided
 uniform vec4 uFlags2;     // vertex colour, has emissive map, night glow strength, vertex colour stored as sqrt
 uniform vec3 uEmissive;   // already scaled for the time of day
+uniform vec4 uFlags3;     // (Phase 7) x paint mode (1 car paint: the instance colour, 2 livery: red -> the instance colour)
 void main() {
   vec4 base = uBaseColor;
+  if (vTint.a > 0.0 && uFlags3.x > 0.5 && uFlags3.x < 1.5) base.rgb = vTint.rgb;
   vec3 texel = vec3(1.0);
   if (uFlags.x > 0.5) { vec4 t = texture(uBase, vUV); texel = t.rgb; base *= t; }
+  if (vTint.a > 0.0 && uFlags3.x > 1.5) {
+    float red = smoothstep(0.04, 0.2, base.r - max(base.g, base.b) * 1.1);
+    base.rgb = mix(base.rgb, vTint.rgb * (0.35 + 2.4 * dot(base.rgb, vec3(0.5, 0.35, 0.15))), red * vTint.a);
+  }
   if (uFlags2.x > 0.5) base.rgb *= uFlags2.w > 0.5 ? vColor * vColor : vColor;
   if (uMat.w >= 0.0 && base.a < uMat.w) discard;
   float metallic = uMat.x, rough = uMat.y;
@@ -181,7 +225,11 @@ void main() {
   vec3 n = normalize(vNormal);
   vec3 v = normalize(-vRel);
   if (uFlags.w > 0.5 && dot(n, v) < 0.0) n = -n;
+#ifdef SL_LOW
+  if (uFlags.z > 0.5 && dot(vRel, vRel) < 900.0) {   // (simplified shaders: no normal maps past 30 m)
+#else
   if (uFlags.z > 0.5) {
+#endif
     vec3 tn = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
     tn.xy *= uMat.z;
     n = perturbNormal(n, vRel, vUV, normalize(tn));
@@ -194,7 +242,7 @@ void main() {
     float warm = smoothstep(0.35, 0.8, texel.r - texel.b * 0.8) * smoothstep(0.25, 0.6, texel.r);
     em += vec3(1.0, 0.62, 0.28) * warm * uMisc.x * uFlags2.z;
   }
-  vec3 col = shade(base.rgb, metallic, clamp(rough, 0.04, 1.0), n, v, sh, 1.0) + em;
+  vec3 col = shade(base.rgb, metallic, clamp(rough, 0.04, 1.0), n, v, sh, 1.0) + em + localLights(base.rgb, n, vRel);
   oColor = vec4(applyFog(col, vRel), base.a);
 }
 )GLSL";
@@ -261,10 +309,12 @@ void main() {
   vec3 nn = normalize(mix(sn, n, rockK));
   float sh = shadowAt(vRel, n);
   vec3 v = normalize(-vRel);
-  vec3 col = shade(alb, 0.0, mix(0.62, 0.85, rockK), nn, v, sh, 1.0);
+  vec3 col = shade(alb, 0.0, mix(0.62, 0.85, rockK), nn, v, sh, 1.0) + localLights(alb, nn, vRel);
+#ifndef SL_LOW
   // sun glints on the snow
   float glint = pow(max(dot(reflect(-v, nn), uSunDir.xyz), 0.0), 400.0) * (1.0 - rockK) * near * step(0.92, b.a);
   col += uSunColor.rgb * glint * 0.4 * sh;
+#endif
   oColor = vec4(applyFog(col, vRel), 1.0);
 }
 )GLSL";
@@ -309,8 +359,11 @@ inline const char* kPostFS = R"GLSL(
 in vec2 vNdc;
 out vec4 oColor;
 uniform sampler2D uHdr;
+uniform sampler2D uBloom;   // (Phase 7) the bloom (quarter res, blurred bright parts)
 uniform float uExposure;
 uniform int uToneMap;   // 0 ACES filmic, 1 Neutral
+uniform vec4 uPost;     // x bloom strength, y vignette, z speed streaks (0..1), w flash (white)
+uniform vec4 uPost2;    // x hit (red), y time
 vec3 RRTAndODTFit(vec3 v) {
   vec3 a = v * (v + 0.0245786) - 0.000090537;
   vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
@@ -338,9 +391,58 @@ vec3 neutral(vec3 c) {
 }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
-  vec3 c = texture(uHdr, vNdc * 0.5 + 0.5).rgb;
+  vec2 uv = vNdc * 0.5 + 0.5;
+  vec3 c = texture(uHdr, uv).rgb;
+  if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+  // speed streaks (screen effects): a radial smear toward the edges at speed
+  if (uPost.z > 0.001) {
+    vec2 dir = uv - 0.5;
+    float r = length(dir);
+    float k = uPost.z * smoothstep(0.18, 0.7, r) * 0.035;
+    vec3 acc = c;
+    for (int i = 1; i <= 4; i++) { vec3 q = texture(uHdr, uv - dir * k * float(i)).rgb; if (!(any(isnan(q)) || any(isinf(q)))) acc += q; }
+    c = acc / 5.0;
+  }
+  if (uPost.x > 0.0) c += texture(uBloom, uv).rgb * uPost.x;
   c = uToneMap == 1 ? neutral(c) : aces(c);
+  // vignette, the white flash of a big landing, the red edge of a crash
+  float vr = length(vNdc * vec2(0.9, 1.0));
+  c *= 1.0 - uPost.y * smoothstep(0.6, 1.45, vr);
+  c = mix(c, vec3(1.0), clamp(uPost.w, 0.0, 1.0) * 0.5);
+  c = mix(c, vec3(0.55, 0.02, 0.02), clamp(uPost2.x, 0.0, 1.0) * smoothstep(0.5, 1.4, vr) * 0.7);
   oColor = vec4(toSRGB(clamp(c, 0.0, 1.0)), 1.0);
+}
+
+)GLSL";
+
+// ---------------------------------------------------------------- (Phase 7) bloom: a bright pass + separable blur
+inline const char* kBloomFS = R"GLSL(
+in vec2 vNdc;
+out vec4 oColor;
+uniform sampler2D uSrc;
+uniform vec2 uTexel;     // source texel size
+uniform vec2 uDir;       // 0,0: the bright pass (downsampled); else the blur direction in texels
+uniform float uThreshold;
+void main() {
+  vec2 uv = vNdc * 0.5 + 0.5;
+  if (uDir == vec2(0.0)) {
+    vec3 s = vec3(0.0);
+    for (int y = -1; y <= 1; y += 2) for (int x = -1; x <= 1; x += 2) {
+      vec3 q = texture(uSrc, uv + vec2(x, y) * uTexel).rgb;
+      if (!(any(isnan(q)) || any(isinf(q)))) s += min(q, vec3(64.0));   // (no NaN / inf into the blur)
+    }
+    s *= 0.25;
+    float l = max(s.r, max(s.g, s.b));
+    oColor = vec4(s * (max(l - uThreshold, 0.0) / max(l, 1e-4)), 1.0);
+    return;
+  }
+  const float w[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+  vec3 s = texture(uSrc, uv).rgb * w[0];
+  for (int i = 1; i < 5; i++) {
+    s += texture(uSrc, uv + uDir * uTexel * float(i) * 1.5).rgb * w[i];
+    s += texture(uSrc, uv - uDir * uTexel * float(i) * 1.5).rgb * w[i];
+  }
+  oColor = vec4(s, 1.0);
 }
 )GLSL";
 

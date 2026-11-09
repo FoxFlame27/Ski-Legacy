@@ -7,9 +7,10 @@ A portable C++20 rewrite of Ski Legacy (the Three.js / Electron game in `../src`
 props, signs, gondola and railway stations, all 18 gondolas and chairlifts in motion, boarding and riding them, day /
 night lighting), **Phase 3** (roads, tunnels, car parks, your car, traffic, the ski buses, the Wolkenspitzbahn and
 the Legacy Express), **Phase 4** (menus, HUD, trail map, the economy and saving), **Phase 5** (races, jobs and the
-taxi, the police / prison / impound, the rescue and the hospital, chalets and build mode, people, snowmobiles, weather)
-and **Phase 6** (multiplayer: a C++ client for the game's Node server over wss://) are done. Phase 7 is listed at the
-end of this file.
+taxi, the police / prison / impound, the rescue and the hospital, chalets and build mode, people, snowmobiles, weather),
+**Phase 6** (multiplayer: a C++ client for the game's Node server over wss://) and **Phase 7** (audio from the game's
+recordings, visual polish, the Switch performance preset, packaging and the release workflow) are done. Where the port
+stands against the JS game: "Status" near the end; what a Switch release still needs: "Nintendo Switch porting checklist".
 
 ---
 
@@ -17,9 +18,10 @@ end of this file.
 
 Dependencies are fetched by CMake (`FetchContent`) and pinned to exact tags; nothing has to be installed system-wide
 except a compiler, CMake ≥ 3.20, Ninja (optional), **Python 3** (glad generates the OpenGL loader at configure
-time from the specification it ships; no network access is needed for that step) and **Node.js ≥ 22.15** with the
+time from the specification it ships; no network access is needed for that step), **Node.js ≥ 22.15** with the
 repository's `node_modules` (`npm install` in the repo root): the exported world data is not committed, the build
-makes it.
+makes it — and (Phase 7) **ffmpeg** to convert the game's sounds (`public/audio`, AAC) to Ogg Vorbis
+(`native/data/audio`, ~1 min the first time; without ffmpeg the build warns and the game plays synthesized sounds).
 
 ```sh
 npm install                                # once, in the repo root (three.js, the fonts: the exporters need them)
@@ -59,36 +61,54 @@ overrides both.
 ### macOS (Mac mini M2 / MacBook Air)
 ```sh
 xcode-select --install           # Apple clang + Python 3
-brew install cmake ninja node && npm install
+brew install cmake ninja node ffmpeg && npm install
 cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build native/build
 ```
 macOS supports OpenGL up to 4.1 core (deprecated but working on Apple silicon); the renderer uses nothing newer.
 A Metal path, if ever wanted, is a new `gfx/` backend (see Architecture).
 
 ### Windows (Visual Studio 2022)
-Install "Desktop development with C++" (includes CMake and Ninja), Python 3 (python.org or the VS installer) and
-Node.js 22 LTS (nodejs.org), then `npm install` in the repo root.
+Install "Desktop development with C++" (includes CMake and Ninja), Python 3 (python.org or the VS installer),
+Node.js 22 LTS (nodejs.org) and ffmpeg (`winget install ffmpeg` or `choco install ffmpeg`), then `npm install` in the
+repo root.
 From a *x64 Native Tools* prompt:
 ```bat
 cmake -S native -B native\build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build native\build
-native\build\ski_legacy.exe
+native\build\SkiLegacy.exe
 ```
+(Phase 7: the executable is `SkiLegacy.exe`, a Windows-subsystem program with the game's icon: no console window; run
+it from a terminal with `start /wait` or redirect its output to see the log.)
 (or `cmake -S native -B native\build -G "Visual Studio 17 2022"` and open the solution).
 
 ### Linux
 ```sh
-sudo apt install build-essential cmake ninja-build python3 libgl1-mesa-dev libx11-dev libxext-dev \
-                 libasound2-dev libpulse-dev   # audio headers optional (SDL falls back to silence)
+sudo apt install build-essential cmake ninja-build python3 ffmpeg libgl1-mesa-dev libx11-dev libxext-dev \
+                 libasound2-dev libpulse-dev   # audio headers: without them SDL has no audio device (silent)
 # Node.js >= 22.15 (nodejs.org / NodeSource), then in the repo root:
 npm install
 cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build native/build
 ```
 
+### Packages (Phase 7)
+```sh
+# macOS: Ski Legacy.app (universal) in a .dmg
+cmake -S native -B native/build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release -DSL_COPY_ASSETS=ON -DSL_MACOS_BUNDLE=ON \
+      -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" && cmake --build native/build-pkg && (cd native/build-pkg && cpack)
+# Windows (VS 2022): SkiLegacy.exe + assets/ in a .zip
+cmake -S native -B native\build-pkg -G "Visual Studio 17 2022" -A x64 -DSL_COPY_ASSETS=ON && cmake --build native\build-pkg --config Release && cd native\build-pkg && cpack -C Release
+# Linux: ski_legacy + ski-legacy.sh + assets/ in a .tar.gz
+cmake -S native -B native/build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release -DSL_COPY_ASSETS=ON && cmake --build native/build-pkg && (cd native/build-pkg && cpack)
+```
+-> `Ski-Legacy-Native-Mac.dmg` / `-Windows.zip` / `-Linux.tar.gz` in the build folder (`cmake --install <build>
+--prefix <dir>` gives the unpacked folder). The GitHub workflow `.github/workflows/native.yml` does exactly this on
+macOS, Windows and Linux runners for every push to legacy-express touching `native/**` (and on demand) and publishes the
+three files as the rolling `latest-native` release.
+
 ### Command line
 | option | |
 |---|---|
-| `--quality low\|medium\|high\|ultra` | graphics preset (terrain LOD, shadow map, tree distances, render scale); else the SETTINGS preset of the save |
+| `--quality switch\|low\|medium\|high\|ultra` | graphics preset (terrain LOD, shadow map, tree distances, render scale; Phase 7: texture cap / compression, triangle budget, LOD scale, NPC density, lights, simplified shaders, dynamic resolution); else the SETTINGS preset of the save. `switch` = the Nintendo Switch budget |
 | `--no-menu` | straight into the game (no main menu) |
 | `--save name.json` | another save slot (default `ski-legacy-save-v1.json` in the platform's save directory) |
 | `--spawn village\|piste` | start on the village plaza (as the web game) or at the top of a run |
@@ -96,7 +116,7 @@ cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --b
 | `--bindings binds.json` | rebinding, same shape as the web save's `binds` (`{"kb":{"jump":"KeyJ"},"pad":{"jump":1}}`) |
 | `--neutral` | Khronos PBR Neutral tone mapping instead of ACES filmic |
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
-| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled`). Uses its own fresh save (`autotest-save.json`) |
+| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; (Phase 7) the audio running throughout (with SDL's dummy driver the mixer still renders: samples decoded, one-shots, music tracks, frames mixed), the outfit applied, two night shots at 21:30 (the plaza's lamps and flags, a snow gun spraying), the `[perf]` report (CPU ms per system, draw calls, triangles, GPU memory, RSS / peak RSS, streaming); print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled` `_night` `_spray`). Uses its own fresh save (`autotest-save.json`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
 | `--server URL` | (Phase 6) the multiplayer server (else `SKI_LEGACY_SERVER`, else the game's `wss://138-199-163-183.sslip.io/ws`) |
 | `--mptest URL [--mp-peers N] [--mp-seconds S]` | (Phase 6) the multiplayer check against a running server: the menus (PLAY -> MULTIPLAYER -> REGISTER a fresh name -> JOIN A WORLD), presence for S s (default 8), N other players seen (their avatars and name cards; a screenshot with `--png`), a ride in another player's car when one is parked, rental skis bought at the ski shop and a day pass at the ticket seller (checked against the server's own copy of the profile), chat, a dropped connection resumed, LEAVE MULTIPLAYER (the single-player save back); exit 0 / 1. Own save `mptest-save.json` |
@@ -106,6 +126,8 @@ cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --b
 SDL_AUDIODRIVER=dummy xvfb-run -a -s "-screen 0 1280x720x24" ./native/build/ski_legacy --autotest --frames 600 --png /tmp/frame.png
 ./native/build/ski_legacy --verify-heights
 ```
+(Phase 7: the audio runs in the autotest too — with `SDL_AUDIODRIVER=dummy` the mixer renders into SDL's dummy device;
+without any audio device the game runs silent and the check passes as "no device".)
 `SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier` switches parts of the scene off for profiling (`novillage`: the
 whole resort); `sidecam` looks at the rider from the side while riding, `chairtest` makes the autotest ride a chairlift,
 `vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `maptest`
@@ -184,8 +206,11 @@ native/
                                              -DSL_COPY_ASSETS=ON copy
   tools/mp_peer.mjs                          (Phase 6) a JS test player for --mptest (walks, chats, parks a car, says yes)
   cmake/CheckNodeModules.cmake               the data step's "run npm install" check
+  cmake/ConvertAudio.cmake                   (Phase 7) public/audio (AAC) -> data/audio (Ogg Vorbis) with ffmpeg
+  cmake/Info.plist.in, ski-legacy.sh,        (Phase 7) the macOS bundle's plist, the Linux launcher, the packages' README
+    PACKAGE-README.txt                       (install / CPack rules at the end of CMakeLists.txt)
   data/  (generated, git-ignored)            world.json, crag.bin, cuts.bin, regions.bin, resort.json / .bin,
-                                             transport.json / .bin, each as .zst (~28 MB); fonts/
+                                             transport.json / .bin, each as .zst (~28 MB); fonts/; audio/ (Phase 7, 25 MB)
   src/
     main.cpp                                 command line
     platform/platform.h                      THE platform interface (window/surface, input, rumble, time,
@@ -196,10 +221,12 @@ native/
                                              render targets, pipeline state, draws)
     gfx/gl/gl_device.cpp                     OpenGL 4.1 core backend (glad)
     core/                                    noise.js port, input mapping (bindings.js), button prompts (prompts.js),
-                                             job system, asset paths + zstd data reading, log
+                                             job system, asset paths + zstd data reading, log, perf (CPU ms per system)
     engine/                                  asset manager (cgltf + meshoptimizer + libwebp), models / skinning /
-                                             animation, renderer (shadow map, PBR, terrain, sky, tone mapping, HUD),
-                                             procedural audio, quality presets, shaders
+                                             animation, renderer (shadow map, PBR, terrain, sky, tone mapping, HUD;
+                                             Phase 7: point / spot lights, bloom, screen effects, per-instance tint),
+                                             audio (Phase 7: the mixer, audio.js's sound design, stb_vorbis), quality
+                                             presets (+ switch), shaders, texcompress (BC1 / BC3 with stb_dxt)
     world/                                   world.js / wolkenspitze.js / legacypeak.js height port, quadtree terrain,
                                              scenery (trees from vegetation.js, colliders), resort (Phase 2 data),
                                              lifts (lifts.js motion + riding), gondola_station (gondolastation.js),
@@ -216,7 +243,8 @@ native/
                                              Legacy Express); (Phase 4) menus, hud, trailmap, economy (+ save); (Phase 5)
                                              play (the shared context) / play_data, races, jobs (+ taxi), police (+ prison,
                                              vehicle / people hits), rescue (+ hospital), chalets (+ build mode), interiors,
-                                             people (+ PeopleSim), snowmobile, weather, shapes; (Phase 6) mp_session
+                                             people (+ PeopleSim), snowmobile, weather, shapes; (Phase 7) scenefx (lamps'
+                                             light pools, car lights and plates, snowmaking, flags, snowcats); (Phase 6) mp_session
                                              (session.js: account, login, the save swap, presence, the server economy,
                                              seats, rides, chat), mp_view (the other players drawn, name cards, overlays)
 ```
@@ -298,7 +326,7 @@ node native/tools/export_world.mjs      # ~35 s
 - The skier's pose is a few procedural layers on the clips, not `skier.js`'s full rig (poles, pole plants,
   gloves-and-poles first-person view are missing).
 - Time of day and night lights came with Phase 2; still no weather, clouds, snowfall.
-- Audio is synthesised (no `public/audio` samples yet).
+- Audio is synthesised (no `public/audio` samples yet). *(Phase 7: the recordings, see below.)*
 - Meshy models' baked emissive is ignored (as the web game's materials do); the night glow is `addNightGlow`'s.
 
 
@@ -530,7 +558,8 @@ world ready in 13.60 s ...
   surface, is still exact to 2.5 mm). The data grew to ~107 MB (regions 13 MB, cuts 13 MB, transport 58 MB): to be
   compressed / baked for the Switch package (Phase 7).
 - **Cars**: no moving wheels or steering wheel, no dents (damage is a number), no headlights / tail lights / light
-  pools (the L key only toggles the flag), no engine / tyre / horn sounds (audio is Phase 7), no tyre tracks; the
+  pools (the L key only toggles the flag), no engine / tyre / horn sounds (audio is Phase 7), no tyre tracks *(Phase 7:
+  wheels, lights, light pools, sounds, paint and plates done)*; the
   cockpit view shows the car's own interior only as far as its GLB has one (no `_full` models, no seated driver's
   hands); paint colours of the parked / traffic cars are the models' own; the Autohaus showroom (inside), the
   configurator, the garage / selling, the Werkstatt, the tow truck, police, taxi and bad drivers are not ported.
@@ -541,7 +570,7 @@ world ready in 13.60 s ...
 - **Buses**: no overtaking / ramming, the fleet's rounds are a simple rotation (not bus.js's slotted timetable), no
   passengers or driver, no turn-round fade at intermediate stops (the seat view inside the Micruss and the R chase
   view are there).
-- **Trains**: the Express wears the Wolkenspitzbahn's red (no Legacy blue livery), no seated passengers; the default
+- **Trains**: the Express wears the Wolkenspitzbahn's red (no Legacy blue livery: *Phase 7 paints it blue*), no seated passengers; the default
   view is the chase camera (in a tunnel: close behind the train, the sky and sun faded out, no terrain drawn) — R gives
   the seat view in the procedural cabin, whose lounge seat looks at the dark cab partition (the JS's glazed cab and
   the Express's Meshy seats are not reproduced); no trains braking for you on the track, no clocks / departure boards; the Express's stations and the Wolkenspitzbahn's platforms are captured
@@ -637,10 +666,12 @@ world ready in 15.29 s (the trail map's relief builds on the worker threads mean
   tails are coarser), no screen transitions beyond a slide-in, no menu sounds (audio is Phase 7); the Inter font is the
   variable font's default instance (weight 400: no bold Inter), no kerning (GPOS).
 - **Menus**: MULTIPLAYER and the account were stubs (Phase 6 made them real, with a typed name field); the graphics
-  preset needs a restart; music volume, bloom, camera shake and screen effects are stored but have nothing to drive yet;
+  preset needs a restart; music volume, bloom, camera shake and screen effects are stored but have nothing to drive yet
+  *(Phase 7: all four drive something now)*;
   no virtual mouse.
 - **Shops**: one card dialog instead of the walk-in ski shop and the outfit shop's 3D podium; outfits are bought and
-  stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet; no kits.
+  stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet; no kits
+  *(Phase 7: outfits shown, ski stats in the physics)*.
 - **Cars**: no configurator (paint, rims, interior, custom plates), no showroom interior or salesman, no tow truck
   driving (the car reappears), the impound is a fee when it is towed rather than a yard you pay at.
 - **Rescue**: no helicopter or ambulance ride (you come round at the medical centre), no hospital ward; no jobs or
@@ -974,30 +1005,282 @@ world ready in 22.18 s: 315 terrain nodes, 1908 trees in range, 29404 resort pro
 
 ---
 
-## Nintendo Switch plan
+## What Phase 7 ports
 
-What has to come from Nintendo (none of it can be in this repository):
-1. **Nintendo Developer Portal account** and acceptance as a licensed Switch developer (company / sole trader,
-   game pitch). This gives the **NintendoSDK** (toolchain: clang-based, CMake toolchain file), documentation,
-   **dev kits** (SDEV / EDEV hardware) and the Developer Portal forums.
-2. **Graphics**: NVN (Nintendo's native low-level API, best performance) or the **Vulkan** driver the SDK provides.
-   Add `gfx/nvn/` (or `gfx/vulkan/`) implementing `gfx::Device`; compile the GLSL in `engine/shaders.h` offline
-   with the SDK's shader compiler (the programs are already split into the same handful of variants).
-3. **SDL2 Switch port** (official, available to licensed developers through the portal) — or a native
-   `platform/switch/platform_switch.cpp` written against `nn::*`. The contract each part must meet is documented in
-   `src/platform/switch/switch_platform.h`: display / operation mode (docked 1080p, handheld 720p), **Joy-Con /
-   Pro Controller** via `nn::hid` mapped by position, controller applet, **HD Rumble**, **file system** (`rom:`
-   for the packaged `assets/`, **save data** `save:` per user with commit), **user account** (preselected user's
-   nickname), **audio** (`nn::audio`), time, suspend / resume.
-4. **Lotcheck**: Nintendo's certification. Plan for the guidelines from the start: correct controller UI terms and
-   button glyphs per region, the controller applet, save data commit and size limits, behaviour when suspended /
-   resumed / the console sleeps, no crashes or hangs on long play, loading-screen times, age ratings (IARC / per
-   region), and online rules for Phase 6's multiplayer (Nintendo Account, NSO, network service agreements; the socket
-   and TLS layer is `net/stream.h`: implement it on `nn::socket` / NEX with `nn::ssl`).
-5. **Performance budget**: Tegra X1 — target 30 fps (docked 1080p dynamic-res, handheld 720p). The engine is built
-   for it: quality presets (`--quality low` ≈ handheld), render scale for dynamic resolution, worker threads for
-   streaming (3 cores), instancing, LODs, a single shadow map. Phase 7 adds ASTC textures, packed vertex formats and
-   GPU profiling on the dev kit.
+**Audio** (`engine/audio`, a port of `src/core/audio.js`; behind `Platform::openAudio`, one 48 kHz float stream).
+- **The recordings**: `public/audio` (the web game's AAC `.m4a`: 50 sound effects, 26 announcer / station-PA lines, 18
+  music tracks; licences in `CREDITS.txt`) are converted by the build to **Ogg Vorbis** in `native/data/audio`
+  (`cmake/ConvertAudio.cmake`, ffmpeg: mono q3 for effects and voice, stereo q1 for music; only new / changed files;
+  ~1 min the first time; 25 MB) and decoded with **stb_vorbis** (the pinned stb commit, compiled once as C). No AAC
+  decoder in the native build (licences / patents; one codec on every platform incl. the Switch). Without ffmpeg the
+  build warns and the game plays the synthesized fallbacks, as the web game does until its files load.
+- **Mixer**: sfx / music / voice buses -> master (`volume`) -> glue compressor (-12 dB, 6:1, 4 / 220 ms) -> the web game's
+  soft clipper; the announcer ducks the music to 0.42 (and a close siren another -3 dB). Voices: samples with pitch,
+  low / high pass (RBJ biquads), delays, sprites (the variations inside one file: `step`, `land`, `crash_car`...,
+  `SPRITE_GAIN`), loops crossfaded into themselves (`loopify`), synthesized tones / filtered noise bursts / sweeps
+  (`tone`, `burst`, `sweep`: every fallback of `play()`); continuous instruments: the police / ambulance two-tone
+  siren, the helicopter rotor (brown noise chopped at 19 Hz + turbine whine), the snowmobile's two-stroke, the electric
+  car (motor + inverter), the starter whir, turbo whistle, tyre squeal, the car horn. Commands and parameter snapshots
+  go to the audio thread under one short mutex; finished music decoders are freed on the game thread.
+- **What plays**: skiing (`setState`: the carve / scrape / powder loops by speed, edge, sideslip, ice and deep snow, the
+  wind rush by speed (louder in a tuck / in the air), the mountain ambience by altitude, snowfall and the weather's
+  wind), footsteps (the 20 `step` takes), pops, landings (the snow crunch + body thump + sub weight by impact), bumps,
+  crashes (`bodyfall_heavy` + `snow_burst`, "Wipeout!" in a race); the car (`setCar`: the recorded engine loops
+  `eng_<profile>_<i>` crossfaded equal-power and pitched by the rpm, per drive.js `sound` profile v8 / gti / i6 / i4 /
+  v10 / i3t / v8s with the aliases; load filter; the starter recording timed to drive.js's crank; pops on gear changes,
+  overrun crackle, blow-off; the electric cars' synth; the cabin low pass in the cockpit), doors, impacts by surface
+  (`impact`: car, tree, building, rock, metal, net, snow: the recordings layered by amount), `carCrash`, guardrails;
+  the **air horns** of the bus (two-tone, `bus` / `bus2`) and the trains (the Typhon chord, `train` / `train_short`)
+  rendered once at start-up from `hornSpecs` (pulse trumpets a few cents apart, drive, formants, scoop / sag, hiss,
+  "pfff") with the valley's echo, sounding as a bus pulls out of a stop / a train leaves a station near you; lifts
+  (`lift_clunk` boarding, the motor hum riding); the police siren on the nearest chasing patrol car and the ambulance,
+  the police / rescue helicopters' rotor (positional); the race's beeps, gate dings, misses, the finish, the crowd and
+  the **announcer** (3-2-1-GO, checkpoint, first / second / third / personal best, gold / silver / bronze) and the
+  Wolkenspitzbahn's recorded **PA** (departure up / down, arrival at Wolkensee / Wolkenplatt / the village, after the
+  three-tone gong); menu ticks and clicks; cash / error at the till.
+- **Music**: per context (`menu`, `freeride`, `race`, `results` (`results_win` once, then the loop), `chase` while you
+  are wanted), weighted shuffle never repeating the last few, crossfades of 1.4 / 2.5 s, `MUSIC_LEVEL` / `TRACK_GAIN`;
+  streamed from the Ogg file in memory (one decoder per deck, resampled to 48 kHz).
+- **3D**: positional one-shots and instruments use Web Audio's `inverse` distance model (refDistance / rolloff),
+  equal-power panning from the camera's right vector and air absorption (a low pass past 30 m).
+- **Settings**: master / music / sound effects / announcer volumes (`voiceVolume` is a new SETTINGS row), "Mute in
+  background" (`Events::focusLost` / the new `focusGained`), the pause fading the continuous sounds.
+
+**Visual polish.**
+- **Car wheels** (cars.js `splitWheels`): at load the cars' GLBs are kept on the CPU once (`ModelLoadOptions::keepCpu`)
+  and each is split into a body and four wheels (centres from the meshes / materials named like wheels per quadrant,
+  else from the ground contact; every triangle inside a wheel's cylinder goes to it, the paint stays on the body; the
+  shared vertices stay shared), so near cars **roll** (your car from its speed, traffic from its odometer) and your
+  front wheels **steer** (drive.js's steer angle); far cars keep the whole model's light LOD. 10 / 10 models split.
+- **Headlights and light pools**: the renderer has point / spot lights now (a `Lights` uniform block, 16 a frame, 4 on
+  Switch, the strongest near the camera chosen; diffuse with a windowed inverse-square falloff, in the mesh and
+  terrain shaders). At night your car (and every traffic car) lights the road with two spots, its lamps glow (emissive
+  quads, into the bloom), tail lights redden and brighten when braking; **lamp posts** (all 111 of the resort's,
+  transport's and courses' `lamp_post`s) throw warm light pools on the snow; snowcats light their way.
+- **Paint and plates** (carconfig.js): the instanced draw carries a per-instance colour; materials named like paint
+  take it (`Material::paint`). Your cars wear the paint you bought (`save.garage[].paint`), parked and traffic cars the
+  colours real cars come in, other players' cars their `cfg.paint`; near cars carry number plates (canvas textures in
+  the game's font: "VS 123456", your own plate on yours, AUTOHAUS on the cars for sale).
+- **The Legacy Express in its blue livery**: the same railcar body as the Wolkenspitzbahn, its red repainted Legacy
+  blue (#1546c8) per instance by a livery mode in the shader (the Wolkenspitzbahn stays red).
+- **The orange slab on the Express village station canopy** was a renderer bug: the instanced procedural pieces in the
+  packed 28-byte vertex layout (`resort.bin`'s meshes) were bound as if they were float vertices, so their colours came
+  from the next vertex's position (an HDR orange glow) and their normals / uvs were garbage. `Primitive::packed` now
+  selects the right attribute layout everywhere (also fixes the other instanced procedural pieces).
+- **Forest thinning**: the railways' formations thin the forest as in the JS (`transport.js` / `expressground.js`
+  `addCut({ forest })`): `World::forestCuts`, no trees on the Wolkenspitzbahn's or the Express's bed or right beside it
+  (the forest over the tunnels stays).
+- **Snowmaking** (snowmaking.js): at dusk and at night the five snow guns nearest you (of 168) blow a plume of fine snow
+  (the JS's particle maths: a cone out of the fan, drag, sinking, drift downwind, spreading), one instanced draw.
+- **Flags** (flags.js): the house-style masts (a row of three in the plaza, one each side of every World Cup finish,
+  25 in all), the cloths in eight slices of a canvas texture (SKI LEGACY / LEGACY / WORLD CUP in the italic lettering,
+  the bar) streaming downwind and rippling, harder in a storm.
+- **Snowcats** (snowcats.js, condensed): `snowcat.glb` groomers working three runs at night (headlights and light
+  pools), parked at the bottom by day.
+- **Outfits on the skier** (outfits.js, condensed): the skier's albedo is recoloured per garment zone — jacket (torso
+  and arms), trousers (hips and legs), helmet (the top of the head) — with zones from the skin weights rasterized into
+  the texture's UV space; the texture's own shading kept (luminance against the zone's median). Bought outfits show at
+  once (re-applied when the outfit or the character changes).
+- **Ski stats in the physics** (player.js `this.ski`): the equipped skis' speed divides the glide friction and the
+  drag (x speed² on the area), their grip multiplies the edge grip and the carve rate — the rental 1.0 / 1.0 up to the
+  Legacy Gold Edition 1.12 / 1.25.
+- **Poles in the hands**: `ski_pole.glb` from each fist to a tip planted beside and behind the boots while skiing.
+- **Bloom, screen effects, camera shake** wired to SETTINGS: bloom (bright pass at quarter resolution, separable blur,
+  threshold 3.0, strength 0.13 like post.js; a new "Bloom" row), speed streaks (a radial smear past ~65 km/h), the
+  vignette, the white flash of a hard landing and the red edge of a crash ("Screen effects"), camera shake (a fine buzz
+  at speed, jolts on landings, crashes and car knocks: "Camera shake"). NaN-safe now (a GGX term of a dot product a
+  hair over 1 was NaN; the bloom spread those pixels into black blocks before the clamp).
+
+**Performance for Switch-class hardware.**
+- **`--quality switch`** (also a SETTINGS row, "Switch (handheld)") — modelled on the console (1280x720 handheld /
+  1920x1080 docked, ~3.2 GB of its 4 GB for a game, Maxwell 256 cores at 0.3-0.77 GHz ≈ 0.2-0.4 TFLOPS, four A57 cores):
+  textures capped at **512** and **BC1 / BC3 block-compressed** at load (`engine/texcompress`, stb_dxt; Maxwell
+  samples BC natively; the signs' canvases too), a **90k-triangle budget per model** (the heavy GLBs — the police car
+  750k, the chalet 538k, the GLS 520k — simplified with meshoptimizer and their vertex buffers compacted), shadow map
+  1024 over 50 m with **single-tap PCF**, **simplified shaders** (`SL_LOW`: no normal maps past 30 m, no glints, 4 lights),
+  LOD / cull distances x0.6 (props, course / resort meshes, flags, snowcats), trees 22 / 85 / 320 m, terrain LOD 1.05,
+  far plane 14 km, **half the townsfolk, skiers and traffic**, 24 people drawn, **dynamic resolution** (60-100 % of the
+  output, following the frame time toward 30 fps; off in the autotest).
+- **Streaming**: the baked mesh chunks (the resort's, the transport's and the courses' meshes, 2450 of them) are kept
+  zstd-packed on the CPU (92 MB raw -> 36 MB) and uploaded within ~1.8 km (x LOD scale) of the camera, nearest first, up
+  to 6 MB a frame, released 400 m further out (on Switch's unified memory a released chunk is memory back); the course
+  meshes no longer stand everywhere. The transport / play packs' parsed JSON and raw bins are dropped once read.
+- **Leaner GPU data**: the procedural meshes (`mesh_kit`: track, guardrails, stations, kits) use the packed 28-byte
+  vertex (was 44 bytes of floats), the wheel split shares vertices.
+- **Measured in the autotest** (CPU ms per system per frame, mean / max; draw calls, triangles, GPU texture / buffer
+  memory, RSS and its peak, the streaming counters): `[perf]` lines after the skiing and at the end, see below.
+
+**Packaging.** `-DSL_COPY_ASSETS=ON` gathers the assets next to the executable (or into the bundle's `Contents/Resources`; 151 models, `native/data` incl. the
+audio); `cmake --install` / `cpack` lay out and pack the game: macOS **Ski Legacy.app** (`-DSL_MACOS_BUNDLE=ON`:
+`cmake/Info.plist.in`, the icon from `build/icon.icns`, the assets in `Contents/Resources/assets`, which `AssetPaths`
+finds; universal arm64 + x86_64 with `CMAKE_OSX_ARCHITECTURES`) in a drag-to-Applications **.dmg**; Windows a folder
+with **SkiLegacy.exe** (icon from `build/icon.ico`, no console) + `assets/` as **.zip**; Linux a folder with `ski_legacy`,
+`ski-legacy.sh` and `assets/` as **.tar.gz**. **`.github/workflows/native.yml`** (workflow_dispatch + pushes to
+legacy-express touching `native/**`) builds all three (npm ci for the data export, ffmpeg for the audio) and publishes
+them as the rolling **`latest-native`** release: `Ski-Legacy-Native-Mac.dmg`, `Ski-Legacy-Native-Windows.zip`,
+`Ski-Legacy-Native-Linux.tar.gz`. The Electron workflows are untouched.
+
+
+**The checks** (`--autotest`, `--quality medium`, SDL's dummy audio driver, llvmpipe): every Phase 1-6 check as before,
+plus:
+```
+quality: medium (textures <= 2048, shadow map 2048 over 80 m, LOD x1.00, far 30000 m, NPCs x1.00, 16 lights)
+vehicles: 10 of 10 car models with their wheels split off (rolling / steering)
+audio: 50 sound effects and 26 announcer lines decoded in 0.55 s (0 missing)
+scene fx: 111 lamps, 168 snow guns, 25 flag masts, 3 snowcats
+[autotest] outfit applied: {"jacket":"j_sunset","trousers":"t_navy"} -> recoloured
+[autotest] race sound: count:3 / count:2 / count:1 / go / checkpoint / checkpoint / finish:record / medal:silver / results
+[autotest] night: 33 lamps lit (the plaza), 5 snow guns spraying, 6 car headlights, 2 plates (behind a traffic car) -> ok
+[autotest] audio: device open, 50 sound effects + 26 announcer lines decoded in 0.55 s (0 missing, 24.0 MB PCM), 37640192 frames mixed, 76 one-shots + 13 synthesized, peak 22 voices, 10 music tracks started (last 'ride_alive'), peak level 0.53 -> ok
+[autotest] scene fx: 33 lamps lit, 6 car lights, 2 plates, 2 snow guns spraying, 25 flags, 3 snowcats; car wheels split: yes; outfit worn
+[perf] quality 'medium': peak RSS 3582 MB (budget on Switch: well under 3 GB)
+[autotest] PASS
+```
+`--quality switch` passes the same run (peak RSS 2166 MB); `--verify-heights` PASS; `--mptest` against a local server
+with the JS peer PASS; `server/test.mjs` 415 passed (the server is unchanged).
+
+### Performance (the autotest's `[perf]` report)
+
+Measured on the reference container (Mesa **llvmpipe**: software rendering on 4 CPU cores, 1280x720; GPU memory
+lives in system RAM there, so **RSS counts textures and buffers too** — the closest a PC gets to the Switch's unified
+memory), the full `--autotest` (600 frames of skiing every frame rendered, then the walk, the gondola, the car, the
+traffic, the bus, both trains, the race, the job, the police, the chalet, the weather, the snowmobile and the night
+shots, every 4th / 8th frame rendered):
+
+| | `--quality switch` | `--quality medium` (default) | medium before the Phase 7 memory work |
+|---|---|---|---|
+| world ready | 19.5 s | 20.2 s | 19.3 s |
+| GPU textures at ready | **291 MB** (512, BC1/BC3) | 1545 MB | 1556 MB |
+| GPU buffers at ready | **331 MB** | 508 MB | 723 MB |
+| RSS at ready | 1601 MB | 2896 MB | 3272 MB |
+| **peak RSS** (whole run) | **2166 MB** | 3582 MB | ~3.7 GB |
+| skiing: draw calls (mean / max) | 189 / 231 | 355 / 585 | ~350 / 544 (3D only) |
+| skiing: triangles (incl. shadow pass) | 2.25 M / 3.1 M | 4.36 M / 5.77 M | (not counted) |
+| rest of the run: draw calls | 652 / 2047 | 770 / 2346 | — |
+| rest of the run: triangles | 3.7 M / 7.4 M | 8.1 M / 13.9 M | — |
+| mesh chunks resident (of 2450) | 364 (14 MB) | 550 (22 MB) | all |
+
+CPU per frame by system while skiing (switch preset; this container's x86 cores): simulation (120 Hz) 0.02 ms, gameplay
+0.01, vehicles 0.02, streaming 0.14 (max 0.9), audio 0.01 (the mixer itself runs on the audio thread: ~1-2 % of a
+core), scene submit (culling, batching) 0.50 (max 1.0); the GL draw submission is not meaningful under llvmpipe (it
+rasterises: 250 ms a frame). Over the rest of the run the maxima are one-off spikes (a race being set up: 350 ms of
+gameplay; streaming a teleport's cells: 22 ms).
+
+**To verify on Switch hardware** (none of this can be measured here): GPU time per pass at 720p handheld (307-384 MHz)
+and 1080p docked with the SDK's profiler — the shadow pass and the terrain's ~1 M triangles a pass are the first
+suspects, then the alpha-tested trees; whether 30 fps holds with dynamic resolution's 60 % floor; the CPU on four
+~1 GHz A57s (expect the per-system times above x4-6, still a few ms; the draw-call spikes of ~2000 in the busiest
+places — lift lines full of cabins, the race's props — want merging / more instancing if NVN submission shows up);
+memory against the application heap after an hour of streaming; load times from the cartridge / SD card (BC at load
+takes a few seconds: an offline ASTC / BC step removes it); thermals in handheld mode.
+
+### Known gaps (Phase 7)
+- **Audio**: the Express's spoken station announcements are text-to-speech in the web game (speechSynthesis): only the
+  gong plays here (the Wolkenspitzbahn's recorded lines do play); no HRTF / reverb beyond the horns' valley echo, no
+  doppler on the siren / rotor (a pitch factor is wired, fed 1); the helicopter you fly (not ported) has no sound; the
+  studio ident's synthesized ice hit (`iceHit`) and the cold-room hum are not ported; the sledding / rail-scrape loops
+  are simplified to impacts. The mixer runs on the platform's callback thread with a mutex (fine on desktop and with
+  `nn::audio`'s renderer thread; a lock-free queue would be the polish).
+- **Wheels**: the steering wheel inside the cockpit does not turn (cars.js splits it off too), traffic's front wheels
+  don't steer (they roll); no dents, tyre tracks, seated drivers. Wheel detection uses names / the ground contact: a
+  model whose wheels are neither named nor touching the ground stays whole (all ten split today).
+- **Lights**: diffuse only (no specular highlight from the lamps), no shadows from lamps / headlights, at most 16 lights
+  a frame (4 on Switch) chosen by strength and distance; lamp heads glow by their models' night emissive, the Christmas
+  tree's point light and the piste floodlights (pistelights.js streams them) are not added.
+- **Outfits**: the zones come from the skin weights only (outfits.js also clusters the albedo's colours: accents,
+  stripes, the goggle lens): jacket accents and lenses are not recoloured; the shop's 3D podium is still a card dialog.
+- **Snowcats** follow the piste polylines (no grooming trail on the snow, no ploughs on the roads, no winch); flags
+  stand where flags.js's first candidate is (no collider check), without colliders of their own.
+- **Plates** are textures per plate text (a cache of 48); no custom-plate configurator.
+- **Performance**: measured with Mesa llvmpipe (software rendering on 4 CPU cores) — the CPU times per system are real,
+  the render times are not a GPU's. Dynamic resolution is off in the autotest. BC compression happens at load (a few
+  seconds); an offline ASTC / BC step is the console way. The rail sweep and the guardrails are built at load and stay
+  resident (~100 MB of vertices with the packed format); the resort's prop cells stay resident (instances are culled).
+- **Packaging**: the macOS app is not signed / notarized (Gatekeeper: right-click, Open) and the Windows exe is not
+  signed; the workflow has not run yet in this repository (written against the runners' current images: macOS with
+  Homebrew ffmpeg, Windows with Chocolatey ffmpeg, Ubuntu 24.04 with apt); the universal macOS build compiles every
+  dependency for both architectures (if mbedTLS's or libwebp's per-arch code ever objects, drop to arm64 only).
+
+---
+
+## Status: the native port against the JavaScript game
+
+| area | JS game (`src/`) | native (`native/`) |
+|---|---|---|
+| terrain, heights, cuts, regions | world.js, terrain.js | **ported** (`--verify-heights`: base heights and the physics surface within 2.5 mm of the JS, the regions on their 8 m grid), streamed quadtree LOD |
+| skiing physics, crashes, walking | player.js | **ported** (fixed 120 Hz, the same constants), + ski stats (Phase 7) |
+| skier rig | skier.js (full procedural rig, pole plants, first-person gloves) | clips + procedural stance, poles in the hands, outfits recoloured; no pole plants / first-person arms |
+| trees, forest thinning | vegetation.js | **ported** (cells, LODs, the railways' thinning); no boulders / scree, no impostors |
+| village, resort, signs, stations | village.js, decor.js, resortdressing.js, gondolastation.js, stationbuildings.js | **ported** (exported from the JS + the gondola stations as a C++ builder); no huts' interiors, no terrain park |
+| lifts (18), riding | lifts.js | **ported** (exact motion, boarding, mid-stations, x16) |
+| roads, tunnels, traffic, parking | roads.js, transport.js, traffic.js, parking.js | **ported** (traffic without the bay arcs / scenic walks) |
+| your car, Autohaus, garage | drive.js, carrental.js, carconfig.js | **ported** physics, damage, wheels rolling / steering, lights, paint, plates; no configurator UI, showroom, dents |
+| ski bus, Wolkenspitzbahn, Legacy Express | bus.js, railway.js, express.js | **ported** (timetables, riding, x8 / x6 / x10, the blue Express livery, horns, the rail PA) |
+| menus, HUD, settings, controls | menu.js, hud.js, settings.js, bindings.js | **ported** (all rows incl. rebinding, glyphs for Xbox / PlayStation / Switch, Bloom / Announcer added) |
+| trail map | trailmap.js | **ported** (relief, pistes, lifts, roads, rails, markers, waypoint) |
+| economy, shops, saves | economy.js, outfitshop.js | **ported** (the same save JSON); shops are card dialogs, not walk-in rooms |
+| races, records, prizes | modes/race, freeworld.js | **ported** (11 courses, bus races, stand, AI field, announcer); no broadcast presentation, no ghosts |
+| jobs, taxi | jobs/*.js, taxi.js | **ported** (simplified dialogue, no lost & found) |
+| police, prison, impound | police.js, prison.js, impound.js | **ported** (chases, heli, arrest, jail, sirens); no roadblocks / spikes / raids |
+| rescue, hospital | heli/rescue.js, ambulance.js, hospitalroom.js | **ported** (simplified rooms) |
+| chalets, build mode | chalets.js, build/* | **ported** (ground floor, catalogue, virtual mouse) |
+| people, crowds | townsfolk.js, peoplesim.js, crowds.js | **ported** (characters; no fans' keyframes) |
+| snowmobiles | snowmobile.js | **ported** |
+| weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools); no clouds layer, sun glare, sun shafts, AO |
+| snowmaking, flags, snowcats | snowmaking.js, flags.js, snowcats.js | **ported** (Phase 7; snowcats condensed: no grooming trail, no ploughs) |
+| audio | core/audio.js | **ported** (Phase 7: every recording, music, announcer, horns, 3D); the Express's text-to-speech PA lines are not spoken (gong only) |
+| multiplayer | net/*.js against server/ | **ported** (the unchanged server; no race queues, lift / bus shared timelines) |
+| player helicopter, parkour mode, terrain park, tricks | heli/*, modes/parkour, park.js, tricks.js | **not ported** |
+| post: bloom, streaks, vignette, AO, sun shafts, glare | engine/post.js | bloom, streaks, vignette, flash (Phase 7); no AO / shafts / glare |
+
+## Nintendo Switch porting checklist
+
+Nothing below can live in this repository (NDA); the code base is arranged so each item is one backend or one data
+step. In order:
+
+1. **Become a licensed developer**: register on the Nintendo Developer Portal (developer.nintendo.com), apply for the
+   Nintendo Switch program as a company / sole trader with the game's pitch; sign the agreements. This unlocks the
+   **NintendoSDK** (clang-based toolchain with a CMake toolchain file, the system libraries `nn::*`, the documentation),
+   **dev kits** (SDEV / EDEV), the guidelines and **Lotcheck** submission, and the **SDL2 Switch port**.
+2. **Graphics (`gfx/`)**: add `gfx/nvn/` (NVN: Nintendo's native API, best performance) or `gfx/vulkan/` (the SDK's
+   Vulkan driver) implementing `gfx::Device` (`gfx/gfx.h`: buffers, textures incl. `createCompressedTexture` (BC1/BC3,
+   or switch the offline step to **ASTC**), programs, vertex inputs, render targets, pipeline state, draws, the frame
+   stats). Compile the GLSL in `engine/shaders.h` offline (the SDK's shader compiler / glslc to SPIR-V): one program per
+   variant (`SKINNED`, `INSTANCED`, `INSTMAT`, `SL_LOW`, terrain, depth, sky, post, bloom, HUD, UI).
+3. **Platform (`platform/`)**: the official **SDL2 Switch port** (then `platform/sdl/` mostly carries over), or
+   `platform/switch/platform_switch.cpp` on `nn::*` — the contract is in `src/platform/switch/switch_platform.h`:
+   display / operation mode (docked 1080p, handheld 720p) and resize events; Joy-Con (dual, single sideways, handheld)
+   and Pro Controller through **`nn::hid`**, mapped by position (Switch B = index 0) and the **controller applet**
+   (`nn::hid::ShowControllerSupport`); **HD Rumble**; the touch screen as the pointer in menus (optional); time;
+   memory queries (`memoryBytes` / `peakMemoryBytes`); **audio** on `nn::audio` (the mixer is ours: one 48 kHz stream).
+4. **Network (`net/`)**: replace `net/socket_stream.cpp` (BSD sockets + mbedTLS) with **`nn::socket`** + **`nn::ssl`**
+   behind `net/stream.h`; initialise the network with **`nn::nifm`** (request the connection, show the error applet).
+   Online play needs a **Nintendo Account**, a **Nintendo Switch Online** entitlement check, and Nintendo's online rules
+   (or NEX / NPLN instead of our own server, per your agreement). Chat must be filterable / blockable (parental controls).
+5. **Save data**: `writeSave` / `readSave` on **`nn::fs`** (`MountSaveData` for the preselected user, write to a temp
+   file then rename, **`CommitSaveData`** after each write; declare the journal size in the `.nmeta`); the save is one
+   ~10 KB JSON (`ski-legacy-save-v1.json`) written on purchases, settings and every 60 s.
+6. **Account**: **`nn::account`** — the preselected user (`StartupUserAccount` in the `.nmeta`), its nickname for
+   `userName()` (the multiplayer name field's suggestion; typed names go through the **software keyboard applet**
+   `nn::swkbd`).
+7. **ROM data**: package `assets/` (the 148 models, `data/` incl. `audio/`) into the ROM file system (`rom:/`, `MountRom`);
+   for a smaller download and faster loads bake the GLBs' textures offline to ASTC / BC (the build's `texcompress` does
+   BC at load today) and pre-build the trees' LODs.
+8. **Lotcheck items** (the guidelines; plan for them from the start): Switch terms and **button glyphs** everywhere (the
+   prompts already switch to Switch glyphs and A / B confirm / back for `PadFamily::Switch`; no keyboard / mouse text in
+   menus), the controller applet when no controller is connected, **suspend / resume** (HOME button, sleep: pause the
+   game, mute, stop rumble — `Events::focusLost` / `focusGained`; `nn::oe` messages for focus, operation mode, exit
+   requests), no hangs on long play or bad networks, **loading screens** with progress and within the time limits, save
+   data never corrupt on power loss (commit), the **memory limits** of the application heap (the switch preset's peak
+   RSS below, measured with software rendering where GPU memory is counted too), user-visible **strings** localised per
+   region and no unsupported characters, the error applet for network errors, **age ratings** (IARC, ESRB, PEGI, USK,
+   CERO...: violence (police chases, car crashes) is mild; online interactions), the copyright / licences screen (the
+   sounds' CREDITS.txt, the open-source libraries: SDL2 zlib, glm MIT, meshoptimizer MIT, libwebp BSD, stb public
+   domain, cgltf MIT, nlohmann_json MIT, zstd BSD, mbedTLS Apache-2.0).
+9. **Performance on the hardware** (to verify on a dev kit — see "Performance" below): 30 fps docked and handheld with
+   the switch preset, GPU time per pass with the SDK's profiler, the CPU systems on the A57s (the simulation, streaming
+   and audio on worker threads), dynamic resolution bounds, thermal throttling in handheld mode, memory below the heap
+   limit after an hour of play (streaming in and out), the BC / ASTC choice, shader variants' cost.
 
 ---
 
@@ -1012,4 +1295,4 @@ What has to come from Nintendo (none of it can be in this repository):
 | **4 (done)** | menus, HUD and economy: title / pause / settings (the web settings incl. rebinding UI with controller glyphs), trail map, money, ski / outfit shop, tickets and day pass, lift / train charges, the Autohaus garage, Werkstatt, tow and rescue fees, save games through `Platform::writeSave` (the web save's JSON shape), autosave; the data step in the build, zstd data |
 | **5 (done)** | gameplay: races (the World Racing courses with their meshes, the bus races, the RACING stand, practice, the AI field, records, prizes, the race guide), jobs and the taxi, police / prison / impound, vehicle and people hits, the rescue helicopter + ambulance + hospital, chalets and build mode (virtual mouse), townsfolk / skiers / crowds, snowmobiles, weather and snowfall; still open: the player helicopter, parkour mode, snowcats / snowmaking / flags |
 | **6 (done)** | multiplayer: the existing Node server (`server/`, unchanged) and its protocol; a C++ client (`net/`: an RFC 6455 WebSocket over TLS with mbedTLS behind `net/stream.h`, the one file a Switch build swaps for `nn::socket` / `nn::ssl` / NEX), accounts, worlds, presence with interpolated remote skiers / walkers / cars / sleds and name cards, the server-authoritative economy, police / jail / impound, chalets of others, car rides, transit seats, the shared train timelines, the world clock / weather, chat, the admin banner, reconnects; `--mptest`. Still open: race queues, lift / bus shared timelines, the other players' tow / police / rescue / helicopters |
-| **7** | audio (mixer, `public/audio` samples, Ogg decoding, 3D sound), weather / time of day / night lighting, snow FX, post (bloom, sun glare), and Switch performance: ASTC textures, packed vertices, GPU profiling, dynamic resolution, memory budget, Lotcheck pass |
+| **7 (done)** | audio (a mixer on the platform stream, every `public/audio` recording as Ogg Vorbis, music playlists, the announcer and the rail PA, rendered air horns, 3D sound, volumes / mute in background); visual polish (wheels rolling / steering, headlights and lamp light pools, paint and plates, the Express livery, the canopy fix, forest thinning, snowmaking, flags, snowcats, outfits, ski stats, poles, bloom / screen effects / camera shake); the `switch` preset (512 BC textures, triangle budget, LOD bias, half the NPCs, simplified shaders, dynamic resolution), streaming of the mesh chunks, packed vertices, the `[perf]` report; packaging (.app / .dmg, .zip, .tar.gz) and `native.yml` (`latest-native`). Still open: on-hardware profiling, ASTC, Lotcheck, the not-ported features in the status table |

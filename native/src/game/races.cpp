@@ -308,11 +308,14 @@ void Races::finishPlayer() {
   for (auto& b : s.bots) ahead += b.done && b.finishT < s.finalTime;
   if (s.notice != "NEW RECORD") s.notice = s.practice ? "FINISH" : ordinal(ahead + 1);
   s.noticeT = c_.now; s.noticeBad = false;
+  sounds.push_back(s.practice ? std::string("finish:practice") : s.notice == "NEW RECORD" ? std::string("finish:record") : "finish:" + std::to_string(ahead + 1));
+  if (!s.practice) if (const char* m = medalForTime(s.finalTime, *s.c)) sounds.push_back(std::string("medal:") + m);
 }
 
 void Races::showResults() {
   Session& s = *s_;
   s.st = Session::St::Results;
+  sounds.push_back("results");
   // the order: finished racers by time; the ones still out by their projected time
   struct Row { std::string name; double t; bool you; };
   std::vector<Row> rows{{"You", s.finalTime, true}};
@@ -403,7 +406,9 @@ void Races::update(double dt) {
   double goAt = LEAD_IN + 3;
   if (s.st == Session::St::Grid) {
     pl.vel = dvec3(0);
-    if (s.t >= goAt) { s.st = Session::St::Race; s.clock = s.t - goAt; s.progT = 0; s.notice = "GO"; s.noticeT = c_.now; s.noticeBad = false; }
+    int k = int(std::ceil(goAt - s.t));
+    if (k >= 1 && k <= 3 && k != lastCount_) { lastCount_ = k; sounds.push_back("count:" + std::to_string(k)); }
+    if (s.t >= goAt) { s.st = Session::St::Race; s.clock = s.t - goAt; s.progT = 0; s.notice = "GO"; s.noticeT = c_.now; s.noticeBad = false; lastCount_ = 0; sounds.push_back("go"); }
   } else s.clock = s.t - goAt;
   // ---- the AI field
   double scaleRef = s.prof->ref;
@@ -447,6 +452,7 @@ void Races::update(double dt) {
         else std::snprintf(nb, sizeof nb, "%s  %s", cp.name.c_str(), fmtRaceTime(split).c_str());
         s.notice = nb; s.noticeT = c_.now; s.noticeBad = best < 1e9 && split > best;
         s.lastCp = s.nextCp++;
+        sounds.push_back("checkpoint");
       }
     // gates (the lateral at the gate line, between the last two frames)
     while (s.nextGate < int(s.gates.size()) && pr.s >= s.gates[size_t(s.nextGate)].s) {
@@ -459,7 +465,8 @@ void Races::update(double dt) {
         s.missed.push_back(s.nextGate - 1);
         s.penalty = double(s.missed.size()) * GATE_PENALTY;
         s.notice = "MISSED GATE  +0.50 \xC2\xB7 AIM FOR THE GREEN"; s.noticeT = c_.now; s.noticeBad = true;
-      }
+        sounds.push_back("miss");
+      } else sounds.push_back("gate");
     }
     // the finish line
     if (pr.s >= c.finish.s && s.prevS < c.finish.s + 5) {

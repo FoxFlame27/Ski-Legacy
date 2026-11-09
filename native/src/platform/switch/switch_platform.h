@@ -38,13 +38,22 @@
 //      Account + Nintendo Switch Online (NEX / NPLN or your own servers per the guidelines).
 //
 //  Audio (nn::audio)
-//    - openAudio: an audio renderer / audio out stream at 48 kHz pulling from the callback.
+//    - openAudio: an audio renderer / audio out stream at 48 kHz pulling from the callback (engine/audio.cpp mixes
+//      everything itself: one stereo float stream; ~1-2 ms of a core per 5 ms block). The sounds ship as Ogg Vorbis in
+//      rom:/data/audio (stb_vorbis: sound effects decoded at boot, ~17 MB int16; music streamed); Opus via the SDK's
+//      nn::codec would halve the CPU cost of the music if needed.
+//
+//  Memory (Phase 7)
+//    - memoryBytes / peakMemoryBytes: the application heap in use / its peak (nn::os::GetUsedMemorySize or the
+//      allocator's own counters). The 'switch' preset keeps the peak well under 3 GB (see README, Performance).
 //
 //  Time
 //    - timeSeconds: nn::os::GetSystemTick() converted to seconds.
 //
 //  Lifecycle (no equivalent on desktop; add to Events)
-//    - focus / suspend (HOME menu, sleep): pause the game, stop rumble, mute audio (nn::oe messages).
+//    - focus / suspend (HOME menu, sleep): Events::focusLost / focusGained (the game pauses its input, the audio mutes
+//      with the muteUnfocused setting; on Switch always mute and pause), stop rumble (nn::oe messages:
+//      FocusStateChanged, OperationModeChanged -> Events::resized, ExitRequest -> Events::quit).
 //
 // SDL2 also has an official Switch port available to licensed developers through Nintendo's developer portal; using
 // it, most of the above comes for free and platform/sdl/ can be reused with a GL->NVN/Vulkan gfx backend.

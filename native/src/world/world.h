@@ -63,7 +63,13 @@ public:
   double padInfluence(double x, double z) const;
   bool nearPad(double x, double z) const;  // vegetation.js nearPad
   double forest(double x, double z, double h, double slope) const;
+  /// (Phase 7) world.js addCut({ forest }): the railways' formations thin the forest (no trees on the beds or right
+  /// beside them; the forest over the tunnels stays). Each takes (x, z, f) and returns the new density; called from
+  /// the scenery's worker threads (must be thread-safe: read-only).
+  struct ForestCut { dvec2 bmin, bmax; std::function<double(double, double, double)> fn; };
+  std::vector<ForestCut> forestCuts;
   double cragAllow(double x, double z) const;
+  double thinned(double x, double z, double f) const;
   double cutDelta(double x, double z) const;
   /// (Phase 3) the World Racing courses' regions as exported (8 m bilinear delta over base + pads), and whether (x, z)
   /// is inside one (their forest density replaces the analytic one there)

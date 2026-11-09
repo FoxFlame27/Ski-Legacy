@@ -25,6 +25,11 @@ mat4 Camera::proj() const { return glm::perspective(glm::radians(fovY), aspect, 
 // ---------------------------------------------------------------- instances
 static std::vector<gfx::VertexAttrib> baseAttribs(const Primitive& p) {
   const uint32_t st = p.stride;
+  // (Phase 7) the packed 28-byte layout (resort.bin's meshes, mesh_kit models): instanced pieces of it read their normals,
+  // uvs and colours from the wrong bytes before (the Express village canopy glowed orange: colours from positions)
+  if (p.packed)
+    return {{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Byte, true, 12, st},
+            {2, 0, 2, gfx::AttribType::Float, false, 16, st}, {7, 0, 3, gfx::AttribType::UByte, true, 24, st}};
   std::vector<gfx::VertexAttrib> a = {{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Float, false, 12, st},
                                       {2, 0, 2, gfx::AttribType::Float, false, 24, st}};
   if (p.hasColor) a.push_back({7, 0, 3, gfx::AttribType::Float, false, 32, st});
@@ -58,6 +63,7 @@ void MatrixInstanceBatch::init(gfx::Device& d, const Model& m, uint32_t capacity
       a.push_back({9, 1, 4, gfx::AttribType::Float, false, 0, is, true});
       a.push_back({10, 1, 4, gfx::AttribType::Float, false, 16, is, true});
       a.push_back({11, 1, 4, gfx::AttribType::Float, false, 32, is, true});
+      a.push_back({12, 1, 4, gfx::AttribType::Float, false, 48, is, true});
       inputs_.push_back(d.createVertexInput(a, {p.vbo, buf_}, p.ibo));
     }
   }
@@ -66,10 +72,10 @@ void MatrixInstanceBatch::upload(gfx::Device& d, const std::vector<Inst>& inst) 
   count_ = uint32_t(std::min<size_t>(inst.size(), capacity_));
   if (count_) d.replaceBuffer(buf_, inst.data(), count_ * sizeof(Inst));
 }
-MatrixInstanceBatch::Inst MatrixInstanceBatch::pack(const glm::dmat4& w, const dvec3& o) {
+MatrixInstanceBatch::Inst MatrixInstanceBatch::pack(const glm::dmat4& w, const dvec3& o, const vec4& tint) {
   return {vec4(float(w[0][0]), float(w[1][0]), float(w[2][0]), float(w[3][0] - o.x)),
           vec4(float(w[0][1]), float(w[1][1]), float(w[2][1]), float(w[3][1] - o.y)),
-          vec4(float(w[0][2]), float(w[1][2]), float(w[2][2]), float(w[3][2] - o.z))};
+          vec4(float(w[0][2]), float(w[1][2]), float(w[2][2]), float(w[3][2] - o.z)), tint};
 }
 void InstanceBatch::upload(gfx::Device& d, const std::vector<Inst>& inst) {
   count_ = uint32_t(std::min<size_t>(inst.size(), capacity_));
@@ -78,12 +84,15 @@ void InstanceBatch::upload(gfx::Device& d, const std::vector<Inst>& inst) {
 
 // ---------------------------------------------------------------- set-up
 gfx::Program Renderer::build(const char* name, const char* defines, const char* vs, const char* fs, bool lit) {
-  std::string head = std::string("#version 410 core\n") + defines + "\n" + shaders::kCommon;
+  std::string head = std::string("#version 410 core\n") + defines + "\n" +
+                     (set_.lowShaders ? "#define SL_LOW 1\n#define SL_MAX_LIGHTS 4\n" : "#define SL_MAX_LIGHTS 16\n") + shaders::kCommon;
   std::string fsrc = head + (lit ? shaders::kLighting : "") + fs;
   gfx::Program p = dev_->createProgram(name, head + vs, fsrc);
   if (p) {
     dev_->useProgram(p);
     dev_->setUniformBlock("Frame", 0);
+    dev_->setUniformBlock("Lights", 1);
+    dev_->setInt("uBloom", 6);
     dev_->setInt("uBase", 0); dev_->setInt("uMR", 1); dev_->setInt("uNormalMap", 2);
     dev_->setInt("uShadowMap", 5); dev_->setInt("uNoise", 3); dev_->setInt("uHdr", 0); dev_->setInt("uEmissiveMap", 4);
   }
@@ -151,7 +160,12 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   sky_ = build("sky", "", shaders::kSkyVS, shaders::kSkyFS, false);
   post_ = build("post", "", shaders::kPostVS, shaders::kPostFS, false);
   hud_ = build("hud", "", shaders::kHudVS, shaders::kHudFS, false);
-  if (!mesh_ || !meshSkin_ || !meshInst_ || !meshInstM_ || !depthInstM_ || !terrain_ || !depthMesh_ || !depthSkin_ || !depthInst_ || !depthTerrain_ || !sky_ || !post_ || !hud_) return false;
+  bloom_ = build("bloom", "", shaders::kPostVS, shaders::kBloomFS, false);
+  if (bloom_) { dev.useProgram(bloom_); dev.setInt("uSrc", 0); }
+  lightsUbo_ = dev.createBuffer(gfx::BufferUsage::Uniform, nullptr, 16 + 48 * 16, true);
+  set_.maxLights = std::clamp(set_.maxLights, 0, 16);
+  if (!bloom_ ||
+      !mesh_ || !meshSkin_ || !meshInst_ || !meshInstM_ || !depthInstM_ || !terrain_ || !depthMesh_ || !depthSkin_ || !depthInst_ || !depthTerrain_ || !sky_ || !post_ || !hud_) return false;
   frameUbo_ = dev.createBuffer(gfx::BufferUsage::Uniform, nullptr, 512, true);
   shadowUbo_ = dev.createBuffer(gfx::BufferUsage::Uniform, nullptr, 512, true);
   hudVbo_ = dev.createBuffer(gfx::BufferUsage::Vertex, nullptr, 1 << 16, true);
@@ -172,6 +186,64 @@ void Renderer::resize(int w, int h) {
   if (hdr_) dev_->destroy(hdr_);
   rw_ = rw; rh_ = rh;
   hdr_ = dev_->createRenderTarget(rw_, rh_, true, gfx::TexFormat::RGBA16F, true, gfx::TexFormat::Depth24);
+  // (Phase 7) the bloom chain at quarter resolution
+  if (bloomA_) { dev_->destroy(bloomA_); dev_->destroy(bloomB_); }
+  bw_ = std::max(1, rw_ / 4); bh_ = std::max(1, rh_ / 4);
+  bloomA_ = dev_->createRenderTarget(bw_, bh_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+  bloomB_ = dev_->createRenderTarget(bw_, bh_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+}
+
+// (Phase 7) the frame's lights: the strongest near the camera (and in view) first, up to maxLights
+void Renderer::uploadLights() {
+  struct Cand { float score; const PointLight* l; };
+  std::vector<Cand> c;
+  c.reserve(lights_.size());
+  for (const PointLight& l : lights_) {
+    float d = float(glm::length(l.pos - cam_.pos));
+    if (d > l.range + 400) continue;
+    dvec3 e(l.range);
+    if (!visible(l.pos - e, l.pos + e)) continue;
+    float lum = l.color.x * 0.3f + l.color.y * 0.6f + l.color.z * 0.1f;
+    c.push_back({lum * l.range / (d + l.range * 0.5f + 1), &l});
+  }
+  std::sort(c.begin(), c.end(), [](const Cand& a, const Cand& b) { return a.score > b.score; });
+  int n = std::min<int>(int(c.size()), set_.maxLights);
+  std::vector<vec4> buf(1 + 48, vec4(0));
+  buf[0] = vec4(float(n), 0, 0, 0);
+  for (int i = 0; i < n; i++) {
+    const PointLight& l = *c[size_t(i)].l;
+    buf[size_t(1 + i * 3)] = vec4(vec3(l.pos - cam_.pos), l.range);
+    buf[size_t(2 + i * 3)] = vec4(l.color, l.cosOuter);
+    buf[size_t(3 + i * 3)] = vec4(glm::normalize(l.dir + vec3(0, 1e-6f, 0)), l.cosInner);
+  }
+  dev_->updateBuffer(lightsUbo_, buf.data(), buf.size() * sizeof(vec4));
+  lightsUsed_ = n;
+}
+
+void Renderer::bloomPass() {
+  gfx::PipelineState ps;
+  ps.depth = gfx::DepthTest::Off; ps.depthWrite = false; ps.cull = gfx::Cull::None;
+  dev_->useProgram(bloom_);
+  // bright pass (downsampled 4x with a 4-tap box)
+  dev_->bindRenderTarget(bloomA_, bw_, bh_);
+  dev_->setPipeline(ps);
+  dev_->bindTexture(0, dev_->renderTargetColor(hdr_));
+  vec2 t(1.f / float(rw_), 1.f / float(rh_)), z(0);
+  dev_->setVec2("uTexel", glm::value_ptr(t));
+  dev_->setVec2("uDir", glm::value_ptr(z));
+  dev_->setFloat("uThreshold", bloomThreshold);
+  dev_->draw(emptyVi_, 3);
+  // blur: horizontal into B, vertical back into A
+  vec2 tb(1.f / float(bw_), 1.f / float(bh_)), dx(1, 0), dy(0, 1);
+  dev_->bindRenderTarget(bloomB_, bw_, bh_);
+  dev_->bindTexture(0, dev_->renderTargetColor(bloomA_));
+  dev_->setVec2("uTexel", glm::value_ptr(tb));
+  dev_->setVec2("uDir", glm::value_ptr(dx));
+  dev_->draw(emptyVi_, 3);
+  dev_->bindRenderTarget(bloomA_, bw_, bh_);
+  dev_->bindTexture(0, dev_->renderTargetColor(bloomB_));
+  dev_->setVec2("uDir", glm::value_ptr(dy));
+  dev_->draw(emptyVi_, 3);
 }
 
 // ---------------------------------------------------------------- frame
@@ -187,6 +259,7 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   cam_.aspect = float(w_) / float(h_);
   light_ = L;
   items_.clear();
+  lights_.clear();
   hudVerts_.clear();
   viewProj_ = cam_.proj() * cam_.view();
   // frustum planes (Gribb-Hartmann) for culling camera-relative boxes
@@ -356,6 +429,8 @@ void Renderer::setMaterial(const Material& m) {
   dev_->bindTexture(4, m.emissiveTex ? m.emissiveTex : white_);
   vec4 f2(m.vertexColor ? 1.f : 0.f, m.emissiveTex ? 1.f : 0.f, m.glow, m.colorSqrt ? 1.f : 0.f);
   dev_->setVec4("uFlags2", glm::value_ptr(f2));
+  vec4 f3(float(m.paint), 0, 0, 0);
+  dev_->setVec4("uFlags3", glm::value_ptr(f3));
 }
 
 void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur) {
@@ -412,6 +487,8 @@ void Renderer::endFrame() {
   dev_->bindRenderTarget(shadow_, set_.shadowSize, set_.shadowSize);
   dev_->clear(0, 0, 0, 0, false, true);
   dev_->bindUniformBuffer(0, shadowUbo_);
+  uploadLights();
+  dev_->bindUniformBuffer(1, lightsUbo_);
   if (shadowsOn) drawItems(true);   // (off: the cleared map shadows nothing)
 
   // main pass (HDR)
@@ -430,6 +507,9 @@ void Renderer::endFrame() {
     dev_->setMat4("uInvViewProj", glm::value_ptr(inv));
     dev_->draw(emptyVi_, 3);
   }
+  // (Phase 7) bloom
+  bool bloom = bloomOn && bloomStrength > 0 && bloom_;
+  if (bloom) bloomPass();
   // tone map to the window
   dev_->bindRenderTarget({}, w_, h_);
   {
@@ -440,6 +520,10 @@ void Renderer::endFrame() {
     dev_->bindTexture(0, dev_->renderTargetColor(hdr_));
     dev_->setFloat("uExposure", light_.exposure);
     dev_->setInt("uToneMap", light_.toneMap);
+    dev_->bindTexture(6, dev_->renderTargetColor(bloomA_));
+    vec4 p1(bloom ? bloomStrength : 0.f, fx.vignette, fx.streaks, fx.flash), p2(fx.hit, 0, 0, 0);
+    dev_->setVec4("uPost", glm::value_ptr(p1));
+    dev_->setVec4("uPost2", glm::value_ptr(p2));
     dev_->draw(emptyVi_, 3);
   }
   // HUD
@@ -454,6 +538,7 @@ void Renderer::endFrame() {
     dev_->draw(hudVi_, uint32_t(hudVerts_.size() / 6));
   }
   lastDraws_ = dev_->drawCallsThisFrame();
+  lastTris_ = dev_->trianglesThisFrame();
 }
 
 // ---------------------------------------------------------------- HUD

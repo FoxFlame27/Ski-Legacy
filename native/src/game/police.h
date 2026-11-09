@@ -72,6 +72,13 @@ public:
   size_t units() const { return units_.size(); }
   std::string status() const;
   bool heliUp() const { return heli_.on; }
+  /// (Phase 7, audio) the nearest patrol car sounding its siren (in a chase) and the helicopter
+  bool sirenNear(const dvec3& p, dvec3& out) const {
+    double best = 1e18;
+    for (const Unit& u : units_) if (wanted_ && !u.leaving) { double d = glm::length(u.pos - p); if (d < best) { best = d; out = u.pos; } }
+    return best < 1e17;
+  }
+  bool heliAt(dvec3& out) const { if (!heli_.on) return false; out = heli_.pos; return true; }
   void skipJail(double left) { if (jailLeft_ > left) jailLeft_ = left; }
 private:
   struct Unit {

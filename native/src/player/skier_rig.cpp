@@ -4,13 +4,23 @@
 #include "engine/renderer.h"
 #include "player/player.h"
 #include "world/world.h"
+#include "gfx/gfx.h"
+#include <algorithm>
+#include <cmath>
 
 namespace sl {
 
 bool SkierRig::load(AssetManager& assets, const std::string& colour) {
   ModelLoadOptions o;
   o.maxTextureSize = 1024;
-  body_ = assets.model("skier_" + colour + "_rigged", o);
+  ModelLoadOptions oc;
+  oc.maxTextureSize = 1024;
+  oc.keepCpu = true;   // (Phase 7: the outfits recolour the albedo per zone)
+  // (its own copy, not the cache's: the townsfolk load the same skiers without the CPU data at 512)
+  body_ = assets.loadFile(assets.modelPath("skier_" + colour + "_rigged"), "skier_" + colour + "_rigged", oc);
+  gen_++;
+  pole_ = assets.model("ski_pole", o);
+  if (pole_) poleFit_ = pole_->fitTransform(1.2f, 1);
   anims_ = assets.model("skier_" + colour + "_anims", o);
   ski_ = assets.model("ski_carver", o);
   if (!body_) return false;
@@ -29,9 +39,119 @@ bool SkierRig::load(AssetManager& assets, const std::string& colour) {
   legL_ = body_->findNode("LeftLeg"); legR_ = body_->findNode("RightLeg");
   armL_ = body_->findNode("LeftArm"); armR_ = body_->findNode("RightArm");
   footL_ = body_->findNode("LeftFoot"); footR_ = body_->findNode("RightFoot");
+  handL_ = body_->findNode("LeftHand"); handR_ = body_->findNode("RightHand");
   body_->restPose(pose_);
   body_->finishPose(pose_);
+  buildZones();
   return true;
+}
+
+// (Phase 7) the garment zones on the albedo: each vertex by its dominant bone (outfits.js analyzeZones does a colour
+// clustering on top of this; the bones alone separate jacket / trousers / helmet well on these Meshy skiers)
+void SkierRig::buildZones() {
+  dressed_.reset();
+  zone_.clear();
+  if (!body_ || body_->skins.empty() || body_->materials.empty()) return;
+  int img = body_->materials[0].baseImage;
+  if (img < 0 || size_t(img) >= body_->images.size() || !body_->images[size_t(img)]) return;
+  const CpuImage& im = *body_->images[size_t(img)];
+  const Skin& sk = body_->skins[0];
+  // the bones' positions in the mesh's (bind) space
+  std::vector<vec3> jp(sk.joints.size());
+  std::vector<int> cls(sk.joints.size(), 0);
+  float hipsY = 0, headY = 1e9f, footY = -1e9f;
+  for (size_t j = 0; j < sk.joints.size(); j++) {
+    jp[j] = vec3(glm::inverse(sk.inverseBind[j])[3]);
+    const std::string& n = body_->nodes[size_t(sk.joints[j])].name;
+    auto has = [&](const char* k) { return n.find(k) != std::string::npos; };
+    if (has("Hand") || has("Finger") || has("Thumb")) cls[j] = 0;
+    else if (has("Head")) { cls[j] = 3; headY = std::min(headY, jp[j].y); }
+    else if (has("Foot") || has("Toe")) { cls[j] = 0; footY = std::max(footY, jp[j].y); }
+    else if (has("UpLeg") || has("Leg")) cls[j] = 2;
+    else if (has("Hips")) { cls[j] = 4; hipsY = jp[j].y; }
+    else if (has("Spine") || has("Neck") || has("Shoulder") || has("Arm")) cls[j] = 1;
+  }
+  zw_ = im.w; zh_ = im.h; zImage_ = img;
+  zone_.assign(size_t(zw_) * zh_, 0);
+  for (const Mesh& mesh : body_->meshes)
+    for (const Primitive& p : mesh.primitives) {
+      if (!p.cpuVerts || !p.cpuIdx || !p.skinned || p.material != 0) continue;
+      const auto& V = *p.cpuVerts;
+      const auto& I = *p.cpuIdx;
+      size_t nv = V.size() / 16;
+      std::vector<uint8_t> vz(nv, 0);
+      for (size_t v = 0; v < nv; v++) {
+        const float* q = &V[v * 16];
+        int best = 0;
+        for (int k = 1; k < 4; k++) if (q[12 + k] > q[12 + best]) best = k;
+        size_t j = std::min(size_t(q[8 + best]), cls.size() - 1);
+        int c = cls[j];
+        float y = q[1];
+        if (c == 4) c = y > hipsY + 0.04f ? 1 : 2;                 // the hips: the jacket's hem above, the trousers below
+        if (c == 3 && y < headY + 0.07f) c = 0;                    // the face stays (the helmet: the top of the head)
+        if (c == 2 && y < footY + 0.1f) c = 0;                     // the boots stay
+        vz[v] = uint8_t(c);
+      }
+      for (size_t t = 0; t + 2 < I.size(); t += 3) {
+        uint32_t a = I[t], b = I[t + 1], c = I[t + 2];
+        uint8_t z = vz[a] == vz[b] || vz[a] == vz[c] ? vz[a] : vz[b] == vz[c] ? vz[b] : vz[a];
+        if (!z) continue;
+        vec2 P[3] = {vec2(V[a * 16 + 6], V[a * 16 + 7]), vec2(V[b * 16 + 6], V[b * 16 + 7]), vec2(V[c * 16 + 6], V[c * 16 + 7])};
+        for (auto& q : P) { q.x = (q.x - std::floor(q.x)) * zw_; q.y = (q.y - std::floor(q.y)) * zh_; }
+        int x0 = std::max(0, int(std::floor(std::min({P[0].x, P[1].x, P[2].x})))), x1 = std::min(zw_ - 1, int(std::ceil(std::max({P[0].x, P[1].x, P[2].x}))));
+        int y0 = std::max(0, int(std::floor(std::min({P[0].y, P[1].y, P[2].y})))), y1 = std::min(zh_ - 1, int(std::ceil(std::max({P[0].y, P[1].y, P[2].y}))));
+        if ((x1 - x0) * (y1 - y0) > zw_ * zh_ / 4) continue;   // (a seam wrapping round the atlas)
+        float area = (P[1].x - P[0].x) * (P[2].y - P[0].y) - (P[2].x - P[0].x) * (P[1].y - P[0].y);
+        if (std::fabs(area) < 1e-9f) continue;
+        for (int y = y0; y <= y1; y++)
+          for (int x = x0; x <= x1; x++) {
+            vec2 s(x + 0.5f, y + 0.5f);
+            float w0 = ((P[1].x - s.x) * (P[2].y - s.y) - (P[2].x - s.x) * (P[1].y - s.y)) / area;
+            float w1 = ((P[2].x - s.x) * (P[0].y - s.y) - (P[0].x - s.x) * (P[2].y - s.y)) / area;
+            float w2 = 1 - w0 - w1;
+            if (w0 >= -0.02f && w1 >= -0.02f && w2 >= -0.02f) zone_[size_t(y) * zw_ + x] = z;
+          }
+      }
+    }
+  // each zone's median luminance (the shading is kept relative to it)
+  for (int z = 1; z <= 3; z++) {
+    int hist[256] = {0}, n = 0;
+    for (size_t i = 0; i < zone_.size(); i++)
+      if (zone_[i] == z) { const uint8_t* px = &im.rgba[i * 4]; hist[(px[0] * 77 + px[1] * 150 + px[2] * 29) >> 8]++; n++; }
+    int acc = 0, m = 128;
+    for (int k = 0; k < 256; k++) { acc += hist[k]; if (acc * 2 >= n) { m = k; break; } }
+    median_[z] = std::max(8, m) / 255.f;
+  }
+  {
+    size_t cnt[4] = {0, 0, 0, 0};
+    for (uint8_t z : zone_) cnt[z & 3]++;
+    SL_INFO("skier %s: outfit zones on its %dx%d albedo: jacket %.0f%%, trousers %.0f%%, helmet %.0f%%", body_->name.c_str(), zw_, zh_,
+            100.0 * cnt[1] / zone_.size(), 100.0 * cnt[2] / zone_.size(), 100.0 * cnt[3] / zone_.size());
+  }
+  for (Mesh& mesh : body_->meshes) for (Primitive& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }   // (the image stays)
+}
+
+void SkierRig::applyOutfit(gfx::Device& dev, const vec4& jacket, const vec4& trousers, const vec4& helmet) {
+  if (zone_.empty() || zImage_ < 0) return;
+  if (outfitTex_) { dev.destroy(gfx::Texture{outfitTex_}); outfitTex_ = 0; }
+  if (jacket.w <= 0 && trousers.w <= 0 && helmet.w <= 0) { dressed_.reset(); return; }
+  const CpuImage& im = *body_->images[size_t(zImage_)];
+  std::vector<uint8_t> px = im.rgba;
+  const vec4 tgt[4] = {vec4(0), jacket, trousers, helmet};
+  for (size_t i = 0; i < zone_.size(); i++) {
+    int z = zone_[i];
+    if (!z || tgt[z].w <= 0) continue;
+    uint8_t* q = &px[i * 4];
+    float lum = (q[0] * 0.3f + q[1] * 0.59f + q[2] * 0.11f) / 255.f;
+    float k = std::clamp(lum / median_[z], 0.3f, 1.7f);
+    for (int c = 0; c < 3; c++) q[c] = uint8_t(std::clamp(tgt[z][c] * k * 255.f, 0.f, 255.f));
+  }
+  gfx::TextureDesc d;
+  d.width = im.w; d.height = im.h; d.format = gfx::TexFormat::SRGBA8; d.anisotropy = 8;
+  outfitTex_ = dev.createTexture(d, px.data()).id;
+  dressed_ = std::make_shared<Model>(*body_);
+  dressed_->images.clear();
+  dressed_->materials[0].baseTex = gfx::Texture{outfitTex_};
 }
 
 // rotate a bone about an axis given in model space (the rig's own local axes do not matter)
@@ -146,13 +266,32 @@ void SkierRig::update(double dt, const Player& p, World& world) {
                  glm::rotate(mat4(1), plowYaw, vec3(0, 1, 0)) * glm::rotate(mat4(1), float(p.edge) * 0.7f, vec3(0, 0, 1)) * skiFit_;
     }
   }
+  // (Phase 7) the poles in the hands while skiing: from the fist down to a tip planted beside and a little behind the
+  // boots (skier.js holds them so; no pole plants yet)
+  polesVisible_ = pole_ && ski && p.skisOn && handL_ >= 0 && handR_ >= 0;
+  if (polesVisible_) {
+    for (int s = 0; s < 2; s++) {
+      int hand = s == 0 ? handL_ : handR_;
+      float side = s == 0 ? 1.f : -1.f;
+      vec3 hp = vec3(body_M_ * pose_.global[size_t(hand)][3]);
+      vec3 tip = vec3(M * vec4(side * 0.42f, 0.02f - (p.air ? -0.25f : 0.f), -0.28f - 0.25f * float(clamp(p.crouch, 0, 1)), 1));
+      vec3 y = hp - tip;
+      float len = glm::length(y) + 0.1f;
+      y = glm::normalize(y);
+      vec3 fwd = vec3(M * vec4(0, 0, 1, 0));
+      vec3 x = glm::normalize(glm::cross(y, fwd) + vec3(1e-6f, 0, 0));
+      vec3 z = glm::cross(x, y);
+      poleM_[s] = mat4(vec4(x, 0), vec4(y, 0), vec4(z, 0), vec4(tip, 1)) * glm::scale(mat4(1), vec3(1, len / 1.2f, 1)) * poleFit_;
+    }
+  }
   (void)world;
 }
 
 void SkierRig::submit(Renderer& r, bool hideBody) const {
   if (!body_) return;
-  if (!hideBody) r.submitModel(*body_, origin_, body_M_, &pose_, true);
+  if (!hideBody) r.submitModel(dressed_ ? *dressed_ : *body_, origin_, body_M_, &pose_, true);
   if (skisVisible_) for (int s = 0; s < 2; s++) r.submitModel(*ski_, origin_, skiM_[s], nullptr, true);
+  if (polesVisible_ && !hideBody) for (int s = 0; s < 2; s++) r.submitModel(*pole_, origin_, poleM_[s], nullptr, true);
 }
 
 } // namespace sl

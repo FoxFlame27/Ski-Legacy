@@ -7,12 +7,15 @@
 #include <stb_image.h>
 
 #include "engine/asset_manager.h"
+#include "engine/texcompress.h"
 #include "core/assets_path.h"
 #include "core/log.h"
 #include "platform/platform.h"
 
 #include <meshoptimizer.h>
 #include <webp/decode.h>
+#include <cctype>
+#include <cstring>
 #include <future>
 #include <map>
 #include <cstdlib>
@@ -22,7 +25,7 @@
 namespace sl {
 
 namespace {
-struct Image { int w = 0, h = 0; std::vector<uint8_t> rgba; };
+struct Image { int w = 0, h = 0; std::vector<uint8_t> rgba; std::vector<std::vector<uint8_t>> levels; bool bc3 = false; };
 
 bool decodeImage(const uint8_t* data, size_t size, const char* mime, Image& out) {
   bool webp = (mime && std::string(mime) == "image/webp") || (size > 12 && std::memcmp(data, "RIFF", 4) == 0 && std::memcmp(data + 8, "WEBP", 4) == 0);
@@ -94,6 +97,8 @@ std::vector<float> unpack(const cgltf_accessor* a, int comps) {
 }
 } // namespace
 
+std::string AssetManager::modelPath(const std::string& name) const { return paths_.model(name); }
+
 std::shared_ptr<Model> AssetManager::model(const std::string& name, const ModelLoadOptions& opt) {
   auto it = cache_.find(name);
   if (it != cache_.end()) return it->second;
@@ -159,12 +164,15 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     for (cgltf_size i = 0; i < d->textures_count; i++) {
       const cgltf_texture& t = d->textures[i];
       const cgltf_image* img = t.has_webp && t.webp_image ? t.webp_image : t.image;
-      jobs.push_back(std::async(std::launch::async, [img, &opt]() {
+      int cap = std::min(opt.maxTextureSize, textureCap);
+      bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !opt.keepCpu;
+      jobs.push_back(std::async(std::launch::async, [img, cap, bc]() {
         Image im;
         if (!img || !img->buffer_view) return im;
         const uint8_t* data = cgltf_buffer_view_data(img->buffer_view);
         if (!data || !decodeImage(data, img->buffer_view->size, img->mime_type, im)) return Image{};
-        downsample(im, opt.maxTextureSize);
+        downsample(im, cap);
+        if (bc && im.w >= 4 && im.h >= 4) compressBC(im.rgba.data(), im.w, im.h, im.levels, im.bc3);   // (on the worker too)
         return im;
       }));
     }
@@ -175,8 +183,19 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       td.width = im.w; td.height = im.h;
       td.format = srgb[i] ? gfx::TexFormat::SRGBA8 : gfx::TexFormat::RGBA8;
       td.anisotropy = 8;
-      texOf[i] = dev_.createTexture(td, im.rgba.data());
-      texBytes_ += size_t(im.w) * im.h * 4 * 4 / 3;
+      if (!im.levels.empty()) {
+        texOf[i] = dev_.createCompressedTexture(td, im.bc3, srgb[i], im.levels);
+        for (auto& l : im.levels) texBytes_ += l.size();
+      } else {
+        texOf[i] = dev_.createTexture(td, im.rgba.data());
+        texBytes_ += size_t(im.w) * im.h * 4 * 4 / 3;
+      }
+      if (opt.keepCpu) {   // (Phase 7: the skier's outfits recolour its albedo)
+        if (model->images.size() < d->textures_count) model->images.resize(d->textures_count);
+        auto ci = std::make_shared<CpuImage>();
+        ci->w = im.w; ci->h = im.h; ci->rgba = std::move(im.rgba);
+        model->images[i] = ci;
+      }
     }
   }
   auto tex = [&](const cgltf_texture_view& v) { return v.texture ? texOf[size_t(v.texture - d->textures)] : gfx::Texture{}; };
@@ -189,6 +208,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     o.baseColor = vec4(pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3]);
     o.metallic = pbr.metallic_factor; o.roughness = pbr.roughness_factor;
     o.baseTex = tex(pbr.base_color_texture);
+    if (pbr.base_color_texture.texture) o.baseImage = int(pbr.base_color_texture.texture - d->textures);
     o.mrTex = tex(pbr.metallic_roughness_texture);
     o.normalTex = tex(m.normal_texture);
     o.normalScale = m.normal_texture.scale;
@@ -196,6 +216,9 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     o.doubleSided = m.double_sided;
     o.alpha = m.alpha_mode == cgltf_alpha_mode_mask ? Material::Alpha::Mask : m.alpha_mode == cgltf_alpha_mode_blend ? Material::Alpha::Blend : Material::Alpha::Opaque;
     o.alphaCutoff = m.alpha_cutoff;
+    o.name = m.name ? m.name : "";
+    // (Phase 7) car paint: the instance's colour replaces it (cars.js: the materials named like paint)
+    { std::string n = o.name; for (auto& ch : n) ch = char(std::tolower(uint8_t(ch))); if (n.find("paint") != std::string::npos) o.paint = 1; }
     model->materials.push_back(o);
   }
   if (model->materials.empty()) model->materials.push_back(Material{});
@@ -215,6 +238,17 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
   model->restPose(rest);
   model->finishPose(rest);
 
+  // (Phase 7) the triangle budget (the switch preset's mesh LOD bias): the whole model simplified to it
+  double triRatio = 1;
+  if (triangleBudget > 0) {
+    size_t total = 0;
+    for (cgltf_size mi = 0; mi < d->meshes_count; mi++)
+      for (cgltf_size pi = 0; pi < d->meshes[mi].primitives_count; pi++) {
+        const cgltf_primitive& pr = d->meshes[mi].primitives[pi];
+        if (pr.type == cgltf_primitive_type_triangles) total += (pr.indices ? pr.indices->count : (pr.attributes_count ? pr.attributes[0].data->count : 0)) / 3;
+      }
+    if (total > size_t(triangleBudget)) triRatio = double(triangleBudget) / double(total);
+  }
   // ---- meshes: one interleaved float vertex buffer per primitive
   for (cgltf_size mi = 0; mi < d->meshes_count; mi++) {
     const cgltf_mesh& mesh = d->meshes[mi];
@@ -266,6 +300,23 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       std::vector<uint32_t> idx;
       if (pr.indices) { idx.resize(pr.indices->count); cgltf_accessor_unpack_indices(pr.indices, idx.data(), 4, idx.size()); }
       else { idx.resize(n); for (size_t v = 0; v < n; v++) idx[v] = uint32_t(v); }
+      // (Phase 7) over the triangle budget: LOD 0 simplified, then only the vertices still used kept
+      if (triRatio < 1 && !skinned && idx.size() > 300) {
+        size_t target = std::max<size_t>(36, size_t(double(idx.size() / 3) * triRatio) * 3);
+        std::vector<uint32_t> s(idx.size());
+        size_t cnt = meshopt_simplify(s.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 0.02f, 0, nullptr);
+        if (cnt > target * 3 / 2) cnt = meshopt_simplifySloppy(s.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 0.05f, nullptr);
+        if (cnt > 0 && cnt < idx.size()) {
+          s.resize(cnt);
+          std::vector<uint32_t> remap(n);
+          size_t nu = meshopt_optimizeVertexFetchRemap(remap.data(), s.data(), s.size(), n);
+          std::vector<float> vb2(nu * size_t(stride)), P2(nu * 3);
+          meshopt_remapVertexBuffer(vb2.data(), vb.data(), n, sizeof(float) * size_t(stride), remap.data());
+          meshopt_remapVertexBuffer(P2.data(), P.data(), n, sizeof(float) * 3, remap.data());
+          meshopt_remapIndexBuffer(s.data(), s.data(), s.size(), remap.data());
+          vb.swap(vb2); P.swap(P2); idx.swap(s); n = nu;
+        }
+      }
       // LODs: same vertices, simplified index ranges appended
       std::vector<uint32_t> all = idx;
       op.lods.push_back({0, uint32_t(idx.size())});
@@ -293,6 +344,10 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       op.input = dev_.createVertexInput(at, {op.vbo}, op.ibo);
       op.material = pr.material ? int(pr.material - d->materials) : 0;
       op.skinned = skinned;
+      if (opt.keepCpu) {
+        op.cpuVerts = std::make_shared<std::vector<float>>(vb);
+        op.cpuIdx = std::make_shared<std::vector<uint32_t>>(idx);
+      }
       om.primitives.push_back(op);
     }
     model->meshes.push_back(std::move(om));

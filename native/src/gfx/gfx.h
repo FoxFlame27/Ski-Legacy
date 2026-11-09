@@ -74,6 +74,10 @@ public:
   virtual void destroy(Buffer b) = 0;
 
   virtual Texture createTexture(const TextureDesc& d, const void* pixels) = 0;
+  /// (Phase 7) a block-compressed texture: BC1 (8 bytes a 4x4 block) or BC3 (16), sRGB or linear, every mip level given
+  /// (d.format / d.mipmaps are ignored). supportsBC(srgb): whether the device takes them (else upload RGBA8).
+  virtual bool supportsBC(bool srgb) const = 0;
+  virtual Texture createCompressedTexture(const TextureDesc& d, bool bc3, bool srgb, const std::vector<std::vector<uint8_t>>& levels) = 0;
   virtual void destroy(Texture t) = 0;
 
   /// GLSL 410 sources; returns 0 (and logs) on a compile / link error.
@@ -116,6 +120,10 @@ public:
   virtual void readPixels(int w, int h, std::vector<uint8_t>& rgba) = 0;
   virtual uint32_t drawCallsThisFrame() const = 0;
   virtual void resetFrameStats() = 0;
+  // (Phase 7) the performance numbers the autotest prints: triangles drawn since the reset, GPU memory held
+  virtual uint64_t trianglesThisFrame() const = 0;
+  virtual size_t textureBytes() const = 0;
+  virtual size_t bufferBytes() const = 0;
 };
 
 using GetProc = void* (*)(const char*);

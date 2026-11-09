@@ -1,0 +1,141 @@
+# Builds the native C++ game (native/, Phase 7) for macOS, Windows and Linux and publishes the packages as the rolling
+# "latest-native" GitHub Release, so there are fixed download links:
+#   https://github.com/FoxFlame27/Ski-Legacy/releases/download/latest-native/Ski-Legacy-Native-Mac.dmg
+#   https://github.com/FoxFlame27/Ski-Legacy/releases/download/latest-native/Ski-Legacy-Native-Windows.zip
+#   https://github.com/FoxFlame27/Ski-Legacy/releases/download/latest-native/Ski-Legacy-Native-Linux.tar.gz
+# Runs on pushes to legacy-express that touch native/** (or this file) and on demand (Actions tab -> Native build).
+# The build exports the world data with Node from the game's own JavaScript (npm ci in the repo root) and converts
+# public/audio to Ogg Vorbis with ffmpeg; the packages carry the models the game loads and native/data (cmake
+# -DSL_COPY_ASSETS=ON, then cmake --install / cpack). The Electron builds (mac.yml, windows.yml, steam*.yml) are separate.
+name: Native build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [legacy-express]
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+
+permissions:
+  contents: write # to move the latest-native tag and update its release
+
+concurrency:
+  group: native-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: Mac
+            asset: Ski-Legacy-Native-Mac.dmg
+          - os: windows-latest
+            label: Windows
+            asset: Ski-Legacy-Native-Windows.zip
+          - os: ubuntu-24.04
+            label: Linux
+            asset: Ski-Legacy-Native-Linux.tar.gz
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: "Install (node_modules: three.js and the fonts the data exporter needs)"
+        run: npm ci
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ffmpeg libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev libwayland-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev
+
+      - name: Tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja ffmpeg
+
+      - name: Tools (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: "Configure (macOS: a universal arm64 + x86_64 Ski Legacy.app)"
+        if: runner.os == 'macOS'
+        run: >
+          cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSL_COPY_ASSETS=ON -DSL_MACOS_BUNDLE=ON
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S native -B native/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSL_COPY_ASSETS=ON
+
+      - name: Configure (Windows, Visual Studio 2022)
+        if: runner.os == 'Windows'
+        run: cmake -S native -B native/build -G "Visual Studio 17 2022" -A x64 -DSL_COPY_ASSETS=ON
+
+      - name: Build (exports the world data, converts the audio, compiles, gathers the assets)
+        run: cmake --build native/build --config Release --parallel
+
+      - name: Check the world data against the JavaScript
+        if: runner.os == 'Linux'
+        run: ./native/build/ski_legacy --verify-heights
+
+      - name: Package
+        working-directory: native/build
+        run: cpack -C Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: native/build/${{ matrix.asset }}
+          if-no-files-found: error
+          compression-level: 0 # already compressed
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Move the latest-native tag to this commit
+        run: |
+          git tag -f latest-native
+          git push -f origin refs/tags/latest-native
+
+      - name: Update the latest-native release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-native
+          name: Ski Legacy native (latest build)
+          body: |
+            Latest native C++ build of Ski Legacy (commit ${{ github.sha }}): the port in native/ (see native/README.md).
+            - **Ski-Legacy-Native-Mac.dmg**: open it and drag Ski Legacy into Applications (universal: Apple silicon and Intel,
+              macOS 11+). Not signed: the first time right-click the app, Open, Open (or `xattr -cr "/Applications/Ski Legacy.app"`).
+            - **Ski-Legacy-Native-Windows.zip**: unzip and run SkiLegacy.exe (Windows 10+, OpenGL 4.1).
+            - **Ski-Legacy-Native-Linux.tar.gz**: untar and run ./ski-legacy.sh (x86_64, OpenGL 4.1).
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/Ski-Legacy-Native-Mac.dmg
+            dist/Ski-Legacy-Native-Windows.zip
+            dist/Ski-Legacy-Native-Linux.tar.gz
+          overwrite_files: true

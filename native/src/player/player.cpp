@@ -94,7 +94,7 @@ void Player::setSkisOn(bool on) {
 }
 
 double Player::turnRateAt(double sp, bool tk, bool brake) const {
-  double rate = std::min(TURN_MAX, A_TURN / std::max(sp, 1.0));
+  double rate = std::min(TURN_MAX, (A_TURN * skiGrip) / std::max(sp, 1.0));   // (Phase 7: the skis' grip, player.js this.ski)
   if (tk) rate *= TUCK_TURN;
   if (brake && sp > 3) rate *= SKID_TURN;
   return rate;
@@ -209,13 +209,15 @@ void Player::skiStep(double h) {
     if (!downhill && !(push > 0.3 && pull + push > 0.1)) { v = dvec3(0); brakeStop(h, brake); return; }
   }
   if (sp > 1e-4) {
-    double cda = tk ? CDA_TUCK : CDA_STAND + std::fabs(ctl_.steer) * 0.06;
+    // (Phase 7) the skis' speed (player.js this.ski.speed): less glide friction and drag
+    double mult = skiSpeed;
+    double cda = (tk ? CDA_TUCK : CDA_STAND + std::fabs(ctl_.steer) * 0.06) / (mult * mult);
     double carve = CARVE_DRAG * sp * std::fabs(ctl_.steer) * turnRateAt(sp, tk, false);
-    a += v * (-(MU * ice * G * n.y + DRAG * cda * sp * sp + carve) / sp);
+    a += v * (-((MU / mult) * ice * G * n.y + DRAG * cda * sp * sp + carve) / sp);
   }
   if (push) a += f * push;
   v += a * h;
-  double grip = A_GRIP * (0.3 + 0.7 * std::min(1.0, ice));
+  double grip = A_GRIP * skiGrip * (0.3 + 0.7 * std::min(1.0, ice));
   double vL = glm::dot(v, lat);
   v += lat * (-sign(vL) * std::min(std::fabs(vL), grip * h));
   if (brake) {
@@ -298,7 +300,7 @@ void Player::airStep(double h) {
   v.y -= G * h;
   if (!air) v.y -= STICK * h;
   double sp = glm::length(v);
-  v *= std::max(0.0, 1 - DRAG * CDA_AIR * sp * h);
+  v *= std::max(0.0, 1 - DRAG * (CDA_AIR / (skiSpeed * skiSpeed)) * sp * h);
   p += v * h;
   double gy = world_.groundHeight(p.x, p.z, p.y);
   if (p.y <= gy) { if (air) land(gy); else reattach(gy); return; }

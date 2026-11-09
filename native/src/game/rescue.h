@@ -22,6 +22,9 @@ public:
   bool active() const { return stage_ != Stage::None; }
   bool carried() const { return stage_ == Stage::Cabin || stage_ == Stage::Ambulance; }
   bool inBed() const { return stage_ == Stage::Bed; }
+  /// (Phase 7, audio) the rescue helicopter in the air, the ambulance on its way (siren)
+  bool heliAt(dvec3& out) const { if (stage_ != Stage::Wait && stage_ != Stage::Winch && stage_ != Stage::Cabin) return false; out = heliPos_; return true; }
+  bool ambulanceAt(dvec3& out) const { if (stage_ != Stage::Ambulance) return false; out = ambPos_; return true; }
   void update(double dt, bool fast);
   /// the seat while carried (the game seats the player there) and the chase camera
   bool seat(dvec3& pos, dvec3& fwd) const;

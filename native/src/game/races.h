@@ -48,6 +48,8 @@ public:
   const Course* courseById(const std::string& id) const { return c_.data ? c_.data->course(id) : nullptr; }
   double progress() const;   // metres down the course
   std::vector<std::string> lastRows;   // the results' rows (autotest log)
+  /// (Phase 7) what to hear, taken by the game each frame: count:3 count:2 count:1 go checkpoint miss finish:<place|record|practice> medal:<gold|silver|bronze> results
+  std::vector<std::string> sounds;
 private:
   struct Prof { std::vector<float> v; double t0 = 0, ref = 60; };
   const Prof& profile(const Course& c);
@@ -63,6 +65,7 @@ private:
   // the guide
   struct Guide { bool on = false; dvec3 target{0}; std::string label; double t = 0, d0 = 0; } guide_;
   double nearCheckT_ = 0;
+  int lastCount_ = 0;
   const Course* nearCourse_ = nullptr;
 };
 

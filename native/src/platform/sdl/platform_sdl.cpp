@@ -7,6 +7,20 @@
 #include <fstream>
 #include <memory>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define PSAPI_VERSION 2
+#include <windows.h>
+#include <psapi.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/resource.h>
+#else
+#include <sys/resource.h>
+#endif
 
 namespace sl::platform {
 namespace fs = std::filesystem;
@@ -101,6 +115,7 @@ public:
         case SDL_WINDOWEVENT:
           if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) e.resized = true;
           if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) e.focusLost = true;
+          if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) e.focusGained = true;
           break;
         case SDL_KEYDOWN:
         case SDL_KEYUP: {
@@ -239,7 +254,48 @@ public:
     if (audioDev_) { SDL_CloseAudioDevice(audioDev_); audioDev_ = 0; }
   }
 
+  size_t memoryBytes() const override {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    return GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc) ? size_t(pmc.WorkingSetSize) : 0;
+#elif defined(__APPLE__)
+    mach_task_basic_info info{};
+    mach_msg_type_number_t n = MACH_TASK_BASIC_INFO_COUNT;
+    return task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &n) == KERN_SUCCESS ? size_t(info.resident_size) : 0;
+#else
+    return procStatus("VmRSS:");
+#endif
+  }
+  size_t peakMemoryBytes() const override {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    return GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc) ? size_t(pmc.PeakWorkingSetSize) : 0;
+#elif defined(__APPLE__)
+    rusage ru{};
+    getrusage(RUSAGE_SELF, &ru);
+    return size_t(ru.ru_maxrss);   // (bytes on macOS)
+#else
+    size_t v = procStatus("VmHWM:");
+    if (v) return v;
+    rusage ru{};
+    getrusage(RUSAGE_SELF, &ru);
+    return size_t(ru.ru_maxrss) * 1024;
+#endif
+  }
+
 private:
+#if !defined(_WIN32) && !defined(__APPLE__)
+  static size_t procStatus(const char* key) {
+    FILE* f = std::fopen("/proc/self/status", "r");
+    if (!f) return 0;
+    char line[256];
+    size_t kb = 0;
+    while (std::fgets(line, sizeof line, f))
+      if (std::strncmp(line, key, std::strlen(key)) == 0) { kb = size_t(std::strtoull(line + std::strlen(key), nullptr, 10)); break; }
+    std::fclose(f);
+    return kb * 1024;
+  }
+#endif
   void openPad(int deviceIndex) {
     if (!SDL_IsGameController(deviceIndex)) return;
     SDL_GameController* c = SDL_GameControllerOpen(deviceIndex);

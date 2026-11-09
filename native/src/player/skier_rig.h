@@ -6,6 +6,7 @@
 #include "core/math.h"
 #include "engine/model.h"
 #include <memory>
+#include <vector>
 
 namespace sl {
 class AssetManager;
@@ -20,9 +21,26 @@ public:
   void submit(Renderer& r, bool hideBody) const;
   bool loaded() const { return bool(body_); }
   bool skisInRide = true;   // riding: skis on the feet (a chairlift) or in the cabin's outside rack (a gondola: hidden)
+  /// (Phase 7, outfits.js condensed) the shop's garments on the skier: its baked albedo recoloured per zone (jacket:
+  /// the torso and arms, trousers: the hips and legs, helmet: the top of the head; zones from the skin weights), the
+  /// texture's own shading kept (luminance against the zone's median). rgb sRGB 0..1, a = 0: the original piece.
+  void applyOutfit(gfx::Device& dev, const vec4& jacket, const vec4& trousers, const vec4& helmet);
+  bool polesVisible() const { return polesVisible_; }
+  int generation() const { return gen_; }   // bumped by every load (the outfit is applied again)
+  bool dressed() const { return bool(dressed_); }
 
 private:
   void bend(int bone, const vec3& modelAxis, float angle);
+  void buildZones();
+  std::shared_ptr<Model> pole_, dressed_;
+  mat4 poleFit_{1}, poleM_[2];
+  bool polesVisible_ = false;
+  int handL_ = -1, handR_ = -1;
+  std::vector<uint8_t> zone_;
+  int zw_ = 0, zh_ = 0, zImage_ = -1;
+  float median_[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+  uint32_t outfitTex_ = 0;
+  int gen_ = 0;
   std::shared_ptr<Model> body_, anims_, ski_;
   const AnimClip *idle_ = nullptr, *walk_ = nullptr, *run_ = nullptr;
   std::vector<int> idleMap_, walkMap_, runMap_;

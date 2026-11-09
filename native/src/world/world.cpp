@@ -685,7 +685,7 @@ double World::forest(double x, double z, double h, double slope) const {
       uint8_t a = t.f[size_t(j * S1 + i)], b = t.f[size_t(j * S1 + i + 1)], c = t.f[size_t((j + 1) * S1 + i)], d = t.f[size_t((j + 1) * S1 + i + 1)];
       if (a != 255 && b != 255 && c != 255 && d != 255) {
         double ax = fx - i, az = fz - j;
-        return ((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 254.0;
+        return thinned(x, z, ((a + (b - a) * ax) * (1 - az) + (c + (d - c) * ax) * az) / 254.0);
       }
     }
   }
@@ -694,7 +694,13 @@ double World::forest(double x, double z, double h, double slope) const {
   double alt = 1 - smoothstep(tl - 120, tl, h);
   double steep = 1 - smoothstep(0.7, 1.1, slope);
   double nearVillage = smoothstep(VILLAGE_R * 0.9, VILLAGE_R * 1.6, std::hypot(x, z));
-  return clamp((n - 0.38) * 2.6, 0, 1) * alt * steep * nearVillage;
+  return thinned(x, z, clamp((n - 0.38) * 2.6, 0, 1) * alt * steep * nearVillage);
+}
+
+double World::thinned(double x, double z, double f) const {
+  for (const ForestCut& c : forestCuts)
+    if (x >= c.bmin.x && x <= c.bmax.x && z >= c.bmin.y && z <= c.bmax.y) f = c.fn(x, z, f);
+  return f;
 }
 
 } // namespace sl

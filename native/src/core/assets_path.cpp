@@ -21,6 +21,8 @@ bool AssetPaths::init(platform::Platform& p) {
   if (const char* env = std::getenv("SKI_LEGACY_ASSETS")) if (ok(env, fs::path(env) / "data")) return true;
   fs::path exe = p.executableDir();
   if (ok(exe / "assets", exe / "assets" / "data")) return true;
+  // (Phase 7) the macOS app bundle: Ski Legacy.app/Contents/MacOS/<exe>, the assets in Contents/Resources/assets
+  if (ok(exe / ".." / "Resources" / "assets", exe / ".." / "Resources" / "assets" / "data")) return true;
   for (fs::path d = exe; !d.empty(); d = d.parent_path()) {
     if (ok(d / "public", d / "native" / "data")) return true;
     if (d == d.parent_path()) break;

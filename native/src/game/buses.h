@@ -38,6 +38,9 @@ public:
   double busYaw() const;
   std::string stopName(int i) const { return i >= 0 && size_t(i) < t_.stops.size() ? t_.stops[size_t(i)].name : ""; }
 
+  /// (Phase 7, audio) where buses pulled out of a stop since the game last took them (a horn)
+  std::vector<dvec3> departures;
+
 private:
   struct Leg { std::vector<double> X, Y, Z, S, V; double length = 0, s0 = 0, s1 = 0; int to = -1; };
   const Road* parent(int stop) const;

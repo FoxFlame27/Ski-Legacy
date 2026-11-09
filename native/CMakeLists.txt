@@ -34,7 +34,7 @@ endif()
 add_executable(ski_legacy src/main.cpp ${SL_SOURCES} ${SL_PLATFORM_SOURCES})
 target_include_directories(ski_legacy PRIVATE src)
 target_link_libraries(ski_legacy PRIVATE SDL2::SDL2-static SDL2::SDL2main glm::glm meshoptimizer webpdecoder glad
-  nlohmann_json::nlohmann_json sl_headeronly libzstd_static)
+  nlohmann_json::nlohmann_json sl_headeronly libzstd_static sl_vorbis)
 if(NOT TARGET webpdecoder)
   target_link_libraries(ski_legacy PRIVATE webp)
 endif()
@@ -54,8 +54,37 @@ target_link_libraries(ski_legacy PRIVATE mbedtls mbedx509 mbedcrypto)
 if(WIN32)
   target_link_libraries(ski_legacy PRIVATE ws2_32 crypt32)
 endif()
-if(APPLE)
+# (Phase 7) the macOS app bundle: "Ski Legacy.app" (Info.plist, the icon, the assets in Contents/Resources/assets).
+# SL_MACOS_BUNDLE=ON builds it (the packaging does); OFF keeps a plain executable for development.
+option(SL_MACOS_BUNDLE "macOS: build Ski Legacy.app (assets inside Contents/Resources)" OFF)
+# where -DSL_COPY_ASSETS=ON gathers the assets: next to the executable, or inside the bundle's Resources
+set(SL_ASSETS_DST "$<TARGET_FILE_DIR:ski_legacy>/assets")
+if(APPLE AND SL_MACOS_BUNDLE)
+  set(SL_ASSETS_DST "$<TARGET_BUNDLE_CONTENT_DIR:ski_legacy>/Resources/assets")
+  set(SL_ICON ${CMAKE_CURRENT_SOURCE_DIR}/../build/icon.icns)
+  set_target_properties(ski_legacy PROPERTIES
+    MACOSX_BUNDLE ON
+    OUTPUT_NAME "Ski Legacy"
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Info.plist.in
+    MACOSX_BUNDLE_BUNDLE_NAME "Ski Legacy"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.foxflame27.skilegacy.native"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_ICON_FILE icon.icns
+    MACOSX_BUNDLE_COPYRIGHT "Ski Legacy")
+  if(EXISTS ${SL_ICON})
+    target_sources(ski_legacy PRIVATE ${SL_ICON})
+    set_source_files_properties(${SL_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  endif()
+elseif(APPLE)
   set_target_properties(ski_legacy PROPERTIES MACOSX_BUNDLE OFF)
+endif()
+if(WIN32)
+  set_target_properties(ski_legacy PROPERTIES OUTPUT_NAME "SkiLegacy" WIN32_EXECUTABLE ON)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../build/icon.ico)
+    file(WRITE ${CMAKE_BINARY_DIR}/ski_legacy.rc "IDI_ICON1 ICON \"${CMAKE_CURRENT_SOURCE_DIR}/../build/icon.ico\"\n")
+    target_sources(ski_legacy PRIVATE ${CMAKE_BINARY_DIR}/ski_legacy.rc)
+  endif()
 endif()
 
 # ---------------------------------------------------------------- the exported world data (native/data, generated)
@@ -105,6 +134,27 @@ if(SL_EXPORT_DATA)
   endif()
 endif()
 
+# ---------------------------------------------------------------- (Phase 7) the sounds: public/audio -> native/data/audio
+# The web game's recordings are AAC (.m4a); the native build decodes Ogg Vorbis (stb_vorbis), so the build converts them
+# with ffmpeg (cmake/ConvertAudio.cmake: only new / changed files; ~1 min the first time). Without ffmpeg the game still
+# runs and plays its synthesized sounds (as the web game does until its recordings load). SL_FFMPEG overrides the path.
+find_program(SL_FFMPEG NAMES ffmpeg)
+set(SL_AUDIO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../public/audio)
+if(SL_FFMPEG AND EXISTS ${SL_AUDIO_SRC})
+  file(GLOB_RECURSE SL_AUDIO_FILES CONFIGURE_DEPENDS ${SL_AUDIO_SRC}/*.m4a ${SL_AUDIO_SRC}/*.ogg ${SL_AUDIO_SRC}/*.mp3 ${SL_AUDIO_SRC}/*.wav)
+  set(SL_AUDIO_STAMP ${SL_DATA_DIR}/audio/.converted)
+  add_custom_command(OUTPUT ${SL_AUDIO_STAMP}
+    COMMAND ${CMAKE_COMMAND} -DSRC=${SL_AUDIO_SRC} -DDST=${SL_DATA_DIR}/audio -DFFMPEG=${SL_FFMPEG} -DSTAMP=${SL_AUDIO_STAMP}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConvertAudio.cmake
+    DEPENDS ${SL_AUDIO_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConvertAudio.cmake
+    COMMENT "Converting public/audio to Ogg Vorbis (native/data/audio)" VERBATIM)
+  add_custom_target(sl_audio ALL DEPENDS ${SL_AUDIO_STAMP})
+  add_dependencies(ski_legacy sl_audio)
+elseif(NOT EXISTS ${SL_DATA_DIR}/audio)
+  message(WARNING "ffmpeg not found: public/audio is not converted (native/data/audio); the game plays synthesized sounds. "
+    "Install ffmpeg (brew / apt / choco install ffmpeg) or set SL_FFMPEG.")
+endif()
+
 # ---------------------------------------------------------------- packaging: assets next to the executable
 # Only the models the game loads (not the whole public/ folder) plus the exported world data (native/data). The list
 # is derived from what the game actually loads: tools/list_models.mjs collects every model the exported data names
@@ -135,6 +185,52 @@ if(SL_COPY_ASSETS)
   add_dependencies(ski_legacy sl_models)
   add_custom_command(TARGET ski_legacy POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DLIST=${_list} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/../public/models
-            -DDST=$<TARGET_FILE_DIR:ski_legacy>/assets -DDATA=${CMAKE_CURRENT_SOURCE_DIR}/data -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CopyAssets.cmake
+            -DDST=${SL_ASSETS_DST} -DDATA=${CMAKE_CURRENT_SOURCE_DIR}/data -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/CopyAssets.cmake
     COMMENT "Copying the game's assets next to the executable (assets/)")
 endif()
+
+# ---------------------------------------------------------------- (Phase 7) install + package
+# cmake --install native/build --prefix <dir> lays out a self-contained game (needs -DSL_COPY_ASSETS=ON, so the assets
+# are gathered next to the executable first):
+#   macOS (SL_MACOS_BUNDLE=ON): <dir>/Ski Legacy.app (assets in Contents/Resources/assets)
+#   Windows: <dir>/SkiLegacy.exe + assets/        Linux: <dir>/ski_legacy + assets/ + ski-legacy.sh
+# cpack (or the "package" target) zips it: Ski-Legacy-Native-<system>.zip / .tar.gz / .dmg (DragNDrop on macOS).
+# .github/workflows/native.yml builds all three and publishes them as the rolling "latest-native" release.
+if(APPLE AND SL_MACOS_BUNDLE)
+  install(TARGETS ski_legacy BUNDLE DESTINATION . COMPONENT game)   # (the assets are inside it: Contents/Resources/assets)
+else()
+  install(TARGETS ski_legacy RUNTIME DESTINATION . COMPONENT game)
+  if(SL_COPY_ASSETS)
+    install(CODE "file(INSTALL DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" TYPE DIRECTORY FILES \"$<TARGET_FILE_DIR:ski_legacy>/assets\")" COMPONENT game)
+  endif()
+  if(UNIX)
+    install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ski-legacy.sh DESTINATION . COMPONENT game)
+  endif()
+endif()
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PACKAGE-README.txt DESTINATION . RENAME README.txt COMPONENT game)
+
+set(CPACK_PACKAGE_NAME "Ski-Legacy-Native")
+set(CPACK_PACKAGE_VENDOR "Ski Legacy")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Ski Legacy (native C++ build)")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Ski Legacy")
+# only the game's own files (the third-party projects' install rules -- headers, static libs -- stay out)
+set(CPACK_COMPONENTS_ALL game)
+set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_DRAGNDROP_COMPONENT_INSTALL ON)
+if(NOT APPLE)
+  set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY ON)   # (the .zip / .tar.gz unpack into one folder; the .dmg holds the .app)
+endif()
+if(APPLE)
+  set(CPACK_GENERATOR DragNDrop)
+  set(CPACK_PACKAGE_FILE_NAME "Ski-Legacy-Native-Mac")
+  set(CPACK_DMG_VOLUME_NAME "Ski Legacy")
+elseif(WIN32)
+  set(CPACK_GENERATOR ZIP)
+  set(CPACK_PACKAGE_FILE_NAME "Ski-Legacy-Native-Windows")
+else()
+  set(CPACK_GENERATOR TGZ)
+  set(CPACK_PACKAGE_FILE_NAME "Ski-Legacy-Native-Linux")
+endif()
+include(CPack)

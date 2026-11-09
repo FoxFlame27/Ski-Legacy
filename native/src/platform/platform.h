@@ -57,6 +57,7 @@ struct Events {
   bool quit = false;
   bool resized = false;
   bool focusLost = false;
+  bool focusGained = false;   // (Phase 7: the audio mutes while unfocused, when the setting says so)
   float mouseDX = 0, mouseDY = 0, wheel = 0;
   // (Phase 4, menus) the pointer in drawable pixels (top-left origin) while it is not captured, and button edges
   float mouseX = -1, mouseY = -1;
@@ -113,6 +114,10 @@ public:
   // audio output stream (48 kHz float stereo requested); false if no device (the game runs silent)
   virtual bool openAudio(int sampleRate, int channels, AudioCallback cb) = 0;
   virtual void closeAudio() = 0;
+
+  // (Phase 7) memory in use / the peak so far (resident set; on Switch: the heap the application reserved)
+  virtual size_t memoryBytes() const = 0;
+  virtual size_t peakMemoryBytes() const = 0;
 };
 
 /// Creates the platform for this build (SDL2 on desktop).

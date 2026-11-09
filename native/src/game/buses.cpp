@@ -162,6 +162,7 @@ void BusLine::update(double dt, const dvec3& player, const Drive* you, const Tra
         if (from == 0) { round_ = round_ % int(t_.stops.size() - 1) + 1; b.dest = round_; to = b.dest; }
         if (!legs(from, to, b.legs)) { b.dwell = 30; if (from == 0) continue; b.at = 0; continue; }
         b.li = 0; b.s = b.legs[0].s0; b.v = 0; b.at = -1;
+        departures.push_back(b.pose.pos);   // (Phase 7: the horn as it pulls out)
       }
     }
     if (b.legs.empty()) continue;

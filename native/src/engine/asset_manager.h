@@ -16,6 +16,7 @@ struct ModelLoadOptions {
   std::vector<float> lodRatios;   // e.g. {0.15f, 0.03f}: extra LOD index ranges at these triangle ratios
   bool ignoreEmissive = true;     // Meshy exports bake emissive = 1 with a copy of the albedo: off by default
   int maxTextureSize = 2048;      // larger textures are box-downsampled on load (memory budget, Switch)
+  bool keepCpu = false;           // (Phase 7) keep the vertices / indices on the CPU (the cars' wheels are split off)
 };
 
 class AssetManager {
@@ -26,6 +27,11 @@ public:
   /// Load from an explicit path.
   std::shared_ptr<Model> loadFile(const std::string& path, const std::string& name, const ModelLoadOptions& opt);
   size_t textureBytes() const { return texBytes_; }
+  std::string modelPath(const std::string& name) const;
+  /// (Phase 7) a cap on every texture's size (the quality preset: 512 on Switch), whatever the load options ask
+  int textureCap = 4096;
+  int triangleBudget = 0;          // (Phase 7, the switch preset's mesh LOD bias) a model over it is simplified to it
+  bool compressTextures = false;   // (Phase 7, the switch preset) BC1 / BC3 block compression at load (engine/texcompress)
 
 private:
   platform::Platform& p_;

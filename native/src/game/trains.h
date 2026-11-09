@@ -15,6 +15,7 @@ struct TrainRide { bool on = false; dvec3 seat{0}, fwd{0, 0, 1}; std::string hin
 
 class Railway {
 public:
+  std::vector<dvec3> departures;   // (Phase 7, audio) trains that left a station since the game last took them
   Railway(World& w, Transport& t, VehicleModels& m) : world_(w), t_(t), models_(m) {}
   void init();
   void update(double dt, bool fast, const dvec3& viewer);
@@ -28,6 +29,7 @@ public:
   bool leaveAtStop(dvec3& exit);
   void abort() { ride_.on = false; }
   bool riding() const { return ride_.on; }
+  bool rideUp() const { return ride_.up; }
   double cycle() const { return t_.rail.cycle; }
   bool insideView = false;   // the seat view: the car you ride in drawn with its cabin
   /// (Phase 6, transit.js) multiplayer: the line's shared timeline (s: the server clock + its speed-up, 'train|rail');
@@ -59,6 +61,7 @@ private:
 
 class Express {
 public:
+  std::vector<dvec3> departures;   // (Phase 7, audio)
   Express(World& w, Transport& t, VehicleModels& m) : world_(w), t_(t), models_(m) {}
   void init();
   void update(double dt, bool fast, const dvec3& viewer);

@@ -79,6 +79,7 @@ public:
   double airTime = 0;
   double steer = 0, lean = 0, edge = 0, crouch = 0.2, plow = 0, absorb = 0, absorbV = 0, sideslip = 0, skidYaw = 0;
   bool tuck = false;
+  double skiSpeed = 1, skiGrip = 1;   // (Phase 7) the equipped skis (economy.js SKIS: speed / grip), as player.js this.ski
   double charge = 0;
   bool charging = false;
   double flip = 0, yawFx = 0, yawFxV = 0;
@@ -89,6 +90,7 @@ public:
   enum class View : uint8_t { Third, First } view = View::Third;
   std::vector<PlayerEvent> events;   // drained by the game each frame (audio, rumble, HUD)
   double speed() const { return glm::length(vel); }
+  bool groomedAt(double x, double z) const { return onGroomedRun(x, z); }   // (Phase 7: the powder loop off the runs)
   const char* modeName() const;
 
 private:

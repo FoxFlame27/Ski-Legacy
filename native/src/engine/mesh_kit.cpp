@@ -1,4 +1,5 @@
 #include "engine/mesh_kit.h"
+#include <cstring>
 #include "gfx/gfx.h"
 #include <algorithm>
 #include <glm/gtx/quaternion.hpp>
@@ -295,27 +296,35 @@ std::shared_ptr<Model> buildModel(gfx::Device& dev, const std::vector<std::pair<
   Mesh mesh;
   for (auto& [g, mat] : parts) {
     if (g.empty()) continue;
-    std::vector<float> vb(g.pos.size() * 11);
+    // (Phase 7) the packed 28-byte layout (was 44 bytes of floats): position f32 x3, normal i8 x3, uv f32 x2, colour u8 x3
+    // stored as sqrt (the shader squares it: colorSqrt) -- the procedural meshes (track, guardrails, stations) 36 % smaller
+    constexpr uint32_t st = 28;
+    std::vector<uint8_t> vb(g.pos.size() * st, 0);
     Primitive p;
+    auto i8 = [](float v) { return int8_t(std::lround(std::clamp(v, -1.f, 1.f) * 127.f)); };
+    auto u8 = [](float v) { return uint8_t(std::lround(std::sqrt(std::clamp(v, 0.f, 1.f)) * 255.f)); };
     for (size_t i = 0; i < g.pos.size(); i++) {
-      float* o = &vb[i * 11];
+      uint8_t* o = &vb[i * st];
       vec3 n = i < g.nor.size() ? g.nor[i] : vec3(0, 1, 0);
       vec2 t = i < g.uv.size() ? g.uv[i] : vec2(0);
       vec3 c = i < g.col.size() ? g.col[i] : vec3(1);
-      o[0] = g.pos[i].x; o[1] = g.pos[i].y; o[2] = g.pos[i].z; o[3] = n.x; o[4] = n.y; o[5] = n.z; o[6] = t.x; o[7] = t.y;
-      o[8] = c.x; o[9] = c.y; o[10] = c.z;
+      std::memcpy(o, &g.pos[i], 12);
+      int8_t nn[3] = {i8(n.x), i8(n.y), i8(n.z)};
+      std::memcpy(o + 12, nn, 3);
+      std::memcpy(o + 16, &t, 8);
+      o[24] = u8(c.x); o[25] = u8(c.y); o[26] = u8(c.z);
       p.bmin = glm::min(p.bmin, g.pos[i]); p.bmax = glm::max(p.bmax, g.pos[i]);
     }
-    p.stride = 44; p.hasColor = true;
-    p.vbo = dev.createBuffer(gfx::BufferUsage::Vertex, vb.data(), vb.size() * sizeof(float));
+    p.stride = st; p.hasColor = true; p.packed = true;
+    p.vbo = dev.createBuffer(gfx::BufferUsage::Vertex, vb.data(), vb.size());
     p.ibo = dev.createBuffer(gfx::BufferUsage::Index, g.idx.data(), g.idx.size() * sizeof(uint32_t));
     p.lods.push_back({0, uint32_t(g.idx.size())});
-    const uint32_t st = 44;
-    p.input = dev.createVertexInput({{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Float, false, 12, st},
-                                     {2, 0, 2, gfx::AttribType::Float, false, 24, st}, {7, 0, 3, gfx::AttribType::Float, false, 32, st}},
+    p.input = dev.createVertexInput({{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Byte, true, 12, st},
+                                     {2, 0, 2, gfx::AttribType::Float, false, 16, st}, {7, 0, 3, gfx::AttribType::UByte, true, 24, st}},
                                     {p.vbo}, p.ibo);
     p.material = int(m->materials.size());
     m->materials.push_back(mat);
+    m->materials.back().colorSqrt = true;
     m->bmin = glm::min(m->bmin, p.bmin); m->bmax = glm::max(m->bmax, p.bmax);
     mesh.primitives.push_back(std::move(p));
   }

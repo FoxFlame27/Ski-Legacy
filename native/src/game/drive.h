@@ -56,6 +56,8 @@ public:
   void seat(dvec3& pos, dvec3& fwd) const;
   void cameraFor(Camera& cam) const { cam.lookAt(camPos_, camLook_); cam.fovY = float(camFov_); cam.nearZ = view_ == View::Cockpit ? 0.05f : 0.1f; }
   void addDraw(VehicleDraw& draw, const dvec3& cam) const;
+  /// (Phase 7) the cars to light / plate (yours: headlights with L or at night, brake lights)
+  void carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, bool night) const;
   void fillColliders(std::vector<Collider>& out) const;
 
   // ---- state for the HUD, the traffic, the autotest
@@ -72,6 +74,18 @@ public:
   double rpm() const { return d_.rpm; }
   char gear() const { return d_.gear; }
   bool lights() const { return d_.lights; }
+  // (Phase 7) for the audio and the wheels
+  bool electric() const { return d_.spec && d_.spec->electric; }
+  float crank() const { return d_.spec && !d_.spec->electric && d_.start < 0.85 ? 1.f : 0.f; }
+  float firing() const { return d_.crash ? 0.f : d_.spec && !d_.spec->electric && d_.start < 0.85 ? (d_.start > 0.62 ? 0.5f : 0.f) : 1.f; }
+  double load() const { return d_.load; }
+  double squeal() const { return d_.squeal; }
+  bool shifting() const { return d_.shiftT > 0; }
+  bool hornOn() const { return d_.horn; }
+  double steerAngle() const { return d_.steer; }
+  std::string carName() const { return d_.on ? parked[size_t(d_.e)].name : std::string(); }
+  /// the wheels' roll angle (rad), integrated from the speed along the car (drive.js wheel spin)
+  double wheelSpin() const { return wheelSpin_; }
   std::vector<VehicleEvent> events;
 
   std::function<void(std::vector<OtherBody>&)> gatherOthers;
@@ -86,6 +100,7 @@ public:
     bool owned = false, forSale = false, driving = false, wrecked = false;
     double svx = 0, svz = 0, sw = 0;   // shoved: sliding to a stop
     int impoundDay = -1;               // (Phase 5, impound.js) towed: locked until this game day
+    vec4 paint{1, 1, 1, 0};            // (Phase 7) its paint (a = 0: the model's own colour)
   };
   std::vector<Parked> parked;
   /// (Phase 5, impound.js lockReason) a car of yours that doesn't let you in: the reason shown, "" when free
@@ -138,6 +153,7 @@ private:
   dvec3 camPos_{0}, camLook_{0};
   double camFov_ = 62, camYaw_ = 0, camPitch_ = 0.17, lastMouse_ = -1e9, lookYaw_ = 0, lookPitch_ = -0.05, shake_ = 0;
   bool camReady_ = false, lookBackPrev_ = false;
+  double wheelSpin_ = 0;
   double knockT_ = -1e9, bangT_ = -1e9, unstuckT_ = -1e9, now_ = 0;
   unsigned seed_ = 12345;
   double rnd() { seed_ = seed_ * 1103515245u + 12345u; return double((seed_ >> 8) & 0xffffff) / double(0x1000000); }

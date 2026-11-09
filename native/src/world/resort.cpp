@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "engine/asset_manager.h"
 #include "engine/mesh_kit.h"
+#include "engine/texcompress.h"
 #include "gfx/gfx.h"
 #include "platform/platform.h"
 #include "world/gondola_station.h"
@@ -10,8 +11,10 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
+#include <zstd.h>
 
 namespace sl {
 
@@ -124,7 +127,7 @@ struct Inflate {
   }
 };
 
-gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontSet& fonts) {
+gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontSet& fonts, int cap, bool compress) {
   Canvas2D g(c.value("w", 300), c.value("h", 150), &fonts);
   auto F = [](const nlohmann::json& a, size_t i, float d = 0) { return i < a.size() && a[i].is_number() ? a[i].get<float>() : d; };
   for (auto& op : c["ops"]) {
@@ -177,8 +180,23 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
   int W = g.width(), H = g.height();
   std::vector<uint8_t> flip(px.size());   // (CanvasTexture flipY)
   for (int y = 0; y < H; y++) std::memcpy(&flip[size_t(y) * W * 4], &px[size_t(H - 1 - y) * W * 4], size_t(W) * 4);
+  // (Phase 7) the quality preset's texture cap (512 on Switch): box-halved until it fits
+  while ((W > cap || H > cap) && W > 1 && H > 1) {
+    int w2 = W / 2, h2 = H / 2;
+    std::vector<uint8_t> o(size_t(w2) * h2 * 4);
+    for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) for (int k = 0; k < 4; k++)
+      o[(size_t(y) * w2 + x) * 4 + k] = uint8_t((flip[(size_t(2 * y) * W + 2 * x) * 4 + k] + flip[(size_t(2 * y) * W + 2 * x + 1) * 4 + k] +
+                                                 flip[(size_t(2 * y + 1) * W + 2 * x) * 4 + k] + flip[(size_t(2 * y + 1) * W + 2 * x + 1) * 4 + k] + 2) / 4);
+    flip.swap(o); W = w2; H = h2;
+  }
   gfx::TextureDesc d;
   d.width = W; d.height = H; d.format = gfx::TexFormat::SRGBA8; d.anisotropy = 8;
+  if (compress && W >= 4 && H >= 4 && dev.supportsBC(true)) {   // (Phase 7, the switch preset: BC1 / BC3)
+    std::vector<std::vector<uint8_t>> levels;
+    bool bc3 = false;
+    compressBC(flip.data(), W, H, levels, bc3);
+    return dev.createCompressedTexture(d, bc3, true, levels);
+  }
   return dev.createTexture(d, flip.data());
 }
 
@@ -218,7 +236,7 @@ std::shared_ptr<Model> modelFromBin(gfx::Device& dev, const uint8_t* bin, size_t
   std::vector<uint32_t> idx(tris * 3);
   if (i16) { const uint16_t* s16 = reinterpret_cast<const uint16_t*>(bin + iOff); for (size_t i = 0; i < idx.size(); i++) idx[i] = s16[i]; }
   else std::memcpy(idx.data(), bin + iOff, idx.size() * 4);
-  p.stride = 28; p.hasColor = true;
+  p.stride = 28; p.hasColor = true; p.packed = true;
   p.vbo = dev.createBuffer(gfx::BufferUsage::Vertex, bin + vOff, verts * 28);
   p.ibo = dev.createBuffer(gfx::BufferUsage::Index, idx.data(), idx.size() * 4);
   p.lods.push_back({0, uint32_t(idx.size())});
@@ -314,7 +332,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     if (it != canvasTex.end()) return it->second;
     gfx::Texture t;
     auto c = j["canvases"].find(std::to_string(id));
-    if (c != j["canvases"].end()) t = replayCanvas(dev_, *c, fonts_);
+    if (c != j["canvases"].end()) t = replayCanvas(dev_, *c, fonts_, std::min(textureCap, 2048), compressTextures);
     canvasTex[id] = t;
     return t;
   };
@@ -352,6 +370,11 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   auto addSet = [&](std::shared_ptr<Model> model, const std::vector<glm::dmat4>& inst, float glow, bool shadow) {
     if (!model) return;
     if (glow > 0) { auto m2 = std::make_shared<Model>(*model); for (auto& mt : m2->materials) mt.glow = glow; model = m2; }
+    if (model->name == "lamp_post") {   // (Phase 7) the head: the top of the bounds, over the box's centre
+      vec3 c = (model->bmin + model->bmax) * 0.5f;
+      for (const glm::dmat4& M : inst) lamps_.push_back(dvec3(M * glm::dvec4(c.x, model->bmax.y * 0.96, c.z, 1)));
+    }
+    if (model->name == "snow_cannon") for (const glm::dmat4& M : inst) cannons_.push_back(M);
     PropSet ps;
     ps.model = model;
     ps.shadow = shadow;
@@ -383,17 +406,32 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   for (auto& m : j["instanced"]) addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), instList(m, bin), 0, true);
 
   // ---- baked procedural meshes
+  // (Phase 7) kept packed on the CPU and uploaded when the camera comes near (streamChunks)
   for (auto& m : j["meshes"]) {
     Chunk c;
-    dvec3 mn, mx;
     Material M = matAt(m["mat"]);
-    c.model = modelFromBin(dev_, bin.data(), bin.size(), m, M, &mn, &mx);
-    if (!c.model) continue;
+    size_t verts = m["verts"], tris = m["tris"], vOff = m["vOff"], iOff = m["iOff"];
+    bool i16 = m.value("i16", false);
+    size_t ib = tris * 3 * (i16 ? 2 : 4);
+    if (vOff + verts * 28 > bin.size() || iOff + ib > bin.size() || !verts || !tris) continue;
+    vec3 mn(1e30f), mx(-1e30f);
+    for (size_t i = 0; i < verts; i++) { vec3 q; std::memcpy(&q, bin.data() + vOff + i * 28, 12); mn = glm::min(mn, q); mx = glm::max(mx, q); }
     c.origin = dvec3(m["origin"][0].get<double>(), m["origin"][1].get<double>(), m["origin"][2].get<double>());
-    c.bmin = c.origin + mn; c.bmax = c.origin + mx;
+    c.bmin = c.origin + dvec3(mn); c.bmax = c.origin + dvec3(mx);
     c.shadow = M.alpha != Material::Alpha::Blend;
+    c.mat = M; c.verts = verts; c.tris = tris; c.i16 = i16; c.raw = verts * 28 + ib;
+    std::vector<uint8_t> rawb(c.raw);
+    std::memcpy(rawb.data(), bin.data() + vOff, verts * 28);
+    std::memcpy(rawb.data() + verts * 28, bin.data() + iOff, ib);
+    c.packed.resize(ZSTD_compressBound(c.raw));
+    size_t n = ZSTD_compress(c.packed.data(), c.packed.size(), rawb.data(), rawb.size(), 1);
+    if (ZSTD_isError(n)) continue;
+    c.packed.resize(n);
+    c.packed.shrink_to_fit();
+    stream_.packedBytes += n; stream_.rawBytes += c.raw;
     chunks_.push_back(std::move(c));
   }
+  stream_.chunks = chunks_.size();
 
   // ---- the gondola stations (gondolastation.js, built here)
   for (auto& s : j["stations"]) {
@@ -449,11 +487,18 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   return true;
 }
 
+void Resort::releaseLoadData() {
+  tjson_.reset(); pjson_.reset();
+  std::vector<uint8_t>().swap(tbin_);
+  std::vector<uint8_t>().swap(pbin_);
+  std::vector<Material>().swap(tmats_);
+}
+
 void Resort::rebuild(const dvec3& cam) {
   lastBuild_ = cam;
   std::vector<MatrixInstanceBatch::Inst> l0, l1;
   for (PropSet& ps : props_) {
-    double nearD = std::max(150.0, double(ps.radius) * 12), farD = std::max(900.0, double(ps.radius) * 120);
+    double nearD = std::max(150.0, double(ps.radius) * 12) * lodScale, farD = std::max(900.0, double(ps.radius) * 120) * lodScale;
     for (Cell& c : ps.cells) {
       l0.clear(); l1.clear();
       for (const glm::dmat4& M : c.inst) {
@@ -470,6 +515,37 @@ void Resort::rebuild(const dvec3& cam) {
 void Resort::update(double dt, const dvec3& cam) {
   (void)dt;   // (the lifts are moved by the game before the rider is seated: Lifts::update)
   if (glm::length(cam - lastBuild_) > 8) rebuild(cam);
+  streamChunks(cam, false);
+}
+
+// (Phase 7) chunks within loadRadius uploaded (nearest first, up to ~6 MB a frame unless `all`), past +400 m released
+void Resort::streamChunks(const dvec3& cam, bool all) {
+  const double inR = loadRadius(), outR = inR + 400;
+  std::vector<std::pair<double, size_t>> want;
+  for (size_t i = 0; i < chunks_.size(); i++) {
+    Chunk& c = chunks_[i];
+    double d = glm::length(glm::clamp(cam, c.bmin, c.bmax) - cam);
+    if (c.model && d > outR) {
+      for (auto& mesh : c.model->meshes)
+        for (auto& p : mesh.primitives) { dev_.destroy(p.input); dev_.destroy(p.vbo); dev_.destroy(p.ibo); }
+      c.model.reset();
+      stream_.loaded--; stream_.gpuBytes -= c.verts * 28 + c.tris * 12; stream_.releases++;
+    } else if (!c.model && d < inR) want.push_back({d, i});
+  }
+  std::sort(want.begin(), want.end());
+  size_t budget = all ? SIZE_MAX : size_t(6) << 20, spent = 0;
+  std::vector<uint8_t> raw;
+  for (auto& [d, i] : want) {
+    Chunk& c = chunks_[i];
+    if (spent > budget) break;
+    raw.resize(c.raw);
+    if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), c.packed.data(), c.packed.size()))) continue;
+    nlohmann::json m = {{"verts", c.verts}, {"tris", c.tris}, {"vOff", 0}, {"iOff", c.verts * 28}, {"i16", c.i16}};
+    c.model = modelFromBin(dev_, raw.data(), raw.size(), m, c.mat);
+    if (!c.model) continue;
+    spent += c.raw;
+    stream_.loaded++; stream_.gpuBytes += c.verts * 28 + c.tris * 12; stream_.uploads++;
+  }
 }
 
 void Resort::submit(Renderer& r, bool props, bool meshes) {
@@ -485,16 +561,17 @@ void Resort::submit(Renderer& r, bool props, bool meshes) {
     }
   if (meshes) {
     for (const Chunk& c : chunks_) {
+      if (!c.model) continue;
       dvec3 q = glm::clamp(cam, c.bmin, c.bmax);
       double d = glm::length(q - cam);
-      if (d > 1800) continue;
+      if (d > 1800 * lodScale) continue;
       bool vis = r.visible(c.bmin, c.bmax), cast = c.shadow && d < 300 && r.castsShadow(c.bmin, c.bmax);
       if (!vis && !cast) continue;
       r.submitModel(*c.model, c.origin, mat4(1), nullptr, cast, 0, vis);
     }
     for (const Placed& p : stations_) {
       double d = glm::length(p.pos - cam);
-      if (d > 3000) continue;
+      if (d > 3000 * lodScale) continue;
       dvec3 ext(p.radius);
       bool vis = r.visible(p.pos - ext, p.pos + ext), cast = r.castsShadow(p.pos - ext, p.pos + ext);
       if (!vis && !cast) continue;

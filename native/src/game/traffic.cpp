@@ -1,4 +1,5 @@
 #include "game/traffic.h"
+#include "game/scenefx.h"
 #include "core/log.h"
 #include "game/drive.h"
 #include "world/scenery.h"
@@ -74,7 +75,8 @@ void Traffic::init() {
     for (auto& n : names) { a -= weightOf(n); if (a < 0) return n; }
     return names.back();
   };
-  for (int k = 0; k < N_CARS + (scenic_.empty() ? 0 : N_SCENIC); k++) {
+  int nCars = std::max(4, int(std::lround((N_CARS + (scenic_.empty() ? 0 : N_SCENIC)) * density)));
+  for (int k = 0; k < nCars; k++) {
     Car c;
     c.name = draw(uint32_t(k < N_CARS ? k : 1000 + k - N_CARS));
     c.vm = models_.car(c.name);
@@ -379,13 +381,29 @@ void Traffic::fillColliders(std::vector<Collider>& out) const {
   }
 }
 
+void Traffic::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, bool night) const {
+  static const char* CANTONS[] = {"VS", "GR", "BE", "UR", "OW", "TI", "ZH", "LU"};
+  for (const Car& c : list) {
+    if (c.mode == Car::Mode::Gone || !c.vm || !c.vm->ok()) continue;
+    if (std::hypot(c.x - cam.x, c.z - cam.z) > maxD) continue;
+    CarPose p;
+    p.vm = c.vm;
+    p.M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
+    p.lights = night && c.mode == Car::Mode::Road;
+    p.brake = c.mode == Car::Mode::Road && c.brake > 0.2;
+    uint32_t h = uint32_t(&c - list.data()) * 2246822519u + 77u;
+    p.plate = std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
+    out.push_back(p);
+  }
+}
+
 void Traffic::addDraw(VehicleDraw& draw, const dvec3& cam) const {
   for (const Car& c : list) {
     if (c.mode == Car::Mode::Gone || !c.vm || !c.vm->ok()) continue;
     double d = std::hypot(c.x - cam.x, c.z - cam.z);
     if (d > SHOW_R) continue;
     glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
-    draw.add(c.vm->model.get(), M * glm::dmat4(c.vm->fit), d < LOD_R ? 0 : 1);
+    draw.addCar(*c.vm, M, d < LOD_R ? 0 : 1, paintForIndex(uint32_t(&c - list.data())), c.odo / 0.34, 0);
   }
 }
 

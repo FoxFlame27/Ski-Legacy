@@ -34,6 +34,7 @@ const std::vector<SetRow>& setRows() {
     {"quality", "Graphics preset", 'q', 0, 0, 0, nullptr, {}},
     {"renderScale", "Render scale", 'r', 0.5, 1, 0.05, "p", {}},
     {"shadows", "Shadows", 't', 0, 0, 0, nullptr, {}},
+    {"bloom", "Bloom", 't', 0, 0, 0, nullptr, {}},
     {"brightness", "Brightness", 'r', 0.7, 1.3, 0.05, "p", {}},
     {"fpsCap", "Frame rate limit", 'c', 0, 0, 0, nullptr, {{30, "30"}, {60, "60"}, {0, "Unlimited"}}},
     {"fullscreen", "Fullscreen", 't', 0, 0, 0, nullptr, {}},
@@ -41,6 +42,7 @@ const std::vector<SetRow>& setRows() {
     {"volume", "Master volume", 'r', 0, 1, 0.05, "p", {}},
     {"musicVolume", "Music", 'r', 0, 1, 0.05, "p", {}},
     {"sfxVolume", "Sound effects", 'r', 0, 1, 0.05, "p", {}},
+    {"voiceVolume", "Announcer", 'r', 0, 1, 0.05, "p", {}},
     {"muteUnfocused", "Mute in background", 't', 0, 0, 0, nullptr, {}},
     {nullptr, "CONTROLS", 0, 0, 0, 0, nullptr, {}},
     {"controls", "Keyboard & controller buttons", 'k', 0, 0, 0, nullptr, {}},
@@ -63,8 +65,10 @@ const std::vector<SetRow>& setRows() {
   };
   return rows;
 }
-const char* QUALITY_ORDER[] = {"super", "performance", "balanced", "high", "ultra", "superultra"};
-const char* QUALITY_LABELS[] = {"Super Performance", "Performance", "Balanced", "High", "Ultra", "Super Ultra"};
+// (Phase 7) "switch": the Nintendo Switch budget (engine/quality.h), first in the row
+const char* QUALITY_ORDER[] = {"switch", "super", "performance", "balanced", "high", "ultra", "superultra"};
+const char* QUALITY_LABELS[] = {"Switch (handheld)", "Super Performance", "Performance", "Balanced", "High", "Ultra", "Super Ultra"};
+constexpr int kQualityCount = 7;
 const char* HUD_KEYS[] = {"showSpeedo", "showInfo", "showMoney", "showForecast"};
 } // namespace
 
@@ -604,9 +608,9 @@ void Menus::scrSettings() {
     if (r.kind == 'q') {
       std::string q = save_.quality.empty() ? "balanced" : save_.quality;
       if (q == "low") q = "performance"; else if (q == "medium") q = "balanced";
-      int qi = 2;
-      for (int i = 0; i < 6; i++) if (q == QUALITY_ORDER[i]) qi = i;
-      // (six presets: one selector with arrows instead of the web's wrapping row)
+      int qi = 3;
+      for (int i = 0; i < kQualityCount; i++) if (q == QUALITY_ORDER[i]) qi = i;
+      // (seven presets: one selector with arrows instead of the web's wrapping row)
       std::string lbl = QUALITY_LABELS[qi];
       float lw = 190 * u_, bx = rx + rw - lw, by = ry + (rowH - segH) / 2;
       ui_.roundRect(bx, by, lw, segH, 5 * u_, blue);
@@ -614,7 +618,7 @@ void Menus::scrSettings() {
       ui_.text(bx + lw - 14 * u_, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, white, "\xE2\x86\x92", UiAlign::Right);
       ui_.text(bx + lw / 2, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, white, lbl, UiAlign::Center);
       auto set = [this, qi, applyKey](int d) {
-        int n = std::clamp(qi + d, 0, 5);
+        int n = std::clamp(qi + d, 0, kQualityCount - 1);
         if (n == qi) return;
         save_.quality = QUALITY_ORDER[n];
         applyKey("quality");

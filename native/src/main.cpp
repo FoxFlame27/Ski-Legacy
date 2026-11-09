@@ -1,5 +1,5 @@
 // Ski Legacy — native entry point.
-//   ski_legacy [--quality low|medium|high] [--spawn village|piste] [--fullscreen] [--size WxH] [--no-vsync]
+//   ski_legacy [--quality switch|low|medium|high|ultra] [--spawn village|piste] [--fullscreen] [--size WxH] [--no-vsync]
 //              [--bindings file.json] [--neutral] [--hour H] [--no-menu] [--save name.json]
 //   ski_legacy --autotest [--frames N] [--png out.png]   load, ski a run for N frames, walk into a hotel, ride a gondola,
 //                                                        print stats, exit 0 on success
@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
     else if (a == "--mp-seconds") o.mpSeconds = std::max(1.0, std::atof(next().c_str()));
     else if (a == "--size") { std::string s = next(); std::sscanf(s.c_str(), "%dx%d", &o.width, &o.height); }
     else if (a == "--help" || a == "-h") {
-      std::puts("ski_legacy [--quality low|medium|high|ultra] [--spawn village|piste] [--fullscreen] [--size WxH] [--no-vsync]\n"
+      std::puts("ski_legacy [--quality switch|low|medium|high|ultra] [--spawn village|piste] [--fullscreen] [--size WxH] [--no-vsync]\n"
                 "           [--bindings binds.json] [--neutral] [--hour 0-24] [--no-menu] [--save name.json]\n"
                 "           [--autotest [--frames N] [--png out.png]] [--verify-heights]\n"
                 "           [--server wss://host/ws] [--mptest ws://127.0.0.1:PORT/ws [--mp-peers N] [--mp-seconds S]]");

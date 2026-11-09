@@ -13,6 +13,9 @@ class Drive;
 
 class Traffic {
 public:
+  double density = 1;   // (Phase 7, the quality preset) x the number of cars
+  /// (Phase 7) the cars to light (at night) / plate
+  void carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, bool night) const;
   Traffic(World& w, Transport& t, VehicleModels& m) : world_(w), t_(t), models_(m) {}
   void init();
   /// per frame: player position (on foot) / your car (drive), the bus boxes to brake for

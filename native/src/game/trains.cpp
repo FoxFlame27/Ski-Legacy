@@ -1,5 +1,6 @@
 #include "game/trains.h"
 #include "core/log.h"
+#include "engine/mesh_kit.h"
 #include "world/scenery.h"
 #include "world/world.h"
 #include <algorithm>
@@ -78,7 +79,12 @@ void Railway::update(double dt, bool fast, const dvec3&) {
   double scale = ride_.on && fast ? 6 : 1;
   if (mpTime) t_now_ = std::fmod(mpTime(), t_.rail.cycle * 1000);   // (multiplayer: the shared timeline)
   else t_now_ = std::fmod(t_now_ + dt * scale, t_.rail.cycle * 1000);
-  for (auto& tr : trains_) tr.st = trainState(t_now_, tr.phase);
+  for (size_t k = 0; k < trains_.size(); k++) {
+    auto& tr = trains_[k];
+    int was = tr.st.at;
+    tr.st = trainState(t_now_, tr.phase);
+    if (was >= 0 && tr.st.at < 0 && dt > 0) { glm::dmat4 M; carMatrix(int(k), 0, M); departures.push_back(dvec3(M[3])); }   // (Phase 7: the horn)
+  }
   if (ride_.on && trains_[size_t(ride_.train)].st.at != ride_.from) ride_.departed = true;
 }
 
@@ -277,7 +283,11 @@ void Express::update(double dt, bool fast, const dvec3&) {
   if (trains_.empty()) return;
   double scale = ride_.on && fast ? t_.express.fast : 1;
   t_now_ = std::fmod(t_now_ + dt * scale, up_.loop * 1000);
-  for (size_t k = 0; k < trains_.size(); k++) trains_[k].st = trainState(way(trains_[k].dir), u(int(k)));
+  for (size_t k = 0; k < trains_.size(); k++) {
+    int was = trains_[k].st.at;
+    trains_[k].st = trainState(way(trains_[k].dir), u(int(k)));
+    if (was >= 0 && trains_[k].st.at < 0 && dt > 0) { glm::dmat4 M; carMatrix(int(k), 0, M); departures.push_back(dvec3(M[3])); }   // (Phase 7: the horn)
+  }
   if (ride_.on && trains_[size_t(ride_.train)].st.at != ride_.from) ride_.departed = true;
 }
 
@@ -401,7 +411,9 @@ void Express::addDraw(VehicleDraw& draw, const dvec3& cam) const {
       double d = glm::length(dvec3(M[3]) - cam);
       if (d > 420 && !mine) { if (models_.rail.lo) draw.add(models_.rail.lo.get(), M, 0); continue; }
       if (mine && c == 0 && insideView && models_.rail.cabin) { draw.add(models_.rail.cabin.get(), M, 0); continue; }
-      if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), d < 90 ? 0 : 1);
+      // (Phase 7) the Legacy Express in its blue livery (the Wolkenspitzbahn keeps the red)
+      if (models_.rail.express.ok()) draw.add(models_.rail.express.model.get(), M * glm::dmat4(models_.rail.express.fit), d < 90 ? 0 : 1, vec4(hexColor("#1546c8"), 1));
+      else if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), d < 90 ? 0 : 1);
       if (models_.rail.frame) draw.add(models_.rail.frame.get(), M, 0);
       if (models_.rail.bogie && d < 200) for (const vec3& b : t_.rail.bogies) draw.add(models_.rail.bogie.get(), M * glm::translate(glm::dmat4(1), dvec3(b)), 0);
     }

@@ -91,7 +91,7 @@ void MpView::addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels
     if (d > 500) return;
     glm::dmat4 M = glm::translate(glm::dmat4(1), p + dvec3(0, 0.02, 0)) * glm::rotate(glm::dmat4(1), yaw, dvec3(0, 1, 0)) *
                    glm::rotate(glm::dmat4(1), roll, dvec3(0, 0, 1));
-    vd.add(m->model.get(), M * glm::dmat4(m->fit), d < 70 ? 0 : 1);
+    vd.addCar(*m, M, d < 70 ? 0 : 1, paintColor(str(cfg, "paint")));   // (Phase 7: their paint)
   };
   for (const auto& [id, r] : mp.players) {
     // their car: driven (the presence row is its pose) or parked where they left it

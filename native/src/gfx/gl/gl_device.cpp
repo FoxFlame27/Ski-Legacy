@@ -9,7 +9,7 @@
 namespace sl::gfx {
 
 namespace {
-struct GLTex { GLuint id = 0; GLenum target = GL_TEXTURE_2D; };
+struct GLTex { GLuint id = 0; GLenum target = GL_TEXTURE_2D; size_t bytes = 0; };
 struct GLRT { GLuint fbo = 0; Texture color, depth; int w = 0, h = 0; };
 struct GLProg { GLuint id = 0; std::unordered_map<std::string, GLint> locs; std::string name; };
 
@@ -48,6 +48,16 @@ public:
       glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &m);
       info_.maxAnisotropy = int(m);
     }
+    // (Phase 7) block compression (S3TC / BC1-3, and its sRGB variants)
+    GLint ne = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &ne);
+    for (GLint i = 0; i < ne; i++) {
+      const char* e = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, GLuint(i)));
+      if (!e) continue;
+      std::string x = e;
+      if (x == "GL_EXT_texture_compression_s3tc") s3tc_ = true;
+      if (x == "GL_EXT_texture_sRGB" || x == "GL_EXT_texture_compression_s3tc_srgb") s3tcSrgb_ = true;
+    }
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -73,6 +83,7 @@ public:
     bufs_[h] = b;
     bufTarget_[h] = target;
     bufSize_[h] = bytes;
+    bufBytes_ += bytes;
     return Buffer{h};
   }
   void updateBuffer(Buffer b, const void* data, size_t bytes, size_t offset) override {
@@ -86,7 +97,7 @@ public:
     GLenum t = bufTarget_[b.id];
     if (t == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0);
     glBindBuffer(t, bufs_[b.id]);
-    if (bytes > bufSize_[b.id]) bufSize_[b.id] = bytes;
+    if (bytes > bufSize_[b.id]) { bufBytes_ += bytes - bufSize_[b.id]; bufSize_[b.id] = bytes; }
     glBufferData(t, GLsizeiptr(bufSize_[b.id]), nullptr, GL_DYNAMIC_DRAW); // orphan
     if (bytes) glBufferSubData(t, 0, GLsizeiptr(bytes), data);
     glBindBuffer(t, 0);
@@ -95,6 +106,9 @@ public:
     auto it = bufs_.find(b.id);
     if (it == bufs_.end()) return;
     glDeleteBuffers(1, &it->second);
+    bufBytes_ -= std::min(bufBytes_, bufSize_[b.id]);
+    bufSize_.erase(b.id);
+    bufTarget_.erase(b.id);
     bufs_.erase(it);
   }
 
@@ -122,13 +136,46 @@ public:
     }
     glBindTexture(GL_TEXTURE_2D, 0);
     uint32_t h = next_++;
-    texs_[h] = {t, GL_TEXTURE_2D};
+    size_t bpp = d.format == TexFormat::RGBA16F ? 8 : d.format == TexFormat::R8 ? 1 : 4;
+    size_t bytes = size_t(d.width) * d.height * bpp * (mips ? 4 : 3) / 3;
+    texs_[h] = {t, GL_TEXTURE_2D, bytes};
+    texBytes_ += bytes;
     return Texture{h};
+  }
+  bool supportsBC(bool srgb) const override { return s3tc_ && (!srgb || s3tcSrgb_); }
+  Texture createCompressedTexture(const TextureDesc& d, bool bc3, bool srgb, const std::vector<std::vector<uint8_t>>& levels) override {
+    // GL_COMPRESSED_(SRGB_)RGB(A)_S3TC_DXT1 / DXT5 (EXT_texture_compression_s3tc, EXT_texture_sRGB)
+    GLenum fmt = bc3 ? (srgb ? 0x8C4F : 0x83F3) : (srgb ? 0x8C4C : 0x83F0);
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    size_t bytes = 0;
+    int w = d.width, h = d.height;
+    for (size_t l = 0; l < levels.size(); l++) {
+      glCompressedTexImage2D(GL_TEXTURE_2D, GLint(l), fmt, w, h, 0, GLsizei(levels[l].size()), levels[l].data());
+      bytes += levels[l].size();
+      w = std::max(1, w / 2); h = std::max(1, h / 2);
+    }
+    bool mips = levels.size() > 1;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, GLint(levels.size()) - 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, d.filter == Filter::Nearest ? GL_NEAREST : mips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, d.filter == Filter::Nearest ? GL_NEAREST : GL_LINEAR);
+    GLint wrap = d.wrap == Wrap::Repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    if (mips && info_.maxAnisotropy > 1 && d.anisotropy > 1)
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(d.anisotropy, float(info_.maxAnisotropy)));
+    glBindTexture(GL_TEXTURE_2D, 0);
+    uint32_t hnd = next_++;
+    texs_[hnd] = {t, GL_TEXTURE_2D, bytes};
+    texBytes_ += bytes;
+    return Texture{hnd};
   }
   void destroy(Texture t) override {
     auto it = texs_.find(t.id);
     if (it == texs_.end()) return;
     glDeleteTextures(1, &it->second.id);
+    texBytes_ -= std::min(texBytes_, it->second.bytes);
     texs_.erase(it);
   }
 
@@ -298,6 +345,7 @@ public:
     glBindVertexArray(vaos_[v.id]);
     glDrawArrays(GL_TRIANGLES, GLint(first), GLsizei(count));
     draws_++;
+    tris_ += count / 3;
   }
   void drawIndexed(VertexInput v, IndexType t, uint32_t count, uint32_t first, uint32_t instances) override {
     glBindVertexArray(vaos_[v.id]);
@@ -306,6 +354,7 @@ public:
     if (instances == 1) glDrawElements(GL_TRIANGLES, GLsizei(count), it, off);
     else glDrawElementsInstanced(GL_TRIANGLES, GLsizei(count), it, off, GLsizei(instances));
     draws_++;
+    tris_ += uint64_t(count / 3) * instances;
   }
   void readPixels(int w, int h, std::vector<uint8_t>& rgba) override {
     rgba.resize(size_t(w) * h * 4);
@@ -313,7 +362,10 @@ public:
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
   }
   uint32_t drawCallsThisFrame() const override { return draws_; }
-  void resetFrameStats() override { draws_ = 0; }
+  void resetFrameStats() override { draws_ = 0; tris_ = 0; }
+  uint64_t trianglesThisFrame() const override { return tris_; }
+  size_t textureBytes() const override { return texBytes_; }
+  size_t bufferBytes() const override { return bufBytes_; }
 
 private:
   GLint loc(const char* n) {
@@ -336,6 +388,10 @@ private:
   GLProg* cur_ = nullptr;
   PipelineState state_;
   uint32_t draws_ = 0;
+  uint64_t tris_ = 0;
+  size_t texBytes_ = 0, bufBytes_ = 0;
+public:
+  bool s3tc_ = false, s3tcSrgb_ = false;
 };
 
 std::unique_ptr<Device> createGLDevice(GetProc loader) {

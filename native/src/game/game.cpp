@@ -38,8 +38,10 @@
 #include "game/snowmobile.h"
 #include "game/mp_session.h"
 #include "game/mp_view.h"
+#include "game/scenefx.h"
 #include "net/websocket.h"
 #include "core/prompts.h"
+#include "core/perf.h"
 #include "engine/ui.h"
 #include "world/scenery.h"
 #include "world/terrain.h"
@@ -201,9 +203,14 @@ int runGame(const GameOptions& opt) {
   double t0 = plat->timeSeconds();
   JobSystem jobs;
   AssetManager assets(*plat, *dev, paths);
+  assets.textureCap = q.maxTexture;   // (Phase 7: 512 with the switch preset)
+  assets.compressTextures = q.compressTextures;
+  assets.triangleBudget = q.triangleBudget;
   Renderer renderer;
   RenderSettings rs;
   rs.shadowSize = q.shadowSize; rs.shadowRange = q.shadowRange; rs.renderScale = q.renderScale;
+  rs.lowShaders = q.lowShaders; rs.maxLights = q.maxLights;
+  SL_INFO("quality: %s (textures <= %d%s, shadow map %d over %.0f m, LOD x%.2f, far %.0f m, NPCs x%.2f, %d lights%s%s)", q.name.c_str(), q.maxTexture, q.compressTextures ? (dev->supportsBC(true) ? " BC1/BC3" : " (no BC support: RGBA8)") : "", q.shadowSize, q.shadowRange, q.lodScale, q.farZ, q.npcScale, q.maxLights, q.lowShaders ? ", simplified shaders" : "", q.dynamicRes ? ", dynamic resolution" : "");
   if (!renderer.init(*dev, rs)) { SL_ERROR("renderer init failed"); return 4; }
   int dw, dh;
   plat->drawableSize(dw, dh);
@@ -213,6 +220,7 @@ int runGame(const GameOptions& opt) {
   Ui ui;
   ui.init(*dev, *plat, paths);
   auto loadingFrame = [&](const char* what) {
+    SL_INFO("loading: %s (GPU so far: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", what, dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
     plat->drawableSize(dw, dh);
     dev->bindRenderTarget({}, dw, dh);
     dev->clear(0.016f, 0.055f, 0.133f, 1, true, true);
@@ -243,6 +251,9 @@ int runGame(const GameOptions& opt) {
   Scenery scenery(*dev, world, jobs, assets, vs);
   loadingFrame("Building the resort...");
   Resort resort(*dev, world, assets);
+  resort.lodScale = q.lodScale;
+  resort.textureCap = q.maxTexture;
+  resort.compressTextures = q.compressTextures;
   bool haveResort = resort.load(*plat, paths, scenery);
   if (!haveResort) scenery.loadVillage(*plat, paths);   // (Phase 1 placements without the resort data)
   Lifts& lifts = resort.lifts();
@@ -252,6 +263,36 @@ int runGame(const GameOptions& opt) {
   if (transport.loaded()) world.roadSurface = [&](double x, double z, double mesh, double yHint) { return transport.roadSurface(world, x, z, mesh, yHint); };
   if (transport.rail.ok) world.addDeck([&](double x, double z) { return transport.railDeckHeight(x, z); });
   if (transport.express.ok) world.addDeck([&](double x, double z) { return transport.expressDeckHeight(x, z); });
+  // (Phase 7) the railways thin the forest (transport.js / expressground.js addCut forest): no trees on the formations
+  {
+    auto bounds = [](const Line& L, double pad, dvec2& mn, dvec2& mx) {
+      mn = dvec2(1e30); mx = dvec2(-1e30);
+      for (int i = 0; i < L.n; i++) { mn = glm::min(mn, dvec2(L.X[size_t(i)], L.Z[size_t(i)])); mx = glm::max(mx, dvec2(L.X[size_t(i)], L.Z[size_t(i)])); }
+      mn -= dvec2(pad); mx += dvec2(pad);
+    };
+    auto inSpan = [](const std::vector<Span>& sp, double s, double margin) { for (const Span& t : sp) if (s > t.s0 + margin && s < t.s1 - (t.end ? -1e9 : margin)) return true; return false; };
+    if (transport.rail.ok) {
+      World::ForestCut c;
+      bounds(transport.rail.line, 20, c.bmin, c.bmax);
+      c.fn = [&transport, inSpan](double x, double z, double f) {
+        Line::Near n = transport.rail.line.nearest(x, z, 16);
+        if (n.d > 15 || inSpan(transport.rail.tunnels, n.s, 20)) return f;
+        return f * smoothstep(7, 14, n.d);
+      };
+      world.forestCuts.push_back(c);
+    }
+    if (transport.express.ok) {
+      World::ForestCut c;
+      bounds(transport.express.line, 24, c.bmin, c.bmax);
+      double off = transport.express.trackOff;
+      c.fn = [&transport, inSpan, off](double x, double z, double f) {
+        Line::Near n = transport.express.line.nearest(x, z, 20);
+        if (n.d > 19.9 || inSpan(transport.express.tunnels, n.s, 20)) return f;
+        return f * smoothstep(off + 10, off + 20, n.d);
+      };
+      world.forestCuts.push_back(c);
+    }
+  }
   loadingFrame("Laying the roads and the railways...");
   RailSweep sweep;
   sweep.build(*dev, transport);
@@ -263,6 +304,7 @@ int runGame(const GameOptions& opt) {
   BusLine buses(world, transport, vmodels);
   Railway railway(world, transport, vmodels);
   Express express(world, transport, vmodels);
+  traffic.density = q.npcScale;
   if (transport.loaded()) { drive.init(); traffic.init(); buses.init(); }
   railway.init();
   express.init();
@@ -281,12 +323,16 @@ int runGame(const GameOptions& opt) {
   for (const Save::Car& c : save.garage) {
     int i = drive.addOwned(c.id, c.plate, c.damage);
     if (i < 0) SL_WARN("garage: unknown car %s", c.id.c_str());
+    else drive.parked[size_t(i)].paint = paintColor(c.paint);   // (Phase 7: your car's paint)
   }
+  loadingFrame("The trail map, the people, the courses...");
   TrailMap tmap;
   tmap.load(*plat, paths, world, transport, lifts);
   tmap.buildRelief(jobs, world, *dev);
+  // (Phase 7) the audio: the samples decode on a thread while the world builds; the autotest runs it too (SDL's dummy
+  // driver in CI: the mixer runs, nothing is heard)
   Audio audio;
-  if (!opt.autotest) audio.start(*plat);
+  if (!audio.start(*plat, paths)) SL_WARN("audio: no output device: the game runs silent");
 
   // spawn: the village plaza (main.js), or the top of a run on the Legacy face
   std::vector<Piste> pistes = loadPistes(*plat, paths);
@@ -302,6 +348,8 @@ int runGame(const GameOptions& opt) {
   // ---------------------------------------------------------------- (Phase 5) races, jobs, police, rescue, chalets, people, weather
   PlayData playData;
   if (const nlohmann::json* pj = resort.playData()) playData.load(*pj, resort.playBin());
+  transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
+  resort.releaseLoadData();
   Shapes shapes;
   shapes.init(*dev);
   People people;
@@ -311,7 +359,7 @@ int runGame(const GameOptions& opt) {
   {
     std::vector<std::vector<dvec2>> pl;
     for (auto& ps : pistes) pl.push_back(ps.pts);
-    folk.init(world, pl, opt.autotest ? 28 : 56, opt.autotest ? 6 : 14);
+    folk.init(world, pl, int((opt.autotest ? 28 : 56) * q.npcScale), std::max(2, int((opt.autotest ? 6 : 14) * q.npcScale)));
   }
   Weather weather;
   weather.init(unsigned(plat->timeSeconds() * 1000) ^ 0x5eedu, opt.autotest);
@@ -333,6 +381,13 @@ int runGame(const GameOptions& opt) {
   Snowmobiles sleds(pc);
   sleds.load(assets);
   sleds.place();
+  // (Phase 7) lamps' light pools, car lights and plates, snowmaking, flags, snowcats
+  SceneFx sfx;
+  {
+    std::vector<std::vector<dvec2>> pl;
+    for (auto& ps : pistes) pl.push_back(ps.pts);
+    sfx.init(*dev, assets, resort, world, resort.fonts(), pl, &playData, q.npcScale, q.lodScale);
+  }
   std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
   VehicleDraw snowDraw;
   double fadeT = -1;   // a short fade to dark covering a teleport (transition.js)
@@ -344,6 +399,7 @@ int runGame(const GameOptions& opt) {
   };
   drive.onKnock = [&](const OtherBody& b, double vx, double vz, double w) {
     double kmh = glm::length(drive.vel() - dvec2(b.vx, b.vz)) * 3.6;
+    audio.impact("car", float(std::min(1.0, kmh / 60)));
     if (b.kind == 0) { traffic.knock(b.id, vx, vz, w); if (!races.active()) police.callFor("a car was rammed", kmh); }
     else if (b.kind == 3) { police.knockUnit(b.id, vx, vz); police.hitCop(b.id, kmh); }
     else if (b.kind == 2 && !races.active()) police.callFor("a parked car was hit", kmh);
@@ -366,7 +422,7 @@ int runGame(const GameOptions& opt) {
   } else player.teleport(4, 34, PI);
 
   Camera cam;
-  cam.farZ = 30000;
+  cam.farZ = q.farZ;
   Lighting dayLight;
   dayLight.toneMap = opt.toneMap;
   double hour = opt.hour >= 0 ? std::fmod(opt.hour, 24.0) : opt.autotest ? 10.0 : std::fmod(std::max(0.0, save.hour), 24.0);
@@ -376,8 +432,10 @@ int runGame(const GameOptions& opt) {
   terrain.finish(cam.pos);
   scenery.finish(cam.pos);
   resort.update(0, cam.pos);
-  SL_INFO("world ready in %.2f s: %zu terrain nodes, %zu trees in range, %zu resort props, %zu lifts, %.0f MB textures", plat->timeSeconds() - t0,
-          terrain.nodeCount(), scenery.treesDrawn(), resort.propCount(), lifts.lines().size(), assets.textureBytes() / 1048576.0);
+  resort.finishStreaming(cam.pos);
+  SL_INFO("world ready in %.2f s: %zu terrain nodes, %zu trees in range, %zu resort props, %zu lifts, %.0f MB textures (GPU: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", plat->timeSeconds() - t0,
+          terrain.nodeCount(), scenery.treesDrawn(), resort.propCount(), lifts.lines().size(), assets.textureBytes() / 1048576.0,
+          dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
 
   // profiling toggles: SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier
   std::string dbg = std::getenv("SKI_LEGACY_DEBUG") ? std::getenv("SKI_LEGACY_DEBUG") : "";
@@ -411,8 +469,9 @@ int runGame(const GameOptions& opt) {
   };
   // money: spend (refused when short: "Not enough money ($N needed)", economy.js spend), earn
   auto spend = [&](int64_t amount, bool force = false) {
-    if (!save.spend(amount, force)) { flash("Not enough money (" + fmtM(amount) + " needed)", Hud::Flash::Bad); return false; }
+    if (!save.spend(amount, force)) { flash("Not enough money (" + fmtM(amount) + " needed)", Hud::Flash::Bad); audio.play("error"); return false; }
     save.write(*plat);
+    if (amount > 0) audio.play("cash");
     return true;
   };
   // the SETTINGS values applied (main.js onSetting); "" = all
@@ -422,10 +481,13 @@ int runGame(const GameOptions& opt) {
     bool all = k.empty();
     if (all || k == "renderScale") renderer.setRenderScale(float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0)));
     if (all || k == "shadows") renderer.shadowsOn = save.settingOn("shadows");
+    if (all || k == "bloom") renderer.bloomOn = save.settingOn("bloom");
     if (all || k == "brightness") dayLight.exposure = float(0.72 * std::clamp(save.setting("brightness", 1), 0.7, 1.3));
     if (all || k == "fpsCap") fpsCap = int(save.setting("fpsCap", 0));
     if ((all && !opt.autotest) || k == "fullscreen") { bool fs = save.settingOn("fullscreen"); if (plat->fullscreen() != fs && !opt.autotest) plat->setFullscreen(fs); }
-    if (all || k == "volume" || k == "sfxVolume") audio.masterVolume = float(std::clamp(save.setting("volume", 0.8), 0.0, 1.0) * std::clamp(save.setting("sfxVolume", 1), 0.0, 1.0));
+    if (all || k == "volume" || k == "sfxVolume" || k == "musicVolume" || k == "voiceVolume")
+      audio.setVolumes(float(save.setting("volume", 0.8)), float(save.setting("musicVolume", 0.7)), float(save.setting("sfxVolume", 1)), float(save.setting("voiceVolume", 0.95)));
+    if (all || k == "muteUnfocused") audio.setFocused(true, save.settingOn("muteUnfocused"));
     if (all || k == "sensitivity") input.mouseSens = float(save.setting("sensitivity", 1));
     if (all || k == "padSens") input.padSens = float(save.setting("padSens", 1));
     if (all || k == "invertY") input.invertY = save.settingOn("invertY");
@@ -498,6 +560,7 @@ int runGame(const GameOptions& opt) {
     strikes = 0;   // (a lift ride between two wipeouts: no rescue)
     if (!player.skisOn) player.setSkisOn(true);
     Seat seat = lifts.board(line, up, st.mid);
+    audio.play("board");
     player.sitOn(seat.pos, seat.fwd);
     // skis ride in the gondola's outside rack; on chairlifts they stay on your feet; gondolas are ridden in 3rd person
     rig.skisInRide = !line.gondola;
@@ -937,7 +1000,7 @@ int runGame(const GameOptions& opt) {
     for (const Save::Car& c : save.garage) {
       bool have = false;
       for (const auto& e : drive.parked) have = have || (e.owned && e.plate == c.plate);
-      if (!have) drive.addOwned(c.id, c.plate, c.damage);
+      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) drive.parked[size_t(i)].paint = paintColor(c.paint); }
     }
     nlohmann::json& imp = save.data("impound", nlohmann::json::array());
     for (auto& r : imp) for (auto& e : drive.parked) if (e.owned && e.plate == r.value("plate", std::string())) e.impoundDay = r.value("day", 0);
@@ -1168,13 +1231,44 @@ int runGame(const GameOptions& opt) {
     menus.mp.suggested = mt.name;
   }
   if (!started) menus.open(Menus::Screen::Main);
+  // (Phase 7) the audio's transitions, the CPU time per system
+  Ride prevRideKind = Ride::None;
+  bool railAtStop = false;
+  PerfStats perf;
+  bool audioOk = true, nightOk = true;
+  int nightShot = -1, nightLamps = 0, nightSprays = 0, nightCars = 0, nightPlates = 0;
+  auto perfMs = []() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+  uint32_t frameDraws = 0, maxDraws = 0;
+  uint64_t frameTris = 0, maxTris = 0;
+  double sumDraws = 0, sumTris = 0;
+  int statFrames = 0;
+  // (Phase 7) the performance report (the autotest: after the skiing and at the end)
+  auto perfReport = [&](const char* what) {
+    SL_INFO("[perf] %s: CPU ms per frame by system over %d frames (mean / max)", what, perf.frames());
+    double total = 0;
+    for (const auto& sy : perf.systems()) total += sy.n ? sy.sum / sy.n : 0;
+    for (const auto& sy : perf.systems())
+      SL_INFO("[perf]   %-42s %7.2f / %7.2f ms  %4.1f%%", sy.name.c_str(), sy.n ? sy.sum / sy.n : 0.0, sy.max, total > 0 ? 100.0 * (sy.n ? sy.sum / sy.n : 0.0) / total : 0.0);
+    SL_INFO("[perf]   %-42s %7.2f ms", "sum", total);
+    SL_INFO("[perf] draw calls %.0f mean / %u max, triangles %.0fk mean / %.0fk max (shadow pass included), %d lights", statFrames ? sumDraws / statFrames : 0.0, maxDraws,
+            statFrames ? sumTris / statFrames / 1000 : 0.0, double(maxTris) / 1000, renderer.lightsUsed());
+    SL_INFO("[perf] GPU memory: textures %.0f MB, buffers %.0f MB (models' textures as loaded: %.0f MB); RSS %.0f MB, peak %.0f MB",
+            dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, assets.textureBytes() / 1048576.0, plat->memoryBytes() / 1048576.0, plat->peakMemoryBytes() / 1048576.0);
+    Resort::StreamStats st = resort.streamStats();
+    SL_INFO("[perf] streamed mesh chunks: %zu of %zu resident (%.0f MB on the GPU; all of them packed %.0f MB, %.0f MB raw), %d uploads, %d releases",
+            st.loaded, st.chunks, st.gpuBytes / 1048576.0, st.packedBytes / 1048576.0, st.rawBytes / 1048576.0, st.uploads, st.releases);
+    perf.reset(); sumDraws = sumTris = 0; statFrames = 0; maxDraws = 0; maxTris = 0;
+  };
+  std::string outfitKey;
+  double shakeAmt = 0, fxFlash = 0, fxHit = 0, dynScale = 1;
 
   while (running) {
     platform::Events ev;
     plat->pollEvents(ev);
     if (ev.quit) running = false;
     if (ev.resized) { plat->drawableSize(dw, dh); renderer.resize(dw, dh); }
-    if (ev.focusLost) { input.clear(); plat->setRelativeMouse(false); }
+    if (ev.focusLost) { input.clear(); plat->setRelativeMouse(false); audio.setFocused(false, save.settingOn("muteUnfocused")); }
+    if (ev.focusGained) audio.setFocused(true, save.settingOn("muteUnfocused"));
     input.update(*plat, ev);
     double now = plat->timeSeconds();
     double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : 0.1) : std::min(0.25, now - last);
@@ -1807,6 +1901,7 @@ int runGame(const GameOptions& opt) {
     }
 
     // fixed-step simulation (edge-triggered inputs are seen by the first tick of the frame)
+    double pt0 = perfMs();
     if (!paused) acc += frameDt;
     bool first = true;
     while (acc >= STEP) {
@@ -1842,6 +1937,7 @@ int runGame(const GameOptions& opt) {
       simTime += STEP;
       first = false;
     }
+    perf.add("sim (120 Hz physics)", perfMs() - pt0);
     PlayerFrameControls fc;
     fc.toggleView = rideKind != Ride::None ? false : input.takePressed(Action::View);
     if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) { seatView = !seatView; rideCamReady = false; }
@@ -1854,7 +1950,7 @@ int runGame(const GameOptions& opt) {
     for (const PlayerEvent& e : player.events) {
       switch (e.type) {
         case PlayerEvent::Type::Crash: {
-          nCrash++; audio.thud(1); input.rumble(*plat, 0.9f * e.amount, 0.6f * e.amount, 400);
+          nCrash++; audio.play("crash", 1); shakeAmt = std::max(shakeAmt, 0.9); fxHit = 1; input.rumble(*plat, 0.9f * e.amount, 0.6f * e.amount, 400);
           oddJobs.onCrash();
           if (races.active() || rescue.active() || rooms.inside()) break;   // (a race session owns its wipeouts: session.js)
           // main.js: you get up after the first wipeout; the second within 3 min (no lift ride between) calls the rescue
@@ -1865,9 +1961,10 @@ int runGame(const GameOptions& opt) {
           else { strikes = 0; rescueAt = simTime + 4; flash("Wipeout \xC2\xB7 the mountain rescue is on its way", Hud::Flash::Bad); }
           break;
         }
-        case PlayerEvent::Type::Bump: audio.thud(e.amount * 0.6f); input.rumble(*plat, 0.4f * e.amount, 0.3f, 150); break;
-        case PlayerEvent::Type::Land: nLand++; if (opt.autotest) SL_INFO("[autotest] landing (impact %.2f)", e.amount); audio.thud(e.amount * 0.7f); input.rumble(*plat, 0.3f + 0.6f * e.amount, 0.2f, 120); break;
-        case PlayerEvent::Type::Pop: if (opt.autotest) SL_INFO("[autotest] pop (charge %.2f) at %.1f km/h", e.amount, player.speed() * 3.6); input.rumble(*plat, 0.1f, 0.2f + 0.4f * e.amount, 60); break;
+        case PlayerEvent::Type::Bump: audio.play("thud", e.amount * 0.6f); input.rumble(*plat, 0.4f * e.amount, 0.3f, 150); break;
+        case PlayerEvent::Type::Land: nLand++; if (opt.autotest) SL_INFO("[autotest] landing (impact %.2f)", e.amount); audio.play("land", e.amount); shakeAmt = std::max(shakeAmt, 0.3 + 0.6 * e.amount); if (e.amount > 0.6f) fxFlash = 0.35 * e.amount; input.rumble(*plat, 0.3f + 0.6f * e.amount, 0.2f, 120); break;
+        case PlayerEvent::Type::Pop: if (opt.autotest) SL_INFO("[autotest] pop (charge %.2f) at %.1f km/h", e.amount, player.speed() * 3.6); audio.play("pop", e.amount); input.rumble(*plat, 0.1f, 0.2f + 0.4f * e.amount, 60); break;
+        case PlayerEvent::Type::Step: audio.play("step", e.amount); break;
         case PlayerEvent::Type::TooSteep: toast = "Too steep to walk up - take a lift"; toastUntil = simTime + 2.5; break;
         case PlayerEvent::Type::SkisOn: toast = "Skis on"; toastUntil = simTime + 1.2; break;
         case PlayerEvent::Type::SkisOff: toast = "Skis off"; toastUntil = simTime + 1.2; break;
@@ -1894,6 +1991,7 @@ int runGame(const GameOptions& opt) {
       const nlohmann::json& jl = save.data("jail");
       if (!opt.autotest && jl.value("left", 0.0) > 0.5) police.jail(jl.value("left", 0.0), jl.value("reason", std::string("Arrested")));
     }
+    pt0 = perfMs();
     if (started && !paused) {
       weather.update(frameDt);
       races.update(frameDt);
@@ -1906,6 +2004,7 @@ int runGame(const GameOptions& opt) {
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
     }
     if (aiOn) folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
+    perf.add("gameplay (races, jobs, police, people)", perfMs() - pt0);
     // the career (economy.js stats): top speed, distance skied
     if (started && player.mode == PlayerMode::Ski) {
       static double lastDist = player.distance;
@@ -1914,7 +2013,6 @@ int runGame(const GameOptions& opt) {
       lastDist = player.distance;
       if (player.speed() > save.stats.topSpeed && player.speed() < 70) save.stats.topSpeed = player.speed();
     }
-    audio.setSki(float(player.speed()), float(std::fabs(player.edge)), float(player.sideslip), player.air, player.mode == PlayerMode::Ski);
 
     // lifts: move the cars first, then seat the rider on the updated car (no lag); the boarding prompt
     lifts.timeScale = player.mode == PlayerMode::Sit && !paused && input.down(Action::Jump) ? 16 : 1;   // hold Space: x16
@@ -1925,12 +2023,14 @@ int runGame(const GameOptions& opt) {
     bool fastHeld = !paused && input.down(Action::Jump);
     // (Phase 3) the vehicles move first, then the rider is seated on them
     double vdt = paused ? 0 : frameDt;
+    pt0 = perfMs();
     busBoxes.clear();
     buses.boxes(busBoxes);
     traffic.update(vdt, player.pos, &drive, busBoxes, cam.pos);
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
+    perf.add("vehicles (traffic, buses, trains)", perfMs() - pt0);
     if (rideKind == Ride::Car) {
       DriveFrameInput dfi;
       dfi.toggleView = input.takePressed(Action::View);
@@ -1950,10 +2050,12 @@ int runGame(const GameOptions& opt) {
       for (const VehicleEvent& e : drive.events) {
         float a = e.amount;
         switch (e.type) {
-          case VehicleEvent::Type::Crash: input.rumble(*plat, 0.9f * a, 0.7f * a, 500); audio.thud(a); break;
-          case VehicleEvent::Type::Knock: case VehicleEvent::Type::Break: input.rumble(*plat, 0.6f * a, 0.5f * a, 300); audio.thud(a * 0.7f); break;
-          case VehicleEvent::Type::Land: input.rumble(*plat, 0.3f + 0.5f * a, 0.2f, 140); break;
-          default: if (a > 0) input.rumble(*plat, 0.3f * a, 0.3f * a, 120); break;
+          case VehicleEvent::Type::Crash: input.rumble(*plat, 0.9f * a, 0.7f * a, 500); audio.carCrash(a); shakeAmt = std::max(shakeAmt, double(a)); fxHit = a; break;
+          case VehicleEvent::Type::Knock: input.rumble(*plat, 0.6f * a, 0.5f * a, 300); audio.impact(e.text.rfind("Lamp", 0) == 0 ? "metal" : "building", a); break;
+          case VehicleEvent::Type::Break: input.rumble(*plat, 0.6f * a, 0.5f * a, 300); audio.impact("metal", a); break;
+          case VehicleEvent::Type::RailHit: input.rumble(*plat, 0.3f * a, 0.3f * a, 120); audio.impact("metal", a * 0.7f); break;
+          case VehicleEvent::Type::Land: input.rumble(*plat, 0.3f + 0.5f * a, 0.2f, 140); if (a > 0.1f) audio.impact("snow", a * 0.7f); break;
+          default: if (a > 0) { input.rumble(*plat, 0.3f * a, 0.3f * a, 120); audio.impact("snow", a * 0.5f); } break;
         }
         if (!e.text.empty()) { toast = e.text; toastUntil = simTime + 2; }
         if (e.type == VehicleEvent::Type::Knock || e.type == VehicleEvent::Type::Crash) oddJobs.onCarKnock(e.type == VehicleEvent::Type::Crash);
@@ -2194,6 +2296,7 @@ int runGame(const GameOptions& opt) {
       int w = Weather::byId(mp.weather());
       if (w >= 0 && !races.active()) weather.serverSet(w, Weather::byId(mp.upcomingWeather()), mp.upcomingIn());
     }
+    if (nightShot >= 0) hour = 21.5;   // (the autotest's night shots)
     light = timeOfDay(hour, dayLight);
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
     if (rooms.inside()) light = rooms.lighting(light);
@@ -2332,9 +2435,11 @@ int runGame(const GameOptions& opt) {
     }
     save.clock = simTime;
     save.tick(*plat, simTime, opt.autotest ? 1e9 : 60);
+    pt0 = perfMs();
     terrain.update(cam.pos);
     scenery.update(cam.pos);
     resort.update(frameDt, cam.pos);
+    perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
     rig.update(frameDt, player, world);
     scenery.dynamic.clear();
     if (transport.loaded()) {
@@ -2348,10 +2453,169 @@ int runGame(const GameOptions& opt) {
     }
     rooms.fillColliders(scenery.dynamic);
 
+    // ---------------------------------------------------------------- (Phase 7) camera shake, screen effects, skis, outfit
+    {
+      // the equipped skis' speed / grip into the physics (player.js this.ski)
+      if (const SkiDef* sk = skiById(save.skis)) { player.skiSpeed = sk->speed; player.skiGrip = sk->grip; } else player.skiSpeed = player.skiGrip = 1;
+      // the outfit on the skier (re-applied when it or the character changes)
+      if (frame % 15 == 0 && rig.loaded()) {
+        nlohmann::json eq = save.outfits.equipped.is_object() && save.outfits.equipped.contains(save.character) ? save.outfits.equipped[save.character] : nlohmann::json();
+        std::string key = std::to_string(rig.generation()) + save.character + (eq.is_object() ? eq.dump() : std::string());
+        if (key != outfitKey) {
+          outfitKey = key;
+          auto col = [&](const char* slot) {
+            if (!eq.is_object() || !eq.contains(slot) || !eq[slot].is_string()) return vec4(0);
+            const OutfitDef* od = outfitById(eq[slot].get<std::string>());
+            if (!od) return vec4(0);
+            return vec4(float((od->base >> 16) & 255) / 255.f, float((od->base >> 8) & 255) / 255.f, float(od->base & 255) / 255.f, 1.f);
+          };
+          rig.applyOutfit(*dev, col("jacket"), col("trousers"), col("helmet"));
+          if (opt.autotest) SL_INFO("[autotest] outfit applied: %s -> %s", eq.dump().c_str(), rig.dressed() ? "recoloured" : "original");
+        }
+      }
+      // camera shake (SETTINGS): at speed on skis a fine buzz, landings / crashes / car knocks a jolt
+      double sp = rideKind == Ride::Car ? drive.speed() : player.speed();
+      double buzz = (player.mode == PlayerMode::Ski && !player.air && rideKind == Ride::None) || rideKind == Ride::Car || rideKind == Ride::Sled ? smoothstep(14, 32, sp) * 0.25 : 0;
+      shakeAmt = std::max(0.0, shakeAmt - frameDt * 1.8);
+      double sa = save.settingOn("camShake") && !paused && started ? std::min(1.0, shakeAmt + buzz) : 0;
+      if (sa > 0.001) {
+        double tt = simTime * 37;
+        float yawJ = float(sa * 0.006 * (std::sin(tt * 1.3) + 0.6 * std::sin(tt * 2.9 + 1.7)));
+        float pitJ = float(sa * 0.006 * (std::sin(tt * 1.7 + 0.4) + 0.6 * std::sin(tt * 3.3)));
+        mat3 rot = mat3(glm::rotate(mat4(1), yawJ, cam.basis[1]) * glm::rotate(mat4(1), pitJ, cam.basis[0]));
+        cam.basis = rot * cam.basis;
+      }
+      // the screen effects (SETTINGS speedFx / vignette): streaks at speed, a vignette, the flash of a hard landing,
+      // the red edge of a crash
+      fxFlash = std::max(0.0, fxFlash - frameDt * 2.5);
+      fxHit = std::max(0.0, fxHit - frameDt * 1.2);
+      renderer.fx.vignette = save.settingOn("vignette") ? 0.3f : 0.f;
+      renderer.fx.streaks = save.settingOn("speedFx") && started && !paused ? float(smoothstep(18, 36, sp)) * 0.9f : 0.f;
+      renderer.fx.flash = save.settingOn("speedFx") ? float(fxFlash) : 0.f;
+      renderer.fx.hit = save.settingOn("vignette") ? float(fxHit) : 0.f;
+      // dynamic resolution (the switch preset): the 3D resolution follows the frame time toward 30 fps
+      if (q.dynamicRes && !opt.autotest && !mptest && started) {
+        double ms = frameDt * 1000;
+        if (ms > 36 && dynScale > 0.6) dynScale = std::max(0.6, dynScale - 0.02);
+        else if (ms < 28 && dynScale < 1.0) dynScale = std::min(1.0, dynScale + 0.005);
+        float want = float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0) * dynScale);
+        if (std::fabs(want - renderer.renderScale()) > 0.04f) renderer.setRenderScale(want);
+      }
+      sfx.update(paused ? 0 : frameDt, hour, light.night, weather.wind, cam.pos);
+    }
+
+    // ---------------------------------------------------------------- (Phase 7) audio: the listener, the mixes, the events
+    {
+      sl::ScopedTimer stAudio(perf, "audio");
+      audio.setListener(cam.pos, cam.forward());
+      audio.setPaused(paused);
+      Audio::State as;
+      as.speed = float(player.speed()); as.sideslip = float(player.sideslip); as.edge = float(std::fabs(player.edge));
+      as.grounded = !player.air; as.air = player.air; as.tuck = player.tuck;
+      as.skiing = player.mode == PlayerMode::Ski && rideKind == Ride::None;
+      as.riding = player.mode == PlayerMode::Sit && rideKind == Ride::None && lifts.rideLine() != nullptr;
+      as.altitude = float(std::max(0.0, player.pos.y)); as.snow = float(weather.snow); as.weatherWind = float(weather.wind);
+      as.ice = float(std::min(1.0, weather.icy)); as.powder = player.mode == PlayerMode::Ski && !player.groomedAt(player.pos.x, player.pos.z) ? 0.8f : 0.1f;
+      as.indoor = rooms.inside() || rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express || rideKind == Ride::Car;
+      audio.setState(as);
+      Audio::Car ac;
+      ac.on = rideKind == Ride::Car;
+      if (ac.on) {
+        static const std::unordered_map<std::string, std::string> kSound = {{"car_bmw_x3", "i6"}, {"car_audi_rs6", "v8"}, {"car_vw_golf_gti", "gti"}, {"car_mercedes_sls", "v8"},
+          {"car_lamborghini_huracan", "v10"}, {"car_toyota_gr_yaris", "i3t"}, {"car_mercedes_gls", "v8s"}};
+        auto it = kSound.find(drive.carName());
+        ac.profile = it != kSound.end() ? it->second : "i4";
+        ac.electric = drive.electric(); ac.rpm = float(drive.rpm()); ac.load = float(drive.load()); ac.squeal = float(drive.squeal());
+        ac.horn = drive.hornOn(); ac.speed = float(drive.speed()); ac.shift = drive.shifting(); ac.inside = drive.cockpit();
+        ac.crank = drive.crank(); ac.firing = drive.firing();
+      }
+      if (rideKind == Ride::Car && prevRideKind != Ride::Car) audio.carStart(drive.electric());
+      prevRideKind = rideKind;
+      audio.setCar(ac);
+      {
+        float sp = float(sleds.speed());
+        audio.setSled(rideKind == Ride::Sled, std::min(1.f, 0.15f + sp / 30), input.down(Action::Forward) ? 1.f : 0.f, sp);
+      }
+      dvec3 sirenP(0), amb(0), heliP(0);
+      bool siren = police.sirenNear(cam.pos, sirenP);
+      if (rescue.ambulanceAt(amb) && (!siren || glm::length(amb - cam.pos) < glm::length(sirenP - cam.pos))) { siren = true; sirenP = amb; }
+      audio.setSiren(siren, sirenP);
+      bool heli = police.heliAt(heliP) || rescue.heliAt(heliP);
+      audio.setChopper(heli, heliP);
+      // the air horns: a bus pulling out of a stop, a train leaving a station (heard within a few hundred metres)
+      for (const dvec3& p : buses.departures) if (glm::length(p - cam.pos) < 400) audio.horn((int(p.x * 7) & 1) ? "bus" : "bus2", &p, 0.8f);
+      buses.departures.clear();
+      for (const dvec3& p : railway.departures) {
+        if (glm::length(p - cam.pos) < 1500) audio.horn("train", &p);
+        if (rideKind == Ride::Rail && glm::length(p - player.pos) < 60) { audio.paGong(); audio.announce(railway.rideUp() ? "rail_dep_up" : "rail_dep_down", 1.1f); }
+      }
+      railway.departures.clear();
+      for (const dvec3& p : express.departures) {
+        if (glm::length(p - cam.pos) < 1500) audio.horn("train_short", &p, 0.8f);
+        if (rideKind == Ride::Express && glm::length(p - player.pos) < 120) audio.paGong();
+      }
+      express.departures.clear();
+      if (rideKind == Ride::Rail) {   // the Wolkenspitzbahn's recorded PA: arriving at a halt / the terminus
+        TrainRide tr = railway.ride();
+        bool at = tr.atStop || tr.arrived;
+        if (at && !railAtStop) {
+          std::string k = tr.stop;
+          std::transform(k.begin(), k.end(), k.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+          const char* key = k.find("wolkensee") != std::string::npos ? "rail_arr_wolkensee" : k.find("wolkenplatt") != std::string::npos ? "rail_arr_wolkenplatt" : "rail_arr_village";
+          audio.paGong(); audio.announce(key, 1.1f);
+        }
+        railAtStop = at;
+      } else railAtStop = false;
+      // the race: the countdown, the gates and checkpoints, the finish (the announcer)
+      for (const std::string& snd : races.sounds) {
+        if (snd.rfind("count:", 0) == 0) { audio.play("beep"); audio.announce(snd.substr(6)); }
+        else if (snd == "go") { audio.play("go"); audio.announce("go"); }
+        else if (snd == "checkpoint") { audio.play("gate"); audio.announce("checkpoint"); }
+        else if (snd == "gate") audio.play("gate");
+        else if (snd == "miss") audio.play("miss");
+        else if (snd.rfind("finish:", 0) == 0) {
+          std::string r = snd.substr(7);
+          audio.play("finish");
+          audio.announce(r == "record" ? "pb" : r == "1" ? "first" : r == "2" ? "second" : r == "3" ? "third" : "finish", 0.5f);
+        } else if (snd.rfind("medal:", 0) == 0) audio.announce(snd.substr(6), 1.6f);
+      }
+      if (opt.autotest && !races.sounds.empty()) for (const auto& snd : races.sounds) SL_INFO("[autotest] race sound: %s", snd.c_str());
+      races.sounds.clear();
+      // the soundtrack: the menu, a race (its results), a police chase, freeride
+      std::string mctx = !started ? "menu" : races.active() ? (races.resultsUp() || races.finished() ? "results" : "race") : police.wanted() ? "chase" : "freeride";
+      audio.music(mctx);
+      audio.update(frameDt);
+    }
+
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
-    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide;
+    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0;
+    if (nightShot >= 0) {   // (the night shots' cameras: the plaza, then the snow gun nearest it)
+      dvec3 eye, at2;
+      if (nightShot < 16) { eye = dvec3(30, 0, 22); at2 = dvec3(-8, 0, -18); }
+      else if (nightShot >= 34) {   // behind a traffic car on its road: its lights, the pool ahead, its plate
+        const Traffic::Car* tc = nullptr;
+        for (const auto& c : traffic.list) if (c.mode == Traffic::Car::Mode::Road) { tc = &c; break; }
+        if (tc) {
+          dvec3 f(std::sin(tc->yaw), 0, std::cos(tc->yaw));
+          eye = dvec3(tc->x, 0, tc->z) - f * 9.0; at2 = dvec3(tc->x, 0, tc->z) + f * 12.0;
+        } else { eye = dvec3(30, 0, 22); at2 = dvec3(-8, 0, -18); }
+      } else {
+        dvec3 gp(0), gd(0, 0, 1);
+        sfx.gunNear(dvec3(0, 0, -300), gp, gd);
+        dvec3 side = glm::normalize(glm::cross(gd, dvec3(0, 1, 0)));
+        eye = gp + side * 22.0 - gd * 6.0; at2 = gp + gd * 14.0;
+      }
+      eye.y = world.height(eye.x, eye.z) + 5; at2.y = world.height(at2.x, at2.z) + 2;
+      cam.lookAt(eye, at2);
+      cam.fovY = 60;
+      terrain.update(cam.pos);
+      scenery.update(cam.pos);
+      resort.update(0, cam.pos);
+      resort.finishStreaming(cam.pos);
+      sfx.update(0.05, hour, light.night, weather.wind, cam.pos);
+    }
     if (mptest && pendingPng.empty()) rendered = false;   // (llvmpipe: the network test draws only its screenshots, so it runs at a real frame rate)
     if (const char* shot = std::getenv("SKI_LEGACY_SHOT"); shot && at == AT::Ski) {   // (debug: a fixed camera "x,y,z,tx,ty,tz")
       double v[6] = {0};
@@ -2426,6 +2690,10 @@ int runGame(const GameOptions& opt) {
       if (mp.active()) mpv.hud(ui, mp, cam, renderer.width(), renderer.height(), u5, save.setting("nameTags", 1) != 0, mp.interior(), "Y", "N");
     }
     menus.loading.clear();
+    if (menus.isOpen() || tmap.isOpen()) {   // (menu.js: a tick moving, a click choosing)
+      if (nav.up || nav.down || nav.left || nav.right || nav.tabPrev || nav.tabNext) audio.play("tick");
+      if (nav.confirm || nav.click || nav.cancel) audio.play("click");
+    }
     menus.frame(nav, frameDt, simTime);
     if (tmap.isOpen()) {
       int carIdx = -1;
@@ -2446,6 +2714,7 @@ int runGame(const GameOptions& opt) {
       frameLight.zenith = frameLight.mid = frameLight.horizon = frameLight.glow = frameLight.fog = vec3(0.004f, 0.005f, 0.007f);
       frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
     }
+    pt0 = perfMs();
     renderer.beginFrame(cam, frameLight, player.renderPos);
     bool indoor = rooms.inside();
     if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
@@ -2463,6 +2732,13 @@ int runGame(const GameOptions& opt) {
       rescue.addDraw(vdraw, cam.pos);
       sleds.addDraw(vdraw, cam.pos);
       if (mp.active()) mpv.addDraw(mp, vdraw, vmodels, sleds.model(), sleds.fit(), cam.pos, mp.interior());
+      {   // (Phase 7) the lights, car lamps and plates, spray, flags, snowcats
+        bool dark = light.night > 0.15f;
+        std::vector<CarPose> poses;
+        drive.carPoses(poses, cam.pos, 160, dark);
+        if (aiOn) traffic.carPoses(poses, cam.pos, 160, dark);
+        sfx.submit(renderer, vdraw, shapes, cam, poses);
+      }
       vdraw.submit(renderer, *dev, cam.pos);
     }
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
@@ -2483,7 +2759,7 @@ int runGame(const GameOptions& opt) {
     }
     police.addPeople(people, cam.pos);
     if (mp.active()) mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt);
-    people.submit(renderer, cam.pos, opt.autotest ? 28 : 48);
+    people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
     bool hideRig = (player.view == Player::View::First && player.mode != PlayerMode::Fall) || (rideKind == Ride::Car && drive.cockpit()) ||
                    ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || rescue.carried();
@@ -2491,11 +2767,18 @@ int runGame(const GameOptions& opt) {
     express.insideView = rideKind == Ride::Express && seatView;
     if (drawSkier) rig.submit(renderer, hideRig);
 
+    perf.add("render: scene submit (culling, batches)", perfMs() - pt0);
+    pt0 = perfMs();
+    dev->resetFrameStats();
     renderer.endFrame();
     ui.end();
+    perf.add("render: draw calls + post + UI", perfMs() - pt0);
+    frameDraws = dev->drawCallsThisFrame(); frameTris = dev->trianglesThisFrame();
+    statFrames++; sumDraws += frameDraws; sumTris += double(frameTris); maxDraws = std::max(maxDraws, frameDraws); maxTris = std::max<uint64_t>(maxTris, frameTris);
     }
 
     frame++;
+    perf.endFrame();
     fpsN++;
     fpsT += plat->timeSeconds() - now;
     if (fpsT > 0.5 || (opt.autotest && fpsN >= 20)) { fps = fpsN / std::max(1e-6, fpsT); fpsN = 0; fpsT = 0; }
@@ -2504,6 +2787,13 @@ int runGame(const GameOptions& opt) {
       if (!pendingPng.empty() && rendered) { writePng(renderer, pendingPng); pendingPng.clear(); }
       phaseFrame++;
       if (at == AT::Ski) {
+        if (frame == skiFrame0 + 1) {
+          perf.reset(); sumDraws = sumTris = 0; statFrames = 0; maxDraws = 0; maxTris = 0;   // (the skiing measured alone)
+          // (Phase 7) the skier in a bought outfit: a Sunset Orange jacket, Navy trousers (outfits.js on the rig)
+          save.outfits.owned.push_back("j_sunset"); save.outfits.owned.push_back("t_navy");
+          save.outfits.equipped[save.character]["jacket"] = "j_sunset";
+          save.outfits.equipped[save.character]["trousers"] = "t_navy";
+        }
         if ((frame - skiFrame0) % 100 == 0 || frame == skiFrame0 + 1)
           SL_INFO("[autotest] frame %4d  t=%5.2fs  pos=(%8.1f, %7.1f, %8.1f)  speed=%5.1f km/h  %-5s  fps=%5.1f  terrain=%zu trees=%zu draws=%u",
                   frame, simTime, player.pos.x, player.pos.y, player.pos.z, player.speed() * 3.6, player.modeName(), fps,
@@ -2516,6 +2806,7 @@ int runGame(const GameOptions& opt) {
           skiOk = finite && (onPiste ? skiDist > 50 && skiDrop > 5 : true);
           SL_INFO("[autotest] skied %.0f m along the run (%.0f m from the start), dropped %.0f m, top speed %.1f km/h, final %.1f km/h, %d landings, %d crashes, mode %s",
                   skiDist, glm::length(dvec2(player.pos.x - startPos.x, player.pos.z - startPos.z)), skiDrop, maxSpeed * 3.6, player.speed() * 3.6, nLand, nCrash, player.modeName());
+          perfReport("skiing down the run (every frame rendered)");
           at = haveResort ? AT::Collide : AT::Done;
           phaseFrame = 0;
         }
@@ -2666,7 +2957,22 @@ int runGame(const GameOptions& opt) {
           at = AT::Race; phaseFrame = 0;
         }
       }
-      if (at == AT::Done) running = false;
+      // (Phase 7) the night shots: the plaza's lamps and flags, a snow gun spraying, then the end
+      if (at == AT::Done && nightShot < 0) { nightShot = 0; SL_INFO("[autotest] night: 21:30, the plaza's lamps, flags and a snow gun"); }
+      else if (at == AT::Done && nightShot >= 0) {
+        nightShot++;
+        nightLamps = std::max(nightLamps, sfx.lampsLit()); nightSprays = std::max(nightSprays, sfx.sprays());
+        nightCars = std::max(nightCars, sfx.carLights()); nightPlates = std::max(nightPlates, sfx.plates());
+        if (nightShot == 14 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, "night"));
+        if (nightShot == 32 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, "spray"));
+        if (nightShot == 50 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, "carlights"));
+        if (nightShot == 51) {
+          nightOk = nightLamps > 0 && nightSprays > 0;
+          SL_INFO("[autotest] night: %d lamps lit (the plaza), %d snow guns spraying, %d car headlights, %d plates (behind a traffic car) -> %s",
+                  nightLamps, nightSprays, nightCars, nightPlates, nightOk ? "ok" : "FAILED");
+        }
+        if (nightShot > 51) running = false;
+      }
     }
     if (rendered) plat->swapBuffers();
     if (fpsCap > 0 && !opt.autotest) {   // (SETTINGS: frame rate limit)
@@ -2688,6 +2994,20 @@ int runGame(const GameOptions& opt) {
             buyOk ? "ok" : "FAILED", saveOk ? "ok" : "FAILED", chargeOk ? "ok" : "FAILED", mapOk ? "ok" : "FAILED");
     SL_INFO("[autotest] race + records %s, job %s, police chase + jail %s, chalet + furniture %s, weather %s, snowmobile %s (people drawn %zu)", raceOk ? "ok" : "FAILED", jobOk ? "ok" : "FAILED",
             policeOk ? "ok" : "FAILED", chaletOk ? "ok" : "FAILED", weatherOk ? "ok" : "FAILED", sledOk ? "ok" : "FAILED", people.drawn());
+    // (Phase 7) the audio (with SDL's dummy driver the mixer still runs), the scene extras, the performance
+    {
+      Audio::Stats a = audio.stats();
+      audioOk = !a.device || (a.framesMixed > 0 && a.shots > 20 && a.tracksStarted > 0 && (a.samples > 0 || a.failed > 0));
+      SL_INFO("[autotest] audio: device %s, %d sound effects + %d announcer lines decoded in %.2f s (%d missing, %.1f MB PCM), %lld frames mixed, %d one-shots + %d synthesized, peak %d voices, %d music tracks started (last '%s'), peak level %.2f -> %s",
+              a.device ? "open" : "none (silent)", a.samples, a.voiceLines, a.loadSeconds, a.failed, a.sampleBytes / 1048576.0, (long long)a.framesMixed, a.shots, a.synth, a.peakVoices,
+              a.tracksStarted, a.track.c_str(), double(a.peak), audioOk ? "ok" : "FAILED");
+      SL_INFO("[autotest] scene fx: %d lamps lit, %d car lights, %d plates, %d snow guns spraying, %d flags, %d snowcats; car wheels split: %s; outfit %s",
+              sfx.lampsLit(), sfx.carLights(), sfx.plates(), sfx.sprays(), sfx.flags(), sfx.snowcats(), vmodels.car("car_bmw_x3") && vmodels.car("car_bmw_x3")->split() ? "yes" : "no",
+              rig.dressed() ? "worn" : "original");
+      perfReport("the rest of the run (vehicles, rides, gameplay; rendered every 4th / 8th frame)");
+      SL_INFO("[perf] quality '%s': peak RSS %.0f MB (budget on Switch: well under 3 GB)", q.name.c_str(), plat->peakMemoryBytes() / 1048576.0);
+      ok = ok && audioOk && nightOk;
+    }
     SL_INFO("[autotest] %s", ok ? "PASS" : "FAIL");
     audio.stop(*plat);
     return ok ? 0 : 1;

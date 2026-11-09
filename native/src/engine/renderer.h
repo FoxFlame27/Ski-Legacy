@@ -41,7 +41,20 @@ struct RenderSettings {
   int shadowSize = 2048;
   float shadowRange = 90;   // half extent of the shadow box (m)
   float renderScale = 1.0f; // 3D resolution scale (dynamic resolution on console)
+  bool lowShaders = false;  // (Phase 7) SL_LOW: single-tap shadows, no far normal maps, no glints
+  int maxLights = 16;       // point / spot lights a frame (<= 16)
 };
+
+/// (Phase 7) a lamp's or a headlight's light: point (cosOuter < -1.5) or spot (dir, cones)
+struct PointLight {
+  dvec3 pos{0};
+  vec3 color{1};            // linear rgb x intensity
+  float range = 15;
+  vec3 dir{0, -1, 0};
+  float cosOuter = -2, cosInner = -2;
+};
+/// (Phase 7, SETTINGS: screen effects) the post pass's extras
+struct ScreenFx { float vignette = 0, streaks = 0, flash = 0, hit = 0; };
 
 /// A batch of instances of one model (trees): per instance vec4(x, y, z, scale) + vec4(yaw, 0, 0, 0).
 class InstanceBatch {
@@ -63,13 +76,13 @@ private:
 /// translation relative to the batch origin (double precision on the CPU, camera-relative on the GPU).
 class MatrixInstanceBatch {
 public:
-  struct Inst { vec4 r0, r1, r2; };
+  struct Inst { vec4 r0, r1, r2, tint{1, 1, 1, 0}; };   // tint: (Phase 7) paint / livery colour, a = 0: none
   void init(gfx::Device& d, const Model& m, uint32_t capacity);
   void upload(gfx::Device& d, const std::vector<Inst>& inst);
   uint32_t count() const { return count_; }
   const Model* model() const { return model_; }
   const std::vector<gfx::VertexInput>& inputs() const { return inputs_; }
-  static Inst pack(const glm::dmat4& world, const dvec3& origin);
+  static Inst pack(const glm::dmat4& world, const dvec3& origin, const vec4& tint = vec4(1, 1, 1, 0));
 private:
   const Model* model_ = nullptr;
   gfx::Buffer buf_;
@@ -85,6 +98,13 @@ public:
   void setRenderScale(float s) { set_.renderScale = s; resize(w_, h_); }
   float renderScale() const { return set_.renderScale; }
   bool shadowsOn = true;
+  // (Phase 7) SETTINGS: bloom; the screen effects; lights for this frame (call between beginFrame and endFrame)
+  bool bloomOn = true;
+  float bloomStrength = 0.13f, bloomThreshold = 3.0f;
+  ScreenFx fx;
+  void addLight(const PointLight& l) { lights_.push_back(l); }
+  int lightsUsed() const { return lightsUsed_; }
+  uint64_t triangles() const { return lastTris_; }
   int width() const { return w_; }
   int height() const { return h_; }
   gfx::Texture noiseTexture() const { return noise_; }
@@ -133,8 +153,15 @@ private:
   gfx::Device* dev_ = nullptr;
   RenderSettings set_;
   int w_ = 1, h_ = 1, rw_ = 1, rh_ = 1;
-  gfx::RenderTarget hdr_, shadow_;
-  gfx::Buffer frameUbo_, shadowUbo_, hudVbo_;
+  gfx::RenderTarget hdr_, shadow_, bloomA_, bloomB_;
+  gfx::Buffer frameUbo_, shadowUbo_, hudVbo_, lightsUbo_;
+  gfx::Program bloom_;
+  int bw_ = 1, bh_ = 1;
+  std::vector<PointLight> lights_;
+  int lightsUsed_ = 0;
+  uint64_t lastTris_ = 0;
+  void uploadLights();
+  void bloomPass();
   gfx::VertexInput hudVi_, emptyVi_;
   gfx::Program mesh_, meshSkin_, meshInst_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, post_, hud_;
   gfx::Texture noise_, white_;

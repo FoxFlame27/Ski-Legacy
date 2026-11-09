@@ -40,16 +40,42 @@ public:
   const std::vector<uint8_t>& playBin() const { return pbin_; }
   /// A vehicle's procedural parts (export_net.mjs localModel: [{ mat, verts, vOff, ... }]) as one model
   std::shared_ptr<Model> transportModel(const nlohmann::json& parts);
+  /// (Phase 7) the transport / play packs' parsed json and bins dropped once Transport, VehicleModels and PlayData have
+  /// read them (hundreds of MB of DOM and raw data; the Switch budget)
+  void releaseLoadData();
   void update(double dt, const dvec3& cam);
   void submit(Renderer& r, bool props = true, bool meshes = true);
   Lifts& lifts() { return lifts_; }
   size_t propCount() const { return nProps_; }
+  // (Phase 7) streaming of the baked mesh chunks (the resort's, the transport's and the courses' meshes per cell): the
+  // vertex / index bytes are kept zstd-packed on the CPU and uploaded within loadRadius of the camera, released past
+  // loadRadius + 400 m (Switch: unified memory, so a released chunk is memory back). Distances x lodScale.
+  float lodScale = 1.0f;
+  int textureCap = 4096;   // (Phase 7) the canvases' (signs') size cap: the quality preset's
+  bool compressTextures = false;   // (Phase 7) BC1 / BC3 (the switch preset)
+  double loadRadius() const { return 1800.0 * lodScale + 250.0; }
+  struct StreamStats { size_t chunks = 0, loaded = 0, gpuBytes = 0, packedBytes = 0, rawBytes = 0; int uploads = 0, releases = 0; };
+  StreamStats streamStats() const { return stream_; }
+  /// uploads every chunk in range at once (the loading screen; the autotest's teleports)
+  void finishStreaming(const dvec3& cam) { streamChunks(cam, true); }
+  /// (Phase 7) where the lamp posts' heads are (their light pools at night) and the snow cannons stand (spray)
+  const std::vector<dvec3>& lamps() const { return lamps_; }
+  const std::vector<glm::dmat4>& cannons() const { return cannons_; }
   const FontSet& fonts() const { return fonts_; }
 
 private:
   struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; };
   struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; };
-  struct Chunk { std::shared_ptr<Model> model; dvec3 origin; dvec3 bmin, bmax; bool shadow = true; };
+  struct Chunk {
+    std::shared_ptr<Model> model;    // null while unloaded
+    dvec3 origin; dvec3 bmin, bmax; bool shadow = true;
+    std::vector<uint8_t> packed;     // zstd(vertices 28 B each + indices)
+    size_t verts = 0, tris = 0, raw = 0; bool i16 = false; Material mat;
+  };
+  void streamChunks(const dvec3& cam, bool all);
+  StreamStats stream_;
+  std::vector<dvec3> lamps_;
+  std::vector<glm::dmat4> cannons_;
   void rebuild(const dvec3& cam);
   bool loadPack(platform::Platform& p, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf);
   std::shared_ptr<nlohmann::json> tjson_;

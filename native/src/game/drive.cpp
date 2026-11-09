@@ -1,4 +1,5 @@
 #include "game/drive.h"
+#include "game/scenefx.h"
 #include "core/log.h"
 #include "world/scenery.h"
 #include "world/world.h"
@@ -53,6 +54,7 @@ void Drive::init() {
     e.name = p.name; e.spec = t_.car(p.name); e.vm = models_.car(p.name);
     if (!e.spec || !e.vm) continue;
     e.x = p.pos.x; e.y = p.pos.y; e.z = p.pos.z; e.yaw = p.yaw; e.length = p.length;
+    e.paint = paintForIndex(uint32_t(parked.size()) * 31u + 7u);   // (Phase 7: parking.js paints its cars)
     parked.push_back(e);
   }
   // the Autohaus's car park beside the hall (impound.js lays out its bays at runtime: rows along both long sides here,
@@ -729,6 +731,7 @@ void Drive::frame(double dt, const DriveFrameInput& in) {
 void Drive::pose(double dt) {
   D& d = d_;
   double fx = std::sin(d.yaw), fz = std::cos(d.yaw), lx = fz, lz = -fx;
+  wheelSpin_ = std::fmod(wheelSpin_ + (d.vx * fx + d.vz * fz) * dt / 0.34, 2 * PI);   // (Phase 7: the wheels roll, r ~0.34 m)
   double wb = d.wheelBase / 2, tr = d.w / 2 - 0.15;
   double hFL = world_.groundHeight(d.x + fx * wb + lx * tr, d.z + fz * wb + lz * tr, d.y + 1);
   double hFR = world_.groundHeight(d.x + fx * wb - lx * tr, d.z + fz * wb - lz * tr, d.y + 1);
@@ -854,7 +857,31 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
       M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
     }
     double dist = std::hypot(M[3][0] - cam.x, M[3][2] - cam.z);
-    draw.add(e.vm->model.get(), M * glm::dmat4(e.vm->fit), dist < 70 ? 0 : 1);
+    bool mine = d_.on && int(i) == d_.e;
+    draw.addCar(*e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0);
+  }
+}
+
+void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, bool night) const {
+  static const char* CANTONS[] = {"VS", "GR", "BE", "UR", "OW", "TI", "ZH", "LU"};
+  for (size_t i = 0; i < parked.size(); i++) {
+    const Parked& e = parked[i];
+    if (!e.vm || !e.vm->ok()) continue;
+    bool mine = d_.on && int(i) == d_.e;
+    CarPose c;
+    c.vm = e.vm; c.mine = mine;
+    if (mine) {
+      c.M = glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) *
+            glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
+      c.lights = !d_.crash && (d_.lights || night);
+      c.brake = !d_.crash && d_.brkP > 0.1;
+    } else {
+      if (std::hypot(e.x - cam.x, e.z - cam.z) > maxD) continue;
+      c.M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
+    }
+    uint32_t h = uint32_t(i) * 2654435761u;
+    c.plate = !e.plate.empty() ? e.plate : e.forSale ? std::string("AUTOHAUS") : std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
+    out.push_back(c);
   }
 }
 

@@ -118,6 +118,15 @@ if(NOT stb_POPULATED)
   FetchContent_Populate(stb)
 endif()
 
+# (Phase 7) Ogg Vorbis decoding for the audio (stb_vorbis, the same pinned stb commit), compiled once as C
+add_library(sl_vorbis STATIC ${stb_SOURCE_DIR}/stb_vorbis.c)
+set_target_properties(sl_vorbis PROPERTIES FOLDER "third_party" POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+  target_compile_options(sl_vorbis PRIVATE /W0)
+else()
+  target_compile_options(sl_vorbis PRIVATE -w)
+endif()
+
 add_library(sl_headeronly INTERFACE)
 target_include_directories(sl_headeronly SYSTEM INTERFACE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR} ${libwebp_SOURCE_DIR}/src ${zstd_SOURCE_DIR}/lib)
 

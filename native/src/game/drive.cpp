@@ -212,7 +212,9 @@ CarTemplate Drive::carTemplate() const {
   const CarSeats* S = fullVm_ ? carSeatsFor(e.name + "_full") : nullptr;
   if (!S) S = carSeatsFor(e.name);
   const VehicleModel* vm = fullVm_ ? fullVm_ : e.vm;
-  return CarTemplate::of(S, vm && vm->ok() ? double(vm->size.y) : d_.spec ? double(d_.spec->size.y) : 1.5);
+  CarTemplate T = CarTemplate::of(S, vm && vm->ok() ? double(vm->size.y) : d_.spec ? double(d_.spec->size.y) : 1.5);
+  if (vm && vm->steerKnown) T.wheel(three::V3(vm->steerC.x, vm->steerC.y, vm->steerC.z), vm->steerTilt, vm->steerRimR);
+  return T;
 }
 
 bool Drive::clearAt(double x, double z, double r, int own) const {
@@ -779,7 +781,7 @@ void Drive::placeCamera(double dt, const DriveFrameInput& in) {
     dvec3 eye = dvec3(G * glm::dvec4(eyeL, 1));
     dvec3 dir = glm::normalize(dvec3(G * glm::dvec4(std::sin(ly) * std::cos(lookPitch_), std::sin(lookPitch_), std::cos(ly) * std::cos(lookPitch_), 0)));
     camPos_ = eye; camLook_ = eye + dir;
-    camFov_ += (72 + sp * 0.08 - camFov_) * (1 - std::exp(-dt * 4));
+    camFov_ += (72 + (in.fovSetting - 65) + sp * 0.08 - camFov_) * (1 - std::exp(-dt * 4));
   } else {
     double travel = sp > 2 ? std::atan2(d.vx, d.vz) : d.yaw;
     if (!camReady_) { camYaw_ = d.yaw + PI; camPitch_ = 0.17; lastMouse_ = -1e9; }
@@ -798,7 +800,7 @@ void Drive::placeCamera(double dt, const DriveFrameInput& in) {
     if (!camReady_) { camPos_ = want; camReady_ = true; }
     camPos_ += (want - camPos_) * (1 - std::exp(-dt * 9));
     camLook_ = focus;
-    camFov_ += (62 + sp * 0.2 - camFov_) * (1 - std::exp(-dt * 3));
+    camFov_ += (62 + (in.fovSetting - 65) + sp * 0.2 - camFov_) * (1 - std::exp(-dt * 3));
   }
   (void)fx; (void)fz;
   // shake: a crash (strong, dying away), rough snow at speed (a smooth wobble)
@@ -865,7 +867,8 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     }
     double dist = std::hypot(M[3][0] - cam.x, M[3][2] - cam.z);
     bool mine = d_.on && int(i) == d_.e;
-    draw.addCar(mine && fullVm_ ? *fullVm_ : *e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0);
+    // (drive.js updateBody: the steering wheel ~100 degrees either way at full lock: -steer x 3 about its column)
+    draw.addCar(mine && fullVm_ ? *fullVm_ : *e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0, mine ? -d_.steer * 3 : 0);
   }
 }
 

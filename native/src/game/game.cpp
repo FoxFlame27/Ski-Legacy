@@ -2470,6 +2470,7 @@ int runGame(const GameOptions& opt) {
 
     // (Phase 3 autotest) the car: bought at the Autohaus, put on a long road, driven 20 s along its right-hand lane
     DriveInput din;
+    static double cockpitHold = -9;   // (debug cockpittest: the steering held, -9: off)
     if (opt.autotest && at == AT::Drive) {
       if (phaseFrame == 0) {
         input.releaseInjected();
@@ -2552,6 +2553,7 @@ int runGame(const GameOptions& opt) {
           di.brake = (input.down(Action::Back) || input.down(Action::Brake) || input.moveY() < -0.5f) ? 1.f : 0.f;
           di.steer = -input.moveX();
         }
+        if (cockpitHold > -5) { di.throttle = 0; di.brake = 0; di.steer = float(cockpitHold); }   // (debug cockpittest: parked, the wheel as asked)
         di.handbrake = input.down(Action::Jump);
         di.lookBack = input.down(Action::LookBack);
         di.horn = input.down(Action::Horn);
@@ -2711,26 +2713,44 @@ int runGame(const GameOptions& opt) {
         if (sf % 45 == 30 && sf < 420 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("sled" + std::to_string(sf / 45)).c_str());
       } else if (sf > 5 && sf % 60 == 0) SL_INFO("[sledtest] f %d: off the sled (thrown off: %s)", sf, player.mode == PlayerMode::Fall ? "yes" : "no");
     }
-    if (opt.autotest && at == AT::Ski && off("cockpittest")) {   // (debug: in a car for sale (SKI_LEGACY_CAR, else the Golf GTI): the cockpit view, then the chase view: o_cockpit<n>.png)
+    if (opt.autotest && at == AT::Ski && off("cockpittest")) {
+      // (debug: every car's cockpit (SKI_LEGACY_CAR: only that one), from the web reference shots' viewpoints: ahead,
+      // down at your hands, left, right, back, the wheel turned, then the chase view: o_<car>_<view>.png)
+      static const char* ALL[] = {"car_vw_golf_gti", "car_tesla_m3", "car_bmw_x3", "car_toyota_gr_yaris", "car_audi_rs6", "car_mercedes_gls", "car_audi_etron_gt",
+                                  "car_porsche_taycan", "car_mercedes_sls", "car_lamborghini_huracan"};
       static int cf = 0;
+      const char* want = std::getenv("SKI_LEGACY_CAR");
+      const int per = 260, k = cf / per, f = cf % per, n = want ? 1 : int(sizeof ALL / sizeof ALL[0]);
       cf++;
-      if (cf == 5) {
-        const char* want = std::getenv("SKI_LEGACY_CAR");
-        int idx = drive.debugCar(want ? want : "car_vw_golf_gti");
-        if (idx >= 0) {
-          if (drive.enter(idx)) {
-            rideKind = Ride::Car;
-            player.setSkisOn(false);
-            dvec3 sp, sf;
-            drive.seat(sp, sf);
-            player.sitOn(sp, sf);
-            drive.setCockpit(true);
-            SL_INFO("[cockpittest] in the %s, the cockpit view", drive.parked[size_t(idx)].name.c_str());
+      if (k < n) {
+        const std::string model = want ? want : ALL[k], tag = model.rfind("car_", 0) == 0 ? model.substr(4) : model;
+        if (f == 5) {
+          if (drive.active()) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
+          int idx = drive.debugCar(model);
+          if (idx >= 0) {
+            drive.dress(idx, "white", "orig");
+            if (drive.enter(idx)) {
+              rideKind = Ride::Car;
+              player.setSkisOn(false);
+              dvec3 sp, sf;
+              drive.seat(sp, sf);
+              player.sitOn(sp, sf);
+              drive.setCockpit(true);
+              SL_INFO("[cockpittest] in the %s, the cockpit view", model.c_str());
+            }
           }
         }
+        struct V { int at; const char* name; double yaw, pitch; };
+        static const V VIEWS[] = {{60, "fwd", 0, -0.05}, {90, "down", 0, -0.7}, {120, "left", 1.3, -0.15}, {150, "right", -1.3, -0.15}, {180, "back", 2.09, -0.1}, {212, "steer", 0, -0.45}};
+        if (drive.active() && drive.cockpit()) for (const V& v : VIEWS) if (f > v.at - 30 && f <= v.at) drive.setLook(v.yaw, v.pitch);
+        // (parked, as the reference shots: no throttle, the wheel turned to the left for the "steer" view)
+        cockpitHold = f > 182 && f <= 212 ? 1 : 0;
+        if (f == 60 && drive.active()) { const dvec3 e = drive.debugEye(); SL_INFO("[cockpittest] %s: eyeRig (%.3f, %.3f, %.3f), steer %.2f", model.c_str(), e.x, e.y, e.z, drive.debugSteer()); }
+        if (f == 212 && drive.active()) SL_INFO("[cockpittest] %s: steer %.2f", model.c_str(), drive.debugSteer());
+        if (f == 214) drive.setCockpit(false);
+        for (const V& v : VIEWS) if (f == v.at && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (tag + "_" + v.name).c_str());
+        if (f == 252 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (tag + "_chase").c_str());
       }
-      if (cf == 150) drive.setCockpit(false);
-      if ((cf == 60 || cf == 120 || cf == 210) && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("cockpit" + std::to_string(cf / 60)).c_str());
     }
     if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
       dvec3 bp; double bh;
@@ -2748,7 +2768,7 @@ int runGame(const GameOptions& opt) {
       dfi.unstuck = input.takePressed(Action::Unstuck);
       dfi.flip = input.takePressed(Action::Furnish);
       dfi.lookX = paused ? 0 : input.lookX(); dfi.lookY = paused ? 0 : input.lookY();
-      dfi.now = simTime;
+      dfi.now = simTime; dfi.fovSetting = fovSetting;
       drive.frame(vdt, dfi);
       dvec3 sp, sf;
       drive.seat(sp, sf);

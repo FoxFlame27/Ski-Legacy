@@ -49,6 +49,14 @@ struct VehicleModel {
   struct Wheel { std::shared_ptr<Model> model; vec3 c{0}; float r = 0.33f; bool front = false; };
   std::vector<Wheel> wheels;
   bool split() const { return body && wheels.size() == 4; }
+  // (cars.js t.steering) the steering wheel as its own piece round its centre (it turns about the column's axis in the
+  // car you drive: drive.js updateBody), null where the model has none / the car is not split
+  std::shared_ptr<Model> steer;
+  vec3 steerC{0}, steerAxis{0, -0.37f, 0.93f};
+  // the wheel as cars.js measured it on this model (t.steering: centre, rake, rim radius), whether or not it is split
+  // off: where the driver's seat slides to and where the hands hold it (drive.js placeRig, carpeople.js)
+  bool steerKnown = false;
+  float steerTilt = 0.38f, steerRimR = 0.185f;
   vec3 lampF{0.7f, 0.68f, 2.3f}, lampR{0.68f, 0.85f, -2.3f};   // a headlamp / tail lamp (right side; mirrored in x)
   const CarSpec* spec = nullptr;          // (the exported lamps: world/transport)
   std::vector<gfx::Texture> matTex;       // the GLB materials' base colour maps (the lamps glow through them)
@@ -89,8 +97,9 @@ public:
   /// One instance this frame (world matrix incl. the model's fit). lod 0: near, 1: far
   void add(const Model* m, const glm::dmat4& M, int lod = 0, const vec4& tint = vec4(1, 1, 1, 0));
   /// (Phase 7) a car: M its pose (without the model's fit); near (lod 0) with its wheels turning (spin: the roll angle,
-  /// steer: the front wheels' angle), else the whole model; tint: its paint (a = 0: the model's own)
-  void addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin = 0, double steer = 0);
+  /// steer: the front wheels' angle; wheelTurn: the steering wheel's angle about its column), else the whole model;
+  /// tint: its paint (a = 0: the model's own)
+  void addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin = 0, double steer = 0, double wheelTurn = 0);
   void submit(Renderer& r, gfx::Device& dev, const dvec3& cam);
 private:
   struct Batch { std::vector<std::pair<glm::dmat4, vec4>> inst[2]; MatrixInstanceBatch gpu[2]; uint32_t cap[2] = {0, 0}; };

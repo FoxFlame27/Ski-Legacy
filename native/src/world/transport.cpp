@@ -19,6 +19,17 @@ template <class T> std::vector<T> arr(const nlohmann::json& a, const std::vector
   std::memcpy(out.data(), bin.data() + off, n * sizeof(T));
   return out;
 }
+// the steering wheel of a car spec (export_net.mjs steerData)
+void parseSteer(const nlohmann::json& c, const std::vector<uint8_t>& bin, CarSpec& s) {
+  if (!c.contains("steer") || !c["steer"].is_object()) return;
+  const auto& q = c["steer"];
+  if (!q.contains("c") || !q.contains("axis") || !q.contains("cen")) return;
+  s.steerC = vec3(q["c"][0].get<float>(), q["c"][1].get<float>(), q["c"][2].get<float>());
+  s.steerAxis = vec3(q["axis"][0].get<float>(), q["axis"][1].get<float>(), q["axis"][2].get<float>());
+  s.steerTilt = q.value("tilt", 0.38f); s.steerRimR = q.value("rimR", 0.185f);
+  s.steerTris = arr<float>(q["cen"], bin);
+  s.hasSteer = s.steerTris.size() >= 9;
+}
 Road readRoad(const nlohmann::json& r, const std::vector<uint8_t>& bin) {
   Road o;
   o.n = r["n"]; o.length = r["length"];
@@ -180,6 +191,7 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
       s.fit = mat16(c["fit"]);
       for (auto& h : c["hide"]) s.hide.push_back(h.get<std::string>());
       for (auto& g : c["glass"]) s.glass.push_back({g["i"].get<int>(), g.value("red", false), g.value("clear", false)});
+      parseSteer(c, bin, s);
       carsFull.push_back(s);
     }
   for (auto& c : net["cars"]) {
@@ -200,6 +212,7 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
         s.plates.push_back(M);
       }
     }
+    parseSteer(c, bin, s);
     if (c.contains("lamps") && c["lamps"].is_object()) {
       auto& L = c["lamps"];
       s.lampHalfL = L.value("halfL", 0.f);

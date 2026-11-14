@@ -27,7 +27,7 @@ std::shared_ptr<Model> withHidden(const std::shared_ptr<Model>& base, const std:
 }
 } // namespace
 
-static void splitWheels(gfx::Device& dev, VehicleModel& vm);
+static void splitWheels(gfx::Device& dev, VehicleModel& vm, const CarSpec* steerSpec);
 
 void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, Resort& resort) {
   ModelLoadOptions mo;
@@ -51,7 +51,8 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
     for (const Material& bm : base->materials) vm.matTex.push_back(bm.baseTex);
     vm.lampF = vec3(s.size.x * 0.36f, 0.68f, s.size.z * 0.5f - 0.15f);
     vm.lampR = vec3(s.size.x * 0.36f, 0.85f, -s.size.z * 0.5f + 0.1f);
-    splitWheels(dev, vm);
+    if (s.hasSteer) { vm.steerKnown = true; vm.steerC = s.steerC; vm.steerTilt = s.steerTilt; vm.steerRimR = s.steerRimR; }
+    splitWheels(dev, vm, &s);
     nSplit += vm.split();
     for (auto& mesh : base->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
     base->images.clear(); m->images.clear();
@@ -114,7 +115,8 @@ const VehicleModel* VehicleModels::full(const std::string& baseName) {
       for (const auto& g : s.glass) if (g.i >= 0 && size_t(g.i) < m->materials.size()) { Material gm = glassMat(g.red, g.clear); gm.name = m->materials[size_t(g.i)].name; m->materials[size_t(g.i)] = gm; }
       vm.model = m; vm.fit = s.fit; vm.size = s.size;
       if (const VehicleModel* b = car(baseName)) { vm.hasPlates = b->hasPlates; vm.plates = b->plates; vm.lampF = b->lampF; vm.lampR = b->lampR; }
-      splitWheels(*dev_, vm);
+      if (s.hasSteer) { vm.steerKnown = true; vm.steerC = s.steerC; vm.steerTilt = s.steerTilt; vm.steerRimR = s.steerRimR; }
+      splitWheels(*dev_, vm, &s);
       for (auto& mesh : base->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
       base->images.clear(); m->images.clear();
       for (auto& mesh : m->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
@@ -185,10 +187,15 @@ void VehicleDraw::add(const Model* m, const glm::dmat4& M, int lod, const vec4& 
   batches_[m].inst[std::clamp(lod, 0, 1)].push_back({M, tint});
 }
 
-void VehicleDraw::addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin, double steer) {
+void VehicleDraw::addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin, double steer, double wheelTurn) {
   if (!vm.ok()) return;
   if (lod > 0 || !vm.split()) { add(vm.model.get(), M * glm::dmat4(vm.fit), lod, tint); return; }
   add(vm.body.get(), M, 0, tint);
+  if (vm.steer) {
+    glm::dmat4 S = M * glm::translate(glm::dmat4(1), dvec3(vm.steerC));
+    if (wheelTurn != 0) S = S * glm::rotate(glm::dmat4(1), wheelTurn, glm::normalize(dvec3(vm.steerAxis)));
+    add(vm.steer.get(), S, 0, tint);
+  }
   for (const auto& w : vm.wheels) {
     glm::dmat4 W = M * glm::translate(glm::dmat4(1), dvec3(w.c));
     if (w.front && steer != 0) W = W * glm::rotate(glm::dmat4(1), steer, dvec3(0, 1, 0));
@@ -217,7 +224,7 @@ vec4 paintForIndex(uint32_t k) {
 // (Phase 7) cars.js splitWheels, condensed: the wheels' centres from the meshes / materials named like wheels (per
 // quadrant of the fitted car), else from where the body touches the ground; every triangle inside a wheel's cylinder
 // (round its axle, x) goes to that wheel, the rest (and the paint: the arches) stays the body.
-static void splitWheels(gfx::Device& dev, VehicleModel& vm) {
+static void splitWheels(gfx::Device& dev, VehicleModel& vm, const CarSpec* steerSpec) {
   const Model& m = *vm.model;
   struct Tri { vec3 p[3], n[3]; vec2 uv[3]; uint64_t key[3]; int mat; bool named; };   // key: the source vertex (shared ones stay shared)
   std::vector<Tri> tris;
@@ -302,21 +309,41 @@ static void splitWheels(gfx::Device& dev, VehicleModel& vm) {
       w.ok = true;
     }
   }
+  // the steering wheel's triangles (the web game's own pick, exported as their middles: cars.js splitWheels): found
+  // again here by where they are (2 mm cells, within 0.6 mm)
+  const CarSpec* sp = steerSpec;
+  std::unordered_multimap<uint64_t, vec3> steerAt;
+  auto cell = [](const vec3& p, int dx, int dy, int dz) {
+    const int64_t x = int64_t(std::floor(p.x * 500.f)) + dx, y = int64_t(std::floor(p.y * 500.f)) + dy, z = int64_t(std::floor(p.z * 500.f)) + dz;
+    return (uint64_t(x & 0x1fffff) << 42) | (uint64_t(y & 0x1fffff) << 21) | uint64_t(z & 0x1fffff);
+  };
+  if (sp && sp->hasSteer)
+    for (size_t i = 0; i + 2 < sp->steerTris.size(); i += 3) { const vec3 p(sp->steerTris[i], sp->steerTris[i + 1], sp->steerTris[i + 2]); steerAt.emplace(cell(p, 0, 0, 0), p); }
+  auto isSteer = [&](const vec3& c) {
+    if (steerAt.empty()) return false;
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++) {
+      auto r = steerAt.equal_range(cell(c, dx, dy, dz));
+      for (auto it = r.first; it != r.second; ++it) if (glm::length(it->second - c) < 0.0006f) return true;
+    }
+    return false;
+  };
   // split the triangles
-  std::vector<std::vector<Geo>> parts(5, std::vector<Geo>(m.materials.size()));
-  std::vector<std::vector<std::unordered_map<uint64_t, uint32_t>>> seen(5, std::vector<std::unordered_map<uint64_t, uint32_t>>(m.materials.size()));
+  std::vector<std::vector<Geo>> parts(6, std::vector<Geo>(m.materials.size()));
+  std::vector<std::vector<std::unordered_map<uint64_t, uint32_t>>> seen(6, std::vector<std::unordered_map<uint64_t, uint32_t>>(m.materials.size()));
+  size_t nSteer = 0;
   for (const Tri& t : tris) {
     vec3 cen = (t.p[0] + t.p[1] + t.p[2]) / 3.f;
     int part = 4;
     bool paint = size_t(t.mat) < m.materials.size() && m.materials[size_t(t.mat)].paint == 1;
-    if (!paint)
+    if (isSteer(cen)) { part = 5; nSteer++; }
+    else if (!paint)
       for (int i = 0; i < 4; i++) {
         const Wh& w = q[i];
         if (std::fabs(cen.x - w.c.x) < w.hw + 0.06f && std::hypot(cen.y - w.c.y, cen.z - w.c.z) < w.r + 0.03f) { part = i; break; }
       }
     Geo& g = parts[size_t(part)][size_t(t.mat)];
     auto& sn = seen[size_t(part)][size_t(t.mat)];
-    vec3 off = part < 4 ? q[part].c : vec3(0);
+    vec3 off = part < 4 ? q[part].c : part == 5 ? sp->steerC : vec3(0);
     for (int k = 0; k < 3; k++) {
       auto [it, fresh] = sn.emplace(t.key[k], uint32_t(g.pos.size()));
       if (fresh) { g.pos.push_back(t.p[k] - off); g.nor.push_back(t.n[k]); g.uv.push_back(t.uv[k]); g.col.push_back(vec3(1)); }
@@ -332,7 +359,7 @@ static void splitWheels(gfx::Device& dev, VehicleModel& vm) {
       mt.vertexColor = false;
       ps.push_back({std::move(g), mt});
     }
-    return ps.empty() ? nullptr : buildModel(dev, ps, m.name + (part < 4 ? "_wheel" : "_body"));
+    return ps.empty() ? nullptr : buildModel(dev, ps, m.name + (part < 4 ? "_wheel" : part == 5 ? "_steer" : "_body"));
   };
   std::vector<VehicleModel::Wheel> wheels;
   for (int i = 0; i < 4; i++) {
@@ -342,6 +369,8 @@ static void splitWheels(gfx::Device& dev, VehicleModel& vm) {
   }
   vm.body = build(4);
   if (vm.body) vm.wheels = std::move(wheels);
+  if (vm.body && nSteer > 0) { vm.steer = build(5); vm.steerAxis = sp->steerAxis; }
+  if (sp && sp->hasSteer) SL_INFO("vehicles: %s steering wheel: %zu of %zu triangles found", m.name.c_str(), nSteer, sp->steerTris.size() / 3);
   // the lamps: at the nose / tail, at the wheels' track, a little above the axles
   float tx = (std::fabs(q[2].c.x) + std::fabs(q[3].c.x)) * 0.5f;
   vm.lampF = vec3(tx * 0.85f, q[2].r * 2.0f, L * 0.5f - 0.15f);

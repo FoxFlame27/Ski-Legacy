@@ -84,6 +84,25 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
   const { carTemplate } = await imp('game/cars.js');
   let sharp = null;
   try { sharp = (await import('node:module')).createRequire(path.join(SRC, '../package.json'))('sharp'); } catch (e) { log('lamps: no sharp (', e.message, '): the colour-aware lamp rules see no texels'); }
+  // The steering wheel (cars.js splitWheels: the triangles of the model that are the wheel, by name, or found by its
+  // shape round a hint: findSteering): where it is, the column's axis, and which triangles (their middles, in the car's
+  // frame): the C++ takes the same triangles out of its own copy of the model and turns them (game/vehicles)
+  const steerData = (t) => {
+    const S = t?.steering;
+    if (!S?.parts?.length) return null;
+    const cen = [];
+    for (const p of S.parts) {
+      const P = p.geometry.attributes.position, I = p.geometry.index;
+      if (!P || !I || p.material?.userData?.slMat?.index === undefined) continue;   // (the hub's rings: made by the game, not in the model)
+      for (let i = 0; i < I.count; i += 3) {
+        const a = I.getX(i), b = I.getX(i + 1), c = I.getX(i + 2);
+        cen.push((P.getX(a) + P.getX(b) + P.getX(c)) / 3 + S.c.x, (P.getY(a) + P.getY(b) + P.getY(c)) / 3 + S.c.y, (P.getZ(a) + P.getZ(b) + P.getZ(c)) / 3 + S.c.z);
+      }
+    }
+    if (!cen.length) return null;
+    return { c: [r4(S.c.x), r4(S.c.y), r4(S.c.z)], axis: [r4(S.axis.x), r4(S.axis.y), r4(S.axis.z)], tilt: r4(S.tilt), rimR: r4(S.rimR), cen: { off: pack.blob(Float32Array.from(cen)), n: cen.length } };
+  };
+  let lastSteer = null;
   const lampData = async (name, g, length) => {
     const buf = fs.readFileSync(path.join(SRC, '../public/models', name + '.glb'));
     const len = buf.readUInt32LE(12), json = JSON.parse(buf.subarray(20, 20 + len).toString('utf8')), bin = buf.subarray(20 + len + 8);
@@ -125,6 +144,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       o.material = Array.isArray(o.material) ? o.material.map(one) : one(o.material);
     });
     const t = carTemplate({ scene }, length, name);
+    try { lastSteer = steerData(t); } catch (e) { lastSteer = null; log('steering wheel of', name, 'skipped:', e.message); }
     const L = t?.lamps;
     if (!L) return null;
     const v3 = (v) => [r4(v.x), r4(v.y), r4(v.z)];
@@ -172,10 +192,13 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     out.cars.push({ name, label: spec.label || name, accel: spec.accel ?? 5, top: spec.top ?? 55, electric: !!spec.electric, rev: spec.rev ?? 1, mass: MASS[name] ?? 1700,
       drive: DRIVE[name] || 'awd', length, size: [r4(size.x), r4(size.y), r4(size.z)], real: REAL[name] || null, fit: m.matrix.toArray().map(r4), hide, glass,
       price: rent?.price ?? 0, kind: rent?.kind || '', plates });
+    lastSteer = null;
     try {
       const lamps = await lampData(name, g, length);
       if (lamps) { out.cars[out.cars.length - 1].lamps = lamps; log('lamps', name, lamps.parts.map((q) => `${q.kind}/${q.tier}:${q.I.n / 3}`).join(' '), '| halos', Object.entries(lamps.halo).map(([k, v]) => `${k}x${v.length}`).join(' ')); }
     } catch (e) { log('lamps', name, 'failed:', e.message); }
+    if (lastSteer) out.cars[out.cars.length - 1].steer = lastSteer;
+    log('steering wheel', name, lastSteer ? `${lastSteer.cen.n / 3} triangles at ${lastSteer.c.join(', ')}` : 'none');
   }
   // the full-detail models (drive.js FULL: the car you drive shows its `_full` model, with its interior): fitted like
   // the simple ones (the same rules: cars.js works on the name without `_full`)
@@ -192,7 +215,10 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       const size = new THREE.Box3().setFromObject(fit).getSize(new THREE.Vector3());
       const glass = glbMaterials(name).map((q, i) => ({ ...q, i })).filter((q) => q.transmission || (/glass|glas$|window|windscreen/.test(q.name.toLowerCase()) && !/surr|frame|seal|rubber|trim/.test(q.name.toLowerCase())))
         .map((q) => ({ i: q.i, red: /red/.test(q.name.toLowerCase()), clear: /front_light|light/.test(q.name.toLowerCase()) && !/red/.test(q.name.toLowerCase()) }));
-      out.carsFull.push({ name, base, length, size: [r4(size.x), r4(size.y), r4(size.z)], fit: m.matrix.toArray().map(r4), hide, glass });
+      let steer = null;
+      try { steer = steerData(carTemplate(g, length, name)); } catch (e) { log('steering wheel of', name, 'skipped:', e.message); }
+      log('steering wheel', name, steer ? `${steer.cen.n / 3} triangles at ${steer.c.join(', ')}` : 'none');
+      out.carsFull.push({ name, base, length, size: [r4(size.x), r4(size.y), r4(size.z)], fit: m.matrix.toArray().map(r4), hide, glass, steer });
     }
     log('net: full-detail car models', out.carsFull.map((c) => c.name).join(' '));
   } catch (e) { log('net: full-detail car models skipped:', e.message); }

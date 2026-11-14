@@ -651,6 +651,28 @@ shots' viewpoints: outside (front, left, right, the door, the tow bays), in the 
 open, the windows, the floor, the salesman, a car, the stair, upstairs, the marker, the salesman's talk) and the
 configurator's steps (`SKI_LEGACY_CAR=<model>`, `SKI_LEGACY_PAINT=<id>` for another car / paint).
 
+### The cockpit, 1:1 (Nov 2026)
+
+Checked car by car against the web game (`SKI_LEGACY_DEBUG=cockpittest,shotonly` with `--autotest --frames 2650 --png
+out.png`: every Autohaus model parked in a bay, `out_<car>_<view>.png` ahead / down at your hands / left / right /
+back / the wheel turned / the chase view; `SKI_LEGACY_CAR=<model>` for one car; it logs your eye point in the car's
+frame). The eye point (`drive.js placeRig` `d.eyeRig`) agrees to the millimetre in all ten cars, the views overlay.
+What differed and is ported now:
+
+- **The steering wheel turns** (`drive.js updateBody`: -steer x 3 about its column, ~100 degrees at full lock). The
+  web game splits the wheel's triangles off the model (`cars.js splitWheels` / `findSteering`: by name, or by shape
+  round a hint); the exporter writes their middles per car (`net.cars[].steer`, also for the `_full` models), the C++
+  takes exactly those triangles out of the body when it splits the road wheels (`VehicleModel::steer`) and
+  `VehicleDraw::addCar` turns them. All ten cars and the three `_full` models: every triangle found again.
+- **The hands hold the wheel where it is**: the web game takes the wheel's centre, rake and rim radius from the
+  model (`t.steering`: rake 0.25 in the GLS .. 0.54 in the sports cars, rims 0.16 .. 0.19 m); the C++ took the centre
+  from the seat hints' table and one rake / radius for every car. Now the exported values (`CarTemplate::wheel`): the
+  Tesla's full model sat you 6 cm too far forward (its hint row's wheel is not the one the web game measures), and
+  the hands were off the rim in the cars with a steep or a flat column. The traffic's drivers too.
+- **The field of view** follows SETTINGS' FOV in both car cameras (72 / 62 + setting - 65), as `drive.js`.
+
+Not ported: the web's dome light (`cabinLight`), the interior trims, the Tesla's lit screen graphic.
+
 ### Known gaps (Phase 3)
 - **Courses' regions** come as an 8 m grid (mean 0.48 m, max ~4 m off the JS inside the regions, exact on roads and
   roadbeds); the courses themselves (gates, ramps, props) are Phase 5. Outside the regions `--verify-heights` now
@@ -660,8 +682,8 @@ configurator's steps (`SKI_LEGACY_CAR=<model>`, `SKI_LEGACY_PAINT=<id>` for anot
 - **Cars**: no moving wheels or steering wheel, no dents (damage is a number), no headlights / tail lights / light
   pools (the L key only toggles the flag), no engine / tyre / horn sounds (audio is Phase 7), no tyre tracks *(Phase 7:
   wheels, lights, light pools, sounds, paint and plates done)*; the
-  cockpit view shows the car's own interior only as far as its GLB has one (no `_full` models, no seated driver's
-  hands); paint colours of the parked / traffic cars are the models' own; the Werkstatt, the tow truck's job, police, taxi and bad
+  cockpit view showed the car's own interior only as far as its GLB has one (the `_full` models, your seated body with
+  its hands on the turning wheel: done since, see "The cockpit, 1:1"); paint colours of the parked / traffic cars are the models' own; the Werkstatt, the tow truck's job, police, taxi and bad
   drivers are not ported (Phase 3; later phases and "The Autohaus, 1:1" below port most of them).
 - Knocked poles, signs, lamps and broken guardrail sections lose their colliders for 90 s but stay drawn.
 - **Traffic** turns into a car park bay and out of it without the arcs (it appears in / leaves the bay), the scenic

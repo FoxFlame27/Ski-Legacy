@@ -16,6 +16,7 @@ struct DriveFrameInput {
   bool toggleView = false, toggleLights = false, unstuck = false, flip = false;
   float lookX = 0, lookY = 0;
   double now = 0;
+  float fovSetting = 65;   // SETTINGS: field of view (drive.js: the cockpit and chase cameras follow it)
 };
 
 /// another body the car can hit (traffic, a bus, a parked car): drive.js bash()
@@ -81,6 +82,9 @@ public:
   std::string label() const;
   bool cockpit() const { return view_ == View::Cockpit; }
   void setCockpit(bool c) { view_ = c ? View::Cockpit : View::Chase; camReady_ = false; }   // (debug cockpittest)
+  void setLook(double yaw, double pitch) { lookYaw_ = yaw; lookPitch_ = pitch; }             // (debug cockpittest: the mouse look)
+  dvec3 debugEye() const { return eyeRigOk_ ? eyeRig_ : dvec3(0); }
+  double debugSteer() const { return d_.steer; }
   double rpm() const { return d_.rpm; }
   char gear() const { return d_.gear; }
   bool lights() const { return d_.lights; }

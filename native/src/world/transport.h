@@ -83,6 +83,12 @@ struct CarSpec {
   std::vector<std::pair<std::string, std::vector<LampAnchor>>> lampHalo;
   float lampHalfL = 0;
   bool hasLamps() const { return !lampParts.empty() || !lampHalo.empty(); }
+  // (cars.js splitWheels / findSteering, exported) the steering wheel: its centre and the column's axis in the car's
+  // frame, and the middles of the model's triangles that are the wheel (x, y, z each)
+  bool hasSteer = false;
+  vec3 steerC{0}, steerAxis{0, -0.37f, 0.93f};
+  float steerTilt = 0.38f, steerRimR = 0.185f;   // the column's rake, the rim's radius (the driver's hands go by them)
+  std::vector<float> steerTris;
 };
 
 class Transport {

@@ -516,7 +516,8 @@ void Traffic::addPeople(People& people, const dvec3& cam, const std::vector<int>
     const CarSeats* S = carSeatsFor(c.name);
     const glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) *
                          glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
-    const CarTemplate T = CarTemplate::of(S, c.vm ? double(c.vm->size.y) : 1.5);
+    CarTemplate T = CarTemplate::of(S, c.vm ? double(c.vm->size.y) : 1.5);
+    if (c.vm && c.vm->steerKnown) T.wheel(three::V3(c.vm->steerC.x, c.vm->steerC.y, c.vm->steerC.z), c.vm->steerTilt, c.vm->steerRimR);
     const double dx = S ? S->d[0] : 0.36;
     uint32_t h = c.crew;
     auto rnd = [&h]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return double(h & 0xffffff) / double(0x1000000); };

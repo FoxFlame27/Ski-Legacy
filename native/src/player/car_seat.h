@@ -49,6 +49,9 @@ struct CarTemplate {
   double tilt = 0.38, rimR = 0.185;
   /// from the seat hints (the steering wheel at the driver's x)
   static CarTemplate of(const CarSeats* S, double sizeY);
+  /// the steering wheel as measured on the model (cars.js t.steering: carpeople.js and drive.js go by it, the seat hints'
+  /// own wheel only picks the hints)
+  CarTemplate& wheel(const three::V3& c, double tiltRad, double rim) { steering = true; steerC = c; tilt = tiltRad; rimR = rim; return *this; }
 };
 
 /// carpeople.js seatHip(t, hipY, reach): the driver's hip joint in the car's frame, false without seat hints

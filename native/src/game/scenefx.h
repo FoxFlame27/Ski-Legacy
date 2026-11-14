@@ -30,6 +30,7 @@ struct CarPose {
   std::string plate;
   bool lights = false, brake = false, mine = false;
   bool live = false, reverse = false;   // running (daytime running lights), in reverse gear
+  bool hazard = false;                  // crashed / knocked aside / a wreck: the indicators flash (carlights.js hazardPhase), the tails stay on dim
 };
 
 class SceneFx {
@@ -80,7 +81,8 @@ private:
   // model, and the halos' places
   struct LampModel { int kind; int tier; float boost; std::shared_ptr<Model> model; };
   struct LampHalo { int kind; vec3 p; float sx, sy; float dir; };
-  struct CarLamps { std::vector<LampModel> parts; std::vector<LampHalo> halos; bool hasDrl = false, hasHead = false; float headZ = 0, headY = 0.68f; };
+  struct CarLamps { std::vector<LampModel> parts; std::vector<LampHalo> halos; bool hasDrl = false, hasHead = false; float headZ = 0, headY = 0.68f;
+                    bool indF = false, indR = false; };   // (carlights.js hasEnd: amber lamps of its own at the front / the back; else the lenses flash)
   std::unordered_map<const VehicleModel*, CarLamps> carLamps_;
   const CarLamps& lampsFor(const VehicleModel& vm);
   std::vector<std::string> plateOrder_;

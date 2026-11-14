@@ -905,13 +905,16 @@ void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, b
     if (mine) {
       c.M = glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) *
             glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
-      c.lights = !d_.crash && (d_.lights || night);
+      // (drive.js effects: crashed, the lamps stay as they were (the tails dim at least) and the hazards flash)
+      c.lights = d_.lights || night;
       c.brake = !d_.crash && d_.brkP > 0.1;
       c.live = !d_.crash;
       c.reverse = !d_.crash && d_.gear == 'R';
+      c.hazard = d_.crash;
     } else {
       if (std::hypot(e.x - cam.x, e.z - cam.z) > maxD) continue;
       c.M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
+      if (e.wrecked) { c.hazard = true; c.lights = night; }   // (the wreck: hazards, dim tails, the headlights on at night)
     }
     uint32_t h = uint32_t(i) * 2654435761u;
     c.plate = !e.plate.empty() ? e.plate : std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);

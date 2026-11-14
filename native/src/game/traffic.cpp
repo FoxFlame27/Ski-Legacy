@@ -481,6 +481,7 @@ void Traffic::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD,
     p.M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
     p.lights = night && c.mode == Car::Mode::Road;
     p.brake = c.mode == Car::Mode::Road && c.brake > 0.2;
+    if (c.mode == Car::Mode::Knocked) { p.hazard = true; p.lights = night; }   // (traffic.js: knocked aside, its lights stay on and the hazards flash)
     uint32_t h = uint32_t(&c - list.data()) * 2246822519u + 77u;
     p.plate = std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
     out.push_back(p);

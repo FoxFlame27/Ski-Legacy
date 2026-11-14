@@ -216,9 +216,23 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         nLamps_++;
       }
   // ---- cars: headlights (spots onto the road), the lamps' glow, tail lights, number plates
-  const Model* headGlow = shapes.get(Shapes::Kind::Quad, vec4(1, 0.96f, 0.86f, 1), 30.f);
-  const Model* tailGlow = shapes.get(Shapes::Kind::Quad, vec4(0.9f, 0.05f, 0.03f, 1), 6.f);
-  const Model* brakeGlow = shapes.get(Shapes::Kind::Quad, vec4(1, 0.08f, 0.05f, 1), 16.f);
+  // (carlights.js: a soft halo per lamp, additive, never a lit slab: the renderer's glow particles are round, fade
+  // into the bodywork they touch (soft depth) and only show from the side the lamp shines to)
+  (void)shapes;
+  auto lampGlow = [&](const dvec3& p, const dvec3& dir, const vec3& col, float size, float power) {
+    dvec3 toCam = cp - p;
+    double dl = glm::length(toCam);
+    if (dl < 1e-3) return;
+    float face = float(smoothstep(-0.05, 0.35, glm::dot(dir, toCam / dl)));
+    if (face <= 0.01f) return;
+    Particle q;
+    q.pos = p;
+    q.size = size * (1.f + float(std::min(dl, 160.0)) * 0.012f);   // (the glare keeps a little size with distance)
+    q.color = vec4(col * power, face);
+    q.soft = 0.12f;
+    q.kind = 3;
+    r.addParticle(q);
+  };
   for (const CarPose& c : cars) {
     if (!c.vm) continue;
     double d = glm::length(dvec3(c.M[3]) - cp);
@@ -234,17 +248,12 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         r.addLight(l);
         nCarLights_++;
       }
-      for (float sx : {-1.f, 1.f}) {
-        glm::dmat4 G = c.M * glm::translate(glm::dmat4(1), dvec3(sx * F.x, F.y, F.z + 0.02)) * glm::scale(glm::dmat4(1), dvec3(0.24, 0.1, 1));
-        vd.add(headGlow, G, 0);
-      }
+      dvec3 fwd = glm::normalize(dvec3(c.M[2]));
+      for (float sx : {-1.f, 1.f}) lampGlow(dvec3(c.M * glm::dvec4(sx * F.x, F.y, F.z + 0.17, 1)), fwd, vec3(1, 0.95f, 0.84f), 0.3f, 14.f);
     }
     if ((c.lights || c.brake) && d < 220)
-      for (float sx : {-1.f, 1.f}) {
-        glm::dmat4 G = c.M * glm::translate(glm::dmat4(1), dvec3(sx * R.x, R.y, R.z - 0.02)) * glm::rotate(glm::dmat4(1), PI, dvec3(0, 1, 0)) *
-                       glm::scale(glm::dmat4(1), dvec3(0.22, 0.08, 1));
-        vd.add(c.brake ? brakeGlow : tailGlow, G, 0);
-      }
+      for (float sx : {-1.f, 1.f})
+        lampGlow(dvec3(c.M * glm::dvec4(sx * R.x, R.y, R.z - 0.12, 1)), -glm::normalize(dvec3(c.M[2])), vec3(1, 0.035f, 0.02f), c.brake ? 0.26f : 0.2f, c.brake ? 7.f : 2.4f);
     if (!c.plate.empty() && d < 22) {
       const Model* pm = plateModel(c.plate);
       double L2 = c.vm->size.z * 0.5;
@@ -255,7 +264,6 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
   }
   // ---- snowmaking: each running gun's plume (snowmaking.js's particle maths, on the CPU; one instanced draw)
   if (!running_.empty()) {
-    const Model* flake = puff_ ? puff_.get() : shapes.get(Shapes::Kind::Quad, vec4(0.95f, 0.97f, 1.0f, 0.5f), 0.35f);
     dvec3 windV(2.6 * (0.6 + wind_), 0, 0.7 * (0.6 + wind_));
     for (int gi : running_) {
       const Gun& g = guns_[size_t(gi)];
@@ -268,14 +276,20 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         const double k = 1.05;
         dvec3 wander(std::fmod(s.b * 13.7, 1.0) - 0.5, std::fmod(s.c * 7.31, 1.0) - 0.62, std::fmod(s.d * 11.1, 1.0) - 0.5);
         dvec3 p = g.pos + v0 * ((1 - std::exp(-k * t)) / k) + dvec3(0, -0.45, 0) * (t * t) + windV * (t * t * 0.5 * 0.15) + wander * (t * 2.4);
-        double sz = (0.2 + 1.6 * smoothstep(0.0, 1.0, age)) * smoothstep(0.0, 0.05, age) * (1 - smoothstep(0.7, 1.0, age));
-        if (sz < 0.02) continue;
-        glm::dmat4 M(1);
-        M[0] = glm::dvec4(dvec3(cam.basis[0]) * sz, 0);
-        M[1] = glm::dvec4(dvec3(cam.basis[1]) * sz, 0);
-        M[2] = glm::dvec4(dvec3(cam.basis[2]) * sz, 0);
-        M[3] = glm::dvec4(p, 1);
-        vd.add(flake, M, 0);
+        // (snowmaking.js: a point 0.55 -> 4.2 m across that fades in at once and out over the last 70 % of its life;
+        // here a lit, noise-edged powder puff, soft against the snow it settles on)
+        double dia = 0.55 + (4.2 - 0.55) * smoothstep(0.0, 1.0, age);
+        double al = smoothstep(0.0, 0.05, age) * (1 - smoothstep(0.3, 1.0, age)) * (1 - smoothstep(180.0, SPRAY_RANGE, glm::length(p - cp)));
+        if (al < 0.01) continue;
+        Particle q;
+        q.pos = p;
+        q.size = float(dia * 0.5);
+        q.color = vec4(0.93f, 0.95f, 0.98f, float(al * 0.3));
+        q.rot = float(s.a * 6.28 + t * (s.b - 0.5) * 0.6);
+        q.soft = 0.8f;
+        q.seed = s.c + float(gi) * 0.17f;
+        q.kind = 2;
+        r.addParticle(q);
       }
       nSprays_++;
     }
@@ -312,7 +326,7 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         l.color = vec3(1.0f, 0.97f, 0.9f) * 380.f; l.range = 50;
         l.cosOuter = std::cos(0.6f); l.cosInner = std::cos(0.3f);
         r.addLight(l);
-        for (float sx : {-1.f, 1.f}) vd.add(headGlow, M * glm::translate(glm::dmat4(1), dvec3(sx * 0.8, 2.3, 3.75)) * glm::scale(glm::dmat4(1), dvec3(0.3, 0.16, 1)), 0);
+        for (float sx : {-1.f, 1.f}) lampGlow(dvec3(M * glm::dvec4(sx * 0.8, 2.3, 3.8, 1)), glm::normalize(dvec3(M[2])), vec3(1, 0.95f, 0.84f), 0.34f, 14.f);
       }
     }
 }

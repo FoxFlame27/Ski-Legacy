@@ -116,11 +116,12 @@ inline const char* kParticleVS = R"GLSL(
 layout(location = 0) in vec2 aCorner;
 layout(location = 1) in vec4 aPos;    // xyz camera-relative, w size (m)
 layout(location = 2) in vec4 aCol;    // rgb albedo, a opacity
-layout(location = 3) in vec4 aMisc;   // x rotation, y softness, zw unused
+layout(location = 3) in vec4 aMisc;   // x rotation, y softness, z kind (0 powder puff, 1 a clump of snow), w seed
 out vec2 vUV;
 out vec4 vCol;
 out vec3 vRel;
-out float vSoft;
+out vec3 vCenter;
+out vec4 vMisc;
 void main() {
   float c = cos(aMisc.x), s = sin(aMisc.x);
   vec2 k = mat2(c, s, -s, c) * aCorner;
@@ -129,39 +130,177 @@ void main() {
   vUV = aCorner;
   vCol = aCol;
   vRel = p;
-  vSoft = aMisc.y;
+  vCenter = aPos.xyz;
+  vMisc = vec4(aMisc.y, aMisc.z, aMisc.w, aPos.w);
   gl_Position = uViewProj * vec4(p, 1.0);
 }
 )GLSL";
+// Powder puffs: every particle is a little cloud — a sphere of snow dust whose edge is eaten by drifting noise (no
+// disc outlines; overlapping puffs read as one billowing plume), shaded as a volume: the sun wraps round it, its
+// far side falls into sky-blue shade, back-lit it glows at the rim (forward scattering), the scene's shadows and
+// the lamps light it, it fades into whatever it touches (soft against the depth) and before the lens.
 inline const char* kParticleFS = R"GLSL(
 in vec2 vUV;
 in vec4 vCol;
 in vec3 vRel;
-in float vSoft;
+in vec3 vCenter;
+in vec4 vMisc;     // x softness, y kind, z seed, w size
 out vec4 oColor;
 uniform sampler2D uDepth;
 uniform vec2 uNearFar;
 void main() {
   float r = length(vUV);
   if (r > 1.0) discard;
-  float a = (1.0 - smoothstep(0.25, 1.0, r));
-  a *= a * vCol.a;
-  // soft against the scene depth
+  float a;
+  float hgt = sqrt(max(1.0 - r * r, 0.0));
+  if (vMisc.y > 2.5) {
+    // a lamp's glow (carlights.js's halo sprites): a hot core and a soft halo, added to the image; it sinks into the
+    // bodywork it touches and never shows as a quad
+    vec2 suv0 = gl_FragCoord.xy * uRes.zw;
+    float d0 = texture(uDepth, suv0).x;
+    float nn = uNearFar.x, ff = uNearFar.y;
+    float sz0 = 2.0 * nn * ff / (ff + nn - (d0 * 2.0 - 1.0) * (ff - nn));
+    float pz0 = dot(vRel, uCamFwd.xyz);
+    float k = saturate((sz0 - pz0) / max(vMisc.x, 0.02) + 0.35) * vCol.a;
+    float glow = exp(-r * r * 22.0) + 0.16 * pow(1.0 - r, 2.5);
+    oColor = vec4(vCol.rgb * glow * k, 0.0);
+    return;
+  }
+  if (vMisc.y > 0.5 && vMisc.y < 1.5) {
+    a = 1.0 - smoothstep(0.55, 1.0, r);          // a clump: a small soft-edged body
+  } else {
+    vec2 q = vUV * (0.11 + 0.05 * fract(vMisc.z * 7.31)) + vec2(vMisc.z * 3.7, vMisc.z * 9.1) + uCamPos.w * vec2(0.013, 0.009);
+    float n = texture(uSkyNoise, q).r * 0.6 + texture(uSkyNoise, q * 2.9 + 0.31).g * 0.4;
+    float body = 1.0 - smoothstep(0.0, 1.0, r);
+    a = smoothstep(0.0, 0.5, body * 1.5 - (0.62 - n) * 1.25) * smoothstep(0.0, 0.55, body);
+    if (vMisc.y > 1.5) a *= body;   // (the guns' fine mist: no outline at all)
+  }
+  a *= vCol.a;
+  // soft against the scene depth, and no hard slab in front of the lens
   vec2 suv = gl_FragCoord.xy * uRes.zw;
   float d = texture(uDepth, suv).x;
-  float n = uNearFar.x, f = uNearFar.y;
-  float sz = 2.0 * n * f / (f + n - (d * 2.0 - 1.0) * (f - n));
+  float n0 = uNearFar.x, f0 = uNearFar.y;
+  float sz = 2.0 * n0 * f0 / (f0 + n0 - (d * 2.0 - 1.0) * (f0 - n0));
   float pz = dot(vRel, uCamFwd.xyz);
-  a *= saturate((sz - pz) / max(vSoft, 0.02));
-  a *= saturate((pz - 0.3) / 0.6);
+  a *= saturate((sz - pz) / max(vMisc.x, 0.02));
+  a *= saturate((pz - 0.25) / max(0.5, vMisc.w * 0.8));
   if (a < 0.003) discard;
-  // lit like snow dust: the sun (forward scattering, it glows backlit), the sky light; no shadow lookups
+  // the puff as a small volume: a normal bulging toward the eye
+  vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]), up = vec3(uView[0][1], uView[1][1], uView[2][1]);
+  vec3 toEye = normalize(-vCenter);
+  vec3 N = normalize(right * vUV.x + up * vUV.y + toEye * (hgt + 0.25));
   vec3 v = normalize(-vRel);
-  float back = pow(saturate(dot(-v, uSunDir.xyz)), 6.0);
-  vec3 sun = uSunColor.rgb * (0.22 + 0.9 * back) * (0.6 + 0.4 * shadowAt(vRel, vec3(0.0, 1.0, 0.0)));
-  vec3 amb = envIrradiance(vec3(0.0, 1.0, 0.0)) * RECIPROCAL_PI * 1.15 + hemiIrradiance(vec3(0.0, 1.0, 0.0)) * RECIPROCAL_PI;
-  vec3 col = vCol.rgb * (sun + amb) + localLights(vCol.rgb, v, vRel);
+  float ndl = dot(N, uSunDir.xyz);
+  float wrap = saturate((ndl + 0.75) / 1.75);
+  float back = pow(saturate(dot(-v, uSunDir.xyz)), 5.0);
+  float sh = 0.45 + 0.55 * shadowAt(vCenter, vec3(0.0, 1.0, 0.0));
+  vec3 sun = uSunColor.rgb * sh * (0.1 + 0.2 * wrap + 0.75 * back * (0.45 + 0.55 * r));
+  vec3 amb = (envIrradiance(N) * 1.1 + hemiIrradiance(N)) * RECIPROCAL_PI * (0.8 + 0.2 * hgt);
+  vec3 col = vCol.rgb * (sun + amb) + localLights(vCol.rgb, mix(N, v, 0.5), vRel) * 1.6;
+  if (vMisc.y > 1.5) col += vCol.rgb * (0.02 + 0.05 * uMisc.x);   // (a snow gun's plume: pale in its own floodlight / the moonlight, snowmaking.js)
   col = applyFog(col, vRel);
+  oColor = vec4(col * a, a);
+}
+)GLSL";
+
+// ---- snowfall (atmosphere.js makeSnow, on the GPU): flakes in a 46 m box that wraps round the camera, each with
+// its own fall speed, flutter and tumble; drawn as quads with a size in metres (so the layers part with parallax),
+// never under ~1.6 px (smaller ones keep the size and thin out instead: no sparkling noise in the distance), faded
+// before the lens and toward the far side of the box, sheared a little along their motion (a blizzard's streaks,
+// sleet's falling lines), lit by the sun, the sky and the lamps round them.
+inline const char* kSnowVS = R"GLSL(
+layout(location = 0) in vec2 aCorner;
+layout(location = 1) in vec4 aSeed;   // xyz position in the unit box, w rank 0..1
+uniform vec4 uSnowOff;    // xyz the air's drift (m, accumulated), w time (s)
+uniform vec4 uSnowP;      // x snowfall 0..1, y rain 0..1, z box size (m), w -
+uniform vec4 uSnowVel;    // xyz the air's velocity (m/s), w shutter (s)
+out vec2 vC;
+out vec4 vP;              // x alpha, y rotation, z lens blur, w small (soft dot)
+out vec3 vCol;
+out float vRain;
+void main() {
+  float B = uSnowP.z, t = uSnowOff.w;
+  float seed = fract(aSeed.w * 97.13);
+  float fall = 0.7 + seed * 0.7;                         // heavier flakes fall faster
+  vec3 drift = vec3(uSnowOff.x, -fall * uSnowOff.y, uSnowOff.z);
+  vec2 fl = vec2(sin(t * (0.6 + seed) + aSeed.y * 40.0), cos(t * (0.5 + seed * 0.7) + aSeed.x * 40.0));
+  drift.xz += fl * 0.8;                                  // flutter
+  // slow eddies a few metres across carry whole groups of flakes together (turbulence)
+  vec3 cell = aSeed.xyz * B;
+  drift.x += sin(cell.y * 0.31 + cell.z * 0.23 + t * 0.37) * 0.6;
+  drift.z += cos(cell.x * 0.27 - cell.y * 0.19 + t * 0.31) * 0.6;
+  vec3 wp = mod(cell + drift - uCamPos.xyz + B * 0.5, B) - B * 0.5;   // camera-relative
+  float d = max(dot(wp, uCamFwd.xyz), 0.0);
+  float dist = length(wp);
+  float size = (0.03 + seed * 0.04) * (0.8 + 0.5 * uSnowP.x) * (1.0 + 0.7 * uSnowP.y);
+  float alpha = smoothstep(0.12, 0.5, d) * (1.0 - smoothstep(B * 0.39, B * 0.5, dist));
+  float pxPerM = uRes.y * 0.5 / (uCamFwd.w * max(d, 0.1));
+  float px = size * pxPerM;
+  float grow = max(1.0, 1.7 / max(px, 1e-3));
+  size *= grow; alpha /= pow(grow, 1.5);   // (a little more than its share: the far layers stay readable as snowfall)
+  size = min(size, 110.0 / pxPerM);
+  float rot = t * (seed - 0.5) * 3.0 + seed * 40.0;
+  float cr = cos(rot), sr = sin(rot);
+  vec2 k = mat2(cr, sr, -sr, cr) * aCorner;
+  // the nearest ones tumble: a flat clump seen edge-on now and then
+  float near = 1.0 - smoothstep(2.5, 7.0, dist);
+  k.y *= mix(1.0, 0.4 + 0.6 * abs(cos(t * (1.3 + seed * 2.2) + seed * 17.0)), near);
+  vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]), up = vec3(uView[0][1], uView[1][1], uView[2][1]);
+  vec3 vel = vec3(uSnowVel.x + fl.y * 0.5, uSnowVel.y * fall, uSnowVel.z - fl.x * 0.5);
+  vec3 p = wp + (right * k.x + up * k.y) * (size * 0.5) + vel * (aCorner.y * 0.5 * uSnowVel.w);
+  vC = aCorner;
+  vRain = uSnowP.y;
+  vP = vec4(alpha, rot, 1.0 - smoothstep(0.25, 1.6, d), 1.0 - smoothstep(5.0, 12.0, px * grow));
+  // light: the sun through the flake (brighter against the sun), the sky, and the lamps near it
+  vec3 v = normalize(-wp);
+  float back = pow(max(dot(-v, uSunDir.xyz), 0.0), 4.0);
+  // (the sky's irradiance from above: the SH of the lighting chunk for n = +y, and the hemisphere light's sky colour)
+  vec3 skyE = max(uSH[0].rgb * 0.886227 + uSH[1].rgb * 1.023328 - uSH[6].rgb * 0.247708 - uSH[8].rgb * 0.429043, vec3(0.0)) * uHemiSky.w;
+  vec3 col = uSunColor.rgb * (0.12 + 0.3 * back) + (skyE * 1.1 + uHemiSky.rgb) * RECIPROCAL_PI * 1.05;
+  int cnt = int(uLightCount.x);
+  for (int i = 0; i < SL_MAX_LIGHTS; i++) {
+    if (i >= cnt) break;
+    vec4 la = uLight[i * 3], lb = uLight[i * 3 + 1], lc = uLight[i * 3 + 2];
+    vec3 dl = la.xyz - wp;
+    float ld = length(dl);
+    if (ld > la.w) continue;
+    float win = clamp(1.0 - pow(ld / la.w, 4.0), 0.0, 1.0);
+    float spot = lb.w < -1.5 ? 1.0 : smoothstep(lb.w, lc.w, dot(-dl / max(ld, 1e-3), lc.xyz));
+    col += lb.rgb * (win * win / (ld * ld + 1.0) * spot * 0.22);
+  }
+  // (against a bright overcast sky a flake is a grey speck, not a light: its own shade grows with the snowfall)
+  vCol = col * mix(0.92, 0.74, uSnowP.x * uTrueSun.w);
+  gl_Position = uViewProj * vec4(p, 1.0);
+}
+)GLSL";
+inline const char* kSnowFS = R"GLSL(
+in vec2 vC;
+in vec4 vP;
+in vec3 vCol;
+in float vRain;
+out vec4 oColor;
+void main() {
+  vec2 c = vC * 0.5;
+  float lc = length(c);
+  if (lc > 0.5) discard;
+  if (vRain > 0.5) {   // sleet: a thin, faint falling streak
+    float st = (1.0 - smoothstep(0.03, 0.12, abs(c.x))) * (1.0 - smoothstep(0.2, 0.5, abs(c.y))) * vP.x;
+    if (st < 0.01) discard;
+    oColor = vec4(vCol * 0.9 * st * 0.5, st * 0.5);
+    return;
+  }
+  // an irregular soft speck (a clump of crystals, never a star: up close that reads as an icon), its outline
+  // wobbling with its own spin; a soft disc when it is only a few pixels; an out-of-focus disc before the lens
+  float ang = atan(c.y, c.x);
+  float rr = lc * (1.0 + 0.16 * sin(ang * 3.0 + vP.y) + 0.09 * sin(ang * 5.0 - vP.y * 1.7));
+  float shape = 1.0 - smoothstep(0.24, 0.5, rr);
+  float disc = 1.0 - smoothstep(0.0, 0.5, lc);
+  float a = mix(mix(shape, disc, vP.w), disc * 0.5, vP.z) * vP.x;
+  if (a < 0.004) discard;
+  // lit on its face, shaded toward its rim: white against dark trees, and its greyer rim still shows against
+  // bright snow and an overcast sky
+  vec3 col = vCol * mix(1.1, 0.5, smoothstep(0.1, 0.48, lc) * (1.0 - vP.z));
+  a *= 0.95;
   oColor = vec4(col * a, a);
 }
 )GLSL";
@@ -227,6 +366,7 @@ void main() {
   float fwd = 0.5 * pow(max(cs, 0.0), 4.0) + 1.6 * pow(max(cs, 0.0), 24.0);
   vec3 sunC = uSunColor.rgb * (0.115 + 0.3 * fwd);
   vec3 amb = envIrradiance(vec3(0.0, 1.0, 0.0)) * RECIPROCAL_PI * 0.8 + hemiIrradiance(vec3(0.0, 1.0, 0.0)) * RECIPROCAL_PI;
+  amb = max(amb, uFogColor.rgb * 0.5);   // (never darker than the air's own haze: no black mist at night)
   float T = 1.0;
   vec3 L = vec3(0.0);
   float tPrev = 0.0;

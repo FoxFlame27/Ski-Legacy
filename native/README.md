@@ -108,7 +108,7 @@ three files as the rolling `latest-native` release.
 ### Command line
 | option | |
 |---|---|
-| `--quality switch\|super\|performance\|balanced\|high\|ultra\|superultra` (and the old `low` / `medium`) | graphics preset (Phase 8: the look, see "Graphics overhaul"; default `auto`: High on Apple silicon, Balanced elsewhere) (terrain LOD, shadow map, tree distances, render scale; Phase 7: texture cap / compression, triangle budget, LOD scale, NPC density, lights, simplified shaders, dynamic resolution); else the SETTINGS preset of the save. `switch` = the Nintendo Switch budget |
+| `--quality switch\|super\|performance\|balanced\|high\|ultra\|superultra` (and the old `low` / `medium`) | graphics preset (Phase 8: the look, see "Graphics overhaul"; default `auto`: Balanced) (terrain LOD, shadow map, tree distances, render scale; Phase 7: texture cap / compression, triangle budget, LOD scale, NPC density, lights, simplified shaders, dynamic resolution); else the SETTINGS preset of the save. `switch` = the Nintendo Switch budget |
 | `--no-menu` | straight into the game (no main menu) |
 | `--save name.json` | another save slot (default `ski-legacy-save-v1.json` in the platform's save directory) |
 | `--spawn village\|piste` | start on the village plaza (as the web game) or at the top of a run |
@@ -137,6 +137,11 @@ straight with the cars on the player's path (see "The cars on the player's path"
 straight with the trail map, `p5test` straight with the Phase 5 checks.
 `fpview` skis the autotest's run in first person (the hands on the poles in `out.png`), `carside` looks at your car (else the nearest traffic car) from a low side view (the boots in the footwell, not under the sill).
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
+`SKI_LEGACY_SHOTS="name:x,y,z,tx,ty,tz[,hour[,weather]];..."` holds several cameras in one run (heights above the
+ground with `SKI_LEGACY_SHOT_GROUND=1`; `SKI_LEGACY_SHOT_FRAMES` frames each, default 45; written to `out_<name>.png`;
+an hour and a weather id per shot: `...,8,clear;...,16.8,mist`), `SKI_LEGACY_WEATHER=mist|heavy|fog|...` starts in a
+weather, settled and held; `SKI_LEGACY_DEBUG=shotonly` ends the autotest after the skiing phase (then the night
+shots), `nohud` hides the HUD, `spraytest` throws the skis' full powder plumes all the time.
 
 Reference run (a Linux container without a GPU: Mesa llvmpipe software rendering on 4 CPU cores, 1280×720,
 medium): world ready in ~7 s (the resort's canvases and 23 gondola stations are built at load); 600 frames = 10 s of
@@ -1283,7 +1288,12 @@ four cell sizes (prismatic up close). On top of the port: **2048 px tiling snow 
 start-up** (periodic gradient / cellular noise: sintered grains, pits, crust; rock blocks, cracks, lichen; mip-mapped,
 the GPU's maximum anisotropy) for crisp crystals right under the skis (faded out by 45 m), **height-blended snow / rock
 edges** (snow fills the rock's hollows first) and triplanar rock detail near cliffs. The groomed-run data now also
-reaches the 1-2 km terrain nodes, so the pistes read as smooth bright bands on the far slopes.
+reaches the 1-2 km terrain nodes, so the pistes read as smooth bright bands on the far slopes. (Nov 14) **Rock at every
+distance**: the baked rock map (fractured blocks, cracks, ridged grain) is sampled at the scale the pixel footprint
+asks for, two neighbouring scales cross-faded, so a wall has crisp blocks at 10 m and at 3 km (it was magnified
+256 px noise beyond 90 m); **bedding**: banks and thin beds that dip a few degrees, lighter, darker and ochre bands,
+their steps tilting the normal into ledges. **Snow**: the wind relief's hollows and the shade take the sky's blue
+(not a grey stain), a stronger relief normal, crystals with wider tilts and brighter glints that shimmer as you move.
 
 **Snow trails** (`world/snowtrails.*`, the renderer's trail map): a toroidal RGBA16F height map that follows you
 (2048 px over 128 m on High / Ultra, 3072 over 150 m on Super Ultra, 512-1024 on the light presets: 4-6 cm texels),
@@ -1309,6 +1319,29 @@ bias scaled by the texel, the coarser mesh LOD in the shadow pass, small casters
 alpha-tested foliage casts its real shape; **cloud shadows** drifting over the ground (High and up); the lamps and
 headlights now have a specular highlight; height fog / aerial perspective (`fog.js`) with sunlit haze toward the sun.
 
+**Weather mist** (Nov 14; `shaders_fx.h kMistFS`, `world/groundmap.h`; Balanced and up): a half-resolution pass after
+the resolve ray-marches a layer of mist over a height map of the ground round the camera (128 x 128 samples over
+12 km, recomputed on a worker thread as you travel; its second channel is the valley floors' level). On fair days
+thin bright wisps lie in the floors that are lower than their surroundings, more in the morning and evening, with
+the village and the air you stand in kept clear; in **Misty** and **Freezing fog** weather a billowing sea of mist
+fills the valleys to a ceiling a few hundred metres over their floors, the peaks standing out of it (ski down into
+it: ~300 m of sight inside). It is lit by the sun with a forward-scattering lobe (the air glows toward the sun), by
+the sky, by its own depth, and on High and up by the shadow cascades and cloud shadows (shafts through the mist);
+depth-aware blur and upsample. Most of sky.js's uniform mist term is left to this pass where it runs, and the sky
+dome fogs along the same exponential atmosphere as the terrain. Everything follows the weather's eased values:
+clear / misty / snow blend over ~20 s. `SKI_LEGACY_GFX=nomist` switches it off.
+
+**Particles** (Nov 14): **snowfall** is drawn on the GPU as atmosphere.js's flakes (`kSnowVS`: 12-26 thousand seeded
+quads in a 46 m box that wraps round the camera, one draw; each with its own fall speed, flutter, tumble and slow
+eddies; a size in metres so the layers part with parallax, never under ~1.7 px — smaller ones thin out instead;
+faded before the lens and at the far side of the box; sheared along their motion in a blizzard, thin falling lines
+in sleet; lit by the sun, the sky and the lamps round them: warm flakes under the plaza's lanterns). **Powder**
+(ski spray, landings, the snowmobile's tail, the snow guns' plumes) is made of small clouds: spheres of dust whose
+edge is eaten by drifting noise, shaded as a volume (the sun wraps round, sky-blue shade, a back-lit rim), shadowed,
+lit by lamps, soft against the scene's depth and before the lens; a plume is powder + a finer veil that rises above
+it + the clumps the edge throws. **Lamp glows** (cars, snowcats) are round additive halos that sink into the
+bodywork, not lit quads.
+
 **Sky, clouds, sun**: `SKY_FRAG` ported (Rayleigh shading, twilight arch, halo, cirrus, the overcast deck's texture,
 the limb-darkened HDR disc) plus stars, the Milky Way and the moon; a **ray-marched cumulus layer** (Beer-powder
 scattering, a two-lobe phase function, two light taps, erosion noise, aerial perspective; 6 / 16 / 28 steps) and on
@@ -1333,8 +1366,9 @@ colours, snow on the tiers, lit and shadowed) that dissolve in where the 3D tree
 with a soft threshold and a Karis-averaged first level, tent upsample); **GTAO** (post.js's slices / steps / falloff,
 half or full resolution, a depth-aware 4x4 blur and upsample); the final pass with **PBR Neutral** (Ultra and up, with
 post.js's filmic contrast) or ACES, the broadcast grade, vignette, speed streaks, flash, dither; **MSAA** 4x / 8x
-(High / Ultra) resolved before the post chain, then **FXAA 3.11** and a contrast-adaptive sharpen (no blur on still
-images: there is no temporal filter).
+(High / Ultra) resolved before the post chain, then a contrast-adaptive sharpen. No blur filter anywhere: no temporal
+filter, no FXAA (off on every preset; `SKI_LEGACY_GFX=fxaa` turns the 3.11 pass on for comparisons), no depth of
+field, no radial blur at speed (post.js's is not ported: the streaks and the vignette carry the speed).
 
 **Colour** (Nov 2026: "the image is too blue"): the native build no longer lights the world with the sky palette's
 display colours. sky.js's IBL / hemisphere took the palette desaturated to 70 % — in linear light the cobalt zenith is
@@ -1350,22 +1384,28 @@ grade's cool shadow push is halved. The visible sky, the sun and dusk's glow are
 PBR Neutral as Ultra (white sunlit snow, no ACES hue skew); the rock has warm iron-stained strata, darker cool water
 streaks and crevices; the far ranges' haze deepens to a clearer blue over several km.
 
-**Sharpness** (Nov 2026: "the game is blurry"): Balanced and up draw the 3D at the drawable's full (Retina) size and
-anti-alias with MSAA 4x / 8x + alpha to coverage and a contrast-adaptive sharpen; FXAA (whose subpixel pass smeared
-every texture) is left to Performance / Super Performance, at 0.3 subpixel strength. A 3D resolution below the output
-(render scale, dynamic resolution) is upscaled with a ringing-clamped Catmull-Rom filter and a firmer sharpen, not
-a bilinear stretch. The terrain noise and detail maps use the GPU's maximum anisotropy from Balanced up, and the
+**Sharpness** (Nov 2026: "the game is blurry", then "no blur at all"): Balanced and up draw the 3D at the drawable's
+full (Retina) size, always (no dynamic resolution, no pixel budget), and anti-alias with MSAA 4x / 8x + alpha to
+coverage and a contrast-adaptive sharpen. FXAA (whose subpixel pass smeared every texture) is off on every preset:
+Performance / Super Performance use MSAA 2x; their 3D resolution below the output (render scale 0.85 / 0.6, a
+2.4 / 1.6 MP budget, dynamic resolution toward 60 fps) is upscaled with a ringing-clamped Catmull-Rom filter and a
+firmer sharpen, not a bilinear stretch. The simplified LODs no longer smear either: Meshy atlases are thousands of
+tiny UV islands, so the lift cars' and the trees' LODs carry a colour per vertex taken from the base colour map
+instead of sampling it (`ModelLoadOptions::lodVertexColor`), and the trees' LODs are made by vertex clustering as the
+JS's `clusterDecimate` (`lodCluster`): whole branches with white snow at every distance instead of shredded grey-green
+blobs from 40 m and pink polka-dot cabins from 32 m. Colour maps load at twice the models' budgets on High and up
+(the 2048 px originals; with S3TC, which Apple's OpenGL lacks, on Balanced too, block-compressed). The terrain noise and detail maps use the GPU's maximum anisotropy from Balanced up, and the
 baked snow crystal map reaches 50 m on Balanced (new) and 80 m on High and up (was 45 m).
 
 **Presets** (`engine/quality.h`; the SETTINGS row has the web game's seven): `switch` (one 1024 shadow map with
 single-tap PCF, SL_LOW, no MSAA / AO / shafts / clouds / detail maps, a 512 trail map, impostors to 700 m),
-Super Performance / Performance (fx 0: the original look, one shadow map, FXAA, 512 trails), **Balanced** (fx 1, 2
+Super Performance / Performance (fx 0: the original look, one shadow map, MSAA 2x, a reduced 3D resolution, 512 trails), **Balanced** (fx 1, 2
 cascades of 2048 to 160 m, MSAA 4x, the 1024 detail maps, a 1024 trail map, impostors to 1.4 km; the autotest's default),
 **High** (fx 2, 3 cascades of 2048 to 320 m, MSAA 4x, PBR Neutral, half-res GTAO, shafts, glare, the sea of clouds, 2048 detail
-maps and trails, impostors to 1.9 km; **the default on Apple silicon**), **Ultra** (fx 3, 4 cascades of 3072 to
+maps and trails, impostors to 1.9 km), **Ultra** (fx 3, 4 cascades of 3072 to
 480 m, MSAA 8x, full-res GTAO, PBR Neutral, 28-step clouds, impostors to 2.4 km), **Super Ultra** (fx 4, 4 cascades of
 4096 to 640 m, GTAO with 4 slices, a 3072 trail map, groove shadows, impostors to 3 km). `--quality` takes all of them
-(and the old low / medium); the first launch picks `auto` (High on Apple silicon, Balanced elsewhere).
+(and the old low / medium); the first launch picks `auto`: Balanced everywhere (60 fps at Retina size on an M2; see the fps table below).
 `SKI_LEGACY_GFX=noao,noshafts,noclouds,nomsaa,nofxaa,nobloom,notrails,nodetail,cascades=N,fx=N` switches parts off
 for profiling; `SKI_LEGACY_TEXCAP=512` caps and block-compresses the models' textures (look tests on a busy machine).
 
@@ -1374,9 +1414,9 @@ software rendering on a shared 4-core container and only good for relative compa
 | preset | shadow pass | main pass | post | render-target memory |
 |---|---|---|---|---|
 | switch | 1 map, 1024 px, single tap | SL_LOW shaders (no glints, no far normal maps, 4 lights), trails (5 taps near) | tone map + grade | ~40 MB (shadow 4, trails 2) |
-| Super Perf. / Performance | 1 map, 1024 px | fx 0 shaders, render scale 0.6 / 0.85 | FXAA + sharpen | ~50 MB |
-| Balanced (autotest) | 2 cascades x 2048 | MSAA 4x + A2C, fx 1 terrain, 1024 detail maps, 6-step sky clouds, impostors 1.4 km | bloom, sharpen | ~195 MB (MSAA 100, shadow 32, trails 8, detail 11) |
-| High (Apple silicon) | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, cloud shadows, 16-step clouds + the sea, glare | half-res GTAO (2 x 6), shafts, bloom, PBR Neutral, sharpen | ~290 MB (MSAA 100, shadow 64, trails 32, detail 44) |
+| Super Perf. / Performance | 1 map, 1024 px | fx 0 shaders, MSAA 2x, render scale 0.6 / 0.85 (Catmull-Rom upscale) | sharpen | ~60 MB |
+| Balanced (the default; autotest) | 2 cascades x 2048 | MSAA 4x + A2C, fx 1 terrain, 1024 detail maps, 6-step sky clouds, impostors 1.4 km, full resolution always | valley mist (11 steps, half-res), bloom, sharpen | ~210 MB (MSAA 100, shadow 32, trails 8, detail 11, mist 15) |
+| High | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, colour maps at 2x the models' budgets, cloud shadows, 16-step clouds + the sea, glare | half-res GTAO (2 x 6), shafts, valley mist (16 steps, shadowed), bloom, PBR Neutral, sharpen | ~305 MB (MSAA 100, shadow 64, trails 32, detail 44, mist 15) |
 | Ultra | 4 cascades x 3072 | MSAA 8x, fx 3 (parallax trails, far glints), 28-step clouds | full-res GTAO (3 x 8), PBR Neutral | ~480 MB (MSAA 200, shadow 150) |
 | Super Ultra | 4 cascades x 4096 | fx 4 (groove shadows), 3072 trail map, impostors 3 km | GTAO (4 x 10) | ~650 MB (shadow 270, trails 72) |
 

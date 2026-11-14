@@ -336,6 +336,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   trailFade_ = build("trail_fade", "", shaders::kFullscreenVS, shaders::kTrailFadeFS, false);
   particle_ = build("particles", "", shaders::kParticleVS, shaders::kParticleFS, true);
   impostor_ = build("impostors", "", shaders::kImpostorVS, shaders::kImpostorFS, true);
+  snow_ = build("snowfall", "", shaders::kSnowVS, shaders::kSnowFS, false);
   clouds_ = set_.fx >= 2 && !set_.lowShaders ? build("clouds", "", shaders::kFullscreenVS, shaders::kCloudFS, true, shaders::kSkyCommon) : gfx::Program{};
   glare_ = set_.fx >= 2 ? build("sun_glare", "", shaders::kGlareVS, shaders::kGlareFS, false) : gfx::Program{};
   if (set_.fx >= 1 && !set_.lowShaders && !noMist_) {
@@ -408,6 +409,15 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     const uint16_t ix[6] = {0, 1, 2, 0, 2, 3};
     if (!stampQuad_) { stampQuad_ = dev.createBuffer(gfx::BufferUsage::Vertex, q, sizeof q); stampIdx_ = dev.createBuffer(gfx::BufferUsage::Index, ix, sizeof ix); }
     partVbo_ = dev.createBuffer(gfx::BufferUsage::Vertex, nullptr, 48 * 4096, true);
+    if (snow_) {   // the flakes' seeds (quality.js flakes: 2500 .. 26000 by preset)
+      snowN_ = set_.lowShaders ? 5000 : set_.fx >= 2 ? 26000 : set_.fx >= 1 ? 18000 : 12000;
+      std::vector<float> seeds(size_t(snowN_) * 4);
+      uint32_t st = 0x2545F491u;
+      auto rnd = [&]() { st ^= st << 13; st ^= st >> 17; st ^= st << 5; return float(st & 0xffffff) / float(0x1000000); };
+      for (int i = 0; i < snowN_; i++) { seeds[size_t(i) * 4] = rnd(); seeds[size_t(i) * 4 + 1] = rnd(); seeds[size_t(i) * 4 + 2] = rnd(); seeds[size_t(i) * 4 + 3] = (float(i) + 0.5f) / float(snowN_); }
+      snowSeeds_ = dev.createBuffer(gfx::BufferUsage::Vertex, seeds.data(), seeds.size() * sizeof(float));
+      snowVi_ = dev.createVertexInput({{0, 0, 2, gfx::AttribType::Float, false, 0, 8}, {1, 1, 4, gfx::AttribType::Float, false, 0, 16, true}}, {stampQuad_, snowSeeds_}, stampIdx_);
+    }
     partVi_ = dev.createVertexInput({{0, 0, 2, gfx::AttribType::Float, false, 0, 8}, {1, 1, 4, gfx::AttribType::Float, false, 0, 48, true},
                                      {2, 1, 4, gfx::AttribType::Float, false, 16, 48, true}, {3, 1, 4, gfx::AttribType::Float, false, 32, 48, true}},
                                     {stampQuad_, partVbo_}, stampIdx_);
@@ -1131,7 +1141,7 @@ void Renderer::particlePass() {
   // back to front
   std::sort(particles_.begin(), particles_.end(), [&](const Particle& a, const Particle& b) {
     dvec3 da = a.pos - cam_.pos, db = b.pos - cam_.pos; return glm::dot(da, da) > glm::dot(db, db); });
-  for (const Particle& p : particles_) inst.push_back({vec4(vec3(p.pos - cam_.pos), p.size), p.color, vec4(p.rot, p.soft, 0, 0)});
+  for (const Particle& p : particles_) inst.push_back({vec4(vec3(p.pos - cam_.pos), p.size), p.color, vec4(p.rot, p.soft, p.kind, p.seed)});
   gfx::PipelineState ps;
   ps.depth = gfx::DepthTest::LessEqual; ps.depthWrite = false; ps.cull = gfx::Cull::None; ps.blend = gfx::Blend::Premul;
   dev_->setPipeline(ps);
@@ -1144,6 +1154,24 @@ void Renderer::particlePass() {
     dev_->replaceBuffer(partVbo_, inst.data() + i, n * sizeof(PI));
     dev_->drawIndexed(partVi_, gfx::IndexType::U16, 6, 0, uint32_t(n));
   }
+}
+
+void Renderer::snowPass() {
+  if (!snow_ || snowN_ <= 0 || snowfall_.amount < 0.003f || light_.interior) return;
+  gfx::PipelineState ps;
+  ps.depth = gfx::DepthTest::LessEqual; ps.depthWrite = false; ps.cull = gfx::Cull::None; ps.blend = gfx::Blend::Premul;
+  dev_->setPipeline(ps);
+  dev_->useProgram(snow_);
+  const float B = 46.f;
+  vec4 off(std::fmod(snowfall_.drift.x, B * 64.f), std::fmod(snowfall_.drift.y, B * 64.f), std::fmod(snowfall_.drift.z, B * 64.f), std::fmod(snowfall_.time, 3600.f));
+  vec4 p(snowfall_.amount, snowfall_.rain, B, 0.f);
+  vec4 v(snowfall_.vel, 1.f / 80.f);
+  dev_->setVec4("uSnowOff", glm::value_ptr(off));
+  dev_->setVec4("uSnowP", glm::value_ptr(p));
+  dev_->setVec4("uSnowVel", glm::value_ptr(v));
+  // (the flakes are ranked: lighter snowfall draws the first of them)
+  uint32_t n = uint32_t(std::clamp(int(float(snowN_) * std::min(1.f, snowfall_.amount * 1.05f)), 1, snowN_));
+  dev_->drawIndexed(snowVi_, gfx::IndexType::U16, 6, 0, n);
 }
 
 void Renderer::cloudPass() {
@@ -1364,6 +1392,7 @@ void Renderer::endFrame() {
   mistPass();
   cloudPass();
   particlePass();
+  snowPass();
   glarePass();
   bool ao = aoRaw_ && (set_.ao > 0 || shaftsK_ > 0.001f);
   if (ao) aoPass();

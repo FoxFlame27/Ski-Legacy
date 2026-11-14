@@ -119,33 +119,23 @@ void Weather::apply(Lighting& L, double sunH) const {
 }
 
 void Weather::drawSnow(Renderer& r, VehicleDraw& vd, gfx::Device& dev, Shapes& shapes, const Camera& cam, double dt, bool indoors) {
-  int want = indoors ? 0 : int(2200 * snow);
-  const float B = 22;   // half extent of the box round the camera (m)
-  while (int(flakes_.size()) < want) flakes_.push_back({vec3(float((rnd() * 2 - 1) * B), float((rnd() * 2 - 1) * B), float((rnd() * 2 - 1) * B)), float(0.05 + rnd() * 0.05)});
-  if (int(flakes_.size()) > want) flakes_.resize(size_t(want));
-  if (flakes_.empty()) return;
-  vec3 v(float(-gustX * 30 - wind * 7), float(-1.1 - snow * 0.6 - wet * 1.6), float(-gustZ * 30 - wind * 2.5));
-  static dvec3 lastCam = cam.pos;
-  vec3 camMove = vec3(cam.pos - lastCam);
-  lastCam = cam.pos;
-  if (glm::length(camMove) > 50) camMove = vec3(0);
-  float t = float(dt);
-  const Model* m = shapes.get(Shapes::Kind::Quad, vec4(1, 1, 1, 0.9f), 1.4f);
-  vd.begin();
-  mat3 basis = cam.basis;
-  for (size_t i = 0; i < flakes_.size(); i++) {
-    Flake& f = flakes_[i];
-    f.p += v * t * (0.8f + 0.4f * float(i % 7) / 7.f) - camMove;
-    f.p.x += std::sin(float(i) * 1.7f + f.p.y * 0.6f) * 0.3f * t;
-    for (int a = 0; a < 3; a++) { if (f.p[a] < -B) f.p[a] += 2 * B; else if (f.p[a] > B) f.p[a] -= 2 * B; }
-    glm::dmat4 M(1);
-    M[0] = glm::dvec4(dvec3(basis[0]) * double(f.s), 0);
-    M[1] = glm::dvec4(dvec3(basis[1]) * double(f.s), 0);
-    M[2] = glm::dvec4(dvec3(basis[2]) * double(f.s), 0);
-    M[3] = glm::dvec4(cam.pos + dvec3(f.p), 1);
-    vd.add(m, M, 0);
-  }
-  vd.submit(r, dev, cam.pos);
+  (void)vd; (void)dev; (void)shapes;
+  // atmosphere.js update: the air the flakes ride (the wind swings round slowly, more in heavy snow; a blizzard
+  // drives it sideways at ~9 m/s; sleet below the rain line falls four times as fast), accumulated as a drift the
+  // renderer's GPU flakes are offset by
+  snowT_ += dt;
+  double wt = snowT_ * 0.05;
+  double rain = wet * (1 - smoothstep(70.0, 150.0, cam.pos.y));   // (the village stands at y ~ 0)
+  dvec2 w(1.5 + std::sin(wt) * 2.5 * snow + 1 + wind * 8.5, 0.6 + std::cos(wt * 0.7) * 1.5 + wind * 3.4);
+  double fall = 1 + 2.8 * rain + 0.4 * wind;
+  snowOff_ += dvec3(w.x, fall, w.y) * dt;
+  Snowfall s;
+  s.amount = indoors ? 0.f : float(snow);
+  s.rain = float(rain);
+  s.time = float(std::fmod(snowT_, 3600.0));
+  s.drift = vec3(float(std::fmod(snowOff_.x, 2944.0)), float(std::fmod(snowOff_.y, 2944.0)), float(std::fmod(snowOff_.z, 2944.0)));
+  s.vel = vec3(float(w.x), float(-fall), float(w.y));
+  r.setSnowfall(s);
 }
 
 } // namespace sl

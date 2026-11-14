@@ -96,7 +96,9 @@ struct TrailStamp {
   float strength = 1, along = 0, extra = 0.05f, seed = 0;
 };
 /// A soft lit particle (snow spray, powder): world position, size (m), albedo + opacity.
-struct Particle { dvec3 pos{0}; float size = 0.2f; vec4 color{1}; float rot = 0, soft = 0.3f; };
+struct Particle { dvec3 pos{0}; float size = 0.2f; vec4 color{1}; float rot = 0, soft = 0.3f; float kind = 0, seed = 0; };   // kind 0: a powder puff, 1: a clump, 2: a snow gun's mist, 3: a lamp's glow (additive; color = radiance, a = strength)
+/// the snowfall (the renderer's GPU flakes): amount 0..1, the air's accumulated drift and velocity, rain 0..1 (sleet), time
+struct Snowfall { float amount = 0, rain = 0, time = 0; vec3 drift{0}, vel{0, -1, 0}; };
 
 /// A batch of instances of one model (trees): per instance vec4(x, y, z, scale) + vec4(yaw, 0, 0, 0).
 class InstanceBatch {
@@ -186,6 +188,8 @@ public:
   bool wantsGroundMap() const { return bool(mist_); }
   bool trailsOn() const { return set_.trailSize > 0; }
   void addParticle(const Particle& p) { particles_.push_back(p); }
+  void setSnowfall(const Snowfall& s) { snowfall_ = s; }
+  int snowFlakes() const { return snowN_; }
   /// Frustum test of a world-space box (for the caller's culling).
   bool visible(const dvec3& bmin, const dvec3& bmax) const;
   /// Whether a world-space box can cast into the shadow map (overlaps one of the cascades).
@@ -269,6 +273,13 @@ private:
   vec4 groundMap_{0}, mistP_{0}, mistP2_{0};
   int mw_ = 0, mh_ = 0;
   void mistPass();
+  // the snowfall: one instanced draw of seeded quads
+  gfx::Program snow_;
+  gfx::Buffer snowSeeds_;
+  gfx::VertexInput snowVi_;
+  int snowN_ = 0;
+  Snowfall snowfall_;
+  void snowPass();
   std::vector<Item> items_;
   std::vector<const Item*> blend_;
   std::vector<float> hudVerts_;

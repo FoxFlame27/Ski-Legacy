@@ -46,8 +46,8 @@ private:
   int cur_ = 0, next_ = 0;
   unsigned seed_ = 1;
   double gustT_ = 0;
-  struct Flake { vec3 p; float s; };
-  std::vector<Flake> flakes_;
+  double snowT_ = 0;
+  dvec3 snowOff_{0};   // the air's accumulated drift (the GPU snowfall)
 };
 
 } // namespace sl

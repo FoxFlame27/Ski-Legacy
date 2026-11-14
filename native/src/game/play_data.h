@@ -6,6 +6,7 @@
 #pragma once
 #include "core/math.h"
 #include <nlohmann/json_fwd.hpp>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -88,7 +89,9 @@ struct RoomDef {
   std::vector<Hit> hits;
   bool hasClerk = false; double clerkX = 0, clerkZ = 0, clerkYaw = 0; std::string clerkChar;
   vec3 background{0.01f, 0.006f, 0.003f};
-  struct Light { int type; vec3 color; float intensity, distance; dvec3 p; };   // type 0 point, 1 spot, 2 directional, 3 hemisphere, 4 ambient
+  /// type 0 point, 1 spot, 2 directional, 3 hemisphere, 4 ambient; role (the web room's updateLight): 0 as built, 1 the
+  /// daylight through the windows, 2 the sky light, 3 a lantern (brighter after dark), 4 the stove's fire (flickers)
+  struct Light { int type; vec3 color; float intensity, distance; dvec3 p; int role = 0; };
   std::vector<Light> lights;
   // (the Autohaus showroom, carrentalroom.js) the mezzanine: its floor's height and front edge, the stair up to it along
   // the wall (x0, x1, z0 at the top, z1 at the foot), what stands up there; the cars on show (the model, where)
@@ -96,11 +99,92 @@ struct RoomDef {
   std::vector<Circle> obstaclesUp;
   struct Car { std::string id, label; int price = 0; glm::dmat4 M{1}; bool up = false; vec4 paint{1, 1, 1, 0}; };   // paint: a = 0 the model's own
   std::vector<Car> cars;
+  /// the glass (the web game's live view of the world outside): the planes' matrices in the room (their normal into the
+  /// room), their size; where the room stands outdoors: the point in front of its door, the way it faces, E within r
+  struct Pane { mat4 m{1}; float w = 1, h = 1; };
+  std::vector<Pane> panes;
+  bool hasDoor = false; double doorX = 0, doorZ = 0, frontX = 0, frontZ = 1, doorR = 3.2;
+  dvec3 podium{0};
+  bool hasClock = false; mat4 clock{1};   // the wall clock's hands: their frame (turned about its z)
   bool hasShell = false; dvec3 shell{0};   // a room the C++ walks on its own walls: where the exported model goes in its frame
+};
+
+/// inside a chalet as the web game builds it (export_rooms.mjs from chaletroom.js): the house frame (x toward the front
+/// door, z along the house, y up from the ground outside: the ground floor at G, the upper floor at FL)
+struct ChaletRoomDef {
+  bool ok = false;
+  double eye = 1.62, radius = 0.28;
+  struct Seg { double ax, az, bx, bz, half; };
+  std::vector<Seg> solid[3];                    // ground, upstairs, the stair's sides (on the ground floor)
+  std::vector<RoomDef::Circle> round[2];
+  struct Box { double x, z, hw, hd, rot; };
+  std::vector<Box> boxes[2];
+  /// a hinged door: the hinge on the floor, the shut leaf along u, the wall's normal n; base / k: its model's turn
+  /// (rotation.y = base - angle * k); inward: the front door's open angle
+  struct Door { std::string key; double hx = 0, hz = 0, ux = 1, uz = 0, nx = 0, nz = 1, w = 0.9, h = 2.1, y0 = 0, inward = 0, base = 0; int k = 1; bool up = false, front = false; };
+  std::vector<Door> doors;
+  struct Lamp { double x, y, z, power; bool up; };
+  std::vector<Lamp> lamps;
+  std::vector<RoomDef::Pane> panes;
+  double doorX = 0, doorZ = 0, doorNx = 1, doorNz = 0;   // chaletroom.js doorAt: just inside the front door, its outward normal
+  double IX = 3.72, IZ = 5.78, G = 0.3, GC = 2.95, FL = 3.15, rise = 0.178, run = 0.27, stepsX1 = 5.32, doorZc = -0.17;
+  int steps = 16;
+  double stair[4] = {-1.83, -0.78, -2.6, 1.72}, hole[4] = {-1.83, -0.78, -1.9, 1.72}, dormerZ0 = -2.8, dormerZ1 = 2.8;   // x0, x1, z0, z1
+  struct Rm { std::string name; bool up = false; std::vector<Rect2> rects; };
+  std::vector<Rm> rooms;
+  vec3 background{0.6f, 0.7f, 0.8f};
+};
+
+/// the police station inside (export_rooms.mjs from prison.js): the walker's boxes, the cells, the way out, the guard,
+/// the glass; outdoors: the door's spot, the room's two wings on the house (the windows' frames), its colliders
+struct PrisonDef {
+  bool ok = false;
+  double eye = 1.62, radius = 0.26;
+  std::vector<std::array<double, 4>> boxes;     // x0, x1, z0, z1
+  std::vector<dvec2> cellDoors;
+  double roomX0 = -5.4, roomX1 = 9, roomZ0 = -4, bars = -0.4, roomZ1 = 3.6, frontX0 = 9, frontX1 = 17, frontZ0 = -4, frontZ1 = 5.6, cellW = 3.6, exitX = 16.95, exitZ = 2.6;
+  std::vector<double> cells;
+  bool hasGuard = false; double guardX = 0, guardZ = 0;
+  std::vector<RoomDef::Pane> panes;
+  bool hasOutside = false; double doorX = 0, doorZ = 0, doorYaw = 0;
+  glm::dmat4 cellsFrame{1}, officeFrame{1};     // room -> world, the cell block / the front office
+  dvec3 outsideAt{0};                           // where the station's exported model stands
+  struct Col { double x, z, hw, hd, rot, r, top = 1e30; };
+  std::vector<Col> colliders;
+  bool hasPatrol = false; double patrolX = 0, patrolZ = 0, patrolYaw = 0;   // the patrol car parked in the first bay
+};
+
+/// the chalet village outdoors (export_rooms.mjs from chalets.js build()): where its exported model stands, the lit
+/// windows' panes (about that point) and their warmth, the street lamps' lanterns, what you bump into
+struct ChaletVillageDef {
+  bool ok = false;
+  dvec3 at{0};
+  struct Win { mat4 m{1}; vec3 c{1}; };
+  std::vector<Win> windows;
+  std::vector<dvec3> lamps;
+  std::vector<PrisonDef::Col> colliders;
+  struct Inst { std::string key; std::vector<mat4> m; };   // a model standing many times (about `at`)
+  std::vector<Inst> inst;
+};
+
+/// the Werkstatt (export_rooms.mjs from werkstatt.js): where its exported model stands, the garage frame (origin on the
+/// floor in the middle, +z out of the bay toward the road, +x along it), the repair box, the workbench, the colliders
+struct WerkstattDef {
+  bool ok = false;
+  dvec3 at{0};
+  double x = 0, z = 0, ax = 1, az = 0, fx = 0, fz = 1, yaw = 0;
+  double bayX = -3.5, bayZ = -0.6, bayHw = 1.6, bayHl = 2.9, benchX = 3.4, benchZ = -4.8, IW = 6.7, ID = 5.2, repairS = 4;
+  std::vector<PrisonDef::Col> colliders;
 };
 
 struct PlayData {
   bool ok = false;
+  WerkstattDef werkstatt;
+  ChaletRoomDef chaletRoom;
+  std::vector<std::array<double, 3>> hutDoors;   // village.js: the huts' door spots (x, z, the reach)
+  bool hasTickets = false; std::array<double, 3> tickets{15, -50, 2.6};   // the ticket booth's counter spot
+  ChaletVillageDef chaletVillage;
+  PrisonDef prisonDef;
   RoomDef shop, autohaus, prisonRoom;   // prisonRoom: the exported look of the police station (its model's place: shell)
   std::vector<Course> courses, busRaces;
   bool hasStand = false;

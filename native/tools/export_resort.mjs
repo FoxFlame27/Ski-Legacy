@@ -95,10 +95,21 @@ for (const wgt of [500, 700]) {
 }
 
 
+// (the signs and the rooms' tags are set in Georgia, drawn by the C++ in the platform's own serif: canvas2d.cpp
+// systemFontSet; text fitted to a width (village.js makeSign, interior.js fitFont) is measured with that face; a
+// canvas that names a serif is marked for it (serif). Letter spacing counts while a room is built: globalThis.slSysFonts,
+// set by export_rooms.mjs)
+const sysSerif = {};
+for (const [wgt, names] of [[500, ['/System/Library/Fonts/Supplemental/Georgia.ttf', '/Library/Fonts/Georgia.ttf', (process.env.WINDIR || 'C:/Windows') + '/Fonts/georgia.ttf', '/usr/share/fonts/truetype/gelasio/Gelasio-Regular.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf', '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf']],
+  [700, ['/System/Library/Fonts/Supplemental/Georgia Bold.ttf', '/Library/Fonts/Georgia Bold.ttf', (process.env.WINDIR || 'C:/Windows') + '/Fonts/georgiab.ttf', '/usr/share/fonts/truetype/gelasio/Gelasio-Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf', '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf']]]) {
+  for (const f of names) { try { if (fs.existsSync(f)) { sysSerif[wgt] = ttfMetrics(fs.readFileSync(f)); break; } } catch { /* (not a plain TrueType file) */ } }
+}
+
 // ---------------------------------------------------------------- canvas stub: records the drawing commands
 let canvasId = 0;
 const canvases = new Map();
 class RecGradient { constructor(kind, args) { this.kind = kind; this.args = args; this.stops = []; } addColorStop(o, c) { this.stops.push([o, c]); } }
+const isSerif = (f) => /Georgia|Times|serif/.test(f) && !/sans-serif/.test(f);
 const fontPx = (f) => parseFloat(/(\d+(?:\.\d+)?)px/.exec(f)?.[1] || '10');
 class RecCtx {
   constructor(cv) {
@@ -109,6 +120,7 @@ class RecCtx {
         get: () => this._s[k],
         set: (v) => {
           this._s[k] = v;
+          if (k === 'font' && typeof v === 'string' && isSerif(v)) this.canvas.slSerif = true;
           if (typeof v === 'string') v = v.replace(/(\d+\.\d{3})\d+/g, '$1');
           else if (typeof v === 'number') v = Math.round(v * 1000) / 1000;
           this.ops.push(['set', k, v instanceof RecGradient ? { g: v.kind, a: v.args, s: v.stops } : (typeof v === 'object' ? String(v) : v)]);
@@ -117,8 +129,10 @@ class RecCtx {
     }
   }
   measureText(t) {
-    const px = fontPx(this._s.font), bold = /bold|[6-9]00/.test(this._s.font), m = measure[bold ? 700 : 500] || measure[700];
-    return { width: m ? m(String(t), px) : String(t).length * px * 0.5, actualBoundingBoxAscent: px * 0.72, actualBoundingBoxDescent: px * 0.2 };
+    const px = fontPx(this._s.font), bold = /bold|[6-9]00/.test(this._s.font), serif = isSerif(this._s.font);
+    const m = (serif && (sysSerif[bold ? 700 : 500] || sysSerif[500])) || measure[bold ? 700 : 500] || measure[700];
+    const ls = globalThis.slSysFonts ? parseFloat(this._s.letterSpacing) || 0 : 0;
+    return { width: (m ? m(String(t), px) * (serif && !sysSerif[500] ? 1.45 : 1) : String(t).length * px * 0.5) + ls * [...String(t)].length, actualBoundingBoxAscent: px * 0.72, actualBoundingBoxDescent: px * 0.2 };
   }
   createLinearGradient(...a) { return new RecGradient('linear', a); }
   createRadialGradient(...a) { return new RecGradient('radial', a); }
@@ -606,7 +620,7 @@ function makePack(name, opt = {}) {
     // (a canvas drawn into another: its commands go along)
     for (const id of usedCanvas) { const c = canvases.get(id); for (const op of c.ops) if (op[0] === 'drawImage' && op[1] >= 0) usedCanvas.add(op[1]); }
     const canvasOut = {};
-    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}), ...(c.slGrad ? { grad: true } : {}) }; }
+    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}), ...(c.slGrad ? { grad: true } : {}), ...(c.slSerif ? { serif: true } : {}) }; }
     const out = { version: 3, generated: new Date().toISOString(), bin: `${name}.bin`, props: propsOut, materials: mats, meshes, instanced: inst, canvases: canvasOut, ...ex };
     const zb = writeData(OUT, `${name}.bin`, Buffer.concat(parts));
     const js = JSON.stringify(out), zj = writeData(OUT, `${name}.json`, js);
@@ -734,7 +748,7 @@ transport.capture(tScene);
 }
 // ================================================================ pack 3: the gameplay data (Phase 5)
 try {
-  await (await import('./export_play.mjs')).exportPlay({ THREE, SRC, world, L, busRoads, skibus, models, freeMod, loadGLB, makePack, cols: [...colliders, ...tCols], log, r4 });
+  await (await import('./export_play.mjs')).exportPlay({ THREE, SRC, world, L, busRoads, skibus, models, freeMod, loadGLB, makePack, cols: [...colliders, ...tCols], log, r4, village });
 } catch (e) { log('play pack failed:', e.stack?.split('\n').slice(0, 4).join(' | ')); process.exitCode = 1; }
 console.warn = _warn; console.info = _info;
 process.exit(process.exitCode ?? 0); // (the game's modules leave timers running: the export is done)

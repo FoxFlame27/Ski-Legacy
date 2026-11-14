@@ -9,12 +9,13 @@
 #include <stb_easy_font.h>
 #include <cstring>
 #include <cmath>
+#include <glm/gtc/packing.hpp>
 
 namespace sl {
 
 // texture units (every sampler name has its own unit: no two sampler types ever share one)
 enum Unit : int { U_BASE = 0, U_MR = 1, U_NORMAL = 2, U_NOISE = 3, U_EMISSIVE = 4, U_SHADOW = 5, U_ENV = 6, U_TRAIL = 7,
-                  U_DETAIL = 8, U_SNOW = 9, U_ROCK = 10, U_SKYNOISE = 11, U_DEPTH = 12, U_BLOOM = 13, U_AO = 14 };
+                  U_DETAIL = 8, U_SNOW = 9, U_ROCK = 10, U_SKYNOISE = 11, U_DEPTH = 12, U_BLOOM = 13, U_AO = 14, U_GROUND = 15 };
 
 // ---------------------------------------------------------------- camera
 void Camera::lookAt(const dvec3& eye, const dvec3& target, const vec3& up) {
@@ -117,6 +118,7 @@ gfx::Program Renderer::build(const char* name, const char* defines, const char* 
     dev_->setInt("uTrailMap", U_TRAIL); dev_->setInt("uDetail", U_DETAIL); dev_->setInt("uSnowTex", U_SNOW); dev_->setInt("uRockTex", U_ROCK);
     dev_->setInt("uSkyNoise", U_SKYNOISE); dev_->setInt("uDepth", U_DEPTH); dev_->setInt("uBloom", U_BLOOM); dev_->setInt("uAO", U_AO);
     dev_->setInt("uHdr", 0); dev_->setInt("uSrc", 0);
+    dev_->setInt("uGround", U_GROUND);
   }
   return p;
 }
@@ -295,9 +297,11 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     if (has("noshafts")) set_.shafts = false;
     if (has("nomsaa")) set_.msaa = 1;
     if (has("nofxaa")) { set_.fxaa = false; set_.sharpen = 0; }
+    else if (has("fxaa")) set_.fxaa = true;
     if (has("notrails")) set_.trailSize = 0;
     if (has("nodetail")) set_.detailTex = 0;
     if (has("noclouds")) noClouds_ = true;
+    if (has("nomist")) noMist_ = true;
     if (has("nobloom")) bloomOn = false;
     if (auto p = o.find("cascades="); p != std::string::npos) set_.cascades = std::atoi(o.c_str() + p + 9);
     if (auto p = o.find("fx="); p != std::string::npos) set_.fx = std::atoi(o.c_str() + p + 3);
@@ -334,6 +338,12 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   impostor_ = build("impostors", "", shaders::kImpostorVS, shaders::kImpostorFS, true);
   clouds_ = set_.fx >= 2 && !set_.lowShaders ? build("clouds", "", shaders::kFullscreenVS, shaders::kCloudFS, true, shaders::kSkyCommon) : gfx::Program{};
   glare_ = set_.fx >= 2 ? build("sun_glare", "", shaders::kGlareVS, shaders::kGlareFS, false) : gfx::Program{};
+  if (set_.fx >= 1 && !set_.lowShaders && !noMist_) {
+    mist_ = build("mist", "", shaders::kFullscreenVS, shaders::kMistFS, true);
+    mistUp_ = build("mist_up", "", shaders::kFullscreenVS, shaders::kMistUpFS, false);
+    mistBlur_ = build("mist_blur", "", shaders::kFullscreenVS, shaders::kMistBlurFS, false);
+    if (!mistUp_ || !mistBlur_) mist_ = {};
+  }
   {   // sunglare.js makeRays: 8 long primaries, 8 short secondaries, 16 fine streaks, jittered
     const float LEN[3][2] = {{0.12f, 0.2f}, {0.06f, 0.1f}, {0.08f, 0.18f}}, WID[3][2] = {{0.016f, 0.024f}, {0.013f, 0.018f}, {0.0045f, 0.0065f}};
     const float INT[3][2] = {{1.4f, 2.0f}, {1.0f, 1.3f}, {0.35f, 0.55f}};
@@ -432,6 +442,14 @@ void Renderer::resize(int w, int h) {
     bloom_.push_back(dev_->createRenderTarget(bw, bh, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24));
     bloomSize_.push_back({bw, bh});
     bw /= 2; bh /= 2;
+  }
+  if (mistRT_) { dev_->destroy(mistRT_); dev_->destroy(mistRT2_); mistRT_ = mistRT2_ = {}; }
+  if (mist_) {
+    mw_ = std::max(1, rw_ / 2); mh_ = std::max(1, rh_ / 2);
+    mistRT_ = dev_->createRenderTarget(mw_, mh_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+    mistRT2_ = dev_->createRenderTarget(mw_, mh_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+    dev_->setSampling(dev_->renderTargetColor(mistRT_), gfx::Filter::Nearest, gfx::Wrap::Clamp, 1);
+    dev_->setSampling(dev_->renderTargetColor(mistRT2_), gfx::Filter::Nearest, gfx::Wrap::Clamp, 1);
   }
   if (aoRaw_) { dev_->destroy(aoRaw_); dev_->destroy(aoTex_); aoRaw_ = aoTex_ = {}; }
   if (set_.ao > 0 || set_.shafts) {
@@ -670,6 +688,7 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
     // (the trees' wind phase: integrated, so a change of the weather's wind speeds the sway up without a jump; the
     // JS runs it on plain time, a storm here a little faster)
     windPhase_ += dtc * (1.0 + 0.5 * std::clamp(double(L.wind), 0.0, 1.0));
+    frameClockDt_ = dtc;
     lastClock_ = now;
   }
   viewProj_ = cam_.proj() * cam_.view();
@@ -702,7 +721,11 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   // ~10x bluer than red by day, navy at night) at 40 % of its saturation, so distance reads as a light blue-grey
   // aerial perspective and the night haze as dark grey-blue instead of tinting every far slope saturated blue
   fb.fogColor = vec4(desat(L.fog, 0.4f), 1);
-  fb.fogParams = vec4(L.fogDensity, L.fogFalloff, 1.0f / float(atlasW_), L.exposure);
+  // (with the valley mist pass the weather's mist lies in the valleys as a sea you can look down on: most of
+  // sky.js's uniform mist term (mist^2 x 0.0016 at every altitude: the peaks whited out too) is left to it)
+  float fogD = L.fogDensity;
+  if (mist_ && !L.interior) fogD = std::max(fogD * 0.25f, fogD - 0.72f * L.mist * L.mist * 0.0016f * (1.f - 0.45f * L.clearAir));
+  fb.fogParams = vec4(fogD, L.fogFalloff, 1.0f / float(atlasW_), L.exposure);
   computeSky(L, fb);
   fb.misc = vec4(L.night, L.snowCover, float(set_.fx), L.icy);
   fb.misc2 = vec4(1.f, float(windPhase_), L.snow, set_.trailSize > 0 && !L.interior ? 1.f : 0.f);
@@ -722,6 +745,19 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
     float cl = L.cloud, nearR = float((4000 + (2400 - 4000) * sstep(0.15, 0.7, cl)) * (1 - L.snow) + 1800 * L.snow);
     float cover = std::clamp(0.3f + cl * 0.35f + L.mist * 0.3f, 0.f, 0.9f) * (1 - L.clearAir);
     cloudLow_ = vec4(float(seaY - 220), float(seaY + 260), cover, nearR);
+  }
+  {   // the valley mist: morning / evening haze in the floors every day (atmosphere.js uMist), banks in misty weather
+    vec3 ts = glm::length(L.trueSun) > 0.5f ? glm::normalize(L.trueSun) : ld;
+    float lowSun = 1.f - fsmooth(0.22f, 0.62f, ts.y);
+    float amt = std::min(1.f, 0.1f + lowSun * 0.34f + L.mist * 0.9f) * (1.f - 0.9f * L.clearAir) * (L.interior ? 0.f : 1.f);
+    float fair = 1.f - fsmooth(0.3f, 0.7f, L.mist);
+    mistDrift_ += dvec2(1.5, 0.6) * (double(1 + L.wind * 3) * 0.0011 * 0.6 * frameClockDt_);
+    mistDrift_ -= glm::floor(mistDrift_);
+    mistP_ = vec4(amt, 24.f + 40.f * L.mist + 30.f * L.frost, float(mistDrift_.x), float(mistDrift_.y));
+    // (fair weather: thin bright wisps low in the far valleys; misty: a sea of mist a few hundred metres deep you can
+    // still see ~300 m in — sky.js's own fog thickens the air on top; freezing fog: lower and denser)
+    float ceilY = 60.f + 200.f * fsmooth(0.2f, 0.9f, L.mist) - 90.f * L.frost;   // (over the valley floors)
+    mistP2_ = vec4(fair, set_.fx >= 3 ? 24.f : set_.fx >= 2 ? 16.f : 11.f, 0.0045f + 0.0075f * fair + 0.004f * L.frost, ceilY);
   }
   dev_->updateBuffer(frameUbo_, &fb, sizeof fb);
   for (int c = 0; c < nCasc_; c++) {
@@ -826,7 +862,9 @@ void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod,
       it.vi = b.inputs()[k++];
       const auto& L = p.lods[size_t(std::min<int>(lod, int(p.lods.size()) - 1))];
       it.first = L.first; it.count = L.count; it.instances = b.count();
-      it.sFirst = L.first; it.sCount = L.count;
+      // (the shadow pass draws the next lighter LOD, as submitModel: a 20k-triangle spruce casts as its 8k copy)
+      const auto& SL = p.lods[size_t(std::min<int>(lod + 1, int(p.lods.size()) - 1))];
+      it.sFirst = SL.first; it.sCount = SL.count;
       it.mat = &m.materialFor(p.material, std::min<int>(lod, int(p.lods.size()) - 1));
       it.model = fit * g;
       it.shadow = castShadow;
@@ -1122,6 +1160,65 @@ void Renderer::cloudPass() {
   dev_->draw(emptyVi_, 3);
 }
 
+void Renderer::setGroundMap(const std::vector<float>& heights, int n, const dvec2& center, double span) {
+  if (!mist_ || n < 2 || heights.size() < size_t(n) * size_t(n)) return;
+  // the valley floor's level round every point: the lowest ground within ~770 m, smoothed (the mist sea's base)
+  const int R = 8, B = 6;
+  std::vector<float> a(heights.begin(), heights.begin() + long(size_t(n) * size_t(n))), b(a.size());
+  auto pass = [&](bool minF, int rad, bool horiz) {
+    for (int j = 0; j < n; j++)
+      for (int i = 0; i < n; i++) {
+        float m = minF ? 1e30f : 0.f;
+        for (int k = -rad; k <= rad; k++) {
+          int ii = std::clamp(horiz ? i + k : i, 0, n - 1), jj = std::clamp(horiz ? j : j + k, 0, n - 1);
+          float v = a[size_t(jj) * size_t(n) + size_t(ii)];
+          m = minF ? std::min(m, v) : m + v;
+        }
+        b[size_t(j) * size_t(n) + size_t(i)] = minF ? m : m / float(2 * rad + 1);
+      }
+    a.swap(b);
+  };
+  pass(true, R, true); pass(true, R, false); pass(false, B, true); pass(false, B, false);
+  std::vector<uint16_t> half(size_t(n) * size_t(n) * 2);
+  for (size_t i = 0; i < size_t(n) * size_t(n); i++) { half[i * 2] = glm::packHalf1x16(heights[i]); half[i * 2 + 1] = glm::packHalf1x16(a[i]); }
+  if (groundTex_) dev_->destroy(groundTex_);
+  gfx::TextureDesc d;
+  d.width = d.height = n; d.format = gfx::TexFormat::RG16F; d.filter = gfx::Filter::Trilinear; d.wrap = gfx::Wrap::Clamp; d.anisotropy = 1;
+  groundTex_ = dev_->createTexture(d, half.data());
+  groundMap_ = vec4(float(center.x), float(center.y), float(1.0 / span), float(n));
+}
+
+void Renderer::mistPass() {
+  if (!mist_ || !mistRT_ || !groundTex_ || light_.interior || mistP_.x < 0.01f) return;
+  gfx::PipelineState ps;
+  ps.depth = gfx::DepthTest::Off; ps.depthWrite = false; ps.cull = gfx::Cull::None;
+  dev_->bindRenderTarget(mistRT_, mw_, mh_);
+  dev_->setPipeline(ps);
+  dev_->useProgram(mist_);
+  mat4 inv = glm::inverse(viewProj_);
+  vec2 nf(cam_.nearZ, cam_.farZ);
+  dev_->bindTexture(U_GROUND, groundTex_);
+  dev_->setMat4("uInvViewProj", glm::value_ptr(inv));
+  dev_->setVec2("uNearFar", glm::value_ptr(nf));
+  dev_->setVec4("uGroundMap", glm::value_ptr(groundMap_));
+  dev_->setVec4("uMist", glm::value_ptr(mistP_));
+  dev_->setVec4("uMist2", glm::value_ptr(mistP2_));
+  dev_->draw(emptyVi_, 3);
+  dev_->bindRenderTarget(mistRT2_, mw_, mh_);
+  dev_->setPipeline(ps);
+  dev_->useProgram(mistBlur_);
+  dev_->bindTexture(0, dev_->renderTargetColor(mistRT_));
+  dev_->setVec2("uNearFar", glm::value_ptr(nf));
+  dev_->draw(emptyVi_, 3);
+  dev_->bindRenderTarget(hdr_, rw_, rh_);
+  ps.blend = gfx::Blend::Premul;
+  dev_->setPipeline(ps);
+  dev_->useProgram(mistUp_);
+  dev_->bindTexture(0, dev_->renderTargetColor(mistRT2_));
+  dev_->setVec2("uNearFar", glm::value_ptr(nf));
+  dev_->draw(emptyVi_, 3);
+}
+
 void Renderer::glarePass() {
   if (!glare_ || glm::length(glareCore_) < 1e-4f) return;
   gfx::PipelineState ps;
@@ -1264,6 +1361,7 @@ void Renderer::endFrame() {
   dev_->resolve(hdr_, depthCopy_, rw_, rh_, false, true);
   dev_->bindRenderTarget(hdr_, rw_, rh_);
   dev_->bindTexture(U_DEPTH, dev_->renderTargetDepth(depthCopy_));
+  mistPass();
   cloudPass();
   particlePass();
   glarePass();

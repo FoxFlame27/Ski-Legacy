@@ -166,6 +166,152 @@ void main() {
 }
 )GLSL";
 
+// ---- valley mist (native; atmosphere.js makeMist / placeMist are camera-facing cards in the valleys): a ray-marched
+// layer of mist that hugs the ground, thicker in the floors that lie below their surroundings (the ground map's fine
+// level against its ~1 km mean), broken into slowly drifting banks; lit by the sun with a forward-scattering lobe
+// (the air glows toward the sun), shadowed by the terrain / trees / clouds near the camera (shafts through the
+// mist), and by the sky. Drawn at half resolution after the resolve, upsampled depth-aware (kMistUpFS).
+inline const char* kMistFS = R"GLSL(
+in vec2 vNdc;
+out vec4 oColor;
+uniform mat4 uInvViewProj;
+uniform sampler2D uDepth;
+uniform sampler2D uGround;   // R: ground height (m; its higher mips: the regional mean), G: the valley floor's level round about
+uniform vec2 uNearFar;
+uniform vec4 uGroundMap;     // xy the map's centre (world xz), z 1 / span, w texels across
+uniform vec4 uMist;          // x amount 0..1, y layer scale height (m), zw drift (noise uv)
+uniform vec4 uMist2;         // x fair weather 0..1 (the village and the air round the camera stay clear), y steps, z extinction (1/m), w the mist sea's depth over the valley floors (m)
+float groundAt(vec2 xz, float lod) { return textureLod(uGround, (xz - uGroundMap.xy) * uGroundMap.z + 0.5, lod).r; }
+float mistDensity(vec3 p, float camD) {
+  vec2 uv = (p.xz - uGroundMap.xy) * uGroundMap.z;
+  float edge = 1.0 - smoothstep(0.4, 0.49, max(abs(uv.x), abs(uv.y)));
+  if (edge <= 0.0) return 0.0;
+  vec2 gf = textureLod(uGround, uv + 0.5, 0.0).rg;
+  float hag = p.y - gf.x, hv = p.y - gf.y;
+  float H = uMist.y;
+  if (hag > H * 5.0 && hv > uMist2.w + 120.0) return 0.0;
+  float G = textureLod(uGround, uv + 0.5, 3.6).r;
+  float valley = smoothstep(-12.0, 70.0, G - gf.x);
+  H *= 0.5 + valley;
+  vec2 q = p.xz * 0.0011 + uMist.zw + vec2(p.y * 0.0021, -p.y * 0.0013);
+  float n = textureLod(uSkyNoise, q, 0.0).r * 0.62 + textureLod(uSkyNoise, q * 3.3 + 0.37, 0.0).g * 0.38;
+  // fair weather: wisps that hug the floors lying below their surroundings
+  float covF = mix(0.66, 0.34, uMist.x);
+  float wisps = smoothstep(covF, covF + 0.22, n * (0.6 + 0.62 * valley)) * exp(-max(hag, 0.0) / H);
+  // misty weather: a sea of mist that fills the valleys to its ceiling (billowing, thinner toward the top, denser
+  // banks drifting through it); above it the air is clear and the peaks stand out
+  float top = uMist2.w + (n - 0.5) * 170.0;
+  float sea = (1.0 - smoothstep(-90.0, 20.0, hv - top)) * (0.45 + 0.55 * smoothstep(0.3, 0.62, n)) * (0.55 + 0.45 * exp(-max(hag, 0.0) / 120.0));
+  float bank = mix(sea, wisps, uMist2.x);
+  // fair weather: wisps in the valleys round about, the village and the air you stand in stay clear
+  float clearK = mix(1.0, smoothstep(380.0, 950.0, length(p.xz - vec2(0.0, -6.0))) * smoothstep(50.0, 320.0, camD), uMist2.x);
+  return bank * edge * clearK * (1.0 - smoothstep(4200.0, 6500.0, camD));
+}
+void main() {
+  if (uMist.x < 0.01 || uGroundMap.w < 1.0) { oColor = vec4(0.0); return; }
+  vec2 uv = vNdc * 0.5 + 0.5;
+  vec4 w = uInvViewProj * vec4(vNdc, 1.0, 1.0);
+  vec3 rd = normalize(w.xyz / w.w);
+  float z = texture(uDepth, uv).x;
+  float tMax = 6500.0;
+  if (z < 0.99999) {
+    float n = uNearFar.x, f = uNearFar.y;
+    float vz = 2.0 * n * f / (f + n - (z * 2.0 - 1.0) * (f - n));
+    tMax = min(tMax, vz / max(dot(rd, uCamFwd.xyz), 1e-3));
+  }
+  int N = int(uMist2.y);
+  float jit = ign(gl_FragCoord.xy);
+  vec3 sunL = uSunDir.xyz;
+  float cs = dot(rd, sunL);
+  // forward scattering: a broad lobe and a tight one round the sun
+  float fwd = 0.5 * pow(max(cs, 0.0), 4.0) + 1.6 * pow(max(cs, 0.0), 24.0);
+  vec3 sunC = uSunColor.rgb * (0.115 + 0.3 * fwd);
+  vec3 amb = envIrradiance(vec3(0.0, 1.0, 0.0)) * RECIPROCAL_PI * 0.8 + hemiIrradiance(vec3(0.0, 1.0, 0.0)) * RECIPROCAL_PI;
+  float T = 1.0;
+  vec3 L = vec3(0.0);
+  float tPrev = 0.0;
+  for (int i = 0; i < N; i++) {
+    float t1 = tMax * pow(float(i + 1) / float(N), 1.8);
+    float tt = mix(tPrev, t1, jit), dt = t1 - tPrev;
+    tPrev = t1;
+    vec3 rel = rd * tt;
+    float d = mistDensity(rel + uCamPos.xyz, tt) * uMist.x;
+    if (d > 0.0015) {
+      float vis = 1.0;
+#if SL_FX >= 2
+      vis = shadowAt(rel, vec3(0.0, 1.0, 0.0));
+#endif
+      // the layer shades itself: deep in a bank less sun arrives than on its top
+      vec2 gf = textureLod(uGround, (rel.xz + uCamPos.xz - uGroundMap.xy) * uGroundMap.z + 0.5, 0.0).rg;
+      float depthIn = mix(saturate((gf.y + uMist2.w - rel.y - uCamPos.y) / 160.0), 1.0 - saturate((rel.y + uCamPos.y - gf.x) / (uMist.y * 1.5)), uMist2.x);
+      float self = mix(1.0, 0.5, depthIn);
+      vec3 S = sunC * vis * self + amb * (0.55 + 0.45 * self);
+      float a = exp(-d * uMist2.z * dt);
+      L += T * S * (1.0 - a);
+      T *= a;
+      if (T < 0.015) break;
+    }
+  }
+  oColor = vec4(L, 1.0 - T);
+}
+)GLSL";
+// a depth-aware 5 x 5 tent blur of the half-resolution mist (the march's per-pixel jitter averaged out)
+inline const char* kMistBlurFS = R"GLSL(
+in vec2 vNdc;
+out vec4 oColor;
+uniform sampler2D uSrc;
+uniform sampler2D uDepth;
+uniform vec2 uNearFar;
+float lin(float z) { float n = uNearFar.x, f = uNearFar.y; return 2.0 * n * f / (f + n - (z * 2.0 - 1.0) * (f - n)); }
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy), hs = textureSize(uSrc, 0);
+  float z = lin(texture(uDepth, (vec2(c) + 0.5) / vec2(hs)).x);
+  vec4 acc = vec4(0.0);
+  float ws = 0.0;
+  for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) {
+    ivec2 q = clamp(c + ivec2(i, j), ivec2(0), hs - 1);
+    float zc = lin(texture(uDepth, (vec2(q) + 0.5) / vec2(hs)).x);
+    float wgt = (3.0 - abs(float(i))) * (3.0 - abs(float(j))) / (0.02 + abs(zc - z) / max(min(zc, z), 0.5));
+    acc += texelFetch(uSrc, q, 0) * wgt;
+    ws += wgt;
+  }
+  oColor = acc / ws;
+}
+)GLSL";
+// the mist's upsample to the full resolution: the four half-resolution texels weighted by how close their depth is
+// to this pixel's (no halo of mist round a skier or a tree in front of a far bank)
+inline const char* kMistUpFS = R"GLSL(
+in vec2 vNdc;
+out vec4 oColor;
+uniform sampler2D uSrc;
+uniform sampler2D uDepth;
+uniform vec2 uNearFar;
+float lin(float z) { float n = uNearFar.x, f = uNearFar.y; return 2.0 * n * f / (f + n - (z * 2.0 - 1.0) * (f - n)); }
+void main() {
+  vec2 uv = vNdc * 0.5 + 0.5;
+  float z = lin(texture(uDepth, uv).x);
+  ivec2 hs = textureSize(uSrc, 0);
+  vec2 hp = uv * vec2(hs) - 0.5;
+  ivec2 b = ivec2(floor(hp));
+  vec2 f = hp - vec2(b);
+  vec4 acc = vec4(0.0);
+  float ws = 0.0;
+  for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
+    ivec2 c = clamp(b + ivec2(i, j), ivec2(0), hs - 1);
+    float zc = lin(texture(uDepth, (vec2(c) + 0.5) / vec2(hs)).x);
+    float wgt = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y) + 1e-3;
+    wgt /= 0.02 + abs(zc - z) / max(min(zc, z), 0.5);
+    acc += texelFetch(uSrc, c, 0) * wgt;
+    ws += wgt;
+  }
+  vec4 m = acc / ws;
+  if (m.a < 0.002) discard;
+  // a little dither against banding in the smooth gradients
+  m.rgb *= 1.0 + (ign(gl_FragCoord.xy) - 0.5) * 0.02;
+  oColor = m;
+}
+)GLSL";
+
 // ---- far forest impostors (vegetation.js's billboard forests): cylindrical billboards of a procedural conifer
 // in the pines' own colours, snow on the tiers facing the sky, lit by the sun / sky / shadows; they dissolve in
 // where the 3D trees end

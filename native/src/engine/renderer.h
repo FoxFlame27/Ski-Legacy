@@ -180,6 +180,10 @@ public:
   /// the snow trails (world/snowtrails): stamps drawn into the trail map this frame, the map's centre
   void trailStamp(const TrailStamp& s) { if (set_.trailSize > 0) stamps_.push_back(s); }
   void trailFocus(const dvec3& p) { trailFocus_ = p; }
+  /// (the valley mist) the ground's height round the camera: n x n samples (row z, column x) over `span` metres
+  /// centred on `center` (world xz). world/groundmap keeps it up to date.
+  void setGroundMap(const std::vector<float>& heights, int n, const dvec2& center, double span);
+  bool wantsGroundMap() const { return bool(mist_); }
   bool trailsOn() const { return set_.trailSize > 0; }
   void addParticle(const Particle& p) { particles_.push_back(p); }
   /// Frustum test of a world-space box (for the caller's culling).
@@ -258,6 +262,13 @@ private:
   gfx::Program mesh_, meshSkin_, meshInst_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, hud_;
   gfx::Texture noise_, white_, flatN_, skyNoise_, detail_, snowTex_, rockTex_, blackTex_;
   gfx::RenderTarget snowRT_, rockRT_;
+  // the valley mist: half-resolution target, the ground height map (R16F, mip-mapped)
+  gfx::Program mist_, mistUp_, mistBlur_;
+  gfx::RenderTarget mistRT_, mistRT2_;
+  gfx::Texture groundTex_;
+  vec4 groundMap_{0}, mistP_{0}, mistP2_{0};
+  int mw_ = 0, mh_ = 0;
+  void mistPass();
   std::vector<Item> items_;
   std::vector<const Item*> blend_;
   std::vector<float> hudVerts_;
@@ -268,7 +279,9 @@ private:
   int nCasc_ = 1;
   vec4 planes_[6];
   uint32_t lastDraws_ = 0;
-  double time_ = 0, lastClock_ = -1, windPhase_ = 0;
+  double time_ = 0, lastClock_ = -1, windPhase_ = 0, frameClockDt_ = 0;
+  dvec2 mistDrift_{0};
+  bool noMist_ = false;
   vec3 envZenith_{0}, envHorizon_{0}, envSun_{0}, envGlow_{0};
   vec2 sunUV_{0};
   float shaftsK_ = 0;

@@ -281,11 +281,10 @@ int runGame(const GameOptions& opt) {
     SL_INFO("loading: %s (GPU so far: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", what, dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
     plat->drawableSize(dw, dh);
     dev->bindRenderTarget({}, dw, dh);
-    dev->clear(0.016f, 0.055f, 0.133f, 1, true, true);
+    dev->clear(0, 0, 0, 1, true, true);   // (style.css #intro: black, as the web game boots)
     ui.begin(dw, dh);
     // (menu.js scrMain before the world is ready: the big SKI LEGACY logo, white, and the loading line)
     float u = ui.cssU();
-    ui.rectGradient(0, 0, float(dw), float(dh), vec4(0.06f, 0.16f, 0.42f, 1), vec4(0.016f, 0.055f, 0.133f, 1), false);
     ui.textLH(72 * u, 50 * u, 42 * u * 0.85f, 42 * u, UiFont::CondBold, vec4(1), "SKI", UiAlign::Left, 0.5f);
     ui.textLH(72 * u, 50 * u + 42 * u * 0.85f, 104 * u * 0.85f, 104 * u, UiFont::CondBold, vec4(1), "LEGACY", UiAlign::Left, 0.03f);
     ui.textLH(72 * u + 44 * u, 266 * u, 30 * u, std::max(13 * ui.dpr(), 15 * u), UiFont::BodyMed, ui_color::a(vec4(1), 0.9f), what, UiAlign::Left, 0.06f);

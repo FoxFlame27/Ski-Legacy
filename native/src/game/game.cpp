@@ -748,6 +748,8 @@ int runGame(const GameOptions& opt) {
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
   double trainFov = -1;   // (railway.js this.fov) the trains' seat camera, eased
+  int trainView = 0;      // (express.js this.view) 0 the seat, 1 outside, 2 trackside
+  bool walkToggle = false;
   int trainWalk = -1;     // (debug traintest) a standing camera in the car: which
   float CABIN_LAMP = 14.f;   // the cabin lamps' strength at uCabin 1 (SKI_LEGACY_CABIN_LAMP to try another)
   if (const char* e = std::getenv("SKI_LEGACY_CABIN_LAMP")) CABIN_LAMP = float(std::atof(e));
@@ -2570,7 +2572,13 @@ int runGame(const GameOptions& opt) {
     perf.add("sim (120 Hz physics)", perfMs() - pt0);
     PlayerFrameControls fc;
     fc.toggleView = rideKind != Ride::None ? false : input.takePressed(Action::View);
-    if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) { seatView = !seatView; rideCamReady = false; }
+    if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) {
+      // (express.js VIEWS: R goes round the window seat, the chase camera, the camera beside the line; walking about: your
+      // eyes / the orbit round you. The Wolkenspitzbahn and the bus: seat / outside)
+      if (rideKind == Ride::Express && express.walking()) walkToggle = true;
+      else if (rideKind == Ride::Express) { trainView = (trainView + 1) % 3; seatView = trainView == 0; rideCamReady = false; }
+      else { seatView = !seatView; rideCamReady = false; }
+    }
     fc.toggleSkis = input.takePressed(Action::Skis);
     fc.lookX = paused ? 0 : input.lookX(); fc.lookY = paused ? 0 : input.lookY(); fc.wheel = input.wheel();
     fc.now = opt.autotest ? simTime : now; fc.lastLook = opt.autotest ? -1e9 : input.lastLookTime();
@@ -2789,16 +2797,35 @@ int runGame(const GameOptions& opt) {
         trainWalk = f > 322 && f <= 322 + 6 * 30 ? (f - 323) / 30 : -1;
         if (trainWalk >= 0 && (f - 323) % 30 == 28 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + WN[trainWalk]).c_str());
         if (f > 320) { seatYaw = 1.2; seatPitch = -0.1; }
+        if (ph == 1) {   // (the Express: stood up, then walking down the aisle: from behind, through your eyes, from in front)
+          if (f == 506) express.standUp(false);
+          if (f > 506 && f <= 540) express.debugWalk(0, 3.0, PI, 0, -0.18);
+          if (f == 541) walkToggle = true;
+          if (f > 541 && f <= 575) express.debugWalk(0, 1.0, PI, 0, -0.18);
+          if (f == 576) walkToggle = true;
+          if (f > 576 && f <= 610) express.debugWalk(0, -3.0, PI, PI, -0.3);
+          if (f > 610 && f <= 700 && express.walking()) input.injectMove(0, 1);   // (W for 1.5 s: down the aisle)
+          if (f == 701) input.injectMove(0, 0);
+          for (const auto& [at0, nm] : {std::pair<int, const char*>{538, "walk_third"}, {573, "walk_first"}, {608, "walk_front"}, {700, "walk_keys"}})
+            if (f == at0 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + nm).c_str()); dvec3 wf; double a = 0, b = 0; bool sh = false; express.walker(wf, a, b, sh); SL_INFO("[traintest] %s: walking %d, speed %.2f, prompt '%s'", nm, int(express.walking()), b, prompt.c_str()); }
+          if (f == 706) { const bool sat = express.sitDown(); SL_INFO("[traintest] sat down again: %s", sat ? "yes" : "no free seat within reach"); if (!sat) { express.debugWalk(0, 6.3, 0, PI, -0.18); express.sitDown(); } }
+        }
         if (f == 1385 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + "moving").c_str());
+        if (f == 1150) { seatView = false; trainView = ph == 1 ? 2 : 1; }   // (outside under way: the chase camera; the Express: the camera beside the line)
+        if ((f == 1200 || f == 1290) && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + (ph == 1 ? "trackside" : "chase") + (f == 1200 ? "1" : "2")).c_str());
+        if (f == 1300) { seatView = true; trainView = 0; }
         // (then on with the fast-forward key until the first tunnel: the cabin by its own light)
         static bool tunnelShot[2] = {false, false};
         if (f > 1385 && !tunnelShot[ph]) {
-          input.inject(Action::Jump, true);
+          input.inject(Action::Jump, under < 12);   // (fast until it is well inside, then at its own speed)
           seatYaw = 0.6; seatPitch = -0.1;
           const TrainRide tr = ph == 0 ? railway.ride() : express.ride();
           static int under = 0;
           under = tr.on && world.height(tr.seat.x, tr.seat.z) > tr.seat.y + 8 ? under + 1 : 0;
-          if (under == 20 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + "tunnel").c_str()); tunnelShot[ph] = true; under = 0; input.inject(Action::Jump, false); SL_INFO("[traintest] in a tunnel: the cabin light %.2f", double(vmodels.cabinLight())); }
+          if (under == 20) { seatView = false; trainView = 1; }   // (then outside: the chase camera in the tube)
+          if (under == 34) { const dvec3 l = dvec3(glm::inverse(tr.car) * glm::dvec4(cam.pos, 1)); SL_INFO("[traintest] the chase camera in the tunnel: (%.1f, %.1f, %.1f) in your car's frame, %.1f m over the ground there", l.x, l.y, l.z, cam.pos.y - world.height(cam.pos.x, cam.pos.z)); }
+          if (under == 35 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + "tunnel_chase").c_str()); seatView = true; trainView = 0; tunnelShot[ph] = true; under = 0; input.inject(Action::Jump, false); }
+          if (under == 19 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + "tunnel").c_str()); SL_INFO("[traintest] in a tunnel: the cabin light %.2f", double(vmodels.cabinLight())); }
         }
       }
     }
@@ -2850,6 +2877,19 @@ int runGame(const GameOptions& opt) {
       TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
       player.setSeat(tr.seat, tr.fwd);
       rideLine = tr.hint + "   hold " + prompts::K(input, Action::Jump) + (rideKind == Ride::Rail ? " x6" : " x10");
+      if (rideKind == Ride::Express && !tr.arrived && !menus.isOpen()) {
+        // (express.js updateWalk: E stands you up from your seat and sits you down on the nearest free one; at a stop on
+        // the way, where E is for getting off, it is F; W A S D walk, relative to the camera, Shift faster)
+        const bool stop = express.atStop();
+        if (stop ? input.takePressed(Action::Furnish) : interact) {
+          if (!stop) interact = false;
+          if (express.walking()) express.sitDown(); else express.standUp(viewBeforeRide == Player::View::First);
+          seatYaw = 0; seatPitch = -0.04;
+        }
+        if (express.walking()) { express.walkStep(frameDt, paused ? 0 : input.moveY(), paused ? 0 : input.moveX(), input.down(Action::Sprint)); seatView = true; trainView = 0; }
+        if (!stop) prompt = !express.walking() ? "Stand up" : express.nearestFreeSeat() >= 0 ? "Sit down" : "";
+        else rideLine += "   " + prompts::K(input, Action::Furnish) + (express.walking() ? ": sit down" : ": stand up");
+      }
       if (tr.arrived) { if (rideKind == Ride::Rail) railway.abort(); else express.abort(); standOff(tr.exit, tr.hint); races.guideFrom(player.pos, tr.stop); }
       else if (tr.atStop) {
         prompt = "Get off at " + tr.stop;
@@ -3029,7 +3069,7 @@ int runGame(const GameOptions& opt) {
           TrainRide tr = express.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
-          rideCamReady = false; seatView = true; seatYaw = 0; seatPitch = -0.04; trainFov = -1;   // (express.js board: the seat view; R: outside)
+          rideCamReady = false; seatView = true; trainView = 0; seatYaw = 0; seatPitch = -0.04; trainFov = -1;   // (express.js board: the seat view; R: outside, then trackside)
           toast = transport.express.name + " to " + express.station(dest).name + (save.hasPass() ? std::string(" \xC2\xB7 Day pass") : " \xC2\xB7 -$" + std::to_string(transport.express.price)); toastUntil = simTime + 2;
         }
       }
@@ -3210,6 +3250,12 @@ int runGame(const GameOptions& opt) {
     player.cameraFor(cam);
     bool camUnderground = false;   // (a train's camera in a tunnel: the tunnel's darkness, no terrain drawn over it)
     if (rideKind == Ride::Car) drive.cameraFor(cam);
+    else if (rideKind == Ride::Express && express.walking()) {
+      // (express.js walkCamera) walking about in the car: your eyes, or the orbit round you pulled in to stay inside it
+      express.walkCamera(cam, frameDt, paused ? 0 : input.lookX(), paused ? 0 : input.lookY(), input.wheel(), walkToggle);
+      walkToggle = false;
+      camUnderground = world.height(cam.pos.x, cam.pos.z) > cam.pos.y + 6;
+    }
     else if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
       // the trains' seat view (railway.js / express.js updateRide): a seated passenger's eye in the car's own frame (it
       // leans with the car on the grade and in the curves), 0.76 m over the seat; you look round to the side windows
@@ -3244,7 +3290,15 @@ int runGame(const GameOptions& opt) {
       dvec3 eye = player.renderPos + dvec3(0, off("seatback") ? 1.25 : 0.78, 0);   // (debug seatback: standing up at the seat)
       cam.lookAt(eye, eye + dvec3(std::sin(fy) * std::cos(seatPitch), std::sin(seatPitch), std::cos(fy) * std::cos(seatPitch)));
       cam.fovY = 68; cam.nearZ = 0.05f;
-    } else if (rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) {
+    } else if (rideKind == Ride::Rail || rideKind == Ride::Express) {
+      // (railway.js / express.js applyCamera) outside: the chase camera behind the train; in a tunnel, a cutting or
+      // behind a shoulder it follows the track just behind the last car instead of sitting in the rock; the Express's
+      // third view: the camera beside the line (in a tunnel: the chase camera)
+      const float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY(), wh = input.wheel();
+      if (rideKind == Ride::Express && trainView == 2 && express.tracksideCamera(cam, frameDt)) camUnderground = false;
+      else if (rideKind == Ride::Rail) { railway.chaseCamera(cam, frameDt, lx, ly, wh); camUnderground = railway.chaseUnderground(); }
+      else { express.chaseCamera(cam, frameDt, lx, ly, wh); camUnderground = express.chaseUnderground(); }
+    } else if (rideKind == Ride::Bus) {
       // the chase camera behind the bus / train (bus.js chase: 18 m; railway.js 34 m; express.js 46 m), the mouse
       // looks round, easing back behind after 1.5 s
       dvec3 vp;
@@ -3908,7 +3962,16 @@ int runGame(const GameOptions& opt) {
     people.begin(paused ? 0 : frameDt);
     if (!indoor) {
       if (aiOn) { folk.submit(renderer, cam.pos); traffic.addPeople(people, cam.pos, people.skierKinds.empty() ? people.fanKinds : people.skierKinds); }
-      if (!mp.active()) { railway.addPeople(people); express.addPeople(people); }   // (the skiers riding along in your car: single player only, as railway.js)
+      if (!mp.active()) { railway.addPeople(people); express.addPeople(people); }
+      {   // (express.js poseWalker: you walking in the car, on its floor, in third person)
+        dvec3 wf; double wh = 0, ws = 0; bool shown = false;
+        if (rideKind == Ride::Express && express.walker(wf, wh, ws, shown) && shown) {
+          Person q;
+          q.kind = people.kind(save.character);
+          if (q.kind < 0 && !people.skierKinds.empty()) q.kind = people.skierKinds[0];
+          if (q.kind >= 0) { q.pos = wf; q.yaw = wh; q.anim = ws > 0.1 ? PAnim::Walk : PAnim::Idle; q.speed = ws; people.add(q); }
+        }
+      }   // (the skiers riding along in your car: single player only, as railway.js)
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }
@@ -3922,7 +3985,8 @@ int runGame(const GameOptions& opt) {
     // drive.js placeRig)
     bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || heli.hideRig() || showroom.inside();   // (the showroom is its own scene in the web game: you are not in it)
     railway.insideView = rideKind == Ride::Rail && seatView;
-    express.insideView = rideKind == Ride::Express && seatView;
+    express.insideView = rideKind == Ride::Express && (seatView || express.walking());
+    if (express.walking()) hideRig = true;   // (your seat is empty: you walk)
     // first person on skis: the gloves-and-poles view model rides on the camera (player.js, after the camera)
     rig.updateFpView(paused ? 0 : frameDt, cam, player, *dev, assets);
     player.noteCamera(cam);

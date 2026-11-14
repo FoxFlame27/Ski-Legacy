@@ -145,6 +145,7 @@ bool Railway::board(int st, bool up) {
     for (auto& tr : trains_) tr.st = trainState(t_now_, tr.phase);
   }
   ride_ = Ride{};
+  resetChase();
   ride_.on = true; ride_.train = train; ride_.car = up ? 0 : ncars_ - 1; ride_.up = up; ride_.from = st; ride_.dest = up ? nst - 1 : 0;
   return true;
 }
@@ -321,6 +322,7 @@ double Express::u(int k) const {
 void Express::update(double dt, bool fast, const dvec3&) {
   if (trains_.empty()) return;
   double scale = ride_.on && fast ? t_.express.fast : 1;
+  timeScale_ = scale;
   t_now_ = std::fmod(t_now_ + dt * scale, up_.loop * 1000);
   for (size_t k = 0; k < trains_.size(); k++) {
     int was = trains_[k].st.at;
@@ -387,6 +389,7 @@ bool Express::board(int from, int to) {
     update(0, false, dvec3(0));
   }
   ride_ = Ride{};
+  resetViews();
   ride_.on = true; ride_.train = bk; ride_.from = from; ride_.to = to;
   return true;
 }
@@ -417,9 +420,12 @@ TrainRide Express::ride() const {
   glm::dmat4 M;
   carMatrix(ride_.train, 0, M);
   const auto& R = t_.rail;
-  r.seat = dvec3(M * glm::dvec4(dvec3(R.seat), 1));
-  r.car = M; r.seatLocal = dvec3(R.seat); r.seatYaw = R.seatYaw;
-  dvec3 f = dvec3(M * glm::dvec4(std::sin(R.seatYaw), 0, std::cos(R.seatYaw), 0));
+  const bool moved = seat_ >= 0 && size_t(seat_) < R.seats.size();   // (sat down somewhere else after a walk)
+  const dvec3 seatL = moved ? dvec3(R.seats[size_t(seat_)]) : dvec3(R.seat);
+  const double seatYaw = moved ? double(R.seats[size_t(seat_)].w) : R.seatYaw;
+  r.seat = dvec3(M * glm::dvec4(seatL, 1));
+  r.car = M; r.seatLocal = seatL; r.seatYaw = seatYaw;
+  dvec3 f = dvec3(M * glm::dvec4(std::sin(seatYaw), 0, std::cos(seatYaw), 0));
   r.fwd = glm::normalize(dvec3(f.x, 0, f.z) + dvec3(1e-9));
   const State& st = trains_[size_t(ride_.train)].st;
   r.speed = st.speed;

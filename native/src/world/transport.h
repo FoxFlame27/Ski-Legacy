@@ -165,6 +165,9 @@ public:
     // (railway.js seatPassengers, exported) every seat of a car (x, y, z, the way it faces) and the skiers sat on them,
     // per car of the train you board
     std::vector<vec4> seats;
+    // (train.js CABIN, CAR.cabZ) the cabin's inner half width (to the wall panels: W; the shell: HW), its bays, the
+    // ceiling's edge height, the cab partition
+    struct { double W = 1.19, HW = 1.26, BAYS_Z0 = -6.6, BAY = 1.9, CEIL_Y = 3.44, cabZ = 7.32; int BAYS_N = 5; } cabin;
     struct Pax { int seat = 0, look = 0, pose = 0, head = 0; float yaw = 0, scale = 1, turn = 0, vary = 0.5f; };
     std::vector<std::vector<Pax>> passengers;
     std::vector<std::string> passengerLooks;

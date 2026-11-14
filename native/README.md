@@ -704,9 +704,31 @@ seats, tables and racks: `expressinterior.js`) were exported already and stand w
 - **The windows from inside**: `glassIn` is a 13 % tint; the renderer's glass mirrored the sky at full strength on it
   and lit it with the sun (milky panes on the sunny side): no mirror on the inner panes, a quarter of the tint.
 
-Not ported: walking about in the Express (E: stand up), the trackside camera, the Express's live trip display (the
-screens over the cab door show the Wolkenspitzbahn's line map in both trains), the passengers' phones, the people
-waiting on the platforms.
+- **Walking about in the Legacy Express** (`express.js updateWalk` / `standUp` / `sitDown` / `walkCamera`,
+  `game/train_views.cpp`; the web game has it in the Express only): **E** stands you up into the aisle beside your
+  seat (prompt "Stand up") and sits you down on the nearest free seat within 1.6 m ("Sit down"; a seat a passenger has
+  is not free); at a stop on the way, where E is for getting off, it is **F**. W A S D / the stick walk relative to the
+  camera at 1.6 m/s (Shift x1.5) in the car's own frame, so you stay on the moving train; you slide along the seat
+  pairs, the tables, the glass screens and the walls (`walkBoxes` / `walkMove`), from the rear wall to the cab door,
+  in the car you boarded. **R** switches between the orbit round you (pulled in at the walls, the ceiling and the end
+  walls) and your eyes (1.6 m over the floor), 70 degrees. In third person your skier walks on the car's floor.
+- **The chase camera in tunnels** (`railway.js` / `express.js applyCamera`): the old outside camera kept its orbit and
+  went through the tunnel lining and the mountain. Now, as the web game, wherever the orbit's sight line or the
+  camera itself would be in the rock (a tunnel within 60 / 70 m, a cutting, a shoulder) it follows the track just
+  behind the last car: on the tube's axis 4.6 m over the rail in a tunnel (rigid there), 7.5 / 8 m in a cutting, and
+  keeps doing so 1.2 s after the way is clear. The mouse swings the orbit, the wheel zooms (14-70 m, the Express
+  18-110 m); it no longer eases back by itself.
+- **The camera beside the line** (`express.js trackside` / `pickSpot`; the Express's third view: R goes round seat,
+  outside, trackside, as `VIEWS`): it waits on the embankment 170 m and more ahead (beside a viaduct: out from the
+  deck), alternating sides, follows the train going by with a long lens (16-62 degrees: the set about a third of the
+  frame), and moves on once the train has passed, the view is blocked for 0.6 s or the train is 1.1 km off; in a
+  tunnel there is no spot: the chase camera. The web game shows no hint for it and uses the view key / button (R),
+  so does the C++.
+
+Not ported: the Express's live trip display (the screens over the cab door show the Wolkenspitzbahn's line map in both
+trains), the passengers' phones, the people waiting on the platforms, getting off the Express at a stop on the way,
+the station-roof rule of the Wolkenspitzbahn's chase camera. In third person the walker is drawn as one of the
+resort's skiers in your character's suit, not in your own outfit.
 
 ### Known gaps (Phase 3)
 - **Courses' regions** come as an 8 m grid (mean 0.48 m, max ~4 m off the JS inside the regions, exact on roads and

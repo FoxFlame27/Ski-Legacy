@@ -300,6 +300,8 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     const seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
     out.rail.seat = seat ? { p: [r4(seat.pos.x), r4(seat.pos.y), r4(seat.pos.z)], yaw: seat.yaw } : null;
     out.rail.seats = car.seats.map((s) => [r4(s.pos.x), r4(s.pos.y), r4(s.pos.z), r4(s.yaw)]);
+    // (the cabin's layout: express.js walks about in it by these: WALK, walkBoxes, walkCamera)
+    out.rail.cabin = { W: T.CABIN.W, HW: T.CABIN.HW, BAYS_N: T.CABIN.BAYS_N, BAYS_Z0: T.CABIN.BAYS_Z0, BAY: T.CABIN.BAY, CEIL_Y: T.CABIN.CEIL_Y, cabZ: T.CAR.cabZ };
     // the seated passengers (railway.js seatPassengers: skiers on about half the seats of the train you board, never the
     // rider's front row; their looks, poses and places from its own seeded generator, drawn in its order: first the
     // bakes' two numbers for every look x pose x head turn, then per car the seats, and per passenger the look, the

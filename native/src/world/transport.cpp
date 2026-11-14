@@ -271,6 +271,11 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     if (r["seat"].is_object()) { R.seat = vec3(r["seat"]["p"][0].get<float>(), r["seat"]["p"][1].get<float>(), r["seat"]["p"][2].get<float>()); R.seatYaw = r["seat"]["yaw"]; }
     for (auto& b : r["bogies"]) R.bogies.push_back(vec3(b[0].get<float>(), b[1].get<float>(), b[2].get<float>()));
     if (r.contains("seats") && r["seats"].is_array()) for (auto& q : r["seats"]) if (q.size() >= 4) R.seats.push_back(vec4(q[0].get<float>(), q[1].get<float>(), q[2].get<float>(), q[3].get<float>()));
+    if (r.contains("cabin") && r["cabin"].is_object()) {
+      auto& c = r["cabin"];
+      R.cabin.W = c.value("W", R.cabin.W); R.cabin.HW = c.value("HW", R.cabin.HW); R.cabin.BAYS_Z0 = c.value("BAYS_Z0", R.cabin.BAYS_Z0); R.cabin.BAY = c.value("BAY", R.cabin.BAY);
+      R.cabin.CEIL_Y = c.value("CEIL_Y", R.cabin.CEIL_Y); R.cabin.cabZ = c.value("cabZ", R.cabin.cabZ); R.cabin.BAYS_N = c.value("BAYS_N", R.cabin.BAYS_N);
+    }
     if (r.contains("passengerLooks")) for (auto& q : r["passengerLooks"]) R.passengerLooks.push_back(q.get<std::string>());
     if (r.contains("passengers") && r["passengers"].is_array()) for (auto& carList : r["passengers"]) {
       std::vector<Transport::RailData::Pax> list;

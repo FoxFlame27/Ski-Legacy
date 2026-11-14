@@ -1530,6 +1530,10 @@ int runGame(const GameOptions& opt) {
   std::string outfitKey;
   double shakeAmt = 0, fxFlash = 0, fxHit = 0, dynScale = 1;
 
+  // (leaving: the worker jobs still queued or running (terrain nodes, tree cells) read the world, the transport's
+  // railway lines, the forest cuts ... which are declared after the terrain and so destroyed before its destructor
+  // waits for them: exit code 139 now and then. This guard is destroyed first and drains the pool)
+  struct JobDrain { JobSystem& j; ~JobDrain() { while (j.pending() > 0) std::this_thread::yield(); } } jobDrain{jobs};
   while (running) {
     platform::Events ev;
     plat->pollEvents(ev);

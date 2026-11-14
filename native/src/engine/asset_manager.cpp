@@ -172,7 +172,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       // the size cap: the model's own budget x the preset's scale for the colour maps (what the eye reads as sharp or
       // blurry); normal / roughness maps keep the model's budget. Block compression (1/8 - 1/4 of the memory) pays
       // for the larger colour maps; normal maps stay uncompressed (BC1 blocks show in the highlights)
-      int cap = std::min(srgb[i] ? opt.maxTextureSize * std::max(1, textureScale) : opt.maxTextureSize, textureCap);
+      int cap = std::min(srgb[i] ? std::max(opt.colorTextureSize, opt.maxTextureSize * std::max(1, textureScale)) : opt.maxTextureSize, textureCap);
       bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !opt.keepCpu && !isNormal[i];
       jobs.push_back(std::async(std::launch::async, [img, cap, bc]() {
         Image im;

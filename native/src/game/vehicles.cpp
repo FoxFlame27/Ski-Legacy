@@ -45,6 +45,8 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
     VehicleModel vm;
     vm.model = m; vm.fit = s.fit; vm.size = s.size;
     vm.hasPlates = s.hasPlates; vm.plates = s.plates;
+    vm.spec = &s;
+    for (const Material& bm : base->materials) vm.matTex.push_back(bm.baseTex);
     vm.lampF = vec3(s.size.x * 0.36f, 0.68f, s.size.z * 0.5f - 0.15f);
     vm.lampR = vec3(s.size.x * 0.36f, 0.85f, -s.size.z * 0.5f + 0.1f);
     splitWheels(dev, vm);

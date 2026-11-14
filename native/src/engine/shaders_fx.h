@@ -126,6 +126,7 @@ void main() {
   float c = cos(aMisc.x), s = sin(aMisc.x);
   vec2 k = mat2(c, s, -s, c) * aCorner;
   vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]), up = vec3(uView[0][1], uView[1][1], uView[2][1]);
+  if (aMisc.z > 2.5) k.y *= aMisc.w;   // (a lamp's halo: seed = its height / width)
   vec3 p = aPos.xyz + (right * k.x + up * k.y) * aPos.w;
   vUV = aCorner;
   vCol = aCol;
@@ -162,7 +163,8 @@ void main() {
     float sz0 = 2.0 * nn * ff / (ff + nn - (d0 * 2.0 - 1.0) * (ff - nn));
     float pz0 = dot(vRel, uCamFwd.xyz);
     float k = saturate((sz0 - pz0) / max(vMisc.x, 0.02) + 0.35) * vCol.a;
-    float glow = exp(-r * r * 22.0) + 0.16 * pow(1.0 - r, 2.5);
+    // (carlights.js haloTexture: a bright core falling off fast, then a long soft skirt)
+    float glow = r < 0.1 ? mix(1.0, 0.7, r / 0.1) : r < 0.28 ? mix(0.7, 0.28, (r - 0.1) / 0.18) : r < 0.55 ? mix(0.28, 0.08, (r - 0.28) / 0.27) : mix(0.08, 0.0, (r - 0.55) / 0.45);
     oColor = vec4(vCol.rgb * glow * k, 0.0);
     return;
   }
@@ -232,12 +234,14 @@ void main() {
   vec3 wp = mod(cell + drift - uCamPos.xyz + B * 0.5, B) - B * 0.5;   // camera-relative
   float d = max(dot(wp, uCamFwd.xyz), 0.0);
   float dist = length(wp);
-  float size = (0.03 + seed * 0.04) * (0.8 + 0.5 * uSnowP.x) * (1.0 + 0.7 * uSnowP.y);
+  // (sizes: mostly small flakes, a share of big wet clumps; heavy snow falls in bigger ones)
+  float big = fract(aSeed.w * 31.7);
+  float size = (0.032 + seed * 0.03 + big * big * big * 0.07) * (0.8 + 0.55 * uSnowP.x) * (1.0 + 0.7 * uSnowP.y);
   float alpha = smoothstep(0.12, 0.5, d) * (1.0 - smoothstep(B * 0.39, B * 0.5, dist));
   float pxPerM = uRes.y * 0.5 / (uCamFwd.w * max(d, 0.1));
   float px = size * pxPerM;
-  float grow = max(1.0, 1.7 / max(px, 1e-3));
-  size *= grow; alpha /= pow(grow, 1.5);   // (a little more than its share: the far layers stay readable as snowfall)
+  float grow = max(1.0, 2.4 / max(px, 1e-3));
+  size *= grow; alpha /= pow(grow, 1.0);   // (a little more than its share: the far layers stay readable as snowfall)
   size = min(size, 110.0 / pxPerM);
   float rot = t * (seed - 0.5) * 3.0 + seed * 40.0;
   float cr = cos(rot), sr = sin(rot);
@@ -269,7 +273,9 @@ void main() {
     col += lb.rgb * (win * win / (ld * ld + 1.0) * spot * 0.22);
   }
   // (against a bright overcast sky a flake is a grey speck, not a light: its own shade grows with the snowfall)
-  vCol = col * mix(0.92, 0.74, uSnowP.x * uTrueSun.w);
+  // (by day a flake is the brightest thing in the grey air: at least half again as bright as the haze behind it, so
+  // the snowfall reads against the sky, the far slopes and the trees; against sunlit snow its soft blue-grey edge does)
+  vCol = max(col * 0.95, uFogColor.rgb * 1.55 * uTrueSun.w);
   gl_Position = uViewProj * vec4(p, 1.0);
 }
 )GLSL";
@@ -293,13 +299,16 @@ void main() {
   // wobbling with its own spin; a soft disc when it is only a few pixels; an out-of-focus disc before the lens
   float ang = atan(c.y, c.x);
   float rr = lc * (1.0 + 0.16 * sin(ang * 3.0 + vP.y) + 0.09 * sin(ang * 5.0 - vP.y * 1.7));
-  float shape = 1.0 - smoothstep(0.24, 0.5, rr);
-  float disc = 1.0 - smoothstep(0.0, 0.5, lc);
+  float shape = 1.0 - smoothstep(0.14, 0.5, rr);
+  float disc = 1.0 - smoothstep(0.05, 0.5, lc);
   float a = mix(mix(shape, disc, vP.w), disc * 0.5, vP.z) * vP.x;
   if (a < 0.004) discard;
   // lit on its face, shaded toward its rim: white against dark trees, and its greyer rim still shows against
   // bright snow and an overcast sky
-  vec3 col = vCol * mix(1.1, 0.5, smoothstep(0.1, 0.48, lc) * (1.0 - vP.z));
+  // (two tones: a light core that shows against trees and the grey air, and a darker blue-grey rim that shows
+  // against sunlit snow and a bright sky: by day the snowfall reads everywhere without glowing)
+  float rim = smoothstep(0.2, 0.5, lc) * (1.0 - vP.z);
+  vec3 col = vCol * mix(vec3(1.08), vec3(0.66, 0.72, 0.84), rim);
   a *= 0.95;
   oColor = vec4(col * a, a);
 }
@@ -468,7 +477,7 @@ void main() {
   vec3 toCam = -base; toCam.y = 0.0;
   float tl = length(toCam);
   vec3 side = tl > 1e-3 ? vec3(toCam.z, 0.0, -toCam.x) / tl : vec3(1.0, 0.0, 0.0);
-  float H = aInst0.w, W = H * (aInst1.y > 0.5 ? 0.19 : 0.22);
+  float H = aInst0.w, W = H * (aInst1.y > 0.5 ? 0.24 : 0.28);   // (as wide as the 3D firs they take over from)
   vec3 p = base + side * aCorner.x * W + vec3(0.0, aCorner.y * H, 0.0);
   vUV = aCorner;
   vRel = p;
@@ -510,7 +519,8 @@ void main() {
   vec3 n = normalize(side * nx + toCam * sqrt(max(1.0 - nx * nx, 0.0)) + vec3(0.0, up, 0.0));
   // pine colours (vegetation.js pineNeedle range), snow on the tiers' tops
   vec3 alb = mix(vec3(0.012, 0.024, 0.019), vec3(0.030, 0.055, 0.044), jag) * (0.8 + 0.4 * ty);
-  float snow = smoothstep(0.6, 0.95, ty) * smoothstep(0.45, 0.75, jag + uMisc.y * 0.3) * 0.85;
+  // (as much snow on the tiers as the 3D firs carry at the hand-over distance: they read half white from afar)
+  float snow = smoothstep(0.48, 0.88, ty) * smoothstep(0.34, 0.66, jag + uMisc.y * 0.3) * 0.85;
   alb = mix(alb, vec3(0.83, 0.85, 0.88), snow);
   if (trunk > 0.5 && abs(x) < r * 0.3) alb = vec3(0.03, 0.025, 0.02);
   float sh = shadowAt(vRel, n);

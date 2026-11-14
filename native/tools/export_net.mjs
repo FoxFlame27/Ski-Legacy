@@ -75,6 +75,81 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     car_lamborghini_huracan: 1420, car_toyota_gr_yaris: 1280, car_audi_etron_gt: 2300, car_mercedes_gls: 2500 }; // (drive.js MASS)
   const DRIVE = { car_vw_golf_gti: 'fwd', car_mercedes_sls: 'rwd' }; // (drive.js DRIVE)
   const meshNames = (root) => { const s = []; root.traverse((o) => { if (o.isMesh) s.push(o.name); }); return s; };
+  // The cars' lamps (cars.js carTemplate: the model's own light meshes sorted triangle by triangle into head / drl /
+  // tail / third / brake / rev / ind / lens groups by LAMP_RULES, and where their halos go): the game's own code runs
+  // on a copy of the model whose materials carry the base colour maps' pixels (the colour-aware rules read them:
+  // texels() takes image.px), decoded here with sharp. Exported per car: the halo anchors, and each lamp part's
+  // triangles in the car's frame (positions, uvs with the map's KHR_texture_transform applied) with the tier / boost
+  // carInstance gives its material, so the C++ lights the same triangles with the same intensities (carlights.js).
+  const { carTemplate } = await imp('game/cars.js');
+  let sharp = null;
+  try { sharp = (await import('node:module')).createRequire(path.join(SRC, '../package.json'))('sharp'); } catch (e) { log('lamps: no sharp (', e.message, '): the colour-aware lamp rules see no texels'); }
+  const lampData = async (name, g, length) => {
+    const buf = fs.readFileSync(path.join(SRC, '../public/models', name + '.glb'));
+    const len = buf.readUInt32LE(12), json = JSON.parse(buf.subarray(20, 20 + len).toString('utf8')), bin = buf.subarray(20 + len + 8);
+    const texOf = new Map(); // material index -> THREE.Texture with image.px
+    const imgCache = new Map();
+    for (let i = 0; i < (json.materials || []).length; i++) {
+      const bt = json.materials[i].pbrMetallicRoughness?.baseColorTexture;
+      if (!bt || !sharp) continue;
+      const t = json.textures?.[bt.index];
+      const src = t?.extensions?.EXT_texture_webp?.source ?? t?.source;
+      const im = json.images?.[src];
+      if (!im || im.bufferView === undefined) continue;
+      if (!imgCache.has(src)) {
+        const bv = json.bufferViews[im.bufferView];
+        const bytes = bin.subarray(bv.byteOffset || 0, (bv.byteOffset || 0) + bv.byteLength);
+        try {
+          const { data, info } = await sharp(bytes).resize(1024, 1024, { fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+          imgCache.set(src, { width: info.width, height: info.height, px: { w: info.width, h: info.height, d: new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength) } });
+        } catch (e) { imgCache.set(src, null); }
+      }
+      const img = imgCache.get(src);
+      if (!img) continue;
+      const tex = new THREE.Texture();
+      tex.image = img; tex.flipY = false; tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      const tt = bt.extensions?.KHR_texture_transform;
+      if (tt) { if (tt.offset) tex.offset.fromArray(tt.offset); if (tt.scale) tex.repeat.fromArray(tt.scale); if (tt.rotation) tex.rotation = tt.rotation; }
+      tex.updateMatrix();
+      texOf.set(i, tex);
+    }
+    // a private copy of the scene: its materials cloned (the shared ones stay as the rest of the export saw them)
+    const scene = g.scene.clone(true), mats = new Map();
+    scene.traverse((o) => {
+      if (!o.isMesh) return;
+      const one = (m) => {
+        if (!m) return m;
+        if (!mats.has(m)) { const c = m.clone(); c.userData = { ...m.userData }; const idx = m.userData?.slMat?.index; if (idx !== undefined && texOf.has(idx)) c.map = texOf.get(idx); mats.set(m, c); }
+        return mats.get(m);
+      };
+      o.material = Array.isArray(o.material) ? o.material.map(one) : one(o.material);
+    });
+    const t = carTemplate({ scene }, length, name);
+    const L = t?.lamps;
+    if (!L) return null;
+    const v3 = (v) => [r4(v.x), r4(v.y), r4(v.z)];
+    const halo = {};
+    for (const [kind, list] of Object.entries(L.halo || {})) halo[kind] = list.map((a) => ({ c: v3(a.c), size: v3(a.size) }));
+    const parts = [];
+    for (const p of L.parts || []) {
+      const src = p.material, orig = src.userData?.emOrig, nm = src.name || '';
+      const core = p.core || !!orig || /drl|led|glow|emiss|signature/i.test(nm);
+      const map = src.userData?.flat ? null : orig?.map || src.map || null;
+      const tier = core ? 'core' : map ? 'tex' : 'plain';
+      const boost = (src.transparent ? 1 / Math.max(0.12, src.opacity ?? 1) : 1) * (p.glow ?? 1);
+      const P = p.geometry.attributes.position, U = p.geometry.attributes.uv, I = p.geometry.index;
+      if (!P || !I) continue;
+      const pos = new Float32Array(P.count * 3), uv = new Float32Array(P.count * 2);
+      const uvw = new THREE.Vector2();
+      for (let i = 0; i < P.count; i++) {
+        pos[i * 3] = P.getX(i); pos[i * 3 + 1] = P.getY(i); pos[i * 3 + 2] = P.getZ(i);
+        if (U) { uvw.set(U.getX(i), U.getY(i)); if (map?.matrix) uvw.applyMatrix3(map.matrix); uv[i * 2] = uvw.x; uv[i * 2 + 1] = uvw.y; }
+      }
+      parts.push({ kind: p.kind, tier, boost: r4(boost), alpha: r4(src.transparent ? Math.min(1, src.opacity ?? 1) : 1), mat: src.userData?.slMat?.index ?? -1, map: !!map, P: { off: pack.blob(pos), n: pos.length }, U: { off: pack.blob(uv), n: uv.length },
+        I: { off: pack.blob(Uint32Array.from(I.array)), n: I.count } });
+    }
+    return { halfL: r4(L.halfL), halo, parts };
+  };
   out.cars = [];
   for (const [name, length] of CAR_MODELS) {
     const g = models[name] || await loadGLB(name);
@@ -97,6 +172,10 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     out.cars.push({ name, label: spec.label || name, accel: spec.accel ?? 5, top: spec.top ?? 55, electric: !!spec.electric, rev: spec.rev ?? 1, mass: MASS[name] ?? 1700,
       drive: DRIVE[name] || 'awd', length, size: [r4(size.x), r4(size.y), r4(size.z)], real: REAL[name] || null, fit: m.matrix.toArray().map(r4), hide, glass,
       price: rent?.price ?? 0, kind: rent?.kind || '', plates });
+    try {
+      const lamps = await lampData(name, g, length);
+      if (lamps) { out.cars[out.cars.length - 1].lamps = lamps; log('lamps', name, lamps.parts.map((q) => `${q.kind}/${q.tier}:${q.I.n / 3}`).join(' '), '| halos', Object.entries(lamps.halo).map(([k, v]) => `${k}x${v.length}`).join(' ')); }
+    } catch (e) { log('lamps', name, 'failed:', e.message); }
   }
   if (skibus?.line?.bus?.shell) {
     const B = await imp('game/bus/bus.js'), sh = skibus.line.bus.shell, m = sh.children[0];

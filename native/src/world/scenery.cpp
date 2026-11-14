@@ -361,14 +361,20 @@ void Scenery::rebuildInstances(const dvec3& cam) {
   lastBuild_ = cam;
   dirty_ = false;
   std::vector<InstanceBatch::Inst> lists[2][3];
-  const double r0 = vs_.nearR * vs_.nearR, r1 = vs_.midR * vs_.midR, r2 = vs_.farR * vs_.farR;
+  // (the LODs hand over in dithered bands, shaders.h vLodFade: a tree within a band is in both lists, each with the
+  // distances it fades in / out at; SLACK covers the camera's travel until the lists are rebuilt)
+  const double r2 = vs_.farR * vs_.farR, SLACK = 12;
+  const double n0 = vs_.nearR, n1 = vs_.midR, nf = vs_.farR * 0.86;
+  auto band = [](double r) { return std::max(r * 0.16, 4.0); };
   drawn_ = 0;
   for (auto& [k, c] : cells_)
     for (const Tree& t : c.trees) {
       double dx = t.x - cam.x, dz = t.z - cam.z, d2 = dx * dx + dz * dz;
       if (d2 > r2) continue;
-      int lod = d2 < r0 ? 0 : d2 < r1 ? 1 : 2;
-      lists[t.type][lod].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, 0, 0)});
+      double dy = t.y - cam.y, d = std::sqrt(d2 + dy * dy);
+      if (d < n0 + band(n0) + SLACK) lists[t.type][0].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, 0, float(n0))});
+      if (d > n0 - SLACK && d < n1 + band(n1) + SLACK) lists[t.type][1].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n0), float(n1))});
+      if (d > n1 - SLACK) lists[t.type][2].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n1), float(nf))});
       drawn_++;
     }
   for (int t = 0; t < 2; t++)

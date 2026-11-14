@@ -410,7 +410,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     if (!stampQuad_) { stampQuad_ = dev.createBuffer(gfx::BufferUsage::Vertex, q, sizeof q); stampIdx_ = dev.createBuffer(gfx::BufferUsage::Index, ix, sizeof ix); }
     partVbo_ = dev.createBuffer(gfx::BufferUsage::Vertex, nullptr, 48 * 4096, true);
     if (snow_) {   // the flakes' seeds (quality.js flakes: 2500 .. 26000 by preset)
-      snowN_ = set_.lowShaders ? 5000 : set_.fx >= 2 ? 26000 : set_.fx >= 1 ? 18000 : 12000;
+      snowN_ = set_.lowShaders ? 6000 : set_.fx >= 2 ? 60000 : set_.fx >= 1 ? 42000 : 18000;
       std::vector<float> seeds(size_t(snowN_) * 4);
       uint32_t st = 0x2545F491u;
       auto rnd = [&]() { st ^= st << 13; st ^= st >> 17; st ^= st << 5; return float(st & 0xffffff) / float(0x1000000); };
@@ -955,6 +955,8 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   // shading kind: pine (vegetation.js), Meshy detail (meshylook.js), glass
   int kind = 0;
   if (pine || m.shading == 1) kind = 1;
+  else if (m.shading == 5) kind = 5;   // (a lamp's emission only: game/scenefx)
+  else if (m.shading == 6) kind = 6;   // (the gondola cabin: its painted windows are glass)
   else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
   else if (m.alpha == Material::Alpha::Blend && m.roughness < 0.6f) kind = 3;
   else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && m.paint == 0 &&
@@ -1383,9 +1385,11 @@ void Renderer::endFrame() {
     for (const Item* it : blend_) {
       // (fans.js contact shades: the snow under the crowd people multiplied toward a sky-lit blue, offset toward the camera)
       const bool shade = it->mat && it->mat->fanBase.w < -0.5f;
-      ps.blend = shade ? gfx::Blend::Multiply : gfx::Blend::Alpha;
-      ps.depthBiasFactor = shade ? -2.f : 0.f;
-      ps.depthBiasUnits = shade ? -4.f : 0.f;
+      const bool add = it->mat && it->mat->additive;
+      ps.blend = shade ? gfx::Blend::Multiply : add ? gfx::Blend::Additive : gfx::Blend::Alpha;
+      ps.depth = add ? gfx::DepthTest::LessEqual : gfx::DepthTest::Less;
+      ps.depthBiasFactor = shade ? -2.f : add ? -1.f : 0.f;
+      ps.depthBiasUnits = shade ? -4.f : add ? -3.f : 0.f;
       drawItem(*it, false, ps, cur);
     }
   }

@@ -907,6 +907,8 @@ void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, b
             glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
       c.lights = !d_.crash && (d_.lights || night);
       c.brake = !d_.crash && d_.brkP > 0.1;
+      c.live = !d_.crash;
+      c.reverse = !d_.crash && d_.gear == 'R';
     } else {
       if (std::hypot(e.x - cam.x, e.z - cam.z) > maxD) continue;
       c.M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));

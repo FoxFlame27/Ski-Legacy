@@ -50,6 +50,8 @@ struct VehicleModel {
   std::vector<Wheel> wheels;
   bool split() const { return body && wheels.size() == 4; }
   vec3 lampF{0.7f, 0.68f, 2.3f}, lampR{0.68f, 0.85f, -2.3f};   // a headlamp / tail lamp (right side; mirrored in x)
+  const CarSpec* spec = nullptr;          // (the exported lamps: world/transport)
+  std::vector<gfx::Texture> matTex;       // the GLB materials' base colour maps (the lamps glow through them)
 };
 
 /// (Phase 7) car paint colours (carconfig.js PAINTS, linear) by id, and a traffic / parked car's by its index

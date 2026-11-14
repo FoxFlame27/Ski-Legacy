@@ -305,7 +305,8 @@ layout(location = 8) in float aFanMask;   // (fans.js crowd people) the jacket r
 #endif
 #ifdef INSTANCED
 layout(location = 5) in vec4 aInst0;   // xyz world position, w uniform scale
-layout(location = 6) in vec4 aInst1;   // x yaw, y roll (about the local z axis), zw unused
+layout(location = 6) in vec4 aInst1;   // x yaw, y roll (about the local z axis), z / w: the distances (m) at which this LOD
+                                       // dithers in / out (0: no fade); the band is 16 % of the distance
 #endif
 #ifdef INSTMAT
 layout(location = 9) in vec4 aRow0;    // rows of a 3x4 world matrix (translation relative to uInstOrigin)
@@ -328,7 +329,9 @@ out vec3 vObjN;
 out float vScale;                      // world metres per model unit (detail layer)
 out vec3 vOX, vOY, vOZ;                // model axes in world space (detail layer)
 out float vRkHG;                       // (rocks, shading 4) height over the terrain plane under the instance
+out vec2 vLodFade;                     // the LOD cross-fade: a pixel is kept while its dither is < x and >= y
 void main() {
+  vLodFade = vec2(1.0, 0.0);
   vec4 p = vec4(aPos, 1.0);
   vTint = vec4(0.0);
   vRkHG = 10.0;
@@ -375,6 +378,13 @@ void main() {
     n.xy = vec2(cr * n.x - sr * n.y, sr * n.x + cr * n.y);
   }
   float c = cos(aInst1.x), s = sin(aInst1.x);
+  {
+    // the dithered hand-over between two LODs (vegetation.js's fade bands): the outgoing one keeps the pixels the
+    // incoming one drops, by the same dither, so nothing pops and nothing is drawn twice
+    float dI = length(aInst0.xyz - uCamPos.xyz);
+    if (aInst1.z > 0.0) vLodFade.x = clamp((dI - aInst1.z) / max(aInst1.z * 0.16, 4.0), 0.0, 1.0);
+    if (aInst1.w > 0.0) vLodFade.y = clamp((dI - aInst1.w) / max(aInst1.w * 0.16, 4.0), 0.0, 1.0);
+  }
   p.xyz = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z) * aInst0.w + (aInst0.xyz - uCamPos.xyz);
   n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
   vScale *= aInst0.w;
@@ -412,6 +422,7 @@ in vec3 vObjN;
 in float vScale;
 in vec3 vOX, vOY, vOZ;
 in float vRkHG;
+in vec2 vLodFade;
 out vec4 oColor;
 uniform sampler2D uBase;
 uniform sampler2D uMR;
@@ -464,6 +475,18 @@ void main() {
     oColor = vec4(mix(vec3(1.0), uFanBase.xyz, a), 1.0);
     return;
   }
+  if (vLodFade.x < 1.0 || vLodFade.y > 0.0) {
+    float ld = ign(gl_FragCoord.xy);
+    if (ld >= vLodFade.x || ld < vLodFade.y) discard;
+  }
+  if (uFlags3.y > 4.5 && uFlags3.y < 5.5) {
+    // a lamp's lit graphics (carlights.js lampsOn: the material's emissive x its map): only the emission, added
+    vec3 e = vTint.a > 0.0 ? vTint.rgb : uEmissive;
+    if (uFlags2.y > 0.5) e *= texture(uEmissiveMap, vUV).rgb;
+    float fogT = 1.0 - saturate(1.0 - exp(-uFogParams.x * exp(-max(uCamPos.y, 0.0) * uFogParams.y) * length(vRel)));
+    oColor = vec4(e * fogT, 1.0);
+    return;
+  }
   vec4 base = uBaseColor;
   if (vTint.a > 0.0 && uFlags3.x > 0.5 && uFlags3.x < 1.5) base.rgb = vTint.rgb;
   vec3 texel = vec3(1.0);
@@ -501,6 +524,17 @@ void main() {
   }
   float metallic = uMat.x, rough = uMat.y;
   if (uFlags.y > 0.5) { vec4 mr = texture(uMR, vUV); rough *= mr.g; metallic *= mr.b; }
+  // (shading 6: the gondola cabin, whose windows become tinted, reflecting glass)
+  float pane = 0.0;
+  if (uFlags3.y > 5.5) {
+    // (the cabin's windows are painted into its colour map — pale lilac panes with the seats behind them — on the
+    // upright sides between the sills and the roof: the texels that are not the red paint there are glass)
+    float redSat = texel.r - max(texel.g, texel.b);
+    pane = (1.0 - smoothstep(0.1, 0.28, redSat)) * smoothstep(0.06, 0.18, max(texel.r, max(texel.g, texel.b)))
+         * smoothstep(-0.4, -0.31, vObj.y) * (1.0 - smoothstep(0.3, 0.39, vObj.y)) * (1.0 - smoothstep(0.45, 0.7, abs(normalize(vNormal).y)));
+    base.rgb = mix(base.rgb, base.rgb * 0.42, pane);   // tinted glass: what is behind it shows dimly
+    rough = mix(rough, 0.06, pane); metallic = mix(metallic, 0.0, pane);
+  }
   vec3 gn = normalize(vNormal);
   vec3 v = normalize(-vRel);
   float dist = length(vRel);
@@ -612,6 +646,19 @@ void main() {
     col += L.sunE * pow(saturate(dot(reflect(-uSunDir.xyz, n), v)), 60.0) * step(0.93, fl) * 0.6 * metallic * (1.0 - smoothstep(4.0, 15.0, dist));
   }
 #endif
+  if (pane > 0.0) {
+    // the panes mirror the landscape as glass does (the JS's panes mirror its bright environment): the sky's
+    // gradient above, a band of snowy ridges along the horizon, the sunlit snowfield below; stronger at a glance
+    float nvp = saturate(dot(n, v));
+    float Fp = 0.3 + 0.7 * pow(1.0 - nvp, 3.0);
+    vec3 rp = reflect(-v, n);
+    vec3 skyR = envRadiance(vec3(rp.x, abs(rp.y), rp.z), 0.03) * 1.5 + uFogColor.rgb * (exp(-abs(rp.y) * 5.0) * 0.7 * uHemiSky.w);
+    float ridge = 0.05 + 0.16 * texture(uNoise, vec2(atan(rp.z, rp.x) * 0.35, 0.37)).r;
+    vec3 snowR = uEnvGround.rgb * uHemiSky.w;
+    vec3 land = mix(snowR * 0.55, snowR, smoothstep(0.0, -0.25, rp.y));
+    vec3 refl = mix(skyR, land, smoothstep(ridge + 0.015, ridge - 0.015, rp.y));
+    col = mix(col, col * (1.0 - Fp) + refl * Fp * saturate(1.0 + 1.5 * dot(rp, gn)), pane);
+  }
   if (kind == 3) {
     // glass: the sky's reflection with Fresnel, the panes' own tint kept
     float nv = saturate(dot(n, v));

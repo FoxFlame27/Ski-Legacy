@@ -153,6 +153,9 @@ bool Lifts::load(gfx::Device& dev, AssetManager& assets, const nlohmann::json& J
   for (K k : {K{&cabin_, "gondola_cabin", cabH, nCab}, K{&chair_, "chairlift_chair", chairH, nChair}}) {
     k.k->model = assets.model(k.model, o);
     if (!k.k->model) continue;
+    // (the cabin's windows, painted flat lilac into its colour map, become tinted glass that mirrors the sky, the
+    // ridges and the snow: shaders.h shading 6)
+    if (k.k == &cabin_) for (Material& m : k.k->model->materials) m.shading = 6;
     // fitted to carH tall, hung from the top of its grip (lifts.js translate(0, -carH, 0))
     k.k->fit = glm::translate(mat4(1), vec3(0, -float(k.carH), 0)) * k.k->model->fitTransform(float(k.carH), 1);
     for (auto& b : k.k->lod) b.init(dev, *k.k->model, uint32_t(std::max<size_t>(1, k.n)));
@@ -185,10 +188,14 @@ void Lifts::submit(Renderer& r, const dvec3& viewer) {
       if (d2 > 3000.0 * 3000.0) continue;
       dvec3 ext(4);
       if (!r.visible(p - ext - dvec3(0, l.cfg.carH, 0), p + ext) && d2 > CAR_HI * CAR_HI) continue;
-      int lod = d2 < CAR_HI * CAR_HI ? 0 : d2 < CAR_MID * CAR_MID ? 1 : 2;
       float yaw = float(l.yaw + (l.side[i] > 0 ? 0 : PI));
       float roll = float(std::sin(l.s[i] * 0.15 + double(i)) * 0.025 * (l.inStation(l.s[i]) ? 0.2 : 1));
-      lists[kind][lod].push_back({vec4(float(p.x), float(p.y), float(p.z), 1.f), vec4(yaw, roll, 0, 0)});
+      // (the LODs hand over in dithered bands, shaders.h vLodFade: a car within a band is drawn by both)
+      const double d = std::sqrt(d2), b0 = std::max(CAR_HI * 0.16, 4.0), b1 = std::max(CAR_MID * 0.16, 4.0);
+      const vec4 ps(float(p.x), float(p.y), float(p.z), 1.f);
+      if (d < CAR_HI + b0) lists[kind][0].push_back({ps, vec4(yaw, roll, 0, float(CAR_HI))});
+      if (d >= CAR_HI && d < CAR_MID + b1) lists[kind][1].push_back({ps, vec4(yaw, roll, float(CAR_HI), float(CAR_MID))});
+      if (d >= CAR_MID) lists[kind][2].push_back({ps, vec4(yaw, roll, float(CAR_MID), 0)});
     }
   }
   CarKind* kinds[2] = {&cabin_, &chair_};

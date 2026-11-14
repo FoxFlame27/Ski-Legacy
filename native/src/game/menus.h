@@ -113,6 +113,8 @@ public:
   bool focusLabel(const std::string& label);
   /// (autotest / tests) the settings row index of a key
   float u() const { return u_; }
+  /// (autotest) where the open list is scrolled to (px)
+  float scrollTarget() const { return scrollTarget_; }
   std::string loading;              // "Loading the mountain..." while the world builds (main menu spinner)
 
 private:
@@ -161,6 +163,11 @@ private:
   int focus_ = 0, focusPrev_ = -1;
   std::vector<int> focusStack_;
   float u_ = 1, scroll_ = 0, scrollTarget_ = 0, listTop_ = 0, listH_ = 0, contentH_ = 0;
+  float listRight_ = 0;                 // the scroll box's right edge (the scrollbar runs down it)
+  bool focusScroll_ = true;             // the focus moved by keys / buttons: scroll it into view (not on a hover or the wheel)
+  bool thumbDrag_ = false;              // the scrollbar thumb held
+  float thumbGrabY_ = 0, thumbGrabScroll_ = 0;
+  void drawScrollbar();
   double t_ = 0, enterT_ = 0;
   int dir_ = 1;
   Dialog dialog_;

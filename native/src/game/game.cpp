@@ -111,41 +111,56 @@ int verifyHeights(platform::Platform& p, const AssetPaths& paths, World& world) 
   if (nReg) SL_INFO("  in the regions (8 m grid): height max %.3f m, mean %.3f m; meshHeight max %.3f m; forest max %.3f", eReg[0], sumReg / nReg, eReg[1], eReg[2]);
   bool ok = e[0] < 0.05 && e[3] < 0.25;
   // the rocks (vegetation.js genCell, ported in world/scenery.cpp): the reference cells' rocks placed again here and
-  // matched one by one (same grid point position, model, collision size; the top within 5 cm)
+  // matched one by one: the same grid point (an elongated rock's extra colliders within 30 cm: their side follows the
+  // slope's contour), model and collision size. Their tops follow the terrain, so they differ as `height` does: checked
+  // to 0.3 m outside the courses' regions, only reported inside them: there the C++ terrain is the exported 8 m grid
+  // (metres off the JS in places), so slope bands and ridges decide differently. The decisions that read the terrain
+  // can flip for a rock right at a threshold: outside the regions 97 % must match.
   std::vector<uint8_t> rb;
   if (paths.readData(p, "rocks_ref.json", rb)) {
     auto rj = nlohmann::json::parse(rb.begin(), rb.end(), nullptr, false);
-    size_t nJs = 0, nCpp = 0, matched = 0;
-    double eTop = 0, eSize = 0;
+    size_t nJs = 0, nCpp = 0, matched = 0, nTop = 0, topOk = 0, nOut = 0, matchedOut = 0, nCppOut = 0;
+    double eTop = 0, eTopReg = 0;
+    int shown = 0;
     std::vector<Rock> mine;
     if (!rj.is_discarded())
       for (auto& c : rj["cells"]) {
         Scenery::cellRocks(world, nullptr, c[0].get<int64_t>(), c[1].get<int64_t>(), mine);
         nCpp += mine.size();
+        for (const Rock& k : mine) if (!world.inRegion(k.x, k.z)) nCppOut++;
         std::vector<bool> used(mine.size(), false);
         for (auto& r : c[2]) {
           nJs++;
           double x = r[0], z = r[1], s = r[3], top = r[4];
           int v = r[2];
+          const double tol = v < 0 ? 0.3 : 1e-3;
+          const bool reg = world.inRegion(x, z);
+          if (!reg) nOut++;
+          bool found = false;
           for (size_t i = 0; i < mine.size(); i++) {
             const Rock& k = mine[i];
-            if (used[i] || k.v != v || std::fabs(k.x - x) > 1e-3 || std::fabs(k.z - z) > 1e-3) continue;
-            used[i] = true;
-            eTop = std::max(eTop, std::fabs(double(k.y) + 0.75 * k.s - top));
-            eSize = std::max(eSize, std::fabs(double(k.s) - s));
-            if (std::fabs(double(k.s) - s) < 1e-3 && std::fabs(double(k.y) + 0.75 * k.s - top) < 0.05) matched++;
+            if (used[i] || k.v != v || std::fabs(k.x - x) > tol || std::fabs(k.z - z) > tol || std::fabs(double(k.s) - s) > 1e-3) continue;
+            used[i] = found = true;
+            matched++;
+            if (!reg) matchedOut++;
+            double dt = std::fabs(double(k.y) + 0.75 * k.s - top);
+            if (reg) eTopReg = std::max(eTopReg, dt);
+            else { nTop++; eTop = std::max(eTop, dt); if (dt < 0.3) topOk++; }
             break;
           }
+          if (!found && !reg && shown++ < 8) SL_INFO("    rock (%.2f, %.2f) model %d size %.2f: not placed by the C++", x, z, v, s);
         }
+        for (size_t i = 0; i < mine.size(); i++)
+          if (!used[i] && !world.inRegion(mine[i].x, mine[i].z) && shown++ < 8) SL_INFO("    rock (%.2f, %.2f) model %d size %.2f: only in the C++", mine[i].x, mine[i].z, int(mine[i].v), double(mine[i].s));
       }
-    double share = nJs ? double(matched) / double(nJs) : 0;
-    SL_INFO("  rocks: %zu reference cells, %zu JS rocks, %zu C++ rocks, %zu matched (%.1f %%); max |top| %.4f m, max |size| %.4f",
-            rj.is_discarded() ? size_t(0) : rj["cells"].size(), nJs, nCpp, matched, share * 100, eTop, eSize);
-    // (the Meshy rocks are a work in progress: their match is reported but only fails the check with
-    // SL_STRICT_ROCKS=1 until the port is done)
-    bool rocksOk = nJs > 0 && share > 0.97 && nCpp <= nJs + nJs / 20;
-    if (!rocksOk) SL_WARN("  rocks: not matching the JS yet (work in progress)");
-    if (const char* e = std::getenv("SL_STRICT_ROCKS"); e && *e == '1') ok = ok && rocksOk;
+    double share = nOut ? double(matchedOut) / double(nOut) : 0, topShare = nTop ? double(topOk) / double(nTop) : 0;
+    SL_INFO("  rocks: %zu reference cells, %zu JS rocks, %zu C++ rocks, %zu matched (%.1f %%)", rj.is_discarded() ? size_t(0) : rj["cells"].size(),
+            nJs, nCpp, matched, nJs ? 100.0 * double(matched) / double(nJs) : 0.0);
+    SL_INFO("  rocks outside the courses' regions: %zu JS, %zu C++, %zu matched (%.1f %%), top within 0.3 m %zu / %zu (max %.3f m); in the regions (8 m grid) top max %.3f m",
+            nOut, nCppOut, matchedOut, share * 100, topOk, nTop, eTop, eTopReg);
+    bool rocksOk = nOut > 0 && share >= 0.97 && nCppOut <= nOut + nOut / 30 && topShare >= 0.97;
+    if (!rocksOk) SL_WARN("  rocks: the C++ placement does not match the JS");
+    ok = ok && rocksOk;
   } else SL_INFO("  rocks: no data/rocks_ref.json (node native/tools/export_rocks.mjs): not compared");
   SL_INFO("verify-heights: %s", ok ? "PASS" : "FAIL");
   return ok ? 0 : 1;
@@ -267,12 +282,13 @@ int runGame(const GameOptions& opt) {
     dev->bindRenderTarget({}, dw, dh);
     dev->clear(0.016f, 0.055f, 0.133f, 1, true, true);
     ui.begin(dw, dh);
-    float u = std::clamp(std::min(float(dh) / 800.f, float(dw) / 1280.f), 0.55f, 2.2f);
+    // (menu.js scrMain before the world is ready: the big SKI LEGACY logo, white, and the loading line)
+    float u = ui.cssU();
     ui.rectGradient(0, 0, float(dw), float(dh), vec4(0.06f, 0.16f, 0.42f, 1), vec4(0.016f, 0.055f, 0.133f, 1), false);
-    ui.brushStroke(90 * u, 56 * u, 480 * u, 120 * u, vec4(1), 77);
-    ui.text(116 * u, 64 * u, 34 * u, UiFont::CondHeavy, ui_color::red, "SKI");
-    ui.text(114 * u, 86 * u, 84 * u, UiFont::CondHeavy, ui_color::blue, "LEGACY");
-    ui.text(110 * u, 320 * u, 17 * u, UiFont::Body, vec4(1), what);
+    ui.textLH(72 * u, 50 * u, 42 * u * 0.85f, 42 * u, UiFont::CondBold, vec4(1), "SKI", UiAlign::Left, 0.5f);
+    ui.textLH(72 * u, 50 * u + 42 * u * 0.85f, 104 * u * 0.85f, 104 * u, UiFont::CondBold, vec4(1), "LEGACY", UiAlign::Left, 0.03f);
+    ui.textLH(72 * u + 44 * u, 266 * u, 30 * u, std::max(13 * ui.dpr(), 15 * u), UiFont::BodyMed, ui_color::a(vec4(1), 0.9f), what, UiAlign::Left, 0.06f);
+    ui.ring(72 * u + 15 * u, 266 * u + 15 * u, 13.5f * u, 3 * ui.dpr(), ui_color::a(vec4(1), 0.25f));
     ui.end();
     plat->swapBuffers();
   };
@@ -1443,7 +1459,7 @@ int runGame(const GameOptions& opt) {
           break;
         case 3:
           input.inject(Action::Pause, f == 2);
-          if (f == 4) { expect(menus.screen() == Menus::Screen::Pause && paused, "Esc / Menu -> the pause menu"); }
+          if (f == 4) { expect(menus.screen() == Menus::Screen::Pause && paused, "Esc / Menu -> the pause menu"); if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "pause"); }
           if (f == 5 || f == 6 || f == 7) nav.down = true;   // RESUME -> CONTROLS -> STATS -> SETTINGS
           if (f == 9) { expect(menus.focusedLabel() == "SETTINGS", "SETTINGS focused"); nav.confirm = true; }
           if (f == 11) { expect(menus.screen() == Menus::Screen::Settings, "SETTINGS opens"); next(); }
@@ -1458,9 +1474,17 @@ int runGame(const GameOptions& opt) {
             SL_INFO("[autotest] settings: HUD size %.0f%% -> %.0f%% (right on the focused row) -> %s", before * 100, after * 100, settingOk ? "ok" : "FAILED");
             if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "settings");
           }
-          if (f == 7) nav.cancel = true;     // back to the pause menu
-          if (f == 9) { expect(menus.screen() == Menus::Screen::Pause, "back -> the pause menu"); nav.cancel = true; }   // resume
-          if (f == 11) { expect(!menus.isOpen() && !paused, "back again -> resumed"); next(); }
+          // the list scrolls with the wheel / trackpad (a real SDL wheel event) and stays there (the focus does not pull it back)
+          static float scrolled = 0;
+          if (f == 7) { scrolled = menus.scrollTarget(); if (!plat->pushWheel(3)) SL_INFO("[autotest] settings: no wheel events here"); }
+          if (f == 10) {
+            bool wheelOk = menus.scrollTarget() < scrolled - 1;
+            SL_INFO("[autotest] settings: wheel up scrolls the list %.0f -> %.0f px -> %s", scrolled, menus.scrollTarget(), wheelOk ? "ok" : "FAILED");
+            expect(wheelOk, "the wheel scrolls the settings list");
+          }
+          if (f == 12) nav.cancel = true;     // back to the pause menu
+          if (f == 14) { expect(menus.screen() == Menus::Screen::Pause, "back -> the pause menu"); nav.cancel = true; }   // resume
+          if (f == 16) { expect(!menus.isOpen() && !paused, "back again -> resumed"); next(); }
           break;
         }
         case 5: {
@@ -2653,6 +2677,10 @@ int runGame(const GameOptions& opt) {
     {
       // the equipped skis' speed / grip into the physics (player.js this.ski)
       if (const SkiDef* sk = skiById(save.skis)) { player.skiSpeed = sk->speed; player.skiGrip = sk->grip; } else player.skiSpeed = player.skiGrip = 1;
+      // (main.js: player.hasSkis = !!save.skis: a new save has no skis, so none on your back and none to put on; the
+      // player started with hasSkis = true in single player)
+      player.hasSkis = !save.skis.empty();
+      if (!player.hasSkis && player.skisOn) player.setSkisOn(false);
       // the outfit on the skier (re-applied when it or the character changes)
       if (frame % 15 == 0 && rig.loaded()) {
         nlohmann::json eq = save.outfits.equipped.is_object() && save.outfits.equipped.contains(save.character) ? save.outfits.equipped[save.character] : nlohmann::json();
@@ -2668,10 +2696,6 @@ int runGame(const GameOptions& opt) {
           auto id = [&](const char* slot) { return eq.is_object() && eq.contains(slot) && eq[slot].is_string() ? eq[slot].get<std::string>() : std::string(); };
           (void)col;
           rig.applyOutfitIds(*dev, id("jacket"), id("trousers"), id("helmet"), id("lens"));
-      // (main.js: player.hasSkis = !!save.skis: a new save has no skis, so none on your back and none to put on; the
-      // player started with hasSkis = true in single player)
-      player.hasSkis = !save.skis.empty();
-      if (!player.hasSkis && player.skisOn) player.setSkisOn(false);
           if (opt.autotest) SL_INFO("[autotest] outfit applied: %s -> %s", eq.dump().c_str(), rig.dressed() ? "recoloured" : "original");
         }
       }
@@ -2832,9 +2856,12 @@ int runGame(const GameOptions& opt) {
     if (const char* shot = std::getenv("SKI_LEGACY_SHOT"); shot && at == AT::Ski) {   // (debug: a fixed camera "x,y,z,tx,ty,tz")
       double v[6] = {0};
       if (std::sscanf(shot, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {
+        if (std::getenv("SKI_LEGACY_SHOT_GROUND")) { v[1] += world.height(v[0], v[2]); v[4] += world.height(v[3], v[5]); }   // (heights above the ground)
         cam.lookAt(dvec3(v[0], v[1], v[2]), dvec3(v[3], v[4], v[5]));
         cam.fovY = 60;
         terrain.update(cam.pos);
+        static bool shotReady = false;   // (the trees and rocks round the fixed camera, all in before its first frame)
+        if (!shotReady) { shotReady = true; scenery.finish(cam.pos); }
         scenery.update(cam.pos);
         resort.update(0, cam.pos);
       }
@@ -2846,19 +2873,25 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !tmap.isOpen() && !menus.isOpen()) {
+    if (started && !tmap.isOpen() && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal)
       HudFrame hf;
-      hf.speed = rideKind == Ride::Car ? drive.speed() : rideKind == Ride::Bus ? buses.rideSpeed() : rideKind == Ride::Rail ? railway.ride().speed : rideKind == Ride::Express ? express.ride().speed : player.speed();
-      hf.speedo = player.mode != PlayerMode::Sit || rideKind == Ride::Car || rideKind == Ride::Sled;
-      if (rideKind == Ride::Sled) hf.speed = sleds.speed();
+      // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
+      // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
+      hf.speed = rideKind == Ride::Car ? drive.speed() : rideKind == Ride::Bus ? buses.rideSpeed() : rideKind == Ride::Rail ? railway.ride().speed
+               : rideKind == Ride::Express ? express.ride().speed : rideKind == Ride::Sled ? sleds.speed()
+               : player.mode == PlayerMode::Walk || rooms.inside() ? 0.0 : player.speed();
+      hf.speedo = player.mode != PlayerMode::Sit || rideKind == Ride::Car || rideKind == Ride::Sled || rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express;
       hf.hour = hour;
       hf.fps = float(fps);
       hf.prompt = menus.isOpen() ? std::string() : prompt;
       hf.promptKey = prompts::K(input, Action::Interact);
-      hf.rideHint = rideLine;
+      hf.rideHint = rideKind == Ride::Car || rideKind == Ride::Sled ? std::string() : rideLine;
       if (rideKind == Ride::Car) hf.skiName = drive.label();
       else if (rideKind == Ride::Sled) hf.skiName = "Snowmobile";
-      else if (const SkiDef* sk = skiById(save.skis)) hf.skiName = sk->name;
+      else if (rideKind == Ride::Rail) hf.skiName = "Wolkenspitzbahn";
+      else if (rideKind == Ride::Express) hf.skiName = "Legacy Express";
+      else if (rideKind == Ride::Bus) hf.skiName = "Ski bus";
+      else if (const SkiDef* sk = player.hasSkis ? skiById(save.skis) : nullptr) hf.skiName = player.skisOn ? sk->name : sk->name + std::string(" (off)");
       // where you are (trailmap.js locationName, condensed): riding, the village, the nearest run, the backcountry
       if (rideKind == Ride::None && player.mode == PlayerMode::Sit && lifts.rideLine()) hf.location = lifts.rideLine()->name;
       else if (std::hypot(player.pos.x, player.pos.z + 20) < 260) hf.location = "Legacy Village";

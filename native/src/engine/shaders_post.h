@@ -213,9 +213,27 @@ vec3 neutral(vec3 c) {
 }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 float hash1(float n) { return fract(sin(n * 91.3458) * 47453.5453); }
+uniform float uUpscale;   // 1: the 3D was drawn below the output size (render scale / dynamic resolution)
+// (native) the upscale of a reduced 3D resolution: Catmull-Rom (5 bilinear taps) instead of a plain bilinear
+// stretch, its ringing clamped to the 2x2 texels round the sample (EASU-style): edges and texture detail stay crisp
+vec3 upsampleCR(vec2 uv) {
+  vec2 sz = vec2(textureSize(uHdr, 0));
+  vec2 p = uv * sz, tc = floor(p - 0.5) + 0.5, f = p - tc;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);
+  vec2 w12 = w1 + w2, t0 = (tc - 1.0) / sz, t3 = (tc + 2.0) / sz, t12 = (tc + w2 / w12) / sz;
+  vec3 r = texture(uHdr, vec2(t12.x, t0.y)).rgb * (w12.x * w0.y) + texture(uHdr, vec2(t0.x, t12.y)).rgb * (w0.x * w12.y)
+         + texture(uHdr, t12).rgb * (w12.x * w12.y) + texture(uHdr, vec2(t3.x, t12.y)).rgb * (w3.x * w12.y)
+         + texture(uHdr, vec2(t12.x, t3.y)).rgb * (w12.x * w3.y);
+  r /= w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+  ivec2 ip = clamp(ivec2(tc - 0.5), ivec2(0), ivec2(sz) - 2);
+  vec3 a = texelFetch(uHdr, ip, 0).rgb, b = texelFetch(uHdr, ip + ivec2(1, 0), 0).rgb;
+  vec3 d = texelFetch(uHdr, ip + ivec2(0, 1), 0).rgb, e = texelFetch(uHdr, ip + ivec2(1, 1), 0).rgb;
+  return clamp(r, min(min(a, b), min(d, e)), max(max(a, b), max(d, e)));
+}
 void main() {
   vec2 uv = vNdc * 0.5 + 0.5;
-  vec3 c = texture(uHdr, uv).rgb;
+  vec3 c = uUpscale > 0.5 ? upsampleCR(uv) : texture(uHdr, uv).rgb;
   if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
   c = min(c, vec3(64.0));
   if (uPost.z > 0.001) {
@@ -347,7 +365,7 @@ vec3 fxaa(vec2 uv) {
   bool goodSpan = directionN ? goodSpanN : goodSpanP;
   float subpixG = subpixF * subpixF;
   float pixelOffset = (dst * (-1.0 / spanLength)) + 0.5;
-  float subpixH = subpixG * 0.75;
+  float subpixH = subpixG * 0.3;   // (FXAA's subpixel pass at 0.3, not 0.75: it softened every texture)
   float pixelOffsetGood = goodSpan ? pixelOffset : 0.0;
   float pixelOffsetSubpix = max(pixelOffsetGood, subpixH);
   vec2 p = uv;

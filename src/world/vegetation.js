@@ -748,13 +748,15 @@ export class Vegetation {
     _p.set(x, base, z);
     _s.set(s, sy, sz);
     _m.compose(_p, _q, _s);
-    const top = base + Hh, above = top - h;
+    // (whether it is skied over: from its own height and sink only, not the terrain's slope, so the C++ port, whose
+    // terrain differs from this by centimetres, always decides the same)
+    const top = base + Hh, above = Hh * (1 - sink);
     const S = above < LOW_ROCK ? Math.min(s, 2) : Math.max(s, BIG_ROCK);
     const d = R.d * (sz / s), y = top - 0.75 * S, g = [hx, hz, h];
     const long = d < 0.6;
     out.push({ x, y, z, s: S, r: long ? 0.5 * s * d * 0.95 : 0.5 * s * Math.sqrt(d) * 0.9, v, m: Float32Array.from(_m.elements), g });
     if (long) {
-      const e = _m.elements, l = Math.hypot(e[0], e[2]) || 1, ax = e[0] / l, az = e[2] / l, o = (0.5 - 0.5 * d) * s * 0.8;
+      const ax = Math.cos(yaw), az = -Math.sin(yaw), o = (0.5 - 0.5 * d) * s * 0.8; // (its long side: the model's x turned by yaw)
       for (const k of [-1, 1]) out.push({ x: x + ax * o * k, y, z: z + az * o * k, s: S, r: 0.5 * s * d * 0.9, v: -1, m: null, g });
     }
   }

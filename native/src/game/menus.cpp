@@ -17,7 +17,7 @@ std::string fmtMoney(int64_t v) {
   return (v < 0 ? "-" : "") + o;
 }
 std::string upper(std::string s) { for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c))); return s; }
-int seedOf(const std::string& s) { int h = 7; for (char c : s) h = (h * 31 + c) % 997; return h; }
+int seedOf(const std::string& s) { int h = 17; for (char c : s) h = (h * 31 + static_cast<unsigned char>(c)) % 9973; return h; }   // (menu.js seedOf)
 
 // menu.js SET_ROWS
 struct SetRow {
@@ -130,6 +130,8 @@ void Menus::open(Screen s, int dir) {
   dir_ = dir;
   focus_ = 0; focusPrev_ = -1;
   scroll_ = scrollTarget_ = 0;
+  focusScroll_ = true;
+  thumbDrag_ = false;
   enterT_ = t_;
   // opened by the game (Esc / Menu -> PAUSE, E -> a shop) rather than from inside frame(): the key or button that
   // opened it is still in this frame's UiNav, and must not also act on the new screen (Esc would resume the pause
@@ -163,7 +165,7 @@ void Menus::setFocus(int i) {
 
 std::string Menus::focusedLabel() const { return focus_ >= 0 && focus_ < int(items_.size()) ? items_[size_t(focus_)].label : ""; }
 bool Menus::focusLabel(const std::string& label) {
-  for (size_t i = 0; i < items_.size(); i++) if (items_[i].label == label) { focus_ = int(i); return true; }
+  for (size_t i = 0; i < items_.size(); i++) if (items_[i].label == label) { focus_ = int(i); focusScroll_ = true; return true; }
   return false;
 }
 
@@ -193,6 +195,25 @@ void Menus::handle(const UiNav& nav) {
     }
     return -1;
   };
+  // the list's scrollbar (style.css .set-scroll: a thin thumb down the right edge): drag it, or click the track to page
+  float maxScroll = std::max(0.f, contentH_ - listH_);
+  if (listH_ > 0 && maxScroll > 0) {
+    float d = ui_.dpr(), tx = listRight_ - 8 * d;
+    float th = std::max(24 * d, listH_ * listH_ / contentH_), ty = listTop_ + (listH_ - th) * (scroll_ / maxScroll);
+    bool onTrack = nav.mouse.x >= tx - 4 * d && nav.mouse.x <= listRight_ + 4 * d && nav.mouse.y >= listTop_ && nav.mouse.y <= listTop_ + listH_;
+    if (nav.click && onTrack) {
+      if (nav.mouse.y >= ty && nav.mouse.y <= ty + th) { thumbDrag_ = true; thumbGrabY_ = nav.mouse.y; thumbGrabScroll_ = scroll_; }
+      else scrollTarget_ = std::clamp(scrollTarget_ + (nav.mouse.y < ty ? -listH_ : listH_) * 0.9f, 0.f, maxScroll);
+      return;
+    }
+    if (thumbDrag_) {
+      if (!nav.mouseDown) thumbDrag_ = false;
+      else { scrollTarget_ = scroll_ = std::clamp(thumbGrabScroll_ + (nav.mouse.y - thumbGrabY_) * (maxScroll / std::max(1.f, listH_ - th)), 0.f, maxScroll); return; }
+    }
+  } else thumbDrag_ = false;
+  // the wheel / trackpad (SDL's precise delta: a wheel notch is 1, a trackpad gives fractions) scrolls the list; the
+  // focus stays where it is (a hover does not pull the list back)
+  if (nav.wheel != 0 && listH_ > 0) scrollTarget_ = std::clamp(scrollTarget_ - nav.wheel * 48 * u_, 0.f, maxScroll);
   if (nav.mouse.x >= 0 && (nav.mouseMoved || nav.click)) { int h = hit(nav.mouse); if (h >= 0 && !items_[size_t(h)].disabled) focus_ = h; }
   if (nav.click && nav.mouse.x >= 0) {
     int h = hit(nav.mouse);
@@ -203,13 +224,13 @@ void Menus::handle(const UiNav& nav) {
       return;
     }
   }
-  if (nav.wheel != 0 && listH_ > 0) scrollTarget_ = std::clamp(scrollTarget_ - nav.wheel * 70 * u_, 0.f, std::max(0.f, contentH_ - listH_));
   if (!n) { if (nav.cancel) back(); return; }
   focus_ = std::clamp(focus_, 0, n - 1);
   auto move = [&](int d) {
     int i = focus_;
     for (int k = 0; k < n; k++) { i = ((i + d) % n + n) % n; if (!items_[size_t(i)].disabled) break; }
     focus_ = i;
+    focusScroll_ = true;
   };
   if (nav.up) move(-1);
   else if (nav.down) move(1);
@@ -225,64 +246,133 @@ void Menus::handle(const UiNav& nav) {
 
 // ---------------------------------------------------------------- drawing helpers
 void Menus::drawShade(int mode) {
+  // style.css .shade-left / .shade-full / .shade-show (and #menu.paused .shade-left): gradients of rgb(4, 14, 34)
   float W = float(ui_.width()), H = float(ui_.height());
-  if (mode == 1) ui_.rect(0, 0, W, H, a(shade, 0.62f));
-  else if (mode == 2) ui_.rectGradient(0, 0, W * 0.6f, H, a(shade, 0.55f), a(shade, 0.0f));
-  else ui_.rectGradient(0, 0, W, H, a(shade, 0.8f), a(shade, 0.12f));
-}
-
-void Menus::drawLogo(bool big) {
-  float s = (big ? 1.f : 0.62f) * u_, x = 110 * u_, y = (big ? 56 : 30) * u_;
-  // SKI LEGACY in the house style: a white stroke, LEGACY in blue italic, a red underline
-  ui_.brushStroke(x - 20 * s, y, 480 * s, 120 * s, white, 77);
-  ui_.text(x + 6 * s, y + 8 * s, 34 * s, UiFont::CondHeavy, red, "SKI");
-  ui_.text(x + 4 * s, y + 30 * s, 84 * s, UiFont::CondHeavy, blue, "LEGACY");
-}
-
-void Menus::drawHints(const std::vector<std::pair<std::string, std::string>>& hints) {
-  float x = 110 * u_, y = float(ui_.height()) - 52 * u_, h = std::max(17.f, 22 * u_), fs = std::max(11.f, 13 * u_);
-  for (const auto& [k, label] : hints) {
-    if (input_.usingGamepad() && (label.rfind("Drag", 0) == 0 || label.rfind("Click", 0) == 0)) continue;
-    std::string cap;
-    if (k == "updown") cap = prompts::K(input_, "updown");
-    else if (k == "leftright") cap = prompts::K(input_, "leftright");
-    else if (k == "enter") cap = prompts::K(input_, "confirm");
-    else if (k == "esc") cap = prompts::K(input_, "cancel");
-    else if (k == "tabs") cap = input_.usingGamepad() ? std::string(prompts::padGlyph(4, input_.padFamily())) + " " + prompts::padGlyph(5, input_.padFamily()) : "Q E";
-    if (!cap.empty()) {
-      // (arrows as two caps on the keyboard)
-      if (!input_.usingGamepad() && (k == "updown" || k == "leftright")) {
-        x += ui_.keycap(x, y, h, k == "updown" ? "\xE2\x86\x91" : "\xE2\x86\x90") + 3 * u_;
-        x += ui_.keycap(x, y, h, k == "updown" ? "\xE2\x86\x93" : "\xE2\x86\x92") + 6 * u_;
-      } else x += ui_.keycap(x, y, h, cap) + 6 * u_;
-    }
-    x += ui_.text(x, y + (h - ui_.lineHeight(fs, UiFont::Body)) / 2, fs, UiFont::Body, a(white, 0.92f), upper(label)) + 22 * u_;
+  auto stops = [](float t, std::initializer_list<std::pair<float, float>> st) {
+    float prevT = 0, prevA = st.begin()->second;
+    for (auto& [pt, pa] : st) { if (t <= pt) return pt > prevT ? prevA + (pa - prevA) * (t - prevT) / (pt - prevT) : pa; prevT = pt; prevA = pa; }
+    return prevA;
+  };
+  if (mode == 1) {   // full: radial (ellipse 80% 70% at 50% 56%) .12 -> .58, + bottom .45 -> 0 at 40%
+    ui_.gradientGrid(0, 0, W, H, 24, 18, [&](float fx, float fy) {
+      float rx = (fx - 0.5f) / 0.8f, ry = (fy - 0.56f) / 0.7f;
+      // (the ending shape reaches the farthest corner: the gradient ray is normalised to it)
+      float far = std::sqrt((0.5f / 0.8f) * (0.5f / 0.8f) + (0.56f / 0.7f) * (0.56f / 0.7f));
+      float r = std::min(1.f, std::sqrt(rx * rx + ry * ry) / far);
+      float a1 = 0.12f + (0.58f - 0.12f) * r, a2 = stops(1 - fy, {{0, 0.45f}, {0.4f, 0}});
+      return vec4(vec3(shade), a1 + a2 * (1 - a1));
+    });
+  } else if (mode == 2) {   // show: left .66 / .24 at 36% / 0 at 54%, + bottom .42 -> 0 at 32%
+    ui_.gradientGrid(0, 0, W, H, 24, 12, [&](float fx, float fy) {
+      float a1 = stops(fx, {{0, 0.66f}, {0.36f, 0.24f}, {0.54f, 0}}), a2 = stops(1 - fy, {{0, 0.42f}, {0.32f, 0}});
+      return vec4(vec3(shade), a1 + a2 * (1 - a1));
+    });
+  } else if (mode == 3) {   // paused: .72 / .38 at 45% / rgba(0,0,0,.08) from 72%
+    ui_.gradientGrid(0, 0, W, H, 24, 1, [&](float fx, float) {
+      float al = stops(fx, {{0, 0.72f}, {0.45f, 0.38f}, {0.72f, 0.08f}});
+      vec3 c = fx < 0.45f ? vec3(shade) : glm::mix(vec3(shade), vec3(0), std::clamp((fx - 0.45f) / 0.27f, 0.f, 1.f));
+      return vec4(c, al);
+    });
+  } else {           // left: .6 / .2 at 44% / 0 at 66%
+    ui_.gradientGrid(0, 0, W, H, 24, 1, [&](float fx, float) { return vec4(vec3(shade), stops(fx, {{0, 0.6f}, {0.44f, 0.2f}, {0.66f, 0}})); });
   }
 }
 
+void Menus::drawLogo(bool big) {
+  // .menu-logo (main / pause): white Barlow 700, SKI 42u (letter-spacing 0.5em) over LEGACY 104u, line-height 0.85,
+  // text-shadow 0 6u 30u rgba(0,0,0,.45); elsewhere the .menu-mark top right (SKI 17u, LEGACY 38u, opacity 0.92)
+  const vec4 sh = a(hex(0x000000), 0.45f);
+  if (big) {
+    float x = 72 * u_, y = 50 * u_, s1 = 42 * u_, s2 = 104 * u_;
+    float y2 = y + s1 * 0.85f;
+    ui_.textShadow(x, y + (s1 * 0.85f - ui_.lineHeight(s1, UiFont::CondBold)) / 2, s1, UiFont::CondBold, "SKI", UiAlign::Left, 0.5f, 0, 6 * u_, 30 * u_, sh);
+    ui_.textShadow(x, y2 + (s2 * 0.85f - ui_.lineHeight(s2, UiFont::CondBold)) / 2, s2, UiFont::CondBold, "LEGACY", UiAlign::Left, 0.03f, 0, 6 * u_, 30 * u_, sh);
+    ui_.textLH(x, y, s1 * 0.85f, s1, UiFont::CondBold, white, "SKI", UiAlign::Left, 0.5f);
+    ui_.textLH(x, y2, s2 * 0.85f, s2, UiFont::CondBold, white, "LEGACY", UiAlign::Left, 0.03f);
+  } else {
+    float s1 = 17 * u_, s2 = 38 * u_, d = ui_.dpr();
+    float w1 = ui_.textWidth("SKI", s1, UiFont::CondBold, 0.45f), w2 = ui_.textWidth("LEGACY", s2, UiFont::CondBold, 0.03f);
+    float right = float(ui_.width()) - 72 * u_, x2 = right - w2, x1 = x2 - 10 * u_ - w1;
+    float top = 54 * u_, lh2 = ui_.lineHeight(s2, UiFont::CondBold);
+    float base = top + (lh2 - (ui_.ascent(UiFont::CondBold) - ui_.descent(UiFont::CondBold)) * s2) * 0.5f + ui_.ascent(UiFont::CondBold) * s2;
+    float y1 = base - ui_.ascent(UiFont::CondBold) * s1 - (ui_.lineHeight(s1, UiFont::CondBold) - (ui_.ascent(UiFont::CondBold) - ui_.descent(UiFont::CondBold)) * s1) * 0.5f;
+    ui_.textShadow(x1, y1, s1, UiFont::CondBold, "SKI", UiAlign::Left, 0.45f, 0, 2 * d, 14 * d, sh);
+    ui_.textShadow(x2, top, s2, UiFont::CondBold, "LEGACY", UiAlign::Left, 0.03f, 0, 2 * d, 14 * d, sh);
+    ui_.text(x1, y1, s1, UiFont::CondBold, a(white, 0.92f), "SKI", UiAlign::Left, 0.45f);
+    ui_.text(x2, top, s2, UiFont::CondBold, a(white, 0.92f), "LEGACY", UiAlign::Left, 0.03f);
+  }
+}
+
+void Menus::drawHints(const std::vector<std::pair<std::string, std::string>>& hints) {
+  // .menu-foot: left / right 72u, bottom 30u; 600 t-xs Inter, white .85, text-shadow 0 1px 6px rgba(0,0,0,.5); each
+  // hint a .kc (outlined in the text colour) and its label (letter-spacing 0.1em, uppercase), 22u apart; the credit right
+  const float d = ui_.dpr(), fs = std::max(11 * d, 11 * u_), kh = ui_.kcHeight(u_);
+  const vec4 col = a(white, 0.85f), shc = a(hex(0x000000), 0.5f);
+  float cy = float(ui_.height()) - 30 * u_ - kh / 2, x = 72 * u_, ty = cy - ui_.lineHeight(fs, UiFont::BodySemi) / 2;
+  float gap = std::max(4 * d, 6 * u_);
+  for (const auto& [k, label] : hints) {
+    if (input_.usingGamepad() && (label.rfind("Drag", 0) == 0 || label.rfind("Click", 0) == 0)) continue;
+    std::vector<std::string> caps;
+    bool pad = input_.usingGamepad();
+    if (k == "updown") { if (pad) caps = {prompts::K(input_, "updown")}; else caps = {"\xE2\x86\x91", "\xE2\x86\x93"}; }
+    else if (k == "leftright") { if (pad) caps = {prompts::K(input_, "leftright")}; else caps = {"\xE2\x86\x90", "\xE2\x86\x92"}; }
+    else if (k == "enter") caps = {prompts::K(input_, "confirm")};
+    else if (k == "esc") caps = {prompts::K(input_, "cancel")};
+    else if (k == "tabs") caps = {pad ? std::string(prompts::padGlyph(4, input_.padFamily())) + " " + prompts::padGlyph(5, input_.padFamily()) : "Q E"};
+    for (size_t i = 0; i < caps.size(); i++) x += ui_.kc(x, cy - kh / 2, u_, caps[i], col) + (i + 1 < caps.size() ? 4 * u_ : gap);
+    std::string t = upper(label);
+    ui_.textShadow(x, ty, fs, UiFont::BodySemi, t, UiAlign::Left, 0.1f, 0, d, 6 * d, shc);
+    x += ui_.text(x, ty, fs, UiFont::BodySemi, col, t, UiAlign::Left, 0.1f) + 22 * u_;
+  }
+  float rx = float(ui_.width()) - 72 * u_;
+  ui_.textShadow(rx, ty, fs, UiFont::BodySemi, "Icecold Studio", UiAlign::Right, 0.1f, 0, d, 6 * d, shc);
+  ui_.text(rx, ty, fs, UiFont::BodySemi, col, "Icecold Studio", UiAlign::Right, 0.1f);
+}
+
 void Menus::heading(float x, float y, const std::string& title, const std::string& sub) {
-  float w = std::min(760.f, 150.f + float(title.size()) * 26.f) * u_ * 0.9f, h = 90 * u_;
-  float tw = ui_.textWidth(title, 44 * u_, UiFont::CondItalic) + 40 * u_ + h * 0.7f;
-  w = std::max(w, tw);
-  ui_.brushStroke(x, y, w, h, white, seedOf(title));
-  ui_.text(x + 40 * u_, y + (h - ui_.lineHeight(44 * u_, UiFont::CondItalic)) / 2, 44 * u_, UiFont::CondItalic, blue, title);
-  if (!sub.empty()) ui_.textWrapped(x + 12 * u_, y + h + 6 * u_, 820 * u_, std::max(13.f, 15 * u_), UiFont::Body, a(white, 0.92f), sub);
+  // .menu-title: brushSVG(seedOf(title), w, 100) at round(w * 0.9)u x 90u, w = min(760, 150 + 26 per letter); the
+  // title italic 700 44u (letter-spacing 0.04em) from 40u; .menu-sub 600 t-md / 1.35, white .92, below it
+  float vw = std::round(std::min(760.f, 150.f + float(title.size()) * 26.f)), w = std::round(vw * 0.9f) * u_, h = 90 * u_;
+  Ui::Shadow sh{0, 6 * u_, 14 * u_, a(hex(0x000000), 0.25f)};
+  ui_.brushStroke(x, y, w, h, white, seedOf(title), vw, 100, &sh);
+  ui_.textLH(x + 40 * u_, y, h, 44 * u_, UiFont::CondItalic, blue, title, UiAlign::Left, 0.04f);
+  if (!sub.empty()) {
+    float fs = std::max(13 * ui_.dpr(), 15 * u_);
+    ui_.textShadow(x + 12 * u_, y + h + 6 * u_ + fs * 0.075f, fs, UiFont::BodySemi, sub, UiAlign::Left, 0.02f, 0, ui_.dpr(), 8 * ui_.dpr(), hex(0x000a1e, 0.6f));
+    ui_.textLH(x + 12 * u_, y + h + 6 * u_, fs * 1.35f, fs, UiFont::BodySemi, a(white, 0.92f), sub, UiAlign::Left, 0.02f);
+  }
 }
 
 bool Menus::button(float x, float y, float minW, float h, float fs, const std::string& label, int seed, std::function<void()> act, bool disabled) {
+  // .brush-btn: a 420 x 96 paint stroke stretched to the label (padding-left 46u, padding-right 66u at 82u; scaled with
+  // the height for the big / small / compact sizes), italic 700 Barlow, letter-spacing 0.06em, filter: drop-shadow(0 6u
+  // 14u rgba(0,0,0,.25)); focused: translateX(14u) rotate(-1deg), the stroke scaleX(1.05), a red bar at -16u
   int idx = int(items_.size());
   bool foc = idx == focus_;
-  float tw = ui_.textWidth(label, fs, UiFont::CondItalic);
-  float w = std::max(minW, tw + 46 * u_ * (h / (82 * u_)) + h * 0.9f);
-  float ox = foc ? 14 * u_ : 0;
-  // slide in from the side on entering a screen
-  float k = float(std::clamp((t_ - enterT_ - 0.04 * idx) / 0.25, 0.0, 1.0));
-  float ease = 1 - (1 - k) * (1 - k) * (1 - k);
-  ox += (1 - ease) * -40 * u_ * float(dir_);
-  float alpha = ease * (disabled ? 0.55f : 1.f);
+  float k = h / (82 * u_);
+  float padL = (h > 95 * u_ ? 46 : h < 64 * u_ ? 38 : h < 76 * u_ && h > 72 * u_ ? 40 : 46) * u_;
+  float padR = (h > 95 * u_ ? 80 : h < 64 * u_ ? 50 : 66 * std::min(1.f, k)) * u_;
+  (void)k;
+  float tw = ui_.textWidth(label, fs, UiFont::CondItalic, 0.06f);
+  float w = std::max(minW, padL + tw + padR);
+  // brushIn: 0.55 s after a 70 + 60 i ms stagger (from -60u, revealed left to right)
+  double t = (t_ - enterT_ - 0.07 - 0.06 * idx) / 0.55;
+  float e = float(std::clamp(t, 0.0, 1.0));
+  e = 1 - std::pow(1 - e, 4.f);
+  float alpha = e * (disabled ? 0.55f : 1.f);
+  if (alpha <= 0.002f) { Item it; it.x = x; it.y = y; it.w = w; it.h = h; it.label = label; it.activate = std::move(act); it.disabled = disabled; items_.push_back(std::move(it)); return foc; }
+  float ox = (1 - e) * -60 * u_;
+  ui_.pushTranslate(ox + (foc ? 14 * u_ : 0), 0);
+  if (foc) ui_.pushRotate(x + w / 2, y + h / 2, -1.f * 3.14159265f / 180.f);
   if (foc) ui_.rect(x - 16 * u_, y + h * 0.3f, 6 * u_, h * 0.4f, a(red, alpha));
-  ui_.brushStroke(x + ox, y, w * (foc ? 1.05f : 1.f), h, a(white, alpha), seed);
-  ui_.text(x + ox + 46 * u_ * (h / (82 * u_)), y + (h - ui_.lineHeight(fs, UiFont::CondItalic)) / 2, fs, UiFont::CondItalic, a(blue, alpha), label);
+  Ui::Shadow sh{0, 6 * u_, 14 * u_, a(hex(0x000000), 0.25f)};
+  float sw = w * (foc ? 1.05f : 1.f);
+  ui_.pushClip(x - 40 * u_, y - 40 * u_, (sw + 80 * u_) * e, h + 80 * u_);
+  ui_.brushStroke(x, y, sw, h, a(white, alpha), seed, 420, 96, &sh);
+  ui_.popClip();
+  ui_.textLH(x + padL, y, h, fs, UiFont::CondItalic, a(blue, alpha), label, UiAlign::Left, 0.06f);
+  if (foc) ui_.popTransform();
+  ui_.popTransform();
   Item it;
   it.x = x; it.y = y; it.w = w; it.h = h; it.label = label; it.activate = std::move(act); it.disabled = disabled;
   items_.push_back(std::move(it));
@@ -290,22 +380,17 @@ bool Menus::button(float x, float y, float minW, float h, float fs, const std::s
 }
 
 void Menus::panel(float x, float y, float w, float h) {
-  ui_.shadow(x, y, w, h, 6 * u_, 14 * u_, 0.28f);
-  // brushClip-like ragged paper: a rect with jagged top / bottom strips
-  ui_.rect(x, y + 6 * u_, w, h - 12 * u_, a(white, 0.96f));
-  std::vector<vec2> topEdge, botEdge;
-  const int NX = 14;
-  unsigned s = unsigned(int(x) * 7 + int(w));
-  auto rnd = [&]() { s = s * 1103515245u + 12345u; return float((s >> 8) & 0xffff) / 65535.f; };
-  for (int i = 0; i < NX; i++) {
-    float x0 = x + w * float(i) / NX, x1 = x + w * float(i + 1) / NX;
-    float t0 = y + rnd() * 6 * u_, t1 = y + rnd() * 6 * u_;
-    ui_.tri(vec2(x0, t0), vec2(x1, t1), vec2(x1, y + 6 * u_), a(white, 0.96f));
-    ui_.tri(vec2(x0, t0), vec2(x1, y + 6 * u_), vec2(x0, y + 6 * u_), a(white, 0.96f));
-    float b0 = y + h - rnd() * 6 * u_, b1 = y + h - rnd() * 6 * u_;
-    ui_.tri(vec2(x0, y + h - 6 * u_), vec2(x1, y + h - 6 * u_), vec2(x1, b1), a(white, 0.96f));
-    ui_.tri(vec2(x0, y + h - 6 * u_), vec2(x1, b1), vec2(x0, b0), a(white, 0.96f));
-  }
+  // .menu-panel: rgba(255,255,255,.95) paper, menu.js brushClip(seed, 5, 4), drop-shadow(0 10u 24u rgba(0,14,44,.3))
+  Ui::Shadow sh{0, 10 * u_, 24 * u_, hex(0x000e2c, 0.3f)};
+  ui_.brushClip(x, y, w, h, a(white, 0.95f), 150 + int(x / std::max(1.f, u_)) % 7, 5, 4, u_, &sh);
+}
+
+void Menus::drawScrollbar() {
+  // .set-scroll scrollbar: thin, rgba(21, 70, 200, .45) thumb, rounded
+  float maxScroll = std::max(0.f, contentH_ - listH_);
+  if (listH_ <= 0 || maxScroll <= 0) return;
+  float d = ui_.dpr(), th = std::max(24 * d, listH_ * listH_ / contentH_), ty = listTop_ + (listH_ - th) * std::clamp(scroll_ / maxScroll, 0.f, 1.f);
+  ui_.roundRect(listRight_ - 7 * d, ty, 6 * d, th, 3 * d, hex(0x1546c8, thumbDrag_ ? 0.65f : 0.45f));
 }
 
 // ---------------------------------------------------------------- the frame
@@ -315,7 +400,7 @@ bool Menus::textFieldFocused() const {
 
 void Menus::frame(const UiNav& navIn, double dt, double now) {
   t_ = now;
-  u_ = std::clamp(std::min(float(ui_.height()) / 800.f, float(ui_.width()) / 1280.f), 0.55f, 2.2f);
+  u_ = ui_.cssU();   // (style.css --u: 1 CSS px on a 1280 x 800 window, x the display's pixel ratio)
   struct InFrame { bool& f; explicit InFrame(bool& b) : f(b) { f = true; } ~InFrame() { f = false; } } guard(inFrame_);
   // the frame a screen was opened from outside: its presses are not this screen's (the pointer still hovers)
   bool fresh = freshOpen_;
@@ -382,7 +467,7 @@ void Menus::frame(const UiNav& navIn, double dt, double now) {
 void Menus::scrMain() {
   drawShade(0);
   drawLogo(true);
-  float x = 110 * u_, y = 300 * u_;
+  float x = 72 * u_, y = 226 * u_;
   if (!loading.empty()) {
     float r = 16 * u_, cx = x + r, cy = y + r;
     for (int i = 0; i < 8; i++) {
@@ -399,7 +484,7 @@ void Menus::scrMain() {
   button(x, y, 360 * u_, 82 * u_, 40 * u_, "STATS", 7, [this] { open(Screen::Stats); });
   y += 88 * u_;
   button(x, y, 360 * u_, 82 * u_, 40 * u_, "SETTINGS", 11, [this] { open(Screen::Settings); });
-  y += 98 * u_;
+  y += 98 * u_;   // (.small: margin-top 10u)
   button(x, y, 250 * u_, 62 * u_, 28 * u_, "QUIT", 13, [this] { if (hooks.quit) hooks.quit(); });
   drawHints({{"updown", "Select"}, {"enter", "Confirm"}});
 }
@@ -407,7 +492,7 @@ void Menus::scrMain() {
 void Menus::scrPlayMode() {
   drawShade(0);
   drawLogo(true);
-  float x = 110 * u_, y = 300 * u_;
+  float x = 72 * u_, y = 226 * u_;
   auto single = [this] {
     if (save_.characterChosen) { if (hooks.start) hooks.start(); }
     else open(Screen::Showcase);
@@ -418,7 +503,7 @@ void Menus::scrPlayMode() {
     if (!save_.characterChosen) save_.characterChosen = true;   // (the skier you play: SETTINGS -> Skier changes it)
     open(Screen::Multiplayer);
   });
-  y += 116 * u_;
+  y += 116 * u_;   // (.small: margin-top 10u)
   button(x, y, 250 * u_, 62 * u_, 28 * u_, "BACK", 13, [this] { back(); });
   drawHints({{"updown", "Select"}, {"enter", "Confirm"}, {"esc", "Back"}});
 }
@@ -427,13 +512,13 @@ void Menus::scrPlayMode() {
 // fullest one with room, up to 50 players)
 void Menus::scrMultiplayer(const UiNav& nav) {
   (void)nav;
-  drawShade(2);
+  drawShade(0);
   drawLogo(false);
-  float x = 110 * u_, y = 150 * u_;
+  float x = 72 * u_, y = 46 * u_;
   std::string acc = mp.account ? mp.account() : "";
   bool busy = mp.busy && mp.busy();
-  heading(x, y, "MULTIPLAYER", "Ski with everyone in your world Â· up to 50 players a world Â· the server keeps your money, cars and chalet");
-  float py = y + 150 * u_, pw = 560 * u_, ph = 196 * u_;
+  heading(x, y, "MULTIPLAYER", "Ski with everyone in your world \xC2\xB7 up to 50 players a world \xC2\xB7 the server keeps your money, cars and chalet");
+  float py = y + 90 * u_ + 6 * u_ + std::max(13 * ui_.dpr(), 15 * u_) * 1.35f + 20 * u_, pw = 560 * u_, ph = 196 * u_;
   panel(x, py, pw, ph);
   float fs = std::max(12.f, 15 * u_);
   ui_.text(x + 30 * u_, py + 18 * u_, std::max(11.f, 11 * u_), UiFont::Body, red, "SERVER");
@@ -479,35 +564,58 @@ void Menus::pickChar(int i) {
 }
 
 void Menus::scrShowcase(const UiNav& nav, double dt) {
+  // menu.js scrShowcase: the head, the .sc-panel (420u, brushClip(140, 6, 4)) with the MAN / WOMAN brush switch and
+  // the note, START below it
   drawShade(2);
   drawLogo(false);
-  float x = 110 * u_, y = 150 * u_;
+  const float d = ui_.dpr(), tmd = std::max(13 * d, 15 * u_), tsm = std::max(12 * d, 13 * u_);
+  float x = 72 * u_, y = 46 * u_;
   heading(x, y, "CHOOSE YOUR SKIER", inGame ? "Change your skier" : "Free ride \xC2\xB7 the open resort");
   // drag across the free area (or the right stick) turns the skier
-  if (nav.mouseDown && nav.mouse.x > float(ui_.width()) * 0.45f) {
+  if (nav.mouseDown && nav.mouse.x > 520 * u_) {
     if (dragLast_.x >= 0 && hooks.spin) hooks.spin((nav.mouse.x - dragLast_.x) * 0.012f);
     dragLast_ = nav.mouse;
   } else dragLast_ = vec2(-1);
   if (std::fabs(nav.stickR.x) > 0.2f && hooks.spin) hooks.spin(nav.stickR.x * float(dt) * 3.f);
-  float py = y + 150 * u_, pw = 470 * u_, ph = 150 * u_;
-  panel(x, py, pw, ph);
-  // MAN / WOMAN (seg-brush)
+  float py = y + 90 * u_ + 6 * u_ + tmd * 1.35f + 20 * u_, pw = 420 * u_;
+  const char* note = "Customize your look in the ski shop: jackets, trousers, helmets and goggles.";
+  float noteW = pw - 64 * u_;
+  // (the note's height: wrapped at its width, line-height 1.45)
+  int noteLines = 1;
+  {
+    std::string line, word, ns = note;
+    for (size_t i = 0; i <= ns.size(); i++) {
+      char ch = i < ns.size() ? ns[i] : ' ';
+      if (ch != ' ') { word += ch; continue; }
+      if (word.empty()) continue;
+      std::string cand = line.empty() ? word : line + " " + word;
+      if (!line.empty() && ui_.textWidth(cand, tsm, UiFont::BodyMed) > noteW) { noteLines++; line = word; } else line = cand;
+      word.clear();
+    }
+  }
+  float bh = 84 * u_, ph = 22 * u_ + bh + 26 * u_ + tsm * 1.45f * float(noteLines) + 28 * u_;
+  float e = float(std::clamp((t_ - enterT_ - 0.13) / 0.55, 0.0, 1.0));
+  e = 1 - std::pow(1 - e, 4.f);
+  ui_.pushAlpha(e); ui_.pushTranslate(-40 * u_ * (1 - e), 0);
+  Ui::Shadow sh{0, 10 * u_, 24 * u_, hex(0x000e2c, 0.35f)};
+  ui_.brushClip(x, py, pw, ph, white, 140, 6, 4, u_, &sh);
   const char* labels[2] = {"MAN", "WOMAN"};
-  float bx = x + 30 * u_, bw = 190 * u_, bh = 54 * u_;
+  float bx = x + 34 * u_, bw = (pw - 64 * u_ - 10 * u_) / 2, by = py + 22 * u_;
   for (int i = 0; i < 2; i++) {
-    float xx = bx + float(i) * (bw + 20 * u_);
+    float xx = bx + float(i) * (bw + 10 * u_);
     bool on = i == chi_;
-    ui_.brushStroke(xx, py + 22 * u_, bw, bh, on ? blue : a(blue, 0.12f), 140 + i);
-    ui_.text(xx + 30 * u_, py + 22 * u_ + (bh - ui_.lineHeight(30 * u_, UiFont::CondItalic)) / 2, 30 * u_, UiFont::CondItalic, on ? white : blue, labels[i]);
+    ui_.brushPanel(xx, by, bw, bh, on ? blue : bluePale, 1);
+    ui_.textLH(xx + bw / 2, by, bh, 46 * u_, UiFont::CondItalic, on ? white : blue, labels[i], UiAlign::Center, 0.06f);
+    if (on) ui_.rect(xx + bw / 2 - 24 * u_, by + bh + 8 * u_, 48 * u_, 5 * u_, red);
     Item it;
-    it.x = xx; it.y = py + 22 * u_; it.w = bw; it.h = bh; it.label = labels[i];
+    it.x = xx; it.y = by; it.w = bw; it.h = bh; it.label = labels[i];
     it.activate = [this, i] { pickChar(i); };
-    it.adjust = [this](int d) { pickChar(chi_ + d); };
+    it.adjust = [this](int dd) { pickChar(chi_ + dd); };
     items_.push_back(it);
   }
-  ui_.textWrapped(x + 30 * u_, py + 92 * u_, pw - 60 * u_, std::max(12.f, 14 * u_), UiFont::Body, blueDim,
-                  "Customize your look in the ski shop: jackets, trousers, helmets and goggles.");
-  float sy = float(ui_.height()) - 190 * u_;
+  ui_.textWrapped(x + 34 * u_, by + bh + 26 * u_ + tsm * 0.125f, noteW, tsm, UiFont::BodyMed, blueDim, note, 1.45f);
+  ui_.popTransform(); ui_.popAlpha();
+  float sy = py + ph + 24 * u_;
   button(x, sy, 430 * u_, 100 * u_, 54 * u_, "START", 17, [this] {
     save_.characterChosen = true;
     save_.markDirty();
@@ -519,19 +627,21 @@ void Menus::scrShowcase(const UiNav& nav, double dt) {
 }
 
 void Menus::scrPause() {
-  drawShade(0);
+  // menu.js scrPause: a .compact column (70u buttons, RESUME 88u, QUIT GAME 58u); more than five rows: the small logo
+  // and padding-top 116u (.tight)
+  bool online = mp.online && mp.online();
+  drawShade(3);
   drawLogo(false);
-  float x = 110 * u_, y = 170 * u_, h = 70 * u_, step = 76 * u_;
-  button(x, y, 430 * u_, 88 * u_, 46 * u_, "RESUME", 5, [this] { if (hooks.resume) hooks.resume(); });
+  float x = 72 * u_, y = 116 * u_, h = 70 * u_, step = 76 * u_;
+  button(x, y, 430 * u_, 88 * u_, 48 * u_, "RESUME", 5, [this] { if (hooks.resume) hooks.resume(); });
   y += 94 * u_;
   button(x, y, 360 * u_, h, 36 * u_, "CONTROLS", 31, [this] { ctlBack_ = Screen::None; open(Screen::Controls); }); y += step;
   button(x, y, 360 * u_, h, 36 * u_, "STATS", 7, [this] { open(Screen::Stats); }); y += step;
   button(x, y, 360 * u_, h, 36 * u_, "SETTINGS", 11, [this] { open(Screen::Settings); }); y += step;
-  bool online = mp.online && mp.online();
   if (online) { button(x, y, 500 * u_, h, 36 * u_, "LEAVE MULTIPLAYER", 23, [this] { if (mp.leave) mp.leave(); }); y += step; }
   else { button(x, y, 360 * u_, h, 36 * u_, "MAIN MENU", 23, [this] { if (hooks.mainMenu) hooks.mainMenu(); }); y += step; }
-  button(x, y, 500 * u_, h, 36 * u_, "RETURN TO VILLAGE", 19, [this] { if (hooks.village) hooks.village(); }); y += step + 8 * u_;
-  button(x, y, 250 * u_, 62 * u_, 28 * u_, "QUIT GAME", 13, [this] { if (hooks.quit) hooks.quit(); });
+  button(x, y, 500 * u_, h, 36 * u_, "RETURN TO VILLAGE", 19, [this] { if (hooks.village) hooks.village(); }); y += step + 10 * u_;
+  button(x, y, 250 * u_, 58 * u_, 27 * u_, "QUIT GAME", 13, [this] { if (hooks.quit) hooks.quit(); });
   if (online && mp.players) {   // (the world's players: session.js status pill, as a list)
     std::vector<std::string> names = mp.players();
     float px = float(ui_.width()) - 420 * u_, py = 170 * u_, pw = 330 * u_, rh = 30 * u_;
@@ -545,9 +655,12 @@ void Menus::scrPause() {
 }
 
 void Menus::scrStats() {
+  // menu.js scrStats: two .menu-panel (470u, 36u apart): CAREER rows (600 t-md label, italic 700 26u value) and the
+  // course records
   drawShade(0);
   drawLogo(false);
-  float x = 110 * u_, y = 110 * u_;
+  const float d = ui_.dpr(), tmd = std::max(13 * d, 15 * u_), txs = std::max(11 * d, 11 * u_), tsm = std::max(12 * d, 13 * u_);
+  float x = 72 * u_, y = 46 * u_;
   heading(x, y, "STATS", "Your career on the mountain");
   const auto& st = save_.stats;
   const SkiDef* ski = skiById(save_.skis);
@@ -561,115 +674,188 @@ void Menus::scrStats() {
   std::snprintf(b, sizeof b, "%.1f km", st.distance / 1000); rows.push_back({"Distance skied", b});
   rows.push_back({"Prize money", "$" + fmtMoney(int64_t(st.earned))});
   rows.push_back({"Skis", ski ? ski->name : "None yet"});
-  rows.push_back({"Cars", std::to_string(save_.garage.size())});
   rows.push_back({"Day", std::to_string(save_.day)});
-  float py = y + 150 * u_, pw = 470 * u_, rh = 44 * u_, ph = 50 * u_ + rh * float(rows.size());
-  panel(x, py, pw, ph);
-  ui_.text(x + 30 * u_, py + 18 * u_, std::max(11.f, 11 * u_), UiFont::Body, red, "CAREER");
-  float ry = py + 40 * u_;
-  for (const auto& [k, v] : rows) {
-    ui_.text(x + 30 * u_, ry + (rh - ui_.lineHeight(15 * u_, UiFont::Body)) / 2, 15 * u_, UiFont::Body, blue, k);
-    ui_.text(x + pw - 30 * u_, ry + (rh - ui_.lineHeight(26 * u_, UiFont::CondItalic)) / 2, 26 * u_, UiFont::CondItalic, blue, v, UiAlign::Right);
-    ui_.rect(x + 30 * u_, ry + rh - 1, pw - 60 * u_, 1, a(blue, 0.12f));
-    ry += rh;
+  float py = y + 90 * u_ + 6 * u_ + tmd * 1.35f + 20 * u_, pw = 470 * u_;
+  float rowH = std::max(46 * u_, 12 * u_ + 26 * u_), headH = txs + 8 * u_;
+  float ph = 18 * u_ + headH + rowH * float(rows.size()) + 20 * u_;
+  // slideIn: 0.5 s after the stagger (from -40u, faded)
+  auto slide = [&](int i) { float e = float(std::clamp((t_ - enterT_ - 0.07 - 0.06 * i) / 0.5, 0.0, 1.0)); return 1 - std::pow(1 - e, 4.f); };
+  const vec4 line12 = hex(0x1546c8, 0.12f);
+  Ui::Shadow sh{0, 10 * u_, 24 * u_, hex(0x000e2c, 0.3f)};
+  {
+    float e = slide(1);
+    ui_.pushAlpha(e); ui_.pushTranslate(-40 * u_ * (1 - e), 0);
+    ui_.brushClip(x, py, pw, ph, a(white, 0.95f), 150, 5, 4, u_, &sh);
+    float ry = py + 18 * u_;
+    ui_.textLH(x + 30 * u_, ry, txs, txs, UiFont::BodyHeavy, red, "CAREER", UiAlign::Left, 0.18f);
+    ry += headH;
+    for (size_t i = 0; i < rows.size(); i++) {
+      ui_.textLH(x + 30 * u_, ry, rowH, tmd, UiFont::BodySemi, blue, rows[i].first);
+      ui_.textLH(x + pw - 30 * u_, ry, rowH, 26 * u_, UiFont::CondItalic, blue, rows[i].second, UiAlign::Right);
+      if (i + 1 < rows.size()) ui_.rect(x + 30 * u_, ry + rowH - d, pw - 60 * u_, d, line12);
+      ry += rowH;
+    }
+    ui_.popTransform(); ui_.popAlpha();
   }
-  float qx = x + pw + 30 * u_;
+  float qx = x + pw + 36 * u_;
   if (qx + pw < float(ui_.width())) {
-    panel(qx, py, pw, 160 * u_);
-    ui_.text(qx + 30 * u_, py + 18 * u_, std::max(11.f, 11 * u_), UiFont::Body, red, "COURSE RECORDS");
-    ui_.textWrapped(qx + 30 * u_, py + 48 * u_, pw - 60 * u_, 15 * u_, UiFont::Body, blueDim, "No times yet: the World Racing courses and the resort races come with Phase 5.");
+    float e = slide(2);
+    ui_.pushAlpha(e); ui_.pushTranslate(-40 * u_ * (1 - e), 0);
+    float qh = 18 * u_ + headH + rowH + 20 * u_;
+    ui_.brushClip(qx, py, pw, qh, a(white, 0.95f), 151, 5, 4, u_, &sh);
+    ui_.textLH(qx + 30 * u_, py + 18 * u_, txs, txs, UiFont::BodyHeavy, red, "COURSE RECORDS", UiAlign::Left, 0.18f);
+    ui_.textLH(qx + 30 * u_, py + 18 * u_ + headH, rowH, tsm, UiFont::BodySemi, blueDim, "No time yet: race at the RACING stand in Legacy Village");
+    ui_.popTransform(); ui_.popAlpha();
   }
   drawHints({{"esc", "Back"}});
 }
 
 // ---------------------------------------------------------------- SETTINGS
 void Menus::scrSettings() {
+  // menu.js scrSettings + style.css .menu-panel.settings.set-main / .set-scroll / .mp-row / .seg / .set-range
   drawShade(0);
-  float x = 110 * u_, y = 50 * u_;
+  drawLogo(false);
+  const float d = ui_.dpr(), W = float(ui_.width()), H = float(ui_.height());
+  const float tsm = std::max(12 * d, 13 * u_), txs = std::max(11 * d, 11 * u_), tmd = std::max(13 * d, 15 * u_);
+  float x = 72 * u_, y = 46 * u_;
   heading(x, y, "SETTINGS", "Performance runs smoothest on laptops, Super Performance on handhelds \xC2\xB7 the graphics preset applies the next time the game starts");
-  float py = y + 160 * u_, pw = std::min(700 * u_, float(ui_.width()) - x - 40 * u_), ph = float(ui_.height()) - py - 80 * u_;
-  panel(x, py, pw, ph);
-  listTop_ = py + 14 * u_; listH_ = ph - 28 * u_;
+  float py = y + 90 * u_ + 6 * u_ + tmd * 1.35f + 20 * u_;
+  float pw = std::min(700 * u_, W - x - 40 * u_), ph = std::max(120 * u_, H - 92 * u_ - py);
+  {
+    Ui::Shadow sh{0, 10 * u_, 24 * u_, hex(0x000e2c, 0.3f)};
+    ui_.brushClip(x, py, pw, ph, a(white, 0.95f), 160, 5, 4, u_, &sh);
+  }
+  // the scroll box: the panel's content (padding 18u 18u 20u 30u) widened 14u each side
+  listTop_ = py + 18 * u_; listH_ = ph - 38 * u_; listRight_ = x + pw - 18 * u_ + 14 * u_;
+  float rx = x + 30 * u_, rw = pw - 30 * u_ - 18 * u_ - 12 * u_;   // the rows' content box (the scroll box's padding 14u / 26u)
+  float bx0 = rx - 14 * u_, bw = rw + 28 * u_;                       // the rows' box (margin 0 -14u)
   ui_.pushClip(x, listTop_, pw, listH_);
-  float rx = x + 30 * u_, rw = pw - 60 * u_, ry = listTop_ - scroll_, rowH = 52 * u_, fs = 15 * u_, sfs = std::max(12.f, 13 * u_);
-  float segH = 30 * u_;
-  auto rowBg = [&](float yy, bool foc) {
-    if (foc) { ui_.rectGradient(rx - 14 * u_, yy, rw + 28 * u_, rowH, a(blue, 0.09f), a(blue, 0)); ui_.rect(rx - 14 * u_, yy, 4 * u_, rowH, red); }
-    ui_.rect(rx, yy + rowH - 1, rw, 1, a(blue, 0.1f));
+  float ry = listTop_ - scroll_;
+  bool firstHead = true;
+  const vec4 line12 = hex(0x1546c8, 0.12f), line18 = hex(0x1546c8, 0.18f);
+  auto head = [&](const char* label) {
+    float top = firstHead ? 4 * u_ : 18 * u_;
+    firstHead = false;
+    ui_.textLH(rx, ry + top, txs, txs, UiFont::BodyHeavy, red, label, UiAlign::Left, 0.18f);
+    ry += top + txs + 6 * u_;
+    ui_.rect(rx, ry, rw, 2 * d, line18);
+    ry += 2 * d;
   };
-  // a segmented control (right aligned); returns the button x positions
-  auto seg = [&](float yy, const std::vector<std::string>& labels, int on, std::vector<float>& xs) {
-    float total = 0;
-    std::vector<float> ws;
-    for (const auto& l : labels) { ws.push_back(ui_.textWidth(l, sfs, UiFont::Body) + 24 * u_); total += ws.back() + 6 * u_; }
-    float bx = rx + rw - total + 6 * u_, by = yy + (rowH - segH) / 2;
-    xs.clear();
+  // .seg button: padding 6u 10u, 2px border, radius 5u, 700 t-sm / 1
+  const float segH = 12 * u_ + tsm + 4 * d;
+  auto segW = [&](const std::string& l) { return ui_.textWidth(l, tsm, UiFont::BodyBold) + 20 * u_ + 4 * d; };
+  // lays out right-aligned buttons wrapping within maxW; returns the height; xs / ys / ws the boxes
+  struct Box { float x, y, w; };
+  auto segLayout = [&](const std::vector<std::string>& labels, float maxW, std::vector<Box>& boxes) {
+    boxes.clear();
+    std::vector<std::vector<size_t>> lines(1);
+    float lw = 0;
     for (size_t i = 0; i < labels.size(); i++) {
-      xs.push_back(bx);
-      if (int(i) == on) ui_.roundRect(bx, by, ws[i], segH, 5 * u_, blue);
-      else ui_.roundRectStroke(bx, by, ws[i], segH, 5 * u_, 2, blue);
-      ui_.text(bx + ws[i] / 2, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, int(i) == on ? white : blue, labels[i], UiAlign::Center);
-      bx += ws[i] + 6 * u_;
+      float w = segW(labels[i]);
+      if (!lines.back().empty() && lw + 4 * u_ + w > maxW) { lines.emplace_back(); lw = 0; }
+      lw += (lines.back().empty() ? 0 : 4 * u_) + w;
+      lines.back().push_back(i);
     }
-    xs.push_back(bx);
+    boxes.resize(labels.size());
+    for (size_t li = 0; li < lines.size(); li++) {
+      float tot = 0;
+      for (size_t k = 0; k < lines[li].size(); k++) tot += segW(labels[lines[li][k]]) + (k ? 4 * u_ : 0);
+      float bx = rx + rw - tot;
+      for (size_t i : lines[li]) { float w = segW(labels[i]); boxes[i] = {bx, float(li) * (segH + 4 * u_), w}; bx += w + 4 * u_; }
+    }
+    return float(lines.size()) * segH + float(lines.size() - 1) * 4 * u_;
+  };
+  auto segDraw = [&](const std::vector<std::string>& labels, const std::vector<Box>& boxes, float top, int on, bool danger = false) {
+    for (size_t i = 0; i < labels.size(); i++) {
+      const Box& bxx = boxes[i];
+      vec4 c = danger ? ko : blue;
+      if (int(i) == on) ui_.roundRect(bxx.x, top + bxx.y, bxx.w, segH, 5 * u_, c);
+      ui_.roundRectStroke(bxx.x, top + bxx.y, bxx.w, segH, 5 * u_, 2 * d, c);
+      ui_.textLH(bxx.x + bxx.w / 2, top + bxx.y, segH, tsm, UiFont::BodyBold, int(i) == on ? white : c, labels[i], UiAlign::Center);
+    }
+  };
+  // one .mp-row: the label (600 t-sm / 1.25, wrapping into labelW) and the control of height ctrlH on the right
+  auto row = [&](const std::string& label, float labelW, float ctrlH, bool foc) {
+    std::vector<std::string> lines;
+    {
+      std::string line, word;
+      for (size_t i = 0; i <= label.size(); i++) {
+        char ch = i < label.size() ? label[i] : ' ';
+        if (ch != ' ') { word += ch; continue; }
+        if (word.empty()) continue;
+        std::string cand = line.empty() ? word : line + " " + word;
+        if (!line.empty() && ui_.textWidth(cand, tsm, UiFont::BodySemi) > labelW) { lines.push_back(line); line = word; } else line = cand;
+        word.clear();
+      }
+      if (!line.empty()) lines.push_back(line);
+    }
+    float lh = tsm * 1.25f, labH = lh * float(lines.size());
+    float h = std::max(42 * u_, 10 * u_ + std::max(labH, ctrlH));
+    if (foc) {
+      ui_.gradientGrid(bx0, ry, bw, h, 8, 1, [](float fx, float) { return vec4(0.082f, 0.275f, 0.784f, 0.09f * (1 - fx)); });
+      ui_.rect(bx0, ry, 4 * u_, h, red);
+    }
+    float ly = ry + (h - labH) / 2;
+    for (auto& l : lines) { ui_.textLH(rx, ly, lh, tsm, UiFont::BodySemi, blue, l); ly += lh; }
+    ui_.rect(bx0, ry + h - d, bw, d, line12);
+    return h;
   };
   auto applyKey = [this](const std::string& k) { save_.markDirty(); if (hooks.setting) hooks.setting(k); };
   for (const SetRow& r : setRows()) {
-    if (!r.key) {
-      ry += 14 * u_;
-      ui_.text(rx, ry, std::max(11.f, 11 * u_), UiFont::Body, red, r.label);
-      ui_.rect(rx, ry + 22 * u_, rw, 2, a(blue, 0.18f));
-      ry += 30 * u_;
-      continue;
-    }
+    if (!r.key) { head(r.label); continue; }
     std::string key = r.key;
     bool foc = int(items_.size()) == focus_;
-    rowBg(ry, foc);
-    ui_.text(rx, ry + (rowH - ui_.lineHeight(fs, UiFont::Body)) / 2, fs, UiFont::Body, blue, r.label);
     Item it;
-    it.x = rx - 14 * u_; it.y = ry; it.w = rw + 28 * u_; it.h = rowH; it.label = key; it.inList = true;
+    it.label = key; it.inList = true;
+    float rowTop = ry, h = 0;
     if (r.kind == 'q') {
       std::string q = save_.quality.empty() ? "balanced" : save_.quality;
       if (q == "low") q = "performance"; else if (q == "medium") q = "balanced";
       int qi = 3;
       for (int i = 0; i < kQualityCount; i++) if (q == QUALITY_ORDER[i]) qi = i;
-      // (seven presets: one selector with arrows instead of the web's wrapping row)
-      std::string lbl = QUALITY_LABELS[qi];
-      float lw = 190 * u_, bx = rx + rw - lw, by = ry + (rowH - segH) / 2;
-      ui_.roundRect(bx, by, lw, segH, 5 * u_, blue);
-      ui_.text(bx + 14 * u_, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, white, "\xE2\x86\x90");
-      ui_.text(bx + lw - 14 * u_, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, white, "\xE2\x86\x92", UiAlign::Right);
-      ui_.text(bx + lw / 2, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, white, lbl, UiAlign::Center);
-      auto set = [this, qi, applyKey](int d) {
-        int n = std::clamp(qi + d, 0, kQualityCount - 1);
+      std::vector<std::string> labels(QUALITY_LABELS, QUALITY_LABELS + kQualityCount);
+      std::vector<Box> boxes;
+      float sh = segLayout(labels, rw - 160 * u_, boxes);
+      h = row(r.label, 140 * u_, sh, foc);
+      float top = rowTop + (h - sh) / 2;
+      segDraw(labels, boxes, top, qi);
+      auto set = [this, qi, applyKey](int i) {
+        int n = std::clamp(i, 0, kQualityCount - 1);
         if (n == qi) return;
         save_.quality = QUALITY_ORDER[n];
         applyKey("quality");
       };
-      it.adjust = set;
-      it.activate = [set] { set(1); };
-      it.clickAt = [set, bx, lw](float mx) { set(mx < bx + lw / 2 ? -1 : 1); };
+      it.adjust = [set, qi](int dd) { set(qi + dd); };
+      it.activate = [set, qi] { set(qi + 1 < kQualityCount ? qi + 1 : 0); };
+      std::vector<vec4> hits;
+      for (auto& bxx : boxes) hits.push_back(vec4(bxx.x, top + bxx.y, bxx.w, segH));
+      it.clickAt = [set, hits](float mx) { for (size_t i = 0; i < hits.size(); i++) if (mx >= hits[i].x && mx <= hits[i].x + hits[i].z) { set(int(i)); return; } };
     } else if (r.kind == 'r') {
       double v = save_.setting(r.key, r.min);
-      float tw = 230 * u_, tx = rx + rw - tw - 60 * u_, ty = ry + rowH / 2;
-      float f = float((v - r.min) / (r.max - r.min));
-      ui_.roundRect(tx, ty - 3 * u_, tw, 6 * u_, 3 * u_, a(blue, 0.2f));
-      ui_.roundRect(tx, ty - 3 * u_, tw * f, 6 * u_, 3 * u_, blue);
-      ui_.circle(tx + tw * f, ty, 8 * u_, blue);
-      ui_.circle(tx + tw * f, ty, 4 * u_, white);
       char b[32];
       if (r.fmt[0] == 'p') std::snprintf(b, sizeof b, "%d%%", int(std::round(v * 100)));
       else if (r.fmt[0] == 'x') std::snprintf(b, sizeof b, "%.1fx", v);
       else std::snprintf(b, sizeof b, "%d\xC2\xB0", int(std::round(v)));
-      ui_.text(rx + rw, ry + (rowH - ui_.lineHeight(22 * u_, UiFont::CondItalic)) / 2, 22 * u_, UiFont::CondItalic, blue, b, UiAlign::Right);
+      float emW = std::max(48 * u_, ui_.textWidth(b, tsm, UiFont::BodyBold)), tw = 200 * u_;
+      float ctrlH = 16 * d;
+      h = row(r.label, rw - tw - 10 * u_ - emW - 16 * u_, ctrlH, foc);
+      float cy = rowTop + h / 2, tx = rx + rw - emW - 10 * u_ - tw;
+      // input[type=range] with accent-color: a rounded track (the done part blue), a round blue thumb
+      float f = float(std::clamp((v - r.min) / (r.max - r.min), 0.0, 1.0)), th = 8 * d, kr = 8 * d;
+      float kx = tx + kr + (tw - 2 * kr) * f;
+      ui_.roundRect(tx, cy - th / 2, tw, th, th / 2, hex(0xefefef));
+      ui_.roundRectStroke(tx, cy - th / 2, tw, th, th / 2, 1 * d, hex(0xb2b2b2));
+      ui_.roundRect(tx, cy - th / 2, kx - tx, th, th / 2, blue);
+      ui_.circle(kx, cy, kr, blue);
+      ui_.textLH(rx + rw, cy - tsm / 2, tsm, tsm, UiFont::BodyBold, blueDim, b, UiAlign::Right);
       double mn = r.min, mx = r.max, st = r.step;
-      it.adjust = [this, key, v, mn, mx, st, applyKey](int d) {
-        double n = std::clamp(std::round((v + d * st) / st) * st, mn, mx);
+      it.adjust = [this, key, v, mn, mx, st, applyKey](int dd) {
+        double n = std::clamp(std::round((v + dd * st) / st) * st, mn, mx);
         save_.settings[key] = n; applyKey(key);
       };
-      it.clickAt = [this, key, tx, tw, mn, mx, st, applyKey](float px) {
+      it.clickAt = [this, key, tx, tw, kr, mn, mx, st, applyKey](float px) {
         if (px < tx - 10 * u_ || px > tx + tw + 10 * u_) return;
-        double n = std::clamp(mn + std::round((mx - mn) * std::clamp((px - tx) / tw, 0.f, 1.f) / st) * st, mn, mx);
+        double n = std::clamp(mn + std::round((mx - mn) * std::clamp((px - tx - kr) / (tw - 2 * kr), 0.f, 1.f) / st) * st, mn, mx);
         save_.settings[key] = n; applyKey(key);
       };
     } else if (r.kind == 't' || r.kind == 'c' || r.kind == 'h' || r.kind == 'x') {
@@ -691,11 +877,15 @@ void Menus::scrSettings() {
       }
       std::vector<std::string> labels;
       for (auto& o : opts) labels.push_back(o.second);
-      std::vector<float> xs;
-      seg(ry, labels, on, xs);
+      std::vector<Box> boxes;
+      float sh = segLayout(labels, rw * 0.7f, boxes);
+      float segTot = boxes.empty() ? 0 : rx + rw - boxes[0].x;
+      h = row(r.label, rw - segTot - 16 * u_, sh, foc);
+      float top = rowTop + (h - sh) / 2;
+      segDraw(labels, boxes, top, on);
       char kind = r.kind;
       auto pick = [this, key, opts, kind, applyKey](int i) {
-        i = std::clamp(i, 0, int(opts.size()) - 1);
+        i = ((i % int(opts.size())) + int(opts.size())) % int(opts.size());
         if (kind == 'h') {
           static const bool modes[3][4] = {{true, true, true, true}, {true, true, false, false}, {false, false, false, false}};
           for (int k = 0; k < 4; k++) save_.settings[HUD_KEYS[k]] = modes[i][k];
@@ -703,39 +893,42 @@ void Menus::scrSettings() {
         else save_.settings[key] = opts[size_t(i)].first;
         applyKey(key);
       };
-      it.adjust = [pick, on](int d) { pick(on + d); };
-      it.activate = [pick, on, opts] { pick((on + 1) % int(opts.size())); };
-      it.clickAt = [pick, xs](float px) { for (size_t i = 0; i + 1 < xs.size(); i++) if (px >= xs[i] && px < xs[i + 1]) { pick(int(i)); return; } };
+      it.adjust = [pick, on](int dd) { pick(on + dd); };
+      it.activate = [pick, on] { pick(on + 1); };
+      std::vector<vec4> hits;
+      for (auto& bxx : boxes) hits.push_back(vec4(bxx.x, top + bxx.y, bxx.w, segH));
+      it.clickAt = [pick, hits](float mx) { for (size_t i = 0; i < hits.size(); i++) if (mx >= hits[i].x && mx <= hits[i].x + hits[i].z) { pick(int(i)); return; } };
     } else if (r.kind == 'k') {
-      std::vector<float> xs;
-      seg(ry, {"Change controls"}, -1, xs);
+      std::vector<Box> boxes;
+      std::vector<std::string> labels = {"Change controls"};
+      float sh = segLayout(labels, rw, boxes);
+      h = row(r.label, rw - boxes[0].w - 16 * u_, sh, foc);
+      segDraw(labels, boxes, rowTop + (h - sh) / 2, -1);
       it.activate = [this] { ctlBack_ = Screen::Settings; open(Screen::Controls); };
     }
+    it.x = bx0; it.y = rowTop; it.w = bw; it.h = h;
     items_.push_back(it);
-    ry += rowH;
+    ry += h;
   }
   // PLAYER
-  ry += 14 * u_;
-  ui_.text(rx, ry, std::max(11.f, 11 * u_), UiFont::Body, red, "PLAYER");
-  ui_.rect(rx, ry + 22 * u_, rw, 2, a(blue, 0.18f));
-  ry += 30 * u_;
+  head("PLAYER");
   auto actionRow = [&](const std::string& label, const std::string& btn, bool danger, std::function<void()> act, const std::string& id) {
     bool foc = int(items_.size()) == focus_;
-    rowBg(ry, foc);
-    ui_.text(rx, ry + (rowH - ui_.lineHeight(fs, UiFont::Body)) / 2, fs, UiFont::Body, blue, label);
-    float bw = ui_.textWidth(btn, sfs, UiFont::Body) + 24 * u_, bx = rx + rw - bw, by = ry + (rowH - segH) / 2;
-    ui_.roundRectStroke(bx, by, bw, segH, 5 * u_, 2, danger ? ko : blue);
-    ui_.text(bx + bw / 2, by + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, danger ? ko : blue, btn, UiAlign::Center);
+    std::vector<Box> boxes;
+    std::vector<std::string> labels = {btn};
+    float sh = segLayout(labels, rw, boxes);
+    float rowTop = ry, h = row(label, rw - boxes[0].w - 16 * u_, sh, foc);
+    segDraw(labels, boxes, rowTop + (h - sh) / 2, -1, danger);
     Item it;
-    it.x = rx - 14 * u_; it.y = ry; it.w = rw + 28 * u_; it.h = rowH; it.label = id; it.activate = std::move(act); it.inList = true;
+    it.x = bx0; it.y = rowTop; it.w = bw; it.h = h; it.label = id; it.activate = std::move(act); it.inList = true;
     items_.push_back(it);
-    ry += rowH;
+    ry += h;
   };
   actionRow("Skier", "Change skier", false, [this] { open(Screen::Showcase); }, "skier");
   {
     std::string acc = mp.account ? mp.account() : "";
     actionRow("Account", acc.empty() ? "Signed in as " + plat_.userName() : "Multiplayer: " + acc, false, [this, acc] {
-      if (hooks.flash) hooks.flash(acc.empty() ? "This save is on this device Â· PLAY -> MULTIPLAYER registers a name on the server" : "Your multiplayer name on this device: " + acc, 0);
+      if (hooks.flash) hooks.flash(acc.empty() ? "This save is on this device \xC2\xB7 PLAY -> MULTIPLAYER registers a name on the server" : "Your multiplayer name on this device: " + acc, 0);
     }, "account");
   }
   actionRow("Progress", "Reset all progress", true, [this] {
@@ -745,9 +938,11 @@ void Menus::scrSettings() {
     open(Screen::Confirm);
   }, "reset");
   ui_.popClip();
-  contentH_ = ry + scroll_ - listTop_ + 10 * u_;
-  // keep the focused row in view
-  if (focus_ >= 0 && focus_ < int(items_.size())) {
+  contentH_ = ry + scroll_ - listTop_;
+  drawScrollbar();
+  // keep the focused row in view (moved by keys / buttons only: the wheel and a hover leave the list where it is)
+  if (focusScroll_ && focus_ >= 0 && focus_ < int(items_.size())) {
+    focusScroll_ = false;
     const Item& f = items_[size_t(focus_)];
     float top = f.y + scroll_ - listTop_;
     if (top < scrollTarget_) scrollTarget_ = std::max(0.f, top - 40 * u_);
@@ -795,13 +990,17 @@ void Menus::controlsCapture(const UiNav& nav) {
 
 void Menus::scrControls() {
   drawShade(1);
-  float x = 70 * u_, y = 30 * u_;
+  drawLogo(false);
+  float x = 72 * u_, y = 46 * u_;
   heading(x, y, "CONTROLS", "Keyboard, mouse and controller \xC2\xB7 Xbox, PlayStation and Switch \xC2\xB7 select a key or button to change it");
   if (!ctlFamilyPicked_) ctlFamily_ = input_.padConnected() ? input_.padFamily() : ctlFamily_;
-  float py = y + 150 * u_, ph = float(ui_.height()) - py - 80 * u_;
-  float pw = std::min(700 * u_, float(ui_.width()) * 0.56f), refW = float(ui_.width()) - x - pw - 60 * u_;
-  panel(x, py, pw, ph);
-  listTop_ = py + 14 * u_; listH_ = ph - 50 * u_;
+  float py = y + 90 * u_ + 6 * u_ + std::max(13 * ui_.dpr(), 15 * u_) * 1.35f + 20 * u_, ph = float(ui_.height()) - py - 92 * u_;
+  float pw = std::min(660 * u_, float(ui_.width()) * 0.56f), refW = std::min(460 * u_, float(ui_.width()) - x - pw - 22 * u_ - 40 * u_);
+  {
+    Ui::Shadow sh{0, 10 * u_, 24 * u_, hex(0x000e2c, 0.3f)};
+    ui_.brushClip(x, py, pw, ph, a(white, 0.95f), 170, 5, 4, u_, &sh);
+  }
+  listTop_ = py + 14 * u_; listH_ = ph - 50 * u_; listRight_ = x + pw - 6 * u_;
   ui_.pushClip(x, listTop_, pw, listH_);
   float rx = x + 26 * u_, rw = pw - 52 * u_, ry = listTop_ - scroll_, rowH = 40 * u_, fs = std::max(12.f, 13.5f * u_), sfs = std::max(11.f, 12.5f * u_);
   float colKb = rx + rw * 0.56f, colPad = rx + rw * 0.79f, cellW = rw * 0.2f, cellH = 28 * u_;
@@ -809,8 +1008,8 @@ void Menus::scrControls() {
   {
     bool foc = int(items_.size()) == focus_;
     if (foc) { ui_.rectGradient(rx - 12 * u_, ry, rw + 24 * u_, rowH + 10 * u_, a(blue, 0.09f), a(blue, 0)); ui_.rect(rx - 12 * u_, ry, 4 * u_, rowH + 10 * u_, red); }
-    ui_.text(rx, ry + 6 * u_, fs, UiFont::Body, blue, "Controller");
-    ui_.text(rx, ry + 6 * u_ + fs * 1.25f, sfs * 0.9f, UiFont::Body, blueDim, input_.padConnected() ? "Connected" : "None connected \xC2\xB7 preview");
+    ui_.text(rx, ry + 6 * u_, fs, UiFont::BodySemi, blue, "Controller");
+    ui_.text(rx, ry + 6 * u_ + fs * 1.25f, sfs * 0.9f, UiFont::BodySemi, blueDim, input_.padConnected() ? "Connected" : "None connected \xC2\xB7 preview");
     const char* fams[3] = {"Xbox", "PlayStation", "Switch"};
     float bx = rx + rw, segH = 28 * u_;
     std::vector<float> xs(4);
@@ -820,7 +1019,7 @@ void Menus::scrControls() {
     for (int i = 0; i < 3; i++) {
       bool on = int(ctlFamily_) == i;
       if (on) ui_.roundRect(xs[size_t(i)], ry + 8 * u_, ws[i], segH, 5 * u_, blue); else ui_.roundRectStroke(xs[size_t(i)], ry + 8 * u_, ws[i], segH, 5 * u_, 2, blue);
-      ui_.text(xs[size_t(i)] + ws[i] / 2, ry + 8 * u_ + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, on ? white : blue, fams[i], UiAlign::Center);
+      ui_.text(xs[size_t(i)] + ws[i] / 2, ry + 8 * u_ + (segH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::BodySemi, on ? white : blue, fams[i], UiAlign::Center);
     }
     Item it;
     it.x = rx - 12 * u_; it.y = ry; it.w = rw + 24 * u_; it.h = rowH + 10 * u_; it.label = "family"; it.inList = true;
@@ -831,9 +1030,9 @@ void Menus::scrControls() {
     items_.push_back(it);
     ry += rowH + 16 * u_;
   }
-  ui_.text(rx, ry, std::max(10.f, 10.5f * u_), UiFont::Body, red, "ACTION");
-  ui_.text(colKb, ry, std::max(10.f, 10.5f * u_), UiFont::Body, red, "KEYBOARD");
-  ui_.text(colPad, ry, std::max(10.f, 10.5f * u_), UiFont::Body, red, "CONTROLLER");
+  ui_.text(rx, ry, std::max(10.f, 10.5f * u_), UiFont::BodySemi, red, "ACTION");
+  ui_.text(colKb, ry, std::max(10.f, 10.5f * u_), UiFont::BodySemi, red, "KEYBOARD");
+  ui_.text(colPad, ry, std::max(10.f, 10.5f * u_), UiFont::BodySemi, red, "CONTROLLER");
   ry += 22 * u_;
   std::string lastG;
   for (size_t i = 0; i < kActionCount; i++) {
@@ -841,13 +1040,13 @@ void Menus::scrControls() {
     if (lastG != ai.group) {
       lastG = ai.group;
       ry += 8 * u_;
-      ui_.text(rx, ry, std::max(10.f, 11 * u_), UiFont::Body, red, lastG == "MENUS" ? "MENUS & SCREENS" : lastG);
+      ui_.text(rx, ry, std::max(10.f, 11 * u_), UiFont::BodySemi, red, lastG == "MENUS" ? "MENUS & SCREENS" : lastG);
       ui_.rect(rx, ry + 20 * u_, rw, 2, a(blue, 0.18f));
       ry += 26 * u_;
     }
     bool foc = int(items_.size()) == focus_;
     if (foc) { ui_.rectGradient(rx - 12 * u_, ry, rw + 24 * u_, rowH, a(blue, 0.09f), a(blue, 0)); ui_.rect(rx - 12 * u_, ry, 4 * u_, rowH, red); }
-    ui_.textFit(rx, ry + (rowH - ui_.lineHeight(fs, UiFont::Body)) / 2, colKb - rx - 10 * u_, fs, UiFont::Body, blue, ai.label);
+    ui_.textFit(rx, ry + (rowH - ui_.lineHeight(fs, UiFont::Body)) / 2, colKb - rx - 10 * u_, fs, UiFont::BodySemi, blue, ai.label);
     bool stick = i <= size_t(Action::Right);
     bool capKb = captureAction_ == int(i) && captureCol_ == 0, capPad = captureAction_ == int(i) && captureCol_ == 1;
     std::string kb = ai.padOnly ? "\xE2\x80\x94" : capKb ? "Press a key" : prompts::keyLabel(input_.kb[i]);
@@ -864,8 +1063,8 @@ void Menus::scrControls() {
       const std::string& lbl = c == 0 ? kb : pd;
       vec4 col = cap || sel ? white : fixed ? a(blue, 0.45f) : blue;
       bool shape = !cap && c == 1 && ctlFamily_ == PadFamily::PlayStation && input_.pad[i] >= 0 && input_.pad[i] <= 3 && !stick;
-      if (shape) ui_.keycap(cx + cellW / 2 - cellH * 0.45f, by + cellH * 0.08f, cellH * 0.84f, lbl, sel);
-      else ui_.textFit(cx + cellW / 2, by + (cellH - ui_.lineHeight(sfs, UiFont::Body)) / 2, cellW - 8 * u_, sfs, UiFont::Body, col, lbl, UiAlign::Center);
+      if (shape) ui_.kc(cx + cellW / 2 - ui_.kcWidth(u_, lbl) / 2, by + (cellH - ui_.kcHeight(u_)) / 2, u_, lbl, sel ? white : blue, vec4(0), sel ? white : hex(0x1546c8, 0.42f));
+      else ui_.textFit(cx + cellW / 2, by + (cellH - ui_.lineHeight(sfs, UiFont::Body)) / 2, cellW - 8 * u_, sfs, UiFont::BodySemi, col, lbl, UiAlign::Center);
     }
     Item it;
     it.x = rx - 12 * u_; it.y = ry; it.w = rw + 24 * u_; it.h = rowH; it.label = std::string("bind:") + ai.id; it.inList = true;
@@ -894,7 +1093,7 @@ void Menus::scrControls() {
     ry += 10 * u_;
     bool foc = int(items_.size()) == focus_;
     if (foc) { ui_.rectGradient(rx - 12 * u_, ry, rw + 24 * u_, rowH, a(blue, 0.09f), a(blue, 0)); ui_.rect(rx - 12 * u_, ry, 4 * u_, rowH, red); }
-    ui_.text(rx, ry + (rowH - ui_.lineHeight(fs, UiFont::Body)) / 2, fs, UiFont::Body, blue, "Defaults");
+    ui_.text(rx, ry + (rowH - ui_.lineHeight(fs, UiFont::Body)) / 2, fs, UiFont::BodySemi, blue, "Defaults");
     const char* lb[2] = {"Reset keyboard", "Reset controller"};
     float bw[2] = {ui_.textWidth(lb[0], sfs, UiFont::Body) + 20 * u_, ui_.textWidth(lb[1], sfs, UiFont::Body) + 20 * u_};
     float bx1 = rx + rw - bw[1], bx0 = bx1 - 6 * u_ - bw[0];
@@ -902,7 +1101,7 @@ void Menus::scrControls() {
       float bx = c == 0 ? bx0 : bx1;
       bool sel = foc && ctlCol_ == c;
       if (sel) ui_.roundRect(bx, ry + 6 * u_, bw[c], cellH, 5 * u_, blue); else ui_.roundRectStroke(bx, ry + 6 * u_, bw[c], cellH, 5 * u_, 2, blue);
-      ui_.text(bx + bw[c] / 2, ry + 6 * u_ + (cellH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::Body, sel ? white : blue, lb[c], UiAlign::Center);
+      ui_.text(bx + bw[c] / 2, ry + 6 * u_ + (cellH - ui_.lineHeight(sfs, UiFont::Body)) / 2, sfs, UiFont::BodySemi, sel ? white : blue, lb[c], UiAlign::Center);
     }
     auto reset = [this](int c) {
       for (size_t i = 0; i < kActionCount; i++) { if (c == 0) input_.kb[i] = Input::defaultKey(Action(i)); else input_.pad[i] = Input::defaultPad(Action(i)); }
@@ -920,20 +1119,25 @@ void Menus::scrControls() {
   }
   ui_.popClip();
   contentH_ = ry + scroll_ - listTop_ + 10 * u_;
-  if (focus_ >= 0 && focus_ < int(items_.size())) {
+  drawScrollbar();
+  if (focusScroll_ && focus_ >= 0 && focus_ < int(items_.size())) {
+    focusScroll_ = false;
     const Item& f = items_[size_t(focus_)];
     float top = f.y + scroll_ - listTop_;
     if (top < scrollTarget_) scrollTarget_ = std::max(0.f, top - 50 * u_);
     else if (top + f.h > scrollTarget_ + listH_) scrollTarget_ = std::min(std::max(0.f, contentH_ - listH_), top + f.h - listH_ + 20 * u_);
   }
-  if (!ctlStatus_.empty()) ui_.text(rx, py + ph - 30 * u_, sfs, UiFont::Body, ctlStatusBad_ ? ko : blue, ctlStatus_);
+  if (!ctlStatus_.empty()) ui_.text(rx, py + ph - 30 * u_, sfs, UiFont::BodySemi, ctlStatusBad_ ? ko : blue, ctlStatus_);
   // the reference (what each control does), when there is room
   if (refW > 300 * u_) {
-    float qx = x + pw + 30 * u_;
-    panel(qx, py, refW, ph);
+    float qx = x + pw + 22 * u_;
+    {
+      Ui::Shadow sh{0, 10 * u_, 24 * u_, hex(0x000e2c, 0.3f)};
+      ui_.brushClip(qx, py, refW, ph, a(white, 0.95f), 171, 5, 4, u_, &sh);
+    }
     float qy = py + 22 * u_, qx0 = qx + 24 * u_, qw = refW - 48 * u_;
-    ui_.text(qx0, qy, std::max(10.f, 10.5f * u_), UiFont::Body, red, "KEYBOARD");
-    ui_.text(qx0 + qw * 0.3f, qy, std::max(10.f, 10.5f * u_), UiFont::Body, red, prompts::familyName(ctlFamily_));
+    ui_.text(qx0, qy, std::max(10.f, 10.5f * u_), UiFont::BodySemi, red, "KEYBOARD");
+    ui_.text(qx0 + qw * 0.3f, qy, std::max(10.f, 10.5f * u_), UiFont::BodySemi, red, prompts::familyName(ctlFamily_));
     qy += 24 * u_;
     struct Ref { const char* group; Action a; const char* what; };
     static const Ref refs[] = {
@@ -944,15 +1148,15 @@ void Menus::scrControls() {
       {"GENERAL", Action::Interact, "Interact"}, {nullptr, Action::View, "First / third person"}, {nullptr, Action::Skis, "Skis on / off"}, {nullptr, Action::Map, "Trail map"},
       {nullptr, Action::Pause, "Pause menu"},
     };
-    float kh = std::max(15.f, 19 * u_);
+    float kh = ui_.kcHeight(u_);
     ui_.pushClip(qx, py + 10 * u_, refW, ph - 20 * u_);
     for (const Ref& r : refs) {
-      if (r.group) { qy += 6 * u_; ui_.text(qx0, qy, std::max(10.f, 10.5f * u_), UiFont::Body, red, r.group); qy += 20 * u_; }
+      if (r.group) { qy += 6 * u_; ui_.text(qx0, qy, std::max(10.f, 10.5f * u_), UiFont::BodySemi, red, r.group); qy += 20 * u_; }
       std::string k = prompts::bindLabel(input_, r.a, false, ctlFamily_), p = prompts::bindLabel(input_, r.a, true, ctlFamily_);
       if (r.a == Action::Left) { k = prompts::keyLabel(input_.kb[size_t(Action::Left)]) + " " + prompts::keyLabel(input_.kb[size_t(Action::Right)]); p = "L STICK"; }
-      ui_.keycap(qx0, qy, kh, k);
-      ui_.keycap(qx0 + qw * 0.3f, qy, kh, p);
-      ui_.textFit(qx0 + qw * 0.58f, qy + (kh - ui_.lineHeight(sfs, UiFont::Body)) / 2, qw * 0.42f, sfs, UiFont::Body, blue, r.what);
+      ui_.kc(qx0, qy, u_, k, blue, ice, hex(0x1546c8, 0.42f));
+      ui_.kc(qx0 + qw * 0.3f, qy, u_, p, blue, ice, hex(0x1546c8, 0.42f));
+      ui_.textFit(qx0 + qw * 0.58f, qy + (kh - ui_.lineHeight(sfs, UiFont::Body)) / 2, qw * 0.42f, sfs, UiFont::BodySemi, blue, r.what);
       qy += kh + 7 * u_;
     }
     ui_.popClip();
@@ -962,38 +1166,106 @@ void Menus::scrControls() {
 
 // ---------------------------------------------------------------- the card dialog
 void Menus::scrDialog() {
-  drawShade(0);
-  float x = 110 * u_, y = 70 * u_, cw = std::min(640 * u_, float(ui_.width()) - x - 40 * u_);
-  if (!dialog_.kicker.empty()) { ui_.text(x + 6 * u_, y - 26 * u_, std::max(11.f, 12 * u_), UiFont::Body, a(white, 0.85f), upper(dialog_.kicker)); }
-  // the title as a white brush strip (hud.js .card h2)
-  float th = 62 * u_, tw = ui_.textWidth(dialog_.title, 36 * u_, UiFont::CondItalic) + 72 * u_;
-  ui_.shadow(x, y, tw, th, 4 * u_, 10 * u_, 0.25f);
-  ui_.brushPanel(x, y, tw, th, white, 0);
-  ui_.text(x + 26 * u_, y + (th - ui_.lineHeight(36 * u_, UiFont::CondItalic)) / 2, 36 * u_, UiFont::CondItalic, blue, dialog_.title);
-  y += th + 14 * u_;
-  if (!dialog_.say.empty()) y += ui_.textWrapped(x + 4 * u_, y, cw, std::max(13.f, 16 * u_), UiFont::Body, white, dialog_.say) + 10 * u_;
-  // tabs
+  // hud.js dialog + travel.css (the card dialog): over the .modal shade, centred: the kicker, the title stroke
+  // (brushSVG(len * 7 + 3, w, 100)), the line, the option cards (262u x 196u paper, brushClip(60 + 5 i, 6, 4)) and the
+  // secondary buttons with the key hints. Long lists (a shop's racks, tabs, colours) stack as wide rows (#panel.talk).
+  const float d = ui_.dpr(), W = float(ui_.width()), H = float(ui_.height());
+  const float txs = std::max(11 * d, 11 * u_), tsm = std::max(12 * d, 13 * u_), sayS = std::max(14 * d, 17 * u_);
+  // .modal: linear-gradient(90deg, rgba(4,14,34,.78) 0%, .55 55%, .35 100%)
+  ui_.gradientGrid(0, 0, W, H, 16, 1, [](float fx, float) {
+    float al = fx < 0.55f ? 0.78f + (0.55f - 0.78f) * fx / 0.55f : 0.55f + (0.35f - 0.55f) * (fx - 0.55f) / 0.45f;
+    return vec4(0.016f, 0.055f, 0.133f, al);
+  });
+  std::vector<size_t> main, second;
+  bool swatches = false;
+  for (size_t i = 0; i < dialog_.options.size(); i++) { (dialog_.options[i].secondary ? second : main).push_back(i); swatches |= dialog_.options[i].swatch != 0; }
+  bool cards = dialog_.tabs.empty() && !swatches && main.size() <= 4;
+  float hostW = std::min(900 * u_, W * 0.94f), x = (W - hostW) / 2 + 8 * u_, cw = hostW - 16 * u_;
+  // -- heights first (the block is centred vertically)
+  std::string title = upper(dialog_.title);
+  float tvw = std::max(220.f, std::round(float(title.size()) * 26 + 110)), tW = std::round(tvw * 0.92f) * u_, tH = 96 * u_;
+  float kickH = dialog_.kicker.empty() ? 0 : txs + 6 * u_;
+  // the line (wrapped to 720u)
+  float sayW = std::min(720 * u_, cw - 14 * u_);
+  float sayH = 0;
+  if (!dialog_.say.empty()) {
+    int n = 1;
+    std::string line, word;
+    for (size_t i = 0; i <= dialog_.say.size(); i++) {
+      char ch = i < dialog_.say.size() ? dialog_.say[i] : ' ';
+      if (ch == '\n') { n++; line.clear(); continue; }
+      if (ch != ' ') { word += ch; continue; }
+      if (word.empty()) continue;
+      std::string cand = line.empty() ? word : line + " " + word;
+      if (!line.empty() && ui_.textWidth(cand, sayS, UiFont::BodyMed) > sayW) { n++; line = word; } else line = cand;
+      word.clear();
+    }
+    sayH = 10 * u_ + sayS * 1.45f * float(n) + 22 * u_;
+  } else sayH = 10 * u_;
+  float tabsH = dialog_.tabs.empty() ? 0 : 54 * u_ + 18 * u_;
+  float cardW = 262 * u_, cardH = 196 * u_, gap = 22 * u_, rowH = 74 * u_, rowGap = 10 * u_;
+  int perRow = std::max(1, int((cw - 10 * u_ + gap) / (cardW + gap)));
+  float listFull = cards ? float((int(main.size()) + perRow - 1) / perRow) * (cardH + gap) - gap : float(main.size()) * (rowH + rowGap) - rowGap;
+  float footH = 26 * u_ + 54 * u_;
+  float maxList = std::max(rowH, H - 2 * 40 * u_ - (kickH + tH + sayH + tabsH + footH) - 20 * u_);
+  float listVis = std::min(listFull, maxList);
+  float total = 10 * u_ + kickH + tH + sayH + tabsH + listVis + footH + 10 * u_;
+  float y = std::max(20 * u_, (H - total) / 2) + 10 * u_;
+  // -- the kicker, the title, the line
+  if (!dialog_.kicker.empty()) {
+    ui_.rect(x + 14 * u_, y + txs / 2 - 2 * u_, 22 * u_, 4 * u_, red);
+    std::string k = upper(dialog_.kicker);
+    ui_.textShadow(x + 46 * u_, y, txs, UiFont::BodyHeavy, k, UiAlign::Left, 0.2f, 0, d, 6 * d, hex(0x000a1e, 0.55f));
+    ui_.textLH(x + 46 * u_, y, txs, txs, UiFont::BodyHeavy, white, k, UiAlign::Left, 0.2f);
+    y += kickH;
+  }
+  {
+    Ui::Shadow sh{0, 6 * u_, 14 * u_, a(hex(0x000000), 0.28f)};
+    ui_.brushStroke(x, y, tW, tH, white, int(dialog_.title.size()) * 7 + 3, tvw, 100, &sh);
+    ui_.textLH(x + 40 * u_, y, tH, 50 * u_, UiFont::CondItalic, blue, title, UiAlign::Left, 0.03f);
+    y += tH;
+  }
+  if (!dialog_.say.empty()) {
+    // (wrapped to 720u, line-height 1.45, text-shadow 0 1px 8px rgba(0, 10, 30, .6))
+    std::vector<std::string> lines;
+    std::string line, word;
+    for (size_t i = 0; i <= dialog_.say.size(); i++) {
+      char ch = i < dialog_.say.size() ? dialog_.say[i] : ' ';
+      if (ch == '\n') { if (!word.empty()) { line += (line.empty() ? "" : " ") + word; word.clear(); } lines.push_back(line); line.clear(); continue; }
+      if (ch != ' ') { word += ch; continue; }
+      if (word.empty()) continue;
+      std::string cand = line.empty() ? word : line + " " + word;
+      if (!line.empty() && ui_.textWidth(cand, sayS, UiFont::BodyMed) > sayW) { lines.push_back(line); line = word; } else line = cand;
+      word.clear();
+    }
+    if (!line.empty()) lines.push_back(line);
+    float ly = y + 10 * u_;
+    for (auto& l : lines) {
+      float ty = ly + (sayS * 1.45f - ui_.lineHeight(sayS, UiFont::BodyMed)) / 2;
+      ui_.textShadow(x + 14 * u_, ty, sayS, UiFont::BodyMed, l, UiAlign::Left, 0, 0, d, 8 * d, hex(0x000a1e, 0.6f));
+      ui_.text(x + 14 * u_, ty, sayS, UiFont::BodyMed, white, l);
+      ly += sayS * 1.45f;
+    }
+    y += sayH;
+  } else y += sayH;
+  // -- tabs (the outfit racks): the .seg-brush switch, Q / E
   if (!dialog_.tabs.empty()) {
-    float bx = x, segH = 32 * u_, sfs = std::max(12.f, 14 * u_);
+    float bx = x + 10 * u_;
     for (size_t i = 0; i < dialog_.tabs.size(); i++) {
-      float bw = ui_.textWidth(dialog_.tabs[i], sfs, UiFont::CondBold) + 26 * u_;
+      std::string t = upper(dialog_.tabs[i]);
+      float bw = ui_.textWidth(t, 26 * u_, UiFont::CondItalic, 0.05f) + 52 * u_;
       bool on = int(i) == dialog_.tab;
-      ui_.roundRect(bx, y, bw, segH, 5 * u_, on ? white : a(white, 0.18f));
-      ui_.text(bx + bw / 2, y + (segH - ui_.lineHeight(sfs, UiFont::CondBold)) / 2, sfs, UiFont::CondBold, on ? blue : white, dialog_.tabs[i], UiAlign::Center);
-      bx += bw + 6 * u_;
+      ui_.brushPanel(bx, y, bw, 54 * u_, on ? blue : a(white, 0.88f), 1);
+      ui_.textLH(bx + bw / 2, y, 54 * u_, 26 * u_, UiFont::CondItalic, on ? white : blue, t, UiAlign::Center, 0.05f);
+      bx += bw + 8 * u_;
     }
     std::string tcap = input_.usingGamepad() ? std::string(prompts::padGlyph(4, input_.padFamily())) + " " + prompts::padGlyph(5, input_.padFamily()) : "Q E";
-    ui_.keycap(bx + 8 * u_, y + 5 * u_, segH - 10 * u_, tcap);
-    y += segH + 12 * u_;
+    ui_.kc(bx + 10 * u_, y + 27 * u_ - ui_.kcHeight(u_) / 2, u_, tcap, a(white, 0.88f), vec4(0), a(white, 0.7f));
+    y += tabsH;
   }
-  std::vector<size_t> main, second;
-  for (size_t i = 0; i < dialog_.options.size(); i++) (dialog_.options[i].secondary ? second : main).push_back(i);
-  float cardH = 66 * u_, gap = 8 * u_;
-  float bottom = float(ui_.height()) - 80 * u_ - (second.empty() ? 0 : 74 * u_);
-  listTop_ = y; listH_ = std::max(cardH, bottom - y);
-  contentH_ = float(main.size()) * (cardH + gap);
-  ui_.pushClip(0, listTop_ - 2, float(ui_.width()), listH_ + 4);
-  float cy = y - scroll_;
+  // -- the options
+  listTop_ = y - 12 * u_; listH_ = listVis + 24 * u_; listRight_ = x + cw; contentH_ = listFull + 24 * u_;
+  ui_.pushClip(0, listTop_, W, listH_);
   auto choose = [this](size_t oi) {
     DialogOption o = dialog_.options[oi];
     if (o.disabled) return;
@@ -1002,73 +1274,154 @@ void Menus::scrDialog() {
     if (o.act) o.act();
     if (keep && screen_ == Screen::Dialog && dialog_.rebuild) dialog_.rebuild(dialog_);
   };
-  for (size_t k : main) {
+  const vec4 kcBorder = hex(0x1546c8, 0.35f);
+  for (size_t n = 0; n < main.size(); n++) {
+    size_t k = main[n];
     const DialogOption& o = dialog_.options[k];
     bool foc = int(items_.size()) == focus_;
-    float ox = foc ? 10 * u_ : 0;
-    float alpha = o.disabled ? 0.55f : 1.f;
-    if (cy + cardH < listTop_ - 2 || cy > listTop_ + listH_ + 2) { cy += cardH + gap; Item skip; skip.x = x; skip.y = cy - cardH - gap; skip.w = cw; skip.h = cardH; skip.label = o.label; skip.inList = true;
-      skip.activate = [choose, k] { choose(k); }; items_.push_back(skip); continue; }
-    bool inside = cy >= listTop_ - 1 && cy + cardH <= listTop_ + listH_ + 1;
-    if (inside) { ui_.shadow(x + ox, cy, cw, cardH, 4 * u_, 8 * u_, 0.2f); ui_.brushPanel(x + ox, cy, cw, cardH, foc ? white : ice, int(k % 2)); }
-    else ui_.roundRect(x + ox, cy + 3 * u_, cw, cardH - 6 * u_, 3 * u_, foc ? white : ice);   // (half scrolled out: clipped)
-    if (foc) ui_.rect(x - 12 * u_, cy + cardH * 0.25f, 5 * u_, cardH * 0.5f, red);
-    float tx = x + ox + 22 * u_;
-    if (o.swatch) {
-      ui_.roundRect(tx, cy + cardH / 2 - 18 * u_, 36 * u_, 36 * u_, 6 * u_, hex(o.swatch, alpha));
-      if (o.swatch2 && o.swatch2 != o.swatch) ui_.tri(vec2(tx + 36 * u_, cy + cardH / 2 - 18 * u_), vec2(tx + 36 * u_, cy + cardH / 2 + 18 * u_), vec2(tx, cy + cardH / 2 + 18 * u_), hex(o.swatch2, alpha));
-      tx += 50 * u_;
-    }
-    float chipW = 0;
-    std::string chip = o.state.empty() ? (o.price > 0 ? "$" + fmtMoney(o.price) : o.price == 0 ? "FREE" : "") : upper(o.state);
-    if (!chip.empty()) {
-      float cfs = o.state.empty() && o.price > 0 ? 26 * u_ : std::max(12.f, 13 * u_);
-      UiFont cf = o.state.empty() && o.price > 0 ? UiFont::CondItalic : UiFont::CondBold;
-      chipW = ui_.textWidth(chip, cfs, cf) + 26 * u_;
-      bool shortMoney = o.price > 0 && o.state.empty() && save_.money < o.price;
-      vec4 cc = shortMoney ? ko : o.state.empty() ? blue : ok;
-      float chx = x + ox + cw - 22 * u_ - chipW, chh = 34 * u_;
-      if (o.state.empty()) ui_.text(chx + chipW / 2, cy + (cardH - ui_.lineHeight(cfs, cf)) / 2, cfs, cf, a(cc, alpha), chip, UiAlign::Center);
-      else { ui_.roundRect(chx, cy + (cardH - chh) / 2, chipW, chh, chh / 2, a(cc, 0.15f)); ui_.text(chx + chipW / 2, cy + (cardH - ui_.lineHeight(cfs, cf)) / 2, cfs, cf, a(cc, alpha), chip, UiAlign::Center); }
-    }
-    float labW = cw - (tx - x - ox) - chipW - 34 * u_;
-    if (o.sub.empty()) ui_.textFit(tx, cy + (cardH - ui_.lineHeight(24 * u_, UiFont::CondItalic)) / 2, labW, 24 * u_, UiFont::CondItalic, a(blue, alpha), o.label);
-    else {
-      ui_.textFit(tx, cy + 9 * u_, labW, 24 * u_, UiFont::CondItalic, a(blue, alpha), o.label);
-      ui_.textFit(tx, cy + 38 * u_, labW, std::max(11.f, 12.5f * u_), UiFont::Body, a(blueDim, alpha), o.sub);
-    }
+    float ox, oy, ow, oh;
+    if (cards) { ox = x + 10 * u_ + float(int(n) % perRow) * (cardW + gap); oy = y + float(int(n) / perRow) * (cardH + gap) - scroll_; ow = cardW; oh = cardH; }
+    else { ox = x; oy = y + float(n) * (rowH + rowGap) - scroll_; ow = cw; oh = rowH; }
     Item it;
-    it.x = x; it.y = cy; it.w = cw + 10 * u_; it.h = cardH; it.label = o.label; it.inList = true;
+    it.x = ox; it.y = oy; it.w = ow; it.h = oh; it.label = o.label; it.inList = true;
     it.activate = [choose, k] { choose(k); };
     items_.push_back(it);
-    cy += cardH + gap;
+    if (oy + oh < listTop_ - 40 * u_ || oy > listTop_ + listH_ + 40 * u_) continue;
+    // riseIn: 0.5 s after 80 + 60 n ms (from 30u below, faded); focused: lifted 10u (a row: 8u right)
+    float e = float(std::clamp((t_ - enterT_ - 0.08 - 0.06 * double(n)) / 0.5, 0.0, 1.0));
+    e = 1 - std::pow(1 - e, 4.f);
+    float dx = !cards && foc ? 8 * u_ : 0, dy = (cards && foc ? -10 * u_ : 0) + 30 * u_ * (1 - e);
+    ui_.pushAlpha(e);
+    ui_.pushTranslate(dx, dy);
+    Ui::Shadow sh = o.disabled ? Ui::Shadow{0, 8 * u_, 16 * u_, hex(0x000e2c, 0.3f)} : foc ? Ui::Shadow{0, 20 * u_, 32 * u_, hex(0x000e2c, 0.5f)} : Ui::Shadow{0, 12 * u_, 24 * u_, hex(0x000e2c, 0.38f)};
+    ui_.brushClip(ox, oy, ow, oh, a(white, o.disabled ? 0.72f : 1.f), 60 + int(k) * 5, 6, 4, u_, &sh);
+    float ta = o.disabled ? 0.55f : 1.f;
+    // the chip: a price ($ small and red) or a state (a brush-b chip)
+    std::string state = upper(o.state);
+    int64_t price = o.price;
+    if (price == 0 && state.empty()) { state = "FREE"; price = -1; }
+    bool shortMoney = o.disabled && state.empty() && price > 0 && save_.money < price;
+    std::string num = (price > 0 && state.empty()) ? fmtMoney(price) : "";
+    float priceS = (cards ? 40 : 30) * u_;
+    auto drawFoot = [&](float fx, float fy, float fh) {   // fy: the foot line's top, fh its height; returns the width
+      float w = 0;
+      if (!num.empty()) {
+        float base = fy + fh / 2 + priceS * 0.36f;
+        float s1 = priceS * 0.55f, wd = ui_.textWidth("$", s1, UiFont::CondItalic, 0.01f);
+        auto top = [&](float size) { return base - ui_.ascent(UiFont::CondItalic) * size - (ui_.lineHeight(size, UiFont::CondItalic) - (ui_.ascent(UiFont::CondItalic) - ui_.descent(UiFont::CondItalic)) * size) * 0.5f; };
+        ui_.text(fx, top(s1), s1, UiFont::CondItalic, a(red, ta), "$", UiAlign::Left, 0.01f);
+        w = wd + priceS * 0.08f;
+        w += ui_.text(fx + w, top(priceS), priceS, UiFont::CondItalic, a(blue, ta), num, UiAlign::Left, 0.01f);
+      } else if (!state.empty()) {
+        float cs = 20 * u_, chW = ui_.textWidth(state, cs, UiFont::CondItalic, 0.08f) + 28 * u_, chH = cs + 10 * u_;
+        ui_.brushPanel(fx, fy + (fh - chH) / 2, chW, chH, state == "FREE" ? ok : blue, 1);
+        ui_.textLH(fx + 12 * u_, fy + (fh - chH) / 2, chH, cs, UiFont::CondItalic, white, state, UiAlign::Left, 0.08f);
+        w = chW;
+      }
+      if (shortMoney) {
+        std::string note = "YOU HAVE $" + fmtMoney(save_.money);
+        ui_.textLH(fx + w + (w > 0 ? 12 * u_ : 0), fy + (fh - txs * 1.2f) / 2, txs * 1.2f, txs, UiFont::BodyHeavy, ko, note, UiAlign::Left, 0.12f);
+      }
+      return w;
+    };
+    std::string kcl = std::to_string(n + 1);
+    if (cards) {
+      if (!input_.usingGamepad()) ui_.kc(ox + ow - 22 * u_ - ui_.kcWidth(u_, kcl), oy + 18 * u_, u_, kcl, blueDim, vec4(0), kcBorder);
+      float ty = oy + 20 * u_ + 14 * u_;
+      float avail = ow - 52 * u_ - 26 * u_;
+      ui_.textFit(ox + 26 * u_, ty, avail, 36 * u_, UiFont::CondItalic, a(blue, ta), upper(o.label), UiAlign::Left, 0.02f);
+      ty += 36 * u_ * 1.2f;
+      if (!o.sub.empty()) {
+        std::string sub = o.sub;
+        sub[0] = char(std::toupper(static_cast<unsigned char>(sub[0])));
+        ui_.textWrapped(ox + 26 * u_, ty + 8 * u_ + tsm * 0.1f, ow - 52 * u_, tsm, UiFont::BodyMed, a(blueDim, ta), sub, 1.4f);
+      }
+      float fh = std::max(40 * u_, txs * 1.2f);
+      drawFoot(ox + 26 * u_, oy + oh - 24 * u_ - fh, fh);
+      ui_.rect(ox + 26 * u_, oy + oh - 12 * u_ - 4 * u_, (foc ? 90 : 30) * u_, 4 * u_, o.disabled ? hex(0x1546c8, 0.25f) : red);
+    } else {
+      float px = ox + 24 * u_;
+      if (!input_.usingGamepad() && n < 9) px += ui_.kc(px, oy + (oh - ui_.kcHeight(u_)) / 2, u_, kcl, blueDim, vec4(0), kcBorder) + 14 * u_;
+      if (o.swatch) {
+        float sw = 36 * u_, sy = oy + (oh - sw) / 2;
+        ui_.roundRect(px, sy, sw, sw, 6 * u_, hex(o.swatch, ta));
+        if (o.swatch2 && o.swatch2 != o.swatch) ui_.tri(vec2(px + sw, sy), vec2(px + sw, sy + sw), vec2(px, sy + sw), hex(o.swatch2, ta));
+        px += sw + 14 * u_;
+      }
+      // the foot on the right
+      float footW = 0;
+      {
+        float s1 = priceS * 0.55f;
+        if (!num.empty()) footW = ui_.textWidth("$", s1, UiFont::CondItalic, 0.01f) + priceS * 0.08f + ui_.textWidth(num, priceS, UiFont::CondItalic, 0.01f);
+        else if (!state.empty()) footW = ui_.textWidth(state, 20 * u_, UiFont::CondItalic, 0.08f) + 28 * u_;
+        if (shortMoney) footW += 12 * u_ + ui_.textWidth("YOU HAVE $" + fmtMoney(save_.money), txs, UiFont::BodyHeavy, 0.12f);
+      }
+      float fx = ox + ow - 24 * u_ - footW;
+      drawFoot(fx, oy, oh);
+      float avail = fx - 14 * u_ - px;
+      float titleS = 28 * u_;
+      if (o.sub.empty()) ui_.textFit(px, oy + (oh - ui_.lineHeight(titleS, UiFont::CondItalic)) / 2, avail, titleS, UiFont::CondItalic, a(blue, ta), upper(o.label), UiAlign::Left, 0.02f);
+      else {
+        float blockH = titleS + 4 * u_ + tsm * 1.4f, by = oy + (oh - blockH) / 2;
+        ui_.textFit(px, by - titleS * 0.1f, avail, titleS, UiFont::CondItalic, a(blue, ta), upper(o.label), UiAlign::Left, 0.02f);
+        std::string sub = o.sub;
+        sub[0] = char(std::toupper(static_cast<unsigned char>(sub[0])));
+        ui_.textFit(px, by + titleS + 4 * u_ + tsm * 0.1f, avail, tsm, UiFont::BodyMed, a(blueDim, ta), sub);
+      }
+    }
+    ui_.popTransform();
+    ui_.popAlpha();
   }
   ui_.popClip();
-  if (focus_ >= 0 && focus_ < int(items_.size())) {
+  drawScrollbar();
+  if (focusScroll_ && focus_ >= 0 && focus_ < int(items_.size())) {
+    focusScroll_ = false;
     const Item& f = items_[size_t(focus_)];
     float top = f.y + scroll_ - listTop_;
-    if (top < scrollTarget_) scrollTarget_ = std::max(0.f, top - 10 * u_);
-    else if (top + f.h > scrollTarget_ + listH_) scrollTarget_ = std::min(std::max(0.f, contentH_ - listH_), top + f.h - listH_ + 10 * u_);
+    if (top < scrollTarget_) scrollTarget_ = std::max(0.f, top - 12 * u_);
+    else if (top + f.h > scrollTarget_ + listH_) scrollTarget_ = std::min(std::max(0.f, contentH_ - listH_), top + f.h - listH_ + 12 * u_);
   }
-  float sy = listTop_ + std::min(listH_, contentH_) + 12 * u_;
-  float sx = x;
+  // -- the foot: the secondary buttons (.dlg-sec) and the key hints
+  float fy = listTop_ + listH_ - 12 * u_ + 26 * u_, fx = x + 12 * u_;
   for (size_t k : second) {
     const DialogOption& o = dialog_.options[k];
-    float before = float(items_.size());
-    button(sx, sy, 200 * u_, 58 * u_, 26 * u_, upper(o.label), 13 + int(k), [choose, k] { choose(k); });
-    items_.back().y = sy; items_.back().h = 58 * u_;
-    sx += items_.back().w + 16 * u_;
-    (void)before;
+    bool foc = int(items_.size()) == focus_;
+    std::string l = upper(o.label);
+    float bw = ui_.textWidth(l, 26 * u_, UiFont::CondItalic, 0.05f) + 58 * u_, bh = 54 * u_;
+    float dx = foc ? 8 * u_ : 0;
+    if (foc) ui_.rect(fx - 12 * u_ + dx, fy + bh * 0.3f, 5 * u_, bh * 0.4f, red);
+    Ui::Shadow sh{0, 6 * u_, 12 * u_, a(hex(0x000000), 0.25f)};
+    ui_.brushPanel(fx + dx, fy, bw, bh, white, 1, &sh);
+    ui_.textLH(fx + dx + 24 * u_, fy, bh, 26 * u_, UiFont::CondItalic, a(blue, o.disabled ? 0.55f : 1.f), l, UiAlign::Left, 0.05f);
+    Item it;
+    it.x = fx; it.y = fy; it.w = bw; it.h = bh; it.label = o.label; it.disabled = o.disabled;
+    it.activate = [choose, k] { choose(k); };
+    items_.push_back(it);
+    fx += bw + 18 * u_;
   }
-  // the money you have (bottom right of the card)
-  ui_.text(x + cw, listTop_ - 30 * u_, 22 * u_, UiFont::CondItalic, white, "$" + fmtMoney(save_.money), UiAlign::Right);
-  drawHints(dialog_.tabs.empty() ? std::vector<std::pair<std::string, std::string>>{{"updown", "Select"}, {"enter", "Choose"}, {"esc", "Close"}}
-                                 : std::vector<std::pair<std::string, std::string>>{{"updown", "Select"}, {"tabs", "Tabs"}, {"enter", "Buy / wear"}, {"esc", "Close"}});
+  {
+    // .dlg-hints: 600 t-xs, white .88, the caps outlined in white .7
+    const vec4 col = a(white, 0.88f), bc = a(white, 0.7f), shc = a(hex(0x000000), 0.5f);
+    float kh = ui_.kcHeight(u_), cy = fy + 27 * u_, ty = cy - ui_.lineHeight(txs, UiFont::BodySemi) / 2;
+    float gap6 = std::max(4 * d, 6 * u_);
+    std::vector<std::pair<std::vector<std::string>, std::string>> hs;
+    bool pad = input_.usingGamepad();
+    if (main.size() > 1) hs.push_back({pad ? std::vector<std::string>{prompts::K(input_, "leftright")} : std::vector<std::string>{"\xE2\x86\x90", "\xE2\x86\x92"}, "CHOOSE"});
+    if (!dialog_.tabs.empty()) hs.push_back({{pad ? std::string(prompts::padGlyph(4, input_.padFamily())) + " " + prompts::padGlyph(5, input_.padFamily()) : "Q E"}, "TABS"});
+    if (!main.empty()) hs.push_back({{prompts::K(input_, "confirm")}, "SELECT"});
+    hs.push_back({{prompts::K(input_, "cancel")}, "CLOSE"});
+    for (auto& [caps, label] : hs) {
+      for (size_t i = 0; i < caps.size(); i++) fx += ui_.kc(fx, cy - kh / 2, u_, caps[i], col, vec4(0), bc) + (i + 1 < caps.size() ? 4 * u_ : gap6);
+      ui_.textShadow(fx, ty, txs, UiFont::BodySemi, label, UiAlign::Left, 0.1f, 0, d, 6 * d, shc);
+      fx += ui_.text(fx, ty, txs, UiFont::BodySemi, col, label, UiAlign::Left, 0.1f) + 20 * u_;
+    }
+  }
 }
 
 void Menus::scrConfirm() {
   drawShade(1);
-  float x = 110 * u_, y = 220 * u_;
+  drawLogo(false);
+  float x = 72 * u_, y = 226 * u_;
   heading(x, y, "ARE YOU SURE?", confirmText_);
   y += 190 * u_;
   button(x, y, 300 * u_, 74 * u_, 34 * u_, "NO, KEEP IT", 13, [this] { open(confirmBack_, -1); });

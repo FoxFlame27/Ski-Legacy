@@ -92,8 +92,9 @@ void SceneFx::init(gfx::Device& dev, AssetManager& assets, const Resort& resort,
     for (int d = 0; d < 4; d++) {
       Canvas2D g(512, 256, &fonts);
       g.fillStyle(DESIGNS[d].bg); g.fillRect(0, 0, 512, 256);
-      g.fillStyle(DESIGNS[d].bar); g.fillRect(0, 214, 512, 42);
-      g.fillStyle(DESIGNS[d].fg);
+      // (flags.js flagAtlas: a stripe in the bar colour and the lettering's colour along the bottom)
+      g.fillStyle(DESIGNS[d].bar); g.fillRect(0, 205, 512, 18);
+      g.fillStyle(DESIGNS[d].fg); g.fillRect(0, 223, 512, 33);
       g.font("700 96px Barlow");
       g.textAlign("center"); g.textBaseline("middle");
       g.save(); g.translate(256, 110); g.setTransform(1, 0, -0.18f, 1, 256, 110);   // (the italic lean of the arena banners)
@@ -101,10 +102,16 @@ void SceneFx::init(gfx::Device& dev, AssetManager& assets, const Resort& resort,
       g.restore();
       Material m;
       m.baseTex = canvasTexture(dev, g);
-      m.roughness = 0.9f; m.metallic = 0; m.doubleSided = true;
+      m.roughness = 0.9f; m.metallic = 0; m.doubleSided = false;
+      // (two-sided banners: the back is printed the right way round too, so the lettering reads from the lifts and
+      // the runs' side of the plaza as well as from the square; a single mirrored cloth read backwards from there)
       for (int k = 0; k < 8; k++) {
         float w = float(CLOTH_W / 8);
-        segs_[d][k] = buildModel(dev, {{quadGeo(0, w, float(-CLOTH_H), 0, k / 8.f, (k + 1) / 8.f), m}}, "flag");
+        Geo front = quadGeo(0, w, float(-CLOTH_H), 0, k / 8.f, (k + 1) / 8.f);
+        Geo back = quadGeo(0, w, float(-CLOTH_H), 0, 1 - k / 8.f, 1 - (k + 1) / 8.f);
+        back.nor.assign(4, vec3(0, 0, -1));
+        back.idx = {0, 2, 1, 0, 3, 2};
+        segs_[d][k] = buildModel(dev, {{front, m}, {back, m}}, "flag");
       }
     }
   }

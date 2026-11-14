@@ -225,8 +225,17 @@ export class Flags {
             transformed.x -= abs(wz) * 0.25 * fx;                     // the ripples take up a little length
             transformed.y -= fx * fx * (0.22 - uWind * 0.16);          // a light breeze lets the fly droop
           }`);
+      // two-sided banners (Nov 14 2026, the user: "the plaza's banner flags are mirrored"): the back is printed the right
+      // way round too, so the lettering reads from the lifts' side of the plaza as well as from the square
+      s.fragmentShader = s.fragmentShader.replace('#include <map_fragment>', `#ifdef USE_MAP
+          {
+            vec2 flagUv = vMapUv;
+            if (!gl_FrontFacing) { float t0 = floor(clamp(flagUv.x - 1e-4, 0.0, 0.9999) * 2.0) * 0.5; flagUv.x = 2.0 * t0 + 0.5 - flagUv.x; }
+            diffuseColor *= texture2D(map, flagUv);
+          }
+        #endif`);
     };
-    mat.customProgramCacheKey = () => 'resort-flag-v1';
+    mat.customProgramCacheKey = () => 'resort-flag-v2';
     return mat;
   }
 

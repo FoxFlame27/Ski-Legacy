@@ -157,13 +157,20 @@ void Menus::openDialog(Dialog d) {
   open(Screen::Dialog);
 }
 
+void Menus::openCustom(CustomFrame frame, std::string name) {
+  custom_ = std::move(frame);
+  customName_ = std::move(name);
+  customFocus.clear();
+  open(Screen::Custom);
+}
+
 void Menus::setFocus(int i) {
   int n = int(items_.size());
   if (!n) { focus_ = 0; return; }
   focus_ = ((i % n) + n) % n;
 }
 
-std::string Menus::focusedLabel() const { return focus_ >= 0 && focus_ < int(items_.size()) ? items_[size_t(focus_)].label : ""; }
+std::string Menus::focusedLabel() const { if (screen_ == Screen::Custom) return customFocus; return focus_ >= 0 && focus_ < int(items_.size()) ? items_[size_t(focus_)].label : ""; }
 bool Menus::focusLabel(const std::string& label) {
   for (size_t i = 0; i < items_.size(); i++) if (items_[i].label == label) { focus_ = int(i); focusScroll_ = true; return true; }
   return false;
@@ -412,6 +419,7 @@ void Menus::frame(const UiNav& navIn, double dt, double now) {
   }
   const UiNav& nav = fresh ? quiet : navIn;
   if (screen_ == Screen::None) return;
+  if (screen_ == Screen::Custom) { items_.clear(); listH_ = 0; CustomFrame f = custom_; if (f) f(nav, dt, now); return; }
   // the previous frame's items take this frame's input (immediate mode: drawn, then hit-tested next frame)
   if (screen_ == Screen::Controls && captureAction_ >= 0) controlsCapture(nav);
   else if (screen_ == Screen::Showcase && (nav.left || nav.right)) pickChar(chi_ + (nav.left ? -1 : 1));

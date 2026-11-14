@@ -27,6 +27,10 @@ struct HudFrame {
   std::string wpLabel;
   std::string rideHint;
   float fps = 0;
+  bool inRace = false;              // body.in-race: the race panels replace #info, #money, #waypoint, #speedo, #prompt, #ride-hint
+  bool onlyFlash = false;           // body.outfit-open (a full-screen shop): everything but the flash is hidden
+  bool hideHint = false;            // body.wanted: the controls card gives its corner to the WANTED box
+  bool hidePrompt = false;          // a card dialog is up
 };
 
 class Hud {

@@ -1,4 +1,5 @@
 #include "game/police.h"
+#include "game/policehud.h"
 #include "core/log.h"
 #include "core/noise.h"
 #include "engine/asset_manager.h"
@@ -25,7 +26,8 @@ constexpr double TRIGGER_KMH = 25, COP_RAM_KMH = 15, FINE = 1000, ARREST_FINE = 
 constexpr double LOSE_S = 2.5, SEE_NEAR = 45, KEEP_ESC = 0.5, NO_SPOT_S = 75, HEAT_PER_S = 1.0 / 36, HEAT_HIT_COP = 0.35;
 constexpr double STOP_R = 40, STOP_KMH = 3, STOP_S = 3, SPAWN_MIN = 260, SPAWN_MAX = 420, REACH_R = 60, GRACE_S = 6;
 constexpr double FOOT_CATCH_R = 1.5, FOOT_RUN_V = 6.9, FOOT_LOSE_M = 45, FOOT_LEASH_M = 400, FOOT_ESC_K = 2.2;
-constexpr double HOLD_R = 12, HOLD_S = 10, HOLD_MORE = 0.6, V_TOP = 250 / 3.6, LEN = 5.0, WB = 2.95, WALK_V = 1.6;
+constexpr double HOLD_R = 12, HOLD_S = 10, HOLD_MORE = 0.6, V_TOP = 250 / 3.6, LEN = 5.0, WALK_V = 1.6;
+[[maybe_unused]] constexpr double WB = 2.95;
 constexpr double HELI_V = 64, HELI_A = 13, HELI_ALT = 72, HELI_SEE = 170, HELI_HIDE = 1.25, HELI_CALL_S = 45;
 struct Level { int cars; double reinS, vRoad, catchUp, ramGap, ramExtra, sightR, escS; bool heli; };
 const Level LEVELS[6] = {{0, 99, 0, 0, 0, 0, 0, 0, false},
@@ -547,6 +549,7 @@ void Police::jail(double seconds, const std::string& reason) {
 
 std::string Police::objective() const {
   if (jailLeft_ > 0) return "In prison \xC2\xB7 " + mmss(jailLeft_) + " \xC2\xB7 " + jailReason_;
+  if (rooms_.room() == Interiors::Room::Prison) return "Visiting the prison \xC2\xB7 the way out: the front door past the counter";
   if (!wanted_) return "";
   if (pulled_) return "Pulled over \xC2\xB7 wait for the officer";
   if (!fleeing_) return "The police are coming \xC2\xB7 stop to pay the fine";
@@ -560,65 +563,49 @@ std::string Police::status() const {
   return std::string(fleeing_ ? "fleeing" : pulled_ ? "pulled over" : "called") + " " + std::to_string(stars()) + "*" + (searching_ ? " searching" : "");
 }
 
-void Police::hud(Ui& ui, float u) {
-  float W = float(ui.width()), H = float(ui.height());
+void Police::hud(Ui& ui, float) {
   if (wanted_) {
-    // the WANTED badge (top right): the stars (blinking while they search), the state, the escape clock
-    float x = W - 250 * u, y = 110 * u;
-    ui.brushPanel(x, y, 230 * u, 86 * u, ui_color::a(ui_color::navy, 0.9f), 2);
-    ui.text(x + 14 * u, y + 6 * u, 18 * u, UiFont::CondHeavy, ui_color::red, "WANTED");
-    bool blink = searching_ && std::fmod(c_.now * 2, 1.0) < 0.5;
-    for (int i = 0; i < 5; i++) {
-      float sx = x + 100 * u + i * 24 * u, sy = y + 16 * u;
-      vec4 col = i < stars() && !blink ? vec4(1, 0.8f, 0.1f, 1) : vec4(1, 1, 1, 0.25f);
-      std::vector<vec2> star;
-      for (int k = 0; k < 10; k++) { float a = float(k) * float(PI) / 5 - float(PI) / 2, rr = (k % 2 ? 4.5f : 10.f) * u; star.push_back(vec2(sx + std::cos(a) * rr, sy + std::sin(a) * rr)); }
-      std::vector<vec2> fan{vec2(sx, sy)};
-      fan.insert(fan.end(), star.begin(), star.end());
-      fan.push_back(star[0]);
-      ui.poly(fan, col);
+    // the WANTED box (police.js hudFrame / setHud)
+    const Level& L = LEVELS[stars()];
+    PoliceHudState H;
+    H.now = c_.now; H.shownFor = wantedT_;
+    H.t = mmss(wantedT_);
+    H.stars = stars();
+    for (const Unit& q : units_) H.cars += !q.leaving;
+    H.air = heli_.on;
+    H.heli = !heli_.on ? "" : heli_.sees ? "Police helicopter is tracking you" : heli_.hideT > 0 ? "The helicopter lost you" : "Police helicopter on its way";
+    H.heliCls = !heli_.on || heli_.sees ? "" : heli_.hideT > 0 ? "lost" : "come";
+    if (!radio_.empty() && c_.now - radioT_ < 5.2) { H.radio = radio_; H.radioAge = c_.now - radioT_; }
+    const nlohmann::json& rec = c_.save->data("policeRecord");
+    const std::string fine = fmtMoney(int(FINE + FINE_STEP * (rec.value("fines", 0) + rec.value("arrests", 0))));
+    const bool foot = !c_.driving;
+    bool officer = false;
+    for (const Unit& q : units_) officer = officer || q.offState == 3;
+    if (fineOpen_) { H.msg = "Press " + c_.K(Action::Interact) + " to pay the " + fine + " fine"; H.tip = std::string(foot ? "Run" : "Drive") + " off instead and it's a chase \xC2\xB7 jail if caught."; H.state = "PULLED OVER"; }
+    else if (officer) { H.msg = "An officer is running after you!"; H.tip = "Outrun him, or he arrests you."; H.state = "FOOT CHASE"; H.hot = true; }
+    else if (searching_) { H.msg = "They lost you \xC2\xB7 stay out of sight"; H.tip = "Stay hidden until the bar fills to escape."; H.state = "SEARCHING"; H.stateCls = "lost"; }
+    else if (fleeing_) {
+      bool seen = seenT_ > 0 && unseenT_ <= 0;
+      H.msg = seen ? "You're fleeing \xC2\xB7 escape or you'll be arrested" : "Out of sight \xC2\xB7 keep going";
+      H.tip = seen ? (heli_.on && heli_.sees ? "Lose the helicopter: a tunnel, a bridge, buildings or thick forest." : "Break their line of sight to escape.") : "Stay hidden until the bar fills to escape.";
+      H.state = "PURSUIT"; H.stateCls = "hot"; H.hot = true;
+    } else if (pulled_) { H.msg = std::string(foot ? "Stopped" : "Pulled over") + " \xE2\x9C\x93 \xC2\xB7 wait for the officer"; H.tip = "Stay put: it's just a " + fine + " fine."; H.state = "PULL OVER"; }
+    else {
+      H.msg = std::string("Police \xC2\xB7 ") + (foot ? "stay where you are" : "pull over");
+      H.tip = foot ? "Stand still and wait for the officer.\nStay put and you only pay the " + fine + " fine.\nRun off and they'll chase you \xC2\xB7 jail if caught."
+                   : "Pull over at the side of the road and stop.\nStay put and you only pay the " + fine + " fine.\nDrive off and they'll chase you \xC2\xB7 jail if caught.";
+      H.state = "PULL OVER";
     }
-    std::string st = pulled_ ? "PULLED OVER" : !fleeing_ ? "STOP TO PAY THE FINE" : searching_ ? "SEARCHING \xC2\xB7 lose them " + mmss(LEVELS[stars()].escS - escT_) : "FLEEING";
-    ui.text(x + 14 * u, y + 34 * u, 16 * u, UiFont::CondBold, ui_color::white, st);
-    if (!radio_.empty() && c_.now - radioT_ < 5) ui.textFit(x + 14 * u, y + 58 * u, 205 * u, 13 * u, UiFont::CondItalic, vec4(0.7f, 0.85f, 1, 1), "\xF0\x9F\x93\xBB " + radio_);
-    // red / blue at the screen's edges while they are close
+    H.search = searching_; H.gain = searching_;
+    if ((fleeing_ || searching_) && !fineOpen_) { H.esc = mmss(escT_); H.escOf = "/ " + mmss(L.escS) + " \xC2\xB7 out of sight"; H.frac = L.escS > 0 ? escT_ / L.escS : 0; }
     double nearest = 1e9;
     for (auto& q : units_) nearest = std::min(nearest, glm::length(q.pos - c_.player->pos));
-    if (nearest < 80) {
-      float a = float(0.18 * (1 - nearest / 80)) * (std::fmod(c_.now * 3, 1.0) < 0.5 ? 1.f : 0.4f);
-      ui.rectGradient(0, 0, 60 * u, H, vec4(1, 0.1f, 0.1f, a), vec4(1, 0.1f, 0.1f, 0));
-      ui.rectGradient(W - 60 * u, 0, 60 * u, H, vec4(0.1f, 0.3f, 1, 0), vec4(0.1f, 0.3f, 1, a));
-    }
+    if (nearest > 1e8) H.near = "NO POLICE NEAR";
+    else H.near = std::string(searching_ ? "LOST YOU" : unseenT_ <= 0 ? "SEEN" : "OUT OF SIGHT") + " \xC2\xB7 " + std::to_string(int(std::lround(nearest / 5)) * 5) + " M";
+    drawPoliceHud(ui, H);
   }
-  // the ARRESTED banner (police.js bustedBanner): a big red word that slams in, a line under it, the lights pulsing
-  if (arrestT_ >= 0) {
-    float t = float(arrestT_);
-    float sc = t < 0.25f ? 1.6f - 0.6f * (t / 0.25f) + (t > 0.18f ? 0.04f : 0.f) : 1.f;
-    float a = t > 2.6f ? std::max(0.f, 1 - (t - 2.6f) / 0.6f) : 1.f;
-    float pulse = std::fmod(t * 3, 1.f) < 0.5f ? 0.35f : 0.12f;
-    ui.rectGradient(0, 0, W * 0.25f, H, vec4(1, 0.05f, 0.05f, pulse * a), vec4(1, 0.05f, 0.05f, 0));
-    ui.rectGradient(W * 0.75f, 0, W * 0.25f, H, vec4(0.1f, 0.2f, 1, 0), vec4(0.1f, 0.2f, 1, pulse * a));
-    ui.text(W / 2, H * 0.36f - 40 * sc * u, 120 * sc * u, UiFont::CondHeavy, ui_color::a(ui_color::red, a), "ARRESTED", UiAlign::Center);
-    ui.text(W / 2, H * 0.36f + 80 * u, 22 * u, UiFont::CondBold, ui_color::a(ui_color::white, a), "You were " + arrestHow_, UiAlign::Center);
-  }
-  // in the cell: the sentence; visiting: the visitors' book (the local leaderboard)
-  if (rooms_.room() == Interiors::Room::Prison) {
-    const nlohmann::json& r = c_.save->data("policeRecord");
-    float x = 24 * u, y = H * 0.42f;
-    ui.brushPanel(x, y, 260 * u, 150 * u, ui_color::a(ui_color::paper, 0.92f), 0);
-    ui.text(x + 14 * u, y + 8 * u, 15 * u, UiFont::CondBold, ui_color::red, jailed() ? "IN PRISON" : "VISITORS' BOOK \xC2\xB7 local");
-    if (jailed()) {
-      ui.text(x + 14 * u, y + 30 * u, 44 * u, UiFont::CondHeavy, ui_color::blue, mmss(jailLeft_));
-      ui.textFit(x + 14 * u, y + 84 * u, 230 * u, 15 * u, UiFont::Cond, ui_color::navy, jailReason_);
-    } else {
-      char b[160];
-      std::snprintf(b, sizeof b, "Visits %d \xC2\xB7 arrests %d \xC2\xB7 fines %d", r.value("visits", 0), r.value("arrests", 0), r.value("fines", 0));
-      ui.textFit(x + 14 * u, y + 34 * u, 230 * u, 16 * u, UiFont::CondBold, ui_color::navy, b);
-      ui.textFit(x + 14 * u, y + 58 * u, 230 * u, 15 * u, UiFont::Cond, ui_color::navy, "Fined in all " + fmtMoney(r.value("fined", 0)));
-      ui.textFit(x + 14 * u, y + 80 * u, 230 * u, 15 * u, UiFont::Cond, ui_color::navy, "Longest sentence " + mmss(r.value("longest", 0.0)));
-      ui.textFit(x + 14 * u, y + 110 * u, 230 * u, 14 * u, UiFont::CondItalic, ui_color::blueDim, "The front door: " + c_.K(Action::Interact) + " to leave");
-    }
-  }
+  // the ARRESTED moment (police.js bustedBanner)
+  if (arrestT_ >= 0) drawBusted(ui, "ARRESTED", "You were " + arrestHow_, arrestT_);
 }
 
 // ---------------------------------------------------------------- getting hit (vehiclehits.js), hitting people (peoplehits.js)

@@ -116,7 +116,7 @@ bool Ui::bakeAtlas(platform::Platform& plat, const AssetPaths& paths) {
   std::vector<uint32_t> cps;
   for (uint32_t c = 32; c < 127; c++) cps.push_back(c);
   for (uint32_t c = 160; c < 256; c++) cps.push_back(c);
-  for (uint32_t c : {0x2014u, 0x2013u, 0x2026u, 0x2022u, 0x2190u, 0x2191u, 0x2192u, 0x2193u, 0x2212u, 0x20ACu, 0x2018u, 0x2019u, 0x201Cu, 0x201Du, 0x2715u, 0x25CBu, 0x25A1u, 0x25B3u, 0x00D7u, 0x2264u, 0x2265u})
+  for (uint32_t c : {0x2014u, 0x2013u, 0x2026u, 0x2022u, 0x2190u, 0x2191u, 0x2192u, 0x2193u, 0x2212u, 0x20ACu, 0x2018u, 0x2019u, 0x201Cu, 0x201Du, 0x2715u, 0x25CBu, 0x25A1u, 0x25B3u, 0x00D7u, 0x2264u, 0x2265u, 0x2713u})
     cps.push_back(c);
   std::vector<uint8_t> px(size_t(ATLAS) * ATLAS, 0);
   int x = 1, y = 1, rowH = 0;
@@ -763,6 +763,7 @@ float Ui::textWidth(const std::string& s, float size, UiFont f, float tracking) 
     if (!g && cp >= 0x2190 && cp <= 0x2193) { w += size * 0.62f + tracking * size; prev = {}; continue; }   // (arrows drawn as shapes)
     if (!g) g = glyph(f, '?', &u);
     if (!g) continue;
+    if (tabular_ && cp >= '0' && cp <= '9') { const Glyph* z = glyph(f, '0', nullptr); w += (z ? z->adv : g->adv) * k + bold + tracking * size; prev = {}; continue; }
     if (prev.file == u && u >= 0) w += float(stbtt_GetGlyphKernAdvance(&fonts_[size_t(u)]->info, prev.gi, g->gi)) * fonts_[size_t(u)]->bakeScale * k;
     w += g->adv * k + bold + tracking * size;
     prev = {u, g->gi};
@@ -796,11 +797,13 @@ float Ui::text(float x, float y, float size, UiFont f, const vec4& c, const std:
     }
     if (!g) g = glyph(f, '?', &u);
     if (!g) continue;
-    if (prev.file == u && u >= 0) pen += float(stbtt_GetGlyphKernAdvance(&fonts_[size_t(u)]->info, prev.gi, g->gi)) * fonts_[size_t(u)]->bakeScale * k;
-    float gx = pen + bold * 0.5f;
+    float tabAdv = -1;
+    if (tabular_ && cp >= '0' && cp <= '9') { const Glyph* z = glyph(f, '0', nullptr); tabAdv = z ? z->adv : g->adv; prev = {}; }
+    else if (prev.file == u && u >= 0) pen += float(stbtt_GetGlyphKernAdvance(&fonts_[size_t(u)]->info, prev.gi, g->gi)) * fonts_[size_t(u)]->bakeScale * k;
+    float gx = pen + bold * 0.5f + (tabAdv >= 0 ? (tabAdv - g->adv) * k * 0.5f : 0.f);
     if (g->ok) quad(gx + g->x0 * k, base + g->y0 * k, gx + g->x1 * k, base + g->y1 * k, g->u0, g->v0, g->u1, g->v1, c, 0, 0, 0, 0, 0, 0, u == fileOf(f) ? thr : 0, 0, atlas_);
-    pen += g->adv * k + bold + tracking * size;
-    prev = {u, g->gi};
+    pen += (tabAdv >= 0 ? tabAdv : g->adv) * k + bold + tracking * size;
+    if (tabAdv < 0) prev = {u, g->gi};
   }
   return w;
 }
@@ -923,6 +926,19 @@ void Ui::pushTranslate(float dx, float dy) {
   Xf t;
   if (!xf_.empty()) t = xf_.back();
   t.e += dx; t.f += dy;
+  xf_.push_back(t);
+}
+void Ui::pushScale(float cx, float cy, float sx, float sy) {
+  Xf t;
+  t.a = sx; t.d = sy; t.e = cx - sx * cx; t.f = cy - sy * cy;
+  if (!xf_.empty()) {
+    const Xf& o = xf_.back();
+    Xf m;
+    m.a = o.a * t.a + o.c * t.b; m.b = o.b * t.a + o.d * t.b;
+    m.c = o.a * t.c + o.c * t.d; m.d = o.b * t.c + o.d * t.d;
+    m.e = o.a * t.e + o.c * t.f + o.e; m.f = o.b * t.e + o.d * t.f + o.f;
+    t = m;
+  }
   xf_.push_back(t);
 }
 void Ui::popTransform() { if (!xf_.empty()) xf_.pop_back(); }

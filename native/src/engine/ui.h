@@ -143,7 +143,12 @@ public:
   /// a 2D transform (CSS transform: rotate / translate) applied to everything drawn until popTransform (after clipping)
   void pushRotate(float cx, float cy, float radians);
   void pushTranslate(float dx, float dy);
+  /// CSS scale about (cx, cy)
+  void pushScale(float cx, float cy, float sx, float sy);
   void popTransform();
+  /// CSS font-variant-numeric: tabular-nums for the text drawn while it is on: every digit as wide as the font's 0
+  void tabular(bool on) { tabular_ = on; }
+  struct Tabular { Ui& u; bool was; explicit Tabular(Ui& ui) : u(ui), was(ui.tabular_) { ui.tabular_ = true; } ~Tabular() { u.tabular_ = was; } };
   /// an opacity multiplied into everything drawn until popAlpha (CSS opacity on a group)
   void pushAlpha(float a) { alpha_.push_back((alpha_.empty() ? 1.f : alpha_.back()) * a); }
   void popAlpha() { if (!alpha_.empty()) alpha_.pop_back(); }
@@ -186,6 +191,7 @@ private:
   vec2 X(float x, float y) const { if (xf_.empty()) return vec2(x, y); const Xf& t = xf_.back(); return vec2(t.a * x + t.c * y + t.e, t.b * x + t.d * y + t.f); }
   int w_ = 1, h_ = 1;
   bool ready_ = false;
+  bool tabular_ = false;
   std::vector<std::unique_ptr<FontData>> fonts_;   // per font file
   platform::Platform* plat_ = nullptr;
   float dpr_ = 1;

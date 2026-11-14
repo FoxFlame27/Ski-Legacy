@@ -319,6 +319,7 @@ bool Chalets::interact(std::string& prompt, bool pressed) {
 void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   ghostOn_ = false; hover_ = -1;
   if (!inside()) { build_ = false; return; }
+  mouse_ = nav.mouse;
   Input& in = *c_.input;
   if (in.takePressed(Action::Furnish)) toggleBuild();
   if (!build_) return;
@@ -327,12 +328,31 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   std::vector<const FurnitureDef*> items;
   auto catItems = [&](int ci) { std::vector<const FurnitureDef*> v; for (auto& f : D.furniture) if (ci < int(D.categories.size()) && f.category == D.categories[size_t(ci)].first) v.push_back(&f); return v; };
   items = catItems(cat_);
-  if (in.takePressed(Action::NextItem)) { if (++item_ >= int(items.size())) { item_ = 0; cat_ = (cat_ + 1) % std::max<int>(1, int(D.categories.size())); } items = catItems(cat_); if (!items.empty()) hand_ = items[size_t(item_)]->id; moving_ = -1; }
-  if (in.takePressed(Action::PrevItem)) { if (--item_ < 0) { cat_ = (cat_ + int(D.categories.size()) - 1) % std::max<int>(1, int(D.categories.size())); items = catItems(cat_); item_ = std::max(0, int(items.size()) - 1); } items = catItems(cat_); if (!items.empty()) hand_ = items[size_t(item_)]->id; moving_ = -1; }
+  if (in.takePressed(Action::NextItem)) { if (++item_ >= int(items.size())) { item_ = 0; cat_ = (cat_ + 1) % std::max<int>(1, int(D.categories.size())); } items = catItems(cat_); if (!items.empty()) hand_ = items[size_t(item_)]->id; moving_ = -1; bmReveal_ = true; }
+  if (in.takePressed(Action::PrevItem)) { if (--item_ < 0) { cat_ = (cat_ + int(D.categories.size()) - 1) % std::max<int>(1, int(D.categories.size())); items = catItems(cat_); item_ = std::max(0, int(items.size()) - 1); } items = catItems(cat_); if (!items.empty()) hand_ = items[size_t(item_)]->id; moving_ = -1; bmReveal_ = true; }
   if (in.takePressed(Action::Restart)) { hand_.clear(); if (moving_ >= 0) { moving_ = -1; rebuildFurniture(); } }
   if (in.takePressed(Action::VMouse)) { vmouse_ = !vmouse_; cursor_ = vec2(float(uiW) / 2, float(uiH) / 2); }
   if (in.takePressed(Action::View)) rot_ += PI / 2;
-  if (nav.wheel != 0) rot_ += sign(nav.wheel) * 15 * DEG;
+  // the catalogue column (buildmenu.js): the wheel over it scrolls, a click takes a card in hand (the one in hand
+  // again: put down) or jumps to a room's tab; elsewhere the wheel turns the piece and a click places it
+  const bool overMenu = bm_.over && (vmouse_ || nav.mouse.x >= 0);
+  bool menuClick = false;
+  if (overMenu) {
+    const float u = float(std::max(1, uiH)) / 800.f;
+    if (nav.wheel != 0) bmTarget_ = std::clamp(bmTarget_ - nav.wheel * 60 * u, 0.f, bm_.maxScroll);
+    if ((vmouse_ && nav.confirm) || (!vmouse_ && nav.click)) {
+      menuClick = true;
+      if (bm_.tab >= 0 && size_t(bm_.tab) < bm_.catTop.size()) bmTarget_ = std::clamp(bm_.catTop[size_t(bm_.tab)] - 18 * u, 0.f, bm_.maxScroll);
+      else if (bm_.card >= 0 && size_t(bm_.card) < D.furniture.size()) {
+        const FurnitureDef& f = D.furniture[size_t(bm_.card)];
+        if (hand_ == f.id) hand_.clear();
+        else {
+          hand_ = f.id; moving_ = -1;
+          for (size_t ci = 0; ci < D.categories.size(); ci++) if (D.categories[ci].first == f.category) { cat_ = int(ci); auto v = catItems(cat_); for (size_t k = 0; k < v.size(); k++) if (v[k]->id == f.id) item_ = int(k); }
+        }
+      }
+    }
+  } else if (nav.wheel != 0) rot_ += sign(nav.wheel) * 15 * DEG;
   // the aim: the centre dot, or the cursor (the mouse when free, the virtual mouse's left stick)
   if (vmouse_) { cursor_ += vec2(in.moveX(), -in.moveY()) * 9.f; cursor_ = glm::clamp(cursor_, vec2(0), vec2(float(uiW), float(uiH))); }
   vec3 fwd = cam.forward();
@@ -355,7 +375,7 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
     int i = 0;
     for (auto& r : ch["furniture"]) { double dd = std::hypot(r.value("x", 0.0) - fp.x, r.value("z", 0.0) - fp.z); if (dd < bd && i != moving_) { bd = dd; hover_ = i; } i++; }
   }
-  bool click = in.takePressed(Action::Jump) || (vmouse_ && nav.confirm) || (!vmouse_ && nav.click);
+  bool click = in.takePressed(Action::Jump) || (!menuClick && !overMenu && ((vmouse_ && nav.confirm) || (!vmouse_ && nav.click)));
   if (hand_.empty() && hover_ >= 0) {
     if (in.takePressed(Action::Alt)) { sell(hover_); return; }
     if (in.takePressed(Action::Pickup)) { moving_ = hover_; hand_ = ch["furniture"][size_t(hover_)].value("id", std::string()); rot_ = ch["furniture"][size_t(hover_)].value("rot", 0.0); rebuildFurniture(); return; }
@@ -398,8 +418,11 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   ghost_ = dvec3(gx, y, gz);
   if (fd->place == "wall") rot_ = rot;
   if (click) {
-    if (!ghostOk_) { c_.flash("It doesn't fit there", 1); return; }
-    if (place(hand_, gx, gz, rot) && moving_ < 0 && c_.save->money < fd->price) hand_.clear();
+    if (!ghostOk_) { c_.flash("It doesn't fit there", 1); denyId_.clear(); denyAt_ = c_.now; return; }
+    const bool buying = moving_ < 0;
+    const std::string id = hand_;
+    if (!place(hand_, gx, gz, rot)) { if (buying && c_.save->money < fd->price) { denyId_ = id; denyAt_ = c_.now; } }   // (not enough money: the card shakes)
+    else if (buying && c_.save->money < fd->price) hand_.clear();
   }
 }
 
@@ -451,32 +474,46 @@ void Chalets::draw(Renderer& r, const dvec3& cam) {
   }
 }
 
-void Chalets::hud(Ui& ui, float u) {
+void Chalets::hud(Ui& ui, float) {
   uiW = ui.width(); uiH = ui.height();
-  if (!build_ || !inside()) return;
+  if (!build_ || !inside()) { buildAt_ = c_.now; bm_ = BuildMenuLayout(); return; }
   const PlayData& D = *c_.data;
-  float W = float(ui.width()), H = float(ui.height());
-  float pw = 300 * u, x = W - pw - 18 * u, y = 90 * u;
-  ui.brushPanel(x, y, pw, H - 200 * u, ui_color::a(ui_color::paper, 0.95f), 3);
-  ui.text(x + 16 * u, y + 10 * u, 15 * u, UiFont::CondBold, ui_color::red, "BUILD MODE \xC2\xB7 " + fmtMoney(c_.save->money));
-  if (!D.categories.empty()) ui.text(x + 16 * u, y + 32 * u, 26 * u, UiFont::CondHeavy, ui_color::blue, D.categories[size_t(cat_ % int(D.categories.size()))].second);
-  float iy = y + 70 * u;
-  int k = 0;
-  for (auto& f : D.furniture) {
-    if (D.categories.empty() || f.category != D.categories[size_t(cat_ % int(D.categories.size()))].first) continue;
-    bool sel = f.id == hand_;
-    if (sel) ui.roundRect(x + 10 * u, iy - 2 * u, pw - 20 * u, 24 * u, 6 * u, ui_color::a(ui_color::bluePale, 1));
-    ui.textFit(x + 18 * u, iy, pw - 110 * u, 16 * u, sel ? UiFont::CondBold : UiFont::Cond, ui_color::navy, f.name);
-    ui.text(x + pw - 18 * u, iy, 16 * u, UiFont::CondBold, c_.save->money >= f.price ? ui_color::ok : ui_color::ko, fmtMoney(f.price), UiAlign::Right);
-    iy += 26 * u;
-    if (++k > 16) break;
+  const float u = ui.cssU(), W = float(ui.width()), H = float(ui.height());
+  BuildMenuState S;
+  S.money = c_.save->money;
+  S.categories = D.categories;
+  for (auto& f : D.furniture) S.items.push_back({f.id, f.name, f.category, f.price});
+  S.hand = hand_;
+  S.pad = c_.input->usingGamepad(); S.vmouse = vmouse_; S.look = !vmouse_;
+  S.pointer = vmouse_ ? cursor_ : vec2(-1);
+  S.shownFor = c_.now - buildAt_;
+  S.denyId = denyId_; S.denyAge = c_.now - denyAt_;
+  // the status strip (buildmode.js): what a click does with the piece in hand, why it does not fit, the piece you point at
+  if (const FurnitureDef* fd = hand_.empty() ? nullptr : D.furnitureById(hand_)) {
+    if (ghostOn_ && !ghostOk_) { S.status = "It doesn't fit there"; S.statusBad = true; }
+    else S.status = moving_ >= 0 ? "Click to put it down" : "Click to buy \xC2\xB7 " + fmtMoney(fd->price);
+  } else if (hover_ >= 0) {
+    const nlohmann::json& ch = c_.save->data("chalet");
+    if (ch.contains("furniture") && size_t(hover_) < ch["furniture"].size())
+      if (const FurnitureDef* fd = D.furnitureById(ch["furniture"][size_t(hover_)].value("id", std::string())))
+        S.status = fd->name + " \xC2\xB7 " + c_.K(Action::Pickup) + " move \xC2\xB7 " + c_.K(Action::Alt) + " sell +" + fmtMoney(int64_t(std::round(fd->price * D.sellRefund)));
   }
-  ui.textWrapped(x + 16 * u, H - 230 * u, pw - 32 * u, 13 * u, UiFont::Body, ui_color::navy,
-                 c_.K(Action::PrevItem) + " " + c_.K(Action::NextItem) + " browse \xC2\xB7 " + c_.K(Action::Jump) + " place \xC2\xB7 " + c_.K(Action::View) + " turn \xC2\xB7 " + c_.K(Action::Pickup) + " move \xC2\xB7 " + c_.K(Action::Alt) + " sell \xC2\xB7 " +
-                 c_.K(Action::Restart) + " empty hand \xC2\xB7 " + c_.K(Action::VMouse) + " virtual mouse \xC2\xB7 " + c_.K(Action::Furnish) + " done");
-  // the centre dot / the cursor
-  if (vmouse_) { ui.circle(cursor_.x, cursor_.y, 7 * u, ui_color::white); ui.circle(cursor_.x, cursor_.y, 4 * u, ui_color::blue); }
-  else ui.circle(W / 2, H / 2, 3.5f * u, ghostOn_ && !ghostOk_ ? ui_color::red : ui_color::white);
+  bmScroll_ += (bmTarget_ - bmScroll_) * 0.25f;
+  S.scroll = bmScroll_;
+  if (!vmouse_ && c_.plat) { /* (the free mouse points at the column: game.cpp hands it in through update's nav) */ S.pointer = mouse_; }
+  bm_ = drawBuildMenu(ui, S, *c_.input);
+  bmTarget_ = std::clamp(bmTarget_, 0.f, bm_.maxScroll);
+  if (bmReveal_ && !hand_.empty()) {   // (scrollIntoView: nearest)
+    bmReveal_ = false;
+    for (size_t i = 0; i < D.furniture.size() && i < bm_.itemSpan.size(); i++) if (D.furniture[i].id == hand_) {
+      if (bm_.itemSpan[i].first < bmTarget_) bmTarget_ = bm_.itemSpan[i].first - 6 * u;
+      else if (bm_.itemSpan[i].second > bmTarget_ + bm_.viewH - 30 * u) bmTarget_ = bm_.itemSpan[i].second - bm_.viewH + 30 * u;
+    }
+  }
+  // the aim: #build-cross (a white dot in a blue ring), or the virtual mouse's cursor
+  const float d = ui.dpr();
+  if (vmouse_) { ui.circle(cursor_.x, cursor_.y, 7 * d, ui_color::white); ui.circle(cursor_.x, cursor_.y, 4 * d, ui_color::blue); }
+  else { ui.circle(W / 2, H / 2, 6 * d, ui_color::blue); ui.circle(W / 2, H / 2, 4 * d, ghostOn_ && !ghostOk_ ? ui_color::red : ui_color::white); }
 }
 
 std::string Chalets::objective() const {

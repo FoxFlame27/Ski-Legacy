@@ -60,6 +60,7 @@ private:
   void showResults();
   struct Session;
   PlayCtx& c_;
+  Ui* ui_ = nullptr;   // (the frame's 2D layer: the results screen draws from the menus' frame)
   std::vector<std::pair<const Course*, Prof>> profs_;
   std::unique_ptr<Session> s_;
   // the guide

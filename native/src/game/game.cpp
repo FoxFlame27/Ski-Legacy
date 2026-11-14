@@ -25,6 +25,7 @@
 #include "game/hud.h"
 #include "game/menus.h"
 #include "game/trailmap.h"
+#include "game/uitest.h"
 #include "game/play.h"
 #include "game/play_data.h"
 #include "game/people.h"
@@ -1020,6 +1021,9 @@ int runGame(const GameOptions& opt) {
   const bool uiTest = off("uitest") && opt.autotest;
   struct UiT { int step = 0, f = 0; } uiT;
   if (uiTest) at = AT::Map;
+  // (SKI_LEGACY_UISTEP=<name>: from that sample screen on; SKI_LEGACY_UIONLY=1: just that one)
+  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 9 + int(i);
+  const bool uiOnly = std::getenv("SKI_LEGACY_UIONLY") != nullptr;
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
   bool raceOk = true, jobOk = true, policeOk = true, chaletOk = true, weatherOk = true, sledOk = true;
@@ -2918,7 +2922,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !tmap.isOpen() && !tmap.travelOpen() && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
+    if (started && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 9) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -2968,7 +2972,10 @@ int runGame(const GameOptions& opt) {
         if (rooms.room() == Interiors::Room::Prison) hf.location = "Polizei \xC2\xB7 Legacy Village";
         else if (rooms.room() == Interiors::Room::Hospital) hf.location = "Medical centre";
         else if (rooms.room() == Interiors::Room::Chalet) hf.location = "Chalet village";
-        if (races.active()) hf.waypoint = false;
+        if (races.active()) { hf.waypoint = false; hf.inRace = true; }
+        hf.hideHint = police.wanted();
+        hf.hidePrompt = menus.dialogOpen();
+        hf.onlyFlash = menus.customOpen("shop");
       }
       hud.draw(ui, hf, save, input, simTime);
       float u5 = std::clamp(std::min(float(renderer.height()) / 800.f, float(renderer.width()) / 1280.f), 0.55f, 2.2f) * float(save.setting("hudScale", 1));
@@ -2994,6 +3001,7 @@ int runGame(const GameOptions& opt) {
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
     }
+    if (uiTest && uiT.step >= 9 && uiT.step - 9 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 9)], uiT.f * frameDt, plat->timeSeconds());
     if (tmap.travelOpen()) {   // (the route picker: ui/travel.js)
       // (autotest: the picker is driven like the menus: the highlighted stop is ridden to)
       if (opt.autotest && !atRealKeys && !off("uitest")) tmap.travelChoose();
@@ -3293,11 +3301,13 @@ int runGame(const GameOptions& opt) {
           if (uiT.step == 8) { tmap.openTravel(tmap.expressTravel(0, false, save.money)); }
         }
         uiT.f++;
-        if (uiT.f > 12 && !tmap.reliefReady() && uiT.f < 900) uiT.f = 12;
+        if (uiT.step >= nSteps && uiT.f < 22) uiT.f = 22;
+        if (uiT.step < nSteps && uiT.f > 12 && !tmap.reliefReady() && uiT.f < 900) uiT.f = 12;
         else if (uiT.f >= 30 && rendered) {
-          if (!opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string("ui_") + names[uiT.step]).c_str()));
+          if (!opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string("ui_") + (uiT.step < nSteps ? std::string(names[uiT.step]) : uiTestScreens()[size_t(uiT.step - nSteps)])).c_str()));
           uiT.step++; uiT.f = 0;
-          if (uiT.step >= nSteps) { tmap.closeTravel(); running = false; }
+          if (uiT.step == nSteps) tmap.closeTravel();
+          if (uiT.step >= nSteps + int(uiTestScreens().size()) || (uiOnly && uiT.step > nSteps)) running = false;
         }
       }
       else if (at == AT::Map) {

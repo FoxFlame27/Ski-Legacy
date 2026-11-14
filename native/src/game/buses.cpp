@@ -254,6 +254,8 @@ double BusLine::clearAhead(const Leg& t, Bus& r, double dt, double want, int sel
   const bool standing = own.on && own.vo < 0.6;
   const bool slowed = own.on && own.gap < 45 && (standing ? r.v < 0.8 : own.vo < vWant * 0.8 && r.v < vWant * 0.85);
   r.slowT = slowed ? r.slowT + dt : 0;
+  r.dOtherAhead = otherAhead; r.dOtherNear = otherNear; r.dOwn = own.on; r.dOwnV = own.vo; r.dLeft = t.s1 - r.s;
+  r.dNeed = own.on ? std::min(450.0, std::max(60.0, ((own.gap + 2 * own.along + B.len + 12) / std::max(3.0, (own.vo < 3 ? std::max(PASS_V, own.vo + 3) : vWant) - own.vo)) * (own.vo < 3 ? std::max(PASS_V, own.vo + 3) : vWant) + 20)) : 0;
   if (!r.passing && !r.ram && r.slowT > (standing ? PASS_WAIT : 1.5)) {
     const double vp = own.vo < 3 ? std::max(PASS_V, own.vo + 3) : vWant;
     const double rel = std::max(3.0, vp - own.vo), past = own.gap + 2 * own.along + B.len + 12;
@@ -411,6 +413,8 @@ bool BusLine::debugStand(dvec3& p, double& heading) {
     dbg_.logT = clock_;
     SL_INFO("[bustest] t=%6.1f  gap %6.1f m  v %5.2f m/s  shift %.3f (rate %+.3f)  passing %d  held %.1f s  blocked %.1f s  ram %d  horn %d  yaw %.3f",
             clock_, dbg_.s - b.s - t_.bus.len / 2, b.v, b.shift, b.shiftV, int(b.passing), b.heldT, b.blockT, int(b.ram), b.horn, b.pose.yaw);
+    if (b.heldT > 0.2) SL_INFO("[bustest]   pull out? in its lane %d (moving %.2f m/s), slowed for %.1f s, the other lane: something beside %d, clear %.0f m ahead (needs %.0f), road left %.0f m",
+                               int(b.dOwn), b.dOwnV, b.slowT, int(b.dOtherNear), std::min(b.dOtherAhead, 9999.0), b.dNeed, b.dLeft);
   }
   if (b.s > dbg_.s + 45 || b.at >= 0) { dbg_.done = true; SL_INFO("[bustest] the bus is past (overtakes %d, pushed through %d, shift now %.3f)", overtakes, rams, b.shift); return false; }
   p = dbg_.p; heading = dbg_.h;

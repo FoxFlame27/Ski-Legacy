@@ -25,6 +25,11 @@ namespace platform { class Platform; }
 /// italic, CondHeavy 800 italic, CondSemiItalic 600 italic (style.css --num)
 enum class UiFont : uint8_t { Body, Cond, CondBold, CondItalic, CondHeavy, BodyMed, BodySemi, BodyBold, BodyHeavy, CondSemiItalic, Count };
 enum class UiAlign : uint8_t { Left, Center, Right };
+/// how what is drawn meets what is under it: Normal (source-over), Premultiplied (source-over with premultiplied
+/// output: the mode for premultiplied textures, see Ui::mesh), Add (the canvas's 'lighter')
+enum class UiBlend : uint8_t { Normal, Premultiplied, Add };
+/// a vertex of Ui::mesh: drawable px, texture coordinates, a straight-alpha colour
+struct UiVertex { vec2 pos{0}; vec2 uv{0}; vec4 col{1}; };
 
 /// house colours (style.css)
 namespace ui_color {
@@ -127,7 +132,15 @@ public:
   /// a 2D transform (CSS transform: rotate / translate) applied to everything drawn until popTransform (after clipping)
   void pushRotate(float cx, float cy, float radians);
   void pushTranslate(float dx, float dy);
+  /// CSS transform: scale(sx, sy) about (cx, cy)
+  void pushScale(float cx, float cy, float sx, float sy);
   void popTransform();
+  /// the blend mode of everything drawn until it is set again (begin() resets it to Normal)
+  void setBlend(UiBlend b) { blend_ = b; }
+  /// a triangle list (n = 3 per triangle) with a colour per vertex, flat (no texture) or textured. premultipliedTex:
+  /// the texture's colours are premultiplied by its alpha (a render target, a picture prepared so): to be drawn with
+  /// UiBlend::Premultiplied or Add. The transform and alpha stacks apply; the clip stack does not.
+  void mesh(gfx::Texture t, const UiVertex* v, size_t n, bool premultipliedTex = false);
   /// an opacity multiplied into everything drawn until popAlpha (CSS opacity on a group)
   void pushAlpha(float a) { alpha_.push_back((alpha_.empty() ? 1.f : alpha_.back()) * a); }
   void popAlpha() { if (!alpha_.empty()) alpha_.pop_back(); }
@@ -159,7 +172,8 @@ private:
   gfx::Texture atlas_, white_;
   size_t vboBytes_ = 0;
   std::vector<Vert> verts_;
-  struct Batch { gfx::Texture tex; uint32_t first, count; };
+  struct Batch { gfx::Texture tex; uint32_t first, count; UiBlend blend; };
+  UiBlend blend_ = UiBlend::Normal;
   std::vector<Batch> batches_;
   std::vector<vec4> clips_;
   struct Xf { float a = 1, b = 0, c = 0, d = 1, e = 0, f = 0; };   // x' = a x + c y + e, y' = b x + d y + f

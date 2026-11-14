@@ -85,6 +85,13 @@ public:
   /// the announcer (voice/<key>): three two one go pb checkpoint first second third gold silver bronze wipeout finish
   /// welcome alpine icecanyon bigair rail_*; ducks the music. false if that line is missing.
   bool announce(const std::string& key, float delay = 0, float vol = 1);
+  /// The Icecold Studio ident's sound (audio.js iceHit, synthesized: frost crackling in left to right, a breath drawn
+  /// in, then the freeze hit `hitAt` seconds in: an ice crack, a thump, a glassy ping, singing ice, settling crystals,
+  /// in a large cold room). prepareIceHit renders it (about half a second of work: call it on a thread, ahead of
+  /// time); iceHit plays it `delay` seconds from now (false: not rendered yet); stopIceHit fades it out.
+  void prepareIceHit(float hitAt);
+  bool iceHit(float hitAt, float delay = 0);
+  void stopIceHit(float fade = 0.35f);
   /// a station PA's three-tone gong (the Express's spoken lines are text-to-speech in the web game: not here)
   void paGong();
   void carStart(bool electric);

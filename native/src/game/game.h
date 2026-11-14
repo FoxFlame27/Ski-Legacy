@@ -14,6 +14,7 @@ struct GameOptions {
   std::string verifyPoses;       // --verify-poses [ref.json]: the skier rig against the JS reference (tools/ref_poses.mjs)
   std::string quality = "auto";   // (auto: High on Apple silicon, Balanced elsewhere; engine/quality.h)
   bool qualitySet = false;       // --quality given (else the save's SETTINGS preset)
+  bool intro = true;             // the boot intro before the main menu (--no-intro; never with --no-menu / tests)
   bool menu = true;              // start at the main menu (--no-menu: straight into the game)
   std::string saveName = "ski-legacy-save-v1.json";   // --save NAME (the autotest uses its own, fresh)
   int width = 1280, height = 720;

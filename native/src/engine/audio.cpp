@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdlib>
 #include <cstring>
 
@@ -673,6 +674,214 @@ void Audio::stop(platform::Platform& p) {
 
 void Audio::waitLoaded() { if (loader_.joinable()) loader_.join(); }
 
+// ---------------------------------------------------------------- the Icecold Studio ident (audio.js iceHit)
+// Rendered offline as the Web Audio graph plays it: every source through its own high pass / gain into the dry mix
+// and a send into the convolver (the cold room: 2.8 s of decaying noise, normalised as a ConvolverNode does).
+namespace {
+void fftRadix2(std::vector<std::complex<float>>& a, bool inverse) {
+  const size_t n = a.size();
+  for (size_t i = 1, j = 0; i < n; i++) {
+    size_t bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) std::swap(a[i], a[j]);
+  }
+  for (size_t len = 2; len <= n; len <<= 1) {
+    const double ang = 2 * 3.14159265358979323846 / double(len) * (inverse ? 1 : -1);
+    const std::complex<double> wl(std::cos(ang), std::sin(ang));
+    for (size_t i = 0; i < n; i += len) {
+      std::complex<double> w(1);
+      for (size_t k = 0; k < len / 2; k++) {
+        std::complex<float> u = a[i + k], v = a[i + k + len / 2] * std::complex<float>(float(w.real()), float(w.imag()));
+        a[i + k] = u + v; a[i + k + len / 2] = u - v;
+        w *= wl;
+      }
+    }
+  }
+  if (inverse) for (auto& x : a) x /= float(n);
+}
+
+// Web Audio's BiquadFilterNode: highpass (Q in dB) and bandpass (Q linear)
+struct IceBiquad {
+  double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+  void highpass(double f, double qDb) {
+    double w = 2 * 3.14159265358979323846 * f / kRate, al = std::sin(w) / (2 * std::pow(10.0, qDb / 20)), c = std::cos(w), a0 = 1 + al;
+    b0 = (1 + c) / 2 / a0; b1 = -(1 + c) / a0; b2 = b0; a1 = -2 * c / a0; a2 = (1 - al) / a0;
+  }
+  void bandpass(double f, double q) {
+    double w = 2 * 3.14159265358979323846 * f / kRate, al = std::sin(w) / (2 * q), c = std::cos(w), a0 = 1 + al;
+    b0 = al / a0; b1 = 0; b2 = -al / a0; a1 = -2 * c / a0; a2 = (1 - al) / a0;
+  }
+  float run(float x) { double y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return float(y); }
+};
+
+void renderIceHit(float hitAt, std::shared_ptr<Sample>& outL, std::shared_ptr<Sample>& outR) {
+  const double sr = kRate, lead = std::max(0.f, hitAt);
+  const size_t N = size_t((lead + 3.5) * sr), hit = size_t(lead * sr);
+  uint32_t seed = 0x1ce5eedu;
+  auto rnd = [&](double a, double b) { seed = seed * 1664525u + 1013904223u; return a + (b - a) * double(seed >> 8) / 16777216.0; };
+  std::vector<float> dry[2], wet[2];
+  for (int c = 0; c < 2; c++) { dry[c].assign(N, 0.f); wet[c].assign(N, 0.f); }
+  // route(): a stereo source starting at sample `at`: [high pass] -> gain -> out, and gain * send -> the room
+  auto route = [&](const std::vector<float>& L, const std::vector<float>& R, size_t at, float gain, float send, float hp) {
+    const std::vector<float>* ch[2] = {&L, &R};
+    for (int c = 0; c < 2; c++) {
+      IceBiquad f;
+      if (hp > 0) f.highpass(hp, 0.6);
+      for (size_t i = 0; i < ch[c]->size() && at + i < N; i++) {
+        float x = (*ch[c])[i];
+        if (hp > 0) x = f.run(x);
+        x *= gain;
+        dry[c][at + i] += x;
+        wet[c][at + i] += x * send;
+      }
+    }
+  };
+  // a damped ring (+ a click of noise) added into a channel
+  auto ring = [&](std::vector<float>& d, double at, double f, double dec, double amp, int click) {
+    size_t i0 = size_t(std::llround(at * sr));
+    if (i0 >= d.size()) return;
+    size_t n = std::min(d.size() - i0, size_t(std::llround(dec * 7 * sr)));
+    double w = 6.2832 * f / sr, ph = rnd(0, 6.28);
+    for (size_t i = 0; i < n; i++) d[i0 + i] += float(amp * std::exp(-double(i) / (dec * sr)) * (std::sin(ph + w * double(i)) + (int(i) < click ? rnd(-1, 1) : 0.0)));
+  };
+  auto expRamp = [](double v0, double v1, double u) { return v0 * std::pow(v1 / v0, std::clamp(u, 0.0, 1.0)); };
+  // 1. frost: glassy ticks, sparse then dense, panned left to right as the letters freeze
+  if (lead > 0.15) {
+    std::vector<float> L(size_t(lead * sr), 0.f), R(L.size(), 0.f);
+    for (double t = 0.05; t < lead - 0.015;) {
+      double u = t / lead, pan = std::clamp(-0.75 + 1.5 * u + rnd(-0.3, 0.3), -1.0, 1.0);
+      double a0 = rnd(0.2, 1), amp = a0 * a0 * (0.25 + 0.75 * u) * 0.3, f = rnd(2800, 9500), dec = rnd(0.0015, 0.007);
+      ring(L, t, f, dec, amp * std::cos((pan + 1) * 3.14159265358979 / 4), 10);
+      ring(R, t, f, dec, amp * std::sin((pan + 1) * 3.14159265358979 / 4), 10);
+      t += rnd(0.3, 1.7) / (24 + 330 * u * u);
+    }
+    route(L, R, 0, 0.9f, 0.5f, 1500);
+  }
+  // 2. a breath of air drawn in, cut dead on the hit
+  if (lead > 0.3) {
+    double a = std::max(0.0, lead - 0.55), len = lead - a;
+    std::vector<float> M(size_t(len * sr), 0.f);
+    IceBiquad f;
+    for (size_t i = 0; i < M.size(); i++) {
+      double t = double(i) / sr;
+      if (i % 16 == 0) f.bandpass(expRamp(900, 5600, t / len), 0.9);
+      double g = t < len - 0.01 ? expRamp(0.0001, 0.055, t / (len - 0.01)) : 0.055 * std::max(0.0, (len - t) / 0.01);
+      M[i] = f.run(float(rnd(-1, 1))) * float(g);
+    }
+    route(M, M, size_t(a * sr), 1, 0.2f, 0);
+  }
+  // 3. the crack: a splintering cluster of snaps over a short noisy body
+  {
+    std::vector<float> L(size_t(0.32 * sr), 0.f), R(L.size(), 0.f);
+    double a = 1;
+    for (double t = 0; t < 0.14 && a > 0.04;) {
+      double f = rnd(1700, 4300), dec = rnd(0.0007, 0.0028), p = rnd(-0.5, 0.5);
+      ring(L, t, f, dec, a * (0.9 - p * 0.4), 40); ring(R, t + 0.0004, f * 1.01, dec, a * (0.9 + p * 0.4), 40);
+      t += rnd(0.002, 0.014) * (1 + t * 10); a *= rnd(0.5, 0.82);
+    }
+    for (size_t i = 0; i < L.size(); i++) { double e = 0.24 * std::exp(-double(i) / (0.03 * sr)); L[i] += float(rnd(-1, 1) * e); R[i] += float(rnd(-1, 1) * e); }
+    route(L, R, hit, 0.42f, 0.45f, 700);
+  }
+  // an oscillator through a gain envelope (exponential up to `a` in `atk`, down to silence at `end`), f0 -> f1 over `slide`
+  auto osc = [&](double at, double f0, double f1, double slide, double a, double atk, double end, double stop, float gain, float send) {
+    std::vector<float> M(size_t(stop * sr), 0.f);
+    double ph = 0;
+    for (size_t i = 0; i < M.size(); i++) {
+      double t = double(i) / sr, f = slide > 0 ? expRamp(f0, f1, t / slide) : f0;
+      double g = t < atk ? expRamp(0.0001, a, t / atk) : expRamp(a, 0.0001, (t - atk) / (end - atk));
+      M[i] = float(std::sin(ph) * g);
+      ph += 6.283185307179586 * f / sr;
+    }
+    route(M, M, hit + size_t(at * sr), gain, send, 0);
+  };
+  osc(0, 150, 44, 0.24, 0.62, 0.004, 0.62, 0.66, 1, 0);                                    // 4. thump
+  const double pings[4][3] = {{1, 0.06, 1.7}, {1.0035, 0.035, 2.2}, {2.76, 0.026, 0.7}, {5.4, 0.013, 0.34}};
+  for (auto& p : pings) osc(0, 1975 * p[0], 0, 0, p[1], 0.003, p[2], p[2] + 0.05, 1, 0.7f);  // 5. glassy ping
+  const double sing[2][4] = {{0.015, 4800, 520, 0.03}, {0.16, 3500, 430, 0.014}};
+  for (auto& q : sing) osc(q[0], q[1], q[2], 0.2, q[3], 0.005, 0.3, 0.32, 0.5f, 1.4f);       // 6. singing ice
+  // 7. crystals settling after it: a few tiny high pings, scattered
+  {
+    std::vector<float> L(size_t(1.4 * sr), 0.f), R(L.size(), 0.f);
+    for (int k = 0; k < 9; k++) {
+      double t = rnd(0.07, 1.05), f = rnd(3200, 7800), dec = rnd(0.03, 0.12), a = rnd(0.012, 0.035), p = rnd(-0.9, 0.9);
+      ring(L, t, f, dec, a * (1 - p) * 0.7, 0); ring(R, t, f, dec, a * (1 + p) * 0.7, 0);
+    }
+    route(L, R, hit, 1, 0.8f, 0);
+  }
+  // 8. cold air: a high hiss that dies away
+  {
+    std::vector<float> M(size_t(1.25 * sr), 0.f);
+    for (size_t i = 0; i < M.size(); i++) {
+      double t = double(i) / sr, g = t < 0.006 ? expRamp(0.0001, 0.03, t / 0.006) : expRamp(0.03, 0.0001, (t - 0.006) / (1.2 - 0.006));
+      M[i] = float(rnd(-1, 1) * g);
+    }
+    route(M, M, hit, 1, 0.6f, 6500);
+  }
+  // the room (audio.js coldRoom(2.8)): bright early, darker as it dies; wet 0.3
+  const size_t irN = size_t(2.8 * sr);
+  size_t F = 1;
+  while (F < N + irN) F <<= 1;
+  for (int c = 0; c < 2; c++) {
+    std::vector<std::complex<float>> ir(F), sg(F);
+    double lp = 0, power = 0;
+    for (size_t i = 0; i < irN; i++) {
+      double t = double(i) / sr, x = rnd(-1, 1) * std::exp(-t / 0.6) * std::min(1.0, t / 0.015);
+      lp += (x - lp) * (0.6 - 0.45 * (double(i) / double(irN)));
+      ir[i] = float(lp);
+      power += lp * lp;
+    }
+    // ConvolverNode.normalize: 1 / rms * 0.00125, for 44.1 kHz (both channels have the same statistics)
+    double rms = std::max(0.000125, std::sqrt(power / double(irN)));
+    float scale = float(0.00125 / rms * 44100.0 / sr) * 0.3f;
+    for (size_t i = 0; i < N; i++) sg[i] = wet[c][i];
+    fftRadix2(ir, false); fftRadix2(sg, false);
+    for (size_t i = 0; i < F; i++) sg[i] *= ir[i];
+    fftRadix2(sg, true);
+    for (size_t i = 0; i < N; i++) dry[c][i] += sg[i].real() * scale;
+  }
+  std::shared_ptr<Sample>* out[2] = {&outL, &outR};
+  const size_t tail = size_t(0.08 * sr);
+  for (int c = 0; c < 2; c++) {
+    auto s = std::make_shared<Sample>();
+    s->rate = kRate;
+    s->pcm.resize(N);
+    for (size_t i = 0; i < N; i++) {
+      float e = i + tail > N ? float(N - i) / float(tail) : 1.f;
+      s->pcm[i] = int16_t(std::clamp(dry[c][i] * 0.85f * e, -1.f, 1.f) * 32767.f);
+    }
+    *out[c] = s;
+  }
+}
+std::string iceKey(float hitAt, int ch) { return "ice_" + std::to_string(int(std::lround(hitAt * 1000))) + (ch ? "_r" : "_l"); }
+} // namespace
+
+void Audio::prepareIceHit(float hitAt) {
+  if (sample(iceKey(hitAt, 0))) return;
+  std::shared_ptr<Sample> l, r;
+  renderIceHit(hitAt, l, r);
+  std::lock_guard<std::mutex> lk(bankMu_);
+  bank_[iceKey(hitAt, 0)] = l;
+  bank_[iceKey(hitAt, 1)] = r;
+}
+bool Audio::iceHit(float hitAt, float delay) {
+  if (!running_) return false;
+  auto l = sample(iceKey(hitAt, 0)), r = sample(iceKey(hitAt, 1));
+  if (!l || !r) return false;
+  Cmd a; a.id = -78; a.p.s = l; a.p.pan = -1; a.p.delay = delay;
+  Cmd b; b.id = -79; b.p.s = r; b.p.pan = 1; b.p.delay = delay;
+  shots_++;
+  std::lock_guard<std::mutex> lk(mx_->mu);
+  mx_->queue.push_back(std::move(a));
+  mx_->queue.push_back(std::move(b));
+  return true;
+}
+void Audio::stopIceHit(float fade) {
+  if (!running_) return;
+  std::lock_guard<std::mutex> lk(mx_->mu);
+  for (int id : {-78, -79}) { Cmd c; c.t = Cmd::Stop; c.id = id; c.tau = std::max(0.01f, fade / 3); mx_->queue.push_back(c); }
+}
+
 void Audio::loadAll() {
   auto t0 = std::chrono::steady_clock::now();
   std::string root = paths_->dataRoot + "/audio/";
@@ -698,9 +907,16 @@ void Audio::loadAll() {
     bank_["horn_" + k] = s;
   }
   int missing = 0;
+  // the boot intro's sounds first (it starts while this thread works)
+  for (const char* n : {"whoosh", "slam", "tick"}) {
+    auto s = decode(std::string("sfx/") + n);
+    if (!s) continue;
+    std::lock_guard<std::mutex> lk(bankMu_);
+    bank_[n] = s;
+  }
   for (const char* n : kSfx) {
     if (!running_) return;
-    auto s = decode(std::string("sfx/") + n);
+    auto s = sample(n) ? std::const_pointer_cast<Sample>(sample(n)) : decode(std::string("sfx/") + n);
     if (!s) { failed_++; missing++; continue; }
     std::string name = n;
     if (isLoop(name)) loopify(*s, name.rfind("eng_", 0) == 0 ? std::clamp(float((s->seconds() - 0.12) * 0.25), 0.03f, 0.12f) : 0.35f);

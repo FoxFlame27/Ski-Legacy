@@ -110,6 +110,7 @@ three files as the rolling `latest-native` release.
 |---|---|
 | `--quality switch\|super\|performance\|balanced\|high\|ultra\|superultra` (and the old `low` / `medium`) | graphics preset (Phase 8: the look, see "Graphics overhaul"; default `auto`: High on Apple silicon, Balanced elsewhere) (terrain LOD, shadow map, tree distances, render scale; Phase 7: texture cap / compression, triangle budget, LOD scale, NPC density, lights, simplified shaders, dynamic resolution); else the SETTINGS preset of the save. `switch` = the Nintendo Switch budget |
 | `--no-menu` | straight into the game (no main menu) |
+| `--no-intro` | no boot intro (the SKI LEGACY logo clip, Icecold Studio: `game/intro.cpp`, a port of `src/ui/intro.js`, `introclip.js`, `studioident.js`; any key, a click or a controller button skips it). It plays before the world loads (loading holds the main thread for seconds at a time), then the black loading screen fades up; never with `--no-menu`, `--autotest`, `--mptest`, `--verify-*`, `--rig-shots` |
 | `--save name.json` | another save slot (default `ski-legacy-save-v1.json` in the platform's save directory) |
 | `--spawn village\|piste` | start on the village plaza (as the web game) or at the top of a run |
 | `--size 1600x900`, `--fullscreen`, `--no-vsync` | window |
@@ -136,6 +137,7 @@ whole resort); `sidecam` looks at the rider from the side while riding, `chairte
 straight with the cars on the player's path (see "The cars on the player's path" below), `maptest`
 straight with the trail map, `p5test` straight with the Phase 5 checks.
 `fpview` skis the autotest's run in first person (the hands on the poles in `out.png`), `carside` looks at your car (else the nearest traffic car) from a low side view (the boots in the footwell, not under the sill).
+`introtest` with `--autotest --png out.png` draws only the boot intro's frames at fixed times (`out_intro_<ms>.png`; `SKI_LEGACY_INTRO_TIMES=50,150,...` for other times) and quits before the world loads: the frames to hold against the web game's (`SKI_LEGACY_DPR=2` for the Retina layout); without `--png` it plays the intro once in real time with its sound and prints the frame rate.
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 
 Reference run (a Linux container without a GPU: Mesa llvmpipe software rendering on 4 CPU cores, 1280×720,

@@ -230,6 +230,45 @@ std::string pngVariant(const std::string& png, const char* tag) {
 }
 } // namespace
 
+namespace {
+// three.js CatmullRomCurve3(points, closed = true, 'centripetal') with getPointAt(u): the curve read by arc length
+// (200 divisions, as three.js's arcLengthDivisions)
+struct PanoCurve {
+  std::vector<dvec3> pts;
+  std::vector<double> lens;   // cumulative chord lengths at t = i / 200
+  explicit PanoCurve(std::vector<dvec3> p) : pts(std::move(p)) {
+    lens.push_back(0);
+    dvec3 last = point(0);
+    for (int i = 1; i <= 200; i++) { dvec3 c = point(i / 200.0); lens.push_back(lens.back() + glm::length(c - last)); last = c; }
+  }
+  dvec3 point(double t) const {
+    const int l = int(pts.size());
+    double p = l * t;
+    int ip = int(std::floor(p));
+    double w = p - ip;
+    auto at = [&](int i) { return pts[size_t(((i % l) + l) % l)]; };
+    dvec3 p0 = at(ip - 1), p1 = at(ip), p2 = at(ip + 1), p3 = at(ip + 2);
+    // non-uniform Catmull-Rom, alpha 0.5 (three.js initNonuniformCatmullRom per axis)
+    double dt0 = std::pow(glm::dot(p0 - p1, p0 - p1), 0.25), dt1 = std::pow(glm::dot(p1 - p2, p1 - p2), 0.25), dt2 = std::pow(glm::dot(p2 - p3, p2 - p3), 0.25);
+    if (dt1 < 1e-4) dt1 = 1.0;
+    if (dt0 < 1e-4) dt0 = dt1;
+    if (dt2 < 1e-4) dt2 = dt1;
+    dvec3 t1 = ((p1 - p0) / dt0 - (p2 - p0) / (dt0 + dt1) + (p2 - p1) / dt1) * dt1;
+    dvec3 t2 = ((p2 - p1) / dt1 - (p3 - p1) / (dt1 + dt2) + (p3 - p2) / dt2) * dt1;
+    dvec3 c0 = p1, c1 = t1, c2 = -3.0 * p1 + 3.0 * p2 - 2.0 * t1 - t2, c3 = 2.0 * p1 - 2.0 * p2 + t1 + t2;
+    return c0 + c1 * w + c2 * (w * w) + c3 * (w * w * w);
+  }
+  dvec3 pointAt(double u) const {   // (Curve.getUtoTmapping)
+    double target = u * lens.back();
+    size_t hi = size_t(std::upper_bound(lens.begin(), lens.end(), target) - lens.begin());
+    size_t i = hi > 0 ? hi - 1 : 0;
+    if (i >= lens.size() - 1) return point(1.0);
+    double seg = lens[i + 1] - lens[i], f = seg > 0 ? (target - lens[i]) / seg : 0;
+    return point((double(i) + f) / double(lens.size() - 1));
+  }
+};
+} // namespace
+
 int runGame(const GameOptions& opt) {
   auto plat = platform::createPlatform();
   AssetPaths paths;
@@ -2568,12 +2607,16 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(eye, p + dvec3(0, 0.95, 0) - right * 0.9);   // (the skier right of the menu column)
       cam.fovY = 40; cam.nearZ = 0.05f;
     } else if (!started) {
-      double ang = menuT * 0.035 + 0.6, R = 210;
-      dvec3 c(10, world.height(10, -40) + 18, -40);
-      dvec3 eye = c + dvec3(std::sin(ang) * R, 0, std::cos(ang) * R);
-      eye.y = std::max(c.y + 55, world.height(eye.x, eye.z) + 30);
-      cam.lookAt(eye, c);
-      cam.fovY = 55; cam.nearZ = 0.2f;
+      // main.js: the menu panorama, a slow cinematic flight round the valley and the main mountain (the village,
+      // Silberhorn in the west, the Legacy main mountain, Adlerhorn in the east, back to the village): PANO_POS /
+      // PANO_LOOK, closed centripetal Catmull-Rom curves read by arc length, one lap in 150 s, from titleT = 0.02
+      static const PanoCurve POS({{260, 140, 320}, {-700, 260, 260}, {-1800, 520, -100}, {-1200, 950, -1400}, {300, 1050, -1300}, {1500, 700, -500}, {1200, 320, 600}});
+      static const PanoCurve LOOK({{0, 700, -2350}, {-1600, 700, -900}, {-3170, 1100, -330}, {0, 1100, -2350}, {1800, 900, -900}, {3190, 1100, -800}, {0, 500, -1800}});
+      double titleT = std::fmod(0.02 + menuT / 150.0, 1.0);
+      dvec3 eye = POS.pointAt(titleT), look = LOOK.pointAt(titleT);
+      eye.y = std::max(eye.y, world.height(eye.x, eye.z) + 110);
+      cam.lookAt(eye, look);
+      cam.fovY = 50; cam.nearZ = 0.2f;
     }
     if (off("carside") && started) {
       // (debug: a low side view of your car, else of the nearest traffic car with people in it: the boots under the sill)

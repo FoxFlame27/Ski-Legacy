@@ -199,8 +199,12 @@ public:
           // in wheel notches, signed as the OS reports them (macOS natural scrolling included, as a browser's wheel
           // events): a mouse wheel gives whole notches; a trackpad (macOS: precise deltas, a tenth of its pixels) gives
           // fractions, scaled to about a pixel of scroll per pixel moved (a notch ~ 48 px)
+          // (a trackpad stream now and then reports a whole number too: within 0.25 s of a fractional delta it is
+          // still the trackpad, not a wheel notch — no 48 px jumps in the middle of a swipe)
           float y = ev.wheel.preciseY;
-          if (std::fabs(y - std::round(y)) > 1e-3f) y *= 0.21f;
+          bool fractional = std::fabs(y - std::round(y)) > 1e-3f;
+          if (fractional) preciseWheelAt_ = ev.wheel.timestamp;
+          if (fractional || (preciseWheelAt_ && ev.wheel.timestamp - preciseWheelAt_ < 250)) y *= 0.21f;
           e.wheel += y;
           break;
         }
@@ -455,6 +459,7 @@ private:
   SDL_GLContext ctx_ = nullptr;
   bool keys_[size_t(Key::Count)] = {};
   bool rel_ = false;
+  Uint32 preciseWheelAt_ = 0;   // the last trackpad (fractional) wheel delta
   std::vector<SDL_GameController*> pads_;
   SDL_Joystick* testJoy_ = nullptr;   // (autotest) the virtual controller
   double freq_ = 1;

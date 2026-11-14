@@ -1377,7 +1377,7 @@ int runGame(const GameOptions& opt) {
     double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : 0.1) : std::min(0.25, now - last);
     last = now;
     UiNav nav = navBuilder.build(ev, *plat, input, now);
-    if ((opt.autotest && !atRealKeys) || mptest) { nav = UiNav{}; nav.mouse = vec2(-1); }
+    if ((opt.autotest && !atRealKeys) || mptest) { float wheel = nav.wheel; nav = UiNav{}; nav.mouse = vec2(-1); nav.wheel = wheel; }   // (the wheel stays real: pushWheel)
     // (Phase 6) the network: events, presence out, the other players, the shared clock, the money guard
     mp.update(std::min(0.25, frameDt), paused);
     pc.online = mp.active();
@@ -1509,7 +1509,11 @@ int runGame(const GameOptions& opt) {
           if (padOk) {
             if (f == 18) plat->testPadButton(9, true);
             if (f == 19) plat->testPadButton(9, false);
-            if (f == 21) expect(isPause() && input.usingGamepad(), "Menu / + (virtual controller) -> the pause menu, still open");
+            // (the controller counts as the active device once seen: a real mouse moving over the test window meanwhile
+            // would hand the device back to the keyboard)
+            static bool padSeen = false;
+            if (f >= 18 && f <= 21) padSeen = padSeen || input.usingGamepad();
+            if (f == 21) expect(isPause() && padSeen, "Menu / + (virtual controller) -> the pause menu, still open");
             if (f == 22) plat->testPadButton(9, true);
             if (f == 23) plat->testPadButton(9, false);
             if (f == 25) expect(!menus.isOpen() && !paused, "Menu / + again -> resumed");

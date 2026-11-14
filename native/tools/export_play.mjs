@@ -18,17 +18,20 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
   const pScene = new THREE.Scene();
   const pCols = [];
   const out = {};
-  const pack = makePack('play');
+  const pack = makePack('play', { instColor: true });
   const f32 = (a) => ({ off: pack.blob(Float32Array.from(a)), n: a.length });
   for (const n of ['job_board', 'start_house', 'race_arch', 'grandstand', 'timing_board', 'patrol_hut', 'snow_cannon', 'lamp_post', 'snowmobile', 'piste/bnet_panel', 'piste/flag_pole', 'floodlight_mast', 'floodlight_head_b', 'floodlight_head_c'])
     if (!models[n]) models[n] = await loadGLB(n);
   const pt = (p) => (p ? { x: r4(p.x), y: r4(p.y ?? world.height(p.x, p.z)), z: r4(p.z), heading: r4(p.heading ?? 0), s: r4(p.s ?? 0) } : null);
   const courseOut = (e, bus) => {
     const c = e.course, T = c.track, n = T.n;
-    const X = [], Y = [], Z = [], W = [], H = [], K = [];
+    const X = [], Y = [], Z = [], W = [], H = [], K = [], B = [], F = [];
     for (let i = 0; i < n; i++) {
       X.push(T.X[i]); Z.push(T.Z[i]); W.push(T.W ? T.W[i] : 8); H.push(T.H[i]);
       Y.push(T.Y ? T.Y[i] : world.height(T.X[i], T.Z[i]));
+      // (bots.js Track: the bank of the piste and the snow's friction along it, course.frictionAt: ice < 1)
+      B.push(T.B ? T.B[i] : 0);
+      { let f = 1; try { if (typeof c.frictionAt === 'function') f = c.frictionAt(i * 2); } catch { f = 1; } F.push(Number.isFinite(f) ? f : 1); }
       if (T.K) K.push(T.K[i]);
       else { const a = T.H[Math.max(0, i - 1)], b = T.H[Math.min(n - 1, i + 1)]; K.push(Math.atan2(Math.sin(b - a), Math.cos(b - a)) / (2 * 2 * (i > 0 && i < n - 1 ? 1 : 0.5))); }
     }
@@ -39,7 +42,8 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
       start: pt(c.start), finish: pt(c.finish),
       checkpoints: (c.checkpoints || []).map((q) => ({ ...pt(q), name: q.name })),
       gates: (c.gates || []).map((g) => ({ s: r4(g.s), x: r4(g.x), y: r4(g.y ?? world.height(g.x, g.z)), z: r4(g.z), side: g.side, color: g.color, nx: r4(g.nx), nz: r4(g.nz), width: g.width || 8 })),
-      line: { n, ds: 2, X: f32(X), Y: f32(Y), Z: f32(Z), W: f32(W), H: f32(H), K: f32(K) },
+      line: { n, ds: 2, X: f32(X), Y: f32(Y), Z: f32(Z), W: f32(W), H: f32(H), K: f32(K), B: f32(B), F: f32(F) },
+      night: !!(c.def?.night), masts: (c.floodlights || []).map((m) => [m.x, m.y, m.z, m.yaw, m.lx, m.ly, m.lz, m.ax, m.ay, m.az].map(r4)),
     };
     if (bus) { o.stop = e.stop; o.end = e.end; o.board = e.board ? { x: r4(e.board.x), z: r4(e.board.z), yaw: r4(e.board.yaw) } : null; }
     if (c.startHouse) o.house = pt(c.startHouse);

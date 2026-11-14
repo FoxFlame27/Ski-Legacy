@@ -91,13 +91,21 @@ Course parseCourse(const nlohmann::json& c, const std::vector<uint8_t>& bin) {
   o.bus = c.value("bus", false);
   o.stop = str(c, "stop"); o.end = str(c, "end");
   o.start = pt(c["start"]); o.finish = pt(c["finish"]);
+  if (c.contains("house") && c["house"].is_object()) o.houseS = num(c["house"], "s", -1e9);
   for (auto& q : c["checkpoints"]) o.checkpoints.push_back(pt(q));
   for (auto& g : c["gates"]) o.gates.push_back({num(g, "s"), num(g, "x"), num(g, "y"), num(g, "z"), num(g, "nx"), num(g, "nz"), num(g, "width", 8), int(num(g, "side", 1)), str(g, "color") == "blue"});
   auto& L = c["line"];
   o.line.n = int(num(L, "n")); o.line.ds = num(L, "ds", 2);
   o.line.X = f32(L["X"], bin); o.line.Y = f32(L["Y"], bin); o.line.Z = f32(L["Z"], bin);
   o.line.W = f32(L["W"], bin); o.line.H = f32(L["H"], bin); o.line.K = f32(L["K"], bin);
+  if (L.contains("B")) o.line.B = f32(L["B"], bin);
+  if (L.contains("F")) o.line.F = f32(L["F"], bin);
+  if (int(o.line.B.size()) != o.line.n) o.line.B.clear();
+  if (int(o.line.F.size()) != o.line.n) o.line.F.clear();
   if (int(o.line.X.size()) != o.line.n || int(o.line.H.size()) != o.line.n) o.line.n = 0;
+  o.night = c.value("night", false);
+  if (c.contains("masts") && c["masts"].is_array())
+    for (auto& m : c["masts"]) if (m.is_array() && m.size() >= 10) o.masts.push_back({m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9]});
   if (c.contains("board") && c["board"].is_object()) { o.hasBoard = true; o.boardX = num(c["board"], "x"); o.boardZ = num(c["board"], "z"); o.boardYaw = num(c["board"], "yaw"); }
   return o;
 }

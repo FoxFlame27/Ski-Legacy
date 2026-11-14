@@ -614,7 +614,7 @@ world ready in 13.60 s ...
   roads' cars drive them as ordinary roads (no `scenicWalk` round the roundabouts), no tow zones, trains / helicopter
   blockers, no swerving past a car stopped in the lane, no cars put ahead of the bus you ride (`aroundBus`); *(later:
   people in the cars, see "The cars on the player's path")*.
-- **Buses**: no overtaking / ramming, the fleet's rounds are a simple rotation (not bus.js's slotted timetable), no
+- **Buses**: they overtake and push through as bus.js (clearAhead / steerShift / poseBus / ramContact: stop short of what stands in the lane, the horn, pull out round it after 3 s when the other lane is clear, drive on through after 20 s), but the people about (NPC skiers, villagers), the trains and the police / tow vehicles are not among their obstacles yet; the fleet's rounds are a simple rotation (not bus.js's slotted timetable), no
   passengers or driver, no turn-round fade at intermediate stops (the seat view inside the Micruss and the R chase
   view are there).
 - **Trains**: the Express wears the Wolkenspitzbahn's red (no Legacy blue livery: *Phase 7 paints it blue*), no seated passengers; the default
@@ -753,11 +753,17 @@ bouncing you back into the track (restitution, a little speed scrubbed), respawn
 (a wipeout after 1.4 s, stuck 5 s, off the course 9 m for 1.5 s, fallen 7 m below it), WRONG WAY, the finish (time from the
 line crossing), the ski-out brake, the results card after 2.6 s (or when the field is home), records.js `submitTime` /
 `submitPlace` into `save.records[course]` (best, medal by time, splits, runs, best place, best place per field, race
-medal), the prize, career stats; OK and a fade back to Legacy Village (modes.js exitFree). **The AI field**: 14 racers on
-bots.js DIFFICULTY's paces; each follows a speed profile of the course itself (lateral grip 17.5 m/s² in its curvature,
-gravity down its grade, drag, braking room: a forward and a backward pass) scaled so the run takes the course's reference
-time x its pace, weaving across the track, braking into the finish area; drawn as the six skier characters (tuck / carve,
-leaning into the turns). **The race guide** (raceguide.js): off the bus or a train at a stop with a race within 600 m
+medal), the prize, career stats; OK and a fade back to Legacy Village (modes.js exitFree). **The AI field** (`game/race_bots`, bots.js + aistate.js ported): the course model (racing line as an elastic band inside
+the track and the gates' windows, each racer's own plan, curvature and ground profile), the field of 14 calibrated against
+the ideal player's reference run (twelve halvings per racer on a 1D run with the live physics), the live racers at a fixed
+120 Hz step (lateral speed and acceleration bounded by the edges' grip, gravity from the real height change, drag, the
+tuck, skating out of the start, take-offs and landings), race craft (traffic, overtaking lanes, side-by-side spacing,
+mistakes, the +-3 % rubber band), the start grid, the racers' separation and the shoulder contact with you, parking lanes
+and the hockey stop after the line (session.js). Each racer has its own skier rig posed from its own motion (AISkierAnim:
+edge from the lateral acceleration, crouch, tuck, pole plants at the turn transitions, double-pole pushes), every frame
+within 30 m, at 30 / 15 Hz beyond (carried rigidly in between). **The gates** carry their red / blue flags (the
+instance colours are baked by the exporter) and gatebars.js's striped ribbon between the poles: green ahead, the next
+one pulsing, grey once passed, red when missed. **The race guide** (raceguide.js): off the bus or a train at a stop with a race within 600 m
 (the bus race of that stop first): the waypoint, the objective line with the distance, a tall glowing pillar over it and
 pennant poles every 30 m on the way; it ends there, after 180 s or when you wander off. The crowd stands along a course's
 finish while you are within 700 m of it.
@@ -883,8 +889,8 @@ world ready in 21.61 s ...
 
 ### Known gaps (Phase 5)
 - **Races**: no ghosts (the time trial mode is gone in the web game too), no broadcast presentation (intro flyover, podium,
-  replays, photo finish), the AI racers follow a speed profile (bots.js simulates each racer's own physics, lines, jumps and
-  mistakes), no contact between racers, no RACE AGAIN; the course meshes stand everywhere (the web game builds them within
+  replays, photo finish), no far stand-ins for the racers (rigs to 400 m), no snow spray / tracks behind them, no
+  floodlit night course (the masts are exported, the night and their light pools are not set up), no RACE AGAIN; the course meshes stand everywhere (the web game builds them within
   1.7 km); the low-poly spectators of props.js are replaced by the character crowd.
 - **Jobs**: the people are drawn but have no lines of dialogue beyond the flash texts; the guest follows a simplified
   trail; no pack fitting to the jacket (a box on your back); no job board notice-board UI (the card dialog); the taxi's

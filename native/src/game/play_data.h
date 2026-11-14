@@ -16,6 +16,7 @@ struct CourseLine {
   int n = 0;
   double ds = 2;
   std::vector<float> X, Y, Z, W, H, K;
+  std::vector<float> B, F;   // (bots.js Track) the piste's bank (rad, + leans right) and the snow's friction (1 groomed, < 1 ice)
   double length() const { return n > 1 ? (n - 1) * ds : 0; }
   double sAt(const std::vector<float>& a, double s) const;
   dvec3 point(double s, double lateral = 0) const;
@@ -36,9 +37,14 @@ struct Course {
   double length = 0, par = 0, gold = 0, silver = 0, bronze = 0;
   bool bus = false;
   CoursePt start, finish;
+  double houseS = -1e9;   // the start house (courses.js startHouse.s): the grid keeps clear of it
   std::vector<CoursePt> checkpoints;
   std::vector<CourseGate> gates;
   CourseLine line;
+  /// a floodlit night course (floodlights.js: course.def.night) and its masts: x, y, z, yaw, the lamps' centre, the aim
+  bool night = false;
+  struct Mast { double x, y, z, yaw, lx, ly, lz, ax, ay, az; };
+  std::vector<Mast> masts;
   bool hasBoard = false;
   double boardX = 0, boardZ = 0, boardYaw = 0;
 };

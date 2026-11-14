@@ -2697,12 +2697,13 @@ int runGame(const GameOptions& opt) {
       if (!opt.autotest && !mptest && started) {
         double ms = frameDt * 1000;
         bool console = q.dynamicRes;
-        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : 0.55;
+        const std::string& qn = q.name;
+        bool fast = console || qn == "super" || qn == "performance";
+        // (Balanced and up stay sharp: native resolution, only a mild dip under real load; the user found the 3D blurry)
+        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : fast ? 0.6 : 0.85;
         if (ms > hi && dynScale > floorS) dynScale = std::max(floorS, dynScale - (ms > hi * 1.6 ? 0.05 : 0.02));
         else if (ms < lo && dynScale < 1.0) dynScale = std::min(1.0, dynScale + 0.005);
-        const std::string& qn = q.name;
-        double budgetMP = qn == "super" ? 1.2 : qn == "performance" ? 1.6 : qn == "switch" ? 1.0 : qn == "balanced" ? 2.3
-                        : qn == "high" ? 3.2 : qn == "ultra" ? 4.5 : 1e9;
+        double budgetMP = qn == "super" ? 1.6 : qn == "performance" ? 2.4 : qn == "switch" ? 1.0 : 1e9;
         double px = double(std::max(1, renderer.width())) * double(std::max(1, renderer.height()));
         double budgetS = std::min(1.0, std::sqrt(budgetMP * 1e6 / px));
         float want = float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0) * budgetS * dynScale);

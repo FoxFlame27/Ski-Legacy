@@ -135,6 +135,7 @@ whole resort); `sidecam` looks at the rider from the side while riding, `chairte
 `vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `cartest`
 straight with the cars on the player's path (see "The cars on the player's path" below), `maptest`
 straight with the trail map, `p5test` straight with the Phase 5 checks.
+`uitest` (with `--autotest --png out.png`) shows every UI screen in turn and writes `out_ui_<name>.png` (the trail map at three zooms, its legend and tooltip, the route pickers, then sample states of the race HUD / results, the WANTED box, the build catalogue, the shop, the job board, the racing stand, a card dialog and the menus), then quits; `SKI_LEGACY_UISTEP=<name>` starts at that sample screen (`SKI_LEGACY_UIONLY=1`: only it).
 `fpview` skis the autotest's run in first person (the hands on the poles in `out.png`), `carside` looks at your car (else the nearest traffic car) from a low side view (the boots in the footwell, not under the sill).
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 

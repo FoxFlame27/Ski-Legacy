@@ -57,6 +57,12 @@ static Key mapScancode(SDL_Scancode s) {
     case SDL_SCANCODE_RIGHT: return Key::ArrowRight;
     case SDL_SCANCODE_LEFTBRACKET: return Key::BracketLeft;
     case SDL_SCANCODE_RIGHTBRACKET: return Key::BracketRight;
+    case SDL_SCANCODE_PAGEUP: return Key::PageUp;
+    case SDL_SCANCODE_PAGEDOWN: return Key::PageDown;
+    case SDL_SCANCODE_HOME: return Key::Home;
+    case SDL_SCANCODE_END: return Key::End;
+    case SDL_SCANCODE_EQUALS: case SDL_SCANCODE_KP_PLUS: return Key::Equal;
+    case SDL_SCANCODE_MINUS: case SDL_SCANCODE_KP_MINUS: return Key::Minus;
     default: return Key::Unknown;
   }
 }

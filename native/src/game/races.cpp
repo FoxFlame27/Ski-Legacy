@@ -8,6 +8,7 @@
 #include "game/menus.h"
 #include "game/people.h"
 #include "game/racehud.h"
+#include "game/jobboardui.h"
 #include "game/shapes.h"
 #include "game/weather.h"
 #include "player/player.h"
@@ -171,27 +172,32 @@ void Races::openCard(const Course& co, bool fromStand) {
 }
 
 void Races::openStand() {
-  Dialog d;
-  d.kicker = "RACING \xC2\xB7 Legacy Village";
-  d.title = "Racing";
-  d.keepOpen = false;
-  d.rebuild = [this](Dialog& D) {
-    D.say = "Pick a course: you race the 14 AI there just for fun (no prize money). Races for money: at the courses' start houses and the ski bus's free races.";
-    D.options.clear();
-    for (const Course& c : c_.data->courses) {
-      DialogOption o;
-      const nlohmann::json& rec = c_.save->data("records")[c.id];
-      o.label = c.name;
-      o.sub = c.diff + " \xC2\xB7 " + std::to_string(int(std::round(c.length))) + " m" + (rec.is_object() && rec.contains("best") && rec["best"].is_number() ? " \xC2\xB7 best " + fmtRaceTime(rec["best"].get<double>()) : std::string());
-      if (rec.is_object() && rec.contains("bestRace") && rec["bestRace"].is_number()) o.state = ordinal(rec["bestRace"].get<int>());
-      const Course* cp = &c;
-      o.act = [this, cp]() { openCard(*cp, true); };
-      D.options.push_back(o);
+  // the RACING stand's board (ui/racestand.js): any course against the 14 AI, just for fun
+  stand_ = RaceStandView();
+  for (const Course& c : c_.data->courses) {
+    RaceStandView::C q;
+    const nlohmann::json& rec = c_.save->data("records")[c.id];
+    q.name = c.name; q.tagline = c.tagline; q.level = c.diff; q.length = c.length; q.drop = c.drop;
+    if (rec.is_object()) {
+      if (rec.contains("bestRace") && rec["bestRace"].is_number()) q.bestPlace = rec["bestRace"].get<int>();
+      if (rec.contains("best") && rec["best"].is_number()) q.best = rec["best"].get<double>();
+      q.medal = medalRank(rec.contains("raceMedal") ? rec["raceMedal"] : nlohmann::json()) ? 4 - medalRank(rec["raceMedal"]) : 0;
     }
-    DialogOption n; n.label = "Close"; n.secondary = true;
-    D.options.push_back(n);
+    stand_.courses.push_back(std::move(q));
+  }
+  stand_.i = std::clamp(standCourse_, 0, std::max(0, int(stand_.courses.size()) - 1)); stand_.diff = standDiff_;
+  Menus* M = c_.menus;
+  stand_.closed = [M]() { M->close(); };
+  stand_.start = [this](int ci, int df) {
+    standCourse_ = ci; standDiff_ = df;
+    if (ci >= 0 && size_t(ci) < c_.data->courses.size()) start(c_.data->courses[size_t(ci)], df, false, false, true);
   };
-  c_.menus->openDialog(d);
+  M->openCustom([this](const UiNav& nav, double dt, double now) {
+    if (!ui_) return;
+    if (!frameRaceStand(*ui_, nav, *c_.input, stand_, dt, now)) { if (c_.menus->customOpen("racestand")) c_.menus->close(); return; }
+    c_.menus->customFocus = stand_.courses.empty() ? "" : stand_.courses[size_t(stand_.i)].name;
+  }, "racestand");
+  M->customFocusLabel = [this](const std::string& label) { for (size_t i = 0; i < stand_.courses.size(); i++) if (stand_.courses[i].name == label) { stand_.i = int(i); return true; } return false; };
 }
 
 bool Races::interact(std::string& prompt, bool pressed) {

@@ -253,44 +253,58 @@ std::vector<Jobs::Offer> Jobs::offers(const JobHub& hub) {
 
 // ---------------------------------------------------------------- boards, taking a job
 void Jobs::openBoard(const JobHub& hub) {
-  Dialog d;
-  d.kicker = "Job board \xC2\xB7 " + hub.name;
-  d.title = "Jobs";
-  std::string hid = hub.id;
-  d.rebuild = [this, hid](Dialog& D) {
-    const JobHub* h = nullptr;
-    for (auto& x : c_.data->hubs) if (x.id == hid) h = &x;
-    if (!h) return;
-    D.options.clear();
-    if (job_) D.say = "You are on a job: " + job_->title + ". Finish it first (or drop it here).";
-    else D.say = "Odd jobs round the resort. They pay well, quick and careful earns a tip.";
-    if (!job_)
-      for (const Offer& o : offers(*h)) {
-        DialogOption op;
-        op.label = o.title;
-        op.sub = o.client + " \xC2\xB7 " + std::to_string(std::max(1, int(std::round((o.limit + o.estDown * 1.5) / 60.0)))) + " min" + (o.bonus ? " \xC2\xB7 + up to " + fmtMoney(o.bonus) + " tip" : "");
-        op.state = fmtMoney(o.reward);
-        Offer copy = o;
-        op.act = [this, copy]() { accept(copy); };
-        D.options.push_back(op);
-      }
-    else {
-      DialogOption dr; dr.label = "Drop the job"; dr.sub = job_->title;
-      dr.act = [this]() { drop(); c_.flash("Job dropped", 0); };
-      D.options.push_back(dr);
-    }
-    // the TAXI note (taxi.js: only with a car of your own)
-    DialogOption tx;
-    bool car = !c_.save->garage.empty();
-    tx.label = taxiOn_ ? "TAXI \xC2\xB7 end your shift" : "TAXI \xC2\xB7 drive fares in your car";
-    tx.sub = car ? "Flag fall $60 + $180 a km \xC2\xB7 tips for quick, smooth rides" : "Needs a car of your own (the Autohaus)";
-    tx.disabled = !car || (job_ && !taxiOn_);
-    tx.act = [this]() { if (taxiOn_) endTaxi("Shift ended"); else startTaxi(); };
-    D.options.push_back(tx);
-    DialogOption n; n.label = "Close"; n.secondary = true;
-    D.options.push_back(n);
+  // the board up close (ui/jobboard.js): the day's offers as pinned notes, your job as the yellow one, the taxi's note
+  board_ = JobBoardView();
+  board_.place = hub.kind == "village" ? "Legacy Village" : hub.name;
+  boardOffers_.clear();
+  auto minutes = [](double s) { return std::to_string(std::max(1, int(std::round(s / 60.0)))) + " min"; };
+  if (job_) {
+    board_.hasCurrent = true;
+    board_.current.title = job_->title; board_.current.type = job_->type; board_.current.client = job_->client; board_.current.status = objective();
+  }
+  for (const Offer& o : offers(hub)) {
+    if (job_ && o.id == job_->id) continue;
+    JobNote n;
+    n.id = o.id; n.type = o.type; n.title = o.title; n.brief = o.brief; n.client = o.client; n.reward = o.reward; n.bonus = o.bonus;
+    n.minutes = minutes(o.limit + o.estDown * 1.5);
+    double t = o.est + o.estDown;
+    n.diff = t < 360 ? 1 : t < 720 ? 2 : 3;
+    if (o.type == "escort" && o.skill == "beginner") n.diff = std::min(3, n.diff + 1);
+    board_.offers.push_back(std::move(n));
+    boardOffers_.push_back(o);
+  }
+  {
+    // taxi.js boardOffer: only with a car of your own
+    const bool car = !c_.save->garage.empty();
+    JobNote n;
+    n.id = "taxi"; n.type = "taxi"; n.title = taxiOn_ ? "Legacy Taxi \xC2\xB7 on duty" : "Legacy Taxi \xC2\xB7 drive fares"; n.client = "Legacy Taxi dispatch";
+    n.brief = !car ? "Drive guests round the resort in your own car. Buy a car at the Autohaus first, then come back."
+            : taxiOn_ ? "You are on duty: the dispatcher sends fares to your car. End your shift here."
+            : "Drive guests between bus stops, lift stations, hotels, car parks and the chalets in your own car. The meter pays by distance, with a tip for a quick, smooth ride; knocks and crashes cost you, a wreck or a police chase costs the fare.";
+    n.payText = "$150\xE2\x80\x93" "1,500"; n.bonus = 1; n.tipText = "up to 25%"; n.minutes = "per fare"; n.diff = 1;
+    n.locked = !car && !taxiOn_; n.lockText = "Buy a car at the Autohaus first";
+    n.takeText = !car ? "BUY A CAR FIRST" : taxiOn_ ? "END MY SHIFT" : "GO ON DUTY";
+    board_.offers.push_back(std::move(n));
+  }
+  board_.take = [this](int i) {
+    if (i >= 0 && size_t(i) < boardOffers_.size()) { Offer copy = boardOffers_[size_t(i)]; accept(copy); }
+    else if (taxiOn_) endTaxi("Shift ended"); else startTaxi();
   };
-  c_.menus->openDialog(d);
+  board_.cancel = [this]() { drop(); c_.flash("Job dropped", 0); };
+  Menus* M = c_.menus;
+  board_.closed = [M]() { M->close(); };
+  M->openCustom([this](const UiNav& nav, double dt, double now) {
+    if (!ui_) return;
+    JobBoardView& v = board_;
+    if (!frameJobBoard(*ui_, nav, *c_.input, v, dt, now)) { if (c_.menus->customOpen("jobs")) c_.menus->close(); return; }
+    int base = v.hasCurrent ? 2 : 0;
+    c_.menus->customFocus = v.detail >= 0 ? v.offers[size_t(v.detail)].title : v.focus >= base && size_t(v.focus - base) < v.offers.size() ? v.offers[size_t(v.focus - base)].title : "";
+  }, "jobs");
+  // (autotest: focusing a note takes it off the board, TAKE THE JOB under the confirm)
+  M->customFocusLabel = [this](const std::string& label) {
+    for (size_t i = 0; i < board_.offers.size(); i++) if (board_.offers[i].title == label) { board_.detail = int(i); board_.dFocus = 0; board_.detailAt = -10; board_.focus = int(i) + (board_.hasCurrent ? 2 : 0); return true; }
+    return false;
+  };
 }
 
 bool Jobs::accept(const Offer& o) {
@@ -632,6 +646,7 @@ std::string Jobs::objective() const {
 }
 
 void Jobs::hud(Ui& ui, float u) {
+  ui_ = &ui;
   if (!say_.empty() && c_.now - sayT_ < 3.5) {
     float W = float(ui.width()), H = float(ui.height());
     ui.text(W / 2, H * 0.72f, 18 * u, UiFont::CondItalic, ui_color::white, "\xE2\x80\x9C" + say_ + "\xE2\x80\x9D", UiAlign::Center);

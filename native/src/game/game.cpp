@@ -24,6 +24,7 @@
 #include "game/economy.h"
 #include "game/hud.h"
 #include "game/menus.h"
+#include "game/shopui.h"
 #include "game/trailmap.h"
 #include "game/uitest.h"
 #include "game/play.h"
@@ -689,6 +690,8 @@ int runGame(const GameOptions& opt) {
     save.write(*plat);
   };
   // the ski shop (main.js shopAction / outfitshop.js, simplified to one card dialog with tabs)
+  Dialog shopDlg;
+  ShopView shopView;
   auto openSkiShop = [&]() {
     Dialog d;
     d.kicker = "Ski Rental & Shop \xC2\xB7 Legacy Village";
@@ -783,10 +786,34 @@ int runGame(const GameOptions& opt) {
           D.options.push_back(o);
         }
       }
-      DialogOption close; close.label = "Close"; close.secondary = true;
-      D.options.push_back(close);
     };
-    menus.openDialog(d);
+    // the catalogue screen (ui/outfitshop.js): the dialog's options as its rows, their acts as its purchases
+    shopDlg = d;
+    shopView = ShopView();
+    shopView.title = "Ski Shop"; shopView.sub = "Skis and outfits \xC2\xB7 make your skier yours";
+    shopView.tabs = {{"SKIS", "SKIS"}, {"JACKETS", "JACKET"}, {"TROUSERS", "TROUSERS"}, {"HELMETS", "HELMET"}, {"GOGGLES", "GOGGLE LENS"}};
+    shopView.rebuild = [&](ShopView& v) {
+      shopDlg.tab = v.tab;
+      shopDlg.rebuild(shopDlg);
+      v.money = save.money;
+      v.rows.clear();
+      for (const DialogOption& o : shopDlg.options) {
+        ShopRow r;
+        r.name = o.label; r.sub = o.sub; r.price = std::max(0, o.price);
+        r.owned = !o.state.empty(); r.worn = o.state == "Equipped" || o.state == "Wearing";
+        if (v.tab == 0) { r.swatch = 4; r.a = 0x1546c8; r.b = 0xff4d3d; r.wornLabel = "EQUIPPED"; r.useLabel = "EQUIP"; const SkiDef* k = nullptr; for (size_t i = 0; i < kSkiCount; i++) if (o.label == kSkis[i].name) k = &kSkis[i]; if (k && k->desc && *k->desc) r.notes.push_back(k->desc); if (k && k->rent) r.buyLabel = "RENT"; }
+        else if (o.swatch == 0) r.swatch = 0;
+        else { r.swatch = v.tab == 3 ? 2 : v.tab == 4 ? 3 : 1; r.a = o.swatch; r.b = o.swatch2; }
+        v.rows.push_back(std::move(r));
+      }
+    };
+    shopView.act = [&](ShopView&, int row) { if (row >= 0 && size_t(row) < shopDlg.options.size() && shopDlg.options[size_t(row)].act) { auto f = shopDlg.options[size_t(row)].act; f(); } };
+    menus.openCustom([&](const UiNav& nv, double dt, double now) {
+      if (shopView.openedAt >= 0 && shopView.rebuild) shopView.rebuild(shopView);   // (a purchase answered by the server: the rows follow)
+      if (!frameShop(ui, nv, input, shopView, dt, now)) { menus.close(); return; }
+      if (!shopView.rows.empty()) menus.customFocus = shopView.rows[size_t(shopView.focus)].name;
+    }, "shop");
+    menus.customFocusLabel = [&](const std::string& label) { if (shopView.openedAt < 0 && shopView.rebuild) shopView.rebuild(shopView); for (size_t i = 0; i < shopView.rows.size(); i++) if (shopView.rows[i].name == label) { shopView.focus = int(i); return true; } return false; };
   };
   // the ticket seller (main.js talkToSeller)
   auto openTickets = [&]() {
@@ -2973,7 +3000,7 @@ int runGame(const GameOptions& opt) {
         else if (rooms.room() == Interiors::Room::Hospital) hf.location = "Medical centre";
         else if (rooms.room() == Interiors::Room::Chalet) hf.location = "Chalet village";
         if (races.active()) { hf.waypoint = false; hf.inRace = true; }
-        hf.hideHint = police.wanted();
+        hf.hideHint = police.wanted() || menus.dialogOpen();   // (under a card dialog the controls card would show through its paper)
         hf.hidePrompt = menus.dialogOpen();
         hf.onlyFlash = menus.customOpen("shop");
       }
@@ -3300,8 +3327,31 @@ int runGame(const GameOptions& opt) {
           if (uiT.step == 7) { tmap.openTravel(tmap.railTravel(0, false, save.money)); }
           if (uiT.step == 8) { tmap.openTravel(tmap.expressTravel(0, false, save.money)); }
         }
+        if (uiT.f == 0 && uiT.step >= nSteps && uiT.step - nSteps < int(uiTestScreens().size())) {
+          // the menus' own screens and a card dialog, opened for their shot
+          const std::string& nm = uiTestScreens()[size_t(uiT.step - nSteps)];
+          if (menus.isOpen()) menus.close();
+          menus.inGame = true;
+          if (nm == "menu_pause") menus.open(Menus::Screen::Pause);
+          else if (nm == "menu_controls") menus.open(Menus::Screen::Controls);
+          else if (nm == "menu_stats") menus.open(Menus::Screen::Stats);
+          else if (nm == "menu_settings") menus.open(Menus::Screen::Settings);
+          else if (nm == "menu_play") { menus.inGame = false; menus.open(Menus::Screen::PlayMode); }
+          else if (nm == "menu_mp") { menus.inGame = false; menus.open(Menus::Screen::Multiplayer); }
+          else if (nm == "dialog" || nm == "dialog_long") {
+            Dialog dd;
+            dd.kicker = "Ticket office \xC2\xB7 Legacy Village"; dd.title = "Lift tickets"; dd.say = "Day pass: every lift, all day. Single rides are sold at the gate too.";
+            DialogOption o1; o1.label = "Day pass"; o1.sub = "every lift until the lifts close"; o1.price = 120;
+            DialogOption o2; o2.label = "Single ride"; o2.sub = "one ride on any lift"; o2.price = 50;
+            DialogOption o3; o3.label = nm == "dialog" ? "Ten rides" : "Sonnenkopf H\xC3\xBCtte season ticket"; o3.sub = "ten single rides, no expiry"; o3.price = nm == "dialog" ? 4000 : 4000000; o3.disabled = true;
+            DialogOption o4; o4.label = "Not now"; o4.secondary = true;
+            dd.options = {o1, o2, o3, o4};
+            if (nm == "dialog_long") { DialogOption o5; o5.label = "Owned pass"; o5.sub = "your pass is good until midnight, enjoy the mountain"; o5.state = "Day pass active"; dd.options.insert(dd.options.begin() + 3, o5); }
+            menus.openDialog(dd);
+          }
+        }
         uiT.f++;
-        if (uiT.step >= nSteps && uiT.f < 22) uiT.f = 22;
+        if (uiT.step >= nSteps && uiT.f < 12) uiT.f = 12;
         if (uiT.step < nSteps && uiT.f > 12 && !tmap.reliefReady() && uiT.f < 900) uiT.f = 12;
         else if (uiT.f >= 30 && rendered) {
           if (!opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string("ui_") + (uiT.step < nSteps ? std::string(names[uiT.step]) : uiTestScreens()[size_t(uiT.step - nSteps)])).c_str()));

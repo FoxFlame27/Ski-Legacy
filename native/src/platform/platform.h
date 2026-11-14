@@ -23,6 +23,7 @@ enum class Key : uint8_t {
   Space, Enter, Escape, Backspace, Tab, ShiftLeft, ShiftRight, ControlLeft, ControlRight, AltLeft, AltRight,
   MetaLeft, MetaRight, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, BracketLeft, BracketRight,
   F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+  PageUp, PageDown, Home, End, Equal, Minus,   // (lists: paging; the trail map: zoom)
   Count
 };
 /// "KeyW" -> Key::KeyW (Unknown if not a known code).

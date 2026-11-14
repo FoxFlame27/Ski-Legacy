@@ -1769,6 +1769,8 @@ bool TrailMap::frame(Ui& ui, const UiNav& nav, const Input& in, double dt, const
     const double step = 140 / M.vs;
     for (platform::Key k : nav.keys) {
       if (k == platform::Key::KeyR) { M.vx = you.x; M.vz = you.z; }
+      else if (k == platform::Key::Equal) M.zoomAt(M.W / 2, M.H / 2, 1.35);
+      else if (k == platform::Key::Minus) M.zoomAt(M.W / 2, M.H / 2, 1 / 1.35);
       else if (k == platform::Key::ArrowLeft) M.vx -= step;
       else if (k == platform::Key::ArrowRight) M.vx += step;
       else if (k == platform::Key::ArrowUp) M.vz -= step;

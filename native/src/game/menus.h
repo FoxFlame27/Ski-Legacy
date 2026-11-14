@@ -109,6 +109,8 @@ public:
   bool customOpen(const std::string& name = "") const { return screen_ == Screen::Custom && (name.empty() || name == customName_); }
   /// (autotest) the custom screen's focused label, set by the screen each frame
   std::string customFocus;
+  /// (autotest) focusLabel() on a custom screen: the screen focuses its own item of that name
+  std::function<bool(const std::string& label)> customFocusLabel;
   /// a text field has the focus (the MULTIPLAYER name): game.cpp turns the platform's text input on meanwhile
   bool textFieldFocused() const;
   /// the open dialog rebuilt (an answer from the server came in: the shop's chips follow)

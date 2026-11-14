@@ -761,6 +761,7 @@ float Ui::textWidth(const std::string& s, float size, UiFont f, float tracking) 
     int u = -1;
     const Glyph* g = glyph(f, cp, &u);
     if (!g && cp >= 0x2190 && cp <= 0x2193) { w += size * 0.62f + tracking * size; prev = {}; continue; }   // (arrows drawn as shapes)
+    if (!g && (cp == 0x2264 || cp == 0x2265)) g = glyph(f, cp == 0x2264 ? '<' : '>', &u);   // (drawn as < / > over a bar)
     if (!g) g = glyph(f, '?', &u);
     if (!g) continue;
     if (tabular_ && cp >= '0' && cp <= '9') { const Glyph* z = glyph(f, '0', nullptr); w += (z ? z->adv : g->adv) * k + bold + tracking * size; prev = {}; continue; }
@@ -795,14 +796,18 @@ float Ui::text(float x, float y, float size, UiFont f, const vec4& c, const std:
       prev = {};
       continue;
     }
+    bool leq = false;
+    if (!g && (cp == 0x2264 || cp == 0x2265)) { g = glyph(f, cp == 0x2264 ? '<' : '>', &u); leq = g != nullptr; }   // (the fonts' subsets lack them: < / > lifted over a bar)
     if (!g) g = glyph(f, '?', &u);
     if (!g) continue;
+    if (leq) { triRaw(vec2(pen + size * 0.06f, base - size * 0.02f), vec2(pen + g->adv * k - size * 0.02f, base - size * 0.02f), vec2(pen + g->adv * k - size * 0.02f, base - size * 0.1f), c); triRaw(vec2(pen + size * 0.06f, base - size * 0.02f), vec2(pen + g->adv * k - size * 0.02f, base - size * 0.1f), vec2(pen + size * 0.06f, base - size * 0.1f), c); base -= size * 0.1f; }
     float tabAdv = -1;
     if (tabular_ && cp >= '0' && cp <= '9') { const Glyph* z = glyph(f, '0', nullptr); tabAdv = z ? z->adv : g->adv; prev = {}; }
     else if (prev.file == u && u >= 0) pen += float(stbtt_GetGlyphKernAdvance(&fonts_[size_t(u)]->info, prev.gi, g->gi)) * fonts_[size_t(u)]->bakeScale * k;
     float gx = pen + bold * 0.5f + (tabAdv >= 0 ? (tabAdv - g->adv) * k * 0.5f : 0.f);
     if (g->ok) quad(gx + g->x0 * k, base + g->y0 * k, gx + g->x1 * k, base + g->y1 * k, g->u0, g->v0, g->u1, g->v1, c, 0, 0, 0, 0, 0, 0, u == fileOf(f) ? thr : 0, 0, atlas_);
     pen += (tabAdv >= 0 ? tabAdv : g->adv) * k + bold + tracking * size;
+    if (leq) base += size * 0.1f;
     if (tabAdv < 0) prev = {u, g->gi};
   }
   return w;

@@ -4,6 +4,7 @@
 #include "engine/mesh_kit.h"
 #include "game/people.h"
 #include "game/play_data.h"
+#include "game/shapes.h"
 #include "player/player.h"
 #include "world/world.h"
 #include <cmath>
@@ -32,6 +33,7 @@ double Interiors::deck(double x, double z) const {
   if (room_ == Room::None) return std::nan("");
   double lx = x - origin_.x, lz = z - origin_.z;
   if (std::fabs(lx) > halfX.x + 2 || std::fabs(lz) > halfZ.x + 2) return std::nan("");
+  if (ch_) return chaletDeck(lx, lz);
   // (the showroom: the mezzanine's floor upstairs, the stair's slope on it; carrentalshell.js stairY)
   if (def_ && def_->hasStair && level_ == 2) return floorY_ + def_->FL;
   if (def_ && def_->hasStair && level_ == 1) return floorY_ + def_->FL * clamp((def_->stair[3] - lz) / (def_->stair[3] - def_->stair[2]), 0, 1);
@@ -213,8 +215,27 @@ void Interiors::addPeople(People& people) const {
   if (k < 0 && !people.skierKinds.empty()) k = people.skierKinds[0];
   if (k < 0) return;
   Person q;
-  q.kind = k; q.pos = toWorld(def_->clerkX, 0, def_->clerkZ); q.yaw = def_->clerkYaw; q.anim = PAnim::Idle; q.speed = 0;
+  q.kind = k; q.pos = toWorld(def_->clerkX, 0, def_->clerkZ); q.yaw = std::isfinite(clerkYaw) ? clerkYaw : def_->clerkYaw; q.anim = PAnim::Idle; q.speed = 0;
   people.add(q);
+}
+
+void Interiors::crosshair(Ui& ui) {
+  // (style.css #crosshair: 6 px, white 95 %, a 1.5 px ring of black 35 %)
+  const float d = ui.dpr(), cx = float(ui.width()) / 2, cy = float(ui.height()) / 2;
+  ui.circle(cx, cy, 4.5f * d, vec4(0, 0, 0, 0.35f));
+  ui.circle(cx, cy, 3 * d, vec4(1, 1, 1, 0.95f));
+}
+
+// interior.js updateLight: the daylight through the windows follows the sun outside (soft at dawn and dusk, off at
+// night, dimmer under cloud), the sky light with it, the lanterns glow a little brighter after dark, the stove flickers
+float Interiors::roleScale(const RoomDef::Light& l) const {
+  switch (l.role) {
+    case 1: return day_ * (1 - cloud_ * 0.55f);
+    case 2: return (0.4f + 0.25f * day_) / 0.55f;
+    case 3: return (5 + (1 - day_) * 1.5f) / 5;
+    case 4: { const double t = c_.now; return float(0.85 + std::sin(t * 7.3) * 0.08 + std::sin(t * 13.1 + 1.7) * 0.05 + std::sin(t * 2.1) * 0.04); }
+    default: return 1;
+  }
 }
 
 void Interiors::rebuild() {
@@ -240,11 +261,13 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
   room_ = r;
   onLeave_ = std::move(onLeave);
   boxes.clear(); props.clear(); walls_.clear();
-  def_ = nullptr; mesh_.reset();
+  dbg_ = false;
+  def_ = nullptr; mesh_.reset(); ch_ = nullptr; pr_ = nullptr; chDoors_.clear(); furnitureLamps.clear();
   origin_ = dvec3(r == Room::Prison ? -21000 : r == Room::Hospital ? -21100 : r == Room::Shop ? -21300 : r == Room::Autohaus ? -21400 : -21200, 0, -21000);
   floorY_ = c_.world->height(origin_.x, origin_.z) + 80;
   look_ = nullptr; shell_.reset();
-  if (r == Room::Prison) {
+  if (r == Room::Prison && c_.data && c_.data->prisonDef.ok && c_.data->prisonRoom.ok && c_.roomModel && c_.roomModel("prison")) buildPrisonExported();   // (prison.js's room, walked as it is there)
+  else if (r == Room::Prison) {
     buildPrison();
     // (the police station as prison.js builds it, exported: drawn in place of the boxes, which stay as the walls)
     if (c_.data && c_.data->prisonRoom.ok && c_.data->prisonRoom.hasShell && c_.roomModel) { shell_ = c_.roomModel("prison"); if (shell_) look_ = &c_.data->prisonRoom; }
@@ -252,8 +275,9 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
   else if (r == Room::Hospital) buildHospital();
   else if (r == Room::Shop && c_.data && c_.data->shop.ok) buildExported(c_.data->shop, "shop");
   else if (r == Room::Autohaus && c_.data && c_.data->autohaus.ok) buildExported(c_.data->autohaus, "autohaus");
+  else if (c_.data && c_.data->chaletRoom.ok && c_.roomModel && c_.roomModel("chalet")) buildChaletExported();   // (chaletroom.js's house)
   else buildChalet();
-  rebuild();
+  if (!ch_ && !pr_) rebuild();
   c_.scenery->noTrees = true;
   Player& pl = *c_.player;
   prevView_ = int(pl.view);
@@ -268,7 +292,7 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
 void Interiors::leave() {
   if (room_ == Room::None) return;
   room_ = Room::None;
-  def_ = nullptr; look_ = nullptr; shell_.reset(); walls_.clear();
+  def_ = nullptr; look_ = nullptr; shell_.reset(); walls_.clear(); ch_ = nullptr; pr_ = nullptr; chDoors_.clear();
   c_.scenery->noTrees = false;
   c_.player->view = Player::View(prevView_);
   mesh_.reset();
@@ -285,6 +309,19 @@ bool Interiors::atExit(const dvec3& p) const {
 
 void Interiors::fillColliders(std::vector<Collider>& out) const {
   if (room_ == Room::None) return;
+  if (pr_) { prisonColliders(out); return; }
+  if (ch_) {
+    chaletColliders(out);
+    if (chLevel_ == 1) return;
+    // (your furniture: on the floor it stands on)
+    for (const Prop& p : props) {
+      if (!p.solid || (p.local.y > (ch_->FL - ch_->G) / 2) != (chLevel_ == 2)) continue;
+      Collider c;
+      c.x = origin_.x + p.local.x; c.z = origin_.z + p.local.z; c.hw = p.half.x; c.hd = p.half.y; c.rot = -p.yaw;
+      out.push_back(c);
+    }
+    return;
+  }
   for (Collider c : walls_) { c.x += origin_.x; c.z += origin_.z; out.push_back(c); }
   if (def_) {
     // an exported room's furniture, by the floor you are on; the showroom's stair (carrentalroom.js walk): in at its
@@ -334,6 +371,7 @@ void Interiors::fillColliders(std::vector<Collider>& out) const {
 
 void Interiors::draw(Renderer& r) {
   if (room_ == Room::None) return;
+  if (ch_) { chaletDraw(r); return; }
   dvec3 o = toWorld(0, 0, 0);
   if (shell_ && look_) {
     r.submitModel(*shell_, toWorld(look_->shell.x, look_->shell.y, look_->shell.z), mat4(1), nullptr, true);
@@ -354,9 +392,29 @@ void Interiors::draw(Renderer& r) {
       // (three.js lamps are in candela: a spot high under a hall's roof is much stronger than a lantern at head height
       // for the same light on the floor: its strength at the floor counts here)
       const float reach = l.type == 1 ? float(std::max(1.0, l.p.y * l.p.y / 4.0)) : 1.f;
-      q.pos = toWorld(l.p.x, l.p.y, l.p.z); q.color = l.color * std::min(6.f, l.intensity / reach) * ROOM_LAMP; q.range = l.distance > 0 ? l.distance : 12;
+      q.pos = toWorld(l.p.x, l.p.y, l.p.z); q.color = l.color * std::min(6.f, l.intensity * roleScale(l) / reach) * ROOM_LAMP; q.range = l.distance > 0 ? l.distance : 12;
       r.addLight(q);
     }
+  if (def_ && !def_->panes.empty() && c_.shapes) {
+    // (the web room is its own scene on a dark background: here the quiet spot's sky would show through the door's
+    // gaps and past the glass: the room's background colour behind its walls)
+    const float W = float(def_->W) + 1.6f, D = float(def_->D) + 1.6f, H = float(def_->H) + 1.0f;
+    const vec4 bgc(def_->background, 1);
+    auto quad = [&](const vec3& c, float yaw, float w, float h) { c_.shapes->oriented(r, Shapes::Kind::Quad, o, glm::translate(mat4(1), c) * glm::rotate(mat4(1), yaw, vec3(0, 1, 0)) * glm::scale(mat4(1), vec3(w, h, 1)), bgc, 0, false); };
+    quad(vec3(0, H / 2 - 0.5f, D / 2), float(PI), W, H);
+    quad(vec3(0, H / 2 - 0.5f, -D / 2), 0, W, H);
+    quad(vec3(W / 2, H / 2 - 0.5f, 0), float(-PI / 2), D, H);
+    quad(vec3(-W / 2, H / 2 - 0.5f, 0), float(PI / 2), D, H);
+  }
+  if (def_ && def_->hasClock && c_.shapes) {
+    // (interior.js wallClock / updateLight: the hour hand 0.008 x 0.12 x 0.016, the minute hand 0.006 x 0.18 x 0.01,
+    // both from just below the middle, dark iron; the game's time)
+    const double h = c_.hour;
+    const float ah = float(-(std::fmod(h, 12.0) / 12) * 2 * PI), am = float(-(h - std::floor(h)) * 2 * PI);
+    const vec4 ink(hexColor("#1a120b"), 1);
+    c_.shapes->oriented(r, Shapes::Kind::Box, o, def_->clock * glm::rotate(mat4(1), ah, vec3(0, 0, 1)) * glm::translate(mat4(1), vec3(0, -0.01f, 0)) * glm::scale(mat4(1), vec3(0.008f, 0.12f, 0.016f)), ink, 0, false);
+    c_.shapes->oriented(r, Shapes::Kind::Box, o, def_->clock * glm::rotate(mat4(1), am, vec3(0, 0, 1)) * glm::translate(mat4(1), vec3(0, -0.01f, -0.004f)) * glm::scale(mat4(1), vec3(0.006f, 0.18f, 0.01f)), ink, 0, false);
+  }
   for (const Prop& p : props) {
     if (!p.model) continue;
     dvec3 w = toWorld(p.local.x, p.local.y, p.local.z);
@@ -364,7 +422,29 @@ void Interiors::draw(Renderer& r) {
   }
 }
 
+void Interiors::camera(Camera& cam) const {
+  if (!ch_ && !pr_) return;
+  const dvec3& p = c_.player->renderPos;
+  // (prison.js update: 1.62 m, a bob with your steps)
+  cam.pos = ch_ ? dvec3(p.x, chEye_, p.z) : dvec3(p.x, floorY_ + pr_->eye + std::sin(prT_ * 9) * std::min(1.0, c_.player->speed() / 2.2) * 0.025, p.z);
+  cam.fovY = 70; cam.nearZ = 0.05f;
+  if (dbg_) cam.lookAt(cam.pos, cam.pos + dvec3(std::sin(dbgYaw_) * std::cos(dbgPitch_), std::sin(dbgPitch_), std::cos(dbgYaw_) * std::cos(dbgPitch_)));
+}
+
+void Interiors::debugLook(double x, double z, double yaw, double pitch, int level) {
+  if (!ch_ && !pr_) return;
+  dbg_ = true; dbgYaw_ = yaw; dbgPitch_ = pitch;
+  if (ch_ && level >= 0) chLevel_ = level;
+  chPrev_ = dvec3(x, 0, z);
+  Player& pl = *c_.player;
+  const dvec3 w = toWorld(x, 0, z);
+  pl.teleport(w.x, w.z, yaw);
+  pl.pos.y = deck(w.x, w.z); pl.prevPos = pl.renderPos = pl.pos;
+  if (ch_) chEye_ = pl.pos.y + ch_->eye;
+}
+
 Lighting Interiors::lighting(const Lighting& outside) const {
+  if (ch_) return chaletLighting(outside);
   Lighting L = outside;
   if (const RoomDef* D = def_ ? def_ : look_) {
     // an exported room: the web game's own lights: its hemisphere light as the sky / ground, its directional light (the
@@ -372,9 +452,11 @@ Lighting Interiors::lighting(const Lighting& outside) const {
     L.sunDir = glm::normalize(vec3(0.3f, 0.9f, 0.2f));
     L.sunColor = lightTint; L.sunIntensity = 0;
     L.sky = lightTint * 0.5f; L.ground = lightTint * 0.3f;
+    day_ = 1 - clamp(outside.night, 0.f, 1.f); cloud_ = clamp(outside.cloud, 0.f, 1.f);
     for (const RoomDef::Light& l : D->lights) {
-      if (l.type == 2) { L.sunDir = glm::normalize(vec3(l.p)); L.sunColor = l.color; L.sunIntensity = l.intensity * ROOM_SUN; }
-      else if (l.type == 3) { L.sky = l.color * l.intensity * ROOM_SKY; L.ground = l.color * l.intensity * ROOM_SKY * 0.55f; }
+      const float k = roleScale(l);
+      if (l.type == 2) { L.sunDir = glm::normalize(vec3(l.p)); L.sunColor = l.color; L.sunIntensity = l.intensity * k * ROOM_SUN; }
+      else if (l.type == 3) { L.sky = l.color * l.intensity * k * ROOM_SKY; L.ground = l.color * l.intensity * k * ROOM_SKY * 0.55f; }
     }
     L.fogDensity = 0;
     L.night = 1;

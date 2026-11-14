@@ -4,6 +4,7 @@
 #include "engine/asset_manager.h"
 #include "engine/renderer.h"
 #include "engine/ui.h"
+#include "game/drive.h"
 #include "game/economy.h"
 #include "game/menus.h"
 #include "game/play_data.h"
@@ -16,7 +17,7 @@
 namespace sl {
 
 namespace {
-constexpr double REACH = 6, GRID = 0.25, DOOR_R = 2.6;
+constexpr double REACH = 6, GRID = 0.25, DOOR_R = 2.3;   // (chalets.js interaction: 2.3 m round the door's spot)
 int uiW = 1280, uiH = 720;
 double snap(double v, double g = GRID) { return std::round(v / g) * g; }
 // placement.js: oriented footprints { x, z, hw, hd, rot } (rot about +y, model front +z)
@@ -61,7 +62,7 @@ bool hitsWall(const Foot& f, const ChaletWall& w, double tol = 0.01) {
 }
 } // namespace
 
-Chalets::Chalets(PlayCtx& c, Interiors& rooms) : c_(c), rooms_(rooms) {}
+Chalets::Chalets(PlayCtx& c, Interiors& rooms, WindowView& win) : c_(c), rooms_(rooms), win_(win) {}
 
 void Chalets::load(AssetManager& assets) {
   buildThumbs(c_.dev, c_.plat);   // (the catalogue's thumbnails: public/ui/furniture_thumbs.webp)
@@ -104,8 +105,7 @@ bool Chalets::buy(int i) {
     const ChaletHouse& h = c_.data->chalets[size_t(i)];
     c_.buyChalet(h.id, h.name, [this, i](bool ok) {
       if (!ok) return;
-      c_.flash(c_.data->chalets[size_t(i)].name + " is yours \xC2\xB7 unfurnished: " + c_.K(Action::Furnish) + " inside to furnish it", 2);
-      goInside(i);
+      c_.flash(c_.data->chalets[size_t(i)].name + " is yours \xC2\xB7 it comes empty: go in and press " + c_.K(Action::Furnish) + " to furnish it yourself", 0);
     });
     return false;
   }
@@ -114,20 +114,101 @@ bool Chalets::buy(int i) {
   nlohmann::json& ch = c_.save->data("chalet");
   ch = {{"id", h.id}, {"name", h.name}, {"owned", true}, {"since", c_.save->day}, {"furniture", nlohmann::json::array()}, {"layout", 3}, {"plan", 2}};
   c_.save->markDirty();
-  c_.flash(h.name + " is yours \xC2\xB7 unfurnished: " + c_.K(Action::Furnish) + " inside to furnish it", 2);
+  c_.flash(h.name + " is yours \xC2\xB7 it comes empty: go in and press " + c_.K(Action::Furnish) + " to furnish it yourself", 0);
   SL_INFO("chalets: bought %s for $%d", h.name.c_str(), c_.data->chaletPrice);
   return true;
 }
 
+// chalets.js enter(): in at the front door behind a fade; on the way the world round the house is photographed for its
+// windows (the web game's live view from where this chalet stands), one frame for each side of each floor
 void Chalets::goInside(int i) {
-  if (i < 0) return;
+  if (i < 0 || pending_ >= 0 || rooms_.inside()) return;
   const ChaletHouse& h = c_.data->chalets[size_t(i)];
-  insideHouse_ = i;
+  const ChaletRoomDef& R = c_.data->chaletRoom;
+  pending_ = i;
   if (c_.fade) c_.fade();
-  double ox = h.doorX + std::cos(h.yaw) * 1.5 * 0 + std::sin(h.yaw + PI / 2) * 1.2, oz = h.doorZ + std::cos(h.yaw + PI / 2) * 1.2;
-  double heading = h.yaw + PI / 2;
-  rooms_.enter(Interiors::Room::Chalet, [this, ox, oz, heading]() { build_ = false; vmouse_ = false; insideHouse_ = -1; visiting_ = false; if (c_.fade) c_.fade(); c_.teleport(ox, oz, heading, false); });
+  c_.player->vel = dvec3(0);
+  std::vector<WindowView::Shot> shots;
+  std::vector<WindowView::Pane> panes;
+  if (R.ok && !R.panes.empty() && c_.roomModel && c_.roomModel("chalet")) {
+    const double cy = std::cos(h.yaw), sy = std::sin(h.yaw);
+    static const vec3 SIDE[4] = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}};
+    int index[8];
+    for (int& k : index) k = -1;
+    for (const RoomDef::Pane& p : R.panes) {
+      // (the pane faces into the room: the wall's way out is against its normal; upstairs by its height)
+      const vec3 n = -glm::normalize(vec3(p.m * vec4(0, 0, 1, 0)));
+      int side = 0;
+      for (int k = 1; k < 4; k++) if (glm::dot(n, SIDE[k]) > glm::dot(n, SIDE[side])) side = k;
+      const bool up = p.m[3].y > (R.G + R.FL) / 2 + 0.6;
+      int& ix = index[side + (up ? 4 : 0)];
+      if (ix < 0) {
+        ix = int(shots.size());
+        WindowView::Shot s;
+        const vec3& l = SIDE[side];
+        s.local = l;
+        s.eyeLocal = vec3(0, float((up ? R.FL - R.G : 0) + R.eye), 0);
+        s.eye = dvec3(h.x, h.y + (up ? R.FL : R.G) + R.eye, h.z);
+        s.dir = dvec3(l.x * cy + l.z * sy, 0, -l.x * sy + l.z * cy);
+        s.halfAngle = 62; s.nearZ = 0.4f; s.depth = 12; s.gain = 0.6f;
+        shots.push_back(s);
+      }
+      // (the room's frame here: the house frame with the ground floor at 0)
+      panes.push_back({glm::translate(mat4(1), vec3(0, float(-R.G), 0)) * p.m, p.w, p.h, ix});
+    }
+  }
+  win_.begin(std::move(shots), std::move(panes), [this, i] { enterNow(i); });
+}
+
+void Chalets::enterNow(int i) {
+  const ChaletHouse& h = c_.data->chalets[size_t(i)];
+  const ChaletRoomDef& R = c_.data->chaletRoom;
+  pending_ = -1;
+  insideHouse_ = i;
+  // chalets.js leave(): out in front of the steps, facing away from the door
+  const double cy = std::cos(h.yaw), sy = std::sin(h.yaw), lx = R.stepsX1 + 0.7, lz = R.doorZc;
+  const double ox = h.x + lx * cy + lz * sy, oz = h.z - lx * sy + lz * cy, heading = std::atan2(cy, -sy);
+  rooms_.enter(Interiors::Room::Chalet, [this, ox, oz, heading]() {
+    build_ = false; vmouse_ = false; insideHouse_ = -1; visiting_ = false; viewing_ = -1;
+    win_.clear();
+    if (c_.fade) c_.fade();
+    c_.teleport(ox, oz, heading, false);
+  });
   rebuildFurniture();
+}
+
+// chalets.js offer(): the sale's card
+void Chalets::offer(int i) {
+  const ChaletHouse& h = c_.data->chalets[size_t(i)];
+  nlohmann::json& seenList = c_.save->data("chaletViewed", nlohmann::json::array());
+  bool seen = false;
+  if (seenList.is_array()) for (auto& v : seenList) seen = seen || (v.is_number() && v.get<int>() == h.id);
+  Dialog d;
+  d.kicker = "Chalet village \xC2\xB7 " + fmtMoney(c_.data->chaletPrice);
+  d.title = h.name;
+  d.say = "A two-storey chalet on the Chaletweg: entrance hall, open living room and kitchen, two bathrooms and three bedrooms under the roof, a garden and its own parking. "
+          "It comes UNFURNISHED: you furnish it yourself (inside, press " + c_.K(Action::Furnish) + " for build mode). Yours for good.";
+  DialogOption b; b.label = "Buy this chalet"; b.sub = "Yours for good \xC2\xB7 unfurnished: you furnish it yourself"; b.price = c_.data->chaletPrice;
+  b.disabled = c_.save->money < c_.data->chaletPrice;
+  b.act = [this, i]() { buy(i); };
+  DialogOption l; l.label = "Have a look inside";
+  if (seen) { l.sub = "Already viewed \xC2\xB7 one viewing per chalet"; l.disabled = true; }
+  else {
+    l.sub = "One viewing only \xC2\xB7 empty rooms (unfurnished)";
+    l.act = [this, i]() {   // (view(): each chalet can be viewed once)
+      const ChaletHouse& hh = c_.data->chalets[size_t(i)];
+      nlohmann::json& sl = c_.save->data("chaletViewed", nlohmann::json::array());
+      if (!sl.is_array()) sl = nlohmann::json::array();
+      sl.push_back(hh.id);
+      c_.save->markDirty();
+      viewing_ = i;
+      goInside(i);
+      c_.flash("Viewing " + hh.name + " \xC2\xB7 your one viewing \xC2\xB7 it comes unfurnished: you furnish it yourself", 0);
+    };
+  }
+  DialogOption n; n.label = "Not now"; n.secondary = true;
+  d.options = {b, l, n};
+  c_.menus->openDialog(d);
 }
 
 const Chalets::Fit* Chalets::fitFor(const FurnitureDef& d) {
@@ -173,6 +254,7 @@ void Chalets::rebuildFurniture() {
   if (!inside()) return;
   // the room's own props stay; the furniture is re-added from the save
   rooms_.props.clear();
+  rooms_.furnitureLamps.clear();
   const nlohmann::json& own = c_.save->data("chalet");
   nlohmann::json guest = {{"furniture", guestFurniture_}};
   const nlohmann::json& ch = visiting_ ? guest : own;   // (Phase 6: visiting, the owner's furniture)
@@ -191,6 +273,11 @@ void Chalets::rebuildFurniture() {
     p.half = vec2(f->dims.x / 2, f->dims.z / 2);
     p.lamp = d->light > 0;
     rooms_.props.push_back(p);
+    // (build/lamps.js: a lamp that is on joins the room's light pool, at its bulb)
+    if (d->light > 0 && r.value("on", true)) {
+      const double by = d->place == "ceiling" ? f->dims.y * (1 - d->light) : f->dims.y * d->light;
+      rooms_.furnitureLamps.push_back({dvec3(r.value("x", 0.0), r.value("y", G) + by, r.value("z", 0.0)), (d->lux > 0 ? d->lux : 6.0) / 7.5});
+    }
     idx++;
   }
 }
@@ -274,20 +361,28 @@ bool Chalets::interact(std::string& prompt, bool pressed) {
   if (!c_.data || c_.data->chalets.empty()) return false;
   if (inside()) {
     if (build_) return false;
+    if (rooms_.chaletExported()) {
+      // chaletroom.js update(): the door you look at (or stand in): the front door leads out, the others open / close
+      int which = -1;
+      const int k = rooms_.chaletDoor(camPos_, camDir_, which);
+      if (k == 1) { prompt = "Leave the chalet"; if (pressed) rooms_.leave(); return true; }
+      if (k) { prompt = k == 2 ? "Open the door" : "Close the door"; if (pressed) rooms_.chaletUse(which); return true; }
+      return false;
+    }
     if (rooms_.atExit(c_.player->pos)) { prompt = "Leave the chalet"; if (pressed) rooms_.leave(); return true; }
     if (ownedHouse() == insideHouse_) { prompt = "Furnish \xC2\xB7 " + c_.K(Action::Furnish); return false; }
     return false;
   }
-  if (rooms_.inside()) return false;
+  if (rooms_.inside() || pending_ >= 0) return false;
   int i = houseNear(c_.player->pos, DOOR_R);
   if (i < 0) return false;
   const ChaletHouse& h = c_.data->chalets[size_t(i)];
   int mine = ownedHouse();
-  if (mine == i) { prompt = h.name + " \xC2\xB7 go inside"; if (pressed) goInside(i); return true; }
-  // (Phase 6) another player's chalet: ask them (they get Y / N), then in you go with their furniture
+  // chalets.js interaction(): yours (or the one you are viewing): go in; somebody else's: ask to visit; one each; the sale
+  const bool canEnter = mine == i || viewing_ == i;
   std::string other = c_.chaletOwner ? c_.chaletOwner(h.id) : "";
-  if (!other.empty()) {
-    prompt = other + "'s chalet \xC2\xB7 ask to visit";
+  if (!other.empty() && !canEnter) {
+    prompt = h.name + " \xC2\xB7 " + other + "'s chalet \xC2\xB7 ask to visit";
     if (pressed && c_.visitChalet) {
       c_.flash("Asking " + other + " to let you in...", 0);
       c_.visitChalet(h.id, other, [this, i](bool ok, const nlohmann::json& furniture) {
@@ -299,25 +394,20 @@ bool Chalets::interact(std::string& prompt, bool pressed) {
     }
     return true;
   }
-  if (mine >= 0) { prompt = h.name; if (pressed) c_.flash("You already own " + c_.data->chalets[size_t(mine)].name + " (one each)", 1); return true; }
-  prompt = h.name + " for sale \xC2\xB7 " + fmtMoney(c_.data->chaletPrice);
-  if (pressed) {
-    Dialog d;
-    d.kicker = "Chalet village \xC2\xB7 " + fmtMoney(c_.data->chaletPrice);
-    d.title = h.name;
-    d.say = "Two storeys under a snowy roof, a garden inside its picket fence, a private parking space. Yours for good.";
-    DialogOption b; b.label = "Buy this chalet"; b.sub = "Yours for good \xC2\xB7 unfurnished: you furnish it yourself"; b.price = c_.data->chaletPrice;
-    b.disabled = c_.save->money < c_.data->chaletPrice;
-    b.act = [this, i]() { if (buy(i)) goInside(i); };
-    DialogOption l; l.label = "Have a look inside"; l.act = [this, i]() { goInside(i); };
-    DialogOption n; n.label = "Not now"; n.secondary = true;
-    d.options = {b, l, n};
-    c_.menus->openDialog(d);
+  if (canEnter) { prompt = "Go in \xC2\xB7 " + h.name + (mine == i ? " (your chalet)" : ""); if (pressed) goInside(i); return true; }
+  if (mine >= 0) {
+    const std::string& own = c_.data->chalets[size_t(mine)].name;
+    prompt = h.name + " \xC2\xB7 you already own " + own;
+    if (pressed) c_.flash("You already own " + own + ": one chalet each", 1);
+    return true;
   }
+  prompt = h.name + " for sale \xC2\xB7 " + fmtMoney(c_.data->chaletPrice);
+  if (pressed) offer(i);
   return true;
 }
 
 void Chalets::update(double, const Camera& cam, const UiNav& nav) {
+  camPos_ = cam.pos; camDir_ = cam.forward();
   ghostOn_ = false; hover_ = -1;
   if (!inside()) { build_ = false; return; }
   mouse_ = nav.mouse;
@@ -435,11 +525,52 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   }
 }
 
+void Chalets::fillColliders(std::vector<Collider>& out) const {
+  if (!c_.data || !c_.data->chaletVillage.ok || rooms_.inside()) return;
+  const dvec3& p = c_.driving && c_.drive ? c_.drive->pos() : c_.player->pos;
+  for (const PrisonDef::Col& q : c_.data->chaletVillage.colliders) {
+    if (std::fabs(q.x - p.x) > 40 || std::fabs(q.z - p.z) > 40) continue;
+    Collider c;
+    c.x = q.x; c.z = q.z;
+    if (q.r >= 0) c.r = q.r; else { c.hw = q.hw; c.hd = q.hd; c.rot = q.rot; }
+    c.top = q.top;
+    out.push_back(c);
+  }
+}
+
 void Chalets::draw(Renderer& r, const dvec3& cam) {
   if (!c_.data) return;
+  if (!rooms_.inside() && c_.data->chaletVillage.ok) {
+    // chalets.js build(): the gardens (picket fences, sheds, benches, snowmen, spruces), the parking bays and their
+    // signs, the house numbers, the street lamps: the web game's own, exported as one model
+    const ChaletVillageDef& V = c_.data->chaletVillage;
+    if (!village_ && c_.roomModel) village_ = c_.roomModel("chalet_village");
+    const double dv = glm::length(V.at - cam);
+    if (village_ && dv < 2500) r.submitModel(*village_, V.at, mat4(1), nullptr, dv < 400);
+    // (its Meshy props: each model at the places it stands)
+    if (villageInst_.size() != V.inst.size() && c_.roomModel) { villageInst_.clear(); for (const auto& I : V.inst) villageInst_.push_back(c_.roomModel(I.key)); }
+    if (dv < 1200)
+      for (size_t k = 0; k < V.inst.size() && k < villageInst_.size(); k++) {
+        if (!villageInst_[k]) continue;
+        for (const mat4& M : V.inst[k].m) {
+          const dvec3 p = V.at + dvec3(vec3(M[3]));
+          const double d = glm::length(p - cam);
+          if (d < 420 && r.visible(p - dvec3(4, 1, 4), p + dvec3(4, 9, 4))) r.submitModel(*villageInst_[k], V.at, M, nullptr, d < 120);
+        }
+      }
+    // the windows lit from dusk (update(): opacity min(1, night x 1.3), each pane its own warmth), the lamps' pools
+    const float n = c_.night;
+    if (n > 0.05f && dv < 1500 && c_.shapes) {
+      const float op = std::min(1.f, n * 1.3f);
+      for (const ChaletVillageDef::Win& w : V.windows) c_.shapes->oriented(r, Shapes::Kind::Quad, V.at, w.m, vec4(w.c * 0.5f, 1), 2.4f * op, false);
+    }
+    if (n > 0.2f)
+      for (const dvec3& l : V.lamps) if (glm::length(l - cam) < 200) { PointLight q; q.pos = l; q.color = vec3(1.0f, 0.78f, 0.52f) * 55.f * n; q.range = 17; r.addLight(q); }
+  }
   if (!rooms_.inside()) {
     // the chalets (chalet.glb on the ones you are near, the low-poly one on the rest)
     for (const ChaletHouse& h : c_.data->chalets) {
+      if (pending_ >= 0 && win_.capturing() && &h == &c_.data->chalets[size_t(pending_)]) continue;   // (its windows' view: without the house itself)
       dvec3 p(h.x, h.y, h.z);
       double d = glm::length(p - cam);
       if (d > 1800 || !r.visible(p - dvec3(8, 0, 8), p + dvec3(8, 12, 8))) continue;
@@ -524,6 +655,12 @@ void Chalets::hud(Ui& ui, float) {
   const float d = ui.dpr();
   if (vmouse_) { ui.circle(cursor_.x, cursor_.y, 7 * d, ui_color::white); ui.circle(cursor_.x, cursor_.y, 4 * d, ui_color::blue); }
   else { ui.circle(W / 2, H / 2, 6 * d, ui_color::blue); ui.circle(W / 2, H / 2, 4 * d, ghostOn_ && !ghostOk_ ? ui_color::red : ui_color::white); }
+}
+
+std::string Chalets::location() const {
+  if (!inside()) return "";
+  const std::string name = insideHouse_ >= 0 ? c_.data->chalets[size_t(insideHouse_)].name : std::string("Chalet");
+  return rooms_.chaletExported() ? name + " \xC2\xB7 " + rooms_.chaletRoomName() : name;
 }
 
 std::string Chalets::objective() const {

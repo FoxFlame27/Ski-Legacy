@@ -135,8 +135,20 @@ RoomDef parseRoom(const nlohmann::json& r) {
     q.color = vec3(l["color"][0].get<float>(), l["color"][1].get<float>(), l["color"][2].get<float>());
     q.intensity = float(num(l, "intensity", 1)); q.distance = float(num(l, "distance"));
     q.p = dvec3(l["p"][0].get<double>(), l["p"][1].get<double>(), l["p"][2].get<double>());
+    const std::string role = str(l, "role");
+    q.role = role == "day" ? 1 : role == "hemi" ? 2 : role == "lamp" ? 3 : role == "fire" ? 4 : 0;
     o.lights.push_back(q);
   }
+  if (r.contains("panes")) for (auto& q : r["panes"]) {
+    if (!q.contains("m") || q["m"].size() < 12) continue;
+    RoomDef::Pane pn;
+    for (int k = 0; k < 12; k++) pn.m[k % 4][k / 4] = q["m"][size_t(k)].get<float>();   // (rows of the 3 x 4 matrix)
+    pn.w = float(num(q, "w", 1)); pn.h = float(num(q, "h", 1));
+    o.panes.push_back(pn);
+  }
+  if (r.contains("door") && r["door"].is_object()) { o.hasDoor = true; o.doorX = num(r["door"], "x"); o.doorZ = num(r["door"], "z"); o.frontX = num(r["door"], "fx"); o.frontZ = num(r["door"], "fz", 1); o.doorR = num(r["door"], "r", 3.2); }
+  if (r.contains("clock") && r["clock"].is_object() && r["clock"].contains("m") && r["clock"]["m"].size() >= 12) { o.hasClock = true; for (int k = 0; k < 12; k++) o.clock[k % 4][k / 4] = r["clock"]["m"][size_t(k)].get<float>(); }
+  if (r.contains("podium") && r["podium"].is_array() && r["podium"].size() >= 3) o.podium = dvec3(r["podium"][0].get<double>(), r["podium"][1].get<double>(), r["podium"][2].get<double>());
   if (r.contains("shell") && r["shell"].is_array() && r["shell"].size() >= 3) { o.hasShell = true; o.shell = dvec3(r["shell"][0].get<double>(), r["shell"][1].get<double>(), r["shell"][2].get<double>()); }
   if (r.contains("stair") && r["stair"].is_array() && r["stair"].size() >= 4) { o.hasStair = true; for (size_t k = 0; k < 4; k++) o.stair[k] = r["stair"][k]; o.FL = num(r, "FL"); o.MZ = num(r, "MZ"); }
   if (r.contains("obstaclesUp")) for (auto& q : r["obstaclesUp"]) if (q.is_array() && q.size() >= 3) o.obstaclesUp.push_back({q[0], q[1], q[2]});
@@ -151,7 +163,133 @@ RoomDef parseRoom(const nlohmann::json& r) {
 }
 } // namespace
 
+namespace {
+RoomDef::Pane parsePane(const nlohmann::json& q) {
+  RoomDef::Pane pn;
+  if (q.contains("m") && q["m"].size() >= 12) for (int k = 0; k < 12; k++) pn.m[k % 4][k / 4] = q["m"][size_t(k)].get<float>();
+  pn.w = float(num(q, "w", 1)); pn.h = float(num(q, "h", 1));
+  return pn;
+}
+glm::dmat4 parseM34(const nlohmann::json& m) {
+  glm::dmat4 o(1);
+  if (m.is_array() && m.size() >= 12) for (int k = 0; k < 12; k++) o[k % 4][k / 4] = m[size_t(k)].get<double>();
+  return o;
+}
+ChaletRoomDef parseChaletRoom(const nlohmann::json& r) {
+  ChaletRoomDef o;
+  if (!r.is_object() || !r.contains("solid") || !r.contains("plan")) return o;
+  o.ok = true;
+  o.eye = num(r, "eye", 1.62); o.radius = num(r, "radius", 0.28);
+  static const char* lv[3] = {"ground", "up", "stair"};
+  for (int k = 0; k < 3; k++) if (r["solid"].contains(lv[k])) for (auto& q : r["solid"][lv[k]]) if (q.is_array() && q.size() >= 5) o.solid[k].push_back({q[0], q[1], q[2], q[3], q[4]});
+  for (int k = 0; k < 2; k++) {
+    if (r.contains("round") && r["round"].contains(lv[k])) for (auto& q : r["round"][lv[k]]) if (q.is_array() && q.size() >= 3) o.round[k].push_back({q[0], q[1], q[2]});
+    if (r.contains("boxes") && r["boxes"].contains(lv[k])) for (auto& q : r["boxes"][lv[k]]) if (q.is_array() && q.size() >= 5) o.boxes[k].push_back({q[0], q[1], q[2], q[3], q[4]});
+  }
+  if (r.contains("doors")) for (auto& d : r["doors"]) {
+    ChaletRoomDef::Door q;
+    q.key = str(d, "key");
+    if (d.contains("hinge") && d["hinge"].size() >= 2) { q.hx = d["hinge"][0]; q.hz = d["hinge"][1]; }
+    if (d.contains("u") && d["u"].size() >= 2) { q.ux = d["u"][0]; q.uz = d["u"][1]; }
+    if (d.contains("n") && d["n"].size() >= 2) { q.nx = d["n"][0]; q.nz = d["n"][1]; }
+    q.w = num(d, "w", 0.9); q.h = num(d, "h", 2.1); q.y0 = num(d, "y0"); q.inward = num(d, "inward"); q.base = num(d, "base"); q.k = int(num(d, "k", 1));
+    q.up = str(d, "level") == "up"; q.front = d.value("front", false);
+    o.doors.push_back(q);
+  }
+  if (r.contains("lamps")) for (auto& l : r["lamps"]) o.lamps.push_back({num(l, "x"), num(l, "y"), num(l, "z"), num(l, "power", 1), l.value("up", false)});
+  if (r.contains("panes")) for (auto& q : r["panes"]) o.panes.push_back(parsePane(q));
+  if (r.contains("doorAt") && r["doorAt"].is_object()) { o.doorX = num(r["doorAt"], "x"); o.doorZ = (num(r["doorAt"], "z0") + num(r["doorAt"], "z1")) / 2; o.doorNx = num(r["doorAt"], "nx", 1); o.doorNz = num(r["doorAt"], "nz"); }
+  const auto& P = r["plan"];
+  o.IX = num(P, "IX", o.IX); o.IZ = num(P, "IZ", o.IZ); o.G = num(P, "G", o.G); o.GC = num(P, "GC", o.GC); o.FL = num(P, "FL", o.FL); o.rise = num(P, "RISE", o.rise); o.run = num(P, "RUN", o.run);
+  auto rect = [&](const char* k, double* v) { if (P.contains(k)) { v[0] = num(P[k], "x0", v[0]); v[1] = num(P[k], "x1", v[1]); v[2] = num(P[k], "z0", v[2]); v[3] = num(P[k], "z1", v[3]); } };
+  rect("STAIR", o.stair); rect("HOLE", o.hole);
+  if (P.contains("STAIR")) o.steps = int(num(P["STAIR"], "steps", 16));
+  if (P.contains("DORMER")) { o.dormerZ0 = num(P["DORMER"], "z0", o.dormerZ0); o.dormerZ1 = num(P["DORMER"], "z1", o.dormerZ1); }
+  if (P.contains("STEPS")) o.stepsX1 = num(P["STEPS"], "x1", o.stepsX1);
+  if (P.contains("DOOR")) o.doorZc = num(P["DOOR"], "z", o.doorZc);
+  if (r.contains("rooms")) for (auto& q : r["rooms"]) {
+    ChaletRoomDef::Rm m;
+    m.name = str(q, "name"); m.up = q.value("up", false);
+    if (q.contains("rects")) for (auto& t : q["rects"]) if (t.is_array() && t.size() >= 4) m.rects.push_back({t[0], t[1], t[2], t[3]});
+    o.rooms.push_back(std::move(m));
+  }
+  if (r.contains("background") && r["background"].is_array() && r["background"].size() >= 3) o.background = vec3(r["background"][0].get<float>(), r["background"][1].get<float>(), r["background"][2].get<float>());
+  return o;
+}
+PrisonDef parsePrison(const nlohmann::json& r, const nlohmann::json* outModel) {
+  PrisonDef o;
+  if (!r.is_object() || !r.contains("boxes") || !r.contains("EXIT")) return o;
+  o.ok = true;
+  o.eye = num(r, "eye", 1.62); o.radius = num(r, "radius", 0.26);
+  for (auto& q : r["boxes"]) if (q.is_array() && q.size() >= 4) o.boxes.push_back({q[0].get<double>(), q[1].get<double>(), q[2].get<double>(), q[3].get<double>()});
+  if (r.contains("cellDoors")) for (auto& q : r["cellDoors"]) if (q.is_array() && q.size() >= 2) o.cellDoors.push_back(dvec2(q[0].get<double>(), q[1].get<double>()));
+  if (r.contains("ROOM")) { const auto& R = r["ROOM"]; o.roomX0 = num(R, "x0", o.roomX0); o.roomX1 = num(R, "x1", o.roomX1); o.roomZ0 = num(R, "z0", o.roomZ0); o.bars = num(R, "bars", o.bars); o.roomZ1 = num(R, "z1", o.roomZ1); }
+  if (r.contains("FRONT")) { const auto& F = r["FRONT"]; o.frontX0 = num(F, "x0", o.frontX0); o.frontX1 = num(F, "x1", o.frontX1); o.frontZ0 = num(F, "z0", o.frontZ0); o.frontZ1 = num(F, "z1", o.frontZ1); }
+  o.exitX = num(r["EXIT"], "x", o.exitX); o.exitZ = num(r["EXIT"], "z", o.exitZ);
+  o.cellW = num(r, "CELL_W", 3.6);
+  if (r.contains("CELLS")) for (auto& q : r["CELLS"]) o.cells.push_back(q.get<double>());
+  if (o.cells.empty()) o.cells = {-3.6, 0, 3.6};
+  if (r.contains("guard") && r["guard"].is_object()) { o.hasGuard = true; o.guardX = num(r["guard"], "x"); o.guardZ = num(r["guard"], "z"); }
+  if (r.contains("panes")) for (auto& q : r["panes"]) o.panes.push_back(parsePane(q));
+  if (r.contains("outside") && r["outside"].is_object()) {
+    const auto& O = r["outside"];
+    o.hasOutside = true;
+    o.doorX = num(O["door"], "x"); o.doorZ = num(O["door"], "z"); o.doorYaw = num(O["door"], "yaw");
+    o.cellsFrame = parseM34(O["cells"]); o.officeFrame = parseM34(O["office"]);
+    if (O.contains("colliders")) for (auto& c : O["colliders"]) o.colliders.push_back({num(c, "x"), num(c, "z"), num(c, "hw"), num(c, "hd"), num(c, "rot"), num(c, "r", -1), 1e30});
+    if (O.contains("patrol") && O["patrol"].is_object()) { o.hasPatrol = true; o.patrolX = num(O["patrol"], "x"); o.patrolZ = num(O["patrol"], "z"); o.patrolYaw = num(O["patrol"], "yaw"); }
+    if (outModel && outModel->contains("at") && (*outModel)["at"].size() >= 3) o.outsideAt = dvec3((*outModel)["at"][0].get<double>(), (*outModel)["at"][1].get<double>(), (*outModel)["at"][2].get<double>());
+  }
+  return o;
+}
+ChaletVillageDef parseVillage(const nlohmann::json& r) {
+  ChaletVillageDef o;
+  if (!r.is_object() || !r.contains("at") || r["at"].size() < 3) return o;
+  o.ok = true;
+  o.at = dvec3(r["at"][0].get<double>(), r["at"][1].get<double>(), r["at"][2].get<double>());
+  if (r.contains("windows")) for (auto& w : r["windows"]) {
+    if (!w.contains("m") || w["m"].size() < 12) continue;
+    ChaletVillageDef::Win q;
+    for (int k = 0; k < 12; k++) q.m[k % 4][k / 4] = w["m"][size_t(k)].get<float>();
+    if (w.contains("c") && w["c"].size() >= 3) q.c = vec3(w["c"][0].get<float>(), w["c"][1].get<float>(), w["c"][2].get<float>());
+    o.windows.push_back(q);
+  }
+  if (r.contains("lamps")) for (auto& l : r["lamps"]) if (l.is_array() && l.size() >= 3) o.lamps.push_back(dvec3(l[0].get<double>(), l[1].get<double>(), l[2].get<double>()));
+  if (r.contains("inst")) for (auto& q : r["inst"]) {
+    ChaletVillageDef::Inst I;
+    I.key = str(q, "key");
+    if (q.contains("m")) for (auto& mm : q["m"]) if (mm.is_array() && mm.size() >= 12) { mat4 M(1); for (int k = 0; k < 12; k++) M[k % 4][k / 4] = mm[size_t(k)].get<float>(); I.m.push_back(M); }
+    o.inst.push_back(std::move(I));
+  }
+  if (r.contains("colliders")) for (auto& c : r["colliders"]) o.colliders.push_back({num(c, "x"), num(c, "z"), num(c, "hw"), num(c, "hd"), num(c, "rot"), num(c, "r", -1), num(c, "top", 1e30)});
+  return o;
+}
+WerkstattDef parseWerkstatt(const nlohmann::json& r) {
+  WerkstattDef o;
+  if (!r.is_object() || !r.contains("site") || !r.contains("at") || r["at"].size() < 3) return o;
+  o.ok = true;
+  o.at = dvec3(r["at"][0].get<double>(), r["at"][1].get<double>(), r["at"][2].get<double>());
+  const auto& S = r["site"];
+  o.x = num(S, "x"); o.z = num(S, "z"); o.ax = num(S, "ax", 1); o.az = num(S, "az"); o.fx = num(S, "fx"); o.fz = num(S, "fz", 1); o.yaw = num(S, "yaw");
+  if (r.contains("BAY")) { o.bayX = num(r["BAY"], "x", o.bayX); o.bayZ = num(r["BAY"], "z", o.bayZ); o.bayHw = num(r["BAY"], "hw", o.bayHw); o.bayHl = num(r["BAY"], "hl", o.bayHl); }
+  if (r.contains("BENCH")) { o.benchX = num(r["BENCH"], "x", o.benchX); o.benchZ = num(r["BENCH"], "z", o.benchZ); }
+  o.IW = num(r, "IW", o.IW); o.ID = num(r, "ID", o.ID); o.repairS = num(r, "REPAIR_S", 4);
+  if (r.contains("colliders")) for (auto& c : r["colliders"]) o.colliders.push_back({num(c, "x"), num(c, "z"), num(c, "hw"), num(c, "hd"), num(c, "rot"), num(c, "r", -1), 1e30});
+  return o;
+}
+} // namespace
+
 bool PlayData::load(const nlohmann::json& j, const std::vector<uint8_t>& bin) {
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("werkstatt")) werkstatt = parseWerkstatt(j["rooms"]["werkstatt"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("chalet_village")) chaletVillage = parseVillage(j["rooms"]["chalet_village"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("village") && j["rooms"]["village"].contains("huts"))
+    for (auto& h : j["rooms"]["village"]["huts"]) if (h.is_array() && h.size() >= 3) hutDoors.push_back({h[0].get<double>(), h[1].get<double>(), h[2].get<double>()});
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("village") && j["rooms"]["village"].contains("tickets") && j["rooms"]["village"]["tickets"].is_array() && j["rooms"]["village"]["tickets"].size() >= 3) {
+    const auto& t = j["rooms"]["village"]["tickets"];
+    hasTickets = true; tickets = {t[0].get<double>(), t[1].get<double>(), t[2].get<double>()};
+  }
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("chalet")) chaletRoom = parseChaletRoom(j["rooms"]["chalet"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("prison")) prisonDef = parsePrison(j["rooms"]["prison"], j["rooms"].contains("prison_outside") ? &j["rooms"]["prison_outside"] : nullptr);
   if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("shop")) shop = parseRoom(j["rooms"]["shop"]);
   if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("autohaus")) autohaus = parseRoom(j["rooms"]["autohaus"]);
   if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("prison")) prisonRoom = parseRoom(j["rooms"]["prison"]);

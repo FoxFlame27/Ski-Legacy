@@ -26,6 +26,14 @@ struct OutfitDef { const char* id; const char* slot; const char* name; int price
 extern const OutfitDef kOutfits[];
 extern const size_t kOutfitCount;
 const OutfitDef* outfitById(const std::string& id);
+/// outfits.js OUTFIT_KITS: a full kit (jacket, trousers, helmet, lens); once bought its pieces ('kit_gold.jacket') can
+/// be worn on their own
+struct OutfitKit { const char* id; const char* name; int price; const char* desc; uint32_t jBase, jAccent, tBase, tAccent, helmet; const char* finish; uint32_t lens; double mirror; };
+extern const OutfitKit kOutfitKits[];
+extern const size_t kOutfitKitCount;
+const OutfitKit* outfitKitById(const std::string& id);
+/// the kit of a kit piece's id ('kit_gold.jacket' -> kit_gold; `slot` gets 'jacket'), null for anything else
+const OutfitKit* outfitKitOfPiece(const std::string& id, std::string* slot = nullptr);
 
 /// economy.js PRICES
 struct Prices { static constexpr int gondola = 50, chair = 20, dayPass = 150, hotChocolate = 8; };

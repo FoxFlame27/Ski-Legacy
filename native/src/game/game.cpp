@@ -2786,6 +2786,11 @@ int runGame(const GameOptions& opt) {
       if (w >= 0 && !races.active()) weather.serverSet(w, Weather::byId(mp.upcomingWeather()), mp.upcomingIn());
     }
     if (nightShot >= 0) hour = 21.5;   // (the autotest's night shots)
+    {   // (floodlights.js: a floodlit night course: night falls for the race, the hour is given back afterwards)
+      static double hourBeforeRace = -1;
+      if (races.nightCourse()) { if (hourBeforeRace < 0) hourBeforeRace = hour; hour = 21.5; }
+      else if (hourBeforeRace >= 0) { hour = hourBeforeRace; hourBeforeRace = -1; }
+    }
     light = timeOfDay(hour, dayLight);
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
     if (rooms.inside()) light = rooms.lighting(light);
@@ -2799,9 +2804,10 @@ int runGame(const GameOptions& opt) {
       float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
       if (lx != 0 || ly != 0) { rideLookT = simTime; seatYaw = clamp(seatYaw - lx * 0.0022, -2.09, 2.09); seatPitch = clamp(seatPitch - ly * 0.0022, -1.0, 0.6); }
       if (simTime - rideLookT > 3) { seatYaw *= std::exp(-frameDt * 1.5); seatPitch += (-0.05 - seatPitch) * (1 - std::exp(-frameDt * 1.5)); }
+      if (off("seatback")) { seatYaw = 3.05; seatPitch = -0.2; rideLookT = simTime; }   // (debug: the seat view turned to look back down the cabin)
       double fy = player.heading + seatYaw;
       camUnderground = rideKind != Ride::Bus && world.height(player.pos.x, player.pos.z) > player.pos.y + 6;
-      dvec3 eye = player.renderPos + dvec3(0, 0.78, 0);
+      dvec3 eye = player.renderPos + dvec3(0, off("seatback") ? 1.25 : 0.78, 0);   // (debug seatback: standing up at the seat)
       cam.lookAt(eye, eye + dvec3(std::sin(fy) * std::cos(seatPitch), std::sin(seatPitch), std::cos(fy) * std::cos(seatPitch)));
       cam.fovY = 68; cam.nearZ = 0.05f;
     } else if (rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) {

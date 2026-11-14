@@ -34,6 +34,8 @@ public:
   bool start(const Course& c, int ai, bool forMoney, bool practice, bool teleport);
   void update(double dt);
   bool active() const { return bool(s_); }
+  /// a floodlit night course is being raced (floodlights.js: it is night for the whole session, 21:30)
+  bool nightCourse() const;
   bool frozen() const;                     // the grid / countdown: the player is held
   bool finished() const;
   void abort();                            // (pause RETURN TO VILLAGE, arrested...)

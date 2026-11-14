@@ -132,6 +132,7 @@ racebots::Track& Races::trackOf(const Course& c) {
   return *tracks_.back().second;
 }
 
+bool Races::nightCourse() const { return s_ && s_->c->night; }
 bool Races::frozen() const { return s_ && s_->st == Session::St::Grid; }
 bool Races::finished() const { return s_ && (s_->st == Session::St::Finished || s_->st == Session::St::Results); }
 bool Races::resultsUp() const { return s_ && s_->st == Session::St::Results; }
@@ -745,6 +746,22 @@ void Races::addPeople(People& people, const dvec3& cam) const {
 void Races::draw(Renderer& r, const dvec3& cam) {
   Shapes& sh = *c_.shapes;
   if (s_ && !s_->bots.empty()) drawBots(r, cam);
+  // a floodlit night course (floodlights.js CourseFloodlights.write): the masts nearest the camera light the snow and
+  // the racers: four lamps on a crossarm 11 m up, aimed across the run (warm pools, 45 m)
+  if (s_ && s_->c->night && !s_->c->masts.empty()) {
+    std::vector<std::pair<double, const Course::Mast*>> near;
+    for (const Course::Mast& m : s_->c->masts) { const double d = glm::length(dvec3(m.lx, m.ly, m.lz) - cam); if (d < 600) near.push_back({d, &m}); }
+    std::sort(near.begin(), near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    if (near.size() > 10) near.resize(10);
+    for (auto& [d, m] : near) {
+      PointLight l;
+      l.pos = dvec3(m->lx, m->ly, m->lz); l.color = vec3(1.0f, 0.83f, 0.64f) * 420.f; l.range = 46;
+      l.dir = glm::normalize(vec3(float(m->ax), float(m->ay), float(m->az))); l.cosOuter = 0.42f; l.cosInner = 0.8f;
+      r.addLight(l);
+      // (the lamps' glass and their halo, seen from afar)
+      sh.sphere(r, l.pos + dvec3(0, 0.15, 0), 0.34, vec4(1.0f, 0.9f, 0.72f, 1), 9);
+    }
+  }
   // the gates' ribbons (gatebars.js): every gate of the course, green ahead (the next one brighter and pulsing), grey
   // once passed, red when missed; unlit (they glow by night and stand out against the snow by day), striped like
   // barrier tape

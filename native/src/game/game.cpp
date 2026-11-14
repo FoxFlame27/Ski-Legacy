@@ -23,6 +23,7 @@
 #include "game/trains.h"
 #include "game/economy.h"
 #include "game/hud.h"
+#include "game/intro.h"
 #include "game/transition.h"
 #include "game/menus.h"
 #include "game/trailmap.h"
@@ -316,8 +317,8 @@ int runGame(const GameOptions& opt) {
   // (Phase 4) the 2D layer (menus, HUD, trail map) and a loading screen while the world builds
   Ui ui;
   ui.init(*dev, *plat, paths);
-  auto loadingFrame = [&](const char* what) {
-    SL_INFO("loading: %s (GPU so far: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", what, dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
+  auto loadingFrame = [&](const char* what, const std::function<void()>& over = {}) {
+    if (!over) SL_INFO("loading: %s (GPU so far: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", what, dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
     plat->drawableSize(dw, dh);
     dev->bindRenderTarget({}, dw, dh);
     dev->clear(0, 0, 0, 1, true, true);   // (style.css #intro: black, as the web game boots)
@@ -328,9 +329,26 @@ int runGame(const GameOptions& opt) {
     ui.textLH(72 * u, 50 * u + 42 * u * 0.85f, 104 * u * 0.85f, 104 * u, UiFont::CondBold, vec4(1), "LEGACY", UiAlign::Left, 0.03f);
     ui.textLH(72 * u + 44 * u, 266 * u, 30 * u, std::max(13 * ui.dpr(), 15 * u), UiFont::BodyMed, ui_color::a(vec4(1), 0.9f), what, UiAlign::Left, 0.06f);
     ui.ring(72 * u + 15 * u, 266 * u + 15 * u, 13.5f * u, 3 * ui.dpr(), ui_color::a(vec4(1), 0.25f));
+    if (over) over();   // (the boot intro's black lifting off this screen)
     ui.end();
     plat->swapBuffers();
   };
+  // (Phase 7) the audio: the samples decode on a thread while the intro plays and the world builds; the autotest runs
+  // it too (SDL's dummy driver in CI: the mixer runs, nothing is heard)
+  Audio audio;
+  if (!audio.start(*plat, paths)) SL_WARN("audio: no output device: the game runs silent");
+  // the boot intro (ui/intro.js): the SKI LEGACY logo clip, Icecold Studio; played before the world loads (loading
+  // holds this thread for seconds at a time). SKI_LEGACY_DEBUG=introtest --autotest [--png out.png]: the intro only.
+  {
+    const char* dbgEnv = std::getenv("SKI_LEGACY_DEBUG");
+    bool introTest = opt.autotest && dbgEnv && std::strstr(dbgEnv, "introtest");   // (no --png: played once, in real time)
+    if (introTest || (opt.intro && opt.menu && !opt.autotest && !mptest)) {
+      IntroOptions io;
+      if (introTest) io.testPng = opt.png;
+      if (!introTest) io.after = [&](const std::function<void()>& over) { loadingFrame("Loading the mountain...", over); };
+      if (!playIntro(*plat, *dev, ui, audio, paths, io) || introTest) { audio.stop(*plat); return 0; }
+    }
+  }
   loadingFrame("Loading the mountain...");
 
   Input input;
@@ -451,10 +469,6 @@ int runGame(const GameOptions& opt) {
   TrailMap tmap;
   tmap.load(*plat, paths, world, transport, lifts);
   tmap.buildRelief(jobs, world, *dev);
-  // (Phase 7) the audio: the samples decode on a thread while the world builds; the autotest runs it too (SDL's dummy
-  // driver in CI: the mixer runs, nothing is heard)
-  Audio audio;
-  if (!audio.start(*plat, paths)) SL_WARN("audio: no output device: the game runs silent");
 
   // spawn: the village plaza (main.js), or the top of a run on the Legacy face
   std::vector<Piste> pistes = loadPistes(*plat, paths);

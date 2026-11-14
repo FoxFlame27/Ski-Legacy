@@ -67,6 +67,7 @@ void main() {
 const char* kFS = R"GLSL(
 in vec2 vUv; in vec4 vCol; in vec4 vP; in vec2 vQ;
 uniform sampler2D uTex;
+uniform float uPremul;
 out vec4 oColor;
 float sdRound(vec2 p, vec2 h, float r) { vec2 q = abs(p) - h + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
 void main() {
@@ -85,10 +86,14 @@ void main() {
     a = 1.0;
   } else if (vQ.y < 4.5) {          // image
     c *= texture(uTex, vUv);
-  } else {                          // alpha mask (the paper shapes, their shadows, text shadows)
+  } else if (vQ.y < 5.5) {          // alpha mask (the paper shapes, their shadows, text shadows)
     a = texture(uTex, vUv).r;
+  } else {                          // image with premultiplied colours (UiBlend::Premultiplied / Add)
+    vec4 t = texture(uTex, vUv);
+    oColor = vec4(t.rgb * c.rgb * c.a, t.a * c.a);
+    return;
   }
-  oColor = vec4(c.rgb, c.a * a);
+  oColor = uPremul > 0.5 ? vec4(c.rgb * (c.a * a), c.a * a) : vec4(c.rgb, c.a * a);
 }
 )GLSL";
 
@@ -201,11 +206,12 @@ void Ui::begin(int w, int h) {
   clips_.clear();
   xf_.clear();
   alpha_.clear();
+  blend_ = UiBlend::Normal;
 }
 
 void Ui::useTexture(gfx::Texture t) {
   if (!t) t = atlas_;
-  if (batches_.empty() || batches_.back().tex.id != t.id) batches_.push_back({t, uint32_t(verts_.size()), 0});
+  if (batches_.empty() || batches_.back().tex.id != t.id || batches_.back().blend != blend_) batches_.push_back({t, uint32_t(verts_.size()), 0, blend_});
 }
 
 void Ui::end() {
@@ -228,8 +234,16 @@ void Ui::end() {
   vec2 scr{float(w_), float(h_)};
   dev_->setVec2("uScreen", &scr.x);
   dev_->setInt("uTex", 0);
+  dev_->setFloat("uPremul", 0);
+  UiBlend cur = UiBlend::Normal;
   for (const Batch& b : batches_) {
     if (!b.count) continue;
+    if (b.blend != cur) {
+      cur = b.blend;
+      ps.blend = cur == UiBlend::Add ? gfx::Blend::Additive : cur == UiBlend::Premultiplied ? gfx::Blend::Premul : gfx::Blend::Alpha;
+      dev_->setPipeline(ps);
+      dev_->setFloat("uPremul", cur == UiBlend::Normal ? 0.f : 1.f);
+    }
     dev_->bindTexture(0, b.tex);
     dev_->draw(vi_, b.count, b.first);
   }
@@ -700,9 +714,8 @@ void Ui::textShadow(float x, float y, float size, UiFont f, const std::string& s
   auto mix = [&](uint64_t v) { key = (key ^ v) * 1099511628211ull; };
   for (char ch : s) mix(uint64_t(uint8_t(ch)));
   mix(uint64_t(f) + 77); mix(uint64_t(std::lround(size * 8))); mix(uint64_t(std::lround(tracking * 1000))); mix(uint64_t(std::lround(blur * 4)));
-  int fileF = fileOf(f);
   float boldEm = FONT_PICK[size_t(f)].bold;
-  maskDraw(key, x + dx, y + dy, w, lh, blur * 0.5f, c, [this, s, size, f, tracking, baseOff, fileF, boldEm](std::vector<uint8_t>& px, int W, int H, float ox, float oy) {
+  maskDraw(key, x + dx, y + dy, w, lh, blur * 0.5f, c, [this, s, size, f, tracking, baseOff, boldEm](std::vector<uint8_t>& px, int W, int H, float ox, float oy) {
     float k = size / BAKE, pen = ox, bold = boldEm * kBoldAdv * size;
     std::vector<uint8_t> tmp;
     Pen prev;
@@ -791,7 +804,31 @@ void Ui::pushTranslate(float dx, float dy) {
   t.e += dx; t.f += dy;
   xf_.push_back(t);
 }
+void Ui::pushScale(float cx, float cy, float sx, float sy) {
+  Xf t;
+  t.a = sx; t.d = sy; t.e = cx - sx * cx; t.f = cy - sy * cy;
+  if (!xf_.empty()) {   // (outer * t)
+    const Xf& o = xf_.back();
+    Xf m;
+    m.a = o.a * t.a; m.b = o.b * t.a; m.c = o.c * t.d; m.d = o.d * t.d;
+    m.e = o.a * t.e + o.c * t.f + o.e; m.f = o.b * t.e + o.d * t.f + o.f;
+    t = m;
+  }
+  xf_.push_back(t);
+}
 void Ui::popTransform() { if (!xf_.empty()) xf_.pop_back(); }
+
+void Ui::mesh(gfx::Texture t, const UiVertex* v, size_t n, bool premultipliedTex) {
+  n -= n % 3;
+  if (!v || !n) return;
+  const float mode = !t ? 3.f : premultipliedTex ? 6.f : 4.f, al = A();
+  useTexture(t ? t : white_);
+  verts_.reserve(verts_.size() + n);
+  for (size_t i = 0; i < n; i++) {
+    vec2 q = X(v[i].pos.x, v[i].pos.y);
+    verts_.push_back(Vert{q.x, q.y, v[i].uv.x, v[i].uv.y, v[i].col.x, v[i].col.y, v[i].col.z, v[i].col.w * al, 0, 0, 0, 0, 0, mode});
+  }
+}
 
 void Ui::gradientGrid(float x, float y, float w, float h, int nx, int ny, const std::function<vec4(float, float)>& col) {
   if (w <= 0 || h <= 0) return;

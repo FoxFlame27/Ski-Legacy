@@ -2385,6 +2385,29 @@ int runGame(const GameOptions& opt) {
             if (g == 20) { heli.rescue.debugStall(); }
             if (g == 80) { check(ward.inBed() && save.data("rescue").empty(), "over: nothing left in the save (free: no bill)"); next(); }
             break;
+          case 14: {  // flying into a lift's haul rope: pushed back, never through it
+            static double minGap = 1e9, cl = 0; static const LiftLine* L = nullptr;
+            if (g == 4) { ward.reset(); if (rooms.inside()) rooms.leave(); }
+            if (g == 8 && !lifts.lines().empty()) {
+              L = &lifts.lines()[0];
+              double u = L->L * 0.5, side = L->cfg.side;
+              dvec3 c = L->cableAt(u, 1);
+              cl = side;
+              double x = L->B.x + L->dir.x * u + L->sideV.x * (side + 11), z = L->B.z + L->dir.y * u + L->sideV.y * (side + 11);
+              save.earn(1500); heli.debugFly(-1);
+              heli.debugPlace(x, z, 10, std::atan2(-L->sideV.x, -L->sideV.y));
+              heli.flight.pos.y = c.y - 2.2;   // (the rotor disc at the rope's height)
+            }
+            if (L && g > 8) {
+              double lat = (fl.pos.x - L->B.x) * L->sideV.x + (fl.pos.z - L->B.z) * L->sideV.y;
+              minGap = std::min(minGap, lat - cl);
+              input.inject(Action::Forward, g < 200);
+              if (g == 120) shot("hc_rope");
+              { double cy = L->cableAt(L->L * 0.5, 1).y; if (std::fabs(lat - cl) < 1.5 && cy > fl.pos.y - fl.fr.cgH - 0.3 && cy < fl.pos.y + 2.0) minGap = -1; }
+              if (g == 200) { check(minGap > -0.5, "against the haul rope of " + L->name + ": pushed back or over it, never through (nearest " + std::to_string(minGap) + " m beside it; now " + std::to_string(lat - cl) + " m, " + std::to_string(fl.pos.y - L->cableAt(L->L * 0.5, 1).y) + " m above)"); heli.abort(); next(); }
+            } else if (g > 10) next();
+            break;
+          }
           default:
             if (g == 4) { SL_INFO("[helitest] %s", heliOk ? "PASS" : "FAIL"); running = false; }
         }

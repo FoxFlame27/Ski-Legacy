@@ -10,6 +10,7 @@
 #include "game/play.h"
 #include "game/play_data.h"
 #include "world/scenery.h"
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -39,7 +40,7 @@ public:
   bool atExit(const dvec3& p) const;
   /// (the rooms exported from the web game: the ski shop) what the view's centre is on within 6 m (interior.js: the
   /// ray from your eyes at the displays, the door, the clerk, the outfits corner), null if nothing
-  const RoomDef::Hit* aim(const dvec3& eye, const vec3& dir) const;
+  const RoomDef::Hit* aim(const dvec3& eye, const vec3& dir, double reach = 6) const;
   /// where to stand to aim at a thing (kind, id): 1.7 m in front of it in the room, facing it (autotest)
   bool aimSpot(const std::string& kind, const std::string& id, dvec3& stand, double& yaw) const;
   /// the room's own people (the shop clerk behind the counter)
@@ -47,6 +48,10 @@ public:
   /// the exported room you are in (its cars on show...), null outside one; upstairs (the showroom's mezzanine)?
   const RoomDef* def() const { return def_; }
   bool upstairs() const { return level_ == 2; }
+  /// (game/showroom) the exported room's model (the floor's reflection draws it a second time); the clerk's heading
+  /// while he turns to you (NaN: the exported one)
+  std::shared_ptr<Model> roomMesh() const { return def_ ? mesh_ : nullptr; }
+  double clerkYaw = std::nan("");
   // building blocks (rebuilt on enter; the chalet adds its furniture through these)
   struct Box { vec3 c, h; float yaw; vec4 col; bool solid, emissive; };
   struct Prop { std::shared_ptr<Model> model; mat4 fit{1}; dvec3 local{0}; double yaw = 0; bool solid = true; vec2 half{0.4f}; bool lamp = false; };

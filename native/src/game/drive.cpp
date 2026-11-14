@@ -1,4 +1,5 @@
 #include "game/drive.h"
+#include "game/carconfigui.h"
 #include "game/scenefx.h"
 #include "core/log.h"
 #include "world/scenery.h"
@@ -43,9 +44,6 @@ bool obb(const Obb& A, const Obb& B, Hit& h) {
   h.depth = best; h.px = px / n; h.pz = pz / n;
   return true;
 }
-// carrental.js RENTALS order (the Autohaus's cars for sale)
-const char* const SALE[] = {"car_vw_golf_gti", "car_tesla_m3", "car_bmw_x3", "car_toyota_gr_yaris", "car_audi_rs6", "car_mercedes_gls", "car_audi_etron_gt",
-                            "car_porsche_taycan", "car_mercedes_sls", "car_lamborghini_huracan"};
 } // namespace
 
 void Drive::init() {
@@ -57,33 +55,9 @@ void Drive::init() {
     e.paint = paintForIndex(uint32_t(parked.size()) * 31u + 7u);   // (Phase 7: parking.js paints its cars)
     parked.push_back(e);
   }
-  // the Autohaus's car park beside the hall (impound.js lays out its bays at runtime: rows along both long sides here,
-  // carrental.js's 2.6 m bays): the cars for sale, nose out to the aisle
-  const Lot* lot = nullptr;
-  for (const Lot& L : t_.lots) if (L.impound) { lot = &L; break; }
-  if (lot && lot->hw > 4 && lot->hd > 5) {
-    std::vector<Bay> bays = lot->bays;
-    if (bays.empty())
-      for (double side : {-1.0, 1.0})
-        for (double u = -lot->hw + 1.6; u <= lot->hw - 1.6; u += 2.6) {
-          double v = side * (lot->hd - 2.85);
-          bays.push_back({lot->x + lot->ux * u + lot->vx * v, lot->z + lot->uz * u + lot->vz * v, -lot->vx * side, -lot->vz * side});
-        }
-    size_t k = 0;
-    for (const char* name : SALE) {
-      if (k >= bays.size()) break;
-      const CarSpec* spec = t_.car(name);
-      const VehicleModel* vm = models_.car(name);
-      if (!spec || !vm) continue;
-      const Bay& b = bays[k];
-      k += 2;   // (a free bay between them)
-      Parked e;
-      e.name = name; e.spec = spec; e.vm = vm; e.forSale = true;
-      e.x = b.x; e.z = b.z; e.y = world_.height(b.x, b.z) + 0.03; e.yaw = std::atan2(b.hx, b.hz); e.length = spec->length;
-      parked.push_back(e);
-    }
-  }
-  SL_INFO("drive: %zu parked cars (%d for sale at the Autohaus)", parked.size(), int(std::count_if(parked.begin(), parked.end(), [](const Parked& p) { return p.forSale; })));
+  // (carrental.js: the cars for sale stand inside the hall only, on their turntables (game/showroom); the car park
+  // beside it holds the cars you own: addOwned / freeBay)
+  SL_INFO("drive: %zu parked cars", parked.size());
 }
 
 // ---------------------------------------------------------------- getting in
@@ -101,14 +75,6 @@ std::string Drive::prompt(const dvec3& pos, bool canUse) {
   }
   if (!best) return "";
   if (best->wrecked) return best->spec->label + " - wrecked";
-  if (best->forSale && !best->owned) {
-    char b[160];
-    std::snprintf(b, sizeof b, "Buy %s - $%s", best->spec->label.c_str(), [](double v) {
-      std::string n = std::to_string(int64_t(v)), o;
-      for (size_t i = 0; i < n.size(); i++) { if (i && (n.size() - i) % 3 == 0) o += ','; o += n[i]; }
-      return o; }(best->spec->price).c_str());
-    return b;
-  }
   if (!best->owned) return "Buy a car at the Autohaus in Legacy Village";
   if (locked) { std::string why = locked(*best); if (!why.empty()) return why; }
   return "Drive " + best->spec->label;
@@ -128,15 +94,14 @@ bool Drive::interact(const dvec3& pos) {
   }
   if (bi < 0 || parked[size_t(bi)].wrecked) return false;
   Parked& e = parked[size_t(bi)];
-  if (e.forSale && !e.owned) { buyRequest = bi; return true; }
   if (!e.owned) return false;
   if (locked && !locked(e).empty()) return false;
   return enter(bi);
 }
 
-int Drive::saleIndex(const std::string& model) const {
-  for (size_t i = 0; i < parked.size(); i++) if (parked[i].forSale && parked[i].name == model) return int(i);
-  return -1;
+int Drive::debugCar(const std::string& model) {
+  for (size_t i = 0; i < parked.size(); i++) if (parked[i].owned && parked[i].name == model && parked[i].plate.rfind("SL TEST", 0) == 0) return int(i);
+  return addOwned(model, "SL TEST" + std::to_string(parked.size() % 10), 0);
 }
 bool Drive::freeBay(double& x, double& z, double& yaw) const {
   const Lot* lot = nullptr;
@@ -149,10 +114,8 @@ bool Drive::freeBay(double& x, double& z, double& yaw) const {
         double v = side * (lot->hd - 2.85);
         bays.push_back({lot->x + lot->ux * u + lot->vx * v, lot->z + lot->uz * u + lot->vz * v, -lot->vx * side, -lot->vz * side});
       }
-  // the bays the display cars leave free (every other one), then any bay nobody stands in
-  for (int pass = 0; pass < 2; pass++)
-    for (size_t k = 0; k < bays.size(); k++) {
-      if (pass == 0 && k % 2 == 0) continue;
+  // a bay nobody stands in (impound.js freeBay)
+  for (size_t k = 0; k < bays.size(); k++) {
       const Bay& b = bays[k];
       bool taken = false;
       for (const Parked& e : parked) taken = taken || (!e.driving && std::hypot(e.x - b.x, e.z - b.z) < 2.0);
@@ -173,6 +136,12 @@ int Drive::addOwned(const std::string& model, const std::string& plate, double d
   e.x = x; e.z = z; e.yaw = yaw; e.y = world_.height(x, z) + 0.03;
   parked.push_back(e);
   return int(parked.size()) - 1;
+}
+void Drive::dress(int idx, const std::string& paint, const std::string& rims) {
+  if (idx < 0 || size_t(idx) >= parked.size()) return;
+  Parked& e = parked[size_t(idx)];
+  e.paint = paintColor(paint);
+  if (const VehicleModel* vm = models_.dressed(e.vm, e.paint.w > 0 ? carPaintOf(paint).finish : -1, rims)) e.vm = vm;
 }
 int Drive::nearestOwned(const dvec3& p) const {
   int bi = -1;

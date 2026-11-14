@@ -278,6 +278,20 @@ const SceneFx::CarLamps& SceneFx::lampsFor(const VehicleModel& vm) {
   return carLamps_.emplace(&vm, std::move(L)).first->second;
 }
 
+void SceneFx::plates(VehicleDraw& vd, const CarPose& c) {
+  if (!c.vm || c.plate.empty()) return;
+  const Model* pm = plateModel(c.plate);
+  if (c.vm->hasPlates) {   // (where carconfig.js puts them on this model: front and rear, none where it has none)
+    // (12 mm out along its face: the models keep their own blank plate pieces where ours goes; cars.js drops them)
+    for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P * glm::translate(glm::dmat4(1), dvec3(0, 0, 0.012)), 0);
+  } else {
+    double L2 = c.vm->size.z * 0.5;
+    vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.42, L2 + 0.03)), 0);
+    vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.62, -L2 - 0.03)) * glm::rotate(glm::dmat4(1), PI, dvec3(0, 1, 0)), 0);
+  }
+  nPlates_++;
+}
+
 void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera& cam, const std::vector<CarPose>& cars) {
   nSprays_ = 0; nLamps_ = 0; nCarLights_ = 0; nPlates_ = 0;
   const dvec3 cp = cam.pos;
@@ -409,18 +423,7 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         for (float sx : {-1.f, 1.f})
           lampGlow(dvec3(c.M * glm::dvec4(sx * R.x, R.y, R.z - 0.12, 1)), -glm::normalize(dvec3(c.M[2])), vec3(1, 0.04f, 0.01f), 0.3f, (0.16f + (c.brake ? 0.5f : 0.f)) * dk);
     }
-    if (!c.plate.empty() && d < 45) {
-      const Model* pm = plateModel(c.plate);
-      if (c.vm->hasPlates) {   // (where carconfig.js puts them on this model: front and rear, none where it has none)
-        // (12 mm out along its face: the models keep their own blank plate pieces where ours goes; cars.js drops them)
-        for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P * glm::translate(glm::dmat4(1), dvec3(0, 0, 0.012)), 0);
-      } else {
-        double L2 = c.vm->size.z * 0.5;
-        vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.42, L2 + 0.03)), 0);
-        vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.62, -L2 - 0.03)) * glm::rotate(glm::dmat4(1), PI, dvec3(0, 1, 0)), 0);
-      }
-      nPlates_++;
-    }
+    if (!c.plate.empty() && d < 45) plates(vd, c);
   }
   // ---- snowmaking: each running gun's plume (snowmaking.js's particle maths, on the CPU; one instanced draw)
   if (!running_.empty()) {

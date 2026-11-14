@@ -513,8 +513,9 @@ and street lamps (knocked away, the lamp over 100 km/h), other cars and the buse
 is knocked aside, a parked car slides to a stop, a bus is a 12 t wall). Damage: knock / crash / wrecked (at 100 % or
 150 km/h, rolling over on a slope), unstuck (U), flip back (F), the springs (pitch and roll from the four wheels' snow,
 squat, dive and lean), the chase camera (lags into turns, pulls back with speed, eases behind, look back) and the
-cockpit camera with mouse look. The **Autohaus** (carrental.js): the ten cars for sale stand in its car park's bays; E
-buys one (free until the economy, Phase 4), then it is yours to drive; every other parked car says where to buy one.
+cockpit camera with mouse look. The **Autohaus** (carrental.js): the ten cars for sale stand only inside the hall, on their
+turntables and on the mezzanine (see "The Autohaus, 1:1" below): E at its sliding doors, then E at a car; the car you
+buy waits in a bay of the car park beside the hall, yours to drive; every other parked car says where to buy one.
 
 **Traffic** (`game/traffic.cpp`, traffic.js): 12 cars on the valley roads + 6 on the scenic network (models drawn by
 cars.js's spawn weights, seeded), each on its right-hand lane at speedlimits.js's target times its driver's factor,
@@ -538,8 +539,10 @@ full** on its buy button, as ui/carrental.js does: a new save's $500 buys no car
 and the races pay, as in the web game). The autotest checks all of it the way a player does it (`game/cartest.cpp`,
 after the Phase 3 drive; `SKI_LEGACY_DEBUG=cartest` alone): every input is a real event pushed through SDL
 (`SDL_PushEvent` key events; an SDL virtual game controller for the pad), the menus reading the real keys too — walk
-from the plaza to the Autohaus with W A S D and Shift (relative to the camera), **E** at the cheapest car for sale
-(its price granted), **Enter** on "Buy it" (money down by the price, the car in a bay), walk to it, **E** in, **W** held
+from the plaza to the Autohaus with W A S D and Shift (relative to the camera), **E** at its sliding doors, round the
+cars on show to the cheapest one (the view turned at it: the test's stand-in for the mouse, `Player::setLook`), **E**
+(the configurator on that very car, the camera on its turntable), its price granted, **Enter** on "Buy it" (money down
+by the price, the car in a bay), back to the doors and **E** out, walk to the car in the car park, **E** in, **W** held
 10 s steering with **A** / **D** out of the car park and along the road (> 40 km/h), **S** to a stop, **E** out; then
 the controller's **X** in, **RT** 5 s with the left stick steering, **LT** to a stop, **X** out; then 30 s on the
 plaza: at least 3 traffic cars driving 15+ m within 300 m of it (drawn: within the 300 m draw distance), the parked
@@ -605,6 +608,49 @@ world ready in 13.60 s ...
 [autotest] PASS
 ```
 
+### The Autohaus, 1:1 (`game/showroom.*`, Nov 2026)
+
+`carrental.js` sells cars in one place only, inside the hall; so does the C++ now (the row of sale cars in the car
+park is gone; `Drive::Parked::forSale`, `saleIndex`, `buyRequest` with it). What `game/showroom.cpp` adds to the
+exported room (`export_rooms.mjs`, `Interiors::Room::Autohaus`):
+
+- **Going in / out** as `carrental.js` `interaction` / `enter` / `leave`: the prompt "Autohaus" within 2.6 m of the
+  sliding doors (not anywhere near the hall), a fade; out again 0.8 m in front of the doors, facing the road.
+- **The cars on show**: each in its display paint (in that paint's finish) with a canton plate (`setPlates`), the price
+  stands; the crosshair on one within 7 m: "Buy <car>" (a model you own: "<car> · yours: n · buy another · take it
+  out · sell"); the cars upstairs only from up there. You are not drawn in the room (its own scene in the web game).
+- **The configurator on that car** (`carrentalroom.js` `configure` / `orbit` / `cfgCamera`, hooked to
+  `CarCfgView::preview` / `drag`): the camera leaves your eyes for the car's turntable, per step from `SHOT` (paint,
+  wheels, plate from behind, summary), 45 degrees, a slow drift, drag to turn, kept inside the hall and under the
+  mezzanine / the roof, the car framed right of the panel (the web's view offset: the camera turned by the same
+  amount); every click repaints the car, tints its rims (`RIMS`: the wheels' metal, tyres and brakes stay black) and
+  puts your plate on it. What you buy keeps it: `Save::Car::rims` (saved as `rims`, as the web save), the paint's
+  **finish** (`FINISH`: roughness, metalness, clear coat) and the rims on your car outside too
+  (`VehicleModels::dressed`, `Drive::dress`).
+- **The salesman** (`clerkDialog`): turns to you within 6 m; E: "Autohaus · Salesman": **Car of the day** (one of his
+  three lines with the price; a gold arrow bobbing and turning over that car and a ring round it for 45 s or until you
+  open it: `guide`), **Repair my car** $500 flat for your car that is out (the reasons it is refused as the web's),
+  Bye.
+- **The sliding doors** open as you come in and when you walk up to them (`setDoors`, eased), each leaf its own model.
+- **The floor**: the web game lays its stone tiles 80 % opaque over a `Reflector`. Here the hall, the cars, their
+  plates and the windows' view are drawn a second time mirrored under the floor (double-sided copies of the models:
+  mirrored triangles wind the other way) and the tiles, still 80 % opaque, over them. No renderer change.
+- **The view out**: the web game renders the world live through the glass. Here it is **photographed as you go in**
+  (behind the fade, three frames: out of the glass front and out of each side's upper windows, from where you would
+  stand in the hall, the camera's near plane just outside the wall so the hall itself is cut away) and laid on the
+  window planes by direction. Still, not live: the traffic outside does not move while you are in.
+- **Outside**: the three tow trucks (`towtruck.js buildTowTruck`: the 508 D with its star and beacons, exported) in
+  their TOW bays with their colliders, the potted spruces either side of the door (the exporter loaded no
+  `pine_tree` before), the cars on show seen through the glass as real car models in their paints.
+- **Metal in the room**: the renderer lights interiors without an environment map, so bare metal turned black (the
+  Tesla on show, the turntables' steel rims): display cars stand in their paint's finish, the room's steel trims are
+  exported mostly diffuse. The cars' alloy wheels still read darker than in the web game.
+
+`SKI_LEGACY_DEBUG=autohaus,shotonly` with `--autotest --png out.png` writes `out_<name>.png` from the web reference
+shots' viewpoints: outside (front, left, right, the door, the tow bays), in the showroom (the way in with the doors
+open, the windows, the floor, the salesman, a car, the stair, upstairs, the marker, the salesman's talk) and the
+configurator's steps (`SKI_LEGACY_CAR=<model>`, `SKI_LEGACY_PAINT=<id>` for another car / paint).
+
 ### Known gaps (Phase 3)
 - **Courses' regions** come as an 8 m grid (mean 0.48 m, max ~4 m off the JS inside the regions, exact on roads and
   roadbeds); the courses themselves (gates, ramps, props) are Phase 5. Outside the regions `--verify-heights` now
@@ -615,8 +661,8 @@ world ready in 13.60 s ...
   pools (the L key only toggles the flag), no engine / tyre / horn sounds (audio is Phase 7), no tyre tracks *(Phase 7:
   wheels, lights, light pools, sounds, paint and plates done)*; the
   cockpit view shows the car's own interior only as far as its GLB has one (no `_full` models, no seated driver's
-  hands); paint colours of the parked / traffic cars are the models' own; the Autohaus showroom (inside), the
-  configurator, the garage / selling, the Werkstatt, the tow truck, police, taxi and bad drivers are not ported.
+  hands); paint colours of the parked / traffic cars are the models' own; the Werkstatt, the tow truck's job, police, taxi and bad
+  drivers are not ported (Phase 3; later phases and "The Autohaus, 1:1" below port most of them).
 - Knocked poles, signs, lamps and broken guardrail sections lose their colliders for 90 s but stay drawn.
 - **Traffic** turns into a car park bay and out of it without the arcs (it appears in / leaves the bay), the scenic
   roads' cars drive them as ordinary roads (no `scenicWalk` round the roundabouts), no tow zones, trains / helicopter
@@ -727,7 +773,7 @@ world ready in 15.29 s (the trail map's relief builds on the worker threads mean
 - **Shops**: one card dialog instead of the walk-in ski shop and the outfit shop's 3D podium; outfits are bought and
   stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet; no kits
   *(Phase 7: outfits shown, ski stats in the physics)*.
-- **Cars**: no configurator (paint, rims, interior, custom plates), no showroom interior or salesman, no tow truck
+- **Cars**: the configurator has no interior step (trims); the tow trucks stand in their bays but do not drive out
   driving (the car reappears), the impound is a fee when it is towed rather than a yard you pay at.
 - **Rescue**: no helicopter or ambulance ride (you come round at the medical centre), no hospital ward; no jobs or
   race prizes to earn money yet (Phase 5), so a new save has $500 and the autotest grants itself the car's price.
@@ -1179,7 +1225,7 @@ world ready in 22.18 s: 315 terrain nodes, 1908 trees in range, 29404 resort pro
 - **Paint and plates** (carconfig.js): the instanced draw carries a per-instance colour; materials named like paint
   take it (`Material::paint`). Your cars wear the paint you bought (`save.garage[].paint`), parked and traffic cars the
   colours real cars come in, other players' cars their `cfg.paint`; near cars carry number plates (canvas textures in
-  the game's font: "VS 123456", your own plate on yours, AUTOHAUS on the cars for sale).
+  the game's font: "VS 123456", your own plate on yours, a canton plate on each car on show).
 - **The Legacy Express in its blue livery**: the same railcar body as the Wolkenspitzbahn, its red repainted Legacy
   blue (#1546c8) per instance by a livery mode in the shader (the Wolkenspitzbahn stays red).
 - **The orange slab on the Express village station canopy** was a renderer bug: the instanced procedural pieces in the
@@ -1518,7 +1564,7 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 | village, resort, signs, stations | village.js, decor.js, resortdressing.js, gondolastation.js, stationbuildings.js | **ported** (exported from the JS + the gondola stations as a C++ builder); no huts' interiors, no terrain park |
 | lifts (18), riding | lifts.js | **ported** (exact motion, boarding, mid-stations, x16) |
 | roads, tunnels, traffic, parking | roads.js, transport.js, traffic.js, parking.js | **ported** (traffic without the bay arcs / scenic walks) |
-| your car, Autohaus, garage | drive.js, carrental.js, carconfig.js | **ported** physics, damage, wheels rolling / steering, lights, paint, plates; no configurator UI, showroom, dents |
+| your car, Autohaus, garage | drive.js, carrental.js, carconfig.js | **ported** physics, damage, wheels rolling / steering, lights, paint and its finish, rims, plates, the configurator on the showroom's car, the walk-in showroom (salesman, marker, sliding doors, mirror floor, the view out), the tow trucks parked; no interior trims, dents, tow job |
 | ski bus, Wolkenspitzbahn, Legacy Express | bus.js, railway.js, express.js | **ported** (timetables, riding, x8 / x6 / x10, the blue Express livery, horns, the rail PA) |
 | menus, HUD, settings, controls | menu.js, hud.js, settings.js, bindings.js | **ported** (all rows incl. rebinding, glyphs for Xbox / PlayStation / Switch, Bloom / Announcer added) |
 | trail map | trailmap.js | **ported** (relief, pistes, lifts, roads, rails, markers, waypoint) |

@@ -2,6 +2,7 @@
 #include "core/log.h"
 #include "engine/asset_manager.h"
 #include "engine/mesh_kit.h"
+#include "game/carconfigui.h"
 #include "world/resort.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -122,6 +123,56 @@ const VehicleModel* VehicleModels::full(const std::string& baseName) {
   full_[baseName] = vm;
   auto& r = full_[baseName];
   return r.ok() ? &r : nullptr;
+}
+
+const VehicleModel* VehicleModels::dressed(const VehicleModel* vm, int finish, const std::string& rims) const {
+  if (!vm) return nullptr;
+  if (auto b = rimBase_.find(vm); b != rimBase_.end()) vm = b->second;   // (a dressed one: from its factory model again)
+  const CarRim& rim = carRimOf(rims);
+  const bool ownRims = std::string(rim.id) == "orig" || !vm->split();
+  if (finish < 0 && ownRims) return vm;
+  finish = std::min(finish, 3);
+  const std::string key = std::to_string(reinterpret_cast<uintptr_t>(vm)) + ":" + std::to_string(finish) + ":" + (ownRims ? "orig" : rim.id);
+  auto it = rimmed_.find(key);
+  if (it != rimmed_.end()) return it->second.get();
+  auto out = std::make_unique<VehicleModel>(*vm);
+  if (finish >= 0) {
+    // carconfig.js FINISH: solid, metallic, pearl, matte: roughness, metalness, clear coat
+    static const float FIN[4][3] = {{0.3f, 0.25f, 1}, {0.24f, 0.72f, 1}, {0.18f, 0.5f, 1}, {0.66f, 0.12f, 0}};
+    auto paint = [&](const std::shared_ptr<Model>& src) -> std::shared_ptr<Model> {
+      if (!src) return src;
+      auto m = std::make_shared<Model>(*src);
+      for (auto* list : {&m->materials, &m->lodMaterials})
+        for (Material& q : *list) if (q.paint == 1) { q.roughness = FIN[finish][0]; q.metallic = FIN[finish][1]; q.clearcoat = FIN[finish][2]; }
+      return m;
+    };
+    out->model = paint(vm->model);
+    out->body = paint(vm->body);
+  }
+  if (!ownRims) {
+    const vec3 tint((rim.hex >> 16 & 255) / 255.f, (rim.hex >> 8 & 255) / 255.f, (rim.hex & 255) / 255.f);
+    const vec3 lin(std::pow(tint.x, 2.2f), std::pow(tint.y, 2.2f), std::pow(tint.z, 2.2f));
+    const bool black = std::string(rim.id) == "black";
+    auto tyre = [](std::string n) {   // (dressCar: /tire|tyre|rubber|disk|disc|rotor|brake|break|calip|callip/i)
+      std::transform(n.begin(), n.end(), n.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+      for (const char* k : {"tire", "tyre", "rubber", "disk", "disc", "rotor", "brake", "break", "calip", "callip"}) if (n.find(k) != std::string::npos) return true;
+      return false;
+    };
+    for (auto& w : out->wheels) {
+      if (!w.model) continue;
+      auto m = std::make_shared<Model>(*w.model);
+      for (Material& q : m->materials) {
+        if (tyre(q.name)) continue;
+        q.baseColor = vec4(vec3(q.baseColor) * lin, q.baseColor.w);
+        if (black) q.roughness = std::min(q.roughness, 0.3f);
+      }
+      w.model = m;
+    }
+  }
+  const VehicleModel* r = out.get();
+  rimBase_[r] = vm;
+  rimmed_[key] = std::move(out);
+  return r;
 }
 
 const VehicleModel* VehicleModels::car(const std::string& name) const {

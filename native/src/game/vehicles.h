@@ -65,12 +65,19 @@ public:
   /// (drive.js FULL) the full-detail model of a car (its interior), loaded the first time you get into one; null if
   /// the car has none
   const VehicleModel* full(const std::string& baseName);
+  /// (carconfig.js dressCar) a car's model dressed as a config: its paint's finish on the body (`finish`: carconfig.js
+  /// FINISH, 0 solid, 1 metallic, 2 pearl, 3 matte: roughness, metalness, clear coat; -1: the model's own paint as it
+  /// is, a parked / traffic / display car) and its wheels' metal tinted (`rims`: a RIMS id; the tyres and brakes stay
+  /// black; "orig" or a car whose wheels are not split off: as they are). The model itself when nothing changes.
+  const VehicleModel* dressed(const VehicleModel* vm, int finish, const std::string& rims) const;
   VehicleModel bus;
   struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
   //   // express: (Phase 7) the blue livery
 private:
   std::unordered_map<std::string, VehicleModel> cars_;
   std::unordered_map<std::string, VehicleModel> full_;
+  mutable std::unordered_map<std::string, std::unique_ptr<VehicleModel>> rimmed_;
+  mutable std::unordered_map<const VehicleModel*, const VehicleModel*> rimBase_;
   gfx::Device* dev_ = nullptr;
   AssetManager* assets_ = nullptr;
   const Transport* t_ = nullptr;

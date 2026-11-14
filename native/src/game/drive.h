@@ -29,7 +29,7 @@ public:
   // ---- getting in / out
   /// the prompt beside a car (drive.js interaction / the Autohaus), empty if none
   std::string prompt(const dvec3& p, bool canUse);
-  /// E: get in (or buy at the Autohaus); true if something happened
+  /// E: get in; true if something happened
   bool interact(const dvec3& p);
   bool active() const { return d_.on; }
   /// E while driving: out at a standstill; fills the spot to stand on (x, z, heading)
@@ -42,10 +42,10 @@ public:
   /// (Phase 4) a car of yours: a new owned car of `model` in a free bay of the Autohaus car park (your garage)
   /// -> parked index, -1 if the model is unknown
   int addOwned(const std::string& model, const std::string& plate, double damage);
-  /// (autotest) the for-sale display car of a model (-1 if none)
-  int saleIndex(const std::string& model) const;
-  /// E at a car for sale: interact() leaves its index here for the game to sell it (the economy, Phase 4)
-  int buyRequest = -1;
+  /// (carconfig.js dressCar) a parked car's paint and rims (carconfig.js PAINTS / RIMS ids)
+  void dress(int parkedIndex, const std::string& paint, const std::string& rims);
+  /// (the debug switches) a car of `model` of yours in a bay of the Autohaus car park, added the first time (-1: unknown)
+  int debugCar(const std::string& model);
   /// your car wrecked (the tow + repair bill, the tow truck): the parked index
   std::function<void(int)> onWreck;
   /// where your garage's cars stand (the Autohaus car park's bays)
@@ -107,7 +107,7 @@ public:
     const VehicleModel* vm = nullptr;
     double x = 0, y = 0, z = 0, yaw = 0, length = 4.7, damage = 0;
     std::string plate;                  // (Phase 4) your car's plate (save.garage)
-    bool owned = false, forSale = false, driving = false, wrecked = false;
+    bool owned = false, driving = false, wrecked = false;
     double svx = 0, svz = 0, sw = 0;   // shoved: sliding to a stop
     int impoundDay = -1;               // (Phase 5, impound.js) towed: locked until this game day
     vec4 paint{1, 1, 1, 0};            // (Phase 7) its paint (a = 0: the model's own colour)

@@ -2639,6 +2639,28 @@ int runGame(const GameOptions& opt) {
         if (sf % 45 == 30 && sf < 420 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("sled" + std::to_string(sf / 45)).c_str());
       } else if (sf > 5 && sf % 60 == 0) SL_INFO("[sledtest] f %d: off the sled (thrown off: %s)", sf, player.mode == PlayerMode::Fall ? "yes" : "no");
     }
+    if (opt.autotest && at == AT::Ski && off("cockpittest")) {   // (debug: in a car for sale (SKI_LEGACY_CAR, else the Golf GTI): the cockpit view, then the chase view: o_cockpit<n>.png)
+      static int cf = 0;
+      cf++;
+      if (cf == 5) {
+        const char* want = std::getenv("SKI_LEGACY_CAR");
+        int idx = drive.saleIndex(want ? want : "car_vw_golf_gti");
+        if (idx >= 0) {
+          drive.parked[size_t(idx)].owned = true; drive.parked[size_t(idx)].forSale = false;
+          if (drive.enter(idx)) {
+            rideKind = Ride::Car;
+            player.setSkisOn(false);
+            dvec3 sp, sf;
+            drive.seat(sp, sf);
+            player.sitOn(sp, sf);
+            drive.setCockpit(true);
+            SL_INFO("[cockpittest] in the %s, the cockpit view", drive.parked[size_t(idx)].name.c_str());
+          }
+        }
+      }
+      if (cf == 150) drive.setCockpit(false);
+      if ((cf == 60 || cf == 120 || cf == 210) && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("cockpit" + std::to_string(cf / 60)).c_str());
+    }
     if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
       dvec3 bp; double bh;
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }

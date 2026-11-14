@@ -120,6 +120,9 @@ public:
   dvec2 autohausDir{0, 1};
 
   std::vector<CarSpec> cars;
+  /// (drive.js FULL) the full-detail models of some cars (their interiors): shown for the car you drive; `kind` holds
+  /// the base model's name
+  std::vector<CarSpec> carsFull;
   const CarSpec* car(const std::string& name) const;
   std::vector<int> busGlass, busPaint;   // the Micruss's glass and paint materials
   struct BusSpec { std::string model; mat4 fit{1}; double len = 9.3, width = 2.55, floor = 0.95, lane = 1.55, cruise = 26, acc = 1.7, brake = 2.0, lat = 2.6, wheelBase = 6.8; int fleet = 8;

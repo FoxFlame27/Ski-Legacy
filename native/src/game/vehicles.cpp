@@ -36,6 +36,7 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
   mc.maxTextureSize = 512;
   mc.lodRatios.push_back(0.12f);
   mc.keepCpu = true;        // (Phase 7: the wheels are split off, then the CPU copy is dropped)
+  dev_ = &dev; assets_ = &assets; t_ = &t;
   int nSplit = 0;
   for (const CarSpec& s : t.cars) {
     auto base = assets.model(s.name, mc);
@@ -92,6 +93,33 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
   SL_INFO("vehicles: %d of %zu car models with their wheels split off (rolling / steering)", nSplit, cars_.size());
   SL_INFO("vehicles: %zu car models, bus %s, railcar body %s / cabin %s / frame %s / bogie %s", cars_.size(), bus.ok() ? "ok" : "missing",
           rail.body.ok() ? "ok" : "-", rail.cabin ? "ok" : "-", rail.frame ? "ok" : "-", rail.bogie ? "ok" : "-");
+}
+
+const VehicleModel* VehicleModels::full(const std::string& baseName) {
+  auto it = full_.find(baseName);
+  if (it != full_.end()) return it->second.ok() ? &it->second : nullptr;
+  VehicleModel vm;
+  if (t_ && assets_ && dev_)
+    for (const CarSpec& s : t_->carsFull) {
+      if (s.kind != baseName) continue;
+      ModelLoadOptions mc;
+      mc.maxTextureSize = 1024;   // (seen from the driver's seat)
+      mc.keepCpu = true;
+      auto base = assets_->model(s.name, mc);
+      if (!base) break;
+      auto m = withHidden(base, s.hide);
+      for (const auto& g : s.glass) if (g.i >= 0 && size_t(g.i) < m->materials.size()) { Material gm = glassMat(g.red, g.clear); gm.name = m->materials[size_t(g.i)].name; m->materials[size_t(g.i)] = gm; }
+      vm.model = m; vm.fit = s.fit; vm.size = s.size;
+      if (const VehicleModel* b = car(baseName)) { vm.hasPlates = b->hasPlates; vm.plates = b->plates; vm.lampF = b->lampF; vm.lampR = b->lampR; }
+      splitWheels(*dev_, vm);
+      for (auto& mesh : base->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
+      base->images.clear(); m->images.clear();
+      for (auto& mesh : m->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
+      break;
+    }
+  full_[baseName] = vm;
+  auto& r = full_[baseName];
+  return r.ok() ? &r : nullptr;
 }
 
 const VehicleModel* VehicleModels::car(const std::string& name) const {

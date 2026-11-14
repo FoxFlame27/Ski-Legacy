@@ -172,6 +172,16 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     auto& a = net["autohaus"];
     hasAutohaus = true; autohaus = dvec3(a["x"].get<double>(), a["y"].get<double>(), a["z"].get<double>()); autohausDir = dvec2(a["dirx"].get<double>(), a["dirz"].get<double>());
   }
+  if (net.contains("carsFull") && net["carsFull"].is_array())
+    for (auto& c : net["carsFull"]) {
+      CarSpec s;
+      s.name = c["name"]; s.kind = c.value("base", std::string()); s.length = c.value("length", 4.7);
+      if (c["size"].is_array()) s.size = vec3(c["size"][0].get<float>(), c["size"][1].get<float>(), c["size"][2].get<float>());
+      s.fit = mat16(c["fit"]);
+      for (auto& h : c["hide"]) s.hide.push_back(h.get<std::string>());
+      for (auto& g : c["glass"]) s.glass.push_back({g["i"].get<int>(), g.value("red", false), g.value("clear", false)});
+      carsFull.push_back(s);
+    }
   for (auto& c : net["cars"]) {
     CarSpec s;
     s.name = c["name"]; s.label = c.value("label", s.name); s.kind = c.value("kind", std::string());

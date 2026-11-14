@@ -60,11 +60,18 @@ class VehicleModels {
 public:
   void load(gfx::Device& dev, AssetManager& assets, Transport& t, Resort& resort);
   const VehicleModel* car(const std::string& name) const;
+  /// (drive.js FULL) the full-detail model of a car (its interior), loaded the first time you get into one; null if
+  /// the car has none
+  const VehicleModel* full(const std::string& baseName);
   VehicleModel bus;
   struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
   //   // express: (Phase 7) the blue livery
 private:
   std::unordered_map<std::string, VehicleModel> cars_;
+  std::unordered_map<std::string, VehicleModel> full_;
+  gfx::Device* dev_ = nullptr;
+  AssetManager* assets_ = nullptr;
+  const Transport* t_ = nullptr;
 };
 
 class VehicleDraw {

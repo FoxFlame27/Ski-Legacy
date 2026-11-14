@@ -80,6 +80,7 @@ public:
   double damage() const;
   std::string label() const;
   bool cockpit() const { return view_ == View::Cockpit; }
+  void setCockpit(bool c) { view_ = c ? View::Cockpit : View::Chase; camReady_ = false; }   // (debug cockpittest)
   double rpm() const { return d_.rpm; }
   char gear() const { return d_.gear; }
   bool lights() const { return d_.lights; }
@@ -136,6 +137,7 @@ private:
   Scenery& scenery_;
   Transport& t_;
   VehicleModels& models_;
+  const VehicleModel* fullVm_ = nullptr;   // the full-detail model of the car you drive (drive.js FULL), null: its own
   struct D {
     bool on = false;
     int e = -1;                         // the parked entry being driven

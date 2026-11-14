@@ -187,6 +187,8 @@ bool Drive::enter(int idx) {
   e.driving = true;
   d_ = D{};
   d_.on = true; d_.e = idx; d_.spec = e.spec;
+  // (drive.js: the full-detail model, its interior, for the car you drive, when there is one)
+  fullVm_ = models_.full(e.name);
   d_.x = e.x; d_.z = e.z; d_.y = e.y; d_.yaw = e.yaw;
   d_.wheelBase = std::max(2.4, e.length * 0.6); d_.half = e.length / 2; d_.w = e.spec->size.x;
   d_.offT = 0.6;
@@ -237,7 +239,11 @@ glm::dmat4 Drive::carMatrix() const {
 CarTemplate Drive::carTemplate() const {
   if (!d_.on) return CarTemplate{};
   const Parked& e = parked[size_t(d_.e)];
-  return CarTemplate::of(carSeatsFor(e.name), e.vm && e.vm->ok() ? double(e.vm->size.y) : d_.spec ? double(d_.spec->size.y) : 1.5);
+  // (carpeople.js SEATS: the full-detail models have their own seat data where it differs)
+  const CarSeats* S = fullVm_ ? carSeatsFor(e.name + "_full") : nullptr;
+  if (!S) S = carSeatsFor(e.name);
+  const VehicleModel* vm = fullVm_ ? fullVm_ : e.vm;
+  return CarTemplate::of(S, vm && vm->ok() ? double(vm->size.y) : d_.spec ? double(d_.spec->size.y) : 1.5);
 }
 
 bool Drive::clearAt(double x, double z, double r, int own) const {
@@ -890,7 +896,7 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     }
     double dist = std::hypot(M[3][0] - cam.x, M[3][2] - cam.z);
     bool mine = d_.on && int(i) == d_.e;
-    draw.addCar(*e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0);
+    draw.addCar(mine && fullVm_ ? *fullVm_ : *e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0);
   }
 }
 

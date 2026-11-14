@@ -98,6 +98,25 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       drive: DRIVE[name] || 'awd', length, size: [r4(size.x), r4(size.y), r4(size.z)], real: REAL[name] || null, fit: m.matrix.toArray().map(r4), hide, glass,
       price: rent?.price ?? 0, kind: rent?.kind || '', plates });
   }
+  // the full-detail models (drive.js FULL: the car you drive shows its `_full` model, with its interior): fitted like
+  // the simple ones (the same rules: cars.js works on the name without `_full`)
+  out.carsFull = [];
+  try {
+    const { FULL } = await imp('game/drive.js');
+    for (const [base, name] of Object.entries(FULL || {})) {
+      const length = (CAR_MODELS.find(([n]) => n === base) || [])[1];
+      const g = models[name] || await loadGLB(name);
+      if (!g || !length) continue;
+      const fit = fitCar(g, length, name), m = fit.children[0];
+      m.updateMatrix();
+      const kept = new Set(meshNames(m)), hide = [...new Set(meshNames(g.scene).filter((n) => !kept.has(n)))];
+      const size = new THREE.Box3().setFromObject(fit).getSize(new THREE.Vector3());
+      const glass = glbMaterials(name).map((q, i) => ({ ...q, i })).filter((q) => q.transmission || (/glass|glas$|window|windscreen/.test(q.name.toLowerCase()) && !/surr|frame|seal|rubber|trim/.test(q.name.toLowerCase())))
+        .map((q) => ({ i: q.i, red: /red/.test(q.name.toLowerCase()), clear: /front_light|light/.test(q.name.toLowerCase()) && !/red/.test(q.name.toLowerCase()) }));
+      out.carsFull.push({ name, base, length, size: [r4(size.x), r4(size.y), r4(size.z)], fit: m.matrix.toArray().map(r4), hide, glass });
+    }
+    log('net: full-detail car models', out.carsFull.map((c) => c.name).join(' '));
+  } catch (e) { log('net: full-detail car models skipped:', e.message); }
   if (skibus?.line?.bus?.shell) {
     const B = await imp('game/bus/bus.js'), sh = skibus.line.bus.shell, m = sh.children[0];
     m.updateMatrix();

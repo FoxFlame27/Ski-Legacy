@@ -1,7 +1,10 @@
 #include "engine/canvas2d.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <unordered_map>
 
 #define STB_TRUETYPE_IMPLEMENTATION
@@ -81,6 +84,46 @@ float Font::glyph(uint32_t cp, float px, std::vector<std::vector<vec2>>& out) co
   return adv * k;
 }
 
+// the platform's faces for a CSS family (the ones a browser on the same machine draws a canvas's text with)
+static bool loadFile(const std::string& path, Font& f) {
+  FILE* fp = std::fopen(path.c_str(), "rb");
+  if (!fp) return false;
+  std::vector<uint8_t> b;
+  uint8_t buf[65536];
+  size_t n;
+  while ((n = std::fread(buf, 1, sizeof buf, fp)) > 0) b.insert(b.end(), buf, buf + n);
+  std::fclose(fp);
+  return f.load(std::move(b));
+}
+const FontSet* systemFontSet(int family) {
+  static std::once_flag once;
+  static FontSet sets[3];
+  static bool ok[3] = {false, false, false};
+  std::call_once(once, [] {
+    std::string win = "C:/Windows";
+    if (const char* w = std::getenv("WINDIR")) win = w;
+    const std::string mac = "/System/Library/Fonts/Supplemental/", lib = "/Library/Fonts/", lx = "/usr/share/fonts/";
+    struct Face { std::vector<std::string> regular, bold; };
+    const Face faces[3] = {
+      {},
+      {{mac + "Georgia.ttf", lib + "Georgia.ttf", win + "/Fonts/georgia.ttf", lx + "truetype/gelasio/Gelasio-Regular.ttf",
+        lx + "truetype/dejavu/DejaVuSerif.ttf", lx + "TTF/DejaVuSerif.ttf", lx + "dejavu/DejaVuSerif.ttf", lx + "truetype/liberation/LiberationSerif-Regular.ttf"},
+       {mac + "Georgia Bold.ttf", lib + "Georgia Bold.ttf", win + "/Fonts/georgiab.ttf", lx + "truetype/gelasio/Gelasio-Bold.ttf",
+        lx + "truetype/dejavu/DejaVuSerif-Bold.ttf", lx + "TTF/DejaVuSerif-Bold.ttf", lx + "dejavu/DejaVuSerif-Bold.ttf", lx + "truetype/liberation/LiberationSerif-Bold.ttf"}},
+      {{mac + "Arial.ttf", lib + "Arial.ttf", win + "/Fonts/arial.ttf", lx + "truetype/liberation/LiberationSans-Regular.ttf",
+        lx + "liberation/LiberationSans-Regular.ttf", lx + "truetype/croscore/Arimo-Regular.ttf", lx + "truetype/dejavu/DejaVuSans.ttf"},
+       {mac + "Arial Bold.ttf", lib + "Arial Bold.ttf", win + "/Fonts/arialbd.ttf", lx + "truetype/liberation/LiberationSans-Bold.ttf",
+        lx + "liberation/LiberationSans-Bold.ttf", lx + "truetype/croscore/Arimo-Bold.ttf", lx + "truetype/dejavu/DejaVuSans-Bold.ttf"}},
+    };
+    for (int k = 1; k < 3; k++) {
+      for (auto& p : faces[k].regular) if (loadFile(p, sets[k].regular)) break;
+      for (auto& p : faces[k].bold) if (loadFile(p, sets[k].bold)) break;
+      ok[k] = sets[k].regular.ok() || sets[k].bold.ok();
+    }
+  });
+  return family > 0 && family < 3 && ok[family] ? &sets[family] : nullptr;
+}
+
 // ---------------------------------------------------------------- colours
 vec4 Canvas2D::parseColor(const std::string& in) {
   std::string s;
@@ -139,6 +182,33 @@ void Canvas2D::font(const std::string& f) {
   }
   st_.bold = f.find("bold") != std::string::npos || f.find("600") != std::string::npos || f.find("700") != std::string::npos ||
              f.find("800") != std::string::npos || f.find("900") != std::string::npos;
+  if (sysFonts_ && p != std::string::npos) {   // the first family of the list that is a serif or sans face
+    std::string fam;
+    for (char c : f.substr(p + 2)) fam += char(std::tolower(uint8_t(c)));
+    st_.family = 0;
+    size_t i = 0;
+    while (i < fam.size() && !st_.family) {
+      size_t j = fam.find(',', i);
+      std::string t = fam.substr(i, j == std::string::npos ? std::string::npos : j - i);
+      if (t.find("barlow") != std::string::npos) break;
+      if (t.find("georgia") != std::string::npos || t.find("times") != std::string::npos || (t.find("sans") == std::string::npos && t.find("serif") != std::string::npos)) st_.family = 1;
+      else if (t.find("arial") != std::string::npos || t.find("helvetica") != std::string::npos || t.find("sans-serif") != std::string::npos) st_.family = 2;
+      if (j == std::string::npos) break;
+      i = j + 1;
+    }
+  }
+}
+const FontSet* Canvas2D::fontSet() const {
+  if (sysFonts_ && st_.family) if (const FontSet* f = systemFontSet(st_.family)) return f;
+  return fonts_;
+}
+void Canvas2D::setLineDash(std::vector<float> d) {
+  for (float v : d) if (!std::isfinite(v) || v < 0) return;   // (the canvas ignores such a list)
+  float sum = 0;
+  for (float v : d) sum += v;
+  if (sum <= 0) d.clear();
+  else if (d.size() % 2) { auto e = d; d.insert(d.end(), e.begin(), e.end()); }
+  st_.dash = std::move(d);
 }
 void Canvas2D::textAlign(const std::string& a) { st_.align = a == "center" ? 1 : (a == "right" || a == "end") ? 2 : 0; }
 void Canvas2D::textBaseline(const std::string& b) {
@@ -325,13 +395,55 @@ void Canvas2D::strokePolys(const std::vector<std::vector<vec2>>& lines, const st
       polys.push_back(q);
     }
     for (size_t i = cl ? 0 : 1; i < (cl ? p.size() : p.size() - 1); i++) circle(p[i]);
+    if (!cl && st_.roundCap) { circle(p.front()); circle(p.back()); }
+    if (!cl && st_.squareCap) {
+      for (int e = 0; e < 2; e++) {
+        vec2 a = e ? p.back() : p.front(), b = e ? p[p.size() - 2] : p[1], d = a - b;
+        float len = glm::length(d);
+        if (len < 1e-5f) continue;
+        d /= len;
+        vec2 nn = vec2(-d.y, d.x) * hw;
+        polys.push_back({a + nn, a + nn + d * hw, a - nn + d * hw, a - nn});
+      }
+    }
   }
   for (auto& q : polys) if (area(q) < 0) std::reverse(q.begin(), q.end());
   fillPolys(polys, color);
 }
 
 void Canvas2D::fill() { fillPolys(path_, st_.fill); }
-void Canvas2D::stroke() { strokePolys(path_, closed_, st_.lineWidth * scaleK(), st_.stroke); }
+void Canvas2D::stroke() {
+  if (st_.dash.empty()) { strokePolys(path_, closed_, st_.lineWidth * scaleK(), st_.stroke); return; }
+  // dashed: each subpath cut into its dashes (the pattern restarts on every subpath), each stroked as an open line
+  std::vector<std::vector<vec2>> dashes;
+  const float k = scaleK();
+  for (size_t l = 0; l < path_.size(); l++) {
+    const auto& p = path_[l];
+    if (p.size() < 2) continue;
+    bool cl = l < closed_.size() && closed_[l];
+    size_t n = cl ? p.size() : p.size() - 1, di = 0;
+    float left = st_.dash[0] * k;
+    bool on = true;
+    if (on) dashes.push_back({p[0]});
+    for (size_t i = 0; i < n; i++) {
+      vec2 a = p[i], b = p[(i + 1) % p.size()];
+      float len = glm::length(b - a), t = 0;
+      while (len - t > left) {
+        t += left;
+        vec2 q = a + (b - a) * (t / len);
+        if (on) dashes.back().push_back(q); else dashes.push_back({q});
+        on = !on;
+        di = (di + 1) % st_.dash.size();
+        left = st_.dash[di] * k;
+      }
+      left -= len - t;
+      if (on) dashes.back().push_back(b);
+    }
+  }
+  std::vector<std::vector<vec2>> keep;
+  for (auto& d : dashes) if (d.size() >= 2) keep.push_back(std::move(d));
+  strokePolys(keep, std::vector<bool>(keep.size(), false), st_.lineWidth * k, st_.stroke);
+}
 void Canvas2D::clip() {
   auto m = std::make_shared<std::vector<uint8_t>>(size_t(w_) * h_, 0);
   fillPolys(path_, vec4(1), m.get());
@@ -350,10 +462,11 @@ void Canvas2D::clearRect(float x, float y, float w, float h) {
   int ya = std::max(0, int(std::floor(std::min(a.y, b.y)))), yb = std::min(h_, int(std::ceil(std::max(a.y, b.y))));
   for (int yy = ya; yy < yb; yy++) for (int xx = xa; xx < xb; xx++) std::memset(&px_[(size_t(yy) * w_ + xx) * 4], 0, 4);
 }
-float Canvas2D::measureText(const std::string& t) const { return fonts_ ? fonts_->pick(st_.bold).width(t, st_.px) : t.size() * st_.px * 0.5f; }
+float Canvas2D::measureText(const std::string& t) const { const FontSet* fs = fontSet(); return fs ? fs->pick(st_.bold).width(t, st_.px) : t.size() * st_.px * 0.5f; }
 void Canvas2D::fillText(const std::string& text, float x, float y) {
-  if (!fonts_) return;
-  const Font& f = fonts_->pick(st_.bold);
+  const FontSet* fs = fontSet();
+  if (!fs) return;
+  const Font& f = fs->pick(st_.bold);
   float px = st_.px, w = f.width(text, px);
   if (st_.align == 1) x -= w / 2; else if (st_.align == 2) x -= w;
   float asc = f.ascent(px), desc = f.descent(px);
@@ -373,6 +486,14 @@ void Canvas2D::putAlpha(int x, int y, int w, int h, const std::vector<uint8_t>& 
     int xx = x + i, yy = y + j;
     if (xx < 0 || yy < 0 || xx >= w_ || yy >= h_ || size_t(j) * w + i >= a.size()) continue;
     px_[(size_t(yy) * w_ + xx) * 4 + 3] = a[size_t(j) * w + i];
+  }
+}
+void Canvas2D::putImage(int x, int y, int w, int h, const std::vector<uint8_t>& rgba) {
+  for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+    int xx = x + i, yy = y + j;
+    size_t s = (size_t(j) * w + i) * 4;
+    if (xx < 0 || yy < 0 || xx >= w_ || yy >= h_ || s + 4 > rgba.size()) continue;
+    std::memcpy(&px_[(size_t(yy) * w_ + xx) * 4], &rgba[s], 4);
   }
 }
 

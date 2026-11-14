@@ -267,10 +267,14 @@ vec3 applyFog(vec3 col, vec3 rel) {
     f = mix(f, hb, farK);
   }
   vec3 fc = uFogColor.rgb;
+  // (native) aerial perspective: the haze near by is a light blue-grey (the fog colour arrives at 40 % saturation),
+  // over the far ranges (several km of air) it turns a deeper atmospheric blue, as in a clear-day alpine panorama
+  fc = max(mix(vec3(dot(fc, vec3(0.2126, 0.7152, 0.0722))), fc, 1.0 + 0.55 * smoothstep(2500.0, 9000.0, dist)), 0.0);
 #if SL_FX >= 2 && !defined(SL_LOW)
   vec3 vd = rel / max(dist, 1e-3);
   float mie = pow(saturate(dot(vd, uTrueSun.xyz)), 8.0);
-  fc += uSkyGlow.rgb * (mie * 0.12 * uTrueSun.w * uHemiGround.w);
+  vec3 glow = mix(vec3(dot(uSkyGlow.rgb, vec3(0.2126, 0.7152, 0.0722))), uSkyGlow.rgb, 0.5);   // (as the haze: half saturation)
+  fc += glow * (mie * 0.12 * uTrueSun.w * uHemiGround.w);
 #endif
   vec3 hue = mix(vec3(1.0), fc / max(max(fc.r, max(fc.g, fc.b)), 1e-4), 0.6);
   return mix(col * mix(vec3(1.0), hue, f * 0.45), fc, f);
@@ -297,6 +301,7 @@ layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aJoints;
 layout(location = 4) in vec4 aWeights;
 uniform mat4 uJoints[64];
+layout(location = 8) in float aFanMask;   // (fans.js crowd people) the jacket recolour mask
 #endif
 #ifdef INSTANCED
 layout(location = 5) in vec4 aInst0;   // xyz world position, w uniform scale
@@ -316,16 +321,20 @@ out vec3 vRel;
 out vec3 vNormal;
 out vec2 vUV;
 out vec3 vColor;
+out float vFanMask;
 out vec4 vTint;
 out vec3 vObj;                         // model-space position (detail layer, pine crown), w-less
 out vec3 vObjN;
 out float vScale;                      // world metres per model unit (detail layer)
 out vec3 vOX, vOY, vOZ;                // model axes in world space (detail layer)
+out float vRkHG;                       // (rocks, shading 4) height over the terrain plane under the instance
 void main() {
   vec4 p = vec4(aPos, 1.0);
   vTint = vec4(0.0);
+  vRkHG = 10.0;
   vec3 n = aNormal;
   vColor = aColor;
+  vFanMask = 0.0;
   vObj = aPos;
   vObjN = aNormal;
 #ifdef SKINNED
@@ -333,6 +342,7 @@ void main() {
           + aWeights.z * uJoints[int(aJoints.z)] + aWeights.w * uJoints[int(aJoints.w)];
   p = sk * p;
   n = mat3(sk) * n;
+  vFanMask = aFanMask;
 #endif
   p = uModel * p;
   n = mat3(uModel) * n;
@@ -369,6 +379,10 @@ void main() {
   p.xyz = R * p.xyz + vec3(aRow0.w, aRow1.w, aRow2.w) + uInstOrigin;
   n = R * n;
   vTint = aTint;
+  if (uFlags3.y > 3.5 && uFlags3.y < 4.5) {   // (rocks: aTint = the terrain plane's gradient x, z and height over the origin)
+    vec3 rkT = vec3(aRow0.w, aRow1.w, aRow2.w) + uInstOrigin;
+    vRkHG = p.y - (rkT.y + aTint.z + aTint.x * (p.x - rkT.x) + aTint.y * (p.z - rkT.z));
+  }
   vScale *= length(vec3(aRow0.x, aRow1.x, aRow2.x));
   OW = R * OW;
 #endif
@@ -385,11 +399,13 @@ in vec3 vRel;
 in vec3 vNormal;
 in vec2 vUV;
 in vec3 vColor;
+in float vFanMask;
 in vec4 vTint;
 in vec3 vObj;
 in vec3 vObjN;
 in float vScale;
 in vec3 vOX, vOY, vOZ;
+in float vRkHG;
 out vec4 oColor;
 uniform sampler2D uBase;
 uniform sampler2D uMR;
@@ -402,14 +418,28 @@ uniform vec4 uMat;        // metallic, roughness, normal scale, alpha cutoff (<0
 uniform vec4 uFlags;      // has base tex, has mr tex, has normal tex, double sided
 uniform vec4 uFlags2;     // vertex colour, has emissive map, night glow strength, vertex colour stored as sqrt
 uniform vec3 uEmissive;   // already scaled for the time of day
-uniform vec4 uFlags3;     // x paint mode (1 car paint, 2 livery), y shading (0 standard, 1 pine, 2 meshy detail, 3 glass), z model height, w lum norm (pine)
+uniform vec4 uFlags3;     // x paint mode (1 car paint, 2 livery), y shading (0 standard, 1 pine, 2 meshy detail, 3 glass, 4 rock), z model height, w lum norm (pine)
 uniform vec4 uFlags4;     // x clearcoat, y detail strength, z detail fade distance, w sheen (fabric)
+uniform vec4 uFanBase;   // (fans.js) the crowd people's jacket recolour key: I, Q, luma, cos threshold (z = 0: none)
+uniform vec4 uFanCol;    // rgb the person's jacket colour (r < 0: the model's own), a the screen-door fade (1 solid)
+
+// ---- boulders.js rockMaterial: the Meshy rocks' snow (the same value noise as the web game's ROCK_COMMON)
+const vec3 ROCK_SNOW = vec3(0.86, 0.875, 0.895);   // (the terrain's snow albedo)
+float rkHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float rkNoise(vec3 x) {
+  vec3 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(rkHash(i), rkHash(i + vec3(1.0, 0.0, 0.0)), f.x), mix(rkHash(i + vec3(0.0, 1.0, 0.0)), rkHash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+             mix(mix(rkHash(i + vec3(0.0, 0.0, 1.0)), rkHash(i + vec3(1.0, 0.0, 1.0)), f.x), mix(rkHash(i + vec3(0.0, 1.0, 1.0)), rkHash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+}
+float rkN(vec3 p) { return rkNoise(mat3(0.80, 0.36, -0.48, -0.60, 0.48, -0.64, 0.0, 0.80, 0.60) * p); }
 
 // ---- vegetation.js pine shading
-const vec3 PINE_SNOW = vec3(0.78, 0.83, 0.9);
+// (native) spruce / fir green-black needles (vegetation.js's logo navy read as blue trees once lit) and near-white snow
+const vec3 PINE_SNOW = vec3(0.82, 0.845, 0.875);
 vec3 pineNeedle(vec3 tex) {
   float k = clamp(dot(tex, vec3(0.2126, 0.7152, 0.0722)) * uFlags3.w, 0.15, 2.2);
-  return mix(vec3(0.011, 0.027, 0.040), vec3(0.028, 0.060, 0.072), smoothstep(0.5, 1.8, k)) * (0.6 + 0.4 * k);
+  return mix(vec3(0.012, 0.024, 0.019), vec3(0.030, 0.055, 0.044), smoothstep(0.5, 1.8, k)) * (0.6 + 0.4 * k);
 }
 float pineTexSnow(vec3 tex) {
   float hi = max(max(tex.r, tex.g), tex.b);
@@ -421,6 +451,13 @@ float pineSnowMask(vec3 tex, vec3 wn, vec3 op) {
 }
 
 void main() {
+  if (uFanBase.w < -0.5) {   // fans.js blobMaterial: the soft contact shade under a crowd person (multiplied onto the snow)
+    float r = min(1.0, length(vUV * 2.0 - 1.0));
+    float a = pow(1.0 - r * r, 2.2) * (0.45 + 0.55 * (1.0 - smoothstep(0.0, 0.4, r)));   // dark core under the boots
+    a *= uFanCol.x * (1.0 - smoothstep(45.0, 90.0, 1.0 / gl_FragCoord.w));
+    oColor = vec4(mix(vec3(1.0), uFanBase.xyz, a), 1.0);
+    return;
+  }
   vec4 base = uBaseColor;
   if (vTint.a > 0.0 && uFlags3.x > 0.5 && uFlags3.x < 1.5) base.rgb = vTint.rgb;
   vec3 texel = vec3(1.0);
@@ -430,6 +467,21 @@ void main() {
     base.rgb = mix(base.rgb, vTint.rgb * (0.35 + 2.4 * dot(base.rgb, vec3(0.5, 0.35, 0.15))), red * vTint.a);
   }
   if (uFlags2.x > 0.5) base.rgb *= uFlags2.w > 0.5 ? vColor * vColor : vColor;
+  if (uFanCol.a < 1.0) {   // fans.js: the screen-door cross-fade (LOD switches, people coming on / off stage)
+    float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    if (uFanCol.a < -1.5) { if (dth < -uFanCol.a - 2.0) discard; } else if (dth >= uFanCol.a) discard;
+  }
+  if (uFanCol.r >= 0.0 && uFanBase.z > 0.0) {
+    // fans.js jacket recolour: texels near the jacket's own hue take the person's colour, folds / shading kept
+    vec3 c = base.rgb;
+    float Y = dot(c, vec3(0.299, 0.587, 0.114));
+    vec2 iq = vec2(dot(c, vec3(0.596, -0.274, -0.322)), dot(c, vec3(0.211, -0.523, 0.312)));
+    float bc = length(uFanBase.xy), ch = length(iq);
+    float cs = dot(iq, uFanBase.xy) / max(ch * bc, 1e-6);
+    float sat = (ch / max(Y, 0.004)) / (bc / uFanBase.z);
+    float k = vFanMask * smoothstep(uFanBase.w - 0.2, uFanBase.w - 0.04, cs) * smoothstep(0.28, 0.5, sat) * smoothstep(0.004, 0.012, ch);
+    base.rgb = mix(c, uFanCol.rgb * clamp(Y / uFanBase.z, 0.0, 2.2), k);
+  }
   if (uMat.w >= 0.0) {
     // alpha test with a sharpened, mip-stable edge (alpha to coverage under MSAA smooths it)
     float a = (base.a - uMat.w) / max(fwidth(base.a), 1e-4) + 0.5;
@@ -460,13 +512,29 @@ void main() {
   }
   float snowA = 0.0;
   if (kind == 1) {
-    // pine: dark navy needles, snow on needles facing the sky
+    // pine: dark green needles, snow on needles facing the sky
     vec3 pineTex = base.rgb;
     base.rgb = pineNeedle(pineTex);
     snowA = clamp(pineSnowMask(pineTex, n, vObj) * (1.0 + uMisc.y) * (1.0 - 0.75 * smoothstep(40.0, 450.0, dist)), 0.0, 1.0);
     base.rgb = mix(base.rgb, PINE_SNOW, snowA);
     rough = mix(max(rough, 0.82), 0.7, snowA);
     metallic = 0.0;
+  }
+  if (kind == 4) {
+    // rocks: a settled cap on the faces open to the sky (its edge broken by the relief and noise), a dusting on the
+    // ledges, a drift banked against the foot, damp darker rock just above it; more while it snows (uMisc.y)
+    vec3 wp = vRel + uCamPos.xyz;
+    float sn = rkN(wp * 0.9 + 9.0) * 0.6 + rkN(wp * 3.1) * 0.4;
+    float cap = smoothstep(0.62 - uMisc.y * 0.2, 0.8 - uMisc.y * 0.2, gn.y + (sn - 0.5) * 0.35 + (n.y - gn.y) * 0.6);
+    float dust = smoothstep(0.86 - uMisc.y * 0.3, 0.95 - uMisc.y * 0.3, n.y + (sn - 0.5) * 0.2) * 0.85;
+    float driftH = 0.05 + 0.25 * rkN(vec3(wp.x, 0.0, wp.z) * 0.9 + 3.0) * rkN(vec3(wp.x, 0.0, wp.z) * 0.35 + 8.0) * 2.0;
+    float drift = 1.0 - smoothstep(driftH - 0.03, driftH + 0.03, vRkHG + (sn - 0.5) * 0.12);
+    snowA = clamp(max(max(cap, dust), drift), 0.0, 1.0);
+    base.rgb *= mix(0.7, 1.0, smoothstep(0.0, 0.4, vRkHG));
+    base.rgb = mix(base.rgb, ROCK_SNOW, snowA);
+    rough = mix(rough, 0.75, snowA);
+    metallic = 0.0;
+    n = normalize(mix(mix(n, gn, snowA * 0.8), vec3(0.0, 1.0, 0.0), drift * 0.5));
   }
 #ifndef SL_LOW
   if (kind == 2 && uFlags4.y > 0.0) {

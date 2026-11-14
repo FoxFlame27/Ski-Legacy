@@ -547,6 +547,23 @@ void Jobs::addPeople(People& people, const dvec3& cam) const {
       people.add(p);
     }
   }
+  // the fare aboard (taxi.js posePax): in the seat behind the front passenger (a two-seater: beside you), the 'sit' pose
+  // at its seat point, the legs into the footwell and the hands on the thighs (carpeople.js seatLegs)
+  glm::dmat4 car(1);
+  CarTemplate ct;
+  if (taxiOn_ && fare_.stage == Fare::Stage::Aboard && !people.fanKinds.empty() && carFrame && carFrame(car, ct)) {
+    three::V3 pts[4];
+    int n = carSeatPoints(ct, pts);
+    if (n > 0) {
+      int seat = std::min(n - 1, taxiPaxSeat(n));
+      Person p; p.kind = people.fanKinds[size_t(fare_.from + 3) % people.fanKinds.size()];
+      p.pos = dvec3(car * glm::dvec4(pts[seat], 1));
+      p.yaw = std::atan2(car[2][0], car[2][2]);
+      p.anim = PAnim::Sit;
+      p.car.how = CarSeatRef::Seated; p.car.car = car; p.car.t = ct; p.car.seat = seat;
+      people.add(p);
+    }
+  }
   if (taxiOn_ && (fare_.stage == Fare::Stage::Waiting || fare_.stage == Fare::Stage::Boarding || fare_.stage == Fare::Stage::Leaving) && !people.fanKinds.empty()) {
     Person p; p.kind = people.fanKinds[size_t(fare_.from + 3) % people.fanKinds.size()];
     p.pos = fare_.walkPos;

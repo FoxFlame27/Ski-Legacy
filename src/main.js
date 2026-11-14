@@ -16,6 +16,7 @@ import { layout, initLayout, planPisteFences } from './world/layout.js';
 import { Terrain, terrainUniforms } from './world/terrain.js';
 import { Environment } from './world/sky.js';
 import { Vegetation } from './world/vegetation.js';
+import { ROCK_MODELS } from './world/boulders.js';
 import { Atmosphere } from './world/atmosphere.js';
 import { Village } from './world/village.js';
 import { Lifts } from './world/lifts.js';
@@ -178,6 +179,7 @@ const MODEL_LIST = [
   'job_board', 'delivery_backpack', 'patrol_backpack', 'mail_bag', 'ski_glove', 'ski_goggles', 'beanie', 'compact_camera', 'rescue_sled', 'smartphone',
   'rental_shop', 'gondola_cabin', 'chairlift_chair', 'lift_tower',
   'chair_terminal', 'chair_bullwheel', // the chairlift terminals: operator hut + bullwheel (lifts.js MESHY_CHAIR)
+  ...ROCK_MODELS, // the mountains' Meshy rocks (world/boulders.js rockKit), close + distant level
   'pine_tree', 'pine_tree2', 'hotel_chalet', 'mountain_hut', 'race_arch', 'ticket_booth', 'snow_cannon', 'lamp_post',
   // decoration props
   'wooden_bench', 'outdoor_ski_rack', 'snowman', 'firewood_pile', 'wooden_fence', 'christmas_tree', 'picnic_table', 'wooden_sled', 'deck_chair', 'map_board', 'sign_pole', 'truss_pylon',

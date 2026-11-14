@@ -492,6 +492,13 @@ float lum(const vec3& c) { return c.x * 0.2126f + c.y * 0.7152f + c.z * 0.0722f;
 vec3 desat(const vec3& c, float s) { float l = lum(c); return vec3(l) + (c - vec3(l)) * s; }
 float fsat(float x) { return std::clamp(x, 0.f, 1.f); }
 float fsmooth(float a, float b, float x) { float t = fsat((x - a) / (b - a)); return t * t * (3 - 2 * t); }
+// (native) the sky as a light source. sky.js lit the world with the palette's own colours (desaturated to 70 %), but
+// the palette is graded for display: in linear light the cobalt zenith is ~7x bluer than red (the IBL's zenith
+// (0.23, 0.60, 1.66)), so as the only light in the shade it turned shaded snow saturated blue, dark wood navy, and
+// ACES skewed the rest toward purple. A clear sky lights like ~11000 K daylight: the palette's brightness with a
+// light, unsaturated blue (luminance 1), toward a near-neutral grey under an overcast; the sun / glow keep their hue.
+const vec3 SKY_LIGHT{0.86f, 1.015f, 1.266f}, SKY_LIGHT_HOR{0.92f, 1.01f, 1.12f}, OVERCAST_LIGHT{0.97f, 1.0f, 1.05f};
+vec3 skyLight(const vec3& c, const vec3& tint, float overcast) { return glm::mix(tint, OVERCAST_LIGHT, overcast) * lum(c); }
 } // namespace
 
 void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
@@ -527,7 +534,7 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
   fb.moonDir = vec4(md, nightF);
   fb.trueSun = vec4(sun, dayF * sunVisible);
   // the key light and the ambient: three's HemisphereLight + the IBL (envI) as sky.js sets them
-  vec3 hemiC = glm::mix(pal(AMB), vec3(0.62f, 0.68f, 0.78f) * (0.15f + 0.85f * dayF), overcast * 0.7f);
+  vec3 hemiC = skyLight(glm::mix(pal(AMB), vec3(0.62f, 0.68f, 0.78f) * (0.15f + 0.85f * dayF), overcast * 0.7f), SKY_LIGHT, overcast);
   vec3 hemiG = glm::mix(hemiC, vec3(0.75f, 0.78f, 0.85f), 0.5f) * 0.6f;
   float hemiI = (0.04f + 0.08f * dayF) * (1 + 1.6f * overcast) * L.ambientScale;
   float envI = (ENVI[i] + (ENVI[i + 1] - ENVI[i]) * f) * (1 + 0.12f * overcast) * L.ambientScale * sc;
@@ -539,10 +546,13 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
     fb.hemiGround = vec4(hemiG * hemiI, std::max(0.05f, sunVisible));
   }
   vec3 key = L.sunColor * keyI;
-  envZenith_ = desat(glm::mix(L.zenith, L.mid, 0.8f), 0.7f) * 1.8f;
-  envHorizon_ = desat(glm::mix(L.horizon, L.mid, 0.3f), 0.7f) * 0.35f;
+  envZenith_ = skyLight(glm::mix(L.zenith, L.mid, 0.8f), SKY_LIGHT, overcast) * 1.8f;
+  envHorizon_ = skyLight(glm::mix(L.horizon, L.mid, 0.3f), SKY_LIGHT_HOR, overcast) * 0.35f;
+  // the ground below: sunlit snow (albedo ~0.85, most of the ground round you) and the sky it reflects. sky.js took
+  // 30-40 % of it: the walls, eaves and cars in the shade then saw mostly blue sky; the bright warm-white bounce off
+  // the snowfield is what keeps shaded facades neutral in a real snowy valley (the same on every preset)
   float bounce = keyI * std::max(glm::normalize(L.sunDir).y, 0.f) * 0.85f / float(PI);
-  vec3 envGround = L.sunColor * (bounce * (set_.fx >= 2 ? 0.4f : 0.3f)) + envZenith_ * 0.25f;
+  vec3 envGround = L.sunColor * (bounce * 0.75f) + envZenith_ * 0.25f;
   envSun_ = useMoon ? vec3(0) : L.sunColor * (keyI * 0.05f);
   envGlow_ = set_.fx >= 1 ? L.glow * (clearSky * (0.08f + 0.45f * dusk) * dayF) : vec3(0);
   fb.envGround = vec4(envGround, L.mist);
@@ -684,7 +694,10 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   fb.sunDir = vec4(ld, (shadowsOn && L.sunIntensity > 0.01f) ? 1.f : 0.f);
   bool moon = glm::length(L.trueSun) > 0.5f && glm::dot(ld, glm::normalize(L.trueSun)) < 0.999f;
   fb.sunColor = vec4(L.sunColor * (L.sunIntensity * L.ambientScale), moon ? 0.f : 1.f);
-  fb.fogColor = vec4(L.fog, 1);
+  // (native) the haze as it lights the far terrain: the palette's fog (the sky below the horizon, graded for display:
+  // ~10x bluer than red by day, navy at night) at 40 % of its saturation, so distance reads as a light blue-grey
+  // aerial perspective and the night haze as dark grey-blue instead of tinting every far slope saturated blue
+  fb.fogColor = vec4(desat(L.fog, 0.4f), 1);
   fb.fogParams = vec4(L.fogDensity, L.fogFalloff, 1.0f / float(atlasW_), L.exposure);
   computeSky(L, fb);
   fb.misc = vec4(L.night, L.snowCover, float(set_.fx), L.icy);
@@ -889,6 +902,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   // shading kind: pine (vegetation.js), Meshy detail (meshylook.js), glass
   int kind = 0;
   if (pine || m.shading == 1) kind = 1;
+  else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
   else if (m.alpha == Material::Alpha::Blend && m.roughness < 0.6f) kind = 3;
   else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && m.paint == 0 &&
                               (m.name.empty() || m.name.rfind("Material_", 0) == 0))) kind = 2;
@@ -897,6 +911,8 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   dev_->setVec4("uFlags3", glm::value_ptr(f3));
   vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], 0.f);
   dev_->setVec4("uFlags4", glm::value_ptr(f4));
+  dev_->setVec4("uFanBase", glm::value_ptr(m.fanBase));   // (fans.js crowd people: recolour, screen-door fade)
+  dev_->setVec4("uFanCol", glm::value_ptr(m.fanCol));
 }
 
 void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur) {
@@ -1230,7 +1246,14 @@ void Renderer::endFrame() {
     ps.blend = gfx::Blend::Alpha;
     ps.depthWrite = false;
     gfx::Program cur{};
-    for (const Item* it : blend_) drawItem(*it, false, ps, cur);
+    for (const Item* it : blend_) {
+      // (fans.js contact shades: the snow under the crowd people multiplied toward a sky-lit blue, offset toward the camera)
+      const bool shade = it->mat && it->mat->fanBase.w < -0.5f;
+      ps.blend = shade ? gfx::Blend::Multiply : gfx::Blend::Alpha;
+      ps.depthBiasFactor = shade ? -2.f : 0.f;
+      ps.depthBiasUnits = shade ? -4.f : 0.f;
+      drawItem(*it, false, ps, cur);
+    }
   }
   // resolve; the depth copy the post passes and the particles read
   if (msaa_) dev_->resolve(msaa_, hdr_, rw_, rh_, true, true);

@@ -240,7 +240,8 @@ void main() {
     float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
     l = dot(c, vec3(0.2126, 0.7152, 0.0722));
     c = mix(vec3(l), c, uToneMap == 1 ? 1.07 + 0.13 * (1.0 - sat) : 1.1 + 0.22 * (1.0 - sat));
-    c += vec3(-0.008, -0.002, 0.012) * (1.0 - l) * (1.0 - l) + vec3(0.012, 0.006, -0.01) * l * l;
+    // (a touch of warmth in the highlights; the cool push in the shadows halved: the sky light is cool already)
+    c += vec3(-0.004, -0.001, 0.006) * (1.0 - l) * (1.0 - l) + vec3(0.012, 0.006, -0.01) * l * l;
     c = clamp(c, 0.0, 1.0);
   } else c = mix(vec3(l), c, 1.06);
   vec2 d = (uv - 0.5) * vec2(uPost3.y, 1.0);

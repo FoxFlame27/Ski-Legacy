@@ -28,6 +28,7 @@ public:
   std::shared_ptr<Model> loadFile(const std::string& path, const std::string& name, const ModelLoadOptions& opt);
   size_t textureBytes() const { return texBytes_; }
   std::string modelPath(const std::string& name) const;
+  gfx::Device& device() { return dev_; }   // (models built on the side: the crowd people, player/fans_rig)
   /// (Phase 7) a cap on every texture's size (the quality preset: 512 on Switch), whatever the load options ask
   int textureCap = 4096;
   float anisotropy = 8;            // anisotropic filtering of the models' maps (16: the GPU's maximum, High and up)

@@ -357,7 +357,13 @@ double SkierRig::rnd01() {
 
 void SkierRig::setRoot(const V3& p, double heading) {
   rootPos = p; rootHeading = heading;
-  rootM_ = compose(p, yaw(heading), V3(1));
+  rootQ_ = yaw(heading);
+  rootM_ = compose(p, rootQ_, V3(1));
+  std::fill(dirty_.begin(), dirty_.end(), uint8_t(1));
+}
+void SkierRig::setRootQuat(const Q& q) {
+  rootQ_ = q;
+  rootM_ = compose(rootPos, rootQ_, V3(1));
   std::fill(dirty_.begin(), dirty_.end(), uint8_t(1));
 }
 
@@ -375,7 +381,7 @@ M4 SkierRig::W(int i) const {
 
 void SkierRig::setWorldQuat(int bone, const Q& q) {
   int p = M_->body->nodes[size_t(bone)].parent;
-  Q pq = p >= 0 ? wquat(p) : yaw(rootHeading);
+  Q pq = p >= 0 ? wquat(p) : rootQ_;
   setLocalR(bone, mul(conj(pq), q));
 }
 void SkierRig::rotateWorld(int bone, const V3& axis, double angle) {
@@ -430,7 +436,7 @@ void SkierRig::setSkisVisible(bool v) {
   poles[0].visible = poles[1].visible = v && !polesHidden;
 }
 
-V3 SkierRig::eyeWorld() const { return wpos(M_->b[RigModel::head]) + applyQ(M_->eyeOffset, yaw(rootHeading)); }
+V3 SkierRig::eyeWorld() const { return wpos(M_->b[RigModel::head]) + applyQ(M_->eyeOffset, rootQ_); }
 
 void SkierRig::startPolePlant(int side, const V3& fwd, const V3& right) {
   if (!hasPoles_) return;   // "a skier without poles keeps the hands in the ski stance"
@@ -593,13 +599,17 @@ void SkierRig::update(double dt, const RigState& st) {
     std::fill(dirty_.begin(), dirty_.end(), uint8_t(1));
   }
   s_[size_t(R.b[RigModel::head])] = V3(headHidden_ ? 0.001 : 1);
-  bool armsAway = fp_ && (mode_ == Mode::Move || mode_ == Mode::Foot);
+  // "first person with the pole view model: the body's own arms fold away (one pair of hands, and nothing to glitch);
+  // on foot too (the walk / run clips pump the forearms right in front of the eye)"
+  bool armsAway = fp_ && (fpView.visible || mode_ == Mode::Move || mode_ == Mode::Foot);
   s_[size_t(R.b[RigModel::lArm])] = s_[size_t(R.b[RigModel::rArm])] = V3(armsAway ? 0.001 : 1);
   hipsBase_.q = r_[size_t(R.b[RigModel::hips])];
   hipsBase_.p = t_[size_t(R.b[RigModel::hips])];
   hipsBase_.valid = true;
   setRoot(rootPos, rootHeading);
   eyeStable = eyeWorld();
+  // "...and the point a flip turns the body about (flipBody): the first-person eye goes round it too"
+  if (fp_) { fpFlipC = wpos(R.b[RigModel::hips]) + UP * 0.08; hasFpFlipC = true; }
   if (mode == Mode::Fall) placeFallen(dt, st);
   updateGear(dt, st, fwd, right);
   bool polesOn = !fp_ && (!hasSkis_ || skis[0].visible) && !polesHidden;

@@ -10,8 +10,9 @@
 //    their skis on the back, the shop, the market, the trail map, the hotels, along the plaza's path ring), and the far
 //    skiers all over the mountain (one instanced draw of small figures beyond 160 m), at the preset's densities
 //    (quality.js npcs: skiers, walkers, animNear: the distance within which rigs are posed every frame).
-//  - PeopleSim: the townsfolk on the plaza (townsfolk.js / peoplesim.js condensed): the fan_* characters strolling
-//    between places, standing in groups.
+//  - PeopleSim: the townsfolk on the plaza (townsfolk.js / peoplesim.js, game/townsfolk.cpp): the fan_* characters as
+//    the web game's crowd people (fans.js: player/fans_rig, their own keyframed walk, stances, gestures, jacket colours,
+//    LODs), coming and going between the hotels, the shop, the gondola, the market, the fire pit, the tree, the map.
 #pragma once
 #include "core/math.h"
 #include "engine/model.h"
@@ -26,6 +27,7 @@ class AssetManager;
 class Renderer;
 class World;
 class Scenery;
+class FanKit;
 struct Quality;
 
 enum class PAnim : uint8_t { Idle, Walk, Run, Ski, Tuck, Sit, Lie, Wave, Count };
@@ -41,6 +43,9 @@ struct Person {
   float lean = 0;        // skiing: into the turn (-1..1, + right, npcs.js s.lean)
   bool poles = false;    // carries poles (race bots)
   double speed = -1;     // m/s (-1: from the motion)
+  /// in a car (player/car_seat.h): Figure, one of the traffic's seated people (posed as carpeople.js bakes them, placed
+  /// on its seat; pos: about there); Seated, sat at the seat point pos, the legs into the footwell (taxi.js / remote.js)
+  CarSeatRef car;
 };
 
 /// One character for the rigs: its rig model (bones, measurements, clips) and the model drawn (the fans' textured
@@ -72,6 +77,8 @@ public:
   const PeopleKind& kindOf(int k) const { return kinds_[size_t(k)]; }
   std::vector<int> fanKinds, skierKinds;
   int officer = -1;
+  /// the townsfolk's characters as fans.js bakes them (player/fans_rig: PeopleSim draws them), FAN_MODELS order
+  std::vector<std::shared_ptr<FanKit>> fanKits;
   void begin(double dt = 1.0 / 60) { list_.clear(); dt_ = dt; }
   void add(const Person& p) { list_.push_back(p); }
   size_t count() const { return list_.size(); }
@@ -154,43 +161,52 @@ private:
   void spawnFar(Far& o, bool anywhere);
 };
 
-/// The townsfolk: people walking between places round the plaza (the hotels' doors, the ski shop, the gondola, the
-/// market, the fire pit, the tree, the bus stop), standing in groups. Only simulated within SIM m of the camera; fewer
-/// at night. (Their skiers on the pistes are Npcs'.)
+/// The townsfolk (world/townsfolk.js + peoplesim.js, drawn and posed as world/fans.js's crowd people: player/fans_rig):
+/// the village's people come out of the hotels' doors, the ski shop and the gondola with something to do: skiers carry
+/// their skis over the shoulder to the gondola (and back from it), others browse the market stalls, warm their hands at
+/// the fire pit, stop at the Christmas tree for a photo (a phone), read the trail map and point out a run, look in the
+/// shop's window, queue at the ticket booth, wait for the bus; a third come in twos and stop together, people standing
+/// at the same place chat (turned to each other, the hands going); they walk the plaza's path ring at their own pace
+/// (turning smoothly, slowing for the last metres, stepping round the people in front, the lamps, stalls and walls,
+/// and you), fade in at a door and out where they go in. Fewer out at night. Simulated while the camera is within
+/// 260 m of the plaza; drawn within 170 m (the three LODs at 18 / 50 m, cross-faded), no shadows (a soft contact shade
+/// under each), posed less often further out. Knocked over by your car: thrown, tumbling, lying, getting up.
 class PeopleSim {
 public:
-  struct Place { double x, z; int kind; };     // kind 0 door, 1 stall / sight (stand a while), 2 the gondola
+  struct Place { double x, z; int kind; };
+  PeopleSim();
+  ~PeopleSim();
+  PeopleSim(const PeopleSim&) = delete;
+  PeopleSim& operator=(const PeopleSim&) = delete;
+  void setKinds(const std::vector<int>& fans, const std::vector<int>& skiers) { fanKinds_ = fans; skierKinds_ = skiers; }
+  /// the crowd characters (People::fanKits)
+  void setKits(const std::vector<std::shared_ptr<FanKit>>& kits);
+  /// n people (townsfolk.js: 56) on the plaza
   void init(World& world, const std::vector<std::vector<dvec2>>& pistes, int fans, int skiers);
   void update(double dt, const dvec3& cam, double night, const Scenery* scenery);
-  void add(People& people, const dvec3& cam) const;
+  /// (the townsfolk draw themselves: submit; nothing goes through People any more)
+  void add(People&, const dvec3&) const {}
+  /// poses (LODs, fades, the posing rate) and draws the people in view
+  void submit(Renderer& r, const dvec3& cam);
+  /// walking people step round the player (peoplesim.js PeopleSim.player)
+  void setPlayer(const dvec3& p) { player_ = dvec2(p.x, p.z); hasPlayer_ = true; }
   /// people near a point (peoplehits.js: knocked down by your car): index list
   void near(const dvec3& p, double r, std::vector<int>& out) const;
-  /// knock person i (thrown along v, lies a while, then gets up)
+  /// knock person i (thrown along v, tumbling, lying a while, then getting up)
   void knock(int i, double vx, double vz);
-  size_t count() const { return folk_.size(); }
-  const dvec3& pos(int i) const { return folk_[size_t(i)].pos; }
-  bool down(int i) const { return folk_[size_t(i)].downT > 0; }
+  size_t count() const { return pos_.size(); }
+  const dvec3& pos(int i) const { return pos_[size_t(i)]; }
+  bool down(int i) const;
+  size_t drawn() const { return drawn_; }
   int knocked = 0;
 private:
-  struct Folk {
-    int kind = 0;
-    dvec3 pos{0};
-    double yaw = 0, v = 1.3, phase = 0, wait = 0, downT = 0, vx = 0, vz = 0, speed = 0;
-    int target = -1;
-    bool active = true;
-    float scale = 1;
-  };
-  void pick(Folk& f);
-  World* world_ = nullptr;
-  std::vector<Place> places_;
-  std::vector<Folk> folk_;
+  struct Impl;
+  std::unique_ptr<Impl> I_;
+  std::vector<dvec3> pos_;          // (on stage: the feet; off stage: far away)
   std::vector<int> fanKinds_, skierKinds_;
-  unsigned seed_ = 4242;
-  double rnd() { seed_ = seed_ * 1664525u + 1013904223u; return double(seed_ >> 8) / double(1u << 24); }
-  double night_ = 0;
-  friend class People;
-public:
-  void setKinds(const std::vector<int>& fans, const std::vector<int>& skiers) { fanKinds_ = fans; skierKinds_ = skiers; }
+  dvec2 player_{1e9};
+  bool hasPlayer_ = false;
+  size_t drawn_ = 0;
 };
 
 } // namespace sl

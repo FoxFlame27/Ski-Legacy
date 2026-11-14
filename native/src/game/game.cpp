@@ -110,6 +110,39 @@ int verifyHeights(platform::Platform& p, const AssetPaths& paths, World& world) 
   for (int k = 0; k < 6; k++) SL_INFO("  max |C++ - JS| %-24s %.4f %s", names[k], e[k], k == 5 ? "" : "m");
   if (nReg) SL_INFO("  in the regions (8 m grid): height max %.3f m, mean %.3f m; meshHeight max %.3f m; forest max %.3f", eReg[0], sumReg / nReg, eReg[1], eReg[2]);
   bool ok = e[0] < 0.05 && e[3] < 0.25;
+  // the rocks (vegetation.js genCell, ported in world/scenery.cpp): the reference cells' rocks placed again here and
+  // matched one by one (same grid point position, model, collision size; the top within 5 cm)
+  std::vector<uint8_t> rb;
+  if (paths.readData(p, "rocks_ref.json", rb)) {
+    auto rj = nlohmann::json::parse(rb.begin(), rb.end(), nullptr, false);
+    size_t nJs = 0, nCpp = 0, matched = 0;
+    double eTop = 0, eSize = 0;
+    std::vector<Rock> mine;
+    if (!rj.is_discarded())
+      for (auto& c : rj["cells"]) {
+        Scenery::cellRocks(world, nullptr, c[0].get<int64_t>(), c[1].get<int64_t>(), mine);
+        nCpp += mine.size();
+        std::vector<bool> used(mine.size(), false);
+        for (auto& r : c[2]) {
+          nJs++;
+          double x = r[0], z = r[1], s = r[3], top = r[4];
+          int v = r[2];
+          for (size_t i = 0; i < mine.size(); i++) {
+            const Rock& k = mine[i];
+            if (used[i] || k.v != v || std::fabs(k.x - x) > 1e-3 || std::fabs(k.z - z) > 1e-3) continue;
+            used[i] = true;
+            eTop = std::max(eTop, std::fabs(double(k.y) + 0.75 * k.s - top));
+            eSize = std::max(eSize, std::fabs(double(k.s) - s));
+            if (std::fabs(double(k.s) - s) < 1e-3 && std::fabs(double(k.y) + 0.75 * k.s - top) < 0.05) matched++;
+            break;
+          }
+        }
+      }
+    double share = nJs ? double(matched) / double(nJs) : 0;
+    SL_INFO("  rocks: %zu reference cells, %zu JS rocks, %zu C++ rocks, %zu matched (%.1f %%); max |top| %.4f m, max |size| %.4f",
+            rj.is_discarded() ? size_t(0) : rj["cells"].size(), nJs, nCpp, matched, share * 100, eTop, eSize);
+    ok = ok && nJs > 0 && share > 0.97 && nCpp <= nJs + nJs / 20;
+  } else SL_INFO("  rocks: no data/rocks_ref.json (node native/tools/export_rocks.mjs): not compared");
   SL_INFO("verify-heights: %s", ok ? "PASS" : "FAIL");
   return ok ? 0 : 1;
 }
@@ -143,7 +176,7 @@ Lighting timeOfDay(double hour, const Lighting& day) {
   float moonK = float(1 - smoothstep(-0.12, 0.0, h));
   if (moonK > 0 && moon.y > 0.05f && L.sunIntensity < 0.3f) {
     L.sunDir = moon;
-    L.sunColor = vec3(0.55f, 0.66f, 1.0f);
+    L.sunColor = vec3(0.68f, 0.77f, 1.0f);   // (cool moonlight, less saturated than sky.js's navy (0.5, 0.64, 1))
     L.sunIntensity = 0.35f * moonK;
   }
   float level = float(lerp(0.035, 1, smoothstep(-0.2, 0.3, h)));
@@ -252,7 +285,7 @@ int runGame(const GameOptions& opt) {
   }
 
   Terrain terrain(*dev, world, jobs, q.terrainLodK);
-  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 2 ? 2 : 1};
+  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 2 ? 2 : 1, q.rockR};
   SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
@@ -300,6 +333,29 @@ int runGame(const GameOptions& opt) {
       world.forestCuts.push_back(c);
     }
   }
+  // (the rocks) vegetation.js onExpressBed / onRailBed: none on the railways' formations or the toes of their cuttings
+  // (over a tunnel they may lie on its cover)
+  scenery.railBed = [&transport](double x, double z, double size) {
+    const double reach = 8.5 + size * 0.6;
+    if (transport.express.ok) {
+      Line::Near n = transport.express.line.nearest(x, z, reach + 1);
+      if (n.d < reach) {
+        const double L = transport.express.line.length, w = transport.express.line.wrap(n.s), m = 3.2 + 3;   // PORTAL_IN + 3
+        bool tunnel = false;
+        for (const Span& t : transport.express.tunnels)
+          if ((w > t.s0 + m && w < t.s1 - m) || (w - L > t.s0 + m && w - L < t.s1 - m)) tunnel = true;
+        if (!tunnel) return true;
+      }
+    }
+    if (transport.rail.ok) {
+      Line::Near n = transport.rail.line.nearest(x, z, reach + 1);
+      if (n.d < reach) {
+        for (const Span& t : transport.rail.tunnels) if (n.s > t.s0 + 20 && n.s < t.s1 - (t.end ? -1e9 : 20)) return false;
+        return true;
+      }
+    }
+    return false;
+  };
   loadingFrame("Laying the roads and the railways...");
   RailSweep sweep;
   sweep.build(*dev, transport);
@@ -364,6 +420,7 @@ int runGame(const GameOptions& opt) {
   PeopleSim folk;
   Npcs npcs;
   folk.setKinds(people.fanKinds, people.skierKinds);
+  folk.setKits(people.fanKits);   // (the townsfolk: fans.js's crowd people)
   {
     std::vector<std::vector<dvec2>> pl;
     for (auto& ps : pistes) pl.push_back(ps.pts);
@@ -1132,6 +1189,15 @@ int runGame(const GameOptions& opt) {
     p = drive.pos() + f * (seat <= 1 ? 0.15 : -0.75) + rt * (seat == 1 || seat == 3 ? -0.42 : 0.42) + dvec3(0, 0.45, 0);
     return true;
   };
+  // your car's frame and seats while you drive: the players riding with you, the taxi's fare (vehicles.js localCar)
+  auto myCarFrame = [&](glm::dmat4& M, CarTemplate& t) {
+    if (rideKind != Ride::Car || !drive.active()) return false;
+    M = drive.carMatrix(); t = drive.carTemplate();
+    return t.S != nullptr;
+  };
+  mpv.myCar = myCarFrame;
+  mpv.models = &vmodels;
+  oddJobs.carFrame = myCarFrame;
   // the chalets of the others (MP.chalets), buying through the server, visiting with the owner's yes
   pc.chaletOwner = [&](int plot) -> std::string {
     if (!mp.active()) return "";
@@ -1470,6 +1536,7 @@ int runGame(const GameOptions& opt) {
           maxSpeed = 0;
           input.releaseInjected();
           at = AT::Ski; phaseFrame = -1; skiFrame0 = frame + 1;
+          if (off("fpview")) player.view = Player::View::First;   // (debug: the run skied in first person: the hands on the poles)
           break;
         }
         default: break;
@@ -2024,6 +2091,7 @@ int runGame(const GameOptions& opt) {
     fc.toggleSkis = input.takePressed(Action::Skis);
     fc.lookX = paused ? 0 : input.lookX(); fc.lookY = paused ? 0 : input.lookY(); fc.wheel = input.wheel();
     fc.now = opt.autotest ? simTime : now; fc.lastLook = opt.autotest ? -1e9 : input.lastLookTime();
+    fc.fovSetting = fovSetting; fc.camShake = save.settingOn("camShake");
     player.frameUpdate(frameDt, acc / STEP, fc, ctl);
     if (started && !paused && !races.active()) police.vehicleHits(frameDt, busBoxes);
 
@@ -2083,6 +2151,7 @@ int runGame(const GameOptions& opt) {
       if (races.active() && oddJobs.active()) oddJobs.drop();
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
     }
+    folk.setPlayer(player.pos);
     if (aiOn) folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
     npcs.off = !aiOn;
     npcs.update(paused ? 0 : frameDt, player.pos, cam.pos, 1 - light.night);
@@ -2183,7 +2252,17 @@ int runGame(const GameOptions& opt) {
       dvec3 sp, sf;
       if (!mp.active() || !mp.ride.on) { rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
       else {
-        if (mp.rideSeat(sp, sf)) player.setSeat(sp, sf);
+        // (vehicles.js seatWorld: the seat point of that car as it is drawn here)
+        glm::dmat4 cm(1);
+        CarTemplate ct;
+        double roll = 0;
+        three::V3 pts[4];
+        int n = mpCarFrame(mp, vmodels, mp.ride.owner, cm, ct, roll) ? carSeatPoints(ct, pts) : 0;
+        if (n > 0) {
+          sp = dvec3(cm * glm::dvec4(pts[std::max(0, std::min(mp.ride.seat, n - 1))], 1));
+          sf = glm::normalize(dvec3(cm[2][0], 0, cm[2][2]));
+          player.setSeat(sp, sf);
+        } else if (mp.rideSeat(sp, sf)) player.setSeat(sp, sf);
         rideLine = "Riding with " + mp.ride.owner;
         prompt = "Get out";
         if (interact) {
@@ -2443,6 +2522,24 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(eye, c);
       cam.fovY = 55; cam.nearZ = 0.2f;
     }
+    if (off("carside") && started) {
+      // (debug: a low side view of your car, else of the nearest traffic car with people in it: the boots under the sill)
+      glm::dmat4 M(0);
+      if (rideKind == Ride::Car && drive.active()) M = drive.carMatrix();
+      else {
+        double bd = 80;
+        for (const auto& c : traffic.list)
+          if ((c.mode == Traffic::Car::Mode::Road || c.mode == Traffic::Car::Mode::Knocked) && std::hypot(c.x - player.pos.x, c.z - player.pos.z) < bd) {
+            bd = std::hypot(c.x - player.pos.x, c.z - player.pos.z);
+            M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
+          }
+      }
+      if (M[3][3] != 0) {
+        dvec3 eye = dvec3(M * glm::dvec4(2.3, 0.3, -0.2, 1)), at = dvec3(M * glm::dvec4(0, 0.4, -0.2, 1));
+        cam.lookAt(eye, at);
+        cam.fovY = 50; cam.nearZ = 0.05f;
+      }
+    }
     if (toastUntil != toastShownUntil) {   // (the old toasts go to the HUD's flash line)
       toastShownUntil = toastUntil;
       bool bad = toast.find("Crash") != std::string::npos || toast.find("Too steep") != std::string::npos || toast.find("wrecked") != std::string::npos;
@@ -2525,7 +2622,17 @@ int runGame(const GameOptions& opt) {
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
     rig.showcase = showcaseOn;
     rig.sled = rideKind == Ride::Sled;
+    // (drive.js placeRig) you at the wheel: posed in the seat in the car's frame; your eyes are the cockpit camera's
+    rig.car.on = rideKind == Ride::Car && drive.active();
+    rig.car.passenger = false;
+    if (rig.car.on) { rig.car.g = drive.carMatrix(); rig.car.t = drive.carTemplate(); rig.car.steer = drive.steerAngle(); rig.car.inside = drive.cockpit(); }
+    else if (rideKind == Ride::Passenger && mp.active() && mp.ride.on) {   // (carride.js: your legs in the car's footwell)
+      double roll = 0;
+      rig.car.on = rig.car.passenger = mpCarFrame(mp, vmodels, mp.ride.owner, rig.car.g, rig.car.t, roll) && rig.car.t.S;
+      rig.car.seat = mp.ride.seat;
+    }
     rig.update(paused ? 0 : frameDt, player, world);
+    drive.setEyeRig(rig.eyeRigOk, dvec3(rig.eyeRig));
     scenery.dynamic.clear();
     if (transport.loaded()) {
       drive.fillColliders(scenery.dynamic);
@@ -2841,7 +2948,7 @@ int runGame(const GameOptions& opt) {
     if (drawVillage) chalets.draw(renderer, cam.pos);
     people.begin(paused ? 0 : frameDt);
     if (!indoor) {
-      if (aiOn) { folk.add(people, cam.pos); traffic.addPeople(people, cam.pos, people.skierKinds.empty() ? people.fanKinds : people.skierKinds); }
+      if (aiOn) { folk.submit(renderer, cam.pos); traffic.addPeople(people, cam.pos, people.skierKinds.empty() ? people.fanKinds : people.skierKinds); }
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }
@@ -2850,10 +2957,14 @@ int runGame(const GameOptions& opt) {
     people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);
     npcs.submit(renderer, cam.pos);
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
-    bool hideRig = (player.view == Player::View::First && player.mode != PlayerMode::Fall) || (rideKind == Ride::Car && drive.cockpit()) ||
-                   ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || rescue.carried();
+    // (first person: your own body stays visible below the eye, the head folded away; at the wheel too: player.js /
+    // drive.js placeRig)
+    bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || rescue.carried();
     railway.insideView = rideKind == Ride::Rail && seatView;
     express.insideView = rideKind == Ride::Express && seatView;
+    // first person on skis: the gloves-and-poles view model rides on the camera (player.js, after the camera)
+    rig.updateFpView(paused ? 0 : frameDt, cam, player, *dev, assets);
+    player.noteCamera(cam);
     if (drawSkier) rig.submit(renderer, hideRig);
     if (!indoor) {   // the snow trails: you, the vehicles on the snow, the resort's people
       if (rideKind == Ride::None) trails.player(player);
@@ -2907,6 +3018,7 @@ int runGame(const GameOptions& opt) {
           SL_INFO("[autotest] skied %.0f m along the run (%.0f m from the start), dropped %.0f m, top speed %.1f km/h, final %.1f km/h, %d landings, %d crashes, mode %s",
                   skiDist, glm::length(dvec2(player.pos.x - startPos.x, player.pos.z - startPos.z)), skiDrop, maxSpeed * 3.6, player.speed() * 3.6, nLand, nCrash, player.modeName());
           perfReport("skiing down the run (every frame rendered)");
+          if (off("fpview")) player.view = Player::View::Third;
           at = haveResort ? AT::Collide : AT::Done;
           phaseFrame = 0;
         }

@@ -33,7 +33,8 @@ struct PlayerFrameControls {
   bool toggleView = false, toggleSkis = false;
   float lookX = 0, lookY = 0, wheel = 0;
   double now = 0, lastLook = -1e9;
-  float fovSetting = 65;
+  float fovSetting = 65;     // (SETTINGS · Field of view: live.fov)
+  bool camShake = true;      // (SETTINGS · Camera shake: live.camShake)
 };
 
 enum class PlayerMode : uint8_t { Walk, Ski, Fall, Sit };   // Sit: riding a lift (lifts.js / player.js sitOn)
@@ -63,6 +64,17 @@ public:
   void fixedUpdate(double h, const PlayerControls& c);
   void frameUpdate(double dt, double alpha, const PlayerFrameControls& f, const PlayerControls& c);
   void cameraFor(Camera& cam) const;
+  /// the frame's final camera (whatever placed it: a vehicle, a ride): player.js's `camera`, which a first-person mode
+  /// change eases over from and the crash camera starts behind
+  void noteCamera(const Camera& cam);
+  /// (player.js updateFpCrash) first person, wiping out: the third-person camera watches the tumble
+  bool fpCrash() const { return fpCrash_; }
+  /// first person and not watching a crash (player.js `fp`: the rig's head folded away, its eyes the camera)
+  bool firstPerson() const { return view == View::First && !fpCrash_; }
+  /// (player_skier.cpp, after the rig's pose) what the first-person camera takes from your own body: the posed eye
+  /// (eyeStable) relative to the feet, the pole plants' timers, the point a flip turns about relative to the feet
+  struct FpRigFeed { bool ok = false; dvec3 eyeOff{0, 1.26, 0}; double plantT[2] = {1, 1}; bool hasFlipC = false; dvec3 flipCOff{0}; } fpRig;
+  double skidAmt() const { return skidAmt_; }
   /// (Phase 5, vehiclehits.js / peoplehits.js knock) thrown over by a vehicle or a person: velocity v, kind 0 slam,
   /// 1 tumble, 2 roll; `strike`: a Crash event (counts toward the rescue), else a Bump (you just get up)
   void knockDown(int side, const dvec3& v, int kind, bool strike);
@@ -130,6 +142,8 @@ private:
   void bounce(double nx, double nz, double speed, bool soft);
   // camera
   void updateCamera(double dt, const PlayerFrameControls& f);
+  void updateFirstPerson(double dt, const PlayerFrameControls& f, double sp);
+  void updateFpCrash();
 
   World& world_;
   Scenery* scenery_;
@@ -149,9 +163,20 @@ private:
   double camYaw_ = 0, camPitch_ = -0.12, camDist_ = 4.6, lookYaw_ = 0, lookPitch_ = 0;
   dvec3 camPos_{0, 3, 6}, camLook_{0}, camFocus_{0};
   double camFocusY_ = 0;
-  bool camFocusInit_ = false;
+  bool camFocusInit_ = false, camShake_ = true;
   double camDip_ = 0, camDipV_ = 0, fovKick_ = 0, airBlend_ = 0, travelYaw_ = PI, shake_ = 0, camFov_ = 65;
-  double fpEye_ = 1.26;
+  // first person (player.js fpCam / fpBase / fpSlope / fpCrash)
+  struct FpCam {
+    dvec3 off{0}, offV{0}; bool init = false;
+    double lead = 0, leadV = 0, roll = 0, rollV = 0, blend = 1, t = 0;
+    int mode = -1;   // (-1: none yet; the PlayerMode; 99: back from the crash camera)
+    glm::dquat fromQ{1, 0, 0, 0}; dvec3 fromP{0};
+  } fpCam_;
+  double fpBase_ = 0, fpSlope_ = 0;
+  glm::dquat fpQ_{1, 0, 0, 0};
+  bool fpCrash_ = false, followNow_ = false;
+  glm::dquat lastCamQ_{1, 0, 0, 0};
+  dvec3 lastCamP_{0};
   double time_ = 0;
   double lastSteerSign_ = 0, skatePhase_ = 0.7, tuckPoleT_ = 0.5;   // (player.js pole plants)
 };

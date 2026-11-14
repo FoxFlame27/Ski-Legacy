@@ -14,6 +14,7 @@
 //                    the regions' forest density
 //   data/resort.*    (Phase 2, written by export_resort.mjs, run at the end in its own process): the village, the
 //                    resort dressing, lifts and stations as built by the game's own modules
+//   data/rocks_ref.json (export_rocks.mjs, its own process) the game's rocks in a spread of cells, for --verify-heights
 //
 // The analytic base terrain (world.js baseHeight + wolkenspitze.js + legacypeak.js + noise.js) is ported to C++
 // exactly; only data and the closures (cuts) that would be a large port for Phase 1 come from here.
@@ -253,6 +254,11 @@ log('wrote', path.join(OUT, 'world.json.zst'), (writeData(OUT, 'world.json', JSO
 {
   const r = spawnSync(process.execPath, [path.join(HERE, 'export_resort.mjs')], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('export_resort.mjs failed'); process.exitCode = 1; }
+}
+// ---------------------------------------------------------------- the rocks' reference cells (--verify-heights)
+{
+  const r = spawnSync(process.execPath, [path.join(HERE, 'export_rocks.mjs')], { stdio: 'inherit' });
+  if (r.status !== 0) { console.error('export_rocks.mjs failed'); process.exitCode = 1; }
 }
 // ---------------------------------------------------------------- Phase 4: the UI fonts
 {

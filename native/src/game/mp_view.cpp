@@ -36,6 +36,26 @@ bool visible(const RemotePlayer& r, const std::string& interior, const dvec3& ca
 }
 } // namespace
 
+bool mpCarFrame(const Multiplayer& mp, const VehicleModels& vm, const std::string& owner, glm::dmat4& car, CarTemplate& t, double& roll) {
+  for (const auto& [id, r] : mp.players) {
+    if (r.name != owner || !r.vehs.contains("car") || !r.vehs["car"].is_object()) continue;
+    const Json& v = r.vehs["car"];
+    const std::string model = str(v.value("cfg", Json::object()), "id");
+    const VehicleModel* m = vm.car(model);
+    if (!m || !m->ok()) return false;
+    dvec3 p;
+    double yaw;
+    roll = 0;
+    if (r.ok && (r.flags & net::F::car) && r.interior.empty()) { p = r.sm; yaw = r.smYaw; roll = std::clamp(r.lean, -3.2, 3.2); }
+    else if (!atOf(v, p, yaw)) return false;
+    // (as addDraw draws it)
+    car = glm::translate(glm::dmat4(1), p + dvec3(0, 0.02, 0)) * glm::rotate(glm::dmat4(1), yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), roll, dvec3(0, 0, 1));
+    t = CarTemplate::of(carSeatsFor(model), double(m->size.y));
+    return true;
+  }
+  return false;
+}
+
 void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, const std::string& interior, double dt) {
   int fallback = people.kind("skier_blue");
   for (const auto& [id, r] : mp.players) {
@@ -61,8 +81,7 @@ void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, 
       case net::St::Ski: p.anim = (r.flags & net::F::tuck) ? PAnim::Tuck : PAnim::Ski; it->second += dt; break;
       case net::St::Sit: case net::St::Ride: p.anim = PAnim::Sit; p.skis = p.skis && vk != "car" && vk != "bus" && vk != "train" && vk != "express"; break;
       case net::St::Drive:
-        if (r.flags & net::F::car) continue;   // (in the car: hidden behind the glass, the car is drawn)
-        p.anim = PAnim::Sit; p.skis = false; break;     // (a snowmobile: seated on it)
+        p.anim = PAnim::Sit; p.skis = false; break;     // (at the wheel of their car (below), or astride a snowmobile)
       case net::St::Fall: p.anim = PAnim::Lie; break;
       case net::St::Fly: p.anim = PAnim::Idle; break;
       default:
@@ -71,11 +90,33 @@ void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, 
         break;
     }
     p.phase = it->second;
-    // riding in YOUR car: in its seat as it is drawn here (no lag)
-    if (inVeh && vk == "car" && owner == mp.name && myCarSeat) {
-      dvec3 sp;
-      double yaw;
-      if (myCarSeat(seat, sp, yaw)) { p.pos = sp; p.yaw = yaw; p.anim = PAnim::Sit; p.skis = false; }
+    // (vehicles.js seatFor) in a car: at the wheel of their own, riding with someone, riding in YOUR car (in its seat as
+    // it is drawn here: no lag): the seat point of that car, the legs into its footwell (remote.js carLegs: seatLegs)
+    std::string carOwner;
+    int carSeat = 0;
+    if (inVeh && vk == "car") { carOwner = owner; carSeat = seat; }
+    else if (net::St(r.st) == net::St::Drive && (r.flags & net::F::car)) carOwner = r.name;
+    if (!carOwner.empty()) {
+      glm::dmat4 M(1);
+      CarTemplate ct;
+      double roll = 0;
+      bool ok = carOwner == mp.name ? myCar && myCar(M, ct) : models && mpCarFrame(mp, *models, carOwner, M, ct, roll);
+      if (!ok && carOwner == mp.name && myCarSeat) {   // (a car without seat hints)
+        dvec3 sp;
+        double yaw;
+        if (myCarSeat(seat, sp, yaw)) { p.pos = sp; p.yaw = yaw; p.anim = PAnim::Sit; p.skis = false; }
+      }
+      if (!ok && net::St(r.st) == net::St::Drive) continue;   // (their car not drawn here: nothing to sit in)
+      if (ok && std::fabs(roll) > 0.6) continue;              // (rolled over: inside the car, as on their screen)
+      three::V3 pts[4];
+      int n = ok ? carSeatPoints(ct, pts) : 0;
+      if (n > 0) {
+        int s = std::max(0, std::min(carSeat, n - 1));
+        p.pos = dvec3(M * glm::dvec4(pts[s], 1));
+        p.yaw = std::atan2(M[2][0], M[2][2]);
+        p.anim = PAnim::Sit; p.skis = false;
+        p.car.how = CarSeatRef::Seated; p.car.car = M; p.car.t = ct; p.car.seat = carSeat; p.car.driver = carSeat == 0;
+      }
     }
     people.add(p);
   }

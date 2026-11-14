@@ -1078,6 +1078,7 @@ int runGame(const GameOptions& opt) {
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
   bool heliOk = true;
+  const bool heliRun = at == AT::Heli;
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
   bool raceOk = true, jobOk = true, policeOk = true, chaletOk = true, weatherOk = true, sledOk = true;
   struct P5T { const Course* course = nullptr; int resF = -1, jailF = -1, arrestF = -1; int64_t money0 = 0; double jail0 = 0; int done0 = 0, furn0 = 0; bool releasedChecked = false; Jobs::Offer offer; bool haveOffer = false; } t5;
@@ -2048,7 +2049,11 @@ int runGame(const GameOptions& opt) {
       static const char* PH[] = {"none", "inbound", "settle", "pickup", "hover", "home", "arrive", "ambulance"};
       if (f == 0) { T.mode = off("helitest") ? 3 : off("wardtest") ? 2 : off("ambtest") ? 1 : 0; input.releaseInjected(); player.hasSkis = true; if (save.skis.empty()) save.skis = "rental"; }
       if (T.mode <= 1 && T.wardF < 0) {
-        if (f == 2) { player.setSkisOn(true); player.teleport(-342.68, -244.42, 0.6); }
+        if (f == 2) {   // (flat open snow by default: it lands; SKI_LEGACY_SPOT=x,z: somewhere else, e.g. a steep slope or the trees: the winch)
+          double sx = -342.68, sz = -244.42;
+          if (const char* e = std::getenv("SKI_LEGACY_SPOT")) std::sscanf(e, "%lf,%lf", &sx, &sz);
+          player.setSkisOn(true); player.teleport(sx, sz, 0.6);
+        }
         if (f == 40) {
           T.money0 = save.money;
           player.knockDown(1, dvec3(0), 0, false);
@@ -3553,6 +3558,7 @@ int runGame(const GameOptions& opt) {
       SL_INFO("[perf] quality '%s': peak RSS %.0f MB (budget on Switch: well under 3 GB)", q.name.c_str(), plat->peakMemoryBytes() / 1048576.0);
       ok = ok && audioOk && nightOk;
     }
+    if (heliRun) ok = heliOk;   // (the helicopter / rescue / ward debug run: its own verdict)
     SL_INFO("[autotest] %s", ok ? "PASS" : "FAIL");
     audio.stop(*plat);
     return ok ? 0 : 1;

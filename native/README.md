@@ -843,7 +843,7 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
   (and once more through the doors) in the dark moment of the fade as you go in, and each pane shows its part.
 - Debug runs (with `--autotest --png out.png`, a screenshot per stage and the checks logged, `[helitest] PASS`):
   `SKI_LEGACY_DEBUG=rescuetest` (a wipeout on the mountain, the landing, the flight, the ambulance, the ward, out of the
-  doors), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
+  doors; `SKI_LEGACY_SPOT=493,-393`: the wipeout on a steep slope instead, so it hovers and winches you up), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
   landing, getting out).
 
 **Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a

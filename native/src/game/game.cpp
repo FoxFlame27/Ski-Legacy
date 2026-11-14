@@ -621,7 +621,7 @@ int runGame(const GameOptions& opt) {
   auto boardLift = [&](const Lifts::Station& st, bool up) {
     LiftLine& line = *st.line;
     // (Phase 4, main.js boardLift) skis first; a day pass or a gondola ticket, else the line's price; riding down free
-    if (save.skis.empty()) { flash("Rent skis first - the ski shop in Legacy Village", Hud::Flash::Bad); return; }
+    if (save.skis.empty()) { flash("Buy skis first - the ski shop in Legacy Village", Hud::Flash::Bad); return; }
     bool useTicket = !save.hasPass() && up && line.main && save.tickets > 0;
     bool free = save.hasPass() || !up || useTicket;
     int price = line.price > 0 ? line.price : line.gondola ? Prices::gondola : Prices::chair;
@@ -1034,7 +1034,7 @@ int runGame(const GameOptions& opt) {
     if (showcaseOn) { showcaseOn = false; player.teleport(4, 34, PI); }
     started = true;
     if (!opt.autotest) plat->setRelativeMouse(true);
-    flash(save.skis.empty() ? "Welcome to Legacy Village \xC2\xB7 rent skis at the ski shop" : "Welcome back to Legacy Village", Hud::Flash::Good);
+    flash(save.skis.empty() ? "Welcome to Legacy Village \xC2\xB7 buy skis at the ski shop" : "Welcome back to Legacy Village", Hud::Flash::Good);
   };
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
@@ -2668,6 +2668,10 @@ int runGame(const GameOptions& opt) {
           auto id = [&](const char* slot) { return eq.is_object() && eq.contains(slot) && eq[slot].is_string() ? eq[slot].get<std::string>() : std::string(); };
           (void)col;
           rig.applyOutfitIds(*dev, id("jacket"), id("trousers"), id("helmet"), id("lens"));
+      // (main.js: player.hasSkis = !!save.skis: a new save has no skis, so none on your back and none to put on; the
+      // player started with hasSkis = true in single player)
+      player.hasSkis = !save.skis.empty();
+      if (!player.hasSkis && player.skisOn) player.setSkisOn(false);
           if (opt.autotest) SL_INFO("[autotest] outfit applied: %s -> %s", eq.dump().c_str(), rig.dressed() ? "recoloured" : "original");
         }
       }
@@ -2863,7 +2867,7 @@ int runGame(const GameOptions& opt) {
         for (const Piste& ps : pistes) for (size_t i = 0; i < ps.pts.size(); i += 2) { double d = glm::length(ps.pts[i] - dvec2(player.pos.x, player.pos.z)); if (d < bd) { bd = d; hf.location = ps.name; } }
         if (hf.location.empty()) hf.location = rideKind == Ride::Car || transport.laneDistance(player.pos.x, player.pos.z) < 6 ? "On the road" : "Backcountry";
       }
-      if (save.skis.empty()) hf.objective = "Rent skis at the ski shop in Legacy Village";
+      if (save.skis.empty()) hf.objective = "Buy skis at the ski shop in Legacy Village";
       else if (!save.hasPass() && save.tickets <= 0 && save.day == 1 && save.stats.distance < 200) hf.objective = "Buy a day pass or ride a lift";
       if (tmap.mark.on) {
         hf.waypoint = true;

@@ -1020,7 +1020,7 @@ function talkToSeller() {
 function boardLift(st) {
   if (chaseBlocked()) return;
   const line = st.line;
-  if (!player.hasSkis) { hud.flash('Rent skis first', 'bad'); audio.play('error'); return; }
+  if (!player.hasSkis) { hud.flash('Buy skis first at the ski shop', 'bad'); audio.play('error'); return; }
   if (isMP() && !multiplayer.transit.liftGate(st, () => boardLift(st))) return; // (multiplayer: a seat in the next cabin, when it is there)
   const useTicket = !hasPass() && st.up && line.spec.main && (save.tickets || 0) > 0;
   const free = hasPass() || !st.up || useTicket; // riding the gondola down is free
@@ -1777,7 +1777,7 @@ function findInteraction() {
 function objective() {
   const start = startObjective(save, player, buildMode); // rent a chalet -> furnish it -> rent skis
   if (start) return start;
-  if (!player.hasSkis) return 'Rent skis at the ski shop';
+  if (!player.hasSkis) return 'Buy skis at the ski shop';
   if (gondolaRides === 0 && Math.hypot(player.pos.x, player.pos.z) < 400 && save.stats.races === 0) return 'Take the gondola up the mountain';
   if (save.stats.wins === 0) return 'Find a race and win it';
   return '';

@@ -179,7 +179,7 @@ export class Heli {
     const lock = () => this.input.lock();
     if (!CARD_DIALOG) return this.openDialogClassic();
     if (!this.player.hasSkis) {
-      this.hud.dialog('Heli-Ski', 'You will need skis up there. Rent a pair at the ski shop in the village, then come back.', [{ label: 'OK', act: lock }], { kicker: 'HELI-SKI BASE' });
+      this.hud.dialog('Heli-Ski', 'You will need skis up there. Buy a pair at the ski shop in the village, then come back.', [{ label: 'OK', act: lock }], { kicker: 'HELI-SKI BASE' });
       return;
     }
     const broke = save.money < HELI_PRICE, H = this.home;
@@ -219,7 +219,7 @@ export class Heli {
   openDialogClassic() {
     const lock = () => this.input.lock();
     if (!this.player.hasSkis) {
-      this.hud.dialog('Heli-Ski', 'You will need skis up there. Rent a pair at the ski shop in the village, then come back.', [{ label: 'OK', act: lock }]);
+      this.hud.dialog('Heli-Ski', 'You will need skis up there. Buy a pair at the ski shop in the village, then come back.', [{ label: 'OK', act: lock }]);
       return;
     }
     const broke = save.money < HELI_PRICE;

@@ -74,8 +74,26 @@ struct FurnitureDef {
   bool small = false, flat = false, seat = false;
 };
 
+/// a room the web game builds as its own scene (export_rooms.mjs): the room's frame (x across, y up from the floor, z:
+/// + toward the door), what you bump into and what you can aim at
+struct RoomDef {
+  bool ok = false;
+  double W = 8, D = 8, H = 3, eye = 1.62, spawnX = 0, spawnZ = 0, spawnYaw = 0;
+  double bounds[4] = {-4, 4, -4, 4};           // x0, x1, z0, z1 your feet stay within
+  struct Circle { double x, z, r; };
+  std::vector<Circle> obstacles;
+  bool hasCounter = false; double counter[4] = {0, 0, 0, 0};   // minX, maxX, minZ, maxZ
+  struct Hit { std::string kind, id, name; dvec3 bmin{0}, bmax{0}; };
+  std::vector<Hit> hits;
+  bool hasClerk = false; double clerkX = 0, clerkZ = 0, clerkYaw = 0; std::string clerkChar;
+  vec3 background{0.01f, 0.006f, 0.003f};
+  struct Light { int type; vec3 color; float intensity, distance; dvec3 p; };   // type 0 point, 1 spot, 2 directional, 3 hemisphere, 4 ambient
+  std::vector<Light> lights;
+};
+
 struct PlayData {
   bool ok = false;
+  RoomDef shop;
   std::vector<Course> courses, busRaces;
   bool hasStand = false;
   double standX = 0, standZ = 0, standYaw = 0;

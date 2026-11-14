@@ -111,7 +111,38 @@ Course parseCourse(const nlohmann::json& c, const std::vector<uint8_t>& bin) {
 }
 } // namespace
 
+namespace {
+RoomDef parseRoom(const nlohmann::json& r) {
+  RoomDef o;
+  if (!r.is_object()) return o;
+  o.ok = true;
+  o.W = num(r, "W", 8); o.D = num(r, "D", 8); o.H = num(r, "H", 3); o.eye = num(r, "eye", 1.62);
+  if (r.contains("spawn") && r["spawn"].is_array() && r["spawn"].size() >= 3) { o.spawnX = r["spawn"][0]; o.spawnZ = r["spawn"][1]; o.spawnYaw = r["spawn"][2]; }
+  if (r.contains("bounds") && r["bounds"].is_array() && r["bounds"].size() >= 4) for (size_t k = 0; k < 4; k++) o.bounds[k] = r["bounds"][k];
+  if (r.contains("obstacles")) for (auto& q : r["obstacles"]) if (q.is_array() && q.size() >= 3) o.obstacles.push_back({q[0], q[1], q[2]});
+  if (r.contains("counter") && r["counter"].is_array() && r["counter"].size() >= 4) { o.hasCounter = true; for (size_t k = 0; k < 4; k++) o.counter[k] = r["counter"][k]; }
+  if (r.contains("hits")) for (auto& h : r["hits"]) {
+    if (!h.contains("box") || h["box"].size() < 6) continue;
+    auto& b = h["box"];
+    o.hits.push_back({str(h, "kind"), str(h, "id"), str(h, "name"), dvec3(b[0].get<double>(), b[1].get<double>(), b[2].get<double>()), dvec3(b[3].get<double>(), b[4].get<double>(), b[5].get<double>())});
+  }
+  if (r.contains("clerk") && r["clerk"].is_object()) { o.hasClerk = true; o.clerkX = num(r["clerk"], "x"); o.clerkZ = num(r["clerk"], "z"); o.clerkYaw = num(r["clerk"], "yaw"); o.clerkChar = str(r["clerk"], "char"); }
+  if (r.contains("background") && r["background"].is_array() && r["background"].size() >= 3) o.background = vec3(r["background"][0].get<float>(), r["background"][1].get<float>(), r["background"][2].get<float>());
+  if (r.contains("lights")) for (auto& l : r["lights"]) {
+    const std::string t = str(l, "type");
+    RoomDef::Light q;
+    q.type = t == "point" ? 0 : t == "spot" ? 1 : t == "dir" ? 2 : t == "hemi" ? 3 : 4;
+    q.color = vec3(l["color"][0].get<float>(), l["color"][1].get<float>(), l["color"][2].get<float>());
+    q.intensity = float(num(l, "intensity", 1)); q.distance = float(num(l, "distance"));
+    q.p = dvec3(l["p"][0].get<double>(), l["p"][1].get<double>(), l["p"][2].get<double>());
+    o.lights.push_back(q);
+  }
+  return o;
+}
+} // namespace
+
 bool PlayData::load(const nlohmann::json& j, const std::vector<uint8_t>& bin) {
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("shop")) shop = parseRoom(j["rooms"]["shop"]);
   for (auto& c : j["courses"]) { Course o = parseCourse(c, bin); if (o.line.n > 1) courses.push_back(std::move(o)); }
   for (auto& c : j["busRaces"]) { Course o = parseCourse(c, bin); if (o.line.n > 1) busRaces.push_back(std::move(o)); }
   if (j.contains("stand") && j["stand"].is_object()) { hasStand = true; standX = num(j["stand"], "x"); standZ = num(j["stand"], "z"); standYaw = num(j["stand"], "yaw"); }

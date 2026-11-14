@@ -130,6 +130,10 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
     out.furniture = C.FURNITURE; out.categories = C.CATEGORIES; out.sellRefund = C.SELL_REFUND;
   } catch (err) { log('chalet plan skipped:', err.message); }
 
+  // ---------------------------------------------------------------- the rooms you walk into (export_rooms.mjs)
+  try { out.rooms = await (await import('./export_rooms.mjs')).exportRooms({ THREE, SRC, models, loadGLB, pack, log, r4 }); }
+  catch (err) { log('rooms skipped:', err.stack?.split('\n').slice(0, 3).join(' | ')); }
+
   // ---------------------------------------------------------------- capture
   pack.capture(pScene);
   pack.finish({ colliders: pack.colliderOut(pCols.filter((c) => c && Number.isFinite(c.x))), surfaces: [], play: out });

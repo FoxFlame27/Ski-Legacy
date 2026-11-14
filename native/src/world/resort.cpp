@@ -133,6 +133,7 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
   // (a canvas recorded `exact` (the trail map on the village's notice board) is replayed with the rest of the canvas
   // API it uses: line caps, dashes, putImageData's pixels and the fonts it names, as the browser draws them)
   const bool exact = c.value("exact", false);
+  const bool grad = c.value("grad", false);
   g.systemFonts(exact);
   for (auto& op : c["ops"]) {
     if (!op.is_array() || op.empty()) continue;
@@ -141,6 +142,21 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
       const std::string k = op[1].get<std::string>();
       const auto& v = op[2];
       if (k == "fillStyle" && v.is_string()) g.fillStyle(v.get<std::string>());
+      else if (k == "fillStyle" && grad && v.is_object() && v.contains("s") && v["s"].is_array() && !v["s"].empty()) {
+        // (a gradient, the rooms' canvases: its colour stops' mean over their offsets: the paper tags, the signs' fields
+        // and the vignettes are gentle ramps)
+        const auto& S = v["s"];
+        vec4 sum(0);
+        float wsum = 0;
+        for (size_t i = 0; i < S.size(); i++) {
+          if (!S[i].is_array() || S[i].size() < 2 || !S[i][1].is_string()) continue;
+          const float o0 = i > 0 && S[i - 1][0].is_number() ? S[i - 1][0].get<float>() : 0.f, o1 = S[i][0].is_number() ? S[i][0].get<float>() : 1.f;
+          const float o2 = i + 1 < S.size() && S[i + 1][0].is_number() ? S[i + 1][0].get<float>() : 1.f;
+          const float w = std::max(1e-3f, (o1 - o0) * 0.5f + (o2 - o1) * 0.5f + (i == 0 ? o1 : 0.f) + (i + 1 == S.size() ? 1.f - o1 : 0.f));
+          sum += Canvas2D::parseColor(S[i][1].get<std::string>()) * w; wsum += w;
+        }
+        if (wsum > 0) g.fillColor(sum / wsum);
+      }
       else if (k == "strokeStyle" && v.is_string()) g.strokeStyle(v.get<std::string>());
       else if (k == "lineWidth" && v.is_number()) g.lineWidth(v.get<float>());
       else if (k == "globalAlpha" && v.is_number()) g.globalAlpha(v.get<float>());
@@ -298,12 +314,19 @@ const nlohmann::json* Resort::transportNet() const {
   return &(*tjson_)["net"];
 }
 
-std::shared_ptr<Model> Resort::transportModel(const nlohmann::json& parts) {
+std::shared_ptr<Model> Resort::roomModel(const std::string& id) const {
+  for (auto& [k, m] : rooms_) if (k == id) return m;
+  return nullptr;
+}
+
+std::shared_ptr<Model> Resort::transportModel(const nlohmann::json& parts) { return partsModel(parts, tbin_, tmats_); }
+
+std::shared_ptr<Model> Resort::partsModel(const nlohmann::json& parts, const std::vector<uint8_t>& bin, const std::vector<Material>& mats) {
   auto model = std::make_shared<Model>();
   Mesh mesh;
   for (auto& p : parts) {
     int mi = p["mat"];
-    auto m = modelFromBin(dev_, tbin_.data(), tbin_.size(), p, mi >= 0 && size_t(mi) < tmats_.size() ? tmats_[size_t(mi)] : Material{});
+    auto m = modelFromBin(dev_, bin.data(), bin.size(), p, mi >= 0 && size_t(mi) < mats.size() ? mats[size_t(mi)] : Material{});
     if (!m) continue;
     Primitive pr = std::move(m->meshes[0].primitives[0]);
     pr.material = int(model->materials.size());
@@ -366,8 +389,12 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     M.doubleSided = m.value("double", false) || M.doubleSided;
     M.vertexColor = m.value("vc", false);
     auto& e = m["emissive"];
+    // (a GLB material with its own emissive map keeps it: three multiplies the map by the factor the pack carries; the
+    // pack's factor alone, without the map, would light the whole piece)
+    const gfx::Texture glbEm = m["glb"].is_object() ? M.emissiveTex : gfx::Texture{};
     M.emissive = vec3(e[0].get<float>(), e[1].get<float>(), e[2].get<float>());
     M.emissiveTex = canvas(m["emissiveMap"]);
+    if (glbEm && !M.emissiveTex) M.emissiveTex = glbEm;
     if (m["night"].is_array()) { float d = m["night"][0], n = m["night"][1]; M.emissiveNight = vec2(d, n - d); }
     float ne = m.value("nightEmissive", 0.f);
     if (ne > 0) { M.emissive = vec3(1); M.emissiveNight = vec2(0, ne); }
@@ -496,7 +523,19 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   }
   SL_INFO("%s: %zu props, %zu mesh chunks, %zu canvases, %zu colliders", name.c_str(), nProps_ - props0, chunks_.size() - chunks0, canvasTex.size(), cols.size() - cols0);
   if (name == "transport") { tjson_ = jp; tbin_ = std::move(bin); tmats_ = mats; }
-  if (name == "play") { pjson_ = jp; pbin_ = std::move(bin); }
+  if (name == "play") {
+    // (the rooms you walk into: one model each, export_rooms.mjs)
+    if (j.contains("play") && j["play"].contains("rooms") && j["play"]["rooms"].is_object())
+      for (auto it = j["play"]["rooms"].begin(); it != j["play"]["rooms"].end(); ++it)
+        if (it.value().contains("parts")) {
+          auto rm = partsModel(it.value()["parts"], bin, mats);
+          // (three.js draws a Meshy prop's emissive map x its factor 1, and that map is a copy of the albedo: in the
+          // rooms the racks, the jackets and the benches are lit by their own colours)
+          if (rm) for (Material& q : rm->materials) if (q.baseTex && !q.emissiveTex && q.emissive.x > 0.99f && q.emissive.y > 0.99f && q.emissive.z > 0.99f) q.emissiveTex = q.baseTex;
+          rooms_.push_back({it.key(), rm});
+        }
+    pjson_ = jp; pbin_ = std::move(bin);
+  }
   return true;
 }
 

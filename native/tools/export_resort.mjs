@@ -606,7 +606,7 @@ function makePack(name, opt = {}) {
     // (a canvas drawn into another: its commands go along)
     for (const id of usedCanvas) { const c = canvases.get(id); for (const op of c.ops) if (op[0] === 'drawImage' && op[1] >= 0) usedCanvas.add(op[1]); }
     const canvasOut = {};
-    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}) }; }
+    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}), ...(c.slGrad ? { grad: true } : {}) }; }
     const out = { version: 3, generated: new Date().toISOString(), bin: `${name}.bin`, props: propsOut, materials: mats, meshes, instanced: inst, canvases: canvasOut, ...ex };
     const zb = writeData(OUT, `${name}.bin`, Buffer.concat(parts));
     const js = JSON.stringify(out), zj = writeData(OUT, `${name}.json`, js);

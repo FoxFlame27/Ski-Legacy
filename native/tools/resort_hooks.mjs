@@ -3,6 +3,11 @@
 // at night. Nothing here changes what the game builds; it only tags it.
 const PATCHES = [
   {
+    // (the rooms' soft reflections are a PMREM render: none in Node; export_rooms.mjs)
+    file: '/src/engine/roomenv.js',
+    edits: [['export function roomEnvironment(renderer, sigma) {', 'export function roomEnvironment(renderer, sigma) { if (!renderer) return null;']],
+  },
+  {
     file: '/src/core/assets.js',
     edits: [
       // models come from the exporter's Node GLB loader (geometry + material slots, no textures)

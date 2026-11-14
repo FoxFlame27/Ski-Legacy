@@ -43,6 +43,7 @@ public:
 
   // state
   void fillStyle(const std::string& css);
+  void fillColor(const vec4& c) { st_.fill = c; }   // (a gradient's mean colour: straight RGBA 0..1, sRGB)
   void strokeStyle(const std::string& css);
   void lineWidth(float w) { st_.lineWidth = w; }
   void globalAlpha(float a) { st_.alpha = a; }

@@ -30,6 +30,7 @@ public:
   std::string modelPath(const std::string& name) const;
   /// (Phase 7) a cap on every texture's size (the quality preset: 512 on Switch), whatever the load options ask
   int textureCap = 4096;
+  float anisotropy = 8;            // anisotropic filtering of the models' maps (16: the GPU's maximum, High and up)
   int triangleBudget = 0;          // (Phase 7, the switch preset's mesh LOD bias) a model over it is simplified to it
   bool compressTextures = false;   // (Phase 7, the switch preset) BC1 / BC3 block compression at load (engine/texcompress)
 

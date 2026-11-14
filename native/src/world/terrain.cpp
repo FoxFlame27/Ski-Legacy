@@ -11,7 +11,7 @@
 namespace sl {
 
 static constexpr int V = Terrain::SEG + 1;
-static constexpr int FLOATS = 10; // pos3 normal3 data4
+static constexpr int FLOATS = 11; // pos3 normal3 data4 macro1
 
 Terrain::Terrain(gfx::Device& dev, World& world, JobSystem& jobs, float lodK)
   : dev_(dev), world_(world), jobs_(jobs), lodK_(lodK), alive_(std::make_shared<int>(1)) {
@@ -72,7 +72,21 @@ void Terrain::build(const Key& k, CpuNode& out) const {
   const double spacing = st > 3 ? st : 0;
   for (int j = -1; j <= V; j++)
     for (int i = -1; i <= V; i++) H[size_t(j + 1) * W + (i + 1)] = world_.height(x0 + i * st, z0 + j * st, spacing);
-  const bool near = size <= 512;
+  // (terrain.js marks the groomed runs on the 128-512 m nodes only; here also on the coarser ones out to 2 km nodes,
+  // so the pistes read as smooth bright bands down the far slopes)
+  const bool near = size <= 2048;
+  // terrain.js macro slope: the slope without the crags' cliff bands and small bumps (heights band-limited to
+  // 40 m on a coarse grid every MS vertices); the shader tells cliff zones from open slopes by it
+  const int MS = 4, MV = SEG / MS + 1, mw = MV + 2;
+  const double mst = st * MS;
+  std::vector<double> M(size_t(mw) * mw), macro(size_t(MV) * MV);
+  for (int j = -1; j <= MV; j++)
+    for (int i = -1; i <= MV; i++) M[size_t(j + 1) * mw + (i + 1)] = world_.height(x0 + i * mst, z0 + j * mst, std::max(40.0, mst));
+  for (int j = 0; j < MV; j++)
+    for (int i = 0; i < MV; i++) {
+      double mx = M[size_t(j + 1) * mw + i] - M[size_t(j + 1) * mw + i + 2], mz = M[size_t(j) * mw + i + 1] - M[size_t(j + 2) * mw + i + 1];
+      macro[size_t(j) * MV + i] = 1 - (2 * mst) / std::sqrt(mx * mx + 4 * mst * mst + mz * mz);
+    }
   const size_t count = size_t(V) * V + ring_.size();
   out.verts.assign(count * FLOATS, 0.f);
   out.minY = 1e30f; out.maxY = -1e30f;
@@ -101,6 +115,13 @@ void Terrain::build(const Key& k, CpuNode& out) const {
         if (pad > 0.02 && pad > g) { g = std::min(1.0, pad * 1.5); forest = 0; if (dx == 0 && dz == 0) dx = 1; }
       }
       o[6] = float(forest); o[7] = float(g); o[8] = float(dx); o[9] = float(dz);
+      {
+        double fi = double(i) / MS, fj = double(j) / MS;
+        int i0 = std::min(MV - 2, int(std::floor(fi))), j0 = std::min(MV - 2, int(std::floor(fj)));
+        double ti = fi - i0, tj = fj - j0;
+        double a = macro[size_t(j0) * MV + i0], b = macro[size_t(j0) * MV + i0 + 1], cc = macro[size_t(j0 + 1) * MV + i0], dd = macro[size_t(j0 + 1) * MV + i0 + 1];
+        o[10] = float((a + (b - a) * ti) * (1 - tj) + (cc + (dd - cc) * ti) * tj);
+      }
       out.minY = std::min(out.minY, o[1]); out.maxY = std::max(out.maxY, o[1]);
     }
   const float skirt = float(std::max(2.0, size * 0.02));
@@ -118,7 +139,7 @@ void Terrain::upload(CpuNode& n) {
   g.vbo = dev_.createBuffer(gfx::BufferUsage::Vertex, n.verts.data(), n.verts.size() * sizeof(float));
   const uint32_t st = FLOATS * 4;
   g.vi = dev_.createVertexInput({{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Float, false, 12, st},
-                                 {2, 0, 4, gfx::AttribType::Float, false, 24, st}}, {g.vbo}, ibo_);
+                                 {2, 0, 4, gfx::AttribType::Float, false, 24, st}, {3, 0, 1, gfx::AttribType::Float, false, 40, st}}, {g.vbo}, ibo_);
   g.minY = n.minY; g.maxY = n.maxY;
   active_[n.key] = g;
 }
@@ -200,7 +221,7 @@ void Terrain::submit(Renderer& r, double shadowMax) {
     dvec3 bmin(double(k.x), n.minY, double(k.z)), bmax(double(k.x + k.size), n.maxY, double(k.z + k.size));
     bool vis = r.visible(bmin, bmax), cast = double(k.size) <= shadowMax && r.castsShadow(bmin, bmax);
     if (!vis && !cast) continue;
-    r.submitTerrain(n.vi, indexCount_, dvec3(double(k.x), 0, double(k.z)), cast, vis);
+    r.submitTerrain(n.vi, indexCount_, dvec3(double(k.x), 0, double(k.z)), cast, vis, bmin, bmax);
   }
 }
 

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <memory>
 #include <algorithm>
+#include <iterator>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -37,7 +38,7 @@ static Key mapScancode(SDL_Scancode s) {
   switch (s) {
     case SDL_SCANCODE_0: return Key::Digit0;
     case SDL_SCANCODE_SPACE: return Key::Space;
-    case SDL_SCANCODE_RETURN: return Key::Enter;
+    case SDL_SCANCODE_RETURN: case SDL_SCANCODE_KP_ENTER: case SDL_SCANCODE_RETURN2: return Key::Enter;
     case SDL_SCANCODE_ESCAPE: return Key::Escape;
     case SDL_SCANCODE_BACKSPACE: return Key::Backspace;
     case SDL_SCANCODE_TAB: return Key::Tab;
@@ -58,6 +59,27 @@ static Key mapScancode(SDL_Scancode s) {
     default: return Key::Unknown;
   }
 }
+// the standard-layout position (platform.h) of an SDL controller button (-1: none; the triggers are axes)
+static int padPosition(int b) {
+  switch (b) {
+    case SDL_CONTROLLER_BUTTON_A: return 0;
+    case SDL_CONTROLLER_BUTTON_B: return 1;
+    case SDL_CONTROLLER_BUTTON_X: return 2;
+    case SDL_CONTROLLER_BUTTON_Y: return 3;
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return 4;
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return 5;
+    case SDL_CONTROLLER_BUTTON_BACK: return 8;
+    case SDL_CONTROLLER_BUTTON_START: return 9;
+    case SDL_CONTROLLER_BUTTON_LEFTSTICK: return 10;
+    case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return 11;
+    case SDL_CONTROLLER_BUTTON_DPAD_UP: return 12;
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return 13;
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return 14;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return 15;
+    case SDL_CONTROLLER_BUTTON_GUIDE: return 16;
+    default: return -1;
+  }
+}
 
 class SdlPlatform final : public Platform {
 public:
@@ -65,8 +87,14 @@ public:
     // buttons by position (south = A on every controller), as the game's bindings expect
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    // (macOS) the click that focuses the window also counts (it captures the mouse for looking)
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS | SDL_INIT_TIMER) != 0)
       SL_ERROR("SDL_Init: %s", SDL_GetError());
+    // SDL2 starts text input with the video subsystem on desktop. Left on, macOS sends every key through its input
+    // method (the press-and-hold accent popup on a held letter, dead keys, IME candidates); the game reads keys by
+    // position and turns text input on only while a text field has the focus (setTextInput).
+    SDL_StopTextInput();
     if (SDL_InitSubSystem(SDL_INIT_HAPTIC) != 0) SL_WARN("no haptics: %s", SDL_GetError());
     freq_ = double(SDL_GetPerformanceFrequency());
     t0_ = SDL_GetPerformanceCounter();
@@ -74,6 +102,7 @@ public:
   ~SdlPlatform() override {
     closeAudio();
     for (auto* c : pads_) if (c) SDL_GameControllerClose(c);
+    if (testJoy_) SDL_JoystickClose(testJoy_);
     if (ctx_) SDL_GL_DeleteContext(ctx_);
     if (win_) SDL_DestroyWindow(win_);
     SDL_Quit();
@@ -98,6 +127,7 @@ public:
     if (!ctx_) { SL_ERROR("OpenGL 4.1 core context: %s", SDL_GetError()); return false; }
     SDL_GL_MakeCurrent(win_, ctx_);
     SDL_GL_SetSwapInterval(d.vsync ? 1 : 0);
+    SDL_StopTextInput();   // (window creation can start it again on some backends)
     return true;
   }
   void* glProcAddress(const char* name) override { return SDL_GL_GetProcAddress(name); }
@@ -114,16 +144,40 @@ public:
         case SDL_QUIT: e.quit = true; break;
         case SDL_WINDOWEVENT:
           if (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) e.resized = true;
-          if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) e.focusLost = true;
+          // (focus lost: every key counts as up; macOS never sends the key-ups of a Cmd+Tab)
+          if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { e.focusLost = true; std::fill(std::begin(keys_), std::end(keys_), false); }
           if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) e.focusGained = true;
           break;
         case SDL_KEYDOWN:
         case SDL_KEYUP: {
+          // keys by position (the scancode: KeyW is the key left of the third row's E on QWERTY, QWERTZ and AZERTY
+          // alike, as the web game's KeyboardEvent.code)
           Key k = mapScancode(ev.key.keysym.scancode);
           if (k == Key::Unknown) break;
-          if (ev.key.repeat) { if (ev.type == SDL_KEYDOWN) e.repeated.push_back(k); break; }
-          keys_[size_t(k)] = ev.type == SDL_KEYDOWN;
-          (ev.type == SDL_KEYDOWN ? e.pressed : e.released).push_back(k);
+          bool down = ev.type == SDL_KEYDOWN;
+          Uint16 mod = ev.key.keysym.mod;
+          if (down && !ev.key.repeat) {
+            // the desktop shortcuts: fullscreen (F11, Alt+Enter; Cmd+F / Ctrl+Cmd+F on macOS), quit (Cmd+Q: the app
+            // menu sends SDL_QUIT already; this also covers a bundle without one)
+#ifdef __APPLE__
+            bool cmd = (mod & KMOD_GUI) != 0;
+            if (cmd && k == Key::KeyF) { e.toggleFullscreen = true; break; }   // (not also F: furnish)
+            if (cmd && k == Key::KeyQ) { e.quit = true; break; }
+#endif
+            if (k == Key::F11 || (k == Key::Enter && (mod & KMOD_ALT))) { e.toggleFullscreen = true; break; }
+          }
+          if (ev.key.repeat) { if (down) e.repeated.push_back(k); break; }
+          keys_[size_t(k)] = down;
+          (down ? e.pressed : e.released).push_back(k);
+          break;
+        }
+        case SDL_TEXTINPUT:
+          if (SDL_IsTextInputActive()) e.text += ev.text.text;
+          break;
+        case SDL_CONTROLLERBUTTONDOWN: {
+          int b = padPosition(ev.cbutton.button);
+          for (size_t i = 0; i < pads_.size() && b >= 0; i++)
+            if (pads_[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pads_[i])) == ev.cbutton.which) e.padPressed.push_back({int(i), b});
           break;
         }
         case SDL_MOUSEMOTION:
@@ -153,6 +207,62 @@ public:
   void setFullscreen(bool on) override { if (win_) SDL_SetWindowFullscreen(win_, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0); }
   bool fullscreen() const override { return win_ && (SDL_GetWindowFlags(win_) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0; }
   void setVsync(bool on) override { SDL_GL_SetSwapInterval(on ? 1 : 0); }
+
+  void setTextInput(bool on) override {
+    if (on == bool(SDL_IsTextInputActive())) return;
+    if (on) SDL_StartTextInput(); else SDL_StopTextInput();
+  }
+  bool textInputActive() const override { return SDL_IsTextInputActive(); }
+
+  bool pushKey(Key k, bool down) override {
+    SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
+    for (int i = 1; i < SDL_NUM_SCANCODES && sc == SDL_SCANCODE_UNKNOWN; i++) if (mapScancode(SDL_Scancode(i)) == k) sc = SDL_Scancode(i);
+    if (sc == SDL_SCANCODE_UNKNOWN) return false;
+    SDL_Event ev{};
+    ev.type = down ? SDL_KEYDOWN : SDL_KEYUP;
+    ev.key.timestamp = SDL_GetTicks();
+    ev.key.windowID = win_ ? SDL_GetWindowID(win_) : 0;
+    ev.key.state = down ? SDL_PRESSED : SDL_RELEASED;
+    ev.key.keysym.scancode = sc;
+    ev.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+    return SDL_PushEvent(&ev) == 1;
+  }
+
+  bool testPad(bool attach) override {
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+    if (attach) {
+      if (testJoy_) return true;
+      SDL_VirtualJoystickDesc d{};
+      d.version = SDL_VIRTUAL_JOYSTICK_DESC_VERSION;
+      d.type = SDL_JOYSTICK_TYPE_GAMECONTROLLER;
+      d.naxes = SDL_CONTROLLER_AXIS_MAX;
+      d.nbuttons = SDL_CONTROLLER_BUTTON_MAX;
+      d.name = "Autotest controller";
+      int idx = SDL_JoystickAttachVirtualEx(&d);
+      if (idx < 0) { SL_WARN("virtual controller: %s", SDL_GetError()); return false; }
+      testJoy_ = SDL_JoystickOpen(idx);
+      return testJoy_ != nullptr;
+    }
+    if (!testJoy_) return false;
+    SDL_JoystickID id = SDL_JoystickInstanceID(testJoy_);
+    SDL_JoystickClose(testJoy_);
+    testJoy_ = nullptr;
+    for (int i = 0; i < SDL_NumJoysticks(); i++) if (SDL_JoystickGetDeviceInstanceID(i) == id) { SDL_JoystickDetachVirtual(i); break; }
+    return true;
+#else
+    (void)attach;
+    return false;
+#endif
+  }
+  void testPadButton(int position, bool down) override {
+#if SDL_VERSION_ATLEAST(2, 24, 0)
+    if (!testJoy_) return;
+    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++)
+      if (padPosition(b) == position) SDL_JoystickSetVirtualButton(testJoy_, b, down ? SDL_PRESSED : SDL_RELEASED);
+#else
+    (void)position; (void)down;
+#endif
+  }
 
   int gamepadCount() const override { return int(pads_.size()); }
   void gamepad(int i, GamepadState& s) const override {
@@ -314,6 +424,7 @@ private:
   bool keys_[size_t(Key::Count)] = {};
   bool rel_ = false;
   std::vector<SDL_GameController*> pads_;
+  SDL_Joystick* testJoy_ = nullptr;   // (autotest) the virtual controller
   double freq_ = 1;
   Uint64 t0_ = 0;
   SDL_AudioDeviceID audioDev_ = 0;

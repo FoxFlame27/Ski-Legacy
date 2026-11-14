@@ -18,6 +18,7 @@
 #include "world/transport.h"
 #include "game/buses.h"
 #include "game/drive.h"
+#include "game/cartest.h"
 #include "game/traffic.h"
 #include "game/trains.h"
 #include "game/economy.h"
@@ -44,6 +45,7 @@
 #include "core/perf.h"
 #include "engine/ui.h"
 #include "world/scenery.h"
+#include "world/snowtrails.h"
 #include "world/terrain.h"
 #include "world/world.h"
 
@@ -134,6 +136,7 @@ Lighting timeOfDay(double hour, const Lighting& day) {
   // after dusk the moon lights the snow (sky.js moonDir): a faint cold key light with shadows
   double mt = t + PI, melev = (42 * std::cos(mt) + 8) * DEG;
   vec3 moon = glm::normalize(vec3(float(std::sin(mt) * std::cos(melev) * 0.8), float(std::sin(melev)), float(std::cos(mt) * std::cos(melev) * 0.8 - 0.3)));
+  L.trueSun = sun; L.moonDir = moon;   // (the renderer's sky model)
   L.zenith = mix3(ZEN); L.mid = mix3(MID); L.horizon = mix3(HOR); L.glow = mix3(GLO); L.fog = mix3(FOG);
   L.sunColor = mix3(SUN);
   L.sunIntensity = SUNI[i] + (SUNI[i + 1] - SUNI[i]) * f;
@@ -206,15 +209,17 @@ int runGame(const GameOptions& opt) {
   assets.textureCap = q.maxTexture;   // (Phase 7: 512 with the switch preset)
   assets.compressTextures = q.compressTextures;
   assets.triangleBudget = q.triangleBudget;
+  if (!opt.verifyPoses.empty()) return verifyPoses(assets, opt.verifyPoses == "@data" ? paths.dataRoot + "/poses_ref.json" : opt.verifyPoses);
   Renderer renderer;
   RenderSettings rs;
-  rs.shadowSize = q.shadowSize; rs.shadowRange = q.shadowRange; rs.renderScale = q.renderScale;
-  rs.lowShaders = q.lowShaders; rs.maxLights = q.maxLights;
+  q.renderSettings(rs);   // (the preset's look: cascades, MSAA, AO, detail maps, trails, tone mapping)
+  assets.anisotropy = q.aniso;
   SL_INFO("quality: %s (textures <= %d%s, shadow map %d over %.0f m, LOD x%.2f, far %.0f m, NPCs x%.2f, %d lights%s%s)", q.name.c_str(), q.maxTexture, q.compressTextures ? (dev->supportsBC(true) ? " BC1/BC3" : " (no BC support: RGBA8)") : "", q.shadowSize, q.shadowRange, q.lodScale, q.farZ, q.npcScale, q.maxLights, q.lowShaders ? ", simplified shaders" : "", q.dynamicRes ? ", dynamic resolution" : "");
   if (!renderer.init(*dev, rs)) { SL_ERROR("renderer init failed"); return 4; }
   int dw, dh;
   plat->drawableSize(dw, dh);
   renderer.resize(dw, dh);
+  if (!opt.rigShots.empty()) return rigShots(*plat, *dev, renderer, assets, opt.rigShots);
 
   // (Phase 4) the 2D layer (menus, HUD, trail map) and a loading screen while the world builds
   Ui ui;
@@ -247,7 +252,9 @@ int runGame(const GameOptions& opt) {
   }
 
   Terrain terrain(*dev, world, jobs, q.terrainLodK);
-  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar};
+  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 2 ? 2 : 1};
+  SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
+  trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
   loadingFrame("Building the resort...");
   Resort resort(*dev, world, assets);
@@ -316,7 +323,7 @@ int runGame(const GameOptions& opt) {
   drive.onKnock = [&](const OtherBody& b, double vx, double vz, double w) { if (b.kind == 0) traffic.knock(b.id, vx, vz, w); };
   VehicleDraw vdraw;
   Player player(world, &scenery);
-  SkierRig rig;
+  PlayerSkier rig;
   auto rigColour = [&]() { return save.character == "skier_red" ? std::string("red") : std::string("blue"); };
   if (!rig.load(assets, rigColour())) SL_WARN("skier model missing: the player is invisible");
   // (Phase 4) your garage: the cars you own stand in the Autohaus car park's bays
@@ -353,13 +360,15 @@ int runGame(const GameOptions& opt) {
   Shapes shapes;
   shapes.init(*dev);
   People people;
-  people.load(assets);
+  people.load(assets, world);
   PeopleSim folk;
+  Npcs npcs;
   folk.setKinds(people.fanKinds, people.skierKinds);
   {
     std::vector<std::vector<dvec2>> pl;
     for (auto& ps : pistes) pl.push_back(ps.pts);
     folk.init(world, pl, int((opt.autotest ? 28 : 56) * q.npcScale), std::max(2, int((opt.autotest ? 6 : 14) * q.npcScale)));
+    npcs.init(people, *dev, world, pl, q);   // (npcs.js: the resort's skiers and walkers, the far skiers)
   }
   Weather weather;
   weather.init(unsigned(plat->timeSeconds() * 1000) ^ 0x5eedu, opt.autotest);
@@ -768,7 +777,11 @@ int runGame(const GameOptions& opt) {
               " to drive. Dents: the Werkstatt next door, priced by the damage. A wreck: " + fmtM(wreckFee()) + " (tow + repair).";
       D.options.clear();
       DialogOption b;
-      b.label = "Buy it"; b.sub = std::to_string(save.garage.size()) + " of " + std::to_string(GARAGE_MAX) + " cars in your garage";
+      // (ui/carrental.js: NOT ENOUGH MONEY / GARAGE FULL on the buy button)
+      bool broke = spec && save.money < int64_t(spec->price), full = int(save.garage.size()) >= GARAGE_MAX;
+      b.label = full ? "Garage full" : broke ? "Not enough money" : "Buy it";
+      b.sub = broke && !full ? "You have " + fmtM(save.money) + " \xC2\xB7 the job boards and the races pay"
+                             : std::to_string(save.garage.size()) + " of " + std::to_string(GARAGE_MAX) + " cars in your garage";
       b.price = spec ? int(spec->price) : 0;
       b.disabled = !spec || save.money < int64_t(spec->price) || int(save.garage.size()) >= GARAGE_MAX;
       b.act = [&, model]() { buyCar(model); };
@@ -917,8 +930,10 @@ int runGame(const GameOptions& opt) {
   double leftOnRoadT = 0;
 
   // autotest phases after the run: walk into a hotel (collision), then ride a gondola
-  enum class AT { Menu, Ski, Collide, Lift, Drive, Bus, Rail, Express, Map, Race, Job, Police, Chalet, Weather, Done } at = AT::Menu;
+  enum class AT { Menu, Ski, Collide, Lift, Drive, CarFlow, Bus, Rail, Express, Map, Race, Job, Police, Chalet, Weather, Done } at = AT::Menu;
   if (vehTest && opt.autotest) at = AT::Drive;
+  if (off("cartest") && opt.autotest) at = AT::CarFlow;   // (debug: straight to the cars on the player's path)
+  CarFlowTest carFlow;
   if (off("maptest") && opt.autotest) at = AT::Map;   // (debug: straight to the trail map)
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
@@ -927,6 +942,7 @@ int runGame(const GameOptions& opt) {
   // (Phase 4 autotest) the menus, a purchase, save / reload, the trail map
   bool menuOk = true, settingOk = true, buyOk = true, saveOk = true, mapOk = true, chargeOk = true;
   int skiFrame0 = 0, menuStep = 0;
+  bool atRealKeys = false, textWanted = false;   // (autotest: the menus read the real events: keys pushed through SDL)
   std::string pendingPng;
   int64_t money0 = 0, liftMoney0 = 0;
   dvec3 spawnPos = player.pos;
@@ -1269,12 +1285,13 @@ int runGame(const GameOptions& opt) {
     if (ev.resized) { plat->drawableSize(dw, dh); renderer.resize(dw, dh); }
     if (ev.focusLost) { input.clear(); plat->setRelativeMouse(false); audio.setFocused(false, save.settingOn("muteUnfocused")); }
     if (ev.focusGained) audio.setFocused(true, save.settingOn("muteUnfocused"));
+    if (ev.toggleFullscreen && !opt.autotest) { save.set("fullscreen", !plat->fullscreen()); applySetting("fullscreen"); }   // F11 / Cmd+F
     input.update(*plat, ev);
     double now = plat->timeSeconds();
     double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : 0.1) : std::min(0.25, now - last);
     last = now;
     UiNav nav = navBuilder.build(ev, *plat, input, now);
-    if (opt.autotest || mptest) { nav = UiNav{}; nav.mouse = vec2(-1); }
+    if ((opt.autotest && !atRealKeys) || mptest) { nav = UiNav{}; nav.mouse = vec2(-1); }
     // (Phase 6) the network: events, presence out, the other players, the shared clock, the money guard
     mp.update(std::min(0.25, frameDt), paused);
     pc.online = mp.active();
@@ -1282,19 +1299,22 @@ int runGame(const GameOptions& opt) {
       auto pressedKey = [&](platform::Key k) { return std::find(ev.pressed.begin(), ev.pressed.end(), k) != ev.pressed.end(); };
       if (mpv.chatOpen) {   // the chat line: typed letters, Enter sends, Esc closes (the player stands still meanwhile)
         bool shift = plat->keyDown(platform::Key::ShiftLeft) || plat->keyDown(platform::Key::ShiftRight);
+        bool text = plat->textInputActive();   // (the OS's text in the keyboard's layout; else letters from the keys)
         std::vector<platform::Key> keys = ev.pressed;
         keys.insert(keys.end(), ev.repeated.begin(), ev.repeated.end());
         for (platform::Key k : keys) {
           int ki = int(k);
+          if (text) { if (k == platform::Key::Backspace) textBackspace(mpv.chatText); continue; }
           if (ki >= int(platform::Key::KeyA) && ki <= int(platform::Key::KeyZ)) mpv.chatText += char((shift ? 'A' : 'a') + ki - int(platform::Key::KeyA));
           else if (ki >= int(platform::Key::Digit0) && ki <= int(platform::Key::Digit9)) mpv.chatText += char('0' + ki - int(platform::Key::Digit0));
           else if (k == platform::Key::Space) mpv.chatText += ' ';
-          else if (k == platform::Key::Backspace && !mpv.chatText.empty()) mpv.chatText.pop_back();
+          else if (k == platform::Key::Backspace) textBackspace(mpv.chatText);
         }
+        if (text) textAppend(mpv.chatText, ev.text, 120, false);
         if (mpv.chatText.size() > 120) mpv.chatText.resize(120);
         if (pressedKey(platform::Key::Enter)) { mp.sendChat(mpv.chatText); mpv.chatOpen = false; mpv.chatText.clear(); }
         else if (pressedKey(platform::Key::Escape)) { mpv.chatOpen = false; mpv.chatText.clear(); }
-        input.clear();
+        input.clear(); input.holdOff();   // (the Esc that closed the chat: not also the pause menu next frame)
       } else if (pressedKey(platform::Key::Enter)) { mpv.chatOpen = true; input.clear(); }
       if (!mp.asks.empty() && !mpv.chatOpen) {   // the owner's answer: Y / N (controller: d-pad up / down)
         if (pressedKey(platform::Key::KeyY) || input.padPressed(12)) mp.answerPerm(mp.asks.front().rid, true);
@@ -1306,7 +1326,11 @@ int runGame(const GameOptions& opt) {
     bool uiOpen = menus.isOpen() || tmap.isOpen();
     if (started && !uiOpen && wasUiOpen) { input.clear(); input.holdOff(); }   // (the key that closed it: not also in the game)
     if (started && !uiOpen) {
-      if (input.takePressed(Action::Pause)) { menus.inGame = true; menus.open(Menus::Screen::Pause); plat->setRelativeMouse(false); uiOpen = true; }
+      // (in every state: on foot, skiing, driving, riding; build mode is left first, as a dialog or the map closes)
+      if (input.takePressed(Action::Pause)) {
+        if (chalets.building()) chalets.toggleBuild();
+        else { menus.inGame = true; menus.open(Menus::Screen::Pause); plat->setRelativeMouse(false); uiOpen = true; }
+      }
       else if (input.takePressed(Action::Map)) { tmap.open(player.pos); plat->setRelativeMouse(false); uiOpen = true; }
       else if (!opt.autotest && (ev.mousePressed & 1) && !plat->relativeMouse()) plat->setRelativeMouse(true);
     } else if (tmap.isOpen() && !opt.autotest) {
@@ -1315,6 +1339,8 @@ int runGame(const GameOptions& opt) {
     }
     if (uiOpen || !started) input.clear();
     wasUiOpen = uiOpen || !started;
+    // text input on only while a text field has the focus (the multiplayer name, the chat)
+    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
     paused = started && menus.isOpen() && !menus.dialogOpen();
 
     // (Phase 4 autotest) the main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> a
@@ -1367,7 +1393,47 @@ int runGame(const GameOptions& opt) {
           if (f == 11) { expect(!menus.isOpen() && !paused, "back again -> resumed"); next(); }
           break;
         }
-        case 5:
+        case 5: {
+          // the real path: Esc as SDL key events (SDL_PushEvent -> pollEvents -> Input / UiNav, the menus reading the
+          // real events), held and tapped inside one frame, with text input off and on; then the controller's Menu /
+          // + on a virtual SDL controller. (Before the fix the pause menu opened and the same Esc resumed it.)
+          static bool padOk = false;
+          atRealKeys = true;
+          auto key = [&](bool down) { if (!plat->pushKey(platform::Key::Escape, down)) expect(false, "Esc pushed through SDL"); };
+          auto isPause = [&]() { return menus.screen() == Menus::Screen::Pause && paused; };
+          if (f == 1) { plat->setTextInput(false); key(true); }
+          if (f == 2) key(false);
+          if (f == 4) expect(isPause() && !plat->textInputActive(), "Esc (SDL key event, text input off) -> the pause menu, still open");
+          if (f == 5) { key(true); key(false); }   // a tap between two frames
+          if (f == 7) expect(!menus.isOpen() && !paused, "Esc tap (text input off) -> resumed");
+          if (f == 8) { plat->setTextInput(true); key(true); key(false); }
+          if (f == 10) expect(isPause() && plat->textInputActive(), "Esc tap (text input on) -> the pause menu, still open");
+          if (f == 11) key(true);
+          if (f == 12) key(false);
+          if (f == 14) { expect(!menus.isOpen() && !paused, "Esc (text input on) -> resumed"); plat->setTextInput(false); }
+          if (f == 15) { padOk = plat->testPad(true); if (!padOk) SL_INFO("[autotest] menu: no virtual controller here (the Menu button not checked)"); }
+          if (padOk) {
+            if (f == 18) plat->testPadButton(9, true);
+            if (f == 19) plat->testPadButton(9, false);
+            if (f == 21) expect(isPause() && input.usingGamepad(), "Menu / + (virtual controller) -> the pause menu, still open");
+            if (f == 22) plat->testPadButton(9, true);
+            if (f == 23) plat->testPadButton(9, false);
+            if (f == 25) expect(!menus.isOpen() && !paused, "Menu / + again -> resumed");
+            if (f == 26) plat->testPad(false);
+          }
+          if (f == 28) { key(true); key(false); }   // (and the keyboard is the active device again)
+          if (f == 30) expect(isPause() && !input.usingGamepad(), "Esc after the controller -> the pause menu");
+          if (f == 31) { key(true); key(false); }
+          if (f == 33) {
+            expect(!menus.isOpen() && !paused && !plat->textInputActive(), "Esc -> resumed, text input off");
+            SL_INFO("[autotest] menu: Esc as SDL key events (held, tapped; text input off / on)%s -> the pause menu opens and closes: %s",
+                    padOk ? ", Menu / + on a virtual controller" : "", menuOk ? "ok" : "FAILED");
+            atRealKeys = false;
+            next();
+          }
+          break;
+        }
+        case 6:
           if (f == 1) { player.setSkisOn(false); player.teleport(-31.5, -16.0, std::atan2(-8.5, -2.0)); }
           input.inject(Action::Interact, f == 3);
           if (f == 6) {
@@ -1384,7 +1450,7 @@ int runGame(const GameOptions& opt) {
           if (f == 10) nav.cancel = true;
           if (f == 12) { expect(!menus.isOpen(), "the shop closes"); next(); }
           break;
-        case 6: {
+        case 7: {
           // save, read it back into a second save and into the game's own, compare
           bool w = save.write(*plat);
           Save s2(save.fileName());
@@ -1748,7 +1814,14 @@ int runGame(const GameOptions& opt) {
           }
           if (f == 17) input.inject(Action::NextItem, false);
           if (f == 20 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "build");
-          input.inject(Action::Furnish, f == 24);
+          // Esc (an SDL key event) in build mode: leaves build mode, no pause menu
+          if (f == 22 && !plat->pushKey(platform::Key::Escape, true)) { chaletOk = false; SL_WARN("[autotest] chalet: Esc not pushed"); }
+          if (f == 23) plat->pushKey(platform::Key::Escape, false);
+          if (f == 25) {
+            bool ok = !chalets.building() && !menus.isOpen();
+            if (!ok) { chaletOk = false; if (chalets.building()) chalets.toggleBuild(); if (menus.isOpen()) menus.close(); }
+            SL_INFO("[autotest] chalet: Esc in build mode -> build mode left, no pause menu: %s", ok ? "ok" : "FAILED");
+          }
           if (f == 27) { dvec3 e = rooms.toWorld(playData.chaletModel.IX - 0.6, 0, playData.chaletModel.doorZ); player.teleport(e.x, e.z, PI / 2); player.pos.y = rooms.toWorld(0, 0, 0).y; }
           input.inject(Action::Interact, f == 29);
           if (f == 33) {
@@ -1895,8 +1968,15 @@ int runGame(const GameOptions& opt) {
         double tx = q.x - q.dz * 1.6, tz = q.z + q.dx * 1.6;
         double err = wrapPi(std::atan2(tx - drive.pos().x, tz - drive.pos().z) - drive.yaw());
         din.steer = float(clamp(err * 2.2, -1, 1));
-        din.throttle = drive.speed() < 22 ? 1.f : 0.f;
-        din.brake = drive.speed() > 26 ? 0.5f : 0.f;
+        // (as a driver does: no closer than a time gap behind a traffic car in the lane ahead, never into it)
+        double want = 22, fx = std::sin(drive.yaw()), fz = std::cos(drive.yaw());
+        for (const auto& c : traffic.list) {
+          if (c.mode == Traffic::Car::Mode::Gone) continue;
+          double dx = c.x - drive.pos().x, dz = c.z - drive.pos().z, ahead = dx * fx + dz * fz, side = std::fabs(dx * fz - dz * fx);
+          if (ahead > 0 && ahead < 60 && side < 2.6) want = std::min(want, std::max(0.0, (ahead - 9) * 0.6));
+        }
+        din.throttle = drive.speed() < want ? 1.f : 0.f;
+        din.brake = drive.speed() > want + 4 ? (drive.speed() > want + 10 ? 1.f : 0.5f) : 0.f;
       }
     }
 
@@ -2004,6 +2084,8 @@ int runGame(const GameOptions& opt) {
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
     }
     if (aiOn) folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
+    npcs.off = !aiOn;
+    npcs.update(paused ? 0 : frameDt, player.pos, cam.pos, 1 - light.night);
     perf.add("gameplay (races, jobs, police, people)", perfMs() - pt0);
     // the career (economy.js stats): top speed, distance skied
     if (started && player.mode == PlayerMode::Ski) {
@@ -2026,7 +2108,7 @@ int runGame(const GameOptions& opt) {
     pt0 = perfMs();
     busBoxes.clear();
     buses.boxes(busBoxes);
-    traffic.update(vdt, player.pos, &drive, busBoxes, cam.pos);
+    traffic.update(vdt, player.pos, &drive, busBoxes, cam);
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
@@ -2046,7 +2128,7 @@ int runGame(const GameOptions& opt) {
       rideLine = drive.label() + "   " + std::to_string(int(std::round(drive.speed() * 3.6))) + " km/h";
       if (drive.speed() < 2.0) prompt = "Get out";
       dvec3 ex;
-      if (interact && drive.exit(ex)) standOff(ex, "Parked");
+      if (interact && drive.exit(ex)) { interact = false; standOff(ex, "Parked"); }   // (E used: not also back in at once below)
       for (const VehicleEvent& e : drive.events) {
         float a = e.amount;
         switch (e.type) {
@@ -2086,6 +2168,7 @@ int runGame(const GameOptions& opt) {
         si.boost = input.down(Action::Sprint);
         si.handbrake = input.down(Action::Jump);
       }
+      rig.sledShape.steer = si.steer;   // (the rider's fists turn the bars: skier.js poseSled)
       if (sleds.update(vdt, si)) { rideKind = Ride::None; rig.skisInRide = true; }
       else {
         dvec3 sp, sf;
@@ -2440,7 +2523,9 @@ int runGame(const GameOptions& opt) {
     scenery.update(cam.pos);
     resort.update(frameDt, cam.pos);
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
-    rig.update(frameDt, player, world);
+    rig.showcase = showcaseOn;
+    rig.sled = rideKind == Ride::Sled;
+    rig.update(paused ? 0 : frameDt, player, world);
     scenery.dynamic.clear();
     if (transport.loaded()) {
       drive.fillColliders(scenery.dynamic);
@@ -2469,7 +2554,9 @@ int runGame(const GameOptions& opt) {
             if (!od) return vec4(0);
             return vec4(float((od->base >> 16) & 255) / 255.f, float((od->base >> 8) & 255) / 255.f, float(od->base & 255) / 255.f, 1.f);
           };
-          rig.applyOutfit(*dev, col("jacket"), col("trousers"), col("helmet"));
+          auto id = [&](const char* slot) { return eq.is_object() && eq.contains(slot) && eq[slot].is_string() ? eq[slot].get<std::string>() : std::string(); };
+          (void)col;
+          rig.applyOutfitIds(*dev, id("jacket"), id("trousers"), id("helmet"), id("lens"));
           if (opt.autotest) SL_INFO("[autotest] outfit applied: %s -> %s", eq.dump().c_str(), rig.dressed() ? "recoloured" : "original");
         }
       }
@@ -2713,6 +2800,7 @@ int runGame(const GameOptions& opt) {
     if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light
       frameLight.zenith = frameLight.mid = frameLight.horizon = frameLight.glow = frameLight.fog = vec3(0.004f, 0.005f, 0.007f);
       frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
+      frameLight.ambientScale = 0.25f;
     }
     pt0 = perfMs();
     renderer.beginFrame(cam, frameLight, player.renderPos);
@@ -2751,21 +2839,33 @@ int runGame(const GameOptions& opt) {
       rescue.draw(renderer, cam.pos);
     }
     if (drawVillage) chalets.draw(renderer, cam.pos);
-    people.begin();
+    people.begin(paused ? 0 : frameDt);
     if (!indoor) {
-      if (aiOn) folk.add(people, cam.pos);
+      if (aiOn) { folk.add(people, cam.pos); traffic.addPeople(people, cam.pos, people.skierKinds.empty() ? people.fanKinds : people.skierKinds); }
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }
     police.addPeople(people, cam.pos);
     if (mp.active()) mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt);
     people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);
+    npcs.submit(renderer, cam.pos);
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
     bool hideRig = (player.view == Player::View::First && player.mode != PlayerMode::Fall) || (rideKind == Ride::Car && drive.cockpit()) ||
                    ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || rescue.carried();
     railway.insideView = rideKind == Ride::Rail && seatView;
     express.insideView = rideKind == Ride::Express && seatView;
     if (drawSkier) rig.submit(renderer, hideRig);
+    if (!indoor) {   // the snow trails: you, the vehicles on the snow, the resort's people
+      if (rideKind == Ride::None) trails.player(player);
+      if (rideKind == Ride::Car) trails.vehicle(0, drive.pos(), drive.yaw(), 0);
+      { dvec3 sp; double sy; if (sleds.current(sp, sy)) trails.vehicle(1, sp, sy, 1); }
+      for (size_t i = 0; i < folk.count(); i++) {
+        const dvec3& fp = folk.pos(int(i));
+        double dx = fp.x - cam.pos.x, dz = fp.z - cam.pos.z;
+        if (dx * dx + dz * dz < 90.0 * 90.0 && !folk.down(int(i))) trails.npc(int(i), fp, false);
+      }
+      trails.update(paused ? 0 : frameDt, renderer, player.renderPos, &world);
+    }
 
     perf.add("render: scene submit (culling, batches)", perfMs() - pt0);
     pt0 = perfMs();
@@ -2894,6 +2994,27 @@ int runGame(const GameOptions& opt) {
           SL_INFO("[autotest] traffic: %zu cars, %d driving; the furthest moved %.0f m along its road, %.1f m off the centre line (its lane: 1.6 m) -> %s",
                   traffic.list.size(), traffic.movingCount(), moved, lane, trafficOk ? "ok" : "FAILED");
           if (drive.active()) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
+          at = AT::CarFlow; phaseFrame = 0; input.releaseInjected();
+        }
+      } else if (at == AT::CarFlow) {
+        // the cars on the player's path, by real input events (game/cartest.h): buy, get in, drive, get out; the traffic
+        if (phaseFrame == 1) { input.releaseInjected(); atRealKeys = true; }
+        CarFlowEnv ce;
+        ce.player = &player; ce.drive = &drive; ce.traffic = &traffic; ce.transport = &transport; ce.buses = &buses; ce.menus = &menus;
+        ce.money = save.money; ce.garage = save.garage.size();
+        ce.grant = [&](int64_t m) { save.earn(m); };
+        ce.teleport = [&](double x, double z, double h) { player.setSkisOn(false); player.teleport(x, z, h); };
+        ce.png = [&](const char* tag) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, tag); };
+        ce.ground = [&](double x, double z) { return world.height(x, z); };
+        ce.camPos = cam.pos; ce.camFwd = dvec3(cam.forward());
+        ce.prompt = prompt; ce.driving = rideKind == Ride::Car; ce.simTime = simTime; ce.frameDt = frameDt;
+        if (phaseFrame >= 1 && (carFlow.frame(ce) || phaseFrame > 3000)) {
+          if (phaseFrame > 3000) { carFlow.releaseAll(); carFlow.exitOk = false; SL_WARN("[autotest] cars: timed out"); }
+          if (rideKind == Ride::Car) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
+          SL_INFO("[autotest] cars (the player's path): buy %s, get in %s, drive %s, controller %s, get out %s, traffic round the village %s", carFlow.buyOk ? "ok" : "FAILED",
+                  carFlow.enterOk ? "ok" : "FAILED", carFlow.driveOk ? "ok" : "FAILED", carFlow.padOk ? "ok" : "FAILED", carFlow.exitOk ? "ok" : "FAILED", carFlow.trafficOk ? "ok" : "FAILED");
+          atRealKeys = false;
+          if (police.wanted()) { SL_INFO("[autotest] cars: the police were called meanwhile (%s): cleared for the next checks", police.status().c_str()); police.clear("autotest"); }
           at = AT::Bus; phaseFrame = 0; input.releaseInjected(); rideTest = 0; rideBoarded = false;
         }
       } else if (at == AT::Bus || at == AT::Rail || at == AT::Express) {
@@ -2985,7 +3106,7 @@ int runGame(const GameOptions& opt) {
   if (opt.autotest) {
     double wall = plat->timeSeconds() - startT;
     bool ok = skiOk && collideOk && liftOk && driveOk && trafficOk && busOk && railOk && expressOk && menuOk && settingOk && buyOk && saveOk && mapOk && chargeOk &&
-              raceOk && jobOk && policeOk && chaletOk && weatherOk && sledOk;
+              raceOk && jobOk && policeOk && chaletOk && weatherOk && sledOk && carFlow.ok();
     SL_INFO("[autotest] %d frames (%.1f s simulated) in %.1f s wall: avg %.1f fps", frame, simTime, wall, frame / wall);
     SL_INFO("[autotest] ski %s, building collision %s, gondola ride %s", skiOk ? "ok" : "FAILED", collideOk ? "ok" : "FAILED", liftOk ? "ok" : "FAILED");
     SL_INFO("[autotest] drive %s, traffic %s, bus %s, Wolkenspitzbahn %s, Legacy Express %s", driveOk ? "ok" : "FAILED", trafficOk ? "ok" : "FAILED",

@@ -526,6 +526,7 @@ void Races::addPeople(People& people, const dvec3& cam) const {
       q.yaw = L.heading(b.s);
       q.anim = s.st == Session::St::Grid || b.v < 1 ? PAnim::Idle : b.v > 15 ? PAnim::Tuck : PAnim::Ski;
       q.skis = true; q.phase = b.phase;
+      q.poles = true; q.speed = b.v;   // (main.js: the race field skis with poles, makeRig(c, s, { poles: true, ai: true }))
       q.lean = float(clamp((L.K.empty() ? 0 : L.sAt(L.K, b.s)) * b.v * b.v * 0.04, -0.5, 0.5));
       people.add(q);
     }

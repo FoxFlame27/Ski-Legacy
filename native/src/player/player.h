@@ -90,6 +90,13 @@ public:
   enum class View : uint8_t { Third, First } view = View::Third;
   std::vector<PlayerEvent> events;   // drained by the game each frame (audio, rumble, HUD)
   double speed() const { return glm::length(vel); }
+  // (the skier rig's feed, player.js update(): skier_rig / player_skier.cpp)
+  std::vector<int8_t> polePlants;   // pole plants asked for this frame (0 left, 1 right), drained by the rig
+  int teleportCount = 0;            // bumped by every teleport (the rig snaps to the new pose: rig.snapPose)
+  double airTravel() const { return airTravel_; }
+  double lookYaw() const { return lookYaw_; }
+  double lookPitch() const { return lookPitch_; }
+  bool fallAir() const { return fallAir_; }
   bool groomedAt(double x, double z) const { return onGroomedRun(x, z); }   // (Phase 7: the powder loop off the runs)
   const char* modeName() const;
 
@@ -146,6 +153,7 @@ private:
   double camDip_ = 0, camDipV_ = 0, fovKick_ = 0, airBlend_ = 0, travelYaw_ = PI, shake_ = 0, camFov_ = 65;
   double fpEye_ = 1.26;
   double time_ = 0;
+  double lastSteerSign_ = 0, skatePhase_ = 0.7, tuckPoleT_ = 0.5;   // (player.js pole plants)
 };
 
 } // namespace sl

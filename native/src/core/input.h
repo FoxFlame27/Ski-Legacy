@@ -9,6 +9,7 @@
 #include "platform/platform.h"
 #include <array>
 #include <cstdint>
+#include <string>
 #include <nlohmann/json_fwd.hpp>
 
 namespace sl {
@@ -60,7 +61,8 @@ public:
   /// (Phase 4, menus) the active controller's raw state this frame and button edges (any button, by position)
   bool padConnected() const { return havePad_; }
   const platform::GamepadState& padState() const { return gp_; }
-  bool padPressed(int b) const { return havePad_ && b >= 0 && b < platform::kPadButtons && gp_.buttons[b] > 0.5f && prevButtons_[size_t(b)] <= 0.5f; }
+  /// (a press seen by its button event counts too: a tap shorter than a frame between two samples)
+  bool padPressed(int b) const { return havePad_ && b >= 0 && b < platform::kPadButtons && ((gp_.buttons[b] > 0.5f && prevButtons_[size_t(b)] <= 0.5f) || padTap_[size_t(b)]); }
   bool padDown(int b) const { return havePad_ && b >= 0 && b < platform::kPadButtons && gp_.buttons[b] > 0.5f; }
   /// the current bindings as the web save's `binds` ({ kb: {...}, pad: {...} }, only what differs from the defaults)
   nlohmann::json bindingsJson() const;
@@ -94,9 +96,16 @@ private:
   bool padActive_ = false, havePad_ = false;
   platform::GamepadState gp_{};
   std::array<float, platform::kPadButtons> prevButtons_{};
+  std::array<bool, platform::kPadButtons> padTap_{};   // the active controller's button-down events this frame
   int activePad_ = -1;
   platform::PadFamily family_ = platform::PadFamily::Xbox;
   double lastLook_ = -1e9;
 };
+
+/// Text fields (the multiplayer name, the chat): `typed` (Events::text, UTF-8) appended to `s` up to `maxChars`
+/// characters. nameOnly keeps ASCII letters, digits and spaces (a player name); else printable ASCII and Latin-1
+/// (what the UI font has). textBackspace removes the last character (a whole UTF-8 sequence).
+void textAppend(std::string& s, const std::string& typed, size_t maxChars, bool nameOnly);
+void textBackspace(std::string& s);
 
 } // namespace sl

@@ -235,6 +235,7 @@ Lighting Interiors::lighting(const Lighting& outside) const {
   L.ground = lightTint * 0.38f * lightLevel;
   L.fogDensity = 0;
   L.night = 1;   // (lit windows / lamps glow)
+  L.interior = true;
   return L;
 }
 

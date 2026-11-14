@@ -1,83 +1,230 @@
 // GLSL 410 sources of the renderer (OpenGL backend). An NVN / Vulkan backend compiles the same programs offline
 // (glslc / the NVN shader compiler) from these sources with its own header.
+//
+// Split by topic: this file has the shared frame block, the lighting model (three.js MeshStandardMaterial's
+// physically based BRDF, so the look matches the web game: sun + hemisphere + image-based sky light, cascaded
+// shadows, local lights, height fog / aerial perspective) and the mesh programs; the terrain is in
+// shaders_terrain.h, the sky / environment / clouds in shaders_sky.h, the post chain in shaders_post.h, the
+// snow trails, particles, impostors and the procedural texture bakes in shaders_fx.h.
+//
+// Variants (defines): SL_LOW (the switch preset: one shadow cascade, single-tap PCF, no far normal maps, no glints),
+// SL_FX 0..4 (the web game's quality.fx realism tier), SL_CASCADES 1..4, SKINNED / INSTANCED / INSTMAT.
 #pragma once
 
 namespace sl::shaders {
 
-// Shared by every lit program: the frame uniform block, sun + sky lighting, shadows, height fog.
+// Shared by every program: the frame uniform block (std140; must match Renderer's FrameBlock) and the lights.
 inline const char* kCommon = R"GLSL(
 layout(std140) uniform Frame {
   mat4 uViewProj;       // camera-relative (the camera sits at the origin; world = rel + uCamPos)
-  mat4 uShadowMat;      // camera-relative world -> shadow map uv / depth
+  mat4 uView;           // rotation only
+  mat4 uProj;
+  mat4 uShadowMat[4];   // camera-relative world -> cascade uv (atlas) / depth
+  vec4 uCascadeEnd;     // view distance where each cascade ends
+  vec4 uCascadeTexel;   // world size of a shadow texel per cascade
+  vec4 uCascadeRect[4]; // atlas rect of each cascade (x, y, w, h in uv)
   vec4 uCamPos;         // xyz world position of the camera, w time (s)
-  vec4 uSunDir;         // xyz toward the sun, w shadow on (0/1)
-  vec4 uSunColor;       // rgb * intensity
-  vec4 uSkyColor;       // hemisphere sky
-  vec4 uGroundColor;    // hemisphere ground (snow bounce)
-  vec4 uFogColor;       // rgb, w unused
-  vec4 uFogParams;      // x density at sea level, y height falloff (1/m), z shadow texel size, w exposure
-  vec4 uSkyZenith, uSkyMid, uSkyHorizon, uSkyGlow;
-  vec4 uMisc;           // x night (0 day .. 1 night: lamps, windows, signs), yzw unused
+  vec4 uCamFwd;         // xyz camera forward, w tan(fovY / 2)
+  vec4 uSunDir;         // xyz toward the key light (sun or moon), w shadows on (0/1)
+  vec4 uSunColor;       // rgb * intensity (after weather), w 1 = sun, 0 = moon
+  vec4 uHemiSky;        // three HemisphereLight sky colour * intensity, w env (IBL) intensity
+  vec4 uHemiGround;     // ... ground colour, w sun visibility (cloud / haze)
+  vec4 uFogColor;       // rgb, w valley haze scale
+  vec4 uFogParams;      // x density at sea level, y height falloff (1/m), z shadow atlas texel, w exposure
+  vec4 uSkyZenith;      // w dusk
+  vec4 uSkyMid;         // w horizon haze sharpness (16 clear .. 4.5 overcast)
+  vec4 uSkyHorizon;     // w cirrus amount
+  vec4 uSkyGlow;        // w overcast
+  vec4 uSkyHalo;        // w twilight
+  vec4 uSkyHaloBroad;   // w rayleigh strength
+  vec4 uSkyDisc;        // HDR sun disc colour, w sun size
+  vec4 uSkyBelt;        // Belt of Venus colour, w star visibility
+  vec4 uMoonGlow;       // w moon disc visibility
+  vec4 uSkyWisp;        // cirrus colour, w cloud layer cover (0..1)
+  vec4 uMoonDir;        // xyz, w night factor (stars)
+  vec4 uTrueSun;        // xyz the sun's direction (even at night), w day factor
+  vec4 uSH[9];          // irradiance of the environment (L2 spherical harmonics, rgb)
+  vec4 uMisc;           // x night (lamps / windows), y fresh snow cover, z quality fx tier, w icy pistes
+  vec4 uMisc2;          // x sparkle, y wind phase, z snowfall, w trail map on
+  vec4 uTrail;          // xy trail map origin (world xz, toroidal), z 1 / size (m), w texel (m)
+  vec4 uRes;            // xy render size, zw 1 / size
+  vec4 uEnvGround;      // env: ground colour (sunlit snow bounce), w mist
+  vec4 uCloud;          // x layer bottom (world y), y top, z wind x, w wind z
 };
-// (Phase 7) point and spot lights (lamps, headlights): per light three vec4s: position (camera-relative) + range,
-// colour x intensity + cos of the outer cone (< -1.5: a point light), direction + cos of the inner cone
 #ifndef SL_MAX_LIGHTS
 #define SL_MAX_LIGHTS 16
 #endif
+#ifndef SL_FX
+#define SL_FX 2
+#endif
+#ifndef SL_CASCADES
+#define SL_CASCADES 1
+#endif
+#ifndef SL_CROWN0
+#define SL_CROWN0 85.0
+#define SL_CROWN1 115.0
+#endif
+// point and spot lights (lamps, headlights): per light three vec4s: position (camera-relative) + range,
+// colour x intensity + cos of the outer cone (< -1.5: a point light), direction + cos of the inner cone
 layout(std140) uniform Lights {
   vec4 uLightCount;
   vec4 uLight[48];
 };
+const float PI = 3.14159265;
+const float RECIPROCAL_PI = 0.31830989;
+float saturate(float x) { return clamp(x, 0.0, 1.0); }
+vec3 saturate(vec3 x) { return clamp(x, 0.0, 1.0); }
+float pow2(float x) { return x * x; }
+// integer hash, exact for any cell index (terrain.js tHash)
+float tHash(ivec2 c) {
+  uvec2 q = uvec2(c + ivec2(16777216)) * uvec2(1597334673u, 3812015801u);
+  uint n = (q.x ^ q.y) * 1597334673u;
+  return float(n >> 8u) * (1.0 / 16777216.0);
+}
+// interleaved gradient noise (per-pixel dither / rotation)
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 )GLSL";
 
 inline const char* kLighting = R"GLSL(
-uniform sampler2DShadow uShadowMap;
-const float PI = 3.14159265;
+uniform sampler2DShadow uShadowMap;   // the cascades in one atlas (hardware PCF)
+uniform sampler2D uEnvMap;            // the sky's radiance, equirectangular, mip-mapped by roughness
+uniform sampler2D uSkyNoise;          // sky.js makeSkyNoise (cloud coverage: the cloud shadows on the ground)
 
-float shadowAt(vec3 rel, vec3 n) {
-  if (uSunDir.w < 0.5) return 1.0;
-  vec4 s = uShadowMat * vec4(rel + n * 0.08, 1.0);
+// ---- shadows: cascaded, texel-snapped, filtered (bilinear PCF over a disc that keeps its width in metres)
+float shadowTap(vec3 p) { return texture(uShadowMap, p); }
+float shadowCascade(int c, vec3 rel, vec3 n, float rot) {
+  float tx = uCascadeTexel[c];
+  vec3 off = n * tx * 1.6 + uSunDir.xyz * tx * 0.6;   // normal + light offset bias, scaled by the texel
+  vec4 s = uShadowMat[c] * vec4(rel + off, 1.0);
   vec3 p = s.xyz / s.w;
-  if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
+  vec4 r = uCascadeRect[c];
+  vec2 lo = r.xy + uFogParams.z * 2.0, hi = r.xy + r.zw - uFogParams.z * 2.0;
+  if (p.z >= 1.0 || p.x < r.x || p.y < r.y || p.x > r.x + r.z || p.y > r.y + r.w) return 1.0;
 #ifdef SL_LOW
-  float sh = texture(uShadowMap, p);   // (simplified shaders: one hardware-filtered tap)
+  return shadowTap(vec3(clamp(p.xy, lo, hi), p.z));
 #else
-  float t = uFogParams.z, sum = 0.0;
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) sum += texture(uShadowMap, vec3(p.xy + vec2(x, y) * t, p.z));
-  float sh = sum / 9.0;
+  // 12 taps on a rotated Poisson disc of ~1.5 texels (hardware 2x2 PCF each): soft, no blocks, no banding
+  const vec2 D[12] = vec2[](vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457), vec2(-0.203, 0.621),
+                            vec2(0.962, -0.195), vec2(0.473, -0.480), vec2(0.519, 0.767), vec2(0.185, -0.893),
+                            vec2(0.507, 0.064), vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
+  float cs = cos(rot), sn = sin(rot);
+  mat2 R = mat2(cs, sn, -sn, cs);
+#if SL_FX >= 3
+  float rad = uFogParams.z * 2.2;
+  const int N = 12;
+#else
+  float rad = uFogParams.z * 1.7;
+  const int N = 8;
 #endif
-  // fade out toward the map's border
-  vec2 e = min(p.xy, 1.0 - p.xy);
-  return mix(1.0, sh, smoothstep(0.0, 0.06, min(e.x, e.y)));
+  float sum = 0.0;
+  for (int i = 0; i < N; i++) sum += shadowTap(vec3(clamp(p.xy + R * D[i] * rad, lo, hi), p.z));
+  return sum / float(N);
+#endif
+}
+// moving cloud shadows from the cloud layer (the same coverage the sky draws)
+float cloudShadow(vec3 wp) {
+  float cover = uSkyWisp.w;
+  if (cover < 0.01) return 1.0;
+  vec3 l = normalize(uTrueSun.xyz + vec3(0.0, 0.05, 0.0));
+  float t = (uCloud.x + 300.0 - wp.y) / max(l.y, 0.05);
+  vec2 q = (wp.xz + l.xz * t) + uCloud.zw * uCamPos.w;
+  float d = texture(uSkyNoise, q * 0.00009).r * 0.65 + texture(uSkyNoise, q * 0.00031 + 0.3).g * 0.35;
+  float c = smoothstep(1.0 - cover - 0.12, 1.0 - cover + 0.2, d);
+  return 1.0 - c * 0.72 * uTrueSun.w;
+}
+float shadowAt(vec3 rel, vec3 n) {
+  float cs = 1.0;
+#if SL_FX >= 2 && !defined(SL_LOW)
+  cs = cloudShadow(rel + uCamPos.xyz);
+#endif
+  if (uSunDir.w < 0.5) return cs;
+  float z = dot(rel, uCamFwd.xyz);
+  float rot = ign(gl_FragCoord.xy) * 6.2831853;
+  // the cascade this pixel falls in (one filtered lookup; a second one only in the blend band into the next)
+  int c = 0;
+  for (int i = 0; i < SL_CASCADES - 1; i++) if (z >= uCascadeEnd[i]) c = i + 1;
+  float e = uCascadeEnd[c];
+  if (z >= e) return cs;
+  // dithered hand-over into the next cascade over the last 12 % (one lookup per pixel: smaller shaders, no seams)
+  float b = (z - e * 0.88) / (e * 0.12);
+  if (b > fract(rot * 0.618 + 0.31)) { c++; if (c >= SL_CASCADES) return cs; }
+  return shadowCascade(c, rel, n, rot) * cs;
 }
 
-// GGX specular + Lambert diffuse for the sun, a hemisphere for the sky (and a cheap sky reflection).
-vec3 shade(vec3 albedo, float metallic, float rough, vec3 n, vec3 v, float shadow, float ao) {
-  vec3 l = uSunDir.xyz;
+// ---- environment (image-based sky light), as three's PMREM IBL: irradiance from spherical harmonics, radiance
+// from the mip-mapped equirectangular sky
+vec3 envIrradiance(vec3 n) {
+  vec3 r = uSH[0].rgb * 0.886227
+    + uSH[1].rgb * (1.023328 * n.y) + uSH[2].rgb * (1.023328 * n.z) + uSH[3].rgb * (1.023328 * n.x)
+    + uSH[4].rgb * (0.858086 * n.x * n.y) + uSH[5].rgb * (0.858086 * n.y * n.z)
+    + uSH[6].rgb * (0.247708 * (3.0 * n.z * n.z - 1.0)) + uSH[7].rgb * (0.858086 * n.x * n.z)
+    + uSH[8].rgb * (0.429043 * (n.x * n.x - n.y * n.y));
+  return max(r, vec3(0.0)) * uHemiSky.w;   // irradiance (W / m^2 style: x albedo / pi = outgoing)
+}
+vec2 equirect(vec3 d) { return vec2(atan(d.x, -d.z) * (0.5 * RECIPROCAL_PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * RECIPROCAL_PI); }
+vec3 envRadiance(vec3 r, float rough) {
+  float lod = sqrt(rough) * 6.5;
+  return textureLod(uEnvMap, equirect(r), lod).rgb * uHemiSky.w;
+}
+vec3 hemiIrradiance(vec3 n) { return mix(uHemiGround.rgb, uHemiSky.rgb, n.y * 0.5 + 0.5); }
+
+// ---- three.js physical BRDF
+float D_GGX(float alpha, float nh) { float a2 = alpha * alpha; float d = nh * nh * (a2 - 1.0) + 1.0; return RECIPROCAL_PI * a2 / (d * d); }
+float V_SmithCorrelated(float alpha, float nl, float nv) {
+  float a2 = alpha * alpha;
+  float gv = nl * sqrt(a2 + (1.0 - a2) * nv * nv), gl = nv * sqrt(a2 + (1.0 - a2) * nl * nl);
+  return 0.5 / max(gv + gl, 1e-6);
+}
+vec3 F_Schlick(vec3 f0, float vh) { float f = exp2((-5.55473 * vh - 6.98316) * vh); return f0 * (1.0 - f) + f; }
+vec3 BRDF_GGX(vec3 l, vec3 v, vec3 n, vec3 f0, float rough) {
+  float alpha = rough * rough;
   vec3 h = normalize(l + v);
-  // (Phase 7: clamped to 1 as well: pow(1 - x, 5) of a dot product a hair over 1 was NaN, which the bloom spread into blocks)
-  float nl = clamp(dot(n, l), 0.0, 1.0), nv = clamp(dot(n, v), 1e-3, 1.0), nh = clamp(dot(n, h), 0.0, 1.0), vh = clamp(dot(v, h), 0.0, 1.0);
-  vec3 f0 = mix(vec3(0.04), albedo, metallic);
-  float a = max(rough * rough, 0.002), a2 = a * a;
-  float dd = nh * nh * (a2 - 1.0) + 1.0;
-  float D = a2 / (PI * dd * dd);
-  float k = (rough + 1.0) * (rough + 1.0) / 8.0;
-  float G = (nl / (nl * (1.0 - k) + k)) * (nv / (nv * (1.0 - k) + k));
-  vec3 F = f0 + (1.0 - f0) * pow(1.0 - vh, 5.0);
-  vec3 spec = D * G * F / max(4.0 * nl * nv, 1e-3);
-  vec3 diff = (1.0 - F) * (1.0 - metallic) * albedo / PI;
-  vec3 direct = (diff + spec) * uSunColor.rgb * nl * shadow;
-  vec3 hemi = mix(uGroundColor.rgb, uSkyColor.rgb, n.y * 0.5 + 0.5);
-  vec3 amb = hemi * albedo * (1.0 - metallic) * ao;
-  vec3 r = reflect(-v, n);
-  vec3 env = mix(uGroundColor.rgb, uSkyColor.rgb, smoothstep(-0.2, 0.4, r.y));
-  vec3 fenv = f0 + (max(vec3(1.0 - rough), f0) - f0) * pow(1.0 - nv, 5.0);
-  amb += env * fenv * (1.0 - rough * 0.7) * ao * 0.6;
-  return direct + amb;
+  float nl = saturate(dot(n, l)), nv = saturate(dot(n, v)), nh = saturate(dot(n, h)), vh = saturate(dot(v, h));
+  return F_Schlick(f0, vh) * (V_SmithCorrelated(alpha, nl, nv) * D_GGX(alpha, nh));
+}
+vec2 DFGApprox(float nv, float rough) {
+  const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022), c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  vec4 r = rough * c0 + c1;
+  float a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+  return vec2(-1.04, 1.04) * a004 + r.zw;
 }
 
-// (Phase 7) the lamps' and headlights' light pools: diffuse with a smooth range falloff (inverse square, windowed)
-vec3 localLights(vec3 albedo, vec3 n, vec3 rel) {
+struct Lit { vec3 dDiff, dSpec, iDiff, iSpec; vec3 sunE; float ndl; };
+// The sun / moon (shadowed), the hemisphere light and the sky's IBL for a surface: the terms kept apart so the
+// terrain can shape them as terrain.js does. sunE = the key light's colour after its shadow (three's directLight).
+Lit lightSurface(vec3 albedo, float metal, float rough, vec3 n, vec3 v, float shadow, vec3 geoN) {
+  Lit o;
+  rough = clamp(rough, 0.03, 1.0);
+  vec3 diffC = albedo * (1.0 - metal);
+  vec3 f0 = mix(vec3(0.04), albedo, metal);
+  vec3 l = uSunDir.xyz;
+  o.ndl = saturate(dot(n, l));
+  o.sunE = uSunColor.rgb * shadow;
+  vec3 irr = o.sunE * o.ndl;
+  o.dDiff = irr * diffC * RECIPROCAL_PI;
+  o.dSpec = irr * BRDF_GGX(l, v, n, f0, rough);
+  // indirect: hemisphere (three RE_IndirectDiffuse) + IBL with multiple scattering (RE_IndirectSpecular_Physical)
+  float nv = saturate(dot(n, v));
+  vec3 iblIrr = envIrradiance(n);
+  vec3 rad = envRadiance(reflect(-v, n), rough);
+  // horizon occlusion: a reflection under the geometric surface sees the ground, not the sky
+  vec3 rv = reflect(-v, n);
+  rad *= saturate(1.0 + 1.3 * dot(rv, geoN));
+  vec2 fab = DFGApprox(nv, rough);
+  vec3 FssEss = f0 * fab.x + fab.y;
+  float Ess = fab.x + fab.y, Ems = 1.0 - Ess;
+  vec3 Favg = f0 + (1.0 - f0) * 0.047619;
+  vec3 Fms = FssEss * Favg / (1.0 - Ems * Favg);
+  vec3 cosW = iblIrr * RECIPROCAL_PI;
+  vec3 total = FssEss + Fms * Ems;
+  o.iSpec = rad * FssEss + Fms * Ems * cosW;
+  o.iDiff = diffC * (1.0 - max(total.r, max(total.g, total.b))) * cosW + hemiIrradiance(n) * diffC * RECIPROCAL_PI;
+  return o;
+}
+vec3 sumLit(Lit o, float ao) { return o.dDiff + o.dSpec + (o.iDiff + o.iSpec) * ao; }
+
+// lamps' and headlights' light pools: diffuse + a GGX highlight, smooth range falloff (inverse square, windowed)
+vec3 localLights(vec3 albedo, vec3 n, vec3 rel, vec3 v, float rough, vec3 f0) {
   vec3 sum = vec3(0.0);
   int cnt = int(uLightCount.x);
   for (int i = 0; i < SL_MAX_LIGHTS; i++) {
@@ -90,12 +237,20 @@ vec3 localLights(vec3 albedo, vec3 n, vec3 rel) {
     float win = clamp(1.0 - pow(dist / a.w, 4.0), 0.0, 1.0);
     float att = win * win / (dist * dist + 1.0);
     float spot = b.w < -1.5 ? 1.0 : smoothstep(b.w, c.w, dot(-l, c.xyz));
-    sum += b.rgb * (att * spot * max(dot(n, l), 0.0));
+    float nl = max(dot(n, l), 0.0);
+    vec3 e = b.rgb * (att * spot * nl);
+#ifdef SL_LOW
+    sum += e * albedo * RECIPROCAL_PI;
+#else
+    sum += e * (albedo * RECIPROCAL_PI + BRDF_GGX(l, v, n, f0, max(rough, 0.15)));
+#endif
   }
-  return sum * albedo / PI;
+  return sum;
 }
+vec3 localLights(vec3 albedo, vec3 n, vec3 rel) { return localLights(albedo, n, rel, normalize(-rel), 1.0, vec3(0.04)); }
 
-// fog.js: exponential height fog integrated along the view ray + valley haze + aerial perspective
+// fog.js: exponential height fog integrated along the view ray + valley haze + aerial perspective; (High and up)
+// sunlit haze: the air toward the sun glows (Mie forward scattering)
 vec3 applyFog(vec3 col, vec3 rel) {
   float dist = length(rel);
   float camY = max(uCamPos.y, 0.0);
@@ -112,6 +267,11 @@ vec3 applyFog(vec3 col, vec3 rel) {
     f = mix(f, hb, farK);
   }
   vec3 fc = uFogColor.rgb;
+#if SL_FX >= 2 && !defined(SL_LOW)
+  vec3 vd = rel / max(dist, 1e-3);
+  float mie = pow(saturate(dot(vd, uTrueSun.xyz)), 8.0);
+  fc += uSkyGlow.rgb * (mie * 0.12 * uTrueSun.w * uHemiGround.w);
+#endif
   vec3 hue = mix(vec3(1.0), fc / max(max(fc.r, max(fc.g, fc.b)), 1e-4), 0.6);
   return mix(col * mix(vec3(1.0), hue, f * 0.45), fc, f);
 }
@@ -146,21 +306,28 @@ layout(location = 6) in vec4 aInst1;   // x yaw, y roll (about the local z axis)
 layout(location = 9) in vec4 aRow0;    // rows of a 3x4 world matrix (translation relative to uInstOrigin)
 layout(location = 10) in vec4 aRow1;
 layout(location = 11) in vec4 aRow2;
-layout(location = 12) in vec4 aTint;   // (Phase 7) per instance: paint colour / livery (a = 0: the model's own)
+layout(location = 12) in vec4 aTint;   // per instance: paint colour / livery (a = 0: the model's own)
 uniform vec3 uInstOrigin;              // the batch's origin relative to the camera
 #endif
 layout(location = 7) in vec3 aColor;
 uniform mat4 uModel;                   // camera-relative (or the per-model fit transform when instanced)
+uniform vec4 uFlags3;                  // x paint mode, y shading kind (1 pine), z model height (pine sway), w -
 out vec3 vRel;
 out vec3 vNormal;
 out vec2 vUV;
 out vec3 vColor;
 out vec4 vTint;
+out vec3 vObj;                         // model-space position (detail layer, pine crown), w-less
+out vec3 vObjN;
+out float vScale;                      // world metres per model unit (detail layer)
+out vec3 vOX, vOY, vOZ;                // model axes in world space (detail layer)
 void main() {
   vec4 p = vec4(aPos, 1.0);
   vTint = vec4(0.0);
   vec3 n = aNormal;
   vColor = aColor;
+  vObj = aPos;
+  vObjN = aNormal;
 #ifdef SKINNED
   mat4 sk = aWeights.x * uJoints[int(aJoints.x)] + aWeights.y * uJoints[int(aJoints.y)]
           + aWeights.z * uJoints[int(aJoints.z)] + aWeights.w * uJoints[int(aJoints.w)];
@@ -169,7 +336,23 @@ void main() {
 #endif
   p = uModel * p;
   n = mat3(uModel) * n;
+  vScale = length(uModel[0].xyz);
+  mat3 OW = mat3(uModel);
 #ifdef INSTANCED
+  // vegetation.js pineMaterial: gentle wind sway (+ branch flutter on High and up), stronger toward the top
+  if (uFlags3.y > 0.5 && uFlags3.y < 1.5) {
+    float hy = max(p.y, 0.0) / max(uFlags3.z, 1.0);
+    float sway = hy * hy * 0.012 * uFlags3.z;
+    float ph = uMisc2.y;
+    p.x += sin(ph * 1.3 + aInst0.x * 0.1 + aInst0.z * 0.07) * sway * aInst0.w;
+    p.z += cos(ph * 1.1 + aInst0.z * 0.1) * sway * 0.6 * aInst0.w;
+#if SL_FX >= 2
+    float rr = length(aPos.xz) * hy;
+    p.x += sin(ph * 3.7 + dot(aPos, vec3(11.0, 7.0, 5.0)) * 9.0 + aInst0.x) * rr * 0.02;
+    p.z += cos(ph * 3.1 + dot(aPos, vec3(5.0, 9.0, 13.0)) * 9.0 + aInst0.z) * rr * 0.02;
+#endif
+    vObj = p.xyz / max(uFlags3.z, 1e-3);
+  }
   if (aInst1.y != 0.0) {
     float cr = cos(aInst1.y), sr = sin(aInst1.y);
     p.xy = vec2(cr * p.x - sr * p.y, sr * p.x + cr * p.y);
@@ -178,13 +361,18 @@ void main() {
   float c = cos(aInst1.x), s = sin(aInst1.x);
   p.xyz = vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z) * aInst0.w + (aInst0.xyz - uCamPos.xyz);
   n = vec3(c * n.x + s * n.z, n.y, -s * n.x + c * n.z);
+  vScale *= aInst0.w;
+  OW = mat3(vec3(c, 0.0, -s), vec3(0.0, 1.0, 0.0), vec3(s, 0.0, c)) * OW;
 #endif
 #ifdef INSTMAT
   mat3 R = mat3(aRow0.x, aRow1.x, aRow2.x, aRow0.y, aRow1.y, aRow2.y, aRow0.z, aRow1.z, aRow2.z);
   p.xyz = R * p.xyz + vec3(aRow0.w, aRow1.w, aRow2.w) + uInstOrigin;
   n = R * n;
   vTint = aTint;
+  vScale *= length(vec3(aRow0.x, aRow1.x, aRow2.x));
+  OW = R * OW;
 #endif
+  vOX = OW[0]; vOY = OW[1]; vOZ = OW[2];
   vRel = p.xyz;
   vNormal = n;
   vUV = aUV;
@@ -198,17 +386,40 @@ in vec3 vNormal;
 in vec2 vUV;
 in vec3 vColor;
 in vec4 vTint;
+in vec3 vObj;
+in vec3 vObjN;
+in float vScale;
+in vec3 vOX, vOY, vOZ;
 out vec4 oColor;
 uniform sampler2D uBase;
 uniform sampler2D uMR;
 uniform sampler2D uNormalMap;
 uniform sampler2D uEmissiveMap;
+uniform sampler2D uNoise;      // terrain.js noise (pine snow dusting)
+uniform sampler2D uDetail;     // meshylook.js detail layer: RG slope, B roughness variation
 uniform vec4 uBaseColor;
 uniform vec4 uMat;        // metallic, roughness, normal scale, alpha cutoff (<0: opaque)
 uniform vec4 uFlags;      // has base tex, has mr tex, has normal tex, double sided
 uniform vec4 uFlags2;     // vertex colour, has emissive map, night glow strength, vertex colour stored as sqrt
 uniform vec3 uEmissive;   // already scaled for the time of day
-uniform vec4 uFlags3;     // (Phase 7) x paint mode (1 car paint: the instance colour, 2 livery: red -> the instance colour)
+uniform vec4 uFlags3;     // x paint mode (1 car paint, 2 livery), y shading (0 standard, 1 pine, 2 meshy detail, 3 glass), z model height, w lum norm (pine)
+uniform vec4 uFlags4;     // x clearcoat, y detail strength, z detail fade distance, w sheen (fabric)
+
+// ---- vegetation.js pine shading
+const vec3 PINE_SNOW = vec3(0.78, 0.83, 0.9);
+vec3 pineNeedle(vec3 tex) {
+  float k = clamp(dot(tex, vec3(0.2126, 0.7152, 0.0722)) * uFlags3.w, 0.15, 2.2);
+  return mix(vec3(0.011, 0.027, 0.040), vec3(0.028, 0.060, 0.072), smoothstep(0.5, 1.8, k)) * (0.6 + 0.4 * k);
+}
+float pineTexSnow(vec3 tex) {
+  float hi = max(max(tex.r, tex.g), tex.b);
+  return smoothstep(0.6, 0.82, min(min(tex.r, tex.g), tex.b) / max(hi, 1e-4)) * smoothstep(0.12, 0.3, hi);
+}
+float pineSnowMask(vec3 tex, vec3 wn, vec3 op) {
+  float n = texture(uNoise, op.xz * 2.6 + vec2(op.y * 1.9, -op.y * 1.4)).r;
+  return max(pineTexSnow(tex), smoothstep(0.45, 0.85, wn.y) * smoothstep(0.5, 0.66, n) * 0.35);
+}
+
 void main() {
   vec4 base = uBaseColor;
   if (vTint.a > 0.0 && uFlags3.x > 0.5 && uFlags3.x < 1.5) base.rgb = vTint.rgb;
@@ -219,14 +430,27 @@ void main() {
     base.rgb = mix(base.rgb, vTint.rgb * (0.35 + 2.4 * dot(base.rgb, vec3(0.5, 0.35, 0.15))), red * vTint.a);
   }
   if (uFlags2.x > 0.5) base.rgb *= uFlags2.w > 0.5 ? vColor * vColor : vColor;
-  if (uMat.w >= 0.0 && base.a < uMat.w) discard;
+  if (uMat.w >= 0.0) {
+    // alpha test with a sharpened, mip-stable edge (alpha to coverage under MSAA smooths it)
+    float a = (base.a - uMat.w) / max(fwidth(base.a), 1e-4) + 0.5;
+#ifdef SL_A2C
+    if (a < 0.02) discard;
+    base.a = clamp(a, 0.0, 1.0);
+#else
+    if (a < 0.5) discard;
+    base.a = 1.0;
+#endif
+  }
   float metallic = uMat.x, rough = uMat.y;
   if (uFlags.y > 0.5) { vec4 mr = texture(uMR, vUV); rough *= mr.g; metallic *= mr.b; }
-  vec3 n = normalize(vNormal);
+  vec3 gn = normalize(vNormal);
   vec3 v = normalize(-vRel);
-  if (uFlags.w > 0.5 && dot(n, v) < 0.0) n = -n;
+  float dist = length(vRel);
+  if (uFlags.w > 0.5 && dot(gn, v) < 0.0) gn = -gn;
+  vec3 n = gn;
+  int kind = int(uFlags3.y + 0.5);
 #ifdef SL_LOW
-  if (uFlags.z > 0.5 && dot(vRel, vRel) < 900.0) {   // (simplified shaders: no normal maps past 30 m)
+  if (uFlags.z > 0.5 && dist < 30.0) {   // (simplified shaders: no normal maps past 30 m)
 #else
   if (uFlags.z > 0.5) {
 #endif
@@ -234,7 +458,36 @@ void main() {
     tn.xy *= uMat.z;
     n = perturbNormal(n, vRel, vUV, normalize(tn));
   }
-  float sh = shadowAt(vRel, normalize(vNormal));
+  float snowA = 0.0;
+  if (kind == 1) {
+    // pine: dark navy needles, snow on needles facing the sky
+    vec3 pineTex = base.rgb;
+    base.rgb = pineNeedle(pineTex);
+    snowA = clamp(pineSnowMask(pineTex, n, vObj) * (1.0 + uMisc.y) * (1.0 - 0.75 * smoothstep(40.0, 450.0, dist)), 0.0, 1.0);
+    base.rgb = mix(base.rgb, PINE_SNOW, snowA);
+    rough = mix(max(rough, 0.82), 0.7, snowA);
+    metallic = 0.0;
+  }
+#ifndef SL_LOW
+  if (kind == 2 && uFlags4.y > 0.0) {
+    // meshylook.js detail layer: triplanar grain at half a metre per repeat in the model's own space
+    float dF = uFlags4.y * (1.0 - smoothstep(uFlags4.z * 0.3, uFlags4.z, dist));
+    if (dF > 0.001) {
+      vec3 P = vObj * (vScale / 0.5);
+      vec3 dW = abs(normalize(vObjN)); dW *= dW; dW *= dW; dW /= dot(dW, vec3(1.0));
+      vec4 dA = texture(uDetail, P.yz), dB = texture(uDetail, P.zx), dC = texture(uDetail, P.xy);
+      vec2 gA = dA.rg * 2.0 - 1.0, gB = dB.rg * 2.0 - 1.0, gC = dC.rg * 2.0 - 1.0;
+      vec3 dO = dW.x * vec3(0.0, gA.x, gA.y) + dW.y * vec3(gB.y, 0.0, gB.x) + dW.z * vec3(gC.x, gC.y, 0.0);
+      vec3 dV = normalize(vOX) * dO.x + normalize(vOY) * dO.y + normalize(vOZ) * dO.z;
+      dV -= n * dot(dV, n);
+      n = normalize(n + dV * dF);
+      rough += (dW.x * dA.b + dW.y * dB.b + dW.z * dC.b - 0.5) * dF * 0.25;
+    }
+    metallic = smoothstep(0.2, 0.8, metallic);
+    rough *= 0.92;
+  }
+#endif
+  float sh = shadowAt(vRel, gn);
   vec3 em = uEmissive;
   if (uFlags2.y > 0.5) em *= texture(uEmissiveMap, vUV).rgb;
   // village.js addNightGlow: lit windows / lanterns (warm bright texels) glow at night
@@ -242,208 +495,73 @@ void main() {
     float warm = smoothstep(0.35, 0.8, texel.r - texel.b * 0.8) * smoothstep(0.25, 0.6, texel.r);
     em += vec3(1.0, 0.62, 0.28) * warm * uMisc.x * uFlags2.z;
   }
-  vec3 col = shade(base.rgb, metallic, clamp(rough, 0.04, 1.0), n, v, sh, 1.0) + em + localLights(base.rgb, n, vRel);
-  oColor = vec4(applyFog(col, vRel), base.a);
-}
-)GLSL";
-
-// ---------------------------------------------------------------- terrain
-inline const char* kTerrainVS = R"GLSL(
-layout(location = 0) in vec3 aPos;      // local to the node
-layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec4 aData;     // forest, groomed, piste dir xz (length 4 + lateral / 50)
-uniform vec3 uOrigin;                   // node origin relative to the camera
-out vec3 vRel;
-out vec3 vNormal;
-out vec4 vData;
-void main() {
-  vec3 rel = aPos + uOrigin;
-  vRel = rel;
-  vNormal = aNormal;
-  vData = aData;
-  gl_Position = uViewProj * vec4(rel, 1.0);
-}
-)GLSL";
-
-inline const char* kTerrainFS = R"GLSL(
-in vec3 vRel;
-in vec3 vNormal;
-in vec4 vData;
-out vec4 oColor;
-uniform sampler2D uNoise;   // R fbm, GB its gradient, A a second fbm (terrain.js makeNoiseTexture), 8 units / tile
-vec4 nTex(vec2 p) { return texture(uNoise, p * 0.125); }
-void main() {
-  vec3 wp = vRel + uCamPos.xyz;
-  vec3 n = normalize(vNormal);
-  float dist = length(vRel);
-  float groomed = vData.y;
-  // snow surface: soft wind-packed variation and drifts (two noise scales), faded with distance
-  vec4 a = nTex(wp.xz * 0.06);
-  vec4 b = nTex(wp.xz * 0.45 + 3.7);
-  float near = 1.0 - smoothstep(60.0, 400.0, dist);
-  vec2 g = (a.gb - 0.5) * 0.35 + (b.gb - 0.5) * 0.18 * near;
-  g *= 1.0 - groomed * 0.7;
-  // groomer corduroy along the run
-  if (groomed > 0.01 && dist < 120.0) {
-    vec2 dir = vData.zw;
-    float m = length(dir);
-    if (m > 0.1) {
-      dir /= m;
-      float lat = dot(wp.xz, vec2(-dir.y, dir.x));
-      float cord = sin(lat * 6.2831 / 0.42);
-      float fw = fwidth(lat) / 0.42;   // ridges per pixel: fade before they alias into moire
-      g += vec2(-dir.y, dir.x) * cord * 0.035 * groomed * (1.0 - smoothstep(0.15, 0.45, fw)) * (1.0 - smoothstep(20.0, 80.0, dist));
-    }
-  }
-  vec3 sn = normalize(n + vec3(g.x, 0.0, g.y) * (1.0 - smoothstep(0.6, 0.9, 1.0 - n.y)));
-  // rock on steep faces (slate-blue, strata), snow settles on its relief
-  float steep = 1.0 - n.y;
-  float rockK = smoothstep(0.40, 0.58, steep + (a.r - 0.5) * 0.22 + (b.a - 0.5) * 0.08) * (1.0 - groomed);
-  float strata = nTex(vec2(wp.x * 0.02, wp.y * 0.35) + wp.z * 0.013).r;
-  vec3 rock = mix(vec3(0.050, 0.058, 0.075), vec3(0.11, 0.115, 0.13), strata) * (0.85 + 0.3 * b.r);
-  vec3 snow = vec3(0.86, 0.89, 0.94) * (0.94 + 0.08 * a.a) + groomed * vec3(0.03);
-  // distant forest the trees no longer cover
-  float forest = vData.x * smoothstep(700.0, 1100.0, dist);
-  vec3 alb = mix(snow, rock, rockK);
-  alb = mix(alb, vec3(0.045, 0.06, 0.05), forest * 0.75);
-  vec3 nn = normalize(mix(sn, n, rockK));
-  float sh = shadowAt(vRel, n);
-  vec3 v = normalize(-vRel);
-  vec3 col = shade(alb, 0.0, mix(0.62, 0.85, rockK), nn, v, sh, 1.0) + localLights(alb, nn, vRel);
-#ifndef SL_LOW
-  // sun glints on the snow
-  float glint = pow(max(dot(reflect(-v, nn), uSunDir.xyz), 0.0), 400.0) * (1.0 - rockK) * near * step(0.92, b.a);
-  col += uSunColor.rgb * glint * 0.4 * sh;
+  rough = clamp(rough, 0.04, 1.0);
+  Lit L = lightSurface(base.rgb, metallic, rough, n, v, sh, gn);
+  if (kind == 1) {
+    // crown self-shadow, the sky hardly reaching into the crown, translucent needles against the sun
+    float hy = clamp(vObj.y, 0.0, 1.0);
+    // the crown's averaged self-shadow takes over where the trees stop casting into the shadow map
+    float crown = mix(1.0, 0.42, smoothstep(SL_CROWN0, SL_CROWN1, dist));
+    L.dDiff *= crown; L.dSpec *= crown;
+    L.iDiff *= mix(0.62, 1.0, hy);
+#if SL_FX >= 2
+    float pNear = 1.0 - smoothstep(60.0, 110.0, dist);
+    float cr = 0.3 * (1.0 - hy) + 0.03;
+    float inner = smoothstep(0.15, 0.9, length(vObj.xz) / cr);
+    L.iDiff *= mix(1.0, 0.55 + 0.45 * inner, pNear);
+    float pBack = saturate(dot(-v, uSunDir.xyz));
+    float pAlb = max(base.r, max(base.g, base.b));
+    float pTr = pow(pBack, 5.0) * (0.3 + 0.7 * inner) * pNear * (1.0 - smoothstep(0.12, 0.4, pAlb));
+#if SL_FX >= 3
+    pTr *= 1.25;
 #endif
-  oColor = vec4(applyFog(col, vRel), 1.0);
+    L.dDiff += L.sunE * base.rgb * vec3(0.9, 1.25, 0.65) * pTr * 0.45;
+#endif
+  }
+  vec3 col = sumLit(L, 1.0);
+#ifndef SL_LOW
+  if (uFlags4.x > 0.0) {
+    // car paint: a clear coat over the base (three's clearcoat: its own GGX lobe and sky reflection, Fresnel
+    // taken off the layer below), metallic flake sparkle
+    float nv = saturate(dot(gn, v));
+    float Fc = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+    vec3 ccSpec = uSunColor.rgb * sh * saturate(dot(gn, uSunDir.xyz)) * BRDF_GGX(uSunDir.xyz, v, gn, vec3(0.04), 0.06);
+    vec3 ccEnv = envRadiance(reflect(-v, gn), 0.04) * saturate(1.0 + 1.5 * dot(reflect(-v, gn), gn));
+    col = col * (1.0 - Fc * uFlags4.x) + (ccSpec + ccEnv * Fc) * uFlags4.x;
+    float fl = tHash(ivec2(floor(vObj.xz * 900.0))) ;
+    col += L.sunE * pow(saturate(dot(reflect(-uSunDir.xyz, n), v)), 60.0) * step(0.93, fl) * 0.6 * metallic * (1.0 - smoothstep(4.0, 15.0, dist));
+  }
+#endif
+  if (kind == 3) {
+    // glass: the sky's reflection with Fresnel, the panes' own tint kept
+    float nv = saturate(dot(n, v));
+    float F = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+    vec3 r = reflect(-v, n);
+    col += envRadiance(r, 0.03) * F * saturate(1.0 + 1.5 * dot(r, gn)) * 1.2;
+    base.a = mix(base.a, 1.0, F);
+  }
+  col += em + localLights(base.rgb * (1.0 - metallic), n, vRel, v, rough, mix(vec3(0.04), base.rgb, metallic));
+  oColor = vec4(applyFog(col, vRel), base.a);
 }
 )GLSL";
 
 // ---------------------------------------------------------------- shadow depth (terrain, meshes, instanced, skinned)
 inline const char* kDepthFS = R"GLSL(
+in vec2 vUV;
+uniform sampler2D uBase;
+uniform vec4 uMat;
+uniform vec4 uFlags;
+uniform vec4 uBaseColor;
+out vec4 oColor;
+void main() {
+  // alpha-tested foliage casts its real shape (pines, fences)
+  if (uMat.w >= 0.0 && uFlags.x > 0.5 && texture(uBase, vUV).a * uBaseColor.a < uMat.w) discard;
+  oColor = vec4(1.0);
+}
+)GLSL";
+inline const char* kDepthTerrainFS = R"GLSL(
 out vec4 oColor;
 void main() { oColor = vec4(1.0); }
-)GLSL";
-
-// ---------------------------------------------------------------- sky (fullscreen triangle at the far plane)
-inline const char* kSkyVS = R"GLSL(
-out vec2 vNdc;
-void main() {
-  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2) * 2.0 - 1.0;
-  vNdc = p;
-  gl_Position = vec4(p, 1.0, 1.0);
-}
-)GLSL";
-inline const char* kSkyFS = R"GLSL(
-in vec2 vNdc;
-out vec4 oColor;
-uniform mat4 uInvViewProj;
-void main() {
-  vec4 w = uInvViewProj * vec4(vNdc, 1.0, 1.0);
-  vec3 d = normalize(w.xyz / w.w);
-  float h = max(d.y, 0.0);
-  // sky.js: col = mix(mix(zenith, mid, exp(-h * 2.5)), horizon, exp(-h * 16))
-  vec3 col = mix(mix(uSkyZenith.rgb, uSkyMid.rgb, exp(-h * 2.5)), uSkyHorizon.rgb, exp(-h * 16.0));
-  float sd = max(dot(d, uSunDir.xyz), 0.0);
-  col = mix(col, uSkyGlow.rgb, exp(-h * 10.0) * pow(sd, 6.0) * 0.6);
-  col += uSkyGlow.rgb * 0.12 * pow(sd, 32.0);                      // aureole
-  col += uSunColor.rgb * 40.0 * smoothstep(0.99985, 0.99995, sd);  // HDR disc
-  if (d.y < 0.0) col = mix(col, uFogColor.rgb, smoothstep(0.0, -0.08, d.y));
-  oColor = vec4(col, 1.0);
-}
-)GLSL";
-
-// ---------------------------------------------------------------- tone mapping (ACES filmic as three.js, or Khronos PBR Neutral)
-inline const char* kPostVS = kSkyVS;
-inline const char* kPostFS = R"GLSL(
-in vec2 vNdc;
-out vec4 oColor;
-uniform sampler2D uHdr;
-uniform sampler2D uBloom;   // (Phase 7) the bloom (quarter res, blurred bright parts)
-uniform float uExposure;
-uniform int uToneMap;   // 0 ACES filmic, 1 Neutral
-uniform vec4 uPost;     // x bloom strength, y vignette, z speed streaks (0..1), w flash (white)
-uniform vec4 uPost2;    // x hit (red), y time
-vec3 RRTAndODTFit(vec3 v) {
-  vec3 a = v * (v + 0.0245786) - 0.000090537;
-  vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
-  return a / b;
-}
-vec3 aces(vec3 c) {
-  const mat3 IN = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777));
-  const mat3 OUT = mat3(vec3(1.60475, -0.10208, -0.00327), vec3(-0.53108, 1.10813, -0.07276), vec3(-0.07367, -0.00605, 1.07602));
-  c *= uExposure / 0.6;
-  return clamp(OUT * RRTAndODTFit(IN * c), 0.0, 1.0);
-}
-vec3 neutral(vec3 c) {
-  c *= uExposure;
-  const float startC = 0.8 - 0.04, desat = 0.15;
-  float x = min(c.r, min(c.g, c.b));
-  float off = x < 0.08 ? x - 6.25 * x * x : 0.04;
-  c -= off;
-  float peak = max(c.r, max(c.g, c.b));
-  if (peak < startC) return c;
-  float d = 1.0 - startC;
-  float np = 1.0 - d * d / (peak + d - startC);
-  c *= np / peak;
-  float g = 1.0 - 1.0 / (desat * (peak - np) + 1.0);
-  return mix(c, vec3(np), g);
-}
-vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
-void main() {
-  vec2 uv = vNdc * 0.5 + 0.5;
-  vec3 c = texture(uHdr, uv).rgb;
-  if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
-  // speed streaks (screen effects): a radial smear toward the edges at speed
-  if (uPost.z > 0.001) {
-    vec2 dir = uv - 0.5;
-    float r = length(dir);
-    float k = uPost.z * smoothstep(0.18, 0.7, r) * 0.035;
-    vec3 acc = c;
-    for (int i = 1; i <= 4; i++) { vec3 q = texture(uHdr, uv - dir * k * float(i)).rgb; if (!(any(isnan(q)) || any(isinf(q)))) acc += q; }
-    c = acc / 5.0;
-  }
-  if (uPost.x > 0.0) c += texture(uBloom, uv).rgb * uPost.x;
-  c = uToneMap == 1 ? neutral(c) : aces(c);
-  // vignette, the white flash of a big landing, the red edge of a crash
-  float vr = length(vNdc * vec2(0.9, 1.0));
-  c *= 1.0 - uPost.y * smoothstep(0.6, 1.45, vr);
-  c = mix(c, vec3(1.0), clamp(uPost.w, 0.0, 1.0) * 0.5);
-  c = mix(c, vec3(0.55, 0.02, 0.02), clamp(uPost2.x, 0.0, 1.0) * smoothstep(0.5, 1.4, vr) * 0.7);
-  oColor = vec4(toSRGB(clamp(c, 0.0, 1.0)), 1.0);
-}
-
-)GLSL";
-
-// ---------------------------------------------------------------- (Phase 7) bloom: a bright pass + separable blur
-inline const char* kBloomFS = R"GLSL(
-in vec2 vNdc;
-out vec4 oColor;
-uniform sampler2D uSrc;
-uniform vec2 uTexel;     // source texel size
-uniform vec2 uDir;       // 0,0: the bright pass (downsampled); else the blur direction in texels
-uniform float uThreshold;
-void main() {
-  vec2 uv = vNdc * 0.5 + 0.5;
-  if (uDir == vec2(0.0)) {
-    vec3 s = vec3(0.0);
-    for (int y = -1; y <= 1; y += 2) for (int x = -1; x <= 1; x += 2) {
-      vec3 q = texture(uSrc, uv + vec2(x, y) * uTexel).rgb;
-      if (!(any(isnan(q)) || any(isinf(q)))) s += min(q, vec3(64.0));   // (no NaN / inf into the blur)
-    }
-    s *= 0.25;
-    float l = max(s.r, max(s.g, s.b));
-    oColor = vec4(s * (max(l - uThreshold, 0.0) / max(l, 1e-4)), 1.0);
-    return;
-  }
-  const float w[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
-  vec3 s = texture(uSrc, uv).rgb * w[0];
-  for (int i = 1; i < 5; i++) {
-    s += texture(uSrc, uv + uDir * uTexel * float(i) * 1.5).rgb * w[i];
-    s += texture(uSrc, uv - uDir * uTexel * float(i) * 1.5).rgb * w[i];
-  }
-  oColor = vec4(s, 1.0);
-}
 )GLSL";
 
 // ---------------------------------------------------------------- HUD text / quads (pixel coordinates)
@@ -463,4 +581,19 @@ out vec4 oColor;
 void main() { oColor = vColor; }
 )GLSL";
 
+// full-screen triangle (post passes, sky)
+inline const char* kFullscreenVS = R"GLSL(
+out vec2 vNdc;
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2) * 2.0 - 1.0;
+  vNdc = p;
+  gl_Position = vec4(p, 1.0, 1.0);
+}
+)GLSL";
+
 } // namespace sl::shaders
+
+#include "engine/shaders_terrain.h"
+#include "engine/shaders_sky.h"
+#include "engine/shaders_post.h"
+#include "engine/shaders_fx.h"

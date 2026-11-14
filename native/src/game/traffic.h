@@ -3,23 +3,31 @@
 // limit braked ahead of a lower one, the bends ahead) times its driver's own factor, keeps a time gap behind the car
 // ahead (followV / lookFor), stops for you on foot and for your car and the buses, turns off at junctions onto the
 // car parks' access roads and parks a while, comes back out, turns round before a bus stop's dead end, and is knocked
-// aside when you hit it. About six cars stay round you; the far ones are recycled out of sight; beyond SIM_R they are
-// not simulated and between 300 and 600 m they update at a quarter of the rate (distance-based update rates).
+// aside when you hit it. About six cars stay round you (traffic.js NEAR_WANT x the preset's traffic share): the far
+// ones come back on the roads 150-420 m round you out of the camera's sight, trips end out of sight, a car making no
+// headway for 5 minutes is taken off; beyond SIM_R they are not simulated and between 300 and 600 m they update at a
+// quarter of the rate (distance-based update rates). carpeople.js: a driver at the wheel of every car that drives, now
+// and then a front passenger, sometimes one or two in the back (the game's skiers, seated by each model's seats).
 #pragma once
 #include "game/vehicles.h"
+
+namespace sl { class People; }
 
 namespace sl {
 class Drive;
 
 class Traffic {
 public:
-  double density = 1;   // (Phase 7, the quality preset) x the number of cars
+  double density = 1;   // (Phase 7, the quality preset: quality.traffic) x the cars kept round you
   /// (Phase 7) the cars to light (at night) / plate
   void carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, bool night) const;
   Traffic(World& w, Transport& t, VehicleModels& m) : world_(w), t_(t), models_(m) {}
   void init();
   /// per frame: player position (on foot) / your car (drive), the bus boxes to brake for
-  void update(double dt, const dvec3& player, const Drive* you, const std::vector<Obb>& buses, const dvec3& cam);
+  void update(double dt, const dvec3& player, const Drive* you, const std::vector<Obb>& buses, const Camera& cam);
+  /// carpeople.js: the people in the cars that drive near the camera (seated skiers; `kinds`: the looks to pick from)
+  void addPeople(People& people, const dvec3& cam, const std::vector<int>& kinds) const;
+  mutable int peopleShown = 0;   // (the last addPeople: how many)
   void addDraw(VehicleDraw& draw, const dvec3& cam) const;
   void fillColliders(std::vector<Collider>& out) const;
   void others(std::vector<struct OtherBody>& out, const dvec3& near) const;
@@ -40,6 +48,9 @@ public:
     double wait = 0, trip = 0, simAcc = 0, odo = 0;   // odo: metres driven along roads (autotest)
     int lot = -1, bay = -1;
     double kvx = 0, kvz = 0, kw = 0, kt = 0;   // knocked: sliding
+    bool scenic = false;                       // one of the scenic network's own cars
+    double wdX = 1e18, wdZ = 1e18, wdT = 0;    // the watchdog: where it last made 3 m headway, for how long not
+    uint32_t crew = 0;                         // (carpeople.js fill) who sits in it: a seed per trip
   };
   std::vector<Car> list;
   int movingCount() const;
@@ -51,7 +62,11 @@ private:
   void placeOnRoad(Car& c);
   void toRoad(Car& c, int ri, double s, int dir, double v);
   void deadEnd(Car& c, const dvec3& player);
-  bool inSight(double x, double z, const dvec3& player) const;
+  bool inSight(double x, double z, double d = 260) const;
+  bool recycle(Car& c, const dvec3& player);
+  void putOnRoad(Car& c, int ri, double s, int dir, double v);
+  void despawn(Car& c, double wait);
+  bool toLot(Car& c);
   double rnd() { seed_ = seed_ * 1664525u + 1013904223u; return double(seed_ >> 8) / double(1u << 24); }
 
   World& world_;

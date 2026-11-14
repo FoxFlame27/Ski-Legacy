@@ -2,6 +2,7 @@
 #include "game/scenefx.h"
 #include "core/log.h"
 #include "game/drive.h"
+#include "game/people.h"
 #include "world/scenery.h"
 #include "world/world.h"
 #include <algorithm>
@@ -11,7 +12,8 @@ namespace sl {
 
 namespace {
 constexpr int N_CARS = 12, N_SCENIC = 6;
-constexpr double SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, END_KEEP = 95, TURN_LEAD = 7, OFF_TURN = 0.12, NEAR_WANT = 6;
+constexpr double SIM_R = 600, SHOW_R = 300, LOD_R = 70, LANE = 1.6, END_KEEP = 95, TURN_LEAD = 7, OFF_TURN = 0.12, NEAR_WANT = 6, STUCK_T = 300;
+constexpr double PEOPLE_R = 70;   // (traffic.js: the people go with the detailed model)
 constexpr double HEAD = 1.7, BRK = 3.0, V_MAX = 150 / 3.6;
 double lookFor(double v) { return 30 + v * HEAD + (v * v) / (2 * BRK); }
 double followV(double room, double vl = 0) {
@@ -75,7 +77,7 @@ void Traffic::init() {
     for (auto& n : names) { a -= weightOf(n); if (a < 0) return n; }
     return names.back();
   };
-  int nCars = std::max(4, int(std::lround((N_CARS + (scenic_.empty() ? 0 : N_SCENIC)) * density)));
+  int nCars = N_CARS + (scenic_.empty() ? 0 : N_SCENIC);   // (traffic.js: every car; the preset's share is how many stay round you)
   for (int k = 0; k < nCars; k++) {
     Car c;
     c.name = draw(uint32_t(k < N_CARS ? k : 1000 + k - N_CARS));
@@ -84,23 +86,85 @@ void Traffic::init() {
     c.l = sp ? sp->length : 4.7; c.w = sp ? sp->size.x : 1.9;
     c.drv = 0.92 + mulberry(uint32_t(k * 131 + 7)) * 0.34;   // traffic.js DRV: this driver's own pace
     c.vmax = 30;
+    c.scenic = k >= N_CARS;
+    c.crew = uint32_t(k) * 2654435761u + 99u;
     list.push_back(c);
   }
   for (size_t k = 0; k < list.size(); k++) spawn(list[k], dvec3(1e9), true);
   SL_INFO("traffic: %zu cars on %zu roads (%zu access roads, %zu junctions, %zu scenic roads)", list.size(), main_.size(), access_.size(), junctions_.size(), scenic_.size());
 }
 
-bool Traffic::inSight(double x, double z, const dvec3& player) const {
-  double d = std::hypot(x - cam_.x, z - cam_.z);
-  if (d > 260) return false;
-  dvec3 to = glm::normalize(dvec3(x - cam_.x, 0, z - cam_.z) + dvec3(1e-9));
-  (void)player;
-  return glm::dot(to, glm::normalize(dvec3(camFwd_.x, 0, camFwd_.z) + dvec3(1e-9))) > 0.3 || d < 40;
+// seen from the camera? (traffic.js inSight: within d m and not behind it; the camera's own facing)
+bool Traffic::inSight(double x, double z, double d) const {
+  double dx = x - cam_.x, dz = z - cam_.z, dist = std::hypot(dx, dz);
+  if (dist > d) return false;
+  return dist < 40 || (dx * camFwd_.x + dz * camFwd_.z) / dist > -0.15;
+}
+
+// on a bus road somewhere around you (150-420 m away), out of sight, clear of the other cars (traffic.js recycle)
+bool Traffic::recycle(Car& c, const dvec3& player) {
+  if (main_.empty()) return false;
+  for (int tries = 0; tries < 30; tries++) {
+    int ri = main_[size_t(rnd() * main_.size()) % main_.size()];
+    const Road& r = t_.roads[size_t(ri)];
+    if (r.length < 2 * END_KEEP + 30) continue;
+    double s = END_KEEP + 10 + rnd() * std::max(1.0, r.length - 2 * END_KEEP - 20);
+    RoadPoint p = roadAt(r, s);
+    double d = std::hypot(p.x - player.x, p.z - player.z);
+    if (d < 150 || d > 420 || inSight(p.x, p.z)) continue;
+    bool crowded = false;
+    for (const Car& o : list) crowded = crowded || (&o != &c && o.mode != Car::Mode::Gone && std::hypot(o.x - p.x, o.z - p.z) < 45);
+    if (crowded) continue;
+    putOnRoad(c, ri, s, rnd() < 0.5 ? 1 : -1, c.vmax * 0.8);
+    return true;
+  }
+  return false;
+}
+void Traffic::putOnRoad(Car& c, int ri, double s, int dir, double v) {
+  const Road& r = t_.roads[size_t(ri)];
+  c.mode = Car::Mode::Road; c.road = ri; c.s = clamp(s, 2, r.length - 2); c.dir = dir; c.v = v; c.nextJ = -2; c.lot = c.bay = -1;
+  c.off = c.offT = c.offQ = 0; c.trip = 120 + rnd() * 180; c.wdT = 0; c.wdX = c.wdZ = 1e18; c.crew = c.crew * 1664525u + 1013904223u;
+  placeOnRoad(c);
+}
+// off the map for a moment (it comes back elsewhere, out of sight)
+void Traffic::despawn(Car& c, double wait) {
+  c.mode = Car::Mode::Gone; c.wait = wait; c.lot = c.bay = -1; c.v = 0; c.kvx = c.kvz = c.kw = 0; c.wdT = 0; c.wdX = c.wdZ = 1e18;
+}
+// stuck: taken off and parked in a free bay of a car park out of your sight (it drives off from there later)
+bool Traffic::toLot(Car& c) {
+  despawn(c, 1 + rnd() * 4);
+  std::vector<int> free;
+  for (int li : lots_) {
+    const Lot& L = t_.lots[size_t(li)];
+    if (inSight(L.x, L.z)) continue;
+    for (size_t b = 0; b < L.bays.size(); b++) {
+      if (L.bays[b].taken) continue;
+      bool busy = false;
+      for (const Car& o : list) busy = busy || (&o != &c && o.lot == li && o.bay == int(b));
+      if (!busy) { free.push_back(li); break; }
+    }
+  }
+  if (free.empty()) return false;
+  int li = free[size_t(rnd() * free.size()) % free.size()];
+  const Lot& L = t_.lots[size_t(li)];
+  for (size_t b = 0; b < L.bays.size(); b++) {
+    if (L.bays[b].taken) continue;
+    bool busy = false;
+    for (const Car& o : list) busy = busy || (&o != &c && o.lot == li && o.bay == int(b));
+    if (busy) continue;
+    const Bay& bay = L.bays[b];
+    c.mode = Car::Mode::Parked; c.lot = li; c.bay = int(b);
+    c.x = bay.x; c.z = bay.z; c.yaw = std::atan2(bay.hx, bay.hz); c.y = world_.height(c.x, c.z) + 0.03;
+    c.wait = 20 + rnd() * 40; c.v = 0;
+    return true;
+  }
+  return false;
 }
 
 void Traffic::spawn(Car& c, const dvec3& player, bool first) {
   // a car park now and then (parked a while, then it drives out), else on a road away from you (never popping up)
-  if (!lots_.empty() && (first ? rnd() < 0.3 : rnd() < 0.25)) {
+  // (traffic.js spawn: at the start every other car parked, later 6 in 10; the scenic network's cars on their roads)
+  if (!c.scenic && !lots_.empty() && (first ? ((&c - list.data()) % 2 == 1) : rnd() < 0.6)) {
     int li = lots_[size_t(rnd() * lots_.size()) % lots_.size()];
     Lot& L = t_.lots[size_t(li)];
     for (size_t b = 0; b < L.bays.size(); b++) {
@@ -115,7 +179,7 @@ void Traffic::spawn(Car& c, const dvec3& player, bool first) {
       return;
     }
   }
-  const std::vector<int>& pool = c.vmax < 20 || (!scenic_.empty() && (&c - list.data()) >= N_CARS) ? scenic_ : main_;
+  const std::vector<int>& pool = c.scenic && !scenic_.empty() ? scenic_ : main_;
   for (int tries = 0; tries < 30; tries++) {
     int ri = pool[size_t(rnd() * pool.size()) % pool.size()];
     const Road& r = t_.roads[size_t(ri)];
@@ -123,10 +187,8 @@ void Traffic::spawn(Car& c, const dvec3& player, bool first) {
     double s = END_KEEP + 10 + rnd() * std::max(1.0, r.length - 2 * END_KEEP - 20);
     RoadPoint p = roadAt(r, s);
     double dp = std::hypot(p.x - player.x, p.z - player.z);
-    if (!first && (dp < 220 || dp > 520)) continue;
-    c.mode = Car::Mode::Road; c.road = ri; c.s = s; c.dir = rnd() < 0.5 ? 1 : -1; c.v = c.vmax * 0.5; c.off = c.offT = c.offQ = 0; c.nextJ = -2; c.lot = c.bay = -1;
-    c.trip = 120 + rnd() * 180;
-    placeOnRoad(c);
+    if (!first && (dp < (c.scenic ? 150 : 220) || (c.scenic && (dp > 700 || inSight(p.x, p.z))))) continue;
+    putOnRoad(c, ri, s, rnd() < 0.5 ? 1 : -1, c.vmax * 0.5);
     return;
   }
   c.mode = Car::Mode::Gone; c.wait = 5;
@@ -134,21 +196,39 @@ void Traffic::spawn(Car& c, const dvec3& player, bool first) {
 
 int Traffic::movingCount() const { int n = 0; for (auto& c : list) if (c.mode == Car::Mode::Road && c.v > 1) n++; return n; }
 
-void Traffic::update(double dt, const dvec3& player, const Drive* you, const std::vector<Obb>& buses, const dvec3& cam) {
+void Traffic::update(double dt, const dvec3& player, const Drive* you, const std::vector<Obb>& buses, const Camera& cam) {
   if (list.empty() || dt <= 0) return;
-  camFwd_ = glm::length(cam - cam_) > 1e-6 ? cam - cam_ : camFwd_;
-  cam_ = cam;
+  cam_ = cam.pos;
+  camFwd_ = dvec3(cam.forward());   // (the way the camera looks: what you see is never popped in or out)
   dvec3 me = you && you->active() ? you->pos() : player;
-  // keep about six cars round you: far ones (out of sight) come back on the roads around you
+  // traffic.js update, every 2 s: trips end out of sight, the watchdog, about six cars on the roads round you (the rest
+  // spread over the network); the scenic network's cars come back on it near you when they are far out of sight
   recycleT_ -= dt;
   if (recycleT_ <= 0) {
     recycleT_ = 2;
-    int near = 0;
-    for (auto& c : list) if (c.mode != Car::Mode::Gone && std::hypot(c.x - me.x, c.z - me.z) < 420) near++;
     for (auto& c : list) {
-      if (near >= NEAR_WANT) break;
+      double dP = std::hypot(c.x - me.x, c.z - me.z);
+      if (c.scenic) {
+        if ((c.mode == Car::Mode::Knocked || (dP > 900 && c.mode == Car::Mode::Road)) && !inSight(c.x, c.z)) spawn(c, me, false);
+        continue;
+      }
+      if (c.mode == Car::Mode::Gone) continue;
+      c.trip -= 2;
+      // no headway (3 m) for 5 minutes (boxed in, blocked; not a parked car): taken off, parked in a car park
+      if (c.mode == Car::Mode::Parked || std::hypot(c.x - c.wdX, c.z - c.wdZ) > 3) { c.wdX = c.x; c.wdZ = c.z; c.wdT = 0; }
+      else c.wdT += 2;
+      if (c.wdT >= STUCK_T && !inSight(c.x, c.z)) { if (!toLot(c)) despawn(c, 5); continue; }
+      bool away = !inSight(c.x, c.z) || dP > 80;
+      if (away && c.trip <= 0 && c.mode == Car::Mode::Road) despawn(c, 1 + rnd() * 4);
+    }
+    int near = 0;
+    for (auto& c : list) if (!c.scenic && c.mode != Car::Mode::Gone && std::hypot(c.x - me.x, c.z - me.z) < 420) near++;
+    int nearWant = std::max(2, int(std::lround(NEAR_WANT * density)));
+    for (auto& c : list) {
+      if (c.scenic) continue;
+      if (near >= nearWant) break;
       double d = std::hypot(c.x - me.x, c.z - me.z);
-      if ((c.mode == Car::Mode::Gone || d > 520) && !inSight(c.x, c.z, me)) { Car::Mode m0 = c.mode; spawn(c, me, false); if (c.mode != Car::Mode::Gone && m0 != c.mode) near++; else if (c.mode == Car::Mode::Road) near++; }
+      if ((c.mode == Car::Mode::Gone || d > 520) && !inSight(c.x, c.z) && recycle(c, me)) near++;
     }
   }
   for (auto& c : list) {
@@ -168,7 +248,7 @@ void Traffic::update(double dt, const dvec3& player, const Drive* you, const std
           // out of the bay onto the access road's car park end, toward the junction (traffic.js leaveBay)
           int ai = -1;
           for (auto& j : junctions_) if (j.lot == c.lot) ai = j.access;
-          if (ai >= 0 && (!inSight(c.x, c.z, me) || d > 80)) { toRoad(c, ai, 6, 1, 0); c.lot = c.bay = -1; }
+          if (ai >= 0 && (!inSight(c.x, c.z) || d > 80)) { toRoad(c, ai, 6, 1, 0); c.lot = c.bay = -1; c.trip = 120 + rnd() * 180; c.crew = c.crew * 1664525u + 1013904223u; }
           else c.wait = 5;
         }
         break;
@@ -182,7 +262,7 @@ void Traffic::update(double dt, const dvec3& player, const Drive* you, const std
         if (c.kt > 3 && sp < 0.1) {   // back onto its road, steering out what is left over
           Transport::RoadHit rh = t_.nearestRoad(c.x, c.z, 14);
           if (rh.road >= 0) toRoad(c, rh.road, rh.s, std::cos(wrapPi(c.yaw - std::atan2(roadAt(t_.roads[size_t(rh.road)], rh.s).dx, roadAt(t_.roads[size_t(rh.road)], rh.s).dz))) >= 0 ? 1 : -1, 0);
-          else if (!inSight(c.x, c.z, me)) { c.mode = Car::Mode::Gone; c.wait = 5; }
+          else if (!inSight(c.x, c.z)) despawn(c, 5);
         }
         break;
       }
@@ -272,7 +352,7 @@ void Traffic::drive(Car& c, double dt, const dvec3& player, const Drive* you, co
 // turning round before a dead end (a bus stop): out of sight it leaves; in sight it turns across the road, the lane
 // offset carrying it over to the other lane (no jump)
 void Traffic::deadEnd(Car& c, const dvec3& player) {
-  if (!inSight(c.x, c.z, player) || std::hypot(c.x - player.x, c.z - player.z) > 80) { c.mode = Car::Mode::Gone; c.wait = 3 + rnd() * 5; return; }
+  if (!inSight(c.x, c.z) || std::hypot(c.x - player.x, c.z - player.z) > 80) { despawn(c, 1 + rnd() * 4); return; }
   c.dir = -c.dir;
   c.off = -2 * LANE - c.off; c.offT = 0; c.offQ = 0;
   c.v = 0; c.nextJ = -2;
@@ -404,6 +484,62 @@ void Traffic::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     if (d > SHOW_R) continue;
     glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
     draw.addCar(*c.vm, M, d < LOD_R ? 0 : 1, paintForIndex(uint32_t(&c - list.data())), c.odo / 0.34, 0);
+  }
+}
+
+} // namespace sl
+
+namespace sl {
+namespace {
+// carpeople.js SEATS (measured from the models' interiors, nose +z, the driver on +x): d the driver's seat [x, the
+// cushion's y, the seat point's z], p the front passenger's [y, z] when it differs (x mirrored), r the rear outboard
+// seats [x, y, z] (none: a two-seater)
+struct SeatHint { const char* name; double d[3]; double p[2]; bool hasP; double r[3]; bool hasR; };
+const SeatHint SEATS[] = {
+  {"car_vw_golf_gti", {0.35, 0.436, -0.209}, {0, 0}, false, {0.37, 0.461, -1.085}, true},
+  {"car_bmw_x3", {0.373, 0.632, -0.238}, {0, 0}, false, {0.38, 0.631, -1.079}, true},
+  {"car_audi_rs6", {0.381, 0.432, 0.0}, {0.407, -0.10}, true, {0.38, 0.455, -0.986}, true},
+  {"car_tesla_m3", {0.47, 0.395, -0.105}, {0, 0}, false, {0.38, 0.394, -0.97}, true},
+  {"car_mercedes_sls", {0.43, 0.29, -0.675}, {0, 0}, false, {0, 0, 0}, false},
+  {"car_porsche_taycan", {0.37, 0.37, -0.255}, {0, 0}, false, {0.38, 0.47, -1.08}, true},
+  {"car_lamborghini_huracan", {0.37, 0.27, -0.24}, {0, 0}, false, {0, 0, 0}, false},
+  {"car_toyota_gr_yaris", {0.35, 0.47, -0.26}, {0, 0}, false, {0.38, 0.54, -1.085}, true},
+  {"car_audi_etron_gt", {0.37, 0.36, -0.255}, {0, 0}, false, {0.38, 0.475, -0.995}, true},
+  {"car_mercedes_gls", {0.42, 0.79, -0.01}, {0, 0}, false, {0.42, 0.73, -1.16}, true},
+};
+// a seated Person's hips are ~0.55 m over its point (people.cpp: the seat 0.45 m up, the hips 0.1 m over it); the hip
+// joints ~6 cm over the cushion (carpeople.js SEAT_LIFT)
+constexpr double SIT_HIP = 0.06 - 0.55;
+} // namespace
+
+void Traffic::addPeople(People& people, const dvec3& cam, const std::vector<int>& kinds) const {
+  peopleShown = 0;
+  if (kinds.empty()) return;
+  for (const Car& c : list) {
+    if (c.mode != Car::Mode::Road && c.mode != Car::Mode::Knocked) continue;   // (parked traffic cars show nobody)
+    if (std::hypot(c.x - cam.x, c.z - cam.z) > PEOPLE_R) continue;
+    const SeatHint* S = nullptr;
+    for (const SeatHint& h : SEATS) if (c.name == h.name) S = &h;
+    double dx = S ? S->d[0] : 0.36, dy = S ? S->d[1] : 0.45, dz = S ? S->d[2] : -0.2;
+    double cs = std::cos(c.yaw), sn = std::sin(c.yaw);
+    uint32_t h = c.crew;
+    auto rnd = [&h]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return double(h & 0xffffff) / double(0x1000000); };
+    auto put = [&](double x, double y, double z) {
+      Person p;
+      p.kind = kinds[size_t(rnd() * double(kinds.size())) % kinds.size()];
+      p.pos = dvec3(c.x + x * cs + z * sn, c.y + y + SIT_HIP, c.z - x * sn + z * cs);
+      p.yaw = c.yaw;
+      p.anim = PAnim::Sit;
+      p.scale = float(0.94 + rnd() * 0.08);
+      people.add(p);
+      peopleShown++;
+    };
+    put(dx, dy, dz);   // the driver, left front
+    if (rnd() < 0.45) put(-dx, S && S->hasP ? S->p[0] : dy, S && S->hasP ? S->p[1] : dz);
+    double back = !S || S->hasR ? rnd() : 1;   // (a two-seater: nobody in the back)
+    double rx = S && S->hasR ? S->r[0] : dx, ry = S && S->hasR ? S->r[1] : dy, rz = S && S->hasR ? S->r[2] : dz - 0.86;
+    if (back < 0.22) put((rnd() < 0.5 ? 1 : -1) * rx, ry, rz);
+    else if (back < 0.3) { put(rx, ry, rz); put(-rx, ry, rz); }
   }
 }
 

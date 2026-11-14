@@ -23,11 +23,12 @@ struct RenderTarget { uint32_t id = 0; explicit operator bool() const { return i
 enum class BufferUsage : uint8_t { Vertex, Index, Uniform };
 enum class AttribType : uint8_t { Float, UByte, UShort, Short, Byte };
 enum class IndexType : uint8_t { U16, U32 };
-enum class TexFormat : uint8_t { RGBA8, SRGBA8, RGBA16F, R8, Depth24, Depth32F };
+enum class TexFormat : uint8_t { RGBA8, SRGBA8, RGBA16F, R8, Depth24, Depth32F, R16F, RG16F, R11G11B10F, RG8 };
 enum class Filter : uint8_t { Nearest, Linear, Trilinear };
 enum class Wrap : uint8_t { Repeat, Clamp };
 enum class Cull : uint8_t { None, Back, Front };
-enum class Blend : uint8_t { Opaque, Alpha, Additive };
+// Max: per-channel max (trail stamps); Multiply: dst * src (fades); Premul: premultiplied alpha
+enum class Blend : uint8_t { Opaque, Alpha, Additive, Max, Multiply, Premul };
 enum class DepthTest : uint8_t { Off, Less, LessEqual };
 
 struct VertexAttrib {
@@ -57,9 +58,10 @@ struct PipelineState {
   Blend blend = Blend::Opaque;
   bool colorWrite = true;
   float depthBiasFactor = 0, depthBiasUnits = 0;  // polygon offset (shadow maps)
+  bool alphaToCoverage = false; // MSAA: alpha-tested foliage gets smooth edges
 };
 
-struct DeviceInfo { std::string api, renderer, version; int maxAnisotropy = 1; };
+struct DeviceInfo { std::string api, renderer, version; int maxAnisotropy = 1; int maxSamples = 1; int maxTextureSize = 4096; };
 
 class Device {
 public:
@@ -91,6 +93,14 @@ public:
   /// Off-screen target: optional colour texture (format) and depth texture. Either may be "none" via `withColor`.
   virtual RenderTarget createRenderTarget(int w, int h, bool withColor, TexFormat color, bool withDepth, TexFormat depth,
                                           bool depthCompare = false) = 0;
+  /// Multisampled target (renderbuffers: not sampleable): draw into it, then resolve() into a plain target.
+  virtual RenderTarget createRenderTargetMS(int w, int h, int samples, TexFormat color, TexFormat depth) = 0;
+  /// Copies (resolves) colour and / or depth of src into dst (same size).
+  virtual void resolve(RenderTarget src, RenderTarget dst, int w, int h, bool color, bool depth) = 0;
+  /// Mip chain of a texture from its level 0 (render targets: after drawing).
+  virtual void generateMipmaps(Texture t) = 0;
+  /// Change a texture's sampling (filter, wrap, anisotropy); Trilinear needs mips (generateMipmaps).
+  virtual void setSampling(Texture t, Filter f, Wrap w, float anisotropy) = 0;
   virtual Texture renderTargetColor(RenderTarget rt) const = 0;
   virtual Texture renderTargetDepth(RenderTarget rt) const = 0;
   virtual void destroy(RenderTarget rt) = 0;
@@ -98,6 +108,8 @@ public:
   // frame
   virtual void bindRenderTarget(RenderTarget rt, int w, int h) = 0;
   virtual void clear(float r, float g, float b, float a, bool color, bool depth) = 0;
+  /// Sub-rectangle of the bound target (shadow cascades in an atlas); scissored clears stay inside it.
+  virtual void setViewport(int x, int y, int w, int h, bool scissor = false) = 0;
   virtual void setPipeline(const PipelineState& s) = 0;
   virtual void useProgram(Program p) = 0;
   virtual void bindTexture(int unit, Texture t) = 0;

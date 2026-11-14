@@ -45,6 +45,7 @@ const char* Player::modeName() const {
 }
 
 void Player::teleport(double x, double z, double h) {
+  teleportCount++;
   pos = dvec3(x, world_.groundHeight(x, z), z);
   prevPos = renderPos = pos;
   vel = dvec3(0);
@@ -662,8 +663,22 @@ void Player::animateSki(double dt) {
     springStep(yawFx, yawFxV, 0, 8.5, dt);
     if (std::fabs(yawFx) < 0.002 && std::fabs(yawFxV) < 0.02) { yawFx = 0; yawFxV = 0; }
   }
+  // pole plants (player.js): at turn initiation, or rhythmic double-poling when pushing off; holding W at speed now
+  // and then a double-pole push
   double sg = sign(std::round(steer * 1.5));
+  if (sg != 0 && sg != lastSteerSign_ && sp > 3 && !air && !tuck && skidAmt_ < 0.3) polePlants.push_back(int8_t(sg > 0 ? 0 : 1));
+  lastSteerSign_ = sg;
   if (sg != 0) lastTurnSide_ = sg;
+  bool launching = launch_ > 0 && sp < LAUNCH_V;
+  bool pushing = (ctl_.go && sp < W_PUSH_V - 1) || launching;
+  if (pushing && !air && !ctl_.brake && !parked) {
+    skatePhase_ += dt * (launching ? 2.3 : 1.6);
+    if (skatePhase_ > 1) { skatePhase_ = 0; polePlants.push_back(0); polePlants.push_back(1); }
+  } else skatePhase_ = 0.7;
+  if (tuck && !air && sp < 14 && !parked && !ctl_.brake) {
+    tuckPoleT_ -= dt;
+    if (tuckPoleT_ <= 0) { tuckPoleT_ = 1.7 + rnd01() * 1.1; polePlants.push_back(0); polePlants.push_back(1); }
+  } else tuckPoleT_ = 0.5;
 }
 
 void Player::frameUpdate(double dt, double alpha, const PlayerFrameControls& f, const PlayerControls& c) {

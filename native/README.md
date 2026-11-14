@@ -108,16 +108,18 @@ three files as the rolling `latest-native` release.
 ### Command line
 | option | |
 |---|---|
-| `--quality switch\|low\|medium\|high\|ultra` | graphics preset (terrain LOD, shadow map, tree distances, render scale; Phase 7: texture cap / compression, triangle budget, LOD scale, NPC density, lights, simplified shaders, dynamic resolution); else the SETTINGS preset of the save. `switch` = the Nintendo Switch budget |
+| `--quality switch\|super\|performance\|balanced\|high\|ultra\|superultra` (and the old `low` / `medium`) | graphics preset (Phase 8: the look, see "Graphics overhaul"; default `auto`: High on Apple silicon, Balanced elsewhere) (terrain LOD, shadow map, tree distances, render scale; Phase 7: texture cap / compression, triangle budget, LOD scale, NPC density, lights, simplified shaders, dynamic resolution); else the SETTINGS preset of the save. `switch` = the Nintendo Switch budget |
 | `--no-menu` | straight into the game (no main menu) |
 | `--save name.json` | another save slot (default `ski-legacy-save-v1.json` in the platform's save directory) |
 | `--spawn village\|piste` | start on the village plaza (as the web game) or at the top of a run |
 | `--size 1600x900`, `--fullscreen`, `--no-vsync` | window |
 | `--bindings binds.json` | rebinding, same shape as the web save's `binds` (`{"kb":{"jump":"KeyJ"},"pad":{"jump":1}}`) |
-| `--neutral` | Khronos PBR Neutral tone mapping instead of ACES filmic |
+| `--neutral` | Khronos PBR Neutral tone mapping (default on Ultra / Super Ultra; ACES filmic below) |
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
-| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; (Phase 7) the audio running throughout (with SDL's dummy driver the mixer still renders: samples decoded, one-shots, music tracks, frames mixed), the outfit applied, two night shots at 21:30 (the plaza's lamps and flags, a snow gun spraying), the `[perf]` report (CPU ms per system, draw calls, triangles, GPU memory, RSS / peak RSS, streaming); print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled` `_night` `_spray`). Uses its own fresh save (`autotest-save.json`) |
+| `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, then the cars on the player's path (real SDL key / controller events: walk to the Autohaus, buy the cheapest car, E in, W 10 s, E out, the same with the controller; 30 s of traffic round the village), ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; (Phase 7) the audio running throughout (with SDL's dummy driver the mixer still renders: samples decoded, one-shots, music tracks, frames mixed), the outfit applied, two night shots at 21:30 (the plaza's lamps and flags, a snow gun spraying), the `[perf]` report (CPU ms per system, draw calls, triangles, GPU memory, RSS / peak RSS, streaming); print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_cars` `_traffic` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled` `_night` `_spray`). Uses its own fresh save (`autotest-save.json`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
+| `--verify-poses [ref.json]` | the skier rig (`player/skier_rig.cpp`, a port of `skier.js`) against the JavaScript one: `node native/tools/ref_poses.mjs` builds the game's own SkierRig in Node (real three.js, the rigged GLB, its clips, the skis and poles) on a test plane and replays timelines (standing, walking, running, carrying, skiing, carving with pole plants, tuck, snowplough, hockey stop, a jump, a flip with grabs and a spin, crashes and getting up, seated on a chair / bench / car seat / snowmobile), writing every frame's input and, every 0.25 s, every bone's local rotation / position, the skis' and poles' transforms, the clips' playback times and blend weights (default `native/data/poses_ref.json`; `SL_POSE_CHAR=skier_blue` for another character). The C++ replays the same inputs and compares: PASS under 1 degree / 5 mm everywhere and the same timing |
+| `--rig-shots out.png` | the characters posed on their own, no world (`out_<what>.png`): your skier through the rig's poses, an outfit and a kit baked, everyone else standing / walking / skiing |
 | `--server URL` | (Phase 6) the multiplayer server (else `SKI_LEGACY_SERVER`, else the game's `wss://138-199-163-183.sslip.io/ws`) |
 | `--mptest URL [--mp-peers N] [--mp-seconds S]` | (Phase 6) the multiplayer check against a running server: the menus (PLAY -> MULTIPLAYER -> REGISTER a fresh name -> JOIN A WORLD), presence for S s (default 8), N other players seen (their avatars and name cards; a screenshot with `--png`), a ride in another player's car when one is parked, rental skis bought at the ski shop and a day pass at the ticket seller (checked against the server's own copy of the profile), chat, a dropped connection resumed, LEAVE MULTIPLAYER (the single-player save back); exit 0 / 1. Own save `mptest-save.json` |
 
@@ -130,7 +132,8 @@ SDL_AUDIODRIVER=dummy xvfb-run -a -s "-screen 0 1280x720x24" ./native/build/ski_
 without any audio device the game runs silent and the check passes as "no device".)
 `SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier` switches parts of the scene off for profiling (`novillage`: the
 whole resort); `sidecam` looks at the rider from the side while riding, `chairtest` makes the autotest ride a chairlift,
-`vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `maptest`
+`vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `cartest`
+straight with the cars on the player's path (see "The cars on the player's path" below), `maptest`
 straight with the trail map, `p5test` straight with the Phase 5 checks.
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 
@@ -259,7 +262,9 @@ the last two ticks → streaming (terrain, trees) → render. Edge-triggered inp
 one tick.
 
 **Renderer.** Everything is drawn camera-relative (world coordinates in double on the CPU, the camera at the GPU
-origin), so 10 km from the village nothing jitters. Passes: one directional shadow map fitted round the player and
+origin), so 10 km from the village nothing jitters. (Phase 8 rebuilt the passes, see "Graphics overhaul": snow trail map,
+IBL environment, 1-4 shadow cascades, MSAA HDR main pass, clouds, particles, glare, GTAO / shafts, mip bloom, tone map +
+grade, FXAA + sharpen.) Before it: one directional shadow map fitted round the player and
 texel-snapped (PCF 3×3); an HDR main pass (terrain, metal/rough PBR meshes — static, skinned (64 joints) and
 instanced — and the sky gradient of `sky.js`); ACES filmic (three.js's) or Khronos Neutral tone mapping with sRGB
 output; a HUD of `stb_easy_font` text. Lighting is the web game's clear-day palette (sun 6.0 warm white, the sky
@@ -491,6 +496,28 @@ turning at junctions onto the car parks' access roads, parking a while and drivi
 bus stop's dead end (the lane offset carries it across), lane offsets steered (`toRoad`), knocked aside when hit;
 about six kept round you, recycled out of sight. **Parked cars**: parking.js's 102, solid.
 
+**The cars on the player's path** (a later fix, after "cars don't work" on the Mac build): **E** beside your car to get
+out put you straight back in (the same press was also read by the "Drive ..." prompt that the frame showed once you
+stood beside the car), so you could never leave it — the press is used up now. The traffic keeps traffic.js's
+bookkeeping: what is "in sight" is judged by the camera's facing (it was the direction the camera last *moved*, so a
+camera at rest froze it), the far cars come back 150-420 m round you out of sight and clear of the others (`recycle`),
+at the start every other car is parked and later 6 in 10 come back parked, trips end out of sight, a car without
+headway for 5 minutes is parked elsewhere, the scenic network's cars stay on it; all 18 cars on every preset, the
+preset's traffic share (`npcScale`: switch 0.5) setting how many are kept round you (`NEAR_WANT` 6 x the share, at least
+2). **People in the cars** (carpeople.js): a driver at the wheel of every car that drives within 70 m, a front passenger
+45 % of the time, one or two in the back 22 / 8 % (none in the two-seaters), the game's skiers seated on each model's
+measured seats (`SEATS`); parked traffic cars are empty. The sale card says **Not enough money** (you have $N) / **Garage
+full** on its buy button, as ui/carrental.js does: a new save's $500 buys no car (the Golf GTI is $11,250, the jobs
+and the races pay, as in the web game). The autotest checks all of it the way a player does it (`game/cartest.cpp`,
+after the Phase 3 drive; `SKI_LEGACY_DEBUG=cartest` alone): every input is a real event pushed through SDL
+(`SDL_PushEvent` key events; an SDL virtual game controller for the pad), the menus reading the real keys too — walk
+from the plaza to the Autohaus with W A S D and Shift (relative to the camera), **E** at the cheapest car for sale
+(its price granted), **Enter** on "Buy it" (money down by the price, the car in a bay), walk to it, **E** in, **W** held
+10 s steering with **A** / **D** out of the car park and along the road (> 40 km/h), **S** to a stop, **E** out; then
+the controller's **X** in, **RT** 5 s with the left stick steering, **LT** to a stop, **X** out; then 30 s on the
+plaza: at least 3 traffic cars driving 15+ m within 300 m of it (drawn: within the 300 m draw distance), the parked
+cars and buses there counted, a screenshot (`_traffic`) beside the nearest one with its driver (`_cars`: the drive).
+
 **Ski buses** (`game/buses.cpp`, bus.js): the network as a tree rooted at the village (`parent`, `toRoot`, `legs`, both
 roads and bus legs), each trip with `leg()`'s speed profile (cruise, the bends, from and to a standstill in the
 bays), the Micruss on its axles in the right-hand lane (`poseBus`), the fleet of 8 (bus 0 waits at the village, the
@@ -566,7 +593,8 @@ world ready in 13.60 s ...
 - Knocked poles, signs, lamps and broken guardrail sections lose their colliders for 90 s but stay drawn.
 - **Traffic** turns into a car park bay and out of it without the arcs (it appears in / leaves the bay), the scenic
   roads' cars drive them as ordinary roads (no `scenicWalk` round the roundabouts), no tow zones, trains / helicopter
-  blockers, people in the cars.
+  blockers, no swerving past a car stopped in the lane, no cars put ahead of the bus you ride (`aroundBus`); *(later:
+  people in the cars, see "The cars on the player's path")*.
 - **Buses**: no overtaking / ramming, the fleet's rounds are a simple rotation (not bus.js's slotted timetable), no
   passengers or driver, no turn-round fade at intermediate stops (the seat view inside the Micruss and the R chase
   view are there).
@@ -1203,6 +1231,104 @@ takes a few seconds: an offline ASTC / BC step removes it); thermals in handheld
 
 ---
 
+## Graphics overhaul (Phase 8: the look of the web game's Ultra, and past it)
+
+The native renderer now ports the web game's realism tiers (`quality.fx` 0-4) shader for shader and adds what the
+browser could not afford. Everything stays OpenGL 4.1 core (the Mac's limit) and camera-relative.
+
+**Snow and rock** (`engine/shaders_terrain.h`): `terrain.js createTerrainMaterial` line by line — the wind-sculpted
+relief picked by the pixel footprint (two noise octaves cross-faded, drift-shaped, calmer as the features grow), sastrugi,
+grain at three scales, the cinematic micro relief, groomer corduroy and the 5.5 m groomer lanes, scraped ice on the
+steeper pistes (more after freezing weather), the km-scale wind crust, couloirs and the cliff-bands' broken ledges
+(the macro slope is now a vertex attribute, as `aMacro` in the JS), triplanar rock with buttresses, facets, strata,
+cracks and snow on its sky-facing relief, far buttresses / gullies, the far forest tint, the cold sky-blue shade,
+sunlight cooling as it grazes, the subsurface terminator, the forward-scattering sheen, the HDR ice glints at up to
+four cell sizes (prismatic up close). On top of the port: **2048 px tiling snow and rock maps baked on the GPU at
+start-up** (periodic gradient / cellular noise: sintered grains, pits, crust; rock blocks, cracks, lichen; mip-mapped,
+the GPU's maximum anisotropy) for crisp crystals right under the skis (faded out by 45 m), **height-blended snow / rock
+edges** (snow fills the rock's hollows first) and triplanar rock detail near cliffs. The groomed-run data now also
+reaches the 1-2 km terrain nodes, so the pistes read as smooth bright bands on the far slopes.
+
+**Snow trails** (`world/snowtrails.*`, the renderer's trail map): a toroidal RGBA16F height map that follows you
+(2048 px over 128 m on High / Ultra, 3072 over 150 m on Super Ultra, 512-1024 on the light presets: 4-6 cm texels),
+scrolled by clearing the strips the window leaves. Stamps are max-blended quads drawn by a small shader per kind:
+your **skis** (two grooves 9-10 cm wide that follow every carve, deeper on the edge, a wide scraped fan when you skid
+or plough, a crater on landing, a sitzmark when you fall, with the berm the edge throws up), **boot prints** (sole,
+heel, tread lugs, a lip of snow; alternating, longer strides running), the **snowmobile**'s cleated track and its two
+skis, **car tyres** (block tread), and the resort's **skiers and walkers** (skis or boots from their speed). The
+terrain shader reads it for normals, a parallax march into the grooves near the camera (Ultra), compressed
+blue-grey snow with few crystals in the tracks, berms catching the light and, on Super Ultra, the grooves' own
+shadows in low sun. The map fades on the GPU over a few minutes (faster in a snowfall). **Spray**: soft lit particles
+off the edges in a hard carve, a hockey stop's fan (the snow it throws piles up as small mounds), the snowmobile's
+rooster tail, powder on a landing (depth-faded, back-lit forward scattering, drawn after the resolve).
+
+**Lighting** (`engine/shaders.h`): three.js's `MeshStandardMaterial` model (GGX with height-correlated Smith,
+Schlick, the multi-scattering IBL split sum) so materials match the web game; the sky model of `sky.js
+Environment.update` (halo, disc, dusk, twilight, Belt of Venus, cirrus, the hemisphere light and the IBL strength per
+sun height and weather); **image-based lighting**: the `ENV_FRAG` environment rendered every frame into a mip-mapped
+equirectangular map (reflections by roughness: glass, car paint, ice) and projected on the CPU into L2 spherical
+harmonics (irradiance); **cascaded shadow maps**: 1-4 cascades in one atlas (fitted to the view as bounding spheres,
+texel-snapped: no shimmer), 8-12-tap rotated Poisson PCF on hardware 2x2 PCF, cascade blending, normal + light offset
+bias scaled by the texel, the coarser mesh LOD in the shadow pass, small casters skipped in the far cascades;
+alpha-tested foliage casts its real shape; **cloud shadows** drifting over the ground (High and up); the lamps and
+headlights now have a specular highlight; height fog / aerial perspective (`fog.js`) with sunlit haze toward the sun.
+
+**Sky, clouds, sun**: `SKY_FRAG` ported (Rayleigh shading, twilight arch, halo, cirrus, the overcast deck's texture,
+the limb-darkened HDR disc) plus stars, the Milky Way and the moon; a **ray-marched cumulus layer** (Beer-powder
+scattering, a two-lobe phase function, two light taps, erosion noise, aerial perspective; 6 / 16 / 28 steps) and on
+High and up the **sea of clouds** in the far valleys (atmosphere.js's sea patches: kept away from the resort and the
+camera, its level following the valley as in the JS) drawn as a pass over the scene so it stands in front of far
+peaks; the **sun glare** of `sunglare.js` (core, halo, 32-spike starburst; visibility from the depth round the sun)
+into the HDR image so it blooms; **sun shafts** (post.js).
+
+**Materials**: sRGB-correct base / emissive maps, the models' textures at the GPU's maximum anisotropy on High and
+up, normal maps through derivative tangent frames, the **Meshy detail layer** of `core/meshylook.js` (triplanar
+half-metre grain in the model's own space, the metalness clean-up, the roughness tweak), the **pine shading** of
+`vegetation.js` (dark navy needles from the texture's luminance, snow on needles facing the sky, wind sway and branch
+flutter, crown self-shadow and sky occlusion, translucent needles against the sun), **car paint** with a clear coat
+(its own GGX lobe and sky reflection, Fresnel, metallic flakes), **glass** with Fresnel sky reflections, and
+**alpha to coverage** under MSAA (anti-aliased needles and fences).
+
+**Far field**: the **forest impostors** of `vegetation.js` — the same tree placement as the 3D forest (genCell) out
+to 0.7-3 km by preset, drawn as one instanced draw of cylindrical billboards of a procedural conifer (the pines'
+colours, snow on the tiers, lit and shadowed) that dissolve in where the 3D trees end.
+
+**Post** (`engine/shaders_post.h`, `post.js`): HDR throughout; bloom from a 6-7 level mip chain (13-tap downsample
+with a soft threshold and a Karis-averaged first level, tent upsample); **GTAO** (post.js's slices / steps / falloff,
+half or full resolution, a depth-aware 4x4 blur and upsample); the final pass with **PBR Neutral** (Ultra and up, with
+post.js's filmic contrast) or ACES, the broadcast grade, vignette, speed streaks, flash, dither; **MSAA** 4x / 8x
+(High / Ultra) resolved before the post chain, then **FXAA 3.11** and a contrast-adaptive sharpen (no blur on still
+images: there is no temporal filter).
+
+**Presets** (`engine/quality.h`; the SETTINGS row has the web game's seven): `switch` (one 1024 shadow map with
+single-tap PCF, SL_LOW, no MSAA / AO / shafts / clouds / detail maps, a 512 trail map, impostors to 700 m),
+Super Performance / Performance (fx 0: the original look, one shadow map, FXAA, 512 trails), **Balanced** (fx 1, 2
+cascades of 2048 to 160 m, the 1024 detail maps, a 1024 trail map, impostors to 1.4 km; the autotest's default),
+**High** (fx 2, 3 cascades of 2048 to 320 m, MSAA 4x, half-res GTAO, shafts, glare, the sea of clouds, 2048 detail
+maps and trails, impostors to 1.9 km; **the default on Apple silicon**), **Ultra** (fx 3, 4 cascades of 3072 to
+480 m, MSAA 8x, full-res GTAO, PBR Neutral, 28-step clouds, impostors to 2.4 km), **Super Ultra** (fx 4, 4 cascades of
+4096 to 640 m, GTAO with 4 slices, a 3072 trail map, groove shadows, impostors to 3 km). `--quality` takes all of them
+(and the old low / medium); the first launch picks `auto` (High on Apple silicon, Balanced elsewhere).
+`SKI_LEGACY_GFX=noao,noshafts,noclouds,nomsaa,nofxaa,nobloom,notrails,nodetail,cascades=N,fx=N` switches parts off
+for profiling; `SKI_LEGACY_TEXCAP=512` caps and block-compresses the models' textures (look tests on a busy machine).
+
+**Cost by preset** (what each adds per frame; GPU memory of the render targets at 1920x1080; llvmpipe numbers are
+software rendering on a shared 4-core container and only good for relative comparisons):
+| preset | shadow pass | main pass | post | render-target memory |
+|---|---|---|---|---|
+| switch | 1 map, 1024 px, single tap | SL_LOW shaders (no glints, no far normal maps, 4 lights), trails (5 taps near) | tone map + grade | ~40 MB (shadow 4, trails 2) |
+| Super Perf. / Performance | 1 map, 1024 px | fx 0 shaders, render scale 0.6 / 0.85 | FXAA + sharpen | ~50 MB |
+| Balanced (autotest) | 2 cascades x 2048 | fx 1 terrain, 1024 detail maps, 6-step sky clouds, impostors 1.4 km | bloom, FXAA + sharpen | ~95 MB (shadow 32, trails 8, detail 11) |
+| High (Apple silicon) | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, cloud shadows, 16-step clouds + the sea, glare | half-res GTAO (2 x 6), shafts, bloom, FXAA | ~290 MB (MSAA 100, shadow 64, trails 32, detail 44) |
+| Ultra | 4 cascades x 3072 | MSAA 8x, fx 3 (parallax trails, far glints), 28-step clouds | full-res GTAO (3 x 8), PBR Neutral | ~480 MB (MSAA 200, shadow 150) |
+| Super Ultra | 4 cascades x 4096 | fx 4 (groove shadows), 3072 trail map, impostors 3 km | GTAO (4 x 10) | ~650 MB (shadow 270, trails 72) |
+
+On llvmpipe (software GL, contended 4-core container) the skiing view runs at roughly 0.3-0.8 fps on Balanced at 1280x720
+and 0.1-0.2 fps on High (MSAA, GTAO): a real GPU is two to three orders of magnitude faster. Software GL also grows
+the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the autotest's peak RSS).
+
+---
+
 ## Status: the native port against the JavaScript game
 
 | area | JS game (`src/`) | native (`native/`) |
@@ -1226,12 +1352,12 @@ takes a few seconds: an offline ASTC / BC step removes it); thermals in handheld
 | chalets, build mode | chalets.js, build/* | **ported** (ground floor, catalogue, virtual mouse) |
 | people, crowds | townsfolk.js, peoplesim.js, crowds.js | **ported** (characters; no fans' keyframes) |
 | snowmobiles | snowmobile.js | **ported** |
-| weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools); no clouds layer, sun glare, sun shafts, AO |
+| weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools; Phase 8: the full sky shader, stars / moon, IBL, a ray-marched cloud layer + the sea of clouds, cloud shadows); no cumulus impostor banks round the peaks, no backdrop ranges |
 | snowmaking, flags, snowcats | snowmaking.js, flags.js, snowcats.js | **ported** (Phase 7; snowcats condensed: no grooming trail, no ploughs) |
 | audio | core/audio.js | **ported** (Phase 7: every recording, music, announcer, horns, 3D); the Express's text-to-speech PA lines are not spoken (gong only) |
 | multiplayer | net/*.js against server/ | **ported** (the unchanged server; no race queues, lift / bus shared timelines) |
 | player helicopter, parkour mode, terrain park, tricks | heli/*, modes/parkour, park.js, tricks.js | **not ported** |
-| post: bloom, streaks, vignette, AO, sun shafts, glare | engine/post.js | bloom, streaks, vignette, flash (Phase 7); no AO / shafts / glare |
+| post: bloom, streaks, vignette, AO, sun shafts, glare | engine/post.js, sunglare.js | **ported** (Phase 8: mip-chain bloom, GTAO, shafts, glare, PBR Neutral / ACES + grade, MSAA + FXAA + sharpen) |
 
 ## Nintendo Switch porting checklist
 

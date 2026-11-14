@@ -1,7 +1,15 @@
 // Scene renderer on top of gfx::Device.
-//   shadow pass  one directional shadow map fitted round the player (texel-snapped, PCF 3x3)
-//   main pass    HDR target: terrain (snow / rock shading), PBR meshes (static, skinned, instanced), sky gradient
-//   post         ACES filmic (three.js) or Khronos Neutral tone mapping, sRGB encode
+//   trails       the snow trail map (a camera-following toroidal height map the skis, boots, tracks and tyres press
+//                into; world/snowtrails feeds it), faded over minutes
+//   environment  the sky's radiance (sky.js ENV_FRAG) into a mip-mapped equirectangular map + its irradiance as
+//                spherical harmonics (image-based lighting, refreshed with the time of day and the weather)
+//   shadows      1-4 cascades fitted to the view (stable: bounding spheres, texel-snapped), one atlas, soft PCF
+//   main pass    HDR (MSAA on the high presets, alpha to coverage on foliage): terrain (terrain.js's snow / rock +
+//                high-res detail + trails), PBR meshes (static, skinned, instanced; pines, car paint, glass, the
+//                Meshy detail layer), far forest impostors, the sky (sky.js + stars, moon, a ray-marched cumulus
+//                layer), sorted transparent meshes; resolved, then soft lit particles (snow spray)
+//   post         GTAO + sun shafts (reduced resolution, depth-aware), mip-chain bloom, PBR Neutral / ACES and the
+//                broadcast grade (post.js), FXAA + contrast-adaptive sharpening, dither
 //   HUD          text (stb_easy_font) and rectangles in pixels
 // Everything is drawn camera-relative (the camera sits at the origin), so far from the village nothing jitters.
 #pragma once
@@ -25,27 +33,49 @@ struct Camera {
 };
 
 struct Lighting {
-  vec3 sunDir = glm::normalize(vec3(-0.35f, 0.42f, 0.84f));
+  vec3 sunDir = glm::normalize(vec3(-0.35f, 0.42f, 0.84f));   // the key light: the sun, or the moon at night
   vec3 sunColor{1.0f, 0.93f, 0.82f};
   float sunIntensity = 6.0f;
-  vec3 sky{0.26f, 0.42f, 0.78f}, ground{0.42f, 0.44f, 0.50f};
+  vec3 sky{0.26f, 0.42f, 0.78f}, ground{0.42f, 0.44f, 0.50f};   // (interiors: their ambient; outdoors the sky model's)
   vec3 fog{0.1633f, 0.4992f, 1.6117f};
   vec3 zenith{0.0313f, 0.0583f, 0.2011f}, mid{0.0417f, 0.3990f, 1.4235f}, horizon{0.3156f, 1.5195f, 5.2906f}, glow{0.4458f, 2.1394f, 6.6786f};
   float fogDensity = 0.000034f, fogFalloff = 0.00045f;
   float exposure = 0.72f;
-  int toneMap = 0;  // 0 ACES, 1 Neutral
+  int toneMap = -1; // -1 the preset's, 0 ACES, 1 Neutral
   float night = 0;  // village.js nightUniform: 0 by day .. 1 at night (lamps, lit windows, signs)
+  // the sky model (sky.js Environment.update) needs the sun itself and the weather; the defaults: a clear day
+  vec3 trueSun{0};          // the sun's direction even at night (0: = sunDir)
+  vec3 moonDir{0, -1, 0};
+  float overcast = 0, snow = 0, mist = 0.1f, cloud = 0, snowCover = 0, wind = 0, icy = 0, frost = 0, clearAir = 0;
+  float ambientScale = 1;   // tunnels: the sky light fades (railway.js)
+  bool interior = false;    // inside a building: sky / ground above are the room's ambient, no sky IBL
 };
 
 struct RenderSettings {
-  int shadowSize = 2048;
-  float shadowRange = 90;   // half extent of the shadow box (m)
+  int shadowSize = 2048;    // per cascade
+  float shadowRange = 90;   // shadows end here (m; one cascade: half extent of the box round the focus)
+  int cascades = 1;         // 1-4
   float renderScale = 1.0f; // 3D resolution scale (dynamic resolution on console)
-  bool lowShaders = false;  // (Phase 7) SL_LOW: single-tap shadows, no far normal maps, no glints
+  bool lowShaders = false;  // SL_LOW: single-tap shadows, no far normal maps, no glints
   int maxLights = 16;       // point / spot lights a frame (<= 16)
+  int fx = 1;               // the web game's quality.fx realism tier (0..4)
+  int terrainDetail = 1;    // terrain.js TERRAIN_DETAIL (0..2)
+  int msaa = 1;             // samples
+  int ao = 0;               // 0 off, 1 half resolution, 2 full
+  int aoDirs = 2, aoSteps = 6;
+  bool shafts = false;
+  bool fxaa = true;
+  float sharpen = 0.2f;
+  int toneMap = 0;          // the preset's: 0 ACES, 1 PBR Neutral
+  int grade = 2;
+  int detailTex = 2048;     // the baked snow / rock maps (0: none)
+  int trailSize = 1024;     // trail map texels (0: no trails)
+  float trailRange = 96;    // m across
+  int envSize = 256;
+  float bloomRadius = 1.0f;
 };
 
-/// (Phase 7) a lamp's or a headlight's light: point (cosOuter < -1.5) or spot (dir, cones)
+/// a lamp's or a headlight's light: point (cosOuter < -1.5) or spot (dir, cones)
 struct PointLight {
   dvec3 pos{0};
   vec3 color{1};            // linear rgb x intensity
@@ -53,8 +83,20 @@ struct PointLight {
   vec3 dir{0, -1, 0};
   float cosOuter = -2, cosInner = -2;
 };
-/// (Phase 7, SETTINGS: screen effects) the post pass's extras
+/// (SETTINGS: screen effects) the post pass's extras
 struct ScreenFx { float vignette = 0, streaks = 0, flash = 0, hit = 0; };
+
+/// A depression pressed into the snow (world/snowtrails): kind 0 ski groove, 1 boot print, 2 snowmobile track,
+/// 3 tyre, 4 a mound of thrown snow. Sizes in metres; along = distance along the track (keeps tread continuous).
+struct TrailStamp {
+  dvec2 pos{0};
+  vec2 dir{0, 1};
+  float halfAlong = 0.5f, halfAcross = 0.1f;
+  uint8_t kind = 0;
+  float strength = 1, along = 0, extra = 0.05f, seed = 0;
+};
+/// A soft lit particle (snow spray, powder): world position, size (m), albedo + opacity.
+struct Particle { dvec3 pos{0}; float size = 0.2f; vec4 color{1}; float rot = 0, soft = 0.3f; };
 
 /// A batch of instances of one model (trees): per instance vec4(x, y, z, scale) + vec4(yaw, 0, 0, 0).
 class InstanceBatch {
@@ -72,11 +114,25 @@ private:
   uint32_t count_ = 0, capacity_ = 0;
 };
 
+/// Far forest impostors: per instance vec4(x, y, z, height) + vec4(seed, type, fade start, fade length).
+class ImpostorBatch {
+public:
+  struct Inst { vec4 a, b; };
+  void init(gfx::Device& d, uint32_t capacity);
+  void upload(gfx::Device& d, const std::vector<Inst>& inst);
+  uint32_t count() const { return count_; }
+  gfx::VertexInput input() const { return vi_; }
+private:
+  gfx::Buffer quad_, idx_, buf_;
+  gfx::VertexInput vi_;
+  uint32_t count_ = 0, capacity_ = 0;
+};
+
 /// Instances of one model with full 3x4 world matrices (props, lift towers, cabins): per instance three rows, the
 /// translation relative to the batch origin (double precision on the CPU, camera-relative on the GPU).
 class MatrixInstanceBatch {
 public:
-  struct Inst { vec4 r0, r1, r2, tint{1, 1, 1, 0}; };   // tint: (Phase 7) paint / livery colour, a = 0: none
+  struct Inst { vec4 r0, r1, r2, tint{1, 1, 1, 0}; };   // tint: paint / livery colour, a = 0: none
   void init(gfx::Device& d, const Model& m, uint32_t capacity);
   void upload(gfx::Device& d, const std::vector<Inst>& inst);
   uint32_t count() const { return count_; }
@@ -98,7 +154,7 @@ public:
   void setRenderScale(float s) { set_.renderScale = s; resize(w_, h_); }
   float renderScale() const { return set_.renderScale; }
   bool shadowsOn = true;
-  // (Phase 7) SETTINGS: bloom; the screen effects; lights for this frame (call between beginFrame and endFrame)
+  // SETTINGS: bloom; the screen effects; lights for this frame (call between beginFrame and endFrame)
   bool bloomOn = true;
   float bloomStrength = 0.13f, bloomThreshold = 3.0f;
   ScreenFx fx;
@@ -109,6 +165,7 @@ public:
   int height() const { return h_; }
   gfx::Texture noiseTexture() const { return noise_; }
   gfx::Device& device() { return *dev_; }
+  const RenderSettings& settings() const { return set_; }
 
   void beginFrame(const Camera& cam, const Lighting& light, const dvec3& shadowFocus);
   /// A model at world transform (origin + local matrix). pose: skinning (nullptr = rest).
@@ -117,10 +174,17 @@ public:
   /// Matrix instances (origin: the batch's origin the instance translations are relative to). matOverride: draw
   /// every primitive with this material instead (a prop's night glow).
   void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr);
-  void submitTerrain(gfx::VertexInput vi, uint32_t indexCount, const dvec3& origin, bool castShadow, bool visible = true);
+  void submitTerrain(gfx::VertexInput vi, uint32_t indexCount, const dvec3& origin, bool castShadow, bool visible = true,
+                     const dvec3& bmin = dvec3(0), const dvec3& bmax = dvec3(0));
+  void submitImpostors(const ImpostorBatch& b, bool castShadow);
+  /// the snow trails (world/snowtrails): stamps drawn into the trail map this frame, the map's centre
+  void trailStamp(const TrailStamp& s) { if (set_.trailSize > 0) stamps_.push_back(s); }
+  void trailFocus(const dvec3& p) { trailFocus_ = p; }
+  bool trailsOn() const { return set_.trailSize > 0; }
+  void addParticle(const Particle& p) { particles_.push_back(p); }
   /// Frustum test of a world-space box (for the caller's culling).
   bool visible(const dvec3& bmin, const dvec3& bmax) const;
-  /// Whether a world-space box can cast into the shadow map (overlaps the light's ortho box).
+  /// Whether a world-space box can cast into the shadow map (overlaps one of the cascades).
   bool castsShadow(const dvec3& bmin, const dvec3& bmax) const;
 
   // HUD (pixels, origin top-left)
@@ -135,45 +199,80 @@ public:
 
 private:
   struct Item {
-    enum class Kind : uint8_t { Mesh, Instanced, InstMat, Terrain } kind;
+    enum class Kind : uint8_t { Mesh, Instanced, InstMat, Terrain, Impostor } kind;
     gfx::VertexInput vi;
     uint32_t first = 0, count = 0, instances = 1;
+    uint32_t sFirst = 0, sCount = 0;   // the shadow pass's (coarser) LOD
     const Material* mat = nullptr;
     const std::vector<mat4>* joints = nullptr;
     bool skinned = false, shadow = false, main = true;
     mat4 model{1};
     vec3 origin{0};
+    vec4 sphere{0, 0, 0, -1};   // camera-relative bounds (w < 0: unknown) for the per-cascade culling
+    float height = 1;           // (pines) model height for the sway
   };
-  void drawItems(bool shadowPass);
+  struct Cascade { mat4 viewProj{1}, view{1}; float radius = 1, end = 1, texel = 1; vec4 rect{0, 0, 1, 1}; };
+  void drawItems(bool shadowPass, int cascade);
   void drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur);
-  void setMaterial(const Material& m);
+  void setMaterial(const Material& m, bool pine, float height);
   void makeNoiseTexture();
-  gfx::Program build(const char* name, const char* defines, const char* vs, const char* fs, bool lit);
+  void makeSkyNoise();
+  void makeDetailTexture();
+  void bakeTextures();
+  void computeSky(const Lighting& L, struct FrameBlock& fb);
+  void fitCascades(const dvec3& focus);
+  void envPass();
+  void trailPass();
+  void particlePass();
+  void glarePass();
+  void cloudPass();
+  vec4 cloudLow_{0};
+  bool noClouds_ = false;
+  vec4 rays_[32]; float rayI_[32];
+  vec3 glareCore_{0};
+  void aoPass();
+  gfx::Program build(const char* name, const char* defines, const char* vs, const char* fs, bool lit, const char* extra = nullptr);
+  bool inCascade(const Item& it, int c) const;
 
   gfx::Device* dev_ = nullptr;
   RenderSettings set_;
   int w_ = 1, h_ = 1, rw_ = 1, rh_ = 1;
-  gfx::RenderTarget hdr_, shadow_, bloomA_, bloomB_;
-  gfx::Buffer frameUbo_, shadowUbo_, hudVbo_, lightsUbo_;
-  gfx::Program bloom_;
-  int bw_ = 1, bh_ = 1;
+  gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, aoRaw_, aoTex_, trail_;
+  std::vector<gfx::RenderTarget> bloom_;
+  std::vector<std::pair<int, int>> bloomSize_;
+  int aw_ = 1, ah_ = 1, atlasW_ = 1, atlasH_ = 1;
+  gfx::Buffer frameUbo_, shadowUbo_[4], hudVbo_, lightsUbo_, stampVbo_, stampQuad_, stampIdx_, partVbo_;
+  gfx::VertexInput stampVi_, partVi_;
+  gfx::Program clouds_, glare_, bloomDown_, bloomUp_, ao_, aoBlur_, final_, fxaa_, env_p_, stamp_, trailFade_, particle_, impostor_, depthImp_;
   std::vector<PointLight> lights_;
+  std::vector<TrailStamp> stamps_;
+  std::vector<Particle> particles_;
+  dvec3 trailFocus_{0};
+  dvec2 trailCenter_{1e18};
+  double trailFadeT_ = 0;
   int lightsUsed_ = 0;
   uint64_t lastTris_ = 0;
   void uploadLights();
   void bloomPass();
   gfx::VertexInput hudVi_, emptyVi_;
-  gfx::Program mesh_, meshSkin_, meshInst_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, post_, hud_;
-  gfx::Texture noise_, white_;
+  gfx::Program mesh_, meshSkin_, meshInst_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, hud_;
+  gfx::Texture noise_, white_, flatN_, skyNoise_, detail_, snowTex_, rockTex_, blackTex_;
+  gfx::RenderTarget snowRT_, rockRT_;
   std::vector<Item> items_;
   std::vector<const Item*> blend_;
   std::vector<float> hudVerts_;
   Camera cam_;
   Lighting light_;
-  mat4 viewProj_{1}, lightView_{1};
-  float shadowR_ = 80;
+  mat4 viewProj_{1};
+  Cascade casc_[4];
+  int nCasc_ = 1;
   vec4 planes_[6];
   uint32_t lastDraws_ = 0;
+  double time_ = 0, lastClock_ = -1;
+  vec3 envZenith_{0}, envHorizon_{0}, envSun_{0}, envGlow_{0};
+  vec2 sunUV_{0};
+  float shaftsK_ = 0;
+  vec3 sunCol_{0};
 };
 
 } // namespace sl

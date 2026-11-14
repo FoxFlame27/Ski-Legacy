@@ -85,6 +85,7 @@ UiNav NavBuilder::build(const platform::Events& ev, platform::Platform& p, const
   n.menu = pressed(Key::Escape);
   n.tabPrev = pressed(Key::KeyQ); n.tabNext = pressed(Key::KeyE);
   n.keys = ev.pressed;
+  n.text = ev.text;
   n.wheel = ev.wheel;
   n.mouse = vec2(ev.mouseX, ev.mouseY);
   n.mouseMoved = ev.mouseMoved;
@@ -130,6 +131,10 @@ void Menus::open(Screen s, int dir) {
   focus_ = 0; focusPrev_ = -1;
   scroll_ = scrollTarget_ = 0;
   enterT_ = t_;
+  // opened by the game (Esc / Menu -> PAUSE, E -> a shop) rather than from inside frame(): the key or button that
+  // opened it is still in this frame's UiNav, and must not also act on the new screen (Esc would resume the pause
+  // menu it just opened: the pause menu never stayed open)
+  if (!inFrame_) freshOpen_ = true;
   captureAction_ = -1;
   ctlStatus_.clear();
   if (s == Screen::Showcase) chi_ = save_.character == "skier_red" ? 0 : 1;
@@ -304,9 +309,23 @@ void Menus::panel(float x, float y, float w, float h) {
 }
 
 // ---------------------------------------------------------------- the frame
-void Menus::frame(const UiNav& nav, double dt, double now) {
+bool Menus::textFieldFocused() const {
+  return screen_ == Screen::Multiplayer && focus_ == 0 && mp.account && mp.account().empty();
+}
+
+void Menus::frame(const UiNav& navIn, double dt, double now) {
   t_ = now;
   u_ = std::clamp(std::min(float(ui_.height()) / 800.f, float(ui_.width()) / 1280.f), 0.55f, 2.2f);
+  struct InFrame { bool& f; explicit InFrame(bool& b) : f(b) { f = true; } ~InFrame() { f = false; } } guard(inFrame_);
+  // the frame a screen was opened from outside: its presses are not this screen's (the pointer still hovers)
+  bool fresh = freshOpen_;
+  freshOpen_ = false;
+  UiNav quiet;
+  if (fresh) {
+    quiet.mouse = navIn.mouse; quiet.mouseDown = navIn.mouseDown; quiet.usingPad = navIn.usingPad;
+    quiet.stickL = navIn.stickL; quiet.stickR = navIn.stickR;
+  }
+  const UiNav& nav = fresh ? quiet : navIn;
   if (screen_ == Screen::None) return;
   // the previous frame's items take this frame's input (immediate mode: drawn, then hit-tested next frame)
   if (screen_ == Screen::Controls && captureAction_ >= 0) controlsCapture(nav);
@@ -324,15 +343,19 @@ void Menus::frame(const UiNav& nav, double dt, double now) {
     bool field = focus_ == 0 && mp.account && mp.account().empty();
     if (field) {
       bool shift = plat_.keyDown(platform::Key::ShiftLeft) || plat_.keyDown(platform::Key::ShiftRight);
+      // with text input on (game.cpp turns it on while this field has the focus) the letters come from the OS in the
+      // keyboard's layout (QWERTZ, AZERTY, dead keys); without it (a platform with no text input), from the keys
+      bool text = plat_.textInputActive();
       for (platform::Key k : nav.keys) {
         int ki = int(k);
         char c = 0;
         if (ki >= int(platform::Key::KeyA) && ki <= int(platform::Key::KeyZ)) c = char((shift ? 'A' : 'a') + (ki - int(platform::Key::KeyA)));
         else if (ki >= int(platform::Key::Digit0) && ki <= int(platform::Key::Digit9)) c = char('0' + (ki - int(platform::Key::Digit0)));
         else if (k == platform::Key::Space) c = ' ';
-        if (c) { if (nameField_.size() < 16) nameField_ += c; n2.up = n2.down = n2.left = n2.right = n2.confirm = false; n2.tabPrev = n2.tabNext = false; }
-        if (k == platform::Key::Backspace) { if (!nameField_.empty()) nameField_.pop_back(); n2.cancel = false; }
+        if (c) { if (!text) textAppend(nameField_, std::string(1, c), 16, true); n2.up = n2.down = n2.left = n2.right = n2.confirm = false; n2.tabPrev = n2.tabNext = false; }
+        if (k == platform::Key::Backspace) { textBackspace(nameField_); n2.cancel = false; }
       }
+      if (text) textAppend(nameField_, nav.text, 16, true);
     }
     handle(n2);
   } else handle(nav);

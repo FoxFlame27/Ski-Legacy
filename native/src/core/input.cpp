@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <algorithm>
+#include <cctype>
 
 namespace sl {
 using platform::Key;
@@ -101,14 +102,25 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     if (activePad_ < 0 || (touched && i != activePad_)) activePad_ = i;
     if (i == activePad_) { gp = s; havePad = true; }
   }
+  // button-down events (a tap between two samples): they also make their controller the active one
+  for (const auto& pp : ev.padPressed)
+    if (pp.pad >= 0 && pp.pad < p.gamepadCount() && pp.pad != activePad_) {
+      platform::GamepadState s;
+      p.gamepad(pp.pad, s);
+      if (s.connected) { activePad_ = pp.pad; gp = s; havePad = true; }
+    }
+  padTap_.fill(false);
+  for (const auto& pp : ev.padPressed)
+    if (havePad && pp.pad == activePad_ && pp.button >= 0 && pp.button < platform::kPadButtons) padTap_[size_t(pp.button)] = true;
   for (int k = 0; k < platform::kPadButtons; k++) prevButtons_[size_t(k)] = havePad_ ? gp_.buttons[k] : 0.f;
   havePad_ = havePad;
   gp_ = havePad ? gp : platform::GamepadState{};
   if (havePad) family_ = gp.family;
-  bool anyKey = !ev.pressed.empty() || ev.mouseDX != 0 || ev.mouseDY != 0 || ev.mouseMoved || ev.mousePressed;
+  bool anyKey = !ev.pressed.empty() || !ev.text.empty() || ev.mouseDX != 0 || ev.mouseDY != 0 || ev.mouseMoved || ev.mousePressed;
   bool anyPad = false;
   if (havePad) {
     for (float v : gp.buttons) anyPad = anyPad || v > 0.5f;
+    for (bool t : padTap_) anyPad = anyPad || t;
     anyPad = anyPad || std::fabs(gp.leftX) > 0.3f || std::fabs(gp.leftY) > 0.3f || std::fabs(gp.rightX) > 0.3f || std::fabs(gp.rightY) > 0.3f;
   }
   if (anyPad) padActive_ = true;
@@ -116,10 +128,17 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
 
   for (size_t i = 0; i < kActionCount; i++) {
     bool d = kb[i] != Key::Unknown && p.keyDown(kb[i]);
-    if (havePad && pad[i] >= 0 && pad[i] < platform::kPadButtons) d = d || gp.buttons[pad[i]] > 0.5f;
-    if (forced_[i] >= 0) d = forced_[i] > 0;
-    else if (holdOff_[i]) { if (d) d = false; else holdOff_[i] = false; }
+    bool padBound = havePad && pad[i] >= 0 && pad[i] < platform::kPadButtons;
+    if (padBound) d = d || gp.buttons[pad[i]] > 0.5f;
+    // a press this frame by its event: also when the key / button is already up again (a quick tap at a low frame
+    // rate: Esc / Menu between two frames would otherwise never be seen)
+    bool tap = (kb[i] != Key::Unknown && std::find(ev.pressed.begin(), ev.pressed.end(), kb[i]) != ev.pressed.end()) ||
+               (padBound && padTap_[size_t(pad[i])]);
+    if (forced_[i] >= 0) { d = forced_[i] > 0; tap = false; }
+    else if (holdOff_[i]) { if (d && !tap) d = false; else holdOff_[i] = false; }   // (a fresh press ends the hold-off)
+    int before = pressed_[i];
     setDown(i, d);
+    if (tap && pressed_[i] == before) { pressed_[i]++; if (!d) released_[i]++; }
   }
   // arrow keys move too (player.js reads both)
   auto key = [&](Key k) { return p.keyDown(k); };
@@ -149,6 +168,26 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     lookY_ += ry * std::fabs(ry) * 12.f * padSens * (invertY ? -1.f : 1.f);
   }
   if (lookX_ != 0 || lookY_ != 0) lastLook_ = p.timeSeconds();
+}
+
+void textAppend(std::string& s, const std::string& typed, size_t maxChars, bool nameOnly) {
+  auto count = [](const std::string& t) { size_t n = 0; for (unsigned char c : t) n += (c & 0xC0) != 0x80; return n; };
+  size_t n = count(s);
+  for (size_t i = 0; i < typed.size() && n < maxChars;) {
+    unsigned char c = static_cast<unsigned char>(typed[i]);
+    size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 1;
+    if (i + len > typed.size()) break;
+    bool ok;
+    if (len == 1) ok = nameOnly ? std::isalnum(c) || c == ' ' : c >= 0x20 && c < 0x7F;
+    else ok = !nameOnly && len == 2 && (c == 0xC2 || c == 0xC3) && !(c == 0xC2 && static_cast<unsigned char>(typed[i + 1]) < 0xA0);   // U+00A0..U+00FF
+    if (ok) { s.append(typed, i, len); n++; }
+    i += len;
+  }
+}
+
+void textBackspace(std::string& s) {
+  while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80) s.pop_back();
+  if (!s.empty()) s.pop_back();
 }
 
 void Input::rumble(platform::Platform& p, float low, float high, uint32_t ms) {

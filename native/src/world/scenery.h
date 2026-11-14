@@ -33,7 +33,12 @@ struct Collider {
 
 struct Tree { float x, y, z, s, rot, trunk, crown; uint8_t type; };
 
-struct VegetationSettings { float nearR = 70, midR = 220, farR = 650; };
+struct VegetationSettings {
+  float nearR = 70, midR = 220, farR = 650;
+  float impostorR = 0;      // far forest impostors (vegetation.js's billboard forests) out to this (m), 0: none
+  int maxImpostors = 30000;
+  int shadowLods = 1;       // tree LODs that cast into the shadow map
+};
 
 class Scenery {
 public:
@@ -64,6 +69,16 @@ public:
 
 private:
   struct Cell { std::vector<Tree> trees; };
+  struct FarTree { float x, y, z, s; uint8_t type; float seed; };
+  struct FarCell { std::vector<FarTree> trees; };
+  void updateFar(const dvec3& cam);
+  void rebuildImpostors(const dvec3& cam);
+  std::unordered_map<int64_t, FarCell> far_;
+  std::unordered_set<int64_t> farQueued_;
+  std::vector<std::pair<int64_t, std::unique_ptr<FarCell>>> farDone_;
+  ImpostorBatch impostors_;
+  dvec3 lastImp_{1e18};
+  bool farDirty_ = false;
   static int64_t key(int64_t cx, int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); }
   void genCell(int64_t cx, int64_t cz, Cell& out) const;
   void rebuildInstances(const dvec3& cam);

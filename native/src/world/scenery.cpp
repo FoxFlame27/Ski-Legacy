@@ -24,8 +24,16 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
     treeModel_[t] = assets_.model(names[t], o);
     if (!treeModel_[t]) continue;
     treeFit_[t] = treeModel_[t]->fitTransform(1.f, 1);   // unit height, base at 0 (bakeGeometry size 1, axis y)
+    // vegetation.js pineMaterial: needle colour from the texture's luminance (NEEDLE_LUM), snow, sway, translucency
+    for (Material& m : treeModel_[t]->materials) {
+      m.shading = 1;
+      m.lumNorm = 1.f / (t == 0 ? 0.077f : 0.23f);
+      m.emissive = vec3(0); m.emissiveTex = {};
+      m.metallic = 0;
+    }
     for (int l = 0; l < 3; l++) batches_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
   }
+  if (vs_.impostorR > vs_.farR) impostors_.init(dev_, uint32_t(std::max(1000, vs_.maxImpostors)));
 }
 
 Scenery::~Scenery() {
@@ -98,17 +106,91 @@ void Scenery::update(const dvec3& cam, bool force) {
     else ++it;
   }
   if (force || dirty_ || std::hypot(cam.x - lastBuild_.x, cam.z - lastBuild_.z) > 8) rebuildInstances(cam);
+  if (vs_.impostorR > vs_.farR) updateFar(cam);
+}
+
+// the far forest: the same placement (genCell) out to impostorR, kept as positions only, drawn as impostors
+void Scenery::updateFar(const dvec3& cam) {
+  const double R = vs_.impostorR, R0 = std::max(0.0, double(vs_.farR) - 2 * CELL);
+  int n = int(std::ceil(R / CELL));
+  int64_t pcx = int64_t(std::floor(cam.x / CELL)), pcz = int64_t(std::floor(cam.z / CELL));
+  std::vector<std::pair<int, int64_t>> want;
+  for (int i = -n; i <= n; i++)
+    for (int j = -n; j <= n; j++) {
+      double d2 = double(i * i + j * j) * CELL * CELL;
+      if (d2 > (R + CELL) * (R + CELL) || d2 < R0 * R0) continue;
+      int64_t k = key(pcx + i, pcz + j);
+      if (far_.count(k) || farQueued_.count(k)) continue;
+      want.push_back({i * i + j * j, k});
+    }
+  std::sort(want.begin(), want.end());
+  for (auto& [d, k] : want) {
+    if (int(farQueued_.size()) >= jobs_.threads() * 16) break;
+    farQueued_.insert(k);
+    int64_t kx = k >> 32, kz = int64_t(int32_t(k & 0xffffffff));
+    std::weak_ptr<int> alive = alive_;
+    jobs_.push([this, k, kx, kz, alive] {
+      if (alive.expired()) return;
+      Cell c;
+      genCell(kx, kz, c);
+      auto f = std::make_unique<FarCell>();
+      f->trees.reserve(c.trees.size());
+      for (const Tree& t : c.trees) f->trees.push_back({t.x, t.y, t.z, t.s, t.type, float(hash2(int(t.x * 3), int(t.z * 3), 9))});
+      std::lock_guard<std::mutex> l(m_);
+      farDone_.push_back({k, std::move(f)});
+    });
+  }
+  {
+    std::lock_guard<std::mutex> l(m_);
+    for (auto& [k, c] : farDone_) { far_[k] = std::move(*c); farQueued_.erase(k); farDirty_ = true; }
+    farDone_.clear();
+  }
+  for (auto it = far_.begin(); it != far_.end();) {
+    int64_t kx = it->first >> 32, kz = int64_t(int32_t(it->first & 0xffffffff));
+    double dx = (kx + 0.5) * CELL - cam.x, dz = (kz + 0.5) * CELL - cam.z;
+    if (dx * dx + dz * dz > (R + 3 * CELL) * (R + 3 * CELL)) it = far_.erase(it);
+    else ++it;
+  }
+  if (farDirty_ || std::hypot(cam.x - lastImp_.x, cam.z - lastImp_.z) > 24) rebuildImpostors(cam);
+}
+
+void Scenery::rebuildImpostors(const dvec3& cam) {
+  lastImp_ = cam;
+  farDirty_ = false;
+  const float f0 = vs_.farR * 0.86f, fl = vs_.farR * 0.14f;
+  const double r0 = double(f0) * f0, R2 = double(vs_.impostorR) * vs_.impostorR;
+  struct C { float d2; ImpostorBatch::Inst i; };
+  std::vector<C> list;
+  list.reserve(size_t(vs_.maxImpostors) + 1024);
+  for (auto& [k, c] : far_)
+    for (const FarTree& t : c.trees) {
+      double dx = t.x - cam.x, dz = t.z - cam.z, d2 = dx * dx + dz * dz;
+      if (d2 < r0 || d2 > R2) continue;
+      list.push_back({float(d2), {vec4(t.x, t.y, t.z, t.s), vec4(t.seed, float(t.type), f0, fl)}});
+    }
+  if (list.size() > size_t(vs_.maxImpostors)) {
+    std::nth_element(list.begin(), list.begin() + vs_.maxImpostors, list.end(), [](const C& a, const C& b) { return a.d2 < b.d2; });
+    list.resize(size_t(vs_.maxImpostors));
+  }
+  std::vector<ImpostorBatch::Inst> inst;
+  inst.reserve(list.size());
+  for (auto& c : list) inst.push_back(c.i);
+  impostors_.upload(dev_, inst);
 }
 
 void Scenery::finish(const dvec3& cam) {
+  // (the far forest too, for at most a few seconds: the loading screen shows complete slopes)
+  auto t0 = std::chrono::steady_clock::now();
   for (;;) {
     update(cam);
-    bool busy;
-    { std::lock_guard<std::mutex> l(m_); busy = !queued_.empty() || !done_.empty(); }
-    if (!busy) break;
+    bool busy, farBusy;
+    { std::lock_guard<std::mutex> l(m_); busy = !queued_.empty() || !done_.empty(); farBusy = !farQueued_.empty() || !farDone_.empty(); }
+    double el = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (!busy && (!farBusy || el > 6)) break;
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
   update(cam, true);
+  SL_INFO("scenery: %zu far forest cells, %u impostors", far_.size(), impostors_.count());
 }
 
 void Scenery::rebuildInstances(const dvec3& cam) {
@@ -132,8 +214,9 @@ void Scenery::rebuildInstances(const dvec3& cam) {
 void Scenery::submit(Renderer& r, bool trees, bool buildings) {
   for (int t = 0; t < 2; t++) {
     if (!treeModel_[t] || !trees) continue;
-    for (int l = 0; l < 3; l++) r.submitInstances(batches_[t][l], treeFit_[t], l, l == 0);
+    for (int l = 0; l < 3; l++) r.submitInstances(batches_[t][l], treeFit_[t], l, l < vs_.shadowLods);
   }
+  if (trees) r.submitImpostors(impostors_, false);
   const dvec3 cam = r.camera().pos;
   if (buildings) for (const Placed& p : placed_) {
     double d = glm::length(p.pos - cam);

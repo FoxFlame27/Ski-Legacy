@@ -38,6 +38,7 @@ struct UiNav {
   vec2 stickL{0}, stickR{0};      // analog (trail map pan)
   float zoomIn = 0, zoomOut = 0;  // triggers / keys held (trail map)
   std::vector<platform::Key> keys;    // keys pressed this frame (rebinding)
+  std::string text;                   // typed text this frame (UTF-8, while text input is on)
   int padButton = -1;                 // a controller button pressed this frame (rebinding)
   bool usingPad = false;
 };
@@ -101,6 +102,8 @@ public:
   /// opens a card dialog (rebuild() fills it)
   void openDialog(Dialog d);
   bool dialogOpen() const { return screen_ == Screen::Dialog; }
+  /// a text field has the focus (the MULTIPLAYER name): game.cpp turns the platform's text input on meanwhile
+  bool textFieldFocused() const;
   /// the open dialog rebuilt (an answer from the server came in: the shop's chips follow)
   void refreshDialog() { if (screen_ == Screen::Dialog && dialog_.rebuild) dialog_.rebuild(dialog_); }
   /// the frame: input, then drawing (call between Ui::begin / end)
@@ -140,6 +143,7 @@ private:
   void scrConfirm();
   void scrMultiplayer(const UiNav& nav);
   std::string nameField_;
+  bool inFrame_ = false, freshOpen_ = false;   // open() from outside frame(): that frame's UiNav is not for the new screen
   bool nameFieldInit_ = false;
   void handle(const UiNav& nav);
   void back();

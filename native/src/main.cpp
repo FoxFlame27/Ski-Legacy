@@ -23,6 +23,8 @@ int main(int argc, char** argv) {
     else if (a == "--frames") o.frames = std::max(1, std::atoi(next().c_str()));
     else if (a == "--png") o.png = next();
     else if (a == "--verify-heights") o.verifyHeights = true;
+    else if (a == "--rig-shots") o.rigShots = next();
+    else if (a == "--verify-poses") o.verifyPoses = i + 1 < argc && argv[i + 1][0] != '-' ? next() : std::string("@data");
     else if (a == "--quality") { o.quality = next(); o.qualitySet = true; }
     else if (a == "--no-menu") o.menu = false;
     else if (a == "--save") o.saveName = next();
@@ -40,7 +42,7 @@ int main(int argc, char** argv) {
     else if (a == "--help" || a == "-h") {
       std::puts("ski_legacy [--quality switch|low|medium|high|ultra] [--spawn village|piste] [--fullscreen] [--size WxH] [--no-vsync]\n"
                 "           [--bindings binds.json] [--neutral] [--hour 0-24] [--no-menu] [--save name.json]\n"
-                "           [--autotest [--frames N] [--png out.png]] [--verify-heights]\n"
+                "           [--autotest [--frames N] [--png out.png]] [--verify-heights] [--verify-poses [ref.json]]\n"
                 "           [--server wss://host/ws] [--mptest ws://127.0.0.1:PORT/ws [--mp-peers N] [--mp-seconds S]]");
       return 0;
     } else SL_WARN("unknown option %s", a.c_str());

@@ -102,6 +102,9 @@ void Weather::apply(Lighting& L, double sunH) const {
   L.sky = glm::mix(L.sky, vec3(0.62f, 0.68f, 0.78f) * sl * 1.1f, float(overcast * 0.7));
   L.sky *= float(lerp(1, 1.5, overcast));
   (void)clearSky;
+  // (the renderer's sky model: sky.js's clouds, halo, sun disc and IBL from the weather)
+  L.overcast = float(overcast); L.snow = float(snow); L.mist = float(mist); L.cloud = float(cloud); L.wind = float(wind);
+  L.icy = float(icy); L.frost = float(frost); L.clearAir = float(clearAir); L.snowCover = float(std::max(snow, cloud * 0.2));
 }
 
 void Weather::drawSnow(Renderer& r, VehicleDraw& vd, gfx::Device& dev, Shapes& shapes, const Camera& cam, double dt, bool indoors) {

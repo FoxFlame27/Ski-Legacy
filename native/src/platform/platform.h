@@ -66,6 +66,12 @@ struct Events {
   uint8_t mousePressed = 0, mouseReleased = 0; // edges this frame (same bits)
   std::vector<Key> pressed, released; // edges this frame (keyboard)
   std::vector<Key> repeated;          // key auto-repeat this frame (menus: held arrows step through lists)
+  /// controller buttons that went down this frame (by position, per controller index), from the OS's button events:
+  /// a press and release between two frames (a quick tap at a low frame rate) is still seen
+  struct PadPress { int pad; int button; };
+  std::vector<PadPress> padPressed;
+  std::string text;                   // typed text (UTF-8) while text input is on (setTextInput): the layout's letters
+  bool toggleFullscreen = false;      // the desktop's fullscreen shortcut (F11, Alt+Enter; Cmd+F on macOS)
 };
 
 // ---------------------------------------------------------------- audio
@@ -96,6 +102,15 @@ public:
   virtual void gamepad(int index, GamepadState& out) const = 0;
   /// Rumble: low / high frequency motor strength 0..1 for `ms` milliseconds (HD Rumble on Switch).
   virtual void rumble(int index, float low, float high, uint32_t ms) = 0;
+  /// Text entry (a name field, the chat): on while a text field has the focus, off otherwise (SDL turns it on at
+  /// start-up on desktop; left on, macOS routes every key through its input method). Typed text arrives in Events::text.
+  virtual void setTextInput(bool) {}
+  virtual bool textInputActive() const { return false; }
+  /// (autotest) a key event pushed through the OS / SDL event queue, seen by the next pollEvents like a real key
+  virtual bool pushKey(Key, bool) { return false; }
+  /// (autotest) a virtual controller attached / detached (false: not supported), its buttons pressed by position
+  virtual bool testPad(bool) { return false; }
+  virtual void testPadButton(int, bool) {}
 
   // time
   virtual double timeSeconds() const = 0;   // monotonic

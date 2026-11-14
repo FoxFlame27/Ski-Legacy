@@ -182,7 +182,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       gfx::TextureDesc td;
       td.width = im.w; td.height = im.h;
       td.format = srgb[i] ? gfx::TexFormat::SRGBA8 : gfx::TexFormat::RGBA8;
-      td.anisotropy = 8;
+      td.anisotropy = anisotropy;
       if (!im.levels.empty()) {
         texOf[i] = dev_.createCompressedTexture(td, im.bc3, srgb[i], im.levels);
         for (auto& l : im.levels) texBytes_ += l.size();
@@ -210,6 +210,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     o.baseTex = tex(pbr.base_color_texture);
     if (pbr.base_color_texture.texture) o.baseImage = int(pbr.base_color_texture.texture - d->textures);
     o.mrTex = tex(pbr.metallic_roughness_texture);
+    if (pbr.metallic_roughness_texture.texture) o.mrImage = int(pbr.metallic_roughness_texture.texture - d->textures);
     o.normalTex = tex(m.normal_texture);
     o.normalScale = m.normal_texture.scale;
     if (!opt.ignoreEmissive) { o.emissive = vec3(m.emissive_factor[0], m.emissive_factor[1], m.emissive_factor[2]); o.emissiveTex = tex(m.emissive_texture); }

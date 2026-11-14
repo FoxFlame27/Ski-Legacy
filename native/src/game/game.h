@@ -10,7 +10,9 @@ struct GameOptions {
   int frames = 600;
   std::string png;            // autotest: write the last frame here
   bool verifyHeights = false;
-  std::string quality = "medium";
+  std::string rigShots;          // --rig-shots out.png: the characters posed on their own (player/rig_shots.cpp)
+  std::string verifyPoses;       // --verify-poses [ref.json]: the skier rig against the JS reference (tools/ref_poses.mjs)
+  std::string quality = "auto";   // (auto: High on Apple silicon, Balanced elsewhere; engine/quality.h)
   bool qualitySet = false;       // --quality given (else the save's SETTINGS preset)
   bool menu = true;              // start at the main menu (--no-menu: straight into the game)
   std::string saveName = "ski-legacy-save-v1.json";   // --save NAME (the autotest uses its own, fresh)
@@ -18,7 +20,7 @@ struct GameOptions {
   bool fullscreen = false, vsync = true;
   std::string spawn;             // village | piste (default: village; piste for --autotest)
   std::string bindings;          // JSON file with web-style { kb: {...}, pad: {...} } overrides
-  int toneMap = 0;               // 0 ACES, 1 Neutral
+  int toneMap = -1;              // -1 the preset's (PBR Neutral on Ultra and up, else ACES), 0 ACES, 1 Neutral
   double hour = -1;              // time of day to start at (default 10:00; it runs on 24 h / 16 min like sky.js)
   // (Phase 6) multiplayer
   std::string server;            // --server URL (else SKI_LEGACY_SERVER, else the game's wss:// server)

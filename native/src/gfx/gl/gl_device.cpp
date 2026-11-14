@@ -4,13 +4,14 @@
 #include "core/log.h"
 
 #include <glad/glad.h>
+#include <algorithm>
 #include <unordered_map>
 
 namespace sl::gfx {
 
 namespace {
 struct GLTex { GLuint id = 0; GLenum target = GL_TEXTURE_2D; size_t bytes = 0; };
-struct GLRT { GLuint fbo = 0; Texture color, depth; int w = 0, h = 0; };
+struct GLRT { GLuint fbo = 0; Texture color, depth; int w = 0, h = 0; GLuint rbColor = 0, rbDepth = 0; int samples = 1; };
 struct GLProg { GLuint id = 0; std::unordered_map<std::string, GLint> locs; std::string name; };
 
 GLenum attribType(AttribType t) {
@@ -33,6 +34,10 @@ void texFormat(TexFormat f, GLint& internal, GLenum& format, GLenum& type) {
     case TexFormat::R8: internal = GL_R8; format = GL_RED; type = GL_UNSIGNED_BYTE; break;
     case TexFormat::Depth24: internal = GL_DEPTH_COMPONENT24; format = GL_DEPTH_COMPONENT; type = GL_UNSIGNED_INT; break;
     case TexFormat::Depth32F: internal = GL_DEPTH_COMPONENT32F; format = GL_DEPTH_COMPONENT; type = GL_FLOAT; break;
+    case TexFormat::R16F: internal = GL_R16F; format = GL_RED; type = GL_HALF_FLOAT; break;
+    case TexFormat::RG16F: internal = GL_RG16F; format = GL_RG; type = GL_HALF_FLOAT; break;
+    case TexFormat::R11G11B10F: internal = GL_R11F_G11F_B10F; format = GL_RGB; type = GL_HALF_FLOAT; break;
+    case TexFormat::RG8: internal = GL_RG8; format = GL_RG; type = GL_UNSIGNED_BYTE; break;
   }
 }
 } // namespace
@@ -59,6 +64,10 @@ public:
       if (x == "GL_EXT_texture_sRGB" || x == "GL_EXT_texture_compression_s3tc_srgb") s3tcSrgb_ = true;
     }
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+    GLint ms = 1, mt = 4096;
+    glGetIntegerv(GL_MAX_SAMPLES, &ms);
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &mt);
+    info_.maxSamples = ms; info_.maxTextureSize = mt;
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
   }
@@ -136,7 +145,7 @@ public:
     }
     glBindTexture(GL_TEXTURE_2D, 0);
     uint32_t h = next_++;
-    size_t bpp = d.format == TexFormat::RGBA16F ? 8 : d.format == TexFormat::R8 ? 1 : 4;
+    size_t bpp = d.format == TexFormat::RGBA16F ? 8 : d.format == TexFormat::R8 ? 1 : (d.format == TexFormat::R16F || d.format == TexFormat::RG8) ? 2 : 4;
     size_t bytes = size_t(d.width) * d.height * bpp * (mips ? 4 : 3) / 3;
     texs_[h] = {t, GL_TEXTURE_2D, bytes};
     texBytes_ += bytes;
@@ -277,6 +286,65 @@ public:
     rts_[hd] = rt;
     return RenderTarget{hd};
   }
+  RenderTarget createRenderTargetMS(int w, int h, int samples, TexFormat color, TexFormat depth) override {
+    GLRT rt;
+    rt.w = w; rt.h = h; rt.samples = samples;
+    glGenFramebuffers(1, &rt.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
+    GLint ci, di; GLenum f, t;
+    texFormat(color, ci, f, t);
+    texFormat(depth, di, f, t);
+    glGenRenderbuffers(1, &rt.rbColor);
+    glBindRenderbuffer(GL_RENDERBUFFER, rt.rbColor);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GLenum(ci), w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rt.rbColor);
+    glGenRenderbuffers(1, &rt.rbDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, rt.rbDepth);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GLenum(di), w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rt.rbDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (st != GL_FRAMEBUFFER_COMPLETE) SL_ERROR("multisampled framebuffer incomplete: 0x%x", st);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    size_t bytes = size_t(w) * h * size_t(samples) * ((color == TexFormat::RGBA16F ? 8 : 4) + 4);
+    rtBytes_[next_] = bytes;
+    texBytes_ += bytes;
+    uint32_t hd = next_++;
+    rts_[hd] = rt;
+    return RenderTarget{hd};
+  }
+  void resolve(RenderTarget src, RenderTarget dst, int w, int h, bool color, bool depth) override {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src ? rts_[src.id].fbo : 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst ? rts_[dst.id].fbo : 0);
+    if (color) glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (depth) glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  }
+  void generateMipmaps(Texture t) override {
+    auto it = texs_.find(t.id);
+    if (it == texs_.end()) return;
+    glBindTexture(GL_TEXTURE_2D, it->second.id);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
+  void setSampling(Texture t, Filter f, Wrap w, float aniso) override {
+    auto it = texs_.find(t.id);
+    if (it == texs_.end()) return;
+    glBindTexture(GL_TEXTURE_2D, it->second.id);
+    GLint minF = f == Filter::Nearest ? GL_NEAREST : f == Filter::Trilinear ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minF);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f == Filter::Nearest ? GL_NEAREST : GL_LINEAR);
+    GLint wr = w == Wrap::Repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wr);
+    if (info_.maxAnisotropy > 1)
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::max(1.f, std::min(aniso, float(info_.maxAnisotropy))));
+    glBindTexture(GL_TEXTURE_2D, 0);
+  }
+  void setViewport(int x, int y, int w, int h, bool scissor) override {
+    glViewport(x, y, w, h);
+    if (scissor) { glEnable(GL_SCISSOR_TEST); glScissor(x, y, w, h); } else glDisable(GL_SCISSOR_TEST);
+  }
   Texture renderTargetColor(RenderTarget rt) const override { auto it = rts_.find(rt.id); return it == rts_.end() ? Texture{} : it->second.color; }
   Texture renderTargetDepth(RenderTarget rt) const override { auto it = rts_.find(rt.id); return it == rts_.end() ? Texture{} : it->second.depth; }
   void destroy(RenderTarget rt) override {
@@ -284,6 +352,9 @@ public:
     if (it == rts_.end()) return;
     destroy(it->second.color);
     destroy(it->second.depth);
+    if (it->second.rbColor) glDeleteRenderbuffers(1, &it->second.rbColor);
+    if (it->second.rbDepth) glDeleteRenderbuffers(1, &it->second.rbDepth);
+    if (auto b = rtBytes_.find(rt.id); b != rtBytes_.end()) { texBytes_ -= std::min(texBytes_, b->second); rtBytes_.erase(b); }
     glDeleteFramebuffers(1, &it->second.fbo);
     rts_.erase(it);
   }
@@ -291,6 +362,7 @@ public:
   void bindRenderTarget(RenderTarget rt, int w, int h) override {
     glBindFramebuffer(GL_FRAMEBUFFER, rt ? rts_[rt.id].fbo : 0);
     glViewport(0, 0, w, h);
+    glDisable(GL_SCISSOR_TEST);
   }
   void clear(float r, float g, float b, float a, bool color, bool depth) override {
     GLbitfield m = 0;
@@ -309,7 +381,12 @@ public:
       case Blend::Opaque: glDisable(GL_BLEND); break;
       case Blend::Alpha: glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); break;
       case Blend::Additive: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); break;
+      case Blend::Max: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); break;
+      case Blend::Multiply: glEnable(GL_BLEND); glBlendFunc(GL_ZERO, GL_SRC_COLOR); break;
+      case Blend::Premul: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
     }
+    glBlendEquation(s.blend == Blend::Max ? GL_MAX : GL_FUNC_ADD);
+    if (s.alphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE); else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     GLboolean cw = s.colorWrite ? GL_TRUE : GL_FALSE;
     glColorMask(cw, cw, cw, cw);
     if (s.depthBiasFactor != 0 || s.depthBiasUnits != 0) {
@@ -385,6 +462,7 @@ private:
   std::unordered_map<uint32_t, GLTex> texs_;
   std::unordered_map<uint32_t, GLProg> progs_;
   std::unordered_map<uint32_t, GLRT> rts_;
+  std::unordered_map<uint32_t, size_t> rtBytes_;
   GLProg* cur_ = nullptr;
   PipelineState state_;
   uint32_t draws_ = 0;

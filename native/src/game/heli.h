@@ -89,7 +89,11 @@ public:
   /// the helicopter has gone after handing you to the ambulance (its rotor stops)
   bool grounded() const { return phase == Phase::Ambulance && gone; }
   std::string hudLine() const;
-  bool start(bool free);
+  bool start(bool free, bool near = false);
+  /// a rescue under way when you left carries on (the game, once you are back in the world); keep: the next cleanup
+  /// (back to the main menu) leaves it in the save
+  bool resume();
+  bool keep = false;
   HeliCtl controls(double dt);
   void after(double dt, bool fastKey);
   void cleanup();
@@ -125,7 +129,12 @@ private:
   Heli& h_;
   PlayCtx& c_;
   HospitalWard& ward_;
-  double ropeLen_ = 0, winchT_ = 0;
+  double ropeLen_ = 0, winchT_ = 0, t0_ = 0, persistT_ = 0;
+  std::string persistSt_;
+  dvec3 pick_{0};
+  const char* stage() const;
+  void persist(double dt);
+  void forget();
   bool ropeOn_ = false;
   dvec3 ropeTop_{0}, lieAt_{0};
   bool hasLieAt_ = false;

@@ -552,7 +552,7 @@ int runGame(const GameOptions& opt) {
   std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
   VehicleDraw snowDraw;
   Transition trans;   // the scenes between two places (transition.js): the dark dip with the logo, the title card
-  bool jailResumed = false;
+  bool jailResumed = false, rescueResumed = false;
   drive.gatherOthers = [&](std::vector<OtherBody>& out) {
     traffic.others(out, drive.pos());
     for (const Obb& b : busBoxes) if (std::hypot(b.x - drive.pos().x, b.z - drive.pos().z) < 20) { OtherBody o; o.box = b; o.mass = 12000; o.kind = 1; out.push_back(o); }
@@ -1226,7 +1226,7 @@ int runGame(const GameOptions& opt) {
   menus.hooks.records = [&]() { std::vector<Menus::Hooks::Record> out; for (const auto& r : races.records()) out.push_back({r.name, r.best, r.medal}); return out; };
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
-  menus.hooks.mainMenu = [&]() { heli.abort(); save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
+  menus.hooks.mainMenu = [&]() { heli.rescue.keep = heli.rescuing(); heli.abort(); save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
   menus.hooks.village = [&]() {
     menus.close();
     if (police.jailed() || police.arrestedNow()) { flash("You are serving a sentence", Hud::Flash::Bad); return; }
@@ -2369,6 +2369,22 @@ int runGame(const GameOptions& opt) {
             if (g == 90) { check(heli.rescue.phase == HeliRescue::Phase::Ambulance, "in the ambulance"); heli.rescue.debugStall(); }
             if (g == 150) { check(ward.inBed() && !heli.rescuing() && save.money < C.m0, "the ambulance stuck for 45 s: straight to the medical centre, the bill charged"); next(); }
             break;
+          case 12:  // leaving in the middle of a rescue and coming back: it carries on
+            if (g == 4) { ward.reset(); if (rooms.inside()) rooms.leave(); }
+            if (g == 8) { player.setSkisOn(true); player.teleport(-342.68, -244.42, 0.6); }
+            if (g == 30) { player.knockDown(1, dvec3(0), 0, false); check(heli.rescueMe(true), "a rescue called (a vehicle's fault: free)"); }
+            if (g == 50) { check(save.data("rescue").value("st", std::string()) == "wait", "kept in the save while it runs: " + save.data("rescue").dump()); heli.rescue.keep = true; heli.abort(); player.teleport(4, 34, PI); }
+            if (g == 54) { check(!heli.rescuing() && save.data("rescue").value("st", std::string()) == "wait", "left (back to the menu): still in the save"); check(heli.rescue.resume() && heli.rescuing(), "back: the rescue carries on"); }
+            if (g == 60) check(std::hypot(player.pos.x + 342.68, player.pos.z + 244.42) < 3 && player.mode == PlayerMode::Fall && std::hypot(fl.pos.x - player.pos.x, fl.pos.z - player.pos.z) < 300, "lying where you lay, the helicopter " + std::to_string(int(std::hypot(fl.pos.x - player.pos.x, fl.pos.z - player.pos.z))) + " m out");
+            input.inject(Action::Jump, g > 60);
+            if (heli.rescue.phase == HeliRescue::Phase::Home && heli.rescue.pt > 0.4) { check(true, "picked up"); heli.rescue.keep = true; heli.abort(); next(); }
+            else if (g > 3000) { check(false, "picked up after coming back"); next(); }
+            break;
+          case 13:  // ...and from the cabin
+            if (g == 2) { nlohmann::json& r = save.data("rescue"); check(r.value("st", std::string()) == "cabin" && r.contains("hp"), "aboard when you left: " + r.dump()); check(heli.rescue.resume() && heli.rescue.inCabin && !fl.landed, "back: on in the cabin, in the air"); }
+            if (g == 20) { heli.rescue.debugStall(); }
+            if (g == 80) { check(ward.inBed() && save.data("rescue").empty(), "over: nothing left in the save (free: no bill)"); next(); }
+            break;
           default:
             if (g == 4) { SL_INFO("[helitest] %s", heliOk ? "PASS" : "FAIL"); running = false; }
         }
@@ -2659,6 +2675,7 @@ int runGame(const GameOptions& opt) {
     pc.now = simTime;
     pc.driving = rideKind == Ride::Car;
     pc.riding = rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express || (player.mode == PlayerMode::Sit && !heli.riding() && !ward.seated());
+    if (started && !rescueResumed) { rescueResumed = true; if (!opt.autotest && !mp.active()) heli.rescue.resume(); }   // (a rescue under way when you left: rescue.js resume)
     if (started && !jailResumed) {
       jailResumed = true;
       const nlohmann::json& jl = save.data("jail");

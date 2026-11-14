@@ -16,6 +16,7 @@
 #include "player/player.h"
 #include "world/scenery.h"
 #include "world/world.h"
+#include <ctime>
 
 namespace sl {
 
@@ -44,7 +45,7 @@ std::string HeliRescue::hudLine() const {
 }
 
 /// Start a rescue for the player lying where they crashed. false: not possible here (the caller uses the old fade).
-bool HeliRescue::start(bool free_) {
+bool HeliRescue::start(bool free_, bool near) {
   Player& p = *c_.player;
   HeliFlight& f = h_.flight;
   if (phase != Phase::None && h_.state != Heli::State::Rescue) { cleanup(); }   // (a rescue left half-done never blocks the next one)
@@ -55,10 +56,11 @@ bool HeliRescue::start(bool free_) {
   t = 0; pt = 0; fast = false; spot_ = Spot{}; attached = false; inCabin = false; seated = false; shot_.ready = false; camOn = false;
   hasShotAt_ = hasChase_ = false; sirenOff_ = false; leaving = false; boarding = false; liftT = -1; gone = false; watch_ = {};
   h_.away_ = false;
+  t0_ = double(std::time(nullptr)); pick_ = p.pos; persistT_ = 0; persistSt_.clear();
   // where the helicopter starts: its pad, or wherever it is now; from far away it is already on the way
   double d = std::hypot(f.pos.x - p.pos.x, f.pos.z - p.pos.z);
-  if (d > FAR) {
-    const double R = START_D;
+  if (d > FAR || near) {   // (near: a rescue carried on after you came back, so it is with you in moments)
+    const double R = near ? 260 : START_D;
     double ux = d > 1 ? (f.pos.x - p.pos.x) / d : 0, uz = d > 1 ? (f.pos.z - p.pos.z) / d : 1;
     double x = p.pos.x + ux * R, z = p.pos.z + uz * R, yaw = std::atan2(-ux, -uz);
     f.place(x, z, yaw, h_.groundFn());
@@ -87,6 +89,85 @@ dvec3 HeliRescue::door(double& heading) const {
   double a = h_.home.yaw + PI / 2, d = h_.padR + 3, x = h_.home.x + std::sin(a) * d, z = h_.home.z + std::cos(a) * d;
   heading = std::atan2(h_.home.x - x, h_.home.z - z);
   return dvec3(x, 0, z);
+}
+
+// ------------------------------------------------------------------ kept across leaving and coming back
+// (rescue.js persistStep / plan / resume / settle: "if you leave while being rescued and you rejoin, the rescue should
+// continue, not be abandoned") While it runs the save's `rescue` = { st: 'wait' (down in the snow) | 'winch' | 'cabin'
+// (aboard, flying home) | 'amb' (in the ambulance), x, y, z (where you lay), t0 (s: when it began), free, hp [x, y, z,
+// yaw] (aboard: the helicopter) }, written on every change of stage and every 3 s; gone once it is over (charge) or
+// given up (cleanup). Back in the game: down in the snow or on the winch, the helicopter comes for you again from
+// 260 m; aboard, on in the cabin; in the ambulance, straight into a hospital bed; more than 600 s since it began, all
+// over: out at the medical centre's door. The fee is only ever taken once.
+const char* HeliRescue::stage() const {
+  if (phase == Phase::Ambulance) return "amb";
+  if (inCabin || phase == Phase::Home || phase == Phase::Arrive) return "cabin";
+  return attached || phase == Phase::Hover ? "winch" : "wait";
+}
+
+void HeliRescue::persist(double dt) {
+  if (phase == Phase::None || !c_.save) return;
+  std::string st = stage();
+  if (st == persistSt_ && (persistT_ -= dt) > 0) return;
+  persistSt_ = st; persistT_ = 3;
+  const HeliFlight& f = h_.flight;
+  nlohmann::json r = {{"st", st}, {"x", pick_.x}, {"y", pick_.y}, {"z", pick_.z}, {"t0", t0_}, {"free", free}};
+  if (st == "cabin") r["hp"] = {f.pos.x, f.pos.y, f.pos.z, f.yaw};
+  c_.save->data("rescue") = r;
+  c_.save->markDirty();
+}
+
+void HeliRescue::forget() {
+  persistSt_.clear();
+  if (!c_.save) return;
+  nlohmann::json& r = c_.save->data("rescue");
+  if (r.is_object() && r.empty()) return;
+  r = nlohmann::json::object();
+  c_.save->markDirty();
+}
+
+bool HeliRescue::resume() {
+  if (!c_.save || phase != Phase::None) return false;
+  const nlohmann::json rec = c_.save->data("rescue");
+  if (!rec.is_object() || !rec.contains("st") || !rec["st"].is_string() || !rec.contains("x") || !rec.contains("z")) return false;
+  const std::string st = rec["st"];
+  const double now = double(std::time(nullptr)), t0 = rec.value("t0", now);
+  Player& p = *c_.player;
+  free = rec.value("free", false);
+  const bool late = now - t0 > 600;
+  SL_INFO("rescue: one was under way when you left (%s, %.0f s ago%s)", st.c_str(), now - t0, late ? ": over" : "");
+  if (!late && (st == "wait" || st == "winch")) {
+    // down in the snow where you lay, the helicopter close by
+    p.setSkisOn(true);
+    c_.teleport(rec.value("x", 0.0), rec.value("z", 0.0), p.heading, true);
+    if (start(free, true)) { t0_ = t0; c_.flash("Rescue continues \xC2\xB7 the helicopter is on its way", 0); return true; }
+  } else if (!late && st == "cabin" && rec.contains("hp") && rec["hp"].is_array() && rec["hp"].size() == 4) {
+    const double x = rec["hp"][0], y = rec["hp"][1], z = rec["hp"][2], yaw = rec["hp"][3];
+    c_.teleport(x, z, yaw, false);
+    if (start(free, false)) {
+      HeliFlight& f = h_.flight;
+      f.place(x, z, yaw, h_.groundFn());
+      f.landed = false;
+      f.pos.y = std::max(y, h_.ground(x, z) + f.fr.cgH + 40);
+      f.u = 30; f.vel = dvec3(std::sin(yaw) * 30, 0, std::cos(yaw) * 30);
+      f.updateQuat();
+      h_.rpm = 1;
+      t0_ = t0;
+      pick_ = dvec3(rec.value("x", x), rec.value("y", 0.0), rec.value("z", z));
+      intoCabin();
+      c_.flash("Rescue continues \xC2\xB7 flying you back to Legacy Village", 0);
+      return true;
+    }
+  }
+  // (the rest of it at once: into a hospital bed, else out at the medical centre's door; the bill, once)
+  forget();
+  double heading = 0;
+  dvec3 D = door(heading);
+  p.setSkisOn(false);
+  c_.teleport(D.x, D.z, heading, false);
+  bool inBed = !late && ward_.admit();
+  charge(inBed ? "Rescue continues \xC2\xB7 the ambulance brought you to the medical centre" : "Rescued while you were away \xC2\xB7 treated at the medical centre and released");
+  return true;
 }
 
 // ------------------------------------------------------------------ the flight
@@ -209,6 +290,8 @@ void HeliRescue::after(double dt, bool fastKey) {
   Player& p = *c_.player;
   HeliFlight& f = h_.flight;
   fast = fastKey;
+  persist(dt);
+  if (!attached && !inCabin && phase != Phase::Ambulance) pick_ = p.pos;   // (where you lay: a rejoin picks you up there)
   double sdt = dt * (fast ? 4 : 1);   // (SPACE: the waits and the winch run faster too)
   t += sdt; pt += sdt;
   camOn = false;
@@ -426,6 +509,7 @@ void HeliRescue::release() {
 // the ambulance fee, straight off your balance (it can go below zero: shops, lifts and passes then refuse)
 void HeliRescue::charge(const std::string& what) {
   int fee = c_.save->rescueFee();
+  forget();   // (over: nothing left to carry on)
   if (free) { free = false; c_.flash(what + " \xC2\xB7 free: it was not your fault", 0); return; }
   c_.charge(fee);
   c_.save->rescues++;
@@ -447,6 +531,8 @@ void HeliRescue::fail() {
 
 /// End the rescue (Heli::abort / release).
 void HeliRescue::cleanup() {
+  // (given up or ended from outside: forgotten; back to the main menu it is kept for when you play on: keep)
+  if (keep) keep = false; else if (phase != Phase::None) forget();
   if (liftT >= 0 || gone) {   // (it had left after the hand-over: back on its pad, shown again)
     liftT = -1; gone = false;
     h_.rpm = 0;

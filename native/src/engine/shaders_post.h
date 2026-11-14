@@ -236,14 +236,8 @@ void main() {
   vec3 c = uUpscale > 0.5 ? upsampleCR(uv) : texture(uHdr, uv).rgb;
   if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
   c = min(c, vec3(64.0));
-  if (uPost.z > 0.001) {
-    vec2 dir = uv - 0.5;
-    float r = length(dir);
-    float k = uPost.z * smoothstep(0.18, 0.7, r) * 0.035;
-    vec3 acc = c;
-    for (int i = 1; i <= 4; i++) { vec3 q = texture(uHdr, uv - dir * k * float(i)).rgb; if (!(any(isnan(q)) || any(isinf(q)))) acc += min(q, vec3(64.0)); }
-    c = acc / 5.0;
-  }
+  // (native: no radial blur at speed — post.js smears the image's edges by up to 7 % of the screen there; the speed
+  // reads from the streaks and the vignette below, the picture stays sharp)
   if (uPost2.z > 0.0 || uPost2.w > 0.0) {
     vec4 a = texture(uAO, uv);
     c *= mix(1.0, a.r, uPost2.z);

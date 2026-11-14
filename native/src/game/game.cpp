@@ -34,6 +34,7 @@
 #include "game/people.h"
 #include "game/shapes.h"
 #include "game/weather.h"
+#include "world/groundmap.h"
 #include "game/interiors.h"
 #include "game/races.h"
 #include "game/jobs.h"
@@ -303,6 +304,9 @@ int runGame(const GameOptions& opt) {
   AssetManager assets(*plat, *dev, paths);
   assets.textureCap = q.maxTexture;   // (Phase 7: 512 with the switch preset)
   assets.compressTextures = q.compressTextures;
+  // (larger colour maps where block compression pays for them; without it — Apple's OpenGL has no S3TC — High and up
+  // spend the memory, Balanced keeps the models' budgets)
+  assets.textureScale = (q.compressTextures && dev->supportsBC(true)) || q.fx >= 2 ? q.textureScale : 1;
   assets.triangleBudget = q.triangleBudget;
   if (!opt.verifyPoses.empty()) return verifyPoses(assets, opt.verifyPoses == "@data" ? paths.dataRoot + "/poses_ref.json" : opt.verifyPoses);
   Renderer renderer;
@@ -364,7 +368,7 @@ int runGame(const GameOptions& opt) {
   }
 
   Terrain terrain(*dev, world, jobs, q.terrainLodK);
-  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 2 ? 2 : 1, q.rockR};
+  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 1 ? 2 : 1, q.rockR};
   SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
@@ -580,6 +584,7 @@ int runGame(const GameOptions& opt) {
           terrain.nodeCount(), scenery.treesDrawn(), resort.propCount(), lifts.lines().size(), assets.textureBytes() / 1048576.0,
           dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
 
+  GroundMap groundMap;
   // profiling toggles: SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier
   std::string dbg = std::getenv("SKI_LEGACY_DEBUG") ? std::getenv("SKI_LEGACY_DEBUG") : "";
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
@@ -2821,9 +2826,52 @@ int runGame(const GameOptions& opt) {
     save.clock = simTime;
     save.tick(*plat, simTime, opt.autotest ? 1e9 : 60);
     pt0 = perfMs();
+    // (debug) SKI_LEGACY_SHOTS="name:x,y,z,tx,ty,tz[,hour[,weather]];...": several fixed cameras in one run (heights
+    // above the ground with SKI_LEGACY_SHOT_GROUND), each held SKI_LEGACY_SHOT_FRAMES frames (default 45) and written
+    // to <png>_<name>.png; SKI_LEGACY_DEBUG=shotonly ends the run after the skiing phase, nohud hides the HUD
+    if (const char* shots = std::getenv("SKI_LEGACY_SHOTS"); shots && at == AT::Ski && opt.autotest) {
+      struct Shot { std::string name, weather; double v[6]; double hour; };
+      static std::vector<Shot> list;
+      static int per = 0, lastK = -1;
+      if (per == 0) {
+        per = 45;
+        if (const char* e = std::getenv("SKI_LEGACY_SHOT_FRAMES")) per = std::max(2, std::atoi(e));
+        std::string all = shots;
+        for (size_t p0 = 0; p0 < all.size();) {
+          size_t p1 = all.find(';', p0);
+          if (p1 == std::string::npos) p1 = all.size();
+          std::string one = all.substr(p0, p1 - p0);
+          p0 = p1 + 1;
+          size_t c = one.find(':');
+          if (c == std::string::npos) continue;
+          Shot sh{one.substr(0, c), "", {0, 0, 0, 0, 0, 0}, -1};
+          char wx[32] = {0};
+          int n = std::sscanf(one.c_str() + c + 1, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%31s", &sh.v[0], &sh.v[1], &sh.v[2], &sh.v[3], &sh.v[4], &sh.v[5], &sh.hour, wx);
+          if (n < 6) continue;
+          if (n < 7) sh.hour = -1;
+          if (n >= 8) sh.weather = wx;
+          list.push_back(sh);
+        }
+      }
+      int k = std::max(0, frame - skiFrame0) / per;
+      if (k < int(list.size())) {
+        const Shot& sh = list[size_t(k)];
+        double v[6];
+        for (int i = 0; i < 6; i++) v[i] = sh.v[i];
+        if (std::getenv("SKI_LEGACY_SHOT_GROUND")) { v[1] += world.height(v[0], v[2]); v[4] += world.height(v[3], v[5]); }
+        if (sh.hour >= 0) hour = sh.hour;
+        if (!sh.weather.empty()) weather.snap(Weather::byId(sh.weather));
+        cam.lookAt(dvec3(v[0], v[1], v[2]), dvec3(v[3], v[4], v[5]));
+        cam.fovY = 60;
+        // (the frame's streaming below follows this camera; everything round a new one in before its first frame)
+        if (k != lastK) { lastK = k; terrain.update(cam.pos); scenery.finish(cam.pos); resort.update(0, cam.pos); resort.finishStreaming(cam.pos); }
+        if ((frame - skiFrame0) % per == per - 1 && !opt.png.empty()) pendingPng = pngVariant(opt.png, sh.name.c_str());
+      }
+    }
     terrain.update(cam.pos);
     scenery.update(cam.pos);
     resort.update(frameDt, cam.pos);
+    groundMap.update(world, renderer, cam.pos, opt.autotest && frame < 3);   // (the valley mist's height map)
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
     rig.showcase = showcaseOn;
     rig.sled = rideKind == Ride::Sled;
@@ -2905,7 +2953,7 @@ int runGame(const GameOptions& opt) {
         const std::string& qn = q.name;
         bool fast = console || qn == "super" || qn == "performance";
         // (Balanced and up stay sharp: native resolution, only a mild dip under real load; the user found the 3D blurry)
-        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : fast ? 0.6 : 0.85;
+        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : fast ? 0.6 : 1.0;   // (Balanced and up: always the full resolution)
         if (ms > hi && dynScale > floorS) dynScale = std::max(floorS, dynScale - (ms > hi * 1.6 ? 0.05 : 0.02));
         else if (ms < lo && dynScale < 1.0) dynScale = std::min(1.0, dynScale + 0.005);
         double budgetMP = qn == "super" ? 1.6 : qn == "performance" ? 2.4 : qn == "switch" ? 1.0 : 1e9;
@@ -3050,7 +3098,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 9) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
+    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 9) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -3268,6 +3316,7 @@ int runGame(const GameOptions& opt) {
           perfReport("skiing down the run (every frame rendered)");
           if (off("fpview")) player.view = Player::View::Third;
           at = haveResort ? AT::Collide : AT::Done;
+          if (off("shotonly")) at = AT::Done;
           phaseFrame = 0;
         }
       } else if (at == AT::Collide) {

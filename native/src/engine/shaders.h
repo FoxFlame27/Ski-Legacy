@@ -351,17 +351,23 @@ void main() {
 #ifdef INSTANCED
   // vegetation.js pineMaterial: gentle wind sway (+ branch flutter on High and up), stronger toward the top
   if (uFlags3.y > 0.5 && uFlags3.y < 1.5) {
-    float hy = max(p.y, 0.0) / max(uFlags3.z, 1.0);
-    float sway = hy * hy * 0.012 * uFlags3.z;
+    // (all in the unit tree's own space, as the JS: the tree is 1 tall here and the instance scale follows below, so
+    // the top of a 12 m spruce leans ~11 cm, slowly, and the trunk stands still. It used to be scaled by the instance twice
+    // and to flutter in the raw model's units: whole trees wobbled by a metre)
+    vec3 u0 = p.xyz / max(uFlags3.z, 1e-3);
+    float hy = max(u0.y, 0.0);
+    float sway = hy * hy * 0.009 * uFlags3.z;   // (the JS: 0.012; a touch calmer)
     float ph = uMisc2.y;
-    p.x += sin(ph * 1.3 + aInst0.x * 0.1 + aInst0.z * 0.07) * sway * aInst0.w;
-    p.z += cos(ph * 1.1 + aInst0.z * 0.1) * sway * 0.6 * aInst0.w;
+    // nothing moves at distance (sub-pixel there, and the far LODs must not shimmer)
+    float wd = 1.0 - smoothstep(60.0, 140.0, length(aInst0.xyz - uCamPos.xyz));
+    p.x += sin(ph * 1.3 + aInst0.x * 0.1 + aInst0.z * 0.07) * sway * wd;
+    p.z += cos(ph * 1.1 + aInst0.z * 0.1) * sway * 0.6 * wd;
 #if SL_FX >= 2
-    float rr = length(aPos.xz) * hy;
-    p.x += sin(ph * 3.7 + dot(aPos, vec3(11.0, 7.0, 5.0)) * 9.0 + aInst0.x) * rr * 0.02;
-    p.z += cos(ph * 3.1 + dot(aPos, vec3(5.0, 9.0, 13.0)) * 9.0 + aInst0.z) * rr * 0.02;
+    float rr = length(u0.xz) * hy * uFlags3.z * wd;
+    p.x += sin(ph * 3.7 + dot(u0, vec3(11.0, 7.0, 5.0)) * 9.0 + aInst0.x) * rr * 0.012;
+    p.z += cos(ph * 3.1 + dot(u0, vec3(5.0, 9.0, 13.0)) * 9.0 + aInst0.z) * rr * 0.012;
 #endif
-    vObj = p.xyz / max(uFlags3.z, 1e-3);
+    vObj = u0;   // (the needles' snow and shading stay put on the swaying tree, as the JS's vPineObj)
   }
   if (aInst1.y != 0.0) {
     float cr = cos(aInst1.y), sr = sin(aInst1.y);
@@ -498,7 +504,13 @@ void main() {
   vec3 gn = normalize(vNormal);
   vec3 v = normalize(-vRel);
   float dist = length(vRel);
-  if (uFlags.w > 0.5 && dot(gn, v) < 0.0) gn = -gn;
+  if (uFlags.w > 0.5) {
+    // double sided: the side of the triangle you see (its own plane from the derivatives, as gl_FrontFacing in the
+    // JS), not the interpolated normal against the view: that flipped on smooth-shaded silhouettes (dark rims)
+    vec3 fn = cross(dFdx(vRel), dFdy(vRel));
+    if (dot(fn, v) < 0.0) fn = -fn;
+    if (dot(gn, fn) < 0.0) gn = -gn;
+  }
   vec3 n = gn;
   int kind = int(uFlags3.y + 0.5);
 #ifdef SL_LOW

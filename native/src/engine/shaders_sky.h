@@ -62,6 +62,13 @@ vec3 skyColor(vec3 d, bool withSun) {
   }
   col = mix(col, uFogColor.rgb, smoothstep(0.0, -0.07, e));
   if (withSun) {
+    // (native) the sky seen through the same air as the mountains (fog.js's exponential atmosphere along the ray):
+    // in mist and snowfall the lower sky whites out with the far slopes instead of staying blue behind them
+    float path = min(1.0 / (uFogParams.y * max(e, 0.004)), 26000.0);
+    float fs = 1.0 - exp(-uFogParams.x * exp(-max(uCamPos.y, 0.0) * uFogParams.y) * path * 0.55);
+    col = mix(col, uFogColor.rgb, fs);
+  }
+  if (withSun) {
     float R = 0.0085 * uSkyDisc.w;
     float aa = max(fwidth(ang), 1e-5) * 1.5;
     float disc = 1.0 - smoothstep(R - aa, R + aa, ang);

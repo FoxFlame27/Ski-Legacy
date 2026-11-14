@@ -1,4 +1,6 @@
 #include "world/snowtrails.h"
+#include <cstdlib>
+#include <cstring>
 #include "player/player.h"
 #include "world/world.h"
 #include <algorithm>
@@ -47,12 +49,27 @@ void SnowTrails::footprint(const dvec2& p, double yaw, float strength, float sca
 }
 
 void SnowTrails::emitSpray(const dvec3& at, const dvec3& vel, int n, float size, float speed, float up) {
-  n = int(float(n) * spray_ + rnd());
-  for (int i = 0; i < n && sparks_.size() < 3000; i++) {
-    dvec3 v = vel * double(0.6f + 0.5f * rnd());
-    v += dvec3((rnd() - 0.5f) * speed, up * (0.5f + rnd()), (rnd() - 0.5f) * speed);
-    sparks_.push_back({at + dvec3((rnd() - 0.5f) * 0.3f, rnd() * 0.15f, (rnd() - 0.5f) * 0.3f), v, 0.5f + rnd() * 0.9f, 0,
-                       size * (0.6f + 0.8f * rnd()), rnd() * 6.28f, 0.35f + 0.4f * rnd()});
+  // a plume is three things: the powder (many soft puffs that billow out, hang and drift), a finer veil that rises
+  // above it, and the clumps the edge throws (small, bright, ballistic)
+  int np = int(float(n) * spray_ * 1.6f + rnd());
+  for (int i = 0; i < np && sparks_.size() < 5000; i++) {
+    dvec3 v = vel * double(0.55f + 0.55f * rnd());
+    v += dvec3((rnd() - 0.5f) * speed, up * (0.4f + rnd()), (rnd() - 0.5f) * speed);
+    bool veil = rnd() < 0.3f;
+    Spark s{at + dvec3((rnd() - 0.5f) * 0.3f, rnd() * 0.15f, (rnd() - 0.5f) * 0.3f), v, (veil ? 1.1f : 0.55f) + rnd() * 0.9f, 0,
+            size * (veil ? 1.5f : 1.f) * (0.6f + 0.8f * rnd()), rnd() * 6.28f, (veil ? 0.16f : 0.32f) + 0.3f * rnd()};
+    s.seed = rnd(); s.grow = veil ? 3.4f : 2.2f;
+    if (veil) s.v.y += up * 0.5f;
+    sparks_.push_back(s);
+  }
+  int nc = int(float(n) * spray_ * 0.9f + rnd());
+  for (int i = 0; i < nc && sparks_.size() < 5000; i++) {
+    dvec3 v = vel * double(0.8f + 0.6f * rnd());
+    v += dvec3((rnd() - 0.5f) * speed * 1.4f, up * (0.7f + 1.2f * rnd()), (rnd() - 0.5f) * speed * 1.4f);
+    Spark s{at + dvec3((rnd() - 0.5f) * 0.25f, rnd() * 0.1f, (rnd() - 0.5f) * 0.25f), v, 0.35f + rnd() * 0.5f, 0,
+            0.012f + 0.022f * rnd(), rnd() * 6.28f, 0.75f + 0.25f * rnd()};
+    s.kind = 1; s.seed = rnd(); s.grow = 0;
+    sparks_.push_back(s);
   }
 }
 
@@ -135,6 +152,9 @@ void SnowTrails::update(double dt, Renderer& r, const dvec3& focus, const World*
       // spray: off the downhill edges in a hard carve, a fan in a hockey stop / skid
       float carveK = edge * float(std::clamp((sp - 6) / 14, 0.0, 1.0));
       float skidK = float(slide * std::clamp((sp - 3) / 10, 0.0, 1.0));
+      // (dev / screenshots: SKI_LEGACY_DEBUG=spraytest throws the full plumes all the time)
+      static const bool sprayTest = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return e && std::strstr(e, "spraytest"); }();
+      if (sprayTest) { carveK = 1; skidK = 0.8f; }
       double side = P.lean >= 0 ? 1 : -1;
       dvec3 out = dvec3(rt.x, 0, rt.y) * side;
       if (carveK > 0.05) emitSpray(P.pos + out * 0.25 - dvec3(f.x, 0, f.y) * 0.5, v * 0.35 + out * (2.0 + carveK * 3.0), int(carveK * 5 + 0.5), 0.12f, 1.2f, 1.4f + carveK * 1.5f);
@@ -198,9 +218,9 @@ void SnowTrails::update(double dt, Renderer& r, const dvec3& focus, const World*
     Spark& s = sparks_[i];
     s.age += float(dt);
     if (s.age >= s.life) { sparks_[i] = sparks_.back(); sparks_.pop_back(); continue; }
-    double drag = std::exp(-2.2 * dt);
+    double drag = std::exp(-(s.kind > 0.5f ? 0.5 : 2.2) * dt);   // (powder stops in the air, clumps fly)
     s.v = s.v * drag;
-    s.v.y -= g * 0.55 * dt;
+    s.v.y -= g * (s.kind > 0.5f ? 1.0 : 0.5) * dt;
     s.p += s.v * dt;
     if (world) {
       double gy = world->height(s.p.x, s.p.z);
@@ -209,10 +229,11 @@ void SnowTrails::update(double dt, Renderer& r, const dvec3& focus, const World*
     float k = s.age / s.life;
     Particle p;
     p.pos = s.p;
-    p.size = s.size * (1.f + k * 2.2f);
-    p.color = vec4(0.9f, 0.93f, 0.97f, s.alpha * (1.f - k) * (1.f - k) * std::min(1.f, s.age * 12.f));
+    p.size = s.size * (1.f + k * s.grow);
+    p.color = vec4(0.92f, 0.945f, 0.975f, s.alpha * (1.f - k) * (s.kind > 0.5f ? 1.f : 1.f - k) * std::min(1.f, s.age * 14.f));
     p.rot = s.rot + k;
-    p.soft = 0.25f;
+    p.soft = s.kind > 0.5f ? 0.04f : 0.3f;
+    p.kind = s.kind; p.seed = s.seed;
     r.addParticle(p);
     i++;
   }

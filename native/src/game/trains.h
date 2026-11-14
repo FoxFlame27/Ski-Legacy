@@ -49,7 +49,7 @@ private:
   double haltArrival(const std::string& id) const;
   dvec3 trackPoint(double s, bool loop) const;
   void carMatrix(int train, int k, glm::dmat4& M) const;
-  World& world_;
+  [[maybe_unused]] World& world_;
   Transport& t_;
   VehicleModels& models_;
   double t_now_ = 0;
@@ -93,7 +93,7 @@ private:
   const Way& way(int dir) const { return dir > 0 ? up_ : down_; }
   double u(int k) const;
   void carMatrix(int k, int car, glm::dmat4& M) const;
-  World& world_;
+  [[maybe_unused]] World& world_;
   Transport& t_;
   VehicleModels& models_;
   std::vector<double> Tm_;

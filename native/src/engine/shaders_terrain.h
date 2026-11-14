@@ -67,12 +67,20 @@ vec3 triGradL(vec3 p, vec3 w, float s, float lod) {
   vec2 gx = ngradL(p.zy * s, lod), gy = ngradL(p.xz * s, lod), gz = ngradL(p.xy * s, lod);
   return vec3(0.0, -gx.y, -gx.x) * w.x + vec3(-gy.x, 0.0, -gy.y) * w.y + vec3(-gz.x, -gz.y, 0.0) * w.z;
 }
+// (native) the baked rock map, triplanar: world-space normal offset, height (x) and albedo variation (y)
+void rockTri(vec3 P, vec3 w, out vec3 nrm, out vec2 ha) {
+  vec4 a = texture(uRockTex, P.zy), b = texture(uRockTex, P.xz), c = texture(uRockTex, P.xy);
+  vec2 ga = a.rg - 0.5, gb = b.rg - 0.5, gc = c.rg - 0.5;
+  nrm = vec3(0.0, ga.y, ga.x) * w.x + vec3(gb.x, 0.0, gb.y) * w.y + vec3(gc.x, gc.y, 0.0) * w.z;
+  ha = a.ba * w.x + b.ba * w.y + c.ba * w.z;
+}
 float glint(vec2 p, float px, vec3 n, vec3 H) {
   if (px > 0.7) return 0.0;
   ivec2 c = ivec2(floor(p));
   float h1 = tHash(c), h2 = tHash(c + ivec2(7, 113)), h3 = tHash(c + ivec2(151, 29)), h4 = tHash(c + ivec2(37, 211));
-  vec3 facet = normalize(n + vec3(h1 - 0.5, 0.0, h2 - 0.5) * 1.0);
-  float align = pow(max(dot(facet, H), 0.0), 700.0);
+  // (each crystal's own tilt, wide: as the eye moves others line up with the sun and the snow shimmers)
+  vec3 facet = normalize(n + vec3(h1 - 0.5, 0.0, h2 - 0.5) * 1.5);
+  float align = pow(max(dot(facet, H), 0.0), 520.0);
   float r = max(0.1, 0.75 * px);
   float pt = 1.0 - smoothstep(r * 0.4, r, length(fract(p) - 0.2 - 0.6 * vec2(h3, h4)));
   return align * pt * (0.12 + 2.4 * h3 * h3 * h4) * (1.0 - smoothstep(0.35, 0.7, px));
@@ -231,14 +239,42 @@ void main() {
       tCav = smoothstep(0.25, 0.75, grain * 0.6 + faces * 0.4);
       rock *= 1.0 - cracks * 0.6;
       rock *= mix(vec3(1.0), vec3(0.7, 0.72, 0.76), 1.0 - smoothstep(0.2, 0.36, streak));
-#if TERRAIN_DETAIL >= 2
-      // (native) the baked rock map up close: lichen / mineral variation and darker hollows
-      if (tDist < 90.0) {
-        vec3 P = vWPos * 0.25;
-        float av = texture(uRockTex, P.zy).a * tTriW.x + texture(uRockTex, P.xz).a * tTriW.y + texture(uRockTex, P.xy).a * tTriW.z;
-        float k = 1.0 - smoothstep(40.0, 90.0, tDist);
-        rock *= mix(1.0, (0.72 + 0.56 * av) * (0.8 + 0.4 * rockHgt), k);
-        tCav = mix(tCav, tCav * (0.6 + 0.6 * rockHgt), k);
+      {
+        // (native) bedding: the rock is laid in beds that dip a few degrees, thick banks and thin layers between
+        // them, lighter limestone and darker shaly bands; each bed's edge is a small step that catches or loses the
+        // light (ledges), band-limited by the noise map's mips so the layering holds from the foot of the wall to
+        // the far ranges instead of smearing
+        float by = dot(vWPos, vec3(0.105, 0.99, 0.07)) + (fbm3(vWPos.xz * 0.0035) - 0.5) * 14.0 + (faces - 0.5) * 2.2;
+        vec2 bdx = vec2(dot(tDx, vec3(0.105, 0.99, 0.07)), 0.0), bdy = vec2(dot(tDy, vec3(0.105, 0.99, 0.07)), 0.0);
+        vec4 b1 = nTexG(vec2(by * 0.35, 0.61), bdx * 0.35, bdy * 0.35);    // banks: metres
+        vec4 b2 = nTexG(vec2(by * 2.6, 0.23), bdx * 2.6, bdy * 2.6);       // thin beds: decimetres
+        float steepB = smoothstep(0.3, 0.6, slope);
+        float beds = b1.r * 0.62 + b2.r * 0.38;
+        float band = smoothstep(0.4, 0.6, beds);
+        rock *= mix(1.0, mix(0.66, 1.34, band), 0.75 * steepB);
+        rock *= mix(vec3(1.0), vec3(1.1, 1.0, 0.86), smoothstep(0.55, 0.75, b1.a) * 0.6 * steepB);   // (ochre banks)
+        // the beds' steps: the slope of the bedding profile tilts the normal up / down
+        float bslope = (b1.g - 0.5) * 6.0 * 0.35 * 0.5 + (b2.g - 0.5) * 6.0 * 0.12;
+        tRockN.y += bslope * 0.9 * steepB;
+        tCav *= mix(1.0, 0.72 + 0.4 * band, steepB);
+      }
+#if TERRAIN_DETAIL >= 1
+      {
+        // (native) the baked rock map (fractured blocks, cracks, ridged grain, lichen) at the scale the pixel
+        // footprint asks for: a tile always spans a few hundred pixels, two neighbouring scales cross-faded, so the
+        // rock has crisp blocks and cracks at 10 m and at 3 km (it used to be sampled within 90 m only: beyond that
+        // the faces were magnified 256 px noise, a watercolour smear)
+        float rl = clamp(log2(max(tFw, 1e-4) * 60.0), 0.0, 8.0);
+        float r0 = floor(rl), rf = smoothstep(0.25, 0.75, rl - r0);
+        float s0 = 0.25 * exp2(-r0);
+        vec3 nA, nB; vec2 hA, hB;
+        rockTri(vWPos * s0 + fract(vec3(0.618, 0.382, 0.236) * r0), tTriW, nA, hA);
+        rockTri(vWPos * (s0 * 0.5) + fract(vec3(0.618, 0.382, 0.236) * (r0 + 1.0)), tTriW, nB, hB);
+        vec2 ha = mix(hA, hB, rf);
+        vec3 nr = mix(nA, nB, rf);
+        rock *= (0.6 + 0.8 * ha.y) * (0.72 + 0.56 * ha.x);
+        tCav *= 0.55 + 0.75 * ha.x;
+        tRockN += nr * 1.5;
       }
 #endif
       float upR = normalize(wn + tRockN).y;
@@ -348,7 +384,7 @@ void main() {
     float fade = 1.0 - smoothstep(30.0, 140.0, tDist);
     float fadeMid = 1.0 - smoothstep(60.0, 320.0, tDist);
     float onSnow = 1.0 - tRock;
-    vec2 g = tRelG * 0.52 * onSnow * (1.0 - 0.72 * tGroomed) * (1.0 - 0.35 * uSnowCover);   // (native: 0.42 -> 0.52, the wind relief reads)
+    vec2 g = tRelG * 0.66 * onSnow * (1.0 - 0.72 * tGroomed) * (1.0 - 0.35 * uSnowCover);   // (native: 0.42 -> 0.52, the wind relief reads)
 #if TERRAIN_DETAIL >= 1
     if (fadeMid * onSnow > 0.0) {
       vec2 sq = ngrad((mat2(0.8, 0.6, -0.6, 0.8) * vWPos.xz) * vec2(0.04, 0.22)) * vec2(0.04, 0.22);
@@ -408,14 +444,6 @@ void main() {
 #if TERRAIN_DETAIL >= 1
     if (tRock > 0.002 && tDist < 120.0) rockN += triGrad(vWPos, tTriW, 0.6) * 0.3 * (1.0 - smoothstep(30.0, 120.0, tDist));
 #endif
-#if TERRAIN_DETAIL >= 2
-    if (tRock > 0.002 && tDist < 60.0) {
-      vec3 P = vWPos * 0.25;
-      vec2 a = texture(uRockTex, P.zy).rg - 0.5, b = texture(uRockTex, P.xz).rg - 0.5, c = texture(uRockTex, P.xy).rg - 0.5;
-      vec3 rg = vec3(0.0, a.y, a.x) * tTriW.x + vec3(b.x, 0.0, b.y) * tTriW.y + vec3(c.x, c.y, 0.0) * tTriW.z;
-      rockN += rg * 1.1 * (1.0 - smoothstep(25.0, 60.0, tDist));
-    }
-#endif
     pn = normalize(wn + vec3(-g.x, 0.0, -g.y) + rockN * tRock);
   }
   // ================= lighting (three's physical model) + terrain.js lights_fragment_end
@@ -438,10 +466,12 @@ void main() {
   float sunK = smoothstep(0.4, 2.8, dot(uSunColor.rgb / max(uHemiGround.w, 0.05), vec3(0.3333)) * uHemiGround.w);
   // (native) terrain.js's "cold sky-blue shade" tinted the (already blue) sky light again: (0.66, 0.8, 0.98) in the
   // sun. The same density, near neutral: the sky light itself gives the shade its cool
-  L.iDiff *= mix(vec3(0.95, 0.96, 0.98), vec3(0.76, 0.785, 0.81), sunK);
+  // (Nov 14: a clearer sky blue in the shade again, on the snow only: the user missed the JS's blue shadows)
+  L.iDiff *= mix(vec3(0.95, 0.96, 0.98), mix(vec3(0.76, 0.785, 0.81), vec3(0.7, 0.79, 0.94), 1.0 - tRock), sunK);
   float tTilt = pn.y - wn.y;
   L.iDiff *= mix(1.0, (0.5 + 0.65 * tCav) * clamp(0.72 + 0.4 * pn.y + 1.4 * tTilt, 0.32, 1.3), tRock);
-  L.iDiff *= mix(1.0, mix(0.7, 1.06, smoothstep(0.15, 0.85, tRelV)), (1.0 - tRock) * (0.35 + 0.65 * tRelK));
+  // the wind relief's hollows: lit by less of the sky, and what reaches them is its blue (not a grey stain)
+  L.iDiff *= mix(vec3(1.0), mix(vec3(0.6, 0.71, 0.9), vec3(1.06), smoothstep(0.15, 0.85, tRelV)), (1.0 - tRock) * (0.35 + 0.65 * tRelK));
   float tSnowK = 1.0 - tRock;
   {
     float tNdl = saturate(dot(pn, uSunDir.xyz));
@@ -520,9 +550,9 @@ void main() {
 #if TERRAIN_FX >= 2
       vec3 gTint = 0.72 + 0.28 * cos(6.2832 * (tHash(ivec2(floor(gp1)) + ivec2(3, 71)) + vec3(0.0, 0.33, 0.67)));
       gTint = mix(vec3(1.0), gTint, 0.6 * (1.0 - smoothstep(4.0, 15.0, tDist)));
-      L.dSpec += spark * sFade * 10.0 * sunLit * gTint;
+      L.dSpec += spark * sFade * 22.0 * sunLit * gTint;
 #else
-      L.dSpec += spark * sFade * 10.0 * sunLit;
+      L.dSpec += spark * sFade * 22.0 * sunLit;
 #endif
     }
   }

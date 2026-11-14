@@ -42,7 +42,7 @@ private:
     bool init = false, fresh = false, npcSkis = false;
   };
   void stepNpc(Mover& m, double dt);
-  struct Spark { dvec3 p, v; float life, age, size, rot, alpha; };
+  struct Spark { dvec3 p, v; float life, age, size, rot, alpha; float kind = 0, seed = 0, grow = 2.2f; };   // kind 0: powder, 1: a thrown clump
   void groove(Track& t, const dvec2& p, float halfWidth, float strength, float widen, uint8_t kind, float segLen = 0.22f);
   void footprint(const dvec2& p, double yaw, float strength, float scale = 1);
   void emitSpray(const dvec3& at, const dvec3& vel, int n, float size, float speed, float up);

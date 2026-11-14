@@ -29,7 +29,12 @@ static const double PI_D = 3.14159265358979323846;
 Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& assets, const VegetationSettings& vs)
   : dev_(dev), world_(world), jobs_(jobs), assets_(assets), vs_(vs), alive_(std::make_shared<int>(1)) {
   ModelLoadOptions o;
+  // (the trees' LODs as the JS makes them: vertex clustering at DEC_FINE / DEC_COARSE of the tree's height, here with
+  // the map's colour per vertex. The edge-collapse / sloppy simplifier at 20 % and 2 % shredded the branches and
+  // sampled the atlas across its islands: mushy grey-green blobs from 40 m)
   o.lodRatios = {0.2f, 0.02f};
+  o.lodVertexColor = true;
+  o.lodCluster = {0.032f, 0.08f};
   o.maxTextureSize = 1024;
   const char* names[2] = {"pine_tree", "pine_tree2"};
   for (int t = 0; t < 2; t++) {
@@ -37,12 +42,13 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
     if (!treeModel_[t]) continue;
     treeFit_[t] = treeModel_[t]->fitTransform(1.f, 1);   // unit height, base at 0 (bakeGeometry size 1, axis y)
     // vegetation.js pineMaterial: needle colour from the texture's luminance (NEEDLE_LUM), snow, sway, translucency
-    for (Material& m : treeModel_[t]->materials) {
-      m.shading = 1;
-      m.lumNorm = 1.f / (t == 0 ? 0.077f : 0.23f);
-      m.emissive = vec3(0); m.emissiveTex = {};
-      m.metallic = 0;
-    }
+    for (auto* mats : {&treeModel_[t]->materials, &treeModel_[t]->lodMaterials})
+      for (Material& m : *mats) {
+        m.shading = 1;
+        m.lumNorm = 1.f / (t == 0 ? 0.077f : 0.23f);
+        m.emissive = vec3(0); m.emissiveTex = {};
+        m.metallic = 0;
+      }
     for (int l = 0; l < 3; l++) batches_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
   }
   if (vs_.impostorR > vs_.farR) impostors_.init(dev_, uint32_t(std::max(1000, vs_.maxImpostors)));

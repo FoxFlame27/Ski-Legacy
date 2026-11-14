@@ -17,6 +17,15 @@ struct ModelLoadOptions {
   bool ignoreEmissive = true;     // Meshy exports bake emissive = 1 with a copy of the albedo: off by default
   int maxTextureSize = 2048;      // larger textures are box-downsampled on load (memory budget, Switch)
   bool keepCpu = false;           // (Phase 7) keep the vertices / indices on the CPU (the cars' wheels are split off)
+  // The extra LODs are drawn with per-vertex colours taken from the base colour map instead of the textures
+  // (Model::lodMaterials). For Meshy models whose atlas is thousands of tiny UV islands (the gondola cabin): any
+  // simplified mesh joins vertices across islands and samples garbage (pink polka-dot cabins down the line).
+  bool lodVertexColor = false;
+  // With lodVertexColor: the LODs by vertex clustering instead of edge collapses (assets.js clusterDecimate, the
+  // trees' "branch soup" of separate pieces an edge-collapse simplifier cannot reduce and the sloppy one shreds):
+  // the cluster cells as shares of the mesh's height, one LOD each; positions, normals and colours averaged per
+  // cell, snow and needles kept apart
+  std::vector<float> lodCluster;
 };
 
 class AssetManager {
@@ -31,6 +40,7 @@ public:
   gfx::Device& device() { return dev_; }   // (models built on the side: the crowd people, player/fans_rig)
   /// (Phase 7) a cap on every texture's size (the quality preset: 512 on Switch), whatever the load options ask
   int textureCap = 4096;
+  int textureScale = 1;            // the models' own colour-map budgets x this (Balanced and up: 2, with block compression)
   float anisotropy = 8;            // anisotropic filtering of the models' maps (16: the GPU's maximum, High and up)
   int triangleBudget = 0;          // (Phase 7, the switch preset's mesh LOD bias) a model over it is simplified to it
   bool compressTextures = false;   // (Phase 7, the switch preset) BC1 / BC3 block compression at load (engine/texcompress)

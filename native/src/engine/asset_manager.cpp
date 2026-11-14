@@ -407,4 +407,12 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
   return model;
 }
 
+bool decodeImageRGBA(const std::vector<uint8_t>& file, int& w, int& h, std::vector<uint8_t>& rgba) {
+  Image im;
+  if (file.empty() || !decodeImage(file.data(), file.size(), nullptr, im)) return false;
+  w = im.w; h = im.h;
+  rgba = std::move(im.rgba);
+  return true;
+}
+
 } // namespace sl

@@ -23,6 +23,7 @@
 #include "game/trains.h"
 #include "game/economy.h"
 #include "game/hud.h"
+#include "game/transition.h"
 #include "game/menus.h"
 #include "game/trailmap.h"
 #include "game/play.h"
@@ -476,7 +477,7 @@ int runGame(const GameOptions& opt) {
   }
   std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
   VehicleDraw snowDraw;
-  double fadeT = -1;   // a short fade to dark covering a teleport (transition.js)
+  Transition trans;   // the scenes between two places (transition.js): the dark dip with the logo, the title card
   bool jailResumed = false;
   drive.gatherOthers = [&](std::vector<OtherBody>& out) {
     traffic.others(out, drive.pos());
@@ -541,6 +542,7 @@ int runGame(const GameOptions& opt) {
 
   // ---------------------------------------------------------------- (Phase 4) menus, HUD, economy
   Hud hud;
+  trans.init(*dev, *plat, paths);
   Menus menus(ui, save, input, *plat);
   NavBuilder navBuilder;
   bool wasUiOpen = false;
@@ -594,7 +596,10 @@ int runGame(const GameOptions& opt) {
   pc.teleport = [&](double x, double z, double h, bool skis) { player.setSkisOn(skis); player.teleport(x, z, h); };
   pc.mark = [&](double x, double z, const std::string& l) { tmap.mark.on = true; tmap.mark.x = x; tmap.mark.z = z; tmap.mark.label = l; };
   pc.unmark = [&]() { tmap.mark.on = false; };
-  pc.fade = [&]() { fadeT = 0; };
+  // (transition.js: the dip to dark with the logo, the title card over a race's start; the autotest's moves stay
+  // instant: its screenshots follow them at once)
+  pc.fade = [&]() { if (!opt.autotest && !mptest) trans.fade(); };
+  pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
 
   // ---------------------------------------------------------------- (Phase 6) multiplayer: the session and its glue
   // (the host's hooks are filled in below, once the rides and the shops exist; net/session.js's main.js context)
@@ -1435,6 +1440,23 @@ int runGame(const GameOptions& opt) {
       int f = phaseFrame;
       auto expect = [&](bool ok, const char* what) { if (!ok) { menuOk = false; SL_WARN("[autotest] menu: %s (screen %d, focus '%s')", what, int(menus.screen()), menus.focusedLabel().c_str()); } };
       auto next = [&]() { menuStep++; phaseFrame = -1; input.releaseInjected(); };
+      // (debug: SKI_LEGACY_DEBUG=trtest: the screen transitions at fixed moments -> <png>_tr_*.png, then quit)
+      if (off("trtest")) {
+        struct Shot { int kind; const char* label; double t; const char* name; };
+        static const Shot shots[] = {{1, "WORLD RACING \xC2\xB7 Ice Canyon", 0.2, "tr_cover200"}, {1, "WORLD RACING \xC2\xB7 Ice Canyon", 0.45, "tr_cover450"},
+                                     {1, "WORLD RACING \xC2\xB7 Ice Canyon", 0.9, "tr_card"}, {1, "Legacy World Downhill", 1.0, "tr_card_long"},
+                                     {1, "RACE \xC2\xB7 Sunny Meadow", 1.37 + 0.35, "tr_reveal"}, {0, "", 0.2, "tr_fade200"}, {0, "", 0.5, "tr_fade500"}};
+        const int n = int(sizeof shots / sizeof shots[0]), k = f / 3;
+        if (f == 0) { started = false; menus.open(Menus::Screen::Main); }
+        if (k >= n) running = false;
+        else if (f % 3 == 0) {
+          const Shot& sh = shots[k];
+          trans.seek(1e9); trans.update(0);   // (ends the one before)
+          if (sh.kind) trans.teleport(sh.label); else trans.fade();
+          trans.seek(sh.t);
+          if (!opt.png.empty()) pendingPng = pngVariant(opt.png, sh.name);
+        }
+      } else
       switch (menuStep) {
         case 0:
           if (f == 0) { started = false; menus.open(Menus::Screen::Main); }
@@ -2953,12 +2975,10 @@ int runGame(const GameOptions& opt) {
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
     }
-    if (fadeT >= 0) {   // (transition.js: a short fade to dark and back over a teleport)
-      fadeT += frameDt;
-      float a = fadeT < 0.12 ? 1.f : float(std::max(0.0, 1 - (fadeT - 0.12) / 0.45));
-      ui.rect(0, 0, float(renderer.width()), float(renderer.height()), vec4(0.01f, 0.02f, 0.05f, a));
-      if (fadeT > 0.6) fadeT = -1;
-    }
+    // (transition.js: the scenes between two places, over everything; the old place stays on screen until covered)
+    trans.draw(ui);
+    renderer.holdFrame = trans.holdsFrame();
+    trans.update(frameDt);
     if (rendered) {
     Lighting frameLight = light;
     if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light

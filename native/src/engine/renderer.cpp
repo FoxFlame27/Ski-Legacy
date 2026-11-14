@@ -412,6 +412,7 @@ void Renderer::resize(int w, int h) {
   w_ = std::max(1, w); h_ = std::max(1, h);
   int rw = std::max(1, int(w_ * set_.renderScale)), rh = std::max(1, int(h_ * set_.renderScale));
   if (hdr_ && rw == rw_ && rh == rh_ && ldr_) return;
+  frameDrawn_ = false;
   if (hdr_) dev_->destroy(hdr_);
   if (msaa_) dev_->destroy(msaa_);
   if (depthCopy_) dev_->destroy(depthCopy_);
@@ -1199,6 +1200,10 @@ void Renderer::bloomPass() {
 
 void Renderer::endFrame() {
   dev_->resetFrameStats();
+  // (holdFrame: a screen transition is covering a move: the scene passes are skipped, the HDR / bloom / AO targets
+  // still hold the last frame and the final pass shows it again)
+  const bool held = holdFrame && frameDrawn_;
+  if (!held) {
   uploadLights();
   dev_->bindUniformBuffer(1, lightsUbo_);
   trailPass();
@@ -1263,10 +1268,12 @@ void Renderer::endFrame() {
   cloudPass();
   particlePass();
   glarePass();
+  frameDrawn_ = true;
+  }
   bool ao = aoRaw_ && (set_.ao > 0 || shaftsK_ > 0.001f);
-  if (ao) aoPass();
+  if (ao && !held) aoPass();
   bool bloom = bloomOn && bloomStrength > 0;
-  if (bloom) bloomPass();
+  if (bloom && !held) bloomPass();
   // final: tone map + grade (into the LDR target when FXAA / sharpening follow)
   bool aa = set_.fxaa || set_.sharpen > 0;
   if (aa) dev_->bindRenderTarget(ldr_, w_, h_); else dev_->bindRenderTarget({}, w_, h_);

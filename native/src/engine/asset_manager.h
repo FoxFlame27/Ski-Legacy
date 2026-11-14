@@ -43,4 +43,7 @@ private:
   size_t texBytes_ = 0;
 };
 
+/// decodes an image file (WebP, PNG, JPEG) to RGBA8 (the UI's pictures: the round logo of the loading screen)
+bool decodeImageRGBA(const std::vector<uint8_t>& file, int& w, int& h, std::vector<uint8_t>& rgba);
+
 } // namespace sl

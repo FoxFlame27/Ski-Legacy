@@ -53,6 +53,7 @@ struct PlayCtx {
   std::function<void(double x, double z, const std::string& label)> mark;   // the HUD's waypoint (trail map mark)
   std::function<void()> unmark;
   std::function<void()> fade;                                       // a short fade to dark (covers a teleport)
+  std::function<void(const std::string& label)> titleCard;         // the branded title card over a move ("RACE \xC2\xB7 Ice Canyon")
   // (Phase 6) multiplayer: the server is authoritative (net/session.js); unset in single player
   bool online = false;                                              // races are practice races (no fee, no prize)
   std::function<void(int64_t amount, const std::string& source)> earnFrom;   // payouts by source ('job', 'sell')

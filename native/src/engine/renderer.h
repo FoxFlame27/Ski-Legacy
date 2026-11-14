@@ -193,6 +193,9 @@ public:
   static float hudTextWidth(const std::string& text, float scale);
 
   void endFrame();
+  /// shows the last frame again instead of drawing the scene (a screen transition covering a move: transition.js
+  /// awaits the move behind its cover; here the old place stays on screen until it is covered)
+  bool holdFrame = false;
   void readPixels(std::vector<uint8_t>& rgba) { dev_->readPixels(w_, h_, rgba); }
   uint32_t drawCalls() const { return lastDraws_; }
   const Camera& camera() const { return cam_; }
@@ -237,6 +240,7 @@ private:
   gfx::Device* dev_ = nullptr;
   RenderSettings set_;
   int w_ = 1, h_ = 1, rw_ = 1, rh_ = 1;
+  bool frameDrawn_ = false;   // the targets hold a finished frame (holdFrame)
   gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, aoRaw_, aoTex_, trail_;
   std::vector<gfx::RenderTarget> bloom_;
   std::vector<std::pair<int, int>> bloomSize_;

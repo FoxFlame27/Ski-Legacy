@@ -254,7 +254,8 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
     }
   }
   s_ = std::move(s);
-  if (teleport && c_.fade) c_.fade();
+  // (modes.js start: the title card `RACE · <course>` covers the move to the start)
+  if (teleport) { if (c_.titleCard) c_.titleCard("RACE \xC2\xB7 " + co.name); else if (c_.fade) c_.fade(); }
   dvec3 sp = L.point(s0, 0);
   c_.player->setSkisOn(true);
   c_.player->teleport(sp.x, sp.z, co.start.heading);

@@ -241,6 +241,8 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
           if (dir > 0 ? r.length - rh.s < 200 : rh.s < 200) dir = -dir;
           road_ = rh.road * 2 + (dir > 0 ? 1 : 0);
           SL_INFO("[autotest] cars: heading for road %d (%.0f m long, %s) at s=%.0f", rh.road, r.length, r.access ? "access" : "main", rh.s);
+          // (the drive is a check of the car, not of the traffic: a car that happens to stand at the yard's exit would block it)
+          if (e.traffic) e.traffic->clearNear(dr.pos(), 120, 40);
         }
       }
       if (road_ >= 0) {

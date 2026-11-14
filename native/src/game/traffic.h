@@ -32,6 +32,10 @@ public:
   void fillColliders(std::vector<Collider>& out) const;
   void others(std::vector<struct OtherBody>& out, const dvec3& near) const;
   void knock(int id, double vx, double vz, double w);
+  /// a car that has held a bus at a standstill is taken off the road (traffic.js despawn; it comes back out of sight)
+  void takeOff(int id);
+  /// (autotest) the cars driving within r of p are taken off the road for `wait` s: a clear road for a driving check
+  void clearNear(const dvec3& p, double r, double wait);
   /// the cars on road `ri` (the buses brake for them)
   struct CarView { dvec3 pos; double yaw, v, l, w; int road; double s; int dir; };
   void cars(std::vector<CarView>& out) const;

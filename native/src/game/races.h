@@ -4,8 +4,9 @@
 // start), practice runs (alone, no prize), and the race itself (modes/race/session.js condensed): the grid and the
 // 3-2-1-GO countdown (frozen), the timer, checkpoints with splits against the fastest racer, slalom gates (missed:
 // +0.5 s), the B-nets bouncing you back into the track, respawns at the last checkpoint (wipeout, stuck, off course,
-// fallen below the track), the AI field (bots.js condensed: a speed profile from the course's own curvature and grade,
-// scaled to the course's reference time x each racer's pace of the chosen field), the finish (time, place), the
+// fallen below the track), the AI field (game/race_bots: bots.js ported, each racer on its own racing line with its
+// own physics, race craft and rig; the grid, the traffic snapshot, the rubber band, the racers' separation, the
+// shoulder contact with you and the parking lanes after the line as session.js), the finish (time, place), the
 // results card, the records (records.js: best, medal by time, best place per field, splits, runs) and the prize money
 // (freeworld.js prizeFor / busracedefs.js busRacePrize); after the OK you are back in Legacy Village (modes.js
 // exitFree). The race guide (game/raceguide.js) points you to a race near the stop you got off at. The crowd stands at
@@ -21,6 +22,7 @@
 namespace sl {
 class Renderer;
 struct Person;
+namespace racebots { class Track; }
 
 class Races {
 public:
@@ -51,9 +53,16 @@ public:
   std::vector<std::string> lastRows;   // the results' rows (autotest log)
   /// (Phase 7) what to hear, taken by the game each frame: count:3 count:2 count:1 go checkpoint miss finish:<place|record|practice> medal:<gold|silver|bronze> results
   std::vector<std::string> sounds;
+  /// (autotest) the AI field's motion: the largest sideways step of a racer in one frame beyond what its lateral speed
+  /// allows (m; 0 = continuous), the largest lateral speed seen (m/s), how many racers are drawn
+  double botJump = 0, botLatV = 0;
+  int botsDrawn = 0;
 private:
-  struct Prof { std::vector<float> v; double t0 = 0, ref = 60; };
-  const Prof& profile(const Course& c);
+  racebots::Track& trackOf(const Course& c);
+  void updateBots(double dt);
+  void botSeparation();
+  void botContact();
+  void drawBots(Renderer& r, const dvec3& cam);
   void openCard(const Course& c, bool fromStand);
   void openStand();
   void respawn(const char* why);
@@ -63,7 +72,8 @@ private:
   PlayCtx& c_;
   int standCourse_ = 0, standDiff_ = 1;   // (the stand remembers your last pick)
   Ui* ui_ = nullptr;   // (the frame's 2D layer: the results screen draws from the menus' frame)
-  std::vector<std::pair<const Course*, Prof>> profs_;
+  std::vector<std::pair<const Course*, std::unique_ptr<racebots::Track>>> tracks_;
+  double animDt_ = 0;
   std::unique_ptr<Session> s_;
   RaceStandView stand_;
   // the guide

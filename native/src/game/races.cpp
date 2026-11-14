@@ -1,6 +1,7 @@
 #include "game/races.h"
 #include "core/log.h"
 #include "core/noise.h"
+#include "engine/mesh_kit.h"
 #include "engine/renderer.h"
 #include "engine/ui.h"
 #include "game/economy.h"
@@ -9,8 +10,10 @@
 #include "game/people.h"
 #include "game/racehud.h"
 #include "game/jobboardui.h"
+#include "game/race_bots.h"
 #include "game/shapes.h"
 #include "game/weather.h"
+#include "platform/platform.h"
 #include "player/player.h"
 #include "world/world.h"
 #include <nlohmann/json.hpp>
@@ -24,19 +27,46 @@ constexpr double STUCK_TIME = 5, STUCK_PROGRESS = 3, OFF_MARGIN = 9, OFF_TIME = 
 constexpr double RESPAWN_SPEED = 8, FINISH_BRAKE = 9, START_R = 24, BOARD_R = 3.0, STAND_R = 3.0;
 constexpr double GRID_FIRST = 3.1, GRID_SPACING = 2.4, GRID_ROW = 2.4;
 constexpr int FIELD_BOTS = 14;
-// freeworld.js AI_LEVELS / bots.js DIFFICULTY (paces of the 14 AI racers)
+// freeworld.js AI_LEVELS (the prize multipliers); the fields themselves: race_bots (bots.js DIFFICULTY)
 const char* AI_KEY[4] = {"easy", "medium", "hard", "superhard"};
 const char* AI_LABEL[4] = {"Easy", "Medium", "Hard", "Superhard"};
 const double AI_MULT[4] = {0.6, 1, 1.6, 2.5};
-const double PACE[4][14] = {
-  {1.16, 1.18, 1.21, 1.24, 1.27, 1.3, 1.33, 1.36, 1.39, 1.42, 1.45, 1.48, 1.51, 1.55},
-  {1.04, 1.06, 1.08, 1.1, 1.12, 1.14, 1.16, 1.18, 1.2, 1.22, 1.24, 1.26, 1.28, 1.3},
-  {0.99, 1.0, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.11, 1.13},
-  {0.95, 0.96, 0.97, 0.98, 0.99, 1.0, 1.0, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.08},
-};
+// session.js: the grid keeps HOUSE_HALF / HOUSE_REACH clear of the start house; the AI field's level of detail (every
+// frame within LOD_FULL, 30 Hz poses within LOD_HALF, 15 Hz beyond; off screen: not drawn unless closer than LOD_KEEP);
+// BOT_SEP: m between two AI racers' centres (shoulder to shoulder, poles out)
+// (HOUSE_REACH: session.js keeps 2.6 m of the house record clear, or, with the course meshes, the cells its real
+// triangles cover: the racers behind the front row stand beside the house, not in its open front: 2.8 m here)
+constexpr double GRID_GAP = 2.3, GRID_EDGE = 1.2, HOUSE_HALF = 3.7, HOUSE_REACH = 2.8;
+constexpr double LOD_FULL = 30, LOD_HALF = 70, LOD_KEEP = 12, LOD_GONE = 400, BOT_SEP = 1.15;
+const char* BOT_CHARS[6] = {"skier_orange", "skier_black", "skier_purple", "skier_red", "skier_blue", "skier_green"};
+// gatebars.js: the ribbon's lower and upper edge above the snow (knee high), short of each pole, m per stripe pair
+constexpr double BAR_LOW = 0.36, BAR_HIGH = 0.68, BAR_INSET = 0.05, BAR_STRIPE = 0.9;
+const char* BAR_COLORS[4] = {"#29d36a", "#8e959e", "#ff3b30", "#5dff8f"};   // ahead, passed, missed, next
+// the barrier-tape texture (gatebars.js tapeTexture): white with pale diagonal stripes and darker hems, 128 x 32
+gfx::Texture tapeTexture(gfx::Device& dev) {
+  const int W = 128, H = 32;
+  std::vector<uint8_t> px(size_t(W) * H * 4);
+  for (int y = 0; y < H; y++)
+    for (int x = 0; x < W; x++) {
+      // (canvas row y from the top; the parallelograms (X, 32) (X + 32, 0) (X + 64, 0) (X + 32, 32) every 64 px)
+      const int k = ((x + y) % 64 + 64) % 64;
+      const bool stripe = k >= 32;
+      const bool hem = y < 3 || y >= 29;
+      const uint8_t c[3] = {uint8_t(hem ? 0x7f : stripe ? 0xc4 : 0xff), uint8_t(hem ? 0x8c : stripe ? 0xd2 : 0xff), uint8_t(hem ? 0x82 : stripe ? 0xc6 : 0xff)};
+      uint8_t* q = &px[(size_t(H - 1 - y) * W + x) * 4];   // (CanvasTexture flipY: the first row uploaded is the canvas's bottom)
+      q[0] = c[0]; q[1] = c[1]; q[2] = c[2]; q[3] = 255;
+    }
+  gfx::TextureDesc d;
+  d.width = W; d.height = H; d.format = gfx::TexFormat::SRGBA8; d.wrap = gfx::Wrap::Repeat; d.anisotropy = 8;
+  return dev.createTexture(d, px.data());
+}
+uint32_t hashStr(const std::string& str) {
+  uint32_t h = 2166136261u;
+  for (unsigned char ch : str) { h ^= ch; h *= 16777619u; }
+  return h;
+}
 const double PRIZE_SHARE[3] = {1, 0.4, 0.15};
 const double BUS_SHARE[3] = {1, 0.7, 0.5};
-const char* BOT_NAMES[14] = {"L. Meier", "S. Brunner", "A. Rossi", "M. Dubois", "J. Kofler", "E. Lindqvist", "T. Haugen", "K. Sato", "N. Weber", "P. Moreau", "F. Gruber", "C. Bianchi", "O. Berg", "R. Steiner"};
 int prizeFor(const Course& c, int ai) { return int(std::round(c.reward * AI_MULT[std::clamp(ai, 0, 3)] / 50.0) * 50); }
 int aiIndex(const std::string& k) { for (int i = 0; i < 4; i++) if (k == AI_KEY[i]) return i; return 1; }
 const char* medalForTime(double t, const Course& c) {
@@ -51,7 +81,6 @@ int medalRank(const nlohmann::json& m) { if (!m.is_string()) return 0; std::stri
 
 struct Races::Session {
   const Course* c = nullptr;
-  const Prof* prof = nullptr;
   int ai = 1;
   bool forMoney = false, practice = false, stand = false;
   enum class St { Grid, Race, Finished, Results, Done } st = St::Grid;
@@ -67,8 +96,24 @@ struct Races::Session {
   bool noticeBad = false;
   struct Gate { double s, latA, dir, span; };
   std::vector<Gate> gates;
-  struct Bot { int kind; double s, lat, latT, v, pace, finishT, phase, parkLat, stopS; bool done; std::string name; std::vector<double> splits; };
-  std::vector<Bot> bots;
+  // the AI field (race_bots): the course model, the calibrated racers, the traffic snapshot (bots + you)
+  racebots::Track* track = nullptr;
+  racebots::Field field;
+  std::vector<std::unique_ptr<racebots::BotRacer>> bots;
+  std::vector<racebots::Racer> racers;
+  std::vector<double> avoid;
+  int parkCount = 0;
+  double platL = 0, pSpeed = 0;   // your lateral (left +) and speed, for the racers
+  bool went = false;
+  // gatebars.js: a glowing green ribbon strung between the two flags of every gate; the next gate's ribbon pulses,
+  // once you are through a gate its ribbon turns grey, a missed one turns red. The states are merged meshes.
+  struct Bar { dvec3 a, b; double len; int state; };   // state 0 ahead, 1 passed, 2 missed
+  std::vector<Bar> bars;
+  bool barsDirty = true;
+  int barsNext = -2;
+  dvec3 barOrigin{0};
+  std::shared_ptr<Model> barModel[3], barNext[4];
+  gfx::Texture tape;
   int respawns = 0;
   double fadeT = -1;
   // the race HUD (ui/racehud.js): when the panels came up, the last checkpoint's split card, the results screen
@@ -81,40 +126,10 @@ struct Races::Session {
 Races::Races(PlayCtx& c) : c_(c) {}
 Races::~Races() = default;
 
-const Races::Prof& Races::profile(const Course& c) {
-  for (auto& [k, p] : profs_) if (k == &c) return p;
-  // bots.js simulateRun, condensed: the speed a racer can carry (lateral grip in the bends, gravity down the grade,
-  // air drag) in a forward pass, braking room for the bends in a backward pass; the run's time is then scaled to the
-  // course's reference time (courses.js REF_TIMES: par / 1.08; the bus races' par is 1.5 x the AI's ideal run)
-  Prof p;
-  const CourseLine& L = c.line;
-  int n = L.n;
-  std::vector<double> cap(static_cast<size_t>(n)), v(static_cast<size_t>(n));
-  const double aLat = 17.5, g = 9.81;
-  for (int i = 0; i < n; i++) {
-    double k = std::fabs(L.K.empty() ? 0.0 : double(L.K[size_t(i)]));
-    cap[size_t(i)] = std::min(36.0, k > 1e-5 ? std::sqrt(aLat / k) : 36.0);
-  }
-  v[0] = 3;
-  for (int i = 1; i < n; i++) {
-    double grade = (L.Y[size_t(i - 1)] - L.Y[size_t(i)]) / L.ds;
-    double vp = v[size_t(i - 1)];
-    double a = g * grade * 0.92 - 0.0035 * vp * vp - 0.4;
-    v[size_t(i)] = std::min(cap[size_t(i)], std::sqrt(std::max(4.0, vp * vp + 2 * a * L.ds)));
-  }
-  for (int i = n - 2; i >= 0; i--) v[size_t(i)] = std::min(v[size_t(i)], std::sqrt(v[size_t(i) + 1] * v[size_t(i) + 1] + 2 * 6.0 * L.ds));
-  double fin = c.finish.s > 0 ? c.finish.s : L.length(), s0 = c.start.s;
-  p.t0 = 0;
-  for (int i = 0; i + 1 < n; i++) {
-    double s = i * L.ds;
-    if (s < s0 || s >= fin) continue;
-    p.t0 += L.ds / std::max(2.0, v[size_t(i)]);
-  }
-  p.ref = c.bus ? c.par / 1.5 : c.par > 0 ? c.par / 1.08 : p.t0;
-  if (p.ref <= 0) p.ref = p.t0;
-  p.v.assign(v.begin(), v.end());
-  profs_.push_back({&c, std::move(p)});
-  return profs_.back().second;
+racebots::Track& Races::trackOf(const Course& c) {
+  for (auto& [k, t] : tracks_) if (k == &c) return *t;
+  tracks_.push_back({&c, std::make_unique<racebots::Track>(c, *c_.world)});
+  return *tracks_.back().second;
 }
 
 bool Races::frozen() const { return s_ && s_->st == Session::St::Grid; }
@@ -235,8 +250,7 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
   auto s = std::make_unique<Session>();
   s->c = &co;
   s->shownAt = c_.now;
-  s->prof = &profile(co);
-  s->ai = co.bus ? 0 : ai;
+  s->ai = co.bus ? aiIndex(co.ai) : ai;   // (the bus races: their own field, main.js difficulty: e.D.ai)
   s->forMoney = forMoney && !practice;
   s->practice = practice;
   s->stand = !forMoney && !practice;
@@ -248,23 +262,72 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
     double latB = L.project(g.x + g.nx * g.side * 5, g.z + g.nz * g.side * 5, g.s, 30).lat;
     if (std::fabs(latB) > L.width(g.s) + 0.5) latB = latA - (latB - latA);
     s->gates.push_back({g.s, latA, latB >= latA ? 1.0 : -1.0, std::fabs(latB - latA)});
+    // (session.js buildGateBars: from the turning pole to the pole `width` along the gate's axis, on the drawn snow)
+    const double wd = g.width > 0 ? g.width : 5, bx = g.x + g.nx * g.side * wd, bz = g.z + g.nz * g.side * wd;
+    const double dx = bx - g.x, dz = bz - g.z, len0 = std::hypot(dx, dz), len = len0 > 0 ? len0 : 1, ux = dx / len, uz = dz / len;
+    const double x0 = g.x + ux * BAR_INSET, z0 = g.z + uz * BAR_INSET, x1 = bx - ux * BAR_INSET, z1 = bz - uz * BAR_INSET;
+    s->bars.push_back({dvec3(x0, c_.world->meshHeight(x0, z0), z0), dvec3(x1, c_.world->meshHeight(x1, z1), z1), len, 0});
   }
-  // the field: abreast beside you, a second row behind (session.js gridSlots)
+  // the field (session.js spawnBots: the same rivals on every retry) on the start grid (gridSlots): slot 0 is you at
+  // the start wand; the racers line up abreast on both sides like a ski-cross start and in staggered rows behind
+  // where the track is too narrow, clear of the start house, each other and the barriers
   if (!practice) {
-    Mulberry32 rng(uint32_t(std::hash<std::string>{}(co.id)) ^ uint32_t(c_.now * 1000));
-    for (int i = 0; i < FIELD_BOTS; i++) {
-      Session::Bot b{};
-      int row = i < 8 ? 0 : 1, k = row ? i - 8 : i;
-      double side = (k % 2 ? -1 : 1) * (GRID_FIRST + (k / 2) * GRID_SPACING);
-      b.s = s0 - row * GRID_ROW;
-      b.lat = std::clamp(side, -L.width(s0) + 1.2, L.width(s0) - 1.2);
-      b.latT = b.lat * 0.3;
-      b.pace = PACE[s->ai][i] * (0.985 + rng.next() * 0.03);
-      b.kind = c_.people && !c_.people->skierKinds.empty() ? c_.people->skierKinds[size_t(i) % c_.people->skierKinds.size()] : 0;
-      b.phase = rng.next() * 10;
-      b.name = BOT_NAMES[i];
-      b.finishT = -1;
-      s->bots.push_back(b);
+    racebots::Track& tr = trackOf(co);
+    s->track = &tr;
+    const double tField = c_.plat ? c_.plat->timeSeconds() : 0;
+    s->field = racebots::createField(tr, s->ai, FIELD_BOTS, hashStr(co.id + ":" + AI_KEY[s->ai]), c_.player->skiSpeed, c_.player->skiGrip);
+    SL_INFO("race: the %s field of %d on %s: reference run %.2f s, %d line samples, finish at %.0f m, %zu take-offs, calibrated in %.2f s", AI_KEY[s->ai], FIELD_BOTS, co.name.c_str(),
+            s->field.refTime, tr.n, tr.finishS, tr.jumps.size(), (c_.plat ? c_.plat->timeSeconds() : 0) - tField);
+    struct Slot { double s, lat; };
+    std::vector<Slot> slots{{s0, 0}};
+    const size_t want = s->field.specs.size() + 1;
+    const double side = hashStr(co.id) & 1 ? 1 : -1;   // which side an odd racer out stands on
+    auto fits = [&](double q, double lat) {
+      if (std::fabs(lat) > tr.halfWidth(q) - GRID_EDGE) return false;
+      if (co.houseS > -1e8 && std::fabs(q - co.houseS) < HOUSE_REACH && std::fabs(lat) < HOUSE_HALF) return false;
+      for (const Slot& o : slots) if (std::hypot(o.s - q, o.lat - lat) < GRID_GAP) return false;
+      return true;
+    };
+    for (int row = 0; row < 10 && slots.size() < want; row++) {
+      // lanes of a row, nearest the centre first: even rows 0, 3.1, 5.5 ... (you own 0 in the front row), odd rows in
+      // the gaps of the row in front: 1.55, 4.3, 6.7 ...
+      std::vector<double> lanes;
+      if (row % 2) { lanes.push_back(GRID_FIRST / 2); for (double l = GRID_FIRST + GRID_SPACING / 2; l < 30; l += GRID_SPACING) lanes.push_back(l); }
+      else { if (row > 0) lanes.push_back(0); for (double l = GRID_FIRST; l < 30; l += GRID_SPACING) lanes.push_back(l); }
+      const double q = s0 - row * GRID_ROW;
+      for (double l : lanes)
+        for (double lat : {side * l, -side * l}) {
+          if (slots.size() >= want) break;
+          if (fits(q, lat)) slots.push_back({q, lat});
+          if (l == 0) break;
+        }
+    }
+    // a track too narrow for the whole field: the rest queue up behind on the centre line
+    for (int k = 1; slots.size() < want; k++) slots.push_back({s0 - (10 + k) * GRID_ROW, 0});
+    // outfits: rotate the racer characters, avoiding your own look where possible
+    std::vector<int> chars;
+    if (c_.people) {
+      for (const char* n : BOT_CHARS) { int k = c_.people->kind(n); if (k >= 0 && c_.save->character != n) chars.push_back(k); }
+      if (chars.empty()) chars = c_.people->skierKinds;
+    }
+    for (size_t i = 0; i < s->field.specs.size(); i++) {
+      auto b = std::make_unique<racebots::BotRacer>(*s->field.specs[i], tr);
+      if (!chars.empty()) {
+        b->kind = chars[i % chars.size()];
+        const PeopleKind& K = c_.people->kindOf(b->kind);
+        if (K.rig) {
+          World* w = c_.world;
+          // (main.js: the race field skis with poles, makeRig(c, s, { poles: true, ai: true }))
+          b->R.kind = b->kind; b->R.gear = 3;
+          b->R.rig.init(K.rig, c_.people->gear(3), true, true, [w](double x, double z, double y) { return w->groundHeight(x, z, y); });
+          b->R.rig.setCarry(false);
+          b->R.rig.setSkisVisible(true);
+          b->rigOk = true;
+        }
+      }
+      b->reset(slots[i + 1].s, slots[i + 1].lat, 0);
+      SL_INFO("race: field %2zu %-18s target %.2f s, clean run %.2f s, pace %.4f, grid s %.1f lat %+.2f", i, b->name.c_str(), b->spec.targetTime, b->spec.cleanTime, b->spec.P.pace, b->s, b->lat);
+      s->bots.push_back(std::move(b));
     }
   }
   s_ = std::move(s);
@@ -275,6 +338,8 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
   c_.player->teleport(sp.x, sp.z, co.start.heading);
   c_.player->setSkisOn(true);
   s_->prevS = s0; s_->progS = s0;
+  botJump = botLatV = 0;
+  updateBots(0.0001);   // (the first frame of the field: it stands on the grid right away)
   if (c_.weather) c_.weather->frozen = true;   // (session.js: the weather is held for the race)
   if (c_.unmark) c_.unmark();
   guide_.on = false;
@@ -298,6 +363,8 @@ void Races::respawn(const char* why) {
   s.prevS = cs; s.progS = cs; s.progT = s.clock; s.offT = s.fellT = 0; s.crashT = -1;
   // gates behind the checkpoint stay as they were; the ones after it are taken again
   while (s.nextGate > 0 && s.gates[size_t(s.nextGate - 1)].s > cs) s.nextGate--;
+  for (size_t k = size_t(s.nextGate); k < s.bars.size(); k++) s.bars[k].state = 0;   // (their ribbons green again)
+  s.barsDirty = true;
   s.respawns++;
   s.notice = std::string("BACK TO ") + (s.lastCp > 0 ? c.checkpoints[size_t(s.lastCp)].name : std::string("THE START")); s.noticeT = c_.now; s.noticeBad = true;
   SL_INFO("race: respawn (%s) at s=%.0f", why, cs);
@@ -321,7 +388,14 @@ void Races::finishPlayer() {
     c_.save->markDirty();
   }
   int ahead = 0;
-  for (auto& b : s.bots) ahead += b.done && b.finishT < s.finalTime;
+  for (auto& b : s.bots) ahead += b->finished && b->finishTime < s.finalTime;
+  // (session.js: finishers heading for a lane too close to where you ski out pick another one)
+  for (auto& b : s.bots)
+    if (b->parked && !b->stopped && std::fabs(b->parkLat - s.platL) < 2.6) {
+      s.avoid.assign(1, s.platL);
+      for (auto& o : s.bots) if (o != b && o->parked) s.avoid.push_back(o->parkLat);
+      b->setParking(b->parkRank ? b->parkRank : 1, s.avoid, true, s.platL);
+    }
   if (s.notice != "NEW RECORD") s.notice = s.practice ? "FINISH" : ordinal(ahead + 1);
   s.noticeT = c_.now; s.noticeBad = false;
   sounds.push_back(s.practice ? std::string("finish:practice") : s.notice == "NEW RECORD" ? std::string("finish:record") : "finish:" + std::to_string(ahead + 1));
@@ -336,8 +410,7 @@ void Races::showResults() {
   struct Row { std::string name; double t; bool you; };
   std::vector<Row> rows{{"You", s.finalTime, true}};
   for (auto& b : s.bots) {
-    double t = b.done ? b.finishT : s.clock + (s.c->finish.s - b.s) / std::max(4.0, b.v);
-    rows.push_back({b.name, t, false});
+    rows.push_back({b->name, b->projectFinish(), false});
   }
   std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.t < b.t; });
   for (size_t i = 0; i < rows.size(); i++) if (rows[i].you) s.place = int(i) + 1;
@@ -389,6 +462,7 @@ void Races::showResults() {
     if (!frameRaceResults(*ui_, nav, *c_.input, s_->res, now).empty()) confirmResults();
   }, "results");
   SL_INFO("race: %s finished in %s, place %d of %d, prize $%d", s.c->name.c_str(), fmtRaceTime(s.finalTime).c_str(), s.place, field, s.prize);
+  if (!s.bots.empty()) SL_INFO("race: the AI field: fastest lateral speed %.2f m/s, largest step beyond a racer's own motion %.3f m, reference run %.2f s", botLatV, botJump, s.field.refTime);
 }
 
 void Races::confirmResults() {
@@ -421,6 +495,7 @@ void Races::update(double dt) {
   }
   if (!s_) return;
   Session& s = *s_;
+  if (s.st == Session::St::Results) updateBots(dt);   // (the field skis out and stops behind the results card)
   if (s.st == Session::St::Results || s.st == Session::St::Done) return;
   const Course& c = *s.c;
   const CourseLine& L = c.line;
@@ -434,28 +509,8 @@ void Races::update(double dt) {
     if (s.t >= goAt) { s.st = Session::St::Race; s.clock = s.t - goAt; s.progT = 0; s.notice = "GO"; s.noticeT = c_.now; s.noticeBad = false; lastCount_ = 0; sounds.push_back("go"); }
   } else s.clock = s.t - goAt;
   // ---- the AI field
-  double scaleRef = s.prof->ref;
-  for (auto& b : s.bots) {
-    b.phase += dt;
-    if (s.st == Session::St::Grid) continue;
-    if (!b.done) {
-      int i = std::clamp(int(b.s / L.ds), 0, L.n - 1);
-      double vt = s.prof->v[size_t(i)] * s.prof->t0 / (scaleRef * b.pace);
-      b.v += (vt - b.v) * std::min(1.0, dt * 2.5);
-      double ns = b.s + b.v * dt;
-      // checkpoints' splits
-      for (size_t k = 1; k < c.checkpoints.size(); k++) if (b.s < c.checkpoints[k].s && ns >= c.checkpoints[k].s) b.splits.push_back(s.clock);
-      if (ns >= c.finish.s) { b.done = true; b.finishT = s.clock - (ns - c.finish.s) / std::max(1.0, b.v); b.parkLat = (int(&b - s.bots.data()) % 7 - 3) * 2.6; b.stopS = c.finish.s + 25 + (int(&b - s.bots.data()) % 4) * 4; }
-      b.s = ns;
-      // a racing line: weaving across the track with the bends
-      if (std::fmod(b.phase, 3.0) < dt) b.latT = std::sin(b.phase * 0.7 + b.pace * 10) * L.width(b.s) * 0.45;
-      b.lat += (b.latT - b.lat) * std::min(1.0, dt * 0.8);
-    } else {
-      b.v = std::max(0.0, b.v - FINISH_BRAKE * dt);
-      b.s = std::min(b.stopS, b.s + b.v * dt);
-      b.lat += (b.parkLat - b.lat) * std::min(1.0, dt);
-    }
-  }
+  if (s.st != Session::St::Grid && !s.went) { s.went = true; for (auto& b : s.bots) b->go(); }
+  updateBots(dt);
   if (s.st == Session::St::Grid) return;
   // ---- the player down the course
   CourseLine::Proj pr = L.project(pl.pos.x, pl.pos.z, s.prevS, 90);
@@ -469,7 +524,7 @@ void Races::update(double dt) {
         double split = s.clock - std::max(0.0, pr.s - cp.s) / vS + s.penalty;
         s.splits.push_back(std::round(split * 1000) / 1000);
         double best = 1e9;
-        for (auto& b : s.bots) if (b.splits.size() >= size_t(s.nextCp)) best = std::min(best, b.splits[size_t(s.nextCp - 1)]);
+        for (auto& b : s.bots) if (b->splits.size() >= size_t(s.nextCp)) best = std::min(best, b->splits[size_t(s.nextCp - 1)]);
         s.sp = {true, s.nextCp, split, best < 1e9 ? split - best : 0, c_.now, best < 1e9, cp.name};   // (racehud.js checkpoint(): the split card under the clock)
         s.lastCp = s.nextCp++;
         sounds.push_back("checkpoint");
@@ -483,10 +538,11 @@ void Races::update(double dt) {
       double u = (l - g.latA) * g.dir;
       if (u < -GATE_TOL || u > g.span + GATE_FLAG + GATE_TOL) {
         s.missed.push_back(s.nextGate - 1);
+        s.bars[size_t(s.nextGate - 1)].state = 2; s.barsDirty = true;
         s.penalty = double(s.missed.size()) * GATE_PENALTY;
         s.notice = "MISSED GATE  +0.50 \xC2\xB7 AIM FOR THE GREEN"; s.noticeT = c_.now; s.noticeBad = true;
         sounds.push_back("miss");
-      } else sounds.push_back("gate");
+      } else { sounds.push_back("gate"); s.bars[size_t(s.nextGate - 1)].state = 1; s.barsDirty = true; }
     }
     // the finish line
     if (pr.s >= c.finish.s && s.prevS < c.finish.s + 5) {
@@ -527,30 +583,145 @@ void Races::update(double dt) {
     double sp = glm::length(pl.vel);
     if (sp > 0.1 && pl.mode == PlayerMode::Ski) pl.vel *= std::max(0.0, sp - FINISH_BRAKE * dt) / sp;
     bool fieldHome = true;
-    for (auto& b : s.bots) fieldHome = fieldHome && (b.done || (c.finish.s - b.s) / std::max(4.0, b.v) > 12);
+    for (auto& b : s.bots) fieldHome = fieldHome && (b->finished || (c.finish.s - b->s) / std::max(8.0, b->v) > 12);
     if ((s.t >= s.resultsAt && fieldHome) || s.t >= s.resultsAt + RESULTS_MAX_WAIT) showResults();
   }
   s.prevS = pr.s; s.prevLat = pr.lat;
+  s.platL = -pr.lat; s.pSpeed = glm::length(dvec2(pl.vel.x, pl.vel.z));
+}
+
+// ---------------------------------------------------------------- the AI field (session.js updateBots)
+void Races::updateBots(double dt) {
+  Session& s = *s_;
+  if (s.bots.empty()) return;
+  animDt_ += dt;
+  const Course& c = *s.c;
+  // traffic snapshot (bots + you; the bots also steer around you stopping in the finish area)
+  s.racers.clear();
+  for (auto& b : s.bots) s.racers.push_back({b.get(), b->s, b->lat, b->v});
+  s.racers.push_back({&s, s.prevS, s.platL, s.pSpeed});
+  // mild rubber band so races stay close: +-3%, after the start, until you are home
+  for (auto& b : s.bots) {
+    double rb = 1;
+    if (s.st == Session::St::Race && s.clock > 8 && !b->finished) {
+      const double gapT = (b->s - s.prevS) / std::max(12.0, (b->v + s.pSpeed) * 0.5);
+      if (gapT > 1.5) rb = 1 - 0.03 * smoothstep(1.5, 7, gapT);
+      else if (gapT < -1.5) rb = 1 + 0.025 * smoothstep(1.5, 7, -gapT);
+    }
+    b->rbTarget = rb;
+  }
+  for (auto& b : s.bots) {
+    const dvec3 p0 = b->pos;
+    const double lat0 = b->lat;
+    b->update(dt, s.racers);
+    // (autotest) continuity: no racer moves sideways faster than its edges allow (12 m/s at most, bots.js step)
+    if (dt > 1e-3 && b->started) {
+      const double dl = std::fabs(b->lat - lat0);
+      botLatV = std::max(botLatV, dl / dt);
+      botJump = std::max(botJump, std::max(0.0, dl - 12.5 * std::max(dt, racebots::SIM_H * 14)));
+      botJump = std::max(botJump, std::max(0.0, glm::length(b->pos - p0) - 75 * dt - 0.5));
+    }
+  }
+  if (s.st != Session::St::Grid) botSeparation();
+  // splits, finishes, parking lanes in the finish area
+  const bool playerHome = s.st >= Session::St::Finished;
+  for (auto& b : s.bots) {
+    while (b->cpNext < int(c.checkpoints.size()) && b->s >= c.checkpoints[size_t(b->cpNext)].s && b->running) {
+      const CoursePt& cp = c.checkpoints[size_t(b->cpNext)];
+      b->splits.push_back(b->t - std::max(0.0, b->s - cp.s) / std::max(1.0, b->sRate));
+      b->cpNext++;
+    }
+    if (b->finished && !b->parked) {
+      b->parked = true;
+      b->parkRank = ++s.parkCount;
+      s.avoid.clear();
+      if (playerHome) s.avoid.push_back(s.platL);
+      for (auto& o : s.bots) if (o != b && o->parked) s.avoid.push_back(o->parkLat);
+      b->setParking(b->parkRank, s.avoid, playerHome, s.platL);
+    }
+  }
+  if (s.st != Session::St::Grid) botContact();
+}
+
+// AI racers never ski through each other: a pair closer than BOT_SEP (course coordinates, both on the snow) is pushed
+// apart sideways, half each, and the one behind checks its speed a little (a shoulder bump, as with you). Their race
+// craft (race_bots decide) keeps such contacts rare; this is the safety net for a full field squeezing through gates.
+void Races::botSeparation() {
+  auto& B = s_->bots;
+  const double R = BOT_SEP;
+  for (size_t i = 0; i < B.size(); i++) {
+    racebots::BotRacer& a = *B[i];
+    if (!a.started) continue;
+    for (size_t j = i + 1; j < B.size(); j++) {
+      racebots::BotRacer& b = *B[j];
+      if (!b.started) continue;
+      const double ds = b.s - a.s;
+      if (ds > R || ds < -R) continue;
+      const double dl = b.lat - a.lat;
+      if (dl > R || dl < -R || ds * ds + dl * dl >= R * R) continue;
+      const double need = std::sqrt(R * R - ds * ds) - std::fabs(dl);   // lateral gap still missing
+      if (!(need > 0)) continue;
+      const double sg = dl > 0.01 ? 1 : dl < -0.01 ? -1 : (i + j) % 2 ? 1 : -1;
+      // (sideways only while either is in the air: a hop over a roller keeps its speed)
+      racebots::BotRacer& back = a.s < b.s ? a : b;
+      const double cutV = (a.finished && b.finished) || a.air || b.air ? 0 : 0.25;
+      a.bump(-sg * need * 0.5, &back == &a ? cutV : 0);
+      b.bump(sg * need * 0.5, &back == &b ? cutV : 0);
+    }
+  }
+}
+
+// Soft contact between you and the bots: shoulder bumps, never a pile-up. In the finish area a finisher sliding into
+// you stopped there gives way (you are never shoved around there).
+void Races::botContact() {
+  Session& s = *s_;
+  Player& pl = *c_.player;
+  if (pl.mode != PlayerMode::Ski) return;
+  const double R = 0.9;
+  const bool playerHome = s.st >= Session::St::Finished;
+  for (auto& bp : s.bots) {
+    racebots::BotRacer& b = *bp;
+    const double dx = pl.pos.x - b.pos.x, dz = pl.pos.z - b.pos.z, d2 = dx * dx + dz * dz;
+    if (d2 > R * R || std::fabs(pl.pos.y - b.pos.y) > 1.6) continue;
+    const double d0 = std::sqrt(d2), d = d0 > 0 ? d0 : 0.01, nx = dx / d, nz = dz / d;
+    if (playerHome && b.finished) {
+      b.nudge(-nx * (R - d), -nz * (R - d));
+      b.v *= 0.5;
+      continue;
+    }
+    if (s.st == Session::St::Results) continue;
+    pl.pos.x = b.pos.x + nx * R; pl.pos.z = b.pos.z + nz * R;
+    const double vn = (pl.vel.x - b.vel.x) * nx + (pl.vel.z - b.vel.z) * nz;
+    if (vn < 0) {
+      pl.vel.x -= nx * vn * 1.2; pl.vel.z -= nz * vn * 1.2;
+      b.v = std::max(0.0, b.v - std::min(2.0, -vn * 0.3));
+    }
+  }
+}
+
+// the field's rigs: the level of detail by the camera (session.js updateLOD), the poses, the draw
+void Races::drawBots(Renderer& r, const dvec3& cam) {
+  Session& s = *s_;
+  const double dt = animDt_;
+  animDt_ = 0;
+  botsDrawn = 0;
+  const bool still = s.st == Session::St::Grid;
+  const bool countdown = still && LEAD_IN + 3 - s.t < 1;
+  for (auto& bp : s.bots) {
+    racebots::BotRacer& b = *bp;
+    const double d = glm::length(b.pos - cam);
+    const bool view = r.visible(b.pos - dvec3(2.4, 1.5, 2.4), b.pos + dvec3(2.4, 3.3, 2.4));
+    const bool show = d < LOD_GONE && (view || d < LOD_KEEP);
+    const double step = still ? (d < LOD_KEEP ? 0 : 1.0 / 15) : d < LOD_FULL ? 0 : d < LOD_HALF ? 1.0 / 30 : 1.0 / 15;
+    b.animate(dt, d, countdown, show, step);
+    if (!show || !b.rigOk) continue;
+    drawRig(r, b.R, c_.people->kindOf(b.kind), c_.people->gear(3).get(), 1, d < 40);
+    botsDrawn++;
+  }
 }
 
 // ---------------------------------------------------------------- people, 3D, HUD
 void Races::addPeople(People& people, const dvec3& cam) const {
-  if (s_) {
-    const Session& s = *s_;
-    const CourseLine& L = s.c->line;
-    for (const auto& b : s.bots) {
-      dvec3 p = L.point(b.s, b.lat);
-      if (glm::length(p - cam) > 300) continue;
-      Person q;
-      q.kind = b.kind; q.pos = p; q.pos.y = c_.world->height(p.x, p.z);
-      q.yaw = L.heading(b.s);
-      q.anim = s.st == Session::St::Grid || b.v < 1 ? PAnim::Idle : b.v > 15 ? PAnim::Tuck : PAnim::Ski;
-      q.skis = true; q.phase = b.phase;
-      q.poles = true; q.speed = b.v;   // (main.js: the race field skis with poles, makeRig(c, s, { poles: true, ai: true }))
-      q.lean = float(clamp((L.K.empty() ? 0 : L.sAt(L.K, b.s)) * b.v * b.v * 0.04, -0.5, 0.5));
-      people.add(q);
-    }
-  }
   // the crowd at the finish of the course you are near (crowds.js): both sides of the run-out
   const Course* c = s_ ? s_->c : nearCourse_;
   if (c && !c->bus && !c_.people->fanKinds.empty() && std::hypot(cam.x - c->finish.x, cam.z - c->finish.z) < 700) {
@@ -573,15 +744,46 @@ void Races::addPeople(People& people, const dvec3& cam) const {
 
 void Races::draw(Renderer& r, const dvec3& cam) {
   Shapes& sh = *c_.shapes;
-  // the next slalom gate's green bar (gatebars.js): a glowing bar between its poles
-  if (s_ && s_->st == Session::St::Race && s_->nextGate < int(s_->c->gates.size())) {
-    const CourseGate& g = s_->c->gates[size_t(s_->nextGate)];
-    dvec3 a(g.x, g.y, g.z), b(g.x + g.nx * g.side * 5, g.y, g.z + g.nz * g.side * 5);
-    b.y = c_.world->height(b.x, b.z);
-    if (glm::length(a - cam) < 400) {
-      dvec3 m = (a + b) * 0.5;
-      double yaw = std::atan2(b.x - a.x, b.z - a.z);
-      sh.box(r, m + dvec3(0, 1.6, 0), yaw, vec3(0.08f, 0.08f, float(glm::length(b - a))), vec4(0.2f, 1, 0.3f, 1), 4, false);
+  if (s_ && !s_->bots.empty()) drawBots(r, cam);
+  // the gates' ribbons (gatebars.js): every gate of the course, green ahead (the next one brighter and pulsing), grey
+  // once passed, red when missed; unlit (they glow by night and stand out against the snow by day), striped like
+  // barrier tape
+  if (s_ && !s_->bars.empty() && c_.dev) {
+    Session& s = *s_;
+    const int next = s.st != Session::St::Results && s.nextGate < int(s.bars.size()) && s.bars[size_t(s.nextGate)].state == 0 ? s.nextGate : -1;
+    if (s.barsDirty || next != s.barsNext) {
+      s.barsDirty = false; s.barsNext = next;
+      if (!s.tape) s.tape = tapeTexture(*c_.dev);
+      s.barOrigin = s.bars[0].a;
+      auto build = [&](int state, bool isNext, float k) -> std::shared_ptr<Model> {
+        Geo g;
+        for (size_t i = 0; i < s.bars.size(); i++) {
+          const Session::Bar& q = s.bars[i];
+          if (isNext ? int(i) != next : (q.state != state || int(i) == next)) continue;
+          const vec3 a(q.a - s.barOrigin), b(q.b - s.barOrigin);
+          const float L = float(std::max(0.5, q.len - 2 * BAR_INSET) / BAR_STRIPE);
+          const uint32_t base = uint32_t(g.pos.size());
+          const vec3 nrm = glm::normalize(glm::cross(b - a, vec3(0, 1, 0)));
+          g.pos.insert(g.pos.end(), {a + vec3(0, float(BAR_LOW), 0), b + vec3(0, float(BAR_LOW), 0), a + vec3(0, float(BAR_HIGH), 0), b + vec3(0, float(BAR_HIGH), 0)});
+          g.uv.insert(g.uv.end(), {vec2(0, 0), vec2(L, 0), vec2(0, 1), vec2(L, 1)});
+          for (int v = 0; v < 4; v++) { g.nor.push_back(nrm); g.col.push_back(vec3(1)); }
+          g.idx.insert(g.idx.end(), {base, base + 1, base + 2, base + 2, base + 1, base + 3});
+        }
+        if (g.idx.empty()) return nullptr;
+        Material m;   // (MeshBasicMaterial: the colour x the tape, unlit: all of it emissive)
+        m.baseColor = vec4(0, 0, 0, 1); m.metallic = 0; m.roughness = 1; m.doubleSided = true; m.shading = 3;
+        m.emissive = hexColor(BAR_COLORS[isNext ? 3 : state]) * k;
+        m.emissiveTex = s.tape;
+        return buildModel(*c_.dev, {{std::move(g), m}}, "gate-bars");
+      };
+      for (int st = 0; st < 3; st++) s.barModel[st] = build(st, false, 1);
+      for (int k = 0; k < 4; k++) s.barNext[k] = next >= 0 ? build(0, true, 0.64f + 0.12f * float(k)) : nullptr;
+    }
+    if (glm::length(s.barOrigin - cam) < 6000) {
+      for (auto& m : s.barModel) if (m) r.submitModel(*m, s.barOrigin, mat4(1), nullptr, false);
+      // (gatebars.js update: 0.82 + 0.18 sin(7 t))
+      const int k = std::clamp(int(std::lround((0.82 + 0.18 * std::sin(c_.now * 7) - 0.64) / 0.12)), 0, 3);
+      if (s.barNext[k]) r.submitModel(*s.barNext[k], s.barOrigin, mat4(1), nullptr, false);
     }
   }
   // the race guide: a tall soft pillar of light over the race and pennant poles on the way (raceguide.js)
@@ -669,7 +871,7 @@ void Races::hud(Ui& ui, float) {
     std::vector<E> es;
     bool meDone = s.st >= Session::St::Finished;
     es.push_back({"You", meDone ? 1e7 - s.finalTime : s.prevS, std::max(6.0, h.speed), true});
-    for (auto& b : s.bots) es.push_back({b.name, b.done ? 1e7 - b.finishT : b.s, std::max(6.0, b.v), false});
+    for (auto& b : s.bots) es.push_back({b->name, b->finished ? 1e7 - b->finishTime : b->s, std::max(6.0, b->v), false});
     std::sort(es.begin(), es.end(), [](const E& p, const E& q) { return p.key > q.key; });
     for (size_t i = 0; i < es.size(); i++) {
       double gap = es[0].key > 1e6 ? (es[i].key > 1e6 ? es[0].key - es[i].key : (c.finish.s - es[i].key) / es[i].v + std::max(0.0, s.clock - (1e7 - es[0].key))) : (es[0].key - es[i].key) / es[i].v;

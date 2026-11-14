@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "engine/model.h"
 namespace sl {
 namespace platform { class Platform; }
 namespace gfx { class Device; }
@@ -52,6 +53,7 @@ struct PlayCtx {
   std::function<void(double x, double z, double heading, bool skis)> teleport;
   std::function<void(double x, double z, const std::string& label)> mark;   // the HUD's waypoint (trail map mark)
   std::function<void()> unmark;
+  std::function<std::shared_ptr<Model>(const std::string& id)> roomModel;   // a walk-in room's exported model (Resort::roomModel)
   std::function<void()> fade;                                       // a short fade to dark (covers a teleport)
   std::function<void(const std::string& label)> titleCard;         // the branded title card over a move ("RACE \xC2\xB7 Ice Canyon")
   // (Phase 6) multiplayer: the server is authoritative (net/session.js); unset in single player

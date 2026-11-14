@@ -40,6 +40,9 @@ public:
   const std::vector<uint8_t>& playBin() const { return pbin_; }
   /// A vehicle's procedural parts (export_net.mjs localModel: [{ mat, verts, vOff, ... }]) as one model
   std::shared_ptr<Model> transportModel(const nlohmann::json& parts);
+  /// (rooms, export_rooms.mjs) a room the web game builds as a scene of its own (play.json's rooms.<id>.parts), as one
+  /// model in the room's own frame; built when the play pack loads, null if the pack has none
+  std::shared_ptr<Model> roomModel(const std::string& id) const;
   /// (Phase 7) the transport / play packs' parsed json and bins dropped once Transport, VehicleModels and PlayData have
   /// read them (hundreds of MB of DOM and raw data; the Switch budget)
   void releaseLoadData();
@@ -77,12 +80,14 @@ private:
   std::vector<dvec3> lamps_;
   std::vector<glm::dmat4> cannons_;
   void rebuild(const dvec3& cam);
+  std::shared_ptr<Model> partsModel(const nlohmann::json& parts, const std::vector<uint8_t>& bin, const std::vector<Material>& mats);
   bool loadPack(platform::Platform& p, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf);
   std::shared_ptr<nlohmann::json> tjson_;
   std::vector<uint8_t> tbin_;
   std::shared_ptr<nlohmann::json> pjson_;
   std::vector<uint8_t> pbin_;
   std::vector<Material> tmats_;
+  std::vector<std::pair<std::string, std::shared_ptr<Model>>> rooms_;
 
   gfx::Device& dev_;
   World& world_;

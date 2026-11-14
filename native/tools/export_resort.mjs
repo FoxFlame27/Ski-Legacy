@@ -379,7 +379,7 @@ function geoArrays(geo, M, ox, oy, oz, uvx = null) {
   return { pos, nor, uv, col, idx };
 }
 
-function makePack(name) {
+function makePack(name, opt = {}) {
   const props = new Map();      // key model|glow -> { model, glow, inst: [] }
   const mats = [], matIndex = new Map();
   const usedCanvas = new Set();
@@ -401,11 +401,11 @@ function makePack(name) {
     if (img && img._id !== undefined) { usedCanvas.add(img._id); return { canvas: img._id, wrapS: t.wrapS === THREE.RepeatWrapping, wrapT: t.wrapT === THREE.RepeatWrapping, flipY: t.flipY !== false }; }
     return null;
   }
-  function matKey(m) {
+  function matKey(m, tinted = false) {
     const g = m.userData?.slMat;
     const d = {
       color: lin(m.color), opacity: r4(m.opacity ?? 1), transparent: !!m.transparent, double: m.side === THREE.DoubleSide,
-      rough: r4(m.roughness ?? 0.8), metal: r4(m.metalness ?? 0), vc: !!m.vertexColors,
+      rough: r4(m.roughness ?? 0.8), metal: r4(m.metalness ?? 0), vc: !!m.vertexColors || tinted,
       emissive: m.emissive ? lin(m.emissive).map((v) => r4(v * (m.emissiveIntensity ?? 1))) : [0, 0, 0],
       map: texRef(m.map), emissiveMap: texRef(m.emissiveMap), alphaTest: r4(m.alphaTest || 0),
       glow: m.userData?.slGlow || 0, glb: g ? { model: g.model, index: g.index } : null,
@@ -420,7 +420,7 @@ function makePack(name) {
     return matIndex.get(k);
   }
   // raw meshes: per material and 256 m cell, vertices baked to world space relative to the cell's origin
-  function addRaw(geo, material, M) {
+  function addRaw(geo, material, M, tint = null) {
     if (!geo?.attributes?.position || !material) return;
     const mats_ = [].concat(material);
     const groups = Array.isArray(material) && geo.groups.length ? geo.groups : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count, materialIndex: 0 }];
@@ -430,7 +430,7 @@ function makePack(name) {
     for (const gr of groups) {
       const mat = mats_[gr.materialIndex ?? 0];
       if (!mat || mat.visible === false) continue;
-      const mi = matKey(mat);
+      const mi = matKey(mat, !!tint);
       const key = mi + '|' + cx + '|' + cz;
       if (!chunks.has(key)) chunks.set(key, { mat: mi, ox: (cx + 0.5) * CELL, oy: Math.round(c.y), oz: (cz + 0.5) * CELL, pos: [], nor: [], uv: [], col: [], idx: [], hasCol: false });
       const ch = chunks.get(key);
@@ -440,7 +440,9 @@ function makePack(name) {
       for (let i = 0; i < a.pos.length; i++) ch.pos.push(a.pos[i]);
       for (let i = 0; i < a.nor.length; i++) ch.nor.push(a.nor[i]);
       for (let i = 0; i < a.uv.length; i++) ch.uv.push(a.uv[i]);
-      if (a.col) { ch.hasCol = true; for (let i = 0; i < a.col.length; i++) ch.col.push(a.col[i]); } else for (let i = 0; i < vs * 3; i++) ch.col.push(1);
+      // (an InstancedMesh's per-instance colour, setColorAt: baked into the vertex colours)
+      if (tint) { ch.hasCol = true; for (let i = 0; i < vs * 3; i++) ch.col.push((a.col ? a.col[i] : 1) * tint[i % 3]); }
+      else if (a.col) { ch.hasCol = true; for (let i = 0; i < a.col.length; i++) ch.col.push(a.col[i]); } else for (let i = 0; i < vs * 3; i++) ch.col.push(1);
       const idx = a.idx.slice(gr.start, gr.start + gr.count);
       for (const i of idx) ch.idx.push(base + i);
     }
@@ -475,6 +477,11 @@ function makePack(name) {
         if (sl) {
           const f = new THREE.Matrix4().fromArray(sl.fit);
           for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addProp(sl.model, glow, o.matrixWorld.clone().multiply(im).multiply(f)); }
+        } else if (opt.instColor && o.instanceColor) {
+          // (per-instance colours: the slalom gates' red / blue poles and flags, props.js buildGates; the instanced
+          // sets below share one material colour, so these are baked as raw meshes with the colour in the vertices)
+          const C = o.instanceColor;
+          for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addRaw(o.geometry, o.material, o.matrixWorld.clone().multiply(im), [C.getX(i), C.getY(i), C.getZ(i)]); }
         } else if ((n >= 8 || o.geometry.attributes.position.count > 200) && !Array.isArray(o.material)) {
           // (instanced meshes sharing a geometry and material, a chunk's sleepers or poles each: one set)
           const mi = matKey(o.material), k = o.geometry.uuid + '|' + mi;
@@ -599,7 +606,7 @@ function makePack(name) {
     // (a canvas drawn into another: its commands go along)
     for (const id of usedCanvas) { const c = canvases.get(id); for (const op of c.ops) if (op[0] === 'drawImage' && op[1] >= 0) usedCanvas.add(op[1]); }
     const canvasOut = {};
-    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}) }; }
+    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}), ...(c.slGrad ? { grad: true } : {}) }; }
     const out = { version: 3, generated: new Date().toISOString(), bin: `${name}.bin`, props: propsOut, materials: mats, meshes, instanced: inst, canvases: canvasOut, ...ex };
     const zb = writeData(OUT, `${name}.bin`, Buffer.concat(parts));
     const js = JSON.stringify(out), zj = writeData(OUT, `${name}.json`, js);

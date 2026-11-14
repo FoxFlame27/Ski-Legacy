@@ -661,6 +661,7 @@ int runGame(const GameOptions& opt) {
   // instant: its screenshots follow them at once)
   pc.fade = [&]() { if (!opt.autotest && !mptest) trans.fade(); };
   pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
+  pc.roomModel = [&](const std::string& id) { return resort.roomModel(id); };
 
   // ---------------------------------------------------------------- (Phase 6) multiplayer: the session and its glue
   // (the host's hooks are filled in below, once the rides and the shops exist; net/session.js's main.js context)
@@ -754,8 +755,35 @@ int runGame(const GameOptions& opt) {
   // the ski shop (main.js shopAction / outfitshop.js, simplified to one card dialog with tabs)
   Dialog shopDlg;
   ShopView shopView;
+  // a pair of skis (main.js shopAction): equip the ones you own, else rent / buy them
+  std::function<void(const std::string&)> skiAction;
+  skiAction = [&](const std::string& id) {
+    const SkiDef* k = skiById(id);
+    if (!k || save.skis == id) return;
+    if (save.ownsSki(id)) { equipSkis(id); flash(std::string(k->name) + " equipped", Hud::Flash::Good); return; }
+    if (mp.active()) {   // (Phase 6: the server sells it: its price, your money, your skis)
+      if (save.money < k->price) { flash("Not enough money (" + fmtM(k->price) + " needed)", Hud::Flash::Bad); return; }
+      mp.buy("skis", {{"id", id}}, [&, id](bool ok, const nlohmann::json& d) {
+        if (!ok) return;
+        save.owned.clear();
+        for (auto& o : d.value("owned", nlohmann::json::array())) if (o.is_string()) save.owned.push_back(o.get<std::string>());
+        if (mp.profile.is_object()) mp.profile["owned"] = d.value("owned", nlohmann::json::array());
+        equipSkis(id);
+        const SkiDef* k2 = skiById(id);
+        flash(std::string(k2 ? k2->name : id.c_str()) + (k2 && k2->rent ? " rented" : " purchased"), Hud::Flash::Gold);
+        menus.refreshDialog();
+      });
+      return;
+    }
+    if (!spend(k->price)) return;
+    save.owned.push_back(id);
+    equipSkis(id);
+    flash(std::string(k->name) + (k->rent ? " rented" : " purchased"), Hud::Flash::Gold);
+  };
+  int skiShopTab = 0;
   auto openSkiShop = [&]() {
     Dialog d;
+    d.tab = skiShopTab;
     d.kicker = "Ski Rental & Shop \xC2\xB7 Legacy Village";
     d.title = "Ski Shop";
     d.tabs = {"SKIS", "JACKETS", "TROUSERS", "HELMETS", "GOGGLES"};
@@ -778,29 +806,7 @@ int runGame(const GameOptions& opt) {
           else o.price = sk.price;
           o.disabled = !has && save.money < sk.price;
           std::string id = sk.id;
-          o.act = [&, id]() {
-            const SkiDef* k = skiById(id);
-            if (!k || save.skis == id) return;
-            if (save.ownsSki(id)) { equipSkis(id); flash(std::string(k->name) + " equipped", Hud::Flash::Good); return; }
-            if (mp.active()) {   // (Phase 6: the server sells it: its price, your money, your skis)
-              if (save.money < k->price) { flash("Not enough money (" + fmtM(k->price) + " needed)", Hud::Flash::Bad); return; }
-              mp.buy("skis", {{"id", id}}, [&, id](bool ok, const nlohmann::json& d) {
-                if (!ok) return;
-                save.owned.clear();
-                for (auto& o : d.value("owned", nlohmann::json::array())) if (o.is_string()) save.owned.push_back(o.get<std::string>());
-                if (mp.profile.is_object()) mp.profile["owned"] = d.value("owned", nlohmann::json::array());
-                equipSkis(id);
-                const SkiDef* k2 = skiById(id);
-                flash(std::string(k2 ? k2->name : id.c_str()) + (k2 && k2->rent ? " rented" : " purchased"), Hud::Flash::Gold);
-                menus.refreshDialog();
-              });
-              return;
-            }
-            if (!spend(k->price)) return;
-            save.owned.push_back(id);
-            equipSkis(id);
-            flash(std::string(k->name) + (k->rent ? " rented" : " purchased"), Hud::Flash::Gold);
-          };
+          o.act = [&, id]() { skiAction(id); };
           D.options.push_back(o);
         }
       } else {
@@ -1271,7 +1277,7 @@ int runGame(const GameOptions& opt) {
     o.vx = player.vel.x; o.vy = player.vel.y; o.vz = player.vel.z;
     if (rooms.inside()) {
       Interiors::Room r = rooms.room();
-      o.interior = r == Interiors::Room::Prison ? "prison" : r == Interiors::Room::Hospital ? "hospital" : chalets.insidePlot() >= 0 ? "chalet:" + std::to_string(chalets.insidePlot()) : "";
+      o.interior = r == Interiors::Room::Prison ? "prison" : r == Interiors::Room::Hospital ? "hospital" : r == Interiors::Room::Shop ? "skishop" : r == Interiors::Room::Autohaus ? "carrental" : chalets.insidePlot() >= 0 ? "chalet:" + std::to_string(chalets.insidePlot()) : "";
       o.st = int(net::St::Walk);
       return;
     }
@@ -1651,20 +1657,38 @@ int runGame(const GameOptions& opt) {
         }
         case 6:
           if (f == 1) { player.setSkisOn(false); player.teleport(-31.5, -16.0, std::atan2(-8.5, -2.0)); }
-          input.inject(Action::Interact, f == 3);
-          if (f == 6) {
-            expect(menus.dialogOpen(), "E at the ski shop opens it");
-            money0 = save.money;
-            if (!menus.focusLabel("Rental Carver")) expect(false, "the rental skis in the shop");
+          input.inject(Action::Interact, f == 3 || f == 12 || f == 22 || f == 34);
+          if (!playData.shop.ok) {   // (no exported room: the card, as before)
+            if (f == 6) { expect(menus.dialogOpen(), "E at the ski shop opens it"); money0 = save.money; if (!menus.focusLabel("Rental Carver")) expect(false, "the rental skis in the shop"); }
+            if (f == 7) nav.confirm = true;
+            if (f == 9) { buyOk = save.money == money0 - kSkis[0].price && save.skis == "rental" && save.ownsSki("rental"); if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "shop"); }
+            if (f == 10) nav.cancel = true;
+            if (f == 12) { expect(!menus.isOpen(), "the shop closes"); next(); }
+            break;
           }
-          if (f == 7) nav.confirm = true;
-          if (f == 9) {
+          // the walk-in shop: E at the door -> inside; in front of the rental pair on the ski wall, looking at it: E rents
+          // it; the clerk: E opens the shop's card; the door: E -> back outside
+          if (f == 6) {
+            expect(rooms.room() == Interiors::Room::Shop, "E at the ski shop's door -> inside the shop");
+            money0 = save.money;
+            if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "shop_in");
+          }
+          if (f == 8 || f == 18 || f == 30) {
+            dvec3 st; double yw = 0;
+            const char* kind = f == 8 ? "ski" : f == 18 ? "clerk" : "door";
+            if (rooms.aimSpot(kind, f == 8 ? "rental" : "", st, yw)) { player.teleport(st.x, st.z, yw); player.pos.y = rooms.toWorld(0, 0, 0).y; }
+            else expect(false, "the shop's ski wall / clerk / door");
+          }
+          if (f == 11) { expect(prompt.find("Rental Carver") != std::string::npos, "looking at the rental pair: its prompt"); SL_INFO("[autotest] shop: inside, looking at the ski wall: '%s'", prompt.c_str()); if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "shop"); }
+          if (f == 15) {
             buyOk = save.money == money0 - kSkis[0].price && save.skis == "rental" && save.ownsSki("rental");
             SL_INFO("[autotest] shop: rented the %s: $%lld -> $%lld, skis '%s' -> %s", kSkis[0].name, (long long)money0, (long long)save.money, save.skis.c_str(), buyOk ? "ok" : "FAILED");
-            if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "shop");
           }
-          if (f == 10) nav.cancel = true;
-          if (f == 12) { expect(!menus.isOpen(), "the shop closes"); next(); }
+          if (f == 21) { expect(prompt == "Talk to the shop clerk", "looking at the clerk: the prompt"); if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "shop_clerk"); }
+          if (f == 25) expect(menus.dialogOpen(), "E at the clerk opens the shop's card");
+          if (f == 26) nav.cancel = true;
+          if (f == 33) expect(prompt == "Leave the shop", "looking at the door: the prompt");
+          if (f == 38) { expect(!rooms.inside() && std::hypot(player.pos.x + 31.5, player.pos.z + 16.0) < 6, "E at the door -> back outside the shop"); next(); }
           break;
         case 7: {
           // save, read it back into a second save and into the game's own, compare
@@ -1896,6 +1920,8 @@ int runGame(const GameOptions& opt) {
           input.releaseInjected();
           t5.course = nullptr;
           for (const Course& c : playData.courses) if (!t5.course || c.length < t5.course->length) t5.course = &c;
+          if (const char* rid = std::getenv("SKI_LEGACY_RACE")) if (const Course* rc = races.courseById(rid)) t5.course = rc;   // (debug: that course)
+          if (off("p5test") && save.skis.empty()) { save.skis = "rental"; player.hasSkis = true; }   // (debug: straight here, the ski shop skipped)
           if (t5.course) {
             save.earn(2000);
             t5.money0 = save.money;
@@ -1916,6 +1942,7 @@ int runGame(const GameOptions& opt) {
           input.injectMove(-steer, sp < 19 ? 1.f : 0.f);
           if (f % 100 == 0) SL_INFO("[autotest] race t=%6.2fs  %5.0f m down the course  %5.1f km/h  lat %5.1f", races.raceTime(), races.progress(), sp * 3.6, pr.lat);
         } else if (races.finished()) input.releaseInjected();
+        if (off("raceshots") && races.active() && !opt.png.empty() && pendingPng.empty() && f % 40 == 20 && f < 1300) pendingPng = pngVariant(opt.png, ("race" + std::to_string(f / 40)).c_str());   // (debug: the race every 2 s)
         if (races.resultsUp() && t5.resF < 0) {
           t5.resF = f;
           SL_INFO("[autotest] race: finished in %s, place %d, money $%lld -> $%lld", fmtRaceTime(races.raceTime()).c_str(), races.place(), (long long)t5.money0, (long long)save.money);
@@ -2354,6 +2381,24 @@ int runGame(const GameOptions& opt) {
     busBoxes.clear();
     buses.boxes(busBoxes);
     traffic.update(vdt, player.pos, &drive, busBoxes, cam);
+    if (opt.autotest && at == AT::Ski && (off("roomshop") || off("roomauto"))) {   // (debug: a walk-in room from a few spots, shots o_room<n>.png)
+      static int rf = 0;
+      rf++;
+      const bool shop = off("roomshop");
+      auto stand = [&](const char* kind, const char* id) { dvec3 st; double yw = 0; if (rooms.aimSpot(kind, id, st, yw)) { player.teleport(st.x, st.z, yw); player.pos.y = rooms.toWorld(0, 0, 0).y; } };
+      if (rf == 4) rooms.enter(shop ? Interiors::Room::Shop : Interiors::Room::Autohaus);
+      if (rf == 70) stand(shop ? "ski" : "car", shop ? "carver" : "car_bmw_x3");
+      if (rf == 110) stand("clerk", "");
+      if (rf == 150) stand(shop ? "outfits" : "car", shop ? "" : "car_audi_rs6");
+      if (rf == 190) stand("door", "");
+      if (rf > 4 && rf < 230 && rf % 40 == 28 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, ("room" + std::to_string(rf / 40)).c_str()); SL_INFO("[roomtest] shot %d: prompt '%s'", rf / 40, prompt.c_str()); }
+      player.vel = dvec3(0);
+    }
+    if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
+      dvec3 bp; double bh;
+      if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
+      if (!opt.png.empty() && pendingPng.empty() && frame % 45 == 0 && buses.debugCam(bp, bp)) pendingPng = pngVariant(opt.png, ("bus" + std::to_string(frame / 45)).c_str());
+    }
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
@@ -2612,6 +2657,32 @@ int runGame(const GameOptions& opt) {
     } else mpSeatWant.clear();
     // (Phase 5) the police station / the prison, the medical centre, the chalets, the races (start houses, bus race boards,
     // the RACING stand), the job boards and a job's own spots
+    // the walk-in ski shop (interior.js update): what the view's centre is on: a pair of skis on the wall (rent / buy /
+    // equip), the clerk, the outfits corner, the door
+    if (started && rooms.room() == Interiors::Room::Shop && !menus.isOpen()) {
+      if (const RoomDef::Hit* h = rooms.aim(cam.pos, cam.forward())) {
+        if (h->kind == "door") { prompt = "Leave the shop"; if (interact) { interact = false; rooms.leave(); } }
+        else if (h->kind == "clerk") { prompt = "Talk to the shop clerk"; if (interact) { interact = false; skiShopTab = 0; openSkiShop(); } }
+        else if (h->kind == "outfits") { prompt = "Outfits \xC2\xB7 jackets, helmets, goggles"; if (interact) { interact = false; skiShopTab = 1; openSkiShop(); } }
+        else if (const SkiDef* sk = skiById(h->id)) {
+          const bool owned = save.ownsSki(sk->id), eq = save.skis == sk->id, afford = save.money >= sk->price;
+          prompt = eq ? std::string(sk->name) + " \xC2\xB7 equipped" : owned ? std::string("Equip ") + sk->name
+                 : std::string(sk->rent ? "Rent " : "Buy ") + sk->name + " \xC2\xB7 " + fmtM(sk->price) + (afford ? "" : " (not enough money)");
+          if (interact) { interact = false; if (!eq) skiAction(sk->id); }
+        }
+      }
+    }
+    // the Autohaus showroom (carrentalroom.js update): a car on show: its card (buy it), the salesman: your cars, the door
+    if (started && rooms.room() == Interiors::Room::Autohaus && !menus.isOpen()) {
+      if (const RoomDef::Hit* h = rooms.aim(cam.pos, cam.forward())) {
+        if (h->kind == "door") { prompt = "Leave the Autohaus"; if (interact) { interact = false; rooms.leave(); } }
+        else if (h->kind == "clerk") { prompt = "Talk to the salesman"; if (interact) { interact = false; openGarage(); } }
+        else if (h->kind == "car") {
+          prompt = "Buy " + h->name;
+          if (interact) { interact = false; int si = drive.saleIndex(h->id); if (si >= 0) openCarSale(si); else flash(h->name + " \xC2\xB7 not for sale today", Hud::Flash::Bad); }
+        }
+      }
+    }
     if (started && rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !races.active() && !police.arrestedNow()) {
       std::string p5;
       bool used = police.interact(p5, interact) || rescue.interact(p5, interact) || chalets.interact(p5, interact) || races.interact(p5, interact) || oddJobs.interact(p5, interact) ||
@@ -2639,9 +2710,35 @@ int runGame(const GameOptions& opt) {
     }
     if (rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && started) {
       auto near = [&](double x, double z, double r) { return std::hypot(player.pos.x - x, player.pos.z - z) < r; };
-      if (near(-40, -18, 12)) { prompt = "Ski shop \xC2\xB7 skis and outfits"; if (interact) { interact = false; openSkiShop(); } }
+      if (near(-40, -18, 12)) {
+        // (main.js enterShop: through the door behind a fade, into the room; without the exported room: the card)
+        prompt = playData.shop.ok ? "Enter the ski shop" : "Ski shop \xC2\xB7 skis and outfits";
+        if (interact) {
+          interact = false;
+          if (!playData.shop.ok) openSkiShop();
+          else {
+            const dvec3 back = player.pos;
+            const double backYaw = player.heading;
+            pc.fade();
+            rooms.enter(Interiors::Room::Shop, [&, back, backYaw]() { pc.fade(); player.teleport(back.x, back.z, backYaw + PI); });
+          }
+        }
+      }
       else if (near(15, -50, 7.5)) { prompt = "Ticket seller \xC2\xB7 day pass, gondola tickets"; if (interact) { interact = false; openTickets(); } }
-      else if (transport.loaded() && near(transport.autohaus.x, transport.autohaus.z, 12)) { prompt = "Autohaus \xC2\xB7 my cars"; if (interact) { interact = false; openGarage(); } }
+      else if (transport.loaded() && near(transport.autohaus.x, transport.autohaus.z, 12)) {
+        // (carrental.js: through the sliding doors into the showroom; without the exported room: the card)
+        prompt = playData.autohaus.ok ? "Enter the Autohaus" : "Autohaus \xC2\xB7 my cars";
+        if (interact) {
+          interact = false;
+          if (!playData.autohaus.ok) openGarage();
+          else {
+            const dvec3 back = player.pos;
+            const double backYaw = player.heading;
+            pc.fade();
+            rooms.enter(Interiors::Room::Autohaus, [&, back, backYaw]() { pc.fade(); player.teleport(back.x, back.z, backYaw + PI); });
+          }
+        }
+      }
       else for (const Hut& h : huts) if (near(h.x, h.z, 13)) { prompt = h.name + " \xC2\xB7 hot chocolate $" + std::to_string(Prices::hotChocolate); if (interact) { interact = false; openHut(h.name); } break; }
     }
     if (rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !lifts.lines().empty()) {
@@ -3091,6 +3188,10 @@ int runGame(const GameOptions& opt) {
         resort.update(0, cam.pos);
       }
     }
+    if (dvec3 bc, bl; off("bustest") && buses.debugCam(bc, bl)) {   // (debug: the camera on the bus test)
+      cam.lookAt(bc, bl); cam.fovY = 55;
+      terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+    }
     if (off("sidecam") && player.mode == PlayerMode::Sit && lifts.rideLine()) {   // (debug: look at the rider from the side)
       LiftLine* rl = lifts.rideLine();
       dvec3 sv(rl->sideV.x, 0, rl->sideV.y);
@@ -3148,6 +3249,8 @@ int runGame(const GameOptions& opt) {
         if (rooms.room() == Interiors::Room::Prison) hf.location = "Polizei \xC2\xB7 Legacy Village";
         else if (rooms.room() == Interiors::Room::Hospital) hf.location = "Medical centre";
         else if (rooms.room() == Interiors::Room::Chalet) hf.location = "Chalet village";
+        else if (rooms.room() == Interiors::Room::Autohaus) { hf.location = "Autohaus"; hf.objective = "Look at a car or the salesman and press " + pc.K(Action::Interact); }
+        else if (rooms.room() == Interiors::Room::Shop) { hf.location = "Ski Rental & Shop"; hf.objective = "Look at a pair of skis and press " + pc.K(Action::Interact); }
         if (races.active()) { hf.waypoint = false; hf.inRace = true; }
         hf.hideHint = police.wanted() || menus.dialogOpen();   // (under a card dialog the controls card would show through its paper)
         hf.hidePrompt = menus.dialogOpen();
@@ -3235,6 +3338,14 @@ int runGame(const GameOptions& opt) {
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
     // the falling snow
     if (indoor) rooms.draw(renderer);
+    if (indoor && rooms.room() == Interiors::Room::Autohaus && rooms.def()) {
+      // the cars on show on their turntables (the room's own frame: the exporter leaves their meshes out)
+      vdraw.begin();
+      const dvec3 o = rooms.toWorld(0, 0, 0);
+      for (const RoomDef::Car& c : rooms.def()->cars)
+        if (const VehicleModel* vm = vmodels.car(c.id)) vdraw.add(vm->model.get(), glm::translate(glm::dmat4(1), o) * c.M * glm::dmat4(vm->fit), 0, c.paint);
+      vdraw.submit(renderer, *dev, cam.pos);
+    }
     else if (drawVillage) {
       oddJobs.draw(renderer, cam.pos, jobBoard.get());
       races.draw(renderer, cam.pos);
@@ -3248,6 +3359,7 @@ int runGame(const GameOptions& opt) {
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }
+    rooms.addPeople(people);
     police.addPeople(people, cam.pos);
     if (mp.active()) mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt);
     people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);

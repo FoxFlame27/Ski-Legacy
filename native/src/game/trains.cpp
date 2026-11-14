@@ -410,7 +410,7 @@ void Express::addDraw(VehicleDraw& draw, const dvec3& cam) const {
       carMatrix(int(k), c, M);
       double d = glm::length(dvec3(M[3]) - cam);
       if (d > 420 && !mine) { if (models_.rail.lo) draw.add(models_.rail.lo.get(), M, 0); continue; }
-      if (mine && c == 0 && insideView && models_.rail.cabin) { draw.add(models_.rail.cabin.get(), M, 0); continue; }
+      if (mine && c == 0 && insideView && (models_.rail.cabinExpress || models_.rail.cabin)) { draw.add((models_.rail.cabinExpress ? models_.rail.cabinExpress : models_.rail.cabin).get(), M, 0); continue; }   // (the Express's own furnished cabin)
       // (Phase 7) the Legacy Express in its blue livery (the Wolkenspitzbahn keeps the red)
       if (models_.rail.express.ok()) draw.add(models_.rail.express.model.get(), M * glm::dmat4(models_.rail.express.fit), d < 90 ? 0 : 1, vec4(hexColor("#1546c8"), 1));
       else if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), d < 90 ? 0 : 1);

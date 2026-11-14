@@ -86,9 +86,17 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     const glass = glbMaterials(name).map((q, i) => ({ ...q, i })).filter((q) => q.transmission || (/glass|glas$|window|windscreen/.test(q.name.toLowerCase()) && !/surr|frame|seal|rubber|trim/.test(q.name.toLowerCase())))
       .map((q) => ({ i: q.i, red: /red/.test(q.name.toLowerCase()), clear: /front_light|light/.test(q.name.toLowerCase()) && !/red/.test(q.name.toLowerCase()) }));
     const spec = CAR_SPECS[name] || {}, rent = RENTALS.find((x) => x.id === name);
+    // where the number plates go (carconfig.js plateSpots: each model's front and rear spot measured on its own
+    // geometry, flush on the holder / in the recess; the car's frame; none where the model carries none)
+    let plates = null;
+    try {
+      const CARS = await imp('game/cars.js'), CFG = await imp('game/carconfig.js');
+      const tpl = CARS.carTemplate(g, length, name);
+      plates = (CFG.plateSpots(tpl) || []).map((p) => ({ front: !!p.front, m: p.m.toArray().map(r4) }));
+    } catch (e) { log('net: plates of', name, 'skipped:', e.message); }
     out.cars.push({ name, label: spec.label || name, accel: spec.accel ?? 5, top: spec.top ?? 55, electric: !!spec.electric, rev: spec.rev ?? 1, mass: MASS[name] ?? 1700,
       drive: DRIVE[name] || 'awd', length, size: [r4(size.x), r4(size.y), r4(size.z)], real: REAL[name] || null, fit: m.matrix.toArray().map(r4), hide, glass,
-      price: rent?.price ?? 0, kind: rent?.kind || '' });
+      price: rent?.price ?? 0, kind: rent?.kind || '', plates });
   }
   if (skibus?.line?.bus?.shell) {
     const B = await imp('game/bus/bus.js'), sh = skibus.line.bus.shell, m = sh.children[0];
@@ -144,6 +152,22 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       bogie: car.bogies[0] ? pack.localModel(car.bogies[0]) : [],
       lo: car.lo ? pack.localModel(car.lo) : [],
     };
+    // the Legacy Express's own cabin (express.js: buildCar({ express: true }) furnished by expressinterior.js: rounded
+    // laminate tables, the aluminium luggage racks with their glass shelf, and the Meshy double seats and racks from
+    // public/models/train once their GLBs are in); what the web game hides (the procedural coach seats and rack the
+    // Meshy pieces replace) stays out
+    try {
+      const X = await imp('world/expressinterior.js');
+      const xcar = T.buildCar({ number: 1, express: true });
+      X.furnishExpress(xcar);
+      for (let k = 0; k < 40; k++) await new Promise((r) => setTimeout(r, 25)); // (its two GLBs load and are fitted)
+      const xproc = xcar.group.getObjectByName('rail-car-proc');
+      if (xproc) {
+        xproc.traverse((o) => { if (o !== xproc && o.visible === false) o.traverse((q) => { q.userData.slSkip = true; }); });
+        out.rail.models.cabinExpress = pack.localModel(xproc);
+        log('net: the Legacy Express cabin', out.rail.models.cabinExpress.length, 'parts; Meshy interior', !!xcar.group.getObjectByName('express-interior'));
+      }
+    } catch (e) { log('net: express cabin skipped:', e.stack?.split('\n').slice(0, 3).join(' | ')); }
     out.rail.bogies = car.bogies.map((b) => [r4(b.position.x), r4(b.position.y), r4(b.position.z)]);
     const seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
     out.rail.seat = seat ? { p: [r4(seat.pos.x), r4(seat.pos.y), r4(seat.pos.z)], yaw: seat.yaw } : null;

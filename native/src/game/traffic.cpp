@@ -127,6 +127,11 @@ void Traffic::putOnRoad(Car& c, int ri, double s, int dir, double v) {
   placeOnRoad(c);
 }
 // off the map for a moment (it comes back elsewhere, out of sight)
+void Traffic::clearNear(const dvec3& p, double r, double wait) {
+  for (Car& c : list)
+    if (c.mode == Car::Mode::Road && std::hypot(c.x - p.x, c.z - p.z) < r) despawn(c, wait);
+}
+
 void Traffic::despawn(Car& c, double wait) {
   c.mode = Car::Mode::Gone; c.wait = wait; c.lot = c.bay = -1; c.v = 0; c.kvx = c.kvz = c.kw = 0; c.wdT = 0; c.wdX = c.wdZ = 1e18;
 }
@@ -432,6 +437,11 @@ void Traffic::knock(int id, double vx, double vz, double w) {
   if (id < 0 || size_t(id) >= list.size()) return;
   Car& c = list[size_t(id)];
   c.mode = Car::Mode::Knocked; c.kvx = vx; c.kvz = vz; c.kw = w; c.kt = 0; c.v = 0; c.lot = c.bay = -1;
+}
+
+void Traffic::takeOff(int id) {
+  if (id < 0 || size_t(id) >= list.size()) return;
+  despawn(list[size_t(id)], 1 + rnd() * 4);
 }
 
 void Traffic::others(std::vector<OtherBody>& out, const dvec3& near) const {

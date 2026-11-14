@@ -91,19 +91,70 @@ Course parseCourse(const nlohmann::json& c, const std::vector<uint8_t>& bin) {
   o.bus = c.value("bus", false);
   o.stop = str(c, "stop"); o.end = str(c, "end");
   o.start = pt(c["start"]); o.finish = pt(c["finish"]);
+  if (c.contains("house") && c["house"].is_object()) o.houseS = num(c["house"], "s", -1e9);
   for (auto& q : c["checkpoints"]) o.checkpoints.push_back(pt(q));
   for (auto& g : c["gates"]) o.gates.push_back({num(g, "s"), num(g, "x"), num(g, "y"), num(g, "z"), num(g, "nx"), num(g, "nz"), num(g, "width", 8), int(num(g, "side", 1)), str(g, "color") == "blue"});
   auto& L = c["line"];
   o.line.n = int(num(L, "n")); o.line.ds = num(L, "ds", 2);
   o.line.X = f32(L["X"], bin); o.line.Y = f32(L["Y"], bin); o.line.Z = f32(L["Z"], bin);
   o.line.W = f32(L["W"], bin); o.line.H = f32(L["H"], bin); o.line.K = f32(L["K"], bin);
+  if (L.contains("B")) o.line.B = f32(L["B"], bin);
+  if (L.contains("F")) o.line.F = f32(L["F"], bin);
+  if (int(o.line.B.size()) != o.line.n) o.line.B.clear();
+  if (int(o.line.F.size()) != o.line.n) o.line.F.clear();
   if (int(o.line.X.size()) != o.line.n || int(o.line.H.size()) != o.line.n) o.line.n = 0;
+  o.night = c.value("night", false);
+  if (c.contains("masts") && c["masts"].is_array())
+    for (auto& m : c["masts"]) if (m.is_array() && m.size() >= 10) o.masts.push_back({m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9]});
   if (c.contains("board") && c["board"].is_object()) { o.hasBoard = true; o.boardX = num(c["board"], "x"); o.boardZ = num(c["board"], "z"); o.boardYaw = num(c["board"], "yaw"); }
   return o;
 }
 } // namespace
 
+namespace {
+RoomDef parseRoom(const nlohmann::json& r) {
+  RoomDef o;
+  if (!r.is_object()) return o;
+  o.ok = true;
+  o.W = num(r, "W", 8); o.D = num(r, "D", 8); o.H = num(r, "H", 3); o.eye = num(r, "eye", 1.62);
+  if (r.contains("spawn") && r["spawn"].is_array() && r["spawn"].size() >= 3) { o.spawnX = r["spawn"][0]; o.spawnZ = r["spawn"][1]; o.spawnYaw = r["spawn"][2]; }
+  if (r.contains("bounds") && r["bounds"].is_array() && r["bounds"].size() >= 4) for (size_t k = 0; k < 4; k++) o.bounds[k] = r["bounds"][k];
+  if (r.contains("obstacles")) for (auto& q : r["obstacles"]) if (q.is_array() && q.size() >= 3) o.obstacles.push_back({q[0], q[1], q[2]});
+  if (r.contains("counter") && r["counter"].is_array() && r["counter"].size() >= 4) { o.hasCounter = true; for (size_t k = 0; k < 4; k++) o.counter[k] = r["counter"][k]; }
+  if (r.contains("hits")) for (auto& h : r["hits"]) {
+    if (!h.contains("box") || h["box"].size() < 6) continue;
+    auto& b = h["box"];
+    o.hits.push_back({str(h, "kind"), str(h, "id"), str(h, "name"), dvec3(b[0].get<double>(), b[1].get<double>(), b[2].get<double>()), dvec3(b[3].get<double>(), b[4].get<double>(), b[5].get<double>()), h.value("up", false)});
+  }
+  if (r.contains("clerk") && r["clerk"].is_object()) { o.hasClerk = true; o.clerkX = num(r["clerk"], "x"); o.clerkZ = num(r["clerk"], "z"); o.clerkYaw = num(r["clerk"], "yaw"); o.clerkChar = str(r["clerk"], "char"); }
+  if (r.contains("background") && r["background"].is_array() && r["background"].size() >= 3) o.background = vec3(r["background"][0].get<float>(), r["background"][1].get<float>(), r["background"][2].get<float>());
+  if (r.contains("lights")) for (auto& l : r["lights"]) {
+    const std::string t = str(l, "type");
+    RoomDef::Light q;
+    q.type = t == "point" ? 0 : t == "spot" ? 1 : t == "dir" ? 2 : t == "hemi" ? 3 : 4;
+    q.color = vec3(l["color"][0].get<float>(), l["color"][1].get<float>(), l["color"][2].get<float>());
+    q.intensity = float(num(l, "intensity", 1)); q.distance = float(num(l, "distance"));
+    q.p = dvec3(l["p"][0].get<double>(), l["p"][1].get<double>(), l["p"][2].get<double>());
+    o.lights.push_back(q);
+  }
+  if (r.contains("shell") && r["shell"].is_array() && r["shell"].size() >= 3) { o.hasShell = true; o.shell = dvec3(r["shell"][0].get<double>(), r["shell"][1].get<double>(), r["shell"][2].get<double>()); }
+  if (r.contains("stair") && r["stair"].is_array() && r["stair"].size() >= 4) { o.hasStair = true; for (size_t k = 0; k < 4; k++) o.stair[k] = r["stair"][k]; o.FL = num(r, "FL"); o.MZ = num(r, "MZ"); }
+  if (r.contains("obstaclesUp")) for (auto& q : r["obstaclesUp"]) if (q.is_array() && q.size() >= 3) o.obstaclesUp.push_back({q[0], q[1], q[2]});
+  if (r.contains("cars")) for (auto& c : r["cars"]) {
+    RoomDef::Car q;
+    q.id = str(c, "id"); q.label = str(c, "label"); q.price = int(num(c, "price")); q.up = c.value("up", false);
+    if (c.contains("m") && c["m"].size() == 16) for (int k = 0; k < 16; k++) q.M[k / 4][k % 4] = c["m"][size_t(k)].get<double>();
+    if (c.contains("paint") && c["paint"].is_array() && c["paint"].size() >= 3) q.paint = vec4(c["paint"][0].get<float>(), c["paint"][1].get<float>(), c["paint"][2].get<float>(), 1);
+    o.cars.push_back(q);
+  }
+  return o;
+}
+} // namespace
+
 bool PlayData::load(const nlohmann::json& j, const std::vector<uint8_t>& bin) {
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("shop")) shop = parseRoom(j["rooms"]["shop"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("autohaus")) autohaus = parseRoom(j["rooms"]["autohaus"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("prison")) prisonRoom = parseRoom(j["rooms"]["prison"]);
   for (auto& c : j["courses"]) { Course o = parseCourse(c, bin); if (o.line.n > 1) courses.push_back(std::move(o)); }
   for (auto& c : j["busRaces"]) { Course o = parseCourse(c, bin); if (o.line.n > 1) busRaces.push_back(std::move(o)); }
   if (j.contains("stand") && j["stand"].is_object()) { hasStand = true; standX = num(j["stand"], "x"); standZ = num(j["stand"], "z"); standYaw = num(j["stand"], "yaw"); }

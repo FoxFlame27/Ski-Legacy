@@ -60,7 +60,7 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
     for (Material& mt : rockModel_[v]->materials) {
       mt.shading = 4;
       mt.metallic = 0;
-      mt.baseColor = vec4(vec3(mt.baseColor) * ROCKS[v].albedo, mt.baseColor.a);
+      mt.baseColor = vec4(vec3(mt.baseColor) * ROCKS[v].albedo, mt.baseColor.w);
       mt.emissive = vec3(0); mt.emissiveTex = {};
     }
     for (int l = 0; l < 3; l++) rockBatch_[v][l].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);

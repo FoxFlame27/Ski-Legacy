@@ -1570,7 +1570,8 @@ checked; then a hut's door and the ticket counter: `out_werk_<stage>.png`, `out_
 Known gaps: the windows' views are photographs (above); the ticket seller and the townsfolk talk in the card dialog,
 not talk.js's conversation camera; the chalet's build mode still works the ground floor only; no police raid into a
 chalet, no 30 s wait at a chalet's door during a chase; the prison's jail board (the lobby's top 3) shows the room's
-first state; the station's and the Werkstatt's lamps do not brighten at night (their emissives are as exported).
+first state; the station's and the Werkstatt's boards, lamps and windows come on with the night (their strengths by
+day and at night exported per material), but the blue police lamp does not pulse.
 
 ## Status: the native port against the JavaScript game
 

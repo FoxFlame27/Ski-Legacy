@@ -131,6 +131,7 @@ void Menus::open(Screen s, int dir) {
   screen_ = s;
   dir_ = dir;
   focus_ = 0; focusPrev_ = -1;
+  focA_.clear();
   scroll_ = scrollTarget_ = 0;
   focusScroll_ = true;
   thumbDrag_ = false;
@@ -381,16 +382,18 @@ bool Menus::button(float x, float y, float minW, float h, float fs, const std::s
   float alpha = e * (disabled ? 0.55f : 1.f);
   if (alpha <= 0.002f) { Item it; it.x = x; it.y = y; it.w = w; it.h = h; it.label = label; it.activate = std::move(act); it.disabled = disabled; items_.push_back(std::move(it)); return foc; }
   float ox = (1 - e) * -60 * u_;
-  ui_.pushTranslate(ox + (foc ? 14 * u_ : 0), 0);
-  if (foc) ui_.pushRotate(x + w / 2, y + h / 2, -1.f * 3.14159265f / 180.f);
-  if (foc) ui_.rect(x - 16 * u_, y + h * 0.3f, 6 * u_, h * 0.4f, a(red, alpha));
+  float fa = disabled ? 0.f : focusAmt(idx, foc, 0.2f);
+  ui_.pushTranslate(ox + fa * 14 * u_, 0);
+  bool rot = fa > 0.001f;
+  if (rot) ui_.pushRotate(x + w / 2, y + h / 2, -fa * 3.14159265f / 180.f);
+  if (rot) ui_.rect(x - 16 * u_, y + h * (0.5f - 0.2f * fa), 6 * u_, h * 0.4f * fa, a(red, alpha));
   Ui::Shadow sh{0, 6 * u_, 14 * u_, a(hex(0x000000), 0.25f)};
-  float sw = w * (foc ? 1.05f : 1.f);
+  float sw = w * (1.f + 0.05f * fa);
   ui_.pushClip(x - 40 * u_, y - 40 * u_, (sw + 80 * u_) * e, h + 80 * u_);
   ui_.brushStroke(x, y, sw, h, a(white, alpha), seed, 420, 96, &sh);
   ui_.popClip();
   ui_.textLH(x + padL, y, h, fs, UiFont::CondItalic, a(blue, alpha), label, UiAlign::Left, 0.06f);
-  if (foc) ui_.popTransform();
+  if (rot) ui_.popTransform();
   ui_.popTransform();
   Item it;
   it.x = x; it.y = y; it.w = w; it.h = h; it.label = label; it.activate = std::move(act); it.disabled = disabled;
@@ -417,8 +420,20 @@ bool Menus::textFieldFocused() const {
   return screen_ == Screen::Multiplayer && focus_ == 0 && mp.account && mp.account().empty();
 }
 
+float Menus::focusAmt(int idx, bool foc, float dur) {
+  // a linear clock per item toward its state, shaped like cubic-bezier(.2,.9,.2,1): quick out, soft landing
+  if (idx < 0) return foc ? 1.f : 0.f;
+  if (size_t(idx) >= focA_.size()) focA_.resize(size_t(idx) + 1, 0.f);
+  float& v = focA_[size_t(idx)];
+  float step = dt_ / std::max(0.01f, dur);
+  v = foc ? std::min(1.f, v + step) : std::max(0.f, v - step);
+  float r = 1 - v;
+  return 1 - r * r * r;
+}
+
 void Menus::frame(const UiNav& navIn, double dt, double now) {
   t_ = now;
+  dt_ = float(std::clamp(dt, 0.0, 0.1));
   u_ = ui_.cssU();   // (style.css --u: 1 CSS px on a 1280 x 800 window, x the display's pixel ratio)
   struct InFrame { bool& f; explicit InFrame(bool& b) : f(b) { f = true; } ~InFrame() { f = false; } } guard(inFrame_);
   // the frame a screen was opened from outside: its presses are not this screen's (the pointer still hovers)
@@ -859,9 +874,10 @@ void Menus::scrSettings() {
     }
     float lh = tsm * 1.25f, labH = lh * float(lines.size());
     float h = std::max(42 * u_, 10 * u_ + std::max(labH, ctrlH));
-    if (foc) {
-      ui_.gradientGrid(bx0, ry, bw, h, 8, 1, [](float fx, float) { return vec4(0.082f, 0.275f, 0.784f, 0.09f * (1 - fx)); });
-      ui_.rect(bx0, ry, 4 * u_, h, red);
+    float fa = focusAmt(int(items_.size()), foc);
+    if (fa > 0.001f) {
+      ui_.gradientGrid(bx0, ry, bw, h, 8, 1, [fa](float fx, float) { return vec4(0.082f, 0.275f, 0.784f, 0.09f * fa * (1 - fx)); });
+      ui_.rect(bx0, ry, 4 * u_, h, a(red, fa));
     }
     float ly = ry + (h - labH) / 2;
     for (auto& l : lines) { ui_.textLH(rx, ly, lh, tsm, UiFont::BodySemi, blue, l); ly += lh; }
@@ -1082,7 +1098,8 @@ void Menus::scrControls() {
   float ry = listTop_ - scroll_;
   auto rowBack = [&](float yy, float hh, bool foc, bool border) {
     // .settings .mp-row (margin 0 -14u): the focus wash and its red bar; the hairline under it
-    if (foc) { ui_.rectGradient(rx - 14 * u_, yy, rw + 28 * u_, hh, a(blue, 0.09f), a(blue, 0)); ui_.rect(rx - 14 * u_, yy, 4 * u_, hh, red); }
+    float fa = focusAmt(int(items_.size()), foc);
+    if (fa > 0.001f) { ui_.rectGradient(rx - 14 * u_, yy, rw + 28 * u_, hh, a(blue, 0.09f * fa), a(blue, 0)); ui_.rect(rx - 14 * u_, yy, 4 * u_, hh, a(red, fa)); }
     if (border) ui_.rect(rx - 14 * u_, yy + hh - line, rw + 28 * u_, line, hex(0x1546c8, 0.12f));
   };
   // .seg button: 2px blue, 5u corners, 700 t-sm, 6u 10u padding; the focused one in red with its ring (.cb-cell focus)
@@ -1474,14 +1491,15 @@ void Menus::scrDialog() {
     it.x = ox; it.y = oy; it.w = ow; it.h = oh; it.label = o.label; it.inList = true;
     it.activate = [choose, k] { choose(k); };
     items_.push_back(it);
+    float fa = o.disabled ? 0.f : focusAmt(int(items_.size()) - 1, foc, cards ? 0.3f : 0.25f);
     if (oy + oh < listTop_ - 40 * u_ || oy > listTop_ + listH_ + 40 * u_) continue;
     // riseIn: 0.5 s after 80 + 60 n ms (from 30u below, faded); focused: lifted 10u (a row: 8u right)
     float e = float(std::clamp((t_ - enterT_ - 0.08 - 0.06 * double(n)) / 0.5, 0.0, 1.0));
     e = 1 - std::pow(1 - e, 4.f);
-    float dx = !cards && foc ? 8 * u_ : 0, dy = (cards && foc ? -10 * u_ : 0) + 30 * u_ * (1 - e);
+    float dx = !cards ? 8 * u_ * fa : 0, dy = (cards ? -10 * u_ * fa : 0) + 30 * u_ * (1 - e);
     ui_.pushAlpha(e);
     ui_.pushTranslate(dx, dy);
-    Ui::Shadow sh = o.disabled ? Ui::Shadow{0, 8 * u_, 16 * u_, hex(0x000e2c, 0.3f)} : foc ? Ui::Shadow{0, 20 * u_, 32 * u_, hex(0x000e2c, 0.5f)} : Ui::Shadow{0, 12 * u_, 24 * u_, hex(0x000e2c, 0.38f)};
+    Ui::Shadow sh = o.disabled ? Ui::Shadow{0, 8 * u_, 16 * u_, hex(0x000e2c, 0.3f)} : Ui::Shadow{0, (12 + 8 * fa) * u_, (24 + 8 * fa) * u_, hex(0x000e2c, 0.38f + 0.12f * fa)};
     ui_.brushClip(ox, oy, ow, oh, a(white, o.disabled ? 0.72f : 1.f), 60 + int(k) * 5, 6, 4, u_, &sh);
     float ta = o.disabled ? 0.55f : 1.f;
     // the chip: a price ($ small and red) or a state (a brush-b chip)
@@ -1536,7 +1554,7 @@ void Menus::scrDialog() {
       }
       float fh = std::max(40 * u_, txs * 1.2f);
       drawFoot(ox + 26 * u_, oy + oh - 24 * u_ - fh, fh);
-      ui_.rect(ox + 26 * u_, oy + oh - 12 * u_ - 4 * u_, (foc ? 90 : 30) * u_, 4 * u_, o.disabled ? hex(0x1546c8, 0.25f) : red);
+      ui_.rect(ox + 26 * u_, oy + oh - 12 * u_ - 4 * u_, (30 + 60 * fa) * u_, 4 * u_, o.disabled ? hex(0x1546c8, 0.25f) : red);
     } else {
       float px = ox + 24 * u_;
       if (!input_.usingGamepad() && n < 9) px += ui_.kc(px, oy + (oh - ui_.kcHeight(u_)) / 2, u_, kcl, blueDim, vec4(0), kcBorder) + 14 * u_;
@@ -1586,8 +1604,9 @@ void Menus::scrDialog() {
     bool foc = int(items_.size()) == focus_;
     std::string l = upper(o.label);
     float bw = ui_.textWidth(l, 26 * u_, UiFont::CondItalic, 0.05f) + 58 * u_, bh = 54 * u_;
-    float dx = foc ? 8 * u_ : 0;
-    if (foc) ui_.rect(fx - 12 * u_ + dx, fy + bh * 0.3f, 5 * u_, bh * 0.4f, red);
+    float fa = o.disabled ? 0.f : focusAmt(int(items_.size()), foc, 0.2f);
+    float dx = 8 * u_ * fa;
+    if (fa > 0.001f) ui_.rect(fx - 12 * u_ + dx, fy + bh * (0.5f - 0.2f * fa), 5 * u_, bh * 0.4f * fa, red);
     Ui::Shadow sh{0, 6 * u_, 12 * u_, a(hex(0x000000), 0.25f)};
     ui_.brushPanel(fx + dx, fy, bw, bh, white, 1, &sh);
     ui_.textLH(fx + dx + 24 * u_, fy, bh, 26 * u_, UiFont::CondItalic, a(blue, o.disabled ? 0.55f : 1.f), l, UiAlign::Left, 0.05f);

@@ -175,6 +175,28 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   rig.writePose(pose_);
 }
 
+void PlayerSkier::updateStanding(double dt, const dvec3& pos, double heading, World& world) {
+  if (!rig.ready()) return;
+  rig.setGround([&world](double x, double z, double y) { return world.groundHeight(x, z, y); });
+  RigState& st = state;
+  st = RigState{};
+  st.mode = RigMode::Idle;
+  st.heading = heading;
+  st.hasNormal = true; st.normal = UP;
+  st.airY = pos.y - world.groundHeight(pos.x, pos.z, pos.y + 0.4);   // (over the floor: the podium's height, interior.js mannequinLift)
+  rig.setCarry(false);
+  rig.setSkisVisible(false);
+  rig.setHeadHidden(false);
+  rig.polesHidden = true;
+  if (lastTeleport_ != -2) { lastTeleport_ = -2; rig.snapPose(); }   // (the first frame on the podium: no blend from the walk)
+  rig.rootPos = V3(pos);
+  rig.update(dt, st);
+  eyeRigOk = false;
+  rig.writePose(pose_);
+}
+
+std::string PlayerSkier::zones() const { return model_ ? outfitZonesInfo(*model_) : std::string(); }
+
 // player.js fpViewState + skier.js updateFpView / syncFpArms
 void PlayerSkier::updateFpView(double dt, const Camera& cam, const Player& p, gfx::Device& dev, AssetManager& assets) {
   if (!rig.ready()) return;

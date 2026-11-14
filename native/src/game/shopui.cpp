@@ -52,6 +52,17 @@ void swatch(Ui& ui, const ShopRow& r, float x, float cy, float u, bool sel) {
     ui.capsule(vec2(x + w * 0.36f, cy + h * 0.22f), vec2(x + w * 0.52f, cy - h * 0.22f), 3 * u, a(white, 0.5f));
     return;
   }
+  if (r.swatch == 5 && !r.stripes.empty()) {
+    // .os-sw-kit: the kit's colours side by side in a rounded tile, rotate(-8deg)
+    ui.pushRotate(x + s / 2, cy, -8 * 3.14159265f / 180);
+    ui.boxShadow(x, cy - s / 2, s, s, 5 * u, 0, 2 * u, 5 * u, hex(0x00143c, 0.3f));
+    const float bw = s / float(r.stripes.size());
+    ui.roundRect(x, cy - s / 2, s, s, 5 * u, hex(r.stripes.front()));
+    ui.roundRect(x + s - 2 * bw, cy - s / 2, 2 * bw, s, 5 * u, hex(r.stripes.back()));
+    for (size_t i = 1; i + 1 < r.stripes.size(); i++) ui.rect(x + float(i) * bw, cy - s / 2, bw + 0.5f, s, hex(r.stripes[i]));
+    ui.popTransform();
+    return;
+  }
   // skis: two tilted boards in the pair's colours
   for (int i = 0; i < 2; i++) {
     float ox = x + (i ? 20.f : 9.f) * u;
@@ -79,14 +90,14 @@ bool frameShop(Ui& ui, const UiNav& nav, const Input& in, ShopView& v, double dt
     tabsW = 0;
     for (const auto& t : v.tabs) tabsW += ui.textWidth(t.label, tabFs, NUM, 0.05f) + 2 * tabPad + 8 * u;
     tabsW -= 8 * u;
-    if (tabsW <= colW || pass) break;
+    if (tabsW <= colW || pass || !v.fitTabs) break;
     float k = colW / tabsW;
     tabFs *= k; tabPad *= k;
   }
   const float tabsY = top + headH, tabH = 46 * u, listY = tabsY + tabH + 14 * u;
   const ShopRow* cur = n ? &v.rows[size_t(v.focus)] : nullptr;
   std::vector<std::string> notes;
-  if (cur) for (const std::string& nt : cur->notes) for (const std::string& l : uiw::wrap(ui, nt, tXs, UiFont::BodyMed, colW - 56 * u)) notes.push_back(l);
+  if (cur) for (const std::string& nt : cur->notes) for (const std::string& l : uiw::wrap(ui, nt, tXs, UiFont::BodyMed, colW - 48 * u)) notes.push_back(l);
   const float detH = 16 * u + tXs + 7 * u + 36 * u * 0.95f + (notes.empty() ? 0 : 8 * u + float(notes.size()) * tXs * 1.4f) + 12 * u + 74 * u + 18 * u;
   const float detY = bottom - detH, listH = std::max(60 * u, detY - 10 * u - listY);
   const float rowW = colW - 16 * u - 14 * u, rowH = 60 * u, rowGap = 8 * u, contentH = 2 * u + float(n) * (rowH + rowGap) - rowGap + 22 * u;
@@ -147,6 +158,10 @@ bool frameShop(Ui& ui, const UiNav& nav, const Input& in, ShopView& v, double dt
       v.lastClickRow = hoverRow; v.lastClickAt = now;
     }
   }
+  // (.os-drag: the right half of the screen; a drag there turns your skier)
+  if (v.drag && mouseOk && nav.mouseDown && nav.mouse.x > W * 0.5f) { if (v.dragX >= 0) v.drag((nav.mouse.x - v.dragX) / d); v.dragX = nav.mouse.x; }
+  else v.dragX = -1;
+  if (v.drag && std::fabs(nav.stickR.x) > 0.2f) v.drag(nav.stickR.x * float(dt) * 260);
   if (closeNow) { if (v.closed) v.closed(); return false; }
   n = int(v.rows.size());
   v.focus = n ? std::clamp(v.focus, 0, n - 1) : 0;
@@ -255,6 +270,7 @@ bool frameShop(Ui& ui, const UiNav& nav, const Input& in, ShopView& v, double dt
     else { hs.push_back({{"\xE2\x86\x90", "\xE2\x86\x92"}, "CATEGORY"}); hs.push_back({{"\xE2\x86\x91", "\xE2\x86\x93"}, "CHOOSE"}); }
     hs.push_back({{prompts::K(in, "confirm")}, "BUY / WEAR"});
     hs.push_back({{prompts::K(in, "cancel")}, "CLOSE"});
+    if (!v.dragHint.empty() && !nav.usingPad) hs.push_back({{}, v.dragHint});
     uiw::hints(ui, colX, H - 24 * u - ui.kcHeight(u), u, hs, a(white, 0.88f), a(white, 0.88f), W - 20 * u);
   }
   ui.popAlpha();

@@ -51,6 +51,30 @@ const OutfitDef kOutfits[] = {
   {"l_violet", "lens", "Violet Mirror", 450, 0x8a5cff, 0x8a5cff, "Mirror coating"}, {"l_gold", "lens", "Gold Mirror", 550, 0xffb02a, 0xffb02a, "Mirror coating"},
 };
 const size_t kOutfitCount = sizeof(kOutfits) / sizeof(kOutfits[0]);
+// outfits.js OUTFIT_KITS
+const OutfitKit kOutfitKits[] = {
+  {"kit_alpine", "Alpine Classic", 2400, "Swiss red and white, like the old ski school", 0xd0202e, 0xffffff, 0x1b1c1f, 0xd0202e, 0xd0202e, "gloss", 0x3a3d44, 0.35},
+  {"kit_forest", "Freeride Forest", 2800, "Backcountry green and black, burnt-orange helmet", 0x2f5a3e, 0x1b1d22, 0x2c3036, 0x1b1d22, 0xc9501f, "matte", 0xff6a2a, 1},
+  {"kit_park", "Park Purple", 3000, "Deep purple with teal flashes", 0x4a23a6, 0x2cc6c8, 0x1b1d26, 0x2cc6c8, 0x7a1f96, "matte", 0x2fd6d0, 1},
+  {"kit_downhill", "Downhill Orange", 3200, "Race-suit orange and navy, rose mirror", 0xf2541e, 0x1f2643, 0xf2541e, 0x1f2643, 0x1f2a4d, "gloss", 0xff4f9a, 1},
+  {"kit_glacier", "Glacier White", 3600, "Ice white with frost-blue panels", 0xf3f6f9, 0x7fc8f0, 0xf3f6f9, 0x7fc8f0, 0xf4f6f8, "gloss", 0x45b0ff, 1},
+  {"kit_mono", "Monochrome", 4000, "Black and white slalom panels, gloss white helmet", 0x1c1d21, 0xf2f3f5, 0x1c1d21, 0xf2f3f5, 0xf4f5f7, "gloss", 0x2a2d33, 0.4},
+  {"kit_night", "Night Racer", 5200, "Stealth black with race-red flashes", 0x121317, 0xe0182c, 0x121317, 0xe0182c, 0x141518, "matte", 0xff3b1f, 1},
+  {"kit_gold", "Legacy Gold", 8000, "The champion's kit: gold chrome and a gold mirror", 0xdcab35, 0x111214, 0x111214, 0xdcab35, 0xe0b246, "chrome", 0xffb02a, 1},
+};
+const size_t kOutfitKitCount = sizeof(kOutfitKits) / sizeof(kOutfitKits[0]);
+const OutfitKit* outfitKitById(const std::string& id) {
+  for (const OutfitKit& k : kOutfitKits) if (id == k.id) return &k;
+  return nullptr;
+}
+const OutfitKit* outfitKitOfPiece(const std::string& id, std::string* slot) {
+  const size_t dot = id.find('.');
+  if (dot == std::string::npos) return nullptr;
+  const std::string s = id.substr(dot + 1);
+  if (s != "jacket" && s != "trousers" && s != "helmet" && s != "lens") return nullptr;
+  if (slot) *slot = s;
+  return outfitKitById(id.substr(0, dot));
+}
 const OutfitDef* outfitById(const std::string& id) {
   for (const OutfitDef& o : kOutfits) if (id == o.id) return &o;
   return nullptr;
@@ -89,7 +113,11 @@ void Save::reset() {
 }
 
 bool Save::ownsSki(const std::string& id) const { return std::find(owned.begin(), owned.end(), id) != owned.end(); }
-bool Save::ownsOutfit(const std::string& id) const { return std::find(outfits.owned.begin(), outfits.owned.end(), id) != outfits.owned.end(); }
+// (outfits.js ownsOutfit: a kit's piece is owned with its kit)
+bool Save::ownsOutfit(const std::string& id) const {
+  const OutfitKit* k = outfitKitOfPiece(id);
+  return std::find(outfits.owned.begin(), outfits.owned.end(), k ? std::string(k->id) : id) != outfits.owned.end();
+}
 int Save::rescueFee() const { return std::min(RESCUE_FEE_MAX, RESCUE_FEE_BASE + RESCUE_FEE_STEP * std::max(0, rescues)); }
 double Save::setting(const char* key, double def) const {
   auto it = settings.find(key);

@@ -45,6 +45,8 @@ struct PlayCtx {
   bool driving = false;         // in your car (game.cpp rideKind == Car)
   bool riding = false;          // a lift, bus or train
   float night = 0;              // village.js nightUniform: 0 by day .. 1 at night (lamps)
+  double hour = 10;             // the game's clock (sky.js env.hour, 0 .. 24)
+  float snowing = 0;            // how hard it snows, 0..1 (the helicopter's landing light beam shows in it)
   // services
   std::function<void(const std::string& text, int kind)> flash;     // 0 good, 1 bad, 2 gold
   std::function<bool(int64_t amount)> spend;                        // refused when short ("Not enough money")

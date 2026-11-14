@@ -299,11 +299,12 @@ void Showroom::buildPanes(int view, float tanH, float tanV, gfx::Texture tex) {
   const dvec3 n = VIEW_N[view], rt = glm::cross(n, dvec3(0, 1, 0));
   Geo g;
   for (const RoomDef::Pane& p : d->panes) {
-    const dvec3 pn = dvec3(p.M * glm::dvec4(0, 0, 1, 0));
+    const glm::dmat4 PM(p.m);
+    const dvec3 pn = dvec3(PM * glm::dvec4(0, 0, 1, 0));
     if (glm::dot(pn, n) > -0.7) continue;   // (this side's planes face into the room: against its way out)
     const uint32_t base = uint32_t(g.pos.size());
     for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
-      const dvec3 P = dvec3(p.M * glm::dvec4((i - 0.5) * p.w, (j - 0.5) * p.h, 0, 1)), q = P - VIEW_EYE;
+      const dvec3 P = dvec3(PM * glm::dvec4((i - 0.5) * double(p.w), (j - 0.5) * double(p.h), 0, 1)), q = P - VIEW_EYE;
       const double zc = std::max(0.2, glm::dot(q, n));
       g.pos.push_back(vec3(P)); g.nor.push_back(vec3(pn)); g.col.push_back(vec3(1));
       g.uv.push_back(vec2(float(0.5 + 0.5 * glm::dot(q, rt) / (zc * double(tanH))), float(0.5 + 0.5 * q.y / (zc * double(tanV)))));

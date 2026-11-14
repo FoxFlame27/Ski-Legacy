@@ -13,7 +13,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, models, freeMod, loadGLB, makePack, cols, log, r4 }) {
+export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, models, freeMod, loadGLB, makePack, cols, log, r4, village }) {
   const imp = (p) => import(pathToFileURL(path.join(SRC, p)));
   const pScene = new THREE.Scene();
   const pCols = [];
@@ -131,7 +131,7 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
   } catch (err) { log('chalet plan skipped:', err.message); }
 
   // ---------------------------------------------------------------- the rooms you walk into (export_rooms.mjs)
-  try { out.rooms = await (await import('./export_rooms.mjs')).exportRooms({ THREE, SRC, models, loadGLB, pack, log, r4 }); }
+  try { out.rooms = await (await import('./export_rooms.mjs')).exportRooms({ THREE, SRC, models, loadGLB, pack, log, r4, village, world }); }
   catch (err) { log('rooms skipped:', err.stack?.split('\n').slice(0, 3).join(' | ')); }
   // ---------------------------------------------------------------- the helicopter, its pad, the ambulance, the ward
   const m34 = (m) => { const e = m.elements; return [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14]].map((v) => Math.round(v * 1e5) / 1e5); };

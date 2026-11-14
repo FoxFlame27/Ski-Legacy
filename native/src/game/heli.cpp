@@ -10,6 +10,8 @@
 #include "game/play_data.h"
 #include "game/shapes.h"
 #include "player/player.h"
+#include "player/skier_rig.h"
+#include "world/lifts.h"
 #include "world/resort.h"
 #include "world/scenery.h"
 #include "world/world.h"
@@ -53,6 +55,7 @@ double Heli::snow(double x, double z) const { return c_.world->height(x, z); }
 
 void Heli::load(AssetManager& assets, const HeliParts& parts) {
   parts_ = parts;
+  assets_ = &assets;
   const PlayData* D = c_.data;
   if (!D || !D->heli || !parts_.body) { SL_WARN("heli: no data (node native/tools/export_resort.mjs)"); return; }
   const nlohmann::json& j = *D->heli;
@@ -79,7 +82,10 @@ void Heli::load(AssetManager& assets, const HeliParts& parts) {
   if (j.contains("ambulance")) rescue.amb.load(assets, j["ambulance"]);
   // (our own copies of the blades' and discs' materials: their opacity follows the rotor speed)
   for (auto* m : {&parts_.blade, &parts_.disc, &parts_.tailBlades, &parts_.tailDisc})
-    if (*m) { *m = std::make_shared<Model>(**m); for (Material& mt : (*m)->materials) mt.alpha = Material::Alpha::Blend; }
+    if (*m) { *m = std::make_shared<Model>(**m); for (Material& mt : (*m)->materials) { mt.alpha = Material::Alpha::Blend; mt.roughness = std::max(mt.roughness, 0.62f); mt.metallic = 0; } }
+  // (the blur discs are MeshBasicMaterial 0x1d2025: the same dark grey whatever the light, their painted alpha)
+  for (auto* m : {&parts_.disc, &parts_.tailDisc}) if (*m) for (Material& mt : (*m)->materials) { mt.emissive = vec3(mt.baseColor) * 0.9f; mt.baseColor = vec4(0, 0, 0, mt.baseColor.w); mt.roughness = 1; mt.doubleSided = true; }
+  SL_INFO("heli: blur disc texture %s, tail %s", parts_.disc && parts_.disc->materials[0].baseTex ? "ok" : "MISSING", parts_.tailDisc && parts_.tailDisc->materials[0].baseTex ? "ok" : "MISSING");
   // the downwash's puff: a soft round sprite (fx.js Puffs: opacity 0.62, lit white over a cool shade), four strengths
   if (c_.dev) {
     const int S = 64;
@@ -103,6 +109,11 @@ void Heli::load(AssetManager& assets, const HeliParts& parts) {
       Geo g = shapeGeo({vec2(-0.5f, -0.5f), vec2(0.5f, -0.5f), vec2(0.5f, 0.5f), vec2(-0.5f, 0.5f)});
       g.uv = {vec2(0, 0), vec2(1, 0), vec2(1, 1), vec2(0, 1)};
       puffModel_[i] = buildModel(*c_.dev, {{g, m}}, "heli_puff");
+      // (the flare's smoke: lit 0xf26a4b over 0xb4402e, opacity 0.42)
+      Material ms = m;
+      ms.baseColor = vec4(0.88f, 0.14f, 0.07f, 0.42f * (i + 0.6f) / 4.f);
+      ms.emissive = vec3(0.10f, 0.012f, 0.006f);
+      smokeModel_[i] = buildModel(*c_.dev, {{g, ms}}, "heli_smoke");
     }
   }
   ok_ = true;
@@ -187,10 +198,50 @@ void Heli::callHome(bool quiet) {
   if (!quiet) c_.flash("The helicopter is on its way back to the pad", 0);
 }
 
-// The heli-ski desk: pick a drop zone as your flight plan (the compass leads you there) or a free flight; either way
-// you fly it yourself, same price.
+// The heli-ski desk (heli.js openDialog): the pilot's chart of the drop zones (ui/travel.js, TrailMap::heliTravel).
+// Pick one as your flight plan (the compass and the red smoke flare lead you there) or a free flight; either way you
+// fly it yourself, same price. The race courses on the mountains follow the drop zones: the helicopter's spot beside
+// the start house.
+void Heli::fly(const DropZone* z) {
+  if (blocked && blocked()) return;
+  if (state != State::Parked || away_) return;
+  if (c_.spend(price_)) { plan_ = z; board(); }
+}
+
+void Heli::planner(TrailMap::Travel& T) {
+  const bool broke = c_.save->money < price_;
+  auto eta = [](double km) { return (40 + (km * 1000) / 42) / 60; };   // spool-up and climb, then ~150 km/h
+  std::vector<TrailMap::TravelDest> out;
+  TrailMap::TravelDest freeD;
+  bool hasFree = false;
+  for (TrailMap::TravelDest& d : T.dests) {
+    if (d.id < 0) { freeD = d; hasFree = true; continue; }
+    const DropZone* zn = nullptr;
+    for (const DropZone& z : zones_) if (!z.race && (z.name == d.name || std::hypot(z.x - d.x, z.z - d.z) < 30)) zn = &z;
+    d.act = [this, zn]() { fly(zn); };
+    out.push_back(d);
+  }
+  std::vector<std::pair<double, const DropZone*>> races;
+  for (const DropZone& z : zones_) if (z.race) races.push_back({std::hypot(z.x - home.x, z.z - home.z) / 1000, &z});
+  std::sort(races.begin(), races.end());
+  for (auto& [km, z] : races) {
+    TrailMap::TravelDest d;
+    char b[160];
+    std::snprintf(b, sizeof b, "Race course \xC2\xB7 %s \xC2\xB7 %.1f km \xC2\xB7 %d min", z->label.c_str(), km, std::max(1, int(std::lround(eta(km)))));
+    d.name = z->name; d.meta = b; d.tag = "RACE"; d.x = z->x; d.z = z->z; d.id = int(z - zones_.data()) + 1000;
+    d.shortMoney = broke; d.disabled = broke;
+    std::snprintf(b, sizeof b, "%.1f", km);
+    d.plan = {{"DISTANCE", b, "KM"}, {"FLIGHT", std::to_string(std::max(1, int(std::lround(eta(km))))), "MIN"}};
+    d.act = [this, z]() { fly(z); };
+    out.push_back(std::move(d));
+  }
+  if (hasFree) { freeD.act = [this]() { fly(nullptr); }; out.push_back(std::move(freeD)); }
+  T.dests = std::move(out);
+}
+
 void Heli::openDialog() {
   if (!c_.menus) return;
+  if (c_.player->hasSkis && openChart) { openChart(); return; }
   Dialog d;
   d.kicker = "HELI-SKI BASE";
   d.title = "Heli-Ski";
@@ -248,6 +299,7 @@ void Heli::board() {
   p.view = Player::View::Third;
   updateSeat();
   p.sitOn(seatPos_, seatFwd_);
+  loadRack();
   state = State::Flying;
   away_ = false;
   landedT_ = 0;
@@ -303,11 +355,15 @@ void Heli::jumpOut() {
   if (onPad) {
     // stepped out on the helipad: skis back on your shoulder, the rotor winds down
     p.setSkisOn(false);
+    rackOn_ = false;
     state = State::Parked;
     c_.flash("Thanks for flying \xC2\xB7 see you on the next heli drop", 0);
   } else {
-    // onto the snow, skis on, ready to go: you stand still until you push off
-    p.parked = true; p.vel = dvec3(0);
+    // a drop from the skid onto the snow, skis on, ready to go: you stand still after the landing until you push off
+    double gy = c_.world->groundHeight(door.x, door.z, door.y + 1), drop = std::max(0.0, f.pos.y - f.fr.cgH - gy);
+    if (drop > 0.35 && p.mode == PlayerMode::Ski) { p.dropFrom(gy + drop); parkSkier_ = true; }
+    else { p.parked = true; p.vel = dvec3(0); }
+    rackOn_ = false;
     plan_ = nullptr;   // (the trip is over: it flies home)
     state = State::Auto;
     pilot.home(home, 1.6);
@@ -335,6 +391,7 @@ void Heli::getOut() {
   p.standUp(x, z, heading);
   if (!flat) { p.parked = true; p.vel = dvec3(0); }
   state = State::Parked;
+  rackOn_ = false;
   away_ = true;
   awayT_ = 0;
   f.hold = 0;
@@ -354,6 +411,7 @@ void Heli::abort() {
     p.standUp(x, z, std::atan2(home.x - x, home.z - z));
   }
   state = State::Parked;
+  rackOn_ = false;
   away_ = false;
   plan_ = nullptr;
   flight.hold = 0;
@@ -445,12 +503,65 @@ void Heli::update(double dt, bool fly) {
     rescue.after(dt, fly && c_.input && c_.input->down(Action::Jump));
   } else { streamPos = p.pos; f.hold = 0; }
 
+  // after the drop from the skid: once on the snow, stand still until you push off
+  if (parkSkier_) {
+    if (p.mode != PlayerMode::Ski) parkSkier_ = false;
+    else if (!p.air) { p.parked = true; p.vel = dvec3(0); parkSkier_ = false; }
+  }
   if (handoff_ > 0) handoff_ = std::max(0.0, handoff_ - dt);
 
   updateWash(dt);
+  updateSmoke(dt);
+  lampOn_ += ((rpm > 0.6 && !f.landed ? 1 : 0) - lampOn_) * (1 - std::exp(-dt * 6));
   // ---- rotors: spin (model.js update: the main rotor clockwise seen from above)
   angle_ = std::fmod(angle_ - rpm * 26 * dt, TAU);
   tailAngle_ = std::fmod(tailAngle_ + rpm * 120 * dt, TAU);
+}
+
+// fx.js SmokeFlare: red smoke rising from a flare in the snow on your drop zone and drifting downwind (a beacon you
+// can spot from far away): a thin column at the flare spreading into a wide, faint plume
+void Heli::updateSmoke(double dt) {
+  const DropZone* zone = active() ? targetZone(0) : nullptr;
+  flareOn_ = zone && std::hypot(zone->x - flight.pos.x, zone->z - flight.pos.z) < 4500;
+  if (flareOn_) {
+    if (smoke_.empty()) smoke_.resize(80);
+    flareAt_ = dvec3(zone->x, snow(zone->x, zone->z), zone->z);
+    smokeAcc_ += dt * 6.5;
+    while (smokeAcc_ >= 1) {
+      smokeAcc_ -= 1;
+      Puff& p = smoke_[smokeNext_];
+      smokeNext_ = (smokeNext_ + 1) % smoke_.size();
+      p.p = flareAt_ + dvec3((rnd() - 0.5) * 0.4, 0.3, (rnd() - 0.5) * 0.4);
+      p.v = dvec3(0, 2.8, 0);
+      p.s0 = 0.8 + rnd() * 0.4; p.s1 = 10 + rnd() * 5; p.life = 9 + rnd() * 4; p.age = 0;
+    }
+  }
+  // (the pad's breeze: pad.js update, its steady part)
+  const dvec3 wind(2.2, 0, 1.2);
+  const double kd = std::exp(-dt * 0.25), kr = std::exp(-dt * 0.1);
+  for (Puff& p : smoke_) {
+    if ((p.age += dt) > p.life) continue;
+    double f = p.age / p.life;
+    p.v.x = p.v.x * kd + wind.x * (1 - kd) * f; p.v.z = p.v.z * kd + wind.z * (1 - kd) * f; p.v.y *= kr;
+    p.p += p.v * dt;
+  }
+}
+
+// model.js loadRack: your own skis and poles in the side basket while you ride
+void Heli::loadRack() {
+  rackOn_ = false;
+  if (!assets_ || !c_.player->hasSkis) return;
+  const SkiDef* sk = skiById(c_.save->skis);
+  gear_ = rigGear(*assets_, sk ? sk->model : "ski_rental", true);
+  rackOn_ = gear_ && gear_->ski;
+}
+
+void Heli::debugPlace(double x, double z, double agl, double yaw) {
+  flight.place(x, z, yaw, groundFn_);
+  flight.landed = false;
+  flight.pos.y = ground(x, z) + flight.fr.cgH + agl;
+  flight.updateQuat();
+  rpm = 1; spun_ = true;
 }
 
 // heli/collide.js: soft collisions while it flies (you or its pilot): trees, buildings / lift stations and towers /
@@ -531,6 +642,29 @@ double Heli::collide(double dt) {
       // (its own cabin / tail colliders from the moment before it lifted off)
       if (c.r > 0 && (std::hypot(c.x - (p.x + fx * 0.9), c.z - (p.z + fz * 0.9)) < 0.8 || std::hypot(c.x - (p.x - fx * 4.6), c.z - (p.z - fz * 4.6)) < 0.8)) continue;
       one(c, true);
+    }
+  }
+  // lift towers and haul ropes (both directions)
+  if (c_.lifts) for (const LiftLine& l : c_.lifts->lines()) {
+    double bx = p.x - l.B.x, bz = p.z - l.B.z;
+    double u = bx * l.dir.x + bz * l.dir.y;
+    if (u < -8 || u > l.L + 8) continue;
+    double lat = bx * l.sideV.x + bz * l.sideV.y, side = l.cfg.side;
+    if (std::fabs(lat) > side + ROTOR_R + 2) continue;
+    for (const dvec2& tw : l.supports) {
+      double tx = l.B.x + l.dir.x * tw.x, tz = l.B.z + l.dir.y * tw.x;
+      vertical(tx, tz, ground(tx, tz) - 1, tw.y + 1.5, 0.9, 0.9);
+    }
+    if (u < 0 || u > l.L) continue;
+    // the ropes: horizontal lines across the helicopter's path (pushed sideways, or up / down when that is less)
+    for (int sd = -1; sd <= 1; sd += 2) {
+      double cy = l.cableAt(u, sd).y, cl = sd * side;
+      for (const auto& q : parts) {
+        double dl = lat - cl, over = q[2] - std::fabs(dl), dy = q[3] - cy, overY = (q[2] == ROTOR_R ? 0.45 : 1.2) - std::fabs(dy);
+        if (over <= 0 || overY <= 0) continue;
+        if (overY < over) { acc.y += (dy < 0 ? -1 : 1) * overY; n++; }
+        else { double s = dl < 0 ? -1 : 1; acc.x += l.sideV.x * s * over; acc.z += l.sideV.y * s * over; n++; }
+      }
     }
   }
   if (!n) return 0;
@@ -752,8 +886,9 @@ void Heli::draw(Renderer& r, const Camera& camera) {
   if (!ok_) return;
   const dvec3 camP = camera.pos;
   // the downwash's puffs: soft round sprites facing the camera, growing and thinning out
+  bool anyPuff = false;
+  puffDraw_.begin();
   if (!puffs_.empty() && puffModel_[0] && c_.dev) {
-    puffDraw_.begin();
     bool any = false;
     for (const Puff& p : puffs_) {
       if (p.age > p.life) continue;
@@ -770,7 +905,30 @@ void Heli::draw(Renderer& r, const Camera& camera) {
       puffDraw_.add(puffModel_[std::clamp(b, 0, 3)].get(), M, 0);
       any = true;
     }
-    if (any) puffDraw_.submit(r, *c_.dev, camP);
+    if (any) anyPuff = true;
+  }
+  // the drop zone's red smoke and the flare's flickering glow on the snow
+  if (!smoke_.empty() && smokeModel_[0] && c_.dev) {
+    bool any = false;
+    for (const Puff& p : smoke_) {
+      if (p.age > p.life) continue;
+      double fl = p.age / p.life, sz = p.s0 + (p.s1 - p.s0) * (1 - (1 - fl) * (1 - fl));
+      double al = std::min(1.0, p.age * 5) * (1 - fl) * (1 - fl) * smooth(2, 10, glm::length(p.p - camP));
+      if (al < 0.04) continue;
+      glm::dmat4 M(1);
+      M[0] = glm::dvec4(dvec3(camera.basis[0]) * sz, 0);
+      M[1] = glm::dvec4(dvec3(camera.basis[1]) * sz, 0);
+      M[2] = glm::dvec4(dvec3(camera.basis[2]) * sz, 0);
+      M[3] = glm::dvec4(p.p, 1);
+      puffDraw_.add(smokeModel_[std::clamp(int(al * 4), 0, 3)].get(), M, 0);
+      any = true;
+    }
+    if (any) anyPuff = true;
+  }
+  if (anyPuff) puffDraw_.submit(r, *c_.dev, camP);
+  if (flareOn_ && c_.shapes) {
+    double k = 5 + std::sin(time * 23) * 1.2 + std::sin(time * 37 + 1) * 0.8;
+    c_.shapes->sphere(r, flareAt_ + dvec3(0, 0.25, 0), 0.22, vec4(1.0f, 0.32f, 0.12f, 1), float(std::round(k)));
   }
   rescue.draw(r, camP);
   if (state == State::Rescue && rescue.gone) return;   // (gone after the hand-over to the ambulance)
@@ -805,6 +963,34 @@ void Heli::draw(Renderer& r, const Camera& camera) {
   if (parts_.tailDisc && rpm > 0.12) {
     for (Material& m : parts_.tailDisc->materials) { m.baseColor.w = float(0.7 * smooth(0.15, 0.55, rpm)); m.doubleSided = true; }
     r.submitModel(*parts_.tailDisc, f.pos, A * glm::translate(mat4(1), tailHub_ + vec3(float(tailDiscX_), 0, 0)) * glm::rotate(mat4(1), float(tailAngle_), vec3(1, 0, 0)), nullptr, false);
+  }
+  // ---- the landing light (model.js updateLamp): on at night whenever it flies; the beam under the nose (LAMP_TILT
+  // below it), marched to the snow, and its pool there (a spot light on the snow)
+  {
+    const double night = c_.night;
+    const double lit = lampOn_ * night;
+    if (lit > 0.02 && c_.shapes) {
+      const double LAMP_TILT = 0.62;
+      dvec3 lamp = f.world(anchorLamp), dir = f.quat * dvec3(0, -std::sin(LAMP_TILT), std::cos(LAMP_TILT));
+      double far = 160, len = far;
+      for (double s = 2; s <= far; s += s < 30 ? 2 : 5) { dvec3 q = lamp + dir * s; if (q.y <= ground(q.x, q.z)) { len = s; break; } }
+      c_.shapes->sphere(r, lamp, 0.07, vec4(1, 0.93f, 0.8f, 1), 9);
+      c_.shapes->beam(r, lamp, lamp + dir * len, len * std::tan(0.3), vec4(1.0f, 0.94f, 0.82f, float(std::round(lit * (0.05 + 0.1 * c_.snowing) * std::min(1.0, 25 / len) * 100) / 100 + 0.01)), 0.05f);
+      PointLight L;
+      L.pos = lamp; L.dir = vec3(dir);
+      L.color = vec3(1.0f, 0.93f, 0.8f) * float(lit * 1.25 * clamp(len * len * 1.5, 300.0, 6000.0));   // (the pool as bright from 40 m up as from 10)
+      L.range = float(len * 1.35 + 12);
+      L.cosOuter = float(std::cos(0.36)); L.cosInner = float(std::cos(0.08));
+      r.addLight(L);
+    }
+  }
+  // ---- your skis and poles riding in the basket
+  if (rackOn_ && gear_ && (state == State::Flying || (state == State::Rescue && (rescue.inCabin || rescue.attached)))) {
+    const mat4 B = R * glm::translate(mat4(1), vec3(anchorBasket) + vec3(0, -0.1f, 0));
+    for (int s = -1; s <= 1; s += 2) {
+      r.submitModel(*gear_->ski, f.pos, B * glm::translate(mat4(1), vec3(s * 0.075f, 0.018f, 0)) * glm::rotate(mat4(1), s * 0.05f, vec3(0, 0, 1)) * mat4(gear_->skiFit), nullptr, true);
+      if (gear_->pole) r.submitModel(*gear_->pole, f.pos, B * glm::translate(mat4(1), vec3(s * 0.06f, 0.08f, -0.62f)) * glm::rotate(mat4(1), float(-PI / 2), vec3(1, 0, 0)) * mat4(gear_->poleFit), nullptr, true);
+    }
   }
   // lamps: nav lights steady, beacons pulse, strobes double-flash (model.js update)
   if (rpm > 0.05 && c_.shapes && glm::length(f.pos - camP) < 1500) {

@@ -22,6 +22,7 @@
 //                village's people: thrown along your line, they lie a while and get up, a fine ($12 per km/h)
 #pragma once
 #include "game/interiors.h"
+#include "game/window_view.h"
 #include "game/play.h"
 #include "game/vehicles.h"
 #include <memory>
@@ -37,7 +38,7 @@ class Interiors;
 
 class Police {
 public:
-  Police(PlayCtx& c, Interiors& rooms);
+  Police(PlayCtx& c, Interiors& rooms, WindowView& win);
   void load(AssetManager& assets);
   // ---- triggers
   void callFor(const std::string& why, double kmh);          // a hit with your car at kmh closing speed
@@ -63,6 +64,12 @@ public:
   // ---- the prison
   void jail(double seconds, const std::string& reason);
   bool jailed() const { return jailLeft_ > 0; }
+  /// (the view this frame: what you look at inside the station)
+  void setView(const dvec3& eye, const vec3& dir) { camPos_ = eye; camDir_ = dir; }
+  /// going in (the fade, the windows' photographs): you stand still
+  bool busy() const { return entering_; }
+  /// (tests) in as a visitor
+  void debugVisit() { if (!rooms_.inside() && !entering_) enterStation(false); }
   double jailLeft() const { return jailLeft_; }
   std::string objective() const;
   // ---- vehicle hits (vehiclehits.js) and people hits (peoplehits.js)
@@ -103,6 +110,12 @@ private:
   void openFine();
   PlayCtx& c_;
   Interiors& rooms_;
+  WindowView& win_;
+  void enterStation(bool jailed);   // in behind the fade (the windows photographed on the way)
+  std::shared_ptr<Model> outside_;  // the station outdoors as prisonoutside.js builds it (exported)
+  bool entering_ = false;
+  dvec3 camPos_{0};
+  vec3 camDir_{0, 0, 1};
   std::shared_ptr<Model> car_, heliModel_, station_;
   mat4 carFit_{1}, heliFit_{1}, stationFit_{1};
   std::vector<Unit> units_;

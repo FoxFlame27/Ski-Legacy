@@ -849,8 +849,9 @@ world ready in 15.29 s (the trail map's relief builds on the worker threads mean
   preset needs a restart; music volume, bloom, camera shake and screen effects are stored but have nothing to drive yet
   *(Phase 7: all four drive something now)*;
   no virtual mouse.
-- **Shops**: one card dialog instead of the walk-in ski shop and the outfit shop's 3D podium; outfits are bought and
-  stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet; no kits
+- **Shops**: ~~one card dialog instead of the walk-in ski shop and the outfit shop's 3D podium~~ *(the walk-in shop,
+  the podium and the kits: see "The rooms, inside and outside, as the web game")*; outfits are bought and
+  stored but not yet applied to the skier's materials; the skis' speed / grip don't change the physics yet
   *(Phase 7: outfits shown, ski stats in the physics)*.
 - **Cars**: the configurator has no interior step (trims); the tow trucks stand in their bays but do not drive out
   driving (the car reappears), the impound is a fee when it is towed rather than a yard you pay at.
@@ -955,8 +956,9 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
   seen from above at 26 rad/s x rpm, the tail rotor about its own axis at 120 rad/s x rpm, the blades drooping at rest and
   fading into the blur discs as it spools up (no crisp blade shadows above 45 %), nav lights, beacons and strobes, the
   downwash's powder cloud close to the snow.
-- *Heli-ski*: E on the pad or at the hut's door opens the flight planner (a card: the five drop zones by distance, the
-  race courses, a free flight; $1,500, refused without skis or money); you sit in the pilot's seat; W / S speed, A / D
+- *Heli-ski*: E on the pad or at the hut's door opens the flight planner (ui/travel.js's chart, `TrailMap::heliTravel`: the
+  drop zones by distance, the race courses' landing spots, a free flight; $1,500; without skis a notice, short of money
+  FLY refuses); you sit in the pilot's seat; W / S speed, A / D
   turn, Space climbs, Shift sinks, the mouse looks round the chase camera; the turbine spools up (~5 s), the ground
   cushion sets it down; "Land here" / "Too steep to land" / "Trees below" / "Lift line below" / "Too close to buildings"
   from the spot below (it holds a hover over what it may not land on); E gets you out beside the door (landed) or jumps
@@ -981,7 +983,9 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
 - Debug runs (with `--autotest --png out.png`, a screenshot per stage and the checks logged, `[helitest] PASS`):
   `SKI_LEGACY_DEBUG=rescuetest` (a wipeout on the mountain, the landing, the flight, the ambulance, the ward, out of the
   doors; `SKI_LEGACY_SPOT=493,-393`: the wipeout on a steep slope instead, so it hovers and winches you up), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
-  landing, getting out); with `,fadetest` added the real fades run (the windows are photographed behind them).
+  landing, getting out), `helicheck` (no skis / no money at the desk, the chart with a race course, the drop zone's
+  smoke, the skis in the basket, jumping out of the hover with the drop, the pilot flying home, leaving it 650 m behind,
+  calling it back, both watchdogs, a visitor's chair, leaving mid-rescue and coming back); `--hour 22` for the night; with `,fadetest` added the real fades run (the windows are photographed behind them).
 
 **Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a
 door: buy ($50,000, one each, `save.chalet` in the web shape), look inside, or go into yours. The interior: chaletplan.js's
@@ -1069,15 +1073,16 @@ world ready in 21.61 s ...
 - **Police**: no roadblocks or spike strips, no PIT / T-bone choreography beyond aiming at the rear quarter, no radio
   road names (compass only), no siren audio (Phase 7), no chalet raids, no slow motion; patrol cars don't brake for the
   bends or avoid obstacles off the roads.
-- **Interiors** are boxes and the game's furniture GLBs at a quiet spot (not chaletroom.js / prison.js's modelled rooms
-  with their windows onto the real world, LivePortal; the medical centre is the web game's own room); only the chalet's
-  ground floor; placed lamps glow but don't light the room (no point lights yet).
-- **Helicopter / rescue**: the flight planner is a card list (not ui/travel.js's chart); no soft bumps off trees, roofs
-  and lift ropes while you fly (heli/collide.js: the hover hold over them and the terrain floor are in), no red smoke
-  flare on the drop zone, no landing light pool at night, your skis are not shown in the basket, jumping out puts you on
-  the snow at once (no drop); the ward's windows are photographs taken as you go in, not a live view (no parallax); the
-  wall clocks stand; the ambulance looks round at the cars and what is solid near it (no speeds of what it meets);
-  multiplayer: other players' rescues, patients and visitors are not shown, a rescue is not carried on after a rejoin.
+- **Interiors**: the ski shop, the chalet (both floors) and the police station are the web game's own rooms now, with
+  their windows onto the world (see "The rooms, inside and outside, as the web game"); the build mode furnishes the
+  chalet's ground floor only.
+- **Helicopter / rescue**: the ward's windows are photographs taken as you go in, not a live view (no parallax; the
+  interiors draw no world outside: they follow the daylight until the next visit takes new ones); the landing light's
+  pool is a spot light on the snow and a faint cone (not model.js's draped decal); the drop zone's smoke drifts on a
+  steady breeze (the windsock stands); the wall clocks stand; the ambulance looks round at the cars and what is solid
+  near it (no speeds of what it meets); multiplayer: other players' rescues (net/rescue.js `veh` rows), patients and
+  visitors are not shown or sent; a rescue is carried on after you leave and come back in single player (the save's
+  `rescue`), not from the server's profile.
 - **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people.
   The townsfolk are fans.js's crowd people (above), but the race spectators (crowds.js: cheering, flags, cowbells) are
   not; nor townsfolk.js's people at the other lift bases / bus stops; a villager knocked over near you gets the rigid
@@ -1632,6 +1637,67 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 
 ---
 
+## The rooms, inside and outside, as the web game (Nov 2026)
+
+The web game builds every room you walk into as a scene of its own; `native/tools/export_rooms.mjs` runs those very
+modules in Node and writes what they build into `play.json` (`rooms`): the scene as one model (the canvas textures
+replayed, in the platform's Georgia where the web game paints in Georgia, letter spacing included), the collision the
+JS walks on, the things you aim at, the lights with their roles, the glass, and where the room stands in the world.
+`game/interiors*` draws and walks them; `game/window_view` gives the glass its view.
+
+- **The windows' view** (`game/window_view`): the web game renders the world live into the glass from the matching
+  spot outdoors (liveportal.js). Here the world is photographed as you go in, behind the fade's dark moment: one frame
+  per wall with windows, taken from inside the house where it stands (its own building left out: the near plane, or the
+  house not drawn for those frames). The panes' texture coordinates are then set every frame from where your eyes are
+  (the ray through the glass meets the scene on a plane 12 - 14 m beyond it): walk to a window and the view follows.
+  The photographs are of the moment you came in (people and cars in them stand still).
+- **The ski shop** (`game/shoproom`, `game/outfitshop`; interior.js + main.js enterShop / exitShop / shopAction +
+  ui/outfitshop.js): E within 3.2 m of the spot in front of the door (village.js), out again 2.2 m in front of it; the
+  eye 1.62 m, 70 degrees, the crosshair; your own skier on the OUTFITS podium, dressed as equipped; **the outfit shop**
+  with the camera swung round to the podium (outfitCameraPose), every row tried on the skier, a drag (the right stick)
+  turns it, JACKETS / TROUSERS / HELMETS / GOGGLES / **KITS** (the eight kits, their pieces wearable once a kit is yours,
+  the notes about goggles / second colours from the model's zones), buying and wearing in the web save's shape, the
+  server's sale in multiplayer; **the clerk**: the conversation look (the portrait across the counter, the cinema bars,
+  the name on a brush stroke, the line, THANKS), the clerk turning to you; the daylight following the sun, the
+  lanterns brighter after dark, the stove's flicker, the wall clock keeping the game's time. Outside: the boards
+  (SKI SHOP, SKI RENTAL SHOP and every other board painted in Georgia) in Georgia.
+- **The chalets** (`game/interiors_chalet.cpp`, `game/chalets`; chaletroom.js + chalets.js): the house with **both
+  floors**: the walls, floors and beamed ceilings, the open stair (a floor of its own while you are on it), the
+  stairwell's rail, the roof's slope upstairs, the bathrooms' ware, the built-in lamps (the pool of six warm lights at
+  the lamps nearest you, the lamps you bought among them), the fill by the hour; the **hinged doors** (E, or walking
+  into one, opens it away from you; the leaf is solid wherever it stands; the front door: "Leave the chalet"); the HUD
+  names the room ("Chalet 1 · Living room & kitchen"). The sale as chalets.js: "Chalet 3 for sale · $50,000", the
+  card's text, one viewing per chalet (`save.chaletViewed`), "Go in · Chalet 3 (your chalet)", out in front of the
+  steps. Outdoors the village as chalets.js builds it: picket fences, sheds, benches, snowmen, spruces, the PRIVAT
+  parking bays and signs, house numbers, street lamps (their light pools at night), the windows lit from dusk, the
+  houses' and fences' colliders.
+- **The police station** (`game/interiors_prison.cpp`, `game/police`; prison.js + prisonoutside.js): the room's own
+  frame, bounds and boxes (a prisoner between the cell's walls and the bars, a visitor in the corridor and the office),
+  "Cell door · locked" / "Locked · 0:41 to go", "Leave the prison" facing the front door, the guard at his desk
+  watching whoever comes near, "In prison · 0:45 · Speeding", "Released" at the door's spot; "Visit the prison"
+  within 2.6 m of it. Outdoors the POLIZEI house as prisonoutside.js builds it (stone and larch, the board, the
+  lantern, the banners, the potted spruces, the parking bays and signs, the roadside board), its colliders, the patrol
+  car in the first bay.
+- **The Werkstatt** (`game/werkstatt`; werkstatt.js): the garage as built there; your car in the yellow box and
+  stopped (or you at the workbench with it standing there): "Repair · $500 · damage 37%", E pays, the car is held 4 s
+  while the card's bar runs (bottom left: WERKSTATT · GARAGE, "Drive into the yellow box", "Stop the car",
+  "Repairing… 60%"), then behind a fade the damage is gone.
+- **The mountain huts** and **the ticket booth**: no rooms in the web game either; E within 3.5 m of the spot in front
+  of a hut's door ("Mountain hut · hot chocolate $8", the MOUNTAIN HUT card's text), within 2.6 m of the booth's counter
+  ("Talk to the ticket seller").
+
+Debug views (with `--autotest --png out.png`): `SKI_LEGACY_DEBUG=roomshop` (the shop from the web game's reference
+spots, the conversation, the outfit shop's tabs: `out_in_<name>.png`, `out_talk.png`, `out_outfit_<tab>.png`),
+`roomchalet` (`out_ch_<name>.png`: both floors), `roomprison` (`out_po_<name>.png`: visiting, then jailed and
+released), `werktest` (a damaged car of yours in the Werkstatt's box, you at the workbench: the prompt, E, the repair
+checked; then a hut's door and the ticket counter: `out_werk_<stage>.png`, `out_hut_prompt.png`).
+
+Known gaps: the windows' views are photographs (above); the ticket seller and the townsfolk talk in the card dialog,
+not talk.js's conversation camera; the chalet's build mode still works the ground floor only; no police raid into a
+chalet, no 30 s wait at a chalet's door during a chase; the prison's jail board (the lobby's top 3) shows the room's
+first state; the station's and the Werkstatt's boards, lamps and windows come on with the night (their strengths by
+day and at night exported per material), but the blue police lamp does not pulse.
+
 ## Status: the native port against the JavaScript game
 
 | area | JS game (`src/`) | native (`native/`) |
@@ -1647,12 +1713,12 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 | ski bus, Wolkenspitzbahn, Legacy Express | bus.js, railway.js, express.js | **ported** (timetables, riding, x8 / x6 / x10, the blue Express livery, horns, the rail PA) |
 | menus, HUD, settings, controls | menu.js, hud.js, settings.js, bindings.js | **ported** (all rows incl. rebinding, glyphs for Xbox / PlayStation / Switch, Bloom / Announcer added) |
 | trail map | trailmap.js | **ported** (relief, pistes, lifts, roads, rails, markers, waypoint) |
-| economy, shops, saves | economy.js, outfitshop.js | **ported** (the same save JSON); shops are card dialogs, not walk-in rooms |
+| economy, shops, saves | economy.js, outfitshop.js, interior.js | **ported** (the same save JSON); the walk-in ski shop with the outfit podium, the kits, the clerk's conversation |
 | races, records, prizes | modes/race, freeworld.js | **ported** (11 courses, bus races, stand, AI field, announcer); no broadcast presentation, no ghosts |
 | jobs, taxi | jobs/*.js, taxi.js | **ported** (simplified dialogue, no lost & found) |
-| police, prison, impound | police.js, prison.js, impound.js | **ported** (chases, heli, arrest, jail, sirens); no roadblocks / spikes / raids |
+| police, prison, impound | police.js, prison.js, prisonoutside.js, impound.js | **ported** (chases, heli, arrest, jail, sirens; the station inside and outside as built by the web game); no roadblocks / spikes / raids |
 | helicopter (heli-ski), rescue, ambulance, hospital ward | heli.js, heli/*.js, hospitalroom.js | **ported** (the flight model, pad, rotors, landing, the ward as built by the web game; a card flight planner, photographed window views) |
-| chalets, build mode | chalets.js, build/* | **ported** (ground floor, catalogue, virtual mouse) |
+| chalets, build mode | chalets.js, chaletroom.js, build/* | **ported** (the house with both floors, its doors and lamps, the village's gardens and bays; the catalogue, virtual mouse; build mode on the ground floor) |
 | people, crowds | townsfolk.js, peoplesim.js, fans.js, crowds.js | **ported** (the village's townsfolk as fans.js's crowd people; no spectators' cheering, no lift-base people) |
 | snowmobiles | snowmobile.js | **ported** |
 | weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools; Phase 8: the full sky shader, stars / moon, IBL, a ray-marched cloud layer + the sea of clouds, cloud shadows); no cumulus impostor banks round the peaks, no backdrop ranges |

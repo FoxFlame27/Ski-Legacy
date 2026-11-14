@@ -216,6 +216,7 @@ void Canvas2D::font(const std::string& f) {
       if (j == std::string::npos) break;
       i = j + 1;
     }
+    if (serifOnly_ && st_.family == 2) st_.family = 0;
   }
 }
 const FontSet* Canvas2D::fontSet() const {
@@ -485,12 +486,12 @@ void Canvas2D::clearRect(float x, float y, float w, float h) {
   int ya = std::max(0, int(std::floor(std::min(a.y, b.y)))), yb = std::min(h_, int(std::ceil(std::max(a.y, b.y))));
   for (int yy = ya; yy < yb; yy++) for (int xx = xa; xx < xb; xx++) std::memset(&px_[(size_t(yy) * w_ + xx) * 4], 0, 4);
 }
-float Canvas2D::measureText(const std::string& t) const { const FontSet* fs = fontSet(); return fs ? fs->pick(st_.bold).width(t, st_.px) : t.size() * st_.px * 0.5f; }
+float Canvas2D::measureText(const std::string& t) const { const FontSet* fs = fontSet(); return fs ? fs->pick(st_.bold).width(t, st_.px) + st_.spacing * float(utf8(t).size()) : t.size() * st_.px * 0.5f; }
 void Canvas2D::fillText(const std::string& text, float x, float y) {
   const FontSet* fs = fontSet();
   if (!fs) return;
   const Font& f = fs->pick(st_.bold);
-  float px = st_.px, w = f.width(text, px);
+  float px = st_.px, w = f.width(text, px) + st_.spacing * float(utf8(text).size());   // (letter-spacing: after every letter, as the browser)
   if (st_.align == 1) x -= w / 2; else if (st_.align == 2) x -= w;
   float asc = f.ascent(px), desc = f.descent(px);
   if (st_.baseline == 1) y += (asc + desc) / 2; else if (st_.baseline == 2) y += asc; else if (st_.baseline == 3) y += desc; else if (st_.baseline == 4) y += asc * 0.8f;
@@ -500,7 +501,7 @@ void Canvas2D::fillText(const std::string& text, float x, float y) {
     std::vector<std::vector<vec2>> g;
     float adv = f.glyph(cp, px, g);
     for (auto& c : g) { for (auto& p : c) p = xf(x + pen + p.x, y + p.y); polys.push_back(std::move(c)); }
-    pen += adv;
+    pen += adv + st_.spacing;
   }
   fillPolys(polys, st_.fill);
 }

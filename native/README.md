@@ -801,12 +801,50 @@ your car left empty on a road or out on the snow (not in a car park, a lay-by or
 for 2 minutes is towed to the impound row of the Autohaus car park ($1,500, the wreck fee), locked until the next game day
 ("Impounded · available tomorrow"; `save.impound`). (Replaces Phase 4's 60 s / 250 m / $500.)
 
-**Rescue** (`game/rescue`, heli/rescue.js + ambulance.js + hospitalroom.js): instead of the fade, the rescue helicopter
-comes from its pad (from 1.5 km+ it starts on its way, 800 m out), cruises 45 m up, hovers 12 m over you and winches you
-up (2.6 + 4.2 s), flies you home (the chase camera, Space x4), the ambulance at the pad drives the Rettungsweg (the road
-roads.js planned for it) to the medical centre with its blue lights, the bill (rescue.js), and you come round in a bed of
-the ward (four beds, the Meshy hospital furniture): RECOVERING for 8 s, then E gets you up and out of the front doors; a
-watchdog (45 s without getting closer) sends you straight to the medical centre. E at its door visits the ward.
+**The helicopter, the rescue, the ambulance, the ward** (`game/heli`, `heli_flight`, `rescue`, `ambulance`,
+`hospital_ward`, `player/skier_rig_bed`: heli.js, heli/flight.js, model.js, pad.js, zones.js, hud.js, fx.js, rescue.js,
+ambulance.js, hospitalroom.js, ported one to one). `export_play.mjs` runs the game's own modules and writes what they
+build: the helipad (the deck with its painted H and its snowy rim, edge lights, the heli-ski hut and its sign, the mast,
+the windsock, its colliders and walkable deck), the helicopter's parts (the Meshy airframe with its static rotor head
+cut away by model.js, the mast, the ski basket, the main rotor's hub and blade, the tail rotor, the two blur discs with
+their painted textures), FRAME / ANCHORS, the drop zones and the race courses' landing spots, the ambulance's fit and
+its way to the medical centre (Ambulance.plan + setPath), and the medical centre inside as hospitalroom.js builds it
+(one mesh with its painted textures: floors, panelled walls, ceilings and beams, the windows' frames, curtains, sills
+and radiators, the glass doors, the bed-head units, boards and signs; the Meshy furniture as placed; the window / door
+panes; what the walker bumps into; the chairs; the mattress tops measured on the bed model).
+- *The flight model* is flight.js (Flight, HomePilot, autopilot and its terrain look-ahead): the same numbers and order
+  of operations, so the rescue lands on the same spot, at the same heading, as the web game's.
+- *The model*: the airframe at the flight's attitude (Euler YXZ: pitch, yaw, roll), the main rotor spinning clockwise
+  seen from above at 26 rad/s x rpm, the tail rotor about its own axis at 120 rad/s x rpm, the blades drooping at rest and
+  fading into the blur discs as it spools up (no crisp blade shadows above 45 %), nav lights, beacons and strobes, the
+  downwash's powder cloud close to the snow.
+- *Heli-ski*: E on the pad or at the hut's door opens the flight planner (a card: the five drop zones by distance, the
+  race courses, a free flight; $1,500, refused without skis or money); you sit in the pilot's seat; W / S speed, A / D
+  turn, Space climbs, Shift sinks, the mouse looks round the chase camera; the turbine spools up (~5 s), the ground
+  cushion sets it down; "Land here" / "Too steep to land" / "Trees below" / "Lift line below" / "Too close to buildings"
+  from the spot below (it holds a hover over what it may not land on); E gets you out beside the door (landed) or jumps
+  you out (hovering under 6 m over a slope too steep to land on); the landed helicopter waits, idling 25 s (E beside it
+  flies on, free), its pilot flies it home once you are 650 m away or from the pad's prompt; the flight panel (km/h,
+  height, climb arrow, the rotor bar while it spools up), its prompt, the controls card; the compass on the drop zone.
+- *The rescue* (the second wipeout, or a vehicle hit at 45+ km/h: free) is called at the crash: you stay lying where
+  you fell (the fall's own get-up waits). The helicopter flies in on its glide path, picks flat open snow within 33 m
+  (slope, trees, colliders, lift lines: pickSpot) and lands with its right door toward you, a fade and you are in the
+  passenger seat; in the trees or on a steep slope it hovers and winches you up. The shot from the snow beside you, then
+  the chase camera; the pad; the ambulance waiting beside it (blue and red light bars flashing) takes you along the
+  Rettungsweg with its own shot and chase camera, steering round what is in the way, to the medical centre's canopy;
+  the bill ($300 + $25 per earlier rescue, at most $1,000; a vehicle's fault: free). Hold Space: four times as fast.
+  Watchdogs (150 s to be picked up, 45 s without getting closer) take you straight to the medical centre.
+- *The ward*: you wake up in bed 2 behind the fade: the eyelids part, blink and open over 3.6 s (the web's keyframes),
+  a warm haze clears; your body lies flat on the mattress (bedArms: the arms by the side, the legs along the bed), the
+  view from the pillow (the mouse turns the head; the view key: from beside the bed); the RECOVERING card with its
+  clock (20 s), then FIT AGAIN and E gets you up; the visitors' chairs (E sits / stands), the way out through the glass
+  doors to the forecourt ("Get well soon"). E at the door outside visits. The windows and the glass doors show the
+  village: the web game renders it live through them (LivePortal); here it is photographed from the house's four sides
+  (and once more through the doors) in the dark moment of the fade as you go in, and each pane shows its part.
+- Debug runs (with `--autotest --png out.png`, a screenshot per stage and the checks logged, `[helitest] PASS`):
+  `SKI_LEGACY_DEBUG=rescuetest` (a wipeout on the mountain, the landing, the flight, the ambulance, the ward, out of the
+  doors), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
+  landing, getting out).
 
 **Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a
 door: buy ($50,000, one each, `save.chalet` in the web shape), look inside, or go into yours. The interior: chaletplan.js's
@@ -894,11 +932,15 @@ world ready in 21.61 s ...
 - **Police**: no roadblocks or spike strips, no PIT / T-bone choreography beyond aiming at the rear quarter, no radio
   road names (compass only), no siren audio (Phase 7), no chalet raids, no slow motion; patrol cars don't brake for the
   bends or avoid obstacles off the roads.
-- **Interiors** are boxes and the game's furniture GLBs at a quiet spot (not chaletroom.js / prison.js / hospitalroom.js's
-  modelled rooms with their windows onto the real world, LivePortal); only the chalet's ground floor; placed lamps glow but
-  don't light the room (no point lights yet); the hospital bed view is the standing first-person view.
-- **Rescue**: no landing on flat snow (always the winch), no rope physics; the ambulance follows the road's centre lane
-  without dodging.
+- **Interiors** are boxes and the game's furniture GLBs at a quiet spot (not chaletroom.js / prison.js's modelled rooms
+  with their windows onto the real world, LivePortal; the medical centre is the web game's own room); only the chalet's
+  ground floor; placed lamps glow but don't light the room (no point lights yet).
+- **Helicopter / rescue**: the flight planner is a card list (not ui/travel.js's chart); no soft bumps off trees, roofs
+  and lift ropes while you fly (heli/collide.js: the hover hold over them and the terrain floor are in), no red smoke
+  flare on the drop zone, no landing light pool at night, your skis are not shown in the basket, jumping out puts you on
+  the snow at once (no drop); the ward's windows are photographs taken as you go in, not a live view (no parallax); the
+  wall clocks stand; the ambulance looks round at the cars and what is solid near it (no speeds of what it meets);
+  multiplayer: other players' rescues, patients and visitors are not shown, a rescue is not carried on after a rejoin.
 - **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people.
   The townsfolk are fans.js's crowd people (above), but the race spectators (crowds.js: cheering, flags, cowbells) are
   not; nor townsfolk.js's people at the other lift bases / bus stops; a villager knocked over near you gets the rigid
@@ -906,8 +948,7 @@ world ready in 21.61 s ...
 - Snowmobiles are free to take (as snowmobile.js: no rental counter); the rider uses the seated rig, not skier.js's
   handlebar IK. (`-DSL_COPY_ASSETS=ON` lists every model the game loads since Phase 6.)
 - The trail map shows no races, jobs, chalets or the police yet.
-- Not ported yet: the player's helicopter (heli/*: flights, pads), snowcats and ploughs, snowmaking spray, flags, the
-  parkour mode, multiplayer bits of all of the above.
+- Not ported yet: snowcats and ploughs, snowmaking spray, flags, the parkour mode, multiplayer bits of all of the above.
 
 ---
 
@@ -1243,7 +1284,7 @@ takes a few seconds: an offline ASTC / BC step removes it); thermals in handheld
 ### Known gaps (Phase 7)
 - **Audio**: the Express's spoken station announcements are text-to-speech in the web game (speechSynthesis): only the
   gong plays here (the Wolkenspitzbahn's recorded lines do play); no HRTF / reverb beyond the horns' valley echo, no
-  doppler on the siren / rotor (a pitch factor is wired, fed 1); the helicopter you fly (not ported) has no sound; the
+  doppler on the siren / rotor (a pitch factor is wired, fed 1); the helicopter you fly sounds as the rescue's (the rotor loop; no load / speed layers); the
   studio ident's synthesized ice hit (`iceHit`) and the cold-room hum are not ported; the sledding / rail-scrape loops
   are simplified to impacts. The mixer runs on the platform's callback thread with a mutex (fine on desktop and with
   `nn::audio`'s renderer thread; a lock-free queue would be the polish).
@@ -1407,7 +1448,7 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 | races, records, prizes | modes/race, freeworld.js | **ported** (11 courses, bus races, stand, AI field, announcer); no broadcast presentation, no ghosts |
 | jobs, taxi | jobs/*.js, taxi.js | **ported** (simplified dialogue, no lost & found) |
 | police, prison, impound | police.js, prison.js, impound.js | **ported** (chases, heli, arrest, jail, sirens); no roadblocks / spikes / raids |
-| rescue, hospital | heli/rescue.js, ambulance.js, hospitalroom.js | **ported** (simplified rooms) |
+| helicopter (heli-ski), rescue, ambulance, hospital ward | heli.js, heli/*.js, hospitalroom.js | **ported** (the flight model, pad, rotors, landing, the ward as built by the web game; a card flight planner, photographed window views) |
 | chalets, build mode | chalets.js, build/* | **ported** (ground floor, catalogue, virtual mouse) |
 | people, crowds | townsfolk.js, peoplesim.js, fans.js, crowds.js | **ported** (the village's townsfolk as fans.js's crowd people; no spectators' cheering, no lift-base people) |
 | snowmobiles | snowmobile.js | **ported** |
@@ -1415,7 +1456,7 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 | snowmaking, flags, snowcats | snowmaking.js, flags.js, snowcats.js | **ported** (Phase 7; snowcats condensed: no grooming trail, no ploughs) |
 | audio | core/audio.js | **ported** (Phase 7: every recording, music, announcer, horns, 3D); the Express's text-to-speech PA lines are not spoken (gong only) |
 | multiplayer | net/*.js against server/ | **ported** (the unchanged server; no race queues, lift / bus shared timelines) |
-| player helicopter, parkour mode, terrain park, tricks | heli/*, modes/parkour, park.js, tricks.js | **not ported** |
+| parkour mode, terrain park, tricks | modes/parkour, park.js, tricks.js | **not ported** |
 | post: bloom, streaks, vignette, AO, sun shafts, glare | engine/post.js, sunglare.js | **ported** (Phase 8: mip-chain bloom, GTAO, shafts, glare, PBR Neutral / ACES + grade, MSAA + FXAA + sharpen) |
 
 ## Nintendo Switch porting checklist

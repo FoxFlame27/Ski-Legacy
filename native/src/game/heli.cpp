@@ -97,7 +97,7 @@ void Heli::load(AssetManager& assets, const HeliParts& parts) {
     for (int i = 0; i < 4; i++) {
       Material m;
       m.baseTex = tex;
-      m.baseColor = vec4(1, 1, 1, 0.62f * (i + 0.6f) / 4.f);
+      m.baseColor = vec4(1, 1, 1, 0.34f * (i + 0.6f) / 4.f);   // (lit by the sun here, so thinner than the web's unlit 0.62)
       m.emissive = vec3(0.10f); m.roughness = 1; m.metallic = 0; m.doubleSided = true;
       m.alpha = Material::Alpha::Blend;
       Geo g = shapeGeo({vec2(-0.5f, -0.5f), vec2(0.5f, -0.5f), vec2(0.5f, 0.5f), vec2(-0.5f, 0.5f)});
@@ -410,9 +410,13 @@ void Heli::update(double dt, bool fly) {
   else if (want < rpm) rpm = std::max(0.0, rpm - dt * (0.03 + 0.1 * rpm));
 
   if (state != State::Parked || !f.landed || rpm > 0) {
-    f.step(dt, c, groundFn_, rpm);
+    // you (or its own pilot) fly into a tree, a roof, a net: it bumps off softly, nothing breaks; then the hard terrain
+    // floor again (nothing of it ever goes into the hillside). Every step, every state.
+    const bool solid = flying || state == State::Auto || state == State::Rescue;
+    auto stepOnce = [&]() { f.step(dt, c, groundFn_, rpm); if (solid && collide(dt) > 0) f.clampTerrain(groundFn_); };
+    stepOnce();
     // hold SPACE during a rescue: it all runs four times as fast (the pilot steering every step, the same checks)
-    if (rfast) for (int k = 0; k < 3 && state == State::Rescue; k++) { c = rescue.controls(dt); f.step(dt, c, groundFn_, rpm); }
+    if (rfast) for (int k = 0; k < 3 && state == State::Rescue; k++) { c = rescue.controls(dt); stepOnce(); }
   }
   ctl_ = c;
 
@@ -447,6 +451,102 @@ void Heli::update(double dt, bool fly) {
   // ---- rotors: spin (model.js update: the main rotor clockwise seen from above)
   angle_ = std::fmod(angle_ - rpm * 26 * dt, TAU);
   tailAngle_ = std::fmod(tailAngle_ + rpm * 120 * dt, TAU);
+}
+
+// heli/collide.js: soft collisions while it flies (you or its pilot): trees, buildings / lift stations and towers /
+// nets / posts (the colliders, each given a height), cars. Nothing breaks: it is pushed back out a little at a time,
+// its speed into the obstacle is taken away (a small bounce) and the airspeed you asked for eases off while you keep
+// pushing against it. (The terrain is the flight model's job.) Returns 0 (clear) .. 1 (pushed hard this frame).
+double Heli::collide(double dt) {
+  HeliFlight& f = flight;
+  if (f.landed || dt <= 0 || f.agl > 60) return 0;
+  constexpr double ROTOR_R = 5.1, ROTOR_UP = 2.2, BODY_R = 2.0, BODY_UP = 1.3, TAIL_R = 1.0, TAIL_BACK = 4.6;
+  const dvec3 p = f.pos;
+  const double fx = std::sin(f.yaw), fz = std::cos(f.yaw);
+  // the parts tested against each obstacle: x, z, radius, y
+  const double parts[4][4] = {{p.x, p.z, ROTOR_R, p.y + ROTOR_UP}, {p.x, p.z, BODY_R, p.y + BODY_UP}, {p.x, p.z, BODY_R, p.y - f.fr.cgH + 0.2}, {p.x - fx * TAIL_BACK, p.z - fz * TAIL_BACK, TAIL_R, p.y + 0.6}};
+  dvec3 acc(0);
+  int n = 0;
+  // push from a vertical obstacle at (ox, oz), from y0 (radius r0) up to y1 (radius r1)
+  auto vertical = [&](double ox, double oz, double y0, double y1, double r0, double r1) {
+    for (const auto& q : parts) {
+      if (q[3] < y0 || q[3] > y1) continue;
+      double r = r0 + ((r1 - r0) * (q[3] - y0)) / std::max(0.01, y1 - y0);
+      double dx = q[0] - ox, dz = q[1] - oz;
+      if (std::fabs(dx) > q[2] + r || std::fabs(dz) > q[2] + r) continue;
+      double d = std::hypot(dx, dz), over = q[2] + r - d;
+      if (over <= 0) continue;
+      acc.x += (d > 1e-3 ? dx / d : 1) * over; acc.z += (d > 1e-3 ? dz / d : 0) * over; n++;
+    }
+  };
+  const Scenery& S = *c_.scenery;
+  // trees: a trunk, then a cone of branches up to the top
+  if (f.agl < 40) {
+    const Tree* seen[4] = {nullptr, nullptr, nullptr, nullptr};
+    for (int i = 0; i < 4; i++) {
+      const Tree* t = S.treeAt(parts[i][0], parts[i][1], parts[i][2] + 1.5, true);
+      bool dup = false;
+      for (int j = 0; j < i; j++) if (seen[j] == t) dup = true;
+      seen[i] = t;
+      if (!t || dup) continue;
+      double crown = t->y + t->s * 0.12;
+      vertical(t->x, t->z, t->y, crown, t->trunk, t->trunk);
+      vertical(t->x, t->z, crown, t->y + t->s, t->s * 0.21, 0.25);
+    }
+  }
+  // buildings, stations, nets, posts, cars (not the helicopter's own parked colliders: it is flying)
+  if (f.agl < 30) {
+    auto one = [&](const Collider& c, bool car) {
+      double size = c.r >= 0 ? c.r : std::max(c.hw, c.hd), reach = size + ROTOR_R + 1;
+      if (std::fabs(p.x - c.x) > reach || std::fabs(p.z - c.z) > reach) return;
+      double g = ground(c.x, c.z);
+      // a collider's height above the snow (they only carry a footprint): nets, posts and signs are low, lift towers tall
+      double h = c.top < 1e29 ? c.top - g : c.soft ? 3.4 : size >= 4 ? std::min(18.0, 6 + size * 0.9) : size >= 1.5 ? 9 : size >= 0.95 ? 22 : 4.5;
+      if (car) h += 0.5;
+      if (c.r >= 0) { vertical(c.x, c.z, g - 1, g + h, c.r, c.r); return; }
+      // an oriented box from the snow up to its height; building colliders are drawn in from the walls (you walk
+      // under the eaves), so for the rotor they grow back out
+      double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
+      bool big = !c.soft && std::min(c.hw, c.hd) > 1.5;
+      double hw = big ? c.hw * 1.2 + 0.6 : c.hw, hd = big ? c.hd * 1.2 + 0.6 : c.hd;
+      for (const auto& q : parts) {
+        if (q[3] < g - 1 || q[3] > g + h) continue;
+        double lx = (q[0] - c.x) * cs - (q[1] - c.z) * sn, lz = (q[0] - c.x) * sn + (q[1] - c.z) * cs;
+        double ox = hw + q[2] - std::fabs(lx), oz = hd + q[2] - std::fabs(lz);
+        if (ox <= 0 || oz <= 0) continue;
+        double nlx = 0, nlz = 0;
+        if (ox < oz) nlx = lx < 0 ? -1 : 1; else nlz = lz < 0 ? -1 : 1;
+        double push = std::min(ox, oz), c2 = std::cos(c.rot), s2 = std::sin(c.rot);
+        acc.x += (nlx * c2 - nlz * s2) * push; acc.z += (nlx * s2 + nlz * c2) * push; n++;
+      }
+    };
+    const auto& cols = S.colliders();
+    std::vector<int> done;
+    for (int ox = -1; ox <= 1; ox++) for (int oz = -1; oz <= 1; oz++) {
+      const std::vector<int>* L = S.collidersNear(p.x + ox * 14.0, p.z + oz * 14.0);
+      if (!L) continue;
+      for (int i : *L) { if (std::find(done.begin(), done.end(), i) != done.end()) continue; done.push_back(i); one(cols[size_t(i)], false); }
+    }
+    for (const Collider& c : S.dynamic) {
+      // (its own cabin / tail colliders from the moment before it lifted off)
+      if (c.r > 0 && (std::hypot(c.x - (p.x + fx * 0.9), c.z - (p.z + fz * 0.9)) < 0.8 || std::hypot(c.x - (p.x - fx * 4.6), c.z - (p.z - fz * 4.6)) < 0.8)) continue;
+      one(c, true);
+    }
+  }
+  if (!n) return 0;
+  // push out softly (part of the overlap each frame), take away the speed into the obstacle (+ a small bounce)
+  double len = glm::length(acc);
+  if (len < 1e-9) return 0;
+  const double k = std::min(1.0, dt * 14), step = std::min(len * k, 1.2);
+  const dvec3 nrm = acc / len;
+  f.pos += nrm * step;
+  double vn = glm::dot(f.vel, nrm);
+  if (vn < 0) f.vel -= nrm * (vn * 1.25);
+  // still pushing the nose into it: the commanded airspeed eases off (you stop against it rather than grind)
+  double into = fx * nrm.x + fz * nrm.z;
+  if (into < -0.2 && f.u > 0) f.u *= std::exp(-dt * 7 * -into);
+  if (into > 0.2 && f.u < 0) f.u *= std::exp(-dt * 7 * into);
+  return std::min(1.0, len);
 }
 
 // ------------------------------------------------------------------ landing anywhere

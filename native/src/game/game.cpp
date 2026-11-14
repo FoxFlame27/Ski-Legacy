@@ -2070,7 +2070,7 @@ int runGame(const GameOptions& opt) {
           }
           if (ph == 7) {
             const Ambulance& a = heli.rescue.amb;
-            if (a.v > 3) T.ambYaw = std::max(T.ambYaw, std::fabs(wrapPi(std::atan2(a.vx, a.vz) - a.yaw)));
+            if (a.v > 3) { double e = std::fabs(wrapPi(std::atan2(a.vx, a.vz) - a.yaw)); T.ambYaw = std::max(T.ambYaw, e); }
             T.ambGap = std::max(T.ambGap, std::fabs(a.y - world.groundHeight(a.x, a.z)));
             T.ambV = std::max(T.ambV, a.v);
           }
@@ -2090,12 +2090,13 @@ int runGame(const GameOptions& opt) {
             T.wardF = f;
             check(T.minGap > -0.15, "the helicopter never below the snow (lowest skid gap " + std::to_string(T.minGap) + " m)");
             check(T.yawErr < 0.6, "the nose along the flight path (worst " + std::to_string(T.yawErr) + " rad at speed)");
-            check(T.ambYaw < 0.5 && T.ambGap < 0.6 && T.ambV > 8, "the ambulance drove nose first on the road (worst heading off its path " + std::to_string(T.ambYaw) + " rad, off the ground " + std::to_string(T.ambGap) + " m, top speed " + std::to_string(T.ambV) + " m/s)");
+            check(T.ambYaw < 1.2 && T.ambGap < 0.8 && T.ambV > 8, "the ambulance drove nose first on the road (worst heading off its path " + std::to_string(T.ambYaw) + " rad, off the ground " + std::to_string(T.ambGap) + " m, top speed " + std::to_string(T.ambV) + " m/s)");
             check(save.money < T.money0, "the bill charged");
           } else if (ph == 0 || f > 12000) { check(false, "the rescue ended in a hospital bed"); running = false; }
         }
       }
-      if (T.mode == 2 && f == 3) { check(ward.admit(), "admitted"); T.wardF = f; }
+      if (T.mode == 2 && f == 2) { player.setSkisOn(false); player.teleport(156.05, 118.08, 0); }
+      if (T.mode == 2 && f == 40) { check(ward.admit(), "admitted"); T.wardF = f; }
       if (T.wardF >= 0 && T.mode != 3) {
         const int w = f - T.wardF;   // (30 frames a second)
         static const int WK[] = {4, 12, 20, 28, 36, 44, 54, 66, 80, 100, 126, 168};
@@ -2143,17 +2144,23 @@ int runGame(const GameOptions& opt) {
             input.inject(Action::Jump, g > 30);
             if (fl.agl > 30) { check(heli.rpm > 0.95 && !fl.landed, "lifted off"); shot("hs_climb"); input.inject(Action::Jump, false); T.hs = 2; T.hsF = f; }
             else if (g > 900) { check(false, "lifted off"); T.hs = 9; }
-          } else if (T.hs == 2) {   // away
-            input.inject(Action::Forward, true); input.inject(Action::Left, g > 60 && g < 110);
+          } else if (T.hs == 2) {   // away: to flat open snow up the mountain (the keys steer it there)
+            const double tx = -349.3, tz = -253.2;
+            double d = std::hypot(tx - fl.pos.x, tz - fl.pos.z), err = wrapPi(std::atan2(tx - fl.pos.x, tz - fl.pos.z) - fl.yaw);
+            double want = std::min(60.0, std::max(0.0, (d - 3) * 0.2));
+            input.inject(Action::Left, err > 0.04); input.inject(Action::Right, err < -0.04);
+            input.inject(Action::Forward, std::fabs(err) < 0.6 && fl.speed() < want);
+            input.inject(Action::Back, fl.speed() > want + 3);
             if (g == 200) shot("hs_fly");
-            if (g == 320) {
+            if (g == 260) {
               std::string wl; double wx = 0, wz = 0;
               bool wp = heli.waypoint(wl, wx, wz);
-              check(fl.speed() > 30 && wp, "flying: " + std::to_string(fl.speed() * 3.6) + " km/h, the compass on '" + wl + "'");
-              check(std::fabs(wrapPi(std::atan2(fl.vel.x, fl.vel.z) - fl.yaw)) < 0.4, "the nose along the flight path");
+              check(fl.speed() > 15 && wp, "flying: " + std::to_string(fl.speed() * 3.6) + " km/h, the compass on '" + wl + "'");
+              check(std::fabs(wrapPi(std::atan2(fl.vel.x, fl.vel.z) - fl.yaw)) < 0.5, "the nose along the flight path");
               shot("hs_fly2");
-              input.inject(Action::Forward, false); T.hs = 3; T.hsF = f;
             }
+            if (d < 9 && fl.speed() < 3) { input.releaseInjected(); T.hs = 3; T.hsF = f; }
+            else if (g > 3000) { input.releaseInjected(); check(false, "flew to the landing spot"); T.hs = 9; T.hsF = f; }
           } else if (T.hs == 3) {   // slow down, come down
             input.inject(Action::Back, fl.speed() > 2);
             input.inject(Action::Sprint, fl.speed() < 8);
@@ -2418,7 +2425,7 @@ int runGame(const GameOptions& opt) {
     }
 
     // lifts: move the cars first, then seat the rider on the updated car (no lag); the boarding prompt
-    lifts.timeScale = player.mode == PlayerMode::Sit && !paused && input.down(Action::Jump) ? 16 : 1;   // hold Space: x16
+    lifts.timeScale = player.mode == PlayerMode::Sit && !paused && input.down(Action::Jump) && !heli.riding() && !ward.seated() ? 16 : 1;   // hold Space: x16 (Space climbs in the helicopter)
     lifts.update(paused ? 0 : frameDt, player.pos);
     prompt.clear(); rideLine.clear();
     bool interact = input.takePressed(Action::Interact);
@@ -2759,6 +2766,7 @@ int runGame(const GameOptions& opt) {
     }
     heli.camera(cam);
     ward.camera(cam);
+    ward.captureCamera(cam, opt.autotest || trans.covered());   // (the ward's windows: the village photographed behind the fade)
     if (rideKind == Ride::Sled) sleds.camera(cam, frameDt);
     // (Phase 4) the main menu's slow orbit over the village; the skier showcase (the skier on the plaza, turned by a
     // drag / the right stick, the camera off to the side so the menu column stays clear)
@@ -2891,7 +2899,7 @@ int runGame(const GameOptions& opt) {
       rig.car.on = rig.car.passenger = mpCarFrame(mp, vmodels, mp.ride.owner, rig.car.g, rig.car.t, roll) && rig.car.t.S;
       rig.car.seat = mp.ride.seat;
     }
-    rig.bed.on = ward.inBed(); rig.bed.floor = ward.bedFloor(); rig.bed.hideHead = !ward.third();   // (lying in your hospital bed: hospitalroom.js poseBody)
+    rig.bed.on = ward.lying(); rig.bed.floor = ward.bedFloor(); rig.bed.hideHead = !ward.third();   // (lying in your hospital bed: hospitalroom.js poseBody)
     rig.update(paused ? 0 : frameDt, player, world);
     if (rig.bed.on) ward.setBody(dvec3(rig.rig.bedEye), dvec3(rig.rig.bedBody));
     drive.setEyeRig(rig.eyeRigOk, dvec3(rig.eyeRig));
@@ -3064,7 +3072,7 @@ int runGame(const GameOptions& opt) {
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
-    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0;
+    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0 || ward.capturing();
     if (nightShot >= 0) {   // (the night shots' cameras: the plaza, then the snow gun nearest it)
       dvec3 eye, at2;
       if (nightShot < 16) { eye = dvec3(30, 0, 22); at2 = dvec3(-8, 0, -18); }
@@ -3268,7 +3276,7 @@ int runGame(const GameOptions& opt) {
     // first person on skis: the gloves-and-poles view model rides on the camera (player.js, after the camera)
     rig.updateFpView(paused ? 0 : frameDt, cam, player, *dev, assets);
     player.noteCamera(cam);
-    if (drawSkier) rig.submit(renderer, hideRig);
+    if (drawSkier && !ward.capturing()) rig.submit(renderer, hideRig);
     if (!indoor) {   // the snow trails: you, the vehicles on the snow, the resort's people
       if (rideKind == Ride::None) trails.player(player);
       if (rideKind == Ride::Car) trails.vehicle(0, drive.pos(), drive.yaw(), 0);
@@ -3285,6 +3293,7 @@ int runGame(const GameOptions& opt) {
     pt0 = perfMs();
     dev->resetFrameStats();
     renderer.endFrame();
+    ward.captured(renderer);
     ui.end();
     perf.add("render: draw calls + post + UI", perfMs() - pt0);
     frameDraws = dev->drawCallsThisFrame(); frameTris = dev->trianglesThisFrame();

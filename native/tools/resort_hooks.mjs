@@ -57,6 +57,15 @@ const PATCHES = [
       ['  g.putImageData(snow, 0, 0);\n', "  for (let k = 0; k < 16; k++) { const rr = 0.83 + ((k + 0.5) * 0.17) / 16, cv = ((rr - 0.83) / 0.17) * 0.85; g.strokeStyle = 'rgba(240,245,252,' + (cv * cv * 0.87).toFixed(3) + ')'; g.lineWidth = (h * 0.17) / 16 + 1; g.beginPath(); g.arc(h, h, rr * h, 0, Math.PI * 2); g.stroke(); }\n"],
     ],
   },
+  {
+    // the ward's BESUCHSZEIT board (hospitalroom.js board): its cream paper is a gradient fill, which the recorded
+    // canvas has no pixels for: the gradient's middle as a plain fill
+    file: '/src/game/hospitalroom.js',
+    edits: [
+      ["      const bg = g.createLinearGradient(0, 0, w, h); bg.addColorStop(0, '#f8f6f0'); bg.addColorStop(1, '#ece8de');\n      g.fillStyle = bg; g.fillRect(0, 0, w, h);",
+        "      g.fillStyle = '#f2efe7'; g.fillRect(0, 0, w, h);"],
+    ],
+  },
 ];
 
 export async function load(url, context, nextLoad) {

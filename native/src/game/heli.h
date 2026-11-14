@@ -241,6 +241,7 @@ private:
   uint32_t rnd_ = 0x2545f491u;
   double rnd() { rnd_ = rnd_ * 1664525u + 1013904223u; return (rnd_ >> 8) / 16777216.0; }
   void updateWash(double dt);
+  double collide(double dt);
   std::shared_ptr<Model> puffModel_[4];
   VehicleDraw puffDraw_;
   friend class HeliRescue;

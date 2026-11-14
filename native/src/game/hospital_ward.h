@@ -28,7 +28,10 @@ public:
   bool admit(double seconds = -1);
   bool visit();
   bool inside() const { return role_ != Role::None; }
-  bool inBed() const { return role_ == Role::Patient; }
+  /// in bed, or being carried in (controls frozen)
+  bool inBed() const { return role_ == Role::Patient || pending_ == Role::Patient; }
+  /// lying in the bed, in the room (the rig's bed pose, the pillow's view)
+  bool lying() const { return role_ == Role::Patient; }
   bool seated() const { return seat_ >= 0; }
   /// recovering (in bed, not yet allowed up)
   bool recovering() const { return role_ == Role::Patient && left_ > 0; }
@@ -38,6 +41,12 @@ public:
   double deck(double x, double z) const;
   bool seat(dvec3& pos, dvec3& fwd) const;
   bool camera(Camera& cam) const;
+  /// The windows' view (the web game's live portal, here photographed as you go in): while the screen is covered
+  /// (`covered`: the fade's dark moment, or a test) four frames show the village from the house's four sides; each is
+  /// read back after the scene is drawn (captured) and put on that wall's panes. true: this frame is one of them.
+  bool captureCamera(Camera& cam, bool covered);
+  bool capturing() const { return armed_; }
+  void captured(Renderer& r);
   bool interact(std::string& prompt, bool pressed);
   std::string objective() const;
   void draw(Renderer& r);
@@ -58,6 +67,8 @@ private:
   struct Pane { mat4 m; float w, h; };
   struct Furn { std::shared_ptr<Model> model; mat4 m; };
   void build();
+  void enterNow();
+  void buildPanes(int view, float tanH, float tanV);
   void outside();
   void getUp();
   PlayCtx& c_;
@@ -78,6 +89,11 @@ private:
   bool discharged_ = false, third_ = false, notified_ = false;
   double yaw_ = 0, pitch_ = -0.3, tpYaw_ = PI, tpPitch_ = -0.45;
   dvec3 eye_{0}, body_{0};
+  Role pending_ = Role::None;       // admitted / visiting: the windows' view is taken first, then you are in
+  double pendingSeconds_ = -1, captureWait_ = 0;
+  int capture_ = 99;                // the photograph being taken (VIEWS; past them: none)
+  bool armed_ = false;
+  std::shared_ptr<Model> paneModel_[5];
   bool hasEye_ = false;
 };
 

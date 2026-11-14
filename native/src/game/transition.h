@@ -27,6 +27,8 @@ public:
   bool active() const { return kind_ != Kind::None; }
   /// the cover is still coming in: the renderer keeps showing the frame from before the move
   bool holdsFrame() const { return kind_ != Kind::None && t_ < coverTime(); }
+  /// the cover is complete and still there (dark, the logo up): what is drawn now is not seen
+  bool covered() const { return kind_ != Kind::None && t_ >= coverTime() && t_ < coverTime() + holdTime(); }
   /// draws the overlay over everything (call last, between Ui::begin / end)
   void draw(Ui& ui);
   /// (tests) jumps to a moment of the running transition

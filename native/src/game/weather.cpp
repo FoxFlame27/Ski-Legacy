@@ -1,5 +1,6 @@
 #include "game/weather.h"
 #include "core/noise.h"
+#include <cstdlib>
 
 namespace sl {
 
@@ -44,6 +45,16 @@ void Weather::init(unsigned seed, bool fz) {
   seed_ = seed ? seed : 1;
   frozen = fz;
   cur_ = 0; next_ = pick(0); timer = 75;
+  // (dev / screenshots: SKI_LEGACY_WEATHER=mist|fog|heavy|... starts in that weather, settled and held)
+  if (const char* e = std::getenv("SKI_LEGACY_WEATHER")) snap(byId(e));
+}
+
+void Weather::snap(int w) {
+  if (w < 0 || w >= N) return;
+  const Def& W = DEFS[w];
+  if (w != cur_) { cur_ = w; next_ = pick(w); }
+  frozen = true;
+  snow = W.snow; cloud = W.cloud; mist = W.mist; wind = W.wind; clearAir = W.clear; wet = W.wet; frost = W.frost; sea = W.sea;
 }
 
 int Weather::pick(int w) { const auto& o = NEXT[w]; return o[size_t(rnd() * double(o.size())) % o.size()]; }

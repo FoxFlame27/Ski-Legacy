@@ -2866,6 +2866,51 @@ int runGame(const GameOptions& opt) {
         resort.update(0, cam.pos);
       }
     }
+    // (debug) SKI_LEGACY_SHOTS="name:x,y,z,tx,ty,tz[,hour[,weather]];...": several fixed cameras in one run (heights
+    // above the ground with SKI_LEGACY_SHOT_GROUND), each held SKI_LEGACY_SHOT_FRAMES frames (default 45) and written
+    // to <png>_<name>.png; SKI_LEGACY_DEBUG=shotonly ends the run after the skiing phase, nohud hides the HUD
+    if (const char* shots = std::getenv("SKI_LEGACY_SHOTS"); shots && at == AT::Ski && opt.autotest) {
+      struct Shot { std::string name, weather; double v[6]; double hour; };
+      static std::vector<Shot> list;
+      static int per = 0, lastK = -1;
+      if (per == 0) {
+        per = 45;
+        if (const char* e = std::getenv("SKI_LEGACY_SHOT_FRAMES")) per = std::max(2, std::atoi(e));
+        std::string all = shots;
+        for (size_t p0 = 0; p0 < all.size();) {
+          size_t p1 = all.find(';', p0);
+          if (p1 == std::string::npos) p1 = all.size();
+          std::string one = all.substr(p0, p1 - p0);
+          p0 = p1 + 1;
+          size_t c = one.find(':');
+          if (c == std::string::npos) continue;
+          Shot sh{one.substr(0, c), "", {0, 0, 0, 0, 0, 0}, -1};
+          char wx[32] = {0};
+          int n = std::sscanf(one.c_str() + c + 1, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%31s", &sh.v[0], &sh.v[1], &sh.v[2], &sh.v[3], &sh.v[4], &sh.v[5], &sh.hour, wx);
+          if (n < 6) continue;
+          if (n < 7) sh.hour = -1;
+          if (n >= 8) sh.weather = wx;
+          list.push_back(sh);
+        }
+      }
+      int k = std::max(0, frame - skiFrame0) / per;
+      if (k < int(list.size())) {
+        const Shot& sh = list[size_t(k)];
+        double v[6];
+        for (int i = 0; i < 6; i++) v[i] = sh.v[i];
+        if (std::getenv("SKI_LEGACY_SHOT_GROUND")) { v[1] += world.height(v[0], v[2]); v[4] += world.height(v[3], v[5]); }
+        if (sh.hour >= 0) hour = sh.hour;
+        if (!sh.weather.empty()) weather.snap(Weather::byId(sh.weather));
+        cam.lookAt(dvec3(v[0], v[1], v[2]), dvec3(v[3], v[4], v[5]));
+        cam.fovY = 60;
+        terrain.update(cam.pos);
+        if (k != lastK) { lastK = k; scenery.finish(cam.pos); }
+        scenery.update(cam.pos);
+        resort.update(0, cam.pos);
+        if (k != lastK || (frame - skiFrame0) % per < 3) resort.finishStreaming(cam.pos);
+        if ((frame - skiFrame0) % per == per - 1 && !opt.png.empty()) pendingPng = pngVariant(opt.png, sh.name.c_str());
+      }
+    }
     if (off("sidecam") && player.mode == PlayerMode::Sit && lifts.rideLine()) {   // (debug: look at the rider from the side)
       LiftLine* rl = lifts.rideLine();
       dvec3 sv(rl->sideV.x, 0, rl->sideV.y);
@@ -2873,7 +2918,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !tmap.isOpen() && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal)
+    if (started && !off("nohud") && !tmap.isOpen() && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -3073,6 +3118,7 @@ int runGame(const GameOptions& opt) {
           perfReport("skiing down the run (every frame rendered)");
           if (off("fpview")) player.view = Player::View::Third;
           at = haveResort ? AT::Collide : AT::Done;
+          if (off("shotonly")) at = AT::Done;
           phaseFrame = 0;
         }
       } else if (at == AT::Collide) {

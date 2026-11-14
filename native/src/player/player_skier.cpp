@@ -104,9 +104,10 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   st.air = p.air;
   st.flip = p.mode == PlayerMode::Ski ? p.flip : 0;
   st.hasFlipHeading = true; st.flipHeading = p.airTravel();
-  // (no tricks in the port: the grab and the spin arms ease out as after a touchdown)
-  grabVis_ = std::max(0.0, grabVis_ - dt / 0.12);
-  spinVis_ *= std::exp(-dt * 12);
+  // (player.js: the grab and the spin arms follow the trick in the air and ease out after a touchdown)
+  grabVis_ = p.air ? p.tricks.grab : std::max(0.0, grabVis_ - dt / 0.12);
+  spinVis_ = p.air ? p.tricks.spinVel : spinVis_ * std::exp(-dt * 12);
+  st.grabType = GrabType(p.tricks.grabType);
   st.grab = p.mode == PlayerMode::Ski ? grabVis_ : 0;
   st.spinVel = p.mode == PlayerMode::Ski ? spinVis_ : 0;
   st.charge = p.charging && !p.air ? p.charge : 0;

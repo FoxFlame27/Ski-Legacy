@@ -16,6 +16,7 @@ const double CDA_STAND = 0.42, CDA_TUCK = 0.2, CDA_AIR = 0.38;
 const double TURN_MAX = 1.6, A_TURN = 23, STEER_TAU = 0.1, STEER_TAU_OFF = 0.07, TUCK_TURN = 0.65, SKID_TURN = 1.6;
 const double A_GRIP = 30, CARVE_DRAG = 0.012;
 const double AIR_STEER_MAX = 20 * DEG;
+const double STEER_HELD = 0.3;   // A / D held this long before Space is a turn, not a pre-wound spin (s)
 const double V_HOLD = 0.5, G_GO = 0.6;
 const double COS_GO = std::cos(55 * DEG);
 const double PUSH_A = 2.6, W_PUSH_V = 5;
@@ -26,7 +27,7 @@ const double STICK = 10;
 const double POP_MIN = 2.8, POP_MAX = 5.2, CHARGE_TIME = 0.55, COYOTE = 0.16;
 const double IMPACT_FRICTION = 0.3, IMPACT_FREE = 3.5;
 const double BODY_SLIDE = 8.5, GETUP_TIME = 1.35;
-const double CRASH_IMPACT = 16, SKETCHY_YAW = 40 * DEG;
+const double CRASH_IMPACT = 16;
 const double CRASH_HIT = 11;
 // ---- on foot
 const double FOOT_SPEED = 4.2, SPRINT_K = 1.5;
@@ -82,6 +83,7 @@ void Player::teleport(double x, double z, double h) {
   shake_ = fovKick_ = airBlend_ = 0; fpSlope_ = 0;
   prevVelYaw_ = h;
   air = ballistic = false; flip = yawFx = yawFxV = airSteer_ = 0; charging = false; charge = 0; popT_ = 1;
+  tricks.cancel();
   absorb = absorbV = 0; steer = edge = lean = skidAmt_ = skidYaw = turnRate_ = 0;
   crouch = 0.2; plow = 0; sideslip = 0; tuck = false;
   footAir_ = false; footJumpY = footJumpV_ = 0; walkSlip_ = 0; steepT_ = 0; brakeStopT_ = 0;
@@ -94,6 +96,7 @@ void Player::sitOn(const dvec3& seat, const dvec3& fwd) {
   mode = PlayerMode::Sit;
   vel = dvec3(0);
   air = ballistic = false; airTime = 0; charging = false; charge = 0; flip = yawFx = yawFxV = airSteer_ = 0;
+  tricks.cancel();
   absorb = absorbV = 0; steer = edge = lean = 0; footAir_ = false; footJumpY = 0;
   fall = FallState{};
   setSeat(seat, fwd);
@@ -143,13 +146,25 @@ void Player::skiTick(double h, const PlayerControls& c) {
   bool left = steerIn > 0.5, right = steerIn < -0.5;
   heldL_ = left ? heldL_ + h : 0;
   heldR_ = right ? heldR_ + h : 0;
+  keys_.left = left; keys_.right = right;
+  keys_.front = live && c.front; keys_.back = live && c.back; keys_.grab = live && c.grab;
   updatePop(h, c);
   if (air) {
-    // (no freestyle tricks in Phase 1: A / D keep steering the skis a little, carried into the landing)
-    steerToward(steerIn, h);
+    // A / D spin and W / S flip after a deliberate jump (a pop), Shift grabs. Keys that aren't a trick (a turn held
+    // into the jump, any air off a natural bump) keep steering the skis a little, so the turn carries on after the
+    // landing.
+    tricks.update(h, keys_, airEnd_ - airTime);
+    bool spinning = tricks.live.left || tricks.live.right;
+    steerToward(spinning ? 0 : steerIn, h);
     double vh = std::hypot(vel.x, vel.z);
     airSteer_ = clamp(airSteer_ + steer * turnRateAt(vh, false, false) * h, -AIR_STEER_MAX, AIR_STEER_MAX);
-    heading = airHeading_ + airSteer_;
+    heading = airHeading_ + tricks.spin + airSteer_;
+    flip = tricks.flip;
+    // a whoosh for every half turn of rotation under way
+    int turns = int(std::floor((std::fabs(tricks.spin) + std::fabs(tricks.flip)) / PI + 0.5));
+    double rot = std::fabs(tricks.spinVel) + std::fabs(tricks.flipVel);
+    if (turns > rotSnd_ && rot > 2.5) events.push_back({PlayerEvent::Type::Spin, float(clamp(rot / 8, 0.3, 1))});
+    rotSnd_ = std::max(rotSnd_, turns);
   } else steerToward(steerIn, h);
   ctl_.steer = steer;
   ctl_.steerIn = steerIn;
@@ -169,7 +184,15 @@ void Player::steerToward(double target, double dt) {
 void Player::updatePop(double h, const PlayerControls& c) {
   if (c.frozen) { charging = false; charge = 0; return; }
   bool canPop = !air || (airTime < COYOTE && !popped_);
-  if (c.jumpPressed && canPop) { charging = true; charge = 0; }
+  if (c.jumpPressed && canPop) {
+    charging = true; charge = 0;
+    // keys already down when the charge starts are riding inputs (tuck, brake, a turn held for a while): after the
+    // pop they only count as trick keys once pressed again. A / D pressed just before Space or during the charge
+    // pre-wind a spin.
+    preHeld_.front = keys_.front; preHeld_.back = keys_.back; preHeld_.grab = keys_.grab;
+    preHeld_.left = keys_.left && heldL_ > STEER_HELD;
+    preHeld_.right = keys_.right && heldR_ > STEER_HELD;
+  }
   if (!charging) return;
   charge = std::min(1.0, charge + h / CHARGE_TIME);
   if (c.jumpReleased || !c.jumpDown) {
@@ -184,7 +207,11 @@ void Player::pop(double ch) {
   vel += n * imp;
   parked = false;
   if (!air) { pos += n * 0.03; takeoff(true); }
-  else airEnd_ = airTime + predictAirLeft();
+  else {
+    // a late pop just off a lip: a deliberate jump after all (keys held through the lip stay latched)
+    tricks.arm();
+    airEnd_ = airTime + predictAirLeft();
+  }
   popped_ = true;
   popT_ = 0;
   fovKick_ = std::max(fovKick_, 0.4 + ch * 0.6);
@@ -302,12 +329,20 @@ void Player::takeoff(bool isPop) {
   airTime = isPop ? 0 : liftT_;
   popped_ = isPop;
   if (isPop) lastGroundNormal_ = normal;
+  // a revert still in progress becomes the real heading in the air
+  bool sw = std::fabs(wrapPi(yawFx)) > PI / 2;
   heading += yawFx; yawFx = 0; yawFxV = 0;
   flip = 0;
   airHeading_ = heading; airSteer_ = 0;
   double vh = std::hypot(vel.x, vel.z);
   airTravel_ = vh > 0.7 ? std::atan2(vel.x, vel.z) : heading;
-  airEnd_ = airTime + predictAirLeft();
+  rotSnd_ = 0;
+  // spins and flips need a deliberate jump (the pop); keys held into the jump are riding inputs
+  TrickKeys L;
+  if (isPop) { L.left = preHeld_.left && keys_.left; L.right = preHeld_.right && keys_.right; L.front = preHeld_.front && keys_.front; L.back = preHeld_.back && keys_.back; L.grab = preHeld_.grab && keys_.grab; }
+  else L = keys_;
+  tricks.takeoff(true, isPop, isPop, L, sw);
+  airEnd_ = airTime + predictAirLeft();   // (flips only start with room to land them)
 }
 
 double Player::predictAirLeft() {
@@ -352,30 +387,45 @@ void Player::land(double gy) {
   vel -= normal * glm::dot(vel, normal);
   double vh = std::hypot(vel.x, vel.z);
   double travel = vh > 0.7 ? std::atan2(vel.x, vel.z) : heading;
-  double yawErr = wrapPi(airHeading_ - travel);
-  double yaw = std::fabs(yawErr);
-  bool sw = yaw > PI / 2;
-  double yawOff = sw ? PI - yaw : yaw;
+  // the trick is judged on the spin (the skis' own steering in the air is not a trick error)
+  double yawErr = wrapPi(airHeading_ + tricks.spin - travel);
+  double spinDir = tricks.spin < 0 ? -1 : 1, flipVel = tricks.flipVel;
+  TrickResult res = tricks.land(yawErr, impact, vh);
   air = false;
   ballistic = false;
   prevVelYaw_ = travel;
-  bool crashed = (yawOff > SKETCHY_YAW && vh > 5) || impact > CRASH_IMPACT;
-  if (crashed) {
-    FallState::Kind kind = yawOff > SKETCHY_YAW ? FallState::Kind::Roll : impact > 16 ? FallState::Kind::Tumble : FallState::Kind::Roll;
-    crash(int(sign(yawErr)) ? int(sign(yawErr)) : (rnd01() < 0.5 ? -1 : 1), kind, true);
+  if (res.landed == TrickResult::Landed::Crash) {
+    reportTrick(res);
+    bool byFlip = res.cause == TrickResult::Cause::Flip;
+    FallState::Kind kind = byFlip ? FallState::Kind::Tumble : res.cause == TrickResult::Cause::Sideways ? FallState::Kind::Roll : impact > 16 ? FallState::Kind::Tumble : FallState::Kind::Roll;
+    crash(int(sign(yawErr)) ? int(sign(yawErr)) : (rnd01() < 0.5 ? -1 : 1), kind, true, byFlip ? flip : 0, byFlip ? flipVel : 0);
     return;
   }
+  // the legs and the snow absorb the impact: hard flat landings lose speed, landings that match the slope keep it;
+  // sloppy landings scrub a little more
   double s = glm::length(vel);
   double ns = std::max(0.0, s - IMPACT_FRICTION * std::max(0.0, impact - IMPACT_FREE));
-  ns *= 1 - 0.5 * std::pow(std::sin(yawOff), 2);
-  if (impact > 12 || yawOff > 15 * DEG) ns *= 0.92; // sketchy
-  if (sw) ns *= 0.94;
+  double off = res.isSwitch ? PI - std::fabs(yawErr) : std::fabs(yawErr);
+  ns *= 1 - 0.5 * std::pow(std::sin(off), 2);
+  if (res.landed == TrickResult::Landed::Sketchy) ns *= 0.92;
+  if (res.isSwitch) ns *= 0.94;   // the revert pivot
   if (s > 1e-6) vel *= ns / s;
+  // the skis line up with the travel direction (plus what the player steered in the air); the body shows the landed
+  // angle and pivots out of it (a switch landing reverts all the way round, continuing the spin's direction)
   heading = travel + airSteer_;
   airSteer_ = 0;
-  yawFx = sw ? 0 : yawErr; yawFxV = 0;
-  flip = wrapPi(flip);
+  double fx = yawErr;
+  if (res.isSwitch) fx = spinDir > 0 ? (yawErr > 0 ? yawErr - TAU : yawErr) : (yawErr < 0 ? yawErr + TAU : yawErr);
+  yawFx = fx; yawFxV = 0;
+  flip = wrapPi(flip);   // (the residual tilt eases out)
   absorbImpact(impact);
+  reportTrick(res);
+}
+
+void Player::reportTrick(const TrickResult& res) {
+  if (res.name.empty()) return;
+  lastTrick = res;
+  events.push_back({PlayerEvent::Type::Trick, res.points > 0 ? (res.landed == TrickResult::Landed::Clean ? 1.f : 0.6f) : 0.f});
 }
 
 void Player::absorbImpact(double impact) {
@@ -407,6 +457,7 @@ void Player::crash(int side, FallState::Kind kind, bool ski, double flipAngle, d
   } else if (kind == FallState::Kind::Roll) F.rollVel = fallSide * clamp(sp * 0.4, 3, 9);
   F.ball = kind == FallState::Kind::Slam ? 0.25 : 1;
   heading += yawFx;
+  tricks.cancel();
   flip = yawFx = yawFxV = airSteer_ = 0;
   absorb = absorbV = 0;
   shake_ = 1;

@@ -2046,10 +2046,18 @@ int runGame(const GameOptions& opt) {
       double sp = player.speed();
       input.inject(Action::Forward, sp < 20);
       input.inject(Action::Back, sp > 27);
-      input.injectMove(-steer, sp < 20 ? 1.f : 0.f);
+      input.injectMove(player.air ? 0.f : -steer, sp < 20 ? 1.f : 0.f);   // (hands off in the air: A / D after a pop spin)
       // a charged jump half way: crouch for 0.4 s, release to pop (exercises take-off, air and landing)
       int jf = opt.frames / 2, sf = frame - skiFrame0;
       input.inject(Action::Jump, sf >= jf && sf < jf + 24);
+      // (debug: SKI_LEGACY_DEBUG=tricktest: A pressed after the pop spins, Shift grabs -> "[autotest] trick: ..." on landing)
+      if (off("tricktest") && sf >= jf + 24 && sf < jf + 24 + 90 && player.air) {
+        input.inject(Action::Forward, false); input.inject(Action::Back, false);
+        input.injectMove(-1.f, 0.f);
+        input.inject(Action::Sprint, sf >= jf + 24 + 8);
+        if (sf == jf + 24 + 22 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "trick");
+        if (sf % 6 == 0) SL_INFO("[autotest] air t=%.2f spin %.0f deg flip %.0f deg grab %.2f '%s'", player.airTime, player.tricks.spin * 57.2958, player.tricks.flip * 57.2958, player.tricks.grab, player.trickName().c_str());
+      } else if (off("tricktest")) input.inject(Action::Sprint, false);
     }
 
     if (opt.autotest && at == AT::Collide) {
@@ -2217,6 +2225,17 @@ int runGame(const GameOptions& opt) {
         }
         case PlayerEvent::Type::Bump: audio.play("thud", e.amount * 0.6f); input.rumble(*plat, 0.4f * e.amount, 0.3f, 150); break;
         case PlayerEvent::Type::Land: nLand++; if (opt.autotest) SL_INFO("[autotest] landing (impact %.2f)", e.amount); audio.play("land", e.amount); shakeAmt = std::max(shakeAmt, 0.3 + 0.6 * e.amount); if (e.amount > 0.6f) fxFlash = 0.35 * e.amount; input.rumble(*plat, 0.3f + 0.6f * e.amount, 0.2f, 120); break;
+        case PlayerEvent::Type::Spin: audio.play("spin", e.amount); break;
+        case PlayerEvent::Type::Trick: {
+          // (player.js reportTrick -> raceHud.trick: the trick's name, its points and how it was landed)
+          const TrickResult& tr = player.lastTrick;
+          if (e.amount > 0) audio.play("trick", e.amount);
+          bool bailed = tr.landed == TrickResult::Landed::Crash;
+          std::string line = tr.name + (bailed ? " \xC2\xB7 Bailed" : " \xC2\xB7 +" + std::to_string(tr.points) + (tr.landed == TrickResult::Landed::Sketchy ? " \xC2\xB7 Sketchy" : " \xC2\xB7 Clean"));
+          flash(line, bailed ? Hud::Flash::Bad : tr.landed == TrickResult::Landed::Clean ? Hud::Flash::Gold : Hud::Flash::Good);
+          if (opt.autotest) SL_INFO("[autotest] trick: %s", line.c_str());
+          break;
+        }
         case PlayerEvent::Type::Pop: if (opt.autotest) SL_INFO("[autotest] pop (charge %.2f) at %.1f km/h", e.amount, player.speed() * 3.6); audio.play("pop", e.amount); input.rumble(*plat, 0.1f, 0.2f + 0.4f * e.amount, 60); break;
         case PlayerEvent::Type::Step: audio.play("step", e.amount); break;
         case PlayerEvent::Type::TooSteep: toast = "Too steep to walk up - take a lift"; toastUntil = simTime + 2.5; break;

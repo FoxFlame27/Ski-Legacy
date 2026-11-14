@@ -6,11 +6,11 @@
 // stop braking, edges holding a stopped skier, push-off (W while slow), ground following with take-off over crests
 // (STICK), pops charged with Space, landings judged on impact and on how sideways they are, crashes (tumble / roll /
 // slam, slide, lie, get up). On foot: walking with grade limits (30 / 50 degrees), sprint, jump.
-// Phase 1 simplifications: no freestyle tricks (spins / flips / grabs scoring), no park features, no lifts / seats,
-// no other people; colliders are the village buildings, lamp posts and tree trunks / crowns.
+// Freestyle tricks (spins, flips, grabs, their scoring): player/tricks. Simplifications: no park features; colliders are the village buildings, lamp posts and tree trunks / crowns.
 #pragma once
 #include "core/math.h"
 #include "engine/renderer.h"
+#include "player/tricks.h"
 #include <string>
 #include <vector>
 
@@ -39,7 +39,7 @@ struct PlayerFrameControls {
 
 enum class PlayerMode : uint8_t { Walk, Ski, Fall, Sit };   // Sit: riding a lift (lifts.js / player.js sitOn)
 
-struct PlayerEvent { enum class Type : uint8_t { Crash, Bump, Land, Pop, Step, TooSteep, SkisOn, SkisOff } type; float amount = 0; };
+struct PlayerEvent { enum class Type : uint8_t { Crash, Bump, Land, Pop, Step, TooSteep, SkisOn, SkisOff, Spin, Trick } type; float amount = 0; };
 
 /// Crash state (player.js `fall`): drives the body's tumble in the rig.
 struct FallState {
@@ -101,6 +101,10 @@ public:
   double distance = 0, topSpeed = 0;
   enum class View : uint8_t { Third, First } view = View::Third;
   std::vector<PlayerEvent> events;   // drained by the game each frame (audio, rumble, HUD)
+  // freestyle tricks (player/tricks: spins, flips, grabs after a deliberate jump; judged and scored on landing)
+  Tricks tricks;
+  TrickResult lastTrick;             // the last judged landing with a name (a PlayerEvent::Trick says when)
+  std::string trickName() const { return air ? tricks.describe() : std::string(); }
   double speed() const { return glm::length(vel); }
   // (the skier rig's feed, player.js update(): skier_rig / player_skier.cpp)
   std::vector<int8_t> polePlants;   // pole plants asked for this frame (0 left, 1 right), drained by the rig
@@ -124,6 +128,7 @@ private:
   bool onGroomedRun(double x, double z) const;
   void liftOff(double h);
   void takeoff(bool pop);
+  void reportTrick(const TrickResult& res);
   double predictAirLeft();
   void airStep(double h);
   void reattach(double gy);
@@ -149,6 +154,8 @@ private:
   Scenery* scenery_;
   struct Ctl { double steer = 0, steerIn = 0; bool tuck = false, brake = false, go = false, move = false; } ctl_;
   double heldL_ = 0, heldR_ = 0;
+  TrickKeys keys_, preHeld_;   // the trick keys this tick; those already held when the pop was charged
+  int rotSnd_ = 0;
   bool popped_ = false;
   double popT_ = 1, liftT_ = 0, airEnd_ = 0;
   double airHeading_ = 0, airTravel_ = 0, airSteer_ = 0;

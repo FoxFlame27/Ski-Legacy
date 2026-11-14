@@ -360,6 +360,13 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   ModelLoadOptions mo;
   mo.maxTextureSize = 1024;
   mo.lodRatios = {0.08f};   // a light copy for props seen from afar
+  // (the buildings you walk up to on the plaza keep their 2048 px colour maps: +17 MB each over the 1024 px copies,
+  // four of them; everything else stays in the 1024 px budget)
+  auto optFor = [&mo](const std::string& name) {
+    ModelLoadOptions o = mo;
+    if (name == "rental_shop" || name == "hotel_chalet" || name == "ticket_booth" || name == "market_stall") o.colorTextureSize = 2048;
+    return o;
+  };
 
   // ---- canvas textures (on demand) and materials
   std::map<int, gfx::Texture> canvasTex;
@@ -378,7 +385,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   for (auto& m : j["materials"]) {
     Material M;
     if (m["glb"].is_object()) {
-      auto gm = assets_.model(m["glb"]["model"].get<std::string>(), mo);
+      auto gm = assets_.model(m["glb"]["model"].get<std::string>(), optFor(m["glb"]["model"].get<std::string>()));
       int idx = m["glb"]["index"];
       if (gm && idx >= 0 && size_t(idx) < gm->materials.size()) M = gm->materials[size_t(idx)];
     } else {
@@ -444,7 +451,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     }
     props_.push_back(std::move(ps));
   };
-  for (auto& p : j["props"]) addSet(assets_.model(p["model"].get<std::string>(), mo), instList(p, bin), p.value("glow", 0.f), true);
+  for (auto& p : j["props"]) addSet(assets_.model(p["model"].get<std::string>(), optFor(p["model"].get<std::string>())), instList(p, bin), p.value("glow", 0.f), true);
   for (auto& m : j["instanced"]) addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), instList(m, bin), 0, true);
 
   // ---- baked procedural meshes

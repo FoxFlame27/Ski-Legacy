@@ -200,6 +200,25 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
         s.plates.push_back(M);
       }
     }
+    if (c.contains("lamps") && c["lamps"].is_object()) {
+      auto& L = c["lamps"];
+      s.lampHalfL = L.value("halfL", 0.f);
+      for (auto& p : L["parts"]) {
+        CarSpec::LampPart q;
+        q.kind = p.value("kind", std::string());
+        std::string tier = p.value("tier", std::string("plain"));
+        q.tier = tier == "core" ? 0 : tier == "tex" ? 1 : 2;
+        q.boost = p.value("boost", 1.f); q.alpha = p.value("alpha", 1.f); q.mat = p.value("mat", -1); q.map = p.value("map", false);
+        q.pos = arr<float>(p["P"], bin); q.uv = arr<float>(p["U"], bin); q.idx = arr<uint32_t>(p["I"], bin);
+        if (!q.pos.empty() && !q.idx.empty() && q.uv.size() / 2 == q.pos.size() / 3) s.lampParts.push_back(std::move(q));
+      }
+      if (L["halo"].is_object())
+        for (auto it = L["halo"].begin(); it != L["halo"].end(); ++it) {
+          std::vector<CarSpec::LampAnchor> list;
+          for (auto& a : it.value()) list.push_back({vec3(a["c"][0].get<float>(), a["c"][1].get<float>(), a["c"][2].get<float>()), vec3(a["size"][0].get<float>(), a["size"][1].get<float>(), a["size"][2].get<float>())});
+          s.lampHalo.emplace_back(it.key(), std::move(list));
+        }
+    }
     cars.push_back(std::move(s));
   }
   if (net["bus"].is_object()) {

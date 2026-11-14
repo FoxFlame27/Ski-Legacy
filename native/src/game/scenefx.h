@@ -29,6 +29,7 @@ struct CarPose {
   glm::dmat4 M{1};          // the pose without the model's fit
   std::string plate;
   bool lights = false, brake = false, mine = false;
+  bool live = false, reverse = false;   // running (daytime running lights), in reverse gear
 };
 
 class SceneFx {
@@ -75,6 +76,13 @@ private:
   std::shared_ptr<Model> catModel_, puff_;   // puff_: a soft round sprite (the spray's particles)
   mat4 catFit_{1};
   std::unordered_map<std::string, std::shared_ptr<Model>> plates_;
+  // the cars' own lamps (cars.js / carlights.js, from the exported CarSpec): each part an emission-only overlay
+  // model, and the halos' places
+  struct LampModel { int kind; int tier; float boost; std::shared_ptr<Model> model; };
+  struct LampHalo { int kind; vec3 p; float sx, sy; float dir; };
+  struct CarLamps { std::vector<LampModel> parts; std::vector<LampHalo> halos; bool hasDrl = false, hasHead = false; float headZ = 0, headY = 0.68f; };
+  std::unordered_map<const VehicleModel*, CarLamps> carLamps_;
+  const CarLamps& lampsFor(const VehicleModel& vm);
   std::vector<std::string> plateOrder_;
   int nSprays_ = 0, nLamps_ = 0, nCarLights_ = 0, nPlates_ = 0;
 };

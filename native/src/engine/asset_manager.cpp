@@ -155,8 +155,10 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
   // ---- textures (decoded in parallel)
   std::vector<gfx::Texture> texOf(d->textures_count);
   std::vector<bool> srgb(d->textures_count, false);
+  std::vector<bool> isNormal(d->textures_count, false);
   for (cgltf_size i = 0; i < d->materials_count; i++) {
     const cgltf_material& m = d->materials[i];
+    if (m.normal_texture.texture) isNormal[size_t(m.normal_texture.texture - d->textures)] = true;
     if (m.pbr_metallic_roughness.base_color_texture.texture) srgb[size_t(m.pbr_metallic_roughness.base_color_texture.texture - d->textures)] = true;
     if (m.emissive_texture.texture) srgb[size_t(m.emissive_texture.texture - d->textures)] = true;
   }
@@ -167,8 +169,11 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     for (cgltf_size i = 0; i < d->textures_count; i++) {
       const cgltf_texture& t = d->textures[i];
       const cgltf_image* img = t.has_webp && t.webp_image ? t.webp_image : t.image;
-      int cap = std::min(opt.maxTextureSize, textureCap);
-      bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !opt.keepCpu;
+      // the size cap: the model's own budget x the preset's scale for the colour maps (what the eye reads as sharp or
+      // blurry); normal / roughness maps keep the model's budget. Block compression (1/8 - 1/4 of the memory) pays
+      // for the larger colour maps; normal maps stay uncompressed (BC1 blocks show in the highlights)
+      int cap = std::min(srgb[i] ? opt.maxTextureSize * std::max(1, textureScale) : opt.maxTextureSize, textureCap);
+      bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !opt.keepCpu && !isNormal[i];
       jobs.push_back(std::async(std::launch::async, [img, cap, bc]() {
         Image im;
         if (!img || !img->buffer_view) return im;

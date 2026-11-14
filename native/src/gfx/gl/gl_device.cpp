@@ -63,6 +63,16 @@ public:
       if (x == "GL_EXT_texture_compression_s3tc") s3tc_ = true;
       if (x == "GL_EXT_texture_sRGB" || x == "GL_EXT_texture_compression_s3tc_srgb") s3tcSrgb_ = true;
     }
+    {   // (macOS core profile lists neither sRGB extension: sRGB textures are core there. Ask for the formats themselves)
+      GLint nf = 0;
+      glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &nf);
+      std::vector<GLint> fm(size_t(std::max(nf, 1)), 0);
+      if (nf > 0) glGetIntegerv(GL_COMPRESSED_TEXTURE_FORMATS, fm.data());
+      bool d1 = false, d5 = false, s1 = false, s5 = false;
+      for (GLint f : fm) { d1 = d1 || f == 0x83F0; d5 = d5 || f == 0x83F3; s1 = s1 || f == 0x8C4C; s5 = s5 || f == 0x8C4F; }
+      if (d1 && d5) s3tc_ = true;
+      if (s1 && s5) s3tcSrgb_ = true;
+    }
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
     GLint ms = 1, mt = 4096;
     glGetIntegerv(GL_MAX_SAMPLES, &ms);

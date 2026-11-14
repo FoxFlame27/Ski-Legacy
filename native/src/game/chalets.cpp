@@ -332,10 +332,16 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   if (in.takePressed(Action::PrevItem)) { if (--item_ < 0) { cat_ = (cat_ + int(D.categories.size()) - 1) % std::max<int>(1, int(D.categories.size())); items = catItems(cat_); item_ = std::max(0, int(items.size()) - 1); } items = catItems(cat_); if (!items.empty()) hand_ = items[size_t(item_)]->id; moving_ = -1; bmReveal_ = true; }
   if (in.takePressed(Action::Restart)) { hand_.clear(); if (moving_ >= 0) { moving_ = -1; rebuildFurniture(); } }
   if (in.takePressed(Action::VMouse)) { vmouse_ = !vmouse_; cursor_ = vec2(float(uiW) / 2, float(uiH) / 2); }
+  // (keyboard + mouse: CURSOR mode, the mouse free; TAB swaps it with LOOK AROUND)
+  padNow_ = in.usingGamepad();
+  if (!padNow_) for (platform::Key k : nav.keys) if (k == platform::Key::Tab) cursorMode_ = !cursorMode_;
+  const bool freeMouse = wantsFreeMouse() && nav.mouse.x >= 0;
+  const bool pointing = vmouse_ || freeMouse;
+  const vec2 ptr = vmouse_ ? cursor_ : nav.mouse;
   if (in.takePressed(Action::View)) rot_ += PI / 2;
   // the catalogue column (buildmenu.js): the wheel over it scrolls, a click takes a card in hand (the one in hand
   // again: put down) or jumps to a room's tab; elsewhere the wheel turns the piece and a click places it
-  const bool overMenu = bm_.over && (vmouse_ || nav.mouse.x >= 0);
+  const bool overMenu = bm_.over && pointing;
   bool menuClick = false;
   if (overMenu) {
     const float u = float(std::max(1, uiH)) / 800.f;
@@ -356,9 +362,9 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   // the aim: the centre dot, or the cursor (the mouse when free, the virtual mouse's left stick)
   if (vmouse_) { cursor_ += vec2(in.moveX(), -in.moveY()) * 9.f; cursor_ = glm::clamp(cursor_, vec2(0), vec2(float(uiW), float(uiH))); }
   vec3 fwd = cam.forward();
-  if (vmouse_) {
+  if (pointing) {
     float tx = std::tan(cam.fovY * float(DEG) / 2);
-    float nx = (2 * cursor_.x / float(uiW) - 1) * tx * cam.aspect, ny = (1 - 2 * cursor_.y / float(uiH)) * tx;
+    float nx = (2 * ptr.x / float(uiW) - 1) * tx * cam.aspect, ny = (1 - 2 * ptr.y / float(uiH)) * tx;
     fwd = glm::normalize(fwd + cam.basis[0] * nx + cam.basis[1] * ny);
   }
   dvec3 o = rooms_.toLocal(cam.pos);
@@ -375,7 +381,9 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
     int i = 0;
     for (auto& r : ch["furniture"]) { double dd = std::hypot(r.value("x", 0.0) - fp.x, r.value("z", 0.0) - fp.z); if (dd < bd && i != moving_) { bd = dd; hover_ = i; } i++; }
   }
-  bool click = in.takePressed(Action::Jump) || (!menuClick && !overMenu && ((vmouse_ && nav.confirm) || (!vmouse_ && nav.click)));
+  // (the virtual mouse on the catalogue: its click is the card's, never a placement behind the column)
+  const bool jump = in.takePressed(Action::Jump);
+  bool click = (jump && !(vmouse_ && overMenu)) || (!menuClick && !overMenu && ((vmouse_ && nav.confirm) || (!vmouse_ && nav.click)));
   if (hand_.empty() && hover_ >= 0) {
     if (in.takePressed(Action::Alt)) { sell(hover_); return; }
     if (in.takePressed(Action::Pickup)) { moving_ = hover_; hand_ = ch["furniture"][size_t(hover_)].value("id", std::string()); rot_ = ch["furniture"][size_t(hover_)].value("rot", 0.0); rebuildFurniture(); return; }
@@ -484,7 +492,7 @@ void Chalets::hud(Ui& ui, float) {
   S.categories = D.categories;
   for (auto& f : D.furniture) S.items.push_back({f.id, f.name, f.category, f.price});
   S.hand = hand_;
-  S.pad = c_.input->usingGamepad(); S.vmouse = vmouse_; S.look = !vmouse_;
+  S.pad = c_.input->usingGamepad(); S.vmouse = vmouse_; S.look = !vmouse_ && !wantsFreeMouse();
   S.pointer = vmouse_ ? cursor_ : vec2(-1);
   S.shownFor = c_.now - buildAt_;
   S.denyId = denyId_; S.denyAge = c_.now - denyAt_;
@@ -500,7 +508,7 @@ void Chalets::hud(Ui& ui, float) {
   }
   bmScroll_ += (bmTarget_ - bmScroll_) * 0.25f;
   S.scroll = bmScroll_;
-  if (!vmouse_ && c_.plat) { /* (the free mouse points at the column: game.cpp hands it in through update's nav) */ S.pointer = mouse_; }
+  if (wantsFreeMouse()) S.pointer = mouse_;   // (the free mouse points at the column: game.cpp hands it in through update's nav)
   bm_ = drawBuildMenu(ui, S, *c_.input);
   bmTarget_ = std::clamp(bmTarget_, 0.f, bm_.maxScroll);
   if (bmReveal_ && !hand_.empty()) {   // (scrollIntoView: nearest)

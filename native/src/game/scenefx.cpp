@@ -181,16 +181,34 @@ const Model* SceneFx::plateModel(const std::string& text) {
     }
     plateOrder_.erase(plateOrder_.begin());
   }
-  // carconfig.js: a Swiss-style plate, white with a black rim and black lettering
-  Canvas2D g(256, 56, fonts_);
-  g.fillStyle("#f4f4f0"); g.fillRect(0, 0, 256, 56);
-  g.strokeStyle("#111111"); g.lineWidth(4); g.strokeRect(3, 3, 250, 50);
-  g.fillStyle("#111111"); g.font("700 40px Barlow"); g.textAlign("center"); g.textBaseline("middle");
-  g.fillText(text, 128, 30);
+  // carconfig.js plateTexture: 1024 x 220: the white reflective plate with its thin black rim, the shields (the Swiss
+  // cross left, the canton's red / white halves right), the text black and condensed, as wide as it fits
+  const float W = 1024, H = 220;
+  Canvas2D g(int(W), int(H), fonts_);
+  g.fillStyle("#f7f7f4"); g.beginPath(); g.roundRect(4, 4, W - 8, H - 8, 22); g.fill();
+  g.lineWidth(7); g.strokeStyle("#111"); g.beginPath(); g.roundRect(14, 14, W - 28, H - 28, 16); g.stroke();
+  auto shield = [&](float x, const char* fillA, const char* fillB, bool cross) {
+    const float cy = H / 2;
+    auto path = [&]() { g.beginPath(); g.moveTo(x - 34, cy - 46); g.lineTo(x + 34, cy - 46); g.lineTo(x + 34, cy + 8); g.quadraticCurveTo(x + 34, cy + 40, x, cy + 52); g.quadraticCurveTo(x - 34, cy + 40, x - 34, cy + 8); g.closePath(); };
+    path();
+    g.fillStyle(fillA); g.fill();
+    if (fillB) { g.save(); g.clip(); g.fillStyle(fillB); g.fillRect(x, cy - 50, 40, 110); g.restore(); path(); }
+    g.lineWidth(3); g.strokeStyle("#222"); g.stroke();
+    if (cross) { g.fillStyle("#fff"); g.fillRect(x - 7, cy - 26, 14, 48); g.fillRect(x - 22, cy - 9, 44, 14); }
+  };
+  shield(70, "#d52b1e", nullptr, true);
+  shield(W - 70, "#d52b1e", "#f4f4f4", false);
+  g.fillStyle("#121212"); g.textAlign("center"); g.textBaseline("middle");
+  int size = 170;
+  g.font("700 170px \"Barlow Condensed\"");
+  const float room = W - 260, tw = g.measureText(text);
+  if (tw > room) { size = int(std::floor(float(size) * room / tw)); g.font("700 " + std::to_string(size) + "px \"Barlow Condensed\""); }
+  g.fillText(text, W / 2, H / 2 + 8);
   Material m;
   m.baseTex = canvasTexture(*dev_, g);
   m.roughness = 0.5f; m.metallic = 0;
-  auto model = buildModel(*dev_, {{quadGeo(-0.26f, 0.26f, -0.056f, 0.056f, 0, 1), m}}, "plate");
+  // (PLATE_W x PLATE_H: an EU plate, 520 x 110 mm)
+  auto model = buildModel(*dev_, {{quadGeo(-0.26f, 0.26f, -0.055f, 0.055f, 0, 1), m}}, "plate");
   plates_[text] = model;
   plateOrder_.push_back(text);
   return model.get();
@@ -238,11 +256,15 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
                        glm::scale(glm::dmat4(1), dvec3(0.22, 0.08, 1));
         vd.add(c.brake ? brakeGlow : tailGlow, G, 0);
       }
-    if (!c.plate.empty() && d < 22) {
+    if (!c.plate.empty() && d < 45) {
       const Model* pm = plateModel(c.plate);
-      double L2 = c.vm->size.z * 0.5;
-      vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.42, L2 + 0.03)), 0);
-      vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.62, -L2 - 0.03)) * glm::rotate(glm::dmat4(1), PI, dvec3(0, 1, 0)), 0);
+      if (c.vm->hasPlates) {   // (where carconfig.js puts them on this model: front and rear, none where it has none)
+        for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P, 0);
+      } else {
+        double L2 = c.vm->size.z * 0.5;
+        vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.42, L2 + 0.03)), 0);
+        vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.62, -L2 - 0.03)) * glm::rotate(glm::dmat4(1), PI, dvec3(0, 1, 0)), 0);
+      }
       nPlates_++;
     }
   }

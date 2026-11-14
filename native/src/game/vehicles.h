@@ -41,6 +41,8 @@ struct VehicleModel {
   mat4 fit{1};
   vec3 size{1.9f, 1.5f, 4.7f};
   bool ok() const { return bool(model); }
+  bool hasPlates = false;              // (carconfig.js plateSpots) the plates' places in the car's frame, exported
+  std::vector<glm::dmat4> plates;
   // (Phase 7, cars.js splitWheels) the body without its wheels (in the fitted space: nose +z, wheels on y 0) and the
   // four wheels as their own pieces centred on their axles (they roll; the front ones steer), for the near LOD
   std::shared_ptr<Model> body;
@@ -59,7 +61,8 @@ public:
   void load(gfx::Device& dev, AssetManager& assets, Transport& t, Resort& resort);
   const VehicleModel* car(const std::string& name) const;
   VehicleModel bus;
-  struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, frame, bogie, lo; } rail;   // express: (Phase 7) the blue livery
+  struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
+  //   // express: (Phase 7) the blue livery
 private:
   std::unordered_map<std::string, VehicleModel> cars_;
 };

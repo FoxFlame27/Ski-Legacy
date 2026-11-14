@@ -44,6 +44,7 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
     for (const auto& g : s.glass) if (g.i >= 0 && size_t(g.i) < m->materials.size()) { Material gm = glassMat(g.red, g.clear); gm.name = m->materials[size_t(g.i)].name; m->materials[size_t(g.i)] = gm; }
     VehicleModel vm;
     vm.model = m; vm.fit = s.fit; vm.size = s.size;
+    vm.hasPlates = s.hasPlates; vm.plates = s.plates;
     vm.lampF = vec3(s.size.x * 0.36f, 0.68f, s.size.z * 0.5f - 0.15f);
     vm.lampR = vec3(s.size.x * 0.36f, 0.85f, -s.size.z * 0.5f + 0.1f);
     splitWheels(dev, vm);
@@ -81,6 +82,7 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
     if (t.railModels) {
       auto& rm = *t.railModels;
       if (rm.contains("cabin")) rail.cabin = resort.transportModel(rm["cabin"]);
+      if (rm.contains("cabinExpress")) rail.cabinExpress = resort.transportModel(rm["cabinExpress"]);
       if (rm.contains("frame")) rail.frame = resort.transportModel(rm["frame"]);
       if (rm.contains("bogie")) rail.bogie = resort.transportModel(rm["bogie"]);
       if (rm.contains("lo")) rail.lo = resort.transportModel(rm["lo"]);

@@ -70,6 +70,10 @@ struct CarSpec {
   std::vector<std::string> hide;
   struct Glass { int i; bool red, clear; };
   std::vector<Glass> glass;
+  /// (carconfig.js plateSpots) where its number plates go, in the car's frame (x along the plate, y up it, z out of
+  /// its face); hasPlates false: not exported (the plates at the bumpers' height as before)
+  bool hasPlates = false;
+  std::vector<glm::dmat4> plates;
 };
 
 class Transport {

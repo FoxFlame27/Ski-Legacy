@@ -181,6 +181,15 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     s.fit = mat16(c["fit"]);
     for (auto& h : c["hide"]) s.hide.push_back(h.get<std::string>());
     for (auto& g : c["glass"]) s.glass.push_back({g["i"].get<int>(), g.value("red", false), g.value("clear", false)});
+    if (c.contains("plates") && c["plates"].is_array()) {
+      s.hasPlates = true;
+      for (auto& p : c["plates"]) {
+        if (!p.contains("m") || p["m"].size() != 16) continue;
+        glm::dmat4 M(1);
+        for (int k = 0; k < 16; k++) M[k / 4][k % 4] = p["m"][size_t(k)].get<double>();
+        s.plates.push_back(M);
+      }
+    }
     cars.push_back(std::move(s));
   }
   if (net["bus"].is_object()) {

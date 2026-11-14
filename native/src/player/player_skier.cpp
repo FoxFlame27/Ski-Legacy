@@ -84,6 +84,20 @@ bool PlayerSkier::load(AssetManager& assets, const std::string& colour, const st
 void PlayerSkier::update(double dt, Player& p, World& world) {
   if (!rig.ready()) return;
   rig.setGround([&world](double x, double z, double y) { return world.groundHeight(x, z, y); });
+  if (cine.on) {   // (cinecam.js poseRig: the cinematic's pose, the head shown, the gear in world space)
+    if (cine.ground) rig.setGround(cine.ground);
+    rig.setCarry(false);
+    rig.setSkisVisible(cine.skis);
+    rig.setHeadHidden(false);
+    rig.polesHidden = false;
+    if (cine.snap) { cine.snap = false; rig.snapPose(); }
+    p.polePlants.clear();
+    rig.rootPos = cine.pos;
+    rig.update(std::max(1e-4, dt * cine.dtScale), cine.st);
+    eyeRigOk = false;
+    rig.writePose(pose_);
+    return;
+  }
   RigState& st = state;
   st = RigState{};
   const double sp = p.speed();
@@ -179,7 +193,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
 void PlayerSkier::updateFpView(double dt, const Camera& cam, const Player& p, gfx::Device& dev, AssetManager& assets) {
   if (!rig.ready()) return;
   SkierRig::FpViewState o;
-  o.skiing = p.view == Player::View::First && p.mode == PlayerMode::Ski && !showcase;
+  o.skiing = p.view == Player::View::First && p.mode == PlayerMode::Ski && !showcase && !cine.on;
   if (o.skiing) {
     o.speed = p.speed(); o.air = p.air; o.absorb = p.absorb; o.brake = p.skidAmt();
     o.rough = p.groomedAt(p.pos.x, p.pos.z) ? 0.25 : 1;   // (a groomed run is smooth; off it the snow is rough)
@@ -210,7 +224,7 @@ void PlayerSkier::updateFpView(double dt, const Camera& cam, const Player& p, gf
 }
 
 void PlayerSkier::submit(Renderer& r, bool hideBody) const {
-  if (!rig.ready()) return;
+  if (!rig.ready() || (cine.on && !cine.visible)) return;
   const dvec3 o(rig.rootPos);
   mat4 B = mat4(compose(V3(0), rig.rootQuat(), V3(1)));
   const Model& body = dressed_ ? *dressed_ : *model_->body;

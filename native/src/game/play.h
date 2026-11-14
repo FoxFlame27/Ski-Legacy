@@ -16,7 +16,7 @@ namespace sl {
 namespace platform { class Platform; }
 namespace gfx { class Device; }
 class World; class Scenery; class Transport; class Player; class Drive; class Traffic; class Save; class Menus; class Hud;
-class People; class PeopleSim; class Shapes; class Lifts; class Weather; class AssetManager; class Ui;
+class People; class PeopleSim; class PlayerSkier; class Shapes; class Lifts; class Weather; class AssetManager; class Ui;
 struct PlayData;
 
 struct PlayCtx {
@@ -25,6 +25,7 @@ struct PlayCtx {
   Scenery* scenery = nullptr;
   Transport* transport = nullptr;
   Player* player = nullptr;
+  PlayerSkier* skier = nullptr;   // your rig (a race's podium / replay poses it: presentation/cinecam.js)
   Drive* drive = nullptr;
   Traffic* traffic = nullptr;
   Save* save = nullptr;

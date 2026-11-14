@@ -937,8 +937,12 @@ world ready in 21.61 s ...
 ```
 
 ### Known gaps (Phase 5)
-- **Races**: no ghosts (the time trial mode is gone in the web game too), no broadcast presentation (intro flyover, podium,
-  replays, photo finish), no far stand-ins for the racers (rigs to 400 m), no snow spray / tracks behind them, no
+- **Races**: no ghosts (the time trial mode is gone in the web game too); of the broadcast presentation the payoff is
+  ported (`game/race_cine.*`: the replay buffer, the podium with its confetti and orbit, the results over it, WATCH
+  REPLAY behind the brush stinger with the trackside / heli / chase / finish cameras and slow motion, back to the
+  results; `SKI_LEGACY_DEBUG=racetest --autotest --png out.png` plays it out and writes `out_rt_<stage>.png`), the intro
+  flyover and the photo finish's / big airs' world slow motion are not; the trackside camera does not know tunnels /
+  bridges (the course features are not exported); no far stand-ins for the racers (rigs to 400 m), no snow spray / tracks behind them, no
   floodlit night course (the masts are exported, the night and their light pools are not set up), no RACE AGAIN; the course meshes stand everywhere (the web game builds them within
   1.7 km); the low-poly spectators of props.js are replaced by the character crowd.
 - **Jobs**: the people are drawn but have no lines of dialogue beyond the flash texts; the guest follows a simplified

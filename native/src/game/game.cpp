@@ -516,7 +516,7 @@ int runGame(const GameOptions& opt) {
   PlayCtx pc;
   pc.plat = plat.get(); pc.world = &world; pc.scenery = &scenery; pc.transport = &transport; pc.player = &player; pc.drive = &drive; pc.traffic = &traffic;
   pc.save = &save; pc.input = &input; pc.people = &people; pc.folk = &folk; pc.shapes = &shapes; pc.lifts = &lifts; pc.weather = &weather; pc.assets = &assets;
-  pc.dev = dev.get(); pc.data = &playData; pc.autotest = opt.autotest;
+  pc.dev = dev.get(); pc.data = &playData; pc.autotest = opt.autotest; pc.skier = &rig;
   for (auto& ps : pistes) pc.pistes.push_back({ps.name, ps.pts});
   Interiors rooms(pc);
   world.addDeck([&](double x, double z) { return rooms.deck(x, z); });
@@ -1165,7 +1165,7 @@ int runGame(const GameOptions& opt) {
   // (SKI_LEGACY_UISTEP=<name>: from that sample screen on; SKI_LEGACY_UIONLY=1: just that one)
   if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 11 + int(i);
   const bool uiOnly = std::getenv("SKI_LEGACY_UIONLY") != nullptr;
-  if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
+  if ((off("p5test") || off("racetest")) && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest") || off("helicheck")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
   bool heliOk = true;
   const bool heliRun = at == AT::Heli;
@@ -1992,7 +1992,7 @@ int runGame(const GameOptions& opt) {
           t5.course = nullptr;
           for (const Course& c : playData.courses) if (!t5.course || c.length < t5.course->length) t5.course = &c;
           if (const char* rid = std::getenv("SKI_LEGACY_RACE")) if (const Course* rc = races.courseById(rid)) t5.course = rc;   // (debug: that course)
-          if (off("p5test") && save.skis.empty()) { save.skis = "rental"; player.hasSkis = true; }   // (debug: straight here, the ski shop skipped)
+          if ((off("p5test") || off("racetest")) && save.skis.empty()) { save.skis = "rental"; player.hasSkis = true; }   // (debug: straight here, the ski shop skipped)
           if (t5.course) {
             save.earn(2000);
             t5.money0 = save.money;
@@ -2014,7 +2014,47 @@ int runGame(const GameOptions& opt) {
           if (f % 100 == 0) SL_INFO("[autotest] race t=%6.2fs  %5.0f m down the course  %5.1f km/h  lat %5.1f", races.raceTime(), races.progress(), sp * 3.6, pr.lat);
         } else if (races.finished()) input.releaseInjected();
         if (off("raceshots") && races.active() && !opt.png.empty() && pendingPng.empty() && f % 40 == 20 && f < 1300) pendingPng = pngVariant(opt.png, ("race" + std::to_string(f / 40)).c_str());   // (debug: the race every 2 s)
-        if (races.resultsUp() && t5.resF < 0) {
+        const bool raceTest = off("racetest");
+        if (raceTest) {
+          // (debug: SKI_LEGACY_DEBUG=racetest --autotest --png out.png: the finish played out as session.js does: the
+          // podium, the results over it, WATCH REPLAY behind the stinger, every camera of the replay, the stinger, the
+          // results again; out_rt_<stage>.png)
+          static int stage = 0, shotN = 0;
+          static double st = 0, shotT = 0;
+          static std::string lastShot;
+          static bool ok = true;
+          const std::string cs = races.cineStage();
+          const double t0 = st;
+          static double wall = 0;
+          const double wallNow = plat->timeSeconds(), wallDt = wall > 0 ? wallNow - wall : 0;
+          wall = wallNow;
+          st += stage == 2 || stage == 5 ? wallDt : frameDt;   // (the results screen animates on the wall clock)
+          auto at2 = [&](double t) { return t0 < t && st >= t; };
+          auto shot = [&](const std::string& n) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, ("rt_" + n).c_str()); SL_INFO("[racetest] %-16s stage '%s' %.2f s  camera (%.1f, %.1f, %.1f) fov %.1f", n.c_str(), cs.c_str(), races.cineAge(), cam.pos.x, cam.pos.y, cam.pos.z, cam.fovY); };
+          auto expect = [&](bool c, const char* what) { SL_INFO("[racetest] %s -> %s", what, c ? "ok" : "FAILED"); ok = ok && c; };
+          if (stage == 0 && cs == "podium") { stage = 1; st = 0; expect(!races.resultsUp(), "the podium comes before the results"); }
+          else if (stage == 1) {
+            if (at2(0.5)) shot("podium_0p5"); if (at2(2.5)) shot("podium_2p5"); if (at2(5.5)) shot("podium_5p5");
+            if (races.resultsUp()) { expect(std::fabs(st - 6.2) < 0.15 && cs == "podium-hold", "the results come up over the podium after 6.2 s"); stage = 2; st = 0; }
+          } else if (stage == 2) {
+            if (at2(2.5)) shot("results");
+            if (at2(3.0)) { expect(races.watchReplay(), "WATCH REPLAY on the results screen"); stage = 3; st = 0; }
+          } else if (stage == 3) {
+            if (at2(0.2)) shot("sting_in"); if (at2(0.4)) shot("sting_cover");
+            if (cs == "replay") { expect(std::fabs(st - 0.45) < 0.11, "the replay starts behind the stinger (0.45 s)"); stage = 4; st = 0; }
+          } else if (stage == 4) {
+            if (at2(0.25)) shot("sting_out");
+            const std::string k = races.replayShot();
+            if (k != lastShot) { lastShot = k; shotT = st; SL_INFO("[racetest] replay camera: %s at %.2f s", k.c_str(), st); }
+            else if (st > 1 && shotT >= 0 && st - shotT >= 1.4) { shotT = -1; shot("replay" + std::to_string(shotN++) + "_" + k); }
+            if (cs != "replay") { expect(st > 8 && shotN >= 4, "the replay ran through its cameras to the finish"); stage = 5; st = 0; }
+          } else if (stage == 5) {
+            if (at2(2.5)) { expect(races.resultsUp() && menus.customOpen("results"), "the results again after the replay"); shot("results_again"); }
+            if (at2(3.0)) races.confirmResults();
+            if (at2(3.4)) { expect(!races.active(), "OK ends the race"); SL_INFO("[racetest] %s", ok ? "PASS" : "FAIL"); if (!ok) raceOk = false; running = false; }
+          }
+        } else if (races.cineStage() == "podium" && races.cineAge() > 2) races.skipCine();   // (SKIP: the results at once)
+        if (!raceTest && races.resultsUp() && t5.resF < 0) {
           t5.resF = f;
           SL_INFO("[autotest] race: finished in %s, place %d, money $%lld -> $%lld", fmtRaceTime(races.raceTime()).c_str(), races.place(), (long long)t5.money0, (long long)save.money);
           for (auto& row : races.lastRows) SL_INFO("[autotest]   %s", row.c_str());
@@ -2036,7 +2076,7 @@ int runGame(const GameOptions& opt) {
           SL_INFO("[autotest] race: OK -> back in Legacy Village (%.0f, %.0f) %s", player.pos.x, player.pos.z, home ? "ok" : "FAILED");
           nextPhase(AT::Job);
         }
-        if (f > 3600 && t5.resF < 0) { raceOk = false; SL_WARN("[autotest] race: not finished after %.0f s (%.0f m down)", races.raceTime(), races.progress()); races.abort(); nextPhase(AT::Job); }
+        if (f > (raceTest ? 6000 : 3600) && t5.resF < 0) { raceOk = false; SL_WARN("[autotest] race: not finished after %.0f s (%.0f m down)", races.raceTime(), races.progress()); races.abort(); nextPhase(AT::Job); }
       } else if (at == AT::Job) {
         const JobHub* hub = nullptr;
         for (auto& h : playData.hubs) if (h.id == "village") hub = &h;
@@ -3256,6 +3296,7 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(eye, look);
       cam.fovY = 50; cam.nearZ = 0.2f;
     }
+    if (started) races.camera(cam);   // (a race's podium / replay owns the camera: presentation/cinecam.js applyCamera)
     if (off("carside") && started) {
       // (debug: a low side view of your car, else of the nearest traffic car with people in it: the boots under the sill)
       glm::dmat4 M(0);
@@ -3564,6 +3605,7 @@ int runGame(const GameOptions& opt) {
         else if (snd == "checkpoint") { audio.play("gate"); audio.announce("checkpoint"); }
         else if (snd == "gate") audio.play("gate");
         else if (snd == "miss") audio.play("miss");
+        else if (snd == "chime") audio.play("chime");   // (podium.js fire: the confetti cannons)
         else if (snd.rfind("finish:", 0) == 0) {
           std::string r = snd.substr(7);
           audio.play("finish");

@@ -57,6 +57,25 @@ const PATCHES = [
         'export function registerStation(plan, origin, az, colliders, o = {}) { return globalThis.__slRegStation ? globalThis.__slRegStation(() => __rs0(plan, origin, az, globalThis.__slRailCols, o)) : __rs0(plan, origin, az, colliders, o); }\nfunction __rs0(plan, origin, az, colliders, { zOff = 0 } = {}) {'],
     ],
   },
+  {
+    // the helipad's deck (heli/pad.js padTexture) paints its concrete and the snow blown onto its rim pixel by pixel
+    // (a noise canvas scaled up, getImageData / putImageData): the recorder has no pixels, so the same picture in
+    // drawing commands: the concrete's mean grey under the grain it speckles on, the snow as rings thickening to the rim
+    file: '/src/game/heli/pad.js',
+    edits: [
+      ['  g.imageSmoothingEnabled = true;\n  g.drawImage(n, 0, 0, S, S);', "  g.imageSmoothingEnabled = true;\n  g.fillStyle = 'rgb(112,117,123)'; g.fillRect(0, 0, S, S);"],
+      ['  g.putImageData(snow, 0, 0);\n', "  for (let k = 0; k < 16; k++) { const rr = 0.83 + ((k + 0.5) * 0.17) / 16, cv = ((rr - 0.83) / 0.17) * 0.85; g.strokeStyle = 'rgba(240,245,252,' + (cv * cv * 0.87).toFixed(3) + ')'; g.lineWidth = (h * 0.17) / 16 + 1; g.beginPath(); g.arc(h, h, rr * h, 0, Math.PI * 2); g.stroke(); }\n"],
+    ],
+  },
+  {
+    // the ward's BESUCHSZEIT board (hospitalroom.js board): its cream paper is a gradient fill, which the recorded
+    // canvas has no pixels for: the gradient's middle as a plain fill
+    file: '/src/game/hospitalroom.js',
+    edits: [
+      ["      const bg = g.createLinearGradient(0, 0, w, h); bg.addColorStop(0, '#f8f6f0'); bg.addColorStop(1, '#ece8de');\n      g.fillStyle = bg; g.fillRect(0, 0, w, h);",
+        "      g.fillStyle = '#f2efe7'; g.fillRect(0, 0, w, h);"],
+    ],
+  },
 ];
 
 export async function load(url, context, nextLoad) {

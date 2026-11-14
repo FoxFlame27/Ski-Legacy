@@ -43,6 +43,8 @@ public:
   /// (rooms, export_rooms.mjs) a room the web game builds as a scene of its own (play.json's rooms.<id>.parts), as one
   /// model in the room's own frame; built when the play pack loads, null if the pack has none
   std::shared_ptr<Model> roomModel(const std::string& id) const;
+  /// (the helicopter's parts, the ward: export_play.mjs localModel) a play pack local model
+  std::shared_ptr<Model> playModel(const nlohmann::json& parts) { return partsModel(parts, pbin_, pmats_); }
   /// (Phase 7) the transport / play packs' parsed json and bins dropped once Transport, VehicleModels and PlayData have
   /// read them (hundreds of MB of DOM and raw data; the Switch budget)
   void releaseLoadData();
@@ -86,7 +88,7 @@ private:
   std::vector<uint8_t> tbin_;
   std::shared_ptr<nlohmann::json> pjson_;
   std::vector<uint8_t> pbin_;
-  std::vector<Material> tmats_;
+  std::vector<Material> tmats_, pmats_;
   std::vector<std::pair<std::string, std::shared_ptr<Model>>> rooms_;
 
   gfx::Device& dev_;

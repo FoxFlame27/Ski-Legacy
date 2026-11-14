@@ -42,6 +42,7 @@ BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in) 
   struct Card { int item; float cx, cy; };
   std::vector<Card> cards;
   L.itemSpan.assign(s.items.size(), {0.f, 0.f});
+  L.cardCentre.assign(s.items.size(), vec2(-1));
   float ly = 2 * u;
   for (size_t c = 0; c < s.categories.size(); c++) {
     ly += 14 * u;
@@ -64,7 +65,7 @@ BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in) 
   {
     float tx = x, th = 36 * u;
     for (size_t c = 0; c < s.categories.size(); c++) {
-      std::string t = uiw::upper(s.categories[c].second);
+      std::string t = s.categories[c].second;
       float tw = ui.textWidth(t, 18 * u, NUM, 0.05f) + 26 * u;
       if (tx > x && tx + tw > x + w) { tx = x; y += th + 6 * u; }
       bool on = int(c) == curCat, hv = inside(tx, y, tw, th);
@@ -88,7 +89,7 @@ BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in) 
     float hy = listY + L.catTop[c] - scroll;
     if (hy > listY + listH || hy + tXs < listY) continue;
     ui.rect(x + 6 * u, hy + tXs / 2 - 2 * u, 14 * u, 4 * u, red);
-    std::string t = uiw::upper(s.categories[c].second);
+    std::string t = s.categories[c].second;
     ui.textShadow(x + 28 * u, hy + (tXs - ui.lineHeight(tXs, UiFont::BodyHeavy)) / 2, tXs, UiFont::BodyHeavy, t, UiAlign::Left, 0.18f, 0, d, 6 * d, a(hex(0x000000), 0.6f));
     ui.textLH(x + 28 * u, hy, tXs, tXs, UiFont::BodyHeavy, white, t, UiAlign::Left, 0.18f);
   }
@@ -98,6 +99,7 @@ BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in) 
     if (cy > listY + listH || cy + cardH < listY) continue;
     bool sel = it.id == s.hand, hv = L.over && p.y >= listY && p.y <= listY + listH && inside(cx, cy, cardW, cardH), shortM = s.money < it.price;
     if (hv) L.card = c.item;
+    if (cy >= listY && cy + cardH <= listY + listH) L.cardCentre[size_t(c.item)] = vec2(cx + cardW / 2, cy + cardH / 2);
     float dx = 0;
     vec4 paper = sel ? blue : a(white, hv ? 1.f : 0.92f);
     if (it.id == s.denyId && s.denyAge < 0.55) {

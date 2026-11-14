@@ -40,12 +40,19 @@ public:
   bool inside() const { return rooms_.room() == Interiors::Room::Chalet; }
   bool building() const { return build_; }
   bool vmouse() const { return vmouse_; }
+  /// (buildmenu.js setMode 'cursor') build mode with keyboard + mouse: the mouse is free to click the catalogue and
+  /// to place (TAB: back to looking around with it); game.cpp releases / takes the pointer by this
+  bool wantsFreeMouse() const { return build_ && cursorMode_ && !vmouse_ && !padNow_; }
   bool buy(int house);
   void goInside(int house);
   void toggleBuild();
   /// place catalogue item `id` at room-local (x, z), turned rot (rad): bought, saved -> true (autotest / placement)
   bool place(const std::string& id, double lx, double lz, double rot);
   int furnitureCount() const;
+  /// (autotest) the piece in hand; a catalogue card's centre on the screen (x < 0: not visible)
+  const std::string& hand() const { return hand_; }
+  void setCursor(vec2 p) { cursor_ = p; }   // (autotest: the virtual mouse's pointer)
+  vec2 cardCentre(size_t item) const { return item < bm_.cardCentre.size() ? bm_.cardCentre[item] : vec2(-1); }
   int houseNear(const dvec3& p, double r) const;
   std::string objective() const;
   /// (Phase 6) the plot id of the chalet you are in (-1 outside): the presence's interior 'chalet:<id>'
@@ -63,7 +70,7 @@ private:
   mat4 houseLocal_{1};
   std::vector<std::pair<std::string, Fit>> fits_;
   int insideHouse_ = -1;
-  bool build_ = false, vmouse_ = false;
+  bool build_ = false, vmouse_ = false, cursorMode_ = true, padNow_ = false;
   bool visiting_ = false;                       // (Phase 6) in another player's chalet
   nlohmann::json guestFurniture_ = nlohmann::json::array();
   int cat_ = 0, item_ = 0;

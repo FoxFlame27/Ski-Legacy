@@ -115,7 +115,7 @@ struct Icon {
 struct TrailMap::Impl {
   // ---------------------------------------------------------------- data
   struct Piste { std::string name; int diff = 1, number = 0; bool lane = false; std::vector<dvec2> pts; dvec2 lo{0}, hi{0}; };
-  struct Lift { std::string name; bool gondola = true; dvec2 bottom{0}, top{0}; bool hasMid = false; dvec2 mid{0}; std::string midName; };
+  struct Lift { std::string name; bool gondola = true; dvec2 bottom{0}, top{0}; bool hasMid = false; dvec2 mid{0}; std::string midName, topName, bottomName; int price = 0; double L = 1, midU = 0, speed = 6; };
   struct RoadM { std::string name, what; int kind = 0; double length = 0; std::vector<dvec2> pts; dvec2 lo{0}, hi{0}; };
   struct RoadLabel { std::string name; double length = 0; bool scenic = false, minor = false; std::vector<dvec3> pts; };
   struct TunnelM { std::string name, road; double length = 0; std::vector<dvec2> pts; glm::dvec4 ends[2]; };
@@ -1290,7 +1290,7 @@ struct TrailMap::Impl {
     add(tv.from.x, tv.from.z);
     for (const auto& L : tv.lines) for (const dvec3& p : L) add(p.x, p.y);
     if (x0 > x1) { x0 = x1 = tv.from.x; z0 = z1 = tv.from.z; }
-    const double pad = 0.13, w = std::max(400.0, x1 - x0), h = std::max(300.0, z1 - z0);
+    const double pad = tv.chart ? 0.16 : 0.13, w = std::max(400.0, x1 - x0), h = std::max(300.0, z1 - z0);
     vs = std::clamp(std::min(W * (1 - 2 * pad) / w, H * (1 - 2 * pad) / h), 0.02, 1.2);
     vx = (x0 + x1) / 2; vz = (z0 + z1) / 2;
   }
@@ -1388,13 +1388,93 @@ struct TrailMap::Impl {
       if (&e == focus) { LabelOpt o; o.size = 14; o.color = e.color; o.prio = -1; label(upper(e.diff) + DOT + "START", x, cy, o, around(r + 1, 5)); }
     }
   }
+  /// travel.js drawChart(): the pilot's chart: range rings and a compass rose round the helipad, flight lines to each zone
+  void tvDrawChart() {
+    const float hx = X(tv.from.x), hy = Z(tv.from.z), R = 46;
+    const TravelDest* dsel = tvFi >= 0 && tvFi < int(tv.dests.size()) ? &tv.dests[size_t(tvFi)] : nullptr;
+    // range rings every km, labelled where they leave the top of the rose
+    for (int km = 1; km <= 6; km++) {
+      const float r = float(km * 1000 * vs);
+      if (r > std::hypot(W, H)) break;
+      std::vector<vec2> c;
+      const int N = std::clamp(int(r * 0.5f), 48, 240);
+      for (int i = 0; i <= N; i++) { float t = float(i) / N * 6.2831853f; c.push_back(vec2(hx + std::cos(t) * r, hy + std::sin(t) * r)); }
+      dash(c, 1.4f, hex(C_BLUE, 0.45f), 2, 6);
+      const float lx = hx + r * std::cos(-PIf * 0.32f), ly = hy + r * std::sin(-PIf * 0.32f);
+      if (inView(lx, ly)) { LabelOpt o; o.size = 13; o.color = C_BLUE; o.alpha = 0.75f; o.hasAlpha = true; o.prio = 8; label(std::to_string(km) + " KM", lx, ly, o, {C(0, 0, 1)}); }
+    }
+    // compass rose: ticks every 10 degrees, longer every 30, N up (map north is -z)
+    ringS(hx, hy, R - 0.6f, 1.2f, hex(C_NAVY, 0.7f));
+    for (int ang = 0; ang < 360; ang += 10) {
+      const float t = float(ang) * PIf / 180, l = ang % 90 == 0 ? 12.f : ang % 30 == 0 ? 8.f : 4.f;
+      line(hx + std::sin(t) * R, hy - std::cos(t) * R, hx + std::sin(t) * (R - l), hy - std::cos(t) * (R - l), 1.2f, hex(C_NAVY, 0.7f), false);
+    }
+    polyF({vec2(hx, hy - R - 11), vec2(hx + 5, hy - R - 1), vec2(hx - 5, hy - R - 1)}, hex(C_RED));
+    text("N", hx, hy - R - 21 - 7, 14, UiFont::CondItalic, hex(C_NAVY), 1, a(white, 0.95f), 1.5f);
+    boxes.push_back({hx - R - 4, hy - R - 30, hx + R + 4, hy + R + 4});
+    // flight lines: thin dashed to every zone, the planned one solid red with an arrowhead
+    for (size_t i = 0; i < tv.dests.size(); i++) {
+      const TravelDest& q = tv.dests[i];
+      if (!std::isfinite(q.x) || &q == dsel) continue;
+      dash({vec2(hx, hy), vec2(X(q.x), Z(q.z))}, 1.6f, hex(C_NAVY, 0.42f), 6, 7);
+    }
+    if (dsel && std::isfinite(dsel->x)) {
+      const float x = X(dsel->x), y = Z(dsel->z), len = std::hypot(x - hx, y - hy), ux = (x - hx) / std::max(1e-3f, len), uy = (y - hy) / std::max(1e-3f, len);
+      const float ex = x - ux * 14, ey = y - uy * 14, sx = hx + ux * R, sy = hy + uy * R;
+      if (len > R + 14) {
+        line(sx, sy, ex, ey, 8, white);
+        line(sx, sy, ex, ey, 3.5f, hex(C_RED));
+        // (the white dots running along it)
+        const float span = std::hypot(ex - sx, ey - sy), off = float(std::fmod(now * 25.0, 16.0));
+        for (float t = off; t < span; t += 16) disc(sx + ux * t, sy + uy * t, 1, white);
+      }
+      polyS({vec2(ex + ux * 6, ey + uy * 6), vec2(ex - ux * 9 - uy * 7, ey - uy * 9 + ux * 7), vec2(ex - ux * 9 + uy * 7, ey - uy * 9 - ux * 7)}, 2, white);
+      polyF({vec2(ex + ux * 6, ey + uy * 6), vec2(ex - ux * 9 - uy * 7, ey - uy * 9 + ux * 7), vec2(ex - ux * 9 + uy * 7, ey - uy * 9 - ux * 7)}, hex(C_RED));
+      // heading + distance by the line's middle
+      const double km = std::hypot(dsel->x - tv.from.x, dsel->z - tv.from.z) / 1000;
+      const int brg = int(std::lround(std::fmod(std::atan2(dsel->x - tv.from.x, -(dsel->z - tv.from.z)) * 180 / PI + 360, 360.0))) % 360;
+      char b[48];
+      std::snprintf(b, sizeof b, "%03d\xC2\xB0  \xC2\xB7  %.1f km", brg, km);
+      float ang = std::atan2(uy, ux);
+      if (ang > PIf / 2) ang -= PIf; else if (ang < -PIf / 2) ang += PIf;
+      const float nx = -std::sin(ang), ny = std::cos(ang);
+      LabelOpt o; o.size = 16; o.color = C_RED; o.prio = -1; o.force = true;
+      label(b, (hx + x) / 2, (hy + y) / 2, o, {C(nx * 14, ny * 14 - 8, 1), C(-nx * 14, -ny * 14 - 8, 1)});
+    }
+    // the helipad
+    disc(hx, hy, 11 + 1.25f, hex(C_RED)); disc(hx, hy, 11 - 1.25f, white);
+    text("H", hx, hy - 7.5f, 15, UiFont::CondItalic, hex(C_RED), 1);
+    { LabelOpt o; o.size = 15; o.color = C_RED; o.prio = -1; o.force = true; label("HELI-SKI BASE", hx, hy, o, {C(0, R + 16, 1), C(R + 10, 0, 0), C(-R - 10, 0, 2)}); }
+    // drop zones: peaks; the planned one red and breathing
+    for (size_t i = 0; i < tv.dests.size(); i++) {
+      const TravelDest& q = tv.dests[i];
+      if (!std::isfinite(q.x)) continue;
+      const float x = X(q.x), y = Z(q.z);
+      const bool sel = &q == dsel;
+      if (!inView(x, y)) continue;
+      if (sel) { float ph = float(std::fmod(now / 1.3, 1.0)); ringS(x, y, 12 + ph * 22 - 1.25f, 2.5f, hex(C_RED, 0.55f * (1 - ph))); }
+      const float k = sel ? 11.f : 8.f;
+      polyF({vec2(x, y - k), vec2(x + k * 0.95f, y + k * 0.7f), vec2(x - k * 0.95f, y + k * 0.7f)}, sel ? hex(C_RED) : white);
+      polyS({vec2(x, y - k), vec2(x + k * 0.95f, y + k * 0.7f), vec2(x - k * 0.95f, y + k * 0.7f)}, 2.5f, sel ? white : hex(C_RED));
+      reserve(x, y, k + 2);
+      tvSpots.push_back({x, y, 18, int(i)});
+      LabelOpt o;
+      if (sel) { o.size = 22; o.color = C_RED; o.prio = -2; o.force = true; label(upper(q.name), x, y, o, around(k + 2, 6)); }
+      else { o.size = 16; o.color = 0x8f1414; o.prio = 0; label(q.name, x, y, o, around(k + 2, 6)); }
+    }
+  }
   /// travel.js draw(): the quiet map under the line
   void tvDrawMap(const dvec3& you, double heading) {
     drawRelief();
     boxes.clear(); queue.clear(); spots.clear(); icons.clear(); pins.clear(); tvSpots.clear();
-    fillRect(0, 0, W, H, a(white, 0.22f));   // a soft wash calms the relief so the line reads first
+    fillRect(0, 0, W, H, tv.chart ? hex(0xfafcff, 0.42f) : a(white, 0.22f));   // a soft wash calms the relief so the line reads first (more on the pilot's chart)
+    if (tv.chart) {   // a 1 km grid
+      const double STEP = 1000, wx0 = vx - W / 2 / vs, wx1 = vx + W / 2 / vs, wz0 = vz - H / 2 / vs, wz1 = vz + H / 2 / vs;
+      for (double gx = std::ceil(wx0 / STEP) * STEP; gx <= wx1; gx += STEP) fillRect(std::round(X(gx)), 0, 1, H, hex(C_BLUE, 0.13f));
+      for (double gz = std::ceil(wz0 / STEP) * STEP; gz <= wz1; gz += STEP) fillRect(0, std::round(Z(gz)), W, 1, hex(C_BLUE, 0.13f));
+    }
     drawVillage();
-    ui->pushAlpha(0.55f);
+    ui->pushAlpha(tv.chart ? 0.35f : 0.55f);
     for (const Piste& p : pistes) if (boxVisible(p.lo, p.hi)) stroke(path(p.pts), 2.6f, hex(PISTE_COLORS[p.diff]));
     ui->popAlpha();
     ui->pushAlpha(0.6f);
@@ -1411,7 +1491,7 @@ struct TrailMap::Impl {
       o.size = 15; o.color = C_NAVY; o.alpha = 0.8f; o.prio = 6;
       label(upper(p.name), x, y, o, {C(0, 16, 1), C(0, -16, 1), C(11, 0, 0), C(-11, 0, 2)});
     }
-    tvDrawRoute();
+    if (tv.chart) tvDrawChart(); else tvDrawRoute();
     // you (trailmap.js drawPlayer)
     float x = X(you.x), y = Z(you.z), mg = 20, ex = std::clamp(x, mg, W - mg), ey = std::clamp(y, mg, H - mg);
     if (ex != x || ey != y) {
@@ -1530,6 +1610,7 @@ void TrailMap::load(platform::Platform& p, const AssetPaths& paths, const World&
     Impl::Lift L;
     L.name = l.name; L.gondola = l.gondola; L.bottom = dvec2(l.bottom.x, l.bottom.z); L.top = dvec2(l.top.x, l.top.z);
     L.hasMid = l.hasMid; L.mid = dvec2(l.mid.x, l.mid.z); L.midName = l.mid.name;
+    L.topName = l.topName; L.bottomName = l.bottomName; L.price = l.price; L.L = l.L; L.midU = l.mid.u; L.speed = std::max(1.0, l.cfg.speed);
     M.lifts.push_back(std::move(L));
   }
   // the roads as the map draws them (map.json, tools/export_map.mjs); without it: the network's centre lines, unnamed
@@ -2187,6 +2268,67 @@ TrailMap::Travel TrailMap::railTravel(int st, bool pass, long long money) const 
     d.id = up ? 1 : 0;   // (the direction: 1 up, 0 down)
     T.dests.push_back(std::move(d));
   }
+  T.goLabel = [](const TravelDest& d) { return "Ride to " + stripSuffix(d.name, {" Gondola"}); };
+  return T;
+}
+
+TrailMap::Travel TrailMap::heliTravel(long long money, int price) const {
+  const Impl& M = *m_;
+  Travel T;
+  T.chart = true; T.lineStyle = 2;
+  T.title = "Heli-Ski"; T.kicker = "FLIGHT PLANNER"; T.listHead = "DROP ZONES"; T.go = "FLY";
+  T.subPre = "Pick a drop zone: the compass and a red smoke flare lead the way \xC2\xB7 "; T.subBold = "you are the pilot";
+  T.from = {"Heli-ski base", M.helipad.x, M.helipad.y, ""};
+  const bool broke = money < price;
+  auto eta = [](double km) { return (40 + km * 1000 / 42) / 60; };   // spool-up and climb, then about 150 km/h
+  std::vector<std::pair<double, int>> order;
+  for (size_t i = 0; i < M.drops.size(); i++) order.push_back({std::hypot(M.drops[i].x - M.helipad.x, M.drops[i].z - M.helipad.y) / 1000, int(i)});
+  std::sort(order.begin(), order.end());
+  for (const auto& [km, i] : order) {
+    const Marker& z = M.drops[size_t(i)];
+    // (map.json: "Name · 640 m": the zone and its vertical)
+    std::string name = z.label, vert;
+    if (size_t k = name.find(" \xC2\xB7 "); k != std::string::npos) { vert = name.substr(k + 4); name = name.substr(0, k); }
+    if (size_t k = vert.find(' '); k != std::string::npos) vert = vert.substr(0, k);
+    TravelDest d;
+    d.name = name; d.x = z.x; d.z = z.z; d.id = i; d.shortMoney = broke; d.disabled = broke;
+    char b[96];
+    std::snprintf(b, sizeof b, "%.1f km \xC2\xB7 %s%s", km, fmtMin(eta(km)).c_str(), vert.empty() ? "" : (" \xC2\xB7 " + vert + " m vertical").c_str());
+    d.meta = b;
+    std::snprintf(b, sizeof b, "%.1f", km);
+    d.plan = {{"DISTANCE", b, "KM"}, {"FLIGHT", std::to_string(std::max(1, int(std::lround(eta(km))))), "MIN"}};
+    if (!vert.empty()) d.plan.push_back({"VERTICAL", vert, "M"});
+    T.dests.push_back(std::move(d));
+  }
+  TravelDest f;
+  f.name = "Free flight"; f.meta = "No flight plan \xC2\xB7 fly anywhere"; f.x = f.z = std::nan(""); f.id = -1; f.shortMoney = broke; f.disabled = broke;
+  T.dests.push_back(std::move(f));
+  T.goLabel = [broke, price, money](const TravelDest&) { return broke ? "$" + fmtInt(price) + " \xC2\xB7 you have $" + fmtInt(money) : "Fly \xC2\xB7 $" + fmtInt(price); };
+  return T;
+}
+
+TrailMap::Travel TrailMap::liftTravel(int line, bool pass, long long money) const {
+  const Impl& M = *m_;
+  Travel T;
+  T.lineStyle = 2;
+  if (line < 0 || size_t(line) >= M.lifts.size() || !M.lifts[size_t(line)].hasMid) return T;
+  const Impl::Lift& l = M.lifts[size_t(line)];
+  auto cap = [](std::string t) { if (!t.empty()) t[0] = char(std::toupper(static_cast<unsigned char>(t[0]))); return t; };
+  const std::string base = stripSuffix(l.name, {" Gondola"});
+  const std::string topN = cap(l.topName.empty() ? base + " summit" : l.topName), botN = cap(l.bottomName.empty() ? base + " base" : l.bottomName);
+  T.title = l.name; T.kicker = "MID-STATION"; T.subPre = "From "; T.subBold = l.midName; T.subPost = " \xC2\xB7 up or down?";
+  T.lines.push_back({dvec3(l.bottom.x, l.bottom.y, 0), dvec3(l.top.x, l.top.y, 0)});
+  T.stops = {{botN, l.bottom.x, l.bottom.y, ""}, {l.midName, l.mid.x, l.mid.y, ""}, {topN, l.top.x, l.top.y, ""}};
+  T.from = {l.midName, l.mid.x, l.mid.y, ""};
+  const int price = l.price > 0 ? l.price : 50;
+  TravelDest up;
+  up.name = topN; up.x = l.top.x; up.z = l.top.y; up.id = 1; up.path = {l.mid, l.top};
+  up.meta = fmtMin((l.L - l.midU) / l.speed / 60) + " \xC2\xB7 up";
+  if (pass) up.tag = "DAY PASS"; else { up.price = price; up.shortMoney = money < price; }
+  TravelDest down;
+  down.name = botN; down.x = l.bottom.x; down.z = l.bottom.y; down.id = 0; down.path = {l.mid, l.bottom};
+  down.meta = fmtMin(l.midU / l.speed / 60) + " \xC2\xB7 down"; down.tag = "FREE";
+  T.dests = {up, down};
   T.goLabel = [](const TravelDest& d) { return "Ride to " + stripSuffix(d.name, {" Gondola"}); };
   return T;
 }

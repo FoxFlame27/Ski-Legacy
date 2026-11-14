@@ -52,6 +52,9 @@ public:
   void confirmResults();
   const Course* courseById(const std::string& id) const { return c_.data ? c_.data->course(id) : nullptr; }
   double progress() const;   // metres down the course
+  /// (the STATS screen's COURSE RECORDS) every course, your best time (< 0: none) and medal (1 gold, 2 silver, 3 bronze, 0 none)
+  struct RecordRow { std::string name; double best = -1; int medal = 0; };
+  std::vector<RecordRow> records() const;
   std::vector<std::string> lastRows;   // the results' rows (autotest log)
   /// (Phase 7) what to hear, taken by the game each frame: count:3 count:2 count:1 go checkpoint miss finish:<place|record|practice> medal:<gold|silver|bronze> results
   std::vector<std::string> sounds;

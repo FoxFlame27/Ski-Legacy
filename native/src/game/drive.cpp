@@ -890,7 +890,11 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     }
     double dist = std::hypot(M[3][0] - cam.x, M[3][2] - cam.z);
     bool mine = d_.on && int(i) == d_.e;
-    draw.addCar(*e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0);
+    // (dev / screenshots: SKI_LEGACY_RIMS=gold|black|... puts that rim colour on every standing car; "all": one each)
+    static const char* rimTest = std::getenv("SKI_LEGACY_RIMS");
+    static const char* RIM_IDS[5] = {"black", "gunmetal", "bronze", "gold", "red"};
+    const vec4 rim = !rimTest ? e.rim : rimColor(std::string(rimTest) == "all" ? RIM_IDS[i % 5] : rimTest);
+    draw.addCar(*e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0, rim);
   }
 }
 

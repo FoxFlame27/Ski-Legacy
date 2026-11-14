@@ -81,7 +81,7 @@ public:
   bool tutorial = true;
   std::string quality;               // "" = not chosen (the --quality / default preset)
   struct Outfits { std::vector<std::string> owned; nlohmann::json equipped = nlohmann::json::object(); } outfits;
-  struct Car { std::string id, plate, paint = "factory"; int price = 0; double damage = 0; bool custom = false; };
+  struct Car { std::string id, plate, paint = "factory", rims = "orig"; int price = 0; double damage = 0; bool custom = false; };
   std::vector<Car> garage;           // carrental.js save.garage (your cars; damage: this port's percentage)
   std::string rentalPlate;           // save.rental: the one out
   nlohmann::json binds = nlohmann::json::object();      // the CONTROLS screen's rebinding ({ kb, pad })

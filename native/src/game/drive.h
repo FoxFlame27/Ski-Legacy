@@ -110,6 +110,7 @@ public:
     double svx = 0, svz = 0, sw = 0;   // shoved: sliding to a stop
     int impoundDay = -1;               // (Phase 5, impound.js) towed: locked until this game day
     vec4 paint{1, 1, 1, 0};            // (Phase 7) its paint (a = 0: the model's own colour)
+    vec4 rim{1, 1, 1, 0};              // carconfig.js RIMS: the tint over the wheels' metal (a = 0: the factory alloys)
   };
   std::vector<Parked> parked;
   /// (Phase 5, impound.js lockReason) a car of yours that doesn't let you in: the reason shown, "" when free

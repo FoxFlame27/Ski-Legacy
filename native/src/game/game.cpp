@@ -472,7 +472,7 @@ int runGame(const GameOptions& opt) {
   for (const Save::Car& c : save.garage) {
     int i = drive.addOwned(c.id, c.plate, c.damage);
     if (i < 0) SL_WARN("garage: unknown car %s", c.id.c_str());
-    else drive.parked[size_t(i)].paint = paintColor(c.paint);   // (Phase 7: your car's paint)
+    else drive.parked[size_t(i)].paint = paintColor(c.paint), drive.parked[size_t(i)].rim = rimColor(c.rims);   // (Phase 7: your car's paint)
   }
   loadingFrame("The trail map, the people, the courses...");
   TrailMap tmap;
@@ -944,11 +944,11 @@ int runGame(const GameOptions& opt) {
       mp.buy("car", {{"cfg", jc}}, [&, model](bool ok, const nlohmann::json& d) {
         if (!ok || !d.contains("car")) return;
         Save::Car c;
-        c.id = model; c.plate = d["car"].value("plate", std::string()); c.price = int(d["car"].value("price", 0)); c.paint = d["car"].value("paint", std::string("white"));
+        c.id = model; c.plate = d["car"].value("plate", std::string()); c.price = int(d["car"].value("price", 0)); c.paint = d["car"].value("paint", std::string("white")); c.rims = d["car"].value("rims", std::string("orig"));
         save.garage.insert(save.garage.begin(), c);
         save.rentalPlate = c.plate;
         if (d.contains("cars")) mp.profile["cars"] = d["cars"];
-        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.parked[size_t(oi)].paint = paintColor(c.paint);
+        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.parked[size_t(oi)].paint = paintColor(c.paint), drive.parked[size_t(oi)].rim = rimColor(c.rims);
         const CarSpec* sp2 = transport.car(model);
         flash("Bought: " + (sp2 ? sp2->label : model) + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
       });
@@ -957,10 +957,10 @@ int runGame(const GameOptions& opt) {
     if (!spend(price)) return -1;
     Save::Car c;
     c.id = model; c.plate = cfg && !cfg->plate.empty() ? cfg->plate : newPlate(); c.price = int(price);
-    if (cfg) { c.paint = paint; c.custom = cfg->custom; }
+    if (cfg) { c.paint = paint; c.rims = rims; c.custom = cfg->custom; }
     save.garage.push_back(c);
     int idx = drive.addOwned(model, c.plate, 0);
-    if (cfg && idx >= 0) drive.parked[size_t(idx)].paint = paintColor(paint);
+    if (cfg && idx >= 0) drive.parked[size_t(idx)].paint = paintColor(paint), drive.parked[size_t(idx)].rim = rimColor(rims);
     save.write(*plat);
     flash("Bought: " + spec->label + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
     return idx;
@@ -1265,7 +1265,7 @@ int runGame(const GameOptions& opt) {
     for (const Save::Car& c : save.garage) {
       bool have = false;
       for (const auto& e : drive.parked) have = have || (e.owned && e.plate == c.plate);
-      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) drive.parked[size_t(i)].paint = paintColor(c.paint); }
+      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) drive.parked[size_t(i)].paint = paintColor(c.paint), drive.parked[size_t(i)].rim = rimColor(c.rims); }
     }
     nlohmann::json& imp = save.data("impound", nlohmann::json::array());
     for (auto& r : imp) for (auto& e : drive.parked) if (e.owned && e.plate == r.value("plate", std::string())) e.impoundDay = r.value("day", 0);

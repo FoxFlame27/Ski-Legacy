@@ -136,7 +136,7 @@ nlohmann::json Save::toJson() const {
   j["rescues"] = rescues;
   j["outfits"] = {{"owned", outfits.owned}, {"equipped", outfits.equipped}};
   nlohmann::json g = nlohmann::json::array();
-  for (const Car& c : garage) g.push_back({{"id", c.id}, {"paint", c.paint}, {"interior", "standard"}, {"rims", "standard"}, {"plate", c.plate}, {"custom", c.custom}, {"price", c.price}, {"damage", c.damage}});
+  for (const Car& c : garage) g.push_back({{"id", c.id}, {"paint", c.paint}, {"interior", "orig"}, {"rims", c.rims}, {"plate", c.plate}, {"custom", c.custom}, {"price", c.price}, {"damage", c.damage}});
   j["garage"] = g;
   j["rental"] = nlohmann::json(nullptr);
   for (const Car& c : garage) if (c.plate == rentalPlate) j["rental"] = g[size_t(&c - garage.data())];
@@ -175,7 +175,7 @@ void Save::fromJson(const nlohmann::json& s) {
     for (auto& c : s["garage"]) {
       if (!c.is_object() || !c.contains("id") || !c["id"].is_string() || c.value("free", false) || c.value("admin", false)) continue;
       Car car;
-      car.id = c["id"]; car.plate = c.value("plate", std::string()); car.paint = c.value("paint", std::string("factory"));
+      car.id = c["id"]; car.plate = c.value("plate", std::string()); car.paint = c.value("paint", std::string("factory")); car.rims = c.value("rims", std::string("orig"));
       car.price = c.contains("price") && c["price"].is_number() ? c["price"].get<int>() : 0; car.damage = c.value("damage", 0.0); car.custom = c.value("custom", false);
       if (car.id == "car_dacia_duster") car.id = "car_vw_golf_gti";   // (carrental.js RETIRED)
       if (car.plate.empty()) car.plate = "SL " + std::to_string(1000 + garage.size() * 37 % 9000);

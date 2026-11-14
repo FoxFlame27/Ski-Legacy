@@ -396,7 +396,7 @@ bool BusLine::debugStand(dvec3& p, double& heading) {
       const Bus& b = fleet_[k];
       if (b.at >= 0 || b.legs.empty()) continue;
       const Leg& t = b.legs[size_t(b.li)];
-      if (b.s < t.s0 + 40 || t.s1 - b.s < 260 || b.v < 6) continue;
+      if (b.s < t.s0 + 25 || t.s1 - b.s < 200 || b.v < 4) continue;
       dbg_.bus = int(k); dbg_.s = b.s + 60;
       Pose q = place(t, dbg_.s), c = place(t, dbg_.s + 26);
       dbg_.p = q.pos; dbg_.h = q.yaw + PI;

@@ -135,7 +135,7 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
   const bool exact = c.value("exact", false);
   const bool grad = c.value("grad", false);
   bool masked = false;
-  g.systemFonts(exact);
+  g.systemFonts(exact || grad);   // (the rooms' signs and tags are set in Georgia / a hand: the platform's serif)
   for (auto& op : c["ops"]) {
     if (!op.is_array() || op.empty()) continue;
     const std::string n = op[0].get<std::string>();
@@ -149,19 +149,15 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
       if (k == "globalCompositeOperation" && v.is_string()) masked = v.get<std::string>() != "source-over";
       if (k == "fillStyle" && v.is_string()) g.fillStyle(v.get<std::string>());
       else if (k == "fillStyle" && grad && v.is_object() && v.contains("s") && v["s"].is_array() && !v["s"].empty()) {
-        // (a gradient, the rooms' canvases: its colour stops' mean over their offsets: the paper tags, the signs' fields
-        // and the vignettes are gentle ramps)
-        const auto& S = v["s"];
-        vec4 sum(0);
-        float wsum = 0;
-        for (size_t i = 0; i < S.size(); i++) {
-          if (!S[i].is_array() || S[i].size() < 2 || !S[i][1].is_string()) continue;
-          const float o0 = i > 0 && S[i - 1][0].is_number() ? S[i - 1][0].get<float>() : 0.f, o1 = S[i][0].is_number() ? S[i][0].get<float>() : 1.f;
-          const float o2 = i + 1 < S.size() && S[i + 1][0].is_number() ? S[i + 1][0].get<float>() : 1.f;
-          const float w = std::max(1e-3f, (o1 - o0) * 0.5f + (o2 - o1) * 0.5f + (i == 0 ? o1 : 0.f) + (i + 1 == S.size() ? 1.f - o1 : 0.f));
-          sum += Canvas2D::parseColor(S[i][1].get<std::string>()) * w; wsum += w;
+        // (a gradient, the rooms' canvases: the paper tags, the signs' fields, the vignettes)
+        std::vector<std::pair<float, vec4>> stops;
+        for (auto& q : v["s"]) if (q.is_array() && q.size() >= 2 && q[0].is_number() && q[1].is_string()) stops.push_back({q[0].get<float>(), Canvas2D::parseColor(q[1].get<std::string>())});
+        const auto& A = v["a"];
+        const bool radial = v.value("g", std::string()) == "radial";
+        if (!stops.empty() && A.is_array() && A.size() >= (radial ? 6u : 4u)) {
+          if (radial) g.fillGradient(true, F(A, 0), F(A, 1), F(A, 2), F(A, 3), F(A, 4), F(A, 5), std::move(stops));
+          else g.fillGradient(false, F(A, 0), F(A, 1), 0, F(A, 2), F(A, 3), 1, std::move(stops));
         }
-        if (wsum > 0) g.fillColor(sum / wsum);
       }
       else if (k == "strokeStyle" && v.is_string()) g.strokeStyle(v.get<std::string>());
       else if (k == "lineWidth" && v.is_number()) g.lineWidth(v.get<float>());

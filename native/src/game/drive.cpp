@@ -912,7 +912,7 @@ void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, b
       c.M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
     }
     uint32_t h = uint32_t(i) * 2654435761u;
-    c.plate = !e.plate.empty() ? e.plate : e.forSale ? std::string("AUTOHAUS") : std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
+    c.plate = !e.plate.empty() ? e.plate : std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
     out.push_back(c);
   }
 }

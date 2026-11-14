@@ -170,6 +170,22 @@ for (const c of cuts) {
   }
   log('cut scanned', JSON.stringify(b).slice(0, 80), 'tiles so far', tiles.size);
 }
+// the World Racing courses' own pistes: the 8 m region grid leaves the C++ up to ~0.5 m off the web game's surface
+// across a piste (bumps the racers and you take off from: 24 take-offs on Black Forest Giant Slalom against none in the
+// web game). The 2 m delta tiles along every course's track (its width and 16 m either side) make the physics surface
+// there the web game's at every grid point, as on the roads and the resort's pistes.
+try {
+  let n0 = tiles.size;
+  for (const e of FREE.freeCourses()) {
+    const T = e.course?.track;
+    if (!T?.X) continue;
+    for (let i = 0; i < T.n; i += 4) {
+      const r = (T.W ? T.W[i] : 10) + 16;
+      for (const dx of [-r, 0, r]) for (const dz of [-r, 0, r]) tiles.add(tk(Math.floor((T.X[i] + dx) / TW), Math.floor((T.Z[i] + dz) / TW)));
+    }
+  }
+  log('course piste tiles', tiles.size - n0);
+} catch (e) { log('course piste tiles skipped:', e.message); }
 const tileList = [...tiles].map((k) => [Math.round(k / 100000), k - Math.round(k / 100000) * 100000]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 const S1 = TILE + 1;
 const chunks = [];

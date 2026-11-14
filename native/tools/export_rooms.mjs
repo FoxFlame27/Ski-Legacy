@@ -31,6 +31,16 @@ async function build({ THREE, SRC, models, loadGLB, pack, log, r4, village, worl
     });
     return out;
   };
+  // a building's lamps, lit windows and boards come on with the night (its update(n) sets their emissive strength):
+  // each such material's strength by day and at night (the C++: emissive x (day + (night - day) x night))
+  const nightTag = (scene, setNight) => {
+    const mats = new Set();
+    scene.traverse((o) => { for (const m of [].concat(o.material || [])) if (m && m.emissive) mats.add(m); });
+    try { setNight(0); } catch { return; }
+    const day = new Map([...mats].map((m) => [m, m.emissiveIntensity]));
+    try { setNight(1); } catch { return; }
+    for (const m of mats) { const i0 = day.get(m), i1 = m.emissiveIntensity; if (Math.abs(i1 - i0) > 1e-4) { m.userData.slNight = [r4(i0), r4(i1)]; m.emissiveIntensity = 1; } }
+  };
   // the meshes nobody sees (the aim boxes: colorWrite off) stay out of the model
   const hideHelpers = (scene) => scene.traverse((o) => {
     if (!o.isMesh) return;
@@ -181,6 +191,7 @@ async function build({ THREE, SRC, models, loadGLB, pack, log, r4, village, worl
         const G = o3.group;
         if (G && !G.parent) scene.add(G);
         try { o3.showPatrol?.(false); } catch { /* (the patrol car out front is the C++'s own) */ }
+        nightTag(scene, (n) => o3.update(n, 0)); // (the board, the blue lamp, the lanterns, the windows)
         scene.updateMatrixWorld(true);
         hideHelpers(scene);
         // (everything it put in the world, the roadside sign too, about the lot's own place)
@@ -222,6 +233,9 @@ async function build({ THREE, SRC, models, loadGLB, pack, log, r4, village, worl
       for (let k = 0; k < 80; k++) await new Promise((r) => setTimeout(r, 25)); // (its Meshy props swapped in)
       if (W.site) {
         const S = W.site;
+        const VL = await imp('world/village.js');
+        nightTag(scene, (n) => { VL.nightUniform.value = n; W._n = -1; W.update(0); }); // (the board, the lanterns, the office window, the strip lights)
+        VL.nightUniform.value = 0;
         scene.updateMatrixWorld(true);
         hideHelpers(scene);
         const all = new THREE.Group();

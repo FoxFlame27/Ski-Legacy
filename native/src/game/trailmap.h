@@ -86,6 +86,8 @@ public:
   struct Travel {
     std::string title, kicker, subPre, subBold, subPost, listHead;
     int lineStyle = 0;                    // 0 bus, 1 rail, 2 lift, 3 express
+    bool chart = false;                   // travel.js mode 'chart' (the heli-ski flight planner): range rings and a compass
+                                          // rose round `from` (the helipad), flight lines to the dests (x = NaN: no place)
     std::vector<std::vector<dvec3>> lines;   // x, z, tunnel (0 / 1)
     std::vector<TravelStop> stops;
     TravelStop from;
@@ -99,6 +101,11 @@ public:
   Travel busTravel(int from, const std::vector<int>& dests) const;
   /// the Wolkenspitzbahn from station `st`: every other station, up (the fare / the day pass) or down (free)
   Travel railTravel(int st, bool pass, long long money) const;
+  /// a gondola's mid-station (lift index in Lifts::lines()): the line with its three stations, up (the price / the day
+  /// pass) or down (free); each destination's id: 1 up, 0 down
+  /// the heli-ski flight planner (heli.js): the drop zones by distance, then Free flight; dest id = the zone's index (-1 free)
+  Travel heliTravel(long long money, int price = 1500) const;
+  Travel liftTravel(int line, bool pass, long long money) const;
   /// the Legacy Express from station `st`: every other station with its race; the races first, nearest first
   Travel expressTravel(int st, bool pass, long long money) const;
   void openTravel(Travel t);

@@ -43,6 +43,9 @@ public:
   void callFor(const std::string& why, double kmh);          // a hit with your car at kmh closing speed
   void hitCop(int unit, double kmh);                          // your car into a patrol car
   bool wanted() const { return wanted_; }
+  /// (trail map, police.js mapMarkers) the patrol cars while you are wanted, the helicopter while it is out
+  struct MapMark { double x, z; bool heli, sees; };
+  std::vector<MapMark> mapMarks() const;
   int stars() const { return wanted_ ? std::clamp(int(heat_), 1, 5) : 0; }
   bool fleeing() const { return fleeing_; }
   bool arrestedNow() const { return arrestT_ >= 0; }
@@ -118,6 +121,11 @@ private:
   std::vector<dvec2> busPrev_;
   std::vector<int> nearTmp_;
   std::string radio_;
+  // the big word on the screen for a moment (police.js slam): the text, the line under it, the flash's strength
+  std::string slamText_, slamSub_;
+  double slamAt_ = -100, slamK_ = 0;
+  int prevStars_ = 0;
+  void slam(const std::string& text, const std::string& sub, double k) { slamText_ = text; slamSub_ = sub; slamK_ = k; slamAt_ = c_.now; }
   double radioT_ = -1;
   unsigned seed_ = 31337;
   double rnd() { seed_ = seed_ * 1664525u + 1013904223u; return double(seed_ >> 8) / double(1u << 24); }

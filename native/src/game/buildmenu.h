@@ -33,6 +33,7 @@ struct BuildMenuLayout {
   float maxScroll = 0, viewH = 0;
   std::vector<float> catTop;        // each room's heading in the list (px from its top)
   std::vector<std::pair<float, float>> itemSpan;   // each item's top and bottom in the list
+  std::vector<vec2> cardCentre;     // each item's card on the screen (drawable px; x < 0: scrolled out)
 };
 BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in);
 

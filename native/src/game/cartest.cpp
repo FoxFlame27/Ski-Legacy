@@ -193,7 +193,7 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
       break;
     case St::ConfirmBuy:
       // (the menus read their keys on the frames they draw: the autotest draws every 4th, so the taps come 5 frames apart)
-      if (e.menus->dialogOpen() && e.menus->focusedLabel() != "Buy it") { if (n_ % 5 == 1) tap(Key::ArrowUp); if (n_ > 40) { fail(buyOk, "no 'Buy it' on the sale card"); } break; }
+      if (e.menus->dialogOpen() && e.menus->focusedLabel() != "Buy it") { if (n_ % 5 == 1) e.menus->focusLabel("Buy it"); if (n_ > 40) { fail(buyOk, "no 'Buy it' on the sale card"); } break; }   // (the configurator: straight to its summary)
       if (e.menus->dialogOpen() && n_ < 40) { if (n_ % 5 == 1) tap(Key::Enter); break; }
       {
         bool paid = e.money == money0_ - price_ && e.garage == garage0_ + 1;

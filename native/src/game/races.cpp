@@ -186,6 +186,23 @@ void Races::openCard(const Course& co, bool fromStand) {
   c_.menus->openDialog(d);
 }
 
+std::vector<Races::RecordRow> Races::records() const {
+  std::vector<RecordRow> out;
+  if (!c_.data) return out;
+  for (const Course& c : c_.data->courses) {
+    RecordRow r;
+    r.name = c.name;
+    const nlohmann::json& rec = c_.save->data("records")[c.id];
+    if (rec.is_object()) {
+      if (rec.contains("best") && rec["best"].is_number()) r.best = rec["best"].get<double>();
+      int mr = medalRank(rec.contains("medal") ? rec["medal"] : nlohmann::json());
+      r.medal = mr ? 4 - mr : 0;
+    }
+    out.push_back(std::move(r));
+  }
+  return out;
+}
+
 void Races::openStand() {
   // the RACING stand's board (ui/racestand.js): any course against the 14 AI, just for fun
   stand_ = RaceStandView();
@@ -892,6 +909,18 @@ void Races::hud(Ui& ui, float) {
     h.third.stats = {{"LENGTH", km}, {"DROP", fmtMoney(c.drop).substr(1) + " M"}};
     if (!h.trial) h.third.stats.push_back({"FIELD", std::to_string(s.bots.size() + 1)});
   } else if (s.t < LEAD_IN + 3 + 0.6) { h.third.on = true; h.third.age = s.t; h.third.left = LEAD_IN + 1.2; h.third.title = c.name; }
+  // the podium's lower third while you coast out (presentation.js lowerThird: PODIUM, the course, the top 3)
+  if (s.st == Session::St::Finished && !h.trial && h.standings.size() >= 3) {
+    h.third = RaceHudState::Third();
+    h.third.on = true; h.third.bars = false; h.third.age = std::max(0.0, s.t - s.finishT - 0.9); h.third.left = RESULTS_DELAY + 2;
+    h.third.kicker = std::string("PODIUM \xC2\xB7 ") + (c.bus ? "FREE RACE" : uiwUpper(AI_LABEL[s.ai]));
+    h.third.title = c.name;
+    std::vector<std::pair<double, std::pair<std::string, bool>>> fin{{s.finalTime, {"You", true}}};
+    for (auto& b : s.bots) if (b->finished) fin.push_back({b->finishTime, {b->name, false}});
+    std::sort(fin.begin(), fin.end(), [](const auto& p, const auto& q) { return p.first < q.first; });
+    for (size_t i = 0; i < fin.size() && i < 3; i++) h.third.rows.push_back({int(i) + 1, fin[i].second.first, fmtRaceTime(fin[i].first), fin[i].second.second});
+    if (s.t - s.finishT < 0.9) h.third.on = false;
+  }
   if (!s.notice.empty()) {
     if (s.notice == "GO") { h.countdown = "GO"; h.countdownAge = c_.now - s.noticeT; }
     else { h.notice = s.notice; h.noticeAge = c_.now - s.noticeT; h.noticeFor = 2.4; h.noticeKind = s.noticeBad ? 1 : (s.st >= Session::St::Finished ? 2 : 0); }

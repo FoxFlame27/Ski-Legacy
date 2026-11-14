@@ -26,6 +26,8 @@
 #include "game/intro.h"
 #include "game/transition.h"
 #include "game/menus.h"
+#include "game/carconfigui.h"
+#include "game/popups.h"
 #include "game/shopui.h"
 #include "game/trailmap.h"
 #include "game/uitest.h"
@@ -787,6 +789,8 @@ int runGame(const GameOptions& opt) {
     flash(std::string(k->name) + (k->rent ? " rented" : " purchased"), Hud::Flash::Gold);
   };
   int skiShopTab = 0;
+  CarCfgView carCfg;   // the AUTOHAUS configurator (ui/carrental.js)
+  Popups popups;   // the trick popup and the personal-best card (racehud.js trick() / best(), game/bests.js)
   auto openSkiShop = [&]() {
     Dialog d;
     d.tab = skiShopTab;
@@ -921,57 +925,110 @@ int runGame(const GameOptions& opt) {
     return p;
   };
   // buying a car at the Autohaus (carrental.js: your garage, up to GARAGE_MAX cars; it waits in your bay)
-  auto buyCar = [&](const std::string& model) -> int {
+  auto buyCar = [&](const std::string& model, const CarCfg* cfg = nullptr) -> int {
     const CarSpec* spec = transport.car(model);
     if (!spec) return -1;
+    // (the configurator's choices: the paint, the rims, a plate of your own; their extras on the price)
+    const std::string paint = cfg ? cfg->paint : std::string("white"), rims = cfg ? cfg->rims : std::string("orig");
+    const int64_t price = int64_t(spec->price) + (cfg ? carExtras(*cfg) : 0);
     if (int(save.garage.size()) >= GARAGE_MAX) { flash("Your garage is full (" + std::to_string(GARAGE_MAX) + " cars): sell one first", Hud::Flash::Bad); return -1; }
     if (mp.active()) {   // (Phase 6, AUTOHAUS: the server prices it, issues a plate nobody has; your garage from it)
-      mp.buy("car", {{"cfg", {{"id", model}, {"paint", "white"}, {"interior", "orig"}, {"rims", "orig"}}}}, [&, model](bool ok, const nlohmann::json& d) {
+      nlohmann::json jc = {{"id", model}, {"paint", paint}, {"interior", "orig"}, {"rims", rims}};
+      if (cfg && cfg->custom) { jc["plate"] = cfg->plate; jc["custom"] = true; }
+      mp.buy("car", {{"cfg", jc}}, [&, model](bool ok, const nlohmann::json& d) {
         if (!ok || !d.contains("car")) return;
         Save::Car c;
         c.id = model; c.plate = d["car"].value("plate", std::string()); c.price = int(d["car"].value("price", 0)); c.paint = d["car"].value("paint", std::string("white"));
         save.garage.insert(save.garage.begin(), c);
         save.rentalPlate = c.plate;
         if (d.contains("cars")) mp.profile["cars"] = d["cars"];
-        drive.addOwned(model, c.plate, 0);
+        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.parked[size_t(oi)].paint = paintColor(c.paint);
         const CarSpec* sp2 = transport.car(model);
         flash("Bought: " + (sp2 ? sp2->label : model) + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
       });
       return -1;
     }
-    if (!spend(int64_t(spec->price))) return -1;
+    if (!spend(price)) return -1;
     Save::Car c;
-    c.id = model; c.plate = newPlate(); c.price = int(spec->price);
+    c.id = model; c.plate = cfg && !cfg->plate.empty() ? cfg->plate : newPlate(); c.price = int(price);
+    if (cfg) { c.paint = paint; c.custom = cfg->custom; }
     save.garage.push_back(c);
     int idx = drive.addOwned(model, c.plate, 0);
+    if (cfg && idx >= 0) drive.parked[size_t(idx)].paint = paintColor(paint);
     save.write(*plat);
     flash("Bought: " + spec->label + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
     return idx;
   };
+  // selling a car back (half what you paid): MY CARS at the counter and in the configurator
+  std::function<void()> garageChanged;
+  auto sellCar = [&](const std::string& plate) {
+    int value = 0;
+    for (const Save::Car& c : save.garage) if (c.plate == plate) value = int(std::round(c.price * SELL_SHARE / 50.0)) * 50;
+    if (mp.active()) {   // (Phase 6: the server buys it back: half what you paid)
+      for (const auto& e : drive.parked) if (e.owned && e.plate == plate && e.driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
+      mp.carSell(plate, [&, plate](bool ok, const nlohmann::json& d) {
+        if (!ok) return;
+        drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [&](const Drive::Parked& e) { return e.owned && e.plate == plate; }), drive.parked.end());
+        save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
+        if (!save.garage.empty() && save.rentalPlate == plate) save.rentalPlate = save.garage[0].plate;
+        flash("Sold for " + fmtM(d.value("refund", 0)), Hud::Flash::Gold);
+        menus.refreshDialog();
+      });
+      return;
+    }
+    for (size_t i = 0; i < drive.parked.size(); i++)
+      if (drive.parked[i].owned && drive.parked[i].plate == plate) {
+        if (drive.parked[i].driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
+        drive.parked.erase(drive.parked.begin() + long(i));
+        break;
+      }
+    save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
+    save.earn(value);
+    save.write(*plat);
+    flash("Sold for " + fmtM(value), Hud::Flash::Gold);
+  };
+  // E at a car for sale: the AUTOHAUS configurator (ui/carrental.js: PAINT, WHEELS, PLATE, SUMMARY, then BUY). Only
+  // the UI layer here: carCfg.preview / carCfg.drag are free for the walk-in showroom's live car.
+  auto openCarConfig = [&](const std::string& model, int step) {
+    const CarSpec* spec = transport.car(model);
+    if (!spec) return;
+    carCfg = CarCfgView();
+    carCfg.carLabel = spec->label; carCfg.carPrice = int(spec->price); carCfg.step = step;
+    carCfg.cfg.id = model; carCfg.cfg.plate = randomCarPlate(unsigned(plat->timeSeconds() * 1000) ^ unsigned(save.garage.size() * 7919));
+    carCfg.garageMax = GARAGE_MAX; carCfg.wreckFee = int(wreckFee()); carCfg.repairFull = REPAIR_FEE; carCfg.towFee = int(wreckFee()) - REPAIR_FEE;
+    carCfg.interactKey = prompts::K(input, Action::Interact);
+    carCfg.refresh = [&, model](CarCfgView& v) {
+      v.money = save.money; v.owned = 0; v.garage.clear();
+      for (const Save::Car& c : save.garage) {
+        const CarSpec* cs = transport.car(c.id);
+        CarCfgView::Mine m;
+        m.id = c.id; m.plate = c.plate; m.label = cs ? cs->label : c.id; m.paint = c.paint; m.value = int(std::round(c.price * SELL_SHARE / 50.0)) * 50; m.out = c.plate == save.rentalPlate;
+        if (c.id == model) v.owned++;
+        v.garage.push_back(m);
+      }
+      std::stable_partition(v.garage.begin(), v.garage.end(), [&](const CarCfgView::Mine& m) { return m.id == model; });   // (yours of this model first)
+    };
+    carCfg.buy = [&, model](const CarCfg& c, int) { CarCfg cc = c; buyCar(model, &cc); };
+    carCfg.sell = [&](const std::string& plate) { sellCar(plate); };
+    carCfg.takeOut = [&](const std::string& plate) {
+      if (mp.active()) mp.carSwitch(plate, [&, plate](bool ok, const nlohmann::json&) { if (ok) save.rentalPlate = plate; });
+      else { save.rentalPlate = plate; save.write(*plat); }
+      flash(plate + " \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Good);
+    };
+    carCfg.flashBad = [&](const std::string& m) { flash(m, Hud::Flash::Bad); };
+    carCfg.sound = [&](const char* snd) { audio.play(snd); };
+    menus.openCustom([&](const UiNav& nv, double dt, double now) {
+      if (!frameCarConfig(ui, nv, input, carCfg, dt, now)) { if (menus.customOpen("carconfig")) menus.close(); return; }
+      menus.customFocus = carCfg.step == 3 && carCfg.actLabel.rfind("BUY", 0) == 0 ? std::string("Buy it") : carCfg.actLabel;
+    }, "carconfig");
+    menus.customFocusLabel = [&](const std::string& label) { if (label != "Buy it") return false; carCfg.step = 3; return true; };
+  };
   auto openCarSale = [&](int idx) {
     if (idx < 0 || size_t(idx) >= drive.parked.size()) return;
-    std::string model = drive.parked[size_t(idx)].name;
-    Dialog d;
-    d.kicker = "Autohaus \xC2\xB7 Legacy Village";
-    d.title = drive.parked[size_t(idx)].spec->label;
-    d.rebuild = [&, model](Dialog& D) {
-      const CarSpec* spec = transport.car(model);
-      D.say = (spec ? spec->label : model) + " \xC2\xB7 yours for good: it waits in your bay at the Autohaus car park, " + prompts::K(input, Action::Interact) +
-              " to drive. Dents: the Werkstatt next door, priced by the damage. A wreck: " + fmtM(wreckFee()) + " (tow + repair).";
-      D.options.clear();
-      DialogOption b;
-      // (ui/carrental.js: NOT ENOUGH MONEY / GARAGE FULL on the buy button)
-      bool broke = spec && save.money < int64_t(spec->price), full = int(save.garage.size()) >= GARAGE_MAX;
-      b.label = full ? "Garage full" : broke ? "Not enough money" : "Buy it";
-      b.sub = broke && !full ? "You have " + fmtM(save.money) + " \xC2\xB7 the job boards and the races pay"
-                             : std::to_string(save.garage.size()) + " of " + std::to_string(GARAGE_MAX) + " cars in your garage";
-      b.price = spec ? int(spec->price) : 0;
-      b.disabled = !spec || save.money < int64_t(spec->price) || int(save.garage.size()) >= GARAGE_MAX;
-      b.act = [&, model]() { buyCar(model); };
-      DialogOption n; n.label = "Not now"; n.secondary = true;
-      D.options = {b, n};
-    };
-    menus.openDialog(d);
+    const std::string model = drive.parked[size_t(idx)].name;
+    int mine = 0;
+    for (const Save::Car& c : save.garage) mine += c.id == model;
+    openCarConfig(model, mine ? 3 : 0);   // (a model you own opens on the summary: MY CARS)
   };
   auto garageEntry = [&](const std::string& plate) -> Save::Car* { for (auto& c : save.garage) if (c.plate == plate) return &c; return nullptr; };
   // MY CARS (the Autohaus counter): your garage, sell one back for half what you paid
@@ -993,30 +1050,7 @@ int runGame(const GameOptions& opt) {
         for (const auto& e : drive.parked) if (e.owned && e.plate == c.plate && e.impoundDay > save.day) o.sub += " \xC2\xB7 IMPOUNDED: available tomorrow (the fee is paid)";
         o.state = "Sell " + fmtM(value);
         std::string plate = c.plate;
-        o.act = [&, plate, value]() {
-          if (mp.active()) {   // (Phase 6: the server buys it back: half what you paid)
-            for (const auto& e : drive.parked) if (e.owned && e.plate == plate && e.driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
-            mp.carSell(plate, [&, plate](bool ok, const nlohmann::json& d) {
-              if (!ok) return;
-              drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [&](const Drive::Parked& e) { return e.owned && e.plate == plate; }), drive.parked.end());
-              save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
-              if (!save.garage.empty() && save.rentalPlate == plate) save.rentalPlate = save.garage[0].plate;
-              flash("Sold for " + fmtM(d.value("refund", 0)), Hud::Flash::Gold);
-              menus.refreshDialog();
-            });
-            return;
-          }
-          for (size_t i = 0; i < drive.parked.size(); i++)
-            if (drive.parked[i].owned && drive.parked[i].plate == plate) {
-              if (drive.parked[i].driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
-              drive.parked.erase(drive.parked.begin() + long(i));
-              break;
-            }
-          save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
-          save.earn(value);
-          save.write(*plat);
-          flash("Sold for " + fmtM(value), Hud::Flash::Gold);
-        };
+        o.act = [&, plate]() { sellCar(plate); };
         D.options.push_back(o);
       }
       DialogOption n; n.label = "Close"; n.secondary = true;
@@ -1123,7 +1157,7 @@ int runGame(const GameOptions& opt) {
   struct UiT { int step = 0, f = 0; } uiT;
   if (uiTest) at = AT::Map;
   // (SKI_LEGACY_UISTEP=<name>: from that sample screen on; SKI_LEGACY_UIONLY=1: just that one)
-  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 9 + int(i);
+  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 11 + int(i);
   const bool uiOnly = std::getenv("SKI_LEGACY_UIONLY") != nullptr;
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
@@ -1168,6 +1202,22 @@ int runGame(const GameOptions& opt) {
     if (!opt.autotest) plat->setRelativeMouse(true);
     flash(save.skis.empty() ? "Welcome to Legacy Village \xC2\xB7 buy skis at the ski shop" : "Welcome back to Legacy Village", Hud::Flash::Good);
   };
+  // the trail map's live markers (trailmap.js markers()): the patrol cars and the police helicopter while you are
+  // wanted, the other players, the job's target, your cars (the one you drive / parked; grey while impounded)
+  tmap.live = [&](TrailMap::Live& L) {
+    L.ownChalet = chalets.owned() ? chalets.ownedHouse() : -1;
+    for (const Police::MapMark& m : police.mapMarks()) { TrailMap::Marker k; k.x = m.x; k.z = m.z; k.kind = m.heli ? "heli" : "police"; k.flag = m.sees; L.police.push_back(k); }
+    if (mp.active()) for (const auto& [pid, r] : mp.players) if (r.ok && r.interior.empty()) { TrailMap::Marker k; k.x = r.pos.x; k.z = r.pos.z; k.yaw = r.yaw; k.label = r.name; k.kind = "player"; L.players.push_back(k); }
+    if (oddJobs.active() && tmap.mark.on) { TrailMap::Marker k; k.x = tmap.mark.x; k.z = tmap.mark.z; k.kind = "target"; k.label = tmap.mark.label; k.what = "Your job \xC2\xB7 follow the arrow"; L.jobs.push_back(k); }
+    for (const auto& e : drive.parked) if (e.owned && !e.plate.empty()) {
+      TrailMap::Marker k; k.x = e.x; k.z = e.z; k.kind = e.impoundDay > save.day ? "impound" : "car";
+      k.label = (e.spec ? e.spec->label : std::string("Your car")) + (e.impoundDay > save.day ? " \xC2\xB7 impounded" : "");
+      L.mine.push_back(k);
+    }
+  };
+  // (the layer switches are remembered: trailmap.js LAYER_KEY)
+  { std::string lay = save.settingStr("mapLayers", ""); for (int i = 0; i < 7 && i < int(lay.size()); i++) tmap.setLayer(i, lay[size_t(i)] != '0'); }
+  menus.hooks.records = [&]() { std::vector<Menus::Hooks::Record> out; for (const auto& r : races.records()) out.push_back({r.name, r.best, r.medal}); return out; };
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
   menus.hooks.mainMenu = [&]() { heli.abort(); save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
@@ -1534,7 +1584,7 @@ int runGame(const GameOptions& opt) {
         else { menus.inGame = true; menus.open(Menus::Screen::Pause); plat->setRelativeMouse(false); uiOpen = true; }
       }
       else if (input.takePressed(Action::Map)) { tmap.open(player.pos); plat->setRelativeMouse(false); uiOpen = true; }
-      else if (!opt.autotest && (ev.mousePressed & 1) && !plat->relativeMouse()) plat->setRelativeMouse(true);
+      else if (!opt.autotest && (ev.mousePressed & 1) && !plat->relativeMouse() && !chalets.wantsFreeMouse()) plat->setRelativeMouse(true);
     } else if (tmap.isOpen() && !opt.autotest) {
       bool mapKey = std::find(ev.pressed.begin(), ev.pressed.end(), input.kb[size_t(Action::Map)]) != ev.pressed.end() || input.padPressed(input.pad[size_t(Action::Map)]);
       if (mapKey) tmap.close();
@@ -1542,7 +1592,7 @@ int runGame(const GameOptions& opt) {
     if (uiOpen || !started) input.clear();
     wasUiOpen = uiOpen || !started;
     // text input on only while a text field has the focus (the multiplayer name, the chat)
-    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
+    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()) || (carCfg.typing && menus.customOpen("carconfig")); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
     paused = started && menus.isOpen() && !menus.dialogOpen();
 
     // (Phase 4 autotest) the main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> a
@@ -2074,16 +2124,26 @@ int runGame(const GameOptions& opt) {
           if (f == 17) input.inject(Action::NextItem, false);
           if (f == 20 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "build");
           // Esc (an SDL key event) in build mode: leaves build mode, no pause menu
-          if (f == 22 && !plat->pushKey(platform::Key::Escape, true)) { chaletOk = false; SL_WARN("[autotest] chalet: Esc not pushed"); }
-          if (f == 23) plat->pushKey(platform::Key::Escape, false);
-          if (f == 25) {
+          // the catalogue's cards under the mouse (buildmenu.js: a click takes the card in hand, again puts it down)
+          // (the autotest plays on its virtual controller: the virtual mouse points; the free mouse takes the same path)
+          input.inject(Action::VMouse, f == 21);
+          if (f >= 22 && f <= 40 && playData.furniture.size() > 2) {
+            vec2 cc = chalets.cardCentre(2);
+            if (cc.x >= 0) { nav.mouse = cc; chalets.setCursor(cc); }
+            if (f == 29 || f == 37) { nav.click = true; nav.confirm = true; }
+            if (f == 33) { bool ok = chalets.hand() == playData.furniture[2].id; chaletOk = chaletOk && ok; SL_INFO("[autotest] chalet: a click on the %s card (%.0f, %.0f) -> in hand '%s' -> %s", playData.furniture[2].name.c_str(), cc.x, cc.y, chalets.hand().c_str(), ok ? "ok" : "FAILED"); }
+            if (f == 40) { bool ok = chalets.hand().empty(); chaletOk = chaletOk && ok; SL_INFO("[autotest] chalet: a click on it again -> hand '%s' -> %s", chalets.hand().c_str(), ok ? "ok" : "FAILED"); }
+          }
+          if (f == 42 && !plat->pushKey(platform::Key::Escape, true)) { chaletOk = false; SL_WARN("[autotest] chalet: Esc not pushed"); }
+          if (f == 43) plat->pushKey(platform::Key::Escape, false);
+          if (f == 45) {
             bool ok = !chalets.building() && !menus.isOpen();
             if (!ok) { chaletOk = false; if (chalets.building()) chalets.toggleBuild(); if (menus.isOpen()) menus.close(); }
             SL_INFO("[autotest] chalet: Esc in build mode -> build mode left, no pause menu: %s", ok ? "ok" : "FAILED");
           }
-          if (f == 27) { dvec3 e = rooms.toWorld(playData.chaletModel.IX - 0.6, 0, playData.chaletModel.doorZ); player.teleport(e.x, e.z, PI / 2); player.pos.y = rooms.toWorld(0, 0, 0).y; }
-          input.inject(Action::Interact, f == 29);
-          if (f == 33) {
+          if (f == 47) { dvec3 e = rooms.toWorld(playData.chaletModel.IX - 0.6, 0, playData.chaletModel.doorZ); player.teleport(e.x, e.z, PI / 2); player.pos.y = rooms.toWorld(0, 0, 0).y; }
+          input.inject(Action::Interact, f == 49);
+          if (f == 53) {
             save.write(*plat);
             Save s2(save.fileName());
             bool saved = s2.load(*plat) && s2.data("chalet").value("owned", false) && s2.data("chalet")["furniture"].size() == size_t(chalets.furnitureCount());
@@ -2466,7 +2526,7 @@ int runGame(const GameOptions& opt) {
           if (e.amount > 0) audio.play("trick", e.amount);
           bool bailed = tr.landed == TrickResult::Landed::Crash;
           std::string line = tr.name + (bailed ? " \xC2\xB7 Bailed" : " \xC2\xB7 +" + std::to_string(tr.points) + (tr.landed == TrickResult::Landed::Sketchy ? " \xC2\xB7 Sketchy" : " \xC2\xB7 Clean"));
-          flash(line, bailed ? Hud::Flash::Bad : tr.landed == TrickResult::Landed::Clean ? Hud::Flash::Gold : Hud::Flash::Good);
+          popups.trick(tr.name, tr.points, tr.total, bailed ? 2 : tr.landed == TrickResult::Landed::Sketchy ? 1 : 0, simTime);
           if (opt.autotest) SL_INFO("[autotest] trick: %s", line.c_str());
           break;
         }
@@ -2522,6 +2582,9 @@ int runGame(const GameOptions& opt) {
       double dd = player.distance - lastDist;
       if (dd > 0 && dd < 50) save.stats.distance += dd;
       lastDist = player.distance;
+      // (bests.js: a new top speed, the longest jump, the biggest air, distance milestones: one card each, a soft chime)
+      if (popups.updateBests(frameDt, player.mode == PlayerMode::Ski && rideKind == Ride::None, player.speed(), player.air, player.airTime, player.pos,
+                             player.lastTrick.landed == TrickResult::Landed::Crash, save, races.active(), simTime)) audio.play("gate");
       if (player.speed() > save.stats.topSpeed && player.speed() < 70) save.stats.topSpeed = player.speed();
     }
 
@@ -2852,6 +2915,12 @@ int runGame(const GameOptions& opt) {
     }
     if (started && (ward.inBed() || ward.seated())) { std::string wp; if (ward.interact(wp, interact)) interact = false; prompt = wp; }   // (in your hospital bed, on a chair by one)
     if (started && !menus.isOpen() && !tmap.isOpen()) chalets.update(frameDt, cam, nav);
+    // (build mode's CURSOR: the mouse free over the catalogue and the room; taken back with TAB / on leaving it)
+    if (!opt.autotest && started && !menus.isOpen() && !tmap.isOpen()) {
+      static bool buildFree = false;
+      const bool wantFree = chalets.wantsFreeMouse();
+      if (wantFree != buildFree) { buildFree = wantFree; plat->setRelativeMouse(!wantFree); }
+    }
     // (Phase 4) the shops and counters on foot: the ski shop, the ticket seller, the Autohaus counter (your cars), the
     // huts; in your car at the Werkstatt: the repair
     if (rideKind == Ride::Car && werkstattLot && drive.speed() < 2.0 && prompt.rfind("Get out", 0) == 0) {
@@ -2907,7 +2976,19 @@ int runGame(const GameOptions& opt) {
         prompt = stationLabel(st);
         if (st.mid) prompt += "  (" + std::string(input.down(Action::Back) ? "down" : "up") + ")";
         // a mid-station serves both ways: up by default, down while holding back (S)
-        if (interact) boardLift(st, st.mid ? !input.down(Action::Back) : st.up);
+        // a gondola's mid-station: the route picker (main.js openLiftMap): up (the price / the day pass) or down (free)
+        if (st.mid && travelPick.kind == 4) { bool up = travelPick.up; travelPick = {}; boardLift(st, up); }
+        else if (st.mid && interact) {
+          int li = int(st.line - lifts.lines().data());
+          TrailMap::Travel T = tmap.liftTravel(li, save.hasPass(), save.money);
+          if (T.dests.empty()) boardLift(st, !input.down(Action::Back));
+          else {
+            for (auto& d : T.dests) { bool up = d.id == 1; d.act = [&travelPick, up] { travelPick = {4, 0, 0, up}; }; }
+            tmap.openTravel(std::move(T));
+            plat->setRelativeMouse(false);
+          }
+        }
+        else if (interact) boardLift(st, st.up);
       }
     }
     if (!opt.autotest && !paused) {
@@ -3368,7 +3449,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 9) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
+    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 11) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -3427,11 +3508,12 @@ int runGame(const GameOptions& opt) {
         if (races.active()) { hf.waypoint = false; hf.inRace = true; }
         hf.hideHint = police.wanted() || menus.dialogOpen();   // (under a card dialog the controls card would show through its paper)
         hf.hidePrompt = menus.dialogOpen();
-        hf.onlyFlash = menus.customOpen("shop");
+        hf.onlyFlash = menus.customOpen("shop") || menus.customOpen("carconfig");
       }
       hud.draw(ui, hf, save, input, simTime);
       float u5 = std::clamp(std::min(float(renderer.height()) / 800.f, float(renderer.width()) / 1280.f), 0.55f, 2.2f) * float(save.setting("hudScale", 1));
       races.hud(ui, u5);
+      popups.draw(ui, races.active(), simTime);
       oddJobs.hud(ui, u5);
       police.hud(ui, u5);
       heli.hud(ui, u5);
@@ -3453,8 +3535,9 @@ int runGame(const GameOptions& opt) {
       dvec3 carPos = carIdx >= 0 ? dvec3(drive.parked[size_t(carIdx)].x, 0, drive.parked[size_t(carIdx)].z) : dvec3(0);
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
+      { std::string lay; for (int i = 0; i < 7; i++) lay += tmap.layer(i) ? '1' : '0'; if (lay != save.settingStr("mapLayers", "1111111")) save.set("mapLayers", lay); }
     }
-    if (uiTest && uiT.step >= 9 && uiT.step - 9 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 9)], uiT.f * frameDt, plat->timeSeconds());
+    if (uiTest && uiT.step >= 11 && uiT.step - 11 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 11)], uiT.f * frameDt, plat->timeSeconds());
     if (tmap.travelOpen()) {   // (the route picker: ui/travel.js)
       // (autotest: the picker is driven like the menus: the highlighted stop is ridden to)
       if (opt.autotest && !atRealKeys && !off("uitest")) tmap.travelChoose();
@@ -3759,7 +3842,7 @@ int runGame(const GameOptions& opt) {
         }
       }
       else if (at == AT::Map && uiTest) {
-        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express"};
+        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express", "travel_lift", "travel_heli"};
         const int nSteps = int(sizeof names / sizeof *names);
         if (uiT.f == 0) {
           if (uiT.step == 0) { player.setSkisOn(false); player.teleport(4, 34, PI); tmap.open(dvec3(4, 0, 34)); }
@@ -3770,6 +3853,8 @@ int runGame(const GameOptions& opt) {
           if (uiT.step == 5) { tmap.close(); TrailMap::Travel T = tmap.busTravel(0, buses.destinations(0)); tmap.openTravel(std::move(T)); }
           if (uiT.step == 7) { tmap.openTravel(tmap.railTravel(0, false, save.money)); }
           if (uiT.step == 8) { tmap.openTravel(tmap.expressTravel(0, false, save.money)); }
+          if (uiT.step == 9) { int li = 0; for (size_t i = 0; i < lifts.lines().size(); i++) if (lifts.lines()[i].hasMid) { li = int(i); break; } tmap.openTravel(tmap.liftTravel(li, false, save.money)); }
+          if (uiT.step == 10) { tmap.openTravel(tmap.heliTravel(save.money + 5000)); }
         }
         if (uiT.f == 0 && uiT.step >= nSteps && uiT.step - nSteps < int(uiTestScreens().size())) {
           // the menus' own screens and a card dialog, opened for their shot

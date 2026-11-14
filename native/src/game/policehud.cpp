@@ -200,8 +200,20 @@ void drawPoliceSlam(Ui& ui, const std::string& text, const std::string& sub, dou
   ui.pushScale(cx, top + fs * 0.6f, sc, sc);
   ui.pushRotate(cx, top + fs * 0.6f, rot * PIf / 180);
   float yt = top + (fs * 0.9f - ui.lineHeight(fs, UiFont::CondHeavy)) / 2;
-  ui.textShadow(cx, yt, fs, UiFont::CondHeavy, text, UiAlign::Center, 0.03f, 0, 6 * d, 22 * d, hex(0x000a28, 0.45f));
-  ui.textHalo(cx, yt, fs, UiFont::CondHeavy, hex(0xff3b2f), white, stroke / 2, text, UiAlign::Center, 0.03f);
+  size_t nStars = 0;
+  { std::vector<uint32_t> cps = utf8Decode(text); for (uint32_t cp : cps) nStars += cp == 0x2605; if (nStars != cps.size()) nStars = 0; }
+  if (nStars) {
+    // (the wanted level: the fonts have no star, so they are drawn: red in a white rim)
+    const float s = fs * 0.78f, gap = fs * 0.06f, total = float(nStars) * s + float(nStars - 1) * gap;
+    for (size_t i = 0; i < nStars; i++) {
+      float sx = cx - total / 2 + float(i) * (s + gap), sy = top + (fs * 0.9f - s) / 2;
+      star(ui, sx - stroke, sy - stroke, s + 2 * stroke, white);
+      star(ui, sx, sy, s, hex(0xff3b2f));
+    }
+  } else {
+    ui.textShadow(cx, yt, fs, UiFont::CondHeavy, text, UiAlign::Center, 0.03f, 0, 6 * d, 22 * d, hex(0x000a28, 0.45f));
+    ui.textHalo(cx, yt, fs, UiFont::CondHeavy, hex(0xff3b2f), white, stroke / 2, text, UiAlign::Center, 0.03f);
+  }
   if (!sub.empty()) {
     float sy = top + fs * 0.9f + sfs * 0.35f;
     ui.textShadow(cx, sy, sfs, UiFont::BodyHeavy, sub, UiAlign::Center, 0.22f, 0, 2 * d, 8 * d, hex(0x000a28, 0.7f));

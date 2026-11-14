@@ -260,7 +260,7 @@ void drawRaceHud(Ui& ui, const RaceHudState& s, float) {
   // ---------------------------------------------------------------- the intro's letterbox and lower third
   if (s.third.on) {
     const auto& T = s.third;
-    float bars = easeOut(T.age / 0.55) * (1 - easeOut((T.age - T.left) / 0.4));
+    float bars = T.bars ? easeOut(T.age / 0.55) * (1 - easeOut((T.age - T.left) / 0.4)) : 0.f;
     if (bars > 0.002f) {
       ui.rect(0, 0, W, 84 * u * bars, hex(0x040a16));
       ui.rect(0, H - 84 * u * bars, W, 84 * u * bars, hex(0x040a16));
@@ -274,7 +274,10 @@ void drawRaceHud(Ui& ui, const RaceHudState& s, float) {
       float maxInner = W - 144 * u - 84 * u;
       if (tw > maxInner) { tfs *= maxInner / tw; tw = maxInner; }
       float inner = std::max({420 * u - 84 * u, tw, statsW}), w = inner + 84 * u;
-      float h = 16 * u + 56 * u + (T.stats.empty() ? 0 : 12 * u + tXs + 6 * u + 30 * u) + 18 * u;
+      const float tMd = std::max(13 * d, 15 * u);
+      for (const auto& r : T.rows) inner = std::max(inner, 24 * u + 40 * u + 14 * u + ui.textWidth(uiw::ellipsis(ui, r.name, tMd, UiFont::BodySemi, 300 * u), tMd, UiFont::BodySemi) + 14 * u + ui.textWidth(r.time, 26 * u, NUM));
+      w = inner + 84 * u;
+      float h = 16 * u + 56 * u + (T.stats.empty() ? 0 : 12 * u + tXs + 6 * u + 30 * u) + (T.rows.empty() ? 0 : 10 * u + float(T.rows.size()) * 42 * u - 2 * u) + 18 * u;
       float x = 72 * u - 80 * u * (1 - in) - 50 * u * out, y = H - 112 * u - h;
       ui.pushAlpha(in * (1 - out));
       ui.pushClip(0, 0, x + w * in + 40 * u, H);
@@ -291,6 +294,22 @@ void drawRaceHud(Ui& ui, const RaceHudState& s, float) {
         ui.popAlpha();
         sx += std::max(ui.textWidth(T.stats[i].first, tXs, UiFont::BodyHeavy, 0.16f), ui.textWidth(v, 30 * u, NUM)) + 34 * u;
       }
+      // .pl3-rows: the podium's rows (place, name, time; you on the blue brush)
+      {
+        float ry = y + 16 * u + 56 * u + (T.stats.empty() ? 0 : 12 * u + tXs + 6 * u + 30 * u) + 10 * u;
+        for (size_t i = 0; i < T.rows.size(); i++) {
+          const auto& r = T.rows[i];
+          float al = easeOut((T.age - 0.34 - 0.08 * double(i)) / 0.4), rx = x + 36 * u;
+          ui.pushAlpha(al);
+          if (r.me) ui.brushPanel(rx - 8 * u, ry + 2 * u, inner + 16 * u, 36 * u, blue, 1);
+          const vec4 ink = r.me ? white : blue;
+          ui.textLH(rx + 12 * u, ry, 40 * u, 32 * u, NUM, ink, std::to_string(r.place));
+          ui.textLH(rx + 12 * u + 40 * u + 14 * u, ry, 40 * u, tMd, UiFont::BodySemi, ink, uiw::ellipsis(ui, r.name, tMd, UiFont::BodySemi, 300 * u));
+          ui.textLH(rx + inner - 12 * u, ry, 40 * u, 26 * u, NUM, ink, r.time, UiAlign::Right);
+          ui.popAlpha();
+          ry += 42 * u;
+        }
+      }
       ui.popClip();
       if (!T.kicker.empty()) {
         // .pl3-kick: the red tab over the panel's top edge
@@ -304,6 +323,46 @@ void drawRaceHud(Ui& ui, const RaceHudState& s, float) {
       ui.popAlpha();
     }
   }
+}
+
+void drawStinger(Ui& ui, const std::string& label, double age) {
+  const double t = age / 0.9;
+  if (t < 0 || t >= 1.1) return;
+  const float u = ui.cssU(), W = float(ui.width()), H = float(ui.height());
+  // psSweep: -115 % -> 0 (36 %..60 %) -> 115 %, cubic-bezier(.65, 0, .3, 1); the strokes 0.04 s apart
+  struct S { float top, h; int seed; float vbH; vec4 c; };
+  const S strokes[3] = {{-0.08f, 0.48f, 631, 260, blue}, {0.24f, 0.54f, 632, 300, white}, {0.62f, 0.46f, 633, 260, red}};
+  auto ease = [](float k) { k = std::clamp(k, 0.f, 1.f); return k < 0.5f ? 4 * k * k * k : 1 - std::pow(-2 * k + 2, 3.f) / 2; };
+  for (int i = 0; i < 3; i++) {
+    float q = float((age - 0.04 * i) / 0.9);
+    if (q < 0 || q > 1) continue;
+    float off = q < 0.36f ? -1.15f * (1 - ease(q / 0.36f)) : q < 0.6f ? 0.f : 1.15f * ease((q - 0.6f) / 0.4f);
+    float w = W * 1.4f, x = -0.1f * W + off * w, y = strokes[i].top * H, h = strokes[i].h * H;
+    ui.brushStroke(x, y, w, h, strokes[i].c, strokes[i].seed, 1700, strokes[i].vbH);
+    if (i == 1) ui.textLH(x + w / 2, y + h / 2 - 65 * u, 130 * u, 130 * u, UiFont::CondItalic, blue, label, UiAlign::Center, 0.04f);
+  }
+}
+
+void drawReplayBadge(Ui& ui, const std::string& time, bool slow, double age, double now) {
+  const float d = ui.dpr(), u = ui.cssU(), tXs = std::max(11 * d, 11 * u);
+  Ui::Tabular tab(ui);
+  const UiFont NUM = UiFont::CondItalic;
+  float e = easeOut(age / 0.5), x = 64 * u - 80 * u * (1 - e), y = 104 * u;
+  float dot = std::max(8 * d, 14 * u), ww = ui.textWidth("REPLAY", 40 * u, NUM, 0.06f), tw = std::max(92 * u, ui.textWidth(time, 28 * u, NUM));
+  float w = 24 * u + dot + 14 * u + ww + 14 * u + tw + 34 * u, h = 20 * u + 40 * u;
+  ui.pushAlpha(e);
+  ui.pushClip(0, 0, x + w * e + 30 * u, float(ui.height()));
+  uiw::paper(ui, x, y, w, h, 612, 4, 3, u);
+  ui.circle(x + 24 * u + dot / 2, y + h / 2, dot / 2, a(red, 0.625f + 0.375f * float(std::cos(now / 1.2 * 6.2831853))));
+  ui.textLH(x + 24 * u + dot + 14 * u, y, h, 40 * u, NUM, blue, "REPLAY", UiAlign::Left, 0.06f);
+  ui.textLH(x + 24 * u + dot + 14 * u + ww + 14 * u, y, h, 28 * u, NUM, blueDim, time);
+  ui.popClip();
+  if (slow) {
+    float sw = ui.textWidth("SLOW MOTION", tXs, UiFont::BodyHeavy, 0.22f) + 36 * u, sh = 10 * u + tXs * 1.2f;
+    ui.brushPanel(x + 18 * u, y + h - 4 * u, sw, sh, red, 1);
+    ui.textLH(x + 34 * u, y + h - 4 * u + 5 * u, tXs * 1.2f, tXs, UiFont::BodyHeavy, white, "SLOW MOTION", UiAlign::Left, 0.22f);
+  }
+  ui.popAlpha();
 }
 
 // ============================================================================ the results screen

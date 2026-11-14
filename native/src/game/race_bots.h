@@ -187,6 +187,10 @@ public:
   bool parked = false;
   std::vector<double> splits;
   double viewDist = 0;
+  double recCrouch = 0.3;     // (bots.js anim.crouch / anim.tuck: what the replay records)
+  bool recTuck = false;
+  int cineShown = 0;          // (podium.js shown: skis off, the pose snapped once)
+  int cinePlace = -1;       // a podium / replay poses the rig: -1 no, 0 hidden, 1 shown (session.js showRig)
 private:
   void decide(double dt, const std::vector<Racer>& racers);
   void decideFinished(const std::vector<Racer>& racers);

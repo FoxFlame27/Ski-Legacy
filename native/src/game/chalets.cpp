@@ -65,6 +65,7 @@ bool hitsWall(const Foot& f, const ChaletWall& w, double tol = 0.01) {
 Chalets::Chalets(PlayCtx& c, Interiors& rooms, WindowView& win) : c_(c), rooms_(rooms), win_(win) {}
 
 void Chalets::load(AssetManager& assets) {
+  buildThumbs(c_.dev, c_.plat);   // (the catalogue's thumbnails: public/ui/furniture_thumbs.webp)
   ModelLoadOptions o;
   o.maxTextureSize = 1024;
   hi_ = assets.model("chalet", o);
@@ -619,6 +620,7 @@ void Chalets::hud(Ui& ui, float) {
   const PlayData& D = *c_.data;
   const float u = ui.cssU(), W = float(ui.width()), H = float(ui.height());
   BuildMenuState S;
+  S.thumbs = buildThumbs(c_.dev, c_.plat);
   S.money = c_.save->money;
   S.categories = D.categories;
   for (auto& f : D.furniture) S.items.push_back({f.id, f.name, f.category, f.price});

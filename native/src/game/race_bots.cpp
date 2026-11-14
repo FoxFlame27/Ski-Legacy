@@ -1130,7 +1130,9 @@ void BotRacer::animate(double dt, double viewD, bool countdown, bool show, doubl
   mo.stopped = finished && stopped;
   mo.camDist = viewD;
   rig.rootPos = three::V3(pos);
-  rig.update(std::min(adt, 0.25), anim_.update(adt, mo));
+  const RigState& ast = anim_.update(adt, mo);
+  recCrouch = ast.crouch; recTuck = ast.tuck;   // (bots.js this.anim = A.st: the replay records its crouch / tuck)
+  rig.update(std::min(adt, 0.25), ast);
   rig.fx.clear();
   R.pose_();
 }

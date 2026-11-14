@@ -485,6 +485,7 @@ void Traffic::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD,
     p.lights = driving && (night || t_.inRoadTunnel(c.x, c.z, c.y) != nullptr);
     p.live = driving;
     p.brake = driving && c.brake > 0.2;
+    if (c.mode == Car::Mode::Knocked) { p.hazard = true; p.lights = night; }   // (traffic.js: knocked aside, its lights stay on and the hazards flash)
     uint32_t h = uint32_t(&c - list.data()) * 2246822519u + 77u;
     p.plate = std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
     out.push_back(p);

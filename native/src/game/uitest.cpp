@@ -147,10 +147,11 @@ void uiTestDraw(Ui& ui, const UiNav& nav, const Input& in, const std::string& na
     S.categories = {{"living", "Living room"}, {"kitchen", "Kitchen"}, {"bedroom", "Bedroom"}, {"bath", "Bathroom"}, {"decor", "Decor"}, {"lights", "Lights"}};
     static const char* nm[] = {"Wingback Armchair", "Three-Seater Sofa", "Coffee Table", "Bookshelf with a very long name", "Fireplace", "TV Bench", "Dining Table", "Dining Chair", "Kitchen Island", "Fridge", "Double Bed", "Wardrobe"};
     static const int pr[] = {900, 2400, 650, 1200, 14500, 800, 1900, 350, 5200, 2100, 3600, 2900};
-    for (int i = 0; i < 12; i++) S.items.push_back({"i" + std::to_string(i), nm[i], i < 6 ? "living" : i < 10 ? "kitchen" : "bedroom", pr[i]});
-    S.hand = "i1"; S.look = true;
+    S.thumbs = buildThumbs();   // (loaded by the chalets; the sample cards borrow the first twelve renders)
+    for (int i = 0; i < 12; i++) S.items.push_back({S.thumbs && size_t(i) < S.thumbs->ids.size() ? S.thumbs->ids[size_t(i)] : "i" + std::to_string(i), nm[i], i < 6 ? "living" : i < 10 ? "kitchen" : "bedroom", pr[i]});
+    S.hand = S.items[1].id; S.look = true;
     S.status = "Click to buy \xC2\xB7 $2,400";
-    if (name == "build_deny") { S.hand = "i4"; S.denyId = "i4"; S.denyAge = 0.1; S.status = "It doesn't fit there"; S.statusBad = true; }
+    if (name == "build_deny") { S.hand = S.denyId = S.items[4].id; S.denyAge = 0.1; S.status = "It doesn't fit there"; S.statusBad = true; }
     drawBuildMenu(ui, S, in);
   }
   else if (name.rfind("shop", 0) == 0) {

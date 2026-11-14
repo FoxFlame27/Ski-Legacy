@@ -343,6 +343,21 @@ void drawStinger(Ui& ui, const std::string& label, double age) {
   }
 }
 
+void drawCineBars(Ui& ui, float bars, float skip, const std::string& label, const std::string& key) {
+  const float d = ui.dpr(), u = ui.cssU(), W = float(ui.width()), H = float(ui.height()), tXs = std::max(11 * d, 11 * u);
+  if (bars > 0.002f) {   // .pres-bar: 84u, scaleY from its own edge
+    ui.rect(0, 0, W, 84 * u * bars, hex(0x040a16));
+    ui.rect(0, H - 84 * u * bars, W, 84 * u * bars, hex(0x040a16));
+  }
+  if (skip > 0.01f && !label.empty()) {   // .pres-skip: right 64u, bottom 28u; the label, 10u, the keycap
+    const float kh = std::max(17 * d, 22 * u), kw = ui.keycapWidth(kh, key), y = H - 28 * u - kh, x1 = W - 64 * u;
+    ui.pushAlpha(skip);
+    ui.textLH(x1 - kw - 10 * u, y, kh, tXs, UiFont::BodyHeavy, a(white, 0.78f), label, UiAlign::Right, 0.2f);
+    ui.keycap(x1 - kw, y, kh, key);
+    ui.popAlpha();
+  }
+}
+
 void drawReplayBadge(Ui& ui, const std::string& time, bool slow, double age, double now) {
   const float d = ui.dpr(), u = ui.cssU(), tXs = std::max(11 * d, 11 * u);
   Ui::Tabular tab(ui);
@@ -389,7 +404,7 @@ std::string frameRaceResults(Ui& ui, const UiNav& nav, const Input& in, RaceResu
     const auto& c = r.choices[size_t(i)];
     std::string cap = pad ? (c.key == "ENTER" ? prompts::K(in, "confirm") : c.key == "ESC" ? prompts::K(in, "cancel") : "") : c.key;
     btns[size_t(i)].cap = cap;
-    btns[size_t(i)].w = uiw::brushButtonWidth(ui, 270 * u, bh, bfs, c.label, u, cap);
+    btns[size_t(i)].w = uiw::brushButtonWidth(ui, (c.id == "replay" ? 330 : 270) * u, bh, bfs, c.label, u, cap);   // (.pres-replay-btn: a little wider)
     bw += btns[size_t(i)].w + (i ? 18 * u : 0);
   }
   // ---- heights: the hero, the table
@@ -431,7 +446,10 @@ std::string frameRaceResults(Ui& ui, const UiNav& nav, const Input& in, RaceResu
       for (const auto& q : r.choices) if (q.key == "ESC") c = &q;
       if (!c) for (const auto& q : r.choices) if (q.key == "ENTER") c = &q;
       chosen = c ? c->id : r.choices.back().id;
-    } else if (!pad && has("retry")) for (platform::Key k : nav.keys) if (k == platform::Key::KeyR) chosen = "retry";
+    } else if (!pad) for (platform::Key k : nav.keys) {
+      if (k == platform::Key::KeyR && has("retry")) chosen = "retry";
+      if (k == platform::Key::KeyV && has("replay")) chosen = "replay";   // (session.js offerReplay: WATCH REPLAY, V)
+    }
   }
 
   // ---- draw
@@ -565,7 +583,11 @@ std::string frameRaceResults(Ui& ui, const UiNav& nav, const Input& in, RaceResu
   }
   // the buttons (fadeIn 0.5 s after 1 s)
   ui.pushAlpha(float(std::clamp((age - 1.0) / 0.5, 0.0, 1.0)));
-  for (int i = 0; i < nc; i++) uiw::brushButton(ui, btns[size_t(i)].x, byB, 270 * u, bh, bfs, r.choices[size_t(i)].label, 370 + i * 3, i == r.focus, u, btns[size_t(i)].cap);
+  // (the brush seeds: 370 + 3 i by the screen's own buttons; WATCH REPLAY, prepended by the session, is 379)
+  for (int i = 0, k = 0; i < nc; i++) {
+    const bool rep = r.choices[size_t(i)].id == "replay";
+    uiw::brushButton(ui, btns[size_t(i)].x, byB, (rep ? 330 : 270) * u, bh, bfs, r.choices[size_t(i)].label, rep ? 379 : 370 + (k++) * 3, i == r.focus, u, btns[size_t(i)].cap);
+  }
   ui.popAlpha();
   ui.popAlpha();
   return chosen;

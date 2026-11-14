@@ -235,10 +235,12 @@ const SceneFx::CarLamps& SceneFx::lampsFor(const VehicleModel& vm) {
   static const char* KINDS[10] = {"head", "high", "drl", "tail", "third", "brake", "rev", "ind", "lensF", "lensR"};
   auto kindOf = [](const std::string& k) { for (int i = 0; i < 10; i++) if (k == KINDS[i]) return i; return -1; };
   const CarSpec& s = *vm.spec;
+  bool hasInd = false;
   for (const CarSpec::LampPart& p : s.lampParts) {
     int kind = kindOf(p.kind);
-    if (kind < 0 || kind == 7) continue;   // (indicators: only the hazards of a wreck light them in the JS)
+    if (kind < 0) continue;
     if (kind == 2) L.hasDrl = true;
+    if (kind == 7) hasInd = true;   // (the indicators: lit only as hazards, on a crashed / knocked car or a wreck)
     Geo g;
     size_t n = p.pos.size() / 3;
     g.pos.resize(n); g.nor.assign(n, vec3(0, 1, 0)); g.uv.resize(n); g.col.assign(n, vec3(1));
@@ -275,6 +277,20 @@ const SceneFx::CarLamps& SceneFx::lampsFor(const VehicleModel& vm) {
     } else if (k == "rev") for (const auto& a : list) L.halos.push_back({6, vec3(a.c.x, a.c.y, a.c.z + out(a)), 0.4f, 0.3f, a.c.z >= 0 ? 1.f : -1.f});
   }
   if (!ownRev && tails) for (const auto& a : *tails) L.halos.push_back({6, vec3(a.c.x * 0.72f, a.c.y - a.size.y * 0.12f, a.c.z + out(a) - 0.01f), 0.36f, 0.26f, -1.f});
+  // the indicators' halos (carlights.js halos: 'ind'): at the model's own amber lamps (a side repeater shows from
+  // anywhere: dir 0), else at the outer edge of the head / tail lamps
+  {
+    const float hl = vm.size.z * 0.5f;
+    const std::vector<CarSpec::LampAnchor>* ind = nullptr;
+    const std::vector<CarSpec::LampAnchor>* heads = nullptr;
+    for (const auto& [k, list] : s.lampHalo) { if (k == "ind") ind = &list; if (k == "head") heads = &list; }
+    auto has = [&](float sign) { if (ind) for (const auto& a : *ind) if (a.c.z * sign > hl * 0.45f) return true; return false; };
+    auto sgn = [](float v) { return v > 0 ? 1.f : v < 0 ? -1.f : 0.f; };
+    if (ind) for (const auto& a : *ind) { const bool end = std::fabs(a.c.z) > hl * 0.45f; const float z = a.c.z + (end ? out(a) : 0.f); L.halos.push_back({7, vec3(a.c.x, a.c.y, z), 0.32f, 0.24f, std::fabs(z) <= hl * 0.45f ? 0.f : z >= 0 ? 1.f : -1.f}); }
+    if (!has(1) && heads) for (const auto& a : *heads) L.halos.push_back({7, vec3(a.c.x + sgn(a.c.x) * a.size.x * 0.4f, a.c.y, a.c.z + out(a) + 0.01f), 0.34f, 0.26f, a.c.z + out(a) + 0.01f >= 0 ? 1.f : -1.f});
+    if (!has(-1) && tails) for (const auto& a : *tails) L.halos.push_back({7, vec3(a.c.x + sgn(a.c.x) * a.size.x * 0.4f, a.c.y, a.c.z + out(a) - 0.01f), 0.34f, 0.26f, a.c.z + out(a) - 0.01f >= 0 ? 1.f : -1.f});
+    L.indF = hasInd && has(1); L.indR = hasInd && has(-1);
+  }
   return carLamps_.emplace(&vm, std::move(L)).first->second;
 }
 
@@ -327,11 +343,12 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
   // plain lenses) and its colours; lampsOn's sums per kind
   static const float K_HEAD[3] = {6, 3, 1.5f}, K_HIGH[3] = {0.9f, 0.5f, 0.3f}, K_DAYH[3] = {2, 0.6f, 0.35f}, K_DRL[3] = {3.2f, 1.4f, 1},
                      K_TAIL[3] = {0.8f, 1, 0.65f}, K_BRAKE[3] = {1.4f, 1.6f, 1.3f}, K_THIRD[3] = {2.2f, 2.4f, 2}, K_REV[3] = {3, 2, 1.4f};
-  const vec3 C_HEAD(1, 0.93f, 0.82f), C_DRL(0.9f, 0.95f, 1), C_RED(1, 0.006f, 0), C_REV(0.95f, 0.97f, 1);
+  const vec3 C_HEAD(1, 0.93f, 0.82f), C_DRL(0.9f, 0.95f, 1), C_RED(1, 0.006f, 0), C_REV(0.95f, 0.97f, 1), C_AMBER(1, 0.36f, 0.015f);
+  static const float K_IND[3] = {2.6f, 2.2f, 1.8f};
   const float dk = std::round((0.3f + 0.7f * night_) * 10) / 10;
   // (dev / screenshots: SKI_LEGACY_DEBUG=lamptest lights every car's lamps at night, every other one braking, every
   // third reversing; lampday the daytime running lights; the nearest cars' places are logged once)
-  static const int lampTest = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return !e ? 0 : std::strstr(e, "lampday") ? 2 : std::strstr(e, "lamptest") ? 1 : 0; }();
+  static const int lampTest = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return !e ? 0 : std::strstr(e, "haznight") ? 4 : std::strstr(e, "haztest") ? 3 : std::strstr(e, "lampday") ? 2 : std::strstr(e, "lamptest") ? 1 : 0; }();
   static int lampLogged = 0;
   size_t carIdx = 0;
   for (CarPose c : cars) {
@@ -339,15 +356,19 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
     carIdx++;
     if (lampTest == 1) { c.lights = true; c.brake = carIdx % 2 == 0; c.reverse = carIdx % 3 == 0; c.live = true; }
     else if (lampTest == 2) { c.lights = false; c.live = true; c.brake = carIdx % 2 == 0; }
+    else if (lampTest >= 3) { c.hazard = true; c.lights = lampTest == 4; c.brake = false; }   // (haztest / haznight: every car a wreck, the blink held on)
     double d = glm::length(dvec3(c.M[3]) - cp);
     if (lampTest && lampLogged < 12 && d < 400) { lampLogged++; SL_INFO("lamptest: car %s at (%.1f, %.1f, %.1f), nose toward (%.2f, %.2f)%s", c.vm->spec ? c.vm->spec->name.c_str() : "?", c.M[3][0], c.M[3][1], c.M[3][2], c.M[2][0], c.M[2][2], c.vm->spec && c.vm->spec->hasLamps() ? "" : " (no exported lamps)"); }
     const vec3 F = c.vm->lampF, R = c.vm->lampR;
     const bool own = c.vm->spec && c.vm->spec->hasLamps();
     // (lampsOn(inst, head, tail, brake, { drl, reverse }): low beams and tails on together at night / with the
     // switch, the daytime running lights on a running car otherwise)
-    const float head = c.lights ? 1.f : 0.f, tail = head, bk = c.brake ? 1.f : 0.f, rv = c.reverse ? 1.f : 0.f;
-    const float drl = (c.live || c.brake) && !c.lights ? 1.f : 0.f;
-    const bool any = head > 0 || bk > 0 || rv > 0 || drl > 0;
+    const float head = c.lights ? 1.f : 0.f, bk = c.brake ? 1.f : 0.f, rv = c.reverse ? 1.f : 0.f;
+    // (opts.hazard: the blink, 380 ms on / 380 ms off, the same for every car; the tails stay on dim, no DRL)
+    const int haz = c.hazard ? (lampTest >= 3 ? 1 : int(std::floor(t_ * 1000.0 / 380.0)) % 2) : -1;
+    const float tail = haz >= 0 ? std::max(head, 0.55f) : head;
+    const float drl = haz < 0 && (c.live || c.brake) && !c.lights ? 1.f : 0.f;
+    const bool any = head > 0 || bk > 0 || rv > 0 || drl > 0 || haz >= 0;
     if (c.lights && d < 220 && (d < 140 || c.mine)) {
       PointLight l;
       const CarLamps* cl = own ? &lampsFor(*c.vm) : nullptr;
@@ -376,8 +397,9 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
             case 3: k = tail * K_TAIL[t] + bk * K_BRAKE[t]; break;
             case 4: case 5: k = bk * K_THIRD[t]; break;
             case 6: col = C_REV; k = rv * K_REV[t]; break;
-            case 8: col = C_HEAD; k = head * 0.22f + dayH * 0.05f; break;
-            case 9: k = tail * 0.3f + bk * 0.75f; break;
+            case 7: col = C_AMBER; k = haz > 0 ? K_IND[t] : 0.f; break;
+            case 8: if (haz > 0 && !L.indF) { col = C_AMBER; k = 1.2f; } else { col = C_HEAD; k = head * 0.22f + dayH * 0.05f; } break;
+            case 9: if (haz > 0 && !L.indR) { col = C_AMBER; k = 1.2f; } else k = tail * 0.3f + bk * 0.75f; break;
             default: break;
           }
           k *= p.boost;
@@ -392,6 +414,7 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
           case 4: o = bk * 0.45f * dk; break;
           case 0: o = (head * 0.3f + dayH * 0.06f + (L.hasDrl ? drl * 0.04f : 0.f)) * dk; col = vec3(1, 0.88f, 0.7f); break;
           case 6: o = rv * 0.42f * dk; col = vec3(0.85f, 0.9f, 1); break;
+          case 7: o = haz > 0 ? 0.6f * (0.45f + 0.55f * dk) : 0.f; col = vec3(1, 0.42f, 0.04f); break;
           default: break;
         }
         o = std::min(1.f, o);
@@ -402,7 +425,7 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         if (dl < 1e-3) continue;
         toEye /= dl;
         dvec3 axis = glm::normalize(dvec3(c.M[2])) * double(h.dir);
-        float face = float(smoothstep(0.17, 0.6, glm::dot(axis, toEye)));
+        float face = h.dir == 0 ? 1.f : float(smoothstep(0.17, 0.6, glm::dot(axis, toEye)));   // (LAMP_DIR 0: a side repeater, always)
         if (face < 0.003f) continue;
         Particle q;
         q.pos = p + toEye * 0.1;

@@ -231,4 +231,25 @@ void Ambulance::fillColliders(std::vector<Collider>& out) const {
   out.push_back(c);
 }
 
+// net/vehicles.js updateRescue: another player's ambulance (on the snow as place() puts it, flashing as flash() does)
+void Ambulance::drawAt(Renderer& r, double ax, double az, double ayaw, bool lights, double time, double night) const {
+  if (!ok()) return;
+  World& W = *c_.world;
+  const double fx = std::sin(ayaw), fz = std::cos(ayaw);
+  const double f = W.groundHeight(ax + fx * 2, az + fz * 2), b = W.groundHeight(ax - fx * 2, az - fz * 2);
+  const double l = W.groundHeight(ax + fz * 0.9, az - fx * 0.9), rr = W.groundHeight(ax - fz * 0.9, az + fx * 0.9);
+  const dvec3 p(ax, std::max(std::max(f, b), std::max(l, rr)) - 0.03, az);
+  const double pitch = std::atan2(b - f, 4.0), roll = std::atan2(l - rr, 1.8);
+  mat4 R = glm::rotate(mat4(1), float(ayaw), vec3(0, 1, 0)) * glm::rotate(mat4(1), float(pitch), vec3(1, 0, 0)) * glm::rotate(mat4(1), float(roll), vec3(0, 0, 1));
+  r.submitModel(*model_, p, R * fit_, nullptr, true);
+  const double ph = std::fmod(time * 2.2, 1.0), k = 3.5 + night * 3;
+  auto on = [&](int i) { double q = std::fmod(ph + i * 0.5, 1.0); return q < 0.1 || (q > 0.18 && q < 0.28) ? k : 0.15; };
+  if (c_.shapes) for (const Light& L : lights_) {
+    const double lk = lights ? on(L.red ? 1 : 0) : 0.15;
+    vec4 col = L.red ? vec4(1.0f, 0.023f, 0.01f, 1) : vec4(0.028f, 0.147f, 1.0f, 1);
+    mat4 M = R * glm::translate(mat4(1), L.p - vec3(0, 0.065f, 0)) * glm::scale(mat4(1), vec3(0.42f, 0.13f, 0.2f));
+    c_.shapes->oriented(r, Shapes::Kind::Box, p, M, col, float(lk > 1 ? lk * 2.2 : 0.15), false);
+  }
+}
+
 } // namespace sl

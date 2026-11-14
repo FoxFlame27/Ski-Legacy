@@ -1,11 +1,41 @@
 #include "game/buildmenu.h"
 #include "core/prompts.h"
 #include "game/ui_widgets.h"
+#include "core/assets_path.h"
+#include "core/log.h"
+#include "engine/asset_manager.h"
+#include "platform/platform.h"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
 
 namespace sl {
 using namespace ui_color;
+
+const BuildThumbs* buildThumbs(gfx::Device* dev, platform::Platform* plat) {
+  static BuildThumbs T;
+  static int state = 0;   // 0 not tried, 1 loaded, 2 missing
+  if (state == 0 && dev && plat) {
+    state = 2;
+    AssetPaths paths;
+    std::vector<uint8_t> file, meta, rgba;
+    int w = 0, h = 0;
+    if (paths.init(*plat) && plat->readFile(paths.publicRoot + "/ui/furniture_thumbs.webp", file) && plat->readFile(paths.publicRoot + "/ui/furniture_thumbs.json", meta) &&
+        decodeImageRGBA(file, w, h, rgba) && w > 1 && h > 1) {
+      nlohmann::json j = nlohmann::json::parse(meta.begin(), meta.end(), nullptr, false);
+      if (j.is_object() && j.contains("ids") && j["ids"].is_array()) {
+        T.cols = j.value("cols", 8); T.w = j.value("w", 160); T.h = j.value("h", 120); T.texW = w; T.texH = h;
+        for (const auto& id : j["ids"]) T.ids.push_back(id.is_string() ? id.get<std::string>() : std::string());
+        gfx::TextureDesc d;
+        d.width = w; d.height = h; d.format = gfx::TexFormat::RGBA8; d.filter = gfx::Filter::Trilinear; d.wrap = gfx::Wrap::Clamp; d.mipmaps = false;
+        T.tex = dev->createTexture(d, rgba.data());
+        state = 1;
+      }
+    }
+    if (state != 1) SL_WARN("build menu: public/ui/furniture_thumbs.webp / .json missing (node native/tools/browser/render_thumbs.mjs): empty plates");
+  }
+  return state == 1 ? &T : nullptr;
+}
 
 BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in) {
   BuildMenuLayout L;
@@ -122,11 +152,16 @@ BuildMenuLayout drawBuildMenu(Ui& ui, const BuildMenuState& s, const Input& in) 
         return c0 + (c1 - c0) * r;
       });
       ui.popClip();
-      // (the web game renders each model into its plate: here its initials stand in, in the paper's ink)
-      std::string ini;
-      bool start = true;
-      for (char ch : it.name) { if (start && std::isalpha(static_cast<unsigned char>(ch)) && ini.size() < 2) ini += char(std::toupper(static_cast<unsigned char>(ch))); start = ch == ' '; }
-      ui.textLH(tx + tw / 2, ty, thumbH, thumbH * 0.46f, NUM, hex(0x1546c8, 0.22f), ini, UiAlign::Center, 0.04f);
+      // img.bm-thumb: the model's own render (furniture.js renderThumbs), object-fit: contain in the 4:3 plate
+      if (const BuildThumbs* T = s.thumbs) {
+        int k = -1;
+        for (size_t i = 0; i < T->ids.size(); i++) if (T->ids[i] == it.id) { k = int(i); break; }
+        if (k >= 0 && T->texW > 0) {
+          const float x0 = float((k % T->cols) * T->w), y0 = float((k / T->cols) * T->h);
+          ui.image(T->tex, tx, ty, tw, thumbH, vec2((x0 + 0.5f) / float(T->texW), (y0 + 0.5f) / float(T->texH)),
+                   vec2((x0 + float(T->w) - 0.5f) / float(T->texW), (y0 + float(T->h) - 0.5f) / float(T->texH)));
+        }
+      }
     }
     float ny = cy + 8 * u + thumbH + 7 * u;
     ui.textLH(cx + 10 * u, ny, 19 * u, 19 * u, NUM, sel ? white : blue, uiw::ellipsis(ui, uiw::upper(it.name), 19 * u, NUM, cardW - 20 * u, 0.02f), UiAlign::Left, 0.02f);

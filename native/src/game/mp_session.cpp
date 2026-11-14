@@ -338,6 +338,7 @@ void Multiplayer::bind() {
     if (it == players.end()) return;
     std::string k = jstr(d, "k");
     if (d.contains("veh") && d["veh"].is_object()) it->second.vehs[k] = d["veh"]; else it->second.vehs.erase(k);
+    if (k == "rescue") it->second.rescueSeq++;   // (a fresh row: vehicles.js updateRescue w.ref !== vr)
   });
   on("parked", [this](const Json& d) {
     auto it = players.find(int(jnum(d, "pid")));
@@ -742,6 +743,18 @@ void Multiplayer::reportCar(const CarReport& c) {
   net.request("veh", m, [](const net::NetResult&) {});
 }
 
+void Multiplayer::reportRescue(const Json* msg, double dt) {
+  if (!active_ || !net.isOpen()) return;   // (offline: what the server shows is settled once back)
+  if (!msg) {
+    if (rescueSent_) { rescueSent_ = false; net.request("veh", Json{{"k", "rescue"}, {"off", true}}, [](const net::NetResult&) {}); }
+    return;
+  }
+  if ((rescueT_ += dt) < 1.0 / 6 && rescueSent_) return;
+  rescueT_ = 0;
+  rescueSent_ = true;
+  net.request("veh", *msg, [](const net::NetResult&) {});
+}
+
 void Multiplayer::reportKept(const std::vector<Kept>& list) {
   if (!active_ || !net.isOpen()) return;
   std::string sig;
@@ -780,17 +793,22 @@ void Multiplayer::sendPresence() {
   }
   if (paused_) { p.vx = p.vy = p.vz = 0; p.lean = 0; if (p.st != int(net::St::Fall)) { p.crouch = 0; p.flags &= ~(net::F::air | net::F::tuck); } p.flags |= net::F::paused; }
   auto r2 = [](double v) { return std::round(v * 1000) / 1000; };
+  // (inside, the row is in the room's own frame, as the web game sends it: main.js mpPose room.pos)
+  if (!p.interior.empty()) { p.x -= interiorOffset.x; p.y -= interiorOffset.y; p.z -= interiorOffset.z; }
   Json row = Json::array({std::llround(net.serverNow()), r2(p.x), r2(p.y), r2(p.z), r2(p.yaw), r2(p.vx), r2(p.vy), r2(p.vz), p.st, r2(p.crouch), r2(p.lean), p.flags});
   net.sendPresence(row);
   presenceSent++;
 }
 
-void Multiplayer::updateRemotes() {
+// remote.js RemotePlayers.update / sample / smooth
+void Multiplayer::updateRemotes(double dt) {
   double now = net.serverNow();
+  const double ms = std::min(100.0, dt * 1000);
   for (auto& [id, r] : players) {
     if (r.count == 0) { r.ok = false; continue; }
-    if (r.dly < 0) r.dly = r.delay();
-    r.dly += (r.delay() - r.dly) * 0.05;   // (eased: a change of the delay never makes them jump)
+    // (the delay in use eases toward the wanted one at 5 % of real time: the drawn time never steps back or skips)
+    const double want = r.delay();
+    r.dly = r.dly < 0 ? want : r.dly + std::clamp(want - r.dly, -ms * 0.05, ms * 0.05);
     double t = now - r.dly;
     // the two snapshots either side of t (newest first in the ring)
     const RemotePlayer::Snap* a = nullptr;
@@ -807,21 +825,43 @@ void Multiplayer::updateRemotes() {
       auto L = [&](int i) { return a->v[i] + (b->v[i] - a->v[i]) * f; };
       x = L(1); y = L(2); z = L(3); vx = L(5); vy = L(6); vz = L(7); crouch = L(9); lean = L(10);
       yaw = a->v[4] + wrapPi(b->v[4] - a->v[4]) * f;
-      if (f > 0.5) use = b;
-    } else {
-      // past the newest: a short extrapolation along its velocity
-      double ex = std::clamp((t - newest.v[0]) / 1000, 0.0, EXTRAPOLATE / 1000);
-      if (!a) ex = 0;
-      x = newest.v[1] + newest.v[5] * ex; y = newest.v[2] + newest.v[6] * ex; z = newest.v[3] + newest.v[7] * ex;
+      if (f >= 0.5) use = b;
+      r.fa = uint32_t(int64_t(a->v[11])); r.fb = uint32_t(int64_t(b->v[11])); r.ff = f;
+    } else if (a) {
+      // late: carry on along the velocity for a moment (not while seated: seats move with their vehicle)
+      const double ex = std::min(EXTRAPOLATE, t - newest.v[0]) / 1000;
+      const bool seated = int(newest.v[8]) == int(net::St::Sit) || int(newest.v[8]) == int(net::St::Ride);
+      x = newest.v[1]; y = newest.v[2]; z = newest.v[3];
+      if (!seated) { x += newest.v[5] * ex; y += newest.v[6] * ex; z += newest.v[7] * ex; }
       vx = newest.v[5]; vy = newest.v[6]; vz = newest.v[7]; yaw = newest.v[4]; crouch = newest.v[9]; lean = newest.v[10];
+      // (no newer row for a while: a stalled window, a dropped connection: they stand there, not running on the spot)
+      if (t - newest.v[0] > EXTRAPOLATE) vx = vy = vz = 0;
       use = &newest;
+    } else {
+      const RemotePlayer::Snap& o = r.slot(r.count - 1);   // older than anything we have: the oldest
+      x = o.v[1]; y = o.v[2]; z = o.v[3]; yaw = o.v[4]; vx = o.v[5]; vy = o.v[6]; vz = o.v[7]; crouch = o.v[9]; lean = o.v[10];
+      use = &o;
     }
+    // (inside, their rows are in the room's own frame, as the web game's: into the world where the room stands here)
+    if (!use->interior.empty()) { x += interiorOffset.x; y += interiorOffset.y; z += interiorOffset.z; }
     r.pos = dvec3(x, y, z); r.vel = dvec3(vx, vy, vz); r.yaw = yaw; r.crouch = crouch; r.lean = lean;
     r.st = int(use->v[8]); r.flags = uint32_t(int64_t(use->v[11])); r.veh = use->veh; r.interior = use->interior;
+    if (!(a && b)) { r.fa = r.fb = r.flags; r.ff = 0; }
     r.ok = true;
-    // the drawn pose: eased toward the sample (a resent row after a hitch is not a jump), snapping when far
-    if (!r.smOk || glm::length(r.sm - r.pos) > 8) { r.sm = r.pos; r.smYaw = r.yaw; r.smOk = true; }
-    else { r.sm += (r.pos - r.sm) * 0.5; r.smYaw += wrapPi(r.yaw - r.smYaw) * 0.5; }
+    // a player on a slow connection is drawn further back in time (a longer buffer): led forward along their own
+    // velocity by the extra, so they show where they are now (never seated: seats ride their vehicle)
+    const double lead = std::min(0.3, std::max(0.0, r.dly - DELAY) / 1000);
+    const bool free = r.veh.empty() && r.st != int(net::St::Sit) && r.st != int(net::St::Ride);
+    if (lead > 0 && free) r.pos += r.vel * lead;
+    // the drawn pose runs on along their velocity and is pulled onto the sampled one (a correction spreads over ~0.1 s
+    // instead of a jump); height follows the sample; a jump of 4 m (a teleport, a respawn) snaps
+    if (!free) { r.sm = r.pos; r.smYaw = r.yaw; r.smOk = false; continue; }
+    const dvec3 dd = r.sm - r.pos;
+    if (!r.smOk || !(dt > 0) || glm::dot(dd, dd) > 16) { r.sm = r.pos; r.smYaw = r.yaw; r.smOk = true; continue; }
+    r.sm.x += r.vel.x * dt; r.sm.z += r.vel.z * dt;
+    const double k = 1 - std::exp(-dt * 14);
+    r.sm.x += (r.pos.x - r.sm.x) * k; r.sm.z += (r.pos.z - r.sm.z) * k; r.sm.y = r.pos.y;
+    r.smYaw = wrapPi(r.smYaw + wrapPi(r.yaw - r.smYaw) * (1 - std::exp(-dt * 25)));
   }
 }
 
@@ -836,7 +876,7 @@ void Multiplayer::update(double dt, bool paused) {
   // presence at 12 Hz
   sendAcc_ += dt;
   if (sendAcc_ >= 1 / net::SEND_HZ && net.isOpen()) { sendAcc_ = 0; sendPresence(); }
-  updateRemotes();
+  updateRemotes(dt);
   // an owner's prompt that ran out
   double now = clockSeconds();
   while (!asks.empty() && asks.front().until < now) asks.pop_front();

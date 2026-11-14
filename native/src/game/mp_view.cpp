@@ -57,6 +57,13 @@ bool mpCarFrame(const Multiplayer& mp, const VehicleModels& vm, const std::strin
 }
 
 void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, const std::string& interior, double dt) {
+  helis_.clear();
+  flyT_ += dt;
+  // (vehicles.js updateHeli) a helicopter left parked out on the mountain (their veh record: heli { at })
+  if (interior.empty()) for (const auto& [hid, hr] : mp.players) {
+    dvec3 hp; double hyaw;
+    if (hr.ok && net::St(hr.st) != net::St::Fly && hr.vehs.contains("heli") && atOf(hr.vehs["heli"], hp, hyaw) && glm::length(hp - cam) < 3000) { RescueDraw o; o.heli = true; o.hp = hp; o.yaw = hyaw; helis_.push_back(o); }
+  }
   int fallback = people.kind("skier_blue");
   for (const auto& [id, r] : mp.players) {
     if (!visible(r, interior, cam)) continue;
@@ -118,8 +125,199 @@ void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, 
         p.car.how = CarSeatRef::Seated; p.car.car = M; p.car.t = ct; p.car.seat = carSeat; p.car.driver = carSeat == 0;
       }
     }
-    people.add(p);
+    // in a car seat / astride a snowmobile: the seated crowd figure (the legs into the footwell); everyone else is the
+    // game's own skier rig posed from their presence, as remote.js poseOne does (below)
+    const bool sledding = net::St(r.st) == net::St::Drive && (r.flags & net::F::sled);
+    // the rescue coming for them (vehicles.js rescueSeat): on the winch hook, in the cabin's seat; hidden in the ambulance
+    int rs = 0;
+    dvec3 rseat(0);
+    double ryaw = 0;
+    bool held = updateRescue(r, dt, cam, interior.empty(), rs, rseat, ryaw);
+    // (vehicles.js updateHeli) flying their helicopter: the row is its pose (crouch / lean = pitch / roll, F.lights = the
+    // rotor at flight power); they sit in its cabin
+    if (!held && net::St(r.st) == net::St::Fly && interior.empty() && rescuePoint) {
+      RescueDraw o;
+      o.heli = true; o.hp = r.sm; o.yaw = r.smYaw; o.pitch = r.crouch; o.roll = r.lean; o.rpm = (r.flags & net::F::lights) ? 1.0 : 0.4; o.time = flyT_;
+      helis_.push_back(o);
+      rseat = rescuePoint(o, true); ryaw = r.smYaw; held = true;
+    }
+    if (rs == 3) continue;
+    if (p.car.how == CarSeatRef::Seated || !carOwner.empty() || sledding || !ground || !people.kindOf(kind).rig) { people.add(p); continue; }
+    poseRig(r, people, kind, cam, dt, held ? &rseat : nullptr, ryaw);
   }
+  // (a rescue whose player is out of sight / inside still runs its clock; gone with the player)
+  for (const auto& [id, r] : mp.players) if (!visible(r, interior, cam) && rescues_.count(id)) { int s; dvec3 q; double y; updateRescue(r, dt, cam, interior.empty(), s, q, y); }
+  for (auto it = avs_.begin(); it != avs_.end();) { if (!mp.players.count(it->first)) it = avs_.erase(it); else ++it; }
+  for (auto it = rescues_.begin(); it != rescues_.end();) { if (!mp.players.count(it->first)) it = rescues_.erase(it); else ++it; }
+}
+
+// net/vehicles.js updateRescue + rescueSeat: their rescue's helicopter and ambulance eased toward the rows (~6 a second),
+// the helicopter led along its velocity; true with the seat it holds them in (s 1: the winch hook, 2: the cabin)
+bool MpView::updateRescue(const RemotePlayer& r, double dt, const dvec3& cam, bool outdoors, int& s, dvec3& seat, double& seatYaw) {
+  s = 0;
+  auto it = r.vehs.find("rescue");
+  if (it == r.vehs.end() || !it->is_object()) { rescues_.erase(r.pid); return false; }
+  const Json& vr = *it;
+  Resc& w = rescues_[r.pid];
+  const bool fresh = w.seq != r.rescueSeq;
+  if (fresh) { w.seq = r.rescueSeq; w.age = 0; }
+  w.age += dt; w.t += dt; w.clock += dt;
+  w.show = false;
+  w.out = RescueDraw();
+  // (nothing new from them for 10 s: it all goes; their helicopter 8 s after they got into the ambulance, whatever the rows say)
+  if (w.age > 10) { w.h.posed = false; w.a.posed = false; return false; }
+  s = vr.value("s", 0);
+  w.ambT = s == 3 ? w.ambT + dt : 0;
+  auto arr = [&](const char* k, size_t n) { auto q = vr.find(k); return q != vr.end() && q->is_array() && q->size() >= n; };
+  const bool heliOn = arr("h", 7) && w.ambT < 8;
+  const double e = 1 - std::exp(-dt * 7), ahead = std::min(w.age, 0.35);
+  auto wrapPi = [](double a) { return std::atan2(std::sin(a), std::cos(a)); };
+  auto& H = w.h;
+  if (heliOn) {
+    const Json& a = vr["h"];
+    auto n = [&](size_t i) { return a[i].is_number() ? a[i].get<double>() : 0.0; };
+    if (fresh) {
+      // its velocity from the last two poses
+      const double gap = w.clock - H.at;
+      if (H.posed && gap > 0.05 && gap < 1) { H.vx = (n(0) - H.tx) / gap; H.vy = (n(1) - H.ty) / gap; H.vz = (n(2) - H.tz) / gap; } else H.vx = H.vy = H.vz = 0;
+      H.at = w.clock;
+      H.tx = n(0); H.ty = n(1); H.tz = n(2); H.tyaw = n(3); H.tp = n(4); H.tr = n(5);
+      if (!H.posed || std::hypot(H.tx - H.x, H.tz - H.z) > 60) { H.x = H.tx; H.y = H.ty; H.z = H.tz; H.yaw = H.tyaw; H.pitch = H.tp; H.roll = H.tr; H.posed = true; }
+    }
+    H.x += (H.tx + H.vx * ahead - H.x) * e; H.y += (H.ty + H.vy * ahead - H.y) * e; H.z += (H.tz + H.vz * ahead - H.z) * e;
+    H.yaw = wrapPi(H.yaw + wrapPi(H.tyaw - H.yaw) * e); H.pitch += (H.tp - H.pitch) * e; H.roll += (H.tr - H.roll) * e;
+    w.rpm += (std::clamp(n(6), 0.0, 1.0) - w.rpm) * (1 - std::exp(-dt * 1.5));
+    if (outdoors && glm::length(dvec3(H.x, H.y, H.z) - cam) < 3000) {
+      w.out.heli = true; w.out.hp = dvec3(H.x, H.y, H.z); w.out.yaw = H.yaw; w.out.pitch = H.pitch; w.out.roll = H.roll; w.out.rpm = w.rpm; w.out.time = w.t;
+      w.out.rope = vr.value("rope", 0.0);
+      w.show = true;
+    }
+  } else H.posed = false;
+  auto& A = w.a;
+  if (arr("a", 5)) {
+    const Json& a = vr["a"];
+    auto n = [&](size_t i) { return a[i].is_number() ? a[i].get<double>() : 0.0; };
+    if (fresh) {
+      A.tx = n(0); A.tz = n(2); A.tyaw = n(3); A.tv = n(4);
+      if (!A.posed || std::hypot(A.tx - A.x, A.tz - A.z) > 25) { A.x = A.tx; A.z = A.tz; A.yaw = A.tyaw; A.posed = true; }
+    }
+    const double gx = A.tx + std::sin(A.tyaw) * ahead * A.tv, gz = A.tz + std::cos(A.tyaw) * ahead * A.tv;
+    A.x += (gx - A.x) * e; A.z += (gz - A.z) * e; A.yaw = wrapPi(A.yaw + wrapPi(A.tyaw - A.yaw) * e);
+    if (outdoors && glm::length(dvec3(A.x, n(1), A.z) - cam) < 3000) {
+      w.out.amb = true; w.out.ax = A.x; w.out.az = A.z; w.out.ayaw = A.yaw; w.out.lights = vr.value("l", false); w.out.time = w.t;
+      w.show = true;
+    }
+  } else A.posed = false;
+  // where the rescue holds them: the winch hook, the cabin's front seat
+  if ((s == 1 || s == 2) && H.posed && rescuePoint) {
+    RescueDraw o = w.out;
+    o.hp = dvec3(H.x, H.y, H.z); o.yaw = H.yaw; o.pitch = H.pitch; o.roll = H.roll;
+    seat = rescuePoint(o, s == 2);
+    if (s == 1) seat.y += 1.0 - vr.value("rope", 0.0) - 0.9;
+    seatYaw = H.yaw;
+    return true;
+  }
+  return false;
+}
+
+// remote.js poseOne: the avatar is the game's own skier rig, posed from their presence (ski / walk / sit / a wipeout)
+void MpView::poseRig(const RemotePlayer& r, People& people, int kind, const dvec3& cam, double dt, const dvec3* seatAt, double seatYaw) {
+  Av& a = avs_[r.pid];
+  const PeopleKind& K = people.kindOf(kind);
+  if (!a.built || a.kind != kind) {
+    a = Av();
+    a.kind = kind; a.built = true;
+    a.R.kind = kind; a.R.gear = 3;
+    a.R.rig.init(K.rig, people.gear(3), true, true, ground);   // (main.js makeRig(c, s, { poles: true, ai: true }))
+    a.R.rig.setCarry(false);
+    a.snap = true;
+  }
+  a.frame = frame_;
+  const dvec3 pos = seatAt ? *seatAt : r.sm;   // (held by their rescue: the winch hook / the cabin seat, as drawn here)
+  const double d = glm::length(pos - cam);
+  a.dist = d;
+  SkierRig& rig = a.R.rig;
+  // the gait's speed: the row's velocity, but never more than they really move here (smoothed): standing still
+  // (paused mid-run, a stalled row) they stand idle, not running on the spot
+  const double step = a.mHas ? std::hypot(pos.x - a.mx, pos.z - a.mz) : 0;
+  a.mx = pos.x; a.mz = pos.z; a.mHas = true;
+  if (dt > 0) a.mspd += (std::min(60.0, step / dt) - a.mspd) * (1 - std::exp(-dt * 6));
+  const double speed = std::min(std::hypot(r.vel.x, r.vel.z), a.mspd * 1.25 + 0.1);
+  const net::St S = net::St(r.st);
+  const bool seated = seatAt || S == net::St::Sit || S == net::St::Ride || S == net::St::Drive || S == net::St::Fly;
+  const bool fall = !seated && S == net::St::Fall;
+  const bool inside = !r.interior.empty();
+  RigState st;
+  st.fp = 0;
+  if (seated) {
+    st.mode = RigMode::Sit; st.hasSeat = true; st.seat = three::V3(pos);
+    if (S == net::St::Sit && inside) { st.hasBench = true; st.bench.back = -0.2; st.bench.front = 0.25; st.bench.floorY = pos.y - 0.45; st.bench.recline = 0; }   // (benchFor: a plain chair inside)
+  } else if (S == net::St::Ski) st.mode = RigMode::Ski;
+  else if (fall) {
+    // a wipeout as they send it (protocol.js fallFlags): the tumble's pitch and roll (crouch, lean), the tuck and the
+    // get-up blended between the two rows round the sample, the side, the tumble axis, still in the air
+    st.mode = RigMode::Fall;
+    const net::FallInfo A = net::fallDecode(r.fa), B = net::fallDecode(r.fb), N = r.ff < 0.5 ? A : B;
+    st.hasFall = true;
+    st.fall.pitch = r.crouch; st.fall.roll = r.lean;
+    st.fall.ball = A.ball + (B.ball - A.ball) * r.ff; st.fall.getUp = A.getUp + (B.getUp - A.getUp) * r.ff;
+    st.fallSide = N.side; st.fallAir = N.air; st.hasFallHeading = true; st.fallHeading = r.smYaw + N.axis; st.fallT = 1;
+  } else st.mode = speed > 0.1 ? RigMode::Walk : RigMode::Idle;
+  st.heading = seatAt ? seatYaw : r.smYaw;
+  st.speed = seated ? 0 : speed;
+  st.crouch = seated || fall ? 0 : r.crouch; st.lean = seated || fall ? 0 : r.lean;
+  st.hasEdge = true; st.edge = st.lean * 0.6;
+  st.air = !seated && !fall && (r.flags & net::F::air); st.tuck = !seated && !fall && (r.flags & net::F::tuck);
+  st.carry = !seatAt && !fall && (r.flags & net::F::carry);
+  a.st = st;
+  st.hasNormal = true; st.normal = three::V3(0, 1, 0);
+  const bool skisVisible = !st.hasBench && (S == net::St::Ski || st.carry || (fall && (r.flags & net::F::skisOn)));
+  if (a.skis != int(skisVisible)) { a.skis = int(skisVisible); rig.setSkisVisible(skisVisible); }
+  // walking with skis: on the back (the rig's carry pose), never on the feet
+  const bool carry = st.carry && S != net::St::Ski;
+  if (a.carry != int(carry)) { a.carry = int(carry); rig.setCarry(carry); }
+  a.animAcc += dt;
+  if (d < 60 || a.animAcc > (d < 180 ? 0.06 : 0.15) || !a.R.posed) {
+    // inside (a chalet's stairs, the Autohaus mezzanine, the ski shop, the prison): the floor is the row's own height
+    // (their feet), not the world's terrain under the interior's coordinates (remote.js onFloor)
+    if (inside) { const double fy = seated ? pos.y - 0.45 : pos.y; rig.setGround([fy](double, double, double) { return fy; }); }
+    else rig.setGround(ground);
+    if (a.snap) { a.snap = false; rig.snapPose(); }
+    rig.rootPos = three::V3(pos);
+    rig.update(std::max(1e-4, std::min(a.animAcc, 0.25)), st);
+    rig.fx.clear();
+    a.R.pose_();
+    a.animAcc = 0;
+  } else {
+    // (between pose solves the posed skier is carried along rigidly)
+    const three::V3 dl = three::V3(pos) - rig.rootPos;
+    rig.rootPos = three::V3(pos);
+    for (int k = 0; k < 2; k++) { rig.skis[k].p += dl; rig.poles[k].p += dl; }
+  }
+}
+
+void MpView::drawWorld(Renderer& r, People& people) {
+  rigsDrawn = rescuesDrawn = 0;
+  for (auto& [pid, a] : avs_) {
+    if (a.frame != frame_ || !a.R.posed) { if (a.frame != frame_) { a.mHas = false; a.snap = true; } continue; }   // (out of sight this frame: a fresh pose when back)
+    drawRig(r, a.R, people.kindOf(a.kind), people.gear(3).get(), 1, a.dist < 40);
+    rigsDrawn++;
+  }
+  frame_++;
+  if (drawRescue) for (auto& [pid, w] : rescues_) if (w.show) { drawRescue(r, w.out); rescuesDrawn++; }
+  if (drawRescue) for (const RescueDraw& o : helis_) drawRescue(r, o);
+}
+
+std::string MpView::describe(int pid) const {
+  auto it = avs_.find(pid);
+  if (it == avs_.end() || !it->second.R.posed) return "";
+  const Av& a = it->second;
+  static const char* MODE[] = {"idle", "walk", "ski", "fall", "sit"};
+  const int m = int(a.st.mode);
+  char b[200];
+  std::snprintf(b, sizeof b, "%s speed %.1f crouch %.2f lean %.2f%s%s%s%s%s", m >= 0 && m < 5 ? MODE[m] : "?", a.st.speed, a.st.crouch, a.st.lean,
+                a.st.tuck ? " tuck" : "", a.st.air ? " air" : "", a.skis == 1 ? " skis" : " no-skis", a.carry == 1 ? " carried" : "", a.st.hasFall ? " tumbling" : "");
+  return b;
 }
 
 void MpView::addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels& vm, const Model* sled, const glm::mat4& sledFit,
@@ -132,7 +330,7 @@ void MpView::addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels
     if (d > 500) return;
     glm::dmat4 M = glm::translate(glm::dmat4(1), p + dvec3(0, 0.02, 0)) * glm::rotate(glm::dmat4(1), yaw, dvec3(0, 1, 0)) *
                    glm::rotate(glm::dmat4(1), roll, dvec3(0, 0, 1));
-    vd.addCar(*m, M, d < 70 ? 0 : 1, paintColor(str(cfg, "paint")));   // (Phase 7: their paint)
+    vd.addCar(*m, M, d < 70 ? 0 : 1, paintColor(str(cfg, "paint")), 0, 0, 0, rimColor(str(cfg, "rims")));   // (Phase 7: their paint)
   };
   for (const auto& [id, r] : mp.players) {
     // their car: driven (the presence row is its pose) or parked where they left it

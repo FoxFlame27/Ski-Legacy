@@ -48,6 +48,8 @@ public:
   void flash(double dt, double night);
   dvec3 pos() const { return dvec3(x, y, z); }
   void draw(Renderer& r, const dvec3& cam) const;
+  /// (net/vehicles.js) another player's ambulance drawn here: on the snow at (x, z), its light bar flashing
+  void drawAt(Renderer& r, double x, double z, double yaw, bool lights, double time, double night) const;
   void fillColliders(std::vector<Collider>& out) const;
   bool visible = false, arrived = false, rider = false;
   double x = 0, y = 0, z = 0, yaw = 0, v = 0, vx = 0, vz = 0;
@@ -171,6 +173,13 @@ public:
   bool camera(Camera& cam) const;
   bool hideRig() const { return state == State::Rescue && rescue.phase == HeliRescue::Phase::Ambulance; }
   void draw(Renderer& r, const Camera& cam);
+  /// (net/rescue.js RescueMp.frame) your rescue for the other players: the veh message { k: rescue, h, a, s, rope, l };
+  /// false while none runs (or nothing of it is out)
+  bool mpRescue(nlohmann::json& msg) const;
+  /// (net/vehicles.js updateRescue) another player's rescue helicopter as drawn here (Euler pitch, yaw, roll, YXZ), its
+  /// winch rope (m, 0: none); a point of its airframe in the world (the door arm, the cabin seat)
+  void drawOther(Renderer& r, const dvec3& pos, double yaw, double pitch, double roll, double rpm, double rope, double time);
+  dvec3 otherPoint(const dvec3& pos, double yaw, double pitch, double roll, bool seat) const;
   void hud(Ui& ui, float u);
   bool interact(std::string& prompt, bool pressed);
   std::string objective() const;

@@ -11,8 +11,18 @@
 #include <vector>
 
 namespace sl {
+namespace gfx { class Device; }
+namespace platform { class Platform; }
+
+/// The catalogue's thumbnails: the web game's own renders of every model (furniture.js renderThumbs: 160 x 120, its
+/// lights, camera and tone mapping), packed by native/tools/browser/render_thumbs.mjs into public/ui/
+/// furniture_thumbs.webp (+ .json: the ids in atlas order).
+struct BuildThumbs { gfx::Texture tex{}; int cols = 8, w = 160, h = 120, texW = 0, texH = 0; std::vector<std::string> ids; };
+/// loaded once (null when the atlas is missing: the plates stay empty, as the web game's while its renders are pending)
+const BuildThumbs* buildThumbs(gfx::Device* dev = nullptr, platform::Platform* plat = nullptr);
 
 struct BuildMenuState {
+  const BuildThumbs* thumbs = nullptr;
   long long money = 0;
   std::vector<std::pair<std::string, std::string>> categories;   // id, name
   struct Item { std::string id, name, category; int price = 0; };

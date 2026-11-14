@@ -65,6 +65,8 @@ struct VehicleModel {
 /// (Phase 7) car paint colours (carconfig.js PAINTS, linear) by id, and a traffic / parked car's by its index
 vec4 paintColor(const std::string& id);
 vec4 paintForIndex(uint32_t k);
+/// carconfig.js RIMS by id (linear; a = 0: the factory alloys, 0.5 gloss black, 1 the other colours)
+vec4 rimColor(const std::string& id);
 
 class VehicleModels {
 public:
@@ -106,8 +108,9 @@ public:
   void add(const Model* m, const glm::dmat4& M, int lod = 0, const vec4& tint = vec4(1, 1, 1, 0));
   /// (Phase 7) a car: M its pose (without the model's fit); near (lod 0) with its wheels turning (spin: the roll angle,
   /// steer: the front wheels' angle; wheelTurn: the steering wheel's angle about its column), else the whole model;
-  /// tint: its paint (a = 0: the model's own)
-  void addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin = 0, double steer = 0, double wheelTurn = 0);
+  /// tint: its paint (a = 0: the model's own); rim: the configurator's rim colour (rimColor; a = 0: the factory alloys)
+  void addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin = 0, double steer = 0, double wheelTurn = 0,
+              const vec4& rim = vec4(1, 1, 1, 0));
   void submit(Renderer& r, gfx::Device& dev, const dvec3& cam);
 private:
   struct Batch { std::vector<std::pair<glm::dmat4, vec4>> inst[2]; MatrixInstanceBatch gpu[2]; uint32_t cap[2] = {0, 0}; };

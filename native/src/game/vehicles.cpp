@@ -205,7 +205,15 @@ void VehicleDraw::add(const Model* m, const glm::dmat4& M, int lod, const vec4& 
   batches_[m].inst[std::clamp(lod, 0, 1)].push_back({M, tint});
 }
 
-void VehicleDraw::addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin, double steer, double wheelTurn) {
+// carconfig.js RIMS: the tint multiplied over the wheels' metal (linear; a = 0: the factory alloys, 0.5: gloss black,
+// its roughness capped at 0.3, 1: the others)
+vec4 rimColor(const std::string& id) {
+  static const std::pair<const char*, const char*> R[] = {{"black", "#1b1c1e"}, {"gunmetal", "#5a5e64"}, {"bronze", "#9a6a36"}, {"gold", "#d0a650"}, {"red", "#a01a1e"}};
+  for (auto& [k, hex] : R) if (id == k) return vec4(hexColor(hex), id == "black" ? 0.5f : 1.f);
+  return vec4(1, 1, 1, 0);
+}
+
+void VehicleDraw::addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, const vec4& tint, double spin, double steer, double wheelTurn, const vec4& rim) {
   if (!vm.ok()) return;
   if (lod > 0 || !vm.split()) { add(vm.model.get(), M * glm::dmat4(vm.fit), lod, tint); return; }
   add(vm.body.get(), M, 0, tint);
@@ -218,7 +226,7 @@ void VehicleDraw::addCar(const VehicleModel& vm, const glm::dmat4& M, int lod, c
     glm::dmat4 W = M * glm::translate(glm::dmat4(1), dvec3(w.c));
     if (w.front && steer != 0) W = W * glm::rotate(glm::dmat4(1), steer, dvec3(0, 1, 0));
     if (spin != 0) W = W * glm::rotate(glm::dmat4(1), spin * (0.34 / std::max(0.2f, w.r)), dvec3(1, 0, 0));
-    add(w.model.get(), W, 0, tint);
+    add(w.model.get(), W, 0, rim);   // (the rims' own tint: the wheels carry no body paint, splitWheels keeps that on the body)
   }
 }
 
@@ -375,6 +383,14 @@ static void splitWheels(gfx::Device& dev, VehicleModel& vm, const CarSpec* steer
       if (g.empty()) continue;
       Material mt = m.materials[mi];
       mt.vertexColor = false;
+      if (part < 4 && mt.paint == 0) {
+        // (carconfig.js dressCar: a wheel's metal takes the rim colour; tyres, discs and calipers keep their own)
+        const std::string n = lower(mt.name);
+        bool keep = false;
+        for (const char* k : {"tire", "tyre", "rubber", "disk", "disc", "rotor", "brake", "break", "calip", "callip"}) keep = keep || n.find(k) != std::string::npos;
+        if (!keep) mt.paint = 3;
+        if (part == 0 && std::getenv("SKI_LEGACY_RIMS")) SL_INFO("rims: %s wheel material '%s' -> %s", m.name.c_str(), mt.name.c_str(), keep ? "kept" : "rim");
+      }
       ps.push_back({std::move(g), mt});
     }
     return ps.empty() ? nullptr : buildModel(dev, ps, m.name + (part < 4 ? "_wheel" : part == 5 ? "_steer" : "_body"));

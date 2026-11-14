@@ -1063,8 +1063,12 @@ world ready in 21.61 s ...
 ```
 
 ### Known gaps (Phase 5)
-- **Races**: no ghosts (the time trial mode is gone in the web game too), no broadcast presentation (intro flyover, podium,
-  replays, photo finish), no far stand-ins for the racers (rigs to 400 m), no snow spray / tracks behind them, no
+- **Races**: no ghosts (the time trial mode is gone in the web game too); of the broadcast presentation the payoff is
+  ported (`game/race_cine.*`: the replay buffer, the podium with its confetti and orbit, the results over it, WATCH
+  REPLAY behind the brush stinger with the trackside / heli / chase / finish cameras and slow motion, back to the
+  results; `SKI_LEGACY_DEBUG=racetest --autotest --png out.png` plays it out and writes `out_rt_<stage>.png`), the intro
+  flyover and the photo finish's / big airs' world slow motion are not; the trackside camera does not know tunnels /
+  bridges (the course features are not exported); no far stand-ins for the racers (rigs to 400 m), no snow spray / tracks behind them, no
   floodlit night course (the masts are exported, the night and their light pools are not set up), no RACE AGAIN; the course meshes stand everywhere (the web game builds them within
   1.7 km); the low-poly spectators of props.js are replaced by the character crowd.
 - **Jobs**: the people are drawn but have no lines of dialogue beyond the flash texts; the guest follows a simplified
@@ -1724,7 +1728,7 @@ day and at night exported per material), but the blue police lamp does not pulse
 | weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools; Phase 8: the full sky shader, stars / moon, IBL, a ray-marched cloud layer + the sea of clouds, cloud shadows); no cumulus impostor banks round the peaks, no backdrop ranges |
 | snowmaking, flags, snowcats | snowmaking.js, flags.js, snowcats.js | **ported** (Phase 7; snowcats condensed: no grooming trail, no ploughs) |
 | audio | core/audio.js | **ported** (Phase 7: every recording, music, announcer, horns, 3D); the Express's text-to-speech PA lines are not spoken (gong only) |
-| multiplayer | net/*.js against server/ | **ported** (the unchanged server; no race queues, lift / bus shared timelines) |
+| multiplayer | net/*.js against server/ | **ported** (the unchanged server; the other players as the game's own skier rig posed from their rows as remote.js poseOne: walking with / without skis, the skis on the back, carving, the tuck, in the air, a wipeout's tumble, seated; remote.js's playout delay, lead and smoothing; your rescue sent as net/rescue.js and the others' rescues drawn (helicopter, winch rope, the patient on the hook / in the cabin / hidden in the ambulance, the ambulance); flying your helicopter is state fly with its pose, the others' helicopters drawn; `SKI_LEGACY_DEBUG=mpshow --mptest URL --mp-peers 1` with `tools/browser/mp_show_peer.mjs` plays it all and writes `out_mpshow_<s>.png`. Not ported: the others' outfits (their character only) and ski model, the name card riding on the rig, the heli rental through the server (heliRent / the pad's `padAt`), tow trucks, police cars after another player, shared lift / bus / train timelines, race queues, a patient's bed pose in the ward) |
 | parkour mode, terrain park, tricks | modes/parkour, park.js, tricks.js | **not ported** |
 | post: bloom, streaks, vignette, AO, sun shafts, glare | engine/post.js, sunglare.js | **ported** (Phase 8: mip-chain bloom, GTAO, shafts, glare, PBR Neutral / ACES + grade, MSAA + FXAA + sharpen) |
 

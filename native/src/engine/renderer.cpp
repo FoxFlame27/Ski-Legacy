@@ -410,7 +410,9 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     if (!stampQuad_) { stampQuad_ = dev.createBuffer(gfx::BufferUsage::Vertex, q, sizeof q); stampIdx_ = dev.createBuffer(gfx::BufferUsage::Index, ix, sizeof ix); }
     partVbo_ = dev.createBuffer(gfx::BufferUsage::Vertex, nullptr, 48 * 4096, true);
     if (snow_) {   // the flakes' seeds (quality.js flakes: 2500 .. 26000 by preset)
-      snowN_ = set_.lowShaders ? 6000 : set_.fx >= 2 ? 60000 : set_.fx >= 1 ? 42000 : 18000;
+      // (quality.js flakes / crystals: super 2500 / 0, performance 18000 / 160, balanced 16000 / 320, high and up 26000 / 520)
+      snowN_ = set_.lowShaders ? 2500 : set_.fx >= 2 ? 26000 : set_.fx >= 1 ? 16000 : 18000;
+      crystalN_ = set_.lowShaders ? 0 : set_.fx >= 2 ? 520 : set_.fx >= 1 ? 320 : 160;
       std::vector<float> seeds(size_t(snowN_) * 4);
       uint32_t st = 0x2545F491u;
       auto rnd = [&]() { st ^= st << 13; st ^= st >> 17; st ^= st << 5; return float(st & 0xffffff) / float(0x1000000); };
@@ -959,7 +961,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   else if (m.shading == 6) kind = 6;   // (the gondola cabin: its painted windows are glass)
   else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
   else if (m.alpha == Material::Alpha::Blend && m.roughness < 0.6f) kind = 3;
-  else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && m.paint == 0 &&
+  else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && (m.paint == 0 || m.paint == 3) &&
                               (m.name.empty() || m.name.rfind("Material_", 0) == 0))) kind = 2;
   static const float STR[5] = {0, 0.35f, 0.45f, 0.5f, 0.5f}, FAR[5] = {1, 16, 22, 28, 34};
   vec4 f3(float(m.paint), float(kind), height, m.lumNorm);
@@ -1172,9 +1174,15 @@ void Renderer::snowPass() {
   dev_->setVec4("uSnowOff", glm::value_ptr(off));
   dev_->setVec4("uSnowP", glm::value_ptr(p));
   dev_->setVec4("uSnowVel", glm::value_ptr(v));
-  // (the flakes are ranked: lighter snowfall draws the first of them)
-  uint32_t n = uint32_t(std::clamp(int(float(snowN_) * std::min(1.f, snowfall_.amount * 1.05f)), 1, snowN_));
+  // (the flakes are ranked: a snowfall of s draws the first s of the preset's flakes, atmosphere.js aRank < uSnow)
+  uint32_t n = uint32_t(std::clamp(int(std::ceil(float(snowN_) * std::min(1.f, snowfall_.amount))), 1, snowN_));
   dev_->drawIndexed(snowVi_, gfx::IndexType::U16, 6, 0, n);
+  // atmosphere.js updateCrystals: the nearest flakes, wet clumps tumbling in a 7 m box round the camera (none in rain)
+  if (crystalN_ > 0 && snowfall_.amount > 0.004f && snowfall_.rain < 0.5f) {
+    vec4 pc(snowfall_.amount, snowfall_.rain, 7.f, float(snowN_) / float(crystalN_));
+    dev_->setVec4("uSnowP", glm::value_ptr(pc));
+    dev_->drawIndexed(snowVi_, gfx::IndexType::U16, 6, 0, uint32_t(std::min(crystalN_, snowN_)));
+  }
 }
 
 void Renderer::cloudPass() {

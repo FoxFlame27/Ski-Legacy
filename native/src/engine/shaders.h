@@ -491,7 +491,8 @@ void main() {
   if (vTint.a > 0.0 && uFlags3.x > 0.5 && uFlags3.x < 1.5) base.rgb = vTint.rgb;
   vec3 texel = vec3(1.0);
   if (uFlags.x > 0.5) { vec4 t = texture(uBase, vUV); texel = t.rgb; base *= t; }
-  if (vTint.a > 0.0 && uFlags3.x > 1.5) {
+  if (vTint.a > 0.0 && uFlags3.x > 2.5) base.rgb *= vTint.rgb;   // (3: a wheel's metal, the rim colour multiplied over it)
+  else if (vTint.a > 0.0 && uFlags3.x > 1.5) {
     float red = smoothstep(0.04, 0.2, base.r - max(base.g, base.b) * 1.1);
     base.rgb = mix(base.rgb, vTint.rgb * (0.35 + 2.4 * dot(base.rgb, vec3(0.5, 0.35, 0.15))), red * vTint.a);
   }
@@ -609,6 +610,7 @@ void main() {
     float warm = smoothstep(0.35, 0.8, texel.r - texel.b * 0.8) * smoothstep(0.25, 0.6, texel.r);
     em += vec3(1.0, 0.62, 0.28) * warm * uMisc.x * uFlags2.z;
   }
+  if (uFlags3.x > 2.5 && vTint.a > 0.0 && vTint.a < 0.75) rough = min(rough, 0.3);   // (carconfig.js: gloss black rims)
   rough = clamp(rough, 0.04, 1.0);
   Lit L = lightSurface(base.rgb, metallic, rough, n, v, sh, gn);
   if (kind == 1) {

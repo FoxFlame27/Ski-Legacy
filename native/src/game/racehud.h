@@ -48,6 +48,8 @@ struct RaceHudState {
 void drawRaceHud(Ui& ui, const RaceHudState& s, float hudScale = 1);
 /// presentation.js sting(): three brush strokes sweep across (blue, white with the label, red); 0.9 s, covered 36-60 %
 void drawStinger(Ui& ui, const std::string& label, double age);
+/// presentation.js cinematic() / skipHint(): the letterbox bars (0..1 grown) and "SKIP [SPACE]" in the bottom bar (0..1)
+void drawCineBars(Ui& ui, float bars, float skip, const std::string& label, const std::string& key);
 /// presentation.js badge(): the REPLAY badge under the top bar (a blinking red dot, the word, the replay's clock, SLOW MOTION)
 void drawReplayBadge(Ui& ui, const std::string& time, bool slow, double age, double now);
 

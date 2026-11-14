@@ -21,6 +21,7 @@
 
 namespace sl {
 class Renderer;
+struct Camera;
 struct Person;
 namespace racebots { class Track; }
 
@@ -50,6 +51,15 @@ public:
   int place() const;
   bool resultsUp() const;
   void confirmResults();
+  /// the broadcast presentation (session.js cine: the podium, a replay) owns the camera: poses it, true while it does
+  bool camera(Camera& cam) const;
+  /// "" none, "podium" (the skippable show), "podium-hold" (behind the results), "replay"; the replay's shot
+  std::string cineStage() const;
+  std::string replayShot() const;
+  double cineAge() const;
+  /// (the debug run) what a key / a click does: SKIP in a cinematic, WATCH REPLAY on the results screen
+  void skipCine();
+  bool watchReplay();
   const Course* courseById(const std::string& id) const { return c_.data ? c_.data->course(id) : nullptr; }
   double progress() const;   // metres down the course
   /// (the STATS screen's COURSE RECORDS) every course, your best time (< 0: none) and medal (1 gold, 2 silver, 3 bronze, 0 none)
@@ -73,6 +83,17 @@ private:
   void respawn(const char* why);
   void finishPlayer();
   void showResults();
+  void presentResults();
+  // the broadcast presentation (session.js: recordReplay, startPodium, startReplay, finishReplay, endCine, updateCine)
+  void recordReplay();
+  bool startPodium();
+  void startReplay();
+  void beginReplay();
+  void finishReplay();
+  void endCine();
+  void updateCine(double dt);
+  void openCineInput();
+  void hudCine(Ui& ui);
   struct Session;
   PlayCtx& c_;
   int standCourse_ = 0, standDiff_ = 1;   // (the stand remembers your last pick)

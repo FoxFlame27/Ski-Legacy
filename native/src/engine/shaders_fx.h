@@ -263,7 +263,7 @@ void main() {
   vec3 p = wp + (right * k.x + up * k.y) * (size * 0.5);
   vC = aCorner;
   vRain = uSnowP.y;
-  vP = vec4(alpha, rot, crystal > 0.5 ? 0.0 : 1.0 - smoothstep(0.25, 1.6, d), crystal > 0.5 ? 0.0 : 1.0 - smoothstep(5.0, 12.0, px));
+  vP = vec4(alpha, rot, crystal > 0.5 ? 0.0 : 1.0 - smoothstep(0.25, 1.6, d), crystal > 0.5 ? 0.5 : 1.0 - smoothstep(5.0, 12.0, px));   // (a crystal: a soft-edged clump)
   // light: the sun through the flake (brighter against the sun), the sky, and the lamps near it
   vec3 v = normalize(-wp);
   float back = pow(max(dot(-v, uSunDir.xyz), 0.0), 4.0);

@@ -1395,6 +1395,12 @@ int runGame(const GameOptions& opt) {
       o.flags = net::F::sled;
       return;
     }
+    if (heli.active()) {   // (net/heli.js MpHeli.pose: flying, your row is the helicopter's pose, its pitch and roll, the rotor at flight power)
+      const HeliFlight& hf = heli.flight;
+      o.x = hf.pos.x; o.y = hf.pos.y; o.z = hf.pos.z; o.yaw = hf.yaw; o.vx = hf.vel.x; o.vy = hf.vel.y; o.vz = hf.vel.z;
+      o.st = int(net::St::Fly); o.crouch = hf.pitch; o.lean = hf.roll; o.flags = heli.rpm > 0.6 ? net::F::lights : 0u;
+      return;
+    }
     if (rideKind == Ride::Passenger || rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) { o.st = int(net::St::Ride); o.vx = o.vy = o.vz = 0; return; }
     o.st = player.mode == PlayerMode::Sit ? int(net::St::Sit) : player.mode == PlayerMode::Ski ? int(net::St::Ski) : player.mode == PlayerMode::Fall ? int(net::St::Fall) : int(net::St::Walk);
     o.crouch = player.crouch; o.lean = player.lean;
@@ -1422,6 +1428,13 @@ int runGame(const GameOptions& opt) {
   };
   mpv.myCar = myCarFrame;
   mpv.models = &vmodels;
+  // (remote.js poseOne: the other players as the game's own skier rig; vehicles.js updateRescue: their rescues)
+  mpv.ground = [&](double x, double z, double y) { return world.groundHeight(x, z, y); };
+  mpv.drawRescue = [&](Renderer& r, const MpView::RescueDraw& o) {
+    if (o.heli) heli.drawOther(r, o.hp, o.yaw, o.pitch, o.roll, o.rpm, o.rope, o.time);
+    if (o.amb) heli.rescue.amb.drawAt(r, o.ax, o.az, o.ayaw, o.lights, o.time, double(pc.night));
+  };
+  mpv.rescuePoint = [&](const MpView::RescueDraw& o, bool seat) { return heli.otherPoint(o.hp, o.yaw, o.pitch, o.roll, seat); };
   oddJobs.carFrame = myCarFrame;
   // the chalets of the others (MP.chalets), buying through the server, visiting with the owner's yes
   pc.chaletOwner = [&](int plot) -> std::string {
@@ -1531,6 +1544,9 @@ int runGame(const GameOptions& opt) {
   };
   // (Phase 6) the multiplayer check (--mptest): the menus, a fresh name, a world, presence, purchases at the server,
   // chat, a dropped connection resumed, leaving (the single-player save back)
+  bool mpShowCam = false;
+  int mpShowN = -1;
+  dvec3 mpShowEye{0}, mpShowAt{0};
   struct MpT { int step = 0, f = 0, rq = 0; bool asked = false; double t0 = 0; bool ok = true; std::string name; int64_t m0 = 0; int sent0 = 0; bool waiting = false; nlohmann::json prof; bool got = false; } mt;
   if (mptest) {
     mp.forgetAccount();   // (only this test server's entry)
@@ -1589,6 +1605,7 @@ int runGame(const GameOptions& opt) {
     UiNav nav = navBuilder.build(ev, *plat, input, now);
     if ((opt.autotest && !atRealKeys) || mptest) { float wheel = nav.wheel; nav = UiNav{}; nav.mouse = vec2(-1); nav.wheel = wheel; }   // (the wheel stays real: pushWheel)
     // (Phase 6) the network: events, presence out, the other players, the shared clock, the money guard
+    mp.interiorOffset = rooms.inside() ? rooms.toWorld(0, 0, 0) : dvec3(0);
     mp.update(std::min(0.25, frameDt), paused);
     pc.online = mp.active();
     if (mp.active() && started && !menus.isOpen() && !tmap.isOpen()) {
@@ -1890,6 +1907,26 @@ int runGame(const GameOptions& opt) {
               input.releaseInjected();
               player.teleport(r0.sm.x + 6, r0.sm.z + 6, std::atan2(-6.0, -6.0));
               mt.waiting = true; mt.t0 = now;
+            } else if (mt.waiting && off("mpshow")) {
+              // (debug: SKI_LEGACY_DEBUG=mpshow --mptest URL --mp-peers 1 --png out.png with native/tools/browser/mp_show_peer.mjs:
+              // the peer walks without skis, with skis on its back, skis (carving, the tuck, a jump), wipes out and is
+              // rescued (helicopter, winch, cabin, ambulance); the rig it is posed with is logged every second and
+              // photographed every other one: out_mpshow_<s>.png)
+              const RemotePlayer* rp = &mp.players.begin()->second;
+              for (auto& [id, rr] : mp.players) if (rr.name.rfind("ShowPeer", 0) == 0) rp = &rr;   // (the one putting on the show)
+              const RemotePlayer& r0 = *rp;
+              if (!mpShowCam) { mpShowCam = true; player.teleport(4, 50, PI); mt.t0 = now; mpShowN = -1; mpShowEye = dvec3(4, world.groundHeight(4, 47) + 2.6, 47); }
+              mpShowAt = dvec3(r0.sm.x * 0.5 + 2, mpShowEye.y - 1.2 + std::max(0.0, (r0.sm.y - (mpShowEye.y - 2.6)) * 0.5), r0.sm.z);
+              const int sec = int(now - mt.t0);
+              if (sec != mpShowN) {
+                mpShowN = sec;
+                SL_INFO("[mpshow] %2d s: %s at (%.1f, %.1f, %.1f) state %d flags 0x%x -> rig: %s; %d rig(s), %d rescue(s) drawn", sec, r0.name.c_str(), r0.sm.x, r0.sm.y, r0.sm.z, r0.st, r0.flags,
+                        mpv.describe(r0.pid).c_str(), mpv.rigsDrawn, mpv.rescuesDrawn);
+                if (sec % 2 == 1 && !opt.png.empty()) pendingPng = pngVariant(opt.png, ("mpshow_" + std::to_string(sec)).c_str());
+              }
+              // (your own show for the other clients: standing without skis, then from 62 s skis on and off down the plaza)
+              if (sec >= 62 && sec < 78) { player.hasSkis = true; if (!player.skisOn) player.setSkisOn(true); input.inject(Action::Forward, true); }
+              if (sec >= 78) { input.releaseInjected(); player.setSkisOn(false); player.hasSkis = !save.skis.empty(); mpShowCam = false; mt.step = 49; next(); }
             } else if (mt.waiting && el > 2.5) {
               if (!opt.png.empty()) pendingPng = pngVariant(opt.png, "mp");
               mt.step = 49;   // (on to the car ride, when a peer has a car out)
@@ -2003,7 +2040,7 @@ int runGame(const GameOptions& opt) {
           running = false;
           break;
       }
-      if (mt.step < 12 && now - mt.t0 > 60) { fail("step " + std::to_string(mt.step) + " stuck"); next(); }
+      if (mt.step < 12 && now - mt.t0 > (mpShowCam ? 110 : 60)) { fail("step " + std::to_string(mt.step) + " stuck"); next(); }
     }
     if (uiTest && at == AT::Map) {
       nav = UiNav{};
@@ -3447,6 +3484,7 @@ int runGame(const GameOptions& opt) {
       cam.fovY = 50; cam.nearZ = 0.2f;
     }
     if (started) races.camera(cam);   // (a race's podium / replay owns the camera: presentation/cinecam.js applyCamera)
+    if (mpShowCam) { cam.lookAt(mpShowEye, mpShowAt); cam.fovY = 62; }   // (debug: mpshow, the other player's show from a fixed camera)
     if (off("carside") && started) {
       // (debug: a low side view of your car, else of the nearest traffic car with people in it: the boots under the sill)
       glm::dmat4 M(0);
@@ -3475,6 +3513,7 @@ int runGame(const GameOptions& opt) {
     for (const auto& e : drive.parked)
       if (e.owned && !e.plate.empty())
         if (Save::Car* c = garageEntry(e.plate); c && std::fabs(c->damage - e.damage) > 0.01) { c->damage = e.damage; save.markDirty(); if (mp.active()) mp.carDamage(e.plate, e.damage / 100); }
+    if (off("rescuetest") && frame % 150 == 0) { nlohmann::json rm; if (heli.mpRescue(rm)) SL_INFO("[rescuetest] the row for the other players (net/rescue.js): %s", rm.dump().c_str()); }
     if (mp.active() && started) {   // (Phase 6, carride.js frame / keptFrame) your car out and your other cars parked
       Multiplayer::CarReport cr;
       std::vector<Multiplayer::Kept> kept;
@@ -3485,6 +3524,7 @@ int runGame(const GameOptions& opt) {
         else if (!e.driving && e.impoundDay <= save.day) kept.push_back({e.plate, dvec3(e.x, e.y, e.z), e.yaw, e.wrecked});
       }
       mp.reportCar(cr);
+      { nlohmann::json rm; const bool on = heli.mpRescue(rm); mp.reportRescue(on ? &rm : nullptr, frameDt); }   // (net/rescue.js: your rescue for the others)
       if ((mpKeptT += frameDt) > 0.5) { mpKeptT = 0; mp.reportKept(kept); }
     }
     for (size_t k = 0; k < tows.size();) {
@@ -4018,7 +4058,7 @@ int runGame(const GameOptions& opt) {
     }
     rooms.addPeople(people);
     police.addPeople(people, cam.pos);
-    if (mp.active()) mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt);
+    if (mp.active()) { mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt); mpv.drawWorld(renderer, people); }
     people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);
     npcs.submit(renderer, cam.pos);
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);

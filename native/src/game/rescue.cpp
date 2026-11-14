@@ -553,6 +553,59 @@ void HeliRescue::draw(Renderer& r, const dvec3& cam) const {
   if (ropeOn_ && c_.shapes) c_.shapes->cylinder(r, ropeTop_ - dvec3(0, ropeLen_, 0), 0.02, ropeLen_, vec4(0.017f, 0.02f, 0.025f, 1), 0, false);
 }
 
+// net/rescue.js RescueMp.frame: the rescue's pose for the other players (about 6 times a second while it runs)
+bool Heli::mpRescue(nlohmann::json& msg) const {
+  const HeliRescue& R = rescue;
+  if (state != State::Rescue || !R.active()) return false;
+  auto r2 = [](double v) { return std::round((std::isfinite(v) ? v : 0) * 100) / 100; };
+  const HeliFlight& f = flight;
+  // (where you are: 0 down in the snow, 1 on the winch, 2 in the cabin, 3 in the ambulance)
+  const int s = R.phase == HeliRescue::Phase::Ambulance && R.seated ? 3 : R.inCabin ? 2 : R.seated ? 1 : 0;
+  msg = nlohmann::json{{"k", "rescue"}, {"s", s}};
+  // (gone after handing you to the ambulance: null, the others drop it at once)
+  if (!R.gone) msg["h"] = {r2(f.pos.x), r2(f.pos.y), r2(f.pos.z), r2(f.yaw), r2(f.pitch), r2(f.roll), r2(std::min(1.0, std::max(0.0, rpm)))};
+  else msg["h"] = nullptr;
+  if (R.amb.ok() && R.amb.visible) msg["a"] = {r2(R.amb.x), r2(R.amb.y), r2(R.amb.z), r2(R.amb.yaw), r2(std::max(-40.0, std::min(40.0, R.amb.v)))};
+  else msg["a"] = nullptr;
+  msg["rope"] = R.ropeOn_ ? r2(R.ropeLen_) : 0.0;
+  msg["l"] = R.phase == HeliRescue::Phase::Arrive || R.phase == HeliRescue::Phase::Ambulance;
+  return !(msg["h"].is_null() && msg["a"].is_null());
+}
+
+dvec3 Heli::otherPoint(const dvec3& pos, double yaw, double pitch, double roll, bool seat) const {
+  const glm::dquat q = glm::angleAxis(yaw, dvec3(0, 1, 0)) * glm::angleAxis(pitch, dvec3(1, 0, 0)) * glm::angleAxis(roll, dvec3(0, 0, 1));
+  return pos + q * (seat ? anchorSeat : anchorDoor);
+}
+
+// net/vehicles.js updateRescue: their helicopter (model.js: the airframe, the rotors by their rpm) and its winch rope
+void Heli::drawOther(Renderer& r, const dvec3& pos, double yaw, double pitch, double roll, double orpm, double rope, double otime) {
+  if (!ok_ || !parts_.body) return;
+  const glm::dquat q = glm::angleAxis(yaw, dvec3(0, 1, 0)) * glm::angleAxis(pitch, dvec3(1, 0, 0)) * glm::angleAxis(roll, dvec3(0, 0, 1));
+  const mat4 R = mat4(glm::mat4_cast(glm::quat(q)));
+  r.submitModel(*parts_.body, pos, R, nullptr, true);
+  const mat4 A = R * glm::translate(mat4(1), airPos_) * glm::scale(mat4(1), vec3(float(K_)));
+  auto sm = [](double a, double b, double x) { double t = std::clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3 - 2 * t); };
+  const double blur = sm(0.28, 0.9, orpm), ang = otime * 38 * orpm, tang = otime * 150 * orpm;
+  const float droop = float(-0.045 + 0.07 * sm(0.2, 1, orpm));
+  const mat4 spin = A * glm::translate(mat4(1), hub_) * glm::rotate(mat4(1), float(ang), vec3(0, 1, 0));
+  if (parts_.hub) r.submitModel(*parts_.hub, pos, spin, nullptr, true);
+  if (parts_.blade)
+    for (int i = 0; i < 4; i++) {
+      mat4 M = spin * glm::rotate(mat4(1), float(i * PI / 2), vec3(0, 1, 0)) * glm::translate(mat4(1), vec3(float(bladeX_), 0, 0)) * glm::rotate(mat4(1), droop, vec3(0, 0, 1));
+      r.submitModel(*parts_.blade, pos, M, nullptr, orpm < 0.45);
+    }
+  if (parts_.disc && blur > 0.01) r.submitModel(*parts_.disc, pos, A * glm::translate(mat4(1), hub_ + vec3(0, float(discY_), 0)) * glm::rotate(mat4(1), float(ang), vec3(0, 1, 0)), nullptr, false);
+  const mat4 tspin = A * glm::translate(mat4(1), tailHub_) * glm::rotate(mat4(1), float(tang), vec3(1, 0, 0));
+  if (parts_.tailHub) r.submitModel(*parts_.tailHub, pos, tspin, nullptr, true);
+  if (parts_.tailBlades && orpm < 0.4) r.submitModel(*parts_.tailBlades, pos, tspin, nullptr, true);
+  if (parts_.tailDisc && orpm > 0.12) r.submitModel(*parts_.tailDisc, pos, A * glm::translate(mat4(1), tailHub_ + vec3(float(tailDiscX_), 0, 0)) * glm::rotate(mat4(1), float(tang), vec3(1, 0, 0)), nullptr, false);
+  // the winch rope from the door arm down to the hook (rescue.js winch)
+  if (rope > 0.1 && c_.shapes) {
+    const dvec3 top = pos + q * anchorDoor + dvec3(0, 1.0, 0);
+    c_.shapes->cylinder(r, top - dvec3(0, rope, 0), 0.02, rope, vec4(0.017f, 0.02f, 0.025f, 1), 0, false);
+  }
+}
+
 } // namespace sl
 
 /// (debug: ambtest) straight to the pad, landed, you in the cabin

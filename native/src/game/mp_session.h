@@ -79,6 +79,9 @@ struct RemotePlayer {
   double smYaw = 0;
   bool smOk = false;
   double animPhase = 0;
+  uint32_t fa = 0, fb = 0;     // a wipeout: the flags either side of the sample and the blend (remote.js fallPose)
+  double ff = 0;
+  int rescueSeq = 0;           // counts their rescue rows (net/rescue.js, ~6 a second while it runs)
   double delay() const;
   void push(const Json& row, double now);
   const Snap& slot(int k) const { return ring[(head - k + RING * 2) % RING]; }
@@ -176,6 +179,12 @@ public:
   // ---- your car(s) as everyone sees them (carride.js frame / keptFrame)
   struct CarReport { bool has = false, driving = false, wreck = false; dvec3 pos{0}; double yaw = 0; std::string plate; };
   void reportCar(const CarReport& c);
+  /// (net/rescue.js RescueMp.frame) your rescue while it runs (the message of Heli::mpRescue; null: none): out about 6
+  /// times a second, { k: rescue, off: true } once it is over
+  void reportRescue(const Json* msg, double dt);
+  /// where the room you are in stands in this game's world (Interiors::toWorld(0, 0, 0); 0 outdoors): presence rows
+  /// inside a room are in the room's own frame on the wire (as the web game's), converted with it both ways
+  dvec3 interiorOffset{0};
   struct Kept { std::string plate; dvec3 pos; double yaw; bool wreck = false; };
   void reportKept(const std::vector<Kept>& list);
 
@@ -204,7 +213,7 @@ private:
   void push(bool force = false, bool last = false);
   void addPlayer(const Json& p);
   void sendPresence();
-  void updateRemotes();
+  void updateRemotes(double dt);
   Json look() const;
   void loadAccounts();
   void storeAccount(const std::optional<Account>& a);
@@ -229,7 +238,8 @@ private:
   std::string skipKey_;
   bool skipOn_ = false;
   CarReport carSent_;
-  bool carSentAny_ = false;
+  bool carSentAny_ = false, rescueSent_ = false;
+  double rescueT_ = 0;
   double carCheckT_ = 0;
   std::string keptSig_;
   bool paused_ = false;

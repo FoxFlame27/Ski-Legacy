@@ -531,6 +531,12 @@ int runGame(const GameOptions& opt) {
   ward.load(assets, heliParts.ward);
   heli.load(assets, heliParts);
   heliParts = HeliParts{};
+  heli.openChart = [&]() {   // (heli.js openDialog: the flight planner chart, ui/travel.js)
+    TrailMap::Travel T = tmap.heliTravel(save.money, heli.price());
+    heli.planner(T);
+    tmap.openTravel(std::move(T));
+    if (!opt.autotest) plat->setRelativeMouse(false);
+  };
   chalets.load(assets);
   tmap.live = [&](TrailMap::Live& L) { L.ownChalet = chalets.owned() ? chalets.ownedHouse() : -1; };
   Snowmobiles sleds(pc);
@@ -546,7 +552,7 @@ int runGame(const GameOptions& opt) {
   std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
   VehicleDraw snowDraw;
   Transition trans;   // the scenes between two places (transition.js): the dark dip with the logo, the title card
-  bool jailResumed = false;
+  bool jailResumed = false, rescueResumed = false;
   drive.gatherOthers = [&](std::vector<OtherBody>& out) {
     traffic.others(out, drive.pos());
     for (const Obb& b : busBoxes) if (std::hypot(b.x - drive.pos().x, b.z - drive.pos().z) < 20) { OtherBody o; o.box = b; o.mass = 12000; o.kind = 1; out.push_back(o); }
@@ -1160,7 +1166,7 @@ int runGame(const GameOptions& opt) {
   if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 11 + int(i);
   const bool uiOnly = std::getenv("SKI_LEGACY_UIONLY") != nullptr;
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
-  if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
+  if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest") || off("helicheck")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
   bool heliOk = true;
   const bool heliRun = at == AT::Heli;
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
@@ -1220,7 +1226,7 @@ int runGame(const GameOptions& opt) {
   menus.hooks.records = [&]() { std::vector<Menus::Hooks::Record> out; for (const auto& r : races.records()) out.push_back({r.name, r.best, r.medal}); return out; };
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
-  menus.hooks.mainMenu = [&]() { heli.abort(); save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
+  menus.hooks.mainMenu = [&]() { heli.rescue.keep = heli.rescuing(); heli.abort(); save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
   menus.hooks.village = [&]() {
     menus.close();
     if (police.jailed() || police.arrestedNow()) { flash("You are serving a sentence", Hud::Flash::Bad); return; }
@@ -2188,7 +2194,7 @@ int runGame(const GameOptions& opt) {
       auto shot = [&](const std::string& tag) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, tag.c_str()); };
       auto check = [&](bool ok, const std::string& what) { SL_INFO("[helitest] %s -> %s", what.c_str(), ok ? "ok" : "FAILED"); if (!ok) heliOk = false; };
       static const char* PH[] = {"none", "inbound", "settle", "pickup", "hover", "home", "arrive", "ambulance"};
-      if (f == 0) { T.mode = off("helitest") ? 3 : off("wardtest") ? 2 : off("ambtest") ? 1 : 0; input.releaseInjected(); player.hasSkis = true; if (save.skis.empty()) save.skis = "rental"; }
+      if (f == 0) { T.mode = off("helicheck") ? 4 : off("helitest") ? 3 : off("wardtest") ? 2 : off("ambtest") ? 1 : 0; input.releaseInjected(); player.hasSkis = true; if (save.skis.empty()) save.skis = "rental"; }
       if (T.mode <= 1 && T.wardF < 0) {
         if (f == 2) {   // (flat open snow by default: it lands; SKI_LEGACY_SPOT=x,z: somewhere else, e.g. a steep slope or the trees: the winch)
           double sx = -342.68, sz = -244.42;
@@ -2271,6 +2277,145 @@ int runGame(const GameOptions& opt) {
         }
         if (w == 626) { SL_INFO("[helitest] %s", heliOk ? "PASS" : "FAIL"); running = false; }
       }
+      // (helicheck: what a flight and a rescue do off the beaten path: no skis / no money at the desk, the chart, the
+      // drop zone's smoke, your skis in the basket, jumping out of the hover with the drop, the pilot flying it home,
+      // leaving it 650 m behind, calling it back from the pad, both watchdogs, a visitor's chair)
+      if (T.mode == 4) {
+        static struct { int s = 0, f0 = 0, n = 0; int64_t m0 = 0; } C;
+        const HeliFlight& fl = heli.flight;
+        const int g = f - C.f0;
+        auto next = [&]() { C.s++; C.f0 = f; input.releaseInjected(); };
+        auto padSpot = [&]() { double a = heli.home.yaw - PI / 2; player.setSkisOn(false); player.teleport(heli.home.x + std::sin(a) * 9, heli.home.z + std::cos(a) * 9, a + PI); };
+        auto landOut = [&]() {   // (aboard on a free flight, set down on the flat open snow up the mountain, out)
+          if (g == 1) { save.earn(1500); heli.debugFly(-1); heli.debugPlace(-349.3, -253.2, 5, 2.2); }
+          input.inject(Action::Sprint, g > 2 && !fl.landed);
+          input.inject(Action::Interact, fl.landed && heli.active() && g % 8 == 0);
+          return g > 4 && !heli.active() && heli.away();
+        };
+        auto homeAgain = [&](const char* what) {
+          if (heli.state == Heli::State::Parked && !heli.away() && fl.landed && std::hypot(fl.pos.x - heli.home.x, fl.pos.z - heli.home.z) < 2) { check(true, std::string(what) + ": back on its pad after " + std::to_string(g / 30) + " s"); return true; }
+          if (g > 4500) { check(false, std::string(what) + ": back on its pad"); return true; }
+          return false;
+        };
+        if (f % 150 == 0) SL_INFO("[helitest] f %d step %d: helicopter at (%.0f, %.0f, %.0f) agl %.1f %s state %d; you %s at (%.0f, %.0f, %.0f); prompt '%s' / '%s'", f, C.s, fl.pos.x, fl.pos.y, fl.pos.z, fl.agl, fl.landed ? "landed" : "flying",
+                                  int(heli.state), player.modeName(), player.pos.x, player.pos.y, player.pos.z, prompt.c_str(), heli.hudPrompt().c_str());
+        switch (C.s) {
+          case 0:   // no skis: the notice
+            if (g == 2) { save.skis.clear(); padSpot(); }
+            input.inject(Action::Interact, g == 20);
+            if (g == 28) { check(menus.dialogOpen() && !tmap.travelOpen() && !heli.active(), "without skis: the notice, no flight"); shot("hc_noskis"); }
+            if (g == 30) { menus.close(); save.skis = "rental"; next(); }
+            break;
+          case 1:   // no money: the chart opens, FLY refuses
+            if (g == 2) { save.spend(save.money - 100, true); C.m0 = save.money; }
+            input.inject(Action::Interact, g == 10);
+            if (g == 18) { check(tmap.travelOpen(), "the flight planner chart opens (you have $" + std::to_string(save.money) + ")"); shot("hc_broke"); }
+            if (g == 28) { tmap.travelFocus("Rabenspitz"); tmap.travelChoose(); }
+            if (g == 32) { check(!heli.active() && save.money == C.m0, "short of money: no flight, nothing charged"); tmap.closeTravel(); next(); }
+            break;
+          case 2:   // the chart, a race course in it, a flight plan
+            if (g == 2) { save.earn(6000); C.m0 = save.money; }
+            input.inject(Action::Interact, g == 10);
+            if (g == 18) { bool race = tmap.travelFocus("Sunny Meadow"); check(tmap.travelOpen() && race, "the chart lists the race courses (Sunny Meadow)"); shot("hc_chart_race"); }
+            if (g == 30) { check(tmap.travelFocus("Rabenspitz"), "Rabenspitz on the chart"); shot("hc_chart"); }
+            if (g == 40) tmap.travelChoose();
+            if (g == 46) {
+              std::string wl; double wx = 0, wz = 0;
+              bool wp = heli.waypoint(wl, wx, wz);
+              check(heli.active() && save.money == C.m0 - heli.price() && wp && wl.find("Rabenspitz") != std::string::npos, "FLY: aboard, $" + std::to_string(heli.price()) + " charged, the compass on '" + wl + "'");
+              if (wp) heli.debugPlace(wx - 150, wz, 30, PI / 2);   // (150 m short of the drop zone: its red smoke ahead)
+              next();
+            }
+            break;
+          case 3:   // the flare's smoke, your skis in the basket
+            if (g == 300) shot("hc_flare");
+            if (g == 304) { heli.debugPlace(493, -393, 4.5, 2.2); }   // (a slope too steep to land on: hover and jump)
+            if (g == 340) shot("hc_basket");
+            if (g == 360) { SL_INFO("[helitest] hovering %.1f m over the steep slope: '%s'", fl.agl, heli.hudPrompt().c_str()); check(heli.hudPrompt() == "Jump out and ski", "the prompt over a slope too steep to land on ('" + heli.hudPrompt() + "')"); }
+            input.inject(Action::Interact, g == 362);
+            if (g == 366) { check(!heli.active() && heli.state == Heli::State::Auto && player.mode == PlayerMode::Ski && player.air, "jumped out: dropping from the skid (" + std::to_string(player.pos.y - world.groundHeight(player.pos.x, player.pos.z)) + " m up), the pilot takes it home"); shot("hc_jump"); }
+            if (g == 420) { check(!player.air && player.parked && player.mode == PlayerMode::Ski, "landed on the snow, standing still until you push off"); shot("hc_jumped"); next(); }
+            break;
+          case 4: if (g == 240) shot("hc_pilot_home"); if (homeAgain("the pilot flew it home")) { shot("hc_pilot_landed"); next(); } break;
+          case 5:   // land out, walk 650 m away: it flies home by itself
+            if (landOut()) { check(true, "landed out, got out: it waits (prompt '" + prompt + "')"); player.teleport(fl.pos.x + 700, fl.pos.z, 0); next(); }
+            else if (g > 900) { check(false, "landed out"); next(); }
+            break;
+          case 6: if (g == 4) check(heli.state == Heli::State::Auto, "650 m away from it: its pilot takes off for home"); if (homeAgain("left behind")) next(); break;
+          case 7:   // land out again, call it back from the pad
+            if (landOut()) { padSpot(); next(); }
+            else if (g > 900) { check(false, "landed out"); next(); }
+            break;
+          case 8:
+            if (g == 12) { check(prompt.find("call the helicopter back") != std::string::npos, "at the pad while it is out ('" + prompt + "')"); shot("hc_call"); }
+            input.inject(Action::Interact, g == 14);
+            if (g == 20) { check(heli.state == Heli::State::Auto, "called back: on its way"); player.teleport(heli.home.x + 30, heli.home.z + 30, 0); }   // (off the pad: it waits above while somebody stands on it)
+            if (g == 18) check(prompt.find("flying back") != std::string::npos, "the pad's prompt meanwhile ('" + prompt + "')");
+            if (g > 20 && homeAgain("called back")) next();
+            break;
+          case 9:   // a rescue nobody reaches in time: the watchdog
+            if (g == 2) { player.setSkisOn(true); player.teleport(-342.68, -244.42, 0.6); }
+            if (g == 30) { C.m0 = save.money; player.knockDown(1, dvec3(0), 0, false); check(heli.rescueMe(false), "a rescue called"); }
+            if (g == 60) heli.rescue.debugStall();
+            if (g == 110) { check(ward.inBed() && !heli.rescuing() && save.money < C.m0, "not picked up in 150 s: straight to the medical centre, the bill charged"); next(); }
+            break;
+          case 10:  // up, a visitor's chair
+            if (g == 30) ward.debugFit();
+            input.inject(Action::Interact, g == 60 || g == 120 || g == 170);
+            if (g == 90) { dvec3 at; double yaw = 0; bool ok = ward.debugChair(at, yaw); check(ok && !ward.inBed(), "got up"); player.teleport(at.x, at.z, yaw); player.pos.y = at.y; player.prevPos = player.renderPos = player.pos; }
+            if (g == 116) check(prompt == "Sit down", "at a visitor's chair ('" + prompt + "')");
+            if (g == 150) { check(ward.seated() && player.mode == PlayerMode::Sit && prompt == "Stand up", "sitting by the bed ('" + ward.objective() + "')"); shot("hc_chair"); }
+            if (g == 190) { check(!ward.seated() && player.mode == PlayerMode::Walk && ward.inside(), "stood up again"); rooms.leave(); next(); }
+            break;
+          case 11:  // the ambulance stuck: the other watchdog
+            if (g == 4) { player.setSkisOn(true); player.teleport(-342.68, -244.42, 0.6); }
+            if (g == 30) { C.m0 = save.money; player.knockDown(1, dvec3(0), 0, false); check(heli.rescueMe(false), "a rescue called"); heli.rescue.debugArrive(); }
+            if (g == 90) { check(heli.rescue.phase == HeliRescue::Phase::Ambulance, "in the ambulance"); heli.rescue.debugStall(); }
+            if (g == 150) { check(ward.inBed() && !heli.rescuing() && save.money < C.m0, "the ambulance stuck for 45 s: straight to the medical centre, the bill charged"); next(); }
+            break;
+          case 12:  // leaving in the middle of a rescue and coming back: it carries on
+            if (g == 4) { ward.reset(); if (rooms.inside()) rooms.leave(); }
+            if (g == 8) { player.setSkisOn(true); player.teleport(-342.68, -244.42, 0.6); }
+            if (g == 30) { player.knockDown(1, dvec3(0), 0, false); check(heli.rescueMe(true), "a rescue called (a vehicle's fault: free)"); }
+            if (g == 50) { check(save.data("rescue").value("st", std::string()) == "wait", "kept in the save while it runs: " + save.data("rescue").dump()); heli.rescue.keep = true; heli.abort(); player.teleport(4, 34, PI); }
+            if (g == 54) { check(!heli.rescuing() && save.data("rescue").value("st", std::string()) == "wait", "left (back to the menu): still in the save"); check(heli.rescue.resume() && heli.rescuing(), "back: the rescue carries on"); }
+            if (g == 60) check(std::hypot(player.pos.x + 342.68, player.pos.z + 244.42) < 3 && player.mode == PlayerMode::Fall && std::hypot(fl.pos.x - player.pos.x, fl.pos.z - player.pos.z) < 300, "lying where you lay, the helicopter " + std::to_string(int(std::hypot(fl.pos.x - player.pos.x, fl.pos.z - player.pos.z))) + " m out");
+            input.inject(Action::Jump, g > 60);
+            if (heli.rescue.phase == HeliRescue::Phase::Home && heli.rescue.pt > 0.4) { check(true, "picked up"); heli.rescue.keep = true; heli.abort(); next(); }
+            else if (g > 3000) { check(false, "picked up after coming back"); next(); }
+            break;
+          case 13:  // ...and from the cabin
+            if (g == 2) { nlohmann::json& r = save.data("rescue"); check(r.value("st", std::string()) == "cabin" && r.contains("hp"), "aboard when you left: " + r.dump()); check(heli.rescue.resume() && heli.rescue.inCabin && !fl.landed, "back: on in the cabin, in the air"); }
+            if (g == 20) { heli.rescue.debugStall(); }
+            if (g == 80) { check(ward.inBed() && save.data("rescue").empty(), "over: nothing left in the save (free: no bill)"); next(); }
+            break;
+          case 14: {  // flying into a lift's haul rope: pushed back, never through it
+            static double minGap = 1e9, cl = 0; static const LiftLine* L = nullptr;
+            if (g == 4) { ward.reset(); if (rooms.inside()) rooms.leave(); }
+            if (g == 8 && !lifts.lines().empty()) {
+              L = &lifts.lines()[0];
+              double u = L->L * 0.5, side = L->cfg.side;
+              dvec3 c = L->cableAt(u, 1);
+              cl = side;
+              double x = L->B.x + L->dir.x * u + L->sideV.x * (side + 11), z = L->B.z + L->dir.y * u + L->sideV.y * (side + 11);
+              save.earn(1500); heli.debugFly(-1);
+              heli.debugPlace(x, z, 10, std::atan2(-L->sideV.x, -L->sideV.y));
+              heli.flight.pos.y = c.y - 2.2;   // (the rotor disc at the rope's height)
+            }
+            if (L && g > 8) {
+              double lat = (fl.pos.x - L->B.x) * L->sideV.x + (fl.pos.z - L->B.z) * L->sideV.y;
+              minGap = std::min(minGap, lat - cl);
+              input.inject(Action::Forward, g < 200);
+              if (g == 120) shot("hc_rope");
+              { double cy = L->cableAt(L->L * 0.5, 1).y; if (std::fabs(lat - cl) < 1.5 && cy > fl.pos.y - fl.fr.cgH - 0.3 && cy < fl.pos.y + 2.0) minGap = -1; }
+              if (g == 200) { check(minGap > -0.5, "against the haul rope of " + L->name + ": pushed back or over it, never through (nearest " + std::to_string(minGap) + " m beside it; now " + std::to_string(lat - cl) + " m, " + std::to_string(fl.pos.y - L->cableAt(L->L * 0.5, 1).y) + " m above)"); heli.abort(); next(); }
+            } else if (g > 10) next();
+            break;
+          }
+          default:
+            if (g == 4) { SL_INFO("[helitest] %s", heliOk ? "PASS" : "FAIL"); running = false; }
+        }
+      }
       if (T.mode == 3) {
         const HeliFlight& fl = heli.flight;
         if (f == 2) { save.earn(5000); player.setSkisOn(false); double a = heli.home.yaw + PI / 2; player.teleport(heli.home.x + std::sin(a) * 22, heli.home.z + std::cos(a) * 22, a + PI); }
@@ -2280,8 +2425,8 @@ int runGame(const GameOptions& opt) {
         if (f == 64) { double a = heli.home.yaw - PI / 2; player.teleport(heli.home.x + std::sin(a) * 9, heli.home.z + std::cos(a) * 9, a + PI); }
         if (f == 90) { check(prompt.rfind("Heli-ski", 0) == 0, "the pad's prompt ('" + prompt + "')"); shot("hs_prompt"); }
         input.inject(Action::Interact, f == 92 || T.hs == 6);
-        if (f == 100) { check(menus.dialogOpen(), "the flight planner opened"); shot("hs_dialog"); }
-        if (f == 104) { menus.close(); T.money0 = save.money; heli.debugFly(0); check(heli.active() && player.mode == PlayerMode::Sit, "aboard, at the controls"); T.hs = 1; T.hsF = f; }
+        if (f == 100) { check(tmap.travelOpen() && tmap.travelFocus("Rabenspitz"), "the flight planner chart opened"); shot("hs_dialog"); }
+        if (f == 104) { T.money0 = save.money; tmap.travelChoose(); check(heli.active() && player.mode == PlayerMode::Sit, "aboard, at the controls"); T.hs = 1; T.hsF = f; }
         if (T.hs >= 1) {
           int g = f - T.hsF;
           if (f % 60 == 0) SL_INFO("[helitest] f %d step %d: at (%.0f, %.0f, %.0f) %.0f km/h agl %.1f rpm %.2f %s; '%s'", f, T.hs, fl.pos.x, fl.pos.y, fl.pos.z, fl.speed() * 3.6, fl.agl, heli.rpm, fl.landed ? "landed" : "flying", heli.objective().c_str());
@@ -2557,6 +2702,7 @@ int runGame(const GameOptions& opt) {
     pc.now = simTime;
     pc.driving = rideKind == Ride::Car;
     pc.riding = rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express || (player.mode == PlayerMode::Sit && !heli.riding() && !ward.seated());
+    if (started && !rescueResumed) { rescueResumed = true; if (!opt.autotest && !mp.active()) heli.rescue.resume(); }   // (a rescue under way when you left: rescue.js resume)
     if (started && !jailResumed) {
       jailResumed = true;
       const nlohmann::json& jl = save.data("jail");
@@ -3039,6 +3185,7 @@ int runGame(const GameOptions& opt) {
     light = timeOfDay(hour, dayLight);
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
     pc.night = light.night;   // (the night outdoors: the helicopter's lamps, the ward's windows)
+    pc.snowing = float(weather.snow);
     if (rooms.inside()) light = rooms.lighting(light);
 
     // streaming + animation
@@ -3591,7 +3738,7 @@ int runGame(const GameOptions& opt) {
     if (uiTest && uiT.step >= 11 && uiT.step - 11 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 11)], uiT.f * frameDt, plat->timeSeconds());
     if (tmap.travelOpen()) {   // (the route picker: ui/travel.js)
       // (autotest: the picker is driven like the menus: the highlighted stop is ridden to)
-      if (opt.autotest && !atRealKeys && !off("uitest")) tmap.travelChoose();
+      if (opt.autotest && !atRealKeys && !off("uitest") && !heliRun) tmap.travelChoose();   // (the helicopter's debug runs pick on the chart themselves)
       else tmap.frameTravel(ui, nav, input, frameDt, player.pos, player.heading);
       if (!tmap.travelOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
     }

@@ -201,6 +201,7 @@ void HospitalWard::captured(Renderer& r) {
     buildPanes(capture_, tanH, tanV);
     if (paneModel_[capture_]) for (Material& m : paneModel_[capture_]->materials) m.emissiveTex = tex;
   }
+  viewDay_ = 1 - float(clamp(double(c_.night), 0.0, 1.0));
   SL_INFO("hospital ward: window view %d photographed (%d x %d)", capture_, W, H);
   if (++capture_ >= NV) enterNow();
 }
@@ -427,6 +428,9 @@ void HospitalWard::draw(Renderer& r) {
   float day = 1 - float(std::round(clamp(double(c_.night), 0.0, 1.0) * 16) / 16);
   vec3 sky = glm::mix(vec3(0.03f, 0.04f, 0.08f), vec3(1), day) * vec3(0.80f, 0.90f, 1.12f);
   dvec3 o = rooms_.toWorld(0, 0, 0);
+  // (the photographs are of the moment you came in: dusk falling or day breaking while you are inside dims / lifts them)
+  const float gain = std::round(clamp((0.06 + 0.94 * day) / (0.06 + 0.94 * viewDay_), 0.1, 4.0) * 16) / 16;
+  for (int k = 0; k < NV; k++) if (paneModel_[k]) for (Material& m : paneModel_[k]->materials) m.emissive = vec3(gain);
   for (int k = 0; k < NV; k++) if (paneModel_[k] && paneModel_[k]->materials[0].emissiveTex) r.submitModel(*paneModel_[k], o, mat4(1), nullptr, false);
   // (no photograph for a wall: the soft day / night sky)
   for (const Pane& p : panes_) {

@@ -171,13 +171,13 @@ void Interiors::buildExported(const RoomDef& d, const std::string& id) {
   lightLevel = 1;
 }
 
-const RoomDef::Hit* Interiors::aim(const dvec3& eye, const vec3& dir) const {
+const RoomDef::Hit* Interiors::aim(const dvec3& eye, const vec3& dir, double reach) const {
   if (!def_) return nullptr;
   const dvec3 o = toLocal(eye), d(dir);
   const RoomDef::Hit* best = nullptr;
-  double bt = 6;
+  double bt = reach;
   for (const RoomDef::Hit& h : def_->hits) {
-    if (h.up != (level_ == 2) && h.kind == "car") continue;   // (the cars upstairs: from up there, and the others from below)
+    if (h.up && level_ != 2) continue;   // (the cars upstairs: from up there)
     double t0 = 0, t1 = bt;
     bool ok = true;
     for (int k = 0; k < 3 && ok; k++) {
@@ -263,6 +263,7 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
   boxes.clear(); props.clear(); walls_.clear();
   dbg_ = false;
   def_ = nullptr; mesh_.reset(); ch_ = nullptr; pr_ = nullptr; chDoors_.clear(); furnitureLamps.clear();
+  clerkYaw = std::nan("");
   origin_ = dvec3(r == Room::Prison ? -21000 : r == Room::Hospital ? -21100 : r == Room::Shop ? -21300 : r == Room::Autohaus ? -21400 : -21200, 0, -21000);
   floorY_ = c_.world->height(origin_.x, origin_.z) + 80;
   look_ = nullptr; shell_.reset();

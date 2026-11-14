@@ -479,8 +479,12 @@ void Traffic::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD,
     CarPose p;
     p.vm = c.vm;
     p.M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
-    p.lights = night && c.mode == Car::Mode::Road;
-    p.brake = c.mode == Car::Mode::Road && c.brake > 0.2;
+    // (traffic.js: live = not parked, not a wreck: the engine runs. Its lamps are on at night and in a road tunnel;
+    // by day a driving car shows its daytime running lights (scenefx: live && !lights), a knocked one does not)
+    const bool driving = c.mode == Car::Mode::Road;
+    p.lights = driving && (night || t_.inRoadTunnel(c.x, c.z, c.y) != nullptr);
+    p.live = driving;
+    p.brake = driving && c.brake > 0.2;
     uint32_t h = uint32_t(&c - list.data()) * 2246822519u + 77u;
     p.plate = std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
     out.push_back(p);
@@ -516,7 +520,8 @@ void Traffic::addPeople(People& people, const dvec3& cam, const std::vector<int>
     const CarSeats* S = carSeatsFor(c.name);
     const glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) *
                          glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
-    const CarTemplate T = CarTemplate::of(S, c.vm ? double(c.vm->size.y) : 1.5);
+    CarTemplate T = CarTemplate::of(S, c.vm ? double(c.vm->size.y) : 1.5);
+    if (c.vm && c.vm->steerKnown) T.wheel(three::V3(c.vm->steerC.x, c.vm->steerC.y, c.vm->steerC.z), c.vm->steerTilt, c.vm->steerRimR);
     const double dx = S ? S->d[0] : 0.36;
     uint32_t h = c.crew;
     auto rnd = [&h]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return double(h & 0xffffff) / double(0x1000000); };

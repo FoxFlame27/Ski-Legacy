@@ -157,8 +157,19 @@ RoomDef parseRoom(const nlohmann::json& r) {
     q.id = str(c, "id"); q.label = str(c, "label"); q.price = int(num(c, "price")); q.up = c.value("up", false);
     if (c.contains("m") && c["m"].size() == 16) for (int k = 0; k < 16; k++) q.M[k / 4][k % 4] = c["m"][size_t(k)].get<double>();
     if (c.contains("paint") && c["paint"].is_array() && c["paint"].size() >= 3) q.paint = vec4(c["paint"][0].get<float>(), c["paint"][1].get<float>(), c["paint"][2].get<float>(), 1);
+    q.paintId = c.value("paintId", std::string("white")); q.length = num(c, "length", 4.6);
+    q.x = q.M[3][0]; q.y = q.M[3][1]; q.z = q.M[3][2]; q.yaw = std::atan2(q.M[2][0], q.M[2][2]);
+    if (c.contains("table") && c["table"].is_array() && c["table"].size() >= 4) { q.x = c["table"][0]; q.y = c["table"][1]; q.z = c["table"][2]; q.yaw = c["table"][3]; }
     o.cars.push_back(q);
   }
+  if (r.contains("doors") && r["doors"].is_array()) for (auto& d : r["doors"]) {
+    if (!d.contains("p") || d["p"].size() < 3) continue;
+    o.doors.push_back({str(d, "model"), dvec3(d["p"][0].get<double>(), d["p"][1].get<double>(), d["p"][2].get<double>()), num(d, "dir"), num(d, "slide")});
+  }
+  if (r.contains("door") && r["door"].is_array() && r["door"].size() >= 3) for (size_t k = 0; k < 3; k++) o.door[k] = r["door"][k];
+  if (r.contains("marker") && r["marker"].is_object()) { o.markerArrow = str(r["marker"], "arrow"); o.markerRing = str(r["marker"], "ring"); }
+  if (r.contains("floor") && r["floor"].is_string()) o.floorModel = r["floor"].get<std::string>();
+  o.RISE = num(r, "RISE");
   return o;
 }
 } // namespace

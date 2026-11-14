@@ -96,6 +96,7 @@ private:
     double shift = 0, shiftV = 0, passV = 1e18, heldT = 0, slowT = 0, blockT = 0, ramFree = 0;
     bool passing = false, ram = false;
     int horn = 0;
+    double dOtherAhead = 0, dNeed = 0, dOwnV = 0, dLeft = 0; bool dOtherNear = false, dOwn = false;   // (debug bustest: why it does or does not pull out)
   };
   std::vector<Ob> obs_;
   Drive* you_ = nullptr;

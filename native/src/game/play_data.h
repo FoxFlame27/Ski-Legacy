@@ -97,8 +97,18 @@ struct RoomDef {
   // the wall (x0, x1, z0 at the top, z1 at the foot), what stands up there; the cars on show (the model, where)
   bool hasStair = false; double stair[4] = {0, 0, 0, 0}, FL = 0, MZ = 0;
   std::vector<Circle> obstaclesUp;
-  struct Car { std::string id, label; int price = 0; glm::dmat4 M{1}; bool up = false; vec4 paint{1, 1, 1, 0}; };   // paint: a = 0 the model's own
+  struct Car {
+    std::string id, label; int price = 0; glm::dmat4 M{1}; bool up = false; vec4 paint{1, 1, 1, 0};   // paint: a = 0 the model's own
+    std::string paintId = "white";                 // carrental.js DISPLAY / UPPER: the paint it stands in
+    double x = 0, y = 0, z = 0, yaw = 0, length = 4.6;   // its turntable (the floor it stands on), its heading
+  };
   std::vector<Car> cars;
+  // (the showroom's moving parts, each a model of its own: export_rooms.mjs) the sliding doors' leaves, the salesman's
+  // marker (arrow, ring), the polished floor's tiles (drawn over the mirrored hall); the door bay (x, width, height)
+  struct Leaf { std::string model; dvec3 p{0}; double dir = 0, slide = 0; };
+  std::vector<Leaf> doors;
+  std::string markerArrow, markerRing, floorModel;
+  double door[3] = {0, 3.7, 2.7}, RISE = 0;
   /// the glass (the web game's live view of the world outside): the planes' matrices in the room (their normal into the
   /// room), their size; where the room stands outdoors: the point in front of its door, the way it faces, E within r
   struct Pane { mat4 m{1}; float w = 1, h = 1; };

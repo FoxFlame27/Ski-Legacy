@@ -83,6 +83,12 @@ struct CarSpec {
   std::vector<std::pair<std::string, std::vector<LampAnchor>>> lampHalo;
   float lampHalfL = 0;
   bool hasLamps() const { return !lampParts.empty() || !lampHalo.empty(); }
+  // (cars.js splitWheels / findSteering, exported) the steering wheel: its centre and the column's axis in the car's
+  // frame, and the middles of the model's triangles that are the wheel (x, y, z each)
+  bool hasSteer = false;
+  vec3 steerC{0}, steerAxis{0, -0.37f, 0.93f};
+  float steerTilt = 0.38f, steerRimR = 0.185f;   // the column's rake, the rim's radius (the driver's hands go by them)
+  std::vector<float> steerTris;
 };
 
 class Transport {
@@ -129,6 +135,9 @@ public:
   dvec2 autohausDir{0, 1};
 
   std::vector<CarSpec> cars;
+  /// (drive.js FULL) the full-detail models of some cars (their interiors): shown for the car you drive; `kind` holds
+  /// the base model's name
+  std::vector<CarSpec> carsFull;
   const CarSpec* car(const std::string& name) const;
   std::vector<int> busGlass, busPaint;   // the Micruss's glass and paint materials
   struct BusSpec { std::string model; mat4 fit{1}; double len = 9.3, width = 2.55, floor = 0.95, lane = 1.55, cruise = 26, acc = 1.7, brake = 2.0, lat = 2.6, wheelBase = 6.8; int fleet = 8;
@@ -153,6 +162,15 @@ public:
     bool hasBody = false;
     vec3 seat{0.6f, 1.5f, 5.4f};
     double seatYaw = 0;
+    // (railway.js seatPassengers, exported) every seat of a car (x, y, z, the way it faces) and the skiers sat on them,
+    // per car of the train you board
+    std::vector<vec4> seats;
+    // (train.js CABIN, CAR.cabZ) the cabin's inner half width (to the wall panels: W; the shell: HW), its bays, the
+    // ceiling's edge height, the cab partition
+    struct { double W = 1.19, HW = 1.26, BAYS_Z0 = -6.6, BAY = 1.9, CEIL_Y = 3.44, cabZ = 7.32; int BAYS_N = 5; } cabin;
+    struct Pax { int seat = 0, look = 0, pose = 0, head = 0; float yaw = 0, scale = 1, turn = 0, vary = 0.5f; };
+    std::vector<std::vector<Pax>> passengers;
+    std::vector<std::string> passengerLooks;
     std::vector<vec3> bogies;
   } rail;
   struct ExpressData {

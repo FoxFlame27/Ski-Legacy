@@ -18,6 +18,8 @@ using platform::Key;
 
 namespace {
 constexpr double VILLAGE_X = 4, VILLAGE_Z = 34;   // the plaza (main.js spawn)
+// a world point's z in the showroom's own frame (the room's axes are the world's)
+double stand_local_z(const CarFlowEnv& e, const dvec3& w) { return w.z - e.roomWorld(0, 0).z; }
 #ifdef SL_CARTEST_SDL
 SDL_Scancode scancodeOf(Key k) {
   if (int(k) >= int(Key::KeyA) && int(k) <= int(Key::KeyZ)) return SDL_Scancode(SDL_SCANCODE_A + (int(k) - int(Key::KeyA)));
@@ -153,58 +155,103 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
   };
   switch (st_) {
     case St::Setup: {
-      // the cheapest car for sale (carrental.js RENTALS: the Golf GTI), money granted to afford it
-      double best = 1e18;
-      for (size_t i = 0; i < dr.parked.size(); i++) if (dr.parked[i].forSale && dr.parked[i].spec && dr.parked[i].spec->price < best) { best = dr.parked[i].spec->price; sale_ = int(i); }
-      if (sale_ < 0) { fail(buyOk, "no car for sale at the Autohaus"); break; }
-      model_ = dr.parked[size_t(sale_)].name;
-      price_ = int64_t(best);
+      // the cheapest car on show in the Autohaus (carrental.js RENTALS: the Golf GTI), money granted to afford it
+      if (e.cheapest.empty() || !e.hasDoor) { fail(buyOk, "no showroom / no car for sale at the Autohaus"); break; }
+      model_ = e.cheapest;
+      price_ = e.cheapestPrice;
       e.grant(price_ + std::max<int64_t>(0, -e.money));   // (the price granted: the purchase leaves the money as it was)
-      const Drive::Parked& s = dr.parked[size_t(sale_)];
-      // on foot from the plaza if it is near, else from the road 70 m short of the Autohaus
-      double dv = std::hypot(s.x - VILLAGE_X, s.z - VILLAGE_Z);
+      // on foot from the plaza if it is near, else from the road side of the yard, 40 m out from the sliding doors
+      double dv = std::hypot(e.door.x - VILLAGE_X, e.door.z - VILLAGE_Z);
       double sx = VILLAGE_X, sz = VILLAGE_Z;
-      if (dv > 260) { double k = 70 / dv; sx = s.x + (VILLAGE_X - s.x) * k; sz = s.z + (VILLAGE_Z - s.z) * k; }
-      e.teleport(sx, sz, std::atan2(s.x - sx, s.z - sz));
+      if (dv > 260) { sx = e.door.x + e.doorOut.x * 40; sz = e.door.z + e.doorOut.y * 40; }
+      e.teleport(sx, sz, std::atan2(e.door.x - sx, e.door.z - sz));
       start_ = dvec3(sx, 0, sz);
-      SL_INFO("[autotest] cars: the cheapest for sale is the %s ($%lld) at (%.1f, %.1f), %.0f m from the plaza; walking from (%.1f, %.1f) with $%lld",
-              s.spec->label.c_str(), (long long)price_, s.x, s.z, dv, sx, sz, (long long)(std::max<int64_t>(0, e.money) + price_));
-      go(St::WalkToSale);
+      SL_INFO("[autotest] cars: the cheapest for sale is the %s ($%lld), in the showroom; the Autohaus door at (%.1f, %.1f), %.0f m from the plaza; walking from (%.1f, %.1f) with $%lld",
+              e.cheapestLabel.c_str(), (long long)price_, e.door.x, e.door.z, dv, sx, sz, (long long)(std::max<int64_t>(0, e.money) + price_));
+      go(St::WalkToDoor);
       break;
     }
+    case St::WalkToDoor: {
+      bool there = e.prompt == "Autohaus";
+      if (n_ % 20 == 0) SL_INFO("[autotest] cars: walking t=%4.1fs at (%.1f, %.1f), %.1f m to the Autohaus door, prompt '%s'", t_, pl.pos.x, pl.pos.z, std::hypot(e.door.x - pl.pos.x, e.door.z - pl.pos.z), e.prompt.c_str());
+      if (there) { walkTo(e, pl.pos.x, pl.pos.z, 1, false); SL_INFO("[autotest] cars: at the sliding doors after %.1f s on foot: '%s'", t_, e.prompt.c_str()); go(St::EnterHall); break; }
+      walkTo(e, e.door.x, e.door.z, 0.3, true);
+      if (t_ > 120) fail(buyOk, "walking to the Autohaus door took over 2 minutes");
+      break;
+    }
+    case St::EnterHall:
+      if (n_ == 2) tap(Key::KeyE);
+      if (n_ == 8) {
+        if (!e.inShowroom) { fail(buyOk, ("E at the Autohaus door: not inside (prompt '" + e.prompt + "')").c_str()); break; }
+        dvec3 stand, target;
+        if (!e.spot("car", model_, stand, target)) { fail(buyOk, "the cheapest car is not on show"); break; }
+        // the way round the cars on their turntables (carrentalshell.js LAYOUT.spots: the Golf stands at the back on
+        // the left, under the mezzanine): along the front aisle, through the gap in the middle row, along the back aisle
+        path_ = {e.roomWorld(-6.4, 2.6), e.roomWorld(-6.4, stand_local_z(e, stand)), stand};
+        wp_ = 0; aim_ = target;
+        SL_INFO("[autotest] cars: E -> in the showroom at (%.1f, %.1f); the %s stands %.1f m away", pl.pos.x, pl.pos.z, e.cheapestLabel.c_str(), std::hypot(stand.x - pl.pos.x, stand.z - pl.pos.z));
+        go(St::WalkToSale);
+      }
+      break;
     case St::WalkToSale: {
-      const Drive::Parked& s = dr.parked[size_t(sale_)];
-      bool there = e.prompt.rfind("Buy ", 0) == 0 && e.prompt.find(s.spec->label) != std::string::npos;
-      if (n_ % 20 == 0) SL_INFO("[autotest] cars: walking t=%4.1fs at (%.1f, %.1f), %.1f m to the %s, prompt '%s'", t_, pl.pos.x, pl.pos.z, std::hypot(s.x - pl.pos.x, s.z - pl.pos.z), s.spec->label.c_str(), e.prompt.c_str());
-      if (there) { walkTo(e, pl.pos.x, pl.pos.z, 1, false); money0_ = e.money; garage0_ = e.garage; SL_INFO("[autotest] cars: at the %s after %.1f s on foot: '%s'", s.spec->label.c_str(), t_, e.prompt.c_str()); go(St::OpenSale); break; }
-      // to its nose (the cars stand nose out to the aisle; the prompt shows within 2.2 m of the body)
-      double tx = s.x + std::sin(s.yaw) * (s.length / 2 + 1.2), tz = s.z + std::cos(s.yaw) * (s.length / 2 + 1.2);
-      walkTo(e, tx, tz, 0.3, true);
-      if (t_ > 120) fail(buyOk, "walking to the car for sale took over 2 minutes");
+      if (wp_ < int(path_.size())) {
+        const dvec3& w = path_[size_t(wp_)];
+        if (walkTo(e, w.x, w.z, wp_ + 1 == int(path_.size()) ? 0.35 : 0.6, false)) wp_++;
+        if (n_ % 20 == 0) SL_INFO("[autotest] cars: in the showroom t=%4.1fs, waypoint %d, %.1f m to go", t_, wp_, std::hypot(w.x - pl.pos.x, w.z - pl.pos.z));
+      } else {
+        e.lookAt(aim_);   // (the mouse: the crosshair on the car)
+        bool there = e.prompt.find(e.cheapestLabel) != std::string::npos;
+        if (there && n_ > 3) { money0_ = e.money; garage0_ = e.garage; SL_INFO("[autotest] cars: looking at the %s after %.1f s in the showroom: '%s'", e.cheapestLabel.c_str(), t_, e.prompt.c_str()); go(St::OpenSale); break; }
+      }
+      if (t_ > 90) fail(buyOk, ("walking to the car on show took over 90 s (prompt '" + e.prompt + "')").c_str());
       break;
     }
     case St::OpenSale:
       if (n_ == 2) tap(Key::KeyE);
-      if (n_ == 5) {
-        if (!e.menus->dialogOpen()) { fail(buyOk, ("E at the car for sale opened no card (prompt '" + e.prompt + "')").c_str()); break; }
-        SL_INFO("[autotest] cars: E -> the sale card is open, focus on '%s'", e.menus->focusedLabel().c_str());
+      if (n_ == 6) {
+        if (!e.menus->dialogOpen()) { fail(buyOk, ("E at the car on show opened no configurator (prompt '" + e.prompt + "')").c_str()); break; }
+        SL_INFO("[autotest] cars: E -> the configurator is open on the car (the camera on its turntable: %s), focus on '%s'", e.configuring ? "yes" : "NO", e.menus->focusedLabel().c_str());
+        if (!e.configuring) { fail(buyOk, "the configurator did not take the showroom's car"); break; }
+        e.png("config");
         go(St::ConfirmBuy);
       }
       break;
     case St::ConfirmBuy:
       // (the menus read their keys on the frames they draw: the autotest draws every 4th, so the taps come 5 frames apart)
-      if (e.menus->dialogOpen() && e.menus->focusedLabel() != "Buy it") { if (n_ % 5 == 1) e.menus->focusLabel("Buy it"); if (n_ > 40) { fail(buyOk, "no 'Buy it' on the sale card"); } break; }   // (the configurator: straight to its summary)
+      if (e.menus->dialogOpen() && e.menus->focusedLabel() != "Buy it") { if (n_ % 5 == 1) e.menus->focusLabel("Buy it"); if (n_ > 40) { fail(buyOk, "no 'Buy it' on the configurator's summary"); } break; }   // (straight to its summary)
       if (e.menus->dialogOpen() && n_ < 40) { if (n_ % 5 == 1) tap(Key::Enter); break; }
       {
         bool paid = e.money == money0_ - price_ && e.garage == garage0_ + 1;
         own_ = -1;
-        for (size_t i = 0; i < dr.parked.size(); i++) if (dr.parked[i].owned && dr.parked[i].name == model_ && !dr.parked[i].forSale) own_ = int(i);
-        SL_INFO("[autotest] cars: Enter on 'Buy it': $%lld -> $%lld (price $%lld), garage %zu -> %zu, card %s -> %s", (long long)money0_, (long long)e.money, (long long)price_, garage0_, e.garage,
+        for (size_t i = 0; i < dr.parked.size(); i++) if (dr.parked[i].owned && dr.parked[i].name == model_) own_ = int(i);
+        SL_INFO("[autotest] cars: Enter on 'Buy it': $%lld -> $%lld (price $%lld), garage %zu -> %zu, configurator %s -> %s", (long long)money0_, (long long)e.money, (long long)price_, garage0_, e.garage,
                 e.menus->dialogOpen() ? "still open" : "closed", paid && own_ >= 0 ? "ok" : "FAILED");
         if (!paid || own_ < 0) { fail(buyOk, "the purchase"); break; }
-        go(St::WalkToCar);
+        // back the way you came, to the sliding doors
+        dvec3 stand, target;
+        if (!e.spot("door", "", stand, target)) { fail(buyOk, "no door to leave the showroom by"); break; }
+        path_ = {e.roomWorld(-6.4, stand_local_z(e, pl.pos)), e.roomWorld(-6.4, 2.6), stand};
+        wp_ = 0; aim_ = target;
+        go(St::LeaveHall);
       }
       break;
+    case St::LeaveHall: {
+      if (wp_ < int(path_.size())) {
+        const dvec3& w = path_[size_t(wp_)];
+        // (the view turned along the way: W is where you look)
+        if (n_ < 3) e.lookAt(dvec3(w.x, pl.pos.y + 1.5, w.z));
+        if (walkTo(e, w.x, w.z, wp_ + 1 == int(path_.size()) ? 0.35 : 0.6, false)) wp_++;
+      } else if (e.inShowroom) {
+        e.lookAt(aim_);
+        if (e.prompt == "Leave the Autohaus" && n_ % 6 == 0) tap(Key::KeyE);
+      } else {
+        SL_INFO("[autotest] cars: E at the sliding doors -> outside again at (%.1f, %.1f) after %.1f s", pl.pos.x, pl.pos.z, t_);
+        go(St::WalkToCar);
+        break;
+      }
+      if (t_ > 90) fail(buyOk, ("leaving the showroom took over 90 s (prompt '" + e.prompt + "')").c_str());
+      break;
+    }
     case St::WalkToCar: {
       const Drive::Parked& c = dr.parked[size_t(own_)];
       bool there = e.prompt.rfind("Drive ", 0) == 0;
@@ -381,7 +428,7 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
         int moving = 0, drawnEver = 0;
         for (const Seen& s : seen_) { moving += s.moved > 15; drawnEver += s.drawn; }
         parkedNear_ = 0;
-        for (const auto& p : dr.parked) parkedNear_ += !p.forSale && !p.owned && std::hypot(p.x - VILLAGE_X, p.z - VILLAGE_Z) < 300;
+        for (const auto& p : dr.parked) parkedNear_ += !p.owned && std::hypot(p.x - VILLAGE_X, p.z - VILLAGE_Z) < 300;
         trafficOk = moving >= 3;
         SL_INFO("[autotest] cars: 30 s on the plaza: %d traffic cars drove 15+ m within 300 m of it (%d drawn), %d parked cars, %d buses there -> %s", moving, drawnEver, parkedNear_, busesNear_,
                 trafficOk ? "ok" : "FAILED");

@@ -52,6 +52,7 @@
 #include "game/mp_session.h"
 #include "game/mp_view.h"
 #include "game/scenefx.h"
+#include "game/showroom.h"
 #include "net/websocket.h"
 #include "core/prompts.h"
 #include "core/perf.h"
@@ -476,7 +477,7 @@ int runGame(const GameOptions& opt) {
   for (const Save::Car& c : save.garage) {
     int i = drive.addOwned(c.id, c.plate, c.damage);
     if (i < 0) SL_WARN("garage: unknown car %s", c.id.c_str());
-    else drive.parked[size_t(i)].paint = paintColor(c.paint);   // (Phase 7: your car's paint)
+    else drive.dress(i, c.paint, c.rims);   // (Phase 7: your car's paint; its rims)
   }
   loadingFrame("The trail map, the people, the courses...");
   TrailMap tmap;
@@ -523,6 +524,7 @@ int runGame(const GameOptions& opt) {
   pc.dev = dev.get(); pc.data = &playData; pc.autotest = opt.autotest;
   for (auto& ps : pistes) pc.pistes.push_back({ps.name, ps.pts});
   Interiors rooms(pc);
+  Showroom showroom(pc, rooms, vmodels);   // (the Autohaus: its cars, the configurator's live car, the salesman, the doors)
   WindowView windows(pc);                      // (the rooms' windows: the world photographed as you go in)
   world.addDeck([&](double x, double z) { return rooms.deck(x, z); });
   Races races(pc);
@@ -759,6 +761,12 @@ int runGame(const GameOptions& opt) {
   struct TravelPick { int kind = 0, from = -1, to = -1; bool up = true; } travelPick;
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
+  double trainFov = -1;   // (railway.js this.fov) the trains' seat camera, eased
+  int trainView = 0;      // (express.js this.view) 0 the seat, 1 outside, 2 trackside
+  bool walkToggle = false;
+  int trainWalk = -1;     // (debug traintest) a standing camera in the car: which
+  float CABIN_LAMP = 14.f;   // the cabin lamps' strength at uCabin 1 (SKI_LEGACY_CABIN_LAMP to try another)
+  if (const char* e = std::getenv("SKI_LEGACY_CABIN_LAMP")) CABIN_LAMP = float(std::atof(e));
   dvec3 rideCamPos{0};
   bool rideCamReady = false;
   auto standOff = [&](const dvec3& e, const std::string& what) {   // (x, z, heading)
@@ -962,10 +970,11 @@ int runGame(const GameOptions& opt) {
         if (!ok || !d.contains("car")) return;
         Save::Car c;
         c.id = model; c.plate = d["car"].value("plate", std::string()); c.price = int(d["car"].value("price", 0)); c.paint = d["car"].value("paint", std::string("white"));
+        c.rims = d["car"].value("rims", std::string("orig"));
         save.garage.insert(save.garage.begin(), c);
         save.rentalPlate = c.plate;
         if (d.contains("cars")) mp.profile["cars"] = d["cars"];
-        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.parked[size_t(oi)].paint = paintColor(c.paint);
+        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.dress(oi, c.paint, c.rims);
         const CarSpec* sp2 = transport.car(model);
         flash("Bought: " + (sp2 ? sp2->label : model) + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
       });
@@ -974,10 +983,10 @@ int runGame(const GameOptions& opt) {
     if (!spend(price)) return -1;
     Save::Car c;
     c.id = model; c.plate = cfg && !cfg->plate.empty() ? cfg->plate : newPlate(); c.price = int(price);
-    if (cfg) { c.paint = paint; c.custom = cfg->custom; }
+    if (cfg) { c.paint = paint; c.rims = rims; c.custom = cfg->custom; }
     save.garage.push_back(c);
     int idx = drive.addOwned(model, c.plate, 0);
-    if (cfg && idx >= 0) drive.parked[size_t(idx)].paint = paintColor(paint);
+    if (cfg && idx >= 0) drive.dress(idx, paint, rims);
     save.write(*plat);
     flash("Bought: " + spec->label + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
     return idx;
@@ -1011,8 +1020,9 @@ int runGame(const GameOptions& opt) {
     flash("Sold for " + fmtM(value), Hud::Flash::Gold);
   };
   // E at a car for sale: the AUTOHAUS configurator (ui/carrental.js: PAINT, WHEELS, PLATE, SUMMARY, then BUY). Only
-  // the UI layer here: carCfg.preview / carCfg.drag are free for the walk-in showroom's live car.
-  auto openCarConfig = [&](const std::string& model, int step) {
+  // the UI layer here; in the showroom carCfg.preview / carCfg.drag drive the very car on its turntable (game/showroom:
+  // carrentalroom.js configure / orbit). paint: the paint it stands in on show (carrental.js openCard)
+  auto openCarConfig = [&](const std::string& model, int step, const std::string& paint = "white") {
     const CarSpec* spec = transport.car(model);
     if (!spec) return;
     carCfg = CarCfgView();
@@ -1020,6 +1030,12 @@ int runGame(const GameOptions& opt) {
     carCfg.cfg.id = model; carCfg.cfg.plate = randomCarPlate(unsigned(plat->timeSeconds() * 1000) ^ unsigned(save.garage.size() * 7919));
     carCfg.garageMax = GARAGE_MAX; carCfg.wreckFee = int(wreckFee()); carCfg.repairFull = REPAIR_FEE; carCfg.towFee = int(wreckFee()) - REPAIR_FEE;
     carCfg.interactKey = prompts::K(input, Action::Interact);
+    carCfg.cfg.paint = carPaintOf(paint).id;
+    if (showroom.inside()) {
+      carCfg.preview = [&](const CarCfg& c, int st) { showroom.configure(c, st); };
+      carCfg.drag = [&](float dx, float dy) { showroom.orbit(dx, dy); };
+      showroom.configure(carCfg.cfg, step);
+    }
     carCfg.refresh = [&, model](CarCfgView& v) {
       v.money = save.money; v.owned = 0; v.garage.clear();
       for (const Save::Car& c : save.garage) {
@@ -1046,12 +1062,10 @@ int runGame(const GameOptions& opt) {
     }, "carconfig");
     menus.customFocusLabel = [&](const std::string& label) { if (label != "Buy it") return false; carCfg.step = 3; return true; };
   };
-  auto openCarSale = [&](int idx) {
-    if (idx < 0 || size_t(idx) >= drive.parked.size()) return;
-    const std::string model = drive.parked[size_t(idx)].name;
+  auto openCarSale = [&](const std::string& model) {
     int mine = 0;
     for (const Save::Car& c : save.garage) mine += c.id == model;
-    openCarConfig(model, mine ? 3 : 0);   // (a model you own opens on the summary: MY CARS)
+    openCarConfig(model, mine ? 3 : 0, showroom.displayPaint(model));   // (a model you own opens on the summary: MY CARS)
   };
   auto garageEntry = [&](const std::string& plate) -> Save::Car* { for (auto& c : save.garage) if (c.plate == plate) return &c; return nullptr; };
   // MY CARS (the Autohaus counter): your garage, sell one back for half what you paid
@@ -1061,7 +1075,7 @@ int runGame(const GameOptions& opt) {
     d.title = "My Cars";
     d.keepOpen = true;
     d.rebuild = [&](Dialog& D) {
-      D.say = save.garage.empty() ? "No cars yet: the ten for sale stand in the car park out front (" + prompts::K(input, Action::Interact) + " at one to buy it)."
+      D.say = save.garage.empty() ? "No cars yet: the ten for sale stand in the showroom (" + prompts::K(input, Action::Interact) + " at one to buy it)."
                                   : "Your cars wait in the Autohaus car park. Sell one back for half what you paid.";
       D.options.clear();
       for (const Save::Car& c : save.garage) {
@@ -1078,6 +1092,66 @@ int runGame(const GameOptions& opt) {
       }
       DialogOption n; n.label = "Close"; n.secondary = true;
       D.options.push_back(n);
+    };
+    menus.openDialog(d);
+  };
+  // the Autohaus salesman (carrental.js clerkDialog): the car of the day (his tip: a marker over it shows the way), or
+  // "Repair my car": a flat $500 for your car that is out, wherever it is parked
+  auto clerkDialog = [&]() {
+    constexpr int CLERK_REPAIR = 500;
+    Dialog d;
+    d.title = "Autohaus \xC2\xB7 Salesman";
+    d.rebuild = [&](Dialog& D) {
+      const Save::Car* out = nullptr;
+      for (const Save::Car& c : save.garage) if (c.plate == save.rentalPlate) out = &c;
+      if (!out && !save.garage.empty()) out = &save.garage[0];
+      Drive::Parked* e = nullptr;
+      if (out) for (auto& p : drive.parked) if (p.owned && p.plate == out->plate) e = &p;
+      const CarSpec* spec = out ? transport.car(out->id) : nullptr;
+      const std::string label = spec ? spec->label : std::string("car");
+      const double dmg = e ? e->damage : 0;
+      const int pct = dmg > 0 ? std::max(1, int(std::round(dmg))) : 0;
+      std::string why;
+      if (save.garage.empty()) why = "You don't own a car yet";
+      else if (!e) why = "None of your cars is out";
+      else if (e->wrecked) why = "Your " + label + " is with the tow truck \xC2\xB7 wait until it is home";
+      else if (e->impoundDay > save.day) why = "Your " + label + " is in the tow yard \xC2\xB7 available tomorrow";
+      else if (dmg <= 0) why = "Not a scratch on it \xC2\xB7 nothing to repair";
+      else if (save.money < CLERK_REPAIR) why = "Not enough money";
+      static const char* HELLO[] = {"Gr\xC3\xBC" "ezi! Welcome to the Autohaus. How can I help you today?", "Gr\xC3\xBC" "ezi mitenand! Looking for a new car, or is yours giving you trouble?", "Hello again! What can I do for you?"};
+      D.say = e && dmg > 0 && why.empty() ? "Gr\xC3\xBC" "ezi! Your " + label + " has seen some knocks, I see. Our mechanic can fix it up for a flat " + fmtM(CLERK_REPAIR) + ", wherever it is parked."
+                                          : std::string(HELLO[unsigned(simTime * 7) % 3]);
+      D.options.clear();
+      DialogOption tip;
+      tip.label = "Car of the day"; tip.sub = "His tip from the showroom floor";
+      tip.act = [&]() {
+        Showroom::Tip t;
+        if (!showroom.recommend(unsigned(plat->timeSeconds() * 1000), t)) return;
+        const std::string price = fmtM(t.price);
+        const unsigned k = unsigned(plat->timeSeconds() * 977) % 3;
+        flash(k == 0 ? "Gr\xC3\xBC" "ezi! Take a look at the " + t.label + (t.up ? " upstairs" : "") + ", yours for " + price + "!"
+            : k == 1 ? "Have you seen the " + t.label + (t.up ? " upstairs" : "") + "? Lovely in the snow, and only " + price + "."
+                     : "Today I'd buy the " + t.label + (t.up ? ", up the stairs" : "") + ". " + price + ", and it's yours for good!", Hud::Flash::Good);
+      };
+      DialogOption rep;
+      rep.label = "Repair my car";
+      rep.sub = out ? label + " \xC2\xB7 " + out->plate + (e ? " \xC2\xB7 damage " + std::to_string(pct) + "%" : std::string()) + (why.empty() ? std::string() : " \xC2\xB7 " + why) : (why.empty() ? std::string("Your car that is out") : why);
+      rep.price = CLERK_REPAIR; rep.disabled = !why.empty();
+      const std::string plate = out ? out->plate : std::string();
+      rep.act = [&, plate, label, dmg]() {
+        auto done = [&, plate, label]() {
+          for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
+          for (auto& c : save.garage) if (c.plate == plate) c.damage = 0;
+          static const char* L[] = {"Our mechanic will fix it up right away!", "Consider it done, our mechanic is on his way.", "No problem, our mechanic will have it like new in no time."};
+          flash(std::string("\"") + L[unsigned(simTime * 13) % 3] + "\" \xC2\xB7 your " + label + " (" + plate + ") is repaired where it stands \xC2\xB7 paid " + fmtM(CLERK_REPAIR), Hud::Flash::Good);
+        };
+        if (mp.active()) { mp.carRepair(dmg / 100, plate, [done](bool ok, const nlohmann::json&) { if (ok) done(); }); return; }
+        if (!spend(CLERK_REPAIR)) return;
+        done();
+        save.write(*plat);
+      };
+      DialogOption bye; bye.label = "Bye"; bye.secondary = true;
+      D.options = {tip, rep, bye};
     };
     menus.openDialog(d);
   };
@@ -1283,7 +1357,7 @@ int runGame(const GameOptions& opt) {
   menus.hooks.bindingsChanged = [&]() { save.write(*plat); };
   menus.hooks.resetProgress = [&]() {
     save.reset();
-    drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [](const Drive::Parked& e) { return e.owned && !e.forSale && !e.driving; }), drive.parked.end());
+    drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [](const Drive::Parked& e) { return e.owned && !e.driving; }), drive.parked.end());
     input.resetBindings();
     applySetting("");
     save.write(*plat);
@@ -1294,11 +1368,11 @@ int runGame(const GameOptions& opt) {
   // ---------------------------------------------------------------- (Phase 6) the multiplayer session's hooks
   // the garage, the skier, the jail and the trains follow the swapped save (main.js applyMpSave)
   auto syncGarage = [&]() {
-    drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [](const Drive::Parked& e) { return e.owned && !e.forSale && !e.driving; }), drive.parked.end());
+    drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [](const Drive::Parked& e) { return e.owned && !e.driving; }), drive.parked.end());
     for (const Save::Car& c : save.garage) {
       bool have = false;
       for (const auto& e : drive.parked) have = have || (e.owned && e.plate == c.plate);
-      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) drive.parked[size_t(i)].paint = paintColor(c.paint); }
+      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) drive.dress(i, c.paint, c.rims); }
     }
     nlohmann::json& imp = save.data("impound", nlohmann::json::array());
     for (auto& r : imp) for (auto& e : drive.parked) if (e.owned && e.plate == r.value("plate", std::string())) e.impoundDay = r.value("day", 0);
@@ -2589,6 +2663,7 @@ int runGame(const GameOptions& opt) {
 
     // (Phase 3 autotest) the car: bought at the Autohaus, put on a long road, driven 20 s along its right-hand lane
     DriveInput din;
+    static double cockpitHold = -9;   // (debug cockpittest: the steering held, -9: off)
     if (opt.autotest && at == AT::Drive) {
       if (phaseFrame == 0) {
         input.releaseInjected();
@@ -2671,6 +2746,7 @@ int runGame(const GameOptions& opt) {
           di.brake = (input.down(Action::Back) || input.down(Action::Brake) || input.moveY() < -0.5f) ? 1.f : 0.f;
           di.steer = -input.moveX();
         }
+        if (cockpitHold > -5) { di.throttle = 0; di.brake = 0; di.steer = float(cockpitHold); }   // (debug cockpittest: parked, the wheel as asked)
         di.handbrake = input.down(Action::Jump);
         if (werk.servicing()) { di.throttle = 0; di.brake = 1; di.handbrake = true; }   // (the car is held while it is repaired)
         di.lookBack = input.down(Action::LookBack);
@@ -2684,7 +2760,13 @@ int runGame(const GameOptions& opt) {
     perf.add("sim (120 Hz physics)", perfMs() - pt0);
     PlayerFrameControls fc;
     fc.toggleView = rideKind != Ride::None ? false : input.takePressed(Action::View);
-    if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) { seatView = !seatView; rideCamReady = false; }
+    if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) {
+      // (express.js VIEWS: R goes round the window seat, the chase camera, the camera beside the line; walking about: your
+      // eyes / the orbit round you. The Wolkenspitzbahn and the bus: seat / outside)
+      if (rideKind == Ride::Express && express.walking()) walkToggle = true;
+      else if (rideKind == Ride::Express) { trainView = (trainView + 1) % 3; seatView = trainView == 0; rideCamReady = false; }
+      else { seatView = !seatView; rideCamReady = false; }
+    }
     fc.toggleSkis = input.takePressed(Action::Skis);
     fc.lookX = paused ? 0 : input.lookX(); fc.lookY = paused ? 0 : input.lookY(); fc.wheel = input.wheel();
     fc.now = opt.autotest ? simTime : now; fc.lastLook = opt.autotest ? -1e9 : input.lastLookTime();
@@ -2909,8 +2991,8 @@ int runGame(const GameOptions& opt) {
       static dvec3 carAt(0);
       sf++;
       if (sf == 5) {
-        int idx = drive.saleIndex("car_bmw_x3");
-        if (idx < 0) for (size_t i = 0; i < drive.parked.size(); i++) if (!drive.parked[i].driving) { idx = int(i); break; }
+        int idx = -1;
+        for (size_t i = 0; i < drive.parked.size(); i++) if (!drive.parked[i].driving) { idx = int(i); break; }
         if (idx >= 0) {
           const Drive::Parked& e = drive.parked[size_t(idx)];
           carAt = dvec3(e.x, e.y, e.z);
@@ -2928,6 +3010,111 @@ int runGame(const GameOptions& opt) {
         if (sf % 45 == 30 && sf < 420 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("sled" + std::to_string(sf / 45)).c_str());
       } else if (sf > 5 && sf % 60 == 0) SL_INFO("[sledtest] f %d: off the sled (thrown off: %s)", sf, player.mode == PlayerMode::Fall ? "yes" : "no");
     }
+    if (opt.autotest && at == AT::Ski && off("cockpittest")) {
+      // (debug: every car's cockpit (SKI_LEGACY_CAR: only that one), from the web reference shots' viewpoints: ahead,
+      // down at your hands, left, right, back, the wheel turned, then the chase view: o_<car>_<view>.png)
+      static const char* ALL[] = {"car_vw_golf_gti", "car_tesla_m3", "car_bmw_x3", "car_toyota_gr_yaris", "car_audi_rs6", "car_mercedes_gls", "car_audi_etron_gt",
+                                  "car_porsche_taycan", "car_mercedes_sls", "car_lamborghini_huracan"};
+      static int cf = 0;
+      const char* want = std::getenv("SKI_LEGACY_CAR");
+      const int per = 260, k = cf / per, f = cf % per, n = want ? 1 : int(sizeof ALL / sizeof ALL[0]);
+      cf++;
+      if (k < n) {
+        const std::string model = want ? want : ALL[k], tag = model.rfind("car_", 0) == 0 ? model.substr(4) : model;
+        if (f == 5) {
+          if (drive.active()) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
+          int idx = drive.debugCar(model);
+          if (idx >= 0) {
+            drive.dress(idx, "white", "orig");
+            if (drive.enter(idx)) {
+              rideKind = Ride::Car;
+              player.setSkisOn(false);
+              dvec3 sp, sf;
+              drive.seat(sp, sf);
+              player.sitOn(sp, sf);
+              drive.setCockpit(true);
+              SL_INFO("[cockpittest] in the %s, the cockpit view", model.c_str());
+            }
+          }
+        }
+        struct V { int at; const char* name; double yaw, pitch; };
+        static const V VIEWS[] = {{60, "fwd", 0, -0.05}, {90, "down", 0, -0.7}, {120, "left", 1.3, -0.15}, {150, "right", -1.3, -0.15}, {180, "back", 2.09, -0.1}, {212, "steer", 0, -0.45}};
+        if (drive.active() && drive.cockpit()) for (const V& v : VIEWS) if (f > v.at - 30 && f <= v.at) drive.setLook(v.yaw, v.pitch);
+        // (parked, as the reference shots: no throttle, the wheel turned to the left for the "steer" view)
+        cockpitHold = f > 182 && f <= 212 ? 1 : 0;
+        if (f == 60 && drive.active()) { const dvec3 e = drive.debugEye(); SL_INFO("[cockpittest] %s: eyeRig (%.3f, %.3f, %.3f), steer %.2f", model.c_str(), e.x, e.y, e.z, drive.debugSteer()); }
+        if (f == 212 && drive.active()) SL_INFO("[cockpittest] %s: steer %.2f", model.c_str(), drive.debugSteer());
+        if (f == 214) drive.setCockpit(false);
+        for (const V& v : VIEWS) if (f == v.at && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (tag + "_" + v.name).c_str());
+        if (f == 252 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (tag + "_chase").c_str());
+      }
+    }
+    if (opt.autotest && at == AT::Ski && off("traintest")) {
+      // (debug: the trains from your seat, as the web reference shots: the Wolkenspitzbahn boarded at the valley station
+      // going up, then the Legacy Express from its first station: ahead, left, right, hard left, down, up, across the
+      // aisle while it stands, and out of the window 23 s later, under way: o_rail_<view>.png, o_express_<view>.png)
+      static int tf = 0;
+      struct V { const char* name; double yaw, pitch; };
+      static const V VIEWS[] = {{"fwd", 0, -0.04}, {"left", 1.2, -0.1}, {"right", -1.2, -0.1}, {"sideL", 1.75, -0.05}, {"down", 0, -0.8}, {"up", 0.4, 0.7}, {"aisle", 0.5, -0.15}};
+      const int half = 2600, ph = tf / half, f = tf % half;
+      tf++;
+      if (ph < 2) {
+        if (f == 5) {
+          if (rideKind == Ride::Rail) { railway.abort(); rideKind = Ride::None; }
+          const bool ok = ph == 0 ? railway.board(0, true) : express.board(0, 1);
+          if (ok) {
+            rideKind = ph == 0 ? Ride::Rail : Ride::Express;
+            TrainRide tr = ph == 0 ? railway.ride() : express.ride();
+            player.setSkisOn(false);
+            player.sitOn(tr.seat, tr.fwd);
+            seatView = true; seatYaw = 0; seatPitch = -0.04; trainFov = -1;
+            SL_INFO("[traintest] aboard the %s: seat (%.3f, %.3f, %.3f) yaw %.2f in its car", ph == 0 ? "Wolkenspitzbahn" : "Legacy Express", tr.seatLocal.x, tr.seatLocal.y, tr.seatLocal.z, tr.seatYaw);
+          } else SL_WARN("[traintest] no train to board");
+        }
+        const char* tag = ph == 0 ? "rail_" : "express_";
+        for (int i = 0; i < 7; i++) {
+          const int at0 = 60 + i * 40;
+          if (f > at0 - 38 && f <= at0) { seatYaw = VIEWS[i].yaw; seatPitch = VIEWS[i].pitch; }
+          if (f == at0 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + VIEWS[i].name).c_str());
+        }
+        // (then six cameras standing in the car: along the aisle both ways, a bay, from the rear vestibule, the ceiling, the floor)
+        static const char* WN[6] = {"w_fwd", "w_back", "w_bay", "w_rear", "w_ceil", "w_floor"};
+        trainWalk = f > 322 && f <= 322 + 6 * 30 ? (f - 323) / 30 : -1;
+        if (trainWalk >= 0 && (f - 323) % 30 == 28 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + WN[trainWalk]).c_str());
+        if (f > 320) { seatYaw = 1.2; seatPitch = -0.1; }
+        if (ph == 1) {   // (the Express: stood up, then walking down the aisle: from behind, through your eyes, from in front)
+          if (f == 506) express.standUp(false);
+          if (f > 506 && f <= 540) express.debugWalk(0, 3.0, PI, 0, -0.18);
+          if (f == 541) walkToggle = true;
+          if (f > 541 && f <= 575) express.debugWalk(0, 1.0, PI, 0, -0.18);
+          if (f == 576) walkToggle = true;
+          if (f > 576 && f <= 610) express.debugWalk(0, -3.0, PI, PI, -0.3);
+          if (f > 610 && f <= 700 && express.walking()) input.injectMove(0, 1);   // (W for 1.5 s: down the aisle)
+          if (f == 701) input.injectMove(0, 0);
+          for (const auto& [at0, nm] : {std::pair<int, const char*>{538, "walk_third"}, {573, "walk_first"}, {608, "walk_front"}, {700, "walk_keys"}})
+            if (f == at0 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + nm).c_str()); dvec3 wf; double a = 0, b = 0; bool sh = false; express.walker(wf, a, b, sh); SL_INFO("[traintest] %s: walking %d, speed %.2f, prompt '%s'", nm, int(express.walking()), b, prompt.c_str()); }
+          if (f == 706) { const bool sat = express.sitDown(); SL_INFO("[traintest] sat down again: %s", sat ? "yes" : "no free seat within reach"); if (!sat) { express.debugWalk(0, 6.3, 0, PI, -0.18); express.sitDown(); } }
+        }
+        if (f == 1385 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + "moving").c_str());
+        if (f == 1150) { seatView = false; trainView = ph == 1 ? 2 : 1; }   // (outside under way: the chase camera; the Express: the camera beside the line)
+        if ((f == 1200 || f == 1290) && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + (ph == 1 ? "trackside" : "chase") + (f == 1200 ? "1" : "2")).c_str());
+        if (f == 1300) { seatView = true; trainView = 0; }
+        // (then on with the fast-forward key until the first tunnel: the cabin by its own light)
+        static bool tunnelShot[2] = {false, false};
+        if (f > 1385 && !tunnelShot[ph]) {
+          seatYaw = 0.6; seatPitch = -0.1;
+          const TrainRide tr = ph == 0 ? railway.ride() : express.ride();
+          static int under = 0;
+          input.inject(Action::Jump, under < 12);   // (fast until it is well inside, then at its own speed)
+          under = tr.on && world.height(tr.seat.x, tr.seat.z) > tr.seat.y + 8 ? under + 1 : 0;
+          if (under == 20) { seatView = false; trainView = 1; }   // (then outside: the chase camera in the tube)
+          if (under == 219) { const dvec3 l = dvec3(glm::inverse(tr.car) * glm::dvec4(cam.pos, 1)); SL_INFO("[traintest] the chase camera in the tunnel: (%.1f, %.1f, %.1f) in your car's frame, %.1f m over the ground there", l.x, l.y, l.z, cam.pos.y - world.height(cam.pos.x, cam.pos.z)); }
+          if (under == 220 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + "tunnel_chase").c_str()); }
+          if (under == 223) { seatView = true; trainView = 0; tunnelShot[ph] = true; under = 0; input.inject(Action::Jump, false); }   // (the picture is taken from the frame after it is asked for: only then back to the seat)
+          if (under == 19 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + "tunnel").c_str()); SL_INFO("[traintest] in a tunnel: the cabin light %.2f", double(vmodels.cabinLight())); }
+        }
+      }
+    }
     if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
       dvec3 bp; double bh;
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
@@ -2944,7 +3131,7 @@ int runGame(const GameOptions& opt) {
       dfi.unstuck = input.takePressed(Action::Unstuck);
       dfi.flip = input.takePressed(Action::Furnish);
       dfi.lookX = paused ? 0 : input.lookX(); dfi.lookY = paused ? 0 : input.lookY();
-      dfi.now = simTime;
+      dfi.now = simTime; dfi.fovSetting = fovSetting;
       drive.frame(vdt, dfi);
       dvec3 sp, sf;
       drive.seat(sp, sf);
@@ -2976,6 +3163,19 @@ int runGame(const GameOptions& opt) {
       TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
       player.setSeat(tr.seat, tr.fwd);
       rideLine = tr.hint + "   hold " + prompts::K(input, Action::Jump) + (rideKind == Ride::Rail ? " x6" : " x10");
+      if (rideKind == Ride::Express && !tr.arrived && !menus.isOpen()) {
+        // (express.js updateWalk: E stands you up from your seat and sits you down on the nearest free one; at a stop on
+        // the way, where E is for getting off, it is F; W A S D walk, relative to the camera, Shift faster)
+        const bool stop = express.atStop();
+        if (stop ? input.takePressed(Action::Furnish) : interact) {
+          if (!stop) interact = false;
+          if (express.walking()) express.sitDown(); else express.standUp(viewBeforeRide == Player::View::First);
+          seatYaw = 0; seatPitch = -0.04;
+        }
+        if (express.walking()) { express.walkStep(frameDt, paused ? 0 : input.moveY(), paused ? 0 : input.moveX(), input.down(Action::Sprint)); seatView = true; trainView = 0; }
+        if (!stop) prompt = !express.walking() ? "Stand up" : express.nearestFreeSeat() >= 0 ? "Sit down" : "";
+        else rideLine += "   " + prompts::K(input, Action::Furnish) + (express.walking() ? ": sit down" : ": stand up");
+      }
       if (tr.arrived) { if (rideKind == Ride::Rail) railway.abort(); else express.abort(); standOff(tr.exit, tr.hint); races.guideFrom(player.pos, tr.stop); }
       else if (tr.atStop) {
         prompt = "Get off at " + tr.stop;
@@ -3063,8 +3263,7 @@ int runGame(const GameOptions& opt) {
         prompt = cp;
         if (interact && drive.interact(player.pos)) {
           interact = false;
-          if (drive.buyRequest >= 0) { openCarSale(drive.buyRequest); drive.buyRequest = -1; }
-          else if (drive.active()) {
+          if (drive.active()) {
             rideKind = Ride::Car;
             if (mp.active()) for (const auto& e : drive.parked)
               if (e.driving && e.owned && !e.plate.empty() && e.plate != save.rentalPlate) {
@@ -3125,7 +3324,7 @@ int runGame(const GameOptions& opt) {
           TrainRide tr = railway.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
-          rideCamReady = false; seatView = false; seatYaw = 0; seatPitch = -0.04;   // (the outside view: the cabin's seat view is R)
+          rideCamReady = false; seatView = true; seatYaw = 0; seatPitch = -0.04; trainFov = -1;   // (railway.js board: the seat view; R: outside)
           toast = transport.rail.name + (down ? std::string() : save.hasPass() ? std::string(" \xC2\xB7 Day pass") : " \xC2\xB7 -$" + std::to_string(transport.rail.price)); toastUntil = simTime + 2;
         }
       } else if (xst >= 0 && express.stationCount() > 1) {
@@ -3156,7 +3355,7 @@ int runGame(const GameOptions& opt) {
           TrainRide tr = express.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
-          rideCamReady = false; seatView = false; seatYaw = 0; seatPitch = -0.04;
+          rideCamReady = false; seatView = true; trainView = 0; seatYaw = 0; seatPitch = -0.04; trainFov = -1;   // (express.js board: the seat view; R: outside, then trackside)
           toast = transport.express.name + " to " + express.station(dest).name + (save.hasPass() ? std::string(" \xC2\xB7 Day pass") : " \xC2\xB7 -$" + std::to_string(transport.express.price)); toastUntil = simTime + 2;
         }
       }
@@ -3211,14 +3410,18 @@ int runGame(const GameOptions& opt) {
         }
       }
     }
-    // the Autohaus showroom (carrentalroom.js update): a car on show: its card (buy it), the salesman: your cars, the door
+    // the Autohaus showroom (carrental.js frame / carrentalroom.js update): what the crosshair is on within 7 m: a car on
+    // show (the configurator on that very car), the salesman (his talk), the door
+    if (started) showroom.update(frameDt, menus.isOpen(), menus.customOpen("carconfig"));
     if (started && rooms.room() == Interiors::Room::Autohaus && !menus.isOpen()) {
-      if (const RoomDef::Hit* h = rooms.aim(cam.pos, cam.forward())) {
-        if (h->kind == "door") { prompt = "Leave the Autohaus"; if (interact) { interact = false; rooms.leave(); } }
-        else if (h->kind == "clerk") { prompt = "Talk to the salesman"; if (interact) { interact = false; openGarage(); } }
+      if (const RoomDef::Hit* h = rooms.aim(cam.pos, cam.forward(), 7)) {
+        if (h->kind == "door") { prompt = "Leave the Autohaus"; if (interact) { interact = false; audio.play("click"); rooms.leave(); } }
+        else if (h->kind == "clerk") { prompt = "Talk to the salesman"; if (interact) { interact = false; audio.play("click"); clerkDialog(); } }
         else if (h->kind == "car") {
-          prompt = "Buy " + h->name;
-          if (interact) { interact = false; int si = drive.saleIndex(h->id); if (si >= 0) openCarSale(si); else flash(h->name + " \xC2\xB7 not for sale today", Hud::Flash::Bad); }
+          int mine = 0;
+          for (const Save::Car& c : save.garage) mine += c.id == h->id;
+          prompt = mine ? h->name + " \xC2\xB7 yours: " + std::to_string(mine) + " \xC2\xB7 buy another \xC2\xB7 take it out \xC2\xB7 sell" : "Buy " + h->name;
+          if (interact) { interact = false; audio.play("click"); openCarSale(h->id); }
         }
       }
     }
@@ -3260,6 +3463,7 @@ int runGame(const GameOptions& opt) {
     }
     if (rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && started) {
       auto near = [&](double x, double z, double r) { return std::hypot(player.pos.x - x, player.pos.z - z) < r; };
+      dvec2 autoOut(0, 1);
       // (main.js enterShop: E in front of the door (village.js: 3.2 m round the point in front of it), in behind a fade;
       // without the exported room: the card)
       bool atShop = false;
@@ -3268,17 +3472,19 @@ int runGame(const GameOptions& opt) {
       if (atShop) {}
       // (village.js / main.js: within 2.6 m of the booth's counter: 'Talk to the ticket seller')
       else if (playData.hasTickets ? near(playData.tickets[0], playData.tickets[1], playData.tickets[2]) : near(15, -50, 7.5)) { prompt = playData.hasTickets ? "Talk to the ticket seller" : "Ticket seller \xC2\xB7 day pass, gondola tickets"; if (interact) { interact = false; openTickets(); } }
-      else if (transport.loaded() && near(transport.autohaus.x, transport.autohaus.z, 12)) {
-        // (carrental.js: through the sliding doors into the showroom; without the exported room: the card)
-        prompt = playData.autohaus.ok ? "Enter the Autohaus" : "Autohaus \xC2\xB7 my cars";
+      else if (dvec3 dp; transport.loaded() && (showroom.doorSpot(dp, autoOut) ? near(dp.x, dp.z, 2.6) : near(transport.autohaus.x, transport.autohaus.z, 12))) {
+        // (carrental.js interaction / enter / leave: within 2.6 m of the sliding doors, through a fade into the showroom;
+        // out again 0.8 m in front of them, facing the road. Without the exported room: the card)
+        prompt = playData.autohaus.ok ? "Autohaus" : "Autohaus \xC2\xB7 my cars";
         if (interact) {
           interact = false;
           if (!playData.autohaus.ok) openGarage();
           else {
-            const dvec3 back = player.pos;
-            const double backYaw = player.heading;
+            const dvec3 back = dp + dvec3(autoOut.x, 0, autoOut.y) * 0.8;
+            const double backYaw = std::atan2(autoOut.x, autoOut.y);
+            audio.play("click");
             pc.fade();
-            rooms.enter(Interiors::Room::Autohaus, [&, back, backYaw]() { pc.fade(); player.teleport(back.x, back.z, backYaw + PI); });
+            showroom.requestEnter([&, back, backYaw]() { rooms.enter(Interiors::Room::Autohaus, [&, back, backYaw]() { pc.fade(); player.teleport(back.x, back.z, backYaw); }); });
           }
         }
       }
@@ -3341,7 +3547,36 @@ int runGame(const GameOptions& opt) {
     player.cameraFor(cam);
     bool camUnderground = false;   // (a train's camera in a tunnel: the tunnel's darkness, no terrain drawn over it)
     if (rideKind == Ride::Car) drive.cameraFor(cam);
-    else if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+    else if (rideKind == Ride::Express && express.walking()) {
+      // (express.js walkCamera) walking about in the car: your eyes, or the orbit round you pulled in to stay inside it
+      express.walkCamera(cam, frameDt, paused ? 0 : input.lookX(), paused ? 0 : input.lookY(), input.wheel(), walkToggle);
+      walkToggle = false;
+      camUnderground = world.height(cam.pos.x, cam.pos.z) > cam.pos.y + 6;
+    }
+    else if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+      // the trains' seat view (railway.js / express.js updateRide): a seated passenger's eye in the car's own frame (it
+      // leans with the car on the grade and in the curves), 0.76 m over the seat; you look round to the side windows
+      // (+-100 degrees, not back through your own backrest); turning to the side the head leans a little forward and
+      // away from the pane; 72 degrees
+      const TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
+      float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
+      seatYaw = clamp(seatYaw - lx * 0.0022, -1.75, 1.75); seatPitch = clamp(seatPitch - ly * 0.0022, -0.9, 1.0);
+      const double turn = std::fabs(std::sin(seatYaw)), fz = std::cos(tr.seatYaw), sx = tr.seatLocal.x > 0 ? 1 : tr.seatLocal.x < 0 ? -1 : 0;
+      const dvec3 eye = dvec3(tr.car * glm::dvec4(tr.seatLocal + dvec3(-sx * turn * 0.1, 0.76, (0.06 + turn * 0.12) * fz), 1));
+      const double yaw = tr.seatYaw + seatYaw;
+      const dvec3 dir = glm::normalize(dvec3(tr.car * glm::dvec4(std::sin(yaw) * std::cos(seatPitch), std::sin(seatPitch), std::cos(yaw) * std::cos(seatPitch), 0)));
+      camUnderground = world.height(eye.x, eye.z) > eye.y + 6;
+      cam.lookAt(eye, eye + dir, vec3(glm::normalize(dvec3(tr.car * glm::dvec4(0, 1, 0, 0)))));
+      trainFov = trainFov < 0 ? 72 : trainFov + (72 - trainFov) * (1 - std::exp(-frameDt * 6));
+      cam.fovY = float(trainFov); cam.nearZ = 0.05f;
+      if (trainWalk >= 0) {   // (debug traintest: a camera standing in the car, in its frame)
+        static const double W[6][6] = {{0, 2.65, -5, 0, 2.3, 6}, {0, 2.65, 5, 0, 2.2, -6}, {0.9, 2.4, 0, -1.2, 1.9, 1.5}, {0, 2.65, -7.6, 0, 2.4, 0}, {0, 2.2, 1, 0.6, 3.6, 4}, {0, 2.7, -1, 0.5, 1.0, 2}};
+        const double* w = W[trainWalk % 6];
+        cam.lookAt(dvec3(tr.car * glm::dvec4(w[0], w[1], w[2], 1)), dvec3(tr.car * glm::dvec4(w[3], w[4], w[5], 1)));
+        cam.fovY = 72;
+      }
+    }
+    else if (rideKind == Ride::Bus && seatView) {
       // the seat view: your eyes over the seat, the mouse looks round (+-120 degrees), easing back ahead
       float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
       if (lx != 0 || ly != 0) { rideLookT = simTime; seatYaw = clamp(seatYaw - lx * 0.0022, -2.09, 2.09); seatPitch = clamp(seatPitch - ly * 0.0022, -1.0, 0.6); }
@@ -3352,7 +3587,15 @@ int runGame(const GameOptions& opt) {
       dvec3 eye = player.renderPos + dvec3(0, off("seatback") ? 1.25 : 0.78, 0);   // (debug seatback: standing up at the seat)
       cam.lookAt(eye, eye + dvec3(std::sin(fy) * std::cos(seatPitch), std::sin(seatPitch), std::cos(fy) * std::cos(seatPitch)));
       cam.fovY = 68; cam.nearZ = 0.05f;
-    } else if (rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) {
+    } else if (rideKind == Ride::Rail || rideKind == Ride::Express) {
+      // (railway.js / express.js applyCamera) outside: the chase camera behind the train; in a tunnel, a cutting or
+      // behind a shoulder it follows the track just behind the last car instead of sitting in the rock; the Express's
+      // third view: the camera beside the line (in a tunnel: the chase camera)
+      const float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY(), wh = input.wheel();
+      if (rideKind == Ride::Express && trainView == 2 && express.tracksideCamera(cam, frameDt)) camUnderground = false;
+      else if (rideKind == Ride::Rail) { railway.chaseCamera(cam, frameDt, lx, ly, wh); camUnderground = railway.chaseUnderground(); }
+      else { express.chaseCamera(cam, frameDt, lx, ly, wh); camUnderground = express.chaseUnderground(); }
+    } else if (rideKind == Ride::Bus) {
       // the chase camera behind the bus / train (bus.js chase: 18 m; railway.js 34 m; express.js 46 m), the mouse
       // looks round, easing back behind after 1.5 s
       dvec3 vp;
@@ -3379,6 +3622,53 @@ int runGame(const GameOptions& opt) {
     }
     heli.camera(cam);
     ward.camera(cam);
+    showroom.camera(cam, frameDt);   // (the Autohaus: 70 degrees on foot; the configurator's camera round your car)
+    showroom.captureCamera(cam, opt.autotest || trans.covered());   // (its windows: the village photographed behind the fade, as you go in)
+    if (opt.autotest && at == AT::Ski && off("autohaus") && transport.loaded()) {
+      // (debug: the Autohaus from fixed viewpoints, outside (the lot's frame: +z to the road) and in the showroom (the
+      // room's frame), with the configurator's steps, the salesman's talk and his marker: o_<name>.png, the same
+      // viewpoints as the web game's reference shots)
+      struct V { const char* name; int where; double x, y, z, a, b, c; int act; };   // where 0: outside (eye, target), 1: inside (x, z, yaw, pitch; y: 1 upstairs), 2: the game's own camera
+      static const V VIEWS[] = {
+        {"out_front", 0, 0, 3.2, 30, 0, 3.5, -8, 0}, {"out_left", 0, -22, 2.2, 16, -4, 3, -4, 0}, {"out_right", 0, 24, 2.2, 15, 6, 2, 2, 0},
+        {"out_door", 0, 0.2, 1.7, 9, 0, 2.2, 0, 0}, {"out_tow", 0, 16, 2.4, 13, 7.6, 1.2, 6.9, 0},
+        {"in_enter0", 2, 0, 0, 0, 0, 0, 0, 1}, {"in_enter", 2, 0, 0, 0, 0, 0, 0, 0},
+        {"in_doorview", 1, 0, 0, 2, 0, 0.05, 0, 0}, {"in_floor", 1, -1.5, 0, 4.5, PI, -0.45, 0, 0}, {"in_clerk", 1, 12, 0, -3.5, PI, -0.05, 0, 0},
+        {"in_golf", 1, -10.8, 0, -1.6, PI, -0.2, 0, 0}, {"in_stairfoot", 1, -15.2, 0, 6.5, PI, 0.25, 0, 0}, {"in_up", 1, -6, 1, -2.2, PI + 0.5, -0.1, 0, 0},
+        {"in_up2", 1, 2, 1, -2.2, PI - 0.6, -0.1, 0, 0}, {"in_updown", 1, 0, 1, -1.8, 0, -0.35, 0, 0}, {"in_guide", 1, 2.4, 0, 5.5, PI + 0.9, -0.1, 0, 2},
+        {"in_clerkdialog", 1, 12, 0, -3.5, PI, -0.05, 0, 3}, {"cfg_paint", 2, 0, 0, 0, 0, 0, 0, 4}, {"cfg_paint2", 2, 0, 0, 0, 0, 0, 0, 5}, {"cfg_rims", 2, 0, 0, 0, 0, 0, 0, 6},
+        {"cfg_rims2", 2, 0, 0, 0, 0, 0, 0, 7}, {"cfg_plate", 2, 0, 0, 0, 0, 0, 0, 8}, {"cfg_sum", 2, 0, 0, 0, 0, 0, 0, 9}, {"cfg_up", 2, 0, 0, 0, 0, 0, 0, 10}};
+      static int af = 0;
+      const int per = 44, k = af / per, f = af % per;
+      af++;
+      if (size_t(k) < sizeof VIEWS / sizeof VIEWS[0]) {
+        const V& v = VIEWS[k];
+        const double fx = transport.autohausDir.x, fz = transport.autohausDir.y;
+        auto lot = [&](double lx, double ly, double lz) { return dvec3(transport.autohaus.x + fz * lx + fx * lz, transport.autohaus.y + ly, transport.autohaus.z - fx * lx + fz * lz); };
+        if (f == 0) {
+          if (v.where == 0) { const dvec3 q = lot(v.x, 0, v.z + 6); player.setSkisOn(false); player.teleport(q.x, q.z, 0); }
+          if (v.act == 1) { save.earn(300000); showroom.requestEnter([&]() { rooms.enter(Interiors::Room::Autohaus); }); }
+          if (v.act == 2) showroom.guide("car_tesla_m3");
+          if (v.act == 3) { showroom.guide(""); clerkDialog(); }
+          if (v.act == 4) { if (menus.isOpen()) menus.close(); const char* want = std::getenv("SKI_LEGACY_CAR"); openCarSale(want ? want : "car_vw_golf_gti"); if (std::getenv("SKI_LEGACY_PAINT")) { carCfg.cfg.paint = std::getenv("SKI_LEGACY_PAINT"); showroom.configure(carCfg.cfg, 0); } }
+          if (v.act == 5) { carCfg.cfg.paint = "kingfisher"; showroom.configure(carCfg.cfg, carCfg.step); }
+          if (v.act == 6) { carCfg.step = 1; showroom.configure(carCfg.cfg, 1); }
+          if (v.act == 7) { carCfg.cfg.rims = "gold"; showroom.configure(carCfg.cfg, 1); }
+          if (v.act == 8) { carCfg.step = 2; showroom.configure(carCfg.cfg, 2); }
+          if (v.act == 9) { carCfg.step = 3; showroom.configure(carCfg.cfg, 3); }
+          if (v.act == 10) { if (menus.isOpen()) menus.close(); showroom.endConfigure(); openCarSale("car_porsche_taycan"); }
+        }
+        if (v.where == 0) {
+          cam.lookAt(lot(v.x, v.y, v.z), lot(v.a, v.b, v.c)); cam.fovY = 60;
+          if (f == 1) { terrain.update(cam.pos); scenery.finish(cam.pos); resort.update(0, cam.pos); resort.finishStreaming(cam.pos); }
+        } else if (v.where == 1 && rooms.def()) {
+          const dvec3 st = rooms.toWorld(v.x, 0, v.z), eye = rooms.toWorld(v.x, 1.62 + (v.y > 0 ? rooms.def()->FL : 0), v.z);
+          player.teleport(st.x, st.z, v.a); player.pos.y = st.y; player.vel = dvec3(0);
+          cam.lookAt(eye, eye + dvec3(std::sin(v.a) * std::cos(v.b), std::sin(v.b), std::cos(v.a) * std::cos(v.b))); cam.fovY = 70;
+        }
+        if (f == (v.act == 1 ? 6 : per - 2) && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, v.name); SL_INFO("[autohaus] shot %s: prompt '%s', %d cars on show, doors %.2f open", v.name, prompt.c_str(), showroom.carsShown(), showroom.doorOpen()); }
+      }
+    }
     ward.captureCamera(cam, (opt.autotest && !off("fadetest")) || trans.covered());   // (the ward's windows: the village photographed behind the fade)
     shopRoom.camera(cam);
     rooms.camera(cam);
@@ -3576,6 +3866,7 @@ int runGame(const GameOptions& opt) {
       sleds.fillColliders(scenery.dynamic);
     }
     rooms.fillColliders(scenery.dynamic);
+    if (!rooms.inside()) showroom.fillColliders(scenery.dynamic, player.pos);   // (the tow trucks in the yard)
     heli.fillColliders(scenery.dynamic);
 
     // ---------------------------------------------------------------- (Phase 7) camera shake, screen effects, skis, outfit
@@ -3736,7 +4027,7 @@ int runGame(const GameOptions& opt) {
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
-    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0 || ward.capturing() || windows.capturing();
+    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0 || ward.capturing() || showroom.capturing() || windows.capturing();
     if (nightShot >= 0) {   // (the night shots' cameras: the plaza, then the snow gun nearest it)
       dvec3 eye, at2;
       if (nightShot < 16) { eye = dvec3(30, 0, 22); at2 = dvec3(-8, 0, -18); }
@@ -3784,7 +4075,7 @@ int runGame(const GameOptions& opt) {
       static int pf = 0;
       pf++;
       const char* want = std::getenv("SKI_LEGACY_CAR");
-      int idx = drive.saleIndex(want ? want : "car_bmw_x3");
+      int idx = drive.debugCar(want ? want : "car_bmw_x3");
       if (idx >= 0) {
         const Drive::Parked& e = drive.parked[size_t(idx)];
         const int k = (pf / 70) % 4;   // front by day, rear by day, front at night, rear at night
@@ -3918,6 +4209,11 @@ int runGame(const GameOptions& opt) {
     trans.update(frameDt);
     if (rendered) {
     Lighting frameLight = light;
+    {   // (railway.js lateUpdate: the cabins' own light, 0.3 by day, up to 1.2 at night and in a tunnel, eased)
+      static float cabinDark = 0;
+      cabinDark += ((camUnderground ? 1.f : 0.f) - cabinDark) * float(1 - std::exp(-frameDt * 3));
+      vmodels.setCabinLight(0.3f + 0.9f * std::max(light.night, cabinDark));
+    }
     if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light
       frameLight.zenith = frameLight.mid = frameLight.horizon = frameLight.glow = frameLight.fog = vec3(0.004f, 0.005f, 0.007f);
       frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
@@ -3925,6 +4221,18 @@ int runGame(const GameOptions& opt) {
     }
     pt0 = perfMs();
     renderer.beginFrame(cam, frameLight, player.renderPos);
+    if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+      // (train.js: the cabin lit by its own strips, every surface in its own colour x (1, 0.86, 0.68) x 0.55 x uCabin:
+      // here four warm lamps along the ceiling of the car you sit in, faint by day, carrying the light in a tunnel)
+      const TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
+      for (double z : {-6.2, -2.1, 2.1, 6.2}) {
+        PointLight l;
+        l.pos = dvec3(tr.car * glm::dvec4(0, 3.05, z, 1)); l.color = vec3(1.0f, 0.86f, 0.68f) * (CABIN_LAMP * std::max(0.04f, vmodels.cabinLight() - 0.27f)); l.range = 6.5f;
+        renderer.addLight(l);
+      }
+    }
+    if (camUnderground && rideKind == Ride::Rail) railway.tunnelLights(renderer);
+    else if (camUnderground && rideKind == Ride::Express) express.tunnelLights(renderer);
     bool indoor = rooms.inside();
     if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
     if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
@@ -3952,15 +4260,9 @@ int runGame(const GameOptions& opt) {
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
     // the falling snow
     if (indoor) { rooms.draw(renderer); ward.draw(renderer); windows.draw(renderer, rooms.toWorld(0, 0, 0), cam.pos); }
-    if (indoor && rooms.room() == Interiors::Room::Autohaus && rooms.def()) {
-      // the cars on show on their turntables (the room's own frame: the exporter leaves their meshes out)
-      vdraw.begin();
-      const dvec3 o = rooms.toWorld(0, 0, 0);
-      for (const RoomDef::Car& c : rooms.def()->cars)
-        if (const VehicleModel* vm = vmodels.car(c.id)) vdraw.add(vm->model.get(), glm::translate(glm::dmat4(1), o) * c.M * glm::dmat4(vm->fit), 0, c.paint);
-      vdraw.submit(renderer, *dev, cam.pos);
-    }
+    if (indoor && showroom.inside()) showroom.draw(renderer, sfx, *dev, cam);   // (the cars on show, the doors, the marker, the floor's mirror)
     else if (drawVillage) {
+      showroom.drawOutside(renderer, *dev, cam.pos);
       oddJobs.draw(renderer, cam.pos, jobBoard.get());
       races.draw(renderer, cam.pos);
       police.draw(renderer, cam.pos);
@@ -3971,6 +4273,16 @@ int runGame(const GameOptions& opt) {
     people.begin(paused ? 0 : frameDt);
     if (!indoor) {
       if (aiOn) { folk.submit(renderer, cam.pos); traffic.addPeople(people, cam.pos, people.skierKinds.empty() ? people.fanKinds : people.skierKinds); }
+      if (!mp.active()) { railway.addPeople(people); express.addPeople(people); }
+      {   // (express.js poseWalker: you walking in the car, on its floor, in third person)
+        dvec3 wf; double wh = 0, ws = 0; bool shown = false;
+        if (rideKind == Ride::Express && express.walker(wf, wh, ws, shown) && shown) {
+          Person q;
+          q.kind = people.kind(save.character);
+          if (q.kind < 0 && !people.skierKinds.empty()) q.kind = people.skierKinds[0];
+          if (q.kind >= 0) { q.pos = wf; q.yaw = wh; q.anim = ws > 0.1 ? PAnim::Walk : PAnim::Idle; q.speed = ws; people.add(q); }
+        }
+      }   // (the skiers riding along in your car: single player only, as railway.js)
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }
@@ -3982,14 +4294,15 @@ int runGame(const GameOptions& opt) {
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
     // (first person: your own body stays visible below the eye, the head folded away; at the wheel too: player.js /
     // drive.js placeRig)
-    bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || heli.hideRig();
+    bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || heli.hideRig() || showroom.inside();   // (the showroom is its own scene in the web game: you are not in it)
     if (rooms.chaletExported() || rooms.prisonExported()) hideRig = true;   // (the web game's rooms are walked as a camera: no body of your own)
     railway.insideView = rideKind == Ride::Rail && seatView;
-    express.insideView = rideKind == Ride::Express && seatView;
+    express.insideView = rideKind == Ride::Express && (seatView || express.walking());
+    if (express.walking()) hideRig = true;   // (your seat is empty: you walk)
     // first person on skis: the gloves-and-poles view model rides on the camera (player.js, after the camera)
     rig.updateFpView(paused ? 0 : frameDt, cam, player, *dev, assets);
     player.noteCamera(cam);
-    if (drawSkier && !ward.capturing() && !windows.capturing()) rig.submit(renderer, hideRig);
+    if (drawSkier && !ward.capturing() && !showroom.capturing() && !windows.capturing()) rig.submit(renderer, hideRig);
     if (!indoor) {   // the snow trails: you, the vehicles on the snow, the resort's people
       if (rideKind == Ride::None) trails.player(player);
       if (rideKind == Ride::Car) trails.vehicle(0, drive.pos(), drive.yaw(), 0);
@@ -4007,6 +4320,7 @@ int runGame(const GameOptions& opt) {
     dev->resetFrameStats();
     renderer.endFrame();
     ward.captured(renderer);
+    showroom.captured(renderer);
     windows.captured(renderer);
     ui.end();
     perf.add("render: draw calls + post + UI", perfMs() - pt0);
@@ -4146,6 +4460,16 @@ int runGame(const GameOptions& opt) {
         ce.png = [&](const char* tag) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, tag); };
         ce.ground = [&](double x, double z) { return world.height(x, z); };
         ce.camPos = cam.pos; ce.camFwd = dvec3(cam.forward());
+        ce.hasDoor = showroom.doorSpot(ce.door, ce.doorOut); ce.inShowroom = showroom.inside(); ce.configuring = showroom.configuring();
+        ce.roomWorld = [&](double lx, double lz) { return rooms.toWorld(lx, 0, lz); };
+        ce.spot = [&](const std::string& kind, const std::string& id, dvec3& stand, dvec3& target) {
+          double yw = 0;
+          if (!rooms.aimSpot(kind, id, stand, yw)) return false;
+          target = stand + dvec3(std::sin(yw) * 2.4, 0.9, std::cos(yw) * 2.4);
+          return true;
+        };
+        ce.lookAt = [&](const dvec3& t) { const dvec3 eye = player.pos + dvec3(0, 1.62, 0), d = t - eye; player.setLook(std::atan2(d.x, d.z), std::atan2(d.y, std::hypot(d.x, d.z))); };
+        for (const RoomDef::Car& c : playData.autohaus.cars) if (ce.cheapest.empty() || c.price < ce.cheapestPrice) { ce.cheapest = c.id; ce.cheapestLabel = c.label; ce.cheapestPrice = c.price; }
         ce.prompt = prompt; ce.driving = rideKind == Ride::Car; ce.simTime = simTime; ce.frameDt = frameDt;
         if (phaseFrame >= 1 && (carFlow.frame(ce) || phaseFrame > 3000)) {
           if (phaseFrame > 3000) { carFlow.releaseAll(); carFlow.exitOk = false; SL_WARN("[autotest] cars: timed out"); }

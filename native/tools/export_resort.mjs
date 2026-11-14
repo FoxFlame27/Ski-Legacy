@@ -723,7 +723,10 @@ await tryStep('Legacy Express lakes', async () => (await import(pathToFileURL(pa
 await tryStep('Autohaus hall', async () => {
   const { CarRental } = await import(pathToFileURL(path.join(SRC, 'game/carrental.js')));
   const o = Object.create(CarRental.prototype);
-  Object.assign(o, { scene: tScene, models, colliders: tCols, L: busRoads.rental });
+  // (the cars on show seen through the glass: the C++ draws its own models of them in the hall, in their display paints
+  // (game/showroom drawOutside): none in the captured hall; the potted spruces either side of the door: the game's pine)
+  if (!models.pine_tree) { try { models.pine_tree = await loadGLB('pine_tree'); } catch (e) { log('Autohaus: no pine_tree', e.message); } }
+  Object.assign(o, { scene: tScene, models: { pine_tree: models.pine_tree }, colliders: tCols, L: busRoads.rental });
   if (!o.L) throw new Error('no Autohaus site');
   o.yaw0 = Math.atan2(o.L.dirx, o.L.dirz);
   o.buildOutside();

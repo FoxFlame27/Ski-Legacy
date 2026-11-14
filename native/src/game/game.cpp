@@ -1586,6 +1586,8 @@ int runGame(const GameOptions& opt) {
 
     // (Phase 4) the pause menu (Esc / Menu / +), the trail map (M / View / Minus); menus and dialogs take the input
     bool uiOpen = menus.isOpen() || tmap.isOpen() || tmap.travelOpen();
+    // any menu, dialog, shop / board / picker or the map: the pointer is free (whoever opened it, from wherever)
+    if (uiOpen && !opt.autotest && plat->relativeMouse()) plat->setRelativeMouse(false);
     if (started && !uiOpen && wasUiOpen) { input.clear(); input.holdOff(); }   // (the key that closed it: not also in the game)
     if (started && !uiOpen) {
       // (in every state: on foot, skiing, driving, riding; build mode is left first, as a dialog or the map closes)

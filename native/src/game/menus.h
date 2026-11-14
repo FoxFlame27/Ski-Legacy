@@ -174,6 +174,10 @@ private:
   Screen screen_ = Screen::None;
   std::vector<Item> items_;
   int focus_ = 0, focusPrev_ = -1;
+  // the focus look eases in and out like the CSS transitions (.brush-btn 0.18 s, .mp-row 0.2 s, .mode-card 0.3 s)
+  std::vector<float> focA_;
+  float dt_ = 0;
+  float focusAmt(int idx, bool foc, float dur = 0.2f);
   std::vector<int> focusStack_;
   float u_ = 1, scroll_ = 0, scrollTarget_ = 0, listTop_ = 0, listH_ = 0, contentH_ = 0;
   float listRight_ = 0;                 // the scroll box's right edge (the scrollbar runs down it)

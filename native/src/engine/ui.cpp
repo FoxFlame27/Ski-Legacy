@@ -85,8 +85,12 @@ void main() {
     a = 1.0;
   } else if (vQ.y < 4.5) {          // image
     c *= texture(uTex, vUv);
-  } else {                          // alpha mask (the paper shapes, their shadows, text shadows)
+  } else if (vQ.y < 5.5) {          // alpha mask (the paper shapes, their shadows, text shadows)
     a = texture(uTex, vUv).r;
+  } else {                          // a soft box (box-shadow): the rounded rect's edge blurred over vUv.x px
+    float d = sdRound(vP.xy, vP.zw, vQ.x);
+    float t = clamp(0.5 - d / max(vUv.x, 0.001) * 0.5, 0.0, 1.0);
+    a = t * t * (3.0 - 2.0 * t);
   }
   oColor = vec4(c.rgb, c.a * a);
 }
@@ -112,7 +116,7 @@ bool Ui::bakeAtlas(platform::Platform& plat, const AssetPaths& paths) {
   std::vector<uint32_t> cps;
   for (uint32_t c = 32; c < 127; c++) cps.push_back(c);
   for (uint32_t c = 160; c < 256; c++) cps.push_back(c);
-  for (uint32_t c : {0x2014u, 0x2013u, 0x2026u, 0x2022u, 0x2190u, 0x2191u, 0x2192u, 0x2193u, 0x2212u, 0x20ACu, 0x2018u, 0x2019u, 0x201Cu, 0x201Du, 0x2715u, 0x25CBu, 0x25A1u, 0x25B3u, 0x00D7u})
+  for (uint32_t c : {0x2014u, 0x2013u, 0x2026u, 0x2022u, 0x2190u, 0x2191u, 0x2192u, 0x2193u, 0x2212u, 0x20ACu, 0x2018u, 0x2019u, 0x201Cu, 0x201Du, 0x2715u, 0x25CBu, 0x25A1u, 0x25B3u, 0x00D7u, 0x2264u, 0x2265u})
     cps.push_back(c);
   std::vector<uint8_t> px(size_t(ATLAS) * ATLAS, 0);
   int x = 1, y = 1, rowH = 0;
@@ -246,7 +250,7 @@ void Ui::quad(float x0, float y0, float x1, float y1, float u0, float v0, float 
     float tx0 = (cx0 - x0) / (x1 - x0), tx1 = (cx1 - x0) / (x1 - x0), ty0 = (cy0 - y0) / (y1 - y0), ty1 = (cy1 - y0) / (y1 - y0);
     float nu0 = lerpf(u0, u1, tx0), nu1 = lerpf(u0, u1, tx1), nv0 = lerpf(v0, v1, ty0), nv1 = lerpf(v0, v1, ty1);
     float nl0 = lerpf(lx0, lx1, tx0), nl1 = lerpf(lx0, lx1, tx1), nm0 = lerpf(ly0, ly1, ty0), nm1 = lerpf(ly0, ly1, ty1);
-    if (mode > 1.5f && mode < 2.5f) { nu0 = u0; nu1 = u1; nv0 = v0; nv1 = v1; }   // (the stroke width rides in uv)
+    if ((mode > 1.5f && mode < 2.5f) || mode > 5.5f) { nu0 = u0; nu1 = u1; nv0 = v0; nv1 = v1; }   // (the stroke width / blur rides in uv)
     x0 = cx0; x1 = cx1; y0 = cy0; y1 = cy1; u0 = nu0; u1 = nu1; v0 = nv0; v1 = nv1; lx0 = nl0; lx1 = nl1; ly0 = nm0; ly1 = nm1;
   }
   useTexture(tex);
@@ -284,10 +288,126 @@ void Ui::roundRectStroke(float x, float y, float w, float h, float r, float widt
   float hw = w * 0.5f, hh = h * 0.5f;
   quad(x - 1, y - 1, x + w + 1, y + h + 1, width, 0, width, 0, c, -hw - 1, -hh - 1, hw + 1, hh + 1, hw, hh, r, 2, white_);
 }
+void Ui::emitConvex(Vert* v, int n) {
+  // Sutherland-Hodgman against the clip rectangle (every attribute interpolated), then a fan
+  Vert bufA[12], bufB[12];
+  Vert* in = v;
+  if (!clips_.empty() && xf_.empty()) {
+    const vec4& k = clips_.back();
+    const float lim[4] = {k.x, k.x + k.z, k.y, k.y + k.w};
+    bool inside = true;
+    for (int i = 0; i < n; i++) inside = inside && v[i].x >= lim[0] && v[i].x <= lim[1] && v[i].y >= lim[2] && v[i].y <= lim[3];
+    if (!inside) {
+      Vert* out = bufA;
+      for (int e = 0; e < 4 && n > 0; e++) {
+        int m = 0;
+        auto dist = [&](const Vert& p) { return e == 0 ? p.x - lim[0] : e == 1 ? lim[1] - p.x : e == 2 ? p.y - lim[2] : lim[3] - p.y; };
+        for (int i = 0; i < n; i++) {
+          const Vert& p = in[i];
+          const Vert& q = in[(i + 1) % n];
+          float dp = dist(p), dq = dist(q);
+          if (dp >= 0 && m < 12) out[m++] = p;
+          if ((dp >= 0) != (dq >= 0) && m < 12) {
+            float t = dp / (dp - dq);
+            Vert r = p;
+            const float* pf = &p.x;
+            const float* qf = &q.x;
+            float* rf = &r.x;
+            for (int f = 0; f < 10; f++) rf[f] = pf[f] + (qf[f] - pf[f]) * t;   // x y u v r g b a lx ly
+            out[m++] = r;
+          }
+        }
+        n = m;
+        in = out;
+        out = in == bufA ? bufB : bufA;
+      }
+    }
+  }
+  for (int i = 1; i + 1 < n; i++) verts_.insert(verts_.end(), {in[0], in[i], in[i + 1]});
+}
 void Ui::triRaw(vec2 a, vec2 b, vec2 c, const vec4& col) {
   useTexture(white_);
   auto V = [&](vec2 p) { vec2 q = X(p.x, p.y); return Vert{q.x, q.y, 0, 0, col.x, col.y, col.z, col.w * A(), 0, 0, 0, 0, 0, 3}; };
-  verts_.insert(verts_.end(), {V(a), V(b), V(c)});
+  Vert v[3] = {V(a), V(b), V(c)};
+  emitConvex(v, 3);
+}
+void Ui::capsule(vec2 a, vec2 b, float w, const vec4& col, bool round) {
+  vec2 d = b - a;
+  float l = glm::length(d);
+  if (w <= 0 || col.w <= 0) return;
+  if (l < 1e-4f) { if (!round) return; d = vec2(1, 0); l = 0; } else d /= l;
+  vec2 n(-d.y, d.x);
+  float hw = l * 0.5f + (round ? w * 0.5f : 0.f), hh = w * 0.5f, m = 1;
+  vec2 c = (a + b) * 0.5f;
+  useTexture(white_);
+  const float al = col.w * A();
+  auto V = [&](float sx, float sy) {
+    vec2 p = c + d * (sx * (hw + m)) + n * (sy * (hh + m));
+    vec2 q = X(p.x, p.y);
+    return Vert{q.x, q.y, 0, 0, col.x, col.y, col.z, al, sx * (hw + m), sy * (hh + m), hw, hh, round ? hh : 0.f, 1};
+  };
+  Vert v[4] = {V(-1, -1), V(1, -1), V(1, 1), V(-1, 1)};
+  emitConvex(v, 4);
+}
+void Ui::strokePath(const std::vector<vec2>& pts, float w, const vec4& c, bool closed) {
+  if (pts.empty()) return;
+  if (pts.size() == 1) { capsule(pts[0], pts[0], w, c); return; }
+  for (size_t i = 1; i < pts.size(); i++) capsule(pts[i - 1], pts[i], w, c);
+  if (closed) capsule(pts.back(), pts.front(), w, c);
+}
+void Ui::dashPath(const std::vector<vec2>& pts, float w, const vec4& c, float on, float off, bool round) {
+  if (pts.size() < 2 || on + off <= 0) return;
+  float acc = 0;
+  bool pen = true;
+  for (size_t i = 1; i < pts.size(); i++) {
+    vec2 a = pts[i - 1], b = pts[i];
+    float l = glm::length(b - a), t = 0;
+    if (l < 1e-5f) continue;
+    while (t < l) {
+      float len = pen ? on : off, step = std::min(len - acc, l - t);
+      if (pen) capsule(a + (b - a) * (t / l), a + (b - a) * ((t + step) / l), w, c, round);
+      t += step; acc += step;
+      if (acc >= len - 1e-4f) { acc = 0; pen = !pen; }
+    }
+  }
+}
+void Ui::band(const std::vector<vec2>& pts, float w, const vec4& c) {
+  if (pts.size() < 2) return;
+  std::vector<vec2> L(pts.size()), R(pts.size());
+  for (size_t i = 0; i < pts.size(); i++) {
+    vec2 d0 = i > 0 ? pts[i] - pts[i - 1] : pts[1] - pts[0], d1 = i + 1 < pts.size() ? pts[i + 1] - pts[i] : d0;
+    float l0 = glm::length(d0), l1 = glm::length(d1);
+    if (l0 > 1e-5f) d0 /= l0;
+    if (l1 > 1e-5f) d1 /= l1; else d1 = d0;
+    vec2 n0(-d0.y, d0.x), n1(-d1.y, d1.x), m = n0 + n1;
+    float ml = glm::length(m);
+    m = ml > 1e-4f ? m / ml : n0;
+    float k = std::min(2.2f, 1.f / std::max(0.3f, glm::dot(m, n0)));
+    L[i] = pts[i] + m * (w * 0.5f * k); R[i] = pts[i] - m * (w * 0.5f * k);
+  }
+  for (size_t i = 1; i < pts.size(); i++) { triRaw(L[i - 1], L[i], R[i], c); triRaw(L[i - 1], R[i], R[i - 1], c); }
+}
+void Ui::polyAA(const std::vector<vec2>& p, const vec4& c) {
+  if (p.size() < 3) return;
+  for (size_t i = 1; i + 1 < p.size(); i++) triRaw(p[0], p[i], p[i + 1], c);
+  for (size_t i = 0; i < p.size(); i++) capsule(p[i], p[(i + 1) % p.size()], 1.f, c);
+}
+void Ui::arc(float cx, float cy, float r, float a0, float a1, float w, const vec4& c) {
+  int n = std::max(4, int(std::ceil(std::fabs(a1 - a0) * std::max(r, 2.f) / 3.f)));
+  vec2 prev(cx + std::cos(a0) * r, cy + std::sin(a0) * r);
+  for (int i = 1; i <= n; i++) {
+    float t = a0 + (a1 - a0) * float(i) / float(n);
+    vec2 q(cx + std::cos(t) * r, cy + std::sin(t) * r);
+    capsule(prev, q, w, c);
+    prev = q;
+  }
+}
+void Ui::boxShadow(float x, float y, float w, float h, float r, float dx, float dy, float blur, const vec4& c) {
+  if (!dropShadows || w <= 0 || h <= 0 || c.w <= 0) return;
+  x += dx; y += dy;
+  r = std::min(r, std::min(w, h) * 0.5f);
+  float hw = w * 0.5f, hh = h * 0.5f, m = blur + 1;
+  quad(x - m, y - m, x + w + m, y + h + m, std::max(blur, 0.5f), 0, std::max(blur, 0.5f), 0, c, -hw - m, -hh - m, hw + m, hh + m, hw, hh, r, 6, white_);
 }
 void Ui::tri(vec2 a, vec2 b, vec2 c, const vec4& col) { triRaw(a, b, c, col); }
 void Ui::poly(const std::vector<vec2>& p, const vec4& c) {
@@ -376,7 +496,7 @@ struct Rng {
 float n1(double v) { return float(std::round(v * 10) / 10); }   // (toFixed(1): the SVG path's precision)
 
 // menu.js brushSVG(seed, w, h): the outline, point for point (quadratic curves through the edge samples)
-Path strokePath(int seed, float w, float h) {
+Path brushStrokePath(int seed, float w, float h) {
   Path P;
   P.scale = std::min(16.f, 30000.f / std::max(w, h));
   Rng r(seed);
@@ -549,7 +669,7 @@ float Ui::brushTextEnd(float w, float h) {
 void Ui::brushStroke(float x, float y, float w, float h, const vec4& c, int seed, float vbW, float vbH, const Shadow* sh) {
   drawShape(hashMix(hashMix(hashMix(0x57B0ull, uint64_t(seed)), uint64_t(q4(vbW))), uint64_t(q4(vbH))), x, y, w, h, c, sh,
             [w, h, seed, vbW, vbH](std::vector<uint8_t>& px, int W, int H, float ox, float oy) {
-    Path P = strokePath(seed, vbW, vbH);
+    Path P = brushStrokePath(seed, vbW, vbH);
     P.raster(px, W, H, w / vbW, h / vbH, ox, oy);   // (preserveAspectRatio="none": stretched to the box)
   });
 }
@@ -700,9 +820,8 @@ void Ui::textShadow(float x, float y, float size, UiFont f, const std::string& s
   auto mix = [&](uint64_t v) { key = (key ^ v) * 1099511628211ull; };
   for (char ch : s) mix(uint64_t(uint8_t(ch)));
   mix(uint64_t(f) + 77); mix(uint64_t(std::lround(size * 8))); mix(uint64_t(std::lround(tracking * 1000))); mix(uint64_t(std::lround(blur * 4)));
-  int fileF = fileOf(f);
   float boldEm = FONT_PICK[size_t(f)].bold;
-  maskDraw(key, x + dx, y + dy, w, lh, blur * 0.5f, c, [this, s, size, f, tracking, baseOff, fileF, boldEm](std::vector<uint8_t>& px, int W, int H, float ox, float oy) {
+  maskDraw(key, x + dx, y + dy, w, lh, blur * 0.5f, c, [this, s, size, f, tracking, baseOff, boldEm](std::vector<uint8_t>& px, int W, int H, float ox, float oy) {
     float k = size / BAKE, pen = ox, bold = boldEm * kBoldAdv * size;
     std::vector<uint8_t> tmp;
     Pen prev;
@@ -735,6 +854,21 @@ void Ui::textShadow(float x, float y, float size, UiFont f, const std::string& s
       prev = {u, g->gi};
     }
   });
+}
+
+float Ui::textHalo(float x, float y, float size, UiFont f, const vec4& c, const vec4& halo, float radius, const std::string& s, UiAlign al, float tracking) {
+  if (halo.w > 0 && radius > 0.2f) {
+    // the outline as copies round two rings (the canvas's round-joined stroke)
+    int n = std::clamp(int(std::ceil(radius * 3.2f)), 8, 16);
+    for (int ring = 0; ring < (radius > 2.4f ? 2 : 1); ring++) {
+      float rr = ring ? radius * 0.5f : radius;
+      for (int i = 0; i < n; i++) {
+        float ang = (float(i) + (ring ? 0.5f : 0.f)) * 6.2831853f / float(n);
+        text(x + std::cos(ang) * rr, y + std::sin(ang) * rr, size, f, halo, s, al, tracking);
+      }
+    }
+  }
+  return text(x, y, size, f, c, s, al, tracking);
 }
 
 float Ui::textWrapped(float x, float y, float maxW, float size, UiFont f, const vec4& c, const std::string& s, float gap) {

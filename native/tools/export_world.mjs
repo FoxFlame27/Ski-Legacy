@@ -260,6 +260,11 @@ log('wrote', path.join(OUT, 'world.json.zst'), (writeData(OUT, 'world.json', JSO
   const r = spawnSync(process.execPath, [path.join(HERE, 'export_rocks.mjs')], { stdio: 'inherit' });
   if (r.status !== 0) { console.error('export_rocks.mjs failed'); process.exitCode = 1; }
 }
+// ---------------------------------------------------------------- the trail map's extra data (map.json)
+{
+  const r = spawnSync(process.execPath, [path.join(HERE, 'export_map.mjs')], { stdio: 'inherit' });
+  if (r.status !== 0) { console.error('export_map.mjs failed'); process.exitCode = 1; }
+}
 // ---------------------------------------------------------------- Phase 4: the UI fonts
 {
   const r = spawnSync(process.execPath, [path.join(HERE, 'export_fonts.mjs')], { stdio: 'inherit' });

@@ -431,6 +431,7 @@ int runGame(const GameOptions& opt) {
   // ---------------------------------------------------------------- (Phase 5) races, jobs, police, rescue, chalets, people, weather
   PlayData playData;
   if (const nlohmann::json* pj = resort.playData()) playData.load(*pj, resort.playBin());
+  tmap.setPlay(&playData);
   transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
   resort.releaseLoadData();
   Shapes shapes;
@@ -464,6 +465,7 @@ int runGame(const GameOptions& opt) {
   police.load(assets);
   rescue.load(assets);
   chalets.load(assets);
+  tmap.live = [&](TrailMap::Live& L) { L.ownChalet = chalets.owned() ? chalets.ownedHouse() : -1; };
   Snowmobiles sleds(pc);
   sleds.load(assets);
   sleds.place();
@@ -666,6 +668,8 @@ int runGame(const GameOptions& opt) {
   // (Phase 3) what you ride: a car (you drive), a ski bus, the Wolkenspitzbahn, the Legacy Express
   enum class Ride { None, Car, Bus, Rail, Express, Sled, Passenger } rideKind = Ride::None;   // (Passenger: in another player's car)
   int busDestSel = 0, expressDestSel = 0;
+  // the route picker's choice (ui/travel.js): the stop / station it was opened at and where to (taken by the boarding code)
+  struct TravelPick { int kind = 0, from = -1, to = -1; bool up = true; } travelPick;
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
   dvec3 rideCamPos{0};
@@ -1012,6 +1016,10 @@ int runGame(const GameOptions& opt) {
   if (off("cartest") && opt.autotest) at = AT::CarFlow;   // (debug: straight to the cars on the player's path)
   CarFlowTest carFlow;
   if (off("maptest") && opt.autotest) at = AT::Map;   // (debug: straight to the trail map)
+  // (debug: SKI_LEGACY_DEBUG=uitest: each UI screen in turn, a screenshot of it, then quit; <png>_ui_<name>.png)
+  const bool uiTest = off("uitest") && opt.autotest;
+  struct UiT { int step = 0, f = 0; } uiT;
+  if (uiTest) at = AT::Map;
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
   bool raceOk = true, jobOk = true, policeOk = true, chaletOk = true, weatherOk = true, sledOk = true;
@@ -1409,7 +1417,7 @@ int runGame(const GameOptions& opt) {
     }
 
     // (Phase 4) the pause menu (Esc / Menu / +), the trail map (M / View / Minus); menus and dialogs take the input
-    bool uiOpen = menus.isOpen() || tmap.isOpen();
+    bool uiOpen = menus.isOpen() || tmap.isOpen() || tmap.travelOpen();
     if (started && !uiOpen && wasUiOpen) { input.clear(); input.holdOff(); }   // (the key that closed it: not also in the game)
     if (started && !uiOpen) {
       // (in every state: on foot, skiing, driving, riding; build mode is left first, as a dialog or the map closes)
@@ -1750,6 +1758,12 @@ int runGame(const GameOptions& opt) {
       }
       if (mt.step < 12 && now - mt.t0 > 60) { fail("step " + std::to_string(mt.step) + " stuck"); next(); }
     }
+    if (uiTest && at == AT::Map) {
+      nav = UiNav{};
+      if (uiT.step == 4) { nav.mouse = vec2(float(renderer.width()) * 0.5f, float(renderer.height()) * 0.5f + 30 * ui.dpr()); nav.mouseMoved = true; }
+      else nav.mouse = vec2(-1);
+      if (uiT.step == 6 && (uiT.f == 3 || uiT.f == 5)) nav.down = true;
+    } else
     if (opt.autotest && at == AT::Map) {
       if (phaseFrame == 1 && rideKind == Ride::None) { player.setSkisOn(false); player.teleport(4, 34, PI); }   // (back in the village: the map opens on you)
       input.inject(Action::Map, phaseFrame == 2);
@@ -2199,6 +2213,7 @@ int runGame(const GameOptions& opt) {
     prompt.clear(); rideLine.clear();
     bool interact = input.takePressed(Action::Interact);
     bool nextItem = input.takePressed(Action::NextItem), prevItem = input.takePressed(Action::PrevItem);
+    (void)nextItem; (void)prevItem;   // (the stops' route picker takes [ ] itself now)
     bool fastHeld = !paused && input.down(Action::Jump);
     // (Phase 3) the vehicles move first, then the rider is seated on them
     double vdt = paused ? 0 : frameDt;
@@ -2353,11 +2368,19 @@ int runGame(const GameOptions& opt) {
       } else if (stop >= 0) {
         std::vector<int> dests = buses.destinations(stop);
         if (!dests.empty()) {
-          if (nextItem) busDestSel++;
-          if (prevItem) busDestSel--;
+          // E: the route picker (main.js openBusMap): every stop the bus drives to, on the map
           int k = ((busDestSel % int(dests.size())) + int(dests.size())) % int(dests.size());
-          prompt = "Ski bus to " + buses.stopName(dests[size_t(k)]) + "   ([ ] choose)";
-          if (interact && buses.board(stop, dests[size_t(k)])) {
+          prompt = "Take the ski bus";
+          if (interact && !(travelPick.kind == 1 && travelPick.from == stop)) {
+            interact = false;
+            TrailMap::Travel T = tmap.busTravel(stop, dests);
+            for (auto& d : T.dests) { int to = d.id; d.act = [&travelPick, stop, to] { travelPick = {1, stop, to, true}; }; if (to == dests[size_t(k)]) T.focus = int(&d - T.dests.data()); }
+            tmap.openTravel(std::move(T));
+            plat->setRelativeMouse(false);
+          }
+          bool picked = travelPick.kind == 1 && travelPick.from == stop;
+          if (picked) { for (size_t i = 0; i < dests.size(); i++) if (dests[i] == travelPick.to) { k = int(i); busDestSel = k; } travelPick = {}; }
+          if (picked && buses.board(stop, dests[size_t(k)])) {
             interact = false;
             rideKind = Ride::Bus;
             BusLine::RideState rs = buses.rideState();
@@ -2368,8 +2391,18 @@ int runGame(const GameOptions& opt) {
           }
         }
       } else if (rst >= 0) {
-        bool down = input.down(Action::Back);
-        prompt = railway.label(rst, down);
+        // E: the route picker (main.js openRailMap): every other station, uphill the fare or the day pass, downhill free
+        prompt = "Ride the " + transport.rail.name;
+        if (interact && !(travelPick.kind == 2 && travelPick.from == rst)) {
+          interact = false;
+          TrailMap::Travel T = tmap.railTravel(rst, save.hasPass(), save.money);
+          for (auto& d : T.dests) { bool up = d.id == 1; d.act = [&travelPick, rst, up] { travelPick = {2, rst, 0, up}; }; }
+          tmap.openTravel(std::move(T));
+          plat->setRelativeMouse(false);
+        }
+        bool railPicked = travelPick.kind == 2 && travelPick.from == rst;
+        bool down = railPicked && !travelPick.up;
+        if (railPicked) { travelPick = {}; interact = true; }
         if (interact && !railway.trainReady(rst, !down)) { interact = false; flash("No train at the platform \xC2\xB7 wait for the next one (multiplayer: on the shared timetable)", Hud::Flash::Bad); }
         bool railPaid = interact && (down || save.hasPass() || spend(transport.rail.price));
         if (railPaid && !railway.board(rst, !down) && !down && !save.hasPass()) save.money += transport.rail.price;   // (no train: refunded)
@@ -2383,12 +2416,24 @@ int runGame(const GameOptions& opt) {
           toast = transport.rail.name + (down ? std::string() : save.hasPass() ? std::string(" \xC2\xB7 Day pass") : " \xC2\xB7 -$" + std::to_string(transport.rail.price)); toastUntil = simTime + 2;
         }
       } else if (xst >= 0 && express.stationCount() > 1) {
-        if (nextItem) expressDestSel++;
-        if (prevItem) expressDestSel--;
+        // E: the route picker (main.js openExpress): every other station with its race, the fare or the day pass
         int n = int(express.stationCount()) - 1;
         int k = ((expressDestSel % n) + n) % n;
         int dest = k >= xst ? k + 1 : k;
-        prompt = transport.express.name + " to " + express.station(dest).name + "   ([ ] choose)";
+        prompt = "Ride the " + transport.express.name;
+        if (interact && !(travelPick.kind == 3 && travelPick.from == xst)) {
+          interact = false;
+          TrailMap::Travel T = tmap.expressTravel(xst, save.hasPass(), save.money);
+          for (auto& d : T.dests) {
+            int to = d.id;
+            d.act = [&travelPick, xst, to] { travelPick = {3, xst, to, true}; };
+            if (to == dest) T.focus = int(&d - T.dests.data());
+          }
+          tmap.openTravel(std::move(T));
+          plat->setRelativeMouse(false);
+        }
+        bool xPicked = travelPick.kind == 3 && travelPick.from == xst && travelPick.to >= 0;
+        if (xPicked) { dest = travelPick.to; expressDestSel = dest > xst ? dest - 1 : dest; travelPick = {}; interact = true; }
         if (interact && !express.trainReady(xst, dest)) { interact = false; flash("No train at the platform \xC2\xB7 wait for the next one (multiplayer: on the shared timetable)", Hud::Flash::Bad); }
         bool xPaid = interact && (save.hasPass() || spend(transport.express.price));
         if (xPaid && !express.board(xst, dest)) { if (!save.hasPass()) save.money += transport.express.price; }
@@ -2873,7 +2918,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !tmap.isOpen() && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal)
+    if (started && !tmap.isOpen() && !tmap.travelOpen() && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -2935,7 +2980,7 @@ int runGame(const GameOptions& opt) {
       if (mp.active()) mpv.hud(ui, mp, cam, renderer.width(), renderer.height(), u5, save.setting("nameTags", 1) != 0, mp.interior(), "Y", "N");
     }
     menus.loading.clear();
-    if (menus.isOpen() || tmap.isOpen()) {   // (menu.js: a tick moving, a click choosing)
+    if (menus.isOpen() || tmap.isOpen() || tmap.travelOpen()) {   // (menu.js: a tick moving, a click choosing)
       if (nav.up || nav.down || nav.left || nav.right || nav.tabPrev || nav.tabNext) audio.play("tick");
       if (nav.confirm || nav.click || nav.cancel) audio.play("click");
     }
@@ -2948,6 +2993,12 @@ int runGame(const GameOptions& opt) {
       dvec3 carPos = carIdx >= 0 ? dvec3(drive.parked[size_t(carIdx)].x, 0, drive.parked[size_t(carIdx)].z) : dvec3(0);
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
+    }
+    if (tmap.travelOpen()) {   // (the route picker: ui/travel.js)
+      // (autotest: the picker is driven like the menus: the highlighted stop is ridden to)
+      if (opt.autotest && !atRealKeys && !off("uitest")) tmap.travelChoose();
+      else tmap.frameTravel(ui, nav, input, frameDt, player.pos, player.heading);
+      if (!tmap.travelOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
     }
     if (fadeT >= 0) {   // (transition.js: a short fade to dark and back over a teleport)
       fadeT += frameDt;
@@ -3194,7 +3245,7 @@ int runGame(const GameOptions& opt) {
           if (okp) { player.setSkisOn(false); player.teleport(to.x, to.z, 0); SL_INFO("[autotest] %s: at (%.1f, %.1f), prompt next frame", what, to.x, to.z); }
         }
         input.inject(Action::Interact, phaseFrame == 3);
-        if (phaseFrame == 4 && rideKind != want) SL_WARN("[autotest] %s: could not board (prompt '%s')", what, prompt.c_str());
+        if (phaseFrame == 6 && rideKind != want) SL_WARN("[autotest] %s: could not board (prompt '%s')", what, prompt.c_str());
         if (rideKind == want) {
           TrainRide tr;
           dvec3 vp;
@@ -3226,6 +3277,27 @@ int runGame(const GameOptions& opt) {
           input.releaseInjected();
           at = at == AT::Bus ? AT::Rail : at == AT::Rail ? AT::Express : AT::Map;
           phaseFrame = 0; rideTest = 0; rideBoarded = false;
+        }
+      }
+      else if (at == AT::Map && uiTest) {
+        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express"};
+        const int nSteps = int(sizeof names / sizeof *names);
+        if (uiT.f == 0) {
+          if (uiT.step == 0) { player.setSkisOn(false); player.teleport(4, 34, PI); tmap.open(dvec3(4, 0, 34)); }
+          if (uiT.step == 1) tmap.setView(4, 34, 0.2);
+          if (uiT.step == 2) tmap.setView(4, 34, 0.05);
+          if (uiT.step == 3) { tmap.setView(4, 34, 0.75); tmap.showLegend(true); }
+          if (uiT.step == 4) tmap.showLegend(false);
+          if (uiT.step == 5) { tmap.close(); TrailMap::Travel T = tmap.busTravel(0, buses.destinations(0)); tmap.openTravel(std::move(T)); }
+          if (uiT.step == 7) { tmap.openTravel(tmap.railTravel(0, false, save.money)); }
+          if (uiT.step == 8) { tmap.openTravel(tmap.expressTravel(0, false, save.money)); }
+        }
+        uiT.f++;
+        if (uiT.f > 12 && !tmap.reliefReady() && uiT.f < 900) uiT.f = 12;
+        else if (uiT.f >= 30 && rendered) {
+          if (!opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string("ui_") + names[uiT.step]).c_str()));
+          uiT.step++; uiT.f = 0;
+          if (uiT.step >= nSteps) { tmap.closeTravel(); running = false; }
         }
       }
       else if (at == AT::Map) {

@@ -6,7 +6,7 @@
 // paint-brush silhouettes), lines; textured quads (the trail map's relief); text from signed-distance glyph atlases
 // baked with stb_truetype from the game's fonts (Barlow Condensed for headings / numbers, Inter for body text), so one
 // atlas serves every size. Axis-aligned quads (rects, rounded rects, glyphs, images) are clipped on the CPU to a clip
-// rectangle stack (scrolling lists); polygons are not clipped.
+// rectangle stack (scrolling lists); triangles, polygons and capsules too while no transform is pushed.
 #pragma once
 #include "core/math.h"
 #include "gfx/gfx.h"
@@ -71,6 +71,22 @@ public:
   void line(vec2 a, vec2 b, float width, const vec4& c);
   void polyline(const std::vector<vec2>& pts, float width, const vec4& c, bool dashed = false, float dash = 8);
   void image(gfx::Texture t, float x, float y, float w, float h, vec2 uv0 = vec2(0), vec2 uv1 = vec2(1), const vec4& tint = vec4(1));
+  /// an anti-aliased line with round (or butt) caps: a capsule in screen space (clipped to the clip rectangle)
+  void capsule(vec2 a, vec2 b, float width, const vec4& c, bool round = true);
+  /// a stroked path as the 2D canvas draws it (round joins and caps); closed: back to the first point
+  void strokePath(const std::vector<vec2>& pts, float width, const vec4& c, bool closed = false);
+  /// a dashed stroke (canvas setLineDash([on, off])); round: round caps on every dash, else butt
+  void dashPath(const std::vector<vec2>& pts, float width, const vec4& c, float on, float off, bool round = false);
+  /// a translucent band along a path (mitred, no overlap at the joints)
+  void band(const std::vector<vec2>& pts, float width, const vec4& c);
+  /// a convex polygon with anti-aliased edges
+  void polyAA(const std::vector<vec2>& convex, const vec4& c);
+  /// a circular arc stroke (canvas arc; angles in radians, clockwise from +x as on a canvas)
+  void arc(float cx, float cy, float r, float a0, float a1, float width, const vec4& c);
+  /// CSS box-shadow under a rounded box: offset, blur radius (px), colour
+  void boxShadow(float x, float y, float w, float h, float r, float dx, float dy, float blur, const vec4& c);
+  /// text with a halo behind it (canvas strokeText in `halo`, lineWidth = 2 * radius, then the fill)
+  float textHalo(float x, float y, float size, UiFont f, const vec4& c, const vec4& halo, float radius, const std::string& s, UiAlign a = UiAlign::Left, float tracking = 0);
   /// a drop shadow under a box (soft, a few stacked rounded rects)
   void shadow(float x, float y, float w, float h, float r, float spread, float alpha);
 
@@ -147,6 +163,7 @@ private:
   void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, const vec4& c,
             float lx0, float ly0, float lx1, float ly1, float hw, float hh, float rad, float mode, gfx::Texture tex);
   void triRaw(vec2 a, vec2 b, vec2 c, const vec4& col);
+  void emitConvex(Vert* v, int n);   // a convex polygon of final vertices, clipped to the clip rectangle (no transform)
   void useTexture(gfx::Texture t);
   const Glyph* glyph(UiFont f, uint32_t cp, int* usedFile) const;
   int fileOf(UiFont f) const;

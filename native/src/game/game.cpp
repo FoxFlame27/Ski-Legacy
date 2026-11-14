@@ -26,6 +26,7 @@
 #include "game/intro.h"
 #include "game/transition.h"
 #include "game/menus.h"
+#include "game/carconfigui.h"
 #include "game/popups.h"
 #include "game/shopui.h"
 #include "game/trailmap.h"
@@ -755,6 +756,7 @@ int runGame(const GameOptions& opt) {
   // the ski shop (main.js shopAction / outfitshop.js, simplified to one card dialog with tabs)
   Dialog shopDlg;
   ShopView shopView;
+  CarCfgView carCfg;   // the AUTOHAUS configurator (ui/carrental.js)
   Popups popups;   // the trick popup and the personal-best card (racehud.js trick() / best(), game/bests.js)
   auto openSkiShop = [&]() {
     Dialog d;
@@ -911,57 +913,110 @@ int runGame(const GameOptions& opt) {
     return p;
   };
   // buying a car at the Autohaus (carrental.js: your garage, up to GARAGE_MAX cars; it waits in your bay)
-  auto buyCar = [&](const std::string& model) -> int {
+  auto buyCar = [&](const std::string& model, const CarCfg* cfg = nullptr) -> int {
     const CarSpec* spec = transport.car(model);
     if (!spec) return -1;
+    // (the configurator's choices: the paint, the rims, a plate of your own; their extras on the price)
+    const std::string paint = cfg ? cfg->paint : std::string("white"), rims = cfg ? cfg->rims : std::string("orig");
+    const int64_t price = int64_t(spec->price) + (cfg ? carExtras(*cfg) : 0);
     if (int(save.garage.size()) >= GARAGE_MAX) { flash("Your garage is full (" + std::to_string(GARAGE_MAX) + " cars): sell one first", Hud::Flash::Bad); return -1; }
     if (mp.active()) {   // (Phase 6, AUTOHAUS: the server prices it, issues a plate nobody has; your garage from it)
-      mp.buy("car", {{"cfg", {{"id", model}, {"paint", "white"}, {"interior", "orig"}, {"rims", "orig"}}}}, [&, model](bool ok, const nlohmann::json& d) {
+      nlohmann::json jc = {{"id", model}, {"paint", paint}, {"interior", "orig"}, {"rims", rims}};
+      if (cfg && cfg->custom) { jc["plate"] = cfg->plate; jc["custom"] = true; }
+      mp.buy("car", {{"cfg", jc}}, [&, model](bool ok, const nlohmann::json& d) {
         if (!ok || !d.contains("car")) return;
         Save::Car c;
         c.id = model; c.plate = d["car"].value("plate", std::string()); c.price = int(d["car"].value("price", 0)); c.paint = d["car"].value("paint", std::string("white"));
         save.garage.insert(save.garage.begin(), c);
         save.rentalPlate = c.plate;
         if (d.contains("cars")) mp.profile["cars"] = d["cars"];
-        drive.addOwned(model, c.plate, 0);
+        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.parked[size_t(oi)].paint = paintColor(c.paint);
         const CarSpec* sp2 = transport.car(model);
         flash("Bought: " + (sp2 ? sp2->label : model) + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
       });
       return -1;
     }
-    if (!spend(int64_t(spec->price))) return -1;
+    if (!spend(price)) return -1;
     Save::Car c;
-    c.id = model; c.plate = newPlate(); c.price = int(spec->price);
+    c.id = model; c.plate = cfg && !cfg->plate.empty() ? cfg->plate : newPlate(); c.price = int(price);
+    if (cfg) { c.paint = paint; c.custom = cfg->custom; }
     save.garage.push_back(c);
     int idx = drive.addOwned(model, c.plate, 0);
+    if (cfg && idx >= 0) drive.parked[size_t(idx)].paint = paintColor(paint);
     save.write(*plat);
     flash("Bought: " + spec->label + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
     return idx;
   };
+  // selling a car back (half what you paid): MY CARS at the counter and in the configurator
+  std::function<void()> garageChanged;
+  auto sellCar = [&](const std::string& plate) {
+    int value = 0;
+    for (const Save::Car& c : save.garage) if (c.plate == plate) value = int(std::round(c.price * SELL_SHARE / 50.0)) * 50;
+    if (mp.active()) {   // (Phase 6: the server buys it back: half what you paid)
+      for (const auto& e : drive.parked) if (e.owned && e.plate == plate && e.driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
+      mp.carSell(plate, [&, plate](bool ok, const nlohmann::json& d) {
+        if (!ok) return;
+        drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [&](const Drive::Parked& e) { return e.owned && e.plate == plate; }), drive.parked.end());
+        save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
+        if (!save.garage.empty() && save.rentalPlate == plate) save.rentalPlate = save.garage[0].plate;
+        flash("Sold for " + fmtM(d.value("refund", 0)), Hud::Flash::Gold);
+        menus.refreshDialog();
+      });
+      return;
+    }
+    for (size_t i = 0; i < drive.parked.size(); i++)
+      if (drive.parked[i].owned && drive.parked[i].plate == plate) {
+        if (drive.parked[i].driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
+        drive.parked.erase(drive.parked.begin() + long(i));
+        break;
+      }
+    save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
+    save.earn(value);
+    save.write(*plat);
+    flash("Sold for " + fmtM(value), Hud::Flash::Gold);
+  };
+  // E at a car for sale: the AUTOHAUS configurator (ui/carrental.js: PAINT, WHEELS, PLATE, SUMMARY, then BUY). Only
+  // the UI layer here: carCfg.preview / carCfg.drag are free for the walk-in showroom's live car.
+  auto openCarConfig = [&](const std::string& model, int step) {
+    const CarSpec* spec = transport.car(model);
+    if (!spec) return;
+    carCfg = CarCfgView();
+    carCfg.carLabel = spec->label; carCfg.carPrice = int(spec->price); carCfg.step = step;
+    carCfg.cfg.id = model; carCfg.cfg.plate = randomCarPlate(unsigned(plat->timeSeconds() * 1000) ^ unsigned(save.garage.size() * 7919));
+    carCfg.garageMax = GARAGE_MAX; carCfg.wreckFee = int(wreckFee()); carCfg.repairFull = REPAIR_FEE; carCfg.towFee = int(wreckFee()) - REPAIR_FEE;
+    carCfg.interactKey = prompts::K(input, Action::Interact);
+    carCfg.refresh = [&, model](CarCfgView& v) {
+      v.money = save.money; v.owned = 0; v.garage.clear();
+      for (const Save::Car& c : save.garage) {
+        const CarSpec* cs = transport.car(c.id);
+        CarCfgView::Mine m;
+        m.id = c.id; m.plate = c.plate; m.label = cs ? cs->label : c.id; m.paint = c.paint; m.value = int(std::round(c.price * SELL_SHARE / 50.0)) * 50; m.out = c.plate == save.rentalPlate;
+        if (c.id == model) v.owned++;
+        v.garage.push_back(m);
+      }
+      std::stable_partition(v.garage.begin(), v.garage.end(), [&](const CarCfgView::Mine& m) { return m.id == model; });   // (yours of this model first)
+    };
+    carCfg.buy = [&, model](const CarCfg& c, int) { CarCfg cc = c; buyCar(model, &cc); };
+    carCfg.sell = [&](const std::string& plate) { sellCar(plate); };
+    carCfg.takeOut = [&](const std::string& plate) {
+      if (mp.active()) mp.carSwitch(plate, [&, plate](bool ok, const nlohmann::json&) { if (ok) save.rentalPlate = plate; });
+      else { save.rentalPlate = plate; save.write(*plat); }
+      flash(plate + " \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Good);
+    };
+    carCfg.flashBad = [&](const std::string& m) { flash(m, Hud::Flash::Bad); };
+    carCfg.sound = [&](const char* snd) { audio.play(snd); };
+    menus.openCustom([&](const UiNav& nv, double dt, double now) {
+      if (!frameCarConfig(ui, nv, input, carCfg, dt, now)) { if (menus.customOpen("carconfig")) menus.close(); return; }
+      menus.customFocus = carCfg.step == 3 && carCfg.actLabel.rfind("BUY", 0) == 0 ? std::string("Buy it") : carCfg.actLabel;
+    }, "carconfig");
+    menus.customFocusLabel = [&](const std::string& label) { if (label != "Buy it") return false; carCfg.step = 3; return true; };
+  };
   auto openCarSale = [&](int idx) {
     if (idx < 0 || size_t(idx) >= drive.parked.size()) return;
-    std::string model = drive.parked[size_t(idx)].name;
-    Dialog d;
-    d.kicker = "Autohaus \xC2\xB7 Legacy Village";
-    d.title = drive.parked[size_t(idx)].spec->label;
-    d.rebuild = [&, model](Dialog& D) {
-      const CarSpec* spec = transport.car(model);
-      D.say = (spec ? spec->label : model) + " \xC2\xB7 yours for good: it waits in your bay at the Autohaus car park, " + prompts::K(input, Action::Interact) +
-              " to drive. Dents: the Werkstatt next door, priced by the damage. A wreck: " + fmtM(wreckFee()) + " (tow + repair).";
-      D.options.clear();
-      DialogOption b;
-      // (ui/carrental.js: NOT ENOUGH MONEY / GARAGE FULL on the buy button)
-      bool broke = spec && save.money < int64_t(spec->price), full = int(save.garage.size()) >= GARAGE_MAX;
-      b.label = full ? "Garage full" : broke ? "Not enough money" : "Buy it";
-      b.sub = broke && !full ? "You have " + fmtM(save.money) + " \xC2\xB7 the job boards and the races pay"
-                             : std::to_string(save.garage.size()) + " of " + std::to_string(GARAGE_MAX) + " cars in your garage";
-      b.price = spec ? int(spec->price) : 0;
-      b.disabled = !spec || save.money < int64_t(spec->price) || int(save.garage.size()) >= GARAGE_MAX;
-      b.act = [&, model]() { buyCar(model); };
-      DialogOption n; n.label = "Not now"; n.secondary = true;
-      D.options = {b, n};
-    };
-    menus.openDialog(d);
+    const std::string model = drive.parked[size_t(idx)].name;
+    int mine = 0;
+    for (const Save::Car& c : save.garage) mine += c.id == model;
+    openCarConfig(model, mine ? 3 : 0);   // (a model you own opens on the summary: MY CARS)
   };
   auto garageEntry = [&](const std::string& plate) -> Save::Car* { for (auto& c : save.garage) if (c.plate == plate) return &c; return nullptr; };
   // MY CARS (the Autohaus counter): your garage, sell one back for half what you paid
@@ -983,30 +1038,7 @@ int runGame(const GameOptions& opt) {
         for (const auto& e : drive.parked) if (e.owned && e.plate == c.plate && e.impoundDay > save.day) o.sub += " \xC2\xB7 IMPOUNDED: available tomorrow (the fee is paid)";
         o.state = "Sell " + fmtM(value);
         std::string plate = c.plate;
-        o.act = [&, plate, value]() {
-          if (mp.active()) {   // (Phase 6: the server buys it back: half what you paid)
-            for (const auto& e : drive.parked) if (e.owned && e.plate == plate && e.driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
-            mp.carSell(plate, [&, plate](bool ok, const nlohmann::json& d) {
-              if (!ok) return;
-              drive.parked.erase(std::remove_if(drive.parked.begin(), drive.parked.end(), [&](const Drive::Parked& e) { return e.owned && e.plate == plate; }), drive.parked.end());
-              save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
-              if (!save.garage.empty() && save.rentalPlate == plate) save.rentalPlate = save.garage[0].plate;
-              flash("Sold for " + fmtM(d.value("refund", 0)), Hud::Flash::Gold);
-              menus.refreshDialog();
-            });
-            return;
-          }
-          for (size_t i = 0; i < drive.parked.size(); i++)
-            if (drive.parked[i].owned && drive.parked[i].plate == plate) {
-              if (drive.parked[i].driving) { flash("Get out of it first", Hud::Flash::Bad); return; }
-              drive.parked.erase(drive.parked.begin() + long(i));
-              break;
-            }
-          save.garage.erase(std::remove_if(save.garage.begin(), save.garage.end(), [&](const Save::Car& g) { return g.plate == plate; }), save.garage.end());
-          save.earn(value);
-          save.write(*plat);
-          flash("Sold for " + fmtM(value), Hud::Flash::Gold);
-        };
+        o.act = [&, plate]() { sellCar(plate); };
         D.options.push_back(o);
       }
       DialogOption n; n.label = "Close"; n.secondary = true;
@@ -1544,7 +1576,7 @@ int runGame(const GameOptions& opt) {
     if (uiOpen || !started) input.clear();
     wasUiOpen = uiOpen || !started;
     // text input on only while a text field has the focus (the multiplayer name, the chat)
-    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
+    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()) || (carCfg.typing && menus.customOpen("carconfig")); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
     paused = started && menus.isOpen() && !menus.dialogOpen();
 
     // (Phase 4 autotest) the main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> a
@@ -3183,7 +3215,7 @@ int runGame(const GameOptions& opt) {
         if (races.active()) { hf.waypoint = false; hf.inRace = true; }
         hf.hideHint = police.wanted() || menus.dialogOpen();   // (under a card dialog the controls card would show through its paper)
         hf.hidePrompt = menus.dialogOpen();
-        hf.onlyFlash = menus.customOpen("shop");
+        hf.onlyFlash = menus.customOpen("shop") || menus.customOpen("carconfig");
       }
       hud.draw(ui, hf, save, input, simTime);
       float u5 = std::clamp(std::min(float(renderer.height()) / 800.f, float(renderer.width()) / 1280.f), 0.55f, 2.2f) * float(save.setting("hudScale", 1));

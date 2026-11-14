@@ -99,6 +99,9 @@ public:
   Travel busTravel(int from, const std::vector<int>& dests) const;
   /// the Wolkenspitzbahn from station `st`: every other station, up (the fare / the day pass) or down (free)
   Travel railTravel(int st, bool pass, long long money) const;
+  /// a gondola's mid-station (lift index in Lifts::lines()): the line with its three stations, up (the price / the day
+  /// pass) or down (free); each destination's id: 1 up, 0 down
+  Travel liftTravel(int line, bool pass, long long money) const;
   /// the Legacy Express from station `st`: every other station with its race; the races first, nearest first
   Travel expressTravel(int st, bool pass, long long money) const;
   void openTravel(Travel t);

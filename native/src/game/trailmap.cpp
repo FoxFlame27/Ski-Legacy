@@ -115,7 +115,7 @@ struct Icon {
 struct TrailMap::Impl {
   // ---------------------------------------------------------------- data
   struct Piste { std::string name; int diff = 1, number = 0; bool lane = false; std::vector<dvec2> pts; dvec2 lo{0}, hi{0}; };
-  struct Lift { std::string name; bool gondola = true; dvec2 bottom{0}, top{0}; bool hasMid = false; dvec2 mid{0}; std::string midName; };
+  struct Lift { std::string name; bool gondola = true; dvec2 bottom{0}, top{0}; bool hasMid = false; dvec2 mid{0}; std::string midName, topName, bottomName; int price = 0; double L = 1, midU = 0, speed = 6; };
   struct RoadM { std::string name, what; int kind = 0; double length = 0; std::vector<dvec2> pts; dvec2 lo{0}, hi{0}; };
   struct RoadLabel { std::string name; double length = 0; bool scenic = false, minor = false; std::vector<dvec3> pts; };
   struct TunnelM { std::string name, road; double length = 0; std::vector<dvec2> pts; glm::dvec4 ends[2]; };
@@ -1530,6 +1530,7 @@ void TrailMap::load(platform::Platform& p, const AssetPaths& paths, const World&
     Impl::Lift L;
     L.name = l.name; L.gondola = l.gondola; L.bottom = dvec2(l.bottom.x, l.bottom.z); L.top = dvec2(l.top.x, l.top.z);
     L.hasMid = l.hasMid; L.mid = dvec2(l.mid.x, l.mid.z); L.midName = l.mid.name;
+    L.topName = l.topName; L.bottomName = l.bottomName; L.price = l.price; L.L = l.L; L.midU = l.mid.u; L.speed = std::max(1.0, l.cfg.speed);
     M.lifts.push_back(std::move(L));
   }
   // the roads as the map draws them (map.json, tools/export_map.mjs); without it: the network's centre lines, unnamed
@@ -2187,6 +2188,32 @@ TrailMap::Travel TrailMap::railTravel(int st, bool pass, long long money) const 
     d.id = up ? 1 : 0;   // (the direction: 1 up, 0 down)
     T.dests.push_back(std::move(d));
   }
+  T.goLabel = [](const TravelDest& d) { return "Ride to " + stripSuffix(d.name, {" Gondola"}); };
+  return T;
+}
+
+TrailMap::Travel TrailMap::liftTravel(int line, bool pass, long long money) const {
+  const Impl& M = *m_;
+  Travel T;
+  T.lineStyle = 2;
+  if (line < 0 || size_t(line) >= M.lifts.size() || !M.lifts[size_t(line)].hasMid) return T;
+  const Impl::Lift& l = M.lifts[size_t(line)];
+  auto cap = [](std::string t) { if (!t.empty()) t[0] = char(std::toupper(static_cast<unsigned char>(t[0]))); return t; };
+  const std::string base = stripSuffix(l.name, {" Gondola"});
+  const std::string topN = cap(l.topName.empty() ? base + " summit" : l.topName), botN = cap(l.bottomName.empty() ? base + " base" : l.bottomName);
+  T.title = l.name; T.kicker = "MID-STATION"; T.subPre = "From "; T.subBold = l.midName; T.subPost = " \xC2\xB7 up or down?";
+  T.lines.push_back({dvec3(l.bottom.x, l.bottom.y, 0), dvec3(l.top.x, l.top.y, 0)});
+  T.stops = {{botN, l.bottom.x, l.bottom.y, ""}, {l.midName, l.mid.x, l.mid.y, ""}, {topN, l.top.x, l.top.y, ""}};
+  T.from = {l.midName, l.mid.x, l.mid.y, ""};
+  const int price = l.price > 0 ? l.price : 50;
+  TravelDest up;
+  up.name = topN; up.x = l.top.x; up.z = l.top.y; up.id = 1; up.path = {l.mid, l.top};
+  up.meta = fmtMin((l.L - l.midU) / l.speed / 60) + " \xC2\xB7 up";
+  if (pass) up.tag = "DAY PASS"; else { up.price = price; up.shortMoney = money < price; }
+  TravelDest down;
+  down.name = botN; down.x = l.bottom.x; down.z = l.bottom.y; down.id = 0; down.path = {l.mid, l.bottom};
+  down.meta = fmtMin(l.midU / l.speed / 60) + " \xC2\xB7 down"; down.tag = "FREE";
+  T.dests = {up, down};
   T.goLabel = [](const TravelDest& d) { return "Ride to " + stripSuffix(d.name, {" Gondola"}); };
   return T;
 }

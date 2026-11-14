@@ -26,6 +26,7 @@
 #include "game/intro.h"
 #include "game/transition.h"
 #include "game/menus.h"
+#include "game/popups.h"
 #include "game/shopui.h"
 #include "game/trailmap.h"
 #include "game/uitest.h"
@@ -754,6 +755,7 @@ int runGame(const GameOptions& opt) {
   // the ski shop (main.js shopAction / outfitshop.js, simplified to one card dialog with tabs)
   Dialog shopDlg;
   ShopView shopView;
+  Popups popups;   // the trick popup and the personal-best card (racehud.js trick() / best(), game/bests.js)
   auto openSkiShop = [&]() {
     Dialog d;
     d.kicker = "Ski Rental & Shop \xC2\xB7 Legacy Village";
@@ -1111,7 +1113,7 @@ int runGame(const GameOptions& opt) {
   struct UiT { int step = 0, f = 0; } uiT;
   if (uiTest) at = AT::Map;
   // (SKI_LEGACY_UISTEP=<name>: from that sample screen on; SKI_LEGACY_UIONLY=1: just that one)
-  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 9 + int(i);
+  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 10 + int(i);
   const bool uiOnly = std::getenv("SKI_LEGACY_UIONLY") != nullptr;
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
@@ -1153,6 +1155,21 @@ int runGame(const GameOptions& opt) {
     if (!opt.autotest) plat->setRelativeMouse(true);
     flash(save.skis.empty() ? "Welcome to Legacy Village \xC2\xB7 buy skis at the ski shop" : "Welcome back to Legacy Village", Hud::Flash::Good);
   };
+  // the trail map's live markers (trailmap.js markers()): the patrol cars and the police helicopter while you are
+  // wanted, the other players, the job's target, your cars (the one you drive / parked; grey while impounded)
+  tmap.live = [&](TrailMap::Live& L) {
+    L.ownChalet = chalets.owned() ? chalets.ownedHouse() : -1;
+    for (const Police::MapMark& m : police.mapMarks()) { TrailMap::Marker k; k.x = m.x; k.z = m.z; k.kind = m.heli ? "heli" : "police"; k.flag = m.sees; L.police.push_back(k); }
+    if (mp.active()) for (const auto& [pid, r] : mp.players) if (r.ok && r.interior.empty()) { TrailMap::Marker k; k.x = r.pos.x; k.z = r.pos.z; k.yaw = r.yaw; k.label = r.name; k.kind = "player"; L.players.push_back(k); }
+    if (oddJobs.active() && tmap.mark.on) { TrailMap::Marker k; k.x = tmap.mark.x; k.z = tmap.mark.z; k.kind = "target"; k.label = tmap.mark.label; k.what = "Your job \xC2\xB7 follow the arrow"; L.jobs.push_back(k); }
+    for (const auto& e : drive.parked) if (e.owned && !e.plate.empty()) {
+      TrailMap::Marker k; k.x = e.x; k.z = e.z; k.kind = e.impoundDay > save.day ? "impound" : "car";
+      k.label = (e.spec ? e.spec->label : std::string("Your car")) + (e.impoundDay > save.day ? " \xC2\xB7 impounded" : "");
+      L.mine.push_back(k);
+    }
+  };
+  // (the layer switches are remembered: trailmap.js LAYER_KEY)
+  { std::string lay = save.settingStr("mapLayers", ""); for (int i = 0; i < 7 && i < int(lay.size()); i++) tmap.setLayer(i, lay[size_t(i)] != '0'); }
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
   menus.hooks.mainMenu = [&]() { save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
@@ -2282,7 +2299,7 @@ int runGame(const GameOptions& opt) {
           if (e.amount > 0) audio.play("trick", e.amount);
           bool bailed = tr.landed == TrickResult::Landed::Crash;
           std::string line = tr.name + (bailed ? " \xC2\xB7 Bailed" : " \xC2\xB7 +" + std::to_string(tr.points) + (tr.landed == TrickResult::Landed::Sketchy ? " \xC2\xB7 Sketchy" : " \xC2\xB7 Clean"));
-          flash(line, bailed ? Hud::Flash::Bad : tr.landed == TrickResult::Landed::Clean ? Hud::Flash::Gold : Hud::Flash::Good);
+          popups.trick(tr.name, tr.points, tr.total, bailed ? 2 : tr.landed == TrickResult::Landed::Sketchy ? 1 : 0, simTime);
           if (opt.autotest) SL_INFO("[autotest] trick: %s", line.c_str());
           break;
         }
@@ -2337,6 +2354,9 @@ int runGame(const GameOptions& opt) {
       double dd = player.distance - lastDist;
       if (dd > 0 && dd < 50) save.stats.distance += dd;
       lastDist = player.distance;
+      // (bests.js: a new top speed, the longest jump, the biggest air, distance milestones: one card each, a soft chime)
+      if (popups.updateBests(frameDt, player.mode == PlayerMode::Ski && rideKind == Ride::None, player.speed(), player.air, player.airTime, player.pos,
+                             player.lastTrick.landed == TrickResult::Landed::Crash, save, races.active(), simTime)) audio.play("gate");
       if (player.speed() > save.stats.topSpeed && player.speed() < 70) save.stats.topSpeed = player.speed();
     }
 
@@ -2650,7 +2670,19 @@ int runGame(const GameOptions& opt) {
         prompt = stationLabel(st);
         if (st.mid) prompt += "  (" + std::string(input.down(Action::Back) ? "down" : "up") + ")";
         // a mid-station serves both ways: up by default, down while holding back (S)
-        if (interact) boardLift(st, st.mid ? !input.down(Action::Back) : st.up);
+        // a gondola's mid-station: the route picker (main.js openLiftMap): up (the price / the day pass) or down (free)
+        if (st.mid && travelPick.kind == 4) { bool up = travelPick.up; travelPick = {}; boardLift(st, up); }
+        else if (st.mid && interact) {
+          int li = int(st.line - lifts.lines().data());
+          TrailMap::Travel T = tmap.liftTravel(li, save.hasPass(), save.money);
+          if (T.dests.empty()) boardLift(st, !input.down(Action::Back));
+          else {
+            for (auto& d : T.dests) { bool up = d.id == 1; d.act = [&travelPick, up] { travelPick = {4, 0, 0, up}; }; }
+            tmap.openTravel(std::move(T));
+            plat->setRelativeMouse(false);
+          }
+        }
+        else if (interact) boardLift(st, st.up);
       }
     }
     if (!opt.autotest && !paused) {
@@ -3098,7 +3130,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 9) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
+    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 10) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -3156,6 +3188,7 @@ int runGame(const GameOptions& opt) {
       hud.draw(ui, hf, save, input, simTime);
       float u5 = std::clamp(std::min(float(renderer.height()) / 800.f, float(renderer.width()) / 1280.f), 0.55f, 2.2f) * float(save.setting("hudScale", 1));
       races.hud(ui, u5);
+      popups.draw(ui, races.active(), simTime);
       oddJobs.hud(ui, u5);
       police.hud(ui, u5);
       rescue.hud(ui, u5);
@@ -3176,8 +3209,9 @@ int runGame(const GameOptions& opt) {
       dvec3 carPos = carIdx >= 0 ? dvec3(drive.parked[size_t(carIdx)].x, 0, drive.parked[size_t(carIdx)].z) : dvec3(0);
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
+      { std::string lay; for (int i = 0; i < 7; i++) lay += tmap.layer(i) ? '1' : '0'; if (lay != save.settingStr("mapLayers", "1111111")) save.set("mapLayers", lay); }
     }
-    if (uiTest && uiT.step >= 9 && uiT.step - 9 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 9)], uiT.f * frameDt, plat->timeSeconds());
+    if (uiTest && uiT.step >= 10 && uiT.step - 10 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 10)], uiT.f * frameDt, plat->timeSeconds());
     if (tmap.travelOpen()) {   // (the route picker: ui/travel.js)
       // (autotest: the picker is driven like the menus: the highlighted stop is ridden to)
       if (opt.autotest && !atRealKeys && !off("uitest")) tmap.travelChoose();
@@ -3473,7 +3507,7 @@ int runGame(const GameOptions& opt) {
         }
       }
       else if (at == AT::Map && uiTest) {
-        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express"};
+        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express", "travel_lift"};
         const int nSteps = int(sizeof names / sizeof *names);
         if (uiT.f == 0) {
           if (uiT.step == 0) { player.setSkisOn(false); player.teleport(4, 34, PI); tmap.open(dvec3(4, 0, 34)); }
@@ -3484,6 +3518,7 @@ int runGame(const GameOptions& opt) {
           if (uiT.step == 5) { tmap.close(); TrailMap::Travel T = tmap.busTravel(0, buses.destinations(0)); tmap.openTravel(std::move(T)); }
           if (uiT.step == 7) { tmap.openTravel(tmap.railTravel(0, false, save.money)); }
           if (uiT.step == 8) { tmap.openTravel(tmap.expressTravel(0, false, save.money)); }
+          if (uiT.step == 9) { int li = 0; for (size_t i = 0; i < lifts.lines().size(); i++) if (lifts.lines()[i].hasMid) { li = int(i); break; } tmap.openTravel(tmap.liftTravel(li, false, save.money)); }
         }
         if (uiT.f == 0 && uiT.step >= nSteps && uiT.step - nSteps < int(uiTestScreens().size())) {
           // the menus' own screens and a card dialog, opened for their shot

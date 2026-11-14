@@ -2,6 +2,7 @@
 // from sample states so they can be compared with the web game's screenshots without playing up to them.
 #include "game/uitest.h"
 #include "game/racehud.h"
+#include "game/popups.h"
 #include "game/policehud.h"
 #include "game/buildmenu.h"
 #include "game/shopui.h"
@@ -11,7 +12,7 @@
 namespace sl {
 
 const std::vector<std::string>& uiTestScreens() {
-  static const std::vector<std::string> names = {"racehud", "race_count3", "race_go", "race_notice", "race_third", "race_results", "race_results15", "race_results_dnf", "police_pursuit", "police_pullover", "police_search", "police_slam", "police_busted", "build", "build_deny", "shop", "shop_broke", "jobboard", "jobboard_detail", "jobboard_current", "racestand", "dialog", "dialog_long", "menu_pause", "menu_controls", "menu_stats", "menu_settings", "menu_play", "menu_mp"};
+  static const std::vector<std::string> names = {"racehud", "race_count3", "race_go", "race_notice", "race_third", "race_podium", "race_sting", "race_replay", "race_trick", "race_trick_free", "race_results", "race_results15", "race_results_dnf", "police_pursuit", "police_pullover", "police_search", "police_slam", "police_busted", "build", "build_deny", "shop", "shop_broke", "jobboard", "jobboard_detail", "jobboard_current", "racestand", "dialog", "dialog_long", "menu_pause", "menu_controls", "menu_stats", "menu_settings", "menu_play", "menu_mp"};
   return names;
 }
 
@@ -42,6 +43,30 @@ void uiTestDraw(Ui& ui, const UiNav& nav, const Input& in, const std::string& na
     h.position = 14; h.standings.clear();
     for (int i = 0; i < 15; i++) h.standings.push_back({i == 13 ? "You" : "Racer " + std::to_string(i + 1), i * 1.37, i == 13});
     drawRaceHud(ui, h);
+  } else if (name == "race_trick" || name == "race_trick_free") {
+    static Popups pp;
+    static std::string forName;
+    if (forName != name) {
+      forName = name;
+      pp = Popups();
+      if (name == "race_trick") pp.trick("360 Mute Grab", 1250, 4300, 0, now - 0.7);
+      else { pp.trick("Switch Double Backflip Japan Grab", 0, 0, 2, now - 0.7); pp.best("PERSONAL BEST", "Top speed", "112", "KM/H", now - 0.7); }
+    }
+    if (name == "race_trick") { RaceHudState h = hudState(); h.standings.clear(); drawRaceHud(ui, h); }
+    pp.draw(ui, name == "race_trick", now);
+  } else if (name == "race_podium") {
+    RaceHudState h = hudState();
+    h.time = 70.5; h.penalty = 0;
+    h.third.on = true; h.third.bars = false; h.third.kicker = "PODIUM \xC2\xB7 HARD"; h.third.title = "Legacy World Downhill"; h.third.age = 2; h.third.left = 9;
+    h.third.rows = {{1, "L. Meier", "1:09.32", false}, {2, "A. Brunner", "1:09.74", false}, {3, "You", "1:10.50", true}};
+    drawRaceHud(ui, h);
+  } else if (name == "race_sting") {
+    drawStinger(ui, "REPLAY", 0.42);
+  } else if (name == "race_replay") {
+    RaceHudState h;
+    h.third.on = true; h.third.age = 3; h.third.left = 99; h.third.title = ""; h.shownFor = -1;
+    ui.rect(0, 0, float(ui.width()), 84 * ui.cssU(), ui_color::hex(0x040a16)); ui.rect(0, float(ui.height()) - 84 * ui.cssU(), float(ui.width()), 84 * ui.cssU(), ui_color::hex(0x040a16));
+    drawReplayBadge(ui, "1:09.32", true, 2, now);
   } else if (name == "race_third") {
     RaceHudState h = hudState();
     h.time = 0; h.penalty = 0; h.standings.clear(); h.position = 0;

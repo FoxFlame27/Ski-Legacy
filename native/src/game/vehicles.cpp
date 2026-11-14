@@ -88,6 +88,18 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
       auto& rm = *t.railModels;
       if (rm.contains("cabin")) rail.cabin = resort.transportModel(rm["cabin"]);
       if (rm.contains("cabinExpress")) rail.cabinExpress = resort.transportModel(rm["cabinExpress"]);
+      // (train.js glassIn: the panes seen from inside are nearly clear, 13 % of a pale blue. The renderer's glass (a smooth
+      // blended surface) mirrors the sky at full strength and the sun lights the pane's own colour: from a seat on the
+      // sunny side the windows went milky. From inside they are a faint tint only: no mirror, a quarter of the colour)
+      for (Model* cm : {rail.cabin.get(), rail.cabinExpress.get()})
+        if (cm) for (Material& q : cm->materials) if (q.alpha == Material::Alpha::Blend && q.baseColor.w < 0.2f) { q.roughness = 0.6f; q.baseColor = vec4(vec3(q.baseColor) * 0.25f, q.baseColor.w); }
+      // (the cabins' light strips: their own emission, brighter at night and in a tunnel; setCabinLight)
+      for (Model* cm : {rail.cabin.get(), rail.cabinExpress.get()})
+        if (cm) for (size_t i = 0; i < cm->materials.size(); i++) {
+          const Material& q = cm->materials[i];
+          if (q.alpha != Material::Alpha::Blend && !q.emissiveTex && q.emissive.x + q.emissive.y + q.emissive.z > 0.01f) cabinMats_.push_back({cm, i, q.emissive});
+        }
+      setCabinLight(0.3f);
       if (rm.contains("frame")) rail.frame = resort.transportModel(rm["frame"]);
       if (rm.contains("bogie")) rail.bogie = resort.transportModel(rm["bogie"]);
       if (rm.contains("lo")) rail.lo = resort.transportModel(rm["lo"]);
@@ -125,6 +137,12 @@ const VehicleModel* VehicleModels::full(const std::string& baseName) {
   full_[baseName] = vm;
   auto& r = full_[baseName];
   return r.ok() ? &r : nullptr;
+}
+
+void VehicleModels::setCabinLight(float k) {
+  if (std::fabs(k - cabinK_) < 0.004f) return;
+  cabinK_ = k;
+  for (const CabinMat& c : cabinMats_) c.model->materials[c.i].emissive = c.lamp * (0.8f + 3.2f * k);
 }
 
 const VehicleModel* VehicleModels::dressed(const VehicleModel* vm, int finish, const std::string& rims) const {

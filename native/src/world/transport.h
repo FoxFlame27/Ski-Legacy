@@ -162,6 +162,12 @@ public:
     bool hasBody = false;
     vec3 seat{0.6f, 1.5f, 5.4f};
     double seatYaw = 0;
+    // (railway.js seatPassengers, exported) every seat of a car (x, y, z, the way it faces) and the skiers sat on them,
+    // per car of the train you board
+    std::vector<vec4> seats;
+    struct Pax { int seat = 0, look = 0, pose = 0, head = 0; float yaw = 0, scale = 1, turn = 0, vary = 0.5f; };
+    std::vector<std::vector<Pax>> passengers;
+    std::vector<std::string> passengerLooks;
     std::vector<vec3> bogies;
   } rail;
   struct ExpressData {

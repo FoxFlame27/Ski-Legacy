@@ -268,6 +268,9 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     }
     const car = T.buildCar({ number: 1 });
     const proc = car.group.getObjectByName('rail-car-proc');
+    // (the cabin's surfaces: train.js textures them in its shader; baked into maps here: tools/train_detail.mjs)
+    const { bakeCabinDetail } = await import('./train_detail.mjs');
+    if (proc) { try { bakeCabinDetail(THREE, proc, log); } catch (e) { log('train detail skipped:', e.stack?.split('\n').slice(0, 3).join(' | ')); } }
     const frame = new THREE.Group();
     for (const ch of [...car.group.children]) if (ch !== proc && ch.name !== 'rail-car-meshy' && !car.bogies.includes(ch)) frame.add(ch.clone());
     out.rail.models = {
@@ -288,6 +291,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       const xproc = xcar.group.getObjectByName('rail-car-proc');
       if (xproc) {
         xproc.traverse((o) => { if (o !== xproc && o.visible === false) o.traverse((q) => { q.userData.slSkip = true; }); });
+        try { bakeCabinDetail(THREE, xproc, log); } catch (e) { log('train detail (express) skipped:', e.message); }
         out.rail.models.cabinExpress = pack.localModel(xproc);
         log('net: the Legacy Express cabin', out.rail.models.cabinExpress.length, 'parts; Meshy interior', !!xcar.group.getObjectByName('express-interior'));
       }
@@ -296,6 +300,33 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     const seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
     out.rail.seat = seat ? { p: [r4(seat.pos.x), r4(seat.pos.y), r4(seat.pos.z)], yaw: seat.yaw } : null;
     out.rail.seats = car.seats.map((s) => [r4(s.pos.x), r4(s.pos.y), r4(s.pos.z), r4(s.yaw)]);
+    // the seated passengers (railway.js seatPassengers: skiers on about half the seats of the train you board, never the
+    // rider's front row; their looks, poses and places from its own seeded generator, drawn in its order: first the
+    // bakes' two numbers for every look x pose x head turn, then per car the seats, and per passenger the look, the
+    // pose, window or neighbour, the turn in the seat, the size). Per car: [seat, look, pose, head, yaw jitter, scale, the
+    // bake's head turn (rad), the bake's variation]
+    try {
+      const { mulberry32 } = await imp('core/noise.js');
+      const looks = ['skier_red', 'skier_green', 'skier_orange', 'skier_black', 'skier_purple', 'skier_blue'], kinds = ['thighs', 'lap', 'crossed', 'phone'];
+      const rnd = mulberry32(5150);
+      // (poseSeated(rig, kind, dir * (0.38 + rnd() * 0.25), rnd()): each bake's head turn and its own variation)
+      const bake = new Map();
+      for (let i = 0; i < looks.length; i++) for (let k = 0; k < kinds.length; k++) for (const dir of kinds[k] === 'phone' ? [0] : [-1, 1]) { const turn = dir * (0.38 + rnd() * 0.25), v = rnd(); bake.set(`${i}|${k}|${dir}`, [r4(turn), r4(v)]); }
+      out.rail.passengerLooks = looks;
+      out.rail.passengers = [];
+      for (let c = 0; c < 2 * (W.RAIL_UNITS ?? 2); c++) {
+        const places = car.seats.filter((st) => !(st.row === 1 && st.side > 0) && rnd() < 0.56), list = [];
+        for (const st of places) {
+          const look = Math.floor(rnd() * looks.length), r = rnd(), kind = r < 0.36 ? 0 : r < 0.6 ? 1 : r < 0.8 ? 2 : 3;
+          const toWindow = rnd() < 0.65, lateral = Math.sign(st.pos.x) * (toWindow ? 1 : -1);
+          const dir = kind === 3 ? 0 : lateral * (st.yaw === 0 ? 1 : -1) > 0 ? 1 : -1;
+          const yawJ = (rnd() - 0.5) * 0.12, sc = 0.95 + rnd() * 0.08;
+          list.push([car.seats.indexOf(st), look, kind, dir, r4(yawJ), r4(sc), ...(bake.get(`${look}|${kind}|${dir}`) || [0, 0.5])]);
+        }
+        out.rail.passengers.push(list);
+      }
+      log('net: rail passengers per car', out.rail.passengers.map((l) => l.length).join(' '), 'of', car.seats.length, 'seats');
+    } catch (e) { log('net: rail passengers skipped:', e.message); }
     log('net: rail', RAIL.n, 'samples,', RAIL.stations.length, 'stations, cycle', R.CYCLE.toFixed(0), 's; railcar parts', Object.entries(out.rail.models).map(([k, v]) => k + ':' + v.length).join(' '));
   }
 

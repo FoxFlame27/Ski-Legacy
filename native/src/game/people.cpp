@@ -164,7 +164,7 @@ void People::submit(Renderer& r, const dvec3& cam, int maxDraw, double view) {
         break;
       case PAnim::Sit:
         st.mode = RigMode::Sit; st.hasSeat = true;
-        if (p.car.how == CarSeatRef::Figure) { st.seat = V3(0); st.heading = 0; }   // (posed at the origin, as the bake)
+        if (p.car.how == CarSeatRef::Figure || p.car.how == CarSeatRef::Bench) { st.seat = V3(0); st.heading = 0; }   // (posed at the origin, as the bake)
         else st.seat = V3(p.pos) + three::UP * (p.car.how == CarSeatRef::Seated ? 0 : 0.45);
         break;
       case PAnim::Lie:
@@ -176,12 +176,18 @@ void People::submit(Renderer& r, const dvec3& cam, int maxDraw, double view) {
     // animation LOD (npcs.js): posed every frame near, at a lower rate further off
     S.R.animAcc += dt;
     const bool figure = p.anim == PAnim::Sit && p.car.how == CarSeatRef::Figure;
+    const bool bench = p.anim == PAnim::Sit && p.car.how == CarSeatRef::Bench;
     if (d < animNear || S.R.animAcc > (d < animNear * 2.5 ? 0.06 : 0.12) || !S.R.posed) {
       if (figure) {   // (carpeople.js bakeOne: the 'sit' pose at the origin, no blend, then seated in the car)
         rig.rootPos = V3(0);
         rig.snapPose();
         rig.update(0, st);
         rig.poseCarFigure(p.car);
+      } else if (bench) {   // (railway.js seatPassengers: the 'sit' pose at the origin, then seatpose.js's relaxed pose)
+        rig.rootPos = V3(0);
+        rig.snapPose();
+        rig.update(0, st);
+        rig.poseSeated(SkierRig::SeatedKind(std::clamp(p.car.look, 0, 3)), p.car.x, p.car.vary);
       } else {
         rig.rootPos = V3(p.pos);
         rig.update(std::min(S.R.animAcc, 0.25), st);
@@ -199,6 +205,10 @@ void People::submit(Renderer& r, const dvec3& cam, int maxDraw, double view) {
     R.rig.rootPos = V3(p.pos);   // (the body moves on between the poses; the bones keep the last one)
     if (figure) {   // (fill: on its seat, in the car's frame)
       R.rig.rootPos = V3(p.car.car * glm::dvec4(R.rig.carFig.O, 1));
+      R.rig.setRootQuat(three::decomposeQ(p.car.car));
+    }
+    if (bench) {   // (on its seat, in the seat's own frame: it leans with the car)
+      R.rig.rootPos = V3(dvec3(p.car.car[3]));
       R.rig.setRootQuat(three::decomposeQ(p.car.car));
     }
     drawRig(r, R, K, gears_[size_t(S.gear)].get(), p.scale, d < 40);

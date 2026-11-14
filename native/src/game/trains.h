@@ -9,9 +9,13 @@
 #include "game/vehicles.h"
 
 namespace sl {
+class People;
 
 struct TrainRide { bool on = false; dvec3 seat{0}, fwd{0, 0, 1}; std::string hint, stop; bool atStop = false, arrived = false; dvec3 exit{0}; double speed = 0;
-                   dvec3 trainPos{0}; double trainYaw = 0; };
+                   dvec3 trainPos{0}; double trainYaw = 0;
+                   // (railway.js / express.js seat view) the car you sit in (its frame leans with the track) and your
+                   // seat in it (the seat's surface, the way it faces)
+                   glm::dmat4 car{1}; dvec3 seatLocal{0}; double seatYaw = 0; };
 
 class Railway {
 public:
@@ -39,6 +43,8 @@ public:
   /// (multiplayer) a train stands at station `st` going your way (board() would take you): check before paying
   bool trainReady(int st, bool up) const;
   int seatCount() const { return ncars_ * 48; }
+  /// (railway.js seatPassengers / showPassengers) the skiers riding along in the car you sit in (the seat view)
+  void addPeople(People& people) const;
 
 private:
   struct State { double s = 0; int dir = 0; double speed = 0; int at = -1; std::string leg; };
@@ -84,6 +90,8 @@ public:
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
   /// (multiplayer) a train for `to` stands at `from` for 4 s more: check before paying
   bool trainReady(int from, int to) const;
+  /// (express.js copyPassengers) the Wolkenspitzbahn's seated skiers, in the cabin you ride in
+  void addPeople(People& people) const;
 
 private:
   struct Seg { bool dwell; int st, a, b, ia, ib; double t0, dur; };

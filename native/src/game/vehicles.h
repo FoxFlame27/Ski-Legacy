@@ -78,6 +78,11 @@ public:
   /// is, a parked / traffic / display car) and its wheels' metal tinted (`rims`: a RIMS id; the tyres and brakes stay
   /// black; "orig" or a car whose wheels are not split off: as they are). The model itself when nothing changes.
   const VehicleModel* dressed(const VehicleModel* vm, int finish, const std::string& rims) const;
+  /// (train.js trainUniforms.uCabin: 0.3 by day .. 1.2 at night and in a tunnel) the railcars' cabins lit by their
+  /// own strips: the strips' emission x (0.8 + 3.2 k); the surfaces' warm share of it comes from the lamps the game
+  /// puts along the ceiling of the car you ride in (cabinLight(): k)
+  void setCabinLight(float k);
+  float cabinLight() const { return cabinK_; }
   VehicleModel bus;
   struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
   //   // express: (Phase 7) the blue livery
@@ -86,6 +91,9 @@ private:
   std::unordered_map<std::string, VehicleModel> full_;
   mutable std::unordered_map<std::string, std::unique_ptr<VehicleModel>> rimmed_;
   mutable std::unordered_map<const VehicleModel*, const VehicleModel*> rimBase_;
+  struct CabinMat { Model* model; size_t i; vec3 lamp; };
+  std::vector<CabinMat> cabinMats_;
+  float cabinK_ = -1;
   gfx::Device* dev_ = nullptr;
   AssetManager* assets_ = nullptr;
   const Transport* t_ = nullptr;

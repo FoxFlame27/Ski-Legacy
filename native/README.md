@@ -673,6 +673,41 @@ What differed and is ported now:
 
 Not ported: the web's dome light (`cabinLight`), the interior trims, the Tesla's lit screen graphic.
 
+### The trains from inside, 1:1 (Nov 2026)
+
+Compared with the web game from the seat and from six cameras standing in the car, in both trains
+(`SKI_LEGACY_DEBUG=traintest,shotonly` with `--autotest --frames 5250 --png out.png`: the Wolkenspitzbahn boarded at
+the valley station, then the Legacy Express: `out_rail_<view>.png` / `out_express_<view>.png`: ahead, left, right,
+hard left, down, up, across the aisle; `w_fwd` / `w_back` along the aisle, `w_bay`, `w_rear`, `w_ceil`, `w_floor`;
+`moving` under way and `tunnel` in the first tunnel). The cabins themselves (`train.js buildCar`, the Express's Meshy
+seats, tables and racks: `expressinterior.js`) were exported already and stand where the web game's do. What differed:
+
+- **You board into the seat view** (`railway.js` / `express.js` `board`: `view = 'seat'`; R: outside). The C++ put you
+  in the chase view, so the cabin was a key press away.
+- **The seat camera** is the web game's: the eye 0.76 m over the seat in the **car's own frame** (it leans with the
+  car on the grade and in curves; it was a world-up camera at the player's position), you look round to the side
+  windows (+-100 degrees, pitch -0.9 .. 1.0), the head leaning forward and away from the pane as you turn, 72 degrees
+  (was 68), no easing back.
+- **The passengers** (`railway.js seatPassengers`): skiers on 21 to 27 of a car's 48 seats, never the rider's front
+  row, in `seatpose.js`'s relaxed poses (hands on the thighs, in the lap, arms folded, over a phone), the head turned
+  to the window or the neighbour. The exporter runs the web game's own seeded choice (seat, look, pose, turn, size),
+  so the same skier sits in the same seat; the C++ poses them with its port of `poseSeated` (`CarSeatRef::Bench`) in
+  the seat's frame. The Express carries the same passengers (`copyPassengers`). Single player only, as the web game.
+- **The surfaces' textures**: `train.js cabinPatch` textures the cabin in its shader (the wall panels' mottled plastic,
+  the woven fabric, the floor's speckle, the ceiling's perforated panels, brushed metal: one data texture, triplanar,
+  tiles per metre by a per-vertex kind). Shader patches are not captured, so the C++ cabin was flat colour.
+  `tools/train_detail.mjs` bakes the same texels through the same mixes into one tiling map per kind and gives each
+  face its main axis's coordinates.
+- **The cabin's own light** (`uCabin`: 0.3 by day, up to 1.2 at night and in a tunnel): the light strips' emission
+  follows it and four warm lamps along the ceiling of your car carry the light in a tunnel (the cabin was black
+  there).
+- **The windows from inside**: `glassIn` is a 13 % tint; the renderer's glass mirrored the sky at full strength on it
+  and lit it with the sun (milky panes on the sunny side): no mirror on the inner panes, a quarter of the tint.
+
+Not ported: walking about in the Express (E: stand up), the trackside camera, the Express's live trip display (the
+screens over the cab door show the Wolkenspitzbahn's line map in both trains), the passengers' phones, the people
+waiting on the platforms.
+
 ### Known gaps (Phase 3)
 - **Courses' regions** come as an 8 m grid (mean 0.48 m, max ~4 m off the JS inside the regions, exact on roads and
   roadbeds); the courses themselves (gates, ramps, props) are Phase 5. Outside the regions `--verify-heights` now

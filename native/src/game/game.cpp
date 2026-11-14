@@ -747,6 +747,10 @@ int runGame(const GameOptions& opt) {
   struct TravelPick { int kind = 0, from = -1, to = -1; bool up = true; } travelPick;
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
+  double trainFov = -1;   // (railway.js this.fov) the trains' seat camera, eased
+  int trainWalk = -1;     // (debug traintest) a standing camera in the car: which
+  float CABIN_LAMP = 14.f;   // the cabin lamps' strength at uCabin 1 (SKI_LEGACY_CABIN_LAMP to try another)
+  if (const char* e = std::getenv("SKI_LEGACY_CABIN_LAMP")) CABIN_LAMP = float(std::atof(e));
   dvec3 rideCamPos{0};
   bool rideCamReady = false;
   auto standOff = [&](const dvec3& e, const std::string& what) {   // (x, z, heading)
@@ -2752,6 +2756,52 @@ int runGame(const GameOptions& opt) {
         if (f == 252 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (tag + "_chase").c_str());
       }
     }
+    if (opt.autotest && at == AT::Ski && off("traintest")) {
+      // (debug: the trains from your seat, as the web reference shots: the Wolkenspitzbahn boarded at the valley station
+      // going up, then the Legacy Express from its first station: ahead, left, right, hard left, down, up, across the
+      // aisle while it stands, and out of the window 23 s later, under way: o_rail_<view>.png, o_express_<view>.png)
+      static int tf = 0;
+      struct V { const char* name; double yaw, pitch; };
+      static const V VIEWS[] = {{"fwd", 0, -0.04}, {"left", 1.2, -0.1}, {"right", -1.2, -0.1}, {"sideL", 1.75, -0.05}, {"down", 0, -0.8}, {"up", 0.4, 0.7}, {"aisle", 0.5, -0.15}};
+      const int half = 2600, ph = tf / half, f = tf % half;
+      tf++;
+      if (ph < 2) {
+        if (f == 5) {
+          if (rideKind == Ride::Rail) { railway.abort(); rideKind = Ride::None; }
+          const bool ok = ph == 0 ? railway.board(0, true) : express.board(0, 1);
+          if (ok) {
+            rideKind = ph == 0 ? Ride::Rail : Ride::Express;
+            TrainRide tr = ph == 0 ? railway.ride() : express.ride();
+            player.setSkisOn(false);
+            player.sitOn(tr.seat, tr.fwd);
+            seatView = true; seatYaw = 0; seatPitch = -0.04; trainFov = -1;
+            SL_INFO("[traintest] aboard the %s: seat (%.3f, %.3f, %.3f) yaw %.2f in its car", ph == 0 ? "Wolkenspitzbahn" : "Legacy Express", tr.seatLocal.x, tr.seatLocal.y, tr.seatLocal.z, tr.seatYaw);
+          } else SL_WARN("[traintest] no train to board");
+        }
+        const char* tag = ph == 0 ? "rail_" : "express_";
+        for (int i = 0; i < 7; i++) {
+          const int at0 = 60 + i * 40;
+          if (f > at0 - 38 && f <= at0) { seatYaw = VIEWS[i].yaw; seatPitch = VIEWS[i].pitch; }
+          if (f == at0 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + VIEWS[i].name).c_str());
+        }
+        // (then six cameras standing in the car: along the aisle both ways, a bay, from the rear vestibule, the ceiling, the floor)
+        static const char* WN[6] = {"w_fwd", "w_back", "w_bay", "w_rear", "w_ceil", "w_floor"};
+        trainWalk = f > 322 && f <= 322 + 6 * 30 ? (f - 323) / 30 : -1;
+        if (trainWalk >= 0 && (f - 323) % 30 == 28 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + WN[trainWalk]).c_str());
+        if (f > 320) { seatYaw = 1.2; seatPitch = -0.1; }
+        if (f == 1385 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, (std::string(tag) + "moving").c_str());
+        // (then on with the fast-forward key until the first tunnel: the cabin by its own light)
+        static bool tunnelShot[2] = {false, false};
+        if (f > 1385 && !tunnelShot[ph]) {
+          input.inject(Action::Jump, true);
+          seatYaw = 0.6; seatPitch = -0.1;
+          const TrainRide tr = ph == 0 ? railway.ride() : express.ride();
+          static int under = 0;
+          under = tr.on && world.height(tr.seat.x, tr.seat.z) > tr.seat.y + 8 ? under + 1 : 0;
+          if (under == 20 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, (std::string(tag) + "tunnel").c_str()); tunnelShot[ph] = true; under = 0; input.inject(Action::Jump, false); SL_INFO("[traintest] in a tunnel: the cabin light %.2f", double(vmodels.cabinLight())); }
+        }
+      }
+    }
     if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
       dvec3 bp; double bh;
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
@@ -2948,7 +2998,7 @@ int runGame(const GameOptions& opt) {
           TrainRide tr = railway.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
-          rideCamReady = false; seatView = false; seatYaw = 0; seatPitch = -0.04;   // (the outside view: the cabin's seat view is R)
+          rideCamReady = false; seatView = true; seatYaw = 0; seatPitch = -0.04; trainFov = -1;   // (railway.js board: the seat view; R: outside)
           toast = transport.rail.name + (down ? std::string() : save.hasPass() ? std::string(" \xC2\xB7 Day pass") : " \xC2\xB7 -$" + std::to_string(transport.rail.price)); toastUntil = simTime + 2;
         }
       } else if (xst >= 0 && express.stationCount() > 1) {
@@ -2979,7 +3029,7 @@ int runGame(const GameOptions& opt) {
           TrainRide tr = express.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
-          rideCamReady = false; seatView = false; seatYaw = 0; seatPitch = -0.04;
+          rideCamReady = false; seatView = true; seatYaw = 0; seatPitch = -0.04; trainFov = -1;   // (express.js board: the seat view; R: outside)
           toast = transport.express.name + " to " + express.station(dest).name + (save.hasPass() ? std::string(" \xC2\xB7 Day pass") : " \xC2\xB7 -$" + std::to_string(transport.express.price)); toastUntil = simTime + 2;
         }
       }
@@ -3160,7 +3210,30 @@ int runGame(const GameOptions& opt) {
     player.cameraFor(cam);
     bool camUnderground = false;   // (a train's camera in a tunnel: the tunnel's darkness, no terrain drawn over it)
     if (rideKind == Ride::Car) drive.cameraFor(cam);
-    else if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+    else if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+      // the trains' seat view (railway.js / express.js updateRide): a seated passenger's eye in the car's own frame (it
+      // leans with the car on the grade and in the curves), 0.76 m over the seat; you look round to the side windows
+      // (+-100 degrees, not back through your own backrest); turning to the side the head leans a little forward and
+      // away from the pane; 72 degrees
+      const TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
+      float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
+      seatYaw = clamp(seatYaw - lx * 0.0022, -1.75, 1.75); seatPitch = clamp(seatPitch - ly * 0.0022, -0.9, 1.0);
+      const double turn = std::fabs(std::sin(seatYaw)), fz = std::cos(tr.seatYaw), sx = tr.seatLocal.x > 0 ? 1 : tr.seatLocal.x < 0 ? -1 : 0;
+      const dvec3 eye = dvec3(tr.car * glm::dvec4(tr.seatLocal + dvec3(-sx * turn * 0.1, 0.76, (0.06 + turn * 0.12) * fz), 1));
+      const double yaw = tr.seatYaw + seatYaw;
+      const dvec3 dir = glm::normalize(dvec3(tr.car * glm::dvec4(std::sin(yaw) * std::cos(seatPitch), std::sin(seatPitch), std::cos(yaw) * std::cos(seatPitch), 0)));
+      camUnderground = world.height(eye.x, eye.z) > eye.y + 6;
+      cam.lookAt(eye, eye + dir, vec3(glm::normalize(dvec3(tr.car * glm::dvec4(0, 1, 0, 0)))));
+      trainFov = trainFov < 0 ? 72 : trainFov + (72 - trainFov) * (1 - std::exp(-frameDt * 6));
+      cam.fovY = float(trainFov); cam.nearZ = 0.05f;
+      if (trainWalk >= 0) {   // (debug traintest: a camera standing in the car, in its frame)
+        static const double W[6][6] = {{0, 2.65, -5, 0, 2.3, 6}, {0, 2.65, 5, 0, 2.2, -6}, {0.9, 2.4, 0, -1.2, 1.9, 1.5}, {0, 2.65, -7.6, 0, 2.4, 0}, {0, 2.2, 1, 0.6, 3.6, 4}, {0, 2.7, -1, 0.5, 1.0, 2}};
+        const double* w = W[trainWalk % 6];
+        cam.lookAt(dvec3(tr.car * glm::dvec4(w[0], w[1], w[2], 1)), dvec3(tr.car * glm::dvec4(w[3], w[4], w[5], 1)));
+        cam.fovY = 72;
+      }
+    }
+    else if (rideKind == Ride::Bus && seatView) {
       // the seat view: your eyes over the seat, the mouse looks round (+-120 degrees), easing back ahead
       float lx = paused ? 0 : input.lookX(), ly = paused ? 0 : input.lookY();
       if (lx != 0 || ly != 0) { rideLookT = simTime; seatYaw = clamp(seatYaw - lx * 0.0022, -2.09, 2.09); seatPitch = clamp(seatPitch - ly * 0.0022, -1.0, 0.6); }
@@ -3774,6 +3847,11 @@ int runGame(const GameOptions& opt) {
     trans.update(frameDt);
     if (rendered) {
     Lighting frameLight = light;
+    {   // (railway.js lateUpdate: the cabins' own light, 0.3 by day, up to 1.2 at night and in a tunnel, eased)
+      static float cabinDark = 0;
+      cabinDark += ((camUnderground ? 1.f : 0.f) - cabinDark) * float(1 - std::exp(-frameDt * 3));
+      vmodels.setCabinLight(0.3f + 0.9f * std::max(light.night, cabinDark));
+    }
     if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light
       frameLight.zenith = frameLight.mid = frameLight.horizon = frameLight.glow = frameLight.fog = vec3(0.004f, 0.005f, 0.007f);
       frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
@@ -3781,6 +3859,16 @@ int runGame(const GameOptions& opt) {
     }
     pt0 = perfMs();
     renderer.beginFrame(cam, frameLight, player.renderPos);
+    if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
+      // (train.js: the cabin lit by its own strips, every surface in its own colour x (1, 0.86, 0.68) x 0.55 x uCabin:
+      // here four warm lamps along the ceiling of the car you sit in, faint by day, carrying the light in a tunnel)
+      const TrainRide tr = rideKind == Ride::Rail ? railway.ride() : express.ride();
+      for (double z : {-6.2, -2.1, 2.1, 6.2}) {
+        PointLight l;
+        l.pos = dvec3(tr.car * glm::dvec4(0, 3.05, z, 1)); l.color = vec3(1.0f, 0.86f, 0.68f) * (CABIN_LAMP * std::max(0.04f, vmodels.cabinLight() - 0.27f)); l.range = 6.5f;
+        renderer.addLight(l);
+      }
+    }
     bool indoor = rooms.inside();
     if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
     if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
@@ -3820,6 +3908,7 @@ int runGame(const GameOptions& opt) {
     people.begin(paused ? 0 : frameDt);
     if (!indoor) {
       if (aiOn) { folk.submit(renderer, cam.pos); traffic.addPeople(people, cam.pos, people.skierKinds.empty() ? people.fanKinds : people.skierKinds); }
+      if (!mp.active()) { railway.addPeople(people); express.addPeople(people); }   // (the skiers riding along in your car: single player only, as railway.js)
       races.addPeople(people, cam.pos);
       oddJobs.addPeople(people, cam.pos);
     }

@@ -63,7 +63,7 @@ inline int taxiPaxSeat(int n) { return n > 3 ? 3 : 1; }
 
 /// A person seated in a car (game/people.h Person::car)
 struct CarSeatRef {
-  enum How : uint8_t { None, Figure, Seated };
+  enum How : uint8_t { None, Figure, Seated, Bench };   // Bench: a train seat (railway.js seatPassengers): posed by seatpose.js poseSeated at the origin (look: its kind, x: the head's turn, vary), placed by `car` (the seat's own frame)
   How how = None;
   glm::dmat4 car{1};        // the car's frame (car -> world: nose +z, wheels on y 0)
   CarTemplate t;
@@ -71,6 +71,7 @@ struct CarSeatRef {
   bool driver = false;
   int look = 0;             // (Figure) carpeople.js LOOKS index: the passengers' hands (lap / thighs) and head turn
   double x = 0;             // (Figure) the seat's x: the driver's side +, the passenger's -
+  double vary = 0.5;        // (Bench) poseSeated's variation
 };
 
 } // namespace sl

@@ -298,12 +298,14 @@ const nlohmann::json* Resort::transportNet() const {
   return &(*tjson_)["net"];
 }
 
-std::shared_ptr<Model> Resort::transportModel(const nlohmann::json& parts) {
+std::shared_ptr<Model> Resort::transportModel(const nlohmann::json& parts) { return localModel(parts, tbin_, tmats_); }
+
+std::shared_ptr<Model> Resort::localModel(const nlohmann::json& parts, const std::vector<uint8_t>& bin, const std::vector<Material>& mats) {
   auto model = std::make_shared<Model>();
   Mesh mesh;
   for (auto& p : parts) {
     int mi = p["mat"];
-    auto m = modelFromBin(dev_, tbin_.data(), tbin_.size(), p, mi >= 0 && size_t(mi) < tmats_.size() ? tmats_[size_t(mi)] : Material{});
+    auto m = modelFromBin(dev_, bin.data(), bin.size(), p, mi >= 0 && size_t(mi) < mats.size() ? mats[size_t(mi)] : Material{});
     if (!m) continue;
     Primitive pr = std::move(m->meshes[0].primitives[0]);
     pr.material = int(model->materials.size());
@@ -496,7 +498,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   }
   SL_INFO("%s: %zu props, %zu mesh chunks, %zu canvases, %zu colliders", name.c_str(), nProps_ - props0, chunks_.size() - chunks0, canvasTex.size(), cols.size() - cols0);
   if (name == "transport") { tjson_ = jp; tbin_ = std::move(bin); tmats_ = mats; }
-  if (name == "play") { pjson_ = jp; pbin_ = std::move(bin); }
+  if (name == "play") { pjson_ = jp; pbin_ = std::move(bin); pmats_ = mats; }
   return true;
 }
 
@@ -505,6 +507,7 @@ void Resort::releaseLoadData() {
   std::vector<uint8_t>().swap(tbin_);
   std::vector<uint8_t>().swap(pbin_);
   std::vector<Material>().swap(tmats_);
+  std::vector<Material>().swap(pmats_);
 }
 
 void Resort::rebuild(const dvec3& cam) {

@@ -43,6 +43,7 @@ struct PlayCtx {
   bool autotest = false;
   bool driving = false;         // in your car (game.cpp rideKind == Car)
   bool riding = false;          // a lift, bus or train
+  float night = 0;              // village.js nightUniform: 0 by day .. 1 at night (lamps)
   // services
   std::function<void(const std::string& text, int kind)> flash;     // 0 good, 1 bad, 2 gold
   std::function<bool(int64_t amount)> spend;                        // refused when short ("Not enough money")

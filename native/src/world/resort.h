@@ -40,6 +40,8 @@ public:
   const std::vector<uint8_t>& playBin() const { return pbin_; }
   /// A vehicle's procedural parts (export_net.mjs localModel: [{ mat, verts, vOff, ... }]) as one model
   std::shared_ptr<Model> transportModel(const nlohmann::json& parts);
+  /// (the helicopter's parts, the ward: export_play.mjs localModel) a play pack local model
+  std::shared_ptr<Model> playModel(const nlohmann::json& parts) { return localModel(parts, pbin_, pmats_); }
   /// (Phase 7) the transport / play packs' parsed json and bins dropped once Transport, VehicleModels and PlayData have
   /// read them (hundreds of MB of DOM and raw data; the Switch budget)
   void releaseLoadData();
@@ -82,7 +84,8 @@ private:
   std::vector<uint8_t> tbin_;
   std::shared_ptr<nlohmann::json> pjson_;
   std::vector<uint8_t> pbin_;
-  std::vector<Material> tmats_;
+  std::vector<Material> tmats_, pmats_;
+  std::shared_ptr<Model> localModel(const nlohmann::json& parts, const std::vector<uint8_t>& bin, const std::vector<Material>& mats);
 
   gfx::Device& dev_;
   World& world_;

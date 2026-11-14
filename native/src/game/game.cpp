@@ -36,7 +36,8 @@
 #include "game/races.h"
 #include "game/jobs.h"
 #include "game/police.h"
-#include "game/rescue.h"
+#include "game/heli.h"
+#include "game/hospital_ward.h"
 #include "game/chalets.h"
 #include "game/snowmobile.h"
 #include "game/mp_session.h"
@@ -484,6 +485,7 @@ int runGame(const GameOptions& opt) {
   // ---------------------------------------------------------------- (Phase 5) races, jobs, police, rescue, chalets, people, weather
   PlayData playData;
   if (const nlohmann::json* pj = resort.playData()) playData.load(*pj, resort.playBin());
+  HeliParts heliParts = loadHeliParts(resort);   // (the helicopter's parts and the ward, built from the play pack before its bin goes)
   transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
   resort.releaseLoadData();
   Shapes shapes;
@@ -512,10 +514,14 @@ int runGame(const GameOptions& opt) {
   Races races(pc);
   Jobs oddJobs(pc);
   Police police(pc, rooms);
-  Rescue rescue(pc, rooms);
+  HospitalWard ward(pc, rooms);
+  world.addDeck([&](double x, double z) { return ward.deck(x, z); });
+  Heli heli(pc, ward);
   Chalets chalets(pc, rooms);
   police.load(assets);
-  rescue.load(assets);
+  ward.load(assets, heliParts.ward);
+  heli.load(assets, heliParts);
+  heliParts = HeliParts{};
   chalets.load(assets);
   Snowmobiles sleds(pc);
   sleds.load(assets);
@@ -1064,12 +1070,14 @@ int runGame(const GameOptions& opt) {
   double leftOnRoadT = 0;
 
   // autotest phases after the run: walk into a hotel (collision), then ride a gondola
-  enum class AT { Menu, Ski, Collide, Lift, Drive, CarFlow, Bus, Rail, Express, Map, Race, Job, Police, Chalet, Weather, Done } at = AT::Menu;
+  enum class AT { Menu, Ski, Collide, Lift, Drive, CarFlow, Bus, Rail, Express, Map, Race, Job, Police, Chalet, Weather, Heli, Done } at = AT::Menu;
   if (vehTest && opt.autotest) at = AT::Drive;
   if (off("cartest") && opt.autotest) at = AT::CarFlow;   // (debug: straight to the cars on the player's path)
   CarFlowTest carFlow;
   if (off("maptest") && opt.autotest) at = AT::Map;   // (debug: straight to the trail map)
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
+  if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
+  bool heliOk = true;
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
   bool raceOk = true, jobOk = true, policeOk = true, chaletOk = true, weatherOk = true, sledOk = true;
   struct P5T { const Course* course = nullptr; int resF = -1, jailF = -1, arrestF = -1; int64_t money0 = 0; double jail0 = 0; int done0 = 0, furn0 = 0; bool releasedChecked = false; Jobs::Offer offer; bool haveOffer = false; } t5;
@@ -1111,11 +1119,11 @@ int runGame(const GameOptions& opt) {
   };
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
-  menus.hooks.mainMenu = [&]() { save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
+  menus.hooks.mainMenu = [&]() { heli.abort(); save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
   menus.hooks.village = [&]() {
     menus.close();
     if (police.jailed() || police.arrestedNow()) { flash("You are serving a sentence", Hud::Flash::Bad); return; }
-    if (rescue.active()) { flash("The rescue is under way", Hud::Flash::Bad); return; }
+    if (heli.rescuing()) { flash("The rescue is under way", Hud::Flash::Bad); return; }
     if (rooms.inside()) rooms.leave();
     races.abort();
     if (rideKind == Ride::None && player.mode != PlayerMode::Sit) { player.setSkisOn(false); player.teleport(4, 34, PI); flash("Back in Legacy Village", Hud::Flash::Good); }
@@ -1431,7 +1439,7 @@ int runGame(const GameOptions& opt) {
     if (ev.toggleFullscreen && !opt.autotest) { save.set("fullscreen", !plat->fullscreen()); applySetting("fullscreen"); }   // F11 / Cmd+F
     input.update(*plat, ev);
     double now = plat->timeSeconds();
-    double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : 0.1) : std::min(0.25, now - last);
+    double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : at == AT::Heli ? 1.0 / 30.0 : 0.1) : std::min(0.25, now - last);
     last = now;
     UiNav nav = navBuilder.build(ev, *plat, input, now);
     if ((opt.autotest && !atRealKeys) || mptest) { float wheel = nav.wheel; nav = UiNav{}; nav.mouse = vec2(-1); nav.wheel = wheel; }   // (the wheel stays real: pushWheel)
@@ -2028,6 +2036,140 @@ int runGame(const GameOptions& opt) {
       }
     }
 
+    // (debug: SKI_LEGACY_DEBUG=rescuetest | ambtest | wardtest | helitest with --autotest [--png out.png]: a wipeout up
+    // on the mountain, the rescue helicopter comes, lands, flies you home, the ambulance, waking up in the ward,
+    // getting up and out (ambtest: from the pad on; wardtest: the ward only); helitest: the heli-ski base, the flight
+    // planner, a flight. A screenshot at every stage (<png>_<stage>.png), the checks logged, then it quits.)
+    if (opt.autotest && at == AT::Heli) {
+      static struct { int mode = -1, lastPhase = -1, n = 0, wardF = -1, look = 0, hs = 0, hsF = 0; double minGap = 1e9, yawErr = 0, slid = 0, ambYaw = 0, ambGap = 0, ambV = 0; dvec3 lay{0}; bool laid = false, stoodUp = false, landed = false; int64_t money0 = 0; } T;
+      const int f = phaseFrame;
+      auto shot = [&](const std::string& tag) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, tag.c_str()); };
+      auto check = [&](bool ok, const std::string& what) { SL_INFO("[helitest] %s -> %s", what.c_str(), ok ? "ok" : "FAILED"); if (!ok) heliOk = false; };
+      static const char* PH[] = {"none", "inbound", "settle", "pickup", "hover", "home", "arrive", "ambulance"};
+      if (f == 0) { T.mode = off("helitest") ? 3 : off("wardtest") ? 2 : off("ambtest") ? 1 : 0; input.releaseInjected(); player.hasSkis = true; if (save.skis.empty()) save.skis = "rental"; }
+      if (T.mode <= 1 && T.wardF < 0) {
+        if (f == 2) { player.setSkisOn(true); player.teleport(-342.68, -244.42, 0.6); }
+        if (f == 40) {
+          T.money0 = save.money;
+          player.knockDown(1, dvec3(0), 0, false);
+          bool ok = heli.rescueMe(false);
+          check(ok && heli.rescuing(), "rescue called where you fell");
+          if (T.mode == 1) heli.rescue.debugArrive();
+        }
+        if (f > 40) {
+          const HeliFlight& fl = heli.flight;
+          int ph = int(heli.rescue.phase);
+          if (heli.waiting()) {
+            if (!T.laid && player.fall.state == FallState::State::Lie && glm::length(player.vel) < 0.3) { T.laid = true; T.lay = player.pos; }
+            if (T.laid) { T.slid = std::max(T.slid, glm::length(player.pos - T.lay)); if (player.mode != PlayerMode::Fall || player.fall.state != FallState::State::Lie) T.stoodUp = true; }
+          }
+          if (!heli.rescue.gone && ph != 0) {
+            double gap = fl.pos.y - fl.fr.cgH - heli.ground(fl.pos.x, fl.pos.z);
+            T.minGap = std::min(T.minGap, gap);
+            if (fl.speed() > 15) T.yawErr = std::max(T.yawErr, std::fabs(wrapPi(std::atan2(fl.vel.x, fl.vel.z) - fl.yaw)));
+          }
+          if (ph == 7) {
+            const Ambulance& a = heli.rescue.amb;
+            if (a.v > 3) T.ambYaw = std::max(T.ambYaw, std::fabs(wrapPi(std::atan2(a.vx, a.vz) - a.yaw)));
+            T.ambGap = std::max(T.ambGap, std::fabs(a.y - world.groundHeight(a.x, a.z)));
+            T.ambV = std::max(T.ambV, a.v);
+          }
+          if (ph != T.lastPhase) {
+            T.lastPhase = ph; T.n++;
+            SL_INFO("[helitest] f %d: %s; helicopter at (%.1f, %.1f, %.1f) yaw %.2f agl %.1f %s rpm %.2f; you %s at (%.1f, %.1f, %.1f)", f, PH[ph], fl.pos.x, fl.pos.y, fl.pos.z, fl.yaw, fl.agl, fl.landed ? "landed" : "flying", heli.rpm,
+                    player.modeName(), player.pos.x, player.pos.y, player.pos.z);
+            if (ph == 3) { T.landed = true; double gap = fl.pos.y - fl.fr.cgH - heli.ground(fl.pos.x, fl.pos.z); check(fl.landed && std::fabs(gap) < 0.25, "landed beside you: skids on the snow (gap " + std::to_string(gap) + " m)"); }
+            if (ph == 5) check(!T.stoodUp && T.slid < 1.0, "you stayed lying where you fell until picked up (moved " + std::to_string(T.slid) + " m)");
+            if (ph == 6) { double gap = fl.pos.y - fl.fr.cgH - heli.home.y; check(fl.landed && std::fabs(gap) < 0.25 && std::hypot(fl.pos.x - heli.home.x, fl.pos.z - heli.home.z) < 2, "landed on the pad (gap " + std::to_string(gap) + " m)"); }
+            if (ph != 0) shot(std::string("resc_") + char('0' + T.n) + "_" + PH[ph]);
+          } else if (f % 60 == 0 && ph != 0) shot(std::string("resc_") + char('0' + T.n) + "_" + PH[ph] + "_" + std::to_string(f));
+          // (the long parts sped up: SPACE x4)
+          input.inject(Action::Jump, (ph == 1 && heli.rescue.pt > 4) || (ph == 5 && heli.rescue.pt > 14) || (ph == 7 && heli.rescue.pt > 14));
+          if (ward.inBed()) {
+            input.releaseInjected();
+            T.wardF = f;
+            check(T.minGap > -0.15, "the helicopter never below the snow (lowest skid gap " + std::to_string(T.minGap) + " m)");
+            check(T.yawErr < 0.6, "the nose along the flight path (worst " + std::to_string(T.yawErr) + " rad at speed)");
+            check(T.ambYaw < 0.5 && T.ambGap < 0.6 && T.ambV > 8, "the ambulance drove nose first on the road (worst heading off its path " + std::to_string(T.ambYaw) + " rad, off the ground " + std::to_string(T.ambGap) + " m, top speed " + std::to_string(T.ambV) + " m/s)");
+            check(save.money < T.money0, "the bill charged");
+          } else if (ph == 0 || f > 12000) { check(false, "the rescue ended in a hospital bed"); running = false; }
+        }
+      }
+      if (T.mode == 2 && f == 3) { check(ward.admit(), "admitted"); T.wardF = f; }
+      if (T.wardF >= 0 && T.mode != 3) {
+        const int w = f - T.wardF;   // (30 frames a second)
+        static const int WK[] = {4, 12, 20, 28, 36, 44, 54, 66, 80, 100, 126, 168};
+        for (int k = 0; k < 12; k++) if (w == WK[k]) shot("wake_" + std::string(k < 10 ? "0" : "") + std::to_string(k));
+        if (w == 200) { check(ward.inBed() && ward.recovering() && prompt.rfind("Resting", 0) == 0, "in bed, recovering (prompt '" + prompt + "', line '" + ward.objective() + "')"); shot("ward_bed"); }
+        if (w == 204) { input.inject(Action::View, true); }
+        if (w == 206) { input.inject(Action::View, false); }
+        if (w == 230) shot("ward_third");
+        if (w == 234) { input.inject(Action::View, true); }
+        if (w == 236) { input.inject(Action::View, false); ward.debugFit(); }
+        if (w == 270) { check(ward.inBed() && !ward.recovering() && prompt == "Get up", "fit again (prompt '" + prompt + "', line '" + ward.objective() + "')"); shot("ward_fit"); }
+        input.inject(Action::Interact, w == 274 || w == 574);
+        if (w == 290) { check(!ward.inBed() && ward.inside() && player.mode == PlayerMode::Walk, "got up"); shot("ward_up"); }
+        struct Look { double x, z, yaw; const char* name; };
+        static const Look LK[] = {{0, -1.5, PI, "ward_back"}, {0, -3, PI / 2, "ward_left"}, {0, -3, -PI / 2, "ward_right"}, {-4.6, -3.2, PI, "window_back"}, {0, 0.5, 0, "lobby"}, {0, 4.2, 0, "doors"}, {0, 4.2, PI, "from_doors"}, {5.2, 4.3, 0, "window_front"}};
+        if (w >= 300 && w < 300 + 8 * 30) {
+          const Look& L = LK[(w - 300) / 30];
+          if ((w - 300) % 30 == 0) { dvec3 q = rooms.toWorld(L.x, 0, L.z); player.teleport(q.x, q.z, L.yaw); player.pos.y = q.y; player.prevPos = player.renderPos = player.pos; }
+          if ((w - 300) % 30 == 20) shot(L.name);
+        }
+        if (w == 560) { dvec3 q = rooms.toWorld(0, 0, 4.6); player.teleport(q.x, q.z, 0); player.pos.y = q.y; player.prevPos = player.renderPos = player.pos; }
+        if (w == 572) check(prompt == "Leave the medical centre", "at the glass doors (prompt '" + prompt + "')");
+        if (w == 620) {
+          check(!ward.inside() && !rooms.inside() && player.mode == PlayerMode::Walk, "out of the front doors (at " + std::to_string(player.pos.x) + ", " + std::to_string(player.pos.z) + ")");
+          shot("ward_out");
+        }
+        if (w == 626) { SL_INFO("[helitest] %s", heliOk ? "PASS" : "FAIL"); running = false; }
+      }
+      if (T.mode == 3) {
+        const HeliFlight& fl = heli.flight;
+        if (f == 2) { save.earn(5000); player.setSkisOn(false); double a = heli.home.yaw + PI / 2; player.teleport(heli.home.x + std::sin(a) * 22, heli.home.z + std::cos(a) * 22, a + PI); }
+        if (f == 30) shot("hs_pad");
+        if (f == 34) { double a = heli.home.yaw + PI; player.teleport(heli.home.x + std::sin(a) * 14, heli.home.z + std::cos(a) * 14, a + PI); }
+        if (f == 60) shot("hs_pad_front");
+        if (f == 64) { double a = heli.home.yaw - PI / 2; player.teleport(heli.home.x + std::sin(a) * 9, heli.home.z + std::cos(a) * 9, a + PI); }
+        if (f == 90) { check(prompt.rfind("Heli-ski", 0) == 0, "the pad's prompt ('" + prompt + "')"); shot("hs_prompt"); }
+        input.inject(Action::Interact, f == 92 || T.hs == 6);
+        if (f == 100) { check(menus.dialogOpen(), "the flight planner opened"); shot("hs_dialog"); }
+        if (f == 104) { menus.close(); T.money0 = save.money; heli.debugFly(0); check(heli.active() && player.mode == PlayerMode::Sit, "aboard, at the controls"); T.hs = 1; T.hsF = f; }
+        if (T.hs >= 1) {
+          int g = f - T.hsF;
+          if (f % 60 == 0) SL_INFO("[helitest] f %d step %d: at (%.0f, %.0f, %.0f) %.0f km/h agl %.1f rpm %.2f %s; '%s'", f, T.hs, fl.pos.x, fl.pos.y, fl.pos.z, fl.speed() * 3.6, fl.agl, heli.rpm, fl.landed ? "landed" : "flying", heli.objective().c_str());
+          if (T.hs == 1) {   // the turbine spools up, lift off
+            if (g == 60 || g == 150) shot("hs_spool_" + std::to_string(g / 30));
+            input.inject(Action::Jump, g > 30);
+            if (fl.agl > 30) { check(heli.rpm > 0.95 && !fl.landed, "lifted off"); shot("hs_climb"); input.inject(Action::Jump, false); T.hs = 2; T.hsF = f; }
+            else if (g > 900) { check(false, "lifted off"); T.hs = 9; }
+          } else if (T.hs == 2) {   // away
+            input.inject(Action::Forward, true); input.inject(Action::Left, g > 60 && g < 110);
+            if (g == 200) shot("hs_fly");
+            if (g == 320) {
+              std::string wl; double wx = 0, wz = 0;
+              bool wp = heli.waypoint(wl, wx, wz);
+              check(fl.speed() > 30 && wp, "flying: " + std::to_string(fl.speed() * 3.6) + " km/h, the compass on '" + wl + "'");
+              check(std::fabs(wrapPi(std::atan2(fl.vel.x, fl.vel.z) - fl.yaw)) < 0.4, "the nose along the flight path");
+              shot("hs_fly2");
+              input.inject(Action::Forward, false); T.hs = 3; T.hsF = f;
+            }
+          } else if (T.hs == 3) {   // slow down, come down
+            input.inject(Action::Back, fl.speed() > 2);
+            input.inject(Action::Sprint, fl.speed() < 8);
+            if (fl.landed) { input.releaseInjected(); double gap = fl.pos.y - fl.fr.cgH - heli.ground(fl.pos.x, fl.pos.z); check(std::fabs(gap) < 0.3, "set down on the snow (skid gap " + std::to_string(gap) + " m)"); T.hs = 4; T.hsF = f; }
+            else if (g > 1800) { input.releaseInjected(); SL_INFO("[helitest] no landing here (%s)", heli.objective().c_str()); shot("hs_hover"); T.hs = 9; T.hsF = f; }
+            if (g % 240 == 120) shot("hs_descent_" + std::to_string(g / 240));
+          } else if (T.hs == 4) {
+            if (g == 45) { shot("hs_landed"); T.hs = 6; T.hsF = f; }
+          } else if (T.hs == 6) { T.hs = 7; T.hsF = f; }
+          else if (T.hs == 7) {
+            if (g == 50) { check(!heli.active() && player.mode != PlayerMode::Sit, "got out beside the helicopter"); shot("hs_out"); T.hs = 9; T.hsF = f; }
+          } else if (T.hs == 9 && g > 4) { SL_INFO("[helitest] %s", heliOk ? "PASS" : "FAIL"); running = false; }
+        }
+      }
+    }
+
     // autotest pilot: tuck down the run, steering toward a point 35 m ahead on its line
     if (opt.autotest && run && onPiste && at == AT::Ski) {
       size_t best = 0;
@@ -2108,7 +2250,7 @@ int runGame(const GameOptions& opt) {
         testCar = buyCar("car_bmw_x3");
         const CarSpec* bmw = transport.car("car_bmw_x3");
         bool paid = testCar >= 0 && bmw && save.money == before - int64_t(bmw->price);
-        chargeOk = chargeOk && paid;
+        chargeOk = chargeOk && heliOk && paid;
         SL_INFO("[autotest] autohaus: bought the BMW X3: $%lld -> $%lld (price $%.0f), garage %zu -> %s", (long long)before, (long long)save.money, bmw ? bmw->price : 0.0,
                 save.garage.size(), paid ? "ok" : "FAILED");
         if (testCar < 0) testCar = drive.nearestOwned(player.pos);
@@ -2169,7 +2311,7 @@ int runGame(const GameOptions& opt) {
       ctl.jumpReleased = first && input.takeReleased(Action::Jump);
       // (Phase 5) held on the grid during a race's countdown, arrested, waiting for the rescue; the virtual mouse
       // takes the left stick in build mode
-      ctl.frozen = races.frozen() || police.arrestedNow() || (rescue.active() && !rescue.carried() && rooms.room() != Interiors::Room::Hospital) || rescue.inBed();
+      ctl.frozen = races.frozen() || police.arrestedNow() || heli.waiting() || ward.inBed();
       if (chalets.vmouse()) { ctl.moveX = ctl.moveY = 0; ctl.steer = 0; ctl.front = ctl.back = false; }
       // (weather: a blizzard's gusts push the skis a little, sky.js weatherFx)
       if (player.mode == PlayerMode::Ski && !player.air && weather.wind > 0.01) { player.vel.x += weather.gustX * STEP; player.vel.z += weather.gustZ * STEP; }
@@ -2206,13 +2348,16 @@ int runGame(const GameOptions& opt) {
         case PlayerEvent::Type::Crash: {
           nCrash++; audio.play("crash", 1); shakeAmt = std::max(shakeAmt, 0.9); fxHit = 1; input.rumble(*plat, 0.9f * e.amount, 0.6f * e.amount, 400);
           oddJobs.onCrash();
-          if (races.active() || rescue.active() || rooms.inside()) break;   // (a race session owns its wipeouts: session.js)
+          if (races.active() || heli.rescuing() || rooms.inside()) break;   // (a race session owns its wipeouts: session.js)
           // main.js: you get up after the first wipeout; the second within 3 min (no lift ride between) calls the rescue
           if (simTime - lastStrikeAt > 180) strikes = 0;
           lastStrikeAt = simTime;
           if (opt.autotest) { flash("Wipeout", Hud::Flash::Bad); break; }
           if (++strikes < 2) flash("Wipeout \xC2\xB7 one more and the rescue helicopter comes", Hud::Flash::Bad);
-          else { strikes = 0; rescueAt = simTime + 4; flash("Wipeout \xC2\xB7 the mountain rescue is on its way", Hud::Flash::Bad); }
+          else {   // (main.js: heli.rescueMe at once, you stay down where you fell; else the old fade to the medical centre)
+            strikes = 0; flash("Wipeout \xC2\xB7 the rescue helicopter is on its way", Hud::Flash::Bad);
+            if (rideKind != Ride::None || !heli.rescueMe(false)) rescueAt = simTime + 4;
+          }
           break;
         }
         case PlayerEvent::Type::Bump: audio.play("thud", e.amount * 0.6f); input.rumble(*plat, 0.4f * e.amount, 0.3f, 150); break;
@@ -2230,16 +2375,16 @@ int runGame(const GameOptions& opt) {
     // (Phase 5) getting hit by a vehicle at 45+ km/h: the rescue at once (vehiclehits.js); the rescue helicopter instead of the fade
     if (started && !races.active()) {
       Police::Hit h = police.takeHit();
-      if (h.pending && h.rescue && !rescue.active() && rescueAt < 0) { strikes = 0; rescueAt = simTime + 3; flash("Hit by a " + h.what + " at " + std::to_string(h.kmh) + " km/h \xC2\xB7 the mountain rescue is on its way", Hud::Flash::Bad); }
+      if (h.pending && h.rescue && !heli.rescuing() && rescueAt < 0) { strikes = 0; if (rideKind != Ride::None || !heli.rescueMe(true)) rescueAt = simTime + 3;   /* (hit by a vehicle: not your fault, no fee) */ flash("Hit by a " + h.what + " at " + std::to_string(h.kmh) + " km/h \xC2\xB7 the mountain rescue is on its way", Hud::Flash::Bad); }
     }
     if (rescueAt > 0 && simTime >= rescueAt) {
       rescueAt = -1;
-      if (rideKind == Ride::None && player.mode != PlayerMode::Sit && !rooms.inside() && !races.active()) rescue.start(); else if (!races.active()) doRescue();
+      if (!races.active() && !heli.rescuing()) doRescue();
     }
     // (Phase 5) the gameplay systems' frame
     pc.now = simTime;
     pc.driving = rideKind == Ride::Car;
-    pc.riding = rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express || (player.mode == PlayerMode::Sit && !rescue.carried());
+    pc.riding = rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express || (player.mode == PlayerMode::Sit && !heli.riding() && !ward.seated());
     if (started && !jailResumed) {
       jailResumed = true;
       const nlohmann::json& jl = save.data("jail");
@@ -2252,7 +2397,8 @@ int runGame(const GameOptions& opt) {
       oddJobs.update(frameDt);
       police.update(frameDt);
       police.peopleHits(frameDt);
-      rescue.update(frameDt, input.down(Action::Jump));
+      heli.update(frameDt, !menus.isOpen() && !tmap.isOpen());
+      ward.update(frameDt, !menus.isOpen() && !tmap.isOpen());
       if (police.fleeing()) { oddJobs.policeChase(); if (races.active()) police.clear("race"); }
       if (races.active() && oddJobs.active()) oddJobs.drop();
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
@@ -2381,10 +2527,11 @@ int runGame(const GameOptions& opt) {
           toast = "Out of " + owner + "'s car"; toastUntil = simTime + 2;
         }
       }
-    } else if (rescue.carried()) {
+    } else if (heli.riding() || ward.seated()) {   // (in the helicopter: yours, the rescue's; the ambulance; a chair by a hospital bed)
       dvec3 sp, sf;
-      if (rescue.seat(sp, sf)) player.setSeat(sp, sf);
-      rideLine = std::string("Mountain rescue   hold ") + prompts::K(input, Action::Jump) + " x4";
+      if (heli.seat(sp, sf) || ward.seat(sp, sf)) player.setSeat(sp, sf);
+      rig.skisInRide = false;
+      if (heli.active()) { std::string hp; heli.interact(hp, interact); interact = false; }
     } else if (player.mode == PlayerMode::Sit) {
       Lifts::RideState rs = lifts.updateRide();
       if (rs.arrived) leaveLift(rs.exit, "");
@@ -2514,12 +2661,13 @@ int runGame(const GameOptions& opt) {
     // the RACING stand), the job boards and a job's own spots
     if (started && rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !races.active() && !police.arrestedNow()) {
       std::string p5;
-      bool used = police.interact(p5, interact) || rescue.interact(p5, interact) || chalets.interact(p5, interact) || races.interact(p5, interact) || oddJobs.interact(p5, interact) ||
+      bool used = police.interact(p5, interact) || heli.interact(p5, interact) || ward.interact(p5, interact) || chalets.interact(p5, interact) || races.interact(p5, interact) || oddJobs.interact(p5, interact) ||
                   sleds.interact(p5, interact);
       if (sleds.active()) { rideKind = Ride::Sled; rig.skisInRide = false; }
       if (!p5.empty()) prompt = p5;
       if (used) interact = false;
     }
+    if (started && (ward.inBed() || ward.seated())) { std::string wp; if (ward.interact(wp, interact)) interact = false; prompt = wp; }   // (in your hospital bed, on a chair by one)
     if (started && !menus.isOpen() && !tmap.isOpen()) chalets.update(frameDt, cam, nav);
     // (Phase 4) the shops and counters on foot: the ski shop, the ticket seller, the Autohaus counter (your cars), the
     // huts; in your car at the Werkstatt: the repair
@@ -2567,6 +2715,7 @@ int runGame(const GameOptions& opt) {
     if (nightShot >= 0) hour = 21.5;   // (the autotest's night shots)
     light = timeOfDay(hour, dayLight);
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
+    pc.night = light.night;   // (the night outdoors: the helicopter's lamps, the ward's windows)
     if (rooms.inside()) light = rooms.lighting(light);
 
     // streaming + animation
@@ -2608,7 +2757,8 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(rideCamPos, focus);
       cam.fovY = 62; cam.nearZ = 0.2f;
     }
-    if (rescue.carried()) rescue.camera(cam);
+    heli.camera(cam);
+    ward.camera(cam);
     if (rideKind == Ride::Sled) sleds.camera(cam, frameDt);
     // (Phase 4) the main menu's slow orbit over the village; the skier showcase (the skier on the plaza, turned by a
     // drag / the right stick, the camera off to the side so the menu column stays clear)
@@ -2741,7 +2891,9 @@ int runGame(const GameOptions& opt) {
       rig.car.on = rig.car.passenger = mpCarFrame(mp, vmodels, mp.ride.owner, rig.car.g, rig.car.t, roll) && rig.car.t.S;
       rig.car.seat = mp.ride.seat;
     }
+    rig.bed.on = ward.inBed(); rig.bed.floor = ward.bedFloor(); rig.bed.hideHead = !ward.third();   // (lying in your hospital bed: hospitalroom.js poseBody)
     rig.update(paused ? 0 : frameDt, player, world);
+    if (rig.bed.on) ward.setBody(dvec3(rig.rig.bedEye), dvec3(rig.rig.bedBody));
     drive.setEyeRig(rig.eyeRigOk, dvec3(rig.eyeRig));
     scenery.dynamic.clear();
     if (transport.loaded()) {
@@ -2754,6 +2906,7 @@ int runGame(const GameOptions& opt) {
       sleds.fillColliders(scenery.dynamic);
     }
     rooms.fillColliders(scenery.dynamic);
+    heli.fillColliders(scenery.dynamic);
 
     // ---------------------------------------------------------------- (Phase 7) camera shake, screen effects, skis, outfit
     {
@@ -2856,10 +3009,13 @@ int runGame(const GameOptions& opt) {
       }
       dvec3 sirenP(0), amb(0), heliP(0);
       bool siren = police.sirenNear(cam.pos, sirenP);
-      if (rescue.ambulanceAt(amb) && (!siren || glm::length(amb - cam.pos) < glm::length(sirenP - cam.pos))) { siren = true; sirenP = amb; }
+      if (heli.sirenAt(amb) && (!siren || glm::length(amb - cam.pos) < glm::length(sirenP - cam.pos))) { siren = true; sirenP = amb; }
       audio.setSiren(siren, sirenP);
-      bool heli = police.heliAt(heliP) || rescue.heliAt(heliP);
-      audio.setChopper(heli, heliP);
+      double chopRpm = 1; bool chopIn = false;
+      bool chop = heli.rotorAt(heliP, chopRpm, chopIn);
+      if (chop && chopIn) heliP = cam.pos;   // (in the cabin)
+      if (!chop) chop = police.heliAt(heliP);
+      audio.setChopper(chop, heliP);
       // the air horns: a bus pulling out of a stop, a train leaving a station (heard within a few hundred metres)
       for (const dvec3& p : buses.departures) if (glm::length(p - cam.pos) < 400) audio.horn((int(p.x * 7) & 1) ? "bus" : "bus2", &p, 0.8f);
       buses.departures.clear();
@@ -2997,7 +3153,11 @@ int runGame(const GameOptions& opt) {
       hf.forecast = weather.forecast();
       {
         std::string o5 = police.objective();
-        if (o5.empty()) o5 = rescue.objective();
+        if (o5.empty()) o5 = heli.objective();
+        if (o5.empty()) o5 = ward.objective();
+        { std::string wl; double wx = 0, wz = 0;   // (flying: the compass points at the drop zone)
+          if (heli.waypoint(wl, wx, wz)) { hf.waypoint = true; hf.wpLabel = wl; hf.wpDist = std::hypot(wx - player.pos.x, wz - player.pos.z); hf.wpAngle = -wrapPi(std::atan2(wx - player.pos.x, wz - player.pos.z) - std::atan2(double(cam.forward().x), double(cam.forward().z))); } }
+        if (heli.active()) hf.speedo = false;   // (its own panel: heli/hud.js)
         if (o5.empty()) o5 = races.objective();
         if (o5.empty()) o5 = oddJobs.objective();
         if (o5.empty()) o5 = chalets.objective();
@@ -3012,7 +3172,8 @@ int runGame(const GameOptions& opt) {
       races.hud(ui, u5);
       oddJobs.hud(ui, u5);
       police.hud(ui, u5);
-      rescue.hud(ui, u5);
+      heli.hud(ui, u5);
+      ward.hud(ui, u5);
       chalets.hud(ui, u5);
       if (mp.active()) mpv.hud(ui, mp, cam, renderer.width(), renderer.height(), u5, save.setting("nameTags", 1) != 0, mp.interior(), "Y", "N");
     }
@@ -3067,7 +3228,6 @@ int runGame(const GameOptions& opt) {
       railway.addDraw(vdraw, cam.pos);
       express.addDraw(vdraw, cam.pos);
       police.addDraw(vdraw, cam.pos);
-      rescue.addDraw(vdraw, cam.pos);
       sleds.addDraw(vdraw, cam.pos);
       if (mp.active()) mpv.addDraw(mp, vdraw, vmodels, sleds.model(), sleds.fit(), cam.pos, mp.interior());
       {   // (Phase 7) the lights, car lamps and plates, spray, flags, snowcats
@@ -3081,12 +3241,12 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
     // the falling snow
-    if (indoor) rooms.draw(renderer);
+    if (indoor) { rooms.draw(renderer); ward.draw(renderer); }
     else if (drawVillage) {
       oddJobs.draw(renderer, cam.pos, jobBoard.get());
       races.draw(renderer, cam.pos);
       police.draw(renderer, cam.pos);
-      rescue.draw(renderer, cam.pos);
+      heli.draw(renderer, cam);
     }
     if (drawVillage) chalets.draw(renderer, cam.pos);
     people.begin(paused ? 0 : frameDt);
@@ -3102,7 +3262,7 @@ int runGame(const GameOptions& opt) {
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
     // (first person: your own body stays visible below the eye, the head folded away; at the wheel too: player.js /
     // drive.js placeRig)
-    bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || rescue.carried();
+    bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || heli.hideRig();
     railway.insideView = rideKind == Ride::Rail && seatView;
     express.insideView = rideKind == Ride::Express && seatView;
     // first person on skis: the gloves-and-poles view model rides on the camera (player.js, after the camera)

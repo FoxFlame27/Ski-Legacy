@@ -47,6 +47,16 @@ const PATCHES = [
         'export function registerStation(plan, origin, az, colliders, o = {}) { return globalThis.__slRegStation ? globalThis.__slRegStation(() => __rs0(plan, origin, az, globalThis.__slRailCols, o)) : __rs0(plan, origin, az, colliders, o); }\nfunction __rs0(plan, origin, az, colliders, { zOff = 0 } = {}) {'],
     ],
   },
+  {
+    // the helipad's deck (heli/pad.js padTexture) paints its concrete and the snow blown onto its rim pixel by pixel
+    // (a noise canvas scaled up, getImageData / putImageData): the recorder has no pixels, so the same picture in
+    // drawing commands: the concrete's mean grey under the grain it speckles on, the snow as rings thickening to the rim
+    file: '/src/game/heli/pad.js',
+    edits: [
+      ['  g.imageSmoothingEnabled = true;\n  g.drawImage(n, 0, 0, S, S);', "  g.imageSmoothingEnabled = true;\n  g.fillStyle = 'rgb(112,117,123)'; g.fillRect(0, 0, S, S);"],
+      ['  g.putImageData(snow, 0, 0);\n', "  for (let k = 0; k < 16; k++) { const rr = 0.83 + ((k + 0.5) * 0.17) / 16, cv = ((rr - 0.83) / 0.17) * 0.85; g.strokeStyle = 'rgba(240,245,252,' + (cv * cv * 0.87).toFixed(3) + ')'; g.lineWidth = (h * 0.17) / 16 + 1; g.beginPath(); g.arc(h, h, rr * h, 0, Math.PI * 2); g.stroke(); }\n"],
+    ],
+  },
 ];
 
 export async function load(url, context, nextLoad) {

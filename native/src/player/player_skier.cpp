@@ -85,7 +85,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   const double sp = p.speed();
   // skis on the feet or strapped to the back (setSkisOn), shown when owned; a gondola's rack takes them while riding
   rig.setCarry(p.hasSkis && !p.skisOn);
-  bool skisShown = p.hasSkis && (p.mode != PlayerMode::Sit || skisInRide || sled);
+  bool skisShown = p.hasSkis && !bed.on && (p.mode != PlayerMode::Sit || skisInRide || sled);
   rig.setSkisVisible(skisShown);
   if (!car.on) carFrames_ = 0;
   if (p.teleportCount != lastTeleport_) { lastTeleport_ = p.teleportCount; rig.snapPose(); }
@@ -125,7 +125,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   st.hasFallHeading = true; st.fallHeading = p.fall.axisHeading;
   st.fallAir = p.mode == PlayerMode::Fall && p.fallAir();
   st.fp = fp ? 1 : 0;
-  rig.setHeadHidden(fp);
+  rig.setHeadHidden(bed.on ? bed.hideHead : fp);
   // the pole plants the controller asked for (startPolePlant: the root is where the rig stood last frame)
   for (int8_t side : p.polePlants) {
     V3 fw(std::sin(p.heading), 0, std::cos(p.heading));
@@ -142,9 +142,10 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
     rig.setSkisVisible(p.hasSkis);
     rig.setHeadHidden(false);
   }
-  rig.polesHidden = showcase;
+  rig.polesHidden = showcase || bed.on;
   rig.rootPos = V3(p.renderPos);
   rig.update(dt, st);
+  if (bed.on && p.mode == PlayerMode::Fall) rig.bedPose(bed.floor);   // (in a hospital bed: flat on the back, the arms by the side)
   // you at the wheel (drive.js placeRig): fixed to the car (its pitch, roll, bounce), leant back into the backrest,
   // both hands on the wheel at ten to two turning with it, feet to the pedals; inside, the head folded away
   eyeRigOk = false;

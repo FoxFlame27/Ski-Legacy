@@ -195,6 +195,10 @@ public:
   /// back, under the roof (the chase view), hands on the wheel at ten to two turning with it (steer: rad of the front
   /// wheels), the legs to the pedals. Returns your eyes in the car's frame (the cockpit camera: d.eyeRig).
   three::V3 placeDriver(const glm::dmat4& g, const CarTemplate& t, double steer, bool inside);
+  /// (hospitalroom.js bedArms) a patient lying in bed, after the fall pose: the trunk level on the mattress (`floor`: the
+  /// fall pose's floor), the arms by the side, the legs straight along the bed; bedEye: the eyes over the pillow
+  void bedPose(double floor);
+  three::V3 bedEye{0}, bedBody{0};
   /// (carpeople.js) twoBone: the middle joint toward `pole`, the hand at `target` (world)
   void carTwoBone(int a, int b, int c, const three::V3& target, const three::V3& pole);
   /// the skinned mesh's vertex i as posed (world)
@@ -293,6 +297,8 @@ private:
   std::vector<Binding> bindings_;
   std::vector<Action> actions_;
   double clipW_[3] = {0, 1, 0};
+  double trunkBottom() const;
+  double bedBack_ = std::nan("");
   int accuIndex_ = 0;
   bool mixerOk_ = false;
   void setupMixer();
@@ -317,6 +323,8 @@ public:
   bool eyeRigOk = false;
   three::V3 eyeRig{0};
   bool loaded() const { return rig.ready(); }
+  /// (hospitalroom.js poseBody) lying in a hospital bed: set by the game every frame while you rest
+  struct Bed { bool on = false, hideHead = true; double floor = 0; } bed;
   bool skisInRide = true;   // riding: skis on the feet (a chairlift) or in the cabin's outside rack (a gondola: hidden)
   /// (outfits.js) the shop's garments: jacket base / accent, trousers base / accent, helmet, lens (sRGB 0..1, a = 0:
   /// the original piece). Baked once into the albedo (UV space, like the JS bake), the texture's shading kept.

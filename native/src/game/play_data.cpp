@@ -160,6 +160,8 @@ bool PlayData::load(const nlohmann::json& j, const std::vector<uint8_t>& bin) {
   }
   for (auto& c : j["categories"]) categories.push_back({str(c, "id"), str(c, "name")});
   sellRefund = num(j, "sellRefund", 0.5);
+  if (j.contains("heli") && j["heli"].is_object()) heli = std::make_shared<nlohmann::json>(j["heli"]);
+  if (j.contains("ward") && j["ward"].is_object()) ward = std::make_shared<nlohmann::json>(j["ward"]);
   ok = true;
   SL_INFO("play: %zu courses, %zu bus races, %zu job boards, %zu destinations, %zu spots, %zu taxi places, %zu chalets, %zu furniture items",
           courses.size(), busRaces.size(), hubs.size(), dests.size(), spots.size(), taxi.size(), chalets.size(), furniture.size());

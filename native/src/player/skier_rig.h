@@ -15,6 +15,8 @@
 #pragma once
 #include "core/math.h"
 #include "engine/model.h"
+#include "player/car_seat.h"
+#include "player/outfits.h"
 #include "player/three_math.h"
 #include <array>
 #include <functional>
@@ -25,6 +27,7 @@
 namespace sl {
 class AssetManager;
 class Renderer;
+struct Camera;
 namespace platform { class Platform; }
 class Player;
 class World;
@@ -132,6 +135,7 @@ public:
   /// local TRS of bone / node i (three's bone.position / quaternion / scale)
   const three::V3& localT(int i) const { return t_[size_t(i)]; }
   const three::Q& localR(int i) const { return r_[size_t(i)]; }
+  const three::V3& localScale(int i) const { return s_[size_t(i)]; }
   three::M4 worldMatrix(int i) const { return W(i); }
   /// the clips' playback (k: idle / walk / run): the mixer action's time and the blend weight (skier.js clips[k])
   double clipTime(int k) const { for (auto& a : actions_) if (a.clip == k) return a.time; return -1; }
@@ -143,6 +147,59 @@ public:
   bool hasSkis() const { return hasSkis_; }
   bool hasPoles() const { return hasPoles_; }
   bool gearVisible = true, bodyVisible = true;
+  bool firstPerson() const { return fp_; }
+  /// the pole plants' timers (0 .. 1 over the plant, 1: none; the first-person camera and hands follow them)
+  double plantT(int i) const { return plant_[i].t; }
+  /// (first person) the point a flip turns the body about (the hips, 8 cm up; skier.js fpFlipC), valid once set
+  three::V3 fpFlipC{0};
+  bool hasFpFlipC = false;
+
+  // ---- the root's rotation (a car seat: the whole body takes the car's pitch and roll, drive.js placeRig); update()
+  // sets it back to the heading
+  void setRootQuat(const three::Q& q);
+  const three::Q& rootQuat() const { return rootQ_; }
+
+  // ---- first person: the view model (skier.js buildFpView / updateFpView): the gloved hands holding their poles,
+  // carried in the camera's frame. Per frame after the camera.
+  struct FpViewState { bool skiing = false, air = false; double speed = 0, absorb = 0, brake = 0, rough = 0.5; };
+  struct FpHand { three::V3 p{0}, v{0}, d{0}; bool init = false; three::V3 rootP{0}, cuffP{0}; three::Q rootQ{1, 0, 0, 0}, cuffQ{1, 0, 0, 0}; };
+  struct FpView {
+    bool built = false, visible = false, arms = true;   // arms: the Meshy arms (driving_hand_c) on the fists, else the procedural fists
+    three::V3 pos{0}; three::Q quat{1, 0, 0, 0};       // the group: the camera
+    double t = 0, raise = 0; bool init = false;
+    three::Q q{1, 0, 0, 0}; three::V3 e{0}, ev{0}, acc{0}, lag{0}, lagV{0}, w{0};
+    FpHand hands[2];
+  } fpView;
+  /// show: (skier.js) the player in first person, skiing, poles loaded, not tumbling, skis on
+  void updateFpView(double dt, const three::V3& camPos, const three::Q& camQ, const FpViewState& st, bool armsLoaded = true);
+
+  // ---- sitting in a car (car_seat.cpp: carpeople.js / seatpose.js), after update() with the 'sit' pose
+  /// carpeople.js leanBack: the spine back by rec about R (world: the figure's right), the neck and head levelling the eyes
+  void leanBack(const three::V3& R, double rec, double neck, double head);
+  /// carpeople.js underRoof: the head top kept under the car's roof (g: the car's frame, null: the rig's world is it);
+  /// returns how far it is still over (m)
+  double underRoof(const glm::dmat4* g, const CarTemplate* t, int seat, bool wheel);
+  struct SeatLegsOpt { bool driver = false, hands = false, roof = true, hasFloor = false; double floor = 0; };
+  /// carpeople.js seatLegs: the legs into the footwell, the heels on the car's floor (and the hands on the thighs)
+  void seatLegs(const glm::dmat4* g, const CarTemplate* t, int seat, const SeatLegsOpt& o);
+  enum class SeatedKind : uint8_t { Thighs, Lap, Crossed, Phone };
+  /// seatpose.js poseSeated (the rig at the origin facing +z, its seat at the origin)
+  void poseSeated(SeatedKind kind, double look, double rnd);
+  /// carpeople.js bakeOne + fill: one of the traffic's seated figures, posed at the origin (heading 0) after a 'sit'
+  /// update there; carFig: where its seat point goes in the car (originAt, under the roof), its head top
+  void poseCarFigure(const CarSeatRef& c);
+  struct CarFig { three::V3 O{0}, hip{0}, chest{0}, eye{0}; bool hasChest = false; double top = 0; int key = -1; } carFig;
+  /// fill(): where the posed figure's seat point goes on the seat c (car frame)
+  three::V3 carFigureOrigin(const CarSeatRef& c) const;
+  /// drive.js placeRig: you at the wheel (after update() seated at the seat point): the root turned with the car g, leant
+  /// back, under the roof (the chase view), hands on the wheel at ten to two turning with it (steer: rad of the front
+  /// wheels), the legs to the pedals. Returns your eyes in the car's frame (the cockpit camera: d.eyeRig).
+  three::V3 placeDriver(const glm::dmat4& g, const CarTemplate& t, double steer, bool inside);
+  /// (carpeople.js) twoBone: the middle joint toward `pole`, the hand at `target` (world)
+  void carTwoBone(int a, int b, int c, const three::V3& target, const three::V3& pole);
+  /// the skinned mesh's vertex i as posed (world)
+  three::V3 skinnedVertex(size_t i) const;
+  size_t skinnedCount() const;
   /// the pose for drawing (model space floats: Pose::global / joints); body matrix = translate(rootPos) * rotY(heading)
   void writePose(Pose& out) const;
   /// one-shot effects (skierFX: 'land' | 'pole' | 'impact' | 'crash' | 'slide')
@@ -201,6 +258,9 @@ private:
   mutable std::vector<M4> W_;
   mutable std::vector<uint8_t> dirty_;
   M4 rootM_{1};
+  Q rootQ_{1, 0, 0, 0};
+  std::vector<V3> headTop_;   // (carpeople.js headTopOf: the crown's points in the head bone's frame, once per rig)
+  bool headTopDone_ = false;
   // skier.js state
   enum class Mode : uint8_t { Foot, Move, Sit, Ski, Fall } mode_ = Mode::Foot, prevMode_ = Mode::Foot;
   double blend_ = 1;
@@ -247,7 +307,15 @@ class PlayerSkier {
 public:
   bool load(AssetManager& assets, const std::string& colour = "red", const std::string& skiModel = "ski_rental");
   void update(double dt, Player& p, World& world);
+  /// first person on skis: the gloves-and-poles view model rides on the camera (player.js after the camera:
+  /// rig.updateFpView with fpViewState); loads the arm the first time
+  void updateFpView(double dt, const Camera& cam, const Player& p, gfx::Device& dev, AssetManager& assets);
   void submit(Renderer& r, bool hideBody) const;
+  /// (drive.js placeRig) you at the wheel of your car: set by the game every frame while you drive (on = false when
+  /// out); the rig is posed in the seat after its update, its eyes (in the car's frame) come back in eyeRig
+  struct CarSeat { bool on = false, inside = false, passenger = false; glm::dmat4 g{1}; CarTemplate t; double steer = 0; int seat = 1; } car;
+  bool eyeRigOk = false;
+  three::V3 eyeRig{0};
   bool loaded() const { return rig.ready(); }
   bool skisInRide = true;   // riding: skis on the feet (a chairlift) or in the cabin's outside rack (a gondola: hidden)
   /// (outfits.js) the shop's garments: jacket base / accent, trousers base / accent, helmet, lens (sRGB 0..1, a = 0:
@@ -277,6 +345,10 @@ private:
   int gen_ = 0;
   double grabVis_ = 0, spinVis_ = 0;
   int lastTeleport_ = -1;
+  int carFrames_ = 0;                  // (drive.js rigFrames: hidden until posed seated)
+  OutfitLook look_;
+  std::shared_ptr<class FpHands> fpHands_;
+  std::string fpColourKey_;
 };
 
 /// Rig models / gear shared by every rig of a character (loaded once: keepCpu for the measurements).

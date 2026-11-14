@@ -1,4 +1,5 @@
 #include "player/player.h"
+#include "player/three_math.h"
 #include "world/scenery.h"
 #include "world/world.h"
 #include <cstdlib>
@@ -30,8 +31,30 @@ const double CRASH_HIT = 11;
 // ---- on foot
 const double FOOT_SPEED = 4.2, SPRINT_K = 1.5;
 const double WALK_FULL = std::tan(30 * DEG), WALK_MAX = std::tan(50 * DEG);
-// ---- first person
-const double FP_EYE_H = 1.26;
+// ---- first person (player.js FP_*)
+const double FP_PITCH = -15 * DEG;     // default look-down while skiing
+const double FP_SLOPE_PITCH = 0.55;    // share of the snow's pitch the view follows (looks down a steep run)
+const double FP_EYE_H = 1.26;          // eye over the snow in the athletic stance (m), until the rig has one
+const double FP_NEAR = 0.08;
+const double FP_FOV = 78;              // vertical field of view at rest (deg)...
+const double FP_FOV_SPEED = 0.35;      // ...+ this per m/s over 10 m/s (up to +10.5 deg)
+const double FP_LEAD = 0.13;           // the head looks this many seconds of turning ahead into a turn...
+const double FP_LEAD_MAX = 0.2;        // ...at most this far (rad)
+const double FP_BANK = 0.12;           // head roll per radian of body inclination...
+const double FP_BANK_MAX = 6 * DEG;    // ...at most (a steady horizon)
+// player.js spring(): exact critically damped step of x (velocity v) toward target at angular frequency w
+void spring(double& x, double& v, double target, double w, double dt) {
+  double d = x - target, e = std::exp(-w * dt), c = v + w * d;
+  x = target + (d + c * dt) * e;
+  v = (v - c * w * dt) * e;
+}
+// noise.js smoothstep(a, b, x) (either order of the edges)
+double sstep(double a, double b, double x) { double t = std::min(1.0, std::max(0.0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+// THREE.Quaternion.setFromEuler, order 'YXZ'
+glm::dquat eulerYXZ(double x, double y, double z) {
+  double c1 = std::cos(x / 2), c2 = std::cos(y / 2), c3 = std::cos(z / 2), s1 = std::sin(x / 2), s2 = std::sin(y / 2), s3 = std::sin(z / 2);
+  return glm::dquat(c1 * c2 * c3 + s1 * s2 * s3, s1 * c2 * c3 + c1 * s2 * s3, c1 * s2 * c3 - s1 * c2 * s3, c1 * c2 * s3 - s1 * s2 * c3);
+}
 
 double rnd01() { return double(std::rand()) / RAND_MAX; }
 double approachAngleDamp(double a, double b, double k) { return dampAngle(a, b, k); }
@@ -56,7 +79,7 @@ void Player::teleport(double x, double z, double h) {
   fallAir_ = false;
   camPos_ = pos + dvec3(-std::sin(h) * 5, 3, -std::cos(h) * 5);
   camFocusInit_ = false; camLook_ = dvec3(0); travelYaw_ = h; camDip_ = camDipV_ = 0;
-  shake_ = fovKick_ = airBlend_ = 0;
+  shake_ = fovKick_ = airBlend_ = 0; fpSlope_ = 0;
   prevVelYaw_ = h;
   air = ballistic = false; flip = yawFx = yawFxV = airSteer_ = 0; charging = false; charge = 0; popT_ = 1;
   absorb = absorbV = 0; steer = edge = lean = skidAmt_ = skidYaw = turnRate_ = 0;
@@ -590,6 +613,16 @@ void Player::collide(double speed, double feetY, double above) {
   };
   for (size_t ci = 0; ci < n; ci++) test(scenery_->colliders()[near ? size_t((*near)[ci]) : ci]);
   for (const Collider& c : scenery_->dynamic) test(c);   // (Phase 3: vehicles)
+  // rocks (player.js: vegetation.collide's rocks from BIG_ROCK up stop you, a jump clears their top; the lower ones are
+  // skied over)
+  if (const Rock* k = scenery_->rockAt(p.x, p.z, R, 2.6)) {
+    if (!(feetY > double(k->y) + 0.75 * k->s)) {
+      double dx = p.x - k->x, dz = p.z - k->z, d = std::hypot(dx, dz);
+      if (d == 0) d = 1;
+      p.x = k->x + dx / d * (k->r + R + 0.01); p.z = k->z + dz / d * (k->r + R + 0.01);
+      bounce(dx / d, dz / d, speed, false);
+    }
+  }
   // trees: the trunk stops you; the boughs are a soft bump (player.js)
   if (above < 2.5) {
     if (const Tree* t = scenery_->treeAt(p.x, p.z, R, false)) {
@@ -713,20 +746,13 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
   const bool sit = mode == PlayerMode::Sit;
   if (vh > 1.5 && !sit) travelYaw_ = dampAngle(travelYaw_, std::atan2(vel.x, vel.z), dt * (air ? 3 : 6));
   else if (mode != PlayerMode::Fall) travelYaw_ = dampAngle(travelYaw_, heading, dt * 4);
-  if (view == View::First && mode != PlayerMode::Fall) {
-    // helmet cam (simplified): the eyes over the boots, looking a little down the run
-    double eyeT = mode == PlayerMode::Ski ? FP_EYE_H - clamp(crouch + absorb, 0, 1) * 0.35 : sit ? 0.78 : 1.62;
-    fpEye_ = lerp(fpEye_, eyeT, 1 - std::exp(-dt * 12));
-    double yaw = heading + lookYaw_;
-    double pitch = lookPitch_ + (mode == PlayerMode::Ski ? -15 * DEG : -5 * DEG);
-    camFocus_ = renderPos + dvec3(0, fpEye_ + camDip_ * 0.3, 0) + dvec3(std::sin(yaw), 0, std::cos(yaw)) * 0.12;
-    camPos_ = camFocus_;
-    camLook_ = dvec3(std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch));
-    double fov = 78 + std::max(0.0, sp - 10) * 0.35 + fovKick_ * 2;
-    camFov_ = lerp(camFov_, std::min(fov, 92.0), 1 - std::exp(-dt * 3));
-    return;
-  }
-  if (mode != PlayerMode::Walk && f.now - f.lastLook > 1.2) {
+  camShake_ = f.camShake;
+  // first person: a wipeout pulls the camera out of your head to watch the tumble from behind (third-person camera);
+  // you're back in your eyes when you're up again
+  updateFpCrash();
+  if (f.lookX != 0 || f.lookY != 0) followNow_ = false;
+  if (view == View::First && !fpCrash_) { updateFirstPerson(dt, f, sp); return; }
+  if (mode != PlayerMode::Walk && (followNow_ || f.now - f.lastLook > 1.2)) {
     double d = wrapPi(travelYaw_ + PI - camYaw_);
     double rate = sit ? 2.2 : air ? 1.3 : mode == PlayerMode::Fall ? 0.8 : 2.0 + fast * 1.5;
     camYaw_ += d * (1 - std::exp(-dt * rate));
@@ -760,17 +786,139 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
 void Player::cameraFor(Camera& cam) const {
   double t = time_;
   double fast = mode == PlayerMode::Ski && !air ? smoothstep(15, 36, speed()) : 0;
-  double vib = fast * 0.009 + shake_ * 0.05;
+  double vib = camShake_ ? fast * 0.009 + shake_ * 0.05 : 0;
   dvec3 jit((std::sin(t * 57) * 0.6 + std::sin(t * 31.7 + 1) * 0.4) * vib, (std::sin(t * 49 + 2) * 0.6 + std::sin(t * 23.3) * 0.4) * vib,
             (std::sin(t * 43 + 4) * 0.6 + std::sin(t * 37.1 + 3) * 0.4) * vib);
   cam.fovY = float(camFov_);
-  if (view == View::First && mode != PlayerMode::Fall) {
-    cam.nearZ = 0.08f;
-    cam.lookAt(camPos_ + jit, camPos_ + camLook_);
+  if (view == View::First && !fpCrash_) {
+    // (the helmet cam: its own buzz and roll, no third-person jitter; the camera's frame straight from the quaternion)
+    cam.nearZ = float(FP_NEAR);
+    cam.pos = camPos_;
+    cam.basis = mat3(glm::mat3_cast(glm::quat(fpQ_)));
   } else {
     cam.nearZ = 0.1f;
     dvec3 eye = camPos_ + jit + dvec3(0, camDip_, 0);
     cam.lookAt(eye, camFocus_);
+  }
+}
+
+void Player::noteCamera(const Camera& cam) {
+  lastCamP_ = cam.pos;
+  lastCamQ_ = glm::dquat(glm::quat_cast(cam.basis));
+}
+
+// player.js updateFpCrash: first person, wiping out: the third-person camera takes over for the fall, starting just
+// behind your head and pulling out to watch the tumble; when you're up again the first-person view eases back in.
+// (Picked up off the snow by the rescue helicopter's winch you stay in view too.)
+void Player::updateFpCrash() {
+  bool on = view == View::First && (mode == PlayerMode::Fall || (fpCrash_ && mode == PlayerMode::Sit));
+  if (on == fpCrash_) return;
+  fpCrash_ = on;
+  if (on) {
+    const dvec3 c = lastCamP_;
+    double vh = std::hypot(vel.x, vel.z);
+    travelYaw_ = vh > 1.5 ? std::atan2(vel.x, vel.z) : heading;
+    camPos_ = dvec3(c.x - std::sin(travelYaw_) * 0.8, c.y + 0.3, c.z - std::cos(travelYaw_) * 0.8);
+    camYaw_ = travelYaw_ + PI; camPitch_ = -0.22;
+    camFocusInit_ = false; camLook_ = dvec3(0); followNow_ = true;
+  } else fpCam_.mode = 99;   // (a mode change: the view eases over)
+}
+
+// player.js updateFirstPerson: a helmet cam. Skiing: the eyes of your own (visible) body over the boots, so looking
+// down shows your legs on the bindings. On foot and seated: the eyes of the walking / sitting body. The eye is the
+// posed head, smoothed relative to the feet (no lag at speed, no jitter from the pose).
+void Player::updateFirstPerson(double dt, const PlayerFrameControls& f, double sp) {
+  FpCam& S = fpCam_;
+  const double h = clamp(dt, 0, 0.05);
+  const bool skiing = mode == PlayerMode::Ski, sit = mode == PlayerMode::Sit;
+  S.t += h;
+  // a change of mode (back up after a wipeout, clicking into the skis, sitting down) would jump the view: ease over
+  if (S.mode != int(mode)) {
+    if (S.mode != -1) { S.fromQ = lastCamQ_; S.fromP = lastCamP_; S.blend = 0; }
+    S.mode = int(mode);
+  }
+  // ---- the eye: your own head as posed, relative to the feet, smoothed (springs)
+  dvec3 tgt = fpRig.ok ? fpRig.eyeOff : dvec3(0, FP_EYE_H, 0);
+  if (glm::dot(tgt, tgt) > 9) tgt = dvec3(0, FP_EYE_H, 0);   // (no pose yet)
+  if (!S.init || glm::dot(tgt - S.off, tgt - S.off) > 2.25) { S.off = tgt; S.offV = dvec3(0); S.init = true; }
+  const double wH = skiing ? 40 : sit ? 18 : 16, wV = skiing ? 32 : sit ? 18 : 13;
+  spring(S.off.x, S.offV.x, tgt.x, wH, h);
+  spring(S.off.y, S.offV.y, tgt.y, wV, h);
+  spring(S.off.z, S.offV.z, tgt.z, wH, h);
+  // never more than a couple of centimetres behind the head: the eye stays in front of the (collapsed) head
+  dvec3 lag = S.off - tgt;
+  const double maxLag = skiing ? 0.02 : 0.04;
+  if (glm::dot(lag, lag) > maxLag * maxLag) S.off = tgt + lag * (maxLag / glm::length(lag));
+  dvec3 eye = renderPos + S.off;
+  eye.y += camDip_ * 0.3;
+  // the head goes with the hands: a pole push dips it a little forward and down
+  if (skiing) {
+    double push = 0;
+    for (double pt : fpRig.plantT) if (pt < 1) push = std::max(push, sstep(0, 0.25, pt) * (1 - sstep(0.35, 0.85, pt)));
+    eye.y -= 0.03 * push;
+    eye.x += std::sin(heading) * 0.04 * push; eye.z += std::cos(heading) * 0.04 * push;
+  }
+  // ---- where you look: the skis' heading, a little ahead into a turn, plus the mouse
+  const double yaw0 = heading + (skiing ? yawFx : 0);
+  // looking down tips the head forward over the chest: the eyes come forward and down a little
+  const double nod = sstep(0.45, 1.4, -(fpBase_ + lookPitch_));
+  if (nod > 0) { double yl = yaw0 + lookYaw_; eye.x += std::sin(yl) * 0.085 * nod; eye.z += std::cos(yl) * 0.085 * nod; eye.y -= 0.03 * nod; }
+  const double leadT = skiing && !air ? clamp(turnRate_ * FP_LEAD, -FP_LEAD_MAX, FP_LEAD_MAX) * sstep(3, 9, sp) : 0;
+  spring(S.lead, S.leadV, leadT, 6.5, h);
+  // the pitch of the snow along the way you're going (look down a steep run), in the air the flight path
+  double slope = 0;
+  if (skiing) {
+    double fx = std::sin(yaw0), fz = std::cos(yaw0);
+    const dvec3& n = normal;
+    const dvec3& v = vel;
+    slope = air ? 0.7 * clamp(std::atan2(v.y, std::max(2.0, std::hypot(v.x, v.z))), -0.75, 0.45) : std::atan2(-(n.x * fx + n.z * fz), n.y);
+  }
+  fpSlope_ = lerp(fpSlope_, slope, 1 - std::exp(-h * (air ? 2.5 : 3)));
+  // base look-down eases in when you click into the skis, out when you walk
+  fpBase_ = lerp(fpBase_, skiing ? FP_PITCH + FP_SLOPE_PITCH * fpSlope_ : 0, 1 - std::exp(-h * 4));
+  double pitch = fpBase_ + lookPitch_ - absorb * 0.2;
+  if (skiing && popT_ < 0.25) pitch += 0.05 * std::sin((popT_ / 0.25) * PI);   // the pop lifts the head
+  // the head banks a little into the carve (never more than a few degrees: a steady horizon)
+  const double bankT = skiing && !air ? clamp(-edge * FP_BANK, -FP_BANK_MAX, FP_BANK_MAX) : 0;
+  spring(S.roll, S.rollV, bankT, 5.5, h);
+  const double roll = S.roll;
+  pitch = clamp(pitch, -1.25, 1.3);
+  // looking down, the eye goes forward and a little down with the head, so the camera is never inside the collar
+  if (pitch < -0.55) {
+    double k = sstep(-0.55, -1.25, pitch), fy = yaw0 + S.lead + lookYaw_;
+    eye.x += std::sin(fy) * 0.16 * k; eye.z += std::cos(fy) * 0.16 * k; eye.y -= 0.05 * k;
+  }
+  // speed: a fine buzz through the skis (more when skidding), and the shake of hard landings
+  const double fast = skiing && !air ? sstep(14, 34, sp) : 0;
+  const double chatter = skiing && !air ? clamp(sideslip, 0, 1) * sstep(5, 14, sp) : 0;
+  const double amp = f.camShake ? fast * 0.0022 + chatter * 0.0035 + shake_ * 0.014 : 0;
+  const double t = S.t;
+  auto buzz = [&](double a, double b, double c) { return (std::sin(t * a + c) * 0.6 + std::sin(t * b + c * 1.7) * 0.4) * amp; };
+  glm::dquat q = eulerYXZ(pitch + buzz(71, 43.7, 0.3), yaw0 + S.lead + lookYaw_ + PI + buzz(53, 31.3, 1.9) * 0.5, roll + buzz(59, 37.1, 4.1) * 0.7);
+  // flips: the helmet cam goes round with you, about the body's center (the rig turns the body the same way)
+  const double fl = skiing ? flip : 0;
+  if (fl != 0 && fpRig.hasFlipC) {
+    const double hd = airTravel_;
+    const dvec3 C = renderPos + fpRig.flipCOff;
+    const glm::dquat fq = three::axisAngle(dvec3(-std::cos(hd), 0, std::sin(hd)), -fl);
+    q = three::mul(fq, q);
+    eye = three::applyQ(eye - C, fq) + C;
+  }
+  // ease over a mode change (rotations; positions only when they didn't jump: a teleport or the crash camera)
+  if (S.blend < 1) {
+    S.blend = std::min(1.0, S.blend + h / 0.3);
+    const double k = sstep(0, 1, S.blend);
+    q = three::slerp(S.fromQ, q, k);
+    if (glm::dot(S.fromP - eye, S.fromP - eye) < 4) eye = S.fromP + (eye - S.fromP) * k;
+  }
+  camPos_ = eye;
+  fpQ_ = q;
+  const double fov = FP_FOV + (f.fovSetting - 65) + clamp(sp - 10, 0, 30) * FP_FOV_SPEED + fovKick_ * 2.5;
+  camFov_ = lerp(camFov_, fov, 1 - std::exp(-h * 3));
+  // when not dragging the mouse, the view slowly re-centers on the skis while skiing
+  if (skiing && f.now - f.lastLook > 1.5) {
+    lookYaw_ *= std::exp(-dt * 1.5);
+    lookPitch_ *= std::exp(-dt * 1.0);
   }
 }
 

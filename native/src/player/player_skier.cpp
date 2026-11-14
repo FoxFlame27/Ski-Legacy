@@ -1,12 +1,15 @@
 // The player's body: player.js's feed of the skier rig (update(): the rig state from the controller, every frame),
 // the models (main.js makeRig: your character's _rigged / _anims, the equipped skis, the poles) and drawing.
 #include "player/skier_rig.h"
+#include "player/fp_hands.h"
 #include "player/outfits.h"
 #include "core/log.h"
 #include "engine/asset_manager.h"
 #include "engine/renderer.h"
 #include "player/player.h"
 #include "world/world.h"
+#include "engine/mesh_kit.h"
+#include <cstdio>
 #include <unordered_map>
 
 namespace sl {
@@ -84,6 +87,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   rig.setCarry(p.hasSkis && !p.skisOn);
   bool skisShown = p.hasSkis && (p.mode != PlayerMode::Sit || skisInRide || sled);
   rig.setSkisVisible(skisShown);
+  if (!car.on) carFrames_ = 0;
   if (p.teleportCount != lastTeleport_) { lastTeleport_ = p.teleportCount; rig.snapPose(); }
   switch (p.mode) {
     case PlayerMode::Walk: st.mode = sp > 0.1 ? RigMode::Walk : RigMode::Idle; break;
@@ -106,7 +110,8 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   st.grab = p.mode == PlayerMode::Ski ? grabVis_ : 0;
   st.spinVel = p.mode == PlayerMode::Ski ? spinVis_ : 0;
   st.charge = p.charging && !p.air ? p.charge : 0;
-  const bool fp = p.view == Player::View::First && p.mode != PlayerMode::Fall;
+  // first person (player.js: view first and not watching a crash): the head folded away, the eye the camera
+  const bool fp = p.firstPerson();
   st.lookYaw = fp ? p.lookYaw() * 0.5 : 0;
   st.lookPitch = fp ? p.lookPitch() * 0.4 : 0;
   st.hasSeat = p.mode == PlayerMode::Sit;
@@ -140,16 +145,74 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   rig.polesHidden = showcase;
   rig.rootPos = V3(p.renderPos);
   rig.update(dt, st);
+  // you at the wheel (drive.js placeRig): fixed to the car (its pitch, roll, bounce), leant back into the backrest,
+  // both hands on the wheel at ten to two turning with it, feet to the pedals; inside, the head folded away
+  eyeRigOk = false;
+  if (car.on && p.mode == PlayerMode::Sit) {
+    if (car.passenger) {
+      // (carride.js) riding in another player's car: your legs to its footwell, as the others see you (remote.js carLegs)
+      SkierRig::SeatLegsOpt o;
+      o.driver = car.seat == 0; o.hands = true;
+      rig.seatLegs(&car.g, &car.t, car.seat, o);
+    } else {
+      eyeRig = rig.placeDriver(car.g, car.t, car.steer, car.inside);
+      eyeRigOk = true;
+    }
+    carFrames_++;
+  }
+  // what the first-person camera takes from the pose (player.js reads rig.eyeStable, rig.plant, rig.fpFlipC)
+  p.fpRig.ok = true;
+  p.fpRig.eyeOff = dvec3(rig.eyeStable - rig.rootPos);
+  p.fpRig.plantT[0] = rig.plantT(0); p.fpRig.plantT[1] = rig.plantT(1);
+  p.fpRig.hasFlipC = rig.hasFpFlipC;
+  p.fpRig.flipCOff = dvec3(rig.fpFlipC - rig.rootPos);
   rig.writePose(pose_);
+}
+
+// player.js fpViewState + skier.js updateFpView / syncFpArms
+void PlayerSkier::updateFpView(double dt, const Camera& cam, const Player& p, gfx::Device& dev, AssetManager& assets) {
+  if (!rig.ready()) return;
+  SkierRig::FpViewState o;
+  o.skiing = p.view == Player::View::First && p.mode == PlayerMode::Ski && !showcase;
+  if (o.skiing) {
+    o.speed = p.speed(); o.air = p.air; o.absorb = p.absorb; o.brake = p.skidAmt();
+    o.rough = p.groomedAt(p.pos.x, p.pos.z) ? 0.25 : 1;   // (a groomed run is smooth; off it the snow is rough)
+  }
+  // the Meshy arms in your colours: the sleeve your jacket (the outfit's jacket colour, else the character's own sleeve),
+  // the gloves the character's own; follows the shop
+  if (o.skiing && rig.firstPerson() && !fpHands_) {
+    fpHands_ = std::make_shared<FpHands>();
+    fpHands_->load(dev, assets);
+  }
+  if (fpHands_ && fpHands_->armsLoaded()) {
+    std::string key = std::to_string(gen_) + "|" + lookKey_;
+    if (key != fpColourKey_) {
+      fpColourKey_ = key;
+      vec3 glove = hexColor("#2a2d33"), sleeve = hexColor("#1f6fd1");   // (fpArmMaterial's defaults)
+      vec3 c;
+      if (fpRigColour(*model_, model_->b[RigModel::lHand], c)) glove = c;
+      if (look_.jacket) {
+        char hx[8];
+        std::snprintf(hx, sizeof hx, "#%06x", unsigned(look_.jBase & 0xffffff));
+        sleeve = hexColor(hx);
+      } else if (fpRigColour(*model_, model_->b[RigModel::lFore], c)) sleeve = c;
+      fpHands_->setColours(glove, sleeve);
+    }
+  }
+  const glm::dquat cq = glm::dquat(glm::quat_cast(cam.basis));
+  rig.updateFpView(dt, V3(cam.pos), cq, o, fpHands_ && fpHands_->armsLoaded());
 }
 
 void PlayerSkier::submit(Renderer& r, bool hideBody) const {
   if (!rig.ready()) return;
   const dvec3 o(rig.rootPos);
-  mat4 B = mat4(compose(V3(0), yaw(rig.rootHeading), V3(1)));
+  mat4 B = mat4(compose(V3(0), rig.rootQuat(), V3(1)));
   const Model& body = dressed_ ? *dressed_ : *model_->body;
-  if (!hideBody && rig.bodyVisible) r.submitModel(body, o, B, &pose_, true);
-  if (!rig.gearVisible) return;
+  // (in the driver's seat: shown once posed seated, the skis stowed: drive.js rigFrames > 3, gear hidden)
+  const bool seated = car.on && !car.passenger && carFrames_ > 0;
+  if (!hideBody && rig.bodyVisible && (!car.on || car.passenger || carFrames_ > 3)) r.submitModel(body, o, B, &pose_, true);
+  if (fpHands_ && !hideBody) fpHands_->submit(r, rig.fpView);
+  if (!rig.gearVisible || seated) return;
   if (rig.hasSkis())
     for (int s = 0; s < 2; s++) {
       if (!rig.skis[s].visible) continue;
@@ -172,6 +235,7 @@ void PlayerSkier::applyOutfit(gfx::Device& dev, const vec4& jacket, const vec4& 
   if (jacket.w > 0) { L.jacket = true; L.jBase = L.jAccent = hex(jacket); }
   if (trousers.w > 0) { L.trousers = true; L.tBase = L.tAccent = hex(trousers); }
   if (helmet.w > 0) { L.helmet = true; L.hColor = hex(helmet); }
+  look_ = L;
   dev_ = &dev;
   if (L.key() == lookKey_) return;
   lookKey_ = L.key();
@@ -182,6 +246,7 @@ void PlayerSkier::applyOutfit(gfx::Device& dev, const vec4& jacket, const vec4& 
 
 void PlayerSkier::applyOutfitIds(gfx::Device& dev, const std::string& jacket, const std::string& trousers, const std::string& helmet, const std::string& lens) {
   OutfitLook L = outfitLookOf(jacket, trousers, helmet, lens);
+  look_ = L;
   if (L.key() == lookKey_ && (dressed_ || !L.any())) return;
   lookKey_ = L.key();
   for (auto& t : outfitTex_) dev.destroy(t);

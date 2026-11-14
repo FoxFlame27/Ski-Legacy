@@ -2,9 +2,13 @@
 // density and clearances, so trees stand where they stand in the web game) drawn as instanced pine GLBs with
 // meshoptimizer LODs, and the village / mountain hut buildings from the exported placements (village.js).
 // Also owns the static colliders (building boxes, lamp posts) and the tree trunk queries the player collides with.
+// The mountains' rocks (vegetation.js rockSpot / placeRock, ported exactly the same way: same grid points, hashes and
+// clearances): the Meshy rock models (public/models/rocks, tools/meshy-rocks.mjs) drawn as matrix instances with the
+// snow-on-top rock shading (shading kind 4), with their colliders (rockAt).
 #pragma once
 #include "core/math.h"
 #include "engine/renderer.h"
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -32,12 +36,25 @@ struct Collider {
 };
 
 struct Tree { float x, y, z, s, rot, trunk, crown; uint8_t type; };
+/// One rock (vegetation.js placeRock): its collider (x, z, r; s the collision size: under 2.6 it is skied over; y + 0.75 s
+/// its top) and, for v >= 0, the model and its world matrix (rotation x scale `m`, column-major 3x3, at (x, base, z)) with
+/// the terrain plane under it (gx, gz: gradient, gh: height at x, z) for the snow banked at its foot. v = -1: an
+/// elongated rock's extra collider.
+struct Rock {
+  double x, z;
+  float y, s, r;
+  int8_t v;
+  float base, w;       // the model's base height and its width (m)
+  float m[9];
+  float gx, gz, gh;
+};
 
 struct VegetationSettings {
   float nearR = 70, midR = 220, farR = 650;
   float impostorR = 0;      // far forest impostors (vegetation.js's billboard forests) out to this (m), 0: none
   int maxImpostors = 30000;
   int shadowLods = 1;       // tree LODs that cast into the shadow map
+  float rockR = 230;        // rocks drawn within this (m; crags and outcrops to twice it), quality.js veg.rockR
 };
 
 class Scenery {
@@ -51,6 +68,15 @@ public:
 
   /// vegetation.js collide(): the first tree whose trunk (or crown) overlaps a circle of radius r at (x, z).
   const Tree* treeAt(double x, double z, double r, bool crown) const;
+  /// ...the first rock (collision size >= minSize: smaller ones are skied over) overlapping it
+  const Rock* rockAt(double x, double z, double r, double minSize) const;
+  /// vegetation.js onExpressBed / onRailBed: no rock on the railways' formations (set by the game once the transport
+  /// is loaded, before any cell is generated; called from the worker threads: read-only)
+  using RailBedFn = std::function<bool(double x, double z, double size)>;
+  RailBedFn railBed;
+  /// The rocks of one 64 m cell as genCell places them (--verify-heights compares them with the JavaScript's)
+  static void cellRocks(const World& wd, const RailBedFn& rb, int64_t cx, int64_t cz, std::vector<Rock>& out);
+  size_t rocksDrawn() const { return rocksDrawn_; }
   const std::vector<Collider>& colliders() const { return colliders_; }
   /// Replaces the static colliders (the resort's, from export_resort.mjs) and indexes them on a 32 m grid.
   void setColliders(std::vector<Collider> c);
@@ -68,7 +94,7 @@ public:
   static constexpr double CELL = 64, SPACING = 6.5;
 
 private:
-  struct Cell { std::vector<Tree> trees; };
+  struct Cell { std::vector<Tree> trees; std::vector<Rock> rocks; };
   struct FarTree { float x, y, z, s; uint8_t type; float seed; };
   struct FarCell { std::vector<FarTree> trees; };
   void updateFar(const dvec3& cam);
@@ -80,8 +106,9 @@ private:
   dvec3 lastImp_{1e18};
   bool farDirty_ = false;
   static int64_t key(int64_t cx, int64_t cz) { return (cx << 32) ^ (cz & 0xffffffff); }
-  void genCell(int64_t cx, int64_t cz, Cell& out) const;
+  static void genCell(const World& wd, const RailBedFn& rb, int64_t cx, int64_t cz, Cell& out, bool rocks);
   void rebuildInstances(const dvec3& cam);
+  void rebuildRocks(const dvec3& cam);
 
   gfx::Device& dev_;
   World& world_;
@@ -91,6 +118,12 @@ private:
   std::shared_ptr<Model> treeModel_[2];
   mat4 treeFit_[2];
   InstanceBatch batches_[2][3];
+  static constexpr int ROCK_KINDS = 5;
+  std::shared_ptr<Model> rockModel_[ROCK_KINDS];
+  mat4 rockFit_[ROCK_KINDS];
+  MatrixInstanceBatch rockBatch_[ROCK_KINDS][3];   // full mesh (close), 25 %, 8 % (crags and outcrops far off)
+  dvec3 rockOrigin_{0}, lastRocks_{1e18};
+  size_t rocksDrawn_ = 0;
   std::unordered_map<int64_t, Cell> cells_;
   std::unordered_set<int64_t> queued_;
   mutable std::mutex m_;

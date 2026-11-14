@@ -173,12 +173,14 @@ void main() {
       tRelA = mix(r0.a, r1.a, lf);
       tRelG *= flatK; tRelK *= flatK; tRelV = mix(0.5, tRelV, flatK); tRelA = mix(0.5, tRelA, flatK);
     }
-    vec3 snow = vec3(0.83, 0.86, 0.9) * (0.955 + 0.045 * n1);
-    vec3 relA = mix(vec3(0.87, 0.925, 1.0), vec3(1.03), smoothstep(0.2, 0.8, tRelV));
+    // (native) a near-neutral snow albedo: the wind relief's hollows only a touch cooler (terrain.js tinted the snow
+    // itself blue on top of the blue sky light)
+    vec3 snow = vec3(0.86, 0.875, 0.895) * (0.955 + 0.045 * n1);
+    vec3 relA = mix(vec3(0.9, 0.935, 0.98), vec3(1.03), smoothstep(0.2, 0.8, tRelV));
     snow *= mix(vec3(1.0), relA, (0.45 + 0.55 * tRelK) * (1.0 - uSnowCover * 0.6));
     snow *= 0.955 + 0.09 * smoothstep(0.25, 0.75, tRelA);
-    snow = mix(snow, vec3(0.85, 0.895, 0.955), smoothstep(0.55, 0.8, n2) * 0.35);
-    snow = mix(snow, vec3(0.86, 0.89, 0.93), tGroomed * 0.45);
+    snow = mix(snow, vec3(0.855, 0.88, 0.91), smoothstep(0.55, 0.8, n2) * 0.35);
+    snow = mix(snow, vec3(0.86, 0.88, 0.905), tGroomed * 0.45);
     {
       float gpm = length(vData.zw);
       float lane = (gpm - 4.0) * 50.0 / 5.5;
@@ -206,11 +208,15 @@ void main() {
 #if TERRAIN_DETAIL >= 1
       if (closeR > 0.0) cracks = (1.0 - smoothstep(0.0, 0.035 + tFw * 0.25, abs(triFbm(vWPos, tTriW, 0.55) - 0.5))) * closeR;
 #endif
-      vec3 rock = mix(vec3(0.016, 0.021, 0.033), vec3(0.064, 0.075, 0.102), smoothstep(0.34, 0.66, faces * 0.65 + strata * 0.35));
+      // (native) alpine gneiss / limestone instead of terrain.js's slate blue (navy in the shade): mid greys a
+      // little lighter than before (weathered faces ~0.1 albedo), some strata and faces iron-stained warm, the
+      // water streaks down the walls darker and cooler, the crevices darker still
+      vec3 rock = mix(vec3(0.026, 0.026, 0.028), vec3(0.104, 0.1, 0.096), smoothstep(0.34, 0.66, faces * 0.65 + strata * 0.35));
+      rock *= mix(vec3(1.0), vec3(1.2, 1.02, 0.8), saturate(smoothstep(0.56, 0.82, strata) * 0.75 + smoothstep(0.62, 0.86, faceN.a) * 0.45));
       rock *= (0.66 + 0.68 * grain) * (0.68 + 0.64 * smoothstep(0.32, 0.68, strata));
       tCav = smoothstep(0.25, 0.75, grain * 0.6 + faces * 0.4);
-      rock *= 1.0 - cracks * 0.55;
-      rock *= 1.0 - 0.25 * (1.0 - smoothstep(0.2, 0.36, streak));
+      rock *= 1.0 - cracks * 0.6;
+      rock *= mix(vec3(1.0), vec3(0.7, 0.72, 0.76), 1.0 - smoothstep(0.2, 0.36, streak));
 #if TERRAIN_DETAIL >= 2
       // (native) the baked rock map up close: lichen / mineral variation and darker hollows
       if (tDist < 90.0) {
@@ -249,10 +255,10 @@ void main() {
       float farSnow = smoothstep(0.5, 0.68, upF) * (1.0 - smoothstep(0.62, 0.9, slope));
       alb = mix(alb, snow, farF * farSnow);
     }
-    // distant forests: dark navy conifer tint fading in where the real trees become impostors
+    // distant forests: dark conifer green tint fading in where the real trees become impostors
     float forestFar = vData.x * smoothstep(160.0, 420.0, tDist);
     if (forestFar > 0.001) {
-      vec3 forestCol = mix(vec3(0.022, 0.040, 0.052), vec3(0.50, 0.56, 0.63), smoothstep(0.4, 0.9, nTexL(vWPos.xz * 0.12, max(log2(32.0 * 0.12 * max(tFw, 1e-3)), 0.0)).r));
+      vec3 forestCol = mix(vec3(0.019, 0.032, 0.028), vec3(0.54, 0.57, 0.61), smoothstep(0.4, 0.9, nTexL(vWPos.xz * 0.12, max(log2(32.0 * 0.12 * max(tFw, 1e-3)), 0.0)).r));
       alb = mix(alb, forestCol, forestFar * 0.85);
     }
 #if TERRAIN_FX >= 1
@@ -306,7 +312,7 @@ void main() {
         float e = uTrail.w;
         trG = vec2(trailHAt(pxz + vec2(e, 0.0)) - trailHAt(pxz - vec2(e, 0.0)), trailHAt(pxz + vec2(0.0, e)) - trailHAt(pxz - vec2(0.0, e))) / (2.0 * e);
         float groove = saturate(trT.r * 3.0) * trOn, berm = saturate(trT.g * 2.0) * trOn, packedS = saturate(trT.b) * trOn;
-        alb *= mix(vec3(1.0), vec3(0.8, 0.86, 0.95), groove * (0.55 + 0.45 * trT.a));
+        alb *= mix(vec3(1.0), vec3(0.84, 0.88, 0.93), groove * (0.55 + 0.45 * trT.a));
         alb *= 1.0 - packedS * 0.05;
         alb = mix(alb, vec3(0.93, 0.95, 0.98), berm * 0.4);
         tCav *= 1.0 - groove * 0.4;
@@ -409,7 +415,9 @@ void main() {
 #endif
   Lit L = lightSurface(alb, 0.0, rough, pn, v, sh, wn);
   float sunK = smoothstep(0.4, 2.8, dot(uSunColor.rgb / max(uHemiGround.w, 0.05), vec3(0.3333)) * uHemiGround.w);
-  L.iDiff *= mix(vec3(0.9, 0.96, 1.05), vec3(0.66, 0.8, 0.98), sunK);
+  // (native) terrain.js's "cold sky-blue shade" tinted the (already blue) sky light again: (0.66, 0.8, 0.98) in the
+  // sun. The same density, near neutral: the sky light itself gives the shade its cool
+  L.iDiff *= mix(vec3(0.95, 0.96, 0.98), vec3(0.76, 0.785, 0.81), sunK);
   float tTilt = pn.y - wn.y;
   L.iDiff *= mix(1.0, (0.5 + 0.65 * tCav) * clamp(0.72 + 0.4 * pn.y + 1.4 * tTilt, 0.32, 1.3), tRock);
   L.iDiff *= mix(1.0, mix(0.7, 1.06, smoothstep(0.15, 0.85, tRelV)), (1.0 - tRock) * (0.35 + 0.65 * tRelK));
@@ -417,9 +425,9 @@ void main() {
   {
     float tNdl = saturate(dot(pn, uSunDir.xyz));
 #if TERRAIN_FX >= 2
-    vec3 tCool = mix(vec3(0.7, 0.88, 1.1), vec3(1.0), smoothstep(0.1, 1.0, tNdl));
+    vec3 tCool = mix(vec3(0.86, 0.93, 1.03), vec3(1.0), smoothstep(0.1, 1.0, tNdl));
 #else
-    vec3 tCool = mix(vec3(0.5, 0.82, 1.18), vec3(1.0), smoothstep(0.15, 1.0, tNdl));
+    vec3 tCool = mix(vec3(0.82, 0.91, 1.04), vec3(1.0), smoothstep(0.15, 1.0, tNdl));
 #endif
     L.dDiff *= mix(vec3(1.0), tCool, sunK * tSnowK);
   }
@@ -434,7 +442,7 @@ void main() {
   {
     float ndlS = dot(pn, uSunDir.xyz);
     float wrapE = saturate((ndlS + 0.4) / 1.4) - saturate(ndlS);
-    L.dDiff += sunE * wrapE * vec3(0.45, 0.72, 1.0) * 0.55 * alb * RECIPROCAL_PI * tSnowK;
+    L.dDiff += sunE * wrapE * vec3(0.66, 0.82, 1.0) * 0.5 * alb * RECIPROCAL_PI * tSnowK;
 #if TERRAIN_FX >= 2
     float tBack = saturate(dot(-v, uSunDir.xyz));
     float tGrz = 1.0 - saturate(dot(pn, v));
@@ -446,7 +454,7 @@ void main() {
   if (trOn > 0.001) {
     float groove = saturate(trT.r * 3.0) * trOn;
     L.iDiff *= 1.0 - groove * 0.3;
-    L.dDiff *= mix(vec3(1.0), vec3(0.86, 0.94, 1.04), groove);
+    L.dDiff *= mix(vec3(1.0), vec3(0.9, 0.95, 1.0), groove);
   }
   // glints: sparse sun-facing ice facets, a few bright enough to bloom
 #ifndef SL_LOW

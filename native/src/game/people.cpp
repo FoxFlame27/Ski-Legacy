@@ -1,4 +1,5 @@
 #include "game/people.h"
+#include "player/fans_rig.h"
 #include "core/log.h"
 #include "engine/asset_manager.h"
 #include "engine/mesh_kit.h"
@@ -7,6 +8,9 @@
 #include "world/scenery.h"
 #include "world/world.h"
 #include <algorithm>
+#include <chrono>
+#include <fstream>
+#include <future>
 
 namespace sl {
 using three::V3;
@@ -26,7 +30,7 @@ void drawRig(Renderer& r, const RigInst& R, const PeopleKind& K, const RigGear* 
   const SkierRig& g = R.rig;
   const dvec3 o(g.rootPos);
   const mat4 S = glm::scale(mat4(1), vec3(float(scale)));
-  if (g.bodyVisible) r.submitModel(*K.draw, o, S * mat4(three::compose(V3(0), three::yaw(g.rootHeading), V3(1))), &R.pose, shadow);
+  if (g.bodyVisible) r.submitModel(*K.draw, o, S * mat4(three::compose(V3(0), g.rootQuat(), V3(1))), &R.pose, shadow);
   if (!gear || !g.gearVisible) return;
   if (g.hasSkis() && gear->ski)
     for (int s = 0; s < 2; s++)
@@ -56,6 +60,30 @@ bool People::load(AssetManager& assets, World& world) {
   };
   for (const char* s : SKIERS) { int k = addKind(s, std::string(s) + "_rigged", std::string(s) + "_anims", true); if (k >= 0) skierKinds.push_back(k); }
   for (const char* f : FANS) { int k = addKind(f, f, "", false); if (k >= 0) fanKinds.push_back(k); }
+  // the townsfolk as fans.js's crowd people (player/fans_rig): baked from the GLBs in parallel, uploaded here
+  {
+    const double t0 = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::vector<std::future<std::shared_ptr<FanKit>>> jobs;
+    for (const char* f : FANS) {
+      std::string path = assets.modelPath(f), name = f;
+      jobs.push_back(std::async(std::launch::async, [path, name]() -> std::shared_ptr<FanKit> {
+        std::ifstream in(path, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        auto k = std::make_shared<FanKit>();
+        if (bytes.empty() || !k->build(name, bytes)) return nullptr;
+        return k;
+      }));
+    }
+    for (size_t i = 0; i < jobs.size(); i++) {
+      auto k = jobs[i].get();
+      if (!k) { SL_WARN("people: fan kit %s not baked", FANS[i]); continue; }
+      int kd = kind(FANS[i]);
+      k->upload(assets.device(), kd >= 0 ? kinds_[size_t(kd)].rig->body.get() : nullptr);
+      fanKits.push_back(k);
+    }
+    const double t1 = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    SL_INFO("people: %zu crowd characters baked (fans.js: keyframes, LODs, arm weights) in %.0f ms", fanKits.size(), t1 - t0);
+  }
   officer = addKind("police_officer", "police_officer_rigged", "police_officer_anims", true);
   if (fanKinds.empty()) fanKinds = skierKinds;
   SL_INFO("people: %zu characters (%zu skiers, %zu townsfolk%s), one skier rig each", kinds_.size(), skierKinds.size(), fanKinds.size(), officer >= 0 ? ", the police officer" : "");
@@ -134,7 +162,11 @@ void People::submit(Renderer& r, const dvec3& cam, int maxDraw, double view) {
         st.lean = p.lean; st.crouch = p.anim == PAnim::Tuck ? 0.21 : 0.3 + std::fabs(p.lean) * 0.25; st.tuck = p.anim == PAnim::Tuck;
         st.hasNormal = true; st.normal = world_ ? three::normalize(V3(world_->groundNormal(p.pos.x, p.pos.z, p.pos.y + 0.5))) : three::UP;
         break;
-      case PAnim::Sit: st.mode = RigMode::Sit; st.hasSeat = true; st.seat = V3(p.pos) + three::UP * 0.45; break;
+      case PAnim::Sit:
+        st.mode = RigMode::Sit; st.hasSeat = true;
+        if (p.car.how == CarSeatRef::Figure) { st.seat = V3(0); st.heading = 0; }   // (posed at the origin, as the bake)
+        else st.seat = V3(p.pos) + three::UP * (p.car.how == CarSeatRef::Seated ? 0 : 0.45);
+        break;
       case PAnim::Lie:
         st.mode = RigMode::Fall; st.hasFall = true; st.fall.roll = PI / 2; st.fallSide = 1;
         st.hasNormal = true; st.normal = three::UP;
@@ -143,14 +175,32 @@ void People::submit(Renderer& r, const dvec3& cam, int maxDraw, double view) {
     }
     // animation LOD (npcs.js): posed every frame near, at a lower rate further off
     S.R.animAcc += dt;
+    const bool figure = p.anim == PAnim::Sit && p.car.how == CarSeatRef::Figure;
     if (d < animNear || S.R.animAcc > (d < animNear * 2.5 ? 0.06 : 0.12) || !S.R.posed) {
-      rig.rootPos = V3(p.pos);
-      rig.update(std::min(S.R.animAcc, 0.25), st);
+      if (figure) {   // (carpeople.js bakeOne: the 'sit' pose at the origin, no blend, then seated in the car)
+        rig.rootPos = V3(0);
+        rig.snapPose();
+        rig.update(0, st);
+        rig.poseCarFigure(p.car);
+      } else {
+        rig.rootPos = V3(p.pos);
+        rig.update(std::min(S.R.animAcc, 0.25), st);
+        // (a car seat: the legs into the footwell, the heels on that car's floor, the hands on the thighs)
+        if (p.anim == PAnim::Sit && p.car.how == CarSeatRef::Seated) {
+          SkierRig::SeatLegsOpt o;
+          o.driver = p.car.driver; o.hands = true;
+          rig.seatLegs(&p.car.car, &p.car.t, p.car.seat, o);
+        }
+      }
       S.R.pose_();
       S.R.animAcc = 0;
     }
     RigInst& R = S.R;
     R.rig.rootPos = V3(p.pos);   // (the body moves on between the poses; the bones keep the last one)
+    if (figure) {   // (fill: on its seat, in the car's frame)
+      R.rig.rootPos = V3(p.car.car * glm::dvec4(R.rig.carFig.O, 1));
+      R.rig.setRootQuat(three::decomposeQ(p.car.car));
+    }
     drawRig(r, R, K, gears_[size_t(S.gear)].get(), p.scale, d < 40);
     drawn_++;
   }
@@ -478,117 +528,6 @@ void Npcs::submit(Renderer& r, const dvec3& cam) {
   }
 }
 
-// ---------------------------------------------------------------- the townsfolk
-namespace {
-constexpr double SIM = 420;
-} // namespace
-
-void PeopleSim::init(World& world, const std::vector<std::vector<dvec2>>&, int fans, int) {
-  world_ = &world;
-  // townsfolk.js places: the hotels' doors (toward the plaza), the ski shop, the gondola approach, the market stalls,
-  // the fire pit, the Christmas tree ring, the trail map, the bus stop
-  for (int h = 0; h < 8; h++) { dvec2 o = hotelOut(h); places_.push_back({o.x, o.y, 0}); }
-  places_.push_back({SHOP_OUT.x, SHOP_OUT.y, 0});
-  places_.push_back({0, -53, 2});
-  for (int i = 0; i < 3; i++) places_.push_back({27.5 + i * 0.5, 4 + i * 7.2, 1});
-  places_.push_back({19.5, 12, 1});
-  for (int i = 0; i < 6; i++) { double a = i * TAU / 6; places_.push_back({std::cos(a) * 15, -4 + std::sin(a) * 15, 1}); }
-  places_.push_back({MAP_AT.x, MAP_AT.y + 0.6, 1});
-  places_.push_back({8, 46, 1});
-  for (int i = 0; i < fans; i++) {
-    Folk f;
-    const Place& pl = places_[size_t(rnd() * double(places_.size())) % places_.size()];
-    f.pos = dvec3(pl.x + (rnd() - 0.5) * 6, 0, pl.z + (rnd() - 0.5) * 6);
-    f.pos.y = world.height(f.pos.x, f.pos.z);
-    f.v = 1.15 + rnd() * 0.25; f.phase = rnd(); f.scale = float(0.96 + rnd() * 0.08);   // (townsfolk.js vmax; fans.js FAN_CFG scale)
-    f.kind = fanKinds_.empty() ? 0 : fanKinds_[size_t(rnd() * double(fanKinds_.size())) % fanKinds_.size()];
-    f.wait = rnd() * 8;
-    f.yaw = rnd() * TAU;
-    folk_.push_back(f);
-  }
-}
-
-void PeopleSim::pick(Folk& f) {
-  for (int t = 0; t < 6; t++) {
-    int k = int(rnd() * double(places_.size())) % int(places_.size());
-    if (std::hypot(places_[size_t(k)].x - f.pos.x, places_[size_t(k)].z - f.pos.z) > 12) { f.target = k; return; }
-  }
-  f.target = 0;
-}
-
-void PeopleSim::update(double dt, const dvec3& cam, double night, const Scenery* scenery) {
-  if (!world_) return;
-  night_ = night;
-  for (size_t i = 0; i < folk_.size(); i++) {
-    Folk& f = folk_[i];
-    if (f.downT > 0) {   // knocked over: thrown, lies a while, gets up
-      f.downT -= dt;
-      f.pos.x += f.vx * dt; f.pos.z += f.vz * dt;
-      f.vx *= std::exp(-dt * 3); f.vz *= std::exp(-dt * 3);
-      f.pos.y = world_->groundHeight(f.pos.x, f.pos.z, f.pos.y + 1);
-      continue;
-    }
-    double dc = glm::length(dvec2(f.pos.x - cam.x, f.pos.z - cam.z));
-    f.active = dc < SIM && (night < 0.5 || (i % 3) == 0);   // (fewer people out at night)
-    if (!f.active) continue;
-    if (f.wait > 0) { f.wait -= dt; f.phase += dt; f.speed = lerpd(f.speed, 0, std::min(1.0, dt * 6)); continue; }
-    if (f.target < 0) pick(f);
-    const Place& pl = places_[size_t(f.target)];
-    double dx = pl.x - f.pos.x, dz = pl.z - f.pos.z, d = std::hypot(dx, dz);
-    if (d < 1.2) { f.target = -1; f.wait = pl.kind == 1 ? 6 + rnd() * 18 : 1 + rnd() * 3; continue; }
-    f.yaw = dampAngle(f.yaw, std::atan2(dx, dz), dt * 5);
-    f.speed = lerpd(f.speed, f.v, std::min(1.0, dt * 3));
-    f.pos.x += std::sin(f.yaw) * f.speed * dt; f.pos.z += std::cos(f.yaw) * f.speed * dt;
-    // round the buildings, lamps, stalls (the colliders near: pushed out of boxes and circles)
-    if (scenery) if (const std::vector<int>* nearC = scenery->collidersNear(f.pos.x, f.pos.z)) {
-      for (int ci : *nearC) {
-        const Collider& c = scenery->colliders()[size_t(ci)];
-        if (c.r >= 0) {
-          double ex = f.pos.x - c.x, ez = f.pos.z - c.z, e = std::hypot(ex, ez), R = c.r + 0.35;
-          if (e < R && e > 1e-6) { f.pos.x = c.x + ex / e * R; f.pos.z = c.z + ez / e * R; }
-        } else {
-          double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
-          double lx = (f.pos.x - c.x) * cs - (f.pos.z - c.z) * sn, lz = (f.pos.x - c.x) * sn + (f.pos.z - c.z) * cs;
-          double ox = c.hw + 0.35 - std::fabs(lx), oz = c.hd + 0.35 - std::fabs(lz);
-          if (ox > 0 && oz > 0) {
-            if (ox < oz) lx += lx >= 0 ? ox : -ox; else lz += lz >= 0 ? oz : -oz;
-            double c2 = std::cos(c.rot), s2 = std::sin(c.rot);
-            f.pos.x = c.x + lx * c2 - lz * s2; f.pos.z = c.z + lx * s2 + lz * c2;
-            f.yaw += 0.6;   // (and turn along it)
-          }
-        }
-      }
-    }
-    f.pos.y = world_->groundHeight(f.pos.x, f.pos.z, f.pos.y + 1);
-  }
-}
-
-void PeopleSim::add(People& people, const dvec3& cam) const {
-  for (const Folk& f : folk_) {
-    if (!f.active && f.downT <= 0) continue;
-    if (glm::length(f.pos - cam) > 260) continue;
-    Person p;
-    p.kind = f.kind; p.pos = f.pos; p.yaw = f.yaw; p.scale = f.scale;
-    if (f.downT > 0) p.anim = f.downT > 1.2 ? PAnim::Lie : PAnim::Idle;
-    else if (f.speed > 0.1) { p.anim = PAnim::Walk; p.speed = f.speed; }
-    else p.anim = PAnim::Idle;
-    people.add(p);
-  }
-}
-
-void PeopleSim::near(const dvec3& p, double r, std::vector<int>& out) const {
-  out.clear();
-  for (size_t i = 0; i < folk_.size(); i++) {
-    const Folk& f = folk_[i];
-    if (!f.active || f.downT > 0) continue;
-    if (std::hypot(f.pos.x - p.x, f.pos.z - p.z) < r && std::fabs(f.pos.y - p.y) < 3) out.push_back(int(i));
-  }
-}
-
-void PeopleSim::knock(int i, double vx, double vz) {
-  Folk& f = folk_[size_t(i)];
-  f.downT = 6; f.vx = vx; f.vz = vz; f.wait = 0;
-  knocked++;
-}
+// (the townsfolk, PeopleSim: game/townsfolk.cpp)
 
 } // namespace sl

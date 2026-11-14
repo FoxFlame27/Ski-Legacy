@@ -223,9 +223,9 @@ void main() {
   float up = smoothstep(0.55, 1.0, ty) * 0.8;
   vec3 n = normalize(side * nx + toCam * sqrt(max(1.0 - nx * nx, 0.0)) + vec3(0.0, up, 0.0));
   // pine colours (vegetation.js pineNeedle range), snow on the tiers' tops
-  vec3 alb = mix(vec3(0.011, 0.027, 0.040), vec3(0.028, 0.060, 0.072), jag) * (0.8 + 0.4 * ty);
+  vec3 alb = mix(vec3(0.012, 0.024, 0.019), vec3(0.030, 0.055, 0.044), jag) * (0.8 + 0.4 * ty);
   float snow = smoothstep(0.6, 0.95, ty) * smoothstep(0.45, 0.75, jag + uMisc.y * 0.3) * 0.85;
-  alb = mix(alb, vec3(0.82, 0.86, 0.92), snow);
+  alb = mix(alb, vec3(0.83, 0.85, 0.88), snow);
   if (trunk > 0.5 && abs(x) < r * 0.3) alb = vec3(0.03, 0.025, 0.02);
   float sh = shadowAt(vRel, n);
   Lit L = lightSurface(alb, 0.0, 0.85, n, normalize(-vRel), sh, n);

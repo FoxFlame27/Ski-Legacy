@@ -118,7 +118,7 @@ three files as the rolling `latest-native` release.
 | `--hour H` | time of day to start at (default 10:00; the clock runs 24 h in 16 min as in `sky.js`, frozen in the autotest) |
 | `--autotest [--frames N] [--png out.png]` | headless check: load, ski a run for N frames, walk into a hotel (collision), board the Legacy Gondola, ride 30 s, fast-forward to the mid-station and get off; then (Phase 3) buy a car at the Autohaus and drive it 20 s along a valley road, check that a traffic car followed its lane, then the cars on the player's path (real SDL key / controller events: walk to the Autohaus, buy the cheapest car, E in, W 10 s, E out, the same with the controller; 30 s of traffic round the village), ride the ski bus, the Wolkenspitzbahn and the Legacy Express; (Phase 4) first the menus (main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> HUD size changed -> back), the ski shop (rent skis: money down), save + reload compared, the lift ticket and the car charged, and at the end the trail map; (Phase 5) a World Racing race started and finished (records saved and read back, back in the village), a job taken at the village board and delivered (money up), a police chase on foot into an arrest (ARRESTED, the jail timer, released at the station), a chalet bought and an armchair placed in build mode (saved), a weather change to heavy snow, a snowmobile ride; (Phase 7) the audio running throughout (with SDL's dummy driver the mixer still renders: samples decoded, one-shots, music tracks, frames mixed), the outfit applied, two night shots at 21:30 (the plaza's lamps and flags, a snow gun spraying), the `[perf]` report (CPU ms per system, draw calls, triangles, GPU memory, RSS / peak RSS, streaming); print stats, exit 0 / 1 (`out.png` + `_menu` `_showcase` `_settings` `_shop` `_village` `_ride` `_drive` `_cars` `_traffic` `_bus` `_train` `_express` `_map` `_race` `_job` `_police` `_jail` `_build` `_weather` `_sled` `_night` `_spray`). Uses its own fresh save (`autotest-save.json`) |
 | `--verify-heights` | compare the C++ terrain with reference samples taken from the JavaScript world |
-| `--verify-poses [ref.json]` | the skier rig (`player/skier_rig.cpp`, a port of `skier.js`) against the JavaScript one: `node native/tools/ref_poses.mjs` builds the game's own SkierRig in Node (real three.js, the rigged GLB, its clips, the skis and poles) on a test plane and replays timelines (standing, walking, running, carrying, skiing, carving with pole plants, tuck, snowplough, hockey stop, a jump, a flip with grabs and a spin, crashes and getting up, seated on a chair / bench / car seat / snowmobile), writing every frame's input and, every 0.25 s, every bone's local rotation / position, the skis' and poles' transforms, the clips' playback times and blend weights (default `native/data/poses_ref.json`; `SL_POSE_CHAR=skier_blue` for another character). The C++ replays the same inputs and compares: PASS under 1 degree / 5 mm everywhere and the same timing |
+| `--verify-poses [ref.json]` | the skier rig (`player/skier_rig.cpp`, a port of `skier.js`) against the JavaScript one: `node native/tools/ref_poses.mjs` builds the game's own SkierRig in Node (real three.js, the rigged GLB, its clips, the skis and poles) on a test plane and replays timelines (standing, walking, running, carrying, skiing, carving with pole plants, tuck, snowplough, hockey stop, a jump, a flip with grabs and a spin, crashes and getting up, seated on a chair / bench / car seat / snowmobile; first person: the gloves-and-poles view model on a camera path while skiing with pole plants, a jump and the landing, walking with the arms folded away, a wipeout hiding body and gear; in a car: seatLegs on the taxi's fare / a passenger / another player at the wheel in a pitched, rolled car, drive.js placeRig in the cockpit and the chase view, the traffic's seated figures as CarPeople.bakeOne poses them and fill places them), writing every frame's input and, every 0.25 s, every bone's local rotation / position, the skis' and poles' transforms, the clips' playback times and blend weights (default `native/data/poses_ref.json`; `SL_POSE_CHAR=skier_blue` for another character). The C++ replays the same inputs and compares: PASS under 1 degree / 5 mm everywhere and the same timing. Then the crowd people (`player/fans_rig`, fans.js): the same script bakes the eight fan_* characters with fans.js's own FanKit and writes `fans_ref.json` beside it (`SL_POSE_ONLY=fans`: only that file): every keyframe, the rest skeleton, the hands, the legs, the carry, the jacket key, the three LODs' counts / reworked skin weights / recolour mask / sampled vertices, the village's 56 people from mulberry32(6612) and eight people replaying scripted pose inputs (standing, walking, stopping, talking, a phone, pointing, the watch, the skis on the shoulder), compared bone by bone the same way |
 | `--rig-shots out.png` | the characters posed on their own, no world (`out_<what>.png`): your skier through the rig's poses, an outfit and a kit baked, everyone else standing / walking / skiing |
 | `--server URL` | (Phase 6) the multiplayer server (else `SKI_LEGACY_SERVER`, else the game's `wss://138-199-163-183.sslip.io/ws`) |
 | `--mptest URL [--mp-peers N] [--mp-seconds S]` | (Phase 6) the multiplayer check against a running server: the menus (PLAY -> MULTIPLAYER -> REGISTER a fresh name -> JOIN A WORLD), presence for S s (default 8), N other players seen (their avatars and name cards; a screenshot with `--png`), a ride in another player's car when one is parked, rental skis bought at the ski shop and a day pass at the ticket seller (checked against the server's own copy of the profile), chat, a dropped connection resumed, LEAVE MULTIPLAYER (the single-player save back); exit 0 / 1. Own save `mptest-save.json` |
@@ -135,6 +135,7 @@ whole resort); `sidecam` looks at the rider from the side while riding, `chairte
 `vehtest` starts the autotest with the Phase 3 vehicles (skipping the skiing, the hotel and the gondola), `cartest`
 straight with the cars on the player's path (see "The cars on the player's path" below), `maptest`
 straight with the trail map, `p5test` straight with the Phase 5 checks.
+`fpview` skis the autotest's run in first person (the hands on the poles in `out.png`), `carside` looks at your car (else the nearest traffic car) from a low side view (the boots in the footwell, not under the sill).
 `SKI_LEGACY_SHOT=x,y,z,tx,ty,tz` fixes the camera during the autotest's skiing phase (screenshots of a place).
 
 Reference run (a Linux container without a GPU: Mesa llvmpipe software rendering on 4 CPU cores, 1280×720,
@@ -321,12 +322,30 @@ node native/tools/export_world.mjs      # ~35 s
   rumble, job system, asset manager, PBR + skinning + instancing renderer, shadows, sky, fog, tone mapping, HUD,
   procedural wind / ski / thud audio, quality presets, save-data API.
 
+### The mountains' rocks (Nov 2026)
+Five Meshy-made rocks (`tools/meshy-rocks.mjs` -> `public/models/rocks/`: a granite boulder, a limestone block, a long
+gneiss slab, a tall granite crag, a scree heap; ~2.3-4.9k triangles, 1024 px webp base colour / normal / roughness,
+meshopt) replace the web game's procedural boulders on the mountains, placed by `world/vegetation.js` `rockSpot`:
+crags and big bedrock slabs on the steep faces (slope > 0.9), slabs and big boulders breaking out of ridges and convex
+shoulders, boulders at the tree line and in the open forest, a few off the runs on steeper slopes and very few on
+gentle open ground, a talus heap with a block or two below rock walls; never on or beside the runs, race courses,
+lift lines, roads and car parks (their corridors), stations, huts and buildings (pads), the village, the railways'
+formations. The C++ (`world/scenery.cpp` `rockSpot` / `placeRock`) places them from the same grid points and hashes
+(the 64 m cells the trees use, on the worker threads), draws them as matrix instances of the GLBs with meshoptimizer
+LODs (full mesh close, 25 % to `rockR` — 80 / 150 / 230 / 300 / 340 / 400 m by preset as quality.js `veg.rockR` —,
+8 % for the crags and outcrops out to twice that), shadows, and the rock shading (`shading` 4: a snow cap on the
+faces open to the sky, dust on ledges, a drift banked against the foot from the terrain plane each instance carries,
+damp rock above it, more snow while it snows; the terrain's snow white). Colliders as the JS: rocks showing more than
+0.55 m above the snow stop the skier (a jump clears their top), lower ones are skied over; cars collide with them.
+`--verify-heights` also places the rocks of 160 reference cells (`data/rocks_ref.json`, written by
+`tools/export_rocks.mjs` from the game's own `genCell`) and matches them one by one.
+
 ### Known gaps (Phase 1, as updated by Phase 2)
 - No huts' interiors, roads, cars, people, races, menus, economy, saves in use, network (lifts, stations and the
   village: Phase 2).
 - Terrain cuts are baked data (re-export after JS changes); tunnels' covered cuts are left out (Phase 3 added the
   roads' and the Legacy Express's cuts and the courses' regions). Trees ignore cuts' forest thinning (a few trees may
-  stand on the railway bed). No boulders / scree yet.
+  stand on the railway bed). (Nov 2026: the mountains' rocks are in, see "The mountains' rocks".)
 - No freestyle tricks or park features (the physics treat jumps as plain airs), no other skiers to bump into.
 - The skier's pose is a few procedural layers on the clips, not `skier.js`'s full rig (poles, pole plants,
   gloves-and-poles first-person view are missing).
@@ -801,9 +820,24 @@ meets a wall (`rayWall`) at their mount height; ceiling lamps hang from the ceil
 **People** (`game/people`): one renderer for every person: the six skier characters (with skis), the eight fan_*
 townsfolk and the police officer, posed from shared poses built once per character (idle and walking / running cycles in
 phases, a skiing crouch, a tuck, seated, lying, waving: the skier_*_anims clips retargeted by bone name), the nearest 48
-within 220 m, the lighter LOD past 35 m, shadows within 40 m. **PeopleSim**: 56 townsfolk walking between the hotels'
-doors, the ski shop, the gondola, the market, the fire pit, the tree, the trail map, the bus stop (round the colliders,
-lingering at the sights, fewer at night), skiers carving down the pistes near you; knocked over by your car.
+within 220 m, the lighter LOD past 35 m, shadows within 40 m. **The townsfolk** (`game/townsfolk.cpp` + `player/fans_rig`,
+townsfolk.js / peoplesim.js / fans.js): the village's 56 people are fans.js's crowd people, not skier rigs: each fan_*
+character baked as FanKit does it (the 20-bone skeleton, the hands' axes and grip measured from the mesh, the Meshy legs'
+bind look, every keyframe posed with fans.js's two-bone IK: relaxed stances on either leg, hands held / on the hips, the
+twelve phases of its own walking cycle at 1.16 m a stride, talking with the hands, a phone, pointing, a shrug, a glance at
+the watch, skis carried over the right shoulder; the three LOD meshes with the arm weights reworked by geodesic distance
+(separateArms, cleanWeights), the recolour mask and the jacket's own hue), each frame a normalized quaternion blend of a
+few keyframes (walk phases by speed, the weight shifting leg to leg standing, gestures in their own rhythm while talking,
+held poses eased in and out) with the head turn split over chest / neck / head; the jackets recoloured per person
+(chroma-keyed in the mesh shader, the folds kept), the textured LOD within 18 m and the vertex-coloured ones to 50 m and
+170 m (screen-door cross-fades, fading in at the doors), posed every frame near and every 2nd-8th frame further out, a
+soft contact shade under each (multiplied onto the snow), no shadows; the characters, sizes, personalities and colours
+from townsfolk.js's own mulberry32(6612) draws. Their village: plans (off to the gondola with the skis on the shoulder,
+back from the slopes, the market stalls, the fire pit, the tree with a phone, the trail map pointing out a run, the
+ticket booth, the shop's window, the bus stop's waiting area), a third in twos, people stopped together chatting, the
+path ring round the tree, walking round each other, you, the lamps and walls (peoplesim.js), fewer at night; thrown by
+your car (the rigid throw: somersault, bounce, tumble, lying, getting up). Skiers carving down the pistes near you are
+Npcs'.
 
 **Snowmobiles** (`game/snowmobile`, snowmobile.js): 15 parked (five in the village, the rest at the huts and lift bases),
 E to ride, SLED's handling (throttle / boost / brake / reverse, traction-limited climbing, skids on ice and side slopes,
@@ -863,8 +897,10 @@ world ready in 21.61 s ...
   don't light the room (no point lights yet); the hospital bed view is the standing first-person view.
 - **Rescue**: no landing on flat snow (always the winch), no rope physics; the ambulance follows the road's centre lane
   without dodging.
-- **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people,
-  no fans.js keyframes (cheering, flags), no chat groups.
+- **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people.
+  The townsfolk are fans.js's crowd people (above), but the race spectators (crowds.js: cheering, flags, cowbells) are
+  not; nor townsfolk.js's people at the other lift bases / bus stops; a villager knocked over near you gets the rigid
+  throw, not peoplehits.js's SkierRig ragdoll (crowdFall).
 - Snowmobiles are free to take (as snowmobile.js: no rental counter); the rider uses the seated rig, not skier.js's
   handlebar IK. (`-DSL_COPY_ASSETS=ON` lists every model the game loads since Phase 6.)
 - The trail map shows no races, jobs, chalets or the police yet.
@@ -1241,7 +1277,7 @@ relief picked by the pixel footprint (two noise octaves cross-faded, drift-shape
 grain at three scales, the cinematic micro relief, groomer corduroy and the 5.5 m groomer lanes, scraped ice on the
 steeper pistes (more after freezing weather), the km-scale wind crust, couloirs and the cliff-bands' broken ledges
 (the macro slope is now a vertex attribute, as `aMacro` in the JS), triplanar rock with buttresses, facets, strata,
-cracks and snow on its sky-facing relief, far buttresses / gullies, the far forest tint, the cold sky-blue shade,
+cracks and snow on its sky-facing relief, far buttresses / gullies, the far forest tint, the shade (see "Colour" below),
 sunlight cooling as it grazes, the subsurface terminator, the forward-scattering sheen, the HDR ice glints at up to
 four cell sizes (prismatic up close). On top of the port: **2048 px tiling snow and rock maps baked on the GPU at
 start-up** (periodic gradient / cellular noise: sintered grains, pits, crust; rock blocks, cracks, lichen; mip-mapped,
@@ -1284,7 +1320,7 @@ into the HDR image so it blooms; **sun shafts** (post.js).
 **Materials**: sRGB-correct base / emissive maps, the models' textures at the GPU's maximum anisotropy on High and
 up, normal maps through derivative tangent frames, the **Meshy detail layer** of `core/meshylook.js` (triplanar
 half-metre grain in the model's own space, the metalness clean-up, the roughness tweak), the **pine shading** of
-`vegetation.js` (dark navy needles from the texture's luminance, snow on needles facing the sky, wind sway and branch
+`vegetation.js` (dark needles from the texture's luminance (green in the native build), snow on needles facing the sky, wind sway and branch
 flutter, crown self-shadow and sky occlusion, translucent needles against the sun), **car paint** with a clear coat
 (its own GGX lobe and sky reflection, Fresnel, metallic flakes), **glass** with Fresnel sky reflections, and
 **alpha to coverage** under MSAA (anti-aliased needles and fences).
@@ -1299,6 +1335,18 @@ half or full resolution, a depth-aware 4x4 blur and upsample); the final pass wi
 post.js's filmic contrast) or ACES, the broadcast grade, vignette, speed streaks, flash, dither; **MSAA** 4x / 8x
 (High / Ultra) resolved before the post chain, then **FXAA 3.11** and a contrast-adaptive sharpen (no blur on still
 images: there is no temporal filter).
+
+**Colour** (Nov 2026: "the image is too blue"): the native build no longer lights the world with the sky palette's
+display colours. sky.js's IBL / hemisphere took the palette desaturated to 70 % — in linear light the cobalt zenith is
+~7x bluer than red — so in the shade (lit by the sky alone) snow came out saturated blue, dark wood navy, and ACES
+skewed asphalt and white paint toward purple; the terrain's "cold sky-blue shade" and grazing-sun cooling, the blue
+subsurface term, the slate-blue rock, the navy pine needles and the ~10x-blue haze stacked on top. Now
+(`renderer.cpp computeSky` / `beginFrame`): the sky lights with the palette's brightness and a ~11000 K skylight
+colour (light, unsaturated blue; near-neutral under an overcast), the IBL's lower half carries the full bounce off
+the sunlit snowfield (75 %, not 30-40 %: shaded facades stay neutral), the haze lights the far terrain at 40 % of its
+saturation, the moon is a paler blue; in the shaders the snow albedo is near neutral, the shade / grazing / subsurface
+/ groove tints keep their density but only a hint of cool, rock is grey, pines and far forests dark green, and the
+grade's cool shadow push is halved. The visible sky, the sun, dusk's glow and the tone mapping are unchanged.
 
 **Presets** (`engine/quality.h`; the SETTINGS row has the web game's seven): `switch` (one 1024 shadow map with
 single-tap PCF, SL_LOW, no MSAA / AO / shafts / clouds / detail maps, a 512 trail map, impostors to 700 m),
@@ -1350,7 +1398,7 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 | police, prison, impound | police.js, prison.js, impound.js | **ported** (chases, heli, arrest, jail, sirens); no roadblocks / spikes / raids |
 | rescue, hospital | heli/rescue.js, ambulance.js, hospitalroom.js | **ported** (simplified rooms) |
 | chalets, build mode | chalets.js, build/* | **ported** (ground floor, catalogue, virtual mouse) |
-| people, crowds | townsfolk.js, peoplesim.js, crowds.js | **ported** (characters; no fans' keyframes) |
+| people, crowds | townsfolk.js, peoplesim.js, fans.js, crowds.js | **ported** (the village's townsfolk as fans.js's crowd people; no spectators' cheering, no lift-base people) |
 | snowmobiles | snowmobile.js | **ported** |
 | weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools; Phase 8: the full sky shader, stars / moon, IBL, a ray-marched cloud layer + the sea of clouds, cloud shadows); no cumulus impostor banks round the peaks, no backdrop ranges |
 | snowmaking, flags, snowcats | snowmaking.js, flags.js, snowcats.js | **ported** (Phase 7; snowcats condensed: no grooming trail, no ploughs) |

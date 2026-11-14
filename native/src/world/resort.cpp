@@ -130,6 +130,10 @@ struct Inflate {
 gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontSet& fonts, int cap, bool compress) {
   Canvas2D g(c.value("w", 300), c.value("h", 150), &fonts);
   auto F = [](const nlohmann::json& a, size_t i, float d = 0) { return i < a.size() && a[i].is_number() ? a[i].get<float>() : d; };
+  // (a canvas recorded `exact` (the trail map on the village's notice board) is replayed with the rest of the canvas
+  // API it uses: line caps, dashes, putImageData's pixels and the fonts it names, as the browser draws them)
+  const bool exact = c.value("exact", false);
+  g.systemFonts(exact);
   for (auto& op : c["ops"]) {
     if (!op.is_array() || op.empty()) continue;
     const std::string n = op[0].get<std::string>();
@@ -143,6 +147,11 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
       else if (k == "font" && v.is_string()) g.font(v.get<std::string>());
       else if (k == "textAlign" && v.is_string()) g.textAlign(v.get<std::string>());
       else if (k == "textBaseline" && v.is_string()) g.textBaseline(v.get<std::string>());
+      else if (k == "lineCap" && v.is_string() && exact) g.lineCap(v.get<std::string>());
+    } else if (n == "setLineDash" && exact && op.size() >= 2 && op[1].is_array()) {
+      std::vector<float> d;
+      for (auto& x : op[1]) if (x.is_number()) d.push_back(x.get<float>());
+      g.setLineDash(std::move(d));
     } else if (n == "fillRect") g.fillRect(F(op, 1), F(op, 2), F(op, 3), F(op, 4));
     else if (n == "strokeRect") g.strokeRect(F(op, 1), F(op, 2), F(op, 3), F(op, 4));
     else if (n == "clearRect") g.clearRect(F(op, 1), F(op, 2), F(op, 3), F(op, 4));
@@ -174,6 +183,10 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
       auto z = b64(op[5].get<std::string>());
       Inflate inf{z.data(), z.size()};
       if (inf.run()) g.putAlpha(int(F(op, 1)), int(F(op, 2)), int(F(op, 3)), int(F(op, 4)), inf.out);
+    } else if (n == "putImage" && exact && op.size() >= 6 && op[5].is_string()) {
+      auto z = b64(op[5].get<std::string>());
+      Inflate inf{z.data(), z.size()};
+      if (inf.run()) g.putImage(int(F(op, 1)), int(F(op, 2)), int(F(op, 3)), int(F(op, 4)), inf.out);
     }
   }
   const auto& px = g.pixels();
@@ -190,7 +203,7 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
     flip.swap(o); W = w2; H = h2;
   }
   gfx::TextureDesc d;
-  d.width = W; d.height = H; d.format = gfx::TexFormat::SRGBA8; d.anisotropy = 8;
+  d.width = W; d.height = H; d.format = gfx::TexFormat::SRGBA8; d.anisotropy = exact ? 16 : 8;   // (village.js: the map's anisotropy 16)
   if (compress && W >= 4 && H >= 4 && dev.supportsBC(true)) {   // (Phase 7, the switch preset: BC1 / BC3)
     std::vector<std::vector<uint8_t>> levels;
     bool bc3 = false;

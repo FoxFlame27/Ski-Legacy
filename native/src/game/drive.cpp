@@ -212,15 +212,37 @@ bool Drive::exit(dvec3& out) {
 }
 
 void Drive::seat(dvec3& pos, dvec3& fwd) const {
-  // the driver's seat (cars.js driverEye: left front, behind the wheel): ~0.37 m left of the middle, a little forward
   double fx = std::sin(d_.yaw), fz = std::cos(d_.yaw), lx = fz, lz = -fx;
+  fwd = dvec3(fx, 0, fz);
+  // (drive.js updateSeat) you sit on the seat's cushion against its backrest (carpeople.js seatHip, the model's own
+  // seat; the rig's hip is 0.1 m above its seat point), the seat slid forward where the wheel would be out of reach
+  three::V3 hip;
+  if (d_.on && carSeatHip(carTemplate(), 0.1, 0.42, hip)) {
+    pos = dvec3(carMatrix() * glm::dvec4(hip.x, hip.y - 0.1, hip.z, 1));
+    return;
+  }
+  // (a car without seat hints) the driver's seat (cars.js driverEye: left front, behind the wheel)
   double sideOff = d_.w * 0.19, along = d_.half * 0.05;
   pos = dvec3(d_.x + lx * sideOff + fx * along, d_.y + 0.32, d_.z + lz * sideOff + fz * along);
-  fwd = dvec3(fx, 0, fz);
+}
+
+glm::dmat4 Drive::carMatrix() const {
+  // (as addDraw draws it: on its springs (pitch, roll), rolled over in a crash)
+  glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) *
+                 glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
+  if (d_.crashRoll != 0) M = M * glm::translate(glm::dmat4(1), dvec3(0, std::fabs(std::sin(d_.crashRoll)) * d_.w / 2, 0));
+  return M;
+}
+
+CarTemplate Drive::carTemplate() const {
+  if (!d_.on) return CarTemplate{};
+  const Parked& e = parked[size_t(d_.e)];
+  return CarTemplate::of(carSeatsFor(e.name), e.vm && e.vm->ok() ? double(e.vm->size.y) : d_.spec ? double(d_.spec->size.y) : 1.5);
 }
 
 bool Drive::clearAt(double x, double z, double r, int own) const {
   if (scenery_.treeAt(x, z, r, false)) return false;
+  if (scenery_.rockAt(x, z, r, 0.6)) return false;   // (drive.js: vegetation.collide's rocks from 0.6 up)
   if (const auto* near = scenery_.collidersNear(x, z)) {
     for (int ci : *near) {
       const Collider& c = scenery_.colliders()[size_t(ci)];
@@ -454,6 +476,11 @@ void Drive::collide(double now) {
       double dx = cx - t->x, dz = cz - t->z, l = std::hypot(dx, dz);
       if (l < 1e-6) l = 1;
       double o = R + t->crown - l;
+      if (o > 0) { px += dx / l * o; pz += dz / l * o; n++; solid = true; }
+    } else if (const Rock* r = scenery_.rockAt(cx, cz, R, 0.6)) {   // (drive.js: a rock from 0.6 up, as solid as a tree)
+      double dx = cx - r->x, dz = cz - r->z, l = std::hypot(dx, dz);
+      if (l < 1e-6) l = 1;
+      double o = R + r->r - l;
       if (o > 0) { px += dx / l * o; pz += dz / l * o; n++; solid = true; }
     }
     // guardrails: a line you slide along
@@ -763,12 +790,19 @@ void Drive::placeCamera(double dt, const DriveFrameInput& in) {
     lookYaw_ = clamp(lookYaw_ - in.lookX * sens, -2.09, 2.09);
     lookPitch_ = clamp(lookPitch_ - in.lookY * sens, -1.05, 0.5);
     double ly = lookBackPrev_ ? PI : lookYaw_;
-    dvec3 seatP, fwd;
-    seat(seatP, fwd);
-    dvec3 eye = seatP + dvec3(0, 0.82, 0);
-    eye.y = std::min(eye.y, d.y + d.spec->size.y - 0.17);
-    double yaw = d.yaw + ly;
-    dvec3 dir(std::sin(yaw) * std::cos(lookPitch_ + d.pitch * 0), std::sin(lookPitch_) - std::sin(d.pitch), std::cos(yaw) * std::cos(lookPitch_));
+    // (drive.js) your own eyes (placeRig: d.eyeRig, in the car's frame), the head moving a little with the car; a little
+    // over them (COCKPIT_RAISE: more road over the bonnet), never into the headlining; looking about in the car's frame
+    const CarTemplate T = carTemplate();
+    const glm::dmat4 G = carMatrix();
+    dvec3 eyeL;
+    if (eyeRigOk_) eyeL = eyeRig_;
+    else if (T.steering) eyeL = dvec3(T.steerC.x, std::min(T.sizeY - 0.24, T.steerC.y + 0.27), T.steerC.z - 0.6);   // (cars.js driverEye)
+    else { dvec3 sp, fw; seat(sp, fw); eyeL = dvec3(glm::inverse(G) * glm::dvec4(sp, 1)) + dvec3(0, SEAT_EYE_Y, SEAT_EYE_Z); }
+    eyeL += dvec3(clamp(-d.lat * 0.002, -0.03, 0.03), 0, clamp(-d.la * 0.003, -0.03, 0.03));
+    const double COCKPIT_RAISE = 0.1 - SEAT_LIFT;
+    eyeL.y = std::min(eyeL.y + COCKPIT_RAISE, T.sizeY - 0.17);
+    dvec3 eye = dvec3(G * glm::dvec4(eyeL, 1));
+    dvec3 dir = glm::normalize(dvec3(G * glm::dvec4(std::sin(ly) * std::cos(lookPitch_), std::sin(lookPitch_), std::cos(ly) * std::cos(lookPitch_), 0)));
     camPos_ = eye; camLook_ = eye + dir;
     camFov_ += (72 + sp * 0.08 - camFov_) * (1 - std::exp(-dt * 4));
   } else {
@@ -848,9 +882,7 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     glm::dmat4 M;
     if (d_.on && int(i) == d_.e) {
       // the car you drive: on its springs (pitch, roll), rolled over in a crash
-      M = glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) *
-          glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
-      if (d_.crashRoll != 0) M = M * glm::translate(glm::dmat4(1), dvec3(0, std::fabs(std::sin(d_.crashRoll)) * d_.w / 2, 0));
+      M = carMatrix();
     } else {
       double dist = std::hypot(e.x - cam.x, e.z - cam.z);
       if (dist > 400) continue;

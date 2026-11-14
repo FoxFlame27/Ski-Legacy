@@ -3,6 +3,7 @@
 // seated on a chair / a bench / a snowmobile), the outfit bake, and every other character (the six skiers, the eight
 // townsfolk, the police officer) standing, walking and skiing, posed by their own rigs. Writes out_<name>.png.
 #include "player/skier_rig.h"
+#include "player/fans_rig.h"
 #include "core/log.h"
 #include "engine/asset_manager.h"
 #include "engine/mesh_kit.h"
@@ -156,6 +157,65 @@ int rigShots(platform::Platform& plat, gfx::Device& dev, Renderer& renderer, Ass
     shot("everyone", dvec3(0, 3.5, 14), dvec3(0, 0.6, -2.5), [&](Renderer& r) { for (size_t i = 0; i < R.size(); i++) drawRig(r, R[i], Ks[i], G.get(), 1, true); });
     shot("everyone_near", dvec3(-4, 1.6, 4.2), dvec3(-4, 0.9, 0), [&](Renderer& r) { for (size_t i = 0; i < R.size(); i++) drawRig(r, R[i], Ks[i], G.get(), 1, true); });
     shot("everyone_near2", dvec3(4.5, 1.6, 4.2), dvec3(4.5, 0.9, 0), [&](Renderer& r) { for (size_t i = 0; i < R.size(); i++) drawRig(r, R[i], Ks[i], G.get(), 1, true); });
+  }
+  // ---- the townsfolk as the crowd people draw them (player/fans_rig, fans.js): each character standing, three phases of
+  // the walk, talking, a phone, pointing, the watch, the skis on the shoulder; their jacket colours; the three LODs
+  {
+    std::vector<std::shared_ptr<FanKit>> kits;
+    for (const char* n : fans::MODELS) {
+      std::vector<uint8_t> bytes;
+      if (!plat.readFile(assets.modelPath(n), bytes)) continue;
+      auto k = std::make_shared<FanKit>();
+      if (!k->build(n, bytes)) continue;
+      auto M = rigModel(assets, n, ground, n, std::string());
+      k->upload(dev, M ? M->body.get() : nullptr);
+      kits.push_back(k);
+    }
+    struct Act { const char* name; double walk, wph, talk; int hold; int carry; double lookY; };
+    const Act acts[] = {{"stand", 0, 0, 0, 0, 0, 0},   {"walk0", 1, 0.0, 0, 0, 0, 0},  {"walk1", 1, 0.25, 0, 0, 0, 0},
+                        {"walk2", 1, 0.5, 0, 0, 0, 0}, {"talk", 0, 0, 1, 0, 0, 0.6},  {"phone", 0, 0, 0, fans::PHONE, 0, 0},
+                        {"point", 0, 0, 0, fans::POINT, 0, -0.3}, {"watch", 0, 0, 0, fans::WATCH, 0, 0}, {"carry", 1, 0.3, 0, 0, 1, 0},
+                        {"lod1", 0, 0, 0, 0, 0, 0}, {"lod2", 0, 0, 0, 0, 0, 0}};
+    const int NA = int(sizeof acts / sizeof acts[0]);
+    if (!kits.empty()) {
+      uint32_t seed = 6612;
+      FanCrowd crowd;
+      std::vector<int> kitOf;
+      for (size_t k = 0; k < kits.size(); k++) for (int a = 0; a < NA; a++) kitOf.push_back(int(k));
+      crowd.init(kits, int(kitOf.size()), [&]() { seed = seed * 1664525u + 1013904223u; return double(seed >> 8) / double(1u << 24); }, kitOf);
+      struct Fig { std::shared_ptr<Model> body, skis; Pose pose; dvec3 at; mat4 local; };
+      std::vector<Fig> figs(kitOf.size());
+      for (int i = 0; i < crowd.n; i++) {
+        const int k = kitOf[size_t(i)], a = i % NA;
+        const Act& A = acts[a];
+        auto& D = crowd.D;
+        D.walk[size_t(i)] = float(A.walk); D.wph[size_t(i)] = float(A.wph); D.talk[size_t(i)] = float(A.talk); D.hold[size_t(i)] = uint8_t(A.hold);
+        D.holdW[size_t(i)] = A.hold ? 1.f : 0.f; D.carry[size_t(i)] = uint8_t(A.carry); D.lookY[size_t(i)] = float(A.lookY); D.lookP[size_t(i)] = A.hold == fans::PHONE ? 0.25f : 0.02f;
+        crowd.poseDyn(i, 3.0, 1.0);
+        Fig& F = figs[size_t(i)];
+        const int l = a == NA - 2 ? 1 : a == NA - 1 ? 2 : 0;
+        if (!kits[size_t(k)]->lod[l]) continue;
+        F.body = std::make_shared<Model>(*kits[size_t(k)]->lod[l]);
+        for (auto& m : F.body->materials) m.fanCol = vec4(crowd.palC[size_t(i) * 8], crowd.palC[size_t(i) * 8 + 1], crowd.palC[size_t(i) * 8 + 2], 1);
+        if (A.carry) F.skis = kits[size_t(k)]->skis[size_t(std::max(0, std::min(5, int(crowd.palC[size_t(i) * 8 + 7]))))];
+        F.pose.joints.resize(fans::NB);
+        for (int b = 0; b < fans::NB; b++) F.pose.joints[size_t(b)] = fans::skinMatrix(crowd.row(i) + b * 12);
+        F.at = dvec3((a - (NA - 1) / 2.0) * 1.1, 0, -double(k) * 1.8);
+        const float s = crowd.scl[size_t(i) * 2], sy = crowd.scl[size_t(i) * 2 + 1];
+        F.local = glm::rotate(mat4(1), 0.35f, vec3(0, 1, 0)) * glm::scale(mat4(1), vec3(s, sy, s));
+      }
+      auto drawRow = [&](Renderer& r, int only) {
+        for (size_t i = 0; i < figs.size(); i++) {
+          const Fig& F = figs[i];
+          if (!F.body || (only >= 0 && kitOf[i] != only)) continue;
+          r.submitModel(*F.body, F.at, F.local, &F.pose, true);
+          if (F.skis) r.submitModel(*F.skis, F.at, F.local, &F.pose, true);
+        }
+      };
+      shot("townsfolk", dvec3(0, 6.5, 13), dvec3(0, 0.5, -6), [&](Renderer& r) { drawRow(r, -1); });
+      for (int row = 0; row < int(kits.size()); row++)
+        shot("townsfolk_" + kits[size_t(row)]->name, dvec3(0, 1.6, 6.2 - row * 1.8), dvec3(0, 0.85, -row * 1.8), [&](Renderer& r) { drawRow(r, row); });
+    }
   }
   return 0;
 }

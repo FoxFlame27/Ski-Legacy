@@ -29,6 +29,11 @@ private:
 /// Fonts by weight (Barlow Condensed 500 / 700, exported to native/data/fonts).
 struct FontSet { Font regular, bold; const Font& pick(bool b) const { return b && bold.ok() ? bold : regular.ok() ? regular : bold; } };
 
+/// The platform's own faces for a CSS family, as the browser picks them (Georgia / Times / serif -> 1, Arial /
+/// Helvetica / sans-serif -> 2): Georgia / Arial on macOS and Windows, fontconfig's stand-ins on Linux (Gelasio or
+/// DejaVu Serif, Liberation Sans / Arimo). Loaded once; null when none is installed (the caller keeps its own set).
+const FontSet* systemFontSet(int family);
+
 class Canvas2D {
 public:
   Canvas2D(int w, int h, const FontSet* fonts);
@@ -72,6 +77,11 @@ public:
   void fillText(const std::string& text, float x, float y);
   float measureText(const std::string& text) const;
   void putAlpha(int x, int y, int w, int h, const std::vector<uint8_t>& alpha);
+  // (the full canvas API for a canvas replayed exactly, the trail map board: export_resort.mjs `exact`)
+  void putImage(int x, int y, int w, int h, const std::vector<uint8_t>& rgba);   // putImageData: RGBA8 rows
+  void lineCap(const std::string& c) { st_.roundCap = c == "round"; st_.squareCap = c == "square"; }
+  void setLineDash(std::vector<float> d);
+  void systemFonts(bool on) { sysFonts_ = on; }   // font(): the family named (systemFontSet) instead of Barlow Condensed
 
   static vec4 parseColor(const std::string& css);   // straight RGBA 0..1 (sRGB)
 
@@ -80,17 +90,22 @@ private:
     vec4 fill{0, 0, 0, 1}, stroke{0, 0, 0, 1};
     float lineWidth = 1, alpha = 1, px = 10;
     bool bold = false;
+    bool roundCap = false, squareCap = false;
+    int family = 0;              // systemFontSet's family, 0 = the canvas's own fonts
+    std::vector<float> dash;     // setLineDash (user-space lengths)
     int align = 0, baseline = 0;   // align: 0 left 1 center 2 right; baseline: 0 alphabetic 1 middle 2 top 3 bottom 4 hanging
     float m[6] = {1, 0, 0, 1, 0, 0}; // a b c d e f
     std::shared_ptr<std::vector<uint8_t>> clip;
   };
   vec2 xf(float x, float y) const;
   float scaleK() const;
+  const FontSet* fontSet() const;
   void fillPolys(const std::vector<std::vector<vec2>>& polys, const vec4& color, std::vector<uint8_t>* mask = nullptr);
   void strokePolys(const std::vector<std::vector<vec2>>& lines, const std::vector<bool>& closed, float width, const vec4& color);
   int w_, h_;
   std::vector<uint8_t> px_;
   const FontSet* fonts_;
+  bool sysFonts_ = false;
   State st_;
   std::vector<State> stack_;
   std::vector<std::vector<vec2>> path_;   // device-space subpaths

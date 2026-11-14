@@ -1,3 +1,5 @@
+// (Nov 2026: the open world's rocks are Meshy models now: rockKit at the end of this file. The procedural kit below
+// stays for the parkour courses' barriers: modes/parkour/barriers.js, looks.js.)
 // Natural granite boulders, built procedurally (no scanned model): every shape variant starts as a
 // subdivided icosphere that is cut by a handful of fracture planes (blended with a smooth minimum, so the
 // edges come out weathered and rounded instead of sharp), roughened with 3D noise, flattened at the base
@@ -10,6 +12,7 @@
 // how high above the snow every pixel is and can bank snow against the foot instead of a hard seam.
 import * as THREE from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { dequantize } from '../core/assets.js';
 import { mulberry32 } from '../core/noise.js';
 import { terrainUniforms } from './terrain.js';
 
@@ -346,4 +349,165 @@ function boulderMaterial() {
   };
   mat.customProgramCacheKey = () => 'boulder-granite-8';
   return mat;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The open world's rocks (Nov 2026, the user: "the snow and the mountains should look like real life ... use Meshy for
+// models"): Meshy-made alpine rocks (tools/meshy-rocks.mjs -> public/models/rocks/<id>.glb + a light <id>_lo.glb for
+// the distance) replace the procedural granite above on the mountains (the parkour courses keep theirs). Placed by
+// world/vegetation.js (genCell: crags on the steep faces, outcrops on the ridges, boulders at the tree line and off the
+// runs, scree below the cliffs); the C++ port places and draws the same (native/src/world/scenery.cpp). Five models:
+// a granite boulder, a limestone block, a long gneiss slab, a tall granite crag and a scree heap; the slab and the
+// boulders, scaled up and sunk deep, also make the bedrock outcrops on the steep faces and ridges.
+//
+// The shapes' proportions are constants (measured once from the GLBs: unit width = the longest horizontal extent,
+// base at y = 0) so the placement and the colliders never depend on a model having loaded, and the C++ uses the very
+// same numbers. h: height / width, d: depth (the short horizontal side) / width; sy: the placement's vertical scale;
+// albedo: the texture's brightness evened out (Meshy painted the slab and the crag near black, the scree chalky: each
+// mean comes to 0.12-0.22 linear, real weathered granite / gneiss).
+export const ROCKS = [
+  { id: 'granite_boulder', h: 0.606, d: 0.962, sy: 1, albedo: 0.92 },
+  { id: 'limestone_block', h: 0.713, d: 0.984, sy: 1, albedo: 0.95 },
+  { id: 'gneiss_slab', h: 0.346, d: 0.316, sy: 1, albedo: 2.6 },
+  { id: 'crag_spire', h: 1.466, d: 0.809, sy: 1, albedo: 1.7 },
+  { id: 'scree_pile', h: 0.53, d: 0.998, sy: 0.6, albedo: 0.67 }, // (flattened: a heap of talus, not a mound)
+];
+export const ROCK = { GRANITE: 0, LIMESTONE: 1, SLAB: 2, CRAG: 3, SCREE: 4 };
+/** The models to load for the rock kit (both levels). */
+export const ROCK_MODELS = ROCKS.flatMap((r) => [`rocks/${r.id}`, `rocks/${r.id}_lo`]);
+
+// The rock material: the Meshy textures (base colour, normal, roughness) as they are, never metal (Meshy's metalness
+// map puts metal noise on stone), plus snow: a settled cap on the faces that look at the sky (patchy at its edge, more
+// while it snows), a dusting on ledges, and a drift banked against the foot where the rock meets the slope (aGround: the
+// terrain plane under each instance, as the procedural boulders). The snow is the terrain's own white.
+function rockMaterial(src, albedo = 1) {
+  const mat = src.clone();
+  mat.color.multiplyScalar(albedo);
+  mat.metalness = 0;
+  mat.metalnessMap = null;
+  mat.emissive?.setRGB(0, 0, 0);
+  mat.emissiveMap = null;
+  mat.roughness = 1;
+  mat.envMapIntensity = 0.7;
+  mat.onBeforeCompile = (s) => {
+    s.uniforms.uSnowCover = terrainUniforms.uSnowCover;
+    s.vertexShader = s.vertexShader
+      .replace('#include <common>', `#include <common>
+        #ifdef USE_INSTANCING
+          attribute vec3 aGround;
+        #endif
+        varying vec3 vRkW;
+        varying float vRkHG;
+        varying float vRkS;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        {
+          vec4 rkW = vec4(transformed, 1.0);
+          vRkS = 1.0;
+          #ifdef USE_INSTANCING
+            vRkS = length(instanceMatrix[0].xyz);
+            rkW = instanceMatrix * rkW;
+          #endif
+          rkW = modelMatrix * rkW;
+          vRkW = rkW.xyz;
+          vRkHG = 10.0;
+          #ifdef USE_INSTANCING
+            if (aGround.x != 0.0 || aGround.y != 0.0 || aGround.z != 0.0) {
+              vec3 rkI = (modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz;
+              vRkHG = rkW.y - (aGround.z + aGround.x * (rkW.x - rkI.x) + aGround.y * (rkW.z - rkI.z));
+            }
+          #endif
+        }`);
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', `#include <common>
+        ${ROCK_COMMON}
+        uniform float uSnowCover;
+        varying vec3 vRkW;
+        varying float vRkHG;
+        varying float vRkS;`)
+      .replace('#include <lights_physical_fragment>', `
+        {
+          // world-space normals: the textured one (ledges, cracks) and the surface's own (vNormal) for the cap
+          vec3 wn = inverseTransformDirection(normal, viewMatrix);
+          vec3 wg = inverseTransformDirection(normalize(vNormal), viewMatrix);
+          vec3 p = vRkW;
+          float sn = rkN(p * 0.9 + 9.0) * 0.6 + rkN(p * 3.1) * 0.4;
+          // the settled cap: faces open to the sky (the broad shape), its edge broken up by the relief and the noise
+          float cap = smoothstep(0.68 - uSnowCover * 0.2, 0.86 - uSnowCover * 0.2, wg.y + (sn - 0.5) * 0.35 + (wn.y - wg.y) * 0.6);
+          // a dusting on ledges and in the cracks that face up (the textured normal)
+          float dust = smoothstep(0.86 - uSnowCover * 0.3, 0.95 - uSnowCover * 0.3, wn.y + (sn - 0.5) * 0.2) * 0.85;
+          // snow banked against the foot, its line wandering up and down round the rock
+          float driftH = 0.05 + 0.25 * rkN(vec3(p.x, 0.0, p.z) * 0.9 + 3.0) * rkN(vec3(p.x, 0.0, p.z) * 0.35 + 8.0) * 2.0;
+          float drift = 1.0 - smoothstep(driftH - 0.03, driftH + 0.03, vRkHG + (sn - 0.5) * 0.12);
+          float snowA = clamp(max(max(cap, dust), drift), 0.0, 1.0);
+          // damp, darker rock just above the snow line
+          diffuseColor.rgb *= mix(0.7, 1.0, smoothstep(0.0, 0.4, vRkHG));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.87, 0.92), snowA);
+          roughnessFactor = mix(roughnessFactor, 0.75, snowA);
+          vec3 vUp = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          normal = normalize(mix(mix(normal, normalize(vNormal), snowA * 0.8), vUp, drift * 0.5));
+        }
+        #include <lights_physical_fragment>`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        // sunlight bounced off the snowfield onto the faces that look down and sideways (a rock's shadow side stays
+        // grey, not a black hole in a sunny snowfield)
+        #if NUM_DIR_LIGHTS > 0
+        {
+          vec3 rkUp = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+          float rkSunUp = max(dot(directionalLights[0].direction, rkUp), 0.0);
+          float rkDown = 0.5 - 0.5 * dot(normal, rkUp);
+          reflectedLight.indirectDiffuse += directionalLights[0].color * (0.55 * rkSunUp * rkDown) * BRDF_Lambert(material.diffuseColor);
+        }
+        #endif`);
+  };
+  mat.customProgramCacheKey = () => 'meshy-rock-1';
+  return mat;
+}
+
+// One model's geometry in unit-width space (longest horizontal extent 1, centred, base at y = 0); `ref`: the close
+// level's box, so the distant level lines up with it exactly (the simplifier moves the extremes a little).
+function rockGeometry(gltf, ref) {
+  if (!gltf?.scene) return null;
+  gltf.scene.updateMatrixWorld(true);
+  let geo = null, material = null;
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh || geo) return;
+    geo = dequantize(o.geometry);
+    geo.applyMatrix4(o.matrixWorld);
+    material = o.material;
+  });
+  if (!geo) return null;
+  geo.computeBoundingBox();
+  const b = ref || geo.boundingBox.clone();
+  const w = Math.max(b.max.x - b.min.x, b.max.z - b.min.z) || 1;
+  geo.translate(-(b.min.x + b.max.x) / 2, -b.min.y, -(b.min.z + b.max.z) / 2);
+  geo.scale(1 / w, 1 / w, 1 / w);
+  // (the long side along x: the placement turns elongated rocks along the slope's contour by their x axis)
+  if (b.max.z - b.min.z > b.max.x - b.min.x) geo.rotateY(Math.PI / 2);
+  if (!geo.attributes.normal) geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  return { geo, material, box: b };
+}
+
+let rocks = null;
+/**
+ * The Meshy rock kit: per ROCKS entry the close and distant geometry (unit width, templates: clone with withGround per
+ * InstancedMesh) and their materials (the distant level has vertex colours, no textures). A variant whose model is
+ * missing has null geometry (it is simply not drawn).
+ * @returns {{ hi: (THREE.BufferGeometry|null)[], lo: (THREE.BufferGeometry|null)[], hiMats: (THREE.Material|null)[], loMats: (THREE.Material|null)[] }}
+ */
+export function rockKit(models) {
+  if (rocks) return rocks;
+  const hi = [], lo = [], hiMats = [], loMats = [];
+  for (const r of ROCKS) {
+    const a = rockGeometry(models?.[`rocks/${r.id}`]);
+    const b = a && (rockGeometry(models?.[`rocks/${r.id}_lo`], a.box) || a);
+    hi.push(a?.geo ?? null);
+    lo.push(b?.geo ?? null);
+    hiMats.push(a ? rockMaterial(a.material, r.albedo) : null);
+    loMats.push(b ? (b === a ? hiMats[hiMats.length - 1] : rockMaterial(b.material, r.albedo)) : null);
+  }
+  for (const m of [...hiMats, ...loMats]) if (m) m.userData.shared = true;
+  rocks = { hi, lo, hiMats, loMats };
+  return rocks;
 }

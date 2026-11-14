@@ -490,56 +490,47 @@ void Traffic::addDraw(VehicleDraw& draw, const dvec3& cam) const {
 } // namespace sl
 
 namespace sl {
-namespace {
-// carpeople.js SEATS (measured from the models' interiors, nose +z, the driver on +x): d the driver's seat [x, the
-// cushion's y, the seat point's z], p the front passenger's [y, z] when it differs (x mirrored), r the rear outboard
-// seats [x, y, z] (none: a two-seater)
-struct SeatHint { const char* name; double d[3]; double p[2]; bool hasP; double r[3]; bool hasR; };
-const SeatHint SEATS[] = {
-  {"car_vw_golf_gti", {0.35, 0.436, -0.209}, {0, 0}, false, {0.37, 0.461, -1.085}, true},
-  {"car_bmw_x3", {0.373, 0.632, -0.238}, {0, 0}, false, {0.38, 0.631, -1.079}, true},
-  {"car_audi_rs6", {0.381, 0.432, 0.0}, {0.407, -0.10}, true, {0.38, 0.455, -0.986}, true},
-  {"car_tesla_m3", {0.47, 0.395, -0.105}, {0, 0}, false, {0.38, 0.394, -0.97}, true},
-  {"car_mercedes_sls", {0.43, 0.29, -0.675}, {0, 0}, false, {0, 0, 0}, false},
-  {"car_porsche_taycan", {0.37, 0.37, -0.255}, {0, 0}, false, {0.38, 0.47, -1.08}, true},
-  {"car_lamborghini_huracan", {0.37, 0.27, -0.24}, {0, 0}, false, {0, 0, 0}, false},
-  {"car_toyota_gr_yaris", {0.35, 0.47, -0.26}, {0, 0}, false, {0.38, 0.54, -1.085}, true},
-  {"car_audi_etron_gt", {0.37, 0.36, -0.255}, {0, 0}, false, {0.38, 0.475, -0.995}, true},
-  {"car_mercedes_gls", {0.42, 0.79, -0.01}, {0, 0}, false, {0.42, 0.73, -1.16}, true},
-};
-// a seated Person's hips are ~0.55 m over its point (people.cpp: the seat 0.45 m up, the hips 0.1 m over it); the hip
-// joints ~6 cm over the cushion (carpeople.js SEAT_LIFT)
-constexpr double SIT_HIP = 0.06 - 0.55;
-} // namespace
 
+// carpeople.js CarPeople.fill: a driver in every car that drives (left front seat, hands on the wheel at ten to two),
+// now and then a front passenger, sometimes one or two in the back: the game's own skiers seated as the bake poses them
+// (the rig's 'sit' pose, relaxed by seatpose.js and leant back into the seat's backrest; the driver's arms then reach for
+// the wheel, the legs go into the footwell, the heels on the car's floor: seatLegs), placed by the model's own seats
+// (SEATS: the hips on the cushion, the back against the backrest, under the roof) in the car's frame (pitched with it)
 void Traffic::addPeople(People& people, const dvec3& cam, const std::vector<int>& kinds) const {
   peopleShown = 0;
   if (kinds.empty()) return;
+  static const char* LOOKS[] = {"skier_blue", "skier_red", "skier_black", "skier_green"};
   for (const Car& c : list) {
     if (c.mode != Car::Mode::Road && c.mode != Car::Mode::Knocked) continue;   // (parked traffic cars show nobody)
     if (std::hypot(c.x - cam.x, c.z - cam.z) > PEOPLE_R) continue;
-    const SeatHint* S = nullptr;
-    for (const SeatHint& h : SEATS) if (c.name == h.name) S = &h;
-    double dx = S ? S->d[0] : 0.36, dy = S ? S->d[1] : 0.45, dz = S ? S->d[2] : -0.2;
-    double cs = std::cos(c.yaw), sn = std::sin(c.yaw);
+    const CarSeats* S = carSeatsFor(c.name);
+    const glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) *
+                         glm::rotate(glm::dmat4(1), c.pitch, dvec3(1, 0, 0));
+    const CarTemplate T = CarTemplate::of(S, c.vm ? double(c.vm->size.y) : 1.5);
+    const double dx = S ? S->d[0] : 0.36;
     uint32_t h = c.crew;
     auto rnd = [&h]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return double(h & 0xffffff) / double(0x1000000); };
-    auto put = [&](double x, double y, double z) {
+    auto put = [&](double x, int seat) {
       Person p;
       p.kind = kinds[size_t(rnd() * double(kinds.size())) % kinds.size()];
-      p.pos = dvec3(c.x + x * cs + z * sn, c.y + y + SIT_HIP, c.z - x * sn + z * cs);
+      int look = p.kind % 4;
+      for (int k = 0; k < 4; k++) if (people.kindName(p.kind) == LOOKS[k]) look = k;
+      p.car.how = CarSeatRef::Figure;
+      p.car.car = M; p.car.t = T; p.car.seat = seat; p.car.driver = seat == 0; p.car.look = look; p.car.x = x;
+      // (where it sits, near enough: the rig is posed in the seat by People)
+      const double sz = !S ? -0.2 : seat < 2 ? S->d[2] : S->r[2];
+      p.pos = dvec3(M * glm::dvec4(x, S ? (seat < 2 ? S->d[1] : S->r[1]) : 0.45, sz, 1));
       p.yaw = c.yaw;
       p.anim = PAnim::Sit;
-      p.scale = float(0.94 + rnd() * 0.08);
       people.add(p);
       peopleShown++;
     };
-    put(dx, dy, dz);   // the driver, left front
-    if (rnd() < 0.45) put(-dx, S && S->hasP ? S->p[0] : dy, S && S->hasP ? S->p[1] : dz);
+    put(dx, 0);   // the driver, left front
+    if (rnd() < 0.45) put(-dx, 1);
     double back = !S || S->hasR ? rnd() : 1;   // (a two-seater: nobody in the back)
-    double rx = S && S->hasR ? S->r[0] : dx, ry = S && S->hasR ? S->r[1] : dy, rz = S && S->hasR ? S->r[2] : dz - 0.86;
-    if (back < 0.22) put((rnd() < 0.5 ? 1 : -1) * rx, ry, rz);
-    else if (back < 0.3) { put(rx, ry, rz); put(-rx, ry, rz); }
+    double rx = S && S->hasR ? S->r[0] : dx;
+    if (back < 0.22) put((rnd() < 0.5 ? 1 : -1) * rx, 2);
+    else if (back < 0.3) { put(rx, 2); put(-rx, 2); }
   }
 }
 

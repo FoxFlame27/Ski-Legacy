@@ -56,6 +56,7 @@ struct Quality {
   float impostorR = 1400;     // far forest impostors out to (m)
   int maxImpostors = 30000;
   float sprayScale = 1;       // spray particles x this
+  float rockR = 230;          // the mountains' rocks drawn within (m; crags and outcrops twice that): quality.js veg.rockR
 
   /// the web game's names (quality.js QUALITY_ORDER) and the old native ones onto the presets here
   static std::string normalize(const std::string& n) {
@@ -85,6 +86,7 @@ struct Quality {
     } else if (n == "high") {
       q.terrainLodK = 2.9f; q.shadowSize = 2048; q.shadowRange = 320; q.cascades = 3; q.treeNear = 70; q.treeMid = 250; q.treeFar = 900; q.lodScale = 1.25f;
       q.fx = 2; q.terrainDetail = 2; q.msaa = 4; q.ao = 1; q.aoDirs = 2; q.aoSteps = 6; q.shafts = true; q.sharpen = 0.25f;
+      q.toneMap = 1;   // (PBR Neutral as Ultra: sunlit snow white with its detail, no ACES hue skew; costs the same)
       q.detailTex = 2048; q.trailSize = 2048; q.trailRange = 128; q.aniso = 16; q.impostorR = 1900; q.maxImpostors = 50000;
     } else if (n == "ultra") {
       q.terrainLodK = 3.3f; q.shadowSize = 3072; q.shadowRange = 480; q.cascades = 4; q.treeNear = 100; q.treeMid = 350; q.treeFar = 1300; q.lodScale = 1.5f; q.maxPeople = 64;
@@ -104,6 +106,7 @@ struct Quality {
       q.terrainLodK = 2.2f; q.shadowSize = 2048; q.shadowRange = 160; q.cascades = 2; q.treeNear = 40; q.treeMid = 150; q.treeFar = 600;
       q.fx = 1; q.terrainDetail = 1; q.sharpen = 0.15f; q.detailTex = 1024; q.trailSize = 1024; q.trailRange = 96; q.aniso = 8;
     }
+    q.rockR = n == "super" || n == "switch" ? 80.f : n == "performance" ? 150.f : n == "high" ? 300.f : n == "ultra" ? 340.f : n == "superultra" ? 400.f : 230.f;
     // (the six web presets' own npcs rows; switch: performance's)
     if (n == "super") { q.npcSkiers = 3; q.npcWalkers = 1; q.animNear = 25; }
     else if (n == "performance" || n == "switch") { q.npcSkiers = 7; q.npcWalkers = 3; q.animNear = 45; }

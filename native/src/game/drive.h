@@ -3,6 +3,7 @@
 // the road; only your own cars let you in). See vehicles.h for the list of what Phase 3 ports.
 #pragma once
 #include "game/vehicles.h"
+#include "player/car_seat.h"
 #include "world/scenery.h"
 
 namespace sl {
@@ -54,6 +55,12 @@ public:
   void fixedUpdate(double h, const DriveInput& in, double now);
   void frame(double dt, const DriveFrameInput& in);
   void seat(dvec3& pos, dvec3& fwd) const;
+  /// the car you drive: its frame (car -> world, on its springs: drawn so) and its seats / height (carpeople.js `t`)
+  glm::dmat4 carMatrix() const;
+  CarTemplate carTemplate() const;
+  /// (drive.js d.eyeRig) your own eyes in the car's frame, from your seated pose (player_skier: placeRig); the cockpit
+  /// camera sits there
+  void setEyeRig(bool ok, const dvec3& local) { eyeRigOk_ = ok; eyeRig_ = local; }
   void cameraFor(Camera& cam) const { cam.lookAt(camPos_, camLook_); cam.fovY = float(camFov_); cam.nearZ = view_ == View::Cockpit ? 0.05f : 0.1f; }
   void addDraw(VehicleDraw& draw, const dvec3& cam) const;
   /// (Phase 7) the cars to light / plate (yours: headlights with L or at night, brake lights)
@@ -152,7 +159,8 @@ private:
   enum class View : uint8_t { Chase, Cockpit } view_ = View::Chase;
   dvec3 camPos_{0}, camLook_{0};
   double camFov_ = 62, camYaw_ = 0, camPitch_ = 0.17, lastMouse_ = -1e9, lookYaw_ = 0, lookPitch_ = -0.05, shake_ = 0;
-  bool camReady_ = false, lookBackPrev_ = false;
+  bool camReady_ = false, lookBackPrev_ = false, eyeRigOk_ = false;
+  dvec3 eyeRig_{0};
   double wheelSpin_ = 0;
   double knockT_ = -1e9, bangT_ = -1e9, unstuckT_ = -1e9, now_ = 0;
   unsigned seed_ = 12345;

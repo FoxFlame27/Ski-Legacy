@@ -16,7 +16,14 @@ const PATCHES = [
   },
   {
     file: '/src/world/village.js',
-    edits: [['    const m = o.material.clone();\n    m.onBeforeCompile', '    const m = o.material.clone();\n    m.userData.slGlow = strength;\n    m.onBeforeCompile']],
+    edits: [
+      ['    const m = o.material.clone();\n    m.onBeforeCompile', '    const m = o.material.clone();\n    m.userData.slGlow = strength;\n    m.onBeforeCompile'],
+      // the trail map on the notice board: its canvas replayed exactly (the relief's pixels, dashes, caps, its fonts),
+      // and its face (a child of the fitted board) captured with it
+      ["    const W = 2048, H = 1270; // (the panel's 1.61 : 1)\n    const c = document.createElement('canvas');\n    c.width = W; c.height = H;",
+        "    const W = 2048, H = 1270; // (the panel's 1.61 : 1)\n    const c = document.createElement('canvas');\n    c.width = W; c.height = H; c.slExact = true;"],
+      ['    board.add(face);', '    face.userData.slInFit = true;\n    board.add(face);'],
+    ],
   },
   {
     file: '/src/world/gondolastation.js',

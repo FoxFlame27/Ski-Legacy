@@ -8,6 +8,7 @@
 //    owner's prompt ("Allow Bob to get in your car?" Y / N), the admin's banner, chat and server notes
 #pragma once
 #include "core/math.h"
+#include "player/car_seat.h"
 #include <functional>
 #include <string>
 
@@ -20,10 +21,18 @@ class Ui;
 struct Model;
 struct Camera;
 
+/// (vehicles.js seatFor) a player's car as it is drawn here (driven: their presence row; else parked where they left it):
+/// its frame, its seats and its roll (rolled over > 0.6: they are hidden inside it); false if none
+bool mpCarFrame(const Multiplayer& mp, const VehicleModels& vm, const std::string& owner, glm::dmat4& car, CarTemplate& t, double& roll);
+
 class MpView {
 public:
   /// your car's seat `seat` (1 front passenger, 2.. back) in the world, for the players riding with you
   std::function<bool(int seat, dvec3& pos, double& yaw)> myCarSeat;
+  /// (vehicles.js localCar) your car's frame and seats, for the players riding with you (false: not driving)
+  std::function<bool(glm::dmat4& car, CarTemplate& t)> myCar;
+  /// the car models (their sizes: the seats, the roof)
+  const VehicleModels* models = nullptr;
   void addPeople(const Multiplayer& mp, People& people, const dvec3& cam, const std::string& interior, double dt);
   void addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels& vm, const Model* sled, const glm::mat4& sledFit,
                const dvec3& cam, const std::string& interior) const;

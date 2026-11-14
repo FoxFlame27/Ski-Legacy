@@ -126,6 +126,8 @@ class RecCtx {
   getImageData(x, y, w, h) { return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h, _rec: [x, y] }; }
   createImageData(w, h) { return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h }; }
   putImageData(img, x, y) {
+    // (a canvas replayed exactly (the trail map board: its shaded relief) keeps the pixels)
+    if (this.canvas.slExact) { this.ops.push(['putImage', x, y, img.width, img.height, zlib.deflateSync(Buffer.from(img.data.buffer, img.data.byteOffset, img.data.byteLength), { level: 9 }).toString('base64')]); return; }
     // (the game only writes the alpha channel this way: cobble strip edges): keep that plane
     const n = img.width * img.height, a = Buffer.alloc(n);
     for (let i = 0; i < n; i++) a[i] = img.data[i * 4 + 3];
@@ -460,6 +462,7 @@ function makePack(name) {
       let glow = 0;
       o.traverse((q) => { if (q.isMesh && q.material?.userData?.slGlow) glow = q.material.userData.slGlow; });
       addProp(o.userData.slFit.model, glow, o.matrixWorld.clone().multiply(f));
+      for (const c of o.children) if (c.userData.slInFit) visit(c); // (a part added to a fitted model: the trail map's face)
       return;
     }
     if (o.isLOD && o.levels?.length) { visit(o.levels[0].object); return; }
@@ -596,7 +599,7 @@ function makePack(name) {
     // (a canvas drawn into another: its commands go along)
     for (const id of usedCanvas) { const c = canvases.get(id); for (const op of c.ops) if (op[0] === 'drawImage' && op[1] >= 0) usedCanvas.add(op[1]); }
     const canvasOut = {};
-    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops }; }
+    for (const id of usedCanvas) { const c = canvases.get(id); canvasOut[id] = { w: c.width, h: c.height, ops: c.ops, ...(c.slExact ? { exact: true } : {}) }; }
     const out = { version: 3, generated: new Date().toISOString(), bin: `${name}.bin`, props: propsOut, materials: mats, meshes, instanced: inst, canvases: canvasOut, ...ex };
     const zb = writeData(OUT, `${name}.bin`, Buffer.concat(parts));
     const js = JSON.stringify(out), zj = writeData(OUT, `${name}.json`, js);

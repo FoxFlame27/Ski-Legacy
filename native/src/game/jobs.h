@@ -17,7 +17,9 @@
 #include "game/play_data.h"
 #include <memory>
 #include <string>
+#include <functional>
 #include <vector>
+#include "player/car_seat.h"
 
 namespace sl {
 class Renderer;
@@ -56,6 +58,8 @@ public:
   void endTaxi(const char* why);
   bool fareAboard() const { return fare_.stage == Fare::Stage::Aboard; }
   void onCarKnock(bool crash);
+  /// (taxi.js posePax) your car's frame and seats while you drive: the fare aboard sits in it (false: not driving)
+  std::function<bool(glm::dmat4& car, CarTemplate& t)> carFrame;
   void policeChase();                // the police are after you: the fare ends
   // (autotest)
   int done() const;

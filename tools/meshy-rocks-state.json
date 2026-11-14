@@ -1,0 +1,27 @@
+{
+  "gneiss_slab": {
+    "preview": "01a1d99e-bb6e-75ff-802d-f4fa01594c8b",
+    "refine": "01a1d99f-9291-7204-9498-a306b724963d",
+    "done": true
+  },
+  "granite_boulder": {
+    "preview": "01a1d9a4-f9ac-7685-b431-395099d9e6ae",
+    "refine": "01a1d9a6-511f-749b-8606-f4e6ae7916d1",
+    "done": true
+  },
+  "scree_pile": {
+    "preview": "01a1d9a4-f961-76ae-854e-87a3c3aa426c",
+    "refine": "01a1d9a6-d6c6-7744-b45f-deb5804dc098",
+    "done": true
+  },
+  "limestone_block": {
+    "preview": "01a1d9a9-ceb0-7222-8745-3302092f870a",
+    "refine": "01a1d9ab-f328-75a4-a708-a8da1d0464d3",
+    "done": true
+  },
+  "crag_spire": {
+    "preview": "01a1d9af-76b5-725c-9da1-3c6b345979e4",
+    "refine": "01a1d9b5-3cbf-75d6-9a48-886f33011c55",
+    "done": true
+  }
+}

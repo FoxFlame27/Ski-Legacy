@@ -8,8 +8,9 @@ import { hash2 } from '../core/noise.js';
 import { bakeGeometry, fitModel, clusterDecimate } from '../core/assets.js';
 import { terrainUniforms, fxLevel } from './terrain.js';
 import { quality, onQualityChange } from '../engine/quality.js';
-import { boulderKit, withGround, BOULDER_VARIANTS } from './boulders.js';
+import { rockKit, withGround, ROCKS, ROCK } from './boulders.js';
 import { EXPRESS, expressNearest, inExpressTunnel, PORTAL_IN } from './expressroute.js';
+import { RAIL, railNearest } from './railroute.js';
 
 
 const CELL = 64;
@@ -31,10 +32,12 @@ const FAR_STEP = 30, FAR_PAD = 70; // impostors: rebuilt (time-sliced) each FAR_
 const CAPS = [[2500, 1500], [4000, 3000], [9000, 4000]];
 const MAX_FAR = 60000;
 const MAX_ROCKS = 1500;
-const MAX_CLOSE_ROCKS = 160; // boulders within the rocks' close reach use the detailed mesh (rockCloseR)
+const MAX_CLOSE_ROCKS = 160; // rocks within the rocks' close reach use the detailed mesh (rockCloseR), per variant
 const ROCK_STEP = 10;
-const VILLAGE_CLEAR = 160; // no boulders around Legacy Village (centred on the origin): its paths, gardens and plaza
-const BIG_ROCK = 2.6; // boulders from this size up stand tall (player.js collides with them); smaller ones only poke through the snow
+const VILLAGE_CLEAR = 160; // no rocks around Legacy Village (centred on the origin): its paths, gardens and plaza
+const BIG_ROCK = 2.6; // collision size from which a rock stops the player (player.js); lower ones are skied over
+const LOW_ROCK = 0.55; // m above the snow: rocks lower than this are skied over (their collision size stays under BIG_ROCK)
+const BIG_FAR = 4; // rocks this wide and up (crags, outcrops) are drawn out to twice the preset's rock reach
 // no boulder on the Legacy Express's formation or at the toes of its cuttings (Oct 30, the user: "so many parts where
 // you go through a mountain": the trains ran straight through granite blocks of up to 4.5 m lying on the tracks, ~430
 // of them round the ring, most between Eagle Peak and Legacy World Downhill). Over a tunnel the rocks lie on its cover.
@@ -43,6 +46,13 @@ function onExpressBed(x, z, size) {
   if (!EXPRESS.ready) return false;
   const n = expressNearest(x, z, _xn);
   return !!n && n.d < 8.5 + size * 0.6 && !inExpressTunnel(n.s, PORTAL_IN + 3);
+}
+// ... nor on the Wolkenspitzbahn's (its roadbed and the toes of its cuttings; over its tunnels the rocks may lie)
+function onRailBed(x, z, size) {
+  const n = railNearest(x, z, _xn);
+  if (!n || n.d >= 8.5 + size * 0.6) return false;
+  for (const t of RAIL.tunnels) if (n.s > t.s0 + 20 && n.s < t.s1 - (t.end ? -1e9 : 20)) return false;
+  return true;
 }
 const _q = new THREE.Quaternion(), _qy = new THREE.Quaternion(), _up = new THREE.Vector3(0, 1, 0), _n = new THREE.Vector3();
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _id = new THREE.Quaternion();
@@ -279,11 +289,13 @@ export class Vegetation {
     }));
     this.nearCnt = new Int32Array(this.types.length * 6);
 
-    // boulders: procedural granite (boulders.js), a few shape variants at two detail levels; every instance
-    // also carries the snow line under it (aGround) so snow banks against its foot
-    this.rockKit = boulderKit();
-    const makeRocks = (geo, max) => {
-      const m = new THREE.InstancedMesh(withGround(geo, max), this.rockKit.material, max);
+    // rocks: the Meshy rock kit (boulders.js rockKit), each model at two detail levels; every instance also carries
+    // the snow line under it (aGround) so snow banks against its foot. The placement never depends on the models
+    // (a missing one is just not drawn: its rocks still collide)
+    this.rockKit = rockKit(models);
+    const makeRocks = (geo, max, mat) => {
+      if (!geo) return null;
+      const m = new THREE.InstancedMesh(withGround(geo, max), mat, max);
       m.count = 0;
       m.visible = false;
       m.castShadow = true;
@@ -292,10 +304,10 @@ export class Vegetation {
       scene.add(m);
       return m;
     };
-    this.rockFar = this.rockKit.lo.map((g) => makeRocks(g, MAX_ROCKS));
-    this.rockNear = this.rockKit.hi.map((g) => makeRocks(g, MAX_CLOSE_ROCKS));
-    this.rockFarCnt = new Int32Array(BOULDER_VARIANTS);
-    this.rockNearCnt = new Int32Array(BOULDER_VARIANTS);
+    this.rockFar = this.rockKit.lo.map((g, v) => makeRocks(g, MAX_ROCKS, this.rockKit.loMats[v]));
+    this.rockNear = this.rockKit.hi.map((g, v) => makeRocks(g, MAX_CLOSE_ROCKS, this.rockKit.hiMats[v]));
+    this.rockFarCnt = new Int32Array(ROCKS.length);
+    this.rockNearCnt = new Int32Array(ROCKS.length);
 
     this.impostors = treeNames.map((n, i) => this.renderImpostor(renderer, models[n], lumNorm[i]));
     this.farMeshes = this.impostors.map((imp) => this.makeImpostorMesh(imp));
@@ -651,55 +663,100 @@ export class Vegetation {
         const s = 7 + r1 * 9 + f * 5;
         const type = rr < 0.6 ? 0 : 1;
         trees.push({ x, y: h - 0.3, z, s, rot: r2 * 6.283, type, r: s * 0.03 + 0.25, trunk: 0.15 + s * 0.012, crown: Math.max(0.6, s * (CROWN[type] ?? CROWN[0])) }); // trunk: the stem; crown: the branches
-      } else if (rr < (slope > 0.45 ? 0.05 : 0.006) && this.rockKit) {
-        // big boulders keep further off the runs, clear of the nets and border poles at their edges
-        world.corridorAt(x, z, c);
-        if (c.d < 2.6 + (1 + r1 * 3.5) * 0.7 || this.nearPad(x, z) || x * x + z * z < VILLAGE_CLEAR * VILLAGE_CLEAR || onExpressBed(x, z, 1 + r1 * 3.5)) continue;
-        rocks.push(this.placeRock(x, z, h, hx, hz, r1, r2, hash2(gx, gz, 7), hash2(gx, gz, 8)));
-      } else if (rr < 0.16 && slope > 0.12 && slope < 0.8 && this.rockKit) {
-        // scree: below a rock wall, stones that broke off lie in loose clusters at its foot
-        const ux = hx / slope, uz = hz / slope, ax = x + ux * 15, az = z + uz * 15;
-        const cliff = Math.hypot(world.height(ax + 2, az) - world.height(ax - 2, az), world.height(ax, az + 2) - world.height(ax, az - 2)) / 4;
-        if (cliff < 1.0) continue;
-        world.corridorAt(x, z, c);
-        if (c.d < 8 || this.nearPad(x, z) || x * x + z * z < VILLAGE_CLEAR * VILLAGE_CLEAR) continue;
-        const n = 2 + Math.floor(hash2(gx, gz, 9) * 3);
-        for (let k = 0; k < n; k++) {
-          const ox = x + (hash2(gx, gz, 20 + k) - 0.5) * 7, oz = z + (hash2(gx, gz, 30 + k) - 0.5) * 7;
-          const oh = world.height(ox, oz), ohx = world.height(ox + 1, oz) - oh, ohz = world.height(ox, oz + 1) - oh;
-          const big = hash2(gx, gz, 40 + k) < 0.12; // now and then a block too big to ski over
-          const sz = big ? 2.7 + hash2(gx, gz, 50 + k) * 1.4 : 0.7 + hash2(gx, gz, 50 + k) * 1.4;
-          if (onExpressBed(ox, oz, sz)) continue;
-          rocks.push(this.placeRock(ox, oz, oh, ohx, ohz, (sz - 1) / 3.5, hash2(gx, gz, 60 + k), hash2(gx, gz, 70 + k), hash2(gx, gz, 80 + k), sz));
-        }
+      } else if (rr < 0.055 && this.rockKit) {
+        this.rockSpot(gx, gz, x, z, h, hx, hz, slope, f, rr, c, rocks);
       }
     }
     return { trees, rocks };
   }
 
-  // One boulder: a shape variant, settled into the hillside (its base follows most of the slope), turned
-  // at random. Small stones sit deep and only poke through the snow (they are skied over); big boulders
-  // (BIG_ROCK and up, which stop the player) stand tall. The instance matrix is baked here; `g` is the
-  // snow line under it for the shader. `y` is set so player.js's obstacle top (y + 0.75 s) is the real top.
-  placeRock(x, z, h, hx, hz, r1, r2, r3, r4, size) {
-    const kit = this.rockKit;
-    const s = size ?? 1 + r1 * 3.5, v = Math.min(BOULDER_VARIANTS - 1, Math.floor(r3 * BOULDER_VARIANTS));
-    const big = s >= BIG_ROCK;
+  // The rocks at one grid point that holds no tree (rr: its hash). Sparse on purpose: open snowfields stay open, the
+  // rock goes where real mountains show it (the C++ port, native/src/world/scenery.cpp rockSpot, is the same code):
+  //  - crags: on the steep faces (slope > 0.9, where the terrain is rock already), a tall crag or a big slab of bedrock
+  //  - outcrops: bedrock breaking out along the ridges and convex shoulders (the ground falls away on every side)
+  //  - boulders: at the tree line and in the open forest (most), off the runs on the steeper slopes, rarely on gentle
+  //    open ground; a flat slab now and then on the gentler ground
+  //  - scree: a talus heap and a block or two at the foot of a rock wall (steep ground just above)
+  // Nothing on or by the runs, race courses, lift lines and roads (their corridors), stations, huts and buildings (the
+  // pads), the village, or the railways' formations.
+  rockSpot(gx, gz, x, z, h, hx, hz, slope, f, rr, c, out) {
+    const H = (k) => hash2(gx, gz, k);
+    const clear = (px, pz, size) => {
+      world.corridorAt(px, pz, c);
+      return !(c.d < 3 + size * 0.6 || this.nearPad(px, pz) || px * px + pz * pz < VILLAGE_CLEAR * VILLAGE_CLEAR || onExpressBed(px, pz, size) || onRailBed(px, pz, size));
+    };
+    // the long side along the slope's contour (a strata's strike), a little off
+    const contour = Math.atan2(-hx, -hz) + (H(9) - 0.5) * 0.6;
+    if (slope > 0.9) {
+      // the steep faces: a crag standing out of the rock, or a big slab of bedrock breaking out of it
+      if (rr >= 0.012) return;
+      const crag = H(7) < 0.6, s = crag ? 3 + H(8) * 2.5 : 5 + H(8) * 3;
+      if (clear(x, z, s)) this.placeRock(out, crag ? ROCK.CRAG : ROCK.SLAB, x, z, h, hx, hz, s, crag ? H(9) * Math.PI * 2 : contour, 0.3, crag ? 0.25 : 0.4, gx, gz);
+      return;
+    }
+    if (rr < 0.02 && slope > 0.3) {
+      // ridges and convex shoulders (the ground falls away on every side): bedrock breaking out, a slab along the
+      // contour or the top of a big boulder
+      const k = 12, curv = h - (world.height(x + k, z) + world.height(x - k, z) + world.height(x, z + k) + world.height(x, z - k)) / 4;
+      if (curv > 1.5) {
+        const slab = H(7) < 0.6, s = slab ? 5 + H(8) * 3 : 3.5 + H(8) * 2;
+        if (clear(x, z, s)) this.placeRock(out, slab ? ROCK.SLAB : ROCK.GRANITE, x, z, h, hx, hz, s, slab ? contour : H(9) * Math.PI * 2, 0.6, slab ? 0.35 : 0.4, gx, gz);
+        return;
+      }
+    }
+    if (rr < (f > 0.04 ? 0.01 : slope > 0.45 ? 0.006 : 0.002)) {
+      const slab = slope < 0.35 && H(7) < 0.35;
+      const v = slab ? ROCK.SLAB : H(7) < 0.68 ? ROCK.GRANITE : ROCK.LIMESTONE;
+      const s = slab ? 2.5 + H(8) * 2.5 : 1 + H(8) * H(8) * 2.6;
+      if (clear(x, z, s)) this.placeRock(out, v, x, z, h, hx, hz, s, slab ? contour : H(9) * Math.PI * 2, 0.65, 0.2 + H(12) * 0.15, gx, gz);
+      return;
+    }
+    if (rr >= 0.04 && slope > 0.12 && slope < 0.8) {
+      // scree: below a rock wall (15 m uphill the ground is steep), what broke off lies in a heap at its foot
+      const ux = hx / slope, uz = hz / slope, ax = x + ux * 15, az = z + uz * 15;
+      const cliff = Math.hypot(world.height(ax + 2, az) - world.height(ax - 2, az), world.height(ax, az + 2) - world.height(ax, az - 2)) / 4;
+      if (cliff < 1.0) return;
+      const s = 3 + H(8) * 2;
+      if (!clear(x, z, s + 3)) return;
+      this.placeRock(out, ROCK.SCREE, x, z, h, hx, hz, s, H(9) * Math.PI * 2, 0.85, 0.15, gx, gz);
+      const n = 1 + Math.floor(H(13) * 2);
+      for (let i = 0; i < n; i++) {
+        const ox = x + (H(20 + i) - 0.5) * 9, oz = z + (H(30 + i) - 0.5) * 9;
+        const oh = world.height(ox, oz), ohx = world.height(ox + 1, oz) - oh, ohz = world.height(ox, oz + 1) - oh;
+        const os = 0.8 + H(40 + i) * 1.2;
+        if (clear(ox, oz, os)) this.placeRock(out, H(50 + i) < 0.6 ? ROCK.GRANITE : ROCK.LIMESTONE, ox, oz, oh, ohx, ohz, os, H(60 + i) * Math.PI * 2, 0.65, 0.25, gx, gz, 70 + i * 4);
+      }
+    }
+  }
+
+  // One rock: model v, `s` m wide (its longest side), turned to `yaw`, its base following `follow` of the slope (crags
+  // stand upright, boulders settle into the hillside), sunk `sink` of its height into the snow (and deeper on a slope,
+  // so its downhill edge never floats). The instance matrix is baked here; `g` is the snow line under it for the shader.
+  // Colliders: a circle as wide as its short side (two more along an elongated rock's long side, collider-only records
+  // without a matrix); `s` of the record is its collision size: rocks showing less than LOW_ROCK above the snow are
+  // skied over (s < BIG_ROCK), the rest stop you, and y is set so player.js's obstacle top (y + 0.75 s) is the real top.
+  placeRock(out, v, x, z, h, hx, hz, s, yaw, follow, sink, gx, gz, k0 = 10) {
+    const R = ROCKS[v];
     _n.set(-hx, 1, -hz).normalize();
     _q.setFromUnitVectors(_up, _n);
-    _q.slerp(_id, 0.35);
-    _qy.setFromAxisAngle(_up, r2 * Math.PI * 2);
+    _q.slerp(_id, 1 - follow);
+    _qy.setFromAxisAngle(_up, yaw);
     _q.multiply(_qy);
-    const sy = s * (big ? 0.95 + r4 * 0.25 : 0.8 + r4 * 0.3), sz = s * (0.88 + r1 * 0.24);
-    const H = kit.height[v] * sy;
-    // share of the height under the snow: the stones you ski over show at most ~35 cm (no legs through rock)
-    const sink = big ? 0.16 + r4 * 0.1 : Math.max(0.42 + r4 * 0.16, 1 - 0.35 / H);
-    const base = h - sink * H;
+    const sy = s * (0.85 + hash2(gx, gz, k0) * 0.3) * R.sy, sz = s * (0.9 + hash2(gx, gz, k0 + 1) * 0.2);
+    const Hh = R.h * sy, slope = Math.hypot(hx, hz);
+    const base = h - sink * Hh - slope * s * 0.45 * (1 - follow);
     _p.set(x, base, z);
     _s.set(s, sy, sz);
     _m.compose(_p, _q, _s);
-    const top = base + H * _n.y;
-    return { x, y: top - 0.75 * s, z, s, r: s * 0.45, v, m: Float32Array.from(_m.elements), g: [hx, hz, h] };
+    const top = base + Hh, above = top - h;
+    const S = above < LOW_ROCK ? Math.min(s, 2) : Math.max(s, BIG_ROCK);
+    const d = R.d * (sz / s), y = top - 0.75 * S, g = [hx, hz, h];
+    const long = d < 0.6;
+    out.push({ x, y, z, s: S, r: long ? 0.5 * s * d * 0.95 : 0.5 * s * Math.sqrt(d) * 0.9, v, m: Float32Array.from(_m.elements), g });
+    if (long) {
+      const e = _m.elements, l = Math.hypot(e[0], e[2]) || 1, ax = e[0] / l, az = e[2] / l, o = (0.5 - 0.5 * d) * s * 0.8;
+      for (const k of [-1, 1]) out.push({ x: x + ax * o * k, y, z: z + az * o * k, s: S, r: 0.5 * s * d * 0.9, v: -1, m: null, g });
+    }
   }
 
   nearPad(x, z) {
@@ -857,21 +914,26 @@ export class Vegetation {
     a.needsUpdate = true;
   }
 
-  // Boulders within the preset's reach of the camera (the close ones with the detailed mesh).
+  // Rocks within the preset's reach of the camera (the crags and outcrops, BIG_FAR wide and up, to twice that: they
+  // shape the mountains' look from afar), the close ones with the detailed mesh, nearest cells first.
   rebuildRocks(ex, ez) {
     if (!this.rockKit) return;
     const rockFar = this.rockFarCnt.fill(0), rockClose = this.rockNearCnt.fill(0), closeR2 = this.rockCloseR ** 2;
-    const rockR = quality.veg.rockR, offs = this.cellOffsets(rockR);
+    const rockR = quality.veg.rockR, bigR = Math.min(rockR * 2, quality.veg.farR), offs = this.cellOffsets(bigR);
+    const rockR2 = rockR * rockR, bigR2 = bigR * bigR;
     const pcx = Math.floor(ex / CELL), pcz = Math.floor(ez / CELL);
     let rockTotal = 0;
     for (let k = 0; k < offs.length && rockTotal < MAX_ROCKS; k += 2) {
       const cell = this.cellsN.get(cellKey(pcx + offs[k], pcz + offs[k + 1]));
       if (!cell) continue;
       for (const r of cell.rocks) {
+        if (r.v < 0) continue; // (an elongated rock's extra collider)
         if (rockTotal >= MAX_ROCKS) break;
-        const dx = r.x - ex, dz = r.z - ez;
-        const near = rockClose[r.v] < MAX_CLOSE_ROCKS && dx * dx + dz * dz < closeR2;
+        const dx = r.x - ex, dz = r.z - ez, d2 = dx * dx + dz * dz;
+        if (d2 > (r.m[0] * r.m[0] + r.m[2] * r.m[2] >= BIG_FAR * BIG_FAR ? bigR2 : rockR2)) continue;
+        const near = rockClose[r.v] < MAX_CLOSE_ROCKS && d2 < closeR2;
         const mesh = near ? this.rockNear[r.v] : this.rockFar[r.v];
+        if (!mesh) continue;
         const i = near ? rockClose[r.v]++ : rockFar[r.v]++;
         mesh.instanceMatrix.array.set(r.m, i * 16);
         mesh.geometry.attributes.aGround.array.set(r.g, i * 3);
@@ -879,6 +941,7 @@ export class Vegetation {
       }
     }
     const uploadRocks = (meshes, counts) => meshes.forEach((m, v) => {
+      if (!m) return;
       this.upload(m, counts[v]);
       const g = m.geometry.attributes.aGround;
       g.clearUpdateRanges(); g.addUpdateRange(0, counts[v] * 3); g.needsUpdate = true;

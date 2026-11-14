@@ -10,6 +10,7 @@
 #include <iterator>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -133,6 +134,16 @@ public:
   void* glProcAddress(const char* name) override { return SDL_GL_GetProcAddress(name); }
   void swapBuffers() override { SDL_GL_SwapWindow(win_); }
   void drawableSize(int& w, int& h) const override { SDL_GL_GetDrawableSize(win_, &w, &h); }
+  float pixelRatio() const override {
+    if (!win_) return 1.f;
+    int ww = 1, wh = 1, dw = 1, dh = 1;
+    SDL_GetWindowSize(win_, &ww, &wh);
+    SDL_GL_GetDrawableSize(win_, &dw, &dh);
+    if (ww <= 0 || dw <= 0) return 1.f;
+    // SKI_LEGACY_DPR=2 pretends a Retina display (tests: the UI at 2x on any screen)
+    static const float forced = [] { const char* e = std::getenv("SKI_LEGACY_DPR"); return e ? float(std::atof(e)) : 0.f; }();
+    return forced > 0 ? forced : float(dw) / float(ww);
+  }
   void setRelativeMouse(bool on) override { SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE); rel_ = on; }
   bool relativeMouse() const override { return rel_; }
 
@@ -184,7 +195,15 @@ public:
           if (rel_) { e.mouseDX += float(ev.motion.xrel); e.mouseDY += float(ev.motion.yrel); }
           else e.mouseMoved = true;
           break;
-        case SDL_MOUSEWHEEL: e.wheel += float(ev.wheel.preciseY); break;
+        case SDL_MOUSEWHEEL: {
+          // in wheel notches, signed as the OS reports them (macOS natural scrolling included, as a browser's wheel
+          // events): a mouse wheel gives whole notches; a trackpad (macOS: precise deltas, a tenth of its pixels) gives
+          // fractions, scaled to about a pixel of scroll per pixel moved (a notch ~ 48 px)
+          float y = ev.wheel.preciseY;
+          if (std::fabs(y - std::round(y)) > 1e-3f) y *= 0.21f;
+          e.wheel += y;
+          break;
+        }
         case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: {
           uint8_t bit = ev.button.button == SDL_BUTTON_LEFT ? 1 : ev.button.button == SDL_BUTTON_RIGHT ? 2 : ev.button.button == SDL_BUTTON_MIDDLE ? 4 : 0;
           if (ev.type == SDL_MOUSEBUTTONDOWN) e.mousePressed |= bit; else e.mouseReleased |= bit;
@@ -225,6 +244,19 @@ public:
     ev.key.state = down ? SDL_PRESSED : SDL_RELEASED;
     ev.key.keysym.scancode = sc;
     ev.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+    return SDL_PushEvent(&ev) == 1;
+  }
+
+  bool pushWheel(float dy) override {
+    SDL_Event ev{};
+    ev.type = SDL_MOUSEWHEEL;
+    ev.wheel.timestamp = SDL_GetTicks();
+    ev.wheel.windowID = win_ ? SDL_GetWindowID(win_) : 0;
+    ev.wheel.y = int(std::lround(dy));
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    ev.wheel.preciseY = dy;
+#endif
+    ev.wheel.direction = SDL_MOUSEWHEEL_NORMAL;
     return SDL_PushEvent(&ev) == 1;
   }
 

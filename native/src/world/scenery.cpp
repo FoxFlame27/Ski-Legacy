@@ -207,7 +207,7 @@ static void placeRock(std::vector<Rock>& out, int v, double x, double z, double 
   r.m[0] = float((1 - (yy + zz)) * sx); r.m[1] = float((xy + wz) * sx); r.m[2] = float((xz - wy) * sx);
   r.m[3] = float((xy - wz) * sy); r.m[4] = float((1 - (xx + zz)) * sy); r.m[5] = float((yz + wx) * sy);
   r.m[6] = float((xz + wy) * sz); r.m[7] = float((yz - wx) * sz); r.m[8] = float((1 - (xx + yy)) * sz);
-  double top = base + Hh, above = top - h;
+  double top = base + Hh, above = Hh * (1 - sink);   // (skied over or not: from the rock alone, as the JS)
   double S = above < LOW_ROCK ? std::min(s, 2.0) : std::max(s, BIG_ROCK);
   double d = R.d * (sz / s), y = top - 0.75 * S;
   bool elongated = d < 0.6;
@@ -216,9 +216,7 @@ static void placeRock(std::vector<Rock>& out, int v, double x, double z, double 
   r.gx = float(hx); r.gz = float(hz); r.gh = float(h);
   out.push_back(r);
   if (elongated) {
-    double e0 = (1 - (yy + zz)) * sx, e2 = (xz - wy) * sx, l = std::hypot(e0, e2);
-    if (l == 0) l = 1;
-    double ax = e0 / l, az = e2 / l, o = (0.5 - 0.5 * d) * s * 0.8;
+    double ax = std::cos(yaw), az = -std::sin(yaw), o = (0.5 - 0.5 * d) * s * 0.8;
     for (int k = -1; k <= 1; k += 2) {
       Rock c = r;
       c.x = x + ax * o * k; c.z = z + az * o * k; c.v = -1; c.r = float(0.5 * s * d * 0.9);

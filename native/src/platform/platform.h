@@ -88,6 +88,8 @@ public:
   virtual void* glProcAddress(const char* name) = 0;  // GL loader hook (nullptr on non-GL backends)
   virtual void swapBuffers() = 0;
   virtual void drawableSize(int& w, int& h) const = 0;
+  /// drawable pixels per window point (2 on a Retina / HiDPI display): the UI's CSS px -> drawable px
+  virtual float pixelRatio() const { return 1.f; }
   virtual void setRelativeMouse(bool on) = 0;   // capture the mouse for looking (the game asks on a click in play)
   virtual bool relativeMouse() const = 0;
   /// (Phase 4, SETTINGS) desktop: borderless fullscreen / windowed, vsync. A console ignores both (always full screen).
@@ -108,6 +110,8 @@ public:
   virtual bool textInputActive() const { return false; }
   /// (autotest) a key event pushed through the OS / SDL event queue, seen by the next pollEvents like a real key
   virtual bool pushKey(Key, bool) { return false; }
+  /// (autotest) a mouse wheel / trackpad scroll as a real event (dy > 0: up, as SDL)
+  virtual bool pushWheel(float) { return false; }
   /// (autotest) a virtual controller attached / detached (false: not supported), its buttons pressed by position
   virtual bool testPad(bool) { return false; }
   virtual void testPadButton(int, bool) {}

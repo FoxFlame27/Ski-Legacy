@@ -9,9 +9,10 @@
 // a small trail map, dynamic resolution between 60 % and 100 % of the output.
 //
 // The heavy look lives in High / Ultra / Super Ultra (quality.fx 2..4, as the web game): cascaded shadows (3-4, up
-// to 4096 px each), MSAA 4x / 8x with alpha to coverage, GTAO, sun shafts, the 2048 px snow / rock detail maps, a
-// 2048-3072 px snow trail map, PBR Neutral tone mapping on Ultra and up, the ray-marched cloud layer at full steps,
-// farther forests (impostors to 2-3 km), maximum anisotropic filtering.
+// to 4096 px each), MSAA 4x / 8x with alpha to coverage (from Balanced up, with a contrast-adaptive sharpen instead
+// of FXAA: no blur), GTAO, sun shafts, the 2048 px snow / rock detail maps, a 2048-3072 px snow trail map, PBR
+// Neutral tone mapping on High and up, the ray-marched cloud layer at full steps, farther forests (impostors to
+// 2-3 km), maximum anisotropic filtering.
 #pragma once
 #include "engine/renderer.h"
 #include <cstdlib>
@@ -80,16 +81,16 @@ struct Quality {
       q.impostorR = n == "super" ? 700 : 900; q.maxImpostors = n == "super" ? 8000 : 15000; q.sprayScale = 0.5f;
     } else if (n == "high") {
       q.terrainLodK = 2.9f; q.shadowSize = 2048; q.shadowRange = 320; q.cascades = 3; q.treeNear = 70; q.treeMid = 250; q.treeFar = 900; q.lodScale = 1.25f;
-      q.fx = 2; q.terrainDetail = 2; q.msaa = 4; q.ao = 1; q.aoDirs = 2; q.aoSteps = 6; q.shafts = true; q.sharpen = 0.25f;
+      q.fx = 2; q.terrainDetail = 2; q.msaa = 4; q.ao = 1; q.aoDirs = 2; q.aoSteps = 6; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f;
       q.toneMap = 1;   // (PBR Neutral as Ultra: sunlit snow white with its detail, no ACES hue skew; costs the same)
       q.detailTex = 2048; q.trailSize = 2048; q.trailRange = 128; q.aniso = 16; q.impostorR = 1900; q.maxImpostors = 50000;
     } else if (n == "ultra") {
       q.terrainLodK = 3.3f; q.shadowSize = 3072; q.shadowRange = 480; q.cascades = 4; q.treeNear = 100; q.treeMid = 350; q.treeFar = 1300; q.lodScale = 1.5f; q.maxPeople = 64;
-      q.fx = 3; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 3; q.aoSteps = 8; q.shafts = true; q.sharpen = 0.3f; q.toneMap = 1;
+      q.fx = 3; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 3; q.aoSteps = 8; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f; q.toneMap = 1;
       q.detailTex = 2048; q.trailSize = 2048; q.trailRange = 128; q.envSize = 512; q.aniso = 16; q.impostorR = 2400; q.maxImpostors = 60000; q.sprayScale = 1.3f;
     } else if (n == "superultra") {
       q.terrainLodK = 3.8f; q.shadowSize = 4096; q.shadowRange = 640; q.cascades = 4; q.treeNear = 130; q.treeMid = 420; q.treeFar = 1600; q.lodScale = 2.0f; q.maxPeople = 72;
-      q.fx = 4; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 4; q.aoSteps = 10; q.shafts = true; q.sharpen = 0.3f; q.toneMap = 1;
+      q.fx = 4; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 4; q.aoSteps = 10; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f; q.toneMap = 1;
       q.detailTex = 2048; q.trailSize = 3072; q.trailRange = 150; q.envSize = 512; q.aniso = 16; q.impostorR = 3000; q.maxImpostors = 80000; q.sprayScale = 1.5f;
     } else if (n == "switch") {
       q.terrainLodK = 1.05f; q.shadowSize = 1024; q.shadowRange = 50; q.treeNear = 22; q.treeMid = 85; q.treeFar = 320; q.renderScale = 1.0f;
@@ -99,7 +100,9 @@ struct Quality {
     } else {
       q.name = "balanced";
       q.terrainLodK = 2.2f; q.shadowSize = 2048; q.shadowRange = 160; q.cascades = 2; q.treeNear = 40; q.treeMid = 150; q.treeFar = 600;
-      q.fx = 1; q.terrainDetail = 1; q.sharpen = 0.15f; q.detailTex = 1024; q.trailSize = 1024; q.trailRange = 96; q.aniso = 8;
+      // (sharp: MSAA 4x + alpha to coverage and a light contrast-adaptive sharpen instead of FXAA, which smeared every
+      // texture; the GPU's maximum anisotropy)
+      q.fx = 1; q.terrainDetail = 1; q.msaa = 4; q.fxaa = false; q.sharpen = 0.25f; q.detailTex = 1024; q.trailSize = 1024; q.trailRange = 96; q.aniso = 16;
     }
     q.rockR = n == "super" || n == "switch" ? 80.f : n == "performance" ? 150.f : n == "high" ? 300.f : n == "ultra" ? 340.f : n == "superultra" ? 400.f : 230.f;
     // (the six web presets' own npcs rows; switch: performance's)

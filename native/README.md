@@ -831,8 +831,9 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
   seen from above at 26 rad/s x rpm, the tail rotor about its own axis at 120 rad/s x rpm, the blades drooping at rest and
   fading into the blur discs as it spools up (no crisp blade shadows above 45 %), nav lights, beacons and strobes, the
   downwash's powder cloud close to the snow.
-- *Heli-ski*: E on the pad or at the hut's door opens the flight planner (a card: the five drop zones by distance, the
-  race courses, a free flight; $1,500, refused without skis or money); you sit in the pilot's seat; W / S speed, A / D
+- *Heli-ski*: E on the pad or at the hut's door opens the flight planner (ui/travel.js's chart, `TrailMap::heliTravel`: the
+  drop zones by distance, the race courses' landing spots, a free flight; $1,500; without skis a notice, short of money
+  FLY refuses); you sit in the pilot's seat; W / S speed, A / D
   turn, Space climbs, Shift sinks, the mouse looks round the chase camera; the turbine spools up (~5 s), the ground
   cushion sets it down; "Land here" / "Too steep to land" / "Trees below" / "Lift line below" / "Too close to buildings"
   from the spot below (it holds a hover over what it may not land on); E gets you out beside the door (landed) or jumps
@@ -857,7 +858,9 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
 - Debug runs (with `--autotest --png out.png`, a screenshot per stage and the checks logged, `[helitest] PASS`):
   `SKI_LEGACY_DEBUG=rescuetest` (a wipeout on the mountain, the landing, the flight, the ambulance, the ward, out of the
   doors; `SKI_LEGACY_SPOT=493,-393`: the wipeout on a steep slope instead, so it hovers and winches you up), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
-  landing, getting out); with `,fadetest` added the real fades run (the windows are photographed behind them).
+  landing, getting out), `helicheck` (no skis / no money at the desk, the chart with a race course, the drop zone's
+  smoke, the skis in the basket, jumping out of the hover with the drop, the pilot flying home, leaving it 650 m behind,
+  calling it back, both watchdogs, a visitor's chair, leaving mid-rescue and coming back); `--hour 22` for the night; with `,fadetest` added the real fades run (the windows are photographed behind them).
 
 **Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a
 door: buy ($50,000, one each, `save.chalet` in the web shape), look inside, or go into yours. The interior: chaletplan.js's
@@ -948,12 +951,13 @@ world ready in 21.61 s ...
 - **Interiors**: the ski shop, the chalet (both floors) and the police station are the web game's own rooms now, with
   their windows onto the world (see "The rooms, inside and outside, as the web game"); the build mode furnishes the
   chalet's ground floor only.
-- **Helicopter / rescue**: the flight planner is a card list (not ui/travel.js's chart); no soft bumps off trees, roofs
-  and lift ropes while you fly (heli/collide.js: the hover hold over them and the terrain floor are in), no red smoke
-  flare on the drop zone, no landing light pool at night, your skis are not shown in the basket, jumping out puts you on
-  the snow at once (no drop); the ward's windows are photographs taken as you go in, not a live view (no parallax); the
-  wall clocks stand; the ambulance looks round at the cars and what is solid near it (no speeds of what it meets);
-  multiplayer: other players' rescues, patients and visitors are not shown, a rescue is not carried on after a rejoin.
+- **Helicopter / rescue**: the ward's windows are photographs taken as you go in, not a live view (no parallax; the
+  interiors draw no world outside: they follow the daylight until the next visit takes new ones); the landing light's
+  pool is a spot light on the snow and a faint cone (not model.js's draped decal); the drop zone's smoke drifts on a
+  steady breeze (the windsock stands); the wall clocks stand; the ambulance looks round at the cars and what is solid
+  near it (no speeds of what it meets); multiplayer: other players' rescues (net/rescue.js `veh` rows), patients and
+  visitors are not shown or sent; a rescue is carried on after you leave and come back in single player (the save's
+  `rescue`), not from the server's profile.
 - **People**: shared pose phases (no per-person IK, head tracking or getting-hit animation); no railway station people.
   The townsfolk are fans.js's crowd people (above), but the race spectators (crowds.js: cheering, flags, cowbells) are
   not; nor townsfolk.js's people at the other lift bases / bus stops; a villager knocked over near you gets the rigid

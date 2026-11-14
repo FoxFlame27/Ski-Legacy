@@ -42,6 +42,8 @@ public:
   /// lights (call after Renderer::beginFrame) and the 3D pieces into the vehicle batches
   void submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera& cam, const std::vector<CarPose>& cars);
 
+  /// a car's number plates only (the showroom's cars: no lamps, no distance cut)
+  void plates(VehicleDraw& vd, const CarPose& c);
   int sprays() const { return nSprays_; }
   int snowcats() const { return int(cats_.size()); }
   int flags() const { return int(masts_.size()); }

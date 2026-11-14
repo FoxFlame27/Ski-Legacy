@@ -19,6 +19,17 @@ template <class T> std::vector<T> arr(const nlohmann::json& a, const std::vector
   std::memcpy(out.data(), bin.data() + off, n * sizeof(T));
   return out;
 }
+// the steering wheel of a car spec (export_net.mjs steerData)
+void parseSteer(const nlohmann::json& c, const std::vector<uint8_t>& bin, CarSpec& s) {
+  if (!c.contains("steer") || !c["steer"].is_object()) return;
+  const auto& q = c["steer"];
+  if (!q.contains("c") || !q.contains("axis") || !q.contains("cen")) return;
+  s.steerC = vec3(q["c"][0].get<float>(), q["c"][1].get<float>(), q["c"][2].get<float>());
+  s.steerAxis = vec3(q["axis"][0].get<float>(), q["axis"][1].get<float>(), q["axis"][2].get<float>());
+  s.steerTilt = q.value("tilt", 0.38f); s.steerRimR = q.value("rimR", 0.185f);
+  s.steerTris = arr<float>(q["cen"], bin);
+  s.hasSteer = s.steerTris.size() >= 9;
+}
 Road readRoad(const nlohmann::json& r, const std::vector<uint8_t>& bin) {
   Road o;
   o.n = r["n"]; o.length = r["length"];
@@ -172,6 +183,17 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     auto& a = net["autohaus"];
     hasAutohaus = true; autohaus = dvec3(a["x"].get<double>(), a["y"].get<double>(), a["z"].get<double>()); autohausDir = dvec2(a["dirx"].get<double>(), a["dirz"].get<double>());
   }
+  if (net.contains("carsFull") && net["carsFull"].is_array())
+    for (auto& c : net["carsFull"]) {
+      CarSpec s;
+      s.name = c["name"]; s.kind = c.value("base", std::string()); s.length = c.value("length", 4.7);
+      if (c["size"].is_array()) s.size = vec3(c["size"][0].get<float>(), c["size"][1].get<float>(), c["size"][2].get<float>());
+      s.fit = mat16(c["fit"]);
+      for (auto& h : c["hide"]) s.hide.push_back(h.get<std::string>());
+      for (auto& g : c["glass"]) s.glass.push_back({g["i"].get<int>(), g.value("red", false), g.value("clear", false)});
+      parseSteer(c, bin, s);
+      carsFull.push_back(s);
+    }
   for (auto& c : net["cars"]) {
     CarSpec s;
     s.name = c["name"]; s.label = c.value("label", s.name); s.kind = c.value("kind", std::string());
@@ -190,6 +212,7 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
         s.plates.push_back(M);
       }
     }
+    parseSteer(c, bin, s);
     if (c.contains("lamps") && c["lamps"].is_object()) {
       auto& L = c["lamps"];
       s.lampHalfL = L.value("halfL", 0.f);
@@ -247,6 +270,18 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     if (r["body"].is_object()) { R.bodyFit = mat16(r["body"]["fit"]); R.hasBody = true; }
     if (r["seat"].is_object()) { R.seat = vec3(r["seat"]["p"][0].get<float>(), r["seat"]["p"][1].get<float>(), r["seat"]["p"][2].get<float>()); R.seatYaw = r["seat"]["yaw"]; }
     for (auto& b : r["bogies"]) R.bogies.push_back(vec3(b[0].get<float>(), b[1].get<float>(), b[2].get<float>()));
+    if (r.contains("seats") && r["seats"].is_array()) for (auto& q : r["seats"]) if (q.size() >= 4) R.seats.push_back(vec4(q[0].get<float>(), q[1].get<float>(), q[2].get<float>(), q[3].get<float>()));
+    if (r.contains("cabin") && r["cabin"].is_object()) {
+      auto& c = r["cabin"];
+      R.cabin.W = c.value("W", R.cabin.W); R.cabin.HW = c.value("HW", R.cabin.HW); R.cabin.BAYS_Z0 = c.value("BAYS_Z0", R.cabin.BAYS_Z0); R.cabin.BAY = c.value("BAY", R.cabin.BAY);
+      R.cabin.CEIL_Y = c.value("CEIL_Y", R.cabin.CEIL_Y); R.cabin.cabZ = c.value("cabZ", R.cabin.cabZ); R.cabin.BAYS_N = c.value("BAYS_N", R.cabin.BAYS_N);
+    }
+    if (r.contains("passengerLooks")) for (auto& q : r["passengerLooks"]) R.passengerLooks.push_back(q.get<std::string>());
+    if (r.contains("passengers") && r["passengers"].is_array()) for (auto& carList : r["passengers"]) {
+      std::vector<Transport::RailData::Pax> list;
+      for (auto& q : carList) if (q.size() >= 6) list.push_back({q[0].get<int>(), q[1].get<int>(), q[2].get<int>(), q[3].get<int>(), q[4].get<float>(), q[5].get<float>(), q.size() > 6 ? q[6].get<float>() : 0.f, q.size() > 7 ? q[7].get<float>() : 0.5f});
+      R.passengers.push_back(std::move(list));
+    }
     railModels = r.contains("models") ? &r["models"] : nullptr;
     R.ok = R.line.n > 2 && int(R.V.size()) == R.line.n;
   }

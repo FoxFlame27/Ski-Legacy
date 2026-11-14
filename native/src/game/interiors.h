@@ -43,7 +43,7 @@ public:
   bool atExit(const dvec3& p) const;
   /// (the rooms exported from the web game: the ski shop) what the view's centre is on within 6 m (interior.js: the
   /// ray from your eyes at the displays, the door, the clerk, the outfits corner), null if nothing
-  const RoomDef::Hit* aim(const dvec3& eye, const vec3& dir) const;
+  const RoomDef::Hit* aim(const dvec3& eye, const vec3& dir, double reach = 6) const;
   /// where to stand to aim at a thing (kind, id): 1.7 m in front of it in the room, facing it (autotest)
   bool aimSpot(const std::string& kind, const std::string& id, dvec3& stand, double& yaw) const;
   /// the room's own people (the shop clerk behind the counter)
@@ -55,6 +55,8 @@ public:
   /// the exported room you are in (its cars on show...), null outside one; upstairs (the showroom's mezzanine)?
   const RoomDef* def() const { return def_; }
   bool upstairs() const { return level_ == 2; }
+  /// (game/showroom) the exported room's model (the floor's reflection draws it a second time)
+  std::shared_ptr<Model> roomMesh() const { return def_ ? mesh_ : nullptr; }
   // ---- inside a chalet as chaletroom.js builds it (interiors_chalet.cpp)
   bool chaletExported() const { return ch_ != nullptr; }
   /// per frame: the floor you are on (the stair between them), the doors swinging, a shut door you walk into opens

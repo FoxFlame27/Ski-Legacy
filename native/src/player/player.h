@@ -114,6 +114,8 @@ public:
   double airTravel() const { return airTravel_; }
   double lookYaw() const { return lookYaw_; }
   double lookPitch() const { return lookPitch_; }
+  /// the first-person view turned to a heading and a pitch at once (the autotest's stand-in for the mouse)
+  void setLook(double yaw, double pitch) { heading = yaw; lookYaw_ = 0; lookPitch_ = pitch; }
   bool fallAir() const { return fallAir_; }
   bool groomedAt(double x, double z) const { return onGroomedRun(x, z); }   // (Phase 7: the powder loop off the runs)
   const char* modeName() const;

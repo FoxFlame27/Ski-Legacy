@@ -3,6 +3,11 @@
 // at night. Nothing here changes what the game builds; it only tags it.
 const PATCHES = [
   {
+    // (the full-detail models, their interiors, of the car you drive: which cars have one, for export_net.mjs)
+    file: '/src/game/drive.js',
+    edits: [['const FULL = { car_audi_rs6', 'export const FULL = { car_audi_rs6']],
+  },
+  {
     // (the showroom's cars: which stand where, for export_rooms.mjs)
     file: '/src/game/carrental.js',
     edits: [['const DISPLAY = [[', 'export const DISPLAY = [['], ['const UPPER = [[', 'export const UPPER = [[']],

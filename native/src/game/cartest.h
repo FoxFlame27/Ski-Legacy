@@ -1,7 +1,8 @@
 // The autotest's car check on the path a player takes (the --autotest phase after the Phase 3 drive; alone with
 // SKI_LEGACY_DEBUG=cartest): every input goes through the platform as real input events (SDL_PushEvent key events, an
 // SDL virtual game controller for the pad), never through Input::inject or direct calls — walk to the Autohaus with
-// W A S D (Shift to run), E at the cheapest car for sale, Enter on "Buy it" (the money granted first), walk to the car
+// W A S D (Shift to run), E at its sliding doors, round the cars on show to the cheapest one, E at it (the configurator on
+// that car), Enter on "Buy it" (the money granted first), back out through the doors (E), walk to the car
 // in your bay, E to get in, hold W 10 s (> 40 km/h) steering with A / D, S to stop, E to get out; then the same car
 // with the controller (X in, RT throttle, the left stick steering, LT brake, X out); then 30 s on the village plaza
 // counting the traffic cars driving within 300 m (drawn: inside the draw distance) and the parked cars and buses there.
@@ -34,6 +35,17 @@ struct CarFlowEnv {
   std::function<void(const char*)> png;                                // a screenshot (variant name)
   std::function<double(double x, double z)> ground;                    // the terrain's height
   dvec3 camPos{0}, camFwd{0, 0, 1};
+  // the Autohaus: its door outside and the way out of it (toward the road); inside: where to stand to aim at a thing
+  // (kind, id) and its middle, a floor point of the room in the world, the view turned at a point (the test's mouse);
+  // the cheapest car on show; the configurator has the showroom's car
+  bool hasDoor = false, inShowroom = false, configuring = false;
+  dvec3 door{0};
+  dvec2 doorOut{0, 1};
+  std::function<bool(const std::string& kind, const std::string& id, dvec3& stand, dvec3& target)> spot;
+  std::function<dvec3(double lx, double lz)> roomWorld;
+  std::function<void(const dvec3& target)> lookAt;
+  std::string cheapest, cheapestLabel;
+  int64_t cheapestPrice = 0;
   std::string prompt;
   bool driving = false;
   double simTime = 0, frameDt = 0.1;
@@ -48,7 +60,7 @@ public:
   void releaseAll();
 
 private:
-  enum class St { Setup, WalkToSale, OpenSale, ConfirmBuy, WalkToCar, GetIn, Drive, Stop, GetOut, PadIn, PadDrive, PadStop, PadOut, Village, Traffic, Shot, Done } st_ = St::Setup;
+  enum class St { Setup, WalkToDoor, EnterHall, WalkToSale, OpenSale, ConfirmBuy, LeaveHall, WalkToCar, GetIn, Drive, Stop, GetOut, PadIn, PadDrive, PadStop, PadOut, Village, Traffic, Shot, Done } st_ = St::Setup;
   void go(St s) { st_ = s; t_ = 0; n_ = 0; }
   void key(platform::Key k, bool down);
   void tap(platform::Key k) { key(k, true); tapUp_.push_back(k); }
@@ -60,7 +72,9 @@ private:
   void padButton(int b, bool down);
   std::vector<platform::Key> held_, tapUp_;
   double t_ = 0;
-  int n_ = 0, sale_ = -1, own_ = -1, road_ = -1;
+  int n_ = 0, own_ = -1, road_ = -1, wp_ = 0;
+  std::vector<dvec3> path_;   // the way through the showroom (world points)
+  dvec3 aim_{0};
   int64_t money0_ = 0, price_ = 0;
   size_t garage0_ = 0;
   double top_ = 0, dist_ = 0, walked_ = 0, padTop_ = 0;

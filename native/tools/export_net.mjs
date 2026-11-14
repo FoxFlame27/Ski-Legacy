@@ -84,6 +84,25 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
   const { carTemplate } = await imp('game/cars.js');
   let sharp = null;
   try { sharp = (await import('node:module')).createRequire(path.join(SRC, '../package.json'))('sharp'); } catch (e) { log('lamps: no sharp (', e.message, '): the colour-aware lamp rules see no texels'); }
+  // The steering wheel (cars.js splitWheels: the triangles of the model that are the wheel, by name, or found by its
+  // shape round a hint: findSteering): where it is, the column's axis, and which triangles (their middles, in the car's
+  // frame): the C++ takes the same triangles out of its own copy of the model and turns them (game/vehicles)
+  const steerData = (t) => {
+    const S = t?.steering;
+    if (!S?.parts?.length) return null;
+    const cen = [];
+    for (const p of S.parts) {
+      const P = p.geometry.attributes.position, I = p.geometry.index;
+      if (!P || !I || p.material?.userData?.slMat?.index === undefined) continue;   // (the hub's rings: made by the game, not in the model)
+      for (let i = 0; i < I.count; i += 3) {
+        const a = I.getX(i), b = I.getX(i + 1), c = I.getX(i + 2);
+        cen.push((P.getX(a) + P.getX(b) + P.getX(c)) / 3 + S.c.x, (P.getY(a) + P.getY(b) + P.getY(c)) / 3 + S.c.y, (P.getZ(a) + P.getZ(b) + P.getZ(c)) / 3 + S.c.z);
+      }
+    }
+    if (!cen.length) return null;
+    return { c: [r4(S.c.x), r4(S.c.y), r4(S.c.z)], axis: [r4(S.axis.x), r4(S.axis.y), r4(S.axis.z)], tilt: r4(S.tilt), rimR: r4(S.rimR), cen: { off: pack.blob(Float32Array.from(cen)), n: cen.length } };
+  };
+  let lastSteer = null;
   const lampData = async (name, g, length) => {
     const buf = fs.readFileSync(path.join(SRC, '../public/models', name + '.glb'));
     const len = buf.readUInt32LE(12), json = JSON.parse(buf.subarray(20, 20 + len).toString('utf8')), bin = buf.subarray(20 + len + 8);
@@ -125,6 +144,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       o.material = Array.isArray(o.material) ? o.material.map(one) : one(o.material);
     });
     const t = carTemplate({ scene }, length, name);
+    try { lastSteer = steerData(t); } catch (e) { lastSteer = null; log('steering wheel of', name, 'skipped:', e.message); }
     const L = t?.lamps;
     if (!L) return null;
     const v3 = (v) => [r4(v.x), r4(v.y), r4(v.z)];
@@ -172,11 +192,36 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     out.cars.push({ name, label: spec.label || name, accel: spec.accel ?? 5, top: spec.top ?? 55, electric: !!spec.electric, rev: spec.rev ?? 1, mass: MASS[name] ?? 1700,
       drive: DRIVE[name] || 'awd', length, size: [r4(size.x), r4(size.y), r4(size.z)], real: REAL[name] || null, fit: m.matrix.toArray().map(r4), hide, glass,
       price: rent?.price ?? 0, kind: rent?.kind || '', plates });
+    lastSteer = null;
     try {
       const lamps = await lampData(name, g, length);
       if (lamps) { out.cars[out.cars.length - 1].lamps = lamps; log('lamps', name, lamps.parts.map((q) => `${q.kind}/${q.tier}:${q.I.n / 3}`).join(' '), '| halos', Object.entries(lamps.halo).map(([k, v]) => `${k}x${v.length}`).join(' ')); }
     } catch (e) { log('lamps', name, 'failed:', e.message); }
+    if (lastSteer) out.cars[out.cars.length - 1].steer = lastSteer;
+    log('steering wheel', name, lastSteer ? `${lastSteer.cen.n / 3} triangles at ${lastSteer.c.join(', ')}` : 'none');
   }
+  // the full-detail models (drive.js FULL: the car you drive shows its `_full` model, with its interior): fitted like
+  // the simple ones (the same rules: cars.js works on the name without `_full`)
+  out.carsFull = [];
+  try {
+    const { FULL } = await imp('game/drive.js');
+    for (const [base, name] of Object.entries(FULL || {})) {
+      const length = (CAR_MODELS.find(([n]) => n === base) || [])[1];
+      const g = models[name] || await loadGLB(name);
+      if (!g || !length) continue;
+      const fit = fitCar(g, length, name), m = fit.children[0];
+      m.updateMatrix();
+      const kept = new Set(meshNames(m)), hide = [...new Set(meshNames(g.scene).filter((n) => !kept.has(n)))];
+      const size = new THREE.Box3().setFromObject(fit).getSize(new THREE.Vector3());
+      const glass = glbMaterials(name).map((q, i) => ({ ...q, i })).filter((q) => q.transmission || (/glass|glas$|window|windscreen/.test(q.name.toLowerCase()) && !/surr|frame|seal|rubber|trim/.test(q.name.toLowerCase())))
+        .map((q) => ({ i: q.i, red: /red/.test(q.name.toLowerCase()), clear: /front_light|light/.test(q.name.toLowerCase()) && !/red/.test(q.name.toLowerCase()) }));
+      let steer = null;
+      try { steer = steerData(carTemplate(g, length, name)); } catch (e) { log('steering wheel of', name, 'skipped:', e.message); }
+      log('steering wheel', name, steer ? `${steer.cen.n / 3} triangles at ${steer.c.join(', ')}` : 'none');
+      out.carsFull.push({ name, base, length, size: [r4(size.x), r4(size.y), r4(size.z)], fit: m.matrix.toArray().map(r4), hide, glass, steer });
+    }
+    log('net: full-detail car models', out.carsFull.map((c) => c.name).join(' '));
+  } catch (e) { log('net: full-detail car models skipped:', e.message); }
   if (skibus?.line?.bus?.shell) {
     const B = await imp('game/bus/bus.js'), sh = skibus.line.bus.shell, m = sh.children[0];
     m.updateMatrix();
@@ -223,6 +268,9 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     }
     const car = T.buildCar({ number: 1 });
     const proc = car.group.getObjectByName('rail-car-proc');
+    // (the cabin's surfaces: train.js textures them in its shader; baked into maps here: tools/train_detail.mjs)
+    const { bakeCabinDetail } = await import('./train_detail.mjs');
+    if (proc) { try { bakeCabinDetail(THREE, proc, log); } catch (e) { log('train detail skipped:', e.stack?.split('\n').slice(0, 3).join(' | ')); } }
     const frame = new THREE.Group();
     for (const ch of [...car.group.children]) if (ch !== proc && ch.name !== 'rail-car-meshy' && !car.bogies.includes(ch)) frame.add(ch.clone());
     out.rail.models = {
@@ -243,6 +291,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       const xproc = xcar.group.getObjectByName('rail-car-proc');
       if (xproc) {
         xproc.traverse((o) => { if (o !== xproc && o.visible === false) o.traverse((q) => { q.userData.slSkip = true; }); });
+        try { bakeCabinDetail(THREE, xproc, log); } catch (e) { log('train detail (express) skipped:', e.message); }
         out.rail.models.cabinExpress = pack.localModel(xproc);
         log('net: the Legacy Express cabin', out.rail.models.cabinExpress.length, 'parts; Meshy interior', !!xcar.group.getObjectByName('express-interior'));
       }
@@ -251,6 +300,35 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     const seat = car.seats.find((s) => s.row === 1 && s.window && s.side > 0) || car.seats.find((s) => s.front && s.window) || car.seats[0];
     out.rail.seat = seat ? { p: [r4(seat.pos.x), r4(seat.pos.y), r4(seat.pos.z)], yaw: seat.yaw } : null;
     out.rail.seats = car.seats.map((s) => [r4(s.pos.x), r4(s.pos.y), r4(s.pos.z), r4(s.yaw)]);
+    // (the cabin's layout: express.js walks about in it by these: WALK, walkBoxes, walkCamera)
+    out.rail.cabin = { W: T.CABIN.W, HW: T.CABIN.HW, BAYS_N: T.CABIN.BAYS_N, BAYS_Z0: T.CABIN.BAYS_Z0, BAY: T.CABIN.BAY, CEIL_Y: T.CABIN.CEIL_Y, cabZ: T.CAR.cabZ };
+    // the seated passengers (railway.js seatPassengers: skiers on about half the seats of the train you board, never the
+    // rider's front row; their looks, poses and places from its own seeded generator, drawn in its order: first the
+    // bakes' two numbers for every look x pose x head turn, then per car the seats, and per passenger the look, the
+    // pose, window or neighbour, the turn in the seat, the size). Per car: [seat, look, pose, head, yaw jitter, scale, the
+    // bake's head turn (rad), the bake's variation]
+    try {
+      const { mulberry32 } = await imp('core/noise.js');
+      const looks = ['skier_red', 'skier_green', 'skier_orange', 'skier_black', 'skier_purple', 'skier_blue'], kinds = ['thighs', 'lap', 'crossed', 'phone'];
+      const rnd = mulberry32(5150);
+      // (poseSeated(rig, kind, dir * (0.38 + rnd() * 0.25), rnd()): each bake's head turn and its own variation)
+      const bake = new Map();
+      for (let i = 0; i < looks.length; i++) for (let k = 0; k < kinds.length; k++) for (const dir of kinds[k] === 'phone' ? [0] : [-1, 1]) { const turn = dir * (0.38 + rnd() * 0.25), v = rnd(); bake.set(`${i}|${k}|${dir}`, [r4(turn), r4(v)]); }
+      out.rail.passengerLooks = looks;
+      out.rail.passengers = [];
+      for (let c = 0; c < 2 * (W.RAIL_UNITS ?? 2); c++) {
+        const places = car.seats.filter((st) => !(st.row === 1 && st.side > 0) && rnd() < 0.56), list = [];
+        for (const st of places) {
+          const look = Math.floor(rnd() * looks.length), r = rnd(), kind = r < 0.36 ? 0 : r < 0.6 ? 1 : r < 0.8 ? 2 : 3;
+          const toWindow = rnd() < 0.65, lateral = Math.sign(st.pos.x) * (toWindow ? 1 : -1);
+          const dir = kind === 3 ? 0 : lateral * (st.yaw === 0 ? 1 : -1) > 0 ? 1 : -1;
+          const yawJ = (rnd() - 0.5) * 0.12, sc = 0.95 + rnd() * 0.08;
+          list.push([car.seats.indexOf(st), look, kind, dir, r4(yawJ), r4(sc), ...(bake.get(`${look}|${kind}|${dir}`) || [0, 0.5])]);
+        }
+        out.rail.passengers.push(list);
+      }
+      log('net: rail passengers per car', out.rail.passengers.map((l) => l.length).join(' '), 'of', car.seats.length, 'seats');
+    } catch (e) { log('net: rail passengers skipped:', e.message); }
     log('net: rail', RAIL.n, 'samples,', RAIL.stations.length, 'stations, cycle', R.CYCLE.toFixed(0), 's; railcar parts', Object.entries(out.rail.models).map(([k, v]) => k + ':' + v.length).join(' '));
   }
 

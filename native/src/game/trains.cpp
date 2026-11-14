@@ -1,4 +1,5 @@
 #include "game/trains.h"
+#include "game/people.h"
 #include "core/log.h"
 #include "engine/mesh_kit.h"
 #include "world/scenery.h"
@@ -144,6 +145,7 @@ bool Railway::board(int st, bool up) {
     for (auto& tr : trains_) tr.st = trainState(t_now_, tr.phase);
   }
   ride_ = Ride{};
+  resetChase();
   ride_.on = true; ride_.train = train; ride_.car = up ? 0 : ncars_ - 1; ride_.up = up; ride_.from = st; ride_.dest = up ? nst - 1 : 0;
   return true;
 }
@@ -156,6 +158,7 @@ TrainRide Railway::ride() const {
   carMatrix(ride_.train, ride_.car, M);
   const auto& R = t_.rail;
   r.seat = dvec3(M * glm::dvec4(dvec3(R.seat), 1));
+  r.car = M; r.seatLocal = dvec3(R.seat); r.seatYaw = R.seatYaw;
   dvec3 f = dvec3(M * glm::dvec4(std::sin(R.seatYaw), 0, std::cos(R.seatYaw), 0));
   r.fwd = glm::normalize(dvec3(f.x, 0, f.z) + dvec3(1e-9));
   const State& st = trains_[size_t(ride_.train)].st;
@@ -186,6 +189,43 @@ bool Railway::leaveAtStop(dvec3& exit) {
   exit = s.hasExit ? s.exit : dvec3(s.board.x, s.board.y, 0);
   ride_.exitSent = true;
   return true;
+}
+
+namespace {
+// the passengers of one car as seated people: seatpose.js's relaxed poses (hands on the thighs, in the lap, arms folded,
+// over a phone; the head turned to the window or the neighbour), each on its seat in the car's frame
+void seatPassengers(People& people, const Transport::RailData& R, size_t car, const glm::dmat4& M) {
+  if (car >= R.passengers.size()) return;
+  const double carYaw = std::atan2(M[2][0], M[2][2]);
+  for (const auto& q : R.passengers[car]) {
+    if (q.seat < 0 || size_t(q.seat) >= R.seats.size()) continue;
+    const vec4& st = R.seats[size_t(q.seat)];
+    int kind = size_t(q.look) < R.passengerLooks.size() ? people.kind(R.passengerLooks[size_t(q.look)]) : -1;
+    if (kind < 0 && !people.skierKinds.empty()) kind = people.skierKinds[size_t(q.look) % people.skierKinds.size()];
+    if (kind < 0) continue;
+    Person p;
+    p.kind = kind; p.pos = dvec3(M * glm::dvec4(st.x, st.y, st.z, 1)); p.yaw = carYaw + double(st.w) + double(q.yaw);
+    p.anim = PAnim::Sit; p.scale = q.scale; p.speed = 0;
+    // (baked in the seat's frame: seatpose.js's kind and head turn, the seat's place and heading in the car)
+    p.car.how = CarSeatRef::Bench; p.car.look = q.pose; p.car.x = q.turn; p.car.vary = q.vary;
+    p.car.car = M * glm::translate(glm::dmat4(1), dvec3(st.x, st.y, st.z)) * glm::rotate(glm::dmat4(1), double(st.w) + double(q.yaw), dvec3(0, 1, 0));
+    people.add(p);
+  }
+}
+} // namespace
+
+void Railway::addPeople(People& people) const {
+  if (!ride_.on || !insideView) return;
+  glm::dmat4 M;
+  carMatrix(ride_.train, ride_.car, M);
+  seatPassengers(people, t_.rail, size_t(ride_.car), M);
+}
+
+void Express::addPeople(People& people) const {
+  if (!ride_.on || !insideView) return;
+  glm::dmat4 M;
+  carMatrix(ride_.train, 0, M);
+  seatPassengers(people, t_.rail, 0, M);
 }
 
 void Railway::addDraw(VehicleDraw& draw, const dvec3& cam) const {
@@ -282,6 +322,7 @@ double Express::u(int k) const {
 void Express::update(double dt, bool fast, const dvec3&) {
   if (trains_.empty()) return;
   double scale = ride_.on && fast ? t_.express.fast : 1;
+  timeScale_ = scale;
   t_now_ = std::fmod(t_now_ + dt * scale, up_.loop * 1000);
   for (size_t k = 0; k < trains_.size(); k++) {
     int was = trains_[k].st.at;
@@ -348,6 +389,7 @@ bool Express::board(int from, int to) {
     update(0, false, dvec3(0));
   }
   ride_ = Ride{};
+  resetViews();
   ride_.on = true; ride_.train = bk; ride_.from = from; ride_.to = to;
   return true;
 }
@@ -378,8 +420,12 @@ TrainRide Express::ride() const {
   glm::dmat4 M;
   carMatrix(ride_.train, 0, M);
   const auto& R = t_.rail;
-  r.seat = dvec3(M * glm::dvec4(dvec3(R.seat), 1));
-  dvec3 f = dvec3(M * glm::dvec4(std::sin(R.seatYaw), 0, std::cos(R.seatYaw), 0));
+  const bool moved = seat_ >= 0 && size_t(seat_) < R.seats.size();   // (sat down somewhere else after a walk)
+  const dvec3 seatL = moved ? dvec3(R.seats[size_t(seat_)]) : dvec3(R.seat);
+  const double seatYaw = moved ? double(R.seats[size_t(seat_)].w) : R.seatYaw;
+  r.seat = dvec3(M * glm::dvec4(seatL, 1));
+  r.car = M; r.seatLocal = seatL; r.seatYaw = seatYaw;
+  dvec3 f = dvec3(M * glm::dvec4(std::sin(seatYaw), 0, std::cos(seatYaw), 0));
   r.fwd = glm::normalize(dvec3(f.x, 0, f.z) + dvec3(1e-9));
   const State& st = trains_[size_t(ride_.train)].st;
   r.speed = st.speed;

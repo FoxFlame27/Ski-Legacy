@@ -49,6 +49,9 @@ struct CarTemplate {
   double tilt = 0.38, rimR = 0.185;
   /// from the seat hints (the steering wheel at the driver's x)
   static CarTemplate of(const CarSeats* S, double sizeY);
+  /// the steering wheel as measured on the model (cars.js t.steering: carpeople.js and drive.js go by it, the seat hints'
+  /// own wheel only picks the hints)
+  CarTemplate& wheel(const three::V3& c, double tiltRad, double rim) { steering = true; steerC = c; tilt = tiltRad; rimR = rim; return *this; }
 };
 
 /// carpeople.js seatHip(t, hipY, reach): the driver's hip joint in the car's frame, false without seat hints
@@ -60,7 +63,7 @@ inline int taxiPaxSeat(int n) { return n > 3 ? 3 : 1; }
 
 /// A person seated in a car (game/people.h Person::car)
 struct CarSeatRef {
-  enum How : uint8_t { None, Figure, Seated };
+  enum How : uint8_t { None, Figure, Seated, Bench };   // Bench: a train seat (railway.js seatPassengers): posed by seatpose.js poseSeated at the origin (look: its kind, x: the head's turn, vary), placed by `car` (the seat's own frame)
   How how = None;
   glm::dmat4 car{1};        // the car's frame (car -> world: nose +z, wheels on y 0)
   CarTemplate t;
@@ -68,6 +71,7 @@ struct CarSeatRef {
   bool driver = false;
   int look = 0;             // (Figure) carpeople.js LOOKS index: the passengers' hands (lap / thighs) and head turn
   double x = 0;             // (Figure) the seat's x: the driver's side +, the passenger's -
+  double vary = 0.5;        // (Bench) poseSeated's variation
 };
 
 } // namespace sl

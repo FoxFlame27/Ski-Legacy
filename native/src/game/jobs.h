@@ -13,6 +13,7 @@
 //                  quick and smooth ride; late: a cut; a crash: no fare); T ends the shift
 // Rewards go to the economy (save.jobs: done, failed, earned, the boards' re-pins, the active job).
 #pragma once
+#include "game/jobboardui.h"
 #include "game/play.h"
 #include "game/play_data.h"
 #include <memory>
@@ -54,6 +55,9 @@ public:
   void onCrash();                    // your wipeout
   // the taxi
   bool onDuty() const { return taxiOn_; }
+  JobBoardView board_;                 // the board up close (ui/jobboard.js)
+  std::vector<Offer> boardOffers_;
+  Ui* ui_ = nullptr;
   void startTaxi();
   void endTaxi(const char* why);
   bool fareAboard() const { return fare_.stage == Fare::Stage::Aboard; }

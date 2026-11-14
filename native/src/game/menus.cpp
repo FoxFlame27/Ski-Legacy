@@ -1,5 +1,6 @@
 #include "game/menus.h"
 #include "core/prompts.h"
+#include "game/ui_widgets.h"
 #include "platform/platform.h"
 #include <algorithm>
 #include <cmath>
@@ -16,7 +17,7 @@ std::string fmtMoney(int64_t v) {
   for (size_t i = 0; i < s.size(); i++) { if (i && (s.size() - i) % 3 == 0) o += ','; o += s[i]; }
   return (v < 0 ? "-" : "") + o;
 }
-std::string upper(std::string s) { for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c))); return s; }
+std::string upper(const std::string& s) { return uiw::upper(s); }   // (ä ö ü too: Sonnenkopf HÜTTE)
 int seedOf(const std::string& s) { int h = 17; for (char c : s) h = (h * 31 + static_cast<unsigned char>(c)) % 9973; return h; }   // (menu.js seedOf)
 
 // menu.js SET_ROWS
@@ -157,14 +158,23 @@ void Menus::openDialog(Dialog d) {
   open(Screen::Dialog);
 }
 
+void Menus::openCustom(CustomFrame frame, std::string name) {
+  custom_ = std::move(frame);
+  customFocusLabel = nullptr;
+  customName_ = std::move(name);
+  customFocus.clear();
+  open(Screen::Custom);
+}
+
 void Menus::setFocus(int i) {
   int n = int(items_.size());
   if (!n) { focus_ = 0; return; }
   focus_ = ((i % n) + n) % n;
 }
 
-std::string Menus::focusedLabel() const { return focus_ >= 0 && focus_ < int(items_.size()) ? items_[size_t(focus_)].label : ""; }
+std::string Menus::focusedLabel() const { if (screen_ == Screen::Custom) return customFocus; return focus_ >= 0 && focus_ < int(items_.size()) ? items_[size_t(focus_)].label : ""; }
 bool Menus::focusLabel(const std::string& label) {
+  if (screen_ == Screen::Custom) return customFocusLabel && customFocusLabel(label);
   for (size_t i = 0; i < items_.size(); i++) if (items_[i].label == label) { focus_ = int(i); focusScroll_ = true; return true; }
   return false;
 }
@@ -214,6 +224,13 @@ void Menus::handle(const UiNav& nav) {
   // the wheel / trackpad (SDL's precise delta: a wheel notch is 1, a trackpad gives fractions) scrolls the list; the
   // focus stays where it is (a hover does not pull the list back)
   if (nav.wheel != 0 && listH_ > 0) scrollTarget_ = std::clamp(scrollTarget_ - nav.wheel * 48 * u_, 0.f, maxScroll);
+  // Page Up / Page Down a screenful, Home / End to the ends (every scrolling list: SETTINGS, CONTROLS, the dialogs' lists)
+  if (listH_ > 0 && maxScroll > 0) for (Key k : nav.keys) {
+    if (k == Key::PageUp) scrollTarget_ = std::clamp(scrollTarget_ - listH_ * 0.9f, 0.f, maxScroll);
+    else if (k == Key::PageDown) scrollTarget_ = std::clamp(scrollTarget_ + listH_ * 0.9f, 0.f, maxScroll);
+    else if (k == Key::Home) scrollTarget_ = 0;
+    else if (k == Key::End) scrollTarget_ = maxScroll;
+  }
   if (nav.mouse.x >= 0 && (nav.mouseMoved || nav.click)) { int h = hit(nav.mouse); if (h >= 0 && !items_[size_t(h)].disabled) focus_ = h; }
   if (nav.click && nav.mouse.x >= 0) {
     int h = hit(nav.mouse);
@@ -412,6 +429,7 @@ void Menus::frame(const UiNav& navIn, double dt, double now) {
   }
   const UiNav& nav = fresh ? quiet : navIn;
   if (screen_ == Screen::None) return;
+  if (screen_ == Screen::Custom) { items_.clear(); listH_ = 0; CustomFrame f = custom_; if (f) f(nav, dt, now); return; }
   // the previous frame's items take this frame's input (immediate mode: drawn, then hit-tested next frame)
   if (screen_ == Screen::Controls && captureAction_ >= 0) controlsCapture(nav);
   else if (screen_ == Screen::Showcase && (nav.left || nav.right)) pickChar(chi_ + (nav.left ? -1 : 1));
@@ -445,6 +463,11 @@ void Menus::frame(const UiNav& navIn, double dt, double now) {
     handle(n2);
   } else handle(nav);
   if (screen_ == Screen::None) return;
+  // the controller's right stick scrolls the open list smoothly (analog: the further, the faster)
+  if (listH_ > 0 && std::fabs(nav.stickR.y) > 0.18f) {
+    float maxScroll = std::max(0.f, contentH_ - listH_), v = nav.stickR.y * std::fabs(nav.stickR.y);
+    scrollTarget_ = std::clamp(scrollTarget_ + v * float(dt) * 1500 * u_, 0.f, maxScroll);
+  }
   scroll_ += (scrollTarget_ - scroll_) * float(1 - std::exp(-dt * 14));
   items_.clear();
   listH_ = 0;
@@ -1179,7 +1202,7 @@ void Menus::scrDialog() {
   std::vector<size_t> main, second;
   bool swatches = false;
   for (size_t i = 0; i < dialog_.options.size(); i++) { (dialog_.options[i].secondary ? second : main).push_back(i); swatches |= dialog_.options[i].swatch != 0; }
-  bool cards = dialog_.tabs.empty() && !swatches && main.size() <= 4;
+  bool cards = dialog_.tabs.empty() && !swatches && main.size() <= 9;   // (hud.js: every choice a paper card, wrapping; long shop lists as rows)
   float hostW = std::min(900 * u_, W * 0.94f), x = (W - hostW) / 2 + 8 * u_, cw = hostW - 16 * u_;
   // -- heights first (the block is centred vertically)
   std::string title = upper(dialog_.title);
@@ -1205,7 +1228,28 @@ void Menus::scrDialog() {
   float tabsH = dialog_.tabs.empty() ? 0 : 54 * u_ + 18 * u_;
   float cardW = 262 * u_, cardH = 196 * u_, gap = 22 * u_, rowH = 74 * u_, rowGap = 10 * u_;
   int perRow = std::max(1, int((cw - 10 * u_ + gap) / (cardW + gap)));
-  float listFull = cards ? float((int(main.size()) + perRow - 1) / perRow) * (cardH + gap) - gap : float(main.size()) * (rowH + rowGap) - rowGap;
+  // the cards: the title wraps (36u / 1, upper case), the note under it too; a row of cards is as tall as its tallest
+  // (.dlg-opt: min-height 196u; padding 20u 26u 24u; the foot at the bottom)
+  struct CardText { std::vector<std::string> title, sub; float h = 0; };
+  std::vector<CardText> ct(main.size());
+  std::vector<float> rowTop, rowHt;
+  if (cards) {
+    for (size_t n = 0; n < main.size(); n++) {
+      const DialogOption& o = dialog_.options[main[n]];
+      ct[n].title = uiw::wrap(ui_, upper(o.label), 36 * u_, UiFont::CondItalic, cardW - 52 * u_ - 26 * u_, 0.02f);
+      if (!o.sub.empty()) { std::string sub = o.sub; sub[0] = char(std::toupper(static_cast<unsigned char>(sub[0]))); ct[n].sub = uiw::wrap(ui_, sub, tsm, UiFont::BodyMed, cardW - 52 * u_); }
+      bool foot = o.price >= 0 || !o.state.empty();
+      ct[n].h = std::max(cardH, 20 * u_ + 14 * u_ + float(ct[n].title.size()) * 36 * u_ + (ct[n].sub.empty() ? 0 : 8 * u_ + float(ct[n].sub.size()) * tsm * 1.4f) + (foot ? 18 * u_ + 40 * u_ : 0) + 24 * u_);
+    }
+    float yy = 0;
+    for (size_t n = 0; n < main.size(); n += size_t(perRow)) {
+      float hh = 0;
+      for (size_t k = n; k < main.size() && k < n + size_t(perRow); k++) hh = std::max(hh, ct[k].h);
+      rowTop.push_back(yy); rowHt.push_back(hh);
+      yy += hh + gap;
+    }
+  }
+  float listFull = cards ? (rowTop.empty() ? 0 : rowTop.back() + rowHt.back()) : float(main.size()) * (rowH + rowGap) - rowGap;
   float footH = 26 * u_ + 54 * u_;
   float maxList = std::max(rowH, H - 2 * 40 * u_ - (kickH + tH + sayH + tabsH + footH) - 20 * u_);
   float listVis = std::min(listFull, maxList);
@@ -1280,7 +1324,7 @@ void Menus::scrDialog() {
     const DialogOption& o = dialog_.options[k];
     bool foc = int(items_.size()) == focus_;
     float ox, oy, ow, oh;
-    if (cards) { ox = x + 10 * u_ + float(int(n) % perRow) * (cardW + gap); oy = y + float(int(n) / perRow) * (cardH + gap) - scroll_; ow = cardW; oh = cardH; }
+    if (cards) { ox = x + 10 * u_ + float(int(n) % perRow) * (cardW + gap); oy = y + rowTop[n / size_t(perRow)] - scroll_; ow = cardW; oh = rowHt[n / size_t(perRow)]; }
     else { ox = x; oy = y + float(n) * (rowH + rowGap) - scroll_; ow = cw; oh = rowH; }
     Item it;
     it.x = ox; it.y = oy; it.w = ow; it.h = oh; it.label = o.label; it.inList = true;
@@ -1303,6 +1347,7 @@ void Menus::scrDialog() {
     bool shortMoney = o.disabled && state.empty() && price > 0 && save_.money < price;
     std::string num = (price > 0 && state.empty()) ? fmtMoney(price) : "";
     float priceS = (cards ? 40 : 30) * u_;
+    float footRight = ox + ow - 26 * u_;
     auto drawFoot = [&](float fx, float fy, float fh) {   // fy: the foot line's top, fh its height; returns the width
       float w = 0;
       if (!num.empty()) {
@@ -1319,8 +1364,15 @@ void Menus::scrDialog() {
         w = chW;
       }
       if (shortMoney) {
+        // .do-note: beside the price; where the card is too narrow for one line it wraps ("YOU HAVE" / "$500")
         std::string note = "YOU HAVE $" + fmtMoney(save_.money);
-        ui_.textLH(fx + w + (w > 0 ? 12 * u_ : 0), fy + (fh - txs * 1.2f) / 2, txs * 1.2f, txs, UiFont::BodyHeavy, ko, note, UiAlign::Left, 0.12f);
+        float nx = fx + w + (w > 0 ? 12 * u_ : 0), room = footRight - nx;
+        if (ui_.textWidth(note, txs, UiFont::BodyHeavy, 0.12f) <= room) ui_.textLH(nx, fy + (fh - txs * 1.2f) / 2, txs * 1.2f, txs, UiFont::BodyHeavy, ko, note, UiAlign::Left, 0.12f);
+        else if (room > 24 * u_) {
+          float off = (txs * 1.2f - ui_.lineHeight(txs, UiFont::BodyHeavy)) / 2;
+          ui_.textFit(nx, fy + fh / 2 - txs * 1.2f + off, room, txs, UiFont::BodyHeavy, ko, "YOU HAVE", UiAlign::Left, 0.12f);
+          ui_.textFit(nx, fy + fh / 2 + off, room, txs, UiFont::BodyHeavy, ko, "$" + fmtMoney(save_.money), UiAlign::Left, 0.12f);
+        }
       }
       return w;
     };
@@ -1329,12 +1381,14 @@ void Menus::scrDialog() {
       if (!input_.usingGamepad()) ui_.kc(ox + ow - 22 * u_ - ui_.kcWidth(u_, kcl), oy + 18 * u_, u_, kcl, blueDim, vec4(0), kcBorder);
       float ty = oy + 20 * u_ + 14 * u_;
       float avail = ow - 52 * u_ - 26 * u_;
-      ui_.textFit(ox + 26 * u_, ty, avail, 36 * u_, UiFont::CondItalic, a(blue, ta), upper(o.label), UiAlign::Left, 0.02f);
-      ty += 36 * u_ * 1.2f;
-      if (!o.sub.empty()) {
-        std::string sub = o.sub;
-        sub[0] = char(std::toupper(static_cast<unsigned char>(sub[0])));
-        ui_.textWrapped(ox + 26 * u_, ty + 8 * u_ + tsm * 0.1f, ow - 52 * u_, tsm, UiFont::BodyMed, a(blueDim, ta), sub, 1.4f);
+      for (const std::string& tl : ct[n].title) {   // (a single word wider than the card is fitted to it)
+        float tw0 = ui_.textWidth(tl, 36 * u_, UiFont::CondItalic, 0.02f), fs0 = tw0 > avail ? 36 * u_ * avail / tw0 : 36 * u_;
+        ui_.textLH(ox + 26 * u_, ty, 36 * u_, fs0, UiFont::CondItalic, a(blue, ta), tl, UiAlign::Left, 0.02f);
+        ty += 36 * u_;
+      }
+      if (!ct[n].sub.empty()) {
+        ty += 8 * u_;
+        for (const std::string& sl : ct[n].sub) { ui_.textLH(ox + 26 * u_, ty, tsm * 1.4f, tsm, UiFont::BodyMed, a(blueDim, ta), sl); ty += tsm * 1.4f; }
       }
       float fh = std::max(40 * u_, txs * 1.2f);
       drawFoot(ox + 26 * u_, oy + oh - 24 * u_ - fh, fh);

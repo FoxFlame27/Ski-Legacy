@@ -30,6 +30,8 @@ void Hud::draw(Ui& ui, const HudFrame& f, Save& save, const Input& in, double no
   const float d = ui.dpr();
   const float s = float(std::clamp(save.setting("hudScale", 1), 0.5, 2.0)) * d;
   bool showInfo = save.settingOn("showInfo"), showMoney = save.settingOn("showMoney"), showSpeedo = save.settingOn("showSpeedo");
+  const bool aside = f.inRace || f.onlyFlash;
+  if (aside) showInfo = showMoney = showSpeedo = false;
   const vec4 shadowCol = hex(0x00143c, 0.28f);
   auto pill = [&](float x, float y, float w, float h, int variant, float k, float alpha = 1) {
     Ui::Shadow sh{0, 6 * k, 14 * k, a(shadowCol, alpha)};
@@ -93,7 +95,7 @@ void Hud::draw(Ui& ui, const HudFrame& f, Save& save, const Input& in, double no
   }
 
   // ---- #waypoint (top centre): the red arrow turned toward the mark, "label · 412 m"
-  if (f.waypoint) {
+  if (f.waypoint && !aside) {
     char dd[64];
     if (f.wpDist < 1000) std::snprintf(dd, sizeof dd, "%.0f m", std::round(f.wpDist)); else std::snprintf(dd, sizeof dd, "%.1f km", f.wpDist / 1000);
     std::string t = f.wpLabel + " \xC2\xB7 " + dd;
@@ -132,7 +134,7 @@ void Hud::draw(Ui& ui, const HudFrame& f, Save& save, const Input& in, double no
     }
     float tw = 0;
     for (auto& l : lines) tw = std::max(tw, std::min(maxT, ui.textWidth(l, fs, ff, 0.03f)));
-    float w = tw + 52 * d, h = 18 * d + lh * float(lines.size()), x = W / 2 - w / 2, y = 66 * d;
+    float w = tw + 52 * d, h = 18 * d + lh * float(lines.size()), x = W / 2 - w / 2, y = f.inRace ? 196 * ui.cssU() : 66 * d;
     pill(x, y, w, h, 1, d, k);
     vec4 col = flashKind_ == Flash::Bad ? ko : flashKind_ == Flash::Gold ? gold : blue;
     float yy = y + 9 * d;
@@ -171,7 +173,7 @@ void Hud::draw(Ui& ui, const HudFrame& f, Save& save, const Input& in, double no
   if (save.tutorial && hintAt_ < 0 && !hintSeen_) controlsHint(now);
   if (hintAt_ >= 0 && now - hintAt_ > 3 && f.speed > 2) hintUntil_ = std::min(hintUntil_, now + 0.6);
   if (hintAt_ >= 0 && now - hintAt_ > 6 && save.tutorial) { save.tutorial = false; save.markDirty(); }
-  if (hintAt_ >= 0 && now < hintUntil_) {
+  if (hintAt_ >= 0 && now < hintUntil_ && !f.hideHint && !aside) {
     hintSeen_ = true;
     float u = ui.cssU();
     // in 0.6 s after 0.8 s (hintIn: from -30u), out over 0.6 s (-24u)
@@ -261,7 +263,7 @@ void Hud::draw(Ui& ui, const HudFrame& f, Save& save, const Input& in, double no
   }
 
   // ---- #prompt (bottom 84px, centred): the key (a blue 26px cap) and the action, 700 14px
-  if (!f.prompt.empty()) {
+  if (!f.prompt.empty() && !aside && !f.hidePrompt) {
     const UiFont fp = UiFont::BodyBold;
     float ks = 13 * s, kh = 26 * s;
     float kw = std::max(26 * s, ui.textWidth(f.promptKey, ks, UiFont::BodyBold) + 14 * s), tw = ui.textWidth(f.prompt, 14 * s, fp);
@@ -273,7 +275,7 @@ void Hud::draw(Ui& ui, const HudFrame& f, Save& save, const Input& in, double no
   }
 
   // ---- #ride-hint (bottom 28px, centred): 700 13px on a --brush-a pill
-  if (!f.rideHint.empty()) {
+  if (!f.rideHint.empty() && !aside) {
     float fs = 13 * d, lh = normalLH(fs, UiFont::BodyBold);
     float tw = ui.textWidth(f.rideHint, fs, UiFont::BodyBold), w = tw + 44 * d, h = lh + 14 * d, x = W / 2 - w / 2, y = H - 28 * d - h;
     pill(x, y, w, h, 0, d);

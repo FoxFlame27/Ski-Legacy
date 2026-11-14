@@ -7,6 +7,8 @@
 #include "game/hud.h"
 #include "game/menus.h"
 #include "game/people.h"
+#include "game/racehud.h"
+#include "game/jobboardui.h"
 #include "game/shapes.h"
 #include "game/weather.h"
 #include "player/player.h"
@@ -43,6 +45,7 @@ const char* medalForTime(double t, const Course& c) {
   if (c.bronze > 0 && t <= c.bronze) return "bronze";
   return nullptr;
 }
+std::string uiwUpper(std::string t) { for (char& ch : t) ch = char(std::toupper(static_cast<unsigned char>(ch))); return t; }
 int medalRank(const nlohmann::json& m) { if (!m.is_string()) return 0; std::string s = m; return s == "gold" ? 3 : s == "silver" ? 2 : s == "bronze" ? 1 : 0; }
 } // namespace
 
@@ -68,6 +71,11 @@ struct Races::Session {
   std::vector<Bot> bots;
   int respawns = 0;
   double fadeT = -1;
+  // the race HUD (ui/racehud.js): when the panels came up, the last checkpoint's split card, the results screen
+  double shownAt = 0, prevBest = -1;
+  bool pb = false;
+  struct Sp { bool on = false; int index = 0; double split = 0, delta = 0, at = 0; bool hasDelta = false; std::string name; } sp;
+  RaceResults res;
 };
 
 Races::Races(PlayCtx& c) : c_(c) {}
@@ -164,27 +172,32 @@ void Races::openCard(const Course& co, bool fromStand) {
 }
 
 void Races::openStand() {
-  Dialog d;
-  d.kicker = "RACING \xC2\xB7 Legacy Village";
-  d.title = "Racing";
-  d.keepOpen = false;
-  d.rebuild = [this](Dialog& D) {
-    D.say = "Pick a course: you race the 14 AI there just for fun (no prize money). Races for money: at the courses' start houses and the ski bus's free races.";
-    D.options.clear();
-    for (const Course& c : c_.data->courses) {
-      DialogOption o;
-      const nlohmann::json& rec = c_.save->data("records")[c.id];
-      o.label = c.name;
-      o.sub = c.diff + " \xC2\xB7 " + std::to_string(int(std::round(c.length))) + " m" + (rec.is_object() && rec.contains("best") && rec["best"].is_number() ? " \xC2\xB7 best " + fmtRaceTime(rec["best"].get<double>()) : std::string());
-      if (rec.is_object() && rec.contains("bestRace") && rec["bestRace"].is_number()) o.state = ordinal(rec["bestRace"].get<int>());
-      const Course* cp = &c;
-      o.act = [this, cp]() { openCard(*cp, true); };
-      D.options.push_back(o);
+  // the RACING stand's board (ui/racestand.js): any course against the 14 AI, just for fun
+  stand_ = RaceStandView();
+  for (const Course& c : c_.data->courses) {
+    RaceStandView::C q;
+    const nlohmann::json& rec = c_.save->data("records")[c.id];
+    q.name = c.name; q.tagline = c.tagline; q.level = c.diff; q.length = c.length; q.drop = c.drop;
+    if (rec.is_object()) {
+      if (rec.contains("bestRace") && rec["bestRace"].is_number()) q.bestPlace = rec["bestRace"].get<int>();
+      if (rec.contains("best") && rec["best"].is_number()) q.best = rec["best"].get<double>();
+      q.medal = medalRank(rec.contains("raceMedal") ? rec["raceMedal"] : nlohmann::json()) ? 4 - medalRank(rec["raceMedal"]) : 0;
     }
-    DialogOption n; n.label = "Close"; n.secondary = true;
-    D.options.push_back(n);
+    stand_.courses.push_back(std::move(q));
+  }
+  stand_.i = std::clamp(standCourse_, 0, std::max(0, int(stand_.courses.size()) - 1)); stand_.diff = standDiff_;
+  Menus* M = c_.menus;
+  stand_.closed = [M]() { M->close(); };
+  stand_.start = [this](int ci, int df) {
+    standCourse_ = ci; standDiff_ = df;
+    if (ci >= 0 && size_t(ci) < c_.data->courses.size()) start(c_.data->courses[size_t(ci)], df, false, false, true);
   };
-  c_.menus->openDialog(d);
+  M->openCustom([this](const UiNav& nav, double dt, double now) {
+    if (!ui_) return;
+    if (!frameRaceStand(*ui_, nav, *c_.input, stand_, dt, now)) { if (c_.menus->customOpen("racestand")) c_.menus->close(); return; }
+    c_.menus->customFocus = stand_.courses.empty() ? "" : stand_.courses[size_t(stand_.i)].name;
+  }, "racestand");
+  M->customFocusLabel = [this](const std::string& label) { for (size_t i = 0; i < stand_.courses.size(); i++) if (stand_.courses[i].name == label) { stand_.i = int(i); return true; } return false; };
 }
 
 bool Races::interact(std::string& prompt, bool pressed) {
@@ -221,6 +234,7 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
   if (forMoney && !co.bus && co.entry > 0 && !c_.spend(co.entry)) return false;
   auto s = std::make_unique<Session>();
   s->c = &co;
+  s->shownAt = c_.now;
   s->prof = &profile(co);
   s->ai = co.bus ? 0 : ai;
   s->forMoney = forMoney && !practice;
@@ -301,7 +315,8 @@ void Races::finishPlayer() {
     nlohmann::json& r = recs[s.c->id];
     if (!r.is_object()) r = {{"best", nullptr}, {"medal", nullptr}, {"bestRace", nullptr}, {"raceMedal", nullptr}, {"byDifficulty", nlohmann::json::object()}, {"splits", nlohmann::json::array()}, {"runs", 0}};
     r["runs"] = r.value("runs", 0) + 1;
-    if (!r["best"].is_number() || s.finalTime < r["best"].get<double>()) { r["best"] = std::round(s.finalTime * 1000) / 1000; r["splits"] = s.splits; s.notice = "NEW RECORD"; }
+    if (r["best"].is_number()) s.prevBest = r["best"].get<double>();
+    if (!r["best"].is_number() || s.finalTime < r["best"].get<double>()) { r["best"] = std::round(s.finalTime * 1000) / 1000; r["splits"] = s.splits; s.notice = "NEW RECORD"; s.pb = true; }
     if (const char* m = medalForTime(s.finalTime, *s.c)) if (medalRank(m) > medalRank(r["medal"])) r["medal"] = m;
     c_.save->markDirty();
   }
@@ -353,19 +368,26 @@ void Races::showResults() {
   c_.save->markDirty();
   lastRows.clear();
   for (size_t i = 0; i < rows.size() && i < 15; i++) lastRows.push_back(ordinal(int(i) + 1) + "  " + rows[i].name + "  " + fmtRaceTime(rows[i].t));
-  Dialog d;
-  d.kicker = s.practice ? "PRACTICE RACE \xC2\xB7 NO PRIZE" : s.c->bus ? "FREE RACE \xC2\xB7 RESULTS" : s.stand ? "RACE \xC2\xB7 JUST FOR FUN" : std::string("WORLD RACING \xC2\xB7 ") + AI_LABEL[s.ai] + " field";
-  d.title = s.practice ? s.c->name + " \xC2\xB7 " + fmtRaceTime(s.finalTime) : ordinal(s.place) + " \xC2\xB7 " + fmtRaceTime(s.finalTime);
-  std::string say = s.c->name;
-  if (s.penalty > 0) say += " \xC2\xB7 " + std::to_string(s.missed.size()) + " missed gate(s) +" + fmtRaceTime(s.penalty);
-  if (const char* m = medalForTime(s.finalTime, *s.c)) say += std::string(" \xC2\xB7 ") + m + " time";
-  if (s.prize > 0) say += " \xC2\xB7 prize " + fmtMoney(s.prize);
-  if (!s.practice) { say += "\n"; for (size_t i = 0; i < rows.size() && i < 5; i++) say += "  " + ordinal(int(i) + 1) + " " + rows[i].name + " " + fmtRaceTime(rows[i].t); }
-  d.say = say;
-  DialogOption ok; ok.label = "OK"; ok.sub = "Back to Legacy Village";
-  ok.act = [this]() { confirmResults(); };
-  d.options = {ok};
-  c_.menus->openDialog(d);
+  // the results screen (racehud.js results; an open-world race brings its one OK: you are back in Legacy Village)
+  RaceResults& R = s.res;
+  R = RaceResults();
+  R.courseName = s.c->name;
+  R.trial = s.practice;
+  R.difficulty = s.practice ? "" : s.c->bus ? "Free race" : AI_LABEL[s.ai];
+  R.place = s.practice ? 0 : s.place;
+  R.time = s.finalTime;
+  R.pb = s.pb; R.previousBest = s.prevBest; R.penalty = s.penalty;
+  R.prize = s.prize;
+  R.prizeMult = s.forMoney && !s.c->bus ? AI_MULT[std::clamp(s.ai, 0, 3)] : 1;
+  if (s.practice) { const char* m = medalForTime(s.finalTime, *s.c); R.medal = !m ? 0 : std::string(m) == "gold" ? 1 : std::string(m) == "silver" ? 2 : 3; }
+  else R.medal = s.place >= 1 && s.place <= 3 && field > 1 ? s.place : 0;
+  if (!s.practice) for (size_t i = 0; i < rows.size(); i++) R.rows.push_back({rows[i].name, rows[i].t, rows[i].t - rows[0].t, rows[i].you, false});
+  R.choices = {{"ok", "OK", "ENTER"}};
+  c_.menus->openCustom([this](const UiNav& nav, double, double now) {
+    if (!s_ || !ui_) return;
+    c_.menus->customFocus = "OK";
+    if (!frameRaceResults(*ui_, nav, *c_.input, s_->res, now).empty()) confirmResults();
+  }, "results");
   SL_INFO("race: %s finished in %s, place %d of %d, prize $%d", s.c->name.c_str(), fmtRaceTime(s.finalTime).c_str(), s.place, field, s.prize);
 }
 
@@ -448,10 +470,7 @@ void Races::update(double dt) {
         s.splits.push_back(std::round(split * 1000) / 1000);
         double best = 1e9;
         for (auto& b : s.bots) if (b.splits.size() >= size_t(s.nextCp)) best = std::min(best, b.splits[size_t(s.nextCp - 1)]);
-        char nb[96];
-        if (best < 1e9) std::snprintf(nb, sizeof nb, "%s  %s  %s%.2f", cp.name.c_str(), fmtRaceTime(split).c_str(), split - best >= 0 ? "+" : "-", std::fabs(split - best));
-        else std::snprintf(nb, sizeof nb, "%s  %s", cp.name.c_str(), fmtRaceTime(split).c_str());
-        s.notice = nb; s.noticeT = c_.now; s.noticeBad = best < 1e9 && split > best;
+        s.sp = {true, s.nextCp, split, best < 1e9 ? split - best : 0, c_.now, best < 1e9, cp.name};   // (racehud.js checkpoint(): the split card under the clock)
         s.lastCp = s.nextCp++;
         sounds.push_back("checkpoint");
       }
@@ -615,39 +634,68 @@ void Races::guideFrom(const dvec3& p, const std::string& stop) {
   if (c_.mark) c_.mark(tgt.x, tgt.z, best->name);
 }
 
-void Races::hud(Ui& ui, float u) {
+void Races::hud(Ui& ui, float) {
+  ui_ = &ui;
   if (!s_) return;
   const Session& s = *s_;
-  float W = float(ui.width());
-  // the race clock and position (racehud.js): top centre
-  float x = W / 2, y = 18 * u;
-  ui.brushPanel(x - 150 * u, y, 300 * u, 74 * u, ui_color::a(ui_color::paper, 0.92f), 1);
-  ui.text(x, y + 6 * u, 15 * u, UiFont::CondBold, ui_color::red, s.c->name, UiAlign::Center);
-  double t = s.st >= Session::St::Finished ? s.finalTime : std::max(0.0, s.clock) + s.penalty;
-  ui.text(x, y + 24 * u, 36 * u, UiFont::CondHeavy, ui_color::blue, fmtRaceTime(t), UiAlign::Center);
-  if (!s.practice && !s.bots.empty()) {
-    int pos = 1;
-    double myS = s.prevS;
-    for (auto& b : s.bots) pos += b.done ? (s.st < Session::St::Finished || b.finishT < s.finalTime) : b.s > myS && s.st < Session::St::Finished;
-    std::string ps = std::to_string(pos) + "/" + std::to_string(s.bots.size() + 1);
-    ui.text(x + 140 * u, y + 30 * u, 22 * u, UiFont::CondBold, ui_color::navy, ps, UiAlign::Right);
-  }
-  if (!s.gates.empty()) ui.text(x - 140 * u, y + 34 * u, 14 * u, UiFont::Cond, ui_color::navy, "GATES " + std::to_string(s.nextGate) + "/" + std::to_string(s.gates.size()));
-  // the countdown
-  if (s.st == Session::St::Grid) {
-    double left = LEAD_IN + 3 - s.t;
-    if (left <= 3) {
-      std::string n = std::to_string(int(std::ceil(left)));
-      float sz = float(120 + 60 * (std::ceil(left) - left)) * u;
-      ui.text(W / 2, float(ui.height()) * 0.32f, sz, UiFont::CondHeavy, ui_color::red, n, UiAlign::Center);
+  if (s.st >= Session::St::Results) return;   // (the panels step aside for the results screen)
+  const Course& c = *s.c;
+  RaceHudState h;
+  h.course = c.name;
+  h.difficulty = s.practice ? "PRACTICE" : c.bus ? "FREE RACE" : AI_LABEL[s.ai];
+  h.trial = s.practice || s.bots.empty();
+  h.time = s.st >= Session::St::Finished ? s.finalTime : std::max(0.0, s.clock) + s.penalty;
+  h.shownFor = c_.now - s.shownAt;
+  h.penalty = s.penalty;
+  h.checkpoint = s.lastCp; h.checkpoints = std::max(0, int(c.checkpoints.size()) - 1);
+  h.toFinish = std::max(0.0, c.finish.s - s.prevS);
+  h.progress = c.finish.s > c.start.s ? std::clamp((s.prevS - c.start.s) / (c.finish.s - c.start.s), 0.0, 1.0) : 0;
+  h.speed = glm::length(c_.player->vel);
+  // what to ski for next: the gate ahead (red arrow), else the next checkpoint
+  if (s.st == Session::St::Race) {
+    double tx = 0, tz = 0, ts = -1;
+    if (s.nextGate < int(s.gates.size()) && s.nextGate < int(c.gates.size())) { const CourseGate& g = c.gates[size_t(s.nextGate)]; tx = g.x; tz = g.z; ts = g.s; h.nextLabel = "GATE"; }
+    else if (s.nextCp < int(c.checkpoints.size())) { const CoursePt& q = c.checkpoints[size_t(s.nextCp)]; tx = q.x; tz = q.z; ts = q.s; h.nextLabel = "NEXT"; }
+    if (ts >= 0) {
+      h.hasNext = true;
+      h.nextDist = std::max(0.0, ts - s.prevS);
+      double a = std::atan2(tx - c_.player->pos.x, tz - c_.player->pos.z) - c_.player->heading;
+      h.nextAngle = std::atan2(std::sin(a), std::cos(a)) * 180 / PI;
     }
   }
-  // the notice line (splits, gates, GO, FINISH, the place)
-  if (!s.notice.empty() && c_.now - s.noticeT < 2.6) {
-    float a = float(1 - smoothstep(2.0, 2.6, c_.now - s.noticeT));
-    bool big = s.notice == "GO" || s.notice == "FINISH" || s.notice == "NEW RECORD" || (s.notice.size() <= 4 && std::isdigit(uint8_t(s.notice[0])));
-    ui.text(W / 2, float(ui.height()) * (big ? 0.3f : 0.2f), (big ? 84 : 26) * u, UiFont::CondHeavy, ui_color::a(s.noticeBad ? ui_color::red : ui_color::blue, a), s.notice, UiAlign::Center);
+  // the standings: the finished by their times, the rest by how far down the course they are
+  if (!h.trial) {
+    struct E { std::string name; double key, v; bool me; };
+    std::vector<E> es;
+    bool meDone = s.st >= Session::St::Finished;
+    es.push_back({"You", meDone ? 1e7 - s.finalTime : s.prevS, std::max(6.0, h.speed), true});
+    for (auto& b : s.bots) es.push_back({b.name, b.done ? 1e7 - b.finishT : b.s, std::max(6.0, b.v), false});
+    std::sort(es.begin(), es.end(), [](const E& p, const E& q) { return p.key > q.key; });
+    for (size_t i = 0; i < es.size(); i++) {
+      double gap = es[0].key > 1e6 ? (es[i].key > 1e6 ? es[0].key - es[i].key : (c.finish.s - es[i].key) / es[i].v + std::max(0.0, s.clock - (1e7 - es[0].key))) : (es[0].key - es[i].key) / es[i].v;
+      h.standings.push_back({es[i].name, std::max(0.0, gap), es[i].me});
+      if (es[i].me) h.position = int(i) + 1;
+    }
+    h.total = int(es.size());
   }
+  // the countdown, GO, the banner, the split card, the intro's lower third
+  if (s.st == Session::St::Grid) {
+    double left = LEAD_IN + 3 - s.t;
+    if (left <= 3 && left > 0) { h.countdown = std::to_string(int(std::ceil(left))); h.countdownAge = std::ceil(left) - left; }
+    h.third.on = true; h.third.age = s.t; h.third.left = LEAD_IN + 1.2;
+    h.third.kicker = s.practice ? "PRACTICE RACE" : c.bus ? "FREE RACE" : std::string("WORLD RACING \xC2\xB7 ") + uiwUpper(AI_LABEL[s.ai]);
+    h.third.title = c.name;
+    char km[32];
+    std::snprintf(km, sizeof km, "%.1f KM", c.length / 1000);
+    h.third.stats = {{"LENGTH", km}, {"DROP", fmtMoney(c.drop).substr(1) + " M"}};
+    if (!h.trial) h.third.stats.push_back({"FIELD", std::to_string(s.bots.size() + 1)});
+  } else if (s.t < LEAD_IN + 3 + 0.6) { h.third.on = true; h.third.age = s.t; h.third.left = LEAD_IN + 1.2; h.third.title = c.name; }
+  if (!s.notice.empty()) {
+    if (s.notice == "GO") { h.countdown = "GO"; h.countdownAge = c_.now - s.noticeT; }
+    else { h.notice = s.notice; h.noticeAge = c_.now - s.noticeT; h.noticeFor = 2.4; h.noticeKind = s.noticeBad ? 1 : (s.st >= Session::St::Finished ? 2 : 0); }
+  }
+  if (s.sp.on) { h.split.on = true; h.split.index = s.sp.index; h.split.total = h.checkpoints; h.split.split = s.sp.split; h.split.delta = s.sp.delta; h.split.hasDelta = s.sp.hasDelta; h.split.name = s.sp.name; h.split.age = c_.now - s.sp.at; }
+  drawRaceHud(ui, h);
 }
 
 } // namespace sl

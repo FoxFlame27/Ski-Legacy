@@ -70,7 +70,7 @@ struct Dialog {
 
 class Menus {
 public:
-  enum class Screen { None, Main, PlayMode, Showcase, Controls, Stats, Settings, Pause, Dialog, Confirm, Multiplayer };
+  enum class Screen { None, Main, PlayMode, Showcase, Controls, Stats, Settings, Pause, Dialog, Confirm, Multiplayer, Custom };
   /// (Phase 6) what the MULTIPLAYER screen shows and does (game.cpp fills it from the session)
   struct Mp {
     std::function<std::string()> account, status, server, health;   // stored name ("" none), the last line, URL, worlds
@@ -101,7 +101,16 @@ public:
   Screen screen() const { return screen_; }
   /// opens a card dialog (rebuild() fills it)
   void openDialog(Dialog d);
-  bool dialogOpen() const { return screen_ == Screen::Dialog; }
+  bool dialogOpen() const { return screen_ == Screen::Dialog || screen_ == Screen::Custom; }
+  /// a full-screen UI of another system (the race results, the job board, the outfit shop, the racing stand...): the
+  /// menus hand it each frame's input and block the game as a card dialog does (no pause); it closes itself (close())
+  using CustomFrame = std::function<void(const UiNav& nav, double dt, double now)>;
+  void openCustom(CustomFrame frame, std::string name = "custom");
+  bool customOpen(const std::string& name = "") const { return screen_ == Screen::Custom && (name.empty() || name == customName_); }
+  /// (autotest) the custom screen's focused label, set by the screen each frame
+  std::string customFocus;
+  /// (autotest) focusLabel() on a custom screen: the screen focuses its own item of that name
+  std::function<bool(const std::string& label)> customFocusLabel;
   /// a text field has the focus (the MULTIPLAYER name): game.cpp turns the platform's text input on meanwhile
   bool textFieldFocused() const;
   /// the open dialog rebuilt (an answer from the server came in: the shop's chips follow)
@@ -145,6 +154,8 @@ private:
   void scrConfirm();
   void scrMultiplayer(const UiNav& nav);
   std::string nameField_;
+  CustomFrame custom_;
+  std::string customName_;
   bool inFrame_ = false, freshOpen_ = false;   // open() from outside frame(): that frame's UiNav is not for the new screen
   bool nameFieldInit_ = false;
   void handle(const UiNav& nav);

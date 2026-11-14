@@ -17,6 +17,7 @@
 #include "game/interiors.h"
 #include "game/play.h"
 #include <memory>
+#include "game/buildmenu.h"
 #include <string>
 #include <vector>
 
@@ -73,6 +74,13 @@ private:
   int hover_ = -1, moving_ = -1;
   vec2 cursor_{-1};
   std::string tip_;
+  // the catalogue column (ui/buildmenu.js): last frame's layout (the pointer's hits), its scroll, the refusal's shake
+  BuildMenuLayout bm_;
+  float bmScroll_ = 0, bmTarget_ = 0;
+  bool bmReveal_ = false;
+  vec2 mouse_{-1};
+  std::string denyId_;
+  double denyAt_ = -10, buildAt_ = 0;
 };
 
 } // namespace sl

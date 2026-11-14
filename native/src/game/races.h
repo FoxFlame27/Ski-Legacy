@@ -13,6 +13,7 @@
 #pragma once
 #include "game/play.h"
 #include "game/play_data.h"
+#include "game/jobboardui.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,8 +61,11 @@ private:
   void showResults();
   struct Session;
   PlayCtx& c_;
+  int standCourse_ = 0, standDiff_ = 1;   // (the stand remembers your last pick)
+  Ui* ui_ = nullptr;   // (the frame's 2D layer: the results screen draws from the menus' frame)
   std::vector<std::pair<const Course*, Prof>> profs_;
   std::unique_ptr<Session> s_;
+  RaceStandView stand_;
   // the guide
   struct Guide { bool on = false; dvec3 target{0}; std::string label; double t = 0, d0 = 0; } guide_;
   double nearCheckT_ = 0;

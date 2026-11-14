@@ -28,6 +28,9 @@ std::shared_ptr<RigModel> rigModel(AssetManager& assets, const std::string& char
   if (it != cache.end()) return it->second;
   ModelLoadOptions oc;
   oc.maxTextureSize = 1024;
+  // (the first character loaded is yours, seen from a few metres all game long: its 2048 px colour map, +17 MB; the
+  // others on the slopes keep 1024 px)
+  if (cache.empty()) oc.colorTextureSize = 2048;
   oc.keepCpu = true;   // (the measurements read the skinned vertices; the outfits the albedo)
   auto body = assets.loadFile(assets.modelPath(file), file + "#rig", oc);
   ModelLoadOptions oa;
@@ -52,6 +55,7 @@ std::shared_ptr<RigGear> rigGear(AssetManager& assets, const std::string& skiMod
   if (it != cache.end()) return it->second;
   ModelLoadOptions o;
   o.maxTextureSize = 512;
+  if (cache.empty()) o.colorTextureSize = 2048;   // (the first skis loaded are yours, under the camera: +21 MB)
   o.keepCpu = true;
   std::shared_ptr<Model> ski = skiModel.empty() ? nullptr : assets.loadFile(assets.modelPath(skiModel), skiModel + "#rig", o);
   if (!ski && !skiModel.empty()) ski = assets.loadFile(assets.modelPath("ski_rental"), "ski_rental#rig", o);

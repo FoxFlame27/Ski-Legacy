@@ -16,6 +16,8 @@ struct ModelLoadOptions {
   std::vector<float> lodRatios;   // e.g. {0.15f, 0.03f}: extra LOD index ranges at these triangle ratios
   bool ignoreEmissive = true;     // Meshy exports bake emissive = 1 with a copy of the albedo: off by default
   int maxTextureSize = 2048;      // larger textures are box-downsampled on load (memory budget, Switch)
+  int colorTextureSize = 0;       // > 0: the base colour / emissive maps' own cap (what you see closest: your skier, your
+                                  // skis, the plaza's buildings keep their 2048 px colour on Balanced; still under the preset's cap)
   bool keepCpu = false;           // (Phase 7) keep the vertices / indices on the CPU (the cars' wheels are split off)
   // The extra LODs are drawn with per-vertex colours taken from the base colour map instead of the textures
   // (Model::lodMaterials). For Meshy models whose atlas is thousands of tiny UV islands (the gondola cabin): any

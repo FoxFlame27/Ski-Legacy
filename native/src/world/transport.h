@@ -70,6 +70,15 @@ struct CarSpec {
   std::vector<std::string> hide;
   struct Glass { int i; bool red, clear; };
   std::vector<Glass> glass;
+  // (cars.js carTemplate, exported by tools/export_net.mjs) the car's own lamps: each part's triangles in the car's
+  // frame (nose +z, wheels on y 0) with the kind LAMP_RULES gave them, the tier and boost carInstance gives its
+  // material, the GLB material whose base colour map they glow through; and where the halos go, per kind and side
+  struct LampPart { std::string kind; int tier = 2; float boost = 1, alpha = 1; int mat = -1; bool map = false; std::vector<float> pos, uv; std::vector<uint32_t> idx; };
+  struct LampAnchor { vec3 c{0}, size{0}; };
+  std::vector<LampPart> lampParts;
+  std::vector<std::pair<std::string, std::vector<LampAnchor>>> lampHalo;
+  float lampHalfL = 0;
+  bool hasLamps() const { return !lampParts.empty() || !lampHalo.empty(); }
 };
 
 class Transport {

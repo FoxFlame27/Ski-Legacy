@@ -44,6 +44,8 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
     for (const auto& g : s.glass) if (g.i >= 0 && size_t(g.i) < m->materials.size()) { Material gm = glassMat(g.red, g.clear); gm.name = m->materials[size_t(g.i)].name; m->materials[size_t(g.i)] = gm; }
     VehicleModel vm;
     vm.model = m; vm.fit = s.fit; vm.size = s.size;
+    vm.spec = &s;
+    for (const Material& bm : base->materials) vm.matTex.push_back(bm.baseTex);
     vm.lampF = vec3(s.size.x * 0.36f, 0.68f, s.size.z * 0.5f - 0.15f);
     vm.lampR = vec3(s.size.x * 0.36f, 0.85f, -s.size.z * 0.5f + 0.1f);
     splitWheels(dev, vm);

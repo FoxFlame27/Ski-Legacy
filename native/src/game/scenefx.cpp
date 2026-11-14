@@ -1,4 +1,6 @@
 #include "game/scenefx.h"
+#include <cstdlib>
+#include <cstring>
 #include "core/log.h"
 #include "engine/asset_manager.h"
 #include "engine/canvas2d.h"
@@ -203,6 +205,59 @@ const Model* SceneFx::plateModel(const std::string& text) {
   return model.get();
 }
 
+// The lamps of a car model, once: an emission-only overlay model per exported lamp part (the car's own triangles,
+// glowing through the GLB material's base colour map), and carlights.js halos(): a sprite per lamp, a little out
+// from its lens (tail, the third brake light as one bar, head, reversing: its own lamps or the inner part of the tails).
+const SceneFx::CarLamps& SceneFx::lampsFor(const VehicleModel& vm) {
+  auto it = carLamps_.find(&vm);
+  if (it != carLamps_.end()) return it->second;
+  CarLamps L;
+  static const char* KINDS[10] = {"head", "high", "drl", "tail", "third", "brake", "rev", "ind", "lensF", "lensR"};
+  auto kindOf = [](const std::string& k) { for (int i = 0; i < 10; i++) if (k == KINDS[i]) return i; return -1; };
+  const CarSpec& s = *vm.spec;
+  for (const CarSpec::LampPart& p : s.lampParts) {
+    int kind = kindOf(p.kind);
+    if (kind < 0 || kind == 7) continue;   // (indicators: only the hazards of a wreck light them in the JS)
+    if (kind == 2) L.hasDrl = true;
+    Geo g;
+    size_t n = p.pos.size() / 3;
+    g.pos.resize(n); g.nor.assign(n, vec3(0, 1, 0)); g.uv.resize(n); g.col.assign(n, vec3(1));
+    for (size_t i = 0; i < n; i++) { g.pos[i] = vec3(p.pos[i * 3], p.pos[i * 3 + 1], p.pos[i * 3 + 2]); g.uv[i] = vec2(p.uv[i * 2], p.uv[i * 2 + 1]); }
+    g.idx = p.idx;
+    Material m;
+    m.baseColor = vec4(0, 0, 0, 1); m.metallic = 0; m.roughness = 1;
+    m.emissive = vec3(1);
+    if (p.map && p.mat >= 0 && size_t(p.mat) < vm.matTex.size()) m.emissiveTex = vm.matTex[size_t(p.mat)];
+    m.shading = 5; m.additive = true; m.alpha = Material::Alpha::Blend; m.doubleSided = true;
+    // (the JS lights the lamp's own material: see-through lamp glass shows its opacity's share of the emission,
+    // which the boost makes up for; added on top here, so the share is applied to the boost)
+    L.parts.push_back({kind, p.tier, p.boost * p.alpha, buildModel(*dev_, {{g, m}}, "lamp")});
+  }
+  auto cl = [](float v, float a, float b) { return std::min(b, std::max(a, v)); };
+  auto out = [](const CarSpec::LampAnchor& a) { return a.c.z > 0 ? a.size.z / 2 + 0.05f : -a.size.z / 2 - 0.05f; };
+  const std::vector<CarSpec::LampAnchor>* tails = nullptr;
+  bool ownRev = false;
+  for (const auto& [k, list] : s.lampHalo) { if (k == "tail") tails = &list; if (k == "rev" && !list.empty()) ownRev = true; }
+  for (const auto& [k, list] : s.lampHalo) {
+    if (list.empty()) continue;
+    if (k == "tail") for (const auto& a : list) L.halos.push_back({3, vec3(a.c.x, a.c.y, a.c.z + out(a)), cl(a.size.x * 1.5f, 0.42f, 0.85f), cl(a.size.y * 2.4f, 0.3f, 0.6f), a.c.z >= 0 ? 1.f : -1.f});
+    else if (k == "third") {
+      vec3 mn(1e9f), mx(-1e9f);
+      for (const auto& a : list) { mn = glm::min(mn, a.c - a.size * 0.5f); mx = glm::max(mx, a.c + a.size * 0.5f); }
+      L.halos.push_back({4, vec3((mn.x + mx.x) / 2, (mn.y + mx.y) / 2, mn.z - 0.05f), cl((mx.x - mn.x) * 1.6f, 0.4f, 0.9f), 0.24f, -1.f});
+    } else if (k == "head") {
+      float z = -1e9f, y = 0;
+      for (const auto& a : list) {
+        L.halos.push_back({0, vec3(a.c.x, a.c.y, a.c.z + out(a)), cl(a.size.x * 1.2f, 0.3f, 0.6f), cl(a.size.y * 2, 0.22f, 0.4f), a.c.z >= 0 ? 1.f : -1.f});
+        z = std::max(z, a.c.z + a.size.z / 2); y += a.c.y;
+      }
+      L.hasHead = true; L.headZ = z; L.headY = y / float(list.size());
+    } else if (k == "rev") for (const auto& a : list) L.halos.push_back({6, vec3(a.c.x, a.c.y, a.c.z + out(a)), 0.4f, 0.3f, a.c.z >= 0 ? 1.f : -1.f});
+  }
+  if (!ownRev && tails) for (const auto& a : *tails) L.halos.push_back({6, vec3(a.c.x * 0.72f, a.c.y - a.size.y * 0.12f, a.c.z + out(a) - 0.01f), 0.36f, 0.26f, -1.f});
+  return carLamps_.emplace(&vm, std::move(L)).first->second;
+}
+
 void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera& cam, const std::vector<CarPose>& cars) {
   nSprays_ = 0; nLamps_ = 0; nCarLights_ = 0; nPlates_ = 0;
   const dvec3 cp = cam.pos;
@@ -227,33 +282,113 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
     if (face <= 0.01f) return;
     Particle q;
     q.pos = p;
-    q.size = size * (1.f + float(std::min(dl, 160.0)) * 0.012f);   // (the glare keeps a little size with distance)
-    q.color = vec4(col * power, face);
+    q.size = size;
+    q.seed = 0.7f;
+    q.color = vec4(col, power * face * face);
     q.soft = 0.12f;
     q.kind = 3;
     r.addParticle(q);
   };
-  for (const CarPose& c : cars) {
+  // carlights.js K: emissive intensity per lamp tier (core: the LED / DRL emitters, tex: the textured lamp graphics,
+  // plain lenses) and its colours; lampsOn's sums per kind
+  static const float K_HEAD[3] = {6, 3, 1.5f}, K_HIGH[3] = {0.9f, 0.5f, 0.3f}, K_DAYH[3] = {2, 0.6f, 0.35f}, K_DRL[3] = {3.2f, 1.4f, 1},
+                     K_TAIL[3] = {0.8f, 1, 0.65f}, K_BRAKE[3] = {1.4f, 1.6f, 1.3f}, K_THIRD[3] = {2.2f, 2.4f, 2}, K_REV[3] = {3, 2, 1.4f};
+  const vec3 C_HEAD(1, 0.93f, 0.82f), C_DRL(0.9f, 0.95f, 1), C_RED(1, 0.006f, 0), C_REV(0.95f, 0.97f, 1);
+  const float dk = std::round((0.3f + 0.7f * night_) * 10) / 10;
+  // (dev / screenshots: SKI_LEGACY_DEBUG=lamptest lights every car's lamps at night, every other one braking, every
+  // third reversing; lampday the daytime running lights; the nearest cars' places are logged once)
+  static const int lampTest = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return !e ? 0 : std::strstr(e, "lampday") ? 2 : std::strstr(e, "lamptest") ? 1 : 0; }();
+  static int lampLogged = 0;
+  size_t carIdx = 0;
+  for (CarPose c : cars) {
     if (!c.vm) continue;
+    carIdx++;
+    if (lampTest == 1) { c.lights = true; c.brake = carIdx % 2 == 0; c.reverse = carIdx % 3 == 0; c.live = true; }
+    else if (lampTest == 2) { c.lights = false; c.live = true; c.brake = carIdx % 2 == 0; }
     double d = glm::length(dvec3(c.M[3]) - cp);
+    if (lampTest && lampLogged < 12 && d < 400) { lampLogged++; SL_INFO("lamptest: car %s at (%.1f, %.1f, %.1f), nose toward (%.2f, %.2f)%s", c.vm->spec ? c.vm->spec->name.c_str() : "?", c.M[3][0], c.M[3][1], c.M[3][2], c.M[2][0], c.M[2][2], c.vm->spec && c.vm->spec->hasLamps() ? "" : " (no exported lamps)"); }
     const vec3 F = c.vm->lampF, R = c.vm->lampR;
-    if (c.lights && d < 220) {
-      if (d < 140 || c.mine) {
-        PointLight l;
-        l.pos = dvec3(c.M * glm::dvec4(0, F.y, F.z + 0.4, 1));
-        l.dir = glm::normalize(vec3(glm::dmat3(c.M) * dvec3(0, -0.13, 1)));
-        l.color = vec3(1.0f, 0.95f, 0.85f) * (c.mine ? 320.f : 240.f);
-        l.range = c.mine ? 55.f : 42.f;
-        l.cosOuter = std::cos(0.5f); l.cosInner = std::cos(0.26f);
-        r.addLight(l);
-        nCarLights_++;
-      }
-      dvec3 fwd = glm::normalize(dvec3(c.M[2]));
-      for (float sx : {-1.f, 1.f}) lampGlow(dvec3(c.M * glm::dvec4(sx * F.x, F.y, F.z + 0.17, 1)), fwd, vec3(1, 0.95f, 0.84f), 0.3f, 14.f);
+    const bool own = c.vm->spec && c.vm->spec->hasLamps();
+    // (lampsOn(inst, head, tail, brake, { drl, reverse }): low beams and tails on together at night / with the
+    // switch, the daytime running lights on a running car otherwise)
+    const float head = c.lights ? 1.f : 0.f, tail = head, bk = c.brake ? 1.f : 0.f, rv = c.reverse ? 1.f : 0.f;
+    const float drl = (c.live || c.brake) && !c.lights ? 1.f : 0.f;
+    const bool any = head > 0 || bk > 0 || rv > 0 || drl > 0;
+    if (c.lights && d < 220 && (d < 140 || c.mine)) {
+      PointLight l;
+      const CarLamps* cl = own ? &lampsFor(*c.vm) : nullptr;
+      float hz = cl && cl->hasHead ? cl->headZ : F.z, hy = cl && cl->hasHead ? cl->headY : F.y;
+      l.pos = dvec3(c.M * glm::dvec4(0, hy, hz + 0.25, 1));
+      l.dir = glm::normalize(vec3(glm::dmat3(c.M) * dvec3(0, -0.13, 1)));
+      l.color = vec3(1.0f, 0.95f, 0.85f) * (c.mine ? 320.f : 240.f);
+      l.range = c.mine ? 55.f : 42.f;
+      l.cosOuter = std::cos(0.5f); l.cosInner = std::cos(0.26f);
+      r.addLight(l);
+      nCarLights_++;
     }
-    if ((c.lights || c.brake) && d < 220)
-      for (float sx : {-1.f, 1.f})
-        lampGlow(dvec3(c.M * glm::dvec4(sx * R.x, R.y, R.z - 0.12, 1)), -glm::normalize(dvec3(c.M[2])), vec3(1, 0.035f, 0.02f), c.brake ? 0.26f : 0.2f, c.brake ? 7.f : 2.4f);
+    if (own && any && d < 220) {
+      const CarLamps& L = lampsFor(*c.vm);
+      const float dayH = L.hasDrl ? 0.f : drl;
+      // the lamps' own graphics light up (the same triangles as the JS, the same intensities)
+      if (d < 160)
+        for (const LampModel& p : L.parts) {
+          vec3 col = C_RED;
+          float k = 0;
+          int t = p.tier;
+          switch (p.kind) {
+            case 0: col = C_HEAD; k = head * K_HEAD[t] + dayH * K_DAYH[t]; break;
+            case 1: col = C_HEAD; k = head * K_HIGH[t]; break;
+            case 2: col = C_DRL; k = std::max(drl, head * 0.75f) * K_DRL[t]; break;
+            case 3: k = tail * K_TAIL[t] + bk * K_BRAKE[t]; break;
+            case 4: case 5: k = bk * K_THIRD[t]; break;
+            case 6: col = C_REV; k = rv * K_REV[t]; break;
+            case 8: col = C_HEAD; k = head * 0.22f + dayH * 0.05f; break;
+            case 9: k = tail * 0.3f + bk * 0.75f; break;
+            default: break;
+          }
+          k *= p.boost;
+          if (k > 0.004f && p.model) vd.add(p.model.get(), c.M, 0, vec4(col * k, 1));
+        }
+      // the halos: the soft glow round each lit lamp, only from in front of it (carlights.js halos / haloFacing)
+      for (const LampHalo& h : L.halos) {
+        float o = 0;
+        vec3 col(1, 0.04f, 0.01f);
+        switch (h.kind) {
+          case 3: o = (tail * 0.16f + bk * 0.5f) * dk; break;
+          case 4: o = bk * 0.45f * dk; break;
+          case 0: o = (head * 0.3f + dayH * 0.06f + (L.hasDrl ? drl * 0.04f : 0.f)) * dk; col = vec3(1, 0.88f, 0.7f); break;
+          case 6: o = rv * 0.42f * dk; col = vec3(0.85f, 0.9f, 1); break;
+          default: break;
+        }
+        o = std::min(1.f, o);
+        if (o <= 0.004f) continue;
+        dvec3 p = dvec3(c.M * glm::dvec4(h.p, 1));
+        dvec3 toEye = cp - p;
+        double dl = glm::length(toEye);
+        if (dl < 1e-3) continue;
+        toEye /= dl;
+        dvec3 axis = glm::normalize(dvec3(c.M[2])) * double(h.dir);
+        float face = float(smoothstep(0.17, 0.6, glm::dot(axis, toEye)));
+        if (face < 0.003f) continue;
+        Particle q;
+        q.pos = p + toEye * 0.1;
+        q.size = h.sx * 0.5f;
+        q.seed = h.sy / std::max(h.sx, 1e-3f);
+        q.color = vec4(col, o * face * face);
+        q.soft = 0.1f;
+        q.kind = 3;
+        r.addParticle(q);
+      }
+    } else if (!own) {
+      // (no exported lamps for this model: a halo at the nose and tail)
+      if (c.lights && d < 220) {
+        dvec3 fwd = glm::normalize(dvec3(c.M[2]));
+        for (float sx : {-1.f, 1.f}) lampGlow(dvec3(c.M * glm::dvec4(sx * F.x, F.y, F.z + 0.17, 1)), fwd, vec3(1, 0.88f, 0.7f), 0.25f, 0.3f * dk);
+      }
+      if ((c.lights || c.brake) && d < 220)
+        for (float sx : {-1.f, 1.f})
+          lampGlow(dvec3(c.M * glm::dvec4(sx * R.x, R.y, R.z - 0.12, 1)), -glm::normalize(dvec3(c.M[2])), vec3(1, 0.04f, 0.01f), 0.3f, (0.16f + (c.brake ? 0.5f : 0.f)) * dk);
+    }
     if (!c.plate.empty() && d < 22) {
       const Model* pm = plateModel(c.plate);
       double L2 = c.vm->size.z * 0.5;
@@ -326,7 +461,7 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         l.color = vec3(1.0f, 0.97f, 0.9f) * 380.f; l.range = 50;
         l.cosOuter = std::cos(0.6f); l.cosInner = std::cos(0.3f);
         r.addLight(l);
-        for (float sx : {-1.f, 1.f}) lampGlow(dvec3(M * glm::dvec4(sx * 0.8, 2.3, 3.8, 1)), glm::normalize(dvec3(M[2])), vec3(1, 0.95f, 0.84f), 0.34f, 14.f);
+        for (float sx : {-1.f, 1.f}) lampGlow(dvec3(M * glm::dvec4(sx * 0.8, 2.3, 3.8, 1)), glm::normalize(dvec3(M[2])), vec3(1, 0.88f, 0.7f), 0.3f, 0.45f);
       }
     }
 }

@@ -24,10 +24,12 @@ struct Material {
   int baseImage = -1;              // (Phase 7, keepCpu) index of the base colour image in Model::images
   int mrImage = -1;                // (keepCpu) index of the metallic-roughness image (the outfits' baked finish)
   uint8_t paint = 0;               // (Phase 7) 1: car paint (an instance's tint replaces the colour), 2: livery (red -> tint)
-  uint8_t shading = 0;             // renderer: 0 automatic (the Meshy detail layer on Meshy materials, glass), 1 pine needles
+  uint8_t shading = 0;             // renderer (5: a lamp's emission only, see additive; 6: the gondola cabin's glass): 0 automatic (the Meshy detail layer on Meshy materials, glass), 1 pine needles
                                    // (vegetation.js), 2 force the detail layer, 3 plain (no detail layer), 4 rock (snow on top)
   float lumNorm = 1;               // (pines) 1 / mean needle luminance of the texture (vegetation.js uLumNorm)
   float clearcoat = 0;             // a clear coat over the base (car paint gets one on fx >= 1)
+  bool additive = false;           // shading 5 (a lamp's lit graphics): only its emission, added to the image; an
+                                   // instance's tint (a > 0) is the emission's colour x intensity
   // (fans.js, player/fans_rig) the crowd people: the jacket recolour key (the jacket's own hue I, Q, its luma, the cos
   // threshold; z = 0: none) and the person's colour (rgb, r < 0: the model's own) + the screen-door fade (a: 1 solid,
   // 0..1 fading in, < -1.5 the outgoing LOD of a cross-fade)

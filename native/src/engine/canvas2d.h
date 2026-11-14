@@ -85,7 +85,10 @@ public:
   void putImage(int x, int y, int w, int h, const std::vector<uint8_t>& rgba);   // putImageData: RGBA8 rows
   void lineCap(const std::string& c) { st_.roundCap = c == "round"; st_.squareCap = c == "square"; }
   void setLineDash(std::vector<float> d);
-  void systemFonts(bool on) { sysFonts_ = on; }   // font(): the family named (systemFontSet) instead of Barlow Condensed
+  /// font(): the family named (systemFontSet) instead of Barlow Condensed; serifOnly: only a serif (a sign painted in
+  /// Georgia), the sans-serif faces stay Barlow Condensed. letterSpacing (px) is applied with them
+  void systemFonts(bool on, bool serifOnly = false) { sysFonts_ = on; serifOnly_ = serifOnly; }
+  void letterSpacing(float px) { st_.spacing = px; }
 
   static vec4 parseColor(const std::string& css);   // straight RGBA 0..1 (sRGB)
 
@@ -94,7 +97,7 @@ private:
     vec4 fill{0, 0, 0, 1}, stroke{0, 0, 0, 1};
     struct Gradient { bool radial = false; vec2 a{0}, b{0}; float r0 = 0, r1 = 1; std::vector<std::pair<float, vec4>> stops; vec4 at(float x, float y) const; };
     std::shared_ptr<Gradient> grad;   // the fill style is this gradient (device space)
-    float lineWidth = 1, alpha = 1, px = 10;
+    float lineWidth = 1, alpha = 1, px = 10, spacing = 0;
     bool bold = false;
     bool roundCap = false, squareCap = false;
     int family = 0;              // systemFontSet's family, 0 = the canvas's own fonts
@@ -111,7 +114,7 @@ private:
   int w_, h_;
   std::vector<uint8_t> px_;
   const FontSet* fonts_;
-  bool sysFonts_ = false;
+  bool sysFonts_ = false, serifOnly_ = false;
   State st_;
   std::vector<State> stack_;
   std::vector<std::vector<vec2>> path_;   // device-space subpaths

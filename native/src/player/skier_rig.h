@@ -313,6 +313,11 @@ class PlayerSkier {
 public:
   bool load(AssetManager& assets, const std::string& colour = "red", const std::string& skiModel = "ski_rental");
   void update(double dt, Player& p, World& world);
+  /// (interior.js poseMannequin) your skier on the ski shop's OUTFITS podium: standing relaxed at `pos` (the podium's
+  /// top), turned to `heading`, no skis, no poles; instead of update() while you walk the shop
+  void updateStanding(double dt, const dvec3& pos, double heading, World& world);
+  /// the garment zones the outfits can recolour on this model ("jacket jacketAccent trousers ... lens")
+  std::string zones() const;
   /// first person on skis: the gloves-and-poles view model rides on the camera (player.js after the camera:
   /// rig.updateFpView with fpViewState); loads the arm the first time
   void updateFpView(double dt, const Camera& cam, const Player& p, gfx::Device& dev, AssetManager& assets);

@@ -16,6 +16,7 @@
 #pragma once
 #include "game/interiors.h"
 #include "game/play.h"
+#include "game/window_view.h"
 #include <memory>
 #include "game/buildmenu.h"
 #include <string>
@@ -28,12 +29,14 @@ struct UiNav;
 
 class Chalets {
 public:
-  Chalets(PlayCtx& c, Interiors& rooms);
+  Chalets(PlayCtx& c, Interiors& rooms, WindowView& win);
   void load(AssetManager& assets);
   bool interact(std::string& prompt, bool pressed);
   /// build mode's input (game.cpp: every frame while inside your chalet; the nav for the mouse / virtual mouse)
   void update(double dt, const Camera& cam, const UiNav& nav);
   void draw(Renderer& r, const dvec3& cam);
+  /// the village's houses, steps, fences, sheds, benches (chalets.js build(): its colliders), near you
+  void fillColliders(std::vector<Collider>& out) const;
   void hud(Ui& ui, float u);
   bool owned() const;
   int ownedHouse() const;
@@ -55,6 +58,10 @@ public:
   vec2 cardCentre(size_t item) const { return item < bm_.cardCentre.size() ? bm_.cardCentre[item] : vec2(-1); }
   int houseNear(const dvec3& p, double r) const;
   std::string objective() const;
+  /// the HUD's place line inside (chalets.js roomName: 'Chalet 3 \xC2\xB7 Entrance hall')
+  std::string location() const;
+  /// going in (the fade, the windows' photographs): you stand still
+  bool busy() const { return pending_ >= 0; }
   /// (Phase 6) the plot id of the chalet you are in (-1 outside): the presence's interior 'chalet:<id>'
   int insidePlot() const;
   bool visiting() const { return visiting_ && inside(); }
@@ -66,7 +73,14 @@ private:
   void sell(int i);
   PlayCtx& c_;
   Interiors& rooms_;
-  std::shared_ptr<Model> hi_, lo_;
+  WindowView& win_;
+  void enterNow(int house);
+  void offer(int house);
+  int pending_ = -1, viewing_ = -1;             // going into this house; a viewing of it (not yours)
+  dvec3 camPos_{0};
+  vec3 camDir_{0, 0, 1};
+  std::shared_ptr<Model> hi_, lo_, village_;
+  std::vector<std::shared_ptr<Model>> villageInst_;
   mat4 houseLocal_{1};
   std::vector<std::pair<std::string, Fit>> fits_;
   int insideHouse_ = -1;

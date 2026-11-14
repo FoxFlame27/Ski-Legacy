@@ -135,7 +135,10 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
   const bool exact = c.value("exact", false);
   const bool grad = c.value("grad", false);
   bool masked = false;
-  g.systemFonts(exact || grad);   // (the rooms' signs and tags are set in Georgia / a hand: the platform's serif)
+  // (the rooms' signs and tags are set in Georgia / a hand: the platform's serif; a board outdoors painted in Georgia
+  // (village.js makeSign: SKI SHOP, the hotels' names): its serif too, the other faces as before)
+  const bool serif = c.value("serif", false);
+  g.systemFonts(exact || grad || serif, !(exact || grad));
   for (auto& op : c["ops"]) {
     if (!op.is_array() || op.empty()) continue;
     const std::string n = op[0].get<std::string>();
@@ -164,6 +167,7 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
       else if (k == "globalAlpha" && v.is_number()) g.globalAlpha(v.get<float>());
       else if (k == "font" && v.is_string()) g.font(v.get<std::string>());
       else if (k == "textAlign" && v.is_string()) g.textAlign(v.get<std::string>());
+      else if (k == "letterSpacing" && v.is_string() && grad) g.letterSpacing(float(std::atof(v.get<std::string>().c_str())));
       else if (k == "textBaseline" && v.is_string()) g.textBaseline(v.get<std::string>());
       else if (k == "lineCap" && v.is_string() && exact) g.lineCap(v.get<std::string>());
     } else if (n == "setLineDash" && exact && op.size() >= 2 && op[1].is_array()) {

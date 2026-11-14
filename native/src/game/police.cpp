@@ -82,14 +82,16 @@ void Police::callFor(const std::string& why, double kmh) {
     radio_ = "All units: " + why + " \xC2\xB7 suspect in a car near " + (std::hypot(lastSeen_.x, lastSeen_.z) < 400 ? std::string("Legacy Village") : std::string("the valley road"));
     radioT_ = c_.now;
     c_.flash("The police are on their way \xC2\xB7 stop and pay, or run", 1);
+    slam("PULL OVER", c_.driving ? "POLICE \xC2\xB7 STOP AT THE SIDE OF THE ROAD" : "POLICE \xC2\xB7 STAY WHERE YOU ARE", 0);
+    prevStars_ = 1;
     SL_INFO("police: called (%s, %.0f km/h)", why.c_str(), kmh);
   } else if (fleeing_) heat_ = std::min(5.0, heat_ + 0.2);
 }
 
 void Police::hitCop(int, double kmh) {
   if (kmh < COP_RAM_KMH) return;
-  if (!wanted_) { callFor("a patrol car rammed", TRIGGER_KMH); fleeing_ = true; heat_ = 2; }
-  else heat_ = std::min(5.0, heat_ + HEAT_HIT_COP);
+  if (!wanted_) { callFor("a patrol car rammed", TRIGGER_KMH); fleeing_ = true; heat_ = 2; slam("WANTED", "YOU HIT A POLICE CAR", 0.4); prevStars_ = 2; }
+  else { heat_ = std::min(5.0, heat_ + HEAT_HIT_COP); slam("WRECKED!", "POLICE CAR HIT \xC2\xB7 MORE HEAT", 0.15); }
 }
 
 void Police::clear(const char* why) {
@@ -398,7 +400,7 @@ void Police::update(double dt) {
     if (fleeing_ && c_.driving && d < 25 && u.ramT <= 0) {
       double yy = c_.drive->yaw();
       aim = you - dvec3(std::sin(yy), 0, std::cos(yy)) * 1.6 + dvec3(std::cos(yy), 0, -std::sin(yy)) * ((i % 2) ? 1.2 : -1.2);
-      if (d < 6) u.ramT = L.ramGap;
+      if (d < 6) { u.ramT = L.ramGap; slam("RAMMED!", "MORE HEAT", 0.25 + 0.75 * std::clamp(u.v / 30.0, 0.0, 1.0)); }
     }
     driveUnit(u, dt, aim, want);
   }
@@ -563,7 +565,23 @@ std::string Police::status() const {
   return std::string(fleeing_ ? "fleeing" : pulled_ ? "pulled over" : "called") + " " + std::to_string(stars()) + "*" + (searching_ ? " searching" : "");
 }
 
+std::vector<Police::MapMark> Police::mapMarks() const {
+  std::vector<MapMark> out;
+  if (wanted_) for (const Unit& u : units_) if (!u.leaving) out.push_back({u.pos.x, u.pos.z, false, false});
+  if (heli_.on) out.push_back({heli_.pos.x, heli_.pos.z, true, heli_.sees});
+  return out;
+}
+
 void Police::hud(Ui& ui, float) {
+  // the wanted level going up (police.js: the stars slam in with what it brings)
+  if (wanted_ && stars() > prevStars_) {
+    prevStars_ = stars();
+    if (prevStars_ == 3) slam("\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85", "MORE UNITS \xC2\xB7 ROADBLOCKS", 0);
+    else if (prevStars_ == 4) slam("\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85", "HELICOPTER \xC2\xB7 SPIKE STRIPS", 0);
+    else if (prevStars_ == 5) slam("\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85", "MAXIMUM RESPONSE", 0);
+  }
+  if (!wanted_) prevStars_ = 0;
+  if (c_.now - slamAt_ < 1.7 && arrestT_ < 0) drawPoliceSlam(ui, slamText_, slamSub_, c_.now - slamAt_, slamK_);
   if (wanted_) {
     // the WANTED box (police.js hudFrame / setHud)
     const Level& L = LEVELS[stars()];

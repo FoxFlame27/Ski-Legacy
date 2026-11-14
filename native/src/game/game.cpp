@@ -1145,7 +1145,7 @@ int runGame(const GameOptions& opt) {
   struct UiT { int step = 0, f = 0; } uiT;
   if (uiTest) at = AT::Map;
   // (SKI_LEGACY_UISTEP=<name>: from that sample screen on; SKI_LEGACY_UIONLY=1: just that one)
-  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 10 + int(i);
+  if (const char* from = std::getenv("SKI_LEGACY_UISTEP")) for (size_t i = 0; i < uiTestScreens().size(); i++) if (uiTestScreens()[i] == from) uiT.step = 11 + int(i);
   const bool uiOnly = std::getenv("SKI_LEGACY_UIONLY") != nullptr;
   if (off("p5test") && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
@@ -1202,6 +1202,7 @@ int runGame(const GameOptions& opt) {
   };
   // (the layer switches are remembered: trailmap.js LAYER_KEY)
   { std::string lay = save.settingStr("mapLayers", ""); for (int i = 0; i < 7 && i < int(lay.size()); i++) tmap.setLayer(i, lay[size_t(i)] != '0'); }
+  menus.hooks.records = [&]() { std::vector<Menus::Hooks::Record> out; for (const auto& r : races.records()) out.push_back({r.name, r.best, r.medal}); return out; };
   menus.hooks.resume = [&]() { menus.close(); if (!opt.autotest) plat->setRelativeMouse(true); };
   menus.hooks.quit = [&]() { running = false; };
   menus.hooks.mainMenu = [&]() { save.write(*plat); started = false; menus.open(Menus::Screen::Main, -1); };
@@ -1568,7 +1569,7 @@ int runGame(const GameOptions& opt) {
         else { menus.inGame = true; menus.open(Menus::Screen::Pause); plat->setRelativeMouse(false); uiOpen = true; }
       }
       else if (input.takePressed(Action::Map)) { tmap.open(player.pos); plat->setRelativeMouse(false); uiOpen = true; }
-      else if (!opt.autotest && (ev.mousePressed & 1) && !plat->relativeMouse()) plat->setRelativeMouse(true);
+      else if (!opt.autotest && (ev.mousePressed & 1) && !plat->relativeMouse() && !chalets.wantsFreeMouse()) plat->setRelativeMouse(true);
     } else if (tmap.isOpen() && !opt.autotest) {
       bool mapKey = std::find(ev.pressed.begin(), ev.pressed.end(), input.kb[size_t(Action::Map)]) != ev.pressed.end() || input.padPressed(input.pad[size_t(Action::Map)]);
       if (mapKey) tmap.close();
@@ -2087,16 +2088,26 @@ int runGame(const GameOptions& opt) {
           if (f == 17) input.inject(Action::NextItem, false);
           if (f == 20 && !opt.png.empty()) pendingPng = pngVariant(opt.png, "build");
           // Esc (an SDL key event) in build mode: leaves build mode, no pause menu
-          if (f == 22 && !plat->pushKey(platform::Key::Escape, true)) { chaletOk = false; SL_WARN("[autotest] chalet: Esc not pushed"); }
-          if (f == 23) plat->pushKey(platform::Key::Escape, false);
-          if (f == 25) {
+          // the catalogue's cards under the mouse (buildmenu.js: a click takes the card in hand, again puts it down)
+          // (the autotest plays on its virtual controller: the virtual mouse points; the free mouse takes the same path)
+          input.inject(Action::VMouse, f == 21);
+          if (f >= 22 && f <= 40 && playData.furniture.size() > 2) {
+            vec2 cc = chalets.cardCentre(2);
+            if (cc.x >= 0) { nav.mouse = cc; chalets.setCursor(cc); }
+            if (f == 29 || f == 37) { nav.click = true; nav.confirm = true; }
+            if (f == 33) { bool ok = chalets.hand() == playData.furniture[2].id; chaletOk = chaletOk && ok; SL_INFO("[autotest] chalet: a click on the %s card (%.0f, %.0f) -> in hand '%s' -> %s", playData.furniture[2].name.c_str(), cc.x, cc.y, chalets.hand().c_str(), ok ? "ok" : "FAILED"); }
+            if (f == 40) { bool ok = chalets.hand().empty(); chaletOk = chaletOk && ok; SL_INFO("[autotest] chalet: a click on it again -> hand '%s' -> %s", chalets.hand().c_str(), ok ? "ok" : "FAILED"); }
+          }
+          if (f == 42 && !plat->pushKey(platform::Key::Escape, true)) { chaletOk = false; SL_WARN("[autotest] chalet: Esc not pushed"); }
+          if (f == 43) plat->pushKey(platform::Key::Escape, false);
+          if (f == 45) {
             bool ok = !chalets.building() && !menus.isOpen();
             if (!ok) { chaletOk = false; if (chalets.building()) chalets.toggleBuild(); if (menus.isOpen()) menus.close(); }
             SL_INFO("[autotest] chalet: Esc in build mode -> build mode left, no pause menu: %s", ok ? "ok" : "FAILED");
           }
-          if (f == 27) { dvec3 e = rooms.toWorld(playData.chaletModel.IX - 0.6, 0, playData.chaletModel.doorZ); player.teleport(e.x, e.z, PI / 2); player.pos.y = rooms.toWorld(0, 0, 0).y; }
-          input.inject(Action::Interact, f == 29);
-          if (f == 33) {
+          if (f == 47) { dvec3 e = rooms.toWorld(playData.chaletModel.IX - 0.6, 0, playData.chaletModel.doorZ); player.teleport(e.x, e.z, PI / 2); player.pos.y = rooms.toWorld(0, 0, 0).y; }
+          input.inject(Action::Interact, f == 49);
+          if (f == 53) {
             save.write(*plat);
             Save s2(save.fileName());
             bool saved = s2.load(*plat) && s2.data("chalet").value("owned", false) && s2.data("chalet")["furniture"].size() == size_t(chalets.furnitureCount());
@@ -2673,6 +2684,12 @@ int runGame(const GameOptions& opt) {
       if (used) interact = false;
     }
     if (started && !menus.isOpen() && !tmap.isOpen()) chalets.update(frameDt, cam, nav);
+    // (build mode's CURSOR: the mouse free over the catalogue and the room; taken back with TAB / on leaving it)
+    if (!opt.autotest && started && !menus.isOpen() && !tmap.isOpen()) {
+      static bool buildFree = false;
+      const bool wantFree = chalets.wantsFreeMouse();
+      if (wantFree != buildFree) { buildFree = wantFree; plat->setRelativeMouse(!wantFree); }
+    }
     // (Phase 4) the shops and counters on foot: the ski shop, the ticket seller, the Autohaus counter (your cars), the
     // huts; in your car at the Werkstatt: the repair
     if (rideKind == Ride::Car && werkstattLot && drive.speed() < 2.0 && prompt.rfind("Get out", 0) == 0) {
@@ -3162,7 +3179,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 10) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
+    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 11) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -3243,7 +3260,7 @@ int runGame(const GameOptions& opt) {
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
       { std::string lay; for (int i = 0; i < 7; i++) lay += tmap.layer(i) ? '1' : '0'; if (lay != save.settingStr("mapLayers", "1111111")) save.set("mapLayers", lay); }
     }
-    if (uiTest && uiT.step >= 10 && uiT.step - 10 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 10)], uiT.f * frameDt, plat->timeSeconds());
+    if (uiTest && uiT.step >= 11 && uiT.step - 11 < int(uiTestScreens().size())) uiTestDraw(ui, nav, input, uiTestScreens()[size_t(uiT.step - 11)], uiT.f * frameDt, plat->timeSeconds());
     if (tmap.travelOpen()) {   // (the route picker: ui/travel.js)
       // (autotest: the picker is driven like the menus: the highlighted stop is ridden to)
       if (opt.autotest && !atRealKeys && !off("uitest")) tmap.travelChoose();
@@ -3539,7 +3556,7 @@ int runGame(const GameOptions& opt) {
         }
       }
       else if (at == AT::Map && uiTest) {
-        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express", "travel_lift"};
+        static const char* names[] = {"map", "map_out1", "map_out2", "map_legend", "map_hover", "travel_bus", "travel_bus3", "travel_rail", "travel_express", "travel_lift", "travel_heli"};
         const int nSteps = int(sizeof names / sizeof *names);
         if (uiT.f == 0) {
           if (uiT.step == 0) { player.setSkisOn(false); player.teleport(4, 34, PI); tmap.open(dvec3(4, 0, 34)); }
@@ -3551,6 +3568,7 @@ int runGame(const GameOptions& opt) {
           if (uiT.step == 7) { tmap.openTravel(tmap.railTravel(0, false, save.money)); }
           if (uiT.step == 8) { tmap.openTravel(tmap.expressTravel(0, false, save.money)); }
           if (uiT.step == 9) { int li = 0; for (size_t i = 0; i < lifts.lines().size(); i++) if (lifts.lines()[i].hasMid) { li = int(i); break; } tmap.openTravel(tmap.liftTravel(li, false, save.money)); }
+          if (uiT.step == 10) { tmap.openTravel(tmap.heliTravel(save.money + 5000)); }
         }
         if (uiT.f == 0 && uiT.step >= nSteps && uiT.step - nSteps < int(uiTestScreens().size())) {
           // the menus' own screens and a card dialog, opened for their shot

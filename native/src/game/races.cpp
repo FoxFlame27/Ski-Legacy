@@ -171,6 +171,23 @@ void Races::openCard(const Course& co, bool fromStand) {
   c_.menus->openDialog(d);
 }
 
+std::vector<Races::RecordRow> Races::records() const {
+  std::vector<RecordRow> out;
+  if (!c_.data) return out;
+  for (const Course& c : c_.data->courses) {
+    RecordRow r;
+    r.name = c.name;
+    const nlohmann::json& rec = c_.save->data("records")[c.id];
+    if (rec.is_object()) {
+      if (rec.contains("best") && rec["best"].is_number()) r.best = rec["best"].get<double>();
+      int mr = medalRank(rec.contains("medal") ? rec["medal"] : nlohmann::json());
+      r.medal = mr ? 4 - mr : 0;
+    }
+    out.push_back(std::move(r));
+  }
+  return out;
+}
+
 void Races::openStand() {
   // the RACING stand's board (ui/racestand.js): any course against the 14 AI, just for fun
   stand_ = RaceStandView();

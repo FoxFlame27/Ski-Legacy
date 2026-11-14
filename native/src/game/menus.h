@@ -88,6 +88,8 @@ public:
     std::function<void(float dyaw)> spin;                   // drag / stick: turn the showcase skier
     std::function<void()> bindingsChanged;
     std::function<void()> resetProgress;
+    struct Record { std::string name; double best = -1; int medal = 0; };   // (medal: 1 gold, 2 silver, 3 bronze)
+    std::function<std::vector<Record>()> records;            // STATS: every course with your best time and medal
     std::function<void(const std::string& text, int kind)> flash;   // kind 0 good, 1 bad, 2 gold
   };
 
@@ -192,6 +194,7 @@ private:
   int captureAction_ = -1, captureCol_ = 0;
   double captureT_ = 0;
   std::string ctlStatus_;
+  float refX_ = 1e9f, refScroll_ = 0, refScrollT_ = 0, refMax_ = 0;   // the CONTROLS reference panel scrolls by itself (the wheel over it)
   bool ctlStatusBad_ = false;
   Screen ctlBack_ = Screen::None;
   // confirm

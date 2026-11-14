@@ -7,6 +7,7 @@
 #include <stb_image.h>
 
 #include "engine/asset_manager.h"
+#include <unordered_map>
 #include "engine/texcompress.h"
 #include "core/assets_path.h"
 #include "core/log.h"
@@ -159,6 +160,8 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     if (m.pbr_metallic_roughness.base_color_texture.texture) srgb[size_t(m.pbr_metallic_roughness.base_color_texture.texture - d->textures)] = true;
     if (m.emissive_texture.texture) srgb[size_t(m.emissive_texture.texture - d->textures)] = true;
   }
+  std::vector<std::shared_ptr<CpuImage>> lodImg;
+  const bool lodCol = opt.lodVertexColor && (!opt.lodRatios.empty() || !opt.lodCluster.empty());
   {
     std::vector<std::future<Image>> jobs;
     for (cgltf_size i = 0; i < d->textures_count; i++) {
@@ -189,6 +192,12 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       } else {
         texOf[i] = dev_.createTexture(td, im.rgba.data());
         texBytes_ += size_t(im.w) * im.h * 4 * 4 / 3;
+      }
+      if (lodCol) {   // (the LODs' vertex colours are sampled from it below)
+        if (lodImg.size() < d->textures_count) lodImg.resize(d->textures_count);
+        auto ci = std::make_shared<CpuImage>();
+        ci->w = im.w; ci->h = im.h; ci->rgba = im.rgba;
+        lodImg[i] = ci;
       }
       if (opt.keepCpu) {   // (Phase 7: the skier's outfits recolour its albedo)
         if (model->images.size() < d->textures_count) model->images.resize(d->textures_count);
@@ -223,6 +232,25 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     model->materials.push_back(o);
   }
   if (model->materials.empty()) model->materials.push_back(Material{});
+  // (lodVertexColor) the LODs' materials: the vertex colour for the base map, the metal / roughness maps' means
+  if (lodCol)
+    for (cgltf_size i = 0; i < d->materials_count; i++) {
+      Material o = model->materials[i];
+      const auto& pbr = d->materials[i].pbr_metallic_roughness;
+      if (pbr.base_color_texture.texture && size_t(pbr.base_color_texture.texture - d->textures) < lodImg.size() && lodImg[size_t(pbr.base_color_texture.texture - d->textures)]) {
+        if (pbr.metallic_roughness_texture.texture && size_t(pbr.metallic_roughness_texture.texture - d->textures) < lodImg.size())
+          if (auto mr = lodImg[size_t(pbr.metallic_roughness_texture.texture - d->textures)]) {
+            double g = 0, b = 0;
+            size_t n = size_t(mr->w) * size_t(mr->h);
+            for (size_t k = 0; k < n; k++) { g += mr->rgba[k * 4 + 1]; b += mr->rgba[k * 4 + 2]; }
+            o.roughness *= float(g / double(std::max<size_t>(1, n)) / 255.0);
+            o.metallic *= float(b / double(std::max<size_t>(1, n)) / 255.0);
+          }
+        o.baseTex = {}; o.mrTex = {}; o.normalTex = {}; o.emissiveTex = {};
+        o.vertexColor = true; o.colorSqrt = false; o.shading = 3;
+      }
+      model->lodMaterials.push_back(o);
+    }
 
   // ---- skins
   for (cgltf_size si = 0; si < d->skins_count; si++) {
@@ -274,7 +302,38 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
                          U = uv ? unpack(uv, 2) : std::vector<float>(n * 2, 0.f);
       std::vector<float> J, W;
       if (skinned) { J = unpack(jnt, 4); W = unpack(wgt, 4); }
-      const int stride = skinned ? 16 : 8;
+      // (lodVertexColor) a colour per vertex from the base colour map: each vertex samples a little inside its
+      // triangles (off the island's edge, where the atlas bleeds), linear light
+      std::vector<float> C;
+      if (lodCol && !skinned && uv && pr.material && pr.material->pbr_metallic_roughness.base_color_texture.texture) {
+        size_t ti = size_t(pr.material->pbr_metallic_roughness.base_color_texture.texture - d->textures);
+        if (ti < lodImg.size() && lodImg[ti]) {
+          const CpuImage& im = *lodImg[ti];
+          static float toLin[256];
+          static bool lutReady = false;
+          if (!lutReady) { for (int k = 0; k < 256; k++) { float c = float(k) / 255.f; toLin[k] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); } lutReady = true; }
+          std::vector<uint32_t> ix;
+          if (pr.indices) { ix.resize(pr.indices->count); cgltf_accessor_unpack_indices(pr.indices, ix.data(), 4, ix.size()); }
+          else { ix.resize(n); for (size_t v = 0; v < n; v++) ix[v] = uint32_t(v); }
+          C.assign(n * 3, 0.f);
+          std::vector<float> cnt(n, 0.f);
+          auto wrap = [](float t) { return t - std::floor(t); };
+          for (size_t t = 0; t + 2 < ix.size(); t += 3) {
+            float cu = (U[ix[t] * 2] + U[ix[t + 1] * 2] + U[ix[t + 2] * 2]) / 3, cv = (U[ix[t] * 2 + 1] + U[ix[t + 1] * 2 + 1] + U[ix[t + 2] * 2 + 1]) / 3;
+            for (int k = 0; k < 3; k++) {
+              uint32_t v = ix[t + size_t(k)];
+              float u = U[v * 2] + (cu - U[v * 2]) * 0.4f, w = U[v * 2 + 1] + (cv - U[v * 2 + 1]) * 0.4f;
+              int x = std::min(im.w - 1, int(wrap(u) * float(im.w))), y = std::min(im.h - 1, int(wrap(w) * float(im.h)));
+              const uint8_t* q = &im.rgba[(size_t(y) * size_t(im.w) + size_t(x)) * 4];
+              C[v * 3] += toLin[q[0]]; C[v * 3 + 1] += toLin[q[1]]; C[v * 3 + 2] += toLin[q[2]];
+              cnt[v] += 1;
+            }
+          }
+          for (size_t v = 0; v < n; v++) { float k = cnt[v] > 0 ? 1.f / cnt[v] : 0.f; C[v * 3] *= k; C[v * 3 + 1] *= k; C[v * 3 + 2] *= k; }
+        }
+      }
+      const bool hasCol = !C.empty();
+      const int stride = skinned ? 16 : hasCol ? 11 : 8;
       std::vector<float> vb(n * stride);
       Primitive op;
       for (size_t v = 0; v < n; v++) {
@@ -282,6 +341,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
         o[0] = P[v * 3]; o[1] = P[v * 3 + 1]; o[2] = P[v * 3 + 2];
         o[3] = Nn[v * 3]; o[4] = Nn[v * 3 + 1]; o[5] = Nn[v * 3 + 2];
         o[6] = U[v * 2]; o[7] = U[v * 2 + 1];
+        if (hasCol) { o[8] = C[v * 3]; o[9] = C[v * 3 + 1]; o[10] = C[v * 3 + 2]; }
         if (skinned) {
           float ws = W[v * 4] + W[v * 4 + 1] + W[v * 4 + 2] + W[v * 4 + 3];
           for (int k = 0; k < 4; k++) { o[8 + k] = J[v * 4 + k]; o[12 + k] = ws > 0 ? W[v * 4 + k] / ws : (k == 0 ? 1.f : 0.f); }
@@ -321,14 +381,70 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       // LODs: same vertices, simplified index ranges appended
       std::vector<uint32_t> all = idx;
       op.lods.push_back({0, uint32_t(idx.size())});
+      // (lodCluster) vertex clustering: new vertices (the cells' means) appended to the vertex buffer
+      if (hasCol && !opt.lodCluster.empty()) {
+        const float height = std::max(1e-6f, op.bmax.y - op.bmin.y);
+        for (float frac : opt.lodCluster) {
+          const float cell = std::max(1e-6f, frac * height);
+          struct Acc { double p[3] = {0, 0, 0}, nn[3] = {0, 0, 0}, c[3] = {0, 0, 0}; float u = 0, v = 0; uint32_t cnt = 0; };
+          std::unordered_map<uint64_t, uint32_t> cells;
+          std::vector<Acc> acc;
+          std::vector<uint32_t> remap(n);
+          for (size_t v = 0; v < n; v++) {
+            const float* o = &vb[v * size_t(stride)];
+            // snow (bright, unsaturated) and needles / bark never share a cell: the snow on the branches stays white
+            float hi = std::max({o[8], o[9], o[10]}), lo = std::min({o[8], o[9], o[10]});
+            uint64_t cls = (hi > 0.12f && lo > 0.6f * hi) ? 1 : 0;
+            auto q = [&](float x) { return uint64_t(int64_t(std::floor(x / cell)) + 1048576) & 0xFFFFF; };
+            uint64_t key = q(o[0]) | (q(o[1]) << 20) | (q(o[2]) << 40) | (cls << 60);
+            auto it = cells.find(key);
+            uint32_t id;
+            if (it == cells.end()) { id = uint32_t(acc.size()); cells.emplace(key, id); acc.emplace_back(); acc.back().u = o[6]; acc.back().v = o[7]; }
+            else id = it->second;
+            Acc& a = acc[id];
+            for (int k = 0; k < 3; k++) { a.p[k] += o[k]; a.nn[k] += o[3 + k]; a.c[k] += o[8 + k]; }
+            a.cnt++;
+            remap[v] = id;
+          }
+          std::vector<uint32_t> tris;
+          std::unordered_map<uint64_t, uint8_t> seen;
+          for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+            uint32_t a = remap[idx[t]], b = remap[idx[t + 1]], c = remap[idx[t + 2]];
+            if (a == b || b == c || a == c) continue;
+            uint32_t s3[3] = {a, b, c};
+            std::sort(s3, s3 + 3);
+            uint64_t k = (uint64_t(s3[0]) * 2097152u + s3[1]) * 2097152u + s3[2];
+            if (!seen.emplace(k, uint8_t(1)).second) continue;
+            tris.push_back(a); tris.push_back(b); tris.push_back(c);
+          }
+          if (tris.empty() || tris.size() >= op.lods.back().count) continue;
+          const uint32_t base = uint32_t(vb.size() / size_t(stride));
+          vb.resize(vb.size() + acc.size() * size_t(stride));
+          for (size_t i = 0; i < acc.size(); i++) {
+            const Acc& a = acc[i];
+            float* o = &vb[(size_t(base) + i) * size_t(stride)];
+            const double k = 1.0 / double(a.cnt);
+            for (int j = 0; j < 3; j++) { o[j] = float(a.p[j] * k); o[8 + j] = float(a.c[j] * k); }
+            double nl = std::sqrt(a.nn[0] * a.nn[0] + a.nn[1] * a.nn[1] + a.nn[2] * a.nn[2]);
+            if (nl > 1e-4) { o[3] = float(a.nn[0] / nl); o[4] = float(a.nn[1] / nl); o[5] = float(a.nn[2] / nl); } else { o[3] = 0; o[4] = 1; o[5] = 0; }
+            o[6] = a.u; o[7] = a.v;
+          }
+          op.lods.push_back({uint32_t(all.size()), uint32_t(tris.size())});
+          for (uint32_t t : tris) all.push_back(t + base);
+        }
+      }
       for (float ratio : opt.lodRatios) {
-        if (skinned) break;
+        if (skinned || (hasCol && !opt.lodCluster.empty())) break;
         size_t target = size_t(double(idx.size() / 3) * ratio) * 3;
         if (target < 36) target = 36;
         std::vector<uint32_t> lod(idx.size());
         // topology-preserving first (keeps branch cards whole); the sloppy simplifier only where that cannot reach
         // the budget (far LODs of the trees' branch soup)
-        size_t cnt = meshopt_simplify(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 0.05f, 0, nullptr);
+        size_t cnt;
+        if (hasCol) {   // (the colours steer the collapses: windows, stripes and trim keep their edges)
+          const float cw[3] = {0.6f, 0.6f, 0.6f};
+          cnt = meshopt_simplifyWithAttributes(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, &vb[8], sizeof(float) * size_t(stride), cw, 3, nullptr, target, 0.05f, 0, nullptr);
+        } else cnt = meshopt_simplify(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 0.05f, 0, nullptr);
         if (cnt > target * 3 / 2)
           cnt = meshopt_simplifySloppy(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 1e-1f, nullptr);
         if (cnt == 0 || cnt >= op.lods.back().count) continue;
@@ -342,6 +458,8 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
         {0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Float, false, 12, st},
         {2, 0, 2, gfx::AttribType::Float, false, 24, st}};
       if (skinned) { at.push_back({3, 0, 4, gfx::AttribType::Float, false, 32, st}); at.push_back({4, 0, 4, gfx::AttribType::Float, false, 48, st}); }
+      if (hasCol) { at.push_back({7, 0, 3, gfx::AttribType::Float, false, 32, st}); op.hasColor = true; }
+      op.stride = st;
       op.input = dev_.createVertexInput(at, {op.vbo}, op.ibo);
       op.material = pr.material ? int(pr.material - d->materials) : 0;
       op.skinned = skinned;
@@ -403,7 +521,10 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
   }
   size_t tris = 0;
   for (auto& m : model->meshes) for (auto& p : m.primitives) tris += p.lods[0].count / 3;
-  SL_INFO("model %-20s %6zu tris, %zu nodes, %zu clips, %zu textures", name.c_str(), tris, model->nodes.size(), model->clips.size(), size_t(d->textures_count));
+  std::string lodInfo;
+  if (!model->meshes.empty() && !model->meshes[0].primitives.empty())
+    for (size_t l = 1; l < model->meshes[0].primitives[0].lods.size(); l++) lodInfo += (l == 1 ? ", LODs " : " / ") + std::to_string(model->meshes[0].primitives[0].lods[l].count / 3);
+  SL_INFO("model %-20s %6zu tris, %zu nodes, %zu clips, %zu textures%s", name.c_str(), tris, model->nodes.size(), model->clips.size(), size_t(d->textures_count), lodInfo.c_str());
   return model;
 }
 

@@ -139,8 +139,12 @@ bool Lifts::load(gfx::Device& dev, AssetManager& assets, const nlohmann::json& J
   }
   // cars: full Meshy detail near, lighter copies further out (lifts.js CAR_HI / 110 m tiers)
   ModelLoadOptions o;
-  o.maxTextureSize = 1024;
+  // (the cabin's atlas is thousands of tiny islands: at 1024 px they bled into each other, pink windows and seams;
+  // its simplified LODs sampled garbage across them, pink polka-dot cabins down the line: full size, and the LODs
+  // carry vertex colours instead)
+  o.maxTextureSize = 2048;
   o.lodRatios = {0.3f, 0.12f};
+  o.lodVertexColor = true;
   size_t nCab = 0, nChair = 0;
   for (auto& l : lines_) (l.gondola ? nCab : nChair) += l.s.size();
   struct K { CarKind* k; const char* model; double carH; size_t n; };

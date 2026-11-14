@@ -281,7 +281,7 @@ private:
   gfx::Program snow_;
   gfx::Buffer snowSeeds_;
   gfx::VertexInput snowVi_;
-  int snowN_ = 0;
+  int snowN_ = 0, crystalN_ = 0;
   Snowfall snowfall_;
   void snowPass();
   std::vector<Item> items_;

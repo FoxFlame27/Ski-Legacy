@@ -227,40 +227,52 @@ void main() {
   vec3 drift = vec3(uSnowOff.x, -fall * uSnowOff.y, uSnowOff.z);
   vec2 fl = vec2(sin(t * (0.6 + seed) + aSeed.y * 40.0), cos(t * (0.5 + seed * 0.7) + aSeed.x * 40.0));
   drift.xz += fl * 0.8;                                  // flutter
-  // slow eddies a few metres across carry whole groups of flakes together (turbulence)
   vec3 cell = aSeed.xyz * B;
-  drift.x += sin(cell.y * 0.31 + cell.z * 0.23 + t * 0.37) * 0.6;
-  drift.z += cos(cell.x * 0.27 - cell.y * 0.19 + t * 0.31) * 0.6;
-  vec3 wp = mod(cell + drift - uCamPos.xyz + B * 0.5, B) - B * 0.5;   // camera-relative
-  float d = max(dot(wp, uCamFwd.xyz), 0.0);
-  float dist = length(wp);
-  // (sizes: mostly small flakes, a share of big wet clumps; heavy snow falls in bigger ones)
-  float big = fract(aSeed.w * 31.7);
-  float size = (0.032 + seed * 0.03 + big * big * big * 0.07) * (0.8 + 0.55 * uSnowP.x) * (1.0 + 0.7 * uSnowP.y);
-  float alpha = smoothstep(0.12, 0.5, d) * (1.0 - smoothstep(B * 0.39, B * 0.5, dist));
-  float pxPerM = uRes.y * 0.5 / (uCamFwd.w * max(d, 0.1));
-  float px = size * pxPerM;
-  float grow = max(1.0, 2.4 / max(px, 1e-3));
-  size *= grow; alpha /= pow(grow, 1.0);   // (a little more than its share: the far layers stay readable as snowfall)
-  size = min(size, 110.0 / pxPerM);
+  float crystal = step(0.5, uSnowP.w), rank = aSeed.w * max(uSnowP.w, 1.0);
   float rot = t * (seed - 0.5) * 3.0 + seed * 40.0;
+  if (crystal > 0.5) {
+    // atmosphere.js updateCrystals: the flakes closest to the camera, wet clumps tumbling in a 7 m box
+    // (fall 0.7 .. 1.3, a slow sway of 0.35 m, 3.5 .. 8 cm across)
+    float ph = fract(aSeed.w * 517.3) * 6.28;
+    fall = 0.7 + fract(aSeed.w * 211.7) * 0.6;
+    drift = vec3(uSnowOff.x + sin(t * 0.9 + ph) * 0.35, -fall * uSnowOff.y, uSnowOff.z + cos(t * 0.7 + ph) * 0.35);
+    rot = t * (fract(aSeed.w * 97.13) - 0.5) * 3.0 + ph;
+  }
+  vec3 wp = mod(cell + drift - uCamPos.xyz + B * 0.5, B) - B * 0.5;   // camera-relative
+  float d = max(dot(wp, uCamFwd.xyz), 0.0);                            // (-mv.z)
+  float pxPerM = uRes.y * 0.5 / (uCamFwd.w * max(d, 0.02));
+  float size, alpha, px;
+  if (crystal > 0.5) {
+    size = 0.035 + fract(aSeed.w * 431.9) * 0.045;        // metres, as modelled
+    px = size * pxPerM;
+    alpha = step(rank + 1e-4, uSnowP.x) * step(uSnowP.y, 0.5) * 0.9 * smoothstep(0.1, 0.3, d);
+  } else {
+    // flake diameter (big wet flakes; heavy snow falls in bigger, wetter ones; a rain streak is longer), drawn as the
+    // web game's points: gl_PointSize = clamp(size * projectionMatrix[1][1] * 1500 / d, 2, 96) px
+    size = (0.026 + seed * 0.034) * (0.8 + 0.45 * uSnowP.x) * (1.0 + 0.7 * uSnowP.y);
+    px = clamp(size / uCamFwd.w * 1500.0 / max(d, 1e-3), 2.0, 96.0);
+    size = px / pxPerM;
+    // strictly rank < snow: nothing at all falls when it does not snow
+    alpha = step(rank + 1e-4, uSnowP.x) * smoothstep(0.12, 0.5, d) * (1.0 - smoothstep(18.0, 23.0, d));
+  }
   float cr = cos(rot), sr = sin(rot);
   vec2 k = mat2(cr, sr, -sr, cr) * aCorner;
-  // the nearest ones tumble: a flat clump seen edge-on now and then
-  float near = 1.0 - smoothstep(2.5, 7.0, dist);
-  k.y *= mix(1.0, 0.4 + 0.6 * abs(cos(t * (1.3 + seed * 2.2) + seed * 17.0)), near);
+  // (a crystal is a flattened clump, y x 0.55, tumbling in 3D: seen flat or edge-on in turn)
+  if (crystal > 0.5) k.y *= 0.55 + 0.45 * abs(cos(t * (1.3 + seed * 2.2) + seed * 17.0));
   vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]), up = vec3(uView[0][1], uView[1][1], uView[2][1]);
-  vec3 vel = vec3(uSnowVel.x + fl.y * 0.5, uSnowVel.y * fall, uSnowVel.z - fl.x * 0.5);
-  vec3 p = wp + (right * k.x + up * k.y) * (size * 0.5) + vel * (aCorner.y * 0.5 * uSnowVel.w);
+  vec3 p = wp + (right * k.x + up * k.y) * (size * 0.5);
   vC = aCorner;
   vRain = uSnowP.y;
-  vP = vec4(alpha, rot, 1.0 - smoothstep(0.25, 1.6, d), 1.0 - smoothstep(5.0, 12.0, px * grow));
+  vP = vec4(alpha, rot, crystal > 0.5 ? 0.0 : 1.0 - smoothstep(0.25, 1.6, d), crystal > 0.5 ? 0.0 : 1.0 - smoothstep(5.0, 12.0, px));
   // light: the sun through the flake (brighter against the sun), the sky, and the lamps near it
   vec3 v = normalize(-wp);
   float back = pow(max(dot(-v, uSunDir.xyz), 0.0), 4.0);
   // (the sky's irradiance from above: the SH of the lighting chunk for n = +y, and the hemisphere light's sky colour)
   vec3 skyE = max(uSH[0].rgb * 0.886227 + uSH[1].rgb * 1.023328 - uSH[6].rgb * 0.247708 - uSH[8].rgb * 0.429043, vec3(0.0)) * uHemiSky.w;
-  vec3 col = uSunColor.rgb * (0.12 + 0.3 * back) + (skyE * 1.1 + uHemiSky.rgb) * RECIPROCAL_PI * 1.05;
+  // atmosphere.js: col = uAmbient * 1.25 + uLight * 0.55, uLight = the sun's colour x intensity / 3.4, uAmbient = the
+  // hemisphere light's colour x lerp(0.12, 0.9, day): the same white for every flake, whatever is behind it
+  vec3 hemiC = uHemiSky.rgb / max(max(uHemiSky.r, uHemiSky.g), max(uHemiSky.b, 1e-4));
+  vec3 col = hemiC * (mix(0.12, 0.9, uTrueSun.w) * 1.25) + uSunColor.rgb * (uSunColor.w * 0.55 / 3.4) + skyE * 0.0 * back;
   int cnt = int(uLightCount.x);
   for (int i = 0; i < SL_MAX_LIGHTS; i++) {
     if (i >= cnt) break;
@@ -275,7 +287,9 @@ void main() {
   // (against a bright overcast sky a flake is a grey speck, not a light: its own shade grows with the snowfall)
   // (by day a flake is the brightest thing in the grey air: at least half again as bright as the haze behind it, so
   // the snowfall reads against the sky, the far slopes and the trees; against sunlit snow its soft blue-grey edge does)
-  vCol = max(col * 0.95, uFogColor.rgb * 1.55 * uTrueSun.w);
+  // (the web game writes this colour straight to the canvas, past its tone mapping: there it is white by day. Here the
+  // flakes go through the exposure and the tone map with the scene: lifted so they come out the same white)
+  vCol = col * (crystal > 0.5 ? 1.7 : 3.0);   // (a crystal is a lit white clump, shaded: not blown out)
   gl_Position = uViewProj * vec4(p, 1.0);
 }
 )GLSL";
@@ -290,8 +304,8 @@ void main() {
   float lc = length(c);
   if (lc > 0.5) discard;
   if (vRain > 0.5) {   // sleet: a thin, faint falling streak
-    float st = (1.0 - smoothstep(0.03, 0.12, abs(c.x))) * (1.0 - smoothstep(0.2, 0.5, abs(c.y))) * vP.x;
-    if (st < 0.01) discard;
+    float st = (1.0 - smoothstep(0.015, 0.06, abs(c.x))) * (1.0 - smoothstep(0.2, 0.5, abs(c.y))) * vP.x;
+    if (st < 0.02) discard;
     oColor = vec4(vCol * 0.9 * st * 0.5, st * 0.5);
     return;
   }
@@ -299,16 +313,16 @@ void main() {
   // wobbling with its own spin; a soft disc when it is only a few pixels; an out-of-focus disc before the lens
   float ang = atan(c.y, c.x);
   float rr = lc * (1.0 + 0.16 * sin(ang * 3.0 + vP.y) + 0.09 * sin(ang * 5.0 - vP.y * 1.7));
-  float shape = 1.0 - smoothstep(0.14, 0.5, rr);
-  float disc = 1.0 - smoothstep(0.05, 0.5, lc);
-  float a = mix(mix(shape, disc, vP.w), disc * 0.5, vP.z) * vP.x;
-  if (a < 0.004) discard;
+  float shape = 1.0 - smoothstep(0.24, 0.5, rr);
+  float disc = 1.0 - smoothstep(0.0, 0.5, lc);                // soft bokeh disc for very close flakes
+  float a = mix(mix(shape, disc, vP.w), disc * 0.55, vP.z) * vP.x;
+  if (a < 0.02) discard;
   // lit on its face, shaded toward its rim: white against dark trees, and its greyer rim still shows against
   // bright snow and an overcast sky
   // (two tones: a light core that shows against trees and the grey air, and a darker blue-grey rim that shows
   // against sunlit snow and a bright sky: by day the snowfall reads everywhere without glowing)
-  float rim = smoothstep(0.2, 0.5, lc) * (1.0 - vP.z);
-  vec3 col = vCol * mix(vec3(1.08), vec3(0.66, 0.72, 0.84), rim);
+  float rim = smoothstep(0.12, 0.48, lc) * (1.0 - vP.z);
+  vec3 col = vCol * mix(1.08, 0.6, rim);
   a *= 0.95;
   oColor = vec4(col * a, a);
 }

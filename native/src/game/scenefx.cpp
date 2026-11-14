@@ -214,6 +214,8 @@ const Model* SceneFx::plateModel(const std::string& text) {
   Material m;
   m.baseTex = canvasTexture(*dev_, g);
   m.roughness = 0.5f; m.metallic = 0;
+  // (reflective: at night it reads as lit, as in the web game)
+  m.emissive = vec3(1); m.emissiveTex = m.baseTex; m.emissiveNight = vec2(0, 0.5f);
   // (PLATE_W x PLATE_H: an EU plate, 520 x 110 mm)
   auto model = buildModel(*dev_, {{quadGeo(-0.26f, 0.26f, -0.055f, 0.055f, 0, 1), m}}, "plate");
   plates_[text] = model;
@@ -275,7 +277,8 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
     if (!c.plate.empty() && d < 45) {
       const Model* pm = plateModel(c.plate);
       if (c.vm->hasPlates) {   // (where carconfig.js puts them on this model: front and rear, none where it has none)
-        for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P, 0);
+        // (12 mm out along its face: the models keep their own blank plate pieces where ours goes; cars.js drops them)
+        for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P * glm::translate(glm::dmat4(1), dvec3(0, 0, 0.012)), 0);
       } else {
         double L2 = c.vm->size.z * 0.5;
         vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.42, L2 + 0.03)), 0);

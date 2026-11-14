@@ -2394,6 +2394,30 @@ int runGame(const GameOptions& opt) {
       if (rf > 4 && rf < 230 && rf % 40 == 28 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, ("room" + std::to_string(rf / 40)).c_str()); SL_INFO("[roomtest] shot %d: prompt '%s'", rf / 40, prompt.c_str()); }
       player.vel = dvec3(0);
     }
+    if (opt.autotest && at == AT::Ski && off("sledtest")) {   // (debug: a snowmobile driven into a parked car's side: it bounces off / stops; shots o_sled<n>.png)
+      static int sf = 0;
+      static dvec3 carAt(0);
+      sf++;
+      if (sf == 5) {
+        int idx = drive.saleIndex("car_bmw_x3");
+        if (idx < 0) for (size_t i = 0; i < drive.parked.size(); i++) if (!drive.parked[i].driving) { idx = int(i); break; }
+        if (idx >= 0) {
+          const Drive::Parked& e = drive.parked[size_t(idx)];
+          carAt = dvec3(e.x, e.y, e.z);
+          // (from its nose: straight at the front of the car, 26 m out)
+          const dvec3 from = carAt + dvec3(std::sin(e.yaw), 0, std::cos(e.yaw)) * 26.0;
+          sleds.debugRide(dvec3(from.x, world.groundHeight(from.x, from.z, e.y + 3), from.z), e.yaw + PI);
+          rideKind = Ride::Sled; rig.skisInRide = false;
+          SL_INFO("[sledtest] on a snowmobile 26 m in front of the %s at (%.0f, %.0f), driving at it", e.name.c_str(), e.x, e.z);
+        }
+      }
+      if (sf > 5 && rideKind == Ride::Sled) {
+        input.inject(Action::Forward, sf < 400);
+        dvec3 sp; double sy = 0;
+        if (sleds.current(sp, sy) && sf % 12 == 0) SL_INFO("[sledtest] f %3d  %5.1f km/h  %5.2f m from the car's middle", sf, sleds.speed() * 3.6, std::hypot(sp.x - carAt.x, sp.z - carAt.z));
+        if (sf % 45 == 30 && sf < 420 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("sled" + std::to_string(sf / 45)).c_str());
+      } else if (sf > 5 && sf % 60 == 0) SL_INFO("[sledtest] f %d: off the sled (thrown off: %s)", sf, player.mode == PlayerMode::Fall ? "yes" : "no");
+    }
     if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
       dvec3 bp; double bh;
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
@@ -3191,6 +3215,23 @@ int runGame(const GameOptions& opt) {
     if (dvec3 bc, bl; off("bustest") && buses.debugCam(bc, bl)) {   // (debug: the camera on the bus test)
       cam.lookAt(bc, bl); cam.fovY = 55;
       terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+    }
+    if (opt.autotest && at == AT::Ski && off("platetest")) {   // (debug: a parked car's plates close up, front and rear, by day and at night: o_plate<n>.png)
+      static int pf = 0;
+      pf++;
+      const char* want = std::getenv("SKI_LEGACY_CAR");
+      int idx = drive.saleIndex(want ? want : "car_bmw_x3");
+      if (idx >= 0) {
+        const Drive::Parked& e = drive.parked[size_t(idx)];
+        const int k = (pf / 70) % 4;   // front by day, rear by day, front at night, rear at night
+        const double side = k % 2 ? -1 : 1, L2 = e.length / 2;
+        const dvec3 f(std::sin(e.yaw), 0, std::cos(e.yaw)), rt(f.z, 0, -f.x);
+        const dvec3 eye = dvec3(e.x, e.y + 0.85, e.z) + f * (side * (L2 + 2.4)) + rt * 0.8, look = dvec3(e.x, e.y + 0.55, e.z) + f * (side * L2);
+        cam.lookAt(eye, look); cam.fovY = 38;
+        if (k >= 2) hour = 21.5;
+        terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+        if (pf % 70 == 60 && pf < 290 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("plate" + std::to_string(k)).c_str());
+      }
     }
     if (off("sidecam") && player.mode == PlayerMode::Sit && lifts.rideLine()) {   // (debug: look at the rider from the side)
       LiftLine* rl = lifts.rideLine();

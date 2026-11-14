@@ -1420,6 +1420,17 @@ software rendering on a shared 4-core container and only good for relative compa
 | Ultra | 4 cascades x 3072 | MSAA 8x, fx 3 (parallax trails, far glints), 28-step clouds | full-res GTAO (3 x 8), PBR Neutral | ~480 MB (MSAA 200, shadow 150) |
 | Super Ultra | 4 cascades x 4096 | fx 4 (groove shadows), 3072 trail map, impostors 3 km | GTAO (4 x 10) | ~650 MB (shadow 270, trails 72) |
 
+**Measured on a MacBook-class Apple M2 (8 GB)** (Nov 14 2026; OpenGL 4.1 on Metal, a 2316 x 1266 drawable = 2.9 MP,
+vsync off, three fixed views held 100 frames each with `SKI_LEGACY_SHOTS`, other programs running; a 2560 x 1664
+Retina panel has 1.45x the pixels):
+| preset | top of a run | village plaza | valley with the village and forests | GPU textures |
+|---|---|---|---|---|
+| Super Performance | 411 fps | 289 | 194-211 | 1.63 GB |
+| Performance | 394 | 250 | 307-320 | 1.67 GB |
+| **Balanced** (default) | 214 | 116 | 118-123 | 1.97 GB |
+| High | 224 | 119 | 96-130 | 2.62 GB |
+| Ultra | 180 | 97 | 93-101 | 2.73 GB |
+
 On llvmpipe (software GL, contended 4-core container) the skiing view runs at roughly 0.3-0.8 fps on Balanced at 1280x720
 and 0.1-0.2 fps on High (MSAA, GTAO): a real GPU is two to three orders of magnitude faster. Software GL also grows
 the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the autotest's peak RSS).

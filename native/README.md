@@ -1346,13 +1346,22 @@ colour (light, unsaturated blue; near-neutral under an overcast), the IBL's lowe
 the sunlit snowfield (75 %, not 30-40 %: shaded facades stay neutral), the haze lights the far terrain at 40 % of its
 saturation, the moon is a paler blue; in the shaders the snow albedo is near neutral, the shade / grazing / subsurface
 / groove tints keep their density but only a hint of cool, rock is grey, pines and far forests dark green, and the
-grade's cool shadow push is halved. The visible sky, the sun, dusk's glow and the tone mapping are unchanged.
+grade's cool shadow push is halved. The visible sky, the sun and dusk's glow are unchanged. High now tone maps with
+PBR Neutral as Ultra (white sunlit snow, no ACES hue skew); the rock has warm iron-stained strata, darker cool water
+streaks and crevices; the far ranges' haze deepens to a clearer blue over several km.
+
+**Sharpness** (Nov 2026: "the game is blurry"): Balanced and up draw the 3D at the drawable's full (Retina) size and
+anti-alias with MSAA 4x / 8x + alpha to coverage and a contrast-adaptive sharpen; FXAA (whose subpixel pass smeared
+every texture) is left to Performance / Super Performance, at 0.3 subpixel strength. A 3D resolution below the output
+(render scale, dynamic resolution) is upscaled with a ringing-clamped Catmull-Rom filter and a firmer sharpen, not
+a bilinear stretch. The terrain noise and detail maps use the GPU's maximum anisotropy from Balanced up, and the
+baked snow crystal map reaches 50 m on Balanced (new) and 80 m on High and up (was 45 m).
 
 **Presets** (`engine/quality.h`; the SETTINGS row has the web game's seven): `switch` (one 1024 shadow map with
 single-tap PCF, SL_LOW, no MSAA / AO / shafts / clouds / detail maps, a 512 trail map, impostors to 700 m),
 Super Performance / Performance (fx 0: the original look, one shadow map, FXAA, 512 trails), **Balanced** (fx 1, 2
-cascades of 2048 to 160 m, the 1024 detail maps, a 1024 trail map, impostors to 1.4 km; the autotest's default),
-**High** (fx 2, 3 cascades of 2048 to 320 m, MSAA 4x, half-res GTAO, shafts, glare, the sea of clouds, 2048 detail
+cascades of 2048 to 160 m, MSAA 4x, the 1024 detail maps, a 1024 trail map, impostors to 1.4 km; the autotest's default),
+**High** (fx 2, 3 cascades of 2048 to 320 m, MSAA 4x, PBR Neutral, half-res GTAO, shafts, glare, the sea of clouds, 2048 detail
 maps and trails, impostors to 1.9 km; **the default on Apple silicon**), **Ultra** (fx 3, 4 cascades of 3072 to
 480 m, MSAA 8x, full-res GTAO, PBR Neutral, 28-step clouds, impostors to 2.4 km), **Super Ultra** (fx 4, 4 cascades of
 4096 to 640 m, GTAO with 4 slices, a 3072 trail map, groove shadows, impostors to 3 km). `--quality` takes all of them
@@ -1366,8 +1375,8 @@ software rendering on a shared 4-core container and only good for relative compa
 |---|---|---|---|---|
 | switch | 1 map, 1024 px, single tap | SL_LOW shaders (no glints, no far normal maps, 4 lights), trails (5 taps near) | tone map + grade | ~40 MB (shadow 4, trails 2) |
 | Super Perf. / Performance | 1 map, 1024 px | fx 0 shaders, render scale 0.6 / 0.85 | FXAA + sharpen | ~50 MB |
-| Balanced (autotest) | 2 cascades x 2048 | fx 1 terrain, 1024 detail maps, 6-step sky clouds, impostors 1.4 km | bloom, FXAA + sharpen | ~95 MB (shadow 32, trails 8, detail 11) |
-| High (Apple silicon) | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, cloud shadows, 16-step clouds + the sea, glare | half-res GTAO (2 x 6), shafts, bloom, FXAA | ~290 MB (MSAA 100, shadow 64, trails 32, detail 44) |
+| Balanced (autotest) | 2 cascades x 2048 | MSAA 4x + A2C, fx 1 terrain, 1024 detail maps, 6-step sky clouds, impostors 1.4 km | bloom, sharpen | ~195 MB (MSAA 100, shadow 32, trails 8, detail 11) |
+| High (Apple silicon) | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, cloud shadows, 16-step clouds + the sea, glare | half-res GTAO (2 x 6), shafts, bloom, PBR Neutral, sharpen | ~290 MB (MSAA 100, shadow 64, trails 32, detail 44) |
 | Ultra | 4 cascades x 3072 | MSAA 8x, fx 3 (parallax trails, far glints), 28-step clouds | full-res GTAO (3 x 8), PBR Neutral | ~480 MB (MSAA 200, shadow 150) |
 | Super Ultra | 4 cascades x 4096 | fx 4 (groove shadows), 3072 trail map, impostors 3 km | GTAO (4 x 10) | ~650 MB (shadow 270, trails 72) |
 

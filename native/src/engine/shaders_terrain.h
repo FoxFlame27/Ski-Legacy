@@ -115,7 +115,9 @@ void main() {
     float farK = smoothstep(400.0, 6000.0, tDist);
     float cliff = smoothstep(0.24, 0.38, vMacro);
     float rockT = 0.28 - farK * 0.1 + (n2 - 0.5) * 0.16 + uSnowCover * 0.05 - cliff * 0.07;
-    float edgeW = 0.05 + 0.12 * smoothstep(800.0, 4000.0, tDist);
+    // (native) crisp snow / rock edges at every distance (terrain.js widened them to 0.17 far away: the mountains read
+    // as smeared watercolour)
+    float edgeW = 0.035 + 0.055 * smoothstep(800.0, 4000.0, tDist);
     float slopeR = max(slope, vMacro * smoothstep(900.0, 2200.0, tDist));
     float bench = smoothstep(0.05, 0.14, vMacro - slope) * smoothstep(0.08, 0.14, vMacro);
     float streak = 0.0, edgeN = 0.5;
@@ -194,13 +196,25 @@ void main() {
     alb = snow;
     tRockN = vec3(0.0);
     if (tRock > 0.002) {
-      float buttress = 1.0 - smoothstep(1500.0, 5000.0, tDist), facets = 1.0 - smoothstep(200.0, 1500.0, tDist);
-      if (buttress > 0.0) tRockN = triGrad(vWPos, tTriW, 0.028) * 0.4 * buttress;
+      // (native) the faces' relief carried much farther (facets to 2.5 km, a mid scale to 3.5 km): sunlit and shaded
+      // facets, ribs and gullies on every cliff instead of a smooth grey slab
+      float buttress = 1.0 - smoothstep(1500.0, 5000.0, tDist), facets = 1.0 - smoothstep(400.0, 2500.0, tDist);
+      if (buttress > 0.0) tRockN = triGrad(vWPos, tTriW, 0.028) * 0.45 * buttress;
       if (facets > 0.0) tRockN += triGrad(vWPos, tTriW, 0.12) * 0.6 * facets;
+#if TERRAIN_DETAIL >= 1
+      float ribs = 1.0 - smoothstep(800.0, 3500.0, tDist);
+      if (ribs > 0.0) tRockN += triGrad(vWPos + 17.0, tTriW, 0.055) * 0.5 * ribs;
+#endif
       vec4 faceN = triTex(vWPos, tTriW, 0.03);
       float faces = faceN.r;
       float grain = 0.5;
-      if (tDist < 900.0) grain = mix(triFbmB(vWPos, tTriW, 0.22), 0.5, smoothstep(500.0, 900.0, tDist));
+      // (native) far away the grain comes from a coarser octave instead of fading to flat grey
+      if (tDist < 900.0) grain = triFbmB(vWPos, tTriW, 0.22);
+#if TERRAIN_DETAIL >= 1
+      if (tDist > 500.0) grain = mix(grain, triFbmB(vWPos + 23.0, tTriW, 0.05), smoothstep(500.0, 900.0, tDist));
+#else
+      grain = mix(grain, 0.5, smoothstep(500.0, 900.0, tDist));
+#endif
       float sy = vWPos.y * 0.085 + (fbm3(vWPos.xz * 0.0035) - 0.5) * 10.0 + (faces - 0.5) * 1.6;
       float strata = fbmB(vec2(sy * 0.5, 0.37));
       float closeR = 1.0 - smoothstep(25.0, 90.0, tDist);
@@ -213,7 +227,7 @@ void main() {
       // water streaks down the walls darker and cooler, the crevices darker still
       vec3 rock = mix(vec3(0.026, 0.026, 0.028), vec3(0.104, 0.1, 0.096), smoothstep(0.34, 0.66, faces * 0.65 + strata * 0.35));
       rock *= mix(vec3(1.0), vec3(1.2, 1.02, 0.8), saturate(smoothstep(0.56, 0.82, strata) * 0.75 + smoothstep(0.62, 0.86, faceN.a) * 0.45));
-      rock *= (0.66 + 0.68 * grain) * (0.68 + 0.64 * smoothstep(0.32, 0.68, strata));
+      rock *= (0.6 + 0.8 * grain) * (0.66 + 0.68 * smoothstep(0.4, 0.6, strata));
       tCav = smoothstep(0.25, 0.75, grain * 0.6 + faces * 0.4);
       rock *= 1.0 - cracks * 0.6;
       rock *= mix(vec3(1.0), vec3(0.7, 0.72, 0.76), 1.0 - smoothstep(0.2, 0.36, streak));
@@ -228,9 +242,10 @@ void main() {
       }
 #endif
       float upR = normalize(wn + tRockN).y;
-      float onRelief = smoothstep(0.6, 0.78, upR + (grain - 0.5) * 0.12) * (1.0 - smoothstep(0.8, 0.97, slope));
+      float onRelief = smoothstep(0.63, 0.72, upR + (grain - 0.5) * 0.12) * (1.0 - smoothstep(0.8, 0.97, slope));
       float patches = smoothstep(0.52, 0.72, faceN.a) * (1.0 - smoothstep(0.42, 0.78, slope)) * (1.0 - cliff * 0.6);
-      float steepF = smoothstep(0.42, 0.7, slope) * (1.0 - smoothstep(220.0, 420.0, tDist));
+      // (native) the snow lines on the cliffs' ledges and the flecks in their cracks out to ~1.8 km (were gone by 420 m)
+      float steepF = smoothstep(0.42, 0.7, slope) * (1.0 - smoothstep(1000.0, 1800.0, tDist));
       if (steepF > 0.0) {
         float wx = smoothstep(0.32, 0.68, tTriW.x / max(tTriW.x + tTriW.z, 1e-3));
         vec2 pz = vec2(vWPos.x, vWPos.y), px = vec2(vWPos.z, vWPos.y);
@@ -333,7 +348,7 @@ void main() {
     float fade = 1.0 - smoothstep(30.0, 140.0, tDist);
     float fadeMid = 1.0 - smoothstep(60.0, 320.0, tDist);
     float onSnow = 1.0 - tRock;
-    vec2 g = tRelG * 0.42 * onSnow * (1.0 - 0.72 * tGroomed) * (1.0 - 0.35 * uSnowCover);
+    vec2 g = tRelG * 0.52 * onSnow * (1.0 - 0.72 * tGroomed) * (1.0 - 0.35 * uSnowCover);   // (native: 0.42 -> 0.52, the wind relief reads)
 #if TERRAIN_DETAIL >= 1
     if (fadeMid * onSnow > 0.0) {
       vec2 sq = ngrad((mat2(0.8, 0.6, -0.6, 0.8) * vWPos.xz) * vec2(0.04, 0.22)) * vec2(0.04, 0.22);
@@ -348,10 +363,16 @@ void main() {
       float micro = (1.0 - smoothstep(6.0, 26.0, tDist)) * (1.0 - smoothstep(0.35, 0.8, mfw)) * onSnow;
       if (micro > 0.0) g += (ngrad(mp) * 0.6 + ngrad(mp * 2.7 + 3.1) * 0.4) * 0.03 * micro * (1.0 - 0.6 * tGroomed);
     }
-    // (native) the baked high-resolution snow map: crystals and grain at two rotated scales, crisp right under the
-    // skis and gone before it could shimmer (its mips + anisotropy band-limit it)
+#endif
+#if TERRAIN_DETAIL >= 1
+    // (native) the baked high-resolution snow map: crystals and grain at two rotated scales, crisp under the skis and
+    // out to the mid ground (its mips + maximum anisotropy band-limit it, so it never shimmers; Balanced: 1024 px)
     {
-      float near = (1.0 - smoothstep(12.0, 45.0, tDist)) * onSnow;
+#if TERRAIN_DETAIL >= 2
+      float near = (1.0 - smoothstep(20.0, 80.0, tDist)) * onSnow;
+#else
+      float near = (1.0 - smoothstep(14.0, 50.0, tDist)) * onSnow;
+#endif
       if (near > 0.0) {
         vec2 sa = vWPos.xz * (1.0 / 1.6), sb = (mat2(0.6, -0.8, 0.8, 0.6) * vWPos.xz) * (1.0 / 0.55) + 0.37;
         vec4 ta = texture(uSnowTex, sa), tb = texture(uSnowTex, sb);

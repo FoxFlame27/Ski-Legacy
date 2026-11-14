@@ -91,12 +91,16 @@ void SceneFx::init(gfx::Device& dev, AssetManager& assets, const Resort& resort,
     for (auto& m : masts_) m.pos.y = world.height(m.pos.x, m.pos.z);
     for (int d = 0; d < 4; d++) {
       Canvas2D g(512, 256, &fonts);
+      // flags.js flagAtlas: the ground, a bar stripe at 80 % (7 %), the lettering colour's band below it (13 %), the
+      // text italic 700 104px shrunk to 80 % of the width, at (w / 2 + 10, 0.42 h)
       g.fillStyle(DESIGNS[d].bg); g.fillRect(0, 0, 512, 256);
-      g.fillStyle(DESIGNS[d].bar); g.fillRect(0, 214, 512, 42);
-      g.fillStyle(DESIGNS[d].fg);
-      g.font("700 96px Barlow");
+      g.fillStyle(DESIGNS[d].bar); g.fillRect(0, 256 * 0.8f, 512, 256 * 0.07f);
+      g.fillStyle(DESIGNS[d].fg); g.fillRect(0, 256 * 0.87f, 512, 256 * 0.13f + 1);
+      int size = 104;
+      g.font("700 104px Barlow");
+      while (g.measureText(DESIGNS[d].text) > 512 * 0.8f && size > 24) { size -= 4; g.font("700 " + std::to_string(size) + "px Barlow"); }
       g.textAlign("center"); g.textBaseline("middle");
-      g.save(); g.translate(256, 110); g.setTransform(1, 0, -0.18f, 1, 256, 110);   // (the italic lean of the arena banners)
+      g.save(); g.setTransform(1, 0, -0.2f, 1, 256 + 10, 256 * 0.42f);   // (italic: the lean of Barlow Condensed's italic)
       g.fillText(DESIGNS[d].text, 0, 0);
       g.restore();
       Material m;

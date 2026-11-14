@@ -162,7 +162,7 @@ void Renderer::makeNoiseTexture() {
   }
   gfx::TextureDesc d;
   d.width = d.height = S;
-  d.anisotropy = 4;
+  d.anisotropy = set_.fx >= 1 ? 16.f : 4.f;   // (the terrain's grain and relief at grazing angles: Balanced and up sharp)
   noise_ = dev_->createTexture(d, px.data());
 }
 
@@ -254,7 +254,7 @@ void Renderer::makeDetailTexture() {
   }
   gfx::TextureDesc td;
   td.width = td.height = N;
-  td.anisotropy = 8;
+  td.anisotropy = 16;
   detail_ = dev_->createTexture(td, d.data());
 }
 
@@ -1287,6 +1287,8 @@ void Renderer::endFrame() {
     dev_->setVec4("uPost2", glm::value_ptr(p2));
     dev_->setVec4("uPost3", glm::value_ptr(p3));
     dev_->setVec3("uSunCol", glm::value_ptr(sunCol_));
+    bool up = rw_ < w_ || rh_ < h_;
+    dev_->setFloat("uUpscale", up ? 1.f : 0.f);
     dev_->draw(emptyVi_, 3);
     if (aa) {
       dev_->bindRenderTarget({}, w_, h_);
@@ -1295,7 +1297,8 @@ void Renderer::endFrame() {
       dev_->bindTexture(0, dev_->renderTargetColor(ldr_));
       vec2 t(1.f / float(w_), 1.f / float(h_));
       dev_->setVec2("uTexel", glm::value_ptr(t));
-      dev_->setFloat("uSharpen", set_.sharpen);
+      // (a reduced 3D resolution gets a firmer contrast-adaptive sharpen after its upscale, RCAS-style)
+      dev_->setFloat("uSharpen", std::min(1.f, set_.sharpen + (up ? 0.25f * (1.f - float(rw_) / float(w_)) / 0.4f : 0.f)));
       dev_->setFloat("uAA", set_.fxaa ? 1.f : 0.f);
       dev_->draw(emptyVi_, 3);
     }

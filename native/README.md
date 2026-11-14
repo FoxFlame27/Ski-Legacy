@@ -844,7 +844,7 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
 - Debug runs (with `--autotest --png out.png`, a screenshot per stage and the checks logged, `[helitest] PASS`):
   `SKI_LEGACY_DEBUG=rescuetest` (a wipeout on the mountain, the landing, the flight, the ambulance, the ward, out of the
   doors; `SKI_LEGACY_SPOT=493,-393`: the wipeout on a steep slope instead, so it hovers and winches you up), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
-  landing, getting out).
+  landing, getting out); with `,fadetest` added the real fades run (the windows are photographed behind them).
 
 **Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a
 door: buy ($50,000, one each, `save.chalet` in the web shape), look inside, or go into yours. The interior: chaletplan.js's

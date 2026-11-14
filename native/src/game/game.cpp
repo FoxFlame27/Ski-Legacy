@@ -656,7 +656,7 @@ int runGame(const GameOptions& opt) {
   pc.unmark = [&]() { tmap.mark.on = false; };
   // (transition.js: the dip to dark with the logo, the title card over a race's start; the autotest's moves stay
   // instant: its screenshots follow them at once)
-  pc.fade = [&]() { if (!opt.autotest && !mptest) trans.fade(); };
+  pc.fade = [&]() { if ((!opt.autotest || off("fadetest")) && !mptest) trans.fade(); };   // (fadetest: the debug runs with the real fades)
   pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
 
   // ---------------------------------------------------------------- (Phase 6) multiplayer: the session and its glue
@@ -2771,7 +2771,7 @@ int runGame(const GameOptions& opt) {
     }
     heli.camera(cam);
     ward.camera(cam);
-    ward.captureCamera(cam, opt.autotest || trans.covered());   // (the ward's windows: the village photographed behind the fade)
+    ward.captureCamera(cam, (opt.autotest && !off("fadetest")) || trans.covered());   // (the ward's windows: the village photographed behind the fade)
     if (rideKind == Ride::Sled) sleds.camera(cam, frameDt);
     // (Phase 4) the main menu's slow orbit over the village; the skier showcase (the skier on the plaza, turned by a
     // drag / the right stick, the camera off to the side so the menu column stays clear)

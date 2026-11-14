@@ -201,6 +201,7 @@ void HospitalWard::captured(Renderer& r) {
     buildPanes(capture_, tanH, tanV);
     if (paneModel_[capture_]) for (Material& m : paneModel_[capture_]->materials) m.emissiveTex = tex;
   }
+  SL_INFO("hospital ward: window view %d photographed (%d x %d)", capture_, W, H);
   if (++capture_ >= NV) enterNow();
 }
 

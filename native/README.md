@@ -1342,8 +1342,22 @@ in sleet; lit by the sun, the sky and the lamps round them: warm flakes under th
 (ski spray, landings, the snowmobile's tail, the snow guns' plumes) is made of small clouds: spheres of dust whose
 edge is eaten by drifting noise, shaded as a volume (the sun wraps round, sky-blue shade, a back-lit rim), shadowed,
 lit by lamps, soft against the scene's depth and before the lens; a plume is powder + a finer veil that rises above
-it + the clumps the edge throws. **Lamp glows** (cars, snowcats) are round additive halos that sink into the
-bodywork, not lit quads.
+it + the clumps the edge throws. By day a flake is at least half again as bright as the haze behind it, with a soft
+blue-grey edge (42-60 thousand of them on Balanced / High): heavy snow and blizzards read against the sky, the
+slopes and the trees.
+
+**Car lights** (Nov 14, as `carlights.js` / `cars.js`): `tools/export_net.mjs` runs the game's own `carTemplate` on
+each car model (on a copy whose materials carry the base colour maps' pixels, decoded with sharp: the colour-aware
+`LAMP_RULES` read them) and exports the lamps: every lamp part's triangles in the car's frame with its kind (head,
+high, drl, tail, third, brake, rev, ind, lensF, lensR), tier (core / tex / plain), boost and glass opacity, and the
+halo anchors per kind and side. The C++ (`game/scenefx.cpp`) draws each part as an emission-only overlay through the
+model's own colour map (`Material::additive`, shading 5) with `lampsOn`'s intensities (the K table: low beams, the
+daytime running lights of a running car — the headlamps on models without DRLs —, tails, brake and third brake
+light, reversing lights, the lenses' share), and `halos()`' sprites (the canvas gradient, sizes from the lamps'
+boxes, shown only from in front of the lamp, dimmer by day), plus the spot light as the pool on the road from the
+headlamps' own position. `SKI_LEGACY_DEBUG=lamptest` / `lampday` lights every car for screenshots. Not ported:
+indicators / hazards (only wrecks use them in the JS), the daytime running lights of traffic by day (its poses do
+not say which cars are running).
 
 **Sky, clouds, sun**: `SKY_FRAG` ported (Rayleigh shading, twilight arch, halo, cirrus, the overcast deck's texture,
 the limb-darkened HDR disc) plus stars, the Milky Way and the moon; a **ray-marched cumulus layer** (Beer-powder
@@ -1397,7 +1411,13 @@ tiny UV islands, so the lift cars' and the trees' LODs carry a colour per vertex
 instead of sampling it (`ModelLoadOptions::lodVertexColor`), and the trees' LODs are made by vertex clustering as the
 JS's `clusterDecimate` (`lodCluster`): whole branches with white snow at every distance instead of shredded grey-green
 blobs from 40 m and pink polka-dot cabins from 32 m. Colour maps load at twice the models' budgets on High and up
-(the 2048 px originals; with S3TC, which Apple's OpenGL lacks, on Balanced too, block-compressed). The terrain noise and detail maps use the GPU's maximum anisotropy from Balanced up, and the
+(the 2048 px originals; with S3TC, which Apple's OpenGL lacks, on Balanced too, block-compressed). On Balanced
+without S3TC only what you see closest keeps its 2048 px colour map (`ModelLoadOptions::colorTextureSize`): your
+skier, your skis and the plaza's rental shop, hotel, ticket booth and market stalls: +125 MB of textures.
+**LOD hand-overs** are dithered cross-fades (trees at 40 / 150 m and into the far-forest impostors, the lift cars at
+32 / 110 m): within a band of 16 % of the distance the outgoing LOD keeps the pixels the incoming one drops, by
+the same dither, so nothing pops. The gondola cabin's painted windows are tinted glass that mirrors the sky, a band
+of ridges and the snowfield (shading 6). The terrain noise and detail maps use the GPU's maximum anisotropy from Balanced up, and the
 baked snow crystal map reaches 50 m on Balanced (new) and 80 m on High and up (was 45 m).
 
 **Presets** (`engine/quality.h`; the SETTINGS row has the web game's seven): `switch` (one 1024 shadow map with

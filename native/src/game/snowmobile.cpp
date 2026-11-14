@@ -2,6 +2,7 @@
 #include "core/log.h"
 #include "core/noise.h"
 #include "engine/asset_manager.h"
+#include "game/people.h"
 #include "game/play_data.h"
 #include "player/player.h"
 #include "world/scenery.h"
@@ -13,7 +14,7 @@ namespace sl {
 namespace {
 // snowmobile.js SLED
 constexpr double LEN = 2.9, VMAX = 35, VBOOST = 40, VBACK = 4.5, ACC = 14, BRAKE = 13, DRAG = 0.0028, ROLL = 0.35;
-constexpr double MU = 1.3, MU_ICE = 0.62, GRIP = 8, GRIP_ICE = 2.4, TURN = 1.7, CRASH = 12.5, G = 9.81, R = 1.0;
+constexpr double MU = 1.3, MU_ICE = 0.62, GRIP = 8, GRIP_ICE = 2.4, TURN = 1.7, CRASH = 12.5, G = 9.81;
 const dvec3 SEAT(0, 0.74, -0.32);
 }
 
@@ -131,30 +132,94 @@ bool Snowmobiles::update(double dt, const In& in) {
     if (s.air) { s.vy -= G * h; np.y = s.pos.y + s.vy * h; if (np.y <= gy) { np.y = gy; s.air = false; s.bounce = -std::min(0.15, -s.vy * 0.02); } }
     else if (gy < s.pos.y - std::max(0.3, std::fabs(s.v) * h * 1.2) && std::fabs(s.v) > 12) { s.air = true; s.vy = (s.pos.y - gy) / h * 0.0 + grade * s.v * 0.5; np.y = s.pos.y; }
     else np.y = gy;
-    // trees and colliders: bump off; a hard hit straight in throws you off
-    double into = 0, nx = 0, nz = 0;
-    if (const Tree* t = c_.scenery->treeAt(np.x, np.z, R, false)) { double dx = np.x - t->x, dz = np.z - t->z, d = std::max(1e-3, std::hypot(dx, dz)); nx = dx / d; nz = dz / d; np.x = t->x + nx * (t->trunk + R); np.z = t->z + nz * (t->trunk + R); into = -(fx * s.v * nx + fz * s.v * nz); }
-    if (const std::vector<int>* near = c_.scenery->collidersNear(np.x, np.z))
-      for (int ci : *near) {
-        const Collider& c = c_.scenery->colliders()[size_t(ci)];
-        if (c.downUntil > c_.now || c.top < np.y + 0.4) continue;
+    // snowmobile.js collide: soft bumps off trees, rocks, buildings, towers, nets, the traffic, parked cars, buses,
+    // trains, patrol cars and parked sleds (the dynamic colliders) and people; a hard hit at speed throws you off.
+    // Two circles along the sled (0.95 m ahead, 0.85 m behind its middle, 0.72 m each).
+    double px = 0, pz = 0, hard = 0;
+    int nHit = 0;
+    bool soft = false;
+    const double vx = fx * s.v + rx * s.vs, vz = fz * s.v + rz * s.vs;
+    auto hit = [&](double hx, double hz, double over, bool isSoft) {
+      px += hx * over; pz += hz * over; nHit++;
+      const double vn = vx * hx + vz * hz;
+      if (vn < 0) { if (!isSoft && -vn >= hard) hard = -vn; soft = soft || isSoft; }
+    };
+    for (double k : {0.95, -0.85}) {
+      const double cx = np.x + fx * k, cz = np.z + fz * k, PR = 0.72;
+      if (const Tree* t = c_.scenery->treeAt(cx, cz, PR, true)) {   // (the whole tree: its branches too)
+        double dx = cx - t->x, dz = cz - t->z, l = std::hypot(dx, dz);
+        if (l < 1e-6) { dx = 1; dz = 0; l = 1; }
+        hit(dx / l, dz / l, std::max(0.0, PR + double(t->crown) - l), false);
+      }
+      if (const Rock* q = c_.scenery->rockAt(cx, cz, PR, 0)) {
+        double dx = cx - q->x, dz = cz - q->z, l = std::hypot(dx, dz);
+        if (l < 1e-6) { dx = 1; dz = 0; l = 1; }
+        if (double(q->y) + 0.75 * double(q->s) > np.y + 0.45) hit(dx / l, dz / l, std::max(0.0, PR + double(q->r) - l), false);
+      }
+      auto test = [&](const Collider& c, bool solid) {
+        if (c.downUntil > c_.now) return;
+        if (c.top < np.y + 0.45) return;   // (low solid props: a kerb, a step, paving over the snow: driven over)
+        const bool isSoft = c.soft && !solid;
         if (c.r >= 0) {
-          double dx = np.x - c.x, dz = np.z - c.z, d = std::hypot(dx, dz);
-          if (d < c.r + R && d > 1e-6) { nx = dx / d; nz = dz / d; np.x = c.x + nx * (c.r + R); np.z = c.z + nz * (c.r + R); into = std::max(into, -(fx * s.v * nx + fz * s.v * nz)); }
+          const double dx = cx - c.x, dz = cz - c.z, l = std::hypot(dx, dz);
+          if (l < c.r + PR) hit(l > 1e-3 ? dx / l : 1, l > 1e-3 ? dz / l : 0, c.r + PR - l, isSoft);
         } else {
-          double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
-          double lx = (np.x - c.x) * cs - (np.z - c.z) * sn, lz = (np.x - c.x) * sn + (np.z - c.z) * cs;
-          double ox = c.hw + R - std::fabs(lx), oz = c.hd + R - std::fabs(lz);
+          const double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
+          const double lx = (cx - c.x) * cs - (cz - c.z) * sn, lz = (cx - c.x) * sn + (cz - c.z) * cs;
+          const double ox = c.hw + PR - std::fabs(lx), oz = c.hd + PR - std::fabs(lz);
           if (ox > 0 && oz > 0) {
             double nlx = 0, nlz = 0;
             if (ox < oz) nlx = lx >= 0 ? 1 : -1; else nlz = lz >= 0 ? 1 : -1;
-            double c2 = std::cos(c.rot), s2 = std::sin(c.rot);
-            nx = nlx * c2 - nlz * s2; nz = nlx * s2 + nlz * c2;
-            np.x += nx * std::min(ox, oz); np.z += nz * std::min(ox, oz);
-            into = std::max(into, -(fx * s.v * nx + fz * s.v * nz));
+            const double c2 = std::cos(c.rot), s2 = std::sin(c.rot);
+            hit(nlx * c2 - nlz * s2, nlx * s2 + nlz * c2, std::min(ox, oz), isSoft);
           }
         }
+      };
+      if (const std::vector<int>* near = c_.scenery->collidersNear(cx, cz))
+        for (int ci : *near) test(c_.scenery->colliders()[size_t(ci)], false);
+      // (the moving things: cars, buses, trains, patrol cars, the other sleds. A vehicle's box is `soft` for you on
+      // foot; to a sled its body is solid)
+      for (const Collider& c : c_.scenery->dynamic) {
+        const double size = c.r >= 0 ? c.r : std::max(c.hw, c.hd);
+        if (std::fabs(c.x - cx) > size + PR + 0.5 || std::fabs(c.z - cz) > size + PR + 0.5) continue;
+        test(c, c.r < 0 && c.hd > 1.2);
       }
+    }
+    // people (the villagers): the sled bumps off them; a hit knocks them over (peoplehits.js)
+    if (c_.folk) {
+      std::vector<int> folk;
+      c_.folk->near(np, 3, folk);
+      for (int i : folk) {
+        if (c_.folk->down(i)) continue;
+        const dvec3& q = c_.folk->pos(i);
+        if (std::fabs(q.y - np.y) > 2.5) continue;
+        for (double k : {0.95, -0.85}) {
+          const double cx = np.x + fx * k, cz = np.z + fz * k, dx = cx - q.x, dz = cz - q.z, l = std::hypot(dx, dz), rr = 0.72 + 0.4;
+          if (l >= rr || l < 1e-3) continue;
+          const double hx = dx / l, hz = dz / l, closing = -(vx * hx + vz * hz), sp = std::hypot(vx, vz);
+          if (closing > 0.5) c_.folk->knock(i, (sp > 1 ? vx / sp : -hx) * closing, (sp > 1 ? vz / sp : -hz) * closing);
+          hit(hx, hz, rr - l, true);
+          break;
+        }
+      }
+    }
+    double into = 0;
+    if (nHit) {
+      const double l0 = std::hypot(px, pz), l = l0 > 0 ? l0 : 1, hx = px / l, hz = pz / l;
+      np.x += px; np.z += pz;
+      if (hard > CRASH && !soft) into = hard;
+      else {
+        const double vn = vx * hx + vz * hz;
+        if (vn < 0) {
+          // a soft bounce back, some speed lost
+          double wx = vx - hx * vn * 1.3, wz = vz - hz * vn * 1.3;
+          const double loss = std::max(0.5, 1 - (-vn) * 0.04);
+          wx *= loss; wz *= loss;
+          s.v = wx * fx + wz * fz; s.vs = wx * rx + wz * rz;
+          s.bounce -= std::min(0.06, -vn * 0.01);
+        }
+      }
+    }
     s.pos = np;
     s.bounce *= std::exp(-h * 6);
     if (into > CRASH) {
@@ -166,7 +231,6 @@ bool Snowmobiles::update(double dt, const In& in) {
       c_.player->knockDown(1, dvec3(fx * sp * 0.6, 3, fz * sp * 0.6), 1, true);
       return true;
     }
-    if (into > 0.5) { s.v *= 0.35; s.vs *= 0.5; }
   }
   return false;
 }

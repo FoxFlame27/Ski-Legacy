@@ -2687,12 +2687,21 @@ int runGame(const GameOptions& opt) {
       renderer.fx.streaks = save.settingOn("speedFx") && started && !paused ? float(smoothstep(18, 36, sp)) * 0.9f : 0.f;
       renderer.fx.flash = save.settingOn("speedFx") ? float(fxFlash) : 0.f;
       renderer.fx.hit = save.settingOn("vignette") ? float(fxHit) : 0.f;
-      // dynamic resolution (the switch preset): the 3D resolution follows the frame time toward 30 fps
-      if (q.dynamicRes && !opt.autotest && !mptest && started) {
+      // dynamic resolution: the 3D resolution follows the frame time (switch preset: toward 30 fps; every other preset:
+      // toward 60 fps), under a pixel budget per preset like the web game's (a Retina / 4K drawable is 4-8 MP: drawing
+      // the 3D at that size made a MacBook crawl; the HUD and menus stay at full resolution)
+      if (!opt.autotest && !mptest && started) {
         double ms = frameDt * 1000;
-        if (ms > 36 && dynScale > 0.6) dynScale = std::max(0.6, dynScale - 0.02);
-        else if (ms < 28 && dynScale < 1.0) dynScale = std::min(1.0, dynScale + 0.005);
-        float want = float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0) * dynScale);
+        bool console = q.dynamicRes;
+        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : 0.55;
+        if (ms > hi && dynScale > floorS) dynScale = std::max(floorS, dynScale - (ms > hi * 1.6 ? 0.05 : 0.02));
+        else if (ms < lo && dynScale < 1.0) dynScale = std::min(1.0, dynScale + 0.005);
+        const std::string& qn = q.name;
+        double budgetMP = qn == "super" ? 1.2 : qn == "performance" ? 1.6 : qn == "switch" ? 1.0 : qn == "balanced" ? 2.3
+                        : qn == "high" ? 3.2 : qn == "ultra" ? 4.5 : 1e9;
+        double px = double(std::max(1, renderer.width())) * double(std::max(1, renderer.height()));
+        double budgetS = std::min(1.0, std::sqrt(budgetMP * 1e6 / px));
+        float want = float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0) * budgetS * dynScale);
         if (std::fabs(want - renderer.renderScale()) > 0.04f) renderer.setRenderScale(want);
       }
       sfx.update(paused ? 0 : frameDt, hour, light.night, weather.wind, cam.pos);
@@ -2888,7 +2897,9 @@ int runGame(const GameOptions& opt) {
       if (nav.up || nav.down || nav.left || nav.right || nav.tabPrev || nav.tabNext) audio.play("tick");
       if (nav.confirm || nav.click || nav.cancel) audio.play("click");
     }
-    menus.frame(nav, frameDt, simTime);
+    // (the menus' animations run on the wall clock: simTime stops while paused, so the pause menu's buttons, which
+    // fade / slide in over 0.25 s from the moment it opens, stayed invisible)
+    menus.frame(nav, frameDt, plat->timeSeconds());
     if (tmap.isOpen()) {
       int carIdx = -1;
       for (size_t i = 0; i < drive.parked.size(); i++) if (drive.parked[i].owned && !drive.parked[i].plate.empty() && (carIdx < 0 || drive.parked[i].driving)) carIdx = int(i);

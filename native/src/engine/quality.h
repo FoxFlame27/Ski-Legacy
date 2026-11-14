@@ -65,14 +65,9 @@ struct Quality {
     if (n == "switch" || n == "super" || n == "performance" || n == "balanced" || n == "high" || n == "ultra" || n == "superultra") return n;
     return "auto";
   }
-  /// first launch: High on Apple silicon (an M-series GPU carries it at 60 fps), Balanced elsewhere
-  static std::string platformDefault() {
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
-    return "high";
-#else
-    return "balanced";
-#endif
-  }
+  /// first launch: Balanced everywhere (a fanless MacBook Air ran High at a crawl; dynamic resolution and the pixel
+  /// budget keep it smooth, and the settings offer more)
+  static std::string platformDefault() { return "balanced"; }
   static Quality preset(const std::string& web) {
     Quality q;
     std::string n = normalize(web);

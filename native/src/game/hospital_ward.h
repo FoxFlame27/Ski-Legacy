@@ -58,6 +58,8 @@ public:
   double bedFloor() const { return role_ == Role::Patient ? rooms_.toWorld(0, bedTops_[size_t(bed_)] + 0.04, 0).y : 0; }
   bool third() const { return third_; }
   void setBody(const dvec3& eye, const dvec3& body) { eye_ = eye; body_ = body; hasEye_ = true; }
+  /// (debug) a spot in front of the first visitor's chair, facing it
+  bool debugChair(dvec3& at, double& yaw) const { if (chairs_.empty() || role_ == Role::None) return false; const Chair& c = chairs_[0]; at = rooms_.toWorld(c.x, 0, c.z + 0.9); yaw = PI; return true; }
   /// (debug: wardtest) fit in a moment
   void debugFit() { if (left_ > 0.05) left_ = 0.05; }
 
@@ -93,6 +95,7 @@ private:
   double pendingSeconds_ = -1, captureWait_ = 0;
   int capture_ = 99;                // the photograph being taken (VIEWS; past them: none)
   bool armed_ = false;
+  float viewDay_ = 1;               // the daylight (1 - night) when the photographs were taken
   std::shared_ptr<Model> paneModel_[5];
   bool hasEye_ = false;
 };

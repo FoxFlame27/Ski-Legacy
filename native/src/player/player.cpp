@@ -464,6 +464,13 @@ void Player::crash(int side, FallState::Kind kind, bool ski, double flipAngle, d
   events.push_back({bump ? PlayerEvent::Type::Bump : PlayerEvent::Type::Crash, float(clamp(sp / 25, 0.2, 1))});
 }
 
+void Player::dropFrom(double y) {
+  if (mode != PlayerMode::Ski || y <= pos.y) return;
+  pos.y = y; prevPos = renderPos = pos;
+  vel = dvec3(0, -0.5, 0);
+  takeoff(false);
+}
+
 void Player::knockDown(int side, const dvec3& v, int kind, bool strike) {
   if (mode == PlayerMode::Fall || mode == PlayerMode::Sit) return;
   if (mode == PlayerMode::Walk && skisOn) skisOn = false;

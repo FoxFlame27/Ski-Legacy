@@ -13,6 +13,7 @@
 #pragma once
 #include "game/heli_flight.h"
 #include "game/play.h"
+#include "game/trailmap.h"
 #include "game/vehicles.h"
 #include <memory>
 #include <string>
@@ -96,6 +97,7 @@ public:
   void draw(Renderer& r, const dvec3& cam) const;
   /// (debug: ambtest) straight to the pad, landed, you in the cabin
   void debugArrive();
+  void debugStall();
   bool fast = false, inCabin = false, attached = false, gone = false, free = false, leaving = false, boarding = false;
   double t = 0, pt = 0, liftT = -1;
   Ambulance amb;
@@ -170,6 +172,15 @@ public:
   bool rotorAt(dvec3& out, double& rpmOut, bool& inside) const;
   bool sirenAt(dvec3& out) const;
   std::function<bool()> blocked;      // (no flying off mid-chase)
+  /// the flight planner (ui/travel.js mode 'chart', TrailMap::heliTravel): the game opens the chart; planner() gives its
+  /// destinations their flights and adds the race courses' landing spots (heli.js openDialog)
+  std::function<void()> openChart;
+  void planner(TrailMap::Travel& T);
+  int price() const { return price_; }
+  const std::string& hudPrompt() const { return promptText_; }
+  bool away() const { return away_; }
+  /// (debug) in the air at (x, z), agl m over the snow, the rotor at speed
+  void debugPlace(double x, double z, double agl, double yaw = 0);
   /// (debug: helitest) aboard at once on a flight plan to zone i, paid
   void debugFly(int zone) { if (state != State::Parked) return; c_.spend(price_); plan_ = zone >= 0 && size_t(zone) < zones_.size() ? &zones_[size_t(zone)] : nullptr; board(); }
 
@@ -224,6 +235,7 @@ private:
   dvec3 handPos_{0}, handLook_{0};
   double handFov_ = 62;
   bool parkSkier_ = false;
+  void fly(const DropZone* z);
   int flights_ = 0;
   struct { bool ok = false, warn = false, onPad = false, landed = false; std::string label; } jump_;
   struct { bool ok = false, warn = false, pad = false; double hold = 0, t = 0; std::string label; } land_;
@@ -235,12 +247,22 @@ private:
   int prevView_ = 0;
   // heli/fx.js Downwash: the powder blown out from under the rotor when it is close to the snow
   struct Puff { dvec3 p{0}, v{0}; double age = 1e9, life = 1, s0 = 1, s1 = 2; };
-  std::vector<Puff> puffs_;
+  std::vector<Puff> puffs_, smoke_;   // smoke_: fx.js SmokeFlare, the red smoke on the drop zone
+  size_t smokeNext_ = 0;
+  double smokeAcc_ = 0, lampOn_ = 0;
+  bool flareOn_ = false;
+  dvec3 flareAt_{0};
+  std::shared_ptr<Model> smokeModel_[4];
+  std::shared_ptr<struct RigGear> gear_;   // your skis and poles in the basket (model.js loadRack)
+  bool rackOn_ = false;
+  AssetManager* assets_ = nullptr;
+  void loadRack();
   size_t puffNext_ = 0;
   double puffAcc_ = 0;
   uint32_t rnd_ = 0x2545f491u;
   double rnd() { rnd_ = rnd_ * 1664525u + 1013904223u; return (rnd_ >> 8) / 16777216.0; }
   void updateWash(double dt);
+  void updateSmoke(double dt);
   double collide(double dt);
   std::shared_ptr<Model> puffModel_[4];
   VehicleDraw puffDraw_;

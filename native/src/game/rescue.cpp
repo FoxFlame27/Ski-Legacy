@@ -353,6 +353,7 @@ void HeliRescue::intoCabin() {
   dvec3 sp, sf;
   h_.seat(sp, sf);
   p.sitOn(sp, sf);
+  h_.loadRack();
   // first shot of the ride: behind the left shoulder
   h_.cam.yaw = h_.flight.yaw + PI - 0.6; h_.cam.pitch = 0.2; h_.cam.dist = 19; h_.cam.lastMouse = h_.time;
   h_.placeCamera(0, true, false);
@@ -452,6 +453,7 @@ void HeliRescue::cleanup() {
     h_.place();
   }
   ropeOn_ = false;
+  h_.rackOn_ = false;
   amb.hide();
   sirenOff_ = false;
   phase = Phase::None; spot_ = Spot{}; attached = false; inCabin = false; seated = false;
@@ -475,4 +477,10 @@ void sl::HeliRescue::debugArrive() {
   intoCabin();
   h_.pilot.phase = HeliHomePilot::Phase::Landed;
   go(Phase::Arrive);
+}
+
+/// (debug) the watchdog: as if it had not got any closer for STUCK seconds / the pick-up had taken LIMIT seconds
+void sl::HeliRescue::debugStall() {
+  if (phase == Phase::Home || phase == Phase::Ambulance) { watch_.phase = phase; watch_.best = -1e18; watch_.t = STUCK; }
+  else t = LIMIT + 1;
 }

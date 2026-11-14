@@ -171,7 +171,27 @@ vec4 Canvas2D::parseColor(const std::string& in) {
 // ---------------------------------------------------------------- canvas
 Canvas2D::Canvas2D(int w, int h, const FontSet* fonts) : w_(std::max(1, w)), h_(std::max(1, h)), px_(size_t(w_) * h_ * 4, 0), fonts_(fonts) {}
 
-void Canvas2D::fillStyle(const std::string& c) { st_.fill = parseColor(c); }
+void Canvas2D::fillStyle(const std::string& c) { st_.fill = parseColor(c); st_.grad.reset(); }
+void Canvas2D::fillGradient(bool radial, float x0, float y0, float r0, float x1, float y1, float r1, std::vector<std::pair<float, vec4>> stops) {
+  if (stops.empty()) return;
+  std::stable_sort(stops.begin(), stops.end(), [](const auto& p, const auto& q) { return p.first < q.first; });
+  auto g = std::make_shared<State::Gradient>();
+  g->radial = radial; g->a = xf(x0, y0); g->b = xf(x1, y1);
+  const float k = scaleK();
+  g->r0 = r0 * k; g->r1 = r1 * k;
+  st_.fill = stops.back().second;
+  g->stops = std::move(stops);
+  st_.grad = g;
+}
+vec4 Canvas2D::State::Gradient::at(float x, float y) const {
+  float t;
+  if (radial) t = (glm::length(vec2(x, y) - b) - r0) / std::max(1e-4f, r1 - r0);
+  else { const vec2 d = b - a; t = glm::dot(vec2(x, y) - a, d) / std::max(1e-6f, glm::dot(d, d)); }
+  if (t <= stops.front().first) return stops.front().second;
+  for (size_t i = 1; i < stops.size(); i++)
+    if (t <= stops[i].first) { const float u = (t - stops[i - 1].first) / std::max(1e-6f, stops[i].first - stops[i - 1].first); return stops[i - 1].second + (stops[i].second - stops[i - 1].second) * u; }
+  return stops.back().second;
+}
 void Canvas2D::strokeStyle(const std::string& c) { st_.stroke = parseColor(c); }
 void Canvas2D::font(const std::string& f) {
   size_t p = f.find("px");
@@ -315,6 +335,8 @@ void Canvas2D::fillPolys(const std::vector<std::vector<vec2>>& polys, const vec4
     }
   }
   if (edges.empty()) return;
+  // (the fill style as a gradient: fills only, not the strokes and the text drawn through here in their own colour)
+  const State::Gradient* gradient = st_.grad && &color == &st_.fill && !mask ? st_.grad.get() : nullptr;
   int y0 = std::max(0, int(std::floor(ymin))), y1 = std::min(h_ - 1, int(std::ceil(ymax)));
   int x0 = std::max(0, int(std::floor(xmin))), x1 = std::min(w_ - 1, int(std::ceil(xmax)));
   if (x0 > x1) return;
@@ -352,12 +374,13 @@ void Canvas2D::fillPolys(const std::vector<std::vector<vec2>>& polys, const vec4
       size_t o = size_t(y) * w_ + x;
       if (mask) { (*mask)[o] = uint8_t(std::lround(cov * 255)); continue; }
       if (st_.clip) cov *= (*st_.clip)[o] / 255.f;
-      float a = cov * color.w * st_.alpha;
+      const vec4 col = gradient ? gradient->at(float(x) + 0.5f, float(y) + 0.5f) : color;
+      float a = cov * col.w * st_.alpha;
       if (a <= 0) continue;
       uint8_t* d = &px_[o * 4];
       float da = d[3] / 255.f, oa = a + da * (1 - a);
       for (int k = 0; k < 3; k++) {
-        float v = (color[k] * a + d[k] / 255.f * da * (1 - a)) / std::max(oa, 1e-6f);
+        float v = (col[k] * a + d[k] / 255.f * da * (1 - a)) / std::max(oa, 1e-6f);
         d[k] = uint8_t(std::lround(std::clamp(v, 0.f, 1.f) * 255));
       }
       d[3] = uint8_t(std::lround(std::clamp(oa, 0.f, 1.f) * 255));

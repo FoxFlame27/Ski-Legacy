@@ -43,7 +43,10 @@ public:
 
   // state
   void fillStyle(const std::string& css);
-  void fillColor(const vec4& c) { st_.fill = c; }   // (a gradient's mean colour: straight RGBA 0..1, sRGB)
+  void fillColor(const vec4& c) { st_.fill = c; st_.grad.reset(); }   // (straight RGBA 0..1, sRGB)
+  /// createLinearGradient(x0, y0, x1, y1) / createRadialGradient(x0, y0, r0, x1, y1, r1) as the fill style: the
+  /// colour stops (offset 0..1, straight sRGB RGBA), interpolated per pixel (radial: about the outer circle's centre)
+  void fillGradient(bool radial, float x0, float y0, float r0, float x1, float y1, float r1, std::vector<std::pair<float, vec4>> stops);
   void strokeStyle(const std::string& css);
   void lineWidth(float w) { st_.lineWidth = w; }
   void globalAlpha(float a) { st_.alpha = a; }
@@ -89,6 +92,8 @@ public:
 private:
   struct State {
     vec4 fill{0, 0, 0, 1}, stroke{0, 0, 0, 1};
+    struct Gradient { bool radial = false; vec2 a{0}, b{0}; float r0 = 0, r1 = 1; std::vector<std::pair<float, vec4>> stops; vec4 at(float x, float y) const; };
+    std::shared_ptr<Gradient> grad;   // the fill style is this gradient (device space)
     float lineWidth = 1, alpha = 1, px = 10;
     bool bold = false;
     bool roundCap = false, squareCap = false;

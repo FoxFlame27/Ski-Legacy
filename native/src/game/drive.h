@@ -74,6 +74,8 @@ public:
   dvec2 vel() const { return dvec2(d_.vx, d_.vz); }
   double halfLen() const { return d_.half; }
   double halfWidth() const { return d_.w / 2; }
+  /// a bus pushing through (bus.js ramContact 'drive'): your car moved out of its way and given some of its speed
+  void push(double dx, double dz, double vx, double vz) { if (!d_.on) return; d_.x += dx; d_.z += dz; d_.vx += (vx - d_.vx) * 0.5; d_.vz += (vz - d_.vz) * 0.5; }
   bool air() const { return d_.air; }
   double damage() const;
   std::string label() const;

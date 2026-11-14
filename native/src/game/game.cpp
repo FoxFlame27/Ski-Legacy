@@ -1768,6 +1768,8 @@ int runGame(const GameOptions& opt) {
           input.releaseInjected();
           t5.course = nullptr;
           for (const Course& c : playData.courses) if (!t5.course || c.length < t5.course->length) t5.course = &c;
+          if (const char* rid = std::getenv("SKI_LEGACY_RACE")) if (const Course* rc = races.courseById(rid)) t5.course = rc;   // (debug: that course)
+          if (off("p5test") && save.skis.empty()) { save.skis = "rental"; player.hasSkis = true; }   // (debug: straight here, the ski shop skipped)
           if (t5.course) {
             save.earn(2000);
             t5.money0 = save.money;
@@ -1788,6 +1790,7 @@ int runGame(const GameOptions& opt) {
           input.injectMove(-steer, sp < 19 ? 1.f : 0.f);
           if (f % 100 == 0) SL_INFO("[autotest] race t=%6.2fs  %5.0f m down the course  %5.1f km/h  lat %5.1f", races.raceTime(), races.progress(), sp * 3.6, pr.lat);
         } else if (races.finished()) input.releaseInjected();
+        if (off("raceshots") && races.active() && !opt.png.empty() && pendingPng.empty() && f % 40 == 20 && f < 1300) pendingPng = pngVariant(opt.png, ("race" + std::to_string(f / 40)).c_str());   // (debug: the race every 2 s)
         if (races.resultsUp() && t5.resF < 0) {
           t5.resF = f;
           SL_INFO("[autotest] race: finished in %s, place %d, money $%lld -> $%lld", fmtRaceTime(races.raceTime()).c_str(), races.place(), (long long)t5.money0, (long long)save.money);
@@ -2206,6 +2209,11 @@ int runGame(const GameOptions& opt) {
     busBoxes.clear();
     buses.boxes(busBoxes);
     traffic.update(vdt, player.pos, &drive, busBoxes, cam);
+    if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
+      dvec3 bp; double bh;
+      if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
+      if (!opt.png.empty() && pendingPng.empty() && frame % 45 == 0 && buses.debugCam(bp, bp)) pendingPng = pngVariant(opt.png, ("bus" + std::to_string(frame / 45)).c_str());
+    }
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
@@ -2865,6 +2873,10 @@ int runGame(const GameOptions& opt) {
         scenery.update(cam.pos);
         resort.update(0, cam.pos);
       }
+    }
+    if (dvec3 bc, bl; off("bustest") && buses.debugCam(bc, bl)) {   // (debug: the camera on the bus test)
+      cam.lookAt(bc, bl); cam.fovY = 55;
+      terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
     }
     if (off("sidecam") && player.mode == PlayerMode::Sit && lifts.rideLine()) {   // (debug: look at the rider from the side)
       LiftLine* rl = lifts.rideLine();

@@ -434,6 +434,11 @@ void Traffic::knock(int id, double vx, double vz, double w) {
   c.mode = Car::Mode::Knocked; c.kvx = vx; c.kvz = vz; c.kw = w; c.kt = 0; c.v = 0; c.lot = c.bay = -1;
 }
 
+void Traffic::takeOff(int id) {
+  if (id < 0 || size_t(id) >= list.size()) return;
+  despawn(list[size_t(id)], 1 + rnd() * 4);
+}
+
 void Traffic::others(std::vector<OtherBody>& out, const dvec3& near) const {
   for (size_t i = 0; i < list.size(); i++) {
     const Car& c = list[i];

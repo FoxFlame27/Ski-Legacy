@@ -87,9 +87,15 @@ struct Model {
   std::vector<int> roots;
   std::vector<Mesh> meshes;
   std::vector<Material> materials;
+  std::vector<Material> lodMaterials;   // (ModelLoadOptions::lodVertexColor) per material: what LOD >= 1 draws with
   std::vector<Skin> skins;
   std::vector<AnimClip> clips;
   vec3 bmin{1e30f}, bmax{-1e30f};  // bind pose bounds in model space (all mesh nodes)
+  /// the material a primitive draws with at a level of detail
+  const Material& materialFor(int index, int lod) const {
+    size_t i = size_t(index < 0 ? 0 : index);
+    return lod > 0 && i < lodMaterials.size() ? lodMaterials[i] : materials[i];
+  }
   std::vector<std::shared_ptr<CpuImage>> images;   // (Phase 7, keepCpu) per glTF texture
 
   int findNode(const std::string& n) const {

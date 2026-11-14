@@ -268,7 +268,7 @@ private:
   int nCasc_ = 1;
   vec4 planes_[6];
   uint32_t lastDraws_ = 0;
-  double time_ = 0, lastClock_ = -1;
+  double time_ = 0, lastClock_ = -1, windPhase_ = 0;
   vec3 envZenith_{0}, envHorizon_{0}, envSun_{0}, envGlow_{0};
   vec2 sunUV_{0};
   float shaftsK_ = 0;

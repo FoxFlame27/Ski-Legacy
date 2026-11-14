@@ -665,7 +665,11 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   // the clock (clouds, wind, twinkle)
   {
     double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (lastClock_ >= 0) time_ += std::min(0.25, now - lastClock_);
+    double dtc = lastClock_ >= 0 ? std::min(0.25, now - lastClock_) : 0.0;
+    time_ += dtc;
+    // (the trees' wind phase: integrated, so a change of the weather's wind speeds the sway up without a jump; the
+    // JS runs it on plain time, a storm here a little faster)
+    windPhase_ += dtc * (1.0 + 0.5 * std::clamp(double(L.wind), 0.0, 1.0));
     lastClock_ = now;
   }
   viewProj_ = cam_.proj() * cam_.view();
@@ -701,7 +705,7 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   fb.fogParams = vec4(L.fogDensity, L.fogFalloff, 1.0f / float(atlasW_), L.exposure);
   computeSky(L, fb);
   fb.misc = vec4(L.night, L.snowCover, float(set_.fx), L.icy);
-  fb.misc2 = vec4(1.f, float(time_) * (1.f + L.wind * 1.5f), L.snow, set_.trailSize > 0 && !L.interior ? 1.f : 0.f);
+  fb.misc2 = vec4(1.f, float(windPhase_), L.snow, set_.trailSize > 0 && !L.interior ? 1.f : 0.f);
   // the trail map's window: its centre moves in steps of 1/16 of the map (the strips it leaves are cleared)
   if (set_.trailSize > 0) {
     double S = set_.trailRange, step = S / 16;
@@ -783,7 +787,7 @@ void Renderer::submitModel(const Model& m, const dvec3& origin, const mat4& loca
       it.first = L.first; it.count = L.count;
       const auto& SL = p.lods[size_t(std::min<int>(lod + 1, int(p.lods.size()) - 1))];
       it.sFirst = SL.first; it.sCount = SL.count;
-      it.mat = &m.materials[size_t(std::max(0, p.material))];
+      it.mat = &m.materialFor(p.material, std::min<int>(lod, int(p.lods.size()) - 1));
       it.skinned = p.skinned && pose && !pose->joints.empty();
       it.joints = it.skinned ? &pose->joints : nullptr;
       it.model = it.skinned ? rel : rel * (pose && pose->global.size() == m.nodes.size() ? pose->global[i] : mat4(1));
@@ -823,7 +827,7 @@ void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod,
       const auto& L = p.lods[size_t(std::min<int>(lod, int(p.lods.size()) - 1))];
       it.first = L.first; it.count = L.count; it.instances = b.count();
       it.sFirst = L.first; it.sCount = L.count;
-      it.mat = &m.materials[size_t(std::max(0, p.material))];
+      it.mat = &m.materialFor(p.material, std::min<int>(lod, int(p.lods.size()) - 1));
       it.model = fit * g;
       it.shadow = castShadow;
       it.height = height;
@@ -852,7 +856,7 @@ void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin
       const auto& L = p.lods[size_t(std::min<int>(lod, int(p.lods.size()) - 1))];
       it.first = L.first; it.count = L.count; it.instances = b.count();
       it.sFirst = L.first; it.sCount = L.count;
-      it.mat = matOverride ? matOverride : &m.materials[size_t(std::max(0, p.material))];
+      it.mat = matOverride ? matOverride : &m.materialFor(p.material, std::min<int>(lod, int(p.lods.size()) - 1));
       it.model = g;
       it.origin = o;
       it.shadow = castShadow && it.mat->alpha != Material::Alpha::Blend;

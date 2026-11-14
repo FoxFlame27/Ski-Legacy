@@ -2975,6 +2975,16 @@ int runGame(const GameOptions& opt) {
       tmap.frame(ui, nav, input, frameDt, rideKind == Ride::Car ? drive.pos() : player.pos, rideKind == Ride::Car ? drive.yaw() : player.heading, carIdx >= 0 ? &carPos : nullptr);
       if (!tmap.isOpen() && started && !opt.autotest) plat->setRelativeMouse(true);
     }
+    // (main.js: getting into / out of your car, a bus, the Wolkenspitzbahn, the Legacy Express and another player's
+    // car, walking into / out of a room, PLAY and back to the main menu all dip to dark: transition.fade)
+    {
+      static Ride prevRide = Ride::None;
+      static bool prevInside = false, prevStarted = false;
+      auto fades = [](Ride r) { return r == Ride::Car || r == Ride::Bus || r == Ride::Rail || r == Ride::Express || r == Ride::Passenger; };
+      bool inside = rooms.inside();
+      if (!opt.autotest && !mptest && ((rideKind != prevRide && (fades(rideKind) || fades(prevRide))) || inside != prevInside || started != prevStarted)) trans.fade();
+      prevRide = rideKind; prevInside = inside; prevStarted = started;
+    }
     // (transition.js: the scenes between two places, over everything; the old place stays on screen until covered)
     trans.draw(ui);
     renderer.holdFrame = trans.holdsFrame();

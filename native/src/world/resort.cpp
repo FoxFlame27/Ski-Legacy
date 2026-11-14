@@ -134,13 +134,19 @@ gfx::Texture replayCanvas(gfx::Device& dev, const nlohmann::json& c, const FontS
   // API it uses: line caps, dashes, putImageData's pixels and the fonts it names, as the browser draws them)
   const bool exact = c.value("exact", false);
   const bool grad = c.value("grad", false);
+  bool masked = false;
   g.systemFonts(exact);
   for (auto& op : c["ops"]) {
     if (!op.is_array() || op.empty()) continue;
     const std::string n = op[0].get<std::string>();
+    // (a compositing mask, destination-in / -out: the Autohaus yard's faded sides, a tag's punched hole. Canvas2D
+    // only paints source-over: what is drawn under another mode is left out, not painted over the whole canvas in the
+    // last fill colour, which turned the yard in front of the Autohaus yellow)
+    if (masked && n != "set" && n != "save" && n != "restore") continue;
     if (n == "set") {
       const std::string k = op[1].get<std::string>();
       const auto& v = op[2];
+      if (k == "globalCompositeOperation" && v.is_string()) masked = v.get<std::string>() != "source-over";
       if (k == "fillStyle" && v.is_string()) g.fillStyle(v.get<std::string>());
       else if (k == "fillStyle" && grad && v.is_object() && v.contains("s") && v["s"].is_array() && !v["s"].empty()) {
         // (a gradient, the rooms' canvases: its colour stops' mean over their offsets: the paper tags, the signs' fields

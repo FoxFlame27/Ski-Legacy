@@ -32,6 +32,9 @@ double Interiors::deck(double x, double z) const {
   if (room_ == Room::None) return std::nan("");
   double lx = x - origin_.x, lz = z - origin_.z;
   if (std::fabs(lx) > halfX.x + 2 || std::fabs(lz) > halfZ.x + 2) return std::nan("");
+  // (the showroom: the mezzanine's floor upstairs, the stair's slope on it; carrentalshell.js stairY)
+  if (def_ && def_->hasStair && level_ == 2) return floorY_ + def_->FL;
+  if (def_ && def_->hasStair && level_ == 1) return floorY_ + def_->FL * clamp((def_->stair[3] - lz) / (def_->stair[3] - def_->stair[2]), 0, 1);
   return floorY_;
 }
 
@@ -150,7 +153,7 @@ void Interiors::buildExported(const RoomDef& d, const std::string& id) {
   auto wall = [&](double x, double z, double hw, double hd) { Collider c; c.x = x; c.z = z; c.hw = hw; c.hd = hd; c.rot = 0; walls_.push_back(c); };
   const double x0 = d.bounds[0] - 0.3, x1 = d.bounds[1] + 0.3, z0 = d.bounds[2] - 0.3, z1 = d.bounds[3] + 0.3;   // (the player's own radius: 0.3)
   wall(x0 - 1, 0, 1, d.D); wall(x1 + 1, 0, 1, d.D); wall(0, z0 - 1, d.W, 1); wall(0, z1 + 1, d.W, 1);
-  for (const RoomDef::Circle& o : d.obstacles) { Collider c; c.x = o.x; c.z = o.z; c.r = o.r; walls_.push_back(c); }
+  level_ = 0;
   // (the counter: nobody gets behind it; interior.js stops you 0.35 m short of its front along its whole length)
   if (d.hasCounter) wall((d.counter[0] + x1) / 2, (d.counter[2] + d.counter[3]) / 2, (x1 - d.counter[0]) / 2 + 0.05, (d.counter[3] - d.counter[2]) / 2);
   spawnLocal = dvec3(d.spawnX, 0, d.spawnZ);
@@ -172,6 +175,7 @@ const RoomDef::Hit* Interiors::aim(const dvec3& eye, const vec3& dir) const {
   const RoomDef::Hit* best = nullptr;
   double bt = 6;
   for (const RoomDef::Hit& h : def_->hits) {
+    if (h.up != (level_ == 2) && h.kind == "car") continue;   // (the cars upstairs: from up there, and the others from below)
     double t0 = 0, t1 = bt;
     bool ok = true;
     for (int k = 0; k < 3 && ok; k++) {
@@ -237,11 +241,17 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
   onLeave_ = std::move(onLeave);
   boxes.clear(); props.clear(); walls_.clear();
   def_ = nullptr; mesh_.reset();
-  origin_ = dvec3(r == Room::Prison ? -21000 : r == Room::Hospital ? -21100 : r == Room::Shop ? -21300 : -21200, 0, -21000);
+  origin_ = dvec3(r == Room::Prison ? -21000 : r == Room::Hospital ? -21100 : r == Room::Shop ? -21300 : r == Room::Autohaus ? -21400 : -21200, 0, -21000);
   floorY_ = c_.world->height(origin_.x, origin_.z) + 80;
-  if (r == Room::Prison) buildPrison();
+  look_ = nullptr; shell_.reset();
+  if (r == Room::Prison) {
+    buildPrison();
+    // (the police station as prison.js builds it, exported: drawn in place of the boxes, which stay as the walls)
+    if (c_.data && c_.data->prisonRoom.ok && c_.data->prisonRoom.hasShell && c_.roomModel) { shell_ = c_.roomModel("prison"); if (shell_) look_ = &c_.data->prisonRoom; }
+  }
   else if (r == Room::Hospital) buildHospital();
   else if (r == Room::Shop && c_.data && c_.data->shop.ok) buildExported(c_.data->shop, "shop");
+  else if (r == Room::Autohaus && c_.data && c_.data->autohaus.ok) buildExported(c_.data->autohaus, "autohaus");
   else buildChalet();
   rebuild();
   c_.scenery->noTrees = true;
@@ -258,7 +268,7 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
 void Interiors::leave() {
   if (room_ == Room::None) return;
   room_ = Room::None;
-  def_ = nullptr; walls_.clear();
+  def_ = nullptr; look_ = nullptr; shell_.reset(); walls_.clear();
   c_.scenery->noTrees = false;
   c_.player->view = Player::View(prevView_);
   mesh_.reset();
@@ -276,6 +286,32 @@ bool Interiors::atExit(const dvec3& p) const {
 void Interiors::fillColliders(std::vector<Collider>& out) const {
   if (room_ == Room::None) return;
   for (Collider c : walls_) { c.x += origin_.x; c.z += origin_.z; out.push_back(c); }
+  if (def_) {
+    // an exported room's furniture, by the floor you are on; the showroom's stair (carrentalroom.js walk): in at its
+    // foot from the front, up to the mezzanine at its head, the balustrade along the mezzanine's edge
+    const RoomDef& d = *def_;
+    auto circle = [&](const RoomDef::Circle& o) { Collider c; c.x = origin_.x + o.x; c.z = origin_.z + o.z; c.r = o.r; out.push_back(c); };
+    auto wall = [&](double x0, double x1, double z0, double z1) { Collider c; c.x = origin_.x + (x0 + x1) / 2; c.z = origin_.z + (z0 + z1) / 2; c.hw = (x1 - x0) / 2; c.hd = (z1 - z0) / 2; c.rot = 0; out.push_back(c); };
+    if (d.hasStair) {
+      const dvec3 p = toLocal(c_.player->pos);
+      const double x0 = d.stair[0], x1 = d.stair[1], z0 = d.stair[2], z1 = d.stair[3];
+      const bool inX = p.x < x1 - 0.1 && p.x > x0 - 0.5;
+      if (level_ == 0 && inX && p.z < z1 + 0.05 && p.z > z1 - 0.6) level_ = 1;
+      else if (level_ == 1 && p.z > z1 + 0.1) level_ = 0;
+      else if (level_ == 1 && p.z < z0 - 0.05) level_ = 2;
+      else if (level_ == 2 && inX && p.z > z0 + 0.05) level_ = 1;
+      if (level_ == 0) {
+        for (const auto& o : d.obstacles) circle(o);
+        wall(x1, x1 + 0.1, z0 - 0.3, z1);            // the stair's side (its rail)
+        wall(x0 - 0.2, x1 + 0.1, z0 - 0.5, z0 - 0.3); // under its head
+      } else if (level_ == 1) {
+        wall(x1, x1 + 0.1, z0 - 0.3, z1 + 0.3);
+      } else {
+        for (const auto& o : d.obstaclesUp) circle(o);
+        wall(x1 - 0.2, d.W / 2, d.MZ, d.MZ + 0.1);    // the balustrade
+      }
+    } else for (const auto& o : d.obstacles) circle(o);
+  }
   for (const Box& b : boxes) {
     if (!b.solid) continue;
     Collider c;
@@ -299,12 +335,26 @@ void Interiors::fillColliders(std::vector<Collider>& out) const {
 void Interiors::draw(Renderer& r) {
   if (room_ == Room::None) return;
   dvec3 o = toWorld(0, 0, 0);
+  if (shell_ && look_) {
+    r.submitModel(*shell_, toWorld(look_->shell.x, look_->shell.y, look_->shell.z), mat4(1), nullptr, true);
+    for (const RoomDef::Light& l : look_->lights) {
+      if (l.type != 0 && l.type != 1) continue;
+      const float reach = l.type == 1 ? float(std::max(1.0, l.p.y * l.p.y / 4.0)) : 1.f;
+      PointLight q;
+      q.pos = toWorld(l.p.x + look_->shell.x, l.p.y + look_->shell.y, l.p.z + look_->shell.z); q.color = l.color * std::min(6.f, l.intensity / reach) * ROOM_LAMP; q.range = l.distance > 0 ? l.distance : 12;
+      r.addLight(q);
+    }
+    return;
+  }
   if (mesh_) r.submitModel(*mesh_, o, mat4(1), nullptr, true);
   if (def_)
     for (const RoomDef::Light& l : def_->lights) {
       if (l.type != 0 && l.type != 1) continue;
       PointLight q;
-      q.pos = toWorld(l.p.x, l.p.y, l.p.z); q.color = l.color * l.intensity * ROOM_LAMP; q.range = l.distance > 0 ? l.distance : 12;
+      // (three.js lamps are in candela: a spot high under a hall's roof is much stronger than a lantern at head height
+      // for the same light on the floor: its strength at the floor counts here)
+      const float reach = l.type == 1 ? float(std::max(1.0, l.p.y * l.p.y / 4.0)) : 1.f;
+      q.pos = toWorld(l.p.x, l.p.y, l.p.z); q.color = l.color * std::min(6.f, l.intensity / reach) * ROOM_LAMP; q.range = l.distance > 0 ? l.distance : 12;
       r.addLight(q);
     }
   for (const Prop& p : props) {
@@ -316,13 +366,13 @@ void Interiors::draw(Renderer& r) {
 
 Lighting Interiors::lighting(const Lighting& outside) const {
   Lighting L = outside;
-  if (def_) {
+  if (const RoomDef* D = def_ ? def_ : look_) {
     // an exported room: the web game's own lights: its hemisphere light as the sky / ground, its directional light (the
     // daylight through the windows) as the key light; the lanterns and spots are point lights (draw())
     L.sunDir = glm::normalize(vec3(0.3f, 0.9f, 0.2f));
     L.sunColor = lightTint; L.sunIntensity = 0;
     L.sky = lightTint * 0.5f; L.ground = lightTint * 0.3f;
-    for (const RoomDef::Light& l : def_->lights) {
+    for (const RoomDef::Light& l : D->lights) {
       if (l.type == 2) { L.sunDir = glm::normalize(vec3(l.p)); L.sunColor = l.color; L.sunIntensity = l.intensity * ROOM_SUN; }
       else if (l.type == 3) { L.sky = l.color * l.intensity * ROOM_SKY; L.ground = l.color * l.intensity * ROOM_SKY * 0.55f; }
     }

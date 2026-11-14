@@ -3,6 +3,11 @@
 // at night. Nothing here changes what the game builds; it only tags it.
 const PATCHES = [
   {
+    // (the showroom's cars: which stand where, for export_rooms.mjs)
+    file: '/src/game/carrental.js',
+    edits: [['const DISPLAY = [[', 'export const DISPLAY = [['], ['const UPPER = [[', 'export const UPPER = [[']],
+  },
+  {
     // (the rooms' soft reflections are a PMREM render: none in Node; export_rooms.mjs)
     file: '/src/engine/roomenv.js',
     edits: [['export function roomEnvironment(renderer, sigma) {', 'export function roomEnvironment(renderer, sigma) { if (!renderer) return null;']],

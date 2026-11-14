@@ -124,7 +124,7 @@ RoomDef parseRoom(const nlohmann::json& r) {
   if (r.contains("hits")) for (auto& h : r["hits"]) {
     if (!h.contains("box") || h["box"].size() < 6) continue;
     auto& b = h["box"];
-    o.hits.push_back({str(h, "kind"), str(h, "id"), str(h, "name"), dvec3(b[0].get<double>(), b[1].get<double>(), b[2].get<double>()), dvec3(b[3].get<double>(), b[4].get<double>(), b[5].get<double>())});
+    o.hits.push_back({str(h, "kind"), str(h, "id"), str(h, "name"), dvec3(b[0].get<double>(), b[1].get<double>(), b[2].get<double>()), dvec3(b[3].get<double>(), b[4].get<double>(), b[5].get<double>()), h.value("up", false)});
   }
   if (r.contains("clerk") && r["clerk"].is_object()) { o.hasClerk = true; o.clerkX = num(r["clerk"], "x"); o.clerkZ = num(r["clerk"], "z"); o.clerkYaw = num(r["clerk"], "yaw"); o.clerkChar = str(r["clerk"], "char"); }
   if (r.contains("background") && r["background"].is_array() && r["background"].size() >= 3) o.background = vec3(r["background"][0].get<float>(), r["background"][1].get<float>(), r["background"][2].get<float>());
@@ -137,12 +137,24 @@ RoomDef parseRoom(const nlohmann::json& r) {
     q.p = dvec3(l["p"][0].get<double>(), l["p"][1].get<double>(), l["p"][2].get<double>());
     o.lights.push_back(q);
   }
+  if (r.contains("shell") && r["shell"].is_array() && r["shell"].size() >= 3) { o.hasShell = true; o.shell = dvec3(r["shell"][0].get<double>(), r["shell"][1].get<double>(), r["shell"][2].get<double>()); }
+  if (r.contains("stair") && r["stair"].is_array() && r["stair"].size() >= 4) { o.hasStair = true; for (size_t k = 0; k < 4; k++) o.stair[k] = r["stair"][k]; o.FL = num(r, "FL"); o.MZ = num(r, "MZ"); }
+  if (r.contains("obstaclesUp")) for (auto& q : r["obstaclesUp"]) if (q.is_array() && q.size() >= 3) o.obstaclesUp.push_back({q[0], q[1], q[2]});
+  if (r.contains("cars")) for (auto& c : r["cars"]) {
+    RoomDef::Car q;
+    q.id = str(c, "id"); q.label = str(c, "label"); q.price = int(num(c, "price")); q.up = c.value("up", false);
+    if (c.contains("m") && c["m"].size() == 16) for (int k = 0; k < 16; k++) q.M[k / 4][k % 4] = c["m"][size_t(k)].get<double>();
+    if (c.contains("paint") && c["paint"].is_array() && c["paint"].size() >= 3) q.paint = vec4(c["paint"][0].get<float>(), c["paint"][1].get<float>(), c["paint"][2].get<float>(), 1);
+    o.cars.push_back(q);
+  }
   return o;
 }
 } // namespace
 
 bool PlayData::load(const nlohmann::json& j, const std::vector<uint8_t>& bin) {
   if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("shop")) shop = parseRoom(j["rooms"]["shop"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("autohaus")) autohaus = parseRoom(j["rooms"]["autohaus"]);
+  if (j.contains("rooms") && j["rooms"].is_object() && j["rooms"].contains("prison")) prisonRoom = parseRoom(j["rooms"]["prison"]);
   for (auto& c : j["courses"]) { Course o = parseCourse(c, bin); if (o.line.n > 1) courses.push_back(std::move(o)); }
   for (auto& c : j["busRaces"]) { Course o = parseCourse(c, bin); if (o.line.n > 1) busRaces.push_back(std::move(o)); }
   if (j.contains("stand") && j["stand"].is_object()) { hasStand = true; standX = num(j["stand"], "x"); standZ = num(j["stand"], "z"); standYaw = num(j["stand"], "yaw"); }

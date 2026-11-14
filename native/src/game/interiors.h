@@ -21,7 +21,7 @@ struct RoomDef;
 
 class Interiors {
 public:
-  enum class Room : uint8_t { None, Prison, Hospital, Chalet, Shop };
+  enum class Room : uint8_t { None, Prison, Hospital, Chalet, Shop, Autohaus };
   explicit Interiors(PlayCtx& c);
   /// builds the room and puts you in at its spawn (first person); `onLeave` runs when you walk out (E at the door)
   void enter(Room r, std::function<void()> onLeave = {});
@@ -44,6 +44,9 @@ public:
   bool aimSpot(const std::string& kind, const std::string& id, dvec3& stand, double& yaw) const;
   /// the room's own people (the shop clerk behind the counter)
   void addPeople(People& people) const;
+  /// the exported room you are in (its cars on show...), null outside one; upstairs (the showroom's mezzanine)?
+  const RoomDef* def() const { return def_; }
+  bool upstairs() const { return level_ == 2; }
   // building blocks (rebuilt on enter; the chalet adds its furniture through these)
   struct Box { vec3 c, h; float yaw; vec4 col; bool solid, emissive; };
   struct Prop { std::shared_ptr<Model> model; mat4 fit{1}; dvec3 local{0}; double yaw = 0; bool solid = true; vec2 half{0.4f}; bool lamp = false; };
@@ -68,6 +71,9 @@ private:
   double floorY_ = 0;
   std::shared_ptr<Model> mesh_;
   const RoomDef* def_ = nullptr;         // an exported room's data while you are in it
+  const RoomDef* look_ = nullptr;        // a room walked on the C++'s own walls, drawn as the web game's exported model
+  std::shared_ptr<Model> shell_;
+  mutable int level_ = 0;                // (carrentalroom.js walk) 0 the ground floor, 1 on the stair, 2 upstairs
   std::vector<Collider> walls_;          // its own collision (room-local)
   std::function<void()> onLeave_;
   std::vector<std::pair<std::string, std::shared_ptr<Model>>> cache_;

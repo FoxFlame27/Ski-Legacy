@@ -1176,7 +1176,7 @@ int runGame(const GameOptions& opt) {
     o.vx = player.vel.x; o.vy = player.vel.y; o.vz = player.vel.z;
     if (rooms.inside()) {
       Interiors::Room r = rooms.room();
-      o.interior = r == Interiors::Room::Prison ? "prison" : r == Interiors::Room::Hospital ? "hospital" : r == Interiors::Room::Shop ? "skishop" : chalets.insidePlot() >= 0 ? "chalet:" + std::to_string(chalets.insidePlot()) : "";
+      o.interior = r == Interiors::Room::Prison ? "prison" : r == Interiors::Room::Hospital ? "hospital" : r == Interiors::Room::Shop ? "skishop" : r == Interiors::Room::Autohaus ? "carrental" : chalets.insidePlot() >= 0 ? "chalet:" + std::to_string(chalets.insidePlot()) : "";
       o.st = int(net::St::Walk);
       return;
     }
@@ -2233,6 +2233,19 @@ int runGame(const GameOptions& opt) {
     busBoxes.clear();
     buses.boxes(busBoxes);
     traffic.update(vdt, player.pos, &drive, busBoxes, cam);
+    if (opt.autotest && at == AT::Ski && (off("roomshop") || off("roomauto"))) {   // (debug: a walk-in room from a few spots, shots o_room<n>.png)
+      static int rf = 0;
+      rf++;
+      const bool shop = off("roomshop");
+      auto stand = [&](const char* kind, const char* id) { dvec3 st; double yw = 0; if (rooms.aimSpot(kind, id, st, yw)) { player.teleport(st.x, st.z, yw); player.pos.y = rooms.toWorld(0, 0, 0).y; } };
+      if (rf == 4) rooms.enter(shop ? Interiors::Room::Shop : Interiors::Room::Autohaus);
+      if (rf == 70) stand(shop ? "ski" : "car", shop ? "carver" : "car_bmw_x3");
+      if (rf == 110) stand("clerk", "");
+      if (rf == 150) stand(shop ? "outfits" : "car", shop ? "" : "car_audi_rs6");
+      if (rf == 190) stand("door", "");
+      if (rf > 4 && rf < 230 && rf % 40 == 28 && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, ("room" + std::to_string(rf / 40)).c_str()); SL_INFO("[roomtest] shot %d: prompt '%s'", rf / 40, prompt.c_str()); }
+      player.vel = dvec3(0);
+    }
     if (off("bustest")) {   // (debug: you stand in a bus's lane: it stops, waits, pulls out round you)
       dvec3 bp; double bh;
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
@@ -2481,6 +2494,17 @@ int runGame(const GameOptions& opt) {
         }
       }
     }
+    // the Autohaus showroom (carrentalroom.js update): a car on show: its card (buy it), the salesman: your cars, the door
+    if (started && rooms.room() == Interiors::Room::Autohaus && !menus.isOpen()) {
+      if (const RoomDef::Hit* h = rooms.aim(cam.pos, cam.forward())) {
+        if (h->kind == "door") { prompt = "Leave the Autohaus"; if (interact) { interact = false; rooms.leave(); } }
+        else if (h->kind == "clerk") { prompt = "Talk to the salesman"; if (interact) { interact = false; openGarage(); } }
+        else if (h->kind == "car") {
+          prompt = "Buy " + h->name;
+          if (interact) { interact = false; int si = drive.saleIndex(h->id); if (si >= 0) openCarSale(si); else flash(h->name + " \xC2\xB7 not for sale today", Hud::Flash::Bad); }
+        }
+      }
+    }
     if (started && rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !races.active() && !police.arrestedNow()) {
       std::string p5;
       bool used = police.interact(p5, interact) || rescue.interact(p5, interact) || chalets.interact(p5, interact) || races.interact(p5, interact) || oddJobs.interact(p5, interact) ||
@@ -2523,7 +2547,20 @@ int runGame(const GameOptions& opt) {
         }
       }
       else if (near(15, -50, 7.5)) { prompt = "Ticket seller \xC2\xB7 day pass, gondola tickets"; if (interact) { interact = false; openTickets(); } }
-      else if (transport.loaded() && near(transport.autohaus.x, transport.autohaus.z, 12)) { prompt = "Autohaus \xC2\xB7 my cars"; if (interact) { interact = false; openGarage(); } }
+      else if (transport.loaded() && near(transport.autohaus.x, transport.autohaus.z, 12)) {
+        // (carrental.js: through the sliding doors into the showroom; without the exported room: the card)
+        prompt = playData.autohaus.ok ? "Enter the Autohaus" : "Autohaus \xC2\xB7 my cars";
+        if (interact) {
+          interact = false;
+          if (!playData.autohaus.ok) openGarage();
+          else {
+            const dvec3 back = player.pos;
+            const double backYaw = player.heading;
+            fadeT = 0;
+            rooms.enter(Interiors::Room::Autohaus, [&, back, backYaw]() { fadeT = 0; player.teleport(back.x, back.z, backYaw + PI); });
+          }
+        }
+      }
       else for (const Hut& h : huts) if (near(h.x, h.z, 13)) { prompt = h.name + " \xC2\xB7 hot chocolate $" + std::to_string(Prices::hotChocolate); if (interact) { interact = false; openHut(h.name); } break; }
     }
     if (rideKind == Ride::None && prompt.empty() && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && !lifts.lines().empty()) {
@@ -2987,6 +3024,7 @@ int runGame(const GameOptions& opt) {
         if (rooms.room() == Interiors::Room::Prison) hf.location = "Polizei \xC2\xB7 Legacy Village";
         else if (rooms.room() == Interiors::Room::Hospital) hf.location = "Medical centre";
         else if (rooms.room() == Interiors::Room::Chalet) hf.location = "Chalet village";
+        else if (rooms.room() == Interiors::Room::Autohaus) { hf.location = "Autohaus"; hf.objective = "Look at a car or the salesman and press " + pc.K(Action::Interact); }
         else if (rooms.room() == Interiors::Room::Shop) { hf.location = "Ski Rental & Shop"; hf.objective = "Look at a pair of skis and press " + pc.K(Action::Interact); }
         if (races.active()) hf.waypoint = false;
       }
@@ -3057,6 +3095,14 @@ int runGame(const GameOptions& opt) {
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
     // the falling snow
     if (indoor) rooms.draw(renderer);
+    if (indoor && rooms.room() == Interiors::Room::Autohaus && rooms.def()) {
+      // the cars on show on their turntables (the room's own frame: the exporter leaves their meshes out)
+      vdraw.begin();
+      const dvec3 o = rooms.toWorld(0, 0, 0);
+      for (const RoomDef::Car& c : rooms.def()->cars)
+        if (const VehicleModel* vm = vmodels.car(c.id)) vdraw.add(vm->model.get(), glm::translate(glm::dmat4(1), o) * c.M * glm::dmat4(vm->fit), 0, c.paint);
+      vdraw.submit(renderer, *dev, cam.pos);
+    }
     else if (drawVillage) {
       oddJobs.draw(renderer, cam.pos, jobBoard.get());
       races.draw(renderer, cam.pos);

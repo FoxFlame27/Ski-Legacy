@@ -83,17 +83,24 @@ struct RoomDef {
   struct Circle { double x, z, r; };
   std::vector<Circle> obstacles;
   bool hasCounter = false; double counter[4] = {0, 0, 0, 0};   // minX, maxX, minZ, maxZ
-  struct Hit { std::string kind, id, name; dvec3 bmin{0}, bmax{0}; };
+  struct Hit { std::string kind, id, name; dvec3 bmin{0}, bmax{0}; bool up = false; };
   std::vector<Hit> hits;
   bool hasClerk = false; double clerkX = 0, clerkZ = 0, clerkYaw = 0; std::string clerkChar;
   vec3 background{0.01f, 0.006f, 0.003f};
   struct Light { int type; vec3 color; float intensity, distance; dvec3 p; };   // type 0 point, 1 spot, 2 directional, 3 hemisphere, 4 ambient
   std::vector<Light> lights;
+  // (the Autohaus showroom, carrentalroom.js) the mezzanine: its floor's height and front edge, the stair up to it along
+  // the wall (x0, x1, z0 at the top, z1 at the foot), what stands up there; the cars on show (the model, where)
+  bool hasStair = false; double stair[4] = {0, 0, 0, 0}, FL = 0, MZ = 0;
+  std::vector<Circle> obstaclesUp;
+  struct Car { std::string id, label; int price = 0; glm::dmat4 M{1}; bool up = false; vec4 paint{1, 1, 1, 0}; };   // paint: a = 0 the model's own
+  std::vector<Car> cars;
+  bool hasShell = false; dvec3 shell{0};   // a room the C++ walks on its own walls: where the exported model goes in its frame
 };
 
 struct PlayData {
   bool ok = false;
-  RoomDef shop;
+  RoomDef shop, autohaus, prisonRoom;   // prisonRoom: the exported look of the police station (its model's place: shell)
   std::vector<Course> courses, busRaces;
   bool hasStand = false;
   double standX = 0, standZ = 0, standYaw = 0;

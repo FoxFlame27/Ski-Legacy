@@ -6,6 +6,7 @@
 #pragma once
 #include "core/math.h"
 #include <nlohmann/json_fwd.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -111,6 +112,8 @@ struct PlayData {
   std::vector<TaxiPlace> taxi;
   Site prison, rentalPark, hospital, rental;
   dvec2 helipad{92, -128};
+  /// (export_play.mjs exportHeli / exportWard) the helicopter, its pad, the ambulance; the medical centre inside
+  std::shared_ptr<nlohmann::json> heli, ward;
   std::vector<ChaletHouse> chalets;
   int chaletPrice = 50000;
   struct ChaletModel { double scale = 10.305, x = 0.2186, z = -0.2762, y = -0.405, HX = 4.02, HZ = 6.08, IX = 3.72, IZ = 5.78, G = 0.3, GC = 2.95, doorZ = -0.17; } chaletModel;

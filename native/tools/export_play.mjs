@@ -133,8 +133,133 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
   // ---------------------------------------------------------------- the rooms you walk into (export_rooms.mjs)
   try { out.rooms = await (await import('./export_rooms.mjs')).exportRooms({ THREE, SRC, models, loadGLB, pack, log, r4 }); }
   catch (err) { log('rooms skipped:', err.stack?.split('\n').slice(0, 3).join(' | ')); }
+  // ---------------------------------------------------------------- the helicopter, its pad, the ambulance, the ward
+  const m34 = (m) => { const e = m.elements; return [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14]].map((v) => Math.round(v * 1e5) / 1e5); };
+  const surfBefore = new Set();
+  for (const arr of world.surfaceGrid.values()) for (const s of arr) surfBefore.add(s);
+  try { out.heli = await exportHeli({ THREE, imp, world, L, models, loadGLB, pack, pScene, pCols, cols, log, r4, freeMod }); } catch (err) { log('heli skipped:', err.stack?.split('\n').slice(0, 4).join(' | ')); }
+  try { out.ward = await exportWard({ THREE, imp, busRoads, loadGLB, pack, log, r4, m34 }); } catch (err) { log('ward skipped:', err.stack?.split('\n').slice(0, 4).join(' | ')); }
+  const surfSet = new Set();
+  for (const arr of world.surfaceGrid.values()) for (const s of arr) if (!surfBefore.has(s)) surfSet.add(s);
 
   // ---------------------------------------------------------------- capture
   pack.capture(pScene);
-  pack.finish({ colliders: pack.colliderOut(pCols.filter((c) => c && Number.isFinite(c.x))), surfaces: [], play: out });
+  pack.finish({ colliders: pack.colliderOut(pCols.filter((c) => c && Number.isFinite(c.x))), surfaces: pack.sampleSurfaces(surfSet), play: out });
+}
+
+// The heli-ski base and the helicopter (game/heli.js, heli/pad.js, model.js, zones.js, ambulance.js), built by the
+// game's own modules: the pad (deck with its painted H, edge lights, the hut and its sign, the floodlight mast, the
+// windsock) goes into the pack's scene with its colliders and its walkable deck; the helicopter's parts as local
+// meshes: `body` (the Meshy airframe with its static rotor head cut away by model.js meshyBody, the mast, the ski
+// basket; root frame: metres round the centre of mass), the main rotor's hub and one blade (droop pivot frame), the
+// tail rotor's hub and blades (spin frame), the two blur discs with their painted textures; the numbers the flight
+// model runs on (FRAME), the anchors (seat, door, basket, lamp, hub); the drop zones (zones.js) and the race
+// courses' landing spots; the ambulance's fit, where it waits, and the way it drives to the medical centre
+// (Ambulance.plan + setPath: the Rettungsweg, its corners rounded).
+async function exportHeli({ THREE, imp, world, L, models, loadGLB, pack, pScene, pCols, cols, log, r4, freeMod }) {
+  for (const n of ['heli_body', 'ambulance', 'patrol_hut']) if (!models[n]) models[n] = await loadGLB(n);
+  const PAD = await imp('game/heli/pad.js'), MOD = await imp('game/heli/model.js'), ZON = await imp('game/heli/zones.js');
+  let price = 1500;
+  try { price = (await imp('game/heli.js')).HELI_PRICE; } catch (err) { log('heli.js not loaded (price 1500):', err.message); }
+  const v3 = (v) => [r4(v.x), r4(v.y), r4(v.z)];
+  const site = PAD.chooseSite(L.layout, cols);
+  const pad = new PAD.Helipad({ scene: pScene, models, colliders: pCols, site, price });
+  pad.update(30, { camera: null, washFrom: null, wash: 0 }); // (the windsock settled in the breeze)
+  const o = { price, padR: PAD.PAD_R, home: { x: r4(pad.x), z: r4(pad.z), y: r4(pad.y), yaw: r4(pad.yaw) },
+    hut: { x: r4(pad.hut.x), z: r4(pad.hut.z), door: { x: r4(pad.hut.door.x), z: r4(pad.hut.door.z) } },
+    sock: v3(pad.sockPivot.position) };
+  // the helicopter (its blur discs' textures are pixels: replayed exactly)
+  const ce = document.createElement;
+  document.createElement = (t) => { const c = ce(t); if (t === 'canvas') c.slExact = true; return c; };
+  let hm;
+  try { hm = new MOD.HeliModel(models); } finally { document.createElement = ce; }
+  hm.root.updateMatrixWorld(true);
+  o.meshy = hm.meshy; o.K = MOD.K; o.frame = MOD.FRAME;
+  o.anchors = Object.fromEntries(Object.entries(MOD.ANCHORS).map(([k, v]) => [k, v.isVector3 ? v3(v) : v]));
+  o.hub = v3(hm.main.spin.position); o.tailHub = v3(hm.tail.spin.position); // (airframe frame: reference units)
+  o.airframe = { scale: hm.airframe.scale.x, pos: v3(hm.airframe.position) };
+  o.discY = r4(hm.main.disc.position.y - hm.main.spin.position.y); o.tailDiscX = r4(hm.tail.disc.position.x - hm.tail.spin.position.x);
+  o.bladeX = r4(hm.main.blades[0].position.x);
+  const parts = {};
+  const pivots = hm.main.blades.map((b) => b.parent);
+  for (const p of pivots) hm.main.spin.remove(p);
+  parts.hub = pack.localModel(hm.main.spin);
+  parts.blade = pack.localModel(hm.main.blades[0]);
+  parts.disc = pack.localModel(hm.main.disc);
+  const tHub = hm.tail.spin.children[0], tBlades = hm.tail.spin.children[1];
+  hm.tail.spin.remove(tBlades); parts.tailHub = pack.localModel(hm.tail.spin);
+  hm.tail.spin.add(tBlades); hm.tail.spin.remove(tHub); hm.tail.spin.updateMatrixWorld(true); parts.tailBlades = pack.localModel(hm.tail.spin);
+  parts.tailDisc = pack.localModel(hm.tail.disc);
+  hm.airframe.remove(hm.main.spin, hm.main.disc, hm.tail.spin, hm.tail.disc);
+  hm.root.remove(hm.beam, hm.lights);
+  hm.root.updateMatrixWorld(true);
+  parts.body = pack.localModel(hm.root);
+  o.parts = parts;
+  log('play: helicopter', hm.meshy ? 'Meshy airframe:' : 'procedural airframe:', Object.entries(parts).map(([k, p]) => `${k} ${p.reduce((a, q) => a + q.tris, 0)}`).join(', '), 'tris');
+  // the drop zones and the race courses' landing spots (heli.js openDialog)
+  o.zones = ZON.dropZones().map((z) => ({ name: z.name, x: r4(z.x), z: r4(z.z), y: r4(z.y), heading: r4(z.heading), vertical: z.vertical }));
+  o.races = [];
+  try { for (const e of freeMod.freeCourses()) if (e.heli) o.races.push({ name: e.name, x: r4(e.heli.x), z: r4(e.heli.z), label: e.D?.label || '' }); } catch (err) { log('heli: race courses', err.message); }
+  // the ambulance: beside the pad (rescue.js start), its way to the medical centre
+  try {
+    const { Ambulance } = await imp('game/heli/ambulance.js');
+    const amb = new Ambulance({ scene: new THREE.Scene(), models, world, colliders: [] });
+    if (amb.ok) {
+      const a = pad.yaw - Math.PI / 2, d = PAD.PAD_R + 9;
+      amb.park(pad.x + Math.sin(a) * d, pad.z + Math.cos(a) * d, a);
+      const fit = amb.group.children[0], size = fit.userData.size;
+      const A = { park: { x: r4(amb.x), z: r4(amb.z), yaw: r4(a) }, fit: fit.userData.slFit.fit.map((v) => Math.round(v * 1e6) / 1e6), size: v3(size),
+        lights: amb.group.children.filter((c) => c.isMesh).map((c) => ({ p: v3(c.position), red: c.material === amb.lights[1] })) };
+      amb.plan();
+      A.path = amb.path.pts.map((q) => [r4(q[0]), r4(q[1])]);
+      A.goal = { x: r4(amb.goal.x), z: r4(amb.goal.z) };
+      o.ambulance = A;
+      log('play: ambulance path', A.path.length, 'points,', Math.round(amb.path.length), 'm');
+      amb.hide();
+    }
+  } catch (err) { log('ambulance skipped:', err.stack?.split('\n').slice(0, 3).join(' | ')); }
+  return o;
+}
+
+// The medical centre inside (game/hospitalroom.js HospitalRoom, built by the game's own module): the shell (floors,
+// panelled walls, the partition, ceilings and beams), the windows' frames, curtains, sills and radiators, the glass
+// doors, the lights' fittings, the lobby's and the ward's built pieces with their painted textures as one local mesh
+// (the room's frame: x along the front, +z out of the front, y up from the floor); the Meshy furniture as placed
+// (model + matrix), the window / door panes (the live view's planes), what the walker bumps into (obstacles), the
+// chairs, the beds and their mattress tops as measured on the model, the door spot outside.
+async function exportWard({ THREE, imp, busRoads, loadGLB, pack, log, r4, m34 }) {
+  const HR = await imp('game/hospitalroom.js');
+  const { HOSPITAL_LOT } = await imp('game/bus/roads.js');
+  const { HOUSE } = await imp('game/hospital.js');
+  const room = new HR.HospitalRoom({ renderer: null });
+  // (the furniture is swapped in once its GLB has loaded: prisonoutside.js swapInModel)
+  await Promise.all(['hospital_bed', 'bedside_cabinet', 'patient_monitor', 'iv_stand', 'privacy_screen', 'visitor_chair', 'reception_desk', 'waiting_bench', 'medical_cart', 'medicine_cabinet'].map((n) => loadGLB('hospital/' + n))
+    .concat(['decor/lamp_pendant', 'decor/plant_ficus', 'decor/plant_monstera', 'furniture/picture_mountain'].map((n) => loadGLB(n))));
+  for (let k = 0; k < 5; k++) await new Promise((r) => setTimeout(r, 20));
+  const S = room.scene;
+  S.updateMatrixWorld(true);
+  const props = [], panes = [];
+  S.traverse((o) => {
+    if (o.userData.slFit) {
+      props.push({ model: o.userData.slFit.model, m: m34(o.matrixWorld.clone().multiply(new THREE.Matrix4().fromArray(o.userData.slFit.fit))) });
+      o.traverse((q) => { if (q.isMesh) q.userData.slSkip = true; });
+    } else if (o.isMesh && (o.visible === false || [].concat(o.material)[0]?.blending === THREE.AdditiveBlending)) o.userData.slSkip = true; // (the walker's unseen solids; the reading lights' additive glow on the wall)
+  });
+  for (const mesh of room.portal.meshes) {
+    mesh.userData.slSkip = true;
+    panes.push({ m: m34(mesh.matrixWorld), w: r4(mesh.geometry.parameters.width), h: r4(mesh.geometry.parameters.height) });
+  }
+  const out = { mesh: pack.localModel(S), props, panes,
+    obstacles: room.obstacles.map((q) => q.map(r4)), bounds: room.bounds.map(r4),
+    chairs: room.chairs.map((c) => ({ x: r4(c.x), z: r4(c.z), yaw: r4(c.yaw), bed: c.bed, y: c.y })),
+    beds: HR.BEDS, bedTops: room.bedTops.map(r4), stay: HR.STAY_S };
+  const H = busRoads.hospital;
+  if (H) {
+    const yaw0 = Math.atan2(H.dirx, H.dirz), FRONT = HOSPITAL_LOT.front, BZ = FRONT - HOUSE.D / 2;
+    const w = (lx, lz) => ({ x: r4(H.x + H.dirz * lx + H.dirx * lz), z: r4(H.z - H.dirx * lx + H.dirz * lz) });
+    out.door = { ...w(0, FRONT + 2.2), yaw: r4(yaw0) };
+    out.house = { ...w(0, BZ), yaw: r4(yaw0), y: r4(H.y ?? 0) }; // (the room's frame outdoors: hospitalroom.js linkWorld)
+  }
+  log('play: ward', out.mesh.reduce((a, q) => a + q.tris, 0), 'tris,', props.length, 'models,', panes.length, 'panes, mattress tops', out.bedTops.join(' '));
+  return out;
 }

@@ -540,7 +540,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
           if (rm) for (Material& q : rm->materials) if (q.baseTex && !q.emissiveTex && q.emissive.x > 0.99f && q.emissive.y > 0.99f && q.emissive.z > 0.99f) q.emissiveTex = q.baseTex;
           rooms_.push_back({it.key(), rm});
         }
-    pjson_ = jp; pbin_ = std::move(bin);
+    pjson_ = jp; pbin_ = std::move(bin); pmats_ = mats;
   }
   return true;
 }
@@ -550,6 +550,7 @@ void Resort::releaseLoadData() {
   std::vector<uint8_t>().swap(tbin_);
   std::vector<uint8_t>().swap(pbin_);
   std::vector<Material>().swap(tmats_);
+  std::vector<Material>().swap(pmats_);
 }
 
 void Resort::rebuild(const dvec3& cam) {

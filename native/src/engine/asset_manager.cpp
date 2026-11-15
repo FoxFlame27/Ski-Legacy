@@ -179,9 +179,9 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       // blurry); normal / roughness maps keep the model's budget. Block compression (1/8 - 1/4 of the memory) pays
       // for the larger colour maps; normal maps stay uncompressed (BC1 blocks show in the highlights)
       int cap = std::min(srgb[i] ? std::max(opt.colorTextureSize, opt.maxTextureSize * std::max(1, textureScale)) : opt.maxTextureSize, textureCap);
-      bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !opt.keepCpu && !isNormal[i];
+      bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !isNormal[i];   // (keepCpu too: the CPU copy is the RGBA kept beside the blocks)
       // (normal maps: BC5, two channels at 8 bits a pixel, the shader rebuilds z; not one that is a colour map as well)
-      bool bc5 = compressTextures && dev_.supportsRG() && !opt.keepCpu && isNormal[i] && !srgb[i];
+      bool bc5 = compressTextures && dev_.supportsRG() && isNormal[i] && !srgb[i];
       jobs.push_back(std::async(std::launch::async, [img, cap, bc, bc5]() {
         Image im;
         if (!img || !img->buffer_view) return im;

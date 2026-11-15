@@ -16,6 +16,8 @@
 #include "engine/renderer.h"
 #include "world/lifts.h"
 #include "world/scenery.h"
+#include <future>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -69,7 +71,7 @@ public:
   const FontSet& fonts() const { return fonts_; }
 
 private:
-  struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; };
+  struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; std::vector<uint8_t> band; };   // band: each instance's last LOD (0 near, 1 far, 2 off)
   struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; };
   struct Chunk {
     std::shared_ptr<Model> model;    // null while unloaded
@@ -97,6 +99,7 @@ private:
   FontSet fonts_;
   std::vector<PropSet> props_;
   std::vector<Chunk> chunks_;
+  std::map<size_t, std::future<std::vector<uint8_t>>> unpacking_;   // (chunks being decompressed on a worker: streamChunks; after chunks_: gone first, the workers read their packed bytes)
   struct Placed { std::shared_ptr<Model> model; dvec3 pos; mat4 local; float radius; };
   std::vector<Placed> stations_;
   Lifts lifts_;

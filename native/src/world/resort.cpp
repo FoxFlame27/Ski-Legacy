@@ -566,12 +566,20 @@ void Resort::rebuild(const dvec3& cam) {
   for (PropSet& ps : props_) {
     double nearD = std::max(150.0, double(ps.radius) * 12) * lodScale, farD = std::max(900.0, double(ps.radius) * 120) * lodScale;
     for (Cell& c : ps.cells) {
-      l0.clear(); l1.clear();
-      for (const glm::dmat4& M : c.inst) {
-        double d = glm::length(dvec3(M[3]) - cam);
-        if (d > farD) continue;
-        (d < nearD ? l0 : l1).push_back(MatrixInstanceBatch::pack(M, c.origin));
+      // (a cell is uploaded again only when one of its props changed band: the camera moving 8 m used to re-send every
+      // cell of the resort, a thousand buffers, in one frame)
+      const bool first = c.band.size() != c.inst.size();
+      if (first) c.band.assign(c.inst.size(), 255);
+      bool changed = first;
+      for (size_t i = 0; i < c.inst.size(); i++) {
+        const double d = glm::length(dvec3(c.inst[i][3]) - cam);
+        const uint8_t b = d > farD ? 2 : d < nearD ? 0 : 1;
+        if (b != c.band[i]) { c.band[i] = b; changed = true; }
       }
+      if (!changed) continue;
+      l0.clear(); l1.clear();
+      for (size_t i = 0; i < c.inst.size(); i++)
+        if (c.band[i] < 2) (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], c.origin));
       c.lod[0].upload(dev_, l0);
       c.lod[1].upload(dev_, l1);
     }
@@ -599,18 +607,49 @@ void Resort::streamChunks(const dvec3& cam, bool all) {
     } else if (!c.model && d < inR) want.push_back({d, i});
   }
   std::sort(want.begin(), want.end());
-  size_t budget = all ? SIZE_MAX : size_t(6) << 20, spent = 0;
-  std::vector<uint8_t> raw;
-  for (auto& [d, i] : want) {
+  auto make = [&](size_t i, const std::vector<uint8_t>& raw) {
     Chunk& c = chunks_[i];
-    if (spent > budget) break;
-    raw.resize(c.raw);
-    if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), c.packed.data(), c.packed.size()))) continue;
     nlohmann::json m = {{"verts", c.verts}, {"tris", c.tris}, {"vOff", 0}, {"iOff", c.verts * 28}, {"i16", c.i16}};
     c.model = modelFromBin(dev_, raw.data(), raw.size(), m, c.mat);
-    if (!c.model) continue;
-    spent += c.raw;
+    if (!c.model) return false;
     stream_.loaded++; stream_.gpuBytes += c.verts * 28 + c.tris * 12; stream_.uploads++;
+    return true;
+  };
+  if (all) {   // (the load: everything in range now, here)
+    std::vector<uint8_t> raw;
+    for (auto& [d, i] : want) {
+      Chunk& c = chunks_[i];
+      auto u = unpacking_.find(i);
+      if (u != unpacking_.end()) { raw = u->second.get(); unpacking_.erase(u); }
+      else { raw.resize(c.raw); if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), c.packed.data(), c.packed.size()))) continue; }
+      make(i, raw);
+    }
+    return;
+  }
+  // in play: the zstd frames are unpacked on worker threads (a few ahead, nearest first); what is ready is uploaded,
+  // up to ~6 MB a frame (the decompression on this thread took up to tens of ms in one frame)
+  for (auto& [d, i] : want) {
+    if (unpacking_.size() >= 8) break;
+    if (unpacking_.count(i)) continue;
+    const Chunk& c = chunks_[i];
+    const uint8_t* src = c.packed.data();
+    const size_t n = c.packed.size(), rawN = c.raw;
+    unpacking_[i] = std::async(std::launch::async, [src, n, rawN]() {
+      std::vector<uint8_t> raw(rawN);
+      if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), src, n))) raw.clear();
+      return raw;
+    });
+  }
+  size_t spent = 0;
+  for (auto it = unpacking_.begin(); it != unpacking_.end();) {
+    if (spent > (size_t(6) << 20)) break;
+    if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { ++it; continue; }
+    const size_t i = it->first;
+    std::vector<uint8_t> raw = it->second.get();
+    it = unpacking_.erase(it);
+    Chunk& c = chunks_[i];
+    if (raw.empty() || c.model || glm::length(glm::clamp(cam, c.bmin, c.bmax) - cam) >= inR) continue;   // (out of range again meanwhile)
+    if (make(i, raw)) spent += c.raw;
   }
 }
 

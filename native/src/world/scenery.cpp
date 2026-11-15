@@ -360,7 +360,8 @@ void Scenery::finish(const dvec3& cam) {
 void Scenery::rebuildInstances(const dvec3& cam) {
   lastBuild_ = cam;
   dirty_ = false;
-  std::vector<InstanceBatch::Inst> lists[2][3];
+  static thread_local std::vector<InstanceBatch::Inst> lists[2][3];   // (kept: no reallocation each rebuild)
+  for (auto& lv : lists) for (auto& l : lv) l.clear();
   // (the LODs hand over in dithered bands, shaders.h vLodFade: a tree within a band is in both lists, each with the
   // distances it fades in / out at; SLACK covers the camera's travel until the lists are rebuilt)
   const double r2 = vs_.farR * vs_.farR, SLACK = 12;

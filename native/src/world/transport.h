@@ -25,6 +25,7 @@ struct Road {
   double length = 0;
   int from = -1, to = -1;
   bool access = false, scenic = false, depot = false, heli = false, ring = false, loop = false, chalet = false;
+  bool village = false;   // (a road of the native village's own: world/village.h addRoads)
   std::vector<int16_t> kmh;
   std::vector<float> limF, limB, vcF, vcB;
   int indexAt(double s) const;

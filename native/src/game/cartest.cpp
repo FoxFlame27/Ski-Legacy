@@ -163,7 +163,8 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
       // on foot from the plaza if it is near, else from the road side of the yard, 40 m out from the sliding doors
       double dv = std::hypot(e.door.x - VILLAGE_X, e.door.z - VILLAGE_Z);
       double sx = VILLAGE_X, sz = VILLAGE_Z;
-      if (dv > 260) { sx = e.door.x + e.doorOut.x * 40; sz = e.door.z + e.doorOut.y * 40; }
+      // (the native village's Autohaus on the Dorfstrasse: the plaza's buildings stand between, so from the road too)
+      if (dv > 60) { const double out = dv > 260 ? 40 : 22; sx = e.door.x + e.doorOut.x * out; sz = e.door.z + e.doorOut.y * out; }
       e.teleport(sx, sz, std::atan2(e.door.x - sx, e.door.z - sz));
       start_ = dvec3(sx, 0, sz);
       SL_INFO("[autotest] cars: the cheapest for sale is the %s ($%lld), in the showroom; the Autohaus door at (%.1f, %.1f), %.0f m from the plaza; walking from (%.1f, %.1f) with $%lld",

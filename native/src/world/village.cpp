@@ -93,6 +93,10 @@ bool Village::load(platform::Platform& p, const AssetPaths& paths) {
       v.from = dvec2(m["from"][0].get<double>(), m["from"][1].get<double>());
       v.to = dvec2(m["to"][0].get<double>(), m["to"][1].get<double>());
       v.r = m.value("r", 0.0); v.rot = m.value("rot", 0.0); v.dy = m.value("dy", 0.0);
+      if (m.contains("clip") && m["clip"].is_array() && m["clip"].size() == 3) {
+        v.clipDir = dvec2(m["clip"][0].get<double>(), m["clip"][1].get<double>());
+        v.clipMax = m["clip"][2].get<double>();
+      }
       moves_.push_back(v);
     }
   for (auto& q : j["walk"]["nodes"]) nodes_.push_back(dvec2(q[0].get<double>(), q[1].get<double>()));
@@ -171,7 +175,8 @@ std::vector<dvec2> Village::route(const dvec2& from, const dvec2& to, double lan
 }
 
 const Village::Move* Village::moveAt(double x, double z) const {
-  for (const Move& m : moves_) if (glm::length(dvec2(x, z) - m.from) < m.r) return &m;
+  for (const Move& m : moves_)
+    if (glm::length(dvec2(x, z) - m.from) < m.r && glm::dot(dvec2(x, z) - m.from, m.clipDir) < m.clipMax) return &m;
   return nullptr;
 }
 
@@ -357,6 +362,7 @@ void Village::applyMoves(const std::string& pack, nlohmann::json& j, std::vector
         o["x"] = q.x; o["z"] = q.y;
         if (o.contains("y") && o["y"].is_number()) o["y"] = o["y"].get<double>() + m->dy;
         for (const char* a : {"yaw", "heading", "facing"}) if (o.contains(a) && o[a].is_number()) o[a] = o[a].get<double>() + m->rot;
+        if (o.contains("rot") && o["rot"].is_number()) o["rot"] = o["rot"].get<double>() - m->rot;   // (a box collider: rot = -yaw)
         const double c = std::cos(m->rot), s = std::sin(m->rot);
         for (auto [a, b] : {std::pair{"dirx", "dirz"}, {"ux", "uz"}, {"vx", "vz"}, {"ax", "az"}, {"fx", "fz"}, {"tvx", "tvz"}})
           if (o.contains(a) && o.contains(b) && o[a].is_number() && o[b].is_number()) {
@@ -377,9 +383,121 @@ void Village::applyMoves(const std::string& pack, nlohmann::json& j, std::vector
     SL_INFO("village: moved sites in %s: %zu props, %zu colliders, %zu triangles, %zu decks, %zu places", pack.c_str(), nInst, nCol, nTri, nSurf, nPlace);
 }
 
+void Village::addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& world) const {
+  if (!j_ || !j_->contains("roads") || !j.contains("net")) return;
+  int roadMat = -1;
+  for (size_t k = 0; k < j["materials"].size(); k++)
+    if (j["materials"][k].value("tag", std::string()) == "roadsnow-road") { roadMat = int(k); break; }
+  // the exported roads' centre lines (where ours run on top of one, at a junction, theirs is drawn)
+  std::vector<std::vector<dvec2>> old;
+  auto fl = [&](const nlohmann::json& a) {
+    std::vector<float> v;
+    const size_t off = a["off"], n = a["n"];
+    if (off + n * 4 > bin.size()) return v;
+    v.resize(n);
+    std::memcpy(v.data(), bin.data() + off, n * 4);
+    return v;
+  };
+  for (auto& r : j["net"]["roads"]) {
+    const auto X = fl(r["X"]), Z = fl(r["Z"]);
+    std::vector<dvec2> pts;
+    for (size_t i = 0; i < X.size() && i < Z.size(); i++) pts.push_back(dvec2(X[i], Z[i]));
+    old.push_back(std::move(pts));
+  }
+  auto nearOld = [&](const dvec2& p, double d) {
+    for (auto& pts : old) for (const dvec2& q : pts) if (glm::length(q - p) < d) return true;
+    return false;
+  };
+  auto put = [&](const void* data, size_t bytes) {
+    while (bin.size() % 4) bin.push_back(0);
+    const size_t off = bin.size();
+    bin.insert(bin.end(), static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + bytes);
+    return off;
+  };
+  size_t nTris = 0;
+  for (auto& R : (*j_)["roads"]) {
+    std::vector<dvec2> p;
+    for (auto& q : R["pts"]) p.push_back(dvec2(q[0].get<double>(), q[1].get<double>()));
+    if (p.size() < 2) continue;
+    const int n = int(p.size());
+    // heights: the drawn ground across the ribbon's width (the highest of its 7 points: the terrain's mesh never pokes
+    // through), smoothed along it, a little over it (the layout sets the ground under the road 12 cm lower)
+    std::vector<double> y0(static_cast<size_t>(n)), y(static_cast<size_t>(n));
+    const double halfW = R.value("half", 3.4);
+    for (int i = 0; i < n; i++) {
+      dvec2 d = p[size_t(std::min(n - 1, i + 1))] - p[size_t(std::max(0, i - 1))];
+      d /= std::max(1e-6, glm::length(d));
+      double top = -1e30;
+      for (int a = 0; a < 7; a++) { const dvec2 q = p[size_t(i)] + dvec2(-d.y, d.x) * ((a - 3) / 3.0 * halfW); top = std::max(top, world.meshHeight(q.x, q.y)); }
+      y0[size_t(i)] = top + 0.04;
+    }
+    for (int i = 0; i < n; i++) {
+      double s = 0, w = 0;
+      for (int k = -3; k <= 3; k++) { const int q = std::clamp(i + k, 0, n - 1); s += y0[size_t(q)]; w += 1; }
+      y[size_t(i)] = s / w;
+    }
+    std::vector<float> X, Y, Z, S, lim;
+    std::vector<int16_t> kmh;
+    double acc = 0;
+    const int16_t lk = int16_t(R.value("kmh", 30));
+    for (int i = 0; i < n; i++) {
+      if (i) acc += glm::length(p[size_t(i)] - p[size_t(i - 1)]);
+      X.push_back(float(p[size_t(i)].x)); Y.push_back(float(y[size_t(i)])); Z.push_back(float(p[size_t(i)].y)); S.push_back(float(acc));
+      kmh.push_back(lk); lim.push_back(float(lk / 3.6));
+    }
+    auto ref = [&](const void* d, size_t count, size_t sz) { return nlohmann::json{{"off", put(d, count * sz)}, {"n", count}}; };
+    nlohmann::json road = {{"n", n}, {"length", acc}, {"from", -1}, {"to", -1}, {"access", false}, {"scenic", false}, {"depot", false},
+                           {"heli", false}, {"ring", false}, {"loop", false}, {"chalet", false}, {"village", R.value("name", std::string())}};
+    road["X"] = ref(X.data(), X.size(), 4); road["Y"] = ref(Y.data(), Y.size(), 4); road["Z"] = ref(Z.data(), Z.size(), 4); road["S"] = ref(S.data(), S.size(), 4);
+    road["prof"] = {{"kmh", ref(kmh.data(), kmh.size(), 2)}, {"limF", ref(lim.data(), lim.size(), 4)}, {"limB", ref(lim.data(), lim.size(), 4)},
+                    {"vcF", ref(lim.data(), lim.size(), 4)}, {"vcB", ref(lim.data(), lim.size(), 4)}};
+    j["net"]["roads"].push_back(road);
+    if (roadMat < 0) continue;
+    // the ribbon: 7 vertices across the 6.8 m, the exported road's texture (u across, v 0.0754 per m along); left out
+    // where an exported road already lies (the junction)
+    const double half = R.value("half", 3.4);
+    const dvec3 origin(p[0].x, y[0], p[0].y);
+    std::vector<uint8_t> vb;
+    std::vector<uint16_t> ib;
+    for (int i = 0; i + 1 < n; i++) {
+      const dvec2 mid = (p[size_t(i)] + p[size_t(i + 1)]) * 0.5;
+      if (nearOld(mid, half + 1.5)) continue;
+      const uint16_t base = uint16_t(vb.size() / 28);
+      if (vb.size() / 28 + 14 > 65000) break;
+      for (int e = 0; e < 2; e++) {
+        const int k = i + e;
+        dvec2 d = p[size_t(std::min(n - 1, k + 1))] - p[size_t(std::max(0, k - 1))];
+        d /= std::max(1e-6, glm::length(d));
+        const dvec2 rgt(-d.y, d.x);
+        for (int a = 0; a < 7; a++) {
+          const dvec2 q = p[size_t(k)] + rgt * ((a - 3) / 3.0 * half);
+          const float pos[3] = {float(q.x - origin.x), float(y[size_t(k)] + 0.03 - origin.y), float(q.y - origin.z)};
+          const int8_t nrm[4] = {0, 127, 0, 0};
+          const float uv[2] = {float(a / 6.0), float(S[size_t(k)] * 0.0754)};
+          const uint8_t col[4] = {255, 255, 255, 0};
+          uint8_t raw[28];
+          std::memcpy(raw, pos, 12); std::memcpy(raw + 12, nrm, 4); std::memcpy(raw + 16, uv, 8); std::memcpy(raw + 24, col, 4);
+          vb.insert(vb.end(), raw, raw + 28);
+        }
+      }
+      for (int a = 0; a < 6; a++) {
+        const uint16_t p0 = uint16_t(base + a), p1 = uint16_t(base + a + 1), p2 = uint16_t(base + 7 + a), p3 = uint16_t(base + 7 + a + 1);
+        for (uint16_t k : {p0, p2, p1, p1, p2, p3}) ib.push_back(k);
+      }
+    }
+    if (ib.empty()) continue;
+    const size_t vOff = put(vb.data(), vb.size()), iOff = put(ib.data(), ib.size() * 2);
+    j["meshes"].push_back({{"mat", roadMat}, {"verts", vb.size() / 28}, {"tris", ib.size() / 3}, {"vOff", vOff}, {"iOff", iOff}, {"i16", true},
+                           {"origin", {origin.x, origin.y, origin.z}}});
+    nTris += ib.size() / 3;
+  }
+  SL_INFO("village: %zu roads of its own on the network (%zu road triangles)", (*j_)["roads"].size(), nTris);
+}
+
 void Village::applyToPack(const std::string& pack, nlohmann::json& j, std::vector<uint8_t>& bin, World& world,
                           const std::function<std::shared_ptr<Model>(const std::string&)>& model) const {
   if (j_) applyMoves(pack, j, bin);
+  if (j_ && pack == "transport") addRoads(j, bin, world);
   if (!j_ || pack != j_->value("clear", nlohmann::json::object()).value("pack", std::string("resort"))) return;
   const nlohmann::json& V = *j_;
   const auto& C = V["clear"];

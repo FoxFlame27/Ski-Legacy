@@ -55,6 +55,19 @@ void Traffic::init() {
     if (r.scenic) { if (!r.ring && r.length > 300) scenic_.push_back(int(i)); continue; }   // (the scenic network: its own cars)
     (r.access ? access_ : main_).push_back(int(i));
   }
+  // main roads whose ends meet (the village's Dorfstrasse runs on from the Legacy Village stop's end of the valley road)
+  links_.assign(t_.roads.size() * 2, {});
+  for (int a : main_)
+    for (int b : main_) {
+      if (a == b || !(t_.roads[size_t(a)].village || t_.roads[size_t(b)].village)) continue;
+      const Road& A = t_.roads[size_t(a)];
+      const Road& B = t_.roads[size_t(b)];
+      for (int ea = 0; ea < 2; ea++)
+        for (int eb = 0; eb < 2; eb++) {
+          const size_t ia = ea ? size_t(A.n - 1) : 0, ib = eb ? size_t(B.n - 1) : 0;
+          if (std::hypot(A.X[ia] - B.X[ib], A.Z[ia] - B.Z[ib]) < 3) links_[size_t(a) * 2 + size_t(ea)] = {b, eb != 0};
+        }
+    }
   for (size_t i = 0; i < t_.lots.size(); i++) { const Lot& L = t_.lots[i]; if (!L.building && !L.scenic && !L.impound && !L.bays.empty()) lots_.push_back(int(i)); }
   // junctions: where each access road meets a bus road (traffic.js constructor)
   for (int ai : access_) {
@@ -299,7 +312,8 @@ void Traffic::drive(Car& c, double dt, const dvec3& player, const Drive* you, co
   double toJ = J ? (J->s - c.s) * c.dir : 1e18;
   if (J) vt = std::min(vt, std::sqrt(2.6 * 2.6 + 2 * 2.4 * std::max(0.0, toJ - TURN_LEAD)));
   if (J && toJ < 30) vt = std::min(vt, 2.6 + std::max(0.0, toJ - TURN_LEAD) * 0.3);
-  bool keepOut = !acc && !(J && toJ <= toEnd + 0.5);
+  const Link* link = acc ? nullptr : linkAt(c.road, c.dir);
+  bool keepOut = !acc && !link && !(J && toJ <= toEnd + 0.5);
   if (keepOut) vt = std::min(vt, std::sqrt(1.5 * 1.5 + 2 * 2.4 * std::max(0.0, toEnd - END_KEEP)));
   if (keepOut && toEnd < END_KEEP + 45) vt = std::min(vt, 1.5 + std::max(0.0, toEnd - END_KEEP) * 0.3);
   if (keepOut && toEnd <= END_KEEP + 1) { deadEnd(c, player); return; }
@@ -350,7 +364,15 @@ void Traffic::drive(Car& c, double dt, const dvec3& player, const Drive* you, co
     deadEnd(c, player);
     return;
   }
-  if (c.dir > 0 ? c.s >= r.length - 0.5 : c.s <= 0.5) { deadEnd(c, player); return; }
+  if (c.dir > 0 ? c.s >= r.length - 0.5 : c.s <= 0.5) {
+    if (link) {   // on into the road that continues here, away from its end
+      const Road& b = t_.roads[size_t(link->road)];
+      toRoad(c, link->road, link->far ? b.length - 1.5 : 1.5, link->far ? -1 : 1, c.v);
+      return;
+    }
+    deadEnd(c, player);
+    return;
+  }
   placeOnRoad(c);
 }
 

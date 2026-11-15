@@ -1272,7 +1272,13 @@ you (the others see you in that seat of that bus: `seatWorld`, seat ids `bus:<n>
 stands at your stop; SPACE speeds up the round's timeline while everyone aboard holds it (`skip` with `line R<n>`). Bus 0
 (single player's own bus, in its depot bay) is out of the game online, as in the JS. The other players on foot and their
 cars are among the buses' obstacles. `SKI_LEGACY_DEBUG=mplive`: `bus <from> <to>` (wait at a stop), `buslog`, and a
-`[buslog]` line every 5 s of server time (every bus: x, z, speed, heading, stop).
+`[buslog]` line every 5 s of server time (every bus: x, z, speed, heading, stop, the hold-up records). Checked live on
+a local server with two native clients and the web client (its fleet logged right after its own `updateFleet`): every
+bus within 0.02 m (median) of the same place on all three at the same server time, 244 of 252 samples within 5 m
+while one native player stood in a bus lane (the buses stopping, honking, overtaking, the three clients each driving
+and reporting hold-ups the others followed); a native and the web player boarded the same bus at the village and each
+saw the other seated in it ("Seat 1 / Seat 5 of 20 · 2 aboard"). The headless web client ran at ~4 fps (its frame step
+capped at 50 ms), so the buses near it ran in slow motion there; the hold-ups carry that over to the others.
 
 ### Known gaps (Phase 6)
 - **No world picker**: the protocol has none (the server assigns the fullest world with room); the MULTIPLAYER screen

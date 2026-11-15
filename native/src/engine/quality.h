@@ -59,6 +59,7 @@ struct Quality {
   int maxImpostors = 30000;
   float sprayScale = 1;       // spray particles x this
   float rockR = 230;          // the mountains' rocks drawn within (m; crags and outcrops twice that): quality.js veg.rockR
+  int clouds = 300;           // quality.js clouds: cumulus cards a frame (super 60, performance 150, balanced 300, high+ 420)
 
   /// the web game's names (quality.js QUALITY_ORDER) and the old native ones onto the presets here
   static std::string normalize(const std::string& n) {
@@ -110,6 +111,7 @@ struct Quality {
     // spend it on colour maps at twice the models' budgets (the 2048 px originals instead of 1024 / 512 px copies)
     if (n != "switch") { q.compressTextures = true; q.textureScale = (n == "super" || n == "performance") ? 1 : 2; }
     q.rockR = n == "super" || n == "switch" ? 80.f : n == "performance" ? 150.f : n == "high" ? 300.f : n == "ultra" ? 340.f : n == "superultra" ? 400.f : 230.f;
+    q.clouds = n == "super" ? 60 : n == "performance" || n == "switch" ? 150 : n == "balanced" ? 300 : 420;
     // (the six web presets' own npcs rows; switch: performance's)
     if (n == "super") { q.npcSkiers = 3; q.npcWalkers = 1; q.animNear = 25; }
     else if (n == "performance" || n == "switch") { q.npcSkiers = 7; q.npcWalkers = 3; q.animNear = 45; }

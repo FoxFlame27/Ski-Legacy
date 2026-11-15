@@ -92,7 +92,7 @@ void Weather::update(double dt) {
 }
 
 void Weather::apply(Lighting& L, double sunH) const {
-  double overcast = std::max(snow, cloud * 0.85);
+  double overcast = std::max({snow, cloud * 0.85, under * 0.8});
   double clearSky = 1 - overcast;
   double lightLevel = lerp(0.035, 1, smoothstep(-0.2, 0.3, sunH));
   double warmO = smoothstep(-0.12, 0.02, sunH) * (1 - smoothstep(0.05, 0.3, sunH));
@@ -106,7 +106,7 @@ void Weather::apply(Lighting& L, double sunH) const {
   double whiteout = std::min(1.0, mist * 0.55 + snow * 0.5) * lightLevel;
   L.fog = glm::mix(L.fog, MIST_FOG * grey, float(whiteout * 0.6));
   double night = 1 - smoothstep(-0.18, 0.02, sunH);
-  L.fogDensity = float((lerp(0.000034, 0.0013, snow * snow) + mist * mist * 0.0016 + night * 0.00003 + wind * snow * 0.00025 + frost * 0.0006) * (1 - clearAir * 0.45));
+  L.fogDensity = float((lerp(0.000034, 0.0013, snow * snow) + mist * mist * 0.0016 + night * 0.00003 + wind * snow * 0.00025 + frost * 0.0006 + under * 0.0005) * (1 - clearAir * 0.45));
   L.fogFalloff = float(lerp(0.00045, 0.00025, overcast));
   L.sunIntensity *= float(lerp(1, 0.17, overcast));
   float sl = glm::length(L.sky);

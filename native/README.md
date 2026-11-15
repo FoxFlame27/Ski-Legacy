@@ -1500,7 +1500,7 @@ equirectangular map (reflections by roughness: glass, car paint, ice) and projec
 harmonics (irradiance); **cascaded shadow maps**: 1-4 cascades in one atlas (fitted to the view as bounding spheres,
 texel-snapped: no shimmer), 8-12-tap rotated Poisson PCF on hardware 2x2 PCF, cascade blending, normal + light offset
 bias scaled by the texel, the coarser mesh LOD in the shadow pass, small casters skipped in the far cascades;
-alpha-tested foliage casts its real shape; **cloud shadows** drifting over the ground (High and up); the lamps and
+alpha-tested foliage casts its real shape; the lamps and
 headlights now have a specular highlight; height fog / aerial perspective (`fog.js`) with sunlit haze toward the sun.
 
 **Weather mist** (Nov 14; `shaders_fx.h kMistFS`, `world/groundmap.h`; Balanced and up): a half-resolution pass after
@@ -1510,7 +1510,7 @@ thin bright wisps lie in the floors that are lower than their surroundings, more
 the village and the air you stand in kept clear; in **Misty** and **Freezing fog** weather a billowing sea of mist
 fills the valleys to a ceiling a few hundred metres over their floors, the peaks standing out of it (ski down into
 it: ~300 m of sight inside). It is lit by the sun with a forward-scattering lobe (the air glows toward the sun), by
-the sky, by its own depth, and on High and up by the shadow cascades and cloud shadows (shafts through the mist);
+the sky, by its own depth, and on High and up by the shadow cascades (shafts through the mist);
 depth-aware blur and upsample. Most of sky.js's uniform mist term is left to this pass where it runs, and the sky
 dome fogs along the same exponential atmosphere as the terrain. Everything follows the weather's eased values:
 clear / misty / snow blend over ~20 s. `SKI_LEGACY_GFX=nomist` switches it off.
@@ -1541,11 +1541,20 @@ indicators / hazards (only wrecks use them in the JS), the daytime running light
 not say which cars are running).
 
 **Sky, clouds, sun**: `SKY_FRAG` ported (Rayleigh shading, twilight arch, halo, cirrus, the overcast deck's texture,
-the limb-darkened HDR disc) plus stars, the Milky Way and the moon; a **ray-marched cumulus layer** (Beer-powder
-scattering, a two-lobe phase function, two light taps, erosion noise, aerial perspective; 6 / 16 / 28 steps) and on
-High and up the **sea of clouds** in the far valleys (atmosphere.js's sea patches: kept away from the resort and the
-camera, its level following the valley as in the JS) drawn as a pass over the scene so it stands in front of far
-peaks; the **sun glare** of `sunglare.js` (core, halo, 32-spike starburst; visibility from the depth round the sun)
+the limb-darkened HDR disc) plus stars, the Milky Way and the moon; the **clouds of atmosphere.js** (Nov 15 2026, the
+user: "why are the clouds so ugly": the native ray-marched cumulus layer, 6 noisy steps on Balanced, blurry blobs, and its
+sea-of-clouds pass are gone): `world/clouds` places them as the JS does (analyseCell / placeBanks / placeDrifters /
+updateImpostors, the same hashes: valley-filling sea patches, cumulus banks leaning on the flanks, wisps in front of the
+ridges, the ring on the far cloud sea, cumulus over the peaks on cloudy days 9 km+ out, the resort kept clear) round a
+128 x 300 m toroidal height map built on a worker thread, and the renderer draws them (`engine/shaders_clouds.h`): the
+eight shapes of `CELLS` (`engine/cloud_shapes.h`, the same mulberry32 spheres) ray-marched once at load into the
+six-way-lit 1024 px impostor atlas (BAKE_FS, two RGBA8 maps), drawn as camera-facing cards relit for the sun or moon,
+silver-lined toward the sun, soft where they meet the ground, in the height fog, capped per preset (quality.js clouds:
+60 / 150 / 300 / 420); the **overcast deck** (four noise planes 26 m apart: low in snow, higher when cloudy, sunk
+below the village in the sea-of-clouds weather with sky.js's grey day under it, a whiteout riding through it). No
+cloud shadows (the JS has none). Still missing: backdrop.js's painted far ranges and their flat cloud sea (the ring
+cards stand on it in the JS). Before / after / JS shots: clear, flurries, cloudy, heavy at noon from the village, down
+the valley and from the summit, morning, dusk and night; the **sun glare** of `sunglare.js` (core, halo, 32-spike starburst; visibility from the depth round the sun)
 into the HDR image so it blooms; **sun shafts** (post.js).
 
 **Materials**: sRGB-correct base / emissive maps, the models' textures at the GPU's maximum anisotropy on High and
@@ -1605,9 +1614,9 @@ baked snow crystal map reaches 50 m on Balanced (new) and 80 m on High and up (w
 single-tap PCF, SL_LOW, no MSAA / AO / shafts / clouds / detail maps, a 512 trail map, impostors to 700 m),
 Super Performance / Performance (fx 0: the original look, one shadow map, MSAA 2x, a reduced 3D resolution, 512 trails), **Balanced** (fx 1, 2
 cascades of 2048 to 160 m, MSAA 4x, the 1024 detail maps, a 1024 trail map, impostors to 1.4 km; the autotest's default),
-**High** (fx 2, 3 cascades of 2048 to 320 m, MSAA 4x, PBR Neutral, half-res GTAO, shafts, glare, the sea of clouds, 2048 detail
+**High** (fx 2, 3 cascades of 2048 to 320 m, MSAA 4x, PBR Neutral, half-res GTAO, shafts, glare, 2048 detail
 maps and trails, impostors to 1.9 km), **Ultra** (fx 3, 4 cascades of 3072 to
-480 m, MSAA 8x, full-res GTAO, PBR Neutral, 28-step clouds, impostors to 2.4 km), **Super Ultra** (fx 4, 4 cascades of
+480 m, MSAA 8x, full-res GTAO, PBR Neutral, impostors to 2.4 km), **Super Ultra** (fx 4, 4 cascades of
 4096 to 640 m, GTAO with 4 slices, a 3072 trail map, groove shadows, impostors to 3 km). `--quality` takes all of them
 (and the old low / medium); the first launch picks `auto`: Balanced everywhere (60 fps at Retina size on an M2; see the fps table below).
 `SKI_LEGACY_GFX=noao,noshafts,noclouds,nomsaa,nofxaa,nobloom,notrails,nodetail,cascades=N,fx=N` switches parts off
@@ -1619,9 +1628,9 @@ software rendering on a shared 4-core container and only good for relative compa
 |---|---|---|---|---|
 | switch | 1 map, 1024 px, single tap | SL_LOW shaders (no glints, no far normal maps, 4 lights), trails (5 taps near) | tone map + grade | ~40 MB (shadow 4, trails 2) |
 | Super Perf. / Performance | 1 map, 1024 px | fx 0 shaders, MSAA 2x, render scale 0.6 / 0.85 (Catmull-Rom upscale) | sharpen | ~60 MB |
-| Balanced (the default; autotest) | 2 cascades x 2048 | MSAA 4x + A2C, fx 1 terrain, 1024 detail maps, 6-step sky clouds, impostors 1.4 km, full resolution always | valley mist (11 steps, half-res), bloom, sharpen | ~210 MB (MSAA 100, shadow 32, trails 8, detail 11, mist 15) |
-| High | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, colour maps at 2x the models' budgets, cloud shadows, 16-step clouds + the sea, glare | half-res GTAO (2 x 6), shafts, valley mist (16 steps, shadowed), bloom, PBR Neutral, sharpen | ~305 MB (MSAA 100, shadow 64, trails 32, detail 44, mist 15) |
-| Ultra | 4 cascades x 3072 | MSAA 8x, fx 3 (parallax trails, far glints), 28-step clouds | full-res GTAO (3 x 8), PBR Neutral | ~480 MB (MSAA 200, shadow 150) |
+| Balanced (the default; autotest) | 2 cascades x 2048 | MSAA 4x + A2C, fx 1 terrain, 1024 detail maps, 300 cloud cards, impostors 1.4 km, full resolution always | valley mist (11 steps, half-res), bloom, sharpen | ~210 MB (MSAA 100, shadow 32, trails 8, detail 11, mist 15) |
+| High | 3 cascades x 2048 | MSAA 4x + A2C, fx 2, 2048 maps, colour maps at 2x the models' budgets, 420 cloud cards, glare | half-res GTAO (2 x 6), shafts, valley mist (16 steps, shadowed), bloom, PBR Neutral, sharpen | ~305 MB (MSAA 100, shadow 64, trails 32, detail 44, mist 15) |
+| Ultra | 4 cascades x 3072 | MSAA 8x, fx 3 (parallax trails, far glints) | full-res GTAO (3 x 8), PBR Neutral | ~480 MB (MSAA 200, shadow 150) |
 | Super Ultra | 4 cascades x 4096 | fx 4 (groove shadows), 3072 trail map, impostors 3 km | GTAO (4 x 10) | ~650 MB (shadow 270, trails 72) |
 
 **Measured on a MacBook-class Apple M2 (8 GB)** (Nov 14 2026; OpenGL 4.1 on Metal, a 2316 x 1266 drawable = 2.9 MP,
@@ -1725,7 +1734,7 @@ day and at night exported per material), but the blue police lamp does not pulse
 | chalets, build mode | chalets.js, chaletroom.js, build/* | **ported** (the house with both floors, its doors and lamps, the village's gardens and bays; the catalogue, virtual mouse; build mode on the ground floor) |
 | people, crowds | townsfolk.js, peoplesim.js, fans.js, crowds.js | **ported** (the village's townsfolk as fans.js's crowd people; no spectators' cheering, no lift-base people) |
 | snowmobiles | snowmobile.js | **ported** |
-| weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools; Phase 8: the full sky shader, stars / moon, IBL, a ray-marched cloud layer + the sea of clouds, cloud shadows); no cumulus impostor banks round the peaks, no backdrop ranges |
+| weather, day / night | sky.js, atmosphere.js | **ported** (11 states, forecast, snowfall, lamps' light pools; Phase 8: the full sky shader, stars / moon, IBL; Nov 15 2026: atmosphere.js's cumulus impostors and overcast deck); no backdrop ranges |
 | snowmaking, flags, snowcats | snowmaking.js, flags.js, snowcats.js | **ported** (Phase 7; snowcats condensed: no grooming trail, no ploughs) |
 | audio | core/audio.js | **ported** (Phase 7: every recording, music, announcer, horns, 3D); the Express's text-to-speech PA lines are not spoken (gong only) |
 | multiplayer | net/*.js against server/ | **ported** (the unchanged server; the other players as the game's own skier rig posed from their rows as remote.js poseOne: walking with / without skis, the skis on the back, carving, the tuck, in the air, a wipeout's tumble, seated; remote.js's playout delay, lead and smoothing; your rescue sent as net/rescue.js and the others' rescues drawn (helicopter, winch rope, the patient on the hook / in the cabin / hidden in the ambulance, the ambulance); flying your helicopter is state fly with its pose, the others' helicopters drawn; `SKI_LEGACY_DEBUG=mpshow --mptest URL --mp-peers 1` with `tools/browser/mp_show_peer.mjs` plays it all and writes `out_mpshow_<s>.png`. Not ported: the others' outfits (their character only) and ski model, the name card riding on the rig, the heli rental through the server (heliRent / the pad's `padAt`), tow trucks, police cars after another player, shared lift / bus / train timelines, race queues, a patient's bed pose in the ward) |

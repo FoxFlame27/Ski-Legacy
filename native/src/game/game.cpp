@@ -36,6 +36,7 @@
 #include "game/people.h"
 #include "game/shapes.h"
 #include "game/weather.h"
+#include "world/clouds.h"
 #include "world/groundmap.h"
 #include "game/interiors.h"
 #include "game/outfitshop.h"
@@ -669,6 +670,7 @@ int runGame(const GameOptions& opt) {
           dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
 
   GroundMap groundMap;
+  CloudScenery clouds;   // (atmosphere.js: the cumulus impostors and the overcast deck)
   // profiling toggles: SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier
   std::string dbg = std::getenv("SKI_LEGACY_DEBUG") ? std::getenv("SKI_LEGACY_DEBUG") : "";
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
@@ -3981,6 +3983,7 @@ int runGame(const GameOptions& opt) {
       else if (hourBeforeRace >= 0) { hour = hourBeforeRace; hourBeforeRace = -1; }
     }
     light = timeOfDay(hour, dayLight);
+    weather.under = clouds.hasInversion ? weather.sea * (1 - smoothstep(clouds.inversionY - 10, clouds.inversionY + 60, cam.pos.y)) : 0;   // (sky.js: under the sea of clouds)
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
     pc.night = light.night;   // (the night outdoors: the helicopter's lamps, the ward's windows)
     pc.hour = hour;
@@ -4337,6 +4340,11 @@ int runGame(const GameOptions& opt) {
     { HitchScope hs(hitch, "trees"); scenery.update(cam.pos); }
     { HitchScope hs(hitch, "resort"); resort.update(frameDt, cam.pos); }
     { HitchScope hs(hitch, "groundmap"); groundMap.update(world, renderer, cam.pos, opt.autotest && frame < 3); }   // (the valley mist's height map)
+    {   // (atmosphere.js) the clouds round the camera
+      HitchScope hs(hitch, "clouds");
+      clouds.update(frameDt, world, cam.pos, {weather.snow, weather.cloud, weather.mist, weather.wind, weather.sea}, light.fogDensity, light.fogFalloff, q.clouds, frame < 3);
+      renderer.setClouds(clouds.frame);
+    }
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
     const double ptRig = perfMs();
     rig.showcase = showcaseOn;
@@ -4738,6 +4746,7 @@ int runGame(const GameOptions& opt) {
     }
     pt0 = perfMs();
     perf.add("skier rig, audio, HUD + menus built", pt0 - ptRig);
+    frameLight.fogDensity += clouds.cloudInside * 0.012f;   // (main.js: riding through the overcast deck, a whiteout)
     renderer.beginFrame(cam, frameLight, player.renderPos);
     if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
       // (train.js: the cabin lit by its own strips, every surface in its own colour x (1, 0.86, 0.68) x 0.55 x uCabin:

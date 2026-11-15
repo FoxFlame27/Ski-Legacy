@@ -14,6 +14,7 @@
 // Everything is drawn camera-relative (the camera sits at the origin), so far from the village nothing jitters.
 #pragma once
 #include "core/math.h"
+#include "engine/cloud_shapes.h"
 #include "engine/model.h"
 #include "gfx/gfx.h"
 #include <string>
@@ -189,6 +190,8 @@ public:
   bool trailsOn() const { return set_.trailSize > 0; }
   void addParticle(const Particle& p) { particles_.push_back(p); }
   void setSnowfall(const Snowfall& s) { snowfall_ = s; }
+  /// atmosphere.js's cloud scenery for this frame (world/clouds): the cumulus cards, the overcast deck, the height map
+  void setClouds(const CloudFrame& f);
   int snowFlakes() const { return snowN_; }
   /// Frustum test of a world-space box (for the caller's culling).
   bool visible(const dvec3& bmin, const dvec3& bmax) const;
@@ -236,9 +239,22 @@ private:
   void trailPass();
   void particlePass();
   void glarePass();
+  // atmosphere.js's clouds: the baked noise and impostor atlas (two RGBA8 maps), the toroidal terrain map, the cards
+  // and the overcast deck, drawn at the end of the main pass
+  void bakeClouds();
   void cloudPass();
-  vec4 cloudLow_{0};
   bool noClouds_ = false;
+  gfx::Program cardP_, deckP_;
+  gfx::RenderTarget cloudNoiseRT_, atlasRT_[2];
+  gfx::Texture cloudTerrain_;
+  gfx::Buffer cloudQuad_, cloudIdx_, cardBuf_;
+  gfx::VertexInput cardVi_, deckVi_;
+  std::vector<CloudCard> cards_;
+  std::vector<vec4> cardData_;
+  float deckCover_ = 0, deckH_ = 620, deckAbove_ = 1;
+  bool deckLean_ = false;
+  dvec2 deckDrift_{0};
+  vec3 cSun_{0}, cSky_{0}, cGnd_{0};
   vec4 rays_[32]; float rayI_[32];
   vec3 glareCore_{0};
   void aoPass();
@@ -255,7 +271,7 @@ private:
   int aw_ = 1, ah_ = 1, atlasW_ = 1, atlasH_ = 1;
   gfx::Buffer frameUbo_, shadowUbo_[4], hudVbo_, lightsUbo_, stampVbo_, stampQuad_, stampIdx_, partVbo_;
   gfx::VertexInput stampVi_, partVi_;
-  gfx::Program clouds_, glare_, bloomDown_, bloomUp_, ao_, aoBlur_, final_, fxaa_, env_p_, stamp_, trailFade_, particle_, impostor_, depthImp_;
+  gfx::Program glare_, bloomDown_, bloomUp_, ao_, aoBlur_, final_, fxaa_, env_p_, stamp_, trailFade_, particle_, impostor_, depthImp_;
   std::vector<PointLight> lights_;
   std::vector<TrailStamp> stamps_;
   std::vector<Particle> particles_;

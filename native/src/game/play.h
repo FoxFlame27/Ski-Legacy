@@ -66,10 +66,21 @@ struct PlayCtx {
   std::function<bool()> covered;                                    // a transition still covers the screen (the race intro waits for the reveal)
   std::function<void(const std::string& label)> titleCard;         // the branded title card over a move ("RACE \xC2\xB7 Ice Canyon")
   // (Phase 6) multiplayer: the server is authoritative (net/session.js); unset in single player
-  bool online = false;                                              // races are practice races (no fee, no prize)
+  bool online = false;                                              // multiplayer: the server is authoritative
+  int mpPid = 0;                                                    // your player id in the world (multiplayer)
   std::function<void(int64_t amount, const std::string& source)> earnFrom;   // payouts by source ('job', 'sell')
   std::function<void(const std::string& race)> raceSolo;            // a practice race at the server
   std::function<void(double time, bool dnf)> raceFinished;          // your finish, at the line
+  /// (session.js raceJoin / the queue) a race with the other players in the world: join its queue; its state
+  std::function<void(const std::string& race)> raceJoin;
+  std::function<void()> raceLeave;
+  struct RaceQueue { int n = 0; double startIn = -1; bool mine = false; };
+  std::function<RaceQueue(const std::string& race)> raceQueue;
+  /// the other racers of the race you are in: name, time (s; < 0 still racing), dnf; and your prize from the server's
+  /// result (-1: not in yet)
+  struct RaceRival { std::string name; double time = -1; bool dnf = false; };
+  std::function<std::vector<RaceRival>()> raceRivals;
+  std::function<int()> racePrize;
   std::function<std::string(int plot)> chaletOwner;                 // another player's chalet ("" none)
   std::function<void(int plot, const std::string& name, std::function<void(bool)> done)> buyChalet;
   std::function<void(int plot, const std::string& owner, std::function<void(bool, const nlohmann::json& furniture)> done)> visitChalet;

@@ -52,6 +52,10 @@ public:
   void addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels& vm, const Model* sled, const glm::mat4& sledFit,
                const dvec3& cam, const std::string& interior) const;
   /// the name cards, the pill, the prompt, the banner, chat (W x H pixels, u = the HUD scale)
+  /// (net/ui.js: body.in-race #mp-ui .mp-pill) racing: the status pill moves to the bottom left, out of the race HUD's way
+  bool inRace = false;
+  /// the race queue's line under the pill (ui.js setRace: "RACE QUEUE · <course> · n/14 · starts in N s"; "" none)
+  std::string raceLine;
   void hud(Ui& ui, const Multiplayer& mp, const Camera& cam, int W, int H, float u, bool nameTags, const std::string& interior,
            const std::string& allowKey, const std::string& denyKey) const;
   /// the chat line being typed (Enter opens it in the game; "" closed)

@@ -5223,6 +5223,14 @@ int runGame(const GameOptions& opt) {
         renderer.addLight(l);
       }
     }
+    if (roadTunnelDark > 0.05 && !camUnderground && transport.loaded()) {   // (a road tunnel's ceiling lamps light the tube: warm pools every 20 m)
+      static std::vector<dvec3> lamps;
+      transport.roadTunnelLamps(cam.pos, 20, 6, lamps);
+      for (const dvec3& q : lamps) {
+        PointLight l; l.pos = q; l.color = vec3(1.0f, 0.86f, 0.62f) * 30.f * float(roadTunnelDark); l.range = 26.f;
+        renderer.addLight(l);
+      }
+    }
     if (camUnderground && rideKind == Ride::Rail) railway.tunnelLights(renderer);
     else if (camUnderground && rideKind == Ride::Express) express.tunnelLights(renderer);
     bool indoor = rooms.inside();

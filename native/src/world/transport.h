@@ -119,6 +119,8 @@ public:
   /// a vehicle at p heading fwd in a road tunnel's tube (or its approaches, 3 m past the portals): the point `back` m
   /// behind it along the tube's centre line, at the floor's level there (a chase camera that never leaves the tube)
   bool roadTunnelBehind(const dvec3& p, const dvec3& fwd, double back, dvec3& out) const;
+  /// the ceiling lamps of the road tunnel the camera is in (every `every` m along it, the `n` nearest to p): their places
+  void roadTunnelLamps(const dvec3& p, double every, int n, std::vector<dvec3>& out) const;
   /// guardrail segments near (x, z) (16 m grid)
   const std::vector<int>* railsNear(double x, double z) const;
 

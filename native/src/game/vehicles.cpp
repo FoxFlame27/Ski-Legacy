@@ -166,6 +166,21 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
         p.baseColor = vec4(hexColor("#f2c200"), 1) * vec4(1.15f, 1.15f, 1.15f, 1);
         p.metallic = std::min(p.metallic, 0.3f);
       }
+      // (bus.js MIC_INNER: its cabin. Plain standard shading as the trains' cabins (no Meshy detail layer: its grain
+      // and the automatic glass darkened the seats and panels to near black from the seat), and the cabin's own light
+      // as the railcars' (setCabinLight: its albedo given back as a soft emission, more at night and in a tunnel), so
+      // the seat view reads as the web game's, whose cabin is lit by the open sky through the light glass)
+      for (size_t i = 0; i < m->materials.size(); i++) {
+        Material& q = m->materials[i];
+        static const char* INNER[] = {"Interior", "InteriorRacks", "InteriorWindow", "Seats", "SeatMetal", "SeatPlastic"};
+        bool inner = false;
+        for (const char* n : INNER) inner = inner || q.name == n;
+        if (!inner || q.alpha == Material::Alpha::Blend) continue;
+        q.shading = 7;
+        if (q.baseTex && !q.emissiveTex) q.emissiveTex = q.baseTex;
+        busCabinMats_.push_back(int(i));
+      }
+      SL_INFO("vehicles: bus cabin materials %zu (plain, lit)", busCabinMats_.size());
       bus.model = m; bus.fit = t.bus.fit; bus.size = vec3(float(t.bus.width), 3.0f, float(t.bus.len));
     }
   }
@@ -256,6 +271,11 @@ void VehicleModels::setCabinLight(float k) {
   if (std::fabs(k - cabinK_) < 0.004f) return;
   cabinK_ = k;
   for (const CabinMat& c : cabinMats_) c.model->materials[c.i].emissive = c.lamp * (0.8f + 3.2f * k);
+  if (bus.model) for (int i : busCabinMats_) {
+    Material& q = bus.model->materials[size_t(i)];
+    const vec3 alb = q.emissiveTex ? vec3(1) : vec3(q.baseColor);
+    q.emissive = alb * vec3(q.baseColor) * (0.06f + 0.22f * k);
+  }
 }
 
 const VehicleModel* VehicleModels::dressed(const VehicleModel* vm, int finish, const std::string& rims) const {

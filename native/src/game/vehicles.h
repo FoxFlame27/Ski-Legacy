@@ -103,6 +103,7 @@ private:
   float cabinK_ = -1;
   int busGlassIn_ = -1;
   std::vector<int> busGlassMats_;
+  std::vector<int> busCabinMats_;   // (the Micruss's cabin: seats, racks, panels; lit by setCabinLight)
   gfx::Device* dev_ = nullptr;
   AssetManager* assets_ = nullptr;
   const Transport* t_ = nullptr;

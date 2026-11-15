@@ -72,6 +72,28 @@ double Railway::boardingU(int st, int dir) const {
   double tA = haltArrival(R.stations[size_t(st)].id);
   return dir > 0 ? tA + R.dwellMid * 0.3 : 2 * T + R.dwellEnd - tA - R.dwellMid * 0.7;
 }
+bool Railway::windowAt(const std::string& id, bool up, double& u0, double& dur) const {
+  if (!t_.rail.ok) return false;
+  int want = -1;
+  for (size_t i = 0; i < t_.rail.stations.size(); i++) if (t_.rail.stations[i].id == id) want = int(i);
+  if (want < 0) return false;
+  const double C = t_.rail.cycle, step = 0.25;
+  auto inW = [&](double u) {
+    const State st = trainState(u, 0);
+    return st.at == want && (up ? st.leg == "up" || st.leg == "bottom" : st.leg == "down" || st.leg == "top");
+  };
+  const int n = int(std::ceil(C / step));
+  for (int i = 0; i < n; i++) {
+    const double u = i * step;
+    if (inW(u) && !inW(u - step)) {
+      double d = 0;
+      while (d < C && inW(u + d + step)) d += step;
+      u0 = u; dur = d + step;
+      return true;
+    }
+  }
+  return false;
+}
 dvec3 Railway::trackPoint(double s, bool loop) const {
   Line::P p = t_.rail.line.at(s);
   double off = loop ? t_.loopOffset(s) : 0;

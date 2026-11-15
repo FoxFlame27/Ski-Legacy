@@ -101,7 +101,8 @@ private:
   int activePad_ = -1;
   platform::PadFamily family_ = platform::PadFamily::Xbox;
   double lastLook_ = -1e9;
-  vec2 restR_{0}, lastR_{0}; double stillR_ = 0;   // (the right stick's learned rest point)
+  vec2 restR_{0}, lastR_{0}; double stillR_ = 0;
+  vec2 restL_{0}, lastL_{0}; double stillL_ = 0;   // (the left stick's)   // (the right stick's learned rest point)
 };
 
 /// Text fields (the multiplayer name, the chat): `typed` (Events::text, UTF-8) appended to `s` up to `maxChars`

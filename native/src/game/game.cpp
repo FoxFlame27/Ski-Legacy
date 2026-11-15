@@ -323,6 +323,7 @@ int runGame(const GameOptions& opt) {
   // spend the memory, Balanced keeps the models' budgets)
   assets.textureScale = (q.compressTextures && dev->supportsBC(true)) || q.fx >= 2 ? q.textureScale : 1;
   assets.triangleBudget = q.triangleBudget;
+  assets.texCacheDir = plat->saveDir() + "texcache/";   // (the compressed textures from the first start)
   if (!opt.verifyPoses.empty()) return verifyPoses(assets, opt.verifyPoses == "@data" ? paths.dataRoot + "/poses_ref.json" : opt.verifyPoses);
   Renderer renderer;
   RenderSettings rs;
@@ -351,6 +352,10 @@ int runGame(const GameOptions& opt) {
     ui.textLH(72 * u, 50 * u + 42 * u * 0.85f, 104 * u * 0.85f, 104 * u, UiFont::CondBold, vec4(1), "LEGACY", UiAlign::Left, 0.03f);
     ui.textLH(72 * u + 44 * u, 266 * u, 30 * u, std::max(13 * ui.dpr(), 15 * u), UiFont::BodyMed, ui_color::a(vec4(1), 0.9f), what, UiAlign::Left, 0.06f);
     ui.ring(72 * u + 15 * u, 266 * u + 15 * u, 13.5f * u, 3 * ui.dpr(), ui_color::a(vec4(1), 0.25f));
+    {   // (the loading circle's turning quarter: the game is working, not frozen)
+      const float a0 = float(std::fmod(plat->timeSeconds() * 5.0, 6.283185307));
+      ui.arc(72 * u + 15 * u, 266 * u + 15 * u, 13.5f * u, a0, a0 + 1.6f, 3 * ui.dpr(), vec4(1));
+    }
     if (over) over();   // (the boot intro's black lifting off this screen)
     ui.end();
     plat->swapBuffers();
@@ -372,6 +377,20 @@ int runGame(const GameOptions& opt) {
     }
   }
   loadingFrame("Loading the mountain...");
+  // while the world builds the window keeps answering (macOS shows the spinning beach ball and "not responding" after
+  // a few seconds without events) and the loading screen keeps turning: after every model, at most 20 times a second
+  std::string loadingWhat = "Loading the mountain...";
+  double loadingDrawn = 0;
+  bool quitWhileLoading = false;
+  if (!opt.autotest && !mptest) assets.onLoaded = [&]() {
+    const double now = plat->timeSeconds();
+    if (now - loadingDrawn < 0.05) return;
+    loadingDrawn = now;
+    platform::Events lev;
+    plat->pollEvents(lev);
+    if (lev.quit) quitWhileLoading = true;
+    loadingFrame(loadingWhat.c_str(), [] {});   // (a redraw: not logged again)
+  };
 
   // (where the load's memory goes: SKI_LEGACY_DEBUG=memlog, the process footprint and the GPU's share at each step)
   const bool memLog = std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "memlog");
@@ -398,6 +417,7 @@ int runGame(const GameOptions& opt) {
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
   memAt("scenery");
+  loadingWhat = "Building the resort...";
   loadingFrame("Building the resort...");
   Resort resort(*dev, world, assets);
   resort.lodScale = q.lodScale;
@@ -468,6 +488,7 @@ int runGame(const GameOptions& opt) {
     }
     return false;
   };
+  loadingWhat = "Laying the roads and the railways...";
   loadingFrame("Laying the roads and the railways...");
   RailSweep sweep;
   sweep.build(*dev, transport);
@@ -503,6 +524,7 @@ int runGame(const GameOptions& opt) {
     if (i < 0) SL_WARN("garage: unknown car %s", c.id.c_str());
     else drive.dress(i, c.paint, c.rims);   // (Phase 7: your car's paint; its rims)
   }
+  loadingWhat = "The trail map, the people, the courses...";
   loadingFrame("The trail map, the people, the courses...");
   TrailMap tmap;
   tmap.load(*plat, paths, world, transport, lifts);
@@ -640,6 +662,8 @@ int runGame(const GameOptions& opt) {
   dev->memTag("after the load (streamed, built during play)");
   assets.logLateLoads = hitchTest;
   dev->gpuTiming(hitchTest);
+  assets.onLoaded = nullptr;   // (models loaded later, in play, do not draw the loading screen)
+  if (quitWhileLoading) { audio.stop(*plat); return 0; }
   SL_INFO("world ready in %.2f s: %zu terrain nodes, %zu trees in range, %zu resort props, %zu lifts, %.0f MB textures (GPU: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", plat->timeSeconds() - t0,
           terrain.nodeCount(), scenery.treesDrawn(), resort.propCount(), lifts.lines().size(), assets.textureBytes() / 1048576.0,
           dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);

@@ -18,6 +18,9 @@
 #include <cctype>
 #include <cstring>
 #include <future>
+#include <filesystem>
+#include <thread>
+#include <fstream>
 #include <map>
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +30,46 @@ namespace sl {
 
 namespace {
 struct Image { int w = 0, h = 0; std::vector<uint8_t> rgba; std::vector<std::vector<uint8_t>> levels; bool bc3 = false, bc5 = false; };
+
+// ---- the block-compressed textures' disk cache: compressing a model's maps on the CPU is the slow part of the load
+// (a 4096 px colour map is ~1 s); the result is kept per (image bytes, size cap, format) under the save folder, so
+// only the first start pays for it
+uint64_t fnv64(const uint8_t* p, size_t n, uint64_t h = 1469598103934665603ull) {
+  for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ull; }
+  return h;
+}
+constexpr uint32_t kTexCacheMagic = 0x53544331;   // 'STC1'
+bool texCacheRead(const std::string& file, Image& im) {
+  std::ifstream f(std::filesystem::path(file), std::ios::binary);
+  if (!f) return false;
+  uint32_t hd[6] = {};
+  if (!f.read(reinterpret_cast<char*>(hd), sizeof hd) || hd[0] != kTexCacheMagic || hd[5] > 20) return false;
+  Image o; o.w = int(hd[1]); o.h = int(hd[2]); o.bc3 = hd[3] & 1; o.bc5 = (hd[3] & 2) != 0;
+  o.levels.resize(hd[5]);
+  for (auto& l : o.levels) {
+    uint32_t n = 0;
+    if (!f.read(reinterpret_cast<char*>(&n), 4) || n > (64u << 20)) return false;
+    l.resize(n);
+    if (!f.read(reinterpret_cast<char*>(l.data()), std::streamsize(n))) return false;
+  }
+  if (o.levels.empty()) return false;
+  im.w = o.w; im.h = o.h; im.bc3 = o.bc3; im.bc5 = o.bc5; im.levels = std::move(o.levels);
+  return true;
+}
+void texCacheWrite(const std::string& file, const Image& im) {
+  std::error_code ec;
+  std::filesystem::create_directories(std::filesystem::path(file).parent_path(), ec);
+  const std::string tmp = file + ".tmp" + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+  {
+    std::ofstream f(std::filesystem::path(tmp), std::ios::binary);
+    if (!f) return;
+    uint32_t hd[6] = {kTexCacheMagic, uint32_t(im.w), uint32_t(im.h), uint32_t((im.bc3 ? 1 : 0) | (im.bc5 ? 2 : 0)), 0, uint32_t(im.levels.size())};
+    f.write(reinterpret_cast<const char*>(hd), sizeof hd);
+    for (const auto& l : im.levels) { uint32_t n = uint32_t(l.size()); f.write(reinterpret_cast<const char*>(&n), 4); f.write(reinterpret_cast<const char*>(l.data()), std::streamsize(n)); }
+    if (!f) { f.close(); std::filesystem::remove(std::filesystem::path(tmp), ec); return; }
+  }
+  std::filesystem::rename(std::filesystem::path(tmp), std::filesystem::path(file), ec);
+}
 
 bool decodeImage(const uint8_t* data, size_t size, const char* mime, Image& out) {
   bool webp = (mime && std::string(mime) == "image/webp") || (size > 12 && std::memcmp(data, "RIFF", 4) == 0 && std::memcmp(data + 8, "WEBP", 4) == 0);
@@ -111,6 +154,7 @@ std::shared_ptr<Model> AssetManager::model(const std::string& name, const ModelL
   lateLoadMs += ms;
   if (logLateLoads) SL_INFO("[hitch] model '%s' loaded on the main thread during play: %.1f ms", name.c_str(), ms);
   cache_[name] = m;
+  if (onLoaded) onLoaded();   // (the loading screen keeps turning between the models)
   return m;
 }
 
@@ -182,14 +226,28 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !isNormal[i];   // (keepCpu too: the CPU copy is the RGBA kept beside the blocks)
       // (normal maps: BC5, two channels at 8 bits a pixel, the shader rebuilds z; not one that is a colour map as well)
       bool bc5 = compressTextures && dev_.supportsRG() && isNormal[i] && !srgb[i];
-      jobs.push_back(std::async(std::launch::async, [img, cap, bc, bc5]() {
+      const bool needRgba = lodCol || opt.keepCpu;   // (the LODs' colours / the outfits read the pixels)
+      const std::string cacheRoot = (bc || bc5) && !texCacheDir.empty() ? texCacheDir : std::string();
+      jobs.push_back(std::async(std::launch::async, [img, cap, bc, bc5, needRgba, cacheRoot]() {
         Image im;
         if (!img || !img->buffer_view) return im;
         const uint8_t* data = cgltf_buffer_view_data(img->buffer_view);
-        if (!data || !decodeImage(data, img->buffer_view->size, img->mime_type, im)) return Image{};
+        if (!data) return Image{};
+        std::string cacheFile;
+        if (!cacheRoot.empty()) {
+          uint64_t h = fnv64(data, img->buffer_view->size);
+          const int key[3] = {cap, bc ? 1 : 0, bc5 ? 1 : 0};
+          h = fnv64(reinterpret_cast<const uint8_t*>(key), sizeof key, h);
+          char nm[40]; std::snprintf(nm, sizeof nm, "%016llx.bc", (unsigned long long)h);
+          cacheFile = cacheRoot + nm;
+          if (!needRgba && texCacheRead(cacheFile, im)) return im;   // (the blocks from an earlier start: no decode at all)
+        }
+        if (!decodeImage(data, img->buffer_view->size, img->mime_type, im)) return Image{};
         downsample(im, cap);
+        if (!cacheFile.empty() && needRgba) { Image c; if (texCacheRead(cacheFile, c) && c.w == im.w && c.h == im.h) { im.levels = std::move(c.levels); im.bc3 = c.bc3; im.bc5 = c.bc5; return im; } }
         if (bc && im.w >= 4 && im.h >= 4) compressBC(im.rgba.data(), im.w, im.h, im.levels, im.bc3);   // (on the worker too)
         if (bc5 && im.w >= 4 && im.h >= 4) { compressBC5(im.rgba.data(), im.w, im.h, im.levels); im.bc5 = true; }
+        if (!cacheFile.empty() && !im.levels.empty()) texCacheWrite(cacheFile, im);
         return im;
       }));
     }

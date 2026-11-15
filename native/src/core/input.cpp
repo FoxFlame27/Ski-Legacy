@@ -147,7 +147,12 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
   // left stick with a radial dead zone (0.2) rescaled to full range
   float sx = 0, sy = 0;
   if (havePad) {
-    float lx = gp.leftX, ly = -gp.leftY, m = std::sqrt(lx * lx + ly * ly);
+    // (a stick that rests off centre must not walk you: its rest point is learned while it sits still near the middle,
+    // as for the right stick below)
+    const double now = p.timeSeconds();
+    if (std::fabs(gp.leftX - lastL_.x) > 0.02f || std::fabs(gp.leftY - lastL_.y) > 0.02f) { lastL_ = vec2(gp.leftX, gp.leftY); stillL_ = now; }
+    else if (std::hypot(gp.leftX, gp.leftY) < 0.4f && now - stillL_ > 0.6) restL_ += (vec2(gp.leftX, gp.leftY) - restL_) * 0.2f;
+    float lx = gp.leftX - restL_.x, ly = -(gp.leftY - restL_.y), m = std::sqrt(lx * lx + ly * ly);
     if (m > 0.2f) { float k = std::min(1.f, (m - 0.2f) / 0.8f) / m; sx = lx * k; sy = ly * k; }
   }
   moveX_ = std::fabs(sx) > std::fabs(kx) ? sx : kx;

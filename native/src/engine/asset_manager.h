@@ -3,6 +3,7 @@
 // (normalised integer attributes, unpacked to float), EXT_texture_webp (libwebp) and PNG / JPEG (stb_image),
 // skins and animations. Optionally builds extra LODs per primitive with meshoptimizer's simplifier.
 #pragma once
+#include <functional>
 #include "engine/model.h"
 #include <memory>
 #include <string>
@@ -33,6 +34,10 @@ struct ModelLoadOptions {
 class AssetManager {
 public:
   AssetManager(platform::Platform& p, gfx::Device& dev, const AssetPaths& paths) : p_(p), dev_(dev), paths_(paths) {}
+  /// where block-compressed textures are kept between starts (empty: no cache)
+  std::string texCacheDir;
+  /// called after each model is loaded (the loading screen: the window answers, the circle turns)
+  std::function<void()> onLoaded;
   /// models/<name>.glb from the asset root; nullptr (and a log line) if missing or broken.
   std::shared_ptr<Model> model(const std::string& name, const ModelLoadOptions& opt = {});
   /// Load from an explicit path.

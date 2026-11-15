@@ -255,6 +255,7 @@ void Railway::fillColliders(std::vector<Collider>& out, const dvec3& near) const
       glm::dmat4 M;
       carMatrix(int(t), k, M);
       if (glm::length(dvec3(M[3]) - near) > 60) continue;
+      if (near.y < M[3][1] - 2.5) continue;   // (trainstop.js CarColliders.add: well below its floor, e.g. under a viaduct)
       Collider c;
       c.x = M[3][0]; c.z = M[3][2]; c.hw = C.hw; c.hd = C.half + C.gap / 2; c.rot = -std::atan2(M[2][0], M[2][2]); c.top = M[3][1] + C.roofTop;
       out.push_back(c);
@@ -558,6 +559,7 @@ void Express::fillColliders(std::vector<Collider>& out, const dvec3& near) const
       glm::dmat4 M;
       carMatrix(int(k), c, M);
       if (glm::length(dvec3(M[3]) - near) > 60) continue;
+      if (near.y < M[3][1] - 2.5) continue;   // (trainstop.js CarColliders.add: well below its floor, e.g. under a viaduct)
       Collider col;
       col.x = M[3][0]; col.z = M[3][2]; col.hw = C.hw; col.hd = C.half + C.gap / 2; col.rot = -std::atan2(M[2][0], M[2][2]); col.top = M[3][1] + C.roofTop;
       out.push_back(col);

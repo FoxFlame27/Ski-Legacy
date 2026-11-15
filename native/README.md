@@ -1801,6 +1801,33 @@ by position except a rescue in progress, which is on the mountain).
   run unchanged (`SKI_LEGACY_DEBUG=helicheck` / `rescuetest` PASS: landed on the pad, the ambulance to the medical
   centre).
 
+### Round 3: the Dorfstrasse, the Autohaus / police / Werkstatt in the village, footpaths, trees off the roads
+
+- **The Dorfstrasse** (`village.json` "roads", `Village::addRoads`): the valley road used to end at the Legacy Village
+  stop (the bus terminus, (4, 46)); a road now runs on from there along the depot road's bend, west between the Hotel
+  Tirolerhof (now at z 33) and the Hotel Silberhorn (now at z 76) where the Silberhornweg was, and straight west along
+  z 50 at the Oberdorf's foot to its end at (-172, 50) (~190 m, 30 km/h). It is appended to the transport pack's road
+  network as it loads (heights from the drawn ground, smoothed; the relief is level across it), so the car's road
+  surface and tarmac, the speed limit, police routing and traffic all have it; traffic on the valley road runs on into
+  it at the stop and back (`Traffic` links: a main road's end meeting a village road's end). Drawn with the exported
+  roads' own ribbon (`roadsnow-road`: the road snow look), left out where an exported road already lies; lamps by turns
+  on both sides and the plough's banks along the edges; walkers have its south edge in the walking network.
+- **Sites moved onto it** (moves with a clip: only what lies short of the road in front of the old yard goes, so the
+  valley road stays whole; play-data box colliders' `rot` now turn with a move): the **Autohaus** (134, 213) -> (-90, 33),
+  the **police station / prison** (150, 262) -> (-124, 34), the **Werkstatt** (156, 293) -> (-152, 35), each turned so its
+  yard faces the Dorfstrasse as it faced the valley road, at the same distance from the road's middle (17.0 / 16.0 /
+  14.9 m; their floor level `y` is what lands on the new ground: the old yards stood in the valley road's cuts, so the
+  copied ground is held 6 cm under it). Their buildings, rooms, doors, yards, tow trucks, patrol car bay, lots (frames and exits) and colliders go with
+  them. The Autohaus car park (impound) stays on the valley road. The chalets Stadel and Haus Bergfrieden stand across
+  the road now.
+- **Footpaths**: the Postgasse and the Werkstattgasse from the Dorfstrasse up to the Kapellenweg; the Bahnhofstiege from
+  the square's north-west corner straight up the terraces (ramps through the terrace walls at each terrace's level) to
+  the Legacy Express station's exit.
+- **Trees**: every layout tree is checked against all roads, car parks / yards (as moved), the moved sites and the
+  footpaths, and moved off to the nearest clear spot (9 of 30 moved).
+- Not done yet: the trail map draws its roads from `map.json` (the Dorfstrasse is not on it), the ski shop is not
+  moved, the village core is not compacted.
+
 ## Status: the native port against the JavaScript game
 
 | area | JS game (`src/`) | native (`native/`) |

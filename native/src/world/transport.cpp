@@ -40,6 +40,7 @@ Road readRoad(const nlohmann::json& r, const std::vector<uint8_t>& bin) {
   o.from = r.value("from", -1); o.to = r.value("to", -1);
   o.access = r.value("access", false); o.scenic = r.value("scenic", false); o.depot = r.value("depot", false); o.heli = r.value("heli", false);
   o.ring = r.value("ring", false); o.loop = r.value("loop", false); o.chalet = r.value("chalet", false);
+  o.village = r.contains("village");
   if (r.contains("prof")) {
     auto& p = r["prof"];
     o.kmh = arr<int16_t>(p["kmh"], bin); o.limF = arr<float>(p["limF"], bin); o.limB = arr<float>(p["limB"], bin);

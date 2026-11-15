@@ -14,6 +14,7 @@ struct MpLive {
   std::string path;
   long offset = 0;
   double pollT = 0;
+  int renderFrames = 0;   // ("render N": the next N frames drawn, not only the shots)
   /// the commands that arrived since the last call (each split at spaces), polled about 5 times a second
   std::vector<std::vector<std::string>> poll(double dt) {
     std::vector<std::vector<std::string>> out;

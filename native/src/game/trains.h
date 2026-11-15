@@ -125,6 +125,14 @@ public:
   std::string rideVehicle() const;
   /// (debug: mplive) where car `car` of train `train` is drawn now; how far along its line it is
   double debugS(int train) const { return trains_[size_t(train)].st.s; }
+  double debugU(int train) const { return u(train); }
+  /// (debug: mplive) the timetable one way: its loop, each segment's start and length, the profile's samples
+  std::string debugTt(int dir) const {
+    const Way& w = way(dir);
+    std::string o = "loop " + std::to_string(w.loop) + " n " + std::to_string(Tm_.size()) + " Tm[n] " + std::to_string(Tm_.empty() ? 0.0 : Tm_.back()) + ":";
+    for (const Seg& g : w.segs) o += " " + std::to_string(int(g.dwell)) + "/" + std::to_string(g.ia) + "-" + std::to_string(g.ib) + "@" + std::to_string(g.t0).substr(0, 7) + "+" + std::to_string(g.dur).substr(0, 6);
+    return o;
+  }
   int trainCount() const { return int(trains_.size()); }
   dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }

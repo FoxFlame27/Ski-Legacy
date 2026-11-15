@@ -207,6 +207,8 @@ public:
   /// (debug) in the air at (x, z), agl m over the snow, the rotor at speed
   void debugPlace(double x, double z, double agl, double yaw = 0);
   /// (debug: helitest) aboard at once on a flight plan to zone i, paid
+  /// (debug: mplive) aboard on a flight plan to zone i, paid as FLY pays (multiplayer: rented at the server)
+  void debugRent(int zone) { if (state == State::Parked && !away_) payFly(zone >= 0 && size_t(zone) < zones_.size() ? &zones_[size_t(zone)] : nullptr); }
   void debugFly(int zone) { if (state != State::Parked) return; c_.spend(price_); plan_ = zone >= 0 && size_t(zone) < zones_.size() ? &zones_[size_t(zone)] : nullptr; board(); }
 
   // the parts the rescue flies

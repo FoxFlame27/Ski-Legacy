@@ -830,6 +830,9 @@ int runGame(const GameOptions& opt) {
   boardLiftFn = boardLift;
   // (debug: mplive) "lift <line> <up 0|1>": to that station and E; "log": the shared vehicles as they are placed here
   mpLiveCmd = [&](const std::vector<std::string>& c) {
+    // "rescue": knocked down here, the rescue helicopter comes (free); "helirent <zone>": FLY at the heli-ski desk
+    if (c[0] == "rescue") { player.knockDown(1, dvec3(0), 0, false); SL_INFO("[mplive] rescue called: %d", int(heli.rescueMe(true))); }
+    if (c[0] == "helirent") { heli.debugRent(c.size() > 1 ? std::atoi(c[1].c_str()) : 0); SL_INFO("[mplive] heli rent asked"); }
     if (c[0] == "lift" && c.size() > 2 && size_t(std::atoi(c[1].c_str())) < lifts.lines().size()) {
       LiftLine& l = lifts.lines()[size_t(std::atoi(c[1].c_str()))];
       const bool up = c[2] != "0";
@@ -848,8 +851,20 @@ int runGame(const GameOptions& opt) {
     for (size_t i = 0; i < lifts.lines().size(); i++) { const LiftLine& l = lifts.lines()[i]; if (l.pos.empty() || !l.near) continue; std::snprintf(b, sizeof b, " L%zu %.2f %.2f %.2f %.3f", i, l.pos[0].x, l.pos[0].y, l.pos[0].z, l.s[0]); s += b; }
     SL_INFO("[mplive] T %.0f%s", mp.net.serverNow(), s.c_str());
     s.clear();
-    for (int i = 0; i < express.trainCount(); i++) { std::snprintf(b, sizeof b, " %.2f", express.debugS(i)); s += b; }
+    for (int i = 0; i < express.trainCount(); i++) { std::snprintf(b, sizeof b, " %.2f/%.3f", express.debugS(i), express.debugU(i)); s += b; }
+    std::snprintf(b, sizeof b, " lt-now e %.1f w %.1f", mp.lineTime("express|e") - mp.net.serverNow(), mp.lineTime("express|w") - mp.net.serverNow()); s += b;
     SL_INFO("[mplive] E %.0f%s", mp.net.serverNow(), s.c_str());
+    s = " r" + std::to_string(railway.trainCount()) + ":" + std::to_string(railway.seatCount()) + " x" + std::to_string(express.trainCount()) + " l";
+    for (const LiftLine& l : lifts.lines()) { std::snprintf(b, sizeof b, "%.1f:%zu:%g,", l.L, l.s.size(), l.cfg.speed); s += b; }
+    SL_INFO("[mplive] timetables%s", s.c_str());
+    SL_INFO("[mplive] express up %s", express.debugTt(1).c_str());
+    if (rooms.inside()) {   // (rows inside a room are in its own frame: yours and the others' there, in it)
+      const dvec3 me = rooms.toLocal(player.pos);
+      std::string o;
+      for (auto& [id, r] : mp.players) if (r.interior == mp.interior()) { const dvec3 l = rooms.toLocal(r.sm); std::snprintf(b, sizeof b, " %s (%.2f, %.2f, %.2f)", r.name.c_str(), l.x, l.y, l.z); o += b; }
+      SL_INFO("[mplive] in room '%s': me (%.2f, %.2f, %.2f) yaw %.2f; the others in its frame:%s", mp.interior().c_str(), me.x, me.y, me.z, player.heading, o.c_str());
+    }
+    SL_INFO("[mplive] heli: state %d away %d pad hidden %d at (%.1f, %.1f, %.1f) rescue %d; the server's %s", int(heli.state), int(heli.away()), int(heli.padHidden), heli.flight.pos.x, heli.flight.pos.y, heli.flight.pos.z, int(heli.rescuing()), mp.heli.dump().c_str());   // (transit.js fingerprint's parts, to hold against the web game's)
     SL_INFO("[mplive] rigs drawn %d, rescues %d, ride info '%s', players: %s", mpv.rigsDrawn, mpv.rescuesDrawn, mp.rideInfo.c_str(), mpv.trace.c_str());
     std::string k; int n = 0;
     const std::string v = lifts.riding() ? lifts.rideVehicle(k, n) : std::string();
@@ -2197,6 +2212,7 @@ int runGame(const GameOptions& opt) {
               else if (op == "key") { static const std::pair<const char*, Action> KEYS[] = {{"forward", Action::Forward}, {"back", Action::Back}, {"left", Action::Left}, {"right", Action::Right}, {"jump", Action::Jump}, {"interact", Action::Interact}, {"sprint", Action::Sprint}};
                 for (auto& [n, a] : KEYS) if (word(1) == n) input.inject(a, num(2) != 0); }
               else if (op == "png" && !opt.png.empty()) pendingPng = pngVariant(opt.png, word(1).c_str());
+              else if (op == "render") mpLive.renderFrames = int(num(1, 60));
               else if (op == "log") {
                 SL_INFO("[mplive] me at (%.2f, %.2f, %.2f) yaw %.2f interior '%s' ride %d; clock %.3f h, server now %.0f", player.pos.x, player.pos.y, player.pos.z, player.heading, mp.interior().c_str(), int(rideKind), mp.hourNow().value_or(-1), mp.net.serverNow());
                 for (auto& [id, r] : mp.players) SL_INFO("[mplive] %s (pid %d) at (%.2f, %.2f, %.2f) yaw %.2f st %d flags 0x%x veh '%s' interior '%s' look %s -> %s", r.name.c_str(), id, r.sm.x, r.sm.y, r.sm.z, r.smYaw, r.st, r.flags, r.veh.c_str(), r.interior.c_str(), r.look.dump().c_str(), mpv.describe(id).c_str());
@@ -4487,7 +4503,8 @@ int runGame(const GameOptions& opt) {
       resort.finishStreaming(cam.pos);
       sfx.update(0.05, hour, light.night, weather.wind, cam.pos);
     }
-    if (mptest && pendingPng.empty()) rendered = false;   // (llvmpipe: the network test draws only its screenshots, so it runs at a real frame rate)
+    if (mptest && pendingPng.empty() && mpLive.renderFrames <= 0) rendered = false;
+    if (mpLive.renderFrames > 0) mpLive.renderFrames--;   // (debug mplive "render N": N frames drawn, so a shot is settled)   // (llvmpipe: the network test draws only its screenshots, so it runs at a real frame rate)
     if (const char* shot = std::getenv("SKI_LEGACY_SHOT"); shot && at == AT::Ski) {   // (debug: a fixed camera "x,y,z,tx,ty,tz")
       double v[6] = {0};
       if (std::sscanf(shot, "%lf,%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6) {

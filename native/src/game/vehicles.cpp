@@ -93,11 +93,13 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
       auto& rm = *t.railModels;
       if (rm.contains("cabin")) rail.cabin = resort.transportModel(rm["cabin"]);
       if (rm.contains("cabinExpress")) rail.cabinExpress = resort.transportModel(rm["cabinExpress"]);
-      // (train.js glassIn: the panes seen from inside are nearly clear, 13 % of a pale blue. The renderer's glass (a smooth
-      // blended surface) mirrors the sky at full strength and the sun lights the pane's own colour: from a seat on the
-      // sunny side the windows went milky. From inside they are a faint tint only: no mirror, a quarter of the colour)
+      // (train.js materials(): the cabin is plain MeshStandardMaterial, its surfaces' texture its own (the baked
+      // cabinPatch maps), no Meshy detail layer: that layer's triplanar grain bumped the walls like plaster and crinkled
+      // the grab rails. The panes seen from inside, glassIn, are a standard lit surface too: 13 % of a pale blue with
+      // the sun's glint and the sky's reflection at that 13 %, not the renderer's glass (whose Fresnel turns the pane
+      // opaque at a glance). Two of them between you and the line ahead, the cab partition and the windscreen)
       for (Model* cm : {rail.cabin.get(), rail.cabinExpress.get()})
-        if (cm) for (Material& q : cm->materials) if (q.alpha == Material::Alpha::Blend && q.baseColor.w < 0.2f) { q.roughness = 0.6f; q.baseColor = vec4(vec3(q.baseColor) * 0.25f, q.baseColor.w); }
+        if (cm) for (Material& q : cm->materials) if (q.shading == 0 && q.name.empty()) q.shading = 7;
       // (the cabins' light strips: their own emission, brighter at night and in a tunnel; setCabinLight)
       for (Model* cm : {rail.cabin.get(), rail.cabinExpress.get()})
         if (cm) for (size_t i = 0; i < cm->materials.size(); i++) {

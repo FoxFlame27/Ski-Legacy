@@ -385,17 +385,27 @@ int runGame(const GameOptions& opt) {
   SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
+  // (where the load's memory goes: SKI_LEGACY_DEBUG=memlog, the process footprint and the GPU's share at each step)
+  const bool memLog = std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "memlog");
+  auto memAt = [&](const char* what) {
+    if (!memLog) return;
+    const double fp = plat->footprintBytes() / 1048576.0, gpu = (dev->textureBytes() + dev->bufferBytes()) / 1048576.0;
+    SL_INFO("[mem] %-28s footprint %6.0f MB, GPU %6.0f MB, the rest %6.0f MB", what, fp, gpu, fp - gpu);
+  };
   loadingFrame("Building the resort...");
   Resort resort(*dev, world, assets);
   resort.lodScale = q.lodScale;
   resort.textureCap = q.maxTexture;
   resort.compressTextures = q.compressTextures;
   bool haveResort = resort.load(*plat, paths, scenery);
-  if (!haveResort) scenery.loadVillage(*plat, paths);   // (Phase 1 placements without the resort data)
+  if (!haveResort) scenery.loadVillage(*plat, paths);
+  memAt("resort");
+   // (Phase 1 placements without the resort data)
   Lifts& lifts = resort.lifts();
   // (Phase 3) the transport: roads, car parks, railways (data), the swept track, the vehicles
   Transport transport;
   if (const nlohmann::json* net = resort.transportNet()) transport.load(*net, resort.transportBin());
+  memAt("transport data");
   if (transport.loaded()) world.roadSurface = [&](double x, double z, double mesh, double yHint) { return transport.roadSurface(world, x, z, mesh, yHint); };
   if (transport.rail.ok) world.addDeck([&](double x, double z) { return transport.railDeckHeight(x, z); });
   if (transport.express.ok) world.addDeck([&](double x, double z) { return transport.expressDeckHeight(x, z); });
@@ -456,8 +466,10 @@ int runGame(const GameOptions& opt) {
   RailSweep sweep;
   sweep.build(*dev, transport);
   sweep.buildGuardrails(*dev, transport, world);
+  memAt("rail sweep");
   VehicleModels vmodels;
   vmodels.load(*dev, assets, transport, resort);
+  memAt("vehicle models");
   Drive drive(world, scenery, transport, vmodels);
   Traffic traffic(world, transport, vmodels);
   BusLine buses(world, transport, vmodels);
@@ -478,6 +490,7 @@ int runGame(const GameOptions& opt) {
   PlayerSkier rig;
   auto rigColour = [&]() { return save.character == "skier_red" ? std::string("red") : std::string("blue"); };
   if (!rig.load(assets, rigColour())) SL_WARN("skier model missing: the player is invisible");
+  memAt("skier rig");
   // (Phase 4) your garage: the cars you own stand in the Autohaus car park's bays
   for (const Save::Car& c : save.garage) {
     int i = drive.addOwned(c.id, c.plate, c.damage);
@@ -488,6 +501,7 @@ int runGame(const GameOptions& opt) {
   TrailMap tmap;
   tmap.load(*plat, paths, world, transport, lifts);
   tmap.buildRelief(jobs, world, *dev);
+  memAt("trail map");
 
   // spawn: the village plaza (main.js), or the top of a run on the Legacy face
   std::vector<Piste> pistes = loadPistes(*plat, paths);
@@ -507,10 +521,12 @@ int runGame(const GameOptions& opt) {
   HeliParts heliParts = loadHeliParts(resort);   // (the helicopter's parts and the ward, built from the play pack before its bin goes)
   transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
   resort.releaseLoadData();
+  memAt("packs released");
   Shapes shapes;
   shapes.init(*dev);
   People people;
   people.load(assets, world);
+  memAt("people");
   PeopleSim folk;
   Npcs npcs;
   folk.setKinds(people.fanKinds, people.skierKinds);
@@ -521,6 +537,7 @@ int runGame(const GameOptions& opt) {
     folk.init(world, pl, int((opt.autotest ? 28 : 56) * q.npcScale), std::max(2, int((opt.autotest ? 6 : 14) * q.npcScale)));
     npcs.init(people, *dev, world, pl, q);   // (npcs.js: the resort's skiers and walkers, the far skiers)
   }
+  memAt("npcs");
   Weather weather;
   weather.init(unsigned(plat->timeSeconds() * 1000) ^ 0x5eedu, opt.autotest);
   PlayCtx pc;
@@ -541,11 +558,13 @@ int runGame(const GameOptions& opt) {
   world.addDeck([&](double x, double z) { return ward.deck(x, z); });
   Heli heli(pc, ward);
   Chalets chalets(pc, rooms, windows);
+  memAt("rooms, windows, showroom");
   Werkstatt werk(pc);                          // (werkstatt.js: the repair garage beside the Autohaus)
   police.load(assets);
   ward.load(assets, heliParts.ward);
   heli.load(assets, heliParts);
   heliParts = HeliParts{};
+  memAt("police, ward, heli");
   heli.openChart = [&]() {   // (heli.js openDialog: the flight planner chart, ui/travel.js)
     TrailMap::Travel T = tmap.heliTravel(save.money, heli.price());
     heli.planner(T);
@@ -557,6 +576,7 @@ int runGame(const GameOptions& opt) {
   Snowmobiles sleds(pc);
   sleds.load(assets);
   sleds.place();
+  memAt("chalets, sleds");
   // (Phase 7) lamps' light pools, car lights and plates, snowmaking, flags, snowcats
   SceneFx sfx;
   {
@@ -565,6 +585,7 @@ int runGame(const GameOptions& opt) {
     sfx.init(*dev, assets, resort, world, resort.fonts(), pl, &playData, q.npcScale, q.lodScale);
   }
   std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
+  memAt("scene fx");
   VehicleDraw snowDraw;
   Transition trans;   // the scenes between two places (transition.js): the dark dip with the logo, the title card
   bool jailResumed = false, rescueResumed = false;
@@ -608,6 +629,7 @@ int runGame(const GameOptions& opt) {
   terrain.finish(cam.pos);
   scenery.finish(cam.pos);
   resort.update(0, cam.pos);
+  memAt("streamed in");
   resort.finishStreaming(cam.pos);
   dev->memTag("after the load (streamed, built during play)");
   assets.logLateLoads = hitchTest;

@@ -960,6 +960,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   else if (m.shading == 5) kind = 5;   // (a lamp's emission only: game/scenefx)
   else if (m.shading == 6) kind = 6;   // (the gondola cabin: its painted windows are glass)
   else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
+  else if (m.shading == 7) kind = 0;   // (plain standard shading, also when blended: the railcars' cabins, train.js)
   else if (m.alpha == Material::Alpha::Blend && m.roughness < 0.6f) kind = 3;
   else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && (m.paint == 0 || m.paint == 3) &&
                               (m.name.empty() || m.name.rfind("Material_", 0) == 0))) kind = 2;

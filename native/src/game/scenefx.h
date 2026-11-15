@@ -88,6 +88,8 @@ private:
   std::unordered_map<const VehicleModel*, CarLamps> carLamps_;
   const CarLamps& lampsFor(const VehicleModel& vm);
   std::vector<std::string> plateOrder_;
+  std::unordered_map<std::string, uint64_t> plateUsed_;   // (the frame each plate was last asked for: never evicted in it)
+  uint64_t plateFrame_ = 0;
   int nSprays_ = 0, nLamps_ = 0, nCarLights_ = 0, nPlates_ = 0;
 };
 

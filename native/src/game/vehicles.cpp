@@ -423,6 +423,12 @@ static void splitWheels(gfx::Device& dev, VehicleModel& vm, const CarSpec* steer
 }
 
 void VehicleDraw::submit(Renderer& r, gfx::Device& dev, const dvec3& cam) {
+  // a model nothing drew this frame loses its batch at once: models come and go (a car dressed in a new paint / rims,
+  // another player's car, a LOD) and a new one can be allocated at a freed one's address; a batch kept under that key
+  // still held the old model's buffers (the crash in submitInstances)
+  for (auto it = batches_.begin(); it != batches_.end();) {
+    if (it->second.inst[0].empty() && it->second.inst[1].empty()) it = batches_.erase(it); else ++it;
+  }
   std::vector<MatrixInstanceBatch::Inst> pk;
   for (auto& [m, b] : batches_) {
     for (int l = 0; l < 2; l++) {

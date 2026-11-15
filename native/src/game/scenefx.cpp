@@ -143,6 +143,7 @@ void SceneFx::init(gfx::Device& dev, AssetManager& assets, const Resort& resort,
 }
 
 void SceneFx::update(double dt, double hour, float night, double wind, const dvec3& cam) {
+  plateFrame_++;
   t_ += dt; hour_ = hour; night_ = night; wind_ = wind; cam_ = cam;
   // the snow guns running: at dusk and at night, the ones nearest you (snowmaking.js)
   running_.clear();
@@ -179,16 +180,24 @@ void SceneFx::update(double dt, double hour, float night, double wind, const dve
 }
 
 const Model* SceneFx::plateModel(const std::string& text) {
+  plateUsed_[text] = plateFrame_;
   auto it = plates_.find(text);
   if (it != plates_.end()) return it->second.get();
-  if (plates_.size() >= 48) {   // (a small cache: the oldest plate texture goes)
-    auto old = plates_.find(plateOrder_.front());
-    if (old != plates_.end()) {
-      for (auto& mesh : old->second->meshes) for (auto& p : mesh.primitives) { dev_->destroy(p.input); dev_->destroy(p.vbo); dev_->destroy(p.ibo); }
-      dev_->destroy(old->second->materials[0].baseTex);
-      plates_.erase(old);
+  if (plates_.size() >= 48) {   // (a small cache: the oldest plate texture goes, never one drawn this frame: it is
+    // already in this frame's vehicle batches, and freeing it crashed the draw; with more plates in view it grows)
+    for (size_t i = 0; i < plateOrder_.size(); i++) {
+      const std::string key = plateOrder_[i];
+      if (plateUsed_[key] == plateFrame_) continue;
+      auto old = plates_.find(key);
+      if (old != plates_.end()) {
+        for (auto& mesh : old->second->meshes) for (auto& p : mesh.primitives) { dev_->destroy(p.input); dev_->destroy(p.vbo); dev_->destroy(p.ibo); }
+        dev_->destroy(old->second->materials[0].baseTex);
+        plates_.erase(old);
+      }
+      plateUsed_.erase(key);
+      plateOrder_.erase(plateOrder_.begin() + long(i));
+      break;
     }
-    plateOrder_.erase(plateOrder_.begin());
   }
   // carconfig.js plateTexture: 1024 x 220: the white reflective plate with its thin black rim, the shields (the Swiss
   // cross left, the canton's red / white halves right), the text black and condensed, as wide as it fits

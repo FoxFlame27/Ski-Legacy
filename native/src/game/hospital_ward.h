@@ -12,6 +12,7 @@
 #pragma once
 #include "game/interiors.h"
 #include "game/play.h"
+#include "game/window_view.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,7 +22,7 @@ class Renderer;
 
 class HospitalWard {
 public:
-  HospitalWard(PlayCtx& c, Interiors& rooms);
+  HospitalWard(PlayCtx& c, Interiors& rooms, WindowView& win);
   void load(AssetManager& assets, std::shared_ptr<Model> mesh);
   /// Taken to the medical centre: you wake up in a hospital bed. false when it cannot (no medical centre): the caller
   /// leaves you outside its door as before.
@@ -46,15 +47,8 @@ public:
   double deck(double x, double z) const;
   bool seat(dvec3& pos, dvec3& fwd) const;
   bool camera(Camera& cam) const;
-  /// The windows' view (the web game's live portal, here photographed as you go in): while the screen is covered
-  /// (`covered`: the fade's dark moment, or a test) four frames show the village from the house's four sides; each is
-  /// read back after the scene is drawn (captured) and put on that wall's panes. true: this frame is one of them.
-  bool captureCamera(Camera& cam, bool covered);
-  bool capturing() const { return armed_; }
-  void captured(Renderer& r);
   bool interact(std::string& prompt, bool pressed);
   std::string objective() const;
-  void draw(Renderer& r);
   void hud(Ui& ui, float u);
   void reset();
   /// (the wake-up's eyelids are still closing / opening)
@@ -75,11 +69,11 @@ private:
   struct Furn { std::shared_ptr<Model> model; mat4 m; };
   void build();
   void enterNow();
-  void buildPanes(int view, float tanH, float tanV);
   void outside();
   void getUp();
   PlayCtx& c_;
   Interiors& rooms_;
+  WindowView& win_;   // (the windows and the glass doors: the village live, hospitalroom.js LivePortal)
   bool ok_ = false;
   std::shared_ptr<Model> mesh_;
   std::vector<Furn> furn_;
@@ -96,12 +90,8 @@ private:
   bool discharged_ = false, third_ = false, notified_ = false;
   double yaw_ = 0, pitch_ = -0.3, tpYaw_ = PI, tpPitch_ = -0.45;
   dvec3 eye_{0}, body_{0};
-  Role pending_ = Role::None;       // admitted / visiting: the windows' view is taken first, then you are in
-  double pendingSeconds_ = -1, captureWait_ = 0;
-  int capture_ = 99;                // the photograph being taken (VIEWS; past them: none)
-  bool armed_ = false;
-  float viewDay_ = 1;               // the daylight (1 - night) when the photographs were taken
-  std::shared_ptr<Model> paneModel_[5];
+  Role pending_ = Role::None;       // admitted / visiting: in at the next update
+  double pendingSeconds_ = -1;
   bool hasEye_ = false;
 };
 

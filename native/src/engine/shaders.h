@@ -50,7 +50,18 @@ layout(std140) uniform Frame {
   vec4 uRes;            // xy render size, zw 1 / size
   vec4 uEnvGround;      // env: ground colour (sunlit snow bounce), w mist
   vec4 uCloud;          // x layer bottom (world y), y top, z wind x, w wind z
+  vec4 uClipA;          // (a room's window view) the house left out: xyz its box's centre (camera-relative), w cos(heading)
+  vec4 uClipB;          // xyz the box's half extents (x <= 0: none), w sin(heading)
+  mat4 uPortalVP;       // (a room's window) the camera its picture was drawn for (camera-relative view-projection)
+  vec4 uPortalEye;      // xyz: how far the eye moved since
 };
+// inside the box a window's view leaves out (the house you look out of)?
+bool slClipped(vec3 rel) {
+  if (uClipB.x <= 0.0) return false;
+  vec3 q = rel - uClipA.xyz;
+  vec2 h = vec2(q.x * uClipA.w - q.z * uClipB.w, q.x * uClipB.w + q.z * uClipA.w);
+  return abs(h.x) < uClipB.x && abs(q.y) < uClipB.y && abs(h.y) < uClipB.z;
+}
 #ifndef SL_MAX_LIGHTS
 #define SL_MAX_LIGHTS 16
 #endif
@@ -484,6 +495,30 @@ void main() {
     float ld = ign(gl_FragCoord.xy);
     if (ld >= vLodFade.x || ld < vLodFade.y) discard;
   }
+  if (uFlags3.y > 8.5 && uMat.x > 0.5) {
+    // a room's misty window (below High): grey frosted glass seen from inside, the hour's soft light (uEmissive)
+    // coming through, brighter toward the top, a mottled mist and frost creeping in from the frame (vColor.xy: the
+    // pane's size in metres)
+    vec2 m = vUV * vColor.xy;
+    float edge = min(min(m.x, vColor.x - m.x), min(m.y, vColor.y - m.y));
+    float n1 = texture(uNoise, m * 0.23 + vec2(0.31, 0.17)).r, n2 = texture(uNoise, m * 1.1 + vec2(0.7, 0.4)).r;
+    float glow = 0.72 + 0.45 * smoothstep(0.0, 1.0, vUV.y) + 0.10 * (1.0 - abs(vUV.x * 2.0 - 1.0));
+    vec3 c = uEmissive * glow * (0.96 + 0.08 * n1);
+    float frost = 1.0 - smoothstep(0.03, 0.12 + 0.20 * n2, edge + 0.06 * (n1 - 0.5));
+    c = mix(c, uEmissive * vec3(1.45, 1.5, 1.6) + vec3(0.015), frost * 0.7);
+    oColor = vec4(c, 1.0);
+    return;
+  }
+  if (uFlags3.y > 8.5) {
+    // a room's window (liveportal.js): the world as the portal pass drew it, by the pixel's place on the screen
+    // (on the screen of the frame it was drawn in: it is drawn every other frame)
+    vec4 pc = uPortalVP * vec4(vRel + uPortalEye.xyz, 1.0);
+    vec2 suv = pc.xy / max(pc.w, 1e-4) * 0.5 + 0.5;
+    if (uMat.z < 0.0) suv.y = 1.0 - suv.y;   // (its mirror image in a polished floor)
+    oColor = vec4(texture(uEmissiveMap, suv).rgb * uEmissive, 1.0);
+    return;
+  }
+  if (slClipped(vRel)) discard;
   if (uFlags3.y > 4.5 && uFlags3.y < 5.5) {
     // a lamp's lit graphics (carlights.js lampsOn: the material's emissive x its map): only the emission, added
     vec3 e = vTint.a > 0.0 ? vTint.rgb : uEmissive;

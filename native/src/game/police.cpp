@@ -586,12 +586,13 @@ void Police::draw(Renderer& r, const dvec3& cam) {
   Shapes& sh = *c_.shapes;
   // the station (prisonoutside.js: the POLIZEI house on its lot, its door toward the road)
   if (!outside_ && c_.roomModel && c_.data && c_.data->prisonDef.hasOutside) outside_ = c_.roomModel("prison_outside");
-  if (outside_ && !rooms_.inside()) {
-    // (the alpine POLIZEI house on its lot as the web game builds it; out of its own windows' photographs)
+  const bool out = !rooms_.inside() || win_.outdoors();   // (outdoors, or the world drawn for a room's windows)
+  if (outside_ && out) {
+    // (the alpine POLIZEI house on its lot as the web game builds it; left out of its own windows' view)
     const dvec3 p = c_.data->prisonDef.outsideAt;
-    if (!(entering_ && win_.capturing()) && glm::length(p - cam) < 1500 && r.visible(p - dvec3(30, 2, 30), p + dvec3(30, 16, 30)))
+    if (!(rooms_.room() == Interiors::Room::Prison && win_.outdoors()) && glm::length(p - cam) < 1500 && r.visible(p - dvec3(30, 2, 30), p + dvec3(30, 16, 30)))
       r.submitModel(*outside_, p, mat4(1), nullptr, glm::length(p - cam) < 300);
-  } else if (station_ && c_.data && c_.data->prison.ok && !rooms_.inside()) {
+  } else if (station_ && c_.data && c_.data->prison.ok && out) {
     const Site& P = c_.data->prison;
     dvec3 p(P.x, c_.world->height(P.x, P.z), P.z);
     if (glm::length(p - cam) < 1500 && r.visible(p - dvec3(12, 0, 12), p + dvec3(12, 14, 12)))
@@ -730,32 +731,14 @@ void Police::enterStation(bool jailed) {
   entering_ = true;
   if (c_.fade) c_.fade();
   c_.player->vel = dvec3(0);
-  std::vector<WindowView::Shot> shots;
+  // (prison.js setWorld / renderPortal: the live view out of whichever wing you are in, the gate between them at x
+  // FRONT.x0; the station's own house is not drawn in it: draw())
   std::vector<WindowView::Pane> panes;
-  struct Group { bool office; vec3 out; dvec3 sum{0}; int n = 0; int shot = -1; };
-  std::vector<Group> groups;
-  for (const RoomDef::Pane& p : D.panes) {
-    const vec3 nIn = glm::normalize(vec3(p.m * vec4(0, 0, 1, 0)));
-    const vec3 out = std::fabs(nIn.x) > std::fabs(nIn.z) ? vec3(nIn.x > 0 ? -1.f : 1.f, 0, 0) : vec3(0, 0, nIn.z > 0 ? -1.f : 1.f);
-    const bool office = p.m[3].x >= float(D.frontX0);
-    size_t g = 0;
-    for (; g < groups.size(); g++) if (groups[g].office == office && glm::dot(groups[g].out, out) > 0.9f) break;
-    if (g == groups.size()) groups.push_back({office, out});
-    groups[g].sum += dvec3(vec3(p.m[3])); groups[g].n++;
-    panes.push_back({p.m, p.w, p.h, int(g)});
-  }
-  for (Group& g : groups) {
-    // (from 2.5 m inside the glass, at eye height, looking out)
-    WindowView::Shot s;
-    const dvec3 c = g.sum / double(g.n) - dvec3(g.out) * 2.5;
-    s.local = g.out; s.eyeLocal = vec3(float(c.x), float(D.eye), float(c.z));
-    const glm::dmat4& F = g.office ? D.officeFrame : D.cellsFrame;
-    s.eye = dvec3(F * glm::dvec4(c.x, D.eye, c.z, 1));
-    s.dir = glm::normalize(dvec3(F * glm::dvec4(g.out.x, 0, g.out.z, 0)));
-    s.halfAngle = 60; s.nearZ = 0.4f; s.depth = 14; s.gain = 0.6f;
-    shots.push_back(s);
-  }
-  win_.begin(std::move(shots), std::move(panes), [this, jailed] {
+  for (const RoomDef::Pane& p : D.panes) panes.push_back({p.m, p.w, p.h});
+  const glm::dmat4 cells = D.cellsFrame, office = D.officeFrame;
+  const double gate = D.frontX0;
+  win_.begin(std::move(panes), [cells, office, gate](const dvec3& eye) { WindowView::Place P; P.frame = eye.x < gate ? cells : office; return P; });
+  {
     entering_ = false;
     const PrisonDef& P = c_.data->prisonDef;
     rooms_.setPrisonRole(jailed, 1);
@@ -768,7 +751,7 @@ void Police::enterStation(bool jailed) {
       if (jailed) c_.flash("Released", 0);
     });
     if (jailed) c_.flash("In prison \xC2\xB7 " + mmss(jailLeft_) + " \xC2\xB7 " + jailReason_, 1);
-  });
+  }
 }
 
 std::string Police::objective() const {

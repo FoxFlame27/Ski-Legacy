@@ -515,6 +515,9 @@ struct FrameBlock {
   vec4 skyZenith, skyMid, skyHorizon, skyGlow, skyHalo, skyHaloBroad, skyDisc, skyBelt, moonGlow, skyWisp, moonDir, trueSun;
   vec4 sh[9];
   vec4 misc, misc2, trail, screen, envGround, cloud;
+  vec4 clipA, clipB;
+  mat4 portalVP;
+  vec4 portalEye;
 };
 
 namespace {
@@ -720,6 +723,13 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   }
   viewProj_ = cam_.proj() * cam_.view();
   mat4 m = glm::transpose(viewProj_);
+  if (portalRect_ != vec4(-1, -1, 1, 1)) {   // (a portal: culled to the windows' part of the screen)
+    const vec4& q = portalRect_;
+    mat4 S(1);
+    S[0][0] = 2 / std::max(1e-4f, q.z - q.x); S[3][0] = -(q.z + q.x) / std::max(1e-4f, q.z - q.x);
+    S[1][1] = 2 / std::max(1e-4f, q.w - q.y); S[3][1] = -(q.w + q.y) / std::max(1e-4f, q.w - q.y);
+    m = glm::transpose(S * viewProj_);
+  }
   planes_[0] = m[3] + m[0]; planes_[1] = m[3] - m[0]; planes_[2] = m[3] + m[1];
   planes_[3] = m[3] - m[1]; planes_[4] = m[3] + m[2]; planes_[5] = m[3] - m[2];
   fitCascades(focus);
@@ -779,6 +789,11 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
     float ceilY = 60.f + 200.f * fsmooth(0.2f, 0.9f, L.mist) - 90.f * L.frost;   // (over the valley floors)
     mistP2_ = vec4(fair, set_.fx >= 3 ? 24.f : set_.fx >= 2 ? 16.f : 11.f, 0.0045f + 0.0075f * fair + 0.004f * L.frost, ceilY);
   }
+  // (a portal view: the house you stand in is left out: setClipBox)
+  fb.clipA = vec4(vec3(clipC_ - cam_.pos), float(std::cos(clipYaw_)));
+  fb.clipB = vec4(clipH_, float(std::sin(clipYaw_)));
+  fb.portalVP = portalVP_;
+  fb.portalEye = vec4(portalEye_, 0);
   dev_->updateBuffer(frameUbo_, &fb, sizeof fb);
   for (int c = 0; c < nCasc_; c++) {
     FrameBlock sb = fb;
@@ -966,6 +981,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   if (pine || m.shading == 1) kind = 1;
   else if (m.shading == 5) kind = 5;   // (a lamp's emission only: game/scenefx)
   else if (m.shading == 6) kind = 6;   // (the gondola cabin: its painted windows are glass)
+  else if (m.shading == 9) kind = 9;   // (a room's window: the portal view by screen position)
   else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
   else if (m.shading == 8) kind = 8;   // (the snow on the roads and car parks: bus.js snowCover)
   else if (m.shading == 7) kind = 0;   // (plain standard shading, also when blended: the railcars' cabins, train.js)
@@ -1487,24 +1503,24 @@ void Renderer::bloomPass() {
   }
 }
 
-void Renderer::endFrame() {
-  dev_->resetFrameStats();
-  // (holdFrame: a screen transition is covering a move: the scene passes are skipped, the HDR / bloom / AO targets
-  // still hold the last frame and the final pass shows it again)
-  const bool held = holdFrame && frameDrawn_;
-  if (!held) {
+// the scene into the HDR target: the trail map, the environment, the shadow cascades, the main pass, the sky, the
+// transparent meshes, mist, clouds, particles, snowfall (portal: a window's view of the world, without the lens glare)
+void Renderer::scenePasses(bool portal) {
   uploadLights();
   dev_->bindUniformBuffer(1, lightsUbo_);
-  dev_->gpuPass("trail map");
-  trailPass();
-  dev_->gpuPass("environment");
-  envPass();
+  if (!portal) {   // (a window's view: the frame's own trail map and sky light, drawn for the room's pass)
+    dev_->gpuPass("trail map");
+    trailPass();
+    dev_->gpuPass("environment");
+    envPass();
+  }
   // shadow cascades
-  dev_->gpuPass("shadow cascades");
+  dev_->gpuPass(portal ? "window view: shadow cascades" : "shadow cascades");
   dev_->bindRenderTarget(shadow_, atlasW_, atlasH_);
   dev_->clear(0, 0, 0, 0, false, true);
   if (shadowsOn && light_.sunIntensity > 0.01f) {
-    for (int c = 0; c < nCasc_; c++) {
+    // (a window's view: the nearest cascade only, what stands further out unshadowed: the dearest pass of the view)
+    for (int c = 0; c < (portal ? std::min(nCasc_, 1) : nCasc_); c++) {
       const vec4& r = casc_[c].rect;
       dev_->setViewport(int(r.x * float(atlasW_)), int(r.y * float(atlasH_)), int(r.z * float(atlasW_)), int(r.w * float(atlasH_)), true);
       dev_->bindUniformBuffer(0, shadowUbo_[c]);
@@ -1512,10 +1528,15 @@ void Renderer::endFrame() {
     }
   }
   // main pass (HDR, multisampled on the high presets)
-  gfx::RenderTarget main = msaa_ ? msaa_ : hdr_;
-  dev_->gpuPass("main pass (opaque)");
+  gfx::RenderTarget main = msaa_ && !portal ? msaa_ : hdr_;   // (a window's view: not multisampled)
+  dev_->gpuPass(portal ? "window view: main pass (opaque)" : "main pass (opaque)");
   dev_->bindRenderTarget(main, rw_, rh_);
   dev_->clear(0, 0, 0, 1, true, true);
+  // (a portal: only the windows' part of the screen)
+  const int sx0 = std::clamp(int(std::floor((portalRect_.x * 0.5f + 0.5f) * float(rw_))) - 1, 0, rw_), sy0 = std::clamp(int(std::floor((portalRect_.y * 0.5f + 0.5f) * float(rh_))) - 1, 0, rh_);
+  const int sx1 = std::clamp(int(std::ceil((portalRect_.z * 0.5f + 0.5f) * float(rw_))) + 1, 0, rw_), sy1 = std::clamp(int(std::ceil((portalRect_.w * 0.5f + 0.5f) * float(rh_))) + 1, 0, rh_);
+  auto scissor = [&] { if (portal) dev_->setScissor(sx0, sy0, std::max(1, sx1 - sx0), std::max(1, sy1 - sy0)); };
+  scissor();
   dev_->bindUniformBuffer(0, frameUbo_);
   dev_->bindTexture(U_SHADOW, dev_->renderTargetDepth(shadow_));
   dev_->bindTexture(U_NOISE, noise_);
@@ -1527,7 +1548,7 @@ void Renderer::endFrame() {
   dev_->bindTexture(U_SKYNOISE, skyNoise_);
   drawItems(false, 0);
   // sky behind everything
-  dev_->gpuPass("sky + transparent");
+  dev_->gpuPass(portal ? "window view: sky + transparent" : "sky + transparent");
   {
     gfx::PipelineState ps;
     ps.depth = gfx::DepthTest::LessEqual; ps.depthWrite = false; ps.cull = gfx::Cull::None;
@@ -1557,22 +1578,50 @@ void Renderer::endFrame() {
       drawItem(*it, false, ps, cur);
     }
   }
-  dev_->gpuPass("clouds");
+  dev_->gpuPass(portal ? "window view: clouds" : "clouds");
   cloudPass();
   // resolve; the depth copy the post passes and the particles read
-  dev_->gpuPass("resolve");
-  if (msaa_) dev_->resolve(msaa_, hdr_, rw_, rh_, true, true);
+  dev_->gpuPass(portal ? "window view: resolve" : "resolve");
+  if (msaa_ && !portal) dev_->resolve(msaa_, hdr_, rw_, rh_, true, true);
   dev_->resolve(hdr_, depthCopy_, rw_, rh_, false, true);
   dev_->bindRenderTarget(hdr_, rw_, rh_);
   dev_->bindTexture(U_DEPTH, dev_->renderTargetDepth(depthCopy_));
-  dev_->gpuPass("mist");
+  dev_->gpuPass(portal ? "window view: mist" : "mist");
+  scissor();
   mistPass();
-  dev_->gpuPass("particles + snow + glare");
+  scissor();
+  dev_->gpuPass(portal ? "window view: particles + snow + glare" : "particles + snow + glare");
   particlePass();
   snowPass();
-  glarePass();
-  frameDrawn_ = true;
+  if (!portal) glarePass();
+  dev_->setScissor(0, 0, 0, 0);
+}
+
+void Renderer::endPortal() {
+  if (!(holdFrame && frameDrawn_)) {
+    if (!portal_ || pw_ != rw_ || ph_ != rh_) {
+      if (portal_) dev_->destroy(portal_);
+      pw_ = rw_; ph_ = rh_;
+      // (4 bytes a pixel, no depth: the picture only)
+      portal_ = dev_->createRenderTarget(pw_, ph_, true, gfx::TexFormat::R11G11B10F, false, gfx::TexFormat::Depth24);
+      dev_->setSampling(dev_->renderTargetColor(portal_), gfx::Filter::Linear, gfx::Wrap::Clamp, 1);   // (1:1 still; between pictures looked up by direction)
+    }
+    scenePasses(true);
+    dev_->gpuPass("window view: into its picture");
+    dev_->resolve(hdr_, portal_, rw_, rh_, true, false);
   }
+  clipH_ = vec3(0);
+  portalRect_ = vec4(-1, -1, 1, 1);
+  portalIdle_ = 0;
+}
+
+void Renderer::endFrame() {
+  // (holdFrame: a screen transition is covering a move: the scene passes are skipped, the HDR / bloom / AO targets
+  // still hold the last frame and the final pass shows it again)
+  const bool held = holdFrame && frameDrawn_;
+  if (!held) { scenePasses(false); frameDrawn_ = true; }
+  // (the windows' picture let go of a few seconds after the last room with a view)
+  if (portal_ && ++portalIdle_ > 240) { dev_->destroy(portal_); portal_ = {}; pw_ = ph_ = 0; }
   bool ao = aoRaw_ && (set_.ao > 0 || shaftsK_ > 0.001f);
   dev_->gpuPass("ao / shafts");
   if (ao && !held) aoPass();

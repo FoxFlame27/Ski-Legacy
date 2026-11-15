@@ -128,36 +128,15 @@ void Chalets::goInside(int i) {
   pending_ = i;
   if (c_.fade) c_.fade();
   c_.player->vel = dvec3(0);
-  std::vector<WindowView::Shot> shots;
+  // (chalets.js enter: room.setWorld({ frame: h.frame, hide: the house }): the room's frame is the house's, the ground
+  // floor at 0 here; the house itself is not drawn in the windows' view: draw())
   std::vector<WindowView::Pane> panes;
-  if (R.ok && !R.panes.empty() && c_.roomModel && c_.roomModel("chalet")) {
-    const double cy = std::cos(h.yaw), sy = std::sin(h.yaw);
-    static const vec3 SIDE[4] = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}};
-    int index[8];
-    for (int& k : index) k = -1;
-    for (const RoomDef::Pane& p : R.panes) {
-      // (the pane faces into the room: the wall's way out is against its normal; upstairs by its height)
-      const vec3 n = -glm::normalize(vec3(p.m * vec4(0, 0, 1, 0)));
-      int side = 0;
-      for (int k = 1; k < 4; k++) if (glm::dot(n, SIDE[k]) > glm::dot(n, SIDE[side])) side = k;
-      const bool up = p.m[3].y > (R.G + R.FL) / 2 + 0.6;
-      int& ix = index[side + (up ? 4 : 0)];
-      if (ix < 0) {
-        ix = int(shots.size());
-        WindowView::Shot s;
-        const vec3& l = SIDE[side];
-        s.local = l;
-        s.eyeLocal = vec3(0, float((up ? R.FL - R.G : 0) + R.eye), 0);
-        s.eye = dvec3(h.x, h.y + (up ? R.FL : R.G) + R.eye, h.z);
-        s.dir = dvec3(l.x * cy + l.z * sy, 0, -l.x * sy + l.z * cy);
-        s.halfAngle = 62; s.nearZ = 0.4f; s.depth = 12; s.gain = 0.6f;
-        shots.push_back(s);
-      }
-      // (the room's frame here: the house frame with the ground floor at 0)
-      panes.push_back({glm::translate(mat4(1), vec3(0, float(-R.G), 0)) * p.m, p.w, p.h, ix});
-    }
-  }
-  win_.begin(std::move(shots), std::move(panes), [this, i] { enterNow(i); });
+  if (R.ok && c_.roomModel && c_.roomModel("chalet"))
+    for (const RoomDef::Pane& p : R.panes) panes.push_back({glm::translate(mat4(1), vec3(0, float(-R.G), 0)) * p.m, p.w, p.h});
+  WindowView::Place P;
+  P.frame = glm::translate(glm::dmat4(1), dvec3(h.x, h.y + R.G, h.z)) * glm::rotate(glm::dmat4(1), h.yaw, dvec3(0, 1, 0));
+  win_.begin(std::move(panes), [P](const dvec3&) { return P; }, vec3(0.95f, 0.97f, 0.98f));
+  enterNow(i);
 }
 
 void Chalets::enterNow(int i) {
@@ -553,7 +532,8 @@ void Chalets::fillColliders(std::vector<Collider>& out) const {
 
 void Chalets::draw(Renderer& r, const dvec3& cam) {
   if (!c_.data) return;
-  if (!rooms_.inside() && c_.data->chaletVillage.ok) {
+  const bool out = !rooms_.inside() || win_.outdoors();   // (outdoors, or the world drawn for a room's windows)
+  if (out && c_.data->chaletVillage.ok) {
     // chalets.js build(): the gardens (picket fences, sheds, benches, snowmen, spruces), the parking bays and their
     // signs, the house numbers, the street lamps: the web game's own, exported as one model
     const ChaletVillageDef& V = c_.data->chaletVillage;
@@ -580,10 +560,10 @@ void Chalets::draw(Renderer& r, const dvec3& cam) {
     if (n > 0.2f)
       for (const dvec3& l : V.lamps) if (glm::length(l - cam) < 200) { PointLight q; q.pos = l; q.color = vec3(1.0f, 0.78f, 0.52f) * 55.f * n; q.range = 17; r.addLight(q); }
   }
-  if (!rooms_.inside()) {
+  if (out) {
     // the chalets (chalet.glb on the ones you are near, the low-poly one on the rest)
     for (const ChaletHouse& h : c_.data->chalets) {
-      if (pending_ >= 0 && win_.capturing() && &h == &c_.data->chalets[size_t(pending_)]) continue;   // (its windows' view: without the house itself)
+      if (insideHouse_ >= 0 && win_.outdoors() && &h == &c_.data->chalets[size_t(insideHouse_)]) continue;   // (its windows' view: without the house itself)
       dvec3 p(h.x, h.y, h.z);
       double d = glm::length(p - cam);
       if (d > 1800 || !r.visible(p - dvec3(8, 0, 8), p + dvec3(8, 12, 8))) continue;

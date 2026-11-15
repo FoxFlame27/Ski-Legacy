@@ -43,6 +43,7 @@
 #include "game/werkstatt.h"
 #include "game/window_view.h"
 #include "game/presentation.h"
+#include "game/railclear.h"
 #include "game/races.h"
 #include "game/jobs.h"
 #include "game/police.h"
@@ -649,6 +650,7 @@ int runGame(const GameOptions& opt) {
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
   bool drawTerrain = !off("noterrain"), drawTrees = !off("notrees"), drawVillage = !off("novillage"), drawSkier = !off("noskier");
   bool running = true, paused = false, qualityRestart = false;
+  if (off("railclear")) { railClearance(resort, transport); running = false; }   // (debug: the trains' swept volume against what the packs place: game/railclear.h)
   bool vehTest = off("vehtest");   // (debug: the autotest starts with the Phase 3 vehicles)
   double acc = 0, last = plat->timeSeconds(), fpsT = 0, fps = 0, simTime = 0;
   int fpsN = 0, frame = 0;
@@ -727,6 +729,7 @@ int runGame(const GameOptions& opt) {
   pc.fade = [&]() { if ((!opt.autotest || off("fadetest")) && !mptest) trans.fade(); };   // (fadetest: the debug runs with the real fades)
   pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
   pc.covered = [&]() { return trans.holdsFrame() || trans.covered(); };
+  pc.trails = &trails;
   // presentation/index.js: slow motion on big moments (a big air, a photo finish, a police ram). The autotest keeps real
   // time (its phases count frames) unless SKI_LEGACY_DEBUG=slowmo
   Presentation pres;
@@ -2457,7 +2460,15 @@ int runGame(const GameOptions& opt) {
             introAge = -1;
             expect(std::fabs(introSeen - 8.4) < 0.11 && races.frozen() && races.raceTime() <= 0, "the intro runs 8.4 s (4.9 s flight + 3.5 s crane), then the countdown");
           }
-          if (stage == 0 && cs == "podium") { stage = 1; st = 0; expect(!races.resultsUp() && introSeen > 0, "the podium comes before the results"); }
+          static int farMax = 0, fxMax = 0;
+          farMax = std::max(farMax, races.botsFar); fxMax = std::max(fxMax, races.botsFx);
+          static bool farShot = false;
+          if (!farShot && races.botsFar >= 2 && races.raceTime() > 4 && pendingPng.empty()) { farShot = true; shot("far"); }
+          if (stage == 0 && cs == "podium") {
+            stage = 1; st = 0; expect(!races.resultsUp() && introSeen > 0, "the podium comes before the results");
+            SL_INFO("[racetest] the field: up to %d far stand-ins (beyond 150 m), up to %d racers leaving tracks and spray", farMax, fxMax);
+            expect(fxMax >= 1 && fxMax <= 6, "the nearest racers (at most 6) leave ski tracks and spray");
+          }
           else if (stage == 1) {
             if (at2(0.5)) shot("podium_0p5"); if (at2(2.5)) shot("podium_2p5"); if (at2(5.5)) shot("podium_5p5");
             if (races.resultsUp()) { expect(std::fabs(st - 6.2) < 0.15 && cs == "podium-hold", "the results come up over the podium after 6.2 s"); stage = 2; st = 0; }
@@ -2599,6 +2610,24 @@ int runGame(const GameOptions& opt) {
             bool ok = placed && chalets.furnitureCount() == t5.furn0 + 1 && fd && save.money == m0 - fd->price;
             chaletOk = chaletOk && ok;
             SL_INFO("[autotest] chalet: build mode, placed the %s at (%.2f, %.2f): $%lld -> $%lld, %d pieces -> %s", fd ? fd->name.c_str() : "?", px, pz, (long long)m0, (long long)save.money, chalets.furnitureCount(), ok ? "ok" : "FAILED");
+            // (buildmode.js currentStorey: upstairs, a piece goes on the upper floor, saved at its y as the web save has it)
+            if (!playData.chaletPlanUp.rects.empty()) {
+              const double y0 = player.pos.y;
+              player.pos.y = rooms.toWorld(0, playData.chaletPlanUp.floorY - playData.chaletPlan.floorY, 0).y;
+              bool up = false;
+              for (const Rect2& r : playData.chaletPlanUp.rects) {
+                for (double x = r.x0 + 0.75; x < r.x1 - 0.5 && !up; x += 0.5)
+                  for (double z = r.z0 + 0.75; z < r.z1 - 0.5 && !up; z += 0.5)
+                    if (chalets.place("armchair", x, z, 0)) { up = true; px = x; pz = z; }
+                if (up) break;
+              }
+              const nlohmann::json& fu = save.data("chalet")["furniture"];
+              const double fy = up && fu.is_array() && !fu.empty() ? fu.back().value("y", 0.0) : -1;
+              const bool okUp = up && std::fabs(fy - playData.chaletPlanUp.floorY) < 0.01 && chalets.furnitureCount() == t5.furn0 + 2;
+              chaletOk = chaletOk && okUp;
+              SL_INFO("[autotest] chalet: upstairs, placed the armchair at (%.2f, %.2f) on the upper floor (y %.2f, floor %.2f), %d pieces -> %s", px, pz, fy, playData.chaletPlanUp.floorY, chalets.furnitureCount(), okUp ? "ok" : "FAILED");
+              player.pos.y = y0;
+            }
             input.inject(Action::NextItem, true);
           }
           if (cf == 17) input.inject(Action::NextItem, false);
@@ -3477,6 +3506,7 @@ int runGame(const GameOptions& opt) {
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
+    if (rideKind == Ride::Express) express.drawInfo(*dev, resort.fonts());   // (express.js drawInfo: the cabin's live trip display)
     perf.add("vehicles (traffic, buses, trains)", perfMs() - pt0);
     const double ptRides = perfMs();
     if (rideKind == Ride::Car) {
@@ -4526,7 +4556,19 @@ int runGame(const GameOptions& opt) {
       static int pf = 0;
       pf++;
       const char* want = std::getenv("SKI_LEGACY_CAR");
-      int idx = drive.debugCar(want ? want : "car_bmw_x3");
+      if (want && std::string(want) == "police" && playData.prisonDef.hasPatrol) {
+        // (SKI_LEGACY_CAR=police: the patrol car parked at the station, its front and rear plate by day and at night)
+        const int k = (pf / 70) % 4;
+        const double side = k % 2 ? -1 : 1, yaw = playData.prisonDef.patrolYaw + PI;
+        dvec3 c(playData.prisonDef.patrolX, 0, playData.prisonDef.patrolZ);
+        c.y = world.groundHeight(c.x, c.z, playData.prison.y + 2);
+        const dvec3 f(std::sin(yaw), 0, std::cos(yaw)), rt(f.z, 0, -f.x);
+        cam.lookAt(c + dvec3(0, 0.85, 0) + f * (side * 4.9) + rt * 0.8, c + dvec3(0, 0.55, 0) + f * (side * 2.5)); cam.fovY = 38;
+        if (k >= 2) hour = 21.5;
+        terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+        if (pf % 70 == 60 && pf < 290 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("plate" + std::to_string(k)).c_str());
+      }
+      int idx = want && std::string(want) == "police" ? -1 : drive.debugCar(want ? want : "car_bmw_x3");
       if (idx >= 0) {
         const Drive::Parked& e = drive.parked[size_t(idx)];
         const int k = (pf / 70) % 4;   // front by day, rear by day, front at night, rear at night
@@ -4706,6 +4748,7 @@ int runGame(const GameOptions& opt) {
         drive.carPoses(poses, cam.pos, 160, dark);
         if (aiOn) traffic.carPoses(poses, cam.pos, 160, dark);
         sfx.submit(renderer, vdraw, shapes, cam, poses);
+        { std::vector<CarPose> pp; police.carPoses(pp, cam.pos); for (const CarPose& c : pp) sfx.plates(vdraw, c); }   // (the patrol cars' Swiss plates)
       }
       vdraw.submit(renderer, *dev, cam.pos);
     }

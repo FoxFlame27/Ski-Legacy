@@ -429,6 +429,8 @@ function makePack(name, opt = {}) {
       night: m.userData?.slNight || (m.onBeforeCompile && !m.userData?.slGlow && m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b) > 0 && String(m.onBeforeCompile).includes('uNight') ? [0, 0.45] : null),
       basic: !!m.isMeshBasicMaterial,
     };
+    // (a material the game redraws at run time keeps a name of its own: the Express's info screens, export_net.mjs)
+    if (m.userData?.slTag) d.tag = m.userData.slTag;
     const k = JSON.stringify(d);
     if (!matIndex.has(k)) { matIndex.set(k, mats.length); mats.push(d); }
     return matIndex.get(k);

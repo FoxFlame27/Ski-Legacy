@@ -23,6 +23,9 @@ public:
   void player(const Player& p);
   /// a vehicle on the snow this frame: kind 0 car / truck (four tyres), 1 snowmobile
   void vehicle(int id, const dvec3& pos, double yaw, int kind);
+  /// another skier with a rig state of its own (a race's AI racers: snowfx.js skierFX for the nearest of the field):
+  /// the same grooves and spray as your skis
+  void skier(int id, const dvec3& pos, const dvec3& vel, double heading, double edge, double sideslip, double lean, double speed, bool grounded);
   /// another person (townsfolk, the resort's skiers): their motion decides skis or boots
   void npc(int id, const dvec3& pos, bool skis);
   /// stamps and spray into the renderer (focus: where the trail map is centred, usually you)
@@ -42,6 +45,8 @@ private:
     bool init = false, fresh = false, npcSkis = false;
   };
   void stepNpc(Mover& m, double dt);
+  struct SkiIn { dvec3 pos, vel; double heading, edge, plow, sideslip, lean, speed; };
+  void skiMarks(Mover& m, const SkiIn& P);
   struct Spark { dvec3 p, v; float life, age, size, rot, alpha; float kind = 0, seed = 0, grow = 2.2f; };   // kind 0: powder, 1: a thrown clump
   void groove(Track& t, const dvec2& p, float halfWidth, float strength, float widen, uint8_t kind, float segLen = 0.22f);
   void footprint(const dvec2& p, double yaw, float strength, float scale = 1);

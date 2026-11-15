@@ -200,6 +200,18 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     if (lastSteer) out.cars[out.cars.length - 1].steer = lastSteer;
     log('steering wheel', name, lastSteer ? `${lastSteer.cen.n / 3} triangles at ${lastSteer.c.join(', ')}` : 'none');
   }
+  // the patrol car (police.js car1Template: car1.glb as a fleet car template fitted to CAR1_LEN = 5.0, nose +z) and where
+  // its two Swiss plates go on it (setPlates(inst, C.t, policePlate()): carconfig.js plateSpots, PLATE_SPOT.car1)
+  try {
+    const g = models.car1 || await loadGLB('car1');
+    const CARS = await imp('game/cars.js'), CFG = await imp('game/carconfig.js');
+    const tpl = CARS.carTemplate(g, 5.0, 'car1');
+    // (and the template's fit, cars.js fitCar: every vertex measured (PRECISE), so the car and its plates sit as in the web game)
+    const fit = fitCar(g, 5.0, 'car1').children[0];
+    fit.updateMatrix();
+    out.policeCar = { length: 5.0, fit: fit.matrix.toArray().map(r4), size: [r4(tpl.size.x), r4(tpl.size.y), r4(tpl.size.z)], plates: (CFG.plateSpots(tpl) || []).map((p) => ({ front: !!p.front, m: p.m.toArray().map(r4) })) };
+    log('net: the patrol car', out.policeCar.size.join(' x '), 'm,', out.policeCar.plates.length, 'plates');
+  } catch (e) { log('net: the patrol car\'s plates skipped:', e.message); }
   // the full-detail models (drive.js FULL: the car you drive shows its `_full` model, with its interior): fitted like
   // the simple ones (the same rules: cars.js works on the name without `_full`)
   out.carsFull = [];
@@ -292,6 +304,16 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       if (xproc) {
         xproc.traverse((o) => { if (o !== xproc && o.visible === false) o.traverse((q) => { q.userData.slSkip = true; }); });
         try { bakeCabinDetail(THREE, xproc, log); } catch (e) { log('train detail (express) skipped:', e.message); }
+        // (express.js drawInfo: the railcar's two info screens, over the cab door and on the rear wall, found by their
+        // planes, show the Express's own live trip display: their material is named so the game can redraw its canvas)
+        let screens = 0;
+        xproc.traverse((o) => {
+          const p = o.geometry?.parameters;
+          if (o.isMesh && p && o.geometry.type === 'PlaneGeometry' && ((p.width === 1.2 && p.height === 0.3) || (p.width === 0.84 && p.height === 0.21))) {
+            o.material = o.material.clone(); o.material.userData = { ...o.material.userData, slTag: 'express-info' }; screens++;
+          }
+        });
+        log('net: the Legacy Express info screens', screens);
         out.rail.models.cabinExpress = pack.localModel(xproc);
         log('net: the Legacy Express cabin', out.rail.models.cabinExpress.length, 'parts; Meshy interior', !!xcar.group.getObjectByName('express-interior'));
       }

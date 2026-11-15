@@ -75,7 +75,7 @@ public:
   /// (autotest) the AI field's motion: the largest sideways step of a racer in one frame beyond what its lateral speed
   /// allows (m; 0 = continuous), the largest lateral speed seen (m/s), how many racers are drawn
   double botJump = 0, botLatV = 0;
-  int botsDrawn = 0;
+  int botsDrawn = 0, botsFar = 0, botsFx = 0;   // (rigs drawn; farbots.js stand-ins; racers with snow FX this frame)
 private:
   racebots::Track& trackOf(const Course& c);
   void updateBots(double dt);

@@ -7,6 +7,7 @@
 #include "core/math.h"
 #include <nlohmann/json_fwd.hpp>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -217,7 +218,18 @@ struct PlayData {
   std::vector<ChaletHouse> chalets;
   int chaletPrice = 50000;
   struct ChaletModel { double scale = 10.305, x = 0.2186, z = -0.2762, y = -0.405, HX = 4.02, HZ = 6.08, IX = 3.72, IZ = 5.78, G = 0.3, GC = 2.95, doorZ = -0.17; } chaletModel;
-  struct ChaletPlan { double floorY = 0.3, ceilingY = 2.95; std::vector<Rect2> rects; std::vector<ChaletWall> walls; std::vector<Rect2> blocks; } chaletPlan;
+  struct ChaletPlan {
+    double floorY = 0.3, ceilingY = 2.95; std::vector<Rect2> rects; std::vector<ChaletWall> walls; std::vector<Rect2> blocks;
+    // (the upper floor: chaletplan.js ceilingUp: the roof slope from the knee walls up to the collar; in the dormer
+    // band never below the dormer's flat ceiling)
+    bool up = false;
+    double knee = 1.8, collar = 3.2, pitch = 0.7, dormerZ0 = -2.8, dormerZ1 = 2.8, dormerH = 2.6, IX = 3.72;
+    double ceilingAt(double x, double z) const {
+      if (!up) return ceilingY;
+      const double slope = knee + (IX - std::fabs(x)) * pitch, dorm = z > dormerZ0 && z < dormerZ1 ? dormerH : 0;
+      return floorY + std::min(collar, std::max(dorm, slope));
+    }
+  } chaletPlan, chaletPlanUp;   // (build/chaletlayout.js planLayout(): the ground floor's storey, the upper floor's)
   std::vector<FurnitureDef> furniture;
   std::vector<std::pair<std::string, std::string>> categories;
   double sellRefund = 0.5;

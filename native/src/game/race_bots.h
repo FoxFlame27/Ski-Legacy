@@ -162,7 +162,8 @@ public:
   void update(double dt, const std::vector<Racer>& racers);
   void setParking(int rank, const std::vector<double>& avoid, bool hasCross, double cross);
   /// show: drawn at all; step: seconds between pose solves (the session's level of detail)
-  void animate(double dt, double viewDist, bool countdown, bool show, double step);
+  /// fxOn: one of the nearest racers (snow FX: its tracks and spray; `fx` is set when a sample is due, ~30 Hz)
+  void animate(double dt, double viewDist, bool countdown, bool show, double step, bool fxOn = false);
   double projectFinish() const;
 
   // ---- state (bots.js names)
@@ -189,6 +190,9 @@ public:
   double viewDist = 0;
   double recCrouch = 0.3;     // (bots.js anim.crouch / anim.tuck: what the replay records)
   bool recTuck = false;
+  bool lodFar = false;        // (session.js updateLOD: the far stand-in instead of the rig, FAR_IN / FAR_OUT)
+  double fxAcc = 0;
+  struct Fx { bool due = false, grounded = false; double speed = 0, sideslip = 0, lean = 0, dt = 0; } fx;   // (bots.js fxInfo)
   int cineShown = 0;          // (podium.js shown: skis off, the pose snapped once)
   int cinePlace = -1;       // a podium / replay poses the rig: -1 no, 0 hidden, 1 shown (session.js showRig)
 private:

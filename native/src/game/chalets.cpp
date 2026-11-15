@@ -282,11 +282,21 @@ void Chalets::rebuildFurniture() {
   }
 }
 
+const PlayData::ChaletPlan& Chalets::storey() const {
+  const PlayData& D = *c_.data;
+  if (D.chaletPlanUp.rects.empty() || !c_.player) return D.chaletPlan;
+  // (the room's frame has the ground floor at 0: the plan's y is that + G)
+  const double y = rooms_.toLocal(c_.player->pos).y + D.chaletPlan.floorY;
+  return D.chaletPlanUp.floorY <= y + 0.5 ? D.chaletPlanUp : D.chaletPlan;
+}
+
 bool Chalets::valid(const FurnitureDef& d, double x, double z, double rot, int skip, double& y) const {
-  const auto& P = c_.data->chaletPlan;
+  // (y: over the ground floor, the room's frame; the storey you stand on: buildmode.js currentStorey)
+  const auto& P = storey();
+  const double base = P.floorY - c_.data->chaletPlan.floorY;
   auto it = std::find_if(fits_.begin(), fits_.end(), [&](auto& e) { return e.first == d.id; });
   vec3 dims = it != fits_.end() ? it->second.dims : d.size;
-  y = d.place == "wall" ? d.mount : d.place == "ceiling" ? rooms_.ceiling - dims.y : 0;
+  y = base + (d.place == "wall" ? d.mount : d.place == "ceiling" ? (P.up ? P.ceilingAt(x, z) - P.floorY : rooms_.ceiling) - dims.y : 0);
   Foot f{x, z, dims.x / 2, dims.z / 2, rot};
   if (d.place == "wall") return true;   // (hung on the wall the ray found)
   double cs[4][2];
@@ -305,10 +315,11 @@ bool Chalets::valid(const FurnitureDef& d, double x, double z, double rot, int s
       if (i++ == skip) continue;
       const FurnitureDef* o = c_.data->furnitureById(r.value("id", std::string()));
       if (!o || o->flat || o->place != "floor") continue;
+      if (std::fabs(r.value("y", P.floorY) - P.floorY) > 1.0) continue;   // (another floor's)
       auto jt = std::find_if(fits_.begin(), fits_.end(), [&](auto& e) { return e.first == o->id; });
       vec3 od = jt != fits_.end() ? jt->second.dims : o->size;
       if (overlap(f, Foot{r.value("x", 0.0), r.value("z", 0.0), od.x / 2, od.z / 2, r.value("rot", 0.0)})) {
-        if (d.small) { y = od.y; return true; }   // (small decor sits on top of furniture)
+        if (d.small) { y = base + od.y; return true; }   // (small decor sits on top of furniture)
         return false;
       }
     }
@@ -460,9 +471,11 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   }
   dvec3 o = rooms_.toLocal(cam.pos);
   dvec3 d(fwd);
-  // the floor point under the aim, within reach
-  bool hit = d.y < -0.05;
-  double t = hit ? -o.y / d.y : 0;
+  // the floor point under the aim, within reach (the floor of the storey you stand on)
+  const PlayData::ChaletPlan& P = storey();
+  const double base = P.floorY - D.chaletPlan.floorY;
+  bool hit = d.y < -0.05 && o.y > base;
+  double t = hit ? (base - o.y) / d.y : 0;
   if (t > REACH) hit = false;
   dvec3 fp = o + d * t;
   // hovering a placed piece
@@ -470,7 +483,7 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
   if (hit && ch.contains("furniture") && ch["furniture"].is_array()) {
     double bd = 0.9;
     int i = 0;
-    for (auto& r : ch["furniture"]) { double dd = std::hypot(r.value("x", 0.0) - fp.x, r.value("z", 0.0) - fp.z); if (dd < bd && i != moving_) { bd = dd; hover_ = i; } i++; }
+    for (auto& r : ch["furniture"]) { double dd = std::hypot(r.value("x", 0.0) - fp.x, r.value("z", 0.0) - fp.z); if (dd < bd && i != moving_ && r.value("y", P.floorY) > P.floorY - 0.3 && r.value("y", P.floorY) < P.floorY + 2.8) { bd = dd; hover_ = i; } i++; }
   }
   // (the virtual mouse on the catalogue: its click is the card's, never a placement behind the column)
   const bool jump = in.takePressed(Action::Jump);
@@ -492,7 +505,7 @@ void Chalets::update(double, const Camera& cam, const UiNav& nav) {
     // the wall the aim points at (placement.js rayWall): flush on its face, at the item's mount height
     double best = REACH;
     bool any = false;
-    for (const ChaletWall& w : D.chaletPlan.walls) {
+    for (const ChaletWall& w : P.walls) {
       double ex = w.bx - w.ax, ez = w.bz - w.az, L = std::hypot(ex, ez);
       if (L < 1e-6) continue;
       double nx = -ez / L, nz = ex / L;

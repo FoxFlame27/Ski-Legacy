@@ -1059,7 +1059,8 @@ void BotRacer::setParking(int rank, const std::vector<double>& avoid, bool hasCr
 }
 
 // ---- animation: the skier rig posed from this racer's own motion
-void BotRacer::animate(double dt, double viewD, bool countdown, bool show, double stepT) {
+void BotRacer::animate(double dt, double viewD, bool countdown, bool show, double stepT, bool fxOn) {
+  fx.due = false;
   viewDist = viewD;
   // travel direction & lateral acceleration (lean)
   const Frame& fr = fr_;
@@ -1135,6 +1136,14 @@ void BotRacer::animate(double dt, double viewD, bool countdown, bool show, doubl
   rig.update(std::min(adt, 0.25), ast);
   rig.fx.clear();
   R.pose_();
+  // ski tracks + spray (throttled to ~30 Hz so the shared trail buffer isn't flooded)
+  if (fxOn && viewD < 140) {
+    fxAcc += adt;
+    if (fxAcc >= 1.0 / 30) {
+      fx = {true, !visAir && started, v, std::max(0.04 + std::fabs(lean) * 0.08 + skid * 0.55, anim_.sideslip), lean, fxAcc};
+      fxAcc = 0;
+    }
+  }
 }
 
 // projected finish time for the results if the bot is still racing: the clean run's time from here to the line

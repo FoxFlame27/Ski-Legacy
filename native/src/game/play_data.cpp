@@ -346,13 +346,22 @@ bool PlayData::load(const nlohmann::json& j, const std::vector<uint8_t>& bin) {
     chaletModel.G = num(m, "G", 0.3); chaletModel.GC = num(m, "GC", 2.95);
     if (m.contains("DOOR")) chaletModel.doorZ = num(m["DOOR"], "z", -0.17);
   }
-  if (j.contains("chaletPlan")) {
-    auto& P = j["chaletPlan"];
-    chaletPlan.floorY = num(P, "floorY", 0.3); chaletPlan.ceilingY = num(P, "ceilingY", 2.95);
-    for (auto& r : P["rects"]) chaletPlan.rects.push_back({num(r, "x0"), num(r, "z0"), num(r, "x1"), num(r, "z1")});
-    for (auto& w : P["walls"]) chaletPlan.walls.push_back({num(w, "ax"), num(w, "az"), num(w, "bx"), num(w, "bz"), num(w, "t", 0.2), num(w, "y0"), num(w, "y1")});
-    for (auto& b : P["blocks"]) { double x = num(b, "x"), z = num(b, "z"), hw = num(b, "hw"), hd = num(b, "hd"); chaletPlan.blocks.push_back({x - hw, z - hd, x + hw, z + hd}); }
-  }
+  auto plan = [&](const char* key, ChaletPlan& out) {
+    if (!j.contains(key)) return;
+    auto& P = j[key];
+    out.floorY = num(P, "floorY", 0.3); out.ceilingY = num(P, "ceilingY", 2.95);
+    for (auto& r : P["rects"]) out.rects.push_back({num(r, "x0"), num(r, "z0"), num(r, "x1"), num(r, "z1")});
+    for (auto& w : P["walls"]) out.walls.push_back({num(w, "ax"), num(w, "az"), num(w, "bx"), num(w, "bz"), num(w, "t", 0.2), num(w, "y0"), num(w, "y1")});
+    for (auto& b : P["blocks"]) { double x = num(b, "x"), z = num(b, "z"), hw = num(b, "hw"), hd = num(b, "hd"); out.blocks.push_back({x - hw, z - hd, x + hw, z + hd}); }
+    if (P.contains("ceilingUp")) {
+      auto& C = P["ceilingUp"];
+      out.up = true;
+      out.knee = num(C, "KNEE", 1.8); out.collar = num(C, "COLLAR", 3.2); out.pitch = num(C, "PITCH", 0.7); out.IX = num(C, "IX", 3.72);
+      out.dormerZ0 = num(C, "z0", -2.8); out.dormerZ1 = num(C, "z1", 2.8); out.dormerH = num(C, "h", 2.6);
+    }
+  };
+  plan("chaletPlan", chaletPlan);
+  plan("chaletPlanUp", chaletPlanUp);
   for (auto& f : j["furniture"]) {
     FurnitureDef d;
     d.id = str(f, "id"); d.name = str(f, "name"); d.category = str(f, "category"); d.place = str(f, "place");

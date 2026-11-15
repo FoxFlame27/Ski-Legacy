@@ -11,6 +11,9 @@
 #include "game/racehud.h"
 #include "game/jobboardui.h"
 #include "game/race_bots.h"
+#include "world/snowtrails.h"
+#include <cstring>
+#include <cstdlib>
 #include "game/race_cine.h"
 #include "core/prompts.h"
 #include "player/skier_rig.h"
@@ -42,7 +45,31 @@ const double AI_MULT[4] = {0.6, 1, 1.6, 2.5};
 // (HOUSE_REACH: session.js keeps 2.6 m of the house record clear, or, with the course meshes, the cells its real
 // triangles cover: the racers behind the front row stand beside the house, not in its open front: 2.8 m here)
 constexpr double GRID_GAP = 2.3, GRID_EDGE = 1.2, HOUSE_HALF = 3.7, HOUSE_REACH = 2.8;
-constexpr double LOD_FULL = 30, LOD_HALF = 70, LOD_KEEP = 12, LOD_GONE = 400, BOT_SEP = 1.15;
+constexpr double LOD_FULL = 30, LOD_HALF = 70, LOD_KEEP = 12, LOD_GONE = 900, BOT_SEP = 1.15;
+constexpr int FX_MAX = 6;                       // snow FX (spray, tracks) for the nearest FX_MAX racers
+constexpr double FAR_IN = 150, FAR_OUT = 135;   // m (farbots.js): rig -> stand-in beyond FAR_IN, back to the rig inside FAR_OUT
+// farbots.js: suit colours of the racer outfits (the figure's parts times the racer's colour, as the instance colour)
+const std::pair<const char*, const char*> FAR_SUIT[6] = {{"skier_blue", "#1f5ad6"}, {"skier_red", "#d7263d"}, {"skier_green", "#2a9d4f"}, {"skier_orange", "#f08a24"}, {"skier_black", "#22252b"}, {"skier_purple", "#7b2cbf"}};
+const char* FAR_FALLBACK[10] = {"#d7263d", "#1546c8", "#f6ae2d", "#2a9d8f", "#ffffff", "#111111", "#e76f51", "#7b2cbf", "#ff6b9a", "#3a86ff"};
+// farbots.js figure(): a racer in a tuck-ish stance (skis, bent legs, the torso pitched forward, the helmet; facing +Z),
+// six boxes, lit like a MeshLambertMaterial, no shadow
+std::shared_ptr<Model> farFigure(gfx::Device& dev, const vec3& suit) {
+  Geo all;
+  auto box = [&](float w, float h, float d, float x, float y, float z, const char* hex, float rx = 0) {
+    Geo g = boxGeo(w, h, d);
+    if (rx != 0) g.rotateX(rx);
+    g.translate(x, y, z);
+    g.col.assign(g.pos.size(), hexColor(hex) * suit);
+    all.append(g);
+  };
+  box(0.09f, 0.03f, 1.75f, -0.12f, 0.02f, 0.12f, "#30343c"); box(0.09f, 0.03f, 1.75f, 0.12f, 0.02f, 0.12f, "#30343c");
+  box(0.13f, 0.62f, 0.16f, -0.12f, 0.36f, 0.1f, "#ffffff", -0.35f); box(0.13f, 0.62f, 0.16f, 0.12f, 0.36f, 0.1f, "#ffffff", -0.35f);
+  box(0.42f, 0.58f, 0.3f, 0, 0.95f, 0.2f, "#ffffff", 0.55f);
+  box(0.24f, 0.25f, 0.26f, 0, 1.27f, 0.45f, "#eef1f5");
+  Material m;
+  m.baseColor = vec4(1); m.roughness = 1; m.metallic = 0; m.vertexColor = true;
+  return buildModel(dev, {{std::move(all), m}}, "far-racer");
+}
 const char* BOT_CHARS[6] = {"skier_orange", "skier_black", "skier_purple", "skier_red", "skier_blue", "skier_green"};
 // gatebars.js: the ribbon's lower and upper edge above the snow (knee high), short of each pole, m per stripe pair
 constexpr double BAR_LOW = 0.36, BAR_HIGH = 0.68, BAR_INSET = 0.05, BAR_STRIPE = 0.9;
@@ -105,6 +132,7 @@ struct Races::Session {
   racebots::Track* track = nullptr;
   racebots::Field field;
   std::vector<std::unique_ptr<racebots::BotRacer>> bots;
+  std::vector<std::shared_ptr<Model>> farModel;   // (farbots.js: one stand-in figure per racer, in its suit's colour)
   std::vector<racebots::Racer> racers;
   std::vector<double> avoid;
   int parkCount = 0;
@@ -372,6 +400,12 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
       }
       b->reset(slots[i + 1].s, slots[i + 1].lat, 0);
       SL_INFO("race: field %2zu %-18s target %.2f s, clean run %.2f s, pace %.4f, grid s %.1f lat %+.2f", i, b->name.c_str(), b->spec.targetTime, b->spec.cleanTime, b->spec.P.pace, b->s, b->lat);
+      // (farbots.js: SUIT[char] || FALLBACK[i % 10])
+      {
+        const char* hex = FAR_FALLBACK[i % 10];
+        if (b->kind >= 0 && c_.people) for (const auto& [n, h] : FAR_SUIT) if (c_.people->kindOf(b->kind).name == n) hex = h;
+        s->farModel.push_back(c_.dev ? farFigure(*c_.dev, hexColor(hex)) : nullptr);
+      }
       s->bots.push_back(std::move(b));
     }
   }
@@ -1146,21 +1180,49 @@ void Races::drawBots(Renderer& r, const dvec3& cam) {
   Session& s = *s_;
   const double dt = animDt_;
   animDt_ = 0;
-  botsDrawn = 0;
+  botsDrawn = botsFar = botsFx = 0;
   const bool still = s.st == Session::St::Grid;
-  const bool countdown = still && LEAD_IN + 3 - s.t < 1;
-  for (auto& bp : s.bots) {
-    racebots::BotRacer& b = *bp;
-    if (b.cinePlace >= 0) {   // (a podium or a replay poses the rigs itself: updateCine)
+  const bool countdown = still && !s.intro && LEAD_IN + 3 - s.t < 1;
+  // session.js updateLOD: full-rate poses nearby, fewer pose solves further out, the far stand-in past FAR_IN (back
+  // to the rig inside FAR_OUT), no rig for racers off screen unless close; snow FX (spray, tracks) for the nearest
+  // FX_MAX racers shown within 140 m
+  static const bool farNear = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return e && std::strstr(e, "farnear"); }();   // (debug: the stand-ins from 6 m)
+  const double farIn = farNear ? 6 : FAR_IN, farOut = farNear ? 5 : FAR_OUT;
+  struct Lod { double d = 0; bool view = true, show = false, fx = false; };
+  std::vector<Lod> lod(s.bots.size());
+  std::vector<size_t> near;
+  for (size_t i = 0; i < s.bots.size(); i++) {
+    racebots::BotRacer& b = *s.bots[i];
+    if (b.cinePlace >= 0) continue;
+    Lod& L = lod[i];
+    L.d = glm::length(b.pos - cam);
+    b.lodFar = i < s.farModel.size() && s.farModel[i] && L.d > (b.lodFar ? farOut : farIn);
+    L.view = r.visible(b.pos - dvec3(2.4, 1.5, 2.4), b.pos + dvec3(2.4, 3.3, 2.4));
+    L.show = !b.lodFar && L.d < LOD_GONE && (L.view || L.d < LOD_KEEP);
+    if (L.show && L.d < 140) near.push_back(i);
+  }
+  if (int(near.size()) > FX_MAX) std::sort(near.begin(), near.end(), [&](size_t a, size_t q) { return lod[a].d < lod[q].d; });
+  for (size_t k = 0; k < near.size() && int(k) < FX_MAX; k++) lod[near[k]].fx = true;
+  for (size_t i = 0; i < s.bots.size(); i++) {
+    racebots::BotRacer& b = *s.bots[i];
+    if (b.cinePlace >= 0) {   // (a podium or a replay poses the rigs itself: updateCine; no stand-ins)
       if (b.cinePlace == 1 && b.rigOk && b.R.posed) { drawRig(r, b.R, c_.people->kindOf(b.kind), c_.people->gear(3).get(), 1, true); botsDrawn++; }
       continue;
     }
-    const double d = glm::length(b.pos - cam);
-    const bool view = r.visible(b.pos - dvec3(2.4, 1.5, 2.4), b.pos + dvec3(2.4, 3.3, 2.4));
-    const bool show = d < LOD_GONE && (view || d < LOD_KEEP);
+    const Lod& L = lod[i];
+    const double d = L.d;
     const double step = still ? (d < LOD_KEEP ? 0 : 1.0 / 15) : d < LOD_FULL ? 0 : d < LOD_HALF ? 1.0 / 30 : 1.0 / 15;
-    b.animate(dt, d, countdown, show, step);
-    if (!show || !b.rigOk) continue;
+    b.animate(dt, d, countdown, L.show, step, L.fx);
+    // (bots.js animate: skierFX(trails, spray, fxId, rig, { grounded, speed, vel, sideslip, plow: 0, lean }, fxAcc))
+    if (b.fx.due && c_.trails) { c_.trails->skier(3000 + int(i) * 4, b.pos, b.vel, b.heading, b.edge, b.fx.sideslip, b.fx.lean, b.fx.speed, b.fx.grounded); botsFx++; }
+    else if (L.fx) botsFx++;
+    if (b.lodFar && L.view && d < LOD_GONE) {
+      // farbots.js put(): facing the heading, leaning -lean * 0.45 about the travel direction
+      const glm::dquat q = glm::angleAxis(-b.lean * 0.45, dvec3(std::sin(b.heading), 0, std::cos(b.heading))) * glm::angleAxis(b.heading, dvec3(0, 1, 0));
+      r.submitModel(*s.farModel[i], b.pos, mat4(glm::mat4_cast(q)), nullptr, false);
+      botsFar++;
+    }
+    if (!L.show || !b.rigOk) continue;
     drawRig(r, b.R, c_.people->kindOf(b.kind), c_.people->gear(3).get(), 1, d < 40);
     botsDrawn++;
   }

@@ -86,7 +86,7 @@ public:
   void setCabinLight(float k);
   float cabinLight() const { return cabinK_; }
   VehicleModel bus;
-  struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
+  struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo, loExpress; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
   //   // express: (Phase 7) the blue livery
 private:
   std::unordered_map<std::string, VehicleModel> cars_;

@@ -46,6 +46,8 @@ public:
   float anisotropy = 8;            // anisotropic filtering of the models' maps (16: the GPU's maximum, High and up)
   int triangleBudget = 0;          // (Phase 7, the switch preset's mesh LOD bias) a model over it is simplified to it
   bool compressTextures = false;   // (Phase 7, the switch preset) BC1 / BC3 block compression at load (engine/texcompress)
+  bool logLateLoads = false;       // (the hitch hunt) a model first loaded after the world is ready is logged with its ms
+  double lateLoadMs = 0;           // ms spent loading models (the frame recorder reads and clears it)
 
 private:
   platform::Platform& p_;

@@ -9,4 +9,8 @@
 namespace sl {
 /// Compresses an RGBA8 image (top row first) with its mips; `alpha` out: BC3 used (some texel's alpha < 250), else BC1.
 void compressBC(const uint8_t* rgba, int w, int h, std::vector<std::vector<uint8_t>>& levels, bool& alpha);
+/// A tangent-space normal map (RGBA8, x in r, y in g) as BC5 / RGTC2 with its mips: two channels at 8 bits a pixel
+/// (1/4 of RGBA8), each an 8-value ramp per block: no banding in the highlights (what kept normal maps out of BC1).
+/// The mips are averaged as vectors and renormalised.
+void compressBC5(const uint8_t* rgba, int w, int h, std::vector<std::vector<uint8_t>>& levels);
 } // namespace sl

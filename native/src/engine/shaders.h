@@ -553,7 +553,9 @@ void main() {
 #else
   if (uFlags.z > 0.5) {
 #endif
-    vec3 tn = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
+    // (x and y from the map, z rebuilt: the normal maps are two-channel BC5 where the device takes it)
+    vec3 tn = vec3(texture(uNormalMap, vUV).xy * 2.0 - 1.0, 0.0);
+    tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
     tn.xy *= uMat.z;
     n = perturbNormal(n, vRel, vUV, normalize(tn));
   }

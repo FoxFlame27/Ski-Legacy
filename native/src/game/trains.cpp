@@ -238,7 +238,7 @@ void Railway::addDraw(VehicleDraw& draw, const dvec3& cam) const {
       bool riding = ride_.on && ride_.train == int(t) && ride_.car == k;
       if (d > 220 && !riding) { if (models_.rail.lo) draw.add(models_.rail.lo.get(), M, 0); continue; }
       if (riding && insideView && models_.rail.cabin) { draw.add(models_.rail.cabin.get(), M, 0); continue; }
-      if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), d < 90 ? 0 : 1);
+      if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), 0);
       else if (models_.rail.cabin) draw.add(models_.rail.cabin.get(), M, 0);
       if (models_.rail.frame) draw.add(models_.rail.frame.get(), M, 0);
       if (models_.rail.bogie) for (const vec3& b : t_.rail.bogies) draw.add(models_.rail.bogie.get(), M * glm::translate(glm::dmat4(1), dvec3(b)), 0);
@@ -455,11 +455,14 @@ void Express::addDraw(VehicleDraw& draw, const dvec3& cam) const {
       glm::dmat4 M;
       carMatrix(int(k), c, M);
       double d = glm::length(dvec3(M[3]) - cam);
-      if (d > 420 && !mine) { if (models_.rail.lo) draw.add(models_.rail.lo.get(), M, 0); continue; }
+      if (d0 > 420 && !mine) {   // (express.js place: the whole train by its distance, the far version in the blue livery)
+        if (models_.rail.loExpress) draw.add(models_.rail.loExpress.get(), M, 0, vec4(hexColor("#1546c8"), 1));
+        continue;
+      }
       if (mine && c == 0 && insideView && (models_.rail.cabinExpress || models_.rail.cabin)) { draw.add((models_.rail.cabinExpress ? models_.rail.cabinExpress : models_.rail.cabin).get(), M, 0); continue; }   // (the Express's own furnished cabin)
       // (Phase 7) the Legacy Express in its blue livery (the Wolkenspitzbahn keeps the red)
-      if (models_.rail.express.ok()) draw.add(models_.rail.express.model.get(), M * glm::dmat4(models_.rail.express.fit), d < 90 ? 0 : 1, vec4(hexColor("#1546c8"), 1));
-      else if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), d < 90 ? 0 : 1);
+      if (models_.rail.express.ok()) draw.add(models_.rail.express.model.get(), M * glm::dmat4(models_.rail.express.fit), 0, vec4(hexColor("#1546c8"), 1));
+      else if (models_.rail.body.ok()) draw.add(models_.rail.body.model.get(), M * glm::dmat4(models_.rail.body.fit), 0);
       if (models_.rail.frame) draw.add(models_.rail.frame.get(), M, 0);
       if (models_.rail.bogie && d < 200) for (const vec3& b : t_.rail.bogies) draw.add(models_.rail.bogie.get(), M * glm::translate(glm::dmat4(1), dvec3(b)), 0);
     }

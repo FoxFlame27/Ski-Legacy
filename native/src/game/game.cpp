@@ -58,6 +58,7 @@
 #include "net/websocket.h"
 #include "core/prompts.h"
 #include "core/perf.h"
+#include "core/hitch.h"
 #include "engine/ui.h"
 #include "world/scenery.h"
 #include "world/snowtrails.h"
@@ -300,9 +301,12 @@ int runGame(const GameOptions& opt) {
   if (opt.autotest) save.write(*plat);   // (a fresh autotest save on disk)
   if (mptest) { save.money = 1234; save.characterChosen = true; save.write(*plat); }   // (the single-player save the test checks comes back)
 
+  // (debug: SKI_LEGACY_DEBUG=hitchtest --autotest: the autotest's route in real time, vsync on, every frame drawn: the
+  // frame times and who took the long ones, core/hitch.h)
+  const bool hitchTest = opt.autotest && std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "hitchtest");
   Quality q = Quality::preset(opt.qualitySet || save.quality.empty() ? opt.quality : save.quality);
   platform::WindowDesc wd;
-  wd.width = opt.width; wd.height = opt.height; wd.fullscreen = opt.fullscreen || (!opt.autotest && save.settingOn("fullscreen")); wd.vsync = opt.vsync && !opt.autotest && !mptest;
+  wd.width = opt.width; wd.height = opt.height; wd.fullscreen = opt.fullscreen || (!opt.autotest && save.settingOn("fullscreen")); wd.vsync = opt.vsync && ((!opt.autotest && !mptest) || hitchTest);
   if (!plat->createWindow(wd)) return 3;
   static platform::Platform* sPlat = plat.get();
   auto dev = gfx::createGLDevice([](const char* n) { return sPlat->glProcAddress(n); });
@@ -334,6 +338,7 @@ int runGame(const GameOptions& opt) {
   Ui ui;
   ui.init(*dev, *plat, paths);
   auto loadingFrame = [&](const char* what, const std::function<void()>& over = {}) {
+    if (!over) dev->memTag(what);
     if (!over) SL_INFO("loading: %s (GPU so far: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", what, dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
     plat->drawableSize(dw, dh);
     dev->bindRenderTarget({}, dw, dh);
@@ -382,17 +387,27 @@ int runGame(const GameOptions& opt) {
   SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
+  // (where the load's memory goes: SKI_LEGACY_DEBUG=memlog, the process footprint and the GPU's share at each step)
+  const bool memLog = std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "memlog");
+  auto memAt = [&](const char* what) {
+    if (!memLog) return;
+    const double fp = plat->footprintBytes() / 1048576.0, gpu = (dev->textureBytes() + dev->bufferBytes()) / 1048576.0;
+    SL_INFO("[mem] %-28s footprint %6.0f MB, GPU %6.0f MB, the rest %6.0f MB", what, fp, gpu, fp - gpu);
+  };
   loadingFrame("Building the resort...");
   Resort resort(*dev, world, assets);
   resort.lodScale = q.lodScale;
   resort.textureCap = q.maxTexture;
   resort.compressTextures = q.compressTextures;
   bool haveResort = resort.load(*plat, paths, scenery);
-  if (!haveResort) scenery.loadVillage(*plat, paths);   // (Phase 1 placements without the resort data)
+  if (!haveResort) scenery.loadVillage(*plat, paths);
+  memAt("resort");
+   // (Phase 1 placements without the resort data)
   Lifts& lifts = resort.lifts();
   // (Phase 3) the transport: roads, car parks, railways (data), the swept track, the vehicles
   Transport transport;
   if (const nlohmann::json* net = resort.transportNet()) transport.load(*net, resort.transportBin());
+  memAt("transport data");
   if (transport.loaded()) world.roadSurface = [&](double x, double z, double mesh, double yHint) { return transport.roadSurface(world, x, z, mesh, yHint); };
   if (transport.rail.ok) world.addDeck([&](double x, double z) { return transport.railDeckHeight(x, z); });
   if (transport.express.ok) world.addDeck([&](double x, double z) { return transport.expressDeckHeight(x, z); });
@@ -453,8 +468,10 @@ int runGame(const GameOptions& opt) {
   RailSweep sweep;
   sweep.build(*dev, transport);
   sweep.buildGuardrails(*dev, transport, world);
+  memAt("rail sweep");
   VehicleModels vmodels;
   vmodels.load(*dev, assets, transport, resort);
+  memAt("vehicle models");
   Drive drive(world, scenery, transport, vmodels);
   Traffic traffic(world, transport, vmodels);
   BusLine buses(world, transport, vmodels);
@@ -475,6 +492,7 @@ int runGame(const GameOptions& opt) {
   PlayerSkier rig;
   auto rigColour = [&]() { return save.character == "skier_red" ? std::string("red") : std::string("blue"); };
   if (!rig.load(assets, rigColour())) SL_WARN("skier model missing: the player is invisible");
+  memAt("skier rig");
   // (Phase 4) your garage: the cars you own stand in the Autohaus car park's bays
   for (const Save::Car& c : save.garage) {
     int i = drive.addOwned(c.id, c.plate, c.damage);
@@ -485,6 +503,7 @@ int runGame(const GameOptions& opt) {
   TrailMap tmap;
   tmap.load(*plat, paths, world, transport, lifts);
   tmap.buildRelief(jobs, world, *dev);
+  memAt("trail map");
 
   // spawn: the village plaza (main.js), or the top of a run on the Legacy face
   std::vector<Piste> pistes = loadPistes(*plat, paths);
@@ -504,10 +523,12 @@ int runGame(const GameOptions& opt) {
   HeliParts heliParts = loadHeliParts(resort);   // (the helicopter's parts and the ward, built from the play pack before its bin goes)
   transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
   resort.releaseLoadData();
+  memAt("packs released");
   Shapes shapes;
   shapes.init(*dev);
   People people;
   people.load(assets, world);
+  memAt("people");
   PeopleSim folk;
   Npcs npcs;
   folk.setKinds(people.fanKinds, people.skierKinds);
@@ -518,6 +539,7 @@ int runGame(const GameOptions& opt) {
     folk.init(world, pl, int((opt.autotest ? 28 : 56) * q.npcScale), std::max(2, int((opt.autotest ? 6 : 14) * q.npcScale)));
     npcs.init(people, *dev, world, pl, q);   // (npcs.js: the resort's skiers and walkers, the far skiers)
   }
+  memAt("npcs");
   Weather weather;
   weather.init(unsigned(plat->timeSeconds() * 1000) ^ 0x5eedu, opt.autotest);
   PlayCtx pc;
@@ -538,11 +560,13 @@ int runGame(const GameOptions& opt) {
   world.addDeck([&](double x, double z) { return ward.deck(x, z); });
   Heli heli(pc, ward);
   Chalets chalets(pc, rooms, windows);
+  memAt("rooms, windows, showroom");
   Werkstatt werk(pc);                          // (werkstatt.js: the repair garage beside the Autohaus)
   police.load(assets);
   ward.load(assets, heliParts.ward);
   heli.load(assets, heliParts);
   heliParts = HeliParts{};
+  memAt("police, ward, heli");
   heli.openChart = [&]() {   // (heli.js openDialog: the flight planner chart, ui/travel.js)
     TrailMap::Travel T = tmap.heliTravel(save.money, heli.price());
     heli.planner(T);
@@ -554,6 +578,7 @@ int runGame(const GameOptions& opt) {
   Snowmobiles sleds(pc);
   sleds.load(assets);
   sleds.place();
+  memAt("chalets, sleds");
   // (Phase 7) lamps' light pools, car lights and plates, snowmaking, flags, snowcats
   SceneFx sfx;
   {
@@ -562,6 +587,7 @@ int runGame(const GameOptions& opt) {
     sfx.init(*dev, assets, resort, world, resort.fonts(), pl, &playData, q.npcScale, q.lodScale);
   }
   std::shared_ptr<Model> jobBoard = assets.model("job_board", ModelLoadOptions{});
+  memAt("scene fx");
   VehicleDraw snowDraw;
   Transition trans;   // the scenes between two places (transition.js): the dark dip with the logo, the title card
   bool jailResumed = false, rescueResumed = false;
@@ -605,7 +631,11 @@ int runGame(const GameOptions& opt) {
   terrain.finish(cam.pos);
   scenery.finish(cam.pos);
   resort.update(0, cam.pos);
+  memAt("streamed in");
   resort.finishStreaming(cam.pos);
+  dev->memTag("after the load (streamed, built during play)");
+  assets.logLateLoads = hitchTest;
+  dev->gpuTiming(hitchTest);
   SL_INFO("world ready in %.2f s: %zu terrain nodes, %zu trees in range, %zu resort props, %zu lifts, %.0f MB textures (GPU: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", plat->timeSeconds() - t0,
           terrain.nodeCount(), scenery.treesDrawn(), resort.propCount(), lifts.lines().size(), assets.textureBytes() / 1048576.0,
           dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
@@ -1737,6 +1767,9 @@ int runGame(const GameOptions& opt) {
   Ride prevRideKind = Ride::None;
   bool railAtStop = false;
   PerfStats perf;
+  HitchRecorder hitch;
+  const int atSlow = hitchTest ? 8 : 1;   // (the script's frame limits in real time)
+  double hitchT0 = 0, hitchSwap = 0;
   bool audioOk = true, nightOk = true;
   int nightShot = -1, nightLamps = 0, nightSprays = 0, nightCars = 0, nightPlates = 0;
   auto perfMs = []() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
@@ -1754,8 +1787,9 @@ int runGame(const GameOptions& opt) {
     SL_INFO("[perf]   %-42s %7.2f ms", "sum", total);
     SL_INFO("[perf] draw calls %.0f mean / %u max, triangles %.0fk mean / %.0fk max (shadow pass included), %d lights", statFrames ? sumDraws / statFrames : 0.0, maxDraws,
             statFrames ? sumTris / statFrames / 1000 : 0.0, double(maxTris) / 1000, renderer.lightsUsed());
-    SL_INFO("[perf] GPU memory: textures %.0f MB, buffers %.0f MB (models' textures as loaded: %.0f MB); RSS %.0f MB, peak %.0f MB",
-            dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, assets.textureBytes() / 1048576.0, plat->memoryBytes() / 1048576.0, plat->peakMemoryBytes() / 1048576.0);
+    SL_INFO("[perf] GPU memory: textures %.0f MB, buffers %.0f MB (models' textures as loaded: %.0f MB); RSS %.0f MB, peak %.0f MB; footprint %.0f MB, peak %.0f MB",
+            dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, assets.textureBytes() / 1048576.0, plat->memoryBytes() / 1048576.0, plat->peakMemoryBytes() / 1048576.0,
+            plat->footprintBytes() / 1048576.0, plat->footprintBytes(true) / 1048576.0);
     Resort::StreamStats st = resort.streamStats();
     SL_INFO("[perf] streamed mesh chunks: %zu of %zu resident (%.0f MB on the GPU; all of them packed %.0f MB, %.0f MB raw), %d uploads, %d releases",
             st.loaded, st.chunks, st.gpuBytes / 1048576.0, st.packedBytes / 1048576.0, st.rawBytes / 1048576.0, st.uploads, st.releases);
@@ -1779,7 +1813,8 @@ int runGame(const GameOptions& opt) {
     if (ev.toggleFullscreen && !opt.autotest) { save.set("fullscreen", !plat->fullscreen()); applySetting("fullscreen"); }   // F11 / Cmd+F
     input.update(*plat, ev);
     double now = plat->timeSeconds();
-    double frameDt = opt.autotest ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : at == AT::Heli ? 1.0 / 30.0 : 0.1) : std::min(0.25, now - last);
+    const double ptFrame = perfMs();
+    double frameDt = opt.autotest && !(hitchTest && at != AT::Menu) ? (at == AT::Ski ? 1.0 / 60.0 : at == AT::Race ? 0.05 : at == AT::Heli ? 1.0 / 30.0 : 0.1) : std::min(0.25, now - last);
     last = now;
     UiNav nav = navBuilder.build(ev, *plat, input, now);
     if ((opt.autotest && !atRealKeys) || mptest) { float wheel = nav.wheel; nav = UiNav{}; nav.mouse = vec2(-1); nav.wheel = wheel; }   // (the wheel stays real: pushWheel)
@@ -3002,6 +3037,7 @@ int runGame(const GameOptions& opt) {
 
     // fixed-step simulation (edge-triggered inputs are seen by the first tick of the frame)
     double pt0 = perfMs();
+    perf.add("frame start (network, menus, the autotest's script)", pt0 - ptFrame);
     if (!paused) acc += frameDt;
     bool first = true;
     while (acc >= STEP) {
@@ -3118,11 +3154,10 @@ int runGame(const GameOptions& opt) {
     pt0 = perfMs();
     if (started && !paused) {
       weather.update(frameDt);
-      races.update(frameDt);
-      oddJobs.update(frameDt);
-      police.update(frameDt);
-      police.peopleHits(frameDt);
-      heli.update(frameDt, !menus.isOpen() && !tmap.isOpen());
+      { HitchScope hs(hitch, "races"); races.update(frameDt); }
+      { HitchScope hs(hitch, "jobs"); oddJobs.update(frameDt); }
+      { HitchScope hs(hitch, "police"); police.update(frameDt); police.peopleHits(frameDt); }
+      { HitchScope hs(hitch, "heli"); heli.update(frameDt, !menus.isOpen() && !tmap.isOpen()); }
       ward.update(frameDt, !menus.isOpen() && !tmap.isOpen());
       shopRoom.update(frameDt);
       werk.update(frameDt);
@@ -3135,9 +3170,9 @@ int runGame(const GameOptions& opt) {
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
     }
     folk.setPlayer(player.pos);
-    if (aiOn) folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery);
+    if (aiOn) { HitchScope hs(hitch, "townsfolk"); folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery); }
     npcs.off = !aiOn;
-    npcs.update(paused ? 0 : frameDt, player.pos, cam.pos, 1 - light.night);
+    { HitchScope hs(hitch, "npcs"); npcs.update(paused ? 0 : frameDt, player.pos, cam.pos, 1 - light.night); }
     perf.add("gameplay (races, jobs, police, people)", perfMs() - pt0);
     // the career (economy.js stats): top speed, distance skied
     if (started && player.mode == PlayerMode::Ski) {
@@ -3406,6 +3441,7 @@ int runGame(const GameOptions& opt) {
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
     perf.add("vehicles (traffic, buses, trains)", perfMs() - pt0);
+    const double ptRides = perfMs();
     if (rideKind == Ride::Car) {
       DriveFrameInput dfi;
       dfi.toggleView = input.takePressed(Action::View);
@@ -4111,6 +4147,7 @@ int runGame(const GameOptions& opt) {
     save.clock = simTime;
     save.tick(*plat, simTime, opt.autotest ? 1e9 : 60);
     pt0 = perfMs();
+    perf.add("rides, rooms, interactions, camera, autosave", pt0 - ptRides);
     // (debug) SKI_LEGACY_SHOTS="name:x,y,z,tx,ty,tz[,hour[,weather]];...": several fixed cameras in one run (heights
     // above the ground with SKI_LEGACY_SHOT_GROUND), each held SKI_LEGACY_SHOT_FRAMES frames (default 45) and written
     // to <png>_<name>.png; SKI_LEGACY_DEBUG=shotonly ends the run after the skiing phase, nohud hides the HUD
@@ -4153,11 +4190,64 @@ int runGame(const GameOptions& opt) {
         if ((frame - skiFrame0) % per == per - 1 && !opt.png.empty()) pendingPng = pngVariant(opt.png, sh.name.c_str());
       }
     }
-    terrain.update(cam.pos);
-    scenery.update(cam.pos);
-    resort.update(frameDt, cam.pos);
-    groundMap.update(world, renderer, cam.pos, opt.autotest && frame < 3);   // (the valley mist's height map)
+    if (opt.autotest && at == AT::Ski && off("trainfar")) {
+      // (debug: SKI_LEGACY_DEBUG=trainfar,shotonly,nohud --autotest --frames 1400 --png o.png: both trains from outside at
+      // 100 / 300 / 800 / 2000 m, one standing and one under way where there is one, by day and at night:
+      // o_far_<rail|express>_<stand|move>_<m>_<day|night>.png)
+      static const double DIST[4] = {100, 300, 800, 2000};
+      const int per = 40, k = std::max(0, frame - skiFrame0) / per, f = std::max(0, frame - skiFrame0) % per;
+      if (k < 32) {
+        const bool ex = (k / 16) % 2 == 1, moving = (k / 8) % 2 == 1, night = (k / 4) % 2 == 1;
+        const double D = DIST[k % 4];
+        static int pick = 0;
+        static double az = 0;
+        const int n = int(ex ? express.trainCount() : railway.trainCount());
+        auto speedOf = [&](int t) { return ex ? express.trainSpeed(t) : railway.trainSpeed(t); };
+        auto poseOf = [&](int t, int c) { glm::dmat4 M; if (ex) express.carPose(t, c, M); else railway.carPose(t, c, M); return M; };
+        auto clearView = [&](const dvec3& eye, const dvec3& to) {
+          for (int i = 1; i < 24; i++) { dvec3 p = glm::mix(eye, to, i / 24.0); if (world.height(p.x, p.z) > p.y - 1.5) return false; }
+          return true;
+        };
+        if (f == 0 && n > 0) {
+          pick = 0; az = 0;
+          bool found = false;
+          for (int t = 0; t < n && !found; t++) {
+            if ((speedOf(t) > 3) != moving) continue;
+            const glm::dmat4 M = poseOf(t, 1);
+            const dvec3 c(M[3]), side = glm::normalize(dvec3(M[0]));
+            const double yaw0 = std::atan2(side.x, side.z);
+            for (double a : {0.0, PI, 0.5, PI - 0.5, -0.5, PI + 0.5, 1.0, PI - 1.0}) {
+              dvec3 eye = c + dvec3(std::sin(yaw0 + a), 0, std::cos(yaw0 + a)) * D;
+              eye.y = std::max(world.height(eye.x, eye.z) + 2.0, c.y + 2.0 + D * 0.1);
+              if (clearView(eye, c + dvec3(0, 2, 0))) { pick = t; az = yaw0 + a; found = true; break; }
+            }
+          }
+          if (!found) SL_WARN("[trainfar] no %s %s train with a clear view at %.0f m: train 0", ex ? "express" : "rail", moving ? "moving" : "standing", D);
+          SL_INFO("[trainfar] %s train %d (%.0f km/h) from %.0f m, %s", ex ? "express" : "rail", pick, speedOf(pick) * 3.6, D, night ? "night" : "day");
+        }
+        if (n > 0) {
+          const glm::dmat4 M = poseOf(pick, 1);
+          const dvec3 c(M[3]);
+          dvec3 eye = c + dvec3(std::sin(az), 0, std::cos(az)) * D;
+          eye.y = std::max(world.height(eye.x, eye.z) + 2.0, c.y + 2.0 + D * 0.1);
+          hour = night ? 22.5 : 11.0;
+          cam.lookAt(eye, c + dvec3(0, 2, 0));
+          cam.fovY = D > 1000 ? 20 : D > 500 ? 30 : 45;   // (a long lens further out: the train still fills a part of the frame)
+          if (f == 0) { terrain.update(cam.pos); scenery.finish(cam.pos); resort.update(0, cam.pos); resort.finishStreaming(cam.pos); }
+          if (f == per - 1 && !opt.png.empty()) {
+            char nm[96];
+            std::snprintf(nm, sizeof nm, "far_%s_%s_%d_%s", ex ? "express" : "rail", moving ? "move" : "stand", int(D), night ? "night" : "day");
+            pendingPng = pngVariant(opt.png, nm);
+          }
+        }
+      }
+    }
+    { HitchScope hs(hitch, "terrain"); terrain.update(cam.pos); }
+    { HitchScope hs(hitch, "trees"); scenery.update(cam.pos); }
+    { HitchScope hs(hitch, "resort"); resort.update(frameDt, cam.pos); }
+    { HitchScope hs(hitch, "groundmap"); groundMap.update(world, renderer, cam.pos, opt.autotest && frame < 3); }   // (the valley mist's height map)
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
+    const double ptRig = perfMs();
     rig.showcase = showcaseOn;
     rig.sled = rideKind == Ride::Sled;
     // (drive.js placeRig) you at the wheel: posed in the seat in the car's frame; your eyes are the cockpit camera's
@@ -4351,7 +4441,7 @@ int runGame(const GameOptions& opt) {
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
-    bool rendered = !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0 || ward.capturing() || showroom.capturing() || windows.capturing();
+    bool rendered = hitchTest || !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0 || ward.capturing() || showroom.capturing() || windows.capturing();
     if (nightShot >= 0) {   // (the night shots' cameras: the plaza, then the snow gun nearest it)
       dvec3 eye, at2;
       if (nightShot < 16) { eye = dvec3(30, 0, 22); at2 = dvec3(-8, 0, -18); }
@@ -4544,6 +4634,7 @@ int runGame(const GameOptions& opt) {
       frameLight.ambientScale = 0.25f;
     }
     pt0 = perfMs();
+    perf.add("skier rig, audio, HUD + menus built", pt0 - ptRig);
     renderer.beginFrame(cam, frameLight, player.renderPos);
     if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
       // (train.js: the cabin lit by its own strips, every surface in its own colour x (1, 0.86, 0.68) x 0.55 x uCabin:
@@ -4653,6 +4744,13 @@ int runGame(const GameOptions& opt) {
     }
 
     frame++;
+    if (opt.autotest && frame % 20 == 0) {   // (where the memory goes: a line each time the process grew by 150 MB)
+      static double rssSeen = 0;
+      const double rss = plat->footprintBytes() / 1048576.0;
+      if (rss > rssSeen + 150) { SL_INFO("[mem] footprint %.0f MB (was %.0f) in autotest phase %d, frame %d; GPU textures %.0f MB, buffers %.0f MB", rss, rssSeen, int(at), frame, dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0); rssSeen = rss; }
+      else if (rss < rssSeen - 300) rssSeen = rss;
+    }
+    hitch.capture(perf);
     perf.endFrame();
     fpsN++;
     fpsT += plat->timeSeconds() - now;
@@ -4688,7 +4786,7 @@ int runGame(const GameOptions& opt) {
           phaseFrame = 0;
         }
       } else if (at == AT::Collide) {
-        if (phaseFrame >= 60 || !hotel) {
+        if (phaseFrame >= 60 * (hitchTest ? 6 : 1) || !hotel) {
           bool inside = false;
           if (hotel) {
             double cs = std::cos(-hotel->rot), sn = std::sin(-hotel->rot);
@@ -4731,7 +4829,7 @@ int runGame(const GameOptions& opt) {
             liftOk = rideT >= 30 && rideP1 > rideP0 && std::min(dExit, dTop) < 1.0 && player.mode != PlayerMode::Sit;
           }
         }
-        if (gotOff || !testLine || phaseFrame > 900 || (!boarded && phaseFrame > 10)) {
+        if (gotOff || !testLine || phaseFrame > 900 * atSlow || (!boarded && phaseFrame > 10)) {
           if (!boarded) { liftOk = false; SL_WARN("[autotest] lift: could not board (prompt '%s')", prompt.c_str()); }
           else if (!gotOff) { liftOk = false; SL_WARN("[autotest] lift: still riding after %.0f s", rideT); }
           at = transport.loaded() ? AT::Drive : AT::Done;
@@ -4754,7 +4852,7 @@ int runGame(const GameOptions& opt) {
                     drive.speed() * 3.6, drive.label().c_str(), transport.speedLimitAt(p.x, p.z), transport.laneDistance(p.x, p.z));
           if (rendered && driveT >= 12 && driveT < 12.4 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, "drive"));
         }
-        if (driveT >= 20 || phaseFrame > 400 || (!drive.active() && phaseFrame > 10)) {
+        if (driveT >= 20 || phaseFrame > 400 * atSlow || (!drive.active() && phaseFrame > 10)) {
           bool finite = std::isfinite(drive.pos().x) && std::isfinite(drive.pos().y);
           driveOk = drive.active() && finite && driveDist > 100 && driveTop > 30 / 3.6 && driveMaxSink < 0.5;
           SL_INFO("[autotest] drive: %.0f m in %.1f s, top %.1f km/h, deepest below the ground %.2f m, damage %.0f%% -> %s", driveDist, driveT, driveTop * 3.6,
@@ -4795,8 +4893,8 @@ int runGame(const GameOptions& opt) {
         ce.lookAt = [&](const dvec3& t) { const dvec3 eye = player.pos + dvec3(0, 1.62, 0), d = t - eye; player.setLook(std::atan2(d.x, d.z), std::atan2(d.y, std::hypot(d.x, d.z))); };
         for (const RoomDef::Car& c : playData.autohaus.cars) if (ce.cheapest.empty() || c.price < ce.cheapestPrice) { ce.cheapest = c.id; ce.cheapestLabel = c.label; ce.cheapestPrice = c.price; }
         ce.prompt = prompt; ce.driving = rideKind == Ride::Car; ce.simTime = simTime; ce.frameDt = frameDt;
-        if (phaseFrame >= 1 && (carFlow.frame(ce) || phaseFrame > 3000)) {
-          if (phaseFrame > 3000) { carFlow.releaseAll(); carFlow.exitOk = false; SL_WARN("[autotest] cars: timed out"); }
+        if (phaseFrame >= 1 && (carFlow.frame(ce) || phaseFrame > 3000 * atSlow)) {
+          if (phaseFrame > 3000 * atSlow) { carFlow.releaseAll(); carFlow.exitOk = false; SL_WARN("[autotest] cars: timed out"); }
           if (rideKind == Ride::Car) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
           SL_INFO("[autotest] cars (the player's path): buy %s, get in %s, drive %s, controller %s, get out %s, traffic round the village %s", carFlow.buyOk ? "ok" : "FAILED",
                   carFlow.enterOk ? "ok" : "FAILED", carFlow.driveOk ? "ok" : "FAILED", carFlow.padOk ? "ok" : "FAILED", carFlow.exitOk ? "ok" : "FAILED", carFlow.trafficOk ? "ok" : "FAILED");
@@ -4834,7 +4932,7 @@ int runGame(const GameOptions& opt) {
           if (rendered && rideTest >= 15 && rideTest < 15.4 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, (std::string(what) + (seatView ? "_seat" : "")).c_str()));
         }
         double limit = at == AT::Rail ? 32 : 24;
-        if (rideTest >= limit || phaseFrame > 600 || (phaseFrame > 6 && rideKind != want)) {
+        if (rideTest >= limit || phaseFrame > 600 * atSlow || (phaseFrame > 6 && rideKind != want)) {
           dvec3 vp = at == AT::Bus ? buses.busPos() : at == AT::Rail ? railway.ride().trainPos : express.ride().trainPos;
           double moved = rideBoarded ? glm::length(vp - ridePos0) : 0;
           bool ok = rideBoarded && moved > (at == AT::Bus ? 25 : 60) && std::isfinite(player.pos.y);
@@ -4848,6 +4946,7 @@ int runGame(const GameOptions& opt) {
           input.releaseInjected();
           at = at == AT::Bus ? AT::Rail : at == AT::Rail ? AT::Express : AT::Map;
           phaseFrame = 0; rideTest = 0; rideBoarded = false;
+          if (hitchTest && at == AT::Map) running = false;   // (the hitch route ends here)
         }
       }
       else if (at == AT::Map && uiTest) {
@@ -4930,7 +5029,19 @@ int runGame(const GameOptions& opt) {
         if (nightShot > 51) running = false;
       }
     }
+    hitchSwap = plat->timeSeconds();
+    dev->gpuPass(nullptr);
     if (rendered) plat->swapBuffers();
+    if (hitchTest) {
+      static const char* atNames[] = {"menu", "ski", "walk", "gondola", "drive", "carflow", "bus", "train", "express", "map", "race", "job", "police", "chalet", "weather", "heli", "done"};
+      const double t1 = plat->timeSeconds();
+      hitch.on = at != AT::Menu && at != AT::Done;
+      if (assets.lateLoadMs > 0) hitch.note("model loads", assets.lateLoadMs);
+      hitch.note("GPU 3 frames ago", dev->gpuLastFrameMs());
+      assets.lateLoadMs = 0;
+      hitch.endFrame((t1 - hitchT0) * 1000, (t1 - hitchSwap) * 1000, atNames[int(at)], player.pos.x, player.pos.z, frameDraws, frameTris);
+      hitchT0 = t1;
+    }
     if (fpsCap > 0 && !opt.autotest) {   // (SETTINGS: frame rate limit)
       double spent = plat->timeSeconds() - now, want = 1.0 / fpsCap;
       if (spent < want) std::this_thread::sleep_for(std::chrono::microseconds(int64_t((want - spent) * 1e6)));
@@ -4938,6 +5049,19 @@ int runGame(const GameOptions& opt) {
   }
   if (!opt.autotest) save.write(*plat);
 
+  if (hitchTest) {
+    hitch.report();
+    perfReport("the hitch route (real time)");
+    for (const auto& g : dev->gpuTimes()) SL_INFO("[gpu]   %-32s %6.2f ms mean / %6.2f max (%d frames)", g.name.c_str(), g.mean, g.max, g.n);
+    std::vector<gfx::Device::MemRow> rows = dev->memByTag();
+    std::sort(rows.begin(), rows.end(), [](const gfx::Device::MemRow& a, const gfx::Device::MemRow& b) { return a.textures + a.buffers > b.textures + b.buffers; });
+    SL_INFO("[mem] GPU memory by owner (MB): textures / buffers");
+    for (size_t i = 0; i < rows.size() && i < 60; i++)
+      SL_INFO("[mem]   %-52s %8.1f (%3d) / %7.1f (%4d)", rows[i].tag.c_str(), rows[i].textures / 1048576.0, rows[i].nTex, rows[i].buffers / 1048576.0, rows[i].nBuf);
+    SL_INFO("[perf] quality '%s': peak RSS %.0f MB", q.name.c_str(), plat->peakMemoryBytes() / 1048576.0);
+    audio.stop(*plat);
+    return 0;
+  }
   if (opt.autotest) {
     double wall = plat->timeSeconds() - startT;
     bool ok = skiOk && collideOk && liftOk && driveOk && trafficOk && busOk && railOk && expressOk && menuOk && settingOk && buyOk && saveOk && mapOk && chargeOk &&

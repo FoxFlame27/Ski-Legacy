@@ -138,6 +138,9 @@ public:
   // (Phase 7) memory in use / the peak so far (resident set; on Switch: the heap the application reserved)
   virtual size_t memoryBytes() const = 0;
   virtual size_t peakMemoryBytes() const = 0;
+  /// the memory the system charges the process with, resident or not (macOS: the physical footprint, which counts
+  /// compressed / swapped pages and the GPU's allocations; RSS alone drops under memory pressure). peak: its maximum
+  virtual size_t footprintBytes(bool peak = false) const { return peak ? peakMemoryBytes() : memoryBytes(); }
 };
 
 /// Creates the platform for this build (SDL2 on desktop).

@@ -418,6 +418,15 @@ public:
     return procStatus("VmRSS:");
 #endif
   }
+  size_t footprintBytes(bool peak) const override {
+#if defined(__APPLE__)
+    task_vm_info_data_t vi{};
+    mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vi), &n) == KERN_SUCCESS)
+      return size_t(peak ? std::max<int64_t>(vi.ledger_phys_footprint_peak, int64_t(vi.phys_footprint)) : int64_t(vi.phys_footprint));
+#endif
+    return peak ? peakMemoryBytes() : memoryBytes();
+  }
   size_t peakMemoryBytes() const override {
 #if defined(_WIN32)
     PROCESS_MEMORY_COUNTERS pmc{};

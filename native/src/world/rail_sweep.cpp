@@ -272,6 +272,24 @@ void RailSweep::buildRailCell(const Transport& t, RailCell& c) {
   c.model = parts.empty() || !dev_ ? nullptr : buildModel(*dev_, parts, "guardrail");
 }
 
+std::shared_ptr<Model> RailSweep::sectionModel(const Transport& t, int seg, dvec3& origin) const {
+  if (!dev_ || seg < 0 || size_t(seg) * 12 + 12 > t.railSegs.size()) return nullptr;
+  const RailTpl& T = railTpl();
+  const float* S = &t.railSegs[size_t(seg) * 12];
+  origin = dvec3((S[0] + S[4]) * 0.5, (S[1] + S[5]) * 0.5, (S[2] + S[6]) * 0.5);
+  Geo galv, refl;
+  bendInto(galv, T.galv, S, origin);
+  bendInto(refl, T.refl, S, origin);
+  std::vector<std::pair<Geo, Material>> parts;
+  Material g;
+  g.baseColor = vec4(1); g.roughness = 0.42f; g.metallic = 0.7f; g.vertexColor = true; g.doubleSided = true;
+  Material r;
+  r.baseColor = vec4(hexColor("#ffa21a"), 1); r.emissive = hexColor("#ff8a00") * 0.45f; r.roughness = 0.3f;
+  if (!galv.empty()) parts.push_back({std::move(galv), g});
+  if (!refl.empty()) parts.push_back({std::move(refl), r});
+  return parts.empty() ? nullptr : buildModel(*dev_, parts, "guardrail-piece");
+}
+
 void RailSweep::railsOff(const Transport& t, double now) {
   if (railOff_.empty()) return;
   // (breakables.js: a section broken through is gone until it comes back, 90 s later)

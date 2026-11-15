@@ -1,5 +1,6 @@
 #include "game/game.h"
 #include "game/sinktest.h"
+#include "game/breakfx.h"
 
 #include "core/assets_path.h"
 #include "core/input.h"
@@ -531,6 +532,7 @@ int runGame(const GameOptions& opt) {
   vmodels.load(*dev, assets, transport, resort);
   memAt("vehicle models");
   Drive drive(world, scenery, transport, vmodels);
+  BreakFx breakFx(world, scenery, transport, resort, sweep);   // (breakables.js: what the car knocks down, flying and lying)
   Traffic traffic(world, transport, vmodels);
   BusLine buses(world, transport, vmodels);
   Railway railway(world, transport, vmodels);
@@ -578,8 +580,8 @@ int runGame(const GameOptions& opt) {
   // ---------------------------------------------------------------- (Phase 5) races, jobs, police, rescue, chalets, people, weather
   PlayData playData;
   if (const nlohmann::json* pj = resort.playData()) playData.load(*pj, resort.playBin());
-  tmap.setPlay(&playData);
   for (const Course& c : playData.courses) for (const RampSurface& r : c.ramps) world.addRamp(r);   // (the courses' jumps, walkable)
+  tmap.setPlay(&playData);
   HeliParts heliParts = loadHeliParts(resort);   // (the helicopter's parts and the ward, built from the play pack before its bin goes)
   transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
   resort.releaseLoadData();
@@ -1545,8 +1547,8 @@ int runGame(const GameOptions& opt) {
   // (debug: SKI_LEGACY_DEBUG=bridgetest --autotest) under every railway viaduct: sweep a walker across beneath each
   // span (both sides, 14 m out, at the ground) and list every collider that would stop it and is not a pier drawn there;
   // then a train over a viaduct must not be solid to someone well below its floor (trainstop.js CarColliders.add)
-  if (off("bridgetest") && opt.autotest) {
   if (off("sinktest") && opt.autotest) { std::fflush(nullptr); const int r = runSinkTest(world, std::getenv("SKI_LEGACY_SINKREF") ? std::getenv("SKI_LEGACY_SINKREF") : "course_ref.json"); std::fflush(nullptr); std::_Exit(r); }
+  if (off("bridgetest") && opt.autotest) {
     int bad = 0, piers = 0, probes = 0, nets = 0;
     std::set<int> seenBad;
     auto blocks = [](const Collider& c, double x, double z, double feetY) {
@@ -3866,6 +3868,8 @@ int runGame(const GameOptions& opt) {
         if (e.type == VehicleEvent::Type::Knock || e.type == VehicleEvent::Type::Crash) oddJobs.onCarKnock(e.type == VehicleEvent::Type::Crash);
       }
       drive.events.clear();
+      for (const Drive::Knocked& k : drive.knocked) { if (k.rail) breakFx.breakRail(k.idx, k.vx, k.vz, simTime, nullptr, cam.pos); else breakFx.knockCollider(k.idx, k.vx, k.vz, simTime, &audio, cam.pos); }
+      drive.knocked.clear();
     } else if (rideKind == Ride::Bus) {
       BusLine::RideState rs = buses.rideState();
       player.setSeat(rs.seat, rs.fwd);
@@ -4905,6 +4909,38 @@ int runGame(const GameOptions& opt) {
       cam.lookAt(bc, bl); cam.fovY = 55;
       terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
     }
+    if (opt.autotest && at == AT::Ski && off("breaktest")) {   // (debug: a pole / sign / lamp knocked and a guardrail broken, flying, lying, back: o_brk_*.png)
+      static int bf = 0, ci = -1, ri = -1;
+      static dvec3 tgt[2];
+      bf++;
+      if (bf == 1) {
+        double bd = 1e30;
+        for (size_t i = 0; i < scenery.colliders().size(); i++) {
+          const Collider& c = scenery.colliders()[i];
+          const double d = std::hypot(c.x - 4, c.z - 34);
+          Resort::KnockedProp kp;
+          if (c.brk > 0 && d < bd && d > 20) { const int64_t h = resort.knockProp(c.x, c.z, 1.2, 3.5, kp); if (h >= 0) { resort.standProp(h); bd = d; ci = int(i); } }
+        }
+        bd = 1e30;
+        for (size_t i = 0; i < transport.rails.size(); i++) { const Guardrail& g = transport.rails[i]; const double d = std::hypot(g.ax - 4, g.az - 34); if (g.seg >= 0 && !g.tunnel && d < bd) { bd = d; ri = int(i); } }
+        if (ci >= 0) { const Collider& c = scenery.colliders()[size_t(ci)]; tgt[0] = dvec3(c.x, world.meshHeight(c.x, c.z), c.z); }
+        if (ri >= 0) { const Guardrail& g = transport.rails[size_t(ri)]; tgt[1] = dvec3((g.ax + g.bx) / 2, world.meshHeight((g.ax + g.bx) / 2, (g.az + g.bz) / 2), (g.az + g.bz) / 2); }
+        SL_INFO("[breaktest] pole collider %d at (%.1f, %.1f) lamp %d brk %.1f; guardrail %d at (%.1f, %.1f)", ci, tgt[0].x, tgt[0].z, ci >= 0 ? int(scenery.colliders()[size_t(ci)].lamp) : 0, ci >= 0 ? scenery.colliders()[size_t(ci)].brk : 0.0, ri, tgt[1].x, tgt[1].z);
+      }
+      const int k = bf < 300 ? 0 : 1, f = bf % 300;
+      const dvec3 T = tgt[k];
+      cam.lookAt(T + dvec3(9, 4.5, 9), T + dvec3(-3, 0.5, -3)); cam.fovY = 60;
+      terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+      if (f == 60) {
+        if (k == 0 && ci >= 0) { scenery.colliders()[size_t(ci)].downUntil = simTime + 90; breakFx.knockCollider(ci, -14, -14, simTime, &audio, cam.pos); }
+        if (k == 1 && ri >= 0) { transport.rails[size_t(ri)].offUntil = simTime + 90; breakFx.breakRail(ri, -20, -20, simTime, nullptr, cam.pos); }
+        SL_INFO("[breaktest] %s knocked: %d down, %d flying", k ? "guardrail" : "pole", breakFx.down(), breakFx.flying());
+      }
+      if (f == 240) { Camera far = cam; far.pos += dvec3(500, 0, 0); breakFx.update(0, simTime + 400, far); SL_INFO("[breaktest] respawned: %d down", breakFx.down()); }
+      const char* nm = f == 50 ? "before" : f == 66 ? "fly" : f == 200 ? "down" : f == 260 ? "back" : nullptr;
+      if (nm && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, ("brk_" + std::string(k ? "rail_" : "pole_") + nm).c_str()); SL_INFO("[breaktest] %s %s: %d down, %d flying", k ? "guardrail" : "pole", nm, breakFx.down(), breakFx.flying()); }
+      if (bf >= 600) running = false;
+    }
     if (opt.autotest && at == AT::Ski && off("platetest")) {   // (debug: a parked car's plates close up, front and rear, by day and at night: o_plate<n>.png)
       static int pf = 0;
       pf++;
@@ -5121,7 +5157,9 @@ int runGame(const GameOptions& opt) {
     if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
     if (drawVillage && !indoor) resort.submit(renderer);
     vmodels.setBusGlassInside(rideKind == Ride::Bus && seatView);   // (bus.js busGlass: you see out from inside)
+    breakFx.update(paused ? 0 : frameDt, simTime, cam);
     sweep.railsOff(transport, simTime);   // (breakables.js: the sections broken through hidden, back after 90 s)
+    if (drawVillage && !indoor) breakFx.submit(renderer);
     if (drawVillage && !indoor) sweep.submit(renderer, cam.pos);
     if (drawVillage && !indoor) {
       vdraw.begin();

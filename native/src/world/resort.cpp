@@ -621,7 +621,6 @@ void Resort::releaseLoadData() {
 
 void Resort::rebuild(const dvec3& cam) {
   lastBuild_ = cam;
-  std::vector<MatrixInstanceBatch::Inst> l0, l1;
   for (PropSet& ps : props_) {
     double nearD = std::max(150.0, double(ps.radius) * 12) * lodScale, farD = std::max(900.0, double(ps.radius) * 120) * lodScale;
     for (Cell& c : ps.cells) {
@@ -631,18 +630,64 @@ void Resort::rebuild(const dvec3& cam) {
       if (first) c.band.assign(c.inst.size(), 255);
       bool changed = first;
       for (size_t i = 0; i < c.inst.size(); i++) {
+        if (c.band[i] == 3) continue;   // (knocked down: knockProp)
         const double d = glm::length(dvec3(c.inst[i][3]) - cam);
         const uint8_t b = d > farD ? 2 : d < nearD ? 0 : 1;
         if (b != c.band[i]) { c.band[i] = b; changed = true; }
       }
       if (!changed) continue;
-      l0.clear(); l1.clear();
-      for (size_t i = 0; i < c.inst.size(); i++)
-        if (c.band[i] < 2) (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], c.origin));
-      c.lod[0].upload(dev_, l0);
-      c.lod[1].upload(dev_, l1);
+      uploadCell(c);
     }
   }
+}
+
+// (band 3: knocked down, not drawn until standProp)
+int64_t Resort::knockProp(double x, double z, double reach, double maxR, KnockedProp& out) {
+  int64_t best = -1;
+  double bd = reach * reach;
+  for (size_t si = 0; si < props_.size(); si++) {
+    const PropSet& ps = props_[si];
+    if (!ps.model) continue;
+    const double half = glm::length(dvec3(ps.model->bmax - ps.model->bmin)) * 0.5;
+    for (size_t ci = 0; ci < ps.cells.size(); ci++) {
+      const Cell& c = ps.cells[ci];
+      if (x < c.bmin.x - reach || x > c.bmax.x + reach || z < c.bmin.z - reach || z > c.bmax.z + reach) continue;
+      for (size_t i = 0; i < c.inst.size(); i++) {
+        const double dx = c.inst[i][3][0] - x, dz = c.inst[i][3][2] - z, d2 = dx * dx + dz * dz;
+        if (d2 >= bd || (i < c.band.size() && c.band[i] == 3)) continue;
+        if (half * std::cbrt(std::fabs(glm::determinant(glm::dmat3(c.inst[i])))) > maxR) continue;   // (a pole, a sign, a lamp: not a building)
+        bd = d2; best = int64_t((si << 40) | (ci << 20) | i);
+      }
+    }
+  }
+  if (best < 0) return -1;
+  PropSet& ps = props_[size_t(best >> 40)];
+  Cell& c = ps.cells[size_t((best >> 20) & 0xfffff)];
+  const size_t i = size_t(best & 0xfffff);
+  out.model = ps.model; out.M = c.inst[i]; out.radius = ps.radius;
+  if (c.band.size() != c.inst.size()) c.band.assign(c.inst.size(), 255);
+  c.band[i] = 3;
+  uploadCell(c);
+  return best;
+}
+
+void Resort::standProp(int64_t h) {
+  if (h < 0 || size_t(h >> 40) >= props_.size()) return;
+  PropSet& ps = props_[size_t(h >> 40)];
+  if (size_t((h >> 20) & 0xfffff) >= ps.cells.size()) return;
+  Cell& c = ps.cells[size_t((h >> 20) & 0xfffff)];
+  const size_t i = size_t(h & 0xfffff);
+  if (i >= c.band.size() || c.band[i] != 3) return;
+  c.band[i] = 0;   // (its band again at the next rebuild; near you: the full model at once)
+  uploadCell(c);
+}
+
+void Resort::uploadCell(Cell& c) {
+  std::vector<MatrixInstanceBatch::Inst> l0, l1;
+  for (size_t i = 0; i < c.inst.size(); i++)
+    if (i < c.band.size() && c.band[i] < 2) (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], c.origin));
+  c.lod[0].upload(dev_, l0);
+  c.lod[1].upload(dev_, l1);
 }
 
 void Resort::update(double dt, const dvec3& cam) {

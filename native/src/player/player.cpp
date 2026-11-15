@@ -86,7 +86,7 @@ void Player::teleport(double x, double z, double h) {
   tricks.cancel();
   absorb = absorbV = 0; steer = edge = lean = skidAmt_ = skidYaw = turnRate_ = 0;
   crouch = 0.2; plow = 0; sideslip = 0; tuck = false;
-  footAir_ = false; footJumpY = footJumpV_ = 0; walkSlip_ = 0; steepT_ = 0; brakeStopT_ = 0;
+  footAir_ = false; footJumpY = footJumpV_ = 0; footWind_ = 0; walkSlip_ = 0; steepT_ = 0; brakeStopT_ = 0;
   parked = true;
   launch_ = 0;
   normal = dvec3(world_.groundNormal(x, z));
@@ -97,7 +97,7 @@ void Player::sitOn(const dvec3& seat, const dvec3& fwd) {
   vel = dvec3(0);
   air = ballistic = false; airTime = 0; charging = false; charge = 0; flip = yawFx = yawFxV = airSteer_ = 0;
   tricks.cancel();
-  absorb = absorbV = 0; steer = edge = lean = 0; footAir_ = false; footJumpY = 0;
+  absorb = absorbV = 0; steer = edge = lean = 0; footAir_ = false; footJumpY = 0; footWind_ = 0;
   fall = FallState{};
   setSeat(seat, fwd);
   camFocusInit_ = false;
@@ -623,7 +623,12 @@ void Player::walkTick(double dt, const PlayerControls& c) {
   p += vel * dt;
   if (walkSlip_ > 0.01) { p.x -= ux * walkSlip_ * dt; p.z -= uz * walkSlip_ * dt; walkSlip_ *= std::exp(-dt * 4); }
   else walkSlip_ = 0;
-  if (live && c.jumpPressed && !footAir_) { footJumpV_ = 4.4; footAir_ = true; }
+  // (player.js: Space jumps at once at 4.4 m/s. Here the knees load first, as a real jump does: a short countermovement
+  // from a stand, a quicker one off a running stride, then the same take-off)
+  if (live && c.jumpPressed && !footAir_ && footWind_ <= 0) {
+    footWind0_ = footWind_ = lerp(0.15, 0.075, smoothstep(0.8, 3.0, std::hypot(vel.x, vel.z)));
+  }
+  if (footWind_ > 0 && !footAir_ && (footWind_ -= dt) <= 0) { footWind_ = 0; footJumpV_ = 4.4; footAir_ = true; }
   double ground = world_.groundHeight(p.x, p.z, feetY);
   if (footAir_) {
     footJumpY += footJumpV_ * dt;

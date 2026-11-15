@@ -3168,6 +3168,7 @@ int runGame(const GameOptions& opt) {
     perf.add("sim (120 Hz physics)", perfMs() - pt0);
     PlayerFrameControls fc;
     fc.toggleView = rideKind != Ride::None ? false : input.takePressed(Action::View);
+    if (rooms.inside()) { fc.toggleView = false; player.view = Player::View::First; }   // (no third person in a room)
     if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) {
       // (express.js VIEWS: R goes round the window seat, the chase camera, the camera beside the line; walking about: your
       // eyes / the orbit round you. The Wolkenspitzbahn and the bus: seat / outside)

@@ -285,7 +285,7 @@ void Express::standUp(bool firstPerson) {
   const vec4 st = seat_ >= 0 && size_t(seat_) < R.seats.size() ? R.seats[size_t(seat_)] : vec4(R.seat, float(R.seatYaw));
   // into the aisle beside your seat, facing the way the seat faces
   walk_ = Walk{};
-  walk_.on = true; walk_.x = 0; walk_.z = st.z; walk_.yaw = st.w; walk_.camYaw = double(st.w) + PI; walk_.camPitch = -0.18; walk_.first = firstPerson; walk_.dist = 2.2;
+  walk_.on = true; walk_.x = 0; walk_.z = st.z; walk_.yaw = st.w; walk_.camYaw = double(st.w) + PI; walk_.camPitch = -0.18; walk_.first = true; (void)firstPerson;   // (no third person inside the car: always your own eyes) walk_.dist = 2.2;
   walkMove(0, 0);
 }
 
@@ -342,7 +342,7 @@ bool Express::walkCamera(Camera& cam, double dt, float lookX, float lookY, float
   if (!ride_.on || !walk_.on) return false;
   Walk& w = walk_;
   const auto& R = t_.rail;
-  if (toggleView) w.first = !w.first;
+  (void)toggleView; w.first = true;   // (walking the car: first person only, the view key does nothing)
   const double F = R.car.floor, sens = 0.0022;
   dvec3 eye, dir;
   if (w.first) {

@@ -138,6 +138,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   if (p.mode == PlayerMode::Sit && sled) { st.hasSled = true; st.sled = sledShape; }
   st.carry = p.hasSkis && !p.skisOn;
   st.airY = p.mode == PlayerMode::Walk ? p.footJumpY : 0;
+  st.footJump = p.mode == PlayerMode::Walk; st.footWind = p.footWindK();   // (the jump on foot: foot_jump.cpp)
   st.fallT = p.fall.t / 0.6; st.fallSide = p.fallSide;
   st.hasFall = p.mode == PlayerMode::Fall;
   st.fall.ball = p.fall.ball; st.fall.getUp = p.fall.getUp; st.fall.pitch = p.fall.pitch; st.fall.roll = p.fall.roll;

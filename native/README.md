@@ -1702,6 +1702,24 @@ chalet, no 30 s wait at a chalet's door during a chase; the prison's jail board 
 first state; the station's and the Werkstatt's boards, lamps and windows come on with the night (their strengths by
 day and at night exported per material), but the blue police lamp does not pulse.
 
+**First person indoors (Nov 2026, the user: "you shouldn't be able to go in 3rd person mode inside buildings").** In
+every room (the ski shop, the Autohaus, the chalets, the police station / prison, the medical centre's ward, in bed
+too) and while walking about in a Legacy Express car, the view is your own eyes and the view key does nothing; the view
+you had outside comes back when you leave (Interiors::enter / leave). The ward's "R: view" line is gone. (The web game
+builds its rooms as first-person scenes too, but its ward has a camera beside the bed and its Express walk an orbit:
+both left out here on purpose.)
+
+**The jump on foot (Nov 2026, `player/foot_jump.cpp`).** player.js jumps on foot at once (4.4 m/s) and the walk / idle
+carries on in the air. Here the knees load first (0.15 s from a stand, 0.075 s off a run, then the same take-off), and
+the rig layers a procedural jump over the walk: the countermovement crouch with the arms back, the push-off (toes
+pointed, the arms driving up; off a run the arm opposite the leading knee), the knees tucked in the air (off a run the
+stride held), the legs reaching for the snow and the arms widening as it falls, the landing absorbed by the knees
+(scaled by the drop, shallower off a run, the planted foot staying put), then back into the idle / walk / run. The other
+players' walkers jump the same way (their height over the ground). `RigState::footJump` off (NPCs, `--verify-poses`)
+leaves the rig as the JS. Frames: `SKI_LEGACY_RIGSHOTS=jump ./ski_legacy --rig-shots out.png` writes
+`out_jump_{stand,run,sprint}[_js].png` (every 0.1 s from 0.3 s before the press; `_js`: the web game's jump;
+`SKI_LEGACY_JUMPVIEW=front` for a three-quarter view).
+
 ## Status: the native port against the JavaScript game
 
 | area | JS game (`src/`) | native (`native/`) |

@@ -432,7 +432,7 @@ bool HospitalWard::interact(std::string& prompt, bool pressed) {
 std::string HospitalWard::objective() const {
   if (role_ == Role::None) return "";
   if (role_ == Role::Patient)
-    return (left_ > 0 ? "Recovering in bed " + std::to_string(bed_ + 1) + " \xC2\xB7 " + fmtClock(left_) : "Fit again \xC2\xB7 press " + c_.K(Action::Interact) + " to get up") + " \xC2\xB7 " + c_.K(Action::View) + ": view";
+    return (left_ > 0 ? "Recovering in bed " + std::to_string(bed_ + 1) + " \xC2\xB7 " + fmtClock(left_) : "Fit again \xC2\xB7 press " + c_.K(Action::Interact) + " to get up");   // (no view toggle in a room: always your own eyes)
   if (seat_ >= 0) return "Sitting by the bed \xC2\xB7 " + c_.K(Action::Interact) + " to stand up";
   return "Medical centre \xC2\xB7 visit a patient in the ward, the way out: the glass doors";
 }

@@ -429,6 +429,7 @@ void SkierRig::snapPose() {
   airW_ = 0;
   for (auto& p : plant_) p.t = 1;
   sk_.init = false; poleDirOk_ = false;
+  fj_.init = false; fj_.w = 0;
 }
 
 void SkierRig::setSkisVisible(bool v) {
@@ -588,6 +589,8 @@ void SkierRig::update(double dt, const RigState& st) {
   else if (mode == Mode::Sit) poseSit(dt, st, fwd, right);
   else if (mode == Mode::Ski) poseSki(dt, st, fwd, right);
   else poseFall(dt, st, fwd, right);
+  if (mode == Mode::Move || mode == Mode::Foot) footJumpLayer(dt, st, fwd, right);   // (the jump on foot)
+  else { fj_.w = 0; fj_.init = false; }
 
   if (blend_ < 1) {
     blend_ = std::min(1.0, blend_ + dt / 0.3);

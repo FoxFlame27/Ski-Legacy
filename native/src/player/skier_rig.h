@@ -65,6 +65,11 @@ struct RigState {
   struct Sled { three::V3 grip{0}, foot{0}; double pivot = 0, turn = 0, steer = 0; } sled;
   bool carry = false;
   double airY = 0;
+  /// (native) a jump on foot with its own body language (player/foot_jump.cpp) layered over the walk / stand: the
+  /// anticipation crouch before the take-off (0 .. 1), then the push-off, the air, the fall and the landing from airY.
+  /// Off: the web game's jump (the walk carries on in the air): --verify-poses' timelines
+  bool footJump = false;
+  double footWind = 0;
   int fp = -1;   // -1: undefined (NPCs), 0 / 1 (the player)
 };
 
@@ -237,6 +242,8 @@ private:
   void poseBench(double dt, const RigState& st, const V3& fwd, const V3& right);
   void poseSki(double dt, const RigState& st, const V3& fwd, const V3& right);
   void poseFall(double dt, const RigState& st, const V3& fwd, const V3& right);
+  void footJumpLayer(double dt, const RigState& st, const V3& fwd, const V3& right);   // (foot_jump.cpp)
+  void poseFootJump(double dt, const RigState& st, const V3& fwd, const V3& right);
   void placeFallen(double dt, const RigState& st);
   void flipBody(const RigState& st);
   void rotateBody(const Q& q, const V3& C, bool gear);
@@ -297,6 +304,14 @@ private:
   std::vector<Binding> bindings_;
   std::vector<Action> actions_;
   double clipW_[3] = {0, 1, 0};
+  // the jump on foot (foot_jump.cpp): the layer's weight, the phases' clocks, springs on the limbs
+  struct FootJumpS {
+    double w = 0, airT = 0, landT = -1, peak = 0, landH = 0, run = 0, lead = 1, prevY = 0, vy = 0, wind = 0, hold = 0.2, strideD = 0;
+    bool wasAir = false, init = false;
+    double crouch = 0, crouchV = 0, tuck = 0, tuckV = 0, prep = 0, prepV = 0, point = 0, pointV = 0, pitch = 0, pitchV = 0;
+    V3 arm[2], armV[2];
+    std::vector<Q> baseR; std::vector<V3> baseT;
+  } fj_;
   double trunkBottom() const;
   double bedBack_ = std::nan("");
   int accuIndex_ = 0;

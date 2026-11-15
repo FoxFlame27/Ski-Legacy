@@ -12,6 +12,7 @@
 #include "player/outfits.h"
 #include "platform/platform.h"
 #include <stb_image_write.h>
+#include <cstdlib>
 #include <cstring>
 
 namespace sl {
@@ -46,6 +47,107 @@ int rigShots(platform::Platform& plat, gfx::Device& dev, Renderer& renderer, Ass
     if (stbi_write_png(out.c_str(), dw, dh, 4, fl.data(), dw * 4)) SL_INFO("rig-shots: wrote %s", out.c_str());
     plat.swapBuffers();
   };
+  // ---- (SKI_LEGACY_RIGSHOTS=jump) the jump on foot (foot_jump.cpp) as frame sequences every 0.1 s, a contact sheet per
+  // jump (out_jump_<what>.png: a standing jump, a running jump, a sprinting jump, each with the layer and without it,
+  // the web game's walk carried into the air), the Player's own timing: the load, then 4.4 m/s up under 9.81.
+  // SKI_LEGACY_JUMPVIEW=front: from ahead at an angle, else from the side
+  if (const char* only = std::getenv("SKI_LEGACY_RIGSHOTS"); only && std::string(only) == "jump") {
+    auto M = rigModel(assets, "skier_red", ground);
+    auto G = rigGear(assets, "ski_rental", true);
+    if (!M) return 1;
+    PeopleKind K;
+    K.rig = M; K.draw = M->body;
+    struct Seq { const char* name; double speed; bool layer; };
+    const Seq seqs[] = {{"stand", 0, true}, {"stand_js", 0, false}, {"run", 4.2, true}, {"run_js", 4.2, false}, {"sprint", 6.3, true}, {"sprint_js", 6.3, false}};
+    const double fromT = -0.3, toT = 1.6, every = 0.1;
+    const char* view = std::getenv("SKI_LEGACY_JUMPVIEW");
+    const bool front = view && std::string(view) == "front";
+    for (const Seq& q : seqs) {
+      RigInst x;
+      x.rig.init(M, G, true, true, ground);
+      x.rig.setSkisVisible(false);
+      x.rig.setCarry(false);
+      const double heading = PI / 2;   // (along +x)
+      const double wind = q.layer ? 0.15 + (0.075 - 0.15) * std::min(1.0, std::max(0.0, (q.speed - 0.8) / 2.2)) : 0;
+      const double dt = 1 / 120.0;
+      double t = -1.5, y = 0, vy = 0, px = 0;
+      bool air = false, launched = false;
+      std::vector<std::vector<uint8_t>> tiles;
+      int tw = 0, th = 0, nextShot = 0;
+      while (t < toT + 1e-6) {
+        // the Player's walkTick: the press at t = 0, the load, the take-off, the landing
+        double windK = 0;
+        if (t >= 0 && !launched) {
+          if (t >= wind) { launched = true; air = true; vy = 4.4; }
+          else windK = wind > 0 ? t / wind : 0;
+        }
+        if (air) { y += vy * dt; vy -= 9.81 * dt; if (y <= 0) { y = 0; air = false; } }
+        px += q.speed * dt;
+        RigState st;
+        st.mode = q.speed > 0.1 ? RigMode::Walk : RigMode::Idle;
+        st.speed = q.speed; st.heading = heading; st.airY = y;
+        st.footJump = q.layer; st.footWind = windK;
+        x.rig.rootPos = V3(px, y, 0);
+        x.rig.update(dt, st);
+        t += dt;
+        const double shotT = fromT + nextShot * every;
+        if (t < shotT - 1e-6 || shotT > toT + 1e-6) continue;
+        const int reps = nextShot++ == 0 ? 6 : 1;   // (the first picture drawn a few times: the renderer warmed up)
+        x.pose_();
+        const dvec3 c(px, 0.45, 0);   // (framed for the whole jump: the body up to 1 m over the snow)
+        const dvec3 eye = front ? c + dvec3(4.2, 0.9, 2.6) : c + dvec3(0, 0.75, 5.6);
+        int dw, dh;
+        plat.drawableSize(dw, dh);
+        renderer.resize(dw, dh);
+        Camera cam;
+        cam.lookAt(eye, c + dvec3(0, 0.95, 0));
+        cam.fovY = 40; cam.nearZ = 0.05f; cam.aspect = float(dw) / float(std::max(1, dh));
+        Lighting L;
+        for (int rep = 0; rep < reps; rep++) {
+          renderer.beginFrame(cam, L, c);
+          renderer.submitModel(*floor, dvec3(0), mat4(1), nullptr, false);
+          drawRig(renderer, x, K, G.get(), 1, true);
+          renderer.endFrame();
+        }
+        std::vector<uint8_t> px8;
+        renderer.readPixels(px8);
+        plat.swapBuffers();
+        // the middle half of the width (the body), halved
+        const int x0 = dw / 4, cw = dw / 2;
+        tw = cw / 2; th = dh / 2;
+        std::vector<uint8_t> tile(size_t(tw) * size_t(th) * 4);
+        for (int ty = 0; ty < th; ty++)
+          for (int tx = 0; tx < tw; tx++)
+            for (int k = 0; k < 4; k++) {
+              int sum = 0;
+              for (int oy = 0; oy < 2; oy++)
+                for (int ox = 0; ox < 2; ox++) sum += px8[(size_t(dh - 1 - (ty * 2 + oy)) * size_t(dw) + size_t(x0 + tx * 2 + ox)) * 4 + size_t(k)];
+              tile[(size_t(ty) * size_t(tw) + size_t(tx)) * 4 + size_t(k)] = uint8_t(sum / 4);
+            }
+        tiles.push_back(std::move(tile));
+      }
+      // the sheet: 5 columns; the time as marks in each corner (red: before the press; white: 0.1 s each after it)
+      const int cols = 5, rows = int((tiles.size() + cols - 1) / cols);
+      const size_t rowB = size_t(tw) * cols * 4;
+      std::vector<uint8_t> sheet(rowB * size_t(th) * size_t(rows), 40);
+      for (size_t k = 0; k < tiles.size(); k++) {
+        const size_t cx = k % cols, cy = k / cols;
+        for (int ty = 0; ty < th; ty++) std::memcpy(&sheet[(cy * size_t(th) + size_t(ty)) * rowB + cx * size_t(tw) * 4], &tiles[k][size_t(ty) * size_t(tw) * 4], size_t(tw) * 4);
+        const int ticks = int(std::lround(fromT / every)) + int(k);
+        for (int d = 0; d < std::abs(ticks); d++)
+          for (int oy = 0; oy < 6; oy++)
+            for (int ox = 0; ox < 6; ox++) {
+              const size_t o = (cy * size_t(th) + 8 + size_t(oy)) * rowB + (cx * size_t(tw) + 8 + size_t(d) * 10 + size_t(ox)) * 4;
+              if (o + 3 < sheet.size()) { sheet[o] = 255; sheet[o + 1] = ticks < 0 ? 40 : 255; sheet[o + 2] = ticks < 0 ? 40 : 255; }
+            }
+        for (int ty = 0; ty < th; ty++) { const size_t o = (cy * size_t(th) + size_t(ty)) * rowB + cx * size_t(tw) * 4; sheet[o] = sheet[o + 1] = sheet[o + 2] = 20; }
+      }
+      const size_t dot = png.rfind('.');
+      const std::string out = (dot == std::string::npos ? png : png.substr(0, dot)) + "_jump_" + q.name + ".png";
+      if (!tiles.empty() && stbi_write_png(out.c_str(), tw * cols, th * rows, 4, sheet.data(), int(rowB))) SL_INFO("rig-shots: wrote %s (%zu frames)", out.c_str(), tiles.size());
+    }
+    return 0;
+  }
   // ---- your skier through the poses
   for (const char* ch : {"skier_red", "skier_blue"}) {
     auto M = rigModel(assets, ch, ground);

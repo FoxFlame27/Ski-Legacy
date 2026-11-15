@@ -319,6 +319,7 @@ void Npcs::spawnSkier(const dvec3& p) {
 
 std::vector<dvec2> Npcs::route(const dvec2& from, const dvec2& to) {
   double lane = (rnd() - 0.5) * 1.8;
+  if (world_->village().loaded()) return world_->village().route(from, to, lane);   // (along the village's streets)
   auto ang = [](const dvec2& p) { return std::atan2(p.y - RING_C.y, p.x - RING_C.x); };
   auto ringPt = [&](double a) { return dvec2(RING_C.x + std::cos(a) * (RING + lane), RING_C.y + std::sin(a) * (RING + lane)); };
   double a0 = ang(from), a1 = ang(to);
@@ -443,8 +444,11 @@ void Npcs::update(double dt, const dvec3& playerPos, const dvec3& camPos, double
       w.speed = lerpd(w.speed, 0, std::min(1.0, dt * 6));
       if (w.wait <= 0) {
         std::vector<dvec2> opts;
-        if (w.carry) { opts = {GONDOLA_OUT, SHOP_OUT, MAP_AT}; for (int h = 0; h < 8; h++) opts.push_back(hotelOut(h)); }
-        else { opts = {SHOP_OUT, dvec2(26.5, 6 + rnd() * 10), MAP_AT, GONDOLA_OUT}; for (int h = 0; h < 8; h++) opts.push_back(hotelOut(h)); }
+        if (w.carry) opts = {GONDOLA_OUT, SHOP_OUT, MAP_AT};
+        else opts = {SHOP_OUT, dvec2(26.5, 6 + rnd() * 10), MAP_AT, GONDOLA_OUT};
+        // (the hotels' doors: the native village's own, world/village.h; else village.js's eight)
+        if (world_->village().loaded()) for (const VillageDoor& d : world_->village().hotels()) opts.push_back(d.out);
+        else for (int h = 0; h < 8; h++) opts.push_back(hotelOut(h));
         dvec2 to = opts[size_t(rnd() * double(opts.size())) % opts.size()];
         w.route = route(dvec2(w.pos.x, w.pos.z), to);
         w.target = w.route.front();

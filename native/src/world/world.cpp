@@ -371,6 +371,7 @@ bool World::load(platform::Platform& p, const AssetPaths& paths) {
   shoulderLock_ = true;
   shoulderH_ = baseHeight(CROWN_X, CROWN_Z);
   shoulderLock_ = false;
+  village_.load(p, paths);   // (the village's own relief: world/village.h)
   loaded_ = true;
   for (auto& v : vcache_) v.key = INT64_MIN;
   SL_INFO("world: %zu pads, %zu corridor segments, %zu cut tiles, %zu region tiles, crag %dx%d", pads_.size(), corridors_.size(), cuts_.size(), regs_.size(), crag_.nx, crag_.nz);
@@ -562,7 +563,12 @@ double World::height(double x, double z, double spacing) const {
       if (d < p.r + p.blend) h = lerp(p.h, h, smoothstep(p.r, p.r + p.blend, d));
     }
   }
-  return h + regionDelta(x, z) + cutDelta(x, z);
+  return h + regionDelta(x, z) + cutDelta(x, z) + village_.delta(x, z);
+}
+
+void World::setVillageRelief(bool on) {
+  village_.reliefOn = on;
+  for (auto& v : vcache_) v.key = INT64_MIN;
 }
 
 double World::meshHeight(double x, double z) {

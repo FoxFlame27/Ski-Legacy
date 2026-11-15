@@ -1706,6 +1706,11 @@ void TrailMap::load(platform::Platform& p, const AssetPaths& paths, const World&
   if (t.hasAutohaus) M.services.insert(M.services.begin(), {t.autohaus.x, t.autohaus.z, "Autohaus", "Cars to rent and buy", Ico::Car});
   for (const Lot& L : t.lots) if (L.name == "Werkstatt") M.services.push_back({L.ex != 0 ? L.ex : L.x, L.ez != 0 ? L.ez : L.z, "Werkstatt \xC2\xB7 Garage", "Car repairs", Ico::Garage});
   M.services.push_back({-40, -18 + 9.5, "Ski shop", "Skis, boards and gear", Ico::Shop});
+  // (the native village's own buildings, world/village.h: the ski shop and the ticket booth stay where they were)
+  if (world.village().loaded()) {
+    M.village = {{-40, -18}, {15, -50}};
+    for (const VillageBuilding& b : world.village().buildings()) M.village.push_back(dvec2(b.x, b.z));
+  }
   SL_INFO("trail map: %zu pistes, %zu lifts, %zu roads (%zu named), %zu tunnels, %zu car parks, %zu summits, %zu bus stops", M.pistes.size(), M.lifts.size(), M.roads.size(),
           M.roadLabels.size(), M.tunnels.size(), M.lots.size(), M.peaks.size(), M.busStops.size());
 }

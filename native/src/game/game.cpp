@@ -107,6 +107,11 @@ int verifyHeights(platform::Platform& p, const AssetPaths& paths, World& world) 
   std::vector<uint8_t> b;
   if (!paths.readData(p, "world.json", b)) return 2;
   auto j = nlohmann::json::parse(b.begin(), b.end(), nullptr, false);
+  // (the native village's relief, world/village.h, is the C++ game's own on purpose: the JS terrain is compared
+  // without it; the reference points it covers are counted)
+  int nVillage = 0;
+  for (auto& r : j["refs"]) if (world.village().inRelief(r[0].get<double>(), r[1].get<double>())) nVillage++;
+  world.setVillageRelief(false);
   double e[6] = {0}, eReg[3] = {0}, sumReg = 0;
   int nReg = 0;
   const char* names[6] = {"baseHeight(spacing 0)", "baseHeight(spacing 8)", "baseHeight(spacing 64)", "height", "meshHeight", "forest"};
@@ -123,7 +128,7 @@ int verifyHeights(platform::Platform& p, const AssetPaths& paths, World& world) 
       else e[k] = std::max(e[k], d);
     }
   }
-  SL_INFO("verify-heights: %zu reference points from the JavaScript world (%d in the courses' regions)", j["refs"].size(), nReg);
+  SL_INFO("verify-heights: %zu reference points from the JavaScript world (%d in the courses' regions; %d under the native village's own relief, compared without it)", j["refs"].size(), nReg, nVillage);
   for (int k = 0; k < 6; k++) SL_INFO("  max |C++ - JS| %-24s %.4f %s", names[k], e[k], k == 5 ? "" : "m");
   if (nReg) SL_INFO("  in the regions (8 m grid): height max %.3f m, mean %.3f m; meshHeight max %.3f m; forest max %.3f", eReg[0], sumReg / nReg, eReg[1], eReg[2]);
   bool ok = e[0] < 0.05 && e[3] < 0.25;
@@ -3026,10 +3031,12 @@ int runGame(const GameOptions& opt) {
     if (opt.autotest && at == AT::Collide) {
       if (phaseFrame == 0) {
         input.releaseInjected();
-        // the hotel nearest (62, 34) (village.js): walk at it from the plaza side
+        // the hotel nearest (62, 34) (village.js; the native village's own: its Grand Hotel, world/village.h): walk at it
+        // from the plaza side
         double bd = 1e18;
+        const dvec2 hq = world.village().loaded() ? world.village().autotestHotel() : dvec2(62, 34);
         for (const Collider& c : scenery.colliders())
-          if (c.r < 0 && c.hw > 3) { double d = std::hypot(c.x - 62, c.z - 34); if (d < bd) { bd = d; hotel = &c; } }
+          if (c.r < 0 && c.hw > 3) { double d = std::hypot(c.x - hq.x, c.z - hq.y); if (d < bd) { bd = d; hotel = &c; } }
         if (hotel) {
           dvec2 out = glm::normalize(dvec2(-hotel->x, -hotel->z));
           double R = std::max(hotel->hw, hotel->hd) + 6;

@@ -1737,6 +1737,25 @@ leaves the rig as the JS. Frames: `SKI_LEGACY_RIGSHOTS=jump ./ski_legacy --rig-s
 `out_jump_{stand,run,sprint}[_js].png` (every 0.1 s from 0.3 s before the press; `_js`: the web game's jump;
 `SKI_LEGACY_JUMPVIEW=front` for a three-quarter view).
 
+## Moved sites (Nov 2026, village round 2, C++ only)
+
+`native/tools/village/village_layout.mjs` can carry a whole site of the exported world elsewhere (`moveSite(name, from,
+r, to, rot)`, written to `village.json` "moves"). `world/village.cpp` `applyMoves` runs on every pack as it loads:
+props and instanced pieces, colliders (rot, top), walkable decks, the baked triangles whose centre lies within r of
+`from` (copied into a mesh of their own, turned and raised), and the gameplay data's places in `play` / `net` (points
+with x / z and their y, yaw and frame directions, `at` / `sock` spots, the prison's frames, a path leaving the site:
+its first points carried, then on from the nearest of the rest). The relief under the new site copies the old ground
+(raised by dy), so everything sits as it sat. The JS game is untouched; saves keep working (nothing of a site is saved
+by position except a rescue in progress, which is on the mountain).
+
+- **Heliport** (the pad, the rental hut, the windsock, the ambulance's bay): from (92, -128), at the end of the
+  Bergbahnstrasse among chalets, to (170, 52) on the open meadow at the village's east edge (the medical centre 65 m
+  south, the Adlerhorn Gondola's line 68 m north, the nearest building 37 m away, the east car park and road 25-30 m),
+  reached on foot by the new
+  Heliweg from the Adlerhornweg past the Gasthof Adlerhorn. Rental, flight, landing home, the rescue and the ambulance
+  run unchanged (`SKI_LEGACY_DEBUG=helicheck` / `rescuetest` PASS: landed on the pad, the ambulance to the medical
+  centre).
+
 ## Status: the native port against the JavaScript game
 
 | area | JS game (`src/`) | native (`native/`) |

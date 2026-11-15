@@ -111,7 +111,23 @@ function prop(m, x, z, yaw, o = {}) {
 // ---------------------------------------------------------------- what stays (exported) and must not move
 // every placed thing of the three packs that is kept: the relief is zero within reach of it
 const keptPts = [];   // [x, z, r]
-const BOX = { x0: -290, z0: -250, x1: 190, z1: 180 };
+const BOX = { x0: -290, z0: -250, x1: 240, z1: 180 };
+// ---------------------------------------------------------------- moved sites (round 2)
+// A site of the exported world carried elsewhere (world/village.cpp applyMoves): everything within r of `from` in every
+// pack (props, colliders, baked triangles, the play data's places) goes to `to`, turned by rot, raised by dy; the relief
+// at `to` copies the old site's ground (so it all sits as it sat), fading out over FADE m beyond r.
+const MOVES = [];
+const MOVE_FADE = 12;
+function moveSite(name, from, r, to, rot = 0) { const m = { name, from, r, to, rot }; MOVES.push(m); return m; }
+const moveOf = (x, z) => MOVES.find((m) => Math.hypot(x - m.from[0], z - m.from[1]) < m.r);
+const movePt = (m, x, z) => { const dx = x - m.from[0], dz = z - m.from[1], c = Math.cos(m.rot), s = Math.sin(m.rot); return [m.to[0] + dx * c + dz * s, m.to[1] - dx * s + dz * c]; };
+const unmovePt = (m, x, z) => { const dx = x - m.to[0], dz = z - m.to[1], c = Math.cos(m.rot), s = Math.sin(m.rot); return [m.from[0] + dx * c - dz * s, m.from[1] + dx * s + dz * c]; };
+// The heliport (the pad, the rental hut, the windsock, the ambulance's bay): from the Bergbahnstrasse's end, hemmed in
+// by chalets with its way out over the village, to the open meadow at the village's east edge between the Mountain
+// Lodge and the medical centre: 68 m from the Adlerhorn Gondola's line, no building within 37 m of the pad, the
+// medical centre 65 m away, a footpath from the Adlerhornweg.
+const HELI = moveSite('Heliport', [92, -128], 26, [170, 52], 0);
+HELI.dy = r3(h0(HELI.to[0], HELI.to[1]) - h0(HELI.from[0], HELI.from[1]));
 const inBox = (x, z, m = 0) => x > BOX.x0 - m && x < BOX.x1 + m && z > BOX.z0 - m && z < BOX.z1 + m;
 const CLEAR_MODELS = ['hotel_chalet', 'lamp_post', 'snowman', 'firewood_pile'];
 // the old village's things that go (the eight hotels, the lamp ring, the snowmen and firewood by the hotels); the shop's
@@ -144,14 +160,14 @@ for (const [J, bin, pk] of [[R, RB, 'resort'], [T, TB, 'transport'], [P, PB, 'pl
   for (const p of [...J.props, ...J.instanced]) {
     for (const m of instOf(p, bin)) {
       const x = m[3], z = m[11];
-      if (!inBox(x, z, 40)) continue;
+      if (!inBox(x, z, 40) || moveOf(x, z)) continue;
       if (pk === 'resort' && p.model && cleared(p.model, x, z)) { clearedAt.push([x, z]); continue; }
       const sc = Math.cbrt(Math.abs(m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) + m[2] * (m[4] * m[9] - m[5] * m[8])));
       keptPts.push([x, z, Math.max(4, Math.min(20, sc * 1.2 + 3))]);
     }
   }
   for (const c of J.colliders) {
-    if (!inBox(c.x, c.z, 40)) continue;
+    if (!inBox(c.x, c.z, 40) || moveOf(c.x, c.z)) continue;
     if (pk === 'resort' && clearedAt.some(([x, z]) => Math.hypot(x - c.x, z - c.z) < 0.6)) continue;
     keptPts.push([c.x, c.z, (c.r >= 0 ? c.r : Math.hypot(c.hw, c.hd)) + 4]);
   }
@@ -162,7 +178,7 @@ for (const [J, bin, pk] of [[R, RB, 'resort'], [T, TB, 'transport'], [P, PB, 'pl
     const f = new Float32Array(bin.buffer.slice(bin.byteOffset + m.vOff, bin.byteOffset + m.vOff + m.verts * 28));
     for (let i = 0; i < m.verts; i += 1) {
       const x = f[i * 7] + o[0], z = f[i * 7 + 2] + o[2];
-      if (inBox(x, z, 20)) keptPts.push([x, z, 5]);
+      if (inBox(x, z, 20) && !moveOf(x, z)) keptPts.push([x, z, 5]);
     }
   }
 }
@@ -245,6 +261,9 @@ street('Sonnenhang', [[-104, -32], [-86, -50], [-66, -64], [-46, -80], [-34, -92
 street('Hangweg', [[-122, -56], [-104, -72], [-86, -92], [-68, -108], [-52, -124]], 3.5, { lamps: 28 });
 street('Kapellenweg', [[-80, -16], [-98, -4], [-120, 8], [-146, 14], [-170, 18]], 3.5, { lamps: 28 });
 street('Bahnhofweg', [[-150, -108], [-128, -122], [-104, -136], [-86, -140]], 3.5, { lamps: 28 });
+// the way to the heliport (moved, see MOVES): from the Adlerhornweg's end past the Gasthof to the rental hut's door
+// and the pad's edge
+street('Heliweg', [[85, 14], [118, 20], [140, 40], [153.6, 51.5], [159.5, 53]], 3, { lamps: 22 });
 // the chapel way down from the knoll: stairs from the square up to the church (relief: the stair's ramp)
 const STAIR_W = 5;
 street('Kirchstiege', [[36, -8, 0], [46, -8, KNOLL.level]], STAIR_W, { relief: true, pave: false, lamps: 0 });
@@ -392,6 +411,17 @@ for (const s of streets) {
     const w = 1 - sstep(hw, hw + sh, best);
     const want = lerp(ground(k), y, w);
     relief[k] = want - base[k];
+  }
+}
+// the moved sites: their old ground copied under them (raised by dy), fading into the ground round them
+for (const m of MOVES) {
+  const R = m.r + MOVE_FADE;
+  for (let j = 0; j < G.nz; j++) for (let i = 0; i < G.nx; i++) {
+    const x = G.x0 + i * STEP, z = G.z0 + j * STEP, d = Math.hypot(x - m.to[0], z - m.to[1]);
+    if (d > R) continue;
+    const k = j * G.nx + i, [sx, sz] = unmovePt(m, x, z);
+    const want = h0(sx, sz) + m.dy, w = 1 - sstep(m.r, R, d);
+    relief[k] = lerp(relief[k], want - base[k], w);
   }
 }
 // (the kept things win over the streets too)
@@ -562,7 +592,7 @@ for (const [x, z] of [[0, 11], [0, -19], [14, 1], [12, 12], [-28, -10], [-25, 4]
 const streetIds = nodes.map((_, i) => i);
 for (const b of buildings) { const [x, z] = b.door.out; joinNearest(x, z, streetIds); }
 // the places the people use that stay (the shop's door, the gondolas' exits, the bus stop's waiting area)
-for (const [x, z] of [[-33.3, -16.7], [0, -53], [85.5, 7.8], [-58.6, 82.2], [9.6, 57.1], [13.3, -22.5], [8, -21.6]]) joinNearest(x, z, streetIds);
+for (const [x, z] of [[-33.3, -16.7], [0, -53], [85.5, 7.8], [-58.6, 82.2], [9.6, 57.1], [13.3, -22.5], [8, -21.6], movePt(HELI, 75.64, -132.48)]) joinNearest(x, z, streetIds);
 log(`walking network: ${nodes.length} nodes, ${edges.length} edges`);
 
 // ---------------------------------------------------------------- write
@@ -585,6 +615,7 @@ const out = {
     square: [0, -4, 15],
   },
   walk: { nodes, edges },
+  moves: MOVES.map((m) => ({ name: m.name, from: m.from, r: m.r, to: m.to, rot: m.rot, dy: m.dy })),
   buildings: buildings.map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: r3(b.x), z: r3(b.z), yaw: r3(b.yaw), w: r3(b.w), d: r3(b.d), h: r3(b.h) })),
 };
 if (process.argv.includes('--plan')) fs.writeFileSync(process.argv[process.argv.indexOf('--plan') + 1], JSON.stringify(out));

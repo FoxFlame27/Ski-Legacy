@@ -58,6 +58,9 @@ public:
   int trainCount() const { return int(trains_.size()); }
   dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int seatCount() const { return ncars_ * 48; }
+  /// (railway.js windowAt) the stretch of the cycle (u0, dur) a train stands at station `id` with its doors open,
+  /// about to leave up / down (scanned off the timetable in 0.25 s steps); false: none
+  bool windowAt(const std::string& id, bool up, double& u0, double& dur) const;
   /// (railway.js seatWorldAt) where seat n (every car's seats in turn) of train `train` is now, the way it faces
   bool seatWorld(int train, int n, dvec3& pos, double& yaw) const;
   /// (debug trainfar: the trains from outside at a distance) a train's car, its speed

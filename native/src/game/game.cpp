@@ -89,6 +89,62 @@ namespace {
 constexpr double STEP = 1.0 / 120.0;   // simulation tick (player.js SUBSTEP)
 constexpr double ALT0 = 1245;          // village altitude above sea level (signs)
 
+// (JS x.toFixed(1)) one decimal from the double's exact value, a tie going away from zero ('-': not finite)
+std::string jsFixed1(double x) {
+  if (!std::isfinite(x)) return "-";
+  const double a = std::fabs(x), q = a * 4;
+  char b[64];
+  // the only exact ties at one decimal are .25 / .75 (k/20 is a binary fraction only for odd k = 5m): printf rounds
+  // those to even, JS up
+  if (q == std::floor(q) && std::fmod(q, 2) == 1 && a < 1e15) std::snprintf(b, sizeof b, "%s%.1f", x < 0 ? "-" : "", (std::floor(a * 10) + 1) / 10);
+  else std::snprintf(b, sizeof b, "%.1f", x);
+  return x == 0 ? std::string("0.0") : std::string(b);   // (-0: "0.0" in JS; -0.01 is "-0.0" in both)
+}
+// (JS String(x)) the shortest decimal that reads back as x
+std::string jsNum(double x) {
+  if (!std::isfinite(x)) return std::isnan(x) ? "NaN" : x > 0 ? "Infinity" : "-Infinity";
+  char b[64];
+  if (x == std::floor(x) && std::fabs(x) < 1e21) { std::snprintf(b, sizeof b, "%.0f", x); return x == 0 ? "0" : b; }
+  for (int p = 1; p <= 17; p++) { std::snprintf(b, sizeof b, "%.*g", p, x); if (std::strtod(b, nullptr) == x) break; }
+  return b;
+}
+// (transit.js fingerprint) this game version's timetables, sent with the login: the same parts string as the web
+// game from the same timetables (railway, Express, ski buses, lifts), then the same FNV-1a hash; a JS player sees a
+// warning when a player in the world has another one. A subsystem that isn't loaded leaves its part out (as there).
+std::string transitParts(const Railway& railway, const Express& express, const BusLine& buses, const Transport& transport, Lifts& lifts) {
+  std::vector<std::string> parts;
+  const std::string sep = ":";
+  if (transport.rail.ok) {
+    double u0 = 0, dur = 0;
+    parts.push_back("r" + std::to_string(railway.trainCount()) + sep + std::to_string(railway.seatCount()) + sep +
+                    (railway.windowAt("tal", true, u0, dur) ? jsFixed1(u0) + "/" + jsFixed1(dur) : std::string("-")));
+  }
+  if (express.trainCount() > 0) {
+    const int per = transport.rail.seats.empty() ? 48 : int(transport.rail.seats.size());   // (Express::seatWorld: 4 cars of the railway's seats)
+    parts.push_back("x" + std::to_string(express.trainCount()) + sep + std::to_string(per * 4) + sep + jsFixed1(express.loopOf(1)) + sep + jsFixed1(express.loopOf(-1)));
+  }
+  if (transport.fleet.ok && !transport.fleet.buses.empty()) {
+    std::string b = "b" + std::to_string(buses.seatCount()) + sep;
+    for (size_t i = 0; i < transport.fleet.buses.size(); i++) b += (i ? "," : "") + jsFixed1(transport.fleet.buses[i].cycle) + "+" + jsFixed1(transport.fleet.buses[i].phase);
+    parts.push_back(b);
+  }
+  {
+    std::string l = "l";
+    for (size_t i = 0; i < lifts.lines().size(); i++) { const LiftLine& L = lifts.lines()[i]; l += (i ? "," : "") + jsFixed1(L.L) + sep + std::to_string(L.s.size()) + sep + jsNum(L.cfg.speed); }
+    parts.push_back(l);
+  }
+  std::string s;
+  for (size_t i = 0; i < parts.size(); i++) s += (i ? "|" : "") + parts[i];
+  return s;
+}
+std::string transitHash(const std::string& s) {
+  uint32_t h = 0x811c9dc5u;
+  for (unsigned char c : s) { h ^= c; h *= 0x01000193u; }   // (the parts are ASCII: charCodeAt == the byte)
+  char b[16];
+  std::snprintf(b, sizeof b, "%08x", h);
+  return b;
+}
+
 struct Piste { std::string name; int diff = 0; std::string peak; std::vector<dvec2> pts; };
 
 std::vector<Piste> loadPistes(platform::Platform& p, const AssetPaths& paths) {
@@ -1941,7 +1997,18 @@ int runGame(const GameOptions& opt) {
     SL_INFO("[mp] brk %s %s (%.1f s ago): %s", d["k"].get<std::string>().c_str(), d["id"].get<std::string>().c_str(), age, ok ? "knocked here too" : "not found / down already");
   };
   mp.host.plots = [&]() { std::vector<int> v; for (const ChaletHouse& h : playData.chalets) v.push_back(h.id); return v; };
-  mp.host.transitFingerprint = []() { return std::string("native-phase6"); };
+  mp.host.transitFingerprint = [&]() {
+    static std::string fp;   // (kept once every system is there, as transit.js)
+    if (!fp.empty()) return fp;
+    const std::string h = transitHash(transitParts(railway, express, buses, transport, lifts));
+    if (transport.rail.ok && express.trainCount() > 0 && transport.fleet.ok) fp = h;
+    return h;
+  };
+  if (const char* dbg = std::getenv("SKI_LEGACY_DEBUG"); dbg && std::strstr(dbg, "ttlog")) {   // (the parts, to hold against the web game's)
+    const std::string parts = transitParts(railway, express, buses, transport, lifts);
+    SL_INFO("[ttlog] parts %s", parts.c_str());
+    SL_INFO("[ttlog] fingerprint %s", transitHash(parts).c_str());
+  }
   mp.host.wantedNow = [&]() {
     double h = 0, e = 0, t = 0; bool f = false;
     if (!police.snapshot(h, e, t, f)) return nlohmann::json();

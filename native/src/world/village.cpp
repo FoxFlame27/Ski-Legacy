@@ -471,7 +471,7 @@ void Village::addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& worl
         const dvec2 rgt(-d.y, d.x);
         for (int a = 0; a < 7; a++) {
           const dvec2 q = p[size_t(k)] + rgt * ((a - 3) / 3.0 * half);
-          const float pos[3] = {float(q.x - origin.x), float(y[size_t(k)] + 0.03 - origin.y), float(q.y - origin.z)};
+          const float pos[3] = {float(q.x - origin.x), float(y[size_t(k)] + 0.22 - origin.y), float(q.y - origin.z)};
           const int8_t nrm[4] = {0, 127, 0, 0};
           const float uv[2] = {float(a / 6.0), float(S[size_t(k)] * 0.0754)};
           const uint8_t col[4] = {255, 255, 255, 0};

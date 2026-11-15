@@ -411,7 +411,7 @@ try {
   ok(q1.ok && q1.d.n === 1 && !q1.d.startAt, 'one in the queue: waiting for players (1/2)');
   await b.req('raceJoin', { race: 'meadow' });
   const qe = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 2);
-  ok(qe && qe.startAt - Date.now() > 25000, 'two in the queue (of 3 in the world): the 45 s countdown starts');
+  ok(qe && qe.startAt - Date.now() > 20000, 'two in the queue (of 3 in the world): the 30 s countdown starts');
   await a.req('raceLeave');
   const qc = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 1);
   ok(qc && qc.startAt === 0, 'one leaves: the countdown is cancelled');
@@ -420,7 +420,7 @@ try {
   const startAt = qe2?.startAt;
   await c3.req('raceJoin', { race: 'meadow' }); // everyone in the world is queued: it still waits for the countdown
   const qe3 = await c3.next('raceQueue', (d) => d.race === 'meadow' && d.n === 3);
-  ok(qe3 && qe3.startAt === startAt && qe3.waitMs === 45000, 'everyone in the world queued: no instant start, the 45 s countdown runs on');
+  ok(qe3 && qe3.startAt === startAt && qe3.waitMs === 30000, 'everyone in the world queued: no instant start, the 30 s countdown runs on');
   { const wq = server.worlds.get(la.d.world.id), q = wq.queues.get('meadow'); clearTimeout(q.timer); wq.startRace('meadow'); } // (the countdown's end, now)
   const st = await a.next('raceStart', (d) => d.race === 'meadow');
   ok(st && st.grid.length === 3 && st.at - Date.now() <= 4500 && new Set(st.grid.map((g) => g.slot)).size === 3, 'at the countdown\'s end the race starts (3 on the grid, shared start time)');
@@ -579,7 +579,7 @@ try {
     const B = await racer('Bea');
     const m0 = (server.profileOf('bea').money = -2500); // (deep in debt)
     const jq = await B.f.req('raceJoin', { race: id });
-    ok(jq.ok && jq.d.need === 2 && jq.d.waitMs === 45000, 'a broke player joins a bus race queue (need 2, the 45 s countdown)');
+    ok(jq.ok && jq.d.need === 2 && jq.d.waitMs === 30000, 'a broke player joins a bus race queue (need 2, the 30 s countdown)');
     const q1 = B.world.queues.get(id);
     ok(q1 && !q1.startAt, 'alone in the queue: no countdown (nobody races alone)');
     B.world.startRace(id); // (forced: one racer is sent back to the queue)
@@ -659,7 +659,7 @@ try {
     ok(F.every((x) => x.world === w), `${RACE_MAX} racers in one world`);
     for (const x of F.slice(0, RACE_MAX - 1)) await x.f.req('raceJoin', { race: 'meadow' });
     const q = w.queues.get('meadow');
-    ok(q && q.members.length === RACE_MAX - 1 && q.startAt > 0 && w.queueMsg('meadow').max === RACE_MAX, `${RACE_MAX - 1} queued: the 45 s countdown runs (queue max ${RACE_MAX})`);
+    ok(q && q.members.length === RACE_MAX - 1 && q.startAt > 0 && w.queueMsg('meadow').max === RACE_MAX, `${RACE_MAX - 1} queued: the 30 s countdown runs (queue max ${RACE_MAX})`);
     await F[RACE_MAX - 1].f.req('raceJoin', { race: 'meadow' });
     const st = await F[0].f.next('raceStart', (d) => d.race === 'meadow' && d.grid.length === RACE_MAX, 2000);
     ok(!!st && !w.queues.get('meadow'), `the ${RACE_MAX}st racer: a full field starts at once`);

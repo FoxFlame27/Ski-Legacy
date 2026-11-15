@@ -23,9 +23,9 @@ export const MAX_PLAYERS = 50;
 export const TICK_HZ = 15;                 // presence batches per second
 export const DAY_MS = 16 * 60 * 1000;      // one game day (sky.js DAY_SECONDS)
 export const HELI_COPY_MS = 5 * 60 * 1000; // a rental out this long: a new copy waits at the pad
-export const RACE_WAIT_MS = 45 * 1000;     // queue countdown once 2 are in (Oct 30, the user: 45 s, never at once)
+export const RACE_WAIT_MS = 30 * 1000;     // (Nov 15, the user: 30 s for others to join; was 45 s)     // queue countdown once 2 are in (Oct 30, the user: 45 s, never at once)
 export const BUS_RACE_WAIT_MS = RACE_WAIT_MS; // a bus race (catalog races[id].bus: free entry): the same 45 s countdown (Oct 30, the user: "keep the countdown from 45 sec not 20")
-export const RACE_MAX = 21;                 // racers in one race at most (Oct 30, the user: "every race can have max 21 players"): a full field starts at once
+export const RACE_MAX = 14;                 // (Nov 15, the user: max 14 players in a race; was 21)                 // racers in one race at most (Oct 30, the user: "every race can have max 21 players"): a full field starts at once
 export const RACE_LEAD_MS = 4000;          // the start is broadcast this far ahead (everyone counts down together)
 export const RACE_MAX_MS = 10 * 60 * 1000; // a race is closed this long after its start at the latest
 export const RACE_AFTER_FIRST_MS = 60 * 1000; // ...or this long after its first finisher (nobody waits for a racer who left)
@@ -96,7 +96,7 @@ export const weatherHoldMs = (w, rnd = Math.random) => (w === 'blizzard' ? 60000
 export const pickWeather = (w, rnd = Math.random) => { const o = WEATHER_NEXT[w] || WEATHER_NEXT.clear; return o[Math.floor(rnd() * o.length)]; };
 // max per payout; and EARN_HOURLY over the last hour, all sources, per account. sell: furniture sold back from your
 // chalet (build mode: half its price; the dearest piece is $3,600)
-const EARN_RULES = { job: 6000, secret: 10000, sell: 2000 };
+const EARN_RULES = { job: 6000, secret: 10000, sell: 2000, race: 6000 };   // (race: a solo online race against the AI field pays its prize)
 const EARN_HOURLY = 60000;
 // the in-game admin panel: these accounts (name keys) may send 'admin' requests (Oct 31 2026, the user: "can you add an
 // admin panel, 'new', only for Icey27": the account named Icey27 and nobody else; src/ui/adminnew.js "Admin · new")

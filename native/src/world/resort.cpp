@@ -412,6 +412,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     float ne = m.value("nightEmissive", 0.f);
     if (ne > 0) { M.emissive = vec3(1); M.emissiveNight = vec2(0, ne); }
     M.glow = m.value("glow", 0.f);
+    if (m.contains("tag") && m["tag"].is_string()) M.name = m["tag"].get<std::string>();   // (a material redrawn at run time: the Express's info screens)
     if (m.value("alphaTest", 0.f) > 0) { M.alpha = Material::Alpha::Mask; M.alphaCutoff = m["alphaTest"]; }
     else if (m.value("transparent", false)) M.alpha = Material::Alpha::Blend;
     if (m.value("basic", false)) { M.roughness = 1; M.metallic = 0; }

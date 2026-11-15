@@ -3274,6 +3274,7 @@ int runGame(const GameOptions& opt) {
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
+    if (rideKind == Ride::Express) express.drawInfo(*dev, resort.fonts());   // (express.js drawInfo: the cabin's live trip display)
     perf.add("vehicles (traffic, buses, trains)", perfMs() - pt0);
     if (rideKind == Ride::Car) {
       DriveFrameInput dfi;

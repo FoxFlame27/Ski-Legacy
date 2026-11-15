@@ -9,6 +9,8 @@
 #include "game/vehicles.h"
 
 namespace sl {
+struct FontSet;
+namespace gfx { class Device; }
 class People;
 
 struct TrainRide { bool on = false; dvec3 seat{0}, fwd{0, 0, 1}; std::string hint, stop; bool atStop = false, arrived = false; dvec3 exit{0}; double speed = 0;
@@ -123,6 +125,11 @@ public:
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
   /// (multiplayer) a train for `to` stands at `from` for 4 s more: check before paying
   bool trainReady(int from, int to) const;
+  /// express.js drawInfo(): the cabin's info screens (over the cab door and on the rear wall) show the trip you ride:
+  /// LEGACY EXPRESS -> the destination, the speed, NEXT STOP / NOW / DEPARTING, the line with its stops (the part
+  /// behind you red). A 512 x 128 canvas redrawn when the next stop, the speed (5 km/h steps) or the stop changes.
+  void drawInfo(gfx::Device& dev, const FontSet& fonts);
+  const std::string& infoKey() const { return infoKey_; }
   /// (express.js copyPassengers) the Wolkenspitzbahn's seated skiers, in the cabin you ride in
   void addPeople(People& people) const;
 
@@ -144,6 +151,9 @@ private:
   struct Train { int dir; double phase; State st; };
   std::vector<Train> trains_;
   struct Ride { bool on = false; int train = 0, from = -1, to = -1; bool departed = false, exitSent = false; } ride_;
+  std::string infoKey_;
+  int infoMat_ = -1;   // the cabin's info screen material (-2: none)
+  gfx::Texture infoTex_{};
   TrainChase chase_{0, 0.16, 46};
   struct Spot { bool on = false; double x = 0, y = 0, z = 0, s = 0, blocked = 0; bool fresh = false; } spot_;
   int spotN_ = 0, seat_ = -1;       // seat_: the seat you sat down on after a walk (-1: the one you boarded into)

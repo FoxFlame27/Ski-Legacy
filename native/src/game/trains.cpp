@@ -1,11 +1,14 @@
 #include "game/trains.h"
 #include "game/people.h"
 #include "core/log.h"
+#include "engine/canvas2d.h"
 #include "engine/mesh_kit.h"
+#include "game/ui_widgets.h"
 #include "world/scenery.h"
 #include "world/world.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace sl {
 
@@ -411,6 +414,85 @@ void Express::carMatrix(int k, int car, glm::dmat4& M) const {
   double sF = sc + fwd * C.bogie, sB = sc - fwd * C.bogie;
   auto trackAt = [&](double s) { Line::P p = t_.express.line.at(s); double off = t_.express.trackOff * d; return dvec3(p.x - p.dz * off, p.y, p.z + p.dx * off); };
   M = between(trackAt(sF), trackAt(sB));
+}
+
+// express.js drawInfo(): the cabin's info screens: the trip (from, to, the stops between, where we are), the next
+// stop, the speed
+void Express::drawInfo(gfx::Device& dev, const FontSet& fonts) {
+  if (!ride_.on || infoMat_ == -2) return;
+  Model* cm = models_.rail.cabinExpress.get();
+  if (!cm) return;
+  if (infoMat_ < 0) {
+    infoMat_ = -2;
+    for (size_t i = 0; i < cm->materials.size(); i++) if (cm->materials[i].name == "express-info") infoMat_ = int(i);
+    if (infoMat_ < 0) { SL_WARN("express: the cabin has no info screen material (re-export the data)"); return; }
+  }
+  const Train& T = trains_[size_t(ride_.train)];
+  const State& st = T.st;
+  const auto& S = t_.express.stations;
+  const int n = int(S.size());
+  const int nextK = !ride_.departed ? ride_.from : st.at >= 0 ? st.at : st.next;
+  const int kmh = int(std::floor(st.speed * 3.6 / 5 + 0.5)) * 5;
+  std::vector<int> stops;
+  for (int k = ride_.from;; k = (k + T.dir + n) % n) { stops.push_back(k); if (k == ride_.to || int(stops.size()) > n) break; }
+  int pos = -1;
+  for (size_t i = 0; i < stops.size(); i++) if (stops[i] == nextK) { pos = int(i); break; }
+  const std::string key = std::to_string(nextK) + "|" + std::to_string(kmh) + "|" + std::to_string(st.at) + "|" + (ride_.departed ? "true" : "false");
+  if (key == infoKey_) return;
+  infoKey_ = key;
+  const float W = 512, H = 128;
+  Canvas2D g(int(W), int(H), &fonts);
+  const std::string F = "\"Barlow Condensed\"";
+  // (the stations' names without the race's kind: / (Giant Slalom|Slalom|Super-G|Downhill)$/)
+  auto shortName = [&](int k) {
+    std::string nm = k >= 0 && k < n ? S[size_t(k)].name : std::string();
+    for (const char* suf : {" Giant Slalom", " Slalom", " Super-G", " Downhill"}) {
+      const size_t l = std::strlen(suf);
+      if (nm.size() >= l && nm.compare(nm.size() - l, l, suf) == 0) { nm.erase(nm.size() - l); break; }
+    }
+    return nm;
+  };
+  g.fillStyle("#0f1729"); g.fillRect(0, 0, W, H);
+  g.textBaseline("alphabetic");
+  g.fillStyle("#9fb3e8"); g.font("600 19px " + F); g.textAlign("left");
+  {
+    // "LEGACY EXPRESS  ->  DEST": the arrow drawn (U+2192 is not in the font; the browser takes it from a fallback)
+    const std::string a = "LEGACY EXPRESS  ", b = "  " + uiw::upper(shortName(ride_.to));
+    g.fillText(a, 22, 25);
+    const float ax = 22 + g.measureText(a), aw = 17;
+    g.strokeStyle("#9fb3e8"); g.lineWidth(1.6f);
+    g.beginPath(); g.moveTo(ax + 1, 19); g.lineTo(ax + aw - 1, 19); g.moveTo(ax + aw - 6, 14.5f); g.lineTo(ax + aw - 1, 19); g.lineTo(ax + aw - 6, 23.5f); g.stroke();
+    g.fillText(b, ax + aw, 25);
+  }
+  g.textAlign("right"); g.fillStyle("#ffffff"); g.font("italic 700 24px " + F);
+  g.fillText(std::to_string(kmh) + " km/h", W - 22, 27);
+  g.textAlign("left"); g.fillStyle("#ffb02a"); g.font("600 17px " + F);
+  g.fillText(st.at >= 0 ? (ride_.departed ? "NOW" : "DEPARTING") : "NEXT STOP", 22, 54);
+  g.fillStyle("#ffffff"); g.font("700 30px " + F);
+  g.fillText(shortName(st.at >= 0 ? st.at : nextK), 110, 56);
+  // the trip: a line with its stops, the part behind us dimmed
+  const float x0 = 34, x1 = W - 34, y = 92, m = float(std::max<size_t>(1, stops.size() - 1));
+  const float done = st.at >= 0 ? float(pos) : float(pos) - 0.5f;
+  g.lineWidth(5); g.strokeStyle("#33405f"); g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
+  g.strokeStyle("#e2231a"); g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + ((x1 - x0) * std::max(0.f, done)) / m, y); g.stroke();
+  for (size_t i = 0; i < stops.size(); i++) {
+    const float x = x0 + ((x1 - x0) * float(i)) / m;
+    const bool end = i == 0 || float(i) == m;
+    g.fillStyle(float(i) <= done ? "#e2231a" : "#ffffff"); g.beginPath(); g.arc(x, y, end ? 7 : 5, 0, 7); g.fill();
+    if (end) { g.fillStyle("#c9d4ee"); g.font("600 15px " + F); g.textAlign(i == 0 ? "left" : "right"); g.fillText(shortName(stops[i]), i == 0 ? x - 6 : x + 6, y + 26); }
+  }
+  // (THREE.CanvasTexture: flipY; map = emissiveMap = the canvas, emissive 0.9 as the screen's own material)
+  const auto& px = g.pixels();
+  std::vector<uint8_t> flip(px.size());
+  for (int yy = 0; yy < int(H); yy++) std::memcpy(&flip[size_t(yy) * size_t(W) * 4], &px[size_t(int(H) - 1 - yy) * size_t(W) * 4], size_t(W) * 4);
+  gfx::TextureDesc d;
+  d.width = int(W); d.height = int(H); d.format = gfx::TexFormat::SRGBA8; d.anisotropy = 8; d.wrap = gfx::Wrap::Clamp;
+  const gfx::Texture t = dev.createTexture(d, flip.data());
+  Material& M = cm->materials[size_t(infoMat_)];
+  M.baseTex = t; M.emissiveTex = t;
+  M.baseColor = vec4(1); M.emissive = vec3(0.9f); M.emissiveNight = vec2(1, 0); M.roughness = 0.4f; M.metallic = 0;   // (MeshStandardMaterial: emissive 0xffffff x 0.9, roughness 0.4)
+  if (infoTex_) dev.destroy(infoTex_);
+  infoTex_ = t;
 }
 
 TrainRide Express::ride() const {

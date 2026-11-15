@@ -349,6 +349,7 @@ void Multiplayer::bind() {
   });
   on("skip", [this](const Json& d) { skips[jstr(d, "k") + "|" + jstr(d, "v")] = d; });
   on("warp", [this](const Json& d) { warps[jstr(d, "key")] = d; });
+  on("busHold", [this](const Json& d) { if (host.onBusHold) host.onBusHold(d); });
   on("permAsk", [this](const Json& d) {
     PermAsk a;
     a.rid = int(jnum(d, "rid"));

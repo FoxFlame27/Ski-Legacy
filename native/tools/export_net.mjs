@@ -339,6 +339,22 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       glass: glbMaterials('ski_bus_micruss').map((q, i) => (/^(Windows|InteriorWindow)$/.test(q.name) ? i : -1)).filter((i) => i >= 0),
       paint: glbMaterials('ski_bus_micruss').map((q, i) => (q.name === 'Body' ? i : -1)).filter((i) => i >= 0),
       seats: (skibus.line.bus.seats || []).map((s) => ({ p: [r4(s.pos.x), r4(s.pos.y), r4(s.pos.z)], window: !!s.window, side: s.side, row: s.row })) };
+    // the fleet's timetable as bus.js buildFleet / slotFleet made it (bus:1..7 on their rounds, each round its own
+    // shared timeline 'bus|R<idx>' online): per bus its round, cycle, phase and its two ways (fleetDir: the joined
+    // trips, the speed profile, the stops' marks, the knots (time, arc length)) at full precision, so the C++ places
+    // every bus where the web game does at the same clock; and bus:0's bay at the depot (depotTrips(0).in, its end)
+    const L = skibus.line, idx = (s) => stops.indexOf(s);
+    const way = (P) => ({ n: P.n, length: P.length, X: f32(P.X), Y: f32(P.Y), Z: f32(P.Z), S: f32(P.S), V: f32(P.V), sA: P.sA, sB: P.sB, dur: P.dur,
+      kt: Array.from(P.kt), ks: f32(P.ks), marks: P.marks.map((m) => ({ s: m.s, stop: idx(m.stop), depot: !!m.stop?.depot, dwell: m.dwell, t: m.t ?? 0 })) });
+    if (L.fleet?.length) {
+      out.fleet = { buses: L.fleet.map((b) => ({ id: b.id, line: b.route.mpLine, round: b.route.idx, to: idx(b.route.to), cycle: b.route.cycle, phase: b.phase, out: way(b.route.out), back: way(b.route.back) })) };
+      try {
+        const { depotTrips } = await imp('game/bus/depot.js');
+        const T = depotTrips(0);
+        if (T) out.fleet.park0 = { n: T.in.n, X: f32(T.in.X), Y: f32(T.in.Y), Z: f32(T.in.Z), S: f32(T.in.S), s1: T.in.s1 };
+      } catch (e) { log('net: bus:0 bay', e.message); }
+      log('net: bus fleet', out.fleet.buses.map((b) => `${b.id} ${b.line} ${(b.cycle / 60).toFixed(0)} min`).join(', '));
+    }
   }
 
   // ---------------------------------------------------------------- the Wolkenspitzbahn

@@ -261,6 +261,30 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     for (auto& g : b["paint"]) if (g.is_number()) busPaint.push_back(g.get<int>());
     for (auto& s : b["seats"]) bus.seats.push_back({vec3(s["p"][0].get<float>(), s["p"][1].get<float>(), s["p"][2].get<float>()), s.value("window", false), s.value("side", 1), s.value("row", 0)});
   }
+  if (net.contains("fleet") && net["fleet"].is_object()) {
+    auto way = [&](const nlohmann::json& w, FleetWay& o) {
+      o.X = arr<float>(w["X"], bin); o.Y = arr<float>(w["Y"], bin); o.Z = arr<float>(w["Z"], bin); o.S = arr<float>(w["S"], bin); o.V = arr<float>(w["V"], bin);
+      o.ks = arr<float>(w["ks"], bin);
+      for (auto& t : w["kt"]) o.kt.push_back(t.get<double>());
+      o.length = w.value("length", 0.0); o.sA = w.value("sA", 0.0); o.sB = w.value("sB", 0.0); o.dur = w.value("dur", 0.0);
+      for (auto& m : w["marks"]) o.marks.push_back({m.value("s", 0.0), m.value("dwell", 0.0), m.value("t", 0.0), m.value("stop", -1), m.value("depot", false)});
+      return !o.X.empty() && o.X.size() == o.S.size() && o.kt.size() == o.ks.size() && !o.marks.empty();
+    };
+    auto& F = net["fleet"];
+    bool ok = true;
+    for (auto& b : F["buses"]) {
+      FleetBus q;
+      q.id = b.value("id", std::string()); q.line = b.value("line", std::string()); q.round = b.value("round", 0); q.to = b.value("to", -1);
+      q.cycle = b.value("cycle", 0.0); q.phase = b.value("phase", 0.0);
+      ok = ok && way(b["out"], q.out) && way(b["back"], q.back) && q.cycle > 0;
+      fleet.buses.push_back(std::move(q));
+    }
+    if (F.contains("park0") && F["park0"].is_object()) {
+      auto& P = F["park0"];
+      fleet.parkX = arr<float>(P["X"], bin); fleet.parkY = arr<float>(P["Y"], bin); fleet.parkZ = arr<float>(P["Z"], bin); fleet.parkS = arr<float>(P["S"], bin); fleet.parkS1 = P.value("s1", 0.0);
+    }
+    fleet.ok = ok && !fleet.buses.empty();
+  }
   if (net["rail"].is_object()) {
     auto& r = net["rail"];
     auto& R = rail;

@@ -68,9 +68,10 @@ const std::vector<SetRow>& setRows() {
   return rows;
 }
 // (Phase 7) "switch": the Nintendo Switch budget (engine/quality.h), first in the row
-const char* QUALITY_ORDER[] = {"switch", "super", "performance", "balanced", "high", "ultra", "superultra"};
-const char* QUALITY_LABELS[] = {"Switch (handheld)", "Super Performance", "Performance", "Balanced", "High", "Ultra", "Super Ultra"};
-constexpr int kQualityCount = 7;
+// (the console's own preset is not offered on a computer: picked by accident it drew a small, soft picture)
+const char* QUALITY_ORDER[] = {"super", "performance", "balanced", "high", "ultra", "superultra"};
+const char* QUALITY_LABELS[] = {"Super Performance", "Performance", "Balanced", "High", "Ultra", "Super Ultra"};
+constexpr int kQualityCount = 6;
 const char* HUD_KEYS[] = {"showSpeedo", "showInfo", "showMoney", "showForecast"};
 } // namespace
 
@@ -815,7 +816,7 @@ void Menus::scrSettings() {
   const float d = ui_.dpr(), W = float(ui_.width()), H = float(ui_.height());
   const float tsm = std::max(12 * d, 13 * u_), txs = std::max(11 * d, 11 * u_), tmd = std::max(13 * d, 15 * u_);
   float x = 72 * u_, y = 46 * u_;
-  heading(x, y, "SETTINGS", "Performance runs smoothest on laptops, Super Performance on handhelds \xC2\xB7 the graphics preset applies the next time the game starts");
+  heading(x, y, "SETTINGS", "Performance runs smoothest on laptops, Super Performance on handhelds \xC2\xB7 a new graphics preset applies at once (the game restarts into it)");
   float py = y + 90 * u_ + 6 * u_ + tmd * 1.35f + 20 * u_;
   float pw = std::min(700 * u_, W - x - 40 * u_), ph = std::max(120 * u_, H - 92 * u_ - py);
   {
@@ -910,7 +911,7 @@ void Menus::scrSettings() {
     if (r.kind == 'q') {
       std::string q = save_.quality.empty() ? "balanced" : save_.quality;
       if (q == "low") q = "performance"; else if (q == "medium") q = "balanced";
-      int qi = 3;
+      int qi = 2;
       for (int i = 0; i < kQualityCount; i++) if (q == QUALITY_ORDER[i]) qi = i;
       std::vector<std::string> labels(QUALITY_LABELS, QUALITY_LABELS + kQualityCount);
       std::vector<Box> boxes;

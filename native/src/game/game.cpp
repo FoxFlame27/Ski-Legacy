@@ -312,6 +312,8 @@ int runGame(const GameOptions& opt) {
   // (debug: SKI_LEGACY_DEBUG=hitchtest --autotest: the autotest's route in real time, vsync on, every frame drawn: the
   // frame times and who took the long ones, core/hitch.h)
   const bool hitchTest = opt.autotest && std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "hitchtest");
+  // (a save from the handheld preset on a computer: back to Balanced; only --quality switch still asks for it)
+  if (!opt.qualitySet && save.quality == "switch") save.quality = "balanced";
   Quality q = Quality::preset(opt.qualitySet || save.quality.empty() ? opt.quality : save.quality);
   platform::WindowDesc wd;
   wd.width = opt.width; wd.height = opt.height; wd.fullscreen = opt.fullscreen || (!opt.autotest && save.settingOn("fullscreen")); wd.vsync = opt.vsync && ((!opt.autotest && !mptest) || hitchTest);
@@ -1965,7 +1967,10 @@ int runGame(const GameOptions& opt) {
     platform::Events ev;
     plat->pollEvents(ev);
     if (ev.quit) running = false;
-    if (ev.resized) { plat->drawableSize(dw, dh); renderer.resize(dw, dh); }
+    // the drawable's real size every frame (not only on a resize event: one that arrived while the world was loading,
+    // e.g. the window going full screen, was taken by the loading screen's event pump and the 3D stayed at the old
+    // size: a black border around a smaller picture)
+    { int nw = 0, nh = 0; plat->drawableSize(nw, nh); if (ev.resized || nw != renderer.width() || nh != renderer.height()) { dw = nw; dh = nh; renderer.resize(dw, dh); } }
     if (ev.focusLost) { input.clear(); plat->setRelativeMouse(false); audio.setFocused(false, save.settingOn("muteUnfocused")); }
     if (ev.focusGained) audio.setFocused(true, save.settingOn("muteUnfocused"));
     if (ev.toggleFullscreen && !opt.autotest) { save.set("fullscreen", !plat->fullscreen()); applySetting("fullscreen"); }   // F11 / Cmd+F

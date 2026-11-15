@@ -8,6 +8,7 @@
 #pragma once
 #include "core/math.h"
 #include "engine/renderer.h"
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,7 +44,24 @@ struct LiftLine {
   dvec3 cableAt(double u, int sd) const;
   int carState(double q, dvec3& out) const;
   void advance(size_t i, double t);
-  void update(double dt, double timeScale);
+  /// T (s): multiplayer, every car placed from the line's shared timeline (placeAt); null: the cars run on by dt
+  void update(double dt, double timeScale, const double* T = nullptr);
+  // ---- multiplayer (lifts.js setDwell / loopTimes / placeAt / nextCar / seatCount / preferredSeat / seatInto)
+  /// the end-station crawl (multiplayer: you wait for the real cabin, so it slows through both end stations)
+  struct Dwell { double half = 0, ramp = 0, slow = 1; } dwell;
+  bool hasDwell = false;
+  std::vector<double> s0;        // the cars' single-player places (as loaded: back to them when multiplayer ends)
+  struct LoopT { double P = 1; int steps = 0; std::vector<double> times; } loopT;
+  void setDwell(bool on);
+  void loopTimes();
+  double sAfter(double tau) const;
+  void placeAt(double T);
+  /// the car next at loop position `target`: t s until it is there (< 0: it passed a moment ago); nothing is moved
+  struct Next { int idx = -1; double t = 0; };
+  Next nextCar(double target) const;
+  int seatCount() const;
+  int preferredSeat() const;
+  Seat seatInto(size_t idx, int n) const;
   double travelTime(double s0, double dist) const;
   struct Pick { size_t idx; double t; };
   Pick pickCar(double target) const;
@@ -59,7 +77,16 @@ public:
   struct Station { LiftLine* line = nullptr; bool up = true, mid = false; double dist = 1e18; };
   /// lifts.js nearestStation: the closest bottom (up) / top (down) / mid-station (both ways)
   Station nearestStation(const dvec3& p);
-  Seat board(LiftLine& line, bool up, bool atMid);
+  /// pickIdx >= 0 (multiplayer): the cabin you waited for and the seat the server gave you; the loop is not moved
+  Seat board(LiftLine& line, bool up, bool atMid, int pickIdx = -1, int seat = -1);
+  /// lifts.js boardTarget: the loop position a rider boards at
+  static double boardTarget(const LiftLine& line, bool up, bool atMid) { return atMid && line.hasMid ? (up ? line.mid.u : 2 * line.L - line.mid.u) : (up ? 0 : line.L); }
+  /// multiplayer (net/transit.js hooks.lifts): s on line i's shared timeline; unset: single player. Every line crawls
+  /// through its end stations while it is set
+  void setMp(std::function<double(size_t line)> time);
+  bool mp() const { return bool(mpTime_); }
+  int rideSeat() const { return ride_.seat; }
+  size_t rideIdx() const { return ride_.idx; }
   struct RideState { bool riding = false; Seat seat; bool atStop = false; std::string stopName; bool arrived = false; LiftExit exit; };
   RideState updateRide();
   bool leaveAtStop(LiftExit& out);
@@ -70,7 +97,7 @@ public:
   std::string rideVehicle(std::string& kind, int& seats) const {
     if (!ride_.line) return "";
     kind = ride_.line->gondola ? "gondola" : "chair";
-    seats = ride_.line->gondola ? 6 : 4;
+    seats = ride_.line->seatCount();
     return "L" + std::to_string(ride_.line - lines_.data()) + "-" + std::to_string(ride_.idx);
   }
   std::vector<LiftLine>& lines() { return lines_; }
@@ -81,7 +108,8 @@ private:
   struct CarKind { std::shared_ptr<Model> model; mat4 fit{1}; InstanceBatch lod[3]; };
   CarKind cabin_, chair_;
   bool hasCars_ = false;
-  struct Ride { LiftLine* line = nullptr; size_t idx = 0; bool up = true, clearOfStop = true; } ride_;
+  struct Ride { LiftLine* line = nullptr; size_t idx = 0; bool up = true, clearOfStop = true; int seat = -1; } ride_;
+  std::function<double(size_t)> mpTime_;
 };
 
 } // namespace sl

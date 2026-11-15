@@ -33,6 +33,11 @@ public:
   /// lying in the bed, in the room (the rig's bed pose, the pillow's view)
   bool lying() const { return role_ == Role::Patient; }
   bool seated() const { return seat_ >= 0; }
+  /// (hospitalroom.js mpPose) how the others see you in the ward: lying in your bed (the bed's spot, flat on the back:
+  /// `patient`) or sitting on a visitor's chair; pos in the world. false: walking about
+  bool mpPose(dvec3& pos, double& yaw, bool& patient) const;
+  /// (hospitalroom.js patientSpot) the bed a patient at world x lies in: where the rig's root rests (the mattress + 4 cm)
+  dvec3 patientSpot(double worldX) const;
   /// recovering (in bed, not yet allowed up)
   bool recovering() const { return role_ == Role::Patient && left_ > 0; }
   double left() const { return std::max(0.0, left_); }

@@ -109,8 +109,18 @@ void Multiplayer::registerName(const std::string& raw, std::function<void(bool, 
 }
 
 Json Multiplayer::look() const {
+  // (outfits.js getEquipped: the four slots, each the item worn if you own it (a kit's piece: the kit), else null)
   const Save& s = *host.save;
-  Json o = s.outfits.equipped.contains(s.character) ? s.outfits.equipped[s.character] : Json(nullptr);
+  Json o{{"jacket", nullptr}, {"trousers", nullptr}, {"helmet", nullptr}, {"lens", nullptr}};
+  const Json e = s.outfits.equipped.is_object() && s.outfits.equipped.contains(s.character) ? s.outfits.equipped[s.character] : Json();
+  auto owns = [&](const std::string& id) {
+    const OutfitKit* kit = outfitKitOfPiece(id);
+    if (!kit && !outfitById(id)) return false;
+    const std::string need = kit ? kit->id : id;
+    return std::find(s.outfits.owned.begin(), s.outfits.owned.end(), need) != s.outfits.owned.end();
+  };
+  if (e.is_object())
+    for (auto& [slot, v] : o.items()) if (e.contains(slot) && e[slot].is_string() && owns(e[slot].get<std::string>())) v = e[slot];
   return Json{{"c", s.character}, {"o", o}, {"s", s.skis.empty() ? std::string("rental") : s.skis}};
 }
 
@@ -211,6 +221,7 @@ void Multiplayer::enter(const Json& d) {
     return true;
   };
   if (host.applySave) host.applySave();
+  lookSent_ = look().dump();
   net.send("look", look());
   push(true);
   statusLine_ = "Online \xC2\xB7 world " + std::to_string(worldId);
@@ -873,6 +884,12 @@ void Multiplayer::update(double dt, bool paused) {
   if (auto day = dayNow(); day && host.save->day != *day) host.save->day = *day;
   guardMoney();
   if (pushT_ >= 0 && (pushT_ -= dt) <= 0) { pushT_ = -1; push(); }
+  // (session.js sendLook: your character / outfit / skis changed: everyone's avatar of you follows)
+  if ((lookT_ -= dt) <= 0 && net.isOpen()) {
+    lookT_ = 0.25;
+    Json l = look();
+    if (std::string d = l.dump(); d != lookSent_) { lookSent_ = d; net.send("look", l); }
+  }
   // presence at 12 Hz
   sendAcc_ += dt;
   if (sendAcc_ >= 1 / net::SEND_HZ && net.isOpen()) { sendAcc_ = 0; sendPresence(); }

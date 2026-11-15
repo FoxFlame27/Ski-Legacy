@@ -1,6 +1,10 @@
 // The other players drawn, and the multiplayer overlays (see mp_view.h).
 #include "game/mp_view.h"
+#include "engine/asset_manager.h"
 #include "engine/renderer.h"
+#include "core/log.h"
+#include "game/economy.h"
+#include "player/outfits.h"
 #include "engine/ui.h"
 #include "game/mp_session.h"
 #include "game/people.h"
@@ -58,6 +62,8 @@ bool mpCarFrame(const Multiplayer& mp, const VehicleModels& vm, const std::strin
 
 void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, const std::string& interior, double dt) {
   helis_.clear();
+  tags_.clear();
+  trace.clear();
   flyT_ += dt;
   // (vehicles.js updateHeli) a helicopter left parked out on the mountain (their veh record: heli { at })
   if (interior.empty()) for (const auto& [hid, hr] : mp.players) {
@@ -66,11 +72,11 @@ void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, 
   }
   int fallback = people.kind("skier_blue");
   for (const auto& [id, r] : mp.players) {
-    if (!visible(r, interior, cam)) continue;
+    if (!visible(r, interior, cam)) { trace += std::to_string(id) + (r.ok ? r.interior != interior ? ":other-room " : ":far " : ":no-rows "); continue; }
     std::string ch = r.look.is_object() ? str(r.look, "c") : "";
     int kind = ch.empty() ? -1 : people.kind(ch);
     if (kind < 0) kind = fallback;
-    if (kind < 0) continue;
+    if (kind < 0) { trace += std::to_string(id) + ":nokind "; continue; }
     // their walk / ski cycle: advanced by their own speed here
     auto it = std::find_if(phases_.begin(), phases_.end(), [&](auto& e) { return e.first == id; });
     if (it == phases_.end()) { phases_.push_back({id, 0.0}); it = phases_.end() - 1; }
@@ -141,13 +147,24 @@ void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, 
       helis_.push_back(o);
       rseat = rescuePoint(o, true); ryaw = r.smYaw; held = true;
     }
-    if (rs == 3) continue;
-    if (p.car.how == CarSeatRef::Seated || !carOwner.empty() || sledding || !ground || !people.kindOf(kind).rig) { people.add(p); continue; }
+    if (rs == 3) { trace += std::to_string(id) + ":ambulance "; continue; }
+    // (vehicles.js seatFor: TRANSIT) riding a shared cabin / chair / train / bus: the seat of that vehicle as drawn here
+    if (!held && inVeh && vk != "car" && transitSeat && interior.empty() && transitSeat(vk, owner, seat, rseat, ryaw)) held = true;
+    const bool paused = (r.flags & net::F::paused) != 0;
+    if (p.car.how == CarSeatRef::Seated || !carOwner.empty() || sledding || !ground || !people.kindOf(kind).rig) {
+      // (in a car: no name over their head, the car's own tag says whose it is)
+      if (carOwner.empty() && p.car.how != CarSeatRef::Seated) tags_.push_back({id, p.pos, glm::length(p.pos - cam), paused});
+      people.add(p);
+      trace += std::to_string(id) + ":figure ";
+      continue;
+    }
+    trace += std::to_string(id) + ":rig ";
     poseRig(r, people, kind, cam, dt, held ? &rseat : nullptr, ryaw);
+    if (auto av = avs_.find(id); av != avs_.end()) tags_.push_back({id, dvec3(av->second.R.rig.rootPos), av->second.dist, paused});
   }
   // (a rescue whose player is out of sight / inside still runs its clock; gone with the player)
   for (const auto& [id, r] : mp.players) if (!visible(r, interior, cam) && rescues_.count(id)) { int s; dvec3 q; double y; updateRescue(r, dt, cam, interior.empty(), s, q, y); }
-  for (auto it = avs_.begin(); it != avs_.end();) { if (!mp.players.count(it->first)) it = avs_.erase(it); else ++it; }
+  for (auto it = avs_.begin(); it != avs_.end();) { if (!mp.players.count(it->first)) { freeAv(it->second); it = avs_.erase(it); } else ++it; }
   for (auto it = rescues_.begin(); it != rescues_.end();) { if (!mp.players.count(it->first)) it = rescues_.erase(it); else ++it; }
 }
 
@@ -220,20 +237,58 @@ bool MpView::updateRescue(const RemotePlayer& r, double dt, const dvec3& cam, bo
   return false;
 }
 
+MpView::~MpView() { for (auto& [pid, a] : avs_) freeAv(a); }
+
+void MpView::freeAv(Av& a) {
+  if (dev) for (auto& t : a.tex) dev->destroy(t);
+  a.tex.clear();
+  a.dressed.reset();
+}
+
+// remote.js ensureRig: their skis (makeRig(look.c, look.s): skiById(s) || the rental's model) and their outfit
+// (applyOutfit(rig, look.c, look.o): the four slots' item ids, null = the skier's own piece); only the outfit changed:
+// re-dressed, not rebuilt
+void MpView::dress(Av& a, const RemotePlayer& r, People& people, int kind) {
+  const Json& L = r.look;
+  std::string ids[4];
+  static const char* SLOT[4] = {"jacket", "trousers", "helmet", "lens"};
+  if (L.is_object() && L.contains("o") && L["o"].is_object())
+    for (int i = 0; i < 4; i++) { auto it = L["o"].find(SLOT[i]); if (it != L["o"].end() && it->is_string()) ids[i] = it->get<std::string>(); }
+  const std::string key = std::to_string(kind) + "|" + ids[0] + "|" + ids[1] + "|" + ids[2] + "|" + ids[3];
+  if (key == a.outfitKey) return;
+  a.outfitKey = key;
+  freeAv(a);
+  const PeopleKind& K = people.kindOf(kind);
+  if (!dev || !K.rig) return;
+  const OutfitLook look = outfitLookOf(ids[0], ids[1], ids[2], ids[3]);
+  if (!look.any()) return;
+  a.dressed = dressModel(*dev, *K.rig, look, a.tex);
+  SL_INFO("mp: %s wears %s %s %s %s -> %s", r.name.c_str(), ids[0].c_str(), ids[1].c_str(), ids[2].c_str(), ids[3].c_str(), a.dressed ? "baked" : "the original");
+}
+
 // remote.js poseOne: the avatar is the game's own skier rig, posed from their presence (ski / walk / sit / a wipeout)
 void MpView::poseRig(const RemotePlayer& r, People& people, int kind, const dvec3& cam, double dt, const dvec3* seatAt, double seatYaw) {
   Av& a = avs_[r.pid];
   const PeopleKind& K = people.kindOf(kind);
-  if (!a.built || a.kind != kind) {
+  const std::string skiId = r.look.is_object() ? str(r.look, "s") : "";
+  if (!a.built || a.kind != kind || a.skiId != skiId) {
+    freeAv(a);
     a = Av();
-    a.kind = kind; a.built = true;
+    a.kind = kind; a.built = true; a.skiId = skiId;
     a.R.kind = kind; a.R.gear = 3;
-    a.R.rig.init(K.rig, people.gear(3), true, true, ground);   // (main.js makeRig(c, s, { poles: true, ai: true }))
+    const SkiDef* sk = skiById(skiId);
+    a.gear = assets ? rigGear(*assets, sk ? sk->model : kSkis[0].model, true) : people.gear(3);
+    if (!a.gear) a.gear = people.gear(3);
+    a.R.rig.init(K.rig, a.gear, true, true, ground);   // (main.js makeRig(c, s, { poles: true, ai: true }))
     a.R.rig.setCarry(false);
     a.snap = true;
   }
+  dress(a, r, people, kind);
   a.frame = frame_;
-  const dvec3 pos = seatAt ? *seatAt : r.sm;   // (held by their rescue: the winch hook / the cabin seat, as drawn here)
+  dvec3 pos = seatAt ? *seatAt : r.sm;   // (held by their rescue: the winch hook / the cabin seat, as drawn here)
+  // a patient in a hospital bed (lying there, state fall inside the hospital): on the bed as you see it here
+  const bool patient = !seatAt && patientSpot && r.interior == "hospital" && net::St(r.st) == net::St::Fall;
+  if (patient) pos = patientSpot(pos.x);
   const double d = glm::length(pos - cam);
   a.dist = d;
   SkierRig& rig = a.R.rig;
@@ -252,6 +307,13 @@ void MpView::poseRig(const RemotePlayer& r, People& people, int kind, const dvec
   if (seated) {
     st.mode = RigMode::Sit; st.hasSeat = true; st.seat = three::V3(pos);
     if (S == net::St::Sit && inside) { st.hasBench = true; st.bench.back = -0.2; st.bench.front = 0.25; st.bench.floorY = pos.y - 0.45; st.bench.recline = 0; }   // (benchFor: a plain chair inside)
+    // (benchFor outside: the world bench / deck chair they sit on, seating.js seatAt at their seat point. The seat
+    // registry is not ported: its default seat shape (registerSeat: backrest 0.22 m behind, front edge 0.24 m ahead),
+    // its floor the ground the prop stands on)
+    else if (S == net::St::Sit && !seatAt && r.veh.empty() && ground) {
+      const double fy = ground(pos.x, pos.z, pos.y);
+      if (pos.y - fy > 0.25 && pos.y - fy < 1.2) { st.hasBench = true; st.bench.back = -0.22; st.bench.front = 0.24; st.bench.floorY = fy; st.bench.recline = 0; }
+    }
   } else if (S == net::St::Ski) st.mode = RigMode::Ski;
   else if (fall) {
     // a wipeout as they send it (protocol.js fallFlags): the tumble's pitch and roll (crouch, lean), the tuck and the
@@ -269,15 +331,36 @@ void MpView::poseRig(const RemotePlayer& r, People& people, int kind, const dvec
   st.hasEdge = true; st.edge = st.lean * 0.6;
   st.air = !seated && !fall && (r.flags & net::F::air); st.tuck = !seated && !fall && (r.flags & net::F::tuck);
   st.carry = !seatAt && !fall && (r.flags & net::F::carry);
+  if (patient) {
+    // (hospitalroom.js _pst: flat on the back, the pose set here, not decoded from the row's lossy pitch / flags)
+    st = RigState();
+    st.fp = 0; st.mode = RigMode::Fall; st.hasFall = true; st.fall.pitch = -PI / 2; st.fall.roll = 0; st.fall.ball = 0; st.fall.getUp = 0;
+    st.fallSide = 1; st.fallAir = false; st.hasFallHeading = true; st.fallHeading = 0; st.fallT = 1; st.heading = 0; st.hasEdge = true; st.edge = 0;
+  }
   a.st = st;
   st.hasNormal = true; st.normal = three::V3(0, 1, 0);
-  const bool skisVisible = !st.hasBench && (S == net::St::Ski || st.carry || (fall && (r.flags & net::F::skisOn)));
+  rig.polesHidden = patient;   // (in bed: no skis, no poles, no snow)
+  const bool skisVisible = !st.hasBench && !patient && (S == net::St::Ski || st.carry || (fall && (r.flags & net::F::skisOn)));
   if (a.skis != int(skisVisible)) { a.skis = int(skisVisible); rig.setSkisVisible(skisVisible); }
   // walking with skis: on the back (the rig's carry pose), never on the feet
   const bool carry = st.carry && S != net::St::Ski;
   if (a.carry != int(carry)) { a.carry = int(carry); rig.setCarry(carry); }
   a.animAcc += dt;
-  if (d < 60 || a.animAcc > (d < 180 ? 0.06 : 0.15) || !a.R.posed) {
+  if (patient) {
+    // posed exactly as your own body in bed (posePatient): the root on the bed's spot, the mattress its floor, no blend,
+    // the head showing, the arms by the side and the legs straight along the bed
+    const double top = pos.y;
+    rig.setGround([top](double, double, double) { return top; });
+    rig.snapPose();
+    rig.setHeadHidden(false);
+    rig.rootPos = three::V3(pos);
+    rig.update(std::max(1e-4, std::min(a.animAcc, 0.1)), st);
+    rig.fx.clear();
+    rig.bedPose(top);
+    a.R.pose_();
+    a.animAcc = 0;
+    a.snap = true;
+  } else if (d < 60 || a.animAcc > (d < 180 ? 0.06 : 0.15) || !a.R.posed) {
     // inside (a chalet's stairs, the Autohaus mezzanine, the ski shop, the prison): the floor is the row's own height
     // (their feet), not the world's terrain under the interior's coordinates (remote.js onFloor)
     if (inside) { const double fy = seated ? pos.y - 0.45 : pos.y; rig.setGround([fy](double, double, double) { return fy; }); }
@@ -300,7 +383,9 @@ void MpView::drawWorld(Renderer& r, People& people) {
   rigsDrawn = rescuesDrawn = 0;
   for (auto& [pid, a] : avs_) {
     if (a.frame != frame_ || !a.R.posed) { if (a.frame != frame_) { a.mHas = false; a.snap = true; } continue; }   // (out of sight this frame: a fresh pose when back)
-    drawRig(r, a.R, people.kindOf(a.kind), people.gear(3).get(), 1, a.dist < 40);
+    const PeopleKind& K = people.kindOf(a.kind);
+    if (a.dressed) { PeopleKind D; D.rig = K.rig; D.draw = a.dressed; drawRig(r, a.R, D, a.gear.get(), 1, a.dist < 40); }
+    else drawRig(r, a.R, K, a.gear.get(), 1, a.dist < 40);
     rigsDrawn++;
   }
   frame_++;
@@ -310,13 +395,15 @@ void MpView::drawWorld(Renderer& r, People& people) {
 
 std::string MpView::describe(int pid) const {
   auto it = avs_.find(pid);
-  if (it == avs_.end() || !it->second.R.posed) return "";
+  if (it == avs_.end()) return "(no rig)";
+  if (!it->second.R.posed) return "(rig not posed)";
   const Av& a = it->second;
   static const char* MODE[] = {"idle", "walk", "ski", "fall", "sit"};
   const int m = int(a.st.mode);
-  char b[200];
-  std::snprintf(b, sizeof b, "%s speed %.1f crouch %.2f lean %.2f%s%s%s%s%s", m >= 0 && m < 5 ? MODE[m] : "?", a.st.speed, a.st.crouch, a.st.lean,
-                a.st.tuck ? " tuck" : "", a.st.air ? " air" : "", a.skis == 1 ? " skis" : " no-skis", a.carry == 1 ? " carried" : "", a.st.hasFall ? " tumbling" : "");
+  char b[320];
+  std::snprintf(b, sizeof b, "%s speed %.1f crouch %.2f lean %.2f%s%s%s%s%s; skis '%s' (%s), outfit %s", m >= 0 && m < 5 ? MODE[m] : "?", a.st.speed, a.st.crouch, a.st.lean,
+                a.st.tuck ? " tuck" : "", a.st.air ? " air" : "", a.skis == 1 ? " skis" : " no-skis", a.carry == 1 ? " carried" : "", a.st.hasFall ? " tumbling" : "",
+                a.skiId.c_str(), a.gear && a.gear->ski ? a.gear->ski->name.c_str() : "-", a.dressed ? a.outfitKey.c_str() : "original");
   return b;
 }
 
@@ -370,11 +457,51 @@ void MpView::hud(Ui& ui, const Multiplayer& mp, const Camera& cam, int W, int H,
     Camera c = cam;
     c.aspect = float(W) / float(std::max(1, H));
     mat4 VP = c.proj() * c.view();
+    // remote.js makeTag: a slanted white card with a soft shadow and a coloured stripe on the left, the name in the HUD's
+    // bold italic shrunk to fit, on the rig's root 2.15 m up (so it rides the winch, lies on the bed with them); a sprite
+    // without size attenuation (0.05 of a unit at distance 1, a little smaller far away), hidden beyond 150 m; in the
+    // pause menu a dark "In pause menu" badge over it
+    const float unit = float(H) / (2 * std::tan(glm::radians(c.fovY) * 0.5f));
+    auto card = [&](const dvec3& at, double k, const std::string& name, bool dark) {
+      vec4 cl = VP * vec4(vec3(at - cam.pos), 1);
+      if (cl.w <= 0.1f) return;
+      const float sx = (cl.x / cl.w * 0.5f + 0.5f) * float(W), sy = (1 - (cl.y / cl.w * 0.5f + 0.5f)) * float(H);
+      const float q = float(k) * unit / 192.f;   // (one pixel of the 1024 x 192 canvas, the sprite 512:96)
+      if (sx < -512 * q || sx > float(W) + 512 * q || sy < -40 * q || sy > float(H) + 192 * q) return;
+      const float icon = dark ? 60 : 0, pad = 56, maxText = 1024 - 60 - 2 * pad - icon;
+      float px = 104;
+      float tw = ui.textWidth(name, px, UiFont::CondItalic);
+      while (px > 48 && tw > maxText) { px -= 4; tw = ui.textWidth(name, px, UiFont::CondItalic); }
+      const float w = std::min(1024.f - 60, tw + 2 * pad + icon), x0c = (1024 - w) / 2, y0c = 30, h = 128, sk = 14;
+      auto X = [&](float cx) { return sx + (cx - 512) * q; };
+      auto Y = [&](float cy) { return sy + (cy - 192) * q; };
+      const vec4 stripe = dark ? vec4(0.580f, 0.639f, 0.722f, 1) : vec4(0.122f, 0.373f, 0.820f, 1);
+      ui.boxShadow(X(x0c + sk / 2), Y(y0c), (w - sk) * q, h * q, 0, 0, 6 * q, 18 * q, vec4(0.031f, 0.078f, 0.188f, 0.35f));
+      ui.polyAA({vec2(X(x0c + sk), Y(y0c)), vec2(X(x0c + w), Y(y0c)), vec2(X(x0c + w - sk), Y(y0c + h)), vec2(X(x0c), Y(y0c + h))}, dark ? vec4(0.086f, 0.118f, 0.180f, 0.9f) : vec4(1, 1, 1, 0.95f));
+      ui.polyAA({vec2(X(x0c + sk), Y(y0c)), vec2(X(x0c + 20), Y(y0c)), vec2(X(x0c + 20), Y(y0c + h)), vec2(X(x0c), Y(y0c + h))}, stripe);
+      const float cx = x0c + 20 + (w - 20) / 2, cy = y0c + h / 2 + 4, fs = px * q;
+      const vec4 ink = dark ? vec4(0.945f, 0.961f, 0.976f, 1) : stripe;
+      const float ty = Y(cy) - ui.lineHeight(fs, UiFont::CondItalic) / 2;
+      if (dark) {
+        const float ix = cx - (tw + icon) / 2, bh = 50;
+        ui.rect(X(ix + 6), Y(cy - bh / 2 - 4), 13 * q, bh * q, ink);
+        ui.rect(X(ix + 28), Y(cy - bh / 2 - 4), 13 * q, bh * q, ink);
+        ui.text(X(ix + icon + tw / 2), ty, fs, UiFont::CondItalic, ink, name, UiAlign::Center);
+      } else ui.text(X(cx), ty, fs, UiFont::CondItalic, ink, name, UiAlign::Center);
+    };
+    for (const Tag& t : tags_) {
+      auto it = mp.players.find(t.pid);
+      if (it == mp.players.end() || t.d >= TAG_FAR) continue;
+      const double k = 0.05 * std::max(0.6, std::min(1.0, 1.15 - t.d / 220));
+      card(t.at + dvec3(0, 2.15, 0), k, it->second.name, false);
+      if (t.paused) card(t.at + dvec3(0, 2.55, 0), k * 0.85, "In pause menu", true);
+    }
     for (const auto& [id, r] : mp.players) {
       if (!r.ok || r.interior != interior) continue;
       double d = glm::length(r.sm - cam.pos);
       if (d > TAG_FAR) continue;
       bool inCar = (r.flags & net::F::car) != 0;
+      if (!inCar) continue;   // (driving: the card over their car, with the wanted stars; everyone else above)
       dvec3 head = r.sm + dvec3(0, inCar ? 2.1 : (r.st == int(net::St::Fall) ? 0.7 : 2.05), 0);
       vec4 cl = VP * vec4(vec3(head - cam.pos), 1);
       if (cl.w <= 0.1f) continue;
@@ -403,7 +530,12 @@ void MpView::hud(Ui& ui, const Multiplayer& mp, const Camera& cam, int W, int H,
     float x0 = float(W) - pw - 18 * u, y0 = 128 * u;
     ui.rect(x0, y0, pw, ph, a(white, 0.92f));
     ui.text(x0 + 12 * u, y0 + (ph - ui.lineHeight(fs, UiFont::CondItalic)) / 2, fs, UiFont::CondItalic, bad ? ko : blue, s);
-    if (!mp.guests.empty()) {
+    if (!mp.rideInfo.empty()) {   // (ui.js setSkip: your seat, who is aboard, the speed-up)
+      const float rw = ui.textWidth(mp.rideInfo, fs, UiFont::CondItalic) + 24 * u;
+      ui.rect(float(W) - rw - 18 * u, y0 + ph + 6 * u, rw, ph, a(white, 0.92f));
+      ui.text(float(W) - rw - 6 * u, y0 + ph + 6 * u + (ph - ui.lineHeight(fs, UiFont::CondItalic)) / 2, fs, UiFont::CondItalic, blue, mp.rideInfo);
+    }
+    if (!mp.guests.empty() && mp.rideInfo.empty()) {
       std::string g = "GUESTS: ";
       for (size_t i = 0; i < mp.guests.size(); i++) g += (i ? ", " : "") + mp.guests[i];
       float gw = ui.textWidth(g, fs * 0.85f, UiFont::Body) + 24 * u;

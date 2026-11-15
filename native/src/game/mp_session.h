@@ -169,6 +169,9 @@ public:
   void releaseSeat();
   void holdSkip(const std::string& k, const std::string& v, bool on, double rate, const std::string& line = "");
   std::string mySeat;                      // 'kind|id' claimed ("" none)
+  /// (transit.js rideLineFor) under the status pill while you ride a shared vehicle: "Seat 1 of 6 seats · 2 aboard ·
+  /// Hold SPACE to speed up (0/2 holding)"; set by the game each frame ("" none)
+  std::string rideInfo;
   /// riding in someone's car: { owner, pid, seat }
   struct CarRide { std::string owner; int pid = 0, seat = 0; bool on = false; } ride;
   /// the nearest other player's car within reach (pos), for "Ask <owner> for a ride"; -1 none
@@ -242,6 +245,8 @@ private:
   double rescueT_ = 0;
   double carCheckT_ = 0;
   std::string keptSig_;
+  std::string lookSent_;
+  double lookT_ = 0;
   bool paused_ = false;
 };
 

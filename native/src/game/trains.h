@@ -52,6 +52,9 @@ public:
   int rideTrain() const { return ride_.on ? ride_.train : -1; }
   /// (multiplayer) a train stands at station `st` going your way (board() would take you): check before paying
   bool trainReady(int st, bool up) const;
+  /// (debug: mplive) where car `car` of train `train` is drawn now
+  int trainCount() const { return int(trains_.size()); }
+  dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int seatCount() const { return ncars_ * 48; }
   /// (railway.js seatPassengers / showPassengers) the skiers riding along in the car you sit in (the seat view)
   void addPeople(People& people) const;
@@ -120,6 +123,10 @@ public:
   std::function<double(int dir)> mpTime;
   /// the train you ride as the server's vehicle id ('express-e0'...), "" when not riding
   std::string rideVehicle() const;
+  /// (debug: mplive) where car `car` of train `train` is drawn now; how far along its line it is
+  double debugS(int train) const { return trains_[size_t(train)].st.s; }
+  int trainCount() const { return int(trains_.size()); }
+  dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
   /// (multiplayer) a train for `to` stands at `from` for 4 s more: check before paying
   bool trainReady(int from, int to) const;

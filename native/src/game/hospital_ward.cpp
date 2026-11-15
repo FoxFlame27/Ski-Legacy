@@ -313,6 +313,21 @@ void HospitalWard::update(double dt, bool input) {
   }
 }
 
+bool HospitalWard::mpPose(dvec3& pos, double& yaw, bool& patient) const {
+  if (role_ == Role::Patient && size_t(bed_) < beds_.size()) { pos = rooms_.toWorld(beds_[size_t(bed_)], bedTops_[size_t(bed_)], HIPS_Z); yaw = 0; patient = true; return true; }
+  if (role_ != Role::None && seat_ >= 0) { const Chair& ch = chairs_[size_t(seat_)]; pos = rooms_.toWorld(ch.x, ch.y, ch.z); yaw = ch.yaw; patient = false; return true; }
+  return false;
+}
+
+dvec3 HospitalWard::patientSpot(double worldX) const {
+  const double lx = rooms_.toLocal(dvec3(worldX, 0, 0)).x;
+  size_t bed = 0;
+  double bd = 1e300;
+  for (size_t i = 0; i < beds_.size(); i++) if (std::fabs(lx - beds_[i]) < bd) { bd = std::fabs(lx - beds_[i]); bed = i; }
+  if (beds_.empty()) return rooms_.toWorld(lx, BED_TOP + 0.04, HIPS_Z);
+  return rooms_.toWorld(beds_[bed], bedTops_[bed] + 0.04, HIPS_Z);
+}
+
 bool HospitalWard::seat(dvec3& pos, dvec3& fwd) const {
   if (role_ == Role::None || seat_ < 0) return false;
   const Chair& ch = chairs_[size_t(seat_)];

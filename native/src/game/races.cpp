@@ -12,6 +12,7 @@
 #include "game/jobboardui.h"
 #include "game/race_bots.h"
 #include "world/snowtrails.h"
+#include <cctype>
 #include <cstring>
 #include <cstdlib>
 #include "game/race_cine.h"
@@ -221,12 +222,21 @@ void Races::openCard(const Course& co, bool fromStand) {
       o.act = [this, cp]() { start(*cp, 0, true, false, true); };
       D.options.push_back(o);
     } else {
+      // (the field is the course's own rating: a HARD course is raced against the hard field, no choice to make)
       int def = aiIndex(c.ai);
-      for (int ai = 0; ai < 4; ai++) {
+      {
+        std::string dl;
+        for (char ch : c.diff) dl += char(std::tolower(static_cast<unsigned char>(ch)));
+        if (dl.find("super") != std::string::npos || dl.find("expert") != std::string::npos || dl.find("extreme") != std::string::npos) def = 3;
+        else if (dl.find("hard") != std::string::npos || dl.find("difficult") != std::string::npos) def = 2;
+        else if (dl.find("medium") != std::string::npos || dl.find("intermediate") != std::string::npos) def = 1;
+        else if (dl.find("easy") != std::string::npos || dl.find("beginner") != std::string::npos) def = 0;
+      }
+      for (int ai = def; ai <= def; ai++) {
         DialogOption o;
         o.label = std::string("Race \xC2\xB7 ") + AI_LABEL[ai] + " field";
         if (fromStand) { o.sub = "14 AI racers \xC2\xB7 just for fun"; o.price = 0; }
-        else { o.sub = "14 AI racers \xC2\xB7 1st " + fmtMoney(prizeFor(c, ai)) + ", 2nd " + fmtMoney(int64_t(std::round(prizeFor(c, ai) * 0.4))) + (ai == def ? " \xC2\xB7 suggested" : ""); o.price = c.entry; }
+        else { o.sub = "14 AI racers \xC2\xB7 1st " + fmtMoney(prizeFor(c, ai)) + ", 2nd " + fmtMoney(int64_t(std::round(prizeFor(c, ai) * 0.4))); o.price = c.entry; }
         o.disabled = !fromStand && c_.save->money < c.entry;
         o.act = [this, cp, ai, fromStand]() { start(*cp, ai, !fromStand, false, fromStand); };
         D.options.push_back(o);

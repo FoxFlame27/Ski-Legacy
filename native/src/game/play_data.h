@@ -5,6 +5,7 @@
 // chalets, the chalet's ground floor plan and the furniture catalogue (game/build/catalog.js).
 #pragma once
 #include "core/math.h"
+#include "world/world.h"
 #include <nlohmann/json_fwd.hpp>
 #include <array>
 #include <algorithm>
@@ -55,6 +56,8 @@ struct Course {
   /// narrow, cliff, bank; land1 = where a jump's landing ends, NaN without one) and its own rating (course.difficulty)
   struct Feature { std::string type; double s0 = 0, s1 = 0, land1 = std::nan(""); };
   std::vector<Feature> features;
+  /// (courses.js ramps, ramps.js makeRamp) the kickers / tabletops / rollers: walkable, World::addRamp
+  std::vector<RampSurface> ramps;
   std::string difficulty;
 };
 

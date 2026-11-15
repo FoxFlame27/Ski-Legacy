@@ -1,4 +1,5 @@
 #include "game/game.h"
+#include "game/sinktest.h"
 
 #include "core/assets_path.h"
 #include "core/input.h"
@@ -578,6 +579,7 @@ int runGame(const GameOptions& opt) {
   PlayData playData;
   if (const nlohmann::json* pj = resort.playData()) playData.load(*pj, resort.playBin());
   tmap.setPlay(&playData);
+  for (const Course& c : playData.courses) for (const RampSurface& r : c.ramps) world.addRamp(r);   // (the courses' jumps, walkable)
   HeliParts heliParts = loadHeliParts(resort);   // (the helicopter's parts and the ward, built from the play pack before its bin goes)
   transport.railModels = nullptr;   // (Phase 7: the packs' json / bins are not needed any more)
   resort.releaseLoadData();
@@ -1544,6 +1546,7 @@ int runGame(const GameOptions& opt) {
   // span (both sides, 14 m out, at the ground) and list every collider that would stop it and is not a pier drawn there;
   // then a train over a viaduct must not be solid to someone well below its floor (trainstop.js CarColliders.add)
   if (off("bridgetest") && opt.autotest) {
+  if (off("sinktest") && opt.autotest) { std::fflush(nullptr); const int r = runSinkTest(world, std::getenv("SKI_LEGACY_SINKREF") ? std::getenv("SKI_LEGACY_SINKREF") : "course_ref.json"); std::fflush(nullptr); std::_Exit(r); }
     int bad = 0, piers = 0, probes = 0, nets = 0;
     std::set<int> seenBad;
     auto blocks = [](const Collider& c, double x, double z, double feetY) {

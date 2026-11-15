@@ -41,6 +41,18 @@ struct SampledSurface {
   double at(double x, double z) const;
 };
 
+/// (courses.js) a course's kicker / tabletop / roller as ramps.js makeRamp shapes its walkable surface, analytic: the
+/// terrain under it (World::height) plus the feature's profile along it and its side walls across (0.25 m samples left
+/// a 2-3 m step at a kicker's lip that you sank into or rode over on air for a cell)
+struct RampSurface {
+  int type = 0;   // 0 kicker, 1 roller, 2 tabletop
+  double x = 0, z = 0, heading = 0, height = 1.6, lip = 0.49, width = 5, length = 0, R = 0, upLen = 0, deckLen = 6;
+  bool shaped = false;
+  double minx = 0, maxx = 0, minz = 0, maxz = 0;
+  /// the profile's height over the terrain at (x, z), or NaN off it
+  double over(double x, double z) const;
+};
+
 struct CorridorHit { double d = 1e9; CorridorKind kind = CorridorKind::Piste; bool any = false; double dx = 0, dz = 1, lat = 0; bool groomed = false; };
 
 class World {
@@ -58,6 +70,7 @@ public:
   /// world.js groundHeight: the terrain, or the highest walkable surface not far above yHint
   double groundHeight(double x, double z, double yHint = 1e30);
   void addSurface(SampledSurface s);
+  void addRamp(RampSurface r);
   vec3 groundNormal(double x, double z, double yHint = 1e30);
 
   CorridorHit corridorAt(double x, double z) const;
@@ -126,6 +139,8 @@ private:
   std::unique_ptr<Peak> peak_;
 
   std::vector<SampledSurface> surfaces_;
+  std::vector<RampSurface> ramps_;
+  std::unordered_map<int64_t, std::vector<int>> rampGrid_;      // 64 m cells
   std::unordered_map<int64_t, std::vector<int>> surfGrid_;      // 64 m cells
 
   struct VCache { int64_t key; double h; };

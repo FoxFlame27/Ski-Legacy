@@ -2396,6 +2396,24 @@ int runGame(const GameOptions& opt) {
             bool ok = placed && chalets.furnitureCount() == t5.furn0 + 1 && fd && save.money == m0 - fd->price;
             chaletOk = chaletOk && ok;
             SL_INFO("[autotest] chalet: build mode, placed the %s at (%.2f, %.2f): $%lld -> $%lld, %d pieces -> %s", fd ? fd->name.c_str() : "?", px, pz, (long long)m0, (long long)save.money, chalets.furnitureCount(), ok ? "ok" : "FAILED");
+            // (buildmode.js currentStorey: upstairs, a piece goes on the upper floor, saved at its y as the web save has it)
+            if (!playData.chaletPlanUp.rects.empty()) {
+              const double y0 = player.pos.y;
+              player.pos.y = rooms.toWorld(0, playData.chaletPlanUp.floorY - playData.chaletPlan.floorY, 0).y;
+              bool up = false;
+              for (const Rect2& r : playData.chaletPlanUp.rects) {
+                for (double x = r.x0 + 0.75; x < r.x1 - 0.5 && !up; x += 0.5)
+                  for (double z = r.z0 + 0.75; z < r.z1 - 0.5 && !up; z += 0.5)
+                    if (chalets.place("armchair", x, z, 0)) { up = true; px = x; pz = z; }
+                if (up) break;
+              }
+              const nlohmann::json& fu = save.data("chalet")["furniture"];
+              const double fy = up && fu.is_array() && !fu.empty() ? fu.back().value("y", 0.0) : -1;
+              const bool okUp = up && std::fabs(fy - playData.chaletPlanUp.floorY) < 0.01 && chalets.furnitureCount() == t5.furn0 + 2;
+              chaletOk = chaletOk && okUp;
+              SL_INFO("[autotest] chalet: upstairs, placed the armchair at (%.2f, %.2f) on the upper floor (y %.2f, floor %.2f), %d pieces -> %s", px, pz, fy, playData.chaletPlanUp.floorY, chalets.furnitureCount(), okUp ? "ok" : "FAILED");
+              player.pos.y = y0;
+            }
             input.inject(Action::NextItem, true);
           }
           if (cf == 17) input.inject(Action::NextItem, false);

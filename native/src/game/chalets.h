@@ -70,6 +70,8 @@ private:
   const Fit* fitFor(const FurnitureDef& d);
   void rebuildFurniture();
   bool valid(const FurnitureDef& d, double x, double z, double rot, int skip, double& y) const;
+  /// buildmode.js currentStorey: the floor you stand on (the upper one from half a metre under its floor)
+  const PlayData::ChaletPlan& storey() const;
   void sell(int i);
   PlayCtx& c_;
   Interiors& rooms_;

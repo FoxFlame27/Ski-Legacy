@@ -134,6 +134,11 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
     const g = planLayout()[0];
     out.chaletPlan = { floorY: g.floorY, ceilingY: g.ceilingY, rects: g.rects, walls: g.walls.map((w) => ({ ax: r4(w.ax), az: r4(w.az), bx: r4(w.bx), bz: r4(w.bz), t: w.t, y0: r4(w.y0), y1: r4(w.y1) })),
       blocks: g.blocks.map((b) => ({ x: b.x, z: b.z, hw: b.hw, hd: b.hd })), sills: planSills().filter((s) => s.level === 'ground') };
+    // the upper floor (buildmode.js currentStorey: the storey you stand on), its sloped ceiling (chaletplan.js ceilingUp)
+    const u = planLayout()[1], CP = await imp('game/chaletplan.js');
+    out.chaletPlanUp = { floorY: u.floorY, ceilingY: u.ceilingY, rects: u.rects, walls: u.walls.map((w) => ({ ax: r4(w.ax), az: r4(w.az), bx: r4(w.bx), bz: r4(w.bz), t: w.t, y0: r4(w.y0), y1: r4(w.y1) })),
+      blocks: u.blocks.map((b) => ({ x: b.x, z: b.z, hw: b.hw, hd: b.hd })), sills: planSills().filter((s) => s.level === 'up'),
+      ceilingUp: { KNEE: CP.KNEE, COLLAR: CP.COLLAR, PITCH: CP.PITCH, IX: CP.IX, z0: CP.DORMER.z0, z1: CP.DORMER.z1, h: CP.DORMER.h } };
     const C = await imp('game/build/catalog.js');
     out.furniture = C.FURNITURE; out.categories = C.CATEGORIES; out.sellRefund = C.SELL_REFUND;
   } catch (err) { log('chalet plan skipped:', err.message); }

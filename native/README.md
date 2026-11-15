@@ -754,7 +754,7 @@ resort's skiers in your character's suit, not in your own outfit.
   roads' cars drive them as ordinary roads (no `scenicWalk` round the roundabouts), no tow zones, trains / helicopter
   blockers, no swerving past a car stopped in the lane, no cars put ahead of the bus you ride (`aroundBus`); *(later:
   people in the cars, see "The cars on the player's path")*.
-- **Buses**: they overtake and push through as bus.js (clearAhead / steerShift / poseBus / ramContact: stop short of what stands in the lane, the horn, pull out round it after 3 s when the other lane is clear, drive on through after 20 s), but the people about (NPC skiers, villagers), the trains and the police / tow vehicles are not among their obstacles yet; the fleet's rounds are a simple rotation (not bus.js's slotted timetable), no
+- **Buses**: they overtake and push through as bus.js (clearAhead / steerShift / poseBus / ramContact: stop short of what stands in the lane, the horn, pull out round it after 3 s when the other lane is clear, drive on through after 20 s), but the people about (NPC skiers, villagers), the trains and the police / tow vehicles are not among their obstacles yet; the fleet runs bus.js's slotted timetable (exported, see Phase 6 "The ski buses on the shared timeline"), no
   passengers or driver, no turn-round fade at intermediate stops (the seat view inside the Micruss and the R chase
   view are there).
 - **Trains**: the Express wears the Wolkenspitzbahn's red (no Legacy blue livery: *Phase 7 paints it blue*), no seated passengers; the default
@@ -1241,7 +1241,7 @@ world ready in 22.18 s: 315 terrain nodes, 1908 trees in range, 29404 resort pro
 (`express.V64`): its loop is the web game's to the nanosecond, so at the same server time every client places every
 train at the same spot (before, the float profile drifted 60-325 m off after ~10^6 loops of the server clock). The
 others riding a train / the Express sit in their seat of the car as drawn here (`seatWorld`, no lagging presence);
-on a ski bus only while that bus here is where they are (the buses are not on the shared timeline yet). Riding a
+on a ski bus too (the buses are on the shared timeline since: see below). Riding a
 bus / train your skis are stowed and the seat view shows your own seated body (head folded away). The police come at
 road speed (police.js vRoad x the rubber band, 25 m/s over the snow) and turn round on a road leading away; every unit
 sent out is logged (`police: unit N out ...`, the chase every 5 s). Ramming a bus calls the police like any vehicle.
@@ -1253,6 +1253,31 @@ when it arrives; the race card shows the server's 14-racer cap and its join wind
 sends `pos` (your last outdoor spot), `wanted` (a chase under way, carried on at the next login) and `rescue` (null);
 your snowmobile goes out as `veh sled` (driving, then where you left it).
 
+**The ski buses on the shared timeline (Nov 2026)** (`game/buses.*`, bus.js buildFleet / fleetDrive / updateFleet and
+the multiplayer part, net/transit.js busGate / busTry, server.js busHold): the fleet's timetable is the web game's own,
+exported at full precision by `export_net.mjs` (transport.json `fleet`: per bus its round `R<n>`, cycle, phase and its
+two ways as `fleetDir` built them: the joined trips, the speed profile, the stops' marks, the knots in double
+precision; bus 0's bay at the depot). Where a bus is is a function of the clock alone (single player: the fleet's own
+clock, as the JS; online: each round's shared timeline `bus|R<n>`, `lineTime`), so a native and a web client place
+every bus at the same spot. Near you a bus drives itself (`fleetDrive`: the timetable less a delay of its own while
+held up, catching up after, LATE_HOLD at a stop it got to late, two at one stop queued one behind the other,
+overtaking / pushing through as before); online a bus held up near you is reported (`busHold`, every 250 ms, cleared
+once on time) and everyone else places it from the server's record (`holdAt` / `followStep`, eased); a client that
+sees it run into something there takes it over (`mustTake`); the records standing are fetched on joining
+(`busHolds`). Online you wait at the stop (E, a destination: "Ski bus to X · next bus in 2:10"; 25 m away cancels) for a
+real bus that goes your way and get on once it stands there with 4 s left (`mpBuses`), in the seat the server gives
+you (the others see you in that seat of that bus: `seatWorld`, seat ids `bus:<n>`), and ride it on its round until it
+stands at your stop; SPACE speeds up the round's timeline while everyone aboard holds it (`skip` with `line R<n>`). Bus 0
+(single player's own bus, in its depot bay) is out of the game online, as in the JS. The other players on foot and their
+cars are among the buses' obstacles. `SKI_LEGACY_DEBUG=mplive`: `bus <from> <to>` (wait at a stop), `buslog`, and a
+`[buslog]` line every 5 s of server time (every bus: x, z, speed, heading, stop, the hold-up records). Checked live on
+a local server with two native clients and the web client (its fleet logged right after its own `updateFleet`): every
+bus within 0.02 m (median) of the same place on all three at the same server time, 244 of 252 samples within 5 m
+while one native player stood in a bus lane (the buses stopping, honking, overtaking, the three clients each driving
+and reporting hold-ups the others followed); a native and the web player boarded the same bus at the village and each
+saw the other seated in it ("Seat 1 / Seat 5 of 20 · 2 aboard"). The headless web client ran at ~4 fps (its frame step
+capped at 50 ms), so the buses near it ran in slow motion there; the hold-ups carry that over to the others.
+
 ### Known gaps (Phase 6)
 - **No world picker**: the protocol has none (the server assigns the fullest world with room); the MULTIPLAYER screen
   shows the server's world / player counts instead.
@@ -1260,10 +1285,9 @@ your snowmobile goes out as `veh sled` (driving, then where you left it).
   name field wants the software keyboard applet (here: typed, or the suggested platform user name).
 - **Races online are practice races** (`raceSolo`): the server's race queues (2-21 racers, the synced start, the live
   board, the results card with prize money) are not wired to the native race session yet.
-- **Shared timelines**: the trains are on them; the gondolas / chairlifts and the ski buses still run on the local
-  clock (lifts.js / bus.js's time-based placement and the shared bus hold-ups are not ported), so a remote rider is
-  drawn where their own client puts their seat (their presence), not in your local cabin; the bus seat registry uses
-  `bus:1..7` by the local bus index.
+- **Shared timelines**: the trains, the gondolas / chairlifts and the ski buses are on them (the buses: see "The ski
+  buses on the shared timeline"); a full bus lets you ride standing instead of queueing you for the next one, and the
+  native transit fingerprint (`tt`) is still `native-phase6`.
 - **Remote vehicles**: cars are drawn from their model id (no paint / rims / plate / dents, no seated driver model,
   no wheels turning, no lights); the tow truck, patrol cars chasing them, the rescue helicopter / ambulance and rented
   helicopters of other players (`veh` tow / police / rescue / heli) are not drawn; the helicopter pad (`heliRent`) is
@@ -1823,6 +1847,33 @@ by position except a rescue in progress, which is on the mountain).
   Heliweg from the Adlerhornweg past the Gasthof Adlerhorn. Rental, flight, landing home, the rescue and the ambulance
   run unchanged (`SKI_LEGACY_DEBUG=helicheck` / `rescuetest` PASS: landed on the pad, the ambulance to the medical
   centre).
+
+### Round 3: the Dorfstrasse, the Autohaus / police / Werkstatt in the village, footpaths, trees off the roads
+
+- **The Dorfstrasse** (`village.json` "roads", `Village::addRoads`): the valley road used to end at the Legacy Village
+  stop (the bus terminus, (4, 46)); a road now runs on from there along the depot road's bend, west between the Hotel
+  Tirolerhof (now at z 33) and the Hotel Silberhorn (now at z 76) where the Silberhornweg was, and straight west along
+  z 50 at the Oberdorf's foot to its end at (-172, 50) (~190 m, 30 km/h). It is appended to the transport pack's road
+  network as it loads (heights from the drawn ground, smoothed; the relief is level across it), so the car's road
+  surface and tarmac, the speed limit, police routing and traffic all have it; traffic on the valley road runs on into
+  it at the stop and back (`Traffic` links: a main road's end meeting a village road's end). Drawn with the exported
+  roads' own ribbon (`roadsnow-road`: the road snow look), left out where an exported road already lies; lamps by turns
+  on both sides and the plough's banks along the edges; walkers have its south edge in the walking network.
+- **Sites moved onto it** (moves with a clip: only what lies short of the road in front of the old yard goes, so the
+  valley road stays whole; play-data box colliders' `rot` now turn with a move): the **Autohaus** (134, 213) -> (-90, 33),
+  the **police station / prison** (150, 262) -> (-124, 34), the **Werkstatt** (156, 293) -> (-152, 35), each turned so its
+  yard faces the Dorfstrasse as it faced the valley road, at the same distance from the road's middle (17.0 / 16.0 /
+  14.9 m; their floor level `y` is what lands on the new ground: the old yards stood in the valley road's cuts, so the
+  copied ground is held 6 cm under it). Their buildings, rooms, doors, yards, tow trucks, patrol car bay, lots (frames and exits) and colliders go with
+  them. The Autohaus car park (impound) stays on the valley road. The chalets Stadel and Haus Bergfrieden stand across
+  the road now.
+- **Footpaths**: the Postgasse and the Werkstattgasse from the Dorfstrasse up to the Kapellenweg; the Bahnhofstiege from
+  the square's north-west corner straight up the terraces (ramps through the terrace walls at each terrace's level) to
+  the Legacy Express station's exit.
+- **Trees**: every layout tree is checked against all roads, car parks / yards (as moved), the moved sites and the
+  footpaths, and moved off to the nearest clear spot (9 of 30 moved).
+- Not done yet: the trail map draws its roads from `map.json` (the Dorfstrasse is not on it), the ski shop is not
+  moved, the village core is not compacted.
 
 ## Status: the native port against the JavaScript game
 

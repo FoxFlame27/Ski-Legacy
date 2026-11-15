@@ -899,6 +899,16 @@ int runGame(const GameOptions& opt) {
   struct MpLift { bool pending = false, wait = false, ready = false, queued = false; Lifts::Station st; bool up = true; int idx = -1, seat = -1; double target = 0; dvec2 near{0}; std::string full; } mpLift;
   std::string mpSeatWant;
   int mpSeatNo = -1;   // (the seat the server gave you on the shared vehicle you ride)
+  struct MpBusWait { bool on = false; int from = -1, to = -1; } mpBusWait;
+  double mpBusWaitT = -1;   // (transit.js busWait: at the stop for a shared bus going your way)
+  auto busHoldOf = [](const nlohmann::json& x) {   // (a busHold record / broadcast -> bus.js setHold)
+    BusLine::Hold h;
+    h.bus = x.value("bus", std::string()); h.clear = x.value("clear", false);
+    auto num = [&](const char* k) { return x.contains(k) && x[k].is_number() ? x[k].get<double>() : 0.0; };
+    h.d = x.contains("d") && x["d"].is_number() ? x["d"].get<double>() : NAN; h.dd = num("dd"); h.sh = num("sh"); h.sv = num("sv"); h.bt = num("bt");
+    h.at = x.contains("at") && x["at"].is_number() ? x["at"].get<double>() : NAN; h.ram = x.value("ram", false) == true; h.own = int(num("own"));
+    return h;
+  };
   MpLive mpLive;                                                        // (debug: game/mp_live.h)
   std::function<void(const std::vector<std::string>&)> mpLiveCmd;       // (its commands of the systems below)
   std::function<void()> mpLiveLog;
@@ -953,6 +963,12 @@ int runGame(const GameOptions& opt) {
   mpLiveCmd = [&](const std::vector<std::string>& c) {
     // "rescue": knocked down here, the rescue helicopter comes (free); "helirent <zone>": FLY at the heli-ski desk
     if (c[0] == "rescue") { player.knockDown(1, dvec3(0), 0, false); SL_INFO("[mplive] rescue called: %d", int(heli.rescueMe(true))); }
+    // the ski buses: "bus <from> <to>": at stop <from>, waiting for the shared bus to <to>; "buslog": the fleet here
+    if (c[0] == "bus" && c.size() > 2 && !buses.riding()) {
+      const int f = std::atoi(c[1].c_str()), t = std::atoi(c[2].c_str());
+      if (f >= 0 && size_t(f) < transport.stops.size()) { const StopInfo& q = transport.stops[size_t(f)]; player.setSkisOn(false); player.teleport(q.x - 1.5 * std::sin(q.heading) - 3 * std::cos(q.heading), q.z - 1.5 * std::cos(q.heading) + 3 * std::sin(q.heading), q.heading); mpBusWait = {true, f, t}; mpBusWaitT = -1; }
+    }
+    if (c[0] == "buslog") SL_INFO("[mplive] buses %.0f ride %d bus %d seat %d '%s':%s", mp.net.serverNow(), int(buses.riding()), buses.rideBus(), mpSeatNo, mp.rideInfo.c_str(), buses.debugFleet().c_str());
     if (c[0] == "helirent") { heli.debugRent(c.size() > 1 ? std::atoi(c[1].c_str()) : 0); SL_INFO("[mplive] heli rent asked"); }
     // races: "racejoin <id>" (the queue with the others), "racesolo <id>" (alone against the AI field, for money),
     // "raceskip <m>" (on to <m> before the finish), "racelog"; "wxlog": the clock, the weather and its intensities
@@ -1775,7 +1791,25 @@ int runGame(const GameOptions& opt) {
       express.mpTime = [&](int dir) { return mp.lineTime(dir > 0 ? "express|e" : "express|w") / 1000.0; };
       // (transit.js hooks.lifts) each gondola / chairlift on its own timeline '<kind>|L<line>'; they crawl through their end stations
       lifts.setMp([&](size_t i) { return mp.lineTime((lifts.lines()[i].gondola ? "gondola|L" : "chair|L") + std::to_string(i)) / 1000.0; });
-    } else { railway.mpTime = nullptr; express.mpTime = nullptr; lifts.setMp(nullptr); mpLift = MpLift{}; }
+      // (transit.js hooks.bus) the ski buses: each round on its timeline 'bus|R<round>', the shared hold-ups
+      BusLine::Mp bh;
+      bh.time = [&](const std::string& l) { return mp.lineTime("bus|" + l) / 1000.0; };
+      bh.rate = [&](const std::string& l) { auto it = mp.warps.find("bus|" + l); return it == mp.warps.end() || !it->second.contains("rate") ? 1.0 : it->second["rate"].get<double>(); };
+      bh.now = [&]() { return mp.net.serverNow(); };
+      bh.pid = [&]() { return int(mp.pid); };
+      bh.report = [&](const BusLine::Hold& h) {
+        nlohmann::json d{{"bus", h.bus}, {"d", h.clear ? 0.0 : h.d}, {"sh", h.clear ? 0.0 : h.sh}};
+        if (!h.clear) { d["dd"] = h.dd; d["sv"] = h.sv; d["ram"] = h.ram; d["bt"] = h.bt; }
+        mp.net.request("busHold", d, [](const net::NetResult&) {});
+      };
+      buses.setMp(&bh);
+      mp.net.request("busHolds", nlohmann::json::object(), [&, busHoldOf](const net::NetResult& r) {
+        if (!r.ok || !mp.active() || !r.d.contains("holds") || !r.d["holds"].is_array()) return;
+        std::vector<BusLine::Hold> L;
+        for (auto& x : r.d["holds"]) L.push_back(busHoldOf(x));
+        buses.setHolds(L);
+      });
+    } else { railway.mpTime = nullptr; express.mpTime = nullptr; lifts.setMp(nullptr); mpLift = MpLift{}; buses.setMp(nullptr); mpBusWait = MpBusWait{}; }
     // (net/heli.js hooks) the helicopter pad: one copy at a time, rented at the server
     if (mp.active()) { heli.mpReady = [&]() { return mp.heliReady(); }; heli.mpRent = [&](std::function<void(bool)> done) { mp.heliRent(std::move(done)); }; heli.mpWait = [&]() { return mp.heliWait(); }; }
     else { heli.mpReady = nullptr; heli.mpRent = nullptr; heli.mpWait = nullptr; heli.padHidden = false; }
@@ -1901,6 +1935,7 @@ int runGame(const GameOptions& opt) {
     jailQuiet = false;
     flash(by + " was caught \xC2\xB7 you're going to jail too" + (fine > 0 ? " \xC2\xB7 -" + fmtM(fine) : std::string()), Hud::Flash::Bad);
   };
+  mp.host.onBusHold = [&, busHoldOf](const nlohmann::json& d) { if (mp.active()) buses.setHold(busHoldOf(d)); };
   mp.host.onSeatLost = [&](const nlohmann::json& d) {
     if (d.value("k", std::string()) == "car" && rideKind == Ride::Passenger) {
       rideKind = Ride::None;
@@ -2003,8 +2038,7 @@ int runGame(const GameOptions& opt) {
     if (k == "train") return v.rfind("rail-", 0) == 0 && railway.seatWorld(std::atoi(v.c_str() + 5), n, p, yaw);
     if (k == "express") return express.seatWorld(v, n, p, yaw);
     if (k == "bus") {
-      auto it = std::find_if(mp.players.begin(), mp.players.end(), [&](const auto& e) { return e.second.veh.rfind("bus:" + v + ":", 0) == 0 && e.second.veh.size() > v.size() + 5 && std::atoi(e.second.veh.c_str() + v.size() + 5) == n; });
-      return v.rfind("bus:", 0) == 0 && buses.seatWorld(std::atoi(v.c_str() + 4), n, p, yaw) && (it == mp.players.end() || std::hypot(p.x - it->second.sm.x, p.z - it->second.sm.z) < 25);
+      return v.rfind("bus:", 0) == 0 && buses.seatWorld(std::atoi(v.c_str() + 4), n, p, yaw);   // (the buses are on the shared timelines too)
     }
     if (k != "gondola" && k != "chair") return false;
     int li = -1, ci = -1;
@@ -2569,6 +2603,11 @@ int runGame(const GameOptions& opt) {
           if (off("mplive")) {   // (debug: the remote control of game/mp_live.h; "quit" goes on to LEAVE MULTIPLAYER)
             mt.t0 = now;
             if (mpLive.path.empty()) { mpLive.path = std::getenv("SKI_LEGACY_MPCTL") ? std::getenv("SKI_LEGACY_MPCTL") : "mpctl.txt"; SL_INFO("[mplive] in world %d as %s: commands from %s", mp.worldId, mp.name.c_str(), mpLive.path.c_str()); }
+            {   // (the fleet as placed here every 5 s of the server's clock: compared across the clients)
+              static long busQ = -1;
+              const double T = mp.net.serverNow();
+              if (long(T / 5000) != busQ) { busQ = long(T / 5000); SL_INFO("[buslog] %ld %.0f%s", busQ * 5000, T, buses.debugFleet().c_str()); }
+            }
             for (const auto& c : mpLive.poll(frameDt)) {
               auto num = [&](size_t i, double d = 0) { return c.size() > i ? std::atof(c[i].c_str()) : d; };
               auto word = [&](size_t i) { return c.size() > i && c[i] != "-" ? c[i] : std::string(); };
@@ -2594,6 +2633,7 @@ int runGame(const GameOptions& opt) {
                 for (auto& [n, a] : KEYS) if (word(1) == n) input.inject(a, num(2) != 0); }
               else if (op == "png" && !opt.png.empty()) pendingPng = pngVariant(opt.png, word(1).c_str());
               else if (op == "render") mpLive.renderFrames = int(num(1, 60));
+              else if (op == "seatyaw") { seatYaw = num(1); seatPitch = num(2, -0.05); }
               else if (op == "log") {
                 SL_INFO("[mplive] me at (%.2f, %.2f, %.2f) yaw %.2f interior '%s' ride %d; clock %.3f h, server now %.0f", player.pos.x, player.pos.y, player.pos.z, player.heading, mp.interior().c_str(), int(rideKind), mp.hourNow().value_or(-1), mp.net.serverNow());
                 for (auto& [id, r] : mp.players) SL_INFO("[mplive] %s (pid %d) at (%.2f, %.2f, %.2f) yaw %.2f st %d flags 0x%x veh '%s' interior '%s' look %s -> %s", r.name.c_str(), id, r.sm.x, r.sm.y, r.sm.z, r.smYaw, r.st, r.flags, r.veh.c_str(), r.interior.c_str(), r.look.dump().c_str(), mpv.describe(id).c_str());
@@ -3913,6 +3953,14 @@ int runGame(const GameOptions& opt) {
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
       if (!opt.png.empty() && pendingPng.empty() && frame % 45 == 0 && buses.debugCam(bp, bp)) pendingPng = pngVariant(opt.png, ("bus" + std::to_string(frame / 45)).c_str());
     }
+    buses.extraObs.clear();   // (bus.js obstacles: online, the other players on foot / on skis and in their cars)
+    if (mp.active())
+      for (const auto& [id, r] : mp.players) {
+        if (!r.ok || !r.interior.empty() || !r.veh.empty()) continue;
+        const double v = std::hypot(r.vel.x, r.vel.z);
+        if (r.st == 2 && (r.flags & net::F::car)) buses.extraObs.push_back({r.sm.x, r.sm.y, r.sm.z, r.smYaw, 0.95, 2.3, v, false});
+        else if (r.st == 0 || r.st == 1 || r.st == 6) buses.extraObs.push_back({r.sm.x, r.sm.y, r.sm.z, v > 0.2 ? std::atan2(r.vel.x, r.vel.z) : 0.0, 0.35, 0.35, v, true});
+      }
     buses.update(vdt, worldPos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, worldPos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, worldPos);
@@ -4051,6 +4099,38 @@ int runGame(const GameOptions& opt) {
         }
       }
     }
+    auto sitInBus = [&](int to) {
+      rideKind = Ride::Bus;
+      player.setSkisOn(false); rig.skisInRide = false;   // (main.js boardBus: skis off, stowed; you are the passenger)
+      BusLine::RideState rs = buses.rideState();
+      player.sitOn(rs.seat, rs.fwd);
+      viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
+      rideCamReady = false; seatView = true; seatYaw = -0.35; seatPitch = -0.05;
+      toast = "Ski bus to " + buses.stopName(to); toastUntil = simTime + 2;
+    };
+    // (transit.js busGate / busTry) online: waiting at the stop for a shared bus that goes your way; once one stands
+    // there (for 4 s more at least) you get on it
+    if (mpBusWait.on) {
+      const StopInfo& bs = transport.stops[size_t(mpBusWait.from)];
+      const std::string to = buses.stopName(mpBusWait.to);
+      if (!mp.active() || rideKind != Ride::None || player.mode == PlayerMode::Sit || std::hypot(player.pos.x - bs.x, player.pos.z - bs.z) > 25) {
+        if (mp.active() && rideKind == Ride::None) flash("Ski bus \xC2\xB7 you left the stop", Hud::Flash::Good);
+        mpBusWait = MpBusWait{};
+      } else {
+        const std::vector<BusLine::Next> list = buses.mpBuses(mpBusWait.from, mpBusWait.to);
+        int pick = -1;
+        for (const BusLine::Next& n : list) if (n.wait <= 0 && n.left >= 4) { pick = n.bus; break; }
+        if (pick >= 0 && buses.mpBoard(pick, mpBusWait.from, mpBusWait.to)) { const int dest = mpBusWait.to; mpBusWait = MpBusWait{}; sitInBus(dest); SL_INFO("[bus] boarded bus:%d at %s for %s (server %.0f)", pick, bs.name.c_str(), to.c_str(), mp.net.serverNow()); }
+        else if (list.empty()) { flash("No bus goes from " + bs.name + " to " + to, Hud::Flash::Bad); mpBusWait = MpBusWait{}; }
+        else {
+          const int sec = int(std::ceil(std::max(0.0, list[0].wait)));
+          char w[32];
+          std::snprintf(w, sizeof w, "%d:%02d", sec / 60, sec % 60);
+          if (mpBusWaitT < 0) { flash("Ski bus to " + to + " \xC2\xB7 next bus " + (sec > 0 ? std::string("in ") + w : std::string("boarding")) + " \xC2\xB7 wait at the stop", Hud::Flash::Good); mpBusWaitT = 0; }
+          toast = "Ski bus to " + to + " \xC2\xB7 " + (sec > 0 ? std::string("next bus in ") + w : std::string("boarding")); toastUntil = simTime + 0.4;
+        }
+      }
+    }
     if (rideKind == Ride::None && player.mode != PlayerMode::Sit && player.mode != PlayerMode::Fall && transport.loaded()) {
       // a car (yours: drive; at the Autohaus: buy), a ski bus stop, a railway station, a Legacy Express station
       std::string cp = drive.prompt(player.pos, true);
@@ -4090,16 +4170,8 @@ int runGame(const GameOptions& opt) {
           }
           bool picked = travelPick.kind == 1 && travelPick.from == stop;
           if (picked) { for (size_t i = 0; i < dests.size(); i++) if (dests[i] == travelPick.to) { k = int(i); busDestSel = k; } travelPick = {}; }
-          if (picked && buses.board(stop, dests[size_t(k)])) {
-            interact = false;
-            rideKind = Ride::Bus;
-            player.setSkisOn(false); rig.skisInRide = false;   // (main.js boardBus: skis off, stowed; you are the passenger)
-            BusLine::RideState rs = buses.rideState();
-            player.sitOn(rs.seat, rs.fwd);
-            viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
-            rideCamReady = false; seatView = true; seatYaw = -0.35; seatPitch = -0.05;
-            toast = "Ski bus to " + buses.stopName(dests[size_t(k)]); toastUntil = simTime + 2;
-          }
+          if (picked && mp.active()) { picked = false; interact = false; mpBusWait = {true, stop, dests[size_t(k)]}; mpBusWaitT = -1; }   // (online: wait for the shared bus)
+          if (picked && buses.board(stop, dests[size_t(k)])) { interact = false; sitInBus(dests[size_t(k)]); }
         }
       } else if (rst >= 0) {
         // E: the route picker (main.js openRailMap): every other station, uphill the fare or the day pass, downhill free
@@ -4195,7 +4267,7 @@ int runGame(const GameOptions& opt) {
       std::string k, v, line;
       int n = 0;
       double rate = 1;
-      if (rideKind == Ride::Bus && buses.rideBus() >= 0) { k = "bus"; v = "bus:" + std::to_string(buses.rideBus()); n = 36; rate = 8; }
+      if (rideKind == Ride::Bus && buses.rideBus() >= 0) { k = "bus"; v = "bus:" + std::to_string(buses.rideBus()); n = buses.seatCount(); rate = 8; line = buses.rideLine(); }
       else if (rideKind == Ride::Rail && railway.rideTrain() >= 0) { k = "train"; v = "rail-" + std::to_string(railway.rideTrain()); n = railway.seatCount(); rate = 6; line = "rail"; }
       else if (rideKind == Ride::Express && express.riding()) { k = "express"; v = express.rideVehicle(); n = 192; rate = transport.express.fast; line = express.rideDir() > 0 ? "e" : "w"; }
       else if (rideKind == Ride::None && player.mode == PlayerMode::Sit && lifts.riding()) { v = lifts.rideVehicle(k, n); rate = 16; line = "L" + std::to_string(lifts.rideLine() - lifts.lines().data()); }
@@ -4209,6 +4281,7 @@ int runGame(const GameOptions& opt) {
         });
       }
       if (!want.empty() && !line.empty()) mp.holdSkip(k, v, fastHeld, rate, line);
+      if (k == "bus" && mp.mySeat == want && mpSeatNo >= 0) buses.setRideSeat(mpSeatNo);   // (you sit in the seat the server gave you)
       // (transit.js rideLineFor / seatText / session.js skipLine) your seat, who is aboard, the shared speed-up
       mp.rideInfo.clear();
       if (!want.empty() && mp.mySeat == want && mpSeatNo >= 0 && n > 0) {

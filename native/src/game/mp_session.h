@@ -53,6 +53,7 @@ struct MpHost {
   std::function<void(const std::string& what)> adminRelease;  // ("Admin · new") out of prison / the chase / the tow yard here
   std::function<void(const Json& d)> onArrested;              // the driver you rode with was caught: you go to jail too
   std::function<void(const Json& d)> onSeatLost;              // the server took your seat (the owner left / took it back)
+  std::function<void(const Json& d)> onBusHold;               // a ski bus's shared hold-up record (busHold: bus.js setHold)
   std::function<std::vector<int>()> plots;                    // the chalet plots' ids (the server learns them from us)
   std::function<std::string()> transitFingerprint;            // the timetables' version (transit.js fingerprint)
   std::function<Json()> wantedNow;                            // (police.js chaseSnap) a chase under way, else null

@@ -57,6 +57,9 @@ public:
   void knockUnit(int id, double vx, double vz);
   void fillColliders(std::vector<Collider>& out) const;
   void addDraw(VehicleDraw& vd, const dvec3& cam) const;
+  /// the patrol cars' number plates (police.js buildPoliceCar: setPlates(inst, C.t, policePlate())): the cars near the
+  /// camera as poses for SceneFx::plates
+  void carPoses(std::vector<CarPose>& out, const dvec3& cam) const;
   void draw(Renderer& r, const dvec3& cam);
   void addPeople(People& p, const dvec3& cam) const;
   void hud(Ui& ui, float u);
@@ -97,6 +100,7 @@ private:
     int road = -1, dir = 1;
     double s = 0, bestD = 1e18, stuckT = 0;
     bool stopped = false, leaving = false;
+    std::string plate;   // (police.js policePlate: a Swiss plate of its own for every patrol car built)
     // its officer on foot
     bool out = false;
     dvec3 off{0};
@@ -118,6 +122,9 @@ private:
   vec3 camDir_{0, 0, 1};
   std::shared_ptr<Model> car_, heliModel_, station_;
   mat4 carFit_{1}, heliFit_{1}, stationFit_{1};
+  bool car1_ = false;   // car_ is car1 (police.js car1Template), not the fallback model
+  /// the patrol car's fit: car1 as the web game's car template fits it (Transport::policeFit), else measured here
+  glm::dmat4 carFit() const;
   std::vector<Unit> units_;
   bool wanted_ = false, fleeing_ = false, searching_ = false, spotted_ = false, pulled_ = false, fineOpen_ = false;
   double heat_ = 0, wantedT_ = 0, seenT_ = 0, unseenT_ = 0, escT_ = 0, stopT_ = 0, reachT_ = -1, holdT_ = 0, reinT_ = 0, arrestT_ = -1, fleeT_ = 0;
@@ -138,6 +145,11 @@ private:
   std::string slamText_, slamSub_;
   double slamAt_ = -100, slamK_ = 0;
   double slowT_ = -100;   // (police.js slowT: the last slow-motion hit; TUNING.slowMoS = 5 s between two)
+  // (police.js unit(k) builds patrol car k once and keeps it, policePlate() giving it the next plate; plateN 0 went to
+  // the car parked at the station, built with the world): the plate of each unit slot
+  int plateN_ = 1;
+  std::vector<std::string> slotPlates_;
+  mutable VehicleModel plateVm_;   // (the plates' places on the patrol car: Transport::policePlates)
   int prevStars_ = 0;
   void slam(const std::string& text, const std::string& sub, double k) { slamText_ = text; slamSub_ = sub; slamK_ = k; slamAt_ = c_.now; }
   double radioT_ = -1;

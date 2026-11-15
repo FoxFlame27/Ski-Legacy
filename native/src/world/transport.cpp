@@ -194,6 +194,14 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
       parseSteer(c, bin, s);
       carsFull.push_back(s);
     }
+  if (net.contains("policeCar") && net["policeCar"].is_object() && net["policeCar"].contains("fit")) { policeFit = mat16(net["policeCar"]["fit"]); hasPoliceFit = true; }
+  if (net.contains("policeCar") && net["policeCar"].is_object() && net["policeCar"]["plates"].is_array())
+    for (auto& p : net["policeCar"]["plates"]) {
+      if (!p.contains("m") || p["m"].size() != 16) continue;
+      glm::dmat4 M(1);
+      for (int k = 0; k < 16; k++) M[k / 4][k % 4] = p["m"][size_t(k)].get<double>();
+      policePlates.push_back(M);
+    }
   for (auto& c : net["cars"]) {
     CarSpec s;
     s.name = c["name"]; s.label = c.value("label", s.name); s.kind = c.value("kind", std::string());

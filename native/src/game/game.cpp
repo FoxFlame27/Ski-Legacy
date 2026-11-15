@@ -4233,7 +4233,19 @@ int runGame(const GameOptions& opt) {
       static int pf = 0;
       pf++;
       const char* want = std::getenv("SKI_LEGACY_CAR");
-      int idx = drive.debugCar(want ? want : "car_bmw_x3");
+      if (want && std::string(want) == "police" && playData.prisonDef.hasPatrol) {
+        // (SKI_LEGACY_CAR=police: the patrol car parked at the station, its front and rear plate by day and at night)
+        const int k = (pf / 70) % 4;
+        const double side = k % 2 ? -1 : 1, yaw = playData.prisonDef.patrolYaw + PI;
+        dvec3 c(playData.prisonDef.patrolX, 0, playData.prisonDef.patrolZ);
+        c.y = world.groundHeight(c.x, c.z, playData.prison.y + 2);
+        const dvec3 f(std::sin(yaw), 0, std::cos(yaw)), rt(f.z, 0, -f.x);
+        cam.lookAt(c + dvec3(0, 0.85, 0) + f * (side * 4.9) + rt * 0.8, c + dvec3(0, 0.55, 0) + f * (side * 2.5)); cam.fovY = 38;
+        if (k >= 2) hour = 21.5;
+        terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+        if (pf % 70 == 60 && pf < 290 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("plate" + std::to_string(k)).c_str());
+      }
+      int idx = want && std::string(want) == "police" ? -1 : drive.debugCar(want ? want : "car_bmw_x3");
       if (idx >= 0) {
         const Drive::Parked& e = drive.parked[size_t(idx)];
         const int k = (pf / 70) % 4;   // front by day, rear by day, front at night, rear at night
@@ -4412,6 +4424,7 @@ int runGame(const GameOptions& opt) {
         drive.carPoses(poses, cam.pos, 160, dark);
         if (aiOn) traffic.carPoses(poses, cam.pos, 160, dark);
         sfx.submit(renderer, vdraw, shapes, cam, poses);
+        { std::vector<CarPose> pp; police.carPoses(pp, cam.pos); for (const CarPose& c : pp) sfx.plates(vdraw, c); }   // (the patrol cars' Swiss plates)
       }
       vdraw.submit(renderer, *dev, cam.pos);
     }

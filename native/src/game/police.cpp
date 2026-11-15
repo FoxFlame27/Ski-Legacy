@@ -1,4 +1,5 @@
 #include "game/police.h"
+#include "game/scenefx.h"
 #include "game/policehud.h"
 #include "core/log.h"
 #include "core/noise.h"
@@ -60,6 +61,7 @@ void Police::load(AssetManager& assets) {
   o.maxTextureSize = 512;
   o.lodRatios = {0.15f};
   car_ = assets.model("car1", o);
+  car1_ = bool(car_);
   if (!car_) car_ = assets.model("police/police_car", o);
   if (car_) carFit_ = car_->fitTransform(float(LEN), 2);
   heliModel_ = assets.model("heli_body", o);
@@ -131,6 +133,8 @@ void Police::spawnUnit() {
     u.yaw = std::atan2(fwdX, fwdZ);
   }
   u.v = 20;
+  while (slotPlates_.size() <= units_.size()) slotPlates_.push_back("VS " + std::to_string(11700 + (plateN_++ * 37) % 300));   // (police.js policePlate)
+  u.plate = slotPlates_[units_.size()];
   units_.push_back(u);
 }
 
@@ -446,12 +450,33 @@ void Police::fillColliders(std::vector<Collider>& out) const {
   }
 }
 
+glm::dmat4 Police::carFit() const { return car1_ && c_.transport && c_.transport->hasPoliceFit ? glm::dmat4(c_.transport->policeFit) : glm::dmat4(carFit_); }
+
+void Police::carPoses(std::vector<CarPose>& out, const dvec3& cam) const {
+  if (!plateVm_.hasPlates && c_.transport && !c_.transport->policePlates.empty()) { plateVm_.hasPlates = true; plateVm_.plates = c_.transport->policePlates; }
+  if (!car_ || !car1_ || !plateVm_.hasPlates) return;
+  auto add = [&](const dvec3& p, double yaw, const std::string& plate) {
+    if (glm::length(p - cam) > 45) return;   // (as the other cars' plates: scenefx.cpp)
+    CarPose c;
+    c.vm = &plateVm_; c.plate = plate;
+    c.M = glm::translate(glm::dmat4(1), p) * glm::rotate(glm::dmat4(1), yaw, dvec3(0, 1, 0));
+    out.push_back(c);
+  };
+  for (const Unit& u : units_) add(u.pos, u.yaw, u.plate);
+  // the patrol car parked at the station (prisonoutside.js: built with the world, the first plate)
+  if (c_.data && c_.data->prison.ok && c_.data->prisonDef.hasPatrol) {
+    dvec3 p(c_.data->prisonDef.patrolX, 0, c_.data->prisonDef.patrolZ);
+    p.y = c_.world->groundHeight(p.x, p.z, c_.data->prison.y + 2);
+    add(p, c_.data->prisonDef.patrolYaw + PI, "VS 11700");
+  }
+}
+
 void Police::addDraw(VehicleDraw& vd, const dvec3& cam) const {
   if (!car_) return;
   for (const Unit& u : units_) {
     double d = glm::length(u.pos - cam);
     if (d > 600) continue;
-    glm::dmat4 M = glm::translate(glm::dmat4(1), u.pos) * glm::rotate(glm::dmat4(1), u.yaw, dvec3(0, 1, 0)) * glm::dmat4(carFit_);
+    glm::dmat4 M = glm::translate(glm::dmat4(1), u.pos) * glm::rotate(glm::dmat4(1), u.yaw, dvec3(0, 1, 0)) * carFit();
     vd.add(car_.get(), M, d > 70 ? 1 : 0);
   }
   // the patrol car parked at the station
@@ -462,7 +487,7 @@ void Police::addDraw(VehicleDraw& vd, const dvec3& cam) const {
     // (prisonoutside.js: the patrol car parked in the station's first bay)
     if (c_.data->prisonDef.hasPatrol) { p = dvec3(c_.data->prisonDef.patrolX, 0, c_.data->prisonDef.patrolZ); pyaw = c_.data->prisonDef.patrolYaw + PI; }   // (its nose to the house)
     p.y = c_.world->groundHeight(p.x, p.z, P.y + 2);
-    if (glm::length(p - cam) < 500) vd.add(car_.get(), glm::translate(glm::dmat4(1), p) * glm::rotate(glm::dmat4(1), pyaw, dvec3(0, 1, 0)) * glm::dmat4(carFit_), glm::length(p - cam) > 70 ? 1 : 0);
+    if (glm::length(p - cam) < 500) vd.add(car_.get(), glm::translate(glm::dmat4(1), p) * glm::rotate(glm::dmat4(1), pyaw, dvec3(0, 1, 0)) * carFit(), glm::length(p - cam) > 70 ? 1 : 0);
   }
 }
 

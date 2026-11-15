@@ -135,6 +135,11 @@ public:
   dvec2 autohausDir{0, 1};
 
   std::vector<CarSpec> cars;
+  /// the patrol car's plate spots (police.js: car1 as a car template, carconfig.js plateSpots), in the car's frame
+  std::vector<glm::dmat4> policePlates;
+  /// its fit (cars.js fitCar(car1, 5.0): every vertex measured, model space -> nose +z, wheels on y 0)
+  mat4 policeFit{1};
+  bool hasPoliceFit = false;
   /// (drive.js FULL) the full-detail models of some cars (their interiors): shown for the car you drive; `kind` holds
   /// the base model's name
   std::vector<CarSpec> carsFull;

@@ -1457,6 +1457,9 @@ int runGame(const GameOptions& opt) {
       // (transit.js hooks.lifts) each gondola / chairlift on its own timeline '<kind>|L<line>'; they crawl through their end stations
       lifts.setMp([&](size_t i) { return mp.lineTime((lifts.lines()[i].gondola ? "gondola|L" : "chair|L") + std::to_string(i)) / 1000.0; });
     } else { railway.mpTime = nullptr; express.mpTime = nullptr; lifts.setMp(nullptr); mpLift = MpLift{}; }
+    // (net/heli.js hooks) the helicopter pad: one copy at a time, rented at the server
+    if (mp.active()) { heli.mpReady = [&]() { return mp.heliReady(); }; heli.mpRent = [&](std::function<void(bool)> done) { mp.heliRent(std::move(done)); }; heli.mpWait = [&]() { return mp.heliWait(); }; }
+    else { heli.mpReady = nullptr; heli.mpRent = nullptr; heli.mpWait = nullptr; heli.padHidden = false; }
     // a chalet bought at the server (one each, the plot free; session.js buyChalet)
     if (mp.active()) pc.buyChalet = [&](int plot, const std::string& nm, std::function<void(bool)> done) {
       mp.buy("chalet", {{"id", plot}, {"name", nm}, {"meta", {{"plan", 2}, {"layout", 3}}}}, [&, plot, done](bool ok, const nlohmann::json& d) {
@@ -1768,6 +1771,11 @@ int runGame(const GameOptions& opt) {
     mp.interiorOffset = rooms.inside() ? rooms.toWorld(0, 0, 0) : dvec3(0);
     mp.update(std::min(0.25, frameDt), paused);
     pc.online = mp.active();
+    if (mp.active()) {   // (net/heli.js frame: yours returned on the pad, shown to everyone; the pad empty while it is out)
+      const bool onPad = heli.state == Heli::State::Parked && !heli.away();
+      heli.padHidden = !mp.heliFrame(onPad, heli.state == Heli::State::Flying || heli.state == Heli::State::Boarding, heli.state == Heli::State::Parked && heli.away(),
+                                      heli.flight.pos, heli.flight.yaw, std::hypot(player.pos.x - heli.home.x, player.pos.z - heli.home.z));
+    }
     if (mp.active() && started && !menus.isOpen() && !tmap.isOpen()) {
       auto pressedKey = [&](platform::Key k) { return std::find(ev.pressed.begin(), ev.pressed.end(), k) != ev.pressed.end(); };
       if (mpv.chatOpen) {   // the chat line: typed letters, Enter sends, Esc closes (the player stands still meanwhile)

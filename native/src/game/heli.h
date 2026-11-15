@@ -190,6 +190,13 @@ public:
   bool rotorAt(dvec3& out, double& rpmOut, bool& inside) const;
   bool sirenAt(dvec3& out) const;
   std::function<bool()> blocked;      // (no flying off mid-chase)
+  /// (net/heli.js hooks) multiplayer: a helicopter waits on the pad (mpReady), FLY rents it at the server (mpRent: the
+  /// server's price; done(true): rented), the pad's prompt while it is out with someone (mpWait); unset: single player
+  std::function<bool()> mpReady;
+  std::function<void(std::function<void(bool)>)> mpRent;
+  std::function<std::string()> mpWait;
+  /// (net/heli.js frame) multiplayer: no helicopter stands on the pad (out with someone): not drawn, not solid
+  bool padHidden = false;
   /// the flight planner (ui/travel.js mode 'chart', TrailMap::heliTravel): the game opens the chart; planner() gives its
   /// destinations their flights and adds the race courses' landing spots (heli.js openDialog)
   std::function<void()> openChart;
@@ -222,6 +229,7 @@ public:
   bool liftLineNear(double x, double z, double d) const;
 
 private:
+  void payFly(const DropZone* z);
   void openDialog();
   void board();
   void jumpOut();

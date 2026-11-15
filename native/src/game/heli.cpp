@@ -184,6 +184,8 @@ bool Heli::interact(std::string& prompt, bool pressed) {
   bool near = std::hypot(p.pos.x - home.x, p.pos.z - home.z) < padR + 1.5 || std::hypot(p.pos.x - hutDoor_.x, p.pos.z - hutDoor_.y) < 3.2;
   if (!near) return false;
   if (state == State::Auto) { prompt = "Heli-ski \xC2\xB7 the helicopter is flying back"; if (pressed) c_.flash("The helicopter is on its way back to the pad", 0); return true; }
+  // (multiplayer: out with someone, the next copy later)
+  if (mpRent && !away_ && mpReady && !mpReady()) { prompt = mpWait ? mpWait() : "Heli-ski \xC2\xB7 next helicopter soon"; if (pressed) c_.flash(prompt, 1); return true; }
   if (away_) { prompt = "Heli-ski \xC2\xB7 call the helicopter back to the pad"; if (pressed) callHome(false); return true; }
   prompt = "Heli-ski \xC2\xB7 fly to the far peaks \xC2\xB7 " + fmtMoney(price_);
   if (pressed) openDialog();
@@ -205,6 +207,12 @@ void Heli::callHome(bool quiet) {
 void Heli::fly(const DropZone* z) {
   if (blocked && blocked()) return;
   if (state != State::Parked || away_) return;
+  payFly(z);
+}
+
+// (heli.js fly) multiplayer: the server rents it (its price; one copy at a time, net/heli.js); else paid here
+void Heli::payFly(const DropZone* z) {
+  if (mpRent) { mpRent([this, z](bool ok) { if (ok && state == State::Parked) { plan_ = z; board(); } }); return; }
   if (c_.spend(price_)) { plan_ = z; board(); }
 }
 
@@ -264,7 +272,7 @@ void Heli::openDialog() {
     auto fly = [this](const DropZone* z) {
       if (blocked && blocked()) return;
       if (state != State::Parked || away_) return;
-      if (c_.spend(price_)) { plan_ = z; board(); }
+      payFly(z);
     };
     std::vector<std::pair<double, const DropZone*>> order;
     for (const DropZone& z : zones_) order.push_back({std::hypot(z.x - home.x, z.z - home.z) / 1000 + (z.race ? 1000 : 0), &z});
@@ -841,7 +849,7 @@ void Heli::fillColliders(std::vector<Collider>& out) const {
   if (!ok_) return;
   const HeliFlight& f = flight;
   // solid only while it stands still somewhere (parked, or set down by the rescue: nobody walks through it)
-  bool still = (state == State::Parked || state == State::Rescue) && f.landed && !(state == State::Rescue && rescue.gone);
+  bool still = (state == State::Parked || state == State::Rescue) && f.landed && !(state == State::Rescue && rescue.gone) && !(padHidden && state == State::Parked && !away_);
   if (still) {
     double fx = std::sin(f.yaw), fz = std::cos(f.yaw);
     Collider a; a.x = f.pos.x + fx * 0.9; a.z = f.pos.z + fz * 0.9; a.r = 2.1; out.push_back(a);
@@ -932,6 +940,7 @@ void Heli::draw(Renderer& r, const Camera& camera) {
   }
   rescue.draw(r, camP);
   if (state == State::Rescue && rescue.gone) return;   // (gone after the hand-over to the ambulance)
+  if (padHidden && state == State::Parked && !away_) return;   // (multiplayer: the pad stands empty, net/heli.js)
   const HeliFlight& f = flight;
   if (glm::length(f.pos - camP) > 6000) return;
   const mat4 R = mat4(glm::mat4_cast(glm::quat(f.quat)));

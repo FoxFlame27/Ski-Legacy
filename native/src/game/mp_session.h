@@ -152,6 +152,18 @@ public:
   void carDamage(const std::string& plate, double damage);
   void tow(const std::string& kind, const dvec3& home, double yaw, int bay, std::function<void(bool, const Json&)> done);
   void towDone();
+  // ---- the helicopter pad (net/heli.js, server heliRent / heliReturn and its 'heli' state { copies, padAt })
+  Json heli;                               // (MP.heli; null: none heard yet)
+  /// a helicopter waits on the pad for the next renter (yours on its way back counts)
+  bool heliReady() const;
+  /// the pad's prompt while it is out: "Heli-ski · the helicopter is out · next one in N min"
+  std::string heliWait() const;
+  /// FLY: rented at the server (its price); done(true) when it is yours
+  void heliRent(std::function<void(bool)> done);
+  /// per frame (MpHeli.frame): yours back on the pad -> returned; what everyone sees of yours (veh heli: flying /
+  /// parked out at `at`, yaw); the pad's "A helicopter is waiting" when you are within 400 m. Returns whether a
+  /// helicopter shows on the pad
+  bool heliFrame(bool onPad, bool flying, bool parkedAway, const dvec3& at, double yaw, double padDist);
   void jail(double seconds, const std::string& reason);
   void policeArrest(bool onFoot);
   void chaletFurniture(int id, std::function<void(bool, const Json&)> done);
@@ -246,6 +258,9 @@ private:
   double carCheckT_ = 0;
   std::string keptSig_;
   std::string lookSent_;
+  bool heliRented_ = false, heliReturning_ = false;
+  int heliWasReady_ = -1;
+  std::string heliV_ = "none";
   double lookT_ = 0;
   bool paused_ = false;
 };

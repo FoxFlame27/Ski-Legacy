@@ -246,6 +246,7 @@ void Multiplayer::setWorld(const Json& w) {
   worldId = int(jnum(w, "id"));
   worldMax = int(jnum(w, "max", net::MAX_PLAYERS));
   clock_ = w.value("clock", Json::object());
+  heli = w.contains("heli") ? w["heli"] : Json();
   players.clear();
   if (w.contains("players") && w["players"].is_array()) for (auto& p : w["players"]) addPlayer(p);
   seats.clear();
@@ -344,6 +345,7 @@ void Multiplayer::bind() {
     chat.push_back(Line{jstr(d, "name"), jstr(d, "text"), clockSeconds(), false});
     while (chat.size() > 8) chat.pop_front();
   });
+  on("heli", [this](const Json& d) { heli = d; });
   on("veh", [this](const Json& d) {
     auto it = players.find(int(jnum(d, "pid")));
     if (it == players.end()) return;
@@ -388,7 +390,7 @@ void Multiplayer::relogin() {
     setWorld(r.d.value("world", Json::object()));
     resumed = r.d.value("resumed", false);
     if (!interior_.empty()) { std::string want = interior_; net.request("enter", Json{{"interior", want}}, [this](const net::NetResult& e) { if (!e.ok) interior_.clear(); }); }
-    if (!resumed) { ride = CarRide{}; mySeat.clear(); carSentAny_ = false; keptSig_.clear(); }
+    if (!resumed) { ride = CarRide{}; mySeat.clear(); carSentAny_ = false; keptSig_.clear(); heliRented_ = heliReturning_ = false; heliV_ = "none"; }
     flash(resumed ? "Reconnected" : "Reconnected \xC2\xB7 back in the world", 0);
     net.emit("relogin", r.d);
     SL_INFO("mp: reconnected (%s), world %d, pid %d", resumed ? "resumed" : "new session", worldId, pid);
@@ -416,6 +418,7 @@ void Multiplayer::leave() {
   seats.clear(); warps.clear(); skips.clear(); asks.clear(); guests.clear(); chaletOwners.clear();
   ride = CarRide{}; mySeat.clear(); skipKey_.clear();
   carSentAny_ = false; keptSig_.clear();
+  heli = Json(); heliRented_ = heliReturning_ = false; heliWasReady_ = -1; heliV_ = "none";
   banner.clear(); chat.clear();
   host.save->mpWrite = nullptr;
   restoreSave();
@@ -622,6 +625,46 @@ void Multiplayer::tow(const std::string& kind, const dvec3& home, double yaw, in
     if (done) done(r.ok, r.d);
   });
 }
+bool Multiplayer::heliReady() const {
+  if (heliReturning_) return true;
+  return !heli.is_object() || net.serverNow() >= jnum(heli, "padAt");
+}
+std::string Multiplayer::heliWait() const {
+  const double padAt = heli.is_object() ? jnum(heli, "padAt") : 0;
+  const int min = std::max(1, int(std::ceil((padAt - net.serverNow()) / 60000)));
+  return "Heli-ski \xC2\xB7 the helicopter is out \xC2\xB7 next one in " + std::to_string(min) + " min";
+}
+void Multiplayer::heliRent(std::function<void(bool)> done) {
+  guardMoney();
+  net.request("heliRent", Json::object(), [this, done](const net::NetResult& r) {
+    if (r.d.contains("money")) setServerMoney(jnum(r.d, "money"));
+    if (!r.ok) flash(r.err == "not_yet" ? "Next helicopter in " + std::to_string(int(std::ceil(jnum(r.d, "waitMs") / 60000))) + " min" : net::errText(r.err), 1);
+    else heliRented_ = true;
+    if (done) done(r.ok);
+  });
+}
+bool Multiplayer::heliFrame(bool onPad, bool flying, bool parkedAway, const dvec3& at, double yaw, double padDist) {
+  if (!active_) return true;
+  // back on the pad (flown home by its pilot, or the flight ended): returned, the pad has one again for everyone
+  if (heliRented_ && onPad) {
+    heliRented_ = false; heliReturning_ = true;
+    net.request("heliReturn", Json::object(), [this](const net::NetResult&) { heliReturning_ = false; });
+  }
+  const bool ready = heliReady();
+  if (heliWasReady_ == 0 && ready && onPad && !heliReturning_ && padDist < 400) flash("A helicopter is waiting at the helipad", 0);
+  heliWasReady_ = ready ? 1 : 0;
+  // what everyone sees of yours
+  const std::string want = !heliRented_ ? "none" : flying ? "fly" : parkedAway ? "park" : "none";
+  if (want != heliV_) {
+    const std::string was = heliV_;
+    heliV_ = want;
+    if (want == "fly") net.request("veh", Json{{"k", "heli"}}, [](const net::NetResult&) {});
+    else if (want == "park") net.request("veh", Json{{"k", "heli"}, {"at", {at.x, at.y, at.z, yaw}}}, [](const net::NetResult&) {});
+    else if (was != "none" && heliRented_) net.request("veh", Json{{"k", "heli"}, {"off", true}}, [](const net::NetResult&) {});   // (flying home on its own)
+  }
+  return !onPad || ready;
+}
+
 void Multiplayer::towDone() { net.request("towDone", Json::object(), [](const net::NetResult&) {}); }
 void Multiplayer::jail(double seconds, const std::string& reason) {
   net.request("jail", Json{{"seconds", std::clamp(seconds, 1.0, 300.0)}, {"reason", reason.substr(0, 80)}}, [this](const net::NetResult& r) {

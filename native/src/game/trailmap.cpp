@@ -138,6 +138,7 @@ struct TrailMap::Impl {
   std::vector<Peak> peaks;
   std::vector<Hut> huts;
   std::vector<dvec2> village, parkLine, parkFeatures, chaletRoad;
+  std::vector<dvec2> villageArea;   // (the native village: its built-up area, a convex outline round the buildings)
   std::string parkName = "Legacy Park";
   double parkHalf = 17;
   bool hasPark = false, hasParkDrop = false;
@@ -716,11 +717,22 @@ struct TrailMap::Impl {
   void drawVillage() {
     float vx0 = X(0), vy0 = Z(0);
     if (!inView(vx0, vy0, 300)) return;
-    float b = float(std::max(2.5, 16 * vs));
-    for (const dvec2& q : village) {
-      float px = X(q.x), py = Z(q.y);
-      fillRect(px - b / 2, py - b / 2, b, b, hex(0x8796bb));
-      strokeRect(px - b / 2, py - b / 2, b, b, 1, a(white, 0.9f));
+    if (!villageArea.empty()) {
+      // (the native village's 27 buildings: one clean built-up area under the roads and the places' icons, not a
+      // square per building cluttering the plaza; the services, stations and stops carry the detail)
+      std::vector<vec2> q;
+      q.reserve(villageArea.size());
+      for (const dvec2& w : villageArea) q.push_back(P(X(w.x), Z(w.y)));
+      ui->polyAA(q, a(hex(0x8796bb), 0.26f));
+      q.push_back(q.front());
+      ui->strokePath(q, 1.5f * d, a(hex(0x8796bb), 0.55f), true);
+    } else {
+      float b = float(std::max(2.5, 16 * vs));
+      for (const dvec2& q : village) {
+        float px = X(q.x), py = Z(q.y);
+        fillRect(px - b / 2, py - b / 2, b, b, hex(0x8796bb));
+        strokeRect(px - b / 2, py - b / 2, b, b, 1, a(white, 0.9f));
+      }
     }
     float off = float(std::max(24.0, 150 * vs));
     LabelOpt o;
@@ -1709,7 +1721,21 @@ void TrailMap::load(platform::Platform& p, const AssetPaths& paths, const World&
   // (the native village's own buildings, world/village.h: the ski shop and the ticket booth stay where they were)
   if (world.village().loaded()) {
     M.village = {{-40, -18}, {15, -50}};
-    for (const VillageBuilding& b : world.village().buildings()) M.village.push_back(dvec2(b.x, b.z));
+    std::vector<dvec2> pts = {{-40 - 14, -18 - 14}, {-40 + 14, -18 + 14}, {-40 - 14, -18 + 14}, {-40 + 14, -18 - 14}, {15 - 8, -50 - 8}, {15 + 8, -50 + 8}};
+    for (const VillageBuilding& b : world.village().buildings()) {
+      M.village.push_back(dvec2(b.x, b.z));
+      const double c = std::cos(b.yaw), sn = std::sin(b.yaw), hw = b.w / 2 + 10, hd = b.d / 2 + 10;
+      for (int k = 0; k < 4; k++) { const double u = (k & 1) ? hw : -hw, v = (k & 2) ? hd : -hd; pts.push_back(dvec2(b.x + u * c + v * sn, b.z - u * sn + v * c)); }
+    }
+    // (Andrew's monotone chain)
+    std::sort(pts.begin(), pts.end(), [](const dvec2& p, const dvec2& q) { return p.x < q.x || (p.x == q.x && p.y < q.y); });
+    auto cross = [](const dvec2& o, const dvec2& p, const dvec2& q) { return (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x); };
+    std::vector<dvec2> h(pts.size() * 2);
+    size_t k = 0;
+    for (size_t i = 0; i < pts.size(); i++) { while (k >= 2 && cross(h[k - 2], h[k - 1], pts[i]) <= 0) k--; h[k++] = pts[i]; }
+    for (size_t i = pts.size() - 1, t = k + 1; i-- > 0;) { while (k >= t && cross(h[k - 2], h[k - 1], pts[i]) <= 0) k--; h[k++] = pts[i]; }
+    h.resize(k > 0 ? k - 1 : 0);
+    M.villageArea = std::move(h);
   }
   SL_INFO("trail map: %zu pistes, %zu lifts, %zu roads (%zu named), %zu tunnels, %zu car parks, %zu summits, %zu bus stops", M.pistes.size(), M.lifts.size(), M.roads.size(),
           M.roadLabels.size(), M.tunnels.size(), M.lots.size(), M.peaks.size(), M.busStops.size());

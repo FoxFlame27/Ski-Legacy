@@ -25,6 +25,7 @@ struct Road {
   double length = 0;
   int from = -1, to = -1;
   bool access = false, scenic = false, depot = false, heli = false, ring = false, loop = false, chalet = false;
+  bool village = false;   // (a road of the native village's own: world/village.h addRoads)
   std::vector<int16_t> kmh;
   std::vector<float> limF, limB, vcF, vcB;
   int indexAt(double s) const;
@@ -119,6 +120,8 @@ public:
   /// a vehicle at p heading fwd in a road tunnel's tube (or its approaches, 3 m past the portals): the point `back` m
   /// behind it along the tube's centre line, at the floor's level there (a chase camera that never leaves the tube)
   bool roadTunnelBehind(const dvec3& p, const dvec3& fwd, double back, dvec3& out) const;
+  /// the ceiling lamps of the road tunnel the camera is in (every `every` m along it, the `n` nearest to p): their places
+  void roadTunnelLamps(const dvec3& p, double every, int n, std::vector<dvec3>& out) const;
   /// guardrail segments near (x, z) (16 m grid)
   const std::vector<int>* railsNear(double x, double z) const;
 

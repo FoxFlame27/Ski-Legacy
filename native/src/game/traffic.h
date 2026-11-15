@@ -79,6 +79,11 @@ private:
   std::vector<int> main_, access_, scenic_;
   struct Junction { int access, road; double s; int lot; };
   std::vector<Junction> junctions_;
+  /// (the native village's roads) a main road's end that runs on into another main road's end: [road * 2 + (end at
+  /// its far end)] -> (that road, its far end?) ; -1 none
+  struct Link { int road = -1; bool far = false; };
+  std::vector<Link> links_;
+  const Link* linkAt(int road, int dir) const { const size_t k = size_t(road) * 2 + (dir > 0 ? 1 : 0); return k < links_.size() && links_[k].road >= 0 ? &links_[k] : nullptr; }
   std::vector<int> lots_;
   double recycleT_ = 0;
   dvec3 cam_{0}, camFwd_{0, 0, 1};

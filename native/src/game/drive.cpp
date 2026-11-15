@@ -486,7 +486,7 @@ void Drive::collide(double now) {
         // a little pole, a sign, a street lamp (over 100 km/h): knocked flying, the car drives on (world/breakables.js)
         if (c.brk > 0 && sp > std::max(c.brk, BREAK_V)) {
           double reach = size + R, dx = c.x - cx, dz = c.z - cz;
-          if (dx * dx + dz * dz < reach * reach) { c.downUntil = now + 90; poles++; if (c.lamp) lamps++; }
+          if (dx * dx + dz * dz < reach * reach) { c.downUntil = now + 90; poles++; if (c.lamp) lamps++; knocked.push_back({ci, false, d.vx, d.vz}); }
           continue;
         }
         if (std::fabs(c.x - cx) > size + R + 0.5 || std::fabs(c.z - cz) > size + R + 0.5) continue;
@@ -550,7 +550,7 @@ void Drive::railHit(double px, double pz, int rk, double now) {
       double ex = q.bx - q.ax, ez = q.bz - q.az, l2 = ex * ex + ez * ez;
       if (l2 < 1e-9) continue;
       double t = clamp(((x - q.ax) * ex + (z - q.az) * ez) / l2, 0, 1);
-      if (std::hypot(q.ax + ex * t - x, q.az + ez * t - z) < 6) { q.offUntil = now + 90; any = true; }
+      if (std::hypot(q.ax + ex * t - x, q.az + ez * t - z) < 6) { q.offUntil = now + 90; any = true; knocked.push_back({int(&q - t_.rails.data()), true, d.vx, d.vz}); }
     }
     return any;
   };

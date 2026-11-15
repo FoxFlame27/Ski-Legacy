@@ -1692,6 +1692,35 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
 
 ---
 
+## Fix round 5 (Nov 2026): races' ground, the map's village, indoors, the bus cabin, tunnel roads, breakables
+
+- **The courses' jumps and bridge are solid** (the user: "you sink through some parts of races"). The World Racing
+  courses register their walkable surfaces (courses.js: every kicker / tabletop / roller's ramps.js surface, the gorge
+  bridge's deck) before the resort is built, so neither the resort's nor the play pack's surfaces carried them: the C++
+  skied through every jump drawn on a course and fell through the bridge. The bridge deck is now sampled into the play
+  pack; the ramps go as their ramps.js parameters (`courses[].ramps`) and are shaped analytically (World::addRamp:
+  the terrain under them plus profile / sideCurve, as makeRamp's surface.height; sampled at 0.25 m a kicker's lip was a
+  2-3 m step a cell wide). Check: `SKI_LEGACY_DEBUG=sinktest SKI_LEGACY_SINKREF=ref.json --autotest`, where ref.json is
+  the JS's world.groundHeight every metre along every course at five laterals (a Node script imports world.js,
+  registers the courses as main.js does and samples them): every point where the C++ ground is more than 4 cm off is
+  listed in runs with the course feature there.
+- **Trail map**: the native village's 27 buildings were 27 squares over the plaza; it is one soft built-up area now
+  (the convex outline round the buildings' footprints), under the roads, stops, stations and the places' icons.
+- **No sprinting indoors** (the user's wish; the JS lets you): in a room, the Autohaus, the ward, walking in the Express.
+- **The bus cabin** (bus.js MIC_INNER): plain standard shading (no Meshy detail layer: it turned the seats grainy and
+  near black from the seat) and the cabin's own light as the railcars' (setCabinLight: its albedo as a soft emission,
+  0.3 by day, up to 1.2 at night and in a tunnel).
+- **Road tunnels**: no outdoor snow on the tube's road. resort.cpp packs how much snow each road vertex keeps into its
+  colour (fading out 4..16 m past the portal, Transport::roadTunnelDepth's measure); the road snow shader drops the
+  snow and slush there (the web game darkens it with its decal).
+- **Breakables** (world/breakables.js, `game/breakfx.*`): a pole, sign or street lamp a car knocks is hidden where it
+  stood (Resort::knockProp: the placed prop at the collider) and a copy of it flies off the bumper (the car's velocity,
+  a kick up, a tumble), bounces on the snow up to three times, turns flat and lies there, with the clack (and a lamp's
+  glass); a guardrail section broken through flies off as its own bent beam (RailSweep::sectionModel). After 90 s,
+  once you are 25 m away or not looking (or 2 minutes later anyway), it stands again with its collider. At most 30
+  down at once. `SKI_LEGACY_DEBUG=breaktest --autotest --frames 700 --png out.png`: the nearest knockable prop and
+  guardrail to the plaza knocked, `out_brk_{pole,rail}_{before,fly,down,back}.png`.
+
 ## The rooms, inside and outside, as the web game (Nov 2026)
 
 The web game builds every room you walk into as a scene of its own; `native/tools/export_rooms.mjs` runs those very
@@ -1789,6 +1818,33 @@ by position except a rescue in progress, which is on the mountain).
   Heliweg from the Adlerhornweg past the Gasthof Adlerhorn. Rental, flight, landing home, the rescue and the ambulance
   run unchanged (`SKI_LEGACY_DEBUG=helicheck` / `rescuetest` PASS: landed on the pad, the ambulance to the medical
   centre).
+
+### Round 3: the Dorfstrasse, the Autohaus / police / Werkstatt in the village, footpaths, trees off the roads
+
+- **The Dorfstrasse** (`village.json` "roads", `Village::addRoads`): the valley road used to end at the Legacy Village
+  stop (the bus terminus, (4, 46)); a road now runs on from there along the depot road's bend, west between the Hotel
+  Tirolerhof (now at z 33) and the Hotel Silberhorn (now at z 76) where the Silberhornweg was, and straight west along
+  z 50 at the Oberdorf's foot to its end at (-172, 50) (~190 m, 30 km/h). It is appended to the transport pack's road
+  network as it loads (heights from the drawn ground, smoothed; the relief is level across it), so the car's road
+  surface and tarmac, the speed limit, police routing and traffic all have it; traffic on the valley road runs on into
+  it at the stop and back (`Traffic` links: a main road's end meeting a village road's end). Drawn with the exported
+  roads' own ribbon (`roadsnow-road`: the road snow look), left out where an exported road already lies; lamps by turns
+  on both sides and the plough's banks along the edges; walkers have its south edge in the walking network.
+- **Sites moved onto it** (moves with a clip: only what lies short of the road in front of the old yard goes, so the
+  valley road stays whole; play-data box colliders' `rot` now turn with a move): the **Autohaus** (134, 213) -> (-90, 33),
+  the **police station / prison** (150, 262) -> (-124, 34), the **Werkstatt** (156, 293) -> (-152, 35), each turned so its
+  yard faces the Dorfstrasse as it faced the valley road, at the same distance from the road's middle (17.0 / 16.0 /
+  14.9 m; their floor level `y` is what lands on the new ground: the old yards stood in the valley road's cuts, so the
+  copied ground is held 6 cm under it). Their buildings, rooms, doors, yards, tow trucks, patrol car bay, lots (frames and exits) and colliders go with
+  them. The Autohaus car park (impound) stays on the valley road. The chalets Stadel and Haus Bergfrieden stand across
+  the road now.
+- **Footpaths**: the Postgasse and the Werkstattgasse from the Dorfstrasse up to the Kapellenweg; the Bahnhofstiege from
+  the square's north-west corner straight up the terraces (ramps through the terrace walls at each terrace's level) to
+  the Legacy Express station's exit.
+- **Trees**: every layout tree is checked against all roads, car parks / yards (as moved), the moved sites and the
+  footpaths, and moved off to the nearest clear spot (9 of 30 moved).
+- Not done yet: the trail map draws its roads from `map.json` (the Dorfstrasse is not on it), the ski shop is not
+  moved, the village core is not compacted.
 
 ## Status: the native port against the JavaScript game
 

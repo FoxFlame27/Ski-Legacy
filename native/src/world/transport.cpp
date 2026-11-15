@@ -40,6 +40,7 @@ Road readRoad(const nlohmann::json& r, const std::vector<uint8_t>& bin) {
   o.from = r.value("from", -1); o.to = r.value("to", -1);
   o.access = r.value("access", false); o.scenic = r.value("scenic", false); o.depot = r.value("depot", false); o.heli = r.value("heli", false);
   o.ring = r.value("ring", false); o.loop = r.value("loop", false); o.chalet = r.value("chalet", false);
+  o.village = r.contains("village");
   if (r.contains("prof")) {
     auto& p = r["prof"];
     o.kmh = arr<int16_t>(p["kmh"], bin); o.limF = arr<float>(p["limF"], bin); o.limB = arr<float>(p["limB"], bin);
@@ -430,6 +431,29 @@ double Transport::roadTunnelDepth(double x, double y, double z) const {
     best = std::max(best, std::min(at, total - at));
   }
   return best;
+}
+void Transport::roadTunnelLamps(const dvec3& p, double every, int n, std::vector<dvec3>& out) const {
+  out.clear();
+  for (const RoadTunnel& t : tunnels) {
+    if (p.x < t.bmin.x - 30 || p.x > t.bmax.x + 30 || p.z < t.bmin.y - 30 || p.z > t.bmax.y + 30 || t.pts.size() < 2) continue;
+    std::vector<std::pair<double, dvec3>> all;
+    double run = 0, next = every * 0.5;
+    for (size_t i = 0; i + 1 < t.pts.size(); i++) {
+      const dvec3 &a = t.pts[i], &b = t.pts[i + 1];
+      const double l = std::hypot(b.x - a.x, b.z - a.z);
+      while (l > 1e-6 && next <= run + l) {
+        const double u = (next - run) / l;
+        const dvec3 q = a + (b - a) * u + dvec3(0, t.hc - 0.6, 0);
+        all.push_back({glm::length(q - p), q});
+        next += every;
+      }
+      run += l;
+    }
+    if (all.empty() || all.front().first > 400) continue;
+    std::sort(all.begin(), all.end(), [](const auto& A, const auto& B) { return A.first < B.first; });
+    for (int k = 0; k < n && k < int(all.size()); k++) out.push_back(all[size_t(k)].second);
+    return;
+  }
 }
 bool Transport::roadTunnelBehind(const dvec3& p, const dvec3& fwd, double back, dvec3& out) const {
   for (const RoadTunnel& t : tunnels) {

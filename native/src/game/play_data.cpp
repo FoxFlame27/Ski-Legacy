@@ -110,6 +110,13 @@ Course parseCourse(const nlohmann::json& c, const std::vector<uint8_t>& bin) {
   if (c.contains("features") && c["features"].is_array())
     for (auto& f : c["features"]) if (f.is_object()) o.features.push_back({str(f, "type"), num(f, "s0"), num(f, "s1"), num(f, "land1", std::nan(""))});
   o.difficulty = str(c, "difficulty");
+  if (c.contains("ramps") && c["ramps"].is_array())
+    for (auto& r : c["ramps"]) if (r.is_array() && r.size() >= 16) {
+      RampSurface q;
+      q.type = r[0].get<int>(); q.x = r[1]; q.z = r[2]; q.heading = r[3]; q.height = r[4]; q.lip = r[5]; q.width = r[6]; q.length = r[7];
+      q.R = r[8]; q.upLen = r[9]; q.deckLen = r[10]; q.shaped = r[11].get<double>() != 0; q.minx = r[12]; q.maxx = r[13]; q.minz = r[14]; q.maxz = r[15];
+      o.ramps.push_back(q);
+    }
   if (c.contains("board") && c["board"].is_object()) { o.hasBoard = true; o.boardX = num(c["board"], "x"); o.boardZ = num(c["board"], "z"); o.boardYaw = num(c["board"], "yaw"); }
   return o;
 }

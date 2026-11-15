@@ -101,6 +101,11 @@ public:
   /// the wheels' roll angle (rad), integrated from the speed along the car (drive.js wheel spin)
   double wheelSpin() const { return wheelSpin_; }
   std::vector<VehicleEvent> events;
+  /// (world/breakables.js) what this car knocked down since the game last took them: the colliders' indices (poles,
+  /// signs, lamps: game/breakfx.cpp hides the prop and throws a copy) and the guardrail sections broken through
+  /// (Guardrail indices), each with the car's velocity then
+  struct Knocked { int idx; bool rail; double vx, vz; };
+  std::vector<Knocked> knocked;
 
   std::function<void(std::vector<OtherBody>&)> gatherOthers;
   std::function<void(const OtherBody&, double vx, double vz, double w)> onKnock;

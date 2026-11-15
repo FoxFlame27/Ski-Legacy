@@ -76,6 +76,13 @@ public:
   const std::vector<dvec3>& lamps() const { return lamps_; }
   const std::vector<glm::dmat4>& cannons() const { return cannons_; }
   const FontSet& fonts() const { return fonts_; }
+  /// (world/breakables.js) a knocked pole / sign / lamp: the small placed prop standing at (x, z) (within `reach`, at most
+  /// `maxR` big) hidden where it stood; its model and world matrix for the flying copy. -> a handle (>= 0) for
+  /// standProp(), -1: nothing drawn there as a prop of its own (a baked mesh)
+  struct KnockedProp { std::shared_ptr<Model> model; glm::dmat4 M{1}; float radius = 1; };
+  int64_t knockProp(double x, double z, double reach, double maxR, KnockedProp& out);
+  /// the prop stands again (breakables.js restore)
+  void standProp(int64_t handle);
 
 private:
   struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; std::vector<uint8_t> band; };   // band: each instance's last LOD (0 near, 1 far, 2 off)
@@ -92,6 +99,7 @@ private:
   std::vector<dvec3> lamps_;
   std::vector<glm::dmat4> cannons_;
   void rebuild(const dvec3& cam);
+  void uploadCell(Cell& c);
   std::shared_ptr<Model> partsModel(const nlohmann::json& parts, const std::vector<uint8_t>& bin, const std::vector<Material>& mats);
   bool loadPack(platform::Platform& p, const AssetPaths& paths, const std::string& name, std::vector<Collider>& cols, size_t& nSurf);
   std::shared_ptr<nlohmann::json> tjson_;

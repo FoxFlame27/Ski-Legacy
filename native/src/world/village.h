@@ -58,8 +58,14 @@ public:
   /// every pack within r of `from` (props, colliders, baked triangles, walkable decks, the play data's places: pads,
   /// doors, parking spots, paths) is carried rigidly to `to`, turned by rot (yaw adds rot), raised by dy. The relief
   /// at `to` copies the old site's ground, so all of it sits as it sat.
-  struct Move { std::string name; dvec2 from{0}, to{0}; double r = 0, rot = 0, dy = 0; };
+  /// clip (round 3): only what lies short of `clipMax` m along `clipDir` from `from` goes (a roadside site: its lot and
+  /// buildings, not the road in front of it)
+  struct Move { std::string name; dvec2 from{0}, to{0}; double r = 0, rot = 0, dy = 0; dvec2 clipDir{0}; double clipMax = 1e30; };
   const std::vector<Move>& moves() const { return moves_; }
+  /// Roads of the village's own (village.json "roads", round 3: the Dorfstrasse through the village): appended to the
+  /// transport pack's road network (traffic, police, the car's road surface and tarmac, speed limits) with their
+  /// heights from the drawn ground, and drawn as the exported roads are (the roadsnow-road ribbon).
+  void addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& world) const;
   /// the move whose source holds (x, z), or null
   const Move* moveAt(double x, double z) const;
   /// (x, z) carried by m

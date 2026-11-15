@@ -56,6 +56,7 @@ struct MpHost {
   std::function<std::vector<int>()> plots;                    // the chalet plots' ids (the server learns them from us)
   std::function<std::string()> transitFingerprint;            // the timetables' version (transit.js fingerprint)
   std::function<Json()> wantedNow;                            // (police.js chaseSnap) a chase under way, else null
+  std::function<void(const Json& d, double age)> onBrk;       // (breakables.js remote) a pole / guardrail another player knocked (age: s since)
 };
 
 /// one other player, as received (presence ring) and as drawn (interpolated)
@@ -114,6 +115,8 @@ public:
 
   bool active() const { return active_; }
   bool connecting() const { return busy_; }
+  /// (breakables.js send) your knock to the world: 'brk' { k: 'pole' | 'rail', id, v } (nothing when not in a world)
+  void sendBrk(const std::string& k, const std::string& id, const dvec3& v) { if (active_) net.send("brk", Json{{"k", k}, {"id", id}, {"v", {v.x, v.y, v.z}}}); }
   const std::string& statusLine() const { return statusLine_; }
 
   // ---- the frame

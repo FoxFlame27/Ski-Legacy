@@ -1899,6 +1899,12 @@ int runGame(const GameOptions& opt) {
       flash("Out of " + d.value("v", std::string("the")) + "'s car", Hud::Flash::Bad);
     }
   };
+  mp.host.onBrk = [&](const nlohmann::json& d, double age) {   // (session.js: another player's knock, breakables.remote)
+    const auto& v = d.value("v", nlohmann::json());
+    if (d.value("k", std::string()).empty() || !d.contains("id") || !d["id"].is_string() || !v.is_array() || v.size() != 3 || !v[0].is_number() || !v[1].is_number() || !v[2].is_number()) return;
+    const bool ok = breakFx.remote(d["k"].get<std::string>(), d["id"].get<std::string>(), dvec3(v[0].get<double>(), v[1].get<double>(), v[2].get<double>()), age, simTime);
+    SL_INFO("[mp] brk %s %s (%.1f s ago): %s", d["k"].get<std::string>().c_str(), d["id"].get<std::string>().c_str(), age, ok ? "knocked here too" : "not found / down already");
+  };
   mp.host.plots = [&]() { std::vector<int> v; for (const ChaletHouse& h : playData.chalets) v.push_back(h.id); return v; };
   mp.host.transitFingerprint = []() { return std::string("native-phase6"); };
   mp.host.wantedNow = [&]() {
@@ -3665,6 +3671,7 @@ int runGame(const GameOptions& opt) {
     busBoxes.clear();
     buses.boxes(busBoxes);
     traffic.update(vdt, player.pos, &drive, busBoxes, cam);
+    if (vdt > 0) breakFx.sweepTraffic(traffic, simTime, &audio, cam.pos);   // (breakables.js update: the traffic knocks poles too)
     if (opt.autotest && at == AT::Ski && off("werktest") && werk.available()) {
       // (debug: a damaged car of yours standing in the Werkstatt's box, you at the workbench: the prompt, E, the repair;
       // then a mountain hut's door and the ticket counter: o_werk_<n>.png, the checks logged)
@@ -4992,7 +4999,7 @@ int runGame(const GameOptions& opt) {
           const Collider& c = scenery.colliders()[i];
           const double d = std::hypot(c.x - 4, c.z - 34);
           Resort::KnockedProp kp;
-          if (c.brk > 0 && d < bd && d > 20) { const int64_t h = resort.knockProp(c.x, c.z, 1.2, 3.5, kp); if (h >= 0) { resort.standProp(h); bd = d; ci = int(i); } }
+          if (c.brk > 0 && d < bd && d > 20) { const Resort::BreakParts* b = resort.breakParts(int(i)); const bool own = b && !b->parts.empty(); const int64_t h = own ? -1 : resort.knockProp(c.x, c.z, 1.2, 3.5, kp); if (h >= 0) resort.standProp(h); if (own || h >= 0) { bd = d; ci = int(i); } }
         }
         bd = 1e30;
         for (size_t i = 0; i < transport.rails.size(); i++) { const Guardrail& g = transport.rails[i]; const double d = std::hypot(g.ax - 4, g.az - 34); if (g.seg >= 0 && !g.tunnel && d < bd) { bd = d; ri = int(i); } }
@@ -5013,6 +5020,139 @@ int runGame(const GameOptions& opt) {
       const char* nm = f == 50 ? "before" : f == 66 ? "fly" : f == 200 ? "down" : f == 260 ? "back" : nullptr;
       if (nm && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, ("brk_" + std::string(k ? "rail_" : "pole_") + nm).c_str()); SL_INFO("[breaktest] %s %s: %d down, %d flying", k ? "guardrail" : "pole", nm, breakFx.down(), breakFx.flying()); }
       if (bf >= 600) running = false;
+    }
+    if (opt.autotest && at == AT::Ski && off("brkdrive")) {
+      // (debug: a car driven into a road sign by the village, a snow pole up a mountain road and a guardrail there at
+      // 125 km/h: the car's own collisions knock them (drive.cpp, breakfx.cpp), o_brkdrive_<sign|pole|rail>_
+      // <before|fly|down|back>.png; the approach picked flat and clear of everything else)
+      static int bf = 0, kf = -1, tgtCol[3] = {-1, -1, -1};
+      static dvec3 T[3], dir[3];
+      static bool shot0 = false;
+      const int k = bf / 520, f = bf % 520;
+      bf++;
+      const dvec3 P(4, world.meshHeight(4, 34), 34);
+      auto railNear = [&](double x, double z, double r, int skip) {
+        for (size_t i = 0; i < transport.rails.size(); i++) {
+          const Guardrail& g = transport.rails[i];
+          if (int(i) == skip || g.offUntil > simTime) continue;
+          const double ex = g.bx - g.ax, ez = g.bz - g.az, l2 = std::max(1e-9, ex * ex + ez * ez), t = std::clamp(((x - g.ax) * ex + (z - g.az) * ez) / l2, 0.0, 1.0);
+          if (std::hypot(g.ax + ex * t - x, g.az + ez * t - z) < r) return true;
+        }
+        return false;
+      };
+      // the best way in to (x, z): flat, nothing solid or railed along it (`len` m, `skipRail`: the rail it ends on)
+      auto approach = [&](double x, double z, double len, int skipRail, const dvec3* along, double& score) {
+        dvec3 best(0);
+        score = 1e30;
+        for (int a = 0; a < 24; a++) {
+          dvec3 d(std::sin(a * PI / 12), 0, std::cos(a * PI / 12));
+          if (along) { const double c = std::fabs(glm::dot(d, *along)); if (c > 0.9 || c < 0.75) continue; }   // (into a rail at 25 - 40 deg)
+          double worst = 0, h0 = world.meshHeight(x, z);
+          bool ok = true;
+          for (double s = 2.5; s <= len && ok; s += 2) {
+            const double px = x - d.x * s, pz = z - d.z * s, h = world.meshHeight(px, pz);
+            worst = std::max(worst, std::fabs(h - h0) / s);
+            if ((skipRail < 0 || (s > 6 && s < 18)) && railNear(px, pz, 2.0, skipRail)) ok = false;   // (a rail: the far side of the road may have its own)
+            if (const auto* near = scenery.collidersNear(px, pz))
+              for (int ci : *near) {
+                const Collider& c = scenery.colliders()[size_t(ci)];
+                if (c.rail || (c.brk > 0 && std::hypot(c.x - x, c.z - z) < 0.5)) continue;
+                const double sz = c.r >= 0 ? c.r : std::hypot(c.hw, c.hd);
+                if (std::hypot(c.x - px, c.z - pz) < sz + 1.6) ok = false;
+              }
+          }
+          if (ok && worst < score) { score = worst; best = d; }
+        }
+        return best;
+      };
+      if (bf == 1) {
+        // the targets: a road sign (a post and two panels of its own) nearest the plaza; a snow pole (pole + tip) and a
+        // guardrail section 1.2 km+ out and 150 m+ up
+        std::vector<std::pair<double, int>> cand[3];
+        for (size_t i = 0; i < scenery.colliders().size(); i++) {
+          const Collider& c = scenery.colliders()[i];
+          const Resort::BreakParts* b = resort.breakParts(int(i));
+          if (c.brk <= 0 || !b || c.lamp) continue;
+          const double d = std::hypot(c.x - P.x, c.z - P.z), g = world.meshHeight(c.x, c.z);
+          if (b->parts.size() == 3 && c.top < 1e29 && c.top - g > 2.2 && d > 30) cand[0].push_back({d, int(i)});
+          if (b->parts.size() == 2 && d > 1200 && g > P.y + 150 && railNear(c.x, c.z, 25, -1)) cand[1].push_back({d, int(i)});   // (a snow pole by a mountain road: a guardrail near)
+        }
+        for (size_t i = 0; i < transport.rails.size(); i++) {
+          const Guardrail& g = transport.rails[i];
+          const double mx = (g.ax + g.bx) / 2, mz = (g.az + g.bz) / 2, d = std::hypot(mx - P.x, mz - P.z);
+          if (g.seg >= 0 && !g.tunnel && d > 1200 && world.meshHeight(mx, mz) > P.y + 150) cand[2].push_back({d, int(i)});
+        }
+        for (int q = 0; q < 3; q++) {
+          std::sort(cand[q].begin(), cand[q].end());
+          int tries = 0;
+          for (const auto& [dist, i] : cand[q]) {
+            if (++tries > 400) break;
+            double sc;
+            dvec3 a;
+            if (q < 2) {
+              const Collider& c = scenery.colliders()[size_t(i)];
+              if (railNear(c.x, c.z, q == 0 ? 4 : 2.5, -1)) continue;
+              a = approach(c.x, c.z, 24, -1, nullptr, sc);
+              if (sc > 0.12) continue;
+            } else {
+              const Guardrail& g = transport.rails[size_t(i)];
+              const dvec3 e = glm::normalize(dvec3(g.bx - g.ax, 0, g.bz - g.az));
+              a = approach((g.ax + g.bx) / 2, (g.az + g.bz) / 2, 34, i, &e, sc);
+              if (sc > 0.12) continue;
+            }
+            if (glm::length(a) < 0.5) continue;
+            tgtCol[q] = i; dir[q] = a;
+            break;
+          }
+        }
+        for (int q = 0; q < 3; q++) {
+          if (tgtCol[q] < 0) continue;
+          double x, z;
+          if (q < 2) { x = scenery.colliders()[size_t(tgtCol[q])].x; z = scenery.colliders()[size_t(tgtCol[q])].z; }
+          else { const Guardrail& g = transport.rails[size_t(tgtCol[q])]; x = (g.ax + g.bx) / 2; z = (g.az + g.bz) / 2; }
+          T[q] = dvec3(x, world.meshHeight(x, z), z);
+        }
+        SL_INFO("[brkdrive] sign collider %d at (%.1f, %.1f), pole %d at (%.1f, %.1f, y %.0f), guardrail %d at (%.1f, %.1f, y %.0f)", tgtCol[0], T[0].x, T[0].z,
+                tgtCol[1], T[1].x, T[1].z, T[1].y, tgtCol[2], T[2].x, T[2].z, T[2].y);
+      }
+      static const char* NM[3] = {"sign", "pole", "rail"};
+      const double V0 = k == 2 ? 125 / 3.6 : 45 / 3.6, RUN = k == 2 ? 34 : 20;
+      if (k < 3 && tgtCol[k] >= 0) {
+        const dvec3 d = dir[k], side = glm::normalize(glm::cross(d, dvec3(0, 1, 0)));
+        if (f == 2) {
+          if (drive.active()) { drive.stopNow(); dvec3 ex; if (drive.exit(ex)) standOff(ex, "Parked"); }
+          int idx = drive.debugCar("car_vw_golf_gti");
+          if (idx >= 0) {
+            Drive::Parked& e = drive.parked[size_t(idx)];
+            e.x = T[k].x - d.x * RUN; e.z = T[k].z - d.z * RUN; e.y = world.meshHeight(e.x, e.z) + 0.05; e.yaw = std::atan2(d.x, d.z);
+            if (drive.enter(idx)) { rideKind = Ride::Car; player.setSkisOn(false); dvec3 sp, sf; drive.seat(sp, sf); player.sitOn(sp, sf); drive.setCockpit(false); }
+          }
+          kf = -1; shot0 = false;
+          traffic.clearNear(T[k], 80, 30);   // (no traffic car crossing the run: one rammed spoils it; held off until the hit)
+          SL_INFO("[brkdrive] %s: the car %.0f m out at %.0f km/h, heading (%.2f, %.2f)", NM[k], RUN, V0 * 3.6, d.x, d.z);
+        }
+        cam.lookAt(T[k] + side * 12.0 + dvec3(0, 5, 0) - d * 4.0, T[k] + d * 3.0 + dvec3(0, 0.8, 0)); cam.fovY = 60;
+        if (f == 2) { terrain.update(cam.pos); scenery.finish(cam.pos); resort.update(0, cam.pos); resort.finishStreaming(cam.pos); }
+        terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+        const bool down = k < 2 ? scenery.colliders()[size_t(tgtCol[k])].downUntil > simTime : transport.rails[size_t(tgtCol[k])].offUntil > simTime;
+        if (kf < 0 && down) { kf = f; SL_INFO("[brkdrive] %s knocked by the car at %.0f km/h: %d down, %d flying", NM[k], drive.speed() * 3.6, breakFx.down(), breakFx.flying()); }
+        if (kf < 0 && f > 2 && f < 300 && drive.active()) {   // (the car held at its speed, aimed at the target, until it hits)
+          dvec3 to(T[k].x - drive.pos().x, 0, T[k].z - drive.pos().z);
+          to = glm::length(to) > 1.5 && glm::dot(to, d) > 0 ? glm::normalize(to) : d;
+          drive.push(0, 0, to.x * V0, to.z * V0);
+          traffic.clearNear(T[k], 80, 30);
+        }
+        if (kf >= 0 && f == kf + 40 && drive.active()) drive.stopNow();
+        const char* nm = nullptr;
+        if (!shot0 && kf < 0 && drive.active() && glm::length(dvec2(drive.pos().x - T[k].x, drive.pos().z - T[k].z)) < V0 * 0.2 + 3) { nm = "before"; shot0 = true; }
+        if (kf >= 0 && f == kf + 10) nm = "fly";
+        if (kf >= 0 && f == kf + 220) nm = "down";
+        if (kf >= 0 && f == kf + 260) { Camera far = cam; far.pos += dvec3(500, 0, 0); breakFx.update(0, simTime + 400, far); SL_INFO("[brkdrive] %s respawned: %d down", NM[k], breakFx.down()); }
+        if (kf >= 0 && f == kf + 280) nm = "back";
+        if (f == 519 && kf < 0) SL_INFO("[brkdrive] %s: NOT knocked (car at (%.1f, %.1f), %.0f km/h)", NM[k], drive.pos().x, drive.pos().z, drive.speed() * 3.6);
+        if (nm && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, ("brkdrive_" + std::string(NM[k]) + "_" + nm).c_str()); SL_INFO("[brkdrive] %s %s: %d down, %d flying", NM[k], nm, breakFx.down(), breakFx.flying()); }
+      }
+      if (bf >= 3 * 520) running = false;
     }
     if (opt.autotest && at == AT::Ski && off("platetest")) {   // (debug: a parked car's plates close up, front and rear, by day and at night: o_plate<n>.png)
       static int pf = 0;
@@ -5239,6 +5379,9 @@ int runGame(const GameOptions& opt) {
     if (drawVillage && !indoor) resort.submit(renderer);
     vmodels.setBusGlassInside(rideKind == Ride::Bus && seatView);   // (bus.js busGlass: you see out from inside)
     breakFx.update(paused ? 0 : frameDt, simTime, cam);
+    breakFx.net = mp.active();   // (multiplayer: your knocks to the world, breakables.js send)
+    for (const BreakFx::NetKnock& k : breakFx.outbox) mp.sendBrk(k.k, k.id, k.v);
+    breakFx.outbox.clear();
     sweep.railsOff(transport, simTime);   // (breakables.js: the sections broken through hidden, back after 90 s)
     if (drawVillage && !indoor) breakFx.submit(renderer);
     if (drawVillage && !indoor) sweep.submit(renderer, cam.pos);

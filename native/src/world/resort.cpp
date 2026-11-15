@@ -453,6 +453,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
         ps.cells.back().origin = dvec3((double(cx) + 0.5) * PROP_CELL, M[3][1], (double(cz) + 0.5) * PROP_CELL);
       }
       Cell& c = ps.cells[it->second];
+      ps.loc.push_back(uint64_t(it->second) << 20 | c.inst.size());
       c.inst.push_back(M);
       c.bmin = glm::min(c.bmin, dvec3(M[3])); c.bmax = glm::max(c.bmax, dvec3(M[3]));
       nProps_++;
@@ -464,7 +465,12 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     props_.push_back(std::move(ps));
   };
   for (auto& p : j["props"]) addSet(assets_.model(p["model"].get<std::string>(), optFor(p["model"].get<std::string>())), instList(p, bin), p.value("glow", 0.f), true);
-  for (auto& m : j["instanced"]) addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), instList(m, bin), 0, true);
+  std::vector<int> instSet;   // (the pack's instanced set k -> props_ index, -1: not drawn)
+  for (auto& m : j["instanced"]) {
+    const size_t n0 = props_.size();
+    addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), instList(m, bin), 0, true);
+    instSet.push_back(props_.size() > n0 ? int(n0) : -1);
+  }
 
   // ---- (tunnelview.js) the roads' snow stops inside the road tunnels: no outdoor snow on the tube's road (the web game
   // lays its dark decal over it). Each road vertex's colour g (r = aEnd, sqrt-packed) carries how much snow it keeps:
@@ -581,6 +587,21 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     k.rail = c.value("rail", 0) != 0;
     k.brk = c.value("brk", 0.0);
     k.lamp = c.value("lamp", 0) != 0;
+    if (k.brk > 0 && (c.contains("bp") || c.contains("bprop") || c.contains("nid"))) {   // (a breakable's own drawn parts: hideParts)
+      BreakParts b;
+      b.prop = c.value("bprop", 0) != 0;
+      if (c.contains("nid") && c["nid"].is_string()) b.nid = c["nid"].get<std::string>();
+      if (c.contains("bp") && c["bp"].is_array())
+        for (size_t q = 0; q + 1 < c["bp"].size(); q += 2) {
+          const int set = c["bp"][q], inst = c["bp"][q + 1];
+          if (set < 0 || size_t(set) >= instSet.size() || instSet[size_t(set)] < 0) continue;
+          const PropSet& ps = props_[size_t(instSet[size_t(set)])];
+          if (inst < 0 || size_t(inst) >= ps.loc.size()) continue;
+          b.parts.push_back(int64_t(uint64_t(instSet[size_t(set)]) << 40 | ps.loc[size_t(inst)]));
+        }
+      if (b.parts.empty()) b.prop = true;   // (nothing of its own: the prop at the collider, as before)
+      brk_[int(cols.size())] = std::move(b);
+    }
     cols.push_back(k);
   }
   for (auto& s : j["surfaces"]) {
@@ -661,14 +682,39 @@ int64_t Resort::knockProp(double x, double z, double reach, double maxR, Knocked
     }
   }
   if (best < 0) return -1;
-  PropSet& ps = props_[size_t(best >> 40)];
-  Cell& c = ps.cells[size_t((best >> 20) & 0xfffff)];
-  const size_t i = size_t(best & 0xfffff);
-  out.model = ps.model; out.M = c.inst[i]; out.radius = ps.radius;
+  return hideHandle(best, out);
+}
+
+int64_t Resort::hideHandle(int64_t h, KnockedProp& out) {
+  if (h < 0 || size_t(h >> 40) >= props_.size()) return -1;
+  PropSet& ps = props_[size_t(h >> 40)];
+  if (size_t((h >> 20) & 0xfffff) >= ps.cells.size()) return -1;
+  Cell& c = ps.cells[size_t((h >> 20) & 0xfffff)];
+  const size_t i = size_t(h & 0xfffff);
+  if (i >= c.inst.size()) return -1;
   if (c.band.size() != c.inst.size()) c.band.assign(c.inst.size(), 255);
+  if (c.band[i] == 3) return -1;   // (down already)
+  out.model = ps.model; out.M = c.inst[i]; out.radius = ps.radius; out.handle = h;
   c.band[i] = 3;
   uploadCell(c);
-  return best;
+  return h;
+}
+
+bool Resort::partMatrix(int64_t h, glm::dmat4& M, vec3& bmin, vec3& bmax) const {
+  if (h < 0 || size_t(h >> 40) >= props_.size()) return false;
+  const PropSet& ps = props_[size_t(h >> 40)];
+  if (size_t((h >> 20) & 0xfffff) >= ps.cells.size() || !ps.model) return false;
+  const Cell& c = ps.cells[size_t((h >> 20) & 0xfffff)];
+  if (size_t(h & 0xfffff) >= c.inst.size()) return false;
+  M = c.inst[size_t(h & 0xfffff)]; bmin = ps.model->bmin; bmax = ps.model->bmax;
+  return true;
+}
+
+void Resort::hideParts(const BreakParts& b, std::vector<KnockedProp>& out) {
+  for (int64_t h : b.parts) {
+    KnockedProp kp;
+    if (hideHandle(h, kp) >= 0) out.push_back(std::move(kp));
+  }
 }
 
 void Resort::standProp(int64_t h) {

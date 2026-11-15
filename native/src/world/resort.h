@@ -79,14 +79,24 @@ public:
   /// (world/breakables.js) a knocked pole / sign / lamp: the small placed prop standing at (x, z) (within `reach`, at most
   /// `maxR` big) hidden where it stood; its model and world matrix for the flying copy. -> a handle (>= 0) for
   /// standProp(), -1: nothing drawn there as a prop of its own (a baked mesh)
-  struct KnockedProp { std::shared_ptr<Model> model; glm::dmat4 M{1}; float radius = 1; };
+  struct KnockedProp { std::shared_ptr<Model> model; glm::dmat4 M{1}; float radius = 1; int64_t handle = -1; };
   int64_t knockProp(double x, double z, double reach, double maxR, KnockedProp& out);
   /// the prop stands again (breakables.js restore)
   void standProp(int64_t handle);
+  /// (world/breakables.js) a breakable collider's own drawn parts (export_resort.mjs brkInst: each part an instance of
+  /// its kind's set; prop: a GLB part too, knockProp at the collider; nid: its multiplayer id, breakables.js spotId)
+  struct BreakParts { std::vector<int64_t> parts; bool prop = false; std::string nid; };
+  const BreakParts* breakParts(int collider) const { auto it = brk_.find(collider); return it == brk_.end() ? nullptr : &it->second; }
+  /// each part hidden where it stands (as knockProp), its model and world matrix appended to `out`
+  void hideParts(const BreakParts& b, std::vector<KnockedProp>& out);
+  /// (debug brkdrive) a part's world matrix and its model's box
+  bool partMatrix(int64_t h, glm::dmat4& M, vec3& bmin, vec3& bmax) const;
 
 private:
   struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; std::vector<uint8_t> band; };   // band: each instance's last LOD (0 near, 1 far, 2 off)
-  struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; std::string what; };
+  struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; std::string what; std::vector<uint64_t> loc; };   // loc: the pack's instance k -> (cell << 20 | index in it)
+  std::map<int, BreakParts> brk_;   // collider index -> its parts (handles as knockProp's)
+  int64_t hideHandle(int64_t h, KnockedProp& out);
   struct Chunk {
     std::shared_ptr<Model> model;    // null while unloaded
     dvec3 origin; dvec3 bmin, bmax; bool shadow = true;

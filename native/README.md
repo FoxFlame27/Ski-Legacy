@@ -1702,6 +1702,22 @@ the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the a
   once you are 25 m away or not looking (or 2 minutes later anyway), it stands again with its collider. At most 30
   down at once. `SKI_LEGACY_DEBUG=breaktest --autotest --frames 700 --png out.png`: the nearest knockable prop and
   guardrail to the plaza knocked, `out_brk_{pole,rail}_{before,fly,down,back}.png`.
+- **Signs and poles fly off too** (they were baked into the merged meshes: only their colliders dropped). The exporter
+  walks breakables.js's list (and adopts the piste markers as main.js does): every drawn part of a breakable (a road
+  sign's post and its two panels, a snow pole and its tip, a reflector post's post / band / reflector, the scenic and P
+  signs, the bollards, the piste markers' pole and top) goes out as an instance of a set of its own kind (the same
+  geometry content and material: one set, instanced, one draw per 512 m cell; the road signs' atlas cell baked into
+  the uv, so each sign face is its own set by cell), its `[set, instance]` pairs on its collider (`bp`; `bprop`: a GLB
+  part too, found at the collider as before; `nid`: breakables.js's spot id). Resort::breakParts / hideParts hide
+  each part (its instance's band 3, as knockProp), BreakFx throws a copy of all of them together. Counts: resort
+  6640 parts (3320 piste markers) in 2 sets; transport 1235 parts in 39 sets (4 multi-material parts still baked).
+  The pole threshold is breakables.js's 8 km/h now (was 30). The traffic's cars knock them too (BreakFx::sweepTraffic,
+  breakables.js update: both ends of each car, local only). **Multiplayer**: your knocks go out as 'brk'
+  { k: 'pole' | 'rail', id, v } (at most 10 a second), another player's (and the world snapshot's `brk` list on
+  joining, flown forward by its age) knock the same pole / section here (Multiplayer host.onBrk -> BreakFx::remote).
+  `SKI_LEGACY_DEBUG=brkdrive --autotest --frames 1600 --png out.png`: a Golf driven into a road sign by the village
+  (45 km/h), a snow pole up a mountain road (45 km/h) and a guardrail there (125 km/h, 25-40 deg), by the car's own
+  collisions: `out_brkdrive_{sign,pole,rail}_{before,fly,down,back}.png`.
 
 ## The rooms, inside and outside, as the web game (Nov 2026)
 

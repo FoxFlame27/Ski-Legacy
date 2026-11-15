@@ -400,7 +400,11 @@ void Police::update(double dt) {
     if (fleeing_ && c_.driving && d < 25 && u.ramT <= 0) {
       double yy = c_.drive->yaw();
       aim = you - dvec3(std::sin(yy), 0, std::cos(yy)) * 1.6 + dvec3(std::cos(yy), 0, -std::sin(yy)) * ((i % 2) ? 1.2 : -1.2);
-      if (d < 6) { u.ramT = L.ramGap; slam("RAMMED!", "MORE HEAT", 0.25 + 0.75 * std::clamp(u.v / 30.0, 0.0, 1.0)); }
+      if (d < 6) {
+        u.ramT = L.ramGap; slam("RAMMED!", "MORE HEAT", 0.25 + 0.75 * std::clamp(u.v / 30.0, 0.0, 1.0));
+        // (police.js impact: a big one, k = (v - 8) / 26 > 0.38: a short slow motion, single player only)
+        if (!c_.online && std::clamp((u.v - 8) / 26.0, 0.0, 1.0) > 0.38 && c_.now - slowT_ > 5 && c_.slowMo && c_.slowMo(0.3, 0.03, 0.25, 0.22, "police")) slowT_ = c_.now;
+      }
     }
     driveUnit(u, dt, aim, want);
   }

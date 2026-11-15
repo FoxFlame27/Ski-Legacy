@@ -42,6 +42,7 @@
 #include "game/shoproom.h"
 #include "game/werkstatt.h"
 #include "game/window_view.h"
+#include "game/presentation.h"
 #include "game/races.h"
 #include "game/jobs.h"
 #include "game/police.h"
@@ -686,6 +687,12 @@ int runGame(const GameOptions& opt) {
   pc.fade = [&]() { if ((!opt.autotest || off("fadetest")) && !mptest) trans.fade(); };   // (fadetest: the debug runs with the real fades)
   pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
   pc.covered = [&]() { return trans.holdsFrame() || trans.covered(); };
+  // presentation/index.js: slow motion on big moments (a big air, a photo finish, a police ram). The autotest keeps real
+  // time (its phases count frames) unless SKI_LEGACY_DEBUG=slowmo
+  Presentation pres;
+  pres.enabled = !opt.autotest || off("slowmo");
+  pc.slowMo = [&](double scale, double easeIn, double hold, double easeOut, const char* reason) { return pres.slowMo(scale, easeIn, hold, easeOut, reason ? reason : ""); };
+  pc.slowCancel = [&]() { pres.cancel(); };
   pc.roomModel = [&](const std::string& id) { return resort.roomModel(id); };
 
   // ---------------------------------------------------------------- (Phase 6) multiplayer: the session and its glue
@@ -1682,6 +1689,51 @@ int runGame(const GameOptions& opt) {
     // (Phase 6) the network: events, presence out, the other players, the shared clock, the money guard
     mp.interiorOffset = rooms.inside() ? rooms.toWorld(0, 0, 0) : dvec3(0);
     mp.update(std::min(0.25, frameDt), paused);
+    // (main.js: presentation.update(rawDt), dt = rawDt * presentation.timeScale: the world slows, the UI, the transitions
+    // and a race's cinematics keep real time)
+    const double realDt = frameDt;
+    {
+      Presentation::Air air;
+      air.has = started; air.air = player.air; air.ski = player.mode == PlayerMode::Ski; air.frozen = races.frozen();
+      air.airTime = player.airTime; air.airEnd = player.airEnd();
+      pres.cinematic = !races.cineStage().empty();
+      const bool was = pres.slowing();
+      frameDt *= pres.update(std::min(0.05, realDt), air, paused, mp.active());
+      if (pres.slowing() && !was) SL_INFO("[slowmo] %s: the world slows (air %.2f s of %.2f s predicted)", pres.reason.c_str(), player.airTime, player.airEnd());
+      else if (was && !pres.slowing()) SL_INFO("[slowmo] back to full speed");
+      races.timeScale = pres.timeScale;
+    }
+    if (opt.autotest && at == AT::Ski && off("slowtest")) {
+      // (debug: SKI_LEGACY_DEBUG=slowtest,slowmo --autotest: a 14 m drop on skis = a big air: the slow motion's trigger,
+      // depth, length and cooldown against presentation/index.js, then a photo finish's { 0.3, 0.12, 1.0, 0.45 })
+      static int stage = 0;
+      static double realT = 0, minScale = 1, expect = 0, wait = 0;
+      static bool ok = true;
+      auto check = [&](bool c, const char* what) { SL_INFO("[slowtest] %s -> %s", what, c ? "ok" : "FAILED"); ok = ok && c; };
+      if (stage == 0 && phaseFrame == 150) { player.pos.y += 14; stage = 1; SL_INFO("[slowtest] lifted 14 m at %.1f km/h", player.speed() * 3.6); }
+      else if (stage == 1 && pres.slowing()) {
+        stage = 2; realT = 0; minScale = 1;
+        const double left = std::max(0.0, player.airEnd() - player.airTime);
+        expect = 0.18 + std::min(1.3, std::max(0.6, left * 1.6)) + 0.4;
+        SL_INFO("[slowtest] big air: %.2f s into a flight predicted %.2f s -> slow for %.2f s", player.airTime, player.airEnd(), expect);
+        check(pres.reason == "air" && player.airTime > 0.3 && player.airEnd() >= 1.2, "a flight predicted >= 1.2 s slows the world 0.3 s in");
+      } else if (stage == 1 && phaseFrame > 400) { check(false, "no big air seen"); stage = 9; }
+      if (stage == 2 || stage == 5) {
+        if (pres.slowing()) { realT += std::min(0.05, realDt); minScale = std::min(minScale, pres.timeScale); }
+        else {
+          SL_INFO("[slowtest] %s: %.2f s of real time, the world down to x%.3f", stage == 2 ? "big air" : "photo finish", realT, minScale);
+          if (stage == 2) check(std::fabs(realT - expect) < 0.04 && std::fabs(minScale - 0.35) < 0.005, "eased to x0.35 and back over easeIn 0.18 + hold + easeOut 0.4");
+          else check(std::fabs(realT - 1.57) < 0.04 && std::fabs(minScale - 0.3) < 0.005, "a photo finish: x0.3 over 0.12 + 1.0 + 0.45 s");
+          stage++; wait = 0;
+        }
+      } else if (stage == 3) {
+        wait += std::min(0.05, realDt);
+        if (wait >= 1.0) { check(!pres.slowMo(0.3, 0.12, 1.0, 0.45, "photo"), "none during the 1.6 s cooldown"); stage = 4; }
+      } else if (stage == 4) {
+        wait += std::min(0.05, realDt);
+        if (wait >= 1.7) { check(pres.slowMo(0.3, 0.12, 1.0, 0.45, "photo"), "a photo finish's slow motion after the cooldown"); stage = 5; realT = 0; minScale = 1; }
+      } else if (stage == 6 || stage == 9) { SL_INFO("[slowtest] %s", ok ? "PASS" : "FAIL"); stage = 10; running = false; }
+    }
     pc.online = mp.active();
     if (mp.active() && started && !menus.isOpen() && !tmap.isOpen()) {
       auto pressedKey = [&](platform::Key k) { return std::find(ev.pressed.begin(), ev.pressed.end(), k) != ev.pressed.end(); };
@@ -4274,7 +4326,7 @@ int runGame(const GameOptions& opt) {
     }
     // (the menus' animations run on the wall clock: simTime stops while paused, so the pause menu's buttons, which
     // fade / slide in over 0.25 s from the moment it opens, stayed invisible)
-    menus.frame(nav, frameDt, plat->timeSeconds());
+    menus.frame(nav, realDt, plat->timeSeconds());
     if (tmap.isOpen()) {
       int carIdx = -1;
       for (size_t i = 0; i < drive.parked.size(); i++) if (drive.parked[i].owned && !drive.parked[i].plate.empty() && (carIdx < 0 || drive.parked[i].driving)) carIdx = int(i);
@@ -4303,7 +4355,7 @@ int runGame(const GameOptions& opt) {
     // (transition.js: the scenes between two places, over everything; the old place stays on screen until covered)
     trans.draw(ui);
     renderer.holdFrame = trans.holdsFrame();
-    trans.update(frameDt);
+    trans.update(realDt);
     if (rendered) {
     Lighting frameLight = light;
     {   // (railway.js lateUpdate: the cabins' own light, 0.3 by day, up to 1.2 at night and in a tunnel, eased)

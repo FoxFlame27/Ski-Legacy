@@ -68,6 +68,8 @@ public:
   struct RecordRow { std::string name; double best = -1; int medal = 0; };
   std::vector<RecordRow> records() const;
   std::vector<std::string> lastRows;   // the results' rows (autotest log)
+  /// the presentation's time scale this frame (update's dt is scaled by it; the cinematics run on real time)
+  double timeScale = 1;
   /// (Phase 7) what to hear, taken by the game each frame: count:3 count:2 count:1 go checkpoint miss finish:<place|record|practice> medal:<gold|silver|bronze> results
   std::vector<std::string> sounds;
   /// (autotest) the AI field's motion: the largest sideways step of a racer in one frame beyond what its lateral speed

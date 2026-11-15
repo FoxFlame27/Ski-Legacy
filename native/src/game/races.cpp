@@ -25,6 +25,7 @@
 namespace sl {
 
 namespace {
+constexpr double PHOTO_GAP = 0.3;       // s between the player and a rival at the line = photo finish
 constexpr double INTRO_LEAD_IN = 0.7;   // s on the grid before the "3" after the intro (the camera is already behind the racer)
 constexpr double LEAD_IN = 1.4, GATE_PENALTY = 0.5, GATE_FLAG = 0.75, GATE_TOL = 4, RESULTS_DELAY = 2.6, RESULTS_MAX_WAIT = 6;
 constexpr double STUCK_TIME = 5, STUCK_PROGRESS = 3, OFF_MARGIN = 9, OFF_TIME = 1.5, FAR_MARGIN = 40, FAR_TIME = 0.8, FALL_BELOW = 7, FALL_TIME = 0.35;
@@ -141,6 +142,7 @@ struct Races::Session {
   std::unique_ptr<racecine::CourseIntro> intro;
   bool introRan = false, introInput = false, courseCalled = false, introL3 = false;
   double camBlend = 0;       // the intro's hand-over to the gameplay camera
+  bool photoDone = false;    // (one photo finish per attempt)
   double fovCarry = 0, camDt = 0;   // the field of view the camera had last frame (the gameplay camera eases from it)
   double introL3Hide = -1;   // (c_.now) when the intro's lower third went: L3_OUT, or SKIP
 };
@@ -165,6 +167,7 @@ double Races::progress() const { return s_ ? s_->prevS - s_->c->start.s : 0; }
 
 void Races::abort() {
   if (!s_) return;
+  if (c_.slowCancel) c_.slowCancel();
   endCine();
   s_.reset();
   if (c_.weather) c_.weather->frozen = c_.autotest;
@@ -373,6 +376,7 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
     }
   }
   if (s_) endCine();
+  if (c_.slowCancel) c_.slowCancel();   // (session.js reset: presentation.cancel())
   // (session.js: every racer is recorded, 30 Hz, the last 60 s)
   if (c_.skier) s->rep = std::make_unique<racecine::ReplayBuffer>(int(s->bots.size()) + 1);
   s_ = std::move(s);
@@ -579,6 +583,7 @@ bool Races::startPodium() {
   for (size_t i = 0; i < list.size() && i < 3; i++) top.push_back({list[i].track, list[i].name, std::isfinite(list[i].time) ? fmtRaceTime(list[i].time) : "DNF", list[i].me});
   s.podium = std::make_unique<racecine::Podium>(*c_.dev, c_.plat, *c_.world, *s.track, std::move(top));
   s.cineT = 0; s.podiumHideT = -1;
+  if (c_.slowCancel) c_.slowCancel();
   c_.skier->cine = PlayerSkier::Cine();
   c_.skier->cine.on = true; c_.skier->cine.visible = false; c_.skier->cine.snap = true;
   for (auto& b : s.bots) b->cinePlace = 0;
@@ -782,6 +787,7 @@ void Races::beginIntro() {
   Session& s = *s_;
   if (!c_.skier || !s.track || std::getenv("SKI_LEGACY_NO_RACE_INTRO")) { s.introRan = false; return; }
   s.intro = std::make_unique<racecine::CourseIntro>(*s.track, *s.c, *c_.world);
+  if (c_.slowCancel) c_.slowCancel();
   s.cineT = 0; s.camOn = false; s.camBlend = 0; s.introInput = false; s.introL3 = false; s.introL3Hide = -1;
   c_.skier->forceThird = true;   // (the racer is on show: first person hides the body)
   SL_INFO("race: intro, the flight ends %.0f m down the course", s.intro->sEnd() - s.c->start.s);
@@ -878,6 +884,7 @@ void Races::hudCine(Ui& ui) {
 
 void Races::confirmResults() {
   if (!s_) return;
+  if (c_.slowCancel) c_.slowCancel();
   endCine();   // (the podium behind the results)
   if (c_.menus->dialogOpen()) c_.menus->close();
   s_.reset();
@@ -907,8 +914,9 @@ void Races::update(double dt) {
   }
   if (!s_) return;
   Session& s = *s_;
-  s.camDt = dt;
-  updateCine(dt);   // (the replay buffer; the podium, a replay, the stinger: real time)
+  const double cineDt = dt / std::max(0.05, timeScale);   // (session.js: updateCine(dt / max(0.05, presentation.timeScale)))
+  s.camDt = cineDt;
+  updateCine(cineDt);   // (the replay buffer; the podium, a replay, the stinger: real time)
   if (!s_) return;
   if (s.st == Session::St::Results) updateBots(dt);   // (the field skis out and stops behind the results card)
   if (s.st == Session::St::Results || s.st == Session::St::Done) return;
@@ -959,6 +967,20 @@ void Races::update(double dt) {
         s.notice = "MISSED GATE  +0.50 \xC2\xB7 AIM FOR THE GREEN"; s.noticeT = c_.now; s.noticeBad = true;
         sounds.push_back("miss");
       } else { sounds.push_back("gate"); s.bars[size_t(s.nextGate - 1)].state = 1; s.barsDirty = true; }
+    }
+    // A rival reaching the line within PHOTO_GAP of the player: slow motion through the finish (checkPhotoFinish).
+    if (!s.photoDone && !s.bots.empty() && s.track && c_.slowMo) {
+      const double fin = s.track->finishS, ttl = (fin - pr.s) / std::max(1.0, dt > 0 ? (pr.s - s.prevS) / dt : vS);
+      if (ttl > 0 && ttl < 0.45)
+        for (auto& b : s.bots) {
+          const double bt = b->finished ? b->finishTime - s.clock : (fin - b->s) / std::max(1.0, b->v);
+          if (std::fabs(bt - ttl) < PHOTO_GAP) {
+            s.photoDone = true;
+            const bool on = c_.slowMo(0.3, 0.12, 1.0, 0.45, "photo");
+            SL_INFO("race: photo finish with %s (%.2f s apart at the line)%s", b->name.c_str(), std::fabs(bt - ttl), on ? "" : " (no slow motion: one runs / cooldown / off)");
+            break;
+          }
+        }
     }
     // the finish line
     if (pr.s >= c.finish.s && s.prevS < c.finish.s + 5) {

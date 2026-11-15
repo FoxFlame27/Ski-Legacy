@@ -380,6 +380,12 @@ void MpView::poseRig(const RemotePlayer& r, People& people, int kind, const dvec
   st.hasEdge = true; st.edge = st.lean * 0.6;
   st.air = !seated && !fall && (r.flags & net::F::air); st.tuck = !seated && !fall && (r.flags & net::F::tuck);
   st.carry = !seatAt && !fall && (r.flags & net::F::carry);
+  if (!seated && !fall && S != net::St::Ski) {
+    // (native) a jump on foot as your own (foot_jump.cpp): their feet's height over the ground they walk on (remote.js
+    // airY 0: the body stays on the snow and walks). Inside a room the floor is their own height: no jump shown
+    st.footJump = true;
+    if (!inside && ground) { const double ay = pos.y - ground(pos.x, pos.z, pos.y - 0.55); st.airY = ay > 0.06 && ay < 2.5 ? ay : 0; }
+  }
   if (patient) {
     // (hospitalroom.js _pst: flat on the back, the pose set here, not decoded from the row's lossy pitch / flags)
     st = RigState();

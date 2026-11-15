@@ -100,6 +100,9 @@ public:
   bool charging = false;
   double flip = 0, yawFx = 0, yawFxV = 0;
   double footJumpY = 0;
+  /// on foot: the jump's anticipation (0 .. 1 while the knees load before the take-off), in the air
+  double footWindK() const { return footWind_ > 0 ? 1 - footWind_ / footWind0_ : 0; }
+  bool footAirborne() const { return footAir_; }
   FallState fall;
   int fallSide = 1;
   double distance = 0, topSpeed = 0;
@@ -170,6 +173,7 @@ private:
   double skidAmt_ = 0, skidSide_ = 1, turnRate_ = 0, prevVelYaw_ = PI, lastTurnSide_ = 1;
   bool footAir_ = false;
   double footJumpV_ = 0, walkSlip_ = 0, steepT_ = 0, steepOkT_ = 0, footT_ = 0;
+  double footWind_ = 0, footWind0_ = 1;   // (the load before a jump on foot: time left, its length)
   bool steepWarned_ = false;
   bool fallAir_ = false;
   // camera

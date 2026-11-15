@@ -372,6 +372,8 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     if (name == "rental_shop" || name == "hotel_chalet" || name == "ticket_booth" || name == "market_stall") o.colorTextureSize = 2048;
     return o;
   };
+  // (Nov 2026) the native village's own layout over the exported one (world/village.h)
+  world_.village().applyToPack(name, j, bin, world_, [&](const std::string& m) { return assets_.model(m, optFor(m)); });
 
   // ---- canvas textures (on demand) and materials
   std::map<int, gfx::Texture> canvasTex;

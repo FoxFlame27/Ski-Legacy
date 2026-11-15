@@ -134,6 +134,18 @@ if(SL_EXPORT_DATA)
       VERBATIM USES_TERMINAL)
     add_custom_target(sl_data ALL DEPENDS ${SL_DATA_OUTPUTS})
     add_dependencies(ski_legacy sl_data)
+    # (Nov 2026) the native game's own village layout, applied over the exported world (world/village.h): written from
+    # the exported data by its own tool, in a folder of its own so editing it does not re-run the export above
+    set(SL_VILLAGE_OUTPUTS ${SL_DATA_DIR}/village.json.zst ${SL_DATA_DIR}/village.bin.zst)
+    add_custom_command(OUTPUT ${SL_VILLAGE_OUTPUTS}
+      COMMAND ${SL_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/village/village_layout.mjs
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/village/village_layout.mjs ${SL_DATA_OUTPUTS}
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+      COMMENT "Laying out the village (native/data/village.json)"
+      VERBATIM)
+    add_custom_target(sl_village ALL DEPENDS ${SL_VILLAGE_OUTPUTS})
+    add_dependencies(sl_village sl_data)
+    add_dependencies(ski_legacy sl_village)
   endif()
 endif()
 
@@ -178,7 +190,7 @@ if(SL_COPY_ASSETS)
     file(GLOB_RECURSE _cpp CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h)
     add_custom_command(OUTPUT ${_list}
       COMMAND ${SL_NODE_COPY} ${CMAKE_CURRENT_SOURCE_DIR}/tools/list_models.mjs ${_list}
-      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/list_models.mjs ${_cpp} ${SL_DATA_OUTPUTS}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/list_models.mjs ${_cpp} ${SL_DATA_OUTPUTS} ${SL_VILLAGE_OUTPUTS}
       COMMENT "Listing the models the game loads (models.txt)" VERBATIM)
   else()
     string(REPLACE ";" "\n" _fb "${SL_FALLBACK_MODELS}")

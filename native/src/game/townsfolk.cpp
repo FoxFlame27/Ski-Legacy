@@ -471,6 +471,9 @@ struct PeopleSim::Impl {
   dvec2 ringPt(double a, double lane) const { return dvec2(C.x + std::cos(a) * (RING + lane), C.y + std::sin(a) * (RING + lane)); }
   std::vector<dvec2> route(const dvec2& from, const dvec2& to) {
     const double lane = (rnd() - 0.5) * 1.8;
+    // (along the native village's streets: world/village.h; within the square the ring as townsfolk.js)
+    if (world && world->village().loaded() && (std::hypot(from.x - C.x, from.y - C.y) > RING + 12 || std::hypot(to.x - C.x, to.y - C.y) > RING + 12))
+      return world->village().route(from, to, lane);
     const double a0 = angC(from.x, from.y), a1 = angC(to.x, to.y);
     const double r0 = std::hypot(from.x - C.x, from.y - C.y), r1 = std::hypot(to.x - C.x, to.y - C.y);
     std::vector<dvec2> pts;
@@ -713,7 +716,9 @@ void PeopleSim::init(World& world, const std::vector<std::vector<dvec2>>&, int f
   pos_.clear();
   if (S.kits.empty() || fans <= 0) { SL_WARN("townsfolk: no crowd characters"); return; }
   // the doors (townsfolk.js Village: the hotels face the plaza, their door on the front ~7 m from the middle)
-  for (auto& h : HOTELS) {
+  // (the native village's own hotels and their doors, world/village.h; else village.js's eight round the plaza)
+  if (world.village().loaded()) for (const VillageDoor& d : world.village().hotels()) S.doors.push_back({HOTEL, d.in, d.out, d.w});
+  else for (auto& h : HOTELS) {
     const double x = h[0], z = h[1], l = std::hypot(x, z);
     S.doors.push_back({HOTEL, dvec2(x - (x / l) * 7.4, z - (z / l) * 7.4), dvec2(x - (x / l) * 12.5, z - (z / l) * 12.5), 1});
   }
@@ -746,7 +751,7 @@ void PeopleSim::update(double dt, const dvec3& cam, double night, const Scenery*
     // obstacles near the plaza (lamps, benches, stalls, signs, racks, buildings) for walking round them (8 m cells)
     S.gridBuilt = true;
     for (const Collider& c : scenery->colliders()) {
-      if (std::fabs(c.x) >= 170 || std::fabs(c.z) >= 170) continue;
+      if (std::fabs(c.x) >= 230 || std::fabs(c.z) >= 230) continue;   // (the native village reaches ~200 m out)
       Obst o{c.x, c.z, c.r, c.hw, c.hd, c.rot, (c.r >= 0 ? c.r : std::hypot(c.hw, c.hd)) + 1.6};
       const int idx = int(S.obst.size());
       S.obst.push_back(o);
@@ -773,9 +778,9 @@ void PeopleSim::submit(Renderer& r, const dvec3& cam) {
   if (!S.awake || S.P.empty()) { S.visible = false; return; }
   FanCrowd& c = S.crowd;
   const double dt = S.lastDt;
-  // fans.js FanCrowd.update: the crowd's bounds (the village: 150 m round the plaza) in reach
+  // fans.js FanCrowd.update: the crowd's bounds (the village: 150 m round the plaza; the native village 210 m) in reach
   const dvec3 sc = S.bcenter + dvec3(0, 1, 0);
-  if (glm::length(cam - sc) >= VIEW + 150 || !r.visible(sc - dvec3(150), sc + dvec3(150))) { S.visible = false; return; }
+  if (glm::length(cam - sc) >= VIEW + 210 || !r.visible(sc - dvec3(210), sc + dvec3(210))) { S.visible = false; return; }
   if (!S.visible) { S.visible = true; std::fill(c.stale.begin(), c.stale.end(), 1); }
   c.frame++;
   S.draws.clear();

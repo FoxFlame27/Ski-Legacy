@@ -1,0 +1,200 @@
+{
+  "hotel_tyrol": {
+    "preview": "01a1dfae-2ff2-728b-81f9-de1fd5da554b",
+    "previewCost": 20,
+    "refine": "01a1dfb0-2fc1-72bd-872a-f036d449c28d",
+    "refineCost": 10,
+    "done": true
+  },
+  "hotel_grand": {
+    "preview": "01a1dfb2-19c8-7442-9e1d-6a798964fbb7",
+    "previewCost": 20,
+    "refine": "01a1dfb4-eca4-754c-a08e-b56d5aa8d02f",
+    "refineCost": 10,
+    "done": true
+  },
+  "hotel_lodge": {
+    "preview": "01a1dfb2-19c8-71e7-b189-6e685451995a",
+    "previewCost": 20,
+    "refine": "01a1dfb5-cc85-717e-a9ec-ca25b4bc9a41",
+    "refineCost": 10,
+    "done": true
+  },
+  "hotel_modern": {
+    "preview": "01a1dfb2-19dc-74a3-9353-58c6754936b4",
+    "previewCost": 20,
+    "refine": "01a1dfb5-acb0-73c2-b6e1-213957c57dc3",
+    "refineCost": 10,
+    "done": true
+  },
+  "hotel_valais": {
+    "preview": "01a1dfb2-42d7-72f9-96a9-9dfaf11fad90",
+    "previewCost": 20,
+    "refine": "01a1dfb4-d43a-769a-a809-017d2fcfff66",
+    "refineCost": 10,
+    "done": true
+  },
+  "shop_townhouse": {
+    "preview": "01a1dfb2-19cc-7687-b82c-5fc919b05994",
+    "previewCost": 20,
+    "refine": "01a1dfb3-6ed3-7718-b68f-027f2a9f5bd9",
+    "refineCost": 10,
+    "done": true
+  },
+  "shop_pastel": {
+    "preview": "01a1dfb2-19dd-7573-b1c3-67cf8bc29310",
+    "previewCost": 20,
+    "refine": "01a1dfb4-d3c6-77e2-9562-6b14e2bd519f",
+    "refineCost": 10,
+    "done": true
+  },
+  "shop_timber": {
+    "preview": "01a1dfb2-19d9-7360-a463-dfd949e71a4f",
+    "previewCost": 20,
+    "refine": "01a1dfb5-5e74-7595-ba9e-da86724f8746",
+    "refineCost": 10,
+    "done": true
+  },
+  "cafe": {
+    "preview": "01a1dfb2-19db-7752-b834-a9c1a29d0fd4",
+    "previewCost": 20,
+    "refine": "01a1dfb4-cf8c-72c7-9d85-2ede3b77e436",
+    "refineCost": 10,
+    "done": true
+  },
+  "bakery": {
+    "preview": "01a1dfb2-19de-7748-a39f-0908ea5925da",
+    "previewCost": 20,
+    "refine": "01a1dfb3-a90b-71e0-8c87-cef2f79d719b",
+    "refineCost": 10,
+    "done": true
+  },
+  "sports_shop": {
+    "preview": "01a1dfb2-19d2-7574-a02c-98e8e43c4c50",
+    "previewCost": 20,
+    "refine": "01a1dfb4-65db-76d3-b506-508c07d9b227",
+    "refineCost": 10,
+    "done": true
+  },
+  "restaurant_stube": {
+    "preview": "01a1dfb2-42cc-71bf-8afa-3fe6f02ea63b",
+    "previewCost": 20,
+    "refine": "01a1dfb5-6cbe-7509-92fb-e5b22129a5be",
+    "refineCost": 10,
+    "done": true
+  },
+  "lift_hall": {
+    "preview": "01a1dfb2-19d8-71bd-9b40-c17e92a02a99",
+    "previewCost": 20,
+    "refine": "01a1dfb4-10e1-7259-be5c-be6a95a51e6d",
+    "refineCost": 10,
+    "done": true
+  },
+  "bus_terminal": {
+    "preview": "01a1dfb2-19cb-71f5-8f47-24d5d6f47260",
+    "previewCost": 20,
+    "refine": "01a1dfb4-0bc1-74c4-962a-2ab72a80b43a",
+    "refineCost": 10,
+    "done": true
+  },
+  "town_hall": {
+    "preview": "01a1dfb2-19cb-770e-b4d9-9954a0119764",
+    "previewCost": 20,
+    "refine": "01a1dfb5-ec95-755b-88ed-fcbf14a529fe",
+    "refineCost": 10,
+    "done": true
+  },
+  "apartment_lodge": {
+    "preview": "01a1dfb2-19d4-75c9-a921-182c071d63d7",
+    "previewCost": 20,
+    "refine": "01a1dfb4-0deb-715a-9c44-bde298d0f944",
+    "refineCost": 10,
+    "done": true
+  },
+  "apartment_modern": {
+    "preview": "01a1dfb2-19cb-7710-aa83-699b13432d23",
+    "previewCost": 20,
+    "refine": "01a1dfb4-4cbe-766f-8b09-040f04996f5b",
+    "refineCost": 10,
+    "done": true
+  },
+  "chalet_classic": {
+    "preview": "01a1dfb2-19dd-7575-877c-8a35e9dc3423",
+    "previewCost": 20,
+    "refine": "01a1dfb6-5e0e-7014-bc66-17ad138d043a",
+    "refineCost": 10,
+    "done": true
+  },
+  "chalet_stone": {
+    "preview": "01a1dfb2-19d8-776e-83fa-99fd50aba48d",
+    "previewCost": 20,
+    "refine": "01a1dfb4-2e17-76e3-b75f-e36345a8b306",
+    "refineCost": 10,
+    "done": true
+  },
+  "chalet_modern": {
+    "preview": "01a1dfb2-19d6-75ce-92c0-e3223cf8617a",
+    "previewCost": 20,
+    "refine": "01a1dfb5-de4c-74de-94fc-92b984ceae0b",
+    "refineCost": 10,
+    "done": true
+  },
+  "chalet_small": {
+    "preview": "01a1dfb2-419b-76a2-8e4e-557e0a1014ce",
+    "previewCost": 20,
+    "refine": "01a1dfb4-7158-70fb-9c77-4c87f5a2e86d",
+    "refineCost": 10,
+    "done": true
+  },
+  "garages": {
+    "preview": "01a1dfb2-42d6-7699-8279-e9f4661c4c38",
+    "previewCost": 20,
+    "refine": "01a1dfb4-6fee-7322-aa9a-89a909988e7e",
+    "refineCost": 10,
+    "done": true
+  },
+  "fountain": {
+    "preview": "01a1dfb2-42d4-765d-8bcb-5dcdf8de698b",
+    "previewCost": 20,
+    "refine": "01a1dfb4-0dea-7723-8eb1-4090058d5c15",
+    "refineCost": 10,
+    "done": true
+  },
+  "retaining_wall": {
+    "preview": "01a1dfb2-19de-7543-bc18-d0b7480556eb",
+    "previewCost": 20,
+    "refine": "01a1dfb3-af72-709f-9176-3af2adb70d87",
+    "refineCost": 10,
+    "done": true
+  },
+  "stone_stairs": {
+    "preview": "01a1dfb2-19d4-7108-b090-7105b60c1582",
+    "previewCost": 20,
+    "refine": "01a1dfb4-0650-7143-8cd5-bb277f4de101",
+    "refineCost": 10,
+    "done": true
+  },
+  "bus_shelter": {
+    "preview": "01a1dfb2-42d6-749a-a645-9c7daf752cf1",
+    "previewCost": 20,
+    "refine": "01a1dfb4-6d0d-7011-b51a-bd509cbe6c51",
+    "refineCost": 10,
+    "done": true
+  },
+  "church_old": [
+    {
+      "preview": "01a1dfb2-19dd-7161-bd3d-8acd7a9bcd39",
+      "previewCost": 20,
+      "refine": "01a1dfb5-34bc-7467-9eed-f134ecd106cf",
+      "refineCost": 10,
+      "done": true
+    }
+  ],
+  "church": {
+    "preview": "01a1dfb9-ffa1-75b7-b983-3404ec1c6c40",
+    "previewCost": 20,
+    "refine": "01a1dfbb-7c52-725a-b8fc-96531bacd32a",
+    "refineCost": 10,
+    "done": true
+  }
+}

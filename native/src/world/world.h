@@ -8,6 +8,7 @@
 #pragma once
 #include "core/math.h"
 #include "core/noise.h"
+#include "world/village.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -82,6 +83,12 @@ public:
   /// like a sampled surface (above the ground, not far above yHint).
   void addDeck(std::function<double(double, double)> f) { decks_.push_back(std::move(f)); }
 
+  /// (Nov 2026) the native game's own village (world/village.h): its relief is part of height()
+  Village& village() { return village_; }
+  const Village& village() const { return village_; }
+  /// the relief on / off (--verify-heights compares the JS terrain without it); drops the mesh height cache
+  void setVillageRelief(bool on);
+
   const std::vector<Massif>& massifs() const { return massifs_; }
   const std::vector<Pad>& pads() const { return pads_; }
   bool hasData() const { return loaded_; }
@@ -124,6 +131,7 @@ private:
   struct VCache { int64_t key; double h; };
   std::vector<VCache> vcache_;
   bool loaded_ = false;
+  Village village_;
 };
 
 } // namespace sl

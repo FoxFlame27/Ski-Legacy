@@ -59,6 +59,10 @@ struct PlayCtx {
   std::function<void()> unmark;
   std::function<std::shared_ptr<Model>(const std::string& id)> roomModel;   // a walk-in room's exported model (Resort::roomModel)
   std::function<void()> fade;                                       // a short fade to dark (covers a teleport)
+  /// presentation.slowMo({ scale, easeIn, hold, easeOut, reason }) / presentation.cancel() (game/presentation.h)
+  std::function<bool(double scale, double easeIn, double hold, double easeOut, const char* reason)> slowMo;
+  std::function<void()> slowCancel;
+  std::function<bool()> covered;                                    // a transition still covers the screen (the race intro waits for the reveal)
   std::function<void(const std::string& label)> titleCard;         // the branded title card over a move ("RACE \xC2\xB7 Ice Canyon")
   // (Phase 6) multiplayer: the server is authoritative (net/session.js); unset in single player
   bool online = false;                                              // races are practice races (no fee, no prize)

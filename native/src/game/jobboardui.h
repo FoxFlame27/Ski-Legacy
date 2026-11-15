@@ -52,4 +52,7 @@ bool frameRaceStand(Ui& ui, const UiNav& nav, const Input& in, RaceStandView& v,
 /// one frame: input, then drawing; false once it closed
 bool frameJobBoard(Ui& ui, const UiNav& nav, const Input& in, JobBoardView& v, double dt, double now);
 
+/// .diff-sign: the piste-style sign of a course's level (a green disc, a blue square, a black diamond, ringed red for Expert)
+void drawDiffSign(Ui& ui, float cx, float cy, const std::string& level, float u);
+
 } // namespace sl

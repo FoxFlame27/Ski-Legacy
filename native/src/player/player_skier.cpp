@@ -130,7 +130,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   st.spinVel = p.mode == PlayerMode::Ski ? spinVis_ : 0;
   st.charge = p.charging && !p.air ? p.charge : 0;
   // first person (player.js: view first and not watching a crash): the head folded away, the eye the camera
-  const bool fp = p.firstPerson();
+  const bool fp = p.firstPerson() && !forceThird;
   st.lookYaw = fp ? p.lookYaw() * 0.5 : 0;
   st.lookPitch = fp ? p.lookPitch() * 0.4 : 0;
   st.hasSeat = p.mode == PlayerMode::Sit;
@@ -215,7 +215,7 @@ std::string PlayerSkier::zones() const { return model_ ? outfitZonesInfo(*model_
 void PlayerSkier::updateFpView(double dt, const Camera& cam, const Player& p, gfx::Device& dev, AssetManager& assets) {
   if (!rig.ready()) return;
   SkierRig::FpViewState o;
-  o.skiing = p.view == Player::View::First && p.mode == PlayerMode::Ski && !showcase && !cine.on;
+  o.skiing = p.view == Player::View::First && p.mode == PlayerMode::Ski && !showcase && !cine.on && !forceThird;
   if (o.skiing) {
     o.speed = p.speed(); o.air = p.air; o.absorb = p.absorb; o.brake = p.skidAmt();
     o.rough = p.groomedAt(p.pos.x, p.pos.z) ? 0.25 : 1;   // (a groomed run is smooth; off it the snow is rough)

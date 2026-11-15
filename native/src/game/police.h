@@ -142,6 +142,7 @@ private:
   // the big word on the screen for a moment (police.js slam): the text, the line under it, the flash's strength
   std::string slamText_, slamSub_;
   double slamAt_ = -100, slamK_ = 0;
+  double slowT_ = -100;   // (police.js slowT: the last slow-motion hit; TUNING.slowMoS = 5 s between two)
   int prevStars_ = 0;
   void slam(const std::string& text, const std::string& sub, double k) { slamText_ = text; slamSub_ = sub; slamK_ = k; slamAt_ = c_.now; }
   double radioT_ = -1;

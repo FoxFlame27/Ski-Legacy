@@ -481,6 +481,9 @@ void diffSign(Ui& ui, float cx, float cy, const std::string& level, float u) {
   ui.rect(cx - s / 2 - ring, cy - s / 2 - ring, s + 2 * ring, s + 2 * ring, white);
   ui.rect(cx - s / 2, cy - s / 2, s, s, hex(0x1f5fd6));
 }
+} // namespace
+void drawDiffSign(Ui& ui, float cx, float cy, const std::string& level, float u) { diffSign(ui, cx, cy, level, u); }
+namespace {
 std::string ordLow(int n) { int t = n % 100; return std::to_string(n) + (t >= 11 && t <= 13 ? "th" : n % 10 == 1 ? "st" : n % 10 == 2 ? "nd" : n % 10 == 3 ? "rd" : "th"); }
 } // namespace
 

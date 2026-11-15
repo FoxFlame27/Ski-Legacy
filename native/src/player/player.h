@@ -91,6 +91,8 @@ public:
   double heading = PI;       // facing -Z (toward the mountain)
   bool air = false, ballistic = false, parked = false, hold = false;
   double airTime = 0;
+  /// predicted flight time of the current air (player.js airEnd; the presentation's big-air slow motion reads it)
+  double airEnd() const { return airEnd_; }
   double steer = 0, lean = 0, edge = 0, crouch = 0.2, plow = 0, absorb = 0, absorbV = 0, sideslip = 0, skidYaw = 0;
   bool tuck = false;
   double skiSpeed = 1, skiGrip = 1;   // (Phase 7) the equipped skis (economy.js SKIS: speed / grip), as player.js this.ski

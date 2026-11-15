@@ -3,6 +3,7 @@
 #include "engine/canvas2d.h"
 #include "engine/mesh_kit.h"
 #include "engine/renderer.h"
+#include "game/play_data.h"
 #include "game/race_bots.h"
 #include "game/shapes.h"
 #include "platform/platform.h"
@@ -266,10 +267,14 @@ ReplayDirector::Shot ReplayDirector::makeShot(const Sample& me) {
   const double s = (hasPs_ ? ps_ : 0) + clamp(v * 2.3, 30, 85);
   racebots::Frame fr;
   o_.track->frame(s, fr);
-  const double lat = side_ * (fr.w + 2.5);
+  // (inside the nets in tunnels / on bridges: replay.js this.tunnels)
+  bool enclosed = false;
+  for (const Course::Feature& f : o_.track->course.features) enclosed = enclosed || ((f.type == "tunnel" || f.type == "bridge") && s > f.s0 - 15 && s < f.s1 + 15);
+  const double lat = side_ * (enclosed ? fr.w - 1.2 : fr.w + 2.5);
   dvec3 pos(fr.x + fr.nx * lat, 0, fr.z + fr.nz * lat);
   // high enough to see over the crest the skier comes over (the piste falls away below the camera)
-  pos.y = std::max(std::max(fr.y, ground(*o_.world, pos.x, pos.z, fr.y + 6)) + 3.2, (me.y != 0 ? me.y : fr.y) + 2.4);
+  pos.y = enclosed ? fr.y + 2.2 : std::max(std::max(fr.y, ground(*o_.world, pos.x, pos.z, fr.y + 6)) + 3.2, (me.y != 0 ? me.y : fr.y) + 2.4);
+  sh.enclosed = enclosed;
   sh.pos = pos; sh.s = s; sh.max = 4.6;
   return sh;
 }
@@ -289,6 +294,109 @@ ReplayDirector::Shot ReplayDirector::makeFinish() {
 std::string ReplayDirector::shotKind() const {
   static const char* N[4] = {"trackside", "heli", "chase", "finish"};
   return hasShot_ && shot_.kind >= 0 ? N[shot_.kind] : "none";
+}
+
+// ============================================================================ the intro (presentation/intro.js)
+namespace {
+constexpr double REACH = 950;   // m: straight-line distance from the start the flight may go
+const char* SET_PIECES[10] = {"kicker", "tabletop", "bridge", "tunnel", "lake", "slalom", "narrow", "cliff", "bank", "roller"};
+}
+
+CourseIntro::CourseIntro(const racebots::Track& tr, const Course& c, World& world) : world_(world) {
+  const double s0 = std::isfinite(c.start.s) ? c.start.s : tr.s0 + 4;
+  racebots::Frame st, fr, la;
+  tr.frame(s0, st);
+  // where the flight ends: past the first set piece within reach, else ~480 m down the course
+  const Course::Feature* f = nullptr;
+  for (const Course::Feature& q : c.features) {
+    bool piece = false;
+    for (const char* n : SET_PIECES) piece = piece || q.type == n;
+    if (piece && q.s0 > s0 + 110 && q.s0 < s0 + 640 && (!f || q.s0 < f->s0)) f = &q;
+  }
+  double sEnd = f ? clamp((std::isfinite(f->land1) ? f->land1 : f->s1) + 40, s0 + 360, s0 + 700) : s0 + 480;
+  sEnd = std::min(sEnd, tr.finishS - 40);
+  while (sEnd > s0 + 250) {
+    tr.frame(sEnd, fr);
+    if (std::hypot(fr.x - st.x, fr.z - st.z) < REACH) break;
+    sEnd -= 20;
+  }
+  sEnd_ = sEnd;
+  // control points every ~32 m: from 80 m behind and high above the start house, descending toward the piste, weaving
+  // from one side of the nets to the other
+  const double sBack = s0 - 80;
+  const int n = std::max(10, int(std::round((sEnd - sBack) / 32)));
+  int sum = 0;
+  for (unsigned char ch : c.id) sum += ch;   // (the ids are ASCII: charCodeAt)
+  const double side = (sum & 1) ? 1 : -1;
+  for (int i = 0; i <= n; i++) {
+    const double u = double(i) / n, s = lerp(sBack, sEnd, u);
+    tr.frame(s, fr);
+    const double h = lerp(52, 16, smoothstep(0, 0.62, u)) + 4 * std::sin(u * PI * 2.6);
+    const double lat = side * (fr.w + 12) * std::sin(u * PI * 1.35) * smoothstep(0.02, 0.3, u);
+    const double x = fr.x + fr.nx * lat, z = fr.z + fr.nz * lat;
+    const bool outside = std::fabs(lat) > fr.w;
+    const double y = std::max(fr.y + h, ground(world_, x, z, fr.y + h + 50) + (outside ? 22 : 11));
+    pathA_.push_back(dvec3(x, y, z));
+    // look far down the course and a little above it: the valley and the peaks stay in frame
+    tr.frame(std::min(s + 140, sEnd + 200), la);
+    lookA_.push_back(dvec3(la.x, la.y + 10 + 12 * (1 - u), la.z));
+  }
+  // smooth the heights (terrain clearance can make neighbours jump), never below the clearance
+  std::vector<double> ys;
+  for (const dvec3& p : pathA_) ys.push_back(p.y);
+  for (int it = 0; it < 3; it++)
+    for (size_t i = 1; i + 1 < pathA_.size(); i++) pathA_[i].y = std::max(ys[i], (pathA_[i - 1].y + pathA_[i].y * 2 + pathA_[i + 1].y) / 4);
+}
+
+// three.js CatmullRomCurve3(points, false, 'centripetal').getPoint(t)
+dvec3 CourseIntro::curve(const std::vector<dvec3>& pts, double t) const {
+  const int l = int(pts.size());
+  const double p = (l - 1) * t;
+  int ip = int(std::floor(p));
+  double w = p - ip;
+  if (w == 0 && ip == l - 1) { ip = l - 2; w = 1; }
+  const dvec3 p0 = ip > 0 ? pts[size_t(ip - 1)] : pts[0] - pts[1] + pts[0];
+  const dvec3 p1 = pts[size_t(ip)], p2 = pts[size_t(ip + 1)];
+  const dvec3 p3 = ip + 2 < l ? pts[size_t(ip + 2)] : pts[size_t(l - 1)] - pts[size_t(l - 2)] + pts[size_t(l - 1)];
+  double dt0 = std::pow(glm::dot(p0 - p1, p0 - p1), 0.25), dt1 = std::pow(glm::dot(p1 - p2, p1 - p2), 0.25), dt2 = std::pow(glm::dot(p2 - p3, p2 - p3), 0.25);
+  if (dt1 < 1e-4) dt1 = 1.0;
+  if (dt0 < 1e-4) dt0 = dt1;
+  if (dt2 < 1e-4) dt2 = dt1;
+  const dvec3 t1 = ((p1 - p0) / dt0 - (p2 - p0) / (dt0 + dt1) + (p2 - p1) / dt1) * dt1;
+  const dvec3 t2 = ((p2 - p1) / dt1 - (p3 - p1) / (dt1 + dt2) + (p3 - p2) / dt2) * dt1;
+  const dvec3 c2 = -3.0 * p1 + 3.0 * p2 - 2.0 * t1 - t2, c3 = 2.0 * p1 - 2.0 * p2 + t1 + t2;
+  return p1 + t1 * w + c2 * (w * w) + c3 * (w * w * w);
+}
+
+bool CourseIntro::update(double dt, bool holding, const dvec3& p, double h) {
+  cutNow = false;
+  if (done_) return false;
+  if (!holding) t_ += dt;
+  const double t = t_;
+  if (t >= duration()) { done_ = true; return false; }
+  if (t < SHOT_A) {
+    // shot A: slow start out of the reveal, fast through the middle, easing into the set piece before the cut
+    const double k = t / SHOT_A;
+    const double u = clamp(0.22 * k + 0.78 * (k * k * (3 - 2 * k)), 0, 1);
+    dvec3 pos = curve(pathA_, u);
+    keepAbove(world_, pos, 6);
+    cam.pos = pos; cam.look = curve(lookA_, u); cam.fov = lerp(52, 44, u);
+    blend = 0;
+  } else {
+    if (!cut_) { cut_ = true; cutNow = true; }
+    // shot B, the crane: in front of the field (looking up at the racers and the start house), up and over to one
+    // side, down behind the player. (Inside the START arch, which stands 12 m below the gate.)
+    const double k = (t - SHOT_A) / SHOT_B;
+    const double fx = std::sin(h), fz = std::cos(h), rx = -fz, rz = fx;
+    const double e = ease(k);
+    const double a = lerp(0.18, PI, e), R = lerp(9.5, 7, e), side = 1, lift = std::sin(a);
+    dvec3 pos(p.x + fx * R * std::cos(a) + rx * side * R * 0.55 * lift, p.y + 1.5 + 8 * lift + 0.04 * std::sin(k * 9), p.z + fz * R * std::cos(a) + rz * side * R * 0.55 * lift);
+    keepAbove(world_, pos, 1.2);
+    cam.pos = pos; cam.look = dvec3(p.x + fx * 1.5 * e, p.y + 1.25, p.z + fz * 1.5 * e); cam.fov = lerp(36, 52, e);
+    // the last part blends into the gameplay camera (computed by the game this frame)
+    blend = smoothstep(0.6, 1, k);
+  }
+  return true;
 }
 
 // ============================================================================ the podium

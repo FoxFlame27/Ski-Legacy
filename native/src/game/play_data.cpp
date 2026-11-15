@@ -1,6 +1,7 @@
 #include "game/play_data.h"
 #include "core/log.h"
 #include "core/noise.h"
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <cstring>
 
@@ -106,6 +107,9 @@ Course parseCourse(const nlohmann::json& c, const std::vector<uint8_t>& bin) {
   o.night = c.value("night", false);
   if (c.contains("masts") && c["masts"].is_array())
     for (auto& m : c["masts"]) if (m.is_array() && m.size() >= 10) o.masts.push_back({m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9]});
+  if (c.contains("features") && c["features"].is_array())
+    for (auto& f : c["features"]) if (f.is_object()) o.features.push_back({str(f, "type"), num(f, "s0"), num(f, "s1"), num(f, "land1", std::nan(""))});
+  o.difficulty = str(c, "difficulty");
   if (c.contains("board") && c["board"].is_object()) { o.hasBoard = true; o.boardX = num(c["board"], "x"); o.boardZ = num(c["board"], "z"); o.boardYaw = num(c["board"], "yaw"); }
   return o;
 }

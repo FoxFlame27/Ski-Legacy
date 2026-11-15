@@ -39,6 +39,8 @@ public:
   bool nightCourse() const;
   bool frozen() const;                     // the grid / countdown: the player is held
   bool finished() const;
+  /// the course flyover before the countdown runs (presentation/intro.js): the racer on show, the HUD's panels aside
+  bool introPlaying() const;
   void abort();                            // (pause RETURN TO VILLAGE, arrested...)
   void addPeople(People& people, const dvec3& cam) const;
   void draw(Renderer& r, const dvec3& cam);
@@ -53,7 +55,7 @@ public:
   void confirmResults();
   /// the broadcast presentation (session.js cine: the podium, a replay) owns the camera: poses it, true while it does
   bool camera(Camera& cam) const;
-  /// "" none, "podium" (the skippable show), "podium-hold" (behind the results), "replay"; the replay's shot
+  /// "" none, "intro" (the flyover and the start-gate crane; cineAge = its clock), "podium" (the skippable show), "podium-hold" (behind the results), "replay"; the replay's shot
   std::string cineStage() const;
   std::string replayShot() const;
   double cineAge() const;
@@ -66,6 +68,8 @@ public:
   struct RecordRow { std::string name; double best = -1; int medal = 0; };
   std::vector<RecordRow> records() const;
   std::vector<std::string> lastRows;   // the results' rows (autotest log)
+  /// the presentation's time scale this frame (update's dt is scaled by it; the cinematics run on real time)
+  double timeScale = 1;
   /// (Phase 7) what to hear, taken by the game each frame: count:3 count:2 count:1 go checkpoint miss finish:<place|record|practice> medal:<gold|silver|bronze> results
   std::vector<std::string> sounds;
   /// (autotest) the AI field's motion: the largest sideways step of a racer in one frame beyond what its lateral speed
@@ -91,6 +95,9 @@ private:
   void beginReplay();
   void finishReplay();
   void endCine();
+  void beginIntro();
+  void updateIntro(double dt);
+  void endIntro();
   void updateCine(double dt);
   void openCineInput();
   void hudCine(Ui& ui);

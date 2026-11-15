@@ -466,6 +466,44 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   for (auto& p : j["props"]) addSet(assets_.model(p["model"].get<std::string>(), optFor(p["model"].get<std::string>())), instList(p, bin), p.value("glow", 0.f), true);
   for (auto& m : j["instanced"]) addSet(modelFromBin(dev_, bin.data(), bin.size(), m, matAt(m["mat"])), instList(m, bin), 0, true);
 
+  // ---- (tunnelview.js) the roads' snow stops inside the road tunnels: no outdoor snow on the tube's road (the web game
+  // lays its dark decal over it). Each road vertex's colour g (r = aEnd, sqrt-packed) carries how much snow it keeps:
+  // g = r x sqrt(keep), 1 outside, fading to 0 from 4 to 16 m in (the shader: keep = (g / r)^2)
+  struct TubeLine { std::vector<dvec3> pts; double wi, hc; dvec2 bmin{1e30}, bmax{-1e30}; double total = 0; };
+  std::vector<TubeLine> tubes;
+  if (name == "transport" && j.contains("net") && j["net"].contains("roadTunnels"))
+    for (auto& t : j["net"]["roadTunnels"]) {
+      TubeLine T;
+      T.wi = t.value("wi", 4.6); T.hc = t.value("hc", 6.6);
+      for (auto& q : t["pts"]) {
+        const dvec3 v(q[0].get<double>(), q[2].get<double>(), q[1].get<double>());
+        if (!T.pts.empty()) T.total += std::hypot(v.x - T.pts.back().x, v.z - T.pts.back().z);
+        T.pts.push_back(v);
+        T.bmin = glm::min(T.bmin, dvec2(v.x, v.z) - dvec2(T.wi + 4)); T.bmax = glm::max(T.bmax, dvec2(v.x, v.z) + dvec2(T.wi + 4));
+      }
+      if (T.pts.size() > 1) tubes.push_back(std::move(T));
+    }
+  auto tubeDepth = [&](double x, double y, double z) {   // (Transport::roadTunnelDepth)
+    double best = 0;
+    for (const TubeLine& t : tubes) {
+      if (x < t.bmin.x || x > t.bmax.x || z < t.bmin.y || z > t.bmax.y) continue;
+      double bestD = 1e30, at = 0, fl = 0, run = 0;
+      for (size_t i = 0; i + 1 < t.pts.size(); i++) {
+        const dvec3 &a = t.pts[i], &b = t.pts[i + 1];
+        const double ex = b.x - a.x, ez = b.z - a.z, l2 = ex * ex + ez * ez, l = std::sqrt(l2);
+        if (l2 < 1e-9) continue;
+        const double u = std::min(1.0, std::max(0.0, ((x - a.x) * ex + (z - a.z) * ez) / l2));
+        const double d = std::hypot(a.x + ex * u - x, a.z + ez * u - z);
+        if (d < bestD) { bestD = d; at = run + u * l; fl = a.y + (b.y - a.y) * u; }
+        run += l;
+      }
+      if (bestD > t.wi + 0.6 || y > fl + t.hc + 0.6 || y < fl - 3) continue;
+      best = std::max(best, std::min(at, t.total - at));
+    }
+    return best;
+  };
+  int tubeVerts = 0;
+
   // ---- baked procedural meshes
   // (Phase 7) kept packed on the CPU and uploaded when the camera comes near (streamChunks)
   for (auto& m : j["meshes"]) {
@@ -484,6 +522,17 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     { const int mi = m["mat"]; c.what = name + " mesh, mat " + std::to_string(mi) + (mi >= 0 && size_t(mi) < matWhat.size() ? " " + matWhat[size_t(mi)] : std::string()); }
     std::vector<uint8_t> rawb(c.raw);
     std::memcpy(rawb.data(), bin.data() + vOff, verts * 28);
+    if (!tubes.empty() && M.roadSnow == 1)
+      for (size_t i = 0; i < verts; i++) {
+        float q[3];
+        std::memcpy(q, rawb.data() + i * 28, 12);
+        const double dep = tubeDepth(c.origin.x + q[0], c.origin.y + q[1], c.origin.z + q[2]);
+        if (dep <= 4) continue;
+        const double t = std::min(1.0, (dep - 4) / 12), keep = 1 - t * t * (3 - 2 * t);
+        uint8_t* col = rawb.data() + i * 28 + 24;
+        col[1] = uint8_t(std::lround(col[0] * std::sqrt(keep)));
+        tubeVerts++;
+      }
     std::memcpy(rawb.data() + verts * 28, bin.data() + iOff, ib);
     c.packed.resize(ZSTD_compressBound(c.raw));
     size_t n = ZSTD_compress(c.packed.data(), c.packed.size(), rawb.data(), rawb.size(), 1);
@@ -494,6 +543,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     chunks_.push_back(std::move(c));
   }
   stream_.chunks = chunks_.size();
+  if (tubeVerts) SL_INFO("%s: %d road vertices in the road tunnels (no snow on them)", name.c_str(), tubeVerts);
 
   // ---- the gondola stations (gondolastation.js, built here)
   for (auto& s : j["stations"]) {
@@ -571,7 +621,6 @@ void Resort::releaseLoadData() {
 
 void Resort::rebuild(const dvec3& cam) {
   lastBuild_ = cam;
-  std::vector<MatrixInstanceBatch::Inst> l0, l1;
   for (PropSet& ps : props_) {
     double nearD = std::max(150.0, double(ps.radius) * 12) * lodScale, farD = std::max(900.0, double(ps.radius) * 120) * lodScale;
     for (Cell& c : ps.cells) {
@@ -581,18 +630,64 @@ void Resort::rebuild(const dvec3& cam) {
       if (first) c.band.assign(c.inst.size(), 255);
       bool changed = first;
       for (size_t i = 0; i < c.inst.size(); i++) {
+        if (c.band[i] == 3) continue;   // (knocked down: knockProp)
         const double d = glm::length(dvec3(c.inst[i][3]) - cam);
         const uint8_t b = d > farD ? 2 : d < nearD ? 0 : 1;
         if (b != c.band[i]) { c.band[i] = b; changed = true; }
       }
       if (!changed) continue;
-      l0.clear(); l1.clear();
-      for (size_t i = 0; i < c.inst.size(); i++)
-        if (c.band[i] < 2) (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], c.origin));
-      c.lod[0].upload(dev_, l0);
-      c.lod[1].upload(dev_, l1);
+      uploadCell(c);
     }
   }
+}
+
+// (band 3: knocked down, not drawn until standProp)
+int64_t Resort::knockProp(double x, double z, double reach, double maxR, KnockedProp& out) {
+  int64_t best = -1;
+  double bd = reach * reach;
+  for (size_t si = 0; si < props_.size(); si++) {
+    const PropSet& ps = props_[si];
+    if (!ps.model) continue;
+    const double half = glm::length(dvec3(ps.model->bmax - ps.model->bmin)) * 0.5;
+    for (size_t ci = 0; ci < ps.cells.size(); ci++) {
+      const Cell& c = ps.cells[ci];
+      if (x < c.bmin.x - reach || x > c.bmax.x + reach || z < c.bmin.z - reach || z > c.bmax.z + reach) continue;
+      for (size_t i = 0; i < c.inst.size(); i++) {
+        const double dx = c.inst[i][3][0] - x, dz = c.inst[i][3][2] - z, d2 = dx * dx + dz * dz;
+        if (d2 >= bd || (i < c.band.size() && c.band[i] == 3)) continue;
+        if (half * std::cbrt(std::fabs(glm::determinant(glm::dmat3(c.inst[i])))) > maxR) continue;   // (a pole, a sign, a lamp: not a building)
+        bd = d2; best = int64_t((si << 40) | (ci << 20) | i);
+      }
+    }
+  }
+  if (best < 0) return -1;
+  PropSet& ps = props_[size_t(best >> 40)];
+  Cell& c = ps.cells[size_t((best >> 20) & 0xfffff)];
+  const size_t i = size_t(best & 0xfffff);
+  out.model = ps.model; out.M = c.inst[i]; out.radius = ps.radius;
+  if (c.band.size() != c.inst.size()) c.band.assign(c.inst.size(), 255);
+  c.band[i] = 3;
+  uploadCell(c);
+  return best;
+}
+
+void Resort::standProp(int64_t h) {
+  if (h < 0 || size_t(h >> 40) >= props_.size()) return;
+  PropSet& ps = props_[size_t(h >> 40)];
+  if (size_t((h >> 20) & 0xfffff) >= ps.cells.size()) return;
+  Cell& c = ps.cells[size_t((h >> 20) & 0xfffff)];
+  const size_t i = size_t(h & 0xfffff);
+  if (i >= c.band.size() || c.band[i] != 3) return;
+  c.band[i] = 0;   // (its band again at the next rebuild; near you: the full model at once)
+  uploadCell(c);
+}
+
+void Resort::uploadCell(Cell& c) {
+  std::vector<MatrixInstanceBatch::Inst> l0, l1;
+  for (size_t i = 0; i < c.inst.size(); i++)
+    if (i < c.band.size() && c.band[i] < 2) (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], c.origin));
+  c.lod[0].upload(dev_, l0);
+  c.lod[1].upload(dev_, l1);
 }
 
 void Resort::update(double dt, const dvec3& cam) {

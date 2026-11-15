@@ -55,6 +55,12 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
       return q;
     });
     o.difficulty = c.difficulty || '';
+    // (ramps.js makeRamp: type, base x / z, heading, height, lip (rad), width, length, R, upLen, deckLen, shaped, bounds)
+    const RT = { kicker: 0, roller: 1, tabletop: 2 };
+    o.ramps = (c.ramps || []).filter((r) => r?.opts && r.params && r.surface).map((r) => {
+      const P = r.params, O = r.opts, b = r.surface.bounds;
+      return [RT[O.type || 'kicker'] ?? 0, O.x, O.z, O.heading, P.height, P.lip, P.width, P.length, P.R || 0, P.upLen || 0, P.deckLen || 0, O.shaped ? 1 : 0, b.minx, b.maxx, b.minz, b.maxz].map((v) => Math.round(v * 1e6) / 1e6);
+    });
     return o;
   };
 
@@ -154,6 +160,16 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
   try { out.ward = await exportWard({ THREE, imp, busRoads, loadGLB, pack, log, r4, m34 }); } catch (err) { log('ward skipped:', err.stack?.split('\n').slice(0, 4).join(' | ')); }
   const surfSet = new Set();
   for (const arr of world.surfaceGrid.values()) for (const s of arr) if (!surfBefore.has(s)) surfSet.add(s);
+  // the World Racing courses' gorge bridges' decks (courses.js registerBridgeSurface): registered with the courses before
+  // the resort was built, so neither the resort's surfaces nor the ones above; without them the C++ fell through the
+  // bridge into the gorge. (The kickers, tabletops and rollers go as their ramps.js parameters, each course's `ramps`:
+  // the C++ shapes them analytically, World::addRamp; sampled, a kicker's lip was a 2-3 m step a cell wide)
+  let nCourseSurf = 0;
+  for (const e of freeMod.freeCourses()) {
+    const c = e.course;
+    if (c?.bridgeSurface && !surfSet.has(c.bridgeSurface)) { surfSet.add(c.bridgeSurface); nCourseSurf++; }
+  }
+  log('play: course bridge decks', nCourseSurf);
 
   // ---------------------------------------------------------------- capture
   pack.capture(pScene);

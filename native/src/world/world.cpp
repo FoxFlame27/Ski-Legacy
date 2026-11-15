@@ -602,6 +602,39 @@ double SampledSurface::at(double x, double z) const {
   return base + ((a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz) * 0.01;
 }
 
+// ramps.js profile / sideCurve / makeRamp's surface.height (less the terrain)
+double RampSurface::over(double px, double pz) const {
+  if (px < minx || px > maxx || pz < minz || pz > maxz) return std::nan("");
+  const double fx = std::sin(heading), fz = std::cos(heading), rx = fz, rz = -fx;
+  const double dx = px - x, dz = pz - z, u = dx * fx + dz * fz, v = dx * rx + dz * rz;
+  if (u < 0 || u > length) return std::nan("");
+  double h;
+  if (type == 0) h = R * (1 - std::cos(u / length * lip));
+  else if (type == 1) { const double s = std::sin(3.141592653589793 * u / length); h = height * s * s; }
+  else {
+    const double down = length - upLen - deckLen;
+    if (u < upLen) h = R * (1 - std::cos(u / upLen * lip));
+    else if (u < upLen + deckLen) h = height;
+    else { const double t = (u - upLen - deckLen) / down; h = height * (1 - t * t * (3 - 2 * t)); }
+  }
+  const double hw = width / 2, av = std::fabs(v);
+  if (av > hw) {
+    const double sw = shaped ? 0.5 + 1.0 * h : 0.6;
+    if (av > hw + sw) return std::nan("");
+    double t = std::min(1.0, std::max(0.0, (av - hw) / sw));
+    h *= (1 - t) * (1 - t) * (1 - t) * (1 + 3 * t);
+  }
+  return h;
+}
+
+void World::addRamp(RampSurface r) {
+  const int idx = int(ramps_.size());
+  for (int64_t cx = int64_t(std::floor(r.minx / 64)); cx <= int64_t(std::floor(r.maxx / 64)); cx++)
+    for (int64_t cz = int64_t(std::floor(r.minz / 64)); cz <= int64_t(std::floor(r.maxz / 64)); cz++)
+      rampGrid_[(cx << 32) ^ (cz & 0xffffffff)].push_back(idx);
+  ramps_.push_back(r);
+}
+
 void World::addSurface(SampledSurface s) {
   int idx = int(surfaces_.size());
   double x1 = s.x0 + (s.nx - 1) * s.step, z1 = s.z0 + (s.nz - 1) * s.step;
@@ -615,6 +648,16 @@ double World::groundHeight(double x, double z, double yHint) {
   double h = meshHeight(x, z);
   if (roadSurface) { double r = roadSurface(x, z, h, yHint); if (!std::isnan(r)) h = r; }
   for (auto& f : decks_) { double d = f(x, z); if (!std::isnan(d) && d > h && d <= yHint + 0.6) h = d; }
+  if (!ramps_.empty()) {
+    auto rt = rampGrid_.find((int64_t(std::floor(x / 64)) << 32) ^ (int64_t(std::floor(z / 64)) & 0xffffffff));
+    if (rt != rampGrid_.end())
+      for (int i : rt->second) {
+        const double o = ramps_[size_t(i)].over(x, z);
+        if (std::isnan(o)) continue;
+        const double d = meshHeight(x, z) + o;   // (the 2 m physics surface: the JS world.height to cm, the cuts and the course tiles exact at its vertices)
+        if (d > h && d <= yHint + 0.6) h = d;
+      }
+  }
   if (surfaces_.empty()) return h;
   int64_t cx = int64_t(std::floor(x / 64)), cz = int64_t(std::floor(z / 64));
   auto it = surfGrid_.find((cx << 32) ^ (cz & 0xffffffff));

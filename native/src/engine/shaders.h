@@ -591,6 +591,9 @@ void main() {
     float bare = smoothstep(0.6, 0.78, P);
     snow = max(snow * (1.0 - bare * 0.9), clamp(edge, 0.0, 1.0));
     float slush = (1.0 - snow) * smoothstep(0.35, 0.7, rdF(Wp * 0.06 + 11.0)) * (1.0 - bare);
+    // (in a road tunnel: no snow or slush, resort.cpp packs how much is kept into the colour's g)
+    float keep = lot || vColor.r < 0.02 ? 1.0 : clamp(vColor.g / vColor.r, 0.0, 1.0);
+    keep *= keep; snow *= keep; slush *= keep;
     base.rgb = mix(base.rgb, vec3(0.30, 0.29, 0.28) * (0.85 + 0.3 * fine), slush * 0.75);
     base.rgb = mix(base.rgb, vec3(0.80, 0.84, 0.89) * (0.88 + 0.16 * fine), snow * (0.7 + 0.3 * fine));
     rough *= 1.0 - 0.4 * slush;

@@ -23,6 +23,9 @@ public:
   void submit(Renderer& r, const dvec3& cam);
   /// (world/breakables.js) the sections of the rail lines broken through (Guardrail::offUntil past now: back) hidden
   void railsOff(const Transport& t, double now);
+  /// (breakables.js breakRail) one drawn 4 m section (railSegs[seg]) as a model of its own round `origin` (its middle):
+  /// the bent beam that flies off when it is broken through
+  std::shared_ptr<Model> sectionModel(const Transport& t, int seg, dvec3& origin) const;
   size_t chunkCount() const { return chunks_.size(); }
 
 private:

@@ -118,8 +118,10 @@ const BOX = { x0: -290, z0: -250, x1: 240, z1: 180 };
 // at `to` copies the old site's ground (so it all sits as it sat), fading out over FADE m beyond r.
 const MOVES = [];
 const MOVE_FADE = 12;
-function moveSite(name, from, r, to, rot = 0) { const m = { name, from, r, to, rot }; MOVES.push(m); return m; }
-const moveOf = (x, z) => MOVES.find((m) => Math.hypot(x - m.from[0], z - m.from[1]) < m.r);
+// clip (round 3): [dx, dz, max]: only what lies short of max m along (dx, dz) from `from` goes (a roadside site's lot and
+// buildings, not the road in front of it)
+function moveSite(name, from, r, to, rot = 0, clip = null) { const m = { name, from, r, to, rot, clip }; MOVES.push(m); return m; }
+const moveOf = (x, z) => MOVES.find((m) => Math.hypot(x - m.from[0], z - m.from[1]) < m.r && (!m.clip || (x - m.from[0]) * m.clip[0] + (z - m.from[1]) * m.clip[1] < m.clip[2]));
 const movePt = (m, x, z) => { const dx = x - m.from[0], dz = z - m.from[1], c = Math.cos(m.rot), s = Math.sin(m.rot); return [m.to[0] + dx * c + dz * s, m.to[1] - dx * s + dz * c]; };
 const unmovePt = (m, x, z) => { const dx = x - m.to[0], dz = z - m.to[1], c = Math.cos(m.rot), s = Math.sin(m.rot); return [m.from[0] + dx * c - dz * s, m.from[1] + dx * s + dz * c]; };
 // The heliport (the pad, the rental hut, the windsock, the ambulance's bay): from the Bergbahnstrasse's end, hemmed in
@@ -128,6 +130,44 @@ const unmovePt = (m, x, z) => { const dx = x - m.to[0], dz = z - m.to[1], c = Ma
 // medical centre 65 m away, a footpath from the Adlerhornweg.
 const HELI = moveSite('Heliport', [92, -128], 26, [170, 52], 0);
 HELI.dy = r3(h0(HELI.to[0], HELI.to[1]) - h0(HELI.from[0], HELI.from[1]));
+
+// ---------------------------------------------------------------- the village's own roads (round 3)
+// The Dorfstrasse: the valley road ended at the Legacy Village stop (the bus terminus); now a road runs on from there
+// through the village: along the depot road's bend, west between the Hotel Tirolerhof and the Hotel Silberhorn
+// (where the Silberhornweg was), then straight west along the foot of the Oberdorf (z 50) to a turning place at its end.
+// Along its north side the Autohaus, the police station / prison and the Werkstatt, moved in from the valley road
+// (each turned so that its yard faces the Dorfstrasse as it faced the valley road, at the same distance from it).
+// world/village.cpp addRoads puts it on the transport network (traffic runs on into it from the valley road's end at
+// the stop) and draws it with the exported road's ribbon.
+const DORF_Z = 50;
+const DORF_CTRL = [[4, 46], [-2, 45], [-8, 47], [-11.5, 51], [-20, 53.5], [-34, 54.5], [-46, 55], [-58, 52.5], [-68, DORF_Z], [-172, DORF_Z]];
+const chaikin = (pts, it) => { let p = pts; for (let k = 0; k < it; k++) { const o = [p[0]]; for (let i = 0; i + 1 < p.length; i++) { const [ax, az] = p[i], [bx, bz] = p[i + 1]; o.push([ax * 0.75 + bx * 0.25, az * 0.75 + bz * 0.25], [ax * 0.25 + bx * 0.75, az * 0.25 + bz * 0.75]); } o.push(p[p.length - 1]); p = o; } return p; };
+const resample = (pts, step) => { const o = [pts[0]]; let carry = 0; for (let i = 1; i < pts.length; i++) { const [ax, az] = pts[i - 1], [bx, bz] = pts[i], L = Math.hypot(bx - ax, bz - az); let t = step - carry; while (t <= L) { o.push([ax + (bx - ax) * t / L, az + (bz - az) * t / L]); t += step; } carry = L - (t - step); } const e = pts[pts.length - 1], l = o[o.length - 1]; if (Math.hypot(e[0] - l[0], e[1] - l[1]) > 0.5) o.push(e); else o[o.length - 1] = e; return o; };
+const DORF = resample(chaikin(DORF_CTRL, 3), 4).map(([x, z]) => [r3(x), r3(z)]);
+const VROADS = [{ name: 'Dorfstrasse', pts: DORF, kmh: 30, half: 3.4 }];
+// the sites moved onto it: from the valley road (road 0), the same distance from the Dorfstrasse's middle, turned so
+// their front (dir: toward the road) faces +z (the Dorfstrasse runs along z = DORF_Z south of them)
+{
+  const fa0 = (o) => new Float32Array(TB.buffer.slice(TB.byteOffset + o.off, TB.byteOffset + o.off + o.n * 4));
+  const r0 = T.net.roads[0], X0 = fa0(r0.X), Z0 = fa0(r0.Z);
+  const toRoad0 = (x, z) => { let d = 1e9; for (let i = 1; i < X0.length; i++) { const ex = X0[i] - X0[i - 1], ez = Z0[i] - Z0[i - 1], t = clamp(((x - X0[i - 1]) * ex + (z - Z0[i - 1]) * ez) / (ex * ex + ez * ez), 0, 1); d = Math.min(d, Math.hypot(X0[i - 1] + ex * t - x, Z0[i - 1] + ez * t - z)); } return d; };
+  const W = P.play.rooms.werkstatt.site;
+  const SITES = [
+    // name, the site (centre, dir to the road), r, clip (short of the road's ribbon), where along the Dorfstrasse
+    ['Autohaus', P.play.rental, 25, 13.3, -90],
+    ['Police / Prison', P.play.prison, 24, 12.3, -124],
+    ['Werkstatt', { x: W.x, y: W.y, z: W.z, dirx: W.fx, dirz: W.fz }, 14, 11, -152],
+  ];
+  for (const [name, s, r, clipMax, x] of SITES) {
+    const d0 = toRoad0(s.x, s.z), rot = -Math.atan2(s.dirx, s.dirz);
+    const m = moveSite(name, [r3(s.x), r3(s.z)], r, [x, r3(DORF_Z - d0)], r3(rot), [r3(s.dirx), r3(s.dirz), clipMax]);
+    // (the yards stand in the exported road's cuts, below the base ground: their floor `y` is the level carried; the
+    // ground copied under them is held down to it)
+    m.floor = s.y;
+    m.dy = r3(h0(m.to[0], m.to[1]) - s.y);
+    log(`${name}: (${s.x.toFixed(1)}, ${s.z.toFixed(1)}) -> (${m.to[0]}, ${m.to[1]}), ${d0.toFixed(1)} m from the road, turned ${(rot * 180 / PI).toFixed(0)} deg, dy ${m.dy}`);
+  }
+}
 const inBox = (x, z, m = 0) => x > BOX.x0 - m && x < BOX.x1 + m && z > BOX.z0 - m && z < BOX.z1 + m;
 const CLEAR_MODELS = ['hotel_chalet', 'lamp_post', 'snowman', 'firewood_pile'];
 // the old village's things that go (the eight hotels, the lamp ring, the snowmen and firewood by the hotels); the shop's
@@ -185,7 +225,9 @@ for (const [J, bin, pk] of [[R, RB, 'resort'], [T, TB, 'transport'], [P, PB, 'pl
 // the roads (their plough width and shoulders) and the lifts' lines and the corridors (pistes, races, lift lines)
 const fa = (o) => new Float32Array(TB.buffer.slice(TB.byteOffset + o.off, TB.byteOffset + o.off + o.n * 4));
 const roads = T.net.roads.map((r) => { const X = fa(r.X), Z = fa(r.Z); return Array.from(X, (x, i) => [x, Z[i]]); });
+const exportedRoads = roads.length;
 for (const pts of roads) for (const [x, z] of pts) if (inBox(x, z, 30)) keptPts.push([x, z, 14]);
+for (const R of VROADS) roads.push(R.pts);   // (the checks below: buildings / trees clear of our roads too)
 for (const L of T.net.lots) if (inBox(L.x, L.z, 60)) keptPts.push([L.x, L.z, Math.hypot(L.hw, L.hd) + 10]);
 for (const c of W.corridors) {
   const [ax, az, bx, bz, w, kind] = c;
@@ -243,7 +285,12 @@ street('Marktgasse', [[14, 1], [24, -2], [36, -8]], 4, { lamps: 0 });
 // the Adlerhorn way: square -> the Adlerhorn Gondola base, past the hotels
 street('Adlerhornweg', [[12, 12], [30, 22], [48, 21], [70, 19], [85, 14], [88, 9]], 4.5, { lamps: 22 });
 // the Silberhorn way: the bus terminus -> the Silberhorn Gondola base, past the hotels in the south-west
-street('Silberhornweg', [[-6, 36], [-20, 50], [-45, 54], [-52, 72], [-56, 82]], 4, { lamps: 22 });
+// (round 3: its first stretch is the Dorfstrasse now; the people walk along the road's edge, the paving starts where
+// it leaves the road for the gondola)
+street('Silberhornweg', [[-6, 36], [-11.5, 51]], 4, { lamps: 0, pave: false });
+street('Silberhornweg', [[-46, 59], [-52, 72], [-56, 82]], 4, { lamps: 22 });
+// the Dorfstrasse for the walkers (its edge: the people's way along it; not paved, the road's ribbon is drawn)
+street('Dorfstrasse', DORF_CTRL.slice(3).map(([x, z]) => [x, z + 4.4]), 2, { lamps: 0, pave: false });
 // the Bergbahnstrasse: square's north-east corner -> the hotels and chalets by the helipad
 street('Bergbahnstrasse', [[14, -40], [26, -58], [36, -78], [46, -100], [60, -116]], 4, { lamps: 24 });
 // the Oberdorfstrasse: from the square's west side up through the terraces to the Legacy Express station (9.43 m)
@@ -264,6 +311,18 @@ street('Bahnhofweg', [[-150, -108], [-128, -122], [-104, -136], [-86, -140]], 3.
 // the way to the heliport (moved, see MOVES): from the Adlerhornweg's end past the Gasthof to the rental hut's door
 // and the pad's edge
 street('Heliweg', [[85, 14], [118, 20], [140, 40], [153.6, 51.5], [159.5, 53]], 3, { lamps: 22 });
+// (round 3) more footpaths: from the Dorfstrasse's sites up to the Kapellenweg, and the Bahnhofstiege: from the
+// square's north-west corner straight up the terraces (ramps through the terrace walls, at each terrace's level) to
+// the Legacy Express station's exit
+street('Postgasse', [[-70, 45.5], [-64, 20], [-58, -6]], 2.6, { lamps: 26 });
+street('Werkstattgasse', [[-139, 45.5], [-142, 30], [-146, 14]], 2.6, { lamps: 26 });
+{
+  const lv = (x, z) => r3(bandLevel(U(x, z)));
+  const pts = [[-14, -48], [-22, -66], [-34, -92], [-52, -124], [-86, -140], [-130, -146], [-172, -146], [-186, -144]].map(([x, z]) => [x, z, lv(x, z)]);
+  pts[0][2] = 0;
+  pts[pts.length - 1][2] = BENCH;
+  street('Bahnhofstiege', pts, 3, { relief: true, lamps: 26 });
+}
 // the chapel way down from the knoll: stairs from the square up to the church (relief: the stair's ramp)
 const STAIR_W = 5;
 street('Kirchstiege', [[36, -8, 0], [46, -8, KNOLL.level]], STAIR_W, { relief: true, pave: false, lamps: 0 });
@@ -275,7 +334,7 @@ const facing = (dx, dz) => Math.atan2(dx, dz);
 building('bakery', -35, -35.5, E, 13, { name: 'Bäckerei Moser', kind: 'shop' });
 building('cafe', -38, 3, E, 14, { name: 'Café Alpenrose', kind: 'shop' });
 building('shop_townhouse', -34.5, 15.5, E, 7.5, { name: 'Sport Hofer', kind: 'shop' });
-building('hotel_tyrol', -38, 35, E, 24, { name: 'Hotel Tirolerhof', kind: 'hotel', weight: 1.4 });
+building('hotel_tyrol', -38, 33, E, 24, { name: 'Hotel Tirolerhof', kind: 'hotel', weight: 1.4 });
 // the street from the bus terminus into the square, lined with shops on both sides
 building('shop_pastel', -15, 29, E, 17, { name: 'Boutique Kristall', kind: 'shop' });
 building('shop_timber', 20, 30, Wt, 15, { name: 'Bergsport Rainer', kind: 'shop' });
@@ -293,7 +352,7 @@ building('bus_terminal', 19, 77, N, 22, { name: 'Busbahnhof', kind: 'station' })
 building('town_hall', 22, 104, Wt, 18, { name: 'Gemeindeamt · Post', kind: 'civic' });
 building('apartment_lodge', 40, 102, facing(-0.5, -0.86), 14, { name: 'Residenz Edelweiss', kind: 'hotel', weight: 0.8 });
 // south-west, toward the Silberhorn Gondola
-building('hotel_modern', -33, 70, E, 24, { name: 'Hotel Silberhorn', kind: 'hotel', weight: 1.2 });
+building('hotel_modern', -33, 76, E, 24, { name: 'Hotel Silberhorn', kind: 'hotel', weight: 1.2 });
 building('apartment_modern', -32, 112, E, 20, { name: 'Appartements Lärchenhof', kind: 'house' });
 building('garages', -28, 140, E, 18, { name: 'Garagen', kind: 'house' });
 // north-east by the Bergbahnstrasse: an old Valais hotel and chalets toward the helipad
@@ -308,8 +367,9 @@ building('shop_pastel', -78, 0, facing(0.2, -1), 19, { name: 'Boutiquen Oberdorf
 building('chalet_modern', -62, -82, SE, 13, { name: 'Chalet Nova' });
 building('chalet_classic', -88, -66, SE, 13, { name: 'Chalet Heidi' });
 building('hotel_valais', -110, -18, facing(1, -0.2), 13, { name: 'Pension Arvenstube', kind: 'hotel', weight: 0.6 });
-building('chalet_small', -122, 24, facing(0.3, -1), 8, { name: 'Stadel' });
-building('chalet_stone', -146, 32, facing(0.3, -1), 11, { name: 'Haus Bergfrieden' });
+// (round 3: across the Dorfstrasse from the Autohaus and the police station, facing the road)
+building('chalet_small', -108, 63, N, 8, { name: 'Stadel' });
+building('chalet_stone', -141, 63, N, 11, { name: 'Haus Bergfrieden' });
 building('apartment_modern', -136, -40, SE, 20, { name: 'Residenz Panorama', kind: 'hotel', weight: 0.6 });
 building('chalet_small', -104, -96, SE, 8, { name: 'Heustadel' });
 building('chalet_modern', -124, -86, facing(0.8, 0.6), 13, { name: 'Chalet Lumière' });
@@ -420,12 +480,36 @@ for (const m of MOVES) {
     const x = G.x0 + i * STEP, z = G.z0 + j * STEP, d = Math.hypot(x - m.to[0], z - m.to[1]);
     if (d > R) continue;
     const k = j * G.nx + i, [sx, sz] = unmovePt(m, x, z);
-    const want = h0(sx, sz) + m.dy, w = 1 - sstep(m.r, R, d);
+    const g0 = h0(sx, sz), want = (m.floor != null ? Math.min(g0, m.floor - 0.06) : g0) + m.dy, w = 1 - sstep(m.r, R, d);
     relief[k] = lerp(relief[k], want - base[k], w);
   }
 }
 // (the kept things win over the streets too)
 for (let k = 0; k < NC; k++) relief[k] *= sstep(0, 8, dist[k]);
+// our roads: level across (the ground's level along the middle, smoothed), blended into the ground over 4 m beyond
+// the shoulders (after the moved sites: the road in front of them is the road)
+for (const R of VROADS) {
+  const pts = R.pts, n = pts.length, gy = (x, z) => { const fi = (x - G.x0) / STEP, fj = (z - G.z0) / STEP, i = clamp(Math.floor(fi), 0, G.nx - 2), j = clamp(Math.floor(fj), 0, G.nz - 2), tx = fi - i, tz = fj - j, v = (a, b) => base[b * G.nx + a] + relief[b * G.nx + a]; return lerp(lerp(v(i, j), v(i + 1, j), tx), lerp(v(i, j + 1), v(i + 1, j + 1), tx), tz); };
+  const y0 = pts.map(([x, z]) => gy(x, z)), ys = y0.map((_, i) => { let a = 0, c = 0; for (let k = -4; k <= 4; k++) { a += y0[clamp(i + k, 0, n - 1)]; c++; } return a / c; });
+  const hw = R.half + 1.6, sh = 4;
+  const xs = pts.map((p) => p[0]), zs = pts.map((p) => p[1]);
+  const i0 = Math.floor((Math.min(...xs) - hw - sh - G.x0) / STEP), i1 = Math.ceil((Math.max(...xs) + hw + sh - G.x0) / STEP);
+  const j0 = Math.floor((Math.min(...zs) - hw - sh - G.z0) / STEP), j1 = Math.ceil((Math.max(...zs) + hw + sh - G.z0) / STEP);
+  for (let j = Math.max(0, j0); j <= Math.min(G.nz - 1, j1); j++) for (let i = Math.max(0, i0); i <= Math.min(G.nx - 1, i1); i++) {
+    const x = G.x0 + i * STEP, z = G.z0 + j * STEP, k = j * G.nx + i;
+    let best = 1e9, y = 0;
+    for (let q = 1; q < n; q++) {
+      const [ax, az] = pts[q - 1], [bx, bz] = pts[q], ex = bx - ax, ez = bz - az;
+      const t = clamp(((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez), 0, 1);
+      const d = Math.hypot(ax + ex * t - x, az + ez * t - z);
+      if (d < best) { best = d; y = lerp(ys[q - 1], ys[q], t); }
+    }
+    if (best > hw + sh) continue;
+    // (12 cm under the road's level within its ribbon: world/village.cpp draws it over the highest of the drawn ground)
+    const w = (1 - sstep(hw, hw + sh, best)) * sstep(0, 8, dist[k]);
+    relief[k] = lerp(relief[k], y - 0.12 * (1 - sstep(R.half, hw, best)) - base[k], w);
+  }
+}
 const groundAt = (x, z) => {
   const fi = (x - G.x0) / STEP, fj = (z - G.z0) / STEP;
   const i = clamp(Math.floor(fi), 0, G.nx - 2), j = clamp(Math.floor(fj), 0, G.nz - 2), tx = fi - i, tz = fj - j;
@@ -506,6 +590,35 @@ for (const s of streets) {
     acc = (acc - L) % s.lamps; if (acc < 0) acc += s.lamps;
   }
 }
+// our roads: lamps on both sides by turns every 26 m, 1.3 m beyond the ribbon (not in front of a moved site's yard,
+// not where an exported road lies: its own lamps); the plough's snow banks along the edges (the kerbs)
+const nearOldRoad = (x, z, d) => { for (let r = 0; r < exportedRoads; r++) for (const [a, b] of roads[r]) if (Math.hypot(a - x, b - z) < d) return true; return false; };
+const inYard = (x, z) => MOVES.some((m) => m.clip && Math.hypot(x - m.to[0], z - m.to[1]) < m.r - 4);
+let nRoadLamps = 0, nRoadBanks = 0;
+for (const R of VROADS) {
+  const pts = R.pts;
+  let acc = 13, side = 1, bankAcc = 5, bankN = 0;
+  for (let q = 1; q < pts.length; q++) {
+    const [ax, az] = pts[q - 1], [bx, bz] = pts[q], L = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / L, dz = (bz - az) / L;
+    for (let t = acc; t < L; t += 26) {
+      const off = R.half + 2.4, x = ax + dx * t - dz * off * side, z = az + dz * t + dx * off * side;
+      side = -side;
+      if (insideBuilding(x, z, 0.8) || nearOldRoad(x, z, R.half + 4) || inYard(x, z)) continue;
+      lampAt(x, z, facing(dz * side, -dx * side)); nRoadLamps++;
+    }
+    acc = (acc - L) % 26; if (acc < 0) acc += 26;
+    for (let t = bankAcc; t < L; t += 9) {
+      for (const sd of [1, -1]) {
+        const off = R.half + 3.2, x = ax + dx * t - dz * off * sd, z = az + dz * t + dx * off * sd;
+        if (insideBuilding(x, z, 1.2) || nearOldRoad(x, z, R.half + 5) || inYard(x, z) || (++bankN % 3 === 0)) continue;
+        prop('snow/drift_long', x, z, facing(dx, dz) + PI / 2, { s: [3.2 / 1.898, 0.45 / 0.162, 1.0 / 0.5], sink: 0.12, ground: 'center', col: null, shadow: false });
+        nRoadBanks++;
+      }
+    }
+    bankAcc = (bankAcc - L) % 9; if (bankAcc < 0) bankAcc += 9;
+  }
+}
+log(`our roads: ${nRoadLamps} lamps, ${nRoadBanks} snow banks`);
 // the square's corners and the bus terminus get their lamps too
 for (const [x, z] of [[-18, 24], [18, 26], [-20, -34], [24, -34], [10, 40], [-4, 42]]) lampAt(x, z, 0);
 log(`${nLamps} lamp posts`);
@@ -517,11 +630,31 @@ prop('village/bus_shelter', 30, 50, facing(0, 1), { w: 5, col: { k: 0.45 } });
 const TREES = [[-48, 22], [-50, -6], [-48, 56], [-12, 60], [36, 64], [86, 46], [90, 28], [96, 62], [-20, 96], [6, 92], [36, 88], [60, 120],
   [-60, -60], [-96, -46], [-74, -100], [-112, -60], [-138, -64], [-120, -110], [-150, -84], [-96, -126], [-48, -106], [-160, 6], [-136, 6],
   [56, -86], [80, -82], [24, -86], [-48, 100], [-46, 128], [-12, 120], [52, -60]];
-for (const [x, z] of TREES) {
-  if (insideBuilding(x, z, 3)) { log(`tree at ${x}, ${z} inside a building: skipped`); continue; }
+// (round 3) no tree on a road, a car park, a yard or a footpath: each checked against all of them and moved off to the
+// nearest clear spot within 14 m (else left out)
+const segDist = (x, z, pts) => { let d = 1e9; for (let q = 1; q < pts.length; q++) { const [ax, az] = pts[q - 1], [bx, bz] = pts[q], ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, t = clamp(((x - ax) * ex + (z - az) * ez) / l2, 0, 1); d = Math.min(d, Math.hypot(ax + ex * t - x, az + ez * t - z)); } return d; };
+const lotsNow = T.net.lots.map((L) => { const m = moveOf(L.x, L.z); if (!m) return L; const [x, z] = movePt(m, L.x, L.z), c = Math.cos(m.rot), sn = Math.sin(m.rot); return { ...L, x, z, ux: L.ux * c + L.uz * sn, uz: -L.ux * sn + L.uz * c, vx: L.vx * c + L.vz * sn, vz: -L.vx * sn + L.vz * c }; });
+const treeClear = (x, z, trunk = 1.2) => {
+  if (insideBuilding(x, z, 3)) return false;
+  for (const pts of roads) if (pts.length && Math.abs(pts[0][0] - x) + Math.abs(pts[0][1] - z) < 6000 && segDist(x, z, pts) < 3.4 + 2.5 + trunk) return false;
+  for (const L of lotsNow) { const dx = x - L.x, dz = z - L.z; if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + trunk + 1 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + trunk + 1) return false; }
+  for (const m of MOVES) if (Math.hypot(x - m.to[0], z - m.to[1]) < m.r) return false;
+  for (const st of streets) if (st.walk && segDist(x, z, st.pts) < st.w / 2 + trunk + 0.6) return false;
+  return true;
+};
+let treesMoved = 0, treesOut = 0;
+for (let [x, z] of TREES) {
+  if (!treeClear(x, z)) {
+    let found = null;
+    for (let rr = 2; rr <= 14 && !found; rr += 2) for (let a = 0; a < 16 && !found; a++) { const tx = x + Math.cos(a * PI / 8) * rr, tz = z + Math.sin(a * PI / 8) * rr; if (treeClear(tx, tz)) found = [tx, tz]; }
+    if (!found) { log(`tree at ${x}, ${z}: on a road / path / yard, no clear spot near: left out`); treesOut++; continue; }
+    log(`tree at ${x}, ${z}: on a road / path / yard: moved to ${found[0].toFixed(1)}, ${found[1].toFixed(1)}`);
+    [x, z] = found; treesMoved++;
+  }
   const k = (Math.abs(Math.sin(x * 12.9898 + z * 78.233)) * 43758.5453) % 1;
   prop(k < 0.5 ? 'pine_tree' : 'pine_tree2', x, z, k * 6.28, { h: 9 + k * 6, sink: 0.3, col: { r: 0.45 } });
 }
+log(`trees: ${TREES.length}, ${treesMoved} moved off a road / path / yard, ${treesOut} left out`);
 for (const [x, z, yaw] of [[-18.5, 12, E], [-9.5, 16, Wt], [-26, -2, E], [-80, -24, SE], [-140, -100, SE], [50, 20, N], [-30, 60, E]])
   prop('wooden_bench', x, z, yaw, { w: 1.9, sink: 0.02, col: { k: 0.4 } });
 // snow banks: the plough's heaps at the streets' corners and along the Adlerhornweg / Silberhornweg
@@ -615,7 +748,8 @@ const out = {
     square: [0, -4, 15],
   },
   walk: { nodes, edges },
-  moves: MOVES.map((m) => ({ name: m.name, from: m.from, r: m.r, to: m.to, rot: m.rot, dy: m.dy })),
+  moves: MOVES.map((m) => ({ name: m.name, from: m.from, r: m.r, to: m.to, rot: m.rot, dy: m.dy, ...(m.clip ? { clip: m.clip } : {}) })),
+  roads: VROADS.map((R) => ({ name: R.name, pts: R.pts, kmh: R.kmh, half: R.half })),
   buildings: buildings.map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: r3(b.x), z: r3(b.z), yaw: r3(b.yaw), w: r3(b.w), d: r3(b.d), h: r3(b.h) })),
 };
 if (process.argv.includes('--plan')) fs.writeFileSync(process.argv[process.argv.indexOf('--plan') + 1], JSON.stringify(out));

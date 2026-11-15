@@ -687,6 +687,7 @@ int runGame(const GameOptions& opt) {
   pc.fade = [&]() { if ((!opt.autotest || off("fadetest")) && !mptest) trans.fade(); };   // (fadetest: the debug runs with the real fades)
   pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
   pc.covered = [&]() { return trans.holdsFrame() || trans.covered(); };
+  pc.trails = &trails;
   // presentation/index.js: slow motion on big moments (a big air, a photo finish, a police ram). The autotest keeps real
   // time (its phases count frames) unless SKI_LEGACY_DEBUG=slowmo
   Presentation pres;
@@ -2245,7 +2246,15 @@ int runGame(const GameOptions& opt) {
             introAge = -1;
             expect(std::fabs(introSeen - 8.4) < 0.11 && races.frozen() && races.raceTime() <= 0, "the intro runs 8.4 s (4.9 s flight + 3.5 s crane), then the countdown");
           }
-          if (stage == 0 && cs == "podium") { stage = 1; st = 0; expect(!races.resultsUp() && introSeen > 0, "the podium comes before the results"); }
+          static int farMax = 0, fxMax = 0;
+          farMax = std::max(farMax, races.botsFar); fxMax = std::max(fxMax, races.botsFx);
+          static bool farShot = false;
+          if (!farShot && races.botsFar >= 2 && races.raceTime() > 4 && pendingPng.empty()) { farShot = true; shot("far"); }
+          if (stage == 0 && cs == "podium") {
+            stage = 1; st = 0; expect(!races.resultsUp() && introSeen > 0, "the podium comes before the results");
+            SL_INFO("[racetest] the field: up to %d far stand-ins (beyond 150 m), up to %d racers leaving tracks and spray", farMax, fxMax);
+            expect(fxMax >= 1 && fxMax <= 6, "the nearest racers (at most 6) leave ski tracks and spray");
+          }
           else if (stage == 1) {
             if (at2(0.5)) shot("podium_0p5"); if (at2(2.5)) shot("podium_2p5"); if (at2(5.5)) shot("podium_5p5");
             if (races.resultsUp()) { expect(std::fabs(st - 6.2) < 0.15 && cs == "podium-hold", "the results come up over the podium after 6.2 s"); stage = 2; st = 0; }

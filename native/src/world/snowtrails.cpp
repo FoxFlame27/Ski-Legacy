@@ -73,6 +73,54 @@ void SnowTrails::emitSpray(const dvec3& at, const dvec3& vel, int n, float size,
   }
 }
 
+// a skier's marks for one frame: the two grooves, the spray off the edges / a skid's fan
+void SnowTrails::skiMarks(Mover& m, const SkiIn& P) {
+  dvec2 f(std::sin(P.heading), std::cos(P.heading)), rt(f.y, -f.x), c(P.pos.x, P.pos.z);
+  dvec3 v = P.vel;
+  double sp = P.speed;
+  // the skis point along the heading; skidding (sideslip) turns them across the travel: a wide scrape
+  double slide = std::clamp(std::fabs(P.sideslip) * 1.6 + P.plow * 0.8, 0.0, 1.0);
+  float edge = float(std::clamp(std::fabs(P.edge), 0.0, 1.0));
+  float depth = std::clamp(0.45f + edge * 0.55f - float(slide) * 0.35f, 0.15f, 1.f) * float(std::min(1.0, 0.4 + sp * 0.15));
+  float widen = 1.f + float(slide) * 3.5f;
+  double stance = 0.1 + P.plow * 0.12;
+  // (a snowplough: the skis splay into a V, their tails apart)
+  groove(m.t[0], c + rt * stance, 0.048f, depth, widen, 0, 0.18f);
+  groove(m.t[1], c - rt * stance, 0.048f, depth, widen, 0, 0.18f);
+  m.t[2].on = m.t[3].on = false;
+  // spray: off the downhill edges in a hard carve, a fan in a hockey stop / skid
+  float carveK = edge * float(std::clamp((sp - 6) / 14, 0.0, 1.0));
+  float skidK = float(slide * std::clamp((sp - 3) / 10, 0.0, 1.0));
+  // (dev / screenshots: SKI_LEGACY_DEBUG=spraytest throws the full plumes all the time)
+  static const bool sprayTest = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return e && std::strstr(e, "spraytest"); }();
+  if (sprayTest) { carveK = 1; skidK = 0.8f; }
+  double side = P.lean >= 0 ? 1 : -1;
+  dvec3 out = dvec3(rt.x, 0, rt.y) * side;
+  if (carveK > 0.05) emitSpray(P.pos + out * 0.25 - dvec3(f.x, 0, f.y) * 0.5, v * 0.35 + out * (2.0 + carveK * 3.0), int(carveK * 5 + 0.5), 0.12f, 1.2f, 1.4f + carveK * 1.5f);
+  if (skidK > 0.05) {
+    dvec3 dir = glm::length(v) > 0.1 ? glm::normalize(v) : dvec3(f.x, 0, f.y);
+    emitSpray(P.pos + dir * 0.5, dir * (sp * 0.55) + out * 1.5, int(skidK * 10 + 0.5), 0.16f, 2.2f, 1.6f + skidK * 1.2f);
+    if (rnd() < skidK * 0.4f) {   // the thrown snow piles up downhill
+      TrailStamp s;
+      s.pos = dvec2(P.pos.x + dir.x * (1.2 + rnd()), P.pos.z + dir.z * (1.2 + rnd()));
+      s.halfAlong = s.halfAcross = 0.25f + 0.35f * rnd();
+      s.kind = 4; s.strength = 0.6f * skidK; s.seed = rnd() * 100;
+      pending_.push_back(s);
+    }
+  }
+}
+
+void SnowTrails::skier(int id, const dvec3& pos, const dvec3& vel, double heading, double edge, double sideslip, double lean, double speed, bool grounded) {
+  Mover& m = movers_[id | (2 << 24)];
+  m.seen = time_;
+  if (m.init && glm::length(pos - m.pos) > 6) { for (auto& t : m.t) t.on = false; }   // (a respawn)
+  m.prev = m.init ? m.pos : pos;
+  m.pos = pos; m.init = true;
+  // (skierFX: active = grounded && speed > 0.6)
+  if (!grounded || speed <= 0.6) { m.t[0].on = m.t[1].on = false; return; }
+  skiMarks(m, {pos, vel, heading, edge, 0, sideslip, lean, speed});
+}
+
 void SnowTrails::vehicle(int id, const dvec3& pos, double yaw, int kind) {
   Mover& m = movers_[id | (1 << 24)];
   m.seen = time_;
@@ -139,36 +187,7 @@ void SnowTrails::update(double dt, Renderer& r, const dvec3& focus, const World*
     bool onSnow = !P.air;
     const int SKI = 1, WALK = 0, FALL = 2;
     if (P.mode == SKI && P.skis && onSnow) {
-      // the skis point along the heading; skidding (sideslip) turns them across the travel: a wide scrape
-      double slide = std::clamp(std::fabs(P.sideslip) * 1.6 + P.plow * 0.8, 0.0, 1.0);
-      float edge = float(std::clamp(std::fabs(P.edge), 0.0, 1.0));
-      float depth = std::clamp(0.45f + edge * 0.55f - float(slide) * 0.35f, 0.15f, 1.f) * float(std::min(1.0, 0.4 + sp * 0.15));
-      float widen = 1.f + float(slide) * 3.5f;
-      double stance = 0.1 + P.plow * 0.12;
-      // (a snowplough: the skis splay into a V, their tails apart)
-      groove(m.t[0], c + rt * stance, 0.048f, depth, widen, 0, 0.18f);
-      groove(m.t[1], c - rt * stance, 0.048f, depth, widen, 0, 0.18f);
-      m.t[2].on = m.t[3].on = false;
-      // spray: off the downhill edges in a hard carve, a fan in a hockey stop / skid
-      float carveK = edge * float(std::clamp((sp - 6) / 14, 0.0, 1.0));
-      float skidK = float(slide * std::clamp((sp - 3) / 10, 0.0, 1.0));
-      // (dev / screenshots: SKI_LEGACY_DEBUG=spraytest throws the full plumes all the time)
-      static const bool sprayTest = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return e && std::strstr(e, "spraytest"); }();
-      if (sprayTest) { carveK = 1; skidK = 0.8f; }
-      double side = P.lean >= 0 ? 1 : -1;
-      dvec3 out = dvec3(rt.x, 0, rt.y) * side;
-      if (carveK > 0.05) emitSpray(P.pos + out * 0.25 - dvec3(f.x, 0, f.y) * 0.5, v * 0.35 + out * (2.0 + carveK * 3.0), int(carveK * 5 + 0.5), 0.12f, 1.2f, 1.4f + carveK * 1.5f);
-      if (skidK > 0.05) {
-        dvec3 dir = glm::length(v) > 0.1 ? glm::normalize(v) : dvec3(f.x, 0, f.y);
-        emitSpray(P.pos + dir * 0.5, dir * (sp * 0.55) + out * 1.5, int(skidK * 10 + 0.5), 0.16f, 2.2f, 1.6f + skidK * 1.2f);
-        if (rnd() < skidK * 0.4f) {   // the thrown snow piles up downhill
-          TrailStamp s;
-          s.pos = dvec2(P.pos.x + dir.x * (1.2 + rnd()), P.pos.z + dir.z * (1.2 + rnd()));
-          s.halfAlong = s.halfAcross = 0.25f + 0.35f * rnd();
-          s.kind = 4; s.strength = 0.6f * skidK; s.seed = rnd() * 100;
-          pending_.push_back(s);
-        }
-      }
+      skiMarks(m, {P.pos, P.vel, P.heading, P.edge, P.plow, P.sideslip, P.lean, P.speed});
       if (wasAir_) {   // landing: a crater of compressed snow, powder thrown up
         TrailStamp s;
         s.pos = c; s.dir = vec2(f); s.halfAlong = 0.55f; s.halfAcross = 0.5f; s.kind = 0; s.extra = 0.22f; s.strength = 0.8f; s.seed = rnd() * 100;

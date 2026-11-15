@@ -22,6 +22,7 @@ struct PlayData;
 struct PlayCtx {
   platform::Platform* plat = nullptr;
   World* world = nullptr;
+  class SnowTrails* trails = nullptr;   // the snow's marks and spray (a race's AI racers leave theirs: snowfx.js skierFX)
   Scenery* scenery = nullptr;
   Transport* transport = nullptr;
   Player* player = nullptr;

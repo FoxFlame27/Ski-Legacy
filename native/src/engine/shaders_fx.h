@@ -250,7 +250,10 @@ void main() {
     // flake diameter (big wet flakes; heavy snow falls in bigger, wetter ones; a rain streak is longer), drawn as the
     // web game's points: gl_PointSize = clamp(size * projectionMatrix[1][1] * 1500 / d, 2, 96) px
     size = (0.026 + seed * 0.034) * (0.8 + 0.45 * uSnowP.x) * (1.0 + 0.7 * uSnowP.y);
-    px = clamp(size / uCamFwd.w * 1500.0 / max(d, 1e-3), 2.0, 96.0);
+    // (the web game's 1500 / d made the near flakes up to 96 px: the user found them huge. Here a flake keeps its real
+    // projected size, a little enlarged so it reads, capped by the screen's height)
+    float kRes = uRes.y / 1080.0;
+    px = clamp(size * pxPerM * 1.5, 1.5 * kRes, 26.0 * kRes);
     size = px / pxPerM;
     // strictly rank < snow: nothing at all falls when it does not snow
     alpha = step(rank + 1e-4, uSnowP.x) * smoothstep(0.12, 0.5, d) * (1.0 - smoothstep(18.0, 23.0, d));

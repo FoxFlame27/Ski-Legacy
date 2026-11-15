@@ -607,18 +607,49 @@ void Resort::streamChunks(const dvec3& cam, bool all) {
     } else if (!c.model && d < inR) want.push_back({d, i});
   }
   std::sort(want.begin(), want.end());
-  size_t budget = all ? SIZE_MAX : size_t(6) << 20, spent = 0;
-  std::vector<uint8_t> raw;
-  for (auto& [d, i] : want) {
+  auto make = [&](size_t i, const std::vector<uint8_t>& raw) {
     Chunk& c = chunks_[i];
-    if (spent > budget) break;
-    raw.resize(c.raw);
-    if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), c.packed.data(), c.packed.size()))) continue;
     nlohmann::json m = {{"verts", c.verts}, {"tris", c.tris}, {"vOff", 0}, {"iOff", c.verts * 28}, {"i16", c.i16}};
     c.model = modelFromBin(dev_, raw.data(), raw.size(), m, c.mat);
-    if (!c.model) continue;
-    spent += c.raw;
+    if (!c.model) return false;
     stream_.loaded++; stream_.gpuBytes += c.verts * 28 + c.tris * 12; stream_.uploads++;
+    return true;
+  };
+  if (all) {   // (the load: everything in range now, here)
+    std::vector<uint8_t> raw;
+    for (auto& [d, i] : want) {
+      Chunk& c = chunks_[i];
+      auto u = unpacking_.find(i);
+      if (u != unpacking_.end()) { raw = u->second.get(); unpacking_.erase(u); }
+      else { raw.resize(c.raw); if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), c.packed.data(), c.packed.size()))) continue; }
+      make(i, raw);
+    }
+    return;
+  }
+  // in play: the zstd frames are unpacked on worker threads (a few ahead, nearest first); what is ready is uploaded,
+  // up to ~6 MB a frame (the decompression on this thread took up to tens of ms in one frame)
+  for (auto& [d, i] : want) {
+    if (unpacking_.size() >= 8) break;
+    if (unpacking_.count(i)) continue;
+    const Chunk& c = chunks_[i];
+    const uint8_t* src = c.packed.data();
+    const size_t n = c.packed.size(), rawN = c.raw;
+    unpacking_[i] = std::async(std::launch::async, [src, n, rawN]() {
+      std::vector<uint8_t> raw(rawN);
+      if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), src, n))) raw.clear();
+      return raw;
+    });
+  }
+  size_t spent = 0;
+  for (auto it = unpacking_.begin(); it != unpacking_.end();) {
+    if (spent > (size_t(6) << 20)) break;
+    if (it->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { ++it; continue; }
+    const size_t i = it->first;
+    std::vector<uint8_t> raw = it->second.get();
+    it = unpacking_.erase(it);
+    Chunk& c = chunks_[i];
+    if (raw.empty() || c.model || glm::length(glm::clamp(cam, c.bmin, c.bmax) - cam) >= inR) continue;   // (out of range again meanwhile)
+    if (make(i, raw)) spent += c.raw;
   }
 }
 

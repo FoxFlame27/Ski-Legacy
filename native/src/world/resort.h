@@ -16,6 +16,8 @@
 #include "engine/renderer.h"
 #include "world/lifts.h"
 #include "world/scenery.h"
+#include <future>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -97,6 +99,7 @@ private:
   FontSet fonts_;
   std::vector<PropSet> props_;
   std::vector<Chunk> chunks_;
+  std::map<size_t, std::future<std::vector<uint8_t>>> unpacking_;   // (chunks being decompressed on a worker: streamChunks; after chunks_: gone first, the workers read their packed bytes)
   struct Placed { std::shared_ptr<Model> model; dvec3 pos; mat4 local; float radius; };
   std::vector<Placed> stations_;
   Lifts lifts_;

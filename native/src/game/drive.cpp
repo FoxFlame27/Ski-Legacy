@@ -135,6 +135,7 @@ int Drive::addOwned(const std::string& model, const std::string& plate, double d
   freeBay(x, z, yaw);
   e.x = x; e.z = z; e.yaw = yaw; e.y = world_.height(x, z) + 0.03;
   parked.push_back(e);
+  models_.full(model);   // (its cockpit model loaded now, at the load or the purchase, not in the frame you get in: ~175 ms)
   return int(parked.size()) - 1;
 }
 void Drive::dress(int idx, const std::string& paint, const std::string& rims) {

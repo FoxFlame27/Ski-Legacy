@@ -4,8 +4,10 @@
 #include "engine/mesh_kit.h"
 #include "game/carconfigui.h"
 #include "world/resort.h"
+#include <meshoptimizer.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <unordered_map>
 
 namespace sl {
 
@@ -29,6 +31,94 @@ std::shared_ptr<Model> withHidden(const std::shared_ptr<Model>& base, const std:
 
 static void splitWheels(gfx::Device& dev, VehicleModel& vm, const CarSpec* steerSpec);
 
+// (cars.js dropPlates) the model's own number plates left out: the triangles whose middles (in the car's frame, fit *
+// the node's transform) are in `cen` (tools/export_net.mjs plateDrop) go from each primitive's LOD 0, and its far
+// LODs are simplified again from what is left (the same ratio). Needs the CPU copy (keepCpu); m is changed in place
+// (a copy of the cached model: withHidden), its primitives' index buffers replaced.
+size_t dropTriangles(gfx::Device& dev, Model& m, const mat4& fit, const std::vector<float>& cen) {
+  if (cen.size() < 3 || std::getenv("SKI_LEGACY_KEEP_PLATES")) return 0;   // (debug: the models' own plates kept, the before shots)
+  auto cell = [](const vec3& p, int dx, int dy, int dz) {
+    const int64_t x = int64_t(std::floor(p.x * 500.f)) + dx, y = int64_t(std::floor(p.y * 500.f)) + dy, z = int64_t(std::floor(p.z * 500.f)) + dz;
+    return (uint64_t(x & 0x1fffff) << 42) | (uint64_t(y & 0x1fffff) << 21) | uint64_t(z & 0x1fffff);
+  };
+  std::unordered_multimap<uint64_t, vec3> at;
+  for (size_t i = 0; i + 2 < cen.size(); i += 3) { const vec3 p(cen[i], cen[i + 1], cen[i + 2]); at.emplace(cell(p, 0, 0, 0), p); }
+  auto hit = [&](const vec3& c) {
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++) {
+      auto r = at.equal_range(cell(c, dx, dy, dz));
+      for (auto it = r.first; it != r.second; ++it) if (glm::length(it->second - c) < 0.0006f) return true;
+    }
+    return false;
+  };
+  Pose rest;
+  m.restPose(rest);
+  m.finishPose(rest);
+  std::vector<std::vector<std::vector<uint8_t>>> drop(m.meshes.size());
+  for (size_t ni = 0; ni < m.nodes.size(); ni++) {
+    const Node& nd = m.nodes[ni];
+    if (nd.mesh < 0 || size_t(nd.mesh) >= m.meshes.size()) continue;
+    const mat4 G = fit * rest.global[ni];
+    if (std::fabs(glm::determinant(mat3(G))) < 1e-12f) continue;   // (hidden)
+    Mesh& mesh = m.meshes[size_t(nd.mesh)];
+    auto& dm = drop[size_t(nd.mesh)];
+    dm.resize(mesh.primitives.size());
+    for (size_t pi = 0; pi < mesh.primitives.size(); pi++) {
+      const Primitive& p = mesh.primitives[pi];
+      if (!p.cpuVerts || !p.cpuIdx) continue;
+      const auto& V = *p.cpuVerts;
+      const auto& I = *p.cpuIdx;
+      const size_t st = p.skinned ? 16 : 8;
+      dm[pi].resize(I.size() / 3, 0);
+      for (size_t t = 0; t + 2 < I.size(); t += 3) {
+        vec3 c(0);
+        for (size_t k = 0; k < 3; k++) { const float* v = &V[size_t(I[t + k]) * st]; c += vec3(G * vec4(v[0], v[1], v[2], 1)); }
+        if (hit(c / 3.f)) dm[pi][t / 3] = 1;
+      }
+    }
+  }
+  size_t n = 0;
+  for (size_t mi = 0; mi < m.meshes.size(); mi++)
+    for (size_t pi = 0; pi < drop[mi].size(); pi++) {
+      const auto& d = drop[mi][pi];
+      size_t nd = 0;
+      for (uint8_t x : d) nd += x;
+      if (!nd) continue;
+      Primitive& p = m.meshes[mi].primitives[pi];
+      if (p.skinned || p.hasColor || p.packed || p.stride != 32) continue;   // (the cars' layout only)
+      const auto& V = *p.cpuVerts;
+      const auto& I = *p.cpuIdx;
+      std::vector<uint32_t> keep;
+      keep.reserve(I.size());
+      for (size_t t = 0; t + 2 < I.size(); t += 3) if (!d[t / 3]) { keep.push_back(I[t]); keep.push_back(I[t + 1]); keep.push_back(I[t + 2]); }
+      std::vector<uint32_t> all = keep;
+      std::vector<Primitive::Lod> lods;
+      lods.push_back({0, uint32_t(keep.size())});
+      const size_t nv = V.size() / 8;
+      for (size_t l = 1; l < p.lods.size(); l++) {
+        size_t cnt = 0;
+        std::vector<uint32_t> lod(keep.size());
+        if (!keep.empty()) {
+          const double ratio = double(p.lods[l].count) / double(std::max<uint32_t>(1, p.lods[0].count));
+          const size_t target = std::max<size_t>(36, size_t(double(keep.size() / 3) * ratio) * 3);
+          cnt = meshopt_simplify(lod.data(), keep.data(), keep.size(), V.data(), nv, sizeof(float) * 8, target, 0.05f, 0, nullptr);
+          if (cnt > target * 3 / 2) cnt = meshopt_simplifySloppy(lod.data(), keep.data(), keep.size(), V.data(), nv, sizeof(float) * 8, target, 1e-1f, nullptr);
+          if (cnt >= lods.back().count) { lod = keep; cnt = keep.size(); }
+        }
+        lods.push_back({uint32_t(all.size()), uint32_t(cnt)});
+        all.insert(all.end(), lod.begin(), lod.begin() + long(cnt));
+      }
+      if (all.empty()) all.push_back(0);   // (a primitive that was all plate: nothing drawn)
+      p.ibo = dev.createBuffer(gfx::BufferUsage::Index, all.data(), all.size() * sizeof(uint32_t));
+      const uint32_t st = 32;
+      std::vector<gfx::VertexAttrib> a = {{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Float, false, 12, st}, {2, 0, 2, gfx::AttribType::Float, false, 24, st}};
+      p.input = dev.createVertexInput(a, {p.vbo}, p.ibo);
+      p.lods = lods;
+      p.cpuIdx = std::make_shared<std::vector<uint32_t>>(keep);
+      n += nd;
+    }
+  return n;
+}
+
 void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, Resort& resort) {
   ModelLoadOptions mo;
   mo.maxTextureSize = 512;   // (the cars carry dozens of textures each: memory budget)
@@ -39,10 +129,12 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
   mc.keepCpu = true;        // (Phase 7: the wheels are split off, then the CPU copy is dropped)
   dev_ = &dev; assets_ = &assets; t_ = &t;
   int nSplit = 0;
+  size_t nPlate = 0;
   for (const CarSpec& s : t.cars) {
     auto base = assets.model(s.name, mc);
     if (!base) continue;
     auto m = withHidden(base, s.hide);
+    nPlate += dropTriangles(dev, *m, s.fit, s.plateTris);
     for (const auto& g : s.glass) if (g.i >= 0 && size_t(g.i) < m->materials.size()) { Material gm = glassMat(g.red, g.clear); gm.name = m->materials[size_t(g.i)].name; m->materials[size_t(g.i)] = gm; }
     VehicleModel vm;
     vm.model = m; vm.fit = s.fit; vm.size = s.size;
@@ -67,6 +159,7 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
         Material g = glassMat(false, false);
         g.baseColor = vec4(hexColor("#0e151b"), 0.82f); g.metallic = 0.3f;
         m->materials[size_t(i)] = g;
+        busGlassMats_.push_back(i);
       }
       for (int i : t.busPaint) if (i >= 0 && size_t(i) < m->materials.size()) {
         Material& p = m->materials[size_t(i)];
@@ -118,6 +211,7 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
   }
   (void)dev;
   SL_INFO("vehicles: %d of %zu car models with their wheels split off (rolling / steering)", nSplit, cars_.size());
+  SL_INFO("vehicles: %zu triangles of the models' own number plates left out (cars.js dropPlates)", nPlate);
   SL_INFO("vehicles: %zu car models, bus %s, railcar body %s / cabin %s / frame %s / bogie %s", cars_.size(), bus.ok() ? "ok" : "missing",
           rail.body.ok() ? "ok" : "-", rail.cabin ? "ok" : "-", rail.frame ? "ok" : "-", rail.bogie ? "ok" : "-");
 }
@@ -135,6 +229,8 @@ const VehicleModel* VehicleModels::full(const std::string& baseName) {
       auto base = assets_->model(s.name, mc);
       if (!base) break;
       auto m = withHidden(base, s.hide);
+      const size_t nPlate = dropTriangles(*dev_, *m, s.fit, s.plateTris);
+      SL_INFO("vehicles: %s: %zu triangles of its own number plates left out", s.name.c_str(), nPlate);
       for (const auto& g : s.glass) if (g.i >= 0 && size_t(g.i) < m->materials.size()) { Material gm = glassMat(g.red, g.clear); gm.name = m->materials[size_t(g.i)].name; m->materials[size_t(g.i)] = gm; }
       vm.model = m; vm.fit = s.fit; vm.size = s.size;
       if (const VehicleModel* b = car(baseName)) { vm.hasPlates = b->hasPlates; vm.plates = b->plates; vm.lampF = b->lampF; vm.lampR = b->lampR; }
@@ -148,6 +244,12 @@ const VehicleModel* VehicleModels::full(const std::string& baseName) {
   full_[baseName] = vm;
   auto& r = full_[baseName];
   return r.ok() ? &r : nullptr;
+}
+
+void VehicleModels::setBusGlassInside(bool in) {
+  if (!bus.model || int(in) == busGlassIn_) return;
+  busGlassIn_ = int(in);
+  for (int i : busGlassMats_) bus.model->materials[size_t(i)].baseColor = in ? vec4(hexColor("#6f8796"), 0.16f) : vec4(hexColor("#0e151b"), 0.82f);
 }
 
 void VehicleModels::setCabinLight(float k) {

@@ -60,7 +60,22 @@ void Police::load(AssetManager& assets) {
   ModelLoadOptions o;
   o.maxTextureSize = 512;
   o.lodRatios = {0.15f};
-  car_ = assets.model("car1", o);
+  {
+    // (police.js car1Template: carTemplate leaves its German plates out, cars.js dropPlates; ours go on: plates())
+    ModelLoadOptions oc = o;
+    oc.keepCpu = true;
+    if (auto base = assets.model("car1", oc)) {
+      auto m = std::make_shared<Model>(*base);
+      if (c_.dev && c_.transport && c_.transport->hasPoliceFit) {
+        const size_t n = dropTriangles(*c_.dev, *m, c_.transport->policeFit, c_.transport->policePlateTris);
+        SL_INFO("police: car1: %zu triangles of its own number plates left out", n);
+      }
+      for (auto& mesh : base->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
+      for (auto& mesh : m->meshes) for (auto& p : mesh.primitives) { p.cpuVerts.reset(); p.cpuIdx.reset(); }
+      base->images.clear(); m->images.clear();
+      car_ = m;
+    }
+  }
   car1_ = bool(car_);
   if (!car_) car_ = assets.model("police/police_car", o);
   if (car_) carFit_ = car_->fitTransform(float(LEN), 2);

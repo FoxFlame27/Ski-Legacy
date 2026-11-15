@@ -21,11 +21,17 @@ public:
   /// the roads' guardrails (bus.js Guardrails: a galvanised W-beam on posts along busRoads.rails), swept per 256 m cell
   void buildGuardrails(gfx::Device& dev, const Transport& t, const class World& world);
   void submit(Renderer& r, const dvec3& cam);
+  /// (world/breakables.js) the sections of the rail lines broken through (Guardrail::offUntil past now: back) hidden
+  void railsOff(const Transport& t, double now);
   size_t chunkCount() const { return chunks_.size(); }
 
 private:
   struct Chunk { std::shared_ptr<Model> bed, detail, lining; dvec3 origin; dvec3 bmin, bmax; };
   struct Sleeper { dvec3 p; double yaw, pitch; };
+  struct RailCell { std::vector<int> segs; std::shared_ptr<Model> model; dvec3 origin{0}, bmin{0}, bmax{0}; };
+  void buildRailCell(const Transport& t, RailCell& c);
+  std::vector<RailCell> rails_;
+  std::vector<uint8_t> railOff_;
   void rebuildSleepers(const dvec3& cam);
   std::vector<Chunk> chunks_;
   std::vector<Sleeper> sleeperSpots_;            // every sleeper of both lines (positions only)

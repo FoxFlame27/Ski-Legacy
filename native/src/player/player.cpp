@@ -840,6 +840,34 @@ void Player::updateCamera(double dt, const PlayerFrameControls& f) {
   double mx = (desired.x + camFocus_.x) / 2, mz = (desired.z + camFocus_.z) / 2, my = (desired.y + camFocus_.y) / 2;
   double gm = world_.groundHeight(mx, mz) + 0.35;
   if (my < gm) desired.y += (gm - my) * 2;
+  // (player.js cameraBlockers) keep the camera out of buildings: pulled in front of the first wall between it and you
+  // (here the buildings' solid colliders, walked along the ray every 0.2 m)
+  if (scenery_ && scenery_->hasResort() && !sit) {
+    const dvec3 to = desired - camFocus_;
+    const double len = glm::length(to);
+    if (len > 0.7) {
+      const dvec3 dir = to / len;
+      double hitD = -1;
+      for (double s = 0.4; s <= len && hitD < 0; s += 0.2) {
+        const dvec3 q = camFocus_ + dir * s;
+        const std::vector<int>* near = scenery_->collidersNear(q.x, q.z);
+        if (!near) continue;
+        for (int ci : *near) {
+          const Collider& c = scenery_->colliders()[size_t(ci)];
+          if (c.soft || c.rail || c.brk > 0 || (c.r >= 0 ? c.r : std::min(c.hw, c.hd)) < 0.5 || q.y > c.top) continue;
+          bool in;
+          if (c.r >= 0) in = std::hypot(q.x - c.x, q.z - c.z) < c.r;
+          else {
+            const double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
+            const double lx = (q.x - c.x) * cs - (q.z - c.z) * sn, lz = (q.x - c.x) * sn + (q.z - c.z) * cs;
+            in = std::fabs(lx) < c.hw && std::fabs(lz) < c.hd;
+          }
+          if (in) { hitD = s; break; }
+        }
+      }
+      if (hitD > 0) desired = camFocus_ + dir * std::max(0.6, hitD - 0.3);
+    }
+  }
   // riding a lift (possibly fast-forwarded): follow tightly so the view never trails the cabin
   camPos_ = glm::mix(camPos_, desired, 1 - std::exp(-dt * (sit ? 60 : 12)));
   double fov = f.fovSetting + clamp(sp - 10, 0, 30) * 0.4 + fovKick_ * 2 + airBlend_ * 2;

@@ -307,8 +307,9 @@ void SceneFx::plates(VehicleDraw& vd, const CarPose& c) {
   if (!c.vm || c.plate.empty()) return;
   const Model* pm = plateModel(c.plate);
   if (c.vm->hasPlates) {   // (where carconfig.js puts them on this model: front and rear, none where it has none)
-    // (12 mm out along its face: the models keep their own blank plate pieces where ours goes; cars.js drops them)
-    for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P * glm::translate(glm::dmat4(1), dvec3(0, 0, 0.012)), 0);
+    // (plateSpots' own place, 2 mm proud of the holder / recess: the models' own plates are gone, vehicles.cpp
+    // dropTriangles as cars.js dropPlates)
+    for (const glm::dmat4& P : c.vm->plates) vd.add(pm, c.M * P, 0);
   } else {
     double L2 = c.vm->size.z * 0.5;
     vd.add(pm, c.M * glm::translate(glm::dmat4(1), dvec3(0, 0.42, L2 + 0.03)), 0);

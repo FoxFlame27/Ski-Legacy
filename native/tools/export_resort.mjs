@@ -757,7 +757,7 @@ transport.capture(tScene);
   for (const arr of world.surfaceGrid.values()) for (const s of arr) if (!surfBeforeT.has(s) && !s.roadTunnel) surfSet.add(s);
   const surfaces = transport.sampleSurfaces(surfSet);
   log('transport surfaces', surfaces.length);
-  const net = await (await import('./export_net.mjs')).exportNet({ THREE, SRC, world, L, busRoads, skibus, parking, roadTunnels, railStations, xtrack, models, freeMod, loadGLB, pack: transport, log, r4 });
+  const net = await (await import('./export_net.mjs')).exportNet({ THREE, SRC, world, L, busRoads, skibus, parking, roadTunnels, railStations, xtrack, models, freeMod, loadGLB, pack: transport, log, r4, scene: tScene });
   transport.finish({ colliders: transport.colliderOut(tCols), surfaces, net });
 }
 // ================================================================ pack 3: the gameplay data (Phase 5)

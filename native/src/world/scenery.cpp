@@ -456,6 +456,12 @@ void Scenery::cellRocks(const World& wd, const RailBedFn& rb, int64_t cx, int64_
   out = std::move(c.rocks);
 }
 
+void Scenery::cellTrees(const World& wd, int64_t cx, int64_t cz, std::vector<Tree>& out) {
+  Cell c;
+  genCell(wd, RailBedFn{}, cx, cz, c, false);
+  out = std::move(c.trees);
+}
+
 const Rock* Scenery::rockAt(double x, double z, double r, double minSize) const {
   if (noTrees) return nullptr;
   const double REACH = 6;   // (a rock's collider reaches at most ~5 m from its grid point's cell)

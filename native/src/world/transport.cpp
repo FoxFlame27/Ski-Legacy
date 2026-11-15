@@ -30,6 +30,9 @@ void parseSteer(const nlohmann::json& c, const std::vector<uint8_t>& bin, CarSpe
   s.steerTris = arr<float>(q["cen"], bin);
   s.hasSteer = s.steerTris.size() >= 9;
 }
+void parsePlateDrop(const nlohmann::json& c, const std::vector<uint8_t>& bin, std::vector<float>& out) {
+  if (c.contains("plateDrop") && c["plateDrop"].is_object()) out = arr<float>(c["plateDrop"], bin);
+}
 Road readRoad(const nlohmann::json& r, const std::vector<uint8_t>& bin) {
   Road o;
   o.n = r["n"]; o.length = r["length"];
@@ -168,6 +171,9 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
   for (auto& j : net["junctions"]) junctions.push_back(dvec2(j[0].get<double>(), j[1].get<double>()));
   for (auto& j : net["laybys"]) laybys.push_back(dvec3(j[0].get<double>(), j[1].get<double>(), j[2].get<double>()));
   for (auto& g : net["rails"]) rails.push_back({g[0].get<double>(), g[1].get<double>(), g[2].get<double>(), g[3].get<double>(), g[4].get<int>() != 0});
+  if (net.contains("railSegs") && net["railSegs"].is_object()) railSegs = arr<float>(net["railSegs"], bin);
+  if (net.contains("railSeg") && net["railSeg"].is_array() && net["railSeg"].size() == rails.size())
+    for (size_t k = 0; k < rails.size(); k++) rails[k].seg = net["railSeg"][k].get<int>();
   for (auto& t : net["roadTunnels"]) {
     RoadTunnel T;
     T.wi = t.value("wi", 4.6); T.hc = t.value("hc", 6.6);
@@ -192,9 +198,10 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
       for (auto& h : c["hide"]) s.hide.push_back(h.get<std::string>());
       for (auto& g : c["glass"]) s.glass.push_back({g["i"].get<int>(), g.value("red", false), g.value("clear", false)});
       parseSteer(c, bin, s);
+      parsePlateDrop(c, bin, s.plateTris);
       carsFull.push_back(s);
     }
-  if (net.contains("policeCar") && net["policeCar"].is_object() && net["policeCar"].contains("fit")) { policeFit = mat16(net["policeCar"]["fit"]); hasPoliceFit = true; }
+  if (net.contains("policeCar") && net["policeCar"].is_object() && net["policeCar"].contains("fit")) { policeFit = mat16(net["policeCar"]["fit"]); hasPoliceFit = true; parsePlateDrop(net["policeCar"], bin, policePlateTris); }
   if (net.contains("policeCar") && net["policeCar"].is_object() && net["policeCar"]["plates"].is_array())
     for (auto& p : net["policeCar"]["plates"]) {
       if (!p.contains("m") || p["m"].size() != 16) continue;
@@ -221,6 +228,7 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
       }
     }
     parseSteer(c, bin, s);
+    parsePlateDrop(c, bin, s.plateTris);
     if (c.contains("lamps") && c["lamps"].is_object()) {
       auto& L = c["lamps"];
       s.lampHalfL = L.value("halfL", 0.f);
@@ -375,6 +383,53 @@ const RoadTunnel* Transport::inRoadTunnel(double x, double z, double y, double p
     }
   }
   return nullptr;
+}
+double Transport::roadTunnelDepth(double x, double y, double z) const {
+  double best = 0;
+  for (const RoadTunnel& t : tunnels) {
+    if (x < t.bmin.x || x > t.bmax.x || z < t.bmin.y || z > t.bmax.y || t.pts.size() < 2) continue;
+    // (path.project: the nearest point of the centre line; its arc length from the first sample, pF0 - 3)
+    double bestD = 1e30, at = 0, fl = 0, run = 0, total = 0;
+    for (size_t i = 0; i + 1 < t.pts.size(); i++) total += std::hypot(t.pts[i + 1].x - t.pts[i].x, t.pts[i + 1].z - t.pts[i].z);
+    for (size_t i = 0; i + 1 < t.pts.size(); i++) {
+      const dvec3 &a = t.pts[i], &b = t.pts[i + 1];
+      const double ex = b.x - a.x, ez = b.z - a.z, l2 = ex * ex + ez * ez, l = std::sqrt(l2);
+      if (l2 < 1e-9) continue;
+      const double u = clamp(((x - a.x) * ex + (z - a.z) * ez) / l2, 0, 1);
+      const double d = std::hypot(a.x + ex * u - x, a.z + ez * u - z);
+      if (d < bestD) { bestD = d; at = run + u * l; fl = a.y + (b.y - a.y) * u; }
+      run += l;
+    }
+    if (bestD > t.wi + 0.6 || y > fl + t.hc + 0.6 || y < fl - 3) continue;
+    best = std::max(best, std::min(at, total - at));
+  }
+  return best;
+}
+bool Transport::roadTunnelBehind(const dvec3& p, const dvec3& fwd, double back, dvec3& out) const {
+  for (const RoadTunnel& t : tunnels) {
+    if (p.x < t.bmin.x || p.x > t.bmax.x || p.z < t.bmin.y || p.z > t.bmax.y || t.pts.size() < 2) continue;
+    std::vector<double> S(t.pts.size(), 0);
+    for (size_t i = 1; i < t.pts.size(); i++) S[i] = S[i - 1] + std::hypot(t.pts[i].x - t.pts[i - 1].x, t.pts[i].z - t.pts[i - 1].z);
+    double bestD = 1e30, at = 0, fl = 0, dirDot = 0;
+    for (size_t i = 0; i + 1 < t.pts.size(); i++) {
+      const dvec3 &a = t.pts[i], &b = t.pts[i + 1];
+      const double ex = b.x - a.x, ez = b.z - a.z, l2 = ex * ex + ez * ez;
+      if (l2 < 1e-9) continue;
+      const double u = clamp(((p.x - a.x) * ex + (p.z - a.z) * ez) / l2, 0, 1);
+      const double d = std::hypot(a.x + ex * u - p.x, a.z + ez * u - p.z);
+      if (d < bestD) { bestD = d; at = S[i] + u * (S[i + 1] - S[i]); fl = a.y + (b.y - a.y) * u; dirDot = ex * fwd.x + ez * fwd.z; }
+    }
+    if (bestD > t.wi + 1 || p.y > fl + t.hc + 1 || p.y < fl - 3) continue;
+    const double s = at + (dirDot > 0 ? -back : back), total = S.back();
+    // (past an end: on along the end segment, out of the portal)
+    size_t i = 0;
+    while (i + 2 < t.pts.size() && S[i + 1] < s) i++;
+    const dvec3 &a = t.pts[i], &b = t.pts[i + 1];
+    const double l = std::max(1e-6, S[i + 1] - S[i]), u = (std::clamp(s, -60.0, total + 60) - S[i]) / l;
+    out = a + (b - a) * u;
+    return true;
+  }
+  return false;
 }
 double Transport::roadSurface(const World& world, double x, double z, double mesh, double yHint) const {
   if (roads.empty()) return std::nan("");

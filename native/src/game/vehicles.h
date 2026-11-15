@@ -62,6 +62,9 @@ struct VehicleModel {
   std::vector<gfx::Texture> matTex;       // the GLB materials' base colour maps (the lamps glow through them)
 };
 
+/// (cars.js dropPlates) leaves the triangles whose middles (car frame: fit * node) are in cen out of m's primitives
+/// (their CPU copy needed: keepCpu; the far LODs simplified again); the number left out
+size_t dropTriangles(gfx::Device& dev, Model& m, const mat4& fit, const std::vector<float>& cen);
 /// (Phase 7) car paint colours (carconfig.js PAINTS, linear) by id, and a traffic / parked car's by its index
 vec4 paintColor(const std::string& id);
 vec4 paintForIndex(uint32_t k);
@@ -85,6 +88,8 @@ public:
   /// puts along the ceiling of the car you ride in (cabinLight(): k)
   void setCabinLight(float k);
   float cabinLight() const { return cabinK_; }
+  /// (bus.js busGlass) the bus's windows: dark privacy glass from outside, light (16 %, #6f8796) while you sit inside
+  void setBusGlassInside(bool in);
   VehicleModel bus;
   struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo, loExpress; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
   //   // express: (Phase 7) the blue livery
@@ -96,6 +101,8 @@ private:
   struct CabinMat { Model* model; size_t i; vec3 lamp; };
   std::vector<CabinMat> cabinMats_;
   float cabinK_ = -1;
+  int busGlassIn_ = -1;
+  std::vector<int> busGlassMats_;
   gfx::Device* dev_ = nullptr;
   AssetManager* assets_ = nullptr;
   const Transport* t_ = nullptr;

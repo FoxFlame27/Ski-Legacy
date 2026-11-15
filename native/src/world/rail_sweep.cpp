@@ -164,58 +164,127 @@ void RailSweep::build(gfx::Device& dev, const Transport& t) {
   SL_INFO("rail sweep: %zu track chunks, %zu sleepers", chunks_.size(), sleeperSpots_.size());
 }
 
-void RailSweep::buildGuardrails(gfx::Device& dev, const Transport& t, const World& world) {
-  // per 256 m cell: the beam (a W-beam's face as two bands, galvanised, double sided) 0.45-0.8 m over the ground, a
-  // post every ~2 m (bus.js: posts 2 m apart, the beam's top at ~0.75 m)
-  std::map<std::pair<int, int>, Geo> cells;
-  const vec3 galv = hexColor("#c9ced3"), post = hexColor("#8d9196");
-  size_t n = 0;
-  for (const Guardrail& g : t.rails) {
-    if (g.tunnel) continue;   // (the road tunnels' walls are captured meshes)
-    double len = std::hypot(g.bx - g.ax, g.bz - g.az);
-    if (len < 0.05) continue;
-    double mx = (g.ax + g.bx) / 2, mz = (g.az + g.bz) / 2;
-    auto key = std::make_pair(int(std::floor(mx / 256)), int(std::floor(mz / 256)));
-    Geo& geo = cells[key];
-    dvec3 o((key.first + 0.5) * 256, 0, (key.second + 0.5) * 256);
-    double ya = world.height(g.ax, g.az), yb = world.height(g.bx, g.bz);
-    double dx = (g.bx - g.ax) / len, dz = (g.bz - g.az) / len;
-    vec3 nrm(float(-dz), 0, float(dx));
-    for (auto band : {std::pair<double, double>{0.45, 0.62}, std::pair<double, double>{0.62, 0.8}}) {
-      uint32_t b0 = uint32_t(geo.pos.size());
-      double off = band.first < 0.6 ? 0.02 : 0;   // (the W: the lower band set back a little)
-      for (int k = 0; k < 4; k++) {
-        bool end = k == 1 || k == 2, top = k >= 2;
-        double x = end ? g.bx : g.ax, z = end ? g.bz : g.az, y = (end ? yb : ya) + (top ? band.second : band.first);
-        geo.pos.push_back(vec3(float(x + nrm.x * off - o.x), float(y), float(z + nrm.z * off - o.z)));
-        geo.nor.push_back(nrm); geo.col.push_back(galv); geo.uv.push_back(vec2(0));
+namespace {
+// bus.js railGeometry: one 4 m section in its own frame (x along 0..SEG, y up from the snow, z outward, away from the
+// road): the beam a single sheet with the W profile (two waves toward the road, its valley on the spacers), C-posts at 1
+// and 3 m (0.45 m in the ground) with their flanges, the spacer blocks; the amber reflector in the valley at the first
+// post. Colours: the galvanised steel (galvTexture's ground #c3c8cd x the material's #e4e8ec), the road grime low down
+// on the beam (its gradient over the lowest 38 %)
+constexpr double SEG = 4, BEAM_LO = 0.38, BEAM_TOP = 0.68, WAVE = 0.083, RAIL_FAR = 400;
+struct RailTpl { Geo galv, refl; };
+const RailTpl& railTpl() {
+  static RailTpl T = [] {
+    RailTpl t;
+    const vec3 steel = hexColor("#c3c8cd") * hexColor("#e4e8ec"), grime = hexColor("#5c5852") * hexColor("#e4e8ec");
+    const int NP = 16, NX = 4;
+    Geo& b = t.galv;
+    for (int ix = 0; ix <= NX; ix++)
+      for (int k = 0; k <= NP; k++) {
+        const double q = double(k) / NP, x = double(ix) / NX * SEG;
+        const double dy = BEAM_TOP - BEAM_LO, dz = -WAVE * 0.5 * 4 * PI * std::sin(4 * PI * q);
+        const double l = std::hypot(dy, dz);
+        b.pos.push_back(vec3(float(x), float(BEAM_LO + dy * q), float(-WAVE * (0.5 - 0.5 * std::cos(4 * PI * q)))));
+        b.nor.push_back(vec3(0, float(dz / l), float(-dy / l)));
+        b.uv.push_back(vec2(float(x / SEG), float(q)));
+        const double g = q < 0.38 ? 0.38 * (1 - q / 0.38) : 0;
+        b.col.push_back(glm::mix(steel, grime, float(g)));
       }
-      geo.idx.insert(geo.idx.end(), {b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3});
+    for (int ix = 0; ix < NX; ix++)
+      for (int k = 0; k < NP; k++) { uint32_t a = uint32_t(ix * (NP + 1) + k), c = a + NP + 1; b.idx.insert(b.idx.end(), {a, a + 1, c, a + 1, c + 1, c}); }
+    auto box = [&](float w, float h, float d, float x, float y, float z) { Geo g = boxGeo(w, h, d); g.translate(x, y, z); g.col.assign(g.pos.size(), steel); return g; };
+    const float mid = float((BEAM_LO + BEAM_TOP) / 2);
+    for (float px : {1.f, 3.f}) {
+      b.append(box(0.1f, 1.09f, 0.008f, px, 0.095f, 0.205f));            // post web (toward the road)
+      b.append(box(0.008f, 1.09f, 0.055f, px - 0.046f, 0.095f, 0.235f));  // flanges
+      b.append(box(0.008f, 1.09f, 0.055f, px + 0.046f, 0.095f, 0.235f));
+      b.append(box(0.075f, 0.19f, 0.2f, px, mid, 0.1f));                  // spacer block
     }
-    for (double u = 0; u < len; u += 2.0) {
-      Geo p = boxGeo(0.1f, 0.85f, 0.12f);
-      double x = g.ax + dx * u, z = g.az + dz * u, y = world.height(x, z);
-      p.rotateY(float(std::atan2(dx, dz)));
-      p.translate(float(x - nrm.x * 0.12 - o.x), float(y + 0.42), float(z - nrm.z * 0.12 - o.z));
-      p.col.assign(p.pos.size(), post);
-      geo.append(p);
-    }
-    n++;
+    t.refl = box(0.065f, 0.07f, 0.014f, 1, mid, -0.006f);
+    t.refl.col.assign(t.refl.pos.size(), vec3(1));
+    return t;
+  }();
+  return T;
+}
+// bus.js BEND_GLSL railBend: the section bent along its stretch (a cubic Hermite from A to B in xz with the tangents
+// TA / TB, the height linear less the terminal's sink), local z turned outward; relative to `o`
+void bendInto(Geo& out, const Geo& g, const float* S, const dvec3& o) {
+  const dvec2 A(S[0], S[2]), B(S[4], S[6]), TA(S[8], S[9]), TB(S[10], S[11]);
+  const uint32_t b0 = uint32_t(out.pos.size());
+  for (size_t i = 0; i < g.pos.size(); i++) {
+    const vec3 p = g.pos[i], n = g.nor[i];
+    const double t = std::clamp(double(p.x) / SEG, 0.0, 1.0), t2 = t * t, t3 = t2 * t;
+    const dvec2 P = (2 * t3 - 3 * t2 + 1) * A + (t3 - 2 * t2 + t) * TA + (3 * t2 - 2 * t3) * B + (t3 - t2) * TB;
+    dvec2 d = (6 * t2 - 6 * t) * A + (3 * t2 - 4 * t + 1) * TA + (6 * t - 6 * t2) * B + (3 * t2 - 2 * t) * TB;
+    d /= std::max(glm::length(d), 1e-4);
+    const double y = (S[1] - S[3]) + ((S[5] - S[7]) - (S[1] - S[3])) * t;
+    out.pos.push_back(vec3(float(P.x - d.y * p.z - o.x), float(y + p.y - o.y), float(P.y + d.x * p.z - o.z)));
+    out.nor.push_back(vec3(float(d.x * n.x - d.y * n.z), n.y, float(d.y * n.x + d.x * n.z)));
+    out.uv.push_back(g.uv.empty() ? vec2(0) : g.uv[i]);
+    out.col.push_back(g.col[i]);
   }
-  Material m;
-  m.baseColor = vec4(1); m.roughness = 0.42f; m.metallic = 0.7f; m.vertexColor = true; m.doubleSided = true;
-  for (auto& [k, geo] : cells) {
-    if (geo.empty()) continue;
-    dvec3 o((k.first + 0.5) * 256, 0, (k.second + 0.5) * 256);
-    std::vector<std::pair<Geo, Material>> parts{{std::move(geo), m}};
-    Chunk c;
-    c.origin = o;
-    c.detail = buildModel(dev, parts, "guardrail");
-    if (!c.detail) continue;
-    c.bmin = o + dvec3(c.detail->bmin); c.bmax = o + dvec3(c.detail->bmax);
-    chunks_.push_back(std::move(c));
+  for (uint32_t k : g.idx) out.idx.push_back(b0 + k);
+}
+} // namespace
+
+void RailSweep::buildGuardrails(gfx::Device& dev, const Transport& t, const World& world) {
+  (void)world;
+  dev_ = &dev;
+  rails_.clear();
+  const size_t n = t.railSegs.size() / 12;
+  // (bus.js Guardrails.build: the sections in ~200 m stretches, drawn within RAIL_FAR)
+  std::map<std::pair<int, int>, size_t> at;
+  for (size_t k = 0; k < n; k++) {
+    const float* S = &t.railSegs[k * 12];
+    auto key = std::make_pair(int(std::floor((S[0] + S[4]) / 400)), int(std::floor((S[2] + S[6]) / 400)));
+    auto it = at.find(key);
+    if (it == at.end()) { it = at.emplace(key, rails_.size()).first; rails_.emplace_back(); }
+    rails_[it->second].segs.push_back(int(k));
   }
-  SL_INFO("guardrails: %zu lines swept in %zu cells", n, cells.size());
+  railOff_.assign(n, 0);
+  for (RailCell& c : rails_) {
+    dvec3 sum(0);
+    for (int k : c.segs) { const float* S = &t.railSegs[size_t(k) * 12]; sum += dvec3(S[0] + S[4], S[1] + S[5], S[2] + S[6]) * 0.5; }
+    c.origin = sum / double(c.segs.size());
+    buildRailCell(t, c);
+  }
+  SL_INFO("guardrails: %zu sections (bus.js railGeometry, bent as its shader bends them) in %zu stretches", n, rails_.size());
+}
+
+void RailSweep::buildRailCell(const Transport& t, RailCell& c) {
+  const RailTpl& T = railTpl();
+  Geo galv, refl;
+  c.bmin = dvec3(1e30); c.bmax = dvec3(-1e30);
+  for (int k : c.segs) {
+    const float* S = &t.railSegs[size_t(k) * 12];
+    c.bmin = glm::min(c.bmin, glm::min(dvec3(S[0], S[1] - 1, S[2]), dvec3(S[4], S[5] - 1, S[6])) - dvec3(1));
+    c.bmax = glm::max(c.bmax, glm::max(dvec3(S[0], S[1] + 1, S[2]), dvec3(S[4], S[5] + 1, S[6])) + dvec3(1));
+    if (railOff_[size_t(k)]) continue;   // (broken through: world/breakables.js hides the section)
+    bendInto(galv, T.galv, S, c.origin);
+    bendInto(refl, T.refl, S, c.origin);
+  }
+  std::vector<std::pair<Geo, Material>> parts;
+  Material g;   // (bus.js: metalness 0.7, roughness 0.42, double sided)
+  g.baseColor = vec4(1); g.roughness = 0.42f; g.metallic = 0.7f; g.vertexColor = true; g.doubleSided = true;
+  Material r;   // (the amber reflector: #ffa21a, emissive #ff8a00 x 0.45, roughness 0.3)
+  r.baseColor = vec4(hexColor("#ffa21a"), 1); r.emissive = hexColor("#ff8a00") * 0.45f; r.roughness = 0.3f;
+  if (!galv.empty()) parts.push_back({std::move(galv), g});
+  if (!refl.empty()) parts.push_back({std::move(refl), r});
+  c.model = parts.empty() || !dev_ ? nullptr : buildModel(*dev_, parts, "guardrail");
+}
+
+void RailSweep::railsOff(const Transport& t, double now) {
+  if (railOff_.empty()) return;
+  // (breakables.js: a section broken through is gone until it comes back, 90 s later)
+  std::vector<uint8_t> off(railOff_.size(), 0);
+  for (const Guardrail& g : t.rails) if (g.seg >= 0 && size_t(g.seg) < off.size() && g.offUntil > now) off[size_t(g.seg)] = 1;
+  if (off == railOff_) return;
+  std::vector<uint8_t> was = railOff_;
+  railOff_ = off;
+  for (RailCell& c : rails_) {
+    bool changed = false;
+    for (int k : c.segs) if (was[size_t(k)] != off[size_t(k)]) { changed = true; break; }
+    if (changed) buildRailCell(t, c);
+  }
 }
 
 void RailSweep::rebuildSleepers(const dvec3& cam) {
@@ -249,6 +318,14 @@ void RailSweep::submit(Renderer& r, const dvec3& cam) {
     if (c.bed) r.submitModel(*c.bed, c.origin, mat4(1), nullptr, false, 0, vis);
     if (c.detail && d < 800) r.submitModel(*c.detail, c.origin, mat4(1), nullptr, cast, 0, vis);
     if (c.lining && d < 900) r.submitModel(*c.lining, c.origin, mat4(1), nullptr, false, 0, vis);
+  }
+  for (const RailCell& c : rails_) {
+    if (!c.model) continue;
+    const dvec3 q = glm::clamp(cam, c.bmin, c.bmax);
+    const double d = glm::length(q - cam);
+    if (d > RAIL_FAR) continue;
+    const bool vis = r.visible(c.bmin, c.bmax), cast = d < 250 && r.castsShadow(c.bmin, c.bmax);
+    if (vis || cast) r.submitModel(*c.model, c.origin, mat4(1), nullptr, cast, 0, vis);
   }
   if (sleeper_ && dev_) {
     if (glm::length(cam - lastCam_) > 30) rebuildSleepers(cam);

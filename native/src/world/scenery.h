@@ -76,6 +76,8 @@ public:
   RailBedFn railBed;
   /// The rocks of one 64 m cell as genCell places them (--verify-heights compares them with the JavaScript's)
   static void cellRocks(const World& wd, const RailBedFn& rb, int64_t cx, int64_t cz, std::vector<Rock>& out);
+  /// The trees of one 64 m cell as genCell places them (the treeroad check)
+  static void cellTrees(const World& wd, int64_t cx, int64_t cz, std::vector<Tree>& out);
   size_t rocksDrawn() const { return rocksDrawn_; }
   const std::vector<Collider>& colliders() const { return colliders_; }
   /// Replaces the static colliders (the resort's, from export_resort.mjs) and indexes them on a 32 m grid.

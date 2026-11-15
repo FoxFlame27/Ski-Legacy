@@ -252,7 +252,8 @@ void PlayerSkier::submit(Renderer& r, bool hideBody) const {
   mat4 B = mat4(compose(V3(0), rig.rootQuat(), V3(1)));
   const Model& body = dressed_ ? *dressed_ : *model_->body;
   // (in the driver's seat: shown once posed seated, the skis stowed: drive.js rigFrames > 3, gear hidden)
-  const bool seated = car.on && !car.passenger && carFrames_ > 0;
+  // (a passenger too: carride.js board, rig.gear.visible = false: your skis stay out of the cabin)
+  const bool seated = car.on && (car.passenger || carFrames_ > 0);
   if (!hideBody && rig.bodyVisible && (!car.on || car.passenger || carFrames_ > 3)) r.submitModel(body, o, B, &pose_, true);
   if (fpHands_ && !hideBody) fpHands_->submit(r, rig.fpView);
   if (!rig.gearVisible || seated) return;

@@ -18,7 +18,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parking, roadTunnels, railStations, xtrack, models, freeMod, loadGLB, pack, log, r4 }) {
+export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parking, roadTunnels, railStations, xtrack, models, freeMod, loadGLB, pack, log, r4, scene = null }) {
   const imp = (p) => import(pathToFileURL(path.join(SRC, p)));
   const f32 = (a) => ({ off: pack.blob(Float32Array.from(a)), n: a.length });
   const i16 = (a) => ({ off: pack.blob(Int16Array.from(a)), n: a.length });
@@ -59,6 +59,28 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
   out.depot = busRoads.depot ? { x: r4(busRoads.depot.x ?? 0), z: r4(busRoads.depot.z ?? 0) } : null;
   out.autohaus = busRoads.rental ? { x: r4(busRoads.rental.x), y: r4(busRoads.rental.y ?? 0), z: r4(busRoads.rental.z), dirx: r4(busRoads.rental.dirx ?? 0), dirz: r4(busRoads.rental.dirz ?? 1) } : null;
   out.parked = (parking?.cars || []).map((e) => ({ name: e.name, x: r4(e.car.position.x), y: r4(e.car.position.y), z: r4(e.car.position.z), yaw: r4(e.car.rotation.y), length: e.length }));
+  // the guardrails' drawn 4 m sections (bus.js Guardrails.build: each instance a railGeometry() bent along a cubic
+  // Hermite from a to b with the tangents ta / tb, heights linear less the terminal's sink): per section
+  // [ax, ay, az, asink, bx, by, bz, bsink, tax, taz, tbx, tbz] in world space, and for each rail line the section it
+  // draws (busRoads.rails[k].seg: broken through, that section goes)
+  if (scene) {
+    const S = [], key = (x, z, x2, z2) => `${Math.round(x * 50)},${Math.round(z * 50)},${Math.round(x2 * 50)},${Math.round(z2 * 50)}`, at = new Map();
+    scene.updateMatrixWorld(true);
+    scene.traverse((o) => {
+      if (!o.isInstancedMesh || o.name !== 'guardrail') return;
+      const A = o.geometry.getAttribute('aRailA'), B = o.geometry.getAttribute('aRailB'), T = o.geometry.getAttribute('aRailT');
+      const c = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld);
+      for (let k = 0; k < o.count; k++) {
+        const ax = A.getX(k) + c.x, az = A.getZ(k) + c.z, bx = B.getX(k) + c.x, bz = B.getZ(k) + c.z;
+        at.set(key(ax, az, bx, bz), S.length / 12);
+        S.push(ax, A.getY(k) + c.y, az, A.getW(k), bx, B.getY(k) + c.y, bz, B.getW(k), T.getX(k), T.getY(k), T.getZ(k), T.getW(k));
+      }
+    });
+    const railSeg = (busRoads.rails || []).map((g) => (g.seg ? at.get(key(g.seg.a[0], g.seg.a[2], g.seg.b[0], g.seg.b[2])) ?? -1 : -1));
+    out.railSegs = { off: pack.blob(Float32Array.from(S)), n: S.length };
+    out.railSeg = railSeg;
+    log('net: guardrail sections', S.length / 12, '; rail lines with their section', railSeg.filter((k) => k >= 0).length, 'of', railSeg.length);
+  }
   log('net: roads', out.roads.length, 'legs', out.busLegs.length, 'stops', out.stops.length, 'lots', out.lots.length, 'rails', out.rails.length, 'road tunnels', out.roadTunnels.length, 'parked', out.parked.length);
 
   // ---------------------------------------------------------------- vehicles
@@ -170,6 +192,81 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     }
     return { halfL: r4(L.halfL), halo, parts };
   };
+
+  // The models' own number plates (cars.js dropPlates: every material named like a plate, isPlateMat, and per model the
+  // plate pieces of shared materials, PLATE_PIECES: the connected pieces welded at 1 mm lying wholly inside a box of the
+  // fitted frame, or with 'face' just the triangles in it facing out of the car's end) are left out of the web game's
+  // template: their triangles' middles in the car's frame, so the C++ leaves the same triangles out of its own copy.
+  // (the copy of PLATE_PIECES below must follow cars.js; triangles carTemplate's lamp split took first stay)
+  const { isPlateMat } = await imp('game/cars.js');
+  const PLATE_PIECES = {
+    car_tesla_m3: [[/^(White|BlackWash)$/, [-0.17, 0.17, 0.32, 0.5, 2.28, 2.42]], [/^(White|BlackWash)$/, [-0.17, 0.17, 0.67, 0.85, -2.38, -2.26]]],
+    car_vw_golf_gti: [[/^Atlas$/, [-0.28, 0.28, 0.42, 0.565, 2.125, 2.2], 'face'], [/^Atlas$/, [-0.28, 0.28, 0.42, 0.565, -2.2, -2.08]]],
+    car_porsche_taycan: [[/turbo_s_misc/, [-0.17, 0.17, 0.35, 0.47, -2.47, -2.38]]],
+    car_audi_etron_gt: [[/^gtVehicle_Exterior_mm_misc1$/, [-0.26, 0.26, 0.64, 0.76, -2.41, -2.33]]],
+    car_toyota_gr_yaris: [[/Coloured_Material/, [-0.17, 0.17, 0.73, 0.9, -1.885, -1.8]]],
+    car_mercedes_gls: [[/^gls_dash_wood$/, [-0.28, 0.28, 0.5, 0.625, 2.59, 2.62], 'face']],
+    car1: [[/^material$/, [-0.3, 0.34, 0.385, 0.56, 2.45, 2.54]], [/^material$/, [-0.3, 0.34, 0.61, 0.765, -2.44, -2.34]]],
+  };
+  const plateDrop = (g, length, name) => {
+    const model = name.replace(/_full$/, ''), pieces = PLATE_PIECES[model] || [];
+    const src = fitCar(g, length, name);
+    src.updateMatrixWorld(true);
+    const lampAt = new Set(), key = (x, y, z) => `${Math.round(x * 2000)},${Math.round(y * 2000)},${Math.round(z * 2000)}`;
+    try {
+      const t = carTemplate(g, length, name);
+      for (const p of t?.lamps?.parts || []) {
+        const P = p.geometry.attributes.position, I = p.geometry.index;
+        if (!P || !I) continue;
+        for (let i = 0; i < I.count; i += 3) { const a = I.getX(i), b = I.getX(i + 1), c = I.getX(i + 2); lampAt.add(key((P.getX(a) + P.getX(b) + P.getX(c)) / 3, (P.getY(a) + P.getY(b) + P.getY(c)) / 3, (P.getZ(a) + P.getZ(b) + P.getZ(c)) / 3)); }
+      }
+    } catch { /* (no template: no lamps to keep) */ }
+    const cen = [], v = new THREE.Vector3();
+    src.traverse((o) => {
+      if (!o.isMesh) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      const P0 = o.geometry.attributes.position, n = P0.count;
+      const pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { v.fromBufferAttribute(P0, i).applyMatrix4(o.matrixWorld); pos[i * 3] = v.x; pos[i * 3 + 1] = v.y; pos[i * 3 + 2] = v.z; }
+      const idxAll = o.geometry.index ? Array.from(o.geometry.index.array) : [...Array(n).keys()];
+      const sets = mats.length === 1 || !o.geometry.groups?.length ? [[mats[0], idxAll]]
+        : o.geometry.groups.map((gr) => [mats[gr.materialIndex] || mats[0], idxAll.slice(gr.start, gr.start + gr.count)]);
+      for (const [mat, I] of sets) {
+        const X = (i) => pos[i * 3], Y = (i) => pos[i * 3 + 1], Z = (i) => pos[i * 3 + 2];
+        const drop = new Uint8Array(I.length / 3);
+        if (isPlateMat(mat)) drop.fill(1);
+        else for (const [re, box, face] of pieces) {
+          if (!re.test(mat?.name || '')) continue;
+          if (face) {
+            const s = Math.sign(box[4] + box[5]), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+            for (let t = 0; t < I.length; t += 3) {
+              a.set(X(I[t]), Y(I[t]), Z(I[t])); b.set(X(I[t + 1]), Y(I[t + 1]), Z(I[t + 1])); c.set(X(I[t + 2]), Y(I[t + 2]), Z(I[t + 2]));
+              const x = (a.x + b.x + c.x) / 3, y = (a.y + b.y + c.y) / 3, z = (a.z + b.z + c.z) / 3;
+              const nz = b.sub(a).cross(c.sub(a)).normalize().z * s;
+              if (Math.abs(nz) > 0.9 && x >= box[0] && x <= box[1] && y >= box[2] && y <= box[3] && z >= box[4] && z <= box[5]) drop[t / 3] = 1;
+            }
+            continue;
+          }
+          const wk = new Map(), canon = new Int32Array(n), par = new Int32Array(n).map((_, i) => i);
+          for (let i = 0; i < n; i++) { const k = `${Math.round(X(i) * 1000)},${Math.round(Y(i) * 1000)},${Math.round(Z(i) * 1000)}`; if (!wk.has(k)) wk.set(k, i); canon[i] = wk.get(k); }
+          const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+          for (let t = 0; t < I.length; t += 3) { const a = find(canon[I[t]]), b = find(canon[I[t + 1]]), c = find(canon[I[t + 2]]); par[b] = a; par[find(c)] = a; }
+          const inside = new Map();
+          const used = new Set(I);
+          for (const i of used) { const r = find(canon[i]); const ins = X(i) >= box[0] && X(i) <= box[1] && Y(i) >= box[2] && Y(i) <= box[3] && Z(i) >= box[4] && Z(i) <= box[5]; inside.set(r, (inside.get(r) ?? true) && ins); }
+          for (let t = 0; t < I.length; t += 3) if (inside.get(find(canon[I[t]]))) drop[t / 3] = 1;
+        }
+        for (let t = 0; t < I.length; t += 3) {
+          if (!drop[t / 3]) continue;
+          const x = (X(I[t]) + X(I[t + 1]) + X(I[t + 2])) / 3, y = (Y(I[t]) + Y(I[t + 1]) + Y(I[t + 2])) / 3, z = (Z(I[t]) + Z(I[t + 1]) + Z(I[t + 2])) / 3;
+          if (lampAt.has(key(x, y, z))) continue;
+          cen.push(x, y, z);
+        }
+      }
+    });
+    log('net: own plates of', name, cen.length / 3, 'triangles left out');
+    return cen.length ? { off: pack.blob(Float32Array.from(cen)), n: cen.length } : null;
+  };
   out.cars = [];
   for (const [name, length] of CAR_MODELS) {
     const g = models[name] || await loadGLB(name);
@@ -191,7 +288,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     } catch (e) { log('net: plates of', name, 'skipped:', e.message); }
     out.cars.push({ name, label: spec.label || name, accel: spec.accel ?? 5, top: spec.top ?? 55, electric: !!spec.electric, rev: spec.rev ?? 1, mass: MASS[name] ?? 1700,
       drive: DRIVE[name] || 'awd', length, size: [r4(size.x), r4(size.y), r4(size.z)], real: REAL[name] || null, fit: m.matrix.toArray().map(r4), hide, glass,
-      price: rent?.price ?? 0, kind: rent?.kind || '', plates });
+      price: rent?.price ?? 0, kind: rent?.kind || '', plates, plateDrop: plateDrop(g, length, name) });
     lastSteer = null;
     try {
       const lamps = await lampData(name, g, length);
@@ -209,7 +306,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
     // (and the template's fit, cars.js fitCar: every vertex measured (PRECISE), so the car and its plates sit as in the web game)
     const fit = fitCar(g, 5.0, 'car1').children[0];
     fit.updateMatrix();
-    out.policeCar = { length: 5.0, fit: fit.matrix.toArray().map(r4), size: [r4(tpl.size.x), r4(tpl.size.y), r4(tpl.size.z)], plates: (CFG.plateSpots(tpl) || []).map((p) => ({ front: !!p.front, m: p.m.toArray().map(r4) })) };
+    out.policeCar = { length: 5.0, fit: fit.matrix.toArray().map(r4), size: [r4(tpl.size.x), r4(tpl.size.y), r4(tpl.size.z)], plates: (CFG.plateSpots(tpl) || []).map((p) => ({ front: !!p.front, m: p.m.toArray().map(r4) })), plateDrop: plateDrop(g, 5.0, 'car1') };
     log('net: the patrol car', out.policeCar.size.join(' x '), 'm,', out.policeCar.plates.length, 'plates');
   } catch (e) { log('net: the patrol car\'s plates skipped:', e.message); }
   // the full-detail models (drive.js FULL: the car you drive shows its `_full` model, with its interior): fitted like
@@ -230,7 +327,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       let steer = null;
       try { steer = steerData(carTemplate(g, length, name)); } catch (e) { log('steering wheel of', name, 'skipped:', e.message); }
       log('steering wheel', name, steer ? `${steer.cen.n / 3} triangles at ${steer.c.join(', ')}` : 'none');
-      out.carsFull.push({ name, base, length, size: [r4(size.x), r4(size.y), r4(size.z)], fit: m.matrix.toArray().map(r4), hide, glass, steer });
+      out.carsFull.push({ name, base, length, size: [r4(size.x), r4(size.y), r4(size.z)], fit: m.matrix.toArray().map(r4), hide, glass, steer, plateDrop: plateDrop(g, length, name) });
     }
     log('net: full-detail car models', out.carsFull.map((c) => c.name).join(' '));
   } catch (e) { log('net: full-detail car models skipped:', e.message); }

@@ -40,7 +40,7 @@ struct Lot {
   bool building = false, impound = false, scenic = false, hospital = false, depot = false;
   std::vector<Bay> bays;
 };
-struct Guardrail { double ax, az, bx, bz; bool tunnel = false; double offUntil = -1; };
+struct Guardrail { double ax, az, bx, bz; bool tunnel = false; double offUntil = -1; int seg = -1; };   // (seg: its drawn section in railSegs)
 struct RoadTunnel { std::vector<dvec3> pts; double wi = 4.6, hc = 6.6; dvec2 bmin{1e30}, bmax{-1e30}; };
 struct StopInfo { std::string name; double x = 0, z = 0, heading = 0; bool noRoad = false; };
 
@@ -89,6 +89,9 @@ struct CarSpec {
   vec3 steerC{0}, steerAxis{0, -0.37f, 0.93f};
   float steerTilt = 0.38f, steerRimR = 0.185f;   // the column's rake, the rim's radius (the driver's hands go by them)
   std::vector<float> steerTris;
+  // (cars.js dropPlates, exported) the middles of the model's own number plate triangles (isPlateMat materials and the
+  // PLATE_PIECES boxes): left out of the car as the web game leaves them out of its template (ours go on instead)
+  std::vector<float> plateTris;
 };
 
 class Transport {
@@ -111,6 +114,11 @@ public:
   int speedLimitAt(double x, double z, double maxD = 3.4 + 2.5) const;
   /// busRoads.tunnelAt: inside a road tunnel's tube?
   const RoadTunnel* inRoadTunnel(double x, double z, double y, double pad = 0.4) const;
+  /// tunnels.js depth: how deep (x, y, z) is inside a road tunnel's tube, m from the nearer portal (<= 0: outside)
+  double roadTunnelDepth(double x, double y, double z) const;
+  /// a vehicle at p heading fwd in a road tunnel's tube (or its approaches, 3 m past the portals): the point `back` m
+  /// behind it along the tube's centre line, at the floor's level there (a chase camera that never leaves the tube)
+  bool roadTunnelBehind(const dvec3& p, const dvec3& fwd, double back, dvec3& out) const;
   /// guardrail segments near (x, z) (16 m grid)
   const std::vector<int>* railsNear(double x, double z) const;
 
@@ -127,6 +135,8 @@ public:
   std::vector<dvec2> junctions;
   std::vector<dvec3> laybys;       // x, z, yaw
   std::vector<Guardrail> rails;
+  /// (bus.js Guardrails) the drawn 4 m sections: 12 floats each (a: x, y, z, sink; b: x, y, z, sink; tangents ta, tb in xz)
+  std::vector<float> railSegs;
   std::vector<RoadTunnel> tunnels;
   struct Parked { std::string name; dvec3 pos; double yaw, length; };
   std::vector<Parked> parked;
@@ -140,6 +150,7 @@ public:
   /// its fit (cars.js fitCar(car1, 5.0): every vertex measured, model space -> nose +z, wheels on y 0)
   mat4 policeFit{1};
   bool hasPoliceFit = false;
+  std::vector<float> policePlateTris;   // (cars.js dropPlates on car1: its German plates)
   /// (drive.js FULL) the full-detail models of some cars (their interiors): shown for the car you drive; `kind` holds
   /// the base model's name
   std::vector<CarSpec> carsFull;

@@ -78,6 +78,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <set>
 #include <unordered_map>
 
 namespace sl {
@@ -442,6 +443,28 @@ int runGame(const GameOptions& opt) {
   if (const nlohmann::json* net = resort.transportNet()) transport.load(*net, resort.transportBin());
   memAt("transport data");
   if (transport.loaded()) world.roadSurface = [&](double x, double z, double mesh, double yHint) { return transport.roadSurface(world, x, z, mesh, yHint); };
+  if (const char* d = std::getenv("SKI_LEGACY_DEBUG"); d && std::strstr(d, "treeroad") && transport.loaded()) {
+    // (debug: the forest's trees standing on a road, its shoulder, a car park, a junction or a lay-by)
+    std::set<std::pair<int64_t, int64_t>> cells;
+    for (const Road& r : transport.roads)
+      for (size_t i = 0; i < r.X.size(); i++)
+        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++)
+          cells.insert({int64_t(std::floor(r.X[i] / Scenery::CELL)) + dx, int64_t(std::floor(r.Z[i] / Scenery::CELL)) + dz});
+    size_t hits = 0, n = 0;
+    std::vector<Tree> ts;
+    for (auto [cx, cz] : cells) {
+      Scenery::cellTrees(world, cx, cz, ts);
+      for (const Tree& t : ts) {
+        n++;
+        const double ld = transport.laneDistance(t.x, t.z);
+        if (ld < Transport::ROAD_HALF + 2.5 + t.trunk || transport.onTarmac(t.x, t.z)) {
+          if (hits < 40) SL_INFO("[treeroad] tree at (%.1f, %.1f) %.1f m from the lane's middle%s", double(t.x), double(t.z), ld, transport.onTarmac(t.x, t.z) ? " (on the tarmac)" : "");
+          hits++;
+        }
+      }
+    }
+    SL_INFO("[treeroad] %zu of %zu forest trees by the roads stand on a road / shoulder / car park", hits, n);
+  }
   if (transport.rail.ok) world.addDeck([&](double x, double z) { return transport.railDeckHeight(x, z); });
   if (transport.express.ok) world.addDeck([&](double x, double z) { return transport.expressDeckHeight(x, z); });
   // (Phase 7) the railways thin the forest (transport.js / expressground.js addCut forest): no trees on the formations
@@ -922,6 +945,7 @@ int runGame(const GameOptions& opt) {
   // the route picker's choice (ui/travel.js): the stop / station it was opened at and where to (taken by the boarding code)
   struct TravelPick { int kind = 0, from = -1, to = -1; bool up = true; } travelPick;
   double rideCamYaw = 0, rideCamPitch = 0.15, rideLookT = -1e9, seatYaw = 0, seatPitch = -0.05;
+  double roadTunnelDark = 0;   // (tunnelview.js dark: the camera deep in a road tunnel)
   bool seatView = true;   // riding the bus / a train: the seat view (bus.js / railway.js / express.js default), R: outside
   double trainFov = -1;   // (railway.js this.fov) the trains' seat camera, eased
   int trainView = 0;      // (express.js this.view) 0 the seat, 1 outside, 2 trackside
@@ -3275,7 +3299,8 @@ int runGame(const GameOptions& opt) {
     }
     perf.add("sim (120 Hz physics)", perfMs() - pt0);
     PlayerFrameControls fc;
-    fc.toggleView = rideKind != Ride::None ? false : input.takePressed(Action::View);
+    // (a passenger in another player's car: carride.js, the view key toggles first person / chase as on any seat)
+    fc.toggleView = rideKind != Ride::None && rideKind != Ride::Passenger ? false : input.takePressed(Action::View);
     if (rooms.inside()) { fc.toggleView = false; player.view = Player::View::First; }   // (no third person in a room)
     if ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && input.takePressed(Action::View)) {
       // (express.js VIEWS: R goes round the window seat, the chase camera, the camera beside the line; walking about: your
@@ -4171,6 +4196,14 @@ int runGame(const GameOptions& opt) {
       if (!tube) want.y = std::max(want.y, world.groundHeight(want.x, want.z, vp.y + 3) + 2.5);
       if (!rideCamReady || glm::length(want - rideCamPos) > 200) { rideCamPos = want; rideCamReady = true; }
       rideCamPos += (want - rideCamPos) * (1 - std::exp(-frameDt * 8));
+      // (a road tunnel: the tube's walls and the rock over it between the bus and an orbiting camera; here it follows
+      // close behind along the tube's centre line, under the crown, as the trains' chase cameras do in theirs)
+      if (dvec3 tb; rideKind == Ride::Bus && transport.roadTunnelBehind(vp, dvec3(std::sin(vyaw), 0, std::cos(vyaw)), 14, tb)) {
+        const dvec3 tw = tb + dvec3(0, 3.6, 0);
+        rideCamPos += (tw - rideCamPos) * (1 - std::exp(-frameDt * 8));
+        if (glm::length(rideCamPos - tw) > 6) rideCamPos = tw;
+        focus = vp + dvec3(0, 2.2, 0);
+      }
       cam.lookAt(rideCamPos, focus);
       cam.fovY = 62; cam.nearZ = 0.2f;
     }
@@ -4713,7 +4746,24 @@ int runGame(const GameOptions& opt) {
         terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
         if (pf % 70 == 60 && pf < 290 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("plate" + std::to_string(k)).c_str());
       }
-      int idx = want && std::string(want) == "police" ? -1 : drive.debugCar(want ? want : "car_bmw_x3");
+      if (want && std::string(want) == "all") {
+        // (SKI_LEGACY_CAR=all: every car model in turn, its front and rear plate by day: o_plate_<model>_<f|r>.png)
+        const size_t ci = size_t(pf / 140);
+        if (ci < transport.cars.size()) {
+          const std::string nm = transport.cars[ci].name;
+          const int ia = drive.debugCar(nm);
+          if (ia >= 0) {
+            const Drive::Parked& e = drive.parked[size_t(ia)];
+            const int k = (pf / 70) % 2;
+            const double side = k ? -1 : 1, L2 = e.length / 2;
+            const dvec3 f(std::sin(e.yaw), 0, std::cos(e.yaw)), rt(f.z, 0, -f.x);
+            cam.lookAt(dvec3(e.x, e.y + 0.85, e.z) + f * (side * (L2 + 2.4)) + rt * 0.8, dvec3(e.x, e.y + 0.55, e.z) + f * (side * L2)); cam.fovY = 38;
+            terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos);
+            if (pf % 70 == 60 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("plate_" + nm + (k ? "_r" : "_f")).c_str());
+          }
+        }
+      }
+      int idx = want && (std::string(want) == "police" || std::string(want) == "all") ? -1 : drive.debugCar(want ? want : "car_bmw_x3");
       if (idx >= 0) {
         const Drive::Parked& e = drive.parked[size_t(idx)];
         const int k = (pf / 70) % 4;   // front by day, rear by day, front at night, rear at night
@@ -4852,6 +4902,14 @@ int runGame(const GameOptions& opt) {
       cabinDark += ((camUnderground ? 1.f : 0.f) - cabinDark) * float(1 - std::exp(-frameDt * 3));
       vmodels.setCabinLight(0.3f + 0.9f * std::max(light.night, cabinDark));
     }
+    {   // (tunnelview.js lateUpdate) in a road tunnel the daylight fades out, from 6 to 45 m in, eased; no snowfall past 0.3
+      const double d = transport.loaded() ? transport.roadTunnelDepth(cam.pos.x, cam.pos.y, cam.pos.z) : 0;
+      roadTunnelDark += ((d > 0 ? smoothstep(6.0, 45.0, d) : 0.0) - roadTunnelDark) * (1 - std::exp(-frameDt * 3));
+      if (roadTunnelDark > 0.003 && !camUnderground) {
+        const float k = float(1 - roadTunnelDark * 0.92), e = float(1 - roadTunnelDark * 0.85);
+        frameLight.sunIntensity *= k; frameLight.sky *= k; frameLight.ground *= k; frameLight.ambientScale *= e;
+      }
+    }
     if (camUnderground) {   // railway.js lateUpdate: deep in a tunnel the sun and the sky fade out; the lamps and the cabin carry the light
       frameLight.zenith = frameLight.mid = frameLight.horizon = frameLight.glow = frameLight.fog = vec3(0.004f, 0.005f, 0.007f);
       frameLight.sunIntensity *= 0.03f; frameLight.sky *= 0.25f; frameLight.ground *= 0.25f;
@@ -4877,6 +4935,8 @@ int runGame(const GameOptions& opt) {
     if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
     if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
     if (drawVillage && !indoor) resort.submit(renderer);
+    vmodels.setBusGlassInside(rideKind == Ride::Bus && seatView);   // (bus.js busGlass: you see out from inside)
+    sweep.railsOff(transport, simTime);   // (breakables.js: the sections broken through hidden, back after 90 s)
     if (drawVillage && !indoor) sweep.submit(renderer, cam.pos);
     if (drawVillage && !indoor) {
       vdraw.begin();
@@ -4932,7 +4992,7 @@ int runGame(const GameOptions& opt) {
     if (mp.active()) { mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt); mpv.drawWorld(renderer, people); }
     people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);
     npcs.submit(renderer, cam.pos);
-    weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground);
+    weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground || roadTunnelDark > 0.3);
     // (first person: your own body stays visible below the eye, the head folded away; at the wheel too: player.js /
     // drive.js placeRig)
     bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || heli.hideRig() || showroom.inside();   // (the showroom is its own scene in the web game: you are not in it)

@@ -53,6 +53,10 @@ public:
   /// (multiplayer) a train stands at station `st` going your way (board() would take you): check before paying
   bool trainReady(int st, bool up) const;
   int seatCount() const { return ncars_ * 48; }
+  /// (debug trainfar: the trains from outside at a distance) a train's car, its speed
+  size_t trainCount() const { return trains_.size(); }
+  void carPose(int train, int car, glm::dmat4& M) const { carMatrix(train, car, M); }
+  double trainSpeed(int train) const { return trains_[size_t(train)].st.speed; }
   /// (railway.js seatPassengers / showPassengers) the skiers riding along in the car you sit in (the seat view)
   void addPeople(People& people) const;
 
@@ -121,6 +125,9 @@ public:
   /// the train you ride as the server's vehicle id ('express-e0'...), "" when not riding
   std::string rideVehicle() const;
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
+  size_t trainCount() const { return trains_.size(); }   // (debug trainfar)
+  void carPose(int train, int car, glm::dmat4& M) const { carMatrix(train, car, M); }
+  double trainSpeed(int train) const { return trains_[size_t(train)].st.speed; }
   /// (multiplayer) a train for `to` stands at `from` for 4 s more: check before paying
   bool trainReady(int from, int to) const;
   /// (express.js copyPassengers) the Wolkenspitzbahn's seated skiers, in the cabin you ride in

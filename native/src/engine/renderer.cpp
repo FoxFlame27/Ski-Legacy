@@ -973,7 +973,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
 }
 
 void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur) {
-  auto use = [&](gfx::Program p) { if (p.id != cur.id) { dev_->useProgram(p); cur = p; } };
+  auto use = [&](gfx::Program p) { if (p.id != cur.id) { dev_->useProgram(p); cur = p; lastMat_ = nullptr; } };
   if (it.kind == Item::Kind::Terrain) {
     use(shadowPass ? depthTerrain_ : terrain_);
     ps.cull = shadowPass ? gfx::Cull::None : gfx::Cull::Back;
@@ -997,10 +997,16 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
                  : it.skinned ? (shadowPass ? depthSkin_ : meshSkin_) : (shadowPass ? depthMesh_ : mesh_);
   use(p);
   bool pine = it.kind == Item::Kind::Instanced && it.mat->shading == 1;
+  // (the same material as the draw before, in the same program: its uniforms and textures are still set. A prop's
+  // cells, a car's instances, a model's primitives sharing a material follow each other)
+  const bool sameMat = it.mat == lastMat_ && pine == lastPine_ && it.height == lastHeight_;
+  lastMat_ = it.mat; lastPine_ = pine; lastHeight_ = it.height;
   if (!shadowPass) {
-    setMaterial(*it.mat, pine, it.height);
+    if (!sameMat) setMaterial(*it.mat, pine, it.height);
     ps.cull = it.mat->doubleSided ? gfx::Cull::None : gfx::Cull::Back;
     ps.alphaToCoverage = set_.msaa > 1 && it.mat->alpha == Material::Alpha::Mask;
+  } else if (sameMat) {
+    ps.cull = gfx::Cull::None;
   } else {
     // alpha-tested foliage casts its shape
     dev_->bindTexture(U_BASE, it.mat->baseTex ? it.mat->baseTex : white_);
@@ -1011,7 +1017,7 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
     dev_->setVec4("uBaseColor", glm::value_ptr(it.mat->baseColor));
     ps.cull = gfx::Cull::None;
   }
-  if (shadowPass) {
+  if (shadowPass && !sameMat) {
     vec4 f3(0, pine ? 1.f : 0.f, it.height, 1.f);
     dev_->setVec4("uFlags3", glm::value_ptr(f3));
   }
@@ -1027,6 +1033,7 @@ void Renderer::drawItems(bool shadowPass, int cascade) {
   gfx::PipelineState ps;
   if (shadowPass) { ps.colorWrite = false; ps.cull = gfx::Cull::None; ps.depthBiasFactor = 1.4f; ps.depthBiasUnits = 2.f; }
   gfx::Program cur{};
+  lastMat_ = nullptr;
   // terrain first (largest occluder), then opaque meshes, impostors, then (main pass) the transparent ones back to front
   blend_.clear();
   for (int pass = 0; pass < 3; pass++)
@@ -1345,9 +1352,12 @@ void Renderer::endFrame() {
   if (!held) {
   uploadLights();
   dev_->bindUniformBuffer(1, lightsUbo_);
+  dev_->gpuPass("trail map");
   trailPass();
+  dev_->gpuPass("environment");
   envPass();
   // shadow cascades
+  dev_->gpuPass("shadow cascades");
   dev_->bindRenderTarget(shadow_, atlasW_, atlasH_);
   dev_->clear(0, 0, 0, 0, false, true);
   if (shadowsOn && light_.sunIntensity > 0.01f) {
@@ -1360,6 +1370,7 @@ void Renderer::endFrame() {
   }
   // main pass (HDR, multisampled on the high presets)
   gfx::RenderTarget main = msaa_ ? msaa_ : hdr_;
+  dev_->gpuPass("main pass (opaque)");
   dev_->bindRenderTarget(main, rw_, rh_);
   dev_->clear(0, 0, 0, 1, true, true);
   dev_->bindUniformBuffer(0, frameUbo_);
@@ -1373,6 +1384,7 @@ void Renderer::endFrame() {
   dev_->bindTexture(U_SKYNOISE, skyNoise_);
   drawItems(false, 0);
   // sky behind everything
+  dev_->gpuPass("sky + transparent");
   {
     gfx::PipelineState ps;
     ps.depth = gfx::DepthTest::LessEqual; ps.depthWrite = false; ps.cull = gfx::Cull::None;
@@ -1390,6 +1402,7 @@ void Renderer::endFrame() {
     ps.blend = gfx::Blend::Alpha;
     ps.depthWrite = false;
     gfx::Program cur{};
+    lastMat_ = nullptr;
     for (const Item* it : blend_) {
       // (fans.js contact shades: the snow under the crowd people multiplied toward a sky-lit blue, offset toward the camera)
       const bool shade = it->mat && it->mat->fanBase.w < -0.5f;
@@ -1402,21 +1415,28 @@ void Renderer::endFrame() {
     }
   }
   // resolve; the depth copy the post passes and the particles read
+  dev_->gpuPass("resolve");
   if (msaa_) dev_->resolve(msaa_, hdr_, rw_, rh_, true, true);
   dev_->resolve(hdr_, depthCopy_, rw_, rh_, false, true);
   dev_->bindRenderTarget(hdr_, rw_, rh_);
   dev_->bindTexture(U_DEPTH, dev_->renderTargetDepth(depthCopy_));
+  dev_->gpuPass("mist");
   mistPass();
+  dev_->gpuPass("clouds");
   cloudPass();
+  dev_->gpuPass("particles + snow + glare");
   particlePass();
   snowPass();
   glarePass();
   frameDrawn_ = true;
   }
   bool ao = aoRaw_ && (set_.ao > 0 || shaftsK_ > 0.001f);
+  dev_->gpuPass("ao / shafts");
   if (ao && !held) aoPass();
   bool bloom = bloomOn && bloomStrength > 0;
+  dev_->gpuPass("bloom");
   if (bloom && !held) bloomPass();
+  dev_->gpuPass("tone map + sharpen + HUD");
   // final: tone map + grade (into the LDR target when FXAA / sharpening follow)
   bool aa = set_.fxaa || set_.sharpen > 0;
   if (aa) dev_->bindRenderTarget(ldr_, w_, h_); else dev_->bindRenderTarget({}, w_, h_);
@@ -1464,6 +1484,7 @@ void Renderer::endFrame() {
     dev_->replaceBuffer(hudVbo_, hudVerts_.data(), hudVerts_.size() * sizeof(float));
     dev_->draw(hudVi_, uint32_t(hudVerts_.size() / 6));
   }
+  dev_->gpuPass("UI");
   lastDraws_ = dev_->drawCallsThisFrame();
   lastTris_ = dev_->trianglesThisFrame();
 }

@@ -77,7 +77,12 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
     }
   }
   if (t.rail.ok) {
-    if (t.rail.hasBody) if (auto b = assets.model("rail_car2", mo)) {
+    // (the railcar's body as train.js draws it: the whole mesh with its 2048 px paint out to where the far version takes
+    // over (railway.js 220 m, express.js NEAR 420 m). No simplified copy: the Meshy atlas is thousands of UV islands,
+    // an edge-collapsed shell smears the red / white livery across them and dents the body)
+    ModelLoadOptions mr;
+    mr.maxTextureSize = 2048; mr.colorTextureSize = 2048;
+    if (t.rail.hasBody) if (auto b = assets.model("rail_car2", mr)) {
       rail.body.model = b; rail.body.fit = t.rail.bodyFit;
       // (Phase 7) the Legacy Express's blue livery: the same body, its red repainted per instance (livery mode)
       auto e = std::make_shared<Model>(*b);
@@ -103,6 +108,10 @@ void VehicleModels::load(gfx::Device& dev, AssetManager& assets, Transport& t, R
       if (rm.contains("frame")) rail.frame = resort.transportModel(rm["frame"]);
       if (rm.contains("bogie")) rail.bogie = resort.transportModel(rm["bogie"]);
       if (rm.contains("lo")) rail.lo = resort.transportModel(rm["lo"]);
+      if (rail.lo) {   // (express.js: the far version in the Express's livery too, paintMat)
+        rail.loExpress = std::make_shared<Model>(*rail.lo);
+        for (auto& mt : rail.loExpress->materials) mt.paint = 2;
+      }
     }
   }
   (void)dev;
@@ -422,13 +431,20 @@ void VehicleDraw::submit(Renderer& r, gfx::Device& dev, const dvec3& cam) {
         b.gpu[l] = MatrixInstanceBatch();
         b.gpu[l].init(dev, *m, b.cap[l]);
       }
+      // (each instance on its own: in view, or casting into a shadow cascade. The fleet's bounding box spans the map,
+      // so every car and railcar used to be drawn every frame, most of them behind the camera)
       pk.clear();
-      dvec3 mn(1e30), mx(-1e30);
-      for (const auto& [M, tint] : list) { pk.push_back(MatrixInstanceBatch::pack(M, cam, tint)); mn = glm::min(mn, dvec3(M[3])); mx = glm::max(mx, dvec3(M[3])); }
+      const dvec3 e(14);
+      bool cast = false;
+      for (const auto& [M, tint] : list) {
+        const dvec3 c(M[3]);
+        const bool cs = l == 0 && r.castsShadow(c - e, c + e);
+        if (!cs && !r.visible(c - e, c + e)) continue;
+        cast = cast || cs;
+        pk.push_back(MatrixInstanceBatch::pack(M, cam, tint));
+      }
+      if (pk.empty()) { b.gpu[l].upload(dev, pk); continue; }
       b.gpu[l].upload(dev, pk);
-      dvec3 e(12);
-      bool cast = l == 0 && r.castsShadow(mn - e, mx + e);
-      if (!r.visible(mn - e, mx + e) && !cast) continue;
       r.submitInstances(b.gpu[l], cam, l, cast);
     }
   }

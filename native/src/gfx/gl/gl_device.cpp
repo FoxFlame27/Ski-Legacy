@@ -5,14 +5,16 @@
 
 #include <glad/glad.h>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <unordered_map>
 
 namespace sl::gfx {
 
 namespace {
-struct GLTex { GLuint id = 0; GLenum target = GL_TEXTURE_2D; size_t bytes = 0; };
+struct GLTex { GLuint id = 0; GLenum target = GL_TEXTURE_2D; size_t bytes = 0; int tag = 0; };
 struct GLRT { GLuint fbo = 0; Texture color, depth; int w = 0, h = 0; GLuint rbColor = 0, rbDepth = 0; int samples = 1; };
-struct GLProg { GLuint id = 0; std::unordered_map<std::string, GLint> locs; std::string name; };
+struct GLProg { GLuint id = 0; std::unordered_map<std::string, GLint> locs; std::string name; struct ByPtr { const char* p; std::string n; GLint l; }; std::vector<ByPtr> byPtr; };
 
 GLenum attribType(AttribType t) {
   switch (t) {
@@ -72,6 +74,45 @@ public:
       for (GLint f : fm) { d1 = d1 || f == 0x83F0; d5 = d5 || f == 0x83F3; s1 = s1 || f == 0x8C4C; s5 = s5 || f == 0x8C4F; }
       if (d1 && d5) s3tc_ = true;
       if (s1 && s5) s3tcSrgb_ = true;
+      // (Apple's GL on Metal lists the three linear S3TC formats only, yet takes the sRGB ones (core with the
+      // extension since GL 2.1) and RGTC (core since 3.0): asked directly with a 4x4 block. Without this every
+      // texture stayed RGBA8 on a Mac: 2.7 GB of them on an 8 GB machine)
+      auto takes = [](GLenum f, int bytes) {
+        static const unsigned char blk[16] = {0};
+        GLuint t = 0;
+        glGenTextures(1, &t);
+        glBindTexture(GL_TEXTURE_2D, t);
+        while (glGetError() != GL_NO_ERROR) {}
+        glCompressedTexImage2D(GL_TEXTURE_2D, 0, f, 4, 4, 0, bytes, blk);
+        const bool ok = glGetError() == GL_NO_ERROR;
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDeleteTextures(1, &t);
+        return ok;
+      };
+      if (s3tc_ && !s3tcSrgb_) s3tcSrgb_ = takes(0x8C4C, 8) && takes(0x8C4F, 16);
+      rgtc_ = takes(0x8DBD, 16);
+      if (std::getenv("SKI_LEGACY_GLINFO")) {
+        std::string l;
+        char hx[16];
+        for (GLint f : fm) { std::snprintf(hx, sizeof hx, " %04x", unsigned(f)); l += hx; }
+        SL_INFO("gl: %d compressed formats:%s", int(nf), l.c_str());
+        l.clear();
+        for (GLint i = 0; i < ne; i++) if (const char* e = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, GLuint(i)))) { l += ' '; l += e; }
+        SL_INFO("gl: extensions:%s", l.c_str());
+        // (the formats tried directly: a 4x4 block of each)
+        static const unsigned char blk[16] = {0};
+        for (GLenum f : {0x83F0u, 0x83F3u, 0x8C4Cu, 0x8C4Fu, 0x8DBBu, 0x8DBDu, 0x8E8Cu, 0x8E8Du}) {
+          GLuint t = 0;
+          glGenTextures(1, &t);
+          glBindTexture(GL_TEXTURE_2D, t);
+          while (glGetError() != GL_NO_ERROR) {}
+          const bool bc1 = f == 0x83F0u || f == 0x8C4Cu || f == 0x8DBBu;
+          glCompressedTexImage2D(GL_TEXTURE_2D, 0, f, 4, 4, 0, bc1 ? 8 : 16, blk);
+          SL_INFO("gl: compressed format %04x: %s", unsigned(f), glGetError() == GL_NO_ERROR ? "accepted" : "refused");
+          glBindTexture(GL_TEXTURE_2D, 0); boundTex_[active_] = 0;
+          glDeleteTextures(1, &t);
+        }
+      }
     }
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
     GLint ms = 1, mt = 4096;
@@ -94,7 +135,7 @@ public:
     GLuint b = 0;
     glGenBuffers(1, &b);
     GLenum target = usage == BufferUsage::Index ? GL_ELEMENT_ARRAY_BUFFER : usage == BufferUsage::Uniform ? GL_UNIFORM_BUFFER : GL_ARRAY_BUFFER;
-    if (target == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0);
+    if (target == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0); curVao_ = 0;
     glBindBuffer(target, b);
     glBufferData(target, GLsizeiptr(bytes), data, dynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
     glBindBuffer(target, 0);
@@ -103,20 +144,21 @@ public:
     bufTarget_[h] = target;
     bufSize_[h] = bytes;
     bufBytes_ += bytes;
+    bufTag_[h] = tag_; rows_[size_t(tag_)].buffers += bytes; rows_[size_t(tag_)].nBuf++;
     return Buffer{h};
   }
   void updateBuffer(Buffer b, const void* data, size_t bytes, size_t offset) override {
     GLenum t = bufTarget_[b.id];
-    if (t == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0);
+    if (t == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0); curVao_ = 0;
     glBindBuffer(t, bufs_[b.id]);
     glBufferSubData(t, GLintptr(offset), GLsizeiptr(bytes), data);
     glBindBuffer(t, 0);
   }
   void replaceBuffer(Buffer b, const void* data, size_t bytes) override {
     GLenum t = bufTarget_[b.id];
-    if (t == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0);
+    if (t == GL_ELEMENT_ARRAY_BUFFER) glBindVertexArray(0); curVao_ = 0;
     glBindBuffer(t, bufs_[b.id]);
-    if (bytes > bufSize_[b.id]) { bufBytes_ += bytes - bufSize_[b.id]; bufSize_[b.id] = bytes; }
+    if (bytes > bufSize_[b.id]) { bufBytes_ += bytes - bufSize_[b.id]; rows_[size_t(bufTag_[b.id])].buffers += bytes - bufSize_[b.id]; bufSize_[b.id] = bytes; }
     glBufferData(t, GLsizeiptr(bufSize_[b.id]), nullptr, GL_DYNAMIC_DRAW); // orphan
     if (bytes) glBufferSubData(t, 0, GLsizeiptr(bytes), data);
     glBindBuffer(t, 0);
@@ -126,6 +168,7 @@ public:
     if (it == bufs_.end()) return;
     glDeleteBuffers(1, &it->second);
     bufBytes_ -= std::min(bufBytes_, bufSize_[b.id]);
+    { MemRow& r = rows_[size_t(bufTag_[b.id])]; r.buffers -= std::min(r.buffers, bufSize_[b.id]); r.nBuf--; bufTag_.erase(b.id); }
     bufSize_.erase(b.id);
     bufTarget_.erase(b.id);
     bufs_.erase(it);
@@ -153,12 +196,12 @@ public:
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
     }
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D, 0); boundTex_[active_] = 0;
     uint32_t h = next_++;
     size_t bpp = d.format == TexFormat::RGBA16F ? 8 : d.format == TexFormat::R8 ? 1 : (d.format == TexFormat::R16F || d.format == TexFormat::RG8) ? 2 : 4;
     size_t bytes = size_t(d.width) * d.height * bpp * (mips ? 4 : 3) / 3;
-    texs_[h] = {t, GL_TEXTURE_2D, bytes};
-    texBytes_ += bytes;
+    texs_[h] = {t, GL_TEXTURE_2D, bytes, tag_};
+    texBytes_ += bytes; rows_[size_t(tag_)].textures += bytes; rows_[size_t(tag_)].nTex++;
     return Texture{h};
   }
   bool supportsBC(bool srgb) const override { return s3tc_ && (!srgb || s3tcSrgb_); }
@@ -184,17 +227,46 @@ public:
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
     if (mips && info_.maxAnisotropy > 1 && d.anisotropy > 1)
       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(d.anisotropy, float(info_.maxAnisotropy)));
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D, 0); boundTex_[active_] = 0;
     uint32_t hnd = next_++;
-    texs_[hnd] = {t, GL_TEXTURE_2D, bytes};
-    texBytes_ += bytes;
+    texs_[hnd] = {t, GL_TEXTURE_2D, bytes, tag_};
+    texBytes_ += bytes; rows_[size_t(tag_)].textures += bytes; rows_[size_t(tag_)].nTex++;
+    return Texture{hnd};
+  }
+  bool supportsRG() const override { return rgtc_; }
+  Texture createCompressedTextureRG(const TextureDesc& d, const std::vector<std::vector<uint8_t>>& levels) override {
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    size_t bytes = 0;
+    int w = d.width, h = d.height;
+    for (size_t l = 0; l < levels.size(); l++) {
+      glCompressedTexImage2D(GL_TEXTURE_2D, GLint(l), 0x8DBD /* GL_COMPRESSED_RG_RGTC2 */, w, h, 0, GLsizei(levels[l].size()), levels[l].data());
+      bytes += levels[l].size();
+      w = std::max(1, w / 2); h = std::max(1, h / 2);
+    }
+    const bool mips = levels.size() > 1;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, GLint(levels.size()) - 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    const GLint wrap = d.wrap == Wrap::Repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    if (mips && info_.maxAnisotropy > 1 && d.anisotropy > 1)
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(d.anisotropy, float(info_.maxAnisotropy)));
+    glBindTexture(GL_TEXTURE_2D, 0); boundTex_[active_] = 0;
+    uint32_t hnd = next_++;
+    texs_[hnd] = {t, GL_TEXTURE_2D, bytes, tag_};
+    texBytes_ += bytes; rows_[size_t(tag_)].textures += bytes; rows_[size_t(tag_)].nTex++;
     return Texture{hnd};
   }
   void destroy(Texture t) override {
     auto it = texs_.find(t.id);
     if (it == texs_.end()) return;
+    for (GLuint& b : boundTex_) if (b == it->second.id) b = 0;   // (GL unbinds a deleted texture; a new one may reuse the name)
     glDeleteTextures(1, &it->second.id);
     texBytes_ -= std::min(texBytes_, it->second.bytes);
+    { MemRow& r = rows_[size_t(it->second.tag)]; r.textures -= std::min(r.textures, it->second.bytes); r.nTex--; }
     texs_.erase(it);
   }
 
@@ -233,12 +305,13 @@ public:
       return Program{};
     }
     uint32_t h = next_++;
-    progs_[h] = GLProg{p, {}, name};
+    progs_[h] = GLProg{p, {}, name, {}};
     return Program{h};
   }
   void destroy(Program p) override {
     auto it = progs_.find(p.id);
     if (it == progs_.end()) return;
+    if (cur_ == &it->second) { cur_ = nullptr; curProg_ = 0; glUseProgram(0); }
     glDeleteProgram(it->second.id);
     progs_.erase(it);
   }
@@ -248,6 +321,7 @@ public:
     GLuint vao = 0;
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
+    curVao_ = vao;
     for (const auto& a : attribs) {
       glBindBuffer(GL_ARRAY_BUFFER, bufs_[buffers[a.buffer].id]);
       glEnableVertexAttribArray(a.location);
@@ -256,7 +330,7 @@ public:
       glVertexAttribDivisor(a.location, a.perInstance ? 1 : 0);
     }
     if (index) glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, bufs_[index.id]);
-    glBindVertexArray(0);
+    glBindVertexArray(0); curVao_ = 0;
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     uint32_t h = next_++;
     vaos_[h] = vao;
@@ -265,6 +339,7 @@ public:
   void destroy(VertexInput v) override {
     auto it = vaos_.find(v.id);
     if (it == vaos_.end()) return;
+    if (curVao_ == it->second) curVao_ = 0;
     glDeleteVertexArrays(1, &it->second);
     vaos_.erase(it);
   }
@@ -318,7 +393,7 @@ public:
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     size_t bytes = size_t(w) * h * size_t(samples) * ((color == TexFormat::RGBA16F ? 8 : 4) + 4);
     rtBytes_[next_] = bytes;
-    texBytes_ += bytes;
+    texBytes_ += bytes; msBytes_ += bytes;
     uint32_t hd = next_++;
     rts_[hd] = rt;
     return RenderTarget{hd};
@@ -335,7 +410,7 @@ public:
     if (it == texs_.end()) return;
     glBindTexture(GL_TEXTURE_2D, it->second.id);
     glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D, 0); boundTex_[active_] = 0;
   }
   void setSampling(Texture t, Filter f, Wrap w, float aniso) override {
     auto it = texs_.find(t.id);
@@ -349,7 +424,7 @@ public:
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wr);
     if (info_.maxAnisotropy > 1)
       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::max(1.f, std::min(aniso, float(info_.maxAnisotropy))));
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D, 0); boundTex_[active_] = 0;
   }
   void setViewport(int x, int y, int w, int h, bool scissor) override {
     glViewport(x, y, w, h);
@@ -364,7 +439,7 @@ public:
     destroy(it->second.depth);
     if (it->second.rbColor) glDeleteRenderbuffers(1, &it->second.rbColor);
     if (it->second.rbDepth) glDeleteRenderbuffers(1, &it->second.rbDepth);
-    if (auto b = rtBytes_.find(rt.id); b != rtBytes_.end()) { texBytes_ -= std::min(texBytes_, b->second); rtBytes_.erase(b); }
+    if (auto b = rtBytes_.find(rt.id); b != rtBytes_.end()) { texBytes_ -= std::min(texBytes_, b->second); msBytes_ -= std::min(msBytes_, b->second); rtBytes_.erase(b); }
     glDeleteFramebuffers(1, &it->second.fbo);
     rts_.erase(it);
   }
@@ -376,43 +451,63 @@ public:
   }
   void clear(float r, float g, float b, float a, bool color, bool depth) override {
     GLbitfield m = 0;
-    if (color) { glClearColor(r, g, b, a); glColorMask(1, 1, 1, 1); m |= GL_COLOR_BUFFER_BIT; }
-    if (depth) { glDepthMask(GL_TRUE); glClearDepth(1.0); m |= GL_DEPTH_BUFFER_BIT; }
+    if (color) { glClearColor(r, g, b, a); glColorMask(1, 1, 1, 1); m |= GL_COLOR_BUFFER_BIT; state_.colorWrite = true; }
+    if (depth) { glDepthMask(GL_TRUE); glClearDepth(1.0); m |= GL_DEPTH_BUFFER_BIT; state_.depthWrite = true; }
     glClear(m);
-    state_.depthWrite = true; state_.colorWrite = true;
   }
+  // (only what changed reaches the driver: a few thousand draws a frame each set the whole state, and every call is
+  // a pipeline-state lookup in the GL-on-Metal layer)
   void setPipeline(const PipelineState& s) override {
-    if (s.depth == DepthTest::Off) glDisable(GL_DEPTH_TEST);
-    else { glEnable(GL_DEPTH_TEST); glDepthFunc(s.depth == DepthTest::Less ? GL_LESS : GL_LEQUAL); }
-    glDepthMask(s.depthWrite ? GL_TRUE : GL_FALSE);
-    if (s.cull == Cull::None) glDisable(GL_CULL_FACE);
-    else { glEnable(GL_CULL_FACE); glCullFace(s.cull == Cull::Back ? GL_BACK : GL_FRONT); }
-    switch (s.blend) {
-      case Blend::Opaque: glDisable(GL_BLEND); break;
-      case Blend::Alpha: glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); break;
-      case Blend::Additive: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); break;
-      case Blend::Max: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); break;
-      case Blend::Multiply: glEnable(GL_BLEND); glBlendFunc(GL_ZERO, GL_SRC_COLOR); break;
-      case Blend::Premul: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
+    const bool all = !pipeValid_;
+    const PipelineState& o = state_;
+    if (all || s.depth != o.depth) {
+      if (s.depth == DepthTest::Off) glDisable(GL_DEPTH_TEST);
+      else { glEnable(GL_DEPTH_TEST); glDepthFunc(s.depth == DepthTest::Less ? GL_LESS : GL_LEQUAL); }
     }
-    glBlendEquation(s.blend == Blend::Max ? GL_MAX : GL_FUNC_ADD);
-    if (s.alphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE); else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-    GLboolean cw = s.colorWrite ? GL_TRUE : GL_FALSE;
-    glColorMask(cw, cw, cw, cw);
-    if (s.depthBiasFactor != 0 || s.depthBiasUnits != 0) {
-      glEnable(GL_POLYGON_OFFSET_FILL);
-      glPolygonOffset(s.depthBiasFactor, s.depthBiasUnits);
-    } else glDisable(GL_POLYGON_OFFSET_FILL);
+    if (all || s.depthWrite != o.depthWrite) glDepthMask(s.depthWrite ? GL_TRUE : GL_FALSE);
+    if (all || s.cull != o.cull) {
+      if (s.cull == Cull::None) glDisable(GL_CULL_FACE);
+      else { glEnable(GL_CULL_FACE); glCullFace(s.cull == Cull::Back ? GL_BACK : GL_FRONT); }
+    }
+    if (all || s.blend != o.blend) {
+      switch (s.blend) {
+        case Blend::Opaque: glDisable(GL_BLEND); break;
+        case Blend::Alpha: glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); break;
+        case Blend::Additive: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); break;
+        case Blend::Max: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); break;
+        case Blend::Multiply: glEnable(GL_BLEND); glBlendFunc(GL_ZERO, GL_SRC_COLOR); break;
+        case Blend::Premul: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
+      }
+      glBlendEquation(s.blend == Blend::Max ? GL_MAX : GL_FUNC_ADD);
+    }
+    if (all || s.alphaToCoverage != o.alphaToCoverage) { if (s.alphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE); else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE); }
+    if (all || s.colorWrite != o.colorWrite) {
+      GLboolean cw = s.colorWrite ? GL_TRUE : GL_FALSE;
+      glColorMask(cw, cw, cw, cw);
+    }
+    if (all || s.depthBiasFactor != o.depthBiasFactor || s.depthBiasUnits != o.depthBiasUnits) {
+      if (s.depthBiasFactor != 0 || s.depthBiasUnits != 0) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(s.depthBiasFactor, s.depthBiasUnits);
+      } else glDisable(GL_POLYGON_OFFSET_FILL);
+    }
     state_ = s;
+    pipeValid_ = true;
   }
   void useProgram(Program p) override {
     cur_ = p.id ? &progs_[p.id] : nullptr;
-    glUseProgram(cur_ ? cur_->id : 0);
+    const GLuint id = cur_ ? cur_->id : 0;
+    if (id == curProg_) return;
+    curProg_ = id;
+    glUseProgram(id);
   }
   void bindTexture(int unit, Texture t) override {
-    glActiveTexture(GL_TEXTURE0 + unit);
     auto it = texs_.find(t.id);
-    glBindTexture(GL_TEXTURE_2D, it == texs_.end() ? 0 : it->second.id);
+    const GLuint id = it == texs_.end() ? 0 : it->second.id;
+    if (unit >= 0 && unit < MAX_UNITS && boundTex_[unit] == id && id != 0) return;
+    if (active_ != unit) { glActiveTexture(GL_TEXTURE0 + GLenum(unit)); active_ = unit; }
+    glBindTexture(GL_TEXTURE_2D, id);
+    if (unit >= 0 && unit < MAX_UNITS) boundTex_[unit] = id;
   }
   void bindUniformBuffer(int binding, Buffer b) override { glBindBufferBase(GL_UNIFORM_BUFFER, binding, bufs_[b.id]); }
 
@@ -429,13 +524,13 @@ public:
   }
 
   void draw(VertexInput v, uint32_t count, uint32_t first) override {
-    glBindVertexArray(vaos_[v.id]);
+    bindVao(vaos_[v.id]);
     glDrawArrays(GL_TRIANGLES, GLint(first), GLsizei(count));
     draws_++;
     tris_ += count / 3;
   }
   void drawIndexed(VertexInput v, IndexType t, uint32_t count, uint32_t first, uint32_t instances) override {
-    glBindVertexArray(vaos_[v.id]);
+    bindVao(vaos_[v.id]);
     GLenum it = t == IndexType::U16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
     const void* off = reinterpret_cast<const void*>(uintptr_t(first) * (t == IndexType::U16 ? 2 : 4));
     if (instances == 1) glDrawElements(GL_TRIANGLES, GLsizei(count), it, off);
@@ -453,14 +548,66 @@ public:
   uint64_t trianglesThisFrame() const override { return tris_; }
   size_t textureBytes() const override { return texBytes_; }
   size_t bufferBytes() const override { return bufBytes_; }
+  void gpuTiming(bool on) override { timing_ = on; }
+  void gpuPass(const char* name) override {
+    if (!timing_) return;
+    if (inPass_) { glEndQuery(GL_TIME_ELAPSED); inPass_ = false; }
+    if (!name) {   // (the frame's end: the results of the frame three before, the ring moves on)
+      passFrame_++;
+      const int slot = passFrame_ % RING;
+      double total = 0;
+      for (GpuPass& p : passes_) {
+        if (!p.pending[slot]) continue;
+        GLuint64 ns = 0;
+        glGetQueryObjectui64v(p.q[slot], GL_QUERY_RESULT, &ns);
+        p.pending[slot] = false;
+        const double ms = double(ns) / 1e6;
+        p.sum += ms; p.max = std::max(p.max, ms); p.n++;
+        total += ms;
+      }
+      gpuLast_ = total;
+      return;
+    }
+    GpuPass* p = nullptr;
+    for (GpuPass& q : passes_) if (q.name == name) { p = &q; break; }
+    if (!p) { passes_.push_back(GpuPass{}); p = &passes_.back(); p->name = name; glGenQueries(RING, p->q); }
+    const int slot = passFrame_ % RING;
+    if (p->pending[slot]) return;   // (a pass named twice in a frame: the first one counts)
+    glBeginQuery(GL_TIME_ELAPSED, p->q[slot]);
+    p->pending[slot] = true;
+    inPass_ = true;
+  }
+  std::vector<GpuTime> gpuTimes() const override {
+    std::vector<GpuTime> r;
+    for (const GpuPass& p : passes_) r.push_back(GpuTime{p.name, p.n ? p.sum / p.n : 0.0, p.max, p.n});
+    return r;
+  }
+  double gpuLastFrameMs() const override { return gpuLast_; }
+  std::string memTag(const std::string& tag) override {
+    std::string prev = rows_[size_t(tag_)].tag;
+    for (size_t i = 0; i < rows_.size(); i++) if (rows_[i].tag == tag) { tag_ = int(i); return prev; }
+    rows_.push_back(MemRow{tag, 0, 0, 0, 0});
+    tag_ = int(rows_.size()) - 1;
+    return prev;
+  }
+  std::vector<MemRow> memByTag() const override {
+    std::vector<MemRow> r = rows_;
+    r.push_back(MemRow{"(multisampled render buffers)", msBytes_, 0, 0, 0});
+    return r;
+  }
 
 private:
+  void bindVao(GLuint vao) { if (vao != curVao_) { glBindVertexArray(vao); curVao_ = vao; } }
   GLint loc(const char* n) {
     if (!cur_) return -1;
+    // (found by their address first, no string built or hashed per uniform per draw; the name compared as well: a
+    // caller may format several names into one buffer)
+    for (const auto& pl : cur_->byPtr) if (pl.p == n && pl.n == n) return pl.l;
+    GLint l;
     auto it = cur_->locs.find(n);
-    if (it != cur_->locs.end()) return it->second;
-    GLint l = glGetUniformLocation(cur_->id, n);
-    cur_->locs.emplace(n, l);
+    if (it != cur_->locs.end()) l = it->second;
+    else { l = glGetUniformLocation(cur_->id, n); cur_->locs.emplace(n, l); }
+    if (cur_->byPtr.size() < 96) cur_->byPtr.push_back({n, n, l});
     return l;
   }
 
@@ -475,11 +622,25 @@ private:
   std::unordered_map<uint32_t, size_t> rtBytes_;
   GLProg* cur_ = nullptr;
   PipelineState state_;
+  bool pipeValid_ = false;
+  enum { MAX_UNITS = 32 };
+  GLuint boundTex_[MAX_UNITS] = {0};
+  int active_ = 0;
+  GLuint curProg_ = 0, curVao_ = 0;
   uint32_t draws_ = 0;
   uint64_t tris_ = 0;
-  size_t texBytes_ = 0, bufBytes_ = 0;
+  size_t texBytes_ = 0, bufBytes_ = 0, msBytes_ = 0;
+  std::vector<MemRow> rows_{MemRow{"(untagged)", 0, 0, 0, 0}};
+  int tag_ = 0;
+  std::unordered_map<uint32_t, int> bufTag_;
+  enum { RING = 4 };
+  struct GpuPass { std::string name; GLuint q[RING] = {0, 0, 0, 0}; bool pending[RING] = {false, false, false, false}; double sum = 0, max = 0; int n = 0; };
+  std::vector<GpuPass> passes_;
+  bool timing_ = false, inPass_ = false;
+  int passFrame_ = 0;
+  double gpuLast_ = 0;
 public:
-  bool s3tc_ = false, s3tcSrgb_ = false;
+  bool s3tc_ = false, s3tcSrgb_ = false, rgtc_ = false;
 };
 
 std::unique_ptr<Device> createGLDevice(GetProc loader) {

@@ -80,6 +80,10 @@ public:
   /// (d.format / d.mipmaps are ignored). supportsBC(srgb): whether the device takes them (else upload RGBA8).
   virtual bool supportsBC(bool srgb) const = 0;
   virtual Texture createCompressedTexture(const TextureDesc& d, bool bc3, bool srgb, const std::vector<std::vector<uint8_t>>& levels) = 0;
+  /// a two-channel block-compressed texture (BC5 / RGTC2, 8 bits a pixel: tangent-space normal maps, x and y; the
+  /// shader rebuilds z), every mip level given. supportsRG(): whether the device takes it
+  virtual bool supportsRG() const { return false; }
+  virtual Texture createCompressedTextureRG(const TextureDesc& d, const std::vector<std::vector<uint8_t>>& levels) { (void)d; (void)levels; return Texture{}; }
   virtual void destroy(Texture t) = 0;
 
   /// GLSL 410 sources; returns 0 (and logs) on a compile / link error.
@@ -136,6 +140,17 @@ public:
   virtual uint64_t trianglesThisFrame() const = 0;
   virtual size_t textureBytes() const = 0;
   virtual size_t bufferBytes() const = 0;
+  /// (debug, the memory table) resources created from now on are counted under this tag; returns the tag before
+  virtual std::string memTag(const std::string& tag) { (void)tag; return {}; }
+  struct MemRow { std::string tag; size_t textures = 0, buffers = 0; int nTex = 0, nBuf = 0; };
+  virtual std::vector<MemRow> memByTag() const { return {}; }
+  /// (debug, the hitch hunt) GPU time per pass: gpuPass("shadow") ends the pass before and starts this one (nullptr:
+  /// ends); the times come back a few frames later (timer queries). Off (and free) unless gpuTiming(true).
+  virtual void gpuTiming(bool on) { (void)on; }
+  virtual void gpuPass(const char* name) { (void)name; }
+  struct GpuTime { std::string name; double mean = 0, max = 0; int n = 0; };
+  virtual std::vector<GpuTime> gpuTimes() const { return {}; }
+  virtual double gpuLastFrameMs() const { return 0; }
 };
 
 using GetProc = void* (*)(const char*);

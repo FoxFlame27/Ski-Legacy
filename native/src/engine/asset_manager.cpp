@@ -26,7 +26,7 @@
 namespace sl {
 
 namespace {
-struct Image { int w = 0, h = 0; std::vector<uint8_t> rgba; std::vector<std::vector<uint8_t>> levels; bool bc3 = false; };
+struct Image { int w = 0, h = 0; std::vector<uint8_t> rgba; std::vector<std::vector<uint8_t>> levels; bool bc3 = false, bc5 = false; };
 
 bool decodeImage(const uint8_t* data, size_t size, const char* mime, Image& out) {
   bool webp = (mime && std::string(mime) == "image/webp") || (size > 12 && std::memcmp(data, "RIFF", 4) == 0 && std::memcmp(data + 8, "WEBP", 4) == 0);
@@ -103,7 +103,13 @@ std::string AssetManager::modelPath(const std::string& name) const { return path
 std::shared_ptr<Model> AssetManager::model(const std::string& name, const ModelLoadOptions& opt) {
   auto it = cache_.find(name);
   if (it != cache_.end()) return it->second;
+  const std::string tagBefore = dev_.memTag("model " + name);
+  const double t0 = p_.timeSeconds();
   auto m = loadFile(paths_.model(name), name, opt);
+  dev_.memTag(tagBefore);
+  const double ms = (p_.timeSeconds() - t0) * 1000;
+  lateLoadMs += ms;
+  if (logLateLoads) SL_INFO("[hitch] model '%s' loaded on the main thread during play: %.1f ms", name.c_str(), ms);
   cache_[name] = m;
   return m;
 }
@@ -174,13 +180,16 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       // for the larger colour maps; normal maps stay uncompressed (BC1 blocks show in the highlights)
       int cap = std::min(srgb[i] ? std::max(opt.colorTextureSize, opt.maxTextureSize * std::max(1, textureScale)) : opt.maxTextureSize, textureCap);
       bool bc = compressTextures && dev_.supportsBC(srgb[i]) && !opt.keepCpu && !isNormal[i];
-      jobs.push_back(std::async(std::launch::async, [img, cap, bc]() {
+      // (normal maps: BC5, two channels at 8 bits a pixel, the shader rebuilds z; not one that is a colour map as well)
+      bool bc5 = compressTextures && dev_.supportsRG() && !opt.keepCpu && isNormal[i] && !srgb[i];
+      jobs.push_back(std::async(std::launch::async, [img, cap, bc, bc5]() {
         Image im;
         if (!img || !img->buffer_view) return im;
         const uint8_t* data = cgltf_buffer_view_data(img->buffer_view);
         if (!data || !decodeImage(data, img->buffer_view->size, img->mime_type, im)) return Image{};
         downsample(im, cap);
         if (bc && im.w >= 4 && im.h >= 4) compressBC(im.rgba.data(), im.w, im.h, im.levels, im.bc3);   // (on the worker too)
+        if (bc5 && im.w >= 4 && im.h >= 4) { compressBC5(im.rgba.data(), im.w, im.h, im.levels); im.bc5 = true; }
         return im;
       }));
     }
@@ -192,7 +201,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
       td.format = srgb[i] ? gfx::TexFormat::SRGBA8 : gfx::TexFormat::RGBA8;
       td.anisotropy = anisotropy;
       if (!im.levels.empty()) {
-        texOf[i] = dev_.createCompressedTexture(td, im.bc3, srgb[i], im.levels);
+        texOf[i] = im.bc5 ? dev_.createCompressedTextureRG(td, im.levels) : dev_.createCompressedTexture(td, im.bc3, srgb[i], im.levels);
         for (auto& l : im.levels) texBytes_ += l.size();
       } else {
         texOf[i] = dev_.createTexture(td, im.rgba.data());

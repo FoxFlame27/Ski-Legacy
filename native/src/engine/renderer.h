@@ -294,6 +294,9 @@ private:
   int nCasc_ = 1;
   vec4 planes_[6];
   uint32_t lastDraws_ = 0;
+  const Material* lastMat_ = nullptr;   // (drawItem: the material the draw before set, skipped when the next one's is the same)
+  bool lastPine_ = false;
+  float lastHeight_ = 0;
   double time_ = 0, lastClock_ = -1, windPhase_ = 0, frameClockDt_ = 0;
   dvec2 mistDrift_{0};
   bool noMist_ = false;

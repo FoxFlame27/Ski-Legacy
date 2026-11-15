@@ -30,6 +30,8 @@ struct GameOptions {
   double mpSeconds = 8;          // --mp-seconds S: presence sent this long
 };
 
+/// runGame's exit code asking main() to start the game again (a new graphics preset)
+constexpr int kRestartGame = 75;
 int runGame(const GameOptions& opt);
 
 } // namespace sl

@@ -137,6 +137,8 @@ private:
     std::function<void(float)> clickAt;         // a click at fraction x (sliders, segments)
     bool disabled = false;
     bool inList = false;                        // in the scrolling list (hit only inside its viewport)
+    int optCount = 0;                           // a choice row: its options (the select: A opens it)
+    std::function<void(int)> pick;              // sets option i
   };
   void drawShade(int mode);
   void drawLogo(bool big);
@@ -174,6 +176,7 @@ private:
   Screen screen_ = Screen::None;
   std::vector<Item> items_;
   int focus_ = 0, focusPrev_ = -1;
+  int selRow_ = -1, selCur_ = 0;   // the open select (a choice row: its cursor), -1 none
   // the focus look eases in and out like the CSS transitions (.brush-btn 0.18 s, .mp-row 0.2 s, .mode-card 0.3 s)
   std::vector<float> focA_;
   float dt_ = 0;

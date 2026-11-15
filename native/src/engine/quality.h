@@ -76,7 +76,7 @@ struct Quality {
     if (n == "auto") n = platformDefault();
     q.name = n;
     if (n == "super" || n == "performance") {
-      q.terrainLodK = 1.15f; q.shadowSize = 1024; q.shadowRange = 60; q.treeNear = 25; q.treeMid = 100; q.treeFar = 380; q.renderScale = n == "super" ? 0.6f : 0.85f;
+      q.terrainLodK = 1.15f; q.shadowSize = 1024; q.shadowRange = 60; q.treeNear = 25; q.treeMid = 100; q.treeFar = 380; q.renderScale = n == "super" ? 0.75f : 1.0f;   // (Performance: the full resolution: the user found 0.85 x the pixel budget blurry)
       q.maxTexture = 1024; q.lodScale = 0.75f; q.farZ = 20000; q.npcScale = 0.75f; q.maxLights = 8; q.maxPeople = 36;
       q.fx = 0; q.terrainDetail = 0; q.msaa = 2; q.sharpen = 0.25f; q.detailTex = 0; q.trailSize = 512; q.trailRange = 64; q.envSize = 128; q.aniso = n == "super" ? 4.f : 8.f;
       // (no FXAA: MSAA 2x for the edges; the reduced 3D resolution is upscaled with Catmull-Rom + a contrast-adaptive sharpen)

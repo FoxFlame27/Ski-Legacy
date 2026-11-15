@@ -162,8 +162,19 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
   }
   lookX_ = ev.mouseDX * mouseSens; lookY_ = ev.mouseDY * mouseSens * (invertY ? -1.f : 1.f); wheel_ = ev.wheel;
   if (havePad) {
-    auto dz = [](float v) { return std::fabs(v) < 0.15f ? 0.f : (v - (v > 0 ? 0.15f : -0.15f)) / 0.85f; };
-    float rx = dz(gp.rightX), ry = dz(gp.rightY);
+    // a worn or Bluetooth Pro Controller / Joy-Con rests off centre: learn the rest point while the stick sits still
+    // near the middle, and use a radial dead zone (0.2) around it, so the camera never drifts on its own
+    auto rest = [&](float x, float y, vec2& c, vec2& last, double& still) {
+      const double now = p.timeSeconds();
+      if (std::fabs(x - last.x) > 0.02f || std::fabs(y - last.y) > 0.02f) { last = vec2(x, y); still = now; }
+      else if (std::hypot(x, y) < 0.4f && now - still > 0.6) c += (vec2(x, y) - c) * 0.2f;
+      float dx = x - c.x, dy = y - c.y, m = std::sqrt(dx * dx + dy * dy);
+      if (m < 0.2f) return vec2(0);
+      float k = std::min(1.f, (m - 0.2f) / 0.8f) / m;
+      return vec2(dx * k, dy * k);
+    };
+    const vec2 r = rest(gp.rightX, gp.rightY, restR_, lastR_, stillR_);
+    float rx = r.x, ry = r.y;
     lookX_ += rx * std::fabs(rx) * 18.f * padSens; // ~ mouse pixels per frame at full deflection
     lookY_ += ry * std::fabs(ry) * 12.f * padSens * (invertY ? -1.f : 1.f);
   }

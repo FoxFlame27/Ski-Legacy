@@ -6,6 +6,7 @@
 // right stick always looks (not rebindable), as in the web version. Bindings can be overridden from a JSON object
 // shaped like the web save's `binds` ({ "kb": { "jump": "Space" }, "pad": { "jump": 0 } }).
 #pragma once
+#include "core/math.h"
 #include "platform/platform.h"
 #include <array>
 #include <cstdint>
@@ -100,6 +101,7 @@ private:
   int activePad_ = -1;
   platform::PadFamily family_ = platform::PadFamily::Xbox;
   double lastLook_ = -1e9;
+  vec2 restR_{0}, lastR_{0}; double stillR_ = 0;   // (the right stick's learned rest point)
 };
 
 /// Text fields (the multiplayer name, the chat): `typed` (Events::text, UTF-8) appended to `s` up to `maxChars`

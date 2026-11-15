@@ -131,6 +131,7 @@ void Menus::open(Screen s, int dir) {
   screen_ = s;
   dir_ = dir;
   focus_ = 0; focusPrev_ = -1;
+  selRow_ = -1;
   focA_.clear();
   scroll_ = scrollTarget_ = 0;
   focusScroll_ = true;
@@ -246,6 +247,17 @@ void Menus::handle(const UiNav& nav) {
   }
   if (!n) { if (nav.cancel) back(); return; }
   focus_ = std::clamp(focus_, 0, n - 1);
+  if (selRow_ >= 0) {   // a select is open: left / right move its cursor, A sets the option, B (or up / down) closes it
+    if (selRow_ >= n || !items_[size_t(selRow_)].pick || nav.click) { selRow_ = -1; }
+    else {
+      const Item& it = items_[size_t(selRow_)];
+      if (nav.left) selCur_ = (selCur_ + it.optCount - 1) % it.optCount;
+      else if (nav.right) selCur_ = (selCur_ + 1) % it.optCount;
+      else if (nav.confirm) { auto f = it.pick; int c = selCur_; selRow_ = -1; f(c); }
+      else if (nav.cancel || nav.up || nav.down) selRow_ = -1;
+      return;
+    }
+  }
   auto move = [&](int d) {
     int i = focus_;
     for (int k = 0; k < n; k++) { i = ((i + d) % n + n) % n; if (!items_[size_t(i)].disabled) break; }
@@ -853,6 +865,7 @@ void Menus::scrSettings() {
       const Box& bxx = boxes[i];
       vec4 c = danger ? ko : blue;
       if (int(i) == on) ui_.roundRect(bxx.x, top + bxx.y, bxx.w, segH, 5 * u_, c);
+      if (selRow_ == int(items_.size()) && int(i) == selCur_) ui_.roundRectStroke(bxx.x - 4 * u_, top + bxx.y - 4 * u_, bxx.w + 8 * u_, segH + 8 * u_, 8 * u_, 3 * d, red);   // (the open select's cursor)
       ui_.roundRectStroke(bxx.x, top + bxx.y, bxx.w, segH, 5 * u_, 2 * d, c);
       ui_.textLH(bxx.x + bxx.w / 2, top + bxx.y, segH, tsm, UiFont::BodyBold, int(i) == on ? white : c, labels[i], UiAlign::Center);
     }
@@ -910,7 +923,8 @@ void Menus::scrSettings() {
         applyKey("quality");
       };
       it.adjust = [set, qi](int dd) { set(qi + dd); };
-      it.activate = [set, qi] { set(qi + 1 < kQualityCount ? qi + 1 : 0); };
+      it.pick = set; it.optCount = kQualityCount;
+      { const int idx = int(items_.size()); it.activate = [this, idx, qi] { selRow_ = idx; selCur_ = qi; }; }   // (A opens the select)
       std::vector<vec4> hits;
       for (auto& bxx : boxes) hits.push_back(vec4(bxx.x, top + bxx.y, bxx.w, segH));
       it.clickAt = [set, hits](float mx) { for (size_t i = 0; i < hits.size(); i++) if (mx >= hits[i].x && mx <= hits[i].x + hits[i].z) { set(int(i)); return; } };
@@ -978,7 +992,9 @@ void Menus::scrSettings() {
         applyKey(key);
       };
       it.adjust = [pick, on](int dd) { pick(on + dd); };
-      it.activate = [pick, on] { pick(on + 1); };
+      it.pick = pick; it.optCount = int(opts.size());
+      if (opts.size() > 2) { const int idx = int(items_.size()); it.activate = [this, idx, on] { selRow_ = idx; selCur_ = on; }; }   // (A opens the select)
+      else it.activate = [pick, on] { pick(on + 1); };   // (on / off: A flips it)
       std::vector<vec4> hits;
       for (auto& bxx : boxes) hits.push_back(vec4(bxx.x, top + bxx.y, bxx.w, segH));
       it.clickAt = [pick, hits](float mx) { for (size_t i = 0; i < hits.size(); i++) if (mx >= hits[i].x && mx <= hits[i].x + hits[i].z) { pick(int(i)); return; } };

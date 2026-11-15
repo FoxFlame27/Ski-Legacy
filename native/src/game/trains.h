@@ -57,7 +57,6 @@ public:
   dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int seatCount() const { return ncars_ * 48; }
   /// (debug trainfar: the trains from outside at a distance) a train's car, its speed
-  size_t trainCount() const { return trains_.size(); }
   void carPose(int train, int car, glm::dmat4& M) const { carMatrix(train, car, M); }
   double trainSpeed(int train) const { return trains_[size_t(train)].st.speed; }
   /// (railway.js seatPassengers / showPassengers) the skiers riding along in the car you sit in (the seat view)
@@ -132,7 +131,6 @@ public:
   int trainCount() const { return int(trains_.size()); }
   dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
-  size_t trainCount() const { return trains_.size(); }   // (debug trainfar)
   void carPose(int train, int car, glm::dmat4& M) const { carMatrix(train, car, M); }
   double trainSpeed(int train) const { return trains_[size_t(train)].st.speed; }
   /// (multiplayer) a train for `to` stands at `from` for 4 s more: check before paying

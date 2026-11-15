@@ -13,6 +13,11 @@
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
+#include <vector>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 int main(int argc, char** argv) {
   sl::GameOptions o;
@@ -48,5 +53,32 @@ int main(int argc, char** argv) {
       return 0;
     } else SL_WARN("unknown option %s", a.c_str());
   }
-  return sl::runGame(o);
+  // test runs are silent (the autotest's mixer still runs on SDL's dummy driver); SKI_LEGACY_SOUND=1 to hear them
+  if ((o.autotest || !o.mptest.empty() || std::getenv("SKI_LEGACY_DEBUG")) && !std::getenv("SKI_LEGACY_SOUND")) {
+#if defined(_WIN32)
+    _putenv_s("SDL_AUDIODRIVER", "dummy");
+#else
+    setenv("SDL_AUDIODRIVER", "dummy", 1);
+#endif
+  }
+  const int r = sl::runGame(o);
+#if defined(__APPLE__) || defined(__linux__)
+  if (r == sl::kRestartGame) {   // (a new graphics preset: this process again, straight to the menu)
+    std::string self = argv[0];
+#if defined(__APPLE__)
+    char buf[4096]; uint32_t sz = sizeof buf;
+    if (_NSGetExecutablePath(buf, &sz) == 0) self = buf;
+#endif
+    std::vector<char*> args(argv, argv + argc);
+    bool hasNoIntro = false;
+    for (int i = 1; i < argc; i++) hasNoIntro = hasNoIntro || std::strcmp(argv[i], "--no-intro") == 0;
+    static char noIntro[] = "--no-intro";
+    if (!hasNoIntro) args.push_back(noIntro);
+    args.push_back(nullptr);
+    SDL_Quit();
+    execv(self.c_str(), args.data());
+    SL_ERROR("restart failed: %s", self.c_str());
+  }
+#endif
+  return r == sl::kRestartGame ? 0 : r;
 }

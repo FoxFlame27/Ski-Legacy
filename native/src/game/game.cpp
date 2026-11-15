@@ -645,7 +645,7 @@ int runGame(const GameOptions& opt) {
   std::string dbg = std::getenv("SKI_LEGACY_DEBUG") ? std::getenv("SKI_LEGACY_DEBUG") : "";
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
   bool drawTerrain = !off("noterrain"), drawTrees = !off("notrees"), drawVillage = !off("novillage"), drawSkier = !off("noskier");
-  bool running = true, paused = false;
+  bool running = true, paused = false, qualityRestart = false;
   bool vehTest = off("vehtest");   // (debug: the autotest starts with the Phase 3 vehicles)
   double acc = 0, last = plat->timeSeconds(), fpsT = 0, fps = 0, simTime = 0;
   int fpsN = 0, frame = 0;
@@ -698,7 +698,13 @@ int runGame(const GameOptions& opt) {
     if (all || k == "invertY") input.invertY = save.settingOn("invertY");
     if (all || k == "vibration") input.vibration = save.settingOn("vibration");
     if (all || k == "fov") fovSetting = float(save.setting("fov", 65));
+    // (quality.js setQuality applies at once: here the preset is built into the shaders and the loaded textures, so the
+    // game saves and restarts itself straight into the new preset, without the intro)
+#if defined(_WIN32)
     if (k == "quality") flash("Graphics preset saved: it applies the next time the game starts", Hud::Flash::Good);
+#else
+    if (k == "quality" && !opt.autotest && !mptest) { qualityRestart = true; running = false; }
+#endif
     if (!all) save.write(*plat);
   };
   applySetting("");
@@ -1803,7 +1809,19 @@ int runGame(const GameOptions& opt) {
   // railway lines, the forest cuts ... which are declared after the terrain and so destroyed before its destructor
   // waits for them: exit code 139 now and then. This guard is destroyed first and drains the pool)
   struct JobDrain { JobSystem& j; ~JobDrain() { while (j.pending() > 0) std::this_thread::yield(); } } jobDrain{jobs};
+  // (debug: SKI_LEGACY_DEBUG=qrestart: 4 s after the menu is up the preset changes to High once, as from SETTINGS: the
+  // game must come back on its own in the new preset)
+  const bool qRestartTest = !opt.autotest && std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "qrestart") && !std::getenv("SKI_LEGACY_QRESTARTED");
+  const double qRestartAt = plat->timeSeconds() + 4;
+  SL_INFO("quality in use: %s", q.name.c_str());
   while (running) {
+    if (qRestartTest && plat->timeSeconds() > qRestartAt && !qualityRestart) {
+#if defined(_WIN32)
+      _putenv_s("SKI_LEGACY_QRESTARTED", "1");
+#else
+      setenv("SKI_LEGACY_QRESTARTED", "1", 1);
+#endif
+      save.quality = "high"; applySetting("quality"); }
     platform::Events ev;
     plat->pollEvents(ev);
     if (ev.quit) running = false;
@@ -4335,12 +4353,11 @@ int runGame(const GameOptions& opt) {
         double ms = frameDt * 1000;
         bool console = q.dynamicRes;
         const std::string& qn = q.name;
-        bool fast = console || qn == "super" || qn == "performance";
         // (Balanced and up stay sharp: native resolution, only a mild dip under real load; the user found the 3D blurry)
-        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : fast ? 0.6 : 1.0;   // (Balanced and up: always the full resolution)
+        double hi = console ? 36 : 19, lo = console ? 28 : 14.5, floorS = console ? 0.6 : qn == "super" ? 0.75 : 1.0;   // (only Super / Switch ever drop below the full resolution)   // (Balanced and up: always the full resolution)
         if (ms > hi && dynScale > floorS) dynScale = std::max(floorS, dynScale - (ms > hi * 1.6 ? 0.05 : 0.02));
         else if (ms < lo && dynScale < 1.0) dynScale = std::min(1.0, dynScale + 0.005);
-        double budgetMP = qn == "super" ? 1.6 : qn == "performance" ? 2.4 : qn == "switch" ? 1.0 : 1e9;
+        double budgetMP = qn == "super" ? 2.4 : qn == "switch" ? 1.0 : 1e9;
         double px = double(std::max(1, renderer.width())) * double(std::max(1, renderer.height()));
         double budgetS = std::min(1.0, std::sqrt(budgetMP * 1e6 / px));
         float want = float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0) * budgetS * dynScale);
@@ -5096,6 +5113,7 @@ int runGame(const GameOptions& opt) {
   if (mp.active()) mp.leave();   // (quitting online: the profile pushed, close code 1000)
   audio.stop(*plat);
   if (mptest) return mt.ok && mt.step >= 12 ? 0 : 1;
+  if (qualityRestart) { save.write(*plat); return kRestartGame; }
   return 0;
 }
 

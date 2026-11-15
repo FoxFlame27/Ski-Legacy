@@ -418,7 +418,7 @@ void Multiplayer::leave() {
   seats.clear(); warps.clear(); skips.clear(); asks.clear(); guests.clear(); chaletOwners.clear();
   ride = CarRide{}; mySeat.clear(); skipKey_.clear();
   carSentAny_ = false; keptSig_.clear();
-  heli = Json(); heliRented_ = heliReturning_ = false; heliWasReady_ = -1; heliV_ = "none";
+  heli = Json(); heliRented_ = heliReturning_ = false; heliWasReady_ = -1; heliV_ = "none"; policeSent_ = false;
   banner.clear(); chat.clear();
   host.save->mpWrite = nullptr;
   restoreSave();
@@ -663,6 +663,21 @@ bool Multiplayer::heliFrame(bool onPad, bool flying, bool parkedAway, const dvec
     else if (was != "none" && heliRented_) net.request("veh", Json{{"k", "heli"}, {"off", true}}, [](const net::NetResult&) {});   // (flying home on its own)
   }
   return !onPad || ready;
+}
+
+void Multiplayer::policeFrame(double dt, const std::vector<std::array<double, 5>>& cars) {
+  if (!active_ || !net.isOpen()) { policeSent_ = false; return; }
+  if (cars.empty()) {
+    if (policeSent_) { policeSent_ = false; net.request("veh", Json{{"k", "police"}, {"off", true}}, [](const net::NetResult&) {}); }
+    return;
+  }
+  if ((policeT_ += dt) < 1.0 / 6 && policeSent_) return;
+  policeT_ = 0;
+  policeSent_ = true;
+  auto r2 = [](double v) { return std::round(v * 100) / 100; };
+  Json list = Json::array();
+  for (const auto& c : cars) list.push_back({r2(c[0]), r2(c[1]), r2(c[2]), r2(c[3]), r2(c[4])});
+  net.send("veh", Json{{"k", "police"}, {"cars", list}});
 }
 
 void Multiplayer::towDone() { net.request("towDone", Json::object(), [](const net::NetResult&) {}); }

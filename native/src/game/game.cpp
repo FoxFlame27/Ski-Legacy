@@ -798,7 +798,7 @@ int runGame(const GameOptions& opt) {
     char b[160];
     for (int i = 0; i < railway.trainCount(); i++) { const dvec3 p = railway.debugCarPos(i, 0); std::snprintf(b, sizeof b, " rail%d %.2f %.2f %.2f", i, p.x, p.y, p.z); s += b; }
     for (int i = 0; i < express.trainCount(); i++) { const dvec3 p = express.debugCarPos(i, 0); std::snprintf(b, sizeof b, " exp%d %.2f %.2f %.2f", i, p.x, p.y, p.z); s += b; }
-    for (size_t i = 0; i < lifts.lines().size(); i++) { const LiftLine& l = lifts.lines()[i]; if (l.pos.empty()) continue; std::snprintf(b, sizeof b, " L%zu %.2f %.2f %.2f %.3f", i, l.pos[0].x, l.pos[0].y, l.pos[0].z, l.s[0]); s += b; }
+    for (size_t i = 0; i < lifts.lines().size(); i++) { const LiftLine& l = lifts.lines()[i]; if (l.pos.empty() || !l.near) continue; std::snprintf(b, sizeof b, " L%zu %.2f %.2f %.2f %.3f", i, l.pos[0].x, l.pos[0].y, l.pos[0].z, l.s[0]); s += b; }
     SL_INFO("[mplive] T %.0f%s", mp.net.serverNow(), s.c_str());
     s.clear();
     for (int i = 0; i < express.trainCount(); i++) { std::snprintf(b, sizeof b, " %.2f", express.debugS(i)); s += b; }
@@ -1581,6 +1581,14 @@ int runGame(const GameOptions& opt) {
   mpv.models = &vmodels;
   mpv.assets = &assets; mpv.dev = dev.get();
   mpv.patientSpot = [&](double x) { return ward.patientSpot(x); };
+  // (net/vehicles.js updatePolice / updateTow) the patrol cars chasing another player, their tow truck on a job
+  mpv.drawPolice = [&](VehicleDraw& vd, const dvec3& p, double yaw, double d) { police.addDrawAt(vd, p, yaw, d); };
+  std::shared_ptr<Model> mpTowTruck;
+  bool mpTowTried = false;
+  mpv.drawTow = [&](Renderer& r, const dvec3& p, double yaw) {
+    if (!mpTowTried) { mpTowTried = true; mpTowTruck = pc.roomModel ? pc.roomModel("towtruck") : nullptr; }
+    if (mpTowTruck) r.submitModel(*mpTowTruck, p + dvec3(0, 0.02, 0), glm::rotate(mat4(1), float(yaw), vec3(0, 1, 0)), nullptr, true);
+  };
   // (transit.js seat) the others riding a cabin / chair: their seat in it as it is drawn here (no lag)
   mpv.transitSeat = [&](const std::string& k, const std::string& v, int n, dvec3& p, double& yaw) {
     if (k != "gondola" && k != "chair") return false;
@@ -1775,6 +1783,7 @@ int runGame(const GameOptions& opt) {
       const bool onPad = heli.state == Heli::State::Parked && !heli.away();
       heli.padHidden = !mp.heliFrame(onPad, heli.state == Heli::State::Flying || heli.state == Heli::State::Boarding, heli.state == Heli::State::Parked && heli.away(),
                                       heli.flight.pos, heli.flight.yaw, std::hypot(player.pos.x - heli.home.x, player.pos.z - heli.home.z));
+      mp.policeFrame(std::min(0.25, frameDt), police.mpCars());   // (police.js netFrame: your patrol cars to the others)
     }
     if (mp.active() && started && !menus.isOpen() && !tmap.isOpen()) {
       auto pressedKey = [&](platform::Key k) { return std::find(ev.pressed.begin(), ev.pressed.end(), k) != ev.pressed.end(); };

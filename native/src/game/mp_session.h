@@ -15,6 +15,7 @@
 //  - reconnects: the server holds you for a minute; a login on the new socket resumes (same world, pid, seat...)
 #pragma once
 #include "core/math.h"
+#include <array>
 #include "net/client.h"
 #include "net/protocol.h"
 #include <deque>
@@ -164,6 +165,9 @@ public:
   /// parked out at `at`, yaw); the pad's "A helicopter is waiting" when you are within 400 m. Returns whether a
   /// helicopter shows on the pad
   bool heliFrame(bool onPad, bool flying, bool parkedAway, const dvec3& at, double yaw, double padDist);
+  /// (police.js netFrame) your patrol cars to the others: 'veh' police { cars: [[x, y, z, yaw, v]] } ~6 times a
+  /// second, { off } once they are gone
+  void policeFrame(double dt, const std::vector<std::array<double, 5>>& cars);
   void jail(double seconds, const std::string& reason);
   void policeArrest(bool onFoot);
   void chaletFurniture(int id, std::function<void(bool, const Json&)> done);
@@ -258,7 +262,8 @@ private:
   double carCheckT_ = 0;
   std::string keptSig_;
   std::string lookSent_;
-  bool heliRented_ = false, heliReturning_ = false;
+  bool heliRented_ = false, heliReturning_ = false, policeSent_ = false;
+  double policeT_ = 0;
   int heliWasReady_ = -1;
   std::string heliV_ = "none";
   double lookT_ = 0;

@@ -162,6 +162,7 @@ void MpView::addPeople(const Multiplayer& mp, People& people, const dvec3& cam, 
     poseRig(r, people, kind, cam, dt, held ? &rseat : nullptr, ryaw);
     if (auto av = avs_.find(id); av != avs_.end()) tags_.push_back({id, dvec3(av->second.R.rig.rootPos), av->second.dist, paused});
   }
+  updateChasers(mp, cam, interior.empty(), dt);
   // (a rescue whose player is out of sight / inside still runs its clock; gone with the player)
   for (const auto& [id, r] : mp.players) if (!visible(r, interior, cam) && rescues_.count(id)) { int s; dvec3 q; double y; updateRescue(r, dt, cam, interior.empty(), s, q, y); }
   for (auto it = avs_.begin(); it != avs_.end();) { if (!mp.players.count(it->first)) { freeAv(it->second); it = avs_.erase(it); } else ++it; }
@@ -235,6 +236,54 @@ bool MpView::updateRescue(const RemotePlayer& r, double dt, const dvec3& cam, bo
     return true;
   }
   return false;
+}
+
+// net/vehicles.js updateTow / updatePolice: a fresh pose (a new 'veh' row) is the target; the last one runs on at its
+// speed for a third of a second at most, eased into (a jump over 25 m: snapped); beyond VEH_FAR or indoors not shown
+void MpView::updateChasers(const Multiplayer& mp, const dvec3& cam, bool outdoors, double dt) {
+  constexpr double VEH_FAR = 1800;
+  auto wrapPi = [](double a) { return std::atan2(std::sin(a), std::cos(a)); };
+  auto run = [&](Eased& w, bool fresh, double tx, double ty, double tz, double tyaw, double tv) {
+    if (fresh) {
+      w.tx = tx; w.ty = ty; w.tz = tz; w.tyaw = tyaw; w.tv = tv; w.age = 0;
+      if (!w.posed || std::hypot(w.tx - w.x, w.tz - w.z) > 25) { w.x = w.tx; w.y = w.ty; w.z = w.tz; w.yaw = w.tyaw; w.posed = true; }
+    }
+    w.age += dt;
+    const double ahead = std::min(w.age, 0.35) * w.tv, gx = w.tx + std::sin(w.tyaw) * ahead, gz = w.tz + std::cos(w.tyaw) * ahead;
+    const double e = 1 - std::exp(-dt * 7);
+    w.x += (gx - w.x) * e; w.z += (gz - w.z) * e; w.yaw = wrapPi(w.yaw + wrapPi(w.tyaw - w.yaw) * e);
+    w.y = ground ? ground(w.x, w.z, w.ty + 2) : w.ty;
+    w.show = outdoors && glm::length(dvec3(w.x, w.y, w.z) - cam) < VEH_FAR;
+  };
+  for (const auto& [id, r] : mp.players) {
+    // their tow truck
+    auto vt = r.vehs.find("tow");
+    if (vt != r.vehs.end() && vt->is_object() && vt->contains("at") && (*vt)["at"].is_array() && (*vt)["at"].size() >= 4) {
+      Tow& T = tows_[id];
+      const std::string ref = vt->dump();
+      const bool fresh = ref != T.ref;
+      T.ref = ref;
+      const Json& a = (*vt)["at"];
+      run(T.w, fresh, a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>(), vt->value("v", 0.0));
+    } else if (auto it = tows_.find(id); it != tows_.end()) { it->second.w.show = false; it->second.w.posed = false; }
+    // the patrol cars chasing them
+    auto vp = r.vehs.find("police");
+    if (vp != r.vehs.end() && vp->is_object() && vp->contains("cars") && (*vp)["cars"].is_array() && !(*vp)["cars"].empty()) {
+      Cops& C = police_[id];
+      const std::string ref = vp->dump();
+      const bool fresh = ref != C.ref;
+      C.ref = ref;
+      const Json& cars = (*vp)["cars"];
+      if (C.cars.size() < cars.size()) C.cars.resize(cars.size());
+      for (size_t k = 0; k < C.cars.size(); k++) {
+        if (k >= cars.size() || !cars[k].is_array() || cars[k].size() < 5) { C.cars[k].show = false; continue; }
+        const Json& a = cars[k];
+        run(C.cars[k], fresh, a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>(), a[4].get<double>());
+      }
+    } else if (auto it = police_.find(id); it != police_.end()) for (Eased& w : it->second.cars) w.show = false;
+  }
+  for (auto it = tows_.begin(); it != tows_.end();) { if (!mp.players.count(it->first)) it = tows_.erase(it); else ++it; }
+  for (auto it = police_.begin(); it != police_.end();) { if (!mp.players.count(it->first)) it = police_.erase(it); else ++it; }
 }
 
 MpView::~MpView() { for (auto& [pid, a] : avs_) freeAv(a); }
@@ -391,6 +440,8 @@ void MpView::drawWorld(Renderer& r, People& people) {
   frame_++;
   if (drawRescue) for (auto& [pid, w] : rescues_) if (w.show) { drawRescue(r, w.out); rescuesDrawn++; }
   if (drawRescue) for (const RescueDraw& o : helis_) drawRescue(r, o);
+  towsDrawn = 0;
+  if (drawTow) for (auto& [pid, T] : tows_) if (T.w.show) { drawTow(r, dvec3(T.w.x, T.w.y, T.w.z), T.w.yaw); towsDrawn++; }
 }
 
 std::string MpView::describe(int pid) const {
@@ -410,6 +461,8 @@ std::string MpView::describe(int pid) const {
 void MpView::addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels& vm, const Model* sled, const glm::mat4& sledFit,
                      const dvec3& cam, const std::string& interior) const {
   if (!interior.empty()) return;   // (cars and sleds are outdoors)
+  policeDrawn = 0;
+  if (drawPolice) for (const auto& [pid, C] : police_) for (const Eased& w : C.cars) if (w.show) { drawPolice(vd, dvec3(w.x, w.y, w.z), w.yaw, glm::length(dvec3(w.x, w.y, w.z) - cam)); policeDrawn++; }
   auto car = [&](const Json& cfg, const dvec3& p, double yaw, double roll) {
     const VehicleModel* m = vm.car(str(cfg, "id"));
     if (!m || !m->ok()) return;

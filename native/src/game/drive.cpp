@@ -16,7 +16,7 @@ constexpr double FINAL = 3.7, IDLE = 820, REDLINE = 6400;
 constexpr double CRASH_V = 70 / 3.6, EXTREME_V = 150 / 3.6, KNOCK_V = 30 / 3.6;
 constexpr double UNSTUCK_V = 5 / 3.6, UNSTUCK_CD = 10, REST_SLACK = 0.15;
 const double RAIL_BREAK_V = 100 / 3.6, RAIL_BREAK_SIN = std::sin(15 * PI / 180);
-constexpr double BREAK_V = 30 / 3.6;   // world/breakables.js: a little pole knocked flying
+constexpr double BREAK_V = 8 / 3.6;    // world/breakables.js BREAK_V: a little pole knocked flying (slower: just a bump)
 struct Surf { double mu, roll, rough; bool road; };
 const Surf S_ROAD{1.0, 0.015, 0.1, true}, S_SHOULDER{0.72, 0.03, 0.5, false}, S_SNOW{0.58, 0.05, 1, false}, S_PISTE{0.4, 0.02, 0.4, false};
 

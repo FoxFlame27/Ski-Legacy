@@ -184,6 +184,10 @@ globalThis.devicePixelRatio = 1;
 globalThis.innerWidth = 1280; globalThis.innerHeight = 720;
 
 const THREE = await import('three');
+const { createHash } = await import('node:crypto');
+// (world/breakables.js: the poles and signs a car knocks flying; their drawn parts go out as instances of their own,
+// makePack brkInst, so the C++ can hide the one standing and throw a copy: Resort::knockParts)
+const BRK = (await import(pathToFileURL(path.join(SRC, 'world/breakables.js')))).breakables;
 const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
 const { MeshoptDecoder } = await import('three/addons/libs/meshopt_decoder.module.js');
 await MeshoptDecoder.ready;
@@ -325,6 +329,8 @@ log('decor built');
 const dressing = buildResortDressing(scene, models);
 colliders.push(...(dressing.userData.colliders || []));
 log('resort dressing built');
+// (main.js: the piste markers are breakables too, adopted from the dressing's instanced poles and their colliders)
+try { log('piste markers breakable:', BRK.adoptInstances([dressing.getObjectByName('piste-markers'), dressing.getObjectByName('piste-marker-tops')], dressing.userData.colliders, { h: 1.85, loud: 0.3 })); } catch (e) { log('piste markers: breakable', e.message); }
 void decor;
 
 const railBuilt = new Set(); // surfaces the rail build added that are not the stations' paving
@@ -407,6 +413,75 @@ function makePack(name, opt = {}) {
   const shared = new Map(); // geometry|material -> instanced entry
   const imIndex = new Map(); // InstancedMesh -> its instanced entry index (breakables)
   let skipped = 0;
+  // ---- breakables (world/breakables.js): every drawn part of a pole / sign a car knocks becomes an instance of a set
+  // of its own kind (the same geometry content and material: one set, one draw per 512 m cell), its [set, instance]
+  // on the breakable's entry (e._bp) and so on its collider (colliderOut: bp); a GLB part stays a prop (e._bprop: the
+  // C++ finds it at the collider, Resort::knockProp)
+  let brkIm = new Map(), brkObj = new Map();
+  const brkSets = new Map(), brkGeoKey = new Map();
+  const brkStat = { parts: 0, props: 0, raw: 0 };
+  function brkIndex() {
+    brkIm = new Map(); brkObj = new Map();
+    for (const e of BRK.list) for (const p of e.parts) {
+      if (p.im) { if (!brkIm.has(p.im)) brkIm.set(p.im, new Map()); brkIm.get(p.im).set(p.k, e); }
+      else if (p.obj) brkObj.set(p.obj, e);
+    }
+  }
+  function brkRecord(e, set, inst) { if (e._bpack && e._bpack !== name) return; e._bpack = name; (e._bp ||= []).push(set, inst); brkStat.parts++; }
+  // (the road signs' panels pick their cell of the sign atlas per instance, roadsigns.js aCell: baked into the uv)
+  const atlasCell = (o, k) => {
+    const a = o.geometry?.attributes?.aCell;
+    if (!a?.isInstancedBufferAttribute || String(o.material?.customProgramCacheKey?.() || '') !== 'roadsign-atlas') return null;
+    return [1 / 6, 1 / 4, a.getX(k), a.getY(k)];
+  };
+  // one drawn part (geo, material, world matrix M) of breakable e as an instance of its kind's set
+  function brkInst(geo, material, M, e, uvCell = null) {
+    if (!geo?.attributes?.position || !material) return;
+    if (Array.isArray(material) || material.visible === false) { addRaw(geo, material, M); if (e) brkStat.raw++; return; }
+    const mi = matKey(material);
+    const uvx = uvCell || uvXf(material);
+    let gk = brkGeoKey.get(geo);
+    const ck = (uvx ? uvx.join(',') : '');
+    if (!gk || !gk[ck]) {
+      const a = geoArrays(geo, null, 0, 0, 0, uvx);
+      const h = createHash('sha1');
+      for (const arr of [a.pos, a.nor, a.uv, a.col || [], a.idx]) h.update(Float32Array.from(arr.map((v) => Math.round(v * 1e4) / 1e4)));
+      if (!gk) brkGeoKey.set(geo, (gk = {}));
+      gk[ck] = { hash: h.digest('hex'), a };
+    }
+    const k = 'brk|' + gk[ck].hash + '|' + mi;
+    if (!brkSets.has(k)) { const en = { mat: mi, geo: gk[ck].a, inst: [] }; brkSets.set(k, en); instanced.push(en); }
+    const en = brkSets.get(k);
+    en.inst.push(m34(M));
+    if (e) brkRecord(e, instanced.indexOf(en), en.inst.length - 1);
+  }
+  // a breakable's object (a sign's group, a bollard, a sign post): its meshes each as brkInst, its GLBs as props
+  function brkVisit(o, e) {
+    if (o.visible === false || o.userData.slSkip) return;
+    if (o.userData.slFit) {
+      const f = new THREE.Matrix4().fromArray(o.userData.slFit.fit);
+      let glow = 0;
+      o.traverse((q) => { if (q.isMesh && q.material?.userData?.slGlow) glow = q.material.userData.slGlow; });
+      addProp(o.userData.slFit.model, glow, o.matrixWorld.clone().multiply(f));
+      e._bprop = true; brkStat.props++;
+      for (const c of o.children) if (c.userData.slInFit) brkVisit(c, e);
+      return;
+    }
+    if (o.isLOD && o.levels?.length) { brkVisit(o.levels[0].object, e); return; }
+    if (o.isMesh && !o.isSkinnedMesh) {
+      const sl = o.geometry?.userData?.sl, glow = o.material?.userData?.slGlow || 0;
+      const im = new THREE.Matrix4();
+      if (o.isInstancedMesh) {
+        for (let i = 0; i < o.count; i++) {
+          o.getMatrixAt(i, im);
+          const W = o.matrixWorld.clone().multiply(im);
+          if (sl) { addProp(sl.model, glow, W.multiply(new THREE.Matrix4().fromArray(sl.fit))); e._bprop = true; brkStat.props++; } else brkInst(o.geometry, o.material, W, e, atlasCell(o, i));
+        }
+      } else if (sl) { addProp(sl.model, glow, o.matrixWorld.clone().multiply(new THREE.Matrix4().fromArray(sl.fit))); e._bprop = true; brkStat.props++; }
+      else brkInst(o.geometry, o.material, o.matrixWorld, e);
+    }
+    for (const c of o.children) brkVisit(c, e);
+  }
   function addProp(model, glow, M) {
     if (!model) return;
     const k = model + '|' + (glow || 0);
@@ -476,6 +551,7 @@ function makePack(name, opt = {}) {
   function visit(o) {
     if (o.visible === false) return;
     if (o.userData.slSkip) { skipped++; return; }
+    if (brkObj.has(o)) { brkVisit(o, brkObj.get(o)); return; }
     // (the cars on show (the Autohaus, the medical centre's ambulance...): vehicles are the C++ build's own)
     if (o.isMesh && /^(car_|car1$|ski_bus|ambulance|tow_truck)/.test([].concat(o.material)[0]?.userData?.slMat?.model || '')) { skipped++; return; }
     // (additive light pools on the snow / platforms: the C++ renderer has no additive pass yet; drawn as plain glass
@@ -499,7 +575,15 @@ function makePack(name, opt = {}) {
       if (o.isInstancedMesh) {
         const im = new THREE.Matrix4();
         const n = o.count;
-        if (sl) {
+        const brk = brkIm.get(o);
+        if (brk && !Array.isArray(o.material)) {
+          // (a breakable's instanced parts: every instance one of its kind's set, the breakable ones recorded)
+          for (let i = 0; i < n; i++) {
+            o.getMatrixAt(i, im);
+            const W = o.matrixWorld.clone().multiply(im), e = brk.get(i);
+            if (sl) { addProp(sl.model, glow, W.multiply(new THREE.Matrix4().fromArray(sl.fit))); if (e) { e._bprop = true; brkStat.props++; } } else brkInst(o.geometry, o.material, W, e || null, atlasCell(o, i));
+          }
+        } else if (sl) {
           const f = new THREE.Matrix4().fromArray(sl.fit);
           for (let i = 0; i < n; i++) { o.getMatrixAt(i, im); addProp(sl.model, glow, o.matrixWorld.clone().multiply(im).multiply(f)); }
         } else if (opt.instColor && o.instanceColor) {
@@ -528,7 +612,9 @@ function makePack(name, opt = {}) {
     sc.updateMatrixWorld(true);
     geoUse = new Map();
     sc.traverse((o) => { if (o.isMesh && !o.isInstancedMesh && !o.geometry?.userData?.sl && !Array.isArray(o.material)) geoUse.set(o.geometry, (geoUse.get(o.geometry) || 0) + 1); });
+    brkIndex();
     visit(sc);
+    log(`${name}: breakables' parts as instances`, brkStat.parts, 'in', brkSets.size, 'sets;', brkStat.props, 'GLB parts,', brkStat.raw, 'baked');
     log(`${name}: captured props`, [...props.values()].reduce((a, p) => a + p.inst.length, 0), 'in', props.size, 'batches;', chunks.size, 'mesh chunks;', instanced.length, 'instanced meshes;', skipped, 'skipped');
   }
 
@@ -618,12 +704,21 @@ function makePack(name, opt = {}) {
       if (c.top !== undefined && Number.isFinite(c.top)) o.top = r4(c.top);
       if (c.soft || c.net) o.soft = 1;
       if (c.rail) o.rail = 1;
-      if (c.breakable) { o.brk = r4(c.breakable.minV || 0); if (c.breakable.lamp) o.lamp = 1; }
+      if (c.breakable) {
+        o.brk = r4(c.breakable.minV || 0); if (c.breakable.lamp) o.lamp = 1;
+        // (its drawn parts: [instanced set, instance] pairs in this pack; prop: a GLB part too, found at the collider)
+        const e = c.breakable;
+        if (e._bp?.length && e._bpack === name) o.bp = e._bp; else if (e._bp?.length) brkStat.otherPack = (brkStat.otherPack || 0) + 1;
+        if (e._bprop) o.bprop = 1;
+        // (multiplayer, breakables.js spotId: its id the spot it stands on, 10 cm)
+        if (e.nid) o.nid = e.nid;
+      }
       return o;
     });
   }
 
   function finish(extra) {
+    if (brkStat.otherPack) log(`${name}: ${brkStat.otherPack} breakable colliders whose parts are in another pack`);
     const meshes = [...chunks.values()].filter((c) => c.idx.length).map((c) => ({ mat: c.mat, origin: [c.ox, c.oy, c.oz], ...packGeo(c, c.hasCol) }));
     const inst = instanced.map((m) => ({ mat: m.mat, ...packGeo(m.geo, !!m.geo.col), ...instOut(m.inst) }));
     const propsOut = [...props.values()].map((p) => ({ model: p.model, glow: p.glow, ...instOut(p.inst) }));

@@ -256,6 +256,8 @@ void Multiplayer::setWorld(const Json& w) {
   if (w.contains("warps") && w["warps"].is_array()) for (auto& x : w["warps"]) warps[jstr(x, "key")] = x;
   raceQueues.clear();
   if (w.contains("queues") && w["queues"].is_array()) for (auto& q : w["queues"]) if (q.value("n", 0) > 0) raceQueues[jstr(q, "race")] = q;
+  // (session.js remoteList: what was knocked in the last 90 s is down already)
+  if (host.onBrk && w.contains("brk") && w["brk"].is_array()) for (auto& b : w["brk"]) if (b.is_object()) host.onBrk(b, jdbl(b, "age") / 1000);
 }
 
 void Multiplayer::unbind() {
@@ -396,6 +398,7 @@ void Multiplayer::bind() {
     while (chat.size() > 8) chat.pop_front();
   });
   on("heli", [this](const Json& d) { heli = d; });
+  on("brk", [this](const Json& d) { if (host.onBrk && d.is_object()) host.onBrk(d, 0); });
   on("veh", [this](const Json& d) {
     auto it = players.find(int(jnum(d, "pid")));
     if (it == players.end()) return;

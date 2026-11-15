@@ -5,7 +5,9 @@
 // ("Native...") showed up with presence.
 // With 'car': it earns two job payouts, buys a Golf at the Autohaus (the server's 'buy'), parks it on the plaza ('veh'
 // at) and reports whether the native player rode in it (their presence's vehicle 'car:<name>:<seat>').
-//   node native/tools/mp_peer.mjs ws://127.0.0.1:8787/ws [seconds=90] [car]
+// With 'brk': it knocks a road sign by the village before the native player joins (the world snapshot's brk list)
+// and a snow pole up the mountain once they are in ('brk' relayed), and logs the knocks it gets from them.
+//   node native/tools/mp_peer.mjs ws://127.0.0.1:8787/ws [seconds=90] [car|brk]
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +18,7 @@ const WebSocket = require('ws');
 
 const url = process.argv[2] || 'ws://127.0.0.1:8787/ws';
 const seconds = Number(process.argv[3]) || 90;
-const withCar = process.argv[4] === 'car';
+const withCar = process.argv[4] === 'car', withBrk = process.argv[4] === 'brk';
 const name = 'JsPeer' + (1000 + Math.floor(Math.random() * 9000));
 const ws = new WebSocket(url);
 let n = 1, pid = 0, groundY = 0; // (the plaza's height: taken from the native player's rows once they come)
@@ -30,7 +32,11 @@ const log = (s) => console.log('[peer] ' + s);
 ws.on('message', (b) => {
   const m = JSON.parse(b.toString());
   if (m.t === 'res') { const w = wait.get(m.id); if (w) { wait.delete(m.id); w(m); } return; }
-  if (m.t === 'join') { names.set(m.d.pid, m.d.name); log(m.d.name + ' joined (pid ' + m.d.pid + ')'); }
+  if (m.t === 'join') {
+    names.set(m.d.pid, m.d.name); log(m.d.name + ' joined (pid ' + m.d.pid + ')');
+    if (withBrk) setTimeout(async () => { const r = await req('brk', { k: 'pole', id: '15704,1507', v: [5, 4, -3] }); log('knocked the snow pole (15704,1507): ' + (r.ok ? 'ok' : r.err)); }, 3000);
+  }
+  if (m.t === 'brk') log('brk from pid ' + m.d.pid + ': ' + m.d.k + ' ' + m.d.id + ' v ' + JSON.stringify(m.d.v));
   if (m.t === 'leave') log(m.d.name + ' left');
   if (m.t === 'chat') log('chat ' + m.d.name + ': ' + m.d.text);
   if (m.t === 'permAsk') { log(m.d.from + ' asks ' + m.d.kind + ': allowed'); req('permAnswer', { rid: m.d.rid, allow: true }); }
@@ -53,6 +59,7 @@ ws.on('open', async () => {
   for (const p of li.d.world.players) names.set(p.pid, p.name);
   log(name + ' in world ' + li.d.world.id + ' (pid ' + pid + '), ' + (li.d.world.players.length - 1) + ' other(s) there');
   setTimeout(() => ws.send(JSON.stringify({ t: 'chat', d: { text: 'hello from ' + name } })), 4000);
+  if (withBrk) { const r = await req('brk', { k: 'pole', id: '1269,2591', v: [-8, 5, -8] }); log('knocked the road sign (1269,2591): ' + (r.ok ? 'ok' : r.err)); }
   const t0 = Date.now();
   const tick = setInterval(() => {
     const t = (Date.now() - t0) / 1000, a = t * 0.35, R = 6;

@@ -3942,6 +3942,14 @@ int runGame(const GameOptions& opt) {
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
       if (!opt.png.empty() && pendingPng.empty() && frame % 45 == 0 && buses.debugCam(bp, bp)) pendingPng = pngVariant(opt.png, ("bus" + std::to_string(frame / 45)).c_str());
     }
+    buses.extraObs.clear();   // (bus.js obstacles: online, the other players on foot / on skis and in their cars)
+    if (mp.active())
+      for (const auto& [id, r] : mp.players) {
+        if (!r.ok || !r.interior.empty() || !r.veh.empty()) continue;
+        const double v = std::hypot(r.vel.x, r.vel.z);
+        if (r.st == 2 && (r.flags & net::F::car)) buses.extraObs.push_back({r.sm.x, r.sm.y, r.sm.z, r.smYaw, 0.95, 2.3, v, false});
+        else if (r.st == 0 || r.st == 1 || r.st == 6) buses.extraObs.push_back({r.sm.x, r.sm.y, r.sm.z, v > 0.2 ? std::atan2(r.vel.x, r.vel.z) : 0.0, 0.35, 0.35, v, true});
+      }
     buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
     railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
     express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);

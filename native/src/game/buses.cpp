@@ -771,15 +771,17 @@ std::string BusLine::rideLine() const {
 }
 void BusLine::setRideSeat(int n) { if (ride_.on) ride_.seat = n; }
 std::string BusLine::debugFleet() const {
-  std::string s;
+  std::string s, h;
   char buf[128];
+  for (const auto& [id, r] : holds_) { std::snprintf(buf, sizeof buf, " %s:%.1f/%d", id.c_str(), r.d, r.own); h += buf; }
+  for (const Bus& b : fleet_) if (b.own) h += " own:" + b.id;
   for (size_t k = 1; k < fleet_.size(); k++) {
     const Bus& b = fleet_[k];
     if (b.fi < 0) continue;
     std::snprintf(buf, sizeof buf, " %s %.2f %.2f %.2f %.3f %d %d", b.id.c_str(), b.pose.pos.x, b.pose.pos.z, b.st ? b.v * (mp_.rate ? mp_.rate(t_.fleet.buses[size_t(b.fi)].line) : 1) : 0.0, b.pose.yaw, b.at, int(b.visible));
     s += buf;
   }
-  return s;
+  return s + (h.empty() ? "" : "  holds" + h);
 }
 
 // (debug) bustest: you stand in the lane of a bus on its round; it stops short of you, sounds its horn, pulls out round

@@ -91,6 +91,8 @@ public:
     struct Record { std::string name; double best = -1; int medal = 0; };   // (medal: 1 gold, 2 silver, 3 bronze)
     std::function<std::vector<Record>()> records;            // STATS: every course with your best time and medal
     std::function<void(const std::string& text, int kind)> flash;   // kind 0 good, 1 bad, 2 gold
+    std::function<bool()> adminShown;                        // ("Admin · new": the account Icey27) ADMIN in the pause menu
+    std::function<void()> admin;
   };
 
   Menus(Ui& ui, Save& save, Input& input, platform::Platform& plat) : ui_(ui), save_(save), input_(input), plat_(plat) {}

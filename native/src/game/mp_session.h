@@ -50,6 +50,7 @@ struct MpHost {
   std::function<void(const std::string& why)> onLost;         // back at the menu
   std::function<void(const std::string& interior)> onKickInterior;
   std::function<void(double x, double z, double yaw, const std::string& to)> adminTp;
+  std::function<void(const std::string& what)> adminRelease;  // ("Admin · new") out of prison / the chase / the tow yard here
   std::function<void(const Json& d)> onArrested;              // the driver you rode with was caught: you go to jail too
   std::function<void(const Json& d)> onSeatLost;              // the server took your seat (the owner left / took it back)
   std::function<std::vector<int>()> plots;                    // the chalet plots' ids (the server learns them from us)
@@ -211,6 +212,12 @@ public:
   struct Line { std::string from, text; double at = 0; bool admin = false; };
   std::deque<Line> chat;                   // chat lines and server notes (the last few, shown for a while)
   std::string banner, bannerFrom;          // the admin's banner across the top
+  /// ("Admin · new", ui/adminnew.js op) an 'admin' request the server checks against the login (Icey27 only);
+  /// done(ok, the answer, the refusal's code). A clock in the answer is the world's new clock.
+  void adminOp(const std::string& op, Json data, std::function<void(bool, const Json&, const std::string&)> done);
+  /// (session.js adminClock) the admin's time (hour >= 0) / weather ("" unchanged) shown at once, before the server's
+  /// 'clock' confirms it
+  void adminClock(double hour, const std::string& weather);
   double bannerUntil = 0;
   void sendChat(const std::string& text);
   double clockSeconds() const;             // a monotonic clock for the HUD timers (s)

@@ -337,8 +337,14 @@ void Multiplayer::bind() {
     std::string tt = t;
     on(t, [this, tt](const Json& d) {
       if (tt == "adminMsg") { banner = jstr(d, "text"); bannerFrom = jstr(d, "from"); bannerUntil = clockSeconds() + 8; }
-      else if (tt == "adminNote") chat.push_back(Line{"server", jstr(d, "text"), clockSeconds(), true});
-      else flash("An admin released you (" + jstr(d, "what") + ")", 0);
+      else if (tt == "adminNote") flash(jstr(d, "text"), 2);   // (adminnew.js onServer: a gold note)
+      else {   // (adminnew.js releaseLocal: the server cleared its records; here too)
+        const std::string what = jstr(d, "what");
+        if (what == "jail") { profile.erase("jailUntil"); profile.erase("jailReason"); }
+        else if (what == "chase") profile.erase("wanted");
+        else if (what == "impound" && profile.contains("cars") && profile["cars"].is_array()) for (auto& c : profile["cars"]) if (c.is_object()) c.erase("impound");
+        if (host.adminRelease) host.adminRelease(what);
+      }
     });
   }
   on("chat", [this](const Json& d) {
@@ -536,6 +542,26 @@ std::optional<int> Multiplayer::dayNow() const {
   return int(jnum(clock_, "day")) + int(std::floor((jdbl(clock_, "hour") + (now - jdbl(clock_, "at", now)) / dayMs * 24) / 24));
 }
 std::string Multiplayer::weather() const { return jstr(clock_, "weather"); }
+void Multiplayer::adminClock(double hour, const std::string& w) {
+  if (!clock_.is_object()) return;
+  if (hour >= 0) {
+    const double now = net.serverNow();
+    const std::optional<int> day = dayNow();
+    clock_["hour"] = std::fmod(hour, 24.0); clock_["at"] = now;
+    if (day) clock_["day"] = *day;
+  }
+  if (!w.empty()) clock_["weather"] = w;
+}
+void Multiplayer::adminOp(const std::string& op, Json data, std::function<void(bool, const Json&, const std::string&)> done) {
+  if (!active_) { if (done) done(false, Json::object(), "offline"); return; }
+  if (op == "time" && data.contains("hour")) adminClock(data["hour"].get<double>(), "");
+  if (op == "weather" && data.contains("w")) adminClock(-1, data["w"].get<std::string>());
+  data["op"] = op;
+  net.request("admin", data, [this, done](const net::NetResult& r) {
+    if (r.ok && r.d.is_object() && r.d.contains("clock") && r.d["clock"].is_object()) clock_ = r.d["clock"];
+    if (done) done(r.ok, r.d, r.err);
+  });
+}
 std::string Multiplayer::upcomingWeather() const { return jstr(clock_, "upcoming"); }
 double Multiplayer::upcomingIn() const { return clock_.contains("nextAt") ? std::max(0.0, (jdbl(clock_, "nextAt") - net.serverNow()) / 1000) : -1; }
 double Multiplayer::lineTime(const std::string& key) const {

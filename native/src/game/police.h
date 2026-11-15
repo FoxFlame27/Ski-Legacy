@@ -52,6 +52,16 @@ public:
   bool fleeing() const { return fleeing_; }
   bool arrestedNow() const { return arrestT_ >= 0; }
   void clear(const char* why);                                // wanted cleared (escaped, fined, jailed)
+  /// (multiplayer, the user's rule) riding in another player's car: `stars` their wanted level (0: not wanted, -1: not
+  /// aboard, -2: their row unknown this frame). Aboard a wanted car you are wanted with them at their level (the
+  /// WANTED box; their patrol cars chase the car, none of yours); out of it you stay wanted on your own, at that level,
+  /// until you escape or are caught; still aboard when they get away, you got away with them.
+  void passenger(int stars, const std::string& driver);
+  bool passengerWanted() const { return rideMirror_; }
+  /// (police.js chaseSnap / resume, multiplayer: the profile's 'wanted') a chase under way: heat, escape time, chase
+  /// time, fleeing; false when not wanted. resume() carries one on at the next login.
+  bool snapshot(double& heat, double& esc, double& t, bool& fleeing) const;
+  void resume(double heat, double esc, double t, bool fleeing);
   void update(double dt);
   /// patrol cars as bodies for drive.js bash (kind 3) and for the player's collisions
   void others(std::vector<OtherBody>& out, const dvec3& near) const;
@@ -131,6 +141,9 @@ private:
   /// the patrol car's fit: car1 as the web game's car template fits it (Transport::policeFit), else measured here
   glm::dmat4 carFit() const;
   std::vector<Unit> units_;
+  bool rideMirror_ = false;
+  std::string rideDriver_;
+  double logT_ = 0;
   bool wanted_ = false, fleeing_ = false, searching_ = false, spotted_ = false, pulled_ = false, fineOpen_ = false;
   double heat_ = 0, wantedT_ = 0, seenT_ = 0, unseenT_ = 0, escT_ = 0, stopT_ = 0, reachT_ = -1, holdT_ = 0, reinT_ = 0, arrestT_ = -1, fleeT_ = 0;
   dvec3 lastSeen_{0};

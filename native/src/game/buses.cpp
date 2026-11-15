@@ -478,6 +478,16 @@ BusLine::RideState BusLine::rideState() const {
   rs.hint = buf;
   return rs;
 }
+bool BusLine::seatWorld(int bus, int n, dvec3& pos, double& yaw) const {
+  if (bus < 0 || bus >= int(fleet_.size()) || n < 0) return false;
+  const Bus& b = fleet_[size_t(bus)];
+  if (!b.visible) return false;
+  const vec3 sl = size_t(n) < t_.bus.seats.size() ? t_.bus.seats[size_t(n)].p : seatLocal_;
+  glm::dmat4 M = glm::translate(glm::dmat4(1), b.pose.pos) * glm::rotate(glm::dmat4(1), b.pose.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), b.pose.pitch, dvec3(1, 0, 0));
+  pos = dvec3(M * glm::dvec4(dvec3(sl), 1));
+  yaw = b.pose.yaw;
+  return true;
+}
 double BusLine::rideSpeed() const { return ride_.on ? fleet_[size_t(ride_.bus)].v : 0; }
 dvec3 BusLine::busPos() const { return ride_.on ? fleet_[size_t(ride_.bus)].pose.pos : dvec3(0); }
 double BusLine::busYaw() const { return ride_.on ? fleet_[size_t(ride_.bus)].pose.yaw : 0; }

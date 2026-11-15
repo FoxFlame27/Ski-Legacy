@@ -38,6 +38,8 @@ public:
   int rideBus() const { return ride_.on ? ride_.bus : -1; }   // (Phase 6: the seat registry's 'bus:<n>')
   struct RideState { dvec3 seat{0}, fwd{0, 0, 1}; std::string hint; bool arrived = false; dvec3 exit{0}; };   // exit: x, z, heading
   RideState rideState() const;
+  /// (bus.js seatWorldAt) where seat n of fleet bus `bus` is now, the way it faces; false if it is not out
+  bool seatWorld(int bus, int n, dvec3& pos, double& yaw) const;
   void abort() { ride_.on = false; }
   double rideSpeed() const;
   dvec3 busPos() const;

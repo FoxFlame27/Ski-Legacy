@@ -459,7 +459,7 @@ export async function exportNet({ THREE, SRC, world, L, busRoads, skibus, parkin
       out.express = {
         name: E.EXPRESS_NAME, step: E.STEP, n: EXPRESS.n, length: E.LENGTH, X: f32(EXPRESS.X), Y: f32(EXPRESS.Y), Z: f32(EXPRESS.Z), trackOff: E.TRACK_OFF,
         tunnels: EXPRESS.tunnels.map((t) => ({ s0: t.s0, s1: t.s1 })), bridges: EXPRESS.bridges.map((b) => ({ s0: b.s0, s1: b.s1 })),
-        V: f32(EXPRESS_PROFILE.V), T: f32(EXPRESS_PROFILE.T), loop: EXPRESS_PROFILE.loop, dwell: E.DWELL, vmax: E.VMAX, price: X.EXPRESS_PRICE, fast: X.FAST,
+        V: f32(EXPRESS_PROFILE.V), T: f32(EXPRESS_PROFILE.T), V64: Array.from(EXPRESS_PROFILE.V), loop: EXPRESS_PROFILE.loop, dwell: E.DWELL, vmax: E.VMAX, price: X.EXPRESS_PRICE, fast: X.FAST,
         stations: (L.layout.express?.stations || []).map((s) => ({ id: s.id, name: s.name, course: s.course, s: s.s, x: r4(s.x), z: r4(s.z), y: r4(s.y), heading: r4(s.heading), side: s.side,
           board: s.board ? [r4(s.board.x), r4(s.board.z)] : null, exit: s.exit ? [r4(s.exit.x), r4(s.exit.z), r4(s.exit.heading ?? 0)] : null })),
       };

@@ -25,6 +25,7 @@ public:
   /// per frame while riding (sub-stepped); true when you were thrown off (a wipeout)
   bool update(double dt, const In& in);
   bool getOff();                                         // E at a standstill
+  void abort() { if (cur_ >= 0) sleds_[size_t(cur_)].v = sleds_[size_t(cur_)].vs = 0; cur_ = -1; }   // (main.js mpRaceStart: sleds.abort)
   /// (debug, SKI_LEGACY_DEBUG=sledtest) the first sled put at a spot, facing yaw, with you on it
   void debugRide(const dvec3& at, double yaw) { if (sleds_.empty()) return; Sled& s = sleds_[0]; s.pos = at; s.yaw = yaw; s.v = s.vs = s.vy = 0; s.air = false; cur_ = 0; camReady_ = false; }
   void seat(dvec3& pos, dvec3& fwd) const;

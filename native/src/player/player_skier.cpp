@@ -145,7 +145,7 @@ void PlayerSkier::update(double dt, Player& p, World& world) {
   st.hasFallHeading = true; st.fallHeading = p.fall.axisHeading;
   st.fallAir = p.mode == PlayerMode::Fall && p.fallAir();
   st.fp = fp ? 1 : 0;
-  rig.setHeadHidden(bed.on ? bed.hideHead : fp);
+  rig.setHeadHidden(bed.on ? bed.hideHead : fp || (seatHeadHidden && p.mode == PlayerMode::Sit));
   // the pole plants the controller asked for (startPolePlant: the root is where the rig stood last frame)
   for (int8_t side : p.polePlants) {
     V3 fw(std::sin(p.heading), 0, std::cos(p.heading));

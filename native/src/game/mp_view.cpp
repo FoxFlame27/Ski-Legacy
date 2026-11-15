@@ -552,7 +552,8 @@ void MpView::hud(Ui& ui, const Multiplayer& mp, const Camera& cam, int W, int H,
       auto it = mp.players.find(t.pid);
       if (it == mp.players.end() || t.d >= TAG_FAR) continue;
       const double k = 0.05 * std::max(0.6, std::min(1.0, 1.15 - t.d / 220));
-      card(t.at + dvec3(0, 2.15, 0), k, it->second.name, false);
+      const int ws = int((it->second.flags & net::F::wanted) >> net::F::W_SHIFT);   // (a wanted passenger, in the car or out)
+      card(t.at + dvec3(0, 2.15, 0), k, ws > 0 ? it->second.name + "  " + std::string(size_t(ws), '*') : it->second.name, false);
       if (t.paused) card(t.at + dvec3(0, 2.55, 0), k * 0.85, "In pause menu", true);
     }
     for (const auto& [id, r] : mp.players) {

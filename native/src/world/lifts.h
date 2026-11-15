@@ -91,6 +91,7 @@ public:
   RideState updateRide();
   bool leaveAtStop(LiftExit& out);
   bool riding() const { return ride_.line != nullptr; }
+  void abort() { ride_ = Ride{}; }   // (main.js mpRaceStart: lifts.ride = null)
   LiftLine* rideLine() const { return ride_.line; }
   double rideProgress() const;   // 0..1 along the ride
   /// (Phase 6) the cabin / chair you ride as the server's vehicle id ('L<line>-<car>'), its kind and seats; "" if none

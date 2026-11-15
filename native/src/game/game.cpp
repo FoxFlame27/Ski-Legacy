@@ -660,6 +660,7 @@ int runGame(const GameOptions& opt) {
     if (b.kind == 0) { traffic.knock(b.id, vx, vz, w); if (!races.active()) police.callFor("a car was rammed", kmh); }
     else if (b.kind == 3) { police.knockUnit(b.id, vx, vz); police.hitCop(b.id, kmh); }
     else if (b.kind == 2 && !races.active()) police.callFor("a parked car was hit", kmh);
+    else if (b.kind == 1 && !races.active()) police.callFor("a bus was rammed", kmh);   // (drive.js hitReport('bus'): police.js counts it as any vehicle)
   };
   // (impound.js) a car of yours towed to the impound row: locked until the next game day
   drive.locked = [&](const Drive::Parked& e) -> std::string { return e.impoundDay > save.day ? "Impounded \xC2\xB7 available tomorrow at the Autohaus car park" : ""; };
@@ -832,7 +833,7 @@ int runGame(const GameOptions& opt) {
   pc.raceLeave = [&]() { mp.raceLeave(); };
   pc.raceQueue = [&](const std::string& race) {
     PlayCtx::RaceQueue q;
-    if (const Json* j = mp.raceQueue(race)) q.n = j->value("n", 0);
+    if (const Json* j = mp.raceQueue(race)) { q.n = j->value("n", 0); q.max = j->value("max", 14); q.wait = j->value("waitMs", 30000.0) / 1000; }
     q.startIn = mp.raceQueueIn(race);
     q.mine = mp.raceQueued == race;
     return q;
@@ -954,6 +955,10 @@ int runGame(const GameOptions& opt) {
       if (const Course* co = races.courseById(c[1])) SL_INFO("[mplive] racesolo %s: %d", c[1].c_str(), int(races.start(*co, 1, true, false, true)));
     }
     if (c[0] == "raceskip" && c.size() > 1) races.debugSkip(std::atof(c[1].c_str()));
+    // police: "wanted" (a car rammed: called), "flee" (a patrol car rammed: wanted and fleeing), "policelog"
+    if (c[0] == "wanted") police.callFor("a car was rammed", 40);
+    if (c[0] == "flee") police.hitCop(0, 40);
+    if (c[0] == "policelog") SL_INFO("[mplive] police: %s, %zu units, me at (%.0f, %.0f)", police.status().c_str(), police.units(), player.pos.x, player.pos.z);
     if (c[0] == "racelog") SL_INFO("[mplive] race: active %d mp %d finished %d results %d place %d time %.2f progress %.0f; money %lld; queued '%s'; queues %zu; in race %d",
                                    int(races.active()), int(races.mpRace()), int(races.finished()), int(races.resultsUp()), races.place(), races.raceTime(), races.progress(),
                                    (long long)save.money, mp.raceQueued.c_str(), mp.raceQueues.size(), int(mp.raceStart_.is_object()));
@@ -981,6 +986,12 @@ int runGame(const GameOptions& opt) {
     for (int i = 0; i < express.trainCount(); i++) { std::snprintf(b, sizeof b, " %.2f/%.3f", express.debugS(i), express.debugU(i)); s += b; }
     std::snprintf(b, sizeof b, " lt-now e %.1f w %.1f", mp.lineTime("express|e") - mp.net.serverNow(), mp.lineTime("express|w") - mp.net.serverNow()); s += b;
     SL_INFO("[mplive] E %.0f%s", mp.net.serverNow(), s.c_str());
+    {   // (the phase of every train on its timeline: u - T, the same on every client at any moment)
+      const double T = mp.net.serverNow() / 1000;
+      std::string ph;
+      for (int i = 0; i < express.trainCount(); i++) { const double L = express.loopOf(express.trainDir(i)); std::snprintf(b, sizeof b, " %.3f", std::fmod(std::fmod(express.debugU(i) - T, L) + L, L)); ph += b; }
+      SL_INFO("[mplive] EP loop %.9f %.9f:%s", express.loopOf(1), express.loopOf(-1), ph.c_str());
+    }
     s = " r" + std::to_string(railway.trainCount()) + ":" + std::to_string(railway.seatCount()) + " x" + std::to_string(express.trainCount()) + " l";
     for (const LiftLine& l : lifts.lines()) { std::snprintf(b, sizeof b, "%.1f:%zu:%g,", l.L, l.s.size(), l.cfg.speed); s += b; }
     SL_INFO("[mplive] timetables%s", s.c_str());
@@ -1015,7 +1026,19 @@ int runGame(const GameOptions& opt) {
     const Course* c = races.courseById(race);
     if (!c && pc.data) for (const Course& b : pc.data->busRaces) if (b.id == race) c = &b;
     if (!c) { SL_WARN("mp: race %s: no such course here", race.c_str()); return; }
-    if (rideKind != Ride::None || rooms.inside()) { flash("The race starts \xC2\xB7 get out first", Hud::Flash::Bad); }
+    if (police.jailed()) return;   // (main.js mpRaceStart: in prison, no race start)
+    // (main.js mpRaceStart) wherever you are (a lift, a car, a bus, a train, the shop...): off it, to the start gate
+    if (heli.active() || heli.riding()) heli.abort();
+    auto offRide = [&](const dvec3& e) { player.standUp(e.x, e.y, e.z); rig.skisInRide = true; if (restoreView) { player.view = viewBeforeRide; restoreView = false; } rideKind = Ride::None; };
+    if (rideKind == Ride::Car) { drive.stopNow(); dvec3 ex; if (!drive.exit(ex)) ex = dvec3(player.pos.x, player.pos.z, player.heading); offRide(ex); }
+    if (rideKind == Ride::Passenger) mp.releaseSeat();
+    if (rideKind == Ride::Sled) sleds.abort();
+    if (rideKind != Ride::None || player.mode == PlayerMode::Sit) {
+      buses.abort(); railway.abort(); express.abort(); lifts.abort();
+      offRide(dvec3(player.pos.x, player.pos.z, player.heading));
+    }
+    if (rooms.inside()) rooms.leave();
+    if (player.hasSkis && !player.skisOn) player.setSkisOn(true);
     mpRaceRid = int(d.value("rid", -1));
     mpQueueAt = dvec2(0);
     races.startMp(*c, slot, toGo, d.value("practice", false));
@@ -1754,6 +1777,10 @@ int runGame(const GameOptions& opt) {
     if (mp.active()) jailResumed = true;
     const nlohmann::json& jl = save.data("jail");
     if (mp.active() && jl.value("left", 0.0) > 1 && !police.jailed()) { jailQuiet = true; police.jail(jl.value("left", 0.0), jl.value("reason", std::string("Arrested"))); jailQuiet = false; }
+    if (mp.active() && mp.profile.contains("wanted") && mp.profile["wanted"].is_object() && !police.jailed()) {   // (a chase under way when you left)
+      const nlohmann::json& w = mp.profile["wanted"];
+      police.resume(w.value("h", 1.0), w.value("e", 0.0), w.value("t", 0.0), w.value("f", false));
+    }
     if (mp.active()) {
       const nlohmann::json& pos = save.data("pos");
       if (pos.contains("x") && pos.contains("z") && pos["x"].is_number() && rideKind == Ride::None && !police.jailed()) player.teleport(pos["x"].get<double>(), pos["z"].get<double>(), pos.value("h", PI));
@@ -1869,6 +1896,11 @@ int runGame(const GameOptions& opt) {
   };
   mp.host.plots = [&]() { std::vector<int> v; for (const ChaletHouse& h : playData.chalets) v.push_back(h.id); return v; };
   mp.host.transitFingerprint = []() { return std::string("native-phase6"); };
+  mp.host.wantedNow = [&]() {
+    double h = 0, e = 0, t = 0; bool f = false;
+    if (!police.snapshot(h, e, t, f)) return nlohmann::json();
+    return nlohmann::json{{"h", std::round(h * 100) / 100}, {"e", std::round(e)}, {"t", std::round(t)}, {"f", f}, {"why", "resume"}};
+  };
   // your presence (main.js mpPose): the car's pose while you drive, the sled's on a snowmobile, else you
   mp.host.pose = [&](MpPose& o) {
     o.x = player.pos.x; o.y = player.pos.y; o.z = player.pos.z; o.yaw = player.heading;
@@ -1910,7 +1942,9 @@ int runGame(const GameOptions& opt) {
       o.st = int(net::St::Fly); o.crouch = hf.pitch; o.lean = hf.roll; o.flags = heli.rpm > 0.6 ? net::F::lights : 0u;
       return;
     }
-    if (rideKind == Ride::Passenger || rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) { o.st = int(net::St::Ride); o.vx = o.vy = o.vz = 0; return; }
+    // (the user's rule: a wanted passenger, in the car or out of it, carries the stars in the row too)
+    const uint32_t wbits = police.wanted() ? uint32_t(std::clamp(police.stars(), 1, 5)) << net::F::W_SHIFT : 0u;
+    if (rideKind == Ride::Passenger || rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) { o.st = int(net::St::Ride); o.vx = o.vy = o.vz = 0; o.flags = wbits; return; }
     o.st = player.mode == PlayerMode::Sit ? int(net::St::Sit) : player.mode == PlayerMode::Ski ? int(net::St::Ski) : player.mode == PlayerMode::Fall ? int(net::St::Fall) : int(net::St::Walk);
     o.crouch = player.crouch; o.lean = player.lean;
     o.flags = (player.air ? net::F::air : 0u) | (player.tuck ? net::F::tuck : 0u) | (player.skisOn ? net::F::skisOn : 0u) |
@@ -1921,6 +1955,7 @@ int runGame(const GameOptions& opt) {
       o.flags = (player.skisOn ? net::F::skisOn : 0u) | (player.hasSkis ? net::F::hasSkis : 0u) |
                 net::fallFlags(player.fallSide, player.air, F.ball, F.getUp, F.axisHeading - player.heading);
     }
+    o.flags |= wbits;
   };
   mpv.myCarSeat = [&](int seat, dvec3& p, double& yaw) {
     if (rideKind != Ride::Car) return false;
@@ -1949,6 +1984,14 @@ int runGame(const GameOptions& opt) {
   };
   // (transit.js seat) the others riding a cabin / chair: their seat in it as it is drawn here (no lag)
   mpv.transitSeat = [&](const std::string& k, const std::string& v, int n, dvec3& p, double& yaw) {
+    // (the trains / the Express: on the shared timelines, so their seat in the car as drawn here; a bus: the fleet bus
+    // of that number here, while it is where they are: the buses still run on this machine's clock)
+    if (k == "train") return v.rfind("rail-", 0) == 0 && railway.seatWorld(std::atoi(v.c_str() + 5), n, p, yaw);
+    if (k == "express") return express.seatWorld(v, n, p, yaw);
+    if (k == "bus") {
+      auto it = std::find_if(mp.players.begin(), mp.players.end(), [&](const auto& e) { return e.second.veh.rfind("bus:" + v + ":", 0) == 0 && e.second.veh.size() > v.size() + 5 && std::atoi(e.second.veh.c_str() + v.size() + 5) == n; });
+      return v.rfind("bus:", 0) == 0 && buses.seatWorld(std::atoi(v.c_str() + 4), n, p, yaw) && (it == mp.players.end() || std::hypot(p.x - it->second.sm.x, p.z - it->second.sm.z) < 25);
+    }
     if (k != "gondola" && k != "chair") return false;
     int li = -1, ci = -1;
     if (std::sscanf(v.c_str(), "L%d-%d", &li, &ci) != 2 || li < 0 || size_t(li) >= lifts.lines().size()) return false;
@@ -2223,7 +2266,14 @@ int runGame(const GameOptions& opt) {
       const bool onPad = heli.state == Heli::State::Parked && !heli.away();
       heli.padHidden = !mp.heliFrame(onPad, heli.state == Heli::State::Flying || heli.state == Heli::State::Boarding, heli.state == Heli::State::Parked && heli.away(),
                                       heli.flight.pos, heli.flight.yaw, std::hypot(player.pos.x - heli.home.x, player.pos.z - heli.home.z));
-      mp.policeFrame(std::min(0.25, frameDt), police.mpCars());   // (police.js netFrame: your patrol cars to the others)
+      mp.policeFrame(std::min(0.25, frameDt), police.mpCars());
+      {   // (net/sled.js) your snowmobile for the others: driving it, then where you left it
+        dvec3 sp; double sy = 0;
+        static dvec3 sledLast(0); static double sledLastYaw = 0; static bool sledHad = false;
+        const bool on = sleds.current(sp, sy);
+        if (on) { sledLast = sp; sledLastYaw = sy; sledHad = true; }
+        mp.sledFrame(std::min(0.25, frameDt), on, sledHad, sledLast, sledLastYaw);
+      }   // (police.js netFrame: your patrol cars to the others)
     }
     if (mp.active() && started && !menus.isOpen() && !tmap.isOpen()) {
       auto pressedKey = [&](platform::Key k) { return std::find(ev.pressed.begin(), ev.pressed.end(), k) != ev.pressed.end(); };
@@ -2535,6 +2585,8 @@ int runGame(const GameOptions& opt) {
                 for (auto& [id, r] : mp.players) SL_INFO("[mplive] %s (pid %d) at (%.2f, %.2f, %.2f) yaw %.2f st %d flags 0x%x veh '%s' interior '%s' look %s -> %s", r.name.c_str(), id, r.sm.x, r.sm.y, r.sm.z, r.smYaw, r.st, r.flags, r.veh.c_str(), r.interior.c_str(), r.look.dump().c_str(), mpv.describe(id).c_str());
                 if (mpLiveLog) mpLiveLog();
               }
+              else if (op == "ride") askRide(word(1));   // ("ride <owner>": ask for a ride in their car)
+              else if (op == "getout" && rideKind == Ride::Passenger) { mp.releaseSeat(); rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
               else if (op == "quit") { mpShowCam = false; mt.step = 10; next(); }
               else if (mpLiveCmd) mpLiveCmd(c);
             }
@@ -3545,6 +3597,24 @@ int runGame(const GameOptions& opt) {
       weather.update(frameDt);
       { HitchScope hs(hitch, "races"); races.update(frameDt); }
       { HitchScope hs(hitch, "jobs"); oddJobs.update(frameDt); }
+      if (mp.active()) {   // (the user's rule: the passengers of a wanted driver are wanted too)
+        int ds = -1;
+        if (rideKind == Ride::Passenger && mp.ride.on) {
+          auto it = mp.players.find(mp.ride.pid);
+          ds = it == mp.players.end() || !it->second.ok || !(it->second.flags & net::F::car) ? -2 : int((it->second.flags & net::F::wanted) >> net::F::W_SHIFT);
+        }
+        police.passenger(ds, mp.ride.owner);
+        // (main.js rememberSpot) your last outdoor spot on foot / on skis: back there at your next login
+        static double mpSpotT = 0;
+        if ((mpSpotT -= frameDt) <= 0) {
+          mpSpotT = 1;
+          if (rideKind == Ride::None && !rooms.inside() && !races.active() && !police.jailed() && !heli.riding() && !player.air &&
+              (player.mode == PlayerMode::Walk || player.mode == PlayerMode::Ski) && std::fabs(player.pos.x) < 12000 && std::fabs(player.pos.z) < 12000) {
+            auto r2 = [](double v) { return std::round(v * 100) / 100; };
+            save.data("pos") = {{"x", r2(player.pos.x)}, {"z", r2(player.pos.z)}, {"y", r2(player.pos.y)}, {"h", r2(wrapPi(player.heading))}, {"skis", player.mode == PlayerMode::Ski && player.skisOn}};
+          }
+        }
+      }
       { HitchScope hs(hitch, "police"); police.update(frameDt); police.peopleHits(frameDt); }
       { HitchScope hs(hitch, "heli"); heli.update(frameDt, !menus.isOpen() && !tmap.isOpen()); }
       ward.update(frameDt, !menus.isOpen() && !tmap.isOpen());
@@ -4004,6 +4074,7 @@ int runGame(const GameOptions& opt) {
           if (picked && buses.board(stop, dests[size_t(k)])) {
             interact = false;
             rideKind = Ride::Bus;
+            player.setSkisOn(false); rig.skisInRide = false;   // (main.js boardBus: skis off, stowed; you are the passenger)
             BusLine::RideState rs = buses.rideState();
             player.sitOn(rs.seat, rs.fwd);
             viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
@@ -4030,6 +4101,7 @@ int runGame(const GameOptions& opt) {
         else if (railPaid) {
           interact = false;
           rideKind = Ride::Rail;
+          rig.skisInRide = false;   // (main.js boardRail: the gear hidden, you are the passenger in the window seat)
           TrainRide tr = railway.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
@@ -4061,6 +4133,7 @@ int runGame(const GameOptions& opt) {
         else if (xPaid) {
           interact = false;
           rideKind = Ride::Express;
+          rig.skisInRide = false;
           TrainRide tr = express.ride();
           player.sitOn(tr.seat, tr.fwd);
           viewBeforeRide = player.view; restoreView = true; player.view = Player::View::Third;
@@ -4103,7 +4176,7 @@ int runGame(const GameOptions& opt) {
       std::string k, v, line;
       int n = 0;
       double rate = 1;
-      if (rideKind == Ride::Bus && buses.rideBus() >= 0) { k = "bus"; v = "bus:" + std::to_string(buses.rideBus() % 7 + 1); n = 36; rate = 8; }
+      if (rideKind == Ride::Bus && buses.rideBus() >= 0) { k = "bus"; v = "bus:" + std::to_string(buses.rideBus()); n = 36; rate = 8; }
       else if (rideKind == Ride::Rail && railway.rideTrain() >= 0) { k = "train"; v = "rail-" + std::to_string(railway.rideTrain()); n = railway.seatCount(); rate = 6; line = "rail"; }
       else if (rideKind == Ride::Express && express.riding()) { k = "express"; v = express.rideVehicle(); n = 192; rate = transport.express.fast; line = express.rideDir() > 0 ? "e" : "w"; }
       else if (rideKind == Ride::None && player.mode == PlayerMode::Sit && lifts.riding()) { v = lifts.rideVehicle(k, n); rate = 16; line = "L" + std::to_string(lifts.rideLine() - lifts.lines().data()); }
@@ -5176,7 +5249,9 @@ int runGame(const GameOptions& opt) {
     weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground || roadTunnelDark > 0.3);
     // (first person: your own body stays visible below the eye, the head folded away; at the wheel too: player.js /
     // drive.js placeRig)
-    bool hideRig = ((rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) || heli.hideRig() || showroom.inside();   // (the showroom is its own scene in the web game: you are not in it)
+    // (a bus / train seat view: your seated body below the eye, legs, lap and hands, the head folded away)
+    rig.seatHeadHidden = (rideKind == Ride::Bus || rideKind == Ride::Rail || rideKind == Ride::Express) && seatView;
+    bool hideRig = heli.hideRig() || showroom.inside();   // (the showroom is its own scene in the web game: you are not in it)
     if (rooms.chaletExported() || rooms.prisonExported()) hideRig = true;   // (the web game's rooms are walked as a camera: no body of your own)
     railway.insideView = rideKind == Ride::Rail && seatView;
     express.insideView = rideKind == Ride::Express && (seatView || express.walking());

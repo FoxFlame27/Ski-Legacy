@@ -350,6 +350,7 @@ public:
   /// feet, unset = the world's)
   struct Cine { bool on = false, visible = true, skis = true, snap = false; RigState st; three::V3 pos{0}; double dtScale = 1; SkierRig::Ground ground; } cine;
   bool forceThird = false;   // (a race's intro: the racer is on show, never the first-person body)
+  bool seatHeadHidden = false;   // (a bus / train seat view: your own seated body below the eye, the head folded away)
   bool skisInRide = true;   // riding: skis on the feet (a chairlift) or in the cabin's outside rack (a gondola: hidden)
   /// (outfits.js) the shop's garments: jacket base / accent, trousers base / accent, helmet, lens (sRGB 0..1, a = 0:
   /// the original piece). Baked once into the albedo (UV space, like the JS bake), the texture's shading kept.

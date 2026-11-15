@@ -3435,7 +3435,8 @@ int runGame(const GameOptions& opt) {
       ctl.front = input.down(Action::Forward) || input.moveY() > 0.5f;
       ctl.back = input.down(Action::Back) || input.down(Action::Brake) || input.moveY() < -0.5f;
       ctl.grab = input.down(Action::Sprint);
-      ctl.sprint = input.down(Action::Sprint);
+      // (no sprinting indoors: the rooms, the Autohaus, the ward; the user's wish, the JS lets you)
+      ctl.sprint = input.down(Action::Sprint) && !rooms.inside() && !showroom.inside() && !ward.inside();
       ctl.moveX = input.moveX(); ctl.moveY = input.moveY();
       ctl.jumpDown = input.down(Action::Jump);
       ctl.jumpPressed = first && input.takePressed(Action::Jump);
@@ -3883,7 +3884,7 @@ int runGame(const GameOptions& opt) {
           if (express.walking()) express.sitDown(); else express.standUp(viewBeforeRide == Player::View::First);
           seatYaw = 0; seatPitch = -0.04;
         }
-        if (express.walking()) { express.walkStep(frameDt, paused ? 0 : input.moveY(), paused ? 0 : input.moveX(), input.down(Action::Sprint)); seatView = true; trainView = 0; }
+        if (express.walking()) { express.walkStep(frameDt, paused ? 0 : input.moveY(), paused ? 0 : input.moveX(), false); seatView = true; trainView = 0; }   // (no sprinting in the train)
         if (!stop) prompt = !express.walking() ? "Stand up" : express.nearestFreeSeat() >= 0 ? "Sit down" : "";
         else rideLine += "   " + prompts::K(input, Action::Furnish) + (express.walking() ? ": sit down" : ": stand up");
       }

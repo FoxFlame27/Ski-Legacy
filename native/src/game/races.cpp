@@ -116,6 +116,7 @@ struct Races::Session {
   const Course* c = nullptr;
   int ai = 1;
   bool forMoney = false, practice = false, stand = false;
+  bool mp = false;   // (startMp) a race with the other players: the server's start, ranking and prize
   enum class St { Grid, Race, Finished, Results, Done } st = St::Grid;
   double t = 0, clock = 0, penalty = 0;
   int nextCp = 1, lastCp = 0, nextGate = 0;
@@ -193,6 +194,8 @@ bool Races::resultsUp() const { return s_ && s_->st == Session::St::Results; }
 double Races::raceTime() const { return s_ ? (s_->st >= Session::St::Finished ? s_->finalTime : s_->clock) : 0; }
 int Races::place() const { return s_ ? s_->place : 0; }
 double Races::progress() const { return s_ ? s_->prevS - s_->c->start.s : 0; }
+double Races::progressS() const { return s_ ? s_->prevS : 0; }
+int Races::gatesPassed() const { return s_ ? s_->nextGate : 0; }
 
 void Races::abort() {
   if (!s_) return;
@@ -206,6 +209,47 @@ void Races::abort() {
 void Races::openCard(const Course& co, bool fromStand) {
   Dialog d;
   const Course* cp = &co;
+  // (Phase 6, main.js mpCourseInteraction) multiplayer: the race with the other players in the world (the queue: the
+  // server starts it for everyone at once), or alone: against the AI field for the course's prize (the user, Nov 2026:
+  // a race with only you pays like in single player), or a practice run
+  if (c_.online && !fromStand && c_.raceJoin) {
+    const PlayCtx::RaceQueue q = c_.raceQueue ? c_.raceQueue(co.id) : PlayCtx::RaceQueue{};
+    d.kicker = co.bus ? "Free race \xC2\xB7 ski bus \xC2\xB7 multiplayer" : "World Racing \xC2\xB7 multiplayer";
+    d.title = co.name;
+    if (q.mine) d.say = "You are in the queue (" + std::to_string(q.n) + " in" + (q.startIn >= 0 ? ", the race starts in " + std::to_string(int(std::ceil(q.startIn))) + " s" : std::string(", it starts once a second racer joins")) + ").";
+    else d.say = std::string("Race the other players (at least 2, up to 14: the race starts for everyone together), or alone against the AI field.") + (q.n ? " " + std::to_string(q.n) + " waiting" + (q.startIn >= 0 ? ", starts in " + std::to_string(int(std::ceil(q.startIn))) + " s" : std::string()) + "." : std::string());
+    if (q.mine) {
+      DialogOption o; o.label = "Leave the race queue"; o.sub = "you stay here"; o.price = 0;
+      o.act = [this]() { if (c_.raceLeave) c_.raceLeave(); c_.flash("Left the race queue", 0); };
+      d.options.push_back(o);
+    } else {
+      DialogOption o; o.label = "Join race (other players \xC2\xB7 prize)";
+      o.sub = std::string(co.bus ? "free entry \xC2\xB7 " : "") + "up to " + fmtMoney(co.reward) + (q.n ? " \xC2\xB7 " + std::to_string(q.n) + "/14 waiting" : std::string(" \xC2\xB7 needs a 2nd racer"));
+      o.price = 0;
+      o.disabled = q.n >= 14;
+      o.act = [this, cp]() { c_.raceJoin(cp->id); };
+      d.options.push_back(o);
+      if (!co.bus) {
+        int ai = aiIndex(co.ai);
+        DialogOption a; a.label = std::string("Race the AI field alone \xC2\xB7 ") + AI_LABEL[ai];
+        a.sub = "14 AI racers \xC2\xB7 1st " + fmtMoney(prizeFor(co, ai)) + ", 2nd " + fmtMoney(int64_t(std::round(prizeFor(co, ai) * 0.4))); a.price = co.entry;
+        a.disabled = c_.save->money < co.entry;
+        a.act = [this, cp, ai]() { start(*cp, ai, true, false, false); };
+        d.options.push_back(a);
+      } else {
+        DialogOption a; a.label = "Race the field alone"; a.sub = "Free entry \xC2\xB7 every finisher is paid \xC2\xB7 win " + fmtMoney(co.reward); a.price = 0;
+        a.act = [this, cp]() { start(*cp, 0, true, false, true); };
+        d.options.push_back(a);
+      }
+      DialogOption pr; pr.label = "Practice race (no prize)"; pr.sub = "free \xC2\xB7 just you \xC2\xB7 starts at once"; pr.price = 0;
+      pr.act = [this, cp]() { start(*cp, 0, false, true, cp->bus); };
+      d.options.push_back(pr);
+    }
+    DialogOption n; n.label = "Not now"; n.secondary = true;
+    d.options.push_back(n);
+    c_.menus->openDialog(d);
+    return;
+  }
   d.kicker = co.bus ? "Free race \xC2\xB7 ski bus" : fromStand ? "RACING \xC2\xB7 just for fun \xC2\xB7 no prize money" : "World Racing \xC2\xB7 " + co.diff;
   d.title = co.name;
   d.rebuild = [this, cp, fromStand](Dialog& D) {
@@ -328,7 +372,10 @@ bool Races::interact(std::string& prompt, bool pressed) {
 bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool teleport) {
   // (Phase 6) multiplayer: a practice race (session.js raceSolo: just you, no entry fee, no prize, nothing counted;
   // the server's queues for 2+ racers are not ported yet)
-  if (c_.online) { forMoney = false; practice = true; ai = 0; if (c_.raceSolo) c_.raceSolo(co.id); }
+  // (Nov 2026, the user: "you don't earn any money if you do a race with only 1 person": a race alone against the AI
+  // field pays its prize like in single player; the server hears of it as a practice race (raceSolo: the others see
+  // you on the course), the entry fee and the prize go through the server's money (spend / earn))
+  if (c_.online && !noField_) { if (practice) ai = 0; if (c_.raceSolo) c_.raceSolo(co.id); }
   if (forMoney && !co.bus && co.entry > 0 && !c_.spend(co.entry)) return false;
   auto s = std::make_unique<Session>();
   s->c = &co;
@@ -354,7 +401,9 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
   // the field (session.js spawnBots: the same rivals on every retry) on the start grid (gridSlots): slot 0 is you at
   // the start wand; the racers line up abreast on both sides like a ski-cross start and in staggered rows behind
   // where the track is too narrow, clear of the start house, each other and the barriers
-  if (!practice) {
+  s->mp = noField_;
+  if (noField_) s->stand = false;
+  if (!practice && !noField_) {
     racebots::Track& tr = trackOf(co);
     s->track = &tr;
     const double tField = c_.plat ? c_.plat->timeSeconds() : 0;
@@ -445,10 +494,53 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
   return true;
 }
 
+bool Races::mpRace() const { return s_ && s_->mp; }
+
+void Races::debugSkip(double toFinish) {
+  if (!s_ || s_->st != Session::St::Race) return;
+  Session& s = *s_;
+  const Course& c = *s.c;
+  const double q = std::max(s.prevS, c.finish.s - toFinish);
+  while (s.nextCp < int(c.checkpoints.size()) && c.checkpoints[size_t(s.nextCp)].s <= q) { s.splits.push_back(std::round(s.clock * 1000) / 1000); s.lastCp = s.nextCp++; }
+  while (s.nextGate < int(s.gates.size()) && s.gates[size_t(s.nextGate)].s <= q) s.nextGate++;
+  const dvec3 p = c.line.point(q, 0);
+  const double h = c.line.heading(q);
+  c_.player->teleport(p.x, p.z, h);
+  c_.player->setSkisOn(true);
+  c_.player->vel = dvec3(std::sin(h), 0, std::cos(h)) * 15.0;
+  s.prevS = s.progS = q; s.progT = s.clock;
+  SL_INFO("race: (debug) skipped on to s %.0f, %.0f m before the finish", q, c.finish.s - q);
+}
+
+bool Races::startMp(const Course& co, int slot, double secondsToGo, bool practice) {
+  if (s_) abort();
+  noField_ = true;
+  const bool ok = start(co, 0, false, practice, true);
+  noField_ = false;
+  if (!ok || !s_) return false;
+  Session& s = *s_;
+  s.mp = true; s.stand = false;
+  // (main.js mpRaceStart: grid { slot, n }) your place on the grid: abreast in rows of five behind the start wand
+  static const double LANE[5] = {0, GRID_FIRST, -GRID_FIRST, 2 * GRID_FIRST, -2 * GRID_FIRST};
+  const int row = std::max(0, slot) / 5;
+  const double q = co.start.s - row * GRID_ROW * 2;
+  const double hw = std::max(0.0, co.line.width(q) - GRID_EDGE);
+  const double lat = std::clamp(LANE[std::max(0, slot) % 5], -hw, hw);
+  const dvec3 sp = co.line.point(q, lat);
+  c_.player->teleport(sp.x, sp.z, co.start.heading);
+  c_.player->setSkisOn(true);
+  s.prevS = s.progS = q;
+  // (session.js syncGo) the 3-2-1-GO ends at the server's start: the same moment for everyone in the race
+  const double goAt = LEAD_IN + 3;
+  s.t = goAt - std::max(0.0, secondsToGo);
+  SL_INFO("race: multiplayer race on %s: slot %d (s %.1f, lat %+.1f), GO in %.2f s%s", co.name.c_str(), slot, q, lat, secondsToGo, practice ? " (practice)" : "");
+  return true;
+}
+
 void Races::respawn(const char* why) {
   Session& s = *s_;
   const Course& c = *s.c;
-  double cs = s.lastCp > 0 && s.lastCp < int(c.checkpoints.size()) ? c.checkpoints[size_t(s.lastCp)].s : c.start.s;
+  double cs = (s.lastCp > 0 && s.lastCp < int(c.checkpoints.size()) ? c.checkpoints[size_t(s.lastCp)].s : c.start.s) + 2;   // (session.js respawnNow: cp.s + 2)
   dvec3 p = c.line.point(cs, 0);
   double h = c.line.heading(cs);
   if (c_.fade) c_.fade();
@@ -463,8 +555,8 @@ void Races::respawn(const char* why) {
   s.barsDirty = true;
   s.respawns++;
   if (s.rep) s.rep->cut(0);   // (the replay snaps over the teleport)
-  s.notice = std::string("BACK TO ") + (s.lastCp > 0 ? c.checkpoints[size_t(s.lastCp)].name : std::string("THE START")); s.noticeT = c_.now; s.noticeBad = true;
-  SL_INFO("race: respawn (%s) at s=%.0f", why, cs);
+  s.notice = "RESPAWN"; s.noticeT = c_.now; s.noticeBad = false;   // (session.js respawnNow: notice('RESPAWN', 'info'))
+  SL_INFO("race: respawn (%s) at s=%.0f (%s)", why, cs, s.lastCp > 0 && s.lastCp < int(c.checkpoints.size()) ? c.checkpoints[size_t(s.lastCp)].name.c_str() : "the start");
 }
 
 void Races::finishPlayer() {
@@ -509,10 +601,14 @@ void Races::showResults() {
   for (auto& b : s.bots) {
     rows.push_back({b->name, b->projectFinish(), false});
   }
+  // (session.js raceResultFor / the live board) a race with the other players: their finishes so far, the rest
+  // behind them (still racing or out)
+  if (s.mp && c_.raceRivals) for (const PlayCtx::RaceRival& r : c_.raceRivals()) rows.push_back({r.name + (r.dnf ? " (DNF)" : r.time < 0 ? " (racing)" : ""), r.dnf ? 1e7 : r.time < 0 ? 1e6 : r.time, false});
   std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.t < b.t; });
   for (size_t i = 0; i < rows.size(); i++) if (rows[i].you) s.place = int(i) + 1;
   int field = int(rows.size());
   if (c_.online && c_.raceFinished) c_.raceFinished(s.finalTime, false);
+  if (s.mp && !s.practice && c_.racePrize) { const int pz = c_.racePrize(); if (pz > 0) s.prize = pz; }   // (the server pays; its 'money' brings it in)
   // the prize (freeworld.js prize / busracedefs.js busRacePrize) and records.js submitPlace
   if (s.forMoney) {
     if (s.c->bus) {
@@ -1048,12 +1144,16 @@ void Races::update(double dt) {
         double outBy = std::fabs(pr.lat) - w;
         bool offc = !pl.air && outBy > OFF_MARGIN;
         s.offT = offc ? s.offT + dt : std::max(0.0, s.offT - dt);
+        // (session.js projectFull: the track's designed surface where you are, track.js surfaceY: the bank applied
+        // across the lateral, clamped to the edges; a bus race's line lies on the terrain: busraces.js surfaceY)
         double yLine = L.sAt(L.Y, pr.s);
+        if (c.bus && c_.world) { const dvec3 q = L.point(pr.s, std::clamp(pr.lat, -w, w)); yLine = c_.world->height(q.x, q.z); }
+        else if (!L.B.empty()) yLine -= std::tan(L.sAt(L.B, pr.s)) * std::clamp(pr.lat, -w, w);
         bool below = pl.pos.y < yLine - FALL_BELOW && !(pl.air && pl.vel.y > 0);
         s.fellT = below ? s.fellT + dt : 0;
-        if (s.clock - s.progT > STUCK_TIME) respawn("stuck");
-        else if (s.offT > (outBy > FAR_MARGIN ? FAR_TIME : OFF_TIME)) respawn("off");
-        else if (s.fellT > FALL_TIME) respawn("fell");
+        if (s.clock - s.progT > STUCK_TIME) { SL_INFO("race: stuck: no %.0f m of progress in %.1f s (s %.1f, best %.1f)", STUCK_PROGRESS, s.clock - s.progT, pr.s, s.progS); respawn("stuck"); }
+        else if (s.offT > (outBy > FAR_MARGIN ? FAR_TIME : OFF_TIME)) { SL_INFO("race: off course: %.1f m beyond the edge (lat %+.1f, half width %.1f) at s %.1f", outBy, pr.lat, w, pr.s); respawn("off"); }
+        else if (s.fellT > FALL_TIME) { SL_INFO("race: fell: %.1f m below the track (y %.1f, track %.1f) at s %.1f", yLine - pl.pos.y, pl.pos.y, yLine, pr.s); respawn("fell"); }
         double h = L.heading(pr.s);
         double along = pl.vel.x * std::sin(h) + pl.vel.z * std::cos(h);
         s.wrongT = along < -2 ? s.wrongT + dt : std::max(0.0, s.wrongT - dt * 2);

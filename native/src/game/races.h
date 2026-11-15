@@ -33,8 +33,14 @@ public:
   bool interact(std::string& prompt, bool pressed);
   /// start a race on `c`: ai 0..3 (easy .. superhard), forMoney (the start house / bus race: entry + prize), practice
   bool start(const Course& c, int ai, bool forMoney, bool practice, bool teleport);
+  /// (Phase 6, session.js onRaceStart / main.js mpRaceStart) a race with the other players: the server's start in
+  /// `secondsToGo` s (the same moment for everyone), your grid slot, no AI field; the server ranks and pays
+  bool startMp(const Course& c, int slot, double secondsToGo, bool practice);
   void update(double dt);
   bool active() const { return bool(s_); }
+  bool mpRace() const;
+  /// (debug mplive "raceskip <m>") on down the course to <m> before the finish, the checkpoints and gates on the way passed
+  void debugSkip(double toFinish);
   /// a floodlit night course is being raced (floodlights.js: it is night for the whole session, 21:30)
   bool nightCourse() const;
   bool frozen() const;                     // the grid / countdown: the player is held
@@ -64,6 +70,8 @@ public:
   bool watchReplay();
   const Course* courseById(const std::string& id) const { return c_.data ? c_.data->course(id) : nullptr; }
   double progress() const;   // metres down the course
+  double progressS() const;  // (multiplayer raceProgress) the arc length along the course line
+  int gatesPassed() const;
   /// (the STATS screen's COURSE RECORDS) every course, your best time (< 0: none) and medal (1 gold, 2 silver, 3 bronze, 0 none)
   struct RecordRow { std::string name; double best = -1; int medal = 0; };
   std::vector<RecordRow> records() const;
@@ -103,6 +111,7 @@ private:
   void hudCine(Ui& ui);
   struct Session;
   PlayCtx& c_;
+  bool noField_ = false;   // (startMp: the other players instead of the AI field)
   int standCourse_ = 0, standDiff_ = 1;   // (the stand remembers your last pick)
   Ui* ui_ = nullptr;   // (the frame's 2D layer: the results screen draws from the menus' frame)
   std::vector<std::pair<const Course*, std::unique_ptr<racebots::Track>>> tracks_;

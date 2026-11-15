@@ -134,6 +134,25 @@ public:
   std::map<std::string, Json> warps;       // 'kind|line' -> { off, rate, since }
   std::map<std::string, Json> skips;       // 'kind|id' -> { holding, aboard, active }
 
+  // ---- races (session.js race: the queue, the synced start, the server's results)
+  /// the users' rules (Nov 2026): at most 14 human racers in one race; the server's queue counts down once two are in
+  static constexpr int RACE_HUMANS_MAX = 14;
+  std::map<std::string, Json> raceQueues;  // race id -> { race, n, names, startAt, need, waitMs, max }
+  std::string raceQueued;                  // the race you are queued for ("" none)
+  Json raceStart_;                         // the race you are in: { rid, race, practice, at, endAt, grid: [{ pid, name, slot }] } (null: none)
+  std::map<int, Json> raceDone;            // pid -> { pid, name, time, dnf } (raceProgress: finishes so far)
+  Json raceBoardRows = Json::array();      // the live board (raceBoard rows)
+  Json raceResult;                         // the server's result of your last race { rid, race, practice, order: [...] }
+  std::function<std::string(const std::string& race)> raceName;     // a race id's course name
+  std::function<void(const Json& start, int slot)> onRaceStart;   // (main.js mpRaceStart) you are on the grid of a race
+  /// join a race's queue (raceJoin); done(true) queued
+  void raceJoin(const std::string& race, std::function<void(bool, const std::string&)> done = {});
+  void raceLeave();
+  /// the queue of a race (null: nobody waiting)
+  const Json* raceQueue(const std::string& race) const { auto it = raceQueues.find(race); return it == raceQueues.end() ? nullptr : &it->second; }
+  /// s until a queue's start (-1: not counting down yet)
+  double raceQueueIn(const std::string& race) const;
+
   // ---- the shared clock and weather
   std::optional<double> hourNow() const;
   std::optional<int> dayNow() const;

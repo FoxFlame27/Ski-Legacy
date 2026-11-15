@@ -131,7 +131,8 @@ void HospitalWard::enterNow() {
   build();
   seat_ = -1; discharged_ = false;
   if (r == Role::Patient) {
-    role_ = Role::Patient; bed_ = 1;
+    // (hospitalroom.js bedIndex: multiplayer: bed pid % 4, so two patients never share one; alone: bed 2)
+    role_ = Role::Patient; bed_ = c_.online && !beds_.empty() ? int(unsigned(c_.mpPid) % unsigned(beds_.size())) : 1;
     left_ = std::max(5.0, pendingSeconds_ < 0 ? stay_ : pendingSeconds_);
     notified_ = false; third_ = false;
     yaw_ = 0; pitch_ = -0.3; tpYaw_ = PI; tpPitch_ = -0.45;   // (looking down along yourself to your feet)

@@ -587,14 +587,22 @@ void MpView::hud(Ui& ui, const Multiplayer& mp, const Camera& cam, int W, int H,
     bool bad = mp.net.status() == "reconnecting";
     float fs = std::max(12.f, 15 * u), tw = ui.textWidth(s, fs, UiFont::CondItalic), pw = tw + 24 * u, ph = fs * 1.6f;
     float x0 = float(W) - pw - 18 * u, y0 = 128 * u;
+    if (inRace) { x0 = 28 * u; y0 = float(H) - 24 * u - ph; }   // (ui.js: in a race, bottom left: the race HUD owns the top)
     ui.rect(x0, y0, pw, ph, a(white, 0.92f));
     ui.text(x0 + 12 * u, y0 + (ph - ui.lineHeight(fs, UiFont::CondItalic)) / 2, fs, UiFont::CondItalic, bad ? ko : blue, s);
-    if (!mp.rideInfo.empty()) {   // (ui.js setSkip: your seat, who is aboard, the speed-up)
+    if (!raceLine.empty() && !inRace) {
+      const float rw = ui.textWidth(raceLine, fs, UiFont::CondItalic) + 24 * u;
+      y0 += ph + 6 * u;
+      ui.rect(float(W) - rw - 18 * u, y0, rw, ph, a(white, 0.92f));
+      ui.text(float(W) - rw - 6 * u, y0 + (ph - ui.lineHeight(fs, UiFont::CondItalic)) / 2, fs, UiFont::CondItalic, navy, raceLine);
+    }
+    if (inRace) {}
+    else if (!mp.rideInfo.empty()) {   // (ui.js setSkip: your seat, who is aboard, the speed-up)
       const float rw = ui.textWidth(mp.rideInfo, fs, UiFont::CondItalic) + 24 * u;
       ui.rect(float(W) - rw - 18 * u, y0 + ph + 6 * u, rw, ph, a(white, 0.92f));
       ui.text(float(W) - rw - 6 * u, y0 + ph + 6 * u + (ph - ui.lineHeight(fs, UiFont::CondItalic)) / 2, fs, UiFont::CondItalic, blue, mp.rideInfo);
     }
-    if (!mp.guests.empty() && mp.rideInfo.empty()) {
+    if (!inRace && !mp.guests.empty() && mp.rideInfo.empty()) {
       std::string g = "GUESTS: ";
       for (size_t i = 0; i < mp.guests.size(); i++) g += (i ? ", " : "") + mp.guests[i];
       float gw = ui.textWidth(g, fs * 0.85f, UiFont::Body) + 24 * u;

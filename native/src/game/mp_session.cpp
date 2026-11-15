@@ -254,6 +254,8 @@ void Multiplayer::setWorld(const Json& w) {
     for (auto& s : w["seats"]) seats[jstr(s, "k") + "|" + jstr(s, "v")] = s.value("occ", Json::array());
   warps.clear();
   if (w.contains("warps") && w["warps"].is_array()) for (auto& x : w["warps"]) warps[jstr(x, "key")] = x;
+  raceQueues.clear();
+  if (w.contains("queues") && w["queues"].is_array()) for (auto& q : w["queues"]) if (q.value("n", 0) > 0) raceQueues[jstr(q, "race")] = q;
 }
 
 void Multiplayer::unbind() {
@@ -277,6 +279,47 @@ void Multiplayer::bind() {
   on("leave", [this](const Json& p) { players.erase(int(jnum(p, "pid"))); flash(jstr(p, "name") + " left", 0); });
   on("look", [this](const Json& d) { auto it = players.find(int(jnum(d, "pid"))); if (it != players.end()) it->second.look = d.value("look", Json()); });
   on("clock", [this](const Json& d) { clock_ = d; });
+  // (session.js) the race queues, the synced start, the progress, the results
+  on("raceQueue", [this](const Json& d) {
+    const std::string race = jstr(d, "race");
+    const int n = int(jnum(d, "n"));
+    const bool had = raceQueues.count(race) > 0;
+    if (n > 0) raceQueues[race] = d; else raceQueues.erase(race);
+    // a race forming: everyone in the world hears of it (the join window), not only the ones at its start
+    if (n > 0 && raceQueued != race && !raceStart_.is_object()) {
+      const double in = raceQueueIn(race);
+      std::string who = d.contains("names") && d["names"].is_array() && !d["names"].empty() ? d["names"][0].get<std::string>() : std::string("A player");
+      if (!had) flash(who + " is starting a race \xC2\xB7 " + (raceName ? raceName(race) : race) + " \xC2\xB7 join at its start (" + std::to_string(n) + "/" + std::to_string(RACE_HUMANS_MAX) + ")", 0);
+      else if (in > 0 && int(jnum(raceQueues[race], "flashedIn", 0)) == 0) { raceQueues[race]["flashedIn"] = 1; flash("Race " + (raceName ? raceName(race) : race) + " starts in " + std::to_string(int(std::ceil(in))) + " s \xC2\xB7 " + std::to_string(n) + " racers \xC2\xB7 join at its start", 0); }
+    }
+    SL_INFO("mp: race queue %s: %d waiting (start in %.0f s)", race.c_str(), n, raceQueueIn(race));
+  });
+  on("raceStart", [this](const Json& d) {
+    if (!d.contains("grid") || !d["grid"].is_array()) return;
+    int slot = -1;
+    for (auto& g : d["grid"]) if (int(jnum(g, "pid")) == pid) slot = int(jnum(g, "slot"));
+    if (slot < 0) return;   // (someone else's race)
+    if (raceStart_.is_object() && jnum(raceStart_, "rid") == jnum(d, "rid")) return;   // (a practice race: its answer and its broadcast, once)
+    raceQueued.clear();
+    raceStart_ = d; raceDone.clear(); raceResult = Json(); raceBoardRows = Json::array();
+    SL_INFO("mp: race %s (rid %d) starts in %.1f s: %zu racers, you in slot %d", jstr(d, "race").c_str(), int(jnum(d, "rid")), (jdbl(d, "at") - net.serverNow()) / 1000, d["grid"].size(), slot);
+    if (onRaceStart) onRaceStart(d, slot);
+  });
+  on("raceProgress", [this](const Json& d) {
+    if (raceStart_.is_object() && jnum(raceStart_, "rid") == jnum(d, "rid")) raceDone[int(jnum(d, "pid"))] = d;
+  });
+  on("raceBoard", [this](const Json& d) {
+    if (raceStart_.is_object() && jnum(raceStart_, "rid") == jnum(d, "rid")) raceBoardRows = d.value("rows", Json::array());
+  });
+  on("raceResult", [this](const Json& d) {
+    if (!raceStart_.is_object() || jnum(raceStart_, "rid") != jnum(d, "rid")) return;
+    raceResult = d; raceStart_ = Json();
+    SL_INFO("mp: race result (rid %d): %s", int(jnum(d, "rid")), d.value("order", Json::array()).dump().substr(0, 400).c_str());
+  });
+  on("raceDropped", [this](const Json& d) {
+    if (raceQueued == jstr(d, "race")) raceQueued.clear();
+    flash("Race \xC2\xB7 not enough money for the entry fee", 1);
+  });
   on("chalet", [this](const Json& d) {
     int id = int(jnum(d, "id", -1));
     if (d.contains("owner") && d["owner"].is_string()) chaletOwners[id] = d["owner"].get<std::string>(); else chaletOwners.erase(id);
@@ -422,6 +465,7 @@ void Multiplayer::leave() {
   profile = Json::object();
   interior_.clear(); entering_ = false;
   seats.clear(); warps.clear(); skips.clear(); asks.clear(); guests.clear(); chaletOwners.clear();
+  raceQueues.clear(); raceQueued.clear(); raceStart_ = Json(); raceDone.clear(); raceResult = Json();
   ride = CarRide{}; mySeat.clear(); skipKey_.clear();
   carSentAny_ = false; keptSig_.clear();
   heli = Json(); heliRented_ = heliReturning_ = false; heliWasReady_ = -1; heliV_ = "none"; policeSent_ = false;
@@ -561,6 +605,38 @@ void Multiplayer::adminOp(const std::string& op, Json data, std::function<void(b
     if (r.ok && r.d.is_object() && r.d.contains("clock") && r.d["clock"].is_object()) clock_ = r.d["clock"];
     if (done) done(r.ok, r.d, r.err);
   });
+}
+void Multiplayer::raceJoin(const std::string& race, std::function<void(bool, const std::string&)> done) {
+  const Json* q = raceQueue(race);
+  if (q && int(jnum(*q, "n")) >= RACE_HUMANS_MAX && raceQueued != race) {   // (the users' cap: 14 human racers)
+    flash("Race full \xC2\xB7 " + std::to_string(RACE_HUMANS_MAX) + "/" + std::to_string(RACE_HUMANS_MAX) + " racers are in \xC2\xB7 wait for the next race", 1);
+    if (done) done(false, "race_full");
+    return;
+  }
+  net.request("raceJoin", Json{{"race", race}}, [this, race, done](const net::NetResult& r) {
+    if (r.ok) {
+      raceQueued = race;
+      if (r.d.is_object() && r.d.value("n", 0) > 0) raceQueues[race] = r.d;
+      const int need = r.d.is_object() ? std::max(2, r.d.value("need", 2)) : 2;
+      const int wait = r.d.is_object() ? int(std::lround(r.d.value("waitMs", 45000.0) / 1000)) : 45;
+      flash("In the race queue \xC2\xB7 at least " + std::to_string(need) + " racers \xC2\xB7 starts " + std::to_string(wait) + " s after the 2nd joins", 0);
+      SL_INFO("mp: queued for race %s (%d in)", race.c_str(), r.d.is_object() ? r.d.value("n", 0) : 0);
+    } else {
+      flash(r.err == "race_full" ? "Race full \xC2\xB7 wait for the next race" : "Race \xC2\xB7 " + r.err, 1);
+      SL_WARN("mp: raceJoin %s refused: %s", race.c_str(), r.err.c_str());
+    }
+    if (done) done(r.ok, r.err);
+  });
+}
+void Multiplayer::raceLeave() {
+  if (raceQueued.empty()) return;
+  net.request("raceLeave", Json::object(), [](const net::NetResult&) {});
+  raceQueued.clear();
+}
+double Multiplayer::raceQueueIn(const std::string& race) const {
+  const Json* q = raceQueue(race);
+  if (!q || jdbl(*q, "startAt") <= 0) return -1;
+  return std::max(0.0, (jdbl(*q, "startAt") - net.serverNow()) / 1000);
 }
 std::string Multiplayer::upcomingWeather() const { return jstr(clock_, "upcoming"); }
 double Multiplayer::upcomingIn() const { return clock_.contains("nextAt") ? std::max(0.0, (jdbl(clock_, "nextAt") - net.serverNow()) / 1000) : -1; }

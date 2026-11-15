@@ -78,6 +78,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <set>
 #include <unordered_map>
 
 namespace sl {
@@ -785,14 +786,67 @@ int runGame(const GameOptions& opt) {
   bool aiOn = true;            // (multiplayer: no traffic, townsfolk or decorative cars: the other players instead)
   bool jailQuiet = false;      // (a sentence the server already knows: not reported again)
   int mpRaceRid = -1;
+  bool mpWxSynced = false;     // (the world's weather shown settled once after a join / resume)
   pc.earnFrom = [&](int64_t a, const std::string& source) {
-    if (mp.active()) mp.earn(a, source == "sell" ? "sell" : "job");
+    if (mp.active()) {
+      // (the server's earn: at most $6,000 a payout for 'job', $2,000 for 'sell'; a race's prize alone against the AI
+      // field can be more (up to $11,750): paid in parts, the server's hourly cap still applies)
+      const std::string src = source == "sell" ? "sell" : "job";
+      const int64_t cap = src == "sell" ? 2000 : 6000;
+      for (int64_t left = a; left > 0; left -= cap) mp.earn(std::min(left, cap), src);
+    }
     else { save.earn(a); save.markDirty(); }
   };
   pc.earn = [&](int64_t a) { pc.earnFrom(a, "job"); };
   pc.raceSolo = [&](const std::string& race) {
     mpRaceRid = -1;
     mp.net.request("raceSolo", {{"race", race}}, [&](const net::NetResult& r) { if (r.ok) mpRaceRid = int(r.d.value("rid", -1)); });
+  };
+  // (session.js raceJoin / raceLeave, main.js mpCourseInteraction / mpQueueWatch) the race queue with the others
+  dvec2 mpQueueAt(0);
+  pc.raceJoin = [&](const std::string& race) {
+    mp.raceJoin(race, [&](bool ok, const std::string&) { if (ok) mpQueueAt = dvec2(player.pos.x, player.pos.z); });
+  };
+  pc.raceLeave = [&]() { mp.raceLeave(); };
+  pc.raceQueue = [&](const std::string& race) {
+    PlayCtx::RaceQueue q;
+    if (const Json* j = mp.raceQueue(race)) q.n = j->value("n", 0);
+    q.startIn = mp.raceQueueIn(race);
+    q.mine = mp.raceQueued == race;
+    return q;
+  };
+  pc.raceRivals = [&]() {
+    std::vector<PlayCtx::RaceRival> out;
+    if (!mp.raceStart_.is_object() && mp.raceResult.is_object() && mp.raceResult.contains("order")) {   // (the server's result is in: its order)
+      for (auto& o : mp.raceResult["order"]) {
+        if (o.value("pid", 0) == mp.pid) continue;
+        PlayCtx::RaceRival r; r.name = o.value("name", std::string("?")); r.dnf = o.value("dnf", false);
+        if (o.contains("time") && o["time"].is_number()) r.time = o["time"].get<double>() / 1000;
+        out.push_back(r);
+      }
+      return out;
+    }
+    const Json& st = mp.raceStart_.is_object() ? mp.raceStart_ : Json::object();
+    if (st.contains("grid"))
+      for (auto& g : st["grid"]) {
+        const int p = g.value("pid", 0);
+        if (p == mp.pid) continue;
+        PlayCtx::RaceRival r; r.name = g.value("name", std::string("?"));
+        auto it = mp.raceDone.find(p);
+        if (it != mp.raceDone.end()) { r.dnf = it->second.value("dnf", false); if (it->second.contains("time") && it->second["time"].is_number()) r.time = it->second["time"].get<double>() / 1000; }
+        out.push_back(r);
+      }
+    return out;
+  };
+  pc.racePrize = [&]() {
+    if (!mp.raceResult.is_object() || !mp.raceResult.contains("order")) return -1;
+    for (auto& o : mp.raceResult["order"]) if (o.value("pid", 0) == mp.pid) return int(o.value("prize", 0.0));
+    return -1;
+  };
+  mp.raceName = [&](const std::string& race) {
+    if (const Course* c = races.courseById(race)) return c->name;
+    if (pc.data) for (const Course& c : pc.data->busRaces) if (c.id == race) return c.name;
+    return race;
   };
   pc.raceFinished = [&](double t, bool dnf) {
     if (mpRaceRid < 0) return;
@@ -870,6 +924,20 @@ int runGame(const GameOptions& opt) {
     // "rescue": knocked down here, the rescue helicopter comes (free); "helirent <zone>": FLY at the heli-ski desk
     if (c[0] == "rescue") { player.knockDown(1, dvec3(0), 0, false); SL_INFO("[mplive] rescue called: %d", int(heli.rescueMe(true))); }
     if (c[0] == "helirent") { heli.debugRent(c.size() > 1 ? std::atoi(c[1].c_str()) : 0); SL_INFO("[mplive] heli rent asked"); }
+    // races: "racejoin <id>" (the queue with the others), "racesolo <id>" (alone against the AI field, for money),
+    // "raceskip <m>" (on to <m> before the finish), "racelog"; "wxlog": the clock, the weather and its intensities
+    if (c[0] == "racejoin" && c.size() > 1) { save.skis = save.skis.empty() ? "rental" : save.skis; player.hasSkis = true; if (pc.raceJoin) pc.raceJoin(c[1]); }
+    if (c[0] == "racesolo" && c.size() > 1) {
+      save.skis = save.skis.empty() ? "rental" : save.skis; player.hasSkis = true;
+      if (const Course* co = races.courseById(c[1])) SL_INFO("[mplive] racesolo %s: %d", c[1].c_str(), int(races.start(*co, 1, true, false, true)));
+    }
+    if (c[0] == "raceskip" && c.size() > 1) races.debugSkip(std::atof(c[1].c_str()));
+    if (c[0] == "racelog") SL_INFO("[mplive] race: active %d mp %d finished %d results %d place %d time %.2f progress %.0f; money %lld; queued '%s'; queues %zu; in race %d",
+                                   int(races.active()), int(races.mpRace()), int(races.finished()), int(races.resultsUp()), races.place(), races.raceTime(), races.progress(),
+                                   (long long)save.money, mp.raceQueued.c_str(), mp.raceQueues.size(), int(mp.raceStart_.is_object()));
+    if (c[0] == "raceok" && races.resultsUp()) races.confirmResults();
+    if (c[0] == "wxlog") SL_INFO("[mplive] clock: hour %.3f (server %.3f) weather %s (server %s, upcoming %s in %.0f s) snow %.3f cloud %.3f mist %.3f wind %.3f frozen %d",
+                                 hour, mp.hourNow().value_or(-1), weather.label().c_str(), mp.weather().c_str(), mp.upcomingWeather().c_str(), mp.upcomingIn(), weather.snow, weather.cloud, weather.mist, weather.wind, int(weather.frozen));
     if (c[0] == "lift" && c.size() > 2 && size_t(std::atoi(c[1].c_str())) < lifts.lines().size()) {
       LiftLine& l = lifts.lines()[size_t(std::atoi(c[1].c_str()))];
       const bool up = c[2] != "0";
@@ -918,6 +986,18 @@ int runGame(const GameOptions& opt) {
   std::string prompt, rideLine;
   // (Phase 3) what you ride: a car (you drive), a ski bus, the Wolkenspitzbahn, the Legacy Express
   enum class Ride { None, Car, Bus, Rail, Express, Sled, Passenger } rideKind = Ride::None;   // (Passenger: in another player's car)
+  mp.onRaceStart = [&](const Json& d, int slot) {
+    const std::string race = d.value("race", std::string());
+    const double toGo = (d.value("at", 0.0) - mp.net.serverNow()) / 1000;
+    if (races.active() && !races.mpRace()) { mpRaceRid = int(d.value("rid", -1)); return; }   // (your own race alone: raceSolo's broadcast)
+    const Course* c = races.courseById(race);
+    if (!c && pc.data) for (const Course& b : pc.data->busRaces) if (b.id == race) c = &b;
+    if (!c) { SL_WARN("mp: race %s: no such course here", race.c_str()); return; }
+    if (rideKind != Ride::None || rooms.inside()) { flash("The race starts \xC2\xB7 get out first", Hud::Flash::Bad); }
+    mpRaceRid = int(d.value("rid", -1));
+    mpQueueAt = dvec2(0);
+    races.startMp(*c, slot, toGo, d.value("practice", false));
+  };
   int busDestSel = 0, expressDestSel = 0;
   // the route picker's choice (ui/travel.js): the stop / station it was opened at and where to (taken by the boarding code)
   struct TravelPick { int kind = 0, from = -1, to = -1; bool up = true; } travelPick;
@@ -1437,6 +1517,76 @@ int runGame(const GameOptions& opt) {
   if ((off("p5test") || off("racetest")) && opt.autotest) at = AT::Race;   // (debug: straight to the Phase 5 checks)
   if ((off("rescuetest") || off("ambtest") || off("wardtest") || off("helitest") || off("helicheck")) && opt.autotest) at = AT::Heli;   // (debug: the helicopter, the rescue, the ward)
   bool heliOk = true;
+  // (debug: SKI_LEGACY_DEBUG=bridgetest --autotest) under every railway viaduct: sweep a walker across beneath each
+  // span (both sides, 14 m out, at the ground) and list every collider that would stop it and is not a pier drawn there;
+  // then a train over a viaduct must not be solid to someone well below its floor (trainstop.js CarColliders.add)
+  if (off("bridgetest") && opt.autotest) {
+    int bad = 0, piers = 0, probes = 0, nets = 0;
+    std::set<int> seenBad;
+    auto blocks = [](const Collider& c, double x, double z, double feetY) {
+      const double R = 0.35;
+      if (c.top < 1e29 && feetY > c.top) return false;
+      if (c.r >= 0) return std::hypot(x - c.x, z - c.z) < c.r + R;
+      double cs = std::cos(-c.rot), sn = std::sin(-c.rot);
+      double lx = (x - c.x) * cs - (z - c.z) * sn, lz = (x - c.x) * sn + (z - c.z) * cs;
+      return c.hw + R - std::fabs(lx) > 0 && c.hd + R - std::fabs(lz) > 0;
+    };
+    auto bsweep = [&](const char* name, const Line& L, const std::vector<Span>& spans, double off0) {
+      for (const Span& sp : spans)
+        for (double sq = sp.s0 + 2; sq < sp.s1 - 2; sq += 3) {
+          Line::P P = L.at(sq);
+          const double hl = std::hypot(P.dx, P.dz); if (hl < 1e-6) continue;
+          const double rx = -P.dz / hl, rz = P.dx / hl;
+          const double cx = P.x + rx * off0, cz = P.z + rz * off0;
+          const double g = world.height(cx, cz);
+          if (P.y - g < 4.5) continue;   // (not high enough to walk under)
+          for (double lat = -14; lat <= 14; lat += 0.5) {
+            const double x = cx + rx * lat, z = cz + rz * lat, gy = world.height(x, z);
+            if (P.y - gy < 4.5) continue;
+            probes++;
+            const std::vector<int>* nb = scenery.collidersNear(x, z);
+            if (!nb) continue;
+            for (int ci : *nb) {
+              const Collider& c = scenery.colliders()[size_t(ci)];
+              if (!blocks(c, x, z, gy + 0.02)) continue;
+              // a pier (this viaduct's, or the one crossing over it: a box from the ground up to its deck) or a race
+              // course's B-net along a course that runs under the viaduct (soft, drawn with the course: props.js
+              // course.solids, solid in the JS too while the course stands)
+              const bool pier = c.r < 0 && !c.soft && std::max(c.hw, c.hd) > 1.2 && c.top < 1e29 && (c.top > P.y - 9 || c.top > gy + 15);   // (gy + 15: the other viaduct's pier where the Express crosses itself)
+              if (pier) { piers++; continue; }
+              if (c.soft && c.r < 0 && std::min(c.hw, c.hd) < 0.3) { nets++; continue; }
+              ++bad;
+              if (seenBad.insert(ci).second) SL_WARN("[bridgetest] %s s=%.0f: a collider under the deck (deck %.1f, ground %.1f) at (%.1f, %.1f): %s %.2f x %.2f top %s", name, sq, P.y, gy, c.x, c.z,
+                                       c.r >= 0 ? "circle" : "box", c.r >= 0 ? c.r : c.hw, c.r >= 0 ? c.r : c.hd, c.top < 1e29 ? std::to_string(c.top).c_str() : "tall");
+              if (seenBad.size() <= 60 && seenBad.count(ci)) SL_INFO("[bridgetest]   collider #%d rot %.2f soft %d rail %d lamp %d brk %.0f", ci, c.rot, int(c.soft), int(c.rail), int(c.lamp), c.brk);
+            }
+          }
+        }
+    };
+    if (transport.rail.ok) bsweep("Wolkenspitzbahn", transport.rail.line, transport.rail.bridges, 0);
+    if (transport.express.ok) bsweep("Legacy Express", transport.express.line, transport.express.bridges, 0);
+    // the trains: every car near a point on a viaduct is solid at the deck and not 6 m below it
+    int above = 0, below = 0;
+    express.update(0, false, dvec3(0)); railway.update(0, false, dvec3(0));
+    for (int pass = 0; pass < 2; pass++) {
+      const Line& L = pass ? transport.rail.line : transport.express.line;
+      const auto& spans = pass ? transport.rail.bridges : transport.express.bridges;
+      (void)spans;
+      for (double sq = 0; sq < L.length; sq += 10) {   // (the whole line: wherever the trains are now)
+          Line::P P = L.at(sq);
+          std::vector<Collider> at, under;
+          if (pass) { railway.fillColliders(at, dvec3(P.x, P.y + 0.5, P.z)); railway.fillColliders(under, dvec3(P.x, P.y - 6, P.z)); }
+          else { express.fillColliders(at, dvec3(P.x, P.y + 0.5, P.z)); express.fillColliders(under, dvec3(P.x, P.y - 6, P.z)); }
+          above += int(at.size());
+          for (const Collider& c : under) if (std::hypot(c.x - P.x, c.z - P.z) < 30 && c.top - 3.64 > P.y - 3) below++;
+        }
+    }
+    SL_INFO("[bridgetest] %d probes under the viaducts: %d pier contacts (drawn piers), %d course B-net contacts, %d unexpected colliders; trains: %d car colliders at deck level, %d solid to a walker 6 m below the deck",
+            probes, piers, nets, bad, above, below);
+    SL_INFO("[bridgetest] %s", bad == 0 && below == 0 ? "PASS" : "FAIL");
+    std::fflush(nullptr);
+    std::_Exit(bad == 0 && below == 0 ? 0 : 1);
+  }
   const bool heliRun = at == AT::Heli;
   // (Phase 5 autotest) a race, a job, a police chase into jail, a chalet and a piece of furniture, a weather change
   bool raceOk = true, jobOk = true, policeOk = true, chaletOk = true, weatherOk = true, sledOk = true;
@@ -1558,7 +1708,7 @@ int runGame(const GameOptions& opt) {
     rig.load(assets, rigColour());
     player.hasSkis = !save.skis.empty();
     if (rideKind == Ride::None && player.mode != PlayerMode::Sit) player.setSkisOn(false);
-    pc.online = mp.active();
+    pc.online = mp.active(); pc.mpPid = mp.pid;
     // the trains on the world's shared timelines (transit.js): every client places them from the server's clock
     if (mp.active()) {
       railway.mpTime = [&]() { return mp.lineTime("train|rail") / 1000.0; };
@@ -1984,6 +2134,22 @@ int runGame(const GameOptions& opt) {
     // (Phase 6) the network: events, presence out, the other players, the shared clock, the money guard
     mp.interiorOffset = rooms.inside() ? rooms.toWorld(0, 0, 0) : dvec3(0);
     mp.update(std::min(0.25, frameDt), paused);
+    if (mp.active()) {
+      // (main.js mpQueueWatch) queued and walked off (150 m from where you joined) or into a vehicle / a building: out
+      // of the queue, so you never stay stuck in it
+      if (mp.raceQueued.empty()) mpQueueAt = dvec2(0);
+      else if (mpQueueAt != dvec2(0) && (std::hypot(player.pos.x - mpQueueAt.x, player.pos.z - mpQueueAt.y) > 150 || rideKind != Ride::None || rooms.inside())) {
+        mp.raceLeave(); mpQueueAt = dvec2(0);
+        flash("Left the race queue (you went away from the start)", Hud::Flash::Bad);
+      }
+      // (session.js raceProgress) how far you are, a couple of times a second, for everyone's live board
+      static double progT = 0;
+      progT -= frameDt;
+      if (races.mpRace() && mpRaceRid >= 0 && progT <= 0 && !races.finished()) {
+        progT = 0.5;
+        mp.net.send("raceProgress", {{"rid", mpRaceRid}, {"gate", races.gatesPassed()}, {"s", std::round(races.progressS() * 10) / 10}});
+      }
+    }
     // (main.js: presentation.update(rawDt), dt = rawDt * presentation.timeScale: the world slows, the UI, the transitions
     // and a race's cinematics keep real time)
     const double realDt = frameDt;
@@ -2029,7 +2195,7 @@ int runGame(const GameOptions& opt) {
         if (wait >= 1.7) { check(pres.slowMo(0.3, 0.12, 1.0, 0.45, "photo"), "a photo finish's slow motion after the cooldown"); stage = 5; realT = 0; minScale = 1; }
       } else if (stage == 6 || stage == 9) { SL_INFO("[slowtest] %s", ok ? "PASS" : "FAIL"); stage = 10; running = false; }
     }
-    pc.online = mp.active();
+    pc.online = mp.active(); pc.mpPid = mp.pid;
     if (mp.active()) {   // (net/heli.js frame: yours returned on the pad, shown to everyone; the pad empty while it is out)
       const bool onPad = heli.state == Heli::State::Parked && !heli.away();
       heli.padHidden = !mp.heliFrame(onPad, heli.state == Heli::State::Flying || heli.state == Heli::State::Boarding, heli.state == Heli::State::Parked && heli.away(),
@@ -4080,9 +4246,15 @@ int runGame(const GameOptions& opt) {
     }
     if (mp.active()) {   // (Phase 6) the world's clock and weather (the server moves them on; everyone in the world shares them)
       if (auto h = mp.hourNow()) { hour = *h; save.hour = hour; }
+      // (session.js update: every frame, also during a race; nothing local moves it on. A fresh join / resume shows
+      // the world's weather settled at once, so a late joiner sees the same snow as everyone, not a 20 s fade from
+      // its own save's weather)
       int w = Weather::byId(mp.weather());
-      if (w >= 0 && !races.active()) weather.serverSet(w, Weather::byId(mp.upcomingWeather()), mp.upcomingIn());
-    }
+      if (w >= 0) {
+        if (!mpWxSynced) { weather.snap(w); weather.frozen = false; mpWxSynced = true; SL_INFO("[mp] weather: the world's %s (settled)", weather.label().c_str()); }
+        weather.serverSet(w, Weather::byId(mp.upcomingWeather()), mp.upcomingIn());
+      }
+    } else mpWxSynced = false;
     if (nightShot >= 0) hour = 21.5;   // (the autotest's night shots)
     {   // (floodlights.js: a floodlit night course: night falls for the race, the hour is given back afterwards)
       static double hourBeforeRace = -1;
@@ -4806,6 +4978,16 @@ int runGame(const GameOptions& opt) {
       if ((rooms.prisonExported() || (rooms.chaletExported() && !chalets.building())) && !menus.isOpen() && !tmap.isOpen()) Interiors::crosshair(ui);
       chalets.hud(ui, u5);
       werk.hud(ui, u5);
+      if (mp.active()) {
+        mpv.inRace = races.active();
+        mpv.raceLine.clear();
+        if (!mp.raceQueued.empty()) {
+          const Json* q = mp.raceQueue(mp.raceQueued);
+          const double in = mp.raceQueueIn(mp.raceQueued);
+          mpv.raceLine = "RACE QUEUE \xC2\xB7 " + (mp.raceName ? mp.raceName(mp.raceQueued) : mp.raceQueued) + " \xC2\xB7 " + std::to_string(q ? q->value("n", 1) : 1) + "/" + std::to_string(Multiplayer::RACE_HUMANS_MAX)
+                       + (in >= 0 ? " \xC2\xB7 starts in " + std::to_string(int(std::ceil(in))) + " s" : std::string(" \xC2\xB7 waiting for a 2nd racer"));
+        }
+      }
       if (mp.active()) mpv.hud(ui, mp, cam, renderer.width(), renderer.height(), u5, save.setting("nameTags", 1) != 0, mp.interior(), "Y", "N");
     }
     menus.loading.clear();

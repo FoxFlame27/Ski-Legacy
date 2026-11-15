@@ -216,8 +216,8 @@ void Races::openCard(const Course& co, bool fromStand) {
     const PlayCtx::RaceQueue q = c_.raceQueue ? c_.raceQueue(co.id) : PlayCtx::RaceQueue{};
     d.kicker = co.bus ? "Free race \xC2\xB7 ski bus \xC2\xB7 multiplayer" : "World Racing \xC2\xB7 multiplayer";
     d.title = co.name;
-    if (q.mine) d.say = "You are in the queue (" + std::to_string(q.n) + " in" + (q.startIn >= 0 ? ", the race starts in " + std::to_string(int(std::ceil(q.startIn))) + " s" : std::string(", it starts once a second racer joins")) + ").";
-    else d.say = std::string("Race the other players (at least 2, up to 14: the race starts for everyone together), or alone against the AI field.") + (q.n ? " " + std::to_string(q.n) + " waiting" + (q.startIn >= 0 ? ", starts in " + std::to_string(int(std::ceil(q.startIn))) + " s" : std::string()) + "." : std::string());
+    if (q.mine) d.say = "You are in the queue (" + std::to_string(q.n) + "/" + std::to_string(q.max) + " in" + (q.startIn >= 0 ? ", the race starts in " + std::to_string(int(std::ceil(q.startIn))) + " s" : std::string(", it starts once a second racer joins")) + ").";
+    else d.say = "Race the other players (at least 2, up to " + std::to_string(q.max) + "; the others have " + std::to_string(int(std::lround(q.wait))) + " s to join after the second racer, then it starts for everyone together), or alone against the AI field." + (q.n ? " " + std::to_string(q.n) + "/" + std::to_string(q.max) + " waiting" + (q.startIn >= 0 ? ", starts in " + std::to_string(int(std::ceil(q.startIn))) + " s" : std::string()) + "." : std::string());
     if (q.mine) {
       DialogOption o; o.label = "Leave the race queue"; o.sub = "you stay here"; o.price = 0;
       o.act = [this]() { if (c_.raceLeave) c_.raceLeave(); c_.flash("Left the race queue", 0); };
@@ -1054,6 +1054,12 @@ void Races::update(double dt) {
   }
   if (!s_) return;
   Session& s = *s_;
+  // (session.js raceResult) finished before the others: the server's prize comes with its result, once everyone is in
+  // (or out); the results screen shows it as it arrives
+  if (s.hasResults && s.mp && !s.practice && c_.racePrize) {
+    const int pz = c_.racePrize();
+    if (pz > 0 && pz != s.res.prize) { s.prize = s.res.prize = pz; SL_INFO("race: the server's prize $%d (results screen updated)", pz); }
+  }
   const double cineDt = dt / std::max(0.05, timeScale);   // (session.js: updateCine(dt / max(0.05, presentation.timeScale)))
   s.camDt = cineDt;
   updateCine(cineDt);   // (the replay buffer; the podium, a replay, the stinger: real time)

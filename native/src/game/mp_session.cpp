@@ -571,6 +571,12 @@ void Multiplayer::push(bool force, bool last) {
   send("secrets", s.data("secrets", Json::array()));
   send("dayPass", s.dayPass);
   send("tickets", std::clamp(s.tickets, 0, 999));
+  // (session.js push) where you were (back there at your next login), a chase under way (it carries on), a rescue
+  // (not carried on online here: none)
+  const Json& pos = s.data("pos");
+  if (pos.is_object() && pos.contains("x") && pos.contains("z") && pos.contains("y") && pos.contains("h")) send("pos", pos);
+  send("wanted", host.wantedNow ? host.wantedNow() : Json());
+  send("rescue", Json());
 }
 
 // ---------------------------------------------------------------- the clock
@@ -618,7 +624,7 @@ void Multiplayer::raceJoin(const std::string& race, std::function<void(bool, con
       raceQueued = race;
       if (r.d.is_object() && r.d.value("n", 0) > 0) raceQueues[race] = r.d;
       const int need = r.d.is_object() ? std::max(2, r.d.value("need", 2)) : 2;
-      const int wait = r.d.is_object() ? int(std::lround(r.d.value("waitMs", 45000.0) / 1000)) : 45;
+      const int wait = r.d.is_object() ? int(std::lround(r.d.value("waitMs", 30000.0) / 1000)) : 30;
       flash("In the race queue \xC2\xB7 at least " + std::to_string(need) + " racers \xC2\xB7 starts " + std::to_string(wait) + " s after the 2nd joins", 0);
       SL_INFO("mp: queued for race %s (%d in)", race.c_str(), r.d.is_object() ? r.d.value("n", 0) : 0);
     } else {
@@ -780,6 +786,20 @@ void Multiplayer::policeFrame(double dt, const std::vector<std::array<double, 5>
   Json list = Json::array();
   for (const auto& c : cars) list.push_back({r2(c[0]), r2(c[1]), r2(c[2]), r2(c[3]), r2(c[4])});
   net.send("veh", Json{{"k", "police"}, {"cars", list}});
+}
+
+void Multiplayer::sledFrame(double dt, bool driving, bool hasLast, const dvec3& at, double yaw) {
+  if (!active_ || !net.isOpen()) { sledSent_.clear(); return; }
+  if (driving) { if (sledSent_ != "drive") { sledSent_ = "drive"; net.request("veh", Json{{"k", "sled"}}, [](const net::NetResult&) {}); } return; }
+  if (!hasLast) return;
+  if ((sledT_ += dt) < 1 && sledSent_ != "drive") return;
+  sledT_ = 0;
+  char key[96];
+  std::snprintf(key, sizeof key, "%.1f,%.1f,%.2f", at.x, at.z, yaw);
+  if (sledSent_ == key) return;
+  sledSent_ = key;
+  auto r2 = [](double v) { return std::round(v * 100) / 100; };
+  net.request("veh", Json{{"k", "sled"}, {"at", {r2(at.x), r2(at.y), r2(at.z), r2(yaw)}}}, [](const net::NetResult&) {});
 }
 
 void Multiplayer::towDone() { net.request("towDone", Json::object(), [](const net::NetResult&) {}); }
@@ -1044,6 +1064,7 @@ void Multiplayer::update(double dt, bool paused) {
   if (auto day = dayNow(); day && host.save->day != *day) host.save->day = *day;
   guardMoney();
   if (pushT_ >= 0 && (pushT_ -= dt) <= 0) { pushT_ = -1; push(); }
+  if ((spotT_ -= dt) <= 0) { spotT_ = 5; push(); }   // (your spot and the chase change without a save write: every 5 s, only what changed)
   // (session.js sendLook: your character / outfit / skis changed: everyone's avatar of you follows)
   if ((lookT_ -= dt) <= 0 && net.isOpen()) {
     lookT_ = 0.25;

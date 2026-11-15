@@ -74,7 +74,7 @@ struct PlayCtx {
   /// (session.js raceJoin / the queue) a race with the other players in the world: join its queue; its state
   std::function<void(const std::string& race)> raceJoin;
   std::function<void()> raceLeave;
-  struct RaceQueue { int n = 0; double startIn = -1; bool mine = false; };
+  struct RaceQueue { int n = 0; double startIn = -1; bool mine = false; int max = 14; double wait = 30; };   // (server.js RACE_MAX, the join window)
   std::function<RaceQueue(const std::string& race)> raceQueue;
   /// the other racers of the race you are in: name, time (s; < 0 still racing), dnf; and your prize from the server's
   /// result (-1: not in yet)

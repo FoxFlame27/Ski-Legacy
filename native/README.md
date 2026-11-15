@@ -1239,6 +1239,22 @@ world ready in 22.18 s: 315 terrain nodes, 1908 trees in range, 29404 resort pro
 [autotest] PASS
 ```
 
+**Linked like the JS (Nov 2026, round 4)**: the Legacy Express's speed profile is exported at full precision
+(`express.V64`): its loop is the web game's to the nanosecond, so at the same server time every client places every
+train at the same spot (before, the float profile drifted 60-325 m off after ~10^6 loops of the server clock). The
+others riding a train / the Express sit in their seat of the car as drawn here (`seatWorld`, no lagging presence);
+on a ski bus only while that bus here is where they are (the buses are not on the shared timeline yet). Riding a
+bus / train your skis are stowed and the seat view shows your own seated body (head folded away). The police come at
+road speed (police.js vRoad x the rubber band, 25 m/s over the snow) and turn round on a road leading away; every unit
+sent out is logged (`police: unit N out ...`, the chase every 5 s). Ramming a bus calls the police like any vehicle.
+The user's rule: riding in a wanted player's car you are wanted with them (their stars, the WANTED box), and stay
+wanted on your own after getting out until you escape or are caught; still aboard when they get away, so do you; the
+stars go in your presence row (the others' name cards show them). A race's start takes you off any ride first (a car,
+the bus, a train, a lift, the snowmobile, the helicopter, an interior); the results screen shows the server's prize
+when it arrives; the race card shows the server's 14-racer cap and its join window (30 s). `profileSet` now also
+sends `pos` (your last outdoor spot), `wanted` (a chase under way, carried on at the next login) and `rescue` (null);
+your snowmobile goes out as `veh sled` (driving, then where you left it).
+
 ### Known gaps (Phase 6)
 - **No world picker**: the protocol has none (the server assigns the fullest world with room); the MULTIPLAYER screen
   shows the server's world / player counts instead.

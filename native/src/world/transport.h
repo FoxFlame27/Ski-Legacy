@@ -197,6 +197,9 @@ public:
     int price = 75;
     std::vector<Span> tunnels, bridges;
     std::vector<float> V, T;
+    /// the speed profile at full precision (export_net.mjs V64; the shared timelines' loop must match the web game's
+    /// to well under a microsecond, or a train drifts seconds off after ~10^6 loops of the server clock)
+    std::vector<double> V64;
     std::vector<Station> stations;
   } express;
   /// the procedural railcar parts (local meshes in transport.bin): name -> json list (built by Vehicles)

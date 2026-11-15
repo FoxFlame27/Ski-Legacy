@@ -58,6 +58,8 @@ public:
   int trainCount() const { return int(trains_.size()); }
   dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
   int seatCount() const { return ncars_ * 48; }
+  /// (railway.js seatWorldAt) where seat n (every car's seats in turn) of train `train` is now, the way it faces
+  bool seatWorld(int train, int n, dvec3& pos, double& yaw) const;
   /// (debug trainfar: the trains from outside at a distance) a train's car, its speed
   void carPose(int train, int car, glm::dmat4& M) const { carMatrix(train, car, M); }
   double trainSpeed(int train) const { return trains_[size_t(train)].st.speed; }
@@ -131,6 +133,8 @@ public:
   /// (debug: mplive) where car `car` of train `train` is drawn now; how far along its line it is
   double debugS(int train) const { return trains_[size_t(train)].st.s; }
   double debugU(int train) const { return u(train); }
+  double loopOf(int dir) const { return way(dir).loop; }
+  int trainDir(int train) const { return trains_[size_t(train)].dir; }
   /// (debug: mplive) the timetable one way: its loop, each segment's start and length, the profile's samples
   std::string debugTt(int dir) const {
     const Way& w = way(dir);
@@ -140,6 +144,8 @@ public:
   }
   int trainCount() const { return int(trains_.size()); }
   dvec3 debugCarPos(int train, int car) const { glm::dmat4 M(1); carMatrix(train, car, M); return dvec3(M[3]); }
+  /// (express.js seatWorldAt) where seat n (48 a car) of the train with the server's id `id` ('express-e0'...) is now
+  bool seatWorld(const std::string& id, int n, dvec3& pos, double& yaw) const;
   int rideDir() const { return ride_.on ? trains_[size_t(ride_.train)].dir : 0; }
   void carPose(int train, int car, glm::dmat4& M) const { carMatrix(train, car, M); }
   double trainSpeed(int train) const { return trains_[size_t(train)].st.speed; }

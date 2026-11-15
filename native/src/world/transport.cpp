@@ -313,6 +313,8 @@ bool Transport::load(const nlohmann::json& net, const std::vector<uint8_t>& bin)
     E.fast = e.value("fast", 10.0);
     E.tunnels = spans(e["tunnels"]); E.bridges = spans(e["bridges"]);
     E.V = arr<float>(e["V"], bin); E.T = arr<float>(e["T"], bin);
+    if (e.contains("V64") && e["V64"].is_array()) for (const auto& v : e["V64"]) E.V64.push_back(v.get<double>());
+    if (E.V64.size() != E.V.size()) { E.V64.assign(E.V.begin(), E.V.end()); SL_WARN("transport: the Legacy Express speed profile only at float precision (re-export the data): it drifts off the web game's timetable online"); }
     for (auto& s : e["stations"]) E.stations.push_back(readStation(s));
     E.ok = E.line.n > 2 && int(E.V.size()) == E.line.n + 1 && !E.stations.empty();
   }

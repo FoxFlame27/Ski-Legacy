@@ -55,6 +55,7 @@ struct MpHost {
   std::function<void(const Json& d)> onSeatLost;              // the server took your seat (the owner left / took it back)
   std::function<std::vector<int>()> plots;                    // the chalet plots' ids (the server learns them from us)
   std::function<std::string()> transitFingerprint;            // the timetables' version (transit.js fingerprint)
+  std::function<Json()> wantedNow;                            // (police.js chaseSnap) a chase under way, else null
 };
 
 /// one other player, as received (presence ring) and as drawn (interpolated)
@@ -188,6 +189,8 @@ public:
   /// (police.js netFrame) your patrol cars to the others: 'veh' police { cars: [[x, y, z, yaw, v]] } ~6 times a
   /// second, { off } once they are gone
   void policeFrame(double dt, const std::vector<std::array<double, 5>>& cars);
+  /// (net/sled.js frame) your snowmobile: 'veh' { k: 'sled' } once as you get on; off it, { at } where you left it
+  void sledFrame(double dt, bool driving, bool hasLast, const dvec3& at, double yaw);
   void jail(double seconds, const std::string& reason);
   void policeArrest(bool onFoot);
   void chaletFurniture(int id, std::function<void(bool, const Json&)> done);
@@ -275,7 +278,7 @@ private:
   Json clock_;                             // { hour, at, day, dayMs, weather, upcoming, nextAt }
   int64_t moneyServer_ = 0, moneyPending_ = 0, expected_ = 0;
   std::map<std::string, std::string> pushed_;
-  double pushT_ = -1, sendAcc_ = 0;
+  double pushT_ = -1, sendAcc_ = 0, spotT_ = 5;
   std::string interior_;
   bool entering_ = false;
   std::string byeReason_;
@@ -289,7 +292,8 @@ private:
   std::string keptSig_;
   std::string lookSent_;
   bool heliRented_ = false, heliReturning_ = false, policeSent_ = false;
-  double policeT_ = 0;
+  double policeT_ = 0, sledT_ = 0;
+  std::string sledSent_;
   int heliWasReady_ = -1;
   std::string heliV_ = "none";
   double lookT_ = 0;

@@ -102,6 +102,37 @@ void Railway::carMatrix(int train, int k, glm::dmat4& M) const {
   M = between(trackPoint(sF, onLoop), trackPoint(sB, onLoop));
 }
 
+// (railway.js seatAt / seatWorldAt) seat n: the cars' seats in turn, in that car's frame as it is drawn now
+static bool carSeat(const Transport& T, const glm::dmat4& M, int k, dvec3& pos, double& yaw) {
+  const auto& R = T.rail;
+  const dvec3 sl = R.seats.empty() ? dvec3(R.seat) : dvec3(R.seats[size_t(k)]);
+  const double sy = R.seats.empty() ? R.seatYaw : double(R.seats[size_t(k)].w);
+  pos = dvec3(M * glm::dvec4(sl, 1));
+  const dvec3 f = dvec3(M * glm::dvec4(std::sin(sy), 0, std::cos(sy), 0));
+  yaw = std::atan2(f.x, f.z);
+  return true;
+}
+bool Railway::seatWorld(int train, int n, dvec3& pos, double& yaw) const {
+  if (train < 0 || train >= int(trains_.size()) || n < 0) return false;
+  const int per = t_.rail.seats.empty() ? 48 : int(t_.rail.seats.size()), car = n / per;
+  if (car >= ncars_) return false;
+  glm::dmat4 M;
+  carMatrix(train, car, M);
+  return carSeat(t_, M, t_.rail.seats.empty() ? 0 : n % per, pos, yaw);
+}
+bool Express::seatWorld(const std::string& id, int n, dvec3& pos, double& yaw) const {
+  if (id.size() < 10 || id.compare(0, 8, "express-") != 0 || n < 0) return false;
+  const int dir = id[8] == 'e' ? 1 : -1, want = std::atoi(id.c_str() + 9);
+  int k = -1;
+  for (int i = 0, m = 0; i < int(trains_.size()); i++) if (trains_[size_t(i)].dir == dir && m++ == want) { k = i; break; }
+  if (k < 0) return false;
+  const int per = t_.rail.seats.empty() ? 48 : int(t_.rail.seats.size()), car = n / per;
+  if (car >= 4) return false;
+  glm::dmat4 M;
+  carMatrix(k, car, M);
+  return carSeat(t_, M, t_.rail.seats.empty() ? 0 : n % per, pos, yaw);
+}
+
 int Railway::stationNear(const dvec3& p) const {
   if (ride_.on) return -1;
   for (size_t i = 0; i < t_.rail.stations.size(); i++) {
@@ -269,7 +300,7 @@ void Express::init() {
   const int n = E.line.n;
   const double STEP = E.line.step;
   Tm_.assign(size_t(n + 1), 0);   // pure running time from the hall at each sample (+s)
-  for (int i = 1; i <= n; i++) Tm_[size_t(i)] = Tm_[size_t(i - 1)] + STEP / std::max((E.V[size_t(i)] + E.V[size_t(i - 1)]) / 2.0, 0.3);
+  for (int i = 1; i <= n; i++) Tm_[size_t(i)] = Tm_[size_t(i - 1)] + STEP / std::max((E.V64[size_t(i)] + E.V64[size_t(i - 1)]) / 2.0, 0.3);
   for (auto& st : E.stations) idx_.push_back(int(std::lround(st.s / STEP)));
   int ns = int(E.stations.size());
   auto build = [&](int dir) {

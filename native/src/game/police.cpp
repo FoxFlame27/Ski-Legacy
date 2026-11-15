@@ -29,6 +29,7 @@ constexpr double STOP_R = 40, STOP_KMH = 3, STOP_S = 3, SPAWN_MIN = 260, SPAWN_M
 constexpr double FOOT_CATCH_R = 1.5, FOOT_RUN_V = 6.9, FOOT_LOSE_M = 45, FOOT_LEASH_M = 400, FOOT_ESC_K = 2.2;
 constexpr double HOLD_R = 12, HOLD_S = 10, HOLD_MORE = 0.6, V_TOP = 250 / 3.6, LEN = 5.0, WALK_V = 1.6;
 [[maybe_unused]] constexpr double WB = 2.95;
+constexpr double V_OFF = 25;   // (police.js TUNING.vOff: m/s over the snow)
 constexpr double HELI_V = 64, HELI_A = 13, HELI_ALT = 72, HELI_SEE = 170, HELI_HIDE = 1.25, HELI_CALL_S = 45;
 struct Level { int cars; double reinS, vRoad, catchUp, ramGap, ramExtra, sightR, escS; bool heli; };
 const Level LEVELS[6] = {{0, 99, 0, 0, 0, 0, 0, 0, false},
@@ -112,11 +113,48 @@ void Police::hitCop(int, double kmh) {
 }
 
 void Police::clear(const char* why) {
+  rideMirror_ = false;
   if (!wanted_) return;
   wanted_ = false; fleeing_ = false; searching_ = false; pulled_ = false; heat_ = 0;
   for (Unit& u : units_) { u.leaving = true; u.out = false; u.offState = 0; }
   heli_.on = false;
   SL_INFO("police: %s", why);
+}
+
+void Police::passenger(int ds, const std::string& driver) {
+  if (ds == -2 || jailed() || arrestT_ >= 0) return;
+  if (ds > 0) {
+    if (!wanted_) {
+      wanted_ = true; wantedT_ = 0; reachT_ = -1; stopT_ = 0; escT_ = 0; pulled_ = false; prevStars_ = ds;
+      radio_ = "All units: a passenger in the suspect's car"; radioT_ = c_.now;
+      c_.flash("WANTED \xC2\xB7 you're riding with " + driver + " \xC2\xB7 caught, you go to prison too", 1);
+      SL_INFO("police: wanted as %s's passenger (%d stars)", driver.c_str(), ds);
+    }
+    rideMirror_ = true; rideDriver_ = driver; fleeing_ = true; heat_ = ds; spotted_ = true; searching_ = false; unseenT_ = 0;
+    lastSeen_ = c_.player->pos;
+    return;
+  }
+  if (!rideMirror_) return;
+  rideMirror_ = false;
+  const std::string who = driver.empty() ? rideDriver_ : driver;
+  if (ds == 0) { c_.flash("You got away with " + who, 2); clear("escaped with the driver"); return; }
+  // out of the car mid-chase: wanted on your own from here (police.js chase at their level, fleeing)
+  reinT_ = 0; escT_ = 0; wantedT_ = 0; lastSeen_ = c_.player->pos;
+  c_.flash("Still WANTED \xC2\xB7 you rode with " + who, 1);
+  SL_INFO("police: out of %s's car, still wanted (%d stars)", who.c_str(), stars());
+}
+
+bool Police::snapshot(double& heat, double& esc, double& t, bool& fleeing) const {
+  if (!wanted_ || jailed() || arrestT_ >= 0) return false;
+  heat = std::clamp(heat_, 1.0, 5.99); esc = std::clamp(escT_, 0.0, 600.0); t = std::clamp(wantedT_, 0.0, 86400.0); fleeing = fleeing_;
+  return true;
+}
+void Police::resume(double heat, double esc, double t, bool fleeing) {
+  if (wanted_ || jailed()) return;
+  wanted_ = true; fleeing_ = fleeing; heat_ = std::clamp(heat, 1.0, 5.0); escT_ = esc; wantedT_ = t; spotted_ = true; searching_ = false; unseenT_ = 0;
+  reachT_ = -1; stopT_ = 0; reinT_ = 0; prevStars_ = stars(); lastSeen_ = c_.player->pos;
+  c_.flash("Still WANTED \xC2\xB7 the chase carries on", 1);
+  SL_INFO("police: the chase resumed (%d stars, %s)", stars(), fleeing ? "fleeing" : "called");
 }
 
 void Police::spawnUnit() {
@@ -148,6 +186,8 @@ void Police::spawnUnit() {
     u.yaw = std::atan2(fwdX, fwdZ);
   }
   u.v = 20;
+  SL_INFO("police: unit %zu out %s at (%.0f, %.0f), %.0f m from you at (%.0f, %.0f)%s", units_.size() + 1, br >= 0 ? "on the roads" : "over the snow (no road point 260-420 m away)",
+          u.pos.x, u.pos.z, std::hypot(u.pos.x - p.x, u.pos.z - p.z), p.x, p.z, T.roads.empty() ? " - NO ROADS LOADED" : "");
   while (slotPlates_.size() <= units_.size()) slotPlates_.push_back("VS " + std::to_string(11700 + (plateN_++ * 37) % 300));   // (police.js policePlate)
   u.plate = slotPlates_[units_.size()];
   units_.push_back(u);
@@ -171,29 +211,34 @@ void Police::driveUnit(Unit& u, double dt, const dvec3& target, double want) {
   u.v += std::clamp(want - u.v, -9 * dt, 6 * dt);
   // (not getting any closer along the roads for a while: straight over the snow instead)
   if (dist < u.bestD - 3) { u.bestD = dist; u.stuckT = 0; } else u.stuckT += dt;
-  if (u.stuckT > 6 && u.road >= 0) { u.road = -1; u.stuckT = 0; u.bestD = dist; }
+  if (u.stuckT > 3 && u.road >= 0) { u.road = -1; u.stuckT = 0; u.bestD = dist; }   // (a road that only runs round you: over the snow at you)
   // along the roads while far (the lane ahead toward you), straight at you when close or off the roads
   if (dist > 110 && u.road >= 0) {
     const Road& r = T.roads[size_t(u.road)];
     RoadPoint a = roadAt(r, std::clamp(u.s + 25, 0.0, r.length)), b = roadAt(r, std::clamp(u.s - 25, 0.0, r.length));
     double da = std::hypot(target.x - a.x, target.z - a.z), db = std::hypot(target.x - b.x, target.z - b.z);
-    int want_dir = da < db ? 1 : -1;
-    if (want_dir != u.dir && u.v < 12) u.dir = want_dir;
-    u.s += u.dir * u.v * dt;
-    if (u.s < 0 || u.s > r.length || std::min(da, db) > dist + 30) {
-      // the road ends or leads away: onto another road nearer you, or over the snow
-      Transport::RoadHit h = T.nearestRoad(u.pos.x, u.pos.z, 30);
-      u.road = (h.road >= 0 && h.road != u.road) ? h.road : -1;
-      u.s = h.s;
-    }
-    if (u.road >= 0) {
-      const Road& r2 = T.roads[size_t(u.road)];
-      RoadPoint q = roadAt(r2, std::clamp(u.s, 0.0, r2.length));
-      double lane = 1.6 * u.dir;
-      u.pos = dvec3(q.x - q.dz * lane, 0, q.z + q.dx * lane);
-      u.yaw = std::atan2(q.dx * u.dir, q.dz * u.dir);
-      u.pos.y = c_.world->groundHeight(u.pos.x, u.pos.z, q.y + 1);
-      return;
+    // neither way along this road gets nearer you (it runs past you, it ends here): off it, straight at you. Before,
+    // a unit at speed never turned (only under 12 m/s) and drove its road away from you for good (Nov 2026)
+    if (std::min(da, db) > dist - 2) u.road = -1;
+    else {
+      int want_dir = da < db ? 1 : -1;
+      if (want_dir != u.dir) { if (u.v < 12) u.dir = want_dir; else u.v = std::max(0.0, u.v - 25 * dt); }   // (it brakes and turns round)
+      u.s += u.dir * u.v * dt;
+      if (u.s < 0 || u.s > r.length) {
+        // the road ends: onto another road nearer you, or over the snow
+        Transport::RoadHit h = T.nearestRoad(u.pos.x, u.pos.z, 30);
+        u.road = (h.road >= 0 && h.road != u.road) ? h.road : -1;
+        u.s = h.s;
+      }
+      if (u.road >= 0) {
+        const Road& r2 = T.roads[size_t(u.road)];
+        RoadPoint q = roadAt(r2, std::clamp(u.s, 0.0, r2.length));
+        double lane = 1.6 * u.dir;
+        u.pos = dvec3(q.x - q.dz * lane, 0, q.z + q.dx * lane);
+        u.yaw = std::atan2(q.dx * u.dir, q.dz * u.dir);
+        u.pos.y = c_.world->groundHeight(u.pos.x, u.pos.z, q.y + 1);
+        return;
+      }
     }
   }
   double tgtYaw = std::atan2(target.x - u.pos.x, target.z - u.pos.z);
@@ -204,7 +249,15 @@ void Police::driveUnit(Unit& u, double dt, const dvec3& target, double want) {
   u.kvx *= std::exp(-dt * 2); u.kvz *= std::exp(-dt * 2);
   u.pos.y = c_.world->groundHeight(u.pos.x, u.pos.z, u.pos.y + 1.5);
   if (dist < 60 && u.road >= 0) u.road = -1;
-  else if (u.road < 0 && dist > 160 && u.stuckT < 3) { Transport::RoadHit h = T.nearestRoad(u.pos.x, u.pos.z, 8); if (h.road >= 0) { u.road = h.road; u.s = h.s; } }
+  else if (u.road < 0 && dist > 160 && u.stuckT < 3) {   // (back onto a road under it, when that road leads toward you)
+    Transport::RoadHit h = T.nearestRoad(u.pos.x, u.pos.z, 8);
+    if (h.road >= 0) {
+      const Road& r = T.roads[size_t(h.road)];
+      RoadPoint a = roadAt(r, std::clamp(h.s + 25, 0.0, r.length)), b = roadAt(r, std::clamp(h.s - 25, 0.0, r.length));
+      const double da = std::hypot(target.x - a.x, target.z - a.z), db = std::hypot(target.x - b.x, target.z - b.z);
+      if (std::min(da, db) < dist - 10) { u.road = h.road; u.s = h.s; u.dir = da < db ? 1 : -1; }
+    }
+  }
 }
 
 void Police::arrest(const char* how) {
@@ -285,6 +338,7 @@ void Police::update(double dt) {
   }
   if (!wanted_) return;
   if (rooms_.inside()) return;
+  if (rideMirror_) { wantedT_ += dt; return; }   // (a passenger in a wanted car: the driver's patrol cars chase it)
   wantedT_ += dt;
   const Level& L = LEVELS[stars()];
   bool onFoot = !c_.driving;
@@ -295,6 +349,13 @@ void Police::update(double dt) {
   for (auto& u : units_) active += !u.leaving;
   reinT_ -= dt;
   if (active < L.cars && (active == 0 || reinT_ <= 0) && units_.size() < 8) { spawnUnit(); reinT_ = L.reinS; }
+  else if (active < L.cars && units_.size() >= 8 && logT_ <= 0) SL_WARN("police: no unit sent: %zu units still out (leaving)", units_.size());
+  if ((logT_ -= dt) <= 0) {   // (where the chase stands, every 5 s: the user saw no patrol car come)
+    logT_ = 5;
+    double nd = 1e9;
+    for (const Unit& u : units_) if (!u.leaving) nd = std::min(nd, glm::length(u.pos - you));
+    SL_INFO("police: %s %.0f s, %d of %d units out, nearest %.0f m%s", status().c_str(), wantedT_, active, L.cars, nd, heli_.on ? ", the helicopter up" : "");
+  }
   // ---- who sees you
   bool seen = false;
   double nearest = 1e9;
@@ -412,8 +473,12 @@ void Police::update(double dt) {
     }
     if (!fleeing_ && !onFoot && d < STOP_R) { u.v = std::max(0.0, std::min(u.v, yourV + 1) - 2 * dt); driveUnit(u, dt, you, std::max(0.0, yourV)); continue; }
     // the chase: road speed far, the rubber band closing in, rams when close (a PIT at the rear quarter)
-    double want = L.vRoad;
-    if (d < 200) want = std::min(V_TOP, yourV + (fleeing_ ? L.ramExtra : 3) + std::max(0.0, d - 90) * L.catchUp * 0.05);
+    // (police.js chase: the road speed with the rubber band (boost: far behind you, faster), V_OFF over the snow; close
+    // in, the speed it needs to stop by you: it never crawled in at your speed from 200 m away, Nov 2026 the user:
+    // "I waited 1 min and didn't see them")
+    const double boost = 1 + L.catchUp * std::clamp((d - 90) / 220, 0.0, 1.0);
+    double want = u.road >= 0 ? std::min(V_TOP, L.vRoad * boost) : V_OFF;
+    if (d < 60) want = std::min(want, yourV + (fleeing_ ? L.ramExtra : 3) + std::sqrt(10 * std::max(0.0, d - 8)));
     if (onFoot && d < 30) want = std::min(want, 6.0);
     dvec3 aim = you;
     if (fleeing_ && c_.driving && d < 25 && u.ramT <= 0) {
@@ -756,7 +821,8 @@ void Police::hud(Ui& ui, float) {
     const bool foot = !c_.driving;
     bool officer = false;
     for (const Unit& q : units_) officer = officer || q.offState == 3;
-    if (fineOpen_) { H.msg = "Press " + c_.K(Action::Interact) + " to pay the " + fine + " fine"; H.tip = std::string(foot ? "Run" : "Drive") + " off instead and it's a chase \xC2\xB7 jail if caught."; H.state = "PULLED OVER"; }
+    if (rideMirror_) { H.msg = "You're riding with " + rideDriver_ + " \xC2\xB7 wanted too"; H.tip = "Caught, you go to prison with them.\nOut of the car you stay wanted."; H.state = "PURSUIT"; H.stateCls = "hot"; H.hot = true; }
+    else if (fineOpen_) { H.msg = "Press " + c_.K(Action::Interact) + " to pay the " + fine + " fine"; H.tip = std::string(foot ? "Run" : "Drive") + " off instead and it's a chase \xC2\xB7 jail if caught."; H.state = "PULLED OVER"; }
     else if (officer) { H.msg = "An officer is running after you!"; H.tip = "Outrun him, or he arrests you."; H.state = "FOOT CHASE"; H.hot = true; }
     else if (searching_) { H.msg = "They lost you \xC2\xB7 stay out of sight"; H.tip = "Stay hidden until the bar fills to escape."; H.state = "SEARCHING"; H.stateCls = "lost"; }
     else if (fleeing_) {

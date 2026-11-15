@@ -161,6 +161,18 @@ public:
   std::vector<int> busGlass, busPaint;   // the Micruss's glass and paint materials
   struct BusSpec { std::string model; mat4 fit{1}; double len = 9.3, width = 2.55, floor = 0.95, lane = 1.55, cruise = 26, acc = 1.7, brake = 2.0, lat = 2.6, wheelBase = 6.8; int fleet = 8;
                    struct S { vec3 p; bool window; int side, row; }; std::vector<S> seats; bool ok = false; } bus;
+  /// (bus.js buildFleet / fleetDir, exported at full precision) the fleet's timetable: bus:1..7 on their rounds, each
+  /// round its own shared timeline online ('bus|R<round>'); each bus its two ways (out from the village to the
+  /// terminus, back to its bay at the depot): the joined trips, the speed profile, the stops' marks, the knots
+  struct FleetWay {
+    struct Mark { double s = 0, dwell = 0, t = 0; int stop = -1; bool depot = false; };
+    std::vector<float> X, Y, Z, S, V, ks;
+    std::vector<double> kt;
+    std::vector<Mark> marks;
+    double length = 0, sA = 0, sB = 0, dur = 0;
+  };
+  struct FleetBus { std::string id, line; int round = 0, to = -1; double cycle = 0, phase = 0; FleetWay out, back; };
+  struct FleetData { std::vector<FleetBus> buses; std::vector<float> parkX, parkY, parkZ, parkS; double parkS1 = 0; bool ok = false; } fleet;
 
   struct Station { std::string id, name, course; double s = 0, s0 = 0, s1 = 0, side = 1, heading = 0; bool halt = false, underground = false;
                    dvec3 pos{0}; dvec2 board{0}; bool hasBoard = false; dvec3 exit{0}; bool hasExit = false; };

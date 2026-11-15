@@ -43,6 +43,7 @@
 #include "game/werkstatt.h"
 #include "game/window_view.h"
 #include "game/presentation.h"
+#include "game/railclear.h"
 #include "game/races.h"
 #include "game/jobs.h"
 #include "game/police.h"
@@ -615,6 +616,7 @@ int runGame(const GameOptions& opt) {
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
   bool drawTerrain = !off("noterrain"), drawTrees = !off("notrees"), drawVillage = !off("novillage"), drawSkier = !off("noskier");
   bool running = true, paused = false;
+  if (off("railclear")) { railClearance(resort, transport); running = false; }   // (debug: the trains' swept volume against what the packs place: game/railclear.h)
   bool vehTest = off("vehtest");   // (debug: the autotest starts with the Phase 3 vehicles)
   double acc = 0, last = plat->timeSeconds(), fpsT = 0, fps = 0, simTime = 0;
   int fpsN = 0, frame = 0;

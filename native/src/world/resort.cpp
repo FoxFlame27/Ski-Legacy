@@ -1,4 +1,5 @@
 #include "world/resort.h"
+#include <set>
 #include "core/assets_path.h"
 #include "core/log.h"
 #include "engine/asset_manager.h"
@@ -386,8 +387,10 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     return t;
   };
   std::vector<Material> mats;
+  std::vector<std::string> matWhat;   // (sweepClearance's log: the material as the pack describes it)
   for (auto& m : j["materials"]) {
     Material M;
+    matWhat.push_back(m["glb"].is_object() ? "glb " + m["glb"]["model"].get<std::string>() : m.contains("color") ? "colour " + m["color"].dump() + (m["map"].is_null() || !m.contains("map") ? "" : " map " + m["map"].dump()) : std::string());
     if (m["glb"].is_object()) {
       auto gm = assets_.model(m["glb"]["model"].get<std::string>(), optFor(m["glb"]["model"].get<std::string>()));
       int idx = m["glb"]["index"];
@@ -431,6 +434,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     if (model->name == "snow_cannon") for (const glm::dmat4& M : inst) cannons_.push_back(M);
     PropSet ps;
     ps.model = model;
+    ps.what = name + " prop " + model->name;
     ps.shadow = shadow;
     vec3 dim = model->bmax - model->bmin;
     std::map<int64_t, size_t> cellOf;
@@ -474,6 +478,7 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     c.bmin = c.origin + dvec3(mn); c.bmax = c.origin + dvec3(mx);
     c.shadow = M.alpha != Material::Alpha::Blend;
     c.mat = M; c.verts = verts; c.tris = tris; c.i16 = i16; c.raw = verts * 28 + ib;
+    { const int mi = m["mat"]; c.what = name + " mesh, mat " + std::to_string(mi) + (mi >= 0 && size_t(mi) < matWhat.size() ? " " + matWhat[size_t(mi)] : std::string()); }
     std::vector<uint8_t> rawb(c.raw);
     std::memcpy(rawb.data(), bin.data() + vOff, verts * 28);
     std::memcpy(rawb.data() + verts * 28, bin.data() + iOff, ib);
@@ -612,6 +617,58 @@ void Resort::streamChunks(const dvec3& cam, bool all) {
     if (!c.model) continue;
     spent += c.raw;
     stream_.loaded++; stream_.gpuBytes += c.verts * 28 + c.tris * 12; stream_.uploads++;
+  }
+}
+
+void Resort::sweepClearance(const std::function<bool(const dvec3&, const dvec3&)>& near, const std::function<bool(const dvec3&)>& inside,
+                            const std::function<void(const dvec3&, const std::string&)>& hit) const {
+  std::vector<uint8_t> raw;
+  std::set<int64_t> seen;
+  auto report = [&](const dvec3& p, const std::string& what, size_t id) {
+    const int64_t k = (int64_t(std::floor(p.x / 4)) * 73856093) ^ (int64_t(std::floor(p.z / 4)) * 19349663) ^ int64_t(id * 83492791u);
+    if (seen.insert(k).second) hit(p, what);
+  };
+  for (size_t ci = 0; ci < chunks_.size(); ci++) {
+    const Chunk& c = chunks_[ci];
+    if (!near(c.bmin, c.bmax)) continue;
+    raw.resize(c.raw);
+    if (ZSTD_isError(ZSTD_decompress(raw.data(), raw.size(), c.packed.data(), c.packed.size()))) continue;
+    auto vert = [&](uint32_t i) { vec3 q; std::memcpy(&q, raw.data() + size_t(i) * 28, 12); return c.origin + dvec3(q); };
+    const uint8_t* ib = raw.data() + c.verts * 28;
+    for (size_t t = 0; t < c.tris; t++) {
+      uint32_t i0, i1, i2;
+      if (c.i16) { const uint16_t* s = reinterpret_cast<const uint16_t*>(ib) + t * 3; i0 = s[0]; i1 = s[1]; i2 = s[2]; }
+      else { const uint32_t* s = reinterpret_cast<const uint32_t*>(ib) + t * 3; i0 = s[0]; i1 = s[1]; i2 = s[2]; }
+      const dvec3 a = vert(i0), b = vert(i1), d = vert(i2);
+      if (!near(glm::min(a, glm::min(b, d)), glm::max(a, glm::max(b, d)))) continue;
+      // points over the triangle every ~0.3 m
+      const double e = std::max({glm::length(b - a), glm::length(d - a), glm::length(d - b)});
+      const int n = std::clamp(int(std::ceil(e / 0.3)), 1, 200);
+      bool any = false;
+      for (int u = 0; u <= n && !any; u++)
+        for (int v = 0; u + v <= n && !any; v++) {
+          const dvec3 p = a + (b - a) * (double(u) / n) + (d - a) * (double(v) / n);
+          if (inside(p)) { report(p, c.what, ci); any = true; }
+        }
+    }
+  }
+  for (size_t pi = 0; pi < props_.size(); pi++) {
+    const PropSet& ps = props_[pi];
+    if (!ps.model) continue;
+    const vec3 lo = ps.model->bmin, hi = ps.model->bmax;
+    for (const Cell& cell : ps.cells)
+      for (const glm::dmat4& M : cell.inst) {
+        // the instance's box (model bounds) sampled every ~0.3 m
+        const dvec3 o(M[3]);
+        const double r = glm::length(dvec3(hi - lo)) * std::max({glm::length(dvec3(M[0])), glm::length(dvec3(M[1])), glm::length(dvec3(M[2]))});
+        if (!near(o - dvec3(r), o + dvec3(r))) continue;
+        int nx = std::clamp(int(std::ceil((hi.x - lo.x) / 0.3f)), 1, 60), ny = std::clamp(int(std::ceil((hi.y - lo.y) / 0.3f)), 1, 60), nz = std::clamp(int(std::ceil((hi.z - lo.z) / 0.3f)), 1, 60);
+        bool any = false;
+        for (int x = 0; x <= nx && !any; x++) for (int y = 0; y <= ny && !any; y++) for (int z = 0; z <= nz && !any; z++) {
+          const dvec3 p = dvec3(M * glm::dvec4(lo.x + (hi.x - lo.x) * x / nx, lo.y + (hi.y - lo.y) * y / ny, lo.z + (hi.z - lo.z) * z / nz, 1));
+          if (inside(p)) { report(p, ps.what, 1000000 + pi); any = true; }
+        }
+      }
   }
 }
 

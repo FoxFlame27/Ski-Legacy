@@ -11,6 +11,7 @@
 //   lifts      moving cabins and chairs, boarding and riding (lifts.h)
 //   colliders + walkable surfaces (decks, stairs) handed to Scenery / World
 #pragma once
+#include <functional>
 #include "core/math.h"
 #include "engine/canvas2d.h"
 #include "engine/renderer.h"
@@ -51,6 +52,12 @@ public:
   void update(double dt, const dvec3& cam);
   void submit(Renderer& r, bool props = true, bool meshes = true);
   Lifts& lifts() { return lifts_; }
+  /// (debug: SKI_LEGACY_DEBUG=railclear) what of the baked meshes and the placed props reaches into a clearance
+  /// envelope (a train's swept volume): near(bmin, bmax) culls whole chunks / instances, inside(p) tests a point;
+  /// hit(p, what) once per 4 m cell of each chunk / instance that reaches in (what: "<pack> mesh, mat <i> ..." or the
+  /// prop's model name)
+  void sweepClearance(const std::function<bool(const dvec3&, const dvec3&)>& near, const std::function<bool(const dvec3&)>& inside,
+                      const std::function<void(const dvec3&, const std::string&)>& hit) const;
   size_t propCount() const { return nProps_; }
   // (Phase 7) streaming of the baked mesh chunks (the resort's, the transport's and the courses' meshes per cell): the
   // vertex / index bytes are kept zstd-packed on the CPU and uploaded within loadRadius of the camera, released past
@@ -70,12 +77,13 @@ public:
 
 private:
   struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; };
-  struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; };
+  struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; std::string what; };
   struct Chunk {
     std::shared_ptr<Model> model;    // null while unloaded
     dvec3 origin; dvec3 bmin, bmax; bool shadow = true;
     std::vector<uint8_t> packed;     // zstd(vertices 28 B each + indices)
     size_t verts = 0, tris = 0, raw = 0; bool i16 = false; Material mat;
+    std::string what;                // (sweepClearance) the pack and the material it came from
   };
   void streamChunks(const dvec3& cam, bool all);
   StreamStats stream_;

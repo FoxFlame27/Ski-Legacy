@@ -643,10 +643,9 @@ exported room (`export_rooms.mjs`, `Interiors::Room::Autohaus`):
 - **The floor**: the web game lays its stone tiles 80 % opaque over a `Reflector`. Here the hall, the cars, their
   plates and the windows' view are drawn a second time mirrored under the floor (double-sided copies of the models:
   mirrored triangles wind the other way) and the tiles, still 80 % opaque, over them. No renderer change.
-- **The view out**: the web game renders the world live through the glass. Here it is **photographed as you go in**
-  (behind the fade, three frames: out of the glass front and out of each side's upper windows, from where you would
-  stand in the hall, the camera's near plane just outside the wall so the hall itself is cut away) and laid on the
-  window planes by direction. Still, not live: the traffic outside does not move while you are in.
+- **The view out**: live through the glass, as the web game's (`game/window_view`, see "The windows' view" below):
+  the yard, the tow trucks, the road's traffic and the mountains from where you stand in the hall, the hall itself
+  left out; in the polished floor once more upside down, as the web game's Reflector shows the window planes.
 - **Outside**: the three tow trucks (`towtruck.js buildTowTruck`: the 508 D with its star and beacons, exported) in
   their TOW bays with their colliders, the potted spruces either side of the door (the exporter loaded no
   `pine_tree` before), the cars on show seen through the glass as real car models in their paints.
@@ -986,14 +985,14 @@ panes; what the walker bumps into; the chairs; the mattress tops measured on the
   view from the pillow (the mouse turns the head; the view key: from beside the bed); the RECOVERING card with its
   clock (20 s), then FIT AGAIN and E gets you up; the visitors' chairs (E sits / stands), the way out through the glass
   doors to the forecourt ("Get well soon"). E at the door outside visits. The windows and the glass doors show the
-  village: the web game renders it live through them (LivePortal); here it is photographed from the house's four sides
-  (and once more through the doors) in the dark moment of the fade as you go in, and each pane shows its part.
+  village live, as the web game's LivePortal (`game/window_view`): the forecourt under the canopy through the doors,
+  the snow and the trees behind the house through the ward's windows.
 - Debug runs (with `--autotest --png out.png`, a screenshot per stage and the checks logged, `[helitest] PASS`):
   `SKI_LEGACY_DEBUG=rescuetest` (a wipeout on the mountain, the landing, the flight, the ambulance, the ward, out of the
   doors; `SKI_LEGACY_SPOT=493,-393`: the wipeout on a steep slope instead, so it hovers and winches you up), `ambtest` (from the pad on), `wardtest` (the ward only), `helitest` (the base, the planner, a flight, a
   landing, getting out), `helicheck` (no skis / no money at the desk, the chart with a race course, the drop zone's
   smoke, the skis in the basket, jumping out of the hover with the drop, the pilot flying home, leaving it 650 m behind,
-  calling it back, both watchdogs, a visitor's chair, leaving mid-rescue and coming back); `--hour 22` for the night; with `,fadetest` added the real fades run (the windows are photographed behind them).
+  calling it back, both watchdogs, a visitor's chair, leaving mid-rescue and coming back); `--hour 22` for the night; with `,fadetest` added the real fades run.
 
 **Chalets** (`game/chalets`): the 18 chalets (chalet.glb within 60 m, chalet_lo.glb beyond) by their plan frames; E at a
 door: buy ($50,000, one each, `save.chalet` in the web shape), look inside, or go into yours. The interior: chaletplan.js's
@@ -1088,8 +1087,7 @@ world ready in 21.61 s ...
 - **Interiors**: the ski shop, the chalet (both floors) and the police station are the web game's own rooms now, with
   their windows onto the world (see "The rooms, inside and outside, as the web game"); the build mode furnishes the
   chalet's ground floor only.
-- **Helicopter / rescue**: the ward's windows are photographs taken as you go in, not a live view (no parallax; the
-  interiors draw no world outside: they follow the daylight until the next visit takes new ones); the landing light's
+- **Helicopter / rescue**: the landing light's
   pool is a spot light on the snow and a faint cone (not model.js's draped decal); the drop zone's smoke drifts on a
   steady breeze (the windsock stands); the wall clocks stand; the ambulance looks round at the cars and what is solid
   near it (no speeds of what it meets); multiplayer: other players' rescues (net/rescue.js `veh` rows), patients and
@@ -1711,12 +1709,37 @@ replayed, in the platform's Georgia where the web game paints in Georgia, letter
 JS walks on, the things you aim at, the lights with their roles, the glass, and where the room stands in the world.
 `game/interiors*` draws and walks them; `game/window_view` gives the glass its view.
 
-- **The windows' view** (`game/window_view`): the web game renders the world live into the glass from the matching
-  spot outdoors (liveportal.js). Here the world is photographed as you go in, behind the fade's dark moment: one frame
-  per wall with windows, taken from inside the house where it stands (its own building left out: the near plane, or the
-  house not drawn for those frames). The panes' texture coordinates are then set every frame from where your eyes are
-  (the ray through the glass meets the scene on a plane 12 - 14 m beyond it): walk to a window and the view follows.
-  The photographs are of the moment you came in (people and cars in them stand still).
+- **The windows' view** (`game/window_view`): **below High** (Super Performance, Performance, Balanced, Switch;
+  `Quality::liveWindows`, fixed at start: a preset change restarts the game) no world is drawn for the glass: it is a
+  misty, grey frosted pane seen from inside (shading 9 with metallic 1: the hour's soft light coming through, a bright
+  cool grey by day, warmer and dimmer at dusk / dawn, a dark blue-grey at night, brighter toward the top, a faint
+  mottled mist and frost creeping in from the frame; set against the room's exposure, so as bright in every room), and
+  the world is streamed and simulated round you as before. **High, Ultra, Super Ultra**: live, as the web game's (liveportal.js; interior.js / chaletroom.js /
+  carrentalroom.js renderPortal, prison.js, hospitalroom.js). The rooms stand at a quiet spot 21 km from the resort;
+  every frame with a window in view your camera is carried to where the room stands outdoors (the same eye, direction
+  and field of view; the police station's two wings each to their own place on the house) and the frame is drawn
+  twice: first the world from there (`Renderer::endPortal`: the scene passes, culled and scissored to the part of the
+  screen the windows cover, into a 4-byte R11G11B10F picture of the frame's own 3D resolution, without AO, bloom,
+  glare or tone map, freed a few seconds after you leave; no trail map or sky-light pass of its own, the sun's
+  shadows from the nearest cascade only, not multisampled), then the room, whose window planes (a material of shading
+  9) show that picture: a hole in the wall onto the world with exact parallax, tone-mapped once with the room, as
+  sharp as the view outdoors (1:1 pixels; the web game draws the chalets', the station's and the ward's at 40 % of the
+  resolution every third frame). The world's pass runs every third frame in the chalets, the station and the ward (as the
+  web game's), every other frame in the shop and the Autohaus (their glass fronts; the web game: every frame), up to
+  two frames rarer while it is slow (`WindowView::rate`); in between the glass looks the picture up by direction from the camera it was
+  drawn for (`Renderer::setPortalView`), so turning your head between two pictures does not drag the view along, and
+  a turn that brings a window in from the edge of the screen draws at once. The house you are in
+  is left out: the chalet and the station are not submitted for that pass, the ski shop, the Autohaus hall and the
+  medical centre (baked into the resort's chunks) by a box the mesh shader discards in (`Renderer::setClipBox`; the
+  snowflakes inside it too). **While you are inside, the world goes on round the house**: terrain, trees and resort
+  cells are streamed round the carried camera and the townsfolk, the skiers, the traffic, the buses, the trains and the
+  lifts are simulated round it (`windows.focus()`), so through the glass the people walk, the cars drive, the snow
+  falls and the day turns to night. With no window in view the world is not drawn (the web game's test). Not ported:
+  the shop's `nearClutter` (the web game hides the signboard and racks right in front of the shop in its view; here
+  they are baked into the resort's chunks and stay). Debug: a room's test with `,winlive` holds every picture 4 s of
+  game time and takes it again (`<name>_b.png`), logging the mean frame time of the first 2 s without the windows'
+  view and of the last 2 s with it, and the GPU's time by pass (`window view: ...`: per drawn picture); `SKI_LEGACY_WINSHOT=a+b` only for the pictures whose name has a or b in it
+  (outdoors too, for a baseline); `,noportal` switches the view off (the soft sky).
 - **The ski shop** (`game/shoproom`, `game/outfitshop`; interior.js + main.js enterShop / exitShop / shopAction +
   ui/outfitshop.js): E within 3.2 m of the spot in front of the door (village.js), out again 2.2 m in front of it; the
   eye 1.62 m, 70 degrees, the crosshair; your own skier on the OUTFITS podium, dressed as equipped; **the outfit shop**
@@ -1758,7 +1781,7 @@ spots, the conversation, the outfit shop's tabs: `out_in_<name>.png`, `out_talk.
 released), `werktest` (a damaged car of yours in the Werkstatt's box, you at the workbench: the prompt, E, the repair
 checked; then a hut's door and the ticket counter: `out_werk_<stage>.png`, `out_hut_prompt.png`).
 
-Known gaps: the windows' views are photographs (above); the ticket seller and the townsfolk talk in the card dialog,
+Known gaps: the other players are not drawn in the windows' view; the ticket seller and the townsfolk talk in the card dialog,
 not talk.js's conversation camera; the chalet's build mode still works the ground floor only; no police raid into a
 chalet, no 30 s wait at a chalet's door during a chase; the prison's jail board (the lobby's top 3) shows the room's
 first state; the station's and the Werkstatt's boards, lamps and windows come on with the night (their strengths by
@@ -1820,7 +1843,7 @@ by position except a rescue in progress, which is on the mountain).
 | races, records, prizes | modes/race, freeworld.js | **ported** (11 courses, bus races, stand, AI field, announcer); no broadcast presentation, no ghosts |
 | jobs, taxi | jobs/*.js, taxi.js | **ported** (simplified dialogue, no lost & found) |
 | police, prison, impound | police.js, prison.js, prisonoutside.js, impound.js | **ported** (chases, heli, arrest, jail, sirens; the station inside and outside as built by the web game); no roadblocks / spikes / raids |
-| helicopter (heli-ski), rescue, ambulance, hospital ward | heli.js, heli/*.js, hospitalroom.js | **ported** (the flight model, pad, rotors, landing, the ward as built by the web game; a card flight planner, photographed window views) |
+| helicopter (heli-ski), rescue, ambulance, hospital ward | heli.js, heli/*.js, hospitalroom.js | **ported** (the flight model, pad, rotors, landing, the ward as built by the web game; a card flight planner, live window views) |
 | chalets, build mode | chalets.js, chaletroom.js, build/* | **ported** (the house with both floors, its doors and lamps, the village's gardens and bays; the catalogue, virtual mouse; build mode on the ground floor) |
 | people, crowds | townsfolk.js, peoplesim.js, fans.js, crowds.js | **ported** (the village's townsfolk as fans.js's crowd people; no spectators' cheering, no lift-base people) |
 | snowmobiles | snowmobile.js | **ported** |

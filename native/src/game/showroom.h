@@ -10,10 +10,9 @@
 //   sliding doors open as you come near them and on the way in (setDoors, eased)
 //   the floor     the web game's dark stone tiles lie 80 % opaque over a Reflector: here the hall and the cars are drawn
 //                 a second time mirrored under the floor, and the tiles over them
-//   the windows   the web game renders the real world live through the glass (carrentalroom.js renderPortal). Here the
-//                 world is photographed from the hall as you go in, behind the fade (the camera where you would stand
-//                 in the hall, its near plane just outside the glass: the hall itself is cut away), once through the
-//                 glass front and once through each side's upper windows; the photographs lie on the window planes
+//   the windows   the web game renders the real world live through the glass (carrentalroom.js renderPortal): here
+//                 too (game/window_view: the camera carried to the hall in the village, the hall itself left out),
+//                 and once more upside down in the polished floor, as the web game's Reflector shows it
 //   outside       the three tow trucks (towtruck.js buildTowTruck) parked in their TOW bays in the yard; the cars on
 //                 show seen through the glass, in their display paints
 #pragma once
@@ -23,6 +22,7 @@
 #include "game/play.h"
 #include "game/play_data.h"
 #include "game/vehicles.h"
+#include "game/window_view.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -36,7 +36,7 @@ struct Collider;
 
 class Showroom {
 public:
-  Showroom(PlayCtx& c, Interiors& rooms, VehicleModels& models) : c_(c), rooms_(rooms), models_(models) {}
+  Showroom(PlayCtx& c, Interiors& rooms, VehicleModels& models, WindowView& win) : c_(c), rooms_(rooms), models_(models), win_(win) {}
   /// in the showroom (the exported room is the one you are in)
   bool inside() const;
   /// per frame while inside: the doors, the salesman, the marker; `talking`: a panel is open (the configurator, his
@@ -62,14 +62,8 @@ public:
   void draw(Renderer& r, SceneFx& sfx, gfx::Device& dev, const Camera& cam);
   /// outside: the tow trucks in their bays, the cars on show behind the glass (near the hall only)
   void drawOutside(Renderer& r, gfx::Device& dev, const dvec3& cam);
-  // ---- going in: `enter` runs once the windows' view is photographed (a few frames behind the fade; after 1.2 s anyway)
+  // ---- going in: the windows get their view of the village (carrental.js: room.setWorld), then `enter` runs
   void requestEnter(std::function<void()> enter);
-  bool entering() const { return bool(pending_); }
-  /// the photograph's camera this frame (while the screen is covered); true: this frame is one
-  bool captureCamera(Camera& cam, bool covered);
-  bool capturing() const { return armed_; }
-  /// after the scene is drawn: the frame read back onto that side's window planes
-  void captured(Renderer& r);
   void fillColliders(std::vector<Collider>& out, const dvec3& near) const;
   /// where you stand to go in (carrental.js door: 1.3 m in front of the sliding doors) and the way out (toward the road)
   bool doorSpot(dvec3& p, dvec2& out) const;
@@ -91,6 +85,7 @@ private:
   PlayCtx& c_;
   Interiors& rooms_;
   VehicleModels& models_;
+  WindowView& win_;
   Cfg cfg_;
   bool was_ = false;
   double doorT_ = 0, clerkYaw_ = 0, t_ = 0;
@@ -102,16 +97,6 @@ private:
   std::shared_ptr<Model> floor_, truck_;
   bool truckTried_ = false;
   VehicleDraw vd_;
-  // the windows' view
-  void buildPanes(int view, float tanH, float tanV, gfx::Texture tex);
-  void finishEnter();
-  dvec3 hallToWorld(const dvec3& l) const;   // the hall's frame (the room's) at its place in the village
-  std::function<void()> pending_;
-  int capture_ = 99;
-  bool armed_ = false;
-  double wait_ = 0;
-  std::shared_ptr<Model> pane_[3];
-  gfx::Texture paneTex_[3];
 };
 
 } // namespace sl

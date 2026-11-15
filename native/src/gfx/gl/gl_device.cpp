@@ -430,6 +430,9 @@ public:
     glViewport(x, y, w, h);
     if (scissor) { glEnable(GL_SCISSOR_TEST); glScissor(x, y, w, h); } else glDisable(GL_SCISSOR_TEST);
   }
+  void setScissor(int x, int y, int w, int h) override {
+    if (w > 0 && h > 0) { glEnable(GL_SCISSOR_TEST); glScissor(x, y, w, h); } else glDisable(GL_SCISSOR_TEST);
+  }
   Texture renderTargetColor(RenderTarget rt) const override { auto it = rts_.find(rt.id); return it == rts_.end() ? Texture{} : it->second.color; }
   Texture renderTargetDepth(RenderTarget rt) const override { auto it = rts_.find(rt.id); return it == rts_.end() ? Texture{} : it->second.depth; }
   void destroy(RenderTarget rt) override {

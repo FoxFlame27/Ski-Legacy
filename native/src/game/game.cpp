@@ -79,6 +79,7 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <sstream>
 #include <thread>
 #include <set>
 #include <unordered_map>
@@ -610,13 +611,14 @@ int runGame(const GameOptions& opt) {
   pc.dev = dev.get(); pc.data = &playData; pc.autotest = opt.autotest; pc.skier = &rig;
   for (auto& ps : pistes) pc.pistes.push_back({ps.name, ps.pts});
   Interiors rooms(pc);
-  Showroom showroom(pc, rooms, vmodels);   // (the Autohaus: its cars, the configurator's live car, the salesman, the doors)
-  WindowView windows(pc);                      // (the rooms' windows: the world photographed as you go in)
+  WindowView windows(pc);                      // (the rooms' windows: the world outside, live on High and up)
+  windows.misty = !q.liveWindows;              // (below High: a misty pane, no world drawn for it)
+  Showroom showroom(pc, rooms, vmodels, windows);   // (the Autohaus: its cars, the configurator's live car, the salesman, the doors)
   world.addDeck([&](double x, double z) { return rooms.deck(x, z); });
   Races races(pc);
   Jobs oddJobs(pc);
   Police police(pc, rooms, windows);
-  HospitalWard ward(pc, rooms);
+  HospitalWard ward(pc, rooms, windows);
   ShopRoom shopRoom(pc, rooms, windows, ui);   // (interior.js: the walk-in ski shop's door, podium, views)
   OutfitShop outfitShop(pc, ui, shopRoom);     // (ui/outfitshop.js: the OUTFITS corner)
   world.addDeck([&](double x, double z) { return ward.deck(x, z); });
@@ -684,6 +686,7 @@ int runGame(const GameOptions& opt) {
   } else player.teleport(4, 34, PI);
 
   Camera cam;
+  Camera viewCam;   // (the world's camera: yours, or inside a room with windows the one carried to where the house stands)
   cam.farZ = q.farZ;
   Lighting dayLight;
   dayLight.toneMap = opt.toneMap;
@@ -698,7 +701,7 @@ int runGame(const GameOptions& opt) {
   resort.finishStreaming(cam.pos);
   dev->memTag("after the load (streamed, built during play)");
   assets.logLateLoads = hitchTest;
-  dev->gpuTiming(hitchTest);
+  dev->gpuTiming(hitchTest || (std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "winlive")));   // (,winlive: the GPU's time by pass too)
   assets.onLoaded = nullptr;   // (models loaded later, in play, do not draw the loading screen)
   if (quitWhileLoading) { audio.stop(*plat); return 0; }
   SL_INFO("world ready in %.2f s: %zu terrain nodes, %zu trees in range, %zu resort props, %zu lifts, %.0f MB textures (GPU: textures %.0f MB, buffers %.0f MB; RSS %.0f MB)", plat->timeSeconds() - t0,
@@ -1657,6 +1660,12 @@ int runGame(const GameOptions& opt) {
   adminHooks.shot = [&](const std::string& n) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, n.c_str()); };
   adminHooks.key = [&](platform::Key k) { plat->pushKey(k, true); plat->pushKey(k, false); };
   bool adminTestOk = true, adminTestDone = false;
+  // (debug: a room's test with ",winlive": every picture taken in a room is followed by a second one 4 s of game time
+  // later, "<name>_b" (the view out of the windows has moved on), the test standing still meanwhile; the mean frame time
+  // of those frames is logged: the first half without the windows' view, the second with it. ",noportal": never)
+  int winHold = 0, winStep = 1, winFrames = 0;
+  std::string winPng;
+  double winT0 = 0, winTm = 0;
   int64_t money0 = 0, liftMoney0 = 0;
   dvec3 spawnPos = player.pos;
   double spawnHeading = player.heading;
@@ -3634,10 +3643,12 @@ int runGame(const GameOptions& opt) {
       if (races.active() && oddJobs.active()) oddJobs.drop();
       if (input.takePressed(Action::Duty) && oddJobs.onDuty()) oddJobs.endTaxi("Shift ended");
     }
-    folk.setPlayer(player.pos);
-    if (aiOn) { HitchScope hs(hitch, "townsfolk"); folk.update(paused ? 0 : frameDt, cam.pos, light.night, &scenery); }
+    // (inside a room with windows the world goes on round the house: window_view)
+    const dvec3 worldPos = windows.live() && rooms.inside() ? windows.focus() : player.pos;
+    folk.setPlayer(worldPos);
+    if (aiOn) { HitchScope hs(hitch, "townsfolk"); folk.update(paused ? 0 : frameDt, viewCam.pos, light.night, &scenery); }
     npcs.off = !aiOn;
-    { HitchScope hs(hitch, "npcs"); npcs.update(paused ? 0 : frameDt, player.pos, cam.pos, 1 - light.night); }
+    { HitchScope hs(hitch, "npcs"); npcs.update(paused ? 0 : frameDt, worldPos, viewCam.pos, 1 - light.night); }
     perf.add("gameplay (races, jobs, police, people)", perfMs() - pt0);
     // the career (economy.js stats): top speed, distance skied
     if (started && player.mode == PlayerMode::Ski) {
@@ -3653,7 +3664,7 @@ int runGame(const GameOptions& opt) {
 
     // lifts: move the cars first, then seat the rider on the updated car (no lag); the boarding prompt
     lifts.timeScale = player.mode == PlayerMode::Sit && !paused && input.down(Action::Jump) && !heli.riding() && !ward.seated() ? 16 : 1;   // hold Space: x16 (Space climbs in the helicopter)
-    lifts.update(paused ? 0 : frameDt, player.pos);
+    lifts.update(paused ? 0 : frameDt, worldPos);
     prompt.clear(); rideLine.clear();
     bool interact = input.takePressed(Action::Interact);
     bool nextItem = input.takePressed(Action::NextItem), prevItem = input.takePressed(Action::PrevItem);
@@ -3664,7 +3675,7 @@ int runGame(const GameOptions& opt) {
     pt0 = perfMs();
     busBoxes.clear();
     buses.boxes(busBoxes);
-    traffic.update(vdt, player.pos, &drive, busBoxes, cam);
+    traffic.update(vdt, worldPos, &drive, busBoxes, viewCam);
     if (opt.autotest && at == AT::Ski && off("werktest") && werk.available()) {
       // (debug: a damaged car of yours standing in the Werkstatt's box, you at the workbench: the prompt, E, the repair;
       // then a mountain hut's door and the ticket counter: o_werk_<n>.png, the checks logged)
@@ -3696,7 +3707,7 @@ int runGame(const GameOptions& opt) {
         if (opt.autotest && at == AT::Ski && (off("roomchalet") || off("roomprison")) && playData.chaletRoom.ok && playData.prisonDef.ok) {
       // (debug: inside a chalet / the police station from the web game's reference views: o_ch_<name>.png, o_po_<name>.png)
       static int rf = 0;
-      rf++;
+      rf += winStep;
       const bool ch = off("roomchalet");
       struct Look { const char* name; int level; double x, z, yaw, pitch; };
       static const Look chL[] = {{"in_enter", 0, 3.07, -0.17, -PI / 2, -0.05}, {"in_living", 0, 1.5, -3.0, std::atan2(-1.0, -0.6), -0.05}, {"in_living2", 0, -2.5, -5.0, 0.5, -0.05}, {"in_hall", 0, 2.6, 0.2, -PI / 2, -0.05},
@@ -3724,7 +3735,7 @@ int runGame(const GameOptions& opt) {
       // (debug: the ski shop from the web game's reference views (the same spots and angles), the clerk's conversation,
       // the outfit shop's tabs: o_in_<name>.png, o_talk.png, o_outfit_<tab>.png)
       static int rf = 0;
-      rf++;
+      rf += winStep;
       struct Look { const char* name; double x, z, yaw, pitch; };
       static const Look looks[] = {{"enter", 0, 2.6, PI, -0.05}, {"wall", 0, 0.5, PI, -0.05}, {"wall_left", -3, 0.5, PI, -0.05}, {"wall_right", 3, 0.5, PI, -0.05}, {"clerk", 2.6, 1.4, PI / 2, -0.05},
                                    {"outfits", -3.6, -0.45, -PI / 2, -0.05}, {"door", 0, 0, 0, -0.05}, {"right", 0, 0, PI / 2 + 0.5, -0.05}, {"window", -4.7, 2.2, 0, -0.05}, {"ski_close", -5.2, -1.6, PI, 0.05}};
@@ -3757,7 +3768,7 @@ int runGame(const GameOptions& opt) {
     }
     if (opt.autotest && at == AT::Ski && ((off("roomshop") && !shopRoom.available()) || off("roomauto"))) {   // (debug: a walk-in room from a few spots, shots o_room<n>.png)
       static int rf = 0;
-      rf++;
+      rf += winStep;
       const bool shop = off("roomshop");
       auto stand = [&](const char* kind, const char* id) { dvec3 st; double yw = 0; if (rooms.aimSpot(kind, id, st, yw)) { player.teleport(st.x, st.z, yw); player.pos.y = rooms.toWorld(0, 0, 0).y; } };
       if (rf == 4) rooms.enter(shop ? Interiors::Room::Shop : Interiors::Room::Autohaus);
@@ -3902,9 +3913,9 @@ int runGame(const GameOptions& opt) {
       if (buses.debugStand(bp, bh)) { player.setSkisOn(false); player.teleport(bp.x, bp.z, bh); player.vel = dvec3(0); }
       if (!opt.png.empty() && pendingPng.empty() && frame % 45 == 0 && buses.debugCam(bp, bp)) pendingPng = pngVariant(opt.png, ("bus" + std::to_string(frame / 45)).c_str());
     }
-    buses.update(vdt, player.pos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
-    railway.update(vdt, rideKind == Ride::Rail && fastHeld, player.pos);
-    express.update(vdt, rideKind == Ride::Express && fastHeld, player.pos);
+    buses.update(vdt, worldPos, &drive, &traffic, rideKind == Ride::Bus && fastHeld);
+    railway.update(vdt, rideKind == Ride::Rail && fastHeld, worldPos);
+    express.update(vdt, rideKind == Ride::Express && fastHeld, worldPos);
     if (rideKind == Ride::Express) express.drawInfo(*dev, resort.fonts());   // (express.js drawInfo: the cabin's live trip display)
     perf.add("vehicles (traffic, buses, trains)", perfMs() - pt0);
     const double ptRides = perfMs();
@@ -4372,6 +4383,7 @@ int runGame(const GameOptions& opt) {
     pc.night = light.night;   // (the night outdoors: the helicopter's lamps, the ward's windows)
     pc.hour = hour;
     pc.snowing = float(weather.snow);
+    const Lighting outLight = light;   // (the world's light: the rooms' windows show it)
     if (rooms.inside()) light = rooms.lighting(light);
 
     // streaming + animation
@@ -4462,7 +4474,6 @@ int runGame(const GameOptions& opt) {
     heli.camera(cam);
     ward.camera(cam);
     showroom.camera(cam, frameDt);   // (the Autohaus: 70 degrees on foot; the configurator's camera round your car)
-    showroom.captureCamera(cam, opt.autotest || trans.covered());   // (its windows: the village photographed behind the fade, as you go in)
     if (opt.autotest && at == AT::Ski && off("autohaus") && transport.loaded()) {
       // (debug: the Autohaus from fixed viewpoints, outside (the lot's frame: +z to the road) and in the showroom (the
       // room's frame), with the configurator's steps, the salesman's talk and his marker: o_<name>.png, the same
@@ -4479,7 +4490,7 @@ int runGame(const GameOptions& opt) {
         {"cfg_rims2", 2, 0, 0, 0, 0, 0, 0, 7}, {"cfg_plate", 2, 0, 0, 0, 0, 0, 0, 8}, {"cfg_sum", 2, 0, 0, 0, 0, 0, 0, 9}, {"cfg_up", 2, 0, 0, 0, 0, 0, 0, 10}};
       static int af = 0;
       const int per = 44, k = af / per, f = af % per;
-      af++;
+      af += winStep;
       if (size_t(k) < sizeof VIEWS / sizeof VIEWS[0]) {
         const V& v = VIEWS[k];
         const double fx = transport.autohausDir.x, fz = transport.autohausDir.y;
@@ -4508,10 +4519,8 @@ int runGame(const GameOptions& opt) {
         if (f == (v.act == 1 ? 6 : per - 2) && !opt.png.empty() && pendingPng.empty()) { pendingPng = pngVariant(opt.png, v.name); SL_INFO("[autohaus] shot %s: prompt '%s', %d cars on show, doors %.2f open", v.name, prompt.c_str(), showroom.carsShown(), showroom.doorOpen()); }
       }
     }
-    ward.captureCamera(cam, (opt.autotest && !off("fadetest")) || trans.covered());   // (the ward's windows: the village photographed behind the fade)
     shopRoom.camera(cam);
     rooms.camera(cam);
-    windows.captureCamera(cam, (opt.autotest && !off("fadetest")) || trans.covered(), frameDt);   // (a room's windows, the same way)
     if (rideKind == Ride::Sled) sleds.camera(cam, frameDt);
     // (Phase 4) the main menu's slow orbit over the village; the skier showcase (the skier on the plaza, turned by a
     // drag / the right stick, the camera off to the side so the menu column stays clear)
@@ -4734,13 +4743,17 @@ int runGame(const GameOptions& opt) {
       }
     }
     admin.camera(cam, ev, realDt);   // (Icey27's free camera takes the view; the world streams round it)
-    { HitchScope hs(hitch, "terrain"); terrain.update(cam.pos); }
-    { HitchScope hs(hitch, "trees"); scenery.update(cam.pos); }
-    { HitchScope hs(hitch, "resort"); resort.update(frameDt, cam.pos); }
-    { HitchScope hs(hitch, "groundmap"); groundMap.update(world, renderer, cam.pos, opt.autotest && frame < 3); }   // (the valley mist's height map)
+    // (a room's windows: liveportal.js) the world is streamed round the camera carried to where the house stands
+    viewCam = cam;
+    if (windows.walked() && !rooms.inside()) windows.clear();   // (out of the room however you left it)
+    if (windows.live() && rooms.inside()) { windows.carry(cam, rooms.toWorld(0, 0, 0)); viewCam = windows.camera(); }
+    { HitchScope hs(hitch, "terrain"); terrain.update(viewCam.pos); }
+    { HitchScope hs(hitch, "trees"); scenery.update(viewCam.pos); }
+    { HitchScope hs(hitch, "resort"); resort.update(frameDt, viewCam.pos); }
+    { HitchScope hs(hitch, "groundmap"); groundMap.update(world, renderer, viewCam.pos, opt.autotest && frame < 3); }   // (the valley mist's height map)
     {   // (atmosphere.js) the clouds round the camera
       HitchScope hs(hitch, "clouds");
-      clouds.update(frameDt, world, cam.pos, {weather.snow, weather.cloud, weather.mist, weather.wind, weather.sea}, light.fogDensity, light.fogFalloff, q.clouds, frame < 3);
+      clouds.update(frameDt, world, viewCam.pos, {weather.snow, weather.cloud, weather.mist, weather.wind, weather.sea}, light.fogDensity, light.fogFalloff, q.clouds, frame < 3);
       renderer.setClouds(clouds.frame);
     }
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
@@ -4842,7 +4855,7 @@ int runGame(const GameOptions& opt) {
         float want = float(q.renderScale * std::clamp(save.setting("renderScale", 1), 0.5, 1.0) * budgetS * dynScale);
         if (std::fabs(want - renderer.renderScale()) > 0.04f) renderer.setRenderScale(want);
       }
-      sfx.update(paused ? 0 : frameDt, hour, light.night, weather.wind, cam.pos);
+      sfx.update(paused ? 0 : frameDt, hour, light.night, weather.wind, viewCam.pos);
     }
 
     // ---------------------------------------------------------------- (Phase 7) audio: the listener, the mixes, the events
@@ -4937,7 +4950,7 @@ int runGame(const GameOptions& opt) {
     // render (the autotest's walking / riding phases draw every 4th frame: llvmpipe is slow)
     bool pngVillage = opt.autotest && at == AT::Collide && phaseFrame == 59;
     bool pngRide = opt.autotest && at == AT::Lift && boarded && !ridePng && rideT >= 12;
-    bool rendered = hitchTest || !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0 || ward.capturing() || showroom.capturing() || windows.capturing();
+    bool rendered = hitchTest || !(opt.autotest && at != AT::Ski && at != AT::Menu && at != AT::Map) || phaseFrame % (at == AT::Race ? 8 : 4) == 0 || pngVillage || pngRide || nightShot >= 0;
     if (nightShot >= 0) {   // (the night shots' cameras: the plaza, then the snow gun nearest it)
       dvec3 eye, at2;
       if (nightShot < 16) { eye = dvec3(30, 0, 22); at2 = dvec3(-8, 0, -18); }
@@ -5212,7 +5225,20 @@ int runGame(const GameOptions& opt) {
     pt0 = perfMs();
     perf.add("skier rig, audio, HUD + menus built", pt0 - ptRig);
     frameLight.fogDensity += clouds.cloudInside * 0.012f;   // (main.js: riding through the overcast deck, a whiteout)
-    renderer.beginFrame(cam, frameLight, player.renderPos);
+    // (the rooms' windows, liveportal.js: with a window in view the world is drawn first, from where your eyes would be
+    // in the real house, into the picture the glass shows; then the room)
+    const Camera roomCam = cam;
+    vec4 viewRect(-1, -1, 1, 1);
+    cam.aspect = float(renderer.width()) / float(std::max(1, renderer.height()));
+    const bool viewOut = windows.live() && rooms.inside() && !renderer.holdFrame && !off("noportal") && !(winHold > winFrames / 2) && windows.inView(cam, rooms.toWorld(0, 0, 0), &viewRect) && windows.due(viewRect);
+    dev->resetFrameStats();
+    if (windows.misty) windows.gain = 1.f / std::max(1e-3f, frameLight.exposure);   // (the misty glass: as bright in every room)
+    for (int pass = viewOut ? 0 : 1; pass < 2; pass++) {
+    if (pass == 0 && showroom.inside()) viewRect = vec4(viewRect.x, std::min(viewRect.y, -viewRect.w), viewRect.z, std::max(viewRect.w, -viewRect.y));   // (and its mirror image in the floor)
+    if (pass == 0) windows.drawnFor(cam);
+    if (pass == 1 && windows.live() && rooms.inside()) windows.bindView(renderer, cam);
+    if (pass == 0) { renderer.setPortalRect(viewRect); cam = viewCam; windows.gain = outLight.exposure / std::max(1e-3f, frameLight.exposure); windows.beginOutdoors(renderer); }
+    renderer.beginFrame(cam, pass == 0 ? outLight : frameLight, pass == 0 ? cam.pos : player.renderPos);
     if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
       // (train.js: the cabin lit by its own strips, every surface in its own colour x (1, 0.86, 0.68) x 0.55 x uCabin:
       // here four warm lamps along the ceiling of the car you sit in, faint by day, carrying the light in a tunnel)
@@ -5233,7 +5259,7 @@ int runGame(const GameOptions& opt) {
     }
     if (camUnderground && rideKind == Ride::Rail) railway.tunnelLights(renderer);
     else if (camUnderground && rideKind == Ride::Express) express.tunnelLights(renderer);
-    bool indoor = rooms.inside();
+    bool indoor = rooms.inside() && pass == 1;
     if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
     if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
     if (drawVillage && !indoor) resort.submit(renderer);
@@ -5264,7 +5290,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
     // the falling snow
-    if (indoor) { rooms.draw(renderer); ward.draw(renderer); windows.draw(renderer, rooms.toWorld(0, 0, 0), cam.pos); }
+    if (indoor) { rooms.draw(renderer); windows.draw(renderer, rooms.toWorld(0, 0, 0)); }
     if (indoor && showroom.inside()) showroom.draw(renderer, sfx, *dev, cam);   // (the cars on show, the doors, the marker, the floor's mirror)
     else if (drawVillage) {
       showroom.drawOutside(renderer, *dev, cam.pos);
@@ -5293,10 +5319,19 @@ int runGame(const GameOptions& opt) {
     }
     rooms.addPeople(people);
     police.addPeople(people, cam.pos);
-    if (mp.active()) { mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt); mpv.drawWorld(renderer, people); }
+    if (mp.active() && pass == 1) { mpv.addPeople(mp, people, cam.pos, mp.interior(), frameDt); mpv.drawWorld(renderer, people); }
     people.submit(renderer, cam.pos, opt.autotest ? std::min(28, q.maxPeople) : q.maxPeople);
-    npcs.submit(renderer, cam.pos);
-    weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, frameDt, indoor || camUnderground || roadTunnelDark > 0.3);
+    if (pass == 0 || !viewOut) npcs.submit(renderer, cam.pos);
+    weather.drawSnow(renderer, snowDraw, *dev, shapes, cam, pass == 0 || !viewOut ? frameDt : 0, indoor || camUnderground || roadTunnelDark > 0.3);
+    if (pass == 0) {   // (the view out is drawn: now the room)
+      const double t1 = perfMs();
+      windows.endOutdoors(renderer);
+      windows.took(perfMs() - pt0);
+      perf.add("render: a room's windows, the world (submit)", t1 - pt0);
+      perf.add("render: a room's windows, the world (draw calls)", perfMs() - t1);
+      cam = roomCam; pt0 = perfMs();
+      continue;
+    }
     // (first person: your own body stays visible below the eye, the head folded away; at the wheel too: player.js /
     // drive.js placeRig)
     // (a bus / train seat view: your seated body below the eye, legs, lap and hands, the head folded away)
@@ -5309,7 +5344,7 @@ int runGame(const GameOptions& opt) {
     // first person on skis: the gloves-and-poles view model rides on the camera (player.js, after the camera)
     rig.updateFpView(paused ? 0 : frameDt, cam, player, *dev, assets);
     player.noteCamera(cam);
-    if (drawSkier && !ward.capturing() && !showroom.capturing() && !windows.capturing()) rig.submit(renderer, hideRig);
+    if (drawSkier) rig.submit(renderer, hideRig);
     if (!indoor) {   // the snow trails: you, the vehicles on the snow, the resort's people
       if (rideKind == Ride::None) trails.player(player);
       if (rideKind == Ride::Car) trails.vehicle(0, drive.pos(), drive.yaw(), 0);
@@ -5322,13 +5357,10 @@ int runGame(const GameOptions& opt) {
       trails.update(paused ? 0 : frameDt, renderer, player.renderPos, &world);
     }
 
+    }
     perf.add("render: scene submit (culling, batches)", perfMs() - pt0);
     pt0 = perfMs();
-    dev->resetFrameStats();
     renderer.endFrame();
-    ward.captured(renderer);
-    showroom.captured(renderer);
-    windows.captured(renderer);
     ui.end();
     perf.add("render: draw calls + post + UI", perfMs() - pt0);
     frameDraws = dev->drawCallsThisFrame(); frameTris = dev->trianglesThisFrame();
@@ -5349,8 +5381,29 @@ int runGame(const GameOptions& opt) {
     if (fpsT > 0.5 || (opt.autotest && fpsN >= 20)) { fps = fpsN / std::max(1e-6, fpsT); fpsN = 0; fpsT = 0; }
     if (mptest && !pendingPng.empty() && rendered) { writePng(renderer, pendingPng); SL_INFO("[mptest] wrote %s", pendingPng.c_str()); pendingPng.clear(); }
     if (opt.autotest) {
-      if (!pendingPng.empty() && rendered) { writePng(renderer, pendingPng); pendingPng.clear(); }
-      phaseFrame++;
+      if (winHold > 0) pendingPng.clear();
+      if (!pendingPng.empty() && rendered) {
+        writePng(renderer, pendingPng);
+        // (SKI_LEGACY_WINSHOT=a+b: only the pictures whose name has one of these in it, outdoors too)
+        const char* only = std::getenv("SKI_LEGACY_WINSHOT");
+        bool picked = !only;
+        if (only) { std::string o = only, t; std::istringstream is(o); while (std::getline(is, t, '+')) if (!t.empty() && pendingPng.find(t) != std::string::npos) picked = true; }
+        if (off("winlive") && (rooms.inside() || only) && pendingPng != winPng && picked) {
+          winPng = pendingPng.substr(0, pendingPng.size() - 4) + "_b.png"; winHold = winFrames = int(std::lround(4 / frameDt)); winT0 = plat->timeSeconds();
+          perf.reset();
+        }
+        pendingPng.clear();
+      }
+      if (winHold > 0 && --winHold == winFrames / 2) winTm = plat->timeSeconds();
+      if (winHold == 0 && winFrames > 0) {
+        const int h = winFrames / 2;
+        SL_INFO("[winlive] %s: %.2f ms a frame without the windows' view, %.2f ms with it (%u draws)", winPng.c_str(), (winTm - winT0) * 1000 / (winFrames - h), (plat->timeSeconds() - winTm) * 1000 / h, frameDraws);
+        perfReport("winlive"); pendingPng = winPng; winFrames = 0;
+        dev->gpuPass(nullptr);
+        for (const auto& g : dev->gpuTimes()) SL_INFO("[gpu]   %-40s %6.2f ms mean / %6.2f max (%d frames)", g.name.c_str(), g.mean, g.max, g.n);
+      }
+      winStep = winHold > 0 ? 0 : 1;
+      phaseFrame += winStep;
       if (at == AT::Ski) {
         if (frame == skiFrame0 + 1) {
           perf.reset(); sumDraws = sumTris = 0; statFrames = 0; maxDraws = 0; maxTris = 0;   // (the skiing measured alone)

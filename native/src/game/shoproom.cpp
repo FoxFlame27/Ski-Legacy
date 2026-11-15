@@ -43,37 +43,24 @@ void ShopRoom::enter() {
   pending_ = true;
   if (c_.fade) c_.fade();
   c_.player->vel = dvec3(0);
-  std::vector<WindowView::Shot> shots;
+  // (interior.js setOutside / renderPortal: room +z = the way the shop faces, the glass on the facade 1.4 m behind the
+  // door point; your camera is carried to the matching spot in the village, its near plane 45 % of the way to the
+  // glass, and the shop's own building is left out: here the box it fills, out to the porch)
   std::vector<WindowView::Pane> panes;
-  if (!d.panes.empty()) {
-    // (interior.js setOutside / renderPortal: room +z = the way the shop faces, the glass on the facade 1.4 m behind
-    // the door point; the web game carries your camera to the matching spot in the village and leaves the shop's own
-    // building out. Here: one photograph from the middle of the room where it stands out there, at eye height, the
-    // near plane just beyond the porch (the building round the camera is cut away); the plaza, the racks and lamps in
-    // front, the people passing, the mountains)
-    WindowView::Shot s;
-    const dvec3 f = glm::normalize(dvec3(d.frontX, 0, d.frontZ));
-    s.eyeLocal = vec3(0, float(d.eye), 0);
-    s.eye = dvec3(d.doorX, 0, d.doorZ) - f * (1.4 + d.D / 2);
-    s.eye.y = c_.world->height(d.doorX, d.doorZ) + d.eye;
-    s.dir = f; s.local = vec3(0, 0, 1); s.halfAngle = 62;
-    s.nearZ = float(d.D / 2 + 1.4 + 0.25); s.depth = 14; s.gain = 0.6f;
-    shots.push_back(s);
-    // (nearClutter: the signboard beside the entrance stays out of the window view in the web game: a second
-    // photograph from beyond it for the windows on its side, x < 0)
-    s.nearZ = float(d.D / 2 + 1.4 + 1.6);
-    shots.push_back(s);
-    // (the glass is one plane behind every opening, from the floor up: only above the sills here, so nothing shows
-    // under the door; in two parts, one for each photograph)
-    for (const RoomDef::Pane& p : d.panes) {
-      const float cut = std::min(0.9f, p.h * 0.4f), split = -0.6f;
-      const float px = p.m[3].x, ax = p.m[0].x >= 0 ? 1.f : -1.f, x0 = px - p.w / 2, x1 = px + p.w / 2;   // (the pane's span along the room's x)
-      if (x0 >= split || x1 <= split) { panes.push_back({p.m * glm::translate(mat4(1), vec3(0, cut / 2, 0)), p.w, p.h - cut, px > split ? 0 : 1}); continue; }
-      panes.push_back({p.m * glm::translate(mat4(1), vec3(((split + x1) / 2 - px) * ax, cut / 2, 0)), x1 - split, p.h - cut, 0});
-      panes.push_back({p.m * glm::translate(mat4(1), vec3(((x0 + split) / 2 - px) * ax, cut / 2, 0)), split - x0, p.h - cut, 1});
-    }
-  }
-  win_.begin(std::move(shots), std::move(panes), [this] { enterNow(); });
+  for (const RoomDef::Pane& p : d.panes) panes.push_back({p.m, p.w, p.h});
+  const dvec3 f = glm::normalize(dvec3(d.frontX, 0, d.frontZ));
+  const dvec3 mid = dvec3(d.doorX, 0, d.doorZ) - f * (1.4 + d.D / 2);
+  const glm::dmat4 frame = glm::translate(glm::dmat4(1), dvec3(mid.x, c_.world->height(d.doorX, d.doorZ), mid.z)) * glm::rotate(glm::dmat4(1), std::atan2(f.x, f.z), dvec3(0, 1, 0));
+  const double W = d.W, D = d.D;
+  win_.begin(std::move(panes), [frame, W, D](const dvec3& eye) {
+    WindowView::Place P;
+    P.frame = frame;
+    P.nearZ = float(std::max(0.1, std::max(0.0, D / 2 - eye.z) * 0.45));
+    P.boxC = dvec3(0, 4, 0.325); P.boxH = vec3(float(W / 2 + 1.0), 6.f, float(D / 2 + 1.325));
+    return P;
+  }, vec3(0.93f, 0.94f, 0.92f));
+  win_.rate = 2;   // (its shop window: the web game draws it every frame)
+  enterNow();
 }
 
 void ShopRoom::enterNow() {

@@ -204,6 +204,21 @@ public:
   static float hudTextWidth(const std::string& text, float scale);
 
   void endFrame();
+  /// A second view in the same frame (the rooms' windows: game/window_view, the web game's liveportal.js): what was
+  /// submitted since beginFrame is drawn as the world seen from that camera into the portal target (HDR, the 3D
+  /// resolution; no AO, bloom or tone map: the frame it is shown in does those, once). The frame then starts over
+  /// with beginFrame. A material of shading 9 shows the target by the pixel's place on the screen.
+  void endPortal();
+  gfx::Texture portalTexture() const { return portal_ ? dev_->renderTargetColor(portal_) : gfx::Texture{}; }
+  /// the portal view leaves out what stands inside this box (the house you are in, seen from within): its centre, half
+  /// extents and heading; until the next endPortal
+  void setClipBox(const dvec3& centre, const vec3& half, double yaw) { clipC_ = centre; clipH_ = half; clipYaw_ = yaw; }
+  /// the part of the screen the windows cover (NDC x0, y0, x1, y1), set before the portal's beginFrame: only what is
+  /// seen through it is submitted and drawn; until the next endPortal
+  void setPortalRect(const vec4& ndc) { portalRect_ = ndc; }
+  /// the camera the portal picture was drawn for (its view-projection, camera-relative, in the frame the windows are
+  /// drawn in) and how far the eye has moved since: the glass shows the picture by direction (set before beginFrame)
+  void setPortalView(const mat4& vp, const vec3& moved) { portalVP_ = vp; portalEye_ = moved; }
   /// shows the last frame again instead of drawing the scene (a screen transition covering a move: transition.js
   /// awaits the move behind its cover; here the old place stays on screen until it is covered)
   bool holdFrame = false;
@@ -265,7 +280,13 @@ private:
   RenderSettings set_;
   int w_ = 1, h_ = 1, rw_ = 1, rh_ = 1;
   bool frameDrawn_ = false;   // the targets hold a finished frame (holdFrame)
-  gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, aoRaw_, aoTex_, trail_;
+  gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, aoRaw_, aoTex_, trail_, portal_;
+  int pw_ = 0, ph_ = 0, portalIdle_ = 0;
+  vec4 portalRect_{-1, -1, 1, 1};
+  mat4 portalVP_{1};
+  vec3 portalEye_{0};
+  dvec3 clipC_{0}; vec3 clipH_{0}; double clipYaw_ = 0;
+  void scenePasses(bool portal);
   std::vector<gfx::RenderTarget> bloom_;
   std::vector<std::pair<int, int>> bloomSize_;
   int aw_ = 1, ah_ = 1, atlasW_ = 1, atlasH_ = 1;

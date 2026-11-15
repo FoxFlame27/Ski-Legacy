@@ -20,13 +20,8 @@ constexpr double SHOT[4][3] = {{1.05, 0.24, 5.4}, {1.45, 0.06, 4.6}, {PI - 0.3, 
 constexpr double TOW_X = 7.6, TOW_Z[3] = {3.4, 6.9, 10.4}, TRUCK_S = 5.25 / 4.5, TRUCK_HW = 1.17 * TRUCK_S, TRUCK_HL = 3.3 * TRUCK_S;
 // carrentalshell.js LAYOUT / carrental.js YARD: the hall's middle in the lot's frame, its depth, the door's x
 constexpr double HALL_Z = -7.9, HALL_D = 17.5;
-// the windows' view: where the photographs are taken from in the hall (the room's frame: the middle, 4 m behind it, at
-// eye height), the three sides (out of the glass front, out of the left and the right wall), each camera's field of
-// view and how far its near plane lies (just outside that wall)
-const dvec3 VIEW_EYE(0, 1.62, -4);
-constexpr int NV = 3;
-const dvec3 VIEW_N[NV] = {dvec3(0, 0, 1), dvec3(-1, 0, 0), dvec3(1, 0, 0)};
-constexpr double VIEW_FOV[NV] = {72, 60, 60}, VIEW_NEAR[NV] = {HALL_D / 2 + 4 + 0.5, 16 + 0.65, 16 + 0.65};
+// the hall's box in its own frame (carrentalshell.js: 32 m wide, 17.5 m deep): left out of its windows' view
+constexpr double HALL_HW = 16.0, HALL_TOP = 11.0;
 // a display car's plate (carconfig.js setPlates: a random canton plate each): the same one every time for a model
 std::string showPlate(const std::string& id) {
   static const char* CANTONS[] = {"VS", "GR", "BE", "UR", "OW", "TI", "ZH", "LU"};
@@ -75,9 +70,8 @@ std::string Showroom::displayPaint(const std::string& id) const {
 
 // ---------------------------------------------------------------- per frame
 void Showroom::update(double dt, bool talking, bool configOpen) {
-  if (pending_) { wait_ += dt; if (wait_ > 1.2) finishEnter(); }   // (no dark moment to photograph in: in anyway)
   const RoomDef* d = def();
-  if (!d) { was_ = false; if (cfg_.on) endConfigure(); guideId_.clear(); return; }
+  if (!d) { if (was_) win_.clear(); was_ = false; if (cfg_.on) endConfigure(); guideId_.clear(); return; }
   const dvec3 p = rooms_.toLocal(c_.player->pos);
   if (!was_) {   // (carrentalroom.js enter: the doors open behind you, the salesman square to the room)
     was_ = true; doorT_ = 1; clerkYaw_ = d->clerkYaw; cfg_ = Cfg{}; guideId_.clear(); t_ = 0;
@@ -220,108 +214,31 @@ void Showroom::draw(Renderer& r, SceneFx& sfx, gfx::Device& dev, const Camera& c
       if (auto m = part(d->markerRing))
         r.submitModel(*m, rooms_.toWorld(c.x, y0 + 0.2, c.z), glm::scale(mat4(1), vec3(c.up ? 1.05f : 1.12f, 1, c.up ? 1.05f : 1.12f)), nullptr, false);
     }
-  // the windows: the world photographed as you came in (none yet: a pale winter sky)
-  if (!d->panes.empty() && !pane_[0]) for (int v = 0; v < NV; v++) buildPanes(v, 1, 1, gfx::Texture{});
-  for (int v = 0; v < NV; v++) if (pane_[v]) {
-    r.submitModel(*pane_[v], o, mat4(1), nullptr, false);
-    if (mirror) r.submitModel(*pane_[v], o, glm::scale(mat4(1), vec3(1, -1, 1)), nullptr, false);
-  }
+  // (the windows: game/window_view draws them; here their mirror image in the floor)
   if (mirror) {
+    win_.draw(r, o, true);
     if (auto room = twoSided(rooms_.roomMesh())) r.submitModel(*room, o, glm::scale(mat4(1), vec3(1, -1, 1)), nullptr, false);
     r.submitModel(*floor_, o, mat4(1), nullptr, false);
   }
 }
 
 // ---------------------------------------------------------------- the windows' view
-dvec3 Showroom::hallToWorld(const dvec3& l) const {
-  const Transport* t = c_.transport;
-  const double fx = t->autohausDir.x, fz = t->autohausDir.y, lz = l.z + HALL_Z;
-  return dvec3(t->autohaus.x + fz * l.x + fx * lz, t->autohaus.y + l.y, t->autohaus.z - fx * l.x + fz * lz);
-}
-
+// carrental.js: room.setWorld({ frame: the hall, hide: the hall }): the room's frame is the hall's in the village
 void Showroom::requestEnter(std::function<void()> enter) {
-  pending_ = std::move(enter);
-  const bool can = c_.transport && c_.transport->hasAutohaus && c_.data && !c_.data->autohaus.panes.empty();
-  capture_ = can ? 0 : 99; wait_ = 0; armed_ = false;
-  if (!can) finishEnter();
-}
-
-void Showroom::finishEnter() {
-  auto f = std::move(pending_);
-  pending_ = nullptr; capture_ = 99; armed_ = false;
-  if (f) f();
-}
-
-bool Showroom::captureCamera(Camera& cam, bool covered) {
-  armed_ = false;
-  if (!pending_ || capture_ < 0 || capture_ >= NV || !covered) return false;
-  const dvec3 eye = hallToWorld(VIEW_EYE), to = hallToWorld(VIEW_EYE + VIEW_N[capture_]);
-  cam.lookAt(eye, to);
-  cam.fovY = float(VIEW_FOV[capture_]); cam.nearZ = float(VIEW_NEAR[capture_]);   // (the hall's own walls, glass and cars: in front of the near plane)
-  armed_ = true;
-  return true;
-}
-
-void Showroom::captured(Renderer& r) {
-  if (!armed_) return;
-  armed_ = false;
-  std::vector<uint8_t> px;
-  r.readPixels(px);
-  const int W = r.width(), H = r.height();
-  if (c_.dev && W > 8 && H > 8 && px.size() >= size_t(W) * size_t(H) * 4) {
-    // box-filtered down to at most 2048 wide (the glass front fills the screen when you look out)
-    const int k = std::max(1, (W + 2047) / 2048), w2 = W / k, h2 = H / k;
-    std::vector<uint8_t> o(size_t(w2) * size_t(h2) * 4);
-    for (int y = 0; y < h2; y++) for (int x = 0; x < w2; x++) {
-      unsigned acc[3] = {0, 0, 0};
-      for (int j = 0; j < k; j++) for (int i = 0; i < k; i++) { const uint8_t* q = &px[(size_t(y * k + j) * size_t(W) + size_t(x * k + i)) * 4]; acc[0] += q[0]; acc[1] += q[1]; acc[2] += q[2]; }
-      uint8_t* q = &o[(size_t(y) * size_t(w2) + size_t(x)) * 4];
-      for (int ch = 0; ch < 3; ch++) q[ch] = uint8_t(acc[ch] / unsigned(k * k));
-      q[3] = 255;
-    }
-    gfx::TextureDesc td;
-    td.width = w2; td.height = h2; td.format = gfx::TexFormat::SRGBA8; td.wrap = gfx::Wrap::Clamp;
-    gfx::Texture tex = c_.dev->createTexture(td, o.data());
-    const float tanV = float(std::tan(VIEW_FOV[capture_] * DEG / 2)), tanH = tanV * float(W) / float(H);
-    buildPanes(capture_, tanH, tanV, tex);
+  const Transport* t = c_.transport;
+  if (t && t->hasAutohaus && c_.data && !c_.data->autohaus.panes.empty()) {
+    std::vector<WindowView::Pane> panes;
+    for (const RoomDef::Pane& p : c_.data->autohaus.panes) panes.push_back({p.m, p.w, p.h});
+    WindowView::Place P;
+    P.frame = glm::translate(glm::dmat4(1), dvec3(t->autohaus)) * glm::rotate(glm::dmat4(1), std::atan2(t->autohausDir.x, t->autohausDir.y), dvec3(0, 1, 0)) * glm::translate(glm::dmat4(1), dvec3(0, 0, HALL_Z));
+    P.boxC = dvec3(0, HALL_TOP / 2 - 1, 0); P.boxH = vec3(float(HALL_HW + 0.7), float(HALL_TOP / 2 + 1), float(HALL_D / 2 + 0.7));
+    // (carrentalroom.js PORTAL_FRAG: the view x (0.94, 0.96, 0.97), a clean glass's faint cool tint)
+    win_.begin(std::move(panes), [P](const dvec3&) { return P; }, vec3(0.94f, 0.96f, 0.97f));
+    win_.rate = 2;   // (the glass front: the web game draws it every frame)
   }
-  SL_INFO("Autohaus: window view %d photographed (%d x %d)", capture_, W, H);
-  if (++capture_ >= NV) finishEnter();
+  if (enter) enter();
 }
 
-// One side's window planes as a mesh showing that side's photograph: by direction from where it was taken (the planes
-// stand square to the camera: the mapping is flat)
-void Showroom::buildPanes(int view, float tanH, float tanV, gfx::Texture tex) {
-  const RoomDef* d = c_.data && c_.data->autohaus.ok ? &c_.data->autohaus : nullptr;
-  if (!d || !c_.dev) return;
-  if (paneTex_[view]) { c_.dev->destroy(paneTex_[view]); paneTex_[view] = gfx::Texture{}; }
-  pane_[view].reset();
-  const dvec3 n = VIEW_N[view], rt = glm::cross(n, dvec3(0, 1, 0));
-  Geo g;
-  for (const RoomDef::Pane& p : d->panes) {
-    const glm::dmat4 PM(p.m);
-    const dvec3 pn = dvec3(PM * glm::dvec4(0, 0, 1, 0));
-    if (glm::dot(pn, n) > -0.7) continue;   // (this side's planes face into the room: against its way out)
-    const uint32_t base = uint32_t(g.pos.size());
-    for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) {
-      const dvec3 P = dvec3(PM * glm::dvec4((i - 0.5) * double(p.w), (j - 0.5) * double(p.h), 0, 1)), q = P - VIEW_EYE;
-      const double zc = std::max(0.2, glm::dot(q, n));
-      g.pos.push_back(vec3(P)); g.nor.push_back(vec3(pn)); g.col.push_back(vec3(1));
-      g.uv.push_back(vec2(float(0.5 + 0.5 * glm::dot(q, rt) / (zc * double(tanH))), float(0.5 + 0.5 * q.y / (zc * double(tanV)))));
-    }
-    g.idx.insert(g.idx.end(), {base, base + 1, base + 3, base, base + 3, base + 2});
-  }
-  if (g.idx.empty()) return;
-  Material m;
-  m.baseColor = vec4(0, 0, 0, 1); m.roughness = 1; m.metallic = 0; m.doubleSided = true;
-  // (carrentalroom.js PORTAL_FRAG: the view x (0.94, 0.96, 0.97), a clean glass's faint cool tint; no view: a pale sky)
-  m.emissive = tex ? vec3(0.94f, 0.96f, 0.97f) : vec3(0.62f, 0.72f, 0.84f);
-  if (tex) m.emissiveTex = tex;
-  paneTex_[view] = tex;
-  pane_[view] = buildModel(*c_.dev, {{std::move(g), m}}, "autohaus_panes");
-}
-
-// ---------------------------------------------------------------- outside: the door, the tow trucks
 bool Showroom::doorSpot(dvec3& p, dvec2& out) const {
   const Transport* t = c_.transport;
   const RoomDef* d = c_.data && c_.data->autohaus.ok ? &c_.data->autohaus : nullptr;

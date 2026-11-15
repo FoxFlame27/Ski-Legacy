@@ -114,6 +114,8 @@ public:
   virtual void clear(float r, float g, float b, float a, bool color, bool depth) = 0;
   /// Sub-rectangle of the bound target (shadow cascades in an atlas); scissored clears stay inside it.
   virtual void setViewport(int x, int y, int w, int h, bool scissor = false) = 0;
+  /// Only this rectangle of the bound target is drawn (the viewport stays); w <= 0: the whole of it again.
+  virtual void setScissor(int x, int y, int w, int h) = 0;
   virtual void setPipeline(const PipelineState& s) = 0;
   virtual void useProgram(Program p) = 0;
   virtual void bindTexture(int unit, Texture t) = 0;

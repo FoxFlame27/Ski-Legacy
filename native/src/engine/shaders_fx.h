@@ -258,6 +258,7 @@ void main() {
     // strictly rank < snow: nothing at all falls when it does not snow
     alpha = step(rank + 1e-4, uSnowP.x) * smoothstep(0.12, 0.5, d) * (1.0 - smoothstep(18.0, 23.0, d));
   }
+  if (slClipped(wp)) alpha = 0.0;   // (a window's view: no snow falls inside the house you look out of)
   float cr = cos(rot), sr = sin(rot);
   vec2 k = mat2(cr, sr, -sr, cr) * aCorner;
   // (a crystal is a flattened clump, y x 0.55, tumbling in 3D: seen flat or edge-on in turn)

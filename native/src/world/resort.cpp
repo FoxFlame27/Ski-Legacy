@@ -566,12 +566,20 @@ void Resort::rebuild(const dvec3& cam) {
   for (PropSet& ps : props_) {
     double nearD = std::max(150.0, double(ps.radius) * 12) * lodScale, farD = std::max(900.0, double(ps.radius) * 120) * lodScale;
     for (Cell& c : ps.cells) {
-      l0.clear(); l1.clear();
-      for (const glm::dmat4& M : c.inst) {
-        double d = glm::length(dvec3(M[3]) - cam);
-        if (d > farD) continue;
-        (d < nearD ? l0 : l1).push_back(MatrixInstanceBatch::pack(M, c.origin));
+      // (a cell is uploaded again only when one of its props changed band: the camera moving 8 m used to re-send every
+      // cell of the resort, a thousand buffers, in one frame)
+      const bool first = c.band.size() != c.inst.size();
+      if (first) c.band.assign(c.inst.size(), 255);
+      bool changed = first;
+      for (size_t i = 0; i < c.inst.size(); i++) {
+        const double d = glm::length(dvec3(c.inst[i][3]) - cam);
+        const uint8_t b = d > farD ? 2 : d < nearD ? 0 : 1;
+        if (b != c.band[i]) { c.band[i] = b; changed = true; }
       }
+      if (!changed) continue;
+      l0.clear(); l1.clear();
+      for (size_t i = 0; i < c.inst.size(); i++)
+        if (c.band[i] < 2) (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], c.origin));
       c.lod[0].upload(dev_, l0);
       c.lod[1].upload(dev_, l1);
     }

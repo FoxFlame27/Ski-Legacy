@@ -370,6 +370,14 @@ int runGame(const GameOptions& opt) {
   }
   loadingFrame("Loading the mountain...");
 
+  // (where the load's memory goes: SKI_LEGACY_DEBUG=memlog, the process footprint and the GPU's share at each step)
+  const bool memLog = std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "memlog");
+  auto memAt = [&](const char* what) {
+    if (!memLog) return;
+    const double fp = plat->footprintBytes() / 1048576.0, gpu = (dev->textureBytes() + dev->bufferBytes()) / 1048576.0;
+    SL_INFO("[mem] %-28s footprint %6.0f MB, GPU %6.0f MB, the rest %6.0f MB", what, fp, gpu, fp - gpu);
+  };
+  memAt("world, window, audio");
   Input input;
   if (save.binds.is_object() && !save.binds.empty()) input.applyBindings(save.binds);
   if (!opt.bindings.empty()) {
@@ -381,17 +389,12 @@ int runGame(const GameOptions& opt) {
   }
 
   Terrain terrain(*dev, world, jobs, q.terrainLodK);
+  memAt("terrain");
   VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 1 ? 2 : 1, q.rockR};
   SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);
-  // (where the load's memory goes: SKI_LEGACY_DEBUG=memlog, the process footprint and the GPU's share at each step)
-  const bool memLog = std::getenv("SKI_LEGACY_DEBUG") && std::strstr(std::getenv("SKI_LEGACY_DEBUG"), "memlog");
-  auto memAt = [&](const char* what) {
-    if (!memLog) return;
-    const double fp = plat->footprintBytes() / 1048576.0, gpu = (dev->textureBytes() + dev->bufferBytes()) / 1048576.0;
-    SL_INFO("[mem] %-28s footprint %6.0f MB, GPU %6.0f MB, the rest %6.0f MB", what, fp, gpu, fp - gpu);
-  };
+  memAt("scenery");
   loadingFrame("Building the resort...");
   Resort resort(*dev, world, assets);
   resort.lodScale = q.lodScale;

@@ -69,7 +69,7 @@ public:
   const FontSet& fonts() const { return fonts_; }
 
 private:
-  struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; };
+  struct Cell { dvec3 origin; std::vector<glm::dmat4> inst; MatrixInstanceBatch lod[2]; double radius = 10; dvec3 bmin{1e30}, bmax{-1e30}; std::vector<uint8_t> band; };   // band: each instance's last LOD (0 near, 1 far, 2 off)
   struct PropSet { std::shared_ptr<Model> model; float radius = 5; std::vector<Cell> cells; bool shadow = true; };
   struct Chunk {
     std::shared_ptr<Model> model;    // null while unloaded

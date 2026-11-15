@@ -14,7 +14,9 @@
 #include <cstdio>
 #include <algorithm>
 #include <vector>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif

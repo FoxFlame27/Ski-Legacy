@@ -43,7 +43,10 @@ struct RaceHudState {
   // the intro's lower third (presentation.js lowerThird)
   struct Third { bool on = false; std::string kicker, title; std::vector<std::pair<std::string, std::string>> stats; double age = 0, left = 9;
                  struct Row { int place = 0; std::string name, time; bool me = false; }; std::vector<Row> rows;   // the podium: the top 3
-                 bool bars = true; } third;
+                 bool bars = true;
+                 // per stat (same index as stats, may be shorter): a unit set small after the value (.pl3-stat b small), a
+                 // course rating's sign before it (.diff-sign)
+                 std::vector<std::string> units, signs; } third;
 };
 void drawRaceHud(Ui& ui, const RaceHudState& s, float hudScale = 1);
 /// presentation.js sting(): three brush strokes sweep across (blue, white with the label, red); 0.9 s, covered 36-60 %

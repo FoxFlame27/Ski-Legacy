@@ -1,4 +1,5 @@
 #include "game/racehud.h"
+#include "game/jobboardui.h"
 #include "core/prompts.h"
 #include "game/play.h"
 #include "game/ui_widgets.h"
@@ -269,8 +270,16 @@ void drawRaceHud(Ui& ui, const RaceHudState& s, float) {
     if (in > 0.01f && out < 0.99f) {
       std::string title = uiw::upper(T.title);
       float tfs = 56 * u, tw = ui.textWidth(title, tfs, NUM, 0.02f), statsW = 0;
+      // (.pl3-stat b: the value, a small unit 0.6em at -0.12em, a rating's sign and 8u before it)
+      const float signW = std::max(9 * d, 13 * u) + 8 * u;
+      auto valueW = [&](size_t i) {
+        float vw = ui.textWidth(uiw::upper(T.stats[i].second), 30 * u, NUM);
+        if (i < T.units.size() && !T.units[i].empty()) vw += 8 * u - 0.12f * 30 * u + ui.textWidth(T.units[i], 18 * u, NUM);
+        if (i < T.signs.size() && !T.signs[i].empty()) vw += signW;
+        return vw;
+      };
       for (size_t i = 0; i < T.stats.size(); i++)
-        statsW += (i ? 34 * u : 0) + std::max(ui.textWidth(T.stats[i].first, tXs, UiFont::BodyHeavy, 0.16f), ui.textWidth(uiw::upper(T.stats[i].second), 30 * u, NUM));
+        statsW += (i ? 34 * u : 0) + std::max(ui.textWidth(T.stats[i].first, tXs, UiFont::BodyHeavy, 0.16f), valueW(i));
       float maxInner = W - 144 * u - 84 * u;
       if (tw > maxInner) { tfs *= maxInner / tw; tw = maxInner; }
       float inner = std::max({420 * u - 84 * u, tw, statsW}), w = inner + 84 * u;
@@ -290,9 +299,13 @@ void drawRaceHud(Ui& ui, const RaceHudState& s, float) {
         ui.pushAlpha(al);
         std::string v = uiw::upper(T.stats[i].second);
         ui.textLH(sx, sy, tXs, tXs, UiFont::BodyHeavy, blueDim, T.stats[i].first, UiAlign::Left, 0.16f);
-        ui.textLH(sx, sy + tXs + 6 * u, 30 * u, 30 * u, NUM, blue, v);
+        float vx = sx;
+        if (i < T.signs.size() && !T.signs[i].empty()) { drawDiffSign(ui, vx + (signW - 8 * u) / 2, sy + tXs + 6 * u + 15 * u, T.signs[i], u); vx += signW; }
+        ui.textLH(vx, sy + tXs + 6 * u, 30 * u, 30 * u, NUM, blue, v);
+        if (i < T.units.size() && !T.units[i].empty())
+          ui.textLH(vx + ui.textWidth(v, 30 * u, NUM) + 8 * u - 0.12f * 30 * u, sy + tXs + 6 * u, 30 * u, 18 * u, NUM, blueDim, T.units[i]);
         ui.popAlpha();
-        sx += std::max(ui.textWidth(T.stats[i].first, tXs, UiFont::BodyHeavy, 0.16f), ui.textWidth(v, 30 * u, NUM)) + 34 * u;
+        sx += std::max(ui.textWidth(T.stats[i].first, tXs, UiFont::BodyHeavy, 0.16f), valueW(i)) + 34 * u;
       }
       // .pl3-rows: the podium's rows (place, name, time; you on the blue brush)
       {

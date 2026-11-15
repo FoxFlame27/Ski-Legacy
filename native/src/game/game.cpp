@@ -685,6 +685,7 @@ int runGame(const GameOptions& opt) {
   // instant: its screenshots follow them at once)
   pc.fade = [&]() { if ((!opt.autotest || off("fadetest")) && !mptest) trans.fade(); };   // (fadetest: the debug runs with the real fades)
   pc.titleCard = [&](const std::string& label) { if (!opt.autotest && !mptest) trans.teleport(label); };
+  pc.covered = [&]() { return trans.holdsFrame() || trans.covered(); };
   pc.roomModel = [&](const std::string& id) { return resort.roomModel(id); };
 
   // ---------------------------------------------------------------- (Phase 6) multiplayer: the session and its glue
@@ -2181,7 +2182,18 @@ int runGame(const GameOptions& opt) {
           auto at2 = [&](double t) { return t0 < t && st >= t; };
           auto shot = [&](const std::string& n) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, ("rt_" + n).c_str()); SL_INFO("[racetest] %-16s stage '%s' %.2f s  camera (%.1f, %.1f, %.1f) fov %.1f", n.c_str(), cs.c_str(), races.cineAge(), cam.pos.x, cam.pos.y, cam.pos.z, cam.fovY); };
           auto expect = [&](bool c, const char* what) { SL_INFO("[racetest] %s -> %s", what, c ? "ok" : "FAILED"); ok = ok && c; };
-          if (stage == 0 && cs == "podium") { stage = 1; st = 0; expect(!races.resultsUp(), "the podium comes before the results"); }
+          // (the intro first: presentation/intro.js, the flight down the course and the start-gate crane)
+          static double introAge = -1, introSeen = 0;
+          if (cs == "intro") {
+            const double a0 = introAge, a1 = races.cineAge();
+            if (a0 < 0) expect(races.frozen(), "the intro plays before the countdown, the field waiting in the gate");
+            for (double q : {0.3, 1.2, 2.6, 4.2, 5.0, 6.0, 7.0, 8.1}) if (a0 < q && a1 >= q) { char nm[32]; std::snprintf(nm, sizeof nm, "intro_%dp%d", int(q), int(std::round(q * 10)) % 10); shot(nm); }
+            introAge = a1; introSeen = a1;
+          } else if (introAge >= 0) {
+            introAge = -1;
+            expect(std::fabs(introSeen - 8.4) < 0.11 && races.frozen() && races.raceTime() <= 0, "the intro runs 8.4 s (4.9 s flight + 3.5 s crane), then the countdown");
+          }
+          if (stage == 0 && cs == "podium") { stage = 1; st = 0; expect(!races.resultsUp() && introSeen > 0, "the podium comes before the results"); }
           else if (stage == 1) {
             if (at2(0.5)) shot("podium_0p5"); if (at2(2.5)) shot("podium_2p5"); if (at2(5.5)) shot("podium_5p5");
             if (races.resultsUp()) { expect(std::fabs(st - 6.2) < 0.15 && cs == "podium-hold", "the results come up over the podium after 6.2 s"); stage = 2; st = 0; }
@@ -2203,6 +2215,7 @@ int runGame(const GameOptions& opt) {
             if (at2(3.4)) { expect(!races.active(), "OK ends the race"); SL_INFO("[racetest] %s", ok ? "PASS" : "FAIL"); if (!ok) raceOk = false; running = false; }
           }
         } else if (races.cineStage() == "podium" && races.cineAge() > 2) races.skipCine();   // (SKIP: the results at once)
+        else if (races.cineStage() == "intro" && races.cineAge() > 2) { races.skipCine(); SL_INFO("[autotest] race: the intro skipped after %.2f s", races.cineAge()); }
         if (!raceTest && races.resultsUp() && t5.resF < 0) {
           t5.resF = f;
           SL_INFO("[autotest] race: finished in %s, place %d, money $%lld -> $%lld", fmtRaceTime(races.raceTime()).c_str(), races.place(), (long long)t5.money0, (long long)save.money);
@@ -4092,6 +4105,8 @@ int runGame(const GameOptions& opt) {
         else if (snd == "gate") audio.play("gate");
         else if (snd == "miss") audio.play("miss");
         else if (snd == "chime") audio.play("chime");   // (podium.js fire: the confetti cannons)
+        else if (snd == "whoosh") audio.play("whoosh");   // (intro.js: the cut to the start gate)
+        else if (snd.rfind("announce:", 0) == 0) audio.announce(snd.substr(9));   // (session.js: the announcer names the course)
         else if (snd.rfind("finish:", 0) == 0) {
           std::string r = snd.substr(7);
           audio.play("finish");

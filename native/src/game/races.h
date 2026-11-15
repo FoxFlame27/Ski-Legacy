@@ -39,6 +39,8 @@ public:
   bool nightCourse() const;
   bool frozen() const;                     // the grid / countdown: the player is held
   bool finished() const;
+  /// the course flyover before the countdown runs (presentation/intro.js): the racer on show, the HUD's panels aside
+  bool introPlaying() const;
   void abort();                            // (pause RETURN TO VILLAGE, arrested...)
   void addPeople(People& people, const dvec3& cam) const;
   void draw(Renderer& r, const dvec3& cam);
@@ -53,7 +55,7 @@ public:
   void confirmResults();
   /// the broadcast presentation (session.js cine: the podium, a replay) owns the camera: poses it, true while it does
   bool camera(Camera& cam) const;
-  /// "" none, "podium" (the skippable show), "podium-hold" (behind the results), "replay"; the replay's shot
+  /// "" none, "intro" (the flyover and the start-gate crane; cineAge = its clock), "podium" (the skippable show), "podium-hold" (behind the results), "replay"; the replay's shot
   std::string cineStage() const;
   std::string replayShot() const;
   double cineAge() const;
@@ -91,6 +93,9 @@ private:
   void beginReplay();
   void finishReplay();
   void endCine();
+  void beginIntro();
+  void updateIntro(double dt);
+  void endIntro();
   void updateCine(double dt);
   void openCineInput();
   void hudCine(Ui& ui);

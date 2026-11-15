@@ -25,6 +25,7 @@
 namespace sl {
 
 namespace {
+constexpr double INTRO_LEAD_IN = 0.7;   // s on the grid before the "3" after the intro (the camera is already behind the racer)
 constexpr double LEAD_IN = 1.4, GATE_PENALTY = 0.5, GATE_FLAG = 0.75, GATE_TOL = 4, RESULTS_DELAY = 2.6, RESULTS_MAX_WAIT = 6;
 constexpr double STUCK_TIME = 5, STUCK_PROGRESS = 3, OFF_MARGIN = 9, OFF_TIME = 1.5, FAR_MARGIN = 40, FAR_TIME = 0.8, FALL_BELOW = 7, FALL_TIME = 0.35;
 constexpr double RESPAWN_SPEED = 8, FINISH_BRAKE = 9, START_R = 24, BOARD_R = 3.0, STAND_R = 3.0;
@@ -136,6 +137,12 @@ struct Races::Session {
   double stingT = -1;      // s into the stinger (-1: none)
   int stingThen = 0;       // behind it, once the strokes cover the screen: 1 the replay starts, 2 it ends
   double lbox = 0;         // the letterbox bars, 0..1
+  // the intro (presentation/intro.js): the field waits in the start gate while the camera flies the course
+  std::unique_ptr<racecine::CourseIntro> intro;
+  bool introRan = false, introInput = false, courseCalled = false, introL3 = false;
+  double camBlend = 0;       // the intro's hand-over to the gameplay camera
+  double fovCarry = 0, camDt = 0;   // the field of view the camera had last frame (the gameplay camera eases from it)
+  double introL3Hide = -1;   // (c_.now) when the intro's lower third went: L3_OUT, or SKIP
 };
 
 Races::Races(PlayCtx& c) : c_(c) {}
@@ -149,6 +156,7 @@ racebots::Track& Races::trackOf(const Course& c) {
 
 bool Races::nightCourse() const { return s_ && s_->c->night; }
 bool Races::frozen() const { return s_ && s_->st == Session::St::Grid; }
+bool Races::introPlaying() const { return s_ && s_->intro; }
 bool Races::finished() const { return s_ && (s_->st == Session::St::Finished || s_->st == Session::St::Results); }
 bool Races::resultsUp() const { return s_ && s_->st == Session::St::Results; }
 double Races::raceTime() const { return s_ ? (s_->st >= Session::St::Finished ? s_->finalTime : s_->clock) : 0; }
@@ -377,6 +385,9 @@ bool Races::start(const Course& co, int ai, bool forMoney, bool practice, bool t
   s_->prevS = s0; s_->progS = s0;
   botJump = botLatV = 0;
   updateBots(0.0001);   // (the first frame of the field: it stands on the grid right away)
+  // (session.js start: the intro on the first start of a session; else the announcer names the course right away)
+  beginIntro();
+  if (!s_->intro) { s_->courseCalled = true; sounds.push_back("announce:" + co.id); }
   if (c_.weather) c_.weather->frozen = true;   // (session.js: the weather is held for the race)
   if (c_.unmark) c_.unmark();
   guide_.on = false;
@@ -592,6 +603,7 @@ void Races::openCineInput() {
 void Races::skipCine() {
   if (!s_) return;
   Session& s = *s_;
+  if (s.intro) { s.intro->skip(); return; }
   if (s.podium && s.podium->showing() && s.st == Session::St::Finished) s.podium->skip();
   else if (s.replay && s.stingT < 0) finishReplay();
 }
@@ -644,6 +656,11 @@ void Races::endCine() {
   if (!s_) return;
   Session& s = *s_;
   const bool had = s.podium || s.replay;
+  if (s.intro) {   // (an intro is cut short)
+    s.intro.reset(); s.introRan = true;
+    if (s.introL3) { s.introL3 = false; s.introL3Hide = c_.now; }
+    if (c_.skier) c_.skier->forceThird = false;
+  }
   s.podium.reset(); s.replay.reset();
   s.replayEnding = false; s.camOn = false; s.stingThen = 0;
   if (c_.skier) { const bool was = c_.skier->cine.on; c_.skier->cine = PlayerSkier::Cine(); if (was) c_.skier->rig.snapPose(); }
@@ -674,7 +691,7 @@ void Races::updateCine(double dt) {
     }
     if (s.stingT >= 0.96) s.stingT = -1;
   }
-  const bool barsOn = (s.podium && s.podium->showing()) || s.replay;
+  const bool barsOn = (s.podium && s.podium->showing()) || s.replay || s.intro;
   s.lbox += ((barsOn ? 1.0 : 0.0) - s.lbox) * (1 - std::exp(-dt * 9));
   if (s.podium) {
     racecine::Podium& P = *s.podium;
@@ -737,21 +754,79 @@ void Races::updateCine(double dt) {
 }
 
 bool Races::camera(Camera& cam) const {
-  if (!s_ || !s_->camOn || !(s_->podium || s_->replay)) return false;
+  if (s_ && !s_->intro && s_->fovCarry > 0) {   // (after the intro: the field of view eases on from the crane's)
+    s_->fovCarry = lerp(s_->fovCarry, cam.fovY, 1 - std::exp(-s_->camDt * 3));
+    if (std::fabs(s_->fovCarry - cam.fovY) < 0.05 || s_->st != Session::St::Grid) s_->fovCarry = 0; else cam.fovY = float(s_->fovCarry);
+  }
+  if (!s_ || !s_->camOn || !(s_->podium || s_->replay || s_->intro)) return false;
+  // (cinecam.js applyCamera: `blend` mixes toward the pose the camera already has this frame, the gameplay camera;
+  // player.js eases its field of view from what the camera had: cam.fov = lerp(cam.fov, fov, 1 - exp(-dt * 3)))
+  const double blend = s_->intro ? s_->camBlend : 0;
+  const dvec3 p0 = cam.pos;
+  const mat3 b0 = cam.basis;
+  const float f0 = s_->intro && s_->fovCarry > 0 ? float(lerp(s_->fovCarry, cam.fovY, 1 - std::exp(-s_->camDt * 3))) : cam.fovY;
   cam.lookAt(s_->cam.pos, s_->cam.look);
   cam.fovY = float(s_->cam.fov);
+  if (blend > 0) {
+    cam.pos = glm::mix(cam.pos, p0, blend);
+    cam.basis = glm::mat3_cast(glm::slerp(glm::quat_cast(cam.basis), glm::quat_cast(b0), float(blend)));
+    cam.fovY += (f0 - cam.fovY) * float(blend);
+  }
+  if (s_->intro) s_->fovCarry = cam.fovY;
   cam.nearZ = 0.1f;
   return true;
 }
 
+// ---------------------------------------------------------------- the intro (session.js beginIntro / updateIntro / endIntro)
+void Races::beginIntro() {
+  Session& s = *s_;
+  if (!c_.skier || !s.track || std::getenv("SKI_LEGACY_NO_RACE_INTRO")) { s.introRan = false; return; }
+  s.intro = std::make_unique<racecine::CourseIntro>(*s.track, *s.c, *c_.world);
+  s.cineT = 0; s.camOn = false; s.camBlend = 0; s.introInput = false; s.introL3 = false; s.introL3Hide = -1;
+  c_.skier->forceThird = true;   // (the racer is on show: first person hides the body)
+  SL_INFO("race: intro, the flight ends %.0f m down the course", s.intro->sEnd() - s.c->start.s);
+}
+
+void Races::updateIntro(double dt) {
+  Session& s = *s_;
+  Player& pl = *c_.player;
+  racecine::CourseIntro& D = *s.intro;
+  // the field waits in the start gate
+  pl.vel = dvec3(0);
+  updateBots(dt);
+  if (!s.introInput) { s.introInput = true; openCineInput(); }
+  const bool holding = c_.covered && c_.covered();   // (the branded transition still covers the screen: time holds)
+  if (!D.update(dt, holding, pl.pos, s.c->start.heading)) { endIntro(); return; }
+  s.cam = D.cam; s.camBlend = D.blend; s.camOn = true;
+  if (D.cutNow) sounds.push_back("whoosh");
+  const double t = D.time();
+  if (!holding && !s.introL3 && s.introL3Hide < 0 && t >= racecine::CourseIntro::L3_IN) s.introL3 = true;
+  if (s.introL3 && t >= racecine::CourseIntro::L3_OUT) { s.introL3 = false; s.introL3Hide = c_.now; }
+  // the announcer names the course as the crane settles behind the racer
+  if (!s.courseCalled && t > D.duration() - 2.2) { s.courseCalled = true; sounds.push_back("announce:" + s.c->id); }
+  // the racer is on show until the camera reaches the first-person eye
+  if (c_.skier && t > D.duration() - 0.5) c_.skier->forceThird = false;
+}
+
+void Races::endIntro() {
+  Session& s = *s_;
+  endCine();
+  s.t = LEAD_IN - INTRO_LEAD_IN;   // (clock = -(INTRO_LEAD_IN + 3))
+  // skipped before the announcer named the course: name it now, with time for it before the "three"
+  if (!s.courseCalled) { s.courseCalled = true; sounds.push_back("announce:" + s.c->id); s.t -= 1.2; }
+  lastCount_ = 0;
+  s.shownAt = c_.now;   // (the race panels slide in now)
+}
+
 std::string Races::cineStage() const {
   if (!s_) return "";
+  if (s_->intro) return "intro";
   if (s_->replay) return "replay";
   if (s_->podium) return s_->podium->showing() ? "podium" : "podium-hold";
   return "";
 }
 std::string Races::replayShot() const { return s_ && s_->replay ? s_->replay->shotKind() : ""; }
-double Races::cineAge() const { return s_ ? s_->cineT : 0; }
+double Races::cineAge() const { return s_ ? (s_->intro ? s_->intro->time() : s_->cineT) : 0; }
 
 // presentation.js: the letterbox bars, the podium's lower third, the REPLAY badge, SKIP [SPACE], the stinger
 void Races::hudCine(Ui& ui) {
@@ -761,7 +836,27 @@ void Races::hudCine(Ui& ui) {
   float skip = 0;
   if (s.podium) skip = s.podium->showing() ? float(std::clamp((s.cineT - 0.6) / 0.4, 0.0, 1.0)) : float(std::clamp(1 - (s.podium->age() - s.podiumHideT) / 0.4, 0.0, 1.0));
   else if (s.replay) skip = float(std::clamp((s.cineT - 0.6) / 0.4, 0.0, 1.0));
+  else if (s.intro) skip = float(std::clamp((s.intro->time() - racecine::CourseIntro::L3_IN - 0.6) / 0.4, 0.0, 1.0));   // (.pres-skip.on: 0.4 s after 0.6 s)
   drawCineBars(ui, float(s.lbox), skip, "SKIP", key);
+  if (s.introL3 || (s.introL3Hide >= 0 && c_.now - s.introL3Hide < 0.45)) {
+    // (session.js introInfo: the kicker, the course, LENGTH / DROP / RATING / WEATHER)
+    const Course& c = *s.c;
+    RaceHudState h;
+    h.trial = true; h.shownFor = -10;   // (body.pres-cine: the race panels step aside)
+    h.third.on = true; h.third.bars = false;
+    if (s.introL3Hide >= 0) { h.third.age = 100 + (c_.now - s.introL3Hide); h.third.left = 100.4; }   // (.pres-l3.out)
+    else { h.third.age = s.intro ? s.intro->time() - racecine::CourseIntro::L3_IN : 100; h.third.left = 1e9; }
+    h.third.kicker = uiwUpper(s.practice ? std::string("PRACTICE RACE \xC2\xB7 NO PRIZE") : !s.bots.empty()
+      ? std::string("RACE \xC2\xB7 ") + AI_LABEL[s.ai] + " \xC2\xB7 " + std::to_string(s.bots.size() + 1) + " RACERS" : std::string("WORLD RACING \xC2\xB7 TIME TRIAL"));
+    h.third.title = c.name;
+    char len[32];
+    if (c.length >= 1000) std::snprintf(len, sizeof len, "%.1f", c.length / 1000); else std::snprintf(len, sizeof len, "%.0f", c.length);
+    h.third.stats = {{"LENGTH", len}, {"DROP", fmtMoney(c.drop).substr(1)}};
+    h.third.units = {c.length >= 1000 ? "KM" : "M", "M"};
+    if (!c.difficulty.empty()) { h.third.stats.push_back({"RATING", c.difficulty}); h.third.signs = {"", "", c.difficulty}; }
+    if (c_.weather && !c_.weather->label().empty()) h.third.stats.push_back({"WEATHER", c_.weather->label()});
+    drawRaceHud(ui, h);
+  }
   if (s.podium && (s.podium->showing() || s.podium->age() - s.podiumHideT < 0.45)) {
     // (podium.js info: PODIUM · <difficulty>, the course, the top three)
     RaceHudState h;
@@ -812,10 +907,12 @@ void Races::update(double dt) {
   }
   if (!s_) return;
   Session& s = *s_;
+  s.camDt = dt;
   updateCine(dt);   // (the replay buffer; the podium, a replay, the stinger: real time)
   if (!s_) return;
   if (s.st == Session::St::Results) updateBots(dt);   // (the field skis out and stops behind the results card)
   if (s.st == Session::St::Results || s.st == Session::St::Done) return;
+  if (s.intro) { updateIntro(dt); return; }
   const Course& c = *s.c;
   const CourseLine& L = c.line;
   Player& pl = *c_.player;
@@ -1184,7 +1281,7 @@ void Races::hud(Ui& ui, float) {
   ui_ = &ui;
   if (!s_) return;
   const Session& s = *s_;
-  if (s.st >= Session::St::Results || s.podium || s.replay) { hudCine(ui); return; }   // (the panels step aside for the results screen and the cinematics)
+  if (s.st >= Session::St::Results || s.podium || s.replay || s.intro) { hudCine(ui); return; }   // (the panels step aside for the results screen and the cinematics)
   const Course& c = *s.c;
   RaceHudState h;
   h.course = c.name;
@@ -1228,14 +1325,14 @@ void Races::hud(Ui& ui, float) {
   if (s.st == Session::St::Grid) {
     double left = LEAD_IN + 3 - s.t;
     if (left <= 3 && left > 0) { h.countdown = std::to_string(int(std::ceil(left))); h.countdownAge = std::ceil(left) - left; }
-    h.third.on = true; h.third.age = s.t; h.third.left = LEAD_IN + 1.2;
+    h.third.on = !s.introRan; h.third.age = s.t; h.third.left = LEAD_IN + 1.2;   // (after the intro its lower third has been shown)
     h.third.kicker = s.practice ? "PRACTICE RACE" : c.bus ? "FREE RACE" : std::string("WORLD RACING \xC2\xB7 ") + uiwUpper(AI_LABEL[s.ai]);
     h.third.title = c.name;
     char km[32];
     std::snprintf(km, sizeof km, "%.1f KM", c.length / 1000);
     h.third.stats = {{"LENGTH", km}, {"DROP", fmtMoney(c.drop).substr(1) + " M"}};
     if (!h.trial) h.third.stats.push_back({"FIELD", std::to_string(s.bots.size() + 1)});
-  } else if (s.t < LEAD_IN + 3 + 0.6) { h.third.on = true; h.third.age = s.t; h.third.left = LEAD_IN + 1.2; h.third.title = c.name; }
+  } else if (s.t < LEAD_IN + 3 + 0.6 && !s.introRan) { h.third.on = true; h.third.age = s.t; h.third.left = LEAD_IN + 1.2; h.third.title = c.name; }
   if (!s.notice.empty()) {
     if (s.notice == "GO") { h.countdown = "GO"; h.countdownAge = c_.now - s.noticeT; }
     else { h.notice = s.notice; h.noticeAge = c_.now - s.noticeT; h.noticeFor = 2.4; h.noticeKind = s.noticeBad ? 1 : (s.st >= Session::St::Finished ? 2 : 0); }

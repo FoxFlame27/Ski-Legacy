@@ -7,6 +7,7 @@
 #include "core/math.h"
 #include <nlohmann/json_fwd.hpp>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -49,6 +50,11 @@ struct Course {
   std::vector<Mast> masts;
   bool hasBoard = false;
   double boardX = 0, boardZ = 0, boardYaw = 0;
+  /// the course's set pieces along its line (courses.js features: kicker, tabletop, roller, bridge, tunnel, lake, slalom,
+  /// narrow, cliff, bank; land1 = where a jump's landing ends, NaN without one) and its own rating (course.difficulty)
+  struct Feature { std::string type; double s0 = 0, s1 = 0, land1 = std::nan(""); };
+  std::vector<Feature> features;
+  std::string difficulty;
 };
 
 struct JobHub { std::string id, kind, name, place; double x = 0, z = 0, yaw = 0, fx = 0, fz = 0; bool hut = false; };

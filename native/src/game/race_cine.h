@@ -18,6 +18,7 @@
 namespace sl {
 class World;
 class Renderer;
+struct Course;
 class Shapes;
 namespace gfx { class Device; }
 namespace platform { class Platform; }
@@ -88,8 +89,10 @@ public:
   CineCam cam;
   bool camOk = false;
   std::string shotKind() const;
+  /// the trackside camera stands inside the nets (a tunnel / a bridge at its place)
+  bool shotEnclosed() const { return hasShot_ && shot_.kind == 0 && shot_.enclosed; }
 private:
-  struct Shot { int kind = -1; double t0 = 0, max = 0, s = 0, side = 1, yaw = 0; int frames = 0; dvec3 pos{0}; };   // kind 0 trackside, 1 heli, 2 chase, 3 finish
+  struct Shot { int kind = -1; double t0 = 0, max = 0, s = 0, side = 1, yaw = 0; int frames = 0; dvec3 pos{0}; bool enclosed = false; };   // kind 0 trackside, 1 heli, 2 chase, 3 finish
   double rate(double t) const;
   void frame(double dt, const Sample& me);
   bool shotOver(const Shot& sh) const;
@@ -102,6 +105,35 @@ private:
   Shot shot_;
   int shotN_ = 0;
   dvec3 camPos_{0}, camLook_{0}, focus_{0};
+};
+
+/// presentation/intro.js CourseIntro: the ~8 s opening before the countdown. Shot A (4.9 s): from 80 m behind and
+/// high above the start house the camera swoops down the course on a centripetal Catmull-Rom spline built from the
+/// course line, weaving from one side of the nets to the other and past the first set piece (within 950 m of the
+/// start). Shot B (3.5 s): a hard cut to the start gate, low in front of the field, craning up and over the racers
+/// and settling into the player's own camera (`blend` toward it over the last 40 %). Real time only.
+class CourseIntro {
+public:
+  static constexpr double SHOT_A = 4.9, SHOT_B = 3.5, L3_IN = 0.55, L3_OUT = SHOT_A + SHOT_B - 1.0;
+  CourseIntro(const racebots::Track& track, const Course& course, World& world);
+  /// per frame (real dt; `holding`: a transition still covers the screen, time holds), the player in the start gate:
+  /// poses the camera. False once finished.
+  bool update(double dt, bool holding, const dvec3& gate, double heading);
+  void skip() { done_ = true; }
+  bool done() const { return done_; }
+  double duration() const { return SHOT_A + SHOT_B; }
+  double time() const { return t_; }
+  double sEnd() const { return sEnd_; }
+  bool crane() const { return t_ >= SHOT_A; }
+  CineCam cam;
+  double blend = 0;      // 0..1 toward the gameplay camera of this frame (cinecam.js applyCamera's blend)
+  bool cutNow = false;   // the cut to the start gate happened this frame (the whoosh)
+private:
+  dvec3 curve(const std::vector<dvec3>& pts, double t) const;
+  World& world_;
+  double t_ = 0, sEnd_ = 0;
+  bool done_ = false, cut_ = false;
+  std::vector<dvec3> pathA_, lookA_;
 };
 
 class Podium {

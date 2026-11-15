@@ -47,6 +47,14 @@ export async function exportPlay({ THREE, SRC, world, L, busRoads, skibus, model
     };
     if (bus) { o.stop = e.stop; o.end = e.end; o.board = e.board ? { x: r4(e.board.x), z: r4(e.board.z), yaw: r4(e.board.yaw) } : null; }
     if (c.startHouse) o.house = pt(c.startHouse);
+    // (presentation/intro.js, replay.js: the course's set pieces along the line: the intro flies past the first one, the
+    // replay's trackside camera stands inside the nets in tunnels / on bridges) and the course's own rating
+    o.features = (c.features || []).filter((f) => f && Number.isFinite(f.s0)).map((f) => {
+      const q = { type: String(f.type), s0: r4(f.s0), s1: r4(f.s1 ?? f.s0) };
+      if (Number.isFinite(f.land1)) q.land1 = r4(f.land1);
+      return q;
+    });
+    o.difficulty = c.difficulty || '';
     return o;
   };
 

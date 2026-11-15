@@ -500,6 +500,14 @@ Express's line is fitted on that final ground). So:
 terrain over the shoulder; inside a road tunnel below its crown the tube's floor, so cars and people go through the
 mountain while the terrain stays whole over it), drive.js's `onTarmac`, the speed limit where you are, the railways'
 walkable track decks (railroute.js `railDeckHeight`, expressroute.js `expressDeckHeight`) as `World` decks.
+**The snow on the roads** (Nov 15 2026, the user: "there should be snow on the road so it's more realistic"; the roads
+were bare grey asphalt): bus.js `snowCover`, the shader patch the web game lays over its road, car-park and junction
+materials, is ported into the mesh shader (`shading` 8): packed snow in large world-space patches, tyre tracks worn
+down to the asphalt that wander across the lane, vary in width and fade out on fully snowed-over stretches, ragged
+ploughed snow along both edges, slush (darker, glossier) and bare patches; the markings and tracks fade where a road
+runs into a car park (its `aEnd`, exported in the strip's vertex colour), the car parks and junction mouths get the
+same snow without tracks or edges. `export_resort.mjs` tags these materials (`roadsnow-road` / `-lot` / `-mouth`). The
+plough berms beside the roads are the terrain's (roads.js `berm`, in the exported cuts).
 
 **Your car** (`game/drive.cpp`, drive.js): the bicycle model step by step — the automatic gearbox (P / D / R, six ratios
 and the final drive, shift points that hold a gear downhill, the electric cars' single gear and power limit), the

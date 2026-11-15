@@ -467,6 +467,11 @@ float pineSnowMask(vec3 tex, vec3 wn, vec3 op) {
   return max(pineTexSnow(tex), smoothstep(0.45, 0.85, wn.y) * smoothstep(0.5, 0.66, n) * 0.35);
 }
 
+// bus.js SNOW_GLSL: the road snow's value noise
+float rdH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float rdN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(rdH(i), rdH(i + vec2(1.0, 0.0)), f.x), mix(rdH(i + vec2(0.0, 1.0)), rdH(i + vec2(1.0, 1.0)), f.x), f.y); }
+float rdF(vec2 p) { return rdN(p) * 0.5 + rdN(p * 2.03 + 7.1) * 0.25 + rdN(p * 4.01 + 3.3) * 0.125 + rdN(p * 8.1 + 1.7) * 0.0625; }
 void main() {
   if (uFanBase.w < -0.5) {   // fans.js blobMaterial: the soft contact shade under a crowd person (multiplied onto the snow)
     float r = min(1.0, length(vUV * 2.0 - 1.0));
@@ -560,6 +565,36 @@ void main() {
     n = perturbNormal(n, vRel, vUV, normalize(tn));
   }
   float snowA = 0.0;
+  if (kind == 8) {
+    // bus.js snowCover: the snow on the road, wheel tracks that wander across the lane and vary in width along the
+    // road and fade out (stretches fully snowed over), ragged snow along both edges, large patches (world position
+    // noise, no repeating tile) of packed snow, slush and bare asphalt. u across the strip (0..1), v = metres / 13.5.
+    // uFlags4.w: 1 a road (its aEnd in the vertex colour: 0 where it runs into a car park), 2 a car park / a mouth
+    bool lot = uFlags4.w > 1.5;
+    float roadEnd = lot ? 0.0 : vColor.r * vColor.r;
+    if (!lot) base.rgb = mix(uBaseColor.rgb * texture(uBase, vec2(0.3, vUV.y)).rgb, base.rgb, roadEnd);   // (markings fade out into a car park)
+    vec2 Wp = vRel.xz + uCamPos.xz;
+    float u = vUV.x, sv = vUV.y * 13.5;
+    float wob = (rdN(vec2(sv * 0.021, 3.7)) - 0.5) * 0.10 + (rdN(vec2(sv * 0.09, 9.1)) - 0.5) * 0.035;
+    float wid = 0.04 + 0.035 * rdN(vec2(sv * 0.03, 1.3));
+    float tr = 0.0;
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.2 - wob)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.36 - wob * 0.8)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.64 + wob * 0.7)));
+    tr = max(tr, 1.0 - smoothstep(wid * 0.5, wid * 1.5, abs(u - 0.8 + wob)));
+    tr *= roadEnd;
+    float fine = rdF(Wp * 0.9), P = rdF(Wp * 0.03 + 4.0);
+    float clearT = smoothstep(0.3, 0.7, rdN(vec2(sv * 0.012, 5.5))) * (0.6 + 0.4 * fine);
+    float eN = rdN(vec2(sv * 0.15, 2.2)) * 0.07 + (fine - 0.5) * 0.06;
+    float edge = lot ? 0.0 : 1.0 - smoothstep(0.06 + eN, 0.16 + eN, u) + smoothstep(0.84 - eN, 0.94 - eN, u);
+    float snow = clamp(1.0 - tr * clearT, 0.0, 1.0) * smoothstep(0.22, 0.55, P + 0.3 * fine - 0.1);
+    float bare = smoothstep(0.6, 0.78, P);
+    snow = max(snow * (1.0 - bare * 0.9), clamp(edge, 0.0, 1.0));
+    float slush = (1.0 - snow) * smoothstep(0.35, 0.7, rdF(Wp * 0.06 + 11.0)) * (1.0 - bare);
+    base.rgb = mix(base.rgb, vec3(0.30, 0.29, 0.28) * (0.85 + 0.3 * fine), slush * 0.75);
+    base.rgb = mix(base.rgb, vec3(0.80, 0.84, 0.89) * (0.88 + 0.16 * fine), snow * (0.7 + 0.3 * fine));
+    rough *= 1.0 - 0.4 * slush;
+  }
   if (kind == 1) {
     // pine: dark green needles, snow on needles facing the sky
     vec3 pineTex = base.rgb;

@@ -967,6 +967,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   else if (m.shading == 5) kind = 5;   // (a lamp's emission only: game/scenefx)
   else if (m.shading == 6) kind = 6;   // (the gondola cabin: its painted windows are glass)
   else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
+  else if (m.shading == 8) kind = 8;   // (the snow on the roads and car parks: bus.js snowCover)
   else if (m.shading == 7) kind = 0;   // (plain standard shading, also when blended: the railcars' cabins, train.js)
   else if (m.alpha == Material::Alpha::Blend && m.roughness < 0.6f) kind = 3;
   else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && (m.paint == 0 || m.paint == 3) &&
@@ -974,7 +975,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   static const float STR[5] = {0, 0.35f, 0.45f, 0.5f, 0.5f}, FAR[5] = {1, 16, 22, 28, 34};
   vec4 f3(float(m.paint), float(kind), height, m.lumNorm);
   dev_->setVec4("uFlags3", glm::value_ptr(f3));
-  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], 0.f);
+  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], float(m.roadSnow));
   dev_->setVec4("uFlags4", glm::value_ptr(f4));
   dev_->setVec4("uFanBase", glm::value_ptr(m.fanBase));   // (fans.js crowd people: recolour, screen-door fade)
   dev_->setVec4("uFanCol", glm::value_ptr(m.fanCol));

@@ -393,6 +393,10 @@ function geoArrays(geo, M, ox, oy, oz, uvx = null) {
   return { pos, nor, uv, col, idx };
 }
 
+// bus.js snowCover: the roads', car parks' and junction mouths' snow is drawn by a shader patch (packed snow, tyre
+// tracks, ploughed edges, slush): its materials carry the kind ('roadsnow-road' / '-lot' / '-mouth') for the C++ shader
+const roadSnow = (m) => { const k = String(m?.customProgramCacheKey?.() || ''), i = k.lastIndexOf('roadsnow-'); return i >= 0 ? k.slice(i + 9) : null; };
+
 function makePack(name, opt = {}) {
   const props = new Map();      // key model|glow -> { model, glow, inst: [] }
   const mats = [], matIndex = new Map();
@@ -431,6 +435,7 @@ function makePack(name, opt = {}) {
     };
     // (a material the game redraws at run time keeps a name of its own: the Express's info screens, export_net.mjs)
     if (m.userData?.slTag) d.tag = m.userData.slTag;
+    else if (roadSnow(m)) d.tag = 'roadsnow-' + roadSnow(m);
     const k = JSON.stringify(d);
     if (!matIndex.has(k)) { matIndex.set(k, mats.length); mats.push(d); }
     return matIndex.get(k);
@@ -453,6 +458,10 @@ function makePack(name, opt = {}) {
       const a = geoArrays(geo, M, ch.ox, ch.oy, ch.oz, uvXf(mat));
       const base = ch.pos.length / 3;
       const vs = a.pos.length / 3;
+      // (a road strip's aEnd: 1 along the road, 0 where it runs into a car park (the tracks and markings fade out): in
+      // the vertex colour, the C++ road shader reads it there)
+      const aEnd = roadSnow(mat) === 'road' ? geo.attributes.aEnd : null;
+      if (aEnd && !tint) { a.col = new Array(vs * 3); for (let i = 0; i < vs; i++) a.col[i * 3] = a.col[i * 3 + 1] = a.col[i * 3 + 2] = aEnd.getX(i); }
       for (let i = 0; i < a.pos.length; i++) ch.pos.push(a.pos[i]);
       for (let i = 0; i < a.nor.length; i++) ch.nor.push(a.nor[i]);
       for (let i = 0; i < a.uv.length; i++) ch.uv.push(a.uv[i]);

@@ -19,6 +19,10 @@ double pmod(double a, double m) { return std::fmod(std::fmod(a, m) + m, m); }
 // ---------------------------------------------------------------- one line (lifts.js LiftLine)
 double LiftLine::speedAt(double q) const {
   double v = cfg.speed;
+  if (hasDwell) {   // (multiplayer: the station crawl at both ends of the loop)
+    const double r = pmod(q, L), d = std::min(r, L - r);
+    if (d < dwell.half + dwell.ramp) v *= d < dwell.half ? dwell.slow : dwell.slow + (1 - dwell.slow) * smooth01((d - dwell.half) / dwell.ramp);
+  }
   if (!hasMid) return v;
   double d = std::fabs(uOf(q) - mid.u);
   return std::min(v, cfg.speed * (d < MID_HALF ? MID_SLOW : d < MID_HALF + MID_RAMP ? MID_SLOW + (1 - MID_SLOW) * smooth01((d - MID_HALF) / MID_RAMP) : 1));
@@ -57,9 +61,80 @@ void LiftLine::advance(size_t i, double t) {
   for (int k = 0; k < n; k++) s[i] = pmod(s[i] + speedAt(s[i]) * h, L2);
 }
 
-void LiftLine::update(double dt, double timeScale) {
+// ---- multiplayer (net/transit.js): every car's place from a time T (s, the line's shared timeline), so everyone sees
+// the same cabin in the same place. Car k sits where a car leaving s = 0 is after T + k/n of the loop's time
+void LiftLine::setDwell(bool on) {
+  if (on == hasDwell) return;
+  hasDwell = on;
+  dwell = on ? (gondola ? Dwell{7, 30, 0.1} : Dwell{4, 14, 0.15}) : Dwell{};   // (lifts.js END_DWELL)
+  loopTimes();
+  if (!on && s0.size() == s.size()) s = s0;   // (single player again: its spacing back)
+}
+void LiftLine::loopTimes() {
+  const double L2 = 2 * L;
+  loopT = LoopT{};
+  if (!hasMid && !hasDwell) { loopT.P = L2 / cfg.speed; return; }
+  const int steps = int(std::ceil(L2 / 2));
+  loopT.steps = steps;
+  loopT.times.assign(size_t(steps) + 1, 0.0);
+  for (int i = 1; i <= steps; i++) loopT.times[size_t(i)] = loopT.times[size_t(i) - 1] + (L2 / steps) / speedAt((i - 0.5) * (L2 / steps));
+  loopT.P = loopT.times[size_t(steps)];
+}
+double LiftLine::sAfter(double tau) const {
+  const double L2 = 2 * L;
+  if (loopT.times.empty()) return (tau / loopT.P) * L2;
+  int lo = 0, hi = loopT.steps;
+  while (hi - lo > 1) { const int m = (lo + hi) >> 1; if (loopT.times[size_t(m)] <= tau) lo = m; else hi = m; }
+  double span = loopT.times[size_t(lo) + 1] - loopT.times[size_t(lo)];
+  if (span == 0) span = 1;
+  return ((lo + (tau - loopT.times[size_t(lo)]) / span) * L2) / loopT.steps;
+}
+void LiftLine::placeAt(double T) {
+  const double P = loopT.P, L2 = 2 * L;
+  const size_t n = s.size();
+  for (size_t k = 0; k < n; k++) s[k] = std::fmod(sAfter(pmod(T + (P * double(k)) / double(n), P)), L2);
+}
+LiftLine::Next LiftLine::nextCar(double target) const {
+  const double L2 = 2 * L;
+  Next best;
   for (size_t i = 0; i < s.size(); i++) {
-    if (dt > 0) {
+    const double ahead = pmod(s[i] - target, L2);
+    // (one still crawling out of the station: that one)
+    const double t = ahead < std::max(1.5, 0.5 * (hasDwell ? dwell.half : 0.0)) ? -ahead / speedAt(s[i]) : travelTime(s[i], pmod(target - s[i], L2));
+    if (best.idx < 0 || t < best.t) best = Next{int(i), t};
+  }
+  return best;
+}
+int LiftLine::seatCount() const {
+  if (gondola) return 6;
+  const double w = std::max(carSize.x, carSize.y);
+  return std::max(1, std::min(6, int(std::floor((w * 0.85) / 0.62))));
+}
+int LiftLine::preferredSeat() const {
+  if (gondola) return 1;
+  const int n = seatCount();
+  int best = 0;
+  for (int k = 0; k < n; k++) if (std::fabs((k - (n - 1) / 2.0) * 0.62 - 0.35) < std::fabs((best - (n - 1) / 2.0) * 0.62 - 0.35)) best = k;
+  return best;
+}
+Seat LiftLine::seatInto(size_t idx, int n) const {
+  Seat st;
+  const int sd = side[idx] != 0 ? side[idx] : 1;
+  const double fx = dir.x * sd, fz = dir.y * sd;
+  st.pos = pos[idx];
+  st.pos.y -= cfg.seatDrop;
+  double lat, along, face = 1;
+  if (!gondola) { const int m = seatCount(); lat = (std::min(n, m - 1) - (m - 1) / 2.0) * 0.62; along = 0.1; }
+  else { const int b = n >= 3 ? 1 : 0; lat = ((n % 3) - 1) * 0.55; along = b ? 0.55 : -0.55; face = b ? -1 : 1; }
+  st.pos.x += fx * along + sideV.x * lat; st.pos.z += fz * along + sideV.y * lat;
+  st.fwd = dvec3(fx * face, 0, fz * face);
+  return st;
+}
+
+void LiftLine::update(double dt, double timeScale, const double* T) {
+  if (T) placeAt(*T);   // (multiplayer: from the shared timeline)
+  for (size_t i = 0; i < s.size(); i++) {
+    if (dt > 0 && !T) {
       if (hasMid) advance(i, dt * timeScale);
       else s[i] = std::fmod(s[i] + cfg.speed * dt * timeScale, 2 * L);
     }
@@ -68,7 +143,7 @@ void LiftLine::update(double dt, double timeScale) {
 }
 
 double LiftLine::travelTime(double s0, double dist) const {
-  if (!hasMid) return dist / cfg.speed;
+  if (!hasMid && !hasDwell) return dist / cfg.speed;
   double t = 0;
   int n = std::max(1, int(std::ceil(dist / 2)));
   double h = dist / n;
@@ -134,6 +209,8 @@ bool Lifts::load(gfx::Device& dev, AssetManager& assets, const nlohmann::json& J
     l.exitUp = ex(j["exitUp"]); l.exitDown = ex(j["exitDown"]); l.midExit = ex(j["midExit"]);
     if (j["carSize"].is_array()) l.carSize = dvec2(j["carSize"][0].get<double>(), j["carSize"][1].get<double>());
     if (l.supports.size() < 2) continue;
+    l.s0 = l.s;
+    l.loopTimes();
     l.update(0, 1);
     lines_.push_back(std::move(l));
   }
@@ -172,8 +249,14 @@ void Lifts::update(double dt, const dvec3& viewer) {
     if (!l.near) continue;
     // fast-forwarding rides slow to x2 while the rider's cabin crawls through a mid-station (time to get off)
     double ts = ride_.line == &l && l.inStation(l.s[ride_.idx]) ? std::min(timeScale, 2.0) : timeScale;
-    l.update(dt, ts);
+    if (mpTime_) { const double T = mpTime_(size_t(&l - lines_.data())); l.update(dt, ts, &T); }   // (multiplayer: the line's shared timeline, net/transit.js)
+    else l.update(dt, ts);
   }
+}
+
+void Lifts::setMp(std::function<double(size_t)> time) {
+  mpTime_ = std::move(time);
+  for (auto& l : lines_) l.setDwell(bool(mpTime_));
 }
 
 void Lifts::submit(Renderer& r, const dvec3& viewer) {
@@ -223,8 +306,14 @@ Lifts::Station Lifts::nearestStation(const dvec3& p) {
   return best;
 }
 
-Seat Lifts::board(LiftLine& line, bool up, bool atMid) {
+Seat Lifts::board(LiftLine& line, bool up, bool atMid, int pickIdx, int seat) {
   atMid = atMid && line.hasMid;
+  if (mpTime_ && pickIdx >= 0 && size_t(pickIdx) < line.s.size()) {
+    const double T = mpTime_(size_t(&line - lines_.data()));
+    line.update(0, 1, &T);
+    ride_ = {&line, size_t(pickIdx), up, !atMid, seat};
+    return seat >= 0 ? line.seatInto(size_t(pickIdx), seat) : line.seatFor(size_t(pickIdx));
+  }
   double target = atMid ? (up ? line.mid.u : 2 * line.L - line.mid.u) : (up ? 0 : line.L);
   LiftLine::Pick pk = line.pickCar(target);
   // bring that cabin to the boarding point: the whole loop moves on (or back) by the same time
@@ -236,7 +325,7 @@ Seat Lifts::board(LiftLine& line, bool up, bool atMid) {
     for (double& q : line.s) q = pmod(q + delta, L2);
   }
   line.update(0, 1);
-  ride_ = {&line, pk.idx, up, !atMid};
+  ride_ = {&line, pk.idx, up, !atMid, -1};
   return line.seatFor(pk.idx);
 }
 
@@ -246,7 +335,7 @@ Lifts::RideState Lifts::updateRide() {
   LiftLine& line = *ride_.line;
   double q = line.s[ride_.idx], L = line.L;
   rs.riding = true;
-  rs.seat = line.seatFor(ride_.idx);
+  rs.seat = ride_.seat >= 0 ? line.seatInto(ride_.idx, ride_.seat) : line.seatFor(ride_.idx);
   bool arrived = ride_.up ? q >= L - 3 : (q >= 2 * L - 3 || q < 1);
   if (!arrived) {
     if (line.hasMid) {

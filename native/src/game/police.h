@@ -25,6 +25,7 @@
 #include "game/window_view.h"
 #include "game/play.h"
 #include "game/vehicles.h"
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -57,6 +58,10 @@ public:
   void knockUnit(int id, double vx, double vz);
   void fillColliders(std::vector<Collider>& out) const;
   void addDraw(VehicleDraw& vd, const dvec3& cam) const;
+  /// (multiplayer, police.js netFrame) your patrol cars for the other players: [x, y, z, yaw, v] each (8 at most)
+  std::vector<std::array<double, 5>> mpCars() const;
+  /// (net/vehicles.js updatePolice) another player's patrol car, drawn with the same model at pos (on the ground)
+  void addDrawAt(VehicleDraw& vd, const dvec3& pos, double yaw, double dist) const;
   void draw(Renderer& r, const dvec3& cam);
   void addPeople(People& p, const dvec3& cam) const;
   void hud(Ui& ui, float u);

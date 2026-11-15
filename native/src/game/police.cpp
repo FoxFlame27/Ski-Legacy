@@ -442,6 +442,17 @@ void Police::fillColliders(std::vector<Collider>& out) const {
   }
 }
 
+std::vector<std::array<double, 5>> Police::mpCars() const {
+  std::vector<std::array<double, 5>> out;
+  for (const Unit& u : units_) if (out.size() < 8) out.push_back({u.pos.x, u.pos.y, u.pos.z, u.yaw, std::clamp(u.v, -75.0, 75.0)});
+  return out;
+}
+
+void Police::addDrawAt(VehicleDraw& vd, const dvec3& pos, double yaw, double dist) const {
+  if (!car_ || dist > 600) return;
+  vd.add(car_.get(), glm::translate(glm::dmat4(1), pos) * glm::rotate(glm::dmat4(1), yaw, dvec3(0, 1, 0)) * glm::dmat4(carFit_), dist > 70 ? 1 : 0);
+}
+
 void Police::addDraw(VehicleDraw& vd, const dvec3& cam) const {
   if (!car_) return;
   for (const Unit& u : units_) {

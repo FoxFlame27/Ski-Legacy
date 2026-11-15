@@ -54,7 +54,20 @@ public:
   dvec3 spawn() const { return spawn_; }
   dvec2 autotestHotel() const { return autotestHotel_; }
 
+  /// A site of the exported world moved somewhere else (village.json "moves", round 2: the heliport...): everything of
+  /// every pack within r of `from` (props, colliders, baked triangles, walkable decks, the play data's places: pads,
+  /// doors, parking spots, paths) is carried rigidly to `to`, turned by rot (yaw adds rot), raised by dy. The relief
+  /// at `to` copies the old site's ground, so all of it sits as it sat.
+  struct Move { std::string name; dvec2 from{0}, to{0}; double r = 0, rot = 0, dy = 0; };
+  const std::vector<Move>& moves() const { return moves_; }
+  /// the move whose source holds (x, z), or null
+  const Move* moveAt(double x, double z) const;
+  /// (x, z) carried by m
+  static dvec2 movePoint(const Move& m, dvec2 p);
+
 private:
+  void applyMoves(const std::string& pack, nlohmann::json& j, std::vector<uint8_t>& bin) const;
+  std::vector<Move> moves_;
   bool loaded_ = false;
   double x0_ = 0, z0_ = 0, step_ = 2;
   int nx_ = 0, nz_ = 0;

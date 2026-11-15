@@ -86,6 +86,15 @@ bool Village::load(platform::Platform& p, const AssetPaths& paths) {
   }
   if (P.contains("spawn")) spawn_ = dvec3(P["spawn"][0].get<double>(), P["spawn"][1].get<double>(), P["spawn"][2].get<double>());
   if (P.contains("autotestHotel")) autotestHotel_ = dvec2(P["autotestHotel"][0].get<double>(), P["autotestHotel"][1].get<double>());
+  if (j.contains("moves"))
+    for (auto& m : j["moves"]) {
+      Move v;
+      v.name = m.value("name", std::string());
+      v.from = dvec2(m["from"][0].get<double>(), m["from"][1].get<double>());
+      v.to = dvec2(m["to"][0].get<double>(), m["to"][1].get<double>());
+      v.r = m.value("r", 0.0); v.rot = m.value("rot", 0.0); v.dy = m.value("dy", 0.0);
+      moves_.push_back(v);
+    }
   for (auto& q : j["walk"]["nodes"]) nodes_.push_back(dvec2(q[0].get<double>(), q[1].get<double>()));
   adj_.assign(nodes_.size(), {});
   for (auto& e : j["walk"]["edges"]) {
@@ -161,8 +170,216 @@ std::vector<dvec2> Village::route(const dvec2& from, const dvec2& to, double lan
   return out;
 }
 
+const Village::Move* Village::moveAt(double x, double z) const {
+  for (const Move& m : moves_) if (glm::length(dvec2(x, z) - m.from) < m.r) return &m;
+  return nullptr;
+}
+
+dvec2 Village::movePoint(const Move& m, dvec2 p) {
+  const dvec2 d = p - m.from;
+  const double c = std::cos(m.rot), s = std::sin(m.rot);
+  return m.to + dvec2(d.x * c + d.y * s, -d.x * s + d.y * c);   // (glm::rotate about +y: a front (sin yaw, cos yaw) turns to yaw + rot)
+}
+
+namespace {
+glm::dmat4 moveMatrix(const Village::Move& m) {
+  glm::dmat4 T = glm::translate(glm::dmat4(1), dvec3(m.to.x, m.dy, m.to.y));
+  T = glm::rotate(T, m.rot, dvec3(0, 1, 0));
+  return glm::translate(T, dvec3(-m.from.x, 0, -m.from.y));
+}
+} // namespace
+
+void Village::applyMoves(const std::string& pack, nlohmann::json& j, std::vector<uint8_t>& bin) const {
+  if (moves_.empty()) return;
+  size_t nInst = 0, nCol = 0, nTri = 0, nSurf = 0, nPlace = 0;
+  // ---- props and instanced pieces: their matrices
+  for (const char* key : {"props", "instanced"}) {
+    if (!j.contains(key)) continue;
+    for (auto& p : j[key]) {
+      auto inst = instances(p, bin);
+      bool any = false;
+      for (auto& M : inst)
+        if (const Move* m = moveAt(M[3][0], M[3][2])) { M = moveMatrix(*m) * M; any = true; nInst++; }
+      if (!any) continue;
+      nlohmann::json rows = nlohmann::json::array();
+      for (const auto& M : inst) rows.push_back(toRows34(M));
+      p.erase("instOff"); p.erase("instN");
+      p["inst"] = std::move(rows);
+    }
+  }
+  // ---- colliders (rot = -yaw)
+  for (auto& c : j["colliders"]) {
+    const Move* m = moveAt(c["x"].get<double>(), c["z"].get<double>());
+    if (!m) continue;
+    const dvec2 q = movePoint(*m, dvec2(c["x"].get<double>(), c["z"].get<double>()));
+    c["x"] = q.x; c["z"] = q.y;
+    if (c.contains("rot")) c["rot"] = c["rot"].get<double>() - m->rot;
+    else if (!c.contains("r") && m->rot != 0) c["rot"] = -m->rot;
+    if (c.contains("top")) c["top"] = c["top"].get<double>() + m->dy;
+    nCol++;
+  }
+  // ---- walkable decks (sampled height grids): carried along (turned only by whole quarter turns: not supported, kept)
+  if (j.contains("surfaces"))
+    for (auto& s : j["surfaces"]) {
+      const double cx = s["x0"].get<double>() + s["step"].get<double>() * s["nx"].get<double>() * 0.5;
+      const double cz = s["z0"].get<double>() + s["step"].get<double>() * s["nz"].get<double>() * 0.5;
+      const Move* m = moveAt(cx, cz);
+      if (!m) continue;
+      if (std::fabs(m->rot) > 1e-6) { SL_WARN("village: a walkable deck at (%.0f, %.0f) in move '%s' is not turned (rot)", cx, cz, m->name.c_str()); continue; }
+      s["x0"] = s["x0"].get<double>() + m->to.x - m->from.x;
+      s["z0"] = s["z0"].get<double>() + m->to.y - m->from.y;
+      s["base"] = s["base"].get<double>() + m->dy;
+      nSurf++;
+    }
+  // ---- baked meshes: the triangles whose centre is in a move's source go into a new mesh of their own, carried
+  if (j.contains("meshes")) {
+    nlohmann::json added = nlohmann::json::array();
+    for (auto& mj : j["meshes"]) {
+      const size_t verts = mj["verts"], tris = mj["tris"], vOff = mj["vOff"], iOff = mj["iOff"];
+      const bool i16 = mj.value("i16", false);
+      if (vOff + verts * 28 > bin.size() || iOff + tris * 3 * (i16 ? 2 : 4) > bin.size()) continue;
+      const dvec3 o(mj["origin"][0].get<double>(), mj["origin"][1].get<double>(), mj["origin"][2].get<double>());
+      auto idx = [&](size_t k) -> uint32_t {
+        if (i16) { uint16_t v; std::memcpy(&v, bin.data() + iOff + k * 2, 2); return v; }
+        uint32_t v; std::memcpy(&v, bin.data() + iOff + k * 4, 4); return v;
+      };
+      auto pos = [&](uint32_t v) { float q[3]; std::memcpy(q, bin.data() + vOff + size_t(v) * 28, 12); return dvec3(q[0], q[1], q[2]) + o; };
+      std::map<const Move*, std::vector<size_t>> out;   // the move -> its triangles
+      std::vector<const Move*> tm(tris, nullptr);
+      for (size_t t = 0; t < tris; t++) {
+        const uint32_t a = idx(t * 3), b = idx(t * 3 + 1), c = idx(t * 3 + 2);
+        if (a >= verts || b >= verts || c >= verts) continue;
+        const dvec3 ctr = (pos(a) + pos(b) + pos(c)) / 3.0;
+        if (const Move* m = moveAt(ctr.x, ctr.z)) { tm[t] = m; out[m].push_back(t); }
+      }
+      if (out.empty()) continue;
+      // the moved triangles' own copies (vertices duplicated as needed)
+      std::vector<std::array<uint32_t, 3>> keep;
+      for (size_t t = 0; t < tris; t++) if (!tm[t]) keep.push_back({idx(t * 3), idx(t * 3 + 1), idx(t * 3 + 2)});
+      for (auto& [m, list] : out) {
+        const glm::dmat4 T = moveMatrix(*m);
+        const double c = std::cos(m->rot), s = std::sin(m->rot);
+        const dvec3 no = dvec3(T * glm::dvec4(o, 1));
+        std::map<uint32_t, uint32_t> remap;
+        std::vector<uint8_t> vb;
+        std::vector<uint32_t> ib;
+        for (size_t t : list)
+          for (int k = 0; k < 3; k++) {
+            const uint32_t v = idx(t * 3 + size_t(k));
+            auto it = remap.find(v);
+            if (it == remap.end()) {
+              it = remap.emplace(v, uint32_t(remap.size())).first;
+              uint8_t raw[28];
+              std::memcpy(raw, bin.data() + vOff + size_t(v) * 28, 28);
+              const dvec3 w = dvec3(T * glm::dvec4(pos(v), 1)) - no;
+              const float q[3] = {float(w.x), float(w.y), float(w.z)};
+              std::memcpy(raw, q, 12);
+              int8_t n[3];
+              std::memcpy(n, raw + 12, 3);
+              const double nx = n[0] * c + n[2] * s, nz = -n[0] * s + n[2] * c;
+              n[0] = int8_t(std::lround(std::clamp(nx, -127.0, 127.0)));
+              n[2] = int8_t(std::lround(std::clamp(nz, -127.0, 127.0)));
+              std::memcpy(raw + 12, n, 3);
+              vb.insert(vb.end(), raw, raw + 28);
+            }
+            ib.push_back(it->second);
+          }
+        const bool small = remap.size() < 65536;
+        while (bin.size() % 4) bin.push_back(0);
+        const size_t nvOff = bin.size();
+        bin.insert(bin.end(), vb.begin(), vb.end());
+        const size_t niOff = bin.size();
+        for (uint32_t v : ib) {
+          if (small) { const uint16_t s16 = uint16_t(v); bin.push_back(uint8_t(s16 & 255)); bin.push_back(uint8_t(s16 >> 8)); }
+          else { uint8_t b4[4]; std::memcpy(b4, &v, 4); bin.insert(bin.end(), b4, b4 + 4); }
+        }
+        nlohmann::json nm = mj;
+        nm["verts"] = remap.size(); nm["tris"] = list.size(); nm["vOff"] = nvOff; nm["iOff"] = niOff; nm["i16"] = small;
+        nm["origin"] = {no.x, no.y, no.z};
+        added.push_back(std::move(nm));
+        nTri += list.size();
+      }
+      // (what stays: compacted in place, as the cobble's clearing does; the index buffer is re-read above first)
+      auto put = [&](size_t k, uint32_t v) {
+        if (i16) { const uint16_t s16 = uint16_t(v); std::memcpy(bin.data() + iOff + k * 2, &s16, 2); }
+        else std::memcpy(bin.data() + iOff + k * 4, &v, 4);
+      };
+      for (size_t t = 0; t < keep.size(); t++) for (int k = 0; k < 3; k++) put(t * 3 + size_t(k), keep[t][size_t(k)]);
+      mj["tris"] = keep.size();
+    }
+    for (auto& a : added) j["meshes"].push_back(std::move(a));
+  }
+  // ---- the gameplay data's places (play.json "play", transport.json "net"): points with x / z (y, yaw, the frame's
+  // directions with them), [x, y, z] spots, rows-of-12 frames, the paths that start in a site
+  std::function<void(nlohmann::json&, const std::string&)> walk = [&](nlohmann::json& o, const std::string& key) {
+    if (o.is_array()) {
+      if ((key == "at" || key == "sock") && o.size() == 3 && o[0].is_number()) {
+        if (const Move* m = moveAt(o[0].get<double>(), o[2].get<double>())) {
+          const dvec2 q = movePoint(*m, dvec2(o[0].get<double>(), o[2].get<double>()));
+          o = {q.x, o[1].get<double>() + m->dy, q.y};
+          nPlace++;
+        }
+        return;
+      }
+      if ((key == "cells" || key == "office") && o.size() == 12 && o[0].is_number()) {
+        if (const Move* m = moveAt(o[3].get<double>(), o[11].get<double>())) { o = toRows34(moveMatrix(*m) * rows34(o)); nPlace++; }
+        return;
+      }
+      if (key == "path" && !o.empty() && o[0].is_array() && o[0].size() == 2 && o[0][0].is_number()) {
+        // a path leaving a moved site: its points in the site carried; then on from the nearest of the rest
+        size_t k = 0;
+        dvec2 last(0);
+        while (k < o.size()) {
+          const Move* m = moveAt(o[k][0].get<double>(), o[k][1].get<double>());
+          if (!m) break;
+          last = movePoint(*m, dvec2(o[k][0].get<double>(), o[k][1].get<double>()));
+          o[k] = {last.x, last.y};
+          k++;
+        }
+        if (k == 0 || k >= o.size()) return;
+        size_t best = k;
+        double bd = 1e30;
+        for (size_t i = k; i < o.size(); i++) {
+          const double d = glm::length(dvec2(o[i][0].get<double>(), o[i][1].get<double>()) - last);
+          if (d < bd) { bd = d; best = i; }
+        }
+        o.erase(o.begin() + std::ptrdiff_t(k), o.begin() + std::ptrdiff_t(best));
+        nPlace++;
+        return;
+      }
+      for (auto& e : o) walk(e, key);
+      return;
+    }
+    if (!o.is_object()) return;
+    if (o.contains("x") && o.contains("z") && o["x"].is_number() && o["z"].is_number())
+      if (const Move* m = moveAt(o["x"].get<double>(), o["z"].get<double>())) {
+        const dvec2 q = movePoint(*m, dvec2(o["x"].get<double>(), o["z"].get<double>()));
+        o["x"] = q.x; o["z"] = q.y;
+        if (o.contains("y") && o["y"].is_number()) o["y"] = o["y"].get<double>() + m->dy;
+        for (const char* a : {"yaw", "heading", "facing"}) if (o.contains(a) && o[a].is_number()) o[a] = o[a].get<double>() + m->rot;
+        const double c = std::cos(m->rot), s = std::sin(m->rot);
+        for (auto [a, b] : {std::pair{"dirx", "dirz"}, {"ux", "uz"}, {"vx", "vz"}, {"ax", "az"}, {"fx", "fz"}, {"tvx", "tvz"}})
+          if (o.contains(a) && o.contains(b) && o[a].is_number() && o[b].is_number()) {
+            const double u = o[a].get<double>(), v = o[b].get<double>();
+            o[a] = u * c + v * s; o[b] = -u * s + v * c;
+          }
+        for (auto [a, b] : {std::pair{"ex", "ez"}, {"sx", "sz"}})
+          if (o.contains(a) && o.contains(b) && o[a].is_number() && o[b].is_number()) {
+            const dvec2 e = movePoint(*m, dvec2(o[a].get<double>(), o[b].get<double>()));
+            o[a] = e.x; o[b] = e.y;
+          }
+        nPlace++;
+      }
+    for (auto it = o.begin(); it != o.end(); ++it) if (it.key() != "parts") walk(it.value(), it.key());
+  };
+  for (const char* key : {"play", "net"}) if (j.contains(key)) walk(j[key], key);
+  if (nInst + nCol + nTri + nSurf + nPlace)
+    SL_INFO("village: moved sites in %s: %zu props, %zu colliders, %zu triangles, %zu decks, %zu places", pack.c_str(), nInst, nCol, nTri, nSurf, nPlace);
+}
+
 void Village::applyToPack(const std::string& pack, nlohmann::json& j, std::vector<uint8_t>& bin, World& world,
                           const std::function<std::shared_ptr<Model>(const std::string&)>& model) const {
+  if (j_) applyMoves(pack, j, bin);
   if (!j_ || pack != j_->value("clear", nlohmann::json::object()).value("pack", std::string("resort"))) return;
   const nlohmann::json& V = *j_;
   const auto& C = V["clear"];

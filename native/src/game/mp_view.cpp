@@ -615,13 +615,39 @@ void MpView::hud(Ui& ui, const Multiplayer& mp, const Camera& cam, int W, int H,
     ui.rect(x0 + 20 * u, y0 + ph - 14 * u, (pw - 40 * u) * float(left), 3 * u, blue);
   }
   // ---- the admin's banner
-  if (!mp.banner.empty() && mp.clockSeconds() < mp.bannerUntil) {
-    std::string t = mp.banner + (mp.bannerFrom.empty() ? "" : "  \xE2\x80\x94 " + mp.bannerFrom);
-    float fs = 26 * u, pw = std::min(float(W) - 40 * u, ui.textWidth(t, fs, UiFont::CondItalic) + 60 * u), ph = 54 * u;
-    float x0 = (float(W) - pw) / 2, y0 = 22 * u;
-    ui.shadow(x0, y0, pw, ph, 4 * u, 10 * u, 0.3f);
-    ui.rect(x0, y0, pw, ph, ko);
-    ui.textFit(x0 + pw / 2, y0 + (ph - ui.lineHeight(fs, UiFont::CondItalic)) / 2, pw - 30 * u, fs, UiFont::CondItalic, white, t, UiAlign::Center);
+  if (!mp.banner.empty() && mp.clockSeconds() < mp.bannerUntil + 0.4) {
+    // (adminnew.js adminBanner + adminnew.css #admin-banner: the paper (brushClip 5303, 4, 3) 90u from the top, "SERVER
+    // MESSAGE · from" in red over the text in blue italic 30u, for 8 s; it fades and lifts 12u away)
+    const float d = ui.dpr(), xs = std::max(11 * d, 11 * u), fs = 30 * u;
+    const std::string head = "SERVER MESSAGE" + (mp.bannerFrom.empty() ? std::string() : " \xC2\xB7 " + mp.bannerFrom);
+    const double left = mp.bannerUntil - mp.clockSeconds(), age = 8 - left;
+    const float out = float(std::clamp(-left / 0.4, 0.0, 1.0)), in = float(std::clamp(age / 0.3, 0.0, 1.0));
+    const float maxW = float(W) * 0.8f - 80 * u;
+    std::vector<std::string> lines;   // (overflow-wrap: the text in lines that fit 80 vw)
+    {
+      std::string cur;
+      size_t p = 0;
+      const std::string& s = mp.banner;
+      while (p <= s.size()) {
+        size_t q = s.find(' ', p);
+        if (q == std::string::npos) q = s.size();
+        const std::string w = s.substr(p, q - p), t = cur.empty() ? w : cur + " " + w;
+        if (!cur.empty() && ui.textWidth(t, fs, UiFont::CondItalic, 0.02f) > maxW) { lines.push_back(cur); cur = w; } else cur = t;
+        p = q + 1;
+      }
+      if (!cur.empty()) lines.push_back(cur);
+    }
+    float tw = ui.textWidth(head, xs, UiFont::BodyHeavy, 0.2f);
+    for (const auto& l : lines) tw = std::max(tw, std::min(maxW, ui.textWidth(l, fs, UiFont::CondItalic, 0.02f)));
+    const float lh = fs * 1.15f, pw = tw + 80 * u, ph = 32 * u + xs + 8 * u + lh * float(lines.size());
+    const float x0 = (float(W) - pw) / 2, y0 = 90 * u - 12 * u * out;
+    ui.pushAlpha(in * (1 - out));
+    Ui::Shadow sh{0, 8 * u, 18 * u, ui_color::hex(0x00143c, 0.3f)};
+    ui.brushClip(x0, y0, pw, ph, white, 5303, 4, 3, u, &sh);
+    ui.textLH(x0 + pw / 2, y0 + 16 * u, xs, xs, UiFont::BodyHeavy, ui_color::red, head, UiAlign::Center, 0.2f);
+    float ly = y0 + 16 * u + xs + 8 * u;
+    for (const auto& l : lines) { ui.textFit(x0 + pw / 2, ly + (lh - ui.lineHeight(fs, UiFont::CondItalic)) / 2, pw - 40 * u, fs, UiFont::CondItalic, blue, l, UiAlign::Center, 0.02f); ly += lh; }
+    ui.popAlpha();
   }
   // ---- chat and server notes (bottom left, above the hints), the line being typed
   {

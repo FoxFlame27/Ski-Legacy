@@ -1,5 +1,6 @@
 #include "engine/renderer.h"
 #include "engine/shaders.h"
+#include "engine/shaders_clouds.h"
 #include "core/log.h"
 #include <algorithm>
 #include <chrono>
@@ -337,7 +338,11 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   particle_ = build("particles", "", shaders::kParticleVS, shaders::kParticleFS, true);
   impostor_ = build("impostors", "", shaders::kImpostorVS, shaders::kImpostorFS, true);
   snow_ = build("snowfall", "", shaders::kSnowVS, shaders::kSnowFS, false);
-  clouds_ = set_.fx >= 2 && !set_.lowShaders ? build("clouds", "", shaders::kFullscreenVS, shaders::kCloudFS, true, shaders::kSkyCommon) : gfx::Program{};
+  if (!noClouds_) {   // atmosphere.js's cloud scenery (every preset: the cards are capped by quality.clouds)
+    cardP_ = build("cloud_cards", "", shaders::kCloudCardVS, shaders::kCloudCardFS, true, shaders::kCloudTerrain);
+    deckP_ = build("cloud_deck", "", shaders::kCloudDeckVS, shaders::kCloudDeckFS, true, shaders::kCloudTerrain);
+    if (!cardP_ || !deckP_) noClouds_ = true;
+  }
   glare_ = set_.fx >= 2 ? build("sun_glare", "", shaders::kGlareVS, shaders::kGlareFS, false) : gfx::Program{};
   if (set_.fx >= 1 && !set_.lowShaders && !noMist_) {
     mist_ = build("mist", "", shaders::kFullscreenVS, shaders::kMistFS, true);
@@ -386,6 +391,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   makeSkyNoise();
   makeDetailTexture();
   bakeTextures();
+  bakeClouds();
   // the environment map (equirectangular, mips = roughness)
   int E = std::max(32, set_.envSize);
   env_ = dev.createRenderTarget(E, E / 2, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
@@ -560,13 +566,21 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
   fb.skyBelt = vec4(vec3(1.0f, 0.6f, 0.66f) * (lum(L.horizon) * 0.45f), nightF * (1 - overcast));
   vec3 md = glm::length(L.moonDir) > 0.5f ? glm::normalize(L.moonDir) : vec3(0, -1, 0);
   fb.moonGlow = vec4(vec3(0.05f, 0.075f, 0.13f) * (nightF * (1 - overcast * 0.85f) * float(sstep(-0.1, 0.15, md.y))), nightF * (1 - overcast * 0.9f));
-  float cover = set_.fx >= 1 && !noClouds_ ? std::clamp(0.17f + L.cloud * 0.72f + L.snow * 0.1f, 0.f, 0.92f) * (1 - L.clearAir * 0.8f) : 0.f;
+  const float cover = 0.f;   // (the native ray-marched cumulus layer and its shadows: replaced by atmosphere.js's clouds)
   fb.skyWisp = vec4(glm::mix(L.horizon, L.glow, 0.35f) * 0.55f + vec3(0.35f * dayF), cover * sc);
   fb.moonDir = vec4(md, nightF);
   fb.trueSun = vec4(sun, dayF * sunVisible);
   // the key light and the ambient: three's HemisphereLight + the IBL (envI) as sky.js sets them
   vec3 hemiC = skyLight(glm::mix(pal(AMB), vec3(0.62f, 0.68f, 0.78f) * (0.15f + 0.85f * dayF), overcast * 0.7f), SKY_LIGHT, overcast);
   vec3 hemiG = glm::mix(hemiC, vec3(0.75f, 0.78f, 0.85f), 0.5f) * 0.6f;
+  {   // atmosphere.js updateCloudLight: the clouds' key light (sun or moon), sky ambient (saturated blue on clear days,
+      // grey under overcast) and the snow's bounce
+    const float over = std::max(L.snow, L.cloud * 0.85f), k = 0.07f + (1 - 0.07f) * dayF;
+    const vec3 hc = glm::mix(pal(AMB), vec3(0.62f, 0.68f, 0.78f) * (0.15f + 0.85f * dayF), overcast * 0.7f);
+    cSun_ = L.sunColor * (L.sunIntensity * 0.46f);
+    cSky_ = glm::mix(vec3(hc.x * hc.x * 1.35f, hc.y * hc.y * 1.45f, hc.z * hc.z * 1.6f) * k, vec3(0.95f, 1.0f, 1.08f) * (k * 0.9f), over * 0.7f);
+    cGnd_ = vec3(0.05f, 0.07f, 0.11f) * (k * (1 + 2 * over));
+  }
   float hemiI = (0.04f + 0.08f * dayF) * (1 + 1.6f * overcast) * L.ambientScale;
   float envI = (ENVI[i] + (ENVI[i + 1] - ENVI[i]) * f) * (1 + 0.12f * overcast) * L.ambientScale * sc;
   if (L.interior) {
@@ -752,13 +766,6 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   fb.screen = vec4(float(rw_), float(rh_), 1.f / float(rw_), 1.f / float(rh_));
   float wind = 1 + L.wind * 3;
   fb.cloud = vec4(2900.f, 4100.f, 7.f * wind, 2.6f * wind);
-  {   // atmosphere.js: the sea of clouds' level follows the valley baseline, kept 260 m below the eye
-    double bz = cam_.pos.z - 200, baseY = bz > 0 ? -0.17 * bz * sstep(0, 450, bz) : 0;
-    double seaY = baseY + std::min(380.0 + L.cloud * 420 + L.mist * 220 + L.snow * 200, cam_.pos.y - baseY - 260);
-    float cl = L.cloud, nearR = float((4000 + (2400 - 4000) * sstep(0.15, 0.7, cl)) * (1 - L.snow) + 1800 * L.snow);
-    float cover = std::clamp(0.3f + cl * 0.35f + L.mist * 0.3f, 0.f, 0.9f) * (1 - L.clearAir);
-    cloudLow_ = vec4(float(seaY - 220), float(seaY + 260), cover, nearR);
-  }
   {   // the valley mist: morning / evening haze in the floors every day (atmosphere.js uMist), banks in misty weather
     vec3 ts = glm::length(L.trueSun) > 0.5f ? glm::normalize(L.trueSun) : ld;
     float lowSun = 1.f - fsmooth(0.22f, 0.62f, ts.y);
@@ -960,6 +967,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   else if (m.shading == 5) kind = 5;   // (a lamp's emission only: game/scenefx)
   else if (m.shading == 6) kind = 6;   // (the gondola cabin: its painted windows are glass)
   else if (m.shading == 4) kind = 4;   // (the mountains' rocks: world/scenery)
+  else if (m.shading == 8) kind = 8;   // (the snow on the roads and car parks: bus.js snowCover)
   else if (m.shading == 7) kind = 0;   // (plain standard shading, also when blended: the railcars' cabins, train.js)
   else if (m.alpha == Material::Alpha::Blend && m.roughness < 0.6f) kind = 3;
   else if (m.shading == 2 || (m.shading == 0 && m.baseTex && m.alpha != Material::Alpha::Blend && (m.paint == 0 || m.paint == 3) &&
@@ -967,7 +975,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   static const float STR[5] = {0, 0.35f, 0.45f, 0.5f, 0.5f}, FAR[5] = {1, 16, 22, 28, 34};
   vec4 f3(float(m.paint), float(kind), height, m.lumNorm);
   dev_->setVec4("uFlags3", glm::value_ptr(f3));
-  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], 0.f);
+  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], float(m.roadSnow));
   dev_->setVec4("uFlags4", glm::value_ptr(f4));
   dev_->setVec4("uFanBase", glm::value_ptr(m.fanBase));   // (fans.js crowd people: recolour, screen-door fade)
   dev_->setVec4("uFanCol", glm::value_ptr(m.fanCol));
@@ -1193,18 +1201,152 @@ void Renderer::snowPass() {
   }
 }
 
-void Renderer::cloudPass() {
-  if (!clouds_ || light_.interior || noClouds_) return;
+// ---------------------------------------------------------------- clouds (atmosphere.js)
+// The bakes (once): bakeNoise's 256 x 256 fbm and bakeAtlas's eight cloud shapes, ray-marched into the six-way-lit
+// impostor atlas (2 x 4 cells of 512 x 256 in two 1024 x 1024 RGBA8 maps, mip-mapped; the JS writes both maps in one
+// pass, here one pass each)
+void Renderer::bakeClouds() {
+  if (noClouds_) return;
   gfx::PipelineState ps;
-  ps.depth = gfx::DepthTest::Off; ps.depthWrite = false; ps.cull = gfx::Cull::None; ps.blend = gfx::Blend::Premul;
+  ps.depth = gfx::DepthTest::Off; ps.depthWrite = false; ps.cull = gfx::Cull::None;
+  gfx::Program np = build("cloud_noise", "", shaders::kFullscreenVS, shaders::kCloudNoiseFS, false);
+  gfx::Program bp = build("cloud_bake", "", shaders::kFullscreenVS, shaders::kCloudBakeFS, false);
+  if (!np || !bp) { noClouds_ = true; return; }
+  cloudNoiseRT_ = dev_->createRenderTarget(256, 256, true, gfx::TexFormat::RGBA8, false, gfx::TexFormat::Depth24);
+  dev_->bindRenderTarget(cloudNoiseRT_, 256, 256);
   dev_->setPipeline(ps);
-  dev_->useProgram(clouds_);
-  mat4 inv = glm::inverse(viewProj_);
-  dev_->setMat4("uInvViewProj", glm::value_ptr(inv));
-  vec2 nf(cam_.nearZ, cam_.farZ);
-  dev_->setVec2("uNearFar", glm::value_ptr(nf));
-  dev_->setVec4("uCloudLow", glm::value_ptr(cloudLow_));
+  dev_->useProgram(np);
+  const vec2 res(256.f, 256.f);
+  dev_->setVec2("uNoiseRes", glm::value_ptr(res));
   dev_->draw(emptyVi_, 3);
+  gfx::Texture nt = dev_->renderTargetColor(cloudNoiseRT_);
+  dev_->generateMipmaps(nt);
+  dev_->setSampling(nt, gfx::Filter::Trilinear, gfx::Wrap::Repeat, 1);
+  const int A = 1024;
+  const vec2 margin(16.f / 512.f, 12.f / 256.f), size(float(A / 2), float(A / 4));
+  const auto& cells = cloudShapes();
+  for (int o = 0; o < 2; o++) {
+    atlasRT_[o] = dev_->createRenderTarget(A, A, true, gfx::TexFormat::RGBA8, false, gfx::TexFormat::Depth24);
+    dev_->bindRenderTarget(atlasRT_[o], A, A);
+    dev_->clear(0, 0, 0, 0, true, false);
+    dev_->setPipeline(ps);
+    dev_->useProgram(bp);
+    dev_->setInt("uOut", o);
+    dev_->setVec2("uSize", glm::value_ptr(size));
+    dev_->setVec2("uMargin", glm::value_ptr(margin));
+    for (int i = 0; i < int(cells.size()); i++) {
+      const CloudShape& c = cells[size_t(i)];
+      const int x = (i % 2) * (A / 2), y = (i / 2) * (A / 4);
+      float sph[12 * 16] = {0};
+      for (size_t k = 0; k < c.S.size() && k < 48; k++)
+        for (int e = 0; e < 4; e++) sph[k * 4 + size_t(e)] = float(c.S[k][size_t(e)]);
+      dev_->setMat4("uSph", sph, 12);
+      dev_->setInt("uCount", int(c.S.size()));
+      dev_->setInt("uKind", c.kind == 2 ? 2 : 0);
+      dev_->setFloat("uFlat", c.flat);
+      dev_->setFloat("uSeed", float(i) * 7.31f);
+      const vec2 org{float(x), float(y)};
+      dev_->setVec2("uOrigin", glm::value_ptr(org));
+      // the shape's bounding box (+ room for the noise bulges): texels outside are left empty at once
+      vec3 box(-0.98f, 0.98f, 0.82f);
+      if (c.kind != 2) {
+        double x0 = 1e9, x1 = -1e9, y1 = -1e9;
+        for (const auto& s : c.S) { x0 = std::min(x0, s[0] - s[3] * 1.4); x1 = std::max(x1, s[0] + s[3] * 1.4); y1 = std::max(y1, s[1] + s[3] * c.flat * 1.4); }
+        box = vec3(float(std::max(-1.0, x0)), float(std::min(1.0, x1)), float(std::min(1.0, y1)));
+      }
+      dev_->setVec3("uBox", glm::value_ptr(box));
+      dev_->setViewport(x, y, A / 2, A / 4, true);
+      dev_->draw(emptyVi_, 3);
+    }
+    gfx::Texture t = dev_->renderTargetColor(atlasRT_[o]);
+    dev_->generateMipmaps(t);
+    dev_->setSampling(t, gfx::Filter::Trilinear, gfx::Wrap::Clamp, 1);
+  }
+  dev_->destroy(np);
+  dev_->destroy(bp);
+  dev_->bindRenderTarget({}, w_, h_);
+  // the cards' quad (x -0.5..0.5, y 0..1: anchored at the cloud base) and their instances; the deck's planes
+  const float q[8] = {-0.5f, 0, 0.5f, 0, 0.5f, 1, -0.5f, 1};
+  const uint16_t ix[6] = {0, 1, 2, 0, 2, 3};
+  cloudQuad_ = dev_->createBuffer(gfx::BufferUsage::Vertex, q, sizeof q);
+  cloudIdx_ = dev_->createBuffer(gfx::BufferUsage::Index, ix, sizeof ix);
+  cardBuf_ = dev_->createBuffer(gfx::BufferUsage::Vertex, nullptr, 420 * 48, true);
+  cardVi_ = dev_->createVertexInput({{0, 0, 2, gfx::AttribType::Float, false, 0, 8}, {1, 1, 4, gfx::AttribType::Float, false, 0, 48, true},
+                                     {2, 1, 4, gfx::AttribType::Float, false, 16, 48, true}, {3, 1, 4, gfx::AttribType::Float, false, 32, 48, true}},
+                                    {cloudQuad_, cardBuf_}, cloudIdx_);
+  deckVi_ = dev_->createVertexInput({{0, 0, 2, gfx::AttribType::Float, false, 0, 8}}, {cloudQuad_}, cloudIdx_);
+  // (their samplers: units of their own, the lighting's stay where build() put them)
+  dev_->useProgram(cardP_);
+  dev_->setInt("uAtlasA", U_BASE); dev_->setInt("uAtlasB", U_MR); dev_->setInt("uCloudTerrain", U_EMISSIVE);
+  dev_->setVec2("uMargin", glm::value_ptr(margin));
+  dev_->useProgram(deckP_);
+  dev_->setInt("uCloudNoise", U_NORMAL); dev_->setInt("uCloudTerrain", U_EMISSIVE);
+}
+
+void Renderer::setClouds(const CloudFrame& f) {
+  if (noClouds_) return;
+  cards_ = f.cards;
+  deckCover_ = f.cover; deckH_ = f.cloudH; deckAbove_ = f.deckAbove; deckLean_ = f.lean; deckDrift_ = f.drift;
+  if (f.tmapDirty && !f.tmap.empty()) {
+    const int n = int(std::lround(std::sqrt(double(f.tmap.size()))));
+    std::vector<uint16_t> half(f.tmap.size());
+    for (size_t i = 0; i < half.size(); i++) half[i] = glm::packHalf1x16(f.tmap[i]);
+    if (cloudTerrain_) dev_->destroy(cloudTerrain_);
+    gfx::TextureDesc d;
+    d.width = d.height = n; d.format = gfx::TexFormat::R16F; d.filter = gfx::Filter::Linear; d.wrap = gfx::Wrap::Repeat; d.mipmaps = false; d.anisotropy = 1;
+    cloudTerrain_ = dev_->createTexture(d, half.data());
+  }
+}
+
+// The cards (renderOrder 1) and the deck (2 seen from below, 0 from above), after the scene's transparent meshes
+void Renderer::cloudPass() {
+  if (noClouds_ || light_.interior || !cloudTerrain_) return;
+  const bool below = cam_.pos.y < double(deckH_) + 39;
+  gfx::PipelineState ps;
+  ps.depth = gfx::DepthTest::Less; ps.depthWrite = false; ps.cull = gfx::Cull::None; ps.blend = gfx::Blend::Premul;
+  auto cards = [&]() {
+    const uint32_t n = uint32_t(std::min<size_t>(cards_.size(), 420));
+    if (!n) return;
+    cardData_.resize(size_t(n) * 3);
+    for (uint32_t i = 0; i < n; i++) {
+      const CloudCard& c = cards_[i];
+      cardData_[i * 3] = vec4(vec3(c.pos - cam_.pos), c.mirror);
+      cardData_[i * 3 + 1] = c.b;
+      cardData_[i * 3 + 2] = c.c;
+    }
+    dev_->replaceBuffer(cardBuf_, cardData_.data(), cardData_.size() * sizeof(vec4));
+    dev_->setPipeline(ps);
+    dev_->useProgram(cardP_);
+    dev_->bindTexture(U_BASE, dev_->renderTargetColor(atlasRT_[0]));
+    dev_->bindTexture(U_MR, dev_->renderTargetColor(atlasRT_[1]));
+    dev_->bindTexture(U_EMISSIVE, cloudTerrain_);
+    dev_->setVec3("uCSun", glm::value_ptr(cSun_)); dev_->setVec3("uCSky", glm::value_ptr(cSky_)); dev_->setVec3("uCGnd", glm::value_ptr(cGnd_));
+    dev_->drawIndexed(cardVi_, gfx::IndexType::U16, 6, 0, n);
+  };
+  auto deck = [&]() {
+    if (deckCover_ <= 0.03f) return;
+    dev_->setPipeline(ps);
+    dev_->useProgram(deckP_);
+    dev_->bindTexture(U_NORMAL, dev_->renderTargetColor(cloudNoiseRT_));
+    dev_->bindTexture(U_EMISSIVE, cloudTerrain_);
+    dev_->setVec3("uCSun", glm::value_ptr(cSun_)); dev_->setVec3("uCSky", glm::value_ptr(cSky_)); dev_->setVec3("uCGnd", glm::value_ptr(cGnd_));
+    const vec2 off(float(cam_.pos.x - deckDrift_.x), float(cam_.pos.z - deckDrift_.y));
+    dev_->setVec2("uDeckOff", glm::value_ptr(off));
+    // the four layers 26 m apart, farthest first (three's transparent sort; the lean presets: the middle two only)
+    int order[4] = {0, 1, 2, 3};
+    auto dy = [&](int i) { return std::fabs(double(deckH_) + i * 26 - cam_.pos.y); };
+    std::sort(order, order + 4, [&](int a, int b) { return dy(a) > dy(b); });
+    for (int k = 0; k < 4; k++) {
+      const int i = order[k];
+      if (deckLean_ && i != 1 && i != 2) continue;
+      const vec4 dp(deckCover_, float(i), deckAbove_, 0.f);
+      dev_->setVec4("uDeck", glm::value_ptr(dp));
+      dev_->setFloat("uDeckY", float(double(deckH_) + i * 26 - cam_.pos.y));
+      dev_->drawIndexed(deckVi_, gfx::IndexType::U16, 6, 0, 1);
+    }
+  };
+  if (below) { cards(); deck(); } else { deck(); cards(); }
+  lastMat_ = nullptr;   // (units 0-4 were rebound: the next mesh sets its material again)
 }
 
 void Renderer::setGroundMap(const std::vector<float>& heights, int n, const dvec2& center, double span) {
@@ -1415,6 +1557,8 @@ void Renderer::endFrame() {
       drawItem(*it, false, ps, cur);
     }
   }
+  dev_->gpuPass("clouds");
+  cloudPass();
   // resolve; the depth copy the post passes and the particles read
   dev_->gpuPass("resolve");
   if (msaa_) dev_->resolve(msaa_, hdr_, rw_, rh_, true, true);
@@ -1423,8 +1567,6 @@ void Renderer::endFrame() {
   dev_->bindTexture(U_DEPTH, dev_->renderTargetDepth(depthCopy_));
   dev_->gpuPass("mist");
   mistPass();
-  dev_->gpuPass("clouds");
-  cloudPass();
   dev_->gpuPass("particles + snow + glare");
   particlePass();
   snowPass();

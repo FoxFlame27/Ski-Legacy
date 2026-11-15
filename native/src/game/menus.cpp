@@ -714,6 +714,8 @@ void Menus::scrPause() {
   button(x, y, 360 * u_, h, 36 * u_, "CONTROLS", 31, [this] { ctlBack_ = Screen::None; open(Screen::Controls); }); y += step;
   button(x, y, 360 * u_, h, 36 * u_, "STATS", 7, [this] { open(Screen::Stats); }); y += step;
   button(x, y, 360 * u_, h, 36 * u_, "SETTINGS", 11, [this] { open(Screen::Settings); }); y += step;
+  // (native: "Admin · new" opens with F10 / Ctrl+Shift+A; a controller has no such key, so Icey27 finds it here)
+  if (hooks.adminShown && hooks.adminShown()) { button(x, y, 360 * u_, h, 36 * u_, "ADMIN", 29, [this] { if (hooks.admin) hooks.admin(); }); y += step; }
   if (online) { button(x, y, 500 * u_, h, 36 * u_, "LEAVE MULTIPLAYER", 23, [this] { if (mp.leave) mp.leave(); }); y += step; }
   else { button(x, y, 360 * u_, h, 36 * u_, "MAIN MENU", 23, [this] { if (hooks.mainMenu) hooks.mainMenu(); }); y += step; }
   button(x, y, 500 * u_, h, 36 * u_, "RETURN TO VILLAGE", 19, [this] { if (hooks.village) hooks.village(); }); y += step + 10 * u_;

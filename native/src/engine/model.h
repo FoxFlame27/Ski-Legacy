@@ -25,7 +25,9 @@ struct Material {
   int mrImage = -1;                // (keepCpu) index of the metallic-roughness image (the outfits' baked finish)
   uint8_t paint = 0;               // (Phase 7) 1: car paint (an instance's tint replaces the colour), 2: livery (red -> tint)
   uint8_t shading = 0;             // renderer (5: a lamp's emission only, see additive; 6: the gondola cabin's glass; 7: plain standard, no Meshy detail and no glass even when blended): 0 automatic (the Meshy detail layer on Meshy materials, glass), 1 pine needles
-                                   // (vegetation.js), 2 force the detail layer, 3 plain (no detail layer), 4 rock (snow on top)
+                                   // (vegetation.js), 2 force the detail layer, 3 plain (no detail layer), 4 rock (snow on top),
+                                   // 8 the snow on a road / car park (bus.js snowCover; roadSnow: 1 road, 2 car park / junction mouth)
+  uint8_t roadSnow = 0;
   float lumNorm = 1;               // (pines) 1 / mean needle luminance of the texture (vegetation.js uLumNorm)
   float clearcoat = 0;             // a clear coat over the base (car paint gets one on fx >= 1)
   bool additive = false;           // shading 5 (a lamp's lit graphics): only its emission, added to the image; an

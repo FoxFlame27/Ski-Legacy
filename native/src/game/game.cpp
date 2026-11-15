@@ -36,6 +36,8 @@
 #include "game/people.h"
 #include "game/shapes.h"
 #include "game/weather.h"
+#include "game/adminpanel.h"
+#include "world/clouds.h"
 #include "world/groundmap.h"
 #include "game/interiors.h"
 #include "game/outfitshop.h"
@@ -669,6 +671,7 @@ int runGame(const GameOptions& opt) {
           dev->textureBytes() / 1048576.0, dev->bufferBytes() / 1048576.0, plat->memoryBytes() / 1048576.0);
 
   GroundMap groundMap;
+  CloudScenery clouds;   // (atmosphere.js: the cumulus impostors and the overcast deck)
   // profiling toggles: SKI_LEGACY_DEBUG=noterrain,notrees,novillage,noskier
   std::string dbg = std::getenv("SKI_LEGACY_DEBUG") ? std::getenv("SKI_LEGACY_DEBUG") : "";
   auto off = [&](const char* k) { return dbg.find(k) != std::string::npos; };
@@ -1436,6 +1439,16 @@ int runGame(const GameOptions& opt) {
   int skiFrame0 = 0, menuStep = 0;
   bool atRealKeys = false, textWanted = false;   // (autotest: the menus read the real events: keys pushed through SDL)
   std::string pendingPng;
+  // (debug: SKI_LEGACY_DEBUG=admintest) the admin panel driven as a player would (single player: --autotest; multiplayer:
+  // --mptest, before the dropped connection; the name with SKI_LEGACY_MPTEST_NAME=Icey27)
+  AdminPanel::TestHooks adminHooks;
+  adminHooks.playerPos = [&]() { return player.pos; };
+  adminHooks.banner = [&]() { return mp.banner; };
+  adminHooks.serverWeather = [&]() { return mp.weather(); };
+  adminHooks.serverHour = [&]() { return mp.hourNow().value_or(-1.0); };
+  adminHooks.shot = [&](const std::string& n) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, n.c_str()); };
+  adminHooks.key = [&](platform::Key k) { plat->pushKey(k, true); plat->pushKey(k, false); };
+  bool adminTestOk = true, adminTestDone = false;
   int64_t money0 = 0, liftMoney0 = 0;
   dvec3 spawnPos = player.pos;
   double spawnHeading = player.heading;
@@ -1582,6 +1595,82 @@ int runGame(const GameOptions& opt) {
     player.teleport(x - std::sin(yaw) * 1.8, z - std::cos(yaw) * 1.8, yaw);
     flash("Moved next to " + to, Hud::Flash::Good);
   };
+  // ("Admin · new", ui/adminnew.js + the old panel's free camera, admin.js: the account Icey27 only) game/adminpanel
+  auto adminRelease = [&](const std::string& what) -> bool {   // (adminnew.js releaseLocal)
+    if (what == "jail") { if (!police.jailed()) return false; police.skipJail(0.01); return true; }
+    if (what == "chase") { if (!police.wanted()) return false; police.clear("admin"); return true; }
+    if (what != "impound") return false;
+    bool any = false;
+    for (auto& e : drive.parked) if (e.owned && e.impoundDay > save.day) { e.impoundDay = -1; any = true; }
+    nlohmann::json& imp = save.data("impound", nlohmann::json::array());
+    if (!imp.empty()) { any = true; imp = nlohmann::json::array(); }
+    save.markDirty();
+    return any;
+  };
+  mp.host.adminRelease = [&](const std::string& what) { adminRelease(what); };
+  AdminHost ah;
+  ah.online = [&]() { return mp.active(); };
+  ah.account = [&]() { if (mp.active()) return mp.name; auto a = mp.account(); return a ? a->name : std::string(); };
+  ah.worldId = [&]() { return mp.worldId; };
+  ah.money = [&]() { return save.money; };
+  ah.addMoney = [&](int64_t d) { if (d >= 0) save.earn(d); else save.spend(-d, true); save.markDirty(); save.write(*plat); };
+  ah.hour = [&]() { return hour; };
+  ah.setHour = [&](double h) { hour = h; save.hour = h; save.markDirty(); };
+  ah.weather = [&]() { return weather.current(); };
+  ah.setWeather = [&](int w) { weather.set(w); weather.timer = 300; };   // (held a while before the weather moves on)
+  ah.releaseLocal = adminRelease;
+  ah.teleportRefusal = [&]() -> std::string {
+    if (rideKind != Ride::None || player.mode == PlayerMode::Sit || rooms.inside() || races.active() || heli.active() || heli.rescuing()) return "Get out first (vehicle, ride, race or inside)";
+    if (police.jailed() || police.arrestedNow()) return "Not while you are in prison";
+    return "";
+  };
+  ah.teleport = [&](double x, double z, double heading, const std::string& label) {
+    pc.fade();
+    player.setSkisOn(false);
+    player.teleport(x, z, heading);
+    flash(label, Hud::Flash::Good);
+  };
+  ah.places = [&]() {
+    std::vector<AdminHost::Place> out;
+    auto add = [&](const std::string& l, const std::string& s, double x, double z, double hd) { if (std::isfinite(x) && std::isfinite(z)) out.push_back({l, s, x, z, hd}); };
+    add("Legacy Village", "The plaza", 4, 34, PI);
+    add("Chalet village", "The Chaletweg", 500, 1075, 0);   // (chaletroad.js CHALET_PLACE: the chalet village's centre)
+    { dvec3 dp; dvec2 dout; if (showroom.doorSpot(dp, dout)) add("Autohaus", "The showroom door", dp.x, dp.z, 0); }   // (carrental.js door)
+    if (playData.hospital.ok) add("Medical centre", "The front door", playData.hospital.ex, playData.hospital.ez, std::atan2(playData.hospital.dirx, playData.hospital.dirz));
+    if (playData.prisonDef.hasOutside) add("Police station", "Police / Prison", playData.prisonDef.doorX, playData.prisonDef.doorZ, std::atan2(playData.prison.dirx, playData.prison.dirz));
+    for (const LiftLine& l : lifts.lines()) {   // every gondola's top station, facing downhill
+      if (!l.gondola) continue;
+      const double k = l.cfg.stationSize * 0.5 + 9, x = l.top.x + l.dir.x * k + l.sideV.x * 4, z = l.top.z + l.dir.y * k + l.sideV.y * 4;
+      const double gx = (world.height(x + 2, z) - world.height(x - 2, z)) / 4, gz = (world.height(x, z + 2) - world.height(x, z - 2)) / 4;
+      add(l.name, l.topName.empty() ? "Summit" : "Summit \xC2\xB7 " + l.topName, x, z, std::hypot(gx, gz) > 0.03 ? std::atan2(-gx, -gz) : std::atan2(l.dir.x, l.dir.y));
+    }
+    return out;
+  };
+  ah.camRefusal = [&]() -> std::string {
+    if (!started || paused || trans.active()) return "Free camera \xC2\xB7 not now";
+    if (races.active()) return "Free camera \xC2\xB7 free ride only";
+    if (rooms.inside()) return "Free camera \xC2\xB7 not inside";
+    if (police.jailed()) return "Free camera \xC2\xB7 not in prison";
+    if (heli.active()) return "Free camera \xC2\xB7 not while flying the helicopter";
+    return "";
+  };
+  ah.drop = [&](double x, double z, double heading) {   // admin.js dropHere
+    if (player.mode == PlayerMode::Sit || rideKind != Ride::None) return;
+    player.teleport(x, z, heading);
+    if (player.hasSkis) player.setSkisOn(true);
+    if (mp.active()) mp.adminOp("tp", {{"x", x}, {"z", z}, {"label", "Free camera drop"}}, {});
+    flash("Dropped here", Hud::Flash::Good);
+  };
+  ah.ground = [&](double x, double z) { return world.height(x, z); };
+  ah.flash = [&](const std::string& t, int k) { flash(t, k == 1 ? Hud::Flash::Bad : k == 2 ? Hud::Flash::Gold : Hud::Flash::Good); };
+  ah.sound = [&](const char* s) { audio.play(s); };
+  ah.op = [&](const std::string& op, nlohmann::json d, std::function<void(bool, const nlohmann::json&, const std::string&)> done) { mp.adminOp(op, std::move(d), std::move(done)); };
+  ah.clock = [&](double h, const std::string& w) { mp.adminClock(h, w); };
+  ah.relativeMouse = [&](bool on) { if (!opt.autotest && !mptest) plat->setRelativeMouse(on); };
+  ah.sensitivity = [&]() { return float(save.setting("sensitivity", 1)); };
+  AdminPanel admin(menus, ui, *plat, input, std::move(ah));
+  menus.hooks.adminShown = [&]() { return admin.allowed(); };
+  menus.hooks.admin = [&]() { menus.close(); admin.open(); };
   mp.host.onArrested = [&](const nlohmann::json& d) {
     if (rideKind == Ride::Passenger) { rideKind = Ride::None; player.standUp(player.pos.x + 2, player.pos.z, player.heading); }
     std::string by = d.value("by", std::string("the driver"));
@@ -1811,6 +1900,7 @@ int runGame(const GameOptions& opt) {
   if (mptest) {
     mp.forgetAccount();   // (only this test server's entry)
     mt.name = "Native" + std::to_string(1000 + unsigned(plat->timeSeconds() * 977) % 9000);
+    if (const char* e = std::getenv("SKI_LEGACY_MPTEST_NAME"); e && *e) mt.name = e;   // (admintest: Icey27)
     menus.mp.suggested = mt.name;
   }
   if (!started) menus.open(Menus::Screen::Main);
@@ -1965,8 +2055,9 @@ int runGame(const GameOptions& opt) {
 
     // (Phase 4) the pause menu (Esc / Menu / +), the trail map (M / View / Minus); menus and dialogs take the input
     bool uiOpen = menus.isOpen() || tmap.isOpen() || tmap.travelOpen();
+    if (started && !uiOpen && !paused) { admin.gameKeys(ev, !trans.active() && !races.active()); uiOpen = menus.isOpen(); }   // (Icey27: F10 / Ctrl+Shift+A, V)
     // any menu, dialog, shop / board / picker or the map: the pointer is free (whoever opened it, from wherever)
-    if (uiOpen && !opt.autotest && plat->relativeMouse()) plat->setRelativeMouse(false);
+    if (uiOpen && !opt.autotest && plat->relativeMouse() && !admin.flying()) plat->setRelativeMouse(false);
     if (started && !uiOpen && wasUiOpen) { input.clear(); input.holdOff(); }   // (the key that closed it: not also in the game)
     if (started && !uiOpen) {
       // (in every state: on foot, skiing, driving, riding; build mode is left first, as a dialog or the map closes)
@@ -1983,7 +2074,7 @@ int runGame(const GameOptions& opt) {
     if (uiOpen || !started) input.clear();
     wasUiOpen = uiOpen || !started;
     // text input on only while a text field has the focus (the multiplayer name, the chat)
-    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()) || (carCfg.typing && menus.customOpen("carconfig")); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
+    if (bool wantText = menus.textFieldFocused() || (mpv.chatOpen && mp.active()) || (carCfg.typing && menus.customOpen("carconfig")) || admin.typing(); wantText != textWanted) { textWanted = wantText; plat->setTextInput(wantText); }
     paused = started && menus.isOpen() && !menus.dialogOpen();
 
     // (Phase 4 autotest) the main menu -> PLAY -> SINGLEPLAYER -> CHOOSE YOUR SKIER -> START; pause -> SETTINGS -> a
@@ -2381,6 +2472,11 @@ int runGame(const GameOptions& opt) {
           }
           break;
         case 10:   // the connection drops: the server holds us, the reconnect resumes the same player
+          if (off("admintest") && !adminTestDone) {   // (first the admin panel, in the world)
+            if (admin.test(now, adminHooks, adminTestOk)) { adminTestDone = true; SL_INFO("[admintest] %s", adminTestOk ? "PASS" : "FAIL"); if (!adminTestOk) fail("the admin panel"); }
+            mt.f = 0; mt.t0 = now;
+            break;
+          }
           if (mt.f == 1) { mt.sent0 = mp.pid; mp.net.simulateDrop(); mt.waiting = true; SL_INFO("[mptest] connection dropped (no close frame): reconnecting..."); }
           if (mt.waiting && el > 1 && mp.net.isOpen() && mp.resumed && mp.pid == mt.sent0) {
             SL_INFO("[mptest] reconnected after %.1f s: resumed, world %d, pid %d, %zu other player(s), status '%s'", el, mp.worldId, mp.pid, mp.players.size(), mp.statusLine().c_str());
@@ -3982,6 +4078,7 @@ int runGame(const GameOptions& opt) {
       else if (hourBeforeRace >= 0) { hour = hourBeforeRace; hourBeforeRace = -1; }
     }
     light = timeOfDay(hour, dayLight);
+    weather.under = clouds.hasInversion ? weather.sea * (1 - smoothstep(clouds.inversionY - 10, clouds.inversionY + 60, cam.pos.y)) : 0;   // (sky.js: under the sea of clouds)
     { double t = (hour - 12) / 12 * PI; weather.apply(light, std::sin((28 * std::cos(t) + 4) * DEG)); }
     pc.night = light.night;   // (the night outdoors: the helicopter's lamps, the ward's windows)
     pc.hour = hour;
@@ -4282,6 +4379,11 @@ int runGame(const GameOptions& opt) {
         if ((frame - skiFrame0) % per == per - 1 && !opt.png.empty()) pendingPng = pngVariant(opt.png, sh.name.c_str());
       }
     }
+    if (opt.autotest && at == AT::Ski && off("admintest") && !adminTestDone && admin.test(now, adminHooks, adminTestOk)) {   // (the admin panel, single player)
+      adminTestDone = true;
+      SL_INFO("[admintest] %s", adminTestOk ? "PASS" : "FAIL");
+      running = false;
+    }
     if (opt.autotest && at == AT::Ski && off("trainfar")) {
       // (debug: SKI_LEGACY_DEBUG=trainfar,shotonly,nohud --autotest --frames 1400 --png o.png: both trains from outside at
       // 100 / 300 / 800 / 2000 m, one standing and one under way where there is one, by day and at night:
@@ -4334,10 +4436,16 @@ int runGame(const GameOptions& opt) {
         }
       }
     }
+    admin.camera(cam, ev, realDt);   // (Icey27's free camera takes the view; the world streams round it)
     { HitchScope hs(hitch, "terrain"); terrain.update(cam.pos); }
     { HitchScope hs(hitch, "trees"); scenery.update(cam.pos); }
     { HitchScope hs(hitch, "resort"); resort.update(frameDt, cam.pos); }
     { HitchScope hs(hitch, "groundmap"); groundMap.update(world, renderer, cam.pos, opt.autotest && frame < 3); }   // (the valley mist's height map)
+    {   // (atmosphere.js) the clouds round the camera
+      HitchScope hs(hitch, "clouds");
+      clouds.update(frameDt, world, cam.pos, {weather.snow, weather.cloud, weather.mist, weather.wind, weather.sea}, light.fogDensity, light.fogFalloff, q.clouds, frame < 3);
+      renderer.setClouds(clouds.frame);
+    }
     perf.add("streaming (terrain, trees, resort cells)", perfMs() - pt0);
     const double ptRig = perfMs();
     rig.showcase = showcaseOn;
@@ -4613,7 +4721,7 @@ int runGame(const GameOptions& opt) {
     }
     // (Phase 4) the 2D layer: HUD, menus / dialogs, the trail map (drawn after the 3D frame)
     ui.begin(renderer.width(), renderer.height());
-    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 11) && (!menus.isOpen() || menus.dialogOpen())) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
+    if (started && !off("nohud") && !tmap.isOpen() && !tmap.travelOpen() && !(uiTest && uiT.step >= 11) && (!menus.isOpen() || menus.dialogOpen()) && !admin.hidesHud()) {   // (a card dialog: over the HUD, as the web's modal; the route picker: the HUD steps aside)
       HudFrame hf;
       // (main.js hud.frame: a vehicle shows its own speed; on foot the speedometer reads 0, indoors too; it is hidden on
       // chairs and gondolas (seated, no vehicle); its label is the vehicle, else the skis ("(off)" when carried))
@@ -4739,6 +4847,7 @@ int runGame(const GameOptions& opt) {
     }
     pt0 = perfMs();
     perf.add("skier rig, audio, HUD + menus built", pt0 - ptRig);
+    frameLight.fogDensity += clouds.cloudInside * 0.012f;   // (main.js: riding through the overcast deck, a whiteout)
     renderer.beginFrame(cam, frameLight, player.renderPos);
     if ((rideKind == Ride::Rail || rideKind == Ride::Express) && seatView) {
       // (train.js: the cabin lit by its own strips, every surface in its own colour x (1, 0.86, 0.68) x 0.55 x uCabin:

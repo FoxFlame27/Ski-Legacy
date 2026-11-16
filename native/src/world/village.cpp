@@ -161,10 +161,43 @@ void Village::prepareRoads(const std::function<double(double, double)>& ground) 
     lines.push_back(std::move(L));
   }
   roadLines_ = std::move(lines);
+  // the buildings' pads (village.json "pads"): the ground levelled under each footprint at the level in front of its
+  // door (the drawn ground there: relief, cuts, the road), so no wall or door of a house is buried on a slope
+  pads_.clear();
+  if (j_->contains("pads"))
+    for (auto& P : (*j_)["pads"]) {
+      BuildingPad b;
+      b.x = P["x"]; b.z = P["z"]; b.yaw = P["yaw"]; b.hw = P["hw"]; b.hd = P["hd"]; b.fade = P.value("fade", 4.0);
+      const double c = std::cos(b.yaw), s = std::sin(b.yaw);
+      double gmin = 1e30, gmax = -1e30;
+      for (int u = -2; u <= 2; u++) for (int v = -2; v <= 2; v++) {
+        const double lx = u * b.hw * 0.5, lz = v * b.hd * 0.5, g = ground(b.x + lx * c + lz * s, b.z - lx * s + lz * c);
+        gmin = std::min(gmin, g); gmax = std::max(gmax, g);
+      }
+      const double front = ground(b.x + s * (b.hd + 1.5), b.z + c * (b.hd + 1.5));
+      b.level = P.contains("level") ? P["level"].get<double>() : std::clamp(front, gmin, gmax);
+      const double r = std::hypot(b.hw, b.hd) + b.fade;
+      b.lo = dvec2(b.x - r, b.z - r); b.hi = dvec2(b.x + r, b.z + r);
+      pads_.push_back(b);
+    }
+}
+
+double Village::padLevel(double x, double z, double h) const {
+  for (const BuildingPad& b : pads_) {
+    if (x < b.lo.x || z < b.lo.y || x > b.hi.x || z > b.hi.y) continue;
+    const double c = std::cos(b.yaw), s = std::sin(b.yaw), dx = x - b.x, dz = z - b.z;
+    const double ex = std::max(0.0, std::fabs(dx * c - dz * s) - b.hw), ez = std::max(0.0, std::fabs(dx * s + dz * c) - b.hd);
+    const double d = std::hypot(ex, ez);
+    if (d >= b.fade) continue;
+    const double t = d / b.fade, w = 1 - t * t * (3 - 2 * t);
+    h += (b.level - h) * w;
+  }
+  return h;
 }
 
 double Village::roadCut(double x, double z, double h) const {
   if (!reliefOn) return h;
+  h = padLevel(x, z, h);
   for (const RoadLine& L : roadLines_) {
     if (L.y.empty() || x < L.lo.x || z < L.lo.y || x > L.hi.x || z > L.hi.y) continue;
     double best = 1e30, y = 0, s = 0;
@@ -642,6 +675,7 @@ void Village::applyToPack(const std::string& pack, nlohmann::json& j, std::vecto
   struct Group { std::string model; float glow; nlohmann::json rows = nlohmann::json::array(); };
   std::vector<Group> groups;
   size_t nAdd = 0, nCol = 0;
+  placed_.clear();
   for (auto& p : V["props"]) {
     const std::string name = p["m"];
     auto M = model(name);
@@ -663,6 +697,7 @@ void Village::applyToPack(const std::string& pack, nlohmann::json& j, std::vecto
     const std::string mode = p.value("ground", std::string("min"));
     const double g = mode == "center" ? gc : mode == "max" ? gmax : gmin;
     const double y = g - p.value("sink", 0.0);
+    placed_.push_back({name, x, z, yaw, hw, hd, y, (bmax.y - bmin.y) * s.y});
     glm::dmat4 T = glm::translate(glm::dmat4(1), dvec3(x, y, z));
     T = glm::rotate(T, yaw, dvec3(0, 1, 0));
     T = glm::scale(T, s);

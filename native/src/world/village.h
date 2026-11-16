@@ -77,6 +77,13 @@ public:
   double roadCut(double x, double z, double h) const;
   /// a road's level along its points (prepareRoads; empty before)
   const std::vector<double>& roadLevel(size_t road) const { static const std::vector<double> none; return road < roadLines_.size() ? roadLines_[road].y : none; }
+  /// (debug: game/villagecheck.h) every prop as applyToPack placed it: model, centre, turn, half extents (from the
+  /// model's bounds), base height, height
+  struct Placed { std::string m; double x = 0, z = 0, yaw = 0, hw = 0, hd = 0, y = 0, h = 0; };
+  const std::vector<Placed>& placed() const { return placed_; }
+  const nlohmann::json* data() const { return j_.get(); }
+  const std::vector<dvec2>& walkNodes() const { return nodes_; }
+  const std::vector<std::vector<int>>& walkAdj() const { return adj_; }
   /// the move whose source holds (x, z), or null
   const Move* moveAt(double x, double z) const;
   /// (x, z) carried by m
@@ -85,12 +92,16 @@ public:
 private:
   void applyMoves(const std::string& pack, nlohmann::json& j, std::vector<uint8_t>& bin) const;
   std::vector<Move> moves_;
+  mutable std::vector<Placed> placed_;
   bool loaded_ = false;
   double x0_ = 0, z0_ = 0, step_ = 2;
   int nx_ = 0, nz_ = 0;
   std::vector<int16_t> relief_;
   struct RoadLine { std::vector<dvec2> p; std::vector<double> y, s; double half = 3.4; dvec2 lo{0}, hi{0}; };
   std::vector<RoadLine> roadLines_;
+  struct BuildingPad { double x = 0, z = 0, yaw = 0, hw = 0, hd = 0, fade = 4, level = 0; dvec2 lo{0}, hi{0}; };
+  std::vector<BuildingPad> pads_;
+  double padLevel(double x, double z, double h) const;
   std::shared_ptr<nlohmann::json> j_;
   std::vector<VillageDoor> hotels_;
   std::vector<VillageBuilding> buildings_;

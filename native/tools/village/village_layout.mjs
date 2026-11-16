@@ -77,14 +77,20 @@ const buildings = [];  // footprints (for the checks, the map, the doors)
 const places = { hotels: [], buildings: [], shops: [] };
 const front = (yaw) => [Math.sin(yaw), Math.cos(yaw)];
 
-/** A building: model id, centre, yaw (its front faces (sin yaw, cos yaw)), real width w (along its own x). */
+/** A building: model id, centre, yaw (its front faces (sin yaw, cos yaw)), real width w (along its own x). Declared
+ *  first (PENDING), then settled clear of everything (settleBuildings) and placed (emitBuilding). */
+const PENDING = [];
 function building(id, x, z, yaw, w, o = {}) {
-  const S = MODELS[id];
   // (on the Oberdorf's terraces: moved up or down the hill onto the middle of its terrace, clear of the walls)
   if (o.snap !== false && typeof U === 'function' && inPoly(x, z, OBERDORF)) {
     const u = U(x, z);
     for (let k = 0; k < BANDS.length - 1; k++) if (u >= BANDS[k] - 6 && u < BANDS[k + 1] - 6) { const du = (BANDS[k] + BANDS[k + 1]) / 2 - u; x += -0.6 * du; z += -0.8 * du; break; }
   }
+  const S = MODELS[id], k = w / S[0];
+  PENDING.push({ id, x, z, yaw, w, d: S[2] * k, o, x0: x, z0: z });
+}
+function emitBuilding(id, x, z, yaw, w, o = {}) {
+  const S = MODELS[id];
   const k = w / S[0];
   const d = S[2] * k, h = S[1] * k;
   props.push({ m: `village/${id}`, x: r3(x), z: r3(z), yaw: r3(yaw), s: [r3(k), r3(k), r3(k)], ground: o.ground || 'min', sink: o.sink ?? 0.35,
@@ -92,7 +98,7 @@ function building(id, x, z, yaw, w, o = {}) {
   const b = { id, name: o.name || id, x, z, yaw, w, d, h, kind: o.kind || 'house' };
   buildings.push(b);
   const [fx, fz] = front(yaw);
-  const door = { in: [r3(x + fx * (d * 0.5 * 0.84 - 0.6)), r3(z + fz * (d * 0.5 * 0.84 - 0.6))], out: [r3(x + fx * (d * 0.5 * 0.84 + 2.6)), r3(z + fz * (d * 0.5 * 0.84 + 2.6))] };
+  const door = { in: [r3(x + fx * (d * 0.5 * 0.84 - 0.6)), r3(z + fz * (d * 0.5 * 0.84 - 0.6))], out: [r3(x + fx * Math.max(d * 0.5 * 0.84 + 2.6, d * 0.5 + 1.8)), r3(z + fz * Math.max(d * 0.5 * 0.84 + 2.6, d * 0.5 + 1.8))] };
   b.door = door;
   if (b.kind === 'hotel') places.hotels.push({ name: b.name, x: r3(x), z: r3(z), ...door, w: o.weight ?? 1 });
   if (b.kind === 'shop') places.shops.push({ name: b.name, x: r3(x), z: r3(z), ...door });
@@ -227,6 +233,12 @@ const fa = (o) => new Float32Array(TB.buffer.slice(TB.byteOffset + o.off, TB.byt
 const roads = T.net.roads.map((r) => { const X = fa(r.X), Z = fa(r.Z); return Array.from(X, (x, i) => [x, Z[i]]); });
 const exportedRoads = roads.length;
 for (const pts of roads) for (const [x, z] of pts) if (inBox(x, z, 30)) keptPts.push([x, z, 14]);
+// (Nov 2026 audit: the railways' beds too, every 2 m: the terraces' fade raised the Legacy Express's station track by up
+// to 1.2 m at (-55, -158))
+for (const k of ['rail', 'express']) {
+  const r = T.net[k], X = fa(r.X), Z = fa(r.Z), off = k === 'express' ? r.trackOff : 0;
+  for (let i = 0; i < X.length; i++) if (inBox(X[i], Z[i], 30) && !r.tunnels.some((t) => i * r.step > t.s0 + 25 && i * r.step < t.s1 - 25)) keptPts.push([X[i], Z[i], off + 6]);
+}
 for (const R of VROADS) roads.push(R.pts);   // (the checks below: buildings / trees clear of our roads too)
 for (const L of T.net.lots) if (inBox(L.x, L.z, 60)) keptPts.push([L.x, L.z, Math.hypot(L.hw, L.hd) + 10]);
 for (const c of W.corridors) {
@@ -291,8 +303,11 @@ street('Silberhornweg', [[-6, 36], [-11.5, 51]], 4, { lamps: 0, pave: false });
 street('Silberhornweg', [[-46, 59], [-52, 72], [-56, 82]], 4, { lamps: 22 });
 // the Dorfstrasse for the walkers (its edge: the people's way along it; not paved, the road's ribbon is drawn)
 street('Dorfstrasse', DORF_CTRL.slice(3).map(([x, z]) => [x, z + 4.4]), 2, { lamps: 0, pave: false });
-// the Bergbahnstrasse: square's north-east corner -> the hotels and chalets by the helipad
-street('Bergbahnstrasse', [[14, -40], [26, -58], [36, -78], [46, -100], [60, -116]], 4, { lamps: 24 });
+// the Bergbahnstrasse: square's north-east corner -> the hotels and chalets of the north-east quarter. (Nov 2026 audit:
+// it ran north-east across the Legacy Express's open cutting just short of its tunnel portal (47, -74), with four
+// houses on the track; now it keeps north of the church's knoll and crosses over the tunnel 30 m past the portal, the
+// quarter east of the line)
+street('Bergbahnstrasse', [[14, -40], [30, -41], [46, -43], [64, -47], [80, -60], [92, -82], [100, -106]], 4, { lamps: 24 });
 // the Oberdorfstrasse: from the square's west side up through the terraces to the Legacy Express station (9.43 m)
 const OBS = [[-28, -10, 0], [-56, -10, 0], [-80, -16, null], [-104, -32, null], [-122, -56, null], [-136, -84, null], [-150, -108, null], [-166, -128, null], [-184, -140, BENCH], [-190, -143.8, BENCH]];
 // its levels: rising with the hill (the terraces' mid levels where it crosses them)
@@ -306,8 +321,10 @@ street('Oberdorfstrasse', OBS, 5.5, { relief: true, lamps: 24 });
 // lanes along the terraces (level: the terrace's), to the chalets' doors
 street('Sonnenhang', [[-104, -32], [-86, -50], [-66, -64], [-46, -80], [-34, -92]], 3.5, { lamps: 28 });
 street('Hangweg', [[-122, -56], [-104, -72], [-86, -92], [-68, -108], [-52, -124]], 3.5, { lamps: 28 });
-street('Kapellenweg', [[-80, -16], [-98, -4], [-120, 8], [-146, 14], [-170, 18]], 3.5, { lamps: 28 });
-street('Bahnhofweg', [[-150, -108], [-128, -122], [-104, -136], [-86, -140]], 3.5, { lamps: 28 });
+// (the Kapellenweg and the Bahnhofweg cross a terrace edge: ramps through it, at each terrace's level, as the
+// Bahnhofstiege; they start on the Oberdorfstrasse at its level there)
+street('Kapellenweg', [[-80, -16, OBS[2][2]], [-98, -4], [-120, 8], [-146, 14], [-170, 18]].map(([x, z, y]) => [x, z, y ?? r3(bandLevel(U(x, z)))]), 3.5, { lamps: 28, relief: true });
+street('Bahnhofweg', [[-150, -108, OBS[6][2]], [-128, -122], [-104, -136], [-86, -140]].map(([x, z, y]) => [x, z, y ?? r3(bandLevel(U(x, z)))]), 3.5, { lamps: 28, relief: true });
 // the way to the heliport (moved, see MOVES): from the Adlerhornweg's end past the Gasthof to the rental hut's door
 // and the pad's edge
 street('Heliweg', [[85, 14], [118, 20], [140, 40], [153.6, 51.5], [159.5, 53]], 3, { lamps: 22 });
@@ -315,10 +332,15 @@ street('Heliweg', [[85, 14], [118, 20], [140, 40], [153.6, 51.5], [159.5, 53]], 
 // square's north-west corner straight up the terraces (ramps through the terrace walls, at each terrace's level) to
 // the Legacy Express station's exit
 street('Postgasse', [[-70, 45.5], [-64, 20], [-58, -6]], 2.6, { lamps: 26 });
+// (Nov 2026 audit: the houses south of the Dorfstrasse had no way to their doors but across the bus road) the
+// Lärchenweg west of the bus road (Hotel Silberhorn, Lärchenhof, the garages), the Rathausweg east of it (the
+// Busbahnhof's back, the Gemeindeamt, the Residenz Edelweiss)
+street('Lärchenweg', [[-12, 57], [-14, 90], [-15, 120], [-16, 146]], 2.6, { lamps: 26 });
+street('Rathausweg', [[8, 59], [5, 90], [34, 91], [34, 118]], 2.6, { lamps: 26 });
 street('Werkstattgasse', [[-139, 45.5], [-142, 30], [-146, 14]], 2.6, { lamps: 26 });
 {
   const lv = (x, z) => r3(bandLevel(U(x, z)));
-  const pts = [[-14, -48], [-22, -66], [-34, -92], [-52, -124], [-86, -140], [-130, -146], [-172, -146], [-186, -144]].map(([x, z]) => [x, z, lv(x, z)]);
+  const pts = [[-14, -48], [-19, -68], [-32, -93], [-52, -124], [-86, -140], [-130, -146], [-172, -146], [-186, -144]].map(([x, z]) => [x, z, lv(x, z)]);
   pts[0][2] = 0;
   pts[pts.length - 1][2] = BENCH;
   street('Bahnhofstiege', pts, 3, { relief: true, lamps: 26 });
@@ -339,44 +361,116 @@ building('hotel_tyrol', -38, 33, E, 24, { name: 'Hotel Tirolerhof', kind: 'hotel
 building('shop_pastel', -15, 29, E, 17, { name: 'Boutique Kristall', kind: 'shop' });
 building('shop_timber', 20, 30, Wt, 15, { name: 'Bergsport Rainer', kind: 'shop' });
 // north side: the lift hall (tickets, ski school, lockers) beside the Legacy Gondola; the sports shop at the corner
-building('lift_hall', -37, -62, facing(1, 0.35), 28, { name: 'Bergbahnen · Skischule', kind: 'lift' });
-building('sports_shop', 42, -46, facing(-0.75, 0.66), 20, { name: 'Intersport Legacy', kind: 'shop' });
+building('lift_hall', -41, -63, facing(1, 0.35), 23, { name: 'Bergbahnen · Skischule', kind: 'lift' });
+building('sports_shop', 34, -54, facing(-0.75, 0.66), 20, { name: 'Intersport Legacy', kind: 'shop' });
 // the church on its knoll east of the square, its stair from the market
-building('church', 56, -10, Wt, 30, { name: 'Pfarrkirche St. Georg', kind: 'church', colK: 0.4, ground: 'center', sink: 0.5 });
+building('church', 56, -10, Wt, 30, { name: 'Pfarrkirche St. Georg', kind: 'church', colK: 0.4, ground: 'center', sink: 0.5, settle: false });
 // the hotels south-east along the Adlerhornweg, the après-ski inn at the Adlerhorn Gondola
 building('hotel_grand', 68, 42, N, 34, { name: 'Grand Hotel Legacy', kind: 'hotel', weight: 2 });
 building('restaurant_stube', 106, 34, N, 17, { name: 'Gasthof Adlerhorn', kind: 'shop' });
 building('hotel_lodge', 118, 74, Wt, 34, { name: 'Mountain Lodge', kind: 'hotel', weight: 1.6 });
 // inside the road's loop: the bus terminus (Postauto station), the town hall and post office, apartments
-building('bus_terminal', 19, 77, N, 22, { name: 'Busbahnhof', kind: 'station' });
+building('bus_terminal', 20, 77.5, N, 22, { name: 'Busbahnhof', kind: 'station' });
 building('town_hall', 22, 104, Wt, 18, { name: 'Gemeindeamt · Post', kind: 'civic' });
 building('apartment_lodge', 40, 102, facing(-0.5, -0.86), 14, { name: 'Residenz Edelweiss', kind: 'hotel', weight: 0.8 });
 // south-west, toward the Silberhorn Gondola
 building('hotel_modern', -33, 76, E, 24, { name: 'Hotel Silberhorn', kind: 'hotel', weight: 1.2 });
 building('apartment_modern', -32, 112, E, 20, { name: 'Appartements Lärchenhof', kind: 'house' });
 building('garages', -28, 140, E, 18, { name: 'Garagen', kind: 'house' });
-// north-east by the Bergbahnstrasse: an old Valais hotel and chalets toward the helipad
-building('hotel_valais', 42, -84, Wt, 13, { name: 'Hotel Walliserhof', kind: 'hotel', weight: 0.8 });
-building('chalet_classic', 62, -70, facing(-1, 0.4), 13, { name: 'Chalet Bergkristall' });
-building('shop_timber', 30, -104, E, 16, { name: 'Ski Service Pro', kind: 'shop' });
-building('chalet_stone', 70, -98, Wt, 11, { name: 'Haus Enzian' });
+// north-east by the Bergbahnstrasse, east of the Legacy Express (over its tunnel): an old Valais hotel, the ski
+// service and chalets (Nov 2026 audit: they stood on the open track by the portal)
+building('hotel_valais', 97, -62, facing(-1, -0.1), 13, { name: 'Hotel Walliserhof', kind: 'hotel', weight: 0.8 });
+building('chalet_classic', 108, -88, facing(-1, 0.1), 13, { name: 'Chalet Bergkristall' });
+building('shop_timber', 72, -78, facing(1, 0.3), 16, { name: 'Ski Service Pro', kind: 'shop' });
+building('chalet_stone', 82, -104, facing(1, 0.3), 11, { name: 'Haus Enzian' });
 // the Oberdorf terraces: apartment houses low down, chalets higher up, facing south-east over the village
 const SE = facing(0.6, 0.8);
-building('apartment_lodge', -70, -40, facing(0.8, 0.6), 16, { name: 'Haus Alpenblick', kind: 'hotel', weight: 0.6 });
+building('apartment_lodge', -62, -32, facing(0.8, 0.6), 16, { name: 'Haus Alpenblick', kind: 'hotel', weight: 0.6, snap: false });
 building('shop_pastel', -78, 0, facing(0.2, -1), 19, { name: 'Boutiquen Oberdorf', kind: 'shop' });
 building('chalet_modern', -62, -82, SE, 13, { name: 'Chalet Nova' });
 building('chalet_classic', -88, -66, SE, 13, { name: 'Chalet Heidi' });
 building('hotel_valais', -110, -18, facing(1, -0.2), 13, { name: 'Pension Arvenstube', kind: 'hotel', weight: 0.6 });
-// (round 3: across the Dorfstrasse from the Autohaus and the police station, facing the road)
-building('chalet_small', -108, 63, N, 8, { name: 'Stadel' });
-building('chalet_stone', -141, 63, N, 11, { name: 'Haus Bergfrieden' });
+// (round 3: across the Dorfstrasse, facing the road; Nov 2026 audit: further east, out of the piste that comes down
+// to the Silberhorn Gondola south of the road west of x -110)
+building('chalet_small', -76, 62, N, 8, { name: 'Stadel' });
+building('chalet_stone', -62, 63, N, 11, { name: 'Haus Bergfrieden' });
 building('apartment_modern', -136, -40, SE, 20, { name: 'Residenz Panorama', kind: 'hotel', weight: 0.6 });
 building('chalet_small', -104, -96, SE, 8, { name: 'Heustadel' });
 building('chalet_modern', -124, -86, facing(0.8, 0.6), 13, { name: 'Chalet Lumière' });
 building('chalet_stone', -172, -96, facing(1, 0.3), 11, { name: 'Haus Edelweiss' });
 building('chalet_classic', -158, -66, facing(1, 0.2), 13, { name: 'Chalet Gemsblick' });
-building('hotel_tyrol', -168, -12, facing(1, 0.1), 22, { name: 'Alpengasthof Post', kind: 'hotel', weight: 0.8 });
-building('restaurant_stube', -176, -122, facing(0.6, 0.8), 15, { name: 'Bahnhofbeizli', kind: 'shop' });
+building('hotel_tyrol', -166.9, 5.8, SE, 22, { name: 'Alpengasthof Post', kind: 'hotel', weight: 0.8, snap: false });
+building('restaurant_stube', -190.5, -130, N, 15, { name: 'Bahnhofbeizli', kind: 'shop', snap: false });
+
+// ---------------------------------------------------------------- clearances (Nov 2026 audit)
+// What every village piece keeps clear of (game/villagecheck.h checks the result in the game): the railways' open
+// stretches (not deep in a tunnel), the pistes and race corridors, the roads with their shoulders and the bus legs, the
+// car parks, the lifts' stations and low cables, the footpaths, the moved sites; on the Oberdorf the terrace it stands
+// on (no house across a terrace wall).
+const sDist = (x, z, pts) => { let d = 1e9; for (let q = 1; q < pts.length; q++) { const [ax, az] = pts[q - 1], [bx, bz] = pts[q], ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, t = clamp(((x - ax) * ex + (z - az) * ez) / l2, 0, 1); d = Math.min(d, Math.hypot(ax + ex * t - x, az + ez * t - z)); } return d; };
+const RAILS = [];
+for (const k of ['rail', 'express']) {
+  const r = T.net[k], X = fa(r.X), Z = fa(r.Z), pts = [];
+  for (let i = 0; i < X.length; i++) if (inBox(X[i], Z[i], 60) && !r.tunnels.some((t) => i * r.step > t.s0 + 25 && i * r.step < t.s1 - 25)) pts.push([X[i], Z[i]]);
+  RAILS.push({ k, pts, off: k === 'express' ? r.trackOff : 0 });
+}
+const railDist = (x, z) => { let d = 1e9; for (const L of RAILS) for (const [a, b] of L.pts) if (Math.abs(a - x) < 30 && Math.abs(b - z) < 30) d = Math.min(d, Math.hypot(a - x, b - z) - L.off); return d; };
+const PISTES = W.corridors.filter((c) => c[5] !== 2 && Math.hypot(c[2] - c[0], c[3] - c[1]) >= 5 && inBox(c[0], c[1], 300));
+const pisteDist = (x, z) => { let d = 1e9; for (const c of PISTES) d = Math.min(d, sDist(x, z, [[c[0], c[1]], [c[2], c[3]]]) - c[4]); return d; };
+const LEGS = (T.net.busLegs || []).map((r) => { const X = fa(r.X), Z = fa(r.Z); return Array.from(X, (x, i) => [x, Z[i]]); });
+const ALLROADS = [...roads, ...LEGS];
+const roadDist = (x, z) => { let d = 1e9; for (const pts of ALLROADS) if (pts.length && pts.some(([a, b]) => Math.abs(a - x) < 80 && Math.abs(b - z) < 80)) d = Math.min(d, sDist(x, z, pts)); return d; };
+const LOTS = T.net.lots.map((L) => { const m = moveOf(L.x, L.z); if (!m) return L; const [x, z] = movePt(m, L.x, L.z), c = Math.cos(m.rot), sn = Math.sin(m.rot); return { ...L, x, z, ux: L.ux * c + L.uz * sn, uz: -L.ux * sn + L.uz * c, vx: L.vx * c + L.vz * sn, vz: -L.vx * sn + L.vz * c }; });
+const inLot = (x, z, m) => LOTS.some((L) => { const dx = x - L.x, dz = z - L.z; return Math.abs(dx * L.ux + dz * L.uz) < L.hw + m && Math.abs(dx * L.vx + dz * L.vz) < L.hd + m; });
+const LIFTS = R.lifts.filter((L) => inBox(L.bottom[0], L.bottom[2], 60) || inBox(L.top[0], L.top[2], 60));
+const liftClear = (x, z, m) => {
+  for (const L of LIFTS) for (const [e, u0] of [[L.bottom, 0], [L.top, L.L]]) {
+    const dx = x - L.bottom[0], dz = z - L.bottom[2], u = dx * L.dir[0] + dz * L.dir[1], lat = -dx * L.dir[1] + dz * L.dir[0];
+    if (Math.abs(u - u0) < L.cfg.stationSize / 2 + 8 + m && Math.abs(lat) < L.cfg.stationSize / 2 + 4 + m) return false;
+    // (the cables low over the village: the first 250 m)
+    if (u > 0 && u < 250 && Math.abs(lat) < L.cfg.side + 4 + m) return false;
+    void e;
+  }
+  return true;
+};
+const fpSamples = (x, z, yaw, hw, hd) => { const o = [], c = Math.cos(yaw), s = Math.sin(yaw), nu = Math.max(1, Math.ceil(hw)), nv = Math.max(1, Math.ceil(hd)); for (let i = 0; i <= nu; i++) for (let j = 0; j <= nv; j++) { const lx = -hw + 2 * hw * i / nu, lz = -hd + 2 * hd * j / nv; o.push([x + lx * c + lz * s, z - lx * s + lz * c]); } return o; };
+const inRect = (b, x, z, m) => { const c = Math.cos(b.yaw), sn = Math.sin(b.yaw), dx = x - b.x, dz = z - b.z; return Math.abs(dx * c - dz * sn) < b.w / 2 + m && Math.abs(dx * sn + dz * c) < b.d / 2 + m; };
+/** why a building's footprint at (x, z) is not clear ('' when it is) */
+function buildingBlocked(p, x, z) {
+  const pts = fpSamples(x, z, p.yaw, p.w / 2, p.d / 2), church = p.id === 'church';
+  for (const [a, b] of pts) {
+    if (railDist(a, b) < 1.42 + 4.5 + 0.3) return 'rail';
+    if (pisteDist(a, b) < 0.5) return 'piste';
+    if (roadDist(a, b) < 3.4 + 3.5 + 0.3) return 'road';
+    if (inLot(a, b, 2.3)) return 'car park';
+    if (!liftClear(a, b, 1)) return 'lift';
+    for (const st of streets) if (st.walk && sDist(a, b, st.pts) < st.w / 2 + 1.0) return `street ${st.name}`;
+    for (const o of buildings) if (inRect(o, a, b, 1.5)) return `building ${o.name}`;
+    for (const m of MOVES) if (Math.hypot(a - m.to[0], b - m.to[1]) < m.r + 1.5) return `site ${m.name}`;
+    if (!church && distPoly(a, b, KNOLL.poly) < 3) return 'knoll';
+  }
+  // a terrace each: every corner on the same band, 2.5 m clear of its walls
+  if (inPoly(x, z, OBERDORF) || pts.some(([a, b]) => inPoly(a, b, OBERDORF))) {
+    const us = pts.map(([a, b]) => U(a, b)), lo = Math.min(...us), hi = Math.max(...us);
+    const edges = [-1e9, ...BANDS, 1e9];
+    if (!edges.some((e, k) => k + 1 < edges.length && lo >= e + 2.5 && hi <= edges[k + 1] - 2.5)) return 'terrace wall';
+  }
+  return '';
+}
+let nSettled = 0;
+for (const p of PENDING) {
+  let best = null;
+  const why0 = p.o.settle === false ? '' : buildingBlocked(p, p.x, p.z);
+  if (!why0) best = [p.x, p.z];
+  for (let r = 1; r <= 16 && !best; r += 1) for (let a = 0; a < 24 && !best; a++) {
+    const x = p.x + Math.cos(a * PI / 12) * r, z = p.z + Math.sin(a * PI / 12) * r;
+    if (!buildingBlocked(p, x, z)) best = [x, z];
+  }
+  if (!best) { log(`SETTLE ${p.o.name || p.id} at (${p.x.toFixed(1)}, ${p.z.toFixed(1)}): ${why0}, no clear spot within 16 m: left`); best = [p.x, p.z]; }
+  else if (why0) { log(`SETTLE ${p.o.name || p.id}: ${why0} at (${p.x.toFixed(1)}, ${p.z.toFixed(1)}) -> (${best[0].toFixed(1)}, ${best[1].toFixed(1)})`); nSettled++; }
+  emitBuilding(p.id, best[0], best[1], p.yaw, p.w, p.o);
+}
+log(`buildings settled: ${nSettled} moved clear`);
 
 // ---------------------------------------------------------------- the relief grid
 const STEP = 2;
@@ -531,6 +625,9 @@ const insideBuilding = (x, z, m) => buildings.some((b) => {
 });
 let nWalls = 0;
 const WALL_LEN = 7.2;
+const WALLS = [];   // (their footprints, for the lamps, trees and door paths)
+const inWall = (x, z, m) => WALLS.some((w) => inRect(w, x, z, m));
+const stepAt = (x, z, r) => { let lo = 1e9, hi = -1e9; for (const [a, b] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) { const g = groundAt(x + a, z + b); lo = Math.min(lo, g); hi = Math.max(hi, g); } return hi - lo; };
 function wallsAlong(ax, az, bx, bz, nx, nz) {   // n: toward the upper side
   const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.round(L / WALL_LEN));
   const len = L / n, yaw = facing(-nx, -nz);
@@ -538,6 +635,10 @@ function wallsAlong(ax, az, bx, bz, nx, nz) {   // n: toward the upper side
     const t = (i + 0.5) / n, x = ax + (bx - ax) * t, z = az + (bz - az) * t;
     const lo = groundAt(x - nx * 3, z - nz * 3), hi = groundAt(x + nx * 3, z + nz * 3), dh = hi - lo;
     if (dh < 0.9 || nearStreet(x, z, 2.5) || insideBuilding(x, z, 1) || nearVillage(x, z) < 0.85) continue;
+    // (Nov 2026 audit: its ends too, against every footpath and house: a wall poked into the lanes and paths)
+    const ends = [[x - (bx - ax) / L * len * 0.5, z - (bz - az) / L * len * 0.5], [x + (bx - ax) / L * len * 0.5, z + (bz - az) / L * len * 0.5], [x, z]];
+    if (ends.some(([ex, ez]) => insideBuilding(ex, ez, 1.5) || streets.some((st) => st.walk && sDist(ex, ez, st.pts) < st.w / 2 + 2.0))) continue;
+    WALLS.push({ x, z, yaw, w: len, d: 2.6 });
     // the wall stands over the 2 m slope between the levels: 2.6 m thick, its top 0.35 m over the upper level
     const H = dh + 0.35 + 0.4;
     props.push({ m: 'village/retaining_wall', x: r3(x), z: r3(z), yaw: r3(yaw), s: [r3(len / 1.899 * 1.04), r3(H / 0.666), r3(2.6 / 0.615)],
@@ -575,14 +676,18 @@ log(`${nWalls} retaining wall sections`);
 // ---------------------------------------------------------------- street furniture
 // lamp posts along the streets (alternating sides, at the paving's edge), trees in the gaps, benches, the fountain
 let nLamps = 0;
-const lampAt = (x, z, yaw) => { prop('lamp_post', x, z, yaw, { h: 3.6, sink: 0.05, glow: 6, col: { r: 0.25, brk: 27.7778, lamp: 1 }, lamp: true }); nLamps++; };
+// (Nov 2026 audit: not in a house or a wall, not on another footpath, not on a step, not on a piste, a road or a
+// railway; false: left out)
+const lampOk = (x, z) => !insideBuilding(x, z, 0.8) && !inWall(x, z, 0.6) && stepAt(x, z, 0.8) < 0.5 && pisteDist(x, z) > 0.5 &&
+  roadDist(x, z) > 3.4 + 1.8 && railDist(x, z) > 1.42 + 2.2 && !inLot(x, z, 0.3) && !streets.some((st) => st.walk && sDist(x, z, st.pts) < st.w / 2 + 0.95);
+const lampAt = (x, z, yaw) => { if (!lampOk(x, z)) return; prop('lamp_post', x, z, yaw, { h: 3.6, sink: 0.05, glow: 6, col: { r: 0.25, brk: 27.7778, lamp: 1 }, lamp: true }); nLamps++; };
 for (const s of streets) {
   if (!s.lamps) continue;
   let acc = s.lamps * 0.5, side = 1;
   for (let q = 1; q < s.pts.length; q++) {
     const [ax, az] = s.pts[q - 1], [bx, bz] = s.pts[q], L = Math.hypot(bx - ax, bz - az), dx = (bx - ax) / L, dz = (bz - az) / L;
     for (let t = acc; t < L; t += s.lamps) {
-      const off = s.w / 2 + 0.7, x = ax + dx * t - dz * off * side, z = az + dz * t + dx * off * side;
+      const off = s.w / 2 + 1.0, x = ax + dx * t - dz * off * side, z = az + dz * t + dx * off * side;
       side = -side;
       if (insideBuilding(x, z, 0.8)) continue;
       lampAt(x, z, facing(dz * side, -dx * side));
@@ -620,16 +725,17 @@ for (const R of VROADS) {
 }
 log(`our roads: ${nRoadLamps} lamps, ${nRoadBanks} snow banks`);
 // the square's corners and the bus terminus get their lamps too
-for (const [x, z] of [[-18, 24], [18, 26], [-20, -34], [24, -34], [10, 40], [-4, 42]]) lampAt(x, z, 0);
+for (const [x, z] of [[-21, 21], [22, 22], [-20, -34], [24, -34], [10, 40]]) lampAt(x, z, 0);
 log(`${nLamps} lamp posts`);
+const spot = (x, z, r) => { const ok = (a, b) => !insideBuilding(a, b, r + 0.8) && !inWall(a, b, r + 0.5) && stepAt(a, b, r) < 0.5 && roadDist(a, b) > 3.4 + r + 0.8 && !streets.some((st) => st.walk && sDist(a, b, st.pts) < st.w / 2 + r + 0.3); if (ok(x, z)) return [x, z]; for (let rr = 1; rr <= 12; rr++) for (let a = 0; a < 16; a++) { const tx = x + Math.cos(a * PI / 8) * rr, tz = z + Math.sin(a * PI / 8) * rr; if (ok(tx, tz)) { log(`spot (${x}, ${z}) -> (${tx.toFixed(1)}, ${tz.toFixed(1)})`); return [tx, tz]; } } log(`spot (${x}, ${z}): none clear`); return [x, z]; };
 prop('village/fountain', -14, 14, 0.3, { w: 4.2, sink: 0.1, col: { r: 2.1 } });
-prop('village/fountain', -150, -100, 0.8, { w: 3.2, sink: 0.1, col: { r: 1.6 } });
+prop('village/fountain', ...spot(-147, -89, 1.8), 0.8, { w: 3.2, sink: 0.1, col: { r: 1.6 } });
 prop('village/bus_shelter', -54, 92, facing(1, 0), { w: 5, col: { k: 0.45 } });
 prop('village/bus_shelter', 30, 50, facing(0, 1), { w: 5, col: { k: 0.45 } });
 // trees between the buildings (the game's own pine), benches by the fountain
 const TREES = [[-48, 22], [-50, -6], [-48, 56], [-12, 60], [36, 64], [86, 46], [90, 28], [96, 62], [-20, 96], [6, 92], [36, 88], [60, 120],
   [-60, -60], [-96, -46], [-74, -100], [-112, -60], [-138, -64], [-120, -110], [-150, -84], [-96, -126], [-48, -106], [-160, 6], [-136, 6],
-  [56, -86], [80, -82], [24, -86], [-48, 100], [-46, 128], [-12, 120], [52, -60]];
+  [110, -60], [88, -120], [118, -104], [-48, 100], [-46, 128], [-12, 120], [78, -36]];
 // (round 3) no tree on a road, a car park, a yard or a footpath: each checked against all of them and moved off to the
 // nearest clear spot within 14 m (else left out)
 const segDist = (x, z, pts) => { let d = 1e9; for (let q = 1; q < pts.length; q++) { const [ax, az] = pts[q - 1], [bx, bz] = pts[q], ex = bx - ax, ez = bz - az, l2 = ex * ex + ez * ez || 1, t = clamp(((x - ax) * ex + (z - az) * ez) / l2, 0, 1); d = Math.min(d, Math.hypot(ax + ex * t - x, az + ez * t - z)); } return d; };
@@ -640,6 +746,9 @@ const treeClear = (x, z, trunk = 1.2) => {
   for (const L of lotsNow) { const dx = x - L.x, dz = z - L.z; if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + trunk + 1 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + trunk + 1) return false; }
   for (const m of MOVES) if (Math.hypot(x - m.to[0], z - m.to[1]) < m.r) return false;
   for (const st of streets) if (st.walk && segDist(x, z, st.pts) < st.w / 2 + trunk + 0.6) return false;
+  // (Nov 2026 audit: the bus legs, the railways (the crown clear of the trains), the pistes, the lifts, the walls, steps)
+  for (const pts of LEGS) if (pts.length && segDist(x, z, pts) < 3.4 + 2.5 + trunk) return false;
+  if (railDist(x, z) < 1.42 + 3.5 + 0.6 || pisteDist(x, z) < 0.5 || !liftClear(x, z, 0) || inWall(x, z, 1.5) || stepAt(x, z, 1.2) > 0.6) return false;
   return true;
 };
 let treesMoved = 0, treesOut = 0;
@@ -655,8 +764,8 @@ for (let [x, z] of TREES) {
   prop(k < 0.5 ? 'pine_tree' : 'pine_tree2', x, z, k * 6.28, { h: 9 + k * 6, sink: 0.3, col: { r: 0.45 } });
 }
 log(`trees: ${TREES.length}, ${treesMoved} moved off a road / path / yard, ${treesOut} left out`);
-for (const [x, z, yaw] of [[-18.5, 12, E], [-9.5, 16, Wt], [-26, -2, E], [-80, -24, SE], [-140, -100, SE], [50, 20, N], [-30, 60, E]])
-  prop('wooden_bench', x, z, yaw, { w: 1.9, sink: 0.02, col: { k: 0.4 } });
+for (const [x, z, yaw] of [[-18.5, 12, E], [-9.5, 16, Wt], [-30.3, -2, E], [-80, -24, SE], [-140, -100, SE], [50, 25.5, N], [-30, 60, E]])
+  prop('wooden_bench', ...spot(x, z, 1.1), yaw, { w: 1.9, sink: 0.02, col: { k: 0.4 } });
 // snow banks: the plough's heaps at the streets' corners and along the Adlerhornweg / Silberhornweg
 let nSnow = 0;
 for (const s of streets) {
@@ -723,10 +832,72 @@ const joinNearest = (x, z, ids) => { const a = nodeAt(x, z); let best = -1, bd =
 for (const [x, z] of [[0, 11], [0, -19], [14, 1], [12, 12], [-28, -10], [-25, 4], [-26, -26], [14, -40]]) joinNearest(x, z, ringIds);
 // every door: to its nearest street node
 const streetIds = nodes.map((_, i) => i);
-for (const b of buildings) { const [x, z] = b.door.out; joinNearest(x, z, streetIds); }
+// (Nov 2026 audit: the nearest node, but by a way that does not cut through a house or a wall; and that way paved, from
+// the step in front of the door: a path to every door)
+const doorPaths = [];
+const clearWay = (ax, az, bx, bz, self) => { const L = Math.hypot(bx - ax, bz - az); for (let t = 0; t <= L; t += 0.5) { const x = ax + (bx - ax) * t / L, z = az + (bz - az) * t / L; if (buildings.some((o) => inRect(o, x, z, 1.0)) || inWall(x, z, 1.0) || roadDist(x, z) < 3.4 + 1.2 || stepAt(x, z, 0.5) > 0.6 || SMALL.some((p) => Math.hypot(p.x - x, p.z - z) < 1.8)) return false; } return true; };
+const SMALL = props.filter((p) => /lamp|pine|bench|fountain|shelter/.test(p.m));
+for (const b of buildings) {
+  const [x, z] = b.door.out, [fx, fz] = front(b.yaw), sx = b.x + fx * (b.d / 2 + 0.6), sz = b.z + fz * (b.d / 2 + 0.6);
+  const a = nodeAt(x, z);
+  const order = streetIds.filter((i) => i !== a).sort((i, k) => Math.hypot(nodes[i][0] - x, nodes[i][1] - z) - Math.hypot(nodes[k][0] - x, nodes[k][1] - z));
+  const found = order.slice(0, 40).find((i) => Math.hypot(nodes[i][0] - x, nodes[i][1] - z) < 30 && clearWay(x, z, nodes[i][0], nodes[i][1], b));
+  if (found === undefined) log(`DOOR ${b.name}: no clear way to a street within 30 m`);
+  const loose = (i) => { const [bx, bz] = nodes[i], L = Math.hypot(bx - x, bz - z); for (let t = 0; t <= L; t += 0.5) { const px = x + (bx - x) * t / L, pz = z + (bz - z) * t / L; if (buildings.some((o) => inRect(o, px, pz, 0.6)) || inWall(px, pz, 0.6)) return false; } return true; };
+  const to = found ?? order.find(loose) ?? order[0];
+  edges.push([a, to]);
+  const [tx, tz] = nodes[to];
+  if (found === undefined && roadDist(x, z) < 9) doorPaths.push({ name: `door ${b.name}`, w: 2, pts: [[r3(sx), r3(sz)], [r3(x), r3(z)]] });
+  if (found !== undefined && Math.hypot(tx - sx, tz - sz) > 2) doorPaths.push({ name: `door ${b.name}`, w: 2, pts: [[r3(sx), r3(sz)], [r3(x), r3(z)], [r3(tx), r3(tz)]] });
+}
 // the places the people use that stay (the shop's door, the gondolas' exits, the bus stop's waiting area)
 for (const [x, z] of [[-33.3, -16.7], [0, -53], [85.5, 7.8], [-58.6, 82.2], [9.6, 57.1], [13.3, -22.5], [8, -21.6], movePt(HELI, 75.64, -132.48)]) joinNearest(x, z, streetIds);
 log(`walking network: ${nodes.length} nodes, ${edges.length} edges`);
+
+// ---------------------------------------------------------------- a quick audit (the full one: the game's
+// SKI_LEGACY_DEBUG=villagecheck, game/villagecheck.h): the railways' open stretches, the pistes, the lifts' stations and
+// towers and the exported roads / car parks against every piece's footprint
+{
+  const RS = R, lines = [];
+  for (const k of ['rail', 'express']) {
+    const r = T.net[k], X = fa(r.X), Z = fa(r.Z), pts = [];
+    for (let i = 0; i < X.length; i++) if (inBox(X[i], Z[i], 60) && !r.tunnels.some((t) => i * r.step > t.s0 + 25 && i * r.step < t.s1 - 25)) pts.push([X[i], Z[i]]);
+    lines.push({ k, pts, off: k === 'express' ? r.trackOff : 0 });
+  }
+  const segs = W.corridors.filter((c) => c[5] !== 2 && Math.hypot(c[2] - c[0], c[3] - c[1]) >= 5 && inBox(c[0], c[1], 300));
+  const stations = [];
+  for (const L of RS.lifts) for (const e of [L.bottom, L.top]) if (inBox(e[0], e[2], 50)) stations.push([e[0], e[2], L.cfg.stationSize / 2 + 4, L.name]);
+  const items = [];
+  for (const b of buildings) items.push({ kind: 'building', name: b.name, x: b.x, z: b.z, yaw: b.yaw, hw: b.w / 2, hd: b.d / 2 });
+  for (const p of props) {
+    const id = p.m.replace('village/', ''), S = MODELS[id] || OTHER[p.m];
+    if (!S || /drift|heap/.test(p.m) || MODELS[id] && !/retaining|fountain|shelter|stairs/.test(id)) continue;
+    items.push({ kind: /retaining/.test(id) ? 'wall' : /lamp/.test(id) ? 'lamp' : /pine/.test(id) ? 'tree' : 'furniture', name: `${id} @${p.x.toFixed(0)},${p.z.toFixed(0)}`, x: p.x, z: p.z, yaw: p.yaw, hw: /pine/.test(id) ? 0.6 : S[0] * p.s[0] / 2, hd: /pine/.test(id) ? 0.6 : S[2] * p.s[2] / 2 });
+  }
+  const samp = (it) => { const o = [], c = Math.cos(it.yaw), s = Math.sin(it.yaw), nu = Math.max(1, Math.ceil(it.hw * 2)), nv = Math.max(1, Math.ceil(it.hd * 2)); for (let i = 0; i <= nu; i++) for (let j = 0; j <= nv; j++) { const lx = -it.hw + 2 * it.hw * i / nu, lz = -it.hd + 2 * it.hd * j / nv; o.push([it.x + lx * c + lz * s, it.z - lx * s + lz * c]); } return o; };
+  const cnt = {};
+  const flag = (cat, it, why) => { cnt[cat] = (cnt[cat] || 0) + 1; log(`AUDIT ${cat} ${it.kind} ${it.name} (${it.x.toFixed(1)}, ${it.z.toFixed(1)}): ${why}`); };
+  for (const it of items) {
+    const S = samp(it), big = it.kind === 'building';
+    for (const L of lines) {
+      const need = 1.42 + L.off + (big ? 4.5 : it.kind === 'tree' ? 3.5 : 2.0);
+      let d = 1e9; for (const [x, z] of S) for (const [a, b] of L.pts) if (Math.abs(a - x) < 30 && Math.abs(b - z) < 30) d = Math.min(d, Math.hypot(a - x, b - z));
+      if (d < need) flag('rail', it, `${L.k} ${d.toFixed(1)} m from its middle (needs ${need.toFixed(1)})`);
+    }
+    let pd = 1e9; for (const [x, z] of S) pd = Math.min(pd, segDist(x, z, []) , ...segs.map((c) => segDist(x, z, [[c[0], c[1]], [c[2], c[3]]]) - c[4]));
+    if (pd < -1) flag('piste', it, `${(-pd).toFixed(1)} m inside`);
+    for (const [x, z, r, n] of stations) if (S.some(([a, b]) => Math.hypot(a - x, b - z) < r)) flag('lift', it, `at ${n}'s station`);
+    const need = 3.4 + (big ? 3.5 : it.kind === 'tree' ? 2.5 : 0.8);
+    let rd = 1e9; for (const [x, z] of S) for (const pts of roads) if (pts.length && Math.abs(pts[0][0] - x) + Math.abs(pts[0][1] - z) < 6000) rd = Math.min(rd, segDist(x, z, pts));
+    if (rd < need) flag('road', it, `${rd.toFixed(1)} m from a road's middle`);
+  }
+  for (let i = 0; i < buildings.length; i++) for (let k = i + 1; k < buildings.length; k++) {
+    const a = items[i], b = items[k];
+    const inside = (o, x, z) => { const c = Math.cos(o.yaw), s = Math.sin(o.yaw), dx = x - o.x, dz = z - o.z; return Math.abs(dx * c - dz * s) < o.hw - 0.3 && Math.abs(dx * s + dz * c) < o.hd - 0.3; };
+    if (samp(a).some(([x, z]) => inside(b, x, z)) || samp(b).some(([x, z]) => inside(a, x, z))) flag('overlap', a, `overlaps ${b.name}`);
+  }
+  log('AUDIT totals', JSON.stringify(cnt));
+}
 
 // ---------------------------------------------------------------- write
 const bin = Buffer.alloc(NC * 2);
@@ -740,7 +911,7 @@ const out = {
   clear: { zone: VILLAGE_ZONE, keep: KEEP_ZONES, models: CLEAR_MODELS, meshMats: PATH_MAT >= 0 ? [PATH_MAT] : [], pack: 'resort' },
   pathMat: PATH_MAT,
   props,
-  paths: streets.filter((s) => s.pave).map((s) => ({ name: s.name, w: s.w, pts: s.pts.map((p) => [r3(p[0]), r3(p[1])]) })),
+  paths: streets.filter((s) => s.pave).map((s) => ({ name: s.name, w: s.w, pts: s.pts.map((p) => [r3(p[0]), r3(p[1])]) })).concat(doorPaths),
   places: {
     ...places,
     spawn: [4, 34, PI],
@@ -751,7 +922,11 @@ const out = {
   moves: MOVES.map((m) => ({ name: m.name, from: m.from, r: m.r, to: m.to, rot: m.rot, dy: m.dy, ...(m.clip ? { clip: m.clip } : {}) })),
   roads: VROADS.map((R) => ({ name: R.name, pts: R.pts, kmh: R.kmh, half: R.half })),
   buildings: buildings.map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: r3(b.x), z: r3(b.z), yaw: r3(b.yaw), w: r3(b.w), d: r3(b.d), h: r3(b.h) })),
+  // (the buildings' pads: world/village.cpp levels the drawn ground under each footprint, 0.8 m round it, at the level
+  // in front of its door, easing back over `fade` m: no house half buried on a slope)
+  pads: buildings.map((b) => ({ x: r3(b.x), z: r3(b.z), yaw: r3(b.yaw), hw: r3(b.w / 2 + 0.8), hd: r3(b.d / 2 + 0.8), fade: 5 })),
 };
 if (process.argv.includes('--plan')) fs.writeFileSync(process.argv[process.argv.indexOf('--plan') + 1], JSON.stringify(out));
+if (process.argv.includes("--dry")) process.exit(0);
 const nj = writeData(DATA, 'village.json', JSON.stringify(out)), nb = writeData(DATA, 'village.bin', bin);
 log(`wrote village.json (${(nj / 1024).toFixed(0)} KB packed), village.bin (${(nb / 1024).toFixed(0)} KB packed): ${props.length} props`);

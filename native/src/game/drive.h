@@ -35,6 +35,10 @@ public:
   bool active() const { return d_.on; }
   /// E while driving: out at a standstill; fills the spot to stand on (x, z, heading)
   bool exit(dvec3& out);
+  /// (drive.js wreckOut) wrecked and come to rest: out beside it (the side that's up), the wreck left lying as it is
+  bool wreckOut(dvec3& out);
+  /// (debug wrecktest) a crash at v m/s into something on the car's left (wrecked at EXTREME_V), rolling to rollTo
+  void debugCrash(double v, double rollTo) { crash(v, std::cos(d_.yaw), -std::sin(d_.yaw)); if (d_.crash) d_.crashRollTo = rollTo; }
   /// the car nearest p you may drive (autotest)
   int nearestOwned(const dvec3& p) const;
   bool enter(int parkedIndex);
@@ -120,6 +124,8 @@ public:
     double svx = 0, svz = 0, sw = 0;   // shoved: sliding to a stop
     int impoundDay = -1;               // (Phase 5, impound.js) towed: locked until this game day
     vec4 paint{1, 1, 1, 0};            // (Phase 7) its paint (a = 0: the model's own colour)
+    bool wreckPose = false;            // (drive.js wreckOut) a wreck lies as it came to rest: wreckM (car -> world)
+    glm::dmat4 wreckM{1};
   };
   std::vector<Parked> parked;
   /// (Phase 5, impound.js lockReason) a car of yours that doesn't let you in: the reason shown, "" when free
@@ -146,6 +152,7 @@ private:
   Scenery& scenery_;
   Transport& t_;
   VehicleModels& models_;
+  bool wreckDone_ = false;
   const VehicleModel* fullVm_ = nullptr;   // the full-detail model of the car you drive (drive.js FULL), null: its own
   struct D {
     bool on = false;

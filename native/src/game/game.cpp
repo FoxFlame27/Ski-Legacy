@@ -21,6 +21,7 @@
 #include "game/buses.h"
 #include "game/drive.h"
 #include "game/cartest.h"
+#include "game/wrecktest.h"
 #include "game/traffic.h"
 #include "game/trains.h"
 #include "game/economy.h"
@@ -1619,7 +1620,7 @@ int runGame(const GameOptions& opt) {
     flash("Mountain rescue \xC2\xB7 treated at the medical centre \xC2\xB7 -" + fmtM(fee).substr(0), Hud::Flash::Bad);
   };
   // your wreck: the tow truck takes it back to the Autohaus repaired (carrental.js wreckFee: tow + repair)
-  struct Tow { int plateIdx; std::string plate; double at; int fee; std::string why; };
+  struct Tow { int plateIdx; std::string plate; double at; int fee; std::string why; double unseen = 0; };
   std::vector<Tow> tows;
   drive.onWreck = [&](int idx) {
     if (idx < 0 || size_t(idx) >= drive.parked.size() || !drive.parked[size_t(idx)].owned) return;
@@ -1640,6 +1641,7 @@ int runGame(const GameOptions& opt) {
   if (vehTest && opt.autotest) at = AT::Drive;
   if (off("cartest") && opt.autotest) at = AT::CarFlow;   // (debug: straight to the cars on the player's path)
   CarFlowTest carFlow;
+  WreckTest wreckTest;   // (debug wrecktest)
   if (off("maptest") && opt.autotest) at = AT::Map;   // (debug: straight to the trail map)
   // (debug: SKI_LEGACY_DEBUG=uitest: each UI screen in turn, a screenshot of it, then quit; <png>_ui_<name>.png)
   const bool uiTest = off("uitest") && opt.autotest;
@@ -4066,6 +4068,7 @@ int runGame(const GameOptions& opt) {
       if (drive.speed() < 2.0) prompt = "Get out";
       dvec3 ex;
       if (interact && drive.exit(ex)) { interact = false; standOff(ex, "Parked"); }   // (E used: not also back in at once below)
+      else if (drive.wreckOut(ex)) { standOff(ex, "Wrecked \xC2\xB7 it will be towed away"); }   // (drive.js wreckOut: out beside it)
       for (const VehicleEvent& e : drive.events) {
         float a = e.amount;
         switch (e.type) {
@@ -4750,10 +4753,18 @@ int runGame(const GameOptions& opt) {
       for (size_t i = 0; i < drive.parked.size(); i++) if (drive.parked[i].owned && drive.parked[i].plate == t.plate) idx = int(i);
       if (idx < 0) { tows.erase(tows.begin() + long(k)); continue; }
       Drive::Parked& e = drive.parked[size_t(idx)];
-      if (e.driving || simTime < t.at) { k++; continue; }
+      if (t.why == "wreck" && !e.driving && e.wreckPose) {
+        // (drive.js updateWrecks: the wreck lies where it came to rest, hazards flashing, the traffic queueing behind it,
+        // until it has been out of sight 3 s (never towed in view, never with you beside it))
+        const double dx = e.x - cam.pos.x, dz = e.z - cam.pos.z, dist = std::hypot(dx, dz);
+        const vec3 f = cam.forward();
+        const bool seen = dist < 30 || (dist < 450 && (dx * f.x + dz * f.z) / std::max(1e-6, dist) > 0.2);
+        t.unseen = seen ? 0 : t.unseen + frameDt;
+        if (t.unseen <= 3 || std::hypot(e.x - player.pos.x, e.z - player.pos.z) < 6) { k++; continue; }
+      } else if (e.driving || simTime < t.at) { k++; continue; }
       double bx, bz, byaw;   // (back to a free bay at the Autohaus car park)
       if (drive.freeBay(bx, bz, byaw)) { e.x = bx; e.z = bz; e.yaw = byaw; e.y = world.height(bx, bz) + 0.03; }
-      if (t.why == "wreck") { e.wrecked = false; e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0; }
+      if (t.why == "wreck") { e.wrecked = false; e.wreckPose = false; e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0; }
       if (mp.active()) mp.towDone();
       save.markDirty();
       flash("Your " + e.spec->label + " is back at the Autohaus car park" + (t.why == "wreck" ? ", repaired" : ""), Hud::Flash::Good);
@@ -5150,6 +5161,14 @@ int runGame(const GameOptions& opt) {
         scenery.update(cam.pos);
         resort.update(0, cam.pos);
       }
+    }
+    if (opt.autotest && at == AT::Ski && off("wrecktest") && !wreckTest.done) {   // (debug: wrecks on a busy road, the queue behind: game/wrecktest.cpp)
+      WreckTestEnv we;
+      we.drive = &drive; we.traffic = &traffic; we.transport = &transport; we.world = &world; we.player = player.pos; we.simTime = simTime; we.prompt = prompt; we.toast = toast;
+      we.teleport = [&](double x, double z, double h) { player.setSkisOn(false); player.teleport(x, z, h); player.vel = dvec3(0); };
+      we.enterCar = [&](int i) { if (drive.enter(i)) { rideKind = Ride::Car; player.setSkisOn(false); dvec3 sp, sf; drive.seat(sp, sf); player.sitOn(sp, sf); } };
+      we.png = [&](const std::string& v) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, v.c_str()); };
+      if (dvec3 wc, wl; wreckTest.frame(we, wc, wl)) { cam.lookAt(wc, wl); cam.fovY = 60; terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos); }
     }
     if (dvec3 bc, bl; off("bustest") && buses.debugCam(bc, bl)) {   // (debug: the camera on the bus test)
       cam.lookAt(bc, bl); cam.fovY = 55;

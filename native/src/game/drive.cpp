@@ -114,7 +114,12 @@ bool Drive::freeBay(double& x, double& z, double& yaw) const {
         double v = side * (lot->hd - 2.85);
         bays.push_back({lot->x + lot->ux * u + lot->vx * v, lot->z + lot->uz * u + lot->vz * v, -lot->vx * side, -lot->vz * side});
       }
-  // a bay nobody stands in (impound.js freeBay)
+  // a bay nobody stands in (impound.js freeBay), the nearest the Autohaus first (impound.js byDoor: your bay is the one
+  // nearest the hall's door)
+  if (t_.hasAutohaus) {
+    const double ax = t_.autohaus.x + t_.autohausDir.x * 8, az = t_.autohaus.z + t_.autohausDir.y * 8;   // (its yard, in front of the doors)
+    std::stable_sort(bays.begin(), bays.end(), [&](const Bay& a, const Bay& b) { return std::hypot(a.x - ax, a.z - az) < std::hypot(b.x - ax, b.z - az); });
+  }
   for (size_t k = 0; k < bays.size(); k++) {
       const Bay& b = bays[k];
       bool taken = false;

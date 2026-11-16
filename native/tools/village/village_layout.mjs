@@ -162,7 +162,7 @@ const VROADS = [{ name: 'Dorfstrasse', pts: DORF, kmh: 30, half: 3.4 }];
     // name, the site (centre, dir to the road), r, clip (short of the road's ribbon), where along the Dorfstrasse
     ['Autohaus', P.play.rental, 25, 13.3, -90],
     ['Police / Prison', P.play.prison, 24, 12.3, -124],
-    ['Werkstatt', { x: W.x, y: W.y, z: W.z, dirx: W.fx, dirz: W.fz }, 14, 11, -152],
+    ['Werkstatt', { x: W.x, y: W.y, z: W.z, dirx: W.fx, dirz: W.fz }, 18, 11, -152],   // (r 18: 14 left half its apron behind)
   ];
   for (const [name, s, r, clipMax, x] of SITES) {
     const d0 = toRoad0(s.x, s.z), rot = -Math.atan2(s.dirx, s.dirz);
@@ -174,6 +174,12 @@ const VROADS = [{ name: 'Dorfstrasse', pts: DORF, kmh: 30, half: 3.4 }];
     log(`${name}: (${s.x.toFixed(1)}, ${s.z.toFixed(1)}) -> (${m.to[0]}, ${m.to[1]}), ${d0.toFixed(1)} m from the road, turned ${(rot * 180 / PI).toFixed(0)} deg, dy ${m.dy}`);
   }
 }
+// (Nov 16, round 3 fixes) the Autohaus car park (impound.js: your cars' bays, the tow yard's row) next to the hall
+// instead of on the valley road 130 m away: east of it between the Postgasse (moved a few metres west for it) and the
+// Hotel Tirolerhof, its long sides north-south, its mouth on the Dorfstrasse. world/village.cpp addRoads puts the
+// transport pack's impound lot here (bays, the map, the tow yard follow) and lays its asphalt and bay lines.
+const RPARK = { name: 'Autohaus car park', x: -59.5, z: 31, ux: 0, uz: 1, vx: 1, vz: 0, hw: 14, hd: 8.5, dirx: 0, dirz: 1, ex: -59.5, ez: 47.2, mouthW: 8, mouthTo: 50.5 };
+const inRPark = (x, z, pad = 0) => { const dx = x - RPARK.x, dz = z - RPARK.z, u = dx * RPARK.ux + dz * RPARK.uz, v = dx * RPARK.vx + dz * RPARK.vz; return (Math.abs(u) < RPARK.hw + pad && Math.abs(v) < RPARK.hd + pad) || (Math.abs(v) < RPARK.mouthW / 2 + pad && u > 0 && z < RPARK.mouthTo + pad); };
 const inBox = (x, z, m = 0) => x > BOX.x0 - m && x < BOX.x1 + m && z > BOX.z0 - m && z < BOX.z1 + m;
 const CLEAR_MODELS = ['hotel_chalet', 'lamp_post', 'snowman', 'firewood_pile'];
 // the old village's things that go (the eight hotels, the lamp ring, the snowmen and firewood by the hotels); the shop's
@@ -331,7 +337,7 @@ street('Heliweg', [[85, 14], [118, 20], [140, 40], [153.6, 51.5], [159.5, 53]], 
 // (round 3) more footpaths: from the Dorfstrasse's sites up to the Kapellenweg, and the Bahnhofstiege: from the
 // square's north-west corner straight up the terraces (ramps through the terrace walls, at each terrace's level) to
 // the Legacy Express station's exit
-street('Postgasse', [[-70, 45.5], [-64, 20], [-58, -6]], 2.6, { lamps: 26 });
+street('Postgasse', [[-71.5, 45.5], [-71, 22], [-64, 4], [-58, -6]], 2.6, { lamps: 26 });   // (west of the Autohaus car park)
 // (Nov 2026 audit: the houses south of the Dorfstrasse had no way to their doors but across the bus road) the
 // Lärchenweg west of the bus road (Hotel Silberhorn, Lärchenhof, the garages), the Rathausweg east of it (the
 // Busbahnhof's back, the Gemeindeamt, the Residenz Edelweiss)
@@ -708,14 +714,14 @@ for (const R of VROADS) {
     for (let t = acc; t < L; t += 26) {
       const off = R.half + 2.4, x = ax + dx * t - dz * off * side, z = az + dz * t + dx * off * side;
       side = -side;
-      if (insideBuilding(x, z, 0.8) || nearOldRoad(x, z, R.half + 4) || inYard(x, z)) continue;
+      if (insideBuilding(x, z, 0.8) || nearOldRoad(x, z, R.half + 4) || inYard(x, z) || inRPark(x, z, 2)) continue;
       lampAt(x, z, facing(dz * side, -dx * side)); nRoadLamps++;
     }
     acc = (acc - L) % 26; if (acc < 0) acc += 26;
     for (let t = bankAcc; t < L; t += 9) {
       for (const sd of [1, -1]) {
         const off = R.half + 3.2, x = ax + dx * t - dz * off * sd, z = az + dz * t + dx * off * sd;
-        if (insideBuilding(x, z, 1.2) || nearOldRoad(x, z, R.half + 5) || inYard(x, z) || (++bankN % 3 === 0)) continue;
+        if (insideBuilding(x, z, 1.2) || nearOldRoad(x, z, R.half + 5) || inYard(x, z) || inRPark(x, z, 2) || (++bankN % 3 === 0)) continue;
         prop('snow/drift_long', x, z, facing(dx, dz) + PI / 2, { s: [3.2 / 1.898, 0.45 / 0.162, 1.0 / 0.5], sink: 0.12, ground: 'center', col: null, shadow: false });
         nRoadBanks++;
       }
@@ -724,6 +730,12 @@ for (const R of VROADS) {
   }
 }
 log(`our roads: ${nRoadLamps} lamps, ${nRoadBanks} snow banks`);
+// the Autohaus car park's lamps (parking.js: along the long sides, 0.9 m out, not by the mouth)
+for (const u of [-10, 0, 10]) for (const side of [-1, 1]) {
+  const x = RPARK.x + RPARK.ux * u + RPARK.vx * side * (RPARK.hd + 0.9), z = RPARK.z + RPARK.uz * u + RPARK.vz * side * (RPARK.hd + 0.9);
+  if (side < 0 && u === 0) continue;
+  lampAt(x, z, facing(-RPARK.vx * side, -RPARK.vz * side));
+}
 // the square's corners and the bus terminus get their lamps too
 for (const [x, z] of [[-21, 21], [22, 22], [-20, -34], [24, -34], [10, 40]]) lampAt(x, z, 0);
 log(`${nLamps} lamp posts`);
@@ -745,6 +757,7 @@ const treeClear = (x, z, trunk = 1.2) => {
   for (const pts of roads) if (pts.length && Math.abs(pts[0][0] - x) + Math.abs(pts[0][1] - z) < 6000 && segDist(x, z, pts) < 3.4 + 2.5 + trunk) return false;
   for (const L of lotsNow) { const dx = x - L.x, dz = z - L.z; if (Math.abs(dx * L.ux + dz * L.uz) < L.hw + trunk + 1 && Math.abs(dx * L.vx + dz * L.vz) < L.hd + trunk + 1) return false; }
   for (const m of MOVES) if (Math.hypot(x - m.to[0], z - m.to[1]) < m.r) return false;
+  if (inRPark(x, z, trunk + 1)) return false;
   for (const st of streets) if (st.walk && segDist(x, z, st.pts) < st.w / 2 + trunk + 0.6) return false;
   // (Nov 2026 audit: the bus legs, the railways (the crown clear of the trains), the pistes, the lifts, the walls, steps)
   for (const pts of LEGS) if (pts.length && segDist(x, z, pts) < 3.4 + 2.5 + trunk) return false;
@@ -921,6 +934,7 @@ const out = {
   walk: { nodes, edges },
   moves: MOVES.map((m) => ({ name: m.name, from: m.from, r: m.r, to: m.to, rot: m.rot, dy: m.dy, ...(m.clip ? { clip: m.clip } : {}) })),
   roads: VROADS.map((R) => ({ name: R.name, pts: R.pts, kmh: R.kmh, half: R.half })),
+  rentalPark: RPARK,
   buildings: buildings.map((b) => ({ id: b.id, name: b.name, kind: b.kind, x: r3(b.x), z: r3(b.z), yaw: r3(b.yaw), w: r3(b.w), d: r3(b.d), h: r3(b.h) })),
   // (the buildings' pads: world/village.cpp levels the drawn ground under each footprint, 0.8 m round it, at the level
   // in front of its door, easing back over `fade` m: no house half buried on a slope)

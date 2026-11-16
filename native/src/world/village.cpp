@@ -218,6 +218,55 @@ double Village::roadCut(double x, double z, double h) const {
   return h;
 }
 
+void Village::liftSites(const std::function<double(double, double)>& cut) {
+  cutAt_ = cut;
+  for (Move& m : moves_) {
+    if (m.clipMax > 1e29) continue;   // (roadside sites only: the heliport stands on the open meadow)
+    const double c = std::cos(m.rot), s = std::sin(m.rot);
+    const dvec2 dir(m.clipDir.x * c + m.clipDir.y * s, -m.clipDir.x * s + m.clipDir.y * c);   // (toward the road, turned)
+    const dvec2 front = m.to + dir * (m.clipMax + 4.0);
+    m.lift = std::max(0.0, cut(front.x, front.y));
+    if (m.lift < 0.02) { m.lift = 0; continue; }
+    m.dy += m.lift;
+    SL_INFO("village: '%s' raised %.2f m to the road in front of it (the exported cuts there)", m.name.c_str(), m.lift);
+  }
+}
+
+double Village::siteGround(double x, double z, double cut) const {
+  if (!reliefOn) return cut;
+  constexpr double FADE = 12.0;   // (village_layout.mjs MOVE_FADE)
+  // (the level: the nearest site's, by the distance past 3/4 of its radius (its buildings and yard), blended over ~1 m
+  // where two meet (the police yard and the Werkstatt's overlap); the cut faded out within the nearest radius)
+  double wmax = 0, best = 1e30;
+  for (const Move& m : moves_) {
+    if (m.lift == 0) continue;
+    const double d = glm::length(dvec2(x, z) - m.to);
+    if (d >= m.r + FADE) continue;
+    const double t = std::clamp((d - m.r) / FADE, 0.0, 1.0);
+    wmax = std::max(wmax, 1 - t * t * (3 - 2 * t));
+    best = std::min(best, d - 0.75 * m.r);
+  }
+  if (wmax <= 0) return cut;
+  double ws = 0, wl = 0;
+  for (const Move& m : moves_) {
+    if (m.lift == 0) continue;
+    const double d = glm::length(dvec2(x, z) - m.to);
+    if (d >= m.r + FADE) continue;
+    const double w = std::exp(-(d - 0.75 * m.r - best));
+    // (lowered where the old site's ground was cut (the valley road's cut it stood in): its apron and ramp followed
+    // that ground; the Werkstatt's apron lay under the copied snow in front of the bay)
+    double old = 0;
+    if (cutAt_ && d < m.r) {
+      const dvec2 q = dvec2(x, z) - m.to;
+      const double c = std::cos(m.rot), s = std::sin(m.rot);
+      const dvec2 o = m.from + dvec2(q.x * c - q.y * s, q.x * s + q.y * c);   // (movePoint's inverse)
+      if (glm::dot(o - m.from, m.clipDir) < m.clipMax) old = std::min(0.0, cutAt_(o.x, o.y));
+    }
+    ws += w; wl += w * (m.lift + old);
+  }
+  return cut * (1 - wmax) + (wl / ws) * wmax;
+}
+
 std::vector<dvec2> Village::route(const dvec2& from, const dvec2& to, double lane) const {
   std::vector<dvec2> out;
   if (nodes_.empty() || glm::length(to - from) < 10) { out.push_back(to); return out; }
@@ -467,6 +516,11 @@ void Village::applyMoves(const std::string& pack, nlohmann::json& j, std::vector
           }
         nPlace++;
       }
+    // (a room model standing at `at` (its parts about that point, unturned): the turn it now stands at, "atRot",
+    // applied where it is drawn (the police station outside, the Werkstatt); before, only `at` moved and the house
+    // stood unturned while its door, colliders, cells and the patrol car's bay were turned: the car stood inside)
+    if (o.contains("at") && o.contains("parts") && o["at"].is_array() && o["at"].size() >= 3 && o["at"][0].is_number())
+      if (const Move* m = moveAt(o["at"][0].get<double>(), o["at"][2].get<double>())) o["atRot"] = o.value("atRot", 0.0) + m->rot;
     for (auto it = o.begin(); it != o.end(); ++it) if (it.key() != "parts") walk(it.value(), it.key());
   };
   for (const char* key : {"play", "net"}) if (j.contains(key)) walk(j[key], key);
@@ -591,6 +645,104 @@ void Village::addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& worl
     nTris += ib.size() / 3;
   }
   SL_INFO("village: %zu roads of its own on the network (%zu road triangles)", (*j_)["roads"].size(), nTris);
+  addRentalPark(j, bin, world);
+}
+
+void Village::addRentalPark(nlohmann::json& j, std::vector<uint8_t>& bin, World& world) const {
+  if (!j_ || !j_->contains("rentalPark") || !j.contains("net") || !j["net"].contains("lots")) return;
+  const nlohmann::json& P = (*j_)["rentalPark"];
+  nlohmann::json* lot = nullptr;
+  for (auto& q : j["net"]["lots"]) if (q.value("impound", false)) { lot = &q; break; }
+  if (!lot) { SL_WARN("village: no impound lot in the transport pack: the Autohaus car park stays where it was"); return; }
+  const double cx = P["x"], cz = P["z"], ux = P["ux"], uz = P["uz"], vx = P["vx"], vz = P["vz"], hw = P["hw"], hd = P["hd"];
+  const double mouthW = P.value("mouthW", 8.0), mouthTo = P.value("mouthTo", cz + hw + 4);
+  auto at = [&](double u, double v) { return dvec2(cx + ux * u + vx * v, cz + uz * u + vz * v); };
+  auto ground = [&](double x, double z) { return std::max(world.height(x, z), world.meshHeight(x, z)); };
+  const double cy = world.height(cx, cz);
+  // the bays: as Drive::freeBay lays them on a lot without its own (two rows along the long sides, 2.6 m apart, their
+  // backs 0.25 m in from the edge, backed in: the nose out to the aisle)
+  constexpr double BAY_W = 2.6, BAY_D = 5.7;
+  nlohmann::json bays = nlohmann::json::array();
+  std::vector<std::array<double, 4>> lines;   // u0, v0, u1, v1
+  for (double side : {-1.0, 1.0}) {
+    double last = -1e9;
+    for (double u = -hw + 1.6; u <= hw - 1.6; u += BAY_W) {
+      const double v = side * (hd - 2.85);
+      const dvec2 p = at(u, v);
+      bays.push_back({p.x, p.y, -vx * side, -vz * side});
+      for (double e : {u - BAY_W / 2, u + BAY_W / 2}) if (e > last + 0.01) { lines.push_back({e, side * (hd - 0.05), e, side * (hd - 0.05 - BAY_D)}); last = e; }
+    }
+  }
+  const dvec2 mouth = at(hw + 2, 0);
+  (*lot)["name"] = P.value("name", std::string("Autohaus car park"));
+  (*lot)["x"] = cx; (*lot)["z"] = cz; (*lot)["y"] = cy; (*lot)["ux"] = ux; (*lot)["uz"] = uz; (*lot)["vx"] = vx; (*lot)["vz"] = vz;
+  (*lot)["hw"] = hw; (*lot)["hd"] = hd; (*lot)["ex"] = mouth.x; (*lot)["ez"] = mouth.y; (*lot)["dirx"] = P.value("dirx", ux); (*lot)["dirz"] = P.value("dirz", uz);
+  (*lot)["bays"] = bays;
+  // ---- the meshes: the asphalt (1 m grid over the lot and its mouth, 5 cm over the ground) and the lines (2 cm over it)
+  int lotMat = -1;
+  for (size_t k = 0; k < j["materials"].size(); k++)
+    if (j["materials"][k].value("tag", std::string()) == "roadsnow-lot") { lotMat = int(k); break; }
+  if (lotMat < 0) { SL_WARN("village: no car park material in the transport pack: the Autohaus car park is not drawn"); return; }
+  const int paintMat = int(j["materials"].size());
+  j["materials"].push_back({{"color", {0.87, 0.875, 0.85}}, {"opacity", 1}, {"transparent", false}, {"double", false}, {"rough", 0.92}, {"metal", 0}, {"vc", false},
+                            {"emissive", {0, 0, 0}}, {"map", nullptr}, {"emissiveMap", nullptr}, {"alphaTest", 0}, {"glow", 0}, {"glb", nullptr}, {"nightEmissive", 0},
+                            {"night", nullptr}, {"basic", false}, {"tag", "rentalpark-paint"}});
+  auto put = [&](const void* data, size_t bytes) {
+    while (bin.size() % 4) bin.push_back(0);
+    const size_t off = bin.size();
+    bin.insert(bin.end(), static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + bytes);
+    return off;
+  };
+  const dvec3 origin(cx, cy, cz);
+  auto vert = [&](std::vector<uint8_t>& vb, double x, double y, double z) {
+    const float pos[3] = {float(x - origin.x), float(y - origin.y), float(z - origin.z)};
+    const int8_t nrm[4] = {0, 127, 0, 0};
+    const float uv[2] = {float(x * 0.0754), float(z * 0.0754)};
+    const uint8_t col[4] = {255, 255, 255, 0};
+    uint8_t raw[28];
+    std::memcpy(raw, pos, 12); std::memcpy(raw + 12, nrm, 4); std::memcpy(raw + 16, uv, 8); std::memcpy(raw + 24, col, 4);
+    vb.insert(vb.end(), raw, raw + 28);
+  };
+  auto mesh = [&](int mat, const std::vector<uint8_t>& vb, const std::vector<uint16_t>& ib) {
+    if (ib.empty()) return;
+    const size_t vOff = put(vb.data(), vb.size()), iOff = put(ib.data(), ib.size() * 2);
+    j["meshes"].push_back({{"mat", mat}, {"verts", vb.size() / 28}, {"tris", ib.size() / 3}, {"vOff", vOff}, {"iOff", iOff}, {"i16", true},
+                           {"origin", {origin.x, origin.y, origin.z}}});
+  };
+  // a grid patch over [u0, u1] x [v0, v1] of the lot's frame (counter-clockwise seen from above)
+  std::vector<uint8_t> vb;
+  std::vector<uint16_t> ib;
+  auto patch = [&](double u0, double u1, double v0, double v1, double lift) {
+    const int nu = std::max(1, int(std::ceil((u1 - u0) / 1.0))), nv = std::max(1, int(std::ceil((v1 - v0) / 1.0)));
+    const uint16_t base = uint16_t(vb.size() / 28);
+    for (int a = 0; a <= nu; a++)
+      for (int b = 0; b <= nv; b++) {
+        const dvec2 p = at(u0 + (u1 - u0) * a / nu, v0 + (v1 - v0) * b / nv);
+        vert(vb, p.x, ground(p.x, p.y) + lift, p.y);
+      }
+    const bool flip = (ux * vz - uz * vx) > 0;   // (the frame's handedness: keep the faces up)
+    for (int a = 0; a < nu; a++)
+      for (int b = 0; b < nv; b++) {
+        const uint16_t p0 = uint16_t(base + a * (nv + 1) + b), p1 = uint16_t(p0 + 1), p2 = uint16_t(p0 + nv + 1), p3 = uint16_t(p2 + 1);
+        if (flip) for (uint16_t k : {p0, p1, p2, p1, p3, p2}) ib.push_back(k);
+        else for (uint16_t k : {p0, p2, p1, p1, p2, p3}) ib.push_back(k);
+      }
+  };
+  patch(-hw, hw, -hd, hd, 0.05);
+  // the mouth: from the lot's end to the road (its edge under the road's ribbon)
+  {
+    const double uEnd = std::fabs(uz) > 0.5 ? std::max(hw + 0.5, (mouthTo - cz) / uz) : hw + 4;
+    patch(hw, uEnd, -mouthW / 2, mouthW / 2, 0.045);
+  }
+  const size_t lotTris = ib.size() / 3;
+  mesh(lotMat, vb, ib);
+  vb.clear(); ib.clear();
+  for (const auto& L : lines) {
+    const double w = 0.06;
+    patch(L[0] - w, L[0] + w, std::min(L[1], L[3]), std::max(L[1], L[3]), 0.07);
+  }
+  mesh(paintMat, vb, ib);
+  SL_INFO("village: the Autohaus car park at (%.0f, %.0f): %zu bays, %zu asphalt triangles, %zu lines", cx, cz, bays.size(), lotTris, lines.size());
 }
 
 void Village::applyToPack(const std::string& pack, nlohmann::json& j, std::vector<uint8_t>& bin, World& world,

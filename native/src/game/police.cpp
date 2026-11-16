@@ -24,9 +24,12 @@ namespace sl {
 namespace {
 // police.js TUNING / LEVELS
 constexpr double TRIGGER_KMH = 25, COP_RAM_KMH = 15, FINE = 1000, ARREST_FINE = 3000, FINE_STEP = 500, ARREST_STEP = 1000, JAIL_S = 45;
-constexpr double LOSE_S = 2.5, SEE_NEAR = 45, KEEP_ESC = 0.5, NO_SPOT_S = 75, HEAT_PER_S = 1.0 / 36, HEAT_HIT_COP = 0.35;
+constexpr double LOSE_S = 2.5, SEE_NEAR = 45, KEEP_ESC = 0.5, NO_SPOT_S = 75, HEAT_PER_S = 1.0 / 48, HEAT_HIT_COP = 0.3, HEAT_HIT = 0.15;   // (police.js 1/36, 0.35, 0.2: slower to five stars, the user)
 constexpr double STOP_R = 40, STOP_KMH = 3, STOP_S = 3, SPAWN_MIN = 260, SPAWN_MAX = 420, REACH_R = 60, GRACE_S = 6;
-constexpr double FOOT_CATCH_R = 1.5, FOOT_RUN_V = 6.9, FOOT_LOSE_M = 45, FOOT_LEASH_M = 400, FOOT_ESC_K = 2.2;
+// (on foot: police.js footRunV 6.9 m/s ran you down; the user: "only a bit slower ... not impossible to escape on foot,
+// but hard": 5.95 m/s, ~5 % under your sprint (player.cpp 4.2 x 1.5 = 6.3), caught within 1.2 m (1.5), and he gives up
+// once you are FOOT_LOSE_M further off than he ever got (police.js footLoseM 45; before: 105 m from him at all))
+constexpr double FOOT_CATCH_R = 1.2, FOOT_RUN_V = 5.95, FOOT_LOSE_M = 20, FOOT_AGAIN_S = 6, FOOT_LEASH_M = 400, FOOT_ESC_K = 2.2;
 constexpr double HOLD_R = 12, HOLD_S = 10, HOLD_MORE = 0.6, V_TOP = 250 / 3.6, LEN = 5.0, WALK_V = 1.6;
 [[maybe_unused]] constexpr double WB = 2.95;
 constexpr double V_OFF = 25;   // (police.js TUNING.vOff: m/s over the snow)
@@ -93,7 +96,7 @@ int Police::arrests() const {
 
 // ---------------------------------------------------------------- the chase
 void Police::callFor(const std::string& why, double kmh) {
-  if (kmh < TRIGGER_KMH || rooms_.inside() || jailed()) return;
+  if (kmh < TRIGGER_KMH || rooms_.inside() || jailed() || (!wanted_ && c_.now < coolUntil_)) return;
   if (!wanted_) {
     wanted_ = true; fleeing_ = false; heat_ = 1; wantedT_ = 0; spotted_ = false; reachT_ = -1; stopT_ = 0; escT_ = 0; searching_ = false;
     lastSeen_ = c_.player->pos;
@@ -103,20 +106,29 @@ void Police::callFor(const std::string& why, double kmh) {
     slam("PULL OVER", c_.driving ? "POLICE \xC2\xB7 STOP AT THE SIDE OF THE ROAD" : "POLICE \xC2\xB7 STAY WHERE YOU ARE", 0);
     prevStars_ = 1;
     SL_INFO("police: called (%s, %.0f km/h)", why.c_str(), kmh);
-  } else if (fleeing_) heat_ = std::min(5.0, heat_ + 0.2);
+  } else if (fleeing_ && c_.now - hitT_ > 1) { hitT_ = c_.now; heat_ = std::min(5.0, heat_ + HEAT_HIT); }   // (police.js reportHit: once a second)
 }
 
-void Police::hitCop(int, double kmh) {
+void Police::hitCop(int id, double kmh) {
   if (kmh < COP_RAM_KMH) return;
-  if (!wanted_) { callFor("a patrol car rammed", TRIGGER_KMH); fleeing_ = true; heat_ = 2; slam("WANTED", "YOU HIT A POLICE CAR", 0.4); prevStars_ = 2; }
-  else { heat_ = std::min(5.0, heat_ + HEAT_HIT_COP); slam("WRECKED!", "POLICE CAR HIT \xC2\xB7 MORE HEAT", 0.15); }
+  // (a patrol car driving off after a stop (a fine paid) that brushes your car is no ram of yours: before, it made you
+  // wanted and fleeing at once, stopped beside it: arrested right after paying, Nov 16 the user)
+  if (id >= 0 && size_t(id) < units_.size() && units_[size_t(id)].leaving) return;
+  if (!wanted_) { coolUntil_ = -1e9; callFor("a patrol car rammed", TRIGGER_KMH); if (!wanted_) return; fleeing_ = true; heat_ = 2; copHitT_ = c_.now; slam("WANTED", "YOU HIT A POLICE CAR", 0.4); prevStars_ = 2; }
+  else if (c_.now - copHitT_ > 1.5) { copHitT_ = c_.now; heat_ = std::min(5.0, heat_ + HEAT_HIT_COP); slam("WRECKED!", "POLICE CAR HIT \xC2\xB7 MORE HEAT", 0.15); }
 }
 
 void Police::clear(const char* why) {
   rideMirror_ = false;
   if (!wanted_) return;
   wanted_ = false; fleeing_ = false; searching_ = false; pulled_ = false; heat_ = 0;
-  for (Unit& u : units_) { u.leaving = true; u.out = false; u.offState = 0; }
+  coolUntil_ = c_.now + 6;
+  const dvec3 you = c_.driving && c_.drive ? c_.drive->pos() : c_.player->pos;
+  for (Unit& u : units_) {
+    // (driving off away from you: straight on from where it stood it could run into your car)
+    if (!u.leaving && glm::length(dvec2(u.pos.x - you.x, u.pos.z - you.z)) < 30) u.yaw = std::atan2(u.pos.x - you.x, u.pos.z - you.z);
+    u.leaving = true; u.out = false; u.offState = 0;
+  }
   heli_.on = false;
   SL_INFO("police: %s", why);
 }
@@ -290,13 +302,25 @@ void Police::openFine() {
     rr["fines"] = rr.value("fines", 0) + 1; rr["fined"] = rr.value("fined", 0) + fine;
     c_.charge(fine);
     c_.flash("Fined " + fmtMoney(fine) + " \xC2\xB7 the police drive off", 1);
-    fineOpen_ = false;
+    fineOpen_ = false; fineCard_ = false;
+    for (Unit& u : units_) { u.out = false; u.offState = 0; }
     clear("fined");
   };
   DialogOption run; run.label = "Drive off"; run.sub = "Run: they come after you (wanted)"; run.secondary = false;
-  run.act = [this]() { fineOpen_ = false; pulled_ = false; fleeing_ = true; heat_ = std::max(heat_, 2.0); for (Unit& u : units_) { u.out = false; u.offState = 0; } };
+  run.act = [this]() { fineCard_ = false; flee(true); };
   d.options = {pay, run};
+  fineCard_ = true; fineShutT_ = -1;
   c_.menus->openDialog(d);
+}
+
+// fleeing (driving / running off a stop, or past the grace): the stop is over, the fine card shut (before, it stayed up
+// and the HUD said "Press E to pay the fine" while they were after you: paid or not, you were arrested)
+void Police::flee(bool dropOfficers) {
+  const bool wasStop = pulled_ || fineOpen_;
+  pulled_ = false; fineOpen_ = false; fleeing_ = true; heat_ = std::max(heat_, 2.0);
+  if (dropOfficers) for (Unit& u : units_) if (u.offState != 3) { u.out = false; u.offState = 0; }
+  if (fineCard_) { fineCard_ = false; if (c_.menus && c_.menus->dialogOpen()) c_.menus->close(); }
+  if (wasStop) c_.flash(std::string(c_.driving ? "You drove off" : "You ran off") + " \xC2\xB7 WANTED \xC2\xB7 escape or you'll be arrested", 1);
 }
 
 void Police::update(double dt) {
@@ -409,6 +433,7 @@ void Police::update(double dt) {
   }
   if (!spotted_ && wantedT_ > NO_SPOT_S) { clear("gave up"); return; }
   if (fleeing_) fleeT_ += dt; else fleeT_ = 0;
+  footAgainT_ = std::max(0.0, footAgainT_ - dt);
   // ---- reached you: the grace to pull over; still moving after it: fleeing
   if (nearest < REACH_R && reachT_ < 0) reachT_ = 0;
   if (reachT_ >= 0) reachT_ += dt;
@@ -420,12 +445,19 @@ void Police::update(double dt) {
       if (nearI >= 0) { Unit& u = units_[size_t(nearI)]; u.stopped = true; u.out = true; u.offState = 1; u.off = u.pos + dvec3(std::cos(u.yaw) * 1.2, 0, -std::sin(u.yaw) * 1.2); u.offT = 0; }
       radio_ = "Pulling the suspect over"; radioT_ = c_.now;
     } else if (reachT_ > GRACE_S && !stoppedNow) {
-      fleeing_ = true; heat_ = std::max(heat_, 2.0);
+      flee(false);
       radio_ = std::string("Suspect fleeing ") + COMPASS[int(std::fmod(std::atan2(c_.player->vel.x, -c_.player->vel.z) / TAU * 8 + 8.5, 8.0))] + "!"; radioT_ = c_.now;
       c_.flash("You are fleeing \xC2\xB7 WANTED", 1);
     }
   }
-  if (pulled_ && !fleeing_ && !stoppedNow && yourV > 4) { pulled_ = false; fleeing_ = true; heat_ = std::max(heat_, 2.0); for (Unit& u : units_) { u.out = false; u.offState = 0; } }
+  // (police.js: driving off > 4.5 m/s, running off > 4 m/s; getting in / out of the car is not running off (2.5 s);
+  // on foot only a run counts (sprint: walking up to the officer to pay is not fleeing))
+  if (c_.driving != wasDriving_) { wasDriving_ = c_.driving; swapT_ = c_.now; }
+  const bool runOff = c_.now - swapT_ > 2.5 && (c_.driving ? yourV > 4.5 : yourV > 4.8);
+  if (pulled_ && !fleeing_ && runOff) flee(true);
+  // the card dismissed (Esc) while the officer waits: in the car it comes back, on foot E at him opens it (interact)
+  if (fineOpen_ && fineCard_ && c_.menus && !c_.menus->dialogOpen()) { fineCard_ = false; fineShutT_ = c_.now; }
+  if (fineOpen_ && !fineCard_ && c_.driving && fineShutT_ >= 0 && c_.now - fineShutT_ > 2 && c_.menus && !c_.menus->isOpen()) openFine();
   // ---- arrest: boxed in, stopped while fleeing
   if (fleeing_) {
     int close = 0;
@@ -454,11 +486,12 @@ void Police::update(double dt) {
       double dl = glm::length(dvec2(dv.x, dv.z));
       if (dl > 0.2) { u.off.x += dv.x / dl * std::min(dl, sp * dt); u.off.z += dv.z / dl * std::min(dl, sp * dt); u.offYaw = std::atan2(dv.x, dv.z); }
       u.off.y = c_.world->groundHeight(u.off.x, u.off.z, u.off.y + 1);
-      if (u.offState == 1 && dl < 1.0) { u.offState = 2; if (!fineOpen_) openFine(); }
+      if (u.offState == 1 && dl < (c_.driving ? 1.0 : 1.8)) { u.offState = 2; if (!fineOpen_) openFine(); }
       if (u.offState == 3) {
         double dp = std::hypot(c_.player->pos.x - u.off.x, c_.player->pos.z - u.off.z);
         if (dp < FOOT_CATCH_R) { arrest("caught on foot"); return; }
-        if (dp > FOOT_LOSE_M + 60 || glm::length(u.off - u.pos) > FOOT_LEASH_M) u.offState = 4;
+        u.offBest = std::min(u.offBest, dp);
+        if (dp > u.offBest + FOOT_LOSE_M || glm::length(u.off - u.pos) > FOOT_LEASH_M) { u.offState = 4; footAgainT_ = FOOT_AGAIN_S; }
         if (c_.driving) u.offState = 4;
       }
       if (u.offState == 4 && glm::length(dvec2(u.off.x - u.pos.x, u.off.z - u.pos.z)) < 1.5) { u.out = false; u.offState = 0; }
@@ -466,9 +499,10 @@ void Police::update(double dt) {
       continue;
     }
     if (pulled_ && !fleeing_) { u.v = std::max(0.0, u.v - 8 * dt); continue; }
-    if (onFoot && d < 22 && fleeing_ && int(i) == nearI && !u.out) {
+    // (one officer after you on foot at a time, as police.js has one scene: two were out at once, the second one ahead)
+    if (onFoot && d < 22 && fleeing_ && int(i) == nearI && !u.out && footAgainT_ <= 0 && footGap() < 0) {
       // out of the car and after you on foot
-      u.v = 0; u.out = true; u.offState = 3; u.off = u.pos + dvec3(std::cos(u.yaw) * 1.2, 0, -std::sin(u.yaw) * 1.2); u.offT = 0;
+      u.v = 0; u.out = true; u.offState = 3; u.offBest = 1e18; u.off = u.pos + dvec3(std::cos(u.yaw) * 1.2, 0, -std::sin(u.yaw) * 1.2); u.offT = 0;
       continue;
     }
     if (!fleeing_ && !onFoot && d < STOP_R) { u.v = std::max(0.0, std::min(u.v, yourV + 1) - 2 * dt); driveUnit(u, dt, you, std::max(0.0, yourV)); continue; }
@@ -479,7 +513,7 @@ void Police::update(double dt) {
     const double boost = 1 + L.catchUp * std::clamp((d - 90) / 220, 0.0, 1.0);
     double want = u.road >= 0 ? std::min(V_TOP, L.vRoad * boost) : V_OFF;
     if (d < 60) want = std::min(want, yourV + (fleeing_ ? L.ramExtra : 3) + std::sqrt(10 * std::max(0.0, d - 8)));
-    if (onFoot && d < 30) want = std::min(want, 6.0);
+    if (onFoot && d < 30) want = std::min(want, d < 12 ? 0.0 : 6.0);   // (not into you on foot: it ran the runner over)
     dvec3 aim = you;
     if (fleeing_ && c_.driving && d < 25 && u.ramT <= 0) {
       double yy = c_.drive->yaw();
@@ -504,6 +538,13 @@ void Police::others(std::vector<OtherBody>& out, const dvec3& near) const {
     o.mass = 1900; o.kind = 3; o.id = int(i);
     out.push_back(o);
   }
+}
+
+double Police::footGap() const {
+  double d = -1;
+  for (const Unit& u : units_)
+    if (u.out && u.offState == 3) { const double q = std::hypot(u.off.x - c_.player->pos.x, u.off.z - c_.player->pos.z); d = d < 0 ? q : std::min(d, q); }
+  return d;
 }
 
 void Police::knockUnit(int id, double vx, double vz) {
@@ -591,7 +632,7 @@ void Police::draw(Renderer& r, const dvec3& cam) {
     // (the alpine POLIZEI house on its lot as the web game builds it; left out of its own windows' view)
     const dvec3 p = c_.data->prisonDef.outsideAt;
     if (!(rooms_.room() == Interiors::Room::Prison && win_.outdoors()) && glm::length(p - cam) < 1500 && r.visible(p - dvec3(30, 2, 30), p + dvec3(30, 16, 30)))
-      r.submitModel(*outside_, p, mat4(1), nullptr, glm::length(p - cam) < 300);
+      r.submitModel(*outside_, p, glm::rotate(mat4(1), float(c_.data->prisonDef.outsideRot), vec3(0, 1, 0)), nullptr, glm::length(p - cam) < 300);
   } else if (station_ && c_.data && c_.data->prison.ok && out) {
     const Site& P = c_.data->prison;
     dvec3 p(P.x, c_.world->height(P.x, P.z), P.z);
@@ -652,6 +693,12 @@ bool Police::interact(std::string& prompt, bool pressed) {
     if (jailed()) return false;
     if (rooms_.atExit(c_.player->pos)) { prompt = "Leave the police station"; if (pressed) rooms_.leave(); return true; }
     return false;
+  }
+  if (wanted_ && fineOpen_ && !fleeing_ && !fineCard_ && !c_.driving) {   // (the fine's card dismissed: E opens it again)
+    const nlohmann::json& rec = c_.save->data("policeRecord");
+    prompt = "Pay the " + fmtMoney(int(FINE + FINE_STEP * (rec.value("fines", 0) + rec.value("arrests", 0)))) + " fine";
+    if (pressed) openFine();
+    return true;
   }
   if (!c_.data || !c_.data->prison.ok || rooms_.inside() || wanted_ || entering_) return false;
   if (c_.data->prisonDef.ok && c_.data->prisonDef.hasOutside) {
@@ -805,7 +852,7 @@ void Police::hud(Ui& ui, float) {
     bool officer = false;
     for (const Unit& q : units_) officer = officer || q.offState == 3;
     if (rideMirror_) { H.msg = "You're riding with " + rideDriver_ + " \xC2\xB7 wanted too"; H.tip = "Caught, you go to prison with them.\nOut of the car you stay wanted."; H.state = "PURSUIT"; H.stateCls = "hot"; H.hot = true; }
-    else if (fineOpen_) { H.msg = "Press " + c_.K(Action::Interact) + " to pay the " + fine + " fine"; H.tip = std::string(foot ? "Run" : "Drive") + " off instead and it's a chase \xC2\xB7 jail if caught."; H.state = "PULLED OVER"; }
+    else if (fineOpen_) { H.msg = fineCard_ ? "Pay the " + fine + " fine on the card" : foot ? "Press " + c_.K(Action::Interact) + " to pay the " + fine + " fine" : "The officer is at your window \xC2\xB7 the " + fine + " fine"; H.tip = std::string(foot ? "Run" : "Drive") + " off instead and it's a chase \xC2\xB7 jail if caught."; H.state = "PULLED OVER"; }
     else if (officer) { H.msg = "An officer is running after you!"; H.tip = "Outrun him, or he arrests you."; H.state = "FOOT CHASE"; H.hot = true; }
     else if (searching_) { H.msg = "They lost you \xC2\xB7 stay out of sight"; H.tip = "Stay hidden until the bar fills to escape."; H.state = "SEARCHING"; H.stateCls = "lost"; }
     else if (fleeing_) {

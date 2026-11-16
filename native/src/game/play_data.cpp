@@ -266,6 +266,7 @@ PrisonDef parsePrison(const nlohmann::json& r, const nlohmann::json* outModel) {
     if (O.contains("colliders")) for (auto& c : O["colliders"]) o.colliders.push_back({num(c, "x"), num(c, "z"), num(c, "hw"), num(c, "hd"), num(c, "rot"), num(c, "r", -1), 1e30});
     if (O.contains("patrol") && O["patrol"].is_object()) { o.hasPatrol = true; o.patrolX = num(O["patrol"], "x"); o.patrolZ = num(O["patrol"], "z"); o.patrolYaw = num(O["patrol"], "yaw"); }
     if (outModel && outModel->contains("at") && (*outModel)["at"].size() >= 3) o.outsideAt = dvec3((*outModel)["at"][0].get<double>(), (*outModel)["at"][1].get<double>(), (*outModel)["at"][2].get<double>());
+    if (outModel) o.outsideRot = num(*outModel, "atRot", 0);   // (a moved site: world/village.cpp applyMoves)
   }
   return o;
 }
@@ -296,6 +297,7 @@ WerkstattDef parseWerkstatt(const nlohmann::json& r) {
   if (!r.is_object() || !r.contains("site") || !r.contains("at") || r["at"].size() < 3) return o;
   o.ok = true;
   o.at = dvec3(r["at"][0].get<double>(), r["at"][1].get<double>(), r["at"][2].get<double>());
+  o.atRot = num(r, "atRot", 0);   // (a moved site: world/village.cpp applyMoves)
   const auto& S = r["site"];
   o.x = num(S, "x"); o.z = num(S, "z"); o.ax = num(S, "ax", 1); o.az = num(S, "az"); o.fx = num(S, "fx"); o.fz = num(S, "fz", 1); o.yaw = num(S, "yaw");
   if (r.contains("BAY")) { o.bayX = num(r["BAY"], "x", o.bayX); o.bayZ = num(r["BAY"], "z", o.bayZ); o.bayHw = num(r["BAY"], "hw", o.bayHw); o.bayHl = num(r["BAY"], "hl", o.bayHl); }

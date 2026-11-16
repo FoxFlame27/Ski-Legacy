@@ -60,12 +60,29 @@ public:
   /// at `to` copies the old site's ground, so all of it sits as it sat.
   /// clip (round 3): only what lies short of `clipMax` m along `clipDir` from `from` goes (a roadside site: its lot and
   /// buildings, not the road in front of it)
-  struct Move { std::string name; dvec2 from{0}, to{0}; double r = 0, rot = 0, dy = 0; dvec2 clipDir{0}; double clipMax = 1e30; };
+  /// lift (Nov 16, round 3 fixes): the exported terrain cuts (a piste's run-out ramp west of the Autohaus, up to 7 m)
+  /// lay on top of the copied ground, so the Werkstatt stood 3.3 m and the police yard 1.4 m under the Dorfstrasse in
+  /// front (its yard, sign and floor buried): a roadside site is raised by the cut where the road passes it (liftSites,
+  /// added to dy) and within it the cuts give way to its own level (siteGround, World::height)
+  struct Move { std::string name; dvec2 from{0}, to{0}; double r = 0, rot = 0, dy = 0; dvec2 clipDir{0}; double clipMax = 1e30; double lift = 0; };
   const std::vector<Move>& moves() const { return moves_; }
+  /// (World::load, before the packs load and before prepareRoads) each roadside site's lift: `cut` (the exported
+  /// cuts) at the road in front of it
+  void liftSites(const std::function<double(double, double)>& cut);
+  /// the ground of the raised sites: `cut` the exported cuts' delta here; returns what replaces it (the cut faded out
+  /// into the sites' lift within them, over MOVE_FADE beyond their radius)
+  double siteGround(double x, double z, double cut) const;
+private:
+  std::function<double(double, double)> cutAt_;   // (liftSites: the exported cuts, for the old sites' ground)
+public:
   /// Roads of the village's own (village.json "roads", round 3: the Dorfstrasse through the village): appended to the
   /// transport pack's road network (traffic, police, the car's road surface and tarmac, speed limits) with their
   /// heights from the drawn ground, and drawn as the exported roads are (the roadsnow-road ribbon).
   void addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& world) const;
+  /// (Nov 16) the Autohaus car park (village.json "rentalPark"): the transport pack's impound lot put beside the moved
+  /// Autohaus (its frame, mouth and bays: your cars' bays, the tow yard, the map follow), its asphalt (the car parks'
+  /// roadsnow-lot material), the mouth onto the Dorfstrasse and the bay lines laid as meshes (addRoads)
+  void addRentalPark(nlohmann::json& j, std::vector<uint8_t>& bin, World& world) const;
   /// The village's own roads cut into the ground (as roads.js cuts the terrain under the exported roads, their cut
   /// tiles): prepareRoads (World::load, once the cuts and regions are in) levels each road along its middle (the
   /// ground there, smoothed over +-16 m); roadCut (World::height) holds the ground 6 cm under that level across the

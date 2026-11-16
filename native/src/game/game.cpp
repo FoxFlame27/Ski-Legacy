@@ -1036,7 +1036,7 @@ int runGame(const GameOptions& opt) {
     if (c[0] == "raceskip" && c.size() > 1) races.debugSkip(std::atof(c[1].c_str()));
     // police: "wanted" (a car rammed: called), "flee" (a patrol car rammed: wanted and fleeing), "policelog"
     if (c[0] == "wanted") police.callFor("a car was rammed", 40);
-    if (c[0] == "flee") police.hitCop(0, 40);
+    if (c[0] == "flee") police.hitCop(-1, 40);
     if (c[0] == "policelog") SL_INFO("[mplive] police: %s, %zu units, me at (%.0f, %.0f)", police.status().c_str(), police.units(), player.pos.x, player.pos.z);
     if (c[0] == "racelog") SL_INFO("[mplive] race: active %d mp %d finished %d results %d place %d time %.2f progress %.0f; money %lld; queued '%s'; queues %zu; in race %d",
                                    int(races.active()), int(races.mpRace()), int(races.finished()), int(races.resultsUp()), races.place(), races.raceTime(), races.progress(),
@@ -3062,7 +3062,7 @@ int runGame(const GameOptions& opt) {
           if (h.road >= 0) { RoadPoint q = roadAt(transport.roads[size_t(h.road)], h.s); at0 = dvec3(q.x - q.dz * 7, 0, q.z + q.dx * 7); }
           player.setSkisOn(false);
           player.teleport(at0.x, at0.z, 0);
-          police.hitCop(0, 40);
+          police.hitCop(-1, 40);
           SL_INFO("[autotest] police: wanted (%s) at (%.0f, %.0f)", police.status().c_str(), at0.x, at0.z);
         }
         if (f > 1 && f % 40 == 0 && t5.arrestF < 0) SL_INFO("[autotest] police t=%4.1fs  %s, %zu patrol cars%s", f * frameDt, police.status().c_str(), police.units(), police.heliUp() ? ", the helicopter" : "");
@@ -3807,18 +3807,21 @@ int runGame(const GameOptions& opt) {
       wf++;
       const WerkstattDef& WS = playData.werkstatt;
       auto shot = [&](const char* n) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, n); };
+      const bool inCar = off("werkdrive");   // (werkdrive: your damaged car in the box, you in it: E repairs, not out)
       if (wf == 5) {
         wi = drive.addOwned("car_vw_golf_gti", "ZZ 4711", 37);
-        if (wi >= 0) { const dvec3 b = werk.world(WS.bayX, WS.bayZ); Drive::Parked& e = drive.parked[size_t(wi)]; e.x = b.x; e.z = b.z; e.y = b.y + 0.03; e.yaw = WS.yaw + PI; }
-        const dvec3 w = werk.world(WS.benchX - 0.8, WS.benchZ + 1.2);
+        if (wi >= 0) { const dvec3 b = werk.world(WS.bayX, WS.bayZ); Drive::Parked& e = drive.parked[size_t(wi)]; e.x = b.x; e.z = b.z; e.y = world.groundHeight(b.x, b.z, b.y + 2) + 0.03; e.yaw = WS.yaw + PI; }
+        const dvec3 w = inCar ? werk.world(WS.bayX + 2.4, WS.bayZ) : werk.world(WS.benchX - 0.8, WS.benchZ + 1.2);
         player.setSkisOn(false); player.teleport(w.x, w.z, WS.yaw + PI * 0.75);
         save.earn(1000); m0 = save.money;
       }
-      if (wf == 40) { SL_INFO("[werktest] at the workbench: prompt '%s' (car %d, damage %.0f%%)", prompt.c_str(), wi, wi >= 0 ? drive.parked[size_t(wi)].damage : -1); shot("werk_prompt"); }
-      input.inject(Action::Interact, wf == 44);
-      if (wf == 150) shot("werk_repairing");
-      if (wf == 420) { const bool ok = wi >= 0 && drive.parked[size_t(wi)].damage == 0 && save.money == m0 - repairCost(0.37); SL_INFO("[werktest] repaired: damage %.0f%%, money $%lld -> $%lld -> %s", wi >= 0 ? drive.parked[size_t(wi)].damage : -1, (long long)m0, (long long)save.money, ok ? "ok" : "FAILED"); shot("werk_done"); }
-      if (wf == 430 && !playData.hutDoors.empty()) player.teleport(playData.hutDoors[0][0], playData.hutDoors[0][1], PI);
+      if (inCar && (wf == 20 || wf == 175)) SL_INFO("[werktest] in the car: %s, in the box %s, prompt '%s'", rideKind == Ride::Car ? "yes" : "NO", werk.inBox(drive.pos().x, drive.pos().z) ? "yes" : "no", prompt.c_str());
+      const int o = inCar ? -5 : 0;
+      if (wf == 40 + o) { SL_INFO("[werktest] at the workbench: prompt '%s' (car %d, damage %.0f%%)", prompt.c_str(), wi, wi >= 0 ? drive.parked[size_t(wi)].damage : -1); shot("werk_prompt"); }
+      input.inject(Action::Interact, wf == 44 + o || (inCar && wf == 12));
+      if (wf == 150 + o) shot("werk_repairing");
+      if (wf == 420 + o) { const bool ok = wi >= 0 && drive.parked[size_t(wi)].damage == 0 && save.money == m0 - repairCost(0.37); SL_INFO("[werktest] repaired: damage %.0f%%, money $%lld -> $%lld -> %s", wi >= 0 ? drive.parked[size_t(wi)].damage : -1, (long long)m0, (long long)save.money, ok ? "ok" : "FAILED"); shot("werk_done"); }
+      if (wf == 430 && !inCar && !playData.hutDoors.empty()) player.teleport(playData.hutDoors[0][0], playData.hutDoors[0][1], PI);
       if (wf == 470) { SL_INFO("[werktest] at a hut's door: prompt '%s'", prompt.c_str()); shot("hut_prompt"); }
       input.inject(Action::Interact, wf == 474);
       if (wf == 500) { SL_INFO("[werktest] the hut's card: %s", menus.dialogOpen() ? "open" : "NOT OPEN"); shot("hut_card"); }
@@ -3826,6 +3829,68 @@ int runGame(const GameOptions& opt) {
       if (wf == 510 && playData.hasTickets) player.teleport(playData.tickets[0], playData.tickets[1], 0);
       if (wf == 550) { SL_INFO("[werktest] at the ticket counter: prompt '%s'", prompt.c_str()); shot("tickets_prompt"); }
       player.vel = dvec3(0);
+    }
+    if (opt.autotest && at == AT::Ski && off("poltest")) {
+      // (debug: the stop and the fine: called while you sit in your car on the Dorfstrasse, stopped; the officer at the
+      // window, you get out (E), pay on the card: no arrest after; then a foot chase: you run off at your sprint (6.3 m/s,
+      // then a jog, 5.5) straight down the valley (the old sites, open snow), the officer after you: escaped / caught, the gap logged)
+      static int pf = 0, ci = -1, payF = -1, runF = -1, runK = 0;
+      static double gap0 = 0;
+      pf++;
+      auto log = [&](const char* what) { SL_INFO("[poltest] t=%5.1fs %s: %s, fine card %s, dialog %s, ride %s, prompt '%s', gap %.1f", pf * frameDt, what, police.status().c_str(), police.fineAsked() ? "asked" : "-", menus.dialogOpen() ? "open" : "-", rideKind == Ride::Car ? "car" : "foot", prompt.c_str(), police.footGap()); };
+      if (pf == 5) {
+        ci = drive.debugCar("car_vw_golf_gti");
+        if (ci >= 0) { Drive::Parked& e = drive.parked[size_t(ci)]; e.x = -110; e.z = 51.6; e.yaw = -PI / 2; e.y = world.groundHeight(e.x, e.z, 5) + 0.03; }
+        player.setSkisOn(false); player.teleport(-110, 54.5, 0);
+      }
+      input.inject(Action::Interact, pf == 12);
+      if (pf == 40) { log("in the car"); police.callFor("poltest: a car was rammed", 40); }
+      if (pf > 40 && payF < 0 && pf % 120 == 0) log("waiting");
+      if (pf > 40 && payF < 0 && police.fineAsked() && menus.dialogOpen()) { payF = pf; log("the card"); }
+      if (payF > 0 && pf == payF + 20) { input.inject(Action::Interact, true); }
+      if (payF > 0 && pf == payF + 60) log("got out (E)");
+      if (payF > 0 && pf == payF + 200) { log("2 s on foot"); if (!menus.dialogOpen() && police.fineAsked()) input.inject(Action::Interact, true); }
+      if (payF > 0 && pf == payF + 230) { const bool f = menus.focusLabel("Pay the fine"); SL_INFO("[poltest] pay: %s", f ? "focused" : "NO OPTION"); nav.confirm = f; }
+      if (payF > 0 && pf == payF + 260) log("paid");
+      if (payF > 0 && pf == payF + 400) input.inject(Action::Interact, true);   // (out of the car for the foot chase)
+      if (payF > 0 && pf == payF + 1500) { SL_INFO("[poltest] fine: %s", police.wanted() || police.arrestedNow() || police.jailed() ? "STILL WANTED / ARRESTED -> FAILED" : "paid, no arrest -> ok"); runF = pf; }
+      if (pf > 2400 && payF < 0 && runF == -1) { SL_WARN("[poltest] fine: never asked -> FAILED"); runF = pf; }
+      // the foot chase: two runs (sprint, then a jog), each from 3 m ahead of the officer
+      if (runF > 0) {
+        const int k = pf - runF;
+        static dvec2 dir(0);
+        const double runV[2] = {6.3, 5.5};
+        if (k == 1) { police.clear("poltest"); if (police.jailed()) police.skipJail(0.1); }
+        if (k == 20) player.teleport(60, 120, 0);
+        if (k == 40) { police.hitCop(-1, 40); log("wanted on foot"); }
+        if (k > 40 && police.footGap() >= 0 && dir.x == 0 && dir.y == 0) { gap0 = police.footGap(); SL_INFO("[poltest] run %d (%.1f m/s): the officer out, %.1f m behind", runK, runV[runK], gap0); dir = dvec2(1, 0); double nd = 1e9; for (const auto& c : police.mpCars()) { const dvec2 d(player.pos.x - c[0], player.pos.z - c[2]); if (glm::length(d) < nd && glm::length(d) > 0.1) { nd = glm::length(d); dir = glm::normalize(d); } } }   // (away from the patrol car)
+        if (dir.x != 0 || dir.y != 0) {
+          if (police.arrestedNow() || police.jailed() || (police.footGap() < 0 && k % 2 == 0)) {
+            static int left = 0;
+            const bool caught = police.arrestedNow() || police.jailed();
+            if (caught || ++left > 60) {
+              SL_INFO("[poltest] run %d (%.1f m/s): %s after %.1f s, %.0f m run", runK, runV[runK], caught ? "CAUGHT" : "the officer gave up (back to his car)", (pf - runF) * frameDt, glm::length(dvec2(player.pos.x, player.pos.z) - dvec2(60, 120)));
+              left = 0; dir = dvec2(0); if (police.jailed()) police.skipJail(0.1);
+              if (++runK >= 2) { SL_INFO("[poltest] done"); runF = -2; } else runF = pf + 400;
+            }
+          } else {
+            {   // (along the valley road's lane, away from the officer: no guardrail, no house in the way)
+              const Transport::RoadHit h = transport.nearestRoad(player.pos.x, player.pos.z, 60);
+              if (h.road >= 0) {
+                const Road& R = transport.roads[size_t(h.road)];
+                const RoadPoint a = roadAt(R, std::clamp(h.s + 6, 0.0, R.length)), b = roadAt(R, std::clamp(h.s - 6, 0.0, R.length));
+                const dvec2 pp(player.pos.x, player.pos.z), da = dvec2(a.x, a.z) - pp, db = dvec2(b.x, b.z) - pp;
+                const dvec2 want = glm::dot(da, dir) >= glm::dot(db, dir) ? da : db;
+                if (glm::length(want) > 0.5) dir = glm::normalize(want);
+              }
+            }
+            player.pos.x += dir.x * runV[runK] * frameDt; player.pos.z += dir.y * runV[runK] * frameDt;
+            player.pos.y = world.groundHeight(player.pos.x, player.pos.z, player.pos.y + 1.5);
+            player.vel = dvec3(0);
+            if (k % 60 == 0) log("running");
+          }
+        }
+      }
     }
         if (opt.autotest && at == AT::Ski && (off("roomchalet") || off("roomprison")) && playData.chaletRoom.ok && playData.prisonDef.ok) {
       // (debug: inside a chalet / the police station from the web game's reference views: o_ch_<name>.png, o_po_<name>.png)
@@ -4065,7 +4130,8 @@ int runGame(const GameOptions& opt) {
       rideLine = drive.label() + "   " + std::to_string(int(std::round(drive.speed() * 3.6))) + " km/h";
       if (drive.speed() < 2.0) prompt = "Get out";
       dvec3 ex;
-      if (interact && drive.exit(ex)) { interact = false; standOff(ex, "Parked"); }   // (E used: not also back in at once below)
+      std::string werkQ;   // (stopped in the Werkstatt's box, damaged: E repairs (werk.interact below), it does not get you out)
+      if (interact && !(werk.available() && werk.interact(werkQ, false)) && drive.exit(ex)) { interact = false; standOff(ex, "Parked"); }   // (E used: not also back in at once below)
       for (const VehicleEvent& e : drive.events) {
         float a = e.amount;
         switch (e.type) {
@@ -4753,10 +4819,10 @@ int runGame(const GameOptions& opt) {
       if (e.driving || simTime < t.at) { k++; continue; }
       double bx, bz, byaw;   // (back to a free bay at the Autohaus car park)
       if (drive.freeBay(bx, bz, byaw)) { e.x = bx; e.z = bz; e.yaw = byaw; e.y = world.height(bx, bz) + 0.03; }
-      if (t.why == "wreck") { e.wrecked = false; e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0; }
+      e.wrecked = false; e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0;   // (every tow: repaired, as the server clears the damage)
       if (mp.active()) mp.towDone();
       save.markDirty();
-      flash("Your " + e.spec->label + " is back at the Autohaus car park" + (t.why == "wreck" ? ", repaired" : ""), Hud::Flash::Good);
+      flash("Your " + e.spec->label + " is back at the Autohaus car park, repaired", Hud::Flash::Good);
       tows.erase(tows.begin() + long(k));
     }
     // (Phase 5, impound.js) your car left empty on a road or out on the snow (not in a car park, a lay-by or the chalet
@@ -4784,10 +4850,11 @@ int runGame(const GameOptions& opt) {
             if (mp.active()) mp.tow("tow", dvec3(e.x, e.y, e.z), e.yaw, 0, [&](bool, const nlohmann::json&) { mp.towDone(); });   // (the server's fee and its tow yard)
             else save.spend(WRECK_FEE, true);
             e.impoundDay = save.day + 1;
+            e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0;   // (towed: repaired at the tow yard, server.js clears the damage on every tow)
             nlohmann::json& imp = save.data("impound", nlohmann::json::array());
             imp.push_back({{"plate", e.plate}, {"day", e.impoundDay}});
             save.markDirty();
-            flash("Your " + e.spec->label + " was towed to the impound (Autohaus car park) \xC2\xB7 -" + fmtM(WRECK_FEE) + " \xC2\xB7 available tomorrow", Hud::Flash::Bad);
+            flash("Your " + e.spec->label + " was towed to the impound (Autohaus car park) \xC2\xB7 -" + fmtM(WRECK_FEE) + " \xC2\xB7 repaired, available tomorrow", Hud::Flash::Bad);
           }
         }
         // (the next day: free again)

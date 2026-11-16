@@ -18,6 +18,7 @@ struct Collider;
 
 class Werkstatt {
 public:
+  bool inBox(double x, double z) const;   // (your car in the yellow box: werkstatt.js carInBay)
   explicit Werkstatt(PlayCtx& c) : c_(c) {}
   bool available() const;
   /// main.js findInteraction (also while you drive): E to repair your car in the box. true: the prompt is this one's
@@ -38,7 +39,7 @@ public:
 private:
   struct Car { int idx = -1; bool driving = false; double damage = 0, speed = 0; };
   Car carInBay() const;
-  bool inBox(double x, double z) const;
+
   bool inside(double x, double z, double pad) const;
   int fee(double damage) const;
   PlayCtx& c_;

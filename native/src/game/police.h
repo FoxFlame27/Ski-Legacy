@@ -98,6 +98,9 @@ public:
   int arrests() const;
   // (autotest)
   size_t units() const { return units_.size(); }
+  /// (debug, poltest) the nearest officer running after you on foot: his distance (-1: none), the fine's card up
+  double footGap() const;
+  bool fineAsked() const { return fineOpen_; }
   std::string status() const;
   bool heliUp() const { return heli_.on; }
   /// (Phase 7, audio) the nearest patrol car sounding its siren (in a chase) and the helicopter
@@ -119,7 +122,7 @@ private:
     // its officer on foot
     bool out = false;
     dvec3 off{0};
-    double offYaw = 0, offT = 0;
+    double offYaw = 0, offT = 0, offBest = 1e18;   // (offBest: the nearest he got to you, running after you)
     int offState = 0;   // 0 in the car, 1 walking to your window, 2 at the window (the fine), 3 running after you, 4 back
   };
   void spawnUnit();
@@ -145,6 +148,14 @@ private:
   std::string rideDriver_;
   double logT_ = 0;
   bool wanted_ = false, fleeing_ = false, searching_ = false, spotted_ = false, pulled_ = false, fineOpen_ = false;
+  // (the fine: the card open (our dialog), when you got in / out of the car last (police.js _swapT: getting out is not
+  // running off), when the card was dismissed (opened again))
+  bool fineCard_ = false, wasDriving_ = false;
+  double swapT_ = -1e9, fineShutT_ = -1;
+  void flee(bool dropOfficers);
+  double coolUntil_ = -1e9;   // (police.js cool / cooldownS: no new chase for 6 s after one ends (a fine paid, escaped))
+  double footAgainT_ = 0;   // (police.js footT: after an officer gave up on foot, s before the next one gets out)
+  double hitT_ = -1e9, copHitT_ = -1e9;   // (police.js w.hitT / w.copHitT: the same hit's next frames add no heat)
   double heat_ = 0, wantedT_ = 0, seenT_ = 0, unseenT_ = 0, escT_ = 0, stopT_ = 0, reachT_ = -1, holdT_ = 0, reinT_ = 0, arrestT_ = -1, fleeT_ = 0;
   dvec3 lastSeen_{0};
   std::string arrestHow_;

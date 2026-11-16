@@ -64,7 +64,10 @@ struct RigInst {
   int kind = -1, gear = 0;
   double animAcc = 0;
   bool posed = false;
-  void pose_() { rig.writePose(pose); posed = true; }
+  // where the root stood when the pose was taken: the skis' and poles' transforms are in world space, so between poses
+  // (the animation LOD: every 0.06-0.12 s) they move on with the body instead of staying behind on the snow
+  three::V3 posedRoot{0};
+  void pose_() { rig.writePose(pose); posed = true; posedRoot = rig.rootPos; }
 };
 void drawRig(Renderer& r, const RigInst& R, const PeopleKind& K, const RigGear* gear, double scale, bool shadow);
 
@@ -115,6 +118,8 @@ public:
   int maxSkiers = 1 << 30;
   /// people near a point (the player's soft bumps): positions
   void near(const dvec3& p, double r, std::vector<dvec3>& out) const;
+  /// (debug npcshot) skier i on the pistes: where, which way; false past the last
+  bool debugSkier(size_t i, dvec3& pos, double& heading) const { if (i >= skiers_.size()) return false; pos = skiers_[i].pos; heading = skiers_[i].heading; return true; }
 private:
   struct Skier {
     std::unique_ptr<RigInst> R;

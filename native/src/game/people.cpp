@@ -29,15 +29,16 @@ void drawRig(Renderer& r, const RigInst& R, const PeopleKind& K, const RigGear* 
   if (!R.posed || !K.draw) return;
   const SkierRig& g = R.rig;
   const dvec3 o(g.rootPos);
+  const V3 carried = g.rootPos - R.posedRoot;   // (the body has moved on since the pose: the gear with it)
   const mat4 S = glm::scale(mat4(1), vec3(float(scale)));
   if (g.bodyVisible) r.submitModel(*K.draw, o, S * mat4(three::compose(V3(0), g.rootQuat(), V3(1))), &R.pose, shadow);
   if (!gear || !g.gearVisible) return;
   if (g.hasSkis() && gear->ski)
     for (int s = 0; s < 2; s++)
-      if (g.skis[s].visible) r.submitModel(*gear->ski, o, S * mat4(three::compose(g.skis[s].p - V3(o), g.skis[s].q, V3(1)) * gear->skiFit), nullptr, shadow);
+      if (g.skis[s].visible) r.submitModel(*gear->ski, o, S * mat4(three::compose(g.skis[s].p + carried - V3(o), g.skis[s].q, V3(1)) * gear->skiFit), nullptr, shadow);
   if (g.hasPoles() && gear->pole)
     for (int s = 0; s < 2; s++)
-      if (g.poles[s].visible) r.submitModel(*gear->pole, o, S * mat4(three::compose(g.poles[s].p - V3(o), g.poles[s].q, V3(1)) * gear->poleFit), nullptr, shadow);
+      if (g.poles[s].visible) r.submitModel(*gear->pole, o, S * mat4(three::compose(g.poles[s].p + carried - V3(o), g.poles[s].q, V3(1)) * gear->poleFit), nullptr, shadow);
 }
 
 // ---------------------------------------------------------------- People

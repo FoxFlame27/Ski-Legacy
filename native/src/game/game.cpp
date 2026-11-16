@@ -1642,6 +1642,7 @@ int runGame(const GameOptions& opt) {
   if (off("cartest") && opt.autotest) at = AT::CarFlow;   // (debug: straight to the cars on the player's path)
   CarFlowTest carFlow;
   WreckTest wreckTest;   // (debug wrecktest)
+  double npcH = 0;       // (debug npcshot)
   if (off("maptest") && opt.autotest) at = AT::Map;   // (debug: straight to the trail map)
   // (debug: SKI_LEGACY_DEBUG=uitest: each UI screen in turn, a screenshot of it, then quit; <png>_ui_<name>.png)
   const bool uiTest = off("uitest") && opt.autotest;
@@ -5169,6 +5170,14 @@ int runGame(const GameOptions& opt) {
       we.enterCar = [&](int i) { if (drive.enter(i)) { rideKind = Ride::Car; player.setSkisOn(false); dvec3 sp, sf; drive.seat(sp, sf); player.sitOn(sp, sf); } };
       we.png = [&](const std::string& v) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, v.c_str()); };
       if (dvec3 wc, wl; wreckTest.frame(we, wc, wl)) { cam.lookAt(wc, wl); cam.fovY = 60; terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos); }
+    }
+    if (dvec3 np; opt.autotest && at == AT::Ski && off("npcshot") && npcs.debugSkier(size_t(frame / 120) % 6, np, npcH)) {
+      const double nh = npcH;
+      // (debug: the piste skiers close up, from the side, a skier every 120 frames: o_npc<k>.png)
+      const dvec3 side(std::cos(nh), 0, -std::sin(nh));
+      cam.lookAt(np + side * 4.5 + dvec3(std::sin(nh), 0, std::cos(nh)) * 1.5 + dvec3(0, 1.4, 0), np + dvec3(0, 0.7, 0)); cam.fovY = 50;
+      terrain.update(cam.pos); scenery.update(cam.pos);
+      if (frame % 120 == 100 && frame / 120 < 12 && !opt.png.empty() && pendingPng.empty()) pendingPng = pngVariant(opt.png, ("npc" + std::to_string(frame / 120)).c_str());
     }
     if (dvec3 bc, bl; off("bustest") && buses.debugCam(bc, bl)) {   // (debug: the camera on the bus test)
       cam.lookAt(bc, bl); cam.fovY = 55;

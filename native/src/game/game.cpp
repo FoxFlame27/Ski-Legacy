@@ -1323,6 +1323,12 @@ int runGame(const GameOptions& opt) {
     return p;
   };
   // buying a car at the Autohaus (carrental.js: your garage, up to GARAGE_MAX cars; it waits in your bay)
+  // a car just bought: the waypoint arrow at the top points to its bay (cleared on arrival, 25 m)
+  auto guideToCar = [&](int idx, const std::string& label) {
+    if (idx < 0 || idx >= int(drive.parked.size())) return;
+    const auto& e = drive.parked[size_t(idx)];
+    tmap.mark.on = true; tmap.mark.x = e.x; tmap.mark.z = e.z; tmap.mark.label = "Your " + label;
+  };
   auto buyCar = [&](const std::string& model, const CarCfg* cfg = nullptr) -> int {
     const CarSpec* spec = transport.car(model);
     if (!spec) return -1;
@@ -1341,8 +1347,10 @@ int runGame(const GameOptions& opt) {
         save.garage.insert(save.garage.begin(), c);
         save.rentalPlate = c.plate;
         if (d.contains("cars")) mp.profile["cars"] = d["cars"];
-        if (int oi = drive.addOwned(model, c.plate, 0); oi >= 0) drive.dress(oi, c.paint, c.rims);
+        const int oi = drive.addOwned(model, c.plate, 0);
+        if (oi >= 0) drive.dress(oi, c.paint, c.rims);
         const CarSpec* sp2 = transport.car(model);
+        guideToCar(oi, sp2 ? sp2->label : model);
         flash("Bought: " + (sp2 ? sp2->label : model) + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
       });
       return -1;
@@ -1354,6 +1362,7 @@ int runGame(const GameOptions& opt) {
     save.garage.push_back(c);
     int idx = drive.addOwned(model, c.plate, 0);
     if (cfg && idx >= 0) drive.dress(idx, paint, rims);
+    if (!opt.autotest) guideToCar(idx, spec->label);
     save.write(*plat);
     flash("Bought: " + spec->label + " (" + c.plate + ") \xC2\xB7 it waits in your bay at the Autohaus car park", Hud::Flash::Gold);
     return idx;

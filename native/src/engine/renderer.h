@@ -78,6 +78,7 @@ struct RenderSettings {
   float trailRange = 96;    // m across
   int envSize = 256;
   float bloomRadius = 1.0f;
+  bool pcss = false;        // contact-hardening soft sun shadows (needs fx >= 3)
 };
 
 /// a lamp's or a headlight's light: point (cosOuter < -1.5) or spot (dir, cones)
@@ -183,7 +184,7 @@ public:
   void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible = true, int cascade = -1);
   /// Matrix instances (origin: the batch's origin the instance translations are relative to). matOverride: draw
   /// every primitive with this material instead (a prop's night glow).
-  void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr, bool visible = true);
+  void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr, bool visible = true, int cascade = -1);
   void submitTerrain(gfx::VertexInput vi, uint32_t indexCount, const dvec3& origin, bool castShadow, bool visible = true,
                      const dvec3& bmin = dvec3(0), const dvec3& bmax = dvec3(0), uint32_t firstIndex = 0);
   void submitImpostors(const ImpostorBatch& b, bool castShadow);
@@ -274,6 +275,9 @@ private:
   struct Cascade { mat4 viewProj{1}, view{1}; float radius = 1, end = 1, texel = 1; vec4 rect{0, 0, 1, 1}; };
   void drawItems(bool shadowPass, int cascade);
   void drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur);
+  /// the alpha-tested instanced foliage (the forests): depth first, then lit with GL_EQUAL (prezFoliage)
+  bool prezItem(const Item& it) const;
+  void drawPrepass(const Item& it, gfx::PipelineState& ps, gfx::Program& cur);
   void setMaterial(const Material& m, bool pine, float height);
   void makeNoiseTexture();
   void makeSkyNoise();
@@ -293,6 +297,9 @@ private:
   int dbgW_ = 0, dbgH_ = 0;   // (dev: SKI_LEGACY_GFX=res=2560x1440: the 3D drawn at this size whatever the window: profiling a display not attached)
   bool dbgAoView_ = false;   // (dev: SKI_LEGACY_GFX=aoview: the AO term alone, grey)
   bool dbgNoRoomAo_ = false, dbgNoGrain_ = false, dbgNoPlank_ = false;   // (dev: SKI_LEGACY_GFX=noroomao,nograin,noplank)
+  // the forests' depth prepass: their alpha-tested crowns (discard / alpha to coverage) defeated the GPU's hidden-
+  // surface removal, every overlapping crown was shaded in full; SKI_LEGACY_GFX=noprez for A/B runs
+  bool prez_ = true, dbgNoPine_ = false;
   gfx::Program cardP_, deckP_;
   gfx::RenderTarget cloudNoiseRT_, atlasRT_[2];
   gfx::Texture cloudTerrain_;
@@ -351,7 +358,7 @@ private:
   void uploadLights();
   void bloomPass();
   gfx::VertexInput hudVi_, emptyVi_;
-  gfx::Program mesh_, meshSkin_, meshInst_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, hud_;
+  gfx::Program mesh_, meshOpq_, meshSkin_, meshInst_, meshPine_, meshInstEq_, preInst_, meshInstMOpq_, meshInstM_, terrain_, depthMesh_, depthSkin_, depthInst_, depthInstM_, depthTerrain_, sky_, hud_;
   gfx::Texture noise_, white_, flatN_, skyNoise_, detail_, snowTex_, rockTex_, blackTex_;
   gfx::RenderTarget snowRT_, rockRT_;
   // the valley mist: half-resolution target, the ground height map (R16F, mip-mapped)

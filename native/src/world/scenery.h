@@ -55,6 +55,8 @@ struct VegetationSettings {
   int maxImpostors = 30000;
   int shadowLods = 1;       // tree LODs that cast into the shadow map
   float rockR = 230;        // rocks drawn within this (m; crags and outcrops to twice it), quality.js veg.rockR
+  float lod3R = 0;          // past this (m) the far trees are drawn with a coarser clustering (0: none)
+  int treeCascades = 2;     // shadow cascades the trees cast into (Ultra and up: all four, the far forests' shadows)
 };
 
 class Scenery {
@@ -122,20 +124,24 @@ private:
   VegetationSettings vs_;
   std::shared_ptr<Model> treeModel_[2];
   mat4 treeFit_[2];
-  InstanceBatch batches_[2][3];      // (each frame: the lists below culled to the view frustum)
-  InstanceBatch shadowBatch_[2][3][2];   // (...and to the first two shadow cascades' boxes: the only ones trees cast into)
+  static constexpr int TREE_LODS = 4;   // full mesh, clustered at 3.2 %, 8 % and (far, lod3R) 14 % of the height
+  InstanceBatch batches_[2][TREE_LODS];      // (each frame: the lists below culled to the view frustum)
+  InstanceBatch shadowBatch_[2][TREE_LODS][4];   // (...and to the first two shadow cascades' boxes: the only ones trees cast into)
   static constexpr int ROCK_KINDS = 5;
   std::shared_ptr<Model> rockModel_[ROCK_KINDS];
   mat4 rockFit_[ROCK_KINDS];
   MatrixInstanceBatch rockBatch_[ROCK_KINDS][3];   // full mesh (close), 25 %, 8 % (crags and outcrops far off)
   dvec3 rockOrigin_{0}, lastRocks_{1e18};
   // (the lists the batches above were uploaded from, kept for a window's view: culled to its frustum each time)
-  std::vector<InstanceBatch::Inst> treeList_[2][3];
+  std::vector<InstanceBatch::Inst> treeList_[2][TREE_LODS];
   struct RockInst { MatrixInstanceBatch::Inst i; vec3 c; float r; };   // (c: world centre minus rockOrigin_)
   std::vector<RockInst> rockList_[ROCK_KINDS][3];
-  InstanceBatch viewBatch_[2][3];
+  InstanceBatch viewBatch_[2][TREE_LODS];
   ImpostorBatch viewImp_;   // (a window's view: the trees past viewTreeR() as impostors)
   MatrixInstanceBatch viewRock_[ROCK_KINDS][3];
+  // (each frame: the rock lists culled to the view and to the cascades they cast into, as the forest)
+  MatrixInstanceBatch rockVis_[ROCK_KINDS][3], rockSh_[ROCK_KINDS][3][2];
+  void submitRocks(Renderer& r);
   bool viewInit_ = false;
   void submitView(Renderer& r);
   void submitForest(Renderer& r);

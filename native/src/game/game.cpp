@@ -483,7 +483,8 @@ int runGame(const GameOptions& opt) {
 
   Terrain terrain(*dev, world, jobs, q.terrainLodK);
   memAt("terrain");
-  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 1 ? 2 : 1, q.rockR};
+  VegetationSettings vs{q.treeNear, q.treeMid, q.treeFar, q.impostorR, q.maxImpostors, q.fx >= 1 ? 2 : 1, q.rockR, q.treeLod3, 2};
+  if (const char* g = std::getenv("SKI_LEGACY_GFX"); g && std::strstr(g, "lod3=")) vs.lod3R = float(std::atof(std::strstr(g, "lod3=") + 5));   // (dev: A/B)
   SnowTrails trails;   // (ski grooves, footprints, tracks, spray: world/snowtrails)
   trails.init(q.sprayScale);
   Scenery scenery(*dev, world, jobs, assets, vs);

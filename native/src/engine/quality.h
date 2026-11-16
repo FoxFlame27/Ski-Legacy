@@ -26,6 +26,7 @@ struct Quality {
   float shadowRange = 80;     // m: where the sun's shadows end (one cascade: half extent of the box round the player)
   int cascades = 1;
   float treeNear = 40, treeMid = 150, treeFar = 600;  // full mesh / 20 % / 2 % LOD distances
+  float treeLod3 = 0;         // the far trees' coarser clustering from here (m; 0: none)
   float renderScale = 1.0f;
   int maxTexture = 2048;      // texture size cap (box-downsampled at load)
   float lodScale = 1.0f;      // props / vehicles / people / course meshes: LOD and cull distances x this
@@ -61,6 +62,7 @@ struct Quality {
   float rockR = 230;          // the mountains' rocks drawn within (m; crags and outcrops twice that): quality.js veg.rockR
   int clouds = 300;           // quality.js clouds: cumulus cards a frame (super 60, performance 150, balanced 300, high+ 420)
   bool liveWindows = false;   // the rooms' windows show the world live (High and up); below: a misty, frosted pane
+  bool pcss = false;          // contact-hardening soft sun shadows (Ultra and up)
 
   /// the web game's names (quality.js QUALITY_ORDER) and the old native ones onto the presets here
   static std::string normalize(const std::string& n) {
@@ -113,6 +115,9 @@ struct Quality {
     if (n != "switch") { q.compressTextures = true; q.textureScale = (n == "super" || n == "performance") ? 1 : 2; }
     q.rockR = n == "super" || n == "switch" ? 80.f : n == "performance" ? 150.f : n == "high" ? 300.f : n == "ultra" ? 340.f : n == "superultra" ? 400.f : 230.f;
     q.liveWindows = n == "high" || n == "ultra" || n == "superultra";
+    // the far trees' coarser LOD from 1.4 x the mid distance (a tree there is a few dozen pixels tall at 1440p: the
+    // 2,180-triangle LOD's micro-triangles were most of the forest's cost; side by side the forests look the same)
+    q.treeLod3 = n == "high" || n == "ultra" || n == "superultra" ? q.treeMid * 1.4f : 0.f;
     q.clouds = n == "super" ? 60 : n == "performance" || n == "switch" ? 150 : n == "balanced" ? 300 : 420;
     // (the six web presets' own npcs rows; switch: performance's)
     if (n == "super") { q.npcSkiers = 3; q.npcWalkers = 1; q.animNear = 25; }
@@ -129,6 +134,7 @@ struct Quality {
     rs.lowShaders = lowShaders; rs.maxLights = maxLights; rs.fx = fx; rs.terrainDetail = terrainDetail; rs.msaa = msaa;
     rs.ao = ao; rs.aoDirs = aoDirs; rs.aoSteps = aoSteps; rs.shafts = shafts; rs.fxaa = fxaa; rs.sharpen = sharpen;
     rs.toneMap = toneMap; rs.grade = grade; rs.detailTex = detailTex; rs.trailSize = trailSize; rs.trailRange = trailRange; rs.envSize = envSize;
+    rs.pcss = pcss;
   }
 };
 } // namespace sl

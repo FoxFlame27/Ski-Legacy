@@ -28,6 +28,13 @@ enum { R_GRANITE = 0, R_LIMESTONE, R_SLAB, R_CRAG, R_SCREE };
 static const double VILLAGE_CLEAR = 160, BIG_ROCK = 2.6, LOW_ROCK = 0.55, BIG_FAR = 4;
 static const double PI_D = 3.14159265358979323846;
 
+// the far trees' clustering cell (fraction of the height; dev: SKI_LEGACY_GFX=lod3c=0.12 for look tests)
+static float lod3Cluster() {
+  const char* g = std::getenv("SKI_LEGACY_GFX");
+  const char* p = g ? std::strstr(g, "lod3c=") : nullptr;
+  return p ? float(std::atof(p + 6)) : 0.14f;
+}
+
 Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& assets, const VegetationSettings& vs)
   : dev_(dev), world_(world), jobs_(jobs), assets_(assets), vs_(vs), alive_(std::make_shared<int>(1)) {
   ModelLoadOptions o;
@@ -36,7 +43,9 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
   // sampled the atlas across its islands: mushy grey-green blobs from 40 m)
   o.lodRatios = {0.2f, 0.02f};
   o.lodVertexColor = true;
-  o.lodCluster = {0.032f, 0.08f};
+  // (and a fourth, coarser one for the trees past lod3R: on High 2,180 triangles a tree out to 900 m, where one is
+  // a few dozen pixels tall: tens of thousands of trees' micro-triangles)
+  o.lodCluster = {0.032f, 0.08f, lod3Cluster()};
   o.maxTextureSize = 1024;
   const char* names[2] = {"pine_tree", "pine_tree2"};
   for (int t = 0; t < 2; t++) {
@@ -51,9 +60,9 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
         m.emissive = vec3(0); m.emissiveTex = {};
         m.metallic = 0;
       }
-    for (int l = 0; l < 3; l++) {
-      batches_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
-      for (int k = 0; k < 2; k++) shadowBatch_[t][l][k].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
+    for (int l = 0; l < TREE_LODS; l++) {
+      batches_[t][l].init(dev_, *treeModel_[t], l >= 2 ? 40000 : l == 1 ? 16000 : 4000);
+      for (int k = 0; k < std::clamp(vs_.treeCascades, 1, 4); k++) shadowBatch_[t][l][k].init(dev_, *treeModel_[t], l >= 2 ? 40000 : l == 1 ? 16000 : 4000);
     }
   }
   if (vs_.impostorR > vs_.farR) impostors_.init(dev_, uint32_t(std::max(1000, vs_.maxImpostors)));
@@ -74,7 +83,11 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
       mt.baseColor = vec4(vec3(mt.baseColor) * ROCKS[v].albedo, mt.baseColor.w);
       mt.emissive = vec3(0); mt.emissiveTex = {};
     }
-    for (int l = 0; l < 3; l++) rockBatch_[v][l].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);
+    for (int l = 0; l < 3; l++) {
+      rockBatch_[v][l].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);
+      rockVis_[v][l].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);
+      for (int k = 0; k < 2; k++) rockSh_[v][l][k].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);
+    }
   }
 }
 
@@ -370,7 +383,7 @@ void Scenery::rebuildInstances(const dvec3& cam) {
   // (the LODs hand over in dithered bands, shaders.h vLodFade: a tree within a band is in both lists, each with the
   // distances it fades in / out at; SLACK covers the camera's travel until the lists are rebuilt)
   const double r2 = vs_.farR * vs_.farR, SLACK = 12;
-  const double n0 = vs_.nearR, n1 = vs_.midR, nf = vs_.farR * 0.86;
+  const double n0 = vs_.nearR, n1 = vs_.midR, nf = vs_.farR * 0.86, n2 = vs_.lod3R > n1 * 1.2 && vs_.lod3R < nf ? vs_.lod3R : 0;
   auto band = [](double r) { return std::max(r * 0.16, 4.0); };
   drawn_ = 0;
   for (auto& [k, c] : cells_)
@@ -380,7 +393,8 @@ void Scenery::rebuildInstances(const dvec3& cam) {
       double dy = t.y - cam.y, d = std::sqrt(d2 + dy * dy);
       if (d < n0 + band(n0) + SLACK) lists[t.type][0].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, 0, float(n0))});
       if (d > n0 - SLACK && d < n1 + band(n1) + SLACK) lists[t.type][1].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n0), float(n1))});
-      if (d > n1 - SLACK) lists[t.type][2].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n1), float(nf))});
+      if (d > n1 - SLACK && (n2 <= 0 || d < n2 + band(n2) + SLACK)) lists[t.type][2].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n1), float(n2 > 0 ? n2 : nf))});
+      if (n2 > 0 && d > n2 - SLACK) lists[t.type][3].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n2), float(nf))});
       drawn_++;
     }
   // (nearest first: the near crowns fill the depth buffer before the ones they hide are shaded; the alpha-tested
@@ -436,7 +450,7 @@ void Scenery::rebuildRocks(const dvec3& cam) {
 void Scenery::submitView(Renderer& r) {
   if (!viewInit_) {
     viewInit_ = true;
-    for (int t = 0; t < 2; t++) if (treeModel_[t]) for (int l = 0; l < 3; l++) viewBatch_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
+    for (int t = 0; t < 2; t++) if (treeModel_[t]) for (int l = 0; l < TREE_LODS; l++) viewBatch_[t][l].init(dev_, *treeModel_[t], l >= 2 ? 40000 : l == 1 ? 16000 : 4000);
     for (int v = 0; v < ROCK_KINDS; v++) if (rockModel_[v]) for (int l = 0; l < 3; l++) viewRock_[v][l].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);
     viewImp_.init(dev_, 40000);
   }
@@ -457,14 +471,14 @@ void Scenery::submitView(Renderer& r) {
   static std::vector<InstanceBatch::Inst> keep;
   for (int t = 0; t < 2; t++) {
     if (!treeModel_[t]) continue;
-    for (int l = 0; l < 3; l++) {
+    for (int l = 0; l < TREE_LODS; l++) {
       keep.clear();
       for (const InstanceBatch::Inst& i : treeList_[t][l]) {
         const double s = i.posScale.w, w = s * 0.45;   // (unit height: the crown well inside 0.45 x its height round the trunk)
         const dvec3 b(i.posScale.x, i.posScale.y, i.posScale.z);
         if (!seen(b - dvec3(w, 0.5, w), b + dvec3(w, s, w), float(s))) continue;
         const double d = glm::length(b - eye);
-        if (d > R && (l == 2 || i.rot.w <= 0 || d < i.rot.w)) {   // (once per tree: from the list it is drawn in out there)
+        if (d > R && (l == 3 || (l == 2 && treeList_[t][3].empty()) || i.rot.w <= 0 || d < i.rot.w)) {   // (once per tree: from the list it is drawn in out there)
           const float seed = float(hash2(int(b.x * 3), int(b.z * 3), 9));
           imp.push_back({vec4(i.posScale), vec4(seed, float(t), float(R), float(RB))});
         }
@@ -500,16 +514,17 @@ void Scenery::submitView(Renderer& r) {
 // frame's ~26 million triangles while skiing). The same trees in the same LODs: the picture does not change.
 void Scenery::submitForest(Renderer& r) {
   const dvec3 eye = r.camera().pos;
-  const int nc = std::min(2, r.shadowCascades());
-  static std::vector<InstanceBatch::Inst> vis, sh[2];
+  const int nc = std::min(std::clamp(vs_.treeCascades, 1, 4), r.shadowCascades());
+  static std::vector<InstanceBatch::Inst> vis, sh[4];
   // (dev: SKI_LEGACY_GFX=nocull: the old way, every tree of the lists to the main pass and both cascades: A/B timings)
   static const bool noCull = [] { const char* g = std::getenv("SKI_LEGACY_GFX"); return g && std::strstr(g, "nocull"); }();
   for (int t = 0; t < 2; t++) {
     if (!treeModel_[t]) continue;
-    for (int l = 0; l < 3; l++) {
+    for (int l = 0; l < TREE_LODS; l++) {
       const bool cast = l < vs_.shadowLods;
       if (noCull) { batches_[t][l].upload(dev_, treeList_[t][l]); r.submitInstances(batches_[t][l], treeFit_[t], l, cast); continue; }
-      vis.clear(); sh[0].clear(); sh[1].clear();
+      vis.clear();
+      for (auto& v : sh) v.clear();
       for (const InstanceBatch::Inst& i : treeList_[t][l]) {
         // (unit height, base at y: the crown within 0.45 x its height round the trunk; +1 m for the sway)
         const float s = i.posScale.w, rad = s * 0.82f + 1.f;
@@ -527,13 +542,40 @@ void Scenery::submitForest(Renderer& r) {
   }
 }
 
+// the rocks, each frame: into the main pass only those in the view frustum, into the shadow cascades they cast into
+// (the first; the second too with three or more cascades, as before) only those inside each one's box. The same rocks
+// in the same LODs: the picture does not change (all of them went to every pass, behind the camera too)
+void Scenery::submitRocks(Renderer& r) {
+  const dvec3 eye = r.camera().pos;
+  const int nc = r.shadowCascades() >= 3 ? 2 : std::min(1, r.shadowCascades());
+  static std::vector<MatrixInstanceBatch::Inst> vis, sh[2];
+  static const bool noCull = [] { const char* g = std::getenv("SKI_LEGACY_GFX"); return g && std::strstr(g, "nocull"); }();
+  for (int v = 0; v < ROCK_KINDS; v++) {
+    if (!rockModel_[v]) continue;
+    for (int l = 0; l < 3; l++) {
+      const bool cast = l < 2 || vs_.shadowLods >= 2;
+      if (noCull) { r.submitInstances(rockBatch_[v][l], rockOrigin_, l, cast); continue; }
+      vis.clear(); sh[0].clear(); sh[1].clear();
+      for (const RockInst& q : rockList_[v][l]) {
+        const vec3 c = vec3(rockOrigin_ - eye) + q.c;
+        if (r.sphereVisible(c, q.r)) vis.push_back(q.i);
+        if (cast) for (int k = 0; k < nc; k++) if (r.sphereInCascade(c, q.r, k)) sh[k].push_back(q.i);
+      }
+      rockVis_[v][l].upload(dev_, vis);
+      r.submitInstances(rockVis_[v][l], rockOrigin_, l, false, nullptr, true);
+      if (cast) for (int k = 0; k < nc; k++) {
+        rockSh_[v][l][k].upload(dev_, sh[k]);
+        r.submitInstances(rockSh_[v][l][k], rockOrigin_, l, true, nullptr, false, k);
+      }
+    }
+  }
+}
+
 void Scenery::submit(Renderer& r, bool trees, bool buildings, bool view) {
   if (trees && view) submitView(r);
   if (trees && !view) submitForest(r);
   if (trees) r.submitImpostors(impostors_, false);
-  if (trees && !view)
-    for (int v = 0; v < ROCK_KINDS; v++)
-      if (rockModel_[v]) for (int l = 0; l < 3; l++) r.submitInstances(rockBatch_[v][l], rockOrigin_, l, l < 2 || vs_.shadowLods >= 2);
+  if (trees && !view) submitRocks(r);
   const dvec3 cam = r.camera().pos;
   if (buildings) for (const Placed& p : placed_) {
     double d = glm::length(p.pos - cam);

@@ -100,6 +100,10 @@ inline const char* kLighting = R"GLSL(
 uniform sampler2DShadow uShadowMap;   // the cascades in one atlas (hardware PCF)
 uniform sampler2D uEnvMap;            // the sky's radiance, equirectangular, mip-mapped by roughness
 uniform sampler2D uSkyNoise;          // sky.js makeSkyNoise (cloud coverage: the cloud shadows on the ground)
+#if SL_FX >= 3 && !defined(SL_LOW) && !defined(SL_NO_PCSS) && !defined(SL_PCSS)
+#define SL_PCSS 1
+uniform sampler2D uShadowRaw;         // (Ultra and up) the same atlas read as depths: PCSS's blocker search
+#endif
 
 // ---- shadows: cascaded, texel-snapped, filtered (bilinear PCF over a disc that keeps its width in metres)
 float shadowTap(vec3 p) { return texture(uShadowMap, p); }
@@ -120,7 +124,34 @@ float shadowCascade(int c, vec3 rel, vec3 n, float rot) {
                             vec2(0.507, 0.064), vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
   float cs = cos(rot), sn = sin(rot);
   mat2 R = mat2(cs, sn, -sn, cs);
-#if SL_FX >= 3
+#ifdef SL_PCSS
+  // (Ultra and up) contact-hardening soft shadows, as the sun casts them: the penumbra widens with the distance
+  // from the caster to the ground (the sun's disc is half a degree; the air's forward scattering widens it a
+  // little more), so a trunk's shadow is crisp where it stands and its crown's shadow on the snow soft; a pole's
+  // shadow sharp at the foot. The blocker search reads the atlas's depths; the cascade's depth range is linear
+  // (orthographic: 2 R + 2800 m, R = half the cascade's width)
+  float S = r.z / uFogParams.z;
+  float Rc = tx * S * 0.5;
+  float range = 2.0 * Rc + 2799.5;
+  float tanSun = 0.0093 * 1.6;   // (penumbra width per metre of caster height)
+#if SL_FX >= 4
+  const int NB = 12;
+#else
+  const int NB = 8;
+#endif
+  float search = clamp(30.0 * tanSun / (2.0 * Rc) * r.z, uFogParams.z * 2.0, uFogParams.z * 40.0);
+  float zb = 0.0, nb = 0.0;
+  float zBias = tx * 2.0 / range;
+  for (int i = 0; i < NB; i++) {
+    float d = texture(uShadowRaw, clamp(p.xy + R * D[i] * search, lo, hi)).r;
+    if (d < p.z - zBias) { zb += d; nb += 1.0; }
+  }
+  if (nb < 0.5) return 1.0;
+  zb /= nb;
+  float pen = (p.z - zb) * range * tanSun;   // (metres)
+  float rad = clamp(pen / (2.0 * Rc) * r.z * 0.5, uFogParams.z * 1.2, search);
+  const int N = 12;
+#elif SL_FX >= 3
   float rad = uFogParams.z * 2.2;
   const int N = 12;
 #else
@@ -333,14 +364,22 @@ out vec3 vRel;
 out vec3 vNormal;
 out vec2 vUV;
 out vec3 vColor;
+out vec3 vObj;                         // model-space position (detail layer, pine crown), w-less
+#ifdef SL_PINE
+// (the forests' own program: only what the pine shading reads leaves the vertex stage; on a tiled GPU every varying
+// of every vertex of the forest's millions of triangles is written out and read back)
+float vFanMask; vec4 vTint; vec3 vObjN; float vScale; vec3 vOX, vOY, vOZ; float vRkHG;
+#else
 out float vFanMask;
 out vec4 vTint;
-out vec3 vObj;                         // model-space position (detail layer, pine crown), w-less
 out vec3 vObjN;
 out float vScale;                      // world metres per model unit (detail layer)
 out vec3 vOX, vOY, vOZ;                // model axes in world space (detail layer)
 out float vRkHG;                       // (rocks, shading 4) height over the terrain plane under the instance
+#endif
 out vec2 vLodFade;                     // the LOD cross-fade: a pixel is kept while its dither is < x and >= y
+// (the foliage's depth prepass and its shading pass test for the same depth (GL_EQUAL): the same position, bit for bit)
+invariant gl_Position;
 void main() {
   vLodFade = vec2(1.0, 0.0);
   vec4 p = vec4(aPos, 1.0);
@@ -364,7 +403,11 @@ void main() {
   mat3 OW = mat3(uModel);
 #ifdef INSTANCED
   // vegetation.js pineMaterial: gentle wind sway (+ branch flutter on High and up), stronger toward the top
+#ifdef SL_PINE
+  {
+#else
   if (uFlags3.y > 0.5 && uFlags3.y < 1.5) {
+#endif
     // (all in the unit tree's own space, as the JS: the tree is 1 tall here and the instance scale follows below, so
     // the top of a 12 m spruce leans ~11 cm, slowly, and the trunk stands still. It used to be scaled by the instance twice
     // and to flutter in the raw model's units: whole trees wobbled by a metre)
@@ -426,14 +469,22 @@ in vec3 vRel;
 in vec3 vNormal;
 in vec2 vUV;
 in vec3 vColor;
+in vec3 vObj;
+in vec2 vLodFade;
+#ifdef SL_PINE
+// (the forests' program: the shading kind is the pine's, the other kinds' inputs are their defaults for an instance)
+#define SHK 1.0
+const float vFanMask = 0.0; const vec4 vTint = vec4(0.0); const vec3 vObjN = vec3(0.0, 1.0, 0.0); const float vScale = 1.0;
+const vec3 vOX = vec3(1.0, 0.0, 0.0), vOY = vec3(0.0, 1.0, 0.0), vOZ = vec3(0.0, 0.0, 1.0); const float vRkHG = 10.0;
+#else
+#define SHK uFlags3.y
 in float vFanMask;
 in vec4 vTint;
-in vec3 vObj;
 in vec3 vObjN;
 in float vScale;
 in vec3 vOX, vOY, vOZ;
 in float vRkHG;
-in vec2 vLodFade;
+#endif
 out vec4 oColor;
 uniform sampler2D uBase;
 uniform sampler2D uMR;
@@ -491,11 +542,15 @@ void main() {
     oColor = vec4(mix(vec3(1.0), uFanBase.xyz, a), 1.0);
     return;
   }
+#ifndef SL_PREZ
+  // (SL_PREZ: the alpha-tested foliage after its depth prepass: what the prepass kept is what passes the depth test,
+  // so this variant has no discard and the GPU shades each pixel of the forest once)
   if (vLodFade.x < 1.0 || vLodFade.y > 0.0) {
     float ld = ign(gl_FragCoord.xy);
     if (ld >= vLodFade.x || ld < vLodFade.y) discard;
   }
-  if (uFlags3.y > 8.5 && uMat.x > 0.5) {
+#endif
+  if (SHK > 8.5 && uMat.x > 0.5) {
     // a room's misty window (below High): grey frosted glass seen from inside, the hour's soft light (uEmissive)
     // coming through, brighter toward the top, a mottled mist and frost creeping in from the frame (vColor.xy: the
     // pane's size in metres)
@@ -509,7 +564,7 @@ void main() {
     oColor = vec4(c, 1.0);
     return;
   }
-  if (uFlags3.y > 8.5) {
+  if (SHK > 8.5) {
     // a room's window (liveportal.js): the world as the portal pass drew it, by the pixel's place on the screen
     // (on the screen of the frame it was drawn in: it is drawn every other frame)
     vec4 pc = uPortalVP * vec4(vRel + uPortalEye.xyz, 1.0);
@@ -518,8 +573,10 @@ void main() {
     oColor = vec4(texture(uEmissiveMap, suv).rgb * uEmissive, 1.0);
     return;
   }
+#ifndef SL_PREZ
   if (slClipped(vRel)) discard;
-  if (uFlags3.y > 4.5 && uFlags3.y < 5.5) {
+#endif
+  if (SHK > 4.5 && SHK < 5.5) {
     // a lamp's lit graphics (carlights.js lampsOn: the material's emissive x its map): only the emission, added
     vec3 e = vTint.a > 0.0 ? vTint.rgb : uEmissive;
     if (uFlags2.y > 0.5) e *= texture(uEmissiveMap, vUV).rgb;
@@ -537,10 +594,12 @@ void main() {
     base.rgb = mix(base.rgb, vTint.rgb * (0.35 + 2.4 * dot(base.rgb, vec3(0.5, 0.35, 0.15))), red * vTint.a);
   }
   if (uFlags2.x > 0.5) base.rgb *= uFlags2.w > 0.5 ? vColor * vColor : vColor;
+#ifndef SL_PREZ
   if (uFanCol.a < 1.0) {   // fans.js: the screen-door cross-fade (LOD switches, people coming on / off stage)
     float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     if (uFanCol.a < -1.5) { if (dth < -uFanCol.a - 2.0) discard; } else if (dth >= uFanCol.a) discard;
   }
+#endif
   if (uFanCol.r >= 0.0 && uFanBase.z > 0.0) {
     // fans.js jacket recolour: texels near the jacket's own hue take the person's colour, folds / shading kept
     vec3 c = base.rgb;
@@ -556,10 +615,14 @@ void main() {
     // alpha test with a sharpened, mip-stable edge (alpha to coverage under MSAA smooths it)
     float a = (base.a - uMat.w) / max(fwidth(base.a), 1e-4) + 0.5;
 #ifdef SL_A2C
+#ifndef SL_PREZ
     if (a < 0.02) discard;
+#endif
     base.a = clamp(a, 0.0, 1.0);
 #else
+#ifndef SL_PREZ
     if (a < 0.5) discard;
+#endif
     base.a = 1.0;
 #endif
   }
@@ -567,7 +630,7 @@ void main() {
   if (uFlags.y > 0.5) { vec4 mr = texture(uMR, vUV); rough *= mr.g; metallic *= mr.b; }
   // (shading 6: the gondola cabin, whose windows become tinted, reflecting glass)
   float pane = 0.0;
-  if (uFlags3.y > 5.5) {
+  if (SHK > 5.5) {
     // (the cabin's windows are painted into its colour map — pale lilac panes with the seats behind them — on the
     // upright sides between the sills and the roof: the texels that are not the red paint there are glass)
     float redSat = texel.r - max(texel.g, texel.b);
@@ -587,7 +650,7 @@ void main() {
     if (dot(gn, fn) < 0.0) gn = -gn;
   }
   vec3 n = gn;
-  int kind = int(uFlags3.y + 0.5);
+  int kind = int(SHK + 0.5);
 #ifdef SL_LOW
   if (uFlags.z > 0.5 && dist < 30.0) {   // (simplified shaders: no normal maps past 30 m)
 #else
@@ -774,6 +837,37 @@ void main() {
   // alpha-tested foliage casts its real shape (pines, fences)
   if (uMat.w >= 0.0 && uFlags.x > 0.5 && texture(uBase, vUV).a * uBaseColor.a < uMat.w) discard;
   oColor = vec4(1.0);
+}
+)GLSL";
+// the alpha-tested foliage's depth prepass (main view): the same coverage the lit shader's alpha test and alpha to
+// coverage give (the LOD dither, the sharpened alpha edge), depth only; the lit pass then runs with GL_EQUAL
+inline const char* kPrepassFS = R"GLSL(
+in vec2 vUV;
+in vec3 vRel;
+in vec2 vLodFade;
+uniform sampler2D uBase;
+uniform vec4 uMat;
+uniform vec4 uFlags;
+uniform vec4 uBaseColor;
+out vec4 oColor;
+void main() {
+  if (vLodFade.x < 1.0 || vLodFade.y > 0.0) {
+    float ld = ign(gl_FragCoord.xy);
+    if (ld >= vLodFade.x || ld < vLodFade.y) discard;
+  }
+  if (slClipped(vRel)) discard;
+  float al = 1.0;
+  if (uMat.w >= 0.0) {
+    float ba = uBaseColor.a * (uFlags.x > 0.5 ? texture(uBase, vUV).a : 1.0);
+    float a = (ba - uMat.w) / max(fwidth(ba), 1e-4) + 0.5;
+#ifdef SL_A2C
+    if (a < 0.02) discard;
+    al = clamp(a, 0.0, 1.0);
+#else
+    if (a < 0.5) discard;
+#endif
+  }
+  oColor = vec4(1.0, 1.0, 1.0, al);
 }
 )GLSL";
 inline const char* kDepthTerrainFS = R"GLSL(

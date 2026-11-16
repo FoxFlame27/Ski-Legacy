@@ -928,13 +928,18 @@ catch-up, ram gaps, sight range, the escape time). Patrol cars (car1.glb in its 
 bar) appear out of sight 260-420 m away on the roads behind you, follow the roads while far (the lane toward you), cut
 straight at you when close (or when a road leads nowhere), ram the rear quarter while you flee (the impacts are drive.js's
 own bash: knocks, crashes, damage; hitting them raises the heat). Stop with them within 40 m: pulled over, the officer
-(police_officer_rigged.glb) walks to your window: pay $1,000 (+$500 for each earlier fine / arrest) or drive off. Not
-stopping within 6 s of them reaching you: fleeing (2 stars, then a star every 36 s in sight). Escape: out of every patrol
+(police_officer_rigged.glb) walks to your window: pay $1,000 (+$500 for each earlier fine / arrest) or drive off (Nov 16: the fine's card shuts when you
+flee, getting out of the car is not running off (2.5 s, as police.js), on foot only a run is; dismissed, E at the
+officer opens it again; paid, the stop ends whatever came after it: before, "Press E to pay" stayed up while they were
+after you and you were arrested). A towed car comes back repaired (every tow, as the server clears the damage). The
+Werkstatt: stopped in its box in your damaged car, E repairs it (before, E got you out of the car first). Not
+stopping within 6 s of them reaching you: fleeing (2 stars, then a star every 48 s in sight; police.js: 36 s. Nov 16, the user: "does it go to 5 stars way too fast?": the C++ also added the hit heat on every frame of a contact, police.js once a second (a patrol car once per 1.5 s): now gated the same, and slower: hits +0.15 (0.2), a patrol car +0.3 (0.35)). Escape: out of every patrol
 car's sight (line of sight through the terrain, a road tunnel hides you) and the helicopter's: SEARCHING after 2.5 s,
 escaped after the level's time (x2.2 on foot); seen again: half the time kept. The helicopter (4+ stars or 45 s fleeing:
 heli_body.glb, 72 m up, 64 m/s) keeps over you with its searchlight cone. Arrested when boxed in (two cars within 12 m for
-10 s), stopped while fleeing with them close, or caught by the officer on foot (he runs 6.9 m/s, slowed on steep ground,
-gives up beyond reach): the ARRESTED banner (the word slamming in, red / blue at the edges), $3,000 (+$1,000 each time),
+10 s), stopped while fleeing with them close, or caught by the officer on foot (he runs 5.95 m/s, Nov 16: police.js's 6.9 outran your
+6.3 m/s sprint; within 1.2 m (1.5), slowed on steep ground, gives up once you are 20 m further off than he ever got
+(police.js footLoseM 45) and the next one gets out 6 s later): the ARRESTED banner (the word slamming in, red / blue at the edges), $3,000 (+$1,000 each time),
 45 s in prison. **Prison** (prison.js): the cell block as an interior (three cells behind the bars, bunks, toilets, the
 guard's desk and the visiting desk, the front office): "In prison · 0:45", walking the cell, released at the station's
 door; `save.jail` resumes a sentence after a reload; E at the station's door visits it (the visitors' book: a local
@@ -1917,8 +1922,25 @@ by position except a rescue in progress, which is on the mountain).
   yard faces the Dorfstrasse as it faced the valley road, at the same distance from the road's middle (17.0 / 16.0 /
   14.9 m; their floor level `y` is what lands on the new ground: the old yards stood in the valley road's cuts, so the
   copied ground is held 6 cm under it). Their buildings, rooms, doors, yards, tow trucks, patrol car bay, lots (frames and exits) and colliders go with
-  them. The Autohaus car park (impound) stays on the valley road. The chalets Stadel and Haus Bergfrieden stand across
-  the road now.
+  them. The chalets Stadel and Haus Bergfrieden stand across the road now.
+- **Fixes (Nov 16)**: (1) the police station's house (`prison_outside`) and the Werkstatt are room models drawn about
+  their `at` point, which moved but did not turn: the houses stood unturned (74-80 deg off) while their doors, colliders,
+  cells and the patrol car's bay turned with the site (the patrol car stood inside the station, the Werkstatt's bay
+  inside its wall). `applyMoves` now writes the turn as `atRot` beside a moved room model's `at`; `Police::draw` /
+  `Werkstatt::draw` turn the model by it. (2) The exported terrain cuts (a piste run-out ramp west of x -100, up to 7 m)
+  lay on top of the copied ground: the Werkstatt stood 3.3 m and the police yard 1.4 m under the Dorfstrasse in front
+  (the yard, the sign, the apron buried). `Village::liftSites` raises each roadside site by the cut where the road
+  passes it (Autohaus 0.13 m, police 1.41 m, Werkstatt 3.26 m, added to its `dy`), and `Village::siteGround` (in
+  `World::height`) gives the cuts way to the site's own level within it, fading out over 12 m beyond its radius, with
+  the old site's own road cut under it (its aprons and ramps follow that ground). (3) The Werkstatt's radius 14 -> 18 m.
+- **The Autohaus car park** (Nov 16; before, it stayed on the valley road 130 m away, an invisible lot at the end of an
+  access road: the web game builds its surface at run time, impound.js): `village.json` "rentalPark", east of the
+  Autohaus between the Postgasse (moved a few metres west for it) and the Hotel Tirolerhof, 28 x 17 m, its long sides
+  north-south, its mouth on the Dorfstrasse. `Village::addRentalPark` (with `addRoads`) puts the transport pack's impound
+  lot there (frame, mouth, its 20 bays: your cars' bays, `Drive::freeBay`, the tow yard, the trail map's car park, the
+  waypoint to a car just bought follow) and lays its asphalt (the car parks' `roadsnow-lot` material, 1 m grid on the
+  ground), the mouth to the road and the bay lines; six lamps along its sides (the layout's lamp posts), the road's
+  lamps and snow banks kept out of its mouth, trees off it.
 - **Footpaths**: the Postgasse and the Werkstattgasse from the Dorfstrasse up to the Kapellenweg; the Bahnhofstiege from
   the square's north-west corner straight up the terraces (ramps through the terrace walls at each terrace's level) to
   the Legacy Express station's exit.

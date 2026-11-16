@@ -97,7 +97,7 @@ void Werkstatt::draw(Renderer& r, const dvec3& cam) {
   if (!model_ && c_.roomModel) model_ = c_.roomModel("werkstatt");
   const dvec3& at = c_.data->werkstatt.at;
   const double d = glm::length(at - cam);
-  if (model_ && d < 1800 && r.visible(at - dvec3(16, 3, 16), at + dvec3(16, 10, 16))) r.submitModel(*model_, at, mat4(1), nullptr, d < 300);
+  if (model_ && d < 1800 && r.visible(at - dvec3(16, 3, 16), at + dvec3(16, 10, 16))) r.submitModel(*model_, at, glm::rotate(mat4(1), float(c_.data->werkstatt.atRot), vec3(0, 1, 0)), nullptr, d < 300);
 }
 
 void Werkstatt::fillColliders(std::vector<Collider>& out) const {

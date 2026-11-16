@@ -287,6 +287,7 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
           RoadPoint q = roadAt(r, rh.s);
           int dir = std::sin(dr.yaw()) * q.dx + std::cos(dr.yaw()) * q.dz >= 0 ? 1 : -1;
           if (dir > 0 ? r.length - rh.s < 200 : rh.s < 200) dir = -dir;
+          if (r.village) dir = -1;   // (the Dorfstrasse: on toward the valley road it leaves from, not to its dead end)
           road_ = rh.road * 2 + (dir > 0 ? 1 : 0);
           SL_INFO("[autotest] cars: heading for road %d (%.0f m long, %s) at s=%.0f", rh.road, r.length, r.access ? "access" : "main", rh.s);
           // (the drive is a check of the car, not of the traffic: a car that happens to stand at the yard's exit would block it)
@@ -303,6 +304,17 @@ bool CarFlowTest::frame(CarFlowEnv& e) {
           for (int i = 0; i < r.n; i++) { double d = std::hypot(r.X[size_t(i)] - p.x, r.Z[size_t(i)] - p.z); if (d < bd) { bd = d; s = r.S[size_t(i)]; } }
         }
         double ahead = 8 + dr.speed() * 0.9;
+        // (the Dorfstrasse's end at the bus terminus: on along the exported road it meets there, away from the junction)
+        if (r.village && dir < 0 && s < ahead + 4) {
+          const RoadPoint a = roadAt(r, 0);
+          int best = -1; double bs = 0, bd = 25;
+          for (size_t k = 0; k < e.transport->roads.size(); k++) {
+            const Road& o = e.transport->roads[k];
+            if (o.village || o.n < 2) continue;
+            for (double os : {0.0, o.length}) { const RoadPoint b = roadAt(o, os); const double d = std::hypot(b.x - a.x, b.z - a.z); if (d < bd) { bd = d; best = int(k); bs = os; } }
+          }
+          if (best >= 0) { road_ = best * 2 + (bs == 0 ? 1 : 0); SL_INFO("[autotest] cars: the Dorfstrasse's end: on along road %d", best); break; }
+        }
         RoadPoint q = roadAt(r, std::clamp(s + dir * ahead, 1.0, r.length - 1));
         steerTo(e, q.x - q.dz * dir * 1.6, q.z + q.dx * dir * 1.6);   // (the right-hand lane)
       }

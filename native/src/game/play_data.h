@@ -169,6 +169,7 @@ struct PrisonDef {
   bool hasOutside = false; double doorX = 0, doorZ = 0, doorYaw = 0;
   glm::dmat4 cellsFrame{1}, officeFrame{1};     // room -> world, the cell block / the front office
   dvec3 outsideAt{0};                           // where the station's exported model stands
+  double outsideRot = 0;                        // its turn about +y (a moved site)
   struct Col { double x, z, hw, hd, rot, r, top = 1e30; };
   std::vector<Col> colliders;
   bool hasPatrol = false; double patrolX = 0, patrolZ = 0, patrolYaw = 0;   // the patrol car parked in the first bay
@@ -192,7 +193,7 @@ struct ChaletVillageDef {
 struct WerkstattDef {
   bool ok = false;
   dvec3 at{0};
-  double x = 0, z = 0, ax = 1, az = 0, fx = 0, fz = 1, yaw = 0;
+  double x = 0, z = 0, ax = 1, az = 0, fx = 0, fz = 1, yaw = 0, atRot = 0;   // (atRot: the model's turn, a moved site)
   double bayX = -3.5, bayZ = -0.6, bayHw = 1.6, bayHl = 2.9, benchX = 3.4, benchZ = -4.8, IW = 6.7, ID = 5.2, repairS = 4;
   std::vector<PrisonDef::Col> colliders;
 };

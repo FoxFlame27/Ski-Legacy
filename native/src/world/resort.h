@@ -52,7 +52,9 @@ public:
   /// read them (hundreds of MB of DOM and raw data; the Switch budget)
   void releaseLoadData();
   void update(double dt, const dvec3& cam);
-  void submit(Renderer& r, bool props = true, bool meshes = true);
+  /// view: a room window's view of the world (game/window_view): the props instance by instance, only those in the
+  /// renderer's (window-narrowed) frustum or shading it
+  void submit(Renderer& r, bool props = true, bool meshes = true, bool view = false);
   Lifts& lifts() { return lifts_; }
   /// (debug: SKI_LEGACY_DEBUG=railclear) what of the baked meshes and the placed props reaches into a clearance
   /// envelope (a train's swept volume): near(bmin, bmax) culls whole chunks / instances, inside(p) tests a point;
@@ -124,6 +126,10 @@ private:
   AssetManager& assets_;
   FontSet fonts_;
   std::vector<PropSet> props_;
+  // (a window's view: per prop set, its instances in view, the full model / the light copy; origin: the camera's metre)
+  struct ViewProps { MatrixInstanceBatch lod[2]; uint32_t cap = 0; };
+  std::vector<ViewProps> viewProps_;
+  void submitPropsView(Renderer& r);
   std::vector<Chunk> chunks_;
   std::map<size_t, std::future<std::vector<uint8_t>>> unpacking_;   // (chunks being decompressed on a worker: streamChunks; after chunks_: gone first, the workers read their packed bytes)
   struct Placed { std::shared_ptr<Model> model; dvec3 pos; mat4 local; float radius; };

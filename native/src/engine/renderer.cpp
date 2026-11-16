@@ -74,6 +74,11 @@ void MatrixInstanceBatch::init(gfx::Device& d, const Model& m, uint32_t capacity
     }
   }
 }
+void MatrixInstanceBatch::release(gfx::Device& d) {
+  for (gfx::VertexInput v : inputs_) d.destroy(v);
+  if (buf_) d.destroy(buf_);
+  inputs_.clear(); buf_ = {}; count_ = capacity_ = 0; model_ = nullptr;
+}
 void MatrixInstanceBatch::upload(gfx::Device& d, const std::vector<Inst>& inst) {
   count_ = uint32_t(std::min<size_t>(inst.size(), capacity_));
   if (count_) d.replaceBuffer(buf_, inst.data(), count_ * sizeof(Inst));
@@ -701,7 +706,41 @@ bool Renderer::inCascade(const Item& it, int c) const {
 }
 
 // ---------------------------------------------------------------- frame
+// the portal's targets in place of the frame's (and back): its HDR picture (portal_, kept between pictures), depth copy
+// and mist at portalScale of the 3D resolution; every pass of scenePasses then simply works at that size
+void Renderer::swapPortalTargets() {
+  std::swap(hdr_, portal_); std::swap(depthCopy_, pDepth_); std::swap(mistRT_, pMist_); std::swap(mistRT2_, pMist2_);
+  std::swap(rw_, pw_); std::swap(rh_, ph_); std::swap(mw_, pmw_); std::swap(mh_, pmh_);
+}
+
+void Renderer::freePortal() {
+  for (gfx::RenderTarget* t : {&portal_, &pDepth_, &pMist_, &pMist2_}) if (*t) { dev_->destroy(*t); *t = {}; }
+  pw_ = ph_ = pBaseW_ = pBaseH_ = pmw_ = pmh_ = 0;
+}
+
 void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& focus) {
+  if (portalNext_ && !inPortal_) {
+    portalNext_ = false;
+    if (!portal_ || pBaseW_ != rw_ || pBaseH_ != rh_) {
+      freePortal();
+      pBaseW_ = rw_; pBaseH_ = rh_;
+      const float k = std::clamp(portalScale, 0.25f, 1.f);
+      pw_ = std::max(16, int(std::lround(float(rw_) * k))); ph_ = std::max(16, int(std::lround(float(rh_) * k)));
+      portal_ = dev_->createRenderTarget(pw_, ph_, true, gfx::TexFormat::RGBA16F, true, gfx::TexFormat::Depth24);
+      dev_->setSampling(dev_->renderTargetColor(portal_), gfx::Filter::Linear, gfx::Wrap::Clamp, 1);   // (between pictures looked up by direction)
+      pDepth_ = dev_->createRenderTarget(pw_, ph_, false, gfx::TexFormat::RGBA8, true, gfx::TexFormat::Depth24);
+      dev_->setSampling(dev_->renderTargetDepth(pDepth_), gfx::Filter::Nearest, gfx::Wrap::Clamp, 1);
+      if (mistRT_) {
+        pmw_ = std::max(1, pw_ / 2); pmh_ = std::max(1, ph_ / 2);
+        pMist_ = dev_->createRenderTarget(pmw_, pmh_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+        pMist2_ = dev_->createRenderTarget(pmw_, pmh_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+        dev_->setSampling(dev_->renderTargetColor(pMist_), gfx::Filter::Nearest, gfx::Wrap::Clamp, 1);
+        dev_->setSampling(dev_->renderTargetColor(pMist2_), gfx::Filter::Nearest, gfx::Wrap::Clamp, 1);
+      }
+    }
+    swapPortalTargets();
+    inPortal_ = true;
+  }
   cam_ = cam;
   cam_.aspect = float(w_) / float(h_);
   light_ = L;
@@ -825,7 +864,8 @@ bool Renderer::visible(const dvec3& bmin, const dvec3& bmax) const {
 
 bool Renderer::castsShadow(const dvec3& bmin, const dvec3& bmax) const {
   vec3 mn = vec3(bmin - cam_.pos), mx = vec3(bmax - cam_.pos);
-  for (int c = 0; c < nCasc_; c++) {
+  // (a window's view draws the nearest cascade only: what shades only the further ones is not submitted for it)
+  for (int c = 0; c < (inPortal_ ? std::min(nCasc_, 1) : nCasc_); c++) {
     vec2 lo(1e30f), hi(-1e30f);
     for (int k = 0; k < 8; k++) {
       vec3 p((k & 1) ? mx.x : mn.x, (k & 2) ? mx.y : mn.y, (k & 4) ? mx.z : mn.z);
@@ -873,6 +913,7 @@ void Renderer::submitModel(const Model& m, const dvec3& origin, const mat4& loca
       it.sphere = it.skinned ? vec4(vec3(rel[3]), 2.5f) : boundsSphere(it.model, p.bmin, p.bmax);
       it.shadow = castShadow;
       it.main = visible;
+      it.occl = occlusionTag;
       items_.push_back(it);
     }
   }
@@ -909,7 +950,7 @@ void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod,
   }
 }
 
-void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride) {
+void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride, bool visible) {
   if (!b.count() || !b.model()) return;
   const Model& m = *b.model();
   size_t k = 0;
@@ -933,16 +974,17 @@ void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin
       it.model = g;
       it.origin = o;
       it.shadow = castShadow && it.mat->alpha != Material::Alpha::Blend;
+      it.main = visible;
       items_.push_back(it);
     }
   }
 }
 
 void Renderer::submitTerrain(gfx::VertexInput vi, uint32_t indexCount, const dvec3& origin, bool castShadow, bool visible,
-                             const dvec3& bmin, const dvec3& bmax) {
+                             const dvec3& bmin, const dvec3& bmax, uint32_t firstIndex) {
   Item it{};
   it.kind = Item::Kind::Terrain;
-  it.vi = vi; it.count = indexCount;
+  it.vi = vi; it.count = indexCount; it.first = firstIndex;
   it.origin = vec3(origin - cam_.pos);
   it.shadow = castShadow;
   it.main = visible;
@@ -1005,7 +1047,7 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
     ps.alphaToCoverage = false;
     dev_->setPipeline(ps);
     dev_->setVec3("uOrigin", glm::value_ptr(it.origin));
-    dev_->drawIndexed(it.vi, gfx::IndexType::U32, it.count);
+    dev_->drawIndexed(it.vi, gfx::IndexType::U32, it.count, it.first);
     return;
   }
   if (it.kind == Item::Kind::Impostor) {
@@ -1059,6 +1101,7 @@ void Renderer::drawItems(bool shadowPass, int cascade) {
   if (shadowPass) { ps.colorWrite = false; ps.cull = gfx::Cull::None; ps.depthBiasFactor = 1.4f; ps.depthBiasUnits = 2.f; }
   gfx::Program cur{};
   lastMat_ = nullptr;
+  bool occl = false;
   // terrain first (largest occluder), then opaque meshes, impostors, then (main pass) the transparent ones back to front
   blend_.clear();
   for (int pass = 0; pass < 3; pass++)
@@ -1068,8 +1111,17 @@ void Renderer::drawItems(bool shadowPass, int cascade) {
       if (pass != want) continue;
       if (shadowPass && !inCascade(it, cascade)) continue;
       if (it.mat && it.mat->alpha == Material::Alpha::Blend) { if (!shadowPass) blend_.push_back(&it); continue; }
+      if (it.occl && !shadowPass) { occl = true; continue; }
       drawItem(it, shadowPass, ps, cur);
     }
+  // (the windows, last, under an occlusion query: is the view out worth drawing next time)
+  if (occl) {
+    const int slot = occFrame_ & 3;
+    portalIdle_ = 0;   // (the windows' picture is kept while they are drawn)
+    if (occState_[slot] == 0) dev_->occlusionBegin(slot);
+    for (const Item& it : items_) if (it.occl && it.main && !(it.mat && it.mat->alpha == Material::Alpha::Blend)) drawItem(it, false, ps, cur);
+    if (occState_[slot] == 0) { dev_->occlusionEnd(); occState_[slot] = 1; }
+  }
 }
 
 void Renderer::trailPass() {
@@ -1598,21 +1650,24 @@ void Renderer::scenePasses(bool portal) {
 }
 
 void Renderer::endPortal() {
-  if (!(holdFrame && frameDrawn_)) {
-    if (!portal_ || pw_ != rw_ || ph_ != rh_) {
-      if (portal_) dev_->destroy(portal_);
-      pw_ = rw_; ph_ = rh_;
-      // (4 bytes a pixel, no depth: the picture only)
-      portal_ = dev_->createRenderTarget(pw_, ph_, true, gfx::TexFormat::R11G11B10F, false, gfx::TexFormat::Depth24);
-      dev_->setSampling(dev_->renderTargetColor(portal_), gfx::Filter::Linear, gfx::Wrap::Clamp, 1);   // (1:1 still; between pictures looked up by direction)
-    }
-    scenePasses(true);
-    dev_->gpuPass("window view: into its picture");
-    dev_->resolve(hdr_, portal_, rw_, rh_, true, false);
-  }
+  if (inPortal_ && !(holdFrame && frameDrawn_)) scenePasses(true);
+  if (inPortal_) { swapPortalTargets(); inPortal_ = false; }
+  portalNext_ = false;
   clipH_ = vec3(0);
   portalRect_ = vec4(-1, -1, 1, 1);
   portalIdle_ = 0;
+}
+
+// the answer of the oldest frame in the ring (non-blocking: still on the GPU, it is asked again next frame)
+void Renderer::readOcclusion() {
+  occFrame_++;
+  const int slot = occFrame_ & 3;   // (the slot of 4 frames ago, about to be reused)
+  if (occState_[slot] == 1) {
+    const int r = dev_->occlusionResult(slot);
+    if (r < 0) { occFrame_--; return; }   // (not there yet: this frame's queries wait; asked again next frame)
+    occSeen_ = r;
+    occState_[slot] = 0;
+  } else occSeen_ = -1;   // (no windows drawn then: no answer)
 }
 
 void Renderer::endFrame() {
@@ -1620,8 +1675,9 @@ void Renderer::endFrame() {
   // still hold the last frame and the final pass shows it again)
   const bool held = holdFrame && frameDrawn_;
   if (!held) { scenePasses(false); frameDrawn_ = true; }
+  readOcclusion();
   // (the windows' picture let go of a few seconds after the last room with a view)
-  if (portal_ && ++portalIdle_ > 240) { dev_->destroy(portal_); portal_ = {}; pw_ = ph_ = 0; }
+  if (portal_ && ++portalIdle_ > 240) freePortal();
   bool ao = aoRaw_ && (set_.ao > 0 || shaftsK_ > 0.001f);
   dev_->gpuPass("ao / shafts");
   if (ao && !held) aoPass();

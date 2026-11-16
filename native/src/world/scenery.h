@@ -64,7 +64,10 @@ public:
   bool loadVillage(platform::Platform& p, const AssetPaths& paths);
   void update(const dvec3& cam, bool force = false);
   void finish(const dvec3& cam);  // wait for the cells in range (loading / tests)
-  void submit(Renderer& r, bool trees = true, bool buildings = true);
+  /// view: a room window's view of the world (game/window_view): only the trees and rocks in the renderer's (window-
+  /// narrowed) frustum or shading it are drawn, from lists of their own (the forest round a chalet is thousands of
+  /// trees, tens of millions of triangles: without this the window's pass cost 60-90 ms of GPU time)
+  void submit(Renderer& r, bool trees = true, bool buildings = true, bool view = false);
 
   /// vegetation.js collide(): the first tree whose trunk (or crown) overlaps a circle of radius r at (x, z).
   const Tree* treeAt(double x, double z, double r, bool crown) const;
@@ -125,6 +128,15 @@ private:
   mat4 rockFit_[ROCK_KINDS];
   MatrixInstanceBatch rockBatch_[ROCK_KINDS][3];   // full mesh (close), 25 %, 8 % (crags and outcrops far off)
   dvec3 rockOrigin_{0}, lastRocks_{1e18};
+  // (the lists the batches above were uploaded from, kept for a window's view: culled to its frustum each time)
+  std::vector<InstanceBatch::Inst> treeList_[2][3];
+  struct RockInst { MatrixInstanceBatch::Inst i; vec3 c; float r; };   // (c: world centre minus rockOrigin_)
+  std::vector<RockInst> rockList_[ROCK_KINDS][3];
+  InstanceBatch viewBatch_[2][3];
+  ImpostorBatch viewImp_;   // (a window's view: the trees past viewTreeR() as impostors)
+  MatrixInstanceBatch viewRock_[ROCK_KINDS][3];
+  bool viewInit_ = false;
+  void submitView(Renderer& r);
   size_t rocksDrawn_ = 0;
   std::unordered_map<int64_t, Cell> cells_;
   std::unordered_set<int64_t> queued_;

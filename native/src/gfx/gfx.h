@@ -150,6 +150,11 @@ public:
   /// ends); the times come back a few frames later (timer queries). Off (and free) unless gpuTiming(true).
   virtual void gpuTiming(bool on) { (void)on; }
   virtual void gpuPass(const char* name) { (void)name; }
+  /// occlusion queries (does anything of what is drawn between begin and end pass the depth test?), a small ring of
+  /// slots: occlusionResult is non-blocking: -1 while the GPU has not got there yet, else 0 / 1
+  virtual void occlusionBegin(int slot) { (void)slot; }
+  virtual void occlusionEnd() {}
+  virtual int occlusionResult(int slot) { (void)slot; return 1; }
   struct GpuTime { std::string name; double mean = 0, max = 0; int n = 0; };
   virtual std::vector<GpuTime> gpuTimes() const { return {}; }
   virtual double gpuLastFrameMs() const { return 0; }

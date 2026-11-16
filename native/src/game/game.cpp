@@ -5510,7 +5510,7 @@ int runGame(const GameOptions& opt) {
     const Camera roomCam = cam;
     vec4 viewRect(-1, -1, 1, 1);
     cam.aspect = float(renderer.width()) / float(std::max(1, renderer.height()));
-    const bool viewOut = windows.live() && rooms.inside() && !renderer.holdFrame && !off("noportal") && !(winHold > winFrames / 2) && windows.inView(cam, rooms.toWorld(0, 0, 0), &viewRect) && windows.due(viewRect);
+    const bool viewOut = windows.live() && rooms.inside() && !renderer.holdFrame && !off("noportal") && !(winHold > winFrames / 2) && renderer.windowsSeen() != 0 && windows.inView(cam, rooms.toWorld(0, 0, 0), &viewRect) && windows.due(viewRect);
     dev->resetFrameStats();
     if (windows.misty) windows.gain = 1.f / std::max(1e-3f, frameLight.exposure);   // (the misty glass: as bright in every room)
     for (int pass = viewOut ? 0 : 1; pass < 2; pass++) {
@@ -5540,9 +5540,9 @@ int runGame(const GameOptions& opt) {
     if (camUnderground && rideKind == Ride::Rail) railway.tunnelLights(renderer);
     else if (camUnderground && rideKind == Ride::Express) express.tunnelLights(renderer);
     bool indoor = rooms.inside() && pass == 1;
-    if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer);
-    if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort);
-    if (drawVillage && !indoor) resort.submit(renderer);
+    if (drawTerrain && !camUnderground && !indoor) terrain.submit(renderer, 512, pass == 0);   // (a window's view: the coarse grid)
+    if (!indoor) scenery.submit(renderer, drawTrees && !camUnderground, drawVillage && !haveResort, pass == 0);
+    if (drawVillage && !indoor) resort.submit(renderer, true, true, pass == 0);
     vmodels.setBusGlassInside(rideKind == Ride::Bus && seatView);   // (bus.js busGlass: you see out from inside)
     breakFx.update(paused ? 0 : frameDt, simTime, cam);
     breakFx.net = mp.active();   // (multiplayer: your knocks to the world, breakables.js send)

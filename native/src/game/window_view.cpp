@@ -144,7 +144,9 @@ void WindowView::draw(Renderer& r, const dvec3& origin, bool mirror) {
   if (!live()) return;
   if (has_ && model && r.portalTexture()) {
     for (Material& m : model->materials) { m.emissiveTex = r.portalTexture(); m.emissive = tint_ * gain; }
+    r.occlusionTag = true;   // (is any of the glass on the screen: else the next pictures are not drawn)
     r.submitModel(*model, origin, M, nullptr, false);
+    r.occlusionTag = false;
     return;
   }
   // (no view yet, or none in this frame: the soft day / night sky of liveportal.js)

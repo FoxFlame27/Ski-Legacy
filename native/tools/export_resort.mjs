@@ -647,7 +647,9 @@ function makePack(name, opt = {}) {
   const instOut = (inst) => (inst.length > 64 ? { instOff: blob(Float32Array.from(inst.flat())), instN: inst.length } : { inst });
 
   // A group's meshes in its own frame (a vehicle's procedural parts), merged per material: [{ mat, verts, ... }]
-  function localModel(root) {
+  // (opts.shadows: the meshes that cast no shadow in the web game kept apart, { noShadow: 1 }: a room's walls, floor
+  // and ceiling, which three lets the daylight through)
+  function localModel(root, opts = {}) {
     root.updateMatrixWorld(true);
     const inv = root.matrixWorld.clone().invert(), per = new Map();
     root.traverse((o) => {
@@ -661,9 +663,9 @@ function makePack(name, opt = {}) {
       for (const M of Ms) for (const gr of groups) {
         const mat = mats_[gr.materialIndex ?? 0];
         if (!mat || mat.visible === false) continue;
-        const mi = matKey(mat);
-        if (!per.has(mi)) per.set(mi, { pos: [], nor: [], uv: [], col: [], idx: [], hasCol: false });
-        const ch = per.get(mi), a = geoArrays(o.geometry, M, 0, 0, 0, uvXf(mat)), base = ch.pos.length / 3, vs = a.pos.length / 3;
+        const mi = matKey(mat), ns = !!opts.shadows && !o.castShadow, key = ns ? `ns${mi}` : mi;
+        if (!per.has(key)) per.set(key, { mi, ns, pos: [], nor: [], uv: [], col: [], idx: [], hasCol: false });
+        const ch = per.get(key), a = geoArrays(o.geometry, M, 0, 0, 0, uvXf(mat)), base = ch.pos.length / 3, vs = a.pos.length / 3;
         for (const v of a.pos) ch.pos.push(v);
         for (const v of a.nor) ch.nor.push(v);
         for (const v of a.uv) ch.uv.push(v);
@@ -671,7 +673,7 @@ function makePack(name, opt = {}) {
         for (const i of a.idx.slice(gr.start, gr.start + gr.count)) ch.idx.push(base + i);
       }
     });
-    return [...per.entries()].filter(([, c]) => c.idx.length).map(([mi, c]) => ({ mat: mi, ...packGeo(c, c.hasCol) }));
+    return [...per.values()].filter((c) => c.idx.length).map((c) => ({ mat: c.mi, ...(c.ns ? { noShadow: 1 } : {}), ...packGeo(c, c.hasCol) }));
   }
 
   function sampleSurfaces(set) {

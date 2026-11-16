@@ -659,6 +659,19 @@ void main() {
     n = normalize(mix(mix(n, gn, snowA * 0.8), vec3(0.0, 1.0, 0.0), drift * 0.5));
   }
 #ifndef SL_LOW
+  if (kind == 2 && uFlags4.w > 0.0 && uFlags.x > 0.5 && dist < 14.0) {
+    // a room's planks: relief from the colour map's own shading (the dark gaps between the boards sink in, the grain
+    // and knots stand out a little), its slope per texel; gone where the map is minified (its mips are smooth) and
+    // faded out by 14 m
+    vec2 ts = 1.0 / vec2(textureSize(uBase, 0));
+    const vec3 LW = vec3(0.299, 0.587, 0.114);
+    float h0 = sqrt(dot(texture(uBase, vUV).rgb, LW));
+    float hx = sqrt(dot(texture(uBase, vUV + vec2(ts.x, 0.0)).rgb, LW)), hy = sqrt(dot(texture(uBase, vUV + vec2(0.0, ts.y)).rgb, LW));
+    float bk = uFlags4.w * (1.0 - smoothstep(6.0, 14.0, dist));
+    vec3 bn = normalize(vec3((h0 - hx) * bk, (h0 - hy) * bk, 1.0));
+    n = perturbNormal(n, vRel, vUV, bn);
+    rough = clamp(rough + (0.5 - h0) * 0.15, 0.0, 1.0);   // (the worn tops of the boards a little glossier than the gaps)
+  }
   if (kind == 2 && uFlags4.y > 0.0) {
     // meshylook.js detail layer: triplanar grain at half a metre per repeat in the model's own space
     float dF = uFlags4.y * (1.0 - smoothstep(uFlags4.z * 0.3, uFlags4.z, dist));

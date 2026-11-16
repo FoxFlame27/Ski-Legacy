@@ -621,11 +621,36 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     if (j.contains("play") && j["play"].contains("rooms") && j["play"]["rooms"].is_object())
       for (auto it = j["play"]["rooms"].begin(); it != j["play"]["rooms"].end(); ++it)
         if (it.value().contains("parts")) {
-          auto rm = partsModel(it.value()["parts"], bin, mats);
-          // (three.js draws a Meshy prop's emissive map x its factor 1, and that map is a copy of the albedo: in the
-          // rooms the racks, the jackets and the benches are lit by their own colours)
-          if (rm) for (Material& q : rm->materials) if (q.baseTex && !q.emissiveTex && q.emissive.x > 0.99f && q.emissive.y > 0.99f && q.emissive.z > 0.99f) q.emissiveTex = q.baseTex;
-          rooms_.push_back({it.key(), rm});
+          // (the parts that cast no shadow in the web room, the shop's walls, floor and ceiling: a model of their own,
+          // "<room>:noshadow", drawn without casting; the daylight comes in over the walls as there)
+          nlohmann::json cast = nlohmann::json::array(), lit = nlohmann::json::array();
+          for (auto& p : it.value()["parts"]) (p.value("noShadow", 0) ? lit : cast).push_back(p);
+          for (int pass = 0; pass < 2; pass++) {
+            const nlohmann::json& parts = pass ? lit : cast;
+            if (parts.empty()) continue;
+            auto rm = partsModel(parts, bin, mats);
+            if (!rm) continue;
+            // (three.js draws a Meshy prop's emissive map x its factor 1: the GLB's own map. Not always a copy of the
+            // albedo: the jacket rail's is black but for a few labels; lit by their own colours the jackets went pale)
+            for (Material& q : rm->materials) if (q.baseTex && !q.emissiveTex && q.emissive.x > 0.99f && q.emissive.y > 0.99f && q.emissive.z > 0.99f) q.emissiveTex = q.glbEmissiveTex ? q.glbEmissiveTex : q.baseTex;
+            // (the shop's boards painted on canvases, the walls', the floor's, the ceiling's: large, no lettering; their
+            // relief from their own shading, Material::bump)
+            if (it.key() == "shop") {
+              std::vector<uint32_t> boards;
+              for (auto& p : parts) {
+                const int mi = p.value("mat", -1);
+                if (mi < 0 || size_t(mi) >= j["materials"].size()) continue;
+                const auto& m = j["materials"][size_t(mi)];
+                if (m["glb"].is_object() || !m.contains("map") || !m["map"].is_object()) continue;
+                const int id = m["map"]["canvas"];
+                auto c = j["canvases"].find(std::to_string(id));
+                if (c == j["canvases"].end() || c->value("w", 0) < 512 || c->value("h", 0) < 512 || (*c)["ops"].dump().find("\"fillText\"") != std::string::npos) continue;
+                if (size_t(mi) < mats.size() && mats[size_t(mi)].baseTex) boards.push_back(mats[size_t(mi)].baseTex.id);
+              }
+              for (Material& q : rm->materials) if (q.baseTex && std::find(boards.begin(), boards.end(), q.baseTex.id) != boards.end()) q.bump = 2.5f;
+            }
+            rooms_.push_back({pass ? it.key() + ":noshadow" : it.key(), rm});
+          }
         }
     pjson_ = jp; pbin_ = std::move(bin); pmats_ = mats;
   }

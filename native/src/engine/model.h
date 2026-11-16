@@ -14,6 +14,7 @@ struct Material {
   float metallic = 1, roughness = 1, normalScale = 1, alphaCutoff = 0.5f;
   vec3 emissive{0};
   gfx::Texture baseTex, mrTex, normalTex, emissiveTex;
+  gfx::Texture glbEmissiveTex;     // the glTF's own emissive map, kept even when ModelLoadOptions::ignoreEmissive drops it (the rooms: three draws it)
   bool doubleSided = false;
   bool vertexColor = false;        // multiply the base colour by the vertex colour (procedural meshes)
   bool colorSqrt = false;          // the vertex colour is stored as sqrt (8-bit packed meshes): squared in the shader
@@ -30,6 +31,7 @@ struct Material {
   uint8_t roadSnow = 0;
   float lumNorm = 1;               // (pines) 1 / mean needle luminance of the texture (vegetation.js uLumNorm)
   float clearcoat = 0;             // a clear coat over the base (car paint gets one on fx >= 1)
+  float bump = 0;                  // relief from the colour map's own shading (a room's planks: the gaps and the grain), its depth in texels
   bool additive = false;           // shading 5 (a lamp's lit graphics): only its emission, added to the image; an
                                    // instance's tint (a > 0) is the emission's colour x intensity
   // (fans.js, player/fans_rig) the crowd people: the jacket recolour key (the jacket's own hue I, Q, its luma, the cos

@@ -108,6 +108,7 @@ private:
   dvec3 origin_{-21000, 0, -21000};
   double floorY_ = 0;
   std::shared_ptr<Model> mesh_;
+  std::shared_ptr<Model> meshLit_;   // (an exported room's parts that cast no shadow: the shop's walls, floor, ceiling)
   const RoomDef* def_ = nullptr;         // an exported room's data while you are in it
   const RoomDef* look_ = nullptr;        // a room walked on the C++'s own walls, drawn as the web game's exported model
   std::shared_ptr<Model> shell_;

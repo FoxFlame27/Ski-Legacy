@@ -50,6 +50,10 @@ struct Lighting {
   float overcast = 0, snow = 0, mist = 0.1f, cloud = 0, snowCover = 0, wind = 0, icy = 0, frost = 0, clearAir = 0;
   float ambientScale = 1;   // tunnels: the sky light fades (railway.js)
   bool interior = false;    // inside a building: sky / ground above are the room's ambient, no sky IBL
+  // (an interior) the web room's scene.environment, three's RoomEnvironment (a neutral grey studio) at its
+  // environmentIntensity: the room's reflections and part of its diffuse light this neutral radiance (0: the room's
+  // own warm light round you, ROOM_ENV of the ambient)
+  float roomEnv = 0;
 };
 
 struct RenderSettings {
@@ -273,6 +277,10 @@ private:
   vec4 rays_[32]; float rayI_[32];
   vec3 glareCore_{0};
   void aoPass();
+  // the ambient occlusion's level this frame: the preset's, or in a room (below High: no AO outdoors) a half-resolution
+  // pass of its own: the corners, the floor under the racks and shelves, the gaps between the planks
+  int aoLevel() const { return set_.ao > 0 ? set_.ao : light_.interior && !set_.lowShaders ? 1 : 0; }
+  void ensureAo();
   gfx::Program build(const char* name, const char* defines, const char* vs, const char* fs, bool lit, const char* extra = nullptr);
   bool inCascade(const Item& it, int c) const;
 

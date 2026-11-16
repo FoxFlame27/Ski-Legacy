@@ -294,6 +294,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
     if (pbr.metallic_roughness_texture.texture) o.mrImage = int(pbr.metallic_roughness_texture.texture - d->textures);
     o.normalTex = tex(m.normal_texture);
     o.normalScale = m.normal_texture.scale;
+    o.glbEmissiveTex = tex(m.emissive_texture);
     if (!opt.ignoreEmissive) { o.emissive = vec3(m.emissive_factor[0], m.emissive_factor[1], m.emissive_factor[2]); o.emissiveTex = tex(m.emissive_texture); }
     o.doubleSided = m.double_sided;
     o.alpha = m.alpha_mode == cgltf_alpha_mode_mask ? Material::Alpha::Mask : m.alpha_mode == cgltf_alpha_mode_blend ? Material::Alpha::Blend : Material::Alpha::Opaque;

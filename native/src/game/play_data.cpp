@@ -144,10 +144,15 @@ RoomDef parseRoom(const nlohmann::json& r) {
     RoomDef::Light q;
     q.type = t == "point" ? 0 : t == "spot" ? 1 : t == "dir" ? 2 : t == "hemi" ? 3 : 4;
     q.color = vec3(l["color"][0].get<float>(), l["color"][1].get<float>(), l["color"][2].get<float>());
-    q.intensity = float(num(l, "intensity", 1)); q.distance = float(num(l, "distance"));
+    q.intensity = float(num(l, "intensity", 1)); q.distance = float(num(l, "distance")); q.decay = float(num(l, "decay", 2));
     q.p = dvec3(l["p"][0].get<double>(), l["p"][1].get<double>(), l["p"][2].get<double>());
     const std::string role = str(l, "role");
     q.role = role == "day" ? 1 : role == "hemi" ? 2 : role == "lamp" ? 3 : role == "fire" ? 4 : 0;
+    if (l.contains("ground") && l["ground"].is_array() && l["ground"].size() >= 3) q.ground = vec3(l["ground"][0].get<float>(), l["ground"][1].get<float>(), l["ground"][2].get<float>());
+    if (l.contains("dir") && l["dir"].is_array() && l["dir"].size() >= 3) {
+      q.dir = vec3(l["dir"][0].get<float>(), l["dir"][1].get<float>(), l["dir"][2].get<float>());
+      q.angle = float(num(l, "angle")); q.penumbra = float(num(l, "penumbra"));
+    }
     o.lights.push_back(q);
   }
   if (r.contains("panes")) for (auto& q : r["panes"]) {

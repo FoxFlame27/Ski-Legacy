@@ -66,6 +66,17 @@ public:
   /// transport pack's road network (traffic, police, the car's road surface and tarmac, speed limits) with their
   /// heights from the drawn ground, and drawn as the exported roads are (the roadsnow-road ribbon).
   void addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& world) const;
+  /// The village's own roads cut into the ground (as roads.js cuts the terrain under the exported roads, their cut
+  /// tiles): prepareRoads (World::load, once the cuts and regions are in) levels each road along its middle (the
+  /// ground there, smoothed over +-16 m); roadCut (World::height) holds the ground 6 cm under that level across the
+  /// ribbon and a flat shoulder 2.6 m wide each side (no 2 m terrain triangle that reaches under the ribbon climbs a
+  /// terrace, a piste's groove or a bank), then eases it back into the ground over 5 m. Both ways (cut and fill),
+  /// except within 24 m of a road's start (where it leaves an exported road: only cut, never over that road's own
+  /// surface). Off with the relief (--verify-heights). Thread safe once prepared.
+  void prepareRoads(const std::function<double(double, double)>& ground);
+  double roadCut(double x, double z, double h) const;
+  /// a road's level along its points (prepareRoads; empty before)
+  const std::vector<double>& roadLevel(size_t road) const { static const std::vector<double> none; return road < roadLines_.size() ? roadLines_[road].y : none; }
   /// the move whose source holds (x, z), or null
   const Move* moveAt(double x, double z) const;
   /// (x, z) carried by m
@@ -78,6 +89,8 @@ private:
   double x0_ = 0, z0_ = 0, step_ = 2;
   int nx_ = 0, nz_ = 0;
   std::vector<int16_t> relief_;
+  struct RoadLine { std::vector<dvec2> p; std::vector<double> y, s; double half = 3.4; dvec2 lo{0}, hi{0}; };
+  std::vector<RoadLine> roadLines_;
   std::shared_ptr<nlohmann::json> j_;
   std::vector<VillageDoor> hotels_;
   std::vector<VillageBuilding> buildings_;

@@ -5710,7 +5710,7 @@ int runGame(const GameOptions& opt) {
           perfReport("skiing down the run (every frame rendered)");
           if (off("fpview")) player.view = Player::View::Third;
           at = haveResort ? AT::Collide : AT::Done;
-          if (off("shotonly")) at = AT::Done;
+          if (off("shotonly")) { at = AT::Done; if (hitchTest) hitch.report(); }   // (hitchtest,shotonly: the skiing's frame times alone)
           phaseFrame = 0;
         }
       } else if (at == AT::Collide) {

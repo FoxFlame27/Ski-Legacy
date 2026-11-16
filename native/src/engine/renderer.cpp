@@ -722,6 +722,7 @@ void Renderer::fitCascades(const dvec3& focus) {
 }
 
 bool Renderer::inCascade(const Item& it, int c) const {
+  if (it.cascade >= 0) return c == it.cascade;
   if (it.sphere.w < 0) {
     if (it.kind == Item::Kind::Instanced) return c <= 1;
     if (it.kind == Item::Kind::InstMat) return c == 0 || (c == 1 && nCasc_ >= 3);
@@ -800,6 +801,7 @@ void Renderer::beginFrame(const Camera& cam, const Lighting& L, const dvec3& foc
   }
   planes_[0] = m[3] + m[0]; planes_[1] = m[3] - m[0]; planes_[2] = m[3] + m[1];
   planes_[3] = m[3] - m[1]; planes_[4] = m[3] + m[2]; planes_[5] = m[3] - m[2];
+  for (vec4& p : planes_) p /= std::max(1e-12f, glm::length(vec3(p)));   // (unit normals: sphereVisible's distances in metres)
   fitCascades(focus);
 
   FrameBlock fb{};
@@ -948,7 +950,7 @@ void Renderer::submitModel(const Model& m, const dvec3& origin, const mat4& loca
   }
 }
 
-void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow) {
+void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible, int cascade) {
   if (!b.count() || !b.model()) return;
   const Model& m = *b.model();
   size_t k = 0;
@@ -973,6 +975,8 @@ void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod,
       it.mat = &m.materialFor(p.material, std::min<int>(lod, int(p.lods.size()) - 1));
       it.model = fit * g;
       it.shadow = castShadow;
+      it.main = visible;
+      it.cascade = int8_t(cascade);
       it.height = height;
       items_.push_back(it);
     }

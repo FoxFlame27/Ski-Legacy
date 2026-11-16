@@ -463,7 +463,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   }
   SL_INFO("renderer: fx %d, %d shadow cascade(s) of %d px (atlas %dx%d) to %.0f m, MSAA %dx, AO %d, shafts %s, %s, detail maps %d px, trail map %d px over %.0f m",
           set_.fx, nCasc_, S, atlasW_, atlasH_, double(set_.shadowRange), set_.msaa, set_.ao, set_.shafts ? "on" : "off",
-          set_.toneMap == 1 ? "PBR Neutral" : "ACES", set_.detailTex, set_.trailSize, double(set_.trailRange));
+          set_.toneMap == 2 ? "PBR Neutral, long shoulder" : set_.toneMap == 1 ? "PBR Neutral" : "ACES", set_.detailTex, set_.trailSize, double(set_.trailRange));
   return true;
 }
 
@@ -1610,7 +1610,7 @@ void Renderer::aoPass() {
   // (a room: a tighter radius for its corners and shelves, a little deeper)
   // (Ultra and up outdoors: a wider reach, the sky hidden from the snow round a trunk, a hut's foot, a rock's base,
   // the gully under a cornice: what grounds a thing in the snow)
-  const float aoWide = 1.f;
+  const float aoWide = light_.interior ? 1.f : set_.fx >= 4 ? 1.6f : set_.fx >= 3 ? 1.35f : 1.f;
   dev_->setFloat("uRadius", light_.interior ? 0.75f : 1.6f * aoWide);
   dev_->setFloat("uIntensity", light_.interior ? 1.5f : 1.25f);
   dev_->setFloat("uProjScale", P[1][1] * float(rh_) * 0.5f);

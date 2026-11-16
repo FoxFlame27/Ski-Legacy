@@ -1694,6 +1694,59 @@ On llvmpipe (software GL, contended 4-core container) the skiing view runs at ro
 and 0.1-0.2 fps on High (MSAA, GTAO): a real GPU is two to three orders of magnitude faster. Software GL also grows
 the process by ~1-1.5 GB while it JIT-compiles the bigger shader variants (the autotest's peak RSS).
 
+### The forests' cost, and what Ultra / Super Ultra add (Nov 16 2026)
+
+The user: "lag on High; keep the look, way better performance on High, Ultra and Super Ultra; Ultra and Super Ultra
+should look WAY better". Measured with `SKI_LEGACY_DEBUG=hitchtest,shotonly SKI_LEGACY_GFX=res=2560x1440` (the
+autotest's run in real time, vsync on, the 3D at 2560 x 1440 whatever the window) on the M2 MacBook (8 GB, fanless:
+it throttles over back-to-back runs, so only runs taken one after the other are compared). Isolation runs
+(`SKI_LEGACY_DEBUG=notrees / noterrain / novillage`, `SKI_LEGACY_GFX=nomsaa`) showed the main pass was the forests, and
+that it was **geometry, not shading**: the triangle count moved the time, the shading did not.
+
+- **A fourth tree LOD** (`scenery.cpp`, `quality.treeLod3`): the far trees past 1.4 x the mid distance (High 350 m,
+  Ultra 490, Super Ultra 588) use a vertex clustering at 14 % of the height instead of the 8 % one (2,180 triangles a
+  tree out to 900 m, where a tree is a few dozen pixels tall), dithered in like the other LODs. Side by side (the
+  autotest's deterministic shots, amplified differences) the forests look the same. `SKI_LEGACY_GFX=lod3=<m>` and
+  `lod3c=<fraction>` for A/B.
+- **A pine program** (`SL_PINE`): the forests' shader with the pine shading only; the other kinds' inputs are
+  constants, so only the varyings the pine reads leave the vertex stage (on a tiled GPU each varying of each vertex
+  is written out and read back). `nopine` for A/B: ~15 % of the main pass.
+- **The near trees' crowns get a depth prepass** (`kPrepassFS`: the LOD dither and the crowns' alpha to coverage),
+  then the pine shading with `GL_EQUAL` and no discard (`invariant gl_Position`): each crown pixel shaded once. Only the
+  alpha-tested LOD 0: drawing the clustered LODs twice cost more than it saved. `noprez` for A/B.
+- **Opaque props and buildings** use a variant of the mesh program without the discards (`mesh_opaque`,
+  `mesh_instmat_opaque`): a shader that may discard turns the GPU's hidden-surface removal off for all it draws.
+- **The rocks are culled per instance** to the view and to the cascades they cast into, as the trees (`nocull`).
+
+High, skiing (p50 / p95 / p99 ms, main pass GPU ms, triangles incl. shadows): before 66.7 / 83.5 / 84.5, 42.4 ms,
+10.3 M; after 50.0 / 67.0 / 68.1, 29.5 ms, 8.3 M (the frame times are whole vsync intervals: 66.7 = 15 fps,
+50 = 20 fps). The picture is the same. What is left on High at 2560 x 1440 is the terrain's shading (~13 ms of the main
+pass; with the trees off the frame is still ~33 ms there), the forests (~10 ms), the mist (2.3), shadows (3.4), UI (2.9).
+Skiing, p50 / p95 / p99 ms (main pass GPU ms; shadow pass ms; triangles a frame incl. shadows), back to back:
+| preset | before | after the speed-ups | after + the Ultra look |
+|---|---|---|---|
+| Balanced | 50.0 / 51.4 / 52.0 (24.7; 2.0; 5.65 M) | 49.4 / 51.1 / 51.9 (20.8; 2.1; 5.59 M) | (unchanged) |
+| High | 66.7 / 83.5 / 84.1 (42.5; 3.4; 10.3 M) | 50.0 / 67.0 / 68.4 (29.6; 3.3; 8.3 M) | (unchanged) |
+| Ultra | 100.1 / 150.0 / 150.2 (69.5; 6.3; 18.3 M) | 83.3 / 100.1 / 116.7 (44.2; 6.3; 13.9 M) | 83.4 / 116.6 / 116.8 (44.5; 6.8; 14.5 M) |
+| Super Ultra | 149.9 / 183.4 / 183.5 (92.4; 9.9; 26.8 M) | 100.1 / 150.0 / 151.1 (59.1; 9.6; 20.6 M) | 116.7 / 166.7 / 183.4 (61.8; 16.2; 28.3 M) |
+
+(Frame times are whole vsync intervals: 50 ms = 20 fps. Not reached: 60 fps on High at 2560 x 1440 on this
+machine; the village, driving and a room were not measured this round.)
+
+**Ultra / Super Ultra** (High unchanged):
+- **Contact-hardening soft shadows (PCSS)**: a blocker search in the shadow atlas (read as depths through a second,
+  non-comparing sampler on unit 15: `Device::bindDepthRaw`; 8 taps on Ultra, 12 on Super Ultra), the penumbra from the
+  caster's height over the ground and the sun's disc (0.53 deg, widened 1.6x for the air's forward scattering): a
+  pole's or a trunk's shadow crisp at its foot and soft further out, a crown's shadow on the snow soft.
+  `SKI_LEGACY_GFX=nopcss` / `pcss` to compare.
+- **The forests cast further**: the trees out to the far LOD cast (as its coarse copy) into three cascades on Ultra,
+  all four on Super Ultra (High: LOD 0-1 into the first two), so the forests out to ~480 / 640 m shade the snow
+  beside them. (Every tree LOD into all four cascades cost Super Ultra 11 ms of shadow pass: not taken.)
+- **Wider outdoor GTAO** (1.35x / 1.6x the radius): the sky hidden from the snow round a trunk, a hut's foot, a rock.
+- **Neutral with a long shoulder** (`uToneMap` 2): the shoulder starts at 0.56 instead of 0.76 and rolls off longer, a
+  hair less exposure: sunlit snow keeps its relief, wind ripples and sun-to-shade gradation instead of clipping flat
+  white, as a camera sees it.
+
 ---
 
 ## Fix round 5 (Nov 2026): races' ground, the map's village, indoors, the bus cabin, tunnel roads, breakables

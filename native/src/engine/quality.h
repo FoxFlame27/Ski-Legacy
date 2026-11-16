@@ -92,11 +92,11 @@ struct Quality {
       q.detailTex = 2048; q.trailSize = 2048; q.trailRange = 128; q.aniso = 16; q.impostorR = 1900; q.maxImpostors = 50000;
     } else if (n == "ultra") {
       q.terrainLodK = 3.3f; q.shadowSize = 3072; q.shadowRange = 480; q.cascades = 4; q.treeNear = 100; q.treeMid = 350; q.treeFar = 1300; q.lodScale = 1.5f; q.maxPeople = 64;
-      q.fx = 3; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 3; q.aoSteps = 8; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f; q.toneMap = 1;
+      q.fx = 3; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 3; q.aoSteps = 8; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f; q.toneMap = 2;   // (2: Neutral with a long shoulder: the snow keeps its relief)
       q.detailTex = 2048; q.trailSize = 2048; q.trailRange = 128; q.envSize = 512; q.aniso = 16; q.impostorR = 2400; q.maxImpostors = 60000; q.sprayScale = 1.3f;
     } else if (n == "superultra") {
       q.terrainLodK = 3.8f; q.shadowSize = 4096; q.shadowRange = 640; q.cascades = 4; q.treeNear = 130; q.treeMid = 420; q.treeFar = 1600; q.lodScale = 2.0f; q.maxPeople = 72;
-      q.fx = 4; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 4; q.aoSteps = 10; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f; q.toneMap = 1;
+      q.fx = 4; q.terrainDetail = 2; q.msaa = 8; q.ao = 2; q.aoDirs = 4; q.aoSteps = 10; q.shafts = true; q.fxaa = false; q.sharpen = 0.3f; q.toneMap = 2;   // (2: Neutral with a long shoulder: the snow keeps its relief)
       q.detailTex = 2048; q.trailSize = 3072; q.trailRange = 150; q.envSize = 512; q.aniso = 16; q.impostorR = 3000; q.maxImpostors = 80000; q.sprayScale = 1.5f;
     } else if (n == "switch") {
       q.terrainLodK = 1.05f; q.shadowSize = 1024; q.shadowRange = 50; q.treeNear = 22; q.treeMid = 85; q.treeFar = 320; q.renderScale = 1.0f;
@@ -115,6 +115,7 @@ struct Quality {
     if (n != "switch") { q.compressTextures = true; q.textureScale = (n == "super" || n == "performance") ? 1 : 2; }
     q.rockR = n == "super" || n == "switch" ? 80.f : n == "performance" ? 150.f : n == "high" ? 300.f : n == "ultra" ? 340.f : n == "superultra" ? 400.f : 230.f;
     q.liveWindows = n == "high" || n == "ultra" || n == "superultra";
+    q.pcss = n == "ultra" || n == "superultra";   // (contact-hardening soft shadows)
     // the far trees' coarser LOD from 1.4 x the mid distance (a tree there is a few dozen pixels tall at 1440p: the
     // 2,180-triangle LOD's micro-triangles were most of the forest's cost; side by side the forests look the same)
     q.treeLod3 = n == "high" || n == "ultra" || n == "superultra" ? q.treeMid * 1.4f : 0.f;

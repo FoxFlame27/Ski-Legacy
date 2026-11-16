@@ -178,7 +178,7 @@ const VROADS = [{ name: 'Dorfstrasse', pts: DORF, kmh: 30, half: 3.4 }];
 // instead of on the valley road 130 m away: east of it between the Postgasse (moved a few metres west for it) and the
 // Hotel Tirolerhof, its long sides north-south, its mouth on the Dorfstrasse. world/village.cpp addRoads puts the
 // transport pack's impound lot here (bays, the map, the tow yard follow) and lays its asphalt and bay lines.
-const RPARK = { name: 'Autohaus car park', x: -59.5, z: 31, ux: 0, uz: 1, vx: 1, vz: 0, hw: 14, hd: 8.5, dirx: 0, dirz: 1, ex: -59.5, ez: 47.2, mouthW: 8, mouthTo: 50.5 };
+const RPARK = { name: 'Autohaus car park', x: -60, z: 33, ux: 0, uz: 1, vx: 1, vz: 0, hw: 12, hd: 7.5, dirx: 0, dirz: 1, ex: -60, ez: 47.2, mouthW: 8, mouthTo: 50.5 };
 const inRPark = (x, z, pad = 0) => { const dx = x - RPARK.x, dz = z - RPARK.z, u = dx * RPARK.ux + dz * RPARK.uz, v = dx * RPARK.vx + dz * RPARK.vz; return (Math.abs(u) < RPARK.hw + pad && Math.abs(v) < RPARK.hd + pad) || (Math.abs(v) < RPARK.mouthW / 2 + pad && u > 0 && z < RPARK.mouthTo + pad); };
 const inBox = (x, z, m = 0) => x > BOX.x0 - m && x < BOX.x1 + m && z > BOX.z0 - m && z < BOX.z1 + m;
 const CLEAR_MODELS = ['hotel_chalet', 'lamp_post', 'snowman', 'firewood_pile'];
@@ -362,7 +362,7 @@ const facing = (dx, dz) => Math.atan2(dx, dz);
 building('bakery', -35, -35.5, E, 13, { name: 'Bäckerei Moser', kind: 'shop' });
 building('cafe', -38, 3, E, 14, { name: 'Café Alpenrose', kind: 'shop' });
 building('shop_townhouse', -34.5, 15.5, E, 7.5, { name: 'Sport Hofer', kind: 'shop' });
-building('hotel_tyrol', -38, 33, E, 24, { name: 'Hotel Tirolerhof', kind: 'hotel', weight: 1.4 });
+building('hotel_tyrol', -38, 33, E, 21, { name: 'Hotel Tirolerhof', kind: 'hotel', weight: 1.4 });
 // the street from the bus terminus into the square, lined with shops on both sides
 building('shop_pastel', -15, 29, E, 17, { name: 'Boutique Kristall', kind: 'shop' });
 building('shop_timber', 20, 30, Wt, 15, { name: 'Bergsport Rainer', kind: 'shop' });
@@ -731,8 +731,8 @@ for (const R of VROADS) {
 }
 log(`our roads: ${nRoadLamps} lamps, ${nRoadBanks} snow banks`);
 // the Autohaus car park's lamps (parking.js: along the long sides, 0.9 m out, not by the mouth)
-for (const u of [-10, 0, 10]) for (const side of [-1, 1]) {
-  const x = RPARK.x + RPARK.ux * u + RPARK.vx * side * (RPARK.hd + 0.9), z = RPARK.z + RPARK.uz * u + RPARK.vz * side * (RPARK.hd + 0.9);
+for (const u of [-8, 0, 8]) for (const side of [-1, 1]) {
+  const x = RPARK.x + RPARK.ux * u + RPARK.vx * side * (RPARK.hd + 1.8), z = RPARK.z + RPARK.uz * u + RPARK.vz * side * (RPARK.hd + 1.8);
   if (side < 0 && u === 0) continue;
   lampAt(x, z, facing(-RPARK.vx * side, -RPARK.vz * side));
 }

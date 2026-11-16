@@ -127,6 +127,64 @@ double Village::delta(double x, double z) const {
   return ((a + (b - a) * tx) * (1 - tz) + (c + (d - c) * tx) * tz) * 0.01;
 }
 
+namespace {
+constexpr double ROAD_FLAT = 2.6, ROAD_EASE = 5.0, ROAD_UNDER = 0.06, ROAD_JOIN = 24.0;
+}
+
+void Village::prepareRoads(const std::function<double(double, double)>& ground) {
+  roadLines_.clear();
+  if (!j_ || !j_->contains("roads")) return;
+  std::vector<RoadLine> lines;
+  for (auto& R : (*j_)["roads"]) {
+    RoadLine L;
+    for (auto& q : R["pts"]) L.p.push_back(dvec2(q[0].get<double>(), q[1].get<double>()));
+    L.half = R.value("half", 3.4);
+    const int n = int(L.p.size());
+    if (n < 2) { lines.push_back(std::move(L)); continue; }
+    std::vector<double> g(static_cast<size_t>(n));
+    for (int i = 0; i < n; i++) g[size_t(i)] = ground(L.p[size_t(i)].x, L.p[size_t(i)].y);
+    L.y.resize(size_t(n)); L.s.resize(size_t(n));
+    double acc = 0;
+    for (int i = 0; i < n; i++) {
+      double sum = 0, w = 0;
+      for (int k = -4; k <= 4; k++) { const int q = std::clamp(i + k, 0, n - 1); sum += g[size_t(q)]; w += 1; }
+      // (the first points keep the ground's own level: the exported road the Dorfstrasse leaves from)
+      const double t = std::min(1.0, i / 4.0);
+      L.y[size_t(i)] = g[size_t(i)] + (sum / w - g[size_t(i)]) * t;
+      if (i) acc += glm::length(L.p[size_t(i)] - L.p[size_t(i - 1)]);
+      L.s[size_t(i)] = acc;
+    }
+    const double m = L.half + ROAD_FLAT + ROAD_EASE;
+    L.lo = L.p[0]; L.hi = L.p[0];
+    for (const dvec2& q : L.p) { L.lo = glm::min(L.lo, q); L.hi = glm::max(L.hi, q); }
+    L.lo -= dvec2(m); L.hi += dvec2(m);
+    lines.push_back(std::move(L));
+  }
+  roadLines_ = std::move(lines);
+}
+
+double Village::roadCut(double x, double z, double h) const {
+  if (!reliefOn) return h;
+  for (const RoadLine& L : roadLines_) {
+    if (L.y.empty() || x < L.lo.x || z < L.lo.y || x > L.hi.x || z > L.hi.y) continue;
+    double best = 1e30, y = 0, s = 0;
+    bool before = false;
+    for (size_t q = 1; q < L.p.size(); q++) {
+      const dvec2 a = L.p[q - 1], e = L.p[q] - a;
+      const double l2 = std::max(1e-9, glm::dot(e, e)), t0 = glm::dot(dvec2(x, z) - a, e) / l2, t = std::clamp(t0, 0.0, 1.0);
+      const double d = glm::length(a + e * t - dvec2(x, z));
+      if (d < best) { best = d; y = L.y[q - 1] + (L.y[q] - L.y[q - 1]) * t; s = L.s[q - 1] + (L.s[q] - L.s[q - 1]) * t; before = q == 1 && t0 < 0; }
+    }
+    const double flat = L.half + ROAD_FLAT;
+    if (before || best > flat + ROAD_EASE) continue;
+    double w = 1;
+    if (best > flat) { const double t = (best - flat) / ROAD_EASE; w = 1 - t * t * (3 - 2 * t); }
+    const double want = h + (y - ROAD_UNDER - h) * w;
+    h = s < ROAD_JOIN ? std::min(h, want) : want;
+  }
+  return h;
+}
+
 std::vector<dvec2> Village::route(const dvec2& from, const dvec2& to, double lane) const {
   std::vector<dvec2> out;
   if (nodes_.empty() || glm::length(to - from) < 10) { out.push_back(to); return out; }
@@ -415,26 +473,34 @@ void Village::addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& worl
     return off;
   };
   size_t nTris = 0;
+  size_t roadIdx = 0;
   for (auto& R : (*j_)["roads"]) {
+    const size_t ri = roadIdx++;
     std::vector<dvec2> p;
     for (auto& q : R["pts"]) p.push_back(dvec2(q[0].get<double>(), q[1].get<double>()));
     if (p.size() < 2) continue;
     const int n = int(p.size());
-    // heights: the drawn ground across the ribbon's width (the highest of its 7 points: the terrain's mesh never pokes
-    // through), smoothed along it, a little over it (the layout sets the ground under the road 12 cm lower)
-    std::vector<double> y0(static_cast<size_t>(n)), y(static_cast<size_t>(n));
+    // heights: the road's level along its middle (prepareRoads: the ground is cut to it, World::height); without it the
+    // drawn ground's highest across the ribbon, smoothed
+    std::vector<double> y(static_cast<size_t>(n));
     const double halfW = R.value("half", 3.4);
-    for (int i = 0; i < n; i++) {
-      dvec2 d = p[size_t(std::min(n - 1, i + 1))] - p[size_t(std::max(0, i - 1))];
-      d /= std::max(1e-6, glm::length(d));
-      double top = -1e30;
-      for (int a = 0; a < 7; a++) { const dvec2 q = p[size_t(i)] + dvec2(-d.y, d.x) * ((a - 3) / 3.0 * halfW); top = std::max(top, world.meshHeight(q.x, q.y)); }
-      y0[size_t(i)] = top + 0.04;
-    }
-    for (int i = 0; i < n; i++) {
-      double s = 0, w = 0;
-      for (int k = -3; k <= 3; k++) { const int q = std::clamp(i + k, 0, n - 1); s += y0[size_t(q)]; w += 1; }
-      y[size_t(i)] = s / w;
+    const std::vector<double>& lv = roadLevel(ri);
+    if (lv.size() == size_t(n)) {
+      y = lv;
+    } else {
+      std::vector<double> y0(static_cast<size_t>(n));
+      for (int i = 0; i < n; i++) {
+        dvec2 d = p[size_t(std::min(n - 1, i + 1))] - p[size_t(std::max(0, i - 1))];
+        d /= std::max(1e-6, glm::length(d));
+        double top = -1e30;
+        for (int a = 0; a < 7; a++) { const dvec2 q = p[size_t(i)] + dvec2(-d.y, d.x) * ((a - 3) / 3.0 * halfW); top = std::max(top, world.meshHeight(q.x, q.y)); }
+        y0[size_t(i)] = top + 0.04;
+      }
+      for (int i = 0; i < n; i++) {
+        double s = 0, w = 0;
+        for (int k = -3; k <= 3; k++) { const int q = std::clamp(i + k, 0, n - 1); s += y0[size_t(q)]; w += 1; }
+        y[size_t(i)] = s / w;
+      }
     }
     std::vector<float> X, Y, Z, S, lim;
     std::vector<int16_t> kmh;
@@ -471,10 +537,10 @@ void Village::addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& worl
         const dvec2 rgt(-d.y, d.x);
         for (int a = 0; a < 7; a++) {
           const dvec2 q = p[size_t(k)] + rgt * ((a - 3) / 3.0 * half);
-          const float pos[3] = {float(q.x - origin.x), float(y[size_t(k)] + 0.22 - origin.y), float(q.y - origin.z)};
+          const float pos[3] = {float(q.x - origin.x), float(y[size_t(k)] + 0.035 - origin.y), float(q.y - origin.z)};
           const int8_t nrm[4] = {0, 127, 0, 0};
           const float uv[2] = {float(a / 6.0), float(S[size_t(k)] * 0.0754)};
-          const uint8_t col[4] = {255, 255, 255, 0};
+          const uint8_t col[4] = {255, 189, 255, 0};
           uint8_t raw[28];
           std::memcpy(raw, pos, 12); std::memcpy(raw + 12, nrm, 4); std::memcpy(raw + 16, uv, 8); std::memcpy(raw + 24, col, 4);
           vb.insert(vb.end(), raw, raw + 28);
@@ -482,7 +548,7 @@ void Village::addRoads(nlohmann::json& j, std::vector<uint8_t>& bin, World& worl
       }
       for (int a = 0; a < 6; a++) {
         const uint16_t p0 = uint16_t(base + a), p1 = uint16_t(base + a + 1), p2 = uint16_t(base + 7 + a), p3 = uint16_t(base + 7 + a + 1);
-        for (uint16_t k : {p0, p2, p1, p1, p2, p3}) ib.push_back(k);
+        for (uint16_t k : {p0, p1, p2, p1, p3, p2}) ib.push_back(k);   // (counter-clockwise seen from above: the other way round it was culled, only its shadow drawn)
       }
     }
     if (ib.empty()) continue;

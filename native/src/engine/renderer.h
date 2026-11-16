@@ -280,7 +280,7 @@ private:
   RenderSettings set_;
   int w_ = 1, h_ = 1, rw_ = 1, rh_ = 1;
   bool frameDrawn_ = false;   // the targets hold a finished frame (holdFrame)
-  gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, aoRaw_, aoTex_, trail_, portal_;
+  gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, envRoom_, aoRaw_, aoTex_, trail_, portal_;
   int pw_ = 0, ph_ = 0, portalIdle_ = 0;
   vec4 portalRect_{-1, -1, 1, 1};
   mat4 portalVP_{1};
@@ -337,7 +337,7 @@ private:
   double time_ = 0, lastClock_ = -1, windPhase_ = 0, frameClockDt_ = 0;
   dvec2 mistDrift_{0};
   bool noMist_ = false;
-  vec3 envZenith_{0}, envHorizon_{0}, envSun_{0}, envGlow_{0};
+  vec3 envZenith_{0}, envHorizon_{0}, envSun_{0}, envGlow_{0}, roomEnvZ_{0}, roomEnvH_{0};   // (roomEnv: an interior's own reflection)
   vec2 sunUV_{0};
   float shaftsK_ = 0;
   vec3 sunCol_{0};

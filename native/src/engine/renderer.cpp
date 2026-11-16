@@ -1158,7 +1158,8 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
 }
 
 bool Renderer::prezItem(const Item& it) const {
-  return prez_ && it.kind == Item::Kind::Instanced && it.main && !it.occl && it.mat && it.mat->shading == 1 && it.mat->alpha != Material::Alpha::Blend;
+  // (only the near trees' alpha-tested crowns: the forest is vertex-bound, the clustered far LODs are not drawn twice)
+  return prez_ && it.kind == Item::Kind::Instanced && it.main && !it.occl && it.mat && it.mat->shading == 1 && it.mat->alpha == Material::Alpha::Mask;
 }
 
 // depth only, the coverage of the lit pass (alpha to coverage under MSAA); the culling of the lit pass

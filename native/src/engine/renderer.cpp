@@ -472,7 +472,12 @@ void Renderer::resize(int w, int h) {
     dev_->setSampling(dev_->renderTargetColor(mistRT2_), gfx::Filter::Nearest, gfx::Wrap::Clamp, 1);
   }
   if (aoRaw_) { dev_->destroy(aoRaw_); dev_->destroy(aoTex_); aoRaw_ = aoTex_ = {}; }
-  if (set_.ao > 0 || set_.shafts) {
+  ensureAo();
+}
+
+void Renderer::ensureAo() {
+  if (aoRaw_ || !hdr_) return;
+  if (set_.ao > 0 || set_.shafts || aoLevel() > 0) {
     float k = set_.ao >= 2 ? 1.f : 0.5f;
     aw_ = std::max(1, int(rw_ * k)); ah_ = std::max(1, int(rh_ * k));
     aoRaw_ = dev_->createRenderTarget(aw_, ah_, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
@@ -592,9 +597,10 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
     // (a room has no sky to reflect: its own walls and lamps make the reflections, three's RoomEnvironment that the web
     // rooms set at environmentIntensity ~0.2; without it bare metal and gloss went black: the till, the rails, brass.
     // The hemisphere gives up what the room's reflection adds to the diffuse light, so the room is as bright as before)
-    envI = ROOM_ENV;
-    fb.hemiSky = vec4(L.sky * float(PI) * (1 - ROOM_ENV * 0.8f), envI);
-    fb.hemiGround = vec4(L.ground * float(PI) * (1 - ROOM_ENV * 0.8f), 1);
+    const float give = L.roomEnv > 0 ? 0.f : ROOM_ENV * 0.8f;
+    envI = L.roomEnv > 0 ? 1.f : ROOM_ENV;
+    fb.hemiSky = vec4(L.sky * float(PI) * (1 - give), envI);
+    fb.hemiGround = vec4(L.ground * float(PI) * (1 - give), 1);
   } else {
     fb.hemiSky = vec4(hemiC * hemiI, envI);
     fb.hemiGround = vec4(hemiG * hemiI, std::max(0.05f, sunVisible));
@@ -613,6 +619,9 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
     roomEnvZ_ = L.sky * 0.85f;
     roomEnvH_ = L.sky * 1.15f + L.sunColor * (keyI * 0.03f);
     envGround = L.ground * 0.9f;
+    if (L.roomEnv > 0) {   // (RoomEnvironment: its light panels overhead and at the sides, the grey floor below)
+      roomEnvZ_ = vec3(1.25f * L.roomEnv); roomEnvH_ = vec3(L.roomEnv); envGround = vec3(0.6f * L.roomEnv);
+    }
   }
   fb.envGround = vec4(envGround, L.mist);
   sunCol_ = key;
@@ -647,6 +656,9 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
       }
     }
     float norm = float(4 * PI / wsum);
+    // (RoomEnvironment's grey studio: in the web room it shows mostly as the sheen on the floor and the varnish at a
+    // glance, little as diffuse light: the dark corners stay dark)
+    if (L.interior && L.roomEnv > 0) norm *= 0.35f;
     for (int k = 0; k < 9; k++) fb.sh[k] = sh[k] * norm;
   } else for (int k = 0; k < 9; k++) fb.sh[k] = vec4(0);
 }
@@ -1002,7 +1014,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   static const float STR[5] = {0, 0.35f, 0.45f, 0.5f, 0.5f}, FAR[5] = {1, 16, 22, 28, 34};
   vec4 f3(float(m.paint), float(kind), height, m.lumNorm);
   dev_->setVec4("uFlags3", glm::value_ptr(f3));
-  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], float(m.roadSnow));
+  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], kind == 2 ? m.bump : float(m.roadSnow));
   dev_->setVec4("uFlags4", glm::value_ptr(f4));
   dev_->setVec4("uFanBase", glm::value_ptr(m.fanBase));   // (fans.js crowd people: recolour, screen-door fade)
   dev_->setVec4("uFanCol", glm::value_ptr(m.fanCol));
@@ -1471,11 +1483,12 @@ void Renderer::aoPass() {
   dev_->setVec2("uNearFar", glm::value_ptr(nf));
   dev_->setVec2("uInvProj", glm::value_ptr(ip));
   dev_->setVec2("uFullTexel", glm::value_ptr(ft));
-  dev_->setFloat("uRadius", 1.6f);
-  dev_->setFloat("uIntensity", 1.25f);
+  // (a room: a tighter radius for its corners and shelves, a little deeper)
+  dev_->setFloat("uRadius", light_.interior ? 0.75f : 1.6f);
+  dev_->setFloat("uIntensity", light_.interior ? 1.5f : 1.25f);
   dev_->setFloat("uProjScale", P[1][1] * float(rh_) * 0.5f);
   dev_->setFloat("uMaxPx", 110.f * float(rh_) / 1080.f * 1.5f);
-  dev_->setFloat("uDirs", set_.ao > 0 ? float(set_.aoDirs) : 0.f);
+  dev_->setFloat("uDirs", aoLevel() > 0 ? float(set_.aoDirs) : 0.f);
   dev_->setFloat("uSteps", float(set_.aoSteps));
   dev_->setVec2("uSunUV", glm::value_ptr(sunUV_));
   dev_->setFloat("uShafts", shaftsK_);
@@ -1638,7 +1651,8 @@ void Renderer::endFrame() {
   if (!held) { scenePasses(false); frameDrawn_ = true; }
   // (the windows' picture let go of a few seconds after the last room with a view)
   if (portal_ && ++portalIdle_ > 240) { dev_->destroy(portal_); portal_ = {}; pw_ = ph_ = 0; }
-  bool ao = aoRaw_ && (set_.ao > 0 || shaftsK_ > 0.001f);
+  if (aoLevel() > 0) ensureAo();
+  bool ao = aoRaw_ && (aoLevel() > 0 || shaftsK_ > 0.001f);
   dev_->gpuPass("ao / shafts");
   if (ao && !held) aoPass();
   bool bloom = bloomOn && bloomStrength > 0;
@@ -1659,7 +1673,7 @@ void Renderer::endFrame() {
     dev_->setFloat("uExposure", light_.exposure);
     dev_->setInt("uToneMap", light_.toneMap >= 0 ? light_.toneMap : set_.toneMap);
     vec4 p1(bloom ? bloomStrength * 0.42f : 0.f, fx.vignette, fx.streaks, fx.flash);
-    vec4 p2(fx.hit, float(time_), ao && set_.ao > 0 ? 0.85f : 0.f, ao ? shaftsK_ * 0.07f : 0.f);
+    vec4 p2(fx.hit, float(time_), ao && aoLevel() > 0 ? 0.85f : 0.f, ao ? shaftsK_ * 0.07f : 0.f);
     vec4 p3(float(set_.grade), float(w_) / float(h_), set_.fx >= 1 ? 1.f : 0.f, aa ? 1.f : 0.f);
     dev_->setVec4("uPost", glm::value_ptr(p1));
     dev_->setVec4("uPost2", glm::value_ptr(p2));

@@ -1821,6 +1821,21 @@ room's warm light round you, the floor's below, three's RoomEnvironment as the w
 ambient light coming that way (the hemisphere light gives up as much); the sky's environment map stays as it was for
 the windows' view of the world.
 
+**The ski shop's light, as the web game's (Nov 16, the user: "make the ski shop look WAY better").** Held against
+interior.js from the same spots: (1) the jackets were lit by their own colours (the GLB's emissive map was replaced
+by the albedo; the jacket rail's own map is black but for a few labels: pale, garbled jackets up close) — the room
+loader now uses each GLB's own emissive map (`Material::glbEmissiveTex`); (2) the walls, floor and ceiling cast no
+shadow in the web room, so the daylight comes in over them and lays the beams' shadows across the ski wall: the export
+keeps those parts apart (`localModel(..., { shadows: true })`, `noShadow`; drawn as `shop:noshadow` without casting);
+(3) the picture lights and the podium's key light are spots with their cones (export: `dir`, `angle`, `penumbra`), no
+longer lighting the ceiling and the counter round them; the lanterns' falloff matched to three's I / d^decay at 2.5 m;
+(4) the hemisphere's dark brown ground colour (the walls were lit as brightly as the floor) and three's RoomEnvironment
+at 0.22 as a neutral light (`Lighting::roomEnv`: mostly the floor's and the varnish's sheen), so the wood reads brown
+rather than orange and the counter no longer glows. Beyond the web game: ambient occlusion in every room on every
+preset but Switch (`Renderer::aoLevel`: half resolution, 0.75 m radius: the corners, under the racks and shelves) and
+relief on the painted boards from their own shading (`Material::bump`: the gaps sink in, the grain shows; faded out by
+14 m). The room's mean colour from the five reference spots is now within a few % of the web game's.
+
 Debug views (with `--autotest --png out.png`): `SKI_LEGACY_DEBUG=roomshop` (the shop from the web game's reference
 spots (`rack`: close to the jacket rail), the conversation, the outfit shop's tabs: `out_in_<name>.png`, `out_talk.png`, `out_outfit_<tab>.png`),
 `roomchalet` (`out_ch_<name>.png`: both floors), `roomprison` (`out_po_<name>.png`: visiting, then jailed and

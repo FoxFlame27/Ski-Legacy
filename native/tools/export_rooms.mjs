@@ -27,7 +27,9 @@ async function build({ THREE, SRC, models, loadGLB, pack, log, r4, village, worl
       const p = new THREE.Vector3().setFromMatrixPosition(o.matrixWorld);
       out.push({ ...(o.userData.slRole ? { role: o.userData.slRole } : {}), type: o.isPointLight ? 'point' : o.isSpotLight ? 'spot' : o.isDirectionalLight ? 'dir' : o.isHemisphereLight ? 'hemi' : 'ambient',
         color: [r4(o.color.r), r4(o.color.g), r4(o.color.b)], ground: o.groundColor ? [r4(o.groundColor.r), r4(o.groundColor.g), r4(o.groundColor.b)] : null,
-        intensity: r4(o.intensity), distance: r4(o.distance || 0), decay: r4(o.decay ?? 2), p: [r4(p.x), r4(p.y), r4(p.z)] });
+        intensity: r4(o.intensity), distance: r4(o.distance || 0), decay: r4(o.decay ?? 2), p: [r4(p.x), r4(p.y), r4(p.z)],
+        // (a spot: where it points, its cone and the cone's soft edge)
+        ...(o.isSpotLight ? (() => { o.target.updateMatrixWorld(true); const d = new THREE.Vector3().setFromMatrixPosition(o.target.matrixWorld).sub(p).normalize(); return { dir: [r4(d.x), r4(d.y), r4(d.z)], angle: r4(o.angle), penumbra: r4(o.penumbra) }; })() : {}) });
     });
     return out;
   };
@@ -97,7 +99,7 @@ async function build({ THREE, SRC, models, loadGLB, pack, log, r4, village, worl
     for (const h of shop.outfitHits || []) hits.push({ kind: 'outfits', box: box(h) });
     const bg = shop.scene.background;
     rooms.shop = {
-      parts: pack.localModel(shop.scene),
+      parts: pack.localModel(shop.scene, { shadows: true }),
       W: 16, D: 8, H: 3.6, eye: 1.62, spawn: [0, 8 / 2 - 1.4, Math.PI], speed: 2.2,
       // (ShopInterior.update: x within +-(W / 2 - 0.4), z within -D / 2 + 0.65 .. D / 2 - 0.4)
       bounds: [-16 / 2 + 0.4, 16 / 2 - 0.4, -8 / 2 + 0.65, 8 / 2 - 0.4],

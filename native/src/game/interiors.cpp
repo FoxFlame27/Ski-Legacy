@@ -15,6 +15,9 @@ namespace {
 const vec4 PLASTER(0.78f, 0.74f, 0.66f, 1), LARCH(0.42f, 0.24f, 0.11f, 1), STONE(0.33f, 0.32f, 0.30f, 1), STEEL(0.30f, 0.32f, 0.35f, 1);
 // an exported room's lights (three.js units) in the renderer's: the key light, the hemisphere light, the lamps
 constexpr float ROOM_SUN = 1.0f, ROOM_SKY = 1.4f, ROOM_LAMP = 2.6f;
+// (the ski shop, matched to the web game's shots from the same spots: its lanterns, its hemisphere light, its
+// RoomEnvironment's radiance (three's studio averages ~3 at intensity 1))
+constexpr float SHOP_LAMP = 0.85f, SHOP_SKY = 0.55f, SHOP_ENV = 3.0f;
 const vec4 BLOCK(0.55f, 0.56f, 0.55f, 1), OAK(0.50f, 0.33f, 0.17f, 1), LINO(0.62f, 0.66f, 0.63f, 1), WHITE(0.86f, 0.87f, 0.86f, 1), CEIL(0.80f, 0.78f, 0.72f, 1);
 } // namespace
 
@@ -151,7 +154,7 @@ void Interiors::buildExported(const RoomDef& d, const std::string& id) {
   def_ = &d;
   halfX = vec2(float(d.W / 2)); halfZ = vec2(float(d.D / 2));
   ceiling = d.H;
-  if (c_.roomModel) mesh_ = c_.roomModel(id);
+  if (c_.roomModel) { mesh_ = c_.roomModel(id); meshLit_ = c_.roomModel(id + ":noshadow"); }
   auto wall = [&](double x, double z, double hw, double hd) { Collider c; c.x = x; c.z = z; c.hw = hw; c.hd = hd; c.rot = 0; walls_.push_back(c); };
   const double x0 = d.bounds[0] - 0.3, x1 = d.bounds[1] + 0.3, z0 = d.bounds[2] - 0.3, z1 = d.bounds[3] + 0.3;   // (the player's own radius: 0.3)
   wall(x0 - 1, 0, 1, d.D); wall(x1 + 1, 0, 1, d.D); wall(0, z0 - 1, d.W, 1); wall(0, z1 + 1, d.W, 1);
@@ -262,7 +265,7 @@ void Interiors::enter(Room r, std::function<void()> onLeave) {
   onLeave_ = std::move(onLeave);
   boxes.clear(); props.clear(); walls_.clear();
   dbg_ = false;
-  def_ = nullptr; mesh_.reset(); ch_ = nullptr; pr_ = nullptr; chDoors_.clear(); furnitureLamps.clear();
+  def_ = nullptr; mesh_.reset(); meshLit_.reset(); ch_ = nullptr; pr_ = nullptr; chDoors_.clear(); furnitureLamps.clear();
   clerkYaw = std::nan("");
   origin_ = dvec3(r == Room::Prison ? -21000 : r == Room::Hospital ? -21100 : r == Room::Shop ? -21300 : r == Room::Autohaus ? -21400 : -21200, 0, -21000);
   floorY_ = c_.world->height(origin_.x, origin_.z) + 80;
@@ -296,7 +299,7 @@ void Interiors::leave() {
   def_ = nullptr; look_ = nullptr; shell_.reset(); walls_.clear(); ch_ = nullptr; pr_ = nullptr; chDoors_.clear();
   c_.scenery->noTrees = false;
   c_.player->view = Player::View(prevView_);
-  mesh_.reset();
+  mesh_.reset(); meshLit_.reset();
   auto f = std::move(onLeave_);
   onLeave_ = nullptr;
   if (f) f();
@@ -386,6 +389,8 @@ void Interiors::draw(Renderer& r) {
     return;
   }
   if (mesh_) r.submitModel(*mesh_, o, mat4(1), nullptr, true);
+  if (meshLit_) r.submitModel(*meshLit_, o, mat4(1), nullptr, false);
+  const bool shop = def_ && c_.data && def_ == &c_.data->shop;
   if (def_)
     for (const RoomDef::Light& l : def_->lights) {
       if (l.type != 0 && l.type != 1) continue;
@@ -394,6 +399,14 @@ void Interiors::draw(Renderer& r) {
       // for the same light on the floor: its strength at the floor counts here)
       const float reach = l.type == 1 ? float(std::max(1.0, l.p.y * l.p.y / 4.0)) : 1.f;
       q.pos = toWorld(l.p.x, l.p.y, l.p.z); q.color = l.color * std::min(6.f, l.intensity * roleScale(l) / reach) * ROOM_LAMP; q.range = l.distance > 0 ? l.distance : 12;
+      if (shop) {
+        // (the ski shop: its lamps as three lights them, I / d^decay, here I / (d^2 + 1): the same at 2.5 m, the
+        // distance from a lantern to the floor, the counter, the wall; its spots as three's: the cone toward the
+        // target, the soft edge the penumbra: the picture lights wash the ski wall, the sconce the podium, and no
+        // longer the ceiling and the counter round them)
+        q.color = l.color * (l.intensity * roleScale(l) * 7.25f / std::pow(2.5f, l.decay) * SHOP_LAMP);
+        if (l.type == 1 && l.angle > 0) { q.dir = l.dir; q.cosOuter = std::cos(l.angle); q.cosInner = std::cos(l.angle * (1 - l.penumbra)); }
+      }
       r.addLight(q);
     }
   if (def_ && !def_->panes.empty() && c_.shapes) {
@@ -457,11 +470,21 @@ Lighting Interiors::lighting(const Lighting& outside) const {
     for (const RoomDef::Light& l : D->lights) {
       const float k = roleScale(l);
       if (l.type == 2) { L.sunDir = glm::normalize(vec3(l.p)); L.sunColor = l.color; L.sunIntensity = l.intensity * k * ROOM_SUN; }
-      else if (l.type == 3) { L.sky = l.color * l.intensity * k * ROOM_SKY; L.ground = l.color * l.intensity * k * ROOM_SKY * 0.55f; }
+      // (the shop: the hemisphere's ground colour as the web room sets it, a dark brown, so the walls get half the
+      // sky's light and the lanterns make the pools, and its strength as three's (x SHOP_SKY): with its RoomEnvironment
+      // below the room is as bright as the web game's; before, the ground was the sky's own colour at 55 %: lit flat)
+      else if (l.type == 3) {
+        const bool shop = D == &c_.data->shop;
+        const float s = l.intensity * k * ROOM_SKY * (shop ? SHOP_SKY : 1.f);
+        L.sky = l.color * s; L.ground = (shop && l.ground.x >= 0 ? l.ground : l.color * 0.55f) * s;
+      }
     }
     L.fogDensity = 0;
     L.night = 1;
     L.interior = true;
+    // (the ski shop: interior.js scene.environment = RoomEnvironment at environmentIntensity 0.22: a neutral light
+    // beside the lanterns' warm one, the wood brown rather than orange, the jackets' and skis' colours true)
+    if (D == &c_.data->shop) L.roomEnv = 0.22f * SHOP_ENV;
     return L;
   }
   L.sunDir = glm::normalize(vec3(0.3f, 0.9f, 0.2f));

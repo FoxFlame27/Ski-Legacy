@@ -101,7 +101,7 @@ struct RoomDef {
   vec3 background{0.01f, 0.006f, 0.003f};
   /// type 0 point, 1 spot, 2 directional, 3 hemisphere, 4 ambient; role (the web room's updateLight): 0 as built, 1 the
   /// daylight through the windows, 2 the sky light, 3 a lantern (brighter after dark), 4 the stove's fire (flickers)
-  struct Light { int type; vec3 color; float intensity, distance; dvec3 p; int role = 0; };
+  struct Light { int type; vec3 color; float intensity, distance; dvec3 p; int role = 0; vec3 dir{0, -1, 0}; float angle = 0, penumbra = 0; vec3 ground{-1}; float decay = 2; };
   std::vector<Light> lights;
   // (the Autohaus showroom, carrentalroom.js) the mezzanine: its floor's height and front edge, the stair up to it along
   // the wall (x0, x1, z0 at the top, z1 at the foot), what stands up there; the cars on show (the model, where)

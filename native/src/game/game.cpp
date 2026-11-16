@@ -2291,7 +2291,7 @@ int runGame(const GameOptions& opt) {
   };
   std::string outfitKey;
   double shopYaw = 0;
-  double shakeAmt = 0, fxFlash = 0, fxHit = 0, dynScale = 1;
+  double shakeAmt = 0, fxFlash = 0, fxHit = 0, fxStreaks = 0, dynScale = 1;
 
   // (leaving: the worker jobs still queued or running (terrain nodes, tree cells) read the world, the transport's
   // railway lines, the forest cuts ... which are declared after the terrain and so destroyed before its destructor
@@ -4991,7 +4991,11 @@ int runGame(const GameOptions& opt) {
       fxFlash = std::max(0.0, fxFlash - frameDt * 2.5);
       fxHit = std::max(0.0, fxHit - frameDt * 1.2);
       renderer.fx.vignette = save.settingOn("vignette") ? 0.3f : 0.f;
-      renderer.fx.streaks = save.settingOn("speedFx") && started && !paused ? float(smoothstep(18, 36, sp)) * 0.9f : 0.f;
+      // (post.js render: the skier's speed only (0 off skis: none in a car), fading in from ~75 km/h, full by ~140,
+      // eased so bumps in speed don't flicker them; never above the old 0.9 at the very top)
+      const double streakTo = save.settingOn("speedFx") && started && player.mode == PlayerMode::Ski && rideKind == Ride::None ? smoothstep(21, 39, player.speed()) * 0.9 : 0;
+      if (!paused) fxStreaks += (streakTo - fxStreaks) * (1 - std::exp(-frameDt * 3));
+      renderer.fx.streaks = paused ? 0.f : float(fxStreaks);
       renderer.fx.flash = save.settingOn("speedFx") ? float(fxFlash) : 0.f;
       renderer.fx.hit = save.settingOn("vignette") ? float(fxHit) : 0.f;
       // dynamic resolution: the 3D resolution follows the frame time (switch preset: toward 30 fps; every other preset:

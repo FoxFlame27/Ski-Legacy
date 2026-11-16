@@ -184,7 +184,7 @@ uniform sampler2D uHdr;
 uniform sampler2D uBloom;
 uniform sampler2D uAO;
 uniform float uExposure;
-uniform int uToneMap;     // 0 ACES filmic, 1 PBR Neutral (+ the gentle filmic contrast of post.js)
+uniform int uToneMap;     // 0 ACES filmic, 1 PBR Neutral (+ the gentle filmic contrast of post.js), 2 Neutral with a long shoulder (Ultra+)
 uniform vec4 uPost;       // x bloom strength, y vignette, z speed streaks (0..1), w flash
 uniform vec4 uPost2;      // x hit, y time, z AO strength (0: off), w shafts strength
 uniform vec4 uPost3;      // x grade (1 / 2), y aspect, z dither, w 1: output luma in alpha (FXAA follows)
@@ -200,19 +200,27 @@ vec3 aces(vec3 c) {
   c *= uExposure / 0.6;
   return clamp(OUT * RRTAndODTFit(IN * c), 0.0, 1.0);
 }
-vec3 pbrNeutral(vec3 color) {
+vec3 pbrNeutral(vec3 color, float start) {
   float x = min(color.r, min(color.g, color.b));
   color -= x < 0.08 ? x - 6.25 * x * x : 0.04;
   float peak = max(color.r, max(color.g, color.b));
-  if (peak < 0.76) return color;
-  float d = 0.24, newPeak = 1.0 - d * d / (peak + d - 0.76);
+  if (peak < start) return color;
+  float d = 1.0 - start, newPeak = 1.0 - d * d / (peak + d - start);
   color *= newPeak / peak;
   return mix(color, vec3(newPeak), 1.0 - 1.0 / (0.15 * (peak - newPeak) + 1.0));
 }
 vec3 neutral(vec3 c) {
   c = max(c * (uExposure * 1.365), 0.0);
   c = 0.18 * pow(c / 0.18, vec3(1.08));
-  return pbrNeutral(c);
+  return pbrNeutral(c, 0.76);
+}
+// (Ultra and up) as a camera sees sunlit snow: the shoulder starts lower and rolls off longer, so the snow's relief,
+// its wind ripples and the sun-side / shade-side gradation keep their tonal range instead of clipping to flat white;
+// a hair less exposure, the mid tones and the shadows as Neutral
+vec3 neutralSnow(vec3 c) {
+  c = max(c * (uExposure * 1.3), 0.0);
+  c = 0.18 * pow(c / 0.18, vec3(1.1));
+  return pbrNeutral(c, 0.56);
 }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 float hash1(float n) { return fract(sin(n * 91.3458) * 47453.5453); }
@@ -248,14 +256,14 @@ void main() {
     if (uPost2.z > 1.5) { oColor = vec4(vec3(a.r), 1.0); return; }   // (dev: SKI_LEGACY_GFX=aoview)
   }
   if (uPost.x > 0.0) c += texture(uBloom, uv).rgb * uPost.x;
-  c = uToneMap == 1 ? neutral(c) : aces(c);
+  c = uToneMap == 2 ? neutralSnow(c) : uToneMap == 1 ? neutral(c) : aces(c);
   c = toSRGB(clamp(c, 0.0, 1.0));
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   if (uPost3.x > 1.5) {
     c = mix(c, c * c * (3.0 - 2.0 * c), 0.22);
     float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
     l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    c = mix(vec3(l), c, uToneMap == 1 ? 1.07 + 0.13 * (1.0 - sat) : 1.1 + 0.22 * (1.0 - sat));
+    c = mix(vec3(l), c, uToneMap >= 1 ? 1.07 + 0.13 * (1.0 - sat) : 1.1 + 0.22 * (1.0 - sat));
     // (a touch of warmth in the highlights; the cool push in the shadows halved: the sky light is cool already)
     c += vec3(-0.004, -0.001, 0.006) * (1.0 - l) * (1.0 - l) + vec3(0.012, 0.006, -0.01) * l * l;
     c = clamp(c, 0.0, 1.0);

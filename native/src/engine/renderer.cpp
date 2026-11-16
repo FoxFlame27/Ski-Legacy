@@ -110,8 +110,8 @@ void ImpostorBatch::upload(gfx::Device& d, const std::vector<Inst>& inst) {
 // ---------------------------------------------------------------- set-up
 gfx::Program Renderer::build(const char* name, const char* defines, const char* vs, const char* fs, bool lit, const char* extra) {
   char head[512];
-  std::snprintf(head, sizeof head, "#version 410 core\n%s\n%s%s#define SL_MAX_LIGHTS %d\n#define SL_FX %d\n#define SL_CASCADES %d\n#define TERRAIN_DETAIL %d\n",
-                defines, set_.lowShaders ? "#define SL_LOW 1\n" : "", set_.msaa > 1 ? "#define SL_A2C 1\n" : "", set_.lowShaders ? 4 : 16, set_.fx, std::max(1, nCasc_), set_.terrainDetail);
+  std::snprintf(head, sizeof head, "#version 410 core\n%s\n%s%s%s#define SL_MAX_LIGHTS %d\n#define SL_FX %d\n#define SL_CASCADES %d\n#define TERRAIN_DETAIL %d\n",
+                defines, set_.lowShaders ? "#define SL_LOW 1\n" : "", set_.msaa > 1 ? "#define SL_A2C 1\n" : "", set_.pcss ? "" : "#define SL_NO_PCSS 1\n", set_.lowShaders ? 4 : 16, set_.fx, std::max(1, nCasc_), set_.terrainDetail);
   std::string h = std::string(head) + shaders::kCommon;
   std::string fsrc = h + (lit ? shaders::kLighting : "") + (extra ? extra : "") + fs;
   gfx::Program p = dev_->createProgram(name, h + vs, fsrc);
@@ -125,6 +125,7 @@ gfx::Program Renderer::build(const char* name, const char* defines, const char* 
     dev_->setInt("uSkyNoise", U_SKYNOISE); dev_->setInt("uDepth", U_DEPTH); dev_->setInt("uBloom", U_BLOOM); dev_->setInt("uAO", U_AO);
     dev_->setInt("uHdr", 0); dev_->setInt("uSrc", 0);
     dev_->setInt("uGround", U_GROUND);
+    dev_->setInt("uShadowRaw", U_GROUND);   // (PCSS, Ultra and up: no program reads both)
   }
   return p;
 }
@@ -313,6 +314,10 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     if (auto p = o.find("res="); p != std::string::npos) std::sscanf(o.c_str() + p + 4, "%dx%d", &dbgW_, &dbgH_);
     if (has("nograin")) dbgNoGrain_ = true;
     if (has("noplank")) dbgNoPlank_ = true;
+    if (has("noprez")) prez_ = false;
+    if (has("nopcss")) set_.pcss = false;
+    else if (has("pcss")) set_.pcss = true;
+    if (has("nopine")) dbgNoPine_ = true;
     if (has("nobloom")) bloomOn = false;
     if (auto p = o.find("cascades="); p != std::string::npos) set_.cascades = std::atoi(o.c_str() + p + 9);
     if (auto p = o.find("fx="); p != std::string::npos) set_.fx = std::atoi(o.c_str() + p + 3);
@@ -327,6 +332,21 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   mesh_ = build("mesh", "", shaders::kMeshVS, shaders::kMeshFS, true);
   meshSkin_ = build("mesh_skinned", "#define SKINNED 1", shaders::kMeshVS, shaders::kMeshFS, true);
   meshInst_ = build("mesh_instanced", "#define INSTANCED 1", shaders::kMeshVS, shaders::kMeshFS, true);
+  // (the forests: the pine shading alone, only its varyings; SKI_LEGACY_GFX=nopine for A/B runs)
+  if (!dbgNoPine_) meshPine_ = build("mesh_pine", "#define INSTANCED 1\n#define SL_PINE 1", shaders::kMeshVS, shaders::kMeshFS, true);
+  if (!meshPine_) meshPine_ = meshInst_;
+  // (the opaque materials of the props and buildings: the same shading without the discards the LOD fades, the fans'
+  // fades, a window view's clip box and the alpha test need; a shader that may discard turns the GPU's hidden-surface
+  // removal off for everything it draws)
+  if (prez_) {
+    meshOpq_ = build("mesh_opaque", "#define SL_PREZ 1", shaders::kMeshVS, shaders::kMeshFS, true);
+    meshInstMOpq_ = build("mesh_instmat_opaque", "#define INSTMAT 1\n#define SL_PREZ 1", shaders::kMeshVS, shaders::kMeshFS, true);
+  }
+  if (prez_) {
+    meshInstEq_ = build("mesh_pine_eq", "#define INSTANCED 1\n#define SL_PINE 1\n#define SL_PREZ 1", shaders::kMeshVS, shaders::kMeshFS, true);
+    preInst_ = build("prepass_pine", "#define INSTANCED 1\n#define SL_PINE 1", shaders::kMeshVS, shaders::kPrepassFS, false);
+    if (!meshInstEq_ || !preInst_) prez_ = false;
+  }
   meshInstM_ = build("mesh_instmat", "#define INSTMAT 1", shaders::kMeshVS, shaders::kMeshFS, true);
   depthInstM_ = build("depth_instmat", "#define INSTMAT 1", shaders::kMeshVS, shaders::kDepthFS, false);
   terrain_ = build("terrain", "", shaders::kTerrainVS, shaders::kTerrainFS, true);
@@ -355,7 +375,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   }
   glare_ = set_.fx >= 2 ? build("sun_glare", "", shaders::kGlareVS, shaders::kGlareFS, false) : gfx::Program{};
   if (set_.fx >= 1 && !set_.lowShaders && !noMist_) {
-    mist_ = build("mist", "", shaders::kFullscreenVS, shaders::kMistFS, true);
+    mist_ = build("mist", "#define SL_NO_PCSS 1", shaders::kFullscreenVS, shaders::kMistFS, true);   // (its unit 15 is the ground map)
     mistUp_ = build("mist_up", "", shaders::kFullscreenVS, shaders::kMistUpFS, false);
     mistBlur_ = build("mist_blur", "", shaders::kFullscreenVS, shaders::kMistBlurFS, false);
     if (!mistUp_ || !mistBlur_) mist_ = {};
@@ -443,7 +463,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   }
   SL_INFO("renderer: fx %d, %d shadow cascade(s) of %d px (atlas %dx%d) to %.0f m, MSAA %dx, AO %d, shafts %s, %s, detail maps %d px, trail map %d px over %.0f m",
           set_.fx, nCasc_, S, atlasW_, atlasH_, double(set_.shadowRange), set_.msaa, set_.ao, set_.shafts ? "on" : "off",
-          set_.toneMap == 1 ? "PBR Neutral" : "ACES", set_.detailTex, set_.trailSize, double(set_.trailRange));
+          set_.toneMap == 2 ? "PBR Neutral, long shoulder" : set_.toneMap == 1 ? "PBR Neutral" : "ACES", set_.detailTex, set_.trailSize, double(set_.trailRange));
   return true;
 }
 
@@ -983,7 +1003,7 @@ void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod,
   }
 }
 
-void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride, bool visible) {
+void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride, bool visible, int cascade) {
   if (!b.count() || !b.model()) return;
   const Model& m = *b.model();
   size_t k = 0;
@@ -1008,6 +1028,7 @@ void Renderer::submitInstances(const MatrixInstanceBatch& b, const dvec3& origin
       it.origin = o;
       it.shadow = castShadow && it.mat->alpha != Material::Alpha::Blend;
       it.main = visible;
+      it.cascade = int8_t(cascade);
       items_.push_back(it);
     }
   }
@@ -1092,11 +1113,14 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
     dev_->drawIndexed(it.vi, gfx::IndexType::U16, 6, 0, it.instances);
     return;
   }
-  gfx::Program p = it.kind == Item::Kind::Instanced ? (shadowPass ? depthInst_ : meshInst_)
-                 : it.kind == Item::Kind::InstMat ? (shadowPass ? depthInstM_ : meshInstM_)
-                 : it.skinned ? (shadowPass ? depthSkin_ : meshSkin_) : (shadowPass ? depthMesh_ : mesh_);
-  use(p);
+  const bool eq = !shadowPass && prezItem(it);
   bool pine = it.kind == Item::Kind::Instanced && it.mat->shading == 1;
+  const bool opq = !shadowPass && !inPortal_ && meshOpq_ && meshInstMOpq_ && it.mat->alpha == Material::Alpha::Opaque && it.mat->fanCol.w >= 1.f &&
+                   it.mat->fanBase.w >= -0.5f;
+  gfx::Program p = it.kind == Item::Kind::Instanced ? (shadowPass ? depthInst_ : eq ? meshInstEq_ : pine ? meshPine_ : meshInst_)
+                 : it.kind == Item::Kind::InstMat ? (shadowPass ? depthInstM_ : opq ? meshInstMOpq_ : meshInstM_)
+                 : it.skinned ? (shadowPass ? depthSkin_ : meshSkin_) : (shadowPass ? depthMesh_ : opq ? meshOpq_ : mesh_);
+  use(p);
   // (the same material as the draw before, in the same program: its uniforms and textures are still set. A prop's
   // cells, a car's instances, a model's primitives sharing a material follow each other)
   const bool sameMat = it.mat == lastMat_ && pine == lastPine_ && it.height == lastHeight_;
@@ -1121,7 +1145,11 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
     vec4 f3(0, pine ? 1.f : 0.f, it.height, 1.f);
     dev_->setVec4("uFlags3", glm::value_ptr(f3));
   }
+  const gfx::DepthTest d0 = ps.depth;
+  const bool w0 = ps.depthWrite, c0 = ps.alphaToCoverage;
+  if (eq) { ps.depth = gfx::DepthTest::Equal; ps.depthWrite = false; ps.alphaToCoverage = false; }
   dev_->setPipeline(ps);
+  if (eq) { ps.depth = d0; ps.depthWrite = w0; ps.alphaToCoverage = c0; }
   dev_->setMat4("uModel", glm::value_ptr(it.model));
   if (it.kind == Item::Kind::InstMat) dev_->setVec3("uInstOrigin", glm::value_ptr(it.origin));
   if (it.skinned && it.joints) dev_->setMat4("uJoints[0]", glm::value_ptr((*it.joints)[0]), int(std::min<size_t>(64, it.joints->size())));
@@ -1129,12 +1157,42 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
   else dev_->drawIndexed(it.vi, gfx::IndexType::U32, it.count, it.first, it.instances);
 }
 
+bool Renderer::prezItem(const Item& it) const {
+  // (only the near trees' alpha-tested crowns: the forest is vertex-bound, the clustered far LODs are not drawn twice)
+  return prez_ && it.kind == Item::Kind::Instanced && it.main && !it.occl && it.mat && it.mat->shading == 1 && it.mat->alpha == Material::Alpha::Mask;
+}
+
+// depth only, the coverage of the lit pass (alpha to coverage under MSAA); the culling of the lit pass
+void Renderer::drawPrepass(const Item& it, gfx::PipelineState& ps, gfx::Program& cur) {
+  if (preInst_.id != cur.id) { dev_->useProgram(preInst_); cur = preInst_; lastMat_ = nullptr; }
+  const bool pine = it.mat->shading == 1;
+  if (!(it.mat == lastMat_ && pine == lastPine_ && it.height == lastHeight_)) {
+    dev_->bindTexture(U_BASE, it.mat->baseTex ? it.mat->baseTex : white_);
+    vec4 mat(0, 0, 0, it.mat->alpha == Material::Alpha::Mask ? it.mat->alphaCutoff : -1.f);
+    dev_->setVec4("uMat", glm::value_ptr(mat));
+    vec4 flags(it.mat->baseTex ? 1.f : 0.f, 0, 0, 0);
+    dev_->setVec4("uFlags", glm::value_ptr(flags));
+    dev_->setVec4("uBaseColor", glm::value_ptr(it.mat->baseColor));
+    vec4 f3(float(it.mat->paint), pine ? 1.f : float(it.mat->shading), it.height, 1.f);
+    dev_->setVec4("uFlags3", glm::value_ptr(f3));
+  }
+  lastMat_ = it.mat; lastPine_ = pine; lastHeight_ = it.height;
+  gfx::PipelineState p = ps;
+  p.colorWrite = false;
+  p.depth = gfx::DepthTest::Less; p.depthWrite = true;
+  p.cull = it.mat->doubleSided ? gfx::Cull::None : gfx::Cull::Back;
+  p.alphaToCoverage = set_.msaa > 1 && it.mat->alpha == Material::Alpha::Mask;
+  dev_->setPipeline(p);
+  dev_->setMat4("uModel", glm::value_ptr(it.model));
+  dev_->drawIndexed(it.vi, gfx::IndexType::U32, it.count, it.first, it.instances);
+}
+
 void Renderer::drawItems(bool shadowPass, int cascade) {
   gfx::PipelineState ps;
   if (shadowPass) { ps.colorWrite = false; ps.cull = gfx::Cull::None; ps.depthBiasFactor = 1.4f; ps.depthBiasUnits = 2.f; }
   gfx::Program cur{};
   lastMat_ = nullptr;
-  bool occl = false;
+  bool occl = false, prezDone = false;
   // terrain first (largest occluder), then opaque meshes, impostors, then (main pass) the transparent ones back to front
   blend_.clear();
   for (int pass = 0; pass < 3; pass++)
@@ -1143,6 +1201,10 @@ void Renderer::drawItems(bool shadowPass, int cascade) {
       int want = it.kind == Item::Kind::Terrain ? 0 : it.kind == Item::Kind::Impostor ? 2 : 1;
       if (pass != want) continue;
       if (shadowPass && !inCascade(it, cascade)) continue;
+      if (pass == 1 && !shadowPass && prezItem(it) && !prezDone) {   // (the forests' depth first, then everything lit)
+        prezDone = true;
+        for (const Item& f : items_) if (prezItem(f)) drawPrepass(f, ps, cur);
+      }
       if (it.mat && it.mat->alpha == Material::Alpha::Blend) { if (!shadowPass) blend_.push_back(&it); continue; }
       if (it.occl && !shadowPass) { occl = true; continue; }
       drawItem(it, shadowPass, ps, cur);
@@ -1546,10 +1608,13 @@ void Renderer::aoPass() {
   dev_->setVec2("uInvProj", glm::value_ptr(ip));
   dev_->setVec2("uFullTexel", glm::value_ptr(ft));
   // (a room: a tighter radius for its corners and shelves, a little deeper)
-  dev_->setFloat("uRadius", light_.interior ? 0.75f : 1.6f);
+  // (Ultra and up outdoors: a wider reach, the sky hidden from the snow round a trunk, a hut's foot, a rock's base,
+  // the gully under a cornice: what grounds a thing in the snow)
+  const float aoWide = light_.interior ? 1.f : set_.fx >= 4 ? 1.6f : set_.fx >= 3 ? 1.35f : 1.f;
+  dev_->setFloat("uRadius", light_.interior ? 0.75f : 1.6f * aoWide);
   dev_->setFloat("uIntensity", light_.interior ? 1.5f : 1.25f);
   dev_->setFloat("uProjScale", P[1][1] * float(rh_) * 0.5f);
-  dev_->setFloat("uMaxPx", 110.f * float(rh_) / 1080.f * 1.5f);
+  dev_->setFloat("uMaxPx", 110.f * float(rh_) / 1080.f * 1.5f * aoWide);
   dev_->setFloat("uDirs", aoLevel() > 0 ? float(set_.aoDirs) : 0.f);
   dev_->setFloat("uSteps", float(set_.aoSteps));
   dev_->setVec2("uSunUV", glm::value_ptr(sunUV_));
@@ -1630,6 +1695,7 @@ void Renderer::scenePasses(bool portal) {
   scissor();
   dev_->bindUniformBuffer(0, frameUbo_);
   dev_->bindTexture(U_SHADOW, dev_->renderTargetDepth(shadow_));
+  if (set_.pcss && set_.fx >= 3 && !set_.lowShaders) dev_->bindDepthRaw(U_GROUND, dev_->renderTargetDepth(shadow_));   // (PCSS's blocker search)
   dev_->bindTexture(U_NOISE, noise_);
   dev_->bindTexture(U_ENV, dev_->renderTargetColor(light_.interior ? envRoom_ : env_));
   dev_->bindTexture(U_TRAIL, trail_ ? dev_->renderTargetColor(trail_) : blackTex_);

@@ -465,7 +465,7 @@ public:
     const PipelineState& o = state_;
     if (all || s.depth != o.depth) {
       if (s.depth == DepthTest::Off) glDisable(GL_DEPTH_TEST);
-      else { glEnable(GL_DEPTH_TEST); glDepthFunc(s.depth == DepthTest::Less ? GL_LESS : GL_LEQUAL); }
+      else { glEnable(GL_DEPTH_TEST); glDepthFunc(s.depth == DepthTest::Less ? GL_LESS : s.depth == DepthTest::Equal ? GL_EQUAL : GL_LEQUAL); }
     }
     if (all || s.depthWrite != o.depthWrite) glDepthMask(s.depthWrite ? GL_TRUE : GL_FALSE);
     if (all || s.cull != o.cull) {
@@ -504,7 +504,21 @@ public:
     curProg_ = id;
     glUseProgram(id);
   }
+  void bindDepthRaw(int unit, Texture t) override {
+    if (unit < 0 || unit >= MAX_UNITS) return;
+    if (!rawSampler_) {
+      glGenSamplers(1, &rawSampler_);
+      glSamplerParameteri(rawSampler_, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+      glSamplerParameteri(rawSampler_, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glSamplerParameteri(rawSampler_, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glSamplerParameteri(rawSampler_, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glSamplerParameteri(rawSampler_, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    bindTexture(unit, t);
+    if (!(rawUnits_ & (1u << unit))) { glBindSampler(GLuint(unit), rawSampler_); rawUnits_ |= 1u << unit; }
+  }
   void bindTexture(int unit, Texture t) override {
+    if (unit >= 0 && unit < MAX_UNITS && (rawUnits_ & (1u << unit))) { glBindSampler(GLuint(unit), 0); rawUnits_ &= ~(1u << unit); }
     auto it = texs_.find(t.id);
     const GLuint id = it == texs_.end() ? 0 : it->second.id;
     if (unit >= 0 && unit < MAX_UNITS && boundTex_[unit] == id && id != 0) return;
@@ -641,6 +655,8 @@ private:
   bool pipeValid_ = false;
   enum { MAX_UNITS = 32 };
   GLuint boundTex_[MAX_UNITS] = {0};
+  GLuint rawSampler_ = 0;
+  uint32_t rawUnits_ = 0;   // (units read through rawSampler_)
   int active_ = 0;
   GLuint curProg_ = 0, curVao_ = 0;
   uint32_t draws_ = 0;

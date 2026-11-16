@@ -29,7 +29,7 @@ enum class Wrap : uint8_t { Repeat, Clamp };
 enum class Cull : uint8_t { None, Back, Front };
 // Max: per-channel max (trail stamps); Multiply: dst * src (fades); Premul: premultiplied alpha
 enum class Blend : uint8_t { Opaque, Alpha, Additive, Max, Multiply, Premul };
-enum class DepthTest : uint8_t { Off, Less, LessEqual };
+enum class DepthTest : uint8_t { Off, Less, LessEqual, Equal };
 
 struct VertexAttrib {
   uint32_t location = 0;      // shader input location
@@ -119,6 +119,9 @@ public:
   virtual void setPipeline(const PipelineState& s) = 0;
   virtual void useProgram(Program p) = 0;
   virtual void bindTexture(int unit, Texture t) = 0;
+  /// a depth texture read as plain values (no comparison, nearest) on this unit, beside its comparing binding
+  /// elsewhere (PCSS's blocker search); a later bindTexture on the unit restores its own sampling
+  virtual void bindDepthRaw(int unit, Texture t) { bindTexture(unit, t); }
   virtual void bindUniformBuffer(int binding, Buffer b) = 0;
 
   // uniforms of the program in use (looked up by name, cached)

@@ -3852,7 +3852,7 @@ int runGame(const GameOptions& opt) {
       rf += winStep;
       struct Look { const char* name; double x, z, yaw, pitch; };
       static const Look looks[] = {{"enter", 0, 2.6, PI, -0.05}, {"wall", 0, 0.5, PI, -0.05}, {"wall_left", -3, 0.5, PI, -0.05}, {"wall_right", 3, 0.5, PI, -0.05}, {"clerk", 2.6, 1.4, PI / 2, -0.05},
-                                   {"outfits", -3.6, -0.45, -PI / 2, -0.05}, {"door", 0, 0, 0, -0.05}, {"right", 0, 0, PI / 2 + 0.5, -0.05}, {"window", -4.7, 2.2, 0, -0.05}, {"ski_close", -5.2, -1.6, PI, 0.05}};
+                                   {"outfits", -3.6, -0.45, -PI / 2, -0.05}, {"door", 0, 0, 0, -0.05}, {"right", 0, 0, PI / 2 + 0.5, -0.05}, {"window", -4.7, 2.2, 0, -0.05}, {"ski_close", -5.2, -1.6, PI, 0.05}, {"rack", -4.3, 0.7, -0.75, -0.3}};
       const int NL = int(sizeof(looks) / sizeof(looks[0])), per = 30, t0 = 20;
       auto shot = [&](const std::string& n) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, n.c_str()); SL_INFO("[roomtest] %s: prompt '%s'", n.c_str(), prompt.c_str()); };
       if (rf == 4) { const RoomDef& d = playData.shop; player.setSkisOn(false); player.teleport(d.doorX + d.frontX, d.doorZ + d.frontZ, 0); shopRoom.enter(); }

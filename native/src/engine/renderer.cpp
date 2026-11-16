@@ -395,6 +395,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   // the environment map (equirectangular, mips = roughness)
   int E = std::max(32, set_.envSize);
   env_ = dev.createRenderTarget(E, E / 2, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
+  envRoom_ = dev.createRenderTarget(E, E / 2, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);   // (an interior's own: frame())
   // the trail map
   if (set_.trailSize > 0) {
     trail_ = dev.createRenderTarget(set_.trailSize, set_.trailSize, true, gfx::TexFormat::RGBA16F, false, gfx::TexFormat::Depth24);
@@ -526,6 +527,7 @@ const vec3 HALO[7] = {{0, 0, 0}, {0, 0, 0}, {0.5f, 0.12f, 0.03f}, {3.0f, 1.0f, 0
 const vec3 DISC[7] = {{1, 0.3f, 0.1f}, {1, 0.3f, 0.1f}, {1, 0.32f, 0.1f}, {1.0f, 0.42f, 0.14f}, {1.0f, 0.7f, 0.42f}, {1.0f, 0.9f, 0.76f}, {1.0f, 0.97f, 0.93f}};
 const vec3 AMB[7] = {{0.10f, 0.14f, 0.28f}, {0.18f, 0.22f, 0.45f}, {0.42f, 0.36f, 0.62f}, {0.52f, 0.48f, 0.78f}, {0.46f, 0.56f, 0.92f}, {0.40f, 0.58f, 1.0f}, {0.38f, 0.58f, 1.0f}};
 const float ENVI[7] = {0.6f, 0.8f, 0.9f, 0.95f, 1.0f, 1.0f, 1.0f};
+const float ROOM_ENV = 0.35f;   // (an interior: how much of its light comes as the room's own reflection: frame())
 const vec3 OVER_HOR{0.700f, 0.820f, 0.990f}, WARM_TINT{1.25f, 0.95f, 0.78f};
 double sstep(double a, double b, double x) { double t = std::clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3 - 2 * t); }
 float lum(const vec3& c) { return c.x * 0.2126f + c.y * 0.7152f + c.z * 0.0722f; }
@@ -587,8 +589,12 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
   float hemiI = (0.04f + 0.08f * dayF) * (1 + 1.6f * overcast) * L.ambientScale;
   float envI = (ENVI[i] + (ENVI[i + 1] - ENVI[i]) * f) * (1 + 0.12f * overcast) * L.ambientScale * sc;
   if (L.interior) {
-    fb.hemiSky = vec4(L.sky * float(PI), 0);
-    fb.hemiGround = vec4(L.ground * float(PI), 1);
+    // (a room has no sky to reflect: its own walls and lamps make the reflections, three's RoomEnvironment that the web
+    // rooms set at environmentIntensity ~0.2; without it bare metal and gloss went black: the till, the rails, brass.
+    // The hemisphere gives up what the room's reflection adds to the diffuse light, so the room is as bright as before)
+    envI = ROOM_ENV;
+    fb.hemiSky = vec4(L.sky * float(PI) * (1 - ROOM_ENV * 0.8f), envI);
+    fb.hemiGround = vec4(L.ground * float(PI) * (1 - ROOM_ENV * 0.8f), 1);
   } else {
     fb.hemiSky = vec4(hemiC * hemiI, envI);
     fb.hemiGround = vec4(hemiG * hemiI, std::max(0.05f, sunVisible));
@@ -603,6 +609,11 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
   vec3 envGround = L.sunColor * (bounce * 0.75f) + envZenith_ * 0.25f;
   envSun_ = useMoon ? vec3(0) : L.sunColor * (keyI * 0.05f);
   envGlow_ = set_.fx >= 1 ? L.glow * (clearSky * (0.08f + 0.45f * dusk) * dayF) : vec3(0);
+  if (L.interior) {   // (the room's reflection, envRoom_: the warm walls round you, lighter at the lamps' and windows' height, the floor below)
+    roomEnvZ_ = L.sky * 0.85f;
+    roomEnvH_ = L.sky * 1.15f + L.sunColor * (keyI * 0.03f);
+    envGround = L.ground * 0.9f;
+  }
   fb.envGround = vec4(envGround, L.mist);
   sunCol_ = key;
   {
@@ -621,7 +632,7 @@ void Renderer::computeSky(const Lighting& L, FrameBlock& fb) {
         double ph = (u + 0.5) / NU * 2 * PI;
         vec3 d(float(st * std::sin(ph)), float(std::cos(th)), float(-st * std::cos(ph)));
         float e = d.y;
-        vec3 col = glm::mix(envHorizon_, envZenith_, fsmooth(0.f, 0.65f, e));
+        vec3 col = L.interior ? glm::mix(roomEnvH_, roomEnvZ_, fsmooth(0.f, 0.65f, e)) : glm::mix(envHorizon_, envZenith_, fsmooth(0.f, 0.65f, e));
         vec2 dh = glm::normalize(vec2(d.x, d.z) + vec2(1e-6f)), shd = glm::normalize(vec2(sun.x, sun.z) + vec2(1e-6f));
         float az = glm::dot(dh, shd) * 0.5f + 0.5f;
         col += envGlow_ * (az * az * az) * std::exp(-std::max(e, 0.f) * 6.f);
@@ -1154,20 +1165,25 @@ void Renderer::trailPass() {
 
 void Renderer::envPass() {
   int E = std::max(32, set_.envSize);
-  dev_->bindRenderTarget(env_, E, E / 2);
   gfx::PipelineState ps;
   ps.depth = gfx::DepthTest::Off; ps.depthWrite = false; ps.cull = gfx::Cull::None;
-  dev_->setPipeline(ps);
-  dev_->useProgram(env_p_);
-  dev_->setVec3("uEnvZenith", glm::value_ptr(envZenith_));
-  dev_->setVec3("uEnvHorizon", glm::value_ptr(envHorizon_));
-  dev_->setVec3("uEnvSun", glm::value_ptr(envSun_));
-  dev_->setVec3("uEnvGlow", glm::value_ptr(envGlow_));
-  dev_->draw(emptyVi_, 3);
-  gfx::Texture t = dev_->renderTargetColor(env_);
-  dev_->generateMipmaps(t);
-  static bool sampled = false;
-  if (!sampled) { dev_->setSampling(t, gfx::Filter::Trilinear, gfx::Wrap::Repeat, 1); sampled = true; }
+  // (the sky's, always: a window's view of the world uses it; in a room also the room's own, without sun or glow)
+  for (int k = 0; k < (light_.interior ? 2 : 1); k++) {
+    gfx::RenderTarget& rt = k ? envRoom_ : env_;
+    dev_->bindRenderTarget(rt, E, E / 2);
+    dev_->setPipeline(ps);
+    dev_->useProgram(env_p_);
+    const vec3 none(0);
+    dev_->setVec3("uEnvZenith", glm::value_ptr(k ? roomEnvZ_ : envZenith_));
+    dev_->setVec3("uEnvHorizon", glm::value_ptr(k ? roomEnvH_ : envHorizon_));
+    dev_->setVec3("uEnvSun", glm::value_ptr(k ? none : envSun_));
+    dev_->setVec3("uEnvGlow", glm::value_ptr(k ? none : envGlow_));
+    dev_->draw(emptyVi_, 3);
+    gfx::Texture t = dev_->renderTargetColor(rt);
+    dev_->generateMipmaps(t);
+    static bool sampled[2] = {false, false};
+    if (!sampled[k]) { dev_->setSampling(t, gfx::Filter::Trilinear, gfx::Wrap::Repeat, 1); sampled[k] = true; }
+  }
 }
 
 void Renderer::particlePass() {
@@ -1540,7 +1556,7 @@ void Renderer::scenePasses(bool portal) {
   dev_->bindUniformBuffer(0, frameUbo_);
   dev_->bindTexture(U_SHADOW, dev_->renderTargetDepth(shadow_));
   dev_->bindTexture(U_NOISE, noise_);
-  dev_->bindTexture(U_ENV, dev_->renderTargetColor(env_));
+  dev_->bindTexture(U_ENV, dev_->renderTargetColor(light_.interior ? envRoom_ : env_));
   dev_->bindTexture(U_TRAIL, trail_ ? dev_->renderTargetColor(trail_) : blackTex_);
   dev_->bindTexture(U_DETAIL, detail_);
   dev_->bindTexture(U_SNOW, snowTex_);

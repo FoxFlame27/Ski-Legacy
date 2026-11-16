@@ -1815,8 +1815,14 @@ JS walks on, the things you aim at, the lights with their roles, the glass, and 
   of a hut's door ("Mountain hut · hot chocolate $8", the MOUNTAIN HUT card's text), within 2.6 m of the booth's counter
   ("Talk to the ticket seller").
 
+**The room's reflection** (Nov 16): the rooms were lit without an environment, so bare metal and gloss went black
+(the shop's till, the rails, brass). An interior now draws an environment of its own (`Renderer::envRoom_`: the
+room's warm light round you, the floor's below, three's RoomEnvironment as the web rooms set it), 35 % of the
+ambient light coming that way (the hemisphere light gives up as much); the sky's environment map stays as it was for
+the windows' view of the world.
+
 Debug views (with `--autotest --png out.png`): `SKI_LEGACY_DEBUG=roomshop` (the shop from the web game's reference
-spots, the conversation, the outfit shop's tabs: `out_in_<name>.png`, `out_talk.png`, `out_outfit_<tab>.png`),
+spots (`rack`: close to the jacket rail), the conversation, the outfit shop's tabs: `out_in_<name>.png`, `out_talk.png`, `out_outfit_<tab>.png`),
 `roomchalet` (`out_ch_<name>.png`: both floors), `roomprison` (`out_po_<name>.png`: visiting, then jailed and
 released), `werktest` (a damaged car of yours in the Werkstatt's box, you at the workbench: the prompt, E, the repair
 checked; then a hut's door and the ticket counter: `out_werk_<stage>.png`, `out_hut_prompt.png`).
@@ -1875,6 +1881,12 @@ by position except a rescue in progress, which is on the mountain).
   it at the stop and back (`Traffic` links: a main road's end meeting a village road's end). Drawn with the exported
   roads' own ribbon (`roadsnow-road`: the road snow look), left out where an exported road already lies; lamps by turns
   on both sides and the plough's banks along the edges; walkers have its south edge in the walking network.
+  **Cut into the ground** (Nov 16): the ribbon was wound clockwise seen from above (culled: only its shadow was
+  drawn), and in the west it crossed a piste's run-out whose exported cuts lift the ground up to 5 m over the layout's
+  level. Now `Village::prepareRoads` levels the road along its middle (the C++ ground there, smoothed over +-16 m) and
+  `World::height` (`Village::roadCut`) holds the ground 6 cm under that level across the ribbon and a flat 2.6 m
+  shoulder, easing back over 5 m (cut and fill; only cut within 24 m of the valley road); the network line and the
+  ribbon (3.5 cm over the level: the car's road surface) use the same level. Off with the relief (`--verify-heights`).
 - **Sites moved onto it** (moves with a clip: only what lies short of the road in front of the old yard goes, so the
   valley road stays whole; play-data box colliders' `rot` now turn with a move): the **Autohaus** (134, 213) -> (-90, 33),
   the **police station / prison** (150, 262) -> (-124, 34), the **Werkstatt** (156, 293) -> (-152, 35), each turned so its

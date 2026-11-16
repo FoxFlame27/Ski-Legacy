@@ -179,7 +179,8 @@ public:
   void beginFrame(const Camera& cam, const Lighting& light, const dvec3& shadowFocus);
   /// A model at world transform (origin + local matrix). pose: skinning (nullptr = rest).
   void submitModel(const Model& m, const dvec3& origin, const mat4& local, const Pose* pose, bool castShadow, int lod = 0, bool visible = true);
-  void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow);
+  /// visible: drawn in the main pass; cascade >= 0: casts into that shadow cascade only (a list culled to it)
+  void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible = true, int cascade = -1);
   /// Matrix instances (origin: the batch's origin the instance translations are relative to). matOverride: draw
   /// every primitive with this material instead (a prop's night glow).
   void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr, bool visible = true);
@@ -203,6 +204,19 @@ public:
   bool visible(const dvec3& bmin, const dvec3& bmax) const;
   /// Whether a world-space box can cast into the shadow map (overlaps one of the cascades).
   bool castsShadow(const dvec3& bmin, const dvec3& bmax) const;
+  /// per-instance culling of the forests' lists (camera-relative sphere): in the view frustum; in shadow cascade c's box
+  bool sphereVisible(const vec3& c, float r) const {
+    for (const vec4& p : planes_) if (p.x * c.x + p.y * c.y + p.z * c.z + p.w < -r) return false;
+    return true;
+  }
+  bool sphereInCascade(const vec3& c, float r, int k) const {
+    if (k >= nCasc_) return false;
+    const mat4& V = casc_[k].view;
+    const float lx = V[0][0] * c.x + V[1][0] * c.y + V[2][0] * c.z + V[3][0], ly = V[0][1] * c.x + V[1][1] * c.y + V[2][1] * c.z + V[3][1];
+    const float R = casc_[k].radius + r;
+    return std::fabs(lx) <= R && std::fabs(ly) <= R;
+  }
+  int shadowCascades() const { return inPortal_ ? std::min(nCasc_, 1) : nCasc_; }
 
   // HUD (pixels, origin top-left)
   void hudText(float x, float y, float scale, const vec4& color, const std::string& text);
@@ -254,6 +268,7 @@ private:
     mat4 model{1};
     vec3 origin{0};
     vec4 sphere{0, 0, 0, -1};   // camera-relative bounds (w < 0: unknown) for the per-cascade culling
+    int8_t cascade = -1;        // >= 0: cast into this cascade only (its instances were culled to it)
     float height = 1;           // (pines) model height for the sway
   };
   struct Cascade { mat4 viewProj{1}, view{1}; float radius = 1, end = 1, texel = 1; vec4 rect{0, 0, 1, 1}; };
@@ -275,6 +290,9 @@ private:
   void bakeClouds();
   void cloudPass();
   bool noClouds_ = false;
+  int dbgW_ = 0, dbgH_ = 0;   // (dev: SKI_LEGACY_GFX=res=2560x1440: the 3D drawn at this size whatever the window: profiling a display not attached)
+  bool dbgAoView_ = false;   // (dev: SKI_LEGACY_GFX=aoview: the AO term alone, grey)
+  bool dbgNoRoomAo_ = false, dbgNoGrain_ = false, dbgNoPlank_ = false;   // (dev: SKI_LEGACY_GFX=noroomao,nograin,noplank)
   gfx::Program cardP_, deckP_;
   gfx::RenderTarget cloudNoiseRT_, atlasRT_[2];
   gfx::Texture cloudTerrain_;
@@ -291,7 +309,7 @@ private:
   void aoPass();
   // the ambient occlusion's level this frame: the preset's, or in a room (below High: no AO outdoors) a half-resolution
   // pass of its own: the corners, the floor under the racks and shelves, the gaps between the planks
-  int aoLevel() const { return set_.ao > 0 ? set_.ao : light_.interior && !set_.lowShaders ? 1 : 0; }
+  int aoLevel() const { return set_.ao > 0 ? set_.ao : light_.interior && !set_.lowShaders && !dbgNoRoomAo_ ? 1 : 0; }
   void ensureAo();
   gfx::Program build(const char* name, const char* defines, const char* vs, const char* fs, bool lit, const char* extra = nullptr);
   bool inCascade(const Item& it, int c) const;

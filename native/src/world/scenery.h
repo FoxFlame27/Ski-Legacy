@@ -122,7 +122,8 @@ private:
   VegetationSettings vs_;
   std::shared_ptr<Model> treeModel_[2];
   mat4 treeFit_[2];
-  InstanceBatch batches_[2][3];
+  InstanceBatch batches_[2][3];      // (each frame: the lists below culled to the view frustum)
+  InstanceBatch shadowBatch_[2][3][2];   // (...and to the first two shadow cascades' boxes: the only ones trees cast into)
   static constexpr int ROCK_KINDS = 5;
   std::shared_ptr<Model> rockModel_[ROCK_KINDS];
   mat4 rockFit_[ROCK_KINDS];
@@ -137,6 +138,7 @@ private:
   MatrixInstanceBatch viewRock_[ROCK_KINDS][3];
   bool viewInit_ = false;
   void submitView(Renderer& r);
+  void submitForest(Renderer& r);
   size_t rocksDrawn_ = 0;
   std::unordered_map<int64_t, Cell> cells_;
   std::unordered_set<int64_t> queued_;

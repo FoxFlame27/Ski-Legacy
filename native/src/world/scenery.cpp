@@ -1,4 +1,6 @@
 #include "world/scenery.h"
+#include <cstdlib>
+#include <cstring>
 #include "core/assets_path.h"
 #include "core/jobs.h"
 #include "core/log.h"
@@ -49,7 +51,10 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
         m.emissive = vec3(0); m.emissiveTex = {};
         m.metallic = 0;
       }
-    for (int l = 0; l < 3; l++) batches_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
+    for (int l = 0; l < 3; l++) {
+      batches_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
+      for (int k = 0; k < 2; k++) shadowBatch_[t][l][k].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
+    }
   }
   if (vs_.impostorR > vs_.farR) impostors_.init(dev_, uint32_t(std::max(1000, vs_.maxImpostors)));
   // the rocks: the Meshy models with meshoptimizer LODs, snow-on-top rock shading (renderer: shading 4)
@@ -378,9 +383,15 @@ void Scenery::rebuildInstances(const dvec3& cam) {
       if (d > n1 - SLACK) lists[t.type][2].push_back({vec4(t.x, t.y, t.z, t.s), vec4(t.rot, 0, float(n1), float(nf))});
       drawn_++;
     }
-  for (int t = 0; t < 2; t++)
-    if (treeModel_[t]) for (int l = 0; l < 3; l++) batches_[t][l].upload(dev_, lists[t][l]);
-  rebuildRocks(cam);
+  // (nearest first: the near crowns fill the depth buffer before the ones they hide are shaded; the alpha-tested
+  // foliage defeats the GPU's own hidden-surface removal, so in a forest the order alone saves much of the shading)
+  for (auto& lv : lists)
+    for (auto& l : lv)
+      std::sort(l.begin(), l.end(), [&](const InstanceBatch::Inst& a, const InstanceBatch::Inst& b) {
+        const float ax = a.posScale.x - float(cam.x), az = a.posScale.z - float(cam.z), bx = b.posScale.x - float(cam.x), bz = b.posScale.z - float(cam.z);
+        return ax * ax + az * az < bx * bx + bz * bz;
+      });
+  rebuildRocks(cam);   // (the trees' batches are filled each frame from these lists, culled: submitForest)
 }
 
 // vegetation.js rebuildRocks: the rocks within the preset's reach (crags and outcrops BIG_FAR wide and up to twice it),
@@ -483,12 +494,42 @@ void Scenery::submitView(Renderer& r) {
   }
 }
 
+// the forest round the camera, each frame: only the trees in the view frustum are drawn in the main pass, and into the
+// first two shadow cascades only the trees inside each one's box (the whole circle of trees out to the far LOD went to
+// the GPU every frame, behind the camera too, and every casting tree into both cascades: on High ~20 million of the
+// frame's ~26 million triangles while skiing). The same trees in the same LODs: the picture does not change.
+void Scenery::submitForest(Renderer& r) {
+  const dvec3 eye = r.camera().pos;
+  const int nc = std::min(2, r.shadowCascades());
+  static std::vector<InstanceBatch::Inst> vis, sh[2];
+  // (dev: SKI_LEGACY_GFX=nocull: the old way, every tree of the lists to the main pass and both cascades: A/B timings)
+  static const bool noCull = [] { const char* g = std::getenv("SKI_LEGACY_GFX"); return g && std::strstr(g, "nocull"); }();
+  for (int t = 0; t < 2; t++) {
+    if (!treeModel_[t]) continue;
+    for (int l = 0; l < 3; l++) {
+      const bool cast = l < vs_.shadowLods;
+      if (noCull) { batches_[t][l].upload(dev_, treeList_[t][l]); r.submitInstances(batches_[t][l], treeFit_[t], l, cast); continue; }
+      vis.clear(); sh[0].clear(); sh[1].clear();
+      for (const InstanceBatch::Inst& i : treeList_[t][l]) {
+        // (unit height, base at y: the crown within 0.45 x its height round the trunk; +1 m for the sway)
+        const float s = i.posScale.w, rad = s * 0.82f + 1.f;
+        const vec3 c(float(double(i.posScale.x) - eye.x), float(double(i.posScale.y) - eye.y) + s * 0.5f, float(double(i.posScale.z) - eye.z));
+        if (r.sphereVisible(c, rad)) vis.push_back(i);
+        if (cast) for (int k = 0; k < nc; k++) if (r.sphereInCascade(c, rad, k)) sh[k].push_back(i);
+      }
+      batches_[t][l].upload(dev_, vis);
+      r.submitInstances(batches_[t][l], treeFit_[t], l, false, true);
+      if (cast) for (int k = 0; k < nc; k++) {
+        shadowBatch_[t][l][k].upload(dev_, sh[k]);
+        r.submitInstances(shadowBatch_[t][l][k], treeFit_[t], l, true, false, k);
+      }
+    }
+  }
+}
+
 void Scenery::submit(Renderer& r, bool trees, bool buildings, bool view) {
   if (trees && view) submitView(r);
-  for (int t = 0; t < 2 && !view; t++) {
-    if (!treeModel_[t] || !trees) continue;
-    for (int l = 0; l < 3; l++) r.submitInstances(batches_[t][l], treeFit_[t], l, l < vs_.shadowLods);
-  }
+  if (trees && !view) submitForest(r);
   if (trees) r.submitImpostors(impostors_, false);
   if (trees && !view)
     for (int v = 0; v < ROCK_KINDS; v++)

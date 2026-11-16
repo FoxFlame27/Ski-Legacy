@@ -27,7 +27,8 @@ public:
   void update(const dvec3& cam, int maxUploads = 6);
   /// Block until every wanted node is built (loading screens, tests).
   void finish(const dvec3& cam);
-  void submit(Renderer& r, double shadowCastMaxSize = 512);
+  /// coarse: every other grid line (a quarter of the triangles: a room window's view of the world)
+  void submit(Renderer& r, double shadowCastMaxSize = 512, bool coarse = false);
   int pending() const;
   size_t nodeCount() const { return active_.size(); }
 
@@ -47,7 +48,7 @@ private:
   JobSystem& jobs_;
   float lodK_;
   gfx::Buffer ibo_;
-  uint32_t indexCount_ = 0;
+  uint32_t indexCount_ = 0, coarseFirst_ = 0, coarseCount_ = 0;
   std::vector<int> ring_;
   std::vector<Key> desired_;
   std::unordered_set<Key, KeyHash> desiredSet_, queued_;

@@ -360,7 +360,7 @@ void Scenery::finish(const dvec3& cam) {
 void Scenery::rebuildInstances(const dvec3& cam) {
   lastBuild_ = cam;
   dirty_ = false;
-  static thread_local std::vector<InstanceBatch::Inst> lists[2][3];   // (kept: no reallocation each rebuild)
+  auto& lists = treeList_;   // (kept: no reallocation each rebuild; a window's view culls them)
   for (auto& lv : lists) for (auto& l : lv) l.clear();
   // (the LODs hand over in dithered bands, shaders.h vLodFade: a tree within a band is in both lists, each with the
   // distances it fades in / out at; SLACK covers the camera's travel until the lists are rebuilt)
@@ -393,6 +393,7 @@ void Scenery::rebuildRocks(const dvec3& cam) {
   const double rR2 = rockR * rockR, bR2 = bigR * bigR, cR2 = closeR * closeR;
   static thread_local std::vector<MatrixInstanceBatch::Inst> lists[ROCK_KINDS][3];
   for (auto& lv : lists) for (auto& l : lv) l.clear();
+  for (auto& lv : rockList_) for (auto& l : lv) l.clear();
   rocksDrawn_ = 0;
   for (auto& [k, c] : cells_)
     for (const Rock& r : c.rocks) {
@@ -407,19 +408,89 @@ void Scenery::rebuildRocks(const dvec3& cam) {
       M[3] = glm::dvec4(r.x, r.base, r.z, 1);
       M = M * glm::dmat4(rockFit_[size_t(r.v)]);
       lists[size_t(r.v)][lod].push_back(MatrixInstanceBatch::pack(M, rockOrigin_, vec4(r.gx, r.gz, r.gh - r.base, 0)));
+      {   // (its bounding sphere, for a window's view)
+        const Model& rm = *rockModel_[size_t(r.v)];
+        const glm::dvec3 c = glm::dvec3(M * glm::dvec4(glm::dvec3((rm.bmin + rm.bmax) * 0.5f), 1)) - rockOrigin_;
+        const double sc = std::max({glm::length(glm::dvec3(M[0])), glm::length(glm::dvec3(M[1])), glm::length(glm::dvec3(M[2]))});
+        rockList_[size_t(r.v)][lod].push_back({lists[size_t(r.v)][lod].back(), vec3(c), float(glm::length(glm::dvec3(rm.bmax - rm.bmin)) * 0.5 * sc)});
+      }
       rocksDrawn_++;
     }
   for (int v = 0; v < ROCK_KINDS; v++)
     if (rockModel_[v]) for (int l = 0; l < 3; l++) rockBatch_[v][l].upload(dev_, lists[v][l]);
 }
 
-void Scenery::submit(Renderer& r, bool trees, bool buildings) {
+// a window's view: the trees and rocks of the lists that stand in the renderer's frustum (narrowed to the windows' part
+// of the screen) or cast a shadow into it (their box stretched away from the sun to where the shadow of their top falls)
+void Scenery::submitView(Renderer& r) {
+  if (!viewInit_) {
+    viewInit_ = true;
+    for (int t = 0; t < 2; t++) if (treeModel_[t]) for (int l = 0; l < 3; l++) viewBatch_[t][l].init(dev_, *treeModel_[t], l == 2 ? 40000 : l == 1 ? 16000 : 4000);
+    for (int v = 0; v < ROCK_KINDS; v++) if (rockModel_[v]) for (int l = 0; l < 3; l++) viewRock_[v][l].init(dev_, *rockModel_[v], l == 0 ? 300 : 1500);
+    viewImp_.init(dev_, 40000);
+  }
+  // (through the glass, at a fraction of the screen's resolution, the trees past R are the far forest's impostors: the
+  // 3D firs fade out over the band past R as the impostors fade in; the LOD meshes cost ~2-9k triangles a tree)
+  const dvec3 eye = r.camera().pos;
+  const double R = std::max(120.0, double(vs_.midR) * 0.6), RB = std::max(R * 0.16, 4.0);
+  static std::vector<ImpostorBatch::Inst> imp;
+  imp.clear();
+  const vec3 L = r.lighting().sunDir;
+  const vec3 sh = L.y > 0.05f ? -L / std::max(0.25f, L.y) : vec3(0);   // (the shadow of a point 1 m up: this far off)
+  auto seen = [&](const dvec3& lo, const dvec3& hi, float h) {
+    if (r.visible(lo, hi)) return true;
+    if (sh == vec3(0)) return false;
+    const dvec3 d = dvec3(sh * h);
+    return r.visible(glm::min(lo, lo + d), glm::max(hi, hi + d));
+  };
+  static std::vector<InstanceBatch::Inst> keep;
   for (int t = 0; t < 2; t++) {
+    if (!treeModel_[t]) continue;
+    for (int l = 0; l < 3; l++) {
+      keep.clear();
+      for (const InstanceBatch::Inst& i : treeList_[t][l]) {
+        const double s = i.posScale.w, w = s * 0.45;   // (unit height: the crown well inside 0.45 x its height round the trunk)
+        const dvec3 b(i.posScale.x, i.posScale.y, i.posScale.z);
+        if (!seen(b - dvec3(w, 0.5, w), b + dvec3(w, s, w), float(s))) continue;
+        const double d = glm::length(b - eye);
+        if (d > R && (l == 2 || i.rot.w <= 0 || d < i.rot.w)) {   // (once per tree: from the list it is drawn in out there)
+          const float seed = float(hash2(int(b.x * 3), int(b.z * 3), 9));
+          imp.push_back({vec4(i.posScale), vec4(seed, float(t), float(R), float(RB))});
+        }
+        if (d > R + RB + 2 || i.rot.z > R + RB) continue;
+        InstanceBatch::Inst q = i;
+        q.rot.w = q.rot.w > 0 ? std::min(q.rot.w, float(R)) : float(R);
+        keep.push_back(q);
+      }
+      viewBatch_[t][l].upload(dev_, keep);
+      r.submitInstances(viewBatch_[t][l], treeFit_[t], l, l < vs_.shadowLods);
+    }
+  }
+  viewImp_.upload(dev_, imp);
+  r.submitImpostors(viewImp_, false);
+  static std::vector<MatrixInstanceBatch::Inst> rk;
+  for (int v = 0; v < ROCK_KINDS; v++) {
+    if (!rockModel_[v]) continue;
+    for (int l = 0; l < 3; l++) {
+      rk.clear();
+      for (const RockInst& q : rockList_[v][l]) {
+        const dvec3 c = rockOrigin_ + dvec3(q.c), e(q.r);
+        if (seen(c - e, c + e, q.r * 2)) rk.push_back(q.i);
+      }
+      viewRock_[v][l].upload(dev_, rk);
+      r.submitInstances(viewRock_[v][l], rockOrigin_, l, l < 2 || vs_.shadowLods >= 2);
+    }
+  }
+}
+
+void Scenery::submit(Renderer& r, bool trees, bool buildings, bool view) {
+  if (trees && view) submitView(r);
+  for (int t = 0; t < 2 && !view; t++) {
     if (!treeModel_[t] || !trees) continue;
     for (int l = 0; l < 3; l++) r.submitInstances(batches_[t][l], treeFit_[t], l, l < vs_.shadowLods);
   }
   if (trees) r.submitImpostors(impostors_, false);
-  if (trees)
+  if (trees && !view)
     for (int v = 0; v < ROCK_KINDS; v++)
       if (rockModel_[v]) for (int l = 0; l < 3; l++) r.submitInstances(rockBatch_[v][l], rockOrigin_, l, l < 2 || vs_.shadowLods >= 2);
   const dvec3 cam = r.camera().pos;

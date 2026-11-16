@@ -142,6 +142,8 @@ public:
   struct Inst { vec4 r0, r1, r2, tint{1, 1, 1, 0}; };   // tint: paint / livery colour, a = 0: none
   void init(gfx::Device& d, const Model& m, uint32_t capacity);
   void upload(gfx::Device& d, const std::vector<Inst>& inst);
+  /// frees its buffer and vertex inputs (init again to reuse it)
+  void release(gfx::Device& d);
   uint32_t count() const { return count_; }
   const Model* model() const { return model_; }
   const std::vector<gfx::VertexInput>& inputs() const { return inputs_; }
@@ -180,9 +182,9 @@ public:
   void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow);
   /// Matrix instances (origin: the batch's origin the instance translations are relative to). matOverride: draw
   /// every primitive with this material instead (a prop's night glow).
-  void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr);
+  void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr, bool visible = true);
   void submitTerrain(gfx::VertexInput vi, uint32_t indexCount, const dvec3& origin, bool castShadow, bool visible = true,
-                     const dvec3& bmin = dvec3(0), const dvec3& bmax = dvec3(0));
+                     const dvec3& bmin = dvec3(0), const dvec3& bmax = dvec3(0), uint32_t firstIndex = 0);
   void submitImpostors(const ImpostorBatch& b, bool castShadow);
   /// the snow trails (world/snowtrails): stamps drawn into the trail map this frame, the map's centre
   void trailStamp(const TrailStamp& s) { if (set_.trailSize > 0) stamps_.push_back(s); }
@@ -209,17 +211,26 @@ public:
 
   void endFrame();
   /// A second view in the same frame (the rooms' windows: game/window_view, the web game's liveportal.js): what was
-  /// submitted since beginFrame is drawn as the world seen from that camera into the portal target (HDR, the 3D
-  /// resolution; no AO, bloom or tone map: the frame it is shown in does those, once). The frame then starts over
-  /// with beginFrame. A material of shading 9 shows the target by the pixel's place on the screen.
+  /// submitted since beginFrame is drawn as the world seen from that camera into the portal target (HDR, at
+  /// portalScale of the 3D resolution, with its own depth and mist targets: between setPortalRect and endPortal the
+  /// renderer works at that size; no AO, bloom or tone map: the frame it is shown in does those, once). The frame then
+  /// starts over with beginFrame. A material of shading 9 shows the target by the pixel's place on the screen.
   void endPortal();
   gfx::Texture portalTexture() const { return portal_ ? dev_->renderTargetColor(portal_) : gfx::Texture{}; }
+  /// what is submitted while this is on is drawn last in the main pass under an occlusion query (a room's windows):
+  /// windowsSeen() says whether any pixel of it was on the screen a few frames ago (-1: no answer yet)
+  bool occlusionTag = false;
+  int windowsSeen() const { return occSeen_; }
+  /// the portal picture's size against the 3D resolution (liveportal.js: 0.4 in the chalets, the station and the ward;
+  /// here 0.75: at half the mountains' ridges and the roofs stair-stepped through the glass, and the pass is not bound by
+  /// its pixels)
+  float portalScale = 0.75f;
   /// the portal view leaves out what stands inside this box (the house you are in, seen from within): its centre, half
   /// extents and heading; until the next endPortal
   void setClipBox(const dvec3& centre, const vec3& half, double yaw) { clipC_ = centre; clipH_ = half; clipYaw_ = yaw; }
   /// the part of the screen the windows cover (NDC x0, y0, x1, y1), set before the portal's beginFrame: only what is
   /// seen through it is submitted and drawn; until the next endPortal
-  void setPortalRect(const vec4& ndc) { portalRect_ = ndc; }
+  void setPortalRect(const vec4& ndc) { portalRect_ = ndc; portalNext_ = true; }
   /// the camera the portal picture was drawn for (its view-projection, camera-relative, in the frame the windows are
   /// drawn in) and how far the eye has moved since: the glass shows the picture by direction (set before beginFrame)
   void setPortalView(const mat4& vp, const vec3& moved) { portalVP_ = vp; portalEye_ = moved; }
@@ -229,6 +240,7 @@ public:
   void readPixels(std::vector<uint8_t>& rgba) { dev_->readPixels(w_, h_, rgba); }
   uint32_t drawCalls() const { return lastDraws_; }
   const Camera& camera() const { return cam_; }
+  const Lighting& lighting() const { return light_; }
 
 private:
   struct Item {
@@ -238,7 +250,7 @@ private:
     uint32_t sFirst = 0, sCount = 0;   // the shadow pass's (coarser) LOD
     const Material* mat = nullptr;
     const std::vector<mat4>* joints = nullptr;
-    bool skinned = false, shadow = false, main = true;
+    bool skinned = false, shadow = false, main = true, occl = false;
     mat4 model{1};
     vec3 origin{0};
     vec4 sphere{0, 0, 0, -1};   // camera-relative bounds (w < 0: unknown) for the per-cascade culling
@@ -290,6 +302,15 @@ private:
   bool frameDrawn_ = false;   // the targets hold a finished frame (holdFrame)
   gfx::RenderTarget hdr_, msaa_, depthCopy_, shadow_, ldr_, env_, envRoom_, aoRaw_, aoTex_, trail_, portal_;
   int pw_ = 0, ph_ = 0, portalIdle_ = 0;
+  // (the portal's own small targets, swapped in for hdr_ / depthCopy_ / the mist's while its view is drawn)
+  gfx::RenderTarget pDepth_, pMist_, pMist2_;
+  int pBaseW_ = 0, pBaseH_ = 0, pmw_ = 0, pmh_ = 0;
+  bool portalNext_ = false, inPortal_ = false;
+  // (the windows' occlusion queries: a ring of 4 frames; state 0 none drawn, 1 waiting for the GPU)
+  int occFrame_ = 0, occSeen_ = -1, occState_[4] = {0, 0, 0, 0};
+  void readOcclusion();
+  void swapPortalTargets();
+  void freePortal();
   vec4 portalRect_{-1, -1, 1, 1};
   mat4 portalVP_{1};
   vec3 portalEye_{0};

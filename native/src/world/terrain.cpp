@@ -33,6 +33,18 @@ Terrain::Terrain(gfx::Device& dev, World& world, JobSystem& jobs, float lodK)
     idx.insert(idx.end(), {t0, s0, t1, t1, s0, s1, t0, t1, s0, t1, s1, s0}); // both sides
   }
   indexCount_ = uint32_t(idx.size());
+  // (the coarse grid after it: every other line, the skirts along every other ring vertex)
+  coarseFirst_ = indexCount_;
+  for (int j = 0; j < Terrain::SEG; j += 2)
+    for (int i = 0; i < Terrain::SEG; i += 2) {
+      uint32_t a = uint32_t(j * V + i), b = a + 2, c = a + 2 * V, d = c + 2;
+      idx.insert(idx.end(), {a, c, b, b, c, d});
+    }
+  for (uint32_t k = 0; k < R; k += 2) {
+    uint32_t t0 = uint32_t(ring_[k]), t1 = uint32_t(ring_[(k + 2) % R]), s0 = base + k, s1 = base + (k + 2) % R;
+    idx.insert(idx.end(), {t0, s0, t1, t1, s0, s1, t0, t1, s0, t1, s1, s0});
+  }
+  coarseCount_ = uint32_t(idx.size()) - coarseFirst_;
   ibo_ = dev_.createBuffer(gfx::BufferUsage::Index, idx.data(), idx.size() * 4);
 }
 
@@ -205,7 +217,7 @@ int Terrain::pending() const {
   return n;
 }
 
-void Terrain::submit(Renderer& r, double shadowMax) {
+void Terrain::submit(Renderer& r, double shadowMax, bool coarse) {
   auto overlaps = [](const Key& a, const Key& b) {
     return a.x < b.x + b.size && b.x < a.x + a.size && a.z < b.z + b.size && b.z < a.z + a.size;
   };
@@ -221,7 +233,7 @@ void Terrain::submit(Renderer& r, double shadowMax) {
     dvec3 bmin(double(k.x), n.minY, double(k.z)), bmax(double(k.x + k.size), n.maxY, double(k.z + k.size));
     bool vis = r.visible(bmin, bmax), cast = double(k.size) <= shadowMax && r.castsShadow(bmin, bmax);
     if (!vis && !cast) continue;
-    r.submitTerrain(n.vi, indexCount_, dvec3(double(k.x), 0, double(k.z)), cast, vis, bmin, bmax);
+    r.submitTerrain(n.vi, coarse ? coarseCount_ : indexCount_, dvec3(double(k.x), 0, double(k.z)), cast, vis, bmin, bmax, coarse ? coarseFirst_ : 0);
   }
 }
 

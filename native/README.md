@@ -1759,12 +1759,21 @@ JS walks on, the things you aim at, the lights with their roles, the glass, and 
   every frame with a window in view your camera is carried to where the room stands outdoors (the same eye, direction
   and field of view; the police station's two wings each to their own place on the house) and the frame is drawn
   twice: first the world from there (`Renderer::endPortal`: the scene passes, culled and scissored to the part of the
-  screen the windows cover, into a 4-byte R11G11B10F picture of the frame's own 3D resolution, without AO, bloom,
-  glare or tone map, freed a few seconds after you leave; no trail map or sky-light pass of its own, the sun's
-  shadows from the nearest cascade only, not multisampled), then the room, whose window planes (a material of shading
-  9) show that picture: a hole in the wall onto the world with exact parallax, tone-mapped once with the room, as
-  sharp as the view outdoors (1:1 pixels; the web game draws the chalets', the station's and the ward's at 40 % of the
-  resolution every third frame). The world's pass runs every third frame in the chalets, the station and the ward (as the
+  screen the windows cover, into an HDR picture at 0.75 of the frame's 3D resolution (`Renderer::portalScale`: its own
+  depth and mist targets swapped in for the pass), without AO, bloom, glare or tone map, freed a few seconds after you
+  leave; no trail map or sky-light pass of its own, the sun's shadows from the nearest cascade only (and only what
+  shades that cascade submitted), not multisampled), then the room, whose window planes (a material of shading 9) show
+  that picture: a hole in the wall onto the world with exact parallax, tone-mapped once with the room (the web game
+  draws the chalets', the station's and the ward's at 40 % of the resolution every third frame). The world drawn for
+  it is a lighter one (Nov 2026: the pass cost 60-100 ms of GPU time, rooms ran at 28-57 ms a frame; the forest round
+  the chalets alone was 11 000 firs, 25 M triangles, every one drawn whichever way you looked): the trees, the rocks
+  and the resort's props culled one by one to the windows' part of the view (or casting a shadow into it:
+  `Scenery::submitView`, `Resort::submitPropsView`), the firs past 0.6 x the middle LOD distance as the far forest's
+  impostors (fading over as the 3D firs fade out), the terrain's coarse grid (every other line; the models keep their
+  outdoor LODs: the buildings' light copies are 6 % of the triangles, blobs across the square); and none at all
+  while no pixel of the glass passed
+  the depth test a few frames before (an occlusion query on the windows, `Renderer::windowsSeen`: a window behind
+  the hall's wall cost the full pass). The world's pass runs every third frame in the chalets, the station and the ward (as the
   web game's), every other frame in the shop and the Autohaus (their glass fronts; the web game: every frame), up to
   two frames rarer while it is slow (`WindowView::rate`); in between the glass looks the picture up by direction from the camera it was
   drawn for (`Renderer::setPortalView`), so turning your head between two pictures does not drag the view along, and

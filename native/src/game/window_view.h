@@ -5,8 +5,12 @@
 // are in left out), and the window planes show that picture by their place on the screen: a hole in the wall onto the
 // world, parallax and all, with the traffic, the people, the lifts, the snowfall and the hour as they are out there.
 // While you are inside, the world is streamed and simulated round the house (focus()), not round the quiet spot.
-// Drawn only while a window is in view, at the frame's own 3D resolution (sharp: the web game's chalets, station
-// and ward draw theirs at 40 % every third frame). That is the High, Ultra and Super Ultra presets; below them
+// Drawn only while a window is in view and some of its glass was on the screen a few frames ago (an occlusion query on
+// the glass: a window behind a wall costs nothing), at 0.75 of the frame's 3D resolution (the web game's chalets,
+// station and ward: 40 % every third frame), with a lighter world than outdoors: only the trees, rocks and props in
+// the windows' part of the view, the firs past ~150 m as impostors, the coarse terrain grid (the forest round a chalet,
+// tens of millions of triangles uncut, made this pass cost 60-100 ms of GPU time). That is the High, Ultra and Super
+// Ultra presets; below them
 // (misty) no world is drawn for the glass: it is a grey, misty pane seen from inside, the soft light of the hour
 // coming through it, brighter at the top, a little frost round its edges.
 #pragma once

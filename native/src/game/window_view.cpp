@@ -98,7 +98,7 @@ bool WindowView::due(vec4& rect) {
   rect = vec4(std::max(-1.f, rect.x - M), std::max(-1.f, rect.y - M), std::min(1.f, rect.z + M), std::min(1.f, rect.w + M));
   // (every other frame; every third / fourth while the world's pass costs more: liveportal.js draws its view every
   // third frame and switches it off when slow; here it only slows down)
-  const int every = std::clamp(rate + int(cost_ / 9.0), rate, rate + 2);
+  const int every = std::clamp(rate + int(cost_ / 5.0), rate, rate + 3);   // (a costly view (the shop's village behind the counter) slows down sooner)
   if (has_ && inside && ++tick_ < every) return false;
   tick_ = 0; rect_ = rect;
   return true;
@@ -144,7 +144,9 @@ void WindowView::draw(Renderer& r, const dvec3& origin, bool mirror) {
   if (!live()) return;
   if (has_ && model && r.portalTexture()) {
     for (Material& m : model->materials) { m.emissiveTex = r.portalTexture(); m.emissive = tint_ * gain; }
+    r.occlusionTag = true;   // (is any of the glass on the screen: else the next pictures are not drawn)
     r.submitModel(*model, origin, M, nullptr, false);
+    r.occlusionTag = false;
     return;
   }
   // (no view yet, or none in this frame: the soft day / night sky of liveportal.js)

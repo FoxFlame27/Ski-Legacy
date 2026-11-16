@@ -880,15 +880,61 @@ void Resort::sweepClearance(const std::function<bool(const dvec3&, const dvec3&)
   }
 }
 
-void Resort::submit(Renderer& r, bool props, bool meshes) {
+// a window's view: the props in its frustum (or casting into it: their box stretched away from the sun as far as a
+// shadow of their height falls), one batch per prop set, each in the LOD band it has outdoors (the cells' batches
+// hold every instance of a set in a cell, whichever way you look: the village's 20k-triangle props by the hundred)
+void Resort::submitPropsView(Renderer& r) {
+  if (viewProps_.size() != props_.size()) viewProps_.resize(props_.size());
+  const dvec3 cam = r.camera().pos, o = glm::floor(cam);
+  const vec3 L = r.lighting().sunDir;
+  const vec3 sh = L.y > 0.05f ? -L / std::max(0.25f, L.y) : vec3(0);
+  static std::vector<MatrixInstanceBatch::Inst> l0, l1;
+  for (size_t si = 0; si < props_.size(); si++) {
+    const PropSet& ps = props_[si];
+    if (!ps.model) continue;
+    l0.clear(); l1.clear();
+    const dvec3 e(ps.radius);
+    for (const Cell& c : ps.cells) {
+      if (c.band.size() != c.inst.size()) continue;
+      const dvec3 mn = c.bmin - e, mx = c.bmax + e;
+      const bool cellVis = r.visible(mn, mx), cellCast = ps.shadow && r.castsShadow(mn, mx);
+      if (!cellVis && !cellCast) continue;
+      for (size_t i = 0; i < c.inst.size(); i++) {
+        if (c.band[i] >= 2) continue;
+        const dvec3 p(c.inst[i][3]);
+        bool in = cellVis && r.visible(p - e, p + e);
+        if (!in && cellCast && sh != vec3(0)) {
+          const dvec3 d = dvec3(sh * float(2 * ps.radius));
+          in = r.visible(glm::min(p - e, p - e + d), glm::max(p + e, p + e + d));
+        }
+        if (!in) continue;
+        (c.band[i] == 0 ? l0 : l1).push_back(MatrixInstanceBatch::pack(c.inst[i], o));
+      }
+    }
+    ViewProps& v = viewProps_[si];
+    const size_t need = std::max(l0.size(), l1.size());
+    if (need > v.cap) {   // (grown in steps; the old batches' buffers freed)
+      for (MatrixInstanceBatch& b : v.lod) b.release(dev_);
+      v.cap = uint32_t(std::max<size_t>(64, need * 2));
+      for (MatrixInstanceBatch& b : v.lod) b.init(dev_, *ps.model, v.cap);
+    }
+    if (!v.cap) continue;
+    v.lod[0].upload(dev_, l0); v.lod[1].upload(dev_, l1);
+    if (!l0.empty()) r.submitInstances(v.lod[0], o, 0, ps.shadow);
+    if (!l1.empty()) r.submitInstances(v.lod[1], o, 1, ps.shadow);
+  }
+}
+
+void Resort::submit(Renderer& r, bool props, bool meshes, bool view) {
   const dvec3 cam = r.camera().pos;
-  if (props) for (const PropSet& ps : props_)
+  if (props && view) submitPropsView(r);
+  if (props && !view) for (const PropSet& ps : props_)
     for (const Cell& c : ps.cells) {
       dvec3 e(c.radius);
       dvec3 mn = c.bmin - e, mx = c.bmax + e;
       bool vis = r.visible(mn, mx), cast = ps.shadow && r.castsShadow(mn, mx);
       if (!vis && !cast) continue;
-      if (c.lod[0].count()) r.submitInstances(c.lod[0], c.origin, 0, cast);
+      if (c.lod[0].count()) r.submitInstances(c.lod[0], c.origin, 0, cast, nullptr, vis);   // (only shading the view: the shadow pass only)
       if (c.lod[1].count() && vis) r.submitInstances(c.lod[1], c.origin, 1, false);
     }
   if (meshes) {

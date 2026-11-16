@@ -580,6 +580,19 @@ public:
     p->pending[slot] = true;
     inPass_ = true;
   }
+  void occlusionBegin(int slot) override {
+    if (!occ_[0]) glGenQueries(8, occ_);
+    glBeginQuery(GL_ANY_SAMPLES_PASSED, occ_[slot & 7]);
+  }
+  void occlusionEnd() override { glEndQuery(GL_ANY_SAMPLES_PASSED); }
+  int occlusionResult(int slot) override {
+    if (!occ_[0]) return -1;
+    GLuint ready = 0, any = 0;
+    glGetQueryObjectuiv(occ_[slot & 7], GL_QUERY_RESULT_AVAILABLE, &ready);
+    if (!ready) return -1;
+    glGetQueryObjectuiv(occ_[slot & 7], GL_QUERY_RESULT, &any);
+    return any ? 1 : 0;
+  }
   std::vector<GpuTime> gpuTimes() const override {
     std::vector<GpuTime> r;
     for (const GpuPass& p : passes_) r.push_back(GpuTime{p.name, p.n ? p.sum / p.n : 0.0, p.max, p.n});
@@ -640,6 +653,7 @@ private:
   struct GpuPass { std::string name; GLuint q[RING] = {0, 0, 0, 0}; bool pending[RING] = {false, false, false, false}; double sum = 0, max = 0; int n = 0; };
   std::vector<GpuPass> passes_;
   bool timing_ = false, inPass_ = false;
+  GLuint occ_[8] = {0, 0, 0, 0, 0, 0, 0, 0};
   int passFrame_ = 0;
   double gpuLast_ = 0;
 public:

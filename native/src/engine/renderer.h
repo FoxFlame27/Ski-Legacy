@@ -275,6 +275,9 @@ private:
   void bakeClouds();
   void cloudPass();
   bool noClouds_ = false;
+  int dbgW_ = 0, dbgH_ = 0;   // (dev: SKI_LEGACY_GFX=res=2560x1440: the 3D drawn at this size whatever the window: profiling a display not attached)
+  bool dbgAoView_ = false;   // (dev: SKI_LEGACY_GFX=aoview: the AO term alone, grey)
+  bool dbgNoRoomAo_ = false, dbgNoGrain_ = false, dbgNoPlank_ = false;   // (dev: SKI_LEGACY_GFX=noroomao,nograin,noplank)
   gfx::Program cardP_, deckP_;
   gfx::RenderTarget cloudNoiseRT_, atlasRT_[2];
   gfx::Texture cloudTerrain_;
@@ -291,7 +294,7 @@ private:
   void aoPass();
   // the ambient occlusion's level this frame: the preset's, or in a room (below High: no AO outdoors) a half-resolution
   // pass of its own: the corners, the floor under the racks and shelves, the gaps between the planks
-  int aoLevel() const { return set_.ao > 0 ? set_.ao : light_.interior && !set_.lowShaders ? 1 : 0; }
+  int aoLevel() const { return set_.ao > 0 ? set_.ao : light_.interior && !set_.lowShaders && !dbgNoRoomAo_ ? 1 : 0; }
   void ensureAo();
   gfx::Program build(const char* name, const char* defines, const char* vs, const char* fs, bool lit, const char* extra = nullptr);
   bool inCascade(const Item& it, int c) const;

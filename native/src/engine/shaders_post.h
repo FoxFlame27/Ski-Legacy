@@ -161,11 +161,14 @@ in vec2 vNdc;
 out vec4 oColor;
 uniform sampler2D uAO; uniform vec2 uTexel;
 void main() {
-  vec2 vUv = vNdc * 0.5 + 0.5;
-  vec4 c = texture(uAO, vUv);
+  // (whole texels, read exactly: the old taps sat on the texel edges of a nearest-sampled target, so which texel each
+  // one read flipped with the rounding across the screen and left a faint grid of stripes on every flat surface; the
+  // 4 x 4 window covers the whole period of the 4 x 4 Bayer jitter, so the noise averages out)
+  ivec2 p0 = ivec2(gl_FragCoord.xy), pmax = textureSize(uAO, 0) - 1;
+  vec4 c = texelFetch(uAO, p0, 0);
   float z = c.b, ao = 0.0, w = 0.0, sh = 0.0;
   for (int j = -2; j < 2; j++) for (int i = -2; i < 2; i++) {
-    vec4 t = texture(uAO, vUv + (vec2(float(i), float(j)) + 0.5) * uTexel);
+    vec4 t = texelFetch(uAO, clamp(p0 + ivec2(i, j), ivec2(0), pmax), 0);
     float k = exp(-abs(t.b - z) / (z * 0.04 + 0.05));
     ao += t.r * k; w += k; sh += t.g;
   }
@@ -240,8 +243,9 @@ void main() {
   // reads from the streaks and the vignette below, the picture stays sharp)
   if (uPost2.z > 0.0 || uPost2.w > 0.0) {
     vec4 a = texture(uAO, uv);
-    c *= mix(1.0, a.r, uPost2.z);
+    c *= mix(1.0, a.r, min(uPost2.z, 1.0));
     c += uSunCol * a.g * uPost2.w;
+    if (uPost2.z > 1.5) { oColor = vec4(vec3(a.r), 1.0); return; }   // (dev: SKI_LEGACY_GFX=aoview)
   }
   if (uPost.x > 0.0) c += texture(uBloom, uv).rgb * uPost.x;
   c = uToneMap == 1 ? neutral(c) : aces(c);

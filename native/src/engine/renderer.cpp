@@ -308,6 +308,11 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     if (has("nodetail")) set_.detailTex = 0;
     if (has("noclouds")) noClouds_ = true;
     if (has("nomist")) noMist_ = true;
+    if (has("noroomao")) dbgNoRoomAo_ = true;
+    if (has("aoview")) dbgAoView_ = true;
+    if (auto p = o.find("res="); p != std::string::npos) std::sscanf(o.c_str() + p + 4, "%dx%d", &dbgW_, &dbgH_);
+    if (has("nograin")) dbgNoGrain_ = true;
+    if (has("noplank")) dbgNoPlank_ = true;
     if (has("nobloom")) bloomOn = false;
     if (auto p = o.find("cascades="); p != std::string::npos) set_.cascades = std::atoi(o.c_str() + p + 9);
     if (auto p = o.find("fx="); p != std::string::npos) set_.fx = std::atoi(o.c_str() + p + 3);
@@ -445,6 +450,7 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
 void Renderer::resize(int w, int h) {
   w_ = std::max(1, w); h_ = std::max(1, h);
   int rw = std::max(1, int(w_ * set_.renderScale)), rh = std::max(1, int(h_ * set_.renderScale));
+  if (dbgW_ > 0 && dbgH_ > 0) { rw = int(float(dbgW_) * set_.renderScale); rh = int(float(dbgH_) * set_.renderScale); }
   if (hdr_ && rw == rw_ && rh == rh_ && ldr_) return;
   frameDrawn_ = false;
   if (hdr_) dev_->destroy(hdr_);
@@ -1056,7 +1062,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
   static const float STR[5] = {0, 0.35f, 0.45f, 0.5f, 0.5f}, FAR[5] = {1, 16, 22, 28, 34};
   vec4 f3(float(m.paint), float(kind), height, m.lumNorm);
   dev_->setVec4("uFlags3", glm::value_ptr(f3));
-  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 ? STR[set_.fx] : 0.f, FAR[set_.fx], kind == 2 ? m.bump : float(m.roadSnow));
+  vec4 f4(m.paint == 1 && set_.fx >= 1 ? 1.f : m.clearcoat, kind == 2 && !dbgNoGrain_ ? STR[set_.fx] : 0.f, FAR[set_.fx], kind == 2 ? (dbgNoPlank_ ? 0.f : m.bump) : float(m.roadSnow));
   dev_->setVec4("uFlags4", glm::value_ptr(f4));
   dev_->setVec4("uFanBase", glm::value_ptr(m.fanBase));   // (fans.js crowd people: recolour, screen-door fade)
   dev_->setVec4("uFanCol", glm::value_ptr(m.fanCol));
@@ -1729,7 +1735,7 @@ void Renderer::endFrame() {
     dev_->setFloat("uExposure", light_.exposure);
     dev_->setInt("uToneMap", light_.toneMap >= 0 ? light_.toneMap : set_.toneMap);
     vec4 p1(bloom ? bloomStrength * 0.42f : 0.f, fx.vignette, fx.streaks, fx.flash);
-    vec4 p2(fx.hit, float(time_), ao && aoLevel() > 0 ? 0.85f : 0.f, ao ? shaftsK_ * 0.07f : 0.f);
+    vec4 p2(fx.hit, float(time_), ao && aoLevel() > 0 ? (dbgAoView_ ? 2.f : 0.85f) : 0.f, ao ? shaftsK_ * 0.07f : 0.f);
     vec4 p3(float(set_.grade), float(w_) / float(h_), set_.fx >= 1 ? 1.f : 0.f, aa ? 1.f : 0.f);
     dev_->setVec4("uPost", glm::value_ptr(p1));
     dev_->setVec4("uPost2", glm::value_ptr(p2));

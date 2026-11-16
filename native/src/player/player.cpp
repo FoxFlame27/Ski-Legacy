@@ -103,6 +103,11 @@ void Player::sitOn(const dvec3& seat, const dvec3& fwd) {
   camFocusInit_ = false;
 }
 void Player::setSeat(const dvec3& seat, const dvec3& fwd) {
+  // riding (a lift, x16 while Space is held): the camera was placed this frame round last frame's seat (main.js places
+  // the seat before player.update; here the ride updates after the camera): it is carried along with the seat, so the
+  // view stays as close to the cabin fast-forwarded as at the normal speed instead of trailing it by metres
+  const dvec3 d = seat - pos;
+  if (mode == PlayerMode::Sit && camFocusInit_ && glm::length(d) < 60) { camPos_ += d; camFocus_ += d; camFocusY_ += d.y; }
   pos = prevPos = renderPos = seat;
   if (std::hypot(fwd.x, fwd.z) > 1e-6) heading = std::atan2(fwd.x, fwd.z);
   normal = dvec3(0, 1, 0);

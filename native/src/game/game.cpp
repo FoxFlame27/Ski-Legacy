@@ -5757,9 +5757,11 @@ int runGame(const GameOptions& opt) {
             rideT += frameDt;
             rideP1 = lifts.rideProgress();
             if (phaseFrame % 25 == 0)
-              SL_INFO("[autotest] ride t=%5.1fs  progress %5.1f%%  seat=(%8.1f, %7.1f, %8.1f)  x%.0f%s", rideT, rideP1 * 100,
-                      player.pos.x, player.pos.y, player.pos.z, lifts.timeScale, prompt.empty() ? "" : ("  [" + prompt + "]").c_str());
+              SL_INFO("[autotest] ride t=%5.1fs  progress %5.1f%%  seat=(%8.1f, %7.1f, %8.1f)  x%.0f  camera %.1f m from you%s", rideT, rideP1 * 100,
+                      player.pos.x, player.pos.y, player.pos.z, lifts.timeScale, glm::length(cam.pos - player.renderPos), prompt.empty() ? "" : ("  [" + prompt + "]").c_str());
             if (pngRide && rendered) { ridePng = true; if (!opt.png.empty()) writePng(renderer, pngVariant(opt.png, "ride")); }
+            static int ffShot = 0;   // (fast-forwarded, Space held: the camera as close as at the normal speed)
+            if (lifts.timeScale > 1 && rendered && ffShot < 2 && ++ffShot == 2 && !opt.png.empty()) writePng(renderer, pngVariant(opt.png, "ride_ff"));
           } else {
             gotOff = true;
             expectExit = testLine->midExit;

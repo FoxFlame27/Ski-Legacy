@@ -227,7 +227,7 @@ void Traffic::update(double dt, const dvec3& player, const Drive* you, const std
     for (auto& c : list) {
       double dP = std::hypot(c.x - me.x, c.z - me.z);
       if (c.scenic) {
-        if ((c.mode == Car::Mode::Knocked || (dP > 900 && c.mode == Car::Mode::Road)) && !inSight(c.x, c.z)) spawn(c, me, false);
+        if ((c.mode == Car::Mode::Knocked || c.mode == Car::Mode::Wreck || (dP > 900 && c.mode == Car::Mode::Road)) && !inSight(c.x, c.z)) spawn(c, me, false);
         continue;
       }
       if (c.mode == Car::Mode::Gone) continue;
@@ -277,13 +277,12 @@ void Traffic::update(double dt, const dvec3& player, const Drive* you, const std
         c.x += c.kvx * h; c.z += c.kvz * h; c.yaw = wrapPi(c.yaw + c.kw * h);
         c.y = world_.groundHeight(c.x, c.z, c.y + 1) + 0.02;
         c.kt += h;
-        if (c.kt > 3 && sp < 0.1) {   // back onto its road, steering out what is left over
-          Transport::RoadHit rh = t_.nearestRoad(c.x, c.z, 14);
-          if (rh.road >= 0) toRoad(c, rh.road, rh.s, std::cos(wrapPi(c.yaw - std::atan2(roadAt(t_.roads[size_t(rh.road)], rh.s).dx, roadAt(t_.roads[size_t(rh.road)], rh.s).dz))) >= 0 ? 1 : -1, 0);
-          else if (!inSight(c.x, c.z)) despawn(c, 5);
-        }
+        // (traffic.js slide: come to rest it is a wreck: it stays where it stopped, crooked, the hazards flashing, the
+        // traffic queueing behind it, until the watchdog takes it away out of sight (no headway for 5 minutes))
+        if (sp < 0.1 && std::fabs(c.kw) < 0.05) { c.mode = Car::Mode::Wreck; c.kvx = c.kvz = c.kw = 0; c.v = 0; c.brake = 0; }
         break;
       }
+      case Car::Mode::Wreck: c.v = 0; c.brake = 0; break;
       case Car::Mode::Road: drive(c, h, player, you, buses); break;
     }
   }
@@ -436,7 +435,8 @@ double Traffic::clearance(const Car& c, const dvec3& player, const Drive* you, c
   double gapW = std::max(36.0, look);
   for (const Car& o : list) {
     if (&o == &c || o.mode == Car::Mode::Gone || o.mode == Car::Mode::Parked) continue;
-    if (o.mode == Car::Mode::Knocked) { box({o.x, o.z, o.yaw, o.w / 2, o.l / 2}, gapW, 14, 0); continue; }
+    // (a wreck / a knocked car by its footprint: never up against it, it waits 14 m back)
+    if (o.mode == Car::Mode::Knocked || o.mode == Car::Mode::Wreck) { box({o.x, o.z, o.yaw, o.w / 2, o.l / 2}, gapW, 14, 0); continue; }
     if (o.road == c.road && o.dir == c.dir) {
       double ds = (o.s - c.s) * c.dir;
       if (ds > 0 && ds < look && std::fabs(o.off - c.off) < 2.6) lim = std::min(lim, followV(ds - (c.l + o.l) / 2 - 3, o.v));
@@ -451,6 +451,16 @@ double Traffic::clearance(const Car& c, const dvec3& player, const Drive* you, c
     if (std::hypot(v.x, v.y) < 0.8) box({p.x, p.z, you->yaw(), you->halfWidth(), you->halfLen()}, gapW, 2.5, 0);
     else { double vl = v.x * fx + v.y * fz; check(p.x, p.z, vl > -1 ? look : 32, (c.l + you->halfLen() * 2) / 2 + 3, vl); }
   } else check(player.x, player.z, std::max(26.0, look), c.l / 2 + 3, 0);
+  // (traffic.js: parked cars, wrecks and shoved cars in the way: your wreck by its footprint as it lies (its heading,
+  // rolled or not), 14 m back; a car left on the road by its footprint)
+  if (you)
+    for (const Drive::Parked& e : you->parked) {
+      if (e.driving || std::fabs(e.x - c.x) > gapW + 4 || std::fabs(e.z - c.z) > gapW + 4) continue;
+      if (e.wrecked) {
+        const double hy = e.wreckPose ? std::atan2(e.wreckM[2][0], e.wreckM[2][2]) : e.yaw;
+        box({e.x, e.z, hy, 1.0, e.length / 2}, gapW, 14, 0);
+      } else box({e.x, e.z, e.yaw, 0.97, e.length / 2}, 30, 2.5, 0);
+    }
   for (const Obb& b : buses) box(b, gapW, 2.5, 0);
   return lim;
 }
@@ -463,7 +473,9 @@ void Traffic::knock(int id, double vx, double vz, double w) {
 
 void Traffic::takeOff(int id) {
   if (id < 0 || size_t(id) >= list.size()) return;
-  despawn(list[size_t(id)], 1 + rnd() * 4);
+  Car& c = list[size_t(id)];
+  if ((c.mode == Car::Mode::Wreck || c.mode == Car::Mode::Knocked) && inSight(c.x, c.z)) return;   // (traffic.js: never a wreck in view)
+  despawn(c, 1 + rnd() * 4);
 }
 
 void Traffic::others(std::vector<OtherBody>& out, const dvec3& near) const {
@@ -481,7 +493,7 @@ void Traffic::others(std::vector<OtherBody>& out, const dvec3& near) const {
 }
 
 void Traffic::cars(std::vector<CarView>& out) const {
-  for (const Car& c : list) if (c.mode == Car::Mode::Road || c.mode == Car::Mode::Knocked) out.push_back({dvec3(c.x, c.y, c.z), c.yaw, c.v, c.l, c.w, c.mode == Car::Mode::Road ? c.road : -1, c.s, c.dir});
+  for (const Car& c : list) if (c.mode == Car::Mode::Road || c.mode == Car::Mode::Knocked || c.mode == Car::Mode::Wreck) out.push_back({dvec3(c.x, c.y, c.z), c.yaw, c.v, c.l, c.w, c.mode == Car::Mode::Road ? c.road : -1, c.s, c.dir});
 }
 
 void Traffic::fillColliders(std::vector<Collider>& out) const {
@@ -508,6 +520,7 @@ void Traffic::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD,
     p.live = driving;
     p.brake = driving && c.brake > 0.2;
     if (c.mode == Car::Mode::Knocked) { p.hazard = true; p.lights = night; }   // (traffic.js: knocked aside, its lights stay on and the hazards flash)
+    if (c.mode == Car::Mode::Wreck) { p.hazard = true; p.lights = night; }     // (a wreck: hazards, dim tails, the headlights on at night)
     uint32_t h = uint32_t(&c - list.data()) * 2246822519u + 77u;
     p.plate = std::string(CANTONS[(h >> 8) % 8]) + " " + std::to_string(1000 + (h >> 12) % 899000);
     out.push_back(p);
@@ -538,7 +551,7 @@ void Traffic::addPeople(People& people, const dvec3& cam, const std::vector<int>
   if (kinds.empty()) return;
   static const char* LOOKS[] = {"skier_blue", "skier_red", "skier_black", "skier_green"};
   for (const Car& c : list) {
-    if (c.mode != Car::Mode::Road && c.mode != Car::Mode::Knocked) continue;   // (parked traffic cars show nobody)
+    if (c.mode != Car::Mode::Road && c.mode != Car::Mode::Knocked && c.mode != Car::Mode::Wreck) continue;   // (parked traffic cars show nobody)
     if (std::hypot(c.x - cam.x, c.z - cam.z) > PEOPLE_R) continue;
     const CarSeats* S = carSeatsFor(c.name);
     const glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(c.x, c.y, c.z)) * glm::rotate(glm::dmat4(1), c.yaw, dvec3(0, 1, 0)) *

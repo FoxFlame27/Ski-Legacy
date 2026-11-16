@@ -44,7 +44,7 @@ public:
     std::string name;
     const VehicleModel* vm = nullptr;
     double l = 4.7, w = 1.9, drv = 1, vmax = 30;
-    enum class Mode : uint8_t { Road, Parked, Knocked, Gone } mode = Mode::Gone;
+    enum class Mode : uint8_t { Road, Parked, Knocked, Gone, Wreck } mode = Mode::Gone;   // (Wreck: traffic.js 'wreck', knocked to a stop: it rests there, crooked, hazards on, until the watchdog takes it out of sight)
     int road = -1, dir = 1;
     double s = 0, v = 0, off = 0, offT = 0, offQ = 0, brake = 0;
     int nextJ = -2;        // junction index (-1 none, -2 not picked yet)

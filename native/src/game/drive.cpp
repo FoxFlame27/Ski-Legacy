@@ -183,6 +183,21 @@ bool Drive::exit(dvec3& out) {
   return true;
 }
 
+// drive.js wreckOut: out beside the wreck (the side that's up); the car stays as it lies (its pose kept) until it is
+// towed, a wreck the traffic queues behind / steers round
+bool Drive::wreckOut(dvec3& out) {
+  if (!d_.on || !wreckDone_) return false;
+  wreckDone_ = false;
+  Parked& e = parked[size_t(d_.e)];
+  e.wreckM = carMatrix(); e.wreckPose = true; e.wrecked = true;
+  e.x = d_.x; e.z = d_.z; e.y = world_.groundHeight(d_.x, d_.z, d_.y + 1) + 0.03; e.yaw = d_.yaw; e.driving = false;
+  const double sg = d_.crashRollTo > 0.1 ? -1 : 1;   // (on its left side: out to the right)
+  const double sx = std::cos(d_.yaw) * sg, sz = -std::sin(d_.yaw) * sg;
+  out = dvec3(d_.x + sx * (d_.w / 2 + 1.4), d_.z + sz * (d_.w / 2 + 1.4), d_.yaw + PI / 2 * sg);
+  d_.on = false; d_.crash = false; d_.crashRoll = d_.crashRollTo = 0; d_.vx = d_.vz = 0;
+  return true;
+}
+
 void Drive::seat(dvec3& pos, dvec3& fwd) const {
   double fx = std::sin(d_.yaw), fz = std::cos(d_.yaw), lx = fz, lz = -fx;
   fwd = dvec3(fx, 0, fz);
@@ -200,10 +215,17 @@ void Drive::seat(dvec3& pos, dvec3& fwd) const {
 
 glm::dmat4 Drive::carMatrix() const {
   // (as addDraw draws it: on its springs (pitch, roll), rolled over in a crash)
-  glm::dmat4 M = glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) *
-                 glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
-  if (d_.crashRoll != 0) M = M * glm::translate(glm::dmat4(1), dvec3(0, std::fabs(std::sin(d_.crashRoll)) * d_.w / 2, 0));
-  return M;
+  glm::dmat4 R = glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) * glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) *
+                 glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
+  if (d_.crashRoll != 0) {
+    // (drive.js updateBody) rolling over: round its own middle, resting on whichever side is down (on its roof the
+    // body stands on its roof, not sunk to the roof line in the snow)
+    const double cr = d_.crashRoll, h2 = (d_.e >= 0 && parked[size_t(d_.e)].vm ? parked[size_t(d_.e)].vm->size.y : 1.5) / 2;
+    const double rest = std::fabs(std::cos(cr)) * h2 + std::fabs(std::sin(cr)) * (d_.w / 2);
+    const dvec3 off = dvec3(R * glm::dvec4(0, h2, 0, 0));
+    return glm::translate(glm::dmat4(1), dvec3(d_.x - off.x, d_.y + rest - off.y, d_.z - off.z)) * R;
+  }
+  return glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * R;
 }
 
 CarTemplate Drive::carTemplate() const {
@@ -656,8 +678,13 @@ void Drive::slideParked(double h) {
     if (sp > dec) { e.svx -= e.svx / sp * dec; e.svz -= e.svz / sp * dec; } else { e.svx = e.svz = 0; }
     e.sw *= std::exp(-h * 2.6);
     if (std::fabs(e.sw) < 0.04 && e.svx == 0 && e.svz == 0) e.sw = 0;
+    const double ox = e.x, oy = e.y, oz = e.z;
     e.x += e.svx * h; e.z += e.svz * h; e.yaw = wrapPi(e.yaw + e.sw * h);
     e.y = world_.meshHeight(e.x, e.z) + 0.03;
+    if (e.wreckPose) {   // (a wreck shoved: it slides and turns as it lies)
+      const dvec3 c(ox, oy, oz);
+      e.wreckM = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.sw * h, dvec3(0, 1, 0)) * glm::translate(glm::dmat4(1), -c) * e.wreckM;
+    }
   }
 }
 
@@ -730,7 +757,8 @@ void Drive::frame(double dt, const DriveFrameInput& in) {
   pose(dt);
   placeCamera(dt, in);
   // a wreck: the car comes to rest, then you are out beside it (the game takes you out: exit is allowed)
-  if (d.crash && d.crashT > 1.9 && speed() < 1.2) { d.crash = false; d.offT = 0; d.vx = d.vz = 0; }
+  // (drive.js: crash.t > 1.9, slow, the roll done -> wreckOut: the game takes you out beside it, wreckOut())
+  if (d.crash && d.crashT > 1.9 && speed() < 1.2 && std::fabs(d.crashRollTo - d.crashRoll) < 0.05) wreckDone_ = true;
 }
 
 void Drive::pose(double dt) {
@@ -864,7 +892,8 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     } else {
       double dist = std::hypot(e.x - cam.x, e.z - cam.z);
       if (dist > 400) continue;
-      M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
+      // (drive.js wreckOut: the wreck stays as it lies, on its side / roof, crooked, until it is towed)
+      M = e.wrecked && e.wreckPose ? e.wreckM : glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
     }
     double dist = std::hypot(M[3][0] - cam.x, M[3][2] - cam.z);
     bool mine = d_.on && int(i) == d_.e;
@@ -882,8 +911,7 @@ void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, b
     CarPose c;
     c.vm = e.vm; c.mine = mine;
     if (mine) {
-      c.M = glm::translate(glm::dmat4(1), dvec3(d_.x, d_.y + 0.02, d_.z)) * glm::rotate(glm::dmat4(1), d_.yaw, dvec3(0, 1, 0)) *
-            glm::rotate(glm::dmat4(1), d_.pitch, dvec3(1, 0, 0)) * glm::rotate(glm::dmat4(1), d_.roll + d_.crashRoll, dvec3(0, 0, 1));
+      c.M = carMatrix();   // (as drawn: rolled over in a crash, resting on its side / roof)
       // (drive.js effects: crashed, the lamps stay as they were (the tails dim at least) and the hazards flash)
       c.lights = d_.lights || night;
       c.brake = !d_.crash && d_.brkP > 0.1;
@@ -892,7 +920,7 @@ void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, b
       c.hazard = d_.crash;
     } else {
       if (std::hypot(e.x - cam.x, e.z - cam.z) > maxD) continue;
-      c.M = glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
+      c.M = e.wrecked && e.wreckPose ? e.wreckM : glm::translate(glm::dmat4(1), dvec3(e.x, e.y, e.z)) * glm::rotate(glm::dmat4(1), e.yaw, dvec3(0, 1, 0));
       if (e.wrecked) { c.hazard = true; c.lights = night; }   // (the wreck: hazards, dim tails, the headlights on at night)
     }
     uint32_t h = uint32_t(i) * 2654435761u;

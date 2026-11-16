@@ -74,6 +74,7 @@ public:
   vec3 groundNormal(double x, double z, double yHint = 1e30);
 
   CorridorHit corridorAt(double x, double z) const;
+  const std::vector<CorridorSeg>& corridors() const { return corridors_; }
   double padInfluence(double x, double z) const;
   bool nearPad(double x, double z) const;  // vegetation.js nearPad
   double forest(double x, double z, double h, double slope) const;

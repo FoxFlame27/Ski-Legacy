@@ -1927,6 +1927,35 @@ by position except a rescue in progress, which is on the mountain).
 - Not done yet: the trail map draws its roads from `map.json` (the Dorfstrasse is not on it), the ski shop is not
   moved, the village core is not compacted.
 
+### Round 4: the village audit (Nov 2026, the user: "there are houses on the train track in the village")
+
+`SKI_LEGACY_DEBUG=villagecheck --autotest` (`game/villagecheck.h`) checks every village piece as placed (the buildings,
+the props with their models' bounds: walls, lamps, trees by the trunk, benches, fountains, shelters; the relief; the
+moved sites as discs) and logs each hit with its name and place, then PASS / FAIL:
+`rail` (both railways' track envelope + 4.5 m for a house, + 4 m along the stations; not deep in a tunnel, but at its
+portals), `road` (every road and bus leg with its shoulder, the car parks, the stops), `lift` (stations, towers, the cars
+passing low over), `piste` (inside a piste / race corridor), `path` (on a paved footpath; the walking network into a
+house or wall or up a step), `overlap` (houses, walls, trees / lamps / benches in them), `ground` (a house with the
+drawn ground more than 0.9 m over its base or a corner floating, its door buried or hanging; small props on a step),
+`relief` (the terraces raising a railway's bed, an exported road, a lift station). Before: 110 hits (rail 4, ground 17,
+path 46, overlap 7, piste 3, road 2, relief 31); after: 0.
+- **On the tracks**: the Bergbahnstrasse quarter (Hotel Walliserhof, Ski Service Pro, Chalet Bergkristall, Haus Enzian)
+  stood on the Legacy Express's open cutting at its tunnel portal (47, -74); it is east of the line now, over the
+  tunnel, the Bergbahnstrasse round the north of the church's knoll and over the tunnel 30 m past the portal.
+  Intersport moved clear of the portal. The terraces' fade raised the Express's station track by up to 1.2 m: the
+  railways' beds are kept things of the relief now.
+- **Sunk houses**: every building has a pad (`village.json` "pads", `Village::prepareRoads` / `padLevel`): the drawn
+  ground levelled under its footprint (+0.8 m) at the level in front of its door, easing back over 5 m (as the JS
+  levels its buildings' sites). Off with the relief.
+- **Clearances in the layout tool**: every building is settled (`buildingBlocked`: railways, pistes, roads and bus legs,
+  car parks, lifts, footpaths, the other houses, the moved sites, the knoll, one terrace each) to the nearest clear spot;
+  walls skip footpaths and houses by their ends too; lamps, trees, benches and fountains keep off houses, walls,
+  paths, steps, pistes, roads and the railways. Stadel and Haus Bergfrieden left the Silberhorn piste for the
+  Dorfstrasse's east part; the Kapellenweg and the Bahnhofweg ramp through the terrace walls; two new lanes south of
+  the Dorfstrasse (Lärchenweg, Rathausweg); a paved path from every door to its street by a way clear of houses,
+  walls and roads (`door <name>` in `paths`). `node native/tools/village/village_layout.mjs --dry` runs it without
+  writing (its `AUDIT` lines: a quick version of the check).
+
 ## Status: the native port against the JavaScript game
 
 | area | JS game (`src/`) | native (`native/`) |

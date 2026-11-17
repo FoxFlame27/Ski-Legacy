@@ -367,9 +367,14 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
   mo.lodRatios = {0.08f};   // a light copy for props seen from afar
   // (the buildings you walk up to on the plaza keep their 2048 px colour maps: +17 MB each over the 1024 px copies,
   // four of them; everything else stays in the 1024 px budget)
-  auto optFor = [&mo](const std::string& name) {
+  auto optFor = [&mo, this](const std::string& name) {
     ModelLoadOptions o = mo;
     if (name == "rental_shop" || name == "hotel_chalet" || name == "ticket_booth" || name == "market_stall") o.colorTextureSize = 2048;
+    // (Nov 17, the user: "all buildings glitch and overlap when you're far away") the native village's Meshy houses:
+    // their far copy at 8% fell to the sloppy simplifier (the UV seams stop the clean one) and melted into shards;
+    // a gentler copy by the clean simplifier only
+    for (const VillageBuilding& b : world_.village().buildings())
+      if (b.id == name) { o.lodRatios = {0.4f}; o.lodSloppy = false; break; }
     return o;
   };
   // (Nov 2026) the native village's own layout over the exported one (world/village.h)

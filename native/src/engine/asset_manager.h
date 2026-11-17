@@ -15,6 +15,9 @@ namespace platform { class Platform; }
 
 struct ModelLoadOptions {
   std::vector<float> lodRatios;   // e.g. {0.15f, 0.03f}: extra LOD index ranges at these triangle ratios
+  // false: the extra LODs only by the topology-preserving simplifier (what it reaches), never the sloppy one (it melts
+  // a Meshy building's walls, roof and windows into overlapping shards seen from afar)
+  bool lodSloppy = true;
   bool ignoreEmissive = true;     // Meshy exports bake emissive = 1 with a copy of the albedo: off by default
   int maxTextureSize = 2048;      // larger textures are box-downsampled on load (memory budget, Switch)
   int colorTextureSize = 0;       // > 0: the base colour / emissive maps' own cap (what you see closest: your skier, your

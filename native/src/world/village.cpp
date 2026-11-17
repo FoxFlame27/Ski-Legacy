@@ -180,6 +180,27 @@ void Village::prepareRoads(const std::function<double(double, double)>& ground) 
       b.lo = dvec2(b.x - r, b.z - r); b.hi = dvec2(b.x + r, b.z + r);
       pads_.push_back(b);
     }
+  // (Nov 17, the user: "these bent parking lots are wrong") the Autohaus car park levelled like a building's pad: its
+  // asphalt and bay lines followed the slope at the foot of the Oberdorf (bent lines, cars and tow trucks half sunk)
+  if (j_->contains("rentalPark")) {
+    const nlohmann::json& P = (*j_)["rentalPark"];
+    BuildingPad b;
+    b.x = P["x"]; b.z = P["z"];
+    const double ux = P["ux"], uz = P["uz"], hw = P["hw"], hd = P["hd"];
+    b.yaw = std::atan2(-uz, ux);   // (the pad's own x along the lot's u: c = ux, -s = uz)
+    b.hw = hw + 0.6; b.hd = hd + 0.6; b.fade = 4.0;
+    const double c = std::cos(b.yaw), s = std::sin(b.yaw);
+    double sum = 0; int cnt = 0;
+    for (int u = -2; u <= 2; u++) for (int v = -2; v <= 2; v++) {
+      const double lx = u * hw * 0.5, lz = v * hd * 0.5;
+      sum += ground(b.x + lx * c + lz * s, b.z - lx * s + lz * c); cnt++;
+    }
+    b.level = P.contains("level") ? P["level"].get<double>() : sum / cnt;
+    const double r = std::hypot(b.hw, b.hd) + b.fade;
+    b.lo = dvec2(b.x - r, b.z - r); b.hi = dvec2(b.x + r, b.z + r);
+    pads_.push_back(b);
+    SL_INFO("village: the Autohaus car park levelled at %.2f m", b.level);
+  }
 }
 
 double Village::padLevel(double x, double z, double h) const {

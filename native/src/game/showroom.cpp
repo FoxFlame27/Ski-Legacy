@@ -267,7 +267,10 @@ void Showroom::drawOutside(Renderer& r, gfx::Device& dev, const dvec3& cam) {
   const double fx = t->autohausDir.x, fz = t->autohausDir.y, yaw = std::atan2(fx, fz) + PI / 2;
   for (double lz : TOW_Z) {
     const double x = t->autohaus.x + fz * TOW_X + fx * lz, z = t->autohaus.z - fx * TOW_X + fz * lz;
-    r.submitModel(*truck_, dvec3(x, c_.world->height(x, z) + 0.02, z), glm::rotate(mat4(1), float(yaw), vec3(0, 1, 0)), nullptr, true);
+    // (Nov 17, the user: "the tow trucks are in the ground") the yard's asphalt stands at the hall's floor (the level
+    // the move carried), above the ground copied under it: the trucks on the yard, not the ground
+    const double g = c_.world->height(x, z), fl = t->autohaus.y, y = (fl > g && fl - g < 2.0) ? fl : g;
+    r.submitModel(*truck_, dvec3(x, y + 0.02, z), glm::rotate(mat4(1), float(yaw), vec3(0, 1, 0)), nullptr, true);
   }
 }
 

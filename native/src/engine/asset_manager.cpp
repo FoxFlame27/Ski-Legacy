@@ -518,7 +518,7 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
           const float cw[3] = {0.6f, 0.6f, 0.6f};
           cnt = meshopt_simplifyWithAttributes(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, &vb[8], sizeof(float) * size_t(stride), cw, 3, nullptr, target, 0.05f, 0, nullptr);
         } else cnt = meshopt_simplify(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 0.05f, 0, nullptr);
-        if (cnt > target * 3 / 2)
+        if (cnt > target * 3 / 2 && opt.lodSloppy)
           cnt = meshopt_simplifySloppy(lod.data(), idx.data(), idx.size(), P.data(), n, sizeof(float) * 3, target, 1e-1f, nullptr);
         if (cnt == 0 || cnt >= op.lods.back().count) continue;
         op.lods.push_back({uint32_t(all.size()), uint32_t(cnt)});

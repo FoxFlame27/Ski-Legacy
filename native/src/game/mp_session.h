@@ -175,7 +175,7 @@ public:
   void carSell(const std::string& plate, std::function<void(bool, const Json&)> done);
   void carSwitch(const std::string& plate, std::function<void(bool, const Json&)> done);
   void carRepair(double damage, const std::string& plate, std::function<void(bool, const Json&)> done);
-  void carDamage(const std::string& plate, double damage);
+  void carDamage(const std::string& plate, double damage, const Json& dents = Json::array());   // dents: cardamage.js packDents
   void tow(const std::string& kind, const dvec3& home, double yaw, int bay, std::function<void(bool, const Json&)> done);
   void towDone();
   // ---- the helicopter pad (net/heli.js, server heliRent / heliReturn and its 'heli' state { copies, padAt })

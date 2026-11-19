@@ -151,7 +151,9 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     // as for the right stick below)
     const double now = p.timeSeconds();
     if (std::fabs(gp.leftX - lastL_.x) > 0.02f || std::fabs(gp.leftY - lastL_.y) > 0.02f) { lastL_ = vec2(gp.leftX, gp.leftY); stillL_ = now; }
-    else if (std::hypot(gp.leftX, gp.leftY) < 0.4f && now - stillL_ > 0.6) restL_ += (vec2(gp.leftX, gp.leftY) - restL_) * 0.2f;
+    // (Nov 19: only a drift-sized offset (under 0.25) held still for 1.5 s: up to 0.4 / 0.6 s, a steady gentle turn of
+    // the stick was learned as its rest within a second and the car (or you) stopped turning)
+    else if (std::hypot(gp.leftX, gp.leftY) < 0.25f && now - stillL_ > 1.5) restL_ += (vec2(gp.leftX, gp.leftY) - restL_) * 0.2f;
     float lx = gp.leftX - restL_.x, ly = -(gp.leftY - restL_.y), m = std::sqrt(lx * lx + ly * ly);
     if (m > 0.2f) { float k = std::min(1.f, (m - 0.2f) / 0.8f) / m; sx = lx * k; sy = ly * k; }
   }
@@ -172,7 +174,7 @@ void Input::update(platform::Platform& p, const platform::Events& ev) {
     auto rest = [&](float x, float y, vec2& c, vec2& last, double& still) {
       const double now = p.timeSeconds();
       if (std::fabs(x - last.x) > 0.02f || std::fabs(y - last.y) > 0.02f) { last = vec2(x, y); still = now; }
-      else if (std::hypot(x, y) < 0.4f && now - still > 0.6) c += (vec2(x, y) - c) * 0.2f;
+      else if (std::hypot(x, y) < 0.25f && now - still > 1.5) c += (vec2(x, y) - c) * 0.2f;
       float dx = x - c.x, dy = y - c.y, m = std::sqrt(dx * dx + dy * dy);
       if (m < 0.2f) return vec2(0);
       float k = std::min(1.f, (m - 0.2f) / 0.8f) / m;

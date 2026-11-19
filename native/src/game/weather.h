@@ -37,6 +37,7 @@ public:
   std::string forecast() const;   // "Later: Blizzard" or ""
   double snow = 0, cloud = 0, mist = 0, wind = 0, clearAir = 0, wet = 0, frost = 0, sea = 0, icy = 0;
   double gustX = 0, gustZ = 0;     // m/s^2 sideways push on the skis
+  double airX = 1.5, airZ = 0.6;   // (atmosphere.js windUniform) the air's horizontal velocity, m/s (the snow, a wreck's steam)
   double under = 0;                // (sky.js underDeck) below the sea of clouds: a grey, misty day (game.cpp sets it)
   double timer = 75;               // s until the weather moves on
   bool frozen = false;             // (autotest / a race: held)

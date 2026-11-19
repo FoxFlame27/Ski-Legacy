@@ -7,6 +7,8 @@
 #include "world/world.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 namespace sl {
 
@@ -136,7 +138,7 @@ bool Traffic::recycle(Car& c, const dvec3& player) {
 void Traffic::putOnRoad(Car& c, int ri, double s, int dir, double v) {
   const Road& r = t_.roads[size_t(ri)];
   c.mode = Car::Mode::Road; c.road = ri; c.s = clamp(s, 2, r.length - 2); c.dir = dir; c.v = v; c.nextJ = -2; c.lot = c.bay = -1;
-  c.off = c.offT = c.offQ = 0; c.trip = 120 + rnd() * 180; c.wdT = 0; c.wdX = c.wdZ = 1e18; c.crew = c.crew * 1664525u + 1013904223u;
+  c.off = c.offT = c.offQ = 0; c.pass = 0; c.trip = 120 + rnd() * 180; c.wdT = 0; c.wdX = c.wdZ = 1e18; c.crew = c.crew * 1664525u + 1013904223u;
   placeOnRoad(c);
 }
 // off the map for a moment (it comes back elsewhere, out of sight)
@@ -318,11 +320,16 @@ void Traffic::drive(Car& c, double dt, const dvec3& player, const Drive* you, co
   if (keepOut && toEnd <= END_KEEP + 1) { deadEnd(c, player); return; }
   if (acc && c.dir < 0) vt = std::min(vt, 3.5 + toEnd * 0.15);
   if (acc && c.dir > 0) vt = std::min(vt, 2.6 + std::max(0.0, toEnd - TURN_LEAD) * 0.3);
+  // a crash or a car stopped on the road ahead: round it (into the other lane, or up to 1 m beyond the plowed edge)
+  // when there's room and nothing beside the road there (guardrail, tree, wall); else it waits behind it (planPass)
+  c.passT -= dt;
+  if (c.passT <= 0) { c.passT = 0.4; planPass(c, you, buses); }
   // a lane change / swerve is steered: the body angled off the lane line, turning only as it drives
   double err = c.offT - c.off, q = c.offQ, k = std::min(OFF_TURN, 1.8 / std::max(1.0, c.v * c.v));
   double turnBy = k * c.v * dt, qMax = std::min(0.28, std::sqrt(2 * k * std::fabs(err)));
   double qT = std::fabs(err) < 0.02 ? 0 : clamp(err * 0.5, -qMax, qMax);
   c.offQ = q + clamp(qT - q, -turnBy, turnBy);
+  if (c.pass) vt = std::min(vt, 4.5);   // (round it slowly)
   vt = std::min(vt, clearance(c, player, you, buses));
   double dv = vt - c.v;
   c.brake = dv < -0.5 ? clamp(-dv / 4, 0, 1) : 0;
@@ -380,7 +387,7 @@ void Traffic::drive(Car& c, double dt, const dvec3& player, const Drive* you, co
 void Traffic::deadEnd(Car& c, const dvec3& player) {
   if (!inSight(c.x, c.z) || std::hypot(c.x - player.x, c.z - player.z) > 80) { despawn(c, 1 + rnd() * 4); return; }
   c.dir = -c.dir;
-  c.off = -2 * LANE - c.off; c.offT = 0; c.offQ = 0;
+  c.off = -2 * LANE - c.off; c.offT = 0; c.offQ = 0; c.pass = 0;
   c.v = 0; c.nextJ = -2;
 }
 
@@ -388,7 +395,7 @@ void Traffic::deadEnd(Car& c, const dvec3& player) {
 // and an angle it steers out (traffic.js toRoad)
 void Traffic::toRoad(Car& c, int ri, double s, int dir, double v) {
   const Road& r = t_.roads[size_t(ri)];
-  c.mode = Car::Mode::Road; c.road = ri; c.dir = dir; c.v = v; c.nextJ = -2; c.offT = 0;
+  c.mode = Car::Mode::Road; c.road = ri; c.dir = dir; c.v = v; c.nextJ = -2; c.offT = 0; c.pass = 0;
   RoadPoint p = roadAt(r, clamp(s, 1, r.length - 1));
   double tx = p.dx * dir, tz = p.dz * dir, dx = c.x - p.x, dz = c.z - p.z;
   if (c.x != 0 || c.z != 0) {
@@ -433,16 +440,32 @@ double Traffic::clearance(const Car& c, const dvec3& player, const Drive* you, c
     if (ahead + along > 0.5 && ahead - along < gap && side < c.w / 2 + across + 0.3) lim = std::min(lim, followV(ahead - along - c.l / 2 - mm, vl));
   };
   double gapW = std::max(36.0, look);
+  // (a wreck: never up against it: it waits 14 m back (room to swing out round it later), unless it is going round it
+  // now, c.pass)
+  const double mW = c.pass ? 2.5 : 14;
   for (const Car& o : list) {
     if (&o == &c || o.mode == Car::Mode::Gone || o.mode == Car::Mode::Parked) continue;
     // (a wreck / a knocked car by its footprint: never up against it, it waits 14 m back)
-    if (o.mode == Car::Mode::Knocked || o.mode == Car::Mode::Wreck) { box({o.x, o.z, o.yaw, o.w / 2, o.l / 2}, gapW, 14, 0); continue; }
+    if (o.mode == Car::Mode::Knocked || o.mode == Car::Mode::Wreck) { box({o.x, o.z, o.yaw, o.w / 2, o.l / 2}, gapW, mW, 0); continue; }
     if (o.road == c.road && o.dir == c.dir) {
       double ds = (o.s - c.s) * c.dir;
       if (ds > 0 && ds < look && std::fabs(o.off - c.off) < 2.6) lim = std::min(lim, followV(ds - (c.l + o.l) / 2 - 3, o.v));
       continue;
     }
     double vl = (std::sin(o.yaw) * fx + std::cos(o.yaw) * fz) * o.v;
+    if (o.road == c.road && o.dir != c.dir && (o.pass == 2 || c.pass == 2)) {
+      // (round a wreck through the other lane, traffic.js planPass: a car coming the other way waits well back for
+      // the one coming round it (room for it to get back into its own lane); the one going round only stops short of
+      // a car actually in its way, not one waiting in its own lane beside its path)
+      if (o.pass == 2) {
+        const double dx = o.x - c.x, dz = o.z - c.z, ahead = dx * fx + dz * fz, side = std::fabs(dx * fz - dz * fx);
+        if (ahead > 0 && ahead < 60 && side < 3.2) lim = std::min(lim, followV(ahead - (c.l + o.l) / 2 - 22, 0));
+        continue;
+      }
+      const double dx = o.x - c.x, dz = o.z - c.z, ahead = dx * fx + dz * fz, side = std::fabs(dx * fz - dz * fx);
+      if (ahead > 0 && ahead < 32 && side < (c.w + o.w) / 2 + 0.3) lim = std::min(lim, followV(ahead - (c.l + o.l) / 2 - 3, std::max(0.0, vl)));
+      continue;
+    }
     check(o.x, o.z, 32, (c.l + o.l) / 2 + 3, vl);
   }
   if (you && you->active()) {
@@ -458,11 +481,109 @@ double Traffic::clearance(const Car& c, const dvec3& player, const Drive* you, c
       if (e.driving || std::fabs(e.x - c.x) > gapW + 4 || std::fabs(e.z - c.z) > gapW + 4) continue;
       if (e.wrecked) {
         const double hy = e.wreckPose ? std::atan2(e.wreckM[2][0], e.wreckM[2][2]) : e.yaw;
-        box({e.x, e.z, hy, 1.0, e.length / 2}, gapW, 14, 0);
+        box({e.x, e.z, hy, 1.0, e.length / 2}, gapW, mW, 0);
       } else box({e.x, e.z, e.yaw, 0.97, e.length / 2}, 30, 2.5, 0);
     }
   for (const Obb& b : buses) box(b, gapW, 2.5, 0);
   return lim;
+}
+
+// ---- traffic.js planPass: round a crash. The nearest thing standing in its lane ahead (a wreck, a shoved or abandoned
+// car, the car you drive stopped on the road) -> c.offT, the lateral shift off its lane line (+ toward its own edge).
+// Its own edge first, else the other lane (when nothing comes the other way: no car on its road coming toward it
+// within the wreck + 80 m, no bus there); never beyond the plowed edge + 1 m, never into a guardrail, tree or wall
+// beside the road. No room: c.offT 0 and it waits behind (14 m back; the watchdog takes it after 5 min).
+void Traffic::planPass(Car& c, const Drive* you, const std::vector<Obb>& buses) {
+  const Road& r = t_.roads[size_t(c.road)];
+  const double fx = std::sin(c.yaw), fz = std::cos(c.yaw), EDGE = Transport::ROAD_HALF + 2, M = EDGE - c.w / 2;   // (Nov 19: 2 m into the snow beside the road: a wreck lying across the middle left 2.1 m each side, no car fitted and the queue waited for good)
+  struct Best { double u, so, w, gap, along, berth; } best{0, 0, 0, 0, 0, 0};
+  bool have = false;
+  auto consider = [&](double x, double z, double yaw, double hw, double hd, double berth) {
+    const double dx = x - c.x, dz = z - c.z;
+    if (std::fabs(dx) > 40 || std::fabs(dz) > 40) return;
+    const double ca = std::fabs(std::sin(yaw) * fx + std::cos(yaw) * fz), sa = std::sqrt(std::max(0.0, 1 - ca * ca));
+    const double across = hw * ca + hd * sa, along = hw * sa + hd * ca, u = dx * fx + dz * fz;
+    if (u < -(along + c.l / 2 + 4) || u > 36) return;   // (behind it (4 m past it, Nov 19: back in at 1 m its tail clipped the wreck), or still beside it)
+    const double so = clamp(c.s + c.dir * u, 0, r.length);
+    const RoadPoint p = roadAt(r, so);
+    const double rx = -p.dz * c.dir, rz = p.dx * c.dir;
+    // (Nov 19) its four corners, each against the road where it lies: on a bend the lane line curves while the wreck is
+    // straight, and measured from its middle alone its far end stood into the path of the car going round it
+    double wLo = 1e9, wHi = -1e9;
+    const double hx = std::sin(yaw), hz = std::cos(yaw);
+    for (double a : {-1.0, 1.0}) for (double b : {-1.0, 1.0}) {
+      const double qx = x + hx * hd * a + hz * hw * b, qz = z + hz * hd * a - hx * hw * b;
+      const double qu = (qx - c.x) * fx + (qz - c.z) * fz;
+      const RoadPoint q = roadAt(r, clamp(c.s + c.dir * qu, 0, r.length));
+      const double qw = (qx - q.x) * (-q.dz * c.dir) + (qz - q.z) * (q.dx * c.dir);
+      wLo = std::min(wLo, qw); wHi = std::max(wHi, qw);
+    }
+    const double w = (wLo + wHi) / 2, acrossR = std::max(across, (wHi - wLo) / 2), gap = acrossR + c.w / 2 + 0.7;
+    (void)rx; (void)rz;
+    if (std::fabs(w) > EDGE + across) return;   // (not on the road)
+    if (std::fabs(w - LANE - c.off) > gap && std::fabs(w - LANE) > gap) return;   // (clear of the lane)
+    if (!have || u < best.u) { best = {u, so, w, gap, along, berth}; have = true; }
+  };
+  for (const Car& o : list) if (&o != &c && (o.mode == Car::Mode::Wreck || o.mode == Car::Mode::Knocked)) consider(o.x, o.z, o.yaw, o.w / 2, o.l / 2, 1.2);
+  if (you) {
+    for (const Drive::Parked& e : you->parked) {
+      if (e.driving) continue;
+      const double hy = e.wrecked && e.wreckPose ? std::atan2(e.wreckM[2][0], e.wreckM[2][2]) : e.yaw;   // (rolled: its heading)
+      consider(e.x, e.z, hy, 0.97, e.length / 2, e.wrecked ? 1.2 : 0.4);
+    }
+    if (you->active()) { const dvec2 v = you->vel(); if (std::hypot(v.x, v.y) < 0.8) consider(you->pos().x, you->pos().z, you->yaw(), you->halfWidth(), you->halfLen(), 0.4); }
+  }
+  static const bool dbg = [] { const char* e = std::getenv("SKI_LEGACY_DEBUG"); return e && std::strstr(e, "wrecktest"); }();
+  if (!have) {   // (nothing in the way: back on its lane line)
+    if (dbg && c.pass) SL_INFO("[pass] car %d: %d -> 0 (nothing in its way now; off %.2f, %.1f km/h)", int(&c - list.data()), c.pass, c.off, c.v * 3.6);
+    c.pass = 0; c.offT = 0; return;
+  }
+  // a lateral position (from the centre line) free beside it: on the road + 1 m, nothing standing there
+  auto free = [&](double wT) {
+    if (std::fabs(wT) > M) return false;
+    for (int k : {-1, 0, 1}) {
+      const RoadPoint q = roadAt(r, clamp(best.so + c.dir * k * (best.along + c.l / 2), 0, r.length));
+      const double x = q.x - q.dz * c.dir * wT, z = q.z + q.dx * c.dir * wT;
+      if (hardAt && hardAt(x, z, c.w / 2)) return false;
+    }
+    return true;
+  };
+  // (round a wreck through the other lane: a wide berth, 1.2 m)
+  // (the extra berth only where there is room for it: a wreck lying across the middle left just the car's width)
+  const double right = best.w + best.gap, left = std::max(-M, best.w - best.gap - std::max(0.0, best.berth - 0.4)) < best.w - best.gap + 1e-9
+                                                    ? std::max(-M, best.w - best.gap - std::max(0.0, best.berth - 0.4)) : best.w - best.gap;
+  // (beside it already: keep to the side it chose)
+  if (c.pass && best.u < best.along + c.l / 2) return;
+  // (out in the other lane already: it carries on round it. The JS gave up there when a car came the other way, and
+  // stood nose to nose with it in that lane, neither able to move: the one coming now waits for it, clearance)
+  if (c.pass == 2 && c.off < -1.0 && free(left)) { c.offT = left - LANE; return; }
+  // (the other lane clear: nothing coming on its road within the wreck + 80 m, nor near enough to get there before
+  // it is round it at 4.5 m/s; no bus on the road there)
+  const double tRound = (std::max(0.0, best.u) + 2 * best.along + c.l + 15) / 4.5 + 2;
+  bool oncoming = false;
+  for (const Car& o : list) {
+    if (&o == &c || o.mode != Car::Mode::Road || o.road != c.road || o.dir == c.dir) continue;
+    const double ahead = (o.s - c.s) * c.dir;
+    if (ahead > -10 && (ahead < best.u + 80 || ahead - o.v * tRound < best.u + best.along + 25)) oncoming = true;
+  }
+  for (const Obb& b : buses) {
+    const double dx = b.x - c.x, dz = b.z - c.z, u = dx * fx + dz * fz;
+    if (u > -10 && u < best.u + 80 && std::fabs(dx * fz - dz * fx) < 9) oncoming = true;
+  }
+  const int was = c.pass;
+  const bool fr = free(right), fl = free(left);
+  // (Nov 19) a side once chosen is kept while it stays free: by a guardrail the edge side came and went every 0.4 s
+  // (right free, blocked, free...) and the car swung between the two lanes until it stood still
+  if (!fr && !fl) noRoom++;
+  if (was == 1 && fr) { c.offT = right - LANE; return; }
+  if (was == 2 && fl) { c.offT = left - LANE; return; }
+  if (fr) { c.pass = 1; c.offT = right - LANE; }
+  else if (!oncoming && fl) { c.pass = 2; c.offT = left - LANE; }
+  else { c.pass = 0; c.offT = 0; }
+  if (c.pass && !was) passes++;
+  if (dbg && c.pass != was)
+    SL_INFO("[pass] car %d: %d -> %d (wreck %.1f m ahead, %.1f m across; right %.1f %s, left %.1f %s, oncoming %d; off %.2f, %.1f km/h)", int(&c - list.data()), was, c.pass, best.u, best.w,
+            right, fr ? "free" : "blocked", left, fl ? "free" : "blocked", int(oncoming), c.off, c.v * 3.6);
 }
 
 void Traffic::knock(int id, double vx, double vz, double w) {

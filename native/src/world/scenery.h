@@ -126,6 +126,7 @@ private:
   mat4 treeFit_[2];
   static constexpr int TREE_LODS = 4;   // full mesh, clustered at 3.2 %, 8 % and (far, lod3R) 14 % of the height
   InstanceBatch batches_[2][TREE_LODS];      // (each frame: the lists below culled to the view frustum)
+  InstanceBatch fadeBatch_[2][TREE_LODS];    // (...those of them inside a LOD fade band: drawn with the dither)
   InstanceBatch shadowBatch_[2][TREE_LODS][4];   // (...and to the first two shadow cascades' boxes: the only ones trees cast into)
   static constexpr int ROCK_KINDS = 5;
   std::shared_ptr<Model> rockModel_[ROCK_KINDS];

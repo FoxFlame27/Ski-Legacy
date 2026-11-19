@@ -163,6 +163,16 @@ public:
     if (bytes) glBufferSubData(t, 0, GLsizeiptr(bytes), data);
     glBindBuffer(t, 0);
   }
+  bool readBuffer(Buffer b, std::vector<uint8_t>& out) override {
+    out.clear();
+    auto it = bufs_.find(b.id);
+    if (it == bufs_.end()) return false;
+    out.resize(bufSize_[b.id]);
+    glBindBuffer(GL_COPY_READ_BUFFER, it->second);
+    glGetBufferSubData(GL_COPY_READ_BUFFER, 0, GLsizeiptr(out.size()), out.data());
+    glBindBuffer(GL_COPY_READ_BUFFER, 0);
+    return true;
+  }
   void destroy(Buffer b) override {
     auto it = bufs_.find(b.id);
     if (it == bufs_.end()) return;

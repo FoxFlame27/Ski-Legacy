@@ -62,6 +62,7 @@ Scenery::Scenery(gfx::Device& dev, World& world, JobSystem& jobs, AssetManager& 
       }
     for (int l = 0; l < TREE_LODS; l++) {
       batches_[t][l].init(dev_, *treeModel_[t], l >= 2 ? 40000 : l == 1 ? 16000 : 4000);
+      fadeBatch_[t][l].init(dev_, *treeModel_[t], l >= 2 ? 12000 : l == 1 ? 6000 : 2000);
       for (int k = 0; k < std::clamp(vs_.treeCascades, 1, 4); k++) shadowBatch_[t][l][k].init(dev_, *treeModel_[t], l >= 2 ? 40000 : l == 1 ? 16000 : 4000);
     }
   }
@@ -515,7 +516,7 @@ void Scenery::submitView(Renderer& r) {
 void Scenery::submitForest(Renderer& r) {
   const dvec3 eye = r.camera().pos;
   const int nc = std::min(std::clamp(vs_.treeCascades, 1, 4), r.shadowCascades());
-  static std::vector<InstanceBatch::Inst> vis, sh[4];
+  static std::vector<InstanceBatch::Inst> vis, fade, sh[4];
   // (dev: SKI_LEGACY_GFX=nocull: the old way, every tree of the lists to the main pass and both cascades: A/B timings)
   static const bool noCull = [] { const char* g = std::getenv("SKI_LEGACY_GFX"); return g && std::strstr(g, "nocull"); }();
   for (int t = 0; t < 2; t++) {
@@ -523,17 +524,24 @@ void Scenery::submitForest(Renderer& r) {
     for (int l = 0; l < TREE_LODS; l++) {
       const bool cast = l < vs_.shadowLods;
       if (noCull) { batches_[t][l].upload(dev_, treeList_[t][l]); r.submitInstances(batches_[t][l], treeFit_[t], l, cast); continue; }
-      vis.clear();
+      vis.clear(); fade.clear();
       for (auto& v : sh) v.clear();
       for (const InstanceBatch::Inst& i : treeList_[t][l]) {
         // (unit height, base at y: the crown within 0.45 x its height round the trunk; +1 m for the sway)
         const float s = i.posScale.w, rad = s * 0.82f + 1.f;
         const vec3 c(float(double(i.posScale.x) - eye.x), float(double(i.posScale.y) - eye.y) + s * 0.5f, float(double(i.posScale.z) - eye.z));
-        if (r.sphereVisible(c, rad)) vis.push_back(i);
+        if (r.sphereVisible(c, rad)) {
+          // (in a fade band, as the vertex shader's vLodFade: with the dither's discard; past them: solid)
+          const double d = glm::length(dvec3(i.posScale.x, i.posScale.y, i.posScale.z) - eye);
+          const bool fading = (i.rot.z > 0 && d < double(i.rot.z) + std::max(double(i.rot.z) * 0.16, 4.0) + 0.5) || (i.rot.w > 0 && d > double(i.rot.w) - 0.5);
+          (fading ? fade : vis).push_back(i);
+        }
         if (cast) for (int k = 0; k < nc; k++) if (r.sphereInCascade(c, rad, k)) sh[k].push_back(i);
       }
       batches_[t][l].upload(dev_, vis);
-      r.submitInstances(batches_[t][l], treeFit_[t], l, false, true);
+      r.submitInstances(batches_[t][l], treeFit_[t], l, false, true, -1, true);
+      fadeBatch_[t][l].upload(dev_, fade);
+      r.submitInstances(fadeBatch_[t][l], treeFit_[t], l, false, true);
       if (cast) for (int k = 0; k < nc; k++) {
         shadowBatch_[t][l][k].upload(dev_, sh[k]);
         r.submitInstances(shadowBatch_[t][l][k], treeFit_[t], l, true, false, k);

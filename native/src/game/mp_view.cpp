@@ -469,13 +469,21 @@ void MpView::addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels
   if (!interior.empty()) return;   // (cars and sleds are outdoors)
   policeDrawn = 0;
   if (drawPolice) for (const auto& [pid, C] : police_) for (const Eased& w : C.cars) if (w.show) { drawPolice(vd, dvec3(w.x, w.y, w.z), w.yaw, glm::length(dvec3(w.x, w.y, w.z) - cam)); policeDrawn++; }
-  auto car = [&](const Json& cfg, const dvec3& p, double yaw, double roll) {
+  auto car = [&](const Json& cfg, const dvec3& p, double yaw, double roll, bool wreck, uint64_t key) {
     const VehicleModel* m = vm.car(str(cfg, "id"));
     if (!m || !m->ok()) return;
     double d = std::hypot(p.x - cam.x, p.z - cam.z);
     if (d > 500) return;
     glm::dmat4 M = glm::translate(glm::dmat4(1), p + dvec3(0, 0.02, 0)) * glm::rotate(glm::dmat4(1), yaw, dvec3(0, 1, 0)) *
                    glm::rotate(glm::dmat4(1), roll, dvec3(0, 0, 1));
+    // (net/vehicles.js wreckLook / carDents) a wreck: dented at the nose and the front corner; else the dents the
+    // owner's car keeps (cfg.dents, until it is repaired)
+    if (d < 70) {
+      std::vector<Dent> dents;
+      if (wreck) { addDent(dents, 0, 1, 1, m->size, double(key % 97)); addDent(dents, 0.8, 0.5, 0.7, m->size, double(key % 89)); }
+      else if (cfg.contains("dents")) dents = unpackDents(cfg["dents"]);
+      if (!dents.empty()) m = vm.dented(m, key ^ (wreck ? 0x5752ull : 0), dents);
+    }
     vd.addCar(*m, M, d < 70 ? 0 : 1, paintColor(str(cfg, "paint")), 0, 0, 0, rimColor(str(cfg, "rims")));   // (Phase 7: their paint)
   };
   for (const auto& [id, r] : mp.players) {
@@ -485,15 +493,18 @@ void MpView::addDraw(const Multiplayer& mp, VehicleDraw& vd, const VehicleModels
       const Json cfg = v.value("cfg", Json::object());
       dvec3 p;
       double yaw;
-      if (r.ok && (r.flags & net::F::car) && r.interior.empty()) car(cfg, r.sm, r.smYaw, std::clamp(r.lean, -3.2, 3.2));
-      else if (atOf(v, p, yaw)) car(cfg, p, yaw, 0);
+      const uint64_t key = std::hash<std::string>()(std::to_string(id) + "|" + str(cfg, "plate"));
+      const bool wreck = v.value("wreck", false) || (r.ok && (r.flags & net::F::wreck));
+      if (r.ok && (r.flags & net::F::car) && r.interior.empty()) car(cfg, r.sm, r.smYaw, std::clamp(r.lean, -3.2, 3.2), wreck, key);
+      else if (atOf(v, p, yaw)) car(cfg, p, yaw, 0, wreck, key);
     }
     // their other cars parked in the world
     if (r.parked.is_array())
       for (const Json& e : r.parked) {
         dvec3 p;
         double yaw;
-        if (atOf(e, p, yaw)) car(e.value("cfg", Json::object()), p, yaw, 0);
+        const Json cfg = e.value("cfg", Json::object());
+        if (atOf(e, p, yaw)) car(cfg, p, yaw, 0, e.value("wreck", false), std::hash<std::string>()(std::to_string(id) + "|" + str(cfg, "plate")));
       }
     // their snowmobile
     if (sled) {

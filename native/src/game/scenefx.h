@@ -31,6 +31,7 @@ struct CarPose {
   bool lights = false, brake = false, mine = false;
   bool live = false, reverse = false;   // running (daytime running lights), in reverse gear
   bool hazard = false;                  // crashed / knocked aside / a wreck: the indicators flash (carlights.js hazardPhase), the tails stay on dim
+  const std::vector<Dent>* dents = nullptr;   // (cardamage.js) its dents: the lamps at a hard hit's end smashed (never lit again)
 };
 
 class SceneFx {

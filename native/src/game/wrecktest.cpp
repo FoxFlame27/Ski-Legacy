@@ -29,6 +29,36 @@ int busiest(const Traffic& T, const Transport& tr, int skip) {
 }
 } // namespace
 
+// traffic.js planPass: the cars round a wreck through the other lane (logged once each as they come beside it: their
+// offset from the lane line, speed, gap to the wreck's side), a shot of the first one beside it; no car's footprint
+// ever overlaps the wreck's
+void WreckTest::watchPass(WreckTestEnv& e, int which, const dvec3& at, double yaw, double hw, double hl, int skip) {
+  Traffic& T = *e.traffic;
+  const double fx = std::sin(yaw), fz = std::cos(yaw);
+  for (size_t i = 0; i < T.list.size(); i++) {
+    const Traffic::Car& c = T.list[i];
+    if (int(i) == skip || c.mode != Traffic::Car::Mode::Road) continue;
+    const double dx = c.x - at.x, dz = c.z - at.z;
+    if (std::fabs(dx) > 15 || std::fabs(dz) > 15) continue;
+    const double along = dx * fx + dz * fz, side = dx * fz - dz * fx;
+    // (the car's footprint in the wreck's frame: its extents along / across the wreck's heading)
+    const double ca = std::fabs(std::sin(c.yaw) * fx + std::cos(c.yaw) * fz), sa = std::sqrt(std::max(0.0, 1 - ca * ca));
+    const double cAlong = c.l / 2 * ca + c.w / 2 * sa, cAcross = c.l / 2 * sa + c.w / 2 * ca;
+    const double gapSide = std::fabs(side) - hw - cAcross, gapAlong = std::fabs(along) - hl - cAlong;
+    if (gapSide < -0.05 && gapAlong < -0.05) {
+      ok = false;
+      SL_WARN("[wrecktest] car %zu drives into / through the %s wreck (side gap %.2f m, along gap %.2f m)", i, which ? "your" : "traffic", gapSide, gapAlong);
+    }
+    if (gapAlong < 0 && gapSide < 3.5 && std::find(passed_.begin(), passed_.end(), int(i) * 2 + which) == passed_.end()) {
+      passed_.push_back(int(i) * 2 + which);
+      passSeen_[which]++;
+      SL_INFO("[wrecktest] car %zu (%s) passes the %s wreck: pass %s, %.1f m off its lane line, %.0f km/h, %.2f m clear of its side", i, c.name.c_str(), which ? "your" : "traffic",
+              c.pass == 2 ? "through the other lane" : c.pass == 1 ? "by its own edge" : "none", c.off, c.v * 3.6, gapSide);
+      if (!passShot_ && which == 1) { passShot_ = true; e.png("wreck_pass_yours"); }
+    }
+  }
+}
+
 bool WreckTest::frame(WreckTestEnv& e, dvec3& camPos, dvec3& camLook) {
   if (done) return false;
   Traffic& T = *e.traffic;
@@ -44,8 +74,8 @@ bool WreckTest::frame(WreckTestEnv& e, dvec3& camPos, dvec3& camLook) {
       const double along = d.x * fwd_.x + d.z * fwd_.z, dist = std::hypot(d.x, d.z);
       if (dist < 2.2) { ok = false; SL_WARN("[wrecktest] a car drove into / through the wreck (%.1f m from its middle)", dist); }
       if (dist > 250 || along > 0) continue;
-      char b[64];
-      std::snprintf(b, sizeof b, " %5.1fm@%4.0fkm/h", dist, c.v * 3.6);
+      char b[80];
+      std::snprintf(b, sizeof b, " %5.1fm@%4.0fkm/h%s", dist, c.v * 3.6, c.pass == 2 ? "(other lane)" : c.pass == 1 ? "(edge)" : "");
       s += b; n++;
     }
     SL_INFO("[wrecktest] %s t+%4.1fs: %d cars behind:%s", what, t - t0_, n, s.c_str());
@@ -74,6 +104,7 @@ bool WreckTest::frame(WreckTestEnv& e, dvec3& camPos, dvec3& camLook) {
       const Traffic::Car& c = T.list[size_t(tcar_)];
       at_ = dvec3(c.x, c.y, c.z);
       e.teleport(stand_.x, stand_.z, 0);   // (held there: the autotest's skiing would take you away)
+      if (c.mode == Traffic::Car::Mode::Wreck) watchPass(e, 0, at_, c.yaw, c.w / 2, c.l / 2, tcar_);
       if (t >= nextLog_) {
         nextLog_ += 1;
         SL_INFO("[wrecktest] traffic wreck: mode %d (0 road, 2 knocked, 4 wreck), %.2f m over the road", int(c.mode), c.y - e.world->groundHeight(c.x, c.z, c.y + 1));
@@ -140,21 +171,77 @@ bool WreckTest::frame(WreckTestEnv& e, dvec3& camPos, dvec3& camLook) {
       }
       if (k <= 2) e.teleport(stand_.x, stand_.z, 0);   // (where wreckOut put you, beside it)
       if (k > 2 && k < 62) e.teleport(at_.x - fwd_.z * 9 - fwd_.x * 6, at_.z + fwd_.x * 9 - fwd_.z * 6, 0);   // (you stand by the road, out of the lane)
-      camBehind(36, 10);
+      // (cardamage.js / carlights.js Smoke) its dents and the plume from the bonnet: logged, a close shot of the dented
+      // side right after the crash and 10 s later (the plume stops after a minute, what is in the air drifts away)
+      const int puffs = p.smoke ? p.smoke->live() : 0;
+      static const double LOGS[] = {0.6, 10.6, 30, 61.5};
+      if (dentLogs_ < 4 && k >= LOGS[dentLogs_]) {
+        dentLogs_++;
+        std::string ds;
+        for (const Dent& D : p.dents) { char b[96]; std::snprintf(b, sizeof b, " [at (%.2f %.2f %.2f) r %.2f depth %.2f]", D.x, D.y, D.z, D.r, D.depth); ds += b; }
+        SL_INFO("[wrecktest] your wreck t+%.1fs: damage %.0f%%, %zu dents:%s; smoke: %d puffs in the air (rate %.1f)", k, p.damage, p.dents.size(), ds.c_str(), puffs, p.smoke ? p.smoke->rate : 0.0);
+        if (k < 1 && (p.dents.empty() || puffs == 0)) { SL_WARN("[wrecktest] the wreck has no dents / no smoke"); ok = false; }
+        if (k > 20 && k < 40 && puffs == 0) { SL_WARN("[wrecktest] the wreck stopped steaming before its first minute was out"); ok = false; }
+      }
+      const bool close = (k > 0.55 && k < 0.75) || (k > 10.55 && k < 10.75);
+      if (close && !p.dents.empty()) {
+        // (the dented side: the first dent's point as it lies, seen from outside it, a little above)
+        const Dent& D = p.dents.back();
+        const dvec3 dp(p.wreckM * glm::dvec4(D.x, D.y, D.z, 1)), mid(p.wreckM * glm::dvec4(0, 0.7, 0, 1));
+        dvec3 out(dp.x - mid.x, 0, dp.z - mid.z);
+        out = glm::length(out) > 1e-3 ? glm::normalize(out) : dvec3(-fwd_.z, 0, fwd_.x);
+        const dvec3 side = glm::cross(out, dvec3(0, 1, 0));
+        camPos = dp + out * 5.2 + side * 2.2 + dvec3(0, 1.6, 0);
+        camPos.y = std::max(camPos.y, e.world->groundHeight(camPos.x, camPos.z, dp.y + 2) + 1.2);
+        camLook = dp + dvec3(0, 0.6, 0);
+        if (dentShots_ < 2 && k >= (dentShots_ == 0 ? 0.65 : 10.65)) { e.png(dentShots_ == 0 ? "wreck_dents_0s" : "wreck_dents_10s"); dentShots_++; }
+      } else camBehind(36, 10);
+      watchPass(e, 1, at_, std::atan2(p.wreckM[2][0], p.wreckM[2][2]), 0.97, p.length / 2, -1);
       static const double SH[] = {0.5, 10, 60};
-      if (shots_ < 3 && k >= SH[shots_]) { e.png("wreck_yours_" + std::to_string(int(SH[shots_])) + "s"); shots_++; }
+      if (shots_ < 3 && k >= SH[shots_] && !close) { e.png("wreck_yours_" + std::to_string(int(SH[shots_])) + "s"); shots_++; }
       if (k > 62) {   // you walk away and look elsewhere: the tow truck takes it (drive.js: 3 s out of sight)
+        SL_INFO("[wrecktest] round the wrecks: %d cars passed the traffic wreck, %d passed yours; traffic pulled out %d times", passSeen_[0], passSeen_[1], T.passes);
+        // (a wreck lying across a narrow stretch (walls or guardrails both sides) leaves no room: the queue waits for the
+        // tow truck, as on a real road; a failure only where there was room and nobody used it)
+        if (passSeen_[1] == 0 && T.noRoom == 0) { SL_WARN("[wrecktest] no car came round your wreck"); ok = false; }
+        else if (passSeen_[1] == 0) SL_INFO("[wrecktest] no room beside your wreck (%d checks found both sides blocked): the queue waits for the tow truck", T.noRoom);
+        if (passSeen_[0] == 0) { SL_WARN("[wrecktest] no car came round the traffic wreck"); ok = false; }
         e.teleport(at_.x + fwd_.x * 400, at_.z + fwd_.z * 400, std::atan2(fwd_.x, fwd_.z));
         phase_ = 6; t0_ = t;
       }
       return k <= 62;
     }
     case 6: {
-      const Drive::Parked& p = e.drive->parked[size_t(idx_)];
-      if (!p.wrecked) { SL_INFO("[wrecktest] towed %.1f s after you left it", t - t0_); done = true; }
-      else if (t - t0_ > 30) { SL_WARN("[wrecktest] the wreck was never towed"); ok = false; done = true; }
+      Drive::Parked& p = e.drive->parked[size_t(idx_)];
+      if (!p.wrecked) {
+        // (impound.js: towed back repaired: no damage, no dents, no steam)
+        SL_INFO("[wrecktest] towed %.1f s after you left it: damage %.0f%%, %zu dents, smoke %d puffs", t - t0_, p.damage, p.dents.size(), p.smoke ? p.smoke->live() : 0);
+        if (p.damage > 0 || !p.dents.empty() || (p.smoke && p.smoke->any())) { SL_WARN("[wrecktest] the tow did not bring it back repaired"); ok = false; }
+        // (the Werkstatt: a dented car of yours repaired: the dents out)
+        e.drive->debugDent(idx_, 0, 1, 0.8); e.drive->debugDent(idx_, -1, 0.3, 0.5);
+        p.damage = 23;
+        SL_INFO("[wrecktest] in its bay, knocked about again: damage %.0f%%, %zu dents", p.damage, p.dents.size());
+        at_ = dvec3(p.x, p.y, p.z); fwd_ = dvec3(std::sin(p.yaw), 0, std::cos(p.yaw));
+        e.teleport(p.x + fwd_.x * 9 + fwd_.z * 3, p.z + fwd_.z * 9 - fwd_.x * 3, 0);
+        phase_ = 7; t0_ = t;
+      } else if (t - t0_ > 30) { SL_WARN("[wrecktest] the wreck was never towed"); ok = false; done = true; }
       if (done) SL_INFO("[wrecktest] %s", ok ? "PASS" : "FAILED");
       return false;
+    }
+    case 7: {   // the dented car in its bay (a shot), then the Werkstatt's repair (a shot)
+      Drive::Parked& p = e.drive->parked[size_t(idx_)];
+      const double k = t - t0_;
+      camPos = at_ + fwd_ * 5.5 + dvec3(fwd_.z, 0, -fwd_.x) * 2.5 + dvec3(0, 1.7, 0);
+      camLook = at_ + dvec3(0, 0.6, 0);
+      if (werkShots_ == 0 && k >= 1.0) { werkShots_++; e.png("werkstatt_before"); }
+      if (k > 1.5 && !p.dents.empty() && e.repair) {
+        e.repair(p.plate);
+        SL_INFO("[wrecktest] the Werkstatt repaired it: damage %.0f%%, %zu dents", p.damage, p.dents.size());
+        if (p.damage > 0 || !p.dents.empty()) { SL_WARN("[wrecktest] the repair left dents"); ok = false; }
+      }
+      if (werkShots_ == 1 && k >= 2.5) { werkShots_++; e.png("werkstatt_after"); }
+      if (k > 3) { done = true; SL_INFO("[wrecktest] %s", ok ? "PASS" : "FAILED"); }
+      return true;
     }
   }
   return false;

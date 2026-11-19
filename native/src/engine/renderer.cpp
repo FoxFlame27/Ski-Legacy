@@ -9,6 +9,7 @@
 #define STB_EASY_FONT_IMPLEMENTATION
 #include <stb_easy_font.h>
 #include <cstring>
+#include <sstream>
 #include <cmath>
 #include <glm/gtc/packing.hpp>
 
@@ -318,6 +319,27 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
     if (has("nopcss")) set_.pcss = false;
     else if (has("pcss")) set_.pcss = true;
     if (has("nopine")) dbgNoPine_ = true;
+    if (has("nosolid")) dbgNoSolid_ = true;
+    // (dev: SKI_LEGACY_GFX=ab=A+B: every other 20 frames variant B (tdbg defines for the terrain, nosolid, tlast), its
+    // main pass timed apart as "main pass B": A/B timings in one run, whatever else the machine is doing)
+    if (auto p = o.find("ab="); p != std::string::npos) {
+      std::string t = o.substr(p + 3, o.find(',', p) == std::string::npos ? std::string::npos : o.find(',', p) - p - 3), tok;
+      std::istringstream is(t);
+      abOn_ = true;
+      while (std::getline(is, tok, '+')) {
+        if (tok == "nosolid") abNoSolid_ = true;
+        else if (tok == "tlast") abTlast_ = true;
+        else if (tok.rfind("aniso", 0) == 0) abAniso_ = std::atoi(tok.c_str() + 5);
+        else if (!tok.empty()) abDefs_ += "#define TDBG_" + tok + " 1\n";
+      }
+    }
+    if (has("terrainfirst")) terrainLast_ = false;
+    else if (has("terrainlast")) terrainLast_ = true;
+    if (auto p = o.find("tdbg="); p != std::string::npos) {   // (dev: terrain shader parts off, tdbg=A+B -> #define TDBG_A)
+      std::string t = o.substr(p + 5, o.find(',', p) == std::string::npos ? std::string::npos : o.find(',', p) - p - 5), tok;
+      std::istringstream is(t);
+      while (std::getline(is, tok, '+')) if (!tok.empty()) dbgTerrainDefs_ += "#define TDBG_" + tok + " 1\n";
+    }
     if (has("nobloom")) bloomOn = false;
     if (auto p = o.find("cascades="); p != std::string::npos) set_.cascades = std::atoi(o.c_str() + p + 9);
     if (auto p = o.find("fx="); p != std::string::npos) set_.fx = std::atoi(o.c_str() + p + 3);
@@ -349,7 +371,8 @@ bool Renderer::init(gfx::Device& dev, const RenderSettings& s) {
   }
   meshInstM_ = build("mesh_instmat", "#define INSTMAT 1", shaders::kMeshVS, shaders::kMeshFS, true);
   depthInstM_ = build("depth_instmat", "#define INSTMAT 1", shaders::kMeshVS, shaders::kDepthFS, false);
-  terrain_ = build("terrain", "", shaders::kTerrainVS, shaders::kTerrainFS, true);
+  terrain_ = build("terrain", dbgTerrainDefs_.c_str(), shaders::kTerrainVS, shaders::kTerrainFS, true);
+  if (abOn_ && !abDefs_.empty()) terrainB_ = build("terrain_b", (dbgTerrainDefs_ + abDefs_).c_str(), shaders::kTerrainVS, shaders::kTerrainFS, true);
   depthMesh_ = build("depth_mesh", "", shaders::kMeshVS, shaders::kDepthFS, false);
   depthSkin_ = build("depth_skinned", "#define SKINNED 1", shaders::kMeshVS, shaders::kDepthFS, false);
   depthInst_ = build("depth_instanced", "#define INSTANCED 1", shaders::kMeshVS, shaders::kDepthFS, false);
@@ -970,7 +993,7 @@ void Renderer::submitModel(const Model& m, const dvec3& origin, const mat4& loca
   }
 }
 
-void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible, int cascade) {
+void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible, int cascade, bool solid) {
   if (!b.count() || !b.model()) return;
   const Model& m = *b.model();
   size_t k = 0;
@@ -998,6 +1021,7 @@ void Renderer::submitInstances(const InstanceBatch& b, const mat4& fit, int lod,
       it.main = visible;
       it.cascade = int8_t(cascade);
       it.height = height;
+      it.solid = solid;
       items_.push_back(it);
     }
   }
@@ -1096,7 +1120,7 @@ void Renderer::setMaterial(const Material& m, bool pine, float height) {
 void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps, gfx::Program& cur) {
   auto use = [&](gfx::Program p) { if (p.id != cur.id) { dev_->useProgram(p); cur = p; lastMat_ = nullptr; } };
   if (it.kind == Item::Kind::Terrain) {
-    use(shadowPass ? depthTerrain_ : terrain_);
+    use(shadowPass ? depthTerrain_ : abB_ && terrainB_ ? terrainB_ : terrain_);
     ps.cull = shadowPass ? gfx::Cull::None : gfx::Cull::Back;
     ps.alphaToCoverage = false;
     dev_->setPipeline(ps);
@@ -1117,7 +1141,10 @@ void Renderer::drawItem(const Item& it, bool shadowPass, gfx::PipelineState& ps,
   bool pine = it.kind == Item::Kind::Instanced && it.mat->shading == 1;
   const bool opq = !shadowPass && !inPortal_ && meshOpq_ && meshInstMOpq_ && it.mat->alpha == Material::Alpha::Opaque && it.mat->fanCol.w >= 1.f &&
                    it.mat->fanBase.w >= -0.5f;
-  gfx::Program p = it.kind == Item::Kind::Instanced ? (shadowPass ? depthInst_ : eq ? meshInstEq_ : pine ? meshPine_ : meshInst_)
+  // (a forest LOD whose instances are all past their fade bands, opaque (the clustered LODs: vertex colours, no alpha
+  // map): the pine shading without any discard; the GPU removes the hidden pixels before shading them)
+  const bool pineOpq = pine && !shadowPass && !eq && it.solid && !inPortal_ && meshInstEq_ && it.mat->alpha == Material::Alpha::Opaque && !dbgNoSolid_ && !(abB_ && abNoSolid_);
+  gfx::Program p = it.kind == Item::Kind::Instanced ? (shadowPass ? depthInst_ : eq || pineOpq ? meshInstEq_ : pine ? meshPine_ : meshInst_)
                  : it.kind == Item::Kind::InstMat ? (shadowPass ? depthInstM_ : opq ? meshInstMOpq_ : meshInstM_)
                  : it.skinned ? (shadowPass ? depthSkin_ : meshSkin_) : (shadowPass ? depthMesh_ : opq ? meshOpq_ : mesh_);
   use(p);
@@ -1199,9 +1226,10 @@ void Renderer::drawItems(bool shadowPass, int cascade) {
     for (const Item& it : items_) {
       if (shadowPass ? !it.shadow : !it.main) continue;
       int want = it.kind == Item::Kind::Terrain ? 0 : it.kind == Item::Kind::Impostor ? 2 : 1;
+      if ((terrainLast_ != (abB_ && abTlast_)) && !shadowPass && want < 2) want = 1 - want;
       if (pass != want) continue;
       if (shadowPass && !inCascade(it, cascade)) continue;
-      if (pass == 1 && !shadowPass && prezItem(it) && !prezDone) {   // (the forests' depth first, then everything lit)
+      if (!shadowPass && prezItem(it) && !prezDone) {   // (the forests' depth first, then everything lit)
         prezDone = true;
         for (const Item& f : items_) if (prezItem(f)) drawPrepass(f, ps, cur);
       }
@@ -1685,7 +1713,12 @@ void Renderer::scenePasses(bool portal) {
   }
   // main pass (HDR, multisampled on the high presets)
   gfx::RenderTarget main = msaa_ && !portal ? msaa_ : hdr_;   // (a window's view: not multisampled)
-  dev_->gpuPass(portal ? "window view: main pass (opaque)" : "main pass (opaque)");
+  if (abOn_ && !portal) {
+    const bool was = abB_;
+    abB_ = (++abFrame_ / 20) % 2 == 1;
+    if (abAniso_ > 0 && was != abB_) dev_->setSampling(noise_, gfx::Filter::Trilinear, gfx::Wrap::Repeat, abB_ ? float(abAniso_) : 16.f);
+  }
+  dev_->gpuPass(portal ? "window view: main pass (opaque)" : abB_ ? "main pass B" : "main pass (opaque)");
   dev_->bindRenderTarget(main, rw_, rh_);
   dev_->clear(0, 0, 0, 1, true, true);
   // (a portal: only the windows' part of the screen)
@@ -1706,6 +1739,7 @@ void Renderer::scenePasses(bool portal) {
   drawItems(false, 0);
   // sky behind everything
   dev_->gpuPass(portal ? "window view: sky + transparent" : "sky + transparent");
+  if (portal) abB_ = false;
   {
     gfx::PipelineState ps;
     ps.depth = gfx::DepthTest::LessEqual; ps.depthWrite = false; ps.cull = gfx::Cull::None;

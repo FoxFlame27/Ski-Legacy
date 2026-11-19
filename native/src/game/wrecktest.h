@@ -6,6 +6,7 @@
 #include "core/math.h"
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace sl {
 class Drive;
@@ -24,6 +25,7 @@ struct WreckTestEnv {
   std::function<void(int parkedIdx)> enterCar;              // in (rideKind = Car, seated)
   std::function<void(double x, double z, double heading)> teleport;
   std::function<void(const std::string& variant)> png;
+  std::function<void(const std::string& plate)> repair;     // the Werkstatt's repair (werk.repaired)
 };
 
 class WreckTest {
@@ -35,6 +37,11 @@ private:
   int phase_ = 0, idx_ = -1, tcar_ = -1;
   double t0_ = 0, nextLog_ = 0;
   dvec3 at_{0}, fwd_{0, 0, 1}, stand_{0};
-  int shots_ = 0;
+  int shots_ = 0, dentShots_ = 0, dentLogs_ = 0, werkShots_ = 0;
+  // (round the wreck through the other lane) the cars seen passing it, a shot of the first one beside it
+  std::vector<int> passed_;
+  bool passShot_ = false;
+  int passSeen_[2] = {0, 0};   // per wreck (traffic's, yours)
+  void watchPass(WreckTestEnv& e, int which, const dvec3& at, double yaw, double hw, double hl, int skip);
 };
 } // namespace sl

@@ -55,15 +55,23 @@ public:
     bool scenic = false;                       // one of the scenic network's own cars
     double wdX = 1e18, wdZ = 1e18, wdT = 0;    // the watchdog: where it last made 3 m headway, for how long not
     uint32_t crew = 0;                         // (carpeople.js fill) who sits in it: a seed per trip
+    int pass = 0;                              // (traffic.js c.pass) round a crash ahead: 0 no, 1 by its own edge ('right'), 2 through the other lane ('left')
+    double passT = 0;                          // (its plan looked at again every 0.4 s)
   };
   std::vector<Car> list;
   int movingCount() const;
+  /// (traffic.js hard) what a car may never move into at (x, z) with radius r: a guardrail, a building, a parked car, a
+  /// rock, a tree trunk (the game sets it; unset: nothing)
+  std::function<bool(double x, double z, double r)> hardAt;
+  int passes = 0;
+  int noRoom = 0;   // (wrecktest) how many times a car found no room on either side of something in its lane   // (wrecktest) how many times a car pulled out round something standing in its lane
 
 private:
   void spawn(Car& c, const dvec3& player, bool first);
   void drive(Car& c, double dt, const dvec3& player, const Drive* you, const std::vector<Obb>& buses);
   double clearance(const Car& c, const dvec3& player, const Drive* you, const std::vector<Obb>& buses) const;
   void placeOnRoad(Car& c);
+  void planPass(Car& c, const Drive* you, const std::vector<Obb>& buses);
   void toRoad(Car& c, int ri, double s, int dir, double v);
   void deadEnd(Car& c, const dvec3& player);
   bool inSight(double x, double z, double d = 260) const;

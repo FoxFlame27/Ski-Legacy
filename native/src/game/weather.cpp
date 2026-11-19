@@ -127,6 +127,7 @@ void Weather::drawSnow(Renderer& r, VehicleDraw& vd, gfx::Device& dev, Shapes& s
   double wt = snowT_ * 0.05;
   double rain = wet * (1 - smoothstep(70.0, 150.0, cam.pos.y));   // (the village stands at y ~ 0)
   dvec2 w(1.5 + std::sin(wt) * 2.5 * snow + 1 + wind * 8.5, 0.6 + std::cos(wt * 0.7) * 1.5 + wind * 3.4);
+  airX = w.x; airZ = w.y;
   double fall = 1 + 2.8 * rain + 0.4 * wind;
   snowOff_ += dvec3(w.x, fall, w.y) * dt;
   Snowfall s;

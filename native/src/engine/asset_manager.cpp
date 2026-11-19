@@ -321,6 +321,8 @@ std::shared_ptr<Model> AssetManager::loadFile(const std::string& path, const std
           }
         o.baseTex = {}; o.mrTex = {}; o.normalTex = {}; o.emissiveTex = {};
         o.vertexColor = true; o.colorSqrt = false; o.shading = 3;
+        // (no colour map left: nothing to alpha-test; opaque, no alpha to coverage, no discard: hidden-surface removal)
+        if (o.alpha == Material::Alpha::Mask && o.baseColor.w >= o.alphaCutoff) o.alpha = Material::Alpha::Opaque;
       }
       model->lodMaterials.push_back(o);
     }

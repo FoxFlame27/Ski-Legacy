@@ -53,6 +53,7 @@ void Drive::init() {
     if (!e.spec || !e.vm) continue;
     e.x = p.pos.x; e.y = p.pos.y; e.z = p.pos.z; e.yaw = p.yaw; e.length = p.length;
     e.paint = paintForIndex(uint32_t(parked.size()) * 31u + 7u);   // (Phase 7: parking.js paints its cars)
+    e.uid = nextUid_++;
     parked.push_back(e);
   }
   // (carrental.js: the cars for sale stand inside the hall only, on their turntables (game/showroom); the car park
@@ -139,6 +140,7 @@ int Drive::addOwned(const std::string& model, const std::string& plate, double d
   double x = t_.autohaus.x + 6, z = t_.autohaus.z + 6, yaw = 0;
   freeBay(x, z, yaw);
   e.x = x; e.z = z; e.yaw = yaw; e.y = world_.height(x, z) + 0.03;
+  e.uid = nextUid_++;
   parked.push_back(e);
   models_.full(model);   // (its cockpit model loaded now, at the load or the purchase, not in the frame you get in: ~175 ms)
   return int(parked.size()) - 1;
@@ -175,6 +177,7 @@ bool Drive::exit(dvec3& out) {
   if (!d_.on || d_.offT > 0 || d_.crash || speed() > 2.0) return false;
   Parked& e = parked[size_t(d_.e)];
   e.x = d_.x; e.z = d_.z; e.y = world_.groundHeight(d_.x, d_.z, d_.y + 1) + 0.03; e.yaw = d_.yaw; e.driving = false;
+  if (e.smoke) e.smoke->clear();   // (drive.js park: parked, no more steam)
   // drive.js exitSpot: beside the driver's door (the car's left), else the other side, behind, in front
   double fx = std::sin(d_.yaw), fz = std::cos(d_.yaw), lx = fz, lz = -fx;
   const double spots[4][2] = {{0.4, d_.w / 2 + 0.9}, {0.4, -(d_.w / 2 + 0.9)}, {-(d_.half + 1.0), 0}, {d_.half + 1.0, 0}};
@@ -194,7 +197,7 @@ bool Drive::wreckOut(dvec3& out) {
   if (!d_.on || !wreckDone_) return false;
   wreckDone_ = false;
   Parked& e = parked[size_t(d_.e)];
-  e.wreckM = carMatrix(); e.wreckPose = true; e.wrecked = true;
+  e.wreckM = carMatrix(); e.wreckPose = true; e.wrecked = true; e.wreckT = 0;
   e.x = d_.x; e.z = d_.z; e.y = world_.groundHeight(d_.x, d_.z, d_.y + 1) + 0.03; e.yaw = d_.yaw; e.driving = false;
   const double sg = d_.crashRollTo > 0.1 ? -1 : 1;   // (on its left side: out to the right)
   const double sx = std::cos(d_.yaw) * sg, sz = -std::sin(d_.yaw) * sg;
@@ -539,6 +542,7 @@ void Drive::collide(double now) {
     d.vx *= 0.85; d.vz *= 0.85; d.pitchV -= 0.1;
     Parked& e = parked[size_t(d.e)];
     e.damage = std::min(99.0, e.damage + 2 * lamps);
+    { const double l = std::max(1e-6, std::hypot(d.vx, d.vz)); dent(-d.vx / l, -d.vz / l, 0.25); }   // (drive.js: a small dent in the nose)
     shake_ = std::max(shake_, 0.3);
     events.push_back({VehicleEvent::Type::Knock, 0.55f, "Lamp post down - car damage " + std::to_string(int(e.damage)) + "%"});
   }
@@ -619,6 +623,7 @@ void Drive::railBreak(double into, double nx, double nz) {
   if (into >= EXTREME_V || e.damage + add >= 100) { crash(std::max(into, CRASH_V), nx, nz); return; }
   e.damage = std::min(99.0, e.damage + add);
   knockT_ = now_;
+  dent(nx, nz, std::min(0.8, 0.4 + into / 40));
   d.vx *= 0.64; d.vz *= 0.64;
   double side = rnd() < 0.5 ? -1 : 1;
   d.yawRate = clamp(d.yawRate + side * 0.5, -2, 2);
@@ -701,8 +706,54 @@ void Drive::knock(double v, double nx, double nz, double now) {
   double add = 1 + (v - KNOCK_V) * 0.35;
   if (e.damage + add >= 100) { e.damage = 100; crash(CRASH_V, nx, nz); return; }
   e.damage = std::min(99.0, e.damage + add);
+  dent(nx, nz, std::min(0.45, (v - KNOCK_V) / 22));
   shake_ = std::max(shake_, 0.35);
   events.push_back({VehicleEvent::Type::Knock, float(clamp(0.5 + (v - KNOCK_V) / 20, 0, 1)), "Knock - car damage " + std::to_string(int(e.damage)) + "%"});
+}
+
+// drive.js dent: a dent where it hit (n: from what you hit toward the car, world) in the car's frame (cardamage.js)
+void Drive::dent(double nx, double nz, double hard) {
+  if (!d_.on) return;
+  Parked& e = parked[size_t(d_.e)];
+  const double c = std::cos(d_.yaw), s = std::sin(d_.yaw), ix = -nx, iz = -nz;   // (the impact's direction from the car's middle)
+  const vec3 size = e.vm ? e.vm->size : e.spec ? e.spec->size : vec3(1.9f, 1.5f, 4.7f);
+  addDent(e.dents, ix * c - iz * s, ix * s + iz * c, hard, size, rnd() * 100);
+}
+
+void Drive::repair(int idx) {
+  if (idx < 0 || size_t(idx) >= parked.size()) return;
+  Parked& e = parked[size_t(idx)];
+  e.damage = 0;
+  e.dents.clear();
+  if (e.smoke) e.smoke->clear();
+}
+
+// drive.js effects / updateWrecks: steam from the bonnet of the car you drive once it is badly knocked about (40 %+),
+// the plume of a wreck (crashing, then lying there for its first minute); what is in the air drifts away
+void Drive::effects(double dt, const dvec3& cam, double windX, double windZ) {
+  for (size_t i = 0; i < parked.size(); i++) {
+    Parked& e = parked[i];
+    const bool mine = d_.on && int(i) == d_.e;
+    const vec3 sz = e.vm ? e.vm->size : vec3(1.9f, 1.5f, 4.7f);
+    const glm::dvec4 bonnet(0, sz.y * 0.78, sz.z / 2 - 0.8, 1);
+    if (mine) {
+      if (!(d_.crash || e.damage >= 40)) continue;
+      if (!e.smoke) e.smoke = std::make_shared<CarSmoke>();
+      e.smoke->rate = d_.crash ? 6 : 0.8 + ((e.damage - 40) / 60) * 3;
+      const dvec3 b(carMatrix() * bonnet);
+      e.smoke->update(dt, !d_.crash || d_.crashT > 0.25, b, cam, dvec3(std::sin(d_.yaw), 0, std::cos(d_.yaw)), windX, windZ);
+    } else if (e.smoke) {
+      if (e.wrecked && e.wreckPose) {
+        e.wreckT += dt;
+        const dvec3 b(e.wreckM * bonnet), f = glm::normalize(dvec3(e.wreckM * glm::dvec4(0, 0, 1, 0)));
+        e.smoke->update(dt, e.wreckT < 60, b, cam, f, windX, windZ);
+      } else if (e.smoke->any() || e.driving) e.smoke->clear();
+    }
+  }
+}
+
+void Drive::addFx(Renderer& r) const {
+  for (const Parked& e : parked) if (e.smoke && e.smoke->any()) e.smoke->draw(r);
 }
 
 void Drive::crash(double v, double nx, double nz) {
@@ -712,6 +763,7 @@ void Drive::crash(double v, double nx, double nz) {
   Parked& e0 = parked[size_t(d.e)];
   e0.damage = std::min(100.0, e0.damage + (v >= EXTREME_V ? 100 : 7 + (v - CRASH_V) * 0.55));
   knockT_ = now_;
+  dent(nx, nz, std::min(1.0, 0.45 + hard * 0.55 + (e0.damage >= 100 ? 0.2 : 0)));
   if (e0.damage < 100) {
     d.vx = d.vx * 0.22 + nx * v * 0.12; d.vz = d.vz * 0.22 + nz * v * 0.12;
     double side = rnd() < 0.5 ? -1 : 1;
@@ -902,8 +954,11 @@ void Drive::addDraw(VehicleDraw& draw, const dvec3& cam) const {
     }
     double dist = std::hypot(M[3][0] - cam.x, M[3][2] - cam.z);
     bool mine = d_.on && int(i) == d_.e;
+    // (cardamage.js: every look of it, the parked one and the full-detail one you drive, carries its dents)
+    const VehicleModel* vm = mine && fullVm_ ? fullVm_ : e.vm;
+    if (!e.dents.empty() && dist < 70) vm = models_.dented(vm, e.uid, e.dents);
     // (drive.js updateBody: the steering wheel ~100 degrees either way at full lock: -steer x 3 about its column)
-    draw.addCar(mine && fullVm_ ? *fullVm_ : *e.vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0, mine ? -d_.steer * 3 : 0);
+    draw.addCar(*vm, M, dist < 70 ? 0 : 1, e.paint, mine ? wheelSpin_ : 0, mine ? d_.steer : 0, mine ? -d_.steer * 3 : 0);
   }
 }
 
@@ -915,6 +970,7 @@ void Drive::carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, b
     bool mine = d_.on && int(i) == d_.e;
     CarPose c;
     c.vm = e.vm; c.mine = mine;
+    c.dents = e.dents.empty() ? nullptr : &e.dents;   // (cardamage.js: the lamps at a hard hit's corner smashed)
     if (mine) {
       c.M = carMatrix();   // (as drawn: rolled over in a crash, resting on its side / roof)
       // (drive.js effects: crashed, the lamps stay as they were (the tails dim at least) and the hazards flash)

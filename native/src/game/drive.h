@@ -39,6 +39,12 @@ public:
   bool wreckOut(dvec3& out);
   /// (debug wrecktest) a crash at v m/s into something on the car's left (wrecked at EXTREME_V), rolling to rollTo
   void debugCrash(double v, double rollTo) { crash(v, std::cos(d_.yaw), -std::sin(d_.yaw)); if (d_.crash) d_.crashRollTo = rollTo; }
+  /// (debug wrecktest) a dent on a parked car of yours, as a knock there would leave it (impact from dirX / dirZ, car frame)
+  void debugDent(int idx, double dirX, double dirZ, double hard) {
+    if (idx < 0 || size_t(idx) >= parked.size()) return;
+    Parked& e = parked[size_t(idx)];
+    addDent(e.dents, dirX, dirZ, hard, e.vm ? e.vm->size : vec3(1.9f, 1.5f, 4.7f), rnd() * 100);
+  }
   /// the car nearest p you may drive (autotest)
   int nearestOwned(const dvec3& p) const;
   bool enter(int parkedIndex);
@@ -71,6 +77,12 @@ public:
   /// (Phase 7) the cars to light / plate (yours: headlights with L or at night, brake lights)
   void carPoses(std::vector<CarPose>& out, const dvec3& cam, double maxD, bool night) const;
   void fillColliders(std::vector<Collider>& out) const;
+  /// (drive.js repair: the Werkstatt, every tow) no damage, no dents, no steam: every look of it as new
+  void repair(int parkedIndex);
+  /// once a frame: the steam / smoke from the bonnets (drive.js effects, updateWrecks); wind: atmosphere.js windUniform
+  void effects(double dt, const dvec3& cam, double windX, double windZ);
+  /// their puffs into the renderer's particles
+  void addFx(Renderer& r) const;
 
   // ---- state for the HUD, the traffic, the autotest
   double speed() const { return std::hypot(d_.vx, d_.vz); }
@@ -126,6 +138,10 @@ public:
     vec4 paint{1, 1, 1, 0};            // (Phase 7) its paint (a = 0: the model's own colour)
     bool wreckPose = false;            // (drive.js wreckOut) a wreck lies as it came to rest: wreckM (car -> world)
     glm::dmat4 wreckM{1};
+    std::vector<Dent> dents;           // (cardamage.js e.dents) its dents, car frame, kept until it is repaired
+    std::shared_ptr<CarSmoke> smoke;   // (carlights.js Smoke) steam from its bonnet (badly damaged / a wreck)
+    double wreckT = 0;                 // (drive.js W.t) s since it was left a wreck (the plume for its first minute)
+    uint64_t uid = 0;                  // (its dented model's key)
   };
   std::vector<Parked> parked;
   /// (Phase 5, impound.js lockReason) a car of yours that doesn't let you in: the reason shown, "" when free
@@ -140,6 +156,7 @@ private:
   void bash(double h);
   void knock(double v, double nx, double nz, double now);
   void crash(double v, double nx, double nz);
+  void dent(double nx, double nz, double hard);
   void crashStep(double h);
   void pose(double dt);
   void placeCamera(double dt, const DriveFrameInput& in);
@@ -184,6 +201,7 @@ private:
   double wheelSpin_ = 0;
   double knockT_ = -1e9, bangT_ = -1e9, unstuckT_ = -1e9, now_ = 0;
   unsigned seed_ = 12345;
+  uint64_t nextUid_ = 1;
   double rnd() { seed_ = seed_ * 1103515245u + 12345u; return double((seed_ >> 8) & 0xffffff) / double(0x1000000); }
 };
 

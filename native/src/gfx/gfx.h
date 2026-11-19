@@ -74,6 +74,8 @@ public:
   /// Replace the whole contents (orphans the old storage: safe while the GPU still reads it).
   virtual void replaceBuffer(Buffer b, const void* data, size_t bytes) = 0;
   virtual void destroy(Buffer b) = 0;
+  /// (game/cardamage: a car body dented from its own vertices) the whole contents back on the CPU; false if unsupported
+  virtual bool readBuffer(Buffer b, std::vector<uint8_t>& out) { (void)b; out.clear(); return false; }
 
   virtual Texture createTexture(const TextureDesc& d, const void* pixels) = 0;
   /// (Phase 7) a block-compressed texture: BC1 (8 bytes a 4x4 block) or BC3 (16), sRGB or linear, every mip level given

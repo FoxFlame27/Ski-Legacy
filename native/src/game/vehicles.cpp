@@ -7,6 +7,7 @@
 #include <meshoptimizer.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cstring>
 #include <unordered_map>
 
 namespace sl {
@@ -328,6 +329,86 @@ const VehicleModel* VehicleModels::dressed(const VehicleModel* vm, int finish, c
   return r;
 }
 
+// cardamage.js dentInstance: the body's vertices (car frame: the split-off body is built in the fitted space) moved
+// in round each dent in turn, their normals tipped with the panel; a copy of the body per car (the parts are shared
+// by every car of the model), its index buffer shared
+const VehicleModel* VehicleModels::dented(const VehicleModel* vm, uint64_t owner, const std::vector<Dent>& dents) const {
+  if (!vm || dents.empty() || !vm->split() || !dev_) return vm;
+  const uint64_t sig = dentSig(dents);
+  DentEntry& E = dented_[{owner, vm}];
+  E.used = frameNo_;
+  if (E.c.vm && E.sig == sig) return E.c.vm.get();
+  if (E.c.vm) { E.c.at = frameNo_; dentGrave_.push_back(std::move(E.c)); E.c = DentCopy{}; }
+  E.sig = sig;
+  auto out = std::make_unique<VehicleModel>(*vm);
+  auto body = std::make_shared<Model>(*vm->body);
+  std::vector<uint8_t> vb;
+  size_t moved = 0;
+  for (size_t mi = 0; mi < body->meshes.size(); mi++)
+    for (size_t pi = 0; pi < body->meshes[mi].primitives.size(); pi++) {
+      Primitive& p = body->meshes[mi].primitives[pi];
+      p.cpuVerts.reset(); p.cpuIdx.reset();
+      if (!p.packed || p.stride != 28 || !dev_->readBuffer(p.vbo, vb) || vb.size() < 28) continue;   // (drawn from the shared one)
+      const size_t n = vb.size() / 28;
+      for (size_t i = 0; i < n; i++) {
+        uint8_t* o = &vb[i * 28];
+        vec3 pos;
+        std::memcpy(&pos, o, 12);
+        const int8_t* nn = reinterpret_cast<const int8_t*>(o + 12);
+        vec3 nor = vec3(float(nn[0]), float(nn[1]), float(nn[2])) / 127.f;
+        const vec3 p0 = pos;
+        for (const Dent& D : dents) dentVertex(D, pos, nor);
+        if (pos == p0) continue;
+        moved++;
+        std::memcpy(o, &pos, 12);
+        int8_t w[3];
+        for (int k = 0; k < 3; k++) w[k] = int8_t(std::lround(std::clamp(nor[k], -1.f, 1.f) * 127.f));
+        std::memcpy(o + 12, w, 3);
+      }
+      p.vbo = dev_->createBuffer(gfx::BufferUsage::Vertex, vb.data(), vb.size());
+      const uint32_t st = 28;
+      p.input = dev_->createVertexInput({{0, 0, 3, gfx::AttribType::Float, false, 0, st}, {1, 0, 3, gfx::AttribType::Byte, true, 12, st},
+                                         {2, 0, 2, gfx::AttribType::Float, false, 16, st}, {7, 0, 3, gfx::AttribType::UByte, true, 24, st}},
+                                        {p.vbo}, p.ibo);
+      E.c.bufs.push_back(p.vbo); E.c.ins.push_back(p.input);   // (this copy's own: freeDented)
+    }
+  body->name = vm->body->name + "_dented";
+  out->body = body;
+  static int logged = 0;
+  if (logged++ < 20) {
+    // (and read back: the copy on the GPU really holds the moved vertices)
+    size_t diff = 0;
+    std::vector<uint8_t> a, b;
+    for (size_t mi = 0; mi < body->meshes.size(); mi++)
+      for (size_t pi = 0; pi < body->meshes[mi].primitives.size(); pi++)
+        if (dev_->readBuffer(body->meshes[mi].primitives[pi].vbo, a) && dev_->readBuffer(vm->body->meshes[mi].primitives[pi].vbo, b) && a.size() == b.size())
+          for (size_t i = 0; i + 28 <= a.size(); i += 28) diff += std::memcmp(&a[i], &b[i], 12) != 0;
+    SL_INFO("cardamage: %s dented (%zu dents, %zu vertices moved, %zu differ on the GPU; body bounds (%.2f %.2f %.2f) .. (%.2f %.2f %.2f))", vm->body->name.c_str(), dents.size(), moved, diff,
+            vm->body->bmin.x, vm->body->bmin.y, vm->body->bmin.z, vm->body->bmax.x, vm->body->bmax.y, vm->body->bmax.z);
+  }
+  E.c.vm = std::move(out);
+  return E.c.vm.get();
+}
+void VehicleModels::freeDented(DentCopy& c) {
+  if (!dev_) return;
+  for (gfx::VertexInput v : c.ins) if (v) dev_->destroy(v);
+  for (gfx::Buffer b : c.bufs) if (b) dev_->destroy(b);
+  c.ins.clear(); c.bufs.clear(); c.vm.reset();
+}
+void VehicleModels::endFrame() {
+  frameNo_++;
+  for (auto it = dented_.begin(); it != dented_.end();) {
+    if (frameNo_ - it->second.used > 600) {
+      if (it->second.c.vm) { it->second.c.at = frameNo_; dentGrave_.push_back(std::move(it->second.c)); }
+      it = dented_.erase(it);
+    } else ++it;
+  }
+  for (size_t i = 0; i < dentGrave_.size();) {
+    if (frameNo_ - dentGrave_[i].at > 8) { freeDented(dentGrave_[i]); dentGrave_.erase(dentGrave_.begin() + long(i)); }
+    else i++;
+  }
+}
+
 const VehicleModel* VehicleModels::car(const std::string& name) const {
   auto it = cars_.find(name);
   return it == cars_.end() ? nullptr : &it->second;
@@ -574,6 +655,7 @@ void VehicleDraw::submit(Renderer& r, gfx::Device& dev, const dvec3& cam) {
         pk.push_back(MatrixInstanceBatch::pack(M, cam, tint));
       }
       if (pk.empty()) { b.gpu[l].upload(dev, pk); continue; }
+      { static int nLog = 0; if (nLog < 6 && m->name.size() > 7 && m->name.compare(m->name.size() - 7, 7, "_dented") == 0) { nLog++; SL_INFO("cardamage: drawing %s x%zu (batch model %s)", m->name.c_str(), pk.size(), b.gpu[l].model() ? b.gpu[l].model()->name.c_str() : "-"); } }
       b.gpu[l].upload(dev, pk);
       r.submitInstances(b.gpu[l], cam, l, cast);
     }

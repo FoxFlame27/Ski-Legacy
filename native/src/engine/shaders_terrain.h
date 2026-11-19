@@ -158,6 +158,9 @@ void main() {
     tRock *= 1.0 - tGroomed;
     tRelG = vec2(0.0); tRelV = 0.5; tRelK = 0.0; tRelA = 0.5;
     float flatK = 1.0 - smoothstep(0.45, 0.62, slope);
+#ifdef TDBG_NOREL
+    flatK = 0.0;
+#endif
     if (tRock < 0.98 && flatK > 0.0) {
       float lvl = clamp(log2(max(tFw, 1e-3) * 12.0), -1.0, 10.0);
       float l0 = floor(lvl), lf = lvl - l0;
@@ -203,7 +206,11 @@ void main() {
     }
     alb = snow;
     tRockN = vec3(0.0);
+#ifdef TDBG_NOROCK
+    if (false) {
+#else
     if (tRock > 0.002) {
+#endif
       // (native) the faces' relief carried much farther (facets to 2.5 km, a mid scale to 3.5 km): sunlit and shaded
       // facets, ribs and gullies on every cliff instead of a smooth grey slab
       float buttress = 1.0 - smoothstep(1500.0, 5000.0, tDist), facets = 1.0 - smoothstep(400.0, 2500.0, tDist);
@@ -445,10 +452,17 @@ void main() {
     if (tRock > 0.002 && tDist < 120.0) rockN += triGrad(vWPos, tTriW, 0.6) * 0.3 * (1.0 - smoothstep(30.0, 120.0, tDist));
 #endif
     pn = normalize(wn + vec3(-g.x, 0.0, -g.y) + rockN * tRock);
+#ifdef TDBG_NONRM
+    pn = wn;
+#endif
   }
   // ================= lighting (three's physical model) + terrain.js lights_fragment_end
   vec3 wn = normalize(vNormal);
+#ifdef TDBG_NOSHADOW
+  float sh = 1.0;
+#else
   float sh = shadowAt(vRel, wn);
+#endif
 #if SL_FX >= 4
   // (native) the grooves shade themselves in low sun: a short march over the trail heights toward the light
   if (trOn > 0.01 && tDist < 30.0 && uSunDir.y < 0.6) {
@@ -528,6 +542,9 @@ void main() {
     float sFade = (1.0 - tRock) * uSparkle * (1.0 - smoothstep(70.0, 120.0, tDist));
 #endif
     sFade *= 1.0 - saturate(trT.b * 1.5) * trOn * 0.8;   // (packed snow in the tracks: few crystals left)
+#ifdef TDBG_NOGLINT
+    sFade = 0.0;
+#endif
     if (sFade > 0.0 && uSunColor.w > 0.5) {
       vec3 gn = wn;
       vec3 H = normalize(uSunDir.xyz + v);
@@ -557,8 +574,18 @@ void main() {
     }
   }
 #endif
+#ifdef TDBG_NOLOCAL
+  vec3 col = sumLit(L, 1.0);
+#else
   vec3 col = sumLit(L, 1.0) + localLights(alb, pn, vRel, v, rough, vec3(0.04));
+#endif
   oColor = vec4(applyFog(col, vRel), 1.0);
+#ifdef TDBG_FLAT
+  oColor = vec4(alb, 1.0);
+#endif
+#ifdef TDBG_CONST
+  oColor = vec4(0.5);
+#endif
 }
 )GLSL";
 

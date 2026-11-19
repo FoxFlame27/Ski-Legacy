@@ -1,5 +1,6 @@
 #include "game/economy.h"
 #include "core/log.h"
+#include "game/cardamage.h"
 #include "platform/platform.h"
 #include <algorithm>
 #include <cmath>
@@ -166,6 +167,10 @@ nlohmann::json Save::toJson() const {
   nlohmann::json g = nlohmann::json::array();
   for (const Car& c : garage) g.push_back({{"id", c.id}, {"paint", c.paint}, {"interior", "orig"}, {"rims", c.rims}, {"plate", c.plate}, {"custom", c.custom}, {"price", c.price}, {"damage", c.damage}});
   j["garage"] = g;
+  nlohmann::json cd = nlohmann::json::object();
+  for (const Car& c : garage)
+    if (c.damage > 0 || (c.dents.is_array() && !c.dents.empty())) cd[c.plate] = {{"p", std::round(std::clamp(c.damage, 0.0, 99.0) * 10) / 10}, {"d", c.dents.is_array() ? c.dents : nlohmann::json::array()}};
+  j["carDamage"] = cd;
   j["rental"] = nlohmann::json(nullptr);
   for (const Car& c : garage) if (c.plate == rentalPlate) j["rental"] = g[size_t(&c - garage.data())];
   j["binds"] = binds;
@@ -211,12 +216,20 @@ void Save::fromJson(const nlohmann::json& s) {
       for (const Car& g : garage) dup = dup || g.plate == car.plate;
       if (!dup && int(garage.size()) < GARAGE_MAX) garage.push_back(car);
     }
+  // (carrental.js save.carDamage { [plate]: { p: damage %, d: packed dents } }: each car's dents until it is repaired)
+  if (s.contains("carDamage") && s["carDamage"].is_object())
+    for (Car& car : garage) {
+      const auto it = s["carDamage"].find(car.plate);
+      if (it == s["carDamage"].end() || !it->is_object()) continue;
+      if (it->contains("d")) car.dents = packDents(unpackDents((*it)["d"]));
+      if (car.damage <= 0 && it->contains("p") && (*it)["p"].is_number()) car.damage = std::clamp((*it)["p"].get<double>(), 0.0, 99.0);
+    }
   if (s.contains("rental") && s["rental"].is_object()) rentalPlate = s["rental"].value("plate", std::string());
   if (s.contains("binds") && s["binds"].is_object()) binds = s["binds"];
   for (auto& [k, v] : s.items()) if (isSettingKey(k) && !v.is_null()) settings[k] = v;
   if (s.contains("sensitivity") && s["sensitivity"].is_number()) settings["sensitivity"] = s["sensitivity"];
   static const char* mine[] = {"money", "skis", "owned", "character", "characterChosen", "dayPass", "tickets", "day", "hour", "stats", "rescues",
-                               "tutorial", "quality", "outfits", "garage", "rental", "binds", "layoutVersion"};
+                               "tutorial", "quality", "outfits", "garage", "rental", "binds", "layoutVersion", "carDamage"};
   for (auto& [k, v] : s.items()) {
     bool known = isSettingKey(k);
     for (const char* m : mine) known = known || k == m;

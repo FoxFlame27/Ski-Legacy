@@ -1,6 +1,7 @@
 // The multiplayer session (see mp_session.h): session.js with the native game's glue.
 #include "game/mp_session.h"
 #include "core/log.h"
+#include "game/cardamage.h"
 #include "game/economy.h"
 #include "platform/platform.h"
 #include <algorithm>
@@ -509,6 +510,7 @@ void Multiplayer::applyProfile(const Json& p) {
       Save::Car car;
       car.id = jstr(c, "id"); car.plate = jstr(c, "plate"); car.paint = jstr(c, "paint", "white");
       car.price = int(jnum(c, "price")); car.damage = jdbl(c, "damage") * 100; car.custom = c.value("custom", false);
+      if (c.contains("dents")) car.dents = packDents(unpackDents(c["dents"]));   // (net/session.js: the server's car record keeps its dents)
       s.garage.push_back(car);
       if (c.contains("impound") && c["impound"].is_object()) impound.push_back({{"plate", car.plate}, {"day", s.day + 1}, {"until", jdbl(c["impound"], "until")}});
     }
@@ -727,8 +729,8 @@ void Multiplayer::carRepair(double damage, const std::string& plate, std::functi
     done(r.ok, r.d);
   });
 }
-void Multiplayer::carDamage(const std::string& plate, double damage) {
-  net.request("carDamage", Json{{"plate", plate}, {"damage", std::clamp(damage, 0.0, 1.0)}, {"dents", Json::array()}}, [](const net::NetResult&) {});
+void Multiplayer::carDamage(const std::string& plate, double damage, const Json& dents) {
+  net.request("carDamage", Json{{"plate", plate}, {"damage", std::clamp(damage, 0.0, 1.0)}, {"dents", dents.is_array() ? dents : Json::array()}}, [](const net::NetResult&) {});
 }
 void Multiplayer::tow(const std::string& kind, const dvec3& home, double yaw, int bay, std::function<void(bool, const Json&)> done) {
   guardMoney();

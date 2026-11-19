@@ -181,7 +181,9 @@ public:
   /// A model at world transform (origin + local matrix). pose: skinning (nullptr = rest).
   void submitModel(const Model& m, const dvec3& origin, const mat4& local, const Pose* pose, bool castShadow, int lod = 0, bool visible = true);
   /// visible: drawn in the main pass; cascade >= 0: casts into that shadow cascade only (a list culled to it)
-  void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible = true, int cascade = -1);
+  /// solid: no instance is in a LOD fade band this frame (the forests split them): drawn without the dither's discard,
+  /// so the GPU's hidden-surface removal works for them
+  void submitInstances(const InstanceBatch& b, const mat4& fit, int lod, bool castShadow, bool visible = true, int cascade = -1, bool solid = false);
   /// Matrix instances (origin: the batch's origin the instance translations are relative to). matOverride: draw
   /// every primitive with this material instead (a prop's night glow).
   void submitInstances(const MatrixInstanceBatch& b, const dvec3& origin, int lod, bool castShadow, const Material* matOverride = nullptr, bool visible = true, int cascade = -1);
@@ -266,6 +268,7 @@ private:
     const Material* mat = nullptr;
     const std::vector<mat4>* joints = nullptr;
     bool skinned = false, shadow = false, main = true, occl = false;
+    bool solid = false;         // (instanced trees) none of the instances is in a LOD fade band: no discard needed
     mat4 model{1};
     vec3 origin{0};
     vec4 sphere{0, 0, 0, -1};   // camera-relative bounds (w < 0: unknown) for the per-cascade culling
@@ -300,6 +303,12 @@ private:
   // the forests' depth prepass: their alpha-tested crowns (discard / alpha to coverage) defeated the GPU's hidden-
   // surface removal, every overlapping crown was shaded in full; SKI_LEGACY_GFX=noprez for A/B runs
   bool prez_ = true, dbgNoPine_ = false;
+  bool terrainLast_ = false, dbgNoSolid_ = false;
+  bool abOn_ = false, abB_ = false, abNoSolid_ = false, abTlast_ = false;   // (dev: SKI_LEGACY_GFX=ab=...)
+  int abFrame_ = 0, abAniso_ = 0;
+  std::string abDefs_;
+  gfx::Program terrainB_{};          // (main pass: the terrain after the opaque meshes: the trees in front of it hide its pixels)
+  std::string dbgTerrainDefs_;       // (dev: SKI_LEGACY_GFX=tdbg=A+B)
   gfx::Program cardP_, deckP_;
   gfx::RenderTarget cloudNoiseRT_, atlasRT_[2];
   gfx::Texture cloudTerrain_;

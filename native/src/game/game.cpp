@@ -607,6 +607,36 @@ int runGame(const GameOptions& opt) {
     for (const Obb& b : busBoxes) if (std::hypot(b.x - drive.pos().x, b.z - drive.pos().z) < 20) { OtherBody o; o.box = b; o.mass = 12000; o.kind = 1; out.push_back(o); }
   };
   drive.onKnock = [&](const OtherBody& b, double vx, double vz, double w) { if (b.kind == 0) traffic.knock(b.id, vx, vz, w); };
+  // (traffic.js hard: what a car swinging out round a wreck may never move into: a guardrail, a building or wall, a
+  // parked car, a rock, a tree trunk)
+  traffic.hardAt = [&](double x, double z, double r) {
+    if (scenery.treeAt(x, z, r, false) || scenery.rockAt(x, z, r, 0.6)) return true;
+    if (const auto* near = scenery.collidersNear(x, z))
+      for (int ci : *near) {
+        const Collider& c = scenery.colliders()[size_t(ci)];
+        if (c.soft && !c.rail) continue;
+        if (c.r >= 0) { if (std::hypot(x - c.x, z - c.z) < c.r + r) return true; continue; }
+        const double cs = std::cos(-c.rot), sn = std::sin(-c.rot), lx = (x - c.x) * cs - (z - c.z) * sn, lz = (x - c.x) * sn + (z - c.z) * cs;
+        if (std::fabs(lx) < c.hw + r && std::fabs(lz) < c.hd + r) return true;
+      }
+    for (int gx = int(std::floor((x - r - 1) / 16)); gx <= int(std::floor((x + r + 1) / 16)); gx++)
+      for (int gz = int(std::floor((z - r - 1) / 16)); gz <= int(std::floor((z + r + 1) / 16)); gz++)
+        if (const auto* cell = transport.railsNear(gx * 16 + 1, gz * 16 + 1))
+          for (int ri : *cell) {
+            const Guardrail& g = transport.rails[size_t(ri)];
+            const double ex = g.bx - g.ax, ez = g.bz - g.az, l2 = std::max(1e-9, ex * ex + ez * ez);
+            const double t = std::clamp(((x - g.ax) * ex + (z - g.az) * ez) / l2, 0.0, 1.0);
+            if (std::hypot(g.ax + ex * t - x, g.az + ez * t - z) < r + 0.12) return true;
+          }
+    for (const Drive::Parked& e : drive.parked) {
+      if (e.driving || std::fabs(e.x - x) > 6 || std::fabs(e.z - z) > 6) continue;
+      // (a wreck lying rolled: its heading as it lies, as Traffic::planPass sees it)
+      const double hy = e.wrecked && e.wreckPose ? std::atan2(e.wreckM[2][0], e.wreckM[2][2]) : e.yaw;
+      const double cs = std::cos(hy), sn = std::sin(hy), dx = x - e.x, dz = z - e.z;
+      if (std::fabs(dx * cs - dz * sn) < 0.97 + r && std::fabs(dx * sn + dz * cs) < e.length / 2 + r) return true;
+    }
+    return false;
+  };
   VehicleDraw vdraw;
   Player player(world, &scenery);
   PlayerSkier rig;
@@ -617,7 +647,7 @@ int runGame(const GameOptions& opt) {
   for (const Save::Car& c : save.garage) {
     int i = drive.addOwned(c.id, c.plate, c.damage);
     if (i < 0) SL_WARN("garage: unknown car %s", c.id.c_str());
-    else drive.dress(i, c.paint, c.rims);   // (Phase 7: your car's paint; its rims)
+    else { drive.dress(i, c.paint, c.rims); drive.parked[size_t(i)].dents = unpackDents(c.dents); }   // (Phase 7: your car's paint; its rims; carrental.js restoreDamage: its dents)
   }
   loadingWhat = "The trail map, the people, the courses...";
   loadingFrame("The trail map, the people, the courses...");
@@ -1520,7 +1550,7 @@ int runGame(const GameOptions& opt) {
       const std::string plate = out ? out->plate : std::string();
       rep.act = [&, plate, label, dmg]() {
         auto done = [&, plate, label]() {
-          for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
+          for (size_t pi = 0; pi < drive.parked.size(); pi++) if (drive.parked[pi].owned && drive.parked[pi].plate == plate) drive.repair(int(pi));   // (drive.js repair: dents out, new lamps, damage 0)
           for (auto& c : save.garage) if (c.plate == plate) c.damage = 0;
           static const char* L[] = {"Our mechanic will fix it up right away!", "Consider it done, our mechanic is on his way.", "No problem, our mechanic will have it like new in no time."};
           flash(std::string("\"") + L[unsigned(simTime * 13) % 3] + "\" \xC2\xB7 your " + label + " (" + plate + ") is repaired where it stands \xC2\xB7 paid " + fmtM(CLERK_REPAIR), Hud::Flash::Good);
@@ -1559,14 +1589,14 @@ int runGame(const GameOptions& opt) {
           for (auto& p : drive.parked) if (p.owned && p.plate == plate) dmg = p.damage;
           mp.carRepair(dmg / 100, plate, [&, plate](bool ok, const nlohmann::json& d) {
             if (!ok) return;
-            for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
+            for (size_t pi = 0; pi < drive.parked.size(); pi++) if (drive.parked[pi].owned && drive.parked[pi].plate == plate) drive.repair(int(pi));   // (drive.js repair: dents out, new lamps, damage 0)
             if (Save::Car* c = garageEntry(plate)) c->damage = 0;
             flash("Repaired \xC2\xB7 -" + fmtM(d.value("fee", 0)), Hud::Flash::Good);
           });
           return;
         }
         if (!spend(fee)) return;
-        for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
+        for (size_t pi = 0; pi < drive.parked.size(); pi++) if (drive.parked[pi].owned && drive.parked[pi].plate == plate) drive.repair(int(pi));   // (drive.js repair: dents out, new lamps, damage 0)
         if (Save::Car* c = garageEntry(plate)) c->damage = 0;
         save.write(*plat);
         flash("Repaired \xC2\xB7 -" + fmtM(fee).substr(0), Hud::Flash::Good);
@@ -1602,7 +1632,7 @@ int runGame(const GameOptions& opt) {
     done(spend(fee), fee);
   };
   werk.repaired = [&](const std::string& plate) {
-    for (auto& p : drive.parked) if (p.owned && p.plate == plate) p.damage = 0;
+    for (size_t pi = 0; pi < drive.parked.size(); pi++) if (drive.parked[pi].owned && drive.parked[pi].plate == plate) drive.repair(int(pi));   // (drive.js repair: dents out, new lamps, damage 0)
     if (Save::Car* c = garageEntry(plate)) c->damage = 0;
     save.write(*plat);
   };
@@ -1841,7 +1871,7 @@ int runGame(const GameOptions& opt) {
     for (const Save::Car& c : save.garage) {
       bool have = false;
       for (const auto& e : drive.parked) have = have || (e.owned && e.plate == c.plate);
-      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) drive.dress(i, c.paint, c.rims); }
+      if (!have) { int i = drive.addOwned(c.id, c.plate, c.damage); if (i >= 0) { drive.dress(i, c.paint, c.rims); drive.parked[size_t(i)].dents = unpackDents(c.dents); } }
     }
     nlohmann::json& imp = save.data("impound", nlohmann::json::array());
     for (auto& r : imp) for (auto& e : drive.parked) if (e.owned && e.plate == r.value("plate", std::string())) e.impoundDay = r.value("day", 0);
@@ -4798,11 +4828,23 @@ int runGame(const GameOptions& opt) {
       bool bad = toast.find("Crash") != std::string::npos || toast.find("Too steep") != std::string::npos || toast.find("wrecked") != std::string::npos;
       if (!toast.empty()) flash(toast, bad ? Hud::Flash::Bad : Hud::Flash::Good);
     }
+    // (drive.js effects / updateWrecks: the steam and smoke from the bonnets, with the wind; cardamage: the dented
+    // copies nobody draws any more freed)
+    drive.effects(paused ? 0 : frameDt, cam.pos, weather.airX, weather.airZ);
+    vmodels.endFrame();
     // your cars: damage into the save (each change), the tow truck's returns, a car left on a road (towed after 60 s with
     // you far away: PARK_TOW_FEE)
     for (const auto& e : drive.parked)
       if (e.owned && !e.plate.empty())
-        if (Save::Car* c = garageEntry(e.plate); c && std::fabs(c->damage - e.damage) > 0.01) { c->damage = e.damage; save.markDirty(); if (mp.active()) mp.carDamage(e.plate, e.damage / 100); }
+        if (Save::Car* c = garageEntry(e.plate)) {
+          // (carrental.js carDamage: its damage and its dents kept until it is repaired, in the save and on the server)
+          const size_t nd = c->dents.is_array() ? c->dents.size() : 0;
+          const bool dentsChanged = nd != e.dents.size() || (nd && std::fabs(c->dents.back()[5].get<double>() - std::round(double(e.dents.back().seed) * 10) / 10) > 0.01);
+          if (std::fabs(c->damage - e.damage) > 0.01 || dentsChanged) {
+            c->damage = e.damage; c->dents = packDents(e.dents); save.markDirty();
+            if (mp.active()) mp.carDamage(e.plate, e.damage / 100, c->dents);
+          }
+        }
     if (off("rescuetest") && frame % 150 == 0) { nlohmann::json rm; if (heli.mpRescue(rm)) SL_INFO("[rescuetest] the row for the other players (net/rescue.js): %s", rm.dump().c_str()); }
     if (mp.active() && started) {   // (Phase 6, carride.js frame / keptFrame) your car out and your other cars parked
       Multiplayer::CarReport cr;
@@ -4834,7 +4876,7 @@ int runGame(const GameOptions& opt) {
       } else if (e.driving || simTime < t.at) { k++; continue; }
       double bx, bz, byaw;   // (back to a free bay at the Autohaus car park)
       if (drive.freeBay(bx, bz, byaw)) { e.x = bx; e.z = bz; e.yaw = byaw; e.y = world.height(bx, bz) + 0.03; }
-      e.wrecked = false; e.wreckPose = false; e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0;   // (every tow: repaired, as the server clears the damage)
+      e.wrecked = false; e.wreckPose = false; drive.repair(idx); if (Save::Car* c = garageEntry(e.plate)) { c->damage = 0; c->dents = nlohmann::json::array(); }   // (every tow: repaired, dents out (impound.js), as the server clears the damage)
       if (mp.active()) mp.towDone();
       save.markDirty();
       flash("Your " + e.spec->label + " is back at the Autohaus car park, repaired", Hud::Flash::Good);
@@ -4865,7 +4907,7 @@ int runGame(const GameOptions& opt) {
             if (mp.active()) mp.tow("tow", dvec3(e.x, e.y, e.z), e.yaw, 0, [&](bool, const nlohmann::json&) { mp.towDone(); });   // (the server's fee and its tow yard)
             else save.spend(WRECK_FEE, true);
             e.impoundDay = save.day + 1;
-            e.damage = 0; if (Save::Car* c = garageEntry(e.plate)) c->damage = 0;   // (towed: repaired at the tow yard, server.js clears the damage on every tow)
+            drive.repair(int(&e - drive.parked.data())); if (Save::Car* c = garageEntry(e.plate)) { c->damage = 0; c->dents = nlohmann::json::array(); }   // (towed: repaired at the tow yard, server.js clears the damage on every tow)
             nlohmann::json& imp = save.data("impound", nlohmann::json::array());
             imp.push_back({{"plate", e.plate}, {"day", e.impoundDay}});
             save.markDirty();
@@ -5239,6 +5281,7 @@ int runGame(const GameOptions& opt) {
       we.teleport = [&](double x, double z, double h) { player.setSkisOn(false); player.teleport(x, z, h); player.vel = dvec3(0); };
       we.enterCar = [&](int i) { if (drive.enter(i)) { rideKind = Ride::Car; player.setSkisOn(false); dvec3 sp, sf; drive.seat(sp, sf); player.sitOn(sp, sf); } };
       we.png = [&](const std::string& v) { if (!opt.png.empty()) pendingPng = pngVariant(opt.png, v.c_str()); };
+      we.repair = [&](const std::string& plate) { if (werk.repaired) werk.repaired(plate); };
       if (dvec3 wc, wl; wreckTest.frame(we, wc, wl)) { cam.lookAt(wc, wl); cam.fovY = 60; terrain.update(cam.pos); scenery.update(cam.pos); resort.update(0, cam.pos); }
     }
     if (dvec3 np; opt.autotest && at == AT::Ski && off("npcshot") && npcs.debugSkier(size_t(frame / 120) % 6, np, npcH)) {
@@ -5681,6 +5724,7 @@ int runGame(const GameOptions& opt) {
         { std::vector<CarPose> pp; police.carPoses(pp, cam.pos); for (const CarPose& c : pp) sfx.plates(vdraw, c); }   // (the patrol cars' Swiss plates)
       }
       vdraw.submit(renderer, *dev, cam.pos);
+      drive.addFx(renderer);   // (carlights.js Smoke: the steam / smoke puffs)
     }
     // (Phase 5) the interiors; outside the job boards, the race pieces, the police, the rescue, the chalets; the people;
     // the falling snow

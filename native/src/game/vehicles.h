@@ -20,8 +20,10 @@
 #pragma once
 #include "core/math.h"
 #include "engine/renderer.h"
+#include "game/cardamage.h"
 #include "world/transport.h"
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -90,6 +92,14 @@ public:
   float cabinLight() const { return cabinK_; }
   /// (bus.js busGlass) the bus's windows: dark privacy glass from outside, light (16 %, #6f8796) while you sit inside
   void setBusGlassInside(bool in);
+  /// (cardamage.js applyDents) a car's model with its dents in the body: a copy of the body with its own vertices
+  /// pushed in (built when the dents change, kept per owner and model); the model itself without dents or where the
+  /// body is not split off (the far LOD stays whole)
+  const VehicleModel* dented(const VehicleModel* vm, uint64_t owner, const std::vector<Dent>& dents) const;
+  /// once a frame: the dented copies nobody drew for a while, and the replaced ones, freed (a few frames late: never
+  /// while a batch still holds one)
+  void endFrame();
+  size_t dentedCount() const { return dented_.size(); }
   VehicleModel bus;
   struct Rail { VehicleModel body, express; std::shared_ptr<Model> cabin, cabinExpress, frame, bogie, lo, loExpress; } rail;   // cabinExpress: the Legacy Express's furnished cabin (expressinterior.js)
   //   // express: (Phase 7) the blue livery
@@ -104,6 +114,12 @@ private:
   int busGlassIn_ = -1;
   std::vector<int> busGlassMats_;
   std::vector<int> busCabinMats_;   // (the Micruss's cabin: seats, racks, panels; lit by setCabinLight)
+  struct DentCopy { std::unique_ptr<VehicleModel> vm; std::vector<gfx::Buffer> bufs; std::vector<gfx::VertexInput> ins; uint64_t at = 0; };
+  struct DentEntry { uint64_t sig = 0; DentCopy c; uint64_t used = 0; };
+  mutable std::map<std::pair<uint64_t, const VehicleModel*>, DentEntry> dented_;
+  mutable std::vector<DentCopy> dentGrave_;   // (at: the frame it was let go)
+  uint64_t frameNo_ = 0;
+  void freeDented(DentCopy& c);
   gfx::Device* dev_ = nullptr;
   AssetManager* assets_ = nullptr;
   const Transport* t_ = nullptr;

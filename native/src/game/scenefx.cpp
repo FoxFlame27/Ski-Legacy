@@ -379,7 +379,9 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
     const float tail = haz >= 0 ? std::max(head, 0.55f) : head;
     const float drl = haz < 0 && (c.live || c.brake) && !c.lights ? 1.f : 0.f;
     const bool any = head > 0 || bk > 0 || rv > 0 || drl > 0 || haz >= 0;
-    if (c.lights && d < 220 && (d < 140 || c.mine)) {
+    // (cardamage.js: a hard hit at the nose / the tail smashes the lamps there: dark, never lit again)
+    const bool smashF = c.dents && lampSmashed(c.dents, vec3(0, F.y, F.z), F.x + 0.2f), smashR = c.dents && lampSmashed(c.dents, vec3(0, R.y, R.z), R.x + 0.2f);
+    if (c.lights && !smashF && d < 220 && (d < 140 || c.mine)) {
       PointLight l;
       const CarLamps* cl = own ? &lampsFor(*c.vm) : nullptr;
       float hz = cl && cl->hasHead ? cl->headZ : F.z, hy = cl && cl->hasHead ? cl->headY : F.y;
@@ -413,6 +415,10 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
             default: break;
           }
           k *= p.boost;
+          if (c.dents && p.model && k > 0.004f) {   // (its own lens's bounding sphere, cardamage.js dentInstance)
+            const vec3 bc = (p.model->bmin + p.model->bmax) * 0.5f;
+            if (lampSmashed(c.dents, bc, glm::length(p.model->bmax - p.model->bmin) * 0.5f)) k = 0;
+          }
           if (k > 0.004f && p.model) vd.add(p.model.get(), c.M, 0, vec4(col * k, 1));
         }
       // the halos: the soft glow round each lit lamp, only from in front of it (carlights.js halos / haloFacing)
@@ -429,6 +435,7 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
         }
         o = std::min(1.f, o);
         if (o <= 0.004f) continue;
+        if (c.dents && lampSmashed(c.dents, h.p, std::max(h.sx, h.sy) * 0.5f + 0.1f)) continue;
         dvec3 p = dvec3(c.M * glm::dvec4(h.p, 1));
         dvec3 toEye = cp - p;
         double dl = glm::length(toEye);
@@ -448,11 +455,11 @@ void SceneFx::submit(Renderer& r, VehicleDraw& vd, Shapes& shapes, const Camera&
       }
     } else if (!own) {
       // (no exported lamps for this model: a halo at the nose and tail)
-      if (c.lights && d < 220) {
+      if (c.lights && !smashF && d < 220) {
         dvec3 fwd = glm::normalize(dvec3(c.M[2]));
         for (float sx : {-1.f, 1.f}) lampGlow(dvec3(c.M * glm::dvec4(sx * F.x, F.y, F.z + 0.17, 1)), fwd, vec3(1, 0.88f, 0.7f), 0.25f, 0.3f * dk);
       }
-      if ((c.lights || c.brake) && d < 220)
+      if ((c.lights || c.brake) && !smashR && d < 220)
         for (float sx : {-1.f, 1.f})
           lampGlow(dvec3(c.M * glm::dvec4(sx * R.x, R.y, R.z - 0.12, 1)), -glm::normalize(dvec3(c.M[2])), vec3(1, 0.04f, 0.01f), 0.3f, (0.16f + (c.brake ? 0.5f : 0.f)) * dk);
     }

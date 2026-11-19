@@ -372,7 +372,7 @@ building('sports_shop', 34, -54, facing(-0.75, 0.66), 20, { name: 'Intersport Le
 // the church on its knoll east of the square, its stair from the market
 building('church', 56, -10, Wt, 30, { name: 'Pfarrkirche St. Georg', kind: 'church', colK: 0.4, ground: 'center', sink: 0.5, settle: false });
 // the hotels south-east along the Adlerhornweg, the après-ski inn at the Adlerhorn Gondola
-building('hotel_grand', 68, 42, N, 34, { name: 'Grand Hotel Legacy', kind: 'hotel', weight: 2 });
+building('hotel_valais', 68, 42, N, 26, { name: 'Grand Hotel Legacy', kind: 'hotel', weight: 2 });
 building('restaurant_stube', 106, 34, N, 17, { name: 'Gasthof Adlerhorn', kind: 'shop' });
 building('hotel_lodge', 118, 74, Wt, 34, { name: 'Mountain Lodge', kind: 'hotel', weight: 1.6 });
 // inside the road's loop: the bus terminus (Postauto station), the town hall and post office, apartments
@@ -380,7 +380,7 @@ building('bus_terminal', 20, 77.5, N, 22, { name: 'Busbahnhof', kind: 'station' 
 building('town_hall', 22, 104, Wt, 18, { name: 'Gemeindeamt · Post', kind: 'civic' });
 building('apartment_lodge', 40, 102, facing(-0.5, -0.86), 14, { name: 'Residenz Edelweiss', kind: 'hotel', weight: 0.8 });
 // south-west, toward the Silberhorn Gondola
-building('hotel_modern', -33, 76, E, 24, { name: 'Hotel Silberhorn', kind: 'hotel', weight: 1.2 });
+building('apartment_modern', -33, 76, E, 24, { name: 'Hotel Silberhorn', kind: 'hotel', weight: 1.2 });
 building('apartment_modern', -32, 112, E, 20, { name: 'Appartements Lärchenhof', kind: 'house' });
 building('garages', -28, 140, E, 18, { name: 'Garagen', kind: 'house' });
 // north-east by the Bergbahnstrasse, east of the Legacy Express (over its tunnel): an old Valais hotel, the ski

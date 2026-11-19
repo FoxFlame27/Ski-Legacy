@@ -374,7 +374,13 @@ bool Resort::loadPack(platform::Platform& plat, const AssetPaths& paths, const s
     // their far copy at 8% fell to the sloppy simplifier (the UV seams stop the clean one) and melted into shards;
     // a gentler copy by the clean simplifier only
     for (const VillageBuilding& b : world_.village().buildings())
-      if (b.id == name) { o.lodRatios = {0.4f}; o.lodSloppy = false; break; }
+      if (b.id == name) {
+        o.lodRatios = {0.4f}; o.lodSloppy = false;
+        // (Nov 19, the user: "big models from Meshy look not HD") their 2048 px maps were cut to 1024 px: a 20 m
+        // house got 50 px a metre; full size now (under the preset's own cap)
+        o.colorTextureSize = 2048;
+        break;
+      }
     return o;
   };
   // (Nov 2026) the native village's own layout over the exported one (world/village.h)
